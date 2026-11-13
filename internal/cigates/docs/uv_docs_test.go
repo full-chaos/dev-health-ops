@@ -243,7 +243,7 @@ func TestDocsWorkflowsBuildThroughUv(t *testing.T) {
 			return d.edit(t, cf, uvMkdocsPref, "uv run --no-project --with-requirements "+uvDocsReqs+" mkdocs build --strict")
 		}, "must build with"},
 		{"setup-uv is unpinned", func(t *testing.T, d docTree) docTree {
-			return d.edit(t, hr, "astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0", "astral-sh/setup-uv@v10")
+			return d.edit(t, hr, "astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3", "astral-sh/setup-uv@v10")
 		}, "40-hex"},
 		{"setup-uv pins no uv version", func(t *testing.T, d docTree) docTree {
 			return d.edit(t, gd, "          version: 0.12.9\n", "")

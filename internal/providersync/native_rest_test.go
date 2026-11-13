@@ -311,9 +311,6 @@ func TestFetchObjectReturnsTypedErrorWhenTheSharedCapIsExceeded(t *testing.T) {
 	if !errors.As(err, &tooLarge) {
 		t.Fatalf("error=%v, want *providerfoundation.ObjectTooLargeError", err)
 	}
-	if tooLarge.Path != "/repos/acme/api/git/trees/big?recursive=true" {
-		t.Fatalf("path=%q, want the exact request path", tooLarge.Path)
-	}
 	if tooLarge.CapBytes != nativeMaxObjectBytes {
 		t.Fatalf("cap=%d, want %d", tooLarge.CapBytes, nativeMaxObjectBytes)
 	}

@@ -10,7 +10,10 @@
 # main target: a PR that touches a frozen venue sees its replay before merge.
 # A path that ci/venue_oracle_triggers.d/ declares for a test also selects it: code
 # outside the package of the test whose behaviour the test compares (a change of a
-# `teams` write selects the protected-routes test of internal/apiservice).
+# `teams` write selects the protected-routes test of internal/apiservice). So does a
+# file in a package the test binary links: the first `--changed` call derives that
+# closure from the tree (`go list -deps -test`) into VENUE_CLOSURE_DIR and the later
+# call reads it (CHAOS-13101: derived, never committed).
 # Nothing selected is a plain notice and the heavy steps do not run.
 #
 # COST PER PR (D6039a). The measured seconds of the selected rows (ci/venue_oracle_weights.d/):
@@ -21,7 +24,7 @@
 # K VENUE_LEGS`), with no cap on what a change may select. Every leg reads the same change set
 # and computes the same partition; a leg whose slice is empty is a green no-op and starts none of
 # the heavy steps. Each leg's timeout is 60 minutes. A PR that changes no package with a registered venue
-# test costs the checkout and the selection (seconds): the path filter below starts it
+# test costs the checkout, Go setup and the selection with its closure derivation: the path filter below starts it
 # only for changes under internal/, the GraphQL contract, the registry, or the gate itself.
 #
 # NOT COVERED, on purpose: a change to the harness (internal/testsupport/venueoracle),
@@ -38,7 +41,6 @@ on:
       - 'contracts/graphql/**'
       - 'ci/venue_oracle_registry.d/**'
       - 'ci/venue_oracle_triggers.d/**'
-      - 'ci/venue_oracle_closure.d/**'
       - 'ci/check_go.sh'
       - '.github/workflows/venue-oracles-changed.yml'
 
@@ -47,8 +49,10 @@ permissions:
   packages: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  # A ready_for_review run gets its own group keyed by the head sha and is never cancelled: a synchronize run of the
+  # same sha (a push right before the flip) cannot cancel it.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}${{ github.event.action == 'ready_for_review' && '-ready-' || '' }}${{ github.event.action == 'ready_for_review' && github.event.pull_request.head.sha || '' }}
+  cancel-in-progress: ${{ github.event.action != 'ready_for_review' }}
 
 # CHAOS-12858: "|" falls back to direct on ANY proxy error; the default "," only on 404/410.
 env:
@@ -57,28 +61,35 @@ env:
 jobs:
   venue-oracles-changed:
     if: (!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full')))
-    name: venue-oracles (changed packages, shard ${{ matrix.shard }}/4)
+    name: venue-oracles (changed packages, shard ${{ matrix.shard }}/6)
     runs-on: ubuntu-latest
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: [1, 2, 3, 4, 5, 6]
     env:
       CHECK_GO_JOB_CAP_MIN: 60
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository_owner }}
-      VENUE_LEGS: 4
+      VENUE_LEGS: 6
       VENUE_LEG: ${{ matrix.shard }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: '**/go.sum'
+
       - name: Select the venue oracles of the changed packages
         id: select
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          VENUE_CLOSURE_DIR: ${{ runner.temp }}/venue-closure
         run: |
           set -euo pipefail
           git diff --name-only -z "${BASE_SHA}...${HEAD_SHA}" > changed.txt
@@ -96,16 +107,9 @@ jobs:
             printf 'run=true\n' >> "${GITHUB_OUTPUT}"
           fi
 
-      - name: Set up Go
-        if: steps.select.outputs.run == 'true'
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-          cache-dependency-path: '**/go.sum'
-
       - name: Log in to GitHub Container Registry
         if: steps.select.outputs.run == 'true'
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -119,6 +123,7 @@ jobs:
         if: steps.select.outputs.run == 'true'
         env:
           DHO_CHAOS8509_CAPTURE_DIR: ${{ runner.temp }}/venue-oracle-receipt/chaos-8509
+          VENUE_CLOSURE_DIR: ${{ runner.temp }}/venue-closure
         run: |
           set -euo pipefail
           mkdir -p "${RUNNER_TEMP}/venue-oracle-receipt"

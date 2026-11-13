@@ -25,12 +25,18 @@ var (
 	ciLegStage  = regexp.MustCompile(`ci_leg_stage (?:"[^"]*"|\S+) (\w+)`)
 	staticSteps = []string{
 		"Prove the migration matrix contract",
-		"Check the gqlgen output",
 		"Install pinned shellcheck",
 		"Check the shellcheck pin",
 		"Validate River compatibility harness",
 		"Prepare base job contracts",
 		"Check the migration matrix has not gone stale",
+	}
+	// CHAOS-13520: these run on the plan-reads leg, so the static leg stays under five minutes.
+	planReadsSteps = []string{
+		"Check the gqlgen output",
+		"Point the plan-reads call graph at its store",
+		"Restore the plan-reads call-graph result",
+		"Save the plan-reads call-graph result",
 	}
 )
 
@@ -117,8 +123,8 @@ func qualityLegViolations(t *testing.T, root string) []string {
 	}
 	sort.Strings(nonRace)
 	sort.Strings(races)
-	if !reflect.DeepEqual(nonRace, []string{"static"}) {
-		add("the legs that are neither race nor test shards must be exactly static, got %v", nonRace)
+	if !reflect.DeepEqual(nonRace, []string{"plan-reads", "static"}) {
+		add("the legs that are neither race nor test shards must be exactly static and plan-reads, got %v", nonRace)
 	}
 	want := make([]string, len(races))
 	for k := range races {
@@ -131,8 +137,8 @@ func qualityLegViolations(t *testing.T, root string) []string {
 	if b, ok := asMap(leg["strategy"])["fail-fast"].(bool); !ok || b {
 		add("go-quality-leg strategy.fail-fast must be false")
 	}
-	if _, has := leg["if"]; has {
-		add("a job-level `if` on the go-quality legs would let GitHub report them skipped; relevance is decided by a STEP inside each leg")
+	if got, has := leg["if"]; has && str(got) != "needs.go-quality-plan.outputs.draft_skip != 'true'" {
+		add("a job-level `if` on the go-quality legs would let GitHub report them skipped; relevance is decided by a STEP inside each leg (the one exception, an unlabelled draft, is pinned in go_quality_leg_selection_test.go)")
 	}
 	ran := false
 	for _, s := range stepsOf(leg) {
@@ -174,8 +180,8 @@ func qualityLegViolations(t *testing.T, root string) []string {
 		if str(env["GATE_HAS_SELECTOR"]) != "false" {
 			add("fan-in GATE_HAS_SELECTOR must be false, got %q", str(env["GATE_HAS_SELECTOR"]))
 		}
-		if got := str(env["GATED_JOB_1"]); got != "go-quality-leg|unconditional|${{ needs.go-quality-leg.result }}" {
-			add("the fan-in must judge the legs `unconditional` so a skipped, cancelled or missing leg fails the gate; got %q", got)
+		if got := str(env["GATED_JOB_1"]); got != "go-quality-leg|unconditional|${{ needs.go-quality-plan.outputs.draft_skip == 'true' && 'success' || needs.go-quality-leg.result }}" {
+			add("the fan-in must judge the legs `unconditional` (only an unlabelled draft counts them passed) so a skipped, cancelled or missing leg fails the gate on a ready run; got %q", got)
 		}
 		if got := str(env["GATED_JOB_2"]); got != "go-quality-plan|unconditional|${{ needs.go-quality-plan.result }}" {
 			add("the fan-in must judge the plan job `unconditional`: a skipped or failed plan skips every leg; got %q", got)
@@ -187,6 +193,11 @@ func qualityLegViolations(t *testing.T, root string) []string {
 
 	for _, s := range stepsOf(leg) {
 		name := str(s["name"])
+		for _, prefix := range planReadsSteps {
+			if strings.HasPrefix(name, prefix) && !strings.Contains(str(s["if"]), "matrix.name == 'plan-reads'") {
+				add("plan-reads-only step %q must run only on the plan-reads leg (matrix.name == 'plan-reads'), if: %q", name, str(s["if"]))
+			}
+		}
 		for _, prefix := range staticSteps {
 			if strings.HasPrefix(name, prefix) && !strings.Contains(str(s["if"]), "matrix.name == 'static'") {
 				add("static-only step %q must run only on the static leg (matrix.name == 'static'), if: %q", name, str(s["if"]))

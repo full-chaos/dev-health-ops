@@ -14,26 +14,28 @@ import (
 // owned auth-service pods still serve while its pre-upgrade hooks run, and each
 // of their public writes (the sign-in stamp, a register, a password change)
 // needs the users-owned grants: revoking them there answers 500 (SQLSTATE
-// 42501). With the acknowledgement, a deferred run keeps every lost grant that
-// the users-owned switch gives (usersOwnedPublicGrant) and narrows only the
+// 42501). The same holds for the SSO provider routes and their grants
+// (SSOProviderOwn, AUTH_SSO_PROVIDERS_OWNED). With the acknowledgement, a
+// deferred run keeps every lost grant that the users-owned switch or the SSO
+// providers switch gives (usersOwnedPublicGrant) and narrows only the
 // rest; a later release without the deferral narrows them with its own
 // acknowledgement, after no owned pod is left.
 
 // usersOwnedPublicGrant reports whether g, a direct grant of the runtime role
 // on a public table (g.Object is the bare table name), is one the users-owned
-// switch gives: UsersWriteGrant, RegisterOrganizationGrants,
-// LegacyLinkPurgeGrants or the delegated Start's. A grant held WITH GRANT OPTION
-// never is.
+// switch gives: UsersWriteGrant, RegisterOrganizationGrants or the delegated
+// Start's; or one the SSO providers switch gives: SSOProviderOwn. A grant held
+// WITH GRANT OPTION never is.
 func usersOwnedPublicGrant(g GrantRecord) bool {
 	if g.Grantable {
 		return false
 	}
 	switch g.Kind {
 	case "relation":
-		return g.Privilege == "DELETE" && (isLegacyLinkPurgeTable(g.Object) || isMembershipWriteDelete(g.Object))
+		return g.Privilege == "DELETE" && (isMembershipWriteDelete(g.Object) || isSSOProviderOwnDelete(g.Object))
 	case "column":
 		if isMembershipWriteColumn(g.Object, g.Privilege, g.Column) || isInviteWriteColumn(g.Object, g.Privilege, g.Column) ||
-			isImpersonationStartColumn(g.Object, g.Privilege, g.Column) {
+			isImpersonationStartColumn(g.Object, g.Privilege, g.Column) || isSSOProviderOwnColumn(g.Object, g.Privilege, g.Column) {
 			return true
 		}
 		if g.Object == "users" {
@@ -50,13 +52,6 @@ func usersOwnedPublicGrant(g GrantRecord) bool {
 			for _, grant := range RegisterOrganizationGrants() {
 				if grant.Table == g.Object {
 					return slices.Contains(grant.Columns, g.Column)
-				}
-			}
-		}
-		if g.Privilege == "SELECT" {
-			for _, grant := range LegacyLinkPurgeGrants() {
-				if grant.Table == g.Object {
-					return slices.Contains(grant.Select, g.Column)
 				}
 			}
 		}

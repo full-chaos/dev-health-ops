@@ -59,13 +59,6 @@ func (e *publicReadsEnv) usersOwnedHeld(t *testing.T, ctx context.Context) (all,
 			note(slices.Contains(held, column))
 		}
 	}
-	for _, grant := range LegacyLinkPurgeGrants() {
-		note(e.tablePrivilege(t, ctx, grant.Table, "DELETE"))
-		held := e.heldColumns(t, ctx, grant.Table, "SELECT")
-		for _, column := range grant.Select {
-			note(slices.Contains(held, column))
-		}
-	}
 	return all, none
 }
 
@@ -113,7 +106,7 @@ func TestDeferredNarrowingStillNarrowsWhatTheSwitchDoesNotGive(t *testing.T) {
 	env.switchOn(t, ctx)
 	grantExtra := func() {
 		t.Helper()
-		if _, err := env.admin.Exec(ctx, `GRANT UPDATE (full_name) ON public.users TO `+Quote(mustValidatedIdentifier(env.runtimeRole))); err != nil {
+		if _, err := env.admin.Exec(ctx, `GRANT UPDATE (sso_provider_id) ON public.users TO `+Quote(mustValidatedIdentifier(env.runtimeRole))); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -123,8 +116,8 @@ func TestDeferredNarrowingStillNarrowsWhatTheSwitchDoesNotGive(t *testing.T) {
 	if err := env.switchOff(t, ctx, digest, true); err != nil {
 		t.Fatalf("deferred run with the acknowledgement: %v", err)
 	}
-	if slices.Contains(env.heldColumns(t, ctx, "users", "UPDATE"), "full_name") {
-		t.Fatal("the deferred run kept UPDATE(full_name), which the users-owned switch does not give")
+	if slices.Contains(env.heldColumns(t, ctx, "users", "UPDATE"), "sso_provider_id") {
+		t.Fatal("the deferred run kept UPDATE(sso_provider_id), which the users-owned switch does not give")
 	}
 	if all, _ := env.usersOwnedHeld(t, ctx); !all {
 		t.Fatal("the deferred run revoked a users-owned grant")

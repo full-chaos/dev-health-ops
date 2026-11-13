@@ -26,11 +26,9 @@ func TestOrgScopedCreateUserJoinsTheOrgVenueOracle(t *testing.T) {
 	orgID, otherOrgID, memberOrgID, missingOrgID := id("org"), id("other-org"), id("member-org"), id("missing-org")
 	adminID, superID, demotedID := id("admin"), id("super"), id("demoted")
 
-	const jwtKey = "venue-oracle-create-user-membership-32-bytes!!"
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Root:   repoRoot(t),
 		GoOnly: true,
-		JWTKey: jwtKey,
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
 			exec := func(query string, args ...any) {
@@ -67,7 +65,7 @@ VALUES ($1, $2, $3, $4, now(), now(), now())`, uuid.New(), org, user, role)
 			}
 		},
 	})
-	base, pool := startGoServer(t, ctx, venue, jwtKey)
+	base, pool := startGoServer(t, ctx, venue)
 
 	create := func(token, xOrgID, body string) venueoracle.Response {
 		t.Helper()

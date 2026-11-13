@@ -59,6 +59,8 @@ type Operator struct {
 	Provisioner authprovision.Provisioner
 	// readGrants replaces the org deletion's ClickHouse grant read in a test.
 	readGrants func(context.Context, driver.Conn) ([]string, error)
+	// readRefreshStates replaces the org deletion's refresh-state read in a test.
+	readRefreshStates func(context.Context, driver.Conn, []string) (uint64, error)
 }
 
 func (o Operator) logger() *slog.Logger {
@@ -683,6 +685,9 @@ type DeleteOrgConfig struct {
 	// Actor is the user (id or email) that acts for a real delete: an active
 	// superuser, as auth-service's deprovision route requires.
 	Actor string
+	// ACROrgRevoker revokes the organization's acr credentials before the purge (ACR_REVOKE_*); nil is the no_client
+	// case: the delete goes on with one ERROR line and one count.
+	ACROrgRevoker OrgCredentialRevoker
 }
 
 // orgDeleteHandlers is the handler set one delete runs. A real delete asks
@@ -693,13 +698,15 @@ func (o Operator) orgDeleteHandlers(config DeleteOrgConfig, httpDoer providerfou
 		db = o.db
 	}
 	h := &handlers{
-		store:         o.store(db),
-		logger:        o.logger(),
-		clickHouseDSN: config.ClickHouseDSN,
-		decryptor:     config.Decryptor,
-		pagerDuty:     config.PagerDuty,
-		httpDoer:      httpDoer,
-		readGrants:    o.readGrants,
+		store:             o.store(db),
+		logger:            o.logger(),
+		clickHouseDSN:     config.ClickHouseDSN,
+		decryptor:         config.Decryptor,
+		pagerDuty:         config.PagerDuty,
+		httpDoer:          httpDoer,
+		readGrants:        o.readGrants,
+		readRefreshStates: o.readRefreshStates,
+		acrOrgRevoker:     config.ACROrgRevoker,
 	}
 	if !dryRun {
 		h.orgProvision = actorProvisioner{Provisioner: o.Provisioner, actor: config.Actor, resolve: o.resolveActor}
@@ -742,6 +749,9 @@ func (o Operator) DeleteOrg(ctx context.Context, orgID string, dryRun bool, conf
 		}
 		if errors.Is(err, errOrgDeletionRevocationInFlight) {
 			return nil, refuse("%s", orgDeletionRevocationInFlightDetail)
+		}
+		if errors.Is(err, errOrgDeletionACRRevoke) {
+			return nil, refuse("%s", orgDeletionACRRevokeAnswer(err))
 		}
 		return nil, err
 	}

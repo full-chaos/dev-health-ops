@@ -121,8 +121,8 @@ func TestQueryAPIEnforceParity(t *testing.T) {
 				t.Run(plane.name, func(t *testing.T) {
 					byNamespace := map[string][]qpRow{}
 					for i, row := range plane.rows {
-						// The retired HS256 class gets one generic-401 cell per plane, and /buildinfo.
-						if !class.hs256 || i == 0 || row.buildInfo {
+						// The retired classes (HS256, the envelope) get one generic-401 cell per plane, and /buildinfo.
+						if !class.retired() || i == 0 || row.buildInfo {
 							byNamespace[row.namespace] = append(byNamespace[row.namespace], row)
 						}
 					}
@@ -174,9 +174,10 @@ func newQPVenue(t *testing.T, ctx context.Context) *qpVenue {
 	az.caller = session.WirePrincipalID(workloadID)
 	api := az.front.Config.Handler
 	issuerFront.Config.Handler = api
+	issuerFront.TLS = &tls.Config{Certificates: []tls.Certificate{authruntimeTestIssuerTLS}}
 	issuerFront.StartTLS()
 	t.Cleanup(issuerFront.Close)
-	qpTrust(t, issuerFront.Certificate())
+	qpTrustGuard(t)
 
 	v := &qpVenue{az: az, issuer: issuer, client: &http.Client{Timeout: 60 * time.Second}}
 	v.orgA = az.azOrg(t, ctx, true, true)
@@ -305,24 +306,17 @@ func (v *qpVenue) envelopeJWKS(t *testing.T) string {
 	return path
 }
 
-// qpTrust makes the test process trust the issuer listener's certificate: query-api's JWKS client uses the default
-// transport, and prod trusts the issuer's real certificate the same way (the system pool).
-func qpTrust(t *testing.T, cert *x509.Certificate) {
+// qpTrustGuard checks the JWKS client trust against the system pool, which TestMain points at the test certificate
+// with SSL_CERT_FILE.
+func qpTrustGuard(t *testing.T) {
 	t.Helper()
-	original := http.DefaultTransport
-	base, ok := original.(*http.Transport)
-	if !ok {
-		t.Fatalf("http.DefaultTransport is a %T", original)
-	}
 	pool, err := x509.SystemCertPool()
 	if err != nil {
-		pool = x509.NewCertPool()
+		t.Fatal("issuer trust not seen by the system pool")
 	}
-	pool.AddCert(cert)
-	trusting := base.Clone()
-	trusting.TLSClientConfig = &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}
-	http.DefaultTransport = trusting
-	t.Cleanup(func() { http.DefaultTransport = original })
+	if _, err := authruntimeTestIssuerCert.Verify(x509.VerifyOptions{Roots: pool, DNSName: "127.0.0.1"}); err != nil {
+		t.Fatal("issuer trust not seen by the system pool")
+	}
 }
 
 // qpQuietLogs sends query-api's per-request log lines to a bounded tail, printed only when the test fails.
@@ -497,6 +491,9 @@ type qpClass struct {
 	carry  func(r *http.Request)
 }
 
+// retired reports a class query-api no longer accepts: the HS256 token and the effective-principal envelope.
+func (c qpClass) retired() bool { return c.hs256 || c.name == "envelope" }
+
 func (v *qpVenue) classes(t *testing.T, ctx context.Context) []qpClass {
 	t.Helper()
 	a := v.az
@@ -584,7 +581,7 @@ func (v *qpVenue) bearer(t *testing.T, ctx context.Context, user uuid.UUID, org 
 	}
 }
 
-// envelope is a fresh effective-principal envelope of the member in org A (the exempt class).
+// envelope is a fresh effective-principal envelope of the member in org A (a retired class: query-api refuses it).
 func (v *qpVenue) envelope(t *testing.T) string {
 	t.Helper()
 	claims := principal.Claims{SchemaVersion: principal.SupportedSchemaVersion, OrgID: v.orgA.String(), Role: "member",
@@ -864,16 +861,16 @@ func (v *qpVenue) cell(t *testing.T, class qpClass, row qpRow) {
 	if row.buildInfo && asks != 0 {
 		t.Errorf("E asked the PDP %d times for GET /buildinfo: it must never be decided", asks)
 	}
-	// The zero-ask proof needs requests /buildinfo admits: a platform admin acting as itself with a membership row in
-	// its token's org (the edge refuses a token org with no row) and the envelope get the build.
-	if row.buildInfo && (class.name == "superuser_member" || class.name == "envelope") && answers[0].status != http.StatusOK {
+	// The zero-ask proof needs a request /buildinfo admits: a platform admin acting as itself with a membership row in
+	// its token's org (the edge refuses a token org with no row) gets the build.
+	if row.buildInfo && class.name == "superuser_member" && answers[0].status != http.StatusOK {
 		t.Errorf("GET /buildinfo refused %s under E (%s): the zero-ask proof would hold for a refusal only", class.name, answers[0])
 	}
 	if row.askPDP && class.member && asks == 0 {
 		t.Errorf("E answered a decided row without asking the PDP: %s", answers[0])
 	}
-	if class.hs256 && row.listener != "mcp" && answers[0].status != http.StatusUnauthorized {
-		t.Errorf("the retired HS256 token got %s, want the generic 401", answers[0])
+	if class.retired() && row.listener != "mcp" && answers[0].status != http.StatusUnauthorized {
+		t.Errorf("the retired %s class got %s, want the generic 401", class.name, answers[0])
 	}
 	known, isKnown := knownStricter[name]
 	switch {

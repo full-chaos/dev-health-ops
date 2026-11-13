@@ -41,7 +41,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
-	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -51,12 +50,11 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/oauthprovider"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
-// Key is JWT_SECRET_KEY on every plane.
+// Key signs the venue's link tokens (go-api LINK_TOKEN_SECRET). ci/auth_corpus_external.sh reads the line below.
 const Key = "session-venue-signing-key-0123456789abcdef"
 
 // Fixed ids, so audit rows name the same subjects on every plane.
@@ -329,10 +327,16 @@ var retryAfterPattern = regexp.MustCompile(`"retry_after_seconds":(\d+)`)
 // created, whose id each plane draws at random.
 var randomUUIDPattern = regexp.MustCompile(`[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}`)
 
-// permissionsPattern is /me's permissions list: Python returns list(set),
-// whose order follows the process's string hash seed (named limit), so the
-// list is compared as a set.
-var permissionsPattern = regexp.MustCompile(`"permissions":\[([^\]]*)\]`)
+// mePermissionsMember is the permissions member the recorded Python /auth/me answers carry (a sorted-set rendering). GET /auth/me no
+// longer answers it (CHAOS-13585): LoadGolden drops it from the RECORDED side only, in memory, and the pinned golden file stays
+// unedited. Normalize, which every Go answer goes through, never drops it: a Go answer that still emits the member differs from the
+// golden and fails the comparison.
+var mePermissionsMember = regexp.MustCompile(`,"permissions":(?:\[[^\]]*\]|<set [^>]*>)`)
+
+// DropRetiredMePermissions removes the retired permissions member from a recorded /auth/me body (the golden side only).
+func DropRetiredMePermissions(body string) string {
+	return mePermissionsMember.ReplaceAllString(body, "")
+}
 
 // Normalize is the body normalization every comparison applies.
 func Normalize(body string) string {
@@ -342,12 +346,6 @@ func Normalize(body string) string {
 			return id
 		}
 		return "<random-uuid>"
-	})
-	body = permissionsPattern.ReplaceAllStringFunc(body, func(match string) string {
-		inner := permissionsPattern.FindStringSubmatch(match)[1]
-		items := strings.Split(inner, ",")
-		sort.Strings(items)
-		return `"permissions":<set ` + strings.Join(items, ",") + `>`
 	})
 	return retryAfterPattern.ReplaceAllStringFunc(body, func(match string) string {
 		var seconds int
@@ -436,6 +434,9 @@ func LoadGolden(t *testing.T) *Recording {
 	}
 	if len(golden.Answers) < 150 || len(golden.Rows) != 4 {
 		t.Fatalf("golden holds %d answers and %d row sets; it was cut short", len(golden.Answers), len(golden.Rows))
+	}
+	for i := range golden.Answers {
+		golden.Answers[i].Body = DropRetiredMePermissions(golden.Answers[i].Body)
 	}
 	return &golden
 }
@@ -588,19 +589,14 @@ func Run(h *Harness) string {
 	if h.Python == nil {
 		h.golden = LoadGolden(h.T)
 	}
-	signer, err := edgetoken.NewSigner(Key, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		h.T.Fatal(err)
-	}
-	// The HS256 access-token class is retired: no plane verifies one, so these
+	// The HS256 token classes are retired: no plane verifies one, so these
 	// steps carry an unsigned HS256 token of the recorded shape and every plane
 	// answers it as the recording did (a refusal, or logout's no-op 200).
 	past := time.Now().Add(-3 * time.Hour)
 	expired := forgeToken(fmt.Sprintf(`{"sub":%q,"email":"alice@example.com","org_id":%q,"role":"owner","type":"access","exp":%d}`, alice, orgA, past.Add(time.Hour).Unix()))
-	refreshAsAccess, _ := signer.Refresh(edgetoken.RefreshClaims{UserID: alice, OrgID: orgA, FamilyID: "f0000000-0000-4000-8000-000000000001"}, time.Now(), "e0000000-0000-4000-8000-000000000002")
-	otherSigner, _ := edgetoken.NewSigner("a-different-signing-key-0123456789abcdef", "dev-health-ops", "dev-health-api")
-	forgedRefresh, _ := otherSigner.Refresh(edgetoken.RefreshClaims{UserID: alice, OrgID: orgA, FamilyID: "f0000000-0000-4000-8000-000000000002"}, time.Now(), "e0000000-0000-4000-8000-000000000003")
-	forgedUnknownOrg, _ := otherSigner.Refresh(edgetoken.RefreshClaims{UserID: alice, OrgID: "99999999-0000-4000-8000-000000000000", FamilyID: "f0000000-0000-4000-8000-000000000003"}, time.Now(), "e0000000-0000-4000-8000-000000000004")
+	refreshAsAccess := forgeRefresh(alice, orgA, "f0000000-0000-4000-8000-000000000001", "e0000000-0000-4000-8000-000000000002")
+	forgedRefresh := forgeRefresh(alice, orgA, "f0000000-0000-4000-8000-000000000002", "e0000000-0000-4000-8000-000000000003")
+	forgedUnknownOrg := forgeRefresh(alice, "99999999-0000-4000-8000-000000000000", "f0000000-0000-4000-8000-000000000003", "e0000000-0000-4000-8000-000000000004")
 	forgedIntOrg := forgeToken(`{"sub":"x","org_id":7,"type":"refresh","exp":9999999999}`)
 	forgedIntSub := forgeToken(`{"sub":5,"org_id":"` + orgA + `","type":"refresh","exp":9999999999}`)
 	// An HS256 access token whose org claim is not a UUID.
@@ -762,12 +758,11 @@ func Run(h *Harness) string {
 		perPlane("refresh: rotation race, original inside the window", http.MethodPost, "/api/v1/auth/refresh", func(p string) (string, string) {
 			return "", `{"refresh_token": "` + token("login: alice for the rotation race", "refresh_token")(p) + `"}`
 		}),
-		// Signed with the real key and carrying a live token's jti, but a
-		// subject that is no user.
+		// A go-api refresh token carrying a live token's jti, but a subject
+		// that is no user.
 		perPlane("refresh: live jti, subject no user", http.MethodPost, "/api/v1/auth/refresh", func(p string) (string, string) {
 			jti := jtiOf(token("login: alice for the forged subject", "refresh_token")(p))
-			forged, _ := signer.Refresh(edgetoken.RefreshClaims{UserID: ghost, OrgID: orgA, FamilyID: "f0000000-0000-4000-8000-000000000009"}, time.Now(), jti)
-			return "", `{"refresh_token": "` + forged + `"}`
+			return "", `{"refresh_token": "` + forgeRefresh(ghost, orgA, "f0000000-0000-4000-8000-000000000009", jti) + `"}`
 		}),
 	})
 	latest := func(plane string) string {
@@ -965,6 +960,14 @@ func perPlane(name, method, path string, build func(plane string) (token, body s
 func forgeToken(payload string) string {
 	return base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"HS256","typ":"JWT"}`)) + "." +
 		base64.RawURLEncoding.EncodeToString([]byte(payload)) + "." + base64.RawURLEncoding.EncodeToString([]byte("not-a-signature"))
+}
+
+// forgeRefresh is an unsigned go-api refresh token (create_refresh_token's
+// claims) for sub in org: no plane verifies one.
+func forgeRefresh(sub, org, family, jti string) string {
+	now := time.Now()
+	return forgeToken(fmt.Sprintf(`{"sub":%q,"org_id":%q,"family_id":%q,"type":"refresh","iss":"dev-health-ops","aud":"dev-health-api","exp":%d,"iat":%d,"jti":%q}`,
+		sub, org, family, now.Add(7*24*time.Hour).Unix(), now.Unix(), jti))
 }
 
 func jtiOf(token string) string {

@@ -28,6 +28,8 @@ func renderedOpenUnitsIndexArgs(t *testing.T, sets ...string) (args []string, en
 // The open-units index Job is OFF by default and, ON, runs the build-index verb for open-units as a weight -2 pre-hook, so
 // a failed build fails the release before the migrate Job runs revision 0161.
 func TestOpenUnitsIndexJobIsOffByDefaultAndOrderedBeforeTheMigrateJob(t *testing.T) {
+	t.Parallel()
+
 	base := []string{"web.enabled=false"}
 	jobs, _, refusal := renderJobs(t, base...)
 	if refusal != "" {
@@ -59,11 +61,15 @@ func TestOpenUnitsIndexJobIsOffByDefaultAndOrderedBeforeTheMigrateJob(t *testing
 }
 
 func TestOpenUnitsIndexJobRefusesBadBounds(t *testing.T) {
+	t.Parallel()
+
 	for name, sets := range map[string][]string{
 		"lock timeout over a minute": {"web.enabled=false", "migrations.hook.openUnitsIndex.enabled=true", "migrations.hook.openUnitsIndex.lockTimeoutSeconds=61"},
 		"null enabled":               {"web.enabled=false", "migrations.hook.openUnitsIndex=null"},
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
 			_, _, refusal := renderJobs(t, sets...)
 			if refusal == "" {
 				t.Fatal("the render was not refused")
@@ -86,6 +92,8 @@ func TestRenderedOpenUnitsIndexHookArgumentsPassTheVerbParser(t *testing.T) {
 }
 
 func TestOpenUnitsIndexJobWithBundledPostgresIsPreUpgradeOnly(t *testing.T) {
+	t.Parallel()
+
 	bundled := []string{"web.enabled=false", "migrations.hook.localBundledPostgres=true",
 		"migrations.hook.events={post-install,pre-upgrade}", "postgresql.enabled=true"}
 	jobs, _, refusal := renderJobs(t, bundled...)
@@ -125,6 +133,8 @@ func TestOpenUnitsIndexJobWithBundledPostgresIsPreUpgradeOnly(t *testing.T) {
 
 // The hook Job reads no Kubernetes API, so it mounts no service account token, as the migrate and streak Jobs do.
 func TestOpenUnitsIndexJobDoesNotMountTheServiceAccountToken(t *testing.T) {
+	t.Parallel()
+
 	jobs, _, refusal := renderJobs(t, "web.enabled=false", "migrations.hook.openUnitsIndex.enabled=true", "migrations.hook.streakIndex.enabled=true")
 	if refusal != "" {
 		t.Fatalf("render refused: %s", refusal)

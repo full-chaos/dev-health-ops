@@ -29,6 +29,7 @@ Their source is in the `dev-health-go` and `dev-health-web` repositories, not in
 | --- | --- | --- |
 | `POST /v1/authorize` | `authorization_request.v1` | `authorization_decision.v1` |
 | `POST /v1/authorize:batch` | `authorization_batch_request.v1` (1 to 100 requests) | `authorization_batch_response.v1` (one decision per request, each with its zero-based `index`) |
+| `POST /v1/authorize:repositories` | `authorization_request.v1` with `resource` `{type: repository, key: "*", organization_id}` and `acr.context.read` or `acr.evidence.read` | `authorization_decision.v1`: the repositories the principal may read under that action, the same set its per-key decisions allow: an allow carries `repository_scope` `organization` (every repository) or `repository_allowlist` (the principal's own keys, at most 256); more keys is the deny `repository_allowlist_too_large`. |
 
 The caller sends the workload token of its service for the auth-service audience. The request fields, the closed resource types and the decision members are in [authorization decisions and obligations](obligations.md). The OpenAPI document lists the failure statuses 400, 401, 413, 429 and 503. A 503 is also the answer when the decision point could not read the state it needs ([reason codes](reason-codes.md#state-failures-are-not-decisions)). A failure is never a decision document.
 
@@ -41,7 +42,7 @@ A request has these limits in both clients:
 | `resource.type` | One of the ten closed types. |
 | `resource.key` | A repository: `owner/repo` or `*`. Every other type: `^[a-z0-9][a-z0-9._:-]{0,255}$`. |
 | `resource.organization_id` | The resource's organization. Empty for a platform resource. The decision point verifies it. |
-| `context.request_id` | `^req_[A-Za-z0-9_-]{26}$`. Names one call for the client. The decision point does not store it: the audit row of a high-risk decision carries the server-minted request id from `requestid.Audit(ctx)` (`internal/auth/authapi/authorize_audit.go:66`). A low-risk decision writes no audit row (`auditHighRisk`, `internal/auth/authapi/authorize.go:372`). The response never echoes it. |
+| `context.request_id` | `^req_[A-Za-z0-9_-]{26}$`. Names one call for the client. The decision point does not store it: the audit row of a high-risk decision carries the server-minted request id from `requestid.Audit(ctx)` (`internal/auth/authapi/authorize_audit.go:70`). A low-risk decision writes no audit row (`highRiskAction`, `internal/auth/authapi/authorize_audit.go:19`, read by `auditDecisions`, `internal/auth/authapi/authorize_audit.go:36`). The response never echoes it. |
 | `context.client_service` | A label from a closed set. It confers nothing. The Go set is `dev-health-ops-api`, `dev-health-ops-billing-edge`, `dev-health-web`, `dev-health-acr-api`, `dev-health-acr-mcp`, `dev-health-query-api` and `dev-health-auth-service`. The TypeScript client sends `dev-health-web`. |
 
 A request that fails these rules is a local deny. It is never sent.

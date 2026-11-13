@@ -24,8 +24,10 @@ concurrency:
   # go.yml/typecheck.yml/docker-images.yml/arc-runner-image.yml for the
   # specific incidents this protects). cancel-in-progress cancels a stale
   # PR re-push and a stale non-main branch push only.
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || ((github.ref == 'refs/heads/main' || github.event_name == 'merge_group') && github.sha) || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref != 'refs/heads/main') }}
+  # A ready_for_review run gets its own group keyed by the head sha and is never cancelled: a synchronize run of the
+  # same sha (a push right before the flip) cannot cancel it.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || ((github.ref == 'refs/heads/main' || github.event_name == 'merge_group') && github.sha) || github.ref }}${{ github.event.action == 'ready_for_review' && '-ready-' || '' }}${{ github.event.action == 'ready_for_review' && github.event.pull_request.head.sha || '' }}
+  cancel-in-progress: ${{ (github.event_name == 'pull_request' && github.event.action != 'ready_for_review') || (github.event_name == 'push' && github.ref != 'refs/heads/main') }}
 
 permissions:
   contents: read
@@ -72,7 +74,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.14"
 
@@ -116,7 +118,7 @@ jobs:
 
       - name: Upload Semgrep SARIF to code scanning
         if: always() && hashFiles('semgrep.sarif') != ''
-        uses: github/codeql-action/upload-sarif@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
+        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:
           sarif_file: semgrep.sarif
 
@@ -144,11 +146,14 @@ jobs:
           fetch-depth: 0
 
       - name: Install the pinned Gitleaks binary
+        # CHAOS-13426: authenticated (the job token, contents: read), retried; an anonymous download got 504s on 11-09.
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           tarball="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
-          curl -sSfL --retry 3 -o "${RUNNER_TEMP}/${tarball}" \
-            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${tarball}"
+          bash ci/lib/fetch_pinned_release.sh gitleaks/gitleaks "v${GITLEAKS_VERSION}" "${tarball}" "${GITLEAKS_SHA256}" \
+            "${RUNNER_TEMP}/${tarball}"
           echo "${GITLEAKS_SHA256}  ${RUNNER_TEMP}/${tarball}" | sha256sum --check --strict
           mkdir -p "${RUNNER_TEMP}/gitleaks"
           tar -xzf "${RUNNER_TEMP}/${tarball}" -C "${RUNNER_TEMP}/gitleaks" gitleaks
@@ -219,7 +224,7 @@ jobs:
       # alert), always under `gitleaks`. A scan that failed for another reason (exit 1: the SARIF holds no result) uploads nothing.
       - name: Upload Gitleaks SARIF to code scanning
         if: always() && hashFiles('results.sarif') != '' && (steps.scan.outputs.rc == '2' || (steps.scan.outputs.rc == '0' && github.event_name == 'pull_request'))
-        uses: github/codeql-action/upload-sarif@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
+        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:
           sarif_file: results.sarif
           category: ${{ github.event_name == 'pull_request' && 'gitleaks' || format('gitleaks-{0}-{1}', github.event_name, github.sha) }}

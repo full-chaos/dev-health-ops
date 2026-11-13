@@ -113,6 +113,8 @@ func keySetManifestLimit(t *testing.T) int {
 }
 
 func TestAuthKeySetOffRendersNoKeySet(t *testing.T) {
+	t.Parallel()
+
 	docs, out, err := renderAuth(t, authBase...)
 	if err != nil {
 		t.Fatalf("render failed: %v\n%.400s", err, out)
@@ -123,6 +125,8 @@ func TestAuthKeySetOffRendersNoKeySet(t *testing.T) {
 }
 
 func TestAuthKeySetRefusals(t *testing.T) {
+	t.Parallel()
+
 	active := func(kid, file string) string {
 		return `{"kid":"` + kid + `","state":"active","file":"` + file + `","secretName":"s","secretKey":"k"}`
 	}
@@ -147,6 +151,8 @@ func TestAuthKeySetRefusals(t *testing.T) {
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
 			_, out, err := renderAuth(t, tc.args...)
 			if err == nil {
 				t.Fatal("the render succeeded; it must refuse")
@@ -159,6 +165,8 @@ func TestAuthKeySetRefusals(t *testing.T) {
 }
 
 func TestAuthKeySetStillRefusesHandSetEnv(t *testing.T) {
+	t.Parallel()
+
 	args := keySetArgs(twoKeys, "--set", "authService.extraEnv[0].name=AUTH_SIGNING_KEYSET_FILE", "--set", "authService.extraEnv[0].value=/k/keyset.json")
 	_, out, err := renderAuth(t, args...)
 	if err == nil || !strings.Contains(out, "AUTH_SIGNING_KEYSET_FILE") {
@@ -241,6 +249,8 @@ func checkStagedCopies(t *testing.T, pod any, keys []map[string]string) {
 }
 
 func TestAuthKeySetChartLimitIsTheKeystoreLimit(t *testing.T) {
+	t.Parallel()
+
 	raw, err := os.ReadFile("templates/auth-service.yaml")
 	if err != nil {
 		t.Fatal(err)
@@ -256,6 +266,8 @@ func TestAuthKeySetChartLimitIsTheKeystoreLimit(t *testing.T) {
 }
 
 func TestAuthKeySetRefusesSigningFlagsInExtraArgsAndChecksumAnnotation(t *testing.T) {
+	t.Parallel()
+
 	for name, tc := range map[string]struct {
 		args []string
 		want string
@@ -268,6 +280,8 @@ func TestAuthKeySetRefusesSigningFlagsInExtraArgsAndChecksumAnnotation(t *testin
 		"checksum":        {keySetArgs(twoKeys, "--set-json", `authService.podAnnotations={"checksum/keyset":"x"}`), "must not set checksum/keyset"},
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
 			_, out, err := renderAuth(t, tc.args...)
 			if err == nil || !strings.Contains(out, tc.want) {
 				t.Fatalf("not refused with %q: %.400s", tc.want, out)

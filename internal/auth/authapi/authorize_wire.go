@@ -18,6 +18,9 @@ const (
 	decisionIDLength                 = 26
 	decisionIDAlphabet               = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-"
 	expiresAtLayout                  = "2006-01-02T15:04:05.000000Z07:00"
+	decisionIDLogKey                 = "decision_id"
+	// maxDecisionIDDraws bounds the redraw of ids the log redactor would change (about 1e-5 of draws).
+	maxDecisionIDDraws = 8
 )
 
 // authorizeStateFailures are the Reasons that mean the decision point could

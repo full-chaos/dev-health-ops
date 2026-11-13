@@ -38,6 +38,7 @@ var binaryLogging = map[string]string{
 	"auth-migrate":                           "installs",
 	"auth-service":                           "authruntime",
 	"cigate":                                 "installs",
+	"credrefgen":                             "silent",
 	"dev-health-migration-matrix":            "installs",
 	"dev-health-provider-fixture":            "installs",
 	"dev-health-provider-normalized-fixture": "installs",

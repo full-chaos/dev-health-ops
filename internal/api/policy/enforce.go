@@ -67,10 +67,11 @@ var enforceOutcomes = []string{enforceOutcomeAllow, enforceOutcomeDeny, enforceO
 // delegation: its read of a route that is not a platform wrap keeps the legacy answer (served as the target
 // organization, product rule 1) and any other request is refused, as the legacy platform wrap refuses it, both before
 // any call, except on the stop route. A delegated session's own bearer is decided
-// like any other. The one exception is a caller the decision point cannot judge (a legacy HS256 token, an
-// organization route with no organization, a request that serves another organization than the token's, an
-// impersonation read): that request keeps the legacy answer, which is the same answer the route gives with its cell
-// off.
+// like any other. A token with no organization on an organization row is asked the one platform action the legacy
+// guard admits it by, admin.orgs; on an AdminOrg row it is refused as the legacy guard refuses it, with no question
+// (decideOrgless). The one exception is a caller the decision point cannot judge (a legacy HS256 token, a served
+// organization that is no UUID, a delegated session's bearer with no organization, an impersonation read): that request
+// keeps the legacy answer, which is the same answer the route gives with its cell off.
 // Operator runbook: docs/operate/runbooks/auth-pdp-outage-and-rollback.md
 type Enforcer struct {
 	decider pep.Decider
@@ -159,6 +160,13 @@ type enforceObservation struct {
 	served servedOrg
 	// adminOr: the route is mounted WrapAdminOr: an organization admin of the token's organization passes too.
 	adminOr bool
+	// orgRequired: the route level is AdminOrg, which refuses a caller with no organization whoever it is.
+	orgRequired bool
+	// delegated: the bearer is a delegated session's (the token names an actor).
+	delegated bool
+	// orglessAction is the platform action the route's legacy guard admits a caller with no organization by (the wrap's
+	// gate action, else admin.orgs; gate.orglessAction).
+	orglessAction string
 	// platform, when set, keeps the request's platform answers for HoldsPlatform.
 	platform *platformDecisions
 }
@@ -179,7 +187,38 @@ func (e *Enforcer) decides(pattern string) (namespace string, ok bool) {
 	return row.Namespace, true
 }
 
+// decide is decideOnce plus one production-level (Info) log line for a request that serves another organization than the
+// token's, after the verdict: the route, the namespace, the organization the decision point was asked about, the organization
+// the request names and the outcome. The named organization is request input and is logged quoted, never used.
 func (e *Enforcer) decide(ctx context.Context, o enforceObservation) enforceVerdict {
+	verdict := e.decideOnce(ctx, o)
+	if e == nil || o.orgID == "" || o.served.against(o.orgID) != servedOrgOther {
+		return verdict
+	}
+	outcome := ""
+	switch verdict {
+	case enforceAllow:
+		outcome = enforceOutcomeAllow
+	case enforceDeny, enforceDenyNoOrg:
+		outcome = enforceOutcomeDeny
+	case enforceUnavailable, enforceNoDecisionPoint:
+		outcome = enforceOutcomeErrorDeny
+	default:
+		return verdict
+	}
+	e.logger.InfoContext(ctx, "api enforcement: a request that serves another organization than the token's was decided on the token organization",
+		slog.String("route", o.pattern), slog.String("namespace", e.rows[o.pattern].Namespace),
+		slog.String("decided_org", strings.ToLower(o.orgID)), slog.String("served_org", logSafe(o.served.raw)), slog.String("outcome", outcome))
+	return verdict
+}
+
+// logSafe drops the line breaks of a request-supplied value so it cannot start a second log line.
+func logSafe(value string) string {
+	value = strings.ReplaceAll(value, "\n", "")
+	return strings.ReplaceAll(value, "\r", "")
+}
+
+func (e *Enforcer) decideOnce(ctx context.Context, o enforceObservation) enforceVerdict {
 	if e == nil {
 		return enforceNotCovered
 	}
@@ -203,17 +242,16 @@ func (e *Enforcer) decide(ctx context.Context, o enforceObservation) enforceVerd
 			slog.String("route", o.pattern), slog.String("namespace", row.Namespace))
 		return enforceImpersonationRefused
 	}
-	// A request that serves another organization than the token's, or a token with none, keeps the legacy answer: the
-	// legacy guard judges the token organization at the route's level and the handler the served one. The decision point
-	// judges one organization, and neither alone is that answer (product rule 1, D6773).
-	if o.served.against(o.orgID) == servedOrgOther {
-		countEnforceUnjudged(ctx, o.pattern, enforceUnjudgedServedOrg)
-		e.logger.DebugContext(ctx, "api enforcement: the request serves another organization than the token's, the legacy answer stands",
-			slog.String("route", o.pattern), slog.String("namespace", row.Namespace))
-		return enforceLegacy
+	// A request that serves another organization than the token's is judged as the legacy guard judges it: the decision
+	// point answers for the TOKEN organization, the route level's check, and the org scope and the handler keep admitting
+	// the served one. Neither verdict widens the other: an allow for the token organization never widens what the scope or the
+	// handler admit (product rule 1, D6773; CHAOS-10872 S2-parity). A token with no organization has none to judge: on an
+	// organization row it is asked the platform action instead, whatever it serves (S1).
+	if row.ResourceType == policycatalog.ScopeOrganization && o.orgID == "" && o.bearer != "" && o.userAccessToken {
+		return e.decideOrgless(ctx, o, row)
 	}
 	org := strings.ToLower(o.orgID)
-	if reason := unjudgedReason(o, row, org); reason != "" {
+	if reason := unjudgedReason(o, org); reason != "" {
 		countEnforceUnjudged(ctx, o.pattern, reason)
 		e.logger.DebugContext(ctx, "api enforcement: caller not judged, the legacy answer stands",
 			slog.String("route", o.pattern), slog.String("namespace", row.Namespace), slog.String("reason", reason))
@@ -251,6 +289,46 @@ func (e *Enforcer) decide(ctx context.Context, o enforceObservation) enforceVerd
 		return enforceDenyNoOrg
 	}
 	return enforceDeny
+}
+
+// decideOrgless decides an organization row for a token with no organization (CHAOS-10872 S1, product rule 1). The
+// legacy guard admits such a caller only if it holds the wrap's org-less action (Guard.wrap's org-less check: the gate's
+// action, else admin.orgs) and refuses it on an AdminOrg row whoever it is, so the decision point is asked that one
+// platform action and never the row's organization action, which needs an organization. An AdminOrg row refuses before any question: no
+// verdict could change its answer, so it is no deny either. A delegated session's bearer keeps the legacy answer: the
+// decision point refuses a delegated session every platform action, so judging it would narrow impersonation (F1).
+func (e *Enforcer) decideOrgless(ctx context.Context, o enforceObservation, row ShadowRow) enforceVerdict {
+	switch {
+	case o.delegated:
+		countEnforceUnjudged(ctx, o.pattern, enforceUnjudgedDelegatedOrgless)
+		e.logger.DebugContext(ctx, "api enforcement: a delegated session's bearer with no organization keeps the legacy answer",
+			slog.String("route", o.pattern), slog.String("namespace", row.Namespace), slog.String("reason", enforceUnjudgedDelegatedOrgless))
+		return enforceLegacy
+	case o.orgRequired:
+		countEnforceUnjudged(ctx, o.pattern, enforceUnjudgedOrgRequired)
+		e.logger.DebugContext(ctx, "api enforcement: a token with no organization on an AdminOrg row is refused as the legacy guard refuses it",
+			slog.String("route", o.pattern), slog.String("namespace", row.Namespace), slog.String("reason", enforceUnjudgedOrgRequired))
+		return enforceDenyNoOrg
+	}
+	var held bool
+	var err error
+	if o.platform != nil {
+		held, err = o.platform.holds(ctx, o.orglessAction)
+	} else {
+		held, err = e.askPlatform(ctx, o.bearer, o.orglessAction)
+	}
+	if err != nil {
+		countEnforce(ctx, row.Namespace, enforceOutcomeErrorDeny)
+		e.logger.WarnContext(ctx, "api enforcement: no verdict for a token with no organization, the route is refused",
+			slog.String("route", o.pattern), slog.String("namespace", row.Namespace))
+		return enforceUnavailable
+	}
+	if held {
+		countEnforce(ctx, row.Namespace, enforceOutcomeAllow)
+		return enforceAllow
+	}
+	countEnforce(ctx, row.Namespace, enforceOutcomeDeny)
+	return enforceDenyNoOrg
 }
 
 // decideAdminOr decides an admin-or row with one batch (adminOrRequests, read by adminOrAnswer): either allow passes;
@@ -338,11 +416,11 @@ func (e *Enforcer) askBatch(ctx context.Context, requests []pep.Request) (decisi
 // unjudgedReason says why the decision point cannot judge a request, or "" when it can. A token that is not a user
 // access token comes first: nothing else can be said of it. A served organization that parses as no UUID is no_org:
 // its handler refuses it.
-func unjudgedReason(o enforceObservation, row ShadowRow, org string) string {
+func unjudgedReason(o enforceObservation, org string) string {
 	switch {
 	case o.bearer == "" || !o.userAccessToken:
 		return enforceUnjudgedHS256
-	case row.ResourceType == policycatalog.ScopeOrganization && org == "", o.served.against(org) == servedOrgUnparsed:
+	case o.served.against(org) == servedOrgUnparsed:
 		return enforceUnjudgedNoOrg
 	}
 	return ""
@@ -377,7 +455,7 @@ type pdpHooks struct {
 func (g *Guard) SetEnforcer(e *Enforcer) { g.pdp.enforcer = e }
 
 // enforceVerdict asks the Enforcer about one authenticated request.
-func (g *Guard) enforceVerdict(r *http.Request, user *User, bearer string, platformRoute bool, gt gate, platform *platformDecisions) enforceVerdict {
+func (g *Guard) enforceVerdict(r *http.Request, user *User, bearer string, level Authz, platformRoute bool, gt gate, platform *platformDecisions) enforceVerdict {
 	if g.pdp.enforcer == nil {
 		return enforceNotCovered
 	}
@@ -401,7 +479,8 @@ func (g *Guard) enforceVerdict(r *http.Request, user *User, bearer string, platf
 	}
 	verdict := g.pdp.enforcer.decide(ctx, enforceObservation{pattern: r.Pattern, bearer: bearer, orgID: user.OrgID,
 		userAccessToken: user.accessToken, impersonating: impersonating, read: readMethod(r.Method), platformWrap: platformRoute,
-		served: servedOrgOf(r, g.pdp.enforcer.rows[r.Pattern]), adminOr: gt.kind == gateAdminOr, platform: platform})
+		served: servedOrgOf(r, g.pdp.enforcer.rows[r.Pattern]), adminOr: gt.kind == gateAdminOr, orgRequired: level == AdminOrg,
+		delegated: user.ImpersonatedBy != nil, orglessAction: gt.orglessAction(), platform: platform})
 	// The refusal returns before the legacy checks that observe the shadow, so the shadow is told here: it counts
 	// impersonation_refused without a decision point call.
 	if verdict == enforceImpersonationRefused {

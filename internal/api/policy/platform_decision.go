@@ -3,6 +3,7 @@ package policy
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"sync"
@@ -20,6 +21,10 @@ const platformNamespace = "admin"
 
 // ErrPlatformDecisionUnavailable is HoldsPlatform's error when the decision point gave no verdict.
 var ErrPlatformDecisionUnavailable = errors.New("policy: platform decision unavailable")
+
+// ErrPlatformNoDecisionPoint is HoldsPlatform's error when go-api has no decision point client. It wraps
+// ErrPlatformDecisionUnavailable.
+var ErrPlatformNoDecisionPoint = fmt.Errorf("%w: no decision point client", ErrPlatformDecisionUnavailable)
 
 // platformDecisions answers the platform questions of one request from the decision point. The guard installs it
 // when the admin cell is on and the decision point can judge the caller; each action is asked at most once per request.
@@ -49,9 +54,9 @@ func (d *platformDecisions) holds(ctx context.Context, action string) (bool, err
 	if known {
 		return held, nil
 	}
-	held, ok := d.enforcer.askPlatform(ctx, d.bearer, action)
-	if !ok {
-		return false, ErrPlatformDecisionUnavailable
+	held, err := d.enforcer.askPlatform(ctx, d.bearer, action)
+	if err != nil {
+		return false, err
 	}
 	d.seed(action, held)
 	return held, nil
@@ -76,10 +81,18 @@ func WithPlatformDecider(ctx context.Context, decider pep.Decider, bearer string
 		enforcer: &Enforcer{decider: decider, timeout: enforceDefaultTimeout, logger: slog.Default()}, bearer: bearer})
 }
 
-// WritePlatformDecisionRefusal answers a request whose platform question got no verdict: a 503 with a retry hint, as
-// an enforced route that gets none.
-func WritePlatformDecisionRefusal(w http.ResponseWriter, _ error) {
-	WriteDetail(w, http.StatusServiceUnavailable, enforceUnavailableDetail, http.Header{"Retry-After": []string{enforceRetryAfter}})
+// WritePlatformDecisionRefusal answers a request whose platform question got no verdict as an enforced route that gets
+// none: with no decision point client, the 503 with its reason code and no retry hint; else the 503 with a retry hint.
+func WritePlatformDecisionRefusal(w http.ResponseWriter, err error) {
+	verdict := enforceUnavailable
+	// ErrPlatformNoDecisionPoint wraps ErrPlatformDecisionUnavailable, so it is tested first.
+	switch {
+	case errors.Is(err, ErrPlatformNoDecisionPoint):
+		verdict = enforceNoDecisionPoint
+	case errors.Is(err, ErrPlatformDecisionUnavailable):
+		verdict = enforceUnavailable
+	}
+	writeEnforceRefusal(w, Superuser, verdict)
 }
 
 // platformDecisionsFor is the request's platform decisions, or nil when the admin cell is off or the decision point
@@ -96,20 +109,21 @@ func (e *Enforcer) platformDecisionsFor(r *http.Request, bearer string, user *Us
 	return &platformDecisions{enforcer: e, bearer: bearer}
 }
 
-// askPlatform asks the decision point one platform question. ok is false when it gave no verdict: a failure, a
-// local decision, no decision point client, or an allow with an obligation (a platform allow carries none).
-func (e *Enforcer) askPlatform(ctx context.Context, bearer, action string) (held, ok bool) {
+// askPlatform asks the decision point one platform question. The error is ErrPlatformNoDecisionPoint with no decision
+// point client, and ErrPlatformDecisionUnavailable when it gave no verdict: a failure, a local decision, or an allow
+// with an obligation (a platform allow carries none).
+func (e *Enforcer) askPlatform(ctx context.Context, bearer, action string) (held bool, err error) {
 	if e.unconfigured || e.decider == nil {
-		return false, false
+		return false, ErrPlatformNoDecisionPoint
 	}
 	decision, failed := e.ask(ctx, pep.Request{PrincipalReference: bearer, Action: action, ResourceType: policycatalog.ScopePlatform, ResourceKey: shadowPlatformKey})
 	if failed || decision.Local() {
 		e.logger.WarnContext(ctx, "api enforcement: no verdict for a platform question, the handler refuses", slog.String("action", action))
-		return false, false
+		return false, ErrPlatformDecisionUnavailable
 	}
 	if decision.Allowed() && !obligationsCarriedOut(decision.Obligations(), pep.Request{}, false, false) {
 		e.logger.WarnContext(ctx, "api enforcement: a platform allow carries an obligation, no verdict", slog.String("action", action))
-		return false, false
+		return false, ErrPlatformDecisionUnavailable
 	}
-	return decision.Allowed(), true
+	return decision.Allowed(), nil
 }

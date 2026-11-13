@@ -10,11 +10,8 @@ import (
 )
 
 // unflaggedOrganizationActionRows is the closed list of profile rows that may ask an organization action without the
-// platform_admin flag. org.read on GET /buildinfo: the route verifies the internal envelope and never calls the
-// decision point, so the enforced answer equals legacy without the flag (queryapi/server TestBuildInfoNeverAsksThePDP).
-var unflaggedOrganizationActionRows = map[string]string{
-	"GET /buildinfo [dev-health-query-api @query,internal]": "org.read",
-}
+// platform_admin flag. It is empty since catalog 19 flagged org.read.
+var unflaggedOrganizationActionRows = map[string]string{}
 
 // C4. An organization action without the platform_admin flag has no legacy cell for a superuser with no membership
 // row: no served route asks it, so there is no legacy path to execute. A profile row or GraphQL field that starts to

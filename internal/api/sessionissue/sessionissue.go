@@ -28,20 +28,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 )
 
-// EnvToken is the go-api session issuer service credential. The session issue
-// route no longer takes it; auth-service's provisioning routes still read it.
-const EnvToken = "AUTH_SESSION_ISSUE_TOKEN"
-
 // Path is the issue route on auth-service's API listener.
 const Path = "/internal/v1/sessions"
-
-// tokenPattern is the svc_ credential shape of the auth-session-issuer
-// service: its prefix and 32 random bytes as unpadded base64url.
-var tokenPattern = regexp.MustCompile(`^svc_authsess_[A-Za-z0-9_-]{43}$`)
-
-// ValidToken reports whether token has the auth-session-issuer credential
-// shape, for the go-api clients of auth-service that still present it.
-func ValidToken(token string) bool { return tokenPattern.MatchString(token) }
 
 // maxAnswerBytes bounds the issue route's answer.
 const maxAnswerBytes = 64 << 10
@@ -171,10 +159,11 @@ const WorkloadAudience = "auth-service"
 // route (State). It presents the go-api workload token (see NewWorkload): the
 // routes no longer take the session issuer credential.
 type Client struct {
-	endpoint      string
-	stateEndpoint string
-	workload      *workloadtoken.Client
-	http          *http.Client
+	endpoint         string
+	stateEndpoint    string
+	readableEndpoint string
+	workload         *workloadtoken.Client
+	http             *http.Client
 	// proof signs the client address sent in X-Forwarded-For (internal/auth/clientaddr); nil sends none.
 	proof *clientaddr.ProofKey
 }
@@ -208,8 +197,10 @@ func NewWorkload(base *url.URL, workload *workloadtoken.Client, timeout time.Dur
 	}
 	endpoint := url.URL{Scheme: base.Scheme, Host: base.Host, Path: Path}
 	stateEndpoint := url.URL{Scheme: base.Scheme, Host: base.Host, Path: PathState}
+	readableEndpoint := url.URL{Scheme: base.Scheme, Host: base.Host, Path: PathReadableRepositories}
 	client := httpguard.NoRedirects(&http.Client{Transport: httpguard.SharedTransport(), Timeout: timeout})
-	return &Client{endpoint: endpoint.String(), stateEndpoint: stateEndpoint.String(), workload: workload, http: client}, nil
+	return &Client{endpoint: endpoint.String(), stateEndpoint: stateEndpoint.String(), readableEndpoint: readableEndpoint.String(),
+		workload: workload, http: client}, nil
 }
 
 // bearer is the credential of one call: the workload token asked of the workload client (cached there; one exchange

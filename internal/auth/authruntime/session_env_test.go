@@ -15,10 +15,11 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/token"
 )
 
-// testAccessSecret and testSuccessorKey are made up for the tests here; they
-// sign nothing outside a test process.
+// testAccessSecret (the HS256 key of the refused legacy tokens the tests mint), testRateLimitKey and
+// testSuccessorKey are made up for the tests here; they sign nothing outside a test process.
 var (
 	testAccessSecret = strings.Repeat("session-route-test-key-", 2)
+	testRateLimitKey = strings.Repeat("session-route-rate-key-", 2)
 	testSuccessorKey = base64.RawURLEncoding.EncodeToString([]byte("session-route-successor-key-0032"))
 	testLockoutKey   = base64.RawURLEncoding.EncodeToString([]byte("session-route-lockout-key-000032"))
 	testValkeyURI    = "redis://auth-ratelimit:test-only-password@127.0.0.1:1/1"
@@ -27,7 +28,9 @@ var (
 // sessionEnvironment adds the session secrets to env, which mounts the
 // session routes. The loopback peer of a test server is the one trusted proxy.
 func sessionEnvironment(env map[string]string) map[string]string {
-	env[authconfig.EnvAccessTokenSecret] = testAccessSecret
+	if _, set := env[authconfig.EnvRateLimitKey]; !set {
+		env[authconfig.EnvRateLimitKey] = testRateLimitKey
+	}
 	env[authconfig.EnvSessionSuccessorKey] = testSuccessorKey
 	env[authconfig.EnvTrustedProxies] = "127.0.0.1"
 	env[authconfig.EnvValkeyURI] = testValkeyURI
@@ -43,6 +46,13 @@ var testIssueSubject = session.WirePrincipalID(uuid.MustParse("6a1f0c2e-3b4d-4e5
 // set the token issuer.
 func workloadIssueEnvironment(env map[string]string) map[string]string {
 	env[authconfig.EnvSessionIssueWorkloadSubject] = testIssueSubject
+	return env
+}
+
+// acrEventsEnvironment names testIssueSubject as the acr-api workload subject in env, which must set the token
+// issuer: the acr credential events route mounts with it and its endpoint-profile row.
+func acrEventsEnvironment(env map[string]string) map[string]string {
+	env[authconfig.EnvAcrEventsWorkloadSubject] = testIssueSubject
 	return env
 }
 
@@ -62,7 +72,7 @@ func compatEnvironment(env map[string]string) map[string]string {
 // mustLimits is the in-process limits a test mounts the limited routes with.
 func mustLimits(t *testing.T) *authapi.Limits {
 	t.Helper()
-	limits, err := authapi.NewLimits(httpapi.NewMemoryCounters(nil), testAccessSecret)
+	limits, err := authapi.NewLimits(httpapi.NewMemoryCounters(nil), testRateLimitKey)
 	if err != nil {
 		t.Fatal(err)
 	}

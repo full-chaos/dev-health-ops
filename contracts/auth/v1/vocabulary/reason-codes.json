@@ -1,5 +1,5 @@
 {
-  "description": "The closed vocabularies for three auth wire fields. A value is added only with the PR of the producer that emits it, together with its own migration; no speculative values (CHAOS-10194). error.v1 reason_code stays open (shape only) and is NOT governed by this file; authorization_decision.v1 reason_code is closed by decision_reason_code.",
+  "description": "The closed vocabularies for three auth wire fields, and the reason set of go-api's admin users conflicts (go_api_users_conflict_reason). A value is added only with the PR of the producer that emits it, together with its own migration; no speculative values (CHAOS-10194). error.v1 reason_code stays open (shape only) and is NOT governed by this file; authorization_decision.v1 reason_code is closed by decision_reason_code.",
   "revoked_reason": {
     "fields": [
       "credential-entry.v1 revoked_reason",
@@ -34,6 +34,11 @@
       "domain_revoked",
       "org_deprovisioned",
       "owner_request",
+      "sso_provider_created",
+      "sso_provider_updated",
+      "sso_provider_deleted",
+      "sso_provider_activated",
+      "sso_provider_deactivated",
       "role_granted",
       "role_revoked",
       "membership_added",
@@ -119,5 +124,18 @@
       "workload_action_denied",
       "workload_audience_denied"
     ]
+  },
+  "go_api_users_conflict_reason": {
+    "fields": [
+      "go-api /api/v1/admin/users 409 detail.reason"
+    ],
+    "values": [
+      "email_taken",
+      "last_platform_admin",
+      "operation_moved",
+      "state_changed",
+      "username_taken"
+    ],
+    "note": "While auth-service owns users the admin users writes are forwarded to it; operation_moved stays the answer of the writes that are not forwarded: a real is_active change by PATCH (CHAOS-13209 row 4), the force delete (until 13376 S4), a real is_superuser change while the platform roles are not owned, and the operator verbs. The other values are the forwarded writes' conflicts. internal/auth/contracts TestGoAPIUsersConflictReasonsAreTheProducedSet holds the values equal to the go-api 409 sites."
   }
 }

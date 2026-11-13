@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/puddle/v2"
 	"go.opentelemetry.io/otel/metric"
 )
 
@@ -31,7 +32,8 @@ type AgeDB interface {
 
 // AgeProbe reports how stale the org activity projection is. SigNoz cannot read Postgres, so the worker that writes the projection
 // exports this one number. One database read per cache period, whatever the number of collections (the pull and the push reader
-// both collect); a failed or empty read records NO sample (never 0), counts a failure, and is not retried before the period ends.
+// both collect); a failed or empty read records NO sample (never 0), counts a failure (not a read on a closed pool at shutdown),
+// and is not retried before the period ends.
 type AgeProbe struct {
 	db     AgeDB
 	logger *slog.Logger
@@ -91,6 +93,11 @@ func (p *AgeProbe) read(ctx context.Context, now time.Time) {
 	defer cancel()
 	var age *float64
 	if err := p.db.QueryRow(readCtx, ageSQL).Scan(&age); err != nil {
+		// CHAOS-13459: the last collection at pod stop can run after the pool is closed; that is shutdown, not a failed read.
+		if errors.Is(err, puddle.ErrClosedPool) {
+			p.logger.InfoContext(ctx, "org activity age read skipped: the pool is closed (shutdown)")
+			return
+		}
 		p.failed.Add(context.WithoutCancel(ctx), 1)
 		p.logger.WarnContext(ctx, "org activity age read failed", "error", err)
 		return

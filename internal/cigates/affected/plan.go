@@ -2,7 +2,7 @@
 // go.yml and for the go-quality legs. A pull request whose every changed path is a .go file plans AFFECTED: the changed
 // packages' reverse import closure. A non-Go path plans the packages that read it (reads.tsv by class, walks.tsv, dynreads.tsv
 // and edges.tsv, generated from the code and checked by cigate plan-reads; a code-scope read the tool cannot bound plans
-// the packages whose programs reach it, reach.tsv), or NONE when no package reads it; a non-Go path
+// the packages whose programs reach it, reach.d), or NONE when no package reads it; a non-Go path
 // in no declared class plans FULL, as do shared inputs and every push to main, merge group, schedule or manual run. Any
 // doubt plans FULL.
 package affected
@@ -360,8 +360,8 @@ func plan(in planInput) (Verdict, error) {
 		boundedReads(t, scanned, nonGo, sel, importPath)
 	}
 	changedPaths := append(append([]string{}, goPaths...), nonGo...)
-	// A code-scope site the tool cannot bound runs only in the programs that reach it (reach.tsv): their packages are
-	// selected (and every key that runs one). A site reach.tsv does not place selects its reverse import closure.
+	// A code-scope site the tool cannot bound runs only in the programs that reach it (reach.d): their packages are
+	// selected (and every key that runs one). A site reach.d does not place selects its reverse import closure.
 	// A Markdown-only pull request drops the unbounded sites (the merge queue runs the full plan) but keeps those
 	// with positive Markdown evidence: a walk whose gate passes a changed file, a pattern that matches one (patterns.tsv).
 	var unboundedAll func(r siteRow, why string)
@@ -382,7 +382,7 @@ func plan(in planInput) (Verdict, error) {
 		}
 		for _, p := range sortedKeys(rs) {
 			if p != reachNone {
-				sel.only(importPath(p), why+", reached from "+p+" (reach.tsv)")
+				sel.only(importPath(p), why+", reached from "+p+" (reach.d)")
 			}
 		}
 	}
@@ -584,6 +584,10 @@ func boundedReads(t *tables, scanned []Read, changed []string, sel *selection, i
 // PlanVerdict prints the plan verdict of a change set: NONE, `AFFECTED <n>` and one key per line, or `FULL <reason>`.
 // It returns the exit code: 0 with a verdict, 1 on a read, table or event error, 2 on a usage error.
 func PlanVerdict(args []string, stdout, stderr io.Writer) int {
+	return planVerdictFrom(ScanReads, args, stdout, stderr)
+}
+
+func planVerdictFrom(scan func(root string) ([]Read, error), args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("plan-verdict", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	event := fs.String("event", "", "GitHub event name: pull_request (or range, a push-range check for an informational job) judges the change set; any other event is FULL")
@@ -643,7 +647,7 @@ func PlanVerdict(args []string, stdout, stderr io.Writer) int {
 		var scanned []Read
 		in.scanned = &scanned
 		in.tables, in.guardFn = tb, func() ([]string, error) {
-			reads, err := ScanReads(*root)
+			reads, err := scan(*root)
 			if err != nil {
 				return nil, fmt.Errorf("scan the Go sources for reads: %w", err)
 			}

@@ -3,8 +3,11 @@ package session
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"net/http"
 	"net/http/httptest"
-	"reflect"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -13,36 +16,8 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/sessionscenario"
 )
-
-func TestRolePermissionsMatchTheRoleHierarchy(t *testing.T) {
-	viewer := []string{"analytics:read", "metrics:read", "work_items:read", "git:read", "teams:read", "settings:read", "members:read", "org:read"}
-	if got := rolePermissions("viewer"); !reflect.DeepEqual(got, viewer) {
-		t.Fatalf("viewer: %v", got)
-	}
-	member := rolePermissions("member")
-	if len(member) != len(viewer)+1 || member[1] != "analytics:export" {
-		t.Fatalf("member holds viewer plus analytics:export, got %v", member)
-	}
-	if got := len(rolePermissions("admin")); got != 19 {
-		t.Fatalf("admin: %d permissions", got)
-	}
-	if got := rolePermissions("owner"); len(got) != 20 || got[len(got)-1] != "org:delete" {
-		t.Fatalf("owner: %v", got)
-	}
-	for _, unknown := range []string{"", "Owner", "superuser"} {
-		if got := rolePermissions(unknown); len(got) != 0 {
-			t.Fatalf("%q: %v", unknown, got)
-		}
-	}
-	if got := userPermissions(nil, &policy.User{IsSuperuser: true, Role: "viewer"}); len(got) != 22 {
-		t.Fatalf("superuser: %d", len(got))
-	}
-	target := "viewer"
-	if got := userPermissions(&target, &policy.User{IsSuperuser: true, Role: "owner"}); len(got) != 8 {
-		t.Fatalf("impersonation uses the target role, got %d", len(got))
-	}
-}
 
 func TestSelectActiveMembership(t *testing.T) {
 	a, b, c := uuid.New(), uuid.New(), uuid.New()
@@ -123,27 +98,6 @@ func TestValidateKey(t *testing.T) {
 	}
 }
 
-func TestClaimHelpers(t *testing.T) {
-	for value, want := range map[any]string{"s": "s", float64(5): "5", float64(1.5): "1.5", true: "True", nil: "None"} {
-		if got, err := pyStrClaim(value); err != nil || got != want {
-			t.Errorf("pyStrClaim(%#v) = %q %v", value, got, err)
-		}
-	}
-	if _, err := pyStrClaim(map[string]any{}); err == nil {
-		t.Error("a dict claim must fail")
-	}
-	for _, value := range []any{nil, false, "", float64(0), []any{}, map[string]any{}} {
-		if truthy(value) {
-			t.Errorf("truthy(%#v)", value)
-		}
-	}
-	for _, value := range []any{true, "x", float64(2), []any{1}, map[string]any{"a": 1}} {
-		if !truthy(value) {
-			t.Errorf("!truthy(%#v)", value)
-		}
-	}
-}
-
 // The timing hash costs what login.py's DUMMY_PASSWORD_HASH costs (bcrypt,
 // cost 12) and is one hash for the process, so every login without a usable
 // user hash spends the same bcrypt work.
@@ -155,5 +109,116 @@ func TestDummyHashCostsWhatPythonsDoes(t *testing.T) {
 	}
 	if again := dummyHash(); again != first {
 		t.Fatal("the dummy hash changed between calls")
+	}
+}
+
+// CHAOS-13585: GET /api/v1/auth/me carries the caller's identity and no permission list: no consumer reads one (CENSUS-10872-perm-1),
+// and a complete mutable permission set does not belong in an answer a client caches. Each expected body is main's answer for that caller
+// (cfeabc7f4cd1) with the permissions member removed and every other byte unchanged; under a live impersonation session the permission
+// list used to be the target role's, and the identity fields still come from the caller alone.
+func TestMeCarriesNoPermissionsField(t *testing.T) {
+	const identity = `{"id":"u","email":"u@example.com","username":null,"full_name":null,"org_id":"o","role":"%s","is_superuser":%t}`
+	session := &policy.Impersonation{AdminUserID: uuid.New(), TargetUserID: uuid.New(), TargetOrgID: uuid.New(), TargetRole: "viewer"}
+	cases := []struct {
+		name string
+		user *policy.User
+		imp  *policy.Impersonation
+		want string
+	}{
+		{"viewer", &policy.User{UserID: "u", Email: "u@example.com", OrgID: "o", Role: "viewer"}, nil, fmt.Sprintf(identity, "viewer", false)},
+		{"owner", &policy.User{UserID: "u", Email: "u@example.com", OrgID: "o", Role: "owner"}, nil, fmt.Sprintf(identity, "owner", false)},
+		{"platform admin", &policy.User{UserID: "u", Email: "u@example.com", OrgID: "o", Role: "member", IsSuperuser: true}, nil, fmt.Sprintf(identity, "member", true)},
+		{"platform admin under a live impersonation session, target role viewer", &policy.User{UserID: "u", Email: "u@example.com", OrgID: "o", Role: "member", IsSuperuser: true}, session, fmt.Sprintf(identity, "member", true)},
+		{"owner under a live impersonation session, target role viewer", &policy.User{UserID: "u", Email: "u@example.com", OrgID: "o", Role: "owner"}, session, fmt.Sprintf(identity, "owner", false)},
+	}
+	for _, c := range cases {
+		request := httptest.NewRequest(http.MethodGet, "/api/v1/auth/me", nil)
+		ctx := policy.WithUser(request.Context(), c.user)
+		if c.imp != nil {
+			ctx = policy.WithImpersonation(ctx, c.imp)
+		}
+		recorder := httptest.NewRecorder()
+		handlers{}.me(recorder, request.WithContext(ctx))
+		body := strings.TrimSpace(recorder.Body.String())
+		if recorder.Code != http.StatusOK || body != c.want {
+			t.Errorf("%s: %d %s, want the 200 identity answer %s with no permissions", c.name, recorder.Code, body, c.want)
+		}
+	}
+}
+
+// The recorded Python /auth/me answers of the differential scenario (python_golden.json, pinned by sha256, its recorder retired) carry the
+// retired permissions member. Once that member is dropped, each recorded answer is byte-equal to what this handler answers for the same
+// identity: so the scenario's replay of /auth/me cannot differ because of the field.
+func TestRecordedMeAnswersEqualTheHandlerOnceThePermissionsMemberIsDropped(t *testing.T) {
+	golden := sessionscenario.LoadGolden(t)
+	checked := 0
+	for _, answer := range golden.Answers {
+		if answer.Status != http.StatusOK || !strings.Contains(answer.Body, `"is_superuser"`) || !strings.Contains(answer.Body, `"full_name"`) ||
+			strings.Contains(answer.Body, `"access_token"`) || strings.Contains(answer.Body, `"user":`) || strings.Contains(answer.Body, `"memberships"`) {
+			continue
+		}
+		var me struct {
+			ID, Email, OrgID, Role string
+			Username, FullName     *string
+			IsSuperuser            bool
+		}
+		var raw map[string]any
+		if err := json.Unmarshal([]byte(answer.Body), &raw); err != nil || raw["id"] == nil || raw["role"] == nil {
+			continue
+		}
+		str := func(k string) string { v, _ := raw[k].(string); return v }
+		opt := func(k string) *string {
+			if v, ok := raw[k].(string); ok {
+				return &v
+			}
+			return nil
+		}
+		me.ID, me.Email, me.OrgID, me.Role = str("id"), str("email"), str("org_id"), str("role")
+		me.Username, me.FullName = opt("username"), opt("full_name")
+		me.IsSuperuser, _ = raw["is_superuser"].(bool)
+		user := &policy.User{UserID: me.ID, Email: me.Email, OrgID: me.OrgID, Role: me.Role, IsSuperuser: me.IsSuperuser, Username: me.Username, FullName: me.FullName}
+		request := httptest.NewRequest(http.MethodGet, "/api/v1/auth/me", nil)
+		recorder := httptest.NewRecorder()
+		handlers{}.me(recorder, request.WithContext(policy.WithUser(request.Context(), user)))
+		if got := strings.TrimSpace(recorder.Body.String()); got != answer.Body {
+			t.Errorf("%s: handler %s, recorded (permissions dropped) %s", answer.Name, got, answer.Body)
+		}
+		checked++
+	}
+	t.Logf("checked %d recorded /auth/me answers", checked)
+	if checked != 4 {
+		t.Fatalf("%d recorded /auth/me answers checked, the golden holds 4", checked)
+	}
+}
+
+// The drop of the retired member applies to the RECORDED side only. The pinned golden file is unedited (LoadGolden refuses a file whose
+// sha256 is not the pinned one, and the raw bytes still carry the member 4 times), and a Go answer that still emits the member does
+// not equal the recorded one after Normalize: it would fail the scenario's comparison.
+func TestTheDropOfThePermissionsMemberIsOnTheGoldenSideOnly(t *testing.T) {
+	golden := sessionscenario.LoadGolden(t)
+	raw, err := os.ReadFile(sessionscenario.GoldenPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(string(raw), `permissions`); n != 4 {
+		t.Fatalf("the pinned golden file carries the member %d times, want 4: it must stay unedited", n)
+	}
+	checked := 0
+	for _, answer := range golden.Answers {
+		if answer.Status != http.StatusOK || !strings.HasPrefix(answer.Body, `{"id":`) || !strings.Contains(answer.Body, `"is_superuser"`) ||
+			strings.Contains(answer.Body, `"user":`) || strings.Contains(answer.Body, `"access_token"`) || strings.Contains(answer.Body, `"memberships"`) {
+			continue
+		}
+		if strings.Contains(answer.Body, "permissions") {
+			t.Errorf("%s: the loaded golden answer still carries the member: %s", answer.Name, answer.Body)
+		}
+		emitting := strings.TrimSuffix(answer.Body, "}") + `,"permissions":["analytics:read"]}`
+		if got := sessionscenario.Normalize(emitting); got == answer.Body {
+			t.Errorf("%s: a Go answer that still emits permissions equals the recorded one after Normalize: %s", answer.Name, got)
+		}
+		checked++
+	}
+	if checked != 4 {
+		t.Fatalf("%d recorded /auth/me answers checked, the golden holds 4", checked)
 	}
 }

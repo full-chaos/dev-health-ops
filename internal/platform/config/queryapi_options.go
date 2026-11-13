@@ -59,6 +59,11 @@ var queryAPIOptions = func() []Option {
 			Usage: "true while auth-service owns sessions (go-api's flag): the role posture then also requires the read of the auth schema's sessions; unset or false = off, any other value refuses readiness",
 		},
 		{
+			Flag: "auth-proxy-impersonation", Env: "AUTH_PROXY_IMPERSONATION", Kind: KindString,
+			Services: q, Group: GroupRuntime,
+			Usage: "true while go-api starts impersonation as an auth-service delegated session (go-api's flag): /graphql then refuses the admin's own bearer beside a live impersonation row (403); unset or false = off, any other value starts the process with one WARN and refuses (fail closed)",
+		},
+		{
 			Flag: "auth-platform-roles-owned", Env: "AUTH_PLATFORM_ROLES_OWNED", Kind: KindString,
 			Services: q, Group: GroupDatabase,
 			Usage: "true while auth-service owns the platform roles: is_superuser is read from the auth platform role assignments and the role posture also requires that read (needs AUTH_PROXY_SESSIONS); unset or false = off, any other value refuses startup",
@@ -251,7 +256,6 @@ var queryAPIOptions = func() []Option {
 			Usage: "enable the work units route (default off; it also needs its dependencies configured, or it stays unmounted)",
 		},
 		{Env: "GO_API_REGISTRY_POSTGRES_URI", Secret: true, Services: q, Group: GroupCredentials, Usage: "registry PostgreSQL DSN the /query route reads its operation registry from (the query-api role's own login)"},
-		{Env: "GO_API_EDGE_JWT_SECRET", Secret: true, Services: q, Group: GroupCredentials, Usage: "retired HS256 edge secret: nothing verifies with it; a set value only logs one WARN that it is unused"},
 	}
 	// Read from the process environment by the code below the routes (identity
 	// mapping, the LLM model choice, two work-graph switches): declared so the service's whole contract is here, environment

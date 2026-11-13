@@ -1608,15 +1608,15 @@ services:
       auth-migrate:
         condition: service_completed_successfully
 
-  # CHAOS-13107: one-shot `dho auth users-backfill`: copies public.users into the
-  # auth schema before auth-service serves. auth-service owns users
-  # (AUTH_USERS_OWNED) and its users_owned readiness check refuses while a
-  # public user has no auth user; a fresh install has one, the migrations'
-  # baseline service placeholder. Production copies the users before its flip;
-  # here every `up` copies them, with AUTH_USERS_OWNED=false for this run only
-  # (the verb refuses while the flag is on). -insert-only: it creates the auth
-  # users that are missing and never changes an existing one, so a password or
-  # name changed through auth-service is never set back to a stale public.users
+  # CHAOS-13107: the seed tool, one-shot `dho auth users-backfill -insert-only`:
+  # copies public.users into the auth schema before auth-service serves.
+  # auth-service owns users (AUTH_USERS_OWNED) and its users_owned readiness
+  # check refuses while a public user has no auth user; a fresh install has
+  # one, the migrations' baseline service placeholder. Every `up` runs it with
+  # users owned, as every venue runs (CHAOS-13356): -insert-only is the one
+  # form the verb runs while users are owned. It creates the auth users that
+  # are missing and never changes an existing one, so a password or name
+  # changed through auth-service is never set back to a stale public.users
   # value. It connects as auth-service's runtime login, after the schema and
   # its grants.
   auth-users-backfill:
@@ -1639,7 +1639,7 @@ services:
     environment:
       AUTH_DATABASE_URI: host=postgres port=5432 user=${AUTH_RUNTIME_DATABASE_ROLE:-devhealth_auth} password='${AUTH_RUNTIME_DATABASE_PASSWORD:-devhealth_auth}' dbname=${POSTGRES_DB:-postgres} sslmode=disable
       AUTH_DATABASE_SCHEMA: ${AUTH_DATABASE_SCHEMA:-auth}
-      AUTH_USERS_OWNED: "false"
+      AUTH_USERS_OWNED: ${AUTH_USERS_OWNED:-true}
     depends_on:
       auth-migrate:
         condition: service_completed_successfully
@@ -1876,7 +1876,7 @@ services:
   # written last, so its presence means a previous run finished and a later `up` changes nothing; a key/ without it
   # is a partial pair and the step fails (remove the volume). Past its 365 days, remove the volume for a new pair.
   auth-issuer-tls-init:
-    image: mirror.gcr.io/library/golang:1.27.3-alpine@sha256:f2c872bcee949b7be9c490efd02b48a8a2fbf947cdf533f1c58525ec9d8170fd
+    image: mirror.gcr.io/library/golang:1.27.4-alpine@sha256:0a5f7fe796599ff487605987432e7619ae45beeb2fba4c2ce0b907879932aebf
     network_mode: none
     restart: "no"
     read_only: true

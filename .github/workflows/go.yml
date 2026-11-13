@@ -31,6 +31,7 @@ on:
       - 'ci/**/*.md'
       - 'ci/**/*.sh'
       - 'ci/**/*.py'
+      - 'ci/live_e2e_stub/**'
       - 'cmd/**/*.md'
       - 'cmd/**/*.sh'
       - 'cmd/**/*.py'
@@ -40,6 +41,8 @@ on:
       - 'src/**/*.md'
       - 'src/**/*.sh'
       - 'src/**/*.py'
+      # the auth/authapi and sharedserver directory reads see the PDP's diagram source beside its Go owner
+      - 'internal/auth/authapi/web_approver_reference.mmd'
       # The chart's own Go tests (images_test.go, stream_subcommand_test.go)
       # render deploy/helm/dev-health, so a chart-only change is a Go input.
       - 'deploy/helm/dev-health/**'
@@ -155,6 +158,7 @@ on:
       # alone must run go-quality.
       - 'internal/httpguard/*.tsv'
       - 'internal/cigates/affected/*.tsv'
+      - 'internal/cigates/affected/reach.d/*.tsv'
       - 'internal/cigates/chpin/*.tsv'
       - 'internal/cigates/chparams/testdata/*.txt'
       - 'internal/cigates/frozengoldens/*.tsv'
@@ -347,8 +351,10 @@ concurrency:
   # never colliding with each other, and the cancel expression below only
   # ever fires for `pull_request` or a non-main `push` -- `merge_group` is
   # neither, so it is structurally never cancelled, same as before.
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || ((github.ref == 'refs/heads/main' || github.event_name == 'merge_group') && github.sha) || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref != 'refs/heads/main') }}
+  # A ready_for_review run gets its own group keyed by the head sha and is never cancelled: a synchronize run of the
+  # same sha (a push right before the flip) cannot cancel it.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || ((github.ref == 'refs/heads/main' || github.event_name == 'merge_group') && github.sha) || github.ref }}${{ github.event.action == 'ready_for_review' && '-ready-' || '' }}${{ github.event.action == 'ready_for_review' && github.event.pull_request.head.sha || '' }}
+  cancel-in-progress: ${{ (github.event_name == 'pull_request' && github.event.action != 'ready_for_review') || (github.event_name == 'push' && github.ref != 'refs/heads/main') }}
 
 permissions:
   contents: read
@@ -382,7 +388,7 @@ jobs:
   # routable: `vars.SELF_HOSTED_RUNNERS == 'enabled'` and not a fork PR
   # (fork PRs never get a self-hosted runner in a public repo). When
   # SELF_HOSTED_RUNNERS is 'disabled', or on a fork PR, this check simply
-  # does not run -- it is not one of the five ruleset-required contexts, so
+  # does not run -- it is not one of the ruleset-required contexts, so
   # that is a coverage gap, not a merge blocker.
   #
   # Sizing kept at this job's pre-poller baseline (timeout-minutes: 10,
@@ -553,6 +559,7 @@ jobs:
         if: github.event_name == 'pull_request' && steps.docs.outputs.docs_only != 'true'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           EVENT_NAME: ${{ github.event_name }}
           PR_LABELS_JSON: ${{ toJSON(github.event.pull_request.labels.*.name) }}
           PR_DRAFT: ${{ github.event.pull_request.draft }}
@@ -747,7 +754,7 @@ jobs:
       - name: Log in to GitHub Container Registry
         id: ghcr_login
         continue-on-error: true
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -811,6 +818,7 @@ jobs:
         id: select
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_LABELS_JSON: ${{ toJSON(github.event.pull_request.labels.*.name) }}
         run: |
           set -euo pipefail
@@ -834,7 +842,7 @@ jobs:
 
       - name: Log in to GitHub Container Registry
         if: steps.select.outputs.rows != '0'
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -1455,7 +1463,7 @@ jobs:
       - name: Log in to GitHub Container Registry
         id: ghcr_login
         continue-on-error: true
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -1525,7 +1533,7 @@ jobs:
       - name: Log in to GitHub Container Registry
         id: ghcr_login
         continue-on-error: true
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -1566,7 +1574,7 @@ jobs:
           path: dev-health-web
           persist-credentials: false
 
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115
         with:
           package_json_file: dev-health-web/package.json
 
@@ -1707,7 +1715,7 @@ jobs:
           # nothing saved it first and left the heavy jobs an empty entry.
           cache: false
 
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115
         with:
           package_json_file: dev-health-web-main/package.json
 

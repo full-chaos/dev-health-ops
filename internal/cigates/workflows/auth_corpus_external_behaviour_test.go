@@ -21,9 +21,6 @@ import (
 // fakeSigningPEM is what the fake docker's `cp` of auth-service's signing key writes: a marker no output may show.
 const fakeSigningPEM = "FAKE-SIGNING-KEY-MARKER-7f3e9c21"
 
-// noSessionsRefusal is the corpus script's refusal of a leg whose go-api does not forward sessions (CHAOS-13154).
-const noSessionsRefusal = "sessions are not forwarded"
-
 type fakeDocker struct {
 	dir, record string
 }
@@ -46,7 +43,20 @@ case "$*" in
   *" up "*)
     case "$*" in
       *--force-recreate*" auth-service") : > "` + record + `.owned" ;;
-      *--force-recreate*" go-api") printf '%s %s\n' "${AUTH_PROXY_CREDENTIALS:-}" "${AUTH_USERS_OWNED:-}" >> "` + record + `.goapi"; printf '%s\n' "${AUTH_PROXY_SOCIAL:-}" >> "` + record + `.goapisocial" ;;
+      *--force-recreate*" go-api") printf '%s %s\n' "${AUTH_PROXY_CREDENTIALS:-}" "${AUTH_USERS_OWNED:-}" >> "` + record + `.goapi" ;;
+    esac
+    case "$*" in
+      *" go-api")
+        flags="sessions=${AUTH_PROXY_SESSIONS:-} local_login=${AUTH_PROXY_LOCAL_LOGIN:-} credentials=${AUTH_PROXY_CREDENTIALS:-} social=${AUTH_PROXY_SOCIAL:-} oidc=${AUTH_PROXY_OIDC:-} saml=${AUTH_PROXY_SAML:-}"
+        printf '%s\n' "$flags" >> "` + record + `.goapiup"
+        # Leg acp (its state names AUTH_PROXY_URL): go-api runs users owned (compose.yml's default) and refuses to start
+        # without sessions, local login and credentials forwarded (apiservice/usersowned.go).
+        if [ -n "${AUTH_PROXY_URL:-}" ]; then
+          case "$flags" in
+            "sessions=true local_login=true credentials=true "*) ;;
+            *) echo "go-api: AUTH_USERS_OWNED needs AUTH_PROXY_SESSIONS, AUTH_PROXY_LOCAL_LOGIN and AUTH_PROXY_CREDENTIALS" >&2; exit 1 ;;
+          esac
+        fi ;;
     esac
     printf '%s %s %s\n' "${AUTH_SESSION_SUCCESSOR_KEY:-}" "${AUTH_LOGIN_LOCKOUT_KEY:-}" "${AUTH_JWT_SECRET_KEY:+jwt}" >> "` + record + `.keys"
     for arg in "$@"; do last="$arg"; done
@@ -58,7 +68,7 @@ case "$*" in
     if [ -z "${FAKE_AUTH_LOGS+x}" ]; then echo 'level=INFO msg="listener bound"'; else printf '%s\n' "$FAKE_AUTH_LOGS"; fi ;;
   *" port "*) echo 127.0.0.1:12345 ;;
   *" config --format json"*)
-    if [ -n "${FAKE_COMPOSE_CONFIG:-}" ]; then printf '%s\n' "$FAKE_COMPOSE_CONFIG"; else echo '{"services":{"go-api":{"environment":{"AUTH_PROXY_SESSIONS":"true","AUTH_PROXY_LOCAL_LOGIN":"true","AUTH_PROXY_CREDENTIALS":"true","AUTH_PROXY_SOCIAL":"true"}},"auth-service":{"environment":{"AUTH_TOKEN_ISSUER_URL":"https://auth.corpus.example","AUTH_SIGNING_KEY_ID":"auth-signing-corpus"}}}}'; fi ;;
+    if [ -n "${FAKE_COMPOSE_CONFIG:-}" ]; then printf '%s\n' "$FAKE_COMPOSE_CONFIG"; else echo '{"services":{"go-api":{"environment":{"AUTH_PROXY_SESSIONS":"true","AUTH_PROXY_LOCAL_LOGIN":"true","AUTH_PROXY_CREDENTIALS":"true","AUTH_PROXY_SOCIAL":"true","AUTH_USERS_OWNED":"true"}},"auth-service":{"environment":{"AUTH_TOKEN_ISSUER_URL":"https://auth.corpus.example","AUTH_SIGNING_KEY_ID":"auth-signing-corpus"}}}}'; fi ;;
   *" ps -q go-api"*) echo cid-go-api ;;
   *"exec -T postgres psql"*"-At -f -"*) echo prn_AAAAAAAAAAAAAAAAAAAAAA ;;
   *"inspect --format"*)
@@ -76,16 +86,6 @@ esac
 case "$1" in
   test)
     case "$*" in
-      *" -c "*) ;;
-      *) printf 'SMTPADMIN %s\n' "$DEVHEALTH_AUTH_ORACLE_SMTP_ADMIN" >> "` + record + `"
-         printf '%s\n' "${DEVHEALTH_AUTH_ORACLE_FORWARDED-unset}" >> "` + record + `.forwarded"
-         printf '%s\n' "${DEVHEALTH_AUTH_ORACLE_SESSION_ISSUER-unset}" >> "` + record + `.issuer"
-         printf '%s\n' "${DEVHEALTH_AUTH_ORACLE_USERS_OWNED-unset}" >> "` + record + `.usersowned"
-         key="${DEVHEALTH_AUTH_ORACLE_SIGNING_KEY_FILE-unset}"
-         printf '%s %s %s %s\n' "$key" "${DEVHEALTH_AUTH_ORACLE_SIGNING_KEY_ID-unset}" "$(stat -c %a "$key" 2>/dev/null)" "$(stat -c %a "$(dirname "$key")" 2>/dev/null)" >> "` + record + `.signing"
-         if [ -f "$key" ]; then cat "$key" >> "` + record + `.signingcontent"; fi ;;
-    esac
-    case "$*" in
       *" -c "*)
         # go test -c ... -o BIN: BIN is the fake test binary, its pid is recorded where the test can read it.
         for arg in "$@"; do if [ "$prev" = "-o" ]; then out="$arg"; fi; prev="$arg"; done
@@ -94,6 +94,12 @@ case "$1" in
 #!/bin/sh
 printf 'SMTPADMIN %s\n' "$DEVHEALTH_AUTH_ORACLE_SMTP_ADMIN" >> "$FAKE_RECORD"
 printf 'TESTENV forwarded=%s owned=%s\n' "${DEVHEALTH_AUTH_ORACLE_FORWARDED-unset}" "${DEVHEALTH_AUTH_ORACLE_USERS_OWNED-unset}" >> "$FAKE_RECORD"
+printf '%s\n' "${DEVHEALTH_AUTH_ORACLE_FORWARDED-unset}" >> "$FAKE_RECORD.forwarded"
+printf '%s\n' "${DEVHEALTH_AUTH_ORACLE_SESSION_ISSUER-unset}" >> "$FAKE_RECORD.issuer"
+printf '%s\n' "${DEVHEALTH_AUTH_ORACLE_USERS_OWNED-unset}" >> "$FAKE_RECORD.usersowned"
+key="${DEVHEALTH_AUTH_ORACLE_SIGNING_KEY_FILE-unset}"
+printf '%s %s %s %s\n' "$key" "${DEVHEALTH_AUTH_ORACLE_SIGNING_KEY_ID-unset}" "$(stat -c %a "$key" 2>/dev/null)" "$(stat -c %a "$(dirname "$key")" 2>/dev/null)" >> "$FAKE_RECORD.signing"
+if [ -f "$key" ]; then cat "$key" >> "$FAKE_RECORD.signingcontent"; fi
 if [ -n "$FAKE_GO_TEST_EXITS" ]; then exit 0; fi
 printf '%s\n' "$$" > "$FAKE_TEST_PID_FILE"
 printf 'SEEDED\n' >> "$FAKE_RECORD"
@@ -202,6 +208,7 @@ func TestAuthCorpusSetEnvRecreatesGoAPIAndKeepsTheState(t *testing.T) {
 }
 
 func TestAuthCorpusSetEnvGivesUpWhenGoAPIStaysUnhealthy(t *testing.T) {
+	t.Parallel()
 	fake := newFakeDocker(t)
 	_, env := setEnvFixture(t, fake)
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -218,6 +225,7 @@ func TestAuthCorpusSetEnvGivesUpWhenGoAPIStaysUnhealthy(t *testing.T) {
 }
 
 func TestAuthCorpusExternalCleanupIsBounded(t *testing.T) {
+	t.Parallel()
 	fake := newFakeDocker(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 	defer cancel()
@@ -234,36 +242,56 @@ func TestAuthCorpusExternalCleanupIsBounded(t *testing.T) {
 	}
 }
 
-// compose.yml's migrate service refuses a database that holds objects but no alembic_version table, and
-// auth-migrate creates the auth schema: starting them together races. Leg acp starts go-api (and so migrate) first
-// and auth-service after it.
-func TestAuthCorpusExternalAcpLegStartsAuthServiceAfterGoAPI(t *testing.T) {
-	fake := newFakeDocker(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "bash", filepath.Join(authProofRoot(t), "ci", "auth_corpus_external.sh"), "acp")
-	cmd.Env = fake.env()
-	_, _ = cmd.CombinedOutput()
+// CHAOS-13356: leg acp runs users owned from bring-up, and go-api refuses users owned unless sessions, local login and
+// credentials are forwarded. So leg acp starts auth-service first (compose orders migrate before auth-migrate), twice
+// (step 1, then step 1b with the workload subject), and go-api once, in step 1e, after the probe and the sessions grants;
+// the only later up is the auth-service recreate of the seeded users' copy.
+func TestAuthCorpusExternalAcpLegStartsGoAPIOnlyAfterAuthServiceServes(t *testing.T) {
+	t.Parallel()
+	fake, out, err := runAcpLeg(t, "FAKE_SERVED="+ownedServed, "FAKE_METRICS="+ownedMetrics)
+	if err != nil || !strings.Contains(out, "AUTH CORPUS EXTERNAL (acp) PASSED") {
+		t.Fatalf("want a pass, got err=%v:\n%s", err, out)
+	}
 	var ups []string
-	for _, call := range strings.Split(fake.calls(t), "\n") {
+	grants, goAPI := -1, -1
+	for i, call := range strings.Split(fake.calls(t), "\n") {
+		if strings.Contains(call, "run --rm --no-deps -e AUTH_PROXY_SESSIONS=true go-river-migrate") && grants < 0 {
+			grants = i
+		}
 		if strings.Contains(call, " up ") {
 			ups = append(ups, call[strings.Index(call, " up ")+4:])
+			if strings.HasSuffix(call, " go-api") && goAPI < 0 {
+				goAPI = i
+			}
 		}
 	}
-	if len(ups) != 2 {
-		t.Fatalf("want two `compose up` calls (go-api, then auth-service), got %d: %q", len(ups), ups)
+	want := []string{" auth-service", " auth-service", " go-api", " auth-service"}
+	if len(ups) != len(want) {
+		t.Fatalf("want %d `compose up` calls (auth-service, auth-service, go-api, the seed copy's auth-service), got %d: %q", len(want), len(ups), ups)
 	}
-	if !strings.HasSuffix(ups[0], " go-api") || strings.Contains(ups[0], "auth-service") {
-		t.Errorf("the first up must start go-api alone: %q", ups[0])
+	for i, svc := range want {
+		if !strings.HasSuffix(ups[i], svc) {
+			t.Errorf("up %d = %q, want it to end with %q", i, ups[i], svc)
+		}
 	}
-	if !strings.HasSuffix(ups[1], " auth-service") || strings.Contains(ups[1], "go-api") {
-		t.Errorf("the second up must start auth-service alone: %q", ups[1])
+	if !strings.Contains(ups[0], "--build") || strings.Contains(ups[0], "--no-deps") {
+		t.Errorf("step 1 must start auth-service with its dependencies (the migrations): %q", ups[0])
+	}
+	if !strings.Contains(ups[3], "--force-recreate") {
+		t.Errorf("the last up must be the seed copy's auth-service recreate: %q", ups[3])
+	}
+	if grants < 0 || goAPI < grants {
+		t.Errorf("want the sessions grants (call %d) before go-api's first start (call %d)", grants, goAPI)
+	}
+	if strings.Index(out, "leg acp forwards: ") > strings.Index(out, "step 1e: ") {
+		t.Errorf("go-api must start only after the probe:\n%s", out)
 	}
 }
 
 // `compose up --wait-timeout` bounds the wait for health, not a build or a hung compose command: every up carries
 // its own bound.
 func TestAuthCorpusExternalUpIsBounded(t *testing.T) {
+	t.Parallel()
 	fake := newFakeDocker(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 	defer cancel()
@@ -281,6 +309,7 @@ func TestAuthCorpusExternalUpIsBounded(t *testing.T) {
 }
 
 func TestAuthCorpusSetEnvRecreateIsBounded(t *testing.T) {
+	t.Parallel()
 	fake := newFakeDocker(t)
 	_, env := setEnvFixture(t, fake)
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
@@ -308,7 +337,6 @@ if [[ " $* " == *"/mails"* ]] && [ -n "${FAKE_SINK_DOWN:-}" ]; then exit 22; fi
 if [[ " $* " == *" -X OPTIONS "* ]]; then
   path="/${last#http://*/}"
   served="${FAKE_SERVED}"
-  if [ -e "` + f.record + `.owned" ] && [ -n "${FAKE_SERVED_OWNED+x}" ]; then served="${FAKE_SERVED_OWNED}"; fi
   if [[ ",${served}," == *",${path},"* ]]; then printf 405; else printf 404; fi
   exit 0
 fi
@@ -319,14 +347,8 @@ printf '%s\n' "${FAKE_METRICS:-}"
 	}
 }
 
-// runAcpLeg runs leg acp with users NOT owned (AUTH_CORPUS_USERS_UNOWNED): the probe tests below are about the first probe.
+// runAcpLeg runs leg acp as the script does: users owned by auth-service from bring-up.
 func runAcpLeg(t *testing.T, extra ...string) (fakeDocker, string, error) {
-	t.Helper()
-	return runAcpLegWith(t, append([]string{"AUTH_CORPUS_USERS_UNOWNED=1"}, extra...)...)
-}
-
-// runAcpOwnedLeg runs leg acp as the script does by default: users owned by auth-service.
-func runAcpOwnedLeg(t *testing.T, extra ...string) (fakeDocker, string, error) {
 	t.Helper()
 	return runAcpLegWith(t, extra...)
 }
@@ -343,31 +365,43 @@ func runAcpLegWith(t *testing.T, extra ...string) (fakeDocker, string, error) {
 	return fake, string(out), err
 }
 
-func proxyFlagRecreates(calls string) []string {
-	var out []string
+// goAPIUps returns, per `compose up` of go-api, the AUTH_PROXY_* flags its environment carried (the fake docker's record).
+func goAPIUps(t *testing.T, fake fakeDocker) []string {
+	t.Helper()
+	raw, err := os.ReadFile(fake.record + ".goapiup")
+	if err != nil {
+		return nil
+	}
+	return strings.Split(strings.TrimRight(string(raw), "\n"), "\n")
+}
+
+// goAPIRecreates counts go-api's recreates (ci/auth_corpus_set_env.sh): leg acp sets its flags before go-api first starts.
+func goAPIRecreates(calls string) int {
+	n := 0
 	for _, line := range strings.Split(calls, "\n") {
-		if strings.Contains(line, " up ") && strings.Contains(line, "--force-recreate") {
-			if strings.HasSuffix(line, " auth-service") {
-				break // step 1e (users owned) follows the proxy flags
-			}
-			out = append(out, line)
+		if strings.Contains(line, " up ") && strings.Contains(line, "--force-recreate") && strings.HasSuffix(line, " go-api") {
+			n++
 		}
 	}
-	return out
+	return n
 }
+
+// ownedFlags is the fake docker's record of a go-api start that forwards production's set (users owned).
+const ownedFlags = "sessions=true local_login=true credentials=true social=true oidc= saml="
 
 // Leg acp forwards an aggregate only when the running auth-service serves every route of it, and the sessions
 // aggregate gates the others: a flag on for a route auth-service does not serve would compare auth-service's 404
-// with go-api's answer.
+// with go-api's answer. CHAOS-13356: auth-service owns users from bring-up, so credentials and social must be served
+// too, and go-api starts once, with the flags of the forwarded set.
 func TestAuthCorpusAcpLegForwardsOnlyWhatAuthServiceServes(t *testing.T) {
+	t.Parallel()
 	sessions := "/api/v1/auth/refresh,/api/v1/auth/logout,/api/v1/auth/validate,/api/v1/auth/switch-org"
-	required := sessions + ",/api/v1/auth/login,/api/v1/auth/social-login"
 	forwarded := func(aggregate string) string {
 		return `devhealth_api_auth_proxy_requests_total{aggregate="` + aggregate + `",outcome="forwarded"} 3`
 	}
 	for name, tc := range map[string]struct {
 		served, metrics string
-		wantRecreates   int
+		wantGoAPI       string
 		wantForwards    string
 		wantProbes      []string
 		wantError       string
@@ -378,13 +412,15 @@ func TestAuthCorpusAcpLegForwardsOnlyWhatAuthServiceServes(t *testing.T) {
 		"login without sessions": {served: "/api/v1/auth/login", wantError: "required aggregate sessions is not served by auth-service",
 			wantProbes: []string{"probe sessions: not served (4 routes)", "probe local_login: served (1 routes)"}},
 		"sessions only": {served: sessions, wantError: "required aggregate local_login is not served by auth-service"},
-		"sessions and login": {served: sessions + ",/api/v1/auth/login", metrics: forwarded("sessions") + "\n" + forwarded("local_login"),
-			wantRecreates: 2, wantForwards: "leg acp forwards: sessions local_login\n"},
-		"social served stays on go-api": {served: required, metrics: forwarded("sessions") + "\n" + forwarded("local_login"),
-			wantRecreates: 2, wantForwards: "leg acp forwards: sessions local_login\n"},
-		"social forwarded although kept on go-api": {served: required, wantRecreates: 2,
-			metrics:   forwarded("sessions") + "\n" + forwarded("local_login") + "\n" + forwarded("social"),
-			wantError: "go-api forwarded aggregate social, whose flag is off"},
+		"sessions and login, credentials not served": {served: sessions + ",/api/v1/auth/login",
+			wantError: "aggregate credentials is not served by auth-service, which owns the users"},
+		"social not served": {served: sessions + ",/api/v1/auth/login," + credentialsRoutes,
+			wantError: "aggregate social is not served by auth-service, which owns the users"},
+		"the owned set": {served: ownedServed, metrics: ownedMetrics, wantGoAPI: ownedFlags,
+			wantForwards: "leg acp forwards: sessions local_login credentials social\n"},
+		"the owned set and oidc": {served: ownedServed + ",/api/v1/auth/oidc/p-probe/authorize,/api/v1/auth/oidc/p-probe/callback",
+			metrics: ownedMetrics + "\n" + forwarded("oidc"), wantGoAPI: "sessions=true local_login=true credentials=true social=true oidc=true saml=",
+			wantForwards: "leg acp forwards: sessions local_login credentials social oidc\n"},
 		"half an aggregate": {served: "/api/v1/auth/refresh", wantError: "auth-service serves 1 of the 4 routes of aggregate sessions",
 			wantProbes: []string{"probe sessions: partial (1 of 4 routes served)"}},
 		"half a non-session aggregate": {served: sessions + ",/api/v1/auth/oidc/p-probe/authorize",
@@ -392,8 +428,9 @@ func TestAuthCorpusAcpLegForwardsOnlyWhatAuthServiceServes(t *testing.T) {
 			wantProbes: []string{"probe sessions: served (4 routes)", "probe oidc: partial (1 of 2 routes served)"}},
 		"half a non-session aggregate without sessions": {served: "/api/v1/auth/saml/p-probe/metadata",
 			wantError: "auth-service serves 1 of the 3 routes of aggregate saml"},
-		"served but not forwarded": {served: required, wantRecreates: 2, wantError: "no forwarded request for aggregate sessions"},
-		"forwarded while off":      {served: required, wantRecreates: 2, metrics: forwarded("sessions") + "\n" + forwarded("local_login") + "\n" + forwarded("saml"), wantError: "go-api forwarded aggregate saml, whose flag is off"},
+		"served but not forwarded": {served: ownedServed, wantGoAPI: ownedFlags, wantError: "no forwarded request for aggregate sessions"},
+		"forwarded while off": {served: ownedServed, wantGoAPI: ownedFlags, metrics: ownedMetrics + "\n" + forwarded("saml"),
+			wantError: "go-api forwarded aggregate saml, whose flag is off"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			fake, out, err := runAcpLeg(t, "FAKE_SERVED="+tc.served, "FAKE_METRICS="+tc.metrics)
@@ -412,8 +449,16 @@ func TestAuthCorpusAcpLegForwardsOnlyWhatAuthServiceServes(t *testing.T) {
 					t.Errorf("want the probe line %q in the output:\n%s", line, out)
 				}
 			}
-			if got := proxyFlagRecreates(fake.calls(t)); len(got) != tc.wantRecreates {
-				t.Errorf("go-api recreated %d times for proxy flags, want %d: %q", len(got), tc.wantRecreates, got)
+			ups := goAPIUps(t, fake)
+			if tc.wantGoAPI == "" {
+				if len(ups) != 0 {
+					t.Errorf("go-api started although the probe failed: %q", ups)
+				}
+			} else if len(ups) != 1 || ups[0] != tc.wantGoAPI {
+				t.Errorf("go-api starts = %q, want exactly one with %q", ups, tc.wantGoAPI)
+			}
+			if n := goAPIRecreates(fake.calls(t)); n != 0 {
+				t.Errorf("go-api was recreated %d times for its flags, want none: they are set before it starts", n)
 			}
 		})
 	}
@@ -424,8 +469,8 @@ func TestAuthCorpusAcpLegForwardsOnlyWhatAuthServiceServes(t *testing.T) {
 // subject, the sessions-owned grants run before go-api first restarts with the sessions flag, and that restart selects
 // the workload credential with no AUTH_SESSION_ISSUE_TOKEN in its environment.
 func TestAuthCorpusAcpLegSignsInWithTheWorkloadTokenAndGrantsBeforeTheSessionsFlag(t *testing.T) {
-	fake, out, err := runAcpLeg(t, "FAKE_SERVED=/api/v1/auth/refresh,/api/v1/auth/logout,/api/v1/auth/validate,/api/v1/auth/switch-org,/api/v1/auth/login,/api/v1/auth/social-login",
-		"FAKE_METRICS="+metric("sessions")+"\n"+metric("local_login"))
+	t.Parallel()
+	fake, out, err := runAcpLeg(t, "FAKE_SERVED="+ownedServed, "FAKE_METRICS="+ownedMetrics)
 	if err != nil {
 		t.Fatalf("leg acp failed: %v\n%s", err, out)
 	}
@@ -447,16 +492,24 @@ func TestAuthCorpusAcpLegSignsInWithTheWorkloadTokenAndGrantsBeforeTheSessionsFl
 	}
 	bootstrap := index(has("run --build --rm auth-workload-bootstrap"))
 	subject := index(has("exec -T postgres psql"))
-	authUp := index(func(line string) bool {
-		return strings.Contains(line, " up ") && strings.HasSuffix(line, " auth-service")
-	})
+	authUp := -1
+	if subject >= 0 {
+		for i, line := range lines[subject:] {
+			if strings.Contains(line, " up ") && strings.HasSuffix(line, " auth-service") {
+				authUp = subject + i
+				break
+			}
+		}
+	}
 	grants := index(has("run --rm --no-deps -e AUTH_PROXY_SESSIONS=true go-river-migrate"))
-	flag := index(has("--force-recreate"))
+	goAPI := index(func(line string) bool {
+		return strings.Contains(line, " up ") && strings.HasSuffix(line, " go-api")
+	})
 	if bootstrap < 0 || subject < 0 || authUp < 0 || !(bootstrap < subject && subject < authUp) {
 		t.Fatalf("want the bootstrap run (%d), then the subject read (%d), then auth-service up (%d):\n%s", bootstrap, subject, authUp, calls)
 	}
-	if grants < 0 || flag < 0 || !(grants < flag) {
-		t.Fatalf("want the grants (%d) before the first go-api recreate (%d):\n%s", grants, flag, calls)
+	if grants < 0 || goAPI < 0 || !(grants < goAPI) {
+		t.Fatalf("want the grants (%d) before go-api's first start (%d):\n%s", grants, goAPI, calls)
 	}
 	raw, err := os.ReadFile(fake.record + ".workload")
 	if err != nil {
@@ -488,6 +541,7 @@ func TestAuthCorpusAcpLegSignsInWithTheWorkloadTokenAndGrantsBeforeTheSessionsFl
 // compose's auth-issuer serves (compose.yml's AUTH_TOKEN_ISSUER_URL default), not the workload lib's default, which
 // no host serves: there every venue token answered 503.
 func TestAuthCorpusAcpLegUsesTheIssuerAuthIssuerServes(t *testing.T) {
+	t.Parallel()
 	compose, err := os.ReadFile(filepath.Join(authProofRoot(t), "compose.yml"))
 	if err != nil {
 		t.Fatal(err)
@@ -497,7 +551,7 @@ func TestAuthCorpusAcpLegUsesTheIssuerAuthIssuerServes(t *testing.T) {
 		t.Fatal("compose.yml names no AUTH_TOKEN_ISSUER_URL default for go-api's AUTH_ACCESS_TOKEN_ISSUER")
 	}
 	issuer := string(served[1])
-	fake, out, err := runAcpLeg(t, "FAKE_SERVED="+requiredServed, "FAKE_METRICS="+metric("sessions")+"\n"+metric("local_login"))
+	fake, out, err := runAcpLeg(t, "FAKE_SERVED="+ownedServed, "FAKE_METRICS="+ownedMetrics)
 	if err != nil {
 		t.Fatalf("leg acp failed: %v\n%s", err, out)
 	}
@@ -544,11 +598,17 @@ func upKeys(t *testing.T, fake fakeDocker) [][3]string {
 
 const requiredServed = "/api/v1/auth/refresh,/api/v1/auth/logout,/api/v1/auth/validate,/api/v1/auth/switch-org,/api/v1/auth/login,/api/v1/auth/social-login"
 
+// ownedServed is what auth-service serves with users owned and the session keys set: the required aggregates, social
+// and credentials (CHAOS-13356: every run of leg acp). ownedMetrics is go-api forwarding all four.
+const ownedServed = requiredServed + "," + credentialsRoutes
+
+var ownedMetrics = metric("sessions") + "\n" + metric("local_login") + "\n" + metric("credentials") + "\n" + metric("social")
+
 // Leg acp gives auth-service freshly made session keys through the compose environment only: never an argument, never
 // the output (CI masks them first), and none at all when AUTH_CORPUS_OMIT_AUTH_KEYS is set.
 func TestAuthCorpusAcpLegKeysStayOutOfArgumentsAndOutput(t *testing.T) {
-	metrics := metric("sessions") + "\n" + metric("local_login")
-	fake, out, err := runAcpLeg(t, "FAKE_SERVED="+requiredServed, "FAKE_METRICS="+metrics)
+	t.Parallel()
+	fake, out, err := runAcpLeg(t, "FAKE_SERVED="+ownedServed, "FAKE_METRICS="+ownedMetrics)
 	if err != nil {
 		t.Fatalf("leg acp failed: %v\n%s", err, out)
 	}
@@ -570,8 +630,8 @@ func TestAuthCorpusAcpLegKeysStayOutOfArgumentsAndOutput(t *testing.T) {
 }
 
 func TestAuthCorpusAcpLegMasksTheKeysBeforeAnythingElse(t *testing.T) {
-	metrics := metric("sessions") + "\n" + metric("local_login")
-	fake, out, err := runAcpLeg(t, "GITHUB_ACTIONS=true", "CHECK_GO_JOB_CAP_MIN=30", "FAKE_SERVED="+requiredServed, "FAKE_METRICS="+metrics)
+	t.Parallel()
+	fake, out, err := runAcpLeg(t, "GITHUB_ACTIONS=true", "CHECK_GO_JOB_CAP_MIN=30", "FAKE_SERVED="+ownedServed, "FAKE_METRICS="+ownedMetrics)
 	if err != nil {
 		t.Fatalf("leg acp failed: %v\n%s", err, out)
 	}
@@ -640,9 +700,8 @@ func TestAuthCorpusFailureDumpIncludesAuthServiceAndTheStub(t *testing.T) {
 // Leg acp reads auth-service's own log: the corpus test runs in another process than auth-service, so a body written
 // with the wrong writer for its route is visible only as the policy's ERROR line.
 func TestAuthCorpusAcpLegFailsOnAuthServiceWriterViolations(t *testing.T) {
-	served := "/api/v1/auth/refresh,/api/v1/auth/logout,/api/v1/auth/validate,/api/v1/auth/switch-org,/api/v1/auth/login"
-	metrics := `devhealth_api_auth_proxy_requests_total{aggregate="sessions",outcome="forwarded"} 3` + "\n" +
-		`devhealth_api_auth_proxy_requests_total{aggregate="local_login",outcome="forwarded"} 3`
+	t.Parallel()
+	served, metrics := ownedServed, ownedMetrics
 	known := `level=INFO msg="listener bound" component=auth-api-http address=127.0.0.1:8095`
 	violation := `level=ERROR msg="policy: wrong body writer for the route; FastAPI writes this body the other way" route="POST /api/v1/auth/login"`
 	for name, tc := range map[string]struct {
@@ -672,111 +731,73 @@ func TestAuthCorpusAcpLegFailsOnAuthServiceWriterViolations(t *testing.T) {
 
 const credentialsRoutes = "/api/v1/auth/register,/api/v1/auth/verify,/api/v1/auth/resend-verification,/api/v1/auth/forgot-password,/api/v1/auth/reset-password,/api/v1/auth/change-password"
 
-// Leg acp copies public.users into the auth schema before AUTH_USERS_OWNED turns on (the backfill refuses once it is
-// true), then applies the grants, restarts auth-service and go-api with it; AUTH_CORPUS_USERS_UNOWNED skips all of it.
-func TestAuthCorpusAcpLegBackfillsUsersBeforeTheOwnedFlag(t *testing.T) {
-	metrics := metric("sessions") + "\n" + metric("local_login") + "\n" + metric("credentials") + "\n" + metric("social")
-	fake, out, err := runAcpOwnedLeg(t, "FAKE_SERVED="+requiredServed, "FAKE_SERVED_OWNED="+requiredServed+","+credentialsRoutes, "FAKE_METRICS="+metrics)
+// CHAOS-13356: leg acp owns users from bring-up, as leg go-api does: the seeded users are copied by compose.yml's own
+// auth-users-backfill one-shot (`users-backfill -insert-only`, users owned), then auth-service is recreated. No step
+// flips the flag: nothing runs with AUTH_USERS_OWNED on its command line, no ad-hoc migrate copy, no extra grants pass.
+func TestAuthCorpusAcpLegCopiesTheSeededUsersThroughTheOneShot(t *testing.T) {
+	t.Parallel()
+	fake, out, err := runAcpLeg(t, "FAKE_SERVED="+ownedServed, "FAKE_METRICS="+ownedMetrics)
 	if err != nil || !strings.Contains(out, "AUTH CORPUS EXTERNAL (acp) PASSED") {
 		t.Fatalf("want a pass, got err=%v:\n%s", err, out)
 	}
 	calls := fake.calls(t)
-	backfill := strings.Index(calls, "users-backfill")
-	grants := strings.Index(calls, "auth-grants")
+	backfill := strings.Index(calls, "run --rm --no-deps auth-users-backfill")
 	restart := strings.Index(calls, "--force-recreate --no-build --wait --wait-timeout 300 auth-service")
-	if backfill < 0 || grants < backfill || restart < grants {
-		t.Fatalf("want users-backfill, then auth-grants, then the auth-service restart; got positions %d %d %d:\n%s", backfill, grants, restart, calls)
+	if backfill < 0 || restart < backfill {
+		t.Fatalf("want the auth-users-backfill one-shot, then the auth-service restart; got positions %d %d:\n%s", backfill, restart, calls)
 	}
-	// The compose migrate service defaults the flag to true, so the backfill call sets it off itself.
-	if strings.Contains(calls, "-e AUTH_USERS_OWNED=true") || !strings.Contains(calls, "-e AUTH_USERS_OWNED=false migrate auth users-backfill") {
-		t.Errorf("the backfill must run with the flag off:\n%s", calls)
+	if strings.Count(calls, "users-backfill") != 1 {
+		t.Errorf("want exactly one users-backfill run:\n%s", calls)
 	}
+	for _, banned := range []string{"AUTH_USERS_OWNED", "migrate auth users-backfill", "auth-grants"} {
+		if strings.Contains(calls, banned) {
+			t.Errorf("a docker call names %q: users are owned from bring-up, no step flips them:\n%s", banned, calls)
+		}
+	}
+}
 
-	fake, out, err = runAcpLeg(t, "FAKE_SERVED="+requiredServed, "FAKE_METRICS="+metric("sessions")+"\n"+metric("local_login"))
+// go-api refuses users owned (compose.yml's default) without sessions, local login and credentials forwarded: leg acp
+// writes every forwarded flag to the state before go-api's one start, and the fake docker's go-api refuses a start
+// without them, so a script that started go-api before the probe, or turned the flags on one by one, fails here.
+func TestAuthCorpusAcpLegStartsGoAPIOnceWithTheOwnedSet(t *testing.T) {
+	t.Parallel()
+	fake, out, err := runAcpLeg(t, "FAKE_SERVED="+ownedServed, "FAKE_METRICS="+ownedMetrics)
 	if err != nil || !strings.Contains(out, "AUTH CORPUS EXTERNAL (acp) PASSED") {
 		t.Fatalf("want a pass, got err=%v:\n%s", err, out)
 	}
-	if calls := fake.calls(t); strings.Contains(calls, "users-backfill") || strings.Contains(calls, "auth-grants") {
-		t.Errorf("AUTH_CORPUS_USERS_UNOWNED must skip step 1e:\n%s", calls)
+	if got := goAPIUps(t, fake); len(got) != 1 || got[0] != ownedFlags {
+		t.Fatalf("go-api starts = %q, want one with %q", got, ownedFlags)
+	}
+	if !strings.Contains(out, "step 1e: up --build --wait go-api, forwarding sessions,local_login,credentials,social, users owned\n") {
+		t.Errorf("want step 1e naming the forwarded set:\n%s", out)
 	}
 }
 
-func goAPIFlagRecreates(t *testing.T, fake fakeDocker) []string {
-	t.Helper()
-	raw, err := os.ReadFile(fake.record + ".goapi")
-	if err != nil {
-		t.Fatal(err)
-	}
-	return strings.Split(strings.TrimRight(string(raw), "\n"), "\n")
-}
-
-// go-api refuses the owned flag without the credentials flag: the script turns credentials on first, and the fake
-// docker's go-api turns unhealthy for the reverse order, so a script that swapped them fails here.
-func TestAuthCorpusAcpOwnedLegTurnsCredentialsOnBeforeTheOwnedFlag(t *testing.T) {
-	metrics := metric("sessions") + "\n" + metric("local_login") + "\n" + metric("credentials") + "\n" + metric("social")
-	fake, out, err := runAcpOwnedLeg(t, "FAKE_SERVED="+requiredServed, "FAKE_SERVED_OWNED="+requiredServed+","+credentialsRoutes, "FAKE_METRICS="+metrics)
-	if err != nil || !strings.Contains(out, "AUTH CORPUS EXTERNAL (acp) PASSED") {
-		t.Fatalf("want a pass, got err=%v:\n%s", err, out)
-	}
-	got := goAPIFlagRecreates(t, fake)
-	want := []string{" ", " ", "true ", "true ", "true true"}
-	if len(got) != len(want) {
-		t.Fatalf("go-api recreates (credentials owned) = %q, want %q", got, want)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("go-api recreate %d = %q, want %q (all %q)", i, got[i], want[i], got)
-		}
-	}
-	if !strings.Contains(out, "leg acp forwards (users owned): sessions local_login credentials social\n") {
-		t.Errorf("want the re-probed forwarded set in the output:\n%s", out)
+// auth-service owns users from bring-up: a leg where it does not serve credentials or social fails by name, after the
+// required aggregates, and go-api never starts.
+func TestAuthCorpusAcpLegFailsWhenAnOwnedAggregateIsNotServed(t *testing.T) {
+	t.Parallel()
+	for aggregate, served := range map[string]string{
+		"credentials": requiredServed,
+		"social":      strings.Replace(ownedServed, ",/api/v1/auth/social-login", "", 1),
+	} {
+		t.Run(aggregate, func(t *testing.T) {
+			fake, out, err := runAcpLeg(t, "FAKE_SERVED="+served, "FAKE_METRICS="+ownedMetrics)
+			if err == nil || !strings.Contains(out, "aggregate "+aggregate+" is not served by auth-service, which owns the users") {
+				t.Fatalf("want a failure naming %s, got err=%v:\n%s", aggregate, err, out)
+			}
+			if ups := goAPIUps(t, fake); len(ups) != 0 {
+				t.Errorf("go-api started: %q", ups)
+			}
+		})
 	}
 }
 
-// The owned leg fails by name when credentials is still not served after step 1e: the gate refuses a mounted-or-not credentials
-// aggregate once the users are owned.
-func TestAuthCorpusAcpOwnedLegFailsWhenCredentialsStaysNotServed(t *testing.T) {
-	_, out, err := runAcpOwnedLeg(t, "FAKE_SERVED="+requiredServed, "FAKE_SERVED_OWNED="+requiredServed,
-		"FAKE_METRICS="+metric("sessions")+"\n"+metric("local_login"))
-	if err == nil || !strings.Contains(out, "aggregate credentials is not served by auth-service, which owns the users") {
-		t.Fatalf("want a failure naming credentials, got err=%v:\n%s", err, out)
-	}
-}
-
-func forwardedLine(t *testing.T, out, prefix string) []string {
-	t.Helper()
-	for _, line := range strings.Split(out, "\n") {
-		if strings.HasPrefix(line, prefix) {
-			return strings.Fields(strings.TrimPrefix(line, prefix))
-		}
-	}
-	t.Fatalf("no %q line:\n%s", prefix, out)
-	return nil
-}
-
-// The owned and the unowned legs forward the same aggregates but credentials and social.
-func TestAuthCorpusAcpOwnedAndUnownedForwardedSetsDifferByCredentialsAndSocialOnly(t *testing.T) {
-	served := "FAKE_SERVED=" + requiredServed
-	both := "FAKE_SERVED_OWNED=" + requiredServed + "," + credentialsRoutes
-	_, owned, err := runAcpOwnedLeg(t, served, both, "FAKE_METRICS="+metric("sessions")+"\n"+metric("local_login")+"\n"+metric("credentials")+"\n"+metric("social"))
-	if err != nil {
-		t.Fatalf("owned: %v\n%s", err, owned)
-	}
-	_, unowned, err := runAcpLeg(t, served, both, "FAKE_METRICS="+metric("sessions")+"\n"+metric("local_login"))
-	if err != nil {
-		t.Fatalf("unowned: %v\n%s", err, unowned)
-	}
-	o, u := forwardedLine(t, owned, "leg acp forwards (users owned): "), forwardedLine(t, unowned, "leg acp forwards: ")
-	if strings.Join(u, ",") != "sessions,local_login" || strings.Join(o, ",") != "sessions,local_login,credentials,social" {
-		t.Fatalf("owned %v, unowned %v: they must differ by credentials and social only", o, u)
-	}
-}
-
-// The corpus seeds its users before the backfill, as a real switch has users first: the owned leg runs the test in the
-// background, which seeds, signals, and waits for the script to finish step 1e and 1f before it drives go-api.
-func TestAuthCorpusAcpOwnedLegSeedsBeforeTheBackfillAndHandsTheForwardedSetToTheTest(t *testing.T) {
-	metrics := metric("sessions") + "\n" + metric("local_login") + "\n" + metric("credentials") + "\n" + metric("social")
-	fake, out, err := runAcpOwnedLeg(t, "FAKE_SERVED="+requiredServed, "FAKE_SERVED_OWNED="+requiredServed+","+credentialsRoutes, "FAKE_METRICS="+metrics)
+// The corpus seeds its users before the copy: leg acp runs the test in the background, which seeds, signals, and waits
+// for the script to finish step 1f (the seeded users' copy) before it drives go-api.
+func TestAuthCorpusAcpLegSeedsBeforeTheBackfillAndHandsTheForwardedSetToTheTest(t *testing.T) {
+	t.Parallel()
+	fake, out, err := runAcpLeg(t, "FAKE_SERVED="+ownedServed, "FAKE_METRICS="+ownedMetrics)
 	if err != nil || !strings.Contains(out, "AUTH CORPUS EXTERNAL (acp) PASSED") {
 		t.Fatalf("want a pass, got err=%v:\n%s", err, out)
 	}
@@ -788,26 +809,53 @@ func TestAuthCorpusAcpOwnedLegSeedsBeforeTheBackfillAndHandsTheForwardedSetToThe
 	if !strings.Contains(calls, "FLIPPED sessions,local_login,credentials,social\n") {
 		t.Errorf("want the test to be handed the forwarded set after step 1f:\n%s", calls)
 	}
+	if !strings.Contains(calls, "TESTENV forwarded=sessions,local_login,credentials,social owned=true\n") {
+		t.Errorf("want the test told users are owned:\n%s", calls)
+	}
 	if strings.Index(calls, "FLIPPED") < backfill {
 		t.Errorf("the test must be released only after the backfill:\n%s", calls)
 	}
 }
 
-// The unowned legs keep their order: the test runs in the foreground, with no seed hand-off.
-func TestAuthCorpusUnownedLegHasNoSeedHandOff(t *testing.T) {
-	fake, out, err := runAcpLeg(t, "FAKE_SERVED="+requiredServed, "FAKE_METRICS="+metric("sessions")+"\n"+metric("local_login"))
-	if err != nil || !strings.Contains(out, "AUTH CORPUS EXTERNAL (acp) PASSED") {
-		t.Fatalf("want a pass, got err=%v:\n%s", err, out)
+// CHAOS-13356: the run with users not owned is retired. AUTH_CORPUS_USERS_UNOWNED, AUTH_CORPUS_FORCE_SOCIAL and a caller's
+// AUTH_USERS_OWNED other than true are refused by name on both legs, before any docker call and any temporary directory.
+func TestAuthCorpusRetiresTheNotOwnedRun(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		leg, env, want string
+	}{
+		"unowned on acp":           {"acp", "AUTH_CORPUS_USERS_UNOWNED=1", "the not-owned run is retired"},
+		"force social on acp":      {"acp", "AUTH_CORPUS_FORCE_SOCIAL=1", "the not-owned run is retired"},
+		"unowned on go-api":        {"go-api", "AUTH_CORPUS_USERS_UNOWNED=1", "the not-owned run is retired"},
+		"force social on go-api":   {"go-api", "AUTH_CORPUS_FORCE_SOCIAL=1", "the not-owned run is retired"},
+		"caller flag off on acp":   {"acp", "AUTH_USERS_OWNED=false", "users are owned on every leg"},
+		"caller flag off, go-api":  {"go-api", "AUTH_USERS_OWNED=false", "users are owned on every leg"},
+		"caller flag empty on acp": {"acp", "AUTH_USERS_OWNED=", "users are owned on every leg"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			tmp := t.TempDir()
+			fake, out, err := runLegArg(t, tc.leg, "TMPDIR="+tmp, tc.env)
+			if err == nil || !strings.Contains(out, tc.want) {
+				t.Fatalf("want the refusal naming %q, got err=%v:\n%s", tc.want, err, out)
+			}
+			if calls := fake.calls(t); calls != "" {
+				t.Errorf("the refused run called docker:\n%s", calls)
+			}
+			if entries, readErr := os.ReadDir(tmp); readErr != nil || len(entries) != 0 {
+				t.Errorf("the refused run left %d entries in its TMPDIR (%v)", len(entries), readErr)
+			}
+		})
 	}
-	if calls := fake.calls(t); strings.Contains(calls, "SEEDED") || strings.Contains(calls, "FLIPPED") {
-		t.Errorf("an unowned leg must not hand off:\n%s", calls)
+	_, out, err := runAcpLeg(t, "AUTH_USERS_OWNED=true", "FAKE_SERVED="+ownedServed, "FAKE_METRICS="+ownedMetrics)
+	if err != nil || !strings.Contains(out, "AUTH CORPUS EXTERNAL (acp) PASSED") {
+		t.Errorf("a caller's AUTH_USERS_OWNED=true must run: err=%v\n%s", err, out)
 	}
 }
 
 // The test fails the leg when it ends before it seeds.
-func TestAuthCorpusAcpOwnedLegFailsWhenTheTestEndsBeforeSeeding(t *testing.T) {
-	_, out, err := runAcpOwnedLeg(t, "FAKE_SERVED="+requiredServed, "FAKE_SERVED_OWNED="+requiredServed+","+credentialsRoutes,
-		"FAKE_METRICS="+metric("sessions")+"\n"+metric("local_login")+"\n"+metric("credentials")+"\n"+metric("social"), "FAKE_GO_TEST_EXITS=1")
+func TestAuthCorpusAcpLegFailsWhenTheTestEndsBeforeSeeding(t *testing.T) {
+	t.Parallel()
+	_, out, err := runAcpLeg(t, "FAKE_SERVED="+ownedServed, "FAKE_METRICS="+ownedMetrics, "FAKE_GO_TEST_EXITS=1")
 	if err == nil || !strings.Contains(out, "the corpus test ended before it seeded") {
 		t.Fatalf("want a failure naming the early end, got err=%v:\n%s", err, out)
 	}
@@ -894,8 +942,8 @@ func TestAuthCorpusSinkReadAPIIsPublishedOnLoopbackOnly(t *testing.T) {
 // The script reads the sink's published port, fails the leg when the read API does not answer, and hands the test its URL
 // on every leg.
 func TestAuthCorpusScriptHandsTheTestTheSinkReadAPI(t *testing.T) {
-	metrics := metric("sessions") + "\n" + metric("local_login") + "\n" + metric("credentials") + "\n" + metric("social")
-	fake, out, err := runAcpOwnedLeg(t, "FAKE_SERVED="+requiredServed, "FAKE_SERVED_OWNED="+requiredServed+","+credentialsRoutes, "FAKE_METRICS="+metrics)
+	t.Parallel()
+	fake, out, err := runAcpLeg(t, "FAKE_SERVED="+ownedServed, "FAKE_METRICS="+ownedMetrics)
 	if err != nil || !strings.Contains(out, "AUTH CORPUS EXTERNAL (acp) PASSED") {
 		t.Fatalf("want a pass, got err=%v:\n%s", err, out)
 	}
@@ -903,25 +951,24 @@ func TestAuthCorpusScriptHandsTheTestTheSinkReadAPI(t *testing.T) {
 	if !strings.Contains(calls, " port smtpsink 9090") || !strings.Contains(calls, "SMTPADMIN http://127.0.0.1:12345\n") {
 		t.Errorf("want the sink's port read and exported to the test:\n%s", calls)
 	}
-	fake, out, err = runAcpLeg(t, "FAKE_SERVED="+requiredServed, "FAKE_METRICS="+metric("sessions")+"\n"+metric("local_login"))
+	fake, out, err = runLegArg(t, "go-api")
 	if err != nil {
-		t.Fatalf("unowned leg: %v\n%s", err, out)
+		t.Fatalf("leg go-api: %v\n%s", err, out)
 	}
 	if calls := fake.calls(t); !strings.Contains(calls, "SMTPADMIN http://127.0.0.1:12345\n") {
-		t.Errorf("the unowned leg must read the sink too:\n%s", calls)
+		t.Errorf("leg go-api must read the sink too:\n%s", calls)
 	}
-	_, out, err = runAcpOwnedLeg(t, "FAKE_SERVED="+requiredServed, "FAKE_SERVED_OWNED="+requiredServed+","+credentialsRoutes, "FAKE_METRICS="+metrics,
-		"FAKE_SINK_DOWN=1", "AUTH_CORPUS_SINK_TRIES=2")
+	_, out, err = runAcpLeg(t, "FAKE_SERVED="+ownedServed, "FAKE_METRICS="+ownedMetrics, "FAKE_SINK_DOWN=1", "AUTH_CORPUS_SINK_TRIES=2")
 	if err == nil || !strings.Contains(out, "the corpus mail sink's read API does not answer") {
 		t.Fatalf("want the leg to fail closed on a silent sink, got err=%v:\n%s", err, out)
 	}
 }
 
-// The owned leg runs the test as a compiled binary and, when the script fails while the test waits, cleanup kills
+// Every leg runs the test as a compiled binary and, when the script fails while the test waits, cleanup kills
 // that pid: no test process outlives the script (it would hold the mail sink's port).
-func TestAuthCorpusAcpOwnedLegKillsTheTestItself(t *testing.T) {
-	fake, out, err := runAcpOwnedLeg(t, "FAKE_SERVED="+requiredServed, "FAKE_SERVED_OWNED="+requiredServed+","+credentialsRoutes,
-		"FAKE_METRICS="+metric("sessions")+"\n"+metric("local_login")+"\n"+metric("credentials")+"\n"+metric("social"), "FAKE_FAIL_BACKFILL=1")
+func TestAuthCorpusAcpLegKillsTheTestItself(t *testing.T) {
+	t.Parallel()
+	fake, out, err := runAcpLeg(t, "FAKE_SERVED="+ownedServed, "FAKE_METRICS="+ownedMetrics, "FAKE_FAIL_BACKFILL=1")
 	if err == nil || !strings.Contains(out, "users-backfill failed") {
 		t.Fatalf("want the backfill failure, got err=%v:\n%s", err, out)
 	}
@@ -1021,55 +1068,16 @@ func TestAuthCorpusCleanupRemovesExactlyTheProjectsOwnBuiltImagesAfterDown(t *te
 	}
 }
 
-// credentials is mounted by auth-service as a 503 stub before it owns the users: go-api must keep forwarding nothing for
-// it until an owned step sets USERS_OWNED, however many of its routes answer OPTIONS.
-func TestAuthCorpusAcpLegDoesNotForwardMountedCredentialsBeforeUsersAreOwned(t *testing.T) {
-	credentials := "/api/v1/auth/register,/api/v1/auth/verify,/api/v1/auth/resend-verification,/api/v1/auth/forgot-password," +
-		"/api/v1/auth/reset-password,/api/v1/auth/change-password"
-	served := "/api/v1/auth/refresh,/api/v1/auth/logout,/api/v1/auth/validate,/api/v1/auth/switch-org,/api/v1/auth/login,/api/v1/auth/social-login," + credentials
-	metrics := `devhealth_api_auth_proxy_requests_total{aggregate="sessions",outcome="forwarded"} 3` + "\n" +
-		`devhealth_api_auth_proxy_requests_total{aggregate="local_login",outcome="forwarded"} 3`
-	for name, extra := range map[string][]string{"no caller env": nil, "caller env USERS_OWNED=1": {"USERS_OWNED=1"}} {
-		t.Run(name, func(t *testing.T) {
-			fake, out, err := runAcpLeg(t, append([]string{"FAKE_SERVED=" + served, "FAKE_METRICS=" + metrics}, extra...)...)
-			if err != nil || !strings.Contains(out, "leg acp forwards: sessions local_login\n") {
-				t.Fatalf("want credentials kept on go-api, got err=%v:\n%s", err, out)
+// gate_keyed narrows only the sessions stub: since CHAOS-13356 no aggregate is kept on go-api while users are not owned,
+// so a served credentials or social mount stays served, and an unserved one stays unserved (classify then fails it).
+func TestAuthCorpusKeyedGateLeavesTheOwnedAggregatesAlone(t *testing.T) {
+	for _, aggregate := range []string{"credentials", "social", "oidc"} {
+		for _, probed := range []string{"served", "not served"} {
+			out, err := gateFor(t, aggregate, "1", probed)
+			if err != nil || !strings.Contains(out, "PROBED="+probed+"\n") {
+				t.Errorf("%s %s: want PROBED unchanged, got err=%v:\n%s", aggregate, probed, err, out)
 			}
-			if got := proxyFlagRecreates(fake.calls(t)); len(got) != 2 {
-				t.Errorf("go-api recreated %d times for proxy flags, want 2: %q", len(got), got)
-			}
-		})
-	}
-}
-
-// gateOwned runs the script's gate_owned function alone with USERS_OWNED set inside the shell, never by the caller env.
-func gateOwned(t *testing.T, owned, probed string) (string, error) {
-	t.Helper()
-	script := filepath.Join(authProofRoot(t), "ci", "auth_corpus_external.sh")
-	prog := `die() { printf 'ERROR: %s\n' "$1"; exit 1; }
-eval "$(sed -n '/^gate_owned() {$/,/^}$/p' "$1")"
-USERS_OWNED="$2"; PROBED="$3"
-gate_owned "$4"
-printf 'PROBED=%s\n' "${PROBED}"`
-	out, err := exec.Command("env", "-u", "USERS_OWNED", "bash", "-c", prog, "x", script, owned, probed, "credentials").CombinedOutput()
-	return string(out), err
-}
-
-func TestAuthCorpusCredentialsGateNeedsMountAndOwnedUsers(t *testing.T) {
-	for name, tc := range map[string]struct {
-		owned, probed, want string
-		fails               bool
-	}{
-		"not owned and mounted stays on go-api": {owned: "0", probed: "served", want: "PROBED=not owned"},
-		"owned and mounted is forwarded":        {owned: "1", probed: "served", want: "PROBED=served"},
-		"owned and unmounted fails the leg":     {owned: "1", probed: "not served", want: "aggregate credentials is not served", fails: true},
-	} {
-		t.Run(name, func(t *testing.T) {
-			out, err := gateOwned(t, tc.owned, tc.probed)
-			if (err != nil) != tc.fails || !strings.Contains(out, tc.want) {
-				t.Fatalf("want %q (fails=%v), got err=%v:\n%s", tc.want, tc.fails, err, out)
-			}
-		})
+		}
 	}
 }
 
@@ -1081,53 +1089,42 @@ func TestAuthCorpusPartlyMountedCredentialsFailTheLeg(t *testing.T) {
 	}
 }
 
-// USERS_OWNED is the script's own variable: it starts at 0, never reads the caller's environment, and only step 1e (the
-// owned_flip function) sets it to 1, once, before it probes the aggregates again.
-func TestAuthCorpusOnlyStep1eSetsUsersOwned(t *testing.T) {
+// CHAOS-13356: the script has no step that runs or turns users not owned: no USERS_OWNED variable, no flip function,
+// no "not owned yet" narrowing, no forced-social path, no AUTH_USERS_OWNED assignment or set_env call, and one seed copy.
+func TestAuthCorpusScriptHasNoNotOwnedStep(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join(authProofRoot(t), "ci", "auth_corpus_external.sh"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	lines := strings.Split(string(raw), "\n")
-	var zero, ones, flipStart, flipEnd, setter, reprobe int
-	for number, line := range lines {
+	// An assignment of the flag: a statement, an export, a one-command prefix, or a compose -e.
+	assign := regexp.MustCompile(`^(export +)?AUTH_USERS_OWNED=|-e AUTH_USERS_OWNED|AUTH_USERS_OWNED=\S+ +(timeout|docker|bash) `)
+	var calls int
+	for number, line := range strings.Split(string(raw), "\n") {
 		trim := strings.TrimSpace(line)
-		switch {
-		case trim == "owned_flip() {":
-			flipStart = number + 1
-		case flipStart > 0 && flipEnd == 0 && line == "  }":
-			flipEnd = number + 1
+		if strings.HasPrefix(trim, "#") {
+			continue
 		}
-		switch {
-		case strings.HasPrefix(trim, "#"):
-		case trim == "USERS_OWNED=0":
-			zero++
-		case trim == "USERS_OWNED=1":
-			ones++
-			setter = number + 1
-		case strings.Contains(trim, "USERS_OWNED=1"):
-			t.Errorf("USERS_OWNED=1 is set inside another statement: %s", trim)
-		case strings.Contains(trim, "USERS_OWNED:-"):
-			t.Errorf("USERS_OWNED must not be read from the caller env: %s", trim)
+		for _, banned := range []string{"USERS_OWNED=0", "USERS_OWNED=1", "owned_flip", "not owned yet", "FORCE_SOCIAL=", "auth_corpus_set_env.sh"} {
+			if strings.Contains(trim, banned) {
+				t.Errorf("line %d holds %q: %s", number+1, banned, trim)
+			}
 		}
-		if flipStart > 0 && flipEnd == 0 && trim == "classify" {
-			reprobe = number + 1
+		if assign.MatchString(trim) {
+			t.Errorf("line %d assigns AUTH_USERS_OWNED: %s", number+1, trim)
+		}
+		if trim == "owned_seed_copy" {
+			calls++
 		}
 	}
-	if zero != 1 {
-		t.Errorf("want exactly one unconditional USERS_OWNED=0, got %d", zero)
-	}
-	if ones != 1 || flipStart == 0 || flipEnd == 0 || setter <= flipStart || setter >= flipEnd {
-		t.Fatalf("want exactly one USERS_OWNED=1 and it inside owned_flip (lines %d-%d), got %d at line %d", flipStart, flipEnd, ones, setter)
-	}
-	if reprobe == 0 || reprobe < setter {
-		t.Errorf("owned_flip must set USERS_OWNED=1 before it probes again (setter line %d, classify line %d)", setter, reprobe)
+	if calls != 1 {
+		t.Errorf("want exactly one top-level owned_seed_copy call, got %d", calls)
 	}
 }
 
 // local_login keeps today's rule: mounted means served, and it is required. Its mount is only real when auth-service
 // has the lockout key, so the corpus env must keep setting it.
 func TestAuthCorpusLocalLoginStaysRequiredAndKeyed(t *testing.T) {
+	t.Parallel()
 	_, out, err := runAcpLeg(t, "FAKE_SERVED=/api/v1/auth/refresh,/api/v1/auth/logout,/api/v1/auth/validate,/api/v1/auth/switch-org")
 	if err == nil || !strings.Contains(out, "required aggregate local_login is not served by auth-service") {
 		t.Fatalf("want local_login required, got err=%v:\n%s", err, out)
@@ -1141,15 +1138,16 @@ func TestAuthCorpusLocalLoginStaysRequiredAndKeyed(t *testing.T) {
 	}
 }
 
-// gateSessions runs the script's gate_owned function alone for the sessions aggregate with SESSIONS_KEYED set inside the
+// gateSessions runs the script's gate_keyed function alone for the sessions aggregate with SESSIONS_KEYED set inside the
 // shell, never by the caller env.
 func gateSessions(t *testing.T, keyed, probed string, callerEnv ...string) (string, error) {
 	t.Helper()
 	script := filepath.Join(authProofRoot(t), "ci", "auth_corpus_external.sh")
 	prog := `die() { printf 'ERROR: %s\n' "$1"; exit 1; }
-eval "$(sed -n '/^gate_owned() {$/,/^}$/p' "$1")"
-USERS_OWNED=0; SESSIONS_KEYED="$2"; PROBED="$3"
-gate_owned sessions
+eval "$(sed -n '/^gate_keyed() {$/,/^}$/p' "$1")"
+declare -F gate_keyed >/dev/null || { echo "the script defines no gate_keyed"; exit 2; }
+SESSIONS_KEYED="$2"; PROBED="$3"
+gate_keyed sessions
 printf 'PROBED=%s\n' "${PROBED}"`
 	cmd := exec.Command("env", append([]string{"-u", "SESSIONS_KEYED"}, "bash", "-c", prog, "x", script, keyed, probed)...)
 	cmd.Env = append(os.Environ(), callerEnv...)
@@ -1210,86 +1208,6 @@ func TestAuthCorpusSessionsKeyedIsScriptInternal(t *testing.T) {
 	}
 }
 
-func goAPISocialRecreates(t *testing.T, fake fakeDocker) []string {
-	t.Helper()
-	raw, err := os.ReadFile(fake.record + ".goapisocial")
-	if err != nil {
-		t.Fatal(err)
-	}
-	return strings.Split(strings.TrimRight(string(raw), "\n"), "\n")
-}
-
-// Social joins the owned gate (CHAOS-11350): auth-service refuses a new social sign-in until it owns users, so go-api keeps
-// the aggregate until step 1e, and step 1f forwards it with the credentials, BEFORE the owned flag reaches go-api.
-func TestAuthCorpusAcpOwnedLegForwardsSocialAfterTheFlipAndBeforeTheOwnedFlag(t *testing.T) {
-	fake, out, err := runAcpOwnedLeg(t, "FAKE_SERVED="+requiredServed, "FAKE_SERVED_OWNED="+requiredServed+","+credentialsRoutes,
-		"FAKE_METRICS="+metric("sessions")+"\n"+metric("local_login")+"\n"+metric("credentials")+"\n"+metric("social"))
-	if err != nil || !strings.Contains(out, "AUTH CORPUS EXTERNAL (acp) PASSED") {
-		t.Fatalf("want a pass, got err=%v:\n%s", err, out)
-	}
-	if !strings.Contains(out, "probe social: mounted, not owned yet: stays on go-api\n") || !strings.Contains(out, "leg acp forwards: sessions local_login\n") {
-		t.Errorf("before step 1e social must stay on go-api, like credentials:\n%s", out)
-	}
-	owned, social := goAPIFlagRecreates(t, fake), goAPISocialRecreates(t, fake)
-	if len(owned) != len(social) || len(owned) != 5 {
-		t.Fatalf("go-api recreates: %q (flags) and %q (social), want 5 each", owned, social)
-	}
-	first := -1
-	for i, value := range social {
-		if value == "true" {
-			first = i
-			break
-		}
-	}
-	if first < 0 {
-		t.Fatalf("AUTH_PROXY_SOCIAL never reached go-api: %q", social)
-	}
-	if strings.HasSuffix(owned[first], " true") {
-		t.Errorf("the social flag must reach go-api before AUTH_USERS_OWNED (recreate %d: %q, social %q)", first, owned[first], social[first])
-	}
-	if first < 2 {
-		t.Errorf("social turned on at recreate %d, before step 1f (recreates 0 and 1 are sessions and local_login)", first)
-	}
-	if !strings.HasSuffix(owned[len(owned)-1], " true") || social[len(social)-1] != "true" {
-		t.Errorf("the last recreate must carry both the owned flag and the social flag: %q %q", owned[len(owned)-1], social[len(social)-1])
-	}
-}
-
-// Without the posture social stays on go-api, as before; and a leg where social is served but the metrics show it
-// forwarded fails by name.
-func TestAuthCorpusUnownedLegKeepsSocialOnGoAPIThroughTheGate(t *testing.T) {
-	fake, out, err := runAcpLeg(t, "FAKE_SERVED="+requiredServed, "FAKE_METRICS="+metric("sessions")+"\n"+metric("local_login"))
-	if err != nil || !strings.Contains(out, "probe social: mounted, not owned yet: stays on go-api\n") || !strings.Contains(out, "leg acp forwards: sessions local_login\n") {
-		t.Fatalf("want social kept on go-api, got err=%v:\n%s", err, out)
-	}
-	for _, value := range goAPISocialRecreates(t, fake) {
-		if value != "" {
-			t.Errorf("AUTH_PROXY_SOCIAL reached go-api on the not-owned leg: %q", value)
-		}
-	}
-}
-
-// The non-vacuity run (CHAOS-11350): AUTH_CORPUS_FORCE_SOCIAL forwards social although users are not owned, so the new-user
-// row must fail (auth-service refuses it 403 signup_unavailable). Only on the not-owned leg; elsewhere the script refuses it.
-func TestAuthCorpusForceSocialForwardsSocialOnlyOnTheNotOwnedLeg(t *testing.T) {
-	fake, out, err := runAcpLeg(t, "AUTH_CORPUS_FORCE_SOCIAL=1", "FAKE_SERVED="+requiredServed,
-		"FAKE_METRICS="+metric("sessions")+"\n"+metric("local_login")+"\n"+metric("social"))
-	if err != nil || !strings.Contains(out, "leg acp forwards: sessions local_login social\n") {
-		t.Fatalf("want social forwarded without the posture, got err=%v:\n%s", err, out)
-	}
-	if got := goAPISocialRecreates(t, fake); got[len(got)-1] != "true" {
-		t.Errorf("AUTH_PROXY_SOCIAL never reached go-api: %q", got)
-	}
-	_, out, err = runAcpOwnedLeg(t, "AUTH_CORPUS_FORCE_SOCIAL=1", "FAKE_SERVED="+requiredServed)
-	if err == nil || !strings.Contains(out, "AUTH_CORPUS_FORCE_SOCIAL needs AUTH_CORPUS_USERS_UNOWNED=1") {
-		t.Errorf("FORCE_SOCIAL on the owned leg must be refused by name, got err=%v:\n%s", err, out)
-	}
-	_, out, err = runLegArg(t, "go-api", "AUTH_CORPUS_FORCE_SOCIAL=1")
-	if err == nil || !strings.Contains(out, "AUTH_CORPUS_FORCE_SOCIAL needs AUTH_CORPUS_USERS_UNOWNED=1") {
-		t.Errorf("FORCE_SOCIAL on leg go-api must be refused by name, got err=%v:\n%s", err, out)
-	}
-}
-
 func runLegArg(t *testing.T, leg string, extra ...string) (fakeDocker, string, error) {
 	t.Helper()
 	fake := newFakeDocker(t)
@@ -1302,46 +1220,24 @@ func runLegArg(t *testing.T, leg string, extra ...string) (fakeDocker, string, e
 	return fake, string(out), err
 }
 
-func gateOwnedFor(t *testing.T, aggregate, owned, probed, force string) (string, error) {
+// gateFor runs the script's gate_keyed function alone for AGGREGATE with SESSIONS_KEYED and PROBED set inside the shell.
+func gateFor(t *testing.T, aggregate, keyed, probed string) (string, error) {
 	t.Helper()
 	script := filepath.Join(authProofRoot(t), "ci", "auth_corpus_external.sh")
 	prog := `die() { printf 'ERROR: %s\n' "$1"; exit 1; }
-eval "$(sed -n '/^gate_owned() {$/,/^}$/p' "$1")"
-USERS_OWNED="$2"; PROBED="$3"; FORCE_SOCIAL="$5"
-gate_owned "$4"
+eval "$(sed -n '/^gate_keyed() {$/,/^}$/p' "$1")"
+declare -F gate_keyed >/dev/null || { echo "the script defines no gate_keyed"; exit 2; }
+SESSIONS_KEYED="$2"; PROBED="$3"
+gate_keyed "$4"
 printf 'PROBED=%s\n' "${PROBED}"`
-	out, err := exec.Command("env", "-u", "USERS_OWNED", "bash", "-c", prog, "x", script, owned, probed, aggregate, force).CombinedOutput()
+	out, err := exec.Command("env", "-u", "SESSIONS_KEYED", "bash", "-c", prog, "x", script, keyed, probed, aggregate).CombinedOutput()
 	return string(out), err
-}
-
-// Social is gated like credentials: mounted and not owned stays on go-api, owned must be served, and only the forced
-// non-vacuity run forwards it without the posture. No other aggregate is affected by the force.
-func TestAuthCorpusSocialGateNeedsMountAndOwnedUsersUnlessForced(t *testing.T) {
-	for name, tc := range map[string]struct {
-		aggregate, owned, probed, force, want string
-		fails                                 bool
-	}{
-		"not owned and mounted stays on go-api":   {"social", "0", "served", "", "PROBED=not owned", false},
-		"owned and mounted is forwarded":          {"social", "1", "served", "", "PROBED=served", false},
-		"owned and unmounted fails the leg":       {"social", "1", "not served", "", "aggregate social is not served", true},
-		"forced and mounted is forwarded unowned": {"social", "0", "served", "1", "PROBED=served", false},
-		"the force does not reach credentials":    {"credentials", "0", "served", "1", "PROBED=not owned", false},
-		"not owned and unmounted stays unmounted": {"social", "0", "not served", "", "PROBED=not served", false},
-		"forced and unmounted stays not served":   {"social", "0", "not served", "1", "PROBED=not served", false},
-		"another aggregate is never owned-gated":  {"oidc", "0", "served", "", "PROBED=served", false},
-	} {
-		t.Run(name, func(t *testing.T) {
-			out, err := gateOwnedFor(t, tc.aggregate, tc.owned, tc.probed, tc.force)
-			if (err != nil) != tc.fails || !strings.Contains(out, tc.want) {
-				t.Fatalf("want %q (fails=%v), got err=%v:\n%s", tc.want, tc.fails, err, out)
-			}
-		})
-	}
 }
 
 // AUTH_CORPUS_FORCE_SOCIAL is a corpus-harness name: it lives in ci/ scripts and test files only, never in a production Go
 // file or a chart (a leaked switch would forward social without the posture where it is read).
 func TestAuthCorpusForceSocialNameStaysOutOfProductionCodeAndCharts(t *testing.T) {
+	t.Parallel()
 	root := authProofRoot(t)
 	var leaks []string
 	for _, base := range []string{"internal", "cmd", "deploy", "compose.yml"} {
@@ -1368,56 +1264,37 @@ func TestAuthCorpusForceSocialNameStaysOutOfProductionCodeAndCharts(t *testing.T
 	}
 }
 
-// A refused AUTH_CORPUS_FORCE_SOCIAL invocation is refused before the script makes any temporary directory: the cleanup
-// trap is installed later, so a directory made first would be left behind by every refusal.
-func TestAuthCorpusRefusedForceSocialLeavesNoTemporaryDirectory(t *testing.T) {
-	for name, tc := range map[string]struct {
-		leg   string
-		extra []string
-	}{
-		"owned acp leg": {"acp", []string{"AUTH_CORPUS_FORCE_SOCIAL=1"}},
-		"go-api leg":    {"go-api", []string{"AUTH_CORPUS_FORCE_SOCIAL=1"}},
-	} {
-		t.Run(name, func(t *testing.T) {
-			tmp := t.TempDir()
-			_, out, err := runLegArg(t, tc.leg, append([]string{"TMPDIR=" + tmp}, tc.extra...)...)
-			if err == nil || !strings.Contains(out, "AUTH_CORPUS_FORCE_SOCIAL needs AUTH_CORPUS_USERS_UNOWNED=1") {
-				t.Fatalf("want the refusal by name, got err=%v:\n%s", err, out)
-			}
-			entries, readErr := os.ReadDir(tmp)
-			if readErr != nil || len(entries) != 0 {
-				t.Errorf("the refused run left %d entries in its TMPDIR (%v)", len(entries), readErr)
-			}
-		})
-	}
-}
-
 // CHAOS-13107: compose.yml routes go-api's auth aggregates through auth-service, as production does (sessions, local
 // login, credentials and social; OIDC and SAML off). On leg go-api the script reads each of go-api's AUTH_PROXY_* keys,
 // one by one, as compose renders them for the leg and hands the corpus exactly the aggregates that are "true", so it
 // classifies auth-service's answers (authrows) instead of comparing them as go-api's own. go-api's own start-up rules
 // are the script's too: an aggregate without sessions, and OIDC or SAML (no corpus rows), fail the leg by name.
+// CHAOS-13356: go-api must render AUTH_USERS_OWNED true (every leg runs users owned), and with it sessions, local login
+// and credentials forwarded.
 func TestAuthCorpusGoAPILegForwardsSessionsWhenComposeRoutesThem(t *testing.T) {
+	t.Parallel()
 	env := func(pairs string) string {
 		return `{"services":{"go-api":{"environment":{` + pairs + `}},"auth-service":{"environment":{"AUTH_TOKEN_ISSUER_URL":"https://auth.corpus.example","AUTH_SIGNING_KEY_ID":"auth-signing-corpus"}}}}`
 	}
 	const prodSet = `"AUTH_PROXY_SESSIONS":"true","AUTH_PROXY_LOCAL_LOGIN":"true","AUTH_PROXY_CREDENTIALS":"true","AUTH_PROXY_SOCIAL":"true"`
+	const owned = `,"AUTH_USERS_OWNED":"true"`
+	const notOwned = "users are owned on every leg"
 	for _, tc := range []struct {
 		name, config, want, refusal string
 	}{
-		{"the prod set", env(prodSet), "sessions,local_login,credentials,social", ""},
-		{"the prod set, OIDC and SAML off", env(prodSet + `,"AUTH_PROXY_OIDC":"false","AUTH_PROXY_SAML":null`), "sessions,local_login,credentials,social", ""},
-		{"sessions only", env(`"AUTH_PROXY_SESSIONS":"true"`), "sessions", ""},
-		{"sessions and local login", env(`"AUTH_PROXY_SESSIONS":"true","AUTH_PROXY_LOCAL_LOGIN":"true","AUTH_PROXY_CREDENTIALS":"false"`), "sessions,local_login", ""},
-		{"social without credentials", env(`"AUTH_PROXY_SESSIONS":"true","AUTH_PROXY_SOCIAL":"true"`), "sessions,social", ""},
-		// CHAOS-13154: go-api trusts auth-service's tokens only, so a leg without sessions forwarded (go-api's local login
-		// mints the retired HS256 class) is refused before the corpus runs.
-		{"sessions off", `{"services":{"go-api":{"environment":{"AUTH_PROXY_SESSIONS":"false"}}}}`, "", noSessionsRefusal},
-		{"sessions unset", `{"services":{"go-api":{"environment":{"AUTH_PROXY_SESSIONS":null}}}}`, "", noSessionsRefusal},
-		{"no environment", `{"services":{"go-api":{}}}`, "", noSessionsRefusal},
-		{"local login without sessions", env(`"AUTH_PROXY_LOCAL_LOGIN":"true"`), "", "AUTH_PROXY_LOCAL_LOGIN=true without AUTH_PROXY_SESSIONS"},
-		{"OIDC on", env(prodSet + `,"AUTH_PROXY_OIDC":"true"`), "", "AUTH_PROXY_OIDC=true"},
-		{"SAML on", env(prodSet + `,"AUTH_PROXY_SAML":"true"`), "", "AUTH_PROXY_SAML=true"},
+		{"the prod set", env(prodSet + owned), "sessions,local_login,credentials,social", ""},
+		{"the prod set, OIDC and SAML off", env(prodSet + owned + `,"AUTH_PROXY_OIDC":"false","AUTH_PROXY_SAML":null`), "sessions,local_login,credentials,social", ""},
+		{"owned without social", env(`"AUTH_PROXY_SESSIONS":"true","AUTH_PROXY_LOCAL_LOGIN":"true","AUTH_PROXY_CREDENTIALS":"true"` + owned), "sessions,local_login,credentials", ""},
+		{"the prod set, users not owned", env(prodSet + `,"AUTH_USERS_OWNED":"false"`), "", notOwned},
+		{"the prod set, owned unset", env(prodSet), "", notOwned},
+		{"no environment", `{"services":{"go-api":{}}}`, "", notOwned},
+		{"sessions only", env(`"AUTH_PROXY_SESSIONS":"true"` + owned), "", "AUTH_USERS_OWNED=true without AUTH_PROXY_LOCAL_LOGIN"},
+		{"sessions and local login", env(`"AUTH_PROXY_SESSIONS":"true","AUTH_PROXY_LOCAL_LOGIN":"true","AUTH_PROXY_CREDENTIALS":"false"` + owned), "", "AUTH_USERS_OWNED=true without AUTH_PROXY_CREDENTIALS"},
+		// CHAOS-13154: go-api trusts auth-service's tokens only; with users owned it refuses to start without sessions.
+		{"sessions off", env(`"AUTH_PROXY_SESSIONS":"false"` + owned), "", "AUTH_USERS_OWNED=true without AUTH_PROXY_SESSIONS"},
+		{"local login without sessions", env(`"AUTH_PROXY_LOCAL_LOGIN":"true"` + owned), "", "AUTH_PROXY_LOCAL_LOGIN=true without AUTH_PROXY_SESSIONS"},
+		{"OIDC on", env(prodSet + owned + `,"AUTH_PROXY_OIDC":"true"`), "", "AUTH_PROXY_OIDC=true"},
+		{"SAML on", env(prodSet + owned + `,"AUTH_PROXY_SAML":"true"`), "", "AUTH_PROXY_SAML=true"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fake := newFakeDocker(t)
@@ -1449,19 +1326,20 @@ func TestAuthCorpusGoAPILegForwardsSessionsWhenComposeRoutesThem(t *testing.T) {
 			if got := strings.TrimSpace(string(raw)); got != tc.want {
 				t.Errorf("leg go-api hands the corpus DEVHEALTH_AUTH_ORACLE_FORWARDED=%q, want %q", got, tc.want)
 			}
-			if owned, _ := os.ReadFile(fake.record + ".usersowned"); strings.TrimSpace(string(owned)) != "false" {
-				t.Errorf("leg go-api with users not owned hands the corpus DEVHEALTH_AUTH_ORACLE_USERS_OWNED=%q, want false", owned)
+			if owned, _ := os.ReadFile(fake.record + ".usersowned"); strings.TrimSpace(string(owned)) != "true" {
+				t.Errorf("leg go-api hands the corpus DEVHEALTH_AUTH_ORACLE_USERS_OWNED=%q, want true", owned)
 			}
 		})
 	}
 }
 
 // CHAOS-13107: compose.yml has auth-service own users (AUTH_USERS_OWNED, as production's phase 4). The corpus seeds its
-// users into public.users, so on leg go-api with users owned the script runs the owned hand-off of leg acp: the test
-// seeds and waits, the script copies the seeded users (users-backfill, refused while the flag is true, so run with it
-// false for that one command), recreates auth-service, and hands the test the forwarded set; the test is told users
-// are owned. go-api's rule is the script's too: users owned needs sessions, local login and credentials forwarded.
+// users into public.users, so leg go-api runs the owned hand-off of leg acp: the test seeds and waits, the script copies
+// the seeded users (compose.yml's auth-users-backfill one-shot: `users-backfill -insert-only`, users owned; CHAOS-13356),
+// recreates auth-service, and hands the test the forwarded set; the test is told users are owned. go-api's rule is the
+// script's too: users owned needs sessions, local login and credentials forwarded.
 func TestAuthCorpusGoAPILegRunsTheOwnedHandOffWhenComposeOwnsUsers(t *testing.T) {
+	t.Parallel()
 	const prodSet = `"AUTH_PROXY_SESSIONS":"true","AUTH_PROXY_LOCAL_LOGIN":"true","AUTH_PROXY_CREDENTIALS":"true","AUTH_PROXY_SOCIAL":"true"`
 	env := func(pairs string) string {
 		return `{"services":{"go-api":{"environment":{` + pairs + `}},"auth-service":{"environment":{"AUTH_TOKEN_ISSUER_URL":"https://auth.corpus.example","AUTH_SIGNING_KEY_ID":"auth-signing-corpus"}}}}`
@@ -1492,9 +1370,9 @@ func TestAuthCorpusGoAPILegRunsTheOwnedHandOffWhenComposeOwnsUsers(t *testing.T)
 		if backfill < 0 || seeded > backfill || backfill > flipped {
 			t.Errorf("users-backfill must run after the seed and before the hand-off; calls:\n%s", calls)
 		}
-		// CHAOS-13107: the copy is compose.yml's own one-shot (AUTH_USERS_OWNED=false for that run only), not an
-		// ad-hoc run of migrate with the flag on the command line.
-		if !strings.Contains(calls, "run --rm --no-deps auth-users-backfill") || strings.Contains(calls, "migrate auth users-backfill") {
+		// The copy is compose.yml's own one-shot, not an ad-hoc run of migrate, and no call names the flag.
+		if !strings.Contains(calls, "run --rm --no-deps auth-users-backfill") || strings.Contains(calls, "migrate auth users-backfill") ||
+			strings.Contains(calls, "AUTH_USERS_OWNED") {
 			t.Errorf("the seeded users were not copied by the auth-users-backfill one-shot; calls:\n%s", calls)
 		}
 		if _, statErr := os.Stat(fake.record + ".owned"); statErr != nil {
@@ -1519,15 +1397,17 @@ func TestAuthCorpusGoAPILegRunsTheOwnedHandOffWhenComposeOwnsUsers(t *testing.T)
 // (authrows.SessionAccessTokenErr): the script hands it the issuer as compose renders it, and refuses a leg that names none.
 // CHAOS-13154: a leg without sessions forwarded is refused before the corpus runs (the venue mints under that issuer).
 func TestAuthCorpusHandsTheCorpusAuthServicesIssuerWhenSessionsAreForwarded(t *testing.T) {
+	t.Parallel()
+	const goAPIOwnedEnv = `"AUTH_PROXY_SESSIONS":"true","AUTH_PROXY_LOCAL_LOGIN":"true","AUTH_PROXY_CREDENTIALS":"true","AUTH_USERS_OWNED":"true"`
 	const issuer = "https://auth.corpus.example"
 	for _, tc := range []struct {
 		name, config, want string
 		refusal            string
 	}{
-		{"sessions on", `{"services":{"go-api":{"environment":{"AUTH_PROXY_SESSIONS":"true"}},"auth-service":{"environment":{"AUTH_TOKEN_ISSUER_URL":"` + issuer + `","AUTH_SIGNING_KEY_ID":"auth-signing-corpus"}}}}`, issuer, ""},
-		// CHAOS-13154: without sessions forwarded the leg is refused before the corpus runs (noSessionsRefusal).
-		{"sessions off", `{"services":{"go-api":{"environment":{"AUTH_PROXY_SESSIONS":"false"}},"auth-service":{"environment":{"AUTH_TOKEN_ISSUER_URL":"` + issuer + `"}}}}`, "", noSessionsRefusal},
-		{"sessions on, no issuer", `{"services":{"go-api":{"environment":{"AUTH_PROXY_SESSIONS":"true"}},"auth-service":{"environment":{}}}}`, "", "auth-service names no AUTH_TOKEN_ISSUER_URL"},
+		{"sessions on", `{"services":{"go-api":{"environment":{` + goAPIOwnedEnv + `}},"auth-service":{"environment":{"AUTH_TOKEN_ISSUER_URL":"` + issuer + `","AUTH_SIGNING_KEY_ID":"auth-signing-corpus"}}}}`, issuer, ""},
+		// CHAOS-13154: without sessions forwarded the leg is refused before the corpus runs (go-api's users-owned rule).
+		{"sessions off", `{"services":{"go-api":{"environment":{"AUTH_PROXY_SESSIONS":"false","AUTH_USERS_OWNED":"true"}},"auth-service":{"environment":{"AUTH_TOKEN_ISSUER_URL":"` + issuer + `"}}}}`, "", "AUTH_USERS_OWNED=true without AUTH_PROXY_SESSIONS"},
+		{"sessions on, no issuer", `{"services":{"go-api":{"environment":{` + goAPIOwnedEnv + `}},"auth-service":{"environment":{}}}}`, "", "auth-service names no AUTH_TOKEN_ISSUER_URL"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fake := newFakeDocker(t)
@@ -1564,9 +1444,8 @@ func TestAuthCorpusHandsTheCorpusAuthServicesIssuerWhenSessionsAreForwarded(t *t
 // auth-service into a mode 0600 file of a mode 0700 directory in the run's private directory, hands the test only its
 // path and auth-service's key id, never shows the key, and removes the file on exit.
 func TestAuthCorpusVenueSigningKeyIsAPrivateFileOfTheRun(t *testing.T) {
-	acp := []string{"AUTH_CORPUS_USERS_UNOWNED=1",
-		"FAKE_SERVED=/api/v1/auth/refresh,/api/v1/auth/logout,/api/v1/auth/validate,/api/v1/auth/switch-org,/api/v1/auth/login,/api/v1/auth/social-login",
-		"FAKE_METRICS=" + metric("sessions") + "\n" + metric("local_login")}
+	t.Parallel()
+	acp := []string{"FAKE_SERVED=" + ownedServed, "FAKE_METRICS=" + ownedMetrics}
 	for leg, extra := range map[string][]string{"go-api": nil, "acp": acp} {
 		t.Run(leg, func(t *testing.T) {
 			fake := newFakeDocker(t)
@@ -1607,5 +1486,43 @@ func TestAuthCorpusVenueSigningKeyIsAPrivateFileOfTheRun(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// CHAOS-13520: with AUTH_CORPUS_PREBUILT_TAG (the images the CI bake step built and loaded), `up` runs --no-build (a missing image
+// fails, nothing builds), the trap removes the stub images of that tag, and a tag that is not a plain image tag is refused.
+func TestAuthCorpusPrebuiltImagesAreUsedAndNotRebuilt(t *testing.T) {
+	fake := newFakeDocker(t)
+	cmd := exec.Command("bash", filepath.Join(authProofRoot(t), "ci", "auth_corpus_external.sh"), "go-api")
+	cmd.Env = fake.env("FAKE_FAIL_UP=1", "AUTH_CORPUS_PREBUILT_TAG=ci-prebuilt")
+	if out, err := cmd.CombinedOutput(); err == nil {
+		t.Fatalf("the failing up must fail the script: %s", out)
+	}
+	calls := fake.calls(t)
+	var ups, removals []string
+	for _, line := range strings.Split(strings.TrimSpace(calls), "\n") {
+		if strings.Contains(line, " up ") {
+			ups = append(ups, line)
+		}
+		if strings.HasPrefix(line, "image ") {
+			removals = append(removals, line)
+		}
+	}
+	if len(ups) == 0 {
+		t.Fatalf("no `compose up` call:\n%s", calls)
+	}
+	for _, u := range ups {
+		if !strings.Contains(u, " up --no-build ") || strings.Contains(u, " --build ") {
+			t.Errorf("a prebuilt run must `up --no-build`, got %q", u)
+		}
+	}
+	want := []string{"image rm authcorpus-providerstub:ci-prebuilt", "image rm authcorpus-smtpsink:ci-prebuilt"}
+	if strings.Join(removals, "\n") != strings.Join(want, "\n") {
+		t.Errorf("image commands:\n%s\nwant:\n%s", strings.Join(removals, "\n"), strings.Join(want, "\n"))
+	}
+	bad := exec.Command("bash", filepath.Join(authProofRoot(t), "ci", "auth_corpus_external.sh"), "go-api")
+	bad.Env = fake.env("AUTH_CORPUS_PREBUILT_TAG=Bad Tag")
+	if out, err := bad.CombinedOutput(); err == nil || !strings.Contains(string(out), "AUTH_CORPUS_PREBUILT_TAG must be a lower-case image tag") {
+		t.Errorf("a bad AUTH_CORPUS_PREBUILT_TAG must be refused by name, got err=%v:\n%s", err, out)
 	}
 }

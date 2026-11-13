@@ -109,9 +109,6 @@ func TestUsersOwnedCensusKeepsAcceptingTheCleanShapes(t *testing.T) {
 // public.users. The census is the inventory; these tests are the proof.
 var behaviourTests = map[string]string{
 	"internal/api/session/changepassword.go|handlers.changePassword":    "internal/api/session/usersowned_test.go|TestUsersOwnedRefusesEverySessionWriterBeforeTouchingTheDatabase",
-	"internal/api/session/verify.go|handlers.resetPassword":             "internal/api/session/usersowned_test.go|TestUsersOwnedRefusesEverySessionWriterBeforeTouchingTheDatabase",
-	"internal/api/session/verify.go|handlers.verify":                    "internal/api/session/usersowned_test.go|TestUsersOwnedRefusesEverySessionWriterBeforeTouchingTheDatabase",
-	"internal/api/session/register.go|handlers.register":                "internal/api/session/usersowned_test.go|TestUsersOwnedRefusesEverySessionWriterBeforeTouchingTheDatabase",
 	"internal/api/session/social.go|handlers.createSocialUser":          "internal/api/session/usersowned_test.go|TestUsersOwnedRefusesTheSocialAccountCreate",
 	"internal/api/sso/provision.go|handlers.createAccountAndMembership": "internal/api/sso/usersowned_test.go|TestUsersOwnedRefusesTheSSOAccountCreate",
 	"internal/apiservice/admin/userstore.go|pgStore.insertUser":         "internal/apiservice/admin/usersowned_test.go|TestUsersOwnedRefusesEveryAdminUsersWriter",
@@ -123,10 +120,10 @@ var behaviourTests = map[string]string{
 	"internal/api/sso/provision.go|handlers.provisionOrGetUser":         "internal/api/sso/usersowned_signin_integration_test.go|TestUsersOwnedSignInOfAnExistingAccountWritesNoUsersRow",
 	"internal/api/sso/oauth.go|handlers.oauthProvisionUser":             "internal/api/sso/usersowned_signin_integration_test.go|TestUsersOwnedSignInOfAnExistingAccountWritesNoUsersRow",
 
-	"internal/apiservice/admin/users.go|handlers.createUser":      "internal/apiservice/admin/usersowned_test.go|TestUsersOwnedAdminRoutesRefuseBeforeAnyDatabaseWork",
-	"internal/apiservice/admin/users.go|handlers.updateUser":      "internal/apiservice/admin/usersowned_test.go|TestUsersOwnedAdminRoutesRefuseBeforeAnyDatabaseWork",
-	"internal/apiservice/admin/users.go|handlers.setUserPassword": "internal/apiservice/admin/usersowned_test.go|TestUsersOwnedAdminRoutesRefuseBeforeAnyDatabaseWork",
-	"internal/apiservice/admin/users.go|handlers.deleteUser":      "internal/apiservice/admin/usersowned_test.go|TestUsersOwnedAdminRoutesRefuseBeforeAnyDatabaseWork",
+	"internal/apiservice/admin/users.go|handlers.createUser":      "internal/apiservice/admin/users_owned_forward_test.go|TestUsersOwnedPlatformCreateForwardsToAuth",
+	"internal/apiservice/admin/users.go|handlers.updateUser":      "internal/apiservice/admin/users_owned_forward_test.go|TestUsersOwnedPatchVerifiedForwardsToAuth",
+	"internal/apiservice/admin/users.go|handlers.setUserPassword": "internal/apiservice/admin/users_owned_forward_test.go|TestUsersOwnedSetPasswordForwardsToAuth",
+	"internal/apiservice/admin/users.go|handlers.deleteUser":      "internal/apiservice/admin/users_owned_forward_test.go|TestUsersOwnedSoftDeleteForwardsAndRepeatIs404",
 	"internal/apiservice/admin/operator.go|Operator.CreateUser":   "internal/apiservice/admin/usersowned_test.go|TestUsersOwnedOperatorVerbsRefuseBeforeAnyDatabaseWork",
 	"internal/apiservice/admin/operator.go|Operator.DeleteUser":   "internal/apiservice/admin/usersowned_test.go|TestUsersOwnedOperatorVerbsRefuseBeforeAnyDatabaseWork",
 	"internal/apiservice/admin/operator.go|Operator.UpdateUser":   "internal/apiservice/admin/usersowned_test.go|TestUsersOwnedOperatorVerbsRefuseBeforeAnyDatabaseWork",
@@ -179,6 +176,9 @@ func TestEveryUsersOwnedWriterHasABehaviourTest(t *testing.T) {
 		keys[key] = true
 	}
 	for _, key := range usersOwnedEntryPoints {
+		keys[key] = true
+	}
+	for key := range usersOwnedForwardedEntryPoints {
 		keys[key] = true
 	}
 	for key := range keys {

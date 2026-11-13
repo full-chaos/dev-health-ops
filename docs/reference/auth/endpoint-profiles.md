@@ -26,7 +26,7 @@ The question "which validators can observe a credential they do not own" is a
 property of the middleware stack rather than of any single route, so every row
 records it explicitly in `reachable_validators`. That makes it a checkable fact
 per surface instead of an argument; see
-[Reachable-but-not-owner findings](#reachable-but-not-owner-findings) below.
+[Earlier auth gates and foreign-class validators](#earlier-auth-gates-and-foreign-class-validators) below.
 
 ## Scope and counts
 
@@ -34,7 +34,7 @@ Each service has its own profile file. The row counts are:
 
 | Service | Protected | Public | Rows |
 | --- | --- | --- | --- |
-| auth-service | 53 | 28 | 81 |
+| auth-service | 67 | 28 | 95 |
 | go-api | 211 | 33 | 244 |
 | query-api | 37 | 8 | 45 |
 
@@ -93,38 +93,67 @@ On the advisory fields (`action`, `resource_resolver`,
 Never infer "absent" from silence: a missing note is not an examination. This
 matches `issued_credential` and `exposure`, which already work this way.
 
-## Reachable-but-not-owner findings
+## Earlier auth gates and foreign-class validators
 
-Every row's `reachable_validators` array records each validator that can
-observe a credential before (or instead of) the route's intended one, with
-`reachable_but_not_owner: true` marking a credential that reaches a validator
-that is not its own (see
-[credential-classes.md](credential-classes.md#credentials-that-reach-a-validator-that-is-not-their-own)).
+Every entry in a row's `reachable_validators` array carries two required
+booleans. They answer two different questions, so they are never summed:
 
-## Addendum: `svc_worker_*` — mint-only scaffolding, unwired to any HTTP transport
+- `foreign_class_validator: true` (the defect shape): a validator
+  that does not own a credential's class can observe or try to parse that
+  credential before (or regardless of) the route's intended validator. This is
+  the number to watch.
+- `earlier_auth_gate: true` (a design property): an earlier gate of the same
+  class runs before the route's own check. It is defence in depth, recorded so
+  that it stays visible.
 
-`svc_worker_*` can be
-minted/rotated/revoked via CLI, and it **does** have a real,
-DB-backed validator — `internal/joboperator/auth.go` (ops repo Go tree, not the versioned `dev-health-go` dependency): the token-shape regex at line 54
-(`^svc_worker_[A-Za-z0-9_-]{32,256}$`) and `Authenticator.Authenticate`
-(lines ~119-160) hash-match against `public.internal_service_credentials`
-with `revoked_at`/`expires_at` checks and a `last_used_at` touch.
+The schema refuses an entry that sets both, an entry that leaves out either
+field, an entry with the retired name `reachable_but_not_owner`, and an entry
+that is not the intended validator but sets both to false. Both false is
+allowed only on the route's intended validator.
 
-**But nothing calls it.** Searched `cmd/` (all 12 Go binaries) and every
-`internal/` package outside `internal/joboperator/` itself for
-`joboperator.`, `NewAuthenticator`, `ScopeWorkerRead`, `ScopeWorkerOperate`,
-`WorkerOperatorService` — zero hits except `internal/syncreconciler`'s test
-files, which reference an unrelated `joboperator` symbol
-(`NewDirectPostgresBackend`). `internal/joboperator/` itself contains no
-`http.`/`Handler`/`mux.`/`ServeHTTP` reference at all — no HTTP transport
-exists in this package. Also searched `dev-health-go` at both pinned tags
-(`ops/go.mod:8` → `v0.6.1`, `acr/go.mod:5` → `v0.5.5`) via
-`git grep -n svc_worker` against each tag directly (never the unpinned
-working tree) — zero hits in either. **Verdict: `svc_worker_*` is real,
-DB-live scaffolding with no HTTP consumer in ops, acr, or dev-health-go at
-either pinned version — exercised only by `internal/joboperator`'s own
-integration test suite.** Not part of any endpoint-profile file (no route
-uses it); recorded here because it is a Go-side fact, not a REST/GraphQL surface.
+Worked examples:
+
+- Earlier auth gate (ops): `Scope.OrgScope` (`internal/api/policy/scope.go:128`)
+  and `Scope.Impersonation` (`internal/api/policy/scope.go:221`) run around
+  every api-listener route. They read the caller from the `Scope.Principal`
+  decision only (`principalFrom`, `internal/api/policy/scope.go:102-105`); they never read the
+  `Authorization` header. The `Principal` step
+  (`internal/api/policy/principalonce.go:112`) sends a credential that the
+  refusal table or the route's row rules out to no validator.
+- Earlier auth gate (web): the session and organization gate of the web
+  server's request proxy runs before each route's own check.
+- Foreign-class validator: the Python `OrgIdMiddleware` ran every
+  `Authorization` bearer (an opaque ACR service credential included) through
+  the user-JWT decoder. That code is gone. Today no row in ops,
+  web or acr sets `foreign_class_validator: true`.
+
+`contracts/auth/v1/credential-classes.json` lists the validators of each
+credential class with the same two fields. Every validator names its code: the
+schema refuses a null anchor and a missing field, and
+`TestEveryCredentialValidatorNamesItsCode`
+(`internal/auth/contracts/credential_class_validator_anchors_test.go`) refuses
+an ops or acr anchor that is not a Go file and a description that cites the
+deleted Python api. A retired class names the Go code that refuses it. The four
+Python validators that ran a bearer through the user-JWT decoder are removed;
+`credentialanchors/credential-anchor-retired-evidence.tsv` records each removal
+and each moved slot.
+
+The count of foreign-class validators (run at the ops repository root; add the
+web and acr profile files for the platform-wide count):
+
+```sh
+jq -n '[inputs] as $d | {foreign_class_validator: ([$d[] | .. | objects | select(.foreign_class_validator == true)] | length)}' contracts/auth/v1/endpoint-profiles.*.json contracts/auth/v1/credential-classes.json
+```
+
+`ci/auth-contracts-ajv/run.test.mjs` runs this command text from this page:
+on this repository it answers 0; on a fixture with one planted foreign-class
+entry it answers 1.
+
+## Retired worker service credentials
+
+No endpoint profile accepts the retired `internal_svc_worker_token` class. The worker operator CLI uses a fixed operator principal and database role checks. It does not check service-token scopes. The `dho service-credentials` command group is absent.
+
+Enforced by: `TestNoEndpointProfileRowAcceptsARetiredClass`, `internal/joboperator/auth_test.go`, and `cmd/dho/retired_verbs_test.go`. See [Billing and worker boundaries](billing-and-worker-boundaries.md) for the current controls and limits.
 
 ## GraphQL resolvers
 
@@ -229,6 +258,47 @@ row that opts in, so it refuses an HS256 bearer on every row with reason
 `TestNoEndpointProfileRowAcceptsARetiredClass` refuses a row that lists a
 retired class or sets `legacy_hs256: true`.
 
+## Wrong-class gate
+
+`TestWrongClassGateGoAPI` (`internal/apiservice/wrong_class_gate_test.go`)
+sends every go-api row, on the listener that its row names, every credential
+class of `credential-classes.json` that the row does not accept. The requests
+go through the production listeners. The rows come from the embedded profile
+file. Each class's carrier (header or body field) comes from its markers. A
+row that is not mounted fails, and a marker kind with no carrier rule fails.
+A wrong class must give the same answer as a garbage credential in the same
+carrier (or no credential, when the carrier is not `Authorization`). It must
+cause no signing-key read and no store read. It must not make the shadow ask
+the PDP. On a protected row the answer must be a 4xx. A known divergence is
+one row of `ci/auth_exception_ledger.tsv`, anchored on the gate, with an open
+ticket. It excuses the 4xx rule on the rows that it names, and nothing else.
+When a named row no longer diverges, the gate fails until the ledger row is
+removed.
+
+`TestWrongClassGateQueryAPI` (`internal/queryapi/server/wrong_class_gate_test.go`)
+applies the same rules to the query-api rows, public rows included, on every
+listener a row names. The REST rows run on their production route builders.
+The `/query` route set and two REST builders need a live ClickHouse at build
+time, so their rows run on the listener test stack instead. The census line
+names the stack of each row.
+
+`TestWrongClassGateAuthService` (`internal/auth/authruntime/wrong_class_gate_test.go`)
+does the same for every auth-service row, on the API, operator and internal
+listeners. The API and internal listeners are built with the route builders
+that `configureWithRoutes` calls, in its order, with in-memory rate-limit
+counters; `TestWrongClassGateAuthServiceRigMatchesConfigure` fails when the
+routes or the calls differ from the production build. The store is a listener
+that counts each connection. A wrong class must cause no store connection and
+no key-set read that a garbage credential does not cause, and none at all on a
+protected row. auth-service builds no shadow:
+`TestWrongClassGateAuthServiceHasNoShadow` fails when a package of the build
+other than `internal/api/policy` uses a policy shadow. Its ledger rows say
+which rule they excuse (the 4xx rule, or the 4xx rule and the protected-row
+read rule) on the rows that they name. A row whose accepted classes have no
+accept control (a provider token, an OIDC code, a SAML response) is named in
+the gate's pinned not-measured list; a row that joins or leaves it fails the
+gate until the list changes.
+
 ## `delegated_bearer`
 
 An auth-service row that `authenticateWith` gates has `delegated_bearer`:
@@ -320,7 +390,7 @@ every anchor line holds, and empty `rewritten_anchors`.
    `contracts/auth/v1/credential-classes.json`'s closed vocabulary plus
    `reachable_validators` derived from where your router mounts (which
    middleware sees it, per [Deployed apps](#deployed-apps) and
-   [Reachable-but-not-owner findings](#reachable-but-not-owner-findings)
+   [Earlier auth gates and foreign-class validators](#earlier-auth-gates-and-foreign-class-validators)
    above). Then run the Go row tests (`internal/queryapi/server/endpoint_profile_rows_test.go`,
    `internal/auth/contracts/endpoint_profiles_query_api_test.go` and
    `endpoint_profiles_auth_service_test.go`): they fail when the route and its

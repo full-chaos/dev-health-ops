@@ -33,8 +33,8 @@ func TestDefaultRowsEqualTheContractShadowRows(t *testing.T) {
 			plain++
 		}
 	}
-	if controls != 2 || plain != 101 {
-		t.Fatalf("controls=%d rows=%d, want 2 and 101", controls, plain)
+	if controls != 2 || plain != 156 {
+		t.Fatalf("controls=%d rows=%d, want 2 and 156", controls, plain)
 	}
 }
 
@@ -114,8 +114,8 @@ func TestDefaultRowsDestructiveRowsActInThePool(t *testing.T) {
 			}
 		}
 	}
-	if strings.Join(got, ",") != "1,6,9,10,13" {
-		t.Fatalf("destructive rows %v, want 1,6,9,10,13", got)
+	if strings.Join(got, ",") != "1,6,9,10,135,13" {
+		t.Fatalf("destructive rows %v, want 1,6,9,10,135,13", got)
 	}
 }
 
@@ -137,7 +137,7 @@ func TestDefaultRowsExternalRowsActInOrgE(t *testing.T) {
 			state = append(state, row.ID)
 		}
 	}
-	if len(external) != 17 || strings.Join(state, ",") != "34,37" {
+	if len(external) != 20 || strings.Join(state, ",") != "34,37" {
 		t.Fatalf("external rows %v, state rows %v", external, state)
 	}
 	for key := range NoOutboundRows {

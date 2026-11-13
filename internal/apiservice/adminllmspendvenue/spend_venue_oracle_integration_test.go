@@ -267,7 +267,6 @@ func runSpendVenue(t *testing.T, zone, mode, digest string) {
 	golden := venueoracle.OpenGolden(t, goldenSpec("spend_"+mode, t.Name(), digest))
 	root := repoRoot(t)
 	nextID := goldenIDs("spend-" + mode)
-	const jwtKey = "venue-oracle-test-secret-key-for-llm-spend-32-bytes!"
 	cases := scenarios()
 	var pythonEnv []string
 	if zone != "" {
@@ -299,7 +298,7 @@ func runSpendVenue(t *testing.T, zone, mode, digest string) {
 
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Golden: golden,
-		Root:   root, JWTKey: jwtKey, PythonEnv: pythonEnv,
+		Root:   root, PythonEnv: pythonEnv,
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
 			exec := func(sql string, args ...any) {
 				t.Helper()
@@ -418,7 +417,7 @@ VALUES ($1, $2, (SELECT id FROM feature_flags WHERE key = 'byo_llm'), false, NUL
 	}
 	python := golden.Python(t, venue, requests)
 
-	goBase := startGoServer(t, ctx, venue, jwtKey)
+	goBase := startGoServer(t, ctx, venue)
 	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{
 		Golden: golden,
 		// A window that starts "30 days ago" is read from each plane's own clock.
@@ -456,7 +455,7 @@ func localEdgeQueries(base time.Time, zone string) []string {
 	}
 }
 
-func startGoServer(t *testing.T, ctx context.Context, venue *venueoracle.Venue, jwtKey string) string {
+func startGoServer(t *testing.T, ctx context.Context, venue *venueoracle.Venue) string {
 	t.Helper()
 	pool, err := pgxpool.New(ctx, venue.GoAPIDatabaseURI(t))
 	if err != nil {

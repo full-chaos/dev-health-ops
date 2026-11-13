@@ -15,6 +15,7 @@ var dockerCopyLine = regexp.MustCompile(`(?m)^COPY\s+(.+)$`)
 // it the compiler or an embed directive reads, must be copied, or the image
 // build fails closed on a missing package.
 func TestGoAPIToolsBuildStageCopiesEveryContractFileTheBinariesLink(t *testing.T) {
+	t.Parallel()
 	root := rootOf(t)
 	module := goListOutput(t, root, "list", "-m")
 	module = strings.TrimSpace(module)

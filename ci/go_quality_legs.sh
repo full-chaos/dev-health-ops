@@ -1,14 +1,18 @@
 #!/usr/bin/env bash
 # The go-quality-leg matrix (ci/go_quality_legs.json), judged for one event (CHAOS-11418). A heavy (race) leg is left out
 # only on a pull_request without the ci:full label; every other event, and an event this script does not know, keeps all legs.
-# Usage: go_quality_legs.sh <event_name> <ci_full: true|false> [legs.json]
-# stdout line 1: the matrix JSON array. stdout line 2: the race policy line (empty when every leg is kept).
+# An unlabelled draft pull request (draft flag true) runs no leg: the matrix is [] and line 2 says so (CHAOS-13520). The workflow
+# computes the flag (a draft without ci:integration or ci:full); any other event ignores it, and the leg file is still validated.
+# Usage: go_quality_legs.sh <event_name> <ci_full: true|false> [legs.json (empty = default)] [draft: true|false, default false]
+# stdout line 1: the matrix JSON array. stdout line 2: the policy line (empty when every leg is kept).
 set -euo pipefail
 event="${1:?event name}"
 ci_full="${2:?ci:full flag (true|false)}"
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 legs="${3:-${here}/go_quality_legs.json}"
+draft="${4:-false}"
 case "${ci_full}" in true | false) ;; *) echo "go_quality_legs.sh: ci:full flag must be true or false, got '${ci_full}'" >&2; exit 2 ;; esac
+case "${draft}" in true | false) ;; *) echo "go_quality_legs.sh: draft flag must be true or false, got '${draft}'" >&2; exit 2 ;; esac
 if [ "${event}" = pull_request ] && [ "${ci_full}" = false ]; then
   matrix="$(jq -ce '[.[] | select((.heavy // false) | not)]' "${legs}")"
   policy="race: not run on PR by policy (runs in merge_group, on the main push and with the ci:full label)"
@@ -28,11 +32,13 @@ if [ -n "${dups}" ]; then
   exit 3
 fi
 # The whole leg file must have the shape the workflow, the shard plans and the queue-tested check rely on, whatever the event: one static
-# leg with args "static" (a missing static leg is refused above, a repeated name by the duplicate check), test-K-of-N with args "test K N" for K = 1..N, race-K-of-M (heavy) with args "race K M" for K = 1..M, no other name.
+# leg with args "static" (a missing static leg is refused above, a repeated name by the duplicate check), at most one plan-reads leg with
+# args "plan-reads" (CHAOS-13520; workflows_quality_legs_test pins that the legs together run every stage of `ci`), test-K-of-N with args "test K N" for K = 1..N, race-K-of-M (heavy) with args "race K M" for K = 1..M, no other name.
 # Every line of the program below but the last is one check, so a dropped check is a dropped line.
 shape="$(jq -r '
   [.[] | select((.name | type) == "string")] as $l
   | [$l[] | select(.name == "static")] as $st
+  | [$l[] | select(.name == "plan-reads")] as $pr
   | [$l[] | select(.name | test("^test-[0-9]+-of-[0-9]+$"))] as $t
   | [$l[] | select(.name | test("^race-[0-9]+-of-[0-9]+$"))] as $r
   | [$t[] | .name | capture("^test-(?<k>[0-9]+)-of-(?<n>[0-9]+)$") | {k: (.k | tonumber), n: (.n | tonumber)}] as $tk
@@ -40,7 +46,9 @@ shape="$(jq -r '
   | [
     (if ($l | length) != length then "a leg has no string name" else empty end),
     ($st[] | select(.args != "static") | "the static leg must have args \"static\", has \(.args | tojson)"),
-    ($l[] | select(.name | test("^(static|test-[0-9]+-of-[0-9]+|race-[0-9]+-of-[0-9]+)$") | not) | "unknown leg name \(.name)"),
+    (if ($pr | length) > 1 then "more than one plan-reads leg" else empty end),
+    ($pr[] | select(.args != "plan-reads" or (.heavy // false)) | "the plan-reads leg must have args \"plan-reads\" and not be heavy"),
+    ($l[] | select(.name | test("^(static|plan-reads|test-[0-9]+-of-[0-9]+|race-[0-9]+-of-[0-9]+)$") | not) | "unknown leg name \(.name)"),
     ($t[] | . as $e | ($e.name | capture("^test-(?<k>[0-9]+)-of-(?<n>[0-9]+)$")) as $c | select($e.args != "test \($c.k) \($c.n)") | "leg \($e.name) has args \($e.args | tojson), want \"test \($c.k) \($c.n)\""),
     ($r[] | . as $e | ($e.name | capture("^race-(?<k>[0-9]+)-of-(?<n>[0-9]+)$")) as $c | select($e.args != "race \($c.k) \($c.n)") | "leg \($e.name) has args \($e.args | tojson), want \"race \($c.k) \($c.n)\""),
     ($r[] | select(.heavy != true) | "race leg \(.name) must be heavy"),
@@ -56,5 +64,9 @@ shape="$(jq -r '
 if [ -n "${shape}" ]; then
   while IFS= read -r line; do echo "go_quality_legs.sh: ${line}" >&2; done <<<"${shape}"
   exit 3
+fi
+if [ "${event}" = pull_request ] && [ "${draft}" = true ]; then
+  matrix="[]"
+  policy="test: not run on an unlabelled draft"
 fi
 printf '%s\n%s\n' "${matrix}" "${policy}"

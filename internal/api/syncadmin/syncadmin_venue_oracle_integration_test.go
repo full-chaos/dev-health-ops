@@ -90,7 +90,6 @@ func TestSyncAdminReadsVenueOracle(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, goldenSpec(t.Name()))
 	ctx := context.Background()
 	root := repoRoot(t)
-	const jwtKey = "venue-oracle-test-secret-key-for-sync-admin-reads-32b!"
 	ids := newVenueIDs()
 	// Both planes read HIDE_MIGRATED_CHILD_CONFIGS per request; the venue
 	// runs with it on, so include_migrated decides the child rows.
@@ -103,7 +102,6 @@ func TestSyncAdminReadsVenueOracle(t *testing.T) {
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Golden:    golden,
 		Root:      root,
-		JWTKey:    jwtKey,
 		PythonEnv: []string{"HIDE_MIGRATED_CHILD_CONFIGS= On ", "SYNC_INCREMENTAL_HEAVY_MAX_WINDOW_DAYS=5", "SYNC_WATERMARK_OVERLAP=3600"},
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, venue *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
@@ -123,7 +121,7 @@ func TestSyncAdminReadsVenueOracle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	base := startGoServerWith(t, ctx, venue, jwtKey, func(deps *apiservice.Deps) { deps.Now = func() time.Time { return pinned } })
+	base := startGoServerWith(t, ctx, venue, func(deps *apiservice.Deps) { deps.Now = func() time.Time { return pinned } })
 
 	requests := syncAdminRequests(venue, ids)
 	python := golden.Python(t, venue, requests)
@@ -716,14 +714,14 @@ func sortedRawKeys(values map[string]json.RawMessage) []string {
 
 // startGoServer runs the real Go api (apiservice.Routes and NewServer with
 // the scope middlewares, as configure() wires them) on the venue's Go copy.
-func startGoServer(t *testing.T, ctx context.Context, venue *venueoracle.Venue, jwtKey string) string {
+func startGoServer(t *testing.T, ctx context.Context, venue *venueoracle.Venue) string {
 	t.Helper()
-	return startGoServerWith(t, ctx, venue, jwtKey, nil)
+	return startGoServerWith(t, ctx, venue, nil)
 }
 
 // startGoServerWith is startGoServer with a hook that adjusts the api
 // dependencies (a clock, a decryptor) before the routes are built.
-func startGoServerWith(t *testing.T, ctx context.Context, venue *venueoracle.Venue, jwtKey string, adjust func(*apiservice.Deps)) string {
+func startGoServerWith(t *testing.T, ctx context.Context, venue *venueoracle.Venue, adjust func(*apiservice.Deps)) string {
 	t.Helper()
 	pool, err := pgxpool.New(ctx, venue.GoAPIDatabaseURI(t))
 	if err != nil {

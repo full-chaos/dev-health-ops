@@ -2,16 +2,32 @@ package workflows_test
 
 import (
 	"bytes"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
+	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
+	"gopkg.in/yaml.v3"
+
+	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice"
 	"github.com/full-chaos/dev-health-ops/internal/auth/authconfig"
+	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/providerstub"
 )
 
 // The web live e2e logs in through auth-service the way prod does (go-api session issue with the workload
@@ -106,7 +122,7 @@ func TestLiveE2EGoAPIEnvIsProdsFlagSet(t *testing.T) {
 	}
 	for agg, want := range map[apiservice.AuthAggregate]bool{
 		apiservice.AuthSessions: true, apiservice.AuthLocalLogin: true, apiservice.AuthSocial: true,
-		apiservice.AuthCredentials: false, apiservice.AuthOIDC: false, apiservice.AuthSAML: false,
+		apiservice.AuthCredentials: true, apiservice.AuthOIDC: false, apiservice.AuthSAML: false,
 	} {
 		if cfg.Enabled(agg) != want {
 			t.Errorf("FAIL: go-api %s enabled=%v, prod %v", agg, cfg.Enabled(agg), want)
@@ -115,7 +131,11 @@ func TestLiveE2EGoAPIEnvIsProdsFlagSet(t *testing.T) {
 	if cfg.OrgProvisioningOn() {
 		t.Error("FAIL: AUTH_PROXY_ORG_PROVISIONING is on; prod has it off")
 	}
-	for _, name := range []string{"AUTH_USERS_OWNED", "AUTH_SESSION_ISSUE_TOKEN", "AUTH_WORKLOAD_SUBJECT_FILE"} {
+	// CHAOS-13356: users are owned, as prod (phase 4, usersOwnedStage owned): go-api forwards the credentials routes.
+	if env["AUTH_USERS_OWNED"] != "true" {
+		t.Errorf("FAIL: go-api AUTH_USERS_OWNED=%q, prod true", env["AUTH_USERS_OWNED"])
+	}
+	for _, name := range []string{"AUTH_SESSION_ISSUE_TOKEN", "AUTH_WORKLOAD_SUBJECT_FILE"} {
 		if _, ok := env[name]; ok {
 			t.Errorf("FAIL: go-api env carries %s", name)
 		}
@@ -144,10 +164,61 @@ func TestLiveE2EAuthServiceEnvLoadsAndMintsEdDSA(t *testing.T) {
 	}
 }
 
+// CHAOS-13356: with users owned go-api forwards register to auth-service, whose register budget is 3 per hour per
+// client address unless AUTH_REGISTER_LIMIT says otherwise; every live e2e request comes from one address. The script
+// gives auth-service go-api's venue value (1000/hour, the form go-api parses) and no other side of the script sets it;
+// prod sets it nowhere (deploy/helm/dev-health/auth_register_limit_test.go).
+func TestLiveE2EAuthStackRegisterLimitIsAuthServiceOnly(t *testing.T) {
+	env := liveStackEnv(t, "auth-service")
+	if env["AUTH_REGISTER_LIMIT"] != "1000/hour" {
+		t.Fatalf("FAIL: auth-service AUTH_REGISTER_LIMIT=%q, want 1000/hour", env["AUTH_REGISTER_LIMIT"])
+	}
+	limit, err := httpapi.ParseLimit("auth_svc_register_ip", env["AUTH_REGISTER_LIMIT"])
+	if err != nil || limit.Count != 1000 || limit.Window.Hours() != 1 {
+		t.Fatalf("FAIL: AUTH_REGISTER_LIMIT is not go-api's form: %+v %v", limit, err)
+	}
+	for _, side := range []string{"go-api", "query-api", "web"} {
+		if value, ok := liveStackEnv(t, side)["AUTH_REGISTER_LIMIT"]; ok {
+			t.Errorf("FAIL: the script sets AUTH_REGISTER_LIMIT=%q for %s; it is auth-service's only", value, side)
+		}
+	}
+}
+
 func TestLiveE2EQueryAPIEnvIsProdsFlagSet(t *testing.T) {
 	env := liveStackEnv(t, "query-api")
 	if env["AUTH_PROXY_SESSIONS"] != "true" || env["AUTH_ACCESS_TOKEN_ISSUER"] == "" {
 		t.Fatalf("FAIL: query-api env %v lacks the sessions flag or the access token issuer", env)
+	}
+}
+
+// CHAOS-13356: prod runs platform roles owned (deploy values.prod.yaml:1830), and the chart renders
+// AUTH_PLATFORM_ROLES_OWNED=true on auth-service, go-api and query-api, no other Deployment
+// (deploy/helm/dev-health/live_e2e_auth_flags_test.go pins the flag table rows to that render). go-api's impersonation
+// refusal of a superuser target (internal/apiservice/admin/impersonation.go) reads is_superuser through
+// policy.PlatformRoleRead: the venue must read it from auth.platform_role_assignments, the table grant-platform-admin
+// writes, as prod does, not from public.users.is_superuser. web reads no platform role and gets no switch.
+func TestLiveE2EPlatformRolesOwnedOnEveryProdSide(t *testing.T) {
+	for _, side := range []string{"go-api", "query-api", "auth-service"} {
+		env := liveStackEnv(t, side)
+		owned, err := rule.OwnedFromLookup(func(k string) (string, bool) { v, ok := env[k]; return v, ok })
+		if err != nil || !owned {
+			t.Errorf("FAIL: %s %s=%q (owned %v, %v); prod renders true", side, rule.OwnedEnv, env[rule.OwnedEnv], owned, err)
+		}
+	}
+	if value, ok := liveStackEnv(t, "web")[rule.OwnedEnv]; ok {
+		t.Errorf("FAIL: web carries %s=%q; prod renders it on no web workload", rule.OwnedEnv, value)
+	}
+	env := liveStackEnv(t, "go-api")
+	owned, err := rule.OwnedFromLookup(func(k string) (string, bool) { v, ok := env[k]; return v, ok })
+	if err != nil {
+		t.Fatalf("FAIL: go-api refuses %s=%q: %v", rule.OwnedEnv, env[rule.OwnedEnv], err)
+	}
+	expr, err := policy.PlatformRoleRead{Owned: owned, AuthSchema: env["AUTH_DATABASE_SCHEMA"]}.Superuser("is_superuser", "users.id")
+	if err != nil {
+		t.Fatalf("FAIL: go-api's is_superuser read: %v", err)
+	}
+	if want := rule.HoldsSQL(`"auth"`, "users.id", "'"+rule.PlatformAdmin+"'"); expr != want {
+		t.Errorf("FAIL: the venue's go-api reads an impersonation target's is_superuser as %q, not the auth platform role grant-platform-admin writes", expr)
 	}
 }
 
@@ -164,7 +235,8 @@ func liveE2EUpFakes(t *testing.T, state string) string {
 	write("psql", "#!/bin/sh\ncase \"$*\" in *-At*) echo 3b1e2c4d-5f60-4a71-8b92-0c1d2e3f4a5b ;; esac\n")
 	write("sleep", "#!/bin/sh\nexit 0\n")
 	write("curl", "#!/bin/sh\ngrep -q '^started$' '"+state+"/logs/auth-service.log'\n")
-	write("dho", "#!/bin/sh\nexit 0\n")
+	// dho records each call with the AUTH_USERS_OWNED it ran under (the seed tool runs owned, CHAOS-13356).
+	write("dho", "#!/bin/sh\nprintf '%s %s\\n' \"${AUTH_USERS_OWNED:-unset}\" \"$*\" >> '"+state+"/dho.calls'\nexit 0\n")
 	return fake
 }
 
@@ -210,6 +282,7 @@ func runLiveE2EUp(t *testing.T, path, fake, state string) string {
 // The web workflow runs the script by a path relative to the ops checkout. `up` changes directory into the state
 // directory before it starts auth-service through `with-env`, so that re-exec has to name the script by an absolute path.
 func TestLiveE2EAuthStackUpStartsAuthServiceWhenRunByARelativePath(t *testing.T) {
+	t.Parallel()
 	state := filepath.Join(t.TempDir(), "state")
 	fake := liveE2EUpFakes(t, state)
 	out := runLiveE2EUp(t, fake+":"+os.Getenv("PATH"), fake, state)
@@ -218,6 +291,7 @@ func TestLiveE2EAuthStackUpStartsAuthServiceWhenRunByARelativePath(t *testing.T)
 
 // Hosted race legs have no xxd. The workload subject is the uuid of the fake psql row as prn_ and unpadded base64url.
 func TestLiveE2EAuthStackUpNeedsNoXxdAndPinsTheWorkloadSubject(t *testing.T) {
+	t.Parallel()
 	state := filepath.Join(t.TempDir(), "state")
 	fake := liveE2EUpFakes(t, state)
 	runLiveE2EUp(t, liveE2ENoXxdPath(t, fake), fake, state)
@@ -247,11 +321,26 @@ func assertUpWiredTheWebCaller(t *testing.T, state, out string) {
 	if !strings.Contains(out, "step 5b") || !strings.Contains(out, "step 6b") {
 		t.Errorf("FAIL: up skipped the web binding or the fake TokenReview step:\n%s", out)
 	}
+	// CHAOS-13356: users are owned. The seed tool copies the users the caller seeded before auth-service starts, with
+	// users owned, and auth-service has a mail setting for the credentials routes it now serves.
+	calls, err := os.ReadFile(filepath.Join(state, "dho.calls"))
+	if err != nil || !strings.Contains(string(calls), "true auth users-backfill -insert-only\n") {
+		t.Errorf("FAIL: up did not run the seed tool owned (dho calls %q, err %v)", calls, err)
+	}
+	seed, start := strings.Index(out, "step 4b"), strings.Index(out, "step 7")
+	if seed < 0 || start < 0 || seed > start {
+		t.Errorf("FAIL: the seed step (%d) must come before auth-service starts (%d)", seed, start)
+	}
+	for _, want := range []string{"AUTH_USERS_OWNED=true\n", "EMAIL_PROVIDER=console\n", "AUTH_MAIL_ALLOW_CONSOLE=true\n", "EMAIL_FROM_ADDRESS=", "APP_BASE_URL=", "AUTH_REGISTER_LIMIT=1000/hour\n"} {
+		if !strings.Contains(string(saved), want) {
+			t.Errorf("FAIL: the saved auth-service environment lacks %q", strings.TrimSpace(want))
+		}
+	}
 }
 
 // stopStartFixture fills the state dir with a saved environment, a fake auth-service and a fake readyz. run calls a verb of
 // the script with the fakes first on PATH; down runs at cleanup.
-func stopStartFixture(t *testing.T, fake, state string) (run func(verb string)) {
+func stopStartFixture(t *testing.T, fake, state string, extraEnv ...string) (run func(verb string)) {
 	t.Helper()
 	root := repoRoot(t)
 	for _, d := range []string{"bin", "logs"} {
@@ -271,7 +360,7 @@ func stopStartFixture(t *testing.T, fake, state string) (run func(verb string)) 
 		t.Helper()
 		cmd := exec.Command("bash", "ci/live_e2e_auth_stack.sh", verb, state)
 		cmd.Dir = root
-		cmd.Env = []string{"PATH=" + fake + ":" + os.Getenv("PATH")}
+		cmd.Env = append([]string{"PATH=" + fake + ":" + os.Getenv("PATH")}, extraEnv...)
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("FAIL: %s: %v\n%s", verb, err, out)
 		}
@@ -439,6 +528,86 @@ func TestLiveE2EAssertAuditCells(t *testing.T) {
 	}
 }
 
+// liveE2ESetupVerb runs a test-setup verb of the stack script (verify-user, grant-platform-admin) against a fake psql. The fake
+// records every SQL text it gets (one per line, newlines folded) and answers by its STACK_CASE: the write answers nothing or
+// fails, the read-back answers the case's count.
+func liveE2ESetupVerb(t *testing.T, verb, email, stackCase string) (string, string, error) {
+	t.Helper()
+	fake := t.TempDir()
+	record := filepath.Join(fake, "sql.log")
+	shim := "#!/bin/sh\nfor a in \"$@\"; do last=\"$a\"; done\nprintf '%s\\n' \"$last\" | tr '\\n' ' ' >> '" + record + "'; echo >> '" + record + "'\n" +
+		"case \"$last\" in\n" +
+		"  *INSERT\\ INTO*) [ \"$STACK_CASE\" = write_fails ] && exit 1; exit 0 ;;\n" +
+		"esac\n" +
+		"case \"$STACK_CASE\" in\n" +
+		"  verified) echo t; echo '1 1' ;;\n  verified_none) echo t; echo '0 0' ;;\n  verified_auth_only) echo t; echo '1 0' ;;\n" +
+		"  granted) echo 1 ;;\n  granted_none|write_fails) echo 0 ;;\n  granted_two) echo 2 ;;\n  *) exit 2 ;;\nesac\n"
+	if err := os.WriteFile(filepath.Join(fake, "psql"), []byte(shim), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	cmd := exec.Command("bash", filepath.Join(repoRoot(t), "ci", "live_e2e_auth_stack.sh"), verb, t.TempDir(), email)
+	cmd.Env = []string{"PATH=" + fake + ":" + os.Getenv("PATH"), "STACK_CASE=" + stackCase}
+	cmd.Stdout, cmd.Stderr = &out, &out
+	err := cmd.Run()
+	sql, _ := os.ReadFile(record)
+	return out.String(), string(sql), err
+}
+
+// CHAOS-13356: verify-user is test setup. It writes auth.users (the authority while users are owned) through the audit
+// guard and the public.users projection in one transaction, and fails loud unless the read-back is one row of each.
+func TestLiveE2EVerifyUserCells(t *testing.T) {
+	for cell, wantOK := range map[string]bool{"verified": true, "verified_none": false, "verified_auth_only": false} {
+		t.Run(cell, func(t *testing.T) {
+			out, sql, err := liveE2ESetupVerb(t, "verify-user", "a@example.test", cell)
+			if wantOK != (err == nil) {
+				t.Fatalf("FAIL: %s: exit err %v, want ok=%v\n%s", cell, err, wantOK, out)
+			}
+			if !wantOK && !strings.Contains(out, "verify-user: want one auth.users and one public.users row") {
+				t.Errorf("FAIL: %s failed without naming the read-back:\n%s", cell, out)
+			}
+			if !strings.Contains(sql, "pg_current_xact_id()::text, true)") || !strings.Contains(sql, "UPDATE auth.users") {
+				t.Errorf("FAIL: the write is not one guarded transaction on auth.users: %q", sql)
+			}
+		})
+	}
+	if _, _, err := liveE2ESetupVerb(t, "verify-user", "not-an-address", "verified"); err == nil {
+		t.Error("FAIL: verify-user accepted a value that is not an e-mail address")
+	}
+}
+
+// CHAOS-13356: grant-platform-admin is test setup. It writes the user's platform_admin row directly into
+// auth.platform_role_assignments (the guard's audit transaction first, one psql string), then fails loud unless the read-back
+// of the user's active rows is exactly 1.
+func TestLiveE2EGrantPlatformAdminCells(t *testing.T) {
+	for cell, wantOK := range map[string]bool{"granted": true, "granted_none": false, "granted_two": false, "write_fails": false} {
+		t.Run(cell, func(t *testing.T) {
+			out, sql, err := liveE2ESetupVerb(t, "grant-platform-admin", "admin@example.test", cell)
+			if wantOK != (err == nil) {
+				t.Fatalf("FAIL: %s: exit err %v, want ok=%v\n%s", cell, err, wantOK, out)
+			}
+			if cell == "granted_none" || cell == "granted_two" {
+				if !strings.Contains(out, "grant-platform-admin: want one active platform_admin row") {
+					t.Errorf("FAIL: %s failed without naming the read-back:\n%s", cell, out)
+				}
+			}
+			lines := strings.Split(strings.TrimSpace(sql), "\n")
+			write := lines[0]
+			if !strings.Contains(write, "pg_current_xact_id()::text, true)") ||
+				!strings.Contains(write, "INSERT INTO auth.platform_role_assignments") || !strings.Contains(write, "'platform_admin'") ||
+				strings.Index(write, "set_config") > strings.Index(write, "INSERT INTO") {
+				t.Errorf("FAIL: the write is not one guarded transaction that inserts the platform_admin row: %q", write)
+			}
+			if cell != "write_fails" && (len(lines) < 2 || !strings.Contains(lines[1], "disabled_at IS NULL") || !strings.Contains(lines[1], "expires_at")) {
+				t.Errorf("FAIL: the read-back does not count active rows by the store's rule: %q", sql)
+			}
+		})
+	}
+	if _, _, err := liveE2ESetupVerb(t, "grant-platform-admin", "x' OR '1'='1", "granted"); err == nil {
+		t.Error("FAIL: grant-platform-admin accepted a value that is not an e-mail address")
+	}
+}
+
 // The PDP refuses every caller unless AUTH_AUTHORIZE_CALLER_SUBJECTS names it, and the web workload gets its token through
 // the exchange against a job-local fake of the Kubernetes API (the product trusts its issuer by configuration).
 func TestLiveE2EAuthServiceEnvLetsTheWebWorkloadCallThePDP(t *testing.T) {
@@ -486,4 +655,1205 @@ func TestLiveE2EWebReadsTheTokenClassAuthServiceIssues(t *testing.T) {
 	if issuer["AUTH_ACCESS_TOKEN_CLASS"] == "" || web["AUTH_ACCESS_TOKEN_CLASS"] != issuer["AUTH_ACCESS_TOKEN_CLASS"] {
 		t.Errorf("FAIL: web token class %q, auth-service token class %q", web["AUTH_ACCESS_TOKEN_CLASS"], issuer["AUTH_ACCESS_TOKEN_CLASS"])
 	}
+}
+
+func TestLiveE2EEnvOverlays(t *testing.T) {
+	for _, side := range []string{"go-api", "query-api", "web"} {
+		t.Run(side, func(t *testing.T) {
+			state := t.TempDir()
+			if err := os.Mkdir(filepath.Join(state, "extra"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			writeExec(t, filepath.Join(state, "extra", side+".env"), "AUTH_ACCESS_TOKEN_ISSUER=overlay-issuer\nOVERLAY_VALUE=literal=$(false)=value", 0o600)
+			for _, verb := range []string{"with-env", "print-env"} {
+				args := []string{filepath.Join(repoRoot(t), "ci", "live_e2e_auth_stack.sh"), verb, side, state}
+				if verb == "with-env" {
+					args = append(args, "--", "env")
+				}
+				cmd := exec.Command("bash", args...)
+				cmd.Env = sentinelEnv()
+				out, err := cmd.CombinedOutput()
+				if err != nil {
+					t.Fatalf("%s: %v\n%s", verb, err, out)
+				}
+				for _, want := range []string{"AUTH_ACCESS_TOKEN_ISSUER=overlay-issuer\n", "OVERLAY_VALUE=literal=$(false)=value\n"} {
+					if !strings.Contains(string(out), want) {
+						t.Errorf("%s lacks %q: %s", verb, want, out)
+					}
+				}
+				if verb == "with-env" && strings.Contains(string(out), "AUTH_ACCESS_TOKEN_ISSUER=https://") {
+					t.Error("the overlay did not win over the side's own lines")
+				}
+			}
+			for _, invalid := range []string{"bad=value", "# comment", "", "NO_VALUE", "export KEY=value", "1KEY=value"} {
+				writeExec(t, filepath.Join(state, "extra", side+".env"), "SAFE=value\n"+invalid+"\n", 0o600)
+				for _, verb := range []string{"with-env", "print-env"} {
+					marker := filepath.Join(state, "ran")
+					args := []string{filepath.Join(repoRoot(t), "ci", "live_e2e_auth_stack.sh"), verb, side, state}
+					if verb == "with-env" {
+						args = append(args, "--", "touch", marker)
+					}
+					cmd := exec.Command("bash", args...)
+					out, err := cmd.CombinedOutput()
+					if err == nil || !strings.Contains(string(out), "invalid overlay line") {
+						t.Fatalf("%s accepted %q or failed without a reason: %v %s", verb, invalid, err, out)
+					}
+					if _, err := os.Stat(marker); !os.IsNotExist(err) {
+						t.Fatal("with-env ran a command with an invalid overlay")
+					}
+				}
+			}
+		})
+	}
+	state := t.TempDir()
+	if err := os.Mkdir(filepath.Join(state, "extra"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeExec(t, filepath.Join(state, "extra", "auth-service.env"), "invalid overlay\n", 0o600)
+	cmd := exec.Command("bash", filepath.Join(repoRoot(t), "ci", "live_e2e_auth_stack.sh"), "with-env", "auth-service", state, "--", "true")
+	cmd.Env = sentinelEnv()
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("auth-service read an overlay: %v %s", err, out)
+	}
+}
+
+func liveE2EStubFakes(t *testing.T) (string, string, func(...string) (string, error)) {
+	t.Helper()
+	state, fake := t.TempDir(), t.TempDir()
+	stopStartFixture(t, fake, state, "FAKE_STATE="+state, "FAKE_BIN="+fake)
+	if err := os.Mkdir(filepath.Join(state, "tls"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeExec(t, filepath.Join(state, "tls", "ca.pem"), "auth-ca\n", 0o600)
+	writeExec(t, filepath.Join(state, "hosts"), "127.0.0.1 localhost\n", 0o600)
+	writeExec(t, filepath.Join(state, "bin", "auth-service"), `#!/bin/sh
+printf '%s\n' "$MARK" >> "$FAKE_STATE/logs/starts"
+env > "$FAKE_STATE/auth-service.loaded"
+echo $$ > "$FAKE_STATE/auth-service.ready"
+exec sleep 60
+`, 0o755)
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeExec(t, filepath.Join(state, "bin", "cigate"), "#!/bin/sh\nLIVE_E2E_SMTP_FAKE=1 exec '"+strings.ReplaceAll(executable, "'", "'\"'\"'")+"' -test.run=^TestLiveE2ESMTPFakeProcess$ -- \"$@\"\n", 0o755)
+	writeExec(t, filepath.Join(fake, "go"), `#!/bin/sh
+printf '%s %s\n' "$PWD" "$*" >> "$FAKE_STATE/builds"
+while [ "$1" != -o ]; do shift; done
+cp "$FAKE_BIN/stub-template" "$2"
+chmod 755 "$2"
+`, 0o755)
+	writeExec(t, filepath.Join(fake, "stub-template"), `#!/bin/sh
+name=$(basename "$0")
+printf '%s %s\n' "$name" "$*" >> "$FAKE_STATE/stub.calls"
+case "$1" in
+  certs)
+    [ "$2" = -out ] || exit 2
+    mkdir -p "$3"
+    printf '%s-ca\n' "$name" > "$3/ca.pem"
+    touch "$3/server.pem" "$3/server.key"
+    ;;
+  serve)
+    echo "$name serve started"
+    [ ! -f "$FAKE_STATE/stub-slow-start" ] || sleep 1.5
+    echo $$ > "$FAKE_STATE/$name.ready"
+    sleep 60 & child=$!
+    trap 'kill "$child"; exit 0' TERM
+    wait "$child"
+    ;;
+  *) exit 2 ;;
+esac
+`, 0o755)
+	writeExec(t, filepath.Join(fake, "sudo"), `#!/bin/sh
+printf '%s\n' "$*" >> "$FAKE_STATE/sudo.calls"
+case "$1" in
+  tee) [ "$2" = -a ] && [ "$3" = /etc/hosts ] || exit 2; exec tee -a "$FAKE_STATE/hosts" ;;
+  sed) [ "$2" = -i ] && [ "$3" = '/# live-e2e-social/d' ] && [ "$4" = /etc/hosts ] || exit 2
+    exec sed -i "$3" "$FAKE_STATE/hosts" ;;
+  kill) exec /bin/kill "$2" ;;
+  bash) exec "$@" ;;
+  *) exit 2 ;;
+esac
+`, 0o755)
+	grep, err := exec.LookPath("grep")
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeExec(t, filepath.Join(fake, "grep"), "#!/bin/bash\nargs=()\nfor arg; do\n"+
+		"if [ \"$arg\" = /etc/hosts ]; then arg=\"$FAKE_STATE/hosts\"; fi\nargs+=(\"$arg\")\ndone\nexec '"+grep+"' \"${args[@]}\"\n", 0o755)
+	writeExec(t, filepath.Join(fake, "curl"), `#!/bin/sh
+printf '%s\n' "$*" >> "$FAKE_STATE/curl.calls"
+case "$*" in
+  *https://localhost:9443/saml/cert*)
+    [ ! -f "$FAKE_STATE/saml-empty" ] || exit 0
+    if [ -f "$FAKE_STATE/saml-non-pem" ]; then printf 'not a certificate\n'; else cat "$FAKE_BIN/saml-cert.pem"; fi
+    exit 0 ;;
+esac
+case "$*" in
+  *https://api.github.com/*) name=providerstub ;;
+  *https://localhost:9443/*) name=idpstub ;;
+  *) name=auth-service ;;
+esac
+[ "$name" = auth-service ] || [ ! -f "$FAKE_STATE/fail-stub" ] || exit 1
+pid=$(cat "$FAKE_STATE/$name.pid" 2>/dev/null)
+if [ "$(cat "$FAKE_STATE/$name.ready" 2>/dev/null)" = "$pid" ] && kill -0 "$pid" 2>/dev/null; then code=200; else code=000; fi
+[ "$name" = auth-service ] || [ ! -f "$FAKE_STATE/stub-599" ] || code=599
+case "$*" in *%{http_code}*) printf '%s' "$code" ;; esac
+[ "$code" != 000 ]
+`, 0o755)
+	sleep, err := exec.LookPath("sleep")
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeExec(t, filepath.Join(fake, "sleep"), "#!/bin/sh\n[ \"$1\" != 1 ] || set -- 0.01\nexec '"+sleep+"' \"$@\"\n", 0o755)
+	openssl, err := exec.LookPath("openssl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert := exec.Command(openssl, "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes", "-keyout", filepath.Join(fake, "saml.key"), "-out", filepath.Join(fake, "saml-cert.pem"), "-subj", "/CN=fake-saml", "-days", "1")
+	if err := cert.Run(); err != nil {
+		t.Fatal("cannot generate fake SAML certificate")
+	}
+	writeExec(t, filepath.Join(fake, "openssl"), "#!/bin/sh\nif [ \"$1\" = x509 ]; then exec '"+openssl+"' \"$@\"; fi\n[ \"$*\" = 'rand -base64 32' ] || exit 2\nprintf 'new-state-key+test/==\\n'\n", 0o755)
+	env := []string{"PATH=" + fake + ":" + os.Getenv("PATH"), "FAKE_STATE=" + state, "FAKE_BIN=" + fake, "GITHUB_ACTIONS=true", "LIVE_E2E_MAIL_WAIT_SECONDS=5", "LIVE_E2E_STUB_WAIT_SECONDS=5"}
+	run := func(args ...string) (string, error) {
+		t.Helper()
+		cmd := exec.Command("bash", append([]string{filepath.Join(repoRoot(t), "ci", "live_e2e_auth_stack.sh")}, args...)...)
+		cmd.Env = env
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}
+	t.Cleanup(func() {
+		if out, err := run("down", state); err != nil {
+			t.Errorf("stub cleanup: %v %s", err, out)
+		}
+	})
+	return state, fake, run
+}
+
+func liveE2ERead(t *testing.T, path string) string {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
+}
+
+func TestLiveE2EEnableSocialAndSSO(t *testing.T) {
+	for _, order := range [][]string{{"enable-social", "enable-sso"}, {"enable-sso", "enable-social"}} {
+		t.Run(strings.Join(order, "-"), func(t *testing.T) {
+			state, _, run := liveE2EStubFakes(t)
+			if order[0] == "enable-sso" {
+				writeExec(t, filepath.Join(state, "hosts"), "127.0.0.1 localhost\n127.0.0.1 api.github.com github.com # live-e2e-social\n", 0o600)
+			}
+			mustRun := func(args ...string) string {
+				t.Helper()
+				out, err := run(args...)
+				if err != nil {
+					t.Fatalf("%s: %v\n%s", args[0], err, out)
+				}
+				if strings.Contains(out, "gh-secret") || strings.Contains(out, "new-state-key") {
+					t.Fatal("a secret appeared in the command output")
+				}
+				return out
+			}
+			mustRun("start-auth", state)
+			for i, verb := range order {
+				mustRun(verb, state)
+				if n, starts := startCount(t, state); n != i+2 {
+					t.Fatalf("%s did not restart with the saved environment: %s", verb, starts)
+				}
+			}
+			saved := liveE2ERead(t, filepath.Join(state, "auth-service.env"))
+			loaded := liveE2ERead(t, filepath.Join(state, "auth-service.loaded"))
+			for _, want := range []string{"MARK=started-with-saved-env", "SOCIAL_GITHUB_CLIENT_ID=gh-client", "SOCIAL_GITHUB_CLIENT_SECRET=gh-secret",
+				"SSL_CERT_FILE=" + state + "/ca-bundle.pem", "AUTH_SSO_STATE_KEY=new-state-key-test_", "SETTINGS_ENCRYPTION_KEY=live-e2e-test-settings-key-do-not-use", "APP_BASE_URL=http://127.0.0.1:3002",
+				"SSO_EGRESS_ALLOW_CIDRS=127.0.0.1/32"} {
+				if !strings.Contains(saved, want+"\n") || !strings.Contains(loaded, want+"\n") {
+					t.Errorf("saved or loaded auth-service environment lacks %s", strings.Split(want, "=")[0])
+				}
+			}
+			info, err := os.Stat(filepath.Join(state, "auth-service.env"))
+			if err != nil || info.Mode().Perm() != 0o600 {
+				t.Fatalf("saved environment mode: %v %v", info, err)
+			}
+			if got := liveE2ERead(t, filepath.Join(state, "ca-bundle.pem")); got != "auth-ca\nproviderstub-ca\nidpstub-ca\n" {
+				t.Errorf("CA bundle: %q", got)
+			}
+			for _, side := range []string{"go-api", "web"} {
+				var out string
+				wants := []string{"AUTH_PROXY_OIDC=true\n", "AUTH_PROXY_SAML=true\n"}
+				if side == "web" {
+					out, err = run("with-env", side, state, "--", "bash", "-c", `[ "$AUTH_GITHUB_SECRET" = gh-secret ] && env -u AUTH_GITHUB_SECRET`)
+					if err != nil {
+						t.Fatalf("web's secret was not exported: %v", err)
+					}
+					wants = []string{"AUTH_GITHUB_ID=gh-client\n", "AUTH_SSO_ENABLED=true\n", "NODE_EXTRA_CA_CERTS=" + state + "/ca-bundle.pem\n"}
+				} else {
+					out = mustRun("with-env", side, state, "--", "env")
+				}
+				for _, want := range wants {
+					if !strings.Contains(out, want) {
+						t.Errorf("%s lacks %q", side, want)
+					}
+				}
+				if strings.Contains(out, "SSO_EGRESS_ALLOW_CIDRS") {
+					t.Errorf("%s holds SSO_EGRESS_ALLOW_CIDRS: the SSO egress list is auth-service's only", side)
+				}
+			}
+			printed := mustRun("print-env", "web", state)
+			if !strings.Contains(printed, "AUTH_GITHUB_SECRET=<redacted>\n") {
+				t.Fatal("print-env did not redact the overlay secret")
+			}
+			mustRun("start-idp", state, "-redirect-uri", "http://127.0.0.1:3002/callback", "-acs-url", "http://127.0.0.1:3002/acs", "-user", "live,live@example.test,Live User")
+			calls := liveE2ERead(t, filepath.Join(state, "stub.calls"))
+			for _, want := range []string{
+				"providerstub certs -out " + state + "/social",
+				"idpstub certs -out " + state + "/idp -host localhost",
+				"providerstub serve -fixtures " + repoRoot(t) + "/ci/live_e2e_stub -cert " + state + "/social/server.pem -key " + state + "/social/server.key -listen 127.0.0.1:443 -admin 127.0.0.1:9091",
+				"idpstub serve -cert " + state + "/idp/server.pem -key " + state + "/idp/server.key -listen 127.0.0.1:9443 -base-url https://localhost:9443 -redirect-uri http://127.0.0.1:3002/callback -acs-url http://127.0.0.1:3002/acs -user live,live@example.test,Live User",
+			} {
+				if !strings.Contains(calls, want+"\n") {
+					t.Errorf("missing stub call %q: %s", want, calls)
+				}
+			}
+			builds := liveE2ERead(t, filepath.Join(state, "builds"))
+			for _, name := range []string{"providerstub", "idpstub"} {
+				want := repoRoot(t) + " build -trimpath -o " + state + "/bin/" + name + " ./internal/testsupport/" + name + "/cmd/" + name + "\n"
+				if !strings.Contains(builds, want) {
+					t.Errorf("missing build %q", want)
+				}
+				curl := liveE2ERead(t, filepath.Join(state, "curl.calls"))
+				readyCurl := "-sS --max-time 1 -o /dev/null -w %{http_code} --cacert " + state + "/social/ca.pem https://api.github.com/__ready"
+				if name == "idpstub" {
+					readyCurl = "-sS --max-time 1 -o /dev/null -w %{http_code} --cacert " + state + "/idp/ca.pem https://localhost:9443/.well-known/openid-configuration"
+				}
+				if !strings.Contains(curl, readyCurl) {
+					t.Errorf("%s readiness did not trust its CA or did not ask a path that answers 200: readyCurl %q", name, readyCurl)
+				}
+			}
+			hosts := liveE2ERead(t, filepath.Join(state, "hosts"))
+			if strings.Count(hosts, "127.0.0.1 api.github.com github.com # live-e2e-social\n") != 1 {
+				t.Fatalf("social hosts entry was not idempotent: %q", hosts)
+			}
+			providerPID := strings.TrimSpace(liveE2ERead(t, filepath.Join(state, "providerstub.pid")))
+			if ready := strings.TrimSpace(liveE2ERead(t, filepath.Join(state, "providerstub.ready"))); ready != providerPID {
+				t.Fatalf("the pid file holds %q, not the stub's own pid %q", providerPID, ready)
+			}
+			pids := []string{providerPID}
+			for _, name := range []string{"auth-service", "idpstub"} {
+				pids = append(pids, strings.TrimSpace(liveE2ERead(t, filepath.Join(state, name+".pid"))))
+			}
+			mustRun("down", state)
+			for _, pid := range pids {
+				deadline := time.Now().Add(time.Second)
+				for {
+					raw, _ := os.ReadFile(filepath.Join("/proc", pid, "cmdline"))
+					if len(raw) == 0 {
+						break
+					}
+					if time.Now().After(deadline) {
+						t.Errorf("down left process %s running", pid)
+						break
+					}
+					time.Sleep(10 * time.Millisecond)
+				}
+			}
+			if got := liveE2ERead(t, filepath.Join(state, "hosts")); got != "127.0.0.1 localhost\n" {
+				t.Errorf("down did not remove only the social hosts entry: %q", got)
+			}
+			if !strings.Contains(liveE2ERead(t, filepath.Join(state, "sudo.calls")), "kill "+providerPID+"\n") {
+				t.Error("down did not stop providerstub through sudo")
+			}
+		})
+	}
+}
+
+func TestLiveE2EStubReadinessFailure(t *testing.T) {
+	for _, verb := range []string{"enable-social", "start-idp"} {
+		t.Run(verb, func(t *testing.T) {
+			t.Parallel()
+			state, _, run := liveE2EStubFakes(t)
+			if out, err := run("enable-sso", state); err != nil {
+				t.Fatalf("enable-sso: %v %s", err, out)
+			}
+			writeExec(t, filepath.Join(state, "fail-stub"), "", 0o600)
+			out, err := run(verb, state)
+			name := "providerstub"
+			if verb == "start-idp" {
+				name = "idpstub"
+			}
+			if err == nil || !readinessDied(out, name) || !strings.Contains(out, name+" serve") {
+				t.Fatalf("readiness failure did not report the stub and its log: %v %s", err, out)
+			}
+		})
+	}
+}
+
+func TestLiveE2ESocialRequiresSudo(t *testing.T) {
+	bin := t.TempDir()
+	for _, name := range []string{"dirname", "basename"} {
+		path, err := exec.LookPath(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(path, filepath.Join(bin, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cmd := exec.Command("bash", filepath.Join(repoRoot(t), "ci", "live_e2e_auth_stack.sh"), "enable-social", t.TempDir())
+	cmd.Env = []string{"PATH=" + bin, "GITHUB_ACTIONS=true"}
+	out, err := cmd.CombinedOutput()
+	if err == nil || !strings.Contains(string(out), "enable-social requires sudo") {
+		t.Fatalf("missing sudo was not explained: %v %s", err, out)
+	}
+}
+
+func TestLiveE2ESocialRefusesOutsideAGitHubRunnerBeforeAnyWrite(t *testing.T) {
+	for _, value := range []string{"", "1", "True", "false", "true "} {
+		t.Run("GITHUB_ACTIONS="+value, func(t *testing.T) {
+			state, fake, _ := liveE2EStubFakes(t)
+			env := []string{"PATH=" + fake + ":" + os.Getenv("PATH"), "FAKE_STATE=" + state, "FAKE_BIN=" + fake, "LIVE_E2E_MAIL_WAIT_SECONDS=5", "LIVE_E2E_STUB_WAIT_SECONDS=5"}
+			if value != "" {
+				env = append(env, "GITHUB_ACTIONS="+value)
+			}
+			hostsBefore := liveE2ERead(t, filepath.Join(state, "hosts"))
+			cmd := exec.Command("bash", filepath.Join(repoRoot(t), "ci", "live_e2e_auth_stack.sh"), "enable-social", state)
+			cmd.Env = env
+			out, err := cmd.CombinedOutput()
+			if err == nil || !strings.Contains(string(out), "runs only on a GitHub Actions runner") {
+				t.Fatalf("enable-social was not refused: %v %s", err, out)
+			}
+			if got := liveE2ERead(t, filepath.Join(state, "hosts")); got != hostsBefore {
+				t.Errorf("the hosts file changed: %q", got)
+			}
+			for _, name := range []string{"sudo.calls", "builds", "stub.calls", "providerstub.pid", "extra", "ca-bundle.pem", "bin/providerstub", "social"} {
+				if _, statErr := os.Stat(filepath.Join(state, name)); statErr == nil {
+					t.Errorf("%s exists: the refusal came after a write", name)
+				}
+			}
+		})
+	}
+}
+
+func TestLiveE2EStartIdpNeedsNoGitHubRunner(t *testing.T) {
+	state, fake, _ := liveE2EStubFakes(t)
+	env := []string{"PATH=" + fake + ":" + os.Getenv("PATH"), "FAKE_STATE=" + state, "FAKE_BIN=" + fake, "LIVE_E2E_MAIL_WAIT_SECONDS=5", "LIVE_E2E_STUB_WAIT_SECONDS=5"}
+	for _, args := range [][]string{{"enable-sso", state}, {"start-idp", state, "-redirect-uri", "http://127.0.0.1:3002/callback"}} {
+		cmd := exec.Command("bash", append([]string{filepath.Join(repoRoot(t), "ci", "live_e2e_auth_stack.sh")}, args...)...)
+		cmd.Env = env
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%s without GITHUB_ACTIONS: %v %s", args[0], err, out)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(state, "idpstub.pid")); err != nil {
+		t.Fatal("start-idp did not start the stub")
+	}
+}
+
+func TestLiveE2EStubAnsweringNon200IsNotReady(t *testing.T) {
+	for _, verb := range []string{"enable-social", "start-idp"} {
+		t.Run(verb, func(t *testing.T) {
+			t.Parallel()
+			state, _, run := liveE2EStubFakes(t)
+			if out, err := run("enable-sso", state); err != nil {
+				t.Fatalf("enable-sso: %v %s", err, out)
+			}
+			writeExec(t, filepath.Join(state, "stub-599"), "", 0o600)
+			name := map[string]string{"enable-social": "providerstub", "start-idp": "idpstub"}[verb]
+			out, err := run(verb, state)
+			if err == nil || !readinessDied(out, name) {
+				t.Fatalf("a stub answering 599 read as ready: %v %s", err, out)
+			}
+		})
+	}
+}
+
+func TestLiveE2EStubSecondStartIsRefusedAndDownStopsTheFirst(t *testing.T) {
+	for _, verb := range []string{"enable-social", "start-idp"} {
+		t.Run(verb, func(t *testing.T) {
+			state, _, run := liveE2EStubFakes(t)
+			if out, err := run("enable-sso", state); err != nil {
+				t.Fatalf("enable-sso: %v %s", err, out)
+			}
+			pidFile := filepath.Join(state, map[string]string{"enable-social": "providerstub.pid", "start-idp": "idpstub.pid"}[verb])
+			if out, err := run(verb, state); err != nil {
+				t.Fatalf("first %s: %v %s", verb, err, out)
+			}
+			first := strings.TrimSpace(liveE2ERead(t, pidFile))
+			out, err := run(verb, state)
+			if err == nil || !strings.Contains(out, "already runs (pid "+first+")") {
+				t.Fatalf("a second %s was not refused: %v %s", verb, err, out)
+			}
+			if got := strings.TrimSpace(liveE2ERead(t, pidFile)); got != first {
+				t.Fatalf("the pid file changed from %s to %s", first, got)
+			}
+			if out, err := run("down", state); err != nil {
+				t.Fatalf("down: %v %s", err, out)
+			}
+			for i := 0; i < 50; i++ {
+				if _, statErr := os.Stat("/proc/" + first); statErr != nil {
+					return
+				}
+				time.Sleep(50 * time.Millisecond)
+			}
+			t.Fatalf("the first stub (pid %s) is still running after down", first)
+		})
+	}
+}
+
+func TestLiveE2EProviderStopRefusesUnrelatedOrInvalidPID(t *testing.T) {
+	state, _, run := liveE2EStubFakes(t)
+	unrelated := exec.Command("sleep", "60")
+	if err := unrelated.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = unrelated.Process.Kill()
+		_ = unrelated.Wait()
+	})
+	for _, pid := range []string{strconv.Itoa(unrelated.Process.Pid), "not-a-pid", "0"} {
+		writeExec(t, filepath.Join(state, "providerstub.pid"), pid+"\n", 0o600)
+		out, err := run("down", state)
+		if (pid == "not-a-pid") != (err != nil) {
+			t.Fatalf("down pid %q: %v %s", pid, err, out)
+		}
+		if raw, _ := os.ReadFile(filepath.Join(state, "sudo.calls")); strings.Contains(string(raw), "kill ") {
+			t.Fatal("down tried to kill an unrelated process")
+		}
+	}
+}
+
+func TestLiveE2ESSOFlagsStayOffWithoutAnOverlay(t *testing.T) {
+	for _, name := range []string{"AUTH_PROXY_OIDC", "AUTH_PROXY_SAML"} {
+		found := false
+		for _, row := range liveFlagRows(t) {
+			if row.scope == "go-api" && row.name == name {
+				found = true
+				if row.value != "false" {
+					t.Errorf("prod flag table enables %s", name)
+				}
+			}
+		}
+		if !found || liveStackEnv(t, "go-api")[name] != "false" {
+			t.Errorf("%s is not off without an overlay", name)
+		}
+	}
+}
+
+func TestLiveE2ESocialFixtures(t *testing.T) {
+	stub, err := providerstub.LoadDir(filepath.Join(repoRoot(t), "ci", "live_e2e_stub"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(stub)
+	defer server.Close()
+	for _, cell := range []struct {
+		method, host, path, auth, body, want string
+		status                               int
+	}{
+		{"POST", "github.com", "/login/oauth/access_token", "", "code=test&client_id=gh-client&client_secret=gh-secret", `{"access_token":"gh-live","token_type":"bearer","scope":"read:user,user:email"}`, 200},
+		{"GET", "api.github.com", "/user", "Bearer gh-live", "", `{"id":920001,"login":"live-social","name":"Live Social","email":"live-social@example.com"}`, 200},
+		{"POST", "api.github.com", "/applications/gh-client/token", "Basic Z2gtY2xpZW50OmdoLXNlY3JldA==", `{"access_token":"gh-live"}`, `{"app":{"client_id":"gh-client"},"user":{"id":920001}}`, 200},
+		{"POST", "github.com", "/login/oauth/access_token", "", "code=live-refused&client_id=gh-client&client_secret=gh-secret", `{"access_token":"gh-refused","token_type":"bearer","scope":"read:user,user:email"}`, 200},
+		{"GET", "api.github.com", "/user", "Bearer gh-refused", "", `{"id":920002,"login":"live-refused","email":"live-refused@example.test"}`, 200},
+		{"POST", "api.github.com", "/applications/gh-client/token", "Basic Z2gtY2xpZW50OmdoLXNlY3JldA==", `{"access_token":"gh-refused"}`, `{"app":{"client_id":"gh-client"},"user":{"id":920002}}`, 200},
+		{"GET", "api.github.com", "/__ready", "", "", `{"ready":true}`, 200},
+		{"GET", "api.github.com", "/unknown", "", "", "", 599},
+		{"GET", "api.github.com", "/user/emails", "Bearer gh-live", "", "", 599},
+		{"GET", "api.github.com", "/user", "Bearer wrong", "", "", 599},
+		{"POST", "api.github.com", "/applications/gh-client/token", "Basic wrong", `{"access_token":"gh-live"}`, "", 599},
+		{"POST", "api.github.com", "/applications/gh-client/token", "Basic Z2gtY2xpZW50OmdoLXNlY3JldA==", `{"access_token":"wrong"}`, "", 599},
+	} {
+		t.Run(cell.method+cell.path+strconv.Itoa(cell.status), func(t *testing.T) {
+			req, err := http.NewRequest(cell.method, server.URL+cell.path, strings.NewReader(cell.body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.Host = cell.host
+			if cell.auth != "" {
+				req.Header.Set("Authorization", cell.auth)
+			}
+			resp, err := server.Client().Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			body, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if resp.StatusCode != cell.status {
+				t.Fatalf("got %d, want %d: %s", resp.StatusCode, cell.status, body)
+			}
+			if cell.want != "" {
+				var got, want any
+				if err := json.Unmarshal(body, &got); err != nil {
+					t.Fatal(err)
+				}
+				if err := json.Unmarshal([]byte(cell.want), &want); err != nil {
+					t.Fatal(err)
+				}
+				if !reflect.DeepEqual(got, want) {
+					t.Fatalf("got %s, want %s", body, cell.want)
+				}
+			}
+		})
+	}
+}
+
+func TestLiveE2ESSOUsesCallerSettings(t *testing.T) {
+	state, fake, _ := liveE2EStubFakes(t)
+	cmd := exec.Command("bash", filepath.Join(repoRoot(t), "ci", "live_e2e_auth_stack.sh"), "enable-sso", state)
+	cmd.Env = []string{"PATH=" + fake + ":" + os.Getenv("PATH"), "FAKE_STATE=" + state, "FAKE_BIN=" + fake,
+		"LIVE_E2E_SETTINGS_ENCRYPTION_KEY=caller-settings-key", "LIVE_E2E_WEB_ORIGIN=http://localhost:3005"}
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("enable-sso: %v %s", err, out)
+	}
+	if strings.Contains(string(out), "caller-settings-key") {
+		t.Fatal("enable-sso logged the encryption key")
+	}
+	loaded := liveE2ERead(t, filepath.Join(state, "auth-service.loaded"))
+	for _, want := range []string{"SETTINGS_ENCRYPTION_KEY=caller-settings-key\n", "APP_BASE_URL=http://localhost:3005\n"} {
+		if !strings.Contains(loaded, want) {
+			t.Errorf("auth-service did not load the caller's %s", strings.Split(want, "=")[0])
+		}
+	}
+}
+
+func TestLiveE2ESMTPFakeProcess(t *testing.T) {
+	if os.Getenv("LIVE_E2E_SMTP_FAKE") != "1" {
+		return
+	}
+	var args []string
+	for i, arg := range os.Args {
+		if arg == "--" {
+			args = os.Args[i+1:]
+			break
+		}
+	}
+	if len(args) < 2 || args[0] != "live-e2e" {
+		os.Exit(2)
+	}
+	switch args[1] {
+	case "mint-license":
+		if len(args) != 4 {
+			os.Exit(2)
+		}
+		for path, value := range map[string]string{args[2]: "fake-license-public", args[3]: "fake-license-value"} {
+			if err := os.WriteFile(path, []byte(value), 0o600); err != nil {
+				os.Exit(1)
+			}
+		}
+	case "smtp-sink":
+		if len(args) != 5 || args[2] != "127.0.0.1:0" {
+			os.Exit(2)
+		}
+		record, err := os.OpenFile(filepath.Join(os.Getenv("FAKE_STATE"), "smtp.argv"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+		if err != nil {
+			os.Exit(1)
+		}
+		_, err = fmt.Fprintln(record, strings.Join(args, " "))
+		if err != nil {
+			os.Exit(1)
+		}
+		_ = record.Close()
+		if err := os.MkdirAll(args[3], 0o700); err != nil {
+			os.Exit(1)
+		}
+		state := os.Getenv("FAKE_STATE")
+		if _, err := os.Stat(filepath.Join(state, "smtp-slow-start")); err == nil {
+			time.Sleep(1500 * time.Millisecond)
+		}
+		listener, err := net.Listen("tcp", args[2])
+		if err != nil {
+			os.Exit(1)
+		}
+		port := strconv.Itoa(listener.Addr().(*net.TCPAddr).Port)
+		if _, err := os.Stat(filepath.Join(state, "smtp-no-port")); err == nil {
+			fmt.Println("fake sink startup failed")
+		} else {
+			if _, err := os.Stat(filepath.Join(state, "smtp-bad-port")); err == nil {
+				port = "invalid"
+			}
+			if err := os.WriteFile(args[4], []byte(port), 0o644); err != nil {
+				os.Exit(1)
+			}
+		}
+		banner := "220 fake SMTP\r\n"
+		if _, err := os.Stat(filepath.Join(state, "smtp-bad-banner")); err == nil {
+			banner = "500 unready\r\n"
+		}
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				os.Exit(1)
+			}
+			_, _ = io.WriteString(conn, banner)
+			_ = conn.Close()
+		}
+	case "mail-token":
+		if len(args) != 5 {
+			os.Exit(2)
+		}
+		key := args[4] + "." + hex.EncodeToString([]byte(strings.ToLower(args[3])))
+		raw, err := os.ReadFile(filepath.Join(args[2], key))
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "mail token is unavailable")
+			os.Exit(1)
+		}
+		fmt.Println(string(raw))
+	default:
+		os.Exit(2)
+	}
+	os.Exit(0)
+}
+
+// readinessDied: the loud failure names the elapsed seconds and the bound (D6418: the bound is a wait limit; only a ready
+// signal passes, and a hit deadline fails with how long it waited). The fixture bound is 5 s, so the wait was at least that;
+// no upper time bound is asserted.
+func readinessDied(out, name string) bool {
+	m := regexp.MustCompile(regexp.QuoteMeta(name) + ` did not become ready after ([0-9]+)s \(bound 5s\)`).FindStringSubmatch(out)
+	if m == nil {
+		return false
+	}
+	elapsed, err := strconv.Atoi(m[1])
+	//abstime:allow lower bound only: the script dies after its own wall-clock bound, so load can only lengthen the elapsed time; this fails only a run that died before the bound
+	return err == nil && elapsed >= 5
+}
+
+// A slow start must not be read as a failed start: the wait is wall clock, whatever the fake sleep does (CHAOS-13590:
+// the -race test binary behind the fake sink needs ~1.5 s to start, the old wait gave it ~0.45 s).
+func TestLiveE2EEnableMailWaitsOnWallClockForASlowSink(t *testing.T) {
+	state, _, run := liveE2EStubFakes(t)
+	writeExec(t, filepath.Join(state, "smtp-slow-start"), "", 0o600)
+	if out, err := run("enable-mail", state); err != nil {
+		t.Fatalf("enable-mail with a slow sink start: %v %s", err, out)
+	}
+	if port := strings.TrimSpace(liveE2ERead(t, filepath.Join(state, "mail/port"))); port == "" {
+		t.Fatal("the slow sink never published its port")
+	}
+}
+
+func TestLiveE2EStartIdpWaitsOnWallClockForASlowStub(t *testing.T) {
+	state, _, run := liveE2EStubFakes(t)
+	if out, err := run("enable-sso", state); err != nil {
+		t.Fatalf("enable-sso: %v %s", err, out)
+	}
+	writeExec(t, filepath.Join(state, "stub-slow-start"), "", 0o600)
+	if out, err := run("start-idp", state, "-redirect-uri", "http://127.0.0.1:3002/callback"); err != nil {
+		t.Fatalf("start-idp with a slow stub start: %v %s", err, out)
+	}
+}
+
+func TestLiveE2EEnableMail(t *testing.T) {
+	state, fake, run := liveE2EStubFakes(t)
+	runWithoutRunner := func(args ...string) (string, error) {
+		cmd := exec.Command("bash", append([]string{filepath.Join(repoRoot(t), "ci/live_e2e_auth_stack.sh")}, args...)...)
+		cmd.Env = []string{"PATH=" + fake + ":" + os.Getenv("PATH"), "FAKE_STATE=" + state, "FAKE_BIN=" + fake, "LIVE_E2E_MAIL_WAIT_SECONDS=5", "LIVE_E2E_STUB_WAIT_SECONDS=5"}
+		raw, err := cmd.CombinedOutput()
+		return string(raw), err
+	}
+	if out, err := run("start-auth", state); err != nil {
+		t.Fatalf("start-auth: %v %s", err, out)
+	}
+	before := liveE2ERead(t, filepath.Join(state, "auth-service.env"))
+	if out, err := runWithoutRunner("enable-mail", state); err != nil {
+		t.Fatalf("enable-mail without runner: %v %s", err, out)
+	}
+	port := liveE2ERead(t, filepath.Join(state, "mail/port"))
+	want := before + "EMAIL_PROVIDER=smtp\nSMTP_HOST=127.0.0.1\nSMTP_PORT=" + port + "\nSMTP_USE_TLS=false\n"
+	if liveE2ERead(t, filepath.Join(state, "auth-service.env")) != want {
+		t.Fatal("mail overlay did not append exactly four lines")
+	}
+	if n, _ := startCount(t, state); n != 2 {
+		t.Fatal("enable-mail did not restart auth exactly once")
+	}
+	loaded := liveE2ERead(t, filepath.Join(state, "auth-service.loaded"))
+	for _, line := range []string{"EMAIL_PROVIDER=smtp\n", "SMTP_HOST=127.0.0.1\n", "SMTP_PORT=" + port + "\n", "SMTP_USE_TLS=false\n"} {
+		if !strings.Contains(loaded, line) {
+			t.Fatal("auth did not load the SMTP overlay")
+		}
+	}
+	for path, mode := range map[string]os.FileMode{"auth-service.env": 0o600, "mail": 0o700, "mail/tokens": 0o700} {
+		info, err := os.Stat(filepath.Join(state, path))
+		if err != nil || info.Mode().Perm() != mode {
+			t.Fatalf("incorrect permissions for %s", path)
+		}
+	}
+	wantArgs := "live-e2e smtp-sink 127.0.0.1:0 " + state + "/mail/tokens " + state + "/mail/port\n"
+	if liveE2ERead(t, filepath.Join(state, "smtp.argv")) != wantArgs {
+		t.Fatal("incorrect SMTP sink argv")
+	}
+	pid := strings.TrimSpace(liveE2ERead(t, filepath.Join(state, "smtpsink.pid")))
+	if out, err := run("enable-mail", state); err == nil || !strings.Contains(out, "already runs (pid "+pid+")") {
+		t.Fatal("second enable-mail was not refused")
+	}
+	if liveE2ERead(t, filepath.Join(state, "auth-service.env")) != want {
+		t.Fatal("second enable-mail changed the overlay")
+	}
+	if n, _ := startCount(t, state); n != 2 {
+		t.Fatal("second enable-mail restarted auth")
+	}
+	if liveE2ERead(t, filepath.Join(state, "smtp.argv")) != wantArgs {
+		t.Fatal("second enable-mail started another sink")
+	}
+	token := "canned-mail-token-no-log"
+	scanForToken := func() {
+		t.Helper()
+		err := filepath.WalkDir(state, func(path string, entry os.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if path == filepath.Join(state, "mail/tokens") {
+				return filepath.SkipDir
+			}
+			if entry.IsDir() {
+				return nil
+			}
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			if bytes.Contains(raw, []byte(token)) {
+				t.Error("token persisted outside its capture directory")
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, kind := range []string{"reset", "verify"} {
+		key := kind + "." + hex.EncodeToString([]byte("reader@example.test"))
+		writeExec(t, filepath.Join(state, "mail/tokens", key), token, 0o600)
+		cmd := exec.Command("bash", filepath.Join(repoRoot(t), "ci/live_e2e_auth_stack.sh"), "mail-token", state, "Reader@example.test", kind)
+		cmd.Env = []string{"PATH=" + fake + ":" + os.Getenv("PATH"), "FAKE_STATE=" + state, "FAKE_BIN=" + fake, "LIVE_E2E_MAIL_WAIT_SECONDS=5", "LIVE_E2E_STUB_WAIT_SECONDS=5"}
+		var out, errb bytes.Buffer
+		cmd.Stdout = &out
+		cmd.Stderr = &errb
+		if err := cmd.Run(); err != nil || out.String() != token+"\n" || errb.Len() != 0 {
+			t.Fatal("mail-token did not print only its value on stdout")
+		}
+		scanForToken()
+	}
+	for _, args := range [][]string{{"reader@example.test", "bad"}, {"invalid", "reset"}, {"bad address@example.test", "reset"}, {"x'@example.test", "reset"}, {"absent@example.test", "reset"}} {
+		out, err := run("mail-token", state, args[0], args[1])
+		if err == nil || strings.Contains(out, token) {
+			t.Fatal("invalid mail-token request accepted or leaked a token")
+		}
+	}
+	scanForToken()
+	if out, err := run("down", state); err != nil {
+		t.Fatalf("down: %v %s", err, out)
+	}
+	if _, err := os.Stat(filepath.Join(state, "mail/tokens")); !os.IsNotExist(err) {
+		t.Fatal("down left the token directory")
+	}
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		raw, _ := os.ReadFile(filepath.Join("/proc", pid, "cmdline"))
+		if len(raw) == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("down left the sink running")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestLiveE2EEnableMailNeedsSavedEnvironment(t *testing.T) {
+	state, _, run := liveE2EStubFakes(t)
+	if err := os.Remove(filepath.Join(state, "auth-service.env")); err != nil {
+		t.Fatal(err)
+	}
+	out, err := run("enable-mail", state)
+	if err == nil || !strings.Contains(out, "no saved auth-service environment") {
+		t.Fatal("enable-mail accepted absent environment")
+	}
+	for _, path := range []string{"mail", "smtpsink.pid", "smtp.argv"} {
+		if _, err := os.Stat(filepath.Join(state, path)); !os.IsNotExist(err) {
+			t.Fatal("enable-mail wrote before refusing absent environment")
+		}
+	}
+}
+
+func TestLiveE2EMailReadinessRequiresPortAndBanner(t *testing.T) {
+	for _, failure := range []string{"smtp-no-port", "smtp-bad-port", "smtp-bad-banner"} {
+		t.Run(failure, func(t *testing.T) {
+			t.Parallel()
+			state, _, run := liveE2EStubFakes(t)
+			before := liveE2ERead(t, filepath.Join(state, "auth-service.env"))
+			writeExec(t, filepath.Join(state, failure), "", 0o600)
+			out, err := run("enable-mail", state)
+			if err == nil || !readinessDied(out, "smtpsink") {
+				t.Fatal("unready mail sink accepted")
+			}
+			if failure == "smtp-no-port" && !strings.Contains(out, "fake sink startup failed") {
+				t.Fatal("readiness error omitted log tail")
+			}
+			if liveE2ERead(t, filepath.Join(state, "auth-service.env")) != before {
+				t.Fatal("unready sink changed auth environment")
+			}
+		})
+	}
+}
+
+var mailTokenCaller = regexp.MustCompile(`live_e2e_auth_stack\.sh["']?\s+mail-token\b`)
+var mailTokenTrace = regexp.MustCompile(`\b(set|bash)\s+-[a-zA-Z]*x|\bxtrace\b`)
+
+func unsafeMailTokenCaller(raw string) bool {
+	caller := false
+	for _, line := range strings.Split(raw, "\n") {
+		if mailTokenCaller.MatchString(line) {
+			caller = true
+			if !strings.Contains(line, "=$(") {
+				return true
+			}
+		}
+	}
+	return caller && mailTokenTrace.MatchString(raw)
+}
+
+func TestLiveE2EMailTokenCallersCaptureWithoutTracing(t *testing.T) {
+	root := repoRoot(t)
+	var paths []string
+	for _, pattern := range []string{".github/workflows/*.yml", "ci/*.sh", "*.md"} {
+		matches, err := filepath.Glob(filepath.Join(root, pattern))
+		if err != nil {
+			t.Fatal(err)
+		}
+		paths = append(paths, matches...)
+	}
+	for _, dir := range []string{"docs", ".github/docs-legacy"} {
+		err := filepath.WalkDir(filepath.Join(root, dir), func(path string, entry os.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if !entry.IsDir() && (strings.HasSuffix(path, ".md") || strings.HasSuffix(path, ".mdx") || strings.HasSuffix(path, ".rst")) {
+				paths = append(paths, path)
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, path := range paths {
+		if unsafeMailTokenCaller(liveE2ERead(t, path)) {
+			t.Errorf("mail-token caller must capture stdout and disable tracing: %s", path)
+		}
+	}
+	for name, fixture := range map[string]string{
+		"bare":   "bash ci/live_e2e_auth_stack.sh mail-token STATE a@example.test reset\n",
+		"set-x":  "set -x\ntoken=$(bash ci/live_e2e_auth_stack.sh mail-token STATE a@example.test reset)\n",
+		"bash-x": "token=$(bash -x ci/live_e2e_auth_stack.sh mail-token STATE a@example.test reset)\n",
+		"xtrace": "set -o xtrace\ntoken=$(bash ci/live_e2e_auth_stack.sh mail-token STATE a@example.test reset)\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "caller.sh")
+			writeExec(t, path, fixture, 0o600)
+			if !unsafeMailTokenCaller(liveE2ERead(t, path)) {
+				t.Fatal("planted unsafe caller was accepted")
+			}
+		})
+	}
+	t.Run("captured", func(t *testing.T) {
+		if unsafeMailTokenCaller("token=$(bash ci/live_e2e_auth_stack.sh mail-token STATE a@example.test reset)\n") {
+			t.Fatal("safe capture rejected")
+		}
+	})
+}
+
+func TestLiveE2ESSOLicenseAndJITAreJobLocal(t *testing.T) {
+	state, _, run := liveE2EStubFakes(t)
+	if out, err := run("start-auth", state); err != nil {
+		t.Fatalf("start-auth: %v %s", err, out)
+	}
+	out, err := run("enable-sso", state)
+	if err != nil {
+		t.Fatalf("enable-sso: %v %s", err, out)
+	}
+	if strings.Contains(out, "fake-license-public") || strings.Contains(out, "fake-license-value") {
+		t.Fatal("enable-sso printed a licence or verification key")
+	}
+	if n, _ := startCount(t, state); n != 2 {
+		t.Fatal("enable-sso must restart auth-service once")
+	}
+	goEnv := liveE2ERead(t, filepath.Join(state, "extra/go-api.env"))
+	for _, want := range []string{"LICENSE_PUBLIC_KEY=fake-license-public\n", "LICENSE_KEY=fake-license-value\n"} {
+		if strings.Count(goEnv, want) != 1 {
+			t.Fatal("go-api overlay lacks the licence inputs")
+		}
+	}
+	for _, path := range []string{"auth-service.env", "auth-service.loaded"} {
+		if !strings.Contains(liveE2ERead(t, filepath.Join(state, path)), "AUTH_SSO_JIT=true\n") {
+			t.Fatal("auth-service did not save and load SSO JIT")
+		}
+	}
+	for path, mode := range map[string]os.FileMode{"license": 0o700, "license/public.b64": 0o600, "license/licence.txt": 0o600, "extra/go-api.env": 0o600, "auth-service.env": 0o600} {
+		info, err := os.Stat(filepath.Join(state, path))
+		if err != nil || info.Mode().Perm() != mode {
+			t.Fatalf("incorrect permissions for %s", path)
+		}
+	}
+	out, err = run("with-env", "go-api", state, "--", "bash", "-c", `[ "$LICENSE_PUBLIC_KEY" = fake-license-public ] && [ "$LICENSE_KEY" = fake-license-value ]`)
+	if err != nil || out != "" {
+		t.Fatal("go-api did not receive the licence inputs silently")
+	}
+	out, err = run("print-env", "go-api", state)
+	if err != nil || !strings.Contains(out, "LICENSE_KEY=<redacted>\n") || strings.Contains(out, "fake-license-value") {
+		t.Fatal("print-env exposed the licence")
+	}
+	err = filepath.WalkDir(state, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if path == filepath.Join(state, "license") {
+			return filepath.SkipDir
+		}
+		if entry.IsDir() || path == filepath.Join(state, "extra/go-api.env") {
+			return nil
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if bytes.Contains(raw, []byte("fake-license-public")) || bytes.Contains(raw, []byte("fake-license-value")) {
+			t.Error("licence input persisted outside its job-local files")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out, err := run("down", state); err != nil {
+		t.Fatalf("down: %v %s", err, out)
+	}
+	if _, err := os.Lstat(filepath.Join(state, "license")); !os.IsNotExist(err) {
+		t.Fatal("down left the licence directory")
+	}
+}
+
+func TestLiveE2EStopIdpThenStartWithNewArguments(t *testing.T) {
+	state, fake, run := liveE2EStubFakes(t)
+	mustRun := func(args ...string) {
+		t.Helper()
+		if out, err := run(args...); err != nil {
+			t.Fatalf("%s: %v %s", args[0], err, out)
+		}
+	}
+	mustRun("enable-sso", state)
+	mustRun("start-idp", state, "-redirect-uri", "http://localhost:3002/first")
+	certPath := filepath.Join(state, "idp/saml-cert.pem")
+	if liveE2ERead(t, certPath) != liveE2ERead(t, filepath.Join(fake, "saml-cert.pem")) {
+		t.Fatal("start-idp did not save the SAML signing certificate")
+	}
+	if info, err := os.Stat(certPath); err != nil || info.Mode().Perm() != 0o644 {
+		t.Fatal("SAML signing certificate must have mode 0644")
+	}
+	if calls := liveE2ERead(t, filepath.Join(state, "curl.calls")); !strings.Contains(calls, "--cacert "+state+"/idp/ca.pem https://localhost:9443/saml/cert") {
+		t.Fatal("SAML cert fetch did not trust the job-local CA")
+	}
+	firstPID := strings.TrimSpace(liveE2ERead(t, filepath.Join(state, "idpstub.pid")))
+	mustRun("stop-idp", state)
+	if _, err := os.Stat("/proc/" + firstPID); !os.IsNotExist(err) {
+		t.Fatal("stop-idp returned while the old process still exists")
+	}
+	if _, err := os.Lstat(filepath.Join(state, "idpstub.pid")); !os.IsNotExist(err) {
+		t.Fatal("stop-idp left its pid file")
+	}
+	mustRun("stop-idp", state)
+	mustRun("start-idp", state, "-redirect-uri", "http://localhost:3002/second")
+	secondPID := strings.TrimSpace(liveE2ERead(t, filepath.Join(state, "idpstub.pid")))
+	if firstPID == secondPID {
+		t.Fatal("start-idp reused the old process")
+	}
+	calls := liveE2ERead(t, filepath.Join(state, "stub.calls"))
+	for _, uri := range []string{"first", "second"} {
+		if !strings.Contains(calls, "-redirect-uri http://localhost:3002/"+uri+"\n") {
+			t.Fatal("start-idp did not use the new redirect URI")
+		}
+	}
+}
+
+func TestLiveE2EStartIdpRefusesInvalidSAMLCert(t *testing.T) {
+	for _, failure := range []string{"saml-non-pem", "saml-empty"} {
+		t.Run(failure, func(t *testing.T) {
+			state, _, run := liveE2EStubFakes(t)
+			if out, err := run("enable-sso", state); err != nil {
+				t.Fatalf("enable-sso: %v %s", err, out)
+			}
+			writeExec(t, filepath.Join(state, failure), "", 0o600)
+			out, err := run("start-idp", state)
+			if err == nil || out != "live_e2e_auth_stack: idpstub returned no valid SAML PEM certificate\n" {
+				t.Fatal("invalid SAML certificate did not fail with a fixed message")
+			}
+		})
+	}
+}
+
+func TestLiveE2EDownDoesNotFollowLicenseSymlink(t *testing.T) {
+	state, _, run := liveE2EStubFakes(t)
+	outside := t.TempDir()
+	writeExec(t, filepath.Join(outside, "keep"), "keep", 0o600)
+	if err := os.Symlink(outside, filepath.Join(state, "license")); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := run("down", state); err != nil {
+		t.Fatalf("down: %v %s", err, out)
+	}
+	if liveE2ERead(t, filepath.Join(outside, "keep")) != "keep" {
+		t.Fatal("down removed a file outside STATE/license")
+	}
+}
+
+var liveSSOAssignment = regexp.MustCompile(`\b(AUTH_SSO_JIT|LICENSE_PUBLIC_KEY|LICENSE_KEY)=("[^"\n]*"|'[^'\n]*'|[^\s;|&]*)`)
+var liveSSOReference = regexp.MustCompile(`^\$\{[^{}]+\}$|^\$\{\{[^{}]+\}\}$`)
+
+func unsafeLiveSSOConfig(raw string) ([]string, error) {
+	var violations []string
+	check := func(name string, value any) {
+		if name != "AUTH_SSO_JIT" && name != "LICENSE_KEY" && name != "LICENSE_PUBLIC_KEY" {
+			return
+		}
+		if ref, ok := value.(map[string]any); ok && name != "AUTH_SSO_JIT" {
+			if _, ok := ref["secretKeyRef"]; ok {
+				return
+			}
+			if from, ok := ref["valueFrom"].(map[string]any); ok {
+				if _, ok := from["secretKeyRef"]; ok {
+					return
+				}
+			}
+		}
+		text := strings.Trim(strings.TrimSpace(fmt.Sprint(value)), `"'`)
+		if name == "AUTH_SSO_JIT" {
+			if strings.EqualFold(text, "true") {
+				violations = append(violations, name)
+			}
+		} else if name == "LICENSE_KEY" || name == "LICENSE_PUBLIC_KEY" {
+			if value != nil && text != "" && !liveSSOReference.MatchString(text) {
+				violations = append(violations, name)
+			}
+		}
+	}
+	var walk func(any)
+	walk = func(value any) {
+		switch node := value.(type) {
+		case map[string]any:
+			for key, child := range node {
+				check(key, child)
+				walk(child)
+			}
+			if name, ok := node["name"].(string); ok {
+				if literal, ok := node["value"]; ok {
+					check(name, literal)
+				}
+			}
+		case []any:
+			for _, child := range node {
+				walk(child)
+			}
+		case string:
+			for _, match := range liveSSOAssignment.FindAllStringSubmatch(node, -1) {
+				check(match[1], match[2])
+			}
+		}
+	}
+	decoder := yaml.NewDecoder(strings.NewReader(raw))
+	for {
+		var document any
+		if err := decoder.Decode(&document); err != nil {
+			if err == io.EOF {
+				return violations, nil
+			}
+			return nil, err
+		}
+		walk(document)
+	}
+}
+
+func TestLiveE2ESSOLicenseAndJITNotInDeploymentConfig(t *testing.T) {
+	root := repoRoot(t)
+	var paths []string
+	for _, pattern := range []string{".github/workflows/*.yml", "ci/bigboy/*.yml", "compose.yml"} {
+		matches, err := filepath.Glob(filepath.Join(root, pattern))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(matches) == 0 {
+			t.Fatalf("configuration scope matched no files: %s", pattern)
+		}
+		paths = append(paths, matches...)
+	}
+	valuesCount := 0
+	err := filepath.WalkDir(filepath.Join(root, "deploy"), func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !entry.IsDir() && strings.HasPrefix(entry.Name(), "values") && strings.HasSuffix(entry.Name(), ".yaml") {
+			paths = append(paths, path)
+			valuesCount++
+		}
+		return nil
+	})
+	if err != nil || valuesCount == 0 {
+		t.Fatalf("deploy values scope: files=%d error=%v", valuesCount, err)
+	}
+	for _, path := range paths {
+		violations, err := unsafeLiveSSOConfig(liveE2ERead(t, path))
+		if err != nil {
+			t.Fatalf("parse %s: %v", path, err)
+		}
+		if len(violations) != 0 {
+			t.Errorf("job-local SSO settings in %s: %v", path, violations)
+		}
+	}
+	for name, fixture := range map[string]string{
+		"jit":       "env:\n  AUTH_SSO_JIT: \"true\"\n",
+		"licence":   "env:\n  LICENSE_KEY: inline-test-value\n",
+		"public":    "env:\n  LICENSE_PUBLIC_KEY: inline-test-key\n",
+		"shell":     "run: |\n  LICENSE_KEY=inline-test-value command\n",
+		"named-env": "env:\n  - name: LICENSE_KEY\n    value: inline-test-value\n",
+		"shell-jit": "run: |\n  AUTH_SSO_JIT=true command\n",
+		"boolean":   "env:\n  AUTH_SSO_JIT: true\n",
+	} {
+		t.Run("planted-"+name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "fixture.yml")
+			writeExec(t, path, fixture, 0o600)
+			violations, err := unsafeLiveSSOConfig(liveE2ERead(t, path))
+			if err != nil || len(violations) != 1 {
+				t.Fatalf("planted unsafe setting accepted: violations=%v error=%v", violations, err)
+			}
+		})
+	}
+	t.Run("references-and-empty", func(t *testing.T) {
+		fixture := `env:
+  AUTH_SSO_JIT: "false"
+  LICENSE_KEY: ${LICENSE_KEY}
+  LICENSE_PUBLIC_KEY: ""
+secretEnv:
+  - name: LICENSE_KEY
+    valueFrom:
+      secretKeyRef:
+        name: licensing
+        key: licence
+other:
+  LICENSE_PUBLIC_KEY:
+    secretKeyRef:
+      name: licensing
+      key: public
+run: |
+  LICENSE_KEY="${LICENSE_KEY}" command
+  LICENSE_PUBLIC_KEY='${{ secrets.LICENSE_PUBLIC_KEY }}' command
+`
+		violations, err := unsafeLiveSSOConfig(fixture)
+		if err != nil || len(violations) != 0 {
+			t.Fatalf("safe config refused: violations=%v error=%v", violations, err)
+		}
+	})
 }

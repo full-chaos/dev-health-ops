@@ -114,7 +114,7 @@ docker compose logs -f router go-api query-api migrate
 
 ### Create the first admin
 
-A stack on empty volumes has no user. Compose runs with `AUTH_USERS_OWNED=true`, so auth-service owns users. Create the first user with `dho auth users-create` and its organization with `dho admin orgs create`. Run them in the `migrate` service: its image is `dho` and it has the logins these verbs use. The password is read from standard input (the first line of a file here), never from an argument:
+A stack on empty volumes has no user. Compose runs with `AUTH_USERS_OWNED=true`, so auth-service owns users, as every venue does. On every `up`, the seed tool (`dho auth users-backfill -insert-only`, the `auth-users-backfill` job) copies the `public.users` rows that have no auth user into the auth schema before auth-service serves; it never changes an existing auth user. Create the first user with `dho auth users-create` and its organization with `dho admin orgs create`. Run them in the `migrate` service: its image is `dho` and it has the logins these verbs use. The password is read from standard input (the first line of a file here), never from an argument:
 
 ```bash
 docker compose run --rm --no-deps -T migrate auth users-create --email admin@example.com --full-name "Admin User" --password-stdin < password.txt

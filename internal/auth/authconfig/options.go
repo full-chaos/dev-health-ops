@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/clientaddr"
-	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 )
 
@@ -234,35 +233,32 @@ var optionRegistry = []Option{
 			"unset, GET /.well-known/openid-configuration is not served (the JWKS still is)",
 	},
 	{
-		Env: EnvAccessTokenSecret, Kind: KindString, Secret: true, Group: GroupSession,
-		Usage: "HS256 key of the compatibility access token (go-api's JWT_SECRET_KEY value, at least 32 characters); " +
-			EnvAccessTokenSecret + "_FILE reads it from a mounted file instead. Under hs256_compat set together with " +
-			EnvSessionSuccessorKey + "; with neither, no session route is mounted. Under eddsa optional (it only verifies go-api's HS256 token) and it needs " +
-			EnvSessionSuccessorKey,
-	},
-	{
 		Env: EnvSessionSuccessorKey, Kind: KindString, Secret: true, Group: GroupSession,
 		Usage: "32-byte session successor key, base64url without padding; " +
-			EnvSessionSuccessorKey + "_FILE reads it from a mounted file instead",
-	},
-	{
-		Flag: "jwt-issuer", Env: EnvAccessTokenIssuer, Kind: KindString,
-		Default: defaultAccessTokenIssuer, Group: GroupSession,
-		Usage: "iss of the compatibility access token (go-api's JWT_ISSUER)",
+			EnvSessionSuccessorKey + "_FILE reads it from a mounted file instead. Set, it mounts the session routes",
 	},
 	{
 		Flag: "jwt-audience", Env: EnvAccessTokenAudience, Kind: KindString,
 		Default: defaultAccessTokenAudience, Group: GroupSession,
-		Usage: "aud of the compatibility access token (go-api's JWT_AUDIENCE)",
-	},
-	{
-		Env: EnvLegacyJWTAudience, Kind: KindString, Default: contracts.PlatformAPIAudience, Group: GroupSession,
-		Usage: "aud that the eddsa access token class checks go-api's HS256 compatibility token with (go-api's JWT_AUDIENCE). Set but empty is refused at start",
+		Usage: "aud of the access token (go-api's JWT_AUDIENCE)",
 	},
 	{
 		Env: EnvAuthorizeCallerSubjects, Kind: KindString, Group: GroupSession,
-		Usage: "comma-separated workload principal ids (prn_ and 22 base64url characters) whose workload token (audience auth-service) POST /v1/authorize and /v1/authorize:batch accept; unset refuses every caller. Needs " +
+		Usage: "comma-separated workload principal ids (prn_ and 22 base64url characters) whose workload token (audience auth-service) POST /v1/authorize, /v1/authorize:batch and /v1/authorize:repositories accept; unset refuses every caller. Needs " +
 			EnvTokenIssuerURL,
+	},
+	{
+		Env: EnvAuthorizeWebApproverIssuer, Kind: KindString, Group: GroupSession,
+		Usage: "iss of the web approver reference POST /v1/authorize accepts from " + EnvAuthorizeWebApproverCaller + " (the ACR web assertion issuer); with " +
+			EnvAuthorizeWebApproverJWKSFile + " and " + EnvAuthorizeWebApproverCaller + " it turns the kind on, else it stays off with one ERROR line",
+	},
+	{
+		Env: EnvAuthorizeWebApproverJWKSFile, Kind: KindString, Group: GroupSession,
+		Usage: "path of the public JWKS (the ACR web assertion keys, Secret acr-web-assertion-jwks) the web approver reference is verified with; read on every reference",
+	},
+	{
+		Env: EnvAuthorizeWebApproverCaller, Kind: KindString, Group: GroupSession,
+		Usage: "workload principal id (prn_) of acr-api, the only caller that may present a web approver reference; it must also be in " + EnvAuthorizeCallerSubjects,
 	},
 	{
 		Env: EnvSessionIssueWorkloadSubject, Kind: KindString, Group: GroupSession,
@@ -283,8 +279,8 @@ var optionRegistry = []Option{
 	{
 		Env: EnvRateLimitKey, Kind: KindString, Secret: true, Group: GroupSession,
 		Usage: "key the rate-limit counters digest identifiers with, at least 32 characters; " + EnvRateLimitKey +
-			"_FILE reads it from a mounted file instead. Unset, the limiter is keyed from " + EnvAccessTokenSecret +
-			"; required while that is unset; needs the session secrets",
+			"_FILE reads it from a mounted file instead. Unset, the limiter is keyed from " + EnvSessionSuccessorKey +
+			" (its own HKDF subkey); needs the session secrets",
 	},
 	{
 		Env: EnvLoginLockoutKey, Kind: KindString, Secret: true, Group: GroupSession,
@@ -327,7 +323,7 @@ var optionRegistry = []Option{
 	},
 	{
 		Env: EnvInviteTokenSecret, Kind: KindString, Secret: true, Group: GroupSession,
-		Usage: "signing key of new invite tokens (go-api's LINK_TOKEN_SECRET, else its JWT_SECRET_KEY chain); " +
+		Usage: "signing key of new invite tokens (go-api's LINK_TOKEN_SECRET); " +
 			EnvInviteTokenSecret + "_FILE reads it from a mounted file instead. Required while " + EnvMembershipRoutes + " is true",
 	},
 	{

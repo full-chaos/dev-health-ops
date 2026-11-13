@@ -39,14 +39,14 @@ var providerGuards = []string{"RefuseInvalidProviderID", "refuseUnusableSubject"
 // UsersGuardRows lists every public.users writer of a provider id in the tree. A new writer needs a row; a row that
 // loses its guard call (or has it after the write) fails.
 var UsersGuardRows = []UsersGuardRow{
-	{File: "internal/api/session/register.go", Func: "handlers.register", Verb: "INSERT",
-		Exempt: "password sign-up: auth_provider is the literal 'local' and auth_provider_id NULL", Literal: "'local', NULL"},
 	{File: "internal/api/session/social.go", Func: "handlers.createSocialUser", Verb: "INSERT",
 		GuardFile: "internal/api/session/social.go", GuardFunc: "handlers.createSocialUser", Guards: providerGuards},
 	{File: "internal/api/sso/provision.go", Func: "handlers.createAccountAndMembership", Verb: "INSERT",
 		GuardFile: "internal/api/sso/provision.go", GuardFunc: "handlers.createAccountAndMembership", Guards: providerGuards},
 	{File: "internal/apiservice/admin/userstore.go", Func: "pgStore.insertUser", Verb: "INSERT",
 		GuardFile: "internal/apiservice/admin/users.go", GuardFunc: "handlers.createUser", Guards: providerGuards, Then: "insertUserWithMembership"},
+	{File: "internal/auth/identity/adminusers.go", Func: "applyAdminCreate", Verb: "INSERT",
+		GuardFile: "internal/auth/identity/adminusers.go", GuardFunc: "applyAdminCreate", Guards: providerGuards},
 	{File: "internal/auth/identity/publicusers.go", Func: "insertPublicUser", Verb: "INSERT",
 		GuardFile: "internal/auth/identity/publicusers.go", GuardFunc: "federatedPublicUser", Guards: providerGuards, Then: thenLastReturn},
 

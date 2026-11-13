@@ -34,6 +34,7 @@ var pepRoutes = []string{
 	http.MethodPost + " " + workloadexchange.Pattern,
 	http.MethodPost + " " + authapi.PatternAuthorize,
 	http.MethodPost + " " + authapi.PatternAuthorizeBatch,
+	http.MethodPost + " " + authapi.PatternAuthorizeRepositories,
 }
 
 // listenerHandlers returns the handler of each httpapi listener configure built, by component name.
@@ -91,7 +92,7 @@ func fullInternalEnv(t *testing.T, caller string) map[string]string {
 	if caller != "" {
 		env[authconfig.EnvAuthorizeCallerSubjects] = caller
 	}
-	exchangeEnvironment(t, workloadIssueEnvironment(env))
+	exchangeEnvironment(t, acrEventsEnvironment(workloadIssueEnvironment(env)))
 	return provisioningEnvironment(ssoEnvironment(compatEnvironment(env)))
 }
 
@@ -142,7 +143,8 @@ func TestTheInternalListenerServesOnlyThePEPRoutes(t *testing.T) {
 			switch {
 			case pep[method+" "+path]:
 				served++
-			case code == http.StatusMethodNotAllowed && (pep[http.MethodPost+" "+path]):
+			case isInternalOnly(method + " " + path):
+			case code == http.StatusMethodNotAllowed && (pep[http.MethodPost+" "+path] || isInternalOnly(http.MethodPost+" "+path)):
 			case code != http.StatusNotFound:
 				t.Errorf("%s %s answered %d on the internal listener, want 404", method, path, code)
 			}
@@ -268,7 +270,7 @@ func TestTheInternalListenerRefusesANonWorkloadOrUnlistedCaller(t *testing.T) {
 		"forwarded address": unsignedBearer(`{"alg":"EdDSA","typ":"workload+jwt","kid":"k"}`, claims("auth-service", session.WirePrincipalID(uuid.New()))),
 	}
 	for name, bearer := range bearers {
-		for _, path := range []string{authapi.PatternAuthorize, authapi.PatternAuthorizeBatch} {
+		for _, path := range []string{authapi.PatternAuthorize, authapi.PatternAuthorizeBatch, authapi.PatternAuthorizeRepositories} {
 			request := httptest.NewRequest(http.MethodPost, path, strings.NewReader("{}"))
 			request.RemoteAddr = "127.0.0.1:4321"
 			if bearer != "" {
@@ -291,9 +293,9 @@ const injectedInternalOnly = http.MethodPost + " /internal/v1/test-only/get"
 func injectInternalOnly(t *testing.T, keys ...string) {
 	t.Helper()
 	saved := internalOnlyRoutes
-	internalOnlyRoutes = map[string]bool{}
+	internalOnlyRoutes = map[string]internalOnlyRoute{}
 	for _, key := range keys {
-		internalOnlyRoutes[key] = true
+		internalOnlyRoutes[key] = internalOnlyRoute{}
 	}
 	t.Cleanup(func() { internalOnlyRoutes = saved })
 }
@@ -341,5 +343,111 @@ func TestAnInternalOnlyKeyWithNoRouteFailsStartup(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), injectedInternalOnly) {
 		t.Errorf("startup error %q does not name the dead key", err)
+	}
+}
+
+const acrEventsKey = http.MethodPost + " " + authapi.PatternAcrCredentialEvents
+
+// The acr credential events route is internal-only and optional: the key is listed so, and nothing else is.
+func TestTheAcrEventsRouteIsTheOneOptionalInternalOnlyRoute(t *testing.T) {
+	if len(internalOnlyRoutes) != 1 || !isInternalOnly(acrEventsKey) || !internalOnlyRoutes[acrEventsKey].optional {
+		t.Fatalf("internalOnlyRoutes = %v, want exactly %q, optional", internalOnlyRoutes, acrEventsKey)
+	}
+	if internalRoutes[acrEventsKey] {
+		t.Fatalf("%q is also an internalRoutes key: it would be served on both listeners", acrEventsKey)
+	}
+}
+
+// With AUTH_ACR_EVENTS_WORKLOAD_SUBJECT set the route is served on the internal listener and is 404 on the API
+// listener, and the API listener's other routes are unchanged.
+func TestTheAcrEventsRouteIsServedOnTheInternalListenerOnly(t *testing.T) {
+	cfg := loadInternalConfig(t, fullInternalEnv(t, ""))
+	handlers := listenerHandlers(t, cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+	internal := mustListener(t, handlers, internalListenerName)
+	api := mustListener(t, handlers, apiListenerName)
+	if code := probe(internal, http.MethodPost, authapi.PatternAcrCredentialEvents); code != http.StatusUnauthorized {
+		t.Errorf("internal listener answered %d for the acr credential events route with no bearer, want the route's 401", code)
+	}
+	for _, method := range probeMethods {
+		if code := probe(api, method, authapi.PatternAcrCredentialEvents); code != http.StatusNotFound {
+			t.Errorf("API listener answered %d for %s %s, want 404", code, method, authapi.PatternAcrCredentialEvents)
+		}
+	}
+}
+
+// With no AUTH_ACR_EVENTS_WORKLOAD_SUBJECT, auth-service starts (no start refusal for an unset optional route) and
+// the route is 404 on both listeners.
+func TestAnAuthServiceWithNoAcrEventsSubjectStartsWithTheRouteUnmounted(t *testing.T) {
+	env := fullInternalEnv(t, "")
+	delete(env, authconfig.EnvAcrEventsWorkloadSubject)
+	cfg := loadInternalConfig(t, env)
+	handlers := listenerHandlers(t, cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+	for _, name := range []string{internalListenerName, apiListenerName} {
+		listener := mustListener(t, handlers, name)
+		for _, method := range probeMethods {
+			if code := probe(listener, method, authapi.PatternAcrCredentialEvents); code != http.StatusNotFound {
+				t.Errorf("%s answered %d for %s %s with no acr subject, want 404", name, code, method, authapi.PatternAcrCredentialEvents)
+			}
+		}
+	}
+}
+
+// An optional internal-only key with no registered route does not stop startup; a required one does
+// (TestAnInternalOnlyKeyWithNoRouteFailsStartup).
+func TestAnOptionalInternalOnlyKeyWithNoRouteStarts(t *testing.T) {
+	saved := internalOnlyRoutes
+	internalOnlyRoutes = map[string]internalOnlyRoute{injectedInternalOnly: {optional: true}}
+	t.Cleanup(func() { internalOnlyRoutes = saved })
+	if err := checkInternalOnlyRoutes(nil); err != nil {
+		t.Fatalf("an unregistered optional key stopped startup: %v", err)
+	}
+	internalOnlyRoutes = map[string]internalOnlyRoute{injectedInternalOnly: {}}
+	if err := checkInternalOnlyRoutes(nil); err == nil {
+		t.Fatal("an unregistered required key did not stop startup")
+	}
+}
+
+const unservedInternalOnlyMsg = "auth internal-only route served on no listener: AUTH_SERVICE_INTERNAL_HTTP_ADDR is unset"
+
+// unservedWarnings returns the unserved-route log entries of a JSON log.
+func unservedWarnings(logs string) []map[string]any {
+	var out []map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(logs), "\n") {
+		var entry map[string]any
+		if json.Unmarshal([]byte(line), &entry) == nil && entry["msg"] == unservedInternalOnlyMsg {
+			out = append(out, entry)
+		}
+	}
+	return out
+}
+
+// With AUTH_ACR_EVENTS_WORKLOAD_SUBJECT set and the internal listener off, auth-service starts, logs one WARN that the
+// route is served on no listener, and the API listener answers 404 for it. With the internal listener on, no such line.
+func TestTheAcrEventsRouteWithNoInternalListenerStartsAndWarns(t *testing.T) {
+	var on bytes.Buffer
+	listenerHandlers(t, loadInternalConfig(t, fullInternalEnv(t, "")), slog.New(slog.NewJSONHandler(&on, nil)), nil)
+	if got := unservedWarnings(on.String()); len(got) != 0 {
+		t.Errorf("with the internal listener on, %d unserved-route lines, want 0: %v", len(got), got)
+	}
+	env := fullInternalEnv(t, "")
+	delete(env, internalAddressEnv)
+	cfg := loadInternalConfig(t, env)
+	var logs bytes.Buffer
+	handlers := listenerHandlers(t, cfg, slog.New(slog.NewJSONHandler(&logs, nil)), nil)
+	if _, ok := handlers[internalListenerName]; ok {
+		t.Fatal("configure built an internal listener with AUTH_SERVICE_INTERNAL_HTTP_ADDR unset")
+	}
+	api := mustListener(t, handlers, apiListenerName)
+	for _, method := range probeMethods {
+		if code := probe(api, method, authapi.PatternAcrCredentialEvents); code != http.StatusNotFound {
+			t.Errorf("API listener answered %d for %s %s, want 404", code, method, authapi.PatternAcrCredentialEvents)
+		}
+	}
+	warned := unservedWarnings(logs.String())
+	if len(warned) != 1 {
+		t.Fatalf("%d unserved-route WARN lines, want 1; logs:\n%s", len(warned), logs.String())
+	}
+	if warned[0]["level"] != "WARN" || warned[0]["route"] != authapi.PatternAcrCredentialEvents {
+		t.Errorf("the unserved-route line is %v, want level WARN and route %s", warned[0], authapi.PatternAcrCredentialEvents)
 	}
 }

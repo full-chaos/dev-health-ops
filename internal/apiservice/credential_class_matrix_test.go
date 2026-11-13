@@ -24,6 +24,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/accessverify"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/sessionid"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/wrongclass"
 )
 
 // lookupCounts counts every read a credential can cause past the class
@@ -112,15 +113,28 @@ const (
 	matrixFillerBytes = 43
 )
 
-// matrixNotDriven are the classes with no request-head marker in
-// credential-classes.json: the matrix has no carrier to send for them.
-var matrixNotDriven = []string{
-	"acr_browser_refresh_token", "acr_device_flow_code", "acr_workload_identity_exchange",
-	"auth_js_browser_session", "email_verification_token", "github_app_installation_token",
-	"impersonation_session", "infrastructure_deployment_credentials", "kubernetes_sa_token_exchange",
-	"license_key", "link_credential", "llm_api_keys", "org_invite_token", "pagerduty_oauth_credential",
-	"password_reset_token", "refresh_credential", "social_oauth_exchange", "sso_oidc_exchange",
-	"sso_saml_exchange", "ops_refresh_token",
+// matrixNotDriven are the classes the matrix sends no request head for: wrongclass derives the carrier of each class
+// from its credential-classes.json markers, and a class with no carrier, or one carried in a body, has no head.
+func matrixNotDriven(t *testing.T) []string {
+	t.Helper()
+	classes, err := wrongclass.LoadClasses(authv1.CredentialClasses)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []string
+	for _, class := range classes {
+		carrier, ok, err := wrongclass.CarrierFor(class, wrongclass.Options{Mint: func(string, string) string { return "h.p.s" }})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !ok || carrier.Header == "" {
+			out = append(out, class.ID)
+		}
+	}
+	if len(out) == 0 || len(out) == len(classes) {
+		t.Fatalf("%d of %d classes have no request head", len(out), len(classes))
+	}
+	return out
 }
 
 type matrixClass struct {
@@ -247,7 +261,12 @@ func (rig *matrixRig) matrixCarrier(t *testing.T, class matrixClass) (map[string
 		typ := class.markers["jwt_header_typ"][0]
 		return bearer(matrixMint(rig.minter, typ)), true
 	case len(class.markers["dedicated_header"]) > 0:
-		return map[string]string{class.markers["dedicated_header"][0]: probeOrg.String()}, true
+		// Every dedicated header of the class (acr_web_assertion has two) is on the request.
+		headers := map[string]string{}
+		for _, name := range class.markers["dedicated_header"] {
+			headers[name] = probeOrg.String()
+		}
+		return headers, true
 	case len(class.markers["signature_header"]) > 0:
 		return map[string]string{class.markers["signature_header"][0]: "sha256=" + filler}, true
 	}
@@ -337,7 +356,7 @@ func TestCredentialClassMatrix(t *testing.T) {
 		})
 	}
 	slices.Sort(notDriven)
-	want := slices.Clone(matrixNotDriven)
+	want := matrixNotDriven(t)
 	slices.Sort(want)
 	if !slices.Equal(notDriven, want) {
 		t.Errorf("classes with no carrier %v, want %v", notDriven, want)

@@ -41,6 +41,10 @@ var platformRouteActions = map[string][2]string{
 	"POST /service-accounts/{service_account_id}/keys":        {"platform", "ActionAdminUsers"},
 	"POST /service-accounts/{service_account_id}/keys/rotate": {"platform", "ActionAdminUsers"},
 	"POST /service-accounts/keys/{credential_id}/revoke":      {"platform", "ActionAdminUsers"},
+	"POST /service-accounts":                                  {"platform", "ActionAdminUsers"},
+	"POST /service-accounts/{service_account_id}/disable":     {"platform", "ActionAdminUsers"},
+	"POST /service-accounts/{service_account_id}/enable":      {"platform", "ActionAdminUsers"},
+	"POST /service-accounts/{service_account_id}/owner":       {"platform", "ActionAdminUsers"},
 }
 
 // wrapKind names the platform wrap a Handler expression's outermost call is

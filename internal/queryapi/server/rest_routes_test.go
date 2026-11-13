@@ -2,6 +2,7 @@ package server
 
 import (
 	"crypto/ed25519"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -16,9 +17,10 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/version"
-	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/issuerstub"
 )
 
 // oldParserSet is the query-api REST pattern set the retired source parse
@@ -150,9 +152,13 @@ func TestNoAPIV1RegistrationOutsideTheTable(t *testing.T) {
 // restTestEnv switches every route on and gives each builder the settings it needs to
 // construct (nothing is dialled by construction: the read client and the pools connect
 // on first use).
-func restTestEnv(t *testing.T) (getenv getenvFunc, bearer string) {
+// restTestEnv configures every REST route with its switch on and row-routed access (AUTH_ACCESS_TOKEN_ISSUER names a
+// TLS issuer stub for the length of the test), and returns a member's user access token and the users store it is
+// checked against. A declared method has its row, so the token reaches the handler; an undeclared method has none, so
+// the routed verifier refuses it before the handler. The HS256 token and the envelope are retired classes.
+func restTestEnv(t *testing.T) (getenv getenvFunc, bearer string, users edgeUserStore) {
 	t.Helper()
-	pub, priv, err := ed25519.GenerateKey(nil)
+	pub, _, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,7 +191,35 @@ func restTestEnv(t *testing.T) (getenv getenvFunc, bearer string) {
 	} {
 		env[name] = "true"
 	}
-	return func(name string) string { return env[name] }, iaEnvelope(t, priv, principal.Claims{OrgID: "org-1", Role: "admin"})
+	minter := newAccessMinter(t)
+	issuer := startAccessIssuer(t, minter)
+	env[accessTokenIssuerEnvVar] = issuer
+	now := time.Now().Unix()
+	bearer = minter.mint(ecUser, map[string]any{"iss": issuer, "iat": now - 60, "nbf": now - 60, "exp": now + 600}, nil)
+	return func(name string) string { return env[name] }, bearer, newQueryAPIUserStoreFrom(newAccessStore())
+}
+
+// startAccessIssuer serves the discovery document and the JWKS of minter's key over TLS and makes the JWKS client Build
+// makes trust it until the test ends (trustEdgeIssuerJWKS). It returns the issuer URL.
+func startAccessIssuer(t *testing.T, minter *accessMinter) string {
+	t.Helper()
+	srv := httptest.NewUnstartedServer(nil)
+	srv.StartTLS()
+	t.Cleanup(srv.Close)
+	keys := []map[string]any{}
+	for kid, pub := range minter.keys {
+		keys = append(keys, map[string]any{"kty": "OKP", "crv": "Ed25519", "kid": kid, "use": "sig", "alg": "EdDSA",
+			"x": base64.RawURLEncoding.EncodeToString(pub)})
+	}
+	jwks, err := json.Marshal(map[string]any{"keys": keys})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.Config.Handler = issuerstub.Handler(srv.URL, jwks)
+	roots := x509.NewCertPool()
+	roots.AddCert(srv.Certificate())
+	trustEdgeIssuerJWKS(t, roots)
+	return srv.URL
 }
 
 // needsLiveWriteConnection names the builders that open a second, WRITE ClickHouse
@@ -202,15 +236,15 @@ var allMethods = []string{
 	http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete, http.MethodHead, http.MethodOptions,
 }
 
-// (d) each mount's declared methods are the methods its handler serves: built through the
-// row's own Build adapter, an authenticated request is answered with something other
-// than the method refusal for a declared method, and with the handler's own 405 for
-// every other method. A handler that serves a method the row does not declare, or
-// refuses one it declares, fails here.
+// (d) each mount serves its declared methods and only those: built through the row's own
+// Build adapter, a member's user access token is answered with something other than a
+// refusal (401 or 405) for a declared method, and is refused (401: the method has no row,
+// or the handler's own 405) for every other method. A mount that serves a method the row
+// does not declare, or refuses one it declares, fails here.
 func TestEachMountServesExactlyTheMethodsItDeclares(t *testing.T) {
-	getenv, bearer := restTestEnv(t)
+	getenv, bearer, users := restTestEnv(t)
 	for _, group := range restGroups {
-		handlers, cleanup, ok, err := group.Build(getenv, nil)
+		handlers, cleanup, ok, err := group.Build(getenv, users)
 		if needsLiveWriteConnection[group.Builder] {
 			if err == nil && ok {
 				t.Errorf("%s builds without a live ClickHouse: drop it from needsLiveWriteConnection", group.Builder)
@@ -232,6 +266,10 @@ func TestEachMountServesExactlyTheMethodsItDeclares(t *testing.T) {
 			for _, method := range mount.Methods {
 				declared[method] = true
 			}
+			// Served through a mux on the mount's pattern, as the plane serves it: the routed verifier finds the row by
+			// the request's method and matched pattern.
+			mux := http.NewServeMux()
+			mux.HandleFunc(mount.Pattern, handlers[i])
 			for _, method := range allMethods {
 				recorder := httptest.NewRecorder()
 				request := httptest.NewRequest(method, pathParameter.ReplaceAllString(mount.Pattern, "x"), nil)
@@ -239,13 +277,13 @@ func TestEachMountServesExactlyTheMethodsItDeclares(t *testing.T) {
 				// credential, some after (the GET+POST ones dispatch on the method behind
 				// the auth check), so only an authenticated request shows the method set.
 				request.Header.Set("Authorization", "Bearer "+bearer)
-				handlers[i].ServeHTTP(recorder, request)
-				refusedMethod := recorder.Code == http.StatusMethodNotAllowed
+				mux.ServeHTTP(recorder, request)
+				refused := recorder.Code == http.StatusMethodNotAllowed || recorder.Code == http.StatusUnauthorized
 				switch {
-				case declared[method] && refusedMethod:
-					t.Errorf("%s %s: declared, but the handler answers 405", method, mount.Pattern)
-				case !declared[method] && !refusedMethod:
-					t.Errorf("%s %s: not declared, but the handler answers %d (not 405): declare it or refuse it", method, mount.Pattern, recorder.Code)
+				case declared[method] && refused:
+					t.Errorf("%s %s: declared, but the mount answers %d", method, mount.Pattern, recorder.Code)
+				case !declared[method] && !refused:
+					t.Errorf("%s %s: not declared, but the mount answers %d (not 401 or 405): declare it or refuse it", method, mount.Pattern, recorder.Code)
 				}
 			}
 		}

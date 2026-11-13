@@ -73,13 +73,11 @@ func runAdminTimestampVenue(t *testing.T, golden *venueoracle.Golden, pin *venue
 	zone := os.Getenv(containers.ClickHouseTimezoneEnv)
 	ctx := context.Background()
 	root := repoRoot(t)
-	const jwtKey = "venue-oracle-test-secret-key-for-admin-stamps-32b!"
 	orgID, adminID, memberID := stableID("org"), stableID("admin"), stableID("member")
 
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Golden: golden,
 		Root:   root,
-		JWTKey: jwtKey,
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, venue *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
 			exec := func(sql string, args ...any) {
@@ -107,7 +105,7 @@ VALUES ($1, $2, true, true, false, 0, now(), now())`, user.id, user.email)
 		},
 	})
 	teamIDs := seedClickHouse(t, ctx, venue, orgID.String())
-	base := startGoServer(t, ctx, venue, jwtKey)
+	base := startGoServer(t, ctx, venue)
 
 	bearer := func(name string) map[string]string {
 		return map[string]string{"Authorization": "Bearer " + venue.Tokens[name]}
@@ -246,7 +244,7 @@ VALUES ('%s', 'user-%d@example.com', '%s', NULL, 'user-%d@example.com', '{}', ['
 	return teamIDs
 }
 
-func startGoServer(t *testing.T, ctx context.Context, venue *venueoracle.Venue, jwtKey string) string {
+func startGoServer(t *testing.T, ctx context.Context, venue *venueoracle.Venue) string {
 	t.Helper()
 	pool, err := pgxpool.New(ctx, venue.GoAPIDatabaseURI(t))
 	if err != nil {

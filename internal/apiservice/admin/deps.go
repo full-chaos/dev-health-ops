@@ -95,6 +95,15 @@ type Deps struct {
 	// (AUTH_PROXY_ORG_PROVISIONING). Nil leaves the member, invite and delete
 	// routes as they were: go-api writes, no auth call.
 	OrgProvisioner authprovision.Provisioner
+	// OrgDeletionAuth is AUTH_PROXY_URL set: an auth-service holds organizations, so the organization delete asks it to
+	// deprovision even with AUTH_PROXY_ORG_PROVISIONING off. False (no auth-service) deletes as before, with no call.
+	OrgDeletionAuth bool
+	// OrgDeprovisioner is the delete's auth-service client with AUTH_PROXY_ORG_PROVISIONING off; nil while
+	// OrgDeletionAuth is the no_client case. Unused with the switch on (OrgProvisioner deprovisions then).
+	OrgDeprovisioner OrgDeprovisioner
+	// ACROrgRevoker revokes every acr credential of an organization on disable and delete (ACR_REVOKE_*); nil is
+	// "not configured": both proceed with one ERROR line and one count.
+	ACROrgRevoker OrgCredentialRevoker
 	// OrgSuspender is the client of auth-service's organization suspend route, from the same switch; nil leaves PATCH
 	// is_active=false as it was.
 	OrgSuspender orgreactivate.Suspender
@@ -106,6 +115,12 @@ type Deps struct {
 	// ServiceAccountKeys is the client of auth-service's service account key routes (AUTH_PROXY_SERVICE_ACCOUNT_KEYS).
 	// Nil leaves the key routes mounted, answering 503 config_missing.
 	ServiceAccountKeys authprovision.ServiceAccountKeys
+	// ServiceAccounts is the client of auth-service's service account lifecycle routes (AUTH_PROXY_SERVICE_ACCOUNT_KEYS).
+	// Nil leaves the lifecycle routes unmounted, so their paths answer main's 404.
+	ServiceAccounts authprovision.ServiceAccounts
+	// UsersAdmin is the client of auth-service's user-admin routes, built while users are owned (AUTH_USERS_OWNED).
+	// Owned with no client, the admin users writes answer 503.
+	UsersAdmin authprovision.UsersAdmin
 }
 
 // Routes is the admin area's route set.
@@ -148,10 +163,15 @@ func Routes(deps Deps) []httpapi.Route {
 		invites:            deps.Invites,
 		orgReactivator:     deps.OrgReactivator,
 		orgProvision:       deps.OrgProvisioner,
+		orgDeletionAuth:    deps.OrgDeletionAuth,
+		orgDeprovision:     deps.OrgDeprovisioner,
+		acrOrgRevoker:      deps.ACROrgRevoker,
 		orgSuspender:       deps.OrgSuspender,
 		orgState:           deps.OrgState,
 		delegator:          deps.Delegator,
 		serviceAccountKeys: deps.ServiceAccountKeys,
+		serviceAccounts:    deps.ServiceAccounts,
+		usersAdmin:         deps.UsersAdmin,
 	}
 	if deps.ClickHouse != nil {
 		area.spend = clickhouseSpend{conn: deps.ClickHouse}
@@ -167,6 +187,8 @@ func (h *handlers) routes() []httpapi.Route {
 	out = append(out, h.userRoutes()...)
 	out = append(out, h.orgRoutes()...)
 	out = append(out, h.governanceRoutes()...)
+	out = append(out, h.serviceAccountKeyRoutes()...)
+	out = append(out, h.serviceAccountRoutes()...)
 	return out
 }
 
@@ -189,6 +211,9 @@ type handlers struct {
 	// readGrants replaces the org deletion's grant read in tests; nil reads
 	// SHOW GRANTS FOR CURRENT_USER FINAL.
 	readGrants func(context.Context, driver.Conn) ([]string, error)
+	// readRefreshStates replaces the org deletion's read of system.view_refreshes
+	// in tests; nil reads it.
+	readRefreshStates func(context.Context, driver.Conn, []string) (uint64, error)
 	// spend is the LLM spend route's ClickHouse reader; nil when the api has no
 	// ClickHouse login.
 	spend     spendReader
@@ -220,6 +245,13 @@ type handlers struct {
 	// orgProvision is Deps.OrgProvisioner: when set, the member, invite and
 	// delete routes ask auth-service and write nothing of their own.
 	orgProvision authprovision.Provisioner
+	// orgDeletionAuth and orgDeprovision are Deps.OrgDeletionAuth and Deps.OrgDeprovisioner.
+	orgDeletionAuth bool
+	orgDeprovision  OrgDeprovisioner
+	// acrOrgRevoker is Deps.ACROrgRevoker.
+	acrOrgRevoker OrgCredentialRevoker
+	// openOrgDeletionClickHouse replaces the org deletion's ClickHouse preflight in tests; nil is the preflight.
+	openOrgDeletionClickHouse func(context.Context) (*orgDeletionClickHouse, error)
 	// orgSuspender is Deps.OrgSuspender, the PATCH is_active=false counterpart.
 	orgSuspender orgreactivate.Suspender
 	// orgState is Deps.OrgState: the read whose revision the is_active call sends.
@@ -228,6 +260,10 @@ type handlers struct {
 	delegator sessionissue.Delegator
 	// serviceAccountKeys is Deps.ServiceAccountKeys; nil answers the key routes 503 config_missing.
 	serviceAccountKeys authprovision.ServiceAccountKeys
+	// serviceAccounts is Deps.ServiceAccounts; nil leaves the lifecycle routes unmounted.
+	serviceAccounts authprovision.ServiceAccounts
+	// usersAdmin is Deps.UsersAdmin: while users are owned, the admin users writes go to auth-service through it.
+	usersAdmin authprovision.UsersAdmin
 }
 
 // passwordLimit is users.py's `@limiter.limit(ADMIN_PASSWORD_LIMIT =

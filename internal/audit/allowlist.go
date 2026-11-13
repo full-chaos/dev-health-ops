@@ -56,10 +56,6 @@ var allowedAttributeKeys = map[string]struct{}{
 	// when its UID pin changed (the rebind never changes that state).
 	"binding_disabled": {},
 
-	"purged_email_verification_tokens": {},
-	"purged_password_reset_tokens":     {},
-	"run_id":                           {},
-
 	// The auth.authorize.high_risk_decided row: the decision's id and reason
 	// code (the wire codes, not the audit reason_code set) and the type of
 	// the resource asked about.
@@ -185,11 +181,12 @@ var attributeVocabulary = map[string][]string{
 		"provider_already_linked", "expired", "principal_not_found", "malformed", "compromised",
 		"invite_created", "invite_accepted", "invite_revoked", "restore_fence_bootstrap",
 		"workload_enabled", "service_account_owner_changed", "domain_revoked", "org_deprovisioned", "owner_request",
+		"sso_provider_created", "sso_provider_updated", "sso_provider_deleted", "sso_provider_activated", "sso_provider_deactivated",
 	},
 	"target_kind": {
 		"principal", "organization", "membership", "role_assignment", "resource_grant", "credential",
 		"session", "external_identity", "service_account", "workload", "policy_revision", "entitlement_snapshot",
-		"signing_key", "invite",
+		"signing_key", "invite", "sso_provider",
 	},
 	"resource_kind": {"organization", "repository", "project", "team"},
 	// decision_reason_code is authorization_decision.v1's reason_code set (reason-codes.json decision_reason_code).
@@ -238,6 +235,7 @@ var attributeVocabulary = map[string][]string{
 	"changed_fields": {
 		"role_key", "status", "display_name", "disabled_at", "expires_at", "revoked_at", "email", "email_verified_at",
 		"scopes", "audiences", "organization_id", "allowed_actions", "binding", "service_account_uid", "assertion_key", "invited_by", "joined_at", "owner_principal_id",
+		"username", "avatar_url",
 	},
 }
 
@@ -309,8 +307,6 @@ var attributeIDRules = map[string]*regexp.Regexp{
 	"binding_id":          uuidPattern,
 	"assertion_key_id":    uuidPattern,
 	"related_key_id":      regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`),
-	// run_id names one operator run (a roll's purge Job): a short slug, never free text.
-	"run_id": regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,62}$`),
 }
 
 var uuidPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
@@ -331,7 +327,6 @@ func IsListVocabularyKey(key string) bool {
 // attributeNumberKeys take a whole number from 0 to maxWholeNumber.
 var attributeNumberKeys = map[string]struct{}{
 	"policy_revision": {}, "revision": {},
-	"purged_email_verification_tokens": {}, "purged_password_reset_tokens": {},
 }
 
 // attributeListRules are the list-valued keys: every member must satisfy the

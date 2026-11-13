@@ -1,0 +1,5 @@
+# Test packages ci/go_race_shard.awk places first, each on the then-lightest shard, heaviest first (CHAOS-13422). Format:
+# package<TAB>reason. Key = import path relative to the module root.
+# CHAOS-13520 split the packages pinned here (the heaviest of the go-quality test leg and the serial internal/gqlgenguard) by test
+# name instead (ci/go_test_splits.tsv), so their parts spread over the legs; a split package is never pinned
+# (internal/cigates/testshard checks it, that each row names a real package, and that the pinned packages land on distinct shards).

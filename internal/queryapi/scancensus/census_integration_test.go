@@ -533,9 +533,9 @@ internal/queryapi/analytics/timeseries.go|ExecuteOrgTimeseries|*time.Time,**floa
 internal/queryapi/analytics/timeseries.go|ExecuteTimeseries|*time.Time,*string,**float64|f2eec06b6811|statement-not-static
 internal/queryapi/complexitytimeseries/complexitytimeseries.go|fetchFileTimeseries|*time.Time,*string,*string,**uint32,**float64,**uint32,**uint32|69bcb13af3df|spliced-select-list
 internal/queryapi/complexitytimeseries/complexitytimeseries.go|fetchRepoTimeseries|*time.Time,*string,**uint64,**uint64,**float64,**uint64,**uint64|2d500256c88b|spliced-select-list
-internal/queryapi/compoundingrisk/read.go|latestDay|**time.Time|aa76d186ba27|not-describable
-internal/queryapi/compoundingrisk/read.go|latestRows|*string,**float64,*string,**float64,**float64,**float64,**float64,**float64,**float64,**float64,**float64,**float64,**float64,*float64,*float64,*float64,*float64,*float64,*float64,*time.Time|52ea628e3088|not-describable
-internal/queryapi/compoundingrisk/read.go|repoTrend|*time.Time,**float64|89727969156c|not-describable
+internal/queryapi/compoundingrisk/read.go|latestDay|**time.Time|818fa20627a4|not-describable
+internal/queryapi/compoundingrisk/read.go|latestRows|*string,**float64,*string,**float64,**float64,**float64,**float64,**float64,**float64,**float64,**float64,**float64,**float64,*float64,*float64,*float64,*float64,*float64,*float64,*time.Time|9af7066815e3|not-describable
+internal/queryapi/compoundingrisk/read.go|repoTrend|*time.Time,**float64|e90c541be45a|not-describable
 internal/queryapi/datahealth/connectors.go|Connectors|*string,*string,*[]byte,**time.Time,**bool,**string,*[]byte,**time.Time,**int32,**time.Time,**time.Time,*[]byte,**string|d9838116a756|not-describable
 internal/queryapi/datahealth/coverage.go|MetricLineage|**time.Time,*uint64|61037e7ece4e|not-describable
 internal/queryapi/datahealth/sourcehealth.go|SourceHealth|*string,**string,*bool,**time.Time,*bool,*string,*[]byte,**time.Time,**bool,*bool,**time.Time,**string,*bool,**time.Time,**time.Time,**string,**string|dabf0d087730|not-describable

@@ -3,15 +3,31 @@ package authruntime
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/pem"
+	"fmt"
 	"log/slog"
+	"math/big"
+	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/mail"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
+)
+
+var (
+	authruntimeTestIssuerCert *x509.Certificate
+	authruntimeTestIssuerTLS  tls.Certificate
 )
 
 var mailEnvNames = []string{
@@ -196,7 +212,53 @@ func TestMain(m *testing.M) {
 	if _, set := os.LookupEnv("OTEL_ENABLED"); !set {
 		_ = os.Setenv("OTEL_ENABLED", "false")
 	}
-	os.Exit(m.Run())
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		panic(fmt.Errorf("generate test issuer key: %w", err))
+	}
+	now := time.Now()
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		NotBefore:    now.Add(-time.Minute),
+		NotAfter:     now.Add(24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
+		DNSNames:     []string{"localhost"},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		panic(fmt.Errorf("create test issuer certificate: %w", err))
+	}
+	authruntimeTestIssuerCert, err = x509.ParseCertificate(der)
+	if err != nil {
+		panic(fmt.Errorf("parse test issuer certificate: %w", err))
+	}
+	authruntimeTestIssuerTLS = tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key, Leaf: authruntimeTestIssuerCert}
+	dir, err := os.MkdirTemp("", "authruntime-issuer-")
+	if err != nil {
+		panic(fmt.Errorf("create test issuer directory: %w", err))
+	}
+	certFile := filepath.Join(dir, "issuer.pem")
+	if err := os.WriteFile(certFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600); err != nil {
+		panic(fmt.Errorf("write test issuer certificate: %w", err))
+	}
+	// SSL_CERT_FILE supplies the JWKS client's shared transport with trust through the lazily loaded system pool.
+	if err := os.Setenv("SSL_CERT_FILE", certFile); err != nil {
+		panic(fmt.Errorf("set test issuer trust: %w", err))
+	}
+	pool, err := x509.SystemCertPool()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "issuer trust not seen by the system pool")
+		os.Exit(1)
+	}
+	if _, err := authruntimeTestIssuerCert.Verify(x509.VerifyOptions{Roots: pool, DNSName: "127.0.0.1"}); err != nil {
+		fmt.Fprintln(os.Stderr, "issuer trust not seen by the system pool")
+		os.Exit(1)
+	}
+	code := m.Run()
+	_ = os.RemoveAll(dir)
+	os.Exit(code)
 }
 
 func TestOwnedUsersRefuseAnHTTPAppBaseURLWithoutTheOverride(t *testing.T) {

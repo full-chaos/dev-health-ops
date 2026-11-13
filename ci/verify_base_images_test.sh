@@ -18,7 +18,7 @@ DEB_D="sha256:$(printf 'b%.0s' $(seq 64))"
 mkdir -p "${T}/bin"
 cat > "${T}/tsv" <<TSV
 # fixture
-go-build	library/golang:1.27.3-alpine@${GO_D}
+go-build	library/golang:1.27.4-alpine@${GO_D}
 tools-runtime	library/debian:bookworm-slim@${DEB_D}
 TSV
 
@@ -57,7 +57,7 @@ run() { # args: tsv path ; env passes through; sets RC, OUT
 
 # t1 both images readable at the pin
 run "${T}/tsv"
-if [ "${RC}" = 0 ] && [ "$(printf '%s\n' "${OUT}" | grep -c '^OK ')" = 2 ] && printf '%s\n' "${OUT}" | grep -q "^OK   go-build ghcr.io/full-chaos/library/golang:1.27.3-alpine ${GO_D}"; then ok "t1 both images readable anonymously at the pin"; else bad "t1 (rc=${RC}): ${OUT}"; fi
+if [ "${RC}" = 0 ] && [ "$(printf '%s\n' "${OUT}" | grep -c '^OK ')" = 2 ] && printf '%s\n' "${OUT}" | grep -q "^OK   go-build ghcr.io/full-chaos/library/golang:1.27.4-alpine ${GO_D}"; then ok "t1 both images readable anonymously at the pin"; else bad "t1 (rc=${RC}): ${OUT}"; fi
 # t2 anonymous only: no credential in any call, only ghcr.io
 if ! grep -qE -- '(^| )(-u|--user)( |$)|Basic|GITHUB_TOKEN|ghp_' "${T}/curl.log" && ! grep -v 'https://ghcr.io/' "${T}/curl.log" | grep -q 'https://'; then ok "t2 anonymous calls to ghcr.io only"; else bad "t2 a credential or another host appears in the calls"; fi
 # t3 a private or absent package: no anonymous pull token
@@ -65,7 +65,7 @@ FAKE_NO_TOKEN=debian run "${T}/tsv"
 if [ "${RC}" = 1 ] && printf '%s\n' "${OUT}" | grep -q '^FAIL tools-runtime: ghcr.io/full-chaos/library/debian is not readable anonymously (no pull token)' && printf '%s\n' "${OUT}" | grep -q '^OK   go-build'; then ok "t3 no anonymous token = named FAIL, the other image still checked"; else bad "t3 (rc=${RC}): ${OUT}"; fi
 # t4 the tag is missing (404)
 FAKE_CODE_GOTAG=404 run "${T}/tsv"
-if [ "${RC}" = 1 ] && printf '%s\n' "${OUT}" | grep -q '^FAIL go-build: ghcr.io/full-chaos/library/golang:1.27.3-alpine answered HTTP 404 anonymously'; then ok "t4 missing tag = named FAIL"; else bad "t4 (rc=${RC}): ${OUT}"; fi
+if [ "${RC}" = 1 ] && printf '%s\n' "${OUT}" | grep -q '^FAIL go-build: ghcr.io/full-chaos/library/golang:1.27.4-alpine answered HTTP 404 anonymously'; then ok "t4 missing tag = named FAIL"; else bad "t4 (rc=${RC}): ${OUT}"; fi
 # t5 the tag serves another digest
 FAKE_DIG_DEBTAG="sha256:$(printf 'c%.0s' $(seq 64))" run "${T}/tsv"
 if [ "${RC}" = 1 ] && printf '%s\n' "${OUT}" | grep -q "^FAIL tools-runtime: ghcr.io/full-chaos/library/debian:bookworm-slim serves sha256:c.*, want ${DEB_D}"; then ok "t5 digest mismatch at the tag = named FAIL"; else bad "t5 (rc=${RC}): ${OUT}"; fi

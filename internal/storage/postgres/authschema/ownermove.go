@@ -30,6 +30,12 @@ type PublicPrivilege struct {
 // the one list the migrator's own authority there is cut from. A unit test holds it equal to what the grant builders
 // emit, both ways.
 func PublicPrivilegeSet() []PublicPrivilege {
+	return publicPrivilegeSetFor(true, true)
+}
+
+// publicPrivilegeSetFor is the part of PublicPrivilegeSet the grants pass gives under the users-owned switch: with it
+// off, only the grants no switch gates remain.
+func publicPrivilegeSetFor(usersOwned, ssoProvidersOwned bool) []PublicPrivilege {
 	type key struct{ table, privilege string }
 	columns := map[key][]string{}
 	tableLevel := map[key]bool{}
@@ -44,33 +50,42 @@ func PublicPrivilegeSet() []PublicPrivilege {
 	for _, entry := range PublicReadColumns() {
 		add(entry.Table, "SELECT", entry.Columns)
 	}
-	usersInsert, usersUpdate := UsersWriteGrant()
-	add("users", "INSERT", usersInsert)
-	add("users", "UPDATE", usersUpdate)
-	for _, grant := range RegisterOrganizationGrants() {
-		add(grant.Table, "INSERT", grant.Columns)
-	}
-	for _, grant := range LegacyLinkPurgeGrants() {
-		tableLevel[key{grant.Table, "DELETE"}] = true
-		add(grant.Table, "SELECT", grant.Select)
-	}
-	member := MembershipWriteGrants()
-	if member.Delete {
-		tableLevel[key{member.Table, "DELETE"}] = true
-	}
-	add(member.Table, "SELECT", member.Select)
-	add(member.Table, "UPDATE", member.Update)
-	add(member.Table, "INSERT", member.Insert)
-	for _, grant := range InviteWriteGrants() {
-		add(grant.Table, "SELECT", grant.Select)
-		add(grant.Table, "INSERT", grant.Insert)
-		add(grant.Table, "UPDATE", grant.Update)
+	if usersOwned {
+		usersInsert, usersUpdate := UsersWriteGrant()
+		add("users", "INSERT", usersInsert)
+		add("users", "UPDATE", usersUpdate)
+		for _, grant := range RegisterOrganizationGrants() {
+			add(grant.Table, "INSERT", grant.Columns)
+		}
+		member := MembershipWriteGrants()
+		if member.Delete {
+			tableLevel[key{member.Table, "DELETE"}] = true
+		}
+		add(member.Table, "SELECT", member.Select)
+		add(member.Table, "UPDATE", member.Update)
+		add(member.Table, "INSERT", member.Insert)
+		for _, grant := range InviteWriteGrants() {
+			add(grant.Table, "SELECT", grant.Select)
+			add(grant.Table, "INSERT", grant.Insert)
+			add(grant.Table, "UPDATE", grant.Update)
+		}
 	}
 	add(publicAuditTable, "INSERT", PublicAuditWriteColumns())
 	add(ssoProvidersTable, "UPDATE", SSOProviderWriteColumns())
+	if ssoProvidersOwned {
+		own := SSOProviderOwn()
+		add(ssoProvidersTable, "INSERT", own.Insert)
+		add(ssoProvidersTable, "UPDATE", own.Update)
+		add(ssoProvidersTable, "SELECT", own.Select)
+		if own.Delete {
+			tableLevel[key{ssoProvidersTable, "DELETE"}] = true
+		}
+	}
 	add(impersonationTable, "UPDATE", ImpersonationEndColumns())
-	add(impersonationTable, "INSERT", ImpersonationStartColumns())
-	add(impersonationTable, "SELECT", ImpersonationLegacyReadColumns())
+	if usersOwned {
+		add(impersonationTable, "INSERT", ImpersonationStartColumns())
+		add(impersonationTable, "SELECT", ImpersonationLegacyReadColumns())
+	}
 
 	var set []PublicPrivilege
 	for k, names := range columns {
@@ -153,6 +168,11 @@ type OwnerMoveReport struct {
 	PublicTables int
 	// GrantRowsMoved counts the runtime role's public privilege rows given to a new grantor.
 	GrantRowsMoved int
+	// ExtrasRevoked counts the migration login's public privileges outside the privilege set that this run takes away;
+	// ExtrasKept counts those it leaves for now (see migratorExtraStatements).
+	ExtrasRevoked, ExtrasKept int
+	// ExtraLines names each one: revoke|table|privilege|column|grantable|grantor, or keep|...|reason.
+	ExtraLines []string
 }
 
 // Validate checks the options without touching the database.
@@ -577,7 +597,11 @@ func ownerMovePublicStatements(ctx context.Context, tx pgx.Tx, options OwnerMove
 		}
 	}
 	if options.GrantsOnly {
-		return statements, nil
+		extras, err := migratorExtraStatements(ctx, tx, options.To, options.RuntimeRole, nil, report)
+		if err != nil {
+			return nil, err
+		}
+		return append(statements, extras...), nil
 	}
 
 	names := make([]string, 0, len(tables))
@@ -589,6 +613,7 @@ func ownerMovePublicStatements(ctx context.Context, tx pgx.Tx, options OwnerMove
 		priv, col string
 		grantable bool
 	}
+	var regranted []dependentRow
 	for _, table := range names {
 		var owner string
 		if err := tx.QueryRow(ctx, `SELECT r.rolname::text FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace JOIN pg_roles r ON r.oid = c.relowner
@@ -643,6 +668,9 @@ func ownerMovePublicStatements(ctx context.Context, tx pgx.Tx, options OwnerMove
 		}
 		report.GrantRowsMoved += len(held)
 		if len(held) > 0 {
+			for _, r := range held {
+				regranted = append(regranted, dependentRow{table: table, privilege: r.priv, quotedColumn: r.col})
+			}
 			if options.Restore {
 				statements = append(statements, regrant...)
 				statements = append(statements, "SET LOCAL ROLE "+from)
@@ -658,6 +686,13 @@ func ownerMovePublicStatements(ctx context.Context, tx pgx.Tx, options OwnerMove
 		if options.Restore {
 			statements = append(statements, "REVOKE ALL ON TABLE "+qualified(table)+" FROM "+from)
 		}
+	}
+	if !options.Restore {
+		extras, err := migratorExtraStatements(ctx, tx, options.To, options.RuntimeRole, regranted, report)
+		if err != nil {
+			return nil, err
+		}
+		statements = append(statements, extras...)
 	}
 	return statements, nil
 }

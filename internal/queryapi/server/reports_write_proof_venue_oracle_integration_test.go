@@ -50,7 +50,7 @@ func TestSavedReportWriteProofBaselinesVenueOracle(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, venueGolden("saved-report-write-proof", t.Name(), "527a21c98dc994c6d1821cc0b50f8bbc358908918651dbe5c725535974e9306d"))
 	user := stableVenueID("saved-report-write-proof/user")
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Golden: golden, Root: root, JWTKey: oracleJWTKey,
+		Golden: golden, Root: root,
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
 			for _, statement := range []struct {
 				sql  string
@@ -95,7 +95,7 @@ VALUES ($1, $2, $3, 'admin', now(), now(), now())`, []any{uuid.New(), oracleOrgA
 		body := `{"query": ` + jsonString(document) + `, "variables": ` + variables + `}`
 		request := httptest.NewRequest(http.MethodPost, "/query", bytes.NewReader([]byte(body)))
 		request.Header.Set("Content-Type", "application/json")
-		request.Header.Set("Authorization", "Bearer "+envelopes(oracleOrgA))
+		goAdmin(oracleOrgA)(request)
 		recorder := httptest.NewRecorder()
 		goHandler(recorder, request)
 		answer, _ := io.ReadAll(recorder.Result().Body)

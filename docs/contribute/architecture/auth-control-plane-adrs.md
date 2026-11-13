@@ -491,10 +491,10 @@ The inventory established the workload-identity ground truth:
   deployment environment variables; namespace and service-account identity come
   from TokenReview's own response. This is the strongest workload identity in
   the platform and it already exists.
-* `svc_worker_*` is **mint-only scaffolding**: a real DB-backed validator exists
-  at `internal/joboperator/auth.go:54` with **zero HTTP wiring** anywhere, and
-  nothing at either pinned `dev-health-go` tag references it. It is mintable,
-  rotatable and revocable by CLI, and reachable by nothing.
+* `svc_worker_*` is retired. The service-credential CLI is absent. Workers use
+  a fixed operator principal and database role checks. See
+  [Billing and worker boundaries](../../reference/auth/billing-and-worker-boundaries.md)
+  for current behavior and enforcing tests.
 
 ### Decision
 
@@ -511,7 +511,9 @@ The inventory established the workload-identity ground truth:
 4. **`svc_worker_*` is retired, not migrated.** It has no consumer. The CI gate
    must not encode a validator that nothing reaches, and the mint path should be removed
    rather than building an exchange for a class with no caller.
-   Retirement still follows G-63's evidence rule. `service-credentials create` and `rotate` refuse `worker-operator`; `list` and `revoke` keep working on stored rows.
+   The entire command group is absent, including list and revoke. All verbs
+   return an unknown-command error with exit 2, as enforced by
+   `cmd/dho/retired_verbs_test.go`.
 5. **Infrastructure identity stays independent** (G-37). A workload token does
    not replace least-privilege database roles, TLS, or network policy — and per
    the threat model §1.1, the private-network boundary is a real control that

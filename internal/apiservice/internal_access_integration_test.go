@@ -71,11 +71,11 @@ func accessLoginDSN(t *testing.T, ctx context.Context, admin driver.Conn, dsn, n
 // TestInternalRoutesServeThePrincipalAccessReadOnTheAPIPosture drives the
 // mounted read the way go-api builds it (InternalRoutes over the pool and the
 // ClickHouse connection) through the internal listener's server wrapper, with
-// the acr-api workload token and a ClickHouse
-// login granted exactly chclickhouse.APIPosture. The same read on a login
-// granted the posture without its repos row answers 503: the repos grant is
-// what the inventory read needs, and a missing grant never answers a partial
-// or empty scope.
+// the acr-api workload token, a ClickHouse login granted exactly
+// chclickhouse.APIPosture and a session issue client that answers the user's
+// read listing. The same read on a login granted the posture without its repos
+// row answers 503: the repos grant is what the empty-org probe needs, and a
+// missing grant never answers a partial or empty scope.
 func TestInternalRoutesServeThePrincipalAccessReadOnTheAPIPosture(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -163,9 +163,10 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, uuid.New(), user, org); err
 		server.Handler().ServeHTTP(recorder, request)
 		return recorder
 	}
+	named := listingIssuer{listing: sessionissue.Readable{Scope: sessionissue.ReadableRepositories, Repositories: []string{"acme/api", "acme/web"}}}
 	read := func(t *testing.T, conn driver.Conn) *httptest.ResponseRecorder {
 		t.Helper()
-		return readWith(t, Deps{Pool: pool, ClickHouse: conn}, "")
+		return readWith(t, Deps{Pool: pool, ClickHouse: conn, SessionIssuer: named}, "")
 	}
 
 	t.Run("posture login", func(t *testing.T) {
@@ -199,9 +200,10 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, uuid.New(), user, org); err
 		}
 	})
 	// InternalRoutes hands the access read go-api's session issue client
-	// (Deps.SessionIssuer) as its session state reader (D6559): a sid read is
-	// decided on that client's answer. Without the client, or with an issuer
-	// that cannot read state, a sid read is a 503 and a row-only read is not.
+	// (Deps.SessionIssuer) as its session state reader (D6559) and its read
+	// listing: a sid read is decided on that client's state answer. With an
+	// issuer that reads listings but no state, a sid read is a 503 and a
+	// row-only read is not; without a listing reader every read is a 503.
 	sid := uuid.New()
 	pin := int64(0)
 	t.Run("a sid read is decided on the session issue client's state answer", func(t *testing.T) {
@@ -213,7 +215,7 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, uuid.New(), user, org); err
 			"bound to no org":  {sessionissue.State{PrincipalID: user, LegacyTokenVersion: &pin}, false},
 			"expired":          {sessionissue.State{PrincipalID: user, OrganizationID: &org, Expired: true, LegacyTokenVersion: &pin}, false},
 		} {
-			states := &stateIssuer{states: map[uuid.UUID]sessionissue.State{sid: tc.state}}
+			states := &stateIssuer{listingIssuer: named, states: map[uuid.UUID]sessionissue.State{sid: tc.state}}
 			rec := readWith(t, Deps{Pool: pool, ClickHouse: granted, SessionIssuer: states}, "?sid="+sessionid.Wire(sid))
 			var body struct {
 				Session *struct {
@@ -229,21 +231,30 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, uuid.New(), user, org); err
 		}
 	})
 	t.Run("without a session state reader a sid read is unavailable", func(t *testing.T) {
-		for name, issuer := range map[string]sessionissue.Issuer{"no issuer": nil, "an issuer that reads no state": issueOnly{}} {
+		deps := Deps{Pool: pool, ClickHouse: granted, SessionIssuer: named}
+		if rec := readWith(t, deps, "?sid="+sessionid.Wire(sid)); rec.Code != http.StatusServiceUnavailable {
+			t.Fatalf("a sid read answered %d %s, want 503", rec.Code, rec.Body.String())
+		}
+		if rec := readWith(t, deps, ""); rec.Code != http.StatusOK {
+			t.Fatalf("a row-only read answered %d %s, want 200", rec.Code, rec.Body.String())
+		}
+	})
+	t.Run("without a read listing reader every read is unavailable", func(t *testing.T) {
+		for name, issuer := range map[string]sessionissue.Issuer{"no issuer": nil, "an issuer that reads nothing": issueOnly{}} {
 			deps := Deps{Pool: pool, ClickHouse: granted, SessionIssuer: issuer}
-			if rec := readWith(t, deps, "?sid="+sessionid.Wire(sid)); rec.Code != http.StatusServiceUnavailable {
-				t.Fatalf("%s: a sid read answered %d %s, want 503", name, rec.Code, rec.Body.String())
-			}
-			if rec := readWith(t, deps, ""); rec.Code != http.StatusOK {
-				t.Fatalf("%s: a row-only read answered %d %s, want 200", name, rec.Code, rec.Body.String())
+			for _, query := range []string{"", "?sid=" + sessionid.Wire(sid)} {
+				if rec := readWith(t, deps, query); rec.Code != http.StatusServiceUnavailable {
+					t.Fatalf("%s: read %q answered %d %s, want 503", name, query, rec.Code, rec.Body.String())
+				}
 			}
 		}
 	})
-	// CHAOS-12285: an org whose repository inventory is above its limit gets the
-	// coded 503 through the mounted route, on a real migrated repos table and the
-	// APIPosture login: the read binds LIMIT 101, sees the 101st repository and
-	// refuses, never a 200 with a cut list.
-	t.Run("an org above the repository limit answers the coded 503", func(t *testing.T) {
+	// An org above the old repository inventory limit (repoinventory.Limit) is
+	// served through the mounted route on a real migrated repos table and the
+	// APIPosture login: the empty-org probe reads one row and holds no limit, so
+	// an org-wide reader gets kind "organization" and the inventory's over-limit
+	// code is never sent. A listing over its own cap is the coded 503.
+	t.Run("an org above the old repository limit answers from the read listing", func(t *testing.T) {
 		big := uuid.New()
 		pgseed.Org(ctx, t, pool, big.String(), "community")
 		if _, err := pool.Exec(ctx, `INSERT INTO memberships (id, user_id, org_id, role, joined_at, created_at, updated_at)
@@ -263,20 +274,32 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, uuid.New(), user, big); err
 				t.Fatal(err)
 			}
 		}
-		server, err := NewInternalServer(config.Config{APIInternalAddress: "127.0.0.1:0"}, quietLog(),
-			InternalRoutes(Deps{Pool: pool, ClickHouse: granted, ACRWorkload: workload}, quietLog()))
-		if err != nil {
-			t.Fatal(err)
+		readBig := func(t *testing.T, listing sessionissue.Readable) *httptest.ResponseRecorder {
+			t.Helper()
+			server, err := NewInternalServer(config.Config{APIInternalAddress: "127.0.0.1:0"}, quietLog(),
+				InternalRoutes(Deps{Pool: pool, ClickHouse: granted, ACRWorkload: workload, SessionIssuer: listingIssuer{listing: listing}}, quietLog()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := httptest.NewRequest(http.MethodGet, "/api/v1/internal/acr/orgs/"+big.String()+"/principals/"+user.String()+"/access", nil)
+			request.Header.Set("Authorization", bearer)
+			rec := httptest.NewRecorder()
+			server.Handler().ServeHTTP(rec, request)
+			return rec
 		}
-		request := httptest.NewRequest(http.MethodGet, "/api/v1/internal/acr/orgs/"+big.String()+"/principals/"+user.String()+"/access", nil)
-		request.Header.Set("Authorization", bearer)
-		rec := httptest.NewRecorder()
-		server.Handler().ServeHTTP(rec, request)
-		const want = `{"detail":"Service unavailable","code":"acr_access_repository_scope_over_limit"}`
-		if rec.Code != http.StatusServiceUnavailable || rec.Body.String() != want {
-			t.Fatalf("status %d body %s, want 503 %s", rec.Code, rec.Body.String(), want)
+		rec := readBig(t, sessionissue.Readable{Scope: sessionissue.ReadableOrganization})
+		var body struct {
+			RepositoryScope map[string]any `json:"repository_scope"`
 		}
-		// The org with two repositories still reads: the refusal is the big org's only.
+		if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &body) != nil ||
+			!reflect.DeepEqual(body.RepositoryScope, map[string]any{"kind": acr.RepositoryScopeOrganization}) {
+			t.Fatalf("org-wide reader: status %d body %s, want 200 with repository_scope {\"kind\":\"organization\"}", rec.Code, rec.Body.String())
+		}
+		const tooLarge = `{"detail":"Service unavailable","code":"acr_access_repository_allowlist_too_large"}`
+		rec = readBig(t, sessionissue.Readable{Scope: sessionissue.ReadableDenied, Reason: sessionissue.ReasonAllowlistTooLarge})
+		if rec.Code != http.StatusServiceUnavailable || rec.Body.String() != tooLarge {
+			t.Fatalf("listing over its cap: status %d body %s, want 503 %s", rec.Code, rec.Body.String(), tooLarge)
+		}
 		if rec := read(t, granted); rec.Code != http.StatusOK {
 			t.Fatalf("the two-repository org answered %d %s after the big org was seeded", rec.Code, rec.Body.String())
 		}
@@ -284,9 +307,9 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, uuid.New(), user, big); err
 }
 
 // stateIssuer is go-api's session issue client as the access read sees it:
-// an Issuer that also reads session state.
+// an Issuer that also reads the read listing and session state.
 type stateIssuer struct {
-	issueOnly
+	listingIssuer
 	states map[uuid.UUID]sessionissue.State
 	calls  int
 }
@@ -305,6 +328,17 @@ type issueOnly struct{}
 
 func (issueOnly) Issue(context.Context, *http.Request, sessionissue.Request) (sessionissue.Pair, error) {
 	return sessionissue.Pair{}, sessionissue.ErrUnavailable
+}
+
+// listingIssuer is an Issuer that answers one fixed read listing and reads no
+// session state.
+type listingIssuer struct {
+	issueOnly
+	listing sessionissue.Readable
+}
+
+func (l listingIssuer) ReadableRepositories(context.Context, uuid.UUID, uuid.UUID) (sessionissue.Readable, error) {
+	return l.listing, nil
 }
 
 // TestInternalRoutesServeProjectScopeOnlyWithTheFlagAndItsGrant drives the
@@ -421,9 +455,13 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, uuid.New(), user, org); err
 			}
 		}
 	})
+	// The reader is org-wide: an org with no repository answers kind "none"
+	// for every reader, whatever its read listing says.
+	orgWide := listingIssuer{listing: sessionissue.Readable{Scope: sessionissue.ReadableOrganization}}
 	read := func(t *testing.T, deps Deps) *httptest.ResponseRecorder {
 		t.Helper()
 		deps.ACRWorkload = workload
+		deps.SessionIssuer = orgWide
 		server, err := NewInternalServer(config.Config{APIInternalAddress: "127.0.0.1:0"}, quietLog(), InternalRoutes(deps, quietLog()))
 		if err != nil {
 			t.Fatal(err)

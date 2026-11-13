@@ -9,10 +9,25 @@
 #   bash ci/live_e2e_auth_stack.sh with-env SIDE STATE_DIR -- CMD [ARG...]   run CMD with the environment of SIDE
 #   bash ci/live_e2e_auth_stack.sh print-env SIDE STATE_DIR                 print NAME=VALUE lines of SIDE, secret values redacted
 #   bash ci/live_e2e_auth_stack.sh assert-audit STATE_DIR                   every delegated session issue used the workload credential
-#   bash ci/live_e2e_auth_stack.sh down STATE_DIR                           stop auth-service by pid
+#   bash ci/live_e2e_auth_stack.sh enable-social STATE_DIR                  enable the throwaway GitHub provider (needs sudo)
+#   bash ci/live_e2e_auth_stack.sh enable-sso STATE_DIR                     enable OIDC/SAML before go-api starts
+#   bash ci/live_e2e_auth_stack.sh start-idp STATE_DIR [ARG...]              start the IdP with extra idpstub serve arguments
+#   bash ci/live_e2e_auth_stack.sh stop-idp STATE_DIR                       stop the IdP before changing its arguments
+#   bash ci/live_e2e_auth_stack.sh enable-mail STATE_DIR                    capture auth mail on loopback SMTP
+#   bash ci/live_e2e_auth_stack.sh down STATE_DIR                           stop the stack and remove the social hosts entry
 #   bash ci/live_e2e_auth_stack.sh stop-auth STATE_DIR      stop auth-service by pid (the outage cell); start-auth starts it again with the same environment
 #   bash ci/live_e2e_auth_stack.sh start-auth STATE_DIR
+#   bash ci/live_e2e_auth_stack.sh verify-user STATE_DIR EMAIL  mark one user's e-mail verified in auth.users (the authority:
+#                                                          users are owned) and in its public.users projection
+#   bash ci/live_e2e_auth_stack.sh grant-platform-admin STATE_DIR EMAIL  test setup only: give one user an active platform_admin
+#                                                          row in auth.platform_role_assignments (written directly, as the bigboy fixture)
+#   bash ci/live_e2e_auth_stack.sh seed-sso-provider STATE_DIR EMAIL PROTOCOL [FLAG...]  test setup only: a stand-in for the provider create
+#                                                          route go-api does not have (CHAOS-13636); PROTOCOL oidc|saml; the client secret comes
+#                                                          from env SSO_CLIENT_SECRET (never argv); prints the provider id only
 # SIDE is go-api, query-api, auth-service or web. The flags are ci/live_e2e_auth_flags.tsv (the prod flag set).
+# CHAOS-13356: users are owned by auth-service, as prod (phase 4, usersOwnedStage owned): `up` copies the users the
+# caller already seeded into the auth schema with the seed tool (`dho auth users-backfill -insert-only`) before
+# auth-service starts; enable-mail switches credentials mail from console to a loopback capture sink.
 # The https front (localhost:8443 to 127.0.0.1:8095) with STATE_DIR/tls is the caller's: the Go and web verifiers read
 # the issuer over https and nothing here serves TLS.
 set -euo pipefail
@@ -65,6 +80,7 @@ print_env() {
   raw_env "$1" "$2" | awk '
     { k = substr($0, 1, index($0, "=") - 1) }
     k == "AUTH_JWT_SECRET_KEY" || k == "AUTH_SESSION_SUCCESSOR_KEY" || k == "AUTH_LOGIN_LOCKOUT_KEY" { print k "=<redacted>"; next }
+    k ~ /(_SECRET|_STATE_KEY)$/ || k == "SETTINGS_ENCRYPTION_KEY" || k == "LICENSE_KEY" { print k "=<redacted>"; next }
     k == "AUTH_DATABASE_URI" { sub(/password=\047[^\047]*\047/, "password=\047<redacted>\047") }
     { print }'
 }
@@ -108,6 +124,8 @@ raw_env() {
       : "${AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT:?AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT is not set}"
       : "${AUTH_AUTHORIZE_CALLER_SUBJECTS:?AUTH_AUTHORIZE_CALLER_SUBJECTS is not set}"
       flag_rows auth-service
+      # AUTH_REGISTER_LIMIT: go-api forwards register here (users owned) and every request of the run comes from one
+      # address, so the 3/hour default would refuse the 4th sign-up. go-api's venue value, same form; prod sets none.
       printf '%s\n' \
         "AUTH_SERVICE_HTTP_ADDR=${AUTH_API_ADDR}" \
         "AUTH_SERVICE_OPERATOR_HTTP_ADDR=${AUTH_OPERATOR_ADDR}" \
@@ -125,10 +143,22 @@ raw_env() {
         "AUTH_WORKLOAD_EXCHANGE_CLUSTER_ISSUER=${CLUSTER_ISSUER}" \
         "AUTH_WORKLOAD_EXCHANGE_KUBE_API_URL=https://${TOKENREVIEW_ADDR}" \
         "AUTH_WORKLOAD_EXCHANGE_KUBE_CA_FILE=${state}/tls/ca.pem" \
-        "AUTH_WORKLOAD_EXCHANGE_REVIEWER_TOKEN_FILE=${state}/workload/reviewer.token"
+        "AUTH_WORKLOAD_EXCHANGE_REVIEWER_TOKEN_FILE=${state}/workload/reviewer.token" \
+        "EMAIL_PROVIDER=console" \
+        "EMAIL_FROM_ADDRESS=live-e2e@example.test" \
+        "AUTH_MAIL_ALLOW_CONSOLE=true" \
+        "APP_BASE_URL=${LIVE_E2E_APP_BASE_URL:-http://localhost:3000}" \
+        "AUTH_REGISTER_LIMIT=1000/hour"
       ;;
     *) die "unknown side ${side} (go-api, query-api, auth-service, web)" ;;
   esac
+  if [ "${side}" != auth-service ] && [ -f "${state}/extra/${side}.env" ]; then
+    local line
+    while IFS= read -r line || [ -n "${line}" ]; do
+      [[ "${line}" =~ ^[A-Z][A-Z0-9_]*= ]] || die "invalid overlay line in ${state}/extra/${side}.env"
+      printf '%s\n' "${line}"
+    done <"${state}/extra/${side}.env"
+  fi
 }
 
 # with_env SIDE STATE -- CMD...: export the lines of raw_env, then exec CMD. A value is taken whole (no shell parsing).
@@ -154,7 +184,7 @@ migrate_run() {
   local user="$1" password="$2"
   shift 2
   AUTH_MIGRATION_DATABASE_URI="$(dsn "${user}" "${password}")" \
-    AUTH_DATABASE_SCHEMA="${SCHEMA}" AUTH_USERS_OWNED=false \
+    AUTH_DATABASE_SCHEMA="${SCHEMA}" AUTH_USERS_OWNED=true \
     AUTH_RUNTIME_DATABASE_ROLE="${RUNTIME_ROLE}" AUTH_SCHEMA_OWNER_ROLE="${MIGRATION_ROLE}" \
     "${STATE}/bin/auth-migrate" "$@"
 }
@@ -236,6 +266,10 @@ up() {
   migrate_run "${MIGRATION_ROLE}" "${migration_password}" grants >/dev/null
   migrate_run "${MIGRATION_ROLE}" "${migration_password}" restore-fence init -if-absent >/dev/null
   migrate_run "${MIGRATION_ROLE}" "${migration_password}" workloads seed -apply >/dev/null
+
+  printf 'step 4b: the seed tool: copy the users the caller seeded into the auth schema (compose auth-users-backfill)\n'
+  AUTH_DATABASE_URI="$(dsn "${RUNTIME_ROLE}" "${runtime_password}")" AUTH_DATABASE_SCHEMA="${SCHEMA}" AUTH_USERS_OWNED=true \
+    "${dho}" auth users-backfill -insert-only >/dev/null
 
   printf 'step 5: api workload bootstrap credential (compose auth-workload-bootstrap)\n'
   migrate_run "${MIGRATION_ROLE}" "${migration_password}" workloads bootstrap-create -workload api -out "${STATE}/workload/api.bootstrap" -apply >/dev/null
@@ -325,6 +359,25 @@ down() {
   STATE="$(cd "$1" && pwd)"
   stop_pid "${STATE}/auth-service.pid"
   stop_pid "${STATE}/tokenreview.pid"
+  stop_pid "${STATE}/idpstub.pid"
+  stop_pid "${STATE}/smtpsink.pid"
+  if [ ! -L "${STATE}/license" ] && [ -d "${STATE}/license" ] && [ "$(cd "${STATE}/license" && pwd -P)" = "${STATE}/license" ]; then
+    rm -rf -- "${STATE}/license"
+  fi
+  if [ ! -L "${STATE}/mail" ] && [ -d "${STATE}/mail" ] && [ "$(cd "${STATE}/mail" && pwd -P)" = "${STATE}/mail" ]; then
+    rm -rf -- "${STATE}/mail/tokens"
+  fi
+  if [ -f "${STATE}/providerstub.pid" ]; then
+    local pid
+    pid="$(cat "${STATE}/providerstub.pid")"
+    [[ "${pid}" =~ ^[0-9]+$ ]] || die "providerstub pid file holds no pid"
+    if [ -r "/proc/${pid}/cmdline" ] && tr '\0' '\n' <"/proc/${pid}/cmdline" | grep -qE '(^|/)providerstub$'; then
+      sudo kill "${pid}"
+    fi
+  fi
+  if grep -q '# live-e2e-social' /etc/hosts; then
+    sudo sed -i '/# live-e2e-social/d' /etc/hosts
+  fi
 }
 
 stop_auth() {
@@ -354,6 +407,233 @@ start_auth() {
     sleep 1
   done
   die "auth-service did not become ready again"
+}
+
+refresh_ca_bundle() {
+  local ca
+  cat "${STATE}/tls/ca.pem" >"${STATE}/ca-bundle.pem"
+  for ca in social idp; do
+    if [ -f "${STATE}/${ca}/ca.pem" ]; then cat "${STATE}/${ca}/ca.pem" >>"${STATE}/ca-bundle.pem"; fi
+  done
+}
+
+# wait_stub NAME URL CA [CURL_ARG...]: ready only when the readiness path answers HTTP 200 (a stub's 599 is not ready).
+wait_stub() {
+  local name="$1" url="$2" ca="$3" start="${SECONDS}" bound="${LIVE_E2E_STUB_WAIT_SECONDS:-30}" code
+  local deadline=$((start + bound))
+  shift 3
+  while [ "${SECONDS}" -lt "${deadline}" ]; do
+    code="$(curl -sS --max-time 1 -o /dev/null -w '%{http_code}' --cacert "${ca}" "$@" "${url}" 2>/dev/null || true)"
+    if [ "${code}" = 200 ]; then return 0; fi
+    sleep 1
+  done
+  tail -n 40 "${STATE}/logs/${name}.log" >&2 || true
+  die "${name} did not become ready after $((SECONDS - start))s (bound ${bound}s)"
+}
+
+# refuse_second_start PIDFILE NAME: a start verb never overwrites the pid file of a stub that still runs (down knows one pid).
+refuse_second_start() {
+  local pid
+  [ -f "$1" ] || return 0
+  pid="$(cat "$1")"
+  if [[ "${pid}" =~ ^[0-9]+$ ]] && [ -d "/proc/${pid}" ]; then die "$2 already runs (pid ${pid}): run down first"; fi
+}
+
+smtp_ready() (
+  local banner
+  exec 3<>"/dev/tcp/127.0.0.1/$1" || exit 1
+  IFS= read -r -t 1 banner <&3 || exit 1
+  [[ "${banner}" == '220 '* ]]
+)
+
+enable_mail() {
+  STATE="$(cd "$1" && pwd)"
+  [ -f "${STATE}/auth-service.env" ] || die "no saved auth-service environment: run up first"
+  refuse_second_start "${STATE}/smtpsink.pid" smtpsink
+  umask 077
+  mkdir -p "${STATE}/logs"
+  if [ ! -d "${STATE}/mail" ]; then mkdir -m 700 "${STATE}/mail"; fi
+  chmod 700 "${STATE}/mail"
+  rm -f "${STATE}/mail/port"
+  (
+    cd "${STATE}"
+    nohup "${STATE}/bin/cigate" live-e2e smtp-sink 127.0.0.1:0 "${STATE}/mail/tokens" "${STATE}/mail/port" \
+      >"${STATE}/logs/smtpsink.log" 2>&1 &
+    echo "$!" >"${STATE}/smtpsink.pid"
+  )
+  local port='' start="${SECONDS}" bound="${LIVE_E2E_MAIL_WAIT_SECONDS:-30}" ready=false
+  local deadline=$((start + bound))
+  while [ "${SECONDS}" -lt "${deadline}" ]; do
+    if [ -f "${STATE}/mail/port" ]; then
+      port="$(cat "${STATE}/mail/port")"
+      if [[ "${port}" =~ ^[0-9]+$ ]] && smtp_ready "${port}" 2>/dev/null; then ready=true; break; fi
+    fi
+    sleep 1
+  done
+  if [ "${ready}" != true ]; then
+    tail -n 40 "${STATE}/logs/smtpsink.log" >&2 || true
+    die "smtpsink did not become ready after $((SECONDS - start))s (bound ${bound}s)"
+  fi
+  chmod 600 "${STATE}/auth-service.env"
+  printf '%s\n' 'EMAIL_PROVIDER=smtp' 'SMTP_HOST=127.0.0.1' "SMTP_PORT=${port}" 'SMTP_USE_TLS=false' >>"${STATE}/auth-service.env"
+  stop_auth "${STATE}"
+  start_auth "${STATE}"
+}
+
+mail_token() {
+  STATE="$(cd "$1" && pwd)"
+  local email="$2" kind="$3"
+  [[ "${email}" =~ ^[^\'[:space:]]+@[^\'[:space:]]+$ ]] || die "mail-token: not an e-mail address"
+  [[ "${kind}" = reset || "${kind}" = verify ]] || die "mail-token: kind must be reset or verify"
+  "${STATE}/bin/cigate" live-e2e mail-token "${STATE}/mail/tokens" "${email}" "${kind}"
+}
+
+enable_social() {
+  # Hard guard, before any write: the verb edits the host /etc/hosts and binds :443 as root, which redirects GitHub for every process on the host.
+  [ "${GITHUB_ACTIONS:-}" = true ] || die "enable-social edits /etc/hosts and binds :443: it runs only on a GitHub Actions runner (GITHUB_ACTIONS=true)"
+  refuse_second_start "$(cd "$1" && pwd)/providerstub.pid" providerstub
+  command -v sudo >/dev/null 2>&1 || die "enable-social requires sudo for /etc/hosts and port 443"
+  STATE="$(cd "$1" && pwd)"
+  [ -f "${STATE}/auth-service.env" ] || die "no saved auth-service environment: run up first"
+  umask 077
+  mkdir -p "${STATE}/bin" "${STATE}/logs" "${STATE}/extra"
+  (cd "${ROOT}" && go build -trimpath -o "${STATE}/bin/providerstub" ./internal/testsupport/providerstub/cmd/providerstub)
+  "${STATE}/bin/providerstub" certs -out "${STATE}/social"
+  refresh_ca_bundle
+  if ! grep -q '# live-e2e-social' /etc/hosts; then
+    printf '%s\n' '127.0.0.1 api.github.com github.com # live-e2e-social' | sudo tee -a /etc/hosts >/dev/null
+  fi
+  (
+    cd "${STATE}"
+    # The root shell writes its own pid and execs the stub, so the pid file holds the stub's pid, not sudo's.
+    # shellcheck disable=SC2016 # the script is the root shell's: $1 and $$ are its own
+    nohup sudo bash -c 'umask 022; echo "$$" >"$1"; shift; exec "$@"' _ "${STATE}/providerstub.pid" \
+      "${STATE}/bin/providerstub" serve -fixtures "${ROOT}/ci/live_e2e_stub" \
+      -cert "${STATE}/social/server.pem" -key "${STATE}/social/server.key" \
+      -listen 127.0.0.1:443 -admin 127.0.0.1:9091 >"${STATE}/logs/providerstub.log" 2>&1 &
+  )
+  wait_stub providerstub https://api.github.com/__ready "${STATE}/social/ca.pem"
+  chmod 600 "${STATE}/auth-service.env"
+  printf '%s\n' 'SOCIAL_GITHUB_CLIENT_ID=gh-client' 'SOCIAL_GITHUB_CLIENT_SECRET=gh-secret' \
+    "SSL_CERT_FILE=${STATE}/ca-bundle.pem" >>"${STATE}/auth-service.env"
+  printf '%s\n' 'AUTH_GITHUB_ID=gh-client' 'AUTH_GITHUB_SECRET=gh-secret' \
+    "NODE_EXTRA_CA_CERTS=${STATE}/ca-bundle.pem" >>"${STATE}/extra/web.env"
+  stop_auth "${STATE}"
+  start_auth "${STATE}"
+}
+
+enable_sso() {
+  STATE="$(cd "$1" && pwd)"
+  [ -f "${STATE}/auth-service.env" ] || die "no saved auth-service environment: run up first"
+  umask 077
+  mkdir -p "${STATE}/bin" "${STATE}/logs" "${STATE}/extra"
+  (cd "${ROOT}" && go build -trimpath -o "${STATE}/bin/idpstub" ./internal/testsupport/idpstub/cmd/idpstub)
+  "${STATE}/bin/idpstub" certs -out "${STATE}/idp" -host localhost
+  refresh_ca_bundle
+  mkdir -m 700 "${STATE}/license"
+  "${STATE}/bin/cigate" live-e2e mint-license "${STATE}/license/public.b64" "${STATE}/license/licence.txt"
+  touch "${STATE}/extra/go-api.env"
+  chmod 600 "${STATE}/extra/go-api.env"
+  printf 'LICENSE_PUBLIC_KEY=%s\nLICENSE_KEY=%s\n' "$(cat "${STATE}/license/public.b64")" "$(cat "${STATE}/license/licence.txt")" >>"${STATE}/extra/go-api.env"
+  printf '%s\n' 'AUTH_PROXY_OIDC=true' 'AUTH_PROXY_SAML=true' >>"${STATE}/extra/go-api.env"
+  printf '%s\n' 'AUTH_SSO_ENABLED=true' "NODE_EXTRA_CA_CERTS=${STATE}/ca-bundle.pem" >>"${STATE}/extra/web.env"
+  chmod 600 "${STATE}/auth-service.env"
+  local state_key
+  state_key="$(new_secret)"
+  printf '%s\n' 'AUTH_SSO_JIT=true' "AUTH_SSO_STATE_KEY=${state_key}" \
+    "SETTINGS_ENCRYPTION_KEY=${LIVE_E2E_SETTINGS_ENCRYPTION_KEY:-live-e2e-test-settings-key-do-not-use}" \
+    "APP_BASE_URL=${LIVE_E2E_WEB_ORIGIN:-http://127.0.0.1:3002}" \
+    "SSL_CERT_FILE=${STATE}/ca-bundle.pem" 'SSO_EGRESS_ALLOW_CIDRS=127.0.0.1/32' >>"${STATE}/auth-service.env"
+  stop_auth "${STATE}"
+  start_auth "${STATE}"
+}
+
+start_idp() {
+  STATE="$(cd "$1" && pwd)"
+  shift
+  refuse_second_start "${STATE}/idpstub.pid" idpstub
+  (
+    cd "${STATE}"
+    nohup "${STATE}/bin/idpstub" serve -cert "${STATE}/idp/server.pem" -key "${STATE}/idp/server.key" \
+      -listen 127.0.0.1:9443 -base-url https://localhost:9443 "$@" >"${STATE}/logs/idpstub.log" 2>&1 &
+    echo "$!" >"${STATE}/idpstub.pid"
+  )
+  wait_stub idpstub https://localhost:9443/.well-known/openid-configuration "${STATE}/idp/ca.pem"
+  if ! curl -fsS --max-time 10 --cacert "${STATE}/idp/ca.pem" https://localhost:9443/saml/cert >"${STATE}/idp/saml-cert.pem" 2>/dev/null \
+    || [ ! -s "${STATE}/idp/saml-cert.pem" ] \
+    || ! grep -q '^-----BEGIN CERTIFICATE-----$' "${STATE}/idp/saml-cert.pem" \
+    || ! openssl x509 -inform PEM -in "${STATE}/idp/saml-cert.pem" -noout >/dev/null 2>&1; then
+    die "idpstub returned no valid SAML PEM certificate"
+  fi
+  chmod 644 "${STATE}/idp/saml-cert.pem"
+}
+
+stop_idp() {
+  STATE="$(cd "$1" && pwd)"
+  stop_pid "${STATE}/idpstub.pid"
+  local pid deadline=$((SECONDS + 10))
+  if [ -f "${STATE}/idpstub.pid" ]; then
+    pid="$(cat "${STATE}/idpstub.pid")"
+    while kill -0 "${pid}" 2>/dev/null; do
+      [ "${SECONDS}" -lt "${deadline}" ] || die "idpstub still runs after stop"
+      sleep 0.1
+    done
+    rm -f -- "${STATE}/idpstub.pid"
+  fi
+}
+
+# verify_user STATE EMAIL: the e-mail of one user is verified, in auth.users (the authority while users are owned; its
+# guard admits a write only in a transaction that names itself the audit transaction, authschema 0006) and in the
+# public.users projection go-api still reads. Exactly one row each, or it fails.
+verify_user() {
+  STATE="$(cd "$1" && pwd)"
+  local email="$2" n
+  [[ "${email}" =~ ^[^\'[:space:]]+@[^\'[:space:]]+$ ]] || die "verify-user: not an e-mail address"
+  n="$(PGHOST="${PGHOST_USE}" PGPORT="${PGPORT_USE}" PGDATABASE="${PGDATABASE_USE}" psql -v ON_ERROR_STOP=1 -At -c \
+    "SELECT set_config('dev_health.audit_txid', pg_current_xact_id()::text, true) IS NOT NULL; \
+     WITH a AS (UPDATE ${SCHEMA}.users SET email_verified_at = coalesce(email_verified_at, clock_timestamp()) WHERE email_lower = lower('${email}') RETURNING 1), \
+          p AS (UPDATE public.users SET is_verified = true WHERE lower(email) = lower('${email}') RETURNING 1) \
+     SELECT (SELECT count(*) FROM a) || ' ' || (SELECT count(*) FROM p)" | tail -n 1)"
+  [ "${n}" = "1 1" ] || die "verify-user: want one auth.users and one public.users row, got ${n:-none}"
+  printf 'verified %s in auth.users and public.users\n' "${email}"
+}
+
+# grant_platform_admin STATE EMAIL: test setup only. The user's platform_admin assignment is written directly into
+# auth.platform_role_assignments (no route, no audit or outbox row; the guard admits the write in a transaction that names
+# itself the audit transaction first, authschema 0006), active: an existing row of the user is made permanent again. A
+# read-back of the active rows (the platform role store's rule: not expired, the principal not disabled) must be exactly 1.
+grant_platform_admin() {
+  STATE="$(cd "$1" && pwd)"
+  local email="$2" n
+  [[ "${email}" =~ ^[^\'[:space:]]+@[^\'[:space:]]+$ ]] || die "grant-platform-admin: not an e-mail address"
+  PGHOST="${PGHOST_USE}" PGPORT="${PGPORT_USE}" PGDATABASE="${PGDATABASE_USE}" psql -v ON_ERROR_STOP=1 -qAt -c \
+    "SELECT set_config('dev_health.audit_txid', pg_current_xact_id()::text, true) IS NOT NULL; \
+     INSERT INTO ${SCHEMA}.platform_role_assignments (principal_id, role_key) \
+       SELECT u.principal_id, 'platform_admin' FROM ${SCHEMA}.users u WHERE u.email_lower = lower('${email}') \
+     ON CONFLICT (principal_id, role_key) DO UPDATE SET expires_at = NULL, updated_at = now()" >/dev/null \
+    || die "grant-platform-admin: the write failed"
+  n="$(PGHOST="${PGHOST_USE}" PGPORT="${PGPORT_USE}" PGDATABASE="${PGDATABASE_USE}" psql -v ON_ERROR_STOP=1 -At -c \
+    "SELECT count(*) FROM ${SCHEMA}.platform_role_assignments r JOIN ${SCHEMA}.users u ON u.principal_id = r.principal_id \
+       JOIN ${SCHEMA}.principals p ON p.id = r.principal_id \
+     WHERE u.email_lower = lower('${email}') AND r.role_key = 'platform_admin' AND p.disabled_at IS NULL \
+       AND (r.expires_at IS NULL OR r.expires_at > now())" | tail -n 1)"
+  [ "${n}" = 1 ] || die "grant-platform-admin: want one active platform_admin row for the user, got ${n:-none}"
+  printf 'granted platform_admin to %s in auth.platform_role_assignments\n' "${email}"
+}
+
+# seed_sso_provider STATE EMAIL PROTOCOL [FLAG...]: test setup only, a stand-in for the provider create route go-api does not
+# have (CHAOS-13636, deleted when it lands). The row is written by cigate live-e2e seed-sso-provider (internal/cigates/livee2e/ssoseed:
+# the production row shape and the production seal of the client secret), not by SQL here. The secret is read from the
+# environment (SSO_CLIENT_SECRET), the encryption key is the stack's own, and neither is printed.
+seed_sso_provider() {
+  STATE="$(cd "$1" && pwd)"
+  local email="$2" protocol="$3"
+  shift 3
+  [[ "${email}" =~ ^[^\'[:space:]]+@[^\'[:space:]]+$ ]] || die "seed-sso-provider: not an e-mail address"
+  [ "${protocol}" = oidc ] || [ "${protocol}" = saml ] || die "seed-sso-provider: protocol must be oidc or saml"
+  PGHOST="${PGHOST_USE}" PGPORT="${PGPORT_USE}" PGDATABASE="${PGDATABASE_USE}" \
+    SETTINGS_ENCRYPTION_KEY="${LIVE_E2E_SETTINGS_ENCRYPTION_KEY:-live-e2e-test-settings-key-do-not-use}" \
+    "${STATE}/bin/cigate" live-e2e seed-sso-provider "${email}" "${protocol}" "$@"
 }
 
 verb="${1:-}"
@@ -386,5 +666,41 @@ case "${verb}" in
     [ "$#" -eq 2 ] || die "usage: start-auth STATE_DIR"
     start_auth "$2"
     ;;
-  *) die "usage: up | with-env | print-env | assert-audit | down | stop-auth | start-auth" ;;
+  enable-mail)
+    [ "$#" -eq 2 ] || die "usage: enable-mail STATE_DIR"
+    enable_mail "$2"
+    ;;
+  mail-token)
+    [ "$#" -eq 4 ] || die "usage: mail-token STATE_DIR EMAIL KIND (reset|verify)"
+    mail_token "$2" "$3" "$4"
+    ;;
+  enable-social)
+    [ "$#" -eq 2 ] || die "usage: enable-social STATE_DIR"
+    enable_social "$2"
+    ;;
+  enable-sso)
+    [ "$#" -eq 2 ] || die "usage: enable-sso STATE_DIR"
+    enable_sso "$2"
+    ;;
+  start-idp)
+    [ "$#" -ge 2 ] || die "usage: start-idp STATE_DIR [idpstub serve ARG...]"
+    start_idp "${@:2}"
+    ;;
+  stop-idp)
+    [ "$#" -eq 2 ] || die "usage: stop-idp STATE_DIR"
+    stop_idp "$2"
+    ;;
+  verify-user)
+    [ "$#" -eq 3 ] || die "usage: verify-user STATE_DIR EMAIL"
+    verify_user "$2" "$3"
+    ;;
+  grant-platform-admin)
+    [ "$#" -eq 3 ] || die "usage: grant-platform-admin STATE_DIR EMAIL"
+    grant_platform_admin "$2" "$3"
+    ;;
+  seed-sso-provider)
+    [ "$#" -ge 4 ] || die "usage: seed-sso-provider STATE_DIR EMAIL PROTOCOL [FLAG...]"
+    seed_sso_provider "$2" "$3" "$4" "${@:5}"
+    ;;
+  *) die "usage: up | with-env | print-env | assert-audit | down | stop-auth | start-auth | enable-mail | mail-token | enable-social | enable-sso | start-idp | stop-idp | verify-user | seed-sso-provider | grant-platform-admin" ;;
 esac

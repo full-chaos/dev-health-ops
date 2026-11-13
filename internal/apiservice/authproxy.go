@@ -65,9 +65,10 @@ const EnvAuthProxyOrgProvisioning = "AUTH_PROXY_ORG_PROVISIONING"
 // default. It needs AUTH_PROXY_SESSIONS: the base session of a delegated session is an auth-service session.
 const EnvAuthProxyImpersonation = "AUTH_PROXY_IMPERSONATION"
 
-// EnvAuthProxyServiceAccountKeys is the switch of the admin service account key routes (CHAOS-9262): on, go-api
-// sends issue, rotate, revoke and list to auth-service's key routes with its workload token; off, the routes answer
-// 503 config_missing. It is no aggregate and is off by default.
+// EnvAuthProxyServiceAccountKeys is the switch of the admin service account key routes (CHAOS-9262) and lifecycle
+// routes (CHAOS-13320): on, go-api sends issue, rotate, revoke and list, and create, disable, enable and owner, to
+// auth-service with its workload token; off, the key routes answer 503 config_missing and the lifecycle routes are not
+// mounted (their paths answer 404 as before). It is no aggregate and is off by default.
 const EnvAuthProxyServiceAccountKeys = admin.EnvServiceAccountKeys
 
 // AuthProxyFlagEnv is the routing flag of an aggregate, AUTH_PROXY_<NAME>.
@@ -800,6 +801,19 @@ func serviceAccountKeys(cfg AuthProxyConfig, cred provisioningCredential) (authp
 	return authprovision.NewKeyClient(core), nil
 }
 
+// serviceAccounts is the client of auth-service's service account lifecycle routes under the same switch and
+// credential as serviceAccountKeys; nil when off, so the admin lifecycle routes are not mounted.
+func serviceAccounts(cfg AuthProxyConfig, cred provisioningCredential) (authprovision.ServiceAccounts, error) {
+	if !cfg.ServiceAccountKeysOn() {
+		return nil, nil
+	}
+	core, err := authprovision.NewWorkloadCore(cfg.Upstream, cred.workload, cfg.Timeout)
+	if err != nil {
+		return nil, fmt.Errorf("%s is on: %w", EnvAuthProxyServiceAccountKeys, err)
+	}
+	return authprovision.NewAccountClient(core), nil
+}
+
 // orgProvisioner is the client of auth-service's provisioning routes when
 // AUTH_PROXY_ORG_PROVISIONING is on, built from the workload token of cred;
 // nil when off, so the member, invite and delete routes never call
@@ -814,4 +828,46 @@ func orgProvisioner(cfg AuthProxyConfig, cred provisioningCredential) (authprovi
 		return nil, fmt.Errorf("%s is on: %w", EnvAuthProxyOrgProvisioning, err)
 	}
 	return client, nil
+}
+
+// orgDeletionDeprovisioner is the organization delete's auth-service client with AUTH_PROXY_ORG_PROVISIONING off.
+// configured is AUTH_PROXY_URL set: an auth-service holds organizations. The client takes the workload token: the
+// provisioning or session credential's client when one is built, else one from the workload inputs, read with no
+// switch. Missing or invalid inputs never fail the start: a nil client, one WARN line, and each delete logs no_client.
+// With the switch on the delete deprovisions through the provisioner and this client is not built.
+func orgDeletionDeprovisioner(ctx context.Context, logger *slog.Logger, cfg AuthProxyConfig, provisioner authprovision.Provisioner,
+	provisioning provisioningCredential, session sessionCredential, lookup func(string) (string, bool)) (configured bool, client admin.OrgDeprovisioner) {
+	if cfg.Upstream == nil {
+		return false, nil
+	}
+	if provisioner != nil {
+		return true, nil
+	}
+	workload := provisioning.workload
+	if workload == nil {
+		workload = session.workload
+	}
+	if workload == nil {
+		subject, _ := lookup(EnvAuthWorkloadSubjectFile)
+		bootstrap, _ := lookup(EnvAuthWorkloadBootstrapFile)
+		if strings.TrimSpace(subject) == "" && strings.TrimSpace(bootstrap) == "" {
+			logger.WarnContext(ctx, "org deletion: no workload inputs, so a delete cannot deprovision the organization in auth-service",
+				slog.String("needs", EnvAuthWorkloadSubjectFile+" or "+EnvAuthWorkloadBootstrapFile))
+			return true, nil
+		}
+		built, err := newWorkloadClient(cfg, lookup, []workloadAsk{{Flag: EnvAuthProxyURL}})
+		if err != nil {
+			logger.WarnContext(ctx, "org deletion: the workload inputs are invalid, so a delete cannot deprovision the organization in auth-service",
+				slog.String("error", err.Error()))
+			return true, nil
+		}
+		workload = built
+	}
+	built, err := authprovision.NewWorkload(cfg.Upstream, workload, cfg.Timeout)
+	if err != nil {
+		logger.WarnContext(ctx, "org deletion: no auth-service client, so a delete cannot deprovision the organization",
+			slog.String("error", err.Error()))
+		return true, nil
+	}
+	return true, built
 }

@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/google/uuid"
@@ -18,9 +20,13 @@ const usage = `usage: cigate live-e2e <verb>
   assert-login-token FILE ISSUER KID     (FILE holds the login answer; prints one proof line)
   edge-request DOCUMENTS OPERATION ORG
   mint-token                             (env E2E_SESSION_ID, E2E_ISSUER_URL, E2E_ISSUER_KEY_FILE; optional E2E_USER_ID, E2E_ORG_ID, E2E_ISSUER_KID)
+  mint-license PUBLIC_FILE LICENSE_FILE   (throwaway enterprise licence; files must not exist)
+  seed-sso-provider EMAIL PROTOCOL [flags]   (TEST-ONLY stand-in for the missing provider create route, CHAOS-13636; PROTOCOL oidc|saml; env PG*, SETTINGS_ENCRYPTION_KEY, SSO_CLIENT_SECRET (oidc); prints the provider id only)
   valkey-ping                            (env REDIS_URL)
   subject-jws FILE                       (test subject token for the fake TokenReview; FILE must not exist)
   reviewer-token FILE                    (random reviewer bearer for the fake TokenReview; FILE must not exist)
+  smtp-sink ADDR DIR PORTFILE             (loopback SMTP capture; blocks)
+  mail-token DIR EMAIL KIND              (KIND reset|verify; prints only the token)
   tokenreview-serve ADDR CERT KEY SUBJECT_FILE REVIEWER_FILE   (env TR_NAMESPACE, TR_SERVICE_ACCOUNT, TR_UID; blocks)
 `
 
@@ -31,7 +37,7 @@ func Run(args []string, getenv func(string) string, stdout, stderr io.Writer) in
 		return 2
 	}
 	timeout := 2 * time.Minute
-	if args[0] == "tokenreview-serve" {
+	if args[0] == "tokenreview-serve" || args[0] == "smtp-sink" {
 		timeout = 24 * time.Hour
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -130,6 +136,23 @@ func Run(args []string, getenv func(string) string, stdout, stderr io.Writer) in
 		}
 		fmt.Fprintln(stdout, token)
 		return 0
+	case "seed-sso-provider":
+		if len(args) < 3 {
+			fmt.Fprint(stderr, usage)
+			return 2
+		}
+		if err := seedSSOProvider(ctx, args[1:], getenv, stdout, openSSODB); err != nil {
+			return fail(err)
+		}
+		return 0
+	case "mint-license":
+		if !need(2) {
+			return 2
+		}
+		if err := mintLicense(args[1], args[2]); err != nil {
+			return fail(err)
+		}
+		return 0
 	case "subject-jws", "reviewer-token":
 		if !need(1) {
 			return 2
@@ -155,6 +178,26 @@ func Run(args []string, getenv func(string) string, stdout, stderr io.Writer) in
 		if err := ServeTokenReview(ctx, args[1], args[2], args[3], args[4], args[5], cfg); err != nil {
 			return fail(err)
 		}
+		return 0
+	case "smtp-sink":
+		if !need(3) {
+			return 2
+		}
+		ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		if err := ServeSMTPSink(ctx, args[1], args[2], args[3], stderr); err != nil {
+			return fail(err)
+		}
+		return 0
+	case "mail-token":
+		if !need(3) {
+			return 2
+		}
+		token, err := readMailToken(args[1], args[2], args[3])
+		if err != nil {
+			return fail(err)
+		}
+		fmt.Fprintln(stdout, token)
 		return 0
 	case "valkey-ping":
 		if !need(0) {

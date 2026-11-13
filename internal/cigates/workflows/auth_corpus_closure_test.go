@@ -68,6 +68,7 @@ func corpusSetValue(t *testing.T, root, name string) []string {
 
 // The roots of the live closure exist in the tree, and the shared set names exactly them.
 func TestAuthCorpusClosureRootsExistAndTheSetNamesThem(t *testing.T) {
+	t.Parallel()
 	root := authProofRoot(t)
 	got := corpusSetValue(t, root, "AUTH_CORPUS_ROOTS")
 	if strings.Join(got, " ") != strings.Join(corpusClosureRoots, " ") {
@@ -224,6 +225,7 @@ func TestAuthCorpusDockerfileParserTable(t *testing.T) {
 // ONE source: both scripts source ci/auth_corpus_set.sh; the tested package is the one the test command runs and the one
 // the relevance script lists with its test dependencies.
 func TestAuthCorpusSetIsTheOneSourceOfTheTestedPackage(t *testing.T) {
+	t.Parallel()
 	root := authProofRoot(t)
 	if got := corpusSetValue(t, root, "AUTH_CORPUS_TEST_PACKAGE"); len(got) != 1 || got[0] != corpusTestPackage {
 		t.Fatalf("AUTH_CORPUS_TEST_PACKAGE = %v, want [%s]", got, corpusTestPackage)
@@ -314,6 +316,7 @@ done
 }
 
 func TestAuthCorpusPathsRowsMatchATrackedFile(t *testing.T) {
+	t.Parallel()
 	root := authProofRoot(t)
 	files := strings.Split(strings.TrimSuffix(corpusRun(t, root, "git", "-c", "core.quotePath=false", "ls-files", "-z"), "\x00"), "\x00")
 	if dead := corpusDeadRows(t, corpusRows(t, root), files); len(dead) > 0 {

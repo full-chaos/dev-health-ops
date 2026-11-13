@@ -382,6 +382,7 @@ func firstWeightsFile(t *testing.T, root string, minRows int) string {
 }
 
 func TestVenueShardsPlantedDefects(t *testing.T) {
+	t.Parallel()
 	root := repoRoot(t)
 	const f, c = venueWorkflow, venueChangedWorkflow
 	files := venueShardFiles(t, root)
@@ -392,9 +393,9 @@ func TestVenueShardsPlantedDefects(t *testing.T) {
 	}{
 		{"verb failure is swallowed by || true", []mutation{{f, `bash ci/check_go.sh venue-oracles "${{ matrix.shard }}" 8 2>&1 | tee "${RUNNER_TEMP}/venue-oracle-receipt/receipt.log"`, `bash ci/check_go.sh venue-oracles "${{ matrix.shard }}" 8 2>&1 | tee "${RUNNER_TEMP}/venue-oracle-receipt/receipt.log" || true`}}, []string{"not a top-level statement"}},
 		{"verb output goes through cat, not tee", []mutation{{f, `8 2>&1 | tee "${RUNNER_TEMP}/venue-oracle-receipt/receipt.log"`, `8 2>&1 | cat`}}, []string{"not a top-level statement"}},
-		{"changed job passes a literal count to the run call", []mutation{{c, `"${VENUE_LEG}" "${VENUE_LEGS}" 2>&1`, `"${VENUE_LEG}" 4 2>&1`}}, []string{"must call the verb exactly twice"}},
-		{"changed job passes a literal count to the listing call", []mutation{{c, `"${VENUE_LEG}" "${VENUE_LEGS}" > listing.txt`, `"${VENUE_LEG}" 4 > listing.txt`}}, []string{"must call the verb exactly twice"}},
-		{"changed job matrix and env shrink while the verb count stays literal", []mutation{{c, "shard: [1, 2, 3, 4]", "shard: [1, 2, 3]"}, {c, "      VENUE_LEGS: 4\n", "      VENUE_LEGS: 3\n"}, {c, `"${VENUE_LEG}" "${VENUE_LEGS}" 2>&1`, `"${VENUE_LEG}" 4 2>&1`}}, []string{"must call the verb exactly twice"}},
+		{"changed job passes a literal count to the run call", []mutation{{c, `"${VENUE_LEG}" "${VENUE_LEGS}" 2>&1`, `"${VENUE_LEG}" 6 2>&1`}}, []string{"must call the verb exactly twice"}},
+		{"changed job passes a literal count to the listing call", []mutation{{c, `"${VENUE_LEG}" "${VENUE_LEGS}" > listing.txt`, `"${VENUE_LEG}" 6 > listing.txt`}}, []string{"must call the verb exactly twice"}},
+		{"changed job matrix and env shrink while the verb count stays literal", []mutation{{c, "shard: [1, 2, 3, 4, 5, 6]", "shard: [1, 2, 3]"}, {c, "      VENUE_LEGS: 6\n", "      VENUE_LEGS: 3\n"}, {c, `"${VENUE_LEG}" "${VENUE_LEGS}" 2>&1`, `"${VENUE_LEG}" 6 2>&1`}}, []string{"must call the verb exactly twice"}},
 		{"changed job run call is swallowed", []mutation{{c, `/receipt.log"`, `/receipt.log" || true`}}, []string{"must call the verb exactly twice"}},
 		{"changed job verb step may fail silently", []mutation{{c, "      - name: Run the venue oracles of the changed packages\n", "      - name: Run the venue oracles of the changed packages\n        continue-on-error: true\n"}}, []string{"the changed-job verb step declares continue-on-error"}},
 		{"changed job run step is gated by something else", []mutation{{c, "      - name: Run the venue oracles of the changed packages\n        if: steps.select.outputs.run == 'true'\n", "      - name: Run the venue oracles of the changed packages\n        if: steps.select.outputs.run == 'false'\n"}}, []string{"changed-job verb step's if is"}},
@@ -409,7 +410,7 @@ func TestVenueShardsPlantedDefects(t *testing.T) {
 		{"the leg job may fail silently", []mutation{{f, "    timeout-minutes: 40\n", "    timeout-minutes: 40\n    continue-on-error: true\n"}}, []string{"the venue-oracles job declares continue-on-error"}},
 		{"the artifact action is another action", []mutation{{f, "actions/upload-artifact@", "evil/upload-artifact-fake@"}}, []string{"exactly one upload-artifact step"}},
 		{"the artifact name only mentions matrix.shardless", []mutation{{f, "-shard-${{ matrix.shard }}", "-shard-${{ matrix.shardless }}"}}, []string{"collide"}},
-		{"changed-job matrix excludes a leg", []mutation{{c, "shard: [1, 2, 3, 4]", "shard: [1, 2, 3, 4]\n        exclude:\n          - shard: 4"}}, []string{"venue-oracles-changed matrix declares [exclude shard]"}},
+		{"changed-job matrix excludes a leg", []mutation{{c, "shard: [1, 2, 3, 4, 5, 6]", "shard: [1, 2, 3, 4, 5, 6]\n        exclude:\n          - shard: 4"}}, []string{"venue-oracles-changed matrix declares [exclude shard]"}},
 		{"matrix has a gap", []mutation{{f, "shard: [1, 2, 3, 4, 5, 6, 7, 8]", "shard: [1, 2, 3, 4, 5, 6, 7, 9]"}}, []string{"not 1..N"}},
 		{"matrix repeats a leg", []mutation{{f, "shard: [1, 2, 3, 4, 5, 6, 7, 8]", "shard: [1, 2, 3, 4, 5, 6, 7, 7]"}}, []string{"not 1..N"}},
 		{"verb count disagrees with the matrix", []mutation{{f, `venue-oracles "${{ matrix.shard }}" 8 2>&1`, `venue-oracles "${{ matrix.shard }}" 7 2>&1`}}, []string{"COUNT=7", "8 legs"}},
@@ -422,8 +423,8 @@ func TestVenueShardsPlantedDefects(t *testing.T) {
 		{"fail-fast removed (GitHub default is true)", []mutation{{f, "      fail-fast: false\n", ""}}, []string{"fail-fast must be false"}},
 		{"receipt artifact is shared", []mutation{{f, "-shard-${{ matrix.shard }}", ""}}, []string{"collide"}},
 		{"budget outgrows the cap", []mutation{{f, "VENUE_LEG_BUDGET_SECONDS: '1800'", "VENUE_LEG_BUDGET_SECONDS: '2300'"}}, []string{"does not fit the 2400s job cap"}},
-		{"changed-job matrix has a gap", []mutation{{c, "shard: [1, 2, 3, 4]", "shard: [1, 2, 3, 5]"}}, []string{"venue-oracles-changed matrix legs", "not 1..N"}},
-		{"changed-job VENUE_LEGS disagrees", []mutation{{c, "      VENUE_LEGS: 4\n", "      VENUE_LEGS: 3\n"}}, []string{"VENUE_LEGS is 3", "4 legs"}},
+		{"changed-job matrix has a gap", []mutation{{c, "shard: [1, 2, 3, 4, 5, 6]", "shard: [1, 2, 3, 4, 5, 7]"}}, []string{"venue-oracles-changed matrix legs", "not 1..N"}},
+		{"changed-job VENUE_LEGS disagrees", []mutation{{c, "      VENUE_LEGS: 6\n", "      VENUE_LEGS: 3\n"}}, []string{"VENUE_LEGS is 3", "6 legs"}},
 		{"changed-job VENUE_LEG is not the matrix shard", []mutation{{c, "      VENUE_LEG: ${{ matrix.shard }}\n", "      VENUE_LEG: 1\n"}}, []string{"VENUE_LEG is"}},
 	}
 	for _, tc := range cases {

@@ -266,7 +266,7 @@ func TestVenueOracleCustomerPushWrites(t *testing.T) {
 	start := time.Now().UTC()
 	var seed customerPushWriteFixture
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Golden: golden, Root: venueRoot(), JWTKey: venueKey, Logger: quietLogger(), OrglessSuperusers: customerPushOrglessSuperusers,
+		Golden: golden, Root: venueRoot(), Logger: quietLogger(), OrglessSuperusers: customerPushOrglessSuperusers,
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
 			seed = customerPushWriteSeed(t, ctx, admin)
 			return seed.tokenSpecs()
@@ -296,7 +296,7 @@ func TestVenueOracleCustomerPushWrites(t *testing.T) {
 	cfg := config.Config{
 		APIAddress: "127.0.0.1:0", RiverDatabaseSchema: "river", APIDatabaseRole: venue.Roles["api"],
 		APIDatabaseURI: secrets.NewValue(venue.GoAPIDatabaseURI(t)),
-		APIJWTSecret:   secrets.NewValue(venueKey), APIJWTIssuer: "dev-health-ops", APIJWTAudience: "dev-health-api",
+		APIJWTIssuer:   "dev-health-ops", APIJWTAudience: "dev-health-api",
 		CORSAllowedOrigins: []string{"http://localhost:3000"},
 	}
 	base := startVenueAPI(t, ctx, cfg, venue)

@@ -1,16 +1,11 @@
 package authapi
 
 import (
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 )
-
-// dropLegacyKey leaves the fixture's routes as they stand once the legacy key
-// is gone: the Issuer they hold has no HS256 verifier.
-func dropLegacyKey(f *compatFixture) { f.issuer.verifier = nil }
 
 func logoutBody(token string) string { return `{"refresh_token":"` + token + `"}` }
 
@@ -33,10 +28,10 @@ func TestCompatLogoutKeySetForeignKeyTokenRevokesNothing(t *testing.T) {
 	}
 }
 
-func TestCompatLogoutWithoutLegacyKeyAnswers200AndRevokesNothing(t *testing.T) {
+// A go-api refresh token is verified by nothing: logout answers 200 and revokes nothing.
+func TestCompatLogoutOfAGoAPIRefreshTokenAnswers200AndRevokesNothing(t *testing.T) {
 	f := newCompatFixture(t)
 	token := legacyToken(t, f, f.org.String(), testSecret)
-	dropLegacyKey(f)
 	response := f.do(http.MethodPost, PatternCompatLogout, logoutBody(token), nil)
 	assertLogoutDone(t, response)
 	if len(f.sessions.byCredential) != 0 {
@@ -44,22 +39,11 @@ func TestCompatLogoutWithoutLegacyKeyAnswers200AndRevokesNothing(t *testing.T) {
 	}
 }
 
-func TestCompatLogoutWithoutLegacyKeyStillRevokesAnOpaqueCredential(t *testing.T) {
+func TestCompatLogoutRevokesAnOpaqueCredential(t *testing.T) {
 	f := newCompatFixture(t)
-	dropLegacyKey(f)
 	response := f.do(http.MethodPost, PatternCompatLogout, logoutBody("opaque-credential"), nil)
 	assertLogoutDone(t, response)
 	if len(f.sessions.byCredential) != 1 || f.sessions.byCredential[0] != "opaque-credential" {
 		t.Fatalf("revoked credentials %v, want the opaque one", f.sessions.byCredential)
-	}
-}
-
-func TestVerifyLegacyRefreshWithoutLegacyKeyIsRefused(t *testing.T) {
-	f := newCompatFixture(t)
-	token := legacyToken(t, f, f.org.String(), testSecret)
-	dropLegacyKey(f)
-	legacy, err := f.issuer.VerifyLegacyRefresh(token)
-	if !errors.Is(err, errLegacyKeyAbsent) || legacy.JTI.Reveal() != "" {
-		t.Fatalf("VerifyLegacyRefresh = %+v, %v, want errLegacyKeyAbsent and no claims", legacy, err)
 	}
 }

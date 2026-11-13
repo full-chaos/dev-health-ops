@@ -25,7 +25,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/auth/accessverify"
 	"github.com/full-chaos/dev-health-ops/internal/auth/authorization"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/sessionid"
 	"github.com/full-chaos/dev-health-ops/internal/authzenforce"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
@@ -275,10 +274,6 @@ VALUES ($1::uuid, $2::uuid, $3, 'cus_x', 'open', 100, 'usd', '{}', now(), now())
 	rig := &parityRig{minter: newEdDSAMinter(t), pdp: newParityPDP(t), pool: pool, revoker: &parityRevoker{}}
 	store := parityStore{PGStore: policy.PGStore{Pool: pool}, sessions: sessions}
 	build := func(enforcer *policy.Enforcer) http.Handler {
-		verifier, err := edgetoken.New(probeKey, "dev-health-ops", "dev-health-api")
-		if err != nil {
-			t.Fatal(err)
-		}
 		auth, err := policy.NewAuthenticator(store, quietLogger())
 		if err != nil {
 			t.Fatal(err)
@@ -307,7 +302,7 @@ VALUES ($1::uuid, $2::uuid, $3, 'cus_x', 'open', 100, 'usd', '{}', now(), now())
 		if enforcer != nil {
 			guard.SetEnforcer(enforcer)
 		}
-		deps := Deps{Pool: pool, ClickHouse: clickHouse, Auth: auth, Guard: guard, Verifier: verifier, ACRRevoker: rig.revoker}
+		deps := Deps{Pool: pool, ClickHouse: clickHouse, Auth: auth, Guard: guard, ACRRevoker: rig.revoker}
 		scope := policy.NewScope(auth, quietLogger())
 		server, err := NewServer(apiTestConfig(), quietLogger(), Routes(deps, quietLogger()), scope.Layers()...)
 		if err != nil {
@@ -374,8 +369,8 @@ func parPtr(u uuid.UUID) *uuid.UUID { return &u }
 
 // Product rule 1 (D6773), CHAOS-13209: on the real go-api Routes over a migrated database, with the members, billing
 // and other namespaces enforced by the production evaluator, every B3/B4 row gives the platform admin and the
-// cross-org callers the answer the same token gets with enforcement off (status and body); the acr revoke route keeps
-// its legacy refusal of a no-membership platform admin (F1, equal).
+// cross-org callers the answer the same token gets with enforcement off (status and body); on the acr revoke route a
+// no-membership platform admin revokes as the organization admin (F1, equal on both sides).
 func TestPlatformAdminAndCrossOrgAnswersEqualLegacy(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
@@ -432,18 +427,19 @@ func TestPlatformAdminAndCrossOrgAnswersEqualLegacy(t *testing.T) {
 		}
 	}
 
-	// F1 is EQUAL (acp Q1): a holder with an org claim and no membership row is refused not_member on both paths
-	// (acrcredentials/routes.go:119), and acr is never called.
+	// F1 is EQUAL: a holder of admin.orgs with an org claim and no membership row revokes as that organization's admin
+	// on both paths (product rule 1, acrcredentials handlers.actor), and the acr call names the platform admin.
 	revoke := "/api/v1/acr/credentials/cred_parity_1/revoke"
+	wantCall := fmt.Sprintf("org=%s cred=cred_parity_1 actor_type=admin actor=%s", parOrgB, parSU0)
 	for _, side := range []struct {
 		name string
 		h    http.Handler
 	}{{"enforce-on", rig.enforced}, {"enforce-off", rig.legacy}} {
 		status, body, _ := rig.do(side.h, http.MethodPost, revoke, "", edSU0b.token)
 		calls := rig.revoker.take()
-		if status != http.StatusForbidden || body != `{"detail":"Organization access denied"}` || len(calls) != 0 {
-			t.Errorf("F1 %s %s: %d %s, revoke calls %v, want the legacy 403 Organization access denied and none", side.name, edSU0b.label,
-				status, body, calls)
+		if status != http.StatusNoContent || body != "" || len(calls) != 1 || calls[0] != wantCall {
+			t.Errorf("F1 %s %s: %d %s, revoke calls %v, want 204 and the one call %s", side.name, edSU0b.label,
+				status, body, calls, wantCall)
 		}
 	}
 	var role string

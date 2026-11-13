@@ -201,6 +201,7 @@ func aggregateDefects(t *testing.T, doc yamlMap) []string {
 }
 
 func TestIntegrationAggregateNeverGreenOnCancelledFailedOrSkippedShards(t *testing.T) {
+	t.Parallel()
 	root := rootOf(t)
 	if d := aggregateDefects(t, loadWf(t, root, "go.yml")); len(d) > 0 {
 		t.Fatalf("%s", strings.Join(d, "\n"))
@@ -279,6 +280,7 @@ func queueGateDefects(t *testing.T, aggScript, gateScript string) []string {
 }
 
 func TestQueueGateNeverGreenWhenAShardWasCancelledFailedOrSkipped(t *testing.T) {
+	t.Parallel()
 	root := rootOf(t)
 	doc := loadWf(t, root, "go.yml")
 	agg := stepRun(t, doc, aggregateJobName, aggregateStepName)

@@ -27,6 +27,9 @@ admin-coverage	admin-sync	/admin/sync-and-coverage/coverage/	Understand coverage
 admin-security	admin	/admin/security-and-audit/	Administration security and audit	landing	true	public	planned	false	
 admin-credential-resp	admin-security	/admin/security-and-audit/credentials/	Credential responsibilities	concept	true	public	planned	false	
 admin-service-accounts	admin-security	/admin/security-and-audit/service-accounts/	Manage service accounts	task-guide	true	public	active	false	What an organization service account is, who may manage it, and the lifecycle an administrator runs on it.
+admin-external-push-credentials	admin-security	/admin/security-and-audit/external-push-credentials/	Manage External Push credentials	task-guide	true	public	active	false	List, create, rotate and revoke External Push credentials as an organization administrator, and check the result of a rotation.
+admin-workload-administration	admin-security	/admin/security-and-audit/workload-administration/	Workload administration	task-guide	true	public	active	false	Review platform workload registration and binding with an operator, and check the authority required for credential lifecycle events.
+admin-impersonation	admin-security	/admin/security-and-audit/impersonation/	View as another user	task-guide	true	public	active	false	View the product as another user, know what is limited, and stop.
 admin-audit	admin-security	/admin/security-and-audit/audit-events/	Audit administrative changes	task-guide	true	public	planned	false	
 admin-privacy	admin-security	/admin/security-and-audit/privacy/	Privacy and data-handling responsibilities	concept	true	public	planned	false	
 admin-troubleshooting	admin	/admin/troubleshooting/	Troubleshoot administration	troubleshooting-index	true	public	planned	false	

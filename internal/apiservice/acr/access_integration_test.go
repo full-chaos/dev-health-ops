@@ -85,7 +85,7 @@ func authServiceStates(t *testing.T, ctx context.Context, admin *pgxpool.Pool, r
 		t.Fatal(err)
 	}
 	signer := token.NewFileSigner(token.FileConfig{KeyPath: keyPath, KeyID: "k1"})
-	issuer, err := authapi.NewEdDSAIssuer(random(), "dev-health-ops", "dev-health-api", signer, "https://auth.example.test")
+	issuer, err := authapi.NewEdDSAIssuer("dev-health-api", signer, "https://auth.example.test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,9 +146,17 @@ func authServiceStates(t *testing.T, ctx context.Context, admin *pgxpool.Pool, r
 	return states
 }
 
+// staticInventory is an org whose repositories exist and that the user reads by name: the empty-org probe and the
+// read listing, fixed.
 type staticInventory []string
 
-func (s staticInventory) Repositories(context.Context, uuid.UUID) ([]string, error) { return s, nil }
+func (s staticInventory) HasRepositories(context.Context, uuid.UUID) (bool, error) {
+	return len(s) > 0, nil
+}
+
+func (s staticInventory) ReadableRepositories(context.Context, uuid.UUID, uuid.UUID) (sessionissue.Readable, error) {
+	return sessionissue.Readable{Scope: sessionissue.ReadableRepositories, Repositories: s}, nil
+}
 
 func startAccessPostgres(t *testing.T, ctx context.Context) (*pgxpool.Pool, *containers.Instance) {
 	t.Helper()
@@ -224,8 +232,9 @@ func TestPrincipalAccessReadsLiveStateEndToEnd(t *testing.T) {
 	store := AccessStore{
 		Organizations: postgresOrganizations{pool: pool},
 		Reads:         policy.PGStore{Pool: pool},
-		Features:      NewPostgresAccessStore(pool, policy.PGStore{Pool: pool}, nil, nil).Features,
-		Inventory:     staticInventory{"acme/api"},
+		Features:      NewPostgresAccessStore(pool, policy.PGStore{Pool: pool}, nil, nil, nil).Features,
+		Listing:       staticInventory{"acme/api"},
+		Existence:     staticInventory{"acme/api"},
 		Sessions:      authServiceStates(t, ctx, pool, rig),
 	}
 	read := func(t *testing.T, orgID, user uuid.UUID, sid *uuid.UUID) PrincipalAccess {
@@ -242,7 +251,7 @@ func TestPrincipalAccessReadsLiveStateEndToEnd(t *testing.T) {
 	t.Run("live session, member, both flags, inventory", func(t *testing.T) {
 		got := read(t, org, alice, &aliceSession)
 		want := PrincipalAccess{Member: true, Session: &SessionAccess{Live: true, Reason: sessionReasonLive},
-			AskDev: true, AgentContextRuntime: true, ACRBasis: "both", Repositories: []string{"acme/api"}}
+			AskDev: true, AgentContextRuntime: true, ACRBasis: "both", Repositories: []string{"acme/api"}, ListingReason: "repositories"}
 		if !reflect.DeepEqual(got, want) {
 			t.Fatalf("access = %+v session %+v", got, got.Session)
 		}
@@ -399,8 +408,9 @@ func TestPrincipalAccessSessionIsBoundToTheOrgAndItsExpiry(t *testing.T) {
 	store := AccessStore{
 		Organizations: postgresOrganizations{pool: pool},
 		Reads:         policy.PGStore{Pool: pool},
-		Features:      NewPostgresAccessStore(pool, policy.PGStore{Pool: pool}, nil, nil).Features,
-		Inventory:     staticInventory{"acme/api"},
+		Features:      NewPostgresAccessStore(pool, policy.PGStore{Pool: pool}, nil, nil, nil).Features,
+		Listing:       staticInventory{"acme/api"},
+		Existence:     staticInventory{"acme/api"},
 		Sessions:      authServiceStates(t, ctx, pool, rig),
 	}
 	read := func(t *testing.T, user, sid uuid.UUID) *SessionAccess {
@@ -490,12 +500,14 @@ func TestPrincipalAccessSessionIsBoundToTheOrgAndItsExpiry(t *testing.T) {
 	})
 }
 
-// TestClickHouseRepositoryInventoryEqualsTheCatalog is the differential check
-// between the two readers of the inventory: go-api's ClickHouseRepositoryInventory
-// on a native connection, and query-api's catalog REPO dimension (the list web
-// reads as the org's repository scope) on the dev-health-go query client, over
-// the same migrated repos table.
-func TestClickHouseRepositoryInventoryEqualsTheCatalog(t *testing.T) {
+// TestClickHouseRepositoryExistenceEqualsTheCatalogBeingNonEmpty is the
+// differential check of the empty-org probe (acp ruling Q3 on CHAOS-13561):
+// go-api's ClickHouseRepositoryExistence on a native connection says an org has
+// repositories exactly when query-api's catalog REPO dimension (the inventory
+// the access read served before the read listing) is non-empty, over the same
+// migrated repos table. An org above the catalog's limit has repositories: the
+// probe reads one row and holds no limit.
+func TestClickHouseRepositoryExistenceEqualsTheCatalogBeingNonEmpty(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	instance, err := containers.StartClickHouse(ctx)
@@ -521,7 +533,7 @@ func TestClickHouseRepositoryInventoryEqualsTheCatalog(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = client.Close() })
 
-	org, other, empty, big := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	org, other, empty, malformed, big := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	insert := func(orgID uuid.UUID, repo string) {
 		t.Helper()
 		if err := conn.Exec(ctx, `INSERT INTO repos (id, repo, org_id, provider, last_synced) VALUES (?, ?, ?, ?, ?)`,
@@ -533,16 +545,14 @@ func TestClickHouseRepositoryInventoryEqualsTheCatalog(t *testing.T) {
 		insert(org, repo)
 	}
 	insert(other, "elsewhere/repo")
-	// An org above the limit (CHAOS-12285): LIMIT 101 sees the 101st repository,
-	// and the read is refused, never cut to 100.
-	for i := 0; i <= repoinventory.Limit; i++ {
+	for _, repo := range []string{"not-a-slug", "a/b/c", " "} {
+		insert(malformed, repo)
+	}
+	for i := 0; i <= repoinventory.Limit+4; i++ {
 		insert(big, fmt.Sprintf("acme/r%03d", i))
 	}
 
-	inventory := ClickHouseRepositoryInventory{Conn: conn}
-	if got, err := inventory.Repositories(ctx, big); !errors.Is(err, repoinventory.ErrOverLimit) || got != nil {
-		t.Fatalf("an org above the repository limit: %d repositories, %v; want ErrOverLimit and no list", len(got), err)
-	}
+	probe := ClickHouseRepositoryExistence{Conn: conn}
 	catalog := func(orgID uuid.UUID) []string {
 		t.Helper()
 		result, degraded, err := analytics.ResolveCatalog(ctx, client, orgID.String(), dimensionRef(model.DimensionInputRepo), nil)
@@ -555,33 +565,30 @@ func TestClickHouseRepositoryInventoryEqualsTheCatalog(t *testing.T) {
 		}
 		return values
 	}
-	for name, orgID := range map[string]uuid.UUID{"seeded": org, "other": other, "empty": empty} {
-		got, err := inventory.Repositories(ctx, orgID)
+	for name, orgID := range map[string]uuid.UUID{"seeded": org, "other": other, "empty": empty, "malformed only": malformed} {
+		got, err := probe.HasRepositories(ctx, orgID)
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
-		if want := catalog(orgID); fmt.Sprint(got) != fmt.Sprint(want) {
-			t.Fatalf("%s: go-api inventory %v, catalog %v", name, got, want)
+		if want := len(catalog(orgID)) > 0; got != want {
+			t.Fatalf("%s: probe %v, catalog non-empty %v", name, got, want)
 		}
 	}
-	if got, _ := inventory.Repositories(ctx, org); !reflect.DeepEqual(got, []string{"acme/api", "acme/web"}) {
-		t.Fatalf("seeded inventory = %v", got)
-	}
-	if got, _ := inventory.Repositories(ctx, empty); got == nil || len(got) != 0 {
-		t.Fatalf("empty inventory = %#v, want a non-nil empty list", got)
+	if got, err := probe.HasRepositories(ctx, big); err != nil || !got {
+		t.Fatalf("an org above the catalog limit: %v, %v; want true", got, err)
 	}
 
 	const samples = 200
 	durations := make([]time.Duration, 0, samples)
 	for i := 0; i < samples; i++ {
 		started := time.Now()
-		if _, err := inventory.Repositories(ctx, org); err != nil {
+		if _, err := probe.HasRepositories(ctx, big); err != nil {
 			t.Fatal(err)
 		}
 		durations = append(durations, time.Since(started))
 	}
 	sort.Slice(durations, func(i, j int) bool { return durations[i] < durations[j] })
-	t.Logf("RECEIPT principal_access_clickhouse samples=%d p50=%s p95=%s max=%s", samples,
+	t.Logf("RECEIPT principal_access_existence_probe samples=%d p50=%s p95=%s max=%s", samples,
 		durations[samples/2], durations[samples*95/100], durations[samples-1])
 }
 

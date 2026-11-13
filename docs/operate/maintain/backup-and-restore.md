@@ -117,6 +117,119 @@ docker exec dev-health-clickhouse-1 clickhouse-client \
 Verify with a real query per store, not by inference — see "Test restore
 in isolation" above.
 
+## Prod Postgres from the nightly dump
+
+The chart value `postgresql.backup.enabled` (default `false`) turns on a
+nightly `pg_dump` of the bundled PostgreSQL. It does nothing for a managed
+or external PostgreSQL.
+
+### Where the dumps are
+
+- The CronJob `<fullname>-postgresql-backup` runs at 03:17 UTC
+  (`postgresql.backup.schedule`). It uses the PostgreSQL image of the
+  release, so `pg_dump` has the same major version as the server.
+- The dumps are on the PVC `<fullname>-postgresql-backups`. Helm keeps this
+  claim when you uninstall the release.
+- Each good run writes `<ts>.dump` (custom format) and `<ts>.dump.sha256`.
+  `<ts>` is the UTC start time, for example `20261110T031700Z`.
+- The newest 7 dumps stay (`postgresql.backup.keep`). The Job deletes older
+  ones only after a good dump.
+- A `.partial` file is a run that failed. The next good run deletes it
+  after one day.
+- A good run logs one line: `pg-backup ok file=<ts>.dump bytes=<n> sha256=<12 hex>`.
+  The Job and its log are deleted 12 hours after the Job ends.
+- The PVC is on the same node and disk as the database. A dump survives a
+  lost or broken database volume or a bad migration. It does not survive a
+  lost disk or node.
+
+Two alerts watch the Job (rules `PostgresBackupFailed` and
+`PostgresBackupStale` in `alerts/rules.yml`): a failed Job in the last hour,
+and no good Job in the last 25 hours.
+
+### List and check the dumps
+
+Start a short pod that mounts the claim read-only. Set `NS`, `RELEASE` (the
+chart fullname) and `PG_IMAGE` (the `postgresql.image` of the release)
+first:
+
+```bash
+kubectl -n "$NS" run pg-backup-list --rm -i --restart=Never --image="$PG_IMAGE" \
+  --overrides='{"spec":{"securityContext":{"runAsUser":70,"runAsGroup":70},"containers":[{"name":"pg-backup-list","image":"'"$PG_IMAGE"'","command":["sh","-c","cd /backups && ls -l && sha256sum -c ./*.dump.sha256"],"volumeMounts":[{"name":"b","mountPath":"/backups","readOnly":true}]}],"volumes":[{"name":"b","persistentVolumeClaim":{"claimName":"'"$RELEASE"'-postgresql-backups"}}]}}'
+```
+
+`sha256sum -c` must print `OK` for the dump you want. A dump with no `OK`
+is damaged: do not use it.
+
+To make a dump now (for example before a risky step), start a Job from the
+CronJob:
+
+```bash
+kubectl -n "$NS" create job --from=cronjob/"$RELEASE"-postgresql-backup "$RELEASE"-postgresql-backup-manual-"$(date -u +%Y%m%d%H%M)"
+```
+
+### Test the dump in isolation first
+
+A dump holds every row of the database. Treat a copy as a secret, keep it
+on an access-controlled host, and delete it after the test.
+
+1. Copy the dump and its `.sha256` out of the cluster. Run the pod above
+   with `sleep 600` as its command, then
+   `kubectl -n "$NS" cp pg-backup-list:/backups/<ts>.dump ./<ts>.dump`
+   (and the same for `<ts>.dump.sha256`), then delete the pod.
+2. On a host with docker (never the prod cluster), run the restore test:
+
+   ```bash
+   DUMP=./<ts>.dump PG_IMAGE=<postgresql.image of the release> \
+     DHO_IMAGE=<the dho image the release ran when the dump was taken> \
+     bash ci/pg_restore_test.sh
+   ```
+
+   It starts a scratch PostgreSQL, restores the dump, and checks the
+   sha256, the restore, the schema, the row counts, the migration to head
+   and `ANALYZE river.river_job`. It prints one `PASS` or `FAIL` line per
+   check and a last line `RESTORE-TEST PASS` or `RESTORE-TEST FAIL`.
+3. Use the dump only after `RESTORE-TEST PASS`.
+
+The schema check does not trust `alembic_version`. It builds an empty
+database to the same revision with `DHO_IMAGE` and fails when a relation,
+column or index of that reference is missing from the restored dump. A
+migration to head never repairs such a dump, because the migrator skips
+every revision the version table already records. If the schema check
+fails, do not restore that dump: test an older one.
+
+### Restore
+
+1. Stop every writer of the database: the API, the workers, the scheduler
+   and the reconciler. Nothing may write during the restore.
+2. If the server still runs, make a dump of the current state first (the
+   manual Job above).
+3. Copy the tested dump into the PostgreSQL pod and restore it into a new
+   database, not over the live one. The owner role of the release
+   (`postgresql.credentials.user`) runs it, so it owns every object:
+
+   ```bash
+   kubectl -n "$NS" cp ./<ts>.dump "$RELEASE"-postgresql-0:/tmp/restore.dump
+   kubectl -n "$NS" exec "$RELEASE"-postgresql-0 -- sh -c \
+     'export PGPASSWORD="$POSTGRES_PASSWORD"; createdb -U "$POSTGRES_USER" -h 127.0.0.1 restore_new &&
+      pg_restore --no-owner --exit-on-error -U "$POSTGRES_USER" -h 127.0.0.1 -d restore_new /tmp/restore.dump'
+   ```
+
+4. Swap the databases (`devhealth` is the default `postgresql.credentials.database`). Keep the old one until the checks below pass:
+
+   ```sql
+   ALTER DATABASE devhealth RENAME TO devhealth_before_restore;
+   ALTER DATABASE restore_new RENAME TO devhealth;
+   ```
+
+   Run this from the `postgres` database, with no session open on either
+   database.
+5. Run the migrate Job of the release at the same image (a `helm upgrade`
+   with unchanged values runs it). It must end at head.
+6. Run `ANALYZE river.river_job` (next section).
+7. Start the writers again, then verify as "Test restore in isolation" at
+   the top of this page says. Delete `/tmp/restore.dump` from the pod, and
+   drop `devhealth_before_restore` only when you are sure.
+
 ## After any Postgres restore: ANALYZE `river.river_job`
 
 A restore leaves Postgres's planner statistics stale for the restored
@@ -194,9 +307,9 @@ bootstrap credential; after T it revokes the credential of one and disables the 
 it then presents both secrets to `workload.Store.ResolveBootstrap`, the verifier the auth service uses at the workload-token
 exchange, as the unprivileged runtime role: the end-of-WAL copy and the fenced PITR copy must refuse both (`revoked`,
 `disabled`); on the unfenced PITR copy the drill records how many are still accepted, which is the gap itself
-(`attempt-T-pitr.json`, `revoked_access_accepted`). The drill also creates one row in each of `public.refresh_tokens`,
-`public.internal_service_credentials` and `public.external_ingest_tokens` before T and revokes it after T: those come back
-unfenced (`legacy_revokes_after_target_that_came_back` is 3, and they count in `b`) and stay revoked after the fenced apply.
+(`attempt-T-pitr.json`, `revoked_access_accepted`). The drill also creates one row in each of `public.refresh_tokens`
+and `public.external_ingest_tokens` before T and revokes it after T: those come back
+unfenced (`legacy_revokes_after_target_that_came_back` is 2, and they count in `b`) and stay revoked after the fenced apply.
 So the unfenced baseline `b` is larger than in the fenced-drill run below. The attempt secrets live in
 `attempt-secrets.json` of the evidence directory (mode 0600, values made for the drill; nothing prints or passes them as an argument).
 
@@ -246,12 +359,12 @@ Order (nothing serves traffic until the last step):
    `postgresql.auto.conf` before it is promoted, so no client or job can write before the fence runs.
 3. Restore a second, shadow copy of the same base backup to the END of the WAL archive (no recovery target) and keep it
    away from clients. It is the source of everything the target time dropped.
-4. Export the manifest from the shadow copy with the owner login (the superuser or ops-table owner; the least-privilege migration login cannot read the legacy tables, and the command refuses the runtime role):
+4. Export the manifest from the shadow copy with the owner login: Secret `auth-migrate-database-owner`, key `AUTH_MIGRATION_DATABASE_URI`, never Secret `auth-migrate-database` (the least-privilege migration login `devhealth_auth_migrator` has no SELECT on the legacy `public` tables and stops with `reading section public.refresh_tokens`; the command refuses the runtime role). The migrator gets no grant for this:
    `auth-migrate restore-fence export -out manifest.json` (`AUTH_MIGRATION_DATABASE_URI`, `AUTH_RUNTIME_DATABASE_ROLE`
    and `AUTH_DATABASE_SCHEMA` in the environment; no secret on a command line). The manifest holds ids, states and
    revision floors, never a credential, a hash or a token.
-5. Apply it to the restored copy, on the owner login too (the least-privilege migration login stops in the privilege preflight): first the dry run, `auth-migrate restore-fence apply -manifest manifest.json` (it writes
-   nothing and prints the counts per table), then `... apply -manifest manifest.json -apply`. The migration DSN of the
+5. Apply it to the restored copy, with the same owner Secret (the least-privilege migration login stops in the privilege preflight): first the dry run, `auth-migrate restore-fence apply -manifest manifest.json` (it writes
+   nothing and prints the counts per table), then `auth-migrate restore-fence apply -manifest manifest.json -apply`. The migration DSN of the
    apply carries `options='-c default_transaction_read_only=off'` so the apply can write although the copy is read-only.
    One transaction does everything: the revision floors, every revocation made after the target time, and the fence row
    for the new timeline. It is idempotent: a second run for the same timeline and manifest changes nothing.
@@ -310,7 +423,7 @@ Order (nothing serves traffic until the last step):
    revoke the token at PagerDuty by hand.
 7. Reset the read-only default: `ALTER SYSTEM RESET default_transaction_read_only;` then `SELECT pg_reload_conf();`.
 8. Start auth-service. Its readiness check `restore_fence` must be true (`/readyz`).
-9. `auth-migrate restore-fence status` prints `fenced=true` and the timeline (and the stored operator actions).
+9. `auth-migrate restore-fence status` (the same owner Secret) prints `fenced=true` and the timeline (and the stored operator actions).
 
 What the apply puts back, so that nothing removed after the target time stays alive: sessions, refresh credentials,
 credential registry, signing keys, resource grants, memberships, service accounts, workloads, workload bindings,

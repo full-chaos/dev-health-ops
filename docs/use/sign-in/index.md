@@ -17,6 +17,8 @@ Use this section to get into Dev Health and to get back in when something blocks
 
 - [Create an account and sign in](create-account-and-sign-in.md) — register, verify your email address, sign in, and sign out.
 - [Recover access](recover-access.md) — reset a forgotten password, request a new verification email, and change your password.
+- [Set up your workspace](onboarding.md) — create your organization and add a first tool.
+- [Switch organization](switch-organization.md) — change the organization you work in.
 - [Choose social sign-in or single sign-on](social-login-and-sso.md) — which sign-in methods exist and who controls each one.
 
 ## Find the cause of a problem

@@ -51,45 +51,124 @@ Each profile row (`contracts/auth/v1/endpoint-profile.schema.json`) has an `acti
 
 ## go-api
 
-242 rows: 64 map to one of 18 catalog actions, 145 have no action with a stated gap, and 33 (the public rows) have no action field.
+252 rows: 156 map to one of 17 catalog actions, 61 have no action with a stated gap, and 33 (the public rows) have no action field. 2 public rows carry `action: null`.
 
 ### Routes with an action
 
 | Action | Method and route | Route level today | Tenant requirement |
 | --- | --- | --- | --- |
-| `teams.read` | `GET /api/v1/admin/teams` | AdminOrg | `org_scoped` |
-| `teams.read` | `GET /api/v1/admin/teams/{team_id}` | AdminOrg | `org_scoped` |
+| `teams.write` | `GET /api/v1/admin/identities` | AdminOrg | `org_scoped` |
+| `teams.write` | `POST /api/v1/admin/identities` | AdminOrg | `org_scoped` |
+| `teams.write` | `GET /api/v1/admin/teams` | AdminOrg | `org_scoped` |
 | `teams.write` | `POST /api/v1/admin/teams` | AdminOrg | `org_scoped` |
 | `teams.write` | `DELETE /api/v1/admin/teams/{team_id}` | AdminOrg | `org_scoped` |
+| `teams.write` | `GET /api/v1/admin/teams/{team_id}` | AdminOrg | `org_scoped` |
 | `teams.write` | `PATCH /api/v1/admin/teams/{team_id}` | AdminOrg | `org_scoped` |
-| `settings.read` | `GET /api/v1/admin/settings/{category}` | Admin | `org_scoped` |
-| `settings.read` | `GET /api/v1/admin/settings/{category}/{key}` | Admin | `org_scoped` |
+| `teams.write` | `POST /api/v1/admin/teams/{team_id}` | AdminOrg | `org_scoped` |
+| `teams.write` | `POST /api/v1/admin/teams/{team_id}/approve-changes` | AdminOrg | `org_scoped` |
+| `teams.write` | `POST /api/v1/admin/teams/{team_id}/confirm-inferred-members` | AdminOrg | `org_scoped` |
+| `teams.write` | `POST /api/v1/admin/teams/{team_id}/confirm-members` | AdminOrg | `org_scoped` |
+| `teams.write` | `GET /api/v1/admin/teams/{team_id}/discover-members` | AdminOrg | `org_scoped` |
+| `teams.write` | `POST /api/v1/admin/teams/{team_id}/dismiss-changes` | AdminOrg | `org_scoped` |
+| `teams.write` | `GET /api/v1/admin/teams/{team_id}/infer-members` | AdminOrg | `org_scoped` |
+| `settings.write` | `GET /api/v1/admin/ip-allowlist` | Admin | `org_scoped` |
+| `settings.write` | `POST /api/v1/admin/ip-allowlist` | Admin | `org_scoped` |
+| `settings.write` | `DELETE /api/v1/admin/ip-allowlist/{entry_id}` | Admin | `org_scoped` |
+| `settings.write` | `GET /api/v1/admin/ip-allowlist/{entry_id}` | Admin | `org_scoped` |
+| `settings.write` | `PATCH /api/v1/admin/ip-allowlist/{entry_id}` | Admin | `org_scoped` |
+| `settings.write` | `POST /api/v1/admin/ip-allowlist/{entry_id}` | Admin | `org_scoped` |
+| `settings.write` | `DELETE /api/v1/admin/llm-settings` | Admin | `org_scoped` |
+| `settings.write` | `GET /api/v1/admin/llm-settings` | Admin | `org_scoped` |
+| `settings.write` | `PUT /api/v1/admin/llm-settings` | Admin | `org_scoped` |
+| `settings.write` | `GET /api/v1/admin/llm-settings/budget` | Admin | `org_scoped` |
+| `settings.write` | `GET /api/v1/admin/llm-settings/models` | Admin | `org_scoped` |
+| `settings.write` | `GET /api/v1/admin/llm-settings/own-model` | Admin | `org_scoped` |
+| `settings.write` | `PUT /api/v1/admin/llm-settings/own-model` | Admin | `org_scoped` |
+| `settings.write` | `GET /api/v1/admin/llm-settings/prompt-cache` | Admin | `org_scoped` |
+| `settings.write` | `PUT /api/v1/admin/llm-settings/prompt-cache` | Admin | `org_scoped` |
+| `settings.write` | `POST /api/v1/admin/llm-settings/readiness` | Admin | `org_scoped` |
+| `settings.write` | `GET /api/v1/admin/llm-settings/service-model` | Admin | `org_scoped` |
+| `settings.write` | `PUT /api/v1/admin/llm-settings/service-model` | Admin | `org_scoped` |
+| `settings.write` | `GET /api/v1/admin/llm-settings/spend` | Admin | `org_scoped` |
+| `settings.write` | `GET /api/v1/admin/llm-settings/status` | Admin | `org_scoped` |
+| `settings.write` | `GET /api/v1/admin/retention-policies` | Admin | `org_scoped` |
+| `settings.write` | `POST /api/v1/admin/retention-policies` | Admin | `org_scoped` |
+| `settings.write` | `DELETE /api/v1/admin/retention-policies/{policy_id}` | Admin | `org_scoped` |
+| `settings.write` | `GET /api/v1/admin/retention-policies/{policy_id}` | Admin | `org_scoped` |
+| `settings.write` | `PATCH /api/v1/admin/retention-policies/{policy_id}` | Admin | `org_scoped` |
+| `settings.write` | `POST /api/v1/admin/retention-policies/{policy_id}/execute` | Admin | `org_scoped` |
 | `settings.write` | `POST /api/v1/admin/settings` | Admin | `org_scoped` |
+| `settings.write` | `GET /api/v1/admin/settings/{category}` | Admin | `org_scoped` |
 | `settings.write` | `DELETE /api/v1/admin/settings/{category}/{key}` | Admin | `org_scoped` |
+| `settings.write` | `GET /api/v1/admin/settings/{category}/{key}` | Admin | `org_scoped` |
 | `settings.write` | `PUT /api/v1/admin/settings/{category}/{key}` | Admin | `org_scoped` |
+| `integrations.read` | `GET /api/v1/admin/backfill-jobs` | AdminOrg | `org_scoped` |
+| `integrations.read` | `GET /api/v1/admin/backfill-jobs/{job_id}` | AdminOrg | `org_scoped` |
+| `integrations.read` | `GET /api/v1/admin/credentials` | AdminOrg | `org_scoped` |
+| `integrations.read` | `GET /api/v1/admin/credentials/{provider}/{name}` | AdminOrg | `org_scoped` |
+| `integrations.read` | `GET /api/v1/admin/customer-push/batches/{ingestion_id}` | Admin | `org_scoped` |
+| `integrations.read` | `GET /api/v1/admin/customer-push/schemas` | Admin | `org_scoped` |
+| `integrations.read` | `GET /api/v1/admin/customer-push/schemas/{schema_version}` | Admin | `org_scoped` |
+| `integrations.read` | `GET /api/v1/admin/customer-push/sources` | Admin | `org_scoped` |
+| `integrations.read` | `GET /api/v1/admin/customer-push/sources/{source_id}` | Admin | `org_scoped` |
+| `integrations.read` | `GET /api/v1/admin/customer-push/sources/{source_id}/batches` | Admin | `org_scoped` |
+| `integrations.read` | `GET /api/v1/admin/customer-push/sources/{source_id}/tokens` | Admin | `org_scoped` |
+| `integrations.read` | `GET /api/v1/admin/customer-push/tokens` | Admin | `org_scoped` |
 | `integrations.read` | `GET /api/v1/admin/integrations` | AdminOrg | `org_scoped` |
 | `integrations.read` | `GET /api/v1/admin/integrations/pagerduty/services` | Admin | `org_scoped` |
 | `integrations.read` | `GET /api/v1/admin/integrations/pagerduty/status` | Admin | `org_scoped` |
 | `integrations.read` | `GET /api/v1/admin/integrations/pagerduty/webhook-bindings/{binding_id}` | Admin | `org_scoped` |
 | `integrations.read` | `GET /api/v1/admin/integrations/{integration_id}` | AdminOrg | `org_scoped` |
 | `integrations.read` | `GET /api/v1/admin/integrations/{integration_id}/datasets` | AdminOrg | `org_scoped` |
+| `integrations.read` | `POST /api/v1/admin/integrations/{integration_id}/discover` | AdminOrg | `org_scoped` |
 | `integrations.read` | `GET /api/v1/admin/integrations/{integration_id}/sources` | AdminOrg | `org_scoped` |
+| `integrations.read` | `GET /api/v1/admin/sync-configs` | AdminOrg | `org_scoped` |
+| `integrations.read` | `GET /api/v1/admin/sync-configs/auto-import-capabilities` | AdminOrg | `org_scoped` |
+| `integrations.read` | `GET /api/v1/admin/sync-configs/{config_id}` | AdminOrg | `org_scoped` |
+| `integrations.read` | `GET /api/v1/admin/sync-configs/{config_id}/coverage` | AdminOrg | `org_scoped` |
+| `integrations.read` | `GET /api/v1/admin/sync-configs/{config_id}/jobs` | AdminOrg | `org_scoped` |
+| `integrations.read` | `GET /api/v1/admin/sync-configs/{config_id}/repositories` | AdminOrg | `org_scoped` |
+| `integrations.read` | `GET /api/v1/admin/sync-runs/{run_id}` | AdminOrg | `org_scoped` |
+| `integrations.read` | `GET /api/v1/admin/sync-runs/{run_id}/units` | AdminOrg | `org_scoped` |
+| `integrations.read` | `GET /api/v1/admin/sync-targets` | AdminOrg | `org_scoped` |
+| `integrations.write` | `POST /api/v1/admin/credentials` | AdminOrg | `org_scoped` |
+| `integrations.write` | `POST /api/v1/admin/credentials/test` | AdminOrg | `org_scoped` |
+| `integrations.write` | `DELETE /api/v1/admin/credentials/{provider}/{name}` | Admin | `org_scoped` |
+| `integrations.write` | `PATCH /api/v1/admin/credentials/{provider}/{name}` | AdminOrg | `org_scoped` |
+| `integrations.write` | `POST /api/v1/admin/customer-push/sources` | Admin | `org_scoped` |
+| `integrations.write` | `PATCH /api/v1/admin/customer-push/sources/{source_id}` | Admin | `org_scoped` |
+| `integrations.write` | `POST /api/v1/admin/customer-push/sources/{source_id}/tokens` | Admin | `org_scoped` |
+| `integrations.write` | `POST /api/v1/admin/customer-push/sources/{source_id}/validate` | Admin | `org_scoped` |
+| `integrations.write` | `POST /api/v1/admin/customer-push/tokens` | Admin | `org_scoped` |
+| `integrations.write` | `POST /api/v1/admin/customer-push/tokens/{token_id}/revoke` | Admin | `org_scoped` |
+| `integrations.write` | `POST /api/v1/admin/customer-push/tokens/{token_id}/rotate` | Admin | `org_scoped` |
 | `integrations.write` | `POST /api/v1/admin/integrations` | AdminOrg | `org_scoped` |
 | `integrations.write` | `POST /api/v1/admin/integrations/github/install-callback` | AdminOrg | `org_scoped` |
+| `integrations.write` | `POST /api/v1/admin/integrations/github/install-url` | AdminOrg | `org_scoped` |
 | `integrations.write` | `POST /api/v1/admin/integrations/pagerduty/api-token` | Admin | `org_scoped` |
 | `integrations.write` | `POST /api/v1/admin/integrations/pagerduty/authorize` | Admin | `org_scoped` |
 | `integrations.write` | `POST /api/v1/admin/integrations/pagerduty/callback` | Admin | `org_scoped` |
 | `integrations.write` | `POST /api/v1/admin/integrations/pagerduty/client-credentials` | Admin | `org_scoped` |
 | `integrations.write` | `POST /api/v1/admin/integrations/pagerduty/disconnect` | Admin | `org_scoped` |
+| `integrations.write` | `POST /api/v1/admin/integrations/pagerduty/preflight` | Admin | `org_scoped` |
 | `integrations.write` | `POST /api/v1/admin/integrations/pagerduty/webhook-bindings` | Admin | `org_scoped` |
 | `integrations.write` | `POST /api/v1/admin/integrations/pagerduty/webhook-bindings/{binding_id}/activate` | Admin | `org_scoped` |
 | `integrations.write` | `POST /api/v1/admin/integrations/pagerduty/webhook-bindings/{binding_id}/revoke` | Admin | `org_scoped` |
 | `integrations.write` | `POST /api/v1/admin/integrations/pagerduty/webhook-bindings/{binding_id}/rotate` | Admin | `org_scoped` |
 | `integrations.write` | `PATCH /api/v1/admin/integrations/{integration_id}` | AdminOrg | `org_scoped` |
+| `integrations.write` | `POST /api/v1/admin/integrations/{integration_id}/backfill` | AdminOrg | `org_scoped` |
 | `integrations.write` | `PATCH /api/v1/admin/integrations/{integration_id}/datasets` | AdminOrg | `org_scoped` |
 | `integrations.write` | `PATCH /api/v1/admin/integrations/{integration_id}/sources/{source_id}` | AdminOrg | `org_scoped` |
-| `members.manage` | `GET /api/v1/admin/orgs/{org_id}/members` | Admin | `org_scoped` |
+| `integrations.write` | `POST /api/v1/admin/integrations/{integration_id}/sync` | AdminOrg | `org_scoped` |
+| `integrations.write` | `POST /api/v1/admin/sync-configs` | AdminOrg | `org_scoped` |
+| `integrations.write` | `POST /api/v1/admin/sync-configs/batch` | AdminOrg | `org_scoped` |
+| `integrations.write` | `DELETE /api/v1/admin/sync-configs/{config_id}` | AdminOrg | `org_scoped` |
+| `integrations.write` | `PATCH /api/v1/admin/sync-configs/{config_id}` | AdminOrg | `org_scoped` |
+| `integrations.write` | `POST /api/v1/admin/sync-configs/{config_id}/backfill` | AdminOrg | `org_scoped` |
+| `integrations.write` | `PUT /api/v1/admin/sync-configs/{config_id}/repositories` | AdminOrg | `org_scoped` |
+| `integrations.write` | `POST /api/v1/admin/sync-configs/{config_id}/trigger` | AdminOrg | `org_scoped` |
 | `members.invite` | `POST /api/v1/admin/orgs/{org_id}/invites` | Admin | `org_scoped` |
+| `members.manage` | `GET /api/v1/admin/orgs/{org_id}/members` | Admin | `org_scoped` |
 | `members.manage` | `POST /api/v1/admin/orgs/{org_id}/members` | Admin | `org_scoped` |
 | `members.manage` | `DELETE /api/v1/admin/orgs/{org_id}/members/{user_id}` | Admin | `org_scoped` |
 | `members.manage` | `PATCH /api/v1/admin/orgs/{org_id}/members/{user_id}` | Admin | `org_scoped` |
@@ -105,12 +184,25 @@ Each profile row (`contracts/auth/v1/endpoint-profile.schema.json`) has an `acti
 | `billing.manage` | `POST /api/v1/billing/subscriptions/reactivate` | Admin | `org_scoped` |
 | `license.read` | `GET /api/v1/billing/entitlements/{org_id}` | Authenticated | `org_scoped` |
 | `license.read` | `GET /api/v1/licensing/entitlements/{org_id}` | Authenticated | `org_scoped` |
+| `org.read` | `GET /api/v1/orgs/me` | Authenticated | `org_scoped` |
+| `acr.credential.revoke` | `POST /api/v1/acr/credentials/{credential_id}/revoke` | Authenticated | `org_scoped` |
+| `admin.users` | `POST /api/v1/admin/service-accounts/keys/{credential_id}/revoke` | Superuser | `cross_org_superuser_only` |
+| `admin.users` | `GET /api/v1/admin/service-accounts/{service_account_id}/keys` | Superuser | `cross_org_superuser_only` |
+| `admin.users` | `POST /api/v1/admin/service-accounts/{service_account_id}/keys` | Superuser | `cross_org_superuser_only` |
+| `admin.users` | `POST /api/v1/admin/service-accounts/{service_account_id}/keys/rotate` | Superuser | `cross_org_superuser_only` |
+| `admin.users` | `GET /api/v1/admin/users` | Admin | `org_scoped` |
+| `admin.users` | `POST /api/v1/admin/users` | Admin | `org_scoped` |
+| `admin.users` | `DELETE /api/v1/admin/users/{user_id}` | Admin | `org_scoped` |
+| `admin.users` | `GET /api/v1/admin/users/{user_id}` | Admin | `org_scoped` |
+| `admin.users` | `PATCH /api/v1/admin/users/{user_id}` | Admin | `org_scoped` |
+| `admin.users` | `POST /api/v1/admin/users/{user_id}/password` | Admin | `org_scoped` |
 | `admin.orgs` | `GET /api/v1/admin/orgs` | Superuser | `cross_org_superuser_only` |
 | `admin.orgs` | `POST /api/v1/admin/orgs` | Superuser | `cross_org_superuser_only` |
 | `admin.orgs` | `DELETE /api/v1/admin/orgs/{org_id}` | Superuser | `cross_org_superuser_only` |
 | `admin.orgs` | `GET /api/v1/admin/orgs/{org_id}` | Superuser | `cross_org_superuser_only` |
 | `admin.orgs` | `PATCH /api/v1/admin/orgs/{org_id}` | Superuser | `cross_org_superuser_only` |
 | `admin.impersonate` | `POST /api/v1/admin/impersonate` | Superuser | `cross_org_superuser_only` |
+| `admin.impersonate` | `POST /api/v1/admin/impersonate/handoff/consume` | Superuser | `cross_org_superuser_only` |
 | `admin.impersonate` | `POST /api/v1/admin/impersonate/stop` | Superuser | `cross_org_superuser_only` |
 | `admin.billing` | `POST /api/v1/billing/plans/pull-stripe` | Superuser | `cross_org_superuser_only` |
 | `admin.flags` | `GET /api/v1/admin/feature-flags` | Superuser | `cross_org_superuser_only` |
@@ -124,59 +216,32 @@ Each profile row (`contracts/auth/v1/endpoint-profile.schema.json`) has an `acti
 
 Source: `contracts/auth/v1/endpoint-profiles.go-api.json`. "Route level today" is the `policy.*` validator named in the row.
 
-These 17 catalog actions have no go-api route that maps to them: `analytics.read`, `analytics.export`, `metrics.read`, `metrics.compute`, `work_items.read`, `work_items.sync`, `git.read`, `git.sync`, `members.update`, `org.read`, `org.write`, `org.delete`, `acr.context.read`, `admin.users`, `authz.decide`, `admin.telemetry`, `reports.write`. Of these, query-api rows and GraphQL fields map to `analytics.read`, `metrics.read`, `work_items.read`, `git.read`, `org.read`, `admin.telemetry` and `reports.write` (see below).
+These 21 catalog actions have no go-api route that maps to them: `analytics.read`, `analytics.export`, `metrics.read`, `metrics.compute`, `work_items.read`, `work_items.sync`, `git.read`, `git.sync`, `teams.read`, `settings.read`, `reports.write`, `members.read`, `members.update`, `org.write`, `org.delete`, `acr.context.read`, `acr.evidence.read`, `acr.credential.issue`, `authz.decide`, `admin.telemetry`, `credentials.project`. Of these, query-api rows map to `analytics.read`, `metrics.read`, `work_items.read`, `git.read` (see below).
 
 ### Routes with no action
 
-145 protected rows carry `action: null` and a gap (140 on the api listener, 4 on the internal listener, 1 on the billing-edge listener). The gap text falls into these groups:
+61 protected rows carry `action: null` and a gap (56 on the api listener, 4 on the internal listener, 1 on the billing-edge listener). The gap text falls into these groups:
 
 | Reason | Rows |
 | --- | --- |
-| no catalog action covers the route's resource | 118 |
-| a check exists but is not proven equal to one catalog action | 10 |
-| other (see the row) | 17 |
+| no catalog action covers the route's resource | 37 |
+| a check exists but is not proven equal to one catalog action | 9 |
+| other (see the row) | 15 |
 
 The first group names a resource that the catalog has no action for. The resources, taken from the gap text, with the number of rows for each:
 
 | Resource | Rows |
 | --- | --- |
-| LLM settings | 14 |
-| sync configuration | 11 |
 | the session and onboarding routes | 10 |
 | SSO provider management; no settings action is mapped because the handler check is not proven to equal one | 9 |
-| credential | 6 |
-| ingest token | 6 |
-| retention policy | 6 |
-| user | 6 |
-| IP allowlist entry | 5 |
-| ingest source | 5 |
 | audit log | 4 |
 | the internal service entitlement and configuration reads | 4 |
-| backfill job | 2 |
-| identity | 2 |
-| ingest batch | 2 |
-| ingest schema | 2 |
-| team drift change | 2 |
-| team members | 2 |
+| user | 4 |
 | the payment provider webhook; the signature is its only credential | 2 |
-| GitHub App install state | 1 |
-| IP allowlist check | 1 |
-| PagerDuty dataset scope preflight | 1 |
-| auto-import capability table | 1 |
-| integration backfill trigger | 1 |
-| integration source | 1 |
-| integration sync trigger | 1 |
 | setup status | 1 |
-| sync run | 1 |
-| sync run units | 1 |
-| sync targets | 1 |
-| team import | 1 |
-| team member discovery | 1 |
-| team member inference | 1 |
 | the build identity read | 1 |
 | the incident provider webhook; the binding signature is its only credential | 1 |
 | the source provider webhook; the signature is its only credential | 1 |
-| the sync configuration domain | 1 |
 
 Each gap entry says "this leaf does not extend the vocabulary": the profile leaf that wrote the rows recorded the missing action and did not add one.
 
@@ -191,47 +256,47 @@ The six dispatcher rows (`/graphql`, `/query` on the query and internal listener
 | Method and route | Class | Action | Accepted credential classes |
 | --- | --- | --- | --- |
 | `api_route /api/v1/` | public | none | none |
-| `GET /api/v1/drilldown/issues` | protected | `work_items.read` | `effective_principal_envelope`, `user_access_token` |
-| `POST /api/v1/drilldown/issues` | protected | `work_items.read` | `effective_principal_envelope`, `user_access_token` |
-| `GET /api/v1/drilldown/prs` | protected | `git.read` | `effective_principal_envelope`, `user_access_token` |
-| `POST /api/v1/drilldown/prs` | protected | `git.read` | `effective_principal_envelope`, `user_access_token` |
-| `GET /api/v1/explain` | protected | `metrics.read` | `effective_principal_envelope`, `user_access_token` |
-| `POST /api/v1/explain` | protected | `metrics.read` | `effective_principal_envelope`, `user_access_token` |
-| `GET /api/v1/filters/options` | protected | `analytics.read` | `effective_principal_envelope`, `user_access_token` |
-| `GET /api/v1/flame` | protected | `metrics.read` | `effective_principal_envelope`, `user_access_token` |
-| `GET /api/v1/flame/aggregated` | protected | `metrics.read` | `effective_principal_envelope`, `user_access_token` |
-| `GET /api/v1/heatmap` | protected | `metrics.read` | `effective_principal_envelope`, `user_access_token` |
-| `GET /api/v1/home` | protected | `analytics.read` | `effective_principal_envelope`, `user_access_token` |
-| `POST /api/v1/home` | protected | `analytics.read` | `effective_principal_envelope`, `user_access_token` |
-| `GET /api/v1/investment` | protected | `analytics.read` | `effective_principal_envelope`, `user_access_token` |
-| `POST /api/v1/investment` | protected | `analytics.read` | `effective_principal_envelope`, `user_access_token` |
-| `POST /api/v1/investment/explain` | protected | `analytics.read` | `effective_principal_envelope`, `user_access_token` |
-| `GET /api/v1/investment/sunburst` | protected | `analytics.read` | `effective_principal_envelope`, `user_access_token` |
+| `GET /api/v1/drilldown/issues` | protected | `work_items.read` | `user_access_token` |
+| `POST /api/v1/drilldown/issues` | protected | `work_items.read` | `user_access_token` |
+| `GET /api/v1/drilldown/prs` | protected | `git.read` | `user_access_token` |
+| `POST /api/v1/drilldown/prs` | protected | `git.read` | `user_access_token` |
+| `GET /api/v1/explain` | protected | `metrics.read` | `user_access_token` |
+| `POST /api/v1/explain` | protected | `metrics.read` | `user_access_token` |
+| `GET /api/v1/filters/options` | protected | `analytics.read` | `user_access_token` |
+| `GET /api/v1/flame` | protected | `metrics.read` | `user_access_token` |
+| `GET /api/v1/flame/aggregated` | protected | `metrics.read` | `user_access_token` |
+| `GET /api/v1/heatmap` | protected | `metrics.read` | `user_access_token` |
+| `GET /api/v1/home` | protected | `analytics.read` | `user_access_token` |
+| `POST /api/v1/home` | protected | `analytics.read` | `user_access_token` |
+| `GET /api/v1/investment` | protected | `analytics.read` | `user_access_token` |
+| `POST /api/v1/investment` | protected | `analytics.read` | `user_access_token` |
+| `POST /api/v1/investment/explain` | protected | `analytics.read` | `user_access_token` |
+| `GET /api/v1/investment/sunburst` | protected | `analytics.read` | `user_access_token` |
 | `GET /api/v1/meta` | public | none | none |
-| `GET /api/v1/opportunities` | protected | `analytics.read` | `effective_principal_envelope`, `user_access_token` |
-| `POST /api/v1/opportunities` | protected | `analytics.read` | `effective_principal_envelope`, `user_access_token` |
-| `GET /api/v1/people` | protected | `metrics.read` | `effective_principal_envelope`, `user_access_token` |
-| `GET /api/v1/people/{person_id}/drilldown/issues` | protected | `work_items.read` | `effective_principal_envelope`, `user_access_token` |
-| `GET /api/v1/people/{person_id}/drilldown/prs` | protected | `git.read` | `effective_principal_envelope`, `user_access_token` |
-| `GET /api/v1/people/{person_id}/metric` | protected | `metrics.read` | `effective_principal_envelope`, `user_access_token` |
-| `GET /api/v1/people/{person_id}/summary` | protected | `metrics.read` | `effective_principal_envelope`, `user_access_token` |
-| `GET /api/v1/quadrant` | protected | `metrics.read` | `effective_principal_envelope`, `user_access_token` |
-| `GET /api/v1/sankey` | protected | `analytics.read` | `effective_principal_envelope`, `user_access_token` |
-| `POST /api/v1/sankey` | protected | `analytics.read` | `effective_principal_envelope`, `user_access_token` |
-| `GET /api/v1/work-units` | protected | `analytics.read` | `effective_principal_envelope`, `user_access_token` |
-| `POST /api/v1/work-units` | protected | `analytics.read` | `effective_principal_envelope`, `user_access_token` |
-| `POST /api/v1/work-units/{work_unit_id}/explain` | protected | `analytics.read` | `effective_principal_envelope`, `user_access_token` |
-| `GET /buildinfo` | protected | `org.read` | `effective_principal_envelope`, `user_access_token` (a platform admin only) |
+| `GET /api/v1/opportunities` | protected | `analytics.read` | `user_access_token` |
+| `POST /api/v1/opportunities` | protected | `analytics.read` | `user_access_token` |
+| `GET /api/v1/people` | protected | `metrics.read` | `user_access_token` |
+| `GET /api/v1/people/{person_id}/drilldown/issues` | protected | `work_items.read` | `user_access_token` |
+| `GET /api/v1/people/{person_id}/drilldown/prs` | protected | `git.read` | `user_access_token` |
+| `GET /api/v1/people/{person_id}/metric` | protected | `metrics.read` | `user_access_token` |
+| `GET /api/v1/people/{person_id}/summary` | protected | `metrics.read` | `user_access_token` |
+| `GET /api/v1/quadrant` | protected | `metrics.read` | `user_access_token` |
+| `GET /api/v1/sankey` | protected | `analytics.read` | `user_access_token` |
+| `POST /api/v1/sankey` | protected | `analytics.read` | `user_access_token` |
+| `GET /api/v1/work-units` | protected | `analytics.read` | `user_access_token` |
+| `POST /api/v1/work-units` | protected | `analytics.read` | `user_access_token` |
+| `POST /api/v1/work-units/{work_unit_id}/explain` | protected | `analytics.read` | `user_access_token` |
+| `GET /buildinfo` | protected | `org.read` | `user_access_token` (a platform admin only) |
 | `GET /graphql` | protected | `analytics.read` | `user_access_token` |
 | `POST /graphql` | protected | `analytics.read` | `user_access_token` |
 | `api_route /healthz` | public | none | none |
 | `GET /healthz` | public | none | none |
 | `GET /metrics` | public | none | none |
-| `POST /query` | protected | `analytics.read` | `effective_principal_envelope`, `user_access_token` |
+| `POST /query` | protected | `analytics.read` | `user_access_token` |
 | `POST /query` | protected | `analytics.read` | none |
-| `POST /query/proof` | protected | `analytics.read` | `effective_principal_envelope`, `user_access_token` |
-| `POST /query/proof-write` | protected | `analytics.read` | `effective_principal_envelope`, `user_access_token` |
-| `POST /query/run-operation` | protected | `analytics.read` | `effective_principal_envelope`, `user_access_token` |
+| `POST /query/proof` | protected | `analytics.read` | `user_access_token` |
+| `POST /query/proof-write` | protected | `analytics.read` | `user_access_token` |
+| `POST /query/run-operation` | protected | `analytics.read` | `user_access_token` |
 | `api_route /readyz` | public | none | none |
 | `GET /readyz` | public | none | none |
 | `GET /registry` | public | none | none |

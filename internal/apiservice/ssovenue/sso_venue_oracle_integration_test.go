@@ -24,11 +24,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
-// jwtKey is JWT_SECRET_KEY on both planes. It is assembled at run time so
-// the source holds no credential-shaped literal.
-var jwtKey = "sso-venue-" + strings.Repeat("0123456789abcdef", 2)
-
-// ssoStateKey is go-api's own SSO_STATE_SECRET, as prod sets it; run-time assembled, distinct from jwtKey.
+// ssoStateKey is go-api's own SSO_STATE_SECRET, as prod sets it; run-time assembled so the source holds no
+// credential-shaped literal.
 var ssoStateKey = "sso-state-" + strings.Repeat("fedcba9876543210", 2)
 
 // Fixed ids, so rows and answers name the same subjects on both planes.
@@ -124,7 +121,7 @@ func TestSSORoutesVenueOracle(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, venueGolden("s-s-o-routes-venue-oracle", t.Name(), "a66dead8a13b12e7c3f28c6f8ad484f9af72d001989145992f7b7a19961c3f09"))
 	ctx := context.Background()
 	key := authplane.NewKey(t)
-	venue := venueoracle.Start(t, ctx, venueoracle.Options{Golden: golden, Root: venueRoot(), JWTKey: jwtKey, TokenIssuer: key.Tokens,
+	venue := venueoracle.Start(t, ctx, venueoracle.Options{Golden: golden, Root: venueRoot(), TokenIssuer: key.Tokens,
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Seed: seed})
 	tok := venue.Tokens
 	req := func(name, method, path, bearer, body string) venueoracle.Request {
@@ -344,7 +341,7 @@ func startGoAPI(t *testing.T, ctx context.Context, venue *venueoracle.Venue, key
 	// Sessions are auth-service's (AUTH_PROXY_SESSIONS=true), as in production: the sign-in routes run their own
 	// validation and take a completed sign-in's pair from the issue route of an in-process auth plane.
 	venue.ApplyAuthSchema(t, ctx)
-	plane := authplane.Start(t, ctx, venue.AdminURI(t, venue.GoDB), key, jwtKey)
+	plane := authplane.Start(t, ctx, venue.AdminURI(t, venue.GoDB), key)
 	deps := apiservice.Deps{Pool: pool, Auth: auth, Guard: policy.NewGuard(auth, logger), SSOStateSecret: ssoStateKey,
 		SessionIssuer: plane.Issuer,
 		AuthProxy:     apiservice.AuthProxyConfig{Upstream: plane.URL, On: map[apiservice.AuthAggregate]bool{apiservice.AuthSessions: true}}}

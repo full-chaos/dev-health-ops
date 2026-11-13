@@ -402,7 +402,7 @@ func TestVenueOracleCredentialGitHubRepos(t *testing.T) {
 	var ids map[string]string
 	rows := githubRepoSeedRows(pemKey)
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Golden: golden, Root: venueRoot(), JWTKey: venueKey, Logger: quietLogger(),
+		Golden: golden, Root: venueRoot(), Logger: quietLogger(),
 		PythonEnv: []string{
 			"SETTINGS_ENCRYPTION_KEY=" + credentialsVenueKey,
 		},
@@ -415,7 +415,7 @@ func TestVenueOracleCredentialGitHubRepos(t *testing.T) {
 	cfg := config.Config{
 		APIAddress: "127.0.0.1:0", RiverDatabaseSchema: "river", APIDatabaseRole: venue.Roles["api"],
 		APIDatabaseURI: secrets.NewValue(venue.GoAPIDatabaseURI(t)),
-		APIJWTSecret:   secrets.NewValue(venueKey), APIJWTIssuer: "dev-health-ops", APIJWTAudience: "dev-health-api",
+		APIJWTIssuer:   "dev-health-ops", APIJWTAudience: "dev-health-api",
 		CORSAllowedOrigins:    []string{"http://localhost:3000"},
 		SettingsEncryptionKey: secrets.NewValue(credentialsVenueKey),
 	}

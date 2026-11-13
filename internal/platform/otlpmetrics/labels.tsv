@@ -39,8 +39,12 @@ devhealth_acr_workload_refused_total	reason,route	code: internal/apiservice/acr/
 devhealth_api_auth_proxy_impersonation_config_invalid		code: internal/apiservice/authproxy.go
 devhealth_api_auth_proxy_requests_total	aggregate,outcome	code: internal/apiservice/authproxy.go
 devhealth_api_auth_proxy_upstream_duration_seconds	aggregate	code: internal/apiservice/authproxy.go
+devhealth_api_org_acr_revoke_skipped_total	event,reason	code: internal/apiservice/admin/org_acr_revoke.go
+devhealth_api_orgdelete_auth_deprovision_skipped_total	reason	code: internal/apiservice/admin/orgdeletion_auth.go
 devhealth_auth_access_token_accepted_total	class,profile,service	code: internal/auth/accessverify/accessverify.go
 devhealth_auth_access_token_refused_total	profile,reason,service	code: internal/auth/accessverify/accessverify.go
+devhealth_auth_jwks_fetch_total	document,result,service	code: internal/auth/accessverify/jwks_metrics.go
+devhealth_auth_jwks_grace_state		code: internal/auth/accessverify/jwks_metrics.go
 dev_health_api_http_request_duration_seconds	listener,method,route,status_class	code: internal/auth/httpapi/accesslog.go
 dev_health_api_http_requests_total	listener,method,route,status_class	code: internal/auth/httpapi/tracehandler.go
 dev_health_api_ingest_auth_audit_failures_total	reason	code: internal/api/externalingest/refusalaudit.go

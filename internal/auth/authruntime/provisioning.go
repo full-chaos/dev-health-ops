@@ -1,7 +1,11 @@
 package authruntime
 
 import (
+	"crypto/rand"
+	"errors"
+	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -14,9 +18,12 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/membership"
 	"github.com/full-chaos/dev-health-ops/internal/auth/org"
 	"github.com/full-chaos/dev-health-ops/internal/auth/orgdeprovision"
+	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole"
 	"github.com/full-chaos/dev-health-ops/internal/auth/publicread"
 	"github.com/full-chaos/dev-health-ops/internal/auth/serviceaccount"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
+	"github.com/full-chaos/dev-health-ops/internal/auth/ssoprovider"
+	"github.com/full-chaos/dev-health-ops/internal/platform/fernet"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
 
@@ -81,4 +88,89 @@ func provisioningRoutes(cfg authconfig.Config, logger *slog.Logger, pool *pgxpoo
 		return nil, err
 	}
 	return append(routes, reads...), nil
+}
+
+// usersAdminRoutes builds the user-admin routes go-api calls for its admin users writes while auth-service owns users
+// (AUTH_USERS_OWNED), and none otherwise. They are not behind AUTH_MEMBERSHIP_ROUTES: they mount only with their
+// endpoint-profile rows (authapi.UsersAdminRoutes), on the provisioning routes' workload path. A missing row is no
+// start refusal (product rule 3): the one INFO line "users routes" says how many are mounted and, when none is, why.
+func usersAdminRoutes(cfg authconfig.Config, logger *slog.Logger, pool *pgxpool.Pool, schema authschema.ValidatedIdentifier,
+	identities *identity.Store, workload *authapi.SessionIssueWorkload) ([]httpapi.Route, error) {
+	if !cfg.UsersOwned {
+		logUsersAdminMount(logger, 0, "reason", "users_not_owned")
+		return nil, nil
+	}
+	roles, err := platformrole.New(platformrole.Config{Pool: pool, Schema: schema, Logger: logger})
+	if err != nil {
+		return nil, err
+	}
+	routes, err := authapi.UsersAdminRoutes(authapi.ProvisioningDeps{
+		Users: pgUsers(cfg, pool, schema), Reader: pool, Organizations: identities, Workload: workload, Logger: logger,
+		ProfileRows:      provisioningProfileRows,
+		UsersAdminStores: authapi.UsersAdminStores{UsersAdmin: identities, PlatformRoles: authapi.PlatformRoleStore{Store: roles}},
+	})
+	if err != nil {
+		return nil, err
+	}
+	var missing *authapi.ProvisioningRowError
+	if len(routes) == 0 && errors.As(authapi.UsersAdminRowsError(provisioningProfileRows), &missing) {
+		logUsersAdminMount(logger, 0, append([]any{"reason", missing.DependencyReason()}, missing.DependencyAttrs()...)...)
+		return routes, nil
+	}
+	logUsersAdminMount(logger, len(routes))
+	return routes, nil
+}
+
+// logUsersAdminMount writes the user-admin routes' start line: mounted=<n>/<all> and attrs.
+func logUsersAdminMount(logger *slog.Logger, mounted int, attrs ...any) {
+	logger.Info("users routes", append([]any{"mounted", fmt.Sprintf("%d/%d", mounted, authapi.UsersAdminRouteCount())}, attrs...)...)
+}
+
+// goAPIInternalRoutes are the internal routes go-api calls: the provisioning routes (AUTH_MEMBERSHIP_ROUTES) and, apart
+// from them, the user-admin routes (AUTH_USERS_OWNED).
+func goAPIInternalRoutes(cfg authconfig.Config, logger *slog.Logger, pool *pgxpool.Pool, schema authschema.ValidatedIdentifier,
+	identities *identity.Store, workload *authapi.SessionIssueWorkload, sessions *session.Store) ([]httpapi.Route, error) {
+	provisioning, err := provisioningRoutes(cfg, logger, pool, schema, identities, workload, sessions)
+	if err != nil {
+		return nil, err
+	}
+	users, err := usersAdminRoutes(cfg, logger, pool, schema, identities, workload)
+	if err != nil {
+		return nil, err
+	}
+	sso, err := ssoProviderRoutes(cfg, logger, pool, schema, identities, workload)
+	if err != nil {
+		return nil, err
+	}
+	return append(append(provisioning, users...), sso...), nil
+}
+
+// cipherSealer seals a provider secret with the SSO cipher, the one the sign-in routes open it with.
+type cipherSealer struct{ cipher fernet.Cipher }
+
+func (s cipherSealer) Seal(plain string) (string, error) {
+	return s.cipher.Seal([]byte(plain), time.Now(), rand.Reader)
+}
+
+// ssoProviderRoutes builds the SSO provider management routes behind AUTH_MEMBERSHIP_ROUTES. They mount only with their
+// endpoint-profile rows (authapi.SSOProviderRoutes) and an SSO cipher that opens; an unusable key leaves them off.
+func ssoProviderRoutes(cfg authconfig.Config, logger *slog.Logger, pool *pgxpool.Pool, schema authschema.ValidatedIdentifier,
+	identities *identity.Store, workload *authapi.SessionIssueWorkload) ([]httpapi.Route, error) {
+	if !cfg.Provisioning.Routes {
+		return nil, nil
+	}
+	if !cfg.SSOProvidersOwned {
+		logger.Info("sso provider routes: not mounted, AUTH_SSO_PROVIDERS_OWNED is off")
+		return nil, nil
+	}
+	cipher, err := fernet.New(cfg.SSO.EncryptionKey.Reveal(), cfg.SSO.EncryptionSalt)
+	if err != nil {
+		logger.Warn("sso provider routes: not mounted, the provider secret key is unusable")
+		return nil, nil
+	}
+	return authapi.SSOProviderRoutes(authapi.ProvisioningDeps{
+		Users: pgUsers(cfg, pool, schema), Reader: pool, Organizations: identities, Workload: workload, Logger: logger,
+		ProfileRows:       provisioningProfileRows,
+		SSOProviderStores: authapi.SSOProviderStores{SSOProviders: ssoprovider.Store{Pool: pool, Schema: schema}, SSOSealer: cipherSealer{cipher}},
+	})
 }

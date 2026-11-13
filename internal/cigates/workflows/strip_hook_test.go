@@ -50,6 +50,7 @@ func runStripHook(t *testing.T, arg string) (int, string) {
 }
 
 func TestStripHookPreservesTheToolsExitStatuses(t *testing.T) {
+	t.Parallel()
 	if code, out := runStripHook(t, ""); code != 2 || !strings.Contains(out, "usage:") {
 		t.Fatalf("hook with no file: exit %d, want 2 and a usage line; output %q", code, out)
 	}
@@ -59,6 +60,7 @@ func TestStripHookPreservesTheToolsExitStatuses(t *testing.T) {
 }
 
 func TestStripHookStripsAnAgentTrailerThroughTheConfiguredCommand(t *testing.T) {
+	t.Parallel()
 	msg := filepath.Join(t.TempDir(), "COMMIT_EDITMSG")
 	body := "fix: a thing\n\nCo-authored-by: Sisyphus <clio-agent@sisyphuslabs.ai>\nCo-authored-by: Real Person <real@example.com>\n"
 	if err := os.WriteFile(msg, []byte(body), 0o644); err != nil {

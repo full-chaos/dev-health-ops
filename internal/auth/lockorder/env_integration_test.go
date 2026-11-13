@@ -32,7 +32,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/auth/invite"
@@ -81,7 +80,6 @@ type env struct {
 	// issuePlane is go-api's workload principal and its token key: the session
 	// issue route takes only the go-api workload token.
 	issuePlane *issuePlane
-	signer     *edgetoken.Signer
 	// tokens mints the routed EdDSA user access tokens go-api's routes verify.
 	tokens     *edtokens.Issuer
 	linkSecret string
@@ -211,14 +209,6 @@ func newEnv(t *testing.T) (*env, error) {
 		return nil, fmt.Errorf("clickhouse table: %w", err)
 	}
 
-	const jwtKey = "lockorder-test-signing-key-32-bytes-long!!"
-	verifier, err := edgetoken.New(jwtKey, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		return nil, err
-	}
-	if e.signer, err = edgetoken.NewSigner(jwtKey, "dev-health-ops", "dev-health-api"); err != nil {
-		return nil, err
-	}
 	logger := slog.New(slog.NewTextHandler(e.goLog, nil))
 	e.tokens = edtokens.New(t)
 	auth := e.tokens.Authenticator(t, policy.PGStore{Pool: admin0}, logger)
@@ -234,14 +224,14 @@ func newEnv(t *testing.T) (*env, error) {
 	}
 	// go-api mints no pair of its own: both servers' accept and onboard take theirs from auth-service's issue route
 	// (the auth plane starts first).
-	if err := e.startAuthPlane(ctx, schema, logger, jwtKey); err != nil {
+	if err := e.startAuthPlane(ctx, schema, logger); err != nil {
 		return nil, err
 	}
 	issuer, err := e.seedIssueClient(ctx)
 	if err != nil {
 		return nil, err
 	}
-	for _, route := range session.Routes(session.Deps{Pool: goPool, Guard: guard, Auth: auth, Verifier: verifier,
+	for _, route := range session.Routes(session.Deps{Pool: goPool, Guard: guard, Auth: auth,
 		Mail: authmail.Config{LinkSecret: e.linkSecret}, Limits: httpapi.NewMemoryCounters(nil), Logger: logger, Issuer: issuer}) {
 		switch route.Pattern {
 		case "/api/v1/auth/accept-invite", "/api/v1/auth/onboard":
@@ -264,7 +254,7 @@ func newEnv(t *testing.T) (*env, error) {
 	e.server = httptest.NewServer(profiled)
 	closers = append(closers, e.server.Close)
 	issuerMux := http.NewServeMux()
-	for _, route := range session.Routes(session.Deps{Pool: goPool, Guard: guard, Auth: auth, Verifier: verifier,
+	for _, route := range session.Routes(session.Deps{Pool: goPool, Guard: guard, Auth: auth,
 		Mail: authmail.Config{LinkSecret: e.linkSecret}, Limits: httpapi.NewMemoryCounters(nil), Logger: logger, Issuer: issuer}) {
 		switch route.Pattern {
 		case "/api/v1/auth/accept-invite", "/api/v1/auth/onboard":

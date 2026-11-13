@@ -22,7 +22,7 @@ An authorization decision answers one question: may this principal perform this 
 {: .fc-page-lede }
 
 !!! warning "No consumer enforces an obligation yet"
-    `POST /v1/authorize` and `POST /v1/authorize:batch` are served by the auth-service (`contracts/auth/v1/openapi/auth-v1.openapi.json`). Every allow of an organization or repository action carries `tenant_scope` and, for an action that reads repository-bound data, `repository_scope` or `repository_allowlist`. A delegated (impersonation) allow also carries `minimum_assurance`. The redaction rules are empty, so no allow carries `redaction` yet. No service enforces an obligation yet. See [Status](#status).
+    `POST /v1/authorize`, `POST /v1/authorize:batch` and `POST /v1/authorize:repositories` are served by the auth-service (`contracts/auth/v1/openapi/auth-v1.openapi.json`). Every allow of an organization or repository action carries `tenant_scope` and, for an action that reads repository-bound data, `repository_scope` or `repository_allowlist`. A delegated (impersonation) allow also carries `minimum_assurance`. The redaction rules are empty, so no allow carries `redaction` yet. No service enforces an obligation yet. See [Status](#status).
 
 ## Request
 
@@ -75,6 +75,7 @@ The decision point (`internal/auth/authorization/scope.go`) sets the obligations
 | Organization action whose catalog `repository_scope` is `filtered`, principal with no grant row of any state (membership default) or with a live `*` grant | `tenant_scope` and `repository_scope: organization`. |
 | Organization action whose catalog `repository_scope` is `filtered`, other principals | `tenant_scope` and `repository_allowlist`: the keys of the live grants (not revoked, not expired) whose role holds the action, sorted. `[]` when none is live. One grant row of any state ends the membership default, for an owner too. |
 | Repository-kind action (`acr.context.read`, `acr.evidence.read`) | `tenant_scope` and `repository_allowlist` with the one requested key. A request for `*` is refused with `invalid_request`. |
+| Repository listing (`POST /v1/authorize:repositories`, `acr.context.read` or `acr.evidence.read`, resource `*`) | The same standing as a repository decision for that action, then the set: `tenant_scope` and `repository_scope: organization` for the membership default or a live `*` grant, else `tenant_scope` and `repository_allowlist` (the canonical keys of the live grants; an id-bearing grant lists the live path of its id). More than 256 keys is the deny `repository_allowlist_too_large`. A platform role gives no listing without a membership (`no_membership`, as the per-key decision). A delegated session gets the same set with `minimum_assurance`, as its per-key reads. No catalog is read. |
 | Delegated session | The obligations above, plus `minimum_assurance`. |
 
 The allowlist is the same rule as a repository decision: a key is in it exactly when a repository question for that key would allow. More than 256 keys is the deny `repository_allowlist_too_large`. The list is never truncated. The catalog actions marked `filtered` are listed in the [policy catalog](policy-catalog.md).

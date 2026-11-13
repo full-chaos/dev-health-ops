@@ -197,6 +197,26 @@ func TestQueryUserTokenDenyAndNoVerdict(t *testing.T) {
 	}
 }
 
+// E9: an allow whose tenant_scope is dropped, or names another organization, is not carried out on /query: 503, no
+// root field runs and nothing is read. (The MCP listener has no principal the PDP can judge before F13, so no decision,
+// and no obligation, reaches it; E5 pins its refusal.)
+func TestQueryAllowWithoutItsTenantScopeIsRefused(t *testing.T) {
+	for name, obligations := range map[string]map[string]any{
+		"tenant_scope dropped":        {"repository_scope": "organization"},
+		"tenant_scope of another org": {"tenant_scope": servedOrgB.String(), "repository_scope": "organization"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv := pdptest.New(t)
+			srv.Obligations(obligations)
+			p := newQMPlane(t, qmEnv(t, srv, pdp.ModeEnforce, "analytics", ""), enforceDocAnalytics)
+			p.queryRun(t, "/query", enforceDocAnalytics, qmUser).code503(t, string(pdp.ReasonTenantMismatch))
+			if n := len(asks(srv)); n != 1 {
+				t.Fatalf("the PDP was asked %d times, want once", n)
+			}
+		})
+	}
+}
+
 // E4 (Q10a, D6721 F9b off): the user cells on and the header cells off: the header carrier on /query, run-operation
 // and MCP stays on today's path, with no ask.
 func TestHeaderCarrierFollowsItsOwnCellsOff(t *testing.T) {
@@ -232,15 +252,18 @@ func TestHeaderCarrierWithItsCellOnIsRefused(t *testing.T) {
 	}
 }
 
-// E6 (Q11): the exempt class on /query (the envelope) is served on today's path with the cell on, and never asks.
-func TestQueryExemptClassesAreNotAsked(t *testing.T) {
+// E6 (Q11): /query has no exempt class: the HS256 edge token and the envelope, the classes the exempt list held, are
+// retired. With the cell on, the envelope is refused (401) before any read, and it asks nothing.
+func TestQueryRetiredClassesAreNotAsked(t *testing.T) {
 	srv := pdptest.New(t)
 	env := qmEnv(t, srv, pdp.ModeEnforce, "analytics", "")
 	p := newQMPlane(t, env, enforceDocAnalytics)
 	envelope := iaEnvelope(t, p.envelopeKey, principal.Claims{OrgID: ecOrg.String(), Role: "member"})
-	p.queryRun(t, "/query", enforceDocAnalytics, qmBearer(envelope)).served(t)
+	if got := p.queryRun(t, "/query", enforceDocAnalytics, qmBearer(envelope)); got.code != http.StatusUnauthorized || got.statements != 0 || got.roots != 0 {
+		t.Fatalf("envelope (a retired class): %d %q with %d statements, want 401 and nothing read", got.code, got.body, got.statements)
+	}
 	if n := len(asks(srv)); n != 0 {
-		t.Fatalf("the PDP was asked %d times for an exempt credential", n)
+		t.Fatalf("the PDP was asked %d times for a retired class", n)
 	}
 }
 

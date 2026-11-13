@@ -14,6 +14,9 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"sort"
+	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -107,6 +110,10 @@ func (h *handlers) deleteOrganization(w http.ResponseWriter, r *http.Request) {
 			policy.WriteDetail(w, http.StatusServiceUnavailable, orgDeletionRevocationInFlightDetail, nil)
 			return
 		}
+		if errors.Is(err, errOrgDeletionACRRevoke) {
+			policy.WriteDetail(w, http.StatusServiceUnavailable, orgDeletionACRRevokeAnswer(err), nil)
+			return
+		}
 		var step *orgDeletionStepError
 		if errors.As(err, &step) {
 			h.logger.ErrorContext(ctx, "admin: org deletion "+step.step+" failed", "error", step.err)
@@ -141,7 +148,11 @@ func (e *orgDeletionStepError) Unwrap() error { return e.err }
 // *orgDeletionIncompleteError.
 func (h *handlers) deleteOrganizationData(ctx context.Context, orgUUID uuid.UUID, dryRun bool) (*orgDeletionResult, error) {
 	orgIDStr := orgUUID.String()
-	ch, err := h.orgDeletionClickHousePreflight(ctx)
+	preflight := h.openOrgDeletionClickHouse
+	if preflight == nil {
+		preflight = h.orgDeletionClickHousePreflight
+	}
+	ch, err := preflight(ctx)
 	if err != nil {
 		var refused *orgDeletionRefusedError
 		if errors.As(err, &refused) {
@@ -150,8 +161,11 @@ func (h *handlers) deleteOrganizationData(ctx context.Context, orgUUID uuid.UUID
 		return nil, err
 	}
 	defer func() { _ = ch.conn.Close() }()
-	if !dryRun && h.orgProvision != nil {
-		if err := h.deprovisionInAuth(ctx, orgUUID); err != nil {
+	if !dryRun {
+		if err := h.deprovisionBeforeDelete(ctx, orgUUID); err != nil {
+			return nil, err
+		}
+		if err := h.revokeACRBeforeDelete(ctx, orgUUID); err != nil {
 			return nil, err
 		}
 	}
@@ -515,12 +529,9 @@ func (h *handlers) orgDeletionPurgeClickHouse(ctx context.Context, ch *orgDeleti
 			first = fmt.Errorf("%s: %w", table, err)
 		}
 	}
+	var fed []ChTable
 	for _, t := range ch.tables {
-		condition := "org_id = ?"
-		var bind any = orgIDStr
-		if IsUUIDColumnType(t.OrgIDType) {
-			condition = "org_id = toUUID(?)"
-		}
+		condition, bind := orgDeletionCondition(t, orgIDStr)
 		var count uint64
 		countRow := ch.conn.QueryRow(ctx, fmt.Sprintf("SELECT count() FROM `%s` WHERE %s", t.Name, condition), bind)
 		if err := countRow.Scan(&count); err != nil {
@@ -533,14 +544,186 @@ func (h *handlers) orgDeletionPurgeClickHouse(ctx context.Context, ch *orgDeleti
 		if dryRun {
 			continue
 		}
+		if _, ok := orgDeletionRefreshFedTables[t.Name]; ok {
+			fed = append(fed, t)
+			continue
+		}
 		if err := ch.conn.Exec(syncCtx, fmt.Sprintf("ALTER TABLE `%s` DELETE WHERE %s", t.Name, condition), bind); err != nil {
 			fail(t.Name, err)
+		}
+		if orgDeletionDeleteHook != nil {
+			orgDeletionDeleteHook(ctx, t.Name, 0)
+		}
+	}
+	if incomplete := orgDeletionPurgeRefreshFed(ctx, syncCtx, ch, fed, orgIDStr); incomplete != nil {
+		for _, table := range incomplete.tables {
+			fail(table, incomplete.err)
 		}
 	}
 	if len(failed) > 0 {
 		return &orgDeletionIncompleteError{tables: failed, err: first}
 	}
 	return nil
+}
+
+// orgDeletionDeleteHook, when a test sets it, runs after each ALTER DELETE of
+// the ClickHouse purge with the table and the pass: 0 in the table loop, n for
+// the n-th delete of a refresh-fed table.
+var orgDeletionDeleteHook func(ctx context.Context, table string, pass int)
+
+// orgDeletionCondition is a table's org_id predicate and its bind value.
+func orgDeletionCondition(t ChTable, orgIDStr string) (string, any) {
+	if IsUUIDColumnType(t.OrgIDType) {
+		return "org_id = toUUID(?)", orgIDStr
+	}
+	return "org_id = ?", orgIDStr
+}
+
+// orgDeletionRefreshFedTables names each org table that a refreshable view
+// fills from other org tables, directly or through a view that copies the
+// refreshable view's target: table -> the refreshable view. A refresh that runs
+// while the organization's source rows are being deleted writes the
+// organization's rows again (built again while a source row is left, marked
+// gone after the last one goes), so these tables are deleted after every other
+// table, and again after any refresh that may have read them, until a
+// read-back finds no row of the organization.
+var orgDeletionRefreshFedTables = map[string]string{
+	"project_team_ownership_groups_current": "project_team_ownership_groups_refresh",
+	"project_team_ownership_groups_log":     "project_team_ownership_groups_refresh",
+}
+
+// orgDeletionRefreshFedPasses is how many wait, delete, wait and read-back
+// passes follow the first delete of the refresh-fed tables before rows still
+// there make the purge incomplete.
+const orgDeletionRefreshFedPasses = 3
+
+var (
+	orgDeletionRefreshPollStep  = time.Second
+	orgDeletionRefreshPollBound = 5 * time.Minute
+)
+
+// orgDeletionRefreshViews is the sorted set of refreshable views that fill the
+// discovered tables.
+func orgDeletionRefreshViews(tables []ChTable) []string {
+	set := map[string]bool{}
+	for _, t := range tables {
+		if view, ok := orgDeletionRefreshFedTables[t.Name]; ok {
+			set[view] = true
+		}
+	}
+	views := make([]string, 0, len(set))
+	for view := range set {
+		views = append(views, view)
+	}
+	sort.Strings(views)
+	return views
+}
+
+// orgDeletionRefreshRunning counts the views whose refresh runs now on any
+// replica. RefreshState (ClickHouse src/Storages/MaterializedView/RefreshTask.h)
+// is Disabled, Scheduling, Scheduled, WaitingForDependencies,
+// MissingDependencies, Running or RunningOnAnotherReplica; only the last two
+// execute the view's query. A view with no row (a database below its
+// migration) runs no refresh.
+func orgDeletionRefreshRunning(ctx context.Context, conn driver.Conn, views []string) (uint64, error) {
+	var running uint64
+	err := conn.QueryRow(ctx,
+		"SELECT count() FROM system.view_refreshes WHERE database = currentDatabase() AND view IN ? AND status IN ('Running', 'RunningOnAnotherReplica')",
+		views).Scan(&running)
+	return running, err
+}
+
+// orgDeletionWaitRefreshes returns when no refresh of the views runs. SYSTEM
+// WAIT VIEW is not used: it fails when the view's previous refresh failed,
+// which says nothing about this organization.
+func orgDeletionWaitRefreshes(ctx context.Context, ch *orgDeletionClickHouse, views []string) error {
+	read := ch.refreshRunning
+	if read == nil {
+		read = orgDeletionRefreshRunning
+	}
+	deadline := time.Now().Add(orgDeletionRefreshPollBound)
+	for {
+		running, err := read(ctx, ch.conn, views)
+		if err != nil {
+			return fmt.Errorf("read the refresh state of %s: %w", strings.Join(views, ", "), err)
+		}
+		if running == 0 {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("a refresh of %s still runs after %s", strings.Join(views, ", "), orgDeletionRefreshPollBound)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(orgDeletionRefreshPollStep):
+		}
+	}
+}
+
+// orgDeletionPurgeRefreshFed deletes the organization's rows of the
+// refresh-fed tables after every other table is purged. Every ALTER DELETE has
+// applied when it returns (mutations_sync), so after the first delete only a
+// refresh that read the tables before it can write the organization's rows
+// again. Each pass waits until no refresh of the views runs, deletes, waits
+// again and counts the organization's rows: 0 is final, as no source row and
+// no live group row of the organization is left for a later refresh to build
+// or mark gone. Rows still there after the last pass make the purge
+// incomplete, by table: never a silent leftover.
+func orgDeletionPurgeRefreshFed(ctx, syncCtx context.Context, ch *orgDeletionClickHouse, tables []ChTable, orgIDStr string) *orgDeletionIncompleteError {
+	if len(tables) == 0 {
+		return nil
+	}
+	views := orgDeletionRefreshViews(tables)
+	names := make([]string, 0, len(tables))
+	for _, t := range tables {
+		names = append(names, t.Name)
+	}
+	deleteAll := func(pass int) *orgDeletionIncompleteError {
+		for _, t := range tables {
+			condition, bind := orgDeletionCondition(t, orgIDStr)
+			if err := ch.conn.Exec(syncCtx, fmt.Sprintf("ALTER TABLE `%s` DELETE WHERE %s", t.Name, condition), bind); err != nil {
+				return &orgDeletionIncompleteError{tables: []string{t.Name}, err: err}
+			}
+			if orgDeletionDeleteHook != nil {
+				orgDeletionDeleteHook(ctx, t.Name, pass)
+			}
+		}
+		return nil
+	}
+	if incomplete := deleteAll(1); incomplete != nil {
+		return incomplete
+	}
+	var left, counts []string
+	for pass := 2; pass <= 1+orgDeletionRefreshFedPasses; pass++ {
+		if err := orgDeletionWaitRefreshes(ctx, ch, views); err != nil {
+			return &orgDeletionIncompleteError{tables: names, err: err}
+		}
+		if incomplete := deleteAll(pass); incomplete != nil {
+			return incomplete
+		}
+		if err := orgDeletionWaitRefreshes(ctx, ch, views); err != nil {
+			return &orgDeletionIncompleteError{tables: names, err: err}
+		}
+		left, counts = nil, nil
+		for _, t := range tables {
+			condition, bind := orgDeletionCondition(t, orgIDStr)
+			var count uint64
+			if err := ch.conn.QueryRow(ctx, fmt.Sprintf("SELECT count() FROM `%s` WHERE %s", t.Name, condition), bind).Scan(&count); err != nil {
+				return &orgDeletionIncompleteError{tables: []string{t.Name}, err: err}
+			}
+			if count > 0 {
+				left = append(left, t.Name)
+				counts = append(counts, fmt.Sprintf("%s=%d", t.Name, count))
+			}
+		}
+		if len(left) == 0 {
+			return nil
+		}
+	}
+	return &orgDeletionIncompleteError{tables: left, err: fmt.Errorf(
+		"rows of the organization are still there after %d deletes (%s): a refresh of %s kept writing them",
+		1+orgDeletionRefreshFedPasses, strings.Join(counts, ", "), strings.Join(views, ", "))}
 }
 
 // orgDeletionMutationSettings: 2 waits for every replica, so a 200 means the

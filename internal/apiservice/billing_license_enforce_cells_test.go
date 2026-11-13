@@ -452,9 +452,9 @@ func cellNamingOrg(key string, org uuid.UUID, headers map[string]string) *http.R
 }
 
 // Class A organization rows with their namespace on: a request that names another organization than the token's
-// (probeUser is a member of probeOtherOrg) keeps the answer of the same rig with every namespace off, with no PDP call
-// (product rule 1, D6773: the legacy guard and the handler decide it); naming the token's own organization is decided
-// by the PDP once, on that organization.
+// (probeUser is a member of probeOtherOrg) keeps the answer of the same rig with every namespace off (product rule 1,
+// D6773: the legacy guard and the handler decide it), and the PDP is asked once, on the token organization; naming the
+// token's own organization is decided by the PDP once more, on that organization.
 func TestBillingClassAOrgRowsServeOnlyTheTokenOrganization(t *testing.T) {
 	var orgRows []string
 	for _, key := range classAKeys() {
@@ -480,16 +480,16 @@ func TestBillingClassAOrgRowsServeOnlyTheTokenOrganization(t *testing.T) {
 		if status, body := recorder.Code, strings.TrimSpace(recorder.Body.String()); status != wantStatus || body != wantBody {
 			t.Errorf("%s naming another org: %d %s, want the legacy %d %s", key, status, body, wantStatus, wantBody)
 		}
-		if n := len(pdp.calls()); n != 0 {
-			t.Errorf("%s naming another org: %d PDP calls, want 0", key, n)
+		if calls := pdp.calls(); len(calls) != 1 || calls[0].org != probeOrg.String() {
+			t.Errorf("%s naming another org: PDP saw %+v, want one call on the token org", key, calls)
 		}
 		recorder = httptest.NewRecorder()
 		rig.handler.ServeHTTP(recorder, cellNamingOrg(key, probeOrg, rig.userBearer()))
 		if status, body := recorder.Code, strings.TrimSpace(recorder.Body.String()); !handlerReached(status, body) {
 			t.Errorf("%s naming the token org: %d %s, want the handler reached", key, status, body)
 		}
-		if calls := pdp.calls(); len(calls) != 1 || calls[0].org != probeOrg.String() {
-			t.Errorf("%s naming the token org: PDP saw %+v, want one call on the token org", key, calls)
+		if calls := pdp.calls(); len(calls) != 2 || calls[1].org != probeOrg.String() {
+			t.Errorf("%s naming the token org: PDP saw %+v, want a second call on the token org", key, calls)
 		}
 	}
 }

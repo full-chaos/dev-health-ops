@@ -1,6 +1,7 @@
 package affected_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -9,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/cigates/affected"
 )
 
 // One plan verdict for the integration plan job and the go-quality legs: a change set of .go files only plans AFFECTED
@@ -357,7 +360,7 @@ func TestPlanVerdictReviewedWrongWayCasesPlanTheReader(t *testing.T) {
 	runRows(t, []verdictRow{
 		// 0b4d992e9b: AFFECTED 1 [b]; c, whose test calls b.Load, was skipped.
 		{name: "importer_of_an_env_reader", head: map[string]string{"b/b_dyn.go": fmt.Sprintf(plantedEnvReader, "b"),
-			"internal/cigates/affected/dynreads.tsv": "b\tb_dyn.go\n", "internal/cigates/affected/reach.tsv": "b\tb_dyn.go\t*\n"},
+			"internal/cigates/affected/dynreads.tsv": "b\tb_dyn.go\n", "internal/cigates/affected/reach.d/b.tsv": "b\tb_dyn.go\t*\n"},
 			changed: []string{"AGENTS.md"}, want: "AFFECTED 2", keys: []string{"b", "c"}},
 		// 0b4d992e9b: AFFECTED 1 [a]; x, reading ../docs through READ_PATH, was skipped.
 		{name: "own_join_escape", head: map[string]string{"x/x_own_test.go": plantedOwnJoin},
@@ -573,5 +576,60 @@ func TestPlanReadsPrintsTheRowsToPaste(t *testing.T) {
 		if !lines[want] {
 			t.Errorf("plan-reads output has no line %q:\n%s", want, res.stdout)
 		}
+	}
+}
+
+// Binary CLI contracts retained: TestPlanVerdict (events, --go-files-full,
+// NONE/AFFECTED/FULL stdout and exit 1), TestPlanVerdictChangedListFormats
+// (NUL/newline flags and stdout), and the Markdown fixture tests (--md-bounded).
+// TestPlanVerdictScanSeamCanary additionally pins usage exit 2 and byte equality
+// across the real built CLI and the private parameter seam. All these use fixture
+// roots. No real-tree table case execs the binary; runRealPlanVerdict still
+// enforces realPlanSlots for binary callers, including this canary.
+func TestPlanVerdictScanSeamCanary(t *testing.T) {
+	for _, c := range []struct {
+		name, event, changed, want string
+		head                       map[string]string
+		extra                      []string
+		code                       int
+	}{
+		{name: "go_only", event: "pull_request", changed: "b/b.go", want: "AFFECTED 2\nb\nc\n"},
+		{name: "query_text", event: "merge_group", changed: "b/b.go", head: map[string]string{"b/b.go": "package b\nconst query = `SELECT 1`\n"}, want: "FULL event merge_group: main, merge groups, schedules and manual runs run everything\n"},
+		{name: "docs_only", event: "pull_request", changed: "docs/a.md", head: map[string]string{"a/a_test.go": "package a\nvar doc = \"../docs/other.md\"\n"}, extra: []string{"--md-bounded"}, want: "NONE\n"},
+		{name: "planted_guard_defect", event: "pull_request", changed: "docs/a.md", head: map[string]string{"x/x_cat_test.go": plantedConcat}, want: "FULL the read tables differ"},
+		{name: "usage_missing_flags", extra: []string{"--event", ""}, code: 2},
+		{name: "usage_unknown_flag", extra: []string{"--unknown-flag"}, code: 2},
+		{name: "unknown_event", event: "not_an_event", code: 1},
+		{name: "read_error", event: "pull_request", extra: []string{"--changed", "missing-input"}, code: 1},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			work := t.TempDir()
+			f, err := newVerdictFixture(work, c.head)
+			if err != nil {
+				t.Fatal(err)
+			}
+			list := filepath.Join(work, "changed.txt")
+			if err := os.WriteFile(list, []byte(c.changed+"\x00"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			args := []string{"--event", c.event, "--changed", list, "--golist", f.golist, "--keys", f.keys, "--root", f.root, "--base", f.base}
+			args = append(args, c.extra...)
+			// An absolute missing path makes read errors independent of the process cwd.
+			if c.name == "read_error" {
+				args[len(args)-1] = filepath.Join(work, "missing-input")
+			}
+			cli := runRealPlanVerdict(f.root, gitEnv, cigate(t), append([]string{"plan-verdict"}, args...)...)
+			var out, errb bytes.Buffer
+			code := affected.PlanVerdictFrom(affected.ScanReads, args, &out, &errb)
+			if code != cli.code || out.String() != cli.stdout || errb.String() != cli.stderr {
+				t.Fatalf("in-process = (%d, %q, %q), binary = (%d, %q, %q)", code, out.String(), errb.String(), cli.code, cli.stdout, cli.stderr)
+			}
+			if cli.code != c.code {
+				t.Fatalf("exit %d, want %d: %s", cli.code, c.code, cli.stderr)
+			}
+			if c.want != "" && !strings.HasPrefix(cli.stdout, c.want) {
+				t.Fatalf("stdout %q, want %q", cli.stdout, c.want)
+			}
+		})
 	}
 }

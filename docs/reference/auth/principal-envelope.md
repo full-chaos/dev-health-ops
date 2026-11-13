@@ -13,6 +13,8 @@ lifecycle: active
 
 # Effective-principal envelope reference
 
+The envelope class is retired: no `query-api` route accepts it, and a validly signed envelope gets the answer of an unaccepted bearer. This page describes the claim schema, the verifier and the signing keys that remain until their removal.
+
 `query-api` does not re-derive auth state from Postgres or Valkey. The edge issues a short-lived, audience-bound, signed envelope that carries the effective principal for one request. Disabled-user and token-version revocation, org-switch membership, active impersonation and tier fallback are all part of it. It is not a bare JWT signature check.
 {: .fc-page-lede }
 

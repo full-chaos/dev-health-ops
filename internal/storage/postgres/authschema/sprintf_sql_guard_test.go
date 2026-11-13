@@ -69,10 +69,6 @@ var sqlOperandExemptions = []sqlOperandExemption{
 		reason: "columns holds only quoteIdentifier results of the validated RegisterOrganizationGrants names",
 	},
 	{
-		file: "publicreads.go", fn: "legacyLinkPurgeStatements", operand: `strings.Join(columns, ", ")`,
-		reason: "columns holds only quoteIdentifier results of the validated LegacyLinkPurgeGrants names",
-	},
-	{
 		file: "memberwrite_grants.go", fn: "membershipWriteStatements", operand: `strings.Join(selectColumns, ", ")`,
 		reason: "selectColumns holds only quoteIdentifier results of the validated MembershipWriteGrants names",
 	},
@@ -103,6 +99,18 @@ var sqlOperandExemptions = []sqlOperandExemption{
 	{
 		file: "ssoproviderwrite_grant.go", fn: "ssoProviderWriteStatements", operand: `strings.Join(columns, ", ")`,
 		reason: "columns holds only quoteIdentifier results of the validated SSOProviderWriteColumns names",
+	},
+	{
+		file: "ssoproviderown_grants.go", fn: "ssoProviderOwnStatements", operand: `strings.Join(insert, ", ")`,
+		reason: "insert holds only quoteIdentifier results of the validated SSOProviderOwn names",
+	},
+	{
+		file: "ssoproviderown_grants.go", fn: "ssoProviderOwnStatements", operand: `strings.Join(update, ", ")`,
+		reason: "update holds only quoteIdentifier results of the validated SSOProviderOwn names",
+	},
+	{
+		file: "ssoproviderown_grants.go", fn: "ssoProviderOwnStatements", operand: `strings.Join(read, ", ")`,
+		reason: "read holds only quoteIdentifier results of the validated SSOProviderOwn names",
 	},
 	{
 		file: "impersonationwrite_grant.go", fn: "impersonationWriteStatements", operand: `strings.Join(end, ", ")`,

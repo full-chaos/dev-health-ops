@@ -51,14 +51,14 @@ var (
 // NewJSON returns a logger whose handler passes every attribute through one
 // redactor: the message, every string, every error, every structured value
 // (maps, structs, slices, types with their own JSON form) at any depth, and
-// attributes inside groups. A protected key or group name hides its whole
+// attributes inside groups. A record whose ctx holds a valid span also gets trace_id and span_id. A protected key or group name hides its whole
 // value; protected key/value pairs inside text are replaced in place.
 func NewJSON(output io.Writer, level slog.Level) *slog.Logger {
 	handler := slog.NewJSONHandler(output, &slog.HandlerOptions{
 		Level:       level,
 		ReplaceAttr: attrRedactor{}.replace,
 	})
-	return slog.New(keyScrubber{inner: handler})
+	return slog.New(traceContext{inner: keyScrubber{inner: handler}})
 }
 
 // InstallDefault makes logger the process default, so slog.Default(), the

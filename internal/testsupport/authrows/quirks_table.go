@@ -5,8 +5,6 @@ import "regexp"
 var (
 	// Alice's two successful sign-in audit rows: go-api signed her in to organization B, auth-service to A.
 	aliceLoginOrgB = regexp.MustCompile(`^Org B(alice@example\.comloginsessionuser:alice@example\.comUser logged in\{\}.*success<null>)$`)
-	// Judy's seeded expired reset token as the public table holds it: expired, a 64-digit hash, a 60-minute lifetime.
-	legacyJudyResetRow = regexp.MustCompile(`^judy@example\.comtrue false 64 60$`)
 	// A link mail whose token is go-api's format.
 	linkTokenGoAPIRow = regexp.MustCompile(`^(.* link token )` + LinkTokenGoAPI + `$`)
 )
@@ -35,12 +33,6 @@ var Quirks = []Quirk{
 		Rewrite: func(line string) (string, bool) {
 			return replaceOnce(aliceLoginOrgB, line, "Org A${1}")
 		},
-	},
-	{
-		ID: "legacy-reset-row-purged-at-switch", Kind: Deliberate, Table: TablePasswordResetTokens, Needs: []Aggregate{Credentials}, Owned: OwnedOnly,
-		Max: 1, Exact: true,
-		Reason:  "the users-owned switch purges go-api's legacy link-token rows (dho auth legacy-link-purge, run by the corpus's owned hand-off as by a deployment's flip): judy's seeded expired reset row, which the golden keeps because nothing touched it, is gone. It could not be redeemed (expired, and go-api's reset refuses while users are owned). Max is that one row",
-		Missing: func(line string) bool { return legacyJudyResetRow.MatchString(line) },
 	},
 	{
 		ID: "link-token-format-auth-service", Kind: Deliberate, Table: TableLinkMails, Needs: []Aggregate{Credentials}, Owned: OwnedOnly,

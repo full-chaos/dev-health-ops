@@ -93,8 +93,10 @@ concurrency:
   # The CHAOS-4921 protection itself is unchanged: two different commits'
   # pushes to main, or two merge_group entries, still never share a group
   # and so can never cancel or displace each other's image build.
-  group: ${{ github.workflow }}${{ github.event.action == 'labeled' && github.event.label.name != 'hotfix-image' && '-other-label' || '' }}-${{ github.event.pull_request.number || github.event.inputs.ref || ((github.ref == 'refs/heads/main' || github.event_name == 'merge_group') && github.sha) || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref != 'refs/heads/main') }}
+  # A ready_for_review run gets its own group keyed by the head sha and is never cancelled: a synchronize run of the
+  # same sha (a push right before the flip) cannot cancel it.
+  group: ${{ github.workflow }}${{ github.event.action == 'labeled' && github.event.label.name != 'hotfix-image' && '-other-label' || '' }}-${{ github.event.pull_request.number || github.event.inputs.ref || ((github.ref == 'refs/heads/main' || github.event_name == 'merge_group') && github.sha) || github.ref }}${{ github.event.action == 'ready_for_review' && '-ready-' || '' }}${{ github.event.action == 'ready_for_review' && github.event.pull_request.head.sha || '' }}
+  cancel-in-progress: ${{ (github.event_name == 'pull_request' && github.event.action != 'ready_for_review') || (github.event_name == 'push' && github.ref != 'refs/heads/main') }}
 
 permissions:
   contents: read
@@ -199,13 +201,39 @@ jobs:
       promoted: ${{ steps.decide.outputs.promoted }}
       tree: ${{ steps.decide.outputs.tree }}
       sha: ${{ steps.decide.outputs.sha }}
+      build_sha: ${{ steps.build_commit.outputs.build_sha }}
+      tag_short: ${{ steps.build_commit.outputs.tag_short }}
     steps:
+      # CHAOS-13518: the commit the build legs check out and the merge jobs tag with, resolved ONCE. metadata-action's
+      # `type=sha` reads the workflow context sha, which on a dispatch with inputs.ref is the dispatch head, not the built
+      # ref; and each leg resolving a branch or tag name on its own can build different commits. build_sha is empty unless
+      # a dispatch names a ref (push, PR, release and a dispatch without a ref keep their checkout fallbacks). tag_short is
+      # the first 7 chars of the built commit; on every other event it is github.sha[:7], what `type=sha,format=short` gave.
+      - name: Resolve the build commit
+        id: build_commit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_REF: ${{ github.event.inputs.ref }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          build_sha=""
+          tag_sha="${GITHUB_SHA}"
+          if [[ "${EVENT_NAME}" == "workflow_dispatch" && -n "${INPUT_REF}" ]]; then
+            build_sha="$(gh api "repos/${REPO}/commits/${INPUT_REF}" --jq .sha)" || { echo "::error::inputs.ref '${INPUT_REF}' does not resolve to a commit in ${REPO}"; exit 1; }
+            [[ "${build_sha}" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::inputs.ref '${INPUT_REF}' resolved to '${build_sha}', not a 40-hex commit"; exit 1; }
+            tag_sha="${build_sha}"
+          fi
+          echo "build_sha=${build_sha}" >> "${GITHUB_OUTPUT}"
+          echo "tag_short=${tag_sha:0:7}" >> "${GITHUB_OUTPUT}"
+          echo "build commit: ${build_sha:-<checkout fallback>}; sha tag: sha-${tag_sha:0:7}"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Log in to GitHub Container Registry
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -331,7 +359,7 @@ jobs:
           # earlier legs actually built (a mixed-commit manifest tagged as
           # if it were one commit). github.sha is pinned to the exact commit
           # that triggered this run and never moves.
-          ref: ${{ github.event.inputs.ref || github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ needs.resolve.outputs.build_sha || github.event.pull_request.head.sha || github.sha }}
 
       - name: Set up QEMU
         # Required for the arm64 matrix leg's x64 (fork-PR / disabled-
@@ -372,7 +400,7 @@ jobs:
       - name: Log in to GitHub Container Registry
         id: ghcr_login
         continue-on-error: true
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -583,7 +611,7 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
-          ref: ${{ github.event.inputs.ref || github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ needs.resolve.outputs.build_sha || github.event.pull_request.head.sha || github.sha }}
 
       - name: Set up QEMU
         # Required for the x64 (fork-PR / disabled-variable) fallback to
@@ -620,7 +648,7 @@ jobs:
       - name: Log in to GitHub Container Registry
         id: ghcr_login
         continue-on-error: true
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -774,10 +802,10 @@ jobs:
           tags: |
             type=raw,value=tree-${{ needs.resolve.outputs.tree }},enable=${{ needs.resolve.outputs.hotfix == 'true' }}
             type=semver,pattern={{version}}
-            type=sha,format=short,enable=${{ (github.event_name != 'pull_request' && github.event_name != 'merge_group') }}
+            type=raw,value=sha-${{ needs.resolve.outputs.tag_short }},priority=100,enable=${{ (github.event_name != 'pull_request' && github.event_name != 'merge_group') }}
 
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -855,7 +883,7 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
-          ref: ${{ github.event.inputs.ref || github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ needs.resolve.outputs.build_sha || github.event.pull_request.head.sha || github.sha }}
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
@@ -889,7 +917,7 @@ jobs:
       - name: Log in to GitHub Container Registry
         id: ghcr_login
         continue-on-error: true
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -1040,10 +1068,10 @@ jobs:
           tags: |
             type=raw,value=tree-${{ needs.resolve.outputs.tree }},enable=${{ needs.resolve.outputs.hotfix == 'true' }}
             type=semver,pattern={{version}}
-            type=sha,format=short,enable=${{ (github.event_name != 'pull_request' && github.event_name != 'merge_group') }}
+            type=raw,value=sha-${{ needs.resolve.outputs.tag_short }},priority=100,enable=${{ (github.event_name != 'pull_request' && github.event_name != 'merge_group') }}
 
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -1201,7 +1229,7 @@ jobs:
           driver-opts: image=ghcr.io/full-chaos/moby/buildkit@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea
 
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}

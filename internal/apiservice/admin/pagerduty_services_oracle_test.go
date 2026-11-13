@@ -255,7 +255,6 @@ func runPagerDutyServicesOracle(t *testing.T, mode, digest string) {
 	ctx := context.Background()
 	golden := venueoracle.OpenGolden(t, pagerDutyGolden("services_"+mode, t.Name(), digest))
 	root := repoRoot(t)
-	const jwtKey = "venue-oracle-test-secret-key-for-pagerduty-services-32-b"
 
 	fake := &fakeServicesPagerDuty{attempts: map[string]int{}}
 	upstream := httptest.NewServer(fake.handler())
@@ -375,7 +374,6 @@ func runPagerDutyServicesOracle(t *testing.T, mode, digest string) {
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Golden:    golden,
 		Root:      root,
-		JWTKey:    jwtKey,
 		PythonEnv: pythonEnv,
 		Seed: withTokenMemberships(func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
@@ -565,7 +563,7 @@ VALUES ($1, 'pagerduty', 'oa-corrupt', 'garbage-not-fernet', 1, now(), now(), 'b
 	// answered: frozen with the golden, compared with the Go plane's calls.
 	pythonCallsText := golden.InspectRows(t, "upstream calls of the Python plane")
 	fake.reset()
-	goBase, _ := startGoServer(t, ctx, venue, jwtKey, func(deps *apiservice.Deps) {
+	goBase, _ := startGoServer(t, ctx, venue, func(deps *apiservice.Deps) {
 		deps.Decryptor = decryptor
 		deps.PagerDuty = providerfoundation.PagerDutyRevokeConfig{
 			ClientID: clientID, ClientSecret: pagerDutyServicesVenueSecret,

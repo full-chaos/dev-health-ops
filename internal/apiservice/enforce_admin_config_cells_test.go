@@ -25,7 +25,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/auth/accessverify"
 	"github.com/full-chaos/dev-health-ops/internal/auth/authorization"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/sessionid"
 	"github.com/full-chaos/dev-health-ops/internal/authzenforce"
@@ -302,14 +301,16 @@ func adminConfigServerWith(t *testing.T, enforcer func(*testing.T) *policy.Enfor
 // access verify, Enforcer and scope layers, whatever the routes are.
 func adminConfigServerOver(t *testing.T, enforcer func(*testing.T) *policy.Enforcer, edit func(*probeStore), build func(*testing.T, Deps) []httpapi.Route) (http.Handler, *eddsaMinter) {
 	t.Helper()
+	return adminConfigServerScoped(t, enforcer, edit, build, nil)
+}
+
+// adminConfigServerScoped is adminConfigServerOver with scoped (nil = none) applied to the scope before it serves.
+func adminConfigServerScoped(t *testing.T, enforcer func(*testing.T) *policy.Enforcer, edit func(*probeStore), build func(*testing.T, Deps) []httpapi.Route, scoped func(*policy.Scope)) (http.Handler, *eddsaMinter) {
+	t.Helper()
 	minter := newEdDSAMinter(t)
 	store := newProbeStore()
 	if edit != nil {
 		edit(store)
-	}
-	verifier, err := edgetoken.New(probeKey, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
 	}
 	auth, err := policy.NewAuthenticator(store, quietLogger())
 	if err != nil {
@@ -349,8 +350,11 @@ func adminConfigServerOver(t *testing.T, enforcer func(*testing.T) *policy.Enfor
 	if enforcer != nil {
 		guard.SetEnforcer(enforcer(t))
 	}
-	deps := Deps{Pool: pool, ClickHouse: clickHouse, Auth: auth, Guard: guard, Verifier: verifier}
+	deps := Deps{Pool: pool, ClickHouse: clickHouse, Auth: auth, Guard: guard}
 	scope := policy.NewScope(auth, quietLogger())
+	if scoped != nil {
+		scoped(scope)
+	}
 	server, err := NewServer(apiTestConfig(), quietLogger(), build(t, deps), scope.Layers()...)
 	if err != nil {
 		t.Fatal(err)
@@ -415,8 +419,14 @@ func adminConfigEchoRoutes(t *testing.T, deps Deps) []httpapi.Route {
 // adminConfigEchoServer is adminConfigServerWith with every row's handler replaced by the principal echo.
 func adminConfigEchoServer(t *testing.T, enforcer func(*testing.T) *policy.Enforcer, edit func(*probeStore)) (http.Handler, *eddsaMinter) {
 	t.Helper()
+	return adminConfigEchoServerScoped(t, enforcer, edit, nil)
+}
+
+// adminConfigEchoServerScoped is adminConfigEchoServer with scoped applied to the scope (adminConfigServerScoped).
+func adminConfigEchoServerScoped(t *testing.T, enforcer func(*testing.T) *policy.Enforcer, edit func(*probeStore), scoped func(*policy.Scope)) (http.Handler, *eddsaMinter) {
+	t.Helper()
 	routes := 0
-	handler, minter := adminConfigServerOver(t, enforcer, edit, func(t *testing.T, deps Deps) []httpapi.Route {
+	handler, minter := adminConfigServerScoped(t, enforcer, edit, func(t *testing.T, deps Deps) []httpapi.Route {
 		built := adminConfigEchoRoutes(t, deps)
 		routes = len(built)
 		got := make([]string, 0, len(built))
@@ -428,7 +438,7 @@ func adminConfigEchoServer(t *testing.T, enforcer func(*testing.T) *policy.Enfor
 			t.Fatalf("echo routes %d, want the %d rows of sortedAdminConfigKeys\ngot  %v\nwant %v", len(got), len(want), got, want)
 		}
 		return built
-	})
+	}, scoped)
 	if routes != 61 {
 		t.Fatalf("%d echo routes, want 61", routes)
 	}

@@ -32,6 +32,8 @@ func jobEnvEntry(t *testing.T, job map[string]any, name string) map[string]any {
 }
 
 func TestProvisionRolesJobPassesTheAPILoginWhenNamed(t *testing.T) {
+	t.Parallel()
+
 	docs, out, err := renderAuth(t, provisionRolesArgs(
 		"--set", "migrations.hook.provisionRoles.apiRole.name=devhealth_api",
 		"--set", "migrations.hook.provisionRoles.apiRole.secretName=dev-health-api-login",
@@ -60,6 +62,8 @@ func TestProvisionRolesJobPassesTheAPILoginWhenNamed(t *testing.T) {
 }
 
 func TestProvisionRolesJobHasNoAPILoginByDefault(t *testing.T) {
+	t.Parallel()
+
 	docs, out, err := renderAuth(t, provisionRolesArgs()...)
 	if err != nil {
 		t.Fatalf("render: %v\n%.500s", err, out)
@@ -76,6 +80,8 @@ func TestProvisionRolesJobHasNoAPILoginByDefault(t *testing.T) {
 }
 
 func TestProvisionRolesAPILoginNeedsItsSecret(t *testing.T) {
+	t.Parallel()
+
 	for name, sets := range map[string][]string{
 		"no secretName": {"--set", "migrations.hook.provisionRoles.apiRole.name=devhealth_api"},
 		"no secretKey": {
@@ -85,6 +91,8 @@ func TestProvisionRolesAPILoginNeedsItsSecret(t *testing.T) {
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
 			_, out, err := renderAuth(t, provisionRolesArgs(sets...)...)
 			if err == nil || !strings.Contains(out, "migrations.hook.provisionRoles.apiRole") {
 				t.Fatalf("expected a render refusal naming apiRole, got err=%v\n%.500s", err, out)

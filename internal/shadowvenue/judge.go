@@ -16,6 +16,8 @@ const (
 	MsgResult      = "api shadow pdp: result"
 	MsgMismatch    = "api shadow pdp: mismatch with the legacy guard"
 	MsgServedOther = "api shadow pdp: the request names an organization that is not the token organization"
+	// MsgHTTPRequest is the access line of every request the listener served (internal/auth/httpapi/accesslog.go).
+	MsgHTTPRequest = "http request"
 )
 
 // Slot verdicts. Only MATCH, MATCH_SERVED_OTHER (given to a cross-org cell only), MISMATCH_INTENTIONAL and MISMATCH_RULED
@@ -39,8 +41,11 @@ const (
 	VerdictLegacyDisagrees      = "CONTROL_LEGACY_DISAGREES"
 	VerdictSkippedSeam          = "SKIPPED_SEAM"
 	VerdictSkippedNoOrg         = "SKIPPED_NOORG"
-	VerdictStricter             = "MISMATCH_STRICTER"
-	VerdictWider                = "MISMATCH_WIDER"
+	// VerdictDecidedNoOrg: a no-org superuser slot that a go-api build which decides a token with no organization
+	// (CHAOS-10872 S1) answered as the yardstick did, with the counter evidence of that build (JudgeEnforced).
+	VerdictDecidedNoOrg = "DECIDED_NOORG"
+	VerdictStricter     = "MISMATCH_STRICTER"
+	VerdictWider        = "MISMATCH_WIDER"
 )
 
 var resultVerdicts = map[string]string{
@@ -56,6 +61,20 @@ type resultLine struct {
 	used                            bool
 }
 
+// requestLine is a go-api "http request" access line: the request the listener served.
+type requestLine struct {
+	at              time.Time
+	method, route   string
+	status          int
+	requestID, peer string
+}
+
+// refusalLine is a go-api "admin: org deletion refused" line: the organization and the refusal reason.
+type refusalLine struct {
+	at            time.Time
+	orgID, reason string
+}
+
 type warnLine struct {
 	at            time.Time
 	route, caller string
@@ -69,6 +88,8 @@ type Tuple struct{ Class, Legacy, Shadow, Reason string }
 // Evidence is the shadow lines of one go-api log.
 type Evidence struct {
 	results     []resultLine
+	requests    []requestLine
+	refusals    []refusalLine
 	mismatches  []warnLine
 	servedOther []warnLine
 }
@@ -84,7 +105,7 @@ func ParseLog(r io.Reader) (Evidence, error) {
 		n++
 		var rec map[string]any
 		if json.Unmarshal(scanner.Bytes(), &rec) != nil {
-			for _, msg := range []string{MsgResult, MsgMismatch, MsgServedOther} {
+			for _, msg := range []string{MsgResult, MsgMismatch, MsgServedOther, OrgDeletionRefusedMsg, MsgHTTPRequest} {
 				if strings.Contains(scanner.Text(), `"`+msg+`"`) {
 					return Evidence{}, fmt.Errorf("log line %d: a %q line that is not JSON: the evidence is unreadable", n, msg)
 				}
@@ -92,6 +113,31 @@ func ParseLog(r io.Reader) (Evidence, error) {
 			continue
 		}
 		msg, _ := rec["msg"].(string)
+		if msg == OrgDeletionRefusedMsg {
+			stamp, _ := rec["time"].(string)
+			at, err := time.Parse(time.RFC3339Nano, stamp)
+			orgID, _ := rec["org_id"].(string)
+			reason, _ := rec["reason"].(string)
+			if err != nil || orgID == "" || reason == "" {
+				return Evidence{}, fmt.Errorf("log line %d: a %q line without a valid time, org_id or reason", n, msg)
+			}
+			ev.refusals = append(ev.refusals, refusalLine{at: at, orgID: orgID, reason: reason})
+			continue
+		}
+		if msg == MsgHTTPRequest {
+			stamp, _ := rec["time"].(string)
+			at, err := time.Parse(time.RFC3339Nano, stamp)
+			method, _ := rec["method"].(string)
+			route, _ := rec["route"].(string)
+			status, okStatus := rec["status"].(float64)
+			id, _ := rec["request_id"].(string)
+			peer, _ := rec["peer"].(string)
+			if err != nil || method == "" || route == "" || !okStatus {
+				return Evidence{}, fmt.Errorf("log line %d: a %q line without a valid time, method, route or status", n, msg)
+			}
+			ev.requests = append(ev.requests, requestLine{at: at, method: method, route: route, status: int(status), requestID: id, peer: peer})
+			continue
+		}
 		if msg != MsgResult && msg != MsgMismatch && msg != MsgServedOther {
 			continue
 		}
@@ -195,7 +241,7 @@ type SlotVerdict struct {
 // Pass reports whether the slot's evidence passes it.
 func (s SlotVerdict) Pass() bool {
 	switch s.Verdict {
-	case VerdictMatch, VerdictMatchServedOther, VerdictMismatchIntentional, VerdictMismatchRuled, VerdictSkippedSeam, VerdictSkippedNoOrg, VerdictMatchEnforced, VerdictEqualPastGuard:
+	case VerdictMatch, VerdictMatchServedOther, VerdictMismatchIntentional, VerdictMismatchRuled, VerdictSkippedSeam, VerdictSkippedNoOrg, VerdictDecidedNoOrg, VerdictMatchEnforced, VerdictEqualPastGuard, VerdictEvidencedNoOrg:
 		return true
 	}
 	return false
@@ -226,6 +272,9 @@ type Report struct {
 	Void    bool
 	Pass    bool
 	Reasons []string
+	// Notes are informational lines of the record (the counter table, the guard deny digests, the idle sweep); they
+	// never decide a verdict.
+	Notes []string
 }
 
 // VerdictCounts counts the slots by verdict; a seam skip is its own count, never a match.

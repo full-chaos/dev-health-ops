@@ -45,13 +45,13 @@ func randomText(n int) (string, error) {
 // startAuthPlane serves auth-service's compatibility routes (go-api's refresh,
 // the session issue route) as auth-service wires them (authruntime
 // compatRoutes), over the auth stores on the runtime role.
-func (e *env) startAuthPlane(ctx context.Context, schema authschema.ValidatedIdentifier, logger *slog.Logger, jwtKey string) error {
+func (e *env) startAuthPlane(ctx context.Context, schema authschema.ValidatedIdentifier, logger *slog.Logger) error {
 	plane, err := newIssuePlane("https://auth.lockorder.example.test")
 	if err != nil {
 		return err
 	}
 	e.issuePlane = plane
-	server, err := e.authPlaneOn(e.runtime, schema, logger, jwtKey)
+	server, err := e.authPlaneOn(e.runtime, schema, logger)
 	if err != nil {
 		return err
 	}
@@ -65,11 +65,11 @@ func (e *env) startAuthPlane(ctx context.Context, schema authschema.ValidatedIde
 		return fmt.Errorf("one-connection pool: %w", err)
 	}
 	closers = append(closers, e.runtimeOne.Close)
-	e.authServerOne, err = e.authPlaneOn(e.runtimeOne, schema, logger, jwtKey)
+	e.authServerOne, err = e.authPlaneOn(e.runtimeOne, schema, logger)
 	return err
 }
 
-func (e *env) authPlaneOn(pool *pgxpool.Pool, schema authschema.ValidatedIdentifier, logger *slog.Logger, jwtKey string) (*httptest.Server, error) {
+func (e *env) authPlaneOn(pool *pgxpool.Pool, schema authschema.ValidatedIdentifier, logger *slog.Logger) (*httptest.Server, error) {
 	successor, err := randomText(32)
 	if err != nil {
 		return nil, err
@@ -96,8 +96,7 @@ func (e *env) authPlaneOn(pool *pgxpool.Pool, schema authschema.ValidatedIdentif
 	if err := os.WriteFile(keyPath, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}), 0o600); err != nil {
 		return nil, err
 	}
-	issuer, err := authapi.NewEdDSAIssuer(jwtKey, "dev-health-ops", "dev-health-api",
-		token.NewFileSigner(token.FileConfig{KeyPath: keyPath, KeyID: "k1"}), "https://auth.example.test")
+	issuer, err := authapi.NewEdDSAIssuer("dev-health-api", token.NewFileSigner(token.FileConfig{KeyPath: keyPath, KeyID: "k1"}), "https://auth.example.test")
 	if err != nil {
 		return nil, fmt.Errorf("issuer: %w", err)
 	}

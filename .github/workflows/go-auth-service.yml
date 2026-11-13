@@ -14,9 +14,11 @@
 # CI: an auth change runs every job below; a change outside the closure runs only
 # `auth-changes` and `auth-gate`.
 #
-# JOB NAMES must not reuse a required context (test, lint, go-quality,
-# metrics-executed-proof; ops main ruleset 5324160): a second producer of a
-# required context is the CHAOS-4834 defect class. tests/tooling/
+# JOB NAMES must not reuse a required context produced elsewhere (test,
+# go-quality, metrics-executed-proof, go-queue-gate, image-queue-gate, live-e2e,
+# pr-title; ops main ruleset 5324160). `auth-gate` is itself a required context
+# and this file is its only producer: a second producer of a required context is
+# the CHAOS-4834 defect class. tests/tooling/
 # test_go_auth_service_workflow.py pins the names, the fuzz matrix against the
 # registry in ci/check_go.sh, and the gate's fan-in.
 name: Go auth service
@@ -33,8 +35,10 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || ((github.ref == 'refs/heads/main' || github.event_name == 'merge_group') && github.sha) || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref != 'refs/heads/main') }}
+  # A ready_for_review run gets its own group keyed by the head sha and is never cancelled: a synchronize run of the
+  # same sha (a push right before the flip) cannot cancel it.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || ((github.ref == 'refs/heads/main' || github.event_name == 'merge_group') && github.sha) || github.ref }}${{ github.event.action == 'ready_for_review' && '-ready-' || '' }}${{ github.event.action == 'ready_for_review' && github.event.pull_request.head.sha || '' }}
+  cancel-in-progress: ${{ (github.event_name == 'pull_request' && github.event.action != 'ready_for_review') || (github.event_name == 'push' && github.ref != 'refs/heads/main') }}
 
 # CHAOS-12858: "|" falls back to direct on ANY proxy error; the default "," only on 404/410.
 env:
@@ -156,11 +160,19 @@ jobs:
       - name: govulncheck (auth packages, pinned, strict)
         run: bash ci/check_go.sh auth vuln
 
+  # CHAOS-13520: auth-test, auth-race and auth-race-integration run as legs (check_go.sh auth test-leg|race-leg|race-integration-leg
+  # LEG COUNT) of about ten minutes each (CHAOS-13622); the job id, and so auth-gate's needs, stays. COUNT in the run line is the
+  # length of the leg list (internal/cigates/workflows checks it).
   auth-test:
+    name: auth-test (${{ matrix.leg }}/1)
     needs: [auth-changes]
     if: needs.auth-changes.outputs.relevant == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        leg: [1]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -169,13 +181,16 @@ jobs:
         with:
           go-version-file: go.mod
           cache-dependency-path: '**/go.sum'
-      - name: go test (auth packages)
-        run: bash ci/check_go.sh auth test
+      - name: go test (auth packages, leg ${{ matrix.leg }} of 1)
+        run: bash ci/check_go.sh auth test-leg "${{ matrix.leg }}" 1
       - name: Dependency closure of the auth binaries (CHAOS-10131)
+        if: matrix.leg == 1
         run: bash ci/check_go.sh auth closure
       - name: Endpoint-profile source_commit resolves and anchors read the same there (CHAOS-4765)
+        if: matrix.leg == 1
         run: bash ci/check_go.sh auth history
       - name: Production middleware stack is mounted and driven (G-69)
+        if: matrix.leg == 1
         run: bash ci/check_go.sh auth middleware
 
   # CHAOS-12213: the race legs have their own job and their own 30 minute cap. In auth-test they shared one cap with the other
@@ -186,10 +201,15 @@ jobs:
   # CHAOS-12420: the same again. The two legs grew to the whole 30 minutes on a slow runner, and the last package got a
   # 2 s timeout, so each leg has a job of its own. auth-gate fans in both.
   auth-race:
+    name: auth-race (${{ matrix.leg }}/3)
     needs: [auth-changes]
     if: needs.auth-changes.outputs.relevant == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        leg: [1, 2, 3]
     env:
       CHECK_GO_JOB_CAP_MIN: 30
     steps:
@@ -200,14 +220,19 @@ jobs:
         with:
           go-version-file: go.mod
           cache-dependency-path: '**/go.sum'
-      - name: go test -race (auth packages)
-        run: bash ci/check_go.sh auth race
+      - name: go test -race (auth packages, leg ${{ matrix.leg }} of 3)
+        run: bash ci/check_go.sh auth race-leg "${{ matrix.leg }}" 3
 
   auth-race-integration:
+    name: auth-race-integration (${{ matrix.leg }}/4)
     needs: [auth-changes]
     if: needs.auth-changes.outputs.relevant == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        leg: [1, 2, 3, 4]
     env:
       CHECK_GO_JOB_CAP_MIN: 30
     steps:
@@ -218,8 +243,8 @@ jobs:
         with:
           go-version-file: go.mod
           cache-dependency-path: '**/go.sum'
-      - name: go test -race on live PostgreSQL (session domain concurrency, CHAOS-10207)
-        run: bash ci/check_go.sh auth race-integration
+      - name: go test -race on live PostgreSQL (session domain concurrency, CHAOS-10207; leg ${{ matrix.leg }} of 4)
+        run: bash ci/check_go.sh auth race-integration-leg "${{ matrix.leg }}" 4
 
   # One job per package (CHAOS-11417): checkout, setup-go and the compile are paid once per package, not once per target.
   # Each target keeps its own `auth fuzz TARGET` call, so its corpus, its proof marker and the one default fuzz budget
@@ -238,8 +263,6 @@ jobs:
             targets: FuzzParseRefreshRequest FuzzDecodeAuthorizationRequest
           - package: internal/auth/contracts
             targets: FuzzParseErrorEnvelope FuzzRevisionUnmarshal FuzzTimestampUnmarshal FuzzParseAccessToken FuzzParseWorkloadToken
-          - package: internal/auth/edgetoken
-            targets: FuzzVerifyToken
           - package: internal/auth/signedtoken
             targets: FuzzValidSignedToken
           - package: internal/auth/httpapi
@@ -293,20 +316,50 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        leg: [go-api, acp, acp-nokeys, acp-social-unowned]
+        leg: [go-api, acp, acp-nokeys]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache-dependency-path: '**/go.sum'
+      # CHAOS-13520: the six images the corpus runs are built here, from the gha cache auth-corpus-image-cache seeds on main
+      # (read only: a pull request never writes the cache; the cache lines are in ci/auth_corpus.bake.hcl), and loaded;
+      # ci/auth_corpus_external.sh then starts them with
+      # --no-build (AUTH_CORPUS_PREBUILT_TAG). The cache token stays inside the bake action; no shell step sees it.
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@594f3bf4285d9ea8dc53c9a0c9c4092420091003 # v4.4.0
+        with:
+          # CHAOS-9064: the mirrored builder image, not Docker Hub's anonymous pull (ci/builder_images.tsv)
+          driver-opts: image=ghcr.io/full-chaos/moby/buildkit@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea
+      - name: Build the corpus images from the cache main seeds (read only)
+        uses: docker/bake-action@59cb1203cd42bcefd40a1b6d73b589e48c86040e # v7.5.0
+        env:
+          AUTH_CORPUS_IMAGE_TAG: ci-prebuilt
+          # Parse-only values: bake reads the whole compose set, and these have no default there (the corpus script sets the
+          # real ones at run time; bugsink's image is not built here).
+          BUGSINK_SECRET_KEY: bake-parse-only
+          AUTH_CORPUS_STUB_DIR: ${{ runner.temp }}/corpus-stub-parse-only
+          AUTH_CORPUS_API_PORT: "18080"
+          AUTH_CORPUS_OPERATOR_PORT: "18081"
+        with:
+          source: .
+          files: |
+            compose.yml
+            ci/auth_corpus_external.override.yml
+            ci/auth_corpus.bake.hcl
+          targets: authcorpus
+          load: true
       - name: Run the auth-flow corpus against the external go-api
-        if: matrix.leg != 'acp-nokeys' && matrix.leg != 'acp-social-unowned'
+        if: matrix.leg != 'acp-nokeys'
+        env:
+          AUTH_CORPUS_PREBUILT_TAG: ci-prebuilt
         run: bash ci/auth_corpus_external.sh "${{ matrix.leg }}"
       # Non-vacuity: leg acp without the auth-service keys must fail, and by name (not pass as "unserved").
       - name: Leg acp without the auth-service keys fails by name
         if: matrix.leg == 'acp-nokeys'
         env:
+          AUTH_CORPUS_PREBUILT_TAG: ci-prebuilt
           NOKEYS_LOG: ${{ runner.temp }}/acp-nokeys.log
         run: |
           status=0
@@ -321,24 +374,44 @@ jobs:
             exit 1
           }
 
-      # Non-vacuity: social forwarded without the users-owned posture must fail, and by name: auth-service refuses the
-      # new-user row (403), so the social row cannot pass.
-      - name: Leg acp with social forwarded without the posture fails by name
-        if: matrix.leg == 'acp-social-unowned'
+  # CHAOS-13520: seeds the gha build cache the auth-corpus-queue legs read. Only a push to main of this repository writes it
+  # (mode=max, one scope per image); it runs no corpus and no job needs it.
+  auth-corpus-image-cache:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'full-chaos/dev-health-ops'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # No secrets: the mirrored buildkit image is public; the cache is written through the runtime token the bake action holds,
+    # so the job token needs no more than contents: read.
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@594f3bf4285d9ea8dc53c9a0c9c4092420091003 # v4.4.0
+        with:
+          # CHAOS-9064: the mirrored builder image, not Docker Hub's anonymous pull (ci/builder_images.tsv)
+          driver-opts: image=ghcr.io/full-chaos/moby/buildkit@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea
+      - name: Build the corpus images and write the cache (main pushes only)
+        uses: docker/bake-action@59cb1203cd42bcefd40a1b6d73b589e48c86040e # v7.5.0
         env:
-          SOCIAL_LOG: ${{ runner.temp }}/acp-social-unowned.log
-        run: |
-          status=0
-          AUTH_CORPUS_USERS_UNOWNED=1 AUTH_CORPUS_FORCE_SOCIAL=1 bash ci/auth_corpus_external.sh acp >"${SOCIAL_LOG}" 2>&1 || status=$?
-          tail -n 60 "${SOCIAL_LOG}"
-          if [ "${status}" -eq 0 ]; then
-            echo "ERROR: leg acp passed with social forwarded and users not owned"
-            exit 1
-          fi
-          grep -a 'social-login through the provider stub: answered 403 with' "${SOCIAL_LOG}" || {
-            echo "ERROR: leg acp failed, but not on the social row"
-            exit 1
-          }
+          AUTH_CORPUS_IMAGE_TAG: ci-prebuilt
+          AUTH_CORPUS_CACHE_WRITE: "1"
+          # Parse-only values: bake reads the whole compose set, and these have no default there (the corpus script sets the
+          # real ones at run time; bugsink's image is not built here).
+          BUGSINK_SECRET_KEY: bake-parse-only
+          AUTH_CORPUS_STUB_DIR: ${{ runner.temp }}/corpus-stub-parse-only
+          AUTH_CORPUS_API_PORT: "18080"
+          AUTH_CORPUS_OPERATOR_PORT: "18081"
+        with:
+          source: .
+          files: |
+            compose.yml
+            ci/auth_corpus_external.override.yml
+            ci/auth_corpus.bake.hcl
+          targets: authcorpus
+          load: true
 
   auth-gate:
     if: always()
@@ -386,7 +459,7 @@ jobs:
   # (no job needs it), continue-on-error, and the checkout is the target branch's tip, never the merge group.
   auth-cancel-stacked-queue-children:
     name: cancel-stacked-queue-children
-    needs: [auth-changes, auth-go-quality, auth-test, auth-race, auth-race-integration, auth-fuzz, auth-corpus-queue, auth-gate]
+    needs: [auth-changes, auth-go-quality, auth-test, auth-race, auth-race-integration, auth-fuzz, auth-corpus-queue, auth-corpus-image-cache, auth-gate]
     if: failure() && github.event_name == 'merge_group'
     runs-on: ubuntu-latest
     timeout-minutes: 5

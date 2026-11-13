@@ -8,6 +8,8 @@ import (
 // go-api reads AUTH_USERS_OWNED from authService.phase only, from phase 4 up; below it (the phase 3 rollback render
 // included) the switch is unset and the credential routes are not forwarded.
 func TestGoAPIUsersOwnedSwitchIsUnsetBelowPhase4(t *testing.T) {
+	t.Parallel()
+
 	for _, phase := range []string{"0", "1", "2", "3"} {
 		docs, out, err := renderAuth(t, goAPIWithAuth(append([]string{"--set", "authService.phase=" + phase}, phase3Secrets...)...)...)
 		if err != nil {
@@ -24,6 +26,8 @@ func TestGoAPIUsersOwnedSwitchIsUnsetBelowPhase4(t *testing.T) {
 
 // The switch has one source: go-api's extraEnv cannot set it.
 func TestGoAPIUsersOwnedCannotBeSetThroughExtraEnv(t *testing.T) {
+	t.Parallel()
+
 	_, out, err := renderAuth(t, goAPIWithAuth("--set-json", `goApi.extraEnv=[{"name":"AUTH_USERS_OWNED","value":"true"}]`)...)
 	if err == nil || !strings.Contains(out, "goApi.extraEnv must not set AUTH_USERS_OWNED") {
 		t.Fatalf("extraEnv AUTH_USERS_OWNED rendered: err=%v out=%.300s", err, out)
@@ -32,6 +36,8 @@ func TestGoAPIUsersOwnedCannotBeSetThroughExtraEnv(t *testing.T) {
 
 // Phase 4: go-api owns the users switch and forwards the credential routes.
 func TestGoAPIUsersOwnedAndCredentialsProxyRenderAtPhase4(t *testing.T) {
+	t.Parallel()
+
 	docs, out, err := renderAuth(t, goAPIWithAuth(append([]string{"--set", "authService.phase=4", "--set", "authService.usersOwnedStage=owned"}, phase3Secrets...)...)...)
 	if err != nil {
 		t.Fatalf("phase 4: render: %v\n%.400s", err, out)

@@ -10,12 +10,11 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 )
 
-// AccessExpiresIn is refresh-response.v1 expires_in: go-api's accessExpiresIn.
-const AccessExpiresIn = int(edgetoken.AccessLifetime / time.Second)
+// AccessExpiresIn is refresh-response.v1 expires_in: go-api's accessExpiresIn (60 min).
+const AccessExpiresIn = int(contracts.AccessTokenLifetimeCeiling / time.Second)
 
 // EdDSAAccessLifetime is the default exp - iat of an EdDSA access token (60 min, the
 // ceiling access-token.v1 allows).
@@ -48,8 +47,7 @@ var sessionRouteScope, _ = contracts.AccessTokenScope(contracts.SessionRouteAudi
 type EdDSAOption func(*eddsaSettings)
 
 type eddsaSettings struct {
-	legacyAudience string
-	lifetime       time.Duration
+	lifetime time.Duration
 }
 
 // WithAccessLifetime sets exp - iat of both minted tokens (and so every answer's expires_in): at least one minute,
@@ -58,25 +56,12 @@ func WithAccessLifetime(lifetime time.Duration) EdDSAOption {
 	return func(s *eddsaSettings) { s.lifetime = lifetime }
 }
 
-// WithLegacyAudience sets the audience the HS256 compatibility token is verified
-// with (go-api's JWT_AUDIENCE). An empty value keeps go-api's default audience.
-func WithLegacyAudience(audience string) EdDSAOption {
-	return func(s *eddsaSettings) {
-		if audience != "" {
-			s.legacyAudience = audience
-		}
-	}
-}
-
 // NewEdDSAIssuer builds an Issuer whose access tokens are access-token.v1
 // EdDSA tokens. audience is the access token's; Tokens also mints the token
-// of audience auth-service the session routes accept. secret and
-// legacyIssuer only verify HS256 compatibility tokens (the session routes,
-// legacy refresh); this Issuer never signs with them. An empty secret leaves
-// the Issuer without a legacy verifier: it refuses every HS256 token.
-// issuerURL is the iss claim, byte for byte.
-func NewEdDSAIssuer(secret, legacyIssuer, audience string, signer AccessSigner, issuerURL string, options ...EdDSAOption) (*Issuer, error) {
-	settings := eddsaSettings{legacyAudience: contracts.PlatformAPIAudience, lifetime: EdDSAAccessLifetime}
+// of audience auth-service the session routes accept. It verifies no HS256
+// token. issuerURL is the iss claim, byte for byte.
+func NewEdDSAIssuer(audience string, signer AccessSigner, issuerURL string, options ...EdDSAOption) (*Issuer, error) {
+	settings := eddsaSettings{lifetime: EdDSAAccessLifetime}
 	for _, option := range options {
 		option(&settings)
 	}
@@ -93,18 +78,9 @@ func NewEdDSAIssuer(secret, legacyIssuer, audience string, signer AccessSigner, 
 	if issuerURL == "" {
 		return nil, errors.New("authapi: the EdDSA access token needs an issuer URL")
 	}
-	// The HS256 compatibility token is go-api's: it carries go-api's audience, whatever audience this issuer mints.
-	var verifier *edgetoken.Verifier
-	if secret != "" {
-		var err error
-		if verifier, err = edgetoken.New(secret, legacyIssuer, settings.legacyAudience); err != nil {
-			return nil, err
-		}
-	}
 	return &Issuer{
-		eddsa:    &eddsaMinter{signer: signer, issuer: issuerURL, audience: audience, scope: scope, lifetime: settings.lifetime},
-		verifier: verifier,
-		now:      time.Now,
+		eddsa: &eddsaMinter{signer: signer, issuer: issuerURL, audience: audience, scope: scope, lifetime: settings.lifetime},
+		now:   time.Now,
 	}, nil
 }
 

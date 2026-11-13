@@ -105,22 +105,22 @@ func (w *wholeResponse) send() {
 	_, _ = w.ResponseWriter.Write(w.body.Bytes())
 }
 
-// graphQLEdgeDeps is what /graphql's request middleware needs beyond the
-// /query pipeline: the edge authenticator the org scope and impersonation
-// middlewares read the caller with, the CORS allow-list, the body limit.
+// graphQLEdgeDeps is what /graphql's request middleware needs beyond the /query pipeline: the edge authenticator
+// the org scope and impersonation middlewares read the caller with, the CORS allow-list, the body limit, and
+// whether the impersonation middleware refuses the legacy impersonation caller (AUTH_PROXY_IMPERSONATION).
 type graphQLEdgeDeps struct {
-	auth        *policy.Authenticator
-	corsOrigins []string
-	maxBytes    int
-	logger      *slog.Logger
+	auth                      *policy.Authenticator
+	corsOrigins               []string
+	maxBytes                  int
+	logger                    *slog.Logger
+	refuseLegacyImpersonation bool
 }
 
 // graphQLEdgeChain is /graphql with the Python api's request middleware, in
 // its order (api/_middleware.py registers in reverse, so the last one added
 // runs first) inside Starlette's ServerErrorMiddleware (an unhandled error's
 // 500 carries only its content headers): the correlation id, OrgIdMiddleware,
-// ImpersonationMiddleware,
-// GraphQLQuerySizeLimitMiddleware, SecurityHeadersMiddleware,
+// ImpersonationMiddleware, GraphQLQuerySizeLimitMiddleware, SecurityHeadersMiddleware,
 // CORSMiddleware, then the route. The order is the contract, not a detail:
 // a refusal from a middleware outside SecurityHeadersMiddleware (the org
 // scope's 403, the size limit's 413 and browser 404) carries no security
@@ -128,10 +128,10 @@ type graphQLEdgeDeps struct {
 // scope and impersonation middlewares are go-api's own ports
 // (internal/api/policy), the headers and CORS the shared ones
 // (internal/api/pyheaders), so query-api and go-api cannot drift apart on
-// them. The provenance stamp is outermost, so every answer is bound to the
-// build that gave it.
+// them. The provenance stamp is outermost, so every answer is bound to the build that gave it.
 func graphQLEdgeChain(query http.HandlerFunc, deps graphQLEdgeDeps) http.Handler {
 	scope := policy.NewScope(deps.auth, deps.logger)
+	scope.RefuseLegacyImpersonationReading(deps.refuseLegacyImpersonation, graphQLEdgeReads(deps.maxBytes))
 	var handler http.Handler = newGraphQLEdgeHandler(query)
 	handler = pyheaders.NewCORS(deps.corsOrigins).Wrap(handler)
 	handler = pyheaders.SecurityHeaders(handler)
@@ -158,12 +158,12 @@ func markGraphQLDocumentNotResolved(next http.Handler) http.Handler {
 }
 
 // mountGraphQLRoute registers /graphql. It stays unmounted -- a 404, and a
-// log line saying why -- when the pod has neither the edge secret nor the
-// access-token issuer: a user's access token is the path's only credential,
-// so without either the path could only ever refuse.
+// log line saying why -- when the pod has no access-token issuer: a user's
+// access token is the path's only credential, so without it the path could
+// only ever refuse.
 func mountGraphQLRoute(mux *http.ServeMux, query http.HandlerFunc, deps graphQLEdgeDeps) {
 	if deps.auth == nil {
-		log.Printf("query-api: %s NOT mounted: %s and %s are unset, so the product path would have no credential to accept", graphQLEdgePath, edgeJWTSecretEnvVar, accessTokenIssuerEnvVar)
+		log.Printf("query-api: %s NOT mounted: %s is unset, so the product path would have no credential to accept", graphQLEdgePath, accessTokenIssuerEnvVar)
 		return
 	}
 	mux.Handle(graphQLEdgePath, graphQLEdgeChain(query, deps))

@@ -19,13 +19,12 @@ import (
 //
 //   - the internal identity headers (the in-cluster caller states the
 //     identity; no token), or
-//   - the effective-principal envelope bearer (the migration carrier, until
-//     the Python edge stops minting it), or
-//   - (CHAOS-6263 PR (a), /query only: edgeAuth non-nil) the user's own
-//     edge access token -- the SAME HS256 bearer authenticateRESTRequest
-//     already accepts on every REST route, disambiguated from the
-//     envelope by the token's own JWT `alg` header, exactly as that
-//     function does.
+//   - (CHAOS-6263 PR (a), /query only: edgeAuth non-nil) the caller's own
+//     user access token through the routed edge carrier (edgeCarrierToken;
+//     the carrier refuses a retired HS256 token alg_not_allowed).
+//
+// Any other bearer, the retired effective-principal envelope included, is
+// an unaccepted class: the bare 401 an invalid bearer always got.
 //
 // A request carrying both the header carrier and ANY Authorization value
 // is refused, never resolved by preferring one: two carriers can name two
@@ -38,9 +37,9 @@ import (
 // reaches: a browser could set the identity headers itself. Those routes
 // keep authenticateRESTRequest.
 //
-// verifier may be nil only where a test exercises the no-carrier refusal.
-// edgeAuth/edgeStore are nil for /buildinfo (this credential is /query-only,
-// per D2898/D2905) and for a pod with no AUTH_ACCESS_TOKEN_ISSUER configured.
+// verifier is not read: the envelope class is retired. edgeAuth/edgeStore
+// are nil for /buildinfo (this credential is /query-only, per D2898/D2905)
+// and for a pod with no AUTH_ACCESS_TOKEN_ISSUER configured.
 func authenticateInternalRequest(w http.ResponseWriter, r *http.Request, verifier *principal.Verifier, edgeAuth *policy.Authenticator, edgeStore policy.Store) (authctx.Claims, bool) {
 	if refuseAmbiguousCarrier(w, r) {
 		return authctx.Claims{}, false
@@ -75,17 +74,9 @@ func authenticateInternalRequest(w http.ResponseWriter, r *http.Request, verifie
 		}
 	}
 
-	verifyCtx := principal.WithRequestMeta(r.Context(), r.RemoteAddr, envelopeRequestID(r))
-	claims, err := verifier.Verify(verifyCtx, token)
-	if err != nil {
-		// principal.Verify logs and counts its own rejection reason; the
-		// internal-path outcome is counted here so the carrier series is whole.
-		internalidentity.RecordOutcome("envelope", "invalid")
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return authctx.Claims{}, false
-	}
-	internalidentity.RecordOutcome("envelope", "accepted")
-	return withLegacyScope(authctx.Claims{OrgID: claims.OrgID, Role: claims.Role, IsSuperuser: claims.IsSuperuser, ImpersonationActive: claims.ImpersonationActive}), true
+	internalidentity.RecordOutcome("envelope", "invalid")
+	http.Error(w, "unauthorized", http.StatusUnauthorized)
+	return authctx.Claims{}, false
 }
 
 // authenticateEdgeCarrier is /query's edge-access-token path (CHAOS-6263
@@ -105,22 +96,28 @@ func authenticateInternalRequest(w http.ResponseWriter, r *http.Request, verifie
 func authenticateEdgeCarrier(w http.ResponseWriter, r *http.Request, edgeAuth *policy.Authenticator, edgeStore policy.Store, token string) (authctx.Claims, bool) {
 	r = r.WithContext(policy.WithRouteProfile(r.Context(), routeProfile(r)))
 	claims, outcome := checkEdgeCarrier(r, edgeAuth, token, liveScope(edgeStore))
-	if outcome != edgeAccepted {
+	switch outcome {
+	case edgeAccepted:
+		return claims, true
+	case edgeImpersonationRefused:
+		policy.WriteImpersonationRefused(w)
+	default:
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return authctx.Claims{}, false
 	}
-	return claims, true
+	return authctx.Claims{}, false
 }
 
 // edgeOutcome is how checkEdgeCarrier decided a token. /query answers every
-// failure with the same bare 401; /graphql answers a store it could not read
-// as the Python app did (its unhandled 500), never as a bad credential.
+// failure with the same bare 401 but the legacy impersonation refusal (403);
+// /graphql answers a store it could not read as the Python app did (its
+// unhandled 500), never as a bad credential.
 type edgeOutcome int
 
 const (
-	edgeAccepted    edgeOutcome = iota
-	edgeRefused                 // the credential is not good
-	edgeUnavailable             // a live check could not be read: nothing was decided
+	edgeAccepted             edgeOutcome = iota
+	edgeRefused                          // the credential is not good
+	edgeUnavailable                      // a live check could not be read: nothing was decided
+	edgeImpersonationRefused             // the legacy impersonation caller, refused (liveScope)
 )
 
 // edgeScope answers, for a caller Authenticate has just accepted, the org the
@@ -130,14 +127,24 @@ const (
 type edgeScope func(ctx context.Context, user *policy.User) (org string, session *policy.Impersonation, err error)
 
 // liveScope is /query's scope: nothing in front of /query decided anything,
-// so the org is the token's own and the session is read here, once, for a
-// caller the live users row confirms is a superuser.
+// so the org is the token's own and the session is read here, once. As in
+// go-api's Scope.Impersonation, a session is applied only to a caller that
+// holds admin.impersonate now. A caller without the action acts as itself.
+// With AUTH_PROXY_IMPERSONATION on, a holder's live row refuses the request
+// (the legacy impersonation caller: the impersonation is a delegated
+// session), and a non-holder is marked for the dispatch, which reads its row
+// for a non-query document only and refuses that document beside a live row
+// (go-api's read limit). With the switch off a non-holder's row is not read.
 func liveScope(store policy.Store) edgeScope {
 	return func(ctx context.Context, user *policy.User) (string, *policy.Impersonation, error) {
-		if !user.IsSuperuser {
+		if !user.Holds(policy.ActionAdminImpersonate) {
+			markNonHolder(ctx, user.ID)
 			return user.OrgID, nil, nil
 		}
 		session, err := store.ActiveImpersonation(ctx, user.ID)
+		if err == nil && session != nil && legacyImpersonationRefused(ctx) {
+			return "", nil, errLegacyImpersonationRefused
+		}
 		return user.OrgID, session, err
 	}
 }
@@ -227,6 +234,10 @@ func checkEdgeCarrier(r *http.Request, edgeAuth *policy.Authenticator, token str
 	}
 
 	orgID, session, scopeErr := scope(ctx, user)
+	if errors.Is(scopeErr, errLegacyImpersonationRefused) {
+		noteRefusal(r, "edge_legacy_impersonation_caller", "edge")
+		return authctx.Claims{}, edgeImpersonationRefused
+	}
 	if scopeErr != nil {
 		// FAIL CLOSED: a superuser who IS impersonating must never be
 		// served as the plain, non-impersonated principal because the

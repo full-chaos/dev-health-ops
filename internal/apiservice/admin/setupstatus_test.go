@@ -60,3 +60,24 @@ func TestSelectPrimaryConfig(t *testing.T) {
 		t.Fatalf("primary = %+v, want none", got)
 	}
 }
+
+func TestSetupNextActionIntegrationSkip(t *testing.T) {
+	cases := []struct {
+		name string
+		in   setupDecision
+		want string
+	}{
+		{"skipped, no integration", setupDecision{integrationSkipped: true, syncStatus: "none", hasRepoSelection: true}, "complete"},
+		{"not skipped, no integration", setupDecision{syncStatus: "none", hasRepoSelection: true}, "connect_integration"},
+		{"skipped, integration connected, no sync config", setupDecision{hasIntegration: true, integrationSkipped: true, providers: []string{"jira"}, syncStatus: "none", hasRepoSelection: true}, "create_sync_config"},
+		{"skipped, integration connected, github no sync config", setupDecision{hasIntegration: true, integrationSkipped: true, providers: []string{"github"}, syncStatus: "none", hasRepoSelection: true}, "select_repositories"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, _ := setupNextAction(tc.in)
+			if got != tc.want {
+				t.Fatalf("next_action = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}

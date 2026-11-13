@@ -46,8 +46,9 @@ func TestAuthCorpusExternalJobIsInTheVenueWorkflow(t *testing.T) {
 	if !ok {
 		t.Fatal("venue-oracles.yml has no auth-corpus-external job")
 	}
-	if got := strings.Join(job.Strategy.Matrix.Leg, ","); got != "go-api,acp,acp-nokeys,acp-social-unowned" {
-		t.Errorf("matrix legs = %q, want go-api,acp,acp-nokeys,acp-social-unowned", got)
+	// CHAOS-13356: the leg acp-social-unowned (users not owned) is removed; every leg runs users owned.
+	if got := strings.Join(job.Strategy.Matrix.Leg, ","); got != "go-api,acp,acp-nokeys" {
+		t.Errorf("matrix legs = %q, want go-api,acp,acp-nokeys", got)
 	}
 	if failFast, ok := job.Strategy.FailFast.(bool); !ok || failFast {
 		t.Error("strategy.fail-fast must be false: leg acp failing must not cancel leg go-api")
@@ -69,9 +70,6 @@ func TestAuthCorpusExternalJobIsInTheVenueWorkflow(t *testing.T) {
 	}
 	for _, want := range []string{
 		"matrix.leg == 'acp-nokeys'",
-		"matrix.leg == 'acp-social-unowned'",
-		"AUTH_CORPUS_USERS_UNOWNED=1 AUTH_CORPUS_FORCE_SOCIAL=1 bash ci/auth_corpus_external.sh acp",
-		"social-login through the provider stub: answered 403 with",
 		"AUTH_CORPUS_OMIT_AUTH_KEYS=1 bash ci/auth_corpus_external.sh acp",
 		"required aggregate sessions is not served by auth-service",
 	} {
@@ -489,8 +487,8 @@ func TestAuthCorpusOverrideTagsItsBuiltImagesByProject(t *testing.T) {
 		t.Fatal(err)
 	}
 	for service, want := range map[string]string{
-		"providerstub": "authcorpus-providerstub:${AUTH_CORPUS_PROJECT:-local}",
-		"smtpsink":     "authcorpus-smtpsink:${AUTH_CORPUS_PROJECT:-local}",
+		"providerstub": "authcorpus-providerstub:${AUTH_CORPUS_IMAGE_TAG:-local}",
+		"smtpsink":     "authcorpus-smtpsink:${AUTH_CORPUS_IMAGE_TAG:-local}",
 	} {
 		if got := override.Services[service].Image; got != want {
 			t.Errorf("%s image = %q, want %q", service, got, want)
@@ -569,7 +567,7 @@ func TestAuthCorpusSocialUnownedLegRunsOnTheEventsOfTheNokeysLeg(t *testing.T) {
 	conditions := map[string]string{}
 	for job, body := range workflow.Jobs {
 		for _, step := range body.Steps {
-			if strings.Contains(step.If, "acp-social-unowned") || strings.Contains(step.If, "acp-nokeys") {
+			if strings.Contains(step.If, "acp-nokeys") {
 				if job != "auth-corpus-external" {
 					t.Errorf("job %s has a step conditioned on a corpus negative leg: %q", job, step.Name)
 				}
@@ -577,13 +575,13 @@ func TestAuthCorpusSocialUnownedLegRunsOnTheEventsOfTheNokeysLeg(t *testing.T) {
 			}
 		}
 	}
-	for _, want := range []string{"matrix.leg == 'acp-nokeys'", "matrix.leg == 'acp-social-unowned'"} {
+	for _, want := range []string{"matrix.leg == 'acp-nokeys'"} {
 		if conditions[want] == "" {
 			t.Errorf("no step with the exact condition %q (found %v)", want, conditions)
 		}
 	}
-	if conditions["matrix.leg != 'acp-nokeys' && matrix.leg != 'acp-social-unowned'"] == "" {
-		t.Errorf("the plain run step must exclude both negative legs, found %v", conditions)
+	if conditions["matrix.leg != 'acp-nokeys'"] == "" {
+		t.Errorf("the plain run step must exclude the negative leg, found %v", conditions)
 	}
 }
 

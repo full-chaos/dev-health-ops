@@ -43,6 +43,8 @@ name: Go quality
 
 on:
   pull_request:
+    # ready_for_review: a draft without the ci:integration or ci:full label runs no leg (go-quality-plan, ci/go_quality_legs.sh),
+    # so the flip to ready runs them. The ready run has its own concurrency group (below) and is never cancelled by a push.
     types: [opened, synchronize, reopened, ready_for_review]
     branches: ['**']
   push:
@@ -63,8 +65,8 @@ concurrency:
   # branch, by commit sha on a push to main or on merge_group (never
   # cancelled -- see go.yml/typecheck.yml/docker-images.yml/
   # arc-runner-image.yml for the specific incidents this protects).
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || ((github.ref == 'refs/heads/main' || github.event_name == 'merge_group') && github.sha) || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref != 'refs/heads/main') }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || ((github.ref == 'refs/heads/main' || github.event_name == 'merge_group') && github.sha) || github.ref }}${{ github.event.action == 'ready_for_review' && '-ready-' || '' }}${{ github.event.action == 'ready_for_review' && github.event.pull_request.head.sha || '' }}
+  cancel-in-progress: ${{ (github.event_name == 'pull_request' && github.event.action != 'ready_for_review') || (github.event_name == 'push' && github.ref != 'refs/heads/main') }}
 
 # CHAOS-12858: "|" falls back to direct on ANY proxy error; the default "," only on 404/410.
 env:
@@ -86,6 +88,7 @@ jobs:
       queue_run: ${{ steps.queue.outputs.queue_run }}
       legs: ${{ steps.legs.outputs.legs }}
       race_policy: ${{ steps.legs.outputs.race_policy }}
+      draft_skip: ${{ steps.legs.outputs.draft_skip }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -98,11 +101,13 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           CI_FULL: ${{ contains(github.event.pull_request.labels.*.name, 'ci:full') && 'true' || 'false' }}
+          # A draft pull request without ci:integration or ci:full runs no leg; the ready flip runs them all.
+          DRAFT_SKIP: ${{ github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full') && !contains(github.event.pull_request.labels.*.name, 'ci:integration') && 'true' || 'false' }}
         run: |
           set -euo pipefail
           out="${RUNNER_TEMP}/go-quality-legs.txt"
-          bash ci/go_quality_legs.sh "${EVENT_NAME}" "${CI_FULL}" > "${out}"
-          { printf 'legs=%s\n' "$(sed -n 1p "${out}")"; printf 'race_policy=%s\n' "$(sed -n 2p "${out}")"; } >> "${GITHUB_OUTPUT}"
+          bash ci/go_quality_legs.sh "${EVENT_NAME}" "${CI_FULL}" "" "${DRAFT_SKIP}" > "${out}"
+          { printf 'legs=%s\n' "$(sed -n 1p "${out}")"; printf 'race_policy=%s\n' "$(sed -n 2p "${out}")"; printf 'draft_skip=%s\n' "${DRAFT_SKIP}"; } >> "${GITHUB_OUTPUT}"
           cat "${out}"
 
       # CHAOS-11408: a main push whose sha the merge queue already ran green through this workflow (the helper checks the
@@ -157,6 +162,7 @@ jobs:
           # CHAOS-11418: every go command of this workflow runs with GOWORK=off, as ci/check_go.sh does.
           GOWORK: "off"
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           EVENT_NAME: ${{ github.event_name }}
         run: |
           set -uo pipefail
@@ -192,10 +198,12 @@ jobs:
   go-quality-leg:
     name: go-quality-leg (${{ matrix.name }})
     needs: [go-quality-plan]
+    # An unlabelled draft starts no leg (CHAOS-13520); the fan-in reports that, and the ready flip runs the legs.
+    if: needs.go-quality-plan.outputs.draft_skip != 'true'
     strategy:
       # One red leg must not cancel the others: every leg reports its own signal.
       fail-fast: false
-      # CHAOS-11418: the legs live in ci/go_quality_legs.json (static, test-N-of-4, race-N-of-6; the tooling tests pin the
+      # CHAOS-11418: the legs live in ci/go_quality_legs.json (static, plan-reads, test-N-of-10, race-N-of-6; the tooling tests pin the
       # race and test counts there). go-quality-plan filters them with ci/go_quality_legs.sh: a pull request without the ci:full
       # label starts no race leg (a job cannot read its own matrix in an `if`, so the leg is left out, not started to report a
       # skip). The legs are not required status contexts (the ruleset requires the `go-quality` aggregate), so the count can
@@ -275,6 +283,11 @@ jobs:
             printf 'relevant=true\n' >> "${GITHUB_OUTPUT}"
             exit 0
           fi
+          if [ "${LEG}" = "plan-reads" ]; then
+            echo "the plan-reads leg runs on every change set"
+            printf 'relevant=true\n' >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
           if [ "${GITHUB_EVENT_NAME}" = push ] && [ -n "${QUEUE_RUN}" ]; then
             echo "skipped: queue-tested sha, merge_group run ${QUEUE_RUN} ran this leg green on this sha"
             printf 'relevant=false\nwarm=true\n' >> "${GITHUB_OUTPUT}"
@@ -334,6 +347,8 @@ jobs:
       - name: Restore this leg's Go build and module cache (GitHub-hosted legs)
         # CHAOS-10486: one cache per leg, keyed on the leg, the runner, the Go version and go.sum; a pull request restores
         # what main saved (the newest entry of the leg when go.sum moved). Saved only by a push to main, below.
+        # CHAOS-13520: a leg with no entry of its own (a new leg layout before main saved it) falls back to the newest test-leg
+        # entry; the build cache is content-addressed, so a foreign entry only saves work. The save key stays the leg's own.
         # The segment after go-quality- is the layout of the cached directory (v1 was built into /tmp, so it held little):
         # bump it whenever that layout changes, because a key is immutable and the save runs only on a key miss.
         id: go-cache
@@ -346,6 +361,7 @@ jobs:
           key: go-quality-v2-${{ matrix.name }}-${{ runner.os }}-${{ runner.arch }}-go${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('**/go.sum') }}
           restore-keys: |
             go-quality-v2-${{ matrix.name }}-${{ runner.os }}-${{ runner.arch }}-go${{ steps.setup-go.outputs.go-version }}-
+            go-quality-v2-test-
 
       - name: Build into the restored Go cache (GitHub-hosted legs)
         # CHAOS-10486: check_go.sh builds into DEV_HEALTH_GO_CACHE, else an inherited or configured GOCACHE, else
@@ -354,8 +370,8 @@ jobs:
         if: (steps.relevance.outputs.relevant == 'true' || steps.relevance.outputs.warm == 'true') && runner.environment == 'github-hosted'
         run: echo "DEV_HEALTH_GO_CACHE=${HOME}/.cache/go-build" >> "${GITHUB_ENV}"
 
-      - name: Point the plan-reads call graph at its store (GitHub-hosted static leg)
-        # CHAOS-11421: the static leg recomputes reach.tsv from the call graph (about 4 min, 13 to 15 GiB) on every change.
+      - name: Point the plan-reads call graph at its store (GitHub-hosted plan-reads leg)
+        # CHAOS-11421: the static leg recomputes reach.d from the call graph (about 4 min, 13 to 15 GiB) on every change.
         # Only a pull request may READ a stored result (the restore below); a merge-queue run and a push to main always
         # compute fresh (PLAN_READS_REACH_FRESH makes the tool ignore any store), and a push to main saves what it computed.
         # The key here is coarse (a hash of the Go files, go.mod/go.sum and the read tables); the tool itself names the
@@ -363,10 +379,10 @@ jobs:
         # GitHub-hosted legs only: the self-hosted pool shares a hostPath any pull request job can write, so it never
         # restores or saves a store and recomputes every time.
         id: reach-key
-        if: steps.relevance.outputs.relevant == 'true' && runner.environment == 'github-hosted' && matrix.name == 'static'
+        if: steps.relevance.outputs.relevant == 'true' && runner.environment == 'github-hosted' && matrix.name == 'plan-reads'
         env:
           EVENT_NAME: ${{ github.event_name }}
-          REACH_KEY: plan-reads-reach-v3-${{ hashFiles('**/*.go', '**/go.mod', '**/go.sum', 'internal/cigates/affected/*.tsv') }}
+          REACH_KEY: plan-reads-reach-v3-${{ hashFiles('**/*.go', '**/go.mod', '**/go.sum', 'internal/cigates/affected/*.tsv', 'internal/cigates/affected/reach.d/*.tsv') }}
         run: |
           set -euo pipefail
           printf 'key=%s\n' "${REACH_KEY}" >> "${GITHUB_OUTPUT}"
@@ -375,13 +391,13 @@ jobs:
             echo "PLAN_READS_REACH_FRESH=1" >> "${GITHUB_ENV}"
           fi
 
-      - name: Restore the plan-reads call-graph result (pull requests, GitHub-hosted static leg)
-        # CHAOS-11421: exact key, no restore-keys. The result is compared with reach.tsv again on a hit. The stored header
+      - name: Restore the plan-reads call-graph result (pull requests, GitHub-hosted plan-reads leg)
+        # CHAOS-11421: exact key, no restore-keys. The result is compared with reach.d again on a hit. The stored header
         # binds its rows to the exact input hash (rows-sha256): a store that fails the digest is refused and the leg
         # computes fresh. The directory is under RUNNER_TEMP, outside the workspace; only the tool (after a green computed
         # run), this restore and the save step below touch it (reach_store_hosted_only_test.go).
         id: reach-store
-        if: steps.relevance.outputs.relevant == 'true' && runner.environment == 'github-hosted' && matrix.name == 'static' && github.event_name == 'pull_request'
+        if: steps.relevance.outputs.relevant == 'true' && runner.environment == 'github-hosted' && matrix.name == 'plan-reads' && github.event_name == 'pull_request'
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/plan-reads-reach
@@ -420,6 +436,7 @@ jobs:
           bash ci/go_worker_fixture_test.sh
           bash ci/pull_base_image_test.sh
           bash ci/retry_test.sh
+          bash ci/fetch_pinned_release_test.sh
           bash ci/ghcr_login_test.sh
           bash ci/auth_rotation_probe_test.sh
           bash ci/rehearse_auth_key_rotation_test.sh
@@ -427,7 +444,8 @@ jobs:
           bash ci/wait_pg_accepting_test.sh
 
       - name: Check the gqlgen output has not drifted from its hand-edits
-        if: steps.relevance.outputs.relevant == 'true' && matrix.name == 'static'
+        # CHAOS-13520: on the plan-reads leg, so the static leg stays under five minutes.
+        if: steps.relevance.outputs.relevant == 'true' && matrix.name == 'plan-reads'
         # cmd/query-api's generated GraphQL layer carries deliberate
         # hand-edits -- the nullability rulings recorded in the file comments --
         # and a bare `gqlgen generate` reverts every one of them.
@@ -485,7 +503,7 @@ jobs:
         id: ghcr_login
         continue-on-error: true
         if: steps.relevance.outputs.relevant == 'true'
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -556,12 +574,12 @@ jobs:
           retention-days: 14
           if-no-files-found: warn
 
-      - name: Save the plan-reads call-graph result (main pushes, GitHub-hosted static leg)
+      - name: Save the plan-reads call-graph result (main pushes, GitHub-hosted plan-reads leg)
         # CHAOS-11421: only a push to main saves, only after the leg passed, and what it saves is a FRESH compute (the push
         # run never reads a store). A pull request restores what main saved and never writes. A key that already exists is
         # kept (the save logs a warning and the step passes).
         if: >-
-          success() && steps.relevance.outputs.relevant == 'true' && runner.environment == 'github-hosted' && matrix.name == 'static'
+          success() && steps.relevance.outputs.relevant == 'true' && runner.environment == 'github-hosted' && matrix.name == 'plan-reads'
           && github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'full-chaos/dev-health-ops'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -589,7 +607,10 @@ jobs:
         # the nondeterminism this pins away. Checksum-verified, because an
         # unverified download is a pin on a name rather than on bytes.
         # Installed under RUNNER_TEMP and put on PATH via GITHUB_PATH so no
-        # step needs sudo.
+        # step needs sudo. CHAOS-13426: the download is authenticated with the
+        # job token (contents: read) and retried (ci/lib/fetch_pinned_release.sh).
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           version=0.11.0
@@ -627,7 +648,7 @@ jobs:
               ;;
           esac
           tarball="shellcheck-v${version}.linux.${arch}.tar.gz"
-          curl -fsSL -o "${RUNNER_TEMP}/${tarball}" "https://github.com/koalaman/shellcheck/releases/download/v${version}/${tarball}"
+          bash ci/lib/fetch_pinned_release.sh koalaman/shellcheck "v${version}" "${tarball}" "${sha}" "${RUNNER_TEMP}/${tarball}"
           echo "${sha}  ${RUNNER_TEMP}/${tarball}" | sha256sum -c -
           tar -xzf "${RUNNER_TEMP}/${tarball}" -C "${RUNNER_TEMP}"
           mkdir -p "${RUNNER_TEMP}/bin"
@@ -641,10 +662,6 @@ jobs:
         # rejected -- the second is what catches a linter that has silently
         # stopped linting, which otherwise reports exactly what a clean tree does.
         run: bash ci/check_shellcheck_pin.sh
-
-      - name: Test the session-issue Secret create script
-        if: steps.relevance.outputs.relevant == 'true' && matrix.name == 'static'
-        run: bash scripts/create-session-issue-secret_test.sh
 
       - name: Test the auth key-set Secret script
         if: steps.relevance.outputs.relevant == 'true' && matrix.name == 'static'
@@ -682,7 +699,7 @@ jobs:
           QUEUE_RUN: ${{ needs.go-quality-plan.outputs.queue_run }}
         run: |
           if [ -n "${QUEUE_RUN}" ]; then
-            summary="go-quality on this push: static ran; test-1-of-4, test-2-of-4, test-3-of-4, test-4-of-4, race-1-of-6, race-2-of-6, race-3-of-6, race-4-of-6, race-5-of-6, race-6-of-6 skipped: queue-tested sha, merge_group run ${QUEUE_RUN}"
+            summary="go-quality on this push: static ran, plan-reads ran; test-1-of-10, test-2-of-10, test-3-of-10, test-4-of-10, test-5-of-10, test-6-of-10, test-7-of-10, test-8-of-10, test-9-of-10, test-10-of-10, race-1-of-6, race-2-of-6, race-3-of-6, race-4-of-6, race-5-of-6, race-6-of-6 skipped: queue-tested sha, merge_group run ${QUEUE_RUN}"
           else
             summary="go-quality on this push: every leg ran (no queue-tested sha)"
           fi
@@ -698,6 +715,13 @@ jobs:
           echo "${RACE_POLICY}"
           echo "${RACE_POLICY}" >> "${GITHUB_STEP_SUMMARY}"
 
+      - name: Report the draft skip
+        if: always() && needs.go-quality-plan.outputs.draft_skip == 'true'
+        run: |
+          msg="DRAFT: legs not run (an unlabelled draft pull request runs no go-quality leg; the ready flip, or the ci:integration or ci:full label at the next push, runs them)"
+          echo "${msg}"
+          echo "${msg}" >> "${GITHUB_STEP_SUMMARY}"
+
       - name: Aggregate go-quality result
         env:
           GATE_NAME: go-quality
@@ -707,7 +731,8 @@ jobs:
           # `unconditional` policy, as typecheck's own fan-in. needs.<job>.result
           # of a matrix job is `success` only when EVERY leg succeeded.
           GATE_HAS_SELECTOR: "false"
-          GATED_JOB_1: go-quality-leg|unconditional|${{ needs.go-quality-leg.result }}
+          # Only an unlabelled draft starts no leg (a draft cannot merge; the ready run posts its own go-quality check-run).
+          GATED_JOB_1: go-quality-leg|unconditional|${{ needs.go-quality-plan.outputs.draft_skip == 'true' && 'success' || needs.go-quality-leg.result }}
           # The plan job must have run: a skipped or failed plan skips every leg.
           GATED_JOB_2: go-quality-plan|unconditional|${{ needs.go-quality-plan.result }}
         run: |

@@ -12,29 +12,41 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/routescan"
 )
 
 // Every file:line anchor in credential-classes.json that cites this repository
-// is pinned to the text of the line it names, and, when the anchor has a
-// line_end, to the text of the range's last real line, in
-// credentialanchors/credential-anchor-lines.json. A line that moves fails here,
-// naming the class, the anchor kind, the file:line and the expected text,
-// instead of leaving a stale citation. An anchor with no pin, a pin no anchor
-// uses, an unknown repo, a path that leaves the checkout (lexically or through
-// a symlink), an anchor on a blank or brace-only line, a line_end before the
-// line or past the end of the file, and an anchor on an absent file all fail;
-// none is skipped. A pin may not carry an offset: the anchor names its first
-// real line.
+// is pinned, in credentialanchors/credential-anchor-lines.json, to the text of
+// the line it names and to the symbol that holds it (the top-level declaration
+// of a Go file, routescan.Decls), and, when the anchor has a line_end, to the
+// text of the range's last real line and its symbol. The check finds the text
+// in its symbol, never at the cited line: a line moved by an edit above it
+// cannot fail here, and the cited line is a citation (a drift count is logged).
+// A symbol that is gone or declared twice, a text that is not in its symbol (a
+// range end text: in its symbol after the start), and a text found twice there
+// all fail. A text that is on several lines of its place when the pin is cut
+// (a non-Go file, or a range end such as "if err != nil {") is pinned as
+// occurrence k of count N, and a count that changes fails. Each failure names
+// the class, the anchor kind and the file:line. An anchor with no pin, a pin no anchor uses, an unknown repo, a
+// path that leaves the checkout (lexically or through a symlink), a blank or
+// brace-only pinned text, a line_end before the line, and an anchor on an
+// absent file fail too; none is skipped.
 //
 // The anchors on the deleted Python tree (src/dev_health_ops/*.py) are gone:
 // credentialanchors/credential-anchor-retired-evidence.tsv says, for each one,
 // the line it cited (path@commit^:line, commit = the one that deleted the file)
-// and that line's text, and whether it was re-pointed to the one Go declaration
-// whose doc says it is that Python symbol, or replaced by null with a gaps entry
-// of its class that quotes the text. The history test (build tag authhistory,
-// run by `ci/check_go.sh auth history` with full history) checks the rows
-// against git: the row set equals the base registry's Python anchors, each
-// commit deleted its file, each range fits and each text matches.
+// and that line's text, and what became of its slot: re-pointed to the one Go
+// declaration whose doc says it is that Python symbol, anchored to the Go code
+// that now decides the class (no successor claim), replaced by null with a gaps
+// entry of its class that quotes the text, or removed with its entry. A row names
+// its slot twice: where it was in the base registry (the key, stable) and where it
+// is now (current, "-" once removed); a removal shifts the current index of every
+// later row of that array by one. The history test (build tag authhistory, run by
+// `ci/check_go.sh auth history` with full history) checks the rows against git: the
+// row set equals the base registry's Python anchors, each commit deleted its file,
+// each range fits, each text matches, and each removed row's base entry is gone
+// from its array now.
 //
 // Anchors in the web and acr repositories are counted, not checked: those
 // files are not in this tree.
@@ -46,16 +58,28 @@ import (
 //
 // That rewrites credentialanchors/credential-anchor-lines.json from the registry
 // and the current source, then runs the check against it. Read its diff before
-// committing: a pin that changed is a line that moved.
+// committing: a pin that changed is a text, a symbol or a citation that moved.
 
 type anchorPin struct {
 	Path string `json:"path"`
 	Line int    `json:"line"`
 	End  int    `json:"end,omitempty"`
 	Text string `json:"text"`
-	// EndBack is how many blank or brace-only lines the end pin walks back from line_end to the range's last real line.
+	// Symbol is the top-level declaration that holds the line in a Go file (routescan.Decls); empty for other files.
+	Symbol string `json:"symbol,omitempty"`
+	// Occurrence k of Count N: in a non-Go file whose text is on N lines, the pin is the k-th of them.
+	Occurrence int `json:"occurrence,omitempty"`
+	Count      int `json:"count,omitempty"`
+	// EndBack is how many blank or brace-only lines the end pin walked back from line_end to the range's last real
+	// line when it was cut.
 	EndBack int    `json:"end_back,omitempty"`
 	EndText string `json:"end_text,omitempty"`
+	// EndSymbol is the declaration that holds the range's last real line when it is not Symbol.
+	EndSymbol string `json:"end_symbol,omitempty"`
+	// EndOccurrence k of EndCount N: the end text is on N lines of its symbol after the start; the range ends on the
+	// k-th.
+	EndOccurrence int `json:"end_occurrence,omitempty"`
+	EndCount      int `json:"end_count,omitempty"`
 }
 
 type anchorReport struct {
@@ -63,6 +87,7 @@ type anchorReport struct {
 	checked  int
 	ranged   int
 	foreign  int
+	drift    int
 }
 
 var foreignAnchorRepos = map[string]bool{"web": true, "acr": true}
@@ -201,15 +226,16 @@ func checkOneAnchor(report *anchorReport, root string, ref credentialAnchorRef, 
 		report.failures = append(report.failures, fmt.Sprintf("%s: pinned text %q is blank or brace-only and cannot detect a change: anchor the first real line", label, pin.Text))
 		return
 	}
-	found := "<past end of file>"
-	if line >= 1 && line <= len(lines) {
-		found = strings.TrimSpace(lines[line-1])
+	at, problem := locatePin(lines, path, pin.Symbol, pin.Text, pin.Occurrence, pin.Count, 1)
+	if problem != "" {
+		report.failures = append(report.failures, fmt.Sprintf("%s: %s", label, problem))
+		return
 	}
-	if found != pin.Text {
-		report.failures = append(report.failures, fmt.Sprintf("%s: expected line text %q at %s:%d, found %q", label, pin.Text, path, line, found))
+	if at != line {
+		report.drift++
 	}
 	if ref.end == 0 {
-		if pin.EndText != "" || pin.EndBack != 0 {
+		if pin.EndText != "" || pin.EndBack != 0 || pin.EndSymbol != "" || pin.EndOccurrence != 0 || pin.EndCount != 0 {
 			report.failures = append(report.failures, fmt.Sprintf("%s: the pin has an end but the anchor has no line_end", label))
 		}
 		return
@@ -219,9 +245,6 @@ func checkOneAnchor(report *anchorReport, root string, ref credentialAnchorRef, 
 	case ref.end < line:
 		report.failures = append(report.failures, fmt.Sprintf("%s: line_end %d is before line %d", label, ref.end, line))
 		return
-	case ref.end > len(lines):
-		report.failures = append(report.failures, fmt.Sprintf("%s: line_end %d is past the end of the file (%d lines)", label, ref.end, len(lines)))
-		return
 	case pin.EndBack < 0:
 		report.failures = append(report.failures, fmt.Sprintf("%s: end_back %d is negative", label, pin.EndBack))
 		return
@@ -229,21 +252,68 @@ func checkOneAnchor(report *anchorReport, root string, ref credentialAnchorRef, 
 		report.failures = append(report.failures, fmt.Sprintf("%s: pinned end text %q is blank or brace-only and cannot detect a change", label, pin.EndText))
 		return
 	}
-	for step := 0; step < pin.EndBack; step++ {
-		at := ref.end - step
-		if at < line || !trivialAnchorText(strings.TrimSpace(lines[at-1])) {
-			report.failures = append(report.failures, fmt.Sprintf("%s: end_back %d crosses line %d, which is not blank or brace-only", label, pin.EndBack, at))
-			return
+	if ref.end-pin.EndBack == line {
+		if pin.EndText != pin.Text || pin.EndSymbol != "" || pin.EndOccurrence != 0 || pin.EndCount != 0 {
+			report.failures = append(report.failures, fmt.Sprintf("%s: the range ends on its first line, so its end text must be the line's text %q, not %q", label, pin.Text, pin.EndText))
 		}
-	}
-	at := ref.end - pin.EndBack
-	if at < line {
-		report.failures = append(report.failures, fmt.Sprintf("%s: end_back %d walks before line %d", label, pin.EndBack, line))
 		return
 	}
-	if endFound := strings.TrimSpace(lines[at-1]); endFound != pin.EndText {
-		report.failures = append(report.failures, fmt.Sprintf("%s: expected range end text %q at %s:%d, found %q", label, pin.EndText, path, at, endFound))
+	endSymbol := pin.EndSymbol
+	if endSymbol == "" {
+		endSymbol = pin.Symbol
 	}
+	if _, problem := locatePin(lines, path, endSymbol, pin.EndText, pin.EndOccurrence, pin.EndCount, at+1); problem != "" {
+		report.failures = append(report.failures, fmt.Sprintf("%s: range end: %s", label, problem))
+	}
+}
+
+// locatePin is the line (1-based) that holds text once in a pin's place, at or after line from: in the one
+// declaration called symbol for a Go file, or in the whole file for another file (the occurrence-th of exactly count
+// lines when occurrence is set). It never reads the line the registry cites.
+func locatePin(lines []string, path, symbol, text string, occurrence, count, from int) (int, string) {
+	lo, hi, where := 1, len(lines), path
+	if strings.HasSuffix(path, ".go") {
+		if symbol == "" {
+			return 0, "the pin names no symbol: re-pin (CREDENTIAL_ANCHOR_UPDATE=1)"
+		}
+		decls, err := routescan.Decls([]byte(strings.Join(lines, "\n")))
+		if err != nil {
+			return 0, fmt.Sprintf("%s does not parse: %v", path, err)
+		}
+		named := routescan.Named(decls, symbol)
+		switch len(named) {
+		case 0:
+			return 0, fmt.Sprintf("anchor stale: %s declares no %s", path, symbol)
+		case 1:
+		default:
+			return 0, fmt.Sprintf("anchor ambiguous: %s declares %s %d times", path, symbol, len(named))
+		}
+		lo, hi, where = named[0].Lo, named[0].Hi, path+"#"+symbol
+	} else if symbol != "" {
+		return 0, fmt.Sprintf("a pin on %s names a symbol (%s): only a Go file has symbols", path, symbol)
+	}
+	if from > lo {
+		lo = from
+	}
+	var found []int
+	for n := lo; n <= hi && n <= len(lines); n++ {
+		if strings.TrimSpace(lines[n-1]) == text {
+			found = append(found, n)
+		}
+	}
+	if occurrence > 0 {
+		if len(found) != count || occurrence > count {
+			return 0, fmt.Sprintf("occurrence changed: %q is on %d lines of %s, the pin says occurrence %d of %d: re-pin", text, len(found), where, occurrence, count)
+		}
+		return found[occurrence-1], ""
+	}
+	switch len(found) {
+	case 1:
+		return found[0], ""
+	case 0:
+		return 0, fmt.Sprintf("anchor stale: %s holds no line %q", where, text)
+	}
+	return 0, fmt.Sprintf("anchor ambiguous: %q is on %d lines of %s", text, len(found), where)
 }
 
 func trivialAnchorText(text string) bool {
@@ -272,6 +342,23 @@ func readAnchorFile(root, path string, cache map[string][]string) ([]string, err
 	lines := strings.Split(string(raw), "\n")
 	cache[path] = lines
 	return lines, nil
+}
+
+// pinSymbolAt is the symbol of the smallest top-level declaration that holds line in a Go file ("" for other files).
+func pinSymbolAt(t *testing.T, path string, lines []string, line int) string {
+	t.Helper()
+	if !strings.HasSuffix(path, ".go") {
+		return ""
+	}
+	decls, err := routescan.Decls([]byte(strings.Join(lines, "\n")))
+	if err != nil {
+		t.Fatalf("%s does not parse: %v", path, err)
+	}
+	decl, ok := routescan.Enclosing(decls, line)
+	if !ok {
+		t.Fatalf("%s:%d is in no top-level declaration: anchor a line of one", path, line)
+	}
+	return decl.Name
 }
 
 // anchorUpdateRequested reads the re-pin switch. The switch rewrites a checked-in file, so it refuses to run with CI set.
@@ -307,6 +394,24 @@ func regenerateAnchorFiles(t *testing.T, root string, document []byte) {
 			t.Fatalf("%s:%d is past the end of the file or a blank or brace-only line: fix the registry first", ref.path, ref.line)
 		}
 		pin := anchorPin{Path: ref.path, Line: ref.line, End: ref.end, Text: strings.TrimSpace(lines[ref.line-1])}
+		symbolAt := func(line int) string { return pinSymbolAt(t, ref.path, lines, line) }
+		pin.Symbol = symbolAt(ref.line)
+		if !strings.HasSuffix(ref.path, ".go") {
+			var at []int
+			for n, l := range lines {
+				if strings.TrimSpace(l) == pin.Text {
+					at = append(at, n+1)
+				}
+			}
+			if len(at) > 1 {
+				pin.Count = len(at)
+				for k, n := range at {
+					if n == ref.line {
+						pin.Occurrence = k + 1
+					}
+				}
+			}
+		}
 		if ref.end != 0 {
 			if ref.end < ref.line || ref.end > len(lines) {
 				t.Fatalf("%s:%d-%d: line_end is before the line or past the end of the file: fix the registry first", ref.path, ref.line, ref.end)
@@ -315,6 +420,48 @@ func regenerateAnchorFiles(t *testing.T, root string, document []byte) {
 				pin.EndBack++
 			}
 			pin.EndText = strings.TrimSpace(lines[ref.end-pin.EndBack-1])
+			endLine := ref.end - pin.EndBack
+			if endSymbol := symbolAt(endLine); endSymbol != pin.Symbol {
+				pin.EndSymbol = endSymbol
+			}
+			if endLine != ref.line {
+				endSymbol := pin.EndSymbol
+				if endSymbol == "" {
+					endSymbol = pin.Symbol
+				}
+				lo, hi := ref.line+1, len(lines)
+				if strings.HasSuffix(ref.path, ".go") {
+					decls, err := routescan.Decls([]byte(strings.Join(lines, "\n")))
+					if err != nil {
+						t.Fatal(err)
+					}
+					named := routescan.Named(decls, endSymbol)
+					if len(named) != 1 {
+						t.Fatalf("%s: symbol %s is declared %d times", ref.path, endSymbol, len(named))
+					}
+					if named[0].Lo > lo {
+						lo = named[0].Lo
+					}
+					hi = named[0].Hi
+				}
+				var at []int
+				for n := lo; n <= hi; n++ {
+					if strings.TrimSpace(lines[n-1]) == pin.EndText {
+						at = append(at, n)
+					}
+				}
+				if len(at) > 1 {
+					pin.EndCount = len(at)
+					for k, n := range at {
+						if n == endLine {
+							pin.EndOccurrence = k + 1
+						}
+					}
+				}
+			}
+		}
+		if at, problem := locatePin(lines, pin.Path, pin.Symbol, pin.Text, pin.Occurrence, pin.Count, 1); problem != "" || at != ref.line {
+			t.Fatalf("%s:%d: the cut pin does not find its own line (%d, %s): give the anchor a line whose text is once in its symbol", ref.path, ref.line, at, problem)
 		}
 		pins[pinKey(pin.Path, pin.Line, pin.End)] = pin
 	}
@@ -350,7 +497,7 @@ func loadAnchorPins(t *testing.T) []anchorPin {
 	dec.DisallowUnknownFields()
 	var pins []anchorPin
 	if err := dec.Decode(&pins); err != nil {
-		t.Fatalf("credentialanchors/credential-anchor-lines.json: %v (a pin carries path, line, end, text, end_back and end_text only)", err)
+		t.Fatalf("credentialanchors/credential-anchor-lines.json: %v (a pin carries path, line, end, text, symbol, occurrence, count, end_back, end_text, end_symbol, end_occurrence and end_count only)", err)
 	}
 	return pins
 }
@@ -375,7 +522,8 @@ func TestCredentialClassAnchorsPointAtTheirPinnedLineText(t *testing.T) {
 	if report.checked == 0 || report.ranged == 0 {
 		t.Fatalf("no ops anchor (or no range) was measured: %d checked, %d ranges", report.checked, report.ranged)
 	}
-	t.Logf("anchors: %d line-checked (%d with a range end), %d in web/acr (counted, not checked)", report.checked, report.ranged, report.foreign)
+	t.Logf("anchors: %d checked by symbol (%d with a range end), %d in web/acr (counted, not checked)", report.checked, report.ranged, report.foreign)
+	t.Logf("citation note: %d of %d anchors cite a line other than the one their pin resolves to", report.drift, report.checked)
 }
 
 func TestTheAnchorUpdateRefusesUnderCI(t *testing.T) {
@@ -399,7 +547,8 @@ func TestTheRetiredPathListIsGone(t *testing.T) {
 
 // retiredEvidence is one row of credentialanchors/credential-anchor-retired-evidence.tsv.
 type retiredEvidence struct {
-	classID, where, old, oldText, action, successor, doc string
+	// where is the slot in the base registry the header names; current is the slot now, "-" for a removed one.
+	classID, where, current, old, oldText, action, successor, doc string
 }
 
 // loadRetiredEvidence returns the rows and the base registry commit the header names ("# base-registry <sha>").
@@ -422,10 +571,10 @@ func loadRetiredEvidence(t *testing.T) ([]retiredEvidence, string) {
 			continue
 		}
 		f := strings.Split(line, "\t")
-		if len(f) != 7 {
-			t.Fatalf("evidence row %q has %d fields, want 7", line, len(f))
+		if len(f) != 8 {
+			t.Fatalf("evidence row %q has %d fields, want 8 (class_id, where, current, old, old_text, action, successor, successor_doc)", line, len(f))
 		}
-		rows = append(rows, retiredEvidence{f[0], f[1], f[2], f[3], f[4], f[5], f[6]})
+		rows = append(rows, retiredEvidence{f[0], f[1], f[2], f[3], f[4], f[5], f[6], f[7]})
 	}
 	if !regexp.MustCompile(`^[0-9a-f]{40}$`).MatchString(base) {
 		t.Fatalf("the evidence header names base registry commit %q, want a 40-hex main commit", base)
@@ -433,9 +582,61 @@ func loadRetiredEvidence(t *testing.T) ([]retiredEvidence, string) {
 	return rows, base
 }
 
-// retiredGap is the gaps entry a null row adds to its class: it quotes the cited line.
+// retiredGap is the gaps entry a null row adds to its class: it quotes the cited line and names the base slot.
 func retiredGap(r retiredEvidence) string {
 	return fmt.Sprintf("retired anchor %s: %s (%s) was deleted with the Python api; no single documented Go successor", r.where, r.old, r.oldText)
+}
+
+var slotIndex = regexp.MustCompile(`^([^\[]*)\[(\d+)\](.*)$`)
+
+// splitSlot splits a slot at its first index: "validators[2]/anchor" is ("validators", 2, "/anchor").
+func splitSlot(where string) (array string, index int, rest string, ok bool) {
+	m := slotIndex.FindStringSubmatch(where)
+	if m == nil {
+		return "", 0, "", false
+	}
+	index, _ = strconv.Atoi(m[2])
+	return m[1], index, m[3], true
+}
+
+// currentSlots is where each kept row's base slot is now: a removed row takes its element out of its array, so each
+// later index of that array moves down by one per removal before it.
+func currentSlots(rows []retiredEvidence) map[string]string {
+	removed := map[string][]int{}
+	for _, r := range rows {
+		if array, index, _, ok := splitSlot(r.where); ok && r.action == "removed" {
+			removed[r.classID+"\t"+array] = append(removed[r.classID+"\t"+array], index)
+		}
+	}
+	slots := map[string]string{}
+	for _, r := range rows {
+		if r.action == "removed" {
+			continue
+		}
+		array, index, rest, ok := splitSlot(r.where)
+		if !ok {
+			slots[r.classID+"\t"+r.where] = r.where
+			continue
+		}
+		shift := 0
+		for _, gone := range removed[r.classID+"\t"+array] {
+			if gone < index {
+				shift++
+			}
+		}
+		slots[r.classID+"\t"+r.where] = fmt.Sprintf("%s[%d]%s", array, index-shift, rest)
+	}
+	return slots
+}
+
+func classHasGap(class map[string]any, gap string) bool {
+	gaps, _ := class["gaps"].([]any)
+	for _, g := range gaps {
+		if g == gap {
+			return true
+		}
+	}
+	return false
 }
 
 var (
@@ -488,6 +689,8 @@ func checkRetiredEvidence(document []byte, rows []retiredEvidence, root string) 
 	}
 	var failures []string
 	seen := map[string]bool{}
+	held := map[string]string{}
+	slots := currentSlots(rows)
 	cache := map[string][]string{}
 	for _, r := range rows {
 		label := fmt.Sprintf("evidence %s %s", r.classID, r.where)
@@ -508,17 +711,37 @@ func checkRetiredEvidence(document []byte, rows []retiredEvidence, root string) 
 			failures = append(failures, label+": no such class")
 			continue
 		}
-		node, ok := registryNode(class, r.where)
+		if r.action == "removed" {
+			if r.current != "-" {
+				failures = append(failures, fmt.Sprintf("%s: a removed slot is current %q, want -", label, r.current))
+			}
+			if r.successor != "-" || r.doc != "-" {
+				failures = append(failures, fmt.Sprintf("%s: a removed slot names successor %q, doc %q", label, r.successor, r.doc))
+			}
+			if classHasGap(class, retiredGap(r)) {
+				failures = append(failures, fmt.Sprintf("%s: the slot is removed, but the class gaps still hold %q", label, retiredGap(r)))
+			}
+			continue
+		}
+		if want := slots[r.classID+"\t"+r.where]; r.current != want {
+			failures = append(failures, fmt.Sprintf("%s: current %q, but the removals before it put the slot at %q", label, r.current, want))
+			continue
+		}
+		if other, dup := held[r.classID+"\t"+r.current]; dup {
+			failures = append(failures, fmt.Sprintf("%s: current %s is also the slot of %s", label, r.current, other))
+		}
+		held[r.classID+"\t"+r.current] = r.where
+		node, ok := registryNode(class, r.current)
 		if !ok {
-			failures = append(failures, label+": no such anchor slot in the registry")
+			failures = append(failures, fmt.Sprintf("%s: no such anchor slot %s in the registry", label, r.current))
 			continue
 		}
 		switch r.action {
-		case "repoint":
+		case "repoint", "anchored":
 			s := successorFmt.FindStringSubmatch(r.successor)
 			anchor, isMap := node.(map[string]any)
 			if s == nil || !isMap {
-				failures = append(failures, fmt.Sprintf("%s: a re-pointed slot holds %v, successor %q", label, node, r.successor))
+				failures = append(failures, fmt.Sprintf("%s: a %s slot holds %v, successor %q", label, r.action, node, r.successor))
 				continue
 			}
 			line, _ := strconv.Atoi(s[2])
@@ -526,6 +749,17 @@ func checkRetiredEvidence(document []byte, rows []retiredEvidence, root string) 
 			got := fmt.Sprintf("%v:%v:%v-%v", anchor["repo"], anchor["path"], anchor["line"], anchor["line_end"])
 			if want := fmt.Sprintf("ops:%s:%d-%d", s[1], line, end); got != want {
 				failures = append(failures, fmt.Sprintf("%s: the registry anchor is %s, the evidence says %s", label, got, want))
+				continue
+			}
+			if r.action == "anchored" {
+				// The slot now cites the Go code that decides the class; it claims no Python successor, so it has no
+				// doc, and the gap the null slot carried is closed.
+				if r.doc != "-" {
+					failures = append(failures, fmt.Sprintf("%s: an anchored slot claims no successor doc, got %q", label, r.doc))
+				}
+				if classHasGap(class, retiredGap(r)) {
+					failures = append(failures, fmt.Sprintf("%s: the slot is anchored, but the class gaps still hold %q", label, retiredGap(r)))
+				}
 				continue
 			}
 			decl := pythonDecl.FindStringSubmatch(r.oldText)
@@ -547,21 +781,70 @@ func checkRetiredEvidence(document []byte, rows []retiredEvidence, root string) 
 				failures = append(failures, fmt.Sprintf("%s: the evidence says null, the registry holds %v", label, node))
 				continue
 			}
-			gaps, _ := class["gaps"].([]any)
-			found := false
-			for _, g := range gaps {
-				if g == retiredGap(r) {
-					found = true
-				}
-			}
-			if !found {
+			if !classHasGap(class, retiredGap(r)) {
 				failures = append(failures, fmt.Sprintf("%s: the class gaps lack %q", label, retiredGap(r)))
 			}
 		default:
-			failures = append(failures, fmt.Sprintf("%s: action %q is not repoint or null", label, r.action))
+			failures = append(failures, fmt.Sprintf("%s: action %q is not repoint, anchored, null or removed", label, r.action))
 		}
 	}
 	sort.Strings(failures)
+	return failures
+}
+
+// removedSlotFailures checks each removed row against the base registry and the current one: the base slot held an
+// entry with a description, and no entry of that array holds that description now. A row that says "removed" while
+// its entry is still there fails. (Arrays also change for other reasons since the base, so their lengths are not
+// compared.)
+func removedSlotFailures(rows []retiredEvidence, baseDoc, currentDoc []byte) []string {
+	classesOf := func(document []byte) (map[string]map[string]any, error) {
+		var parsed struct {
+			Classes []map[string]any `json:"classes"`
+		}
+		if err := json.Unmarshal(document, &parsed); err != nil {
+			return nil, err
+		}
+		classes := map[string]map[string]any{}
+		for _, c := range parsed.Classes {
+			id, _ := c["class_id"].(string)
+			classes[id] = c
+		}
+		return classes, nil
+	}
+	baseClasses, err := classesOf(baseDoc)
+	if err != nil {
+		return []string{fmt.Sprintf("the base registry does not parse: %v", err)}
+	}
+	currentClasses, err := classesOf(currentDoc)
+	if err != nil {
+		return []string{fmt.Sprintf("the current registry does not parse: %v", err)}
+	}
+	var failures []string
+	for _, r := range rows {
+		if r.action != "removed" {
+			continue
+		}
+		label := fmt.Sprintf("evidence %s %s", r.classID, r.where)
+		array, index, _, ok := splitSlot(r.where)
+		if !ok {
+			failures = append(failures, label+": a removed slot names no array element")
+			continue
+		}
+		element, _ := registryNode(baseClasses[r.classID], fmt.Sprintf("%s[%d]", array, index))
+		entry, isMap := element.(map[string]any)
+		description, _ := entry["description"].(string)
+		if !isMap || description == "" {
+			failures = append(failures, label+": the base slot holds no entry with a description to check its removal by")
+			continue
+		}
+		now, _ := registryNode(currentClasses[r.classID], array)
+		list, _ := now.([]any)
+		for i, item := range list {
+			if other, _ := item.(map[string]any); other != nil && other["description"] == description {
+				failures = append(failures, fmt.Sprintf("%s: removed, but %s[%d] still holds its entry %q", label, array, i, description))
+			}
+		}
+	}
 	return failures
 }
 
@@ -598,8 +881,8 @@ func TestTheRetiredEvidenceCheckRefusesAWrongSuccessorAndAMissingGap(t *testing.
 	if err := os.WriteFile(filepath.Join(root, "internal", "x", "a.go"), []byte(source), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	repoint := retiredEvidence{"demo", "validators[0]/anchor", "src/dev_health_ops/check.py@0123456789ab^:10-20", "def verify_token(token):", "repoint", "internal/x/a.go:1-2", "check.py's verify_token"}
-	null := retiredEvidence{"demo", "issuer/anchors[0]", "src/dev_health_ops/check.py@0123456789ab^:5", "TOKEN_TTL = 300", "null", "-", "-"}
+	repoint := retiredEvidence{"demo", "validators[0]/anchor", "validators[0]/anchor", "src/dev_health_ops/check.py@0123456789ab^:10-20", "def verify_token(token):", "repoint", "internal/x/a.go:1-2", "check.py's verify_token"}
+	null := retiredEvidence{"demo", "issuer/anchors[0]", "issuer/anchors[0]", "src/dev_health_ops/check.py@0123456789ab^:5", "TOKEN_TTL = 300", "null", "-", "-"}
 	doc := func(anchor string, gaps string) []byte {
 		return []byte(fmt.Sprintf(`{"classes":[{"class_id":"demo","issuer":{"anchors":[null]},"validators":[{"anchor":%s}],"gaps":[%s]}]}`, anchor, gaps))
 	}
@@ -632,6 +915,86 @@ func TestTheRetiredEvidenceCheckRefusesAWrongSuccessorAndAMissingGap(t *testing.
 	}
 }
 
+// A removal takes its element out of the array: the rows after it name their base slot and the slot one lower now.
+func TestTheRetiredEvidenceCheckFollowsARemovedSlot(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "internal", "x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "internal", "x", "a.go"), []byte("package x\n\nfunc Decide() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	old := func(line int) string { return fmt.Sprintf("src/dev_health_ops/check.py@0123456789ab^:%d", line) }
+	removed := retiredEvidence{"demo", "validators[0]/anchor", "-", old(1), "middleware()", "removed", "-", "-"}
+	anchored := retiredEvidence{"demo", "validators[1]/anchor", "validators[0]/anchor", old(2), "lookup()", "anchored", "internal/x/a.go:3-3", "-"}
+	null := retiredEvidence{"demo", "validators[2]/anchor", "validators[1]/anchor", old(3), "rotate()", "null", "-", "-"}
+	rows := []retiredEvidence{removed, anchored, null}
+	gapOf := func(r retiredEvidence) string { g, _ := json.Marshal(retiredGap(r)); return string(g) }
+	doc := func(validators, gaps string) []byte {
+		return []byte(fmt.Sprintf(`{"classes":[{"class_id":"demo","validators":[%s],"gaps":[%s]}]}`, validators, gaps))
+	}
+	kept := `{"anchor":{"repo":"ops","path":"internal/x/a.go","line":3,"line_end":3}},{"anchor":null}`
+	if f := checkRetiredEvidence(doc(kept, gapOf(null)), rows, root); len(f) != 0 {
+		t.Fatalf("a removal with the later rows moved down must pass: %v", f)
+	}
+	stale := anchored
+	stale.current = "validators[1]/anchor"
+	if f := checkRetiredEvidence(doc(kept, gapOf(null)), []retiredEvidence{removed, stale, null}, root); len(f) == 0 {
+		t.Error("a row that keeps its base index after a removal before it must fail")
+	}
+	notRemoved := removed
+	notRemoved.action = "null"
+	notRemoved.current = "validators[0]/anchor"
+	if f := checkRetiredEvidence(doc(kept, gapOf(null)+","+gapOf(notRemoved)), []retiredEvidence{notRemoved, anchored, null}, root); len(f) == 0 {
+		t.Error("rows that shift without a removed row must fail")
+	}
+	if f := checkRetiredEvidence(doc(kept, gapOf(null)+","+gapOf(removed)), rows, root); len(f) == 0 {
+		t.Error("a removed slot whose gap is still listed must fail")
+	}
+	if f := checkRetiredEvidence(doc(kept, gapOf(null)+","+gapOf(anchored)), rows, root); len(f) == 0 {
+		t.Error("an anchored slot whose gap is still listed must fail")
+	}
+	removedHere := removed
+	removedHere.current = "validators[0]/anchor"
+	if f := checkRetiredEvidence(doc(kept, gapOf(null)), []retiredEvidence{removedHere, anchored, null}, root); len(f) == 0 {
+		t.Error("a removed slot with a current slot must fail")
+	}
+	elsewhere := `{"anchor":{"repo":"ops","path":"internal/x/a.go","line":1,"line_end":1}},{"anchor":null}`
+	if f := checkRetiredEvidence(doc(elsewhere, gapOf(null)), rows, root); len(f) == 0 {
+		t.Error("an anchored slot that holds another anchor than its row must fail")
+	}
+	withDoc := anchored
+	withDoc.doc = "check.py's lookup"
+	if f := checkRetiredEvidence(doc(kept, gapOf(null)), []retiredEvidence{removed, withDoc, null}, root); len(f) == 0 {
+		t.Error("an anchored slot that claims a successor doc must fail")
+	}
+	nulled := `{"anchor":null},{"anchor":null}`
+	if f := checkRetiredEvidence(doc(nulled, gapOf(null)), rows, root); len(f) == 0 {
+		t.Error("an anchored slot that holds null must fail")
+	}
+}
+
+func TestTheRemovedSlotCheckFindsAnEntryStillThere(t *testing.T) {
+	removed := retiredEvidence{"demo", "validators[0]/anchor", "-", "", "", "removed", "-", "-"}
+	kept := retiredEvidence{"demo", "validators[1]/anchor", "validators[0]/anchor", "", "", "null", "-", "-"}
+	base := []byte(`{"classes":[{"class_id":"demo","validators":[{"anchor":null,"description":"middleware"},{"anchor":null,"description":"lookup"}]}]}`)
+	gone := []byte(`{"classes":[{"class_id":"demo","validators":[{"anchor":null,"description":"lookup"}]}]}`)
+	if f := removedSlotFailures([]retiredEvidence{removed, kept}, base, gone); len(f) != 0 {
+		t.Fatalf("a removed row whose entry is gone must pass: %v", f)
+	}
+	if f := removedSlotFailures([]retiredEvidence{removed, kept}, base, base); len(f) == 0 {
+		t.Error("a removed row whose entry is still there must fail")
+	}
+	moved := []byte(`{"classes":[{"class_id":"demo","validators":[{"anchor":null,"description":"lookup"},{"anchor":null,"description":"middleware"}]}]}`)
+	if f := removedSlotFailures([]retiredEvidence{removed, kept}, base, moved); len(f) == 0 {
+		t.Error("a removed row whose entry moved to another index must fail")
+	}
+	bare := []byte(`{"classes":[{"class_id":"demo","validators":[null,{"anchor":null,"description":"lookup"}]}]}`)
+	if f := removedSlotFailures([]retiredEvidence{removed, kept}, bare, gone); len(f) == 0 {
+		t.Error("a removed row whose base slot has no description to check by must fail")
+	}
+}
+
 func TestCredentialAnchorLineCheckFailsOnAMovedLine(t *testing.T) {
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, "internal", "x"), 0o755); err != nil {
@@ -647,8 +1010,8 @@ func TestCredentialAnchorLineCheckFailsOnAMovedLine(t *testing.T) {
 		  "validators":[{"anchor":{"repo":"ops","path":"internal/x/a.go","line":4}}]}]}`, issuerLine))
 	}
 	pins := []anchorPin{
-		{Path: "internal/x/a.go", Line: 3, Text: "func Issue() {}"},
-		{Path: "internal/x/a.go", Line: 4, Text: "func Validate() {}"},
+		{Path: "internal/x/a.go", Line: 3, Text: "func Issue() {}", Symbol: "Issue"},
+		{Path: "internal/x/a.go", Line: 4, Text: "func Validate() {}", Symbol: "Validate"},
 	}
 
 	if report := checkCredentialAnchorLines(fixture(3), pins, root); len(report.failures) != 0 || report.checked != 2 {
@@ -666,7 +1029,7 @@ func TestCredentialAnchorLineCheckFailsOnAMovedLine(t *testing.T) {
 		}
 	}
 
-	orphan := checkCredentialAnchorLines(fixture(3), append(pins, anchorPin{Path: "internal/x/a.go", Line: 1, Text: "package x"}), root)
+	orphan := checkCredentialAnchorLines(fixture(3), append(pins, anchorPin{Path: "internal/x/a.go", Line: 1, Text: "package x", Symbol: "package"}), root)
 	if len(orphan.failures) == 0 {
 		t.Error("a pin no anchor uses must fail")
 	}
@@ -689,23 +1052,37 @@ func TestCredentialAnchorLineCheckPinsTheEndOfTheRange(t *testing.T) {
 	doc := func(line, end int) []byte {
 		return []byte(fmt.Sprintf(`{"classes":[{"class_id":"demo_class","issuer":{"anchors":[{"repo":"ops","path":"a.go","line":%d,"line_end":%d}]}}]}`, line, end))
 	}
-	pins := []anchorPin{{Path: "a.go", Line: 3, End: 5, Text: "func Verify() bool {", EndBack: 1, EndText: "return false"}}
-	if report := checkCredentialAnchorLines(doc(3, 5), pins, root); len(report.failures) != 0 || report.ranged != 1 {
+	pin := anchorPin{Path: "a.go", Line: 3, End: 5, Text: "func Verify() bool {", Symbol: "Verify", EndBack: 1, EndText: "return false"}
+	if report := checkCredentialAnchorLines(doc(3, 5), []anchorPin{pin}, root); len(report.failures) != 0 || report.ranged != 1 {
 		t.Fatalf("a range pinned at its last real line must pass: %+v", report)
 	}
 	write("package x\n\nfunc Verify() bool {\n\treturn true\n}\n")
-	if report := checkCredentialAnchorLines(doc(3, 5), pins, root); len(report.failures) == 0 {
+	if report := checkCredentialAnchorLines(doc(3, 5), []anchorPin{pin}, root); len(report.failures) == 0 {
 		t.Error("a changed last line of the range must fail although the first line holds")
+	}
+	write("package x\n\nfunc Verify() bool {\n\tif ok {\n\t\treturn false\n\t}\n\treturn false\n}\n")
+	twice := pin
+	twice.End, twice.EndBack = 8, 1
+	if report := checkCredentialAnchorLines(doc(3, 8), []anchorPin{twice}, root); len(report.failures) == 0 || !strings.Contains(report.failures[0], "anchor ambiguous") {
+		t.Errorf("a range end text twice after the start without an occurrence must fail as ambiguous: %v", report.failures)
+	}
+	twice.EndOccurrence, twice.EndCount = 2, 2
+	if report := checkCredentialAnchorLines(doc(3, 8), []anchorPin{twice}, root); len(report.failures) != 0 {
+		t.Errorf("occurrence 2 of 2 must pass: %v", report.failures)
+	}
+	twice.EndOccurrence, twice.EndCount = 2, 3
+	if report := checkCredentialAnchorLines(doc(3, 8), []anchorPin{twice}, root); len(report.failures) == 0 || !strings.Contains(report.failures[0], "occurrence changed") {
+		t.Errorf("an end text count that changed must fail: %v", report.failures)
 	}
 	write(source)
 	for name, c := range map[string]struct {
 		line, end int
 		pins      []anchorPin
 	}{
-		"line_end past the end of the file": {3, 9, []anchorPin{{Path: "a.go", Line: 3, End: 9, Text: "func Verify() bool {", EndText: "x"}}},
-		"line_end before the line":          {3, 2, []anchorPin{{Path: "a.go", Line: 3, End: 2, Text: "func Verify() bool {", EndText: "x"}}},
-		"end_back across a real line":       {3, 5, []anchorPin{{Path: "a.go", Line: 3, End: 5, Text: "func Verify() bool {", EndBack: 2, EndText: "func Verify() bool {"}}},
-		"a brace-only end text":             {3, 5, []anchorPin{{Path: "a.go", Line: 3, End: 5, Text: "func Verify() bool {", EndText: "}"}}},
+		"line_end before the line":         {3, 2, []anchorPin{{Path: "a.go", Line: 3, End: 2, Text: "func Verify() bool {", Symbol: "Verify", EndText: "x"}}},
+		"a brace-only end text":            {3, 5, []anchorPin{{Path: "a.go", Line: 3, End: 5, Text: "func Verify() bool {", Symbol: "Verify", EndText: "}"}}},
+		"an end text only above the start": {3, 5, []anchorPin{{Path: "a.go", Line: 3, End: 5, Text: "func Verify() bool {", Symbol: "Verify", EndBack: 1, EndText: "package x", EndSymbol: "package"}}},
+		"an end text in no symbol":         {3, 5, []anchorPin{{Path: "a.go", Line: 3, End: 5, Text: "func Verify() bool {", Symbol: "Verify", EndBack: 1, EndText: "return false", EndSymbol: "Gone"}}},
 	} {
 		if report := checkCredentialAnchorLines(doc(c.line, c.end), c.pins, root); len(report.failures) == 0 {
 			t.Errorf("%s must fail", name)
@@ -713,19 +1090,80 @@ func TestCredentialAnchorLineCheckPinsTheEndOfTheRange(t *testing.T) {
 	}
 }
 
-func TestCredentialAnchorLineCheckRefusesABlankOrBraceOnlyAnchorLine(t *testing.T) {
+func TestCredentialAnchorLineCheckRefusesABlankOrBraceOnlyPinnedText(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "a.go"), []byte("package x\n\nfunc Verify() bool { return false }\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	document := []byte(`{"classes":[{"class_id":"demo_class","issuer":{"anchors":[{"repo":"ops","path":"a.go","line":2}]}}]}`)
 	for _, pins := range [][]anchorPin{
-		{{Path: "a.go", Line: 2, Text: ""}},
-		{{Path: "a.go", Line: 2, Text: "func Verify() bool { return false }"}},
+		{{Path: "a.go", Line: 2, Text: "", Symbol: "Verify"}},
+		{{Path: "a.go", Line: 2, Text: "}", Symbol: "Verify"}},
 	} {
 		if report := checkCredentialAnchorLines(document, pins, root); len(report.failures) == 0 {
-			t.Errorf("an anchor on a blank line must fail (pin %+v): it names its first real line instead", pins[0])
+			t.Errorf("a blank or brace-only pinned text must fail (pin %+v): it cannot detect a change", pins[0])
 		}
+	}
+}
+
+// The check follows a pin's symbol and text, never the cited line: a line moved by an edit above it holds (and counts
+// as drift); a wrong, gone, doubled or moved symbol or text fails, and so does a text count that changed.
+func TestCredentialAnchorLineCheckFollowsItsSymbolNotTheLine(t *testing.T) {
+	root := t.TempDir()
+	write := func(name, body string) {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const issue = "func Issue() string {\n\treturn \"issued\"\n}\n"
+	doc := []byte(`{"classes":[{"class_id":"demo_class","issuer":{"anchors":[{"repo":"ops","path":"a.go","line":4}]},` +
+		`"validators":[{"anchor":{"repo":"ops","path":"s.json","line":2}}]}]}`)
+	goPin := anchorPin{Path: "a.go", Line: 4, Text: "return \"issued\"", Symbol: "Issue"}
+	jsonPin := anchorPin{Path: "s.json", Line: 2, Text: "\"aud\": {", Occurrence: 1, Count: 2}
+	base := func() {
+		write("a.go", "package x\n\n"+issue+"\nfunc Other() {}\n")
+		write("s.json", "{\n\"aud\": {\n},\n\"aud\": {\n}\n}\n")
+	}
+	run := func(pins ...anchorPin) anchorReport { return checkCredentialAnchorLines(doc, pins, root) }
+	base()
+	if r := run(goPin, jsonPin); len(r.failures) != 0 || r.checked != 2 || r.drift != 0 {
+		t.Fatalf("the base fixture must pass with 2 checked and no drift: %+v", r)
+	}
+	write("a.go", "package x\n\n// one\n// two\n// three\n"+issue+"\nfunc Other() {}\n")
+	if r := run(goPin, jsonPin); len(r.failures) != 0 || r.drift != 1 {
+		t.Errorf("three lines above the func must pass with one drifted citation: %+v", r)
+	}
+	for name, c := range map[string]struct {
+		goSource, jsonSource string
+		pins                 []anchorPin
+		want                 string
+	}{
+		"text changed in its symbol":   {"package x\n\nfunc Issue() string {\n\treturn \"minted\"\n}\n", "", nil, "anchor stale: a.go#Issue holds no line"},
+		"symbol renamed":               {"package x\n\nfunc Mint() string {\n\treturn \"issued\"\n}\n", "", nil, "anchor stale: a.go declares no Issue"},
+		"text moved into another func": {"package x\n\nfunc Issue() string { return \"\" }\n\nfunc Other() string {\n\treturn \"issued\"\n}\n", "", nil, "anchor stale: a.go#Issue holds no line"},
+		"text twice in its symbol":     {"package x\n\nfunc Issue() string {\n\tif true {\n\t\treturn \"issued\"\n\t}\n\treturn \"issued\"\n}\n", "", nil, "anchor ambiguous: \"return \\\"issued\\\"\" is on 2 lines of a.go#Issue"},
+		"symbol declared twice":        {"package x\n\n" + issue + "\n" + issue, "", nil, "anchor ambiguous: a.go declares Issue 2 times"},
+		"json text count changed":      {"", "{\n\"aud\": {\n},\n\"aud\": {\n},\n\"aud\": {\n}\n}\n", nil, "occurrence changed: \"\\\"aud\\\": {\" is on 3 lines of s.json"},
+		"go pin without a symbol":      {"", "", []anchorPin{{Path: "a.go", Line: 4, Text: "return \"issued\""}, jsonPin}, "the pin names no symbol"},
+		"json pin with a symbol":       {"", "", []anchorPin{goPin, {Path: "s.json", Line: 2, Text: "\"aud\": {", Symbol: "aud", Occurrence: 1, Count: 2}}, "only a Go file has symbols"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			base()
+			if c.goSource != "" {
+				write("a.go", c.goSource)
+			}
+			if c.jsonSource != "" {
+				write("s.json", c.jsonSource)
+			}
+			pins := c.pins
+			if pins == nil {
+				pins = []anchorPin{goPin, jsonPin}
+			}
+			r := run(pins...)
+			if len(r.failures) != 1 || !strings.Contains(r.failures[0], c.want) {
+				t.Fatalf("want one failure with %q, got %v", c.want, r.failures)
+			}
+		})
 	}
 }
 

@@ -3,9 +3,7 @@
 // suspend, state and rename routes. A suspension
 // in the auth schema ends only by this route (D6456), so go-api's PATCH
 // is_active=true calls it before it writes its own row, behind
-// AUTH_PROXY_ORG_PROVISIONING. It presents the go-api service credential
-// (AUTH_SESSION_ISSUE_TOKEN) holding memberships:write, or the go-api
-// workload token.
+// AUTH_PROXY_ORG_PROVISIONING. It presents the go-api workload token.
 package orgreactivate
 
 import (
@@ -50,7 +48,21 @@ var (
 	ErrSuspended = errors.New("orgreactivate: the organization is suspended")
 	// ErrNotFound: the rename route found no such organization (404). The call changed nothing.
 	ErrNotFound = errors.New("orgreactivate: auth-service has no such organization")
+	// ErrRateLimited: the state route answered 429 (a *RateLimited). It is also ErrRefused, so a caller that does
+	// not tell the two apart keeps the answer it gave before.
+	ErrRateLimited = errors.New("orgreactivate: auth-service rate limited the state read")
 )
+
+// RateLimited is a 429 from the state route, with its Retry-After (zero when it named none).
+type RateLimited struct {
+	RetryAfter time.Duration
+}
+
+func (e *RateLimited) Error() string {
+	return fmt.Sprintf("%s: status %d", ErrRefused, http.StatusTooManyRequests)
+}
+
+func (e *RateLimited) Is(target error) bool { return target == ErrRateLimited || target == ErrRefused }
 
 // Renamer renames an organization in auth-service. While auth-service owns
 // organizations its commit also writes go-api's organizations.name. A nil
@@ -180,6 +192,8 @@ func (c *Client) State(ctx context.Context, orgID uuid.UUID) (State, error) {
 	err := c.core.Post(ctx, StatePath, stateRequest{OrganizationID: orgID.String()}, &got)
 	var refused *authprovision.Refused
 	switch {
+	case errors.As(err, &refused) && refused.Status == http.StatusTooManyRequests:
+		return State{}, &RateLimited{RetryAfter: refused.RetryAfter}
 	case errors.As(err, &refused):
 		return State{}, fmt.Errorf("%w: status %d", ErrRefused, refused.Status)
 	case err != nil:

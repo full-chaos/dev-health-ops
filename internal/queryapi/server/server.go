@@ -382,6 +382,9 @@ func BuildWithLookup(lookup func(string) (string, bool)) (*Plane, error) {
 	var ready func(context.Context) error
 	var probes []ReadinessProbe
 	var registryPool *pgxpool.Pool
+	// AUTH_PROXY_IMPERSONATION is read before the routes are: a value that does not parse starts the
+	// process with one WARN and refuses the legacy caller (fail closed), configured routes or not.
+	warnInvalidImpersonationSwitch(getenv)
 	if routeCfg, ok := loadQueryRouteConfig(getenv); ok {
 		handlers, readyFn, cleanup, buildErr := buildQueryRoute(getenv, routeCfg)
 		if buildErr != nil {
@@ -395,12 +398,9 @@ func BuildWithLookup(lookup func(string) (string, bool)) (*Plane, error) {
 		if edgeErr != nil {
 			return fail(edgeErr)
 		}
-		mountQueryRouteSets(getenv, mux, internalMux, mcpMux, handlers, graphQLEdgeDeps{
-			auth:        edgeAuth,
-			corsOrigins: corsAllowedOrigins(lookup),
-			maxBytes:    graphQLMaxQueryBytes(getenv),
-			logger:      slog.Default(),
-		})
+		// A switch value that does not parse refuses (warnInvalidImpersonationSwitch, above).
+		edgeDeps := newGraphQLEdgeDeps(getenv, lookup, edgeAuth, slog.Default())
+		mountQueryRouteSets(getenv, mux, internalMux, mcpMux, handlers, edgeDeps)
 		ready = readyFn
 		probes = handlers.Probes
 		registryPool = handlers.RegistryPool
@@ -428,7 +428,6 @@ func BuildWithLookup(lookup func(string) (string, bool)) (*Plane, error) {
 
 	// The live users-row store behind every edge-verified REST route below (CHAOS-6290): PGStore over the
 	// /query route's ONE registry pool; an error (issuer set, no pool) refuses to start.
-	warnUnusedEdgeSecret(getenv, slog.Default())
 	edgeUsers, err := newEdgeUserStore(getenv, registryPool)
 	if err != nil {
 		log.Printf("query-api: build edge users store: %v", err)

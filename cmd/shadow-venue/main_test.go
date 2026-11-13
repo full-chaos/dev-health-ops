@@ -278,8 +278,8 @@ func TestPlanRefusesARowTableThatReclassifiesARow(t *testing.T) {
 	if code := run(context.Background(), []string{"plan", "-principals", principalsFile(t), "-rows", path}, &out, &errOut); code != exitUsage || !strings.Contains(errOut.String(), "class") {
 		t.Fatalf("plan with the external rows made internal: code %d, stderr %q", code, errOut.String())
 	}
-	if len(external) != 17 {
-		t.Fatalf("%d external rows changed, want 17", len(external))
+	if len(external) != 20 {
+		t.Fatalf("%d external rows changed, want 20", len(external))
 	}
 	for _, id := range external {
 		if !strings.Contains(errOut.String(), "row "+id+":") {
@@ -409,6 +409,9 @@ func TestJudgeIsStrictAndVoidsASlotsFileWithNoClaimReadBack(t *testing.T) {
 	code := run(context.Background(), []string{"judge", "-slots", slots, "-log", log, "-out", filepath.Join(dir, "t.tsv"), "-k", "1"}, &out, &errOut)
 	if code != 3 || !strings.Contains(out.String(), "claim read-back") {
 		t.Fatalf("a slots file with no claim read-back: code %d out %q err %q", code, out.String(), errOut.String())
+	}
+	if !strings.Contains(out.String(), "judge: schedule sha12 ") {
+		t.Fatalf("judge prints no schedule sha12 line: %q", out.String())
 	}
 }
 

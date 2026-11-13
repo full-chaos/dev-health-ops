@@ -49,19 +49,20 @@ func emittedPublicGrants(t *testing.T) map[string]bool {
 	t.Helper()
 	ctx := context.Background()
 	logger := slog.New(slog.DiscardHandler)
-	options := Options{Schema: "auth", RuntimeRole: "rt", UsersOwned: true, RequirePublicTables: true}
+	options := Options{Schema: "auth", RuntimeRole: "rt", UsersOwned: true, SSOProvidersOwned: true, RequirePublicTables: true}
 	builders := map[string]func() ([]string, error){
 		"publicRead": func() ([]string, error) { return publicReadStatements(ctx, presentQuerier{}, options, logger) },
 		"usersWrite": func() ([]string, error) { return usersWriteStatements(ctx, presentQuerier{}, options, logger) },
 		"register": func() ([]string, error) {
 			return registerOrganizationStatements(ctx, presentQuerier{}, options, logger)
 		},
-		"linkPurge":     func() ([]string, error) { return legacyLinkPurgeStatements(ctx, presentQuerier{}, options, logger) },
-		"membership":    func() ([]string, error) { return membershipWriteStatements(ctx, presentQuerier{}, options, logger) },
-		"invite":        func() ([]string, error) { return inviteWriteStatements(ctx, presentQuerier{}, options, logger) },
-		"audit":         func() ([]string, error) { return publicAuditWriteStatements(ctx, presentQuerier{}, options, logger) },
-		"ssoProviderUp": func() ([]string, error) { return ssoProviderWriteStatements(ctx, presentQuerier{}, options, logger) },
-		"impersonation": func() ([]string, error) { return impersonationWriteStatements(ctx, presentQuerier{}, options, logger) },
+		"linkPurge":      func() ([]string, error) { return legacyLinkPurgeStatements(ctx, presentQuerier{}, options, logger) },
+		"membership":     func() ([]string, error) { return membershipWriteStatements(ctx, presentQuerier{}, options, logger) },
+		"invite":         func() ([]string, error) { return inviteWriteStatements(ctx, presentQuerier{}, options, logger) },
+		"audit":          func() ([]string, error) { return publicAuditWriteStatements(ctx, presentQuerier{}, options, logger) },
+		"ssoProviderUp":  func() ([]string, error) { return ssoProviderWriteStatements(ctx, presentQuerier{}, options, logger) },
+		"ssoProviderOwn": func() ([]string, error) { return ssoProviderOwnStatements(ctx, presentQuerier{}, options, logger) },
+		"impersonation":  func() ([]string, error) { return impersonationWriteStatements(ctx, presentQuerier{}, options, logger) },
 	}
 	emitted := map[string]bool{}
 	for name, build := range builders {
@@ -158,7 +159,7 @@ func TestPublicPrivilegeSetIsClosed(t *testing.T) {
 			t.Errorf("table %q: %v", entry.Table, err)
 		}
 	}
-	for _, table := range []string{"memberships", "email_verification_tokens", "password_reset_tokens"} {
+	for _, table := range []string{"memberships"} {
 		if !seen[table+"|DELETE"] {
 			t.Errorf("%s: the table-level DELETE the grants pass gives is not in the set", table)
 		}

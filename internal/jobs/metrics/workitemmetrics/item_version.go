@@ -13,6 +13,8 @@ type ItemVersion struct {
 	WorkItemID string
 	RepoID     string // the text form of the repository id
 	LastSynced time.Time
+	// Scope is the work scope of the row. Only OncePerProviderScopeAndID reads it.
+	Scope string
 }
 
 // NewerItemVersion says that candidate is the item and current is not: the newer
@@ -33,11 +35,28 @@ func NewerItemVersion(candidate, current ItemVersion) bool {
 // applied to the rows of ONE day (the rows that pass the day's predicate), as the
 // daily job does: a version that does not pass the day's predicate does not compete.
 func OncePerProviderAndID(versions []ItemVersion) (kept []int, duplicates int) {
-	type identity struct{ provider, workItemID string }
+	return oncePer(versions, false)
+}
+
+// OncePerProviderScopeAndID is the scope view's rule (CHAOS-10797): the item
+// counts once in each work scope it is a row of. The key is (provider, scope,
+// id); in one scope the row with the newest last_synced is the item (on a tie,
+// the lower repository id), and a row of another scope does not compete. The
+// sum over scopes can be more than the org total (D5204). Its result has the
+// form of OncePerProviderAndID's.
+func OncePerProviderScopeAndID(versions []ItemVersion) (kept []int, duplicates int) {
+	return oncePer(versions, true)
+}
+
+func oncePer(versions []ItemVersion, byScope bool) (kept []int, duplicates int) {
+	type identity struct{ provider, scope, workItemID string }
 	position := make(map[identity]int, len(versions))
 	kept = make([]int, 0, len(versions))
 	for index, version := range versions {
-		key := identity{version.Provider, version.WorkItemID}
+		key := identity{provider: version.Provider, workItemID: version.WorkItemID}
+		if byScope {
+			key.scope = version.Scope
+		}
 		at, seen := position[key]
 		if !seen {
 			position[key] = len(kept)

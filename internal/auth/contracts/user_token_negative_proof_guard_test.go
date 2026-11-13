@@ -22,32 +22,40 @@ var userAccessClasses = map[string]bool{
 }
 
 const (
-	proofPush      = "internal/api/externalingest/user_tokens_refused_test.go"
-	proofACR       = "internal/apiservice/acr/user_tokens_refused_test.go"
-	proofStripe    = "internal/api/billing/user_tokens_refused_test.go"
-	proofWebhooks  = "internal/api/webhookintake/user_tokens_refused_test.go"
-	proofMCP       = "internal/queryapi/server/user_tokens_refused_test.go"
-	proofIssue     = "internal/auth/authapi/issue_user_tokens_test.go"
-	proofRefresh   = "internal/auth/authapi/refresh_user_tokens_test.go"
-	proofExchange  = "internal/auth/workloadexchange/user_tokens_refused_test.go"
-	proofProvision = "internal/auth/authapi/provisioning_rows_test.go"
-	proofSessState = "internal/auth/authapi/session_state_user_tokens_test.go"
-	proofDelegated = "internal/auth/authapi/delegated_user_tokens_test.go"
-	proofAuthorize = "internal/auth/authapi/authorize_user_tokens_test.go"
-	pushRoutes     = "TestExternalPushAuthenticatedRoutesRefuseUserTokens"
-	acrTest        = "TestInternalACRRoutesRefuseUserTokens"
-	stripeTest     = "TestStripeWebhookRefusesUserTokens"
-	webhookTest    = "TestWebhookRoutesRefuseUserTokens"
-	mcpTest        = "TestMCPRefusesUserTokensAsAuthorization"
-	issueTest      = "TestIssueSessionRefusesUserTokens"
-	refreshTest    = "TestRefreshRowsRefuseUserTokens"
-	exchangeTest   = "TestTheExchangeRefusesUserTokens"
-	provisionTest  = "TestProvisioningRoutesRefuseUserTokens"
-	readTest       = "TestReadRoutesRefuseUserTokens"
-	sessStateTest  = "TestSessionStateRefusesUserTokens"
-	delegatedTest  = "TestDelegatedRoutesRefuseUserTokens"
-	authorizeTest  = "TestAuthorizeRefusesUserTokens"
-	exemptExchange = "the credential is the social provider's own token in the request body, sent to the provider; no bearer of ours is read; a user flow, outside this leaf"
+	proofPush       = "internal/api/externalingest/user_tokens_refused_test.go"
+	proofACR        = "internal/apiservice/acr/user_tokens_refused_test.go"
+	proofStripe     = "internal/api/billing/user_tokens_refused_test.go"
+	proofWebhooks   = "internal/api/webhookintake/user_tokens_refused_test.go"
+	proofMCP        = "internal/queryapi/server/user_tokens_refused_test.go"
+	proofIssue      = "internal/auth/authapi/issue_user_tokens_test.go"
+	proofRefresh    = "internal/auth/authapi/refresh_user_tokens_test.go"
+	proofExchange   = "internal/auth/workloadexchange/user_tokens_refused_test.go"
+	proofProvision  = "internal/auth/authapi/provisioning_rows_test.go"
+	proofUsersAdmin = "internal/auth/authapi/provisioning_users_rows_test.go"
+	proofSSO        = "internal/auth/authapi/provisioning_sso_test.go"
+	proofSessState  = "internal/auth/authapi/session_state_user_tokens_test.go"
+	proofReadable   = "internal/auth/authapi/readable_repositories_user_tokens_test.go"
+	proofDelegated  = "internal/auth/authapi/delegated_user_tokens_test.go"
+	proofAuthorize  = "internal/auth/authapi/authorize_user_tokens_test.go"
+	proofAcrEvents  = "internal/auth/authapi/acr_events_user_tokens_test.go"
+	pushRoutes      = "TestExternalPushAuthenticatedRoutesRefuseUserTokens"
+	acrTest         = "TestInternalACRRoutesRefuseUserTokens"
+	stripeTest      = "TestStripeWebhookRefusesUserTokens"
+	webhookTest     = "TestWebhookRoutesRefuseUserTokens"
+	mcpTest         = "TestMCPRefusesUserTokensAsAuthorization"
+	issueTest       = "TestIssueSessionRefusesUserTokens"
+	refreshTest     = "TestRefreshRowsRefuseUserTokens"
+	exchangeTest    = "TestTheExchangeRefusesUserTokens"
+	provisionTest   = "TestProvisioningRoutesRefuseUserTokens"
+	usersAdminTest  = "TestUsersAdminRoutesRefuseUserTokens"
+	ssoTest         = "TestSSOProviderRoutesRefuseUserTokens"
+	readTest        = "TestReadRoutesRefuseUserTokens"
+	sessStateTest   = "TestSessionStateRefusesUserTokens"
+	readableTest    = "TestReadableRepositoriesRefusesUserTokens"
+	delegatedTest   = "TestDelegatedRoutesRefuseUserTokens"
+	authorizeTest   = "TestAuthorizeRefusesUserTokens"
+	acrEventsTest   = "TestAcrEventsRefusesUserTokens"
+	exemptExchange  = "the credential is the social provider's own token in the request body, sent to the provider; no bearer of ours is read; a user flow, outside this leaf"
 )
 
 type negativeProof struct {
@@ -84,6 +92,17 @@ var negativeProofs = map[string]negativeProof{
 	"auth-service|POST /internal/v1/organizations/suspend [dev-health-auth-service @api]":                      {file: proofProvision, test: provisionTest},
 	"auth-service|POST /internal/v1/organizations/state [dev-health-auth-service @api]":                        {file: proofProvision, test: provisionTest},
 	"auth-service|POST /internal/v1/organizations/rename [dev-health-auth-service @api]":                       {file: proofProvision, test: provisionTest},
+	"auth-service|POST /internal/v1/users/create [dev-health-auth-service @api]":                               {file: proofUsersAdmin, test: usersAdminTest},
+	"auth-service|POST /internal/v1/users/update [dev-health-auth-service @api]":                               {file: proofUsersAdmin, test: usersAdminTest},
+	"auth-service|POST /internal/v1/users/password [dev-health-auth-service @api]":                             {file: proofUsersAdmin, test: usersAdminTest},
+	"auth-service|POST /internal/v1/users/delete [dev-health-auth-service @api]":                               {file: proofUsersAdmin, test: usersAdminTest},
+	"auth-service|POST /internal/v1/sso/providers/list [dev-health-auth-service @api]":                         {file: proofSSO, test: ssoTest},
+	"auth-service|POST /internal/v1/sso/providers/create [dev-health-auth-service @api]":                       {file: proofSSO, test: ssoTest},
+	"auth-service|POST /internal/v1/sso/providers/get [dev-health-auth-service @api]":                          {file: proofSSO, test: ssoTest},
+	"auth-service|POST /internal/v1/sso/providers/update [dev-health-auth-service @api]":                       {file: proofSSO, test: ssoTest},
+	"auth-service|POST /internal/v1/sso/providers/delete [dev-health-auth-service @api]":                       {file: proofSSO, test: ssoTest},
+	"auth-service|POST /internal/v1/sso/providers/activate [dev-health-auth-service @api]":                     {file: proofSSO, test: ssoTest},
+	"auth-service|POST /internal/v1/sso/providers/deactivate [dev-health-auth-service @api]":                   {file: proofSSO, test: ssoTest},
 	"auth-service|POST /internal/v1/service-accounts/create [dev-health-auth-service @api]":                    {file: proofProvision, test: provisionTest},
 	"auth-service|POST /internal/v1/service-accounts/disable [dev-health-auth-service @api]":                   {file: proofProvision, test: provisionTest},
 	"auth-service|POST /internal/v1/service-accounts/enable [dev-health-auth-service @api]":                    {file: proofProvision, test: provisionTest},
@@ -106,10 +125,13 @@ var negativeProofs = map[string]negativeProof{
 	"auth-service|POST /internal/v1/grants/get [dev-health-auth-service @api]":                                 {file: proofProvision, test: readTest},
 	"auth-service|POST /internal/v1/grants/list [dev-health-auth-service @api]":                                {file: proofProvision, test: readTest},
 	"auth-service|POST /internal/v1/sessions/state [dev-health-auth-service @api]":                             {file: proofSessState, test: sessStateTest},
+	"auth-service|POST /internal/v1/principals/readable-repositories [dev-health-auth-service @api]":           {file: proofReadable, test: readableTest},
 	"auth-service|POST /internal/v1/sessions/delegated [dev-health-auth-service @api]":                         {file: proofDelegated, test: delegatedTest},
 	"auth-service|POST /internal/v1/sessions/delegated/end [dev-health-auth-service @api]":                     {file: proofDelegated, test: delegatedTest},
 	"auth-service|POST /v1/authorize [dev-health-auth-service @api]":                                           {file: proofAuthorize, test: authorizeTest},
 	"auth-service|POST /v1/authorize:batch [dev-health-auth-service @api]":                                     {file: proofAuthorize, test: authorizeTest},
+	"auth-service|POST /v1/authorize:repositories [dev-health-auth-service @api]":                              {file: proofAuthorize, test: authorizeTest},
+	"auth-service|POST /internal/v1/acr/credential-events [dev-health-auth-service @internal]":                 {file: proofAcrEvents, test: acrEventsTest},
 	"auth-service|POST /v1/token/refresh [dev-health-auth-service @api]":                                       {file: proofRefresh, test: refreshTest},
 	"auth-service|POST /api/v1/auth/refresh [dev-health-auth-service @api]":                                    {file: proofRefresh, test: refreshTest},
 	"auth-service|POST /api/v1/auth/logout [dev-health-auth-service @api]":                                     {file: proofRefresh, test: refreshTest},
@@ -229,8 +251,9 @@ func TestNegativeProofCensus(t *testing.T) {
 	// CHAOS-11885 added the organization reactivate row, CHAOS-11887 the invite revoke row and the organization suspend row, CHAOS-12043 the organization state row;
 	// CHAOS-12128 the principal access read row; CHAOS-12189 the session state row; CHAOS-10992 the organization onboard and create rows.
 	// CHAOS-10987 the two delegated session rows; CHAOS-12273 the four service account key rows; CHAOS-12275 the organization rename row; CHAOS-10841 the two authorize rows; CHAOS-12670 the eight read rows.
-	// CHAOS-13265 took query-api GET /buildinfo out: it accepts a platform admin's user access token.
-	if len(derivedRows(t)) != 58 || proven != 57 || exempt != 1 {
-		t.Fatalf("derived %d rows, %d proven, %d exempt; want 58, 57, 1", len(derivedRows(t)), proven, exempt)
+	// CHAOS-13265 took query-api GET /buildinfo out: it accepts a platform admin's user access token. CHAOS-13378 the four user-admin rows.
+	// CHAOS-13636 the seven SSO provider rows. CHAOS-13526 the acr credential events row. CHAOS-13542 the authorize repository listing row.
+	if len(derivedRows(t)) != 72 || proven != 71 || exempt != 1 {
+		t.Fatalf("derived %d rows, %d proven, %d exempt; want 72, 71, 1", len(derivedRows(t)), proven, exempt)
 	}
 }

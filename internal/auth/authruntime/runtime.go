@@ -151,8 +151,7 @@ func newAccessIssuer(cfg authconfig.Config, signer authapi.AccessSigner) (*autha
 		return nil, fmt.Errorf("authruntime: unknown access token class %q", cfg.Session.AccessClass)
 	}
 	return authapi.NewEdDSAIssuer(
-		cfg.Session.AccessSecret.Reveal(), cfg.Session.AccessIssuer, cfg.Session.AccessAudience,
-		signer, cfg.TokenIssuerURL, authapi.WithLegacyAudience(cfg.Session.LegacyAudience), authapi.WithAccessLifetime(cfg.Session.AccessLifetime),
+		cfg.Session.AccessAudience, signer, cfg.TokenIssuerURL, authapi.WithAccessLifetime(cfg.Session.AccessLifetime),
 	)
 }
 
@@ -230,11 +229,15 @@ func compatRoutes(
 	if err != nil {
 		return nil, err
 	}
-	provisioning, err := provisioningRoutes(cfg, logger, pool, schema, identities, issueWorkload, sessions)
+	provisioning, err := goAPIInternalRoutes(cfg, logger, pool, schema, identities, issueWorkload, sessions)
 	if err != nil {
 		return nil, err
 	}
-	return append(append(append(routes, links...), sso...), provisioning...), nil
+	readable, err := readableRepositoriesRoutes(cfg, logger, pool, schema, issueWorkload)
+	if err != nil {
+		return nil, err
+	}
+	return append(append(append(append(routes, links...), sso...), provisioning...), readable...), nil
 }
 
 // validateConfig is the validate route's go-api session read over the auth
@@ -306,6 +309,7 @@ func Execute(parent context.Context, args []string, lookup secrets.LookupEnv, st
 		logger.Warn("install the OTel meter provider", "error", err)
 	}
 	removedenv.ObserveOrgsOwned(parent, lookup, logger)
+	warnRetiredHS256Settings(parent, lookup, logger)
 
 	ctx, stop := lifecycle.SignalContext(parent)
 	defer stop()
@@ -616,6 +620,7 @@ func configureWithRoutes(
 		closeStore()
 		return nil, err
 	}
+	warnUnservedInternalOnly(ctx, logger, cfg, routes)
 	apiHTTP, err := httpapi.NewServer(apiServerOptions(cfg, logger, publicRoutes(routes)))
 	if err != nil {
 		closeStore()
@@ -842,7 +847,8 @@ func apiServerOptions(cfg authconfig.Config, logger *slog.Logger, routes []httpa
 		}
 		// The PDP routes are not on the default bucket: one noisy caller would drain it for all (the per-caller
 		// buckets in authapi come first); this is the ceiling of all callers together.
-		if routes[i].Pattern == authapi.PatternAuthorize || routes[i].Pattern == authapi.PatternAuthorizeBatch {
+		if routes[i].Pattern == authapi.PatternAuthorize || routes[i].Pattern == authapi.PatternAuthorizeBatch ||
+			routes[i].Pattern == authapi.PatternAuthorizeRepositories {
 			routes[i].RateLimitPerSecond = cfg.PDPRoute.PerSecond
 			routes[i].RateLimitBurst = cfg.PDPRoute.Burst
 		}

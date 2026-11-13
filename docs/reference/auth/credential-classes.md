@@ -45,14 +45,14 @@ shows where that happens today.
 | --- | --- | --- | --- |
 | `auth_js_browser_session` | active | human | |
 | `ops_access_token_hs256` | retired | human | |
-| `ops_refresh_token` | active | human | |
+| `ops_refresh_token` | retired | human | no endpoint-profile row accepts it; go-api's refresh and logout rows list `refresh_credential` |
 | `social_oauth_exchange` | active | human | |
 | `sso_saml_exchange` | optional_feature | human | |
 | `sso_oidc_exchange` | optional_feature | human | |
 | `org_context_header` | active | human | |
 | `impersonation_session` | active | human | |
-| `internal_svc_acr_token` | **unconsumed** | service_account | no route accepts it; stored rows list/rotate/revoke only |
-| `internal_svc_worker_token` | **unconsumed** | service_account | mint retired; stored rows list/revoke only |
+| `internal_svc_acr_token` | **retired** | service_account | no route accepts it; the service-credentials verbs are gone |
+| `internal_svc_worker_token` | **retired** | service_account | no route accepts it; the service-credentials verbs are gone |
 | `acr_client_credential` | active | client_credential | |
 | `acr_device_flow_code` | active | human | |
 | `acr_browser_refresh_token` | optional_feature | human | |
@@ -61,8 +61,8 @@ shows where that happens today.
 | `external_push_ingest_token` | active | external_source | |
 | `stripe_webhook_signature` | active | external_source | |
 | `github_webhook_signature` | active | external_source | |
-| `gitlab_webhook_signature` | active | external_source | |
-| `jira_webhook_signature` | active | external_source | |
+| `gitlab_webhook_signature` | **retired** | external_source | no route accepts it; the GitLab intake route is removed |
+| `jira_webhook_signature` | **retired** | external_source | no route accepts it; the Jira intake route is removed |
 | `kubernetes_sa_token_exchange` | optional_feature | workload | |
 | `github_app_installation_token` | active | external_source | |
 | `pagerduty_oauth_credential` | active | external_source | |
@@ -72,10 +72,10 @@ shows where that happens today.
 | `org_invite_token` | active | human | |
 | `license_key` | active | infrastructure | |
 | `infrastructure_deployment_credentials` | active | infrastructure | |
-| `effective_principal_envelope` | active | human | |
+| `effective_principal_envelope` | retired | human | no endpoint-profile row accepts it; query-api refuses it on every route |
 | `refresh_credential` | active | human | |
 | `user_access_token` | **unconsumed** | human | |
-| `internal_svc_authsess_token` | **unconsumed** | service_account | no route accepts it; stored rows list/rotate/revoke only |
+| `internal_svc_authsess_token` | **retired** | service_account | no route accepts it; the service-credentials verbs are gone |
 | `link_credential` | active | human | |
 | `pagerduty_webhook_signature` | active | external_source | |
 | `workload_token` | optional_feature | workload | |
@@ -106,7 +106,7 @@ stored as its SHA-256 only, single use with a 30 s grace and family reuse
 revocation. It is class 32. auth-service is its only issuer and its only
 validator (`POST /v1/token/refresh`); its four API routes and three operator
 routes have rows in `contracts/auth/v1/endpoint-profiles.auth-service.json`.
-It is not `ops_refresh_token`: go-api mints that class, and
+It is not `ops_refresh_token`: that class is go-api's retired HS256 refresh JWT, and
 `refresh_credential` is auth-service's own.
 
 **`internal_svc_authsess_token`.** The go-api service credential
@@ -117,9 +117,9 @@ only the go-api workload token and refuse this credential from the bearer text,
 counted in `auth.session.retired_credential_refusals{operation}`. It shares the
 `internal_service_credentials` table with `svc_acr_` and `svc_worker_`, which
 carry other prefixes, services and scopes. No route takes it, so no validator
-accepts it; the verbs of `dev-hops service-credentials` still mint, rotate,
-list and revoke stored rows. Its second scope, `memberships:write`, is retired: no service
-may hold it, the mint refuses it, and the internal provisioning routes
+accepts it, and the `service-credentials` verbs that minted, rotated, listed and
+revoked its rows are gone. Its second scope, `memberships:write`, is retired: no service
+may hold it, nothing mints it, and the internal provisioning routes
 (`/internal/v1/memberships/*`, `/internal/v1/invites/*`, `/internal/v1/organizations/*`,
 `/internal/v1/service-accounts/*`, `/internal/v1/grants/*`) refuse this credential
 and take the go-api workload token only. The route and
@@ -175,9 +175,8 @@ lifetime is at most 60 min, the ceiling of the retired HS256 token. The class is
 `unconsumed`: nothing mints or verifies it yet.
 The audiences `acr-api` and `acr-mcp` (scopes `acr:api` and `acr:mcp`) are ACR's: acr-api accepts `acr-api` only and acr-mcp `acr-mcp`
 only. go-api, query-api and auth-service refuse both. No ops platform token
-carries one: the session token settings (`AUTH_JWT_AUDIENCE`,
-`AUTH_LEGACY_JWT_AUDIENCE`, go-api's `JWT_AUDIENCE`), the HS256 edge-token
-verifier and signer, the envelope verifier and both minters refuse them. The
+carries one: the session token settings (`AUTH_JWT_AUDIENCE`, go-api's
+`JWT_AUDIENCE`), the envelope verifier and both minters refuse them. The
 mint that will issue them is a separate one not built yet.
 
 **`workload_token`.** The EdDSA workload token of TRD section 11
@@ -287,42 +286,41 @@ it only with a browser client configured, so the class is `optional_feature`.
 
 ## Credentials that reach a validator that is not their own
 
-The org scope (`Scope.OrgScope`, `internal/api/policy/scope.go:128`) reads every
-request's `authorization` header through `Scope.headerAuthenticate`
-(`internal/api/policy/scope.go:103-120`), which calls
-`Authenticator.Authenticate` (`internal/api/policy/principal.go:109`) and
-decodes it as a user access JWT — **regardless of what the token actually
-is** — except for one explicit path-prefix exemption (`acrInternalPrefix`,
-`internal/api/policy/scope.go:97-98`, checked at `:130`):
+go-api reads the `Authorization` header in one place: the Principal step
+(`Scope.Principal`, `internal/api/policy/principalonce.go:112`, which decides
+in `Scope.decide`, `:125`). It checks the credential's own shape before any
+decoder runs:
 
-```go
-if strings.HasPrefix(r.URL.Path, acrInternalPrefix) {
-	next.ServeHTTP(w, r)
-	return
-}
-```
+- Its refusal table (`earlyRefusals`, `internal/api/policy/principalonce.go:39-49`)
+  refuses a bearer whose prefix names a domain credential or a secret
+  (`svc_`, `fcpush_`, `fcacr_`, `whsec_`, `fcwlb_`, `fcsak_`, `fcoac_`,
+  `fcocs_`) before any validator or store read.
+- A route whose endpoint-profile row does not accept an access token sends no
+  bearer to the access-token check.
+- The access-token check (`accessverify.Validator.Validate`,
+  `internal/auth/accessverify/accessverify.go:133`) reads only the JOSE header
+  `alg` and refuses every alg but EdDSA, the retired HS256 included.
 
-A non-JWT bearer value does not fail the request: `Authenticator.Authenticate`
-returns a refusal, and `Scope.headerAuthenticate` treats a refusal as no user
-(`internal/api/policy/scope.go:116-118`), so the request proceeds as anonymous
-through the org scope and its *real* validator still gets a turn. **But the
-credential still transited a validator it does not own**, which is exactly the
-shape this section describes. Every class below hits
-this:
+The org scope (`Scope.OrgScope`, `internal/api/policy/scope.go:128`) and the
+impersonation scope (`Scope.Impersonation`, `:221`) read only the Principal
+decision (`principalFrom`, `:105`), never the header. The org scope skips the
+`/api/v1/internal/acr/` prefix (`acrInternalPrefix`, `:98`); those routes
+accept only the acr-api workload token (`routeAuth.authenticate`,
+`internal/apiservice/acr/internalauth.go:99`).
 
-| Credential class | Route(s) | Exempted from the path prefix? |
-| --- | --- | --- |
-| `internal_svc_worker_token` (`svc_worker_*`) | none found (see below) | **No** — no HTTP validator exists for it anywhere, so if one were ever wired up at a non-`/api/v1/internal/acr/` path it would silently degrade to anonymous first. |
-| `external_push_ingest_token` (`fcpush_*`) | External Push data-plane endpoints | **No.** The org scope only understands user JWTs and takes its anonymous pass-through branch for an `fcpush_...` bearer: the decode attempt still happens, it just fails harmlessly. |
+So no class reaches a validator it does not own: no validator in
+`contracts/auth/v1/credential-classes.json` sets
+`foreign_class_validator: true`. The Python `OrgIdMiddleware` did: it ran every
+bearer through the user-JWT decoder, except under the `/api/v1/internal/acr/`
+prefix. That code is gone, and its validator entries are removed from the
+registry:
 
-Only `internal_svc_acr_token` (`svc_acr_*`) got the fix. The fix is a path
-exemption, not a credential-class dispatch — so it only protects whatever
-happens to be mounted under `/api/v1/internal/acr/*` today. Any new route
-for `svc_worker_*` or any future opaque credential
-mounted **outside** that one path prefix inherits the original bug's shape
-by default. **The durable fix is credential-class-aware dispatch (check the
-token's own shape/prefix before choosing a decoder), not a growing exemption
-list of path prefixes.**
+| Credential class | What go-api does with it today |
+| --- | --- |
+| `internal_svc_acr_token` (`svc_acr_*`) | The internal acr routes answer the uniform 401 before any credential read; every other route refuses the `svc_` prefix in the Principal step. |
+| `internal_svc_worker_token` (`svc_worker_*`) | No route accepts it; the Principal step refuses the `svc_` prefix. |
+| `external_push_ingest_token` (`fcpush_*`) | The Principal step refuses the `fcpush_` prefix; only the External Push routes read it (`requireIngestScope`, `internal/api/externalingest/auth.go:81`). |
+| `ops_refresh_token` (a refresh JWT) | It is a body field, not a bearer. auth-service refuses a JWT-shaped `refresh_token` before any session read (`refuseLegacyRefresh`, `internal/auth/authapi/compat.go:504`). |
 
 ### A positive counter-example worth copying: acr's dispatch
 
@@ -344,29 +342,17 @@ cross-tenant write path. Its two credential classes (the deployment-wide API
 key and the HMAC body signature) are deleted from the registry, the wire
 schemas and the stored-class CHECK (auth migration 0036).
 
-The engineering guardrails say: "missing config must never mean auth
-disabled in production." The webhook validators in
-`internal/api/webhookintake/` (`github.go` HMAC, `gitlab.go` token compare,
-`jira.go` HMAC) and the Stripe webhook
-(`internal/api/billing/webhook.go:60-84`, signature check in
-`internal/api/billing/webhooksig.go`) fail closed: each answers 500
-when its secret is unset.
+The current signature-only routes accept Stripe, GitHub, and PagerDuty signatures. GitLab and Jira intake routes are absent. See [Billing and worker boundaries](billing-and-worker-boundaries.md) for matching rules, refusal behavior, and enforcing tests.
 
-## Unconsumed credential: `svc_worker_*`
+## Retired credential: `svc_worker_*`
 
-**Mint retired.** `dho service-credentials create` and `rotate` refuse
-`--service worker-operator` before a database is opened (exit 1, one JSON error line on
-stderr); no `svc_worker_*` token is issued any more. `list` and `revoke` keep working on
-the rows already stored, active and revoked. No row was migrated or deleted.
+The class is retired. The entire `dho service-credentials` command group is absent, including create, rotate, list, and revoke. Each verb returns an unknown-command error with exit 2. Stored rows do not grant operator authority.
 
-`WORKER_OPERATOR_TOKEN_PREFIX = "svc_worker_"` was minted through
-the same code path as `svc_acr_*`
-(`internal/apiservice/admin/servicecredentials.go`), with
-its own scope set (`workers:read`, `workers:operate`,
-`internal/apiservice/admin/servicecredentials.go:36-44`). No HTTP route in ops, web, or acr was found
-that validates a `svc_worker_`-prefixed bearer token — the internal acr routes (`internal/apiservice/acr/internalauth.go`)
-accept only the acr-api workload token. A consumer, if any, lives in the Go
-worker binaries or `dev-health-go`, outside this repository's HTTP routes.
+Enforced by: `TestRetiredVerbGroupsAreUnknownCommands` and `TestRetiredVerbGroupsAreNotInTheTree` in `cmd/dho/retired_verbs_test.go`.
+
+The worker operator CLI uses its fixed operator principal and database role checks. It does not validate `svc_worker_` bearers or check `workers:read` or `workers:operate` scopes. See [Worker and queue authorization](billing-and-worker-boundaries.md#worker-and-queue-authorization).
+
+Enforced by: `internal/joboperator/auth_test.go` and `internal/workersctl/operator_authority_inventory_test.go`.
 
 ## Infrastructure and exchange classes
 

@@ -106,6 +106,8 @@ func TestPgbouncerExporterOffByDefaultKeepsThePoolerObjects(t *testing.T) {
 }
 
 func TestPgbouncerExporterOnIsASupervisedCredentialFreeSidecar(t *testing.T) {
+	t.Parallel()
+
 	docs := renderPoolers(t, exporterOn...)
 	pod := at(authDoc(docs, "Deployment", transactionPooler), "spec", "template", "spec")
 	cs, _ := at(pod, "containers").([]any)
@@ -191,6 +193,8 @@ func TestPgbouncerExporterOnIsASupervisedCredentialFreeSidecar(t *testing.T) {
 }
 
 func TestPgbouncerExporterChangesOnlyTheTransactionPod(t *testing.T) {
+	t.Parallel()
+
 	off := renderPoolers(t)
 	on := renderPoolers(t, exporterOn...)
 	if len(off) != len(on) {
@@ -208,6 +212,8 @@ func TestPgbouncerExporterChangesOnlyTheTransactionPod(t *testing.T) {
 }
 
 func TestPgbouncerExporterImageMustBeDigestPinned(t *testing.T) {
+	t.Parallel()
+
 	for _, image := range []string{"", "quay.io/prometheuscommunity/pgbouncer-exporter:v0.12.1", "quay.io/prometheuscommunity/pgbouncer-exporter@sha256:not-a-digest"} {
 		_, out, err := renderAuth(t, authWith("--set", "goWorkers.pgbouncer.transaction.exporter.enabled=true", "--set", "goWorkers.pgbouncer.transaction.exporter.image="+image)...)
 		if err == nil || !strings.Contains(out, "goWorkers.pgbouncer.transaction.exporter.image") {
@@ -220,6 +226,8 @@ func TestPgbouncerExporterImageMustBeDigestPinned(t *testing.T) {
 }
 
 func TestPgbouncerExporterMetricsFromAdmitsOnlyTheScraperOnItsPort(t *testing.T) {
+	t.Parallel()
+
 	docs := renderPoolers(t, append(append([]string{}, exporterOn...), "--set-json", "goWorkers.pgbouncer.transaction.exporter.metricsFrom="+collectorSelector)...)
 	off := renderPoolers(t)
 	np := authDoc(docs, "NetworkPolicy", transactionPooler)
@@ -266,6 +274,8 @@ func TestPgbouncerExporterMetricsFromAdmitsOnlyTheScraperOnItsPort(t *testing.T)
 }
 
 func TestPgbouncerExporterSchemaRefusesUnknownKeys(t *testing.T) {
+	t.Parallel()
+
 	for _, set := range []string{"goWorkers.pgbouncer.transaction.exporter.bogus=1", "goWorkers.pgbouncer.transaction.exporter.port=80"} {
 		_, out, err := renderAuth(t, authWith(append(append([]string{}, exporterOn...), "--set", set)...)...)
 		if err == nil {
@@ -276,6 +286,8 @@ func TestPgbouncerExporterSchemaRefusesUnknownKeys(t *testing.T) {
 
 // The exporter shares the pod network namespace with PgBouncer: its listen port must not be the pooler port.
 func TestPgbouncerExporterPortMustDifferFromThePoolerPort(t *testing.T) {
+	t.Parallel()
+
 	const msg = "goWorkers.pgbouncer.transaction.exporter.port must differ from the transaction pooler port"
 	for _, set := range [][]string{
 		{"--set", "goWorkers.pgbouncer.transaction.exporter.port=6432"},

@@ -63,7 +63,7 @@ The gauge is set once at start. It is 0 when go-api can ask, so a PDP outage doe
 1. Read `dev_health_authz_enforcement_enabled{namespace,service="go-api"}` (`internal/authzenforce/authzenforce.go:128`, `:140-151`). A series at 1 is a switched-on namespace; the `503` can only come from those.
 2. Read `dev_health_authz_enforcement_decisions_total{outcome="error_deny"}` by `namespace`. A rising share against `allow` and `deny` is the outage signal. The counter is lazy: no series means no event yet.
 3. Read the go-api WARN lines above for the `reason`. `pdp_unreachable`, `pdp_timeout` or `pdp_unavailable` point at auth-service or the network; `pdp_rate_limited` points at the auth-service limits.
-4. Check auth-service: `/readyz` is 200 (`docs/reference/auth/readiness-and-slo.md:26`). The PDP route is `POST /v1/authorize` (`internal/auth/authapi/authorize.go:27`).
+4. Check auth-service: `/readyz` is 200 (`docs/reference/auth/readiness-and-slo.md:26`). The PDP route is `POST /v1/authorize` (`internal/auth/authapi/authorize.go:28`).
 5. Two auth-service limits can cause `pdp_rate_limited`: the per-pod server limit, default 20 requests per second (`defaultRateLimitPerSecond`, `internal/auth/authconfig/config.go:175`, read at `:484`), and the per-caller limit (`PDPCallerLimit`, `internal/auth/authapi/authorize_limit.go:23`; the zero value sets none).
 
 What does not exist on `main`:
@@ -76,7 +76,7 @@ What does not exist on `main`:
 ### Rule out other causes
 
 - A `403` is a PDP deny, not an outage. Triage the reason with [Auth shadow PDP triage](auth-shadow-pdp-triage.md).
-- A legacy HS256 token, a delegated (impersonation) session, an organization route with no organization, or a request that serves another organization than the token's (path `{org_id}` or `org_id` query) keeps the legacy answer and is never refused with a `503` (`enforce.go:147-152`, `unjudgedReason` at `:192`). They are counted in `dev_health_authz_enforcement_unjudged_total{route,reason}` (`enforcecounters.go:14`).
+- A legacy HS256 token, a delegated (impersonation) session, a delegated session's bearer with no organization, or a served organization that is no UUID keeps the legacy answer and is never refused with a `503`. A request that serves another organization than the token's (path `{org_id}` or `org_id` query) is judged on the token organization, so in an outage it is a `503` like any other enforced request. A token with no organization on an organization row is asked `admin.orgs`, so in an outage it is a `503` too (a platform admin included), except on an `AdminOrg` row, which refuses it `403` `Organization context required` with no question (`enforce.go:147-152`, `unjudgedReason` at `:192`). They are counted in `dev_health_authz_enforcement_unjudged_total{route,reason}` (`enforcecounters.go:14`).
 - An allow with a `redaction` or `step_up` obligation, or a `minimum_assurance` other than `aal1` on a read, is a `503` for every such request, however healthy the PDP is. So is a `repository_allowlist` or `repository_scope` allow: no route is listed with no repository dimension (`goAPIRoutesWithoutRepositoryDimension` is empty, `enforce.go:52`). The only log signal is the second WARN line above.
 
 ## Roll back

@@ -1,0 +1,9 @@
+# Every file under internal/auth/passwordpolicy/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
+# python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+# header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+4bd62f9270250c2ed6d289dbba6563732b77205d828cb3b5a44404849117b3e5	hand-written	hopfixture/go.mod.fixture
+bda996da1f161a0c971009220c1620b144ef67eae009db44f155ca7636ff816c	hand-written	hopfixture/internal/api/authprovision/authprovision.go
+fc5f80a955ea5b02a27ad8bb8f5f4b2b450ba1f4b6a0c85c437237ef22bffa90	hand-written	hopfixture/internal/apiservice/admin/users.go
+550b96fc7e740fe29486b9abc7c4144b4d8729449f2f7f8fc78b4fe10693df4b	hand-written	hopfixture/internal/auth/authapi/routes.go
+e3d6a403fd6a4e75545f4f19bc30617a07cad2f5ebdb288ae8acc327c9e23947	hand-written	hopfixture/internal/auth/identity/store.go
+9497e47fe14e2b49ea093739f55422a54b3060c9b2af0d9e70598498ac2c2549	hand-written	hopfixture/internal/auth/passwordpolicy/passwordpolicy.go

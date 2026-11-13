@@ -151,7 +151,7 @@ func TestJiraCombinedCollectorKeepsTheCatalogWhenTheAtlassianLegFailsInStrictMod
 // The stored detail of a failed leg must not carry a provider response body: ProviderError keeps the body
 // out of Error() by design, and a wrapped one must not bring it back.
 func TestDegradedAtlassianLegDetailCarriesNoProviderResponseBody(t *testing.T) {
-	providerErr := &providerfoundation.ProviderError{Class: providerfoundation.ErrorAuthentication, StatusCode: 401, Path: "/gateway/api/graphql", Body: `{"message":"token secret-body-fragment rejected"}`}
+	providerErr := &providerfoundation.ProviderError{Class: providerfoundation.ErrorAuthentication, StatusCode: 401, Body: `{"message":"token secret-body-fragment rejected"}`}
 	leg := newDegradedAtlassianLeg(fmt.Errorf("search atlassian teams: %w", providerErr))
 	if strings.Contains(leg.Detail, "secret-body-fragment") {
 		t.Fatalf("detail carries the response body: %q", leg.Detail)

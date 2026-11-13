@@ -9,8 +9,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/legacyjwt"
 )
 
 func pinned(record session.Record, pin *int64) session.Record {
@@ -75,11 +75,11 @@ func TestCompatRefreshRefusesASessionWithoutAPinAndLeavesIt(t *testing.T) {
 // the access key, as go-api's create_refresh_token mints it.
 func legacyToken(t *testing.T, f *compatFixture, org string, secret string) string {
 	t.Helper()
-	signer, err := edgetoken.NewSigner(secret, testIssuer, testAudience)
+	signer, err := legacyjwt.NewSigner(secret, testIssuer, testAudience)
 	if err != nil {
 		t.Fatal(err)
 	}
-	token, err := signer.Refresh(edgetoken.RefreshClaims{UserID: f.principal.String(), OrgID: org, FamilyID: uuid.NewString()},
+	token, err := signer.Refresh(legacyjwt.RefreshClaims{UserID: f.principal.String(), OrgID: org, FamilyID: uuid.NewString()},
 		time.Now(), "legacy-jti-0001")
 	if err != nil {
 		t.Fatal(err)
@@ -109,41 +109,6 @@ func TestCompatRefreshRefusesEveryGoAPIRefreshJWT(t *testing.T) {
 		if f.sessions.exchanges != 0 || len(f.sessions.created) != 0 || len(f.projector.userCalls) != 0 || len(f.projector.orgCalls) != 0 {
 			t.Fatalf("%s: %d exchanges, %d created, projected %v %v; a go-api refresh JWT reaches nothing", name,
 				f.sessions.exchanges, len(f.sessions.created), f.projector.userCalls, f.projector.orgCalls)
-		}
-	}
-}
-
-func TestVerifyLegacyRefreshReadsSubOrgAndJTI(t *testing.T) {
-	issuer := newTestIssuer(t)
-	signer, err := edgetoken.NewSigner(testSecret, testIssuer, testAudience)
-	if err != nil {
-		t.Fatal(err)
-	}
-	principal, org := uuid.New(), uuid.New()
-	for name, tc := range map[string]struct {
-		claims edgetoken.RefreshClaims
-		jti    string
-		ok     bool
-	}{
-		"org":          {edgetoken.RefreshClaims{UserID: principal.String(), OrgID: org.String()}, "j1", true},
-		"no org":       {edgetoken.RefreshClaims{UserID: principal.String()}, "j2", true},
-		"sub not uuid": {edgetoken.RefreshClaims{UserID: "alice"}, "j3", false},
-		"org not uuid": {edgetoken.RefreshClaims{UserID: principal.String(), OrgID: "acme"}, "j4", false},
-		"empty jti":    {edgetoken.RefreshClaims{UserID: principal.String()}, "", false},
-	} {
-		token, err := signer.Refresh(tc.claims, time.Now(), tc.jti)
-		if err != nil {
-			t.Fatal(err)
-		}
-		legacy, err := issuer.VerifyLegacyRefresh(token)
-		if (err == nil) != tc.ok {
-			t.Fatalf("%s: err %v, want ok=%t", name, err, tc.ok)
-		}
-		if !tc.ok {
-			continue
-		}
-		if legacy.PrincipalID != principal || legacy.JTI.Reveal() != tc.jti || (tc.claims.OrgID == "") != (legacy.OrganizationID == nil) {
-			t.Fatalf("%s: %+v", name, legacy)
 		}
 	}
 }

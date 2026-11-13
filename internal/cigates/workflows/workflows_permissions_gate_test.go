@@ -44,6 +44,7 @@ var jobPermAllowlist = map[jobKey]jobPermRow{
 	{"auto-release.yml", "tag-and-release"}:                       {map[string]string{"contents": "write"}, "creates the release tag and the release"},
 	{"codeql-analysis.yml", "analyze-docs-only"}:                  {map[string]string{"actions": "read", "contents": "read", "security-events": "write"}, "uploads the code scanning result of the docs-only twin"},
 	{"codeql-analysis.yml", "analyze"}:                            {map[string]string{"actions": "read", "contents": "read", "security-events": "write"}, "uploads the code scanning result"},
+	{"codeql-analysis.yml", "refresh-target"}:                     {map[string]string{"contents": "read", "pull-requests": "read"}, "reads the pull request a refresh dispatch names"},
 	{"docker-images.yml", "resolve"}:                              {map[string]string{"contents": "read", "packages": "write", "pull-requests": "read", "attestations": "read"}, "reads the promotion state (pull requests, attestations) and writes the lookup package"},
 	{"docker-images.yml", "go-build"}:                             {map[string]string{"contents": "read", "packages": "write"}, "pushes the platform image by digest to ghcr"},
 	{"docker-images.yml", "go-build-dho-arm64"}:                   {map[string]string{"contents": "read", "packages": "write"}, "pushes the arm64 dho image by digest to ghcr"},
@@ -276,6 +277,7 @@ func TestWorkflowPermissionsGateHoldsOnTheRealTree(t *testing.T) {
 }
 
 func TestWorkflowPermissionsGateRefusesEachDefectClass(t *testing.T) {
+	t.Parallel()
 	root := rootOf(t)
 	files := allWorkflowFiles(t, root)
 	const (

@@ -78,6 +78,11 @@
             "domain_revoked",
             "org_deprovisioned",
             "owner_request",
+            "sso_provider_created",
+            "sso_provider_updated",
+            "sso_provider_deleted",
+            "sso_provider_activated",
+            "sso_provider_deactivated",
             "role_granted",
             "role_revoked",
             "membership_added",
@@ -302,7 +307,9 @@
               "assertion_key",
               "invited_by",
               "joined_at",
-              "owner_principal_id"
+              "owner_principal_id",
+              "username",
+              "avatar_url"
             ]
           }
         },
@@ -493,7 +500,8 @@
             "policy_revision",
             "entitlement_snapshot",
             "signing_key",
-            "invite"
+            "invite",
+            "sso_provider"
           ]
         },
         "workload_jti": {

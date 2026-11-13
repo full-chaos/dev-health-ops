@@ -19,6 +19,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/delegationinput"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 )
 
 // The policy decision point routes. Each mounts only when the endpoint-profile
@@ -201,11 +202,11 @@ type authorizeHandlers struct {
 	resolve func(reference string) (ReferencedPrincipal, string, error)
 }
 
-func (h authorizeHandlers) resolveReference(reference string) (ReferencedPrincipal, string, error) {
+func (h authorizeHandlers) resolveReference(reference, caller string) (ReferencedPrincipal, string, error) {
 	if h.resolve != nil {
 		return h.resolve(reference)
 	}
-	return h.References.Resolve(reference)
+	return h.References.ResolveFor(reference, caller)
 }
 
 // AuthorizeRoutes returns the routes whose endpoint-profile row admits the
@@ -239,13 +240,15 @@ func AuthorizeRoutes(deps AuthorizeDeps) ([]httpapi.Route, error) {
 	}
 	subjects := deps.Callers.callerSubjects()
 	h := authorizeHandlers{AuthorizeDeps: deps, rec: rec, cache: cache, decisionID: newDecisionID, limiters: map[string]*callerLimiter{
-		opAuthorize:      newCallerLimiter(pdpAuthorizeCallerLimitID, subjects, deps.CallerLimit),
-		opAuthorizeBatch: newCallerLimiter(pdpAuthorizeBatchCallerLimitID, subjects, deps.CallerLimit),
+		opAuthorize:             newCallerLimiter(pdpAuthorizeCallerLimitID, subjects, deps.CallerLimit),
+		opAuthorizeBatch:        newCallerLimiter(pdpAuthorizeBatchCallerLimitID, subjects, deps.CallerLimit),
+		opAuthorizeRepositories: newCallerLimiter(pdpAuthorizeRepositoriesCallerLimitID, subjects, deps.CallerLimit),
 	}}
 	var routes []httpapi.Route
 	for _, route := range []httpapi.Route{
 		{Method: http.MethodPost, Pattern: PatternAuthorize, Handler: http.HandlerFunc(h.authorize), MaxBodyBytes: maxAuthorizeBody, Admit: h.admit(opAuthorize)},
 		{Method: http.MethodPost, Pattern: PatternAuthorizeBatch, Handler: http.HandlerFunc(h.authorizeBatch), MaxBodyBytes: maxAuthorizeBatchBody, Admit: h.admit(opAuthorizeBatch)},
+		{Method: http.MethodPost, Pattern: PatternAuthorizeRepositories, Handler: http.HandlerFunc(h.authorizeRepositories), MaxBodyBytes: maxAuthorizeBody, Admit: h.admit(opAuthorizeRepositories)},
 	} {
 		if rowsAcceptFor(rows, []string{route.Pattern}, []string{workloadTokenClass}) != nil {
 			h.Logger.Info("auth authorize route not mounted: no endpoint-profile row", "route", route.Pattern)
@@ -323,6 +326,9 @@ var (
 type authorizeItem struct {
 	question  AuthorizationQuestion
 	principal ReferencedPrincipal
+	// listing is true on the repository listing route: the item is decided by
+	// Evaluator.ReadableRepositories and never through the decision cache.
+	listing   bool
 	decision  authorization.Decision
 	now       int64
 	delegated bool
@@ -384,7 +390,7 @@ func (h authorizeHandlers) decide(w http.ResponseWriter, r *http.Request, op str
 		p, seen := resolved[q.PrincipalReference]
 		if !seen {
 			var why string
-			p, why, err = h.resolveReference(q.PrincipalReference)
+			p, why, err = h.resolveReference(q.PrincipalReference, caller.Subject)
 			if err != nil {
 				h.rec.refuse(w, r, op, unavailable(reasonDependency), err)
 				return nil, false
@@ -396,11 +402,17 @@ func (h authorizeHandlers) decide(w http.ResponseWriter, r *http.Request, op str
 			}
 			resolved[q.PrincipalReference] = p
 		}
-		items[i] = authorizeItem{question: q, principal: p}
+		if p.Kind == ReferenceWebApprover && !webApproverBinds(op, q, p) {
+			h.Logger.WarnContext(ctx, "authorize refused: principal reference", "refusal", "approver_binding", "operation", op)
+			h.rec.refuse(w, r, op, unauthorized(reasonPrincipalReferenceInvalid), nil)
+			return nil, false
+		}
+		items[i] = authorizeItem{question: q, principal: p, listing: op == opAuthorizeRepositories}
 	}
 	// The stamp is taken BEFORE the transaction's snapshot: an event the
 	// snapshot misses is later than the stamp, so a Put of what it read misses.
-	cached := h.Cache != nil && h.Ready != nil && h.Ready()
+	// A listing is never cached: its key would be one repository question's.
+	cached := h.Cache != nil && h.Ready != nil && h.Ready() && op != opAuthorizeRepositories
 	var stamp decisioncache.Stamp
 	if cached {
 		stamp = h.Cache.Begin()
@@ -428,13 +440,13 @@ func (h authorizeHandlers) decide(w http.ResponseWriter, r *http.Request, op str
 			h.rec.refuse(w, r, op, unavailable(reasonDependency), err)
 			return nil, false
 		}
-		h.Logger.InfoContext(ctx, "authorize decision", append([]any{"decision_id", doc.DecisionID, "allowed", doc.Allowed, "reason_code", doc.ReasonCode,
+		h.Logger.InfoContext(ctx, "authorize decision", append([]any{decisionIDLogKey, doc.DecisionID, "allowed", doc.Allowed, "reason_code", doc.ReasonCode,
 			"reason", string(item.decision.Reason), "cache", item.cache}, obligationLogAttrs(doc.Obligations)...)...)
 		// The owner-exemption audit event is written by a follow-up change,
 		// outside this read-only transaction; until then the exemption is only
 		// this log line.
 		if a := item.decision.Audit; a != nil {
-			h.Logger.WarnContext(ctx, "authorize owner exemption", "decision_id", doc.DecisionID, "actor_principal_id", a.ActorPrincipalID,
+			h.Logger.WarnContext(ctx, "authorize owner exemption", decisionIDLogKey, doc.DecisionID, "actor_principal_id", a.ActorPrincipalID,
 				"organization_id", a.OrganizationID, "action", a.Action, "audit_reason", a.Reason)
 		}
 		out[i] = doc
@@ -516,7 +528,8 @@ func (h authorizeHandlers) evaluate(ctx context.Context, tx DecisionTx, resolved
 			key.session = rs.id
 		}
 		items[i].cache = cacheBypass
-		if cached && !delegated && !account {
+		// A web approver reference is decided on the live session every call, never from the cache.
+		if cached && !delegated && !account && items[i].principal.Kind != ReferenceWebApprover {
 			u, ok := unfed[key]
 			if !ok {
 				var err error
@@ -568,7 +581,12 @@ func (h authorizeHandlers) evaluate(ctx context.Context, tx DecisionTx, resolved
 		if q.ResourceType == "repository" {
 			req.ResourceKey = q.ResourceKey
 		}
-		d := h.Evaluator.Evaluate(req, snap)
+		var d authorization.Decision
+		if items[i].listing {
+			d = h.Evaluator.ReadableRepositories(req, snap)
+		} else {
+			d = h.Evaluator.Evaluate(req, snap)
+		}
 		if _, onWire := wireReasonCode(d.Reason); !onWire || !obligationsFit(d, delegated, q.OrganizationID) {
 			return errAuthorizeStateFailure
 		}
@@ -603,7 +621,7 @@ func obligationsFit(d authorization.Decision, delegated bool, organizationID str
 }
 
 func (h authorizeHandlers) document(item authorizeItem) (decisionDocument, error) {
-	id, err := h.decisionID()
+	id, err := logging.DrawKept(decisionIDLogKey, maxDecisionIDDraws, h.decisionID)
 	if err != nil {
 		return decisionDocument{}, err
 	}

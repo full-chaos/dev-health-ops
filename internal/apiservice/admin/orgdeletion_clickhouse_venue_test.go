@@ -40,7 +40,6 @@ func TestOrgDeletionPurgesEveryDiscoveredClickHouseTable(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	t.Cleanup(cancel)
 	root := repoRoot(t)
-	const jwtKey = "venue-oracle-test-secret-key-for-org-deletion-ch-flow-32-byte"
 
 	targetOrgID := uuid.New()
 	controlOrgID := uuid.New()
@@ -49,7 +48,6 @@ func TestOrgDeletionPurgesEveryDiscoveredClickHouseTable(t *testing.T) {
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		GoOnly: true,
 		Root:   root,
-		JWTKey: jwtKey,
 		Seed: func(t *testing.T, ctx context.Context, adminPool *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
 			exec := func(sql string, args ...any) {
@@ -115,6 +113,11 @@ VALUES ($1, 'venue-chdel-super@example.com', true, true, true, 0, now(), now())`
 		"repo_change_failure_daily": `INSERT INTO repo_change_failure_daily (org_id, repo_id, day, deployments_count, computed_at) VALUES (?, generateUUIDv4(), today(), 1, now64(3))`,
 		// The issue size of each work unit (CHAOS-9807, migration 130).
 		"work_unit_issue_size": `INSERT INTO work_unit_issue_size (org_id, work_unit_id, issue_size, sized_issue_count, issue_count, categorization_run_id, computed_at) VALUES (?, 'wu-1', 3, 1, 1, 'run-1', now64(3))`,
+		// The project -> team ownership groups (CHAOS-6347, migration 147). The
+		// log row is copied into the current table by its view. is_deleted = 1:
+		// a group the refresh does not build again is appended as gone only
+		// while its current row is live, so a refresh during the test adds no row.
+		"project_team_ownership_groups_log": `INSERT INTO project_team_ownership_groups_log (org_id, row_key, project_id, team_id, source_name, provider, content_hash, stored_at, is_deleted) VALUES (?, 'jira:p-1:t-1:native', 'p-1', 't-1', 'native', 'jira', 1, now64(6), 1)`,
 	}
 	for _, org := range []uuid.UUID{targetOrgID, controlOrgID} {
 		for table, insert := range shadowTables {
@@ -134,6 +137,12 @@ VALUES ($1, 'venue-chdel-super@example.com', true, true, true, 0, now(), now())`
 	for table := range shadowTables {
 		if got := countShadowTable(table, targetOrgID); got != 1 {
 			t.Fatalf("seed: %s count for target org = %d, want 1", table, got)
+		}
+	}
+	// The view copies each seeded log row into the current table.
+	for _, org := range []uuid.UUID{targetOrgID, controlOrgID} {
+		if got := countShadowTable("project_team_ownership_groups_current", org); got != 1 {
+			t.Fatalf("seed: project_team_ownership_groups_current count for org %s = %d, want 1 (the log view did not copy the row)", org, got)
 		}
 	}
 
@@ -171,7 +180,7 @@ VALUES ($1, 'venue-chdel-super@example.com', true, true, true, 0, now(), now())`
 		t.Fatalf("seed: backfill_log count for target org = %d, want 1", got)
 	}
 
-	goBase, _ := startGoServer(t, ctx, venue, jwtKey, func(deps *apiservice.Deps) {
+	goBase, _ := startGoServer(t, ctx, venue, func(deps *apiservice.Deps) {
 		deps.ClickHouseDSN = chURI
 	})
 
@@ -211,6 +220,12 @@ VALUES ($1, 'venue-chdel-super@example.com', true, true, true, 0, now(), now())`
 		if got := countShadowTable(table, controlOrgID); got != 1 {
 			t.Errorf("%s count for control org after delete = %d, want 1 (untouched)", table, got)
 		}
+	}
+	if got := countShadowTable("project_team_ownership_groups_current", targetOrgID); got != 0 {
+		t.Errorf("project_team_ownership_groups_current count for target org after delete = %d, want 0", got)
+	}
+	if got := countShadowTable("project_team_ownership_groups_current", controlOrgID); got != 1 {
+		t.Errorf("project_team_ownership_groups_current count for control org after delete = %d, want 1 (untouched)", got)
 	}
 
 	// Ground truth, not a sample: ask the route's own discovery function

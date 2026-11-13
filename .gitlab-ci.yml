@@ -76,7 +76,7 @@ variables:
   PYTHONDONTWRITEBYTECODE: "1"
   PYTHONUNBUFFERED: "1"
   GIT_DEPTH: "0"
-  GO_IMAGE: "golang:1.27.3-bookworm"
+  GO_IMAGE: "golang:1.27.4-bookworm"
   DOCKER_CLI_VERSION: "27.5.1"
   DOCKER_IMAGE: "docker:27"
   DIND_IMAGE: "docker:27-dind"
@@ -662,8 +662,13 @@ go:venue-oracles-changed:
     - |
       set -euo pipefail
       export CHECK_GO_JOB_START="$(date +%s)"
+      # CHAOS-13101: the first --changed call derives the venue test closures here, the second reads them
+      export VENUE_CLOSURE_DIR="$(mktemp -d)/closure"
       git diff --name-only -z "${CI_MERGE_REQUEST_DIFF_BASE_SHA}...${CI_COMMIT_SHA}" > changed.txt
-      bash ci/check_go.sh venue-oracles --changed changed.txt --list | grep '^SELECT' > selected.txt || true
+      # The listing fails the job when the derivation, the registry or a trigger file fails: a broken run must not
+      # read as "nothing selected".
+      bash ci/check_go.sh venue-oracles --changed changed.txt --list > listing.txt
+      grep '^SELECT' listing.txt > selected.txt || true
       count="$(wc -l < selected.txt | tr -d ' ')"
       echo "selected ${count} venue oracle test(s):"
       cat selected.txt

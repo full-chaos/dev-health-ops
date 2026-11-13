@@ -109,7 +109,7 @@ func TestAuthQueueRelevanceAFailingGoListRunsTheGates(t *testing.T) {
 		t.Fatal(err)
 	}
 	stub := "#!/bin/sh\ncase \"$1\" in\n" +
-		"  version) echo \"go version go1.27.3 linux/amd64\" ;;\n" +
+		"  version) echo \"go version go1.27.4 linux/amd64\" ;;\n" +
 		"  env) if [ \"$2\" = GOROOT ]; then echo \"" + goroot + "\"; fi ;;\n" +
 		"  list) echo \"go: planted go list failure\" >&2; echo planted > \"" + filepath.Join(bin, "list-called") + "\"; exit 1 ;;\n" +
 		"  *) echo \"go stub: unexpected $*\" >&2; exit 1 ;;\nesac\n"

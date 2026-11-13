@@ -40,7 +40,7 @@ func TestAShardRunDoesNotWaitForAProcessHoldingGoTestStdout(t *testing.T) {
 		t.Run("go test exits "+strconv.Itoa(rc)+", wait "+c.wait, func(t *testing.T) {
 			t.Parallel()
 			bin, state := t.TempDir(), t.TempDir()
-			holderPID := filepath.Join(state, "holder.pid")
+			holderPID, exited := filepath.Join(state, "holder.pid"), filepath.Join(state, "go-test-exited")
 			var okLines []string
 			for p, w := range weights {
 				if p == heavy {
@@ -49,7 +49,7 @@ func TestAShardRunDoesNotWaitForAProcessHoldingGoTestStdout(t *testing.T) {
 				okLines = append(okLines, fmt.Sprintf("printf 'ok  \\tgithub.com/full-chaos/dev-health-ops/%s\\t%ds\\n'", p, w))
 			}
 			goScript := "#!/usr/bin/env bash\nset -euo pipefail\nif [ \"${1-}\" = test ]; then\n" +
-				"  sleep 600 &\n  echo $! > \"${FAKE_HOLDER_PID}\"\n  " + strings.Join(okLines, "\n  ") + "\n  exit \"${FAKE_RC}\"\nfi\n" +
+				"  sleep 600 &\n  echo $! > \"${FAKE_HOLDER_PID}\"\n  " + strings.Join(okLines, "\n  ") + "\n  printf 'x\\n' >> \"${FAKE_EXITED}\"\n  exit \"${FAKE_RC}\"\nfi\n" +
 				"exec '" + realGo + "' \"$@\"\n"
 			for name, text := range map[string]string{"go": goScript, "docker": "#!/bin/sh\nexit 0\n"} {
 				if err := os.WriteFile(filepath.Join(bin, name), []byte(text), 0o755); err != nil {
@@ -71,7 +71,7 @@ func TestAShardRunDoesNotWaitForAProcessHoldingGoTestStdout(t *testing.T) {
 			cmd := exec.Command("bash", "ci/check_go.sh", "integration-shard", "packages", strconv.Itoa(shard))
 			cmd.Dir = root
 			cmd.Env = inheritedEnv(deadlineEnvNames,
-				"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "FAKE_HOLDER_PID="+holderPID, "FAKE_RC="+strconv.Itoa(rc),
+				"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "FAKE_HOLDER_PID="+holderPID, "FAKE_EXITED="+exited, "FAKE_RC="+strconv.Itoa(rc),
 				"DEV_HEALTH_GO_TEE_WAIT_SECS="+c.wait, "TMPDIR="+t.TempDir(),
 				"DEV_HEALTH_GO_INTEGRATION_SHARD_MANIFEST="+shardManifestDir(root),
 				"DEV_HEALTH_GO_PROVIDER_TEST_SHARD_MANIFEST="+filepath.Join(root, "ci", "go_providersync_test_shards.tsv"))
@@ -82,12 +82,35 @@ func TestAShardRunDoesNotWaitForAProcessHoldingGoTestStdout(t *testing.T) {
 			}
 			done := make(chan error, 1)
 			go func() { done <- cmd.Wait() }()
-			select {
-			case <-done:
-			case <-time.After(150 * time.Second):
-				_ = cmd.Process.Kill()
-				<-done
-				t.Fatal("the shard run still waits for the process holding go test's stdout 150 s after go test ended")
+			// The bound counts from the exit of the stand-in go test: the plan before it is not what this guard bounds.
+			finished := false
+			tick := time.NewTicker(100 * time.Millisecond)
+			defer tick.Stop()
+			planBound := time.After(10 * time.Minute)
+			for started := false; !started && !finished; {
+				select {
+				case <-done:
+					finished = true
+				case <-tick.C:
+					_, err := os.Stat(exited)
+					started = err == nil
+				case <-planBound:
+					_ = cmd.Process.Kill()
+					<-done
+					t.Fatal("the stand-in go test did not exit within 10 min of the shard run's start")
+				}
+			}
+			if !finished {
+				select {
+				case <-done:
+				case <-time.After(150 * time.Second):
+					_ = cmd.Process.Kill()
+					<-done
+					t.Fatal("the shard run still waits for the process holding go test's stdout 150 s after go test ended")
+				}
+			}
+			if _, err := os.Stat(exited); err != nil {
+				t.Fatalf("the shard run ended without running the stand-in go test: %v", err)
 			}
 			text, _ := os.ReadFile(out.Name())
 			if code := cmd.ProcessState.ExitCode(); code != rc {

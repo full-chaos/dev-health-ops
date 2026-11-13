@@ -17,7 +17,7 @@ import (
 // real ci/check_go.sh, ci/go_race_shard.awk and ci/go_test_weights.tsv; the leg-count pin is the Go port of the workflow
 // matrix check of tests/tooling/test_go_quality_legs.py.
 
-const shardCount = 4
+const shardCount = 10
 
 func repoRoot(t *testing.T) string {
 	t.Helper()
@@ -103,20 +103,72 @@ func weightRows(t *testing.T) []weightRow {
 	return rows
 }
 
-// shardPlan is the root-module part of a shard (the plan also holds the packages of nested modules).
+// shardPlan is the root-module part of a shard (the plan also holds the packages of nested modules): its packages, a split
+// package (ci/go_test_splits.tsv) once however many of its parts the shard holds.
 func shardPlan(t *testing.T, shard, count int) []string {
+	t.Helper()
+	pkgs, parts := shardPlanParts(t, shard, count)
+	seen := map[string]bool{}
+	for _, p := range pkgs {
+		seen[p] = true
+	}
+	for _, p := range parts {
+		pkg, _, _ := strings.Cut(p, "#")
+		if !seen[pkg] {
+			seen[pkg] = true
+			pkgs = append(pkgs, pkg)
+		}
+	}
+	return pkgs
+}
+
+// shardPlanParts is shardPlan plus the parts of split packages (ci/go_test_splits.tsv, CHAOS-13520) in the shard, each as
+// "<import path>#<part>/<parts>".
+func shardPlanParts(t *testing.T, shard, count int) ([]string, []string) {
 	t.Helper()
 	out, errs, err := checkGo(t, nil, "test-shard-plan", fmt.Sprint(shard), fmt.Sprint(count))
 	if err != nil {
 		t.Fatalf("test-shard-plan %d %d: %v\n%s", shard, count, err, errs)
 	}
-	var pkgs []string
+	var pkgs, parts []string
 	for _, l := range strings.Split(out, "\n") {
-		if f := strings.Split(l, "\t"); len(f) == 3 && f[0] == "." {
+		f := strings.Split(l, "\t")
+		switch {
+		case len(f) == 3 && f[0] == ".":
 			pkgs = append(pkgs, f[1])
+		case len(f) == 5 && f[0] == ".":
+			parts = append(parts, f[1]+"#"+f[3]+"/"+f[4])
 		}
 	}
-	return pkgs
+	return pkgs, parts
+}
+
+// splitRows reads ci/go_test_splits.tsv: package key -> parts.
+func splitRows(t *testing.T) map[string]int {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(repoRoot(t), "ci", "go_test_splits.tsv"))
+	if err != nil {
+		t.Fatalf("ci/go_test_splits.tsv: %v", err)
+	}
+	rows := map[string]int{}
+	for _, line := range strings.Split(string(b), "\n") {
+		if strings.TrimSpace(line) == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		f := strings.Split(line, "\t")
+		if len(f) != 2 {
+			t.Fatalf("split row is not <package><TAB><parts>: %q", line)
+		}
+		n, err := strconv.Atoi(f[1])
+		if err != nil || n < 2 {
+			t.Fatalf("split row %q has no part count of at least 2", line)
+		}
+		if _, dup := rows[f[0]]; dup {
+			t.Fatalf("split row %q repeats its package", line)
+		}
+		rows[f[0]] = n
+	}
+	return rows
 }
 
 func TestTheTestWeightsTableIsClean(t *testing.T) {
@@ -130,6 +182,7 @@ func TestTheTestWeightsTableIsClean(t *testing.T) {
 	if len(rows) == 0 {
 		t.Fatal("ci/go_test_weights.tsv has no row: every shard would be balanced by package count alone")
 	}
+	splits := splitRows(t)
 	seen := map[string]bool{}
 	var keys []string
 	for _, r := range rows {
@@ -138,6 +191,17 @@ func TestTheTestWeightsTableIsClean(t *testing.T) {
 		}
 		seen[r.pkg] = true
 		keys = append(keys, r.pkg)
+		// A "<key>#<part>" row weighs one part of a split package for the chain-aware test-leg plan; its package's own row comes first.
+		if pkg, part, isPart := strings.Cut(r.pkg, "#"); isPart {
+			n, err := strconv.Atoi(part)
+			if err != nil || n < 1 || n > splits[pkg] {
+				t.Errorf("part row %s names no part of a package ci/go_test_splits.tsv splits", r.pkg)
+			}
+			if !seen[pkg] {
+				t.Errorf("part row %s has no row of its whole package before it", r.pkg)
+			}
+			continue
+		}
 		if !known[r.pkg] {
 			t.Errorf("stale row: %s is not a package of the module", r.pkg)
 		}
@@ -154,42 +218,51 @@ func TestEveryShardIsNonEmptyAndTheShardsPartitionTheModule(t *testing.T) {
 	for _, r := range weightRows(t) {
 		weights[r.pkg] = r.seconds
 	}
+	splits := splitRows(t)
+	serial := serialHeavyKey(t, mod)
 	var all []string
-	var loads []int
-	heaviest := 1
+	var shards []chainLoad
 	for k := 1; k <= shardCount; k++ {
-		plan := shardPlan(t, k, shardCount)
-		if len(plan) == 0 {
+		plan, parts := shardPlanParts(t, k, shardCount)
+		if len(plan)+len(parts) == 0 {
 			t.Fatalf("test shard %d/%d is empty", k, shardCount)
 		}
-		load := 0
+		var items []planItem
 		for _, p := range plan {
-			w := 1
-			if v, ok := weights[keyOf(mod, p)]; ok {
-				w = v
-			}
-			if w > heaviest {
-				heaviest = w
-			}
-			load += w
+			items = append(items, planItem{key: keyOf(mod, p)})
 		}
-		loads = append(loads, load)
+		for _, p := range parts {
+			pkg, part, _ := strings.Cut(p, "#")
+			idx, n, _ := strings.Cut(part, "/")
+			i, _ := strconv.Atoi(idx)
+			np, _ := strconv.Atoi(n)
+			if np < 2 || splits[keyOf(mod, pkg)] != np {
+				t.Fatalf("test shard %d/%d holds part %s of a package ci/go_test_splits.tsv splits %d ways", k, shardCount, p, splits[keyOf(mod, pkg)])
+			}
+			items = append(items, planItem{key: keyOf(mod, pkg), part: i, parts: np})
+		}
+		shards = append(shards, chainLoadOf(items, weights, serial))
 		all = append(all, plan...)
+		all = append(all, parts...)
 	}
 	sort.Strings(all)
-	want := append([]string{}, pkgs...)
+	var want []string
+	for _, p := range pkgs {
+		n, split := splits[keyOf(mod, p)]
+		if !split {
+			want = append(want, p)
+			continue
+		}
+		for i := 1; i <= n; i++ {
+			want = append(want, fmt.Sprintf("%s#%d/%d", p, i, n))
+		}
+	}
 	sort.Strings(want)
 	if strings.Join(all, "\n") != strings.Join(want, "\n") {
-		t.Fatalf("the %d test shards are not a partition of go list ./...: %d planned, %d listed", shardCount, len(all), len(want))
+		t.Fatalf("the %d test shards are not a partition of go list ./... (a split package as its parts): %d planned, %d listed", shardCount, len(all), len(want))
 	}
-	total := 0
-	for _, l := range loads {
-		total += l
-	}
-	for k, l := range loads {
-		if l > total/shardCount+heaviest {
-			t.Errorf("test shard %d weighs %d, over the longest-processing-time bound %d (loads %v)", k+1, l, total/shardCount+heaviest, loads)
-		}
+	for _, d := range chainPlanDefects(shards, plannedWallCap) {
+		t.Error(d)
 	}
 }
 
@@ -285,8 +358,8 @@ func writeLog(t *testing.T, text string) string {
 	return p
 }
 
-// Planted row: a fake shard over 85% of the 30 min cap (1530 s) trips the wall-time guard and names its three heaviest
-// packages by measured time.
+// Planted row: a fake shard over the 900 s cap (warn above 600 s, about ten-minute legs) trips the
+// wall-time guard and names its three heaviest packages by measured time.
 func TestTheWallTimeGuardTripsOnAFakeShardOverTheBound(t *testing.T) {
 	t.Parallel()
 	log := writeLog(t, strings.Join([]string{
@@ -297,11 +370,11 @@ func TestTheWallTimeGuardTripsOnAFakeShardOverTheBound(t *testing.T) {
 		"ok  \tgithub.com/x/e\t(cached)",
 		"",
 	}, "\n"))
-	_, errs, err := checkGo(t, nil, "test-shard-wall-guard", "2", "3", "1531", log)
+	_, errs, err := checkGo(t, nil, "test-shard-wall-guard", "2", "3", "901", log)
 	if err == nil {
-		t.Fatal("a shard at 1531 s of a 1800 s cap must fail")
+		t.Fatal("a shard at 901 s of a 900 s cap must fail")
 	}
-	for _, want := range []string{"test shard 2/3", "85%", "github.com/x/b", "github.com/x/c", "github.com/x/d", "measured"} {
+	for _, want := range []string{"test shard 2/3", "900s cap", "github.com/x/b", "github.com/x/c", "github.com/x/d", "measured"} {
 		if !strings.Contains(errs, want) {
 			t.Errorf("the failure lacks %q: %s", want, errs)
 		}
@@ -309,16 +382,38 @@ func TestTheWallTimeGuardTripsOnAFakeShardOverTheBound(t *testing.T) {
 	if strings.Contains(errs, "github.com/x/a") {
 		t.Errorf("the failure names a package outside the three heaviest: %s", errs)
 	}
-	out, errs, err := checkGo(t, nil, "test-shard-wall-guard", "2", "3", "1530", log)
+	out, errs, err := checkGo(t, nil, "test-shard-wall-guard", "2", "3", "900", log)
 	if err != nil {
 		t.Fatalf("a shard at exactly the bound must pass: %v\n%s", err, errs)
 	}
-	if !strings.Contains(out, "test shard 2/3: wall 1530s") {
-		t.Errorf("the guard does not log the shard wall time: %s", out)
+	if !strings.Contains(out, "test shard 2/3: wall 900s") || !strings.Contains(out, "::warning title=TEST SHARD WALL::") {
+		t.Errorf("the guard does not log the shard wall time and the warning above 600 s: %s", out)
 	}
-	_, _, err = checkGo(t, []string{"GO_TEST_SHARD_CAP_SECONDS=100"}, "test-shard-wall-guard", "1", "3", "86", log)
+	out, _, err = checkGo(t, nil, "test-shard-wall-guard", "2", "3", "600", log)
+	if err != nil || strings.Contains(out, "::warning") {
+		t.Errorf("a shard at exactly the warn bound must pass with no warning: %v\n%s", err, out)
+	}
+	_, _, err = checkGo(t, []string{"GO_TEST_SHARD_WALL_FAIL_SECONDS=100"}, "test-shard-wall-guard", "1", "3", "101", log)
 	if err == nil {
-		t.Error("the cap is not read from GO_TEST_SHARD_CAP_SECONDS")
+		t.Error("the cap is not read from GO_TEST_SHARD_WALL_FAIL_SECONDS")
+	}
+}
+
+// The integration packages shards run as about ten-minute legs: check_go.sh warns past 600 s and fails past 900 s of go test
+// wall by default, the same bounds as the test shards above.
+func TestTheIntegrationPackagesShardWallBoundsAreTheTenMinuteLegBounds(t *testing.T) {
+	t.Parallel()
+	raw, err := os.ReadFile(filepath.Join(repoRoot(t), "ci", "check_go.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`INTEGRATION_SHARD_WALL_WARN_SECONDS="${DEV_HEALTH_GO_INTEGRATION_SHARD_WALL_WARN_SECONDS:-600}"` + "\n",
+		`INTEGRATION_SHARD_WALL_FAIL_SECONDS="${DEV_HEALTH_GO_INTEGRATION_SHARD_WALL_FAIL_SECONDS:-900}"` + "\n",
+	} {
+		if strings.Count(string(raw), want) != 1 {
+			t.Errorf("ci/check_go.sh must set the packages shard wall bound once as %q", strings.TrimSpace(want))
+		}
 	}
 }
 
@@ -396,18 +491,14 @@ func assertCensusSplitOverTheShards(t *testing.T, census string) {
 		}
 	}
 	var got []string
+	// One all-legs run gives every leg's rows (TestTheAllLegsFormsPrintEachLegsOwnOutput holds it equal to each leg's own run).
+	_, parts := allLegs(t, []string{"GO_RACE_EXCLUDED_TESTS=" + census}, "race-excluded-shard-plan", shardCount)
 	for k := 1; k <= shardCount; k++ {
-		out, errs, err := checkGo(t, []string{"GO_RACE_EXCLUDED_TESTS=" + census}, "race-excluded-shard-plan", fmt.Sprint(k), fmt.Sprint(shardCount))
-		if err != nil {
-			t.Fatalf("race-excluded-shard-plan %d %d: %v\n%s", k, shardCount, err, errs)
-		}
-		var rows []string
-		for _, l := range strings.Split(out, "\n") {
+		for _, l := range strings.Split(parts[k], "\n") {
 			if strings.Count(l, "\t") == 1 {
-				rows = append(rows, l)
+				got = append(got, l)
 			}
 		}
-		got = append(got, rows...)
 	}
 	sort.Strings(got)
 	sort.Strings(want)

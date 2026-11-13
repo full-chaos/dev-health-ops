@@ -54,6 +54,8 @@ func TestMigration0020GrantServiceAccountWorkloadShape(t *testing.T) {
 	env := newM10Fixture(t, ctx)
 	m20Seed(t, ctx, env)
 	exec := func(sql string) error { return guardedExec(ctx, env.runtime, sql) }
+	// The workload registry is written by the migration role only; the runtime role holds SELECT on it.
+	migrator := func(sql string) error { return guardedExec(ctx, env.admin, sql) }
 
 	for _, key := range []string{"acme/widgets", "*", "acme/a/b", "grp/sub/web"} {
 		if err := exec(m20GrantHead + `'repository', '` + key + `')`); err != nil {
@@ -104,21 +106,21 @@ func TestMigration0020GrantServiceAccountWorkloadShape(t *testing.T) {
 
 	org := `'` + m20Org + `'`
 	for _, bad := range []string{`'{*}'`, `'{Acr.Read}'`, `'{acr}'`, `'{acr.read,acr.read}'`, `'{"acr.read","acr.write "}'`} {
-		m10Fail(t, exec(m20Workload(m20WlPrin, org, "wl", "ns-wl", bad)), "workload allowed_actions "+bad)
+		m10Fail(t, migrator(m20Workload(m20WlPrin, org, "wl", "ns-wl", bad)), "workload allowed_actions "+bad)
 	}
-	if err := exec(m20Workload(m20WlPrin, org, "wl", "ns-wl", `'{acr.context.read,acr.context.write}'`)); err != nil {
+	if err := migrator(m20Workload(m20WlPrin, org, "wl", "ns-wl", `'{acr.context.read,acr.context.write}'`)); err != nil {
 		t.Fatalf("workload with well-formed actions: %v", err)
 	}
 	var actions int
-	if err := exec(m20Workload(m20WlPrin2, "NULL", "platform-wl", "ns-platform-1", `DEFAULT`)); err != nil {
+	if err := migrator(m20Workload(m20WlPrin2, "NULL", "platform-wl", "ns-platform-1", `DEFAULT`)); err != nil {
 		t.Fatalf("workload with the default (empty) action list: %v", err)
 	}
 	if err := env.admin.QueryRow(ctx, `SELECT cardinality(allowed_actions) FROM auth.workloads WHERE name = 'platform-wl'`).Scan(&actions); err != nil || actions != 0 {
 		t.Fatalf("default allowed_actions has %d entries (%v), want 0", actions, err)
 	}
-	m10Fail(t, exec(m20Workload(m20WlPrin3, org, "wl", "ns-other", `'{acr.read}'`)), "a second workload named wl in the same organization (distinct federation tuple)")
-	m10Fail(t, exec(m20Workload(m20WlPrin4, "NULL", "platform-wl", "ns-platform-2", `DEFAULT`)), "a second platform workload with the same name (distinct federation tuple)")
-	if err := exec(m20Workload(m20WlPrin5, "NULL", "platform-wl-b", "ns-platform-2", `DEFAULT`)); err != nil {
+	m10Fail(t, migrator(m20Workload(m20WlPrin3, org, "wl", "ns-other", `'{acr.read}'`)), "a second workload named wl in the same organization (distinct federation tuple)")
+	m10Fail(t, migrator(m20Workload(m20WlPrin4, "NULL", "platform-wl", "ns-platform-2", `DEFAULT`)), "a second platform workload with the same name (distinct federation tuple)")
+	if err := migrator(m20Workload(m20WlPrin5, "NULL", "platform-wl-b", "ns-platform-2", `DEFAULT`)); err != nil {
 		t.Fatalf("a platform workload with another name: %v", err)
 	}
 

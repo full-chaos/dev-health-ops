@@ -11,6 +11,8 @@ const ssoJITEnv = "AUTH_SSO_JIT"
 
 // Default and false render the switch nowhere.
 func TestSSOJITOffRendersNothing(t *testing.T) {
+	t.Parallel()
+
 	for _, extra := range [][]string{nil, {"--set", "authService.ssoJit=false"}} {
 		docs, out, err := renderAuth(t, phaseArgs(4, extra...)...)
 		if err != nil {
@@ -28,6 +30,8 @@ func TestSSOJITOffRendersNothing(t *testing.T) {
 
 // The check runs on every render, so it holds when auth-service does not render.
 func TestSSOJITIsCheckedWithNoConsumerRendered(t *testing.T) {
+	t.Parallel()
+
 	base := []string{"--set", "web.enabled=false", "--set", "authService.phase=0", "--set", "goApi.enabled=false", "--set", "queryApi.enabled=false"}
 	for name, set := range map[string][]string{
 		"true":     {"--set", "authService.ssoJit=true"},
@@ -46,6 +50,8 @@ func TestSSOJITIsCheckedWithNoConsumerRendered(t *testing.T) {
 
 // The switch has one source: extraEnv cannot set it past the guard.
 func TestSSOJITCannotBeSetThroughExtraEnv(t *testing.T) {
+	t.Parallel()
+
 	_, out, err := renderAuth(t, phaseArgs(4, "--set-json", `authService.extraEnv=[{"name":"AUTH_SSO_JIT","value":"true"}]`)...)
 	if err == nil || !strings.Contains(out, "authService.extraEnv must not set AUTH_SSO_JIT") {
 		t.Errorf("extraEnv rendered: err=%v out=%.300s", err, out)
@@ -55,6 +61,8 @@ func TestSSOJITCannotBeSetThroughExtraEnv(t *testing.T) {
 // The env line is pinned by text as well as by render: only auth-service
 // carries it, behind the one read of the switch.
 func TestSSOJITLineSitsOnAuthServiceOnly(t *testing.T) {
+	t.Parallel()
+
 	want := "{{- if eq (include \"dev-health.ssoJit\" .) \"true\" }}\n            - name: AUTH_SSO_JIT\n              value: \"true\"\n"
 	entries, err := filepath.Glob("templates/*")
 	if err != nil {
@@ -80,6 +88,8 @@ func TestSSOJITLineSitsOnAuthServiceOnly(t *testing.T) {
 
 // ssoJit=true renders only where users are owned: phase 4 with usersOwnedStage=owned.
 func TestSSOJITRendersAtPhase4Owned(t *testing.T) {
+	t.Parallel()
+
 	docs, out, err := renderAuth(t, phaseArgs(4, "--set", "authService.ssoJit=true")...)
 	if err != nil {
 		t.Fatalf("phase 4 owned: %v\n%.400s", err, out)
@@ -106,6 +116,8 @@ func TestSSOJITRendersAtPhase4Owned(t *testing.T) {
 
 // Below users owned the render is refused and the text names the stage that allows it.
 func TestSSOJITRefusedBelowOwned(t *testing.T) {
+	t.Parallel()
+
 	const on = "authService.ssoJit=true"
 	for name, args := range map[string][]string{
 		"phase 2":       phaseArgs(2, "--set", on),
@@ -122,6 +134,8 @@ func TestSSOJITRefusedBelowOwned(t *testing.T) {
 // One writer: whenever the sign-in join runs in auth-service, go-api carries AUTH_USERS_OWNED, and its own join and
 // account create refuse on it (internal/api/sso/provision.go createAccountAndMembership and membershipOrJoin).
 func TestSSOJITGoApiSingleWriter(t *testing.T) {
+	t.Parallel()
+
 	docs, out, err := renderAuth(t, phaseArgs(4, "--set", "authService.ssoJit=true")...)
 	if err != nil {
 		t.Fatalf("render: %v\n%.400s", err, out)

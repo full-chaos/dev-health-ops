@@ -3,15 +3,21 @@ package affected_test
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/cigates/affected"
 )
 
 // CHAOS-11421: `plan-reads --reach --reach-cache DIR` reuses the stored reach rows only for a tree whose every input
-// hashes to the same key, and a reused result is still compared with reach.tsv. These tests run the built cigate on a
+// hashes to the same key, and a reused result is still compared with reach.d. These tests run the built cigate on a
 // fixture module (the planted faults of reach_test.go's style).
 
 func reachEnv(extra ...string) []string {
@@ -85,7 +91,7 @@ func TestReachCacheKeyCoversEveryInput(t *testing.T) {
 		{name: "go.sum", apply: func() { appendTo(t, p("go.sum"), "x\n") }},
 		{name: "edges.tsv", apply: func() { appendTo(t, p(tablesDir+"edges.tsv"), "# x\n") }},
 		{name: "dynreads.tsv", apply: func() { appendTo(t, p(tablesDir+"dynreads.tsv"), "# x\n") }},
-		{name: "reach.tsv", apply: func() { appendTo(t, p(tablesDir+"reach.tsv"), "# x\n") }},
+		{name: "a reach.d file", apply: func() { appendTo(t, p(tablesDir+"reach.d/b.tsv"), "# x\n") }},
 		{name: "reads.tsv", apply: func() { appendTo(t, p(tablesDir+"reads.tsv"), "# x\n") }},
 		{name: "a go:embed file", apply: func() { appendTo(t, p("b/assets/x.txt"), "y\n") }},
 		{name: "a non-Go file beside Go files", apply: func() { appendTo(t, p("b/notes.txt"), "y\n") }},
@@ -212,13 +218,13 @@ func TestReachCacheReusesOnlyAnUnchangedTree(t *testing.T) {
 		t.Fatalf("a changed edges.tsv must recompute: exit %d:\n%s%s", third.code, third.stdout, third.stderr)
 	}
 
-	// The call graph changes (c's test stops calling the site) while reach.tsv is stale: a different key, recomputed, RED.
+	// The call graph changes (c's test stops calling the site) while reach.d is stale: a different key, recomputed, RED.
 	if err := os.WriteFile(filepath.Join(f.root, "c", "c_test.go"), []byte(reachTest("c", "\t_ = b.Name()\n")), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	fourth := reachRun(t, f.root, env, "--reach", "--reach-cache", store)
 	if fourth.code == 0 || strings.Contains(fourth.stdout, "reach: reused") || !strings.Contains(fourth.stdout, "does not call for") {
-		t.Fatalf("a changed .go file must recompute and fail on the stale reach.tsv: exit %d:\n%s%s", fourth.code, fourth.stdout, fourth.stderr)
+		t.Fatalf("a changed .go file must recompute and fail on the stale reach.d: exit %d:\n%s%s", fourth.code, fourth.stdout, fourth.stderr)
 	}
 }
 
@@ -258,13 +264,13 @@ func TestReachCacheStoreIsNeverTrusted(t *testing.T) {
 		refused("a missing row", strings.Join(lines[:len(lines)-1], "\n")+"\n")
 	}
 	refused("a header without the rows digest", "# reach-cache-v2 key "+key+"\n"+strings.SplitN(string(good), "\n", 2)[1])
-	// A store whose header digest matches its rows but whose rows differ from reach.tsv is still compared: RED.
+	// A store whose header digest matches its rows but whose rows differ from reach.d is still compared: RED.
 	rows := strings.SplitN(string(good), "\n", 2)[1]
 	rows += "b\tghost.go\tc\n"
 	digest := sha256.Sum256([]byte(rows))
 	write("# reach-cache-v2 key " + key + " rows-sha256 " + hex.EncodeToString(digest[:]) + "\n" + rows)
 	if res := reachRun(t, f.root, env, "--reach", "--reach-cache", store); res.code != 1 || !strings.Contains(res.stdout, "reach: reused") {
-		t.Fatalf("a consistent store that differs from reach.tsv must be reused and compared (RED), exit %d:\n%s%s", res.code, res.stdout, res.stderr)
+		t.Fatalf("a consistent store that differs from reach.d must be reused and compared (RED), exit %d:\n%s%s", res.code, res.stdout, res.stderr)
 	}
 	// A header of another key, an empty file, a truncated header: not reused; recomputed, green, store rewritten.
 	for name, body := range map[string]string{
@@ -286,14 +292,14 @@ func TestReachCacheStoresNothingOnARedRun(t *testing.T) {
 	if res := writeTables(t, f.root); res.code != 0 {
 		t.Fatalf("plan-reads --write exited %d:\n%s%s", res.code, res.stdout, res.stderr)
 	}
-	reach := filepath.Join(f.root, tablesDir, "reach.tsv")
+	reach := filepath.Join(f.root, tablesDir, "reach.d", "b.tsv")
 	b, err := os.ReadFile(reach)
 	if err != nil {
 		t.Fatal(err)
 	}
 	lines := strings.Split(strings.TrimRight(string(b), "\n"), "\n")
 	if len(lines) < 2 {
-		t.Fatalf("fixture reach.tsv has no row to remove:\n%s", b)
+		t.Fatalf("fixture reach.d/b.tsv has no row to remove:\n%s", b)
 	}
 	if err := os.WriteFile(reach, []byte(strings.Join(lines[:len(lines)-1], "\n")+"\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -301,7 +307,7 @@ func TestReachCacheStoresNothingOnARedRun(t *testing.T) {
 	store := t.TempDir()
 	res := reachRun(t, f.root, reachEnv(), "--reach", "--reach-cache", store)
 	if res.code != 1 || !strings.Contains(res.stdout, "missing row") {
-		t.Fatalf("a reach.tsv with a row removed must fail with the missing row (exit 1):\n%s%s", res.stdout, res.stderr)
+		t.Fatalf("a reach.d file with a row removed must fail with the missing row (exit 1):\n%s%s", res.stdout, res.stderr)
 	}
 	if got := storeFiles(t, store); len(got) != 0 {
 		t.Fatalf("a red run stored %v", got)
@@ -515,5 +521,226 @@ func TestReachCacheACorruptStoreIsAMissNotAFailure(t *testing.T) {
 	res := reachRun(t, f.root, env, "--reach", "--reach-cache", dirStore)
 	if res.code != 0 || strings.Contains(res.stdout, "reach: reused") {
 		t.Errorf("a directory in the store path must not fail the gate: exit %d:\n%s%s", res.code, res.stdout, res.stderr)
+	}
+}
+
+// The scan memo's file reads live beside this file's existing source-hash tests
+// so their declared dynamic-read site remains reachcache_test.go.
+type scanMemoKey struct {
+	root string
+	hash [sha256.Size]byte
+}
+
+type scanMemoEntry struct {
+	once  sync.Once
+	reads []affected.Read
+	err   error
+}
+
+type scanMemo struct {
+	entries sync.Map // scanMemoKey -> *scanMemoEntry
+}
+
+// scanner captures the source identity once. Its closure is valid only while
+// that tree is unchanged; callers editing a tree must request a new scanner.
+// Hash or scan errors fail open to a live scan, never an empty cached answer.
+func (m *scanMemo) scanner(root string) func(string) ([]affected.Read, error) {
+	root, err := filepath.Abs(root)
+	if err != nil {
+		return affected.ScanReads
+	}
+	sources, err := affected.ScannedGoSources(root)
+	if err != nil {
+		return affected.ScanReads
+	}
+	sort.Strings(sources)
+	h := sha256.New()
+	for _, rel := range sources {
+		body, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
+		if err != nil {
+			return affected.ScanReads
+		}
+		fmt.Fprintf(h, "%d:%s%d:", len(rel), rel, len(body))
+		_, _ = h.Write(body)
+	}
+	key := scanMemoKey{root: root}
+	copy(key.hash[:], h.Sum(nil))
+	value, _ := m.entries.LoadOrStore(key, &scanMemoEntry{})
+	entry := value.(*scanMemoEntry)
+	return func(requested string) ([]affected.Read, error) {
+		if requested != root {
+			return affected.ScanReads(requested)
+		}
+		entry.once.Do(func() { entry.reads, entry.err = affected.ScanReads(root) })
+		if entry.err != nil {
+			m.entries.Delete(key)
+			return affected.ScanReads(requested)
+		}
+		// Keep consumers from changing the shared scan, including concurrent verdicts.
+		return append([]affected.Read(nil), entry.reads...), nil
+	}
+}
+
+var unchangedRealTree struct {
+	once sync.Once
+	scan func(string) ([]affected.Read, error)
+	memo scanMemo
+}
+
+// realTreeScan is exclusively for the unchanged checkout. Its root and source
+// hash are computed once per process. Fixtures/overlays keep a live ScanReads.
+func realTreeScan(t *testing.T) func(string) ([]affected.Read, error) {
+	t.Helper()
+	root := repoRoot(t)
+	unchangedRealTree.once.Do(func() { unchangedRealTree.scan = unchangedRealTree.memo.scanner(root) })
+	return unchangedRealTree.scan
+}
+
+func TestReadsPathsAreTrackedRepositoryPaths(t *testing.T) {
+	affected.CheckReadsPathsAreTrackedRepositoryPaths(t, realTreeScan(t))
+}
+
+func scanMemoFixture(t *testing.T, path string) string {
+	t.Helper()
+	root := t.TempDir()
+	for rel, body := range map[string]string{
+		"go.mod":       "module m\n",
+		"p/p.go":       fmt.Sprintf("package p\nvar doc = %q\n", "../docs/"+path),
+		"docs/" + path: "fixture\n",
+	} {
+		file := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(file, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return root
+}
+
+func requireScanPath(t *testing.T, scan func(string) ([]affected.Read, error), root, want string) {
+	t.Helper()
+	reads, err := scan(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range reads {
+		if r.Kind == affected.ReadPath && r.File == "p/p.go" && r.Path == want {
+			return
+		}
+	}
+	t.Fatalf("scan of %s = %+v, want %s", root, reads, want)
+}
+
+func TestScanMemoSeparatesRoots(t *testing.T) {
+	var memo scanMemo
+	a := scanMemoFixture(t, "a.md")
+	b := scanMemoFixture(t, "b.md")
+	requireScanPath(t, memo.scanner(a), a, "docs/a.md")
+	requireScanPath(t, memo.scanner(b), b, "docs/b.md")
+	// Even a captured scanner cannot serve its memo to a fixture/overlay root.
+	requireScanPath(t, memo.scanner(a), b, "docs/b.md")
+
+	// Identical Go paths and bytes still need separate entries: the root's
+	// first-level names affect which literals ScanReads recognizes.
+	c := scanMemoFixture(t, "a.md")
+	if err := os.RemoveAll(filepath.Join(c, "docs")); err != nil {
+		t.Fatal(err)
+	}
+	reads, err := memo.scanner(c)(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range reads {
+		if r.Kind == affected.ReadPath && r.Path == "docs/a.md" {
+			t.Fatalf("a different root reused the first scan: %+v", reads)
+		}
+	}
+}
+
+func TestScanMemoHashesSourceBytesAndPaths(t *testing.T) {
+	var memo scanMemo
+	root := scanMemoFixture(t, "a.md")
+	requireScanPath(t, memo.scanner(root), root, "docs/a.md")
+	file := filepath.Join(root, "p", "p.go")
+	if err := os.WriteFile(file, []byte("package p\nvar doc = \"../docs/b.md\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	requireScanPath(t, memo.scanner(root), root, "docs/b.md")
+	if err := os.Rename(file, filepath.Join(root, "p", "renamed.go")); err != nil {
+		t.Fatal(err)
+	}
+	reads, err := memo.scanner(root)(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range reads {
+		if r.File == "p/renamed.go" && r.Path == "docs/b.md" {
+			return
+		}
+	}
+	t.Fatalf("renamed source absent from scan: %+v", reads)
+}
+
+func TestScanMemoConcurrentReuse(t *testing.T) {
+	var memo scanMemo
+	root := scanMemoFixture(t, "a.md")
+	scan := memo.scanner(root)
+	var wg sync.WaitGroup
+	var successes atomic.Int32
+	for range 16 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			reads, err := scan(root)
+			if err == nil {
+				for i := range reads {
+					if reads[i].Path == "docs/a.md" {
+						successes.Add(1)
+						reads[i].Path = "private copy"
+					}
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	if got := successes.Load(); got != 16 {
+		t.Fatalf("successful independent scans = %d, want 16", got)
+	}
+	entries := 0
+	memo.entries.Range(func(_, _ any) bool { entries++; return true })
+	if entries != 1 {
+		t.Fatalf("memo entries = %d, want 1", entries)
+	}
+	requireScanPath(t, scan, root, "docs/a.md")
+}
+
+func TestScanMemoFailsOpen(t *testing.T) {
+	var memo scanMemo
+	root := filepath.Join(t.TempDir(), "missing")
+	scan := memo.scanner(root) // fingerprint fails, so use a live scan later.
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "p.go"), []byte("package p\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := scan(root); err != nil {
+		t.Fatalf("hash failure did not fall back: %v", err)
+	}
+	file := filepath.Join(root, "p.go")
+	if err := os.WriteFile(file, []byte("package p\nfunc broken(\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	scan = memo.scanner(root)
+	if _, err := scan(root); err == nil {
+		t.Fatal("scan error was hidden")
+	}
+	if err := os.WriteFile(file, []byte("package p\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := scan(root); err != nil {
+		t.Fatalf("scan error was cached instead of failing open: %v", err)
 	}
 }

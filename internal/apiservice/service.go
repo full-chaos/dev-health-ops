@@ -29,7 +29,6 @@ package apiservice
 import (
 	"context"
 	"errors"
-	"fmt"
 	"github.com/full-chaos/dev-health-ops/internal/api/acrcredentials"
 	"github.com/full-chaos/dev-health-ops/internal/api/apimetrics"
 	"github.com/full-chaos/dev-health-ops/internal/platform/removedenv"
@@ -65,7 +64,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/acr"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/customerpush"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
+	"github.com/full-chaos/dev-health-ops/internal/auth/acraudience"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 	"github.com/full-chaos/dev-health-ops/internal/auth/pushevent"
@@ -204,7 +203,7 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 	// behind go-api's guard, validator and rate limiter.
 	proxy := newAuthProxy(deps.AuthProxy, logger).withImpersonatingCallerRefusal(deps.Guard)
 	routes = append(routes, session.Routes(session.Deps{
-		Pool: deps.Pool, Guard: deps.Guard, Auth: deps.Auth, Verifier: deps.Verifier,
+		Pool: deps.Pool, Guard: deps.Guard, Auth: deps.Auth,
 		// The api's own ClickHouse login: organization activity.
 		ClickHouse: deps.ClickHouse, Limits: limits, Write: WriteError, OAuth: deps.SessionOAuth, Logger: logger,
 		Mail: deps.Invites, RegisterLimit: deps.RegisterLimit, Inner: proxy.inner, Issuer: deps.SessionIssuer,
@@ -279,10 +278,14 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 			AuthSchema:         deps.AuthSchema,
 			OrgReactivator:     deps.OrgReactivator,
 			OrgProvisioner:     deps.OrgProvisioner,
+			OrgDeletionAuth:    deps.OrgDeletionAuth,
+			OrgDeprovisioner:   deps.OrgDeprovisioner, ACROrgRevoker: deps.ACROrgRevoker,
 			OrgSuspender:       deps.OrgSuspender,
 			OrgState:           deps.OrgState,
 			Delegator:          deps.Delegator,
 			ServiceAccountKeys: deps.ServiceAccountKeys,
+			ServiceAccounts:    deps.ServiceAccounts,
+			UsersAdmin:         deps.UsersAdmin,
 		})...)
 	}
 	webhookintake.LogUnconfiguredSecrets(logger)
@@ -399,6 +402,8 @@ func configureWith(
 	adjust func(*Deps),
 ) ([]lifecycle.Component, error) {
 	removedenv.ObserveOrgsOwned(ctx, envsecrets.ProcessLookup, logger)
+	warnRetiredJWTSecretKey(ctx, envsecrets.ProcessLookup, logger)
+	warnSharedStateSecret(ctx, cfg, logger)
 	if err := checkTrustedProxies(logger); err != nil {
 		return nil, dependencyFailure(ctx, logger, "api_trusted_proxies", "api_trusted_proxies_invalid", err)
 	}
@@ -418,7 +423,7 @@ func configureWith(
 	if err != nil {
 		return nil, err
 	}
-	deps.ACRRevoker = newACRRevoker(envsecrets.ProcessLookup, logger)
+	deps.ACRRevoker, deps.ACROrgRevoker = acrRevokers(envsecrets.ProcessLookup, logger)
 	deps.UsersOwned, err = ParseUsersOwned(envsecrets.ProcessLookup, authProxy)
 	if err != nil {
 		closeComponents(depComponents)
@@ -459,7 +464,12 @@ func configureWith(
 		closeComponents(depComponents)
 		return nil, dependencyFailure(ctx, logger, "api_org_provisioning", "api_org_provisioning_config_invalid", err)
 	}
+	deps.OrgDeletionAuth, deps.OrgDeprovisioner = orgDeletionDeprovisioner(ctx, logger, authProxy, deps.OrgProvisioner,
+		provisioningCred, sessionCred, envsecrets.ProcessLookup)
 	deps.ServiceAccountKeys, err = serviceAccountKeys(authProxy, provisioningCred)
+	if err == nil {
+		deps.ServiceAccounts, err = serviceAccounts(authProxy, provisioningCred)
+	}
 	if err != nil {
 		closeComponents(depComponents)
 		return nil, dependencyFailure(ctx, logger, "api_service_account_keys", "api_service_account_keys_config_invalid", err)
@@ -480,7 +490,6 @@ func configureWith(
 		}
 		protected.guard.SetEnforcer(enforcer)
 		protected.guard.SetShadow(newShadow(decisionPoint, envsecrets.ProcessLookup, logger))
-		deps.Verifier = protected.verifier
 		// ReadOnce first: the org scope and the route's guard read the token
 		// org's membership once per request.
 		scope = []func(http.Handler) http.Handler{protected.auth.ReadOnce, protected.scope.Principal, protected.scope.OrgScope, protected.scope.Impersonation}
@@ -490,6 +499,11 @@ func configureWith(
 	if err != nil {
 		closeComponents(depComponents)
 		return nil, dependencyFailure(ctx, logger, "api_access_verify", "api_access_verify_config_invalid", err)
+	}
+	deps.UsersAdmin, err = usersAdminClient(authProxy, deps.UsersOwned, sharedWorkloadClient(provisioningCred, sessionCred))
+	if err != nil {
+		closeComponents(depComponents)
+		return nil, dependencyFailure(ctx, logger, "api_users_admin", "api_users_admin_config_invalid", err)
 	}
 	deps.ACRWorkload, err = buildACRWorkload(envsecrets.ProcessLookup, accessKeys, acrSubjectSourceOf(deps.Pool, deps.AuthSchema))
 	if err != nil {
@@ -625,19 +639,24 @@ func InternalRoutes(deps Deps, logger *slog.Logger) []httpapi.Route {
 		auth = acr.PostgresCredentialStore{Pool: deps.Pool, Now: deps.Now}
 		// The users, membership and impersonation reads run on go-api's pool
 		// (policy.PGStore with the auth schema, as the authenticator reads it).
-		// Without a ClickHouse connection the inventory read fails, so the
-		// access read answers 503, never a partial answer.
-		// The session a sid names is auth-service's to answer, read on the
-		// client and credential of go-api's session issue route. Without that
-		// client (go-api owns sessions, or no auth-service URL or credential) a
-		// read with a sid answers 503; start-up does not fail (D6465).
+		// The session a sid names and the user's read listing are
+		// auth-service's to answer, read on the client and workload token of
+		// go-api's session issue route. Without that client (go-api owns
+		// sessions, or no auth-service URL or credential) every read answers
+		// 503; start-up does not fail (D6465). Without a ClickHouse connection
+		// the empty-org probe fails, so the read answers 503, never a partial
+		// answer.
 		var sessions acr.SessionStates
 		if states, ok := deps.SessionIssuer.(sessionissue.StateReader); ok {
 			sessions = states
 		}
+		var listing acr.ReadableListing
+		if reader, ok := deps.SessionIssuer.(sessionissue.ReadableReader); ok {
+			listing = reader
+		}
 		store := acr.NewPostgresAccessStore(deps.Pool,
 			policy.PGStore{Pool: deps.Pool, AuthSchema: deps.AuthSchema, PlatformRolesOwned: deps.PlatformRolesOwned},
-			acr.ClickHouseRepositoryInventory{Conn: deps.ClickHouse}, sessions)
+			listing, acr.ClickHouseRepositoryExistence{Conn: deps.ClickHouse}, sessions)
 		// project_scope (CHAOS-12224) only with ACR_ACCESS_PROJECT_SCOPE on: an
 		// acr that does not know the field refuses every answer that carries it.
 		if deps.ACRAccessProjectScope {
@@ -694,25 +713,39 @@ func NewInternalServer(cfg config.Config, logger *slog.Logger, routes []httpapi.
 
 // protection is the protected-route runtime built over the api pool.
 type protection struct {
-	auth     *policy.Authenticator
-	scope    *policy.Scope
-	guard    *policy.Guard
-	verifier *edgetoken.Verifier
+	auth  *policy.Authenticator
+	scope *policy.Scope
+	guard *policy.Guard
 	// authSchema is AUTH_DATABASE_SCHEMA, as the users store reads it.
 	authSchema string
 }
 
-// newProtection builds the principal service. Access tokens are verified by
-// the endpoint-profile row only (buildAccessVerify); JWT_SECRET_KEY keys the
-// local session signer and its refresh-token verifier, so with a database it
-// is required, and a missing or short key stops startup.
-func newProtection(cfg config.Config, pool *pgxpool.Pool, platformRolesOwned bool, proxy AuthProxyConfig, logger *slog.Logger) (protection, error) {
-	if !cfg.APIJWTSecret.Configured() {
-		return protection{}, errors.New("JWT_SECRET_KEY is required by dho api when API_DATABASE_URI is set")
+// retiredJWTSecretKey is the retired HS256 access-token key: go-api reads it no more.
+const retiredJWTSecretKey = "JWT_SECRET_KEY"
+
+// warnRetiredJWTSecretKey logs one WARN when JWT_SECRET_KEY is still set. A
+// leftover value is config hygiene, never a refused start (D6465).
+func warnRetiredJWTSecretKey(ctx context.Context, lookup func(string) (string, bool), logger *slog.Logger) {
+	if value, _ := lookup(retiredJWTSecretKey); value != "" {
+		logger.WarnContext(ctx, retiredJWTSecretKey+" is set but unused (HS256 retired)")
 	}
-	verifier, err := edgetoken.New(cfg.APIJWTSecret.Reveal(), cfg.APIJWTIssuer, cfg.APIJWTAudience)
-	if err != nil {
-		return protection{}, fmt.Errorf("access-token verifier: %w", err)
+}
+
+// warnSharedStateSecret logs one WARN when SSO_STATE_SECRET equals GITHUB_APP_STATE_SECRET. One key per
+// purpose is config hygiene, never a refused start (product rule 3); the line names the keys, never a value.
+func warnSharedStateSecret(ctx context.Context, cfg config.Config, logger *slog.Logger) {
+	if cfg.SSOStateSecret.Configured() && cfg.GitHubAppStateSecret.Configured() &&
+		cfg.SSOStateSecret.Reveal() == cfg.GitHubAppStateSecret.Reveal() {
+		logger.WarnContext(ctx, "SSO_STATE_SECRET equals GITHUB_APP_STATE_SECRET: set one key per purpose")
+	}
+}
+
+// newProtection builds the principal service. Access tokens are verified by
+// the endpoint-profile row only (buildAccessVerify); go-api holds no token key.
+// JWT_AUDIENCE still names go-api's audience, never an ACR one (ACP-ADR-13).
+func newProtection(cfg config.Config, pool *pgxpool.Pool, platformRolesOwned bool, proxy AuthProxyConfig, logger *slog.Logger) (protection, error) {
+	if err := acraudience.Refuse("api", cfg.APIJWTAudience); err != nil {
+		return protection{}, err
 	}
 	authSchema, err := policy.AuthSchemaFromEnv(envsecrets.ProcessGetenv)
 	if err != nil {
@@ -737,8 +770,7 @@ func newProtection(cfg config.Config, pool *pgxpool.Pool, platformRolesOwned boo
 	// impersonation; auth-service still writes go-api's session row, so the
 	// admin's own bearer beside it is refused but on status and stop.
 	scope.RefuseLegacyImpersonation(proxy.ImpersonationOn())
-	return protection{auth: auth, scope: scope, guard: policy.NewGuard(auth, logger), authSchema: authSchema,
-		verifier: verifier}, nil
+	return protection{auth: auth, scope: scope, guard: policy.NewGuard(auth, logger), authSchema: authSchema}, nil
 }
 
 // closeComponents releases what buildDeps opened when startup fails later.

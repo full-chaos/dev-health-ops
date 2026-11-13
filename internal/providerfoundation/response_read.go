@@ -45,9 +45,16 @@ func ResponseRoute(response *http.Response) string {
 // errors.Is reaches cause; the cause text never reaches Error(). Read and
 // decode failures stay permanent: a 2xx body failure is not retried here.
 func ResponseFailure(response *http.Response, reason string, cause error) *ProviderError {
+	return RouteFailure(ResponseRoute(response), reason, cause)
+}
+
+// RouteFailure is ResponseFailure for a failure after the response is gone:
+// an item that fails to decode once its page was read names the route of
+// the request that served that page.
+func RouteFailure(route, reason string, cause error) *ProviderError {
 	return &ProviderError{
 		Class:  ErrorPermanent,
-		Route:  ResponseRoute(response),
+		Route:  route,
 		Reason: reason,
 		cause:  cause,
 	}

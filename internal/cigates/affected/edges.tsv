@@ -16,6 +16,7 @@ deploy/helm/dev-health	clickhouse_started_test.go	unexpressed
 deploy/helm/dev-health	go_pgbouncer_secret_keep_test.go	unexpressed
 deploy/helm/dev-health	go_pgbouncer_session_rollingupdate_test.go	unexpressed
 deploy/helm/dev-health	helm_namespace_test.go	unexpressed
+deploy/helm/dev-health	render_cache_test.go	unexpressed
 internal/api/billing/stripeclient	environment_proxy_test.go	unexpressed
 internal/api/externalurl	environment_proxy_test.go	unexpressed
 internal/api/githubapp	environment_proxy_test.go	unexpressed
@@ -29,8 +30,10 @@ internal/api/teamsidentity	environment_proxy_test.go	unexpressed
 internal/apiservice	environment_proxy_test.go	unexpressed
 internal/atlassianteams	environment_proxy_test.go	unexpressed
 internal/atlassianteams	vendored_redirect_test.go	unexpressed
+internal/auth/accessverify	jwks_metrics_test.go	unexpressed
 internal/auth/authorization	imports_test.go	unexpressed
 internal/auth/authruntime	orgs_owned_removed_test.go	unexpressed
+internal/auth/authruntime	wrong_class_gate_test.go	cmd/auth-service
 internal/auth/contracts	credential_anchor_history_test.go	unexpressed
 internal/auth/contracts	endpoint_profile_source_commit_test.go	unexpressed
 internal/auth/delegationinput	deps_test.go	unexpressed
@@ -38,6 +41,7 @@ internal/auth/entitlement	deps_test.go	internal/auth/...
 internal/auth/entitlement	deps_test.go	unexpressed
 internal/auth/identity	service_provider_callers_test.go	internal/auth/...
 internal/auth/identity/oidc	environment_proxy_test.go	unexpressed
+internal/auth/passwordpolicy	callers_test.go	unexpressed
 internal/authzenforce	census_test.go	unexpressed
 internal/cigates	governance.go	unexpressed
 internal/cigates/affected	always_select_test.go	unexpressed
@@ -65,6 +69,7 @@ internal/cigates/bigboyrender	parity_test.go	cmd/cigate
 internal/cigates/bigboyrender	parity_test.go	unexpressed
 internal/cigates/bigboyrender	posture.go	unexpressed
 internal/cigates/chartgates	helpers_test.go	unexpressed
+internal/cigates/chartgates	overlay_parallel_test.go	unexpressed
 internal/cigates/chartgates	overlay_test.go	unexpressed
 internal/cigates/chartgates	worker_secret_env_scan_test.go	**/cmd/...
 internal/cigates/chartgates	worker_secret_env_scan_test.go	**/internal/...
@@ -94,6 +99,14 @@ internal/cigates/integrationshards	ci_script_helpers_test.go	unexpressed
 internal/cigates/integrationshards	free_run_test.go	unexpressed
 internal/cigates/integrationshards	shard_run_tee_bound_test.go	unexpressed
 internal/cigates/integrationshards	shard_run_term_test.go	unexpressed
+internal/cigates/livee2e	mintlicense_test.go	cmd/...
+internal/cigates/livee2e	mintlicense_test.go	cmd/cigate
+internal/cigates/livee2e	mintlicense_test.go	unexpressed
+internal/cigates/livee2e	smtpsink_test.go	unexpressed
+internal/cigates/livee2e	ssoseedverb_test.go	cmd/...
+internal/cigates/livee2e	ssoseedverb_test.go	unexpressed
+internal/cigates/livee2e/ssoseed	served_census_test.go	...
+internal/cigates/metricsproof	proof_test.go	unexpressed
 internal/cigates/nopython	trackedfiles_test.go	unexpressed
 internal/cigates/outboundtransport	outboundtransport_test.go	unexpressed
 internal/cigates/proofteardown	harness_test.go	unexpressed
@@ -103,6 +116,10 @@ internal/cigates/raceunweighted	raceunweighted_test.go	unexpressed
 internal/cigates/releasetag	parity_test.go	cmd/cigate
 internal/cigates/releasetag	parity_test.go	unexpressed
 internal/cigates/releasetag	releasetag.go	unexpressed
+internal/cigates/retiredcredentialnames	census_test.go	unexpressed
+internal/cigates/retiredcredentialnames	planted_test.go	unexpressed
+internal/cigates/retiredservicecred	census_test.go	unexpressed
+internal/cigates/retiredservicecred	planted_test.go	unexpressed
 internal/cigates/routing	alias_test.go	unexpressed
 internal/cigates/routing	chart_test.go	unexpressed
 internal/cigates/routing	cut_test.go	unexpressed
@@ -120,7 +137,10 @@ internal/cigates/scripts	oracle_triggers_script_test.go	unexpressed
 internal/cigates/scripts	posture_integration_test.go	unexpressed
 internal/cigates/splitshards	ci_script_helpers_test.go	unexpressed
 internal/cigates/splitshards	free_run_test.go	unexpressed
+internal/cigates/splitshards	listing_cache_test.go	unexpressed
 internal/cigates/suitecatalog	suitecatalog_test.go	unexpressed
+internal/cigates/testshard	all_legs_errexit_test.go	unexpressed
+internal/cigates/testshard	chainplan_test.go	unexpressed
 internal/cigates/testshard	checkgofresh_test.go	unexpressed
 internal/cigates/testshard	listcall_test.go	unexpressed
 internal/cigates/testshard	loglineatomic_test.go	unexpressed

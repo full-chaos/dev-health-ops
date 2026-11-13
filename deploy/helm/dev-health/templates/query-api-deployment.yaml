@@ -17,6 +17,25 @@ exits 2 on the `query-api` argument, so the render refuses it by name.
 {{- if and .Values.queryApi.internal.enabled (eq (int .Values.queryApi.internal.port) (int .Values.queryApi.port)) }}
 {{- fail "queryApi.internal.port must differ from queryApi.port (the public listener)" }}
 {{- end }}
+{{- if or (eq (int .Values.queryApi.operatorPort) (int .Values.queryApi.port)) (and .Values.queryApi.internal.enabled (eq (int .Values.queryApi.operatorPort) (int .Values.queryApi.internal.port))) (and .Values.queryApi.mcp.enabled (eq (int .Values.queryApi.operatorPort) (int .Values.queryApi.mcp.port))) }}
+{{- fail "queryApi.operatorPort must differ from queryApi.port, queryApi.internal.port and queryApi.mcp.port: each listener has its own port" }}
+{{- end }}
+{{- /*
+Probe handlers are chart-owned (the operator listener): values carry timings only. The one handler
+allowed in values is the previous chart default (httpGet /readyz on port http), which an upgrade
+still carries and which is dropped; any other handler fails the render.
+*/}}
+{{- range $probe := list "livenessProbe" "readinessProbe" }}
+{{- $v := index $.Values.queryApi $probe }}
+{{- range $h := list "tcpSocket" "exec" "grpc" }}
+{{- if hasKey $v $h }}
+{{- fail (printf "queryApi.%s.%s is set: probe handlers are chart-owned (the operator listener); only timings belong in values" $probe $h) }}
+{{- end }}
+{{- end }}
+{{- if and (hasKey $v "httpGet") (ne (toJson $v.httpGet) (toJson (dict "path" "/readyz" "port" "http"))) }}
+{{- fail (printf "queryApi.%s.httpGet is set to a custom handler: probe handlers are chart-owned (the operator listener); only timings belong in values" $probe) }}
+{{- end }}
+{{- end }}
 {{- range .Values.queryApi.extraEnv }}
 {{- if and (eq .name "CORS_ALLOWED_ORIGINS") $.Values.queryApi.corsAllowedOrigins }}
 {{- fail "queryApi.extraEnv sets CORS_ALLOWED_ORIGINS and queryApi.corsAllowedOrigins is set too: two values for one variable; keep one (extraEnv when the value comes from a Secret)" }}
@@ -62,6 +81,9 @@ the release-wide policy admits every pod in the namespace).
 {{- end }}
 {{- if eq (upper (trim (toString .name))) "AUTH_ACCESS_TOKEN_ISSUER" }}
 {{- fail "queryApi.extraEnv must not set AUTH_ACCESS_TOKEN_ISSUER: authService.accessToken.issuerURL renders it, for auth-service and go-api too" }}
+{{- end }}
+{{- if eq (upper (trim (toString .name))) "AUTH_PROXY_IMPERSONATION" }}
+{{- fail "queryApi.extraEnv must not set AUTH_PROXY_IMPERSONATION: goApi.authProxy.impersonation renders it, for go-api and query-api both" }}
 {{- end }}
 {{- end }}
 {{- if .Values.queryApi.internal.enabled }}
@@ -134,6 +156,9 @@ spec:
             - name: http
               containerPort: {{ .Values.queryApi.port }}
               protocol: TCP
+            - name: operator
+              containerPort: {{ .Values.queryApi.operatorPort }}
+              protocol: TCP
             {{- if .Values.queryApi.internal.enabled }}
             - name: internal
               containerPort: {{ .Values.queryApi.internal.port }}
@@ -171,6 +196,8 @@ spec:
           env:
             - name: QUERY_API_ADDR
               value: {{ printf ":%v" .Values.queryApi.port | quote }}
+            - name: DEV_HEALTH_HTTP_ADDR
+              value: {{ printf ":%v" .Values.queryApi.operatorPort | quote }}
             {{- if (eq (include "dev-health.authOn" (dict "flag" "service" "context" .)) "true") }}
             {{- /* The auth schema the sid check reads auth-service sessions in. */}}
             - name: AUTH_DATABASE_SCHEMA
@@ -196,6 +223,11 @@ spec:
             {{- with (include "dev-health.authzEnforceQueryApi" (dict "key" "queryApiHeaders" "context" .)) }}
             - name: QUERY_API_HEADERS_AUTHZ_ENFORCE
               value: {{ . | quote }}
+            {{- end }}
+            {{- /* go-api's AUTH_PROXY_IMPERSONATION, from the same value: on, /graphql refuses the admin's own bearer beside a live impersonation row. */}}
+            {{- if eq (default false (default dict .Values.goApi.authProxy).impersonation) true }}
+            - name: AUTH_PROXY_IMPERSONATION
+              value: "true"
             {{- end }}
             {{- if .Values.queryApi.internal.enabled }}
             {{- /*
@@ -238,12 +270,11 @@ spec:
             */}}
             - name: GO_API_REGISTRY_POSTGRES_URI
               valueFrom: {secretKeyRef: {name: {{ include "dev-health.secretName" . }}, key: GO_API_REGISTRY_POSTGRES_URI}}
-            - name: GO_API_ENVELOPE_JWKS_PATH
-              value: {{ .Values.queryApi.envelope.jwksPath | quote }}
-            - name: GO_API_ENVELOPE_ISSUER
-              value: {{ .Values.queryApi.envelope.issuer | quote }}
-            - name: GO_API_ENVELOPE_AUDIENCE
-              value: {{ .Values.queryApi.envelope.audience | quote }}
+            {{- /*
+            No GO_API_ENVELOPE_* env and no envelope JWKS volume (CHAOS-13539): the effective-principal envelope is
+            retired, and query-api with no envelope key mounts every route, refuses the envelope class and has no
+            query_jwks readiness dependency (internal/queryapi/server/envelope_key.go).
+            */}}
             {{- /*
             /graphql answers a browser with the Python api's CORS middleware and
             parameters; only the allowed origins are configuration, and they must be
@@ -268,42 +299,21 @@ spec:
             {{- with .Values.queryApi.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
+          {{- with .Values.queryApi.extraVolumeMounts }}
           volumeMounts:
-            - name: envelope-jwks
-              mountPath: {{ .Values.queryApi.envelope.jwksPath }}
-              subPath: {{ base .Values.queryApi.envelope.jwksPath }}
-              readOnly: true
-            {{- with .Values.queryApi.extraVolumeMounts }}
             {{- toYaml . | nindent 12 }}
-            {{- end }}
-          {{- with .Values.queryApi.livenessProbe }}
+          {{- end }}
           livenessProbe:
-            {{- toYaml . | nindent 12 }}
-          {{- end }}
-          {{- with .Values.queryApi.readinessProbe }}
+            {{- toYaml (merge (omit .Values.queryApi.livenessProbe "httpGet") (dict "httpGet" (dict "path" "/healthz" "port" "operator"))) | nindent 12 }}
           readinessProbe:
-            {{- toYaml . | nindent 12 }}
-          {{- end }}
+            {{- toYaml (merge (omit .Values.queryApi.readinessProbe "httpGet") (dict "httpGet" (dict "path" "/readyz" "port" "operator"))) | nindent 12 }}
           resources:
             {{- toYaml .Values.queryApi.resources | nindent 12 }}
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, capabilities: {drop: [ALL]}, seccompProfile: {type: RuntimeDefault}}
+      {{- with .Values.queryApi.extraVolumes }}
       volumes:
-        {{- /*
-        The envelope keypair is minted out of band (scripts/mint-envelope-keys.sh)
-        and only its public half belongs in the cluster, so this chart references
-        the Secret and never creates it. It must exist before this workload is
-        enabled: a missing Secret leaves the Pod in ContainerCreating rather than
-        failing the render, which is the one failure mode a template cannot
-        catch for a resource it does not own.
-        */}}
-        - name: envelope-jwks
-          secret:
-            secretName: {{ include "dev-health.queryApiJwksSecretName" . }}
-            items:
-              - {key: {{ base .Values.queryApi.envelope.jwksPath }}, path: {{ base .Values.queryApi.envelope.jwksPath }}}
-        {{- with .Values.queryApi.extraVolumes }}
         {{- toYaml . | nindent 8 }}
-        {{- end }}
+      {{- end }}
       {{- with .Values.queryApi.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

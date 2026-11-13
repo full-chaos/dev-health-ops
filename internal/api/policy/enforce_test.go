@@ -214,9 +214,9 @@ func TestAnEnforcerWithNoDecisionPointRefusesEveryRequestOfItsNamespacesWithA503
 			}
 		})
 	}
-	got := serve(hs256Handler(t, newUnconfiguredEnforcerFor(t, onFor("teams"))), http.MethodGet, "/api/v1/admin/teams", validAuth(t, func(c jwt.MapClaims) { c["role"] = "admin" }))
+	got := serve(fixtureBearerHandler(t, newUnconfiguredEnforcerFor(t, onFor("teams"))), http.MethodGet, "/api/v1/admin/teams", validAuth(t, func(c jwt.MapClaims) { c["role"] = "admin" }))
 	if got.status != http.StatusServiceUnavailable || got.body != enforceNoDecisionPointBody {
-		t.Fatalf("no decision point, legacy HS256 caller: %d %q, want the 503: fail-closed refuses every request", got.status, got.body)
+		t.Fatalf("no decision point, signed fixture caller: %d %q, want the 503: fail-closed refuses every request", got.status, got.body)
 	}
 }
 
@@ -239,7 +239,7 @@ func TestADeadPDPIsA503NotALegacyAllow(t *testing.T) {
 	}
 }
 
-func hs256Handler(t *testing.T, enf *Enforcer) http.Handler {
+func fixtureBearerHandler(t *testing.T, enf *Enforcer) http.Handler {
 	t.Helper()
 	store := newStore()
 	withClaimRole(store, claims(func(c jwt.MapClaims) { c["role"] = "admin" }))
@@ -292,15 +292,15 @@ func TestAnImpersonatingAdminOnAnEnforcedRowIsRefusedBeforeThePDP(t *testing.T) 
 	}
 }
 
-// A legacy HS256 bearer with a live go-api impersonation row is refused on a write too: the row, not the token class,
+// A signed fixture bearer with a live go-api impersonation row is refused on a write too: the row, not the token class,
 // makes the caller one the decision point cannot judge as the delegation.
-func TestAnImpersonatingHS256CallerOnAnEnforcedRowIsRefused(t *testing.T) {
+func TestAnImpersonatingFixtureCallerOnAnEnforcedRowIsRefused(t *testing.T) {
 	rec := recordEnforce(t)
 	pdp := newTestPDP(t, allowAll)
-	got := serve(impersonating(hs256Handler(t, newEnforcerFor(t, pdp.client(t), onFor("teams")))), http.MethodPost, "/api/v1/admin/teams",
+	got := serve(impersonating(fixtureBearerHandler(t, newEnforcerFor(t, pdp.client(t), onFor("teams")))), http.MethodPost, "/api/v1/admin/teams",
 		validAuth(t, func(c jwt.MapClaims) { c["role"] = "admin" }))
 	if got.status != http.StatusForbidden || got.body != impersonationRefusalBody || len(pdp.calls()) != 0 {
-		t.Fatalf("impersonating HS256 caller: %d %q, %d PDP calls, want 403 %q and 0", got.status, got.body, len(pdp.calls()), impersonationRefusalBody)
+		t.Fatalf("impersonating fixture caller: %d %q, %d PDP calls, want 403 %q and 0", got.status, got.body, len(pdp.calls()), impersonationRefusalBody)
 	}
 	if d, u := rec.snapshot(), rec.unjudgedSnapshot(); !slices.Equal(d, []string{"teams/impersonation_refused"}) || len(u) != 0 {
 		t.Fatalf("decisions %v unjudged %v, want [teams/impersonation_refused] and none", d, u)
@@ -626,8 +626,9 @@ func collectSum(t *testing.T, reader *sdkmetric.ManualReader, name, label string
 	return description, values
 }
 
-// No caller gives the unjudged counter a "delegated" reason: its closed reason set is hs256, no_org, served_org and
-// impersonation (a live-row read; the live-row platform wrap is refused, not unjudged).
+// A delegated session's bearer with an organization gives the unjudged counter no reason: it is judged. Its closed
+// reason set is hs256, no_org, served_org, org_required, delegated_orgless (a delegated bearer with NO organization,
+// CHAOS-10872 S1) and impersonation (a live-row read; the live-row platform wrap is refused, not unjudged).
 func TestTheUnjudgedCounterHasNoDelegatedReason(t *testing.T) {
 	recordEnforce(t)
 	reader := sdkmetric.NewManualReader()
@@ -641,10 +642,10 @@ func TestTheUnjudgedCounterHasNoDelegatedReason(t *testing.T) {
 	noOrg := userClaims(func(c *AccessTokenClaims) { c.OrgID = nil })
 	enforceRequest(enforceHandler(t, personaStore(personaAdmin), noOrg, newEnforcerFor(t, pdp.client(t), onFor("teams"))), http.MethodGet, "/api/v1/admin/teams")
 	description, reasons := collectSum(t, reader, enforceUnjudgedMetric, "reason")
-	if !slices.Equal(reasons, []string{"impersonation", "no_org"}) {
-		t.Errorf("unjudged reasons %v, want [impersonation no_org] (no delegated point)", reasons)
+	if !slices.Equal(reasons, []string{"impersonation", "org_required"}) {
+		t.Errorf("unjudged reasons %v, want [impersonation org_required] (no delegated point)", reasons)
 	}
-	if want := "by route row and reason: hs256, no_org, served_org, impersonation"; !strings.HasSuffix(description, want) {
+	if want := "by route row and reason: hs256, no_org, served_org, org_required, delegated_orgless, impersonation"; !strings.HasSuffix(description, want) {
 		t.Errorf("unjudged description %q, want it to end %q", description, want)
 	}
 }
@@ -672,7 +673,7 @@ func TestTheEnforcementOutcomeSetIsClosed(t *testing.T) {
 	servedOrgServe(t, members, servedOrgSetup{who: personaAdmin, enforcer: servedOrgEnforcer(t, allow, "members")}, strangerOrg)
 	description, outcomes := collectSum(t, reader, enforceDecisionMetric, "outcome")
 	want := []string{"allow", "deny", "error_deny", "impersonation_refused"}
-	if !slices.Equal(outcomes, want) {
+	if outcomes = slices.Compact(outcomes); !slices.Equal(outcomes, want) {
 		t.Errorf("outcomes %v, want %v", outcomes, want)
 	}
 	if suffix := "outcome: allow, deny, error_deny, impersonation_refused"; !strings.HasSuffix(description, suffix) {
@@ -680,6 +681,8 @@ func TestTheEnforcementOutcomeSetIsClosed(t *testing.T) {
 	}
 }
 
+// An AdminOrg route refuses a token with no organization whoever it is: the decision point is not asked, the answer is
+// the legacy one, counted unjudged org_required (CHAOS-10872 S1).
 func TestAnOrganizationRouteWithNoOrganizationKeepsTheLegacyAnswerAndIsCountedUnjudged(t *testing.T) {
 	rec := recordEnforce(t)
 	pdp := newTestPDP(t, denyWith("role_lacks_action"))
@@ -689,8 +692,8 @@ func TestAnOrganizationRouteWithNoOrganizationKeepsTheLegacyAnswerAndIsCountedUn
 	if got.status != base.status || got.body != base.body {
 		t.Fatalf("no organization: %d %q, want the legacy %d %q", got.status, got.body, base.status, base.body)
 	}
-	if n := len(pdp.calls()); n != 0 || !slices.Equal(rec.unjudgedSnapshot(), []string{"GET /api/v1/admin/teams/no_org"}) {
-		t.Fatalf("%d PDP calls, unjudged %v, want 0 and [GET /api/v1/admin/teams/no_org]", n, rec.unjudgedSnapshot())
+	if n := len(pdp.calls()); n != 0 || !slices.Equal(rec.unjudgedSnapshot(), []string{"GET /api/v1/admin/teams/org_required"}) {
+		t.Fatalf("%d PDP calls, unjudged %v, want 0 and [GET /api/v1/admin/teams/org_required]", n, rec.unjudgedSnapshot())
 	}
 }
 
@@ -720,8 +723,8 @@ func TestAnUnjudgedRequestLogsOneDebugLineThatQuotesNoToken(t *testing.T) {
 	noOrg := userClaims(func(c *AccessTokenClaims) { c.OrgID = nil })
 	enforceRequest(enforceHandler(t, personaStore(personaAdmin), noOrg, enf), http.MethodGet, "/api/v1/admin/teams")
 	line := logs.String()
-	if strings.Count(line, "level=DEBUG") != 1 || !strings.Contains(line, "reason=no_org") || !strings.Contains(line, "route=\"GET /api/v1/admin/teams\"") {
-		t.Fatalf("log %q: want one DEBUG line with the route and reason no_org", line)
+	if strings.Count(line, "level=DEBUG") != 1 || !strings.Contains(line, "reason=org_required") || !strings.Contains(line, "route=\"GET /api/v1/admin/teams\"") {
+		t.Fatalf("log %q: want one DEBUG line with the route and reason org_required", line)
 	}
 	if strings.Contains(line, shadowBearer) {
 		t.Fatalf("the log quotes the token: %q", line)
@@ -1100,5 +1103,51 @@ func TestEveryMappedRowAcceptsOnlyUserTokenClasses(t *testing.T) {
 	}
 	if mapped == 0 {
 		t.Fatal("no row names an action")
+	}
+}
+
+// CHAOS-10872 S3: a present bearer that is not a user access token (an HS256 token, a workload token, a push token: whatever the
+// routed verifier refuses, and an authenticator with no access check at all) is refused at authentication, before the enforcer is
+// asked anything: 401, no decision point question, no decision outcome and no unjudged count. So the unjudged reason hs256 cannot be
+// produced by a bearer that reaches the guard on an enforced row.
+func TestANonUserTokenIsRefusedAtAuthenticationBeforeTheEnforcerDecides(t *testing.T) {
+	const refusal = `{"detail":{"message":"Invalid or expired token"}}`
+	for _, tc := range []struct {
+		name string
+		auth func(t *testing.T) *Authenticator
+	}{
+		{"the verifier refuses the token", func(t *testing.T) *Authenticator {
+			return routed(t, personaStore(personaAdmin), &fakeValidator{err: errRefusedByValidator})
+		}},
+		{"the verifier answers no result", func(t *testing.T) *Authenticator {
+			return routed(t, personaStore(personaAdmin), &fakeValidator{})
+		}},
+		{"the verifier answers a result with no claims", func(t *testing.T) *Authenticator {
+			return routed(t, personaStore(personaAdmin), &fakeValidator{result: &RoutedResult{}})
+		}},
+		{"the authenticator has no access check", func(t *testing.T) *Authenticator {
+			return unrouted(t, personaStore(personaAdmin))
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := recordEnforce(t)
+			pdp := newTestPDP(t, allowAll)
+			guard := NewGuard(tc.auth(t), quiet())
+			guard.SetEnforcer(newEnforcerFor(t, pdp.client(t), onFor("teams")))
+			mux := http.NewServeMux()
+			mux.Handle("GET /api/v1/admin/teams", guard.Wrap(AdminOrg, echo))
+			for _, bearer := range []string{shadowBearer, "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ4In0.c2ln"} {
+				got := serve(mux, http.MethodGet, "/api/v1/admin/teams", map[string]string{"Authorization": "Bearer " + bearer})
+				if got.status != http.StatusUnauthorized || got.body != refusal {
+					t.Errorf("%s: %d %q, want 401 %s", tc.name, got.status, got.body, refusal)
+				}
+			}
+			if calls := pdp.calls(); len(calls) != 0 {
+				t.Errorf("%s: the decision point saw %+v, want no question", tc.name, calls)
+			}
+			if d, u := rec.snapshot(), rec.unjudgedSnapshot(); len(d) != 0 || len(u) != 0 {
+				t.Errorf("%s: decisions %v unjudged %v, want none and none (the enforcer is never reached)", tc.name, d, u)
+			}
+		})
 	}
 }

@@ -75,7 +75,7 @@ func TestIntegrationShardsSkipOnPullRequestWiring(t *testing.T) {
 	if strings.Contains(text, "types: [opened, synchronize, reopened, ready_for_review, labeled") {
 		t.Error("a labeled trigger reruns the whole workflow on every label change; the label applies at the next push")
 	}
-	if !strings.Contains(text, "cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref != 'refs/heads/main') }}") {
+	if !strings.Contains(text, "cancel-in-progress: ${{ (github.event_name == 'pull_request' && github.event.action != 'ready_for_review') || (github.event_name == 'push' && github.ref != 'refs/heads/main') }}") {
 		t.Error("a main push run must never be cancelled in progress: every merge sha needs its own integration verdict")
 	}
 }
@@ -84,6 +84,7 @@ func TestIntegrationShardsSkipOnPullRequestWiring(t *testing.T) {
 // path that reaches the planner shows as FULL and a skip shows as NONE. With planner set, stub go and git binaries
 // build a planner that prints that verdict, so the planner's own NONE shows its reason.
 func TestIntegrationShardsSelectionStepBehaviour(t *testing.T) {
+	t.Parallel()
 	root := rootOf(t)
 	doc := loadWf(t, root, "go.yml")
 	step, count := stepNamed(pinJob(doc, "go-storage-integration-plan"), "Select the integration packages the change can affect")

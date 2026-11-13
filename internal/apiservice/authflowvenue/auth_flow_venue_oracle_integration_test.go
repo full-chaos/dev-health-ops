@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -36,7 +37,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/accessrouting"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
 	"github.com/full-chaos/dev-health-ops/internal/auth/accessverify"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/signedtoken"
 	mailpkg "github.com/full-chaos/dev-health-ops/internal/mail"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
@@ -81,7 +81,7 @@ const (
 	appBaseURL  = "https://app.example.test/"
 )
 
-// linkToken is the link token for id under the venue's JWT key: both planes
+// linkToken is the link token for id under the venue's link key: both planes
 // sign with it, so a seeded row's token is the same text on both.
 func linkToken(id string) (token, hash string) {
 	return signedtoken.Build(uuid.MustParse(id), sessionscenario.Key)
@@ -282,6 +282,10 @@ type runner struct {
 	signUpLength string
 	// retired maps a step whose Python answer a ruling retired to that ruling and the pin that holds Go's answer.
 	retired map[string]retiredStep
+	// moved is the in-process run's go-api routes that answer the moved-operation refusal (movedRoutes); nil on an
+	// external target. Their steps, the steps that depend on them and the row and e-mail comparisons they change are
+	// retired under movedRuling.
+	moved map[string]bool
 	// skipSteps maps a step whose Go answer differs from the legacy answer for a tracked gap to its reason (with the
 	// ticket): the legacy answer stays the wanted one, the step's subtest is SKIPPED, and it fails once the answers
 	// agree, so the skip is removed.
@@ -326,8 +330,12 @@ func (r *runner) batch(label string, steps []step) map[string][2]venueoracle.Res
 		pyRequests[index] = s.python
 	}
 	pyResponses := r.golden.Python(r.t, r.venue, pyRequests)
+	movedBatch := false
 	for index, s := range steps {
-		if retired, ok := r.retired[s.name]; ok {
+		if _, moved := movedStepRoute(r.moved, s.name, s.python.Method, s.python.Path); moved {
+			r.golden.Retired(r.t, movedRuling, pyResponses[index])
+			movedBatch = true
+		} else if retired, ok := r.retired[s.name]; ok {
 			r.golden.Retired(r.t, retired.ruling, pyResponses[index])
 		} else {
 			r.golden.Consumed(r.t, pyResponses[index])
@@ -336,6 +344,11 @@ func (r *runner) batch(label string, steps []step) map[string][2]venueoracle.Res
 	out := map[string][2]venueoracle.Response{}
 	fmt.Fprintf(&r.receipt, "-- %s\n", label)
 	for index, s := range steps {
+		if route, moved := movedStepRoute(r.moved, s.name, s.python.Method, s.python.Path); moved {
+			fmt.Fprintf(&r.receipt, "%-70s retired     (%s moved)\n", s.name, route)
+			out[s.name] = [2]venueoracle.Response{pyResponses[index], {}}
+			continue
+		}
 		goResponse := venueoracle.Do(r.t, r.goBase, s.goSide)
 		if r.external {
 			goResponse = venueoracle.WithoutProvenanceHeaders(goResponse)
@@ -443,9 +456,70 @@ func (r *runner) batch(label string, steps []step) map[string][2]venueoracle.Res
 		}
 		out[s.name] = [2]venueoracle.Response{pyResponses[index], goResponse}
 	}
-	r.compareMail(label)
+	if movedBatch {
+		r.retireMail(label)
+	} else {
+		r.compareMail(label)
+	}
 	r.notices, r.registers = 0, false
 	return out
+}
+
+// retireMail is compareMail for an in-process batch with a retired moved step: the Python plane's mails are read (a
+// later step carries their tokens) and the Go plane's are drained, and nothing is compared.
+func (r *runner) retireMail(label string) {
+	r.t.Helper()
+	var pythonMails []recordedMail
+	if err := json.Unmarshal([]byte(r.golden.InspectRows(r.t, "python mails: "+label)), &pythonMails); err != nil {
+		r.t.Fatalf("python mails %q: %v", label, err)
+	}
+	for _, recorded := range pythonMails {
+		decoded := recorded.sent()
+		key := decoded.rcptTo + "|" + decoded.subject
+		r.mails["python"][key] = append(r.mails["python"][key], decoded)
+	}
+	drained := len(r.goSink.Drain(r.t))
+	fmt.Fprintf(&r.receipt, "%-70s python=%d go=%d retired (%s)\n", label+": e-mails", len(pythonMails), drained, movedRuling)
+}
+
+// movedCells runs the executed in-process cells of each moved route (movedProbes), once without and once with a user
+// access token: go-api answers 409 with the operation_moved reason, after its own scope layers, validator and limiter,
+// in a fresh rate-limit window.
+func (r *runner) movedCells(bearer string) {
+	r.t.Helper()
+	flushValkey(r.t, r.ctx, r.venue.ValkeyURI, r.venue.PythonValkeyURI)
+	keys := make([]string, 0, len(r.moved))
+	for key := range r.moved {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	fmt.Fprintf(&r.receipt, "-- moved routes (in process)\n")
+	for _, key := range keys {
+		probe, ok := movedProbes[key]
+		if !ok {
+			r.t.Errorf("%s: no moved-route cell", key)
+			continue
+		}
+		for _, cell := range []struct{ label, bearer string }{{"no bearer", ""}, {"bearer", bearer}} {
+			method, path, _ := strings.Cut(key, " ")
+			body := probe
+			if strings.HasPrefix(probe, "?") {
+				path, body = path+probe, ""
+			}
+			name := "moved: " + key + ", " + cell.label
+			got := venueoracle.Do(r.t, r.goBase, request(name, method, path, cell.bearer, body))
+			var answer struct {
+				Detail struct {
+					Reason string `json:"reason"`
+				} `json:"detail"`
+			}
+			ok := got.Status == http.StatusConflict && json.Unmarshal([]byte(got.Body), &answer) == nil && answer.Detail.Reason == usersowned.Reason
+			fmt.Fprintf(&r.receipt, "%-70s go=%d %s\n", name, got.Status, venueoracle.Mark(ok))
+			if !ok {
+				r.t.Errorf("%s: go-api answered %d %s, want 409 with reason %s", name, got.Status, venueoracle.RedactText(got.Body), usersowned.Reason)
+			}
+		}
+	}
 }
 
 // checkUniformLength asserts that the Go answers of the uniform sign-up steps (new address, taken address,
@@ -642,12 +716,21 @@ func keys(m map[string][]sentMail) []string {
 
 func (r *runner) rows(name, query string) {
 	r.t.Helper()
+	if r.moved != nil && slices.Contains(inProcessRetiredRows, name) {
+		r.golden.RetireRows(r.t, name, movedRuling)
+		fmt.Fprintf(&r.receipt, "%s rows after the scenario: retired (%s)\n", name, movedRuling)
+		return
+	}
 	query, projected, err := authrows.Query(name, query, r.forwarded)
 	if err != nil {
 		r.t.Fatalf("%s rows: %v", name, err)
 	}
 	goRows := venueoracle.TableRows(r.t, r.ctx, r.venue.AdminURI(r.t, r.venue.GoDB), query)
 	if projected {
+		if r.moved != nil && name == "refresh_tokens" {
+			r.refreshRowsInProcess(goRows)
+			return
+		}
 		r.projectedRows(name, goRows)
 		return
 	}
@@ -656,6 +739,19 @@ func (r *runner) rows(name, query string) {
 	fmt.Fprintf(&r.receipt, "%s rows after the scenario: %s\n", name, venueoracle.Mark(same))
 	if pyRows == "" {
 		r.t.Errorf("%s rows are empty", name)
+	}
+}
+
+// refreshRowsInProcess is projectedRows for refresh_tokens on the in-process run: the rows of inProcessRefreshExcluded,
+// written on the Python plane by retired steps, leave both sides; every other row is compared through the quirk table.
+func (r *runner) refreshRowsInProcess(goRows string) {
+	r.t.Helper()
+	pyRows := withoutUsers(r.golden.InspectRows(r.t, "refresh_tokens"), inProcessRefreshExcluded)
+	target := withoutUsers(r.golden.ProjectRows(r.t, "refresh_tokens", goRows), inProcessRefreshExcluded)
+	problems := r.ledger.Compare("refresh_tokens", pyRows, target)
+	fmt.Fprintf(&r.receipt, "refresh_tokens rows after the scenario, without %v (%s): %s\n", inProcessRefreshExcluded, movedRuling, venueoracle.Mark(len(problems) == 0))
+	for _, problem := range problems {
+		r.t.Error(problem)
 	}
 }
 
@@ -748,9 +844,6 @@ VALUES ($1, $2, $3, NULL, 'local', true, $4, false, 0, now() - interval '1 day',
 VALUES ($1, $2, $3, $4, $5, $6, $7, now() + $8::interval, now() - interval '1 hour', now() - interval '1 hour')`,
 			invite.id, invite.org, invite.email, invite.role, tokenHash, alice, invite.status, invite.expiresIn)
 	}
-	_, verificationHash := linkToken(expiredVerification)
-	exec(`INSERT INTO email_verification_tokens (id, user_id, token_hash, expires_at, created_at)
-VALUES ($1, $2, $3, now() - interval '1 hour', now() - interval '25 hours')`, expiredVerification, uma, verificationHash)
 	_, resetHash := linkToken(expiredReset)
 	exec(`INSERT INTO password_reset_tokens (id, user_id, token_hash, expires_at, created_at)
 VALUES ($1, $2, $3, now() - interval '1 hour', now() - interval '2 hours')`, expiredReset, judy, resetHash)
@@ -843,7 +936,7 @@ func TestAuthFlowVenueOracle(t *testing.T) {
 		planeKey = authplane.NewKey(t)
 	}
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{External: external, TokenIssuer: planeKey.Tokens,
-		Golden: golden, Root: venueRoot(), JWTKey: sessionscenario.Key, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Golden: golden, Root: venueRoot(), Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		PythonEnv: []string{"EMAIL_PROVIDER=smtp", "EMAIL_FROM_ADDRESS=" + fromAddress,
 			"SMTP_HOST=" + pyHost, "SMTP_PORT=" + strconv.Itoa(pyPort), "APP_BASE_URL=" + appBaseURL},
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, venue *venueoracle.Venue) map[string]map[string]any {
@@ -918,6 +1011,7 @@ func TestAuthFlowVenueOracle(t *testing.T) {
 			t.Fatal(err)
 		}
 		r.sessionIssuer = authplane.IssuerURL
+		r.moved = movedRoutes(t)
 	}
 	if r.ledger, err = authrows.NewLedger(r.forwarded, r.usersOwned); err != nil {
 		t.Fatal(err)
@@ -1065,7 +1159,13 @@ func TestAuthFlowVenueOracle(t *testing.T) {
 
 	// Batch: follow every link each plane mailed, with that plane's token.
 	link := func(recipient, subject string) func(string) string {
-		return func(plane string) string { return r.token(plane, recipient, subject) }
+		return func(plane string) string {
+			if plane == "go" && r.moved != nil {
+				// In process go-api mails no link: the steps that follow one are retired (movedRuling).
+				return "moved"
+			}
+			return r.token(plane, recipient, subject)
+		}
 	}
 	verifyNina, verifyUma := link("nina.new@example.com", "Verify your email address"), link("uma@example.com", "Verify your email address")
 	resetAlice, resetPia := link("alice@example.com", "Reset your password"), link("pia@example.com", "Reset your password")
@@ -1123,6 +1223,9 @@ func TestAuthFlowVenueOracle(t *testing.T) {
 		limits = append(limits, same(fmt.Sprintf("limit: reset has none %d/3", i), post, reset, "", `{"token": "garbage", "new_password": "Brand-new-pass-7"}`))
 	}
 	r.batch("limits", limits)
+	if r.moved != nil {
+		r.movedCells(tok["alice"])
+	}
 
 	r.rows("users", `SELECT email, coalesce(username, '<null>'), coalesce(full_name, '<null>'), coalesce(auth_provider, '<null>'),
 		is_active, is_verified, is_superuser, token_version, last_login_at IS NOT NULL, updated_at >= created_at,
@@ -1217,16 +1320,12 @@ func startGoAPI(t *testing.T, ctx context.Context, venue *venueoracle.Venue, mai
 	if os.Getenv("DEV_HEALTH_VENUE_GO_LOG") != "" {
 		logger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	}
-	verifier, err := edgetoken.New(sessionscenario.Key, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
 	auth, err := policy.NewAuthenticator(policy.PGStore{Pool: pool}, logger)
 	if err != nil {
 		t.Fatal(err)
 	}
 	venue.ApplyAuthSchema(t, ctx)
-	plane := authplane.Start(t, ctx, venue.AdminURI(t, venue.GoDB), key, sessionscenario.Key)
+	plane := authplane.Start(t, ctx, venue.AdminURI(t, venue.GoDB), key)
 	routeVenueTokens(t, ctx, venue, auth, logger)
 	valkeyClient, err := valkey.Open(ctx, valkey.DefaultConfig(venue.ValkeyURI))
 	if err != nil {
@@ -1242,8 +1341,7 @@ func startGoAPI(t *testing.T, ctx context.Context, venue *venueoracle.Venue, mai
 	if err != nil {
 		t.Fatal(err)
 	}
-	deps := apiservice.Deps{Pool: pool, Valkey: valkeyClient, ClickHouse: ch, Auth: auth, Guard: policy.NewGuard(auth, logger),
-		Verifier: verifier, Invites: mailConfig, SessionIssuer: plane.Issuer,
+	deps := apiservice.Deps{Pool: pool, Valkey: valkeyClient, ClickHouse: ch, Auth: auth, Guard: policy.NewGuard(auth, logger), Invites: mailConfig, SessionIssuer: plane.Issuer,
 		AuthProxy: apiservice.AuthProxyConfig{Upstream: plane.URL, On: map[apiservice.AuthAggregate]bool{apiservice.AuthSessions: true}}}
 	scope := policy.NewScope(auth, logger)
 	server, err := apiservice.NewServer(cfg, logger, apiservice.Routes(deps, logger), scope.Layers()...)

@@ -187,6 +187,8 @@ func withoutSpecStrategy(t *testing.T, doc string, want bool) string {
 }
 
 func TestSessionRollingUpdateSchemaAcceptsAndRefuses(t *testing.T) {
+	t.Parallel()
+
 	for pooler := range sessionPoolers {
 		for name, v := range map[string]string{
 			"surge 0 unavailable 1": `{"maxSurge":0,"maxUnavailable":1}`,
@@ -214,6 +216,8 @@ func TestSessionRollingUpdateSchemaAcceptsAndRefuses(t *testing.T) {
 }
 
 func TestSessionRollingUpdateRendersStrategyOnThatPoolerOnly(t *testing.T) {
+	t.Parallel()
+
 	for pooler, name := range sessionPoolers {
 		docs, out, err := renderAuth(t, authWith(zeroSurge(pooler)...)...)
 		if err != nil {
@@ -237,6 +241,8 @@ func TestSessionRollingUpdateRendersStrategyOnThatPoolerOnly(t *testing.T) {
 // Prod shape: txn (16 + KEDA 4) = 20, queue 36, coordinator 10, direct 24. Every
 // pooler at maxSurge 0 counts 90. One session pooler at surge 1 adds its pool.
 func TestSessionSurgeIsCountedPerPooler(t *testing.T) {
+	t.Parallel()
+
 	allZero := append(append(zeroSurge("queueSession"), zeroSurge("coordinatorSession")...),
 		"--set-json", txnSurgeKey+`={"maxSurge":0,"maxUnavailable":1}`)
 	pools := []string{"--set", "goWorkers.pgbouncer.queueSession.poolSize=36", "--set", "goWorkers.pgbouncer.coordinatorSession.poolSize=10"}
@@ -264,6 +270,8 @@ func TestSessionSurgeIsCountedPerPooler(t *testing.T) {
 // Option B (acp, CHAOS-11583): an UNSET session surge counts one pod, the
 // Kubernetes default, so the budget cannot pass a roll that exceeds the limit.
 func TestSessionSurgeUnsetCountsOnePod(t *testing.T) {
+	t.Parallel()
+
 	// 2 x 20 + 2 x 36 + 2 x 10 + 24 = 156 at prod pool sizes with every pooler unset.
 	args := authWith("--set", "goWorkers.pgbouncer.queueSession.poolSize=36", "--set", "goWorkers.pgbouncer.coordinatorSession.poolSize=10",
 		"--set", "goWorkers.pgbouncer.transaction.poolSize=16", "--set", "authService.database.connectionBudget=97")
@@ -279,6 +287,8 @@ func TestSessionSurgeUnsetCountsOnePod(t *testing.T) {
 }
 
 func TestSessionRollingUpdateHelperRefusesWithoutSchema(t *testing.T) {
+	t.Parallel()
+
 	for pooler := range sessionPoolers {
 		for name, v := range map[string]string{
 			"percentage":    `{"maxSurge":"25%"}`,
@@ -299,6 +309,8 @@ func TestSessionRollingUpdateHelperRefusesWithoutSchema(t *testing.T) {
 
 // The transaction messages did not change when the helper was generalised.
 func TestTransactionRollingUpdateMessagesAreByteIdentical(t *testing.T) {
+	t.Parallel()
+
 	for v, want := range map[string]string{
 		`{"maxSurge":"25%"}`:      "goWorkers.pgbouncer.transaction.rollingUpdate.maxSurge must be a whole number from 0 to 10: the connection budget counts surge pods, a percentage cannot be counted",
 		`{"minReady":1}`:          "goWorkers.pgbouncer.transaction.rollingUpdate.minReady is not a known key: use maxSurge and maxUnavailable",
@@ -393,6 +405,8 @@ func TestGoldenBaseCheckFailsOnAbsentShaAndNonAncestorAndSkipsOnlyWithoutGit(t *
 // A non-map rollingUpdate (false, a string, a list) must reach the helper and be
 // refused, for every pooler: the chart default must not replace an explicit value.
 func TestPgbouncerRollingUpdateNonMapIsRefusedByTheHelper(t *testing.T) {
+	t.Parallel()
+
 	for _, pooler := range []string{"transaction", "queueSession", "coordinatorSession"} {
 		for name, v := range map[string]string{"false": `false`, "string": `"x"`, "list": `[1]`, "number": `5`} {
 			set := []string{"--set-json", "goWorkers.pgbouncer." + pooler + ".rollingUpdate=" + v, "--skip-schema-validation"}
@@ -407,6 +421,8 @@ func TestPgbouncerRollingUpdateNonMapIsRefusedByTheHelper(t *testing.T) {
 
 // Without --skip-schema-validation the same non-map values are refused by the schema.
 func TestPgbouncerRollingUpdateNonMapIsRefusedBySchema(t *testing.T) {
+	t.Parallel()
+
 	for _, pooler := range []string{"transaction", "queueSession", "coordinatorSession"} {
 		for name, v := range map[string]string{"false": `false`, "string": `"x"`, "list": `[1]`, "number": `5`} {
 			_, out, err := renderAuth(t, authWith("--set-json", "goWorkers.pgbouncer."+pooler+".rollingUpdate="+v)...)
@@ -419,6 +435,8 @@ func TestPgbouncerRollingUpdateNonMapIsRefusedBySchema(t *testing.T) {
 
 // An explicit null is "unset": it renders the same as no key, with and without the schema.
 func TestPgbouncerRollingUpdateExplicitNullRendersAsUnset(t *testing.T) {
+	t.Parallel()
+
 	_, want, err := renderAuth(t, authWith()...)
 	if err != nil {
 		t.Fatalf("unset render: %v\n%.300s", err, want)

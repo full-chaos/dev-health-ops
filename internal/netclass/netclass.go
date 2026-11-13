@@ -190,3 +190,36 @@ func embeddedIPv4(addr netip.Addr) []netip.Addr {
 // sharedAddressSpace is RFC 6598 carrier-grade NAT space (100.64.0.0/10): not global, and used inside cloud and overlay
 // networks; Python's tables leave it out, so only the dial-time check refuses it.
 var sharedAddressSpace = netip.MustParsePrefix("100.64.0.0/10")
+
+// neverAllowed are the classes no allow list admits: no service lives there, and the metadata address hands out the
+// node's cloud credentials. egressguard keeps the same set (a test there pins that the two agree).
+var neverAllowed = map[string]bool{"metadata": true, "link_local": true, "multicast": true, "unspecified": true, "invalid_address": true}
+
+// NeverAllowed reports whether class is one no allow list may admit.
+func NeverAllowed(class string) bool { return neverAllowed[class] }
+
+// allowEntryForbidden are the ranges an allow-list entry must not overlap: the never-allowed ranges (link-local,
+// multicast, the unspecified addresses), the translation prefixes (an entry there would decide a translation address on
+// its IPv6 range, not on the IPv4 address it reaches), and every listed metadata address.
+var allowEntryForbidden = func() []netip.Prefix {
+	out := mustPrefixes("169.254.0.0/16", "224.0.0.0/4", "0.0.0.0/32", "fe80::/10", "ff00::/8", "::/128",
+		"64:ff9b::/96", "64:ff9b:1::/48", "2002::/16", "2001::/32", "::/96", "::ffff:0:0/96", "::ffff:0:0:0/96")
+	for addr := range metadataAddrs {
+		out = append(out, netip.PrefixFrom(addr, addr.BitLen()))
+	}
+	return out
+}()
+
+// AllowEntryForbidden reports whether an allow-list entry holds an address no allow list may admit: an IPv4-mapped
+// prefix, or one that overlaps a never-allowed, translation or metadata range. 0.0.0.0/0 and ::/0 are forbidden.
+func AllowEntryForbidden(prefix netip.Prefix) bool {
+	if prefix.Addr().Is4In6() {
+		return true
+	}
+	for _, forbidden := range allowEntryForbidden {
+		if forbidden.Overlaps(prefix) {
+			return true
+		}
+	}
+	return false
+}

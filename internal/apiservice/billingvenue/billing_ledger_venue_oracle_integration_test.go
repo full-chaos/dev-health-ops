@@ -289,7 +289,7 @@ func TestVenueOracleBillingLedger(t *testing.T) {
 	var seed billingFixture
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Golden: golden,
-		Root:   venueRoot(), JWTKey: venueKey, Logger: quietLogger(), PythonEnv: pythonEnv, OrglessSuperusers: billingOrglessSuperusers,
+		Root:   venueRoot(), Logger: quietLogger(), PythonEnv: pythonEnv, OrglessSuperusers: billingOrglessSuperusers,
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
 			seed = billingSeed(t, ctx, admin)
 			specs := seed.tokenSpecs()
@@ -310,7 +310,7 @@ func TestVenueOracleBillingLedger(t *testing.T) {
 	cfg := config.Config{
 		APIAddress: "127.0.0.1:0", RiverDatabaseSchema: "river", APIDatabaseRole: venue.Roles["api"],
 		APIDatabaseURI: secrets.NewValue(venue.GoAPIDatabaseURI(t)),
-		APIJWTSecret:   secrets.NewValue(venueKey), APIJWTIssuer: "dev-health-ops", APIJWTAudience: "dev-health-api",
+		APIJWTIssuer:   "dev-health-ops", APIJWTAudience: "dev-health-api",
 		CORSAllowedOrigins: []string{"http://localhost:3000"},
 		StripeSecretKey:    loaded.StripeSecretKey, APIBilling: loaded.APIBilling,
 	}

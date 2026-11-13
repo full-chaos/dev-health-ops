@@ -247,7 +247,7 @@ func TestVenueOracleCredentialAdmin(t *testing.T) {
 	var seed venueFixture
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Golden: golden,
-		Root:   venueRoot(), JWTKey: venueKey, Logger: quietLogger(), OrglessSuperusers: credentialOrglessSuperusers,
+		Root:   venueRoot(), Logger: quietLogger(), OrglessSuperusers: credentialOrglessSuperusers,
 		PythonEnv: []string{"SETTINGS_ENCRYPTION_KEY=" + credentialsVenueKey},
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, venue *venueoracle.Venue) map[string]map[string]any {
 			seed = venueSeed(t, ctx, admin)
@@ -258,7 +258,7 @@ func TestVenueOracleCredentialAdmin(t *testing.T) {
 	cfg := config.Config{
 		APIAddress: "127.0.0.1:0", RiverDatabaseSchema: "river", APIDatabaseRole: venue.Roles["api"],
 		APIDatabaseURI: secrets.NewValue(venue.GoAPIDatabaseURI(t)),
-		APIJWTSecret:   secrets.NewValue(venueKey), APIJWTIssuer: "dev-health-ops", APIJWTAudience: "dev-health-api",
+		APIJWTIssuer:   "dev-health-ops", APIJWTAudience: "dev-health-api",
 		CORSAllowedOrigins:    []string{"http://localhost:3000"},
 		SettingsEncryptionKey: secrets.NewValue(credentialsVenueKey),
 	}

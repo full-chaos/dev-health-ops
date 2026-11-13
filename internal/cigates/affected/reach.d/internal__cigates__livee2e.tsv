@@ -5,5 +5,7 @@ internal/cigates/livee2e	mintlicense.go	cmd/cigate
 internal/cigates/livee2e	mintlicense.go	internal/cigates/livee2e
 internal/cigates/livee2e	smtpsink.go	cmd/cigate
 internal/cigates/livee2e	smtpsink.go	internal/cigates/livee2e
+internal/cigates/livee2e	ssoseedverb.go	cmd/cigate
+internal/cigates/livee2e	ssoseedverb.go	internal/cigates/livee2e
 internal/cigates/livee2e	tokenreview.go	cmd/cigate
 internal/cigates/livee2e	tokenreview.go	internal/cigates/livee2e

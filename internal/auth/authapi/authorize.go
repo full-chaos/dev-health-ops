@@ -439,13 +439,13 @@ func (h authorizeHandlers) decide(w http.ResponseWriter, r *http.Request, op str
 			h.rec.refuse(w, r, op, unavailable(reasonDependency), err)
 			return nil, false
 		}
-		h.Logger.InfoContext(ctx, "authorize decision", append([]any{"decision_id", doc.DecisionID, "allowed", doc.Allowed, "reason_code", doc.ReasonCode,
+		h.Logger.InfoContext(ctx, "authorize decision", append([]any{decisionIDLogKey, doc.DecisionID, "allowed", doc.Allowed, "reason_code", doc.ReasonCode,
 			"reason", string(item.decision.Reason), "cache", item.cache}, obligationLogAttrs(doc.Obligations)...)...)
 		// The owner-exemption audit event is written by a follow-up change,
 		// outside this read-only transaction; until then the exemption is only
 		// this log line.
 		if a := item.decision.Audit; a != nil {
-			h.Logger.WarnContext(ctx, "authorize owner exemption", "decision_id", doc.DecisionID, "actor_principal_id", a.ActorPrincipalID,
+			h.Logger.WarnContext(ctx, "authorize owner exemption", decisionIDLogKey, doc.DecisionID, "actor_principal_id", a.ActorPrincipalID,
 				"organization_id", a.OrganizationID, "action", a.Action, "audit_reason", a.Reason)
 		}
 		out[i] = doc
@@ -620,7 +620,7 @@ func obligationsFit(d authorization.Decision, delegated bool, organizationID str
 }
 
 func (h authorizeHandlers) document(item authorizeItem) (decisionDocument, error) {
-	id, err := h.decisionID()
+	id, err := loggableDecisionID(h.decisionID)
 	if err != nil {
 		return decisionDocument{}, err
 	}

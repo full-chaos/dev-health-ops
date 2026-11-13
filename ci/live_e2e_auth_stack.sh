@@ -21,6 +21,9 @@
 #                                                          users are owned) and in its public.users projection
 #   bash ci/live_e2e_auth_stack.sh grant-platform-admin STATE_DIR EMAIL  test setup only: give one user an active platform_admin
 #                                                          row in auth.platform_role_assignments (written directly, as the bigboy fixture)
+#   bash ci/live_e2e_auth_stack.sh seed-sso-provider STATE_DIR EMAIL PROTOCOL [FLAG...]  test setup only: a stand-in for the provider create
+#                                                          route go-api does not have (CHAOS-13636); PROTOCOL oidc|saml; the client secret comes
+#                                                          from env SSO_CLIENT_SECRET (never argv); prints the provider id only
 # SIDE is go-api, query-api, auth-service or web. The flags are ci/live_e2e_auth_flags.tsv (the prod flag set).
 # CHAOS-13356: users are owned by auth-service, as prod (phase 4, usersOwnedStage owned): `up` copies the users the
 # caller already seeded into the auth schema with the seed tool (`dho auth users-backfill -insert-only`) before
@@ -618,6 +621,21 @@ grant_platform_admin() {
   printf 'granted platform_admin to %s in auth.platform_role_assignments\n' "${email}"
 }
 
+# seed_sso_provider STATE EMAIL PROTOCOL [FLAG...]: test setup only, a stand-in for the provider create route go-api does not
+# have (CHAOS-13636, deleted when it lands). The row is written by cigate live-e2e seed-sso-provider (internal/cigates/livee2e/ssoseed:
+# the production row shape and the production seal of the client secret), not by SQL here. The secret is read from the
+# environment (SSO_CLIENT_SECRET), the encryption key is the stack's own, and neither is printed.
+seed_sso_provider() {
+  STATE="$(cd "$1" && pwd)"
+  local email="$2" protocol="$3"
+  shift 3
+  [[ "${email}" =~ ^[^\'[:space:]]+@[^\'[:space:]]+$ ]] || die "seed-sso-provider: not an e-mail address"
+  [ "${protocol}" = oidc ] || [ "${protocol}" = saml ] || die "seed-sso-provider: protocol must be oidc or saml"
+  PGHOST="${PGHOST_USE}" PGPORT="${PGPORT_USE}" PGDATABASE="${PGDATABASE_USE}" \
+    SETTINGS_ENCRYPTION_KEY="${LIVE_E2E_SETTINGS_ENCRYPTION_KEY:-live-e2e-test-settings-key-do-not-use}" \
+    "${STATE}/bin/cigate" live-e2e seed-sso-provider "${email}" "${protocol}" "$@"
+}
+
 verb="${1:-}"
 case "${verb}" in
   up)
@@ -680,5 +698,9 @@ case "${verb}" in
     [ "$#" -eq 3 ] || die "usage: grant-platform-admin STATE_DIR EMAIL"
     grant_platform_admin "$2" "$3"
     ;;
-  *) die "usage: up | with-env | print-env | assert-audit | down | stop-auth | start-auth | enable-mail | mail-token | enable-social | enable-sso | start-idp | stop-idp | verify-user | grant-platform-admin" ;;
+  seed-sso-provider)
+    [ "$#" -ge 4 ] || die "usage: seed-sso-provider STATE_DIR EMAIL PROTOCOL [FLAG...]"
+    seed_sso_provider "$2" "$3" "$4" "${@:5}"
+    ;;
+  *) die "usage: up | with-env | print-env | assert-audit | down | stop-auth | start-auth | enable-mail | mail-token | enable-social | enable-sso | start-idp | stop-idp | verify-user | seed-sso-provider | grant-platform-admin" ;;
 esac

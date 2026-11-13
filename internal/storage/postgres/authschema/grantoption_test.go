@@ -53,12 +53,12 @@ func TestGrantOptionGapListIsSortedCompleteAndFormatted(t *testing.T) {
 }
 
 func TestPublicPrivilegeSetForSwitchOffDropsOnlyTheOwnedGrants(t *testing.T) {
-	if !slices.EqualFunc(PublicPrivilegeSet(), publicPrivilegeSetFor(true), func(a, b PublicPrivilege) bool {
+	if !slices.EqualFunc(PublicPrivilegeSet(), publicPrivilegeSetFor(true, true), func(a, b PublicPrivilege) bool {
 		return a.Table == b.Table && a.Privilege == b.Privilege && slices.Equal(a.Columns, b.Columns)
 	}) {
 		t.Fatal("PublicPrivilegeSet is not the switch-on set")
 	}
-	for _, entry := range publicPrivilegeSetFor(false) {
+	for _, entry := range publicPrivilegeSetFor(false, false) {
 		if entry.Table == "users" && entry.Privilege != "SELECT" {
 			t.Errorf("switch off still needs %s on users", entry.Privilege)
 		}
@@ -67,7 +67,7 @@ func TestPublicPrivilegeSetForSwitchOffDropsOnlyTheOwnedGrants(t *testing.T) {
 		}
 	}
 	var sawAudit bool
-	for _, entry := range publicPrivilegeSetFor(false) {
+	for _, entry := range publicPrivilegeSetFor(false, false) {
 		if entry.Table == publicAuditTable && entry.Privilege == "INSERT" {
 			sawAudit = true
 		}

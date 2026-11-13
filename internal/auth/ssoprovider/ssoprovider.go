@@ -19,6 +19,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
@@ -42,13 +43,14 @@ var ErrNotFound = errors.New("ssoprovider: provider not found")
 // ErrStore is a store fault.
 var ErrStore = errors.New("ssoprovider: store fault")
 
-// Provider is one public.sso_providers row as the legacy response showed it: the config is masked (a certificate is cut to 50
-// characters and "...", a client_secret key reads "********"), and the sealed secret is never part of it.
+// Provider is one public.sso_providers row as the legacy response showed it: the config is the stored object in its stored key
+// order, masked (a certificate is cut to 50 characters and "...", a client_secret key reads "********") and written as go-api
+// writes a response model; the sealed secret is never part of it.
 type Provider struct {
 	ID, OrgID                                    string
 	Name, Protocol, Status, DefaultRole          string
 	IsDefault, AllowIdpInitiated, AutoProvision  bool
-	Config                                       map[string]any
+	Config                                       json.RawMessage
 	AllowedDomains                               []string
 	LastMetadataSyncAt, LastLoginAt, LastErrorAt *time.Time
 	LastError                                    *string
@@ -71,7 +73,7 @@ type Filter struct {
 // Config is the stored config of one create or update: the JSON the provider row keeps, and the sealed secret object (nil
 // when the update names no oidc_config).
 type Config struct {
-	JSON    map[string]any
+	JSON    *pyjson.Object
 	Secrets *string
 }
 
@@ -119,11 +121,9 @@ func scan(row scanner) (*Provider, error) {
 		&p.AutoProvision, &config, &domains, &p.LastMetadataSyncAt, &p.LastLoginAt, &p.LastErrorAt, &p.LastError, &p.CreatedAt, &p.UpdatedAt); err != nil {
 		return nil, err
 	}
-	p.Config = map[string]any{}
-	if config != nil {
-		if err := json.Unmarshal([]byte(*config), &p.Config); err != nil || p.Config == nil {
-			return nil, fmt.Errorf("%w: the stored config is not a JSON object", ErrStore)
-		}
+	var err error
+	if p.Config, err = MaskedConfig(config); err != nil {
+		return nil, err
 	}
 	p.AllowedDomains = []string{}
 	if domains != nil {
@@ -137,17 +137,45 @@ func scan(row scanner) (*Provider, error) {
 			}
 		}
 	}
-	mask(p.Config)
 	return &p, nil
 }
 
-// mask is the legacy _provider_to_response masking of the stored config.
-func mask(config map[string]any) {
-	if _, ok := config["client_secret"]; ok {
-		config["client_secret"] = "********"
+// MaskedConfig is the stored config text as the legacy response showed it: the object's keys in the stored order, a null or
+// absent config as {}, masked and written in the response-model form (compact, not ASCII-escaped).
+func MaskedConfig(stored *string) (json.RawMessage, error) {
+	config := pyjson.NewObject()
+	if stored != nil {
+		decoded, err := pyjson.DecodeString(*stored)
+		if err != nil {
+			return nil, fmt.Errorf("%w: the stored config is not JSON", ErrStore)
+		}
+		switch value := decoded.(type) {
+		case nil:
+		case *pyjson.Object:
+			config = value
+		default:
+			return nil, fmt.Errorf("%w: the stored config is not a JSON object", ErrStore)
+		}
 	}
-	if certificate, ok := config["certificate"].(string); ok && len([]rune(certificate)) > 50 {
-		config["certificate"] = string([]rune(certificate)[:50]) + "..."
+	mask(config)
+	raw, err := pyjson.MarshalModel(config)
+	if err != nil {
+		return nil, fmt.Errorf("%w: the stored config cannot be written", ErrStore)
+	}
+	return raw, nil
+}
+
+// mask is the legacy _provider_to_response masking of the stored config.
+func mask(config *pyjson.Object) {
+	if _, ok := config.Get("client_secret"); ok {
+		config.Set("client_secret", "********")
+	}
+	if value, ok := config.Get("certificate"); ok {
+		if certificate, isText := value.(string); isText {
+			if runes := pyjson.Runes(certificate); len(runes) > 50 {
+				config.Set("certificate", pyjson.FromRunes(runes[:50])+"...")
+			}
+		}
 	}
 }
 
@@ -226,9 +254,9 @@ func clearDefault(ctx context.Context, tx audit.TxOps, org uuid.UUID, protocol s
 	return err
 }
 
-func marshalConfig(config map[string]any) (string, error) {
-	raw, err := json.Marshal(config)
-	return string(raw), err
+// marshalConfig is the stored text of a config: json.dumps of the model dump, as the legacy writer stored it.
+func marshalConfig(config *pyjson.Object) (string, error) {
+	return pyjson.Dumps(config)
 }
 
 // Create is the legacy create_provider: a pending_setup provider; a default one clears the others' flag first.

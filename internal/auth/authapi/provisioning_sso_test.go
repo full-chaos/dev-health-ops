@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
@@ -37,14 +39,18 @@ type ssoCall struct {
 }
 
 type fakeSSOProviders struct {
-	calls []ssoCall
-	err   error
+	calls  []ssoCall
+	err    error
+	answer *ssoprovider.Provider
 }
 
 func (f *fakeSSOProviders) provider(org uuid.UUID) *ssoprovider.Provider {
+	if f.answer != nil {
+		return f.answer
+	}
 	now := time.Date(2026, 11, 13, 1, 2, 3, 0, time.UTC)
 	return &ssoprovider.Provider{ID: uuid.NewString(), OrgID: org.String(), Name: "Acme", Protocol: "oidc", Status: "pending_setup", DefaultRole: "member",
-		AutoProvision: true, Config: map[string]any{"client_secret": "********"}, AllowedDomains: []string{}, CreatedAt: now, UpdatedAt: now}
+		AutoProvision: true, Config: json.RawMessage(`{"client_secret":"********"}`), AllowedDomains: []string{}, CreatedAt: now, UpdatedAt: now}
 }
 
 func (f *fakeSSOProviders) List(_ context.Context, org uuid.UUID, filter ssoprovider.Filter) ([]ssoprovider.Provider, int64, error) {
@@ -184,11 +190,11 @@ func TestSSOProviderSecretIsSealedAndNeverInAnAnswerOrALog(t *testing.T) {
 		strings.Contains(*call.create.Config.Secrets, ssoSecretSentinel) {
 		t.Fatalf("the stored secrets object is not the sealed secret: %v", call.create.Config.Secrets)
 	}
-	if _, ok := call.create.Config.JSON["client_secret"]; ok {
+	if _, ok := call.create.Config.JSON.Get("client_secret"); ok {
 		t.Fatal("the stored config carries client_secret")
 	}
 	for _, key := range []string{"authorization_endpoint", "token_endpoint", "userinfo_endpoint", "jwks_uri"} {
-		if v, ok := call.create.Config.JSON[key]; !ok || v != nil {
+		if v, ok := call.create.Config.JSON.Get(key); !ok || v != nil {
 			t.Fatalf("config %s = %v, %v; want present and null (the legacy model dump)", key, v, ok)
 		}
 	}
@@ -221,8 +227,8 @@ func TestSSOProviderCreateDefaultsAreTheLegacyOnes(t *testing.T) {
 	if in.IsDefault || in.AllowIdpInitiated || !in.AutoProvision || in.DefaultRole != "member" || in.AllowedDomains == nil || len(in.AllowedDomains) != 0 {
 		t.Fatalf("create defaults = %+v", in)
 	}
-	if in.Config.JSON["scopes"].([]any)[0] != "openid" || len(in.Config.JSON["claim_mapping"].(map[string]any)) != 0 {
-		t.Fatalf("oidc defaults = %v", in.Config.JSON)
+	if stored, err := pyjson.Dumps(in.Config.JSON); err != nil || !strings.Contains(stored, `"scopes": ["openid", "profile", "email"], "claim_mapping": {}`) {
+		t.Fatalf("oidc defaults = %v (%v)", stored, err)
 	}
 }
 
@@ -361,5 +367,59 @@ func TestSSOProviderRoutesMountOnTheEmbeddedDocument(t *testing.T) {
 	}
 	if err := SSOProviderRowsError(nil); err != nil {
 		t.Fatalf("the embedded document fails the SSO provider rows check: %v", err)
+	}
+}
+
+// The answers are byte-equal to what go-api's providerResponse renders: times in pydantic's form (six fraction digits only when the
+// microseconds are not zero), the config as kept (key order, no HTML escaping, no ASCII escaping).
+func TestSSOProviderAnswerTimesAndConfigAreInGoAPIsForm(t *testing.T) {
+	t.Parallel()
+	f := newProvFixtureFor(t, nil, nil)
+	config := "{\"scopes\":[\"openid\"],\"client_id\":\"c\",\"note\":\"a<b>&c\\u2028\u00e9\",\"client_secret\":\"********\"}"
+	micros := time.Date(2026, 11, 13, 1, 2, 3, 250000000, time.UTC)
+	whole := time.Date(2026, 11, 13, 1, 2, 3, 0, time.UTC)
+	nanos := time.Date(2026, 11, 13, 1, 2, 3, 123456789, time.UTC)
+	f.sso.answer = &ssoprovider.Provider{ID: uuid.NewString(), OrgID: f.org.String(), Name: "Acme", Protocol: "oidc", Status: "active", DefaultRole: "member",
+		Config: json.RawMessage(config), AllowedDomains: []string{}, LastLoginAt: &micros, LastErrorAt: &whole, LastMetadataSyncAt: &nanos, CreatedAt: whole, UpdatedAt: micros}
+	for _, c := range []ssoRouteCase{ssoRouteCases()[2], ssoRouteCases()[5], ssoRouteCases()[6]} {
+		response := f.post(c.path, c.body(f, f.owner), nil)
+		body := response.Body.String()
+		if strings.HasSuffix(body, "\n") || response.Header().Get("Content-Type") != "application/json" || response.Header().Get("Content-Length") != strconv.Itoa(len(body)) {
+			t.Errorf("%s: the answer is not written as go-api writes one (no trailing newline, JSON type, exact length): %q %v", c.op, body, response.Header())
+		}
+		for _, want := range []string{`"config":` + config, `"last_login_at":"2026-11-13T01:02:03.250000Z"`, `"last_error_at":"2026-11-13T01:02:03Z"`,
+			`"last_metadata_sync_at":"2026-11-13T01:02:03.123456Z"`, `"created_at":"2026-11-13T01:02:03Z"`, `"updated_at":"2026-11-13T01:02:03.250000Z"`} {
+			if !strings.Contains(body, want) {
+				t.Errorf("%s: answer %s lacks %s", c.op, body, want)
+			}
+		}
+	}
+}
+
+// A created config is stored in the legacy model's field order (a nested object as sent), as json.dumps writes it.
+func TestSSOProviderCreateStoresTheConfigInTheModelFieldOrder(t *testing.T) {
+	t.Parallel()
+	f := newProvFixtureFor(t, nil, nil)
+	body := `{"organization_id":"` + f.org.String() + `","actor_principal_id":"` + f.owner.String() + `","name":"Acme","protocol":"oidc","oidc_config":` +
+		`{"claim_mapping":{"zeta":"z","alpha":"a"},"issuer":"https://\u00e9.example","client_secret":"` + ssoSecretSentinel + `","client_id":"cid","scopes":["email","openid"]}}`
+	if response := f.post(PatternSSOProviderCreate, body, nil); response.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", response.Code, response.Body)
+	}
+	stored, err := pyjson.Dumps(f.sso.calls[0].create.Config.JSON)
+	want := `{"client_id": "cid", "issuer": "https://\u00e9.example", "authorization_endpoint": null, "token_endpoint": null, "userinfo_endpoint": null, ` +
+		`"jwks_uri": null, "scopes": ["email", "openid"], "claim_mapping": {"zeta": "z", "alpha": "a"}}`
+	if err != nil || stored != want {
+		t.Fatalf("stored oidc config = %s (%v), want %s", stored, err, want)
+	}
+	saml := `{"organization_id":"` + f.org.String() + `","actor_principal_id":"` + f.owner.String() + `","name":"S","protocol":"saml","saml_config":` +
+		`{"certificate":"CERT","sso_url":"https://s.example","entity_id":"e","attribute_mapping":{"b":"2","a":"1"}}}`
+	if response := f.post(PatternSSOProviderCreate, saml, nil); response.Code != http.StatusCreated {
+		t.Fatalf("create saml: %d %s", response.Code, response.Body)
+	}
+	stored, err = pyjson.Dumps(f.sso.calls[1].create.Config.JSON)
+	want = `{"entity_id": "e", "sso_url": "https://s.example", "certificate": "CERT", "slo_url": null, ` +
+		`"name_id_format": "urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress", "attribute_mapping": {"b": "2", "a": "1"}}`
+	if err != nil || stored != want {
+		t.Fatalf("stored saml config = %s (%v), want %s", stored, err, want)
 	}
 }

@@ -45,8 +45,8 @@ import (
 // later row of that array by one. The history test (build tag authhistory, run by
 // `ci/check_go.sh auth history` with full history) checks the rows against git: the
 // row set equals the base registry's Python anchors, each commit deleted its file,
-// each range fits, each text matches, and each array a row names is shorter now by
-// exactly its removed rows.
+// each range fits, each text matches, and each removed row's base entry is gone
+// from its array now.
 //
 // Anchors in the web and acr repositories are counted, not checked: those
 // files are not in this tree.
@@ -792,9 +792,10 @@ func checkRetiredEvidence(document []byte, rows []retiredEvidence, root string) 
 	return failures
 }
 
-// removedSlotFailures compares each array a row names between the base registry and the current one: it is shorter
-// now by exactly the rows that say "removed", so a removal the evidence does not record, or a "removed" row whose
-// element is still there, fails.
+// removedSlotFailures checks each removed row against the base registry and the current one: the base slot held an
+// entry with a description, and no entry of that array holds that description now. A row that says "removed" while
+// its entry is still there fails. (Arrays also change for other reasons since the base, so their lengths are not
+// compared.)
 func removedSlotFailures(rows []retiredEvidence, baseDoc, currentDoc []byte) []string {
 	classesOf := func(document []byte) (map[string]map[string]any, error) {
 		var parsed struct {
@@ -818,36 +819,30 @@ func removedSlotFailures(rows []retiredEvidence, baseDoc, currentDoc []byte) []s
 	if err != nil {
 		return []string{fmt.Sprintf("the current registry does not parse: %v", err)}
 	}
-	removed := map[string]int{}
-	var arrays []string
+	var failures []string
 	for _, r := range rows {
-		array, _, _, ok := splitSlot(r.where)
-		if !ok {
+		if r.action != "removed" {
 			continue
 		}
-		key := r.classID + "\t" + array
-		if _, listed := removed[key]; !listed {
-			arrays = append(arrays, key)
-			removed[key] = 0
+		label := fmt.Sprintf("evidence %s %s", r.classID, r.where)
+		array, index, _, ok := splitSlot(r.where)
+		if !ok {
+			failures = append(failures, label+": a removed slot names no array element")
+			continue
 		}
-		if r.action == "removed" {
-			removed[key]++
+		element, _ := registryNode(baseClasses[r.classID], fmt.Sprintf("%s[%d]", array, index))
+		entry, isMap := element.(map[string]any)
+		description, _ := entry["description"].(string)
+		if !isMap || description == "" {
+			failures = append(failures, label+": the base slot holds no entry with a description to check its removal by")
+			continue
 		}
-	}
-	var failures []string
-	for _, key := range arrays {
-		classID, array, _ := strings.Cut(key, "\t")
-		length := func(classes map[string]map[string]any) int {
-			node, ok := registryNode(classes[classID], array)
-			list, isList := node.([]any)
-			if !ok || !isList {
-				return -1
+		now, _ := registryNode(currentClasses[r.classID], array)
+		list, _ := now.([]any)
+		for i, item := range list {
+			if other, _ := item.(map[string]any); other != nil && other["description"] == description {
+				failures = append(failures, fmt.Sprintf("%s: removed, but %s[%d] still holds its entry %q", label, array, i, description))
 			}
-			return len(list)
-		}
-		before, after := length(baseClasses), length(currentClasses)
-		if before < 0 || after < 0 || after != before-removed[key] {
-			failures = append(failures, fmt.Sprintf("class %s %s: %d elements at the base, %d now, but the evidence removes %d", classID, array, before, after, removed[key]))
 		}
 	}
 	return failures
@@ -979,21 +974,24 @@ func TestTheRetiredEvidenceCheckFollowsARemovedSlot(t *testing.T) {
 	}
 }
 
-func TestTheRemovedSlotCountComparesTheBaseArrayWithTheCurrentOne(t *testing.T) {
+func TestTheRemovedSlotCheckFindsAnEntryStillThere(t *testing.T) {
 	removed := retiredEvidence{"demo", "validators[0]/anchor", "-", "", "", "removed", "-", "-"}
 	kept := retiredEvidence{"demo", "validators[1]/anchor", "validators[0]/anchor", "", "", "null", "-", "-"}
-	base := []byte(`{"classes":[{"class_id":"demo","validators":[{"anchor":null},{"anchor":null}]}]}`)
-	one := []byte(`{"classes":[{"class_id":"demo","validators":[{"anchor":null}]}]}`)
-	if f := removedSlotFailures([]retiredEvidence{removed, kept}, base, one); len(f) != 0 {
-		t.Fatalf("one removed row and one element fewer must pass: %v", f)
+	base := []byte(`{"classes":[{"class_id":"demo","validators":[{"anchor":null,"description":"middleware"},{"anchor":null,"description":"lookup"}]}]}`)
+	gone := []byte(`{"classes":[{"class_id":"demo","validators":[{"anchor":null,"description":"lookup"}]}]}`)
+	if f := removedSlotFailures([]retiredEvidence{removed, kept}, base, gone); len(f) != 0 {
+		t.Fatalf("a removed row whose entry is gone must pass: %v", f)
 	}
 	if f := removedSlotFailures([]retiredEvidence{removed, kept}, base, base); len(f) == 0 {
-		t.Error("a removed row whose element is still there must fail")
+		t.Error("a removed row whose entry is still there must fail")
 	}
-	notRemoved := removed
-	notRemoved.action = "null"
-	if f := removedSlotFailures([]retiredEvidence{notRemoved, kept}, base, one); len(f) == 0 {
-		t.Error("an element gone without a removed row must fail")
+	moved := []byte(`{"classes":[{"class_id":"demo","validators":[{"anchor":null,"description":"lookup"},{"anchor":null,"description":"middleware"}]}]}`)
+	if f := removedSlotFailures([]retiredEvidence{removed, kept}, base, moved); len(f) == 0 {
+		t.Error("a removed row whose entry moved to another index must fail")
+	}
+	bare := []byte(`{"classes":[{"class_id":"demo","validators":[null,{"anchor":null,"description":"lookup"}]}]}`)
+	if f := removedSlotFailures([]retiredEvidence{removed, kept}, bare, gone); len(f) == 0 {
+		t.Error("a removed row whose base slot has no description to check by must fail")
 	}
 }
 

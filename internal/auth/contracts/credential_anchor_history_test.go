@@ -18,8 +18,8 @@ var historyOld = regexp.MustCompile(`^(src/dev_health_ops/[\w/]+\.py)@([0-9a-f]{
 
 // The retired-anchor evidence is checked against git, not against itself: the row set equals the Python anchors of the
 // registry at the base commit the evidence names (keyed by their base slot), each commit is the one that deleted its
-// file, each cited range fits the file at that commit's parent, each old_text is that line, and each array a row names
-// holds exactly its removed rows fewer elements now than at the base. Needs full history (-tags authhistory).
+// file, each cited range fits the file at that commit's parent, each old_text is that line, and the base entry of each
+// removed row is gone from its array now. Needs full history (-tags authhistory).
 func TestRetiredAnchorEvidenceMatchesGitHistory(t *testing.T) {
 	checkRetiredEvidenceAgainstHistory(t)
 }

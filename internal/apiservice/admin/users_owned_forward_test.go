@@ -117,6 +117,8 @@ type ownedCall struct {
 	caller *policy.User
 	header map[string]string
 	input  *setPasswordInput
+	// session is a live impersonation row in the request context, as Scope.Impersonation sets it.
+	session *policy.Impersonation
 }
 
 func (c ownedCall) run(h *handlers) (int, string) {
@@ -135,6 +137,9 @@ func (c ownedCall) run(h *handlers) (int, string) {
 		caller = ownedSuperuser()
 	}
 	req = req.WithContext(policy.WithUser(req.Context(), caller))
+	if c.session != nil {
+		req = req.WithContext(policy.WithImpersonation(req.Context(), c.session))
+	}
 	req.SetPathValue("user_id", provTarget.String())
 	for name, value := range c.header {
 		req.Header.Set(name, value)

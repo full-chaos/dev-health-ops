@@ -220,27 +220,20 @@ func (h provisioningHandlers) usersPrecheck(w http.ResponseWriter, r *http.Reque
 }
 
 // usersAuthorize is the store's Authorize: the platform role write lock (exclusive when the write changes a
-// platform role or sends is_active false, shared otherwise) before any row, then usersActorRule on the transaction
-// with grantRequested, the platform_admin grant the request asks for (go-api guards.go:106-109: a non-superuser is
-// refused for a grant or a superuser target, never for an unchanged false). A deactivate is an erase of the login,
-// as the soft delete is, so it runs the last platform_admin guard on the target too (pm D6878).
-func (h provisioningHandlers) usersAuthorize(actor uuid.UUID, orgID *uuid.UUID, roleChange, grantRequested, deactivate bool,
-	target *uuid.UUID) func(context.Context, audit.TxOps) error {
+// platform role, shared otherwise) before any row, then usersActorRule on the transaction with grantRequested, the
+// platform_admin grant the request asks for (go-api guards.go:106-109: a non-superuser is refused for a grant or a
+// superuser target, never for an unchanged false). An is_active change runs no last platform_admin guard: legacy's
+// PATCH set is_active with none (users.py UserService.update, CHAOS-13684, product rule 1); the soft delete keeps it.
+func (h provisioningHandlers) usersAuthorize(actor uuid.UUID, orgID *uuid.UUID, roleChange, grantRequested bool, target *uuid.UUID) func(context.Context, audit.TxOps) error {
 	return func(ctx context.Context, tx audit.TxOps) error {
 		lock := h.PlatformRoles.LockWritesShared
-		if roleChange || deactivate {
+		if roleChange {
 			lock = h.PlatformRoles.LockWrites
 		}
 		if err := lock(ctx, tx); err != nil {
 			return err
 		}
-		if err := h.usersActorRule(ctx, tx, actor, orgID, grantRequested, target); err != nil {
-			return err
-		}
-		if deactivate {
-			return h.PlatformRoles.RefuseLastPlatformAdmin(ctx, tx, *target)
-		}
-		return nil
+		return h.usersActorRule(ctx, tx, actor, orgID, grantRequested, target)
 	}
 }
 
@@ -337,7 +330,7 @@ func (h provisioningHandlers) usersCreate(w http.ResponseWriter, r *http.Request
 	}
 	req := identity.AdminCreateRequest{Email: email, Username: username, FullName: fullName, PasswordHash: hash, AuthProvider: provider,
 		AuthProviderID: providerID, Verified: verified, OrgID: orgID, RequestMetadata: metadata, Actor: actor,
-		RequestID: requestid.Audit(ctx), Caller: caller, Authorize: h.usersAuthorize(actor, orgID, grant, grant, false, nil)}
+		RequestID: requestid.Audit(ctx), Caller: caller, Authorize: h.usersAuthorize(actor, orgID, grant, grant, nil)}
 	if role != nil {
 		req.Role = *role
 	}
@@ -400,7 +393,6 @@ func (h provisioningHandlers) usersUpdate(w http.ResponseWriter, r *http.Request
 	roleChange := superuser != nil && *superuser != held
 	decided := identity.DecideAdminUpdate(cur, identity.AdminUpdatePatch{Email: email, Verified: verified, Username: username,
 		FullName: fullName, AvatarURL: avatarURL, Active: active})
-	deactivate := active != nil && !*active
 	var superuserWrite func(context.Context, audit.TxOps) error
 	if roleChange {
 		grantIt := *superuser
@@ -417,7 +409,7 @@ func (h provisioningHandlers) usersUpdate(w http.ResponseWriter, r *http.Request
 	// public.users.updated_at moves as go-api's PATCH moves it (pm D6915).
 	err = h.UsersAdmin.AdminUpdateUser(ctx, identity.AdminUpdateRequest{Principal: target, Email: email, Verified: verified,
 		Username: username, FullName: fullName, AvatarURL: avatarURL, Active: active, Actor: actor,
-		RequestID: requestid.Audit(ctx), Caller: caller, Authorize: h.usersAuthorize(actor, orgID, roleChange, grantRequested, deactivate, &target),
+		RequestID: requestid.Audit(ctx), Caller: caller, Authorize: h.usersAuthorize(actor, orgID, roleChange, grantRequested, &target),
 		Superuser: superuserWrite}, cur)
 	if err != nil {
 		h.answerUsersError(w, r, opUsersUpdate, err)
@@ -468,7 +460,7 @@ func (h provisioningHandlers) usersPassword(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	err = h.UsersAdmin.AdminSetPassword(ctx, identity.AdminPasswordRequest{Principal: target, Hash: hash, Actor: actor, AuditOrg: orgID, RequestMetadata: metadata, RequestID: requestid.Audit(ctx),
-		Authorize: h.usersAuthorize(actor, orgID, false, false, false, &target)})
+		Authorize: h.usersAuthorize(actor, orgID, false, false, &target)})
 	if err != nil {
 		h.answerUsersError(w, r, opUsersPassword, err)
 		return

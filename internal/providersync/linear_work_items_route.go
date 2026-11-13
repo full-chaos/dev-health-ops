@@ -443,11 +443,11 @@ type linearWorkItemRows struct {
 //
 // WIRED IS NOT EXECUTING, and this comment claims only the former. Planning
 // admits a canonical work-items unit only when the descriptor satisfies
-// RouteReady AND Plannable AND ExecutedProofSatisfied
-// (internal/scheduler/sync/planner.go:401-423); an attempted-but-unproven
-// executed-proof state returns `PlannedUnit{}, false` before BuildExecutor or
-// Execute is reached -- the condition that silently vetoed github/work-items
-// for two months under CHAOS-4060/CHAOS-4731.
+// RouteReady AND Plannable AND ExecutedProofSatisfied. The canonical
+// work-items claim carries the one work-item family executed-proof waiver
+// (workItemFamilyExecutedProofWaiver, ruling D7011), so an
+// attempted-but-unproven ledger row no longer vetoes it the way it vetoed
+// github/work-items for two months under CHAOS-4060/CHAOS-4731.
 //
 // SUPERSEDED: "It is intentionally not registered or activated here; the
 // SUPERSEDED: family planner and route gate remain separate work."

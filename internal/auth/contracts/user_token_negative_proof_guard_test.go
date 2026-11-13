@@ -32,6 +32,7 @@ const (
 	proofExchange   = "internal/auth/workloadexchange/user_tokens_refused_test.go"
 	proofProvision  = "internal/auth/authapi/provisioning_rows_test.go"
 	proofUsersAdmin = "internal/auth/authapi/provisioning_users_rows_test.go"
+	proofSSO        = "internal/auth/authapi/provisioning_sso_test.go"
 	proofSessState  = "internal/auth/authapi/session_state_user_tokens_test.go"
 	proofReadable   = "internal/auth/authapi/readable_repositories_user_tokens_test.go"
 	proofDelegated  = "internal/auth/authapi/delegated_user_tokens_test.go"
@@ -47,6 +48,7 @@ const (
 	exchangeTest    = "TestTheExchangeRefusesUserTokens"
 	provisionTest   = "TestProvisioningRoutesRefuseUserTokens"
 	usersAdminTest  = "TestUsersAdminRoutesRefuseUserTokens"
+	ssoTest         = "TestSSOProviderRoutesRefuseUserTokens"
 	readTest        = "TestReadRoutesRefuseUserTokens"
 	sessStateTest   = "TestSessionStateRefusesUserTokens"
 	readableTest    = "TestReadableRepositoriesRefusesUserTokens"
@@ -94,6 +96,13 @@ var negativeProofs = map[string]negativeProof{
 	"auth-service|POST /internal/v1/users/update [dev-health-auth-service @api]":                               {file: proofUsersAdmin, test: usersAdminTest},
 	"auth-service|POST /internal/v1/users/password [dev-health-auth-service @api]":                             {file: proofUsersAdmin, test: usersAdminTest},
 	"auth-service|POST /internal/v1/users/delete [dev-health-auth-service @api]":                               {file: proofUsersAdmin, test: usersAdminTest},
+	"auth-service|POST /internal/v1/sso/providers/list [dev-health-auth-service @api]":                         {file: proofSSO, test: ssoTest},
+	"auth-service|POST /internal/v1/sso/providers/create [dev-health-auth-service @api]":                       {file: proofSSO, test: ssoTest},
+	"auth-service|POST /internal/v1/sso/providers/get [dev-health-auth-service @api]":                          {file: proofSSO, test: ssoTest},
+	"auth-service|POST /internal/v1/sso/providers/update [dev-health-auth-service @api]":                       {file: proofSSO, test: ssoTest},
+	"auth-service|POST /internal/v1/sso/providers/delete [dev-health-auth-service @api]":                       {file: proofSSO, test: ssoTest},
+	"auth-service|POST /internal/v1/sso/providers/activate [dev-health-auth-service @api]":                     {file: proofSSO, test: ssoTest},
+	"auth-service|POST /internal/v1/sso/providers/deactivate [dev-health-auth-service @api]":                   {file: proofSSO, test: ssoTest},
 	"auth-service|POST /internal/v1/service-accounts/create [dev-health-auth-service @api]":                    {file: proofProvision, test: provisionTest},
 	"auth-service|POST /internal/v1/service-accounts/disable [dev-health-auth-service @api]":                   {file: proofProvision, test: provisionTest},
 	"auth-service|POST /internal/v1/service-accounts/enable [dev-health-auth-service @api]":                    {file: proofProvision, test: provisionTest},
@@ -243,8 +252,8 @@ func TestNegativeProofCensus(t *testing.T) {
 	// CHAOS-12128 the principal access read row; CHAOS-12189 the session state row; CHAOS-10992 the organization onboard and create rows.
 	// CHAOS-10987 the two delegated session rows; CHAOS-12273 the four service account key rows; CHAOS-12275 the organization rename row; CHAOS-10841 the two authorize rows; CHAOS-12670 the eight read rows.
 	// CHAOS-13265 took query-api GET /buildinfo out: it accepts a platform admin's user access token. CHAOS-13378 the four user-admin rows.
-	// CHAOS-13526 the acr credential events row. CHAOS-13542 the authorize repository listing row.
-	if len(derivedRows(t)) != 65 || proven != 64 || exempt != 1 {
-		t.Fatalf("derived %d rows, %d proven, %d exempt; want 65, 64, 1", len(derivedRows(t)), proven, exempt)
+	// CHAOS-13636 the seven SSO provider rows. CHAOS-13526 the acr credential events row. CHAOS-13542 the authorize repository listing row.
+	if len(derivedRows(t)) != 72 || proven != 71 || exempt != 1 {
+		t.Fatalf("derived %d rows, %d proven, %d exempt; want 72, 71, 1", len(derivedRows(t)), proven, exempt)
 	}
 }

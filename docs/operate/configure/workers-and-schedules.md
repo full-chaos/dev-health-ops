@@ -413,6 +413,15 @@ there, and the run after it reads the rest. Job History
 therefore shows fewer scheduled runs for a slow configuration, each covering
 the time since the previous one. A skipped tick adds no row to Job History.
 
+The scheduler resumes; it does not backfill. After a scheduler
+stop, the first missed cron instant starts late and the next run stands for the
+newest due instant. The instants between them, and an instant a skipped tick
+held back, get no occurrence and no run: a later run covers their time. Running every
+such instant would grow a backlog whenever runs take longer than the cron
+interval. Each lost instant is counted and named instead: the skip line names
+the instant it held back (`skipped_instant`), and the next occurrence the
+scheduler starts names the instants it passed over.
+
 An open run stops holding its schedule back when it is past a bound. Both
 bounds count from the creation of the run's occurrence row (the scheduler's
 clock at the tick that started the run) to the database clock. They do not
@@ -430,7 +439,8 @@ the old run.
 
 | Signal | Meaning | Action |
 | --- | --- | --- |
-| `sync_scheduler_skipped_open_run_total` and the WARN line `sync scheduler tick skipped: an earlier scheduled run of this configuration is still open` (`reason=skipped_open_run`, `config_id`, `open_sync_run_id`, `open_seconds`) | A tick started nothing because a scheduled run is open and inside its bound. | None when the run is making progress. Sustained growth for one configuration means its runs take longer than its cron interval: look at the units that hold the run open. |
+| `sync_scheduler_skipped_open_run_total` and the WARN line `sync scheduler tick skipped: an earlier scheduled run of this configuration is still open` (`reason=skipped_open_run`, `config_id`, `open_sync_run_id`, `open_seconds`, `skipped_instant`) | A tick started nothing because a scheduled run is open and inside its bound. | None when the run is making progress. Sustained growth for one configuration means its runs take longer than its cron interval: look at the units that hold the run open. |
+| `sync_scheduler_unminted_instants_total` and the WARN line `sync scheduler minted an occurrence past cron instants that no window minted` (`reason=unminted_instants`, `config_id`, `scheduled_for`, `unminted_count`, `unminted_count_capped`, `unminted_instants`) | An occurrence started past cron instants that no occurrence stands for: a skipped tick, or a scheduler stop. One line per started occurrence. `unminted_instants` names every instant when there are at most 3, otherwise the first and the last; the count stops at 1,024 (`unminted_count_capped=true`). | None for one line after a long run or a scheduler restart: the run covers the time from the unit watermarks. Steady growth for one configuration means its runs take longer than its cron interval, as for the skip counter. |
 | `sync_scheduler_open_run_past_bound_no_progress_total` and the ERROR line `sync scheduler started a run beside an open run that is past its bound` (`reason=no_progress`) | A run started although an older run of the configuration is open and showed no progress for 2 hours. | Find why the named run does not end: waiting units with no admission, or a run with every unit ended that was never finalized. |
 | `sync_scheduler_open_run_past_bound_age_cap_total` and the same ERROR line with `reason=age_cap` | A run started although an older run of the configuration is open for more than 48 hours. | The same. The line repeats at each start until the old run ends. |
 

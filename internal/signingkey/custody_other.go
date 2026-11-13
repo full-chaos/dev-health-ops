@@ -1,6 +1,6 @@
 //go:build !unix
 
-package envelopemint
+package signingkey
 
 import (
 	"errors"

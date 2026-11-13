@@ -20,7 +20,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/sessionid"
 	"github.com/full-chaos/dev-health-ops/internal/cigates/livee2e"
-	"github.com/full-chaos/dev-health-ops/internal/envelopemint"
+	"github.com/full-chaos/dev-health-ops/internal/signingkey"
 )
 
 const (
@@ -129,7 +129,7 @@ func publicKeyOf(t *testing.T, keyFile string) ed25519.PublicKey {
 	if err != nil {
 		t.Fatal(err)
 	}
-	key, err := envelopemint.LoadPrivateKey(pemBytes)
+	key, err := signingkey.LoadPrivateKey(pemBytes)
 	if err != nil {
 		t.Fatal(err)
 	}

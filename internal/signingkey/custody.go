@@ -1,4 +1,4 @@
-package envelopemint
+package signingkey
 
 import (
 	"crypto/ed25519"
@@ -9,8 +9,8 @@ import (
 	"strings"
 )
 
-// PrivateKeyFileEnvVar names the file that holds the private key PEM. It is
-// preferred over PrivateKeyEnvVar, whose raw value is deprecated.
+// PrivateKeyFileEnvVar names the variable that holds the path of the private key
+// PEM file. No tool here reads the raw PrivateKeyEnvVar value.
 const PrivateKeyFileEnvVar = PrivateKeyEnvVar + "_FILE"
 
 // MaxPrivateKeyFileBytes bounds a key file; a PKCS#8 Ed25519 PEM is ~240 bytes.
@@ -19,7 +19,7 @@ const MaxPrivateKeyFileBytes = int64(16 << 10)
 // ErrKeyFileCustody is returned for every key file that fails the custody
 // contract. Its text carries a fixed reason only: never the path (an
 // os.PathError embeds it) and never key bytes.
-var ErrKeyFileCustody = errors.New("envelopemint: private key file refused")
+var ErrKeyFileCustody = errors.New("signingkey: private key file refused")
 
 func custodyFailure(reason string) error {
 	slog.Info("envelope private key file refused", "reason", reason)
@@ -67,21 +67,4 @@ func LoadPrivateKeyFromFile(path string) (ed25519.PrivateKey, error) {
 		return nil, custodyFailure("not a PKCS#8 Ed25519 private key PEM")
 	}
 	return key, nil
-}
-
-// loadPrivateKeyFromLookup prefers the _FILE source; the raw value is
-// deprecated and logged by name only.
-func loadPrivateKeyFromLookup(fileValue string, hasFile bool, raw string) (ed25519.PrivateKey, error) {
-	if hasFile {
-		if strings.TrimSpace(raw) != "" {
-			slog.Warn("both envelope key sources set; using the file", "file_var", PrivateKeyFileEnvVar, "ignored_var", PrivateKeyEnvVar)
-		}
-		return LoadPrivateKeyFromFile(fileValue)
-	}
-	if strings.TrimSpace(raw) == "" {
-		return nil, fmt.Errorf("%s is not set", PrivateKeyFileEnvVar)
-	}
-	slog.Warn("envelope private key read from a raw environment variable; this form is deprecated, use the _FILE variable",
-		"deprecated_var", PrivateKeyEnvVar, "use_var", PrivateKeyFileEnvVar)
-	return LoadPrivateKey([]byte(raw))
 }

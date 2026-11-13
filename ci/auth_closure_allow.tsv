@@ -46,7 +46,6 @@ github.com/beorn7/perks	Prometheus client
 github.com/cespare/xxhash/v2	Prometheus client
 github.com/munnerz/goautoneg	Prometheus client
 go.yaml.in/yaml/v2	Prometheus common
-github.com/golang-jwt/jwt/v5	internal/envelopemint: the claim types of the effective-principal envelope token (the HS256 token package internal/auth/edgetoken is deleted, CHAOS-13415)
 github.com/google/jsonschema-go	internal/auth/contracts (wire types and schema validation), linked once the session domain is mounted (CHAOS-10228)
 golang.org/x/crypto	bcrypt (and its blowfish) for the local login password check, go-api parity (internal/auth/identity/local, internal/auth/passwordhash); linked once login is mounted (CHAOS-10392)
 github.com/valkey-io/valkey-go	shared rate-limit store client (internal/auth/ratelimitvalkey, internal/storage/valkey) for the login, credential and social link limits; linked into the binary, dialled only once a limited route is mounted (CHAOS-10684)

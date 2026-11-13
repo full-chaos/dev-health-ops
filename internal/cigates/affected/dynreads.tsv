@@ -379,10 +379,6 @@ internal/cigates/workflows	workflows_venue_main_alert_test.go
 internal/clicredentials	opensites_test.go
 internal/deploymentcontract	manifest.go
 internal/egressguard	egressguard_test.go
-internal/envelopemint	custody_unix.go
-internal/envelopemint	keygen.go
-internal/envelopemint	keygen_state_test.go
-internal/envelopemint	keygen_test.go
 internal/fixturescli	dropped_columns_census_test.go
 internal/fixturescli	provider_worlds_demo_gates_integration_test.go
 internal/goapicli/prove	dryrun_help_test.go
@@ -488,7 +484,6 @@ internal/migrationmatrix	live.go
 internal/migrationmatrix	model.go
 internal/migrationmatrix	restendpoints.go
 internal/mintcli/envelopekeys	main_test.go
-internal/mintcli/envelopekeys	verify_roundtrip_test.go
 internal/operationalordering	finalreads_test.go
 internal/pgmigrate	archive_fixture_integration_test.go
 internal/pgmigrate	archive_test.go
@@ -547,6 +542,7 @@ internal/queryapi/pdp	headers_switch_census_test.go
 internal/queryapi/people	identity.go
 internal/queryapi/pepgate	census_test.go
 internal/queryapi/pepgate	legacy_site_census_test.go
+internal/queryapi/principal	generated_keyfiles_test.go
 internal/queryapi/principal	verifier.go
 internal/queryapi/quadrant	identity.go
 internal/queryapi/recommendations	goldens_frozen_python_oracle_test.go
@@ -625,6 +621,11 @@ internal/shadowvenue	claims.go
 internal/shadowvenue	drive.go
 internal/shadowvenue	mint.go
 internal/shadowvenue	requestsites_test.go
+internal/signingkey	custody_unix.go
+internal/signingkey	jwks_key_test.go
+internal/signingkey	keygen.go
+internal/signingkey	keygen_state_test.go
+internal/signingkey	keygen_test.go
 internal/storage/clickhouse	worker_posture_test.go
 internal/storage/clickhouse/liverow	census_test.go
 internal/storage/postgres	api_authorization_platform_roles_test.go

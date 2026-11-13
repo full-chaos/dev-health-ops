@@ -1,4 +1,4 @@
-package envelopemint
+package signingkey
 
 import (
 	"bytes"
@@ -101,46 +101,6 @@ func TestLoadPrivateKeyFromFileRefusals(t *testing.T) {
 	}
 }
 
-func TestLoadPrivateKeyFromEnvPrefersFileAndWarnsOnRaw(t *testing.T) {
-	filePEM, rawPEM := testKeyPEM(t), testKeyPEM(t)
-	p := filepath.Join(t.TempDir(), "k.pem")
-	if err := os.WriteFile(p, []byte(filePEM), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	want, _ := LoadPrivateKey([]byte(filePEM))
-
-	t.Setenv(PrivateKeyFileEnvVar, p)
-	t.Setenv(PrivateKeyEnvVar, rawPEM)
-	logs := captureLogs(t)
-	got, err := LoadPrivateKeyFromEnv()
-	if err != nil || !got.Equal(want) {
-		t.Fatalf("file not preferred: %v", err)
-	}
-	if strings.Contains(logs.String(), "MC4CAQ") || strings.Contains(logs.String(), p) {
-		t.Fatalf("log leaks: %s", logs)
-	}
-
-	t.Setenv(PrivateKeyFileEnvVar, "")
-	logs = captureLogs(t)
-	rawKey, _ := LoadPrivateKey([]byte(rawPEM))
-	got, err = LoadPrivateKeyFromEnv()
-	if err != nil || !got.Equal(rawKey) {
-		t.Fatalf("raw fallback failed: %v", err)
-	}
-	if !strings.Contains(logs.String(), "deprecated") || strings.Contains(logs.String(), "MC4CAQ") {
-		t.Fatalf("want deprecation warning without key: %s", logs)
-	}
-
-	t.Setenv(PrivateKeyEnvVar, "")
-	if _, err := LoadPrivateKeyFromEnv(); err == nil {
-		t.Fatal("expected error when neither set")
-	}
-	t.Setenv(PrivateKeyFileEnvVar, filepath.Join(filepath.Dir(p), "nope"))
-	if _, err := LoadPrivateKeyFromEnv(); err == nil {
-		t.Fatal("expected error for bad file")
-	}
-}
-
 // The compose go-api key file is written by GenerateKeyFiles (mode 0400); the
 // loader must accept exactly that shape.
 func TestLoadPrivateKeyFromFileAcceptsGeneratedKeyFile(t *testing.T) {
@@ -199,18 +159,6 @@ func TestNoLoadPathEchoesKeyInput(t *testing.T) {
 			}
 			_, err = LoadPrivateKeyFromFile(p)
 			check("LoadPrivateKeyFromFile", err, logs)
-
-			logs = captureLogs(t)
-			t.Setenv(PrivateKeyFileEnvVar, "")
-			t.Setenv(PrivateKeyEnvVar, input)
-			_, err = LoadPrivateKeyFromEnv()
-			check("LoadPrivateKeyFromEnv raw", err, logs)
-
-			logs = captureLogs(t)
-			t.Setenv(PrivateKeyFileEnvVar, p)
-			t.Setenv(PrivateKeyEnvVar, input)
-			_, err = LoadPrivateKeyFromEnv()
-			check("LoadPrivateKeyFromEnv file", err, logs)
 		})
 	}
 }

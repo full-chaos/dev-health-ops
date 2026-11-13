@@ -145,9 +145,7 @@ func (executor *CompoundingRiskTeamExecutor) ComputeFinalizeFamily(
 	// this (see that function's own doc comment for why, and why the reason
 	// no longer applies). Propagated here exactly like every other error in
 	// this executor: NO FAIL-OPEN, the finalize retries.
-	repoToTeam, err := teamresolve.ResolveOwnerSharesThenPatterns(
-		ctx, executor.conn, run.OrganizationID, day, repoIDs, repoNamesByID, nil,
-	)
+	repoToTeam, err := resolveCompoundingRepoOwners(ctx, executor.conn, run.OrganizationID, day, repoIDs, repoNamesByID)
 	if err != nil {
 		return 0, err
 	}
@@ -278,6 +276,16 @@ func (executor *CompoundingRiskTeamExecutor) ComputeFinalizeFamily(
 	return executor.supersedeStaleKeys(ctx, run.OrganizationID, day, produced, computedAt, rowsWritten)
 }
 
+// resolveCompoundingRepoOwners is the team rule of compounding_risk_team: a
+// repository's team is its team_repo_ownership owner, else none. No pattern
+// resolver is passed (D7013b).
+func resolveCompoundingRepoOwners(
+	ctx context.Context, conn driver.Conn, organizationID string, day time.Time,
+	repoIDs []uuid.UUID, repoNamesByID map[string]string,
+) (map[string][]teamownership.OwnerShare, error) {
+	return teamresolve.ResolveOwnerSharesThenPatterns(ctx, conn, organizationID, day, repoIDs, repoNamesByID, nil)
+}
+
 type ownedRepository struct {
 	id     uuid.UUID
 	owners []teamownership.OwnerShare
@@ -318,7 +326,7 @@ func (executor *CompoundingRiskTeamExecutor) ownedRepositoriesWithoutMetrics(
 	if err != nil {
 		return nil, err
 	}
-	resolved, err := teamresolve.ResolveOwnerSharesThenPatterns(ctx, executor.conn, organizationID, day, candidates, names, nil)
+	resolved, err := resolveCompoundingRepoOwners(ctx, executor.conn, organizationID, day, candidates, names)
 	if err != nil {
 		return nil, err
 	}

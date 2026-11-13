@@ -2,6 +2,7 @@ package server
 
 import (
 	"crypto/ed25519"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -198,8 +199,8 @@ func restTestEnv(t *testing.T) (getenv getenvFunc, bearer string, users edgeUser
 	return func(name string) string { return env[name] }, bearer, newQueryAPIUserStoreFrom(newAccessStore())
 }
 
-// startAccessIssuer serves the discovery document and the JWKS of minter's key over TLS and has the process trust it
-// (http.DefaultTransport, which the JWKS client uses) until the test ends. It returns the issuer URL.
+// startAccessIssuer serves the discovery document and the JWKS of minter's key over TLS and makes the JWKS client Build
+// makes trust it until the test ends (trustEdgeIssuerJWKS). It returns the issuer URL.
 func startAccessIssuer(t *testing.T, minter *accessMinter) string {
 	t.Helper()
 	srv := httptest.NewUnstartedServer(nil)
@@ -215,9 +216,9 @@ func startAccessIssuer(t *testing.T, minter *accessMinter) string {
 		t.Fatal(err)
 	}
 	srv.Config.Handler = issuerstub.Handler(srv.URL, jwks)
-	saved := http.DefaultTransport
-	http.DefaultTransport = srv.Client().Transport
-	t.Cleanup(func() { http.DefaultTransport = saved })
+	roots := x509.NewCertPool()
+	roots.AddCert(srv.Certificate())
+	trustEdgeIssuerJWKS(t, roots)
 	return srv.URL
 }
 

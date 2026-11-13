@@ -1,5 +1,5 @@
 # Every file under internal/queryapi/cognitiveload/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
-# python-recorded set: 29d841a5f175de1173ca4d0d446e65aeecddead9b2925739a0c803fe1f95615a (1 files)
+# python-recorded set: 23d7cbba8709c7bf84df4adfe7d631954996f462fc3ac19259ad53dde1cb063d (1 files)
 # header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
-b4e2f2a88637627d9cbac61f7bbcefc65789910e3fcf51ae45863a400b0046ab	hand-written	README.md
-01fc75990e9b748595477bb1e2b44213ce1ccb08f48602d63458ff3d6bc3eaea	python-recorded	cognitive_load_golden.json
+f4d4642c521faf58c37358082cc847df1367c09b551cbded311bd6073559e035	hand-written	README.md
+88adea050df15fa0c4bffd7fc09a0e30c55c3c1ed9a5d6551c756ad2b945bd3f	python-recorded	cognitive_load_golden.json

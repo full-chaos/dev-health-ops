@@ -400,7 +400,9 @@ func TestResolve_TeamAndRepoCombined_UnownedPatternRepoIsOutOfScope(t *testing.T
 		t.Fatalf("calls = %d, want 2 (candidates, ownership; teams.repo_patterns is never read)", client.calls)
 	}
 	for i, statement := range client.statements {
-		if strings.Contains(statement, "repo_patterns") || strings.Contains(statement, "FROM teams") {
+		// The active-team rule of the shared ownership statement reads
+		// teams.is_active (FROM teams WHERE ...); no query reads the patterns.
+		if strings.Contains(statement, "repo_patterns") || strings.Contains(statement, "FROM teams FINAL") {
 			t.Fatalf("query %d reads teams: %s", i, statement)
 		}
 	}
@@ -429,7 +431,7 @@ func TestResolveOwnedRepoID_DedupesToFirstRowPerResolvedRepoAndRespectsOrder(t *
 		},
 		errs: []error{nil, nil},
 	}
-	id, found, err := resolveOwnedRepoID(context.Background(), client, "org-1", "team-a", "org/repo-a")
+	id, found, err := resolveOwnedRepoID(context.Background(), client, "org-1", "team-a", "org/repo-a", time.Now().UTC())
 	if err != nil {
 		t.Fatalf("resolveOwnedRepoID: %v", err)
 	}
@@ -537,7 +539,7 @@ func TestResolveOwnedRepoIDTakesEveryMainOwnerOfATie(t *testing.T) {
 			},
 			errs: []error{nil, nil},
 		}
-		id, found, err := resolveOwnedRepoID(context.Background(), client, "org-1", tc.team, "org/repo-a")
+		id, found, err := resolveOwnedRepoID(context.Background(), client, "org-1", tc.team, "org/repo-a", time.Now().UTC())
 		if err != nil {
 			t.Fatalf("%s: resolveOwnedRepoID: %v", tc.team, err)
 		}

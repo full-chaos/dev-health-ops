@@ -579,7 +579,10 @@ means the ClickHouse `teams` dimension is empty.
 > co-owner is never mistaken for the canonical owner; (3) no fallback: the Go resolver
 > (`internal/queryapi/cognitiveload`) reads no `teams.repo_patterns`, so a repo that no
 > `team_repo_ownership` row resolves is owned by no team (the owner-only rule the metric families
-> and the AI analytics team scope use). An unowned/nonexistent repo, or one owned by a different team, returns an
+> and the AI analytics team scope use); (4) the rows are those of the one ownership statement of the team scopes
+> (`teamscope.OwnershipFromWhere`, CHAOS-13685): an inactive team owns nothing (§0.4g rule 1), a row with an empty
+> `team_id` is skipped, and the rows are tested at one instant per request with the first recorded owners applied
+> before the first record (§0.4j), not at the server's `now64(3)`. An unowned/nonexistent repo, or one owned by a different team, returns an
 > explicit empty result, never the wrong team's data. Once ownership is confirmed, both data
 > queries filter by the resolved `repo_id` ALONE: `user_metrics_daily` via its existing repo
 > predicate, and a new `_fetch_repo_scoped_team_metrics` for `team_metrics_daily` that sums the
@@ -2330,7 +2333,8 @@ Only another ACTIVE team's tenure delays a start: an inactive team owns nothing 
 > `internal/ownershipwindow`: the instant a reader tests an ownership row at is clamped up to the
 > repository's first record, so the rows valid at the first record are the owners. It is rendered by the shared
 > readers (`OwnedRepoIDs`, `OwnersByRepo`, `OwnerSharesByRepo` and `AuthoritativeOwnersByRepo` of
-> `internal/teamownership`), by `internal/queryapi/teamscope` (`RepoCondition`, `OwnerShares`, `RepoShare`) and by the
+> `internal/teamownership`), by `internal/queryapi/teamscope` (`RepoCondition`, `OwnerShares`, `RepoShare`, and
+> `OwnershipFromWhere`, which the cognitive-load team + repository gate reads) and by the
 > work-item cascade `LoadRepos` (it keeps the rows of an inactive team, the cascade drops them), which is the
 > only ownership read of `work_item_attribution` (the backstop and the daily family, at the item's day), and by the
 > investment materialize donor set (`TeamRepoDonorSet.DonorsAt`; the one-shot `FetchTeamRepoDonors` keeps the

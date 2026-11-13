@@ -12,6 +12,7 @@ import (
 	"github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
 
 // The golden holds, for neutral synthetic requests over the three request
@@ -26,7 +27,10 @@ import (
 // for every call, and the query text is compared with whitespace collapsed.
 // The ownership and team-pattern queries are compared from the FROM clause
 // on: the Go queries select only the columns they use, and qualify the
-// ranking columns with the table alias, which orders identically.
+// ranking columns with the table alias, which orders identically. The
+// ownership query reads the one ownership statement of the team scopes
+// (teamscope.OwnershipFromWhere, pinned by its own package): the golden holds
+// it as the token sharedOwnership, with its two parameters at goldenAsOf.
 
 type goldenCase struct {
 	Name          string                      `json:"name"`
@@ -49,6 +53,13 @@ type goldenCase struct {
 		} `json:"signals"`
 	} `json:"expected"`
 }
+
+// goldenAsOf is the instant of the ownership rows of every golden request.
+var goldenAsOf = time.Date(2026, 1, 11, 12, 0, 0, 0, time.UTC)
+
+// sharedOwnership stands for the FROM ... WHERE of teamscope.OwnershipFromWhere
+// in the golden ownership query; it keeps the table name queryKind reads.
+const sharedOwnership = "FROM team_repo_ownership {teamscope.OwnershipFromWhere}"
 
 // queryKind names the table a statement reads, in the order the reference
 // resolver's markers were checked.
@@ -80,6 +91,10 @@ func comparableText(kind, statement string) string {
 	if kind == "own" || kind == "teams" {
 		if i := strings.Index(q, " FROM "); i >= 0 {
 			q = q[i:]
+		}
+		if kind == "own" {
+			fromWhere, _ := teamscope.OwnershipFromWhere("org-1", goldenAsOf)
+			q = strings.Replace(q, " "+strings.Join(strings.Fields(fromWhere), " ")+" ", " "+sharedOwnership+" ", 1)
 		}
 		// Declared divergence from the frozen reference: the Go order key is
 		// (is_primary = 1) DESC, so a co-owner row (is_primary = 2) does not
@@ -186,9 +201,9 @@ func TestCognitiveLoadMatchesTheFrozenGolden(t *testing.T) {
 				t.Fatal(err)
 			}
 			client := &goldenClient{src: tc.Src}
-			got, err := Resolve(context.Background(), client, "org-1", since, until, tc.TeamID, tc.RepoID)
+			got, err := resolve(context.Background(), client, "org-1", since, until, tc.TeamID, tc.RepoID, goldenAsOf)
 			if err != nil {
-				t.Fatalf("Resolve: %v", err)
+				t.Fatalf("resolve: %v", err)
 			}
 
 			var wantKinds []string
@@ -205,6 +220,9 @@ func TestCognitiveLoadMatchesTheFrozenGolden(t *testing.T) {
 				gotParams := map[string]any{}
 				for _, b := range client.bindings[i] {
 					gotParams[b.Name] = b.Value
+					if instant, ok := b.Value.(time.Time); ok {
+						gotParams[b.Name] = instant.UTC().Format("2006-01-02 15:04:05.000")
+					}
 				}
 				wantParams := map[string]any{}
 				for k, v := range tc.PythonParams[i] {

@@ -144,7 +144,10 @@ picks between on `teamId`/`repoId`:
    `user_metrics_daily` nor `team_metrics_daily`'s own `team_id` column can
    be trusted (CHAOS-4396 taint). `resolveOwnedRepoID` confirms via
    `team_repo_ownership` (no `teams.repo_patterns` fallback: a repo with no
-   owner row is owned by no team) that the
+   owner row is owned by no team; the rows are those of
+   `teamscope.OwnershipFromWhere`, the one ownership statement of the team
+   scopes: active teams only, a non-empty team id, one bound instant per
+   request with the first recorded owners applied before the first record) that the
    requested repo is CURRENTLY, CANONICALLY owned by the requested team —
    if not owned (or the repo does not exist), returns an explicit empty
    result rather than either the wrong team's data or a confusing error;

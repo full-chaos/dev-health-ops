@@ -156,14 +156,15 @@ func TestTheDefaultSocialClientNeverDialsTheEnvironmentProxy(t *testing.T) {
 // Every OIDC call of the handlers goes through the OIDC client and no social OAuth call does: oidc.go names no
 // h.HTTPClient, oauth.go names no oidcClient.
 func TestOIDCAndSocialCallsUseTheirOwnClients(t *testing.T) {
-	read := func(name string) string {
-		raw, err := os.ReadFile(name)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return string(raw)
+	oidcRaw, err := os.ReadFile("oidc.go")
+	if err != nil {
+		t.Fatal(err)
 	}
-	oidcSource, oauthSource := read("oidc.go"), read("oauth.go")
+	oauthRaw, err := os.ReadFile("oauth.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	oidcSource, oauthSource := string(oidcRaw), string(oauthRaw)
 	if strings.Contains(oidcSource, "h.HTTPClient") || strings.Count(oidcSource, "h.oidcClient") != 4 {
 		t.Errorf("oidc.go: h.HTTPClient %d, h.oidcClient %d; want 0 and the 4 OIDC calls",
 			strings.Count(oidcSource, "h.HTTPClient"), strings.Count(oidcSource, "h.oidcClient"))

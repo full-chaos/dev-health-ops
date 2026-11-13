@@ -222,14 +222,15 @@ func TestOIDCAndSocialCallsUseTheirOwnClients(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	read := func(name string) string {
-		raw, err := os.ReadFile(filepath.Join(root, "internal", "auth", "identity", "oidc", name))
-		if err != nil {
-			t.Fatal(err)
-		}
-		return string(raw)
+	serviceRaw, err := os.ReadFile(filepath.Join(root, "internal", "auth", "identity", "oidc", "service.go"))
+	if err != nil {
+		t.Fatal(err)
 	}
-	service, oauthFlow := read("service.go"), read("oauth_flow.go")
+	oauthFlowRaw, err := os.ReadFile(filepath.Join(root, "internal", "auth", "identity", "oidc", "oauth_flow.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, oauthFlow := string(serviceRaw), string(oauthFlowRaw)
 	if strings.Contains(service, "s.cfg.HTTPClient") || strings.Count(service, "s.oidcClient") != 4 {
 		t.Errorf("service.go: s.cfg.HTTPClient %d, s.oidcClient %d; want 0 and the 4 OIDC calls",
 			strings.Count(service, "s.cfg.HTTPClient"), strings.Count(service, "s.oidcClient"))

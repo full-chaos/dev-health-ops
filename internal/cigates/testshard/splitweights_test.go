@@ -426,3 +426,30 @@ func TestCheckGoFailsAStaleSplitWeightRowAndAHandPartRow(t *testing.T) {
 		t.Errorf("a hand part row passed leg 1's plan: %v\n%s", err, errs)
 	}
 }
+
+// The race legs and the auth legs never read ci/go_test_split_weights.tsv: their plans are byte for byte the same with a broken
+// table in its place (the auth split packages keep their round robin cut).
+func TestTheRaceAndAuthLegPlansDoNotReadTheSplitWeights(t *testing.T) {
+	t.Parallel()
+	broken := filepath.Join(t.TempDir(), "split_weights.tsv")
+	if err := os.WriteFile(broken, []byte("not a row\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		env  []string
+		args []string
+	}{
+		{nil, []string{"race-shard-plan", "1", "6"}},
+		{[]string{"AUTH_LEG_LIST=1"}, []string{"auth", "race-leg", "1", "3"}},
+		{[]string{"AUTH_LEG_LIST=1"}, []string{"auth", "race-integration-leg", "1", "4"}},
+	} {
+		out, errs, err := checkGo(t, c.env, c.args...)
+		if err != nil {
+			t.Fatalf("%v: %v\n%s", c.args, err, errs)
+		}
+		bout, berrs, err := checkGo(t, append(append([]string{}, c.env...), "GO_TEST_SPLIT_WEIGHTS="+broken), c.args...)
+		if err != nil || bout != out || berrs != errs {
+			t.Errorf("%v reads ci/go_test_split_weights.tsv: a broken table changes its plan (err %v)", c.args, err)
+		}
+	}
+}

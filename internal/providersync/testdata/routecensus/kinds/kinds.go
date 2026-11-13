@@ -5,7 +5,9 @@ package routecensuskinds
 
 import (
 	"context"
+	"io"
 	"net/http"
+	"strings"
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
@@ -168,4 +170,168 @@ func FetchUntemplated(ctx context.Context, client *providerfoundation.HTTPClient
 // FailureWithPath names a request path as the route of a failure.
 func FailureWithPath(path string) error {
 	return &providerfoundation.ProviderError{Class: providerfoundation.ErrorPermanent, Route: path} // want "ProviderError Route: cannot prove static"
+}
+
+// anyClient has a DoRoute whose route is any. The census finds DoRoute by
+// name, so this reaches the reject branches a string route cannot reach.
+type anyClient struct{}
+
+func (anyClient) DoRoute(ctx context.Context, method string, route any, path string, body io.Reader) {
+}
+
+// shortClient has a DoRoute with too few arguments for a route.
+type shortClient struct{}
+
+func (shortClient) DoRoute(ctx context.Context) {}
+
+// AnyKinds sends values that are not string routes.
+func AnyKinds(ctx context.Context, client *providerfoundation.HTTPClient, size int, path string) {
+	anyClient{}.DoRoute(ctx, http.MethodGet, client.DoRoute, path, nil)                      // want "a method value"
+	anyClient{}.DoRoute(ctx, http.MethodGet, 7, path, nil)                                   // want "a constant that is not a string"
+	anyClient{}.DoRoute(ctx, http.MethodGet, size*2, path, nil)                              // want "operator *"
+	anyClient{}.DoRoute(ctx, http.MethodGet, path[0], path, nil)                             // want "an index read"
+	anyClient{}.DoRoute(ctx, http.MethodGet, routeFor, path, nil)                            // want "not a value"
+	anyClient{}.DoRoute(ctx, http.MethodGet, func() string { return kindsRoute }, path, nil) // want "an unknown expression kind *ast.FuncLit"
+	anyClient{}.DoRoute(ctx, http.MethodGet, http.DefaultClient, path, nil)                  // want "without a declaration in the loaded packages"
+	shortClient{}.DoRoute(ctx)                                                               // want "DoRoute with 1 arguments"
+}
+
+func fetchVariadic(ctx context.Context, route ...string) {
+	anyClient{}.DoRoute(ctx, http.MethodGet, route, "", nil) // want "variadic parameter"
+}
+
+// FetchVariadic calls a helper whose route is variadic.
+func FetchVariadic(ctx context.Context) { fetchVariadic(ctx, kindsRoute) }
+
+// FetchPointer sends a route read through a pointer.
+func FetchPointer(ctx context.Context, client *providerfoundation.HTTPClient, route *string, path string) error {
+	return closeBody(client.DoRoute(ctx, http.MethodGet, *route, path, nil)) // want "a pointer read"
+}
+
+// FetchTypeAssertion sends a route from a type assertion.
+func FetchTypeAssertion(ctx context.Context, client *providerfoundation.HTTPClient, value any, path string) error {
+	return closeBody(client.DoRoute(ctx, http.MethodGet, value.(string), path, nil)) // want "a type assertion"
+}
+
+// FetchSliceExpression sends a slice of a string.
+func FetchSliceExpression(ctx context.Context, client *providerfoundation.HTTPClient, path string) error {
+	return closeBody(client.DoRoute(ctx, http.MethodGet, path[1:], path, nil)) // want "an unknown expression kind *ast.SliceExpr"
+}
+
+// FetchTypeSwitch sends a type switch value: the census reads no assignment.
+func FetchTypeSwitch(ctx context.Context, client *providerfoundation.HTTPClient, value any, path string) error {
+	switch v := value.(type) {
+	case string:
+		return closeBody(client.DoRoute(ctx, http.MethodGet, v, path, nil)) // want "v has no assignment the census can read"
+	case []string:
+		return closeBody(client.DoRoute(ctx, http.MethodGet, v[0], path, nil)) // want "slice v has no assignment the census can read"
+	}
+	return nil
+}
+
+// FetchMapRange sends a value of a map range.
+func FetchMapRange(ctx context.Context, client *providerfoundation.HTTPClient, routes map[string]string, path string) error {
+	for _, route := range routes {
+		return closeBody(client.DoRoute(ctx, http.MethodGet, route, path, nil)) // want "a range over a value that is not a slice of routes"
+	}
+	return nil
+}
+
+// FetchRangeKey sends a key of a map range.
+func FetchRangeKey(ctx context.Context, client *providerfoundation.HTTPClient, routes map[string]bool, path string) error {
+	for route := range routes {
+		return closeBody(client.DoRoute(ctx, http.MethodGet, route, path, nil)) // want "range key"
+	}
+	return nil
+}
+
+// FetchMultiValueDeclaration sends a var declared from a multi-value call.
+func FetchMultiValueDeclaration(ctx context.Context, client *providerfoundation.HTTPClient, path string) error {
+	var route, ok = lookupRoute(path)
+	if !ok {
+		return nil
+	}
+	return closeBody(client.DoRoute(ctx, http.MethodGet, route, path, nil)) // want "multi-value declaration"
+}
+
+// FetchElementAssigned sends an element of a local slice that code writes.
+func FetchElementAssigned(ctx context.Context, client *providerfoundation.HTTPClient, path string) error {
+	routes := []string{kindsRoute}
+	routes[0] = path
+	return closeBody(client.DoRoute(ctx, http.MethodGet, routes[0], path, nil)) // want "element assigned"
+}
+
+type addressEndpoint struct{ route string }
+
+// FetchFieldAddress sends a field whose address another function writes.
+func FetchFieldAddress(ctx context.Context, client *providerfoundation.HTTPClient, path string) error {
+	target := addressEndpoint{route: kindsRoute}
+	setRoute(&target.route, path)
+	return closeBody(client.DoRoute(ctx, http.MethodGet, target.route, path, nil)) // want "field address taken"
+}
+
+// FetchSplitSlice sends an element of a slice a call returns.
+func FetchSplitSlice(ctx context.Context, client *providerfoundation.HTTPClient, path string) error {
+	routes := strings.Split(path, ",")
+	return closeBody(client.DoRoute(ctx, http.MethodGet, routes[0], path, nil)) // want "is set from a value that is not a literal"
+}
+
+func splitRoutes(path string) ([]string, bool) { return strings.Split(path, ","), path != "" }
+
+// FetchMultiValueSlice sends an element of a slice from a multi-value call.
+func FetchMultiValueSlice(ctx context.Context, client *providerfoundation.HTTPClient, path string) error {
+	routes, ok := splitRoutes(path)
+	if !ok {
+		return nil
+	}
+	return closeBody(client.DoRoute(ctx, http.MethodGet, routes[0], path, nil)) // want "slice routes: multi-value assignment"
+}
+
+var kindsRoutes = []string{kindsRoute}
+
+// FetchPackageSlice sends an element of a package slice.
+func FetchPackageSlice(ctx context.Context, client *providerfoundation.HTTPClient, path string) error {
+	return closeBody(client.DoRoute(ctx, http.MethodGet, kindsRoutes[0], path, nil)) // want "a read of a package slice"
+}
+
+type sliceEndpoint struct{ routes []string }
+
+// FetchFieldSlice sends an element of a field slice.
+func FetchFieldSlice(ctx context.Context, client *providerfoundation.HTTPClient, path string) error {
+	target := sliceEndpoint{routes: []string{kindsRoute}}
+	return closeBody(client.DoRoute(ctx, http.MethodGet, target.routes[0], path, nil)) // want "a slice read of an expression"
+}
+
+func fetchSpread(ctx context.Context, client *providerfoundation.HTTPClient, route string, extra ...string) error {
+	return closeBody(client.DoRoute(ctx, http.MethodGet, route, strings.Join(extra, "/"), nil)) // want "a call with a spread argument"
+}
+
+// FetchSpread calls a pass-through helper with a spread argument.
+func FetchSpread(ctx context.Context, client *providerfoundation.HTTPClient) error {
+	extras := []string{"a"}
+	return fetchSpread(ctx, client, kindsRoute, extras...)
+}
+
+func fetchReassigned(ctx context.Context, client *providerfoundation.HTTPClient, route, path string) error {
+	route = routeFor(path)
+	return closeBody(client.DoRoute(ctx, http.MethodGet, route, path, nil)) // want "parameter route assigned in its function"
+}
+
+// FetchReassigned gives a helper a constant route that the helper replaces.
+func FetchReassigned(ctx context.Context, client *providerfoundation.HTTPClient, path string) error {
+	return fetchReassigned(ctx, client, kindsRoute, path)
+}
+
+// OptionsAppend appends to an option Route.
+func OptionsAppend(path string) providerfoundation.GitHubPageOptions {
+	options := providerfoundation.GitHubPageOptions{Path: path, Route: kindsRoute}
+	options.Route += "/x" // want "Route set by +="
+	return options
+}
+
+func fetchObject(path string) error { return nil }
+
+// FetchObject calls the un-templated object fetch.
+func FetchObject(path string) error {
+	return fetchObject(path) // want "un-templated object fetch"
 }

@@ -1,11 +1,16 @@
 package providersync
 
 import (
+	"bytes"
 	"fmt"
 	"go/ast"
 	"go/constant"
+	"go/parser"
 	"go/token"
 	"go/types"
+	"io/fs"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
@@ -76,6 +81,82 @@ func TestEveryPageWalkAndObjectFetchNamesARouteTemplate(t *testing.T) {
 		t.Errorf("%d provider requests without a provably static route template: use Route / fetchObjectRoute / DoRoute with a constant from route_templates.go (or a literal)", len(census.findings))
 	}
 	t.Logf("route census: load %s, census %s, request sites %v, option sites %d", loaded.Round(time.Millisecond), (time.Since(start) - loaded).Round(time.Millisecond), census.requestSites, census.optionSites)
+}
+
+// The census proves only what it loads: every package of the module that
+// calls DoRoute or DoUnauthenticatedRoute must be in routeCensusPackages
+// (providerfoundation is the library). A new caller package outside the list
+// fails here, not silently. Every non-test Go file of the module is read.
+func TestRouteCensusLoadListHoldsEveryDoRouteCaller(t *testing.T) {
+	const root = "../.."
+	allowed := map[string]bool{"internal/providerfoundation": true}
+	for _, pattern := range routeCensusPackages {
+		allowed[strings.TrimPrefix(pattern, "./")] = true
+	}
+	callers := map[string]bool{}
+	scanned := 0
+	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			switch entry.Name() {
+			case ".git", "node_modules", "vendor", "testdata":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		source, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		scanned++
+		if !bytes.Contains(source, []byte("Route(")) {
+			return nil
+		}
+		file, err := parser.ParseFile(token.NewFileSet(), path, source, 0)
+		if err != nil {
+			return err
+		}
+		ast.Inspect(file, func(node ast.Node) bool {
+			call, ok := node.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			if sel, ok := ast.Unparen(call.Fun).(*ast.SelectorExpr); ok && (sel.Sel.Name == "DoRoute" || sel.Sel.Name == "DoUnauthenticatedRoute") {
+				dir, err := filepath.Rel(root, filepath.Dir(path))
+				if err == nil {
+					callers[filepath.ToSlash(dir)] = true
+				}
+			}
+			return true
+		})
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scanned < 1000 {
+		t.Fatalf("read %d non-test Go files of the module; the scan must see the module", scanned)
+	}
+	for _, pattern := range routeCensusPackages {
+		if !callers[strings.TrimPrefix(pattern, "./")] {
+			t.Errorf("%s is in the census list but the scan found no DoRoute caller in it: the scan or the list is wrong", pattern)
+		}
+	}
+	var outside []string
+	for dir := range callers {
+		if !allowed[dir] {
+			outside = append(outside, dir)
+		}
+	}
+	sort.Strings(outside)
+	if len(outside) > 0 {
+		t.Errorf("packages call DoRoute / DoUnauthenticatedRoute outside the census list %v: add them to routeCensusPackages and routeCensusFloor: %v", routeCensusPackages, outside)
+	}
 }
 
 // requireRouteCensusLoad fails on a load that the census cannot read: a
@@ -621,6 +702,12 @@ func (ix *routeIndex) object(pkg *packages.Package, ident *ast.Ident, obj types.
 			return ""
 		}
 		seen[key] = true
+		param, isParam := ix.params[o]
+		if isParam {
+			if why := routeParamKind(at, o.Name(), param); why != "" {
+				return why
+			}
+		}
 		if why := ix.escaped[key]; why != "" {
 			return at + ": " + o.Name() + ": " + why
 		}
@@ -631,10 +718,15 @@ func (ix *routeIndex) object(pkg *packages.Package, ident *ast.Ident, obj types.
 			}
 			return ix.sourceStatic(source, seen)
 		}
-		if param, ok := ix.params[o]; ok {
+		sources := ix.locals[o]
+		if isParam {
+			for _, source := range sources {
+				if why := ix.sourceStatic(source, seen); why != "" {
+					return why + " (parameter " + o.Name() + " assigned in its function)"
+				}
+			}
 			return ix.param(at, o.Name(), param, seen)
 		}
-		sources := ix.locals[o]
 		if len(sources) == 0 {
 			return at + ": " + o.Name() + " has no assignment the census can read"
 		}
@@ -650,7 +742,8 @@ func (ix *routeIndex) object(pkg *packages.Package, ident *ast.Ident, obj types.
 	return fmt.Sprintf("%s: %s is a %T, not a value", at, ident.Name, obj)
 }
 
-func (ix *routeIndex) param(at, name string, param routeParam, seen map[any]bool) string {
+// routeParamKind rejects a parameter whose callers the census cannot list.
+func routeParamKind(at, name string, param routeParam) string {
 	switch {
 	case param.fn == "":
 		return at + ": parameter " + name + " of a func literal (a call through a func value)"
@@ -659,6 +752,11 @@ func (ix *routeIndex) param(at, name string, param routeParam, seen map[any]bool
 	case param.variadic:
 		return at + ": variadic parameter " + name
 	}
+	return ""
+}
+
+// param proves a parameter by its argument at every call site.
+func (ix *routeIndex) param(at, name string, param routeParam, seen map[any]bool) string {
 	if why := ix.funcValue[param.fn]; why != "" {
 		return at + ": parameter " + name + " of " + param.fn + ", " + why + " (a call through a func value)"
 	}
@@ -740,7 +838,7 @@ func (ix *routeIndex) sliceStatic(pkg *packages.Package, expr ast.Expr, seen map
 	case *ast.Ident:
 		v, ok := pkg.TypesInfo.Uses[e].(*types.Var)
 		if !ok || v.IsField() || routePackageLevel(v) {
-			return at + ": a slice read that is not a local slice of routes"
+			return at + ": a read of a package slice, not a local slice of routes"
 		}
 		if _, isParam := ix.params[v]; isParam {
 			return at + ": a read of slice parameter " + v.Name()
@@ -773,5 +871,5 @@ func (ix *routeIndex) sliceStatic(pkg *packages.Package, expr ast.Expr, seen map
 		}
 		return ""
 	}
-	return at + ": a slice read that is not a local slice of routes"
+	return at + ": a slice read of an expression, not a local slice of routes"
 }

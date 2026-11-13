@@ -28,6 +28,10 @@ func TestRouteCensusAcceptsStaticRouteFixture(t *testing.T) {
 	}
 }
 
+// routeCensusKindsWants is the exact number of want sites in the kinds
+// fixture: one or more per reject branch a route value can reach.
+const routeCensusKindsWants = 48
+
 // CHAOS-10268: each source kind the census cannot prove static fails with
 // its file:line, never a silent skip. The kinds fixture marks each census site
 // with a want comment that holds a word of the expected finding.
@@ -44,8 +48,8 @@ func TestRouteCensusRejectsEveryUnprovableSourceKind(t *testing.T) {
 			}
 		}
 	}
-	if len(wants) < 15 {
-		t.Fatalf("read %d want comments in the kinds fixture, want at least 15", len(wants))
+	if len(wants) != routeCensusKindsWants {
+		t.Fatalf("read %d want comments in the kinds fixture, want %d: a cell added or lost changes this count on purpose", len(wants), routeCensusKindsWants)
 	}
 	got := map[int]string{}
 	for _, finding := range runRouteCensus(pkgs).findings {

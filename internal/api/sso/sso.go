@@ -103,7 +103,6 @@ type Deps struct {
 	// routes and activate/deactivate call it. nil keeps the stub and the direct UPDATE.
 	Providers authprovision.SSOProviders
 
-
 	// oidcClient makes the OIDC calls; newHandlers sets it (HTTPClient when the caller set one).
 	oidcClient *http.Client
 }

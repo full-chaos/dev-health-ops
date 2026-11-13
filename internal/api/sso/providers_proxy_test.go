@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -18,6 +19,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
+	"github.com/full-chaos/dev-health-ops/internal/auth/ssoprovider"
 )
 
 const proxySecret = "s3ntinel-proxy-client-secret"
@@ -417,3 +420,43 @@ func TestProviderConfigIsPassedThroughAsAuthServiceWroteIt(t *testing.T) {
 		t.Errorf("a config that is not JSON: %d %s, want the named 503", response.Code, response.Body)
 	}
 }
+
+// Whole body: the go-api answer for an auth-service provider (PR1d's form: pydantic times, config as stored, masked) is byte-equal
+// to what the legacy path renders from the same row (providerResponse over the stored text). Micros zero and not zero.
+func TestProviderAnswerBodyIsByteEqualToTheLegacyRender(t *testing.T) {
+	stored := `{"scopes": ["openid", "profile"], "client_id": "c", "issuer": "https://\u00e9.example", "claim_mapping": {"z": "1", "a": "2"}, "client_secret": "plain", "certificate": "` + strings.Repeat("Q", 70) + `"}`
+	micros := time.Date(2026, 11, 13, 1, 2, 3, 250000000, time.UTC)
+	whole := time.Date(2026, 11, 13, 1, 2, 3, 0, time.UTC)
+	for name, times := range map[string][2]time.Time{"micros": {micros, whole}, "whole": {whole, whole}, "both": {micros, micros}} {
+		f := newProxyFixture(t)
+		id := uuid.NewString()
+		row := &providerRow{ID: id, OrgID: f.org.String(), Name: "Acme <&>", Protocol: "oidc", Status: "active", DefaultRole: "member", AutoProvision: true,
+			Config: &stored, AllowedDomains: ptr(`["a.example", null, "b.example"]`), LastLoginAt: &times[0], LastErrorAt: &times[1], CreatedAt: times[0], UpdatedAt: times[1]}
+		want, err := providerResponse(row)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantBytes, err := pyjson.MarshalModel(want)
+		if err != nil {
+			t.Fatal(err)
+		}
+		masked, err := ssoprovider.MaskedConfig(&stored)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pyd := func(at time.Time) string { return pytime.Pydantic(pytime.UTC(at)) }
+		f.fake.answer = `{"id":"` + id + `","org_id":"` + f.org.String() + `","name":"Acme <&>","protocol":"oidc","status":"active","is_default":false,` +
+			`"allow_idp_initiated":false,"auto_provision_users":true,"default_role":"member","config":` + string(masked) + `,"allowed_domains":["a.example","b.example"],` +
+			`"last_metadata_sync_at":null,"last_login_at":"` + pyd(times[0]) + `","last_error":null,"last_error_at":"` + pyd(times[1]) + `","created_at":"` + pyd(times[0]) + `","updated_at":"` + pyd(times[1]) + `"}`
+		for op, response := range map[string]*httptest.ResponseRecorder{
+			"get":      f.do(f.h.getProvider, "member", "", id, "", nil),
+			"activate": f.do(f.h.setStatusViaProviders("active").ServeHTTP, "admin", "", id, "", nil),
+		} {
+			if response.Code != http.StatusOK || response.Body.String() != string(wantBytes) {
+				t.Errorf("%s/%s:\n got  %s\n want %s", name, op, response.Body, wantBytes)
+			}
+		}
+	}
+}
+
+func ptr(s string) *string { return &s }

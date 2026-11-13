@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -19,18 +20,24 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 )
 
-// closedPortAddr returns an address nothing listens on: dials get ECONNREFUSED.
+// closedPortAddr returns an address whose dials get ECONNREFUSED, and keeps it that way for the test: a socket is bound to the port and
+// never listens, so the kernel refuses every connection and no other listener, in this process or another parallel test, can be handed
+// that port. (Binding :0, closing it and dialling the freed port left a window in which another test's listener answered the dial.)
 func closedPortAddr(t *testing.T) string {
 	t.Helper()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	fd, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_STREAM, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	addr := listener.Addr().String()
-	if err := listener.Close(); err != nil {
+	t.Cleanup(func() { _ = syscall.Close(fd) })
+	if err := syscall.Bind(fd, &syscall.SockaddrInet4{Addr: [4]byte{127, 0, 0, 1}}); err != nil {
 		t.Fatal(err)
 	}
-	return addr
+	bound, err := syscall.Getsockname(fd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return net.JoinHostPort("127.0.0.1", strconv.Itoa(bound.(*syscall.SockaddrInet4).Port))
 }
 
 // dialCheck is a required check that dials addr and reads one byte, the way a
@@ -77,15 +84,15 @@ func serveOnce(t *testing.T, addr string, answer bool) net.Listener {
 
 func TestPreclaimReadinessRetriesRefusedDialUntilEndpointReturns(t *testing.T) {
 	t.Parallel()
-	addr := closedPortAddr(t)
 	registry := health.NewRegistry(2 * time.Second)
 	var attempts atomic.Int32
-	check := dialCheck(addr)
-	if err := registry.RegisterRequired("queue_postgres", func(ctx context.Context) error {
-		if attempts.Add(1) == 3 {
-			serveOnce(t, addr, true)
+	// The refusals come from the check, not from a port that has to stay free for two attempts: a listener another parallel test
+	// bound on a freed port answered an early dial and the count was the port's (CHAOS-13696).
+	if err := registry.RegisterRequired("queue_postgres", func(context.Context) error {
+		if attempts.Add(1) < 3 {
+			return dependencyCheckFailed(refusedDial())
 		}
-		return check(ctx)
+		return nil
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -112,18 +119,18 @@ func TestPreclaimReadinessRetriesRefusedDialUntilEndpointReturns(t *testing.T) {
 
 func TestPreclaimReadinessRetriesAcceptThenCloseUntilEndpointAnswers(t *testing.T) {
 	t.Parallel()
-	addr := closedPortAddr(t)
-	serveOnce(t, addr, false)
-	addr2 := closedPortAddr(t)
+	// Both endpoints are listening from the start (held for the test), so no attempt depends on a port that must stay free: the
+	// first two attempts reach a peer that accepts and closes, the third a peer that answers.
+	closing := serveOnce(t, "127.0.0.1:0", false)
+	answering := serveOnce(t, "127.0.0.1:0", true)
 	registry := health.NewRegistry(2 * time.Second)
 	var attempts atomic.Int32
-	check := dialCheck(addr)
+	closingCheck, answeringCheck := dialCheck(closing.Addr().String()), dialCheck(answering.Addr().String())
 	if err := registry.RegisterRequired("domain_postgres", func(ctx context.Context) error {
 		if attempts.Add(1) == 3 {
-			serveOnce(t, addr2, true)
-			return dialCheck(addr2)(ctx)
+			return answeringCheck(ctx)
 		}
-		return check(ctx)
+		return closingCheck(ctx)
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -203,59 +210,16 @@ func TestRiverWorkerProcessRetriesRefusedDialUntilSuccess(t *testing.T) {
 	}
 }
 
-// retiredPortForm is the first form of the test above, kept only as the planted cell's subject: the refused dials come from a
-// real port that nothing listens on (addr), and the third attempt starts a listener there.
-func retiredPortForm(t *testing.T, addr string) int32 {
-	t.Helper()
-	process := newTestRiverWorkerProcess(t)
-	process.budget = time.Minute
-	process.sleep = riverStartSleepAfterCheckTimeout(time.Millisecond)
-	var attempts atomic.Int32
-	process.startClient = func(ctx context.Context) error {
-		if attempts.Add(1) == 3 {
-			serveOnce(t, addr, true)
-		}
-		var dialer net.Dialer
-		conn, err := dialer.DialContext(ctx, "tcp", addr)
-		if err != nil {
-			return fmt.Errorf("start producer: %w", err)
-		}
-		return conn.Close()
-	}
-	if err := process.Start(context.Background()); err != nil {
-		t.Fatalf("Start() = %v", err)
-	}
-	return attempts.Load()
-}
-
-// The planted cell: the interference of the failure on main, forced and held. A listener that is already on the port the retired
-// form dials, as one another parallel test bound there, answers the first dial: the form's count is 1, not the 3 its test
-// asserts. The count was the port's, not the retry's; the form that reads the retry from the controlled clock and the hook
-// (TestRiverWorkerProcessRetriesRefusedDialUntilSuccess) has no port to take.
-func TestTheRetiredPortFormCountsTheListenerNotTheRetries(t *testing.T) {
+// The hook above returns the error shape of a refused dial; this pins that the retry classifier of the producer start reads that
+// shape as retryable and a dial that failed for another reason (permission denied) as final.
+func TestProducerStartRetryClassifierReadsARefusedDialAsRetryableAndADeniedOneAsFinal(t *testing.T) {
 	t.Parallel()
-	held := serveOnce(t, "127.0.0.1:0", true)
-	if got := retiredPortForm(t, held.Addr().String()); got != 1 {
-		t.Fatalf("the retired form ran %d times with its port already answering, want 1 (not the 3 of the test it was)", got)
+	if !isRiverProducerStartTimeout(fmt.Errorf("start producer: %w", refusedDial())) {
+		t.Fatal("a refused dial is not retryable")
 	}
-}
-
-func TestRefusedDialRetryCountIgnoresListenersOnOtherPorts(t *testing.T) {
-	t.Parallel()
-	serveOnce(t, closedPortAddr(t), true)
-	process := newTestRiverWorkerProcess(t)
-	process.budget = time.Minute
-	clock := newFakeRetryClock()
-	process.now, process.sleep = clock.Now, clock.Sleep
-	var attempts atomic.Int32
-	process.startClient = func(context.Context) error {
-		if attempts.Add(1) < 3 {
-			return fmt.Errorf("start producer: %w", refusedDial())
-		}
-		return nil
-	}
-	if err := process.Start(context.Background()); err != nil || attempts.Load() != 3 {
-		t.Fatalf("Start() = %v after %d attempts, want nil after 3 with a listener on another port", err, attempts.Load())
+	denied := &net.OpError{Op: "dial", Net: "tcp", Err: os.NewSyscallError("connect", syscall.EACCES)}
+	if isRiverProducerStartTimeout(fmt.Errorf("start producer: %w", denied)) {
+		t.Fatal("a dial refused for permission (EACCES) is retryable, want final")
 	}
 }
 

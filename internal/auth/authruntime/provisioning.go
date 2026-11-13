@@ -159,6 +159,10 @@ func ssoProviderRoutes(cfg authconfig.Config, logger *slog.Logger, pool *pgxpool
 	if !cfg.Provisioning.Routes {
 		return nil, nil
 	}
+	if !cfg.SSOProvidersOwned {
+		logger.Info("sso provider routes: not mounted, AUTH_SSO_PROVIDERS_OWNED is off")
+		return nil, nil
+	}
 	cipher, err := fernet.New(cfg.SSO.EncryptionKey.Reveal(), cfg.SSO.EncryptionSalt)
 	if err != nil {
 		logger.Warn("sso provider routes: not mounted, the provider secret key is unusable")

@@ -338,6 +338,10 @@ spec:
             - name: AUTH_PLATFORM_ROLES_OWNED
               value: "true"
           {{- end }}
+          {{- if eq (include "dev-health.ssoProvidersOwned" .) "true" }}
+            - name: AUTH_SSO_PROVIDERS_OWNED
+              value: "true"
+          {{- end }}
           {{- if eq (include "dev-health.authOn" (dict "flag" "usersOwned" "context" .)) "true" }}
           {{- $m := default dict $a.mail }}
           {{- $mk := default dict $m.keys }}

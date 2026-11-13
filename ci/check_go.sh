@@ -451,8 +451,8 @@ usage() {
          -json files: exactly one pass event per row, and a missing, skipped,
          failed, repeated or cached (package) result fails.
   test-shard-wall-guard SHARD COUNT WALL LOGFILE
-         Log the wall seconds of a test shard, warn above 300 s
-         (GO_TEST_SHARD_WALL_WARN_SECONDS) and fail above 600 s
+         Log the wall seconds of a test shard, warn above 600 s
+         (GO_TEST_SHARD_WALL_WARN_SECONDS) and fail above 900 s
          (GO_TEST_SHARD_WALL_FAIL_SECONDS), naming the shard and its three
          heaviest packages (measured in LOGFILE, else by weight).
   security-fresh-receipt RAN JSON...
@@ -1084,10 +1084,10 @@ GO_TEST_SPLITS="${GO_TEST_SPLITS:-${ROOT}/ci/go_test_splits.tsv}"
 # GO_TEST_SERIAL_FACTOR (CHAOS-13422): the other packages of a test shard overlap, so a shard's wall is about their summed time / 1.9
 # (1.80-2.01 over the 5 shards of PR #5995's run at 9244407eb); the serial package adds its whole wall, so it weighs 2x in the split.
 GO_TEST_SERIAL_FACTOR=2
-# CHAOS-13520: every job five minutes or less. A test shard warns past GO_TEST_SHARD_WALL_WARN_SECONDS of go test wall and fails
-# past GO_TEST_SHARD_WALL_FAIL_SECONDS, so a slow runner warns and a shard plan that no longer fits fails.
-GO_TEST_SHARD_WALL_WARN_SECONDS="${GO_TEST_SHARD_WALL_WARN_SECONDS:-300}"
-GO_TEST_SHARD_WALL_FAIL_SECONDS="${GO_TEST_SHARD_WALL_FAIL_SECONDS:-600}"
+# CHAOS-13622: legs of about ten minutes (CHAOS-13520 had five). A test shard warns past GO_TEST_SHARD_WALL_WARN_SECONDS of go test
+# wall and fails past GO_TEST_SHARD_WALL_FAIL_SECONDS, so a slow runner warns and a shard plan that no longer fits fails.
+GO_TEST_SHARD_WALL_WARN_SECONDS="${GO_TEST_SHARD_WALL_WARN_SECONDS:-600}"
+GO_TEST_SHARD_WALL_FAIL_SECONDS="${GO_TEST_SHARD_WALL_FAIL_SECONDS:-900}"
 
 check_test_shard_args() {
   local shard="${1:-}" count="${2:-}"
@@ -1132,7 +1132,7 @@ check_test_shard_plan() {
 }
 
 # check_test_shard_wall_guard SHARD COUNT WALL_SECONDS LOGFILE: logs the shard's wall time, warns above
-# GO_TEST_SHARD_WALL_WARN_SECONDS (300) and FAILS above GO_TEST_SHARD_WALL_FAIL_SECONDS (600), naming the shard and its three
+# GO_TEST_SHARD_WALL_WARN_SECONDS (600) and FAILS above GO_TEST_SHARD_WALL_FAIL_SECONDS (900), naming the shard and its three
 # heaviest packages: by measured time (the `ok` lines of the go test log), else by weight when the log holds none.
 check_test_shard_wall_guard() {
   local shard="${1:-}" count="${2:-}" wall="${3:-}" log="${4:-}" limit="${GO_TEST_SHARD_WALL_FAIL_SECONDS}" top="" basis="measured time"
@@ -2637,9 +2637,10 @@ declare -A INTEGRATION_DISCOVERY_DONE=()
 declare -A INTEGRATION_DISCOVERY_TAGGED=()
 declare -A INTEGRATION_DISCOVERY_UNTAGGED=()
 declare -A INTEGRATION_DISCOVERY_HOOK=()
-# The wall of one packages shard's go test runs (CHAOS-13520): a warning above WARN, a failure above FAIL.
-INTEGRATION_SHARD_WALL_WARN_SECONDS="${DEV_HEALTH_GO_INTEGRATION_SHARD_WALL_WARN_SECONDS:-300}"
-INTEGRATION_SHARD_WALL_FAIL_SECONDS="${DEV_HEALTH_GO_INTEGRATION_SHARD_WALL_FAIL_SECONDS:-600}"
+# The wall of one packages shard's go test runs (CHAOS-13520, CHAOS-13622 legs of about ten minutes): a warning above WARN, a
+# failure above FAIL.
+INTEGRATION_SHARD_WALL_WARN_SECONDS="${DEV_HEALTH_GO_INTEGRATION_SHARD_WALL_WARN_SECONDS:-600}"
+INTEGRATION_SHARD_WALL_FAIL_SECONDS="${DEV_HEALTH_GO_INTEGRATION_SHARD_WALL_FAIL_SECONDS:-900}"
 declare -A AFFECTED_KEYS=()
 AFFECTED_FILTER_ACTIVE=0
 declare -a INTEGRATION_SHARD_TOTALS=()
@@ -5134,8 +5135,8 @@ sort_integration_shard_packages() {
 }
 
 # check_integration_shard_wall SHARD MODULE WALL (CHAOS-13520): the go test wall of one packages shard (one module) against the
-# five-minute job goal: a ::warning:: above INTEGRATION_SHARD_WALL_WARN_SECONDS (300), a failure above
-# INTEGRATION_SHARD_WALL_FAIL_SECONDS (600), so a slow runner warns and a plan that no longer fits fails.
+# ten-minute leg goal (CHAOS-13622): a ::warning:: above INTEGRATION_SHARD_WALL_WARN_SECONDS (600), a failure above
+# INTEGRATION_SHARD_WALL_FAIL_SECONDS (900), so a slow runner warns and a plan that no longer fits fails.
 check_integration_shard_wall() {
   local shard="$1" module_dir="$2" wall="$3"
   printf 'integration package shard %s (%s): go test wall %ss (warn above %ss, fail above %ss)\n' \

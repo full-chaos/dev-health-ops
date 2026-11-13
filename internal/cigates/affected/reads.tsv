@@ -117,6 +117,7 @@ internal/cigates/exceptionledger	code	contracts
 internal/cigates/exceptionledger	code	deploy
 internal/cigates/gitleaksignore	test	.gitleaksignore
 internal/cigates/integrationshards	test	ci
+internal/cigates/livee2e/ssoseed	test	docker
 internal/cigates/metricsproof	test	ci
 internal/cigates/nopython	test	ci
 internal/cigates/outboundtransport	test	ci

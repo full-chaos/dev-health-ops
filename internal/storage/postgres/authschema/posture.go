@@ -299,6 +299,9 @@ func relationViolations(
 			if options.UsersOwned && schema == publicSchema && privilege == "DELETE" && isMembershipWriteDelete(object) {
 				continue
 			}
+			if options.SSOProvidersOwned && schema == publicSchema && privilege == "DELETE" && isSSOProviderOwnDelete(object) {
+				continue
+			}
 			violations = append(violations, Violation{
 				Kind: "relation", Schema: schema, Object: object, Privilege: privilege,
 				Detail: "outside the auth-owned schema",

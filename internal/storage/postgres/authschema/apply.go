@@ -94,6 +94,9 @@ type Options struct {
 	// holds UsersWriteGrant on public.users. Off, it holds no write privilege
 	// there, and the grants pass revokes any it held.
 	UsersOwned bool
+	// SSOProvidersOwned is the SSO providers switch (AUTH_SSO_PROVIDERS_OWNED): the runtime role holds SSOProviderOwn on
+	// public.sso_providers. Off, it holds none of it, and the grants pass revokes any it held.
+	SSOProvidersOwned bool
 	// DeferNarrowing keeps, with the acknowledgement, every lost grant the
 	// users-owned switch gives (the 4->3 flip-back release, whose old owned
 	// pods still serve); the rest narrows. See defer_narrowing.go.

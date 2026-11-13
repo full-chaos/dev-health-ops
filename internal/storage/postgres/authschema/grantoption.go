@@ -67,7 +67,7 @@ func migratorGrantOptionPrecheck(ctx context.Context, conn querier, options Opti
 		return fmt.Errorf("%w: reading the migration login", ErrMigrationFailed)
 	}
 	var gaps []grantOptionGap
-	for _, entry := range publicPrivilegeSetFor(options.UsersOwned) {
+	for _, entry := range publicPrivilegeSetFor(options.UsersOwned, options.SSOProvidersOwned) {
 		if _, err := NewValidatedIdentifier(entry.Table); err != nil {
 			return err
 		}

@@ -17,7 +17,7 @@ import (
 // real ci/check_go.sh, ci/go_race_shard.awk and ci/go_test_weights.tsv; the leg-count pin is the Go port of the workflow
 // matrix check of tests/tooling/test_go_quality_legs.py.
 
-const shardCount = 28
+const shardCount = 10
 
 func repoRoot(t *testing.T) string {
 	t.Helper()
@@ -357,7 +357,7 @@ func writeLog(t *testing.T, text string) string {
 	return p
 }
 
-// Planted row: a fake shard over the 600 s cap (CHAOS-13520: every job five minutes or less; warn above 300 s) trips the
+// Planted row: a fake shard over the 900 s cap (warn above 600 s, about ten-minute legs) trips the
 // wall-time guard and names its three heaviest packages by measured time.
 func TestTheWallTimeGuardTripsOnAFakeShardOverTheBound(t *testing.T) {
 	t.Parallel()
@@ -369,11 +369,11 @@ func TestTheWallTimeGuardTripsOnAFakeShardOverTheBound(t *testing.T) {
 		"ok  \tgithub.com/x/e\t(cached)",
 		"",
 	}, "\n"))
-	_, errs, err := checkGo(t, nil, "test-shard-wall-guard", "2", "3", "601", log)
+	_, errs, err := checkGo(t, nil, "test-shard-wall-guard", "2", "3", "901", log)
 	if err == nil {
-		t.Fatal("a shard at 601 s of a 600 s cap must fail")
+		t.Fatal("a shard at 901 s of a 900 s cap must fail")
 	}
-	for _, want := range []string{"test shard 2/3", "600s cap", "github.com/x/b", "github.com/x/c", "github.com/x/d", "measured"} {
+	for _, want := range []string{"test shard 2/3", "900s cap", "github.com/x/b", "github.com/x/c", "github.com/x/d", "measured"} {
 		if !strings.Contains(errs, want) {
 			t.Errorf("the failure lacks %q: %s", want, errs)
 		}
@@ -381,20 +381,38 @@ func TestTheWallTimeGuardTripsOnAFakeShardOverTheBound(t *testing.T) {
 	if strings.Contains(errs, "github.com/x/a") {
 		t.Errorf("the failure names a package outside the three heaviest: %s", errs)
 	}
-	out, errs, err := checkGo(t, nil, "test-shard-wall-guard", "2", "3", "600", log)
+	out, errs, err := checkGo(t, nil, "test-shard-wall-guard", "2", "3", "900", log)
 	if err != nil {
 		t.Fatalf("a shard at exactly the bound must pass: %v\n%s", err, errs)
 	}
-	if !strings.Contains(out, "test shard 2/3: wall 600s") || !strings.Contains(out, "::warning title=TEST SHARD WALL::") {
-		t.Errorf("the guard does not log the shard wall time and the warning above 300 s: %s", out)
+	if !strings.Contains(out, "test shard 2/3: wall 900s") || !strings.Contains(out, "::warning title=TEST SHARD WALL::") {
+		t.Errorf("the guard does not log the shard wall time and the warning above 600 s: %s", out)
 	}
-	out, _, err = checkGo(t, nil, "test-shard-wall-guard", "2", "3", "300", log)
+	out, _, err = checkGo(t, nil, "test-shard-wall-guard", "2", "3", "600", log)
 	if err != nil || strings.Contains(out, "::warning") {
 		t.Errorf("a shard at exactly the warn bound must pass with no warning: %v\n%s", err, out)
 	}
 	_, _, err = checkGo(t, []string{"GO_TEST_SHARD_WALL_FAIL_SECONDS=100"}, "test-shard-wall-guard", "1", "3", "101", log)
 	if err == nil {
 		t.Error("the cap is not read from GO_TEST_SHARD_WALL_FAIL_SECONDS")
+	}
+}
+
+// The integration packages shards run as about ten-minute legs: check_go.sh warns past 600 s and fails past 900 s of go test
+// wall by default, the same bounds as the test shards above.
+func TestTheIntegrationPackagesShardWallBoundsAreTheTenMinuteLegBounds(t *testing.T) {
+	t.Parallel()
+	raw, err := os.ReadFile(filepath.Join(repoRoot(t), "ci", "check_go.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`INTEGRATION_SHARD_WALL_WARN_SECONDS="${DEV_HEALTH_GO_INTEGRATION_SHARD_WALL_WARN_SECONDS:-600}"` + "\n",
+		`INTEGRATION_SHARD_WALL_FAIL_SECONDS="${DEV_HEALTH_GO_INTEGRATION_SHARD_WALL_FAIL_SECONDS:-900}"` + "\n",
+	} {
+		if strings.Count(string(raw), want) != 1 {
+			t.Errorf("ci/check_go.sh must set the packages shard wall bound once as %q", strings.TrimSpace(want))
+		}
 	}
 }
 

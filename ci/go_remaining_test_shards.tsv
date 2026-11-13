@@ -7,6 +7,6 @@
 # and never in the `packages` target. Every discovered top-level test lands in
 # exactly one shard, so a new test cannot fall outside every shard.
 # Weights are relative classes (integration-tagged vs ordinary), not seconds.
-shards	4
+shards	2
 integration-test-weight	100
 ordinary-test-weight	1

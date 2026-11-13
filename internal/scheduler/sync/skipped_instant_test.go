@@ -22,7 +22,7 @@ func runSkipWindowThroughLoop(
 	transaction *fakeSchedulerTransaction,
 	ledger *ledgerCoordinator,
 	observedAt time.Time,
-) (HandoffResult, []map[string]any) {
+) (HandoffResult, []map[string]any, string) {
 	t.Helper()
 	var logs bytes.Buffer
 	var result HandoffResult
@@ -50,6 +50,10 @@ func runSkipWindowThroughLoop(
 	if err := loop.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	var metrics strings.Builder
+	if err := loop.WritePrometheus(&metrics); err != nil {
+		t.Fatal(err)
+	}
 	if err := loop.Shutdown(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +66,7 @@ func runSkipWindowThroughLoop(
 		}
 		lines = append(lines, line)
 	}
-	return result, lines
+	return result, lines, metrics.String()
 }
 
 // CHAOS-3954 red cell. The 22:00 scheduled run of an hourly configuration is
@@ -92,7 +96,7 @@ func TestSyncRunSpanningACronInstantNamesTheSkippedInstant(t *testing.T) {
 			blockingOpenSeconds: 3605, lastScheduledRunEndedAt: &previousSync,
 		},
 	}
-	result, lines := runSkipWindowThroughLoop(t, spanning, ledger, at("2026-08-19T23:00:05Z"))
+	result, lines, _ := runSkipWindowThroughLoop(t, spanning, ledger, at("2026-08-19T23:00:05Z"))
 	if len(result.SkippedOpenRun) != 1 || result.Minted() != 0 {
 		t.Fatalf("23:00 window skipped=%d minted=%d, want the tick skipped", len(result.SkippedOpenRun), result.Minted())
 	}
@@ -156,7 +160,7 @@ func TestSyncRunEndingBeforeTheNextInstantMintsIt(t *testing.T) {
 		execTag:  pgconn.NewCommandTag("UPDATE 1"),
 		openRuns: openScheduledRuns{lastScheduledRunEndedAt: &ended},
 	}
-	result, lines := runSkipWindowThroughLoop(t, transaction, ledger, at("2026-08-19T23:00:05Z"))
+	result, lines, _ := runSkipWindowThroughLoop(t, transaction, ledger, at("2026-08-19T23:00:05Z"))
 	if result.Minted() != 1 || len(result.SkippedOpenRun) != 0 {
 		t.Fatalf("minted=%d skipped=%d, want 23:00 minted", result.Minted(), len(result.SkippedOpenRun))
 	}
@@ -173,5 +177,67 @@ func TestSyncRunEndingBeforeTheNextInstantMintsIt(t *testing.T) {
 	}
 	if got := strings.Join(ledger.instants(), ","); got != "2026-08-19T22:00:00Z,2026-08-19T23:00:00Z" {
 		t.Fatalf("ledger instants = %s", got)
+	}
+}
+
+// CHAOS-3954 red cell for the late-poll path. The scheduler is down from 22:30
+// to 02:30. The 02:30 window mints 23:00 late and moves the marker to the next
+// instant after now (03:00), and the 03:00 window rebases onto the 23:00 run's
+// completion (02:45). 00:00, 01:00 and 02:00 never reach the ledger. The window
+// that passes over them must count them and name them in one WARN line.
+func TestSchedulerDownAcrossInstantsCountsAndNamesTheUnmintedInstants(t *testing.T) {
+	createdAt := at("2026-08-01T00:00:00Z")
+	previousEnd := at("2026-08-19T22:20:00Z")
+	marker := at("2026-08-19T23:00:00Z")
+	ledger := newLedgerCoordinator()
+	ledger.minted[at("2026-08-19T22:00:00Z")] = true
+
+	late := &fakeSchedulerTransaction{
+		rows: &fakeLockedRows{rows: [][]any{lockedLedgerRow(
+			"config-down", "org-a", "job-a", "0 * * * *",
+			createdAt, previousEnd, &marker, ledger.latest(),
+		)}},
+		execTag:  pgconn.NewCommandTag("UPDATE 1"),
+		openRuns: openScheduledRuns{lastScheduledRunEndedAt: &previousEnd},
+	}
+	first, _, _ := runSkipWindowThroughLoop(t, late, ledger, at("2026-08-20T02:30:05Z"))
+	if first.Minted() != 1 || !first.HandedOff[0].ScheduledFor.Equal(marker) {
+		t.Fatalf("02:30 window minted %d, handed off %v, want 23:00 minted late", first.Minted(), first.HandedOff)
+	}
+
+	lateEnd := at("2026-08-20T02:45:00Z")
+	nextMarker := first.HandedOff[0].NextRunAt
+	resumed := &fakeSchedulerTransaction{
+		rows: &fakeLockedRows{rows: [][]any{lockedLedgerRow(
+			"config-down", "org-a", "job-a", "0 * * * *",
+			createdAt, lateEnd, &nextMarker, ledger.latest(),
+		)}},
+		execTag:  pgconn.NewCommandTag("UPDATE 1"),
+		openRuns: openScheduledRuns{lastScheduledRunEndedAt: &lateEnd},
+	}
+	second, lines, metrics := runSkipWindowThroughLoop(t, resumed, ledger, at("2026-08-20T03:00:05Z"))
+	if second.Minted() != 1 || !second.HandedOff[0].ScheduledFor.Equal(at("2026-08-20T03:00:00Z")) {
+		t.Fatalf("03:00 window minted %d, handed off %v, want 03:00", second.Minted(), second.HandedOff)
+	}
+	if got := strings.Join(ledger.instants(), ","); got != "2026-08-19T22:00:00Z,2026-08-19T23:00:00Z,2026-08-20T03:00:00Z" {
+		t.Fatalf("ledger instants = %s", got)
+	}
+
+	var named []map[string]any
+	for _, line := range lines {
+		if line["reason"] == "unminted_instants" && line["config_id"] == "config-down" {
+			named = append(named, line)
+		}
+	}
+	if len(named) != 1 {
+		t.Fatalf("CHAOS-3954: unminted-instant lines = %d, want 1; lines = %v", len(named), lines)
+	}
+	if named[0]["unminted_count"] != float64(3) ||
+		named[0]["unminted_instants"] != "2026-08-20T00:00:00Z,2026-08-20T01:00:00Z,2026-08-20T02:00:00Z" ||
+		named[0]["scheduled_for"] != "2026-08-20T03:00:00Z" {
+		t.Errorf("CHAOS-3954: unminted-instant line = %v", named[0])
+	}
+	if !strings.Contains(metrics, "sync_scheduler_unminted_instants_total 3\n") {
+		t.Errorf("CHAOS-3954: metrics omit sync_scheduler_unminted_instants_total 3; metrics = %s", metrics)
 	}
 }

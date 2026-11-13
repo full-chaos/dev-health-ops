@@ -83,3 +83,38 @@ func TestSSOProviderOwnIsInThePrivilegeSetOnlyWithTheSwitch(t *testing.T) {
 		t.Errorf("UPDATE of config: on=%v off=%v, want on only", has(on, "UPDATE"), has(off, "UPDATE"))
 	}
 }
+
+func TestSSOProviderOwnDeleteIsExactlyTheProviderTable(t *testing.T) {
+	if !isSSOProviderOwnDelete(ssoProvidersTable) {
+		t.Fatal("DELETE on sso_providers is not the declared one")
+	}
+	for _, table := range []string{"users", "memberships", "organizations", "sso_provider", "sso_providers_x", ""} {
+		if isSSOProviderOwnDelete(table) {
+			t.Errorf("DELETE on %q is declared", table)
+		}
+	}
+}
+
+// The deferred narrowing of a switch turned off keeps the SSO own grants like the users-owned ones: the old owned pods still
+// serve until the later release narrows them.
+func TestDeferredNarrowingKeepsTheSSOProviderOwnGrants(t *testing.T) {
+	own := SSOProviderOwn()
+	if !usersOwnedPublicGrant(GrantRecord{Kind: "relation", Privilege: "DELETE", Object: ssoProvidersTable}) {
+		t.Error("the table DELETE on sso_providers is not kept")
+	}
+	if usersOwnedPublicGrant(GrantRecord{Kind: "relation", Privilege: "DELETE", Object: ssoProvidersTable, Grantable: true}) {
+		t.Error("a DELETE held WITH GRANT OPTION is kept")
+	}
+	for privilege, columns := range map[string][]string{"INSERT": own.Insert, "UPDATE": own.Update, "SELECT": own.Select} {
+		for _, column := range columns {
+			if !usersOwnedPublicGrant(GrantRecord{Kind: "column", Privilege: privilege, Object: ssoProvidersTable, Column: column}) {
+				t.Errorf("%s (%s) on sso_providers is not kept", privilege, column)
+			}
+		}
+	}
+	for _, column := range []string{"id", "org_id", "protocol", "created_at"} {
+		if usersOwnedPublicGrant(GrantRecord{Kind: "column", Privilege: "UPDATE", Object: ssoProvidersTable, Column: column}) {
+			t.Errorf("UPDATE (%s) on sso_providers is kept: it is no SSO own grant", column)
+		}
+	}
+}

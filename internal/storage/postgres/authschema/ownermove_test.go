@@ -56,13 +56,13 @@ func emittedPublicGrants(t *testing.T) map[string]bool {
 		"register": func() ([]string, error) {
 			return registerOrganizationStatements(ctx, presentQuerier{}, options, logger)
 		},
-		"linkPurge":     func() ([]string, error) { return legacyLinkPurgeStatements(ctx, presentQuerier{}, options, logger) },
-		"membership":    func() ([]string, error) { return membershipWriteStatements(ctx, presentQuerier{}, options, logger) },
-		"invite":        func() ([]string, error) { return inviteWriteStatements(ctx, presentQuerier{}, options, logger) },
-		"audit":         func() ([]string, error) { return publicAuditWriteStatements(ctx, presentQuerier{}, options, logger) },
-		"ssoProviderUp": func() ([]string, error) { return ssoProviderWriteStatements(ctx, presentQuerier{}, options, logger) },
+		"linkPurge":      func() ([]string, error) { return legacyLinkPurgeStatements(ctx, presentQuerier{}, options, logger) },
+		"membership":     func() ([]string, error) { return membershipWriteStatements(ctx, presentQuerier{}, options, logger) },
+		"invite":         func() ([]string, error) { return inviteWriteStatements(ctx, presentQuerier{}, options, logger) },
+		"audit":          func() ([]string, error) { return publicAuditWriteStatements(ctx, presentQuerier{}, options, logger) },
+		"ssoProviderUp":  func() ([]string, error) { return ssoProviderWriteStatements(ctx, presentQuerier{}, options, logger) },
 		"ssoProviderOwn": func() ([]string, error) { return ssoProviderOwnStatements(ctx, presentQuerier{}, options, logger) },
-		"impersonation": func() ([]string, error) { return impersonationWriteStatements(ctx, presentQuerier{}, options, logger) },
+		"impersonation":  func() ([]string, error) { return impersonationWriteStatements(ctx, presentQuerier{}, options, logger) },
 	}
 	emitted := map[string]bool{}
 	for name, build := range builders {

@@ -48,6 +48,11 @@ func isSSOProviderOwnColumn(table, privilege, column string) bool {
 	return false
 }
 
+// isSSOProviderOwnDelete reports whether a public table DELETE is the one SSOProviderOwn declares: exactly sso_providers.
+func isSSOProviderOwnDelete(table string) bool {
+	return SSOProviderOwn().Delete && table == ssoProvidersTable
+}
+
 // ssoProviderOwnStatements grants SSOProviderOwn when the switch is on, and nothing when it is off (the public read pass already
 // took away whatever the role held). It runs after the public read pass. A missing table is
 // skipped unless RequirePublicTables.

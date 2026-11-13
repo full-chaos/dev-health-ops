@@ -159,3 +159,154 @@ func TestSSOProviderListRefusesAnAnswerThatIsNoList(t *testing.T) {
 		t.Fatalf("err = %v, want ErrUnavailable", err)
 	}
 }
+
+// Condition (1): the status set is exact per call. A create is 201 alone, a delete 204 alone, every other call 200 alone;
+// any other status is ErrUnavailable (go-api answers its named 503), never a success and never a refusal.
+func TestSSOProviderClientStatusSetsAreExactPerCall(t *testing.T) {
+	org, actor, id := uuid.New(), uuid.New(), uuid.New()
+	ctx := context.Background()
+	calls := map[string]func(*authprovision.SSOProvidersClient) error{
+		authprovision.PathSSOProviderCreate: func(c *authprovision.SSOProvidersClient) error {
+			_, err := c.Create(ctx, authprovision.SSOCreateRequest{Org: org, Actor: actor, Name: "n", Protocol: "oidc"})
+			return err
+		},
+		authprovision.PathSSOProviderDelete: func(c *authprovision.SSOProvidersClient) error { return c.Delete(ctx, org, actor, id) },
+		authprovision.PathSSOProviderGet: func(c *authprovision.SSOProvidersClient) error {
+			_, err := c.Get(ctx, org, actor, id)
+			return err
+		},
+		authprovision.PathSSOProviderList: func(c *authprovision.SSOProvidersClient) error {
+			_, err := c.List(ctx, authprovision.SSOListRequest{Org: org, Actor: actor})
+			return err
+		},
+		authprovision.PathSSOProviderUpdate: func(c *authprovision.SSOProvidersClient) error {
+			_, err := c.Update(ctx, authprovision.SSOUpdateRequest{Org: org, Actor: actor, Provider: id})
+			return err
+		},
+		authprovision.PathSSOProviderActivate: func(c *authprovision.SSOProvidersClient) error {
+			_, err := c.Activate(ctx, org, actor, id)
+			return err
+		},
+		authprovision.PathSSOProviderDeactivate: func(c *authprovision.SSOProvidersClient) error {
+			_, err := c.Deactivate(ctx, org, actor, id)
+			return err
+		},
+	}
+	want := map[string]int{authprovision.PathSSOProviderCreate: http.StatusCreated, authprovision.PathSSOProviderDelete: http.StatusNoContent}
+	for path, call := range calls {
+		ok := http.StatusOK
+		if status, special := want[path]; special {
+			ok = status
+		}
+		for _, status := range []int{http.StatusOK, http.StatusCreated, http.StatusAccepted, http.StatusNoContent, http.StatusFound, http.StatusInternalServerError} {
+			server := &usersServer{answer: func(p string) (int, string) {
+				code, body := ssoOK(org, id)(p)
+				if status == http.StatusNoContent {
+					return status, ""
+				}
+				if status == ok {
+					return code, body
+				}
+				return status, body
+			}}
+			err := call(newSSOClient(t, server))
+			if status == ok {
+				if err != nil {
+					t.Errorf("%s answering %d (its success status): %v", path, status, err)
+				}
+				continue
+			}
+			if !errors.Is(err, authprovision.ErrUnavailable) {
+				t.Errorf("%s answering %d: err = %v, want ErrUnavailable", path, status, err)
+			}
+		}
+	}
+}
+
+// Condition (2): a call that expects no body (answer nil) refuses a non-empty one; an empty one is the answer asked for.
+func TestPostExpectingWithNoAnswerRefusesABody(t *testing.T) {
+	ctx := context.Background()
+	for body, wantErr := range map[string]bool{"": false, "{}": true, "x": true} {
+		server := &usersServer{answer: func(string) (int, string) { return http.StatusOK, body }}
+		core := newCoreFor(t, server)
+		err := core.PostExpecting(ctx, "/internal/v1/sso/providers/delete", map[string]any{}, nil, http.StatusOK)
+		if gotErr := err != nil; gotErr != wantErr || (gotErr && !errors.Is(err, authprovision.ErrUnavailable)) {
+			t.Errorf("body %q: err = %v, want error %v (ErrUnavailable)", body, err, wantErr)
+		}
+	}
+}
+
+// Condition (4): one red cell per answer check. The provider answer must be an object whose id parses as a UUID and whose
+// org_id is the organization asked about; a list answer must carry items (a list) and a total.
+func TestSSOProviderClientAnswerChecks(t *testing.T) {
+	org, actor, id := uuid.New(), uuid.New(), uuid.New()
+	ctx := context.Background()
+	provider := map[string]string{
+		"id is not a UUID":     `{"id":"not-a-uuid","org_id":"` + org.String() + `"}`,
+		"id is missing":        `{"org_id":"` + org.String() + `"}`,
+		"org_id is another":    `{"id":"` + id.String() + `","org_id":"` + uuid.NewString() + `"}`,
+		"org_id is missing":    `{"id":"` + id.String() + `"}`,
+		"answer is not object": `[]`,
+		"answer is not JSON":   `nonsense`,
+	}
+	for name, body := range provider {
+		server := &usersServer{answer: func(string) (int, string) { return http.StatusOK, body }}
+		if _, err := newSSOClient(t, server).Get(ctx, org, actor, id); !errors.Is(err, authprovision.ErrUnavailable) {
+			t.Errorf("provider answer, %s: err = %v, want ErrUnavailable", name, err)
+		}
+	}
+	list := map[string]string{
+		"items is missing": `{"total":1}`,
+		"items is null":    `{"items":null,"total":1}`,
+		"total is missing": `{"items":[]}`,
+		"answer is a list": `[]`,
+	}
+	for name, body := range list {
+		server := &usersServer{answer: func(string) (int, string) { return http.StatusOK, body }}
+		if _, err := newSSOClient(t, server).List(ctx, authprovision.SSOListRequest{Org: org, Actor: actor}); !errors.Is(err, authprovision.ErrUnavailable) {
+			t.Errorf("list answer, %s: err = %v, want ErrUnavailable", name, err)
+		}
+	}
+	server := &usersServer{answer: func(string) (int, string) { return http.StatusOK, `{"items":[],"total":0,"limit":50,"offset":0}` }}
+	if _, err := newSSOClient(t, server).List(ctx, authprovision.SSOListRequest{Org: org, Actor: actor}); err != nil {
+		t.Errorf("an empty list with a total of 0: %v", err)
+	}
+}
+
+// Condition (3), Core level: Post is PostExpecting(200): the same outcome for every status and body the other callers can meet.
+func TestPostKeepsItsBehaviourForEveryOtherCaller(t *testing.T) {
+	ctx := context.Background()
+	type outcome struct {
+		unavailable, refused bool
+		reason               string
+	}
+	cases := []struct {
+		name   string
+		status int
+		body   string
+		want   outcome
+	}{
+		{"200 JSON", http.StatusOK, `{"a":1}`, outcome{}},
+		{"200 not JSON", http.StatusOK, `nonsense`, outcome{unavailable: true}},
+		{"200 empty", http.StatusOK, ``, outcome{unavailable: true}},
+		{"201", http.StatusCreated, `{"a":1}`, outcome{unavailable: true}},
+		{"204", http.StatusNoContent, ``, outcome{unavailable: true}},
+		{"302", http.StatusFound, ``, outcome{unavailable: true}},
+		{"404 reason", http.StatusNotFound, `{"reason_code":"organization_not_found"}`, outcome{refused: true, reason: "organization_not_found"}},
+		{"409 no reason", http.StatusConflict, `{}`, outcome{refused: true}},
+		{"503", http.StatusServiceUnavailable, `{}`, outcome{unavailable: true}},
+	}
+	for _, c := range cases {
+		server := &usersServer{answer: func(string) (int, string) { return c.status, c.body }}
+		core := newCoreFor(t, server)
+		var answer map[string]any
+		err := core.Post(ctx, "/internal/v1/organizations/state", map[string]any{}, &answer)
+		got := outcome{unavailable: errors.Is(err, authprovision.ErrUnavailable), refused: errors.Is(err, authprovision.ErrRefused), reason: authprovision.ReasonOf(err)}
+		if got != c.want {
+			t.Errorf("%s: Post -> %+v (err %v), want %+v", c.name, got, err, c.want)
+		}
+		if c.status == http.StatusOK && c.want == (outcome{}) && answer["a"] == nil {
+			t.Errorf("%s: the answer was not decoded", c.name)
+		}
+	}
+}

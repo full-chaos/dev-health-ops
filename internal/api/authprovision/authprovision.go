@@ -129,8 +129,9 @@ func (c *Core) Post(ctx context.Context, path string, request, answer any) error
 	return c.PostExpecting(ctx, path, request, answer, http.StatusOK)
 }
 
-// PostExpecting is Post for a route whose success answer is one of statuses (the SSO provider routes answer 201 to a
-// create and 204, with no body, to a delete). A nil answer reads no body: only a status in statuses succeeds then.
+// PostExpecting is Post for a route whose success answer is exactly one of statuses (the SSO provider routes answer 201 to
+// a create and 204, with no body, to a delete); any other status, 200 included, is ErrUnavailable. A nil answer expects
+// no body: a body, however small, is ErrUnavailable.
 func (c *Core) PostExpecting(ctx context.Context, path string, request, answer any, statuses ...int) error {
 	raw, err := json.Marshal(request)
 	if err != nil {
@@ -161,6 +162,9 @@ func (c *Core) PostExpecting(ctx context.Context, path string, request, answer a
 		return fmt.Errorf("%w: answer over %d bytes", ErrUnavailable, maxAnswerBytes)
 	}
 	if answer == nil {
+		if len(body) != 0 {
+			return fmt.Errorf("%w: a body where none is expected", ErrUnavailable)
+		}
 		return nil
 	}
 	if err := json.Unmarshal(body, answer); err != nil {

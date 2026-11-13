@@ -198,6 +198,14 @@ func TestIdPAllowNeverAdmitsATranslationAddress(t *testing.T) {
 	if err := control("tcp", "[::ffff:127.0.0.1]:443", nil); err != nil {
 		t.Errorf("::ffff:127.0.0.1 is 127.0.0.1 and is listed: %v", err)
 	}
+	// Below the parser (which refuses an entry over a translation prefix), a list that covers the IPv6 form still does
+	// not admit it.
+	injected := refuseUnlessIdPAllowed([]netip.Prefix{netip.MustParsePrefix("::/0"), netip.MustParsePrefix("0.0.0.0/0")})
+	for _, address := range []string{"[64:ff9b::7f00:1]:443", "[2002:7f00:1::]:443", "[64:ff9b::a00:1]:443", "[64:ff9b:1:7f00:1::]:443"} {
+		if got, want := controlOutcome(injected, address), controlOutcome(refuseInternalAddress, address); got != want || !strings.HasPrefix(got, errInternalDial.Error()) {
+			t.Errorf("injected ::/0, %s: %q, want the refusal of today %q", address, got, want)
+		}
+	}
 	var allow []netip.Prefix
 	logs := captureLogs(func() { allow = parseIdPAllow("64:ff9b::/96") })
 	if allow != nil || len(logLines(logs)) != 1 || logLines(logs)[0]["level"] != "ERROR" {

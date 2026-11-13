@@ -41,8 +41,11 @@ const (
 	VerdictLegacyDisagrees      = "CONTROL_LEGACY_DISAGREES"
 	VerdictSkippedSeam          = "SKIPPED_SEAM"
 	VerdictSkippedNoOrg         = "SKIPPED_NOORG"
-	VerdictStricter             = "MISMATCH_STRICTER"
-	VerdictWider                = "MISMATCH_WIDER"
+	// VerdictDecidedNoOrg: a no-org superuser slot that a go-api build which decides a token with no organization
+	// (CHAOS-10872 S1) answered as the yardstick did, with the counter evidence of that build (JudgeEnforced).
+	VerdictDecidedNoOrg = "DECIDED_NOORG"
+	VerdictStricter     = "MISMATCH_STRICTER"
+	VerdictWider        = "MISMATCH_WIDER"
 )
 
 var resultVerdicts = map[string]string{
@@ -238,7 +241,7 @@ type SlotVerdict struct {
 // Pass reports whether the slot's evidence passes it.
 func (s SlotVerdict) Pass() bool {
 	switch s.Verdict {
-	case VerdictMatch, VerdictMatchServedOther, VerdictMismatchIntentional, VerdictMismatchRuled, VerdictSkippedSeam, VerdictSkippedNoOrg, VerdictMatchEnforced, VerdictEqualPastGuard, VerdictEvidencedNoOrg:
+	case VerdictMatch, VerdictMatchServedOther, VerdictMismatchIntentional, VerdictMismatchRuled, VerdictSkippedSeam, VerdictSkippedNoOrg, VerdictDecidedNoOrg, VerdictMatchEnforced, VerdictEqualPastGuard, VerdictEvidencedNoOrg:
 		return true
 	}
 	return false

@@ -191,7 +191,8 @@ func shellDependencyFailure(t *testing.T) (code int, output string, left int) {
 func TestTheShellRunLeavesNothingWritingTheGlobalLog(t *testing.T) {
 	t.Setenv("OTEL_BSP_SCHEDULE_DELAY", "1")
 	t.Setenv("OTEL_EXPORTER_OTLP_TIMEOUT", "1")
-	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", closedAddress(t))
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://"+closedAddress(t))
+	t.Setenv("OTEL_SAMPLE_RATE", "1")
 	previousProvider := otel.GetTracerProvider()
 	t.Cleanup(func() { otel.SetTracerProvider(previousProvider) })
 	code, output, left := shellDependencyFailure(t)

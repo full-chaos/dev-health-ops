@@ -277,6 +277,12 @@ run_integration_go_test() {
   if [ -n "${json}" ]; then
     command -v jq >/dev/null 2>&1 || die "run_integration_go_test: GO_INTEGRATION_LEG_JSON_DIR needs jq to render go test -json"
     json_args=(-json)
+    # The fifo exists before go test starts, so a failure here stops the call with no go test left running.
+    fifo="${json%.json}.fifo"
+    rm -f -- "${fifo}"
+    if ! mkfifo -- "${fifo}"; then
+      die "run_integration_go_test: cannot make the renderer fifo ${fifo}"
+    fi
   fi
   (
     cd "${ROOT}/${module_dir}"
@@ -288,8 +294,6 @@ run_integration_go_test() {
   pid=$!
   # The renderer is two background processes joined by a fifo, so each pid is known ($!) and can be stopped by that pid.
   if [ -n "${json}" ]; then
-    fifo="${json%.json}.fifo"
-    rm -f -- "${fifo}" && mkfifo -- "${fifo}" || die "run_integration_go_test: cannot make the renderer fifo ${fifo}"
     jq -nR --unbuffered -rj "${INTEGRATION_LEG_JQ}" <"${fifo}" &
     render_pid=$!
     tail -n +1 -f --pid="${pid}" -- "${json}" >"${fifo}" &

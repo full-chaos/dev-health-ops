@@ -144,10 +144,11 @@ func FetchForeignField(ctx context.Context, client *providerfoundation.HTTPClien
 	return closeBody(client.DoRoute(ctx, http.MethodGet, request.URL.Path, request.URL.Path, nil)) // want "another package"
 }
 
-// OptionsSetOutside sets an option Route outside the literal.
+// OptionsSetOutside sets an option Route from a request value outside the
+// literal.
 func OptionsSetOutside(path string) providerfoundation.GitHubPageOptions {
 	options := providerfoundation.GitHubPageOptions{Path: path, Route: kindsRoute}
-	options.Route = path // want "Route set outside a composite literal"
+	options.Route = path // want "Route set: cannot prove static"
 	return options
 }
 
@@ -162,4 +163,9 @@ func FetchUntemplated(ctx context.Context, client *providerfoundation.HTTPClient
 		return err
 	}
 	return closeBody(client.DoUnauthenticated(ctx, http.MethodGet, path)) // want "un-templated redirect request"
+}
+
+// FailureWithPath names a request path as the route of a failure.
+func FailureWithPath(path string) error {
+	return &providerfoundation.ProviderError{Class: providerfoundation.ErrorPermanent, Route: path} // want "ProviderError Route: cannot prove static"
 }

@@ -436,8 +436,9 @@ func routeFunIdent(fun ast.Expr) *ast.Ident {
 	return ident
 }
 
-// providerfoundationRouteType names an option type: a providerfoundation
-// struct with a Route field.
+// providerfoundationRouteType names a providerfoundation struct with a Route
+// field: a page-walk option (it must name a Route) or a ProviderError (a Route
+// it names must be static).
 func providerfoundationRouteType(info *types.Info, expr ast.Expr) (string, bool) {
 	t := info.TypeOf(expr)
 	if t == nil {
@@ -480,8 +481,11 @@ func (ix *routeIndex) censusFile(pkg *packages.Package, file *ast.File, result *
 			if !ok {
 				return true
 			}
-			optionTypes[name] = true
-			result.optionSites++
+			option := strings.HasSuffix(name, "Options")
+			if option {
+				optionTypes[name] = true
+				result.optionSites++
+			}
 			found := false
 			for _, element := range n.Elts {
 				pair, ok := element.(*ast.KeyValueExpr)
@@ -493,16 +497,24 @@ func (ix *routeIndex) censusFile(pkg *packages.Package, file *ast.File, result *
 					check(n, "providerfoundation."+name+" Route", pair.Value)
 				}
 			}
-			if !found {
+			if !found && option {
 				bad(n, "providerfoundation.%s literal without a Route", name)
 			}
 		case *ast.AssignStmt:
-			for _, lhs := range n.Lhs {
-				if sel, ok := ast.Unparen(lhs).(*ast.SelectorExpr); ok && sel.Sel.Name == "Route" {
-					if name, ok := providerfoundationRouteType(info, sel.X); ok {
-						bad(n, "providerfoundation.%s Route set outside a composite literal", name)
-					}
+			for i, lhs := range n.Lhs {
+				sel, ok := ast.Unparen(lhs).(*ast.SelectorExpr)
+				if !ok || sel.Sel.Name != "Route" {
+					continue
 				}
+				name, ok := providerfoundationRouteType(info, sel.X)
+				if !ok {
+					continue
+				}
+				if len(n.Lhs) != len(n.Rhs) || n.Tok != token.ASSIGN {
+					bad(n, "providerfoundation.%s Route set by %s", name, n.Tok)
+					continue
+				}
+				check(n, "providerfoundation."+name+" Route set", n.Rhs[i])
 			}
 		case *ast.CallExpr:
 			switch fun := ast.Unparen(n.Fun).(type) {

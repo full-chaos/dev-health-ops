@@ -71,3 +71,14 @@ func FetchField(ctx context.Context, client *providerfoundation.HTTPClient, path
 	target := endpoint{route: fixtureRepoRoute + "/tags", path: path}
 	return closeBody(client.DoRoute(ctx, http.MethodGet, target.route, target.path, nil))
 }
+
+// FailureWithRoute names a constant route on a failure, in a literal and by
+// assignment.
+func FailureWithRoute(status int) error {
+	if status == http.StatusNotFound {
+		return &providerfoundation.ProviderError{Class: providerfoundation.ErrorNotFound, Route: fixtureRepoRoute}
+	}
+	failure := &providerfoundation.ProviderError{Class: providerfoundation.ErrorPermanent}
+	failure.Route = fixtureRepoRoute + "/zip"
+	return failure
+}

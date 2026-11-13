@@ -23,6 +23,17 @@ var homeDeltaGoOnlyKeys = map[string]GoOnlyKey{
 	"data.deltas.rate_state":          {Ticket: "CHAOS-9044", Reason: "Go-only: why change failure rate has a value or not (measured, unknown_no_incident_evidence, not_applicable_no_deployments); null for every other metric. The Python reference never served it."},
 }
 
+// homeUnresolvedScopeDifference declares the one answer difference of CHAOS-6119 (R335, D1782): a scope filter whose ids name nothing
+// that exists for the organization (a repository, service or developer; the Python reference has no service picker either) answers
+// EMPTY in Go on Home and on the opportunities and experiments built from it, on both planes. The Python reference drops such a
+// filter and answers the whole organization. No recorded Python body names an unknown id, so no corpus request exercises it; it is
+// declared here in words and pinned by the cells of internal/queryapi/home, opportunities and experiments (scope_unresolved_test.go),
+// until the Python body is deleted.
+var homeUnresolvedScopeDifference = struct{ Ticket, Reason string }{
+	Ticket: "CHAOS-6119",
+	Reason: "Python widens an unresolved repo, service or developer scope filter to the whole organization; Go answers empty (R335).",
+}
+
 // homeNumericLeaves is every numeric leaf this route's response can
 // reach, named float or integer and traced to its producing query, per
 // entry, for every 200-status request below (Options.

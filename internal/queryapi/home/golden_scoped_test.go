@@ -81,6 +81,8 @@ func repoGoldenHandler(t *testing.T) func(t *testing.T, query string, bindings [
 	return func(t *testing.T, query string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
 		q := query
 		switch {
+		case strings.Contains(q, "FROM repos FINAL") && strings.Contains(q, "{id_count:UInt64}"):
+			return &fixtureRowScanner{rows: [][]any{{"repo-1"}}}, nil
 		case strings.Contains(q, "FROM repos FINAL") && strings.Contains(q, "WHERE repo = "):
 			return &fixtureRowScanner{rows: [][]any{{"repo-1"}}}, nil
 		case strings.Contains(q, "FROM recommendations_daily"):

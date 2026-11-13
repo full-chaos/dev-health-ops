@@ -312,6 +312,13 @@ func FromHomeResponse(h *home.Response, f home.Filters) *Response {
 // data-freshness/timing gap this port leaves uncovered rather than
 // shaped -- see this package's own RISK-NOTES citation.
 func BuildResponse(ctx context.Context, chClient home.QueryClient, orgID string, f home.Filters, now time.Time) (*Response, error) {
+	f, err := home.ResolveScope(ctx, chClient, orgID, f)
+	if err != nil {
+		return nil, err
+	}
+	if f.Scope.Unresolved() {
+		return &Response{Items: []Card{}}, nil
+	}
 	h, err := home.BuildResponse(ctx, chClient, nil, orgID, f, now)
 	if err != nil {
 		return nil, err

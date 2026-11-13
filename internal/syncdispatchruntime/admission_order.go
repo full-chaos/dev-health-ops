@@ -105,55 +105,93 @@ WHERE id = $1::uuid`, runID).Scan(&order.createdAt, &order.backfill)
 }
 
 // olderRunsInBucketSQL lists the open runs of the org, older than the deciding run, that have a unit waiting in the
-// bucket and showed progress inside the liveness bound, oldest first. The backfill rule is applied here as well as in
-// holdBackFor so a crowd of older backfills cannot fill the LIMIT.
+// bucket and are live, oldest first. The backfill rule is applied here as well as in holdBackFor so a crowd of older
+// backfills cannot fill the LIMIT. SQL proves liveness, so progress_at is returned as now ($7).
 //
-// Waiting: planned, or retrying and due -- the units a pass of that run would claim now. Progress: the run's creation,
-// a terminal unit, a heartbeat, a live lease, or a dispatching claim; the same signs the open-run gate of the
-// scheduler reads.
+// Waiting: planned, or retrying and due -- the units a pass of that run would claim now. Only the first $11 planned or
+// retrying units of a run are looked at (ix_sync_run_units_run_status); a run whose bucket units lie past them reads
+// as not waiting, which holds back nothing (the behavior before CHAOS-8880), never too much.
 //
-// Cost: the runs come from ix_sync_runs_active_candidates (non-terminal runs only, ordered by created_at, id), so a
-// finished history is never read. Each run's units are read through its sync_run_id indexes; the waiting count stops
-// at $8 rows.
+// Live: one bounded probe per progress sign inside the window ($9 seconds before now), each an EXISTS that stops at
+// its first row:
+//   - created: the run itself was created inside the window;
+//   - terminal: a unit reached a terminal state. Every terminal unit write arms the run's finalize_sync_run outbox
+//     row in its own transaction (syncrunrollup.ArmFinalize), so the row's updated_at is the newest terminal write;
+//     one probe on uq_sync_dispatch_outbox_run_kind instead of a walk over the run's terminal units;
+//   - heartbeat: a running unit sent a heartbeat;
+//   - lease: a running unit holds a live lease;
+//   - dispatching: a unit was claimed (dispatching) inside the window.
+//
+// The unit probes read only the run's running or dispatching units (ix_sync_run_units_run_status), which the
+// concurrency caps keep few; a run's planned backlog and its finished units are never read.
+//
+// Cost: the runs come from ix_sync_runs_active_candidates (non-terminal runs only), so a finished history is never
+// read. Row visits per run: at most $11 waiting candidates plus its running and dispatching units.
 const olderRunsInBucketSQL = `
-SELECT run.id::text, run.created_at, (run.triggered_by = 'backfill' OR run.mode = 'backfill'), progress.at, waiting.n
+SELECT run.id::text, run.created_at, (run.triggered_by = 'backfill' OR run.mode = 'backfill'), $7::timestamptz, waiting.n
 FROM public.sync_runs AS run
 CROSS JOIN LATERAL (
     SELECT count(*)::int AS n
     FROM (
         SELECT 1
-        FROM public.sync_run_units AS unit
-        WHERE unit.sync_run_id = run.id
-            AND unit.provider = $2
-            AND unit.cost_class = $3
-            AND (unit.status = 'planned' OR (unit.status = 'retrying' AND unit.available_at <= $7))
+        FROM (
+            SELECT unit.provider, unit.cost_class, unit.status, unit.available_at
+            FROM public.sync_run_units AS unit
+            WHERE unit.sync_run_id = run.id
+                AND unit.status IN ('planned', 'retrying')
+            LIMIT $11
+        ) AS seen
+        WHERE seen.provider = $2
+            AND seen.cost_class = $3
+            AND (seen.status = 'planned' OR seen.available_at <= $7)
         LIMIT $8
     ) AS due
 ) AS waiting
-CROSS JOIN LATERAL (
-    SELECT GREATEST(run.created_at, MAX(GREATEST(
-        CASE WHEN unit.status IN ('success', 'failed', 'dispatching') THEN unit.updated_at END,
-        unit.last_heartbeat_at,
-        CASE WHEN unit.lease_expires_at > $7 THEN $7 END
-    ))) AS at
-    FROM public.sync_run_units AS unit
-    WHERE unit.sync_run_id = run.id
-) AS progress
 WHERE run.status NOT IN ('success', 'partial_failed', 'failed')
     AND run.org_id = $1
     AND (run.created_at, run.id) < ($4::timestamptz, $5::uuid)
     AND ($6::boolean OR NOT (run.triggered_by = 'backfill' OR run.mode = 'backfill'))
     AND waiting.n > 0
-    AND progress.at > $7 - make_interval(secs => $9::double precision)
+    AND (
+        run.created_at > $7::timestamptz - make_interval(secs => $9::double precision)
+        OR EXISTS (
+            SELECT 1 FROM public.sync_dispatch_outbox AS outbox
+            WHERE outbox.sync_run_id = run.id AND outbox.kind = 'finalize_sync_run'
+                AND outbox.updated_at > $7::timestamptz - make_interval(secs => $9::double precision)
+            LIMIT 1
+        )
+        OR EXISTS (
+            SELECT 1 FROM public.sync_run_units AS unit
+            WHERE unit.sync_run_id = run.id AND unit.status = 'running'
+                AND unit.last_heartbeat_at > $7::timestamptz - make_interval(secs => $9::double precision)
+            LIMIT 1
+        )
+        OR EXISTS (
+            SELECT 1 FROM public.sync_run_units AS unit
+            WHERE unit.sync_run_id = run.id AND unit.status = 'running'
+                AND unit.lease_expires_at > $7::timestamptz
+            LIMIT 1
+        )
+        OR EXISTS (
+            SELECT 1 FROM public.sync_run_units AS unit
+            WHERE unit.sync_run_id = run.id AND unit.status = 'dispatching'
+                AND unit.updated_at > $7::timestamptz - make_interval(secs => $9::double precision)
+            LIMIT 1
+        )
+    )
 ORDER BY run.created_at, run.id
 LIMIT $10`
+
+// olderRunWaitingScanLimit bounds the planned or retrying units read per older run to find its waiting units in one
+// bucket.
+const olderRunWaitingScanLimit = 256
 
 // readOlderRuns runs olderRunsInBucketSQL for one bucket in the guard transaction, after the bucket locks.
 func readOlderRuns(ctx context.Context, tx pgx.Tx, bucket dispatchBucket, self runOrder, now time.Time) ([]olderRun, error) {
 	rows, err := tx.Query(ctx, olderRunsInBucketSQL,
 		bucket.orgID, bucket.provider, bucket.costClass,
 		self.createdAt, self.id, self.backfill, now,
-		concurrencyCapForCostClass(bucket.costClass), admissionLivenessBound().Seconds(), olderRunsReadLimit)
+		concurrencyCapForCostClass(bucket.costClass), admissionLivenessBound().Seconds(), olderRunsReadLimit, olderRunWaitingScanLimit)
 	if err != nil {
 		return nil, fmt.Errorf("%w: load older runs in bucket: %w", ErrDiscoveryTransientFailure, err)
 	}

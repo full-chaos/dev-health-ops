@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/syncrunrollup"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -46,6 +47,19 @@ func TestHeldBackPassesArmOneWakeRowForTheOlderRun(t *testing.T) {
 			ID: guardUnitID("00000088e1", 0), RunID: admissionOlderRun, OrgID: guardTestOrg, Provider: "github", CostClass: "medium",
 			Status: "success", UpdatedAt: &recent,
 		})
+		// The terminal write arms the run's finalize row in the same transaction; that row is the terminal sign the
+		// liveness probe reads.
+		armTx, err := pool.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := syncrunrollup.ArmFinalize(ctx, armTx, admissionOlderRun, guardTestOrg, recent); err != nil {
+			_ = armTx.Rollback(ctx)
+			t.Fatalf("arm finalize: %v", err)
+		}
+		if err := armTx.Commit(ctx); err != nil {
+			t.Fatal(err)
+		}
 		for i := 0; i < 3; i++ {
 			insertGuardUnit(t, ctx, pool, guardUnitID("00000088e2", i), "github", "medium", syncRunUnitStatusPlanned, now, nil, nil, nil)
 		}
@@ -131,7 +145,7 @@ func TestOlderRunsInBucketReadUsesTheActiveRunIndex(t *testing.T) {
 
 		rows, err := pool.Query(ctx, "EXPLAIN (ANALYZE, BUFFERS) "+olderRunsInBucketSQL,
 			bucket.orgID, bucket.provider, bucket.costClass, self.createdAt, self.id, self.backfill, now,
-			concurrencyCapForCostClass(bucket.costClass), admissionLivenessBound().Seconds(), olderRunsReadLimit)
+			concurrencyCapForCostClass(bucket.costClass), admissionLivenessBound().Seconds(), olderRunsReadLimit, olderRunWaitingScanLimit)
 		if err != nil {
 			t.Fatal(err)
 		}

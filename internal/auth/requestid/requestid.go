@@ -11,9 +11,15 @@ package requestid
 import (
 	"context"
 	"encoding/base32"
+	"encoding/json"
 	"net/http"
+	"strconv"
+	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 )
 
 // WirePrefix starts the wire form.
@@ -25,16 +31,57 @@ const Header = "X-Auth-Request-ID"
 
 var wireEncoding = base32.StdEncoding.WithPadding(base32.NoPadding)
 
+const (
+	// logKey is a key the wire form is logged under. Every such key (audit_request_id, request_id,
+	// auth_request_id) is unprotected, so the redactor gives the same answer under each.
+	logKey = "audit_request_id"
+	// maxDraws bounds the redraw of ids the log redactor would change (about 3.6e-7 of draws).
+	maxDraws = 8
+)
+
 type key struct{}
 
 // Middleware mints a fresh id for every request, whatever the request carries,
-// and sets its wire form in Header before the handler writes.
+// and sets its wire form in Header before the handler writes. An id whose wire
+// form the log redactor would change is drawn again; when no draw is kept the
+// request is a 503 dependency_unavailable that reaches no handler and carries
+// no Header, so no log line names a redacted id.
 func Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		id := uuid.New()
-		w.Header().Set(Header, WireOf(id))
+		var id uuid.UUID
+		wire, err := logging.DrawKept(logKey, maxDraws, func() (string, error) {
+			id = uuid.New()
+			return WireOf(id), nil
+		})
+		if err != nil {
+			refuseUnloggable(w, WireOf(id))
+			return
+		}
+		w.Header().Set(Header, wire)
 		next.ServeHTTP(w, r.WithContext(With(r.Context(), id)))
 	})
+}
+
+// refuseUnloggable writes the error.v1 503 of a request with no loggable id. The schema requires a request_id, so the
+// body carries the last draw; it is in no log line.
+func refuseUnloggable(w http.ResponseWriter, wire string) {
+	retry := 1
+	raw, _ := json.Marshal(struct {
+		SchemaVersion     string              `json:"schema_version"`
+		Status            int                 `json:"status"`
+		ReasonCode        string              `json:"reason_code"`
+		RequestID         string              `json:"request_id"`
+		OccurredAt        contracts.Timestamp `json:"occurred_at"`
+		RetryAfterSeconds int                 `json:"retry_after_seconds"`
+	}{contracts.ErrorSurface, http.StatusServiceUnavailable, "dependency_unavailable", wire,
+		contracts.Timestamp{Time: time.Now().UTC()}, retry})
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Length", strconv.Itoa(len(raw)))
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Pragma", "no-cache")
+	w.Header().Set("Retry-After", strconv.Itoa(retry))
+	w.WriteHeader(http.StatusServiceUnavailable)
+	_, _ = w.Write(raw)
 }
 
 // With binds id to ctx.

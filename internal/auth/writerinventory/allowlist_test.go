@@ -290,6 +290,8 @@ var Allowlist = []Entry{
 	{File: "internal/auth/session/store.go", Func: "Store.rotate", Table: "auth.refresh_credentials", Verb: "INSERT"},
 	{File: "internal/auth/session/store.go", Func: "Store.rotate", Table: "auth.refresh_credentials", Verb: "UPDATE"},
 	{File: "internal/auth/session/store.go", Func: "Store.rotate", Table: "auth.sessions", Verb: "UPDATE"},
+	// live-e2e job-local seed; in no served binary (go list -deps census, f942ad6f3c9868d7f7a7555184d4852d4661ada9f0dd3ae265138737b2772f50); deleted when 13636 PR2 lands (P-8)
+	{File: "internal/cigates/livee2e/ssoseed/ssoseed.go", Func: "Insert", Table: "public.sso_providers", Verb: "INSERT"},
 	{File: "internal/maintenancecli/maintenance.go", Func: "CleanupExpiredTokens", Table: "public.refresh_tokens", Verb: "DELETE"},
 	{File: "internal/testsupport/authplane/authplane.go", Func: "Start", Table: "auth.principals", Verb: "INSERT"}, // test support: the venue auth plane's go-api workload principal, the issue route's audit actor
 	{File: "internal/testsupport/pgseed/pgseed.go", Func: "ImpersonationSession", Table: "public.impersonation_sessions", Verb: "INSERT"},

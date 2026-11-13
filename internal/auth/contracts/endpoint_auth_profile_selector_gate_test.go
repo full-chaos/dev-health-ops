@@ -261,8 +261,18 @@ func TestProfileValidationRunsTheSelectorGate(t *testing.T) {
 }
 
 func TestEveryMarkerIsDiscriminatedInItsClassTransport(t *testing.T) {
-	counted := 0
-	for _, class := range registryDocument(t) {
+	problems, counted := markerTransportProblems(registryDocument(t))
+	for _, problem := range problems {
+		t.Error(problem)
+	}
+	if counted == 0 {
+		t.Fatal("no class declares a marker; the check is vacuous")
+	}
+}
+
+// markerTransportProblems: every marker of a class must be how its transport text presents the credential.
+func markerTransportProblems(classes []map[string]any) (problems []string, counted int) {
+	for _, class := range classes {
 		transport := class["transport"].(map[string]any)
 		head := strings.ToLower(transport["header_or_cookie"].(string))
 		shape := strings.ToLower(transport["shape"].(string))
@@ -277,13 +287,46 @@ func TestEveryMarkerIsDiscriminatedInItsClassTransport(t *testing.T) {
 				ok = bodyMarkerMatchesTransport(name, strings.ToLower(bodyShape), head, shape)
 			}
 			if !ok {
-				t.Errorf("class %v marker %s/%q is not how its transport text presents the credential (header_or_cookie %q, shape %q)",
-					class["class_id"], kind, name, transport["header_or_cookie"], transport["shape"])
+				problems = append(problems, fmt.Sprintf("class %v marker %s/%q is not how its transport text presents the credential (header_or_cookie %q, shape %q)",
+					class["class_id"], kind, name, transport["header_or_cookie"], transport["shape"]))
 			}
 		}
 	}
-	if counted == 0 {
-		t.Fatal("no class declares a marker; the check is vacuous")
+	return problems, counted
+}
+
+// A class presented in two headers lists both names in header_or_cookie, comma-separated; each listed name is a
+// whole header name, so a header the list does not name, or a list item with prose, is refused.
+func TestMarkerTransportHeaderListIsExact(t *testing.T) {
+	if problems, counted := markerTransportProblems(registryDocument(t)); len(problems) != 0 || counted == 0 {
+		t.Fatalf("the real registry: %d markers, problems %v", counted, problems)
+	}
+	plant := func(edit func(class map[string]any)) []string {
+		planted := registryDocument(t)
+		found := false
+		for _, class := range planted {
+			if class["class_id"] == "acr_web_assertion" {
+				edit(class)
+				found = true
+			}
+		}
+		if !found {
+			t.Fatal("the registry has no acr_web_assertion class to plant into")
+		}
+		problems, _ := markerTransportProblems(planted)
+		return problems
+	}
+	unlisted := plant(func(class map[string]any) {
+		class["markers"] = append(class["markers"].([]any), map[string]any{"kind": "dedicated_header", "name": "X-ACR-Unlisted"})
+	})
+	if len(unlisted) != 1 || !strings.Contains(unlisted[0], `"x-acr-unlisted"`) {
+		t.Errorf("an unlisted dedicated header: want exactly its problem, got %v", unlisted)
+	}
+	prose := plant(func(class map[string]any) {
+		class["transport"].(map[string]any)["header_or_cookie"] = "X-ACR-Web-Assertion; the web approver reference rides X-ACR-Approver-Reference"
+	})
+	if len(prose) != 2 {
+		t.Errorf("a header_or_cookie with prose: want both header markers refused, got %v", prose)
 	}
 }
 
@@ -300,7 +343,12 @@ func markerMatchesTransport(kind, name, head, shape string) bool {
 		_, rest, found := strings.Cut(shape, "typ ")
 		return found && markerTransportToken(rest) == name
 	case "dedicated_header", "signature_header":
-		return strings.EqualFold(markerTransportToken(head), name)
+		for _, listed := range strings.Split(head, ",") {
+			if strings.EqualFold(strings.TrimSpace(listed), name) {
+				return true
+			}
+		}
+		return false
 	case "content_type":
 		return strings.Contains(head, "content-type "+name)
 	case "subject_token_type":
@@ -343,6 +391,12 @@ func TestMarkerTransportCompareIsExact(t *testing.T) {
 		{"dedicated_header", "x-api-", "x-api-key", "", false},
 		{"signature_header", "x-hub-signature", "x-hub-signature-256", "", false},
 		{"signature_header", "x-hub-signature-256", "x-hub-signature-256", "", true},
+		{"dedicated_header", "x-acr-web-assertion", "x-acr-web-assertion, x-acr-approver-reference", "", true},
+		{"dedicated_header", "X-ACR-Approver-Reference", "x-acr-web-assertion, x-acr-approver-reference", "", true},
+		{"dedicated_header", "x-acr-unlisted", "x-acr-web-assertion, x-acr-approver-reference", "", false},
+		{"dedicated_header", "x-acr-web", "x-acr-web-assertion, x-acr-approver-reference", "", false},
+		{"dedicated_header", "x-acr-web-assertion", "x-acr-web-assertion; the web approver reference rides x-acr-approver-reference", "", false},
+		{"dedicated_header", "x-org-id", "x-org-id header, layered on top of ops_access_token_hs256", "", false},
 		{"authorization_scheme", "Bearer", "authorization: bearer (by construction)", "", true},
 		{"authorization_scheme", "bear", "authorization: bearer", "", false},
 		{"authorization_scheme", "Bearer", "authorization: bearer/token sent by ops", "", true},

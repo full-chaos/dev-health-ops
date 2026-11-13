@@ -18,6 +18,19 @@ import (
 // is the sorted, unique list, empty for none. why is ReasonRepositoryAllowlistTooLarge when the list would pass
 // MaxRepositoryAllowlist: it is never truncated.
 func (e *Evaluator) repositoryScope(s Snapshot, orgID, role string, act policycatalog.Action, rows []Grant, now int64) (keys []string, unrestricted bool, why Reason) {
+	return e.scopeOf(s, orgID, role, act, rows, now, false)
+}
+
+// liveRepositoryScope is repositoryScope for the read listing (CHAOS-13618): a set over MaxRepositoryAllowlist, in an
+// organization with at least one live identity row, is counted again with only the keys that are the live path of a
+// repository identity row (livePath). 256 or fewer of them is the list; still more is
+// ReasonRepositoryAllowlistTooLarge. A set within the bound, or an organization with no live identity row, is
+// repositoryScope's answer.
+func (e *Evaluator) liveRepositoryScope(s Snapshot, orgID, role string, act policycatalog.Action, rows []Grant, now int64) (keys []string, unrestricted bool, why Reason) {
+	return e.scopeOf(s, orgID, role, act, rows, now, true)
+}
+
+func (e *Evaluator) scopeOf(s Snapshot, orgID, role string, act policycatalog.Action, rows []Grant, now int64, recount bool) (keys []string, unrestricted bool, why Reason) {
 	if len(rows) == 0 {
 		return nil, e.membershipDefaultDenial(role, act) == "", ""
 	}
@@ -38,6 +51,13 @@ func (e *Evaluator) repositoryScope(s Snapshot, orgID, role string, act policyca
 		// is stale, and a new repository may hold it. An id with no single live path lists nothing.
 		if path, ok := idPath(s, orgID, g.RepoID); ok {
 			seen[path] = true
+		}
+	}
+	if recount && len(seen) > MaxRepositoryAllowlist && hasLiveIdentity(s, orgID) {
+		for key := range seen {
+			if !livePath(s, orgID, key) {
+				delete(seen, key)
+			}
 		}
 	}
 	if len(seen) > MaxRepositoryAllowlist {

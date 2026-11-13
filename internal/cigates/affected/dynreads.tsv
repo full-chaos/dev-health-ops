@@ -284,6 +284,7 @@ internal/cigates/livee2e	mintlicense.go
 internal/cigates/livee2e	mintlicense_test.go
 internal/cigates/livee2e	smtpsink.go
 internal/cigates/livee2e	smtpsink_test.go
+internal/cigates/livee2e	ssoseedverb.go
 internal/cigates/livee2e	tokenreview.go
 internal/cigates/livee2e	tokenreview_cli_test.go
 internal/cigates/membershipreads	membershipreads.go

@@ -224,6 +224,7 @@ internal/cigates/frozengoldens	reads_guard_test.go	internal/cigates/frozengolden
 internal/cigates/integrationshards	integration_sharding_test.go	unexpressed	-	-
 internal/cigates/integrationshards	support_test.go	unexpressed	-	-
 internal/cigates/livee2e	smtpsink_test.go	unexpressed	-	-
+internal/cigates/livee2e/ssoseed	served_census_test.go	docker	dir	*
 internal/cigates/membershipreads	membershipreads.go	unexpressed	-	*.go
 internal/cigates/nopython	tests_python_test.go	ci/requirements-*.txt	dir	*
 internal/cigates/outboundtransport	outboundtransport_test.go	.	tree	*.go

@@ -136,7 +136,7 @@ func TestTheStateQueryReadsEveryRowOfThePair(t *testing.T) {
 		"org":         `SELECT 'public.organizations', id::text, COALESCE(is_active, false)::text FROM public.organizations WHERE id = $2`,
 		"membership":  `SELECT 'public.memberships', user_id::text || '/' || org_id::text, COALESCE('r:' || role, 'null') FROM public.memberships WHERE org_id = $2 AND user_id = $1`,
 		"grants":      `SELECT 'resource_grants', id::text, xmin::text FROM "auth".resource_grants WHERE principal_id = $1 AND organization_id = $2`,
-		"identities":  `SELECT 'repository_identities', provider || ':' || provider_repo_id, xmin::text FROM "auth".repository_identities WHERE organization_id = $2 AND EXISTS (SELECT 1 FROM "auth".resource_grants WHERE principal_id = $1 AND organization_id = $2 AND resource_repo_id IS NOT NULL)`,
+		"identities":  `SELECT 'repository_identities', provider || ':' || provider_repo_id, xmin::text FROM "auth".repository_identities WHERE organization_id = $2 AND (EXISTS (SELECT 1 FROM "auth".resource_grants WHERE principal_id = $1 AND organization_id = $2 AND resource_repo_id IS NOT NULL) OR (SELECT count(*) FROM "auth".resource_grants WHERE principal_id = $1 AND organization_id = $2) > 256)`,
 		"assignments": `SELECT 'platform_role_assignments', id::text, xmin::text FROM "auth".platform_role_assignments WHERE principal_id = $1`,
 	}
 	for _, tc := range []struct {

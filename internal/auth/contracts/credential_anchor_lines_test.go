@@ -36,12 +36,17 @@ import (
 // The anchors on the deleted Python tree (src/dev_health_ops/*.py) are gone:
 // credentialanchors/credential-anchor-retired-evidence.tsv says, for each one,
 // the line it cited (path@commit^:line, commit = the one that deleted the file)
-// and that line's text, and whether it was re-pointed to the one Go declaration
-// whose doc says it is that Python symbol, or replaced by null with a gaps entry
-// of its class that quotes the text. The history test (build tag authhistory,
-// run by `ci/check_go.sh auth history` with full history) checks the rows
-// against git: the row set equals the base registry's Python anchors, each
-// commit deleted its file, each range fits and each text matches.
+// and that line's text, and what became of its slot: re-pointed to the one Go
+// declaration whose doc says it is that Python symbol, anchored to the Go code
+// that now decides the class (no successor claim), replaced by null with a gaps
+// entry of its class that quotes the text, or removed with its entry. A row names
+// its slot twice: where it was in the base registry (the key, stable) and where it
+// is now (current, "-" once removed); a removal shifts the current index of every
+// later row of that array by one. The history test (build tag authhistory, run by
+// `ci/check_go.sh auth history` with full history) checks the rows against git: the
+// row set equals the base registry's Python anchors, each commit deleted its file,
+// each range fits, each text matches, and each removed row's base entry is gone
+// from its array now.
 //
 // Anchors in the web and acr repositories are counted, not checked: those
 // files are not in this tree.
@@ -542,7 +547,8 @@ func TestTheRetiredPathListIsGone(t *testing.T) {
 
 // retiredEvidence is one row of credentialanchors/credential-anchor-retired-evidence.tsv.
 type retiredEvidence struct {
-	classID, where, old, oldText, action, successor, doc string
+	// where is the slot in the base registry the header names; current is the slot now, "-" for a removed one.
+	classID, where, current, old, oldText, action, successor, doc string
 }
 
 // loadRetiredEvidence returns the rows and the base registry commit the header names ("# base-registry <sha>").
@@ -565,10 +571,10 @@ func loadRetiredEvidence(t *testing.T) ([]retiredEvidence, string) {
 			continue
 		}
 		f := strings.Split(line, "\t")
-		if len(f) != 7 {
-			t.Fatalf("evidence row %q has %d fields, want 7", line, len(f))
+		if len(f) != 8 {
+			t.Fatalf("evidence row %q has %d fields, want 8 (class_id, where, current, old, old_text, action, successor, successor_doc)", line, len(f))
 		}
-		rows = append(rows, retiredEvidence{f[0], f[1], f[2], f[3], f[4], f[5], f[6]})
+		rows = append(rows, retiredEvidence{f[0], f[1], f[2], f[3], f[4], f[5], f[6], f[7]})
 	}
 	if !regexp.MustCompile(`^[0-9a-f]{40}$`).MatchString(base) {
 		t.Fatalf("the evidence header names base registry commit %q, want a 40-hex main commit", base)
@@ -576,9 +582,61 @@ func loadRetiredEvidence(t *testing.T) ([]retiredEvidence, string) {
 	return rows, base
 }
 
-// retiredGap is the gaps entry a null row adds to its class: it quotes the cited line.
+// retiredGap is the gaps entry a null row adds to its class: it quotes the cited line and names the base slot.
 func retiredGap(r retiredEvidence) string {
 	return fmt.Sprintf("retired anchor %s: %s (%s) was deleted with the Python api; no single documented Go successor", r.where, r.old, r.oldText)
+}
+
+var slotIndex = regexp.MustCompile(`^([^\[]*)\[(\d+)\](.*)$`)
+
+// splitSlot splits a slot at its first index: "validators[2]/anchor" is ("validators", 2, "/anchor").
+func splitSlot(where string) (array string, index int, rest string, ok bool) {
+	m := slotIndex.FindStringSubmatch(where)
+	if m == nil {
+		return "", 0, "", false
+	}
+	index, _ = strconv.Atoi(m[2])
+	return m[1], index, m[3], true
+}
+
+// currentSlots is where each kept row's base slot is now: a removed row takes its element out of its array, so each
+// later index of that array moves down by one per removal before it.
+func currentSlots(rows []retiredEvidence) map[string]string {
+	removed := map[string][]int{}
+	for _, r := range rows {
+		if array, index, _, ok := splitSlot(r.where); ok && r.action == "removed" {
+			removed[r.classID+"\t"+array] = append(removed[r.classID+"\t"+array], index)
+		}
+	}
+	slots := map[string]string{}
+	for _, r := range rows {
+		if r.action == "removed" {
+			continue
+		}
+		array, index, rest, ok := splitSlot(r.where)
+		if !ok {
+			slots[r.classID+"\t"+r.where] = r.where
+			continue
+		}
+		shift := 0
+		for _, gone := range removed[r.classID+"\t"+array] {
+			if gone < index {
+				shift++
+			}
+		}
+		slots[r.classID+"\t"+r.where] = fmt.Sprintf("%s[%d]%s", array, index-shift, rest)
+	}
+	return slots
+}
+
+func classHasGap(class map[string]any, gap string) bool {
+	gaps, _ := class["gaps"].([]any)
+	for _, g := range gaps {
+		if g == gap {
+			return true
+		}
+	}
+	return false
 }
 
 var (
@@ -631,6 +689,8 @@ func checkRetiredEvidence(document []byte, rows []retiredEvidence, root string) 
 	}
 	var failures []string
 	seen := map[string]bool{}
+	held := map[string]string{}
+	slots := currentSlots(rows)
 	cache := map[string][]string{}
 	for _, r := range rows {
 		label := fmt.Sprintf("evidence %s %s", r.classID, r.where)
@@ -651,17 +711,37 @@ func checkRetiredEvidence(document []byte, rows []retiredEvidence, root string) 
 			failures = append(failures, label+": no such class")
 			continue
 		}
-		node, ok := registryNode(class, r.where)
+		if r.action == "removed" {
+			if r.current != "-" {
+				failures = append(failures, fmt.Sprintf("%s: a removed slot is current %q, want -", label, r.current))
+			}
+			if r.successor != "-" || r.doc != "-" {
+				failures = append(failures, fmt.Sprintf("%s: a removed slot names successor %q, doc %q", label, r.successor, r.doc))
+			}
+			if classHasGap(class, retiredGap(r)) {
+				failures = append(failures, fmt.Sprintf("%s: the slot is removed, but the class gaps still hold %q", label, retiredGap(r)))
+			}
+			continue
+		}
+		if want := slots[r.classID+"\t"+r.where]; r.current != want {
+			failures = append(failures, fmt.Sprintf("%s: current %q, but the removals before it put the slot at %q", label, r.current, want))
+			continue
+		}
+		if other, dup := held[r.classID+"\t"+r.current]; dup {
+			failures = append(failures, fmt.Sprintf("%s: current %s is also the slot of %s", label, r.current, other))
+		}
+		held[r.classID+"\t"+r.current] = r.where
+		node, ok := registryNode(class, r.current)
 		if !ok {
-			failures = append(failures, label+": no such anchor slot in the registry")
+			failures = append(failures, fmt.Sprintf("%s: no such anchor slot %s in the registry", label, r.current))
 			continue
 		}
 		switch r.action {
-		case "repoint":
+		case "repoint", "anchored":
 			s := successorFmt.FindStringSubmatch(r.successor)
 			anchor, isMap := node.(map[string]any)
 			if s == nil || !isMap {
-				failures = append(failures, fmt.Sprintf("%s: a re-pointed slot holds %v, successor %q", label, node, r.successor))
+				failures = append(failures, fmt.Sprintf("%s: a %s slot holds %v, successor %q", label, r.action, node, r.successor))
 				continue
 			}
 			line, _ := strconv.Atoi(s[2])
@@ -669,6 +749,17 @@ func checkRetiredEvidence(document []byte, rows []retiredEvidence, root string) 
 			got := fmt.Sprintf("%v:%v:%v-%v", anchor["repo"], anchor["path"], anchor["line"], anchor["line_end"])
 			if want := fmt.Sprintf("ops:%s:%d-%d", s[1], line, end); got != want {
 				failures = append(failures, fmt.Sprintf("%s: the registry anchor is %s, the evidence says %s", label, got, want))
+				continue
+			}
+			if r.action == "anchored" {
+				// The slot now cites the Go code that decides the class; it claims no Python successor, so it has no
+				// doc, and the gap the null slot carried is closed.
+				if r.doc != "-" {
+					failures = append(failures, fmt.Sprintf("%s: an anchored slot claims no successor doc, got %q", label, r.doc))
+				}
+				if classHasGap(class, retiredGap(r)) {
+					failures = append(failures, fmt.Sprintf("%s: the slot is anchored, but the class gaps still hold %q", label, retiredGap(r)))
+				}
 				continue
 			}
 			decl := pythonDecl.FindStringSubmatch(r.oldText)
@@ -690,21 +781,70 @@ func checkRetiredEvidence(document []byte, rows []retiredEvidence, root string) 
 				failures = append(failures, fmt.Sprintf("%s: the evidence says null, the registry holds %v", label, node))
 				continue
 			}
-			gaps, _ := class["gaps"].([]any)
-			found := false
-			for _, g := range gaps {
-				if g == retiredGap(r) {
-					found = true
-				}
-			}
-			if !found {
+			if !classHasGap(class, retiredGap(r)) {
 				failures = append(failures, fmt.Sprintf("%s: the class gaps lack %q", label, retiredGap(r)))
 			}
 		default:
-			failures = append(failures, fmt.Sprintf("%s: action %q is not repoint or null", label, r.action))
+			failures = append(failures, fmt.Sprintf("%s: action %q is not repoint, anchored, null or removed", label, r.action))
 		}
 	}
 	sort.Strings(failures)
+	return failures
+}
+
+// removedSlotFailures checks each removed row against the base registry and the current one: the base slot held an
+// entry with a description, and no entry of that array holds that description now. A row that says "removed" while
+// its entry is still there fails. (Arrays also change for other reasons since the base, so their lengths are not
+// compared.)
+func removedSlotFailures(rows []retiredEvidence, baseDoc, currentDoc []byte) []string {
+	classesOf := func(document []byte) (map[string]map[string]any, error) {
+		var parsed struct {
+			Classes []map[string]any `json:"classes"`
+		}
+		if err := json.Unmarshal(document, &parsed); err != nil {
+			return nil, err
+		}
+		classes := map[string]map[string]any{}
+		for _, c := range parsed.Classes {
+			id, _ := c["class_id"].(string)
+			classes[id] = c
+		}
+		return classes, nil
+	}
+	baseClasses, err := classesOf(baseDoc)
+	if err != nil {
+		return []string{fmt.Sprintf("the base registry does not parse: %v", err)}
+	}
+	currentClasses, err := classesOf(currentDoc)
+	if err != nil {
+		return []string{fmt.Sprintf("the current registry does not parse: %v", err)}
+	}
+	var failures []string
+	for _, r := range rows {
+		if r.action != "removed" {
+			continue
+		}
+		label := fmt.Sprintf("evidence %s %s", r.classID, r.where)
+		array, index, _, ok := splitSlot(r.where)
+		if !ok {
+			failures = append(failures, label+": a removed slot names no array element")
+			continue
+		}
+		element, _ := registryNode(baseClasses[r.classID], fmt.Sprintf("%s[%d]", array, index))
+		entry, isMap := element.(map[string]any)
+		description, _ := entry["description"].(string)
+		if !isMap || description == "" {
+			failures = append(failures, label+": the base slot holds no entry with a description to check its removal by")
+			continue
+		}
+		now, _ := registryNode(currentClasses[r.classID], array)
+		list, _ := now.([]any)
+		for i, item := range list {
+			if other, _ := item.(map[string]any); other != nil && other["description"] == description {
+				failures = append(failures, fmt.Sprintf("%s: removed, but %s[%d] still holds its entry %q", label, array, i, description))
+			}
+		}
+	}
 	return failures
 }
 
@@ -741,8 +881,8 @@ func TestTheRetiredEvidenceCheckRefusesAWrongSuccessorAndAMissingGap(t *testing.
 	if err := os.WriteFile(filepath.Join(root, "internal", "x", "a.go"), []byte(source), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	repoint := retiredEvidence{"demo", "validators[0]/anchor", "src/dev_health_ops/check.py@0123456789ab^:10-20", "def verify_token(token):", "repoint", "internal/x/a.go:1-2", "check.py's verify_token"}
-	null := retiredEvidence{"demo", "issuer/anchors[0]", "src/dev_health_ops/check.py@0123456789ab^:5", "TOKEN_TTL = 300", "null", "-", "-"}
+	repoint := retiredEvidence{"demo", "validators[0]/anchor", "validators[0]/anchor", "src/dev_health_ops/check.py@0123456789ab^:10-20", "def verify_token(token):", "repoint", "internal/x/a.go:1-2", "check.py's verify_token"}
+	null := retiredEvidence{"demo", "issuer/anchors[0]", "issuer/anchors[0]", "src/dev_health_ops/check.py@0123456789ab^:5", "TOKEN_TTL = 300", "null", "-", "-"}
 	doc := func(anchor string, gaps string) []byte {
 		return []byte(fmt.Sprintf(`{"classes":[{"class_id":"demo","issuer":{"anchors":[null]},"validators":[{"anchor":%s}],"gaps":[%s]}]}`, anchor, gaps))
 	}
@@ -772,6 +912,86 @@ func TestTheRetiredEvidenceCheckRefusesAWrongSuccessorAndAMissingGap(t *testing.
 	wrongDecl.oldText = "def other(token):"
 	if f := checkRetiredEvidence(doc(good, string(gap)), []retiredEvidence{wrongDecl, null}, root); len(f) == 0 {
 		t.Error("a re-point whose cited line declares another symbol must fail")
+	}
+}
+
+// A removal takes its element out of the array: the rows after it name their base slot and the slot one lower now.
+func TestTheRetiredEvidenceCheckFollowsARemovedSlot(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "internal", "x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "internal", "x", "a.go"), []byte("package x\n\nfunc Decide() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	old := func(line int) string { return fmt.Sprintf("src/dev_health_ops/check.py@0123456789ab^:%d", line) }
+	removed := retiredEvidence{"demo", "validators[0]/anchor", "-", old(1), "middleware()", "removed", "-", "-"}
+	anchored := retiredEvidence{"demo", "validators[1]/anchor", "validators[0]/anchor", old(2), "lookup()", "anchored", "internal/x/a.go:3-3", "-"}
+	null := retiredEvidence{"demo", "validators[2]/anchor", "validators[1]/anchor", old(3), "rotate()", "null", "-", "-"}
+	rows := []retiredEvidence{removed, anchored, null}
+	gapOf := func(r retiredEvidence) string { g, _ := json.Marshal(retiredGap(r)); return string(g) }
+	doc := func(validators, gaps string) []byte {
+		return []byte(fmt.Sprintf(`{"classes":[{"class_id":"demo","validators":[%s],"gaps":[%s]}]}`, validators, gaps))
+	}
+	kept := `{"anchor":{"repo":"ops","path":"internal/x/a.go","line":3,"line_end":3}},{"anchor":null}`
+	if f := checkRetiredEvidence(doc(kept, gapOf(null)), rows, root); len(f) != 0 {
+		t.Fatalf("a removal with the later rows moved down must pass: %v", f)
+	}
+	stale := anchored
+	stale.current = "validators[1]/anchor"
+	if f := checkRetiredEvidence(doc(kept, gapOf(null)), []retiredEvidence{removed, stale, null}, root); len(f) == 0 {
+		t.Error("a row that keeps its base index after a removal before it must fail")
+	}
+	notRemoved := removed
+	notRemoved.action = "null"
+	notRemoved.current = "validators[0]/anchor"
+	if f := checkRetiredEvidence(doc(kept, gapOf(null)+","+gapOf(notRemoved)), []retiredEvidence{notRemoved, anchored, null}, root); len(f) == 0 {
+		t.Error("rows that shift without a removed row must fail")
+	}
+	if f := checkRetiredEvidence(doc(kept, gapOf(null)+","+gapOf(removed)), rows, root); len(f) == 0 {
+		t.Error("a removed slot whose gap is still listed must fail")
+	}
+	if f := checkRetiredEvidence(doc(kept, gapOf(null)+","+gapOf(anchored)), rows, root); len(f) == 0 {
+		t.Error("an anchored slot whose gap is still listed must fail")
+	}
+	removedHere := removed
+	removedHere.current = "validators[0]/anchor"
+	if f := checkRetiredEvidence(doc(kept, gapOf(null)), []retiredEvidence{removedHere, anchored, null}, root); len(f) == 0 {
+		t.Error("a removed slot with a current slot must fail")
+	}
+	elsewhere := `{"anchor":{"repo":"ops","path":"internal/x/a.go","line":1,"line_end":1}},{"anchor":null}`
+	if f := checkRetiredEvidence(doc(elsewhere, gapOf(null)), rows, root); len(f) == 0 {
+		t.Error("an anchored slot that holds another anchor than its row must fail")
+	}
+	withDoc := anchored
+	withDoc.doc = "check.py's lookup"
+	if f := checkRetiredEvidence(doc(kept, gapOf(null)), []retiredEvidence{removed, withDoc, null}, root); len(f) == 0 {
+		t.Error("an anchored slot that claims a successor doc must fail")
+	}
+	nulled := `{"anchor":null},{"anchor":null}`
+	if f := checkRetiredEvidence(doc(nulled, gapOf(null)), rows, root); len(f) == 0 {
+		t.Error("an anchored slot that holds null must fail")
+	}
+}
+
+func TestTheRemovedSlotCheckFindsAnEntryStillThere(t *testing.T) {
+	removed := retiredEvidence{"demo", "validators[0]/anchor", "-", "", "", "removed", "-", "-"}
+	kept := retiredEvidence{"demo", "validators[1]/anchor", "validators[0]/anchor", "", "", "null", "-", "-"}
+	base := []byte(`{"classes":[{"class_id":"demo","validators":[{"anchor":null,"description":"middleware"},{"anchor":null,"description":"lookup"}]}]}`)
+	gone := []byte(`{"classes":[{"class_id":"demo","validators":[{"anchor":null,"description":"lookup"}]}]}`)
+	if f := removedSlotFailures([]retiredEvidence{removed, kept}, base, gone); len(f) != 0 {
+		t.Fatalf("a removed row whose entry is gone must pass: %v", f)
+	}
+	if f := removedSlotFailures([]retiredEvidence{removed, kept}, base, base); len(f) == 0 {
+		t.Error("a removed row whose entry is still there must fail")
+	}
+	moved := []byte(`{"classes":[{"class_id":"demo","validators":[{"anchor":null,"description":"lookup"},{"anchor":null,"description":"middleware"}]}]}`)
+	if f := removedSlotFailures([]retiredEvidence{removed, kept}, base, moved); len(f) == 0 {
+		t.Error("a removed row whose entry moved to another index must fail")
+	}
+	bare := []byte(`{"classes":[{"class_id":"demo","validators":[null,{"anchor":null,"description":"lookup"}]}]}`)
+	if f := removedSlotFailures([]retiredEvidence{removed, kept}, bare, gone); len(f) == 0 {
+		t.Error("a removed row whose base slot has no description to check by must fail")
 	}
 }
 

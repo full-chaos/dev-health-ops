@@ -4,7 +4,9 @@ package contracts
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -15,8 +17,9 @@ import (
 var historyOld = regexp.MustCompile(`^(src/dev_health_ops/[\w/]+\.py)@([0-9a-f]{12})\^:(\d+)(?:-(\d+))?$`)
 
 // The retired-anchor evidence is checked against git, not against itself: the row set equals the Python anchors of the
-// registry at the base commit the evidence names, each commit is the one that deleted its file, each cited range fits
-// the file at that commit's parent, and each old_text is that line. Needs full history (-tags authhistory).
+// registry at the base commit the evidence names (keyed by their base slot), each commit is the one that deleted its
+// file, each cited range fits the file at that commit's parent, each old_text is that line, and the base entry of each
+// removed row is gone from its array now. Needs full history (-tags authhistory).
 func TestRetiredAnchorEvidenceMatchesGitHistory(t *testing.T) {
 	checkRetiredEvidenceAgainstHistory(t)
 }
@@ -105,6 +108,11 @@ func checkRetiredEvidenceAgainstHistory(t *testing.T) {
 			failures = append(failures, "the evidence lists a row the base registry does not cite: "+key)
 		}
 	}
+	current, err := os.ReadFile(filepath.Join(ContractsDir(root), "credential-classes.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	failures = append(failures, removedSlotFailures(rows, []byte(baseDoc), current)...)
 	sort.Strings(failures)
 	for _, f := range failures {
 		t.Error(f)

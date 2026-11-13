@@ -261,7 +261,12 @@ func (rig *matrixRig) matrixCarrier(t *testing.T, class matrixClass) (map[string
 		typ := class.markers["jwt_header_typ"][0]
 		return bearer(matrixMint(rig.minter, typ)), true
 	case len(class.markers["dedicated_header"]) > 0:
-		return map[string]string{class.markers["dedicated_header"][0]: probeOrg.String()}, true
+		// Every dedicated header of the class (acr_web_assertion has two) is on the request.
+		headers := map[string]string{}
+		for _, name := range class.markers["dedicated_header"] {
+			headers[name] = probeOrg.String()
+		}
+		return headers, true
 	case len(class.markers["signature_header"]) > 0:
 		return map[string]string{class.markers["signature_header"][0]: "sha256=" + filler}, true
 	}

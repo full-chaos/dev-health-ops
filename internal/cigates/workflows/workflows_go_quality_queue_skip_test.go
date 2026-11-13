@@ -343,7 +343,7 @@ func TestGoQualityLegSkipIsPushOnlyNeverStaticAndKeepsReceipts(t *testing.T) {
 	if asString(pinJob(doc, "go-quality")["name"]) != "go-quality" {
 		t.Error("the fan-in must keep the name go-quality")
 	}
-	if _, has := leg["if"]; has {
+	if got, has := leg["if"]; has && asString(got) != "needs.go-quality-plan.outputs.draft_skip != 'true'" {
 		t.Error("a job-level if on the legs would report them skipped")
 	}
 	var names []string

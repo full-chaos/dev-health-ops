@@ -38,6 +38,7 @@ package sankey
 
 import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/scoperesolve"
 
 	"context"
 	"errors"
@@ -207,14 +208,25 @@ func BuildResponse(ctx context.Context, client QueryClient, orgID string, params
 	// expense and state modes key on a team column and take no instant.
 	asOf := time.Now().UTC()
 
-	switch mode {
-	case "investment":
+	// An unresolved service or developer scope answers an empty graph (CHAOS-13705, R335), not the whole organization. A repository
+	// scope keeps its own reads: investment and hotspot resolve the repository to nothing, expense and state narrow by work scope id
+	// (a work scope id need not be a repository), so neither widens.
+	unresolved := false
+	if scopeLevel != "repo" {
+		var err error
+		if unresolved, err = scoperesolve.Unresolved(ctx, client, orgID, scopeLevel, params.ScopeIDs); err != nil {
+			return nil, err
+		}
+	}
+	switch {
+	case unresolved:
+	case mode == "investment":
 		nodes, links, err = buildInvestmentFlow(ctx, client, params.StartDay, params.EndDay, scopeLevel, params.ScopeIDs, params.WhatRepos, params.WorkCategory, orgID, asOf)
-	case "expense":
+	case mode == "expense":
 		nodes, links, err = buildExpenseFlow(ctx, client, params.StartDay, params.EndDay, scopeLevel, params.ScopeIDs, params.WhatRepos, orgID)
-	case "state":
+	case mode == "state":
 		nodes, links, err = buildStateFlow(ctx, client, params.StartDay, params.EndDay, scopeLevel, params.ScopeIDs, params.WhatRepos, orgID)
-	case "hotspot":
+	case mode == "hotspot":
 		nodes, links, err = buildHotspotFlow(ctx, client, params.StartDay, params.EndDay, scopeLevel, params.ScopeIDs, params.WhatRepos, orgID, asOf)
 	}
 	if err != nil {

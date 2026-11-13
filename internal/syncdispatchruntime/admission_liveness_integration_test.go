@@ -173,9 +173,9 @@ func rowVisits(node planNode, table string) float64 {
 	return total
 }
 
-// TestOlderRunsInBucketReadIsBoundedOnALargeOpenRun (CHAOS-8880 F1): one OPEN older run of 10,000 units (9,990
-// planned in another bucket, 10 finished) is read on every medium decision of a newer run. The read must visit a
-// bounded number of its units, not all of them.
+// TestOlderRunsInBucketReadIsBoundedOnALargeOpenRun (CHAOS-8880 F1): one OPEN, live older run of 10,000 units (9,990
+// planned in another bucket, 10 finished, 1 running) is read on every medium decision of a newer run. The read must
+// visit a bounded number of its units, not all of them.
 func TestOlderRunsInBucketReadIsBoundedOnALargeOpenRun(t *testing.T) {
 	withGuardPool(t, func(ctx context.Context, pool *pgxpool.Pool) {
 		now := pgNow()
@@ -202,6 +202,13 @@ func TestOlderRunsInBucketReadIsBoundedOnALargeOpenRun(t *testing.T) {
 				t.Fatalf("seed large open run: %v", err)
 			}
 		}
+		// The large run is live (a running unit holds a live lease), so the read must look for its waiting units; a
+		// dead run is dropped before its units are read at all.
+		liveLease := now.Add(time.Hour)
+		pgseed.InsertSyncRunUnit(ctx, t, pool, pgseed.SyncRunUnit{
+			ID: guardUnitID("00000088d1", 0), RunID: admissionOlderRun, OrgID: guardTestOrg, Provider: "github", CostClass: "light",
+			Status: syncRunUnitStatusRunning, UpdatedAt: &now, LeaseExpiresAt: &liveLease, LeaseOwner: ptrString("large-owner"),
+		})
 		if _, err := pool.Exec(ctx, `ANALYZE`); err != nil {
 			t.Fatal(err)
 		}
@@ -239,7 +246,7 @@ func TestOlderRunsInBucketReadIsBoundedOnALargeOpenRun(t *testing.T) {
 			t.Fatal(err)
 		}
 		if len(older) != 0 {
-			t.Fatalf("older runs = %s, want none: the large run waits only in the light bucket and is not live", fmt.Sprint(older))
+			t.Fatalf("older runs = %s, want none: the large run waits only in the light bucket", fmt.Sprint(older))
 		}
 	})
 }

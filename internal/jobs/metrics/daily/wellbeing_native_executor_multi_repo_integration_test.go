@@ -65,8 +65,8 @@ func TestComputeFamilyWritesOneRowPerRepoForAMultiRepoTeam(t *testing.T) {
     after_hours_commit_ratio Float64, weekend_commit_ratio Float64,
     computed_at DateTime64(6, 'UTC'), org_id String, repo_id String
 ) ENGINE = MergeTree PARTITION BY toYYYYMM(day) ORDER BY (org_id, team_id, day)`,
-		// The ownership read of the executor (CHAOS-9084 class); empty here, so
-		// the repo_patterns fallback resolves the team as before.
+		// The ownership read of the executor (CHAOS-9084 class): the team of a
+		// repository is its owner only, no repo_patterns fallback (D7013b).
 		`CREATE TABLE team_repo_ownership (org_id String, provider String, team_id String, repo_id Nullable(UUID),
       repo_full_name String, match_type Enum8('exact' = 1, 'pattern' = 2),
       source Enum8('native' = 1, 'jira_legacy' = 2, 'provider_access' = 3, 'manual' = 4, 'inferred' = 5),
@@ -83,12 +83,18 @@ func TestComputeFamilyWritesOneRowPerRepoForAMultiRepoTeam(t *testing.T) {
 	repoA := "00000000-0000-4000-8000-0000000000a1"
 	repoB := "00000000-0000-4000-8000-0000000000b2"
 
-	// One team, repo-pattern owning BOTH repos -- both repos' commits
+	// One team owning BOTH repos (ownership rows) -- both repos' commits
 	// resolve to the SAME team, exactly the shape that produces two rows
 	// for one (org_id, team_id, day) key.
 	if err := conn.Exec(ctx, `
 INSERT INTO teams (id, name, repo_patterns, org_id) VALUES
-('shared-team', 'Shared Team', ['org/repo-a', 'org/repo-b'], '`+orgID+`')`); err != nil {
+('shared-team', 'Shared Team', [], '`+orgID+`')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.Exec(ctx, `
+INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, valid_from, updated_at) VALUES
+('`+orgID+`', 'github', 'shared-team', toUUID('`+repoA+`'), 'org/repo-a', 'exact', 'native', 1, 10, toDateTime64('2026-08-01 00:00:00', 3, 'UTC'), toDateTime64('2026-08-01 00:00:00', 3, 'UTC')),
+('`+orgID+`', 'github', 'shared-team', toUUID('`+repoB+`'), 'org/repo-b', 'exact', 'native', 1, 10, toDateTime64('2026-08-01 00:00:00', 3, 'UTC'), toDateTime64('2026-08-01 00:00:00', 3, 'UTC'))`); err != nil {
 		t.Fatal(err)
 	}
 	if err := conn.Exec(ctx, `

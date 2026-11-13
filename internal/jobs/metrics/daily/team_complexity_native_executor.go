@@ -86,12 +86,6 @@ func (executor *TeamComplexityExecutor) ComputeFinalizeFamily(
 		return executor.supersedeStaleKeys(ctx, run.OrganizationID, day, nil, executor.nowUTC(), 0)
 	}
 
-	teams, err := LoadWellbeingTeams(ctx, executor.conn, run.OrganizationID)
-	if err != nil {
-		return 0, err
-	}
-	patternResolver := NewRepoPatternResolver(teams)
-
 	repoIDs := make([]uuid.UUID, 0, len(repoRows))
 	for _, row := range repoRows {
 		repoIDs = append(repoIDs, row.RepoID)
@@ -101,7 +95,7 @@ func (executor *TeamComplexityExecutor) ComputeFinalizeFamily(
 		return 0, err
 	}
 
-	repoOwners, err := resolveDailyFinalizeRepoOwnerShares(ctx, executor.conn, run.OrganizationID, day, repoIDs, repoNamesByID, patternResolver)
+	repoOwners, err := resolveDailyFinalizeRepoOwnerShares(ctx, executor.conn, run.OrganizationID, day, repoIDs, repoNamesByID)
 	if err != nil {
 		return 0, err
 	}

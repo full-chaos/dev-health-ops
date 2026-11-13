@@ -533,6 +533,8 @@ func TestHandoffDueSkipsTheTickAndAdvancesTheMarkerWhileAScheduledRunIsOpen(t *t
 	want := OpenRunSkip{
 		ConfigID: "config-due", OccurrenceID: "sha256:open", SyncRunID: "run-open",
 		OpenSeconds: 3600, NextRunAt: at("2026-01-01T13:00:00Z"),
+		// The base is last_sync_at (10:00), so 11:00 is the oldest due instant held back.
+		SkippedInstant: at("2026-01-01T11:00:00Z"),
 	}
 	if len(result.SkippedOpenRun) != 1 || result.SkippedOpenRun[0] != want {
 		t.Fatalf("SkippedOpenRun = %#v, want %#v", result.SkippedOpenRun, want)

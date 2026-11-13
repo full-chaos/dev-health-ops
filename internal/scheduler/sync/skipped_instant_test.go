@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"strings"
 	"testing"
@@ -239,5 +240,104 @@ func TestSchedulerDownAcrossInstantsCountsAndNamesTheUnmintedInstants(t *testing
 	}
 	if !strings.Contains(metrics, "sync_scheduler_unminted_instants_total 3\n") {
 		t.Errorf("CHAOS-3954: metrics omit sync_scheduler_unminted_instants_total 3; metrics = %s", metrics)
+	}
+}
+
+// CHAOS-3954 bound cell, skip side. The 22:00 run stays open for the whole
+// 23:00 hour and the scheduler polls every second. The skip moves the marker
+// to the next instant, so the hour writes one skip, not one per poll.
+func TestOpenRunSkipIsOneLinePerSkippedInstantNotPerPoll(t *testing.T) {
+	createdAt := at("2026-08-01T00:00:00Z")
+	previousSync := at("2026-08-19T21:10:00Z")
+	marker := at("2026-08-19T23:00:00Z")
+	ledger := newLedgerCoordinator()
+	ledger.minted[at("2026-08-19T22:00:00Z")] = true
+	skips := 0
+	for second := range 3600 {
+		transaction := &fakeSchedulerTransaction{
+			rows: &fakeLockedRows{rows: [][]any{lockedLedgerRow(
+				"config-open", "org-a", "job-a", "0 * * * *",
+				createdAt, previousSync, &marker, ledger.latest(),
+			)}},
+			execTag:  pgconn.NewCommandTag("UPDATE 1"),
+			openRuns: openScheduledRuns{blocking: 1, blockingOccurrenceID: "sha256:run-2200", blockingOpenSeconds: 3600},
+		}
+		result, err := mutationRepository(transaction).HandoffDueResult(
+			context.Background(), marker.Add(time.Duration(second)*time.Second), 4, ledger,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		skips += len(result.SkippedOpenRun)
+		if len(result.SkippedOpenRun) == 1 {
+			marker = result.SkippedOpenRun[0].NextRunAt
+		}
+		if result.Minted() != 0 {
+			t.Fatalf("poll %d minted while the run is open", second)
+		}
+	}
+	if skips != 1 {
+		t.Fatalf("skips over one hour of 1 s polls = %d, want 1", skips)
+	}
+}
+
+// CHAOS-3954 bound cell, coalescing side. One minted occurrence that passes
+// over many instants writes one line naming at most unmintedNamedLimit
+// instants (first and last) with the full count, and the scan that counts them
+// stops at unmintedScanLimit.
+func TestUnmintedInstantLineIsBounded(t *testing.T) {
+	createdAt := at("2026-08-01T00:00:00Z")
+	for _, tc := range []struct {
+		name       string
+		newest     string
+		ended      string
+		observedAt string
+		wantCount  float64
+		wantCapped bool
+		wantNamed  string
+	}{
+		{"two hours of a minutely cron", "2026-08-20T10:01:00Z", "2026-08-20T12:00:50Z", "2026-08-20T12:01:05Z", 119, false, "2026-08-20T10:02:00Z,2026-08-20T12:00:00Z"},
+		{"one day of a minutely cron hits the scan cap", "2026-08-19T00:00:00Z", "2026-08-19T23:59:50Z", "2026-08-20T00:00:05Z", unmintedScanLimit, true, "2026-08-19T00:01:00Z,2026-08-19T17:04:00Z"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ledger := newLedgerCoordinator()
+			ledger.minted[at(tc.newest)] = true
+			ended := at(tc.ended)
+			observedAt := at(tc.observedAt)
+			marker := observedAt.Truncate(time.Minute)
+			transaction := &fakeSchedulerTransaction{
+				rows: &fakeLockedRows{rows: [][]any{lockedLedgerRow(
+					"config-minutely", "org-a", "job-a", "* * * * *",
+					createdAt, ended, &marker, ledger.latest(),
+				)}},
+				execTag:  pgconn.NewCommandTag("UPDATE 1"),
+				openRuns: openScheduledRuns{lastScheduledRunEndedAt: &ended},
+			}
+			result, lines, metrics := runSkipWindowThroughLoop(t, transaction, ledger, observedAt)
+			if result.Minted() != 1 || !result.HandedOff[0].ScheduledFor.Equal(marker) {
+				t.Fatalf("minted %d, handed off %v, want %s", result.Minted(), result.HandedOff, marker)
+			}
+			var named []map[string]any
+			for _, line := range lines {
+				if line["reason"] == "unminted_instants" {
+					named = append(named, line)
+				}
+			}
+			if len(named) != 1 {
+				t.Fatalf("unminted-instant lines = %d, want 1", len(named))
+			}
+			instants := strings.Split(named[0]["unminted_instants"].(string), ",")
+			if len(instants) > unmintedNamedLimit {
+				t.Fatalf("one line names %d instants, want at most %d", len(instants), unmintedNamedLimit)
+			}
+			if named[0]["unminted_instants"] != tc.wantNamed ||
+				named[0]["unminted_count"] != tc.wantCount ||
+				named[0]["unminted_count_capped"] != tc.wantCapped {
+				t.Fatalf("unminted-instant line = %v", named[0])
+			}
+			if want := fmt.Sprintf("sync_scheduler_unminted_instants_total %d\n", int(tc.wantCount)); !strings.Contains(metrics, want) {
+				t.Fatalf("metrics omit %q", want)
+			}
+		})
 	}
 }

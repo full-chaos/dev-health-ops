@@ -1212,10 +1212,14 @@ GO_TEST_WEIGHTS="${GO_TEST_WEIGHTS:-${ROOT}/ci/go_test_weights.tsv}"
 GO_TEST_PINS="${GO_TEST_PINS:-${ROOT}/ci/go_test_pins.tsv}"
 # ci/go_test_splits.tsv (CHAOS-13520): package<TAB>parts; such a package runs as PARTS parts of its test names, placed like packages.
 GO_TEST_SPLITS="${GO_TEST_SPLITS:-${ROOT}/ci/go_test_splits.tsv}"
+# ci/go_test_split_weights.tsv (CHAOS-13668): package<TAB>TestName<TAB>seconds, the measured tests of the split packages. A test
+# leg cuts a split package's names by them (ci/go_race_shard.awk cut()), and the plan derives each part's weight from them.
+GO_TEST_SPLIT_WEIGHTS="${GO_TEST_SPLIT_WEIGHTS:-${ROOT}/ci/go_test_split_weights.tsv}"
 # CHAOS-13664: the test-leg split is chain-aware (ci/go_race_shard.awk chain=1). check_test_shard runs the split-package jobs one
 # after another beside one go test of the shard's other packages, then the serial package alone, so a leg's wall is about
 # max(chain, rest / 2) + serial (+6..+34 s over the 50 legs of 5 main runs); the split places the chain and the serial package
-# first, then the rest by that wall. A split part may have its own "<key>#<part>" row in ci/go_test_weights.tsv.
+# first, then the rest by that wall. A split part weighs what ci/go_test_split_weights.tsv gives it (CHAOS-13668); a hand
+# "<key>#<part>" row in ci/go_test_weights.tsv is refused.
 # CHAOS-13622: legs of about ten minutes (CHAOS-13520 had five). A test shard warns past GO_TEST_SHARD_WALL_WARN_SECONDS of go test
 # wall and fails past GO_TEST_SHARD_WALL_FAIL_SECONDS, so a slow runner warns and a shard plan that no longer fits fails.
 GO_TEST_SHARD_WALL_WARN_SECONDS="${GO_TEST_SHARD_WALL_WARN_SECONDS:-600}"
@@ -1230,6 +1234,7 @@ check_test_shard_args() {
   [ -f "${GO_TEST_WEIGHTS}" ] || die "test shards need ${GO_TEST_WEIGHTS}"
   [ -f "${GO_TEST_PINS}" ] || die "test shards need ${GO_TEST_PINS}"
   [ -f "${GO_TEST_SPLITS}" ] || die "test shards need ${GO_TEST_SPLITS}"
+  [ -f "${GO_TEST_SPLIT_WEIGHTS}" ] || die "test shards need ${GO_TEST_SPLIT_WEIGHTS}"
 }
 
 # check_test_shard_plan SHARD COUNT: one "module<TAB>package<TAB>key" line per package of the shard, key = import path relative
@@ -1244,7 +1249,7 @@ check_test_shard_plan() {
     listing="$(test_leg_listed "go-list-all|${module_dir}" module_go "${module_dir}" list -mod=readonly -f '{{.ImportPath}}' ./... \
       | quality_filter "${module_dir}" "${modpath}" \
       | awk -v mod="${modpath}" -v shard="${shard}" -v count="${count}" -v weights="${GO_TEST_WEIGHTS}" -v pin="${GO_TEST_PINS}" \
-          -v splits="${GO_TEST_SPLITS}" \
+          -v splits="${GO_TEST_SPLITS}" -v tests="${GO_TEST_SPLIT_WEIGHTS}" \
           -v serial="${SERIAL_HEAVY_TEST_PACKAGE#"${modpath}/"}" -v chain=1 -v defw=1 -f "${ROOT}/ci/go_race_shard.awk")" \
       || die "test shard ${shard}/${count}: the package list or its split (ci/go_race_shard.awk) failed in ${module_dir}"
     while IFS=$'\t' read -r pkg spart sparts; do
@@ -1479,21 +1484,40 @@ test_legs_all() {
   [ "${rc}" -eq 0 ] || exit "${rc}"
 }
 
-# test_split_part_names MODULE PKG PART PARTS [GO FLAG...] (CHAOS-13520): the test names of part PART of PARTS of the split package
-# PKG: every name `go test -list` reports for the package (the leg's own build: -mod=readonly -trimpath plus the GO FLAGs) that go test can run
-# (Test*, Example*, Fuzz*), sorted (C locale), name i (1-based) in part ((i - 1) mod PARTS) + 1. A new test joins a part with
-# no table edit. Fails when the list fails, reports no name, or has fewer names than parts.
-test_split_part_names() {
-  local module_dir="$1" pkg="$2" part="$3" parts="$4" listing names count
-  shift 4
+# test_split_listed_names MODULE PKG PARTS [GO FLAG...] (CHAOS-13520): every name `go test -list` reports for the split package PKG
+# (the leg's own build: -mod=readonly -trimpath plus the GO FLAGs) that go test can run (Test*, Example*, Fuzz*), sorted (C locale).
+# Fails when the list fails, reports no name, or has fewer names than PARTS.
+test_split_listed_names() {
+  local module_dir="$1" pkg="$2" parts="$3" listing names count
+  shift 3
   listing="$(test_leg_listed "go-test-list|${module_dir}|${pkg}|${MERGE_GROUP_FRESH:+fresh}|$*" \
     module_go "${module_dir}" test -mod=readonly -trimpath ${MERGE_GROUP_FRESH:+-count=1} "$@" -list '.*' "${pkg}")" \
     || die "go test -list failed for split package ${pkg}"
   names="$(printf '%s\n' "${listing}" | grep -E '^(Test|Example|Fuzz)[^[:space:]]*$' | LC_ALL=C sort -u || true)"
   [ -n "${names}" ] || die "go test -list reported no test of split package ${pkg}"
   count="$(printf '%s\n' "${names}" | wc -l)"
-  [ "${count}" -ge "${parts}" ] || die "split package ${pkg} has ${count} test name(s), fewer than its ${parts} parts (ci/go_test_splits.tsv)"
+  [ "${count}" -ge "${parts}" ] || die "split package ${pkg} has ${count} test name(s), fewer than its ${parts} parts"
+  printf '%s\n' "${names}"
+}
+
+# test_split_part_names MODULE PKG PART PARTS [GO FLAG...] (CHAOS-13520; the auth legs): the names of part PART of PARTS of the
+# split package PKG: listed name i (1-based) in part ((i - 1) mod PARTS) + 1. A new test joins a part with no table edit.
+test_split_part_names() {
+  local module_dir="$1" pkg="$2" part="$3" parts="$4" names
+  shift 4
+  names="$(test_split_listed_names "${module_dir}" "${pkg}" "${parts}" "$@")" || exit 2
   printf '%s\n' "${names}" | awk -v p="${part}" -v np="${parts}" '(NR - 1) % np == p - 1'
+}
+
+# test_split_weighed_part_names MODULE PKG KEY PART PARTS (CHAOS-13668; the go-quality test legs): the names of part PART of PARTS
+# of the split package PKG (weights key KEY), cut by ci/go_test_split_weights.tsv (ci/go_race_shard.awk names mode): a measured
+# name by its row, any other name by its own hash, so adding a test moves no other test. Fails when a row of KEY names a test
+# `go test -list` no longer reports, or KEY has fewer rows than parts.
+test_split_weighed_part_names() {
+  local module_dir="$1" pkg="$2" key="$3" part="$4" parts="$5" names
+  names="$(test_split_listed_names "${module_dir}" "${pkg}" "${parts}")" || exit 2
+  printf '%s\n' "${names}" | LC_ALL=C awk -v cutkey="${key}" -v cutparts="${parts}" -v cutpart="${part}" -v tests="${GO_TEST_SPLIT_WEIGHTS}" \
+    -f "${ROOT}/ci/go_race_shard.awk" || die "split package ${key}: its parts cannot be cut by ${GO_TEST_SPLIT_WEIGHTS#"${ROOT}/"}"
 }
 
 # test_shard_split_names PLAN MODULE: one "package<TAB>key<TAB>name" line per test name of the split-package parts of PLAN (the
@@ -1509,7 +1533,7 @@ test_shard_split_names() {
     if printf '%s\n' "${SECURITY_FRESH_SET}" | grep -Fqx -- "${pkg}"; then
       die "split package ${key} is a fresh security package (${SECURITY_FRESH_FILE#"${ROOT}/"}); it cannot be split"
     fi
-    names="$(test_split_part_names "${module_dir}" "${pkg}" "${part}" "${parts}")" || exit 2
+    names="$(test_split_weighed_part_names "${module_dir}" "${pkg}" "${key}" "${part}" "${parts}")" || exit 2
     while IFS= read -r name; do
       [ -n "${name}" ] || continue
       printf '%s\t%s\t%s\n' "${pkg}" "${key}" "${name}"

@@ -32,8 +32,9 @@ const Header = "X-Auth-Request-ID"
 var wireEncoding = base32.StdEncoding.WithPadding(base32.NoPadding)
 
 const (
-	// logKey is a key the wire form is logged under. Every such key (audit_request_id, request_id,
-	// auth_request_id) is unprotected, so the redactor gives the same answer under each.
+	// logKey is a key the wire form is logged under. audit_request_id and request_id are unprotected keys, so the
+	// redactor gives the same answer under each. auth_request_id (the access line) is a protected key: the redactor
+	// hides its whole value, so a draw does not change that line.
 	logKey = "audit_request_id"
 	// maxDraws bounds the redraw of ids the log redactor would change (about 3.6e-7 of draws).
 	maxDraws = 8

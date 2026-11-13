@@ -80,6 +80,16 @@ func seedStore(t *testing.T, ctx context.Context, conn chdriver.Conn) {
 
 	exec(t, ctx, conn, `INSERT INTO teams (id, team_uuid, name, repo_patterns, org_id, updated_at)
         SELECT 'team-b', generateUUIDv4(), 'Team B', ['other/*'], '%s', now64(6)`, org1)
+	// A team's repositories are the ones it owns (team_repo_ownership), never a
+	// match of its repo_patterns. team-a owns acme/alpha in org1 through the
+	// name join (repo_id NULL, as the GitHub team import writes it) and
+	// other/alpha in org2; team-b owns nothing in org1.
+	own := func(org, team, fullName string) {
+		exec(t, ctx, conn, `INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at)
+            SELECT '%s', 'github', '%s', NULL, '%s', 'exact', 'provider_access', 1, 0, 0, toDateTime64('2026-01-01 00:00:00', 3, 'UTC'), NULL, now64(3)`, org, team, fullName)
+	}
+	own(org1, "team-a", "acme/alpha")
+	own(org2, "team-a", "other/alpha")
 
 	// org1: a stale version of the first row (older computed_at) must lose.
 	rollup(t, ctx, conn, org1, "team-a", rA, "pull_request", "2026-08-01", "ai_assisted", 99, 99, 99, 0.9, "2026-08-01 00:00:00")
@@ -214,7 +224,7 @@ func TestRealClickHouse_AIRollups(t *testing.T) {
 		if !ok || len(ids) != 1 || ids[0] != rA {
 			t.Fatalf("org1 team-a = %v %v, want [%s]", ids, ok, rA)
 		}
-		// team-b's pattern names other/*, which only org2 has: org1 owns nothing for it.
+		// team-b owns nothing in org1 (its pattern other/* is not read).
 		ids, ok = teamRepoIDs(ctx, client, org1, "team-b", "aiReviewLoad")
 		if !ok || len(ids) != 0 {
 			t.Fatalf("org1 team-b = %v %v, want none", ids, ok)

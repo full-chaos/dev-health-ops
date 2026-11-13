@@ -13,9 +13,11 @@ import (
 
 	"github.com/full-chaos/dev-health-go/clickhouse"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/aiimpact"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/activeteams"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
 
 // scriptedRows replays fixed rows through Scan, wrapping a value for a
@@ -119,6 +121,8 @@ func (f *fixtureClient) Query(_ context.Context, st string, b []clickhouse.Bindi
 	f.statements = append(f.statements, st)
 	f.bindings = append(f.bindings, b)
 	switch {
+	case strings.Contains(st, teamscope.Marker):
+		return f.ownership(st, b)
 	case strings.Contains(st, "FROM ai_impact_metrics_daily"):
 		var rows [][]any
 		for _, m := range f.ds.Daily {
@@ -163,14 +167,10 @@ func (f *fixtureClient) Query(_ context.Context, st string, b []clickhouse.Bindi
 			rows = append(rows, []any{id})
 		}
 		return &scriptedRows{rows: rows}, nil
-	case strings.Contains(st, "repo_patterns"):
+	case strings.Contains(st, teamsCatalogueRead):
 		var rows [][]any
 		for _, t := range f.c.TeamRows {
-			var pats []string
-			for _, p := range t["repo_patterns"].([]any) {
-				pats = append(pats, p.(string))
-			}
-			rows = append(rows, []any{t["id"].(string), t["name"].(string), pats})
+			rows = append(rows, []any{t["id"].(string), t["name"].(string)})
 		}
 		return &scriptedRows{rows: rows}, nil
 	case strings.Contains(st, "AS full_name"):
@@ -200,6 +200,76 @@ func (f *fixtureClient) Query(_ context.Context, st string, b []clickhouse.Bindi
 		return &scriptedRows{rows: rows}, nil
 	}
 	return nil, errors.New("fixtureClient: unscripted statement: " + st)
+}
+
+// teamsCatalogueRead is the fragment of the team catalogue read (loadTeams).
+const teamsCatalogueRead = "AS name\nFROM teams\n"
+
+// ownership answers the team_repo_ownership reads of package teamscope (the
+// team scope, teamscope.HeldRepoIDs, and the owner of each repository,
+// ownerTeams) from the case's recorded catalogue. The recorded Python cases
+// gave a team the repositories its teams.repo_patterns select over the
+// repository full names. The fixture states that same assignment as
+// ownership: a repository is owned by the team whose pattern selects its full
+// name. With ownership equal to the recorded assignment, the recorded answers
+// hold for the owner rule unchanged, so no recorded file changes; the owner
+// rule itself is pinned by owner_scope_13679_test.go.
+func (f *fixtureClient) ownership(st string, b []clickhouse.Binding) (clickhouse.RowScanner, error) {
+	var teams []aiimpact.Team
+	for _, t := range f.c.TeamRows {
+		var pats []string
+		for _, p := range t["repo_patterns"].([]any) {
+			pats = append(pats, p.(string))
+		}
+		teams = append(teams, aiimpact.Team{ID: t["id"].(string), Name: t["name"].(string), RepoPatterns: pats})
+	}
+	resolver := aiimpact.BuildRepoPatternResolver(teams)
+	names := map[string]string{}
+	for _, r := range f.c.RepoRows {
+		names[r["repo_id"].(string)] = r["full_name"].(string)
+	}
+	owner := func(name string) string {
+		if t := resolver.Resolve(name); t != nil {
+			return *t
+		}
+		return ""
+	}
+	strs := func(name string) []string {
+		for _, x := range b {
+			if x.Name == name {
+				v, _ := x.Value.([]string)
+				return v
+			}
+		}
+		return nil
+	}
+	var rows [][]any
+	switch {
+	case strings.Contains(st, "{held_repo_ids:Array(String)}"):
+		scope := map[string]bool{}
+		for _, id := range strs(teamscope.BindingTeamIDs) {
+			scope[id] = true
+		}
+		for _, id := range strs("held_repo_ids") {
+			if t := owner(names[id]); t != "" && scope[t] {
+				rows = append(rows, []any{id})
+			}
+		}
+	case strings.Contains(st, "{owner_repo_ids:Array(String)}"):
+		for _, id := range strs("owner_repo_ids") {
+			// The recorded reference read a repository with no full name as its id.
+			name := names[id]
+			if name == "" {
+				name = id
+			}
+			if t := owner(name); t != "" {
+				rows = append(rows, []any{id, t})
+			}
+		}
+	default:
+		return nil, errors.New("fixtureClient: unscripted ownership statement: " + st)
+	}
+	return &scriptedRows{rows: rows}, nil
 }
 
 // normalize drops null entries, and parses the timestamp text of computedAt
@@ -323,8 +393,9 @@ func TestResolvers_MatchPythonResolvers(t *testing.T) {
 }
 
 // TestTeamRepoIDs_MatchPython requires the repositories a team resolves to
-// (the pattern resolver over the org's teams and repository names) to equal
-// the set the Python resolver derives from the same catalogues.
+// (its owned repositories, the fixture stating the recorded pattern
+// assignment as ownership) to equal the set the Python resolver derived from
+// the same catalogues.
 func TestTeamRepoIDs_MatchPython(t *testing.T) {
 	datasets, cases := loadOracle(t)
 	checked := 0

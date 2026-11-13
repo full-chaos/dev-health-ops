@@ -388,21 +388,34 @@ LIMIT {limit_n:UInt32} OFFSET {offset_n:UInt32}`, bindings)
 	return out, nil
 }
 
-// repoTeamMap resolves each repository id to the team its full name
-// selects; a catalogue read that fails degrades to "no team", never an error.
-func repoTeamMap(ctx context.Context, client QueryClient, orgID string, repoIDs []string, operation string) map[string]*string {
-	return loadRepoCatalogue(ctx, client, orgID, repoIDs, operation).teamByRepo
-}
-
 // repoCatalogue is what the repository and team catalogues say about a page of
-// repositories: the team each one selects, plus the display names the
-// aiAttributedPrs rows (CHAOS-7773) and the aiOpportunities rows (CHAOS-8114)
-// carry. A name is present only when the catalogue holds a non-empty one: an id
-// is never offered as a name.
+// repositories: the display names the aiAttributedPrs rows (CHAOS-7773) and the
+// aiOpportunities rows (CHAOS-8114) carry, and, after withOwners, the team that
+// owns each one. A name is present only when the catalogue holds a non-empty
+// one: an id is never offered as a name.
 type repoCatalogue struct {
 	teamByRepo map[string]*string
 	repoNames  map[string]string
 	teamNames  map[string]string
+	// complete: both catalogue reads succeeded. Only then does a repository get
+	// a team; a failed read leaves every row with no team, as before.
+	complete bool
+}
+
+// withOwners sets the team of each repository of the page from its owner
+// (ownerTeams), preferring preferTeam. A failed owner read degrades to "no
+// team", never an error.
+func (c repoCatalogue) withOwners(ctx context.Context, client QueryClient, orgID string, repoIDs []string, preferTeam, operation string) repoCatalogue {
+	if !c.complete {
+		return c
+	}
+	owners, err := ownerTeams(ctx, client, orgID, repoIDs, preferTeam, time.Now().UTC())
+	if err != nil {
+		warnCatalogue(ctx, operation, err)
+		return c
+	}
+	c.teamByRepo = owners
+	return c
 }
 
 // repoName is the repository's catalogue full name, or nil.
@@ -434,8 +447,9 @@ func (c repoCatalogue) teamName(teamID *string) *string {
 
 // loadRepoCatalogue reads the team and repository catalogues once for a page.
 // Each read degrades on its own: a failed teams read leaves no team and no team
-// name, a failed repository read leaves no repository name and no team (a team
-// is selected by the repository full name); either way the rows still come back.
+// name, a failed repository read leaves no repository name and no team; either
+// way the rows still come back. The team of a repository is read only by the
+// pages that serve it (withOwners).
 // The team NAMES need the teams read only: a row that carries its own team id
 // (an aiOpportunities row) keeps its team name when the repository read fails.
 func loadRepoCatalogue(ctx context.Context, client QueryClient, orgID string, repoIDs []string, operation string) repoCatalogue {
@@ -466,18 +480,7 @@ func loadRepoCatalogue(ctx context.Context, client QueryClient, orgID string, re
 			out.teamNames[t.ID] = t.Name
 		}
 	}
-	if teamsErr != nil || namesErr != nil {
-		return out
-	}
-	// The reference reads a repository with no full name as its id.
-	fallback := make(map[string]string, len(raw))
-	for id, name := range raw {
-		if name == "" {
-			name = id
-		}
-		fallback[id] = name
-	}
-	out.teamByRepo = resolveTeams(teams, repoIDs, fallback)
+	out.complete = teamsErr == nil && namesErr == nil
 	return out
 }
 

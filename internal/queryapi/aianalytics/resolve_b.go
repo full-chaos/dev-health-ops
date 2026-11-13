@@ -207,7 +207,8 @@ func AttributedPrs(ctx context.Context, client QueryClient, orgID string, dr mod
 	}
 
 	distinct := distinctRepoIDs(len(page), func(i int) *string { return &page[i].RepoID })
-	catalogue := loadRepoCatalogue(ctx, client, orgID, distinct, "aiAttributedPrs")
+	catalogue := loadRepoCatalogue(ctx, client, orgID, distinct, "aiAttributedPrs").
+		withOwners(ctx, client, orgID, distinct, sc.teamID, "aiAttributedPrs")
 	if len(catalogue.teamByRepo) > 0 {
 		for i := range page {
 			page[i].TeamID = catalogue.teamByRepo[page[i].RepoID]
@@ -343,7 +344,8 @@ func AttributionOverview(ctx context.Context, client QueryClient, orgID string, 
 		page = raw[:pageSize]
 	}
 	distinct := distinctRepoIDs(len(page), func(i int) *string { return page[i].RepoID })
-	catalogue := loadRepoCatalogue(ctx, client, orgID, distinct, "aiAttributionOverview")
+	catalogue := loadRepoCatalogue(ctx, client, orgID, distinct, "aiAttributionOverview").
+		withOwners(ctx, client, orgID, distinct, sc.teamID, "aiAttributionOverview")
 	teamMap := catalogue.teamByRepo
 	if len(teamMap) > 0 {
 		for i := range page {

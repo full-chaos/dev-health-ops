@@ -171,8 +171,8 @@ func TestOrglessOrgRowsRealHandlersKeepTheLegacyAnswer(t *testing.T) {
 	if orgsMeChecked != 1 {
 		t.Errorf("%s checked %d times for the org-less platform admin, want 1", orglessOrgsMe, orgsMeChecked)
 	}
-	if handlerAnswers[true]+handlerAnswers[false] != 79 {
-		t.Errorf("%d Admin and Authenticated rows reached the handler, want 79", handlerAnswers[true]+handlerAnswers[false])
+	if handlerAnswers[true]+handlerAnswers[false] != 80 {
+		t.Errorf("%d Admin and Authenticated rows reached the handler, want 80", handlerAnswers[true]+handlerAnswers[false])
 	}
 	t.Logf("platform admin with no organization, legacy handler answers: %d rows refuse 403 Organization context required, %d rows answer otherwise", handlerAnswers[true], handlerAnswers[false])
 }

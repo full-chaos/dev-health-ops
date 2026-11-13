@@ -92,7 +92,7 @@ func TestSSOEgressAllowNeverReachesTheSocialOAuthExchange(t *testing.T) {
 
 // C-a: the OIDC client newHandlers installs keeps today's posture (30 s timeout, no redirect, the GuardedTransport TLS
 // and connection settings, no proxy); only its dial check differs, and it is not the social client.
-func TestTheOIDCClientKeepsTodaysTimeoutTLSAndRedirectPolicy(t *testing.T) {
+func TestGoAPITheOIDCClientKeepsTodaysTimeoutTLSAndRedirectPolicy(t *testing.T) {
 	h := newHandlers(Deps{})
 	client, social := h.oidcClient, h.HTTPClient
 	if client == nil || client == social {
@@ -124,7 +124,7 @@ func TestTheOIDCClientKeepsTodaysTimeoutTLSAndRedirectPolicy(t *testing.T) {
 }
 
 // C-a: with the IdP listed, the OIDC client reaches it and still follows no redirect to another origin.
-func TestSSOEgressAllowKeepsTheOIDCClientsNoRedirectPolicy(t *testing.T) {
+func TestGoAPISSOEgressAllowKeepsTheOIDCClientsNoRedirectPolicy(t *testing.T) {
 	t.Setenv(ssoEgressAllowEnv, "127.0.0.1/32")
 	probe := redirectprobe.New(t)
 	h := newHandlers(Deps{})
@@ -155,7 +155,7 @@ func TestTheDefaultSocialClientNeverDialsTheEnvironmentProxy(t *testing.T) {
 
 // Every OIDC call of the handlers goes through the OIDC client and no social OAuth call does: oidc.go names no
 // h.HTTPClient, oauth.go names no oidcClient.
-func TestOIDCAndSocialCallsUseTheirOwnClients(t *testing.T) {
+func TestGoAPIOIDCAndSocialCallsUseTheirOwnClients(t *testing.T) {
 	oidcRaw, err := os.ReadFile("oidc.go")
 	if err != nil {
 		t.Fatal(err)

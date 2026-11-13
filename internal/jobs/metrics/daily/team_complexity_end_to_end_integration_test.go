@@ -67,15 +67,23 @@ func TestTeamComplexityEndToEndFromNativeComplexityExecutor(t *testing.T) {
 	seedTeamComplexityE2ERepo(t, ctx, conn, repoOne, orgID, "acme/repo-one", lastSynced)
 	seedTeamComplexityE2ERepo(t, ctx, conn, repoTwo, orgID, "acme/repo-two", lastSynced)
 
-	// One team, pattern owning BOTH repos -- the pure prefix-pattern path
-	// (no authoritative-ownership row seeded), same resolution shape
-	// resolveDailyFinalizeRepoToTeam falls back to for a repo its ownership
-	// read leaves unresolved.
+	// One team owning BOTH repos through ownership rows: the team of a
+	// repository is its owner only, no repo_patterns fallback (D7013b).
 	if err := conn.Exec(ctx,
 		"INSERT INTO teams (id, name, repo_patterns, org_id) VALUES (?, ?, ?, ?)",
-		"team-metrics", "Metrics Team", []string{"acme/*"}, orgID,
+		"team-metrics", "Metrics Team", []string{}, orgID,
 	); err != nil {
 		t.Fatalf("insert team: %v", err)
+	}
+	ownedSince := mustParseTeamComplexityE2ETime(t, "2026-04-01T00:00:00Z")
+	for repoID, name := range map[uuid.UUID]string{repoOne: "acme/repo-one", repoTwo: "acme/repo-two"} {
+		if err := conn.Exec(ctx, `INSERT INTO team_repo_ownership
+    (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, valid_from, updated_at)
+    VALUES (?, 'github', ?, ?, ?, 'exact', 'native', 1, 10, ?, ?)`,
+			orgID, "team-metrics", repoID, name, ownedSince, ownedSince,
+		); err != nil {
+			t.Fatalf("insert ownership of %s: %v", name, err)
+		}
 	}
 
 	complexityExecutor, err := remaining.NewComplexityExecutor(ctx, conn, teamComplexityE2EConfigPath(t), nil)

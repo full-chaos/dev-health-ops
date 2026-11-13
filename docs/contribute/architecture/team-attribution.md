@@ -497,6 +497,9 @@ means the ClickHouse `teams` dimension is empty.
 > `docs/operate/run/workers-and-jobs.md`) — `team_autoimport_github.populate()` is the only writer.
 > GitLab/Jira/Linear-only orgs have no `team_repo_ownership` writer by design (§0.2 above); their
 > repos resolve to a team only via `teams.repo_patterns` (manually configured, or fixtures).
+> **Go daily families (D7013b):** `team_wellbeing`, `ai_impact`, `team_cognitive_load`, `team_complexity`,
+> `compounding_risk_team` and the four TestOps families take a repository's team from `team_repo_ownership` only. A
+> repository with no owner row gets no team; none of them reads `teams.repo_patterns`.
 
 > **TestOps daily rows use repository ownership, not patterns.** The native
 > `testops_pipeline`, `testops_test`, `testops_coverage`, and `testops_risk` families retain a
@@ -1984,10 +1987,11 @@ item (`dropInactiveTeamCandidates`, section 0.2) and, with the same test of the 
 metric family:
 
 - `teamownership.AuthoritativeOwnersByRepo` skips an ownership row of an inactive team. A lower-ranked row of an active
-  team for the same repository then wins; a repository with no active owner goes to the caller's pattern fallback.
+  team for the same repository then wins; a repository with no active owner gets no team (no daily family falls back
+  to `teams.repo_patterns`, D7013b).
   Callers: testops, `ai_impact`, `team_cognitive_load`, `team_complexity`, `compounding_risk_team`, `team_wellbeing`.
-- `LoadWellbeingTeams` (`team_wellbeing` for the team names only, `ic_finalize`, and the pattern fallback of the three finalize families) and
-  `LoadAIImpactTeams` (`ai_impact`) drop the inactive teams after their read.
+- `LoadWellbeingTeams` (`team_wellbeing`, for the team names) and `LoadAIImpactTeams` (`ai_impact`, for the incident
+  attribution) read id and name only, and drop the inactive teams after their read.
 
 `team_wellbeing` (`team_metrics_daily`) takes the team of a repository from its owner rows only
 (`teamownership.OwnerSharesByRepo`); a repository with no owner is `unassigned`. It does not fall back to

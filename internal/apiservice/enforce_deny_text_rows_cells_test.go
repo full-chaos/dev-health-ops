@@ -220,6 +220,13 @@ func TestDenyTextRowsAnswerEveryCallerClassAsLegacy(t *testing.T) {
 					t.Errorf("%s / %s / %s: new %d %s, legacy %d %s", posture.name, key, name, got.status, strings.TrimSpace(got.body), legacy.status, strings.TrimSpace(legacy.body))
 				}
 				t.Logf("CELL\t%s\t%s\t%s\tlegacy=%d:%s\tnew=%d:%s\tpdp_calls=%d(%s)\t%s", posture.name, key, name, legacy.status, short(legacy.body), got.status, short(got.body), len(calls), action, result)
+				wantCalls := 1
+				if name == "impersonating platform admin" {
+					wantCalls = 0
+				}
+				if len(calls) != wantCalls || (len(calls) == 1 && calls[0].Action != action) {
+					t.Errorf("%s / %s / %s: decision point calls %+v, want %d asking %s", posture.name, key, name, calls, wantCalls, action)
+				}
 				if name == "impersonating platform admin" {
 					if got.status != http.StatusForbidden {
 						t.Errorf("%s / %s / live impersonation row: %d %s, want 403", posture.name, key, got.status, strings.TrimSpace(got.body))
@@ -292,6 +299,24 @@ func TestReportRefusalIsCountedOnceAndAHolderNever(t *testing.T) {
 			if got := log.refusals(); got != cell.want {
 				t.Errorf("%s / %s: %d refusal log lines (%d %s), want %d", mode, cell.class, got, answer.status, strings.TrimSpace(answer.body), cell.want)
 			}
+		}
+	}
+}
+
+// Each row's profile action is the action its cells ask, and no other.
+func TestDenyTextRowsMatchTheProfile(t *testing.T) {
+	got := map[string]string{}
+	for _, row := range loadGoAPIRows(t) {
+		route, _ := row["route"].(string)
+		method, _ := row["method"].(string)
+		key := method + " " + route
+		if _, ok := denyTextActions[key]; ok && row["service"] == goAPIAccessService {
+			got[key], _ = row["action"].(string)
+		}
+	}
+	for key, want := range denyTextActions {
+		if got[key] != want {
+			t.Errorf("%s: profile action %q, cells ask %q", key, got[key], want)
 		}
 	}
 }

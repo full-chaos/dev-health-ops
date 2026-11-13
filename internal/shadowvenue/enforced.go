@@ -429,6 +429,13 @@ func unjudgedOutsideClosedSet(reasons map[string]map[string]int) []string {
 	return outside
 }
 
+// retiredYardVerdicts are verdicts the shadow judge no longer gives (CHAOS-13675): a no-organization superuser skip it
+// relabelled on the no_org counter, and a seam-row skip it passed by row. A yardstick that carries one is refused.
+var retiredYardVerdicts = []string{"SKIPPED_NOORG", "SKIPPED_SEAM"}
+
+// ErrRetiredYardVerdict is ParseYardstick's refusal of a yardstick with a retired verdict: the run is void.
+var ErrRetiredYardVerdict = errors.New("yardstick: a retired verdict")
+
 // RowNamespaces maps each go-api shadow row key to its action namespace.
 func RowNamespaces(profiles []byte) (map[string]string, error) {
 	rows, err := policy.ParseShadowRows(profiles, accessrouting.Service)
@@ -485,6 +492,9 @@ func ParseYardstick(raw []byte) ([]YardSlot, error) {
 		}
 		if f[7] == VerdictGap {
 			continue
+		}
+		if slices.Contains(retiredYardVerdicts, f[7]) {
+			return nil, fmt.Errorf("%w: line %d has %s: a shadow judge before CHAOS-13675 wrote it, and this judge does not read it", ErrRetiredYardVerdict, n+2, f[7])
 		}
 		norm := f[6]
 		if norm == none {

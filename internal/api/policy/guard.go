@@ -174,11 +174,11 @@ func (g *Guard) wrap(level Authz, gt gate, next http.Handler) http.Handler {
 			return platform.holds(r.Context(), action)
 		}
 		refuse := func(err error) {
-			g.observeShadow(r, caller, bearer, false, gt)
+			g.observeShadow(r, caller, bearer, false, gt, level)
 			WritePlatformDecisionRefusal(w, err)
 		}
 		if user.OrgID == "" && !user.Holds(gt.orglessAction()) && !OrglessMayReach(r.Method, r.URL.Path) {
-			g.observeShadow(r, caller, bearer, false, gt)
+			g.observeShadow(r, caller, bearer, false, gt, level)
 			WriteDetail(w, http.StatusForbidden, "Organization context required", nil)
 			return
 		}
@@ -202,12 +202,12 @@ func (g *Guard) wrap(level Authz, gt gate, next http.Handler) http.Handler {
 				admitted = held
 			}
 			if !admitted {
-				g.observeShadow(r, caller, bearer, false, gt)
+				g.observeShadow(r, caller, bearer, false, gt, level)
 				WriteDetail(w, http.StatusForbidden, "Admin access required", nil)
 				return
 			}
 			if level == AdminOrg && user.OrgID == "" {
-				g.observeShadow(r, caller, bearer, false, gt)
+				g.observeShadow(r, caller, bearer, false, gt, level)
 				WriteDetail(w, http.StatusForbidden, "Organization context required", nil)
 				return
 			}
@@ -221,7 +221,7 @@ func (g *Guard) wrap(level Authz, gt gate, next http.Handler) http.Handler {
 				}
 			}
 			if !held {
-				g.observeShadow(r, caller, bearer, false, gt)
+				g.observeShadow(r, caller, bearer, false, gt, level)
 				WriteDetail(w, http.StatusForbidden, "Superuser access required", nil)
 				return
 			}
@@ -235,13 +235,13 @@ func (g *Guard) wrap(level Authz, gt gate, next http.Handler) http.Handler {
 				if session != nil {
 					g.logger.WarnContext(r.Context(), "api guard: platform action refused in an impersonation session",
 						slog.String("path", r.Pattern), slog.String("action", gt.action))
-					g.observeShadowAs(r, caller, bearer, false, true, gt)
+					g.observeShadowAs(r, caller, bearer, false, true, gt, level)
 					WriteDetail(w, http.StatusForbidden, msgImpersonationDenied, nil)
 					return
 				}
 			}
 		}
-		g.observeShadow(r, caller, bearer, true, gt)
+		g.observeShadow(r, caller, bearer, true, gt, level)
 		next.ServeHTTP(w, g.userRequest(r, user))
 	}))
 }

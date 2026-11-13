@@ -1,6 +1,7 @@
 package shadowvenue
 
 import (
+	"errors"
 	"slices"
 	"strconv"
 	"strings"
@@ -73,7 +74,7 @@ func newEnfRun() *enfRun {
 	add("C2", "superuser", "GET /api/v1/admin/integrations", 200, 403, VerdictMismatch, true)
 	add("1", "member", teamsKey, 403, 403, VerdictMatch, false)
 	add("1", "admin", teamsKey, 200, 200, VerdictMatch, false)
-	add("2", "superuser", seamKey, 200, 200, VerdictSkippedSeam, false)
+	add("2", "superuser", seamKey, 200, 200, VerdictMatch, false)
 	add("3", "superuser", noOrgKey, 403, 403, VerdictSkipped, false)
 	r.in = EnforcedInput{
 		Slots: r.slots, Yard: r.yard, K: 3,
@@ -282,6 +283,13 @@ func TestYardstickRoundTripsThroughTheVerdictsFile(t *testing.T) {
 	yard, err := ParseYardstick([]byte(b.String()))
 	if err != nil || len(yard) != len(run.slots) {
 		t.Fatalf("%d yardstick slots, want %d: %v", len(yard), len(run.slots), err)
+	}
+	// CHAOS-13675 (acp Q2): a yardstick with a verdict the shadow judge no longer gives is refused, by name.
+	for _, retired := range []string{"SKIPPED_NOORG", "SKIPPED_SEAM"} {
+		file := verdictsHeader + "\n1\t2\tsuperuser\t1\t" + seamKey + "\t200\t-\t" + retired + "\n"
+		if _, err := ParseYardstick([]byte(file)); !errors.Is(err, ErrRetiredYardVerdict) || !strings.Contains(err.Error(), retired) {
+			t.Errorf("%s: %v, want ErrRetiredYardVerdict naming it", retired, err)
+		}
 	}
 	for _, bad := range []string{"", "seq\trow\n", verdictsHeader + "\n1\tA\tmember\tx\tGET /a\t200\tMATCH\n", verdictsHeader + "\n"} {
 		if _, err := ParseYardstick([]byte(bad)); err == nil {

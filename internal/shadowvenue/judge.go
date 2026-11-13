@@ -39,8 +39,6 @@ const (
 	VerdictGap                  = "GAP"
 	VerdictKShort               = "K_SHORT"
 	VerdictLegacyDisagrees      = "CONTROL_LEGACY_DISAGREES"
-	VerdictSkippedSeam          = "SKIPPED_SEAM"
-	VerdictSkippedNoOrg         = "SKIPPED_NOORG"
 	// VerdictDecidedNoOrg: a no-org superuser slot that a go-api build which decides a token with no organization
 	// (CHAOS-10872 S1) answered as the yardstick did, with the counter evidence of that build (JudgeEnforced).
 	VerdictDecidedNoOrg = "DECIDED_NOORG"
@@ -219,8 +217,6 @@ func ParseRulings(raw []byte) ([]Ruling, error) {
 type JudgeOptions struct {
 	K     int
 	Grace time.Duration
-	// NoOrg is the enforcement counter evidence for the superuser's no-organization skips; nil gives none.
-	NoOrg NoOrgEvidence
 	// Outbound is the venue stub's evidence of outside calls (checkOutbound).
 	Outbound Outbound
 	// Strict holds every sent slot to its claim read-back and body digest (a missing one voids the run) and the
@@ -241,20 +237,10 @@ type SlotVerdict struct {
 // Pass reports whether the slot's evidence passes it.
 func (s SlotVerdict) Pass() bool {
 	switch s.Verdict {
-	case VerdictMatch, VerdictMatchServedOther, VerdictMismatchIntentional, VerdictMismatchRuled, VerdictSkippedSeam, VerdictSkippedNoOrg, VerdictDecidedNoOrg, VerdictMatchEnforced, VerdictEqualPastGuard:
+	case VerdictMatch, VerdictMatchServedOther, VerdictMismatchIntentional, VerdictMismatchRuled, VerdictDecidedNoOrg, VerdictMatchEnforced, VerdictEqualPastGuard:
 		return true
 	}
 	return false
-}
-
-// seamSkipRows are the rows on which the superuser, whose token has no organization, is answered by the served-org seam
-// (CHAOS-13209, #5862): the request names an organization, the seam keeps the legacy answer and asks the decision
-// point nothing, so the shadow's result is "skipped" and enforcement equals legacy by construction. The result line
-// carries no reason, so the pass is pinned to these rows and to the superuser; any other skip fails the run.
-var seamSkipRows = []string{
-	"GET /api/v1/admin/orgs/{org_id}/members", "POST /api/v1/admin/orgs/{org_id}/members",
-	"DELETE /api/v1/admin/orgs/{org_id}/members/{user_id}", "PATCH /api/v1/admin/orgs/{org_id}/members/{user_id}",
-	"GET /api/v1/billing/entitlements/{org_id}", "GET /api/v1/licensing/entitlements/{org_id}",
 }
 
 // RowVerdict is one row (or control) and its cells, by caller kind.
@@ -337,7 +323,6 @@ func Judge(slots []Slot, ev Evidence, rulings []Ruling, o JudgeOptions) Report {
 		report.Slots = append(report.Slots, sv)
 	}
 	applyStrict(&report, o.Strict, o.Membership, void)
-	relabelNoOrgSkips(report.Slots, o.NoOrg)
 	outbound := checkOutbound(slots, o.Outbound, byRow, o.Grace, []string{"before", "between"})
 	for i := range report.Slots {
 		report.Slots[i].Outbound = outbound.hits[report.Slots[i].Seq]
@@ -477,9 +462,6 @@ func judgeSlot(sv *SlotVerdict, results []resultLine, ev Evidence, rulings []Rul
 		}
 	default:
 		sv.Verdict = resultVerdicts[line.result]
-		if line.result == "skipped" && sv.Caller == "superuser" && slices.Contains(seamSkipRows, sv.Key()) {
-			sv.Verdict = VerdictSkippedSeam
-		}
 	}
 }
 
@@ -585,7 +567,7 @@ func rowVerdicts(slots []SlotVerdict, k int) []RowVerdict {
 func cellPasses(counts map[string]int, row string) bool {
 	for verdict := range counts {
 		switch verdict {
-		case VerdictMatch, VerdictMatchServedOther, VerdictMismatchIntentional, VerdictMismatchRuled, VerdictSkippedSeam, VerdictSkippedNoOrg, VerdictMatchEnforced:
+		case VerdictMatch, VerdictMatchServedOther, VerdictMismatchIntentional, VerdictMismatchRuled, VerdictMatchEnforced:
 		default:
 			if !(strings.HasPrefix(row, "C") && controlMismatch(verdict)) {
 				return false

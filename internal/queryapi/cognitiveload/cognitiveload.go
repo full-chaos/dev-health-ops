@@ -19,8 +19,8 @@
 //     ownership since the wellbeing change, but days computed before it still
 //     hold the author-membership / "unassigned" rows until recomputed).
 //     resolveOwnedRepoID
-//     confirms via team_repo_ownership (falling back to teams.repo_patterns
-//     only when native ownership resolves no row at all) that the
+//     confirms via team_repo_ownership (teams.repo_patterns is not read; a
+//     repo with no owner row is owned by no team) that the
 //     requested repo is CURRENTLY, CANONICALLY owned by the requested
 //     team. If not owned (or the repo does not exist), returns an
 //     explicit empty result rather than either the wrong team's data or a
@@ -59,12 +59,10 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/full-chaos/dev-health-go/clickhouse"
 
-	"github.com/full-chaos/dev-health-ops/internal/queryapi/activeteams"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
@@ -758,9 +756,9 @@ func fetchRetractedLoadDays(ctx context.Context, client QueryClient, bindings []
 // ---------------------------------------------------------------------------
 
 // repoCandidate is one row from the repos lookup: repoID resolves EITHER a
-// repos.id UUID or a repos.repo slug to a concrete repo, keeping both the
-// id (for ownership matching) and the repo slug (for the repo_patterns
-// fallback, which matches on the slug, never the UUID).
+// repos.id UUID or a repos.repo slug to a concrete repo. Only the id is
+// matched against ownership; the slug is scanned because the candidate query
+// text is pinned by the frozen golden.
 type repoCandidate struct {
 	id   string
 	repo string
@@ -778,22 +776,13 @@ type ownershipRow struct {
 	specificity    uint16
 }
 
-// patternTeam is one team's repo_patterns row, for the pattern-fallback
-// resolver -- team_name is not needed (only team_id is ever compared).
-type patternTeam struct {
-	id           string
-	repoPatterns []string
-}
-
-// resolveOwnedRepoID ports _resolve_owned_repo_id verbatim (see that
-// Python function's docstring for the full rationale -- native
-// team_repo_ownership wins where it resolves the repo, ranked by
-// ((is_primary = 1) DESC, specificity DESC, updated_at DESC, team_id ASC) same
-// as load_team_repo_ownership_map; teams.repo_patterns is consulted ONLY
-// for a candidate repo ownership resolves no row for at all, via the same
-// cross-team pattern resolver every other pattern-fallback reader uses).
-// Returns ("", false, nil) when repoID does not exist, or resolves to a
-// different team than teamID.
+// resolveOwnedRepoID resolves repoID to the repository the team owns:
+// native team_repo_ownership, ranked by ((is_primary = 1) DESC, specificity
+// DESC, updated_at DESC, team_id ASC) same as load_team_repo_ownership_map.
+// teams.repo_patterns is not read: a repository with no owner row is owned
+// by no team (the same rule the metric families and the AI analytics scope
+// use). Returns ("", false, nil) when repoID does not exist, has no owner
+// row, or resolves to a different team than teamID.
 func resolveOwnedRepoID(ctx context.Context, client QueryClient, orgID, teamID, repoID string) (string, bool, error) {
 	candidates, err := fetchRepoCandidates(ctx, client, orgID, repoID)
 	if err != nil {
@@ -848,32 +837,8 @@ func resolveOwnedRepoID(ctx context.Context, client QueryClient, orgID, teamID, 
 		}
 	}
 
-	// A candidate resolved by NATIVE ownership to a DIFFERENT team is
-	// claimed and never re-checked against patterns; only a candidate with
-	// NO native ownership row at all gets a pattern-fallback chance.
-	var unresolved []repoCandidate
-	for _, c := range candidates {
-		if _, ok := canonicalOwner[c.id]; !ok {
-			unresolved = append(unresolved, c)
-		}
-	}
-	if len(unresolved) == 0 {
-		return "", false, nil
-	}
-
-	teamRows, err := fetchAllTeamsForPatternFallback(ctx, client, orgID)
-	if err != nil {
-		return "", false, fmt.Errorf("teams: %w", err)
-	}
-	if len(teamRows) == 0 {
-		return "", false, nil
-	}
-	resolver := newRepoPatternResolver(teamRows)
-	for _, c := range unresolved {
-		if resolvedTeamID, ok := resolver.resolve(c.repo); ok && resolvedTeamID == teamID {
-			return c.id, true, nil
-		}
-	}
+	// No owner row resolves the repo to this team: not owned. teams.repo_patterns
+	// is not read (one rule for every team scope reader: the owner row, else none).
 	return "", false, nil
 }
 
@@ -972,148 +937,6 @@ func fetchOwnershipCandidates(ctx context.Context, client QueryClient, orgID str
 		return nil, fmt.Errorf("rows: %w", err)
 	}
 	return result, nil
-}
-
-// fetchAllTeamsForPatternFallback ports the all_team_rows query inside
-// _resolve_owned_repo_id: every team's id + repo_patterns in the org, so
-// the pattern resolver is built from EVERY team's patterns (not just the
-// requesting team's) -- a more specific pattern another team owns must
-// never be silently overridden by this team's own broader one.
-func fetchAllTeamsForPatternFallback(ctx context.Context, client QueryClient, orgID string) ([]patternTeam, error) {
-	query := `SELECT id, repo_patterns FROM teams FINAL WHERE org_id = {org_id:String}`
-	bindings := []clickhouse.Binding{{Name: "org_id", Value: orgID}}
-
-	rows, err := client.Query(ctx, query, bindings)
-	if err != nil {
-		return nil, fmt.Errorf("query: %w", err)
-	}
-	defer rows.Close()
-
-	var result []patternTeam
-	for rows.Next() {
-		var t patternTeam
-		if scanErr := rows.Scan(&t.id, &t.repoPatterns); scanErr != nil {
-			return nil, fmt.Errorf("scan: %w", scanErr)
-		}
-		result = append(result, t)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("rows: %w", err)
-	}
-	if len(result) == 0 {
-		return result, nil
-	}
-	// The SQL above is pinned to the Python reference and reads every team row,
-	// so the retired twin of a team (same repo_patterns) is in `result`. A
-	// retired id never acts as a team: keep only the ids of the shared
-	// active-team set, read through the shared rule.
-	active, err := fetchActiveTeamIDs(ctx, client, orgID)
-	if err != nil {
-		return nil, err
-	}
-	kept := result[:0]
-	for _, t := range result {
-		if _, ok := active[t.id]; ok {
-			kept = append(kept, t)
-		}
-	}
-	return kept, nil
-}
-
-// fetchActiveTeamIDs reads the ids of the active teams of the org through
-// the shared activeteams rule.
-func fetchActiveTeamIDs(ctx context.Context, client QueryClient, orgID string) (map[string]struct{}, error) {
-	rows, err := client.Query(ctx, activeteams.IDsSubquery, []clickhouse.Binding{{Name: "org_id", Value: orgID}})
-	if err != nil {
-		return nil, fmt.Errorf("active teams query: %w", err)
-	}
-	defer rows.Close()
-	ids := map[string]struct{}{}
-	for rows.Next() {
-		var id string
-		if scanErr := rows.Scan(&id); scanErr != nil {
-			return nil, fmt.Errorf("active teams scan: %w", scanErr)
-		}
-		ids[id] = struct{}{}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("active teams rows: %w", err)
-	}
-	return ids, nil
-}
-
-// repoPatternResolver ports RepoPatternTeamResolver/build_repo_pattern_resolver
-// (src/dev_health_ops/providers/teams.py:94,248) -- deliberately a private
-// copy scoped to this package rather than a shared import: query-api is a
-// read-only service and does not import internal/jobs/... (the worker's
-// own copy lives in internal/jobs/metrics/daily/wellbeing_native_clickhouse.go
-// as repoPatternResolver/NewRepoPatternResolver, verified against this
-// same Python function already) -- same convention this package's
-// QueryClient doc comment already documents for why small per-package
-// helpers are not pulled through a shared library here.
-type repoPatternResolver struct {
-	exact    map[string]string // repo slug (lowercased) -> team_id
-	prefixes []repoPatternPrefix
-}
-
-type repoPatternPrefix struct {
-	prefix string
-	teamID string
-}
-
-// newRepoPatternResolver builds the resolver build_repo_pattern_resolver
-// builds: an exact-match map for patterns with no "*", and a prefix list
-// (pattern with trailing "*" and "/" stripped) for the rest, sorted
-// longest-prefix-first so the most specific pattern wins when several
-// match.
-func newRepoPatternResolver(teams []patternTeam) *repoPatternResolver {
-	exact := make(map[string]string)
-	var prefixes []repoPatternPrefix
-	for _, team := range teams {
-		teamID := strings.TrimSpace(team.id)
-		if teamID == "" || len(team.repoPatterns) == 0 {
-			continue
-		}
-		for _, raw := range team.repoPatterns {
-			pattern := strings.ToLower(strings.TrimSpace(raw))
-			if pattern == "" {
-				continue
-			}
-			if strings.Contains(pattern, "*") {
-				prefix := strings.TrimRight(strings.TrimRight(pattern, "*"), "/")
-				if prefix != "" {
-					prefixes = append(prefixes, repoPatternPrefix{prefix: prefix, teamID: teamID})
-				}
-				continue
-			}
-			exact[pattern] = teamID
-		}
-	}
-	sort.SliceStable(prefixes, func(i, j int) bool {
-		return len(prefixes[i].prefix) > len(prefixes[j].prefix)
-	})
-	return &repoPatternResolver{exact: exact, prefixes: prefixes}
-}
-
-// resolve ports RepoPatternTeamResolver.resolve: exact match first, then
-// the longest matching prefix.
-func (r *repoPatternResolver) resolve(repoName string) (string, bool) {
-	if r == nil || repoName == "" {
-		return "", false
-	}
-	key := strings.ToLower(strings.TrimSpace(repoName))
-	if key == "" {
-		return "", false
-	}
-	if teamID, ok := r.exact[key]; ok {
-		return teamID, true
-	}
-	for _, p := range r.prefixes {
-		if strings.HasPrefix(key, p.prefix) {
-			return p.teamID, true
-		}
-	}
-	return "", false
 }
 
 // fetchRepoScopedTeamMetrics ports _fetch_repo_scoped_team_metrics

@@ -23,9 +23,7 @@ var labelLookups = map[string]string{
 
 // ruleAppliedInGo are readers whose SQL text is pinned by a golden captured
 // from the Python reference, so the rule is applied in Go after the read.
-var ruleAppliedInGo = map[string]string{
-	"cognitiveload/cognitiveload.go": "rule applied in Go; SQL pinned by python_queries golden",
-}
+var ruleAppliedInGo = map[string]string{}
 
 var (
 	readsTeams = regexp.MustCompile(`(?i)(FROM|JOIN)\s+teams\b`)

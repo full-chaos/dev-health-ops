@@ -573,10 +573,10 @@ means the ClickHouse `teams` dimension is empty.
 > note): (1) native `team_repo_ownership` wins where it resolves the repo, via the SAME
 > `coalesce(repo_id, name-joined id)` + `matched` sentinel join `load_team_repo_ownership_map`
 > uses; (2) ranked by `((is_primary = 1) DESC, specificity DESC, updated_at DESC)` so a non-primary
-> co-owner is never mistaken for the canonical owner; (3) falls back to the requesting team's
-> `teams.repo_patterns` glob strings ONLY when native ownership resolves nothing for the candidate
-> repo — the path GitLab/Jira/Linear auto-imports rely on entirely, since none of them write
-> `team_repo_ownership`. An unowned/nonexistent repo, or one owned by a different team, returns an
+> co-owner is never mistaken for the canonical owner; (3) no fallback: the Go resolver
+> (`internal/queryapi/cognitiveload`) reads no `teams.repo_patterns`, so a repo that no
+> `team_repo_ownership` row resolves is owned by no team (the owner-only rule the metric families
+> and the AI analytics team scope use). An unowned/nonexistent repo, or one owned by a different team, returns an
 > explicit empty result, never the wrong team's data. Once ownership is confirmed, both data
 > queries filter by the resolved `repo_id` ALONE: `user_metrics_daily` via its existing repo
 > predicate, and a new `_fetch_repo_scoped_team_metrics` for `team_metrics_daily` that sums the

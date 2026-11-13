@@ -704,3 +704,38 @@ func TestThePlatformAdminActionsAreTheAdminGuardAndTheLegacyQueryAPIAndBillingAc
 		t.Fatalf("platform_admin actions %v, want %v", got, want)
 	}
 }
+
+// Catalog 20 adds sso.write for create, update, delete, activate and deactivate of an SSO provider. It is organization
+// scoped, high risk and never cached, denied to a delegated session, held by admin and owner alone, and it carries no
+// platform_admin flag: the legacy provider writes judged the token role alone, so a platform admin with no membership
+// row got 403. org.write is unchanged by it, byte for byte, so no other org.write route moves.
+func TestSSOWriteIsOwnerAndAdminOnlyAndOrgWriteIsUnchanged(t *testing.T) {
+	c := Default()
+	sso, err := c.Action("sso.write")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sso.Scope != ScopeOrganization || sso.ResourceKind != ScopeOrganization || sso.RiskClass != "high" || sso.CacheClass != "none" ||
+		sso.Impersonation != ImpersonationDenied || sso.PlatformAdmin {
+		t.Errorf("sso.write = %+v, want organization, organization, high, none, impersonation denied, no platform_admin", sso)
+	}
+	org, err := c.Action("org.write")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if org.Scope != ScopeOrganization || org.ResourceKind != ScopeOrganization || org.RiskClass != "high" || org.CacheClass != "none" ||
+		org.Impersonation != ImpersonationDenied || org.PlatformAdmin {
+		t.Errorf("org.write = %+v, want organization, organization, high, none, impersonation denied, no platform_admin (unchanged)", org)
+	}
+	if got := strings.Join(c.RolesHolding("sso.write", ScopeOrganization), ","); got != "admin,owner" {
+		t.Errorf("roles holding sso.write = %s, want admin,owner", got)
+	}
+	if got := strings.Join(c.RolesHolding("org.write", ScopeOrganization), ","); got != "admin,owner" {
+		t.Errorf("roles holding org.write = %s, want admin,owner (unchanged)", got)
+	}
+	for _, role := range []string{"viewer", "member", "platform_admin", "platform_owner"} {
+		if c.Allows(role, "sso.write") {
+			t.Errorf("%s holds sso.write", role)
+		}
+	}
+}

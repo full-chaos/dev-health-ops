@@ -126,6 +126,10 @@ type ScheduleResult struct {
 	// is still true — which made a permanent fault visible for a single poll and
 	// invisible to any realistic scrape interval.
 	Evaluated bool
+	// Unminted and UnmintedCountFailed carry what a producer reported about cron
+	// instants it passed over. They are set only for a committed occurrence.
+	Unminted            []UnmintedInstants
+	UnmintedCountFailed []UnmintedCountFailure
 	// MissingFor is how long the newest recorded occurrence has been older
 	// than the schedule expects. It drives missing-occurrence alerting.
 	MissingFor time.Duration
@@ -309,7 +313,7 @@ func (engine *Engine) stepSchedule(
 		// without producing work, so they take the same baseline path.
 		baseline := decision.ColdStart || decision.SkippedStale
 		claimed, duplicate, handoffs, skipped, degraded, evaluated, err := engine.runOccurrence(
-			ctx, schedule, *decision.Occurrence, baseline,
+			ctx, schedule, *decision.Occurrence, baseline, &outcome,
 		)
 		outcome.Claimed += claimed
 		outcome.Duplicate += duplicate
@@ -386,6 +390,7 @@ func (engine *Engine) runOccurrence(
 	schedule Schedule,
 	occurrence Occurrence,
 	baseline bool,
+	reported *ScheduleResult,
 ) (claimed, duplicate, handoffs, skipped int, degraded string, evaluated bool, err error) {
 	producer, ok := engine.producers.Producer(schedule.ProducerID)
 	if !ok {
@@ -482,6 +487,8 @@ func (engine *Engine) runOccurrence(
 	}
 	committed = true
 	afterCommit.Run()
+	reported.Unminted = result.Unminted
+	reported.UnmintedCountFailed = result.UnmintedCountFailed
 	// ONLY a producer-reported condition becomes Degraded. A SkipReason is
 	// deliberately NOT promoted, and that distinction is load-bearing rather than
 	// tidy:

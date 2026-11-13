@@ -340,6 +340,7 @@ fixed_scheduler_windows_total		code: internal/scheduler/fixed/loop.go
 provider_source_discovery_total	outcome,provider	code: internal/scheduler/sync/source_discovery.go
 provider_oauth_revocations_exhausted		code: internal/jobs/providerrevocation/handler.go
 provider_oauth_revocations_total	outcome	code: internal/jobs/providerrevocation/handler.go
+report_scheduler_unminted_instants_total		code: internal/scheduler/fixed/loop.go
 reconciler_database_pool_saturation_ratio	pool	code: internal/platform/poolstat/poolstat.go
 reconciler_database_pool_saturation_ratio_acquired_conns	pool	code: internal/platform/poolstat/poolstat.go
 reconciler_database_pool_saturation_ratio_max_conns	pool	code: internal/platform/poolstat/poolstat.go

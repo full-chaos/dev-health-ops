@@ -186,3 +186,11 @@ func (h handlers) fail(w http.ResponseWriter, r *http.Request, step string, err 
 func refuse(w http.ResponseWriter, status int, message string) {
 	policy.WriteDetail(w, status, policy.ErrorDetail(message), nil)
 }
+
+// refuseCode writes {"detail": {"message": message, "code": code}} with status: a federated sign-in refusal with
+// its code from social.RefusalCode, the same bytes auth-service answers.
+func refuseCode(w http.ResponseWriter, status int, message, code string) {
+	detail := policy.ErrorDetail(message)
+	detail.Set("code", code)
+	policy.WriteDetail(w, status, detail, nil)
+}

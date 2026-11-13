@@ -29,3 +29,25 @@ func TestSocialLinkRefusalsEachMatchAGoldenStepAndChangeIt(t *testing.T) {
 		}
 	}
 }
+
+// Every refusal code names a golden step whose expected answer (after any override) is a detail-object refusal.
+func TestSocialRefusalCodesEachMatchAGoldenRefusal(t *testing.T) {
+	golden := map[string]RecordedAnswer{}
+	for _, answer := range LoadGolden(t).Answers {
+		golden[answer.Name] = answer
+	}
+	for name, code := range socialRefusalCodes {
+		recorded, ok := golden[name]
+		if !ok {
+			t.Errorf("refusal code %q matches no golden step", name)
+			continue
+		}
+		body := recorded.Body
+		if refused, ok := socialLinkRefusals[name]; ok {
+			body = refused.body
+		}
+		if code == "" || WithRefusalCode(t, body, code) == body {
+			t.Errorf("refusal code %q changes nothing", name)
+		}
+	}
+}

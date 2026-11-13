@@ -69,12 +69,12 @@ func readTokenRequest(w http.ResponseWriter, r *http.Request) (Provider, contrac
 		}
 	}
 	if readErr != nil || decodeOne(json.NewDecoder(bytes.NewReader(data)), &body) != nil || body.ProviderAccessToken.Reveal() == "" {
-		writeDetail(w, http.StatusUnprocessableEntity, "provider and provider_access_token are required")
+		writeDetail(w, http.StatusUnprocessableEntity, "provider and provider_access_token are required", "")
 		return "", contracts.SecretString{}, false
 	}
 	provider, ok := ParseProvider(body.Provider)
 	if !ok {
-		writeDetail(w, http.StatusUnprocessableEntity, "provider must be one of github, gitlab, google")
+		writeDetail(w, http.StatusUnprocessableEntity, "provider must be one of github, gitlab, google", "")
 		return "", contracts.SecretString{}, false
 	}
 	return provider, body.ProviderAccessToken, true
@@ -98,7 +98,7 @@ func (h Handlers) Exchange(w http.ResponseWriter, r *http.Request) {
 func (h Handlers) Link(w http.ResponseWriter, r *http.Request) {
 	who, ok := h.Auth.SignedIn(r)
 	if !ok {
-		writeDetail(w, http.StatusUnauthorized, "Not authenticated")
+		writeDetail(w, http.StatusUnauthorized, "Not authenticated", "")
 		return
 	}
 	provider, token, ok := readTokenRequest(w, r)
@@ -121,12 +121,12 @@ func (h Handlers) Link(w http.ResponseWriter, r *http.Request) {
 func (h Handlers) Unlink(w http.ResponseWriter, r *http.Request) {
 	who, ok := h.Auth.SignedIn(r)
 	if !ok {
-		writeDetail(w, http.StatusUnauthorized, "Not authenticated")
+		writeDetail(w, http.StatusUnauthorized, "Not authenticated", "")
 		return
 	}
 	id, err := uuid.Parse(r.PathValue("id"))
 	if err != nil {
-		writeDetail(w, http.StatusNotFound, "Identity not found")
+		writeDetail(w, http.StatusNotFound, "Identity not found", RefusalCode(ReasonPrincipalNotFound))
 		return
 	}
 	if h.Admit != nil && !h.Admit(w, r) {
@@ -145,45 +145,53 @@ func (h Handlers) Unlink(w http.ResponseWriter, r *http.Request) {
 const ConflictMessage = "This sign-in could not be completed. Contact your administrator if this continues."
 
 func writeError(w http.ResponseWriter, provider Provider, err error) {
+	_, reason := Classify(err)
+	code := RefusalCode(reason)
 	var conflict *ConflictError
 	switch {
 	case errors.As(err, &conflict):
-		writeDetail(w, http.StatusConflict, ConflictMessage)
+		writeDetail(w, http.StatusConflict, ConflictMessage, code)
 	case errors.Is(err, ErrProviderUnavailable):
 		writeInternal(w)
 	case errors.Is(err, ErrProviderNotConfigured):
-		writeDetail(w, http.StatusServiceUnavailable, "Social login not configured for "+providerLabel(provider))
+		writeDetail(w, http.StatusServiceUnavailable, "Social login not configured for "+providerLabel(provider), code)
 	case errors.Is(err, ErrInvalidProviderID):
-		writeDetail(w, http.StatusBadRequest, "The provider returned an invalid user id")
+		writeDetail(w, http.StatusBadRequest, "The provider returned an invalid user id", code)
 	case errors.Is(err, ErrProviderRefused):
-		writeDetail(w, http.StatusUnauthorized, "Invalid or expired provider token")
+		writeDetail(w, http.StatusUnauthorized, "Invalid or expired provider token", code)
 	case errors.Is(err, ErrEmailUnverified):
-		writeDetail(w, http.StatusForbidden, "The provider has not verified this email address")
+		writeDetail(w, http.StatusForbidden, "The provider has not verified this email address", code)
 	case errors.Is(err, ErrUnusableEmail):
-		writeDetail(w, http.StatusBadRequest, "The provider returned an unusable email address")
+		writeDetail(w, http.StatusBadRequest, "The provider returned an unusable email address", code)
 	case errors.Is(err, ErrPrincipalDisabled):
-		writeDetail(w, http.StatusForbidden, "Account is disabled")
+		writeDetail(w, http.StatusForbidden, "Account is disabled", code)
 	case errors.Is(err, identity.ErrSignupNotAvailable):
-		writeDetail(w, http.StatusForbidden, "Sign-up with "+providerLabel(provider)+" is not available")
+		writeDetail(w, http.StatusForbidden, "Sign-up with "+providerLabel(provider)+" is not available", code)
 	case errors.Is(err, ErrReauthenticationRequired):
-		writeDetail(w, http.StatusForbidden, "Sign in again to change linked accounts")
+		writeDetail(w, http.StatusForbidden, "Sign in again to change linked accounts", code)
 	case errors.Is(err, identity.ErrIdentityConflict):
-		writeDetail(w, http.StatusConflict, ConflictMessage)
+		writeDetail(w, http.StatusConflict, ConflictMessage, code)
 	case errors.Is(err, ErrProviderLinked):
-		writeDetail(w, http.StatusConflict, ConflictMessage)
+		writeDetail(w, http.StatusConflict, ConflictMessage, code)
 	case errors.Is(err, identity.ErrNotFound):
-		writeDetail(w, http.StatusNotFound, "Identity not found")
+		writeDetail(w, http.StatusNotFound, "Identity not found", code)
 	case errors.Is(err, identity.ErrLastSignInMethod):
-		writeDetail(w, http.StatusConflict, "Cannot remove the last sign-in method")
+		writeDetail(w, http.StatusConflict, "Cannot remove the last sign-in method", code)
 	default:
 		writeInternal(w)
 	}
 }
 
-// writeDetail is go-api's refusal body, {"detail": {"message": message}}
-// (internal/api/session/session.go refuse).
-func writeDetail(w http.ResponseWriter, status int, message string) {
-	writeJSON(w, status, map[string]any{"detail": map[string]string{"message": message}})
+// writeDetail is go-api's refusal body, {"detail": {"message": message}}, with "code" after the message when code
+// is set (internal/api/session/session.go refuse and refuseCode): the same bytes on both planes.
+func writeDetail(w http.ResponseWriter, status int, message string, code string) {
+	writeJSON(w, status, map[string]any{"detail": refusalDetail{Message: message, Code: code}})
+}
+
+// refusalDetail is the detail object of a refusal; its field order is the wire order.
+type refusalDetail struct {
+	Message string `json:"message"`
+	Code    string `json:"code,omitempty"`
 }
 
 // writeInternal is go-api's unhandled-failure answer, 500

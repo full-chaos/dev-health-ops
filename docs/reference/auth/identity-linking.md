@@ -133,8 +133,9 @@ SAML providers the identity provider's response is the source of the email.
 
 **go-api (SSO and social sign-in in use).** A refusal answers with an HTTP
 status and a message. `membership_required` and
-`oauth_domain_not_allowed` are also carried as response codes; an identity
-conflict is not (it is in the audit row and the log only). The message of an
+`oauth_domain_not_allowed` are also carried as response codes. An OIDC or SAML
+identity conflict is not (it is in the audit row and the log only); a social
+sign-in refusal carries the closed `code` set described below. The message of an
 OIDC or SAML domain refusal names the email domain. Each SSO sign-in attempt
 writes an `SSO_LOGIN` audit row, with status success or failure.
 
@@ -182,6 +183,13 @@ answers 500 and the tokens are withheld. The reason codes are:
 
 A `membership_required` refusal answers 403 with `{"detail": {"message": ..., "reason": "membership_required"}}` on
 auth-service and on go-api alike; a client reads `reason`.
+
+A social (GitHub, GitLab, Google) sign-in, link or unlink refusal answers `{"detail": {"message": ..., "code": ...}}`
+on auth-service and on go-api alike, with the same bytes. `code` is one of a closed set: `malformed`,
+`invalid_credentials`, `expired`, `principal_not_found`, `principal_deactivated`, `email_unverified`,
+`identity_conflict`, `signup_unavailable` and `dependency_unavailable`. A client maps `code`, never the message
+text. Every conflict answers `identity_conflict`, so the code says no more than the status and the message: it does
+not tell an email held by another account from an identity linked elsewhere. A 500 has no code.
 
 Provider text never reaches an auth-service response.
 

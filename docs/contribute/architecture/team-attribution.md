@@ -580,7 +580,7 @@ means the ClickHouse `teams` dimension is empty.
 > (`internal/queryapi/cognitiveload`) reads no `teams.repo_patterns`, so a repo that no
 > `team_repo_ownership` row resolves is owned by no team (the owner-only rule the metric families
 > and the AI analytics team scope use); (4) the rows are those of the one ownership statement of the team scopes
-> (`teamscope.OwnershipFromWhere`, CHAOS-13685): an inactive team owns nothing (§0.4g rule 1), a row with an empty
+> (`teamscope.OwnershipFromWhere`): an inactive team owns nothing (§0.4g rule 1), a row with an empty
 > `team_id` is skipped, and the rows are tested at one instant per request with the first recorded owners applied
 > before the first record (§0.4j), not at the server's `now64(3)`. An unowned/nonexistent repo, or one owned by a different team, returns an
 > explicit empty result, never the wrong team's data. Once ownership is confirmed, both data

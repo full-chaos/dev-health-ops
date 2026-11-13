@@ -13,34 +13,24 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
 
-// ssoRowsDocument is the embedded endpoint-profile document with the seven SSO provider rows planted: copies of the
-// organization deprovision row (the embedded document holds none of them; they ship after the PR that adds the file they cite).
-func ssoRowsDocument(t *testing.T) []byte {
+// documentWithoutSSORows is the embedded endpoint-profile document without the seven SSO provider rows.
+func documentWithoutSSORows(t *testing.T) []byte {
 	t.Helper()
 	var document map[string]any
 	if err := json.Unmarshal(authv1.AuthServiceEndpointProfiles, &document); err != nil {
 		t.Fatal(err)
 	}
-	rows := document["rows"].([]any)
-	var base map[string]any
-	for _, item := range rows {
-		if row := item.(map[string]any); row["route"] == authapi.PatternOrgDeprovision {
-			base = row
-		}
-	}
-	if base == nil {
-		t.Fatal("no deprovision row in the embedded document")
-	}
+	drop := map[string]bool{}
 	for _, route := range authapi.SSOProviderPatterns() {
-		clone := map[string]any{}
-		for k, v := range base {
-			clone[k] = v
-		}
-		clone["route"] = route
-		clone["id"] = "POST " + route + " [dev-health-auth-service @api]"
-		rows = append(rows, clone)
+		drop[route] = true
 	}
-	document["rows"] = rows
+	var kept []any
+	for _, item := range document["rows"].([]any) {
+		if route, _ := item.(map[string]any)["route"].(string); !drop[route] {
+			kept = append(kept, item)
+		}
+	}
+	document["rows"] = kept
 	raw, err := json.Marshal(document)
 	if err != nil {
 		t.Fatal(err)
@@ -62,7 +52,7 @@ func ssoSwitchConfig(membershipRoutes, ssoProvidersOwned bool) authconfig.Config
 func TestSSOProviderRoutesMountOnlyWithBothSwitchesAndTheirRows(t *testing.T) {
 	previous := provisioningProfileRows
 	t.Cleanup(func() { provisioningProfileRows = previous })
-	provisioningProfileRows = ssoRowsDocument(t)
+	provisioningProfileRows = nil
 	for name, c := range map[string]struct {
 		membershipRoutes, ssoProvidersOwned bool
 		want                                int
@@ -77,15 +67,9 @@ func TestSSOProviderRoutesMountOnlyWithBothSwitchesAndTheirRows(t *testing.T) {
 			t.Errorf("%s: %d routes, err %v; want %d and no error", name, len(routes), err, c.want)
 		}
 	}
-}
-
-// The dark cell: both switches ON and the REAL embedded profile document (it holds no SSO provider rows) mount no route.
-func TestSSOProviderRoutesAreDarkOnTheRealEmbeddedDocument(t *testing.T) {
-	previous := provisioningProfileRows
-	t.Cleanup(func() { provisioningProfileRows = previous })
-	provisioningProfileRows = nil
+	provisioningProfileRows = documentWithoutSSORows(t)
 	routes, err := ssoProviderRoutes(ssoSwitchConfig(true, true), slog.Default(), nil, authschema.ValidatedIdentifier{}, nil, nil)
 	if err != nil || len(routes) != 0 {
-		t.Fatalf("both switches on, embedded document: %d routes, err %v; want none and no error", len(routes), err)
+		t.Errorf("both switches on, no rows: %d routes, err %v; want none and no error", len(routes), err)
 	}
 }

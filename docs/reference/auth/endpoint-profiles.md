@@ -34,7 +34,7 @@ Each service has its own profile file. The row counts are:
 
 | Service | Protected | Public | Rows |
 | --- | --- | --- | --- |
-| auth-service | 60 | 28 | 88 |
+| auth-service | 67 | 28 | 95 |
 | go-api | 211 | 33 | 244 |
 | query-api | 37 | 8 | 45 |
 

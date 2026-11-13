@@ -270,8 +270,10 @@ func TestOpenRunSkipIsOneLinePerSkippedInstantNotPerPoll(t *testing.T) {
 			t.Fatal(err)
 		}
 		skips += len(result.SkippedOpenRun)
-		if len(result.SkippedOpenRun) == 1 {
-			marker = result.SkippedOpenRun[0].NextRunAt
+		// Feed the marker the window wrote, not the one it reported: a skip
+		// that reports a moved marker but does not write one must still fail.
+		if len(transaction.execArgs) == 1 {
+			marker = transaction.execArgs[0][0].(time.Time)
 		}
 		if result.Minted() != 0 {
 			t.Fatalf("poll %d minted while the run is open", second)

@@ -1,0 +1,35 @@
+{
+  "expect": {
+    "allowed": false,
+    "cache_class": "none",
+    "expires_in_seconds": null,
+    "obligations": null,
+    "policy_revision": 20,
+    "reason": "no_membership",
+    "wire_reason_code": "no_membership"
+  },
+  "id": "deny-non-member-writes-sso",
+  "layer": "pdp",
+  "request": {
+    "action": "sso.write",
+    "organization_id": "org-a",
+    "resource_key": "",
+    "resource_kind": "organization"
+  },
+  "state": {
+    "catalog": "embedded",
+    "clock": "2027-01-15T08:00:00Z",
+    "grants": [],
+    "grants_error": false,
+    "memberships": {},
+    "organizations": {
+      "org-a": "active"
+    },
+    "platform_role": "",
+    "principal_status": "active",
+    "service_accounts": {},
+    "snapshot": "grant",
+    "workload": null
+  },
+  "why": "a caller with no membership row in the organization is refused, as the revoke route answers 403 not a member today."
+}

@@ -85,6 +85,43 @@ type HandoffResult struct {
 	// an earlier scheduled run of the same configuration is still open: every
 	// open run was past its bound, so it no longer holds the schedule back.
 	OpenRunsPastBound []OpenRunPastBound
+	// Unminted lists, per occurrence this window minted, the cron instants it
+	// passed over: no window minted them and no window will (CHAOS-3954).
+	Unminted []UnmintedInstants
+	// UnmintedCountFailed lists the minted occurrences whose unminted-instant
+	// count failed. The mint stands; only the count is lost.
+	UnmintedCountFailed []UnmintedCountFailure
+}
+
+// UnmintedCountFailure names one minted occurrence whose count failed.
+type UnmintedCountFailure struct {
+	ConfigID  string
+	MintedFor time.Time
+	Error     string
+}
+
+const (
+	// unmintedNamedLimit is the most instants one unminted-instant line names.
+	// A longer gap is named by its first and last instant and its count.
+	unmintedNamedLimit = 3
+	// unmintedScanLimit bounds the instants one minted occurrence enumerates,
+	// so a long outage of a fine-grained cron cannot stretch the locked window.
+	unmintedScanLimit = 1024
+)
+
+// UnmintedInstants names the cron instants between the occurrence ledger's
+// newest instant and the occurrence one window just minted. The base only moves
+// forward, so these instants are never minted: this is the only record of them.
+type UnmintedInstants struct {
+	ConfigID  string
+	MintedFor time.Time
+	// Count is how many instants were passed over. When Capped, the scan stopped
+	// at unmintedScanLimit and Count is a lower bound.
+	Count  int
+	Capped bool
+	// Named holds every instant when Count <= unmintedNamedLimit, otherwise the
+	// first and the last one scanned.
+	Named []time.Time
 }
 
 // idleDue reports a window that found a due schedule, was free to start it,
@@ -107,6 +144,8 @@ type OpenRunSkip struct {
 	OpenSeconds int64
 	// NextRunAt is the marker value the skip wrote.
 	NextRunAt time.Time
+	// SkippedInstant is the oldest due cron instant the skip held back.
+	SkippedInstant time.Time
 }
 
 // OpenRunBoundReason is the bounded vocabulary of why an open run stopped
@@ -353,15 +392,16 @@ func (repository *Repository) HandoffDueResult(
 			locked.candidate.Job == nil {
 			continue
 		}
+		// Policy (CHAOS-3954, on the CHAOS-8459 rule of one scheduled run per
+		// configuration at a time): a late window resumes, it does not backfill.
 		// The marker is computed from observedAt, not from the occurrence this
-		// window just minted, so a window that runs late leaves the instants
-		// between them unminted: the schedule resumes rather than backfilling.
-		// Combined with the base rebasing onto a long run's COMPLETION time,
-		// that is why a sync spanning a cron instant leaves that hour with no
-		// occurrence row at all (observed 2026-08-20 23:00 UTC). Recorded here
-		// deliberately: it is bounded and self-correcting, unlike the CHAOS-3936
-		// freeze above, and changing it changes how much work a recovering
-		// scheduler dispatches at once. See CHAOS-3936 for the decision.
+		// window mints, and the base rebases onto a run's completion, so the
+		// instants a late window or an open run passed over are never minted.
+		// Runs are incremental from the unit watermarks, so no data is lost;
+		// the cost is schedule fidelity, and backfilling every instant would
+		// grow a backlog whenever runs take longer than the interval. Each such
+		// instant is counted and named instead: the skip names the instant it
+		// held back, and the next mint names the instants it passed over.
 		nextRunAt, _, err := nextOccurrenceContext(
 			ctx,
 			locked.candidate.Job.ScheduleCron,
@@ -389,11 +429,12 @@ func (repository *Repository) HandoffDueResult(
 				return HandoffResult{}, err
 			}
 			result.SkippedOpenRun = append(result.SkippedOpenRun, OpenRunSkip{
-				ConfigID:     locked.candidate.ConfigID,
-				OccurrenceID: open.blockingOccurrenceID,
-				SyncRunID:    open.blockingSyncRunID,
-				OpenSeconds:  open.blockingOpenSeconds,
-				NextRunAt:    nextRunAt.UTC(),
+				ConfigID:       locked.candidate.ConfigID,
+				OccurrenceID:   open.blockingOccurrenceID,
+				SyncRunID:      open.blockingSyncRunID,
+				OpenSeconds:    open.blockingOpenSeconds,
+				NextRunAt:      nextRunAt.UTC(),
+				SkippedInstant: evaluation.NextOccurrence.UTC(),
 			})
 			continue
 		}
@@ -438,6 +479,24 @@ func (repository *Repository) HandoffDueResult(
 			return HandoffResult{}, err
 		}
 		result.HandedOff = append(result.HandedOff, occurrence)
+		if newest := locked.candidate.LastOccurrenceAt; outcome == OccurrenceMinted && newest != nil {
+			count := repository.countUnminted
+			if count == nil {
+				count = unmintedInstants
+			}
+			unminted, err := count(ctx, locked.candidate.Job, occurrence, *newest)
+			if err != nil {
+				// The count only reports; a failure must not roll back a mint
+				// that would commit without it.
+				result.UnmintedCountFailed = append(result.UnmintedCountFailed, UnmintedCountFailure{
+					ConfigID:  occurrence.ConfigID,
+					MintedFor: occurrence.ScheduledFor.UTC(),
+					Error:     err.Error(),
+				})
+			} else if unminted.Count > 0 {
+				result.Unminted = append(result.Unminted, unminted)
+			}
+		}
 		if open.pastBound > 0 && outcome == OccurrenceMinted {
 			result.OpenRunsPastBound = append(result.OpenRunsPastBound, OpenRunPastBound{
 				ConfigID:     occurrence.ConfigID,
@@ -493,6 +552,36 @@ func resumedOccurrenceInstant(evaluated time.Time, marker, previousRunEndedAt *t
 		return instant
 	}
 	return evaluated
+}
+
+// unmintedInstants enumerates the cron instants after newest and before the
+// occurrence just minted, at most unmintedScanLimit of them.
+func unmintedInstants(ctx context.Context, job *Job, occurrence Occurrence, newest time.Time) (UnmintedInstants, error) {
+	unminted := UnmintedInstants{ConfigID: occurrence.ConfigID, MintedFor: occurrence.ScheduledFor.UTC()}
+	var scanned []time.Time
+	instant := newest.UTC()
+	for {
+		next, _, err := nextOccurrenceContext(ctx, job.ScheduleCron, instant, job.Timezone)
+		if err != nil {
+			return UnmintedInstants{}, err
+		}
+		if !next.Before(unminted.MintedFor) {
+			break
+		}
+		if len(scanned) == unmintedScanLimit {
+			unminted.Capped = true
+			break
+		}
+		scanned = append(scanned, next.UTC())
+		instant = next
+	}
+	unminted.Count = len(scanned)
+	if unminted.Count <= unmintedNamedLimit {
+		unminted.Named = scanned
+	} else {
+		unminted.Named = []time.Time{scanned[0], scanned[len(scanned)-1]}
+	}
+	return unminted, nil
 }
 
 func advanceScheduleMarker(

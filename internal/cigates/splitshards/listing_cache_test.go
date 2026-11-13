@@ -26,7 +26,8 @@ func (k listingKey) cacheKey() string {
 
 type listingEntry struct {
 	done  chan struct{}
-	names map[string]bool
+	names map[string]bool // Test names
+	kinds map[string]bool // every name go test runs: Test, Example (with output), Fuzz
 	err   error
 }
 
@@ -50,12 +51,12 @@ func startListing(root, toolchain string, k listingKey) *listingEntry {
 		defer close(e.done)
 		listingSlots <- struct{}{}
 		defer func() { <-listingSlots }()
-		e.names, e.err = runListing(root, toolchain, k)
+		e.names, e.kinds, e.err = runListing(root, toolchain, k)
 	}()
 	return e
 }
 
-func runListing(root, toolchain string, k listingKey) (map[string]bool, error) {
+func runListing(root, toolchain string, k listingKey) (map[string]bool, map[string]bool, error) {
 	args := []string{"test", "-mod=readonly"}
 	if k.tags != "" {
 		args = append(args, "-tags="+k.tags)
@@ -70,15 +71,18 @@ func runListing(root, toolchain string, k listingKey) (map[string]bool, error) {
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("go %s: %v: %s%s", strings.Join(args, " "), err, out.String(), errb.String())
+		return nil, nil, fmt.Errorf("go %s: %v: %s%s", strings.Join(args, " "), err, out.String(), errb.String())
 	}
-	names := map[string]bool{}
+	names, kinds := map[string]bool{}, map[string]bool{}
 	for _, l := range strings.Split(out.String(), "\n") {
 		if strings.HasPrefix(l, "Test") {
 			names[l] = true
 		}
+		if strings.HasPrefix(l, "Test") || strings.HasPrefix(l, "Example") || strings.HasPrefix(l, "Fuzz") {
+			kinds[l] = true
+		}
 	}
-	return names, nil
+	return names, kinds, nil
 }
 
 // listedOrFail waits for the listing of k. A listing that fails fails the test: never a skip.
@@ -90,6 +94,17 @@ func listedOrFail(tb testing.TB, root, toolchain string, k listingKey) map[strin
 		tb.Fatalf("%v", e.err)
 	}
 	return e.names
+}
+
+// listedKindsOrFail is listedOrFail with every kind go test runs (Test, Example with output, Fuzz) from the same listing.
+func listedKindsOrFail(tb testing.TB, root, toolchain string, k listingKey) map[string]bool {
+	tb.Helper()
+	e := startListing(root, toolchain, k)
+	<-e.done
+	if e.err != nil {
+		tb.Fatalf("%v", e.err)
+	}
+	return e.kinds
 }
 
 // The cache must keep listings apart that differ only by tags, or only by -race: each pair below lists one package twice in

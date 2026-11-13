@@ -431,13 +431,11 @@ WHERE p.org_id = ? AND p.repo_id IN ? AND p.pr_number IN ?`,
 	return linkage, nil
 }
 
-// LoadAIImpactTeams reads the teams rows build_repo_pattern_resolver consumes
-// (job_daily.py:1178 `get_all_teams`). Deduped to the table's ORDER BY key
-// (id) with one tuple argMax over ReplacingMergeTree(updated_at).
-//
-// Ordered by id so the resolver's build order -- and therefore its stable
-// tie-break between equal-length prefixes -- is deterministic. Python's
-// get_all_teams has no such guarantee; see RepoPatternResolver's doc comment.
+// LoadAIImpactTeams reads the id and name of every team (job_daily.py:1178
+// `get_all_teams`), for the incident attribution. It does not read
+// repo_patterns: no daily family takes a team from them (D7013b). Deduped to
+// the table's ORDER BY key (id) with one argMax over
+// ReplacingMergeTree(updated_at), ordered by id.
 //
 // # The active-team rule is applied in Go, not in the query
 //
@@ -457,19 +455,10 @@ func LoadAIImpactTeams(
 		return nil, ErrInvalidState
 	}
 	rows, err := conn.Query(ctx, `
-SELECT id, name, repo_patterns
-FROM (
-    SELECT
-        id,
-        tupleElement(latest, 1) AS name,
-        tupleElement(latest, 2) AS repo_patterns
-    FROM (
-        SELECT id, argMax(tuple(name, repo_patterns), updated_at) AS latest
-        FROM teams
-        WHERE org_id = ?
-        GROUP BY org_id, id
-    )
-)
+SELECT id, argMax(name, updated_at) AS name
+FROM teams
+WHERE org_id = ?
+GROUP BY org_id, id
 ORDER BY id`, organizationID)
 	if err != nil {
 		return nil, fmt.Errorf("load ai impact teams: %w", err)
@@ -478,15 +467,11 @@ ORDER BY id`, organizationID)
 
 	var result []aiimpact.Team
 	for rows.Next() {
-		var (
-			id           string
-			name         string
-			repoPatterns []string
-		)
-		if err := rows.Scan(&id, &name, &repoPatterns); err != nil {
+		var id, name string
+		if err := rows.Scan(&id, &name); err != nil {
 			return nil, fmt.Errorf("scan ai impact team row: %w", err)
 		}
-		result = append(result, aiimpact.Team{ID: id, Name: name, RepoPatterns: repoPatterns})
+		result = append(result, aiimpact.Team{ID: id, Name: name})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate ai impact team rows: %w", err)

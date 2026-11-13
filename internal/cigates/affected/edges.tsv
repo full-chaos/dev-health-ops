@@ -76,6 +76,7 @@ internal/cigates/chartgates	worker_secret_env_scan_test.go	**/internal/...
 internal/cigates/chartgates	worker_secret_env_scan_test.go	unexpressed
 internal/cigates/checkgo	ci_script_helpers_test.go	unexpressed
 internal/cigates/checkgo	go_test_leg_json_test.go	unexpressed
+internal/cigates/checkgo	integration_leg_json_test.go	unexpressed
 internal/cigates/checkgo	race_solo_test.go	unexpressed
 internal/cigates/checkgo	testcontainers_session_reap_test.go	unexpressed
 internal/cigates/checkgoshards	ci_script_helpers_test.go	unexpressed

@@ -215,9 +215,51 @@ tc_trap() {
   exit 143
 }
 
+# INTEGRATION_LEG_JQ renders the go test -json stream of one integration go test call as the plain package-list log:
+# a package that passes or skips prints only its last line (the `ok <pkg> <N>s` / `? <pkg>` summary, the bytes plain go test
+# prints), a failed package prints all its output (the -v form: more lines than plain go test, never fewer), build output
+# and a line that is not a JSON event print at once, and every package still open at the end of the stream (a hang, a
+# kill) prints all it has. Output is kept per package until that package ends, as plain go test does.
+# shellcheck disable=SC2016
+INTEGRATION_LEG_JQ='
+foreach ((inputs | ((fromjson? | select(type == "object" and ((.Action | type) == "string"))) // {Action: "raw", Output: (. + "\n")})), null) as $e (
+  {bufs: {}, out: ""};
+    if $e == null then
+      {bufs: {}, out: ([.bufs[][]] | join(""))}
+    elif $e.Action == "raw" or $e.Action == "build-output" then
+      .out = (($e.Output // "") | tostring)
+    elif $e.Action == "output" then
+      .bufs[(($e.Package // "") | tostring)] += [(($e.Output // "") | tostring)]
+      | .out = ""
+    elif ($e.Action | IN("pass", "fail", "skip")) and (($e.Test // "") == "") then
+      (($e.Package // "") | tostring) as $p
+      | ((.bufs[$p] // []) | join("")) as $all
+      | .out = (if $e.Action == "fail" then $all
+                else ($all | rtrimstr("\n") | split("\n") | last // "" | if . == "" then "" else . + "\n" end) end)
+      | .bufs |= del(.[$p])
+    else
+      .out = ""
+    end;
+    .out)'
+
+# integration_leg_json_file: when GO_INTEGRATION_LEG_JSON_DIR is set (the packages shards in CI only; a name of its own, so a
+# test leg's GO_TEST_LEG_JSON_DIR never reaches a stand-in shard run of the cigates), INTEGRATION_LEG_JSON is the file the
+# next integration go test call writes its -json events to, emptied first: <dir>/integration-packages-g<N>.json, N counting
+# the calls of this script. Empty when the variable is unset (a local run): the call runs plain go test, as before.
+INTEGRATION_LEG_SEQ=0 INTEGRATION_LEG_JSON=""
+integration_leg_json_file() {
+  local dir="${GO_INTEGRATION_LEG_JSON_DIR:-}"
+  INTEGRATION_LEG_JSON=""
+  [ -n "${dir}" ] || return 0
+  INTEGRATION_LEG_SEQ=$((INTEGRATION_LEG_SEQ + 1))
+  mkdir -p -- "${dir}" && : >"${dir}/integration-packages-g${INTEGRATION_LEG_SEQ}.json" || return 1
+  INTEGRATION_LEG_JSON="${dir}/integration-packages-g${INTEGRATION_LEG_SEQ}.json"
+}
+
 run_integration_go_test() {
-  local module_dir="$1" sid pid rc=0 i own_pgid tmo
-  local -a private_group=()
+  local module_dir="$1" sid pid rc=0 i own_pgid tmo json="" render_pid="" render_rc=0 render_wait render_tick arg skip_next=0 want_pkgs=0 got_pkgs
+  local fifo="" tail_pid="" tail_rc=0 jq_rc=0 p
+  local -a private_group=() json_args=()
   shift
   tmo="$(job_go_test_timeout 32)" || return 2
   sid="${TESTCONTAINERS_SESSION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}"
@@ -226,12 +268,37 @@ run_integration_go_test() {
   if command -v setsid >/dev/null 2>&1; then
     private_group=(setsid)
   fi
+  # With a json file, go test writes -json to that file (never a pipe: a child that keeps stdout open cannot stall a
+  # reader, the CHAOS-11794 class) and a renderer (tail of the file until go test exits, through INTEGRATION_LEG_JQ)
+  # prints the plain log on stdout. The status stays go test's own (wait below); a broken renderer only warns and prints
+  # the raw file. The workflow reduces the file to package/test/action/elapsed; the raw events never leave the runner.
+  integration_leg_json_file || die "run_integration_go_test: cannot create the go test -json file under GO_INTEGRATION_LEG_JSON_DIR"
+  json="${INTEGRATION_LEG_JSON}"
+  if [ -n "${json}" ]; then
+    command -v jq >/dev/null 2>&1 || die "run_integration_go_test: GO_INTEGRATION_LEG_JSON_DIR needs jq to render go test -json"
+    json_args=(-json)
+    # The fifo exists before go test starts, so a failure here stops the call with no go test left running.
+    fifo="${json%.json}.fifo"
+    rm -f -- "${fifo}"
+    if ! mkfifo -- "${fifo}"; then
+      die "run_integration_go_test: cannot make the renderer fifo ${fifo}"
+    fi
+  fi
   (
     cd "${ROOT}/${module_dir}"
+    unset GO_INTEGRATION_LEG_JSON_DIR
+    if [ -n "${json}" ]; then exec >>"${json}"; fi
     exec ${private_group[@]+"${private_group[@]}"} "${GO_ENV_OFF[@]}" GOWORK=off TESTCONTAINERS_SESSION_ID="${sid}" ${INTEGRATION_TEST_ENV[@]+"${INTEGRATION_TEST_ENV[@]}"} \
-      go test -mod=readonly -trimpath -tags=integration -count=1 -timeout="${tmo}" "$@"
+      go test -mod=readonly -trimpath -tags=integration -count=1 -timeout="${tmo}" ${json_args[@]+"${json_args[@]}"} "$@"
   ) &
   pid=$!
+  # The renderer is two background processes joined by a fifo, so each pid is known ($!) and can be stopped by that pid.
+  if [ -n "${json}" ]; then
+    jq -nR --unbuffered -rj "${INTEGRATION_LEG_JQ}" <"${fifo}" &
+    render_pid=$!
+    tail -n +1 -f --pid="${pid}" -- "${json}" >"${fifo}" &
+    tail_pid=$!
+  fi
   TC_TRAP_PID="${pid}"
   TC_TRAP_SID="${sid}"
   TC_TRAP_PGID=""
@@ -248,6 +315,54 @@ run_integration_go_test() {
   fi
   wait "${pid}" || rc=$?
   trap - INT TERM
+  if [ -n "${render_pid}" ]; then
+    # tail ends within a second of go test (--pid); jq then ends at the end of the file. Bounded all the same: past the
+    # bound the call goes on without the rest of the rendered log (the -json file is complete: go test has exited).
+    render_wait="${DEV_HEALTH_GO_RENDER_WAIT_SECS:-120}"
+    case "${render_wait}" in ""|*[!0-9]*) render_wait=120 ;; esac
+    render_wait=$((10#${render_wait}))
+    for ((render_tick = 0; render_tick < render_wait * 5; render_tick++)); do
+      kill -0 "${render_pid}" 2>/dev/null || kill -0 "${tail_pid}" 2>/dev/null || break
+      sleep 0.2
+    done
+    if kill -0 "${render_pid}" 2>/dev/null || kill -0 "${tail_pid}" 2>/dev/null; then
+      # Past the bound: stop the renderer's own two pids (TERM, KILL after 5 s), reap them, then print the raw events, so no
+      # renderer outlives this call or writes into the next call's log.
+      echo "run_integration_go_test: the go test -json renderer still runs ${render_wait}s after go test ended; stopping it (pids ${tail_pid} ${render_pid}); the raw events follow in the log, the status stays go test's" >&2
+      kill -TERM "${tail_pid}" "${render_pid}" 2>/dev/null || true
+      for ((render_tick = 0; render_tick < 25; render_tick++)); do
+        kill -0 "${render_pid}" 2>/dev/null || kill -0 "${tail_pid}" 2>/dev/null || break
+        sleep 0.2
+      done
+      for p in "${tail_pid}" "${render_pid}"; do
+        if kill -0 "${p}" 2>/dev/null; then kill -KILL "${p}" 2>/dev/null || true; fi
+      done
+      wait "${tail_pid}" 2>/dev/null || true
+      wait "${render_pid}" 2>/dev/null || true
+      cat -- "${json}" || true
+    else
+      wait "${tail_pid}" || tail_rc=$?
+      wait "${render_pid}" || jq_rc=$?
+      render_rc=$((jq_rc != 0 ? jq_rc : tail_rc))
+      if [ "${render_rc}" -ne 0 ]; then
+        echo "run_integration_go_test: the go test -json renderer failed (rc ${render_rc}); the raw events follow in the log, the status stays go test's" >&2
+        cat -- "${json}" || true
+      fi
+    fi
+    rm -f -- "${fifo}"
+    # End signal: the packages with a final pass/fail/skip event in the file against the packages of the call. A call that
+    # go test passed with fewer final results than packages is a truncated stream: it fails (70), never a green partial.
+    for arg in "$@"; do
+      if [ "${skip_next}" -eq 1 ]; then skip_next=0; continue; fi
+      case "${arg}" in -run) skip_next=1 ;; -*) ;; *) want_pkgs=$((want_pkgs + 1)) ;; esac
+    done
+    got_pkgs="$(jq -R -r 'fromjson? | select(type == "object" and ((.Action | type) == "string") and (.Action | IN("pass", "fail", "skip")) and ((.Test // "") == "")) | (.Package // "")' "${json}" | LC_ALL=C sort -u | grep -c . || true)"
+    echo "run_integration_go_test: ${got_pkgs} of ${want_pkgs} package(s) have a final result in the go test -json file" >&2
+    if [ "${got_pkgs}" -lt "${want_pkgs}" ] && [ "${rc}" -eq 0 ]; then
+      echo "run_integration_go_test: go test passed but its -json stream ends before every package's result (truncated); the call fails" >&2
+      rc=70
+    fi
+  fi
   bash "${SCRIPT_DIR}/reap-testcontainers-session.sh" "${sid}" || rc=$?
   return "${rc}"
 }

@@ -264,7 +264,7 @@ func (j *jitHarness) principalOf(t *testing.T, email string) uuid.UUID {
 	return id
 }
 
-func TestJITNewAccountOneOfEach(t *testing.T) {
+func TestOIDCJITNewAccountOneOfEach(t *testing.T) {
 	t.Run("oidc", func(t *testing.T) {
 		j := newJITHarness(t, harnessOpts{})
 		email, sub := uniqueEmail("jit-new"), "sub-"+uuid.NewString()
@@ -298,7 +298,7 @@ WHERE s.principal_id = $1 AND s.organization_id = $2 AND u.last_login_at = s.iss
 	})
 }
 
-func TestJITFailureAtEachStepWritesNothing(t *testing.T) {
+func TestOIDCJITFailureAtEachStepWritesNothing(t *testing.T) {
 	for name, table := range map[string]string{"oidc after identity": "public.memberships", "oidc after membership": "auth.sessions",
 		"oidc after session": "auth.refresh_credentials"} {
 		t.Run(name, func(t *testing.T) {
@@ -315,7 +315,7 @@ func TestJITFailureAtEachStepWritesNothing(t *testing.T) {
 	}
 }
 
-func TestJITJoinFailureWritesNothing(t *testing.T) {
+func TestOIDCJITJoinFailureWritesNothing(t *testing.T) {
 	t.Run("oidc", func(t *testing.T) {
 		j := newJITHarness(t, harnessOpts{})
 		email, sub := uniqueEmail("jit-join-fail"), "sub-"+uuid.NewString()
@@ -330,7 +330,7 @@ func TestJITJoinFailureWritesNothing(t *testing.T) {
 	})
 }
 
-func TestJITSwitchOffRefusesBeforeAnyWrite(t *testing.T) {
+func TestOIDCJITSwitchOffRefusesBeforeAnyWrite(t *testing.T) {
 	t.Run("oidc", func(t *testing.T) {
 		j := newJITHarness(t, harnessOpts{})
 		j.svc.cfg.MembershipJIT = nil
@@ -342,7 +342,7 @@ func TestJITSwitchOffRefusesBeforeAnyWrite(t *testing.T) {
 	})
 }
 
-func TestJITAutoProvisionOffRefusesAJoin(t *testing.T) {
+func TestOIDCJITAutoProvisionOffRefusesAJoin(t *testing.T) {
 	t.Run("oidc", func(t *testing.T) {
 		j := newJITHarness(t, harnessOpts{noAutoProvision: true})
 		email, sub := uniqueEmail("jit-auto-off"), "sub-"+uuid.NewString()
@@ -355,7 +355,7 @@ func TestJITAutoProvisionOffRefusesAJoin(t *testing.T) {
 	})
 }
 
-func TestJITRefusesAMemberOfAnotherOrg(t *testing.T) {
+func TestOIDCJITRefusesAMemberOfAnotherOrg(t *testing.T) {
 	t.Run("oidc", func(t *testing.T) {
 		for _, shape := range []string{"public", "auth suspended"} {
 			t.Run(shape, func(t *testing.T) {
@@ -377,7 +377,7 @@ func TestJITRefusesAMemberOfAnotherOrg(t *testing.T) {
 	})
 }
 
-func TestJITOtherOrgCommittedAfterThePlanRead(t *testing.T) {
+func TestOIDCJITOtherOrgCommittedAfterThePlanRead(t *testing.T) {
 	t.Run("oidc", func(t *testing.T) {
 		j := newJITHarness(t, harnessOpts{})
 		email, sub := uniqueEmail("jit-parked"), "sub-"+uuid.NewString()
@@ -401,7 +401,7 @@ var jitRoleRows = []struct{ name, row, want string }{
 	{"owner", "owner", ""}, {"unknown", "root", ""},
 }
 
-func TestJITRoleTable(t *testing.T) {
+func TestOIDCJITRoleTable(t *testing.T) {
 	t.Run("oidc", func(t *testing.T) {
 		for _, row := range jitRoleRows {
 			t.Run(row.name, func(t *testing.T) {
@@ -431,7 +431,7 @@ func TestJITRoleTable(t *testing.T) {
 	})
 }
 
-func TestJITSuspendedOrgRefused(t *testing.T) {
+func TestOIDCJITSuspendedOrgRefused(t *testing.T) {
 	t.Run("oidc", func(t *testing.T) {
 		j := newJITHarness(t, harnessOpts{})
 		email, sub := uniqueEmail("jit-suspended"), "sub-"+uuid.NewString()
@@ -446,7 +446,7 @@ func TestJITSuspendedOrgRefused(t *testing.T) {
 }
 
 // The account is disabled after the plan read: the check under the lock refuses it.
-func TestJITDisabledAccountRefused(t *testing.T) {
+func TestOIDCJITDisabledAccountRefused(t *testing.T) {
 	t.Run("oidc", func(t *testing.T) {
 		j := newJITHarness(t, harnessOpts{})
 		email, sub := uniqueEmail("jit-disabled"), "sub-"+uuid.NewString()
@@ -461,7 +461,7 @@ func TestJITDisabledAccountRefused(t *testing.T) {
 }
 
 // A sign-in never undoes a status: the auth row stays as it was.
-func TestJITRemovedMemberStaysOut(t *testing.T) {
+func TestOIDCJITRemovedMemberStaysOut(t *testing.T) {
 	t.Run("oidc", func(t *testing.T) {
 		for _, status := range []string{"removed", "suspended", "invited"} {
 			t.Run(status, func(t *testing.T) {
@@ -482,7 +482,7 @@ func TestJITRemovedMemberStaysOut(t *testing.T) {
 	})
 }
 
-func TestJITTwoFirstSignInsOneRow(t *testing.T) {
+func TestOIDCJITTwoFirstSignInsOneRow(t *testing.T) {
 	t.Run("oidc", func(t *testing.T) {
 		j := newJITHarness(t, harnessOpts{})
 		email, sub := uniqueEmail("jit-two"), "sub-"+uuid.NewString()
@@ -505,7 +505,7 @@ func TestJITTwoFirstSignInsOneRow(t *testing.T) {
 	})
 }
 
-func TestJITTwoJoinsOneRow(t *testing.T) {
+func TestOIDCJITTwoJoinsOneRow(t *testing.T) {
 	t.Run("oidc", func(t *testing.T) {
 		j := newJITHarness(t, harnessOpts{})
 		email, sub := uniqueEmail("jit-two-join"), "sub-"+uuid.NewString()
@@ -528,7 +528,7 @@ func TestJITTwoJoinsOneRow(t *testing.T) {
 }
 
 // The account became a member after the plan read: a session, no second row.
-func TestJITAlreadyMemberGetsASessionOnly(t *testing.T) {
+func TestOIDCJITAlreadyMemberGetsASessionOnly(t *testing.T) {
 	t.Run("oidc", func(t *testing.T) {
 		j := newJITHarness(t, harnessOpts{})
 		email, sub := uniqueEmail("jit-already"), "sub-"+uuid.NewString()
@@ -555,7 +555,7 @@ func TestJITAlreadyMemberGetsASessionOnly(t *testing.T) {
 	})
 }
 
-func TestJITTokenFailureNextSignInWorks(t *testing.T) {
+func TestOIDCJITTokenFailureNextSignInWorks(t *testing.T) {
 	j := newJITHarness(t, harnessOpts{})
 	email, sub := uniqueEmail("jit-mint"), "sub-"+uuid.NewString()
 	j.mintErr = errors.New("mint failed")
@@ -583,7 +583,7 @@ func (j *jitHarness) setAllowedDomains(t *testing.T, list any) {
 	}
 }
 
-func TestJITNewAccountFollowsTheDomainList(t *testing.T) {
+func TestOIDCJITNewAccountFollowsTheDomainList(t *testing.T) {
 	t.Run("oidc", func(t *testing.T) {
 		// Legacy parity: an empty or NULL list is no domain filter.
 		for name, list := range map[string]any{"empty": "[]", "null": nil} {
@@ -623,7 +623,7 @@ func TestJITNewAccountFollowsTheDomainList(t *testing.T) {
 }
 
 // A key the row holds decides the account: the email and the empty list do not.
-func TestJITKnownKeyIgnoresAnEmptyList(t *testing.T) {
+func TestOIDCJITKnownKeyIgnoresAnEmptyList(t *testing.T) {
 	t.Run("oidc", func(t *testing.T) {
 		j := newJITHarness(t, harnessOpts{})
 		email, sub := uniqueEmail("jit-known"), "sub-"+uuid.NewString()

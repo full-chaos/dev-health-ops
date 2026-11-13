@@ -9,7 +9,6 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
 
-	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/numerical"
 	"github.com/full-chaos/dev-health-ops/internal/teamkeytables"
 	"github.com/full-chaos/dev-health-ops/internal/teamownership"
 	"github.com/full-chaos/dev-health-ops/internal/teamresolve"
@@ -28,14 +27,11 @@ import (
 // team_complexity.go's finalize-scope sibling does (repo_complexity_daily's
 // own argMax(tuple(...), computed_at) readback).
 //
-// Team resolution mirrors Python's repo_to_team build in
-// _write_team_cognitive_load_for_day exactly: team_repo_ownership
-// (teamownership.OwnedRepoIDs, the already-hardened bitemporal/matched-
-// sentinel port of load_team_repo_ownership_map) wins where it resolves a
-// repo, falling back to the repo-pattern resolver (LoadWellbeingTeams +
-// NewRepoPatternResolver, already built for team_wellbeing) only for repos
-// team_repo_ownership does not cover. CHAOS-4396 hard rule preserved: this
-// executor never reads either input table's own team_id column.
+// Team resolution: the team of a repository is its team_repo_ownership owner
+// (teamownership.OwnerSharesByRepo); a repository with no owner row gets no
+// team. There is no repo_patterns fallback (D7013b), the same rule as
+// team_wellbeing and the TestOps families. CHAOS-4396 hard rule preserved:
+// this executor never reads either input table's own team_id column.
 type TeamCognitiveLoadExecutor struct {
 	conn   driver.Conn
 	writer *teamCognitiveLoadWriter
@@ -104,12 +100,6 @@ func (executor *TeamCognitiveLoadExecutor) ComputeFinalizeFamily(
 		return executor.supersedeStaleKeys(ctx, run.OrganizationID, day, nil, executor.nowUTC(), 0)
 	}
 
-	teams, err := LoadWellbeingTeams(ctx, executor.conn, run.OrganizationID)
-	if err != nil {
-		return 0, err
-	}
-	patternResolver := NewRepoPatternResolver(teams)
-
 	repoIDSet := make(map[uuid.UUID]struct{}, len(userRows)+len(teamRows))
 	for _, row := range userRows {
 		repoIDSet[row.RepoID] = struct{}{}
@@ -133,7 +123,7 @@ func (executor *TeamCognitiveLoadExecutor) ComputeFinalizeFamily(
 	// -- day-start midnight UTC, no sub-second component (the same value the
 	// query-parameter truncation caveat on load_team_repo_ownership_map warns
 	// callers to already be using).
-	repoToTeam, err := resolveDailyFinalizeRepoOwnerShares(ctx, executor.conn, run.OrganizationID, day, repoIDs, repoNamesByID, patternResolver)
+	repoToTeam, err := resolveDailyFinalizeRepoOwnerShares(ctx, executor.conn, run.OrganizationID, day, repoIDs, repoNamesByID)
 	if err != nil {
 		return 0, fmt.Errorf("team_cognitive_load: %w", err)
 	}
@@ -174,13 +164,11 @@ func (executor *TeamCognitiveLoadExecutor) supersedeStaleKeys(
 // linked shares} (teamownership.OwnerSharesByRepo, CHAOS-9410, D5988): the main
 // owner (or every tied team of a full tie, D5990) and every lesser owner, each
 // at its own share, for the finalize families that add over repositories
-// (team_cognitive_load, team_complexity). The repo-pattern resolver only
-// serves a repo no ownership row resolves AND that is still in the org's repos
-// catalog (repoNamesByID).
+// (team_cognitive_load, team_complexity). A repo with no owner row gets no
+// team: no repo_patterns fallback (D7013b).
 func resolveDailyFinalizeRepoOwnerShares(
 	ctx context.Context, conn driver.Conn, organizationID string, asOf time.Time,
 	repoIDs []uuid.UUID, repoNamesByID map[string]string,
-	patternResolver numerical.RepoTeamResolver,
 ) (map[string][]teamownership.OwnerShare, error) {
 	// A resolution failure is PROPAGATED, never swallowed (CHAOS-5141, #2255
 	// r1 finding 3): a finalize-scope family must fail closed (Retryable ->
@@ -190,7 +178,7 @@ func resolveDailyFinalizeRepoOwnerShares(
 		return nil, fmt.Errorf("resolve authoritative repo ownership: %w", err)
 	}
 	known := ownersKnownToRepoCatalog(owners, repoNamesByID)
-	resolved := teamresolve.ResolveSharesFromOwnershipMap(known, repoIDs, repoNamesByID, patternResolver)
+	resolved := teamresolve.ResolveSharesFromOwnershipMap(known, repoIDs, repoNamesByID, nil)
 	slog.Debug("daily finalize repository owners with shares",
 		"organization_id", organizationID, "repos_total", len(repoIDs), "repos_with_owners", len(resolved))
 	return resolved, nil

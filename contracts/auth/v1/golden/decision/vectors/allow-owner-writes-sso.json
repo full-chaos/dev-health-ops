@@ -1,0 +1,43 @@
+{
+  "expect": {
+    "allowed": true,
+    "cache_class": "",
+    "expires_in_seconds": null,
+    "obligations": {
+      "tenant_scope": "org-a"
+    },
+    "policy_revision": 20,
+    "reason": "allowed_by_role",
+    "wire_reason_code": "allowed_by_role"
+  },
+  "id": "allow-owner-writes-sso",
+  "layer": "pdp",
+  "request": {
+    "action": "sso.write",
+    "organization_id": "org-a",
+    "resource_key": "",
+    "resource_kind": "organization"
+  },
+  "state": {
+    "catalog": "embedded",
+    "clock": "2027-01-15T08:00:00Z",
+    "grants": [],
+    "grants_error": false,
+    "memberships": {
+      "org-a": {
+        "org_id": "org-a",
+        "role": "owner",
+        "status": "active"
+      }
+    },
+    "organizations": {
+      "org-a": "active"
+    },
+    "platform_role": "",
+    "principal_status": "active",
+    "service_accounts": {},
+    "snapshot": "grant",
+    "workload": null
+  },
+  "why": "every organization role holds acr.credential.revoke: the owner reaches the revoke route; acr decides which credentials the actor may revoke."
+}

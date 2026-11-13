@@ -229,11 +229,10 @@ func (erroringOwnershipConn) Query(context.Context, string, ...any) (chdriver.Ro
 func TestResolveDailyFinalizeRepoOwnerSharesPropagatesOwnershipQueryError(t *testing.T) {
 	repoID := uuid.New()
 	repoNamesByID := map[string]string{repoID.String(): "acme/repo"}
-	patternResolver := NewRepoPatternResolver(nil)
 
 	_, err := resolveDailyFinalizeRepoOwnerShares(
 		context.Background(), erroringOwnershipConn{}, "acme", cognitiveLoadTestDay,
-		[]uuid.UUID{repoID}, repoNamesByID, patternResolver,
+		[]uuid.UUID{repoID}, repoNamesByID,
 	)
 	if err == nil {
 		t.Fatal("err=nil, want the ownership query failure to propagate -- " +

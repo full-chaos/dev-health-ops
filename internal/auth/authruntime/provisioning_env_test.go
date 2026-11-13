@@ -6,6 +6,7 @@ import "github.com/full-chaos/dev-health-ops/internal/auth/authconfig"
 // invite keys (test values, never a deployment's), so a probe serves them.
 func provisioningEnvironment(env map[string]string) map[string]string {
 	env[authconfig.EnvMembershipRoutes] = "true"
+	env[authconfig.EnvSSOProvidersOwned] = "true"
 	env[authconfig.EnvInviteTokenSecret] = "probe-invite-signing-key"
 	env[authconfig.EnvInviteTokenSecretPrevious] = "probe-invite-previous-key"
 	return env

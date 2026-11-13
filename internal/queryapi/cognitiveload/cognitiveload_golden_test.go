@@ -11,7 +11,6 @@ import (
 
 	"github.com/full-chaos/dev-health-go/clickhouse"
 
-	"github.com/full-chaos/dev-health-ops/internal/queryapi/activeteams"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
 )
 
@@ -20,8 +19,9 @@ import (
 // queries the reference resolver issued, in order, with their parameters, and
 // the exact signals it built from scripted rows: the merge of per-user and
 // per-team days, empty and null handling, repository ownership resolution
-// (native ownership rows, ranking winner, several candidate repositories) and
-// the pattern fallback across every team. Queries are matched by the table
+// (native ownership rows, ranking winner, several candidate repositories).
+// The eight cases that pinned the teams.repo_patterns fallback hold the Go
+// answer of the owner-only rule (testdata/README.md). Queries are matched by the table
 // they read. The tables read, their order and their parameters are compared
 // for every call, and the query text is compared with whitespace collapsed.
 // The ownership and team-pattern queries are compared from the FROM clause
@@ -149,16 +149,6 @@ type goldenClient struct {
 }
 
 func (c *goldenClient) Query(_ context.Context, statement string, bindings []clickhouse.Binding) (clickhouse.RowScanner, error) {
-	if statement == activeteams.IDsSubquery {
-		// The shared active-team read is Go-only (the Python reference has no
-		// such read) and is kept out of the pinned query sequence. The golden
-		// inputs hold no inactive team, so every scripted team is active.
-		var out [][]any
-		for _, r := range c.src["teams"] {
-			out = append(out, []any{r["id"]})
-		}
-		return &fakeRowScanner{rows: out}, nil
-	}
 	if strings.Contains(statement, "AS measured_teams") || strings.Contains(statement, "AS no_measured_row") || strings.Contains(statement, "AS no_measured_load_day") || strings.Contains(statement, "AS no_live_user_day") {
 		// The four reads of the days that hold retraction rows only are
 		// Go-only (the Python reference has no such read) and are kept out of

@@ -771,6 +771,10 @@ jobs:
         run: bash ci/check_go.sh integration-prepull
 
       - name: Run isolated storage integration shard ${{ matrix.target }} ${{ matrix.shard }}
+        env:
+          # The packages shards run each go test group with -json into this runner directory and print the plain log from
+          # it; the raw events (they carry test output) never leave the runner. Empty for the other targets: plain go test.
+          GO_INTEGRATION_LEG_JSON_DIR: ${{ matrix.target == 'packages' && format('{0}/go-integration-leg-json', runner.temp) || '' }}
         run: bash ci/check_go.sh integration-shard "${{ matrix.target }}" "${{ matrix.shard }}"
 
       - name: Write JUnit XML next to the per-test json
@@ -788,6 +792,29 @@ jobs:
           path: go-test-json/
           retention-days: 14
           if-no-files-found: ignore
+
+      - name: Reduce the packages shard go test -json to per-test timings
+        if: always() && matrix.target == 'packages'
+        continue-on-error: true
+        # One row per finished test and per package (empty test: the package's final pass/fail/skip), package<TAB>test<TAB>
+        # action<TAB>elapsed seconds, gzipped. No test output leaves the runner. A line that is not a JSON event is skipped.
+        # The shard's pass or fail is decided by the step above, never by this one.
+        run: |
+          mkdir -p go-test-timings
+          for f in "${RUNNER_TEMP}"/go-integration-leg-json/*.json; do
+            [ -f "${f}" ] || continue
+            jq -R -r 'fromjson? | select(type == "object" and (.Action == "pass" or .Action == "fail" or .Action == "skip")) | [.Package, (.Test // ""), .Action, (.Elapsed // 0)] | @tsv' "${f}"
+          done | gzip -9 > "go-test-timings/integration-packages-${{ matrix.shard }}.tsv.gz"
+
+      - name: Upload the packages shard per-test timings
+        if: always() && matrix.target == 'packages'
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: go-test-timings-integration-packages-${{ matrix.shard }}
+          path: go-test-timings/
+          retention-days: 14
+          if-no-files-found: warn
 
       - name: Log out of GitHub Container Registry
         if: always()

@@ -143,8 +143,8 @@ picks between on `teamId`/`repoId`:
 2. **Team+repo combined** (both set, CHAOS-4406/CHAOS-4462): neither
    `user_metrics_daily` nor `team_metrics_daily`'s own `team_id` column can
    be trusted (CHAOS-4396 taint). `resolveOwnedRepoID` confirms via
-   `team_repo_ownership` (falling back to `teams.repo_patterns` only when
-   native ownership resolves no row at all for the candidate repo) that the
+   `team_repo_ownership` (no `teams.repo_patterns` fallback: a repo with no
+   owner row is owned by no team) that the
    requested repo is CURRENTLY, CANONICALLY owned by the requested team —
    if not owned (or the repo does not exist), returns an explicit empty
    result rather than either the wrong team's data or a confusing error;
@@ -166,14 +166,10 @@ tracked as follow-up **CHAOS-4462**. The CHAOS-4352 rebase lane then
 rebased the feature branch onto `origin/main` (which carries 8519cd2a8),
 so the Python resolver at the feature tip was identical to
 `origin/main`'s 3-path version, and this PR ported the third path to
-close CHAOS-4462. `resolveOwnedRepoID`'s pattern-fallback resolver
-(`repoPatternResolver`) is a small package-private port of
-`RepoPatternTeamResolver`/`build_repo_pattern_resolver`
-(`providers/teams.py`) — not a shared import, matching this package's
-existing convention (see `QueryClient`'s doc comment) of small per-package
-helpers over a shared library; a separate, independently-verified copy of
-the same logic already exists worker-side
-(`internal/jobs/metrics/daily/wellbeing_native_clickhouse.go`).
+close CHAOS-4462. The port's `teams.repo_patterns` fallback and its
+package-private pattern resolver were later removed: `resolveOwnedRepoID`
+takes the owner from `team_repo_ownership` only, the rule the metric
+families and the AI analytics team scope use.
 
 Like `reviewEdges` (unlike `featureFlags`), `resolve_cognitive_load` has
 no missing-table degraded path — no `degradedReason` field on

@@ -380,31 +380,32 @@ func TestResolve_TeamAndRepoCombined_OwnedByADifferentTeam_NeverPatternFallback_
 	}
 }
 
-// TestResolve_TeamAndRepoCombined_PatternFallbackResolves proves a repo
-// with NO native team_repo_ownership row at all still resolves via
-// teams.repo_patterns (the path GitLab/Jira/Linear auto-imports rely on
-// entirely, since none of them write team_repo_ownership).
-func TestResolve_TeamAndRepoCombined_PatternFallbackResolves(t *testing.T) {
+// TestResolve_TeamAndRepoCombined_UnownedPatternRepoIsOutOfScope proves a
+// repo with NO team_repo_ownership row is owned by no team, even when the
+// team's repo_patterns would match it: two queries (candidates, ownership),
+// no teams read, and an explicit empty result.
+func TestResolve_TeamAndRepoCombined_UnownedPatternRepoIsOutOfScope(t *testing.T) {
 	client := &fakeClient{
 		responses: []*fakeRowScanner{
 			{rows: [][]any{{"repo-uuid-1", "org/repo-a"}}},
-			{rows: nil}, // no native ownership row for this repo at all
-			{rows: [][]any{{"team-a", []string{"org/repo-a"}}}},
-			{rows: [][]any{{"team-a"}}}, // active-team set
-			{rows: nil},                 // user metrics
-			{rows: nil},                 // repo-scoped team metrics
+			{rows: nil}, // no ownership row for this repo
 		},
-		errs: []error{nil, nil, nil, nil, nil, nil},
+		errs: []error{nil, nil},
 	}
 	result, err := Resolve(context.Background(), client, "org-1", mustDate(t, "2026-08-01"), mustDate(t, "2026-08-31"), strPtr("team-a"), strPtr("org/repo-a"))
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	if client.calls != 6 {
-		t.Fatalf("calls = %d, want 6 (candidates, ownership, teams, active-team set, user metrics, repo-scoped team metrics)", client.calls)
+	if client.calls != 2 {
+		t.Fatalf("calls = %d, want 2 (candidates, ownership; teams.repo_patterns is never read)", client.calls)
 	}
-	if result.Signals == nil {
-		t.Fatal("expected a non-nil (possibly empty) signals slice")
+	for i, statement := range client.statements {
+		if strings.Contains(statement, "repo_patterns") || strings.Contains(statement, "FROM teams") {
+			t.Fatalf("query %d reads teams: %s", i, statement)
+		}
+	}
+	if result.Signals == nil || len(result.Signals) != 0 || result.TotalDays != 0 {
+		t.Fatalf("expected an explicit non-nil empty result (no owner row), got %+v", result)
 	}
 }
 
@@ -434,54 +435,6 @@ func TestResolveOwnedRepoID_DedupesToFirstRowPerResolvedRepoAndRespectsOrder(t *
 	}
 	if !found || id != "r2" {
 		t.Fatalf("resolveOwnedRepoID = (%q, %v), want (\"r2\", true)", id, found)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// repoPatternResolver
-// ---------------------------------------------------------------------------
-
-func TestRepoPatternResolver_ExactMatchWinsOverPrefix(t *testing.T) {
-	resolver := newRepoPatternResolver([]patternTeam{
-		{id: "team-broad", repoPatterns: []string{"org/*"}},
-		{id: "team-exact", repoPatterns: []string{"org/repo-a"}},
-	})
-	teamID, ok := resolver.resolve("org/repo-a")
-	if !ok || teamID != "team-exact" {
-		t.Errorf("resolve(org/repo-a) = (%q, %v), want (team-exact, true)", teamID, ok)
-	}
-}
-
-func TestRepoPatternResolver_LongestPrefixWins(t *testing.T) {
-	resolver := newRepoPatternResolver([]patternTeam{
-		{id: "team-broad", repoPatterns: []string{"org/*"}},
-		{id: "team-narrow", repoPatterns: []string{"org/repo-*"}},
-	})
-	teamID, ok := resolver.resolve("org/repo-a")
-	if !ok || teamID != "team-narrow" {
-		t.Errorf("resolve(org/repo-a) = (%q, %v), want (team-narrow, true) -- longest prefix must win", teamID, ok)
-	}
-}
-
-func TestRepoPatternResolver_NoMatchReturnsFalse(t *testing.T) {
-	resolver := newRepoPatternResolver([]patternTeam{
-		{id: "team-a", repoPatterns: []string{"org/repo-a"}},
-	})
-	if _, ok := resolver.resolve("org/repo-z"); ok {
-		t.Error("expected no match for an unrelated repo")
-	}
-	if _, ok := resolver.resolve(""); ok {
-		t.Error("expected no match for an empty repo name")
-	}
-}
-
-func TestRepoPatternResolver_CaseInsensitive(t *testing.T) {
-	resolver := newRepoPatternResolver([]patternTeam{
-		{id: "team-a", repoPatterns: []string{"Org/Repo-A"}},
-	})
-	teamID, ok := resolver.resolve("org/repo-a")
-	if !ok || teamID != "team-a" {
-		t.Errorf("resolve should be case-insensitive, got (%q, %v)", teamID, ok)
 	}
 }
 

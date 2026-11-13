@@ -391,6 +391,7 @@ sync_scheduler_skipped_feature_disabled_total		code: internal/scheduler/sync/loo
 sync_scheduler_skipped_not_planner_managed_total		code: internal/scheduler/sync/loop.go
 sync_scheduler_skipped_open_run_total		code: internal/scheduler/sync/loop.go
 sync_scheduler_skipped_org_missing_total		code: internal/scheduler/sync/loop.go
+sync_scheduler_unminted_instants_total		code: internal/scheduler/sync/loop.go
 sync_scheduler_unsupported_cron_fallback_total		code: internal/scheduler/sync/loop.go
 sync_scheduler_up		code: internal/scheduler/sync/loop.go
 sync_scheduler_windows_total		code: internal/scheduler/sync/loop.go

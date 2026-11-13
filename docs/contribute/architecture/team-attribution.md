@@ -495,8 +495,11 @@ means the ClickHouse `teams` dimension is empty.
 > org with zero `team_repo_ownership` rows:** trigger `run_team_autoimport` for that org with GitHub
 > selected as a source (sync-config / the team auto-import job — see
 > `docs/operate/run/workers-and-jobs.md`) — `team_autoimport_github.populate()` is the only writer.
-> GitLab/Jira/Linear-only orgs have no `team_repo_ownership` writer by design (§0.2 above); their
-> repos resolve to a team only via `teams.repo_patterns` (manually configured, or fixtures).
+> GitLab/Jira/Linear-only orgs have no `team_repo_ownership` writer by design (§0.2 above).
+> **Go daily families (D7013b):** `team_wellbeing`, `ai_impact`, `team_cognitive_load`, `team_complexity`,
+> `compounding_risk_team` and the four TestOps families take a repository's team from `team_repo_ownership` only. A
+> repository with no owner row gets no team; none of them reads `teams.repo_patterns`. So a GitLab/Jira/Linear-only
+> org (teams with patterns only, no owner rows) gets no team in these families.
 
 > **TestOps daily rows use repository ownership, not patterns.** The native
 > `testops_pipeline`, `testops_test`, `testops_coverage`, and `testops_risk` families retain a
@@ -531,7 +534,7 @@ means the ClickHouse `teams` dimension is empty.
 > only, and its own `team_id` column falls back to membership resolution, which is not allowed as a team key. `team_cognitive_load_daily` (migration
 > `081_team_cognitive_load_daily.sql`) will be written by aggregating
 > `user_metrics_daily`/`team_metrics_daily` rows **by `repo_id`**, then mapping `repo_id → team`
-> through the same `team_repo_ownership` (merged over `teams.repo_patterns`) resolution wired into `providers/teams.py::load_team_repo_ownership_map` — never through either
+> through `team_repo_ownership` only (no `teams.repo_patterns` fallback, D7013b) — never through either
 > source table's own `team_id` column.
 >
 > | Column | Type | Notes |
@@ -582,10 +585,10 @@ means the ClickHouse `teams` dimension is empty.
 > note): (1) native `team_repo_ownership` wins where it resolves the repo, via the SAME
 > `coalesce(repo_id, name-joined id)` + `matched` sentinel join `load_team_repo_ownership_map`
 > uses; (2) ranked by `((is_primary = 1) DESC, specificity DESC, updated_at DESC)` so a non-primary
-> co-owner is never mistaken for the canonical owner; (3) falls back to the requesting team's
-> `teams.repo_patterns` glob strings ONLY when native ownership resolves nothing for the candidate
-> repo — the path GitLab/Jira/Linear auto-imports rely on entirely, since none of them write
-> `team_repo_ownership`. An unowned/nonexistent repo, or one owned by a different team, returns an
+> co-owner is never mistaken for the canonical owner; (3) no fallback: the Go resolver
+> (`internal/queryapi/cognitiveload`) reads no `teams.repo_patterns`, so a repo that no
+> `team_repo_ownership` row resolves is owned by no team (the owner-only rule the metric families
+> and the AI analytics team scope use). An unowned/nonexistent repo, or one owned by a different team, returns an
 > explicit empty result, never the wrong team's data. Once ownership is confirmed, both data
 > queries filter by the resolved `repo_id` ALONE: `user_metrics_daily` via its existing repo
 > predicate, and a new `_fetch_repo_scoped_team_metrics` for `team_metrics_daily` that sums the
@@ -1993,14 +1996,15 @@ item (`dropInactiveTeamCandidates`, section 0.2) and, with the same test of the 
 metric family:
 
 - `teamownership.AuthoritativeOwnersByRepo` skips an ownership row of an inactive team. A lower-ranked row of an active
-  team for the same repository then wins; a repository with no active owner goes to the caller's pattern fallback.
+  team for the same repository then wins; a repository with no active owner gets no team (no daily family falls back
+  to `teams.repo_patterns`, D7013b).
   Callers: testops, `ai_impact`, `team_cognitive_load`, `team_complexity`, `compounding_risk_team`, `team_wellbeing`.
-- `LoadWellbeingTeams` (`team_wellbeing` for the names and the pattern fallback, `ic_finalize`, and the pattern fallback of the three finalize families) and
-  `LoadAIImpactTeams` (`ai_impact`) drop the inactive teams after their read.
+- `LoadWellbeingTeams` (`team_wellbeing`, for the team names) and `LoadAIImpactTeams` (`ai_impact`, for the incident
+  attribution) read id and name only, and drop the inactive teams after their read.
 
-`team_wellbeing` (`team_metrics_daily`) takes the team of a repository from its authoritative owner, then from
-`repo_patterns` through `teamresolve.ResolveFromOwnershipMap`, as its siblings do; a repository with no owner is
-`unassigned`. It never resolves a team through `teams.members` (a declared difference from the Python reference). The
+`team_wellbeing` (`team_metrics_daily`) takes the team of a repository from its owner rows only
+(`teamownership.OwnerSharesByRepo`); a repository with no owner is `unassigned`. It does not fall back to
+`teams.repo_patterns` (D7013b), the same rule as the TestOps families. It never resolves a team through `teams.members` (a declared difference from the Python reference). The
 census `TestNoDailyFamilyResolvesATeamThroughTeamMembersExceptICFinalize` names `ic_finalize` as the one daily family
 that still does. A day computed before this change keeps its `unassigned` rows until it is computed again;
 a new compute of the day leaves each of them as a row of zeros under the stale-key rule.
@@ -3972,13 +3976,13 @@ Same hard rule as items 1-2: team = project/repo **ownership**
 only. `repo_complexity_daily` carries no `team_id` column of its own (unlike
 `user_metrics_daily`/`team_metrics_daily`), so
 there is nothing to route around here — the resolution path
-(`team_repo_ownership` merged over `teams.repo_patterns`, §0.2/§1.1) is
+(`team_repo_ownership` only, no `teams.repo_patterns` fallback, D7013b) is
 reused purely for consistency with items 1-2, not to avoid a tainted column.
 
 ```mermaid
 flowchart LR
     RCD["repo_complexity_daily\n(per repo, per day)"] -->|"argMax(*, computed_at)\nreadback, org+day scoped"| FIN
-    TRO["team_repo_ownership\n⋈ teams.repo_patterns"] -->|"repo_id → team_id map"| FIN
+    TRO["team_repo_ownership"] -->|"repo_id → team_id map"| FIN
     FIN["run_daily_metrics_finalize\n(once per org/day)"] -->|"SUM loc/cc/high/very_high;\nrecompute cc_per_kloc from sums"| TCD["team_complexity_daily\n(per team, per day)"]
 ```
 

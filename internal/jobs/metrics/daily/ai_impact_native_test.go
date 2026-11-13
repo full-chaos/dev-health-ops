@@ -248,20 +248,17 @@ func (r *fakeOwnershipRows) Err() error   { return nil }
 func (r *fakeOwnershipRows) Close() error { return nil }
 
 // TestResolveAIImpactRepoToTeamAttributesAnOwnershipOnlyRepo proves a repo
-// whose ONLY signal is a team_repo_ownership row (no repo_patterns match at
-// all -- patternResolver is built from zero teams) still resolves to that
-// row's team.
+// whose ONLY signal is a team_repo_ownership row resolves to that row's team.
 func TestResolveAIImpactRepoToTeamAttributesAnOwnershipOnlyRepo(t *testing.T) {
 	repoID := uuid.New()
 	conn := &governanceQueryRecorder{rows: &fakeOwnershipRows{
 		rows: []fakeOwnershipRow{{repoID: repoID.String(), teamID: "team-owner"}},
 	}}
 	repoNamesByID := map[string]string{repoID.String(): "acme/owned-only"}
-	patternResolver := aiimpact.BuildRepoPatternResolver(nil)
 
 	got, err := resolveAIImpactRepoToTeam(
 		context.Background(), conn, "acme", time.Now().UTC(),
-		[]uuid.UUID{repoID}, repoNamesByID, patternResolver,
+		[]uuid.UUID{repoID}, repoNamesByID,
 	)
 	if err != nil {
 		t.Fatalf("resolveAIImpactRepoToTeam: %v", err)
@@ -272,54 +269,22 @@ func TestResolveAIImpactRepoToTeamAttributesAnOwnershipOnlyRepo(t *testing.T) {
 	}
 }
 
-// TestResolveAIImpactRepoToTeamOwnershipBeatsAPatternMatch proves the
-// precedence half of the same fix: when a repo has BOTH a
-// team_repo_ownership row and a repo_patterns match, the ownership row's
-// team wins, never the pattern's.
-func TestResolveAIImpactRepoToTeamOwnershipBeatsAPatternMatch(t *testing.T) {
-	repoID := uuid.New()
-	conn := &governanceQueryRecorder{rows: &fakeOwnershipRows{
-		rows: []fakeOwnershipRow{{repoID: repoID.String(), teamID: "team-owner"}},
-	}}
-	repoNamesByID := map[string]string{repoID.String(): "acme/both"}
-	patternResolver := aiimpact.BuildRepoPatternResolver([]aiimpact.Team{
-		{ID: "team-pattern", Name: "Pattern", RepoPatterns: []string{"acme/*"}},
-	})
-
-	got, err := resolveAIImpactRepoToTeam(
-		context.Background(), conn, "acme", time.Now().UTC(),
-		[]uuid.UUID{repoID}, repoNamesByID, patternResolver,
-	)
-	if err != nil {
-		t.Fatalf("resolveAIImpactRepoToTeam: %v", err)
-	}
-	if !slices.Equal(ownerTeamIDs(got[repoID.String()]), []string{"team-owner"}) {
-		t.Fatalf("team=%v, want team-owner -- ownership must beat a repo_patterns match "+
-			"for the same repo", got[repoID.String()])
-	}
-}
-
-// TestResolveAIImpactRepoToTeamFallsBackToPatternsWhenUnowned pins the
-// fallback path this fix must not regress: a repo with no ownership row at
-// all still resolves via repo_patterns, exactly as before this change.
-func TestResolveAIImpactRepoToTeamFallsBackToPatternsWhenUnowned(t *testing.T) {
+// TestResolveAIImpactRepoToTeamUnownedRepoGetsNoTeam (D7013b): a repo with
+// no ownership row gets no team; there is no repo_patterns fallback.
+func TestResolveAIImpactRepoToTeamUnownedRepoGetsNoTeam(t *testing.T) {
 	repoID := uuid.New()
 	conn := &governanceQueryRecorder{rows: &fakeOwnershipRows{}}
 	repoNamesByID := map[string]string{repoID.String(): "acme/patterns-only"}
-	patternResolver := aiimpact.BuildRepoPatternResolver([]aiimpact.Team{
-		{ID: "team-pattern", Name: "Pattern", RepoPatterns: []string{"acme/*"}},
-	})
 
 	got, err := resolveAIImpactRepoToTeam(
 		context.Background(), conn, "acme", time.Now().UTC(),
-		[]uuid.UUID{repoID}, repoNamesByID, patternResolver,
+		[]uuid.UUID{repoID}, repoNamesByID,
 	)
 	if err != nil {
 		t.Fatalf("resolveAIImpactRepoToTeam: %v", err)
 	}
-	if !slices.Equal(ownerTeamIDs(got[repoID.String()]), []string{"team-pattern"}) {
-		t.Fatalf("team=%v, want team-pattern -- an unowned repo must still fall back to its "+
-			"repo_patterns match", got[repoID.String()])
+	if owners, ok := got[repoID.String()]; ok {
+		t.Fatalf("team=%v, want none -- an unowned repo gets no team", owners)
 	}
 }
 
@@ -332,11 +297,10 @@ func TestResolveAIImpactRepoToTeamFallsBackToPatternsWhenUnowned(t *testing.T) {
 func TestResolveAIImpactRepoToTeamPropagatesOwnershipQueryError(t *testing.T) {
 	repoID := uuid.New()
 	repoNamesByID := map[string]string{repoID.String(): "acme/repo"}
-	patternResolver := aiimpact.BuildRepoPatternResolver(nil)
 
 	_, err := resolveAIImpactRepoToTeam(
 		context.Background(), erroringOwnershipConn{}, "acme", time.Now().UTC(),
-		[]uuid.UUID{repoID}, repoNamesByID, patternResolver,
+		[]uuid.UUID{repoID}, repoNamesByID,
 	)
 	if err == nil {
 		t.Fatal("err=nil, want the ownership query failure to propagate -- " +
@@ -366,7 +330,7 @@ func TestResolveAIImpactRepoToTeamNamesEveryOwnerAtItsShare(t *testing.T) {
 	}}}
 	got, err := resolveAIImpactRepoToTeam(
 		context.Background(), conn, "acme", time.Now().UTC(),
-		[]uuid.UUID{repoID}, map[string]string{repoID.String(): "acme/shared"}, aiimpact.BuildRepoPatternResolver(nil),
+		[]uuid.UUID{repoID}, map[string]string{repoID.String(): "acme/shared"},
 	)
 	if err != nil {
 		t.Fatal(err)

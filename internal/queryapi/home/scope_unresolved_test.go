@@ -207,29 +207,37 @@ func TestHomeAnswersNoMetricRowsForAnUnresolvedScopeAtEveryLevel(t *testing.T) {
 	}
 }
 
-// The reason of an empty filter is the existing one for an unresolved service or developer scope (CHAOS-6119); a known scope and an
-// org scope carry none, and nothing is read.
-func TestFilterEmptyReasonForAnUnresolvedServiceOrDeveloperScope(t *testing.T) {
+// FilterEmptyReason stays null for an unresolved service or developer scope (CHAOS-6119): the only reasons are repository ones, and the
+// web words repository_not_found as "repository not found". A level-specific reason needs a new enum value and web text.
+func TestFilterEmptyReasonStaysNullForAnUnresolvedServiceOrDeveloperScope(t *testing.T) {
 	for _, level := range []string{"service", "developer"} {
 		unknown := resolved(t, newExistenceClient(), "org-a", level, "nope")
-		reason, err := filterEmptyReason(context.Background(), nil, unknown, "org-a", time.Now())
-		if err != nil || reason == nil || string(*reason) != "repository_not_found" {
-			t.Errorf("%s unknown: reason %v err %v, want repository_not_found", level, reason, err)
+		if !unknown.Scope.Unresolved() {
+			t.Fatalf("%s: the scope is resolved", level)
 		}
-	}
-	known := resolved(t, newExistenceClient(), "org-a", "developer", "dev@example.com")
-	if reason, err := filterEmptyReason(context.Background(), nil, known, "org-a", time.Now()); err != nil || reason != nil {
-		t.Errorf("known developer: reason %v err %v, want null", reason, err)
+		if reason, err := filterEmptyReason(context.Background(), nil, unknown, "org-a", time.Now()); err != nil || reason != nil {
+			t.Errorf("%s unknown: reason %v err %v, want null", level, reason, err)
+		}
 	}
 }
 
-// BuildResponseWithFilterEmptyReason resolves the scope once and hands the resolved scope to both halves.
-func TestBuildResponseWithFilterEmptyReasonCarriesTheReasonOfAnUnresolvedScope(t *testing.T) {
+// An unresolved repository scope keeps its repository_not_found.
+func TestFilterEmptyReasonOfAnUnresolvedRepositoryScopeIsRepositoryNotFound(t *testing.T) {
+	c := newExistenceClient()
+	f := resolved(t, c, "org-a", "repo", "nope")
+	reason, err := filterEmptyReason(context.Background(), c, f, "org-a", time.Now())
+	if err != nil || reason == nil || string(*reason) != "repository_not_found" {
+		t.Fatalf("reason %v err %v, want repository_not_found", reason, err)
+	}
+}
+
+// BuildResponseWithFilterEmptyReason answers the unresolved service scope with no reason and no metric rows.
+func TestBuildResponseWithFilterEmptyReasonAnswersAnUnresolvedServiceWithNoReason(t *testing.T) {
 	c := newExistenceClient()
 	f := Filters{Time: TimeFilter{RangeDays: 7, CompareDays: 7, EndDate: ptrTime(day(2024, 1, 8))}, Scope: ScopeFilter{Level: "service", IDs: []string{"svc-1"}}}
 	resp, err := BuildResponseWithFilterEmptyReason(context.Background(), c, nil, "org-a", f, goldenNow)
-	if err != nil || resp.FilterEmptyReason == nil || *resp.FilterEmptyReason != "repository_not_found" {
-		t.Fatalf("response reason %v err %v, want repository_not_found", resp, err)
+	if err != nil || resp.FilterEmptyReason != nil {
+		t.Fatalf("response reason %v err %v, want null", resp, err)
 	}
 	if c.resolveQueries() != 0 {
 		t.Errorf("%d resolve queries for a service scope, want 0", c.resolveQueries())

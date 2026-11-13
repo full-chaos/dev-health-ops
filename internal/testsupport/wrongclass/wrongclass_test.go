@@ -173,3 +173,56 @@ func TestCaptureMasksTheRequestIDAndKeepsTheComparedHeaders(t *testing.T) {
 		t.Error("census line")
 	}
 }
+
+// A class with two dedicated headers gives one carrier per header, each alone; a class with one gives one.
+func TestCarriersForGivesEveryDedicatedHeaderItsOwnCarrier(t *testing.T) {
+	two := Class{ID: "c", Markers: []Marker{{Kind: "dedicated_header", Name: "X-A"}, {Kind: "dedicated_header", Name: "X-B"}}}
+	carriers, ok, err := CarriersFor(two, Options{Mint: fakeMint, HeaderValue: func(name string) string {
+		if name == "X-B" {
+			return "b"
+		}
+		return ""
+	}})
+	if err != nil || !ok {
+		t.Fatalf("two headers: ok %v, err %v", ok, err)
+	}
+	want := []Carrier{{Class: "c", Header: "X-A", Value: Filler}, {Class: "c", Header: "X-B", Value: "b"}}
+	if !slices.Equal(carriers, want) {
+		t.Fatalf("two headers: carriers %+v, want %+v", carriers, want)
+	}
+	for _, carrier := range carriers {
+		request := carrier.Request(http.MethodGet, "/x")
+		if got := len(request.Header); got != 1 {
+			t.Errorf("%s: the request carries %d headers, want only its own", carrier.Header, got)
+		}
+	}
+	one, ok, err := CarriersFor(Class{ID: "d", Markers: []Marker{{Kind: "dedicated_header", Name: "X-A"}}}, Options{Mint: fakeMint})
+	if err != nil || !ok || len(one) != 1 {
+		t.Fatalf("one header: %d carriers, ok %v, err %v", len(one), ok, err)
+	}
+}
+
+// The real registry presents acr_web_assertion in both of its headers: the web assertion and the web approver
+// reference (the second presentation of the same class, signed with the same key). Removing either marker fails here.
+func TestTheRealRegistryPresentsTheWebAssertionInBothHeaders(t *testing.T) {
+	classes, err := LoadClasses(authv1.CredentialClasses)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var carriers []Carrier
+	for _, class := range classes {
+		if class.ID != "acr_web_assertion" {
+			continue
+		}
+		found, ok, err := CarriersFor(class, Options{Mint: fakeMint})
+		if err != nil || !ok {
+			t.Fatalf("acr_web_assertion: ok %v, err %v", ok, err)
+		}
+		carriers = found
+	}
+	for _, header := range []string{"X-ACR-Web-Assertion", "X-ACR-Approver-Reference"} {
+		if !HasHeaderCarrier(carriers, header) {
+			t.Errorf("acr_web_assertion has no %s carrier: %+v", header, carriers)
+		}
+	}
+}

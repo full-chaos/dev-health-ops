@@ -246,6 +246,10 @@ authService:
   #    to auth.platform_role_assignments. Refused unless users are owned (phase 4, usersOwnedStage owned).
   #    Runbook: docs/operate/runbooks/auth-platform-roles-flip-and-rollback.md.
   platformRolesOwned: false
+  # -- SSO providers owned: renders AUTH_SSO_PROVIDERS_OWNED=true on the auth-migrate and auth-grants Jobs, so the grants
+  #    pass gives the auth runtime role the column INSERT, UPDATE and SELECT and the DELETE the internal SSO provider
+  #    routes write public.sso_providers with. Off (the default) it holds none of them. Turning it on is a grants-hook roll.
+  ssoProvidersOwned: false
   # -- Enforcement switch, per action namespace and service. goApi lists the namespaces whose routes the policy
   #    decision point decides instead of go-api's legacy guard, rendered as GO_API_AUTHZ_ENFORCE (one comma list).
   #    Empty renders nothing: every namespace is off. Dark: turning a namespace on is its own decision, after the shadow

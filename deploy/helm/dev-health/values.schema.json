@@ -199,6 +199,10 @@
           "description": "Render AUTH_SSO_JIT=true on auth-service. true needs authService.phase 4 with usersOwnedStage=owned.",
           "type": "boolean"
         },
+        "ssoProvidersOwned": {
+          "description": "CHAOS-13636: render AUTH_SSO_PROVIDERS_OWNED=true on the auth-migrate and auth-grants Jobs (the SSO provider write grants). Default false: no new grant.",
+          "type": "boolean"
+        },
         "platformRolesOwned": {
           "description": "CHAOS-12191: render AUTH_PLATFORM_ROLES_OWNED=true on every reader. Refused unless users are owned (the templates check it).",
           "type": "boolean"

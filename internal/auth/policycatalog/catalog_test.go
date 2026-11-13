@@ -14,8 +14,8 @@ import (
 )
 
 const (
-	actionsSHA = "d03560cfabbcd514eaed695b31fbbfe9227a825fba737da75827492df7a38ec4"
-	rolesSHA   = "8c1ec5927b7b77ea5bde9997525faac3c9a800722a4d4173155db66a4660c985"
+	actionsSHA = "58aacdef15ce8380744596bd420d62ebe2a47984beddfec6b95cd4f4201220b2"
+	rolesSHA   = "580faa0bf8996fa80303b7c8d8b9b6378341ff18b0b0ed6aef9cdbead80ce2cf"
 )
 
 func repoRoot(t *testing.T) string {
@@ -217,7 +217,7 @@ func TestEmbeddedFilesValidateAgainstTheirSchemas(t *testing.T) {
 // the frozen table of sessionPermissions (the former internal/api/session/permissions.go). Catalog-only = not in that table
 // until a web-reviewed change adds it there; every other catalog action must
 // still equal a session permission.
-var catalogOnly = map[string]bool{"admin.impersonate": true, "billing.read": true, "billing.manage": true, "license.read": true, "members.update": true, "authz.decide": true, "acr.context.read": true, "reports.write": true, "acr.evidence.read": true, "acr.credential.issue": true,
+var catalogOnly = map[string]bool{"admin.impersonate": true, "billing.read": true, "billing.manage": true, "license.read": true, "members.update": true, "authz.decide": true, "acr.context.read": true, "reports.write": true, "acr.evidence.read": true, "acr.credential.issue": true, "acr.credential.revoke": true,
 	"admin.billing": true, "admin.flags": true, "admin.audit": true, "admin.telemetry": true, "admin.stats": true,
 	"credentials.project": true,
 }
@@ -459,11 +459,11 @@ func TestImpersonationIsDeniedOnTheG51List(t *testing.T) {
 		"admin.users": true, "admin.orgs": true, "admin.impersonate": true,
 		"admin.billing": true, "admin.flags": true, "admin.audit": true, "admin.telemetry": true, "admin.stats": true, "members.invite": true, "members.manage": true,
 		"org.write": true, "org.delete": true, "billing.manage": true, "settings.write": true, "integrations.write": true, "reports.write": true,
-		"members.update": true, "authz.decide": true, "acr.credential.issue": true, "credentials.project": true,
+		"members.update": true, "authz.decide": true, "acr.credential.issue": true, "acr.credential.revoke": true, "credentials.project": true,
 	}
 	actions := Default().Actions()
-	if len(actions) != 38 {
-		t.Fatalf("%d actions, want 38", len(actions))
+	if len(actions) != 39 {
+		t.Fatalf("%d actions, want 39", len(actions))
 	}
 	for _, a := range actions {
 		denied := a.Impersonation == ImpersonationDenied
@@ -697,9 +697,9 @@ func TestThePlatformAdminActionsAreTheAdminGuardAndTheLegacyQueryAPIAndBillingAc
 		}
 	}
 	sort.Strings(got)
-	want := []string{"acr.credential.issue", "analytics.read", "billing.manage", "billing.read", "git.read", "integrations.read",
-		"integrations.write", "license.read", "members.invite", "members.manage", "metrics.read", "reports.write",
-		"settings.write", "teams.write", "work_items.read"}
+	want := []string{"acr.credential.issue", "acr.credential.revoke", "analytics.read", "billing.manage", "billing.read", "git.read", "integrations.read",
+		"integrations.write", "license.read", "members.invite", "members.manage", "metrics.read", "org.read", "reports.write",
+		"settings.read", "settings.write", "teams.write", "work_items.read"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("platform_admin actions %v, want %v", got, want)
 	}

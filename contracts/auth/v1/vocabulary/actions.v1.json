@@ -1,6 +1,6 @@
 {
   "schema_version": "actions.v1",
-  "catalog_version": 18,
+  "catalog_version": 19,
   "description": "The closed action vocabulary. An action absent from this list is refused everywhere (ACP-ADR-05 decision 1). Names are dotted and namespaced; a bare single segment is not an action. No action means 'all actions'. Each action carries a risk_class (low or high) and a cache_class (none, decision_bound, resource_revision_bound; the TRD section 14 allow-cache classes). A high-risk action is never cached: its cache_class is none. Each action carries impersonation (denied or allowed): whether a delegated session may exercise it (G-51, ACP-ADR-10). denied is the safe value; every action names one, so an action added later cannot default open. Each action that reads or exports data, and each repository-kind action, carries repository_scope (filtered or none): filtered means an allow carries the repositories the principal may read as an obligation; an action without the member is none. An organization action may carry platform_admin (allowed or denied): allowed means a principal whose platform role holds admin.orgs is allowed it in any active or suspended organization, or one with no organization row, without a membership role, as the legacy paths admit; an action without the member is denied.",
   "actions": [
     {
@@ -101,7 +101,8 @@
       "risk_class": "low",
       "cache_class": "decision_bound",
       "impersonation": "allowed",
-      "repository_scope": "none"
+      "repository_scope": "none",
+      "platform_admin": "allowed"
     },
     {
       "action": "settings.write",
@@ -182,7 +183,8 @@
       "risk_class": "low",
       "cache_class": "decision_bound",
       "impersonation": "allowed",
-      "repository_scope": "none"
+      "repository_scope": "none",
+      "platform_admin": "allowed"
     },
     {
       "action": "org.write",
@@ -255,6 +257,15 @@
       "cache_class": "none",
       "impersonation": "denied",
       "repository_scope": "filtered",
+      "platform_admin": "allowed"
+    },
+    {
+      "action": "acr.credential.revoke",
+      "scope": "organization",
+      "resource_kind": "organization",
+      "risk_class": "high",
+      "cache_class": "none",
+      "impersonation": "denied",
       "platform_admin": "allowed"
     },
     {

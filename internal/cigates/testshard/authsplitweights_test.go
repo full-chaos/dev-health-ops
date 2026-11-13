@@ -53,6 +53,17 @@ func authSplitRows(t *testing.T, rel string) map[string]int {
 	return rows
 }
 
+// lastLines: the last two non-empty lines of a stderr (the die line of check_go.sh and the line before it).
+func lastLines(s string) string {
+	var keep []string
+	for _, l := range strings.Split(s, "\n") {
+		if strings.TrimSpace(l) != "" {
+			keep = append(keep, l)
+		}
+	}
+	return strings.Join(keep[max(len(keep)-2, 0):], " | ")
+}
+
 func readRepoFile(t *testing.T, rel string) string {
 	t.Helper()
 	b, err := os.ReadFile(filepath.Join(repoRoot(t), rel))
@@ -100,7 +111,7 @@ func (a authTree) authLegNames(t *testing.T, env []string, k authSplitKind) (map
 	t.Helper()
 	out, errs, err := a.checkGo(t, append(append([]string{}, env...), "AUTH_LEG_LIST=1"), "auth", k.kind+"-leg", "all", fmt.Sprint(k.legs))
 	if err != nil {
-		return nil, "", fmt.Errorf("auth %s-leg all %d: %v: %s", k.kind, k.legs, err, errs)
+		return nil, "", fmt.Errorf("auth %s-leg all %d: %v: %s", k.kind, k.legs, err, lastLines(errs))
 	}
 	header := regexp.MustCompile(`^==> auth ` + regexp.QuoteMeta(k.kind) + `-leg ([0-9]+) ` + fmt.Sprint(k.legs) + `$`)
 	names := map[string]map[string][]int{}
@@ -263,12 +274,16 @@ func authModule(t *testing.T) string {
 // package, adding or removing an unmeasured test leaves every other test in its leg; the legs cut as the Go mirror cuts by the
 // kind's own table; the listing carries the kind's flags; the plan lines do not depend on the rows.
 func cellAuthLegsMoveNoOtherName(t *testing.T, tree authTree) string {
+	type result struct {
+		what, plan, calls string
+		names             []string
+		got               map[string][]int
+	}
 	for _, k := range authSplitKinds {
 		key, parts := authSplitKey(t, k)
 		pkg := authModule(t) + "/" + key
 		rows := authFixtureRows(k, key)
-		var before map[string][]int
-		var beforePlan string
+		var res []result
 		for _, v := range []struct {
 			what  string
 			names []string
@@ -285,30 +300,33 @@ func cellAuthLegsMoveNoOtherName(t *testing.T, tree authTree) string {
 			if err != nil {
 				return fmt.Sprintf("%s %s: %v", k.kind, v.what, err)
 			}
-			if d := cutDefect(pkg, got[pkg], rows[key], parts, v.names); d != "" {
-				return fmt.Sprintf("%s %s: %s", k.kind, v.what, d)
-			}
 			calls, err := os.ReadFile(log)
 			if err != nil || len(calls) == 0 {
 				return fmt.Sprintf("%s %s: no go test -list call reached the stand-in go (%v)", k.kind, v.what, err)
 			}
-			for _, c := range strings.Split(strings.TrimSpace(string(calls)), "\n") {
-				for _, f := range k.listFlags {
-					if !strings.Contains(" "+c+" ", " "+f+" ") {
-						return fmt.Sprintf("%s %s: the listing %q lacks the leg's flag %s", k.kind, v.what, c, f)
-					}
+			res = append(res, result{v.what, plan, strings.TrimSpace(string(calls)), v.names, got[pkg]})
+		}
+		// First the ticket's rule: no listed name changes leg when one unmeasured name comes or goes, and the plan stays.
+		for _, r := range res[1:] {
+			if r.plan != res[0].plan {
+				return fmt.Sprintf("%s %s: the leg plan (whole packages, leg headers) changed with the listing", k.kind, r.what)
+			}
+			for n, legs := range r.got {
+				if b, ok := res[0].got[n]; ok && b[0] != legs[0] {
+					return fmt.Sprintf("%s %s: %s moved from leg %d to leg %d", k.kind, r.what, n, b[0], legs[0])
 				}
 			}
-			if before == nil {
-				before, beforePlan = got[pkg], plan
-				continue
+		}
+		// Then the cut itself: exactly once, as the Go mirror cuts by the kind's own table, listed under the kind's flags.
+		for _, r := range res {
+			if d := cutDefect(pkg, r.got, rows[key], parts, r.names); d != "" {
+				return fmt.Sprintf("%s %s: %s", k.kind, r.what, d)
 			}
-			if plan != beforePlan {
-				return fmt.Sprintf("%s %s: the leg plan (whole packages, leg headers) changed with the listing", k.kind, v.what)
-			}
-			for n, legs := range got[pkg] {
-				if b, ok := before[n]; ok && b[0] != legs[0] {
-					return fmt.Sprintf("%s %s: %s moved from leg %d to leg %d", k.kind, v.what, n, b[0], legs[0])
+			for _, c := range strings.Split(r.calls, "\n") {
+				for _, f := range k.listFlags {
+					if !strings.Contains(" "+c+" ", " "+f+" ") {
+						return fmt.Sprintf("%s %s: the listing %q lacks the leg's flag %s", k.kind, r.what, c, f)
+					}
 				}
 			}
 		}
@@ -350,7 +368,7 @@ func cellAuthTableFaultsFailTheLeg(t *testing.T, tree authTree) string {
 			}
 			for _, w := range c.want {
 				if !strings.Contains(errs, w) {
-					return fmt.Sprintf("%s: %s failed without naming %q: %s", k.kind, c.what, w, errs)
+					return fmt.Sprintf("%s: %s failed without naming %q: %s", k.kind, c.what, w, lastLines(errs))
 				}
 			}
 		}
@@ -363,7 +381,7 @@ func cellAuthTableFaultsFailTheLeg(t *testing.T, tree authTree) string {
 func cellAuthTablesSelectTheAuthLegs(t *testing.T, tree authTree) string {
 	out, errs, err := tree.checkGo(t, nil, "auth", "paths-selftest")
 	if err != nil {
-		return fmt.Sprintf("auth paths-selftest: %v: %s", err, errs)
+		return fmt.Sprintf("auth paths-selftest: %v: %s", err, lastLines(errs))
 	}
 	for _, p := range authLegTables {
 		if !strings.Contains(out, "auth path filter: "+p+" -> relevant\n") {
@@ -481,6 +499,13 @@ func mutantTree(t *testing.T, src, from, to string) authTree {
 func TestTheAuthSplitWiringPlantedMutantsAreCaught(t *testing.T) {
 	t.Parallel()
 	src := readRepoFile(t, "ci/check_go.sh")
+	// Control: the tree copy with the real script passes every cell, so a mutant fails by its rule, not by the copy.
+	control := mutantTree(t, src, "", "")
+	for _, cell := range []func(*testing.T, authTree) string{cellAuthLegsMoveNoOtherName, cellAuthTableFaultsFailTheLeg, cellAuthTablesSelectTheAuthLegs} {
+		if d := cell(t, control); d != "" {
+			t.Fatalf("the tree copy with the real ci/check_go.sh fails a cell: %s", d)
+		}
+	}
 	call := `    names="$(test_split_cut_names "${tests}" . "${pkg}" "${pkg#"${modpath}/"}" "${part}" "${parts}" "${flags[@]}")" || exit 2` + "\n"
 	for _, c := range []struct {
 		rule, from, to string
@@ -503,9 +528,11 @@ func TestTheAuthSplitWiringPlantedMutantsAreCaught(t *testing.T) {
 			if n := strings.Count(src, c.from); n != 1 {
 				t.Fatalf("ci/check_go.sh holds %q %d times, not once: update this planted mutant", c.from, n)
 			}
-			if d := c.cell(t, mutantTree(t, src, c.from, c.to)); d == "" {
+			d := c.cell(t, mutantTree(t, src, c.from, c.to))
+			if d == "" {
 				t.Errorf("the mutant passed its cell")
 			}
+			t.Logf("planted defect caught: %s", d)
 		})
 	}
 }

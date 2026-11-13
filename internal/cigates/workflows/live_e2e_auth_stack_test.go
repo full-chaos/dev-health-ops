@@ -868,7 +868,8 @@ func TestLiveE2EEnableSocialAndSSO(t *testing.T) {
 			saved := liveE2ERead(t, filepath.Join(state, "auth-service.env"))
 			loaded := liveE2ERead(t, filepath.Join(state, "auth-service.loaded"))
 			for _, want := range []string{"MARK=started-with-saved-env", "SOCIAL_GITHUB_CLIENT_ID=gh-client", "SOCIAL_GITHUB_CLIENT_SECRET=gh-secret",
-				"SSL_CERT_FILE=" + state + "/ca-bundle.pem", "AUTH_SSO_STATE_KEY=new-state-key-test_", "SETTINGS_ENCRYPTION_KEY=live-e2e-test-settings-key-do-not-use", "APP_BASE_URL=http://127.0.0.1:3002"} {
+				"SSL_CERT_FILE=" + state + "/ca-bundle.pem", "AUTH_SSO_STATE_KEY=new-state-key-test_", "SETTINGS_ENCRYPTION_KEY=live-e2e-test-settings-key-do-not-use", "APP_BASE_URL=http://127.0.0.1:3002",
+				"SSO_EGRESS_ALLOW_CIDRS=127.0.0.1/32"} {
 				if !strings.Contains(saved, want+"\n") || !strings.Contains(loaded, want+"\n") {
 					t.Errorf("saved or loaded auth-service environment lacks %s", strings.Split(want, "=")[0])
 				}
@@ -896,6 +897,9 @@ func TestLiveE2EEnableSocialAndSSO(t *testing.T) {
 					if !strings.Contains(out, want) {
 						t.Errorf("%s lacks %q", side, want)
 					}
+				}
+				if strings.Contains(out, "SSO_EGRESS_ALLOW_CIDRS") {
+					t.Errorf("%s holds SSO_EGRESS_ALLOW_CIDRS: the SSO egress list is auth-service's only", side)
 				}
 			}
 			printed := mustRun("print-env", "web", state)

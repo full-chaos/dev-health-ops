@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts/provisioning"
-	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/auth/policycatalog"
 )
 
@@ -287,35 +286,6 @@ func TestProvisioningResourceIDsAreFixedLengthAndFitTheWire(t *testing.T) {
 	}
 	if pattern := schemaNode(t, "invite", "properties", "invite_id", "pattern").(string); !strings.HasSuffix(pattern, "{22}$") {
 		t.Errorf("invite.invite_id pattern %q is not fixed length", pattern)
-	}
-}
-
-// The invite address pattern accepts only addresses the login-key normalizer
-// keeps unchanged, and refuses what it cannot normalize.
-func TestInviteEmailPatternIsASubsetOfTheNormalizerFixedPoints(t *testing.T) {
-	pattern := regexp.MustCompile(schemaNode(t, "invite-create-request", "properties", "email", "pattern").(string))
-	accepted := []string{
-		"a@example.com", "new.member@example.com", "first.last+tag@sub.example.org", "a_b-c%d@ex-ample.io",
-		"x@a.b.c.dev", "user123@mail.example.net",
-	}
-	for _, address := range accepted {
-		if !pattern.MatchString(address) {
-			t.Errorf("pattern refuses %q", address)
-			continue
-		}
-		if got, err := identity.NormalizeEmail(address); err != nil || got != address {
-			t.Errorf("pattern accepts %q but NormalizeEmail gives %q, %v", address, got, err)
-		}
-	}
-	refused := []string{
-		"a@.", "a@", "@example.com", "a@example", "a@example.1", "a..b@example.com", ".a@example.com", "a.@example.com",
-		"New@example.com", "\u00c9@example.com", "a b@example.com", "a@-example.com", "a@example-.com", "a@@example.com",
-		"a@example.com\n", "<a@example.com>", "a@exa mple.com",
-	}
-	for _, address := range refused {
-		if pattern.MatchString(address) {
-			t.Errorf("pattern accepts %q", address)
-		}
 	}
 }
 

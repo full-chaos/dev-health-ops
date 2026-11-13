@@ -388,7 +388,7 @@ jobs:
   # routable: `vars.SELF_HOSTED_RUNNERS == 'enabled'` and not a fork PR
   # (fork PRs never get a self-hosted runner in a public repo). When
   # SELF_HOSTED_RUNNERS is 'disabled', or on a fork PR, this check simply
-  # does not run -- it is not one of the five ruleset-required contexts, so
+  # does not run -- it is not one of the ruleset-required contexts, so
   # that is a coverage gap, not a merge blocker.
   #
   # Sizing kept at this job's pre-poller baseline (timeout-minutes: 10,

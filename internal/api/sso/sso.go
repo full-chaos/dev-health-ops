@@ -82,10 +82,11 @@ type Deps struct {
 	// starts (D6465).
 	StateSecret string
 	// HTTPClient reaches the IdP's discovery document, token endpoint,
-	// JWKS and userinfo endpoint; nil means a client over
-	// externalurl.GuardedTransport() (the SSRF guard credentials.Routes
-	// already uses for admin-configured URLs -- an OIDC issuer is exactly
-	// that kind of URL).
+	// JWKS and userinfo endpoint, and the social OAuth providers; nil means
+	// defaultOIDCClient (externalurl.IdPTransport) for the OIDC calls and a
+	// client over externalurl.GuardedTransport() (the SSRF guard
+	// credentials.Routes already uses for admin-configured URLs) for the
+	// social OAuth calls.
 	HTTPClient *http.Client
 	// Inner, when set, replaces the innermost handler of the five sign-in
 	// routes (OIDC authorize/callback, SAML metadata/initiate/acs); the guard
@@ -101,6 +102,10 @@ type Deps struct {
 	// Providers is the client of auth-service's SSO provider routes while it owns the providers: the five provider CRUD
 	// routes and activate/deactivate call it. nil keeps the stub and the direct UPDATE.
 	Providers authprovision.SSOProviders
+
+
+	// oidcClient makes the OIDC calls; newHandlers sets it (HTTPClient when the caller set one).
+	oidcClient *http.Client
 }
 
 type handlers struct{ Deps }
@@ -337,8 +342,10 @@ func newHandlers(deps Deps) handlers {
 	if deps.Write == nil {
 		deps.Write = httpapi.WriteError
 	}
+	deps.oidcClient = deps.HTTPClient
 	if deps.HTTPClient == nil {
-		deps.HTTPClient = defaultOIDCClient()
+		deps.HTTPClient = defaultSocialClient()
+		deps.oidcClient = defaultOIDCClient()
 	}
 	return handlers{deps}
 }

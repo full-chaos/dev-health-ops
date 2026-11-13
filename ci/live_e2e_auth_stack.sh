@@ -543,7 +543,7 @@ enable_sso() {
   printf '%s\n' 'AUTH_SSO_JIT=true' "AUTH_SSO_STATE_KEY=${state_key}" \
     "SETTINGS_ENCRYPTION_KEY=${LIVE_E2E_SETTINGS_ENCRYPTION_KEY:-live-e2e-test-settings-key-do-not-use}" \
     "APP_BASE_URL=${LIVE_E2E_WEB_ORIGIN:-http://127.0.0.1:3002}" \
-    "SSL_CERT_FILE=${STATE}/ca-bundle.pem" >>"${STATE}/auth-service.env"
+    "SSL_CERT_FILE=${STATE}/ca-bundle.pem" 'SSO_EGRESS_ALLOW_CIDRS=127.0.0.1/32' >>"${STATE}/auth-service.env"
   stop_auth "${STATE}"
   start_auth "${STATE}"
 }

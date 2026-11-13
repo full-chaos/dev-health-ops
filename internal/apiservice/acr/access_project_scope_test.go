@@ -15,8 +15,8 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
 	"github.com/full-chaos/dev-health-ops/internal/projectinventory"
-	"github.com/full-chaos/dev-health-ops/internal/repoinventory"
 )
 
 // fakeProjects is the project inventory read (ProjectInventory).
@@ -154,35 +154,38 @@ func TestPrincipalAccessIsByteIdenticalWithTheProjectScopeOff(t *testing.T) {
 // An inventory over its limit answers 503 with its own code, so acr can type
 // the refusal as an access limitation and not a retryable outage
 // (CHAOS-12228): ProjectScopeOverLimitCode for the project inventory
-// (CHAOS-12224), RepositoryScopeOverLimitCode for the repository inventory
-// (CHAOS-12267). The status stays 503, so acr's existing 503 handling does
-// not change (acr reads no 503 body today). A failed read stays the code-less
-// 503. Every cell runs the real store, so the cell also pins that the store
-// keeps each ErrOverLimit in its error chain.
+// (CHAOS-12224), RepositoryAllowlistTooLargeCode for a user whose read
+// listing is over its cap (CHAOS-13561; the literal is pinned by acp ruling
+// 416c190b on CHAOS-13566). The status stays 503. A failed read stays the
+// code-less 503. Every cell runs the real store, so the cell also pins that the
+// store keeps each refusal in its error chain.
 func TestPrincipalAccessOverLimitHasItsOwnCode(t *testing.T) {
 	const codeless = `{"detail":"Service unavailable"}`
-	const reposOverLimit = `{"detail":"Service unavailable","code":"acr_access_repository_scope_over_limit"}`
+	const allowlistTooLarge = `{"detail":"Service unavailable","code":"acr_access_repository_allowlist_too_large"}`
+	tooLarge := &sessionissue.Readable{Scope: sessionissue.ReadableDenied, Reason: "repository_allowlist_too_large"}
 	cases := []struct {
 		name     string
 		repoErr  error
+		listing  *sessionissue.Readable
 		projects *fakeProjects
 		want     string
 	}{
-		{"project inventory over the limit", nil, &fakeProjects{err: projectinventory.ErrOverLimit},
+		{"project inventory over the limit", nil, nil, &fakeProjects{err: projectinventory.ErrOverLimit},
 			`{"detail":"Service unavailable","code":"acr_access_project_scope_over_limit"}`},
-		{"project inventory over the limit, wrapped", nil, &fakeProjects{err: fmt.Errorf("canonical: %w", projectinventory.ErrOverLimit)},
+		{"project inventory over the limit, wrapped", nil, nil, &fakeProjects{err: fmt.Errorf("canonical: %w", projectinventory.ErrOverLimit)},
 			`{"detail":"Service unavailable","code":"acr_access_project_scope_over_limit"}`},
-		{"project inventory read fails", nil, &fakeProjects{err: errors.New("clickhouse down")}, codeless},
-		{"repository inventory over the limit", repoinventory.ErrOverLimit, &fakeProjects{}, reposOverLimit},
-		{"repository inventory over the limit, project scope off", repoinventory.ErrOverLimit, nil, reposOverLimit},
-		{"repository inventory over the limit, wrapped", fmt.Errorf("canonical: %w", repoinventory.ErrOverLimit), nil, reposOverLimit},
-		{"repository inventory read fails", errors.New("clickhouse down"), &fakeProjects{}, codeless},
+		{"project inventory read fails", nil, nil, &fakeProjects{err: errors.New("clickhouse down")}, codeless},
+		{"read listing over its cap", nil, tooLarge, &fakeProjects{}, allowlistTooLarge},
+		{"read listing over its cap, project scope off", nil, tooLarge, nil, allowlistTooLarge},
+		{"existence probe fails", errors.New("clickhouse down"), nil, &fakeProjects{}, codeless},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newAccessFixture()
-			f.inventory.repos = nil // the project inventory is read only for an org with no repositories
-			f.inventory.err = tc.repoErr
+			if tc.listing == nil {
+				f.inventory.repos = nil // the project inventory is read only for an org with no repositories
+			}
+			f.inventory.err, f.inventory.listing = tc.repoErr, tc.listing
 			store := f.store()
 			if tc.projects != nil {
 				store.Projects = tc.projects
@@ -208,20 +211,25 @@ func TestPrincipalAccessOverLimitIsCountedAndLoggedAtWarn(t *testing.T) {
 	cases := []struct {
 		name      string
 		repoErr   error
+		listing   *sessionissue.Readable
 		projects  *fakeProjects
 		outcome   string
 		inventory string
 		code      string
+		limit     float64
 	}{
-		{"repository inventory over the limit", repoinventory.ErrOverLimit, nil, outcomeReposOverLimit, "repository", RepositoryScopeOverLimitCode},
-		{"project inventory over the limit", nil, &fakeProjects{err: projectinventory.ErrOverLimit}, outcomeProjectsOverLimit, "project", ProjectScopeOverLimitCode},
-		{"a failed read", errors.New("clickhouse down"), nil, outcomeAccessUnavailable, "", ""},
+		{"read listing over its cap", nil, &sessionissue.Readable{Scope: sessionissue.ReadableDenied, Reason: "repository_allowlist_too_large"}, nil,
+			outcomeAllowlistTooLarge, "repository_allowlist", RepositoryAllowlistTooLargeCode, 256},
+		{"project inventory over the limit", nil, nil, &fakeProjects{err: projectinventory.ErrOverLimit}, outcomeProjectsOverLimit, "project", ProjectScopeOverLimitCode, 100},
+		{"a failed read", errors.New("clickhouse down"), nil, nil, outcomeAccessUnavailable, "", "", 0},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newAccessFixture()
-			f.inventory.repos = nil
-			f.inventory.err = tc.repoErr
+			if tc.listing == nil {
+				f.inventory.repos = nil
+			}
+			f.inventory.err, f.inventory.listing = tc.repoErr, tc.listing
 			store := f.store()
 			if tc.projects != nil {
 				store.Projects = tc.projects
@@ -234,7 +242,7 @@ func TestPrincipalAccessOverLimitIsCountedAndLoggedAtWarn(t *testing.T) {
 			if rec.Code != http.StatusServiceUnavailable {
 				t.Fatalf("status %d %s, want 503", rec.Code, rec.Body.String())
 			}
-			for _, outcome := range []string{outcomeReposOverLimit, outcomeProjectsOverLimit, outcomeAccessUnavailable} {
+			for _, outcome := range []string{outcomeAllowlistTooLarge, outcomeProjectsOverLimit, outcomeAccessUnavailable} {
 				key := routePrincipalAccess + "/" + outcome
 				want := int64(0)
 				if outcome == tc.outcome {
@@ -264,9 +272,9 @@ func TestPrincipalAccessOverLimitIsCountedAndLoggedAtWarn(t *testing.T) {
 				t.Fatalf("%d over-limit lines, want 1:\n%s", len(overLimit), logs.String())
 			}
 			record := overLimit[0]
-			if record["level"] != "WARN" || record["inventory"] != tc.inventory || record["limit"] != float64(100) || record["code"] != tc.code ||
+			if record["level"] != "WARN" || record["inventory"] != tc.inventory || record["limit"] != tc.limit || record["code"] != tc.code ||
 				record["org_id"] != accessOrg.String() || record["user_id"] != accessUser.String() {
-				t.Fatalf("over-limit line %v, want WARN inventory=%s limit=100 code=%s and the org and user", record, tc.inventory, tc.code)
+				t.Fatalf("over-limit line %v, want WARN inventory=%s limit=%v code=%s and the org and user", record, tc.inventory, tc.limit, tc.code)
 			}
 		})
 	}

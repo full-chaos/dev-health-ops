@@ -181,18 +181,24 @@ func TestOlderRunsInBucketReadIsBoundedOnALargeOpenRun(t *testing.T) {
 		now := pgNow()
 		insertGuardUnit(t, ctx, pool, guardUnitID("00000088d0", 0), "github", "medium", syncRunUnitStatusPlanned, now, nil, nil, nil)
 		pgseed.EnsureSyncRun(ctx, t, pool, pgseed.SyncRun{ID: admissionOlderRun, OrgID: guardTestOrg})
-		for _, statement := range []string{
-			`UPDATE public.sync_runs SET triggered_by = 'backfill', mode = 'backfill', status = 'dispatching', created_at = now() - interval '3 hours' WHERE id = $1::uuid`,
-			`UPDATE public.sync_runs SET triggered_by = 'backfill', mode = 'backfill', status = 'dispatching', created_at = now() WHERE id = $2::uuid`,
-			`INSERT INTO public.sync_run_units (id, org_id, sync_run_id, integration_id, source_id, provider, dataset_key, cost_class, mode, status, attempts, created_at, updated_at)
+		for _, statement := range []struct {
+			sql  string
+			args []any
+		}{
+			{`UPDATE public.sync_runs SET triggered_by = 'backfill', mode = 'backfill', status = 'dispatching', created_at = now() - interval '3 hours' WHERE id = $1::uuid`,
+				[]any{admissionOlderRun}},
+			{`UPDATE public.sync_runs SET triggered_by = 'backfill', mode = 'backfill', status = 'dispatching', created_at = now() WHERE id = $1::uuid`,
+				[]any{guardTestRun}},
+			{`INSERT INTO public.sync_run_units (id, org_id, sync_run_id, integration_id, source_id, provider, dataset_key, cost_class, mode, status, attempts, created_at, updated_at)
 			 SELECT md5('large-open-8880-' || k)::uuid, run.org_id, run.id, run.integration_id,
 				(SELECT source_id FROM public.sync_run_units WHERE sync_run_id = $2::uuid LIMIT 1),
 				'github', 'dataset-' || k, 'light', 'backfill', CASE WHEN k <= 10 THEN 'success' ELSE 'planned' END, 0,
 				now() - interval '3 hours', now() - interval '3 hours'
 			 FROM public.sync_runs AS run CROSS JOIN generate_series(1, 10000) AS k
 			 WHERE run.id = $1::uuid`,
+				[]any{admissionOlderRun, guardTestRun}},
 		} {
-			if _, err := pool.Exec(ctx, statement, admissionOlderRun, guardTestRun); err != nil {
+			if _, err := pool.Exec(ctx, statement.sql, statement.args...); err != nil {
 				t.Fatalf("seed large open run: %v", err)
 			}
 		}

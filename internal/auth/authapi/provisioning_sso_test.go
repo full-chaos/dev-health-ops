@@ -10,6 +10,9 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
+	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
+	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 	"github.com/full-chaos/dev-health-ops/internal/auth/ssoprovider"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/usertokens"
 )
@@ -154,41 +157,6 @@ func TestSSOProviderRoutesMountOnlyWithTheirRows(t *testing.T) {
 	}
 }
 
-func TestSSOProviderWritesNeedOrganizationAdminOrOwner(t *testing.T) {
-	t.Parallel()
-	for _, c := range ssoRouteCases() {
-		if c.op == opSSOProviderList || c.op == opSSOProviderGet {
-			continue
-		}
-		f := newProvFixtureFor(t, nil, nil)
-		expectRefusal(t, f.post(c.path, c.body(f, f.viewer), nil), http.StatusForbidden, reasonAdminRequired)
-		expectRefusal(t, f.post(c.path, c.body(f, f.x), nil), http.StatusForbidden, reasonDeactivated)
-		if len(f.sso.calls) != 0 {
-			t.Fatalf("%s: a refused actor reached the store", c.op)
-		}
-		for _, actor := range []uuid.UUID{f.admin, f.owner} {
-			if response := f.post(c.path, c.body(f, actor), nil); response.Code != c.status {
-				t.Fatalf("%s as %s: %d %s, want %d", c.op, actor, response.Code, response.Body, c.status)
-			}
-		}
-	}
-}
-
-func TestSSOProviderReadsAreOpenToMembersOnly(t *testing.T) {
-	t.Parallel()
-	for _, c := range ssoRouteCases() {
-		if c.op != opSSOProviderList && c.op != opSSOProviderGet {
-			continue
-		}
-		f := newProvFixtureFor(t, nil, nil)
-		if response := f.post(c.path, c.body(f, f.viewer), nil); response.Code != http.StatusOK {
-			t.Fatalf("%s as a viewer member: %d, want 200", c.op, response.Code)
-		}
-		expectRefusal(t, f.post(c.path, c.body(f, f.target), nil), http.StatusForbidden, reasonAdminRequired)
-		expectRefusal(t, f.post(c.path, c.body(f, f.x), nil), http.StatusForbidden, reasonDeactivated)
-	}
-}
-
 func TestSSOProviderCreateRefusesAProtocolWithoutItsConfig(t *testing.T) {
 	t.Parallel()
 	f := newProvFixtureFor(t, nil, nil)
@@ -268,7 +236,7 @@ func TestSSOProviderListBodyBoundsAndDefaults(t *testing.T) {
 	if got := f.sso.calls[0].filter; got.Limit != 50 || got.Offset != 0 || got.Protocol != "" || got.Status != "" {
 		t.Fatalf("default filter = %+v, want limit 50 offset 0", got)
 	}
-	for _, bad := range []map[string]any{{"limit": -1}, {"limit": maxSSOListMax + 1}, {"offset": -1}, {"limit": "5"}} {
+	for _, bad := range []map[string]any{{"limit": -1}, {"offset": -1}, {"limit": "5"}} {
 		body := map[string]any{"organization_id": base["organization_id"], "actor_principal_id": base["actor_principal_id"]}
 		for k, v := range bad {
 			body[k] = v
@@ -317,6 +285,66 @@ func TestSSOProviderActivateAndDeactivateSetTheirStatus(t *testing.T) {
 		call := f.sso.calls[0]
 		if call.op != "status" || call.status != want || call.org != f.org || call.actor.PrincipalID == nil || *call.actor.PrincipalID != f.owner {
 			t.Fatalf("%s: store call %+v, want status %s for the body's organization and actor", path, call, want)
+		}
+	}
+}
+
+func TestSSOProviderListLimitIsClampedNotRefused(t *testing.T) {
+	t.Parallel()
+	f := newProvFixtureFor(t, nil, nil)
+	body := encode(map[string]any{"organization_id": f.org.String(), "actor_principal_id": f.owner.String(), "limit": 5000})
+	var answer ssoProviderListAnswer
+	response := f.post(PatternSSOProviderList, body, nil)
+	if err := json.Unmarshal(response.Body.Bytes(), &answer); err != nil || response.Code != http.StatusOK || answer.Limit != maxSSOListMax ||
+		f.sso.calls[0].filter.Limit != maxSSOListMax {
+		t.Fatalf("limit 5000: %d %s, store limit %d, want 200 clamped to %d", response.Code, response.Body, f.sso.calls[0].filter.Limit, maxSSOListMax)
+	}
+}
+
+func TestSSOProviderRoutesAddNoActorRuleOfTheirOwn(t *testing.T) {
+	t.Parallel()
+	for _, c := range ssoRouteCases() {
+		f := newProvFixtureFor(t, nil, nil)
+		if response := f.post(c.path, c.body(f, f.viewer), nil); response.Code != c.status {
+			t.Fatalf("%s as a viewer: %d %s, want %d (go-api is the decision point)", c.op, response.Code, response.Body, c.status)
+		}
+		if f.users.reads != 0 {
+			t.Fatalf("%s read the actor (%d reads)", c.op, f.users.reads)
+		}
+	}
+}
+
+func TestSSOProviderRoutesRefuseAnUnknownOrganization(t *testing.T) {
+	t.Parallel()
+	for _, c := range ssoRouteCases() {
+		f := newProvFixtureFor(t, nil, nil)
+		f.orgs.err = identity.ErrOrganizationNotFound
+		expectRefusal(t, f.post(c.path, c.body(f, f.owner), nil), http.StatusNotFound, reasonOrganizationNotFound)
+		if len(f.sso.calls) != 0 {
+			t.Fatalf("%s: an unknown organization reached the store", c.op)
+		}
+	}
+}
+
+func TestSSOProviderRoutesRefuseOtherProdWorkloadSubjects(t *testing.T) {
+	t.Parallel()
+	acrAPI, queryAPI, web := session.WirePrincipalID(uuid.New()), session.WirePrincipalID(uuid.New()), session.WirePrincipalID(uuid.New())
+	refused := map[string]func(*contracts.WorkloadTokenClaims){
+		"acr-api subject":               func(c *contracts.WorkloadTokenClaims) { c.Sub = acrAPI },
+		"query-api subject":             func(c *contracts.WorkloadTokenClaims) { c.Sub = queryAPI },
+		"web subject":                   func(c *contracts.WorkloadTokenClaims) { c.Sub = web },
+		"acr-api subject, api audience": func(c *contracts.WorkloadTokenClaims) { c.Sub, c.Aud = acrAPI, "dev-health-api" },
+		"go-api subject, api audience":  func(c *contracts.WorkloadTokenClaims) { c.Aud = "dev-health-api" },
+		"go-api subject, expired":       func(c *contracts.WorkloadTokenClaims) { c.Iat -= 600; c.Nbf -= 600; c.Exp -= 600 },
+	}
+	for name, mutate := range refused {
+		for _, c := range ssoRouteCases() {
+			f := newProvFixtureFor(t, nil, nil)
+			header, _ := f.w.mint(contracts.WorkloadTokenTyp, mutate)
+			expectRefusal(t, f.post(c.path, c.body(f, f.owner), header), http.StatusUnauthorized, reasonInvalidCredentials)
+			if len(f.sso.calls) != 0 || f.orgs.calls != 0 {
+				t.Fatalf("%s, %s: a refused workload token reached a store", c.op, name)
+			}
 		}
 	}
 }

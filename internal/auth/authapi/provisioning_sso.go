@@ -125,9 +125,9 @@ type SSOProviderStores struct {
 }
 
 // SSOProviderRoutes returns the SSO provider routes, or none (and no refusal) while any row is missing: the routes stay
-// dark until their rows ship. deps needs Users, Reader, Organizations, Workload and both SSOProviderStores.
+// dark until their rows ship. deps needs Organizations, Workload and both SSOProviderStores.
 func SSOProviderRoutes(deps ProvisioningDeps) ([]httpapi.Route, error) {
-	if deps.Users == nil || deps.Reader == nil || deps.Organizations == nil || deps.SSOProviders == nil || deps.SSOSealer == nil {
+	if deps.Organizations == nil || deps.SSOProviders == nil || deps.SSOSealer == nil {
 		return nil, errors.New("authapi: the SSO provider routes need users, a reader, organizations, the provider store and the secret sealer")
 	}
 	if SSOProviderRowsError(deps.ProfileRows) != nil {
@@ -333,30 +333,6 @@ func (o strictObject) optionalDomains(name string) (*[]string, error) {
 		list = []string{}
 	}
 	return &list, nil
-}
-
-// ssoReadRule admits an actor to a provider read: an active user who holds admin.orgs or is a member of the
-// organization, as the legacy reads were open to any member. It returns false after answering.
-func (h provisioningHandlers) ssoReadRule(w http.ResponseWriter, r *http.Request, op string, actor, orgID uuid.UUID) bool {
-	ctx := r.Context()
-	state, found, err := h.Users.StateOn(ctx, h.Reader, actor)
-	if err == nil && found && state.IsActive && !state.Holds(actionAdminOrgs) {
-		var member bool
-		_, member, err = h.Users.RoleOn(ctx, h.Reader, actor, orgID)
-		if err == nil && !member {
-			h.rec.refuse(w, r, op, refusal{http.StatusForbidden, reasonAdminRequired}, nil)
-			return false
-		}
-	}
-	switch {
-	case err != nil:
-		h.rec.refuse(w, r, op, unavailable(reasonStoreUnavailable), err)
-		return false
-	case !found || !state.IsActive:
-		h.rec.refuse(w, r, op, refusal{http.StatusForbidden, reasonDeactivated}, nil)
-		return false
-	}
-	return h.ensureOrganization(w, r, op, orgID)
 }
 
 func (h provisioningHandlers) ensureOrganization(w http.ResponseWriter, r *http.Request, op string, orgID uuid.UUID) bool {

@@ -22,8 +22,9 @@ func ssoIDs(body strictObject) (org, actor uuid.UUID, err error) {
 	return org, actor, errors.Join(err1, err2)
 }
 
-// ssoWriteAdmit is the shared head of a provider write: the bearer and body, the ids, then the actor rule (owner or admin
-// of the organization, or an admin.orgs holder) before any provider row is read.
+// ssoWriteAdmit is the shared head of a provider write: the go-api workload token and the body. go-api is the decision
+// point (owner or admin of the organization, its own feature gate); this route adds no actor rule of its own, and the
+// actor only names the audit row.
 func (h provisioningHandlers) ssoWriteAdmit(w http.ResponseWriter, r *http.Request, op string, members ...string) (strictObject, uuid.UUID, uuid.UUID, ssoprovider.Actor, bool) {
 	body, caller, ok := h.admitUpTo(w, r, op, maxSSOProviderBody, members...)
 	if !ok {
@@ -43,10 +44,10 @@ func (h provisioningHandlers) ssoProviderList(w http.ResponseWriter, r *http.Req
 		return
 	}
 	_ = caller
-	org, actor, err := ssoIDs(body)
+	org, _, err := ssoIDs(body)
 	protocol, err2 := body.optionalAnyText("protocol", maxShortTextBytes)
 	status, err3 := body.optionalAnyText("status", maxShortTextBytes)
-	limit, err4 := body.optionalInt("limit", 0, maxSSOListMax)
+	limit, err4 := body.optionalInt("limit", 0, 1<<31)
 	offset, err5 := body.optionalInt("offset", 0, 1<<31)
 	if errors.Join(err, err2, err3, err4, err5) != nil {
 		h.rec.refuse(w, r, opSSOProviderList, refusal{http.StatusBadRequest, reasonMalformed}, nil)
@@ -60,12 +61,12 @@ func (h provisioningHandlers) ssoProviderList(w http.ResponseWriter, r *http.Req
 		filter.Status = *status
 	}
 	if limit != nil {
-		filter.Limit = *limit
+		filter.Limit = min(*limit, maxSSOListMax)
 	}
 	if offset != nil {
 		filter.Offset = *offset
 	}
-	if !h.ssoReadRule(w, r, opSSOProviderList, actor, org) {
+	if !h.ensureOrganization(w, r, opSSOProviderList, org) {
 		return
 	}
 	items, total, err := h.SSOProviders.List(r.Context(), org, filter)
@@ -86,13 +87,13 @@ func (h provisioningHandlers) ssoProviderGet(w http.ResponseWriter, r *http.Requ
 	if !ok {
 		return
 	}
-	org, actor, err := ssoIDs(body)
+	org, _, err := ssoIDs(body)
 	id, err2 := body.uuid("provider_id")
 	if errors.Join(err, err2) != nil {
 		h.rec.refuse(w, r, opSSOProviderGet, refusal{http.StatusBadRequest, reasonMalformed}, nil)
 		return
 	}
-	if !h.ssoReadRule(w, r, opSSOProviderGet, actor, org) {
+	if !h.ensureOrganization(w, r, opSSOProviderGet, org) {
 		return
 	}
 	p, err := h.SSOProviders.Get(r.Context(), org, id)
@@ -105,7 +106,7 @@ func (h provisioningHandlers) ssoProviderGet(w http.ResponseWriter, r *http.Requ
 }
 
 func (h provisioningHandlers) ssoProviderCreate(w http.ResponseWriter, r *http.Request) {
-	body, org, actor, who, ok := h.ssoWriteAdmit(w, r, opSSOProviderCreate, ssoCreateMembers...)
+	body, org, _, who, ok := h.ssoWriteAdmit(w, r, opSSOProviderCreate, ssoCreateMembers...)
 	if !ok {
 		return
 	}
@@ -122,7 +123,7 @@ func (h provisioningHandlers) ssoProviderCreate(w http.ResponseWriter, r *http.R
 		h.rec.refuse(w, r, opSSOProviderCreate, refusal{http.StatusBadRequest, reasonMalformed}, nil)
 		return
 	}
-	if !h.precheck(w, r, opSSOProviderCreate, actor, org, false) {
+	if !h.ensureOrganization(w, r, opSSOProviderCreate, org) {
 		return
 	}
 	switch {
@@ -168,7 +169,7 @@ func (h provisioningHandlers) ssoProviderCreate(w http.ResponseWriter, r *http.R
 }
 
 func (h provisioningHandlers) ssoProviderUpdate(w http.ResponseWriter, r *http.Request) {
-	body, org, actor, who, ok := h.ssoWriteAdmit(w, r, opSSOProviderUpdate, ssoUpdateMembers...)
+	body, org, _, who, ok := h.ssoWriteAdmit(w, r, opSSOProviderUpdate, ssoUpdateMembers...)
 	if !ok {
 		return
 	}
@@ -185,7 +186,7 @@ func (h provisioningHandlers) ssoProviderUpdate(w http.ResponseWriter, r *http.R
 		h.rec.refuse(w, r, opSSOProviderUpdate, refusal{http.StatusBadRequest, reasonMalformed}, nil)
 		return
 	}
-	if !h.precheck(w, r, opSSOProviderUpdate, actor, org, false) {
+	if !h.ensureOrganization(w, r, opSSOProviderUpdate, org) {
 		return
 	}
 	config, err := h.buildConfig(saml, oidc)
@@ -208,7 +209,7 @@ func (h provisioningHandlers) ssoProviderUpdate(w http.ResponseWriter, r *http.R
 }
 
 func (h provisioningHandlers) ssoProviderDelete(w http.ResponseWriter, r *http.Request) {
-	body, org, actor, who, ok := h.ssoWriteAdmit(w, r, opSSOProviderDelete, ssoByIDMembers...)
+	body, org, _, who, ok := h.ssoWriteAdmit(w, r, opSSOProviderDelete, ssoByIDMembers...)
 	if !ok {
 		return
 	}
@@ -217,7 +218,7 @@ func (h provisioningHandlers) ssoProviderDelete(w http.ResponseWriter, r *http.R
 		h.rec.refuse(w, r, opSSOProviderDelete, refusal{http.StatusBadRequest, reasonMalformed}, nil)
 		return
 	}
-	if !h.precheck(w, r, opSSOProviderDelete, actor, org, false) {
+	if !h.ensureOrganization(w, r, opSSOProviderDelete, org) {
 		return
 	}
 	if err := h.SSOProviders.Delete(r.Context(), org, id, who); err != nil {
@@ -237,7 +238,7 @@ func (h provisioningHandlers) ssoProviderDeactivate(w http.ResponseWriter, r *ht
 }
 
 func (h provisioningHandlers) ssoSetStatus(w http.ResponseWriter, r *http.Request, op, status string) {
-	body, org, actor, who, ok := h.ssoWriteAdmit(w, r, op, ssoByIDMembers...)
+	body, org, _, who, ok := h.ssoWriteAdmit(w, r, op, ssoByIDMembers...)
 	if !ok {
 		return
 	}
@@ -246,7 +247,7 @@ func (h provisioningHandlers) ssoSetStatus(w http.ResponseWriter, r *http.Reques
 		h.rec.refuse(w, r, op, refusal{http.StatusBadRequest, reasonMalformed}, nil)
 		return
 	}
-	if !h.precheck(w, r, op, actor, org, false) {
+	if !h.ensureOrganization(w, r, op, org) {
 		return
 	}
 	p, err := h.SSOProviders.SetStatus(r.Context(), org, id, status, who)

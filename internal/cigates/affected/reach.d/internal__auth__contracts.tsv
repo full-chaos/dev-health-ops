@@ -79,6 +79,7 @@ internal/auth/contracts	contracts.go	internal/auth/restorefence
 internal/auth/contracts	contracts.go	internal/auth/revisionfeed
 internal/auth/contracts	contracts.go	internal/auth/serviceaccount
 internal/auth/contracts	contracts.go	internal/auth/session
+internal/auth/contracts	contracts.go	internal/auth/ssoprovider
 internal/auth/contracts	contracts.go	internal/auth/usersbackfill
 internal/auth/contracts	contracts.go	internal/auth/workload
 internal/auth/contracts	contracts.go	internal/auth/workloadexchange

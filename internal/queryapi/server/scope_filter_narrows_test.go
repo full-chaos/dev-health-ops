@@ -1,10 +1,14 @@
 package server
 
 import (
+	"context"
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/home"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/opportunities"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
 
@@ -89,8 +93,9 @@ var emptyMatchStatements = map[string]int{
 	"GET /api/v1/investment/sunburst":                2,
 }
 
-// A repo-level scope that names nothing (CHAOS-6119, R335) is answered before the page's reads: opportunities and experiments read no
-// metric at all, and Home skips the theme allocation read, which carried one empty match before. Every other consumer is unchanged.
+// The override applies to the repo-level UNRESOLVED case only (CHAOS-6119, R335): the one test that uses it drives a repo-level scope whose
+// repository resolves to nothing. Opportunities answers before any metric read, and Home skips the theme allocation read
+// (FROM work_unit_investments), which carried one empty match before. Every other consumer, and the org-scope what.repos test, is unchanged.
 var repoScopeEmptyMatchStatements = map[string]int{
 	"GET/POST /api/v1/opportunities": 0,
 	"GET/POST /api/v1/home":          22,
@@ -118,10 +123,41 @@ func TestNamedRepositoryThatResolvesToNothingLeavesNothingOnEverySurface(t *test
 					t.Fatalf("%s reads a metric for a repo-level scope that resolved to nothing:\n%v", consumer.route, reads)
 				}
 			}
+			if consumer.route == "GET/POST /api/v1/home" {
+				if got := len(client.statementsWith("1 = 0")); got != want {
+					t.Fatalf("%s: %d statements carry the empty match, want exactly %d (every metric read, the skipped theme allocation read excepted)", consumer.route, got, want)
+				}
+				for _, table := range []string{"repo_metrics_daily", "work_item_metrics_daily", "deploy_metrics_daily", "work_item_state_durations_daily"} {
+					for _, statement := range client.statementsWith(table) {
+						// The coverage read (covered repositories) is an organization-level freshness read with no scope filter.
+						if !strings.Contains(statement, "GROUP BY day") {
+							continue
+						}
+						if !strings.Contains(statement, "1 = 0") {
+							t.Fatalf("%s: a read of %s does not carry the empty match:\n%s", consumer.route, table, statement)
+						}
+					}
+				}
+				if skipped := client.statementsWith("FROM work_unit_investments"); len(skipped) != 0 {
+					t.Fatalf("%s: the theme allocation read (FROM work_unit_investments) ran for a scope that resolved to nothing:\n%v", consumer.route, skipped)
+				}
+			}
 			if got := len(client.statementsWith("1 = 0")); got < want {
 				t.Fatalf("%s: %d statement(s) carry the empty match for a repository that resolved to nothing, want %d (the others read the whole organization):\n%v", consumer.route, got, want, client.statements)
 			}
 		})
+	}
+}
+
+// The opportunities answer for a repo-level scope that resolved to nothing is the empty list: no card, not even the steady-flow fallback.
+func TestOpportunitiesAnswerAnEmptyListForARepoLevelScopeThatResolvedToNothing(t *testing.T) {
+	client := &teamScopeReachClient{}
+	filters := home.DefaultFilters()
+	filters.Scope.Level = "repo"
+	filters.Scope.IDs = []string{"acme/nothing"}
+	resp, err := opportunities.BuildResponse(context.Background(), client, teamScopeReachOrgID, filters, time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC))
+	if err != nil || resp == nil || resp.Items == nil || len(resp.Items) != 0 {
+		t.Fatalf("answer %+v err %v, want an empty non-nil list", resp, err)
 	}
 }
 

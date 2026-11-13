@@ -452,36 +452,40 @@ func TestTheRaceAndTestLegPlansDoNotReadTheAuthSplitWeights(t *testing.T) {
 	}
 }
 
-// trackedEntries: the first path segment of every tracked file of the real tree, at the top and below ci/ (git ls-files: the tree
-// copy holds what the repository tracks).
-func trackedEntries(t *testing.T) (top, ci []string) {
+// trackedEntries: the entries the tree copy links to the real tree: the first path segment of every tracked file, and below
+// ci/ the second one ("ci/<name>"), but never ci/check_go.sh (git ls-files: the copy holds what the repository tracks).
+func trackedEntries(t *testing.T) []string {
 	t.Helper()
 	out, errs, err := run(t, nil, "git", "ls-files", "-z", "--cached")
 	if err != nil {
 		t.Fatalf("git ls-files: %v: %s", err, errs)
 	}
-	seenTop, seenCI := map[string]bool{}, map[string]bool{}
+	seen := map[string]bool{}
+	var entries []string
+	script := false
 	for _, rel := range strings.Split(out, "\x00") {
 		first, rest, nested := strings.Cut(rel, "/")
 		if rel == "" {
 			continue
 		}
-		if !seenTop[first] {
-			seenTop[first] = true
-			top = append(top, first)
-		}
+		entry := first
 		if first == "ci" && nested {
 			second, _, _ := strings.Cut(rest, "/")
-			if !seenCI[second] {
-				seenCI[second] = true
-				ci = append(ci, second)
-			}
+			entry = first + "/" + second
+		}
+		if entry == "ci/check_go.sh" {
+			script = true
+			continue
+		}
+		if !seen[entry] {
+			seen[entry] = true
+			entries = append(entries, entry)
 		}
 	}
-	if !seenTop["ci"] || !seenCI["check_go.sh"] {
+	if !script {
 		t.Fatal("git ls-files lists no ci/check_go.sh")
 	}
-	return top, ci
+	return entries
 }
 
 // mutantTree: a tree whose ci/check_go.sh is SRC with FROM replaced by TO; every other tracked entry links to the real tree (the
@@ -490,27 +494,17 @@ func mutantTree(t *testing.T, src, from, to string) authTree {
 	t.Helper()
 	root := repoRoot(t)
 	dir := t.TempDir()
-	top, ci := trackedEntries(t)
-	for _, name := range top {
-		if name == "ci" {
-			continue
+	for _, rel := range trackedEntries(t) {
+		dst := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			t.Fatal(err)
 		}
-		if err := os.Symlink(filepath.Join(root, name), filepath.Join(dir, name)); err != nil {
+		if err := os.Symlink(filepath.Join(root, rel), dst); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := os.Mkdir(filepath.Join(dir, "ci"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	for _, name := range ci {
-		if name == "check_go.sh" {
-			continue
-		}
-		if err := os.Symlink(filepath.Join(root, "ci", name), filepath.Join(dir, "ci", name)); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := os.WriteFile(filepath.Join(dir, "ci", "check_go.sh"), []byte(strings.Replace(src, from, to, 1)), 0o755); err != nil {
+	script := filepath.Join(dir, "ci/check_go.sh")
+	if err := os.WriteFile(script, []byte(strings.Replace(src, from, to, 1)), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	return authTree{dir}

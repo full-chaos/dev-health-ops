@@ -103,6 +103,8 @@ internal/cigates/livee2e	mintlicense_test.go	cmd/...
 internal/cigates/livee2e	mintlicense_test.go	cmd/cigate
 internal/cigates/livee2e	mintlicense_test.go	unexpressed
 internal/cigates/livee2e	smtpsink_test.go	unexpressed
+internal/cigates/livee2e	ssoseedverb_test.go	cmd/...
+internal/cigates/livee2e	ssoseedverb_test.go	unexpressed
 internal/cigates/metricsproof	proof_test.go	unexpressed
 internal/cigates/nopython	trackedfiles_test.go	unexpressed
 internal/cigates/outboundtransport	outboundtransport_test.go	unexpressed

@@ -88,12 +88,13 @@ func TestProviderNotFoundIsA404ForEveryProviderRoute(t *testing.T) {
 }
 
 // TestProviderFailureKeepsOtherErrorsAs500 guards the other side: only a
-// provider "not found" becomes a client error.
+// provider "not found" or a refused credential becomes a client error.
 func TestProviderFailureKeepsOtherErrorsAs500(t *testing.T) {
 	for _, err := range []error{
 		errors.New("boom"),
-		&providerfoundation.ProviderError{Class: providerfoundation.ErrorAuthentication, StatusCode: 401},
 		&providerfoundation.ProviderError{Class: providerfoundation.ErrorTransient, StatusCode: 503},
+		&providerfoundation.ProviderError{Class: providerfoundation.ErrorRateLimited, StatusCode: 403},
+		&providerfoundation.ProviderError{Class: providerfoundation.ErrorPermanent, StatusCode: 400},
 	} {
 		if rec := answerProviderFailure(err); rec.Code != http.StatusInternalServerError {
 			t.Errorf("%v: status = %d, want 500", err, rec.Code)

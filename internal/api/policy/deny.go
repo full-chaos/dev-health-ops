@@ -20,8 +20,6 @@ type DenyText struct {
 	Refused func(*http.Request)
 }
 
-func (d DenyText) zero() bool { return d.Denied == "" && d.Impersonated == "" && d.Refused == nil }
-
 func (d DenyText) denied(fallback string) string {
 	if d.Denied != "" {
 		return d.Denied
@@ -47,10 +45,9 @@ var denyRows = struct {
 	keys map[string]bool
 }{keys: map[string]bool{}}
 
-func recordDenyRow(key string, deny DenyText) {
-	if deny.zero() {
-		return
-	}
+// recordDenyRow records the route of every *Deny mount, even one with an empty DenyText: such a row answers the guard's
+// own text, and the census asks it for a cell like any other.
+func recordDenyRow(key string) {
 	denyRows.Lock()
 	defer denyRows.Unlock()
 	denyRows.keys[key] = true
@@ -72,13 +69,13 @@ func DenyTextRows() []string {
 // WrapPlatformDeny is WrapPlatform for the route key ("METHOD /route"), whose 403 refusals carry deny's text. The action
 // is the first argument, where the platform action census reads it.
 func (g *Guard) WrapPlatformDeny(action, key string, deny DenyText, next http.Handler) http.Handler {
-	recordDenyRow(key, deny)
+	recordDenyRow(key)
 	return g.wrap(Superuser, gate{action: action, kind: gatePlatform, deny: deny}, next)
 }
 
 // BodyFirstDeny is BodyFirst over Wrap(level, ...) for the route key ("METHOD /route"), whose refusals by the decision
 // point carry deny's text.
 func (g *Guard) BodyFirstDeny(key string, level Authz, deny DenyText, next http.Handler) http.Handler {
-	recordDenyRow(key, deny)
+	recordDenyRow(key)
 	return g.bodyFirstOver(g.wrap(level, gate{deny: deny}, next))
 }

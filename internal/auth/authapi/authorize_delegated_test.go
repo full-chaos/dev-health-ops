@@ -29,7 +29,7 @@ var delegatedCatalogActions = []struct{ action, kind string }{
 	{"members.manage", "organization"}, {"members.update", "organization"},
 	{"org.read", "organization"}, {"org.write", "organization"}, {"org.delete", "organization"},
 	{"billing.read", "organization"}, {"billing.manage", "organization"}, {"license.read", "organization"}, {"reports.write", "organization"},
-	{"acr.context.read", "repository"}, {"acr.evidence.read", "repository"}, {"acr.credential.issue", "organization"}, {"acr.credential.revoke", "organization"},
+	{"acr.context.read", "repository"}, {"acr.evidence.read", "repository"}, {"acr.credential.issue", "organization"}, {"acr.credential.revoke", "organization"}, {"sso.write", "organization"},
 	{"admin.users", "platform"}, {"admin.orgs", "platform"}, {"admin.impersonate", "platform"},
 	{"authz.decide", "platform"}, {"admin.billing", "platform"}, {"admin.flags", "platform"},
 	{"admin.audit", "platform"}, {"admin.telemetry", "platform"}, {"admin.stats", "platform"},

@@ -6,7 +6,7 @@
     "obligations": {
       "tenant_scope": "org-a"
     },
-    "policy_revision": 19,
+    "policy_revision": 20,
     "reason": "allowed_by_platform_admin",
     "wire_reason_code": "allowed_by_role"
   },

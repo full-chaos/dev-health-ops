@@ -4,7 +4,7 @@
     "cache_class": "",
     "expires_in_seconds": null,
     "obligations": null,
-    "policy_revision": 19,
+    "policy_revision": 20,
     "reason": "allowed_by_role",
     "wire_reason_code": "allowed_by_role"
   },

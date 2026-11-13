@@ -28,6 +28,11 @@ func TestMaskIsTheLegacyResponseMasking(t *testing.T) {
 	if short["certificate"] != strings.Repeat("B", 50) {
 		t.Fatalf("a 50-character certificate was cut: %v", short["certificate"])
 	}
+	edge := map[string]any{"certificate": strings.Repeat("C", 51)}
+	mask(edge)
+	if edge["certificate"] != strings.Repeat("C", 50)+"..." {
+		t.Fatalf("a 51-character certificate: %v, want it cut to 50 and ...", edge["certificate"])
+	}
 	none := map[string]any{"certificate": nil}
 	mask(none)
 	if none["certificate"] != nil {

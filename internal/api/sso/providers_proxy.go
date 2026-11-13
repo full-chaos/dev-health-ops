@@ -67,6 +67,14 @@ func parseProviderTime(text *string) (*time.Time, error) {
 	return &at, nil
 }
 
+// rawConfig is the config member as auth-service wrote it, kept as it is (null or absent is the empty object, as the legacy read).
+func rawConfig(raw json.RawMessage) json.RawMessage {
+	if len(raw) == 0 || string(raw) == "null" {
+		return json.RawMessage("{}")
+	}
+	return raw
+}
+
 func jsonText(raw json.RawMessage) *string {
 	if len(raw) == 0 || string(raw) == "null" {
 		return nil
@@ -76,38 +84,41 @@ func jsonText(raw json.RawMessage) *string {
 }
 
 // providerRowOf is the providerRow providerResponse renders for an auth-service answer.
-func providerRowOf(raw json.RawMessage) (*providerRow, error) {
+func providerRowOf(raw json.RawMessage) (*providerRow, json.RawMessage, error) {
 	var a providerAnswer
 	if err := json.Unmarshal(raw, &a); err != nil {
-		return nil, fmt.Errorf(errShapeAnswerFormat, errShape)
+		return nil, nil, fmt.Errorf(errShapeAnswerFormat, errShape)
+	}
+	if len(a.Config) != 0 && !json.Valid(a.Config) {
+		return nil, nil, fmt.Errorf(errShapeAnswerFormat, errShape)
 	}
 	row := &providerRow{ID: a.ID, OrgID: a.OrgID, Name: a.Name, Protocol: a.Protocol, Status: a.Status, DefaultRole: a.DefaultRole,
 		IsDefault: a.IsDefault, AllowIdpInitiated: a.AllowIdpInitiated, AutoProvision: a.AutoProvisionUsers,
-		Config: jsonText(a.Config), AllowedDomains: jsonText(a.AllowedDomains), LastError: a.LastError}
+		AllowedDomains: jsonText(a.AllowedDomains), LastError: a.LastError}
 	var err error
 	if row.LastMetadataSyncAt, err = parseProviderTime(a.LastMetadataSyncAt); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if row.LastLoginAt, err = parseProviderTime(a.LastLoginAt); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if row.LastErrorAt, err = parseProviderTime(a.LastErrorAt); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if row.CreatedAt, err = time.Parse(rfc3339ProviderTimeForm, a.CreatedAt); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if row.UpdatedAt, err = time.Parse(rfc3339ProviderTimeForm, a.UpdatedAt); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return row, nil
+	return row, rawConfig(a.Config), nil
 }
 
 func (h handlers) writeProvider(w http.ResponseWriter, r *http.Request, status int, raw json.RawMessage) {
-	row, err := providerRowOf(raw)
+	row, config, err := providerRowOf(raw)
 	if err == nil {
 		var out *pyjson.Object
-		if out, err = providerResponse(row); err == nil {
+		if out, err = renderProvider(row, config); err == nil {
 			policy.WriteModel(w, status, out, nil)
 			return
 		}
@@ -256,12 +267,12 @@ func (h handlers) listProviders(w http.ResponseWriter, r *http.Request) {
 	}
 	items := make([]pyjson.Value, 0, len(answer.Items))
 	for _, item := range answer.Items {
-		row, err := providerRowOf(item)
+		row, config, err := providerRowOf(item)
 		if err != nil {
 			h.providerFault(w, r, "render provider", err)
 			return
 		}
-		out, err := providerResponse(row)
+		out, err := renderProvider(row, config)
 		if err != nil {
 			h.providerFault(w, r, "render provider", err)
 			return

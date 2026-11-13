@@ -394,3 +394,26 @@ func TestActivateAndDeactivateCallAuthServiceAndKeepTheirTexts(t *testing.T) {
 		t.Errorf("unknown provider: %d %s, want 404 SSO provider not found", response.Code, response.Body)
 	}
 }
+
+// The config is auth-service's bytes, passed on unchanged: a decode and re-marshal here would turn 1.50 into 1.5 and the
+// escape into the character, and would reorder nothing but still change bytes.
+func TestProviderConfigIsPassedThroughAsAuthServiceWroteIt(t *testing.T) {
+	f := newProxyFixture(t)
+	config := `{"z":1.50,"a":"\u00e9","m":{"y":[1,2.0],"b":null},"client_secret":"********"}`
+	f.fake.answer = `{"id":"` + uuid.NewString() + `","org_id":"` + f.org.String() + `","name":"Acme","protocol":"oidc","status":"active","is_default":false,` +
+		`"allow_idp_initiated":false,"auto_provision_users":true,"default_role":"member","config":` + config + `,"allowed_domains":[],` +
+		`"last_metadata_sync_at":null,"last_login_at":null,"last_error":null,"last_error_at":null,"created_at":"2026-11-13T01:02:03Z","updated_at":"2026-11-13T01:02:03.250000Z"}`
+	for name, response := range map[string]*httptest.ResponseRecorder{
+		"get":      f.do(f.h.getProvider, "member", "", uuid.NewString(), "", nil),
+		"activate": f.do(f.h.setStatusViaProviders("active").ServeHTTP, "admin", "", uuid.NewString(), "", nil),
+		"create":   f.do(f.h.createProvider, "admin", "", "", "", okBody()),
+	} {
+		if !strings.Contains(response.Body.String(), `"config":`+config+`,"allowed_domains"`) {
+			t.Errorf("%s: config not passed through: %s", name, response.Body)
+		}
+	}
+	f.fake.answer = strings.Replace(f.fake.answer, config, `{"a":`, 1)
+	if response := f.do(f.h.getProvider, "member", "", uuid.NewString(), "", nil); response.Code != http.StatusServiceUnavailable {
+		t.Errorf("a config that is not JSON: %d %s, want the named 503", response.Code, response.Body)
+	}
+}

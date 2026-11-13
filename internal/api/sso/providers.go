@@ -2,6 +2,7 @@ package sso
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -148,9 +149,16 @@ var errShape = errors.New("sso: stored provider column has the wrong JSON shape"
 // providerResponse is _provider_to_response: the row with config's
 // client_secret masked and a certificate over 50 characters cut to 50 plus
 // "...", allowed_domains without its nulls.
-func providerResponse(p *providerRow) (*pyjson.Object, error) {
+func providerResponse(p *providerRow) (*pyjson.Object, error) { return renderProvider(p, nil) }
+
+// renderProvider is providerResponse; a non-nil raw is the config as auth-service answered it (masked, in the response form),
+// written as it is: not decoded, not masked, not written again.
+func renderProvider(p *providerRow, raw json.RawMessage) (*pyjson.Object, error) {
+	var configValue pyjson.Value
 	config := pyjson.NewObject()
-	if p.Config != nil {
+	if raw != nil {
+		configValue = pyjson.Raw(raw)
+	} else if p.Config != nil {
 		decoded, err := pyjson.DecodeString(*p.Config)
 		if err != nil {
 			return nil, err
@@ -163,15 +171,18 @@ func providerResponse(p *providerRow) (*pyjson.Object, error) {
 			return nil, fmt.Errorf("%w: config", errShape)
 		}
 	}
-	if _, present := config.Get("client_secret"); present {
-		config.Set("client_secret", "********")
-	}
-	if certificate, present := config.Get("certificate"); present {
-		if text, ok := certificate.(string); ok {
-			if runes := pyjson.Runes(text); len(runes) > 50 {
-				config.Set("certificate", pyjson.FromRunes(runes[:50])+"...")
+	if configValue == nil {
+		if _, present := config.Get("client_secret"); present {
+			config.Set("client_secret", "********")
+		}
+		if certificate, present := config.Get("certificate"); present {
+			if text, ok := certificate.(string); ok {
+				if runes := pyjson.Runes(text); len(runes) > 50 {
+					config.Set("certificate", pyjson.FromRunes(runes[:50])+"...")
+				}
 			}
 		}
+		configValue = config
 	}
 	domains := []pyjson.Value{}
 	if p.AllowedDomains != nil {
@@ -205,7 +216,7 @@ func providerResponse(p *providerRow) (*pyjson.Object, error) {
 	out.Set("allow_idp_initiated", p.AllowIdpInitiated)
 	out.Set("auto_provision_users", p.AutoProvision)
 	out.Set("default_role", p.DefaultRole)
-	out.Set("config", config)
+	out.Set("config", configValue)
 	out.Set("allowed_domains", domains)
 	out.Set("last_metadata_sync_at", optionalTime(p.LastMetadataSyncAt))
 	out.Set("last_login_at", optionalTime(p.LastLoginAt))

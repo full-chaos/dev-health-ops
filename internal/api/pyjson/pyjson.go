@@ -27,6 +27,9 @@ type Int struct{ *big.Int }
 // Float is a JSON number with a fraction or exponent (Python float).
 type Float float64
 
+// Raw is JSON text already in the form the writer would give: it is written as it is, never decoded.
+type Raw []byte
+
 // Object is a JSON object in key order.
 type Object struct {
 	keys   []string
@@ -142,6 +145,8 @@ func (wr writer) write(buffer *bytes.Buffer, value Value) error {
 		}
 	case string:
 		return wr.writeString(buffer, typed)
+	case Raw:
+		buffer.Write(typed)
 	case Int:
 		if typed.Int == nil {
 			buffer.WriteString("0")

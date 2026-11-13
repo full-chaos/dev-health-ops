@@ -247,6 +247,11 @@ var Allowlist = []Entry{
 	{File: "internal/auth/serviceaccount/store.go", Func: "Store.Enable", Table: "auth.principals", Verb: "UPDATE"},
 	{File: "internal/auth/serviceaccount/store.go", Func: "Store.Enable", Table: "auth.service_accounts", Verb: "UPDATE"},
 	{File: "internal/auth/serviceaccount/store.go", Func: "Store.SetOwner", Table: "auth.service_accounts", Verb: "UPDATE"},
+	{File: "internal/auth/ssoprovider/ssoprovider.go", Func: "Store.Create", Table: "public.sso_providers", Verb: "INSERT"},
+	{File: "internal/auth/ssoprovider/ssoprovider.go", Func: "Store.Delete", Table: "public.sso_providers", Verb: "DELETE"},
+	{File: "internal/auth/ssoprovider/ssoprovider.go", Func: "Store.SetStatus", Table: "public.sso_providers", Verb: "UPDATE"},
+	{File: "internal/auth/ssoprovider/ssoprovider.go", Func: "Store.Update", Table: "public.sso_providers", Verb: "UPDATE"},
+	{File: "internal/auth/ssoprovider/ssoprovider.go", Func: "clearDefault", Table: "public.sso_providers", Verb: "UPDATE"},
 	{File: "internal/auth/workload/enable.go", Func: "Store.EnableWorkload", Table: "auth.principals", Verb: "UPDATE"},
 	{File: "internal/auth/workload/enable.go", Func: "Store.EnableWorkload", Table: "auth.workloads", Verb: "UPDATE"},
 	// CHAOS-12363 (acp approved plan): auth-migrate rebind, inside audit.Commit.

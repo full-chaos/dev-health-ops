@@ -1,9 +1,11 @@
 package authruntime
 
 import (
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -20,6 +22,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/publicread"
 	"github.com/full-chaos/dev-health-ops/internal/auth/serviceaccount"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
+	"github.com/full-chaos/dev-health-ops/internal/auth/ssoprovider"
+	"github.com/full-chaos/dev-health-ops/internal/platform/fernet"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
 
@@ -134,5 +138,35 @@ func goAPIInternalRoutes(cfg authconfig.Config, logger *slog.Logger, pool *pgxpo
 	if err != nil {
 		return nil, err
 	}
-	return append(provisioning, users...), nil
+	sso, err := ssoProviderRoutes(cfg, logger, pool, schema, identities, workload)
+	if err != nil {
+		return nil, err
+	}
+	return append(append(provisioning, users...), sso...), nil
+}
+
+// cipherSealer seals a provider secret with the SSO cipher, the one the sign-in routes open it with.
+type cipherSealer struct{ cipher fernet.Cipher }
+
+func (s cipherSealer) Seal(plain string) (string, error) {
+	return s.cipher.Seal([]byte(plain), time.Now(), rand.Reader)
+}
+
+// ssoProviderRoutes builds the SSO provider management routes behind AUTH_MEMBERSHIP_ROUTES. They mount only with their
+// endpoint-profile rows (authapi.SSOProviderRoutes) and an SSO cipher that opens; an unusable key leaves them off.
+func ssoProviderRoutes(cfg authconfig.Config, logger *slog.Logger, pool *pgxpool.Pool, schema authschema.ValidatedIdentifier,
+	identities *identity.Store, workload *authapi.SessionIssueWorkload) ([]httpapi.Route, error) {
+	if !cfg.Provisioning.Routes {
+		return nil, nil
+	}
+	cipher, err := fernet.New(cfg.SSO.EncryptionKey.Reveal(), cfg.SSO.EncryptionSalt)
+	if err != nil {
+		logger.Warn("sso provider routes: not mounted, the provider secret key is unusable")
+		return nil, nil
+	}
+	return authapi.SSOProviderRoutes(authapi.ProvisioningDeps{
+		Users: pgUsers(cfg, pool, schema), Reader: pool, Organizations: identities, Workload: workload, Logger: logger,
+		ProfileRows:       provisioningProfileRows,
+		SSOProviderStores: authapi.SSOProviderStores{SSOProviders: ssoprovider.Store{Pool: pool, Schema: schema}, SSOSealer: cipherSealer{cipher}},
+	})
 }

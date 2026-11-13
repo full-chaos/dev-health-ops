@@ -1561,6 +1561,209 @@
         "workload_token"
       ],
       "classification": "protected",
+      "current_state_cache_behavior": "No cache: the workload token reads only the signer's published key set (no table); the actor's public.users and public.memberships rows are read live before the call.",
+      "disclosure_behavior": "The body is organization_id, actor_principal_id and the optional protocol, status, limit and offset, at most 4 KiB. Every bearer refusal, for every credential class and reason, is the same 401 error.v1 invalid_credentials with no credential or reason text (the reason is only in the log line); a malformed body is 400 malformed before any row is read; an actor that is not active gets 403 principal_deactivated, an actor that fails the organization rule 403 admin_required, before anything is read for the request; an unknown organization is 404 organization_not_found; a provider that is not in the organization is 404 sso_provider_not_found; a store failure is 503 store_unavailable; a key set that cannot be read is a 503. The answer is items, total, limit and offset of the legacy provider list; no secret is in it (client_secret reads ********, a certificate is cut to 50 characters and ...).",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "POST /internal/v1/sso/providers/list [dev-health-auth-service @api]",
+      "issued_credential": [],
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 153,
+          "note": "func (s *SessionIssueWorkload) authorize",
+          "path": "internal/auth/authapi/issue_workload.go"
+        },
+        "description": "SessionIssueWorkload.authorize (internal/auth/authapi/issue_workload.go), the session issue route's path: the go-api workload token (JOSE typ workload+jwt, chosen from the bearer text before any validator runs) is decided without a table read: audience auth-service and the configured go-api workload principal (AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT) as sub, then authverify.WorkloadVerifier. The session issuer credential (svc_authsess_) is retired on this route: it is refused from the bearer text alone, before any store or key-set read, and counted (auth.provisioning.retired_credential_refusals). Any other bearer, a workload token of any other subject or audience included, is refused before any read and before the body is read; then the actor must be active and a member of the organization the body names, or an active holder of admin.orgs, checked on the live users and membership rows before any provider row is read (the legacy reads were open to any member)."
+      },
+      "route": "/internal/v1/sso/providers/list",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authapi/provisioning_sso.go",
+        "line": 30
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "org_scoped"
+    },
+    {
+      "accepted_credential_classes": [
+        "workload_token"
+      ],
+      "classification": "protected",
+      "current_state_cache_behavior": "No cache: the workload token reads only the signer's published key set (no table); the actor's public.users and public.memberships rows are read live before the call.",
+      "disclosure_behavior": "The body is organization_id, actor_principal_id, name, protocol and the optional saml_config, oidc_config, is_default, allow_idp_initiated, auto_provision_users, default_role and allowed_domains, at most 64 KiB. Every bearer refusal, for every credential class and reason, is the same 401 error.v1 invalid_credentials with no credential or reason text (the reason is only in the log line); a malformed body is 400 malformed before any row is read; an actor that is not active gets 403 principal_deactivated, an actor that fails the organization rule 403 admin_required, before anything is read for the request; an unknown organization is 404 organization_not_found; a provider that is not in the organization is 404 sso_provider_not_found; a store failure is 503 store_unavailable; a key set that cannot be read is a 503. A SAML provider without saml_config is 400 saml_config_required, an OIDC provider without oidc_config 400 oidc_config_required. The client secret is sealed with the SSO cipher before it is stored and is never in the answer, the log or the audit row. The answer is 201 with the legacy provider body (status pending_setup).",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "POST /internal/v1/sso/providers/create [dev-health-auth-service @api]",
+      "issued_credential": [],
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 153,
+          "note": "func (s *SessionIssueWorkload) authorize",
+          "path": "internal/auth/authapi/issue_workload.go"
+        },
+        "description": "SessionIssueWorkload.authorize (internal/auth/authapi/issue_workload.go), the session issue route's path: the go-api workload token (JOSE typ workload+jwt, chosen from the bearer text before any validator runs) is decided without a table read: audience auth-service and the configured go-api workload principal (AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT) as sub, then authverify.WorkloadVerifier. The session issuer credential (svc_authsess_) is retired on this route: it is refused from the bearer text alone, before any store or key-set read, and counted (auth.provisioning.retired_credential_refusals). Any other bearer, a workload token of any other subject or audience included, is refused before any read and before the body is read; then the actor must be an active owner or admin of the organization the body names, or an active holder of admin.orgs (the rule of the organization routes), checked on the live users and membership rows before any provider row is read."
+      },
+      "route": "/internal/v1/sso/providers/create",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authapi/provisioning_sso.go",
+        "line": 31
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "org_scoped"
+    },
+    {
+      "accepted_credential_classes": [
+        "workload_token"
+      ],
+      "classification": "protected",
+      "current_state_cache_behavior": "No cache: the workload token reads only the signer's published key set (no table); the actor's public.users and public.memberships rows are read live before the call.",
+      "disclosure_behavior": "The body is organization_id, actor_principal_id and provider_id, at most 4 KiB. Every bearer refusal, for every credential class and reason, is the same 401 error.v1 invalid_credentials with no credential or reason text (the reason is only in the log line); a malformed body is 400 malformed before any row is read; an actor that is not active gets 403 principal_deactivated, an actor that fails the organization rule 403 admin_required, before anything is read for the request; an unknown organization is 404 organization_not_found; a provider that is not in the organization is 404 sso_provider_not_found; a store failure is 503 store_unavailable; a key set that cannot be read is a 503. The answer is the legacy provider body; no secret is in it.",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "POST /internal/v1/sso/providers/get [dev-health-auth-service @api]",
+      "issued_credential": [],
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 153,
+          "note": "func (s *SessionIssueWorkload) authorize",
+          "path": "internal/auth/authapi/issue_workload.go"
+        },
+        "description": "SessionIssueWorkload.authorize (internal/auth/authapi/issue_workload.go), the session issue route's path: the go-api workload token (JOSE typ workload+jwt, chosen from the bearer text before any validator runs) is decided without a table read: audience auth-service and the configured go-api workload principal (AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT) as sub, then authverify.WorkloadVerifier. The session issuer credential (svc_authsess_) is retired on this route: it is refused from the bearer text alone, before any store or key-set read, and counted (auth.provisioning.retired_credential_refusals). Any other bearer, a workload token of any other subject or audience included, is refused before any read and before the body is read; then the actor must be active and a member of the organization the body names, or an active holder of admin.orgs, checked on the live users and membership rows before any provider row is read (the legacy reads were open to any member)."
+      },
+      "route": "/internal/v1/sso/providers/get",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authapi/provisioning_sso.go",
+        "line": 32
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "org_scoped"
+    },
+    {
+      "accepted_credential_classes": [
+        "workload_token"
+      ],
+      "classification": "protected",
+      "current_state_cache_behavior": "No cache: the workload token reads only the signer's published key set (no table); the actor's public.users and public.memberships rows are read live before the call.",
+      "disclosure_behavior": "The body is organization_id, actor_principal_id, provider_id and the optional name, saml_config, oidc_config, is_default, allow_idp_initiated, auto_provision_users, default_role and allowed_domains, at most 64 KiB. Every bearer refusal, for every credential class and reason, is the same 401 error.v1 invalid_credentials with no credential or reason text (the reason is only in the log line); a malformed body is 400 malformed before any row is read; an actor that is not active gets 403 principal_deactivated, an actor that fails the organization rule 403 admin_required, before anything is read for the request; an unknown organization is 404 organization_not_found; a provider that is not in the organization is 404 sso_provider_not_found; a store failure is 503 store_unavailable; a key set that cannot be read is a 503. Only the members named change; a secret named is sealed. The answer is the legacy provider body; no secret is in it.",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "POST /internal/v1/sso/providers/update [dev-health-auth-service @api]",
+      "issued_credential": [],
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 153,
+          "note": "func (s *SessionIssueWorkload) authorize",
+          "path": "internal/auth/authapi/issue_workload.go"
+        },
+        "description": "SessionIssueWorkload.authorize (internal/auth/authapi/issue_workload.go), the session issue route's path: the go-api workload token (JOSE typ workload+jwt, chosen from the bearer text before any validator runs) is decided without a table read: audience auth-service and the configured go-api workload principal (AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT) as sub, then authverify.WorkloadVerifier. The session issuer credential (svc_authsess_) is retired on this route: it is refused from the bearer text alone, before any store or key-set read, and counted (auth.provisioning.retired_credential_refusals). Any other bearer, a workload token of any other subject or audience included, is refused before any read and before the body is read; then the actor must be an active owner or admin of the organization the body names, or an active holder of admin.orgs (the rule of the organization routes), checked on the live users and membership rows before any provider row is read."
+      },
+      "route": "/internal/v1/sso/providers/update",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authapi/provisioning_sso.go",
+        "line": 33
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "org_scoped"
+    },
+    {
+      "accepted_credential_classes": [
+        "workload_token"
+      ],
+      "classification": "protected",
+      "current_state_cache_behavior": "No cache: the workload token reads only the signer's published key set (no table); the actor's public.users and public.memberships rows are read live before the call.",
+      "disclosure_behavior": "The body is organization_id, actor_principal_id and provider_id, at most 4 KiB. Every bearer refusal, for every credential class and reason, is the same 401 error.v1 invalid_credentials with no credential or reason text (the reason is only in the log line); a malformed body is 400 malformed before any row is read; an actor that is not active gets 403 principal_deactivated, an actor that fails the organization rule 403 admin_required, before anything is read for the request; an unknown organization is 404 organization_not_found; a provider that is not in the organization is 404 sso_provider_not_found; a store failure is 503 store_unavailable; a key set that cannot be read is a 503. The answer is 204 with no body; users.sso_provider_id of its users becomes NULL by its foreign key.",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "POST /internal/v1/sso/providers/delete [dev-health-auth-service @api]",
+      "issued_credential": [],
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 153,
+          "note": "func (s *SessionIssueWorkload) authorize",
+          "path": "internal/auth/authapi/issue_workload.go"
+        },
+        "description": "SessionIssueWorkload.authorize (internal/auth/authapi/issue_workload.go), the session issue route's path: the go-api workload token (JOSE typ workload+jwt, chosen from the bearer text before any validator runs) is decided without a table read: audience auth-service and the configured go-api workload principal (AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT) as sub, then authverify.WorkloadVerifier. The session issuer credential (svc_authsess_) is retired on this route: it is refused from the bearer text alone, before any store or key-set read, and counted (auth.provisioning.retired_credential_refusals). Any other bearer, a workload token of any other subject or audience included, is refused before any read and before the body is read; then the actor must be an active owner or admin of the organization the body names, or an active holder of admin.orgs (the rule of the organization routes), checked on the live users and membership rows before any provider row is read."
+      },
+      "route": "/internal/v1/sso/providers/delete",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authapi/provisioning_sso.go",
+        "line": 34
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "org_scoped"
+    },
+    {
+      "accepted_credential_classes": [
+        "workload_token"
+      ],
+      "classification": "protected",
+      "current_state_cache_behavior": "No cache: the workload token reads only the signer's published key set (no table); the actor's public.users and public.memberships rows are read live before the call.",
+      "disclosure_behavior": "The body is organization_id, actor_principal_id and provider_id, at most 4 KiB. Every bearer refusal, for every credential class and reason, is the same 401 error.v1 invalid_credentials with no credential or reason text (the reason is only in the log line); a malformed body is 400 malformed before any row is read; an actor that is not active gets 403 principal_deactivated, an actor that fails the organization rule 403 admin_required, before anything is read for the request; an unknown organization is 404 organization_not_found; a provider that is not in the organization is 404 sso_provider_not_found; a store failure is 503 store_unavailable; a key set that cannot be read is a 503. The answer is the legacy provider body with status active.",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "POST /internal/v1/sso/providers/activate [dev-health-auth-service @api]",
+      "issued_credential": [],
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 153,
+          "note": "func (s *SessionIssueWorkload) authorize",
+          "path": "internal/auth/authapi/issue_workload.go"
+        },
+        "description": "SessionIssueWorkload.authorize (internal/auth/authapi/issue_workload.go), the session issue route's path: the go-api workload token (JOSE typ workload+jwt, chosen from the bearer text before any validator runs) is decided without a table read: audience auth-service and the configured go-api workload principal (AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT) as sub, then authverify.WorkloadVerifier. The session issuer credential (svc_authsess_) is retired on this route: it is refused from the bearer text alone, before any store or key-set read, and counted (auth.provisioning.retired_credential_refusals). Any other bearer, a workload token of any other subject or audience included, is refused before any read and before the body is read; then the actor must be an active owner or admin of the organization the body names, or an active holder of admin.orgs (the rule of the organization routes), checked on the live users and membership rows before any provider row is read."
+      },
+      "route": "/internal/v1/sso/providers/activate",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authapi/provisioning_sso.go",
+        "line": 35
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "org_scoped"
+    },
+    {
+      "accepted_credential_classes": [
+        "workload_token"
+      ],
+      "classification": "protected",
+      "current_state_cache_behavior": "No cache: the workload token reads only the signer's published key set (no table); the actor's public.users and public.memberships rows are read live before the call.",
+      "disclosure_behavior": "The body is organization_id, actor_principal_id and provider_id, at most 4 KiB. Every bearer refusal, for every credential class and reason, is the same 401 error.v1 invalid_credentials with no credential or reason text (the reason is only in the log line); a malformed body is 400 malformed before any row is read; an actor that is not active gets 403 principal_deactivated, an actor that fails the organization rule 403 admin_required, before anything is read for the request; an unknown organization is 404 organization_not_found; a provider that is not in the organization is 404 sso_provider_not_found; a store failure is 503 store_unavailable; a key set that cannot be read is a 503. The answer is the legacy provider body with status inactive.",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "POST /internal/v1/sso/providers/deactivate [dev-health-auth-service @api]",
+      "issued_credential": [],
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 153,
+          "note": "func (s *SessionIssueWorkload) authorize",
+          "path": "internal/auth/authapi/issue_workload.go"
+        },
+        "description": "SessionIssueWorkload.authorize (internal/auth/authapi/issue_workload.go), the session issue route's path: the go-api workload token (JOSE typ workload+jwt, chosen from the bearer text before any validator runs) is decided without a table read: audience auth-service and the configured go-api workload principal (AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT) as sub, then authverify.WorkloadVerifier. The session issuer credential (svc_authsess_) is retired on this route: it is refused from the bearer text alone, before any store or key-set read, and counted (auth.provisioning.retired_credential_refusals). Any other bearer, a workload token of any other subject or audience included, is refused before any read and before the body is read; then the actor must be an active owner or admin of the organization the body names, or an active holder of admin.orgs (the rule of the organization routes), checked on the live users and membership rows before any provider row is read."
+      },
+      "route": "/internal/v1/sso/providers/deactivate",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authapi/provisioning_sso.go",
+        "line": 36
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "org_scoped"
+    },
+    {
+      "accepted_credential_classes": [
+        "workload_token"
+      ],
+      "classification": "protected",
       "current_state_cache_behavior": "No cache: the workload token reads only the signer's published key set (no table); the organization's status and aggregate revision are read live, in one statement, on every call.",
       "disclosure_behavior": "Every bearer refusal, for every credential class and reason, is the same 401 error.v1 invalid_credentials; a body that is not exactly one canonical organization_id is 400 malformed; an organization that does not exist is 404 organization_not_found, named to any holder of the service credential or of the go-api workload token; a store failure is 503 store_unavailable; a key set that cannot be read is a 503. The answer is the organization_id, its status and its revision read in one statement. The route writes nothing and no audit row.",
       "gaps": [],

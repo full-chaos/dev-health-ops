@@ -285,6 +285,37 @@ env -u DATABASE_URI -u POSTGRES_URI -u DATABASE_URL CLICKHOUSE_URI="${FIXTURES_S
   --team-count 1 \
   --seed 4276
 
+# The frozen world gives its one team the repo only through teams.repo_patterns; it has no
+# team_repo_ownership row. The team families take a repo's team from team_repo_ownership only
+# (no repo_patterns fallback), so seed one exact, primary, open-ended owner row for every active
+# team whose repo_patterns name a repo of this org. Credentials go by a curl config file, not argv.
+echo "   -- seed team_repo_ownership from the fixture team's repo_patterns"
+CH_OWNER_CFG="${TMP_DIR}/ch-owner-seed.curlrc"
+( umask 077
+  esc() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
+  printf 'header = "X-ClickHouse-User: %s"\nheader = "X-ClickHouse-Key: %s"\n' \
+    "$(esc "${CLICKHOUSE_USER}")" "$(esc "${CLICKHOUSE_PASSWORD}")" >"${CH_OWNER_CFG}" )
+ch_owner_query() {
+  curl --silent --show-error --fail-with-body --noproxy '*' --config "${CH_OWNER_CFG}" \
+    --max-time 30 --data-binary "$1" \
+    "http://${CLICKHOUSE_HOST}:${CLICKHOUSE_HTTP_PORT}/?database=${CLICKHOUSE_DB}&param_org_id=${ORG_ID}"
+}
+ch_owner_query "INSERT INTO team_repo_ownership
+  (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at)
+  SELECT r.org_id, r.provider, t.id, r.id, r.repo, 'exact', 'manual', 1, 0, 0, now64(3), NULL, now64(3)
+  FROM (SELECT org_id, id, provider, repo FROM repos FINAL WHERE org_id = {org_id:String}) AS r
+  INNER JOIN (SELECT id, repo_patterns FROM teams FINAL WHERE org_id = {org_id:String} AND is_active = 1) AS t
+    ON has(t.repo_patterns, r.repo)"
+OWNER_ROWS="$(ch_owner_query "SELECT count() FROM team_repo_ownership FINAL WHERE org_id = {org_id:String}")"
+rm -f "${CH_OWNER_CFG}"
+OWNER_ROWS="$(printf '%s' "${OWNER_ROWS}" | tr -d '[:space:]')"
+case "${OWNER_ROWS}" in ''|*[!0-9]*) OWNER_ROWS=0 ;; esac
+if [ "${OWNER_ROWS}" -lt 1 ]; then
+  echo "FAIL: seeded no team_repo_ownership row for org ${ORG_ID} (the fixture team's repo_patterns matched no repo)" >&2
+  exit 1
+fi
+echo "   team_repo_ownership rows for ${ORG_ID}: ${OWNER_ROWS}"
+
 # ORDERING CONTRACT (CHAOS-4266): seed ALL FOUR targets' ClickHouse rows
 # BEFORE finalizing ANY of their sync_runs -- enforced INSIDE
 # seed_and_finalize_sync_targets (ci/lib/go_worker_fixture.sh), shared with
@@ -313,7 +344,7 @@ ASSERT_SUMMARY_JSON="${METRICS_PROOF_SUMMARY_JSON_FILE:-${TMP_DIR}/family-summar
 # actually exercising repo-pattern resolution. team_cognitive_load
 # (CHAOS-4365 item 2) is derived entirely from this same run's
 # user_metrics_daily + team_wellbeing rows plus team_repo_ownership (also
-# seeded by the same fixtures call), so it is causally satisfied by the
+# seeded right after the fixtures call), so it is causally satisfied by the
 # exact same seeding as team_wellbeing -- no separate fixture path needed.
 # complexity is the one remaining exclusion: it needs persisted file
 # CONTENTS (git_files.contents), which fixtures generate does not write by
@@ -322,7 +353,7 @@ ASSERT_SUMMARY_JSON="${METRICS_PROOF_SUMMARY_JSON_FILE:-${TMP_DIR}/family-summar
 #
 # compounding_risk_team reads this same run's repo_metrics_daily (written by
 # repo_user_commit, seeded above) and resolves teams the same way
-# team_cognitive_load does (team_repo_ownership from the fixtures call) -- the
+# team_cognitive_load does (team_repo_ownership seeded after the fixtures call) -- the
 # identical causal chain as team_cognitive_load, so it is satisfied by the
 # same seeding with no separate fixture path needed.
 go build -trimpath -o "${BIN_DIR}/cigate" ./cmd/cigate

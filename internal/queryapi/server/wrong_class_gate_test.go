@@ -443,7 +443,7 @@ func runQueryAPIGate(t *testing.T, divergences map[string]string, errorf func(fo
 		var out []wrongclass.Carrier
 		census.NotDriven = nil
 		for _, class := range classes {
-			carrier, ok, err := wrongclass.CarrierFor(class, wrongclass.Options{Mint: mint, HeaderValue: func(name string) string {
+			found, ok, err := wrongclass.CarriersFor(class, wrongclass.Options{Mint: mint, HeaderValue: func(name string) string {
 				if name == "X-Org-Id" {
 					return ecOrg.String()
 				}
@@ -456,7 +456,10 @@ func runQueryAPIGate(t *testing.T, divergences map[string]string, errorf func(fo
 				census.NotDriven = append(census.NotDriven, class.ID)
 				continue
 			}
-			out = append(out, carrier)
+			out = append(out, found...)
+		}
+		if !wrongclass.HasHeaderCarrier(out, "X-ACR-Approver-Reference") {
+			t.Fatal("no carrier presents X-ACR-Approver-Reference: the web approver reference header of acr_web_assertion is not driven")
 		}
 		return out
 	}

@@ -168,6 +168,36 @@ func CarrierFor(class Class, options Options) (Carrier, bool, error) {
 	return carrier, true, nil
 }
 
+// CarriersFor is CarrierFor with one carrier for EVERY dedicated header of a class, each alone on its request: a
+// class presented in two headers (acr_web_assertion: X-ACR-Web-Assertion and X-ACR-Approver-Reference) is refused in
+// each. Every other class gives the one CarrierFor carrier.
+func CarriersFor(class Class, options Options) ([]Carrier, bool, error) {
+	first, ok, err := CarrierFor(class, options)
+	if err != nil || !ok {
+		return nil, ok, err
+	}
+	out := []Carrier{first}
+	names := class.names("dedicated_header")
+	if len(names) < 2 || first.Header != names[0] {
+		return out, true, nil
+	}
+	for _, name := range names[1:] {
+		value := Filler
+		if options.HeaderValue != nil {
+			if v := options.HeaderValue(name); v != "" {
+				value = v
+			}
+		}
+		out = append(out, Carrier{Class: class.ID, Header: name, Value: value})
+	}
+	return out, true, nil
+}
+
+// HasHeaderCarrier reports whether carriers present a credential in the named header.
+func HasHeaderCarrier(carriers []Carrier, name string) bool {
+	return slices.ContainsFunc(carriers, func(c Carrier) bool { return http.CanonicalHeaderKey(c.Header) == http.CanonicalHeaderKey(name) })
+}
+
 func shaped(shape string) (string, error) {
 	switch {
 	case shape == "jwt":

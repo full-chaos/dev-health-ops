@@ -308,7 +308,7 @@ func runGoAPIGate(t *testing.T, divergences map[string]string, errorf func(forma
 	divergent := map[string]int{}
 	var carriers []wrongclass.Carrier
 	for _, class := range classes {
-		carrier, ok, err := wrongclass.CarrierFor(class, wrongclass.Options{Mint: rig.mint(t), HeaderValue: func(name string) string {
+		found, ok, err := wrongclass.CarriersFor(class, wrongclass.Options{Mint: rig.mint(t), HeaderValue: func(name string) string {
 			if name == "X-Org-Id" {
 				return probeOrg.String()
 			}
@@ -321,7 +321,10 @@ func runGoAPIGate(t *testing.T, divergences map[string]string, errorf func(forma
 			census.NotDriven = append(census.NotDriven, class.ID)
 			continue
 		}
-		carriers = append(carriers, carrier)
+		carriers = append(carriers, found...)
+	}
+	if !wrongclass.HasHeaderCarrier(carriers, "X-ACR-Approver-Reference") {
+		t.Fatal("no carrier presents X-ACR-Approver-Reference: the web approver reference header of acr_web_assertion is not driven")
 	}
 	census.Driven = len(carriers)
 	if census.Driven == 0 {

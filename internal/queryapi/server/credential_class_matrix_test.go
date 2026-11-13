@@ -199,7 +199,12 @@ func TestCredentialClassMatrixQueryAPI(t *testing.T) {
 				return queryMatrixCell{bearer: minter.mint(ecUser, nil, map[string]any{"typ": typ})}, true
 			}
 		case len(class.markers["dedicated_header"]) > 0:
-			return queryMatrixCell{headers: map[string]string{class.markers["dedicated_header"][0]: ecOrg.String()}}, true
+			// Every dedicated header of the class (acr_web_assertion has two) is on the request.
+			headers := map[string]string{}
+			for _, name := range class.markers["dedicated_header"] {
+				headers[name] = ecOrg.String()
+			}
+			return queryMatrixCell{headers: headers}, true
 		case len(class.markers["signature_header"]) > 0:
 			return queryMatrixCell{headers: map[string]string{class.markers["signature_header"][0]: "sha256=" + filler}}, true
 		}

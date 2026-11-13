@@ -220,6 +220,11 @@ type dueReportCandidate struct {
 	// exists. New work sorts before replays so an installation with many pending
 	// handoff repairs cannot consume every bounded page forever.
 	AlreadyMaterialized bool
+	// PreviousOccurrenceCreatedAt is when the report's newest earlier occurrence was
+	// written, which is when its run actually started. It is nil for a report that
+	// never had an occurrence. It is the start of the window in which a cron
+	// instant counts as skipped (see unmintedInstants).
+	PreviousOccurrenceCreatedAt *time.Time
 	// Base is the instant cron due-ness is measured from: the report's own last
 	// run, or its creation when it has never run. Python uses exactly this, and
 	// deliberately does not advance it here — only a completed run moves it — so
@@ -353,6 +358,8 @@ func (producer *ScheduledReportsProducer) Produce(
 	sortDueEntriesMostOverdueFirst(dueEntries)
 
 	requests := make([]JobRequest, 0, maximumScheduledReportsPerOccurrence)
+	var unminted []UnmintedInstants
+	var countFailed []UnmintedCountFailure
 	due := len(dueEntries)
 	undeliverable := 0
 	deferred := 0
@@ -386,6 +393,17 @@ func (producer *ScheduledReportsProducer) Produce(
 				continue
 			}
 			requests = append(requests, request)
+			// The count only reports: a failure is returned in the outcome and
+			// never rolls back the occurrence just claimed.
+			if found, countErr := producer.unmintedInstants(entry.candidate, entry.scheduledFor); countErr != nil {
+				countFailed = append(countFailed, UnmintedCountFailure{
+					ReportID:  entry.candidate.ReportID,
+					MintedFor: entry.scheduledFor.UTC(),
+					Error:     countErr.Error(),
+				})
+			} else if found.Count > 0 {
+				unminted = append(unminted, found)
+			}
 		}
 		return nil
 	}
@@ -454,7 +472,12 @@ func (producer *ScheduledReportsProducer) Produce(
 	}
 	switch {
 	case len(requests) > 0:
-		return Outcome{Requests: requests, Degraded: degraded}, nil
+		return Outcome{
+			Requests:            requests,
+			Degraded:            degraded,
+			Unminted:            unminted,
+			UnmintedCountFailed: countFailed,
+		}, nil
 	case undeliverable > 0 || deferred > 0:
 		// Nothing publishable, but the occurrence is not idle either: recording it
 		// as "nothing was due" would erase the only signal these conditions have.
@@ -464,6 +487,81 @@ func (producer *ScheduledReportsProducer) Produce(
 	default:
 		return Outcome{SkipReason: SkipNoDueScheduledReports}, nil
 	}
+}
+
+const (
+	// unmintedNamedLimit is the most instants one unminted-instant line names. A
+	// longer gap is named by its first and last instant and its count.
+	unmintedNamedLimit = 3
+	// unmintedScanLimit bounds the instants one minted occurrence enumerates, so a
+	// fine-grained cron cannot stretch the locked sweep.
+	unmintedScanLimit = 1024
+)
+
+// UnmintedInstants names the cron instants a report's cron passed while its
+// previous occurrence's run was in flight: after that occurrence was created and
+// before the occurrence just minted. Base only moves when a run ends, so these
+// instants never get an occurrence. The skip is policy (resume, do not backfill);
+// this is the only record of it.
+//
+// The window starts at the previous occurrence's creation time, not at its cron
+// instant and not at the schedule's creation. A pause, an edit of the cron
+// expression, or a scheduler stop before that moment is therefore never counted.
+// No column records when a job was enabled or its cron edited (updated_at is
+// rewritten by every sweep), so this is the latest start the data supports.
+type UnmintedInstants struct {
+	ReportID  string
+	MintedFor time.Time
+	// Count is how many instants were passed over. When Capped, the scan stopped
+	// at unmintedScanLimit and Count is a lower bound.
+	Count  int
+	Capped bool
+	// Named holds every instant when Count <= unmintedNamedLimit, otherwise the
+	// first and the last one scanned.
+	Named []time.Time
+}
+
+// UnmintedCountFailure names one minted occurrence whose count failed.
+type UnmintedCountFailure struct {
+	ReportID  string
+	MintedFor time.Time
+	Error     string
+}
+
+// unmintedInstants enumerates the cron instants after the previous occurrence's
+// creation and before the occurrence just minted, at most unmintedScanLimit.
+func (producer *ScheduledReportsProducer) unmintedInstants(
+	candidate dueReportCandidate,
+	mintedFor time.Time,
+) (UnmintedInstants, error) {
+	unminted := UnmintedInstants{ReportID: candidate.ReportID, MintedFor: mintedFor.UTC()}
+	if candidate.PreviousOccurrenceCreatedAt == nil {
+		return unminted, nil
+	}
+	var scanned []time.Time
+	instant := candidate.PreviousOccurrenceCreatedAt.UTC()
+	for {
+		next, err := producer.nextRun(candidate, instant)
+		if err != nil {
+			return UnmintedInstants{}, err
+		}
+		if !next.Before(unminted.MintedFor) {
+			break
+		}
+		if len(scanned) == unmintedScanLimit {
+			unminted.Capped = true
+			break
+		}
+		scanned = append(scanned, next)
+		instant = next
+	}
+	unminted.Count = len(scanned)
+	if unminted.Count <= unmintedNamedLimit {
+		unminted.Named = scanned
+	} else {
+		unminted.Named = []time.Time{scanned[0], scanned[len(scanned)-1]}
+	}
+	return unminted, nil
 }
 
 // nextRun resolves the next cron occurrence strictly after base.
@@ -883,10 +981,15 @@ func (producer *ScheduledReportsProducer) lockDueCandidates(
 			&candidate.Base,
 			&candidate.NextDueAt,
 			&candidate.AlreadyMaterialized,
+			&candidate.PreviousOccurrenceCreatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("scan due scheduled report: %w", err)
 		}
 		candidate.Base = candidate.Base.UTC()
+		if candidate.PreviousOccurrenceCreatedAt != nil {
+			previousCreatedAt := candidate.PreviousOccurrenceCreatedAt.UTC()
+			candidate.PreviousOccurrenceCreatedAt = &previousCreatedAt
+		}
 		if candidate.NextDueAt != nil {
 			nextDueAt := candidate.NextDueAt.UTC()
 			candidate.NextDueAt = &nextDueAt
@@ -1016,7 +1119,8 @@ SELECT job.id::text,
        report.id::text,
        COALESCE(report.last_run_at, report.created_at),
        job.next_run_at,
-       replay.occurrence_id IS NOT NULL
+       replay.occurrence_id IS NOT NULL,
+       previous.created_at
 FROM public.scheduled_jobs AS job
 JOIN public.saved_reports AS report
     ON report.schedule_id = job.id
@@ -1045,6 +1149,17 @@ LEFT JOIN LATERAL (
     ORDER BY occurrence.scheduled_for
     LIMIT 1
 ) AS replay ON TRUE
+-- The newest occurrence the report already has. When the sweep mints a new one,
+-- this is the previous occurrence: its creation time starts the window in which a
+-- cron instant counts as skipped, so a pause or a cron edit before that window is
+-- never counted.
+LEFT JOIN LATERAL (
+    SELECT latest.created_at
+    FROM public.scheduled_report_occurrences AS latest
+    WHERE latest.report_id = report.id
+    ORDER BY latest.scheduled_for DESC
+    LIMIT 1
+) AS previous ON TRUE
 WHERE job.job_type = '` + reportJobType + `'
   AND job.status = $1
   AND job.is_running = FALSE

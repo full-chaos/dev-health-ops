@@ -518,6 +518,24 @@ GraphQL create and update writes evaluate the cron before persistence and keep
 `next_run_at` current; the producer independently re-evaluates it as a runtime
 backstop for legacy, corrupt, or direct-database rows.
 
+A report's due time is measured from its last finished run. When a run is still
+open as the cron passes an instant, no occurrence is made for that instant: the
+sweep resumes at the next instant after the run ends and does not backfill. This
+is the same rule as for scheduled syncs. The scheduler records each such skip.
+When it mints an occurrence it counts the cron instants that passed after the
+previous occurrence was created and before the new one. It adds the count to
+`report_scheduler_unminted_instants_total` and writes one WARN line,
+`report scheduler minted an occurrence past cron instants that no run stood for`
+(`reason=unminted_instants`, `report_id`, `scheduled_for`, `unminted_count`,
+`unminted_count_capped`, `unminted_instants`). `unminted_instants` names every
+instant when there are at most 3, otherwise the first and the last. The count
+stops at 1,024 (`unminted_count_capped=true`). A count that fails writes
+`reason=unminted_count_failed` and never stops the occurrence. The window starts
+when the previous occurrence was created, so a pause or a cron edit before that
+moment is not counted; the data holds no stamp for either. One line after a long
+run is normal. Steady growth for one report means its runs take longer than its
+cron interval.
+
 The fixed scheduler stores each producer's latest degraded verdict in the same
 PostgreSQL occurrence row as the committed evaluation. The
 `fixed_scheduler_schedule_degraded` gauge therefore reports shared durable

@@ -284,7 +284,6 @@ func runOwnership(t *testing.T, golden *venueoracle.Golden, cases []scenario, wi
 	ctx := context.Background()
 	idSeq = 0 // each oracle numbers its ids from 1, whichever tests ran before it
 	root := repoRoot(t)
-	const jwtKey = "venue-oracle-test-secret-key-for-ownership-32-bytes!"
 	all := make([]ids, len(cases))
 	for i := range cases {
 		all[i] = ids{pushOrg: nextID(), batchOrg: nextID(), pushAdmin: nextID(),
@@ -294,8 +293,8 @@ func runOwnership(t *testing.T, golden *venueoracle.Golden, cases []scenario, wi
 	batchTokens := make([][]batchSource, len(cases))
 
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Golden: golden,
-		Root:   root, JWTKey: jwtKey,
+		Golden:    golden,
+		Root:      root,
 		PythonEnv: pythonEnv(withKey),
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
 			exec := func(sql string, args ...any) {
@@ -405,7 +404,7 @@ VALUES ($1, $2, $3, 'venue', $4, 'fcpush_venue', $5::jsonb, now())`, nextID(), i
 		t.Fatalf("python /metrics answered %d", pythonMetrics.Status)
 	}
 
-	goBase, operator := startGoServer(t, ctx, venue, jwtKey, withKey)
+	goBase, operator := startGoServer(t, ctx, venue, withKey)
 	receipt := venueoracle.Diff(t, goBase, requests, python[:len(requests)], venueoracle.DiffOptions{Golden: golden, Normalize: normalize})
 	t.Log(receipt)
 	if withKey {
@@ -472,7 +471,7 @@ func pythonEnv(withKey bool) []string {
 	return nil
 }
 
-func startGoServer(t *testing.T, ctx context.Context, venue *venueoracle.Venue, jwtKey string, withKey bool) (string, func() string) {
+func startGoServer(t *testing.T, ctx context.Context, venue *venueoracle.Venue, withKey bool) (string, func() string) {
 	t.Helper()
 	pool, err := pgxpool.New(ctx, venue.GoAPIDatabaseURI(t))
 	if err != nil {

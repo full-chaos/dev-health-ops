@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -181,7 +182,7 @@ func lastVenueRunScenarios() []scenario {
 }
 
 func TestLastVenueRunScript(t *testing.T) {
-	if _, err := os.Stat("/usr/bin/jq"); err != nil {
+	if _, err := exec.LookPath("jq"); err != nil {
 		t.Skip("ci/last-venue-run.sh needs jq, and the fixtures gh uses it too")
 	}
 	script := scriptPath(t, "ci/last-venue-run.sh")

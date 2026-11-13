@@ -185,9 +185,9 @@ type edgeIssuer struct {
 	other *edtokens.Issuer
 }
 
-// startEdgeIssuer serves the issuer and makes this test process trust it: http.DefaultTransport (the transport of
-// the JWKS client Build makes) is replaced by a clone whose RootCAs is the stub's CA until the test ends. The test
-// that calls it must not be parallel and start no parallel subtests: the transport is process-wide.
+// startEdgeIssuer serves the issuer and makes the JWKS client Build makes trust it until the test ends
+// (trustEdgeIssuerJWKS). The test that calls it must not be parallel and start no parallel subtests: the trust is
+// process-wide.
 func startEdgeIssuer(t *testing.T) edgeIssuer {
 	t.Helper()
 	files, err := issuerstub.Prepare(t.TempDir(), "")
@@ -227,26 +227,7 @@ func startEdgeIssuer(t *testing.T) edgeIssuer {
 	go func() { _ = server.ServeTLS(listener, "", "") }()
 	t.Cleanup(func() { _ = server.Close() })
 
-	saved := http.DefaultTransport
-	base, ok := saved.(*http.Transport)
-	if !ok {
-		t.Fatalf("http.DefaultTransport is a %T, not an *http.Transport: it cannot be cloned", saved)
-	}
-	trusting := base.Clone()
-	if trusting.TLSClientConfig == nil {
-		trusting.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
-	}
-	trusting.TLSClientConfig.RootCAs = roots
-	http.DefaultTransport = trusting
-	t.Cleanup(func() {
-		if http.DefaultTransport != http.RoundTripper(trusting) {
-			t.Errorf("http.DefaultTransport was replaced again during the test: the restore would drop that replacement")
-		}
-		http.DefaultTransport = saved
-		if http.DefaultTransport != saved {
-			t.Errorf("http.DefaultTransport was not restored")
-		}
-	})
+	trustEdgeIssuerJWKS(t, roots)
 
 	tokens, err := edtokens.FromKey(priv, issuerstub.DefaultKeyID, issuerURL)
 	if err != nil {

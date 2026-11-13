@@ -388,21 +388,45 @@ func (f fakeOrgs) OrganizationExists(context.Context, uuid.UUID) (bool, error) {
 	return f.exists, f.err
 }
 
+// fakeInventory is the org's repositories as two reads see them: the empty-org
+// probe (HasRepositories: any repo at all) and the user's read listing
+// (ReadableRepositories: listing when set, else the user reads exactly repos).
 type fakeInventory struct {
-	repos []string
-	err   error
-	calls int
-	mu    sync.Mutex
+	repos     []string
+	listing   *sessionissue.Readable
+	err       error
+	listErr   error
+	calls     int
+	listCalls int
+	listUser  uuid.UUID
+	mu        sync.Mutex
 }
 
-func (f *fakeInventory) Repositories(_ context.Context, org uuid.UUID) ([]string, error) {
+func (f *fakeInventory) HasRepositories(_ context.Context, org uuid.UUID) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls++
 	if org != accessOrg {
-		return nil, errors.New("inventory of another org")
+		return false, errors.New("probe of another org")
 	}
-	return f.repos, f.err
+	return len(f.repos) > 0, f.err
+}
+
+func (f *fakeInventory) ReadableRepositories(_ context.Context, user, org uuid.UUID) (sessionissue.Readable, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.listCalls++
+	f.listUser = user
+	if org != accessOrg {
+		return sessionissue.Readable{}, errors.New("listing of another org")
+	}
+	if f.err != nil || f.listErr != nil {
+		return sessionissue.Readable{}, errors.Join(f.err, f.listErr)
+	}
+	if f.listing != nil {
+		return *f.listing, nil
+	}
+	return sessionissue.Readable{Scope: sessionissue.ReadableRepositories, Repositories: f.repos}, nil
 }
 
 type accessFixture struct {
@@ -422,7 +446,7 @@ func newAccessFixture() *accessFixture {
 }
 
 func (f *accessFixture) store() AccessStore {
-	return AccessStore{Organizations: f.orgs, Reads: f.reads, Features: f.features, Inventory: f.inventory, Sessions: f.reads}
+	return AccessStore{Organizations: f.orgs, Reads: f.reads, Features: f.features, Listing: f.inventory, Existence: f.inventory, Sessions: f.reads}
 }
 
 func (f *accessFixture) read(t *testing.T, user uuid.UUID, session *uuid.UUID) (PrincipalAccess, error) {
@@ -439,7 +463,8 @@ func TestAccessStoreServesEveryFieldLive(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := PrincipalAccess{Member: true, Session: &SessionAccess{Live: true, Reason: sessionReasonLive},
-		AskDev: true, AgentContextRuntime: true, ACRBasis: "both", Repositories: []string{"acme/api", "acme/web"}}
+		AskDev: true, AgentContextRuntime: true, ACRBasis: "both", Repositories: []string{"acme/api", "acme/web"},
+		ListingReason: "repositories"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("access = %+v (session %+v), want %+v", got, got.Session, want)
 	}
@@ -640,6 +665,8 @@ func TestAccessStoreFailsClosedOnEveryReadFailure(t *testing.T) {
 		{"ask_dev", func(f *accessFixture) { f.features.err["ask_dev"] = errBoom }},
 		{"agent_context_runtime", func(f *accessFixture) { f.features.err["agent_context_runtime"] = errBoom }},
 		{"inventory", func(f *accessFixture) { f.inventory.err = errBoom }},
+		{"read listing", func(f *accessFixture) { f.inventory.listErr = errBoom }},
+		{"read listing, empty org", func(f *accessFixture) { f.inventory.repos, f.inventory.listErr = nil, errBoom }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -662,7 +689,7 @@ func TestAccessStoreUnknownOrganization(t *testing.T) {
 	if _, err := f.read(t, accessUser, nil); !errors.Is(err, ErrOrgUnknown) {
 		t.Fatalf("err = %v, want ErrOrgUnknown", err)
 	}
-	if f.inventory.calls != 0 || f.features.calls != 0 {
+	if f.inventory.calls != 0 || f.inventory.listCalls != 0 || f.features.calls != 0 {
 		t.Fatal("an unknown organization must read nothing else")
 	}
 }
@@ -670,9 +697,14 @@ func TestAccessStoreUnknownOrganization(t *testing.T) {
 func TestAccessStoreNotConfiguredIsUnavailable(t *testing.T) {
 	f := newAccessFixture()
 	store := f.store()
-	store.Inventory = nil
+	store.Listing = nil
 	if _, err := store.Access(context.Background(), AccessQuery{OrgID: accessOrg, UserID: accessUser}); !errors.Is(err, ErrUnavailable) {
-		t.Fatalf("err = %v, want ErrUnavailable without an inventory reader", err)
+		t.Fatalf("err = %v, want ErrUnavailable without a read listing", err)
+	}
+	store = f.store()
+	store.Existence = nil
+	if _, err := store.Access(context.Background(), AccessQuery{OrgID: accessOrg, UserID: accessUser}); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("err = %v, want ErrUnavailable without an existence probe", err)
 	}
 }
 
@@ -696,7 +728,7 @@ func TestAccessStoreReadsLiveOnEveryCall(t *testing.T) {
 	if second.Session.Live || second.AskDev || len(second.Repositories) != 0 {
 		t.Fatalf("second = %+v (session %+v): a change between calls must be read", second, second.Session)
 	}
-	if f.reads.calls["sessions"] != 2 || f.inventory.calls != 2 || f.features.calls != 4 {
+	if f.reads.calls["sessions"] != 2 || f.inventory.calls != 2 || f.inventory.listCalls != 2 || f.features.calls != 4 {
 		t.Fatalf("calls %v inventory %d features %d", f.reads.calls, f.inventory.calls, f.features.calls)
 	}
 }

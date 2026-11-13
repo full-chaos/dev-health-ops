@@ -17,13 +17,13 @@ import (
 
 var ddls = []string{
 	`CREATE TABLE repos (id UUID, repo String, provider String DEFAULT 'unknown', org_id String DEFAULT 'default',
-      created_at DateTime64(3, 'UTC'), last_synced DateTime64(3, 'UTC')) ENGINE = ReplacingMergeTree(last_synced) ORDER BY id`,
+      created_at DateTime64(3, 'UTC'), last_synced DateTime64(3, 'UTC')) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, id)`,
 	`CREATE TABLE git_commits (repo_id UUID, hash String, author_name Nullable(String), author_email Nullable(String),
       committer_when DateTime64(3, 'UTC'), org_id String DEFAULT 'default', last_synced DateTime64(3, 'UTC'))
-      ENGINE = ReplacingMergeTree(last_synced) ORDER BY (repo_id, hash)`,
+      ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, hash)`,
 	`CREATE TABLE git_commit_stats (repo_id UUID, commit_hash String, file_path String, additions Int32, deletions Int32,
       org_id String DEFAULT 'default', last_synced DateTime64(3, 'UTC'))
-      ENGINE = ReplacingMergeTree(last_synced) ORDER BY (repo_id, commit_hash, file_path)`,
+      ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, commit_hash, file_path)`,
 	`CREATE TABLE teams (id String, org_id String DEFAULT 'default', is_active UInt8 DEFAULT 1,
       updated_at DateTime64(6) DEFAULT now64(6), last_synced DateTime64(6) DEFAULT now64(6))
       ENGINE = ReplacingMergeTree(updated_at) ORDER BY (org_id, id)`,
@@ -249,5 +249,31 @@ func TestRealClickHouse_SameRepoIDInTwoOrgs(t *testing.T) {
 	}
 	if len(other.Repos) != 0 {
 		t.Errorf("org-1 resolved org-2's team ownership: %#v", other.Repos)
+	}
+}
+
+func TestRealClickHouse_DuplicateRowsDoNotMultiplyChurn(t *testing.T) {
+	for _, dup := range []string{"stats", "commit", "repo"} {
+		t.Run(dup, func(t *testing.T) {
+			ctx, conn, client := startStore(t)
+			repo(t, ctx, conn, "org-1", rA, "acme/web")
+			commit(t, ctx, conn, "org-1", rA, "a1", "alice@x", "", 60, 20)
+			commit(t, ctx, conn, "org-1", rA, "a2", "bob@x", "", 10, 10)
+			switch dup {
+			case "stats":
+				exec(t, ctx, conn, `INSERT INTO git_commit_stats (repo_id, commit_hash, file_path, additions, deletions, org_id, last_synced) SELECT '%s', 'a1', 'f.go', 60, 20, 'org-1', now64(3) + INTERVAL 1 SECOND`, rA)
+			case "commit":
+				exec(t, ctx, conn, `INSERT INTO git_commits (repo_id, hash, author_name, author_email, committer_when, org_id, last_synced) SELECT '%s', 'a1', NULL, 'alice@x', now64(3), 'org-1', now64(3) + INTERVAL 1 SECOND`, rA)
+			case "repo":
+				exec(t, ctx, conn, `INSERT INTO repos (id, repo, provider, org_id, created_at, last_synced) SELECT '%s', 'acme/web', 'github', 'org-1', now64(3), now64(3) + INTERVAL 1 SECOND`, rA)
+			}
+			got, err := Resolve(ctx, client, "org-1", nil, time.Now().UTC())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.EvidenceSampleCount != 2 || len(got.TopMaintainers) != 2 || got.TopMaintainers[0].Author != "alice@x" {
+				t.Errorf("%s duplicate changed the evidence: %#v", dup, got)
+			}
+		})
 	}
 }

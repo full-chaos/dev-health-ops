@@ -107,7 +107,7 @@ func TestMCPClassParityVenueOracle(t *testing.T) {
 	schemaDigest := digest.Schema(schemav1.SDL)
 	issuer := startEdgeIssuer(t)
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Root: root, GoOnly: true, JWTKey: edgeOracleJWTKey, TokenIssuer: issuer.tokens,
+		Root: root, GoOnly: true, TokenIssuer: issuer.tokens,
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
 			exec := func(sql string, args ...any) {

@@ -103,7 +103,6 @@ func TestVenueOracleQueryAPIDictOrder(t *testing.T) {
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Golden: golden, Root: root,
 		// No route here checks a token; the key is the one the other venue oracles of this package use.
-		JWTKey: oracleJWTKey,
 	})
 
 	// One identity with a work-item metrics row on both databases, so the

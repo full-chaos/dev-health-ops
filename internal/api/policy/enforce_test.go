@@ -626,8 +626,9 @@ func collectSum(t *testing.T, reader *sdkmetric.ManualReader, name, label string
 	return description, values
 }
 
-// No caller gives the unjudged counter a "delegated" reason: its closed reason set is hs256, no_org, served_org and
-// impersonation (a live-row read; the live-row platform wrap is refused, not unjudged).
+// A delegated session's bearer with an organization gives the unjudged counter no reason: it is judged. Its closed
+// reason set is hs256, no_org, served_org, org_required, delegated_orgless (a delegated bearer with NO organization,
+// CHAOS-10872 S1) and impersonation (a live-row read; the live-row platform wrap is refused, not unjudged).
 func TestTheUnjudgedCounterHasNoDelegatedReason(t *testing.T) {
 	recordEnforce(t)
 	reader := sdkmetric.NewManualReader()
@@ -641,10 +642,10 @@ func TestTheUnjudgedCounterHasNoDelegatedReason(t *testing.T) {
 	noOrg := userClaims(func(c *AccessTokenClaims) { c.OrgID = nil })
 	enforceRequest(enforceHandler(t, personaStore(personaAdmin), noOrg, newEnforcerFor(t, pdp.client(t), onFor("teams"))), http.MethodGet, "/api/v1/admin/teams")
 	description, reasons := collectSum(t, reader, enforceUnjudgedMetric, "reason")
-	if !slices.Equal(reasons, []string{"impersonation", "no_org"}) {
-		t.Errorf("unjudged reasons %v, want [impersonation no_org] (no delegated point)", reasons)
+	if !slices.Equal(reasons, []string{"impersonation", "org_required"}) {
+		t.Errorf("unjudged reasons %v, want [impersonation org_required] (no delegated point)", reasons)
 	}
-	if want := "by route row and reason: hs256, no_org, served_org, impersonation"; !strings.HasSuffix(description, want) {
+	if want := "by route row and reason: hs256, no_org, served_org, org_required, delegated_orgless, impersonation"; !strings.HasSuffix(description, want) {
 		t.Errorf("unjudged description %q, want it to end %q", description, want)
 	}
 }
@@ -680,6 +681,8 @@ func TestTheEnforcementOutcomeSetIsClosed(t *testing.T) {
 	}
 }
 
+// An AdminOrg route refuses a token with no organization whoever it is: the decision point is not asked, the answer is
+// the legacy one, counted unjudged org_required (CHAOS-10872 S1).
 func TestAnOrganizationRouteWithNoOrganizationKeepsTheLegacyAnswerAndIsCountedUnjudged(t *testing.T) {
 	rec := recordEnforce(t)
 	pdp := newTestPDP(t, denyWith("role_lacks_action"))
@@ -689,8 +692,8 @@ func TestAnOrganizationRouteWithNoOrganizationKeepsTheLegacyAnswerAndIsCountedUn
 	if got.status != base.status || got.body != base.body {
 		t.Fatalf("no organization: %d %q, want the legacy %d %q", got.status, got.body, base.status, base.body)
 	}
-	if n := len(pdp.calls()); n != 0 || !slices.Equal(rec.unjudgedSnapshot(), []string{"GET /api/v1/admin/teams/no_org"}) {
-		t.Fatalf("%d PDP calls, unjudged %v, want 0 and [GET /api/v1/admin/teams/no_org]", n, rec.unjudgedSnapshot())
+	if n := len(pdp.calls()); n != 0 || !slices.Equal(rec.unjudgedSnapshot(), []string{"GET /api/v1/admin/teams/org_required"}) {
+		t.Fatalf("%d PDP calls, unjudged %v, want 0 and [GET /api/v1/admin/teams/org_required]", n, rec.unjudgedSnapshot())
 	}
 }
 
@@ -720,8 +723,8 @@ func TestAnUnjudgedRequestLogsOneDebugLineThatQuotesNoToken(t *testing.T) {
 	noOrg := userClaims(func(c *AccessTokenClaims) { c.OrgID = nil })
 	enforceRequest(enforceHandler(t, personaStore(personaAdmin), noOrg, enf), http.MethodGet, "/api/v1/admin/teams")
 	line := logs.String()
-	if strings.Count(line, "level=DEBUG") != 1 || !strings.Contains(line, "reason=no_org") || !strings.Contains(line, "route=\"GET /api/v1/admin/teams\"") {
-		t.Fatalf("log %q: want one DEBUG line with the route and reason no_org", line)
+	if strings.Count(line, "level=DEBUG") != 1 || !strings.Contains(line, "reason=org_required") || !strings.Contains(line, "route=\"GET /api/v1/admin/teams\"") {
+		t.Fatalf("log %q: want one DEBUG line with the route and reason org_required", line)
 	}
 	if strings.Contains(line, shadowBearer) {
 		t.Fatalf("the log quotes the token: %q", line)

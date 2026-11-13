@@ -518,9 +518,10 @@ const nullableIntoPlainSites = `
 // owner_team_id are plain String, not Nullable, so the scan into *string is safe.
 // CHAOS-13705: three explain pins re-pinned by hand, digests copied from the hosted TestScanTypeCensus failure output of job 132076907184
 // (not computed): scope filter now from the unresolved branch, types unchanged (no column or type change):
-//   09e3a4863c03 -> 06f0dd79850a
-//   ed3ed30df2f7 -> 696073003934
-//   42ca92597595 -> cc6f1e4e4f8c
+//
+//	09e3a4863c03 -> 06f0dd79850a
+//	ed3ed30df2f7 -> 696073003934
+//	42ca92597595 -> cc6f1e4e4f8c
 const unverifiedSites = `
 internal/queryapi/aggflame/clickhouse.go|fetchCycleBreakdown|*string,*float64,*uint64|a003456ad69e|not-describable
 internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*string,*uint64,*[]string|7ecb45f4962b|not-describable

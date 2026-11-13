@@ -8,6 +8,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -303,4 +304,91 @@ func scanEmbeddedTrackedFiles(root string, tracked []string) ([]string, error) {
 		return nil, fmt.Errorf("no go:embed file resolved: the scan measures nothing")
 	}
 	return sortedKeysBool(found), nil
+}
+
+// liveE2EFilterEntries returns the entries of one key of the live-e2e `changes` path filter.
+func liveE2EFilterEntries(t *testing.T, doc yamlMap, key string) []string {
+	t.Helper()
+	var out []string
+	for _, st := range stepsOf(jobsOf(doc)["changes"]) {
+		if f := asString(asMap(st["with"])["filters"]); f != "" {
+			for _, e := range asList(parseYAML(t, f, "paths filters")[key]) {
+				out = append(out, asString(e))
+			}
+		}
+	}
+	return out
+}
+
+// metricsProofPathViolations: metrics-executed-proof-run needs code == 'true' as well, so a metrics_proof entry outside
+// `code` would never run it. Every tracked file a metrics_proof entry matches is covered by `code` (testdata/ files
+// are not built into a binary; an embedded one is already demanded in `code` by TestLiveE2EInstallsNoPython), and
+// every entry matches a tracked file (a stale path selects nothing).
+func metricsProofPathViolations(t *testing.T, root string) []string {
+	t.Helper()
+	var out []string
+	doc := loadWf(t, root, e2eWorkflow)
+	proof := liveE2EFilterEntries(t, doc, "metrics_proof")
+	if len(proof) == 0 {
+		return []string{"the live-e2e path filter has no metrics_proof entries"}
+	}
+	var code []*regexp.Regexp
+	for _, p := range liveE2EFilterEntries(t, doc, "code") {
+		re, err := githubGlobToRegexp(p)
+		if err != nil {
+			return []string{err.Error()}
+		}
+		code = append(code, re)
+	}
+	tracked, err := trackedPaths(repoRoot(t), repoRoot(t))
+	if err != nil {
+		return []string{"cannot list tracked files: " + err.Error()}
+	}
+	for _, p := range proof {
+		re, err := githubGlobToRegexp(p)
+		if err != nil {
+			out = append(out, err.Error())
+			continue
+		}
+		matched := false
+		for _, f := range tracked {
+			if !re.MatchString(f) {
+				continue
+			}
+			matched = true
+			if strings.Contains("/"+f, "/testdata/") || slices.ContainsFunc(code, func(c *regexp.Regexp) bool { return c.MatchString(f) }) {
+				continue
+			}
+			out = append(out, fmt.Sprintf("the metrics_proof entry %s matches %s, which no code entry covers: the job needs code == 'true' and would not run", p, f))
+			break
+		}
+		if !matched {
+			out = append(out, fmt.Sprintf("the metrics_proof entry %s matches no tracked file", p))
+		}
+	}
+	return out
+}
+
+func TestLiveE2EMetricsProofPathsAreCode(t *testing.T) {
+	t.Parallel()
+	expectNoViolations(t, metricsProofPathViolations(t, repoRoot(t)))
+}
+
+func TestLiveE2EMetricsProofPathsPlantedDefects(t *testing.T) {
+	t.Parallel()
+	root := repoRoot(t)
+	const wf = ".github/workflows/live-e2e.yml"
+	cases := []struct {
+		name string
+		mut  mutation
+		want []string
+	}{
+		{"an entry outside code", mutation{wf, "              - 'ci/run_metrics_executed_proof.sh'\n", "              - 'ci/run_metrics_executed_proof.sh'\n              - 'Makefile'\n"}, []string{"metrics_proof entry Makefile", "no code entry covers"}},
+		{"a stale entry", mutation{wf, "              - 'internal/pgmigrate/**'\n", "              - 'internal/pgmigrate/**'\n              - 'internal/no-such-package/**'\n"}, []string{"internal/no-such-package/**", "matches no tracked file"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			expectViolation(t, metricsProofPathViolations(t, plantTree(t, root, []string{wf}, c.mut)), c.want...)
+		})
+	}
 }

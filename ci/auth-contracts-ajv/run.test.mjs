@@ -300,13 +300,26 @@ test("the foreign-class count command of the docs answers 0 here, names every un
     assert.equal(result.status, 0, result.stderr);
     return JSON.parse(result.stdout);
   };
-  // Not counted: exactly the unanchored validators, read from the registry itself (the 4 retired ones among them).
+  // Not counted: exactly the unanchored validators, read from the registry itself. Every retired class with an
+  // unanchored validator is named there; that set comes from the registry too (no class id is written here).
   const registry = JSON.parse(readFileSync(path.join(repo, "contracts", "auth", "v1", "credential-classes.json"), "utf8"));
-  const retired = registry.classes.flatMap((c) => (c.validators ?? []).flatMap((v, i) => (v.anchor === null ? [`${c.class_id} validators[${i}]`] : [])));
-  for (const id of ["ops_refresh_token", "internal_svc_acr_token", "internal_svc_worker_token", "external_push_ingest_token"]) {
-    assert.ok(retired.includes(`${id} validators[0]`), `${id} validators[0] is not among the unanchored`);
-  }
-  assert.deepEqual(run(repo), { foreign_class_validator: 0, not_counted_unanchored: retired });
+  const unanchored = registry.classes.flatMap((c) => (c.validators ?? []).flatMap((v, i) => (v.anchor === null ? [`${c.class_id} validators[${i}]`] : [])));
+  const retiredWithUnanchored = registry.classes
+    .filter((c) => c.status === "retired" && (c.validators ?? []).some((v) => v.anchor === null))
+    .map((c) => c.class_id)
+    .sort();
+  assert.ok(retiredWithUnanchored.length > 0, "the registry has no retired class with an unanchored validator: the check measures nothing");
+  const check = (output, want) => {
+    const named = [...new Set(output.not_counted_unanchored.map((entry) => entry.split(" ")[0]))].filter((id) => retiredWithUnanchored.includes(id)).sort();
+    assert.deepEqual(named, retiredWithUnanchored, "a retired class with an unanchored validator is not named by the count");
+    assert.deepEqual(output, want);
+  };
+  const here = run(repo);
+  check(here, { foreign_class_validator: 0, not_counted_unanchored: unanchored });
+  // Planted defect: the output without one retired class's entries must fail the check.
+  const dropped = retiredWithUnanchored[0];
+  const planted = { ...here, not_counted_unanchored: here.not_counted_unanchored.filter((entry) => !entry.startsWith(dropped + " ")) };
+  assert.throws(() => check(planted, planted), /a retired class with an unanchored validator is not named/);
   const root = mkdtempSync(path.join(os.tmpdir(), "foreign-count-"));
   try {
     const v1 = path.join(root, "contracts", "auth", "v1");
@@ -317,7 +330,7 @@ test("the foreign-class count command of the docs answers 0 here, names every un
     row.reachable_validators[0].earlier_auth_gate = false;
     row.reachable_validators[0].foreign_class_validator = true;
     writeFileSync(path.join(v1, "endpoint-profiles.go-api.json"), JSON.stringify(document));
-    assert.deepEqual(run(root), { foreign_class_validator: 1, not_counted_unanchored: retired });
+    assert.deepEqual(run(root), { foreign_class_validator: 1, not_counted_unanchored: unanchored });
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

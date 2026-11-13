@@ -11,6 +11,7 @@ const ssoProvidersEnv = "AUTH_SSO_PROVIDERS_OWNED"
 var ssoProvidersJobs = []struct{ kind, name string }{
 	{"Job", "a-dev-health-auth-migrate"},
 	{"Job", "a-dev-health-auth-grants"},
+	{"Deployment", "a-dev-health-auth-service"},
 }
 
 // Default and false render the switch nowhere: the grants Jobs carry no new variable, so the prod grants stay as they are.
@@ -43,8 +44,8 @@ func TestSSOProvidersOwnedFalseRendersNothing(t *testing.T) {
 	}
 }
 
-// True renders AUTH_SSO_PROVIDERS_OWNED=true on the auth-migrate and auth-grants Jobs, and on no other workload.
-func TestSSOProvidersOwnedTrueRendersOnTheTwoGrantJobsOnly(t *testing.T) {
+// True renders AUTH_SSO_PROVIDERS_OWNED=true on the auth-migrate and auth-grants Jobs and on auth-service (the routes mount from it), and on no other workload.
+func TestSSOProvidersOwnedTrueRendersOnTheGrantJobsAndAuthService(t *testing.T) {
 	t.Parallel()
 
 	docs, out, err := renderAuth(t, phaseArgs(4, "--set", "authService.ssoProvidersOwned=true")...)
@@ -61,11 +62,11 @@ func TestSSOProvidersOwnedTrueRendersOnTheTwoGrantJobsOnly(t *testing.T) {
 		}
 	}
 	for _, other := range []struct{ kind, name string }{
-		{"Deployment", "a-dev-health-auth-service"}, {"Deployment", "a-dev-health-go-api"}, {"Deployment", "a-dev-health-query-api"},
+		{"Deployment", "a-dev-health-go-api"}, {"Deployment", "a-dev-health-query-api"},
 	} {
 		if doc := authDoc(docs, other.kind, other.name); doc != nil {
 			if _, set := containerEnvValue(t, doc, ssoProvidersEnv); set {
-				t.Errorf("%s sets %s; only the two grant Jobs do", other.name, ssoProvidersEnv)
+				t.Errorf("%s sets %s; only the grant Jobs and auth-service do", other.name, ssoProvidersEnv)
 			}
 		}
 	}

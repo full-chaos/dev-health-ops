@@ -143,6 +143,8 @@ type ProvisioningDeps struct {
 	ProfileRows []byte
 	// UsersAdminStores are the user-admin routes' stores: UsersAdminRoutes reads them, ProvisioningRoutes does not.
 	UsersAdminStores
+	// SSOProviderStores are the SSO provider routes' stores: SSOProviderRoutes reads them, ProvisioningRoutes does not.
+	SSOProviderStores
 }
 
 type provisioningHandlers struct {
@@ -264,7 +266,7 @@ func (h provisioningHandlers) caller(w http.ResponseWriter, r *http.Request, op,
 		h.retiredRefusals.Add(ctx, 1, metric.WithAttributes(attribute.String("operation", op)))
 		h.rec.logger.WarnContext(ctx, "provisioning route refused: service credential", "operation", op, "refusal", "retired_credential_class")
 	case issueClassWorkload:
-		if !workloadOperations[op] && !usersAdminOperations[op] {
+		if !workloadOperations[op] && !usersAdminOperations[op] && !ssoProviderOperations[op] {
 			h.rec.logger.WarnContext(ctx, "provisioning route refused: workload token", "operation", op, "refusal", "operation")
 			break
 		}

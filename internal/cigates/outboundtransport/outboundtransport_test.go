@@ -511,6 +511,7 @@ var approvedTransportConstructors = map[string]bool{
 	modulePath + "/internal/httpguard.Transport":              true,
 	modulePath + "/internal/httpguard.SharedTransport":        true,
 	modulePath + "/internal/api/externalurl.GuardedTransport": true,
+	modulePath + "/internal/api/externalurl.IdPTransport":     true,
 }
 
 // approvedTransportWrappers are the functions whose result is a non-nil RoundTripper over the transport they are given

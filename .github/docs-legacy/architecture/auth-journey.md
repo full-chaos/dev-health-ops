@@ -207,7 +207,7 @@ sequenceDiagram
 6. `GET /onboarding/state` returns `next_step="integration"` until the org has an active integration credential or a persisted skip.
 7. The primary first integration is GitHub App installation. Return-aware install handling sends users back to the onboarding flow after installation.
 8. `POST /onboarding/skip-integration` records `Organization.onboarding_integration_skipped_at` and returns a state with `next_step="complete"` and `integration_skipped=true` unless an integration is already connected.
-9. `GET /api/v1/admin/setup/status` powers admin setup gating after onboarding by distinguishing missing integration, missing sync config, failed sync, running sync, and ready states.
+9. `GET /api/v1/admin/setup/status` powers admin setup gating after onboarding by distinguishing missing integration, missing sync config, failed sync, running sync, and ready states. After an onboarding integration skip with no integration connected, `next_action` is `complete`, so the dashboard shows the skipped banner.
 
 **Completion:** Non-admin users complete onboarding when a first integration is connected or the integration step is skipped. Superusers/admins route to `dashboard` in onboarding state and do not block on first-run setup.
 

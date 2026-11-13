@@ -34,7 +34,7 @@ Each service has its own profile file. The row counts are:
 
 | Service | Protected | Public | Rows |
 | --- | --- | --- | --- |
-| auth-service | 60 | 28 | 88 |
+| auth-service | 67 | 28 | 95 |
 | go-api | 211 | 33 | 244 |
 | query-api | 37 | 8 | 45 |
 
@@ -128,24 +128,26 @@ Worked examples:
   web or acr sets `foreign_class_validator: true`.
 
 `contracts/auth/v1/credential-classes.json` lists the validators of each
-credential class with the same two fields, but only on a validator that has a
-code anchor. A validator with a null anchor (its code was not found or is gone,
-four of them retired Python validators) carries neither field: an unverified
-`false` would read as a measured 0. The schema lets only an unanchored entry
-leave the fields out, and the count names every such entry instead of counting
-it.
+credential class with the same two fields. Every validator names its code: the
+schema refuses a null anchor and a missing field, and
+`TestEveryCredentialValidatorNamesItsCode`
+(`internal/auth/contracts/credential_class_validator_anchors_test.go`) refuses
+an ops or acr anchor that is not a Go file and a description that cites the
+deleted Python api. A retired class names the Go code that refuses it. The four
+Python validators that ran a bearer through the user-JWT decoder are removed;
+`credentialanchors/credential-anchor-retired-evidence.tsv` records each removal
+and each moved slot.
 
-The count of foreign-class validators, with the entries it does not count named
-in its output (run at the ops repository root; add the web and acr profile files
-for the platform-wide count):
+The count of foreign-class validators (run at the ops repository root; add the
+web and acr profile files for the platform-wide count):
 
 ```sh
-jq -n '[inputs] as $d | {foreign_class_validator: ([$d[] | .. | objects | select(.foreign_class_validator == true)] | length), not_counted_unanchored: [$d[] | .classes[]? | .class_id as $c | (.validators // []) | to_entries[] | select(.value | has("foreign_class_validator") | not) | "\($c) validators[\(.key)]"]}' contracts/auth/v1/endpoint-profiles.*.json contracts/auth/v1/credential-classes.json
+jq -n '[inputs] as $d | {foreign_class_validator: ([$d[] | .. | objects | select(.foreign_class_validator == true)] | length)}' contracts/auth/v1/endpoint-profiles.*.json contracts/auth/v1/credential-classes.json
 ```
 
 `ci/auth-contracts-ajv/run.test.mjs` runs this command text from this page:
-on this repository it answers 0 and names every unanchored validator; on a
-fixture with one planted foreign-class entry it answers 1.
+on this repository it answers 0; on a fixture with one planted foreign-class
+entry it answers 1.
 
 ## Retired worker service credentials
 

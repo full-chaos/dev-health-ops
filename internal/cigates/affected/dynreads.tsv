@@ -112,6 +112,7 @@ internal/auth/contracts	principal_contract_goldens_test.go
 internal/auth/contracts	principal_wire_form_surface_test.go
 internal/auth/contracts	producer_columns_test.go
 internal/auth/contracts	provisioning_event_goldens_test.go
+internal/auth/contracts	provisioning_invite_email_test.go
 internal/auth/contracts	provisioning_resources_test.go
 internal/auth/contracts	read_api_grant_test.go
 internal/auth/contracts	read_api_test.go

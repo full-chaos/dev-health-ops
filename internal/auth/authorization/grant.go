@@ -49,6 +49,36 @@ func idPath(s Snapshot, orgID, id string) (string, bool) {
 	return path, found && path != ""
 }
 
+// RepositoryIdentityCopy is the optional side of a snapshot that read the organization's repository identity rows as
+// a set. A snapshot without it reads as an organization with no identity row.
+type RepositoryIdentityCopy interface {
+	// HasLiveRepositoryIdentity is true when at least one identity row of the organization has a live path: its path
+	// maps back to its own id (the livePath rule).
+	HasLiveRepositoryIdentity(orgID string) bool
+}
+
+// hasLiveIdentity reports whether the snapshot read at least one live identity row of the organization. With none, an
+// empty identity copy cannot tell "no repositories" from "the copy has not run", so the read listing does not recount.
+func hasLiveIdentity(s Snapshot, orgID string) bool {
+	c, ok := s.(RepositoryIdentityCopy)
+	return ok && c.HasLiveRepositoryIdentity(orgID)
+}
+
+// livePath reports whether path is the live path of a repository identity row: it resolves to one id, and idPath of
+// that id is path again.
+func livePath(s Snapshot, orgID, path string) bool {
+	ri, ok := s.(RepositoryIdentities)
+	if !ok {
+		return false
+	}
+	id, found := ri.RepositoryID(orgID, path)
+	if !found || id == "" {
+		return false
+	}
+	live, ok := idPath(s, orgID, id)
+	return ok && live == path
+}
+
 // ServiceAccount is a service-account principal's row in one organization.
 type ServiceAccount struct {
 	OrgID  string

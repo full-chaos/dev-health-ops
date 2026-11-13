@@ -92,11 +92,16 @@ type servedOrgSetup struct {
 	claims *RoutedResult
 	// adminOf gives the caller an admin row in these organizations too.
 	adminOf []string
+	// store, when set, replaces the persona's store.
+	store func() *accessStore
 }
 
 func servedOrgServe(t *testing.T, row servedOrgCensusRow, setup servedOrgSetup, served string) response {
 	t.Helper()
 	store := personaStore(setup.who)
+	if setup.store != nil {
+		store = setup.store()
+	}
 	for _, org := range setup.adminOf {
 		store.roles[[2]uuid.UUID{userID, uuid.MustParse(org)}] = "admin"
 		store.members[[2]uuid.UUID{userID, uuid.MustParse(org)}] = true
@@ -270,8 +275,9 @@ func TestServedOrgEnforcedCells(t *testing.T) {
 			})
 			// CHAOS-13596: a served organization that is no UUID is judged on the token organization like any other request;
 			// the scope and the handler keep refusing the value, so the composed answer is the legacy one. The double allows,
-			// as the decision point allows an admin of its token organization; other caller classes are taken from the
-			// executed real decision point table (PLAN-13596-2, F-3), not from a double.
+			// as the decision point allows an admin of its token organization. This cell pairs that one class only; the
+			// platform admin with no membership row is paired on the production evaluator below. The other caller classes
+			// are unpaired, named residuals in RISK-NOTES until the S2 real decision point table runs.
 			t.Run("a slug is judged on the token organization and keeps the legacy answer", func(t *testing.T) {
 				for _, slug := range []string{"acme", "not-a-uuid", strings.Repeat("g", 32)} {
 					legacy := servedOrgServe(t, row, servedOrgSetup{who: personaAdmin}, slug)

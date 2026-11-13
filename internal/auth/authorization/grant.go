@@ -49,6 +49,21 @@ func idPath(s Snapshot, orgID, id string) (string, bool) {
 	return path, found && path != ""
 }
 
+// livePath reports whether path is the live path of a repository identity row: it resolves to one id, and idPath of
+// that id is path again.
+func livePath(s Snapshot, orgID, path string) bool {
+	ri, ok := s.(RepositoryIdentities)
+	if !ok {
+		return false
+	}
+	id, found := ri.RepositoryID(orgID, path)
+	if !found || id == "" {
+		return false
+	}
+	live, ok := idPath(s, orgID, id)
+	return ok && live == path
+}
+
 // ServiceAccount is a service-account principal's row in one organization.
 type ServiceAccount struct {
 	OrgID  string

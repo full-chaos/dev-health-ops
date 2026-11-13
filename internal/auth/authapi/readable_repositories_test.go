@@ -49,10 +49,20 @@ type readableFixture struct {
 
 func newReadableFixture(t *testing.T) *readableFixture {
 	t.Helper()
+	return newReadableFixtureOn(t, nil)
+}
+
+// newReadableFixtureOn is newReadableFixture whose route reads through ls (its planted snapshots first), when ls is set.
+func newReadableFixtureOn(t *testing.T, ls *listingState) *readableFixture {
+	t.Helper()
 	f := &readableFixture{t: t, state: &fakeDecisionState{snapshots: map[snapKey]*fakeSnapshot{}}, logs: &bytes.Buffer{},
 		principal: uuid.New(), org: uuid.NewString()}
+	var state DecisionState = f.state
+	if ls != nil {
+		ls.inner, state = f.state, ls
+	}
 	routes, err := ReadableRepositoriesRoutes(ReadableRepositoriesDeps{
-		State: f.state, Evaluator: authorization.NewEvaluator(), Workload: testIssueWorkload(),
+		State: state, Evaluator: authorization.NewEvaluator(), Workload: testIssueWorkload(),
 		ProfileRows: readableRowsDoc(workloadTokenClass), Logger: slog.New(slog.NewJSONHandler(f.logs, nil)),
 	})
 	if err != nil {
@@ -256,18 +266,18 @@ func TestReadableRepositoriesAnswersThePrincipalsReadListing(t *testing.T) {
 		keys   []string
 		reason string
 	}{
-		"viewer by membership default":  {f.member("viewer", nil), ReadableScopeOrganization, nil, ""},
-		"member by membership default":  {f.member("member", nil), ReadableScopeOrganization, nil, ""},
-		"admin by membership default":   {f.member("admin", nil), ReadableScopeOrganization, nil, ""},
-		"owner by membership default":   {f.member("owner", nil), ReadableScopeOrganization, nil, ""},
-		"a live wildcard grant":         {f.member("member", []authorization.Grant{listedGrant(f.org, "*")}), ReadableScopeOrganization, nil, ""},
-		"named, 3 grants":               {f.member("member", named3), ReadableScopeRepositories, keys3, ""},
-		"named, 256 grants":             {f.member("member", named256), ReadableScopeRepositories, keys256, ""},
-		"named, 257 grants":             {f.member("member", named257), ReadableScopeDenied, nil, "repository_allowlist_too_large"},
-		"named, no live grant":          {f.member("member", []authorization.Grant{noLive}), ReadableScopeRepositories, []string{}, ""},
-		"platform admin, no membership": {platformAdmin, ReadableScopeDenied, nil, "no_membership"},
-		"suspended organization":        {suspended, ReadableScopeDenied, nil, "organization_inactive"},
-		"inactive principal":            {inactive, ReadableScopeDenied, nil, "principal_inactive"},
+		"viewer by membership default":       {f.member("viewer", nil), ReadableScopeOrganization, nil, ""},
+		"member by membership default":       {f.member("member", nil), ReadableScopeOrganization, nil, ""},
+		"admin by membership default":        {f.member("admin", nil), ReadableScopeOrganization, nil, ""},
+		"owner by membership default":        {f.member("owner", nil), ReadableScopeOrganization, nil, ""},
+		"a live wildcard grant":              {f.member("member", []authorization.Grant{listedGrant(f.org, "*")}), ReadableScopeOrganization, nil, ""},
+		"named, 3 grants":                    {f.member("member", named3), ReadableScopeRepositories, keys3, ""},
+		"named, 256 grants":                  {f.member("member", named256), ReadableScopeRepositories, keys256, ""},
+		"named, 257 grants, no identity row": {f.member("member", named257), ReadableScopeRepositories, []string{}, ""},
+		"named, no live grant":               {f.member("member", []authorization.Grant{noLive}), ReadableScopeRepositories, []string{}, ""},
+		"platform admin, no membership":      {platformAdmin, ReadableScopeDenied, nil, "no_membership"},
+		"suspended organization":             {suspended, ReadableScopeDenied, nil, "organization_inactive"},
+		"inactive principal":                 {inactive, ReadableScopeDenied, nil, "principal_inactive"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			f.plant(tc.snap)

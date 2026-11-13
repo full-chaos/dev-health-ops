@@ -1,6 +1,11 @@
 package decisionstate
 
-import "testing"
+import (
+	"fmt"
+	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/auth/authorization"
+)
 
 func TestSnapshotRepositoryID(t *testing.T) {
 	s := &snapshot{org: "org-a", repoIDs: map[string]string{"acme/api": "github:42", "acme/dup": ""}}
@@ -37,6 +42,32 @@ func TestSnapshotPathForID(t *testing.T) {
 	} {
 		if p, ok := s.PathForID(c[0], c[1]); ok || p != "" {
 			t.Errorf("%s: resolved %q", name, p)
+		}
+	}
+}
+
+// CHAOS-13618: the snapshot reads the identity rows for an id-bearing grant, and for more grant rows than an allowlist
+// holds (the read listing's recount); 256 or fewer path-only rows read none.
+func TestNeedsIdentities(t *testing.T) {
+	paths := func(n int) []authorization.Grant {
+		rows := make([]authorization.Grant, n)
+		for i := range rows {
+			rows[i] = authorization.Grant{ResourceKind: "repository", ResourceKey: fmt.Sprintf("acme/repo-%03d", i)}
+		}
+		return rows
+	}
+	withID := append(paths(3), authorization.Grant{ResourceKind: "repository", ResourceKey: "acme/x", RepoID: "github:1"})
+	for name, tc := range map[string]struct {
+		grants []authorization.Grant
+		want   bool
+	}{
+		"no grant":                  {nil, false},
+		"256 path-only grants":      {paths(256), false},
+		"257 path-only grants":      {paths(257), true},
+		"3 path-only and 1 with id": {withID, true},
+	} {
+		if got := needsIdentities(tc.grants); got != tc.want {
+			t.Errorf("%s: %v, want %v", name, got, tc.want)
 		}
 	}
 }

@@ -802,13 +802,12 @@
       "access_token_validation": {
         "legacy_hs256": false
       },
-      "action": null,
+      "action": "sso.write",
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
       "disclosure_behavior": null,
       "gaps": [
-        "action: no catalog action covers SSO provider management; no settings action is mapped because the handler check is not proven to equal one (this leaf does not extend the vocabulary)",
         "disclosure_behavior: the by-id or unauthenticated answer of this route is not traced in this record"
       ],
       "graphql_field_name": null,
@@ -5432,14 +5431,12 @@
       "access_token_validation": {
         "legacy_hs256": false
       },
-      "action": null,
+      "action": "settings.read",
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "allowed",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; once any body-first validation has run, a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:182; internal/api/policy/orgless.go:26)",
-      "gaps": [
-        "action: no catalog action covers SSO provider management; no settings action is mapped because the handler check is not proven to equal one (this leaf does not extend the vocabulary)"
-      ],
+      "gaps": [],
       "graphql_field_name": null,
       "id": "GET /api/v1/auth/sso/providers [dev-health-ops-api @api]",
       "impersonation_policy": "subject_to_impersonation_override",
@@ -5500,13 +5497,12 @@
       "access_token_validation": {
         "legacy_hs256": false
       },
-      "action": null,
+      "action": "settings.read",
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "allowed",
       "disclosure_behavior": null,
       "gaps": [
-        "action: no catalog action covers SSO provider management; no settings action is mapped because the handler check is not proven to equal one (this leaf does not extend the vocabulary)",
         "disclosure_behavior: the by-id or unauthenticated answer of this route is not traced in this record"
       ],
       "graphql_field_name": null,
@@ -8585,13 +8581,12 @@
       "access_token_validation": {
         "legacy_hs256": false
       },
-      "action": null,
+      "action": "sso.write",
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
       "disclosure_behavior": null,
       "gaps": [
-        "action: no catalog action covers SSO provider management; no settings action is mapped because the handler check is not proven to equal one (this leaf does not extend the vocabulary)",
         "disclosure_behavior: the by-id or unauthenticated answer of this route is not traced in this record"
       ],
       "graphql_field_name": null,
@@ -13592,14 +13587,12 @@
       "access_token_validation": {
         "legacy_hs256": false
       },
-      "action": null,
+      "action": "sso.write",
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; once any body-first validation has run, a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:182; internal/api/policy/orgless.go:26)",
-      "gaps": [
-        "action: no catalog action covers SSO provider management; no settings action is mapped because the handler check is not proven to equal one (this leaf does not extend the vocabulary)"
-      ],
+      "gaps": [],
       "graphql_field_name": null,
       "id": "POST /api/v1/auth/sso/providers [dev-health-ops-api @api]",
       "impersonation_policy": "subject_to_impersonation_override",
@@ -13660,13 +13653,12 @@
       "access_token_validation": {
         "legacy_hs256": false
       },
-      "action": null,
+      "action": "sso.write",
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
       "disclosure_behavior": null,
       "gaps": [
-        "action: no catalog action covers SSO provider management; no settings action is mapped because the handler check is not proven to equal one (this leaf does not extend the vocabulary)",
         "disclosure_behavior: the by-id or unauthenticated answer of this route is not traced in this record"
       ],
       "graphql_field_name": null,
@@ -13729,13 +13721,12 @@
       "access_token_validation": {
         "legacy_hs256": false
       },
-      "action": null,
+      "action": "sso.write",
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
       "disclosure_behavior": null,
       "gaps": [
-        "action: no catalog action covers SSO provider management; no settings action is mapped because the handler check is not proven to equal one (this leaf does not extend the vocabulary)",
         "disclosure_behavior: the by-id or unauthenticated answer of this route is not traced in this record"
       ],
       "graphql_field_name": null,

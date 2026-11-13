@@ -159,7 +159,7 @@ func (g *Guard) wrap(level Authz, gt gate, next http.Handler) http.Handler {
 		// A route whose namespace is switched on is decided by the decision point, not by the legacy checks below.
 		switch verdict := g.enforceVerdict(r, user, bearer, level, level == Superuser && gt.kind == gatePlatform, gt, platform); verdict {
 		case enforceDeny, enforceUnavailable, enforceNoDecisionPoint, enforceImpersonationRefused, enforceSessionRowUnavailable, enforceDenyNoOrg:
-			writeEnforceRefusal(w, level, verdict)
+			writeEnforceRefusal(w, g.pdp.enforcer.refusalLevel(r.Pattern, level), verdict)
 			return
 		case enforceAllow:
 			next.ServeHTTP(w, r.WithContext(WithUser(r.Context(), user)))

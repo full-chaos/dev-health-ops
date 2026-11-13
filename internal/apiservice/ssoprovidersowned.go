@@ -1,10 +1,13 @@
 package apiservice
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
 	"github.com/full-chaos/dev-health-go/workloadtoken"
+	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/authprovision"
 )
@@ -34,14 +37,49 @@ func ParseSSOProvidersOwned(lookup func(string) (string, bool), proxy AuthProxyC
 }
 
 // ssoProvidersClient is the client of auth-service's SSO provider routes while it owns the providers, over the one
-// workload client; nil when the providers are not owned or there is no workload client.
+// workload client; nil when the providers are not owned. Owned with no workload client, every route answers the named 503
+// (never the stub's 500 and never a write).
 func ssoProvidersClient(cfg AuthProxyConfig, owned bool, workload *workloadtoken.Client) (authprovision.SSOProviders, error) {
-	if !owned || workload == nil {
+	if !owned {
 		return nil, nil
+	}
+	if workload == nil {
+		return ssoProvidersDown{}, nil
 	}
 	core, err := authprovision.NewWorkloadCore(cfg.Upstream, workload, cfg.Timeout)
 	if err != nil {
 		return nil, fmt.Errorf("%s is on: %w", SSOProvidersOwnedEnv, err)
 	}
 	return authprovision.NewSSOProvidersClient(core), nil
+}
+
+// ssoProvidersDown is the client of an owned process that has no workload client: every call is a client fault.
+type ssoProvidersDown struct{}
+
+func (ssoProvidersDown) List(context.Context, authprovision.SSOListRequest) (json.RawMessage, error) {
+	return nil, authprovision.ErrUnavailable
+}
+
+func (ssoProvidersDown) Get(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) (json.RawMessage, error) {
+	return nil, authprovision.ErrUnavailable
+}
+
+func (ssoProvidersDown) Create(context.Context, authprovision.SSOCreateRequest) (json.RawMessage, error) {
+	return nil, authprovision.ErrUnavailable
+}
+
+func (ssoProvidersDown) Update(context.Context, authprovision.SSOUpdateRequest) (json.RawMessage, error) {
+	return nil, authprovision.ErrUnavailable
+}
+
+func (ssoProvidersDown) Delete(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) error {
+	return authprovision.ErrUnavailable
+}
+
+func (ssoProvidersDown) Activate(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) (json.RawMessage, error) {
+	return nil, authprovision.ErrUnavailable
+}
+
+func (ssoProvidersDown) Deactivate(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) (json.RawMessage, error) {
+	return nil, authprovision.ErrUnavailable
 }

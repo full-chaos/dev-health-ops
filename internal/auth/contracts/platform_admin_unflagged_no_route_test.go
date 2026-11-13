@@ -10,8 +10,17 @@ import (
 )
 
 // unflaggedOrganizationActionRows is the closed list of profile rows that may ask an organization action without the
-// platform_admin flag. It is empty since catalog 19 flagged org.read.
-var unflaggedOrganizationActionRows = map[string]string{}
+// platform_admin flag. Catalog 19 flagged org.read; catalog 20's sso.write is unflagged on purpose: the legacy writes refuse a
+// platform admin who holds no membership row (the token role defaults to member; router.py user.role not in owner, admin), and
+// the org-less cells of internal/api/policy (platform admin by the local flag and by a platform set, no membership) execute
+// each of these rows and keep that answer.
+var unflaggedOrganizationActionRows = map[string]string{
+	"POST /api/v1/auth/sso/providers [dev-health-ops-api @api]":                          "sso.write",
+	"PATCH /api/v1/auth/sso/providers/{provider_id} [dev-health-ops-api @api]":           "sso.write",
+	"DELETE /api/v1/auth/sso/providers/{provider_id} [dev-health-ops-api @api]":          "sso.write",
+	"POST /api/v1/auth/sso/providers/{provider_id}/activate [dev-health-ops-api @api]":   "sso.write",
+	"POST /api/v1/auth/sso/providers/{provider_id}/deactivate [dev-health-ops-api @api]": "sso.write",
+}
 
 // C4. An organization action without the platform_admin flag has no legacy cell for a superuser with no membership
 // row: no served route asks it, so there is no legacy path to execute. A profile row or GraphQL field that starts to

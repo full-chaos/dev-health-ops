@@ -47,7 +47,8 @@
 # with no row goes to part djb2(name) mod PARTS + 1 (h = h * 33 + byte mod 2^32 from 5381). So a part depends on the rows and the
 # name alone: adding or removing a test with no row moves no other test. With chain=1, a part weighs the rows cut to it plus
 # ceil(max(weight - all rows, 0) / PARTS) (the unmeasured rest, spread as the hash spreads its names), at least 1; a split package
-# with fewer rows than parts is refused (a part could be empty). Without tests, a part weighs ceil(weight / PARTS).
+# with fewer rows than parts is refused (a part could be empty). Without chain (the race legs; the auth legs, CHAOS-13693, pass
+# their own tests table), a part weighs ceil(weight / PARTS) and tests= only refuses a malformed row or a row of no split package.
 # cutkey=<key> cutparts=<n> [cutpart=<p>] (names mode, run under LC_ALL=C): stdin holds the names `go test -list` reports for the
 # package; prints the names of part p (or "name<TAB>part" for every name without cutpart). A row that names no listed test, or
 # fewer rows than parts, exits 2: a stale row fails instead of describing a part that no longer exists.

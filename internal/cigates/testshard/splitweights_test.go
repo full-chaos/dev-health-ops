@@ -125,9 +125,15 @@ func writeTestRows(t *testing.T, dir string, tests map[string]map[string]int) st
 // splitWeightRows reads ci/go_test_split_weights.tsv: package -> test -> seconds, failing on a malformed table.
 func splitWeightRows(t *testing.T) map[string]map[string]int {
 	t.Helper()
-	b, err := os.ReadFile(filepath.Join(repoRoot(t), "ci", "go_test_split_weights.tsv"))
+	return splitWeightRowsOf(t, "ci/go_test_split_weights.tsv")
+}
+
+// splitWeightRowsOf reads a package<TAB>test<TAB>seconds table (repository-relative path), failing on a malformed table.
+func splitWeightRowsOf(t *testing.T, rel string) map[string]map[string]int {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(repoRoot(t), rel))
 	if err != nil {
-		t.Fatalf("ci/go_test_split_weights.tsv: %v", err)
+		t.Fatalf("%s: %v", rel, err)
 	}
 	rows := map[string]map[string]int{}
 	var keys []string
@@ -156,7 +162,7 @@ func splitWeightRows(t *testing.T) map[string]map[string]int {
 		keys = append(keys, f[0]+"\x00"+f[1])
 	}
 	if !sort.StringsAreSorted(keys) {
-		t.Fatal("ci/go_test_split_weights.tsv is not sorted by package, then test (LC_ALL=C)")
+		t.Fatalf("%s is not sorted by package, then test (LC_ALL=C)", rel)
 	}
 	return rows
 }
@@ -428,7 +434,7 @@ func TestCheckGoFailsAStaleSplitWeightRowAndAHandPartRow(t *testing.T) {
 }
 
 // The race legs and the auth legs never read ci/go_test_split_weights.tsv: their plans are byte for byte the same with a broken
-// table in its place (the auth split packages keep their round robin cut).
+// table in its place (the auth split packages cut by their own tables, CHAOS-13693).
 func TestTheRaceAndAuthLegPlansDoNotReadTheSplitWeights(t *testing.T) {
 	t.Parallel()
 	broken := filepath.Join(t.TempDir(), "split_weights.tsv")

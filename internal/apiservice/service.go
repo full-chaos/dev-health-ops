@@ -501,11 +501,7 @@ func configureWith(
 		closeComponents(depComponents)
 		return nil, dependencyFailure(ctx, logger, "api_access_verify", "api_access_verify_config_invalid", err)
 	}
-	deps.SSOProviders, err = ssoProvidersClient(authProxy, deps.SSOProvidersOwned, sharedWorkloadClient(provisioningCred, sessionCred))
-	if err != nil {
-		closeComponents(depComponents)
-		return nil, dependencyFailure(ctx, logger, "api_sso_providers", "api_sso_providers_config_invalid", err)
-	}
+	deps.SSOProviders = ssoProvidersClient(authProxy, deps.SSOProvidersOwned, sharedWorkloadClient(provisioningCred, sessionCred), logger)
 	deps.UsersAdmin, err = usersAdminClient(authProxy, deps.UsersOwned, sharedWorkloadClient(provisioningCred, sessionCred))
 	if err != nil {
 		closeComponents(depComponents)

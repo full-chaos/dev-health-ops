@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-go/workloadtoken"
 )
 
 func parseSSOProvidersOwnedFor(t *testing.T, values map[string]string) (bool, string) {
@@ -51,12 +53,13 @@ func TestSSOProvidersOwnedNeedsTheSessionsProxyElseWarnsAndStaysOff(t *testing.T
 // Owned with no workload client: every provider route answers the named 503, never the stub's 500 and never a write.
 func TestSSOProvidersOwnedWithNoWorkloadClientAnswersTheNamed503OnEveryRoute(t *testing.T) {
 	withSSOLicence(t, true)
-	client, err := ssoProvidersClient(AuthProxyConfig{}, true, nil)
-	if err != nil || client == nil {
-		t.Fatalf("client = %v, %v, want the unavailable client", client, err)
+	logger := slog.New(slog.DiscardHandler)
+	client := ssoProvidersClient(AuthProxyConfig{}, true, nil, logger)
+	if client == nil {
+		t.Fatal("client is nil, want the unavailable client")
 	}
-	if off, err := ssoProvidersClient(AuthProxyConfig{}, false, nil); off != nil || err != nil {
-		t.Fatalf("not owned: %v, %v, want nil", off, err)
+	if off := ssoProvidersClient(AuthProxyConfig{}, false, nil, logger); off != nil {
+		t.Fatalf("not owned: %v, want nil", off)
 	}
 	handler, minter := adminConfigServerScoped(t, nil, withBoundaryCallers, ssoRoutes(client), nil)
 	admin := boundaryCallers(minter)["org admin"].token
@@ -94,5 +97,14 @@ func TestSSOListBoundsOnTheRealRoute(t *testing.T) {
 	}
 	if got := list("?limit=abc"); got.status != http.StatusUnprocessableEntity {
 		t.Errorf("limit=abc: %d %s, want 422", got.status, got.body)
+	}
+}
+
+// A client that cannot be built from the configuration is a WARN and off (nil: today's path), never a refused start.
+func TestSSOProvidersClientBuiltFromBadConfigurationWarnsAndStaysOff(t *testing.T) {
+	logs := &bytes.Buffer{}
+	got := ssoProvidersClient(AuthProxyConfig{}, true, &workloadtoken.Client{}, slog.New(slog.NewTextHandler(logs, nil)))
+	if got != nil || !strings.Contains(logs.String(), "level=WARN") || !strings.Contains(logs.String(), "AUTH_SSO_PROVIDERS_OWNED") {
+		t.Fatalf("client = %v, logs %q, want nil and a WARN naming AUTH_SSO_PROVIDERS_OWNED", got, logs.String())
 	}
 }

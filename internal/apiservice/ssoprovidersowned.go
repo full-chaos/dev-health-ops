@@ -3,7 +3,6 @@ package apiservice
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"strings"
 
@@ -40,21 +39,25 @@ func ParseSSOProvidersOwned(lookup func(string) (string, bool), proxy AuthProxyC
 	return true
 }
 
-// ssoProvidersClient is the client of auth-service's SSO provider routes while it owns the providers, over the one
-// workload client; nil when the providers are not owned. Owned with no workload client, every route answers the named 503
-// (never the stub's 500 and never a write).
-func ssoProvidersClient(cfg AuthProxyConfig, owned bool, workload *workloadtoken.Client) (authprovision.SSOProviders, error) {
+// ssoProvidersClient is the client of auth-service's SSO provider routes while it owns the providers, over the one workload
+// client; nil when the providers are not owned. Owned with no workload client, every route answers the named 503 (never the stub's
+// 500 and never a write). A client that cannot be built from the configuration (no auth-service URL, a workload token transport the
+// client refuses) is a WARN and the safe default, nil: today's path, switch off. No start is refused here: the only start-time
+// faults are configuration (product rule 3); a runtime fault of a call is the named 503.
+func ssoProvidersClient(cfg AuthProxyConfig, owned bool, workload *workloadtoken.Client, logger *slog.Logger) authprovision.SSOProviders {
 	if !owned {
-		return nil, nil
+		return nil
 	}
 	if workload == nil {
-		return ssoProvidersDown{}, nil
+		return ssoProvidersDown{}
 	}
 	core, err := authprovision.NewWorkloadCore(cfg.Upstream, workload, cfg.Timeout)
 	if err != nil {
-		return nil, fmt.Errorf("%s is on: %w", SSOProvidersOwnedEnv, err)
+		logger.Warn("api sso providers: the auth-service client cannot be built from the configuration; the provider routes stay on today's path (off)",
+			slog.String("env", SSOProvidersOwnedEnv), slog.String("error", err.Error()))
+		return nil
 	}
-	return authprovision.NewSSOProvidersClient(core), nil
+	return authprovision.NewSSOProvidersClient(core)
 }
 
 // ssoProvidersDown is the client of an owned process that has no workload client: every call is a client fault.

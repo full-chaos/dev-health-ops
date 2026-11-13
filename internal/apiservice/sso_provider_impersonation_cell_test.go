@@ -64,3 +64,22 @@ func TestSSOProviderCreateAnswersAnImpersonatingCaller(t *testing.T) {
 		})
 	}
 }
+
+// The same refusal for every SSO provider write with the switch off (the stub and the direct UPDATE paths): an impersonating caller
+// is refused with the impersonation text before the licence and before any handler, licensed and not. The switch-on twin is
+// TestAnImpersonatedSSOWriteIsRefusedBeforeGatedAndCallsNothing.
+func TestEverySSOProviderWriteRefusesAnImpersonatingCallerWithTheSwitchOff(t *testing.T) {
+	writes := []string{"POST /api/v1/auth/sso/providers", "PATCH /api/v1/auth/sso/providers/{provider_id}", "DELETE /api/v1/auth/sso/providers/{provider_id}",
+		"POST /api/v1/auth/sso/providers/{provider_id}/activate", "POST /api/v1/auth/sso/providers/{provider_id}/deactivate"}
+	for _, licensed := range []bool{true, false} {
+		withSSOLicence(t, licensed)
+		handler, minter := adminConfigServerScoped(t, nil, withLegacyImpersonationCaller, realRoutes, refuseLegacyCaller(true))
+		token := minter.mint(probeAdminUser, map[string]any{"sid": sessionid.Wire(cellLegacyCallerSID)})
+		for _, key := range writes {
+			got := ssoDo(handler, key, token)
+			if got.status != http.StatusForbidden || !strings.Contains(got.body, impersonationRefusalBody) || got.header.Get("X-Impersonating") != "" {
+				t.Errorf("licensed=%v %s: %d %s X-Impersonating=%q, want the 403 %s", licensed, key, got.status, got.body, got.header.Get("X-Impersonating"), impersonationRefusalBody)
+			}
+		}
+	}
+}

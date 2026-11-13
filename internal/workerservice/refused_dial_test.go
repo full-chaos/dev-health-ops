@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"os"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -168,9 +169,44 @@ func TestPreclaimReadinessRefusedDialExitsAfterBudget(t *testing.T) {
 	}
 }
 
+// refusedDial is the error a dial to a port nothing listens on returns: an *net.OpError over an *os.SyscallError over
+// ECONNREFUSED, the shape the retry classification reads, with no port and no network in it.
+func refusedDial() error {
+	return &net.OpError{Op: "dial", Net: "tcp", Err: os.NewSyscallError("connect", syscall.ECONNREFUSED)}
+}
+
+// The retry count is a function of the controlled clock and the refusals the hook returns, never of a port: the first form of
+// this test dialled a real closed port, and a listener another parallel test bound on that freed port answered the second
+// attempt, so Start succeeded after 2 attempts (CHAOS-13696; same class as CHAOS-6446: a count that depended on the machine).
 func TestRiverWorkerProcessRetriesRefusedDialUntilSuccess(t *testing.T) {
 	t.Parallel()
-	addr := closedPortAddr(t)
+	process := newTestRiverWorkerProcess(t)
+	process.budget = time.Minute
+	clock := newFakeRetryClock()
+	process.now, process.sleep = clock.Now, clock.Sleep
+	begin := clock.Now()
+	var attempts atomic.Int32
+	process.startClient = func(context.Context) error {
+		if attempts.Add(1) < 3 {
+			return fmt.Errorf("start producer: %w", refusedDial())
+		}
+		return nil
+	}
+	if err := process.Start(context.Background()); err != nil {
+		t.Fatalf("Start() = %v, want nil once the endpoint returns", err)
+	}
+	if got := attempts.Load(); got != 3 {
+		t.Fatalf("startClient ran %d times, want 3", got)
+	}
+	if waited := clock.Now().Sub(begin); waited != 6*time.Second {
+		t.Fatalf("waited %v on the controlled clock, want 2s + 4s", waited)
+	}
+}
+
+// retiredPortForm is the first form of the test above, kept only as the planted cell's subject: the refused dials come from a
+// real port that nothing listens on (addr), and the third attempt starts a listener there.
+func retiredPortForm(t *testing.T, addr string) int32 {
+	t.Helper()
 	process := newTestRiverWorkerProcess(t)
 	process.budget = time.Minute
 	process.sleep = riverStartSleepAfterCheckTimeout(time.Millisecond)
@@ -187,10 +223,39 @@ func TestRiverWorkerProcessRetriesRefusedDialUntilSuccess(t *testing.T) {
 		return conn.Close()
 	}
 	if err := process.Start(context.Background()); err != nil {
-		t.Fatalf("Start() = %v, want nil once the endpoint returns", err)
+		t.Fatalf("Start() = %v", err)
 	}
-	if got := attempts.Load(); got != 3 {
-		t.Fatalf("startClient ran %d times, want 3", got)
+	return attempts.Load()
+}
+
+// The planted cell: the interference of the failure on main, forced and held. A listener that is already on the port the retired
+// form dials, as one another parallel test bound there, answers the first dial: the form's count is 1, not the 3 its test
+// asserts. The count was the port's, not the retry's; the form that reads the retry from the controlled clock and the hook
+// (TestRiverWorkerProcessRetriesRefusedDialUntilSuccess) has no port to take.
+func TestTheRetiredPortFormCountsTheListenerNotTheRetries(t *testing.T) {
+	t.Parallel()
+	held := serveOnce(t, "127.0.0.1:0", true)
+	if got := retiredPortForm(t, held.Addr().String()); got != 1 {
+		t.Fatalf("the retired form ran %d times with its port already answering, want 1 (not the 3 of the test it was)", got)
+	}
+}
+
+func TestRefusedDialRetryCountIgnoresListenersOnOtherPorts(t *testing.T) {
+	t.Parallel()
+	serveOnce(t, closedPortAddr(t), true)
+	process := newTestRiverWorkerProcess(t)
+	process.budget = time.Minute
+	clock := newFakeRetryClock()
+	process.now, process.sleep = clock.Now, clock.Sleep
+	var attempts atomic.Int32
+	process.startClient = func(context.Context) error {
+		if attempts.Add(1) < 3 {
+			return fmt.Errorf("start producer: %w", refusedDial())
+		}
+		return nil
+	}
+	if err := process.Start(context.Background()); err != nil || attempts.Load() != 3 {
+		t.Fatalf("Start() = %v after %d attempts, want nil after 3 with a listener on another port", err, attempts.Load())
 	}
 }
 

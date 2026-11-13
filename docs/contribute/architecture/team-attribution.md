@@ -510,7 +510,7 @@ means the ClickHouse `teams` dimension is empty.
 > integration tests seed an in-day multi-claim and require the primary owner on all six TestOps
 > output tables.
 
-> **The AI analytics team scope uses repository ownership, not patterns (CHAOS-13679).** The
+> **The AI analytics team scope uses repository ownership, not patterns.** The
 > query-api AI analytics reads (`internal/queryapi/aianalytics`: aiReviewLoad, aiRiskBreakdown,
 > aiAttributedPrs, aiAttributionOverview) resolve a team scope to the repositories the team owns,
 > through the one ownership rule of `internal/queryapi/teamscope` (`HeldRepoIDs`, as of the

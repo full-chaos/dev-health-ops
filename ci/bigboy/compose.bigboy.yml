@@ -141,6 +141,9 @@ networks:
   acr:
     driver: bridge
     name: dev-health-acr
+  acr-edge:
+    driver: bridge
+    name: dev-health-acr-edge
   auth_plane:
     driver: bridge
   acr_auth_workload:
@@ -2143,8 +2146,16 @@ services:
       ACR_REQUIRE_BACKING_STORES: 'true'
       ACR_WRITE_TIMEOUT: 135s
     image: ${BIGBOY_ACR_API_IMAGE:?BIGBOY_ACR_API_IMAGE is required (the acr image pin of ci/bigboy/images.env, kept in _records/images.env)}
+    labels:
+      traefik.docker.network: dev-health-acr-edge
+      traefik.enable: 'true'
+      traefik.http.routers.acr-staging.entrypoints: web
+      traefik.http.routers.acr-staging.rule: Host(`acr.commanderkeen.dev`)
+      traefik.http.services.acr-staging.loadbalancer.server.port: '8080'
+      traefik.scope: dev-health
     networks:
       acr: null
+      acr-edge: null
       acr_auth_workload: null
       dho-clickhouse-readers: null
       dho-query-internal: null

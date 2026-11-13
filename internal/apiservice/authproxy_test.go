@@ -24,7 +24,6 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/apimetrics"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
-	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/workloadexchange"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
@@ -796,7 +795,7 @@ func TestConfigureReadsTheAuthProxySettings(t *testing.T) {
 	t.Setenv(AuthProxyFlagEnv(AuthLocalLogin), "")
 	t.Setenv(AuthProxyFlagEnv(AuthSessions), "true")
 	t.Setenv(EnvAuthProxyURL, stub.URL)
-	t.Setenv(sessionissue.EnvToken, testIssueToken(t))
+	t.Setenv(retiredIssueTokenEnv, testIssueToken(t))
 	components, err = configure(ctx, reachableDatabase(config.Config{APIAddress: "127.0.0.1:0"}), health.NewRegistry(time.Second), quietLogger())
 	closeComponents(components)
 	if !errors.As(err, &coded) || coded.DependencyReason() != "api_workload_credential_config_invalid" {

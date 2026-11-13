@@ -120,8 +120,8 @@ Worked examples:
   `Authorization` header. The `Principal` step
   (`internal/api/policy/principalonce.go:112`) sends a credential that the
   refusal table or the route's row rules out to no validator.
-- Earlier auth gate (web): the session and organization gate of `src/proxy.ts`
-  runs before each route's own check.
+- Earlier auth gate (web): the session and organization gate of the web
+  server's request proxy runs before each route's own check.
 - Foreign-class validator: the Python `OrgIdMiddleware` ran every
   `Authorization` bearer (an opaque ACR service credential included) through
   the user-JWT decoder. That code is gone. Today no row in ops,

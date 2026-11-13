@@ -170,7 +170,6 @@ var toolchainPathAllowlist = []struct {
 	{"internal/cigates/workflows/auth_corpus_external_behaviour_test.go", "/bin/chmod", shimExecsRealTool},
 	{"internal/cigates/workflows/live_e2e_auth_stack_test.go", "/bin/kill", shimExecsRealTool},
 	{"scripts/create-auth-keyset-secrets_test.sh", "/usr/bin/mktemp", shimExecsRealTool},
-	{"scripts/create-session-issue-secret_test.sh", "/usr/bin/mktemp", shimExecsRealTool},
 	{"internal/cigates/bigboy/compose_ch_users_test.go", "/usr/bin/ps", "the process snapshot runs with a PATH of stubs only, so ps must be named by its system path; it is a diagnostic, not a toolchain lookup"},
 	{"internal/cigates/docs/parity_test.go", "/usr/bin/python", testDataLiteral},
 	{"internal/cigates/nopython/nopython_test.go", "/usr/bin/python3", testDataLiteral},

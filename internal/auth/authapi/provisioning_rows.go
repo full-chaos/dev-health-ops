@@ -28,10 +28,6 @@ var provisioningRouteOps = map[string]string{
 	opOrgRename: PatternOrgRename,
 }
 
-// serviceSessionIssuerClass is the endpoint-profile credential class of the
-// session issuer credential (svc_authsess_); the session routes take it.
-const serviceSessionIssuerClass = "internal_svc_authsess_token"
-
 var errProvisioningRows = errors.New("authapi: the provisioning routes need their endpoint-profile rows")
 
 // provisioningRowsPresent refuses the provisioning routes unless the

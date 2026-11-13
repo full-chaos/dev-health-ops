@@ -14,8 +14,8 @@ import (
 // compose that leaves either one out is refused here. With the flag on, go-api presents its workload token on the
 // session issue route (AUTH_SESSION_ISSUE_CREDENTIAL=workload): compose writes the bootstrap credential file with the
 // auth-workload-bootstrap one-shot and the principal id auth-service accepts with auth-workload-subject, on every `up`
-// and with no manual step. A svc_authsess_ credential (AUTH_SESSION_ISSUE_TOKEN and the one-shot that seeded its row)
-// is not part of compose.
+// and with no manual step. The retired session issuer credential and the one-shot that seeded its row are not part of
+// compose (the retiredcredentialnames census keeps its name out of every tracked file).
 func TestComposeGoAPIDoesNotMintItsOwnHS256Sessions(t *testing.T) {
 	c := readComposeFile(t, "compose.yml")
 	goAPI, ok := c.Services["go-api"]
@@ -46,11 +46,8 @@ func TestComposeGoAPIDoesNotMintItsOwnHS256Sessions(t *testing.T) {
 			t.Errorf("go-api has no %s: the workload credential needs it and go-api refuses to start without it", name)
 		}
 	}
-	if _, set := env["AUTH_SESSION_ISSUE_TOKEN"]; set {
-		t.Error("go-api's compose environment sets AUTH_SESSION_ISSUE_TOKEN: a svc_authsess_ credential is no longer how it signs in")
-	}
 	if _, ok := c.Services["auth-session-issue-seed"]; ok {
-		t.Error("compose.yml still has auth-session-issue-seed: it writes the row of a svc_authsess_ credential nothing presents")
+		t.Error("compose.yml still has auth-session-issue-seed: it writes the row of the retired session issuer credential, which nothing presents")
 	}
 	if c.Services["go-api"].DependsOn["auth-workload-bootstrap"].Condition != "service_completed_successfully" {
 		t.Error("go-api does not wait for auth-workload-bootstrap: it would start without its credential file")

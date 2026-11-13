@@ -7,9 +7,8 @@ import (
 )
 
 // CHAOS-13039: go-api presents its workload token on the session issue route, read from a bootstrap credential file that a Secret
-// mounts. goApi.sessionIssue.workloadBootstrap is off by default, and off renders nothing. Values alone cannot carry it: with sessions
-// on the template always renders AUTH_SESSION_ISSUE_TOKEN as a required secretKeyRef, so go-api would keep needing an svc_authsess_
-// Secret. auth-service needs no template change: AUTH_WORKLOAD_BOOTSTRAP and AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT pass through
+// mounts. goApi.sessionIssue.workloadBootstrap is off by default, and off renders only the workload selector that sessions on always
+// renders. auth-service needs no template change: AUTH_WORKLOAD_BOOTSTRAP and AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT pass through
 // authService.extraEnv (the last cell).
 
 const (
@@ -38,13 +37,13 @@ func TestWorkloadBootstrapOffRendersNothing(t *testing.T) {
 		t.Fatalf("render failed: %v\n%.400s", err, def)
 	}
 	env := sessionsContainerEnv(t, docs, "Deployment", "a-dev-health-go-api")
-	for _, name := range wbOwnEnv {
+	for _, name := range wbOwnEnv[1:] {
 		if env[name] != nil {
 			t.Errorf("the default render carries %s: %v", name, env[name])
 		}
 	}
-	if env["AUTH_SESSION_ISSUE_TOKEN"] == nil {
-		t.Error("the default render lost AUTH_SESSION_ISSUE_TOKEN")
+	if at(env["AUTH_SESSION_ISSUE_CREDENTIAL"], "value") != "workload" {
+		t.Errorf("the default render with sessions on: AUTH_SESSION_ISSUE_CREDENTIAL = %v, want workload", env["AUTH_SESSION_ISSUE_CREDENTIAL"])
 	}
 	if v := at(authDoc(docs, "Deployment", "a-dev-health-go-api"), "spec", "template", "spec", "volumes"); v != nil {
 		t.Errorf("go-api pod volumes = %v, want no key", v)
@@ -78,11 +77,8 @@ func TestWorkloadBootstrapOnRendersTheCredentialFileAndTheWorkloadSelector(t *te
 			t.Errorf("%s = %v, want %q", name, got, value)
 		}
 	}
-	if env["AUTH_SESSION_ISSUE_TOKEN"] != nil {
-		t.Errorf("workload mode still renders AUTH_SESSION_ISSUE_TOKEN: %v", env["AUTH_SESSION_ISSUE_TOKEN"])
-	}
-	if strings.Contains(out, "svc_authsess_") || strings.Contains(out, "AUTH_SESSION_ISSUE_TOKEN") {
-		t.Error("workload mode leaves an svc_authsess_ credential reference in the render")
+	if got := sessionIssueNames(env); len(got) != 1 {
+		t.Errorf("go-api session issue env = %v, want only AUTH_SESSION_ISSUE_CREDENTIAL", got)
 	}
 	dep := authDoc(docs, "Deployment", "a-dev-health-go-api")
 	vols, _ := at(dep, "spec", "template", "spec", "volumes").([]any)
@@ -190,10 +186,11 @@ func TestWorkloadBootstrapRefusals(t *testing.T) {
 	}
 }
 
+// AUTH_SESSION_ISSUE_CREDENTIAL is left out: sessions on render it always, so goApi.extraEnv cannot set it (goApiEnvNames).
 func TestWorkloadBootstrapOffLeavesExtraEnvAlone(t *testing.T) {
 	t.Parallel()
 
-	for _, name := range wbOwnEnv {
+	for _, name := range wbOwnEnv[1:] {
 		docs, out, err := renderAuth(t, goAPIWithAuth(append(wbSessions(), "--set-json", `goApi.extraEnv=[{"name":"`+name+`","value":"x"}]`)...)...)
 		if err != nil {
 			t.Fatalf("extraEnv %s with the block off was refused: %v\n%.400s", name, err, out)
@@ -221,10 +218,11 @@ func TestWorkloadBootstrapAuthServiceTakesItsEnvThroughExtraEnv(t *testing.T) {
 	}
 }
 
+// AUTH_SESSION_ISSUE_CREDENTIAL is not here: sessions on render it always, so every spelling of it is refused (goApiEnvNames).
 func TestWorkloadBootstrapExtraEnvOtherCaseSpellingsAreAccepted(t *testing.T) {
 	t.Parallel()
 
-	for _, name := range []string{"auth_session_issue_credential", "Auth_Workload_Bootstrap_File", "auth_workload_issuer", " AUTH_WORKLOAD_ISSUER"} {
+	for _, name := range []string{"Auth_Workload_Bootstrap_File", "auth_workload_issuer", " AUTH_WORKLOAD_ISSUER"} {
 		_, out, err := renderAuth(t, goAPIWithAuth(wbOn("--set-json", `goApi.extraEnv=[{"name":"`+name+`","value":"x"}]`)...)...)
 		if err != nil {
 			t.Errorf("extraEnv %q is a different variable in a container and was refused: %v\n%.400s", name, err, out)

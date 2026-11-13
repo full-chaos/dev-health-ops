@@ -57,7 +57,7 @@ func TestServedOrgQueryRowsAreTheProfileQueryResolverRows(t *testing.T) {
 
 // A row's query resolver alone makes the seam compare its org_id: the same route with an organization_from_session
 // resolver serves the session organization and the PDP judges it, and with organization_from_query_or_session another
-// organization keeps the legacy answer with no PDP call (product rule 1).
+// organization is judged on the TOKEN organization, one question (S2-parity, product rule 1).
 func TestServedOrgQueryRowComesFromItsProfileResolver(t *testing.T) {
 	stranger := uuid.MustParse(strangerOrg).String()
 	for _, tc := range []struct {
@@ -65,7 +65,7 @@ func TestServedOrgQueryRowComesFromItsProfileResolver(t *testing.T) {
 		calls    int
 	}{
 		{"organization_from_session: the caller's organization", 1},
-		{queryResolverKind + " the last org_id query value", 0},
+		{queryResolverKind + " the last org_id query value", 1},
 	} {
 		rows, err := ParseShadowRows(profileDocument(profileRowWith("GET", "/api/v1/admin/teams", "teams.read", tc.resolver)), "dev-health-ops-api")
 		if err != nil {

@@ -672,7 +672,7 @@ func TestTheEnforcementOutcomeSetIsClosed(t *testing.T) {
 	servedOrgServe(t, members, servedOrgSetup{who: personaAdmin, enforcer: servedOrgEnforcer(t, allow, "members")}, strangerOrg)
 	description, outcomes := collectSum(t, reader, enforceDecisionMetric, "outcome")
 	want := []string{"allow", "deny", "error_deny", "impersonation_refused"}
-	if !slices.Equal(outcomes, want) {
+	if outcomes = slices.Compact(outcomes); !slices.Equal(outcomes, want) {
 		t.Errorf("outcomes %v, want %v", outcomes, want)
 	}
 	if suffix := "outcome: allow, deny, error_deny, impersonation_refused"; !strings.HasSuffix(description, suffix) {

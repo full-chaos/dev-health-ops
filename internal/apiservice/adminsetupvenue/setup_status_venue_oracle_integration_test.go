@@ -269,7 +269,6 @@ func TestAdminSetupStatusVenueOracle(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, setupGolden(t.Name(), "cbc3024e22b98a2da6d47942c74ec269917b484756f4ddd4e54aa37fdefa1dc8"))
 	root := repoRoot(t)
 	nextID := stableIDs("setup")
-	const jwtKey = "venue-oracle-test-secret-key-for-setup-status-32-by"
 	cases := scenarios()
 	orgs := make([]uuid.UUID, len(cases))
 	admins := make([]uuid.UUID, len(cases))
@@ -277,7 +276,7 @@ func TestAdminSetupStatusVenueOracle(t *testing.T) {
 		orgs[i], admins[i] = nextID(), nextID()
 	}
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Golden: golden, Root: root, JWTKey: jwtKey,
+		Golden: golden, Root: root,
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
 			tokens := map[string]map[string]any{}
 			for i, c := range cases {
@@ -311,7 +310,7 @@ VALUES ($1, $2, $3, 'admin', now(), now(), now())`, nextID(), orgs[i], admins[i]
 	}
 	python := golden.Python(t, venue, requests)
 
-	goBase := startGoServer(t, ctx, venue, jwtKey)
+	goBase := startGoServer(t, ctx, venue)
 	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{Golden: golden})
 	t.Log(receipt)
 	body, _ := json.Marshal(len(requests))
@@ -342,7 +341,7 @@ func stableIDs(prefix string) func() uuid.UUID {
 	}
 }
 
-func startGoServer(t *testing.T, ctx context.Context, venue *venueoracle.Venue, jwtKey string) string {
+func startGoServer(t *testing.T, ctx context.Context, venue *venueoracle.Venue) string {
 	t.Helper()
 	pool, err := pgxpool.New(ctx, venue.GoAPIDatabaseURI(t))
 	if err != nil {

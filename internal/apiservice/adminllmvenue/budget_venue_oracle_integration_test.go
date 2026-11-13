@@ -181,7 +181,6 @@ func TestAdminLLMBudgetVenueOracle(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, goldenSpec("budget", "TestAdminLLMBudgetVenueOracle", "073350a010982939846f117ae3d37ea3d5dcf6546fcf462854ec1b52946cd45c"))
 	root := repoRoot(t)
 	nextID := goldenIDs("budget")
-	const jwtKey = "venue-oracle-test-secret-key-for-llm-budget-32-bytes!"
 	t.Setenv("BYO_LLM_MAX_BUDGET_MICRO_USD", operatorMax)
 	cases := scenarios()
 	orgs := make([]uuid.UUID, len(cases))
@@ -193,8 +192,8 @@ func TestAdminLLMBudgetVenueOracle(t *testing.T) {
 	windowStart, _ := llmbudget.MonthWindow(budgetNow)
 
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Golden: golden,
-		Root:   root, JWTKey: jwtKey,
+		Golden:    golden,
+		Root:      root,
 		PythonEnv: []string{"BYO_LLM_MAX_BUDGET_MICRO_USD=" + operatorMax},
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
 			exec := func(sql string, args ...any) {
@@ -290,13 +289,13 @@ VALUES ($1, 'llm-budget-member', 'llm-budget-member', 'team', 'stripe', true, no
 	)
 	python := golden.Python(t, venue, requests)
 
-	goBase := startGoServer(t, ctx, venue, jwtKey)
+	goBase := startGoServer(t, ctx, venue)
 	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{Golden: golden})
 	t.Log(receipt)
 	golden.Finish(t)
 }
 
-func startGoServer(t *testing.T, ctx context.Context, venue *venueoracle.Venue, jwtKey string) string {
+func startGoServer(t *testing.T, ctx context.Context, venue *venueoracle.Venue) string {
 	t.Helper()
 	pool, err := pgxpool.New(ctx, venue.GoAPIDatabaseURI(t))
 	if err != nil {

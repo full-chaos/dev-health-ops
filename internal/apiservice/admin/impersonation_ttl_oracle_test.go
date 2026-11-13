@@ -50,7 +50,6 @@ func runImpersonationTTLCase(t *testing.T, name, ttlMinutes string) {
 	golden := venueoracle.OpenGolden(t, adminRunValuesGolden("impersonation_ttl_"+name, t.Name(), impersonationTTLDigests[name]))
 	root := repoRoot(t)
 	nextID := goldenIDs("impttl-" + name)
-	jwtKey := "venue-oracle-test-secret-key-for-impersonation-ttl-32bytes!"
 
 	orgID := nextID()
 	adminID := nextID()
@@ -59,7 +58,6 @@ func runImpersonationTTLCase(t *testing.T, name, ttlMinutes string) {
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Golden:    golden,
 		Root:      root,
-		JWTKey:    jwtKey,
 		PythonEnv: []string{"IMPERSONATION_TTL_MINUTES=" + ttlMinutes},
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
@@ -95,7 +93,7 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, nextID(), orgID, targetID)
 			Headers: map[string]string{"Authorization": "Bearer " + venue.Tokens["admin"], "Content-Type": "application/json"}},
 	}
 	python := golden.Python(t, venue, requests)
-	goBase, _ := startGoServer(t, context.Background(), venue, jwtKey)
+	goBase, _ := startGoServer(t, context.Background(), venue)
 
 	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{
 		Golden: golden,

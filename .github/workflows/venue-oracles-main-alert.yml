@@ -14,6 +14,9 @@
 # read for the run and job API; contents: read for the checkout). Nothing from the event
 # reaches a shell except the run id, conclusion and sha, passed through env and validated.
 #
+# BRANCHES. `branches: [main]` starts the workflow only for runs whose head branch is main, so a
+# PR or branch run of a covered workflow no longer starts a job that the job `if` would skip.
+#
 # CHECKOUT. A workflow_run job checks out the default branch, never the run's commit, so
 # the script that runs is the one on main.
 name: Main red alert
@@ -31,6 +34,7 @@ on:
       - Tests
       - CodeQL
     types: [completed]
+    branches: [main]
 
 permissions: {}
 

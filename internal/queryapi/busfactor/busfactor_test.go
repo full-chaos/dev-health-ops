@@ -276,3 +276,15 @@ func TestTiebreaks_DoNotDependOnRowOrder(t *testing.T) {
 		}
 	}
 }
+
+func TestResolve_ReadsReplacingTablesWithFinal(t *testing.T) {
+	cl := &recordingClient{}
+	if _, err := Resolve(context.Background(), cl, "o", nil, time.Unix(0, 0)); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"FROM git_commit_stats AS gcs FINAL", "INNER JOIN git_commits AS gc FINAL", "LEFT JOIN repos AS r FINAL"} {
+		if !strings.Contains(cl.statement, want) {
+			t.Errorf("statement lacks %q", want)
+		}
+	}
+}

@@ -54,7 +54,6 @@ func TestPagerDutyWebhookBindingsVenueOracle(t *testing.T) {
 	ctx := context.Background()
 	golden := venueoracle.OpenGolden(t, pagerDutyGolden("bindings", "TestPagerDutyWebhookBindingsVenueOracle", "f37e54df955700a2096f721b60935f87e8967c753a783a83221f42a60e041dac"))
 	root := repoRoot(t)
-	const jwtKey = "venue-oracle-test-secret-key-for-pagerduty-bindings-32-b"
 
 	ids := map[string]uuid.UUID{}
 	id := func(name string) uuid.UUID {
@@ -73,7 +72,6 @@ func TestPagerDutyWebhookBindingsVenueOracle(t *testing.T) {
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Golden:    golden,
 		Root:      root,
-		JWTKey:    jwtKey,
 		PythonEnv: []string{"SETTINGS_ENCRYPTION_KEY=" + pagerDutyBindingsVenueEncryptionKey},
 		Seed: withTokenMemberships(func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
@@ -305,7 +303,7 @@ VALUES ($1, $2, $3, $4, $5, 'v1:seed-not-decrypted', 'v1', $6, now(), now(), $7:
 		t.Fatalf("build decryptor: %v", err)
 	}
 	python := golden.Python(t, venue, requests)
-	goBase, _ := startGoServer(t, ctx, venue, jwtKey, func(deps *apiservice.Deps) { deps.Decryptor = decryptor })
+	goBase, _ := startGoServer(t, ctx, venue, func(deps *apiservice.Deps) { deps.Decryptor = decryptor })
 	// The rows a create or rotate inserts carry a random id and now()
 	// timestamps: blank the ids of the "new:" answers and every well-formed
 	// timestamp (a malformed one -- "+00:00", a missing "Z" -- stays visible).

@@ -205,7 +205,7 @@ func (handler GitLabIncidentsRouteHandler) Collect(
 	for _, raw := range items {
 		payload, decodeErr := decodeGitLabIncident(raw)
 		if decodeErr != nil {
-			return CompleteRouteBatch{}, decodeErr
+			return CompleteRouteBatch{}, providerfoundation.RouteFailure(gitlabIssuesRoute, providerfoundation.ReasonBodyDecode, decodeErr)
 		}
 		row, normalizeErr := normalizeGitLabIncident(
 			claim, providerInstance, repoFullName, payload, normalizedAt,

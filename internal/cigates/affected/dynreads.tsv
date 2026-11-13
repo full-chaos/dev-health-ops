@@ -208,6 +208,7 @@ internal/cigates/bigboyrender	values.go
 internal/cigates/cachepoison	cachepoison_test.go
 internal/cigates/chartgates	alerts_auth_slo_test.go
 internal/cigates/chartgates	helpers_test.go
+internal/cigates/chartgates	overlay_parallel_test.go
 internal/cigates/chartgates	overlay_test.go
 internal/cigates/chartgates	worker_secret_env_scan_test.go
 internal/cigates/chconstructor	chconstructor_test.go
@@ -279,6 +280,8 @@ internal/cigates/integrationshards	shard_run_tee_bound_test.go
 internal/cigates/integrationshards	shard_start_order_test.go
 internal/cigates/integrationshards	side_effect_hooks_test.go
 internal/cigates/livee2e	cli.go
+internal/cigates/livee2e	mintlicense.go
+internal/cigates/livee2e	mintlicense_test.go
 internal/cigates/livee2e	smtpsink.go
 internal/cigates/livee2e	smtpsink_test.go
 internal/cigates/livee2e	tokenreview.go
@@ -320,6 +323,7 @@ internal/cigates/scripts	posture_integration_test.go
 internal/cigates/scripts	relevance_step_script_test.go
 internal/cigates/scripts	shard_row_files_merge_test.go
 internal/cigates/scripts	tmp_dirs_removed_test.go
+internal/cigates/scripts	toolchain_paths_test.go
 internal/cigates/sharedserver	batch_a_test.go
 internal/cigates/sharedserver	sharedserver_test.go
 internal/cigates/sharedserver	template_schema_test.go
@@ -501,6 +505,7 @@ internal/providerfoundation	clients.go
 internal/providerfoundation	wire_sites_census_test.go
 internal/providersync	client_ledger_census_test.go
 internal/providersync	gitlab_pr_commit_links_integration_test.go
+internal/providersync	item_route_census_test.go
 internal/providersync	jira_search_endpoint_guard_test.go
 internal/providersync	log_sites_redaction_test.go
 internal/providersync	oracle_compare_test.go

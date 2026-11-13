@@ -60,7 +60,6 @@ func TestVenueOracleWorkUnitExplainProviderResolution(t *testing.T) {
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Golden: golden, Root: root,
 		// No route here checks a token; the key is the one the other venue oracles of this package use.
-		JWTKey: oracleJWTKey,
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
 			for _, org := range []struct {

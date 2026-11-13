@@ -76,7 +76,6 @@ func runSettingsOracle(t *testing.T, withKey bool, mode, digest, pinDigest strin
 	pin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/governance/settings_" + mode + ".go-pin.json", SHA256: pinDigest, Ruling: settingsListRuling})
 	root := repoRoot(t)
 	nextID := goldenIDs("set")
-	const jwtKey = "venue-oracle-test-secret-key-for-settings-flow-32-bytes!"
 
 	orgA, orgB := nextID(), nextID()
 	adminA, adminB, memberA, superID := nextID(), nextID(), nextID(), nextID()
@@ -88,7 +87,6 @@ func runSettingsOracle(t *testing.T, withKey bool, mode, digest, pinDigest strin
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Golden:    golden,
 		Root:      root,
-		JWTKey:    jwtKey,
 		PythonEnv: pythonEnv,
 		Seed: withTokenMemberships(func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
@@ -283,7 +281,7 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, '2026-02-01T00:00:00+00:00', '2026-02-01T00:
 	}
 
 	python := golden.Python(t, venue, requests)
-	goBase, _ := startGoServer(t, ctx, venue, jwtKey, func(deps *apiservice.Deps) {
+	goBase, _ := startGoServer(t, ctx, venue, func(deps *apiservice.Deps) {
 		if withKey {
 			decryptor, err := providerfoundation.NewFernetDecryptor(secrets.NewValue(settingsVenueEncryptionKey), "")
 			if err != nil {

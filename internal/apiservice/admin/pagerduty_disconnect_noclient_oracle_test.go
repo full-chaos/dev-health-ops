@@ -43,7 +43,6 @@ func TestPagerDutyDisconnectWithoutClientIDVenueOracle(t *testing.T) {
 	ctx := context.Background()
 	golden := venueoracle.OpenGolden(t, pagerDutyGolden("disconnect_noclient", "TestPagerDutyDisconnectWithoutClientIDVenueOracle", pagerDutyDisconnectUnconfiguredGoldenDigest))
 	root := repoRoot(t)
-	const jwtKey = "venue-oracle-test-secret-key-for-pagerduty-disconnect-32-by"
 
 	fake := &pagerDutyDisconnectFakeServer{failTokens: map[string]bool{}}
 	fakeServer := httptest.NewServer(http.HandlerFunc(fake.handler))
@@ -58,7 +57,6 @@ func TestPagerDutyDisconnectWithoutClientIDVenueOracle(t *testing.T) {
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Golden: golden,
 		Root:   root,
-		JWTKey: jwtKey,
 		// The Python api has no PagerDuty client id: the case under test.
 		PythonEnv: []string{
 			"PAGER_DUTY_CLIENT_ID=",
@@ -131,7 +129,7 @@ VALUES ($1, 'pagerduty', 'default', 'garbage-not-fernet', 1, now(), now(), false
 		t.Fatalf("build decryptor: %v", err)
 	}
 	python := golden.Python(t, venue, requests)
-	goBase, _ := startGoServer(t, ctx, venue, jwtKey, func(deps *apiservice.Deps) {
+	goBase, _ := startGoServer(t, ctx, venue, func(deps *apiservice.Deps) {
 		deps.Decryptor = decryptor
 		// No ClientID: the Go api is unconfigured too. The revoke URL is
 		// set so a plane that tried to revoke anyway would reach the fake.
@@ -192,7 +190,7 @@ VALUES ($1, 'pagerduty', 'default', 'garbage-not-fernet', 1, now(), now(), false
 	}
 
 	// Once the api is configured, the credential's next disconnect drains it.
-	configured, _ := startGoServer(t, ctx, venue, jwtKey, func(deps *apiservice.Deps) {
+	configured, _ := startGoServer(t, ctx, venue, func(deps *apiservice.Deps) {
 		deps.Decryptor = decryptor
 		deps.PagerDuty = providerfoundation.PagerDutyRevokeConfig{ClientID: pagerDutyDisconnectVenueClientID, RevokeURL: fakeServer.URL}
 	})

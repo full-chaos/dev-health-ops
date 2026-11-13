@@ -350,3 +350,32 @@ func TestTeamPoints_CoverageIsTheMeanOverTheRowsThatCarryAScore(t *testing.T) {
 		t.Fatalf("a team of rows with no score has no score and no coverage: %+v", onlyEmpty)
 	}
 }
+
+func TestRepoReads_UseFinal(t *testing.T) {
+	ctx := context.Background()
+	end := time.Date(2026, 3, 10, 0, 0, 0, 0, time.UTC)
+	ids := idList{"r1"}
+	cases := map[string]func(c *bindingClient) error{
+		"latestDay": func(c *bindingClient) error {
+			_, err := latestDay(ctx, c, "o", "repo", ids, end.AddDate(0, 0, -5), end)
+			return err
+		},
+		"repoTrend": func(c *bindingClient) error {
+			_, err := repoTrend(ctx, c, "o", end, 5, ids)
+			return err
+		},
+		"repoLabels": func(c *bindingClient) error {
+			_, err := repoLabels(ctx, c, "o", []string{"r1"})
+			return err
+		},
+	}
+	for name, run := range cases {
+		c := &bindingClient{}
+		if err := run(c); err != nil {
+			t.Fatal(name, err)
+		}
+		if len(c.statements) != 1 || !strings.Contains(c.statements[0], "FROM repos FINAL") {
+			t.Errorf("%s: repos read lacks FINAL: %v", name, c.statements)
+		}
+	}
+}

@@ -257,7 +257,7 @@ integration_leg_json_file() {
 }
 
 run_integration_go_test() {
-  local module_dir="$1" sid pid rc=0 i own_pgid tmo json="" render_pid="" render_rc=0 render_wait render_tick
+  local module_dir="$1" sid pid rc=0 i own_pgid tmo json="" render_pid="" render_rc=0 render_wait render_tick arg skip_next=0 want_pkgs=0 got_pkgs
   local -a private_group=() json_args=()
   shift
   tmo="$(job_go_test_timeout 32)" || return 2
@@ -323,6 +323,18 @@ run_integration_go_test() {
         echo "run_integration_go_test: the go test -json renderer failed (rc ${render_rc}); the raw events follow in the log, the status stays go test's" >&2
         cat -- "${json}" || true
       fi
+    fi
+    # End signal: the packages with a final pass/fail/skip event in the file against the packages of the call. A call that
+    # go test passed with fewer final results than packages is a truncated stream: it fails (70), never a green partial.
+    for arg in "$@"; do
+      if [ "${skip_next}" -eq 1 ]; then skip_next=0; continue; fi
+      case "${arg}" in -run) skip_next=1 ;; -*) ;; *) want_pkgs=$((want_pkgs + 1)) ;; esac
+    done
+    got_pkgs="$(jq -R -r 'fromjson? | select(type == "object" and ((.Action | type) == "string") and (.Action | IN("pass", "fail", "skip")) and ((.Test // "") == "")) | (.Package // "")' "${json}" | LC_ALL=C sort -u | grep -c . || true)"
+    echo "run_integration_go_test: ${got_pkgs} of ${want_pkgs} package(s) have a final result in the go test -json file" >&2
+    if [ "${got_pkgs}" -lt "${want_pkgs}" ] && [ "${rc}" -eq 0 ]; then
+      echo "run_integration_go_test: go test passed but its -json stream ends before every package's result (truncated); the call fails" >&2
+      rc=70
     fi
   fi
   bash "${SCRIPT_DIR}/reap-testcontainers-session.sh" "${sid}" || rc=$?

@@ -166,6 +166,9 @@ func TestIntegrationLegJSONPrintsThePlainLogOfPassingPackages(t *testing.T) {
 	if r.code != 0 || r.stdout != legPassPlain+"RETURNED rc=0\n" {
 		t.Errorf("rc=%d stdout=%q; want rc 0 and exactly the plain go test lines, then RETURNED\nstderr:\n%s", r.code, r.stdout, r.stderr)
 	}
+	if !strings.Contains(r.stderr, "2 of 2 package(s) have a final result") {
+		t.Errorf("no end-signal line on stderr:\n%s", r.stderr)
+	}
 	if !strings.Contains(" "+r.argv+" ", " -json ") {
 		t.Errorf("go test argv %q lacks -json", r.argv)
 	}
@@ -240,6 +243,20 @@ func TestIntegrationLegJSONUnsetRunsPlainGoTest(t *testing.T) {
 	}
 }
 
+// legTruncStream: go test passed, but the stream ends before b's final result.
+func legTruncStream(t *testing.T) string {
+	return legStream(t, lev("start", legPkgA, "", ""), lev("output", legPkgA, "", "ok  \texample.com/m/a\t1.000s\n"), lev("pass", legPkgA, "", ""),
+		lev("start", legPkgB, "", ""), lev("output", legPkgB, "TestB", "=== RUN   TestB\n"))
+}
+
+func TestIntegrationLegJSONTruncatedStreamFailsAGreenCall(t *testing.T) {
+	t.Parallel()
+	r := runIntegrationLeg(t, legTruncStream(t), 0, legOpts{withDir: true})
+	if r.code != 70 || !strings.Contains(r.stderr, "1 of 2 package(s) have a final result") || !strings.Contains(r.stderr, "truncated") {
+		t.Errorf("rc=%d; want 70 with the truncation named\nstderr:\n%s", r.code, r.stderr)
+	}
+}
+
 func TestIntegrationLegJSONBrokenRendererKeepsGoTestStatus(t *testing.T) {
 	t.Parallel()
 	r := runIntegrationLeg(t, legPassStream(t), 0, legOpts{withDir: true, jqFilter: "this is not jq ("})
@@ -274,6 +291,9 @@ func TestIntegrationLegJSONPlantedDefectsAreCaught(t *testing.T) {
 		}},
 		{"the renderer's status becomes the call's", `wait "${render_pid}" || render_rc=$?`, `wait "${render_pid}" || { render_rc=$?; rc=${render_rc}; }`, func(t *testing.T, old, new string) bool {
 			return runIntegrationLeg(t, legPassStream(t), 0, legOpts{withDir: true, jqFilter: "this is not jq (", mutateOld: old, mutateNew: new}).code != 0
+		}},
+		{"a truncated stream stays green", "      rc=70\n    fi\n  fi\n", "      :\n    fi\n  fi\n", func(t *testing.T, old, new string) bool {
+			return runIntegrationLeg(t, legTruncStream(t), 0, legOpts{withDir: true, mutateOld: old, mutateNew: new}).code == 0
 		}},
 		{"no wait for the renderer", `    for ((render_tick = 0; render_tick < render_wait * 5; render_tick++)); do`, `    render_wait=0; for ((render_tick = 0; render_tick < render_wait * 5; render_tick++)); do`, func(t *testing.T, old, new string) bool {
 			return runIntegrationLeg(t, legPassStream(t), 0, legOpts{withDir: true, slowTail: true, mutateOld: old, mutateNew: new}).stdout != legPassPlain+"RETURNED rc=0\n"

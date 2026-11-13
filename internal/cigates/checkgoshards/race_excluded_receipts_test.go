@@ -81,7 +81,7 @@ func receiptsVerb(t *testing.T, census, jsonEvents string) cmdResult {
 	if err := os.WriteFile(events, []byte(jsonEvents), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	return cmdSpec{dir: filepath.Dir(filepath.Dir(script)), env: inheritedEnv([]string{"GO_RACE_EXCLUDED_TESTS", "GO_QUALITY_SELECTION_FILE"}, "GO_RACE_EXCLUDED_TESTS="+list, noSplitsEnv(t))}.
+	return cmdSpec{dir: filepath.Dir(filepath.Dir(script)), env: inheritedEnv([]string{"GO_RACE_EXCLUDED_TESTS", "GO_QUALITY_SELECTION_FILE"}, append([]string{"GO_RACE_EXCLUDED_TESTS=" + list}, noSplitsEnv(t)...)...)}.
 		run("bash", script, "race-excluded-receipts", events)
 }
 
@@ -213,16 +213,21 @@ var shardRuns runCache
 
 // runShardWithFakeGo runs one test-leg shard on the stand-in go. Tests that ask for the same shard, slow package and
 // environment share one run: each reads the answer and never changes it.
-// noSplitsEnv points check_go.sh at an empty ci/go_test_splits.tsv (CHAOS-13520): these harnesses replace go with a fake that
-// lists no test, so a split package's parts could not name their tests; the split path has its own guard
-// (internal/cigates/testshard testsplit_test.go).
-func noSplitsEnv(t *testing.T) string {
+// noSplitsEnv points check_go.sh at an empty ci/go_test_splits.tsv (CHAOS-13520) and an empty ci/go_test_split_weights.tsv
+// (CHAOS-13668, whose rows may only name split packages): these harnesses replace go with a fake that lists no test, so a split
+// package's parts could not name their tests; the split path has its own guards (internal/cigates/testshard testsplit_test.go,
+// splitweights_test.go).
+func noSplitsEnv(t *testing.T) []string {
 	t.Helper()
-	p := filepath.Join(t.TempDir(), "go_test_splits.tsv")
-	if err := os.WriteFile(p, []byte("# no split package in this harness\n"), 0o644); err != nil {
-		t.Fatal(err)
+	dir := t.TempDir()
+	splits := filepath.Join(dir, "go_test_splits.tsv")
+	tests := filepath.Join(dir, "go_test_split_weights.tsv")
+	for _, p := range []string{splits, tests} {
+		if err := os.WriteFile(p, []byte("# no split package in this harness\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
-	return "GO_TEST_SPLITS=" + p
+	return []string{"GO_TEST_SPLITS=" + splits, "GO_TEST_SPLIT_WEIGHTS=" + tests}
 }
 
 func runShardWithFakeGo(t *testing.T, shard int, slowPackage string, extraEnv ...string) (cmdResult, []string) {
@@ -259,7 +264,7 @@ func runShardWithFakeGoOnce(t *testing.T, shard int, slowPackage string, extraEn
 		"DEV_HEALTH_GO_UNWEIGHTED_REPORT_ONLY=",
 		"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "TMPDIR="+work, "FAKE_REAL_GO="+realGo, "FAKE_GO_LOG="+logPath,
 		"FAKE_CENSUS="+filepath.Join(repo, "ci", "race_excluded_tests.tsv"), "FAKE_SLOW_PACKAGE="+slowPackage)
-	env = append(env, noSplitsEnv(t))
+	env = append(env, noSplitsEnv(t)...)
 	env = append(env, extraEnv...)
 	res := cmdSpec{dir: repo, env: env}.run("bash", script, "ci-leg", "test", fmt.Sprint(shard), "3")
 	raw, err := os.ReadFile(logPath)
@@ -390,7 +395,7 @@ func censusRowThatGoListOmitsSubtests(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Run("shard plan", func(t *testing.T) {
-		res := cmdSpec{dir: repo, env: inheritedEnv([]string{"GO_RACE_EXCLUDED_TESTS", "GO_QUALITY_SELECTION_FILE"}, "GO_RACE_EXCLUDED_TESTS="+planted, noSplitsEnv(t))}.
+		res := cmdSpec{dir: repo, env: inheritedEnv([]string{"GO_RACE_EXCLUDED_TESTS", "GO_QUALITY_SELECTION_FILE"}, append([]string{"GO_RACE_EXCLUDED_TESTS=" + planted}, noSplitsEnv(t)...)...)}.
 			run("bash", script, "race-excluded-shard-plan", "1", "3")
 		if res.code == 0 || !strings.Contains(res.stderr, plantedUnlistedPackage) {
 			t.Fatalf("exit %d, stderr %q: want a failure naming %s", res.code, tail(res.stderr, 500), plantedUnlistedPackage)
@@ -440,7 +445,7 @@ func duplicateCensusSubtests(t *testing.T) {
 				if err := os.WriteFile(list, []byte(p.census), 0o644); err != nil {
 					t.Fatal(err)
 				}
-				res = cmdSpec{dir: repo, env: inheritedEnv([]string{"GO_RACE_EXCLUDED_TESTS", "GO_QUALITY_SELECTION_FILE"}, "GO_RACE_EXCLUDED_TESTS="+list, noSplitsEnv(t))}.
+				res = cmdSpec{dir: repo, env: inheritedEnv([]string{"GO_RACE_EXCLUDED_TESTS", "GO_QUALITY_SELECTION_FILE"}, append([]string{"GO_RACE_EXCLUDED_TESTS=" + list}, noSplitsEnv(t)...)...)}.
 					run("bash", script, "race-excluded-shard-plan", "1", "3")
 			}
 			if res.code == 0 {
@@ -487,7 +492,7 @@ func malformedCensusSubtests(t *testing.T) {
 			if err := os.WriteFile(list, []byte(real+p.line+"\n"), 0o644); err != nil {
 				t.Fatal(err)
 			}
-			res := cmdSpec{dir: repo, env: inheritedEnv([]string{"GO_RACE_EXCLUDED_TESTS", "GO_QUALITY_SELECTION_FILE"}, "GO_RACE_EXCLUDED_TESTS="+list, noSplitsEnv(t))}.
+			res := cmdSpec{dir: repo, env: inheritedEnv([]string{"GO_RACE_EXCLUDED_TESTS", "GO_QUALITY_SELECTION_FILE"}, append([]string{"GO_RACE_EXCLUDED_TESTS=" + list}, noSplitsEnv(t)...)...)}.
 				run("bash", script, "race-excluded-shard-plan", "1", "3")
 			if res.code == 0 {
 				t.Fatalf("a census with the line %q was accepted: %s", p.line, res.stdout)

@@ -263,35 +263,33 @@ test("the credential-class schema holds the two validator kinds and the retired 
   const validate = ajv.compile(JSON.parse(readFileSync(path.join(v1, "credential-classes.schema.json"), "utf8")));
   const read = () => JSON.parse(readFileSync(path.join(v1, "credential-classes.json"), "utf8"));
   assert.equal(validate(read()), true, JSON.stringify(validate.errors));
-  const plant = (anchored, mutate) => {
+  const plant = (mutate) => {
     const document = read();
-    const validator = document.classes.flatMap((c) => c.validators ?? []).find((v) => (v.anchor !== null) === anchored);
-    assert.ok(validator, `no ${anchored ? "anchored" : "unanchored"} validator`);
+    const validator = document.classes.flatMap((c) => c.validators ?? [])[0];
+    assert.ok(validator, "no validator");
     mutate(validator);
     return validate(document);
   };
-  // An anchored validator states both fields; an unanchored one states neither (an unverified false is no measurement).
+  // Every validator names its code and states both fields: a null anchor would be an unverified entry.
   for (const v of read().classes.flatMap((c) => c.validators ?? [])) {
     const has = "earlier_auth_gate" in v && "foreign_class_validator" in v;
-    const none = !("earlier_auth_gate" in v) && !("foreign_class_validator" in v);
-    assert.ok(v.anchor !== null ? has : none, `${v.description}: anchor ${JSON.stringify(v.anchor)} with fields ${has}`);
+    assert.ok(v.anchor !== null && typeof v.anchor === "object" && has, `${v.description}: anchor ${JSON.stringify(v.anchor)} with fields ${has}`);
   }
-  assert.equal(plant(false, () => {}), true, "an unanchored entry leaves both out");
-  assert.equal(plant(false, (v) => { v.earlier_auth_gate = false; v.foreign_class_validator = false; }), true, "the schema still allows the fields on an unanchored entry");
+  assert.equal(plant(() => {}), true, "the clean entry passes");
   const refused = {
-    "anchored, earlier_auth_gate missing": [true, (v) => delete v.earlier_auth_gate],
-    "anchored, foreign_class_validator missing": [true, (v) => delete v.foreign_class_validator],
-    "anchored, both missing": [true, (v) => { delete v.earlier_auth_gate; delete v.foreign_class_validator; }],
-    "both true": [true, (v) => { v.earlier_auth_gate = true; v.foreign_class_validator = true; }],
-    "both true, unanchored": [false, (v) => { v.earlier_auth_gate = true; v.foreign_class_validator = true; }],
-    "the retired name": [true, (v) => (v.reachable_but_not_owner = true)],
+    "a null anchor": (v) => (v.anchor = null),
+    "a null anchor without the fields": (v) => { v.anchor = null; delete v.earlier_auth_gate; delete v.foreign_class_validator; },
+    "earlier_auth_gate missing": (v) => delete v.earlier_auth_gate,
+    "foreign_class_validator missing": (v) => delete v.foreign_class_validator,
+    "both missing": (v) => { delete v.earlier_auth_gate; delete v.foreign_class_validator; },
+    "both true": (v) => { v.earlier_auth_gate = true; v.foreign_class_validator = true; },
+    "the retired name": (v) => (v.reachable_but_not_owner = true),
   };
-  for (const [name, [anchored, mutate]] of Object.entries(refused)) assert.equal(plant(anchored, mutate), false, name);
+  for (const [name, mutate] of Object.entries(refused)) assert.equal(plant(mutate), false, name);
 });
 
-// The documented count command, run as written on the docs page: 0 here with the four retired entries named as
-// not counted, and 1 with one planted foreign-class entry.
-test("the foreign-class count command of the docs answers 0 here, names every unanchored validator, and 1 on a planted fixture", () => {
+// The documented count command, run as written on the docs page: 0 here, and 1 with one planted foreign-class entry.
+test("the foreign-class count command of the docs answers 0 here and 1 on a planted fixture", () => {
   const page = readFileSync(path.join(repo, "docs", "reference", "auth", "endpoint-profiles.md"), "utf8");
   const commands = page.split("\n").filter((line) => line.startsWith("jq -n '[inputs] as $d | {foreign_class_validator:"));
   assert.equal(commands.length, 1, "the page holds the count command once");
@@ -300,26 +298,7 @@ test("the foreign-class count command of the docs answers 0 here, names every un
     assert.equal(result.status, 0, result.stderr);
     return JSON.parse(result.stdout);
   };
-  // Not counted: exactly the unanchored validators, read from the registry itself. Every retired class with an
-  // unanchored validator is named there; that set comes from the registry too (no class id is written here).
-  const registry = JSON.parse(readFileSync(path.join(repo, "contracts", "auth", "v1", "credential-classes.json"), "utf8"));
-  const unanchored = registry.classes.flatMap((c) => (c.validators ?? []).flatMap((v, i) => (v.anchor === null ? [`${c.class_id} validators[${i}]`] : [])));
-  const retiredWithUnanchored = registry.classes
-    .filter((c) => c.status === "retired" && (c.validators ?? []).some((v) => v.anchor === null))
-    .map((c) => c.class_id)
-    .sort();
-  assert.ok(retiredWithUnanchored.length > 0, "the registry has no retired class with an unanchored validator: the check measures nothing");
-  const check = (output, want) => {
-    const named = [...new Set(output.not_counted_unanchored.map((entry) => entry.split(" ")[0]))].filter((id) => retiredWithUnanchored.includes(id)).sort();
-    assert.deepEqual(named, retiredWithUnanchored, "a retired class with an unanchored validator is not named by the count");
-    assert.deepEqual(output, want);
-  };
-  const here = run(repo);
-  check(here, { foreign_class_validator: 0, not_counted_unanchored: unanchored });
-  // Planted defect: the output without one retired class's entries must fail the check.
-  const dropped = retiredWithUnanchored[0];
-  const planted = { ...here, not_counted_unanchored: here.not_counted_unanchored.filter((entry) => !entry.startsWith(dropped + " ")) };
-  assert.throws(() => check(planted, planted), /a retired class with an unanchored validator is not named/);
+  assert.deepEqual(run(repo), { foreign_class_validator: 0 });
   const root = mkdtempSync(path.join(os.tmpdir(), "foreign-count-"));
   try {
     const v1 = path.join(root, "contracts", "auth", "v1");
@@ -330,7 +309,12 @@ test("the foreign-class count command of the docs answers 0 here, names every un
     row.reachable_validators[0].earlier_auth_gate = false;
     row.reachable_validators[0].foreign_class_validator = true;
     writeFileSync(path.join(v1, "endpoint-profiles.go-api.json"), JSON.stringify(document));
-    assert.deepEqual(run(root), { foreign_class_validator: 1, not_counted_unanchored: unanchored });
+    assert.deepEqual(run(root), { foreign_class_validator: 1 });
+    // A planted credential-class validator counts too.
+    const classes = JSON.parse(readFileSync(path.join(v1, "credential-classes.json"), "utf8"));
+    classes.classes.flatMap((c) => c.validators ?? [])[0].foreign_class_validator = true;
+    writeFileSync(path.join(v1, "credential-classes.json"), JSON.stringify(classes));
+    assert.deepEqual(run(root), { foreign_class_validator: 2 });
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

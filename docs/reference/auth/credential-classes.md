@@ -61,8 +61,8 @@ shows where that happens today.
 | `external_push_ingest_token` | active | external_source | |
 | `stripe_webhook_signature` | active | external_source | |
 | `github_webhook_signature` | active | external_source | |
-| `gitlab_webhook_signature` | active | external_source | |
-| `jira_webhook_signature` | active | external_source | |
+| `gitlab_webhook_signature` | **retired** | external_source | no route accepts it; the GitLab intake route is removed |
+| `jira_webhook_signature` | **retired** | external_source | no route accepts it; the Jira intake route is removed |
 | `kubernetes_sa_token_exchange` | optional_feature | workload | |
 | `github_app_installation_token` | active | external_source | |
 | `pagerduty_oauth_credential` | active | external_source | |
@@ -286,42 +286,41 @@ it only with a browser client configured, so the class is `optional_feature`.
 
 ## Credentials that reach a validator that is not their own
 
-The org scope (`Scope.OrgScope`, `internal/api/policy/scope.go:128`) reads every
-request's `authorization` header through `Scope.headerAuthenticate`
-(`internal/api/policy/scope.go:103-120`), which calls
-`Authenticator.Authenticate` (`internal/api/policy/principal.go:109`) and
-decodes it as a user access JWT — **regardless of what the token actually
-is** — except for one explicit path-prefix exemption (`acrInternalPrefix`,
-`internal/api/policy/scope.go:97-98`, checked at `:130`):
+go-api reads the `Authorization` header in one place: the Principal step
+(`Scope.Principal`, `internal/api/policy/principalonce.go:112`, which decides
+in `Scope.decide`, `:125`). It checks the credential's own shape before any
+decoder runs:
 
-```go
-if strings.HasPrefix(r.URL.Path, acrInternalPrefix) {
-	next.ServeHTTP(w, r)
-	return
-}
-```
+- Its refusal table (`earlyRefusals`, `internal/api/policy/principalonce.go:39-49`)
+  refuses a bearer whose prefix names a domain credential or a secret
+  (`svc_`, `fcpush_`, `fcacr_`, `whsec_`, `fcwlb_`, `fcsak_`, `fcoac_`,
+  `fcocs_`) before any validator or store read.
+- A route whose endpoint-profile row does not accept an access token sends no
+  bearer to the access-token check.
+- The access-token check (`accessverify.Validator.Validate`,
+  `internal/auth/accessverify/accessverify.go:133`) reads only the JOSE header
+  `alg` and refuses every alg but EdDSA, the retired HS256 included.
 
-A non-JWT bearer value does not fail the request: `Authenticator.Authenticate`
-returns a refusal, and `Scope.headerAuthenticate` treats a refusal as no user
-(`internal/api/policy/scope.go:116-118`), so the request proceeds as anonymous
-through the org scope and its *real* validator still gets a turn. **But the
-credential still transited a validator it does not own**, which is exactly the
-shape this section describes. Every class below hits
-this:
+The org scope (`Scope.OrgScope`, `internal/api/policy/scope.go:128`) and the
+impersonation scope (`Scope.Impersonation`, `:221`) read only the Principal
+decision (`principalFrom`, `:105`), never the header. The org scope skips the
+`/api/v1/internal/acr/` prefix (`acrInternalPrefix`, `:98`); those routes
+accept only the acr-api workload token (`routeAuth.authenticate`,
+`internal/apiservice/acr/internalauth.go:99`).
 
-| Credential class | Route(s) | Exempted from the path prefix? |
-| --- | --- | --- |
-| `internal_svc_worker_token` (`svc_worker_*`) | none found (see below) | **No** — no HTTP validator exists for it anywhere, so if one were ever wired up at a non-`/api/v1/internal/acr/` path it would silently degrade to anonymous first. |
-| `external_push_ingest_token` (`fcpush_*`) | External Push data-plane endpoints | **No.** The org scope only understands user JWTs and takes its anonymous pass-through branch for an `fcpush_...` bearer: the decode attempt still happens, it just fails harmlessly. |
+So no class reaches a validator it does not own: no validator in
+`contracts/auth/v1/credential-classes.json` sets
+`foreign_class_validator: true`. The Python `OrgIdMiddleware` did: it ran every
+bearer through the user-JWT decoder, except under the `/api/v1/internal/acr/`
+prefix. That code is gone, and its validator entries are removed from the
+registry:
 
-Only `internal_svc_acr_token` (`svc_acr_*`) got the fix. The fix is a path
-exemption, not a credential-class dispatch — so it only protects whatever
-happens to be mounted under `/api/v1/internal/acr/*` today. Any new route
-for `svc_worker_*` or any future opaque credential
-mounted **outside** that one path prefix inherits the original bug's shape
-by default. **The durable fix is credential-class-aware dispatch (check the
-token's own shape/prefix before choosing a decoder), not a growing exemption
-list of path prefixes.**
+| Credential class | What go-api does with it today |
+| --- | --- |
+| `internal_svc_acr_token` (`svc_acr_*`) | The internal acr routes answer the uniform 401 before any credential read; every other route refuses the `svc_` prefix in the Principal step. |
+| `internal_svc_worker_token` (`svc_worker_*`) | No route accepts it; the Principal step refuses the `svc_` prefix. |
+| `external_push_ingest_token` (`fcpush_*`) | The Principal step refuses the `fcpush_` prefix; only the External Push routes read it (`requireIngestScope`, `internal/api/externalingest/auth.go:81`). |
+| `ops_refresh_token` (a refresh JWT) | It is a body field, not a bearer. auth-service refuses a JWT-shaped `refresh_token` before any session read (`refuseLegacyRefresh`, `internal/auth/authapi/compat.go:504`). |
 
 ### A positive counter-example worth copying: acr's dispatch
 

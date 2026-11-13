@@ -4,7 +4,7 @@
     "cache_class": "none",
     "expires_in_seconds": null,
     "obligations": null,
-    "policy_revision": 19,
+    "policy_revision": 20,
     "reason": "workload_action_denied",
     "wire_reason_code": "workload_action_denied"
   },

@@ -14,8 +14,8 @@ import (
 )
 
 const (
-	actionsSHA = "58aacdef15ce8380744596bd420d62ebe2a47984beddfec6b95cd4f4201220b2"
-	rolesSHA   = "580faa0bf8996fa80303b7c8d8b9b6378341ff18b0b0ed6aef9cdbead80ce2cf"
+	actionsSHA = "ae502cc9dcfbd8f87ee4e8aaa08bbc553c93799c4eaa4f8fc08cb6dab1efcc34"
+	rolesSHA   = "80373e40a776353acf619f9baa7d7b7d82d46eedf2f88cb8414e0dd5298b07be"
 )
 
 func repoRoot(t *testing.T) string {
@@ -217,7 +217,7 @@ func TestEmbeddedFilesValidateAgainstTheirSchemas(t *testing.T) {
 // the frozen table of sessionPermissions (the former internal/api/session/permissions.go). Catalog-only = not in that table
 // until a web-reviewed change adds it there; every other catalog action must
 // still equal a session permission.
-var catalogOnly = map[string]bool{"admin.impersonate": true, "billing.read": true, "billing.manage": true, "license.read": true, "members.update": true, "authz.decide": true, "acr.context.read": true, "reports.write": true, "acr.evidence.read": true, "acr.credential.issue": true, "acr.credential.revoke": true,
+var catalogOnly = map[string]bool{"admin.impersonate": true, "billing.read": true, "billing.manage": true, "license.read": true, "members.update": true, "authz.decide": true, "acr.context.read": true, "reports.write": true, "acr.evidence.read": true, "acr.credential.issue": true, "acr.credential.revoke": true, "sso.write": true,
 	"admin.billing": true, "admin.flags": true, "admin.audit": true, "admin.telemetry": true, "admin.stats": true,
 	"credentials.project": true,
 }
@@ -459,11 +459,11 @@ func TestImpersonationIsDeniedOnTheG51List(t *testing.T) {
 		"admin.users": true, "admin.orgs": true, "admin.impersonate": true,
 		"admin.billing": true, "admin.flags": true, "admin.audit": true, "admin.telemetry": true, "admin.stats": true, "members.invite": true, "members.manage": true,
 		"org.write": true, "org.delete": true, "billing.manage": true, "settings.write": true, "integrations.write": true, "reports.write": true,
-		"members.update": true, "authz.decide": true, "acr.credential.issue": true, "acr.credential.revoke": true, "credentials.project": true,
+		"members.update": true, "authz.decide": true, "acr.credential.issue": true, "acr.credential.revoke": true, "sso.write": true, "credentials.project": true,
 	}
 	actions := Default().Actions()
-	if len(actions) != 39 {
-		t.Fatalf("%d actions, want 39", len(actions))
+	if len(actions) != 40 {
+		t.Fatalf("%d actions, want 40", len(actions))
 	}
 	for _, a := range actions {
 		denied := a.Impersonation == ImpersonationDenied

@@ -1,11 +1,21 @@
 package synchandoff
 
 import (
+	"context"
 	"fmt"
+	"io"
+	"log/slog"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	prometheusbridge "go.opentelemetry.io/contrib/bridges/prometheus"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/otlpmetrics"
 )
 
 func scrapeAwait(t *testing.T, m *awaitMetrics) string {
@@ -153,4 +163,51 @@ func TestAwaitSumAddsEveryObservation(t *testing.T) {
 			t.Errorf("missing %q in:\n%s", want, got)
 		}
 	}
+}
+
+// What the OTLP exporter is handed for the await latency histogram: the real writer, the real embedded labels.tsv, the real
+// Gatherer and bridge. A row without "outcome" folds the three outcomes into one point without the attribute.
+func TestAwaitLatencyReachesOTLPWithOneSeriesPerOutcome(t *testing.T) {
+	m := newAwaitMetrics()
+	for _, state := range []State{StateQuarantined, StatePending, StateTerminal} {
+		m.observe(state, 120*time.Millisecond)
+	}
+	policy, err := otlpmetrics.DefaultLabelPolicy(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	gatherer := &otlpmetrics.Gatherer{Source: awaitFragment(scrapeAwait(t, m)), Policy: policy}
+	reader := sdkmetric.NewManualReader(sdkmetric.WithProducer(prometheusbridge.NewMetricProducer(prometheusbridge.WithGatherer(gatherer))))
+	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
+	var collected metricdata.ResourceMetrics
+	if err := reader.Collect(context.Background(), &collected); err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, scope := range collected.ScopeMetrics {
+		for _, metric := range scope.Metrics {
+			if metric.Name != awaitLatencyMetric {
+				continue
+			}
+			histogram, ok := metric.Data.(metricdata.Histogram[float64])
+			if !ok {
+				t.Fatalf("%s is not exported as a float histogram: %+v", metric.Name, metric)
+			}
+			for _, point := range histogram.DataPoints {
+				value, _ := point.Attributes.Value("outcome")
+				got = append(got, value.AsString())
+			}
+		}
+	}
+	sort.Strings(got)
+	if want := "materialized,pending,quarantined"; strings.Join(got, ",") != want {
+		t.Errorf("%s exports %d points with outcome values %q, want %s", awaitLatencyMetric, len(got), got, want)
+	}
+}
+
+type awaitFragment string
+
+func (f awaitFragment) EachMetricsFragment(_ map[string]bool, fn func(string, []byte, error)) {
+	fn("await", []byte(f), nil)
 }

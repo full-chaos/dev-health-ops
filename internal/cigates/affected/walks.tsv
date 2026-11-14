@@ -250,6 +250,7 @@ internal/cigates/scripts	golden_drift_test.go	unexpressed	-	-
 internal/cigates/scripts	helper_copies_drift_test.go	internal/cigates	tree	*
 internal/cigates/scripts	oracle_shards_script_test.go	unexpressed	-	-
 internal/cigates/scripts	oracle_triggers_script_test.go	unexpressed	-	-
+internal/cigates/scripts	pipefail_reader_test.go	ci	dir	*
 internal/cigates/scripts	ported_contract_guards_test.go	unexpressed	-	*.go
 internal/cigates/scripts	posture_integration_test.go	unexpressed	-	-
 internal/cigates/scripts	registry_guard_script_test.go	unexpressed	-	-

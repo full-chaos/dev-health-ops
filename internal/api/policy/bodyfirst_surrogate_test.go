@@ -33,7 +33,7 @@ func TestGuardBodyReadRefusesALoneSurrogateBeforeTheHandler(t *testing.T) {
 	if reached != 0 {
 		t.Errorf("the handler ran %d times for a refused body", reached)
 	}
-	clean := httptest.NewRequest(http.MethodPost, "/x", strings.NewReader(`{"v":"ok","p":"😀"}`))
+	clean := httptest.NewRequest(http.MethodPost, "/x", strings.NewReader(`{"v":"ok","p":"`+"\\ud83d"+"\\ude00"+`"}`))
 	clean.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, clean)

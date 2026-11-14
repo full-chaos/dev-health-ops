@@ -69,14 +69,37 @@ func TestReadCheckedRefusesALoneSurrogateAtEveryPosition(t *testing.T) {
 	}
 }
 
+// escapedPair is the JSON text of one astral code point as a Python json.dumps
+// (ensure_ascii) client sends it: two escapes, not raw UTF-8.
+const escapedPair = "\\ud83d" + "\\ude00"
+
 func TestReadCheckedKeepsWhatIsNotALoneSurrogate(t *testing.T) {
 	for _, body := range []string{
-		`{"v":"😀"}`, `{"v":"😀"}`, `{"v":"é"}`, `{"v":["a"],"w":{"k":"v"}}`, `{"v":"�"}`, `{"v":null}`, `[]`, `5`,
-		`{"v":{"😀":"x"}}`,
+		`{"v":"` + escapedPair + `"}`,
+		`{"v":["a","` + escapedPair + `"]}`,
+		`{"v":{"` + escapedPair + `":"x"}}`,
+		`{"v":{"k":"` + escapedPair + `"}}`,
+		`{"v":"a` + escapedPair + `b` + escapedPair + `"}`,
+		`{"v":"` + "\U0001F600" + `"}`,
+		`{"v":"\u00e9"}`, `{"v":"é"}`, `{"v":["a"],"w":{"k":"v"}}`, `{"v":"` + "\\" + `ufffd"}`, `{"v":null}`, `[]`, `5`,
 	} {
 		if outcome, errs := checked(t, body); outcome != pybody.Ready || len(errs) != 0 {
 			t.Errorf("%s: outcome %v errs %v, want Ready", body, outcome, errs)
 		}
+	}
+}
+
+func TestReadCheckedDecodesAnEscapedPairToOneCodePoint(t *testing.T) {
+	req := httptest.NewRequest("POST", "/x", strings.NewReader(`{"v":"`+escapedPair+`"}`))
+	req.Header.Set("Content-Type", "application/json")
+	body, outcome, _, err := pybody.ReadChecked(req)
+	if err != nil || outcome != pybody.Ready {
+		t.Fatalf("outcome %v err %v", outcome, err)
+	}
+	object, _ := body.Value.(*pyjson.Object)
+	value, _ := object.Get("v")
+	if text, _ := value.(string); text != "\U0001F600" {
+		t.Errorf("an escaped pair decodes to %q, want one U+1F600", text)
 	}
 }
 

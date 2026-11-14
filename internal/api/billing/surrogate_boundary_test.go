@@ -38,7 +38,10 @@ func TestBillingBodiesRefuseALoneSurrogateAtTheBoundary(t *testing.T) {
 			t.Errorf("%s: the refusal echoes the input: %s", c.name, text)
 		}
 	}
-	if status, text := post(`{"key":"k","name":"n","tier":"team"}`); status == http.StatusUnprocessableEntity {
-		t.Errorf("a clean body was refused: %d %s", status, text)
+	pair := "\\ud83d" + "\\ude00"
+	for _, body := range []string{`{"key":"k","name":"n","tier":"team"}`, `{"key":"k","name":"n` + pair + `","tier":"team","metadata":{"` + pair + `":"` + pair + `"},"bundle_ids":[]}`} {
+		if status, text := post(body); status == http.StatusUnprocessableEntity {
+			t.Errorf("a clean body was refused: %s: %d %s", body, status, text)
+		}
 	}
 }

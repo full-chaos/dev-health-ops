@@ -144,7 +144,7 @@ func TestTestOpsRateMeasures_AreWeightedNotAMeanOfRates_RealClickHouse(t *testin
 			r.repo, total, r.passed, r.failed, r.skipped, div(r.passed), div(r.failed), r.flake, r.distinct, r.team, orgID))
 	}
 
-	// Line coverage of team-a: 9,000 of 10,000 lines and 10 of 100 lines; a row with a percent and no counts adds to
+	// Line coverage of team-a: 9,000 of 10,000 lines and 10 of 100 lines; a row with a covered count and no total adds to
 	// neither side. Mean of the percents 50; weighted 9,010 / 10,100. team-b: a repository with no line.
 	exec(fmt.Sprintf("INSERT INTO testops_coverage_metrics_daily (repo_id, day, line_coverage_pct, lines_total, lines_covered, team_id, org_id, computed_at) VALUES ('%s', '2026-01-02', 90, 10000, 9000, 'team-a', '%s', now()), ('%s', '2026-01-02', 10, 100, 10, 'team-a', '%s', now()), ('%s', '2026-01-02', 99, NULL, 500, 'team-a', '%s', now()), ('%s', '2026-01-02', NULL, 0, 0, 'team-b', '%s', now())",
 		big, orgID, small, orgID, noTeam, orgID, empty, orgID))

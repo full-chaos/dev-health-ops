@@ -39,8 +39,8 @@ func j1Run(t *testing.T, extra ...string) *enfRun {
 			r.in.Yard[i].BodyNorm = bodyB
 		}
 	}
-	r.in.MetricsBefore = live(allEnforced, 1000, "f50883b", "0", unjudged(noOrgKey, "no_org", "5"), unjudged(seamKey, "served_org", "2"))
-	r.in.MetricsAfter = live(allEnforced, 1100, "f50883b", "0", unjudged(noOrgKey, "no_org", "8"), unjudged(seamKey, "served_org", "5"),
+	r.in.MetricsBefore = enfBefore(allEnforced, 1000, "f50883b", "0")
+	r.in.MetricsAfter = enfAfter(allEnforced, 1100, "f50883b", "0",
 		decisions("teams", "allow", "3"), decisions("teams", "deny", "6"), decisions("integrations", "deny", "3"))
 	r.in.Process = goodProcess()
 	var lines []string
@@ -83,22 +83,22 @@ func TestJ1CounterProofMakesAnEqualFiveXXPastTheGuard(t *testing.T) {
 func TestJ1MutantsAreRefused(t *testing.T) {
 	cases := map[string]func(*enfRun){
 		"no counter delta": func(r *enfRun) {
-			r.in.MetricsAfter = live(allEnforced, 1100, "f50883b", "0", unjudged(noOrgKey, "no_org", "8"), unjudged(seamKey, "served_org", "5"))
+			r.in.MetricsAfter = enfAfter(allEnforced, 1100, "f50883b", "0")
 		},
 		"the allow delta is one short": func(r *enfRun) {
-			r.in.MetricsAfter = live(allEnforced, 1100, "f50883b", "0", unjudged(noOrgKey, "no_org", "8"), unjudged(seamKey, "served_org", "5"),
+			r.in.MetricsAfter = enfAfter(allEnforced, 1100, "f50883b", "0",
 				decisions("teams", "allow", "2"), decisions("teams", "deny", "6"), decisions("integrations", "deny", "3"))
 		},
 		"the deny delta is one more": func(r *enfRun) {
-			r.in.MetricsAfter = live(allEnforced, 1100, "f50883b", "0", unjudged(noOrgKey, "no_org", "8"), unjudged(seamKey, "served_org", "5"),
+			r.in.MetricsAfter = enfAfter(allEnforced, 1100, "f50883b", "0",
 				decisions("teams", "allow", "3"), decisions("teams", "deny", "7"), decisions("integrations", "deny", "3"))
 		},
 		"an error_deny was counted": func(r *enfRun) {
-			r.in.MetricsAfter = live(allEnforced, 1100, "f50883b", "0", unjudged(noOrgKey, "no_org", "8"), unjudged(seamKey, "served_org", "5"),
+			r.in.MetricsAfter = enfAfter(allEnforced, 1100, "f50883b", "0",
 				decisions("teams", "allow", "3"), decisions("teams", "deny", "6"), decisions("teams", "error_deny", "1"), decisions("integrations", "deny", "3"))
 		},
 		"a decision of a namespace with no slot": func(r *enfRun) {
-			r.in.MetricsAfter = live(allEnforced, 1100, "f50883b", "0", unjudged(noOrgKey, "no_org", "8"), unjudged(seamKey, "served_org", "5"),
+			r.in.MetricsAfter = enfAfter(allEnforced, 1100, "f50883b", "0",
 				decisions("teams", "allow", "3"), decisions("teams", "deny", "6"), decisions("integrations", "deny", "3"), decisions("settings", "allow", "1"))
 		},
 		"the guard's deny digest equals the allow cells' answer": func(r *enfRun) {
@@ -202,7 +202,7 @@ func TestJ1AttributedExtraRequests(t *testing.T) {
 	if rep := counted.judge(); rep.Pass || rep.VerdictCounts()[VerdictEqualPastGuard] != 0 {
 		t.Fatalf("a counted-namespace extra the counter does not include is no proof: %v %v", rep.Pass, rep.VerdictCounts())
 	}
-	counted.in.MetricsAfter = live(allEnforced, 1100, "f50883b", "0", unjudged(noOrgKey, "no_org", "8"), unjudged(seamKey, "served_org", "5"),
+	counted.in.MetricsAfter = enfAfter(allEnforced, 1100, "f50883b", "0",
 		decisions("teams", "allow", "4"), decisions("teams", "deny", "6"), decisions("integrations", "deny", "3"))
 	if rep := counted.judge(); !rep.Pass || rep.VerdictCounts()[VerdictEqualPastGuard] != 3 {
 		t.Fatalf("a counter that includes the attributed extra stands: %v %v %v", rep.Pass, rep.VerdictCounts(), rep.Reasons)

@@ -158,15 +158,15 @@ func relabelNoOrgSkips(slots []SlotVerdict, evidence NoOrgEvidence) {
 	}
 }
 
-// UnjudgedSums is the increase of the unjudged counter over all routes by the reasons the verdicts rest on, and every
+// UnjudgedSums is the increase of the unjudged counter over all routes by the reason the verdicts rest on, and every
 // other reason together.
 type UnjudgedSums struct {
-	NoOrg, ServedOrg, OrgRequired, Other int
+	OrgRequired, Other int
 }
 
-// UnjudgedTotals sums the increase of the unjudged counter over all routes: reason no_org, reason served_org, reason
-// org_required (a build that decides a token with no organization, CHAOS-10872 S1), and every other reason together, so
-// the record shows the counts the verdicts rest on on their own line.
+// UnjudgedTotals sums the increase of the unjudged counter over all routes: reason org_required (a build that decides a
+// token with no organization, CHAOS-10872 S1) and every other reason together, so the record shows the count the
+// verdicts rest on on its own line.
 func UnjudgedTotals(before, after []byte) (UnjudgedSums, error) {
 	all, err := ParseUnjudgedReasons(before, after)
 	if err != nil {
@@ -175,14 +175,9 @@ func UnjudgedTotals(before, after []byte) (UnjudgedSums, error) {
 	var sums UnjudgedSums
 	for _, reasons := range all {
 		for reason, n := range reasons {
-			switch reason {
-			case "no_org":
-				sums.NoOrg += n
-			case "served_org":
-				sums.ServedOrg += n
-			case "org_required":
+			if reason == "org_required" {
 				sums.OrgRequired += n
-			default:
+			} else {
 				sums.Other += n
 			}
 		}
@@ -194,8 +189,6 @@ type orglessResidualKind int
 
 const (
 	residualNone orglessResidualKind = iota
-	// residualLegacy: exactly n no_org and no other reason (a build that keeps the legacy answer).
-	residualLegacy
 	// residualOrgRequired: exactly n org_required and no other reason (an S1 build, an AdminOrg row).
 	residualOrgRequired
 	// residualDecided: no reason grew (an S1 build that asked the decision point).
@@ -213,8 +206,6 @@ func orglessResidual(got map[string]int, n int) orglessResidualKind {
 	switch {
 	case len(grown) == 0:
 		return residualDecided
-	case len(grown) == 1 && grown["no_org"] == n:
-		return residualLegacy
 	case len(grown) == 1 && grown["org_required"] == n:
 		return residualOrgRequired
 	}

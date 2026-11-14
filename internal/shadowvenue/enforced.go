@@ -22,11 +22,6 @@ const (
 	VerdictEnforcedDeny     = "ENFORCED_DENY"
 	VerdictStatusDiffers    = "MISMATCH_STATUS"
 	VerdictUnevidencedNoOrg = "UNEVIDENCED_NOORG"
-	// VerdictEvidencedNoOrg is the named rule for a no-org superuser slot the counter does not cover (the handler served
-	// it, reason served_org): the go-api log shows the decision point skipped the request (result "skipped", no
-	// decision_id) and the enforced and yardstick runs gave the same status and the same normalized answer.
-	VerdictEvidencedNoOrg   = "EVIDENCED_NOORG"
-	VerdictUnevidencedSeam  = "UNEVIDENCED_SEAM"
 	VerdictControlNotDenied = "CONTROL_NOT_ENFORCED"
 	// VerdictMismatchCaller: the slot's token is not the one the plan wanted (sub or org claim).
 	VerdictMismatchCaller = "MISMATCH_CALLER"
@@ -160,15 +155,14 @@ func driveSpan(slots []Slot) (first, last time.Time) {
 }
 
 // JudgeEnforced judges a run with enforcement on against the yardstick. Void (exit 3): the enforcement switch not read
-// back from the running go-api or missing a namespace the rows need, a go-api restart or build change between the scrapes, a data digest that differs, an unreadable counter, fewer than two controls, a
-// control the enforcement did not deny. Per slot, every caller: the enforced status must equal the yardstick's legacy
-// status; a difference is MISMATCH_STRICTER or MISMATCH_WIDER by direction (403 = deny), else MISMATCH_STATUS. The
-// superuser's skips of the yardstick pass only on the counter: per route, unjudged{reason="no_org"} grew by exactly the
-// number of those slots and no other reason grew; a seam row (SKIPPED_SEAM in the yardstick) allows served_org only. A
-// build that decides a token with no organization (CHAOS-10872 S1) counts no no_org: there a route passes when
-// unjudged{reason="org_required"} grew by exactly the number of slots (an AdminOrg row) and no other reason grew, or when
-// no reason grew and the route's namespace counted at least as many allow or deny decisions as the run has such slots
-// (DECIDED_NOORG). One run is one build: a legacy route beside an S1 route fails the run.
+// back from the running go-api or missing a namespace the rows need, a go-api restart or build change between the scrapes, a data digest that differs, an unreadable counter, an unjudged
+// series with a reason outside go-api's closed set (policy.EnforceUnjudgedReasons: a go-api build before CHAOS-13596,
+// which this judge does not judge), fewer than two controls, a control the enforcement did not deny. Per slot, every
+// caller: the enforced status must equal the yardstick's legacy status; a difference is MISMATCH_STRICTER or
+// MISMATCH_WIDER by direction (403 = deny), else MISMATCH_STATUS. The superuser's skips of the yardstick (a token with no
+// organization) are decided by the enforcement (CHAOS-10872 S1): a route passes when unjudged{reason="org_required"} grew
+// by exactly the number of slots (an AdminOrg row) and no other reason grew, or when no reason grew and the route's
+// namespace counted at least as many allow or deny decisions as the run has such slots (DECIDED_NOORG).
 func JudgeEnforced(in EnforcedInput) Report {
 	var report Report
 	fail := func(format string, args ...any) {
@@ -230,6 +224,12 @@ func JudgeEnforced(in EnforcedInput) Report {
 	if err != nil {
 		void("the unjudged counter is unreadable: %v", err)
 	}
+	if err == nil {
+		if outside := unjudgedOutsideClosedSet(reasons); len(outside) > 0 {
+			void("the unjudged counter has series with reasons outside go-api's closed set %v: %s; a go-api build before CHAOS-13596, which this judge does not judge",
+				policy.EnforceUnjudgedReasons(), strings.Join(outside, ", "))
+		}
+	}
 
 	type cell struct {
 		row, caller string
@@ -244,7 +244,7 @@ func JudgeEnforced(in EnforcedInput) Report {
 	unjudgedRoutes := map[string]bool{}
 	for route, byReason := range reasons {
 		for reason, n := range byReason {
-			if n > 0 && reason != "no_org" && reason != "served_org" && reason != "org_required" {
+			if n > 0 && reason != "org_required" {
 				unjudgedRoutes[route] = true
 			}
 		}
@@ -265,11 +265,8 @@ func JudgeEnforced(in EnforcedInput) Report {
 			}
 		case slot.Status == y.Status:
 			sv.Verdict = VerdictMatchEnforced
-			switch y.Verdict {
-			case VerdictSkipped:
+			if y.Verdict == VerdictSkipped {
 				sv.Verdict = VerdictUnevidencedNoOrg
-			case VerdictSkippedSeam:
-				sv.Verdict = VerdictUnevidencedSeam
 			}
 			if in.Strict {
 				differs := slot.BodyNormSHA != y.BodyNorm
@@ -302,56 +299,30 @@ func JudgeEnforced(in EnforcedInput) Report {
 		void("%d cells have no body digest in the slots or in the yardstick: the answers cannot be compared", bodyMissing)
 	}
 	applyStrict(&report, in.Strict, in.Membership, void)
-	// The superuser's skips and the seam rows pass on the counter, per route.
+	// The superuser's skips of the yardstick are decided by the enforcement (S1): they pass on the counter, per route.
 	if err == nil {
 		perKey := map[string][]int{}
 		for i, sv := range report.Slots {
-			if sv.Verdict == VerdictUnevidencedNoOrg || sv.Verdict == VerdictUnevidencedSeam {
+			if sv.Verdict == VerdictUnevidencedNoOrg {
 				perKey[sv.Key()] = append(perKey[sv.Key()], i)
 			}
 		}
 		decided, decidedErr := ParseDecisionDeltas(in.MetricsBefore, in.MetricsAfter)
-		legacyRoutes, s1Routes := 0, 0
 		decidedByNS := map[string][]int{}
 		for key, indexes := range perKey {
-			seam := report.Slots[indexes[0]].Verdict == VerdictUnevidencedSeam
-			got := reasons[key]
-			if seam {
-				ok := true
-				for reason, n := range got {
-					if reason != "served_org" && n != 0 {
-						ok = false
-					}
-				}
-				if ok {
-					for _, i := range indexes {
-						report.Slots[i].Verdict = VerdictSkippedSeam
-					}
-				}
-				continue
-			}
-			residual := orglessResidual(got, len(indexes))
-			if residual == residualOrgRequired || residual == residualDecided {
-				// Only the org-less caller of the venue, the superuser, is decided this way; any other caller's skip fails.
-				for _, i := range indexes {
-					if report.Slots[i].Caller != "superuser" {
-						residual = residualNone
-					}
+			residual := orglessResidual(reasons[key], len(indexes))
+			// Only the org-less caller of the venue, the superuser, is decided this way; any other caller's skip fails.
+			for _, i := range indexes {
+				if report.Slots[i].Caller != "superuser" {
+					residual = residualNone
 				}
 			}
 			switch residual {
-			case residualLegacy:
-				legacyRoutes++
-				for _, i := range indexes {
-					report.Slots[i].Verdict = VerdictSkippedNoOrg
-				}
 			case residualOrgRequired:
-				s1Routes++
 				for _, i := range indexes {
 					report.Slots[i].Verdict = VerdictDecidedNoOrg
 				}
 			case residualDecided:
-				s1Routes++
 				ns := in.Namespaces[key]
 				decidedByNS[ns] = append(decidedByNS[ns], indexes...)
 			}
@@ -363,17 +334,6 @@ func JudgeEnforced(in EnforcedInput) Report {
 			for _, i := range indexes {
 				report.Slots[i].Verdict = VerdictDecidedNoOrg
 			}
-		}
-		if legacyRoutes > 0 && s1Routes > 0 {
-			fail("FAIL: %d no-org routes counted no_org and %d were decided: one run is one build, legacy or S1", legacyRoutes, s1Routes)
-		}
-	}
-	// EVIDENCED_NOORG: a no-org superuser slot the counter left UNEVIDENCED (the handler served it) passes on the log proof
-	// that the decision point skipped it, its answer being equal to the yardstick's in status and body (bodyVerdict did not
-	// give it MISMATCH_BODY or MISMATCH_STATUS, so it is still UNEVIDENCED_NOORG only if both are equal).
-	for i, sv := range report.Slots {
-		if in.Strict && sv.Verdict == VerdictUnevidencedNoOrg && sv.Caller == "superuser" && noOrgSkipProof(in.Log, sv.Slot, in.Grace) {
-			report.Slots[i].Verdict = VerdictEvidencedNoOrg
 		}
 	}
 	if in.J1 {
@@ -451,6 +411,22 @@ func applyCounterProof(report *Report, in EnforcedInput, yardVerdict func(row, c
 			report.Reasons = append(report.Reasons, fmt.Sprintf("FAIL: slot %d row %s %s: the answer carries the guard's deny digest %.12s: it is not past the guard", sv.Seq, sv.Row, sv.Caller, sv.BodyNormSHA))
 		}
 	}
+}
+
+// unjudgedOutsideClosedSet lists, sorted, every "route reason" pair of the unjudged counter whose reason go-api can no
+// longer emit: its closed set is read from the production policy package (policy.EnforceUnjudgedReasons), never copied.
+func unjudgedOutsideClosedSet(reasons map[string]map[string]int) []string {
+	closed := policy.EnforceUnjudgedReasons()
+	var outside []string
+	for route, byReason := range reasons {
+		for reason := range byReason {
+			if !slices.Contains(closed, reason) {
+				outside = append(outside, route+" "+reason)
+			}
+		}
+	}
+	slices.Sort(outside)
+	return outside
 }
 
 // RowNamespaces maps each go-api shadow row key to its action namespace.
@@ -630,13 +606,13 @@ func keyOfYard(yard []OutboundSlot, row string) string {
 
 // bodyVerdict gives a status-equal cell its body verdict: a differing normalized body is MISMATCH_BODY; an equal 5xx
 // is EQUAL_PAST_GUARD only with the log proof that the decision point allowed the request, PDP_UNAVAILABLE when the log
-// shows no verdict, else VOID_PARITY (also when the route has an unjudged count for another reason than no_org or
-// served_org). A cell the yardstick skipped (the counter decides it) needs no proof here.
+// shows no verdict, else VOID_PARITY (also when the route has an unjudged count for another reason than
+// org_required). A cell the yardstick skipped (a token with no organization, the counter decides it) needs no proof here.
 func bodyVerdict(in EnforcedInput, slot Slot, y YardSlot, verdict string, unjudged, differs bool) string {
 	switch {
 	case differs:
 		return VerdictMismatchBody
-	case slot.Status < 500 || y.Verdict == VerdictSkipped || y.Verdict == VerdictSkippedSeam:
+	case slot.Status < 500 || y.Verdict == VerdictSkipped:
 		return verdict
 	}
 	if slot.Key() == orgDeleteKey && orgDeletionRefusedProof(in.Log, slot, in.Grace) {
@@ -687,24 +663,6 @@ func pastGuard(ev *Evidence, slot Slot, grace time.Duration) guardProof {
 		return proofAllow
 	}
 	return proofNone
-}
-
-// noOrgSkipProof reads the go-api log for a no-org superuser slot: exactly one result line of its route and caller kind in
-// its window, with result "skipped" and no decision_id, is the proof that the decision point was not asked (the
-// superuser has no token organization) while the handler answered.
-func noOrgSkipProof(ev *Evidence, slot Slot, grace time.Duration) bool {
-	if ev == nil {
-		return false
-	}
-	from, to := slot.Start.Add(-windowSkew), slot.End.Add(grace)
-	n, skipped := 0, false
-	for _, l := range ev.results {
-		if l.route == slot.Key() && l.caller == callerKind(slot.Caller) && !l.at.Before(from) && !l.at.After(to) {
-			n++
-			skipped = l.result == "skipped" && l.decision == ""
-		}
-	}
-	return n == 1 && skipped
 }
 
 // orgDeleteKey is row 13, the organization delete; its 5xx in the venue is the ClickHouse refusal that precedes any

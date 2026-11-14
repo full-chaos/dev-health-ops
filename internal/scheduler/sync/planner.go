@@ -622,9 +622,8 @@ func buildWorkItemFamilyUnit(
 	// covered by a later tick, and the monotonic watermark write keeps its
 	// watermark where it is.
 	uncapped := latest
-	mergedClass := WindowRatchetClass(provider, canonicalWorkItemsDataset, canonical.CostClass)
+	mergedClass := PlannedWindowClass(provider, canonicalWorkItemsDataset, canonical.CostClass, fullQuery)
 	if fullQuery {
-		mergedClass = canonical.CostClass
 		globalPlanGateTelemetry.observe(provider, canonicalWorkItemsDataset, planGateOutcomeFullQueryWindow)
 		slog.Default().Info("sync.plan.work_items_full_query_window",
 			slog.String("provider", provider),
@@ -802,10 +801,7 @@ func resolveWindow(
 	now, before time.Time,
 ) (*time.Time, time.Time, bool) {
 	start := resolveWindowStart(input, source, dataset, spec, now)
-	class := WindowRatchetClass(source.Provider, dataset.Key, spec.CostClass)
-	if dataset.FullQuery {
-		class = spec.CostClass
-	}
+	class := PlannedWindowClass(source.Provider, dataset.Key, spec.CostClass, dataset.FullQuery)
 	end := applyHeavyWindowRatchet(input.Mode, class, start, before, input.WatermarkOverlap)
 	return normalizeStampingWindow(start, end, now, input.WatermarkOverlap)
 }
@@ -834,6 +830,16 @@ func WindowRatchetClass(provider, dataset, costClass string) string {
 		return heavyCostClass
 	}
 	return costClass
+}
+
+// PlannedWindowClass is the class the window ratchet scopes on for a planned dataset: WindowRatchetClass,
+// except that a dataset whose own query the unit window does not bound (fullQuery) skips the ratchet and
+// keeps its registry class. The planner and the sync admin freshness view both decide through it.
+func PlannedWindowClass(provider, dataset, costClass string, fullQuery bool) string {
+	if fullQuery {
+		return costClass
+	}
+	return WindowRatchetClass(provider, dataset, costClass)
 }
 
 // workItemWindowBoundedProviders are the providers whose work-items route

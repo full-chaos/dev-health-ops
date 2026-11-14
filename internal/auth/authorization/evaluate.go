@@ -124,7 +124,8 @@ func (e *Evaluator) evaluateBase(r Request, s Snapshot) Decision {
 		// The legacy paths admit a holder of admin.orgs before they read the membership row, in an active,
 		// suspended or unknown organization (no organization row); a removed organization still denies.
 		orgStatus := s.OrganizationStatus(r.OrganizationID)
-		if (orgStatus == StatusActive || orgStatus == StatusSuspended || orgStatus == StatusUnknown) && act.PlatformAdmin &&
+		// MUTANT E2 (CHAOS-13728 throwaway): the organization-scope platform-admin allow is removed.
+		if false && (orgStatus == StatusActive || orgStatus == StatusSuspended || orgStatus == StatusUnknown) && act.PlatformAdmin &&
 			e.cat.Allows(s.PlatformRole(), platformAdminAction) {
 			o := &Obligations{TenantScope: r.OrganizationID}
 			// A filtered action's allow names the repositories it covers; a platform admin reads them org-wide.

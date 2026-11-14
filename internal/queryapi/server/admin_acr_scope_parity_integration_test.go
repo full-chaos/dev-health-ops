@@ -86,6 +86,8 @@ type paritySeen struct {
 type parityWant struct {
 	// lServed: L answers 200 with lNames; else L refuses (any status but 200).
 	lServed bool
+	// lStatus, when set, is the exact status of a refused L.
+	lStatus int
 	lNames  []string
 	// batchAllowed is the set of L names the per-key reads allow; batchReason the reason of every other key.
 	batchAllowed []string
@@ -99,9 +101,11 @@ type parityWant struct {
 }
 
 var parityWants = map[string]parityWant{
-	// A: platform admin (auth platform_admin assignment, public.users.is_superuser false), no membership.
-	"A_platform_admin_no_membership": {lServed: true, lNames: parityRepos, batchAllowed: nil, batchReason: "no_membership",
-		g2Allowed: false, g2Reason: "no_membership", sameScopes: false},
+	// A: platform admin (auth platform_admin assignment, public.users.is_superuser false), no membership. Observed in run 4
+	// (merge 5612ee36): L 401 edge_not_a_member (query-api roleInOrg admits admin.orgs only for an org other than the
+	// token's), G1 and G2 no_membership: both paths refuse.
+	"A_platform_admin_no_membership": {lServed: false, lStatus: 401, batchAllowed: nil, batchReason: "no_membership",
+		g2Allowed: false, g2Reason: "no_membership", sameScopes: true},
 	// M: member with one named grant row (acme/beta): the control whose answers are known to differ.
 	"M_member_named_grant": {lServed: true, lNames: parityRepos, batchAllowed: []string{"acme/beta"}, batchReason: "repository_not_granted",
 		g2Allowed: true, g2List: []string{"acme/beta"}, sameScopes: false},
@@ -109,7 +113,7 @@ var parityWants = map[string]parityWant{
 	"M0_member_no_grant": {lServed: true, lNames: parityRepos, batchAllowed: parityRepos, g2Allowed: true, g2Scope: "organization",
 		sameScopes: true},
 	// N: no membership, no platform role: refused on both paths.
-	"N_non_member": {lServed: false, batchReason: "no_membership", g2Allowed: false, g2Reason: "no_membership", sameScopes: true},
+	"N_non_member": {lServed: false, lStatus: 401, batchReason: "no_membership", g2Allowed: false, g2Reason: "no_membership", sameScopes: true},
 }
 
 func TestAdminACRScopeParityLegacyVersusGrants(t *testing.T) {
@@ -334,6 +338,9 @@ func TestAdminACRScopeParityLegacyVersusGrants(t *testing.T) {
 		t.Run(name+"/L", func(t *testing.T) {
 			if (s.lStatus == http.StatusOK) != want.lServed {
 				t.Errorf("L status %d, want served=%v", s.lStatus, want.lServed)
+			}
+			if want.lStatus != 0 && s.lStatus != want.lStatus {
+				t.Errorf("L status %d, want %d", s.lStatus, want.lStatus)
 			}
 			if want.lServed && !slices.Equal(s.lNames, want.lNames) {
 				t.Errorf("L names %v, want %v", s.lNames, want.lNames)

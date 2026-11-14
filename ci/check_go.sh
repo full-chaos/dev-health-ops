@@ -476,7 +476,7 @@ run_providersync_bounded() {
 usage() {
   # Backticks in the literal help text document commands; they are not substitutions.
   # shellcheck disable=SC2016
-  printf '%s\n' 'Usage: ci/check_go.sh [auth [STAGE]|fmt|vet|test|race|venue-oracles [SHARD COUNT]|venue-oracle-skips JSON_LOG LEDGER NAME...|venue-oracle-plan COUNT|ci-leg LEG [SHARD COUNT]|ci-leg-warm test|race SHARD COUNT|test-shard-plan SHARD COUNT|test-shard-split-list SHARD COUNT|race-shard-plan SHARD COUNT|race-excluded-shard-plan SHARD COUNT|race-excluded-receipts JSON...|test-shard-wall-guard SHARD COUNT WALL LOGFILE|test-shard-unweighted-guard SHARD COUNT LOGFILE|security-fresh-receipt RAN JSON...|security-fresh-split PKG...|build|contract|ratchets|race-weights-rows|multi-replica-workers|job-timeout MINUTES|job-start|census-ops|integration-vet|integration-coverage|race-excluded-ran|integration-shard-plan|integration-prepull|integration-shard|integration|fast|ci|all]
+  printf '%s\n' 'Usage: ci/check_go.sh [auth [STAGE]|fmt|vet|test|race|venue-oracles [SHARD COUNT]|venue-oracle-skips JSON_LOG LEDGER NAME...|venue-oracle-plan COUNT|ci-leg LEG [SHARD COUNT]|ci-leg-warm all build|race|test-shard-plan SHARD COUNT|test-shard-split-list SHARD COUNT|race-shard-plan SHARD COUNT|race-excluded-shard-plan SHARD COUNT|race-excluded-receipts JSON...|test-shard-wall-guard SHARD COUNT WALL LOGFILE|test-shard-unweighted-guard SHARD COUNT LOGFILE|security-fresh-receipt RAN JSON...|security-fresh-split PKG...|build|contract|ratchets|race-weights-rows|multi-replica-workers|job-timeout MINUTES|job-start|census-ops|integration-vet|integration-coverage|race-excluded-ran|integration-shard-plan|integration-prepull|integration-shard|integration|fast|ci|all]
 
   auth   (CHAOS-4887) The Auth Control Plane gates over the auth packages ALONE: gofmt, vet, test,
          -race, the production-middleware stack test (G-69, must log its marker), one fuzz run per
@@ -552,10 +552,11 @@ usage() {
          slices, ci/go_race_weights.d). The
          legs run exactly the steps of `ci` (pinned by a tooling test); each
          stage prints UTC start/done stamps.
-  ci-leg-warm test|race SHARD COUNT
-         Compile the packages of that leg slice with the leg own flags and
-         run no test (go test -run ^$), to fill the leg Go build cache on a
-         main push whose test and race legs the merge queue already ran.
+  ci-leg-warm all build|race
+         Compile every package of every leg of the family with the flags of
+         the legs (race: -race, over the race shard plans) and run no test
+         code (go test -exec /bin/true; build also runs the two vet passes of
+         the static leg), to fill the go-quality Go cache family on a push to main.
   test-shard-plan SHARD COUNT
          Print the packages (module, import path, weights key) of the SHARD-th of
          COUNT weight-balanced slices of the unit tests (ci/go_test_weights.tsv,
@@ -2099,35 +2100,40 @@ check_ci_leg() {
   printf 'ci-leg %s: OK\n' "${leg}"
 }
 
-# check_ci_leg_warm test|race SHARD COUNT (CHAOS-11408): compile, run nothing. A main push that the merge queue already
-# tested skips its test and race legs, and this fills the leg's Go build cache on a key miss so the pull requests that restore
-# it still hit. The flags are the ones of the real leg (-mod=readonly -trimpath, -race for a race leg) plus -run '^$', so the
-# compiled objects are the ones the real leg would cache.
-check_ci_leg_warm() {
-  local leg="${1:-}" shard="${2:-}" count="${3:-}" module_dir plan pkg
+# check_ci_leg_warm_all build|race (CHAOS-13718): fills one go-quality Go cache family (go-quality.yml job go-quality-cache) with
+# the compile actions of every leg of the family and runs no test code (-exec /bin/true: each test binary is linked, never run).
+# The flags are the real legs' (-mod=readonly -trimpath; -race for race), so the actions are the ones those legs look up.
+#   build  every package of every module (the union of the test shard plans) and the static leg's two vet passes
+#   race   -race over every package of the race shard plans (the module's packages but ci/race_excluded_packages.tsv)
+check_ci_leg_warm_all() {
+  local family="${1:-}" module_dir modpath pkg listing
   local -a pkgs
-  case "${leg}" in
-    test) plan="$(check_test_shard_plan "${shard}" "${count}")" || die "test shard plan failed" ;;
-    race) plan="$(check_race_shard_plan "${shard}" "${count}")" || die "race shard plan failed" ;;
-    *) die "ci-leg-warm LEG must be test or race (got '${leg}')" ;;
+  case "${family}" in
+    build | race) ;;
+    *) die "ci-leg-warm all FAMILY must be build or race (got '${family}')" ;;
   esac
   for module_dir in "${MODULE_DIRS[@]}"; do
+    printf 'ci-leg-warm all %s: %s\n' "${family}" "${module_dir}"
+    if [ "${family}" = build ]; then
+      (cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -exec /bin/true ./...) \
+        || die "ci-leg-warm all build: go test -exec /bin/true failed in ${module_dir}"
+      (cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go vet -mod=readonly -trimpath ./...) \
+        || die "ci-leg-warm all build: go vet failed in ${module_dir}"
+      (cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go vet -mod=readonly -trimpath -tags=integration ./...) \
+        || die "ci-leg-warm all build: go vet -tags=integration failed in ${module_dir}"
+      continue
+    fi
+    modpath="$(cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -m)" || die "go list -m failed in ${module_dir}"
+    listing="$(cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -mod=readonly ./...)" || die "go list failed in ${module_dir}"
     pkgs=()
     while IFS= read -r pkg; do
       [ -n "${pkg}" ] && pkgs+=("${pkg}")
-    done < <(printf '%s\n' "${plan}" | awk -F'\t' -v m="${module_dir}" '$1 == m { print $2 }')
+    done < <(printf '%s\n' "${listing}" | race_excluded_filter "${module_dir}" "${modpath}")
     [ "${#pkgs[@]}" -gt 0 ] || continue
-    printf 'go test -run ^$ (%s %s/%s): %s: %d package(s)\n' "${leg}" "${shard}" "${count}" "${module_dir}" "${#pkgs[@]}"
-    (
-      cd "${ROOT}/${module_dir}"
-      if [ "${leg}" = race ]; then
-        "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -race -run '^$' "${pkgs[@]}"
-      else
-        "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -run '^$' "${pkgs[@]}"
-      fi
-    )
+    (cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -race -exec /bin/true "${pkgs[@]}") \
+      || die "ci-leg-warm all race: go test -race -exec /bin/true failed in ${module_dir}"
   done
-  printf 'ci-leg-warm %s: OK\n' "${leg}"
+  printf 'ci-leg-warm all %s: OK\n' "${family}"
 }
 
 # check_venue_oracles (CHAOS-6314) runs every venue oracle test in the repo,
@@ -6285,9 +6291,8 @@ case "${1:-all}" in
     check_ci_leg "$@"
     ;;
   ci-leg-warm)
-    [ "$#" -eq 4 ] || die "ci-leg-warm accepts test|race SHARD COUNT"
-    shift
-    check_ci_leg_warm "$@"
+    { [ "$#" -eq 3 ] && [ "$2" = all ]; } || die "ci-leg-warm accepts all build|race"
+    check_ci_leg_warm_all "$3"
     ;;
   build)
     check_build

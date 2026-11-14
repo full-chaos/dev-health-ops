@@ -213,9 +213,10 @@ ORDER BY run_id, suite_id`,
 
 // loadNativeTestopsCaseAggregate is the one test_case_results read behind a
 // test metric record, reduced inside ClickHouse to one row per case_name. The
-// table's sorting key has no time column, so any read of it scans the repo's
-// whole case history; both questions the record asks of it are therefore
-// answered in the same scan. It folds today's cases into accumulator and
+// table's sorting key has no time column, but both semi-joins below are on
+// run_id, its second key column, so ClickHouse reads only the runs they name
+// (the read does not grow with the repo's case history); both questions the
+// record asks of it are answered in the same scan. It folds today's cases into accumulator and
 // returns the names that failed in [historyStart, start).
 //
 // Today's half reproduces load_testops_test_data's two-part semi-join
@@ -254,6 +255,44 @@ func loadNativeTestopsCaseAggregate(
 	repoID uuid.UUID,
 	historyStart, start, end time.Time,
 ) (map[string]struct{}, error) {
+	defaultBranch, err := loadNativeTestopsDefaultBranch(ctx, conn, orgID, repoID)
+	if err != nil {
+		return nil, err
+	}
+	// Runs KNOWN to sit on a branch other than the repository default are left
+	// out of this read: flake, retry-dependency and failure-recurrence compare a
+	// case name's statuses across runs, and a pull-request branch that fails,
+	// is fixed and then passes on a new commit would read as a flake. Pass and
+	// failure counts come from suite rows (loadNativeTestopsSuites) and are not
+	// narrowed here. A run with no ci_pipeline_runs row, or a NULL or empty
+	// branch, is not known to be off the default branch and stays in; so does
+	// every run when the repository's default branch is not recorded. The
+	// exclusion set is limited to the runs with a suite in [historyStart, end),
+	// the only runs either half below can use.
+	nonDefaultRuns := ""
+	var nonDefaultArgs []any
+	if defaultBranch != "" {
+		nonDefaultRuns = `
+    AND run_id NOT IN (
+      SELECT run_id FROM ci_pipeline_runs FINAL
+      WHERE org_id = ? AND repo_id = ?
+        AND run_id IN (
+          SELECT run_id FROM test_suite_results FINAL
+          WHERE org_id = ? AND repo_id = ?
+            AND coalesce(started_at, finished_at) >= ? AND coalesce(started_at, finished_at) < ?
+        )
+        AND branch IS NOT NULL AND branch != '' AND branch != ?
+    )`
+		nonDefaultArgs = []any{orgID, repoID, orgID, repoID, historyStart.UTC(), end.UTC(), defaultBranch}
+	}
+	args := []any{
+		orgID, repoID, start.UTC(), end.UTC(),
+		orgID, repoID, end.UTC(),
+		"failure", "failed", "error", "errors", "timeout", "timed_out",
+		orgID, repoID, historyStart.UTC(), start.UTC(),
+		orgID, repoID,
+	}
+	args = append(args, nonDefaultArgs...)
 	rows, err := conn.Query(ctx, `
 SELECT
   case_name,
@@ -284,16 +323,11 @@ FROM (
           AND coalesce(started_at, finished_at) >= ? AND coalesce(started_at, finished_at) < ?
       ) AS failed_in_history
   FROM test_case_results FINAL
-  WHERE org_id = ? AND repo_id = ? AND case_name != ''
+  WHERE org_id = ? AND repo_id = ? AND case_name != ''`+nonDefaultRuns+`
 )
 WHERE in_today OR failed_in_history
 GROUP BY case_name
-ORDER BY case_name`,
-		orgID, repoID, start.UTC(), end.UTC(),
-		orgID, repoID, end.UTC(),
-		"failure", "failed", "error", "errors", "timeout", "timed_out",
-		orgID, repoID, historyStart.UTC(), start.UTC(),
-		orgID, repoID)
+ORDER BY case_name`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("load native testops case aggregate: %w", err)
 	}
@@ -338,16 +372,31 @@ ORDER BY case_name`,
 func loadNativeTestopsLatestCoverage(
 	ctx context.Context, conn testopsNativeConn, orgID string, repoID uuid.UUID, start, end time.Time,
 ) ([]testops.CoverageSnapshotRow, error) {
+	defaultBranch, err := loadNativeTestopsDefaultBranch(ctx, conn, orgID, repoID)
+	if err != nil {
+		return nil, err
+	}
+	// A pull-request run's coverage must never become the repository's latest
+	// snapshot: the ORDER BY below knows no branch, so a PR run whose id sorts
+	// after the default branch's would win. Only runs KNOWN to sit on another
+	// branch are left out (see loadNativeTestopsCaseAggregate for the unknown
+	// cases). The filter is on ci_pipeline_runs, which carries every branch's
+	// runs, so it does not depend on which runs the test sync fetches reports for.
+	onDefaultBranch := ""
+	args := []any{start.UTC(), end.UTC(), repoID, orgID}
+	if defaultBranch != "" {
+		onDefaultBranch = "\n  AND (p.branch IS NULL OR p.branch = '' OR p.branch = ?)"
+		args = append(args, defaultBranch)
+	}
 	rows, err := conn.Query(ctx, `
 SELECT c.run_id, c.snapshot_id, c.lines_total, c.lines_covered,
        c.line_coverage_pct, c.branch_coverage_pct, c.team_id, c.service_id, c.org_id
 FROM coverage_snapshots AS c FINAL
 INNER JOIN ci_pipeline_runs AS p FINAL
   ON (p.repo_id = c.repo_id) AND (p.run_id = c.run_id) AND (p.org_id = c.org_id)
-WHERE p.started_at >= ? AND p.started_at < ? AND p.repo_id = ? AND p.org_id = ?
+WHERE p.started_at >= ? AND p.started_at < ? AND p.repo_id = ? AND p.org_id = ?`+onDefaultBranch+`
 ORDER BY c.run_id DESC, c.snapshot_id DESC
-LIMIT 1`,
-		start.UTC(), end.UTC(), repoID, orgID)
+LIMIT 1`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("load native testops coverage snapshot: %w", err)
 	}
@@ -526,4 +575,32 @@ func writeTestopsCoverageMetrics(
 		return len(metrics), fmt.Errorf("send testops_coverage_metrics_daily batch: %w", err)
 	}
 	return len(metrics), nil
+}
+
+// loadNativeTestopsDefaultBranch returns the repository's default branch as the
+// repository sync recorded it in repos.settings (GitHub and GitLab both write
+// the key default_branch, and both coerce a missing value to "main" before
+// writing). "" means no repos row or no recorded value: the caller then cannot
+// tell a default-branch run from another one and must not drop any run.
+func loadNativeTestopsDefaultBranch(
+	ctx context.Context, conn testopsNativeConn, orgID string, repoID uuid.UUID,
+) (string, error) {
+	rows, err := conn.Query(ctx, `
+SELECT coalesce(JSONExtractString(argMax(settings, last_synced), 'default_branch'), '')
+FROM repos
+WHERE org_id = ? AND id = ?`, orgID, repoID)
+	if err != nil {
+		return "", fmt.Errorf("load native testops default branch: %w", err)
+	}
+	defer rows.Close()
+	var branch string
+	for rows.Next() {
+		if err := rows.Scan(&branch); err != nil {
+			return "", fmt.Errorf("scan native testops default branch: %w", err)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return "", fmt.Errorf("iterate native testops default branch: %w", err)
+	}
+	return branch, nil
 }

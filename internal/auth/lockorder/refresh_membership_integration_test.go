@@ -26,7 +26,7 @@ import (
 // and auth-service's when it owns sessions). A session minted by an invite
 // accept or an onboard join refreshes. The superuser cells pin the answer with
 // AUTH_PROXY_ORG_PROVISIONING off, which prod has not run since the org
-// provisioning flip (deploy values.prod.yaml:1378, orgProvisioning: true): the
+// provisioning flip (deploy values.prod.yaml:1388, orgProvisioning: true): the
 // superuser keeps refreshing on the auth plane, WIDER than the legacy go-api
 // path, which revokes the org's refresh tokens on removal. That is a rule-1 gap
 // of the switch-off path only (CHAOS-13212, D6787). The switch-on answer, the

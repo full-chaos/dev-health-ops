@@ -55,3 +55,16 @@ func TestEmptyReasonWireWords(t *testing.T) {
 		t.Errorf("EmptyReasonText = %v", text)
 	}
 }
+
+func TestScopeNotFoundReasonNamesTheLevel(t *testing.T) {
+	for level, want := range map[string]string{"service": "service_not_found", "developer": "developer_not_found"} {
+		if text := EmptyReasonText(ScopeNotFoundReason(level)); text == nil || *text != want {
+			t.Errorf("%s: %v, want %s", level, text, want)
+		}
+	}
+	for _, level := range []string{"repo", "team", "org", ""} {
+		if reason := ScopeNotFoundReason(level); reason != nil {
+			t.Errorf("%q: %v, want nil", level, *reason)
+		}
+	}
+}

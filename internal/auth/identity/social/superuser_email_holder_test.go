@@ -58,7 +58,7 @@ func TestExchangeRefusesAnEmailAPlatformAdminHoldsAsItRefusesAnyAccount(t *testi
 		}
 		rec := httptest.NewRecorder()
 		writeError(rec, GitHub, err)
-		want := `{"detail":{"message":"` + ConflictMessage + `"}}`
+		want := `{"detail":{"message":"` + ConflictMessage + `","reason":"identity_conflict"}}`
 		if rec.Code != http.StatusConflict || rec.Body.String() != want {
 			t.Fatalf("%s: %d %s, want 409 %s", name, rec.Code, rec.Body.String(), want)
 		}

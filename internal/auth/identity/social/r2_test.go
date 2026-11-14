@@ -11,7 +11,7 @@ import (
 // policy.WriteInternal); only the provider refusing the token is a 401.
 func TestProviderFailuresAnswerLikeGoAPI(t *testing.T) {
 	const internal = `{"detail":"Internal Server Error"}`
-	const refused = `{"detail":{"message":"Invalid or expired provider token"}}`
+	const refused = `{"detail":{"message":"Invalid or expired provider token","reason":"invalid_credentials"}}`
 	cases := []struct {
 		name   string
 		status int // 0: the provider is not reachable

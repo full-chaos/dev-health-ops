@@ -234,7 +234,7 @@ Labels are a closed set: `namespace`, `caller`, `class` on `dev_health_api_shado
 What to read:
 
 - `AuthShadowMismatchUnresolved`: any increase of `dev_health_api_shadow_mismatch_total` with `class = 'unresolved'` in one hour, evaluated every 5 minutes, severity warning, channel `accounts-email`, no renotify (one email per transition; the dashboard holds the detail). `unresolved` is the default class, so any difference that no reviewed row of the class table covers lands here.
-- Dashboard: unresolved total; mismatches by action namespace, by caller and by class; a namespace by caller table; results by `result` (match, mismatch, error, dropped, skipped, impersonation_refused); `dev_health_api_shadow_enabled` and `dev_health_api_shadow_config_invalid`.
+- Dashboard: unresolved total; mismatches by action namespace, by caller and by class; a namespace by caller table; results by `result` (match, mismatch, error, dropped, skipped, impersonation_refused, decided_no_question); `dev_health_api_shadow_enabled` and `dev_health_api_shadow_config_invalid`.
 - Zero mismatches is not "good" by itself: read the results panel, because error, dropped or skipped calls produce no mismatch.
 - The metric says where; the go-api WARN log "api shadow pdp: mismatch with the legacy guard" says what (action, route, reason_code, decision_id). The log is limited to one line per second per class: use it for samples, never for counts.
 

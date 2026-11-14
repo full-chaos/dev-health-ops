@@ -341,6 +341,7 @@ internal/cigates/testshard	checkgofresh_test.go
 internal/cigates/testshard	providersync_test.go
 internal/cigates/testshard	securityfresh_test.go
 internal/cigates/testshard	splitweights_test.go
+internal/cigates/testshard	standin_concurrent_test.go
 internal/cigates/testshard	standin_test.go
 internal/cigates/testshard	trimpath_test.go
 internal/cigates/testshard	weightscensus_test.go

@@ -398,7 +398,7 @@ func (handler GitHubTestsRouteHandler) Collect(
 		artifactRunQuery.Set("branch", repo.DefaultBranch)
 	}
 	if claim.SinceAt != nil {
-		artifactRunQuery.Set("created", ">="+claim.SinceAt.UTC().Format(time.DateOnly))
+		artifactRunQuery.Set("created", ">="+githubTestsArtifactRunsCreatedFrom(claim))
 	}
 	artifactRunsPage, err := providerfoundation.CollectGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{
 		Path: root + "/actions/runs", Route: githubRunsRoute, Query: artifactRunQuery, DataKey: "workflow_runs", MaxPages: runPages,
@@ -490,7 +490,7 @@ func (handler GitHubTestsRouteHandler) Collect(
 			return CompleteRouteBatch{}, providerfoundation.ErrNormalizationInvalid
 		}
 		pipeline, include := normalizeGitHubTestsPipeline(claim, repoID, run, normalizedAt)
-		if !include || githubTestsReportRunOutsideWindow(pipeline, claim) {
+		if !include || !githubTestsRunReadable(run) || githubTestsReportRunOutsideWindow(pipeline, claim) {
 			continue
 		}
 		artPage, pageErr := providerfoundation.CollectGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{
@@ -695,6 +695,19 @@ func githubTestsReportRunOutsideWindow(pipeline githubTestsPipelineRow, claim Cl
 		return false
 	}
 	return pipeline.FinishedAt.UTC().Before(since.Add(-width))
+}
+
+// githubTestsRunReadable: a run's report artifacts are read only once the run
+// is completed. A run read mid-flight lists a partial artifact set whose ids
+// differ from the finished run's, so the same cases land under two keys.
+func githubTestsRunReadable(run gitHubWorkflowRunPayload) bool {
+	return stringValue(run.Status) == "completed"
+}
+
+// githubTestsArtifactRunsCreatedFrom is one day before the claim's since date:
+// a run created before it that completes inside the window is still listed.
+func githubTestsArtifactRunsCreatedFrom(claim Claim) string {
+	return claim.SinceAt.UTC().AddDate(0, 0, -1).Format(time.DateOnly)
 }
 
 func normalizeGitHubTestsPipeline(claim Claim, repoID string, run gitHubWorkflowRunPayload, at time.Time) (githubTestsPipelineRow, bool) {

@@ -42,7 +42,7 @@ A batch request holds 1 to 100 requests. A batch response holds 1 to 100 decisio
 | Member | Rule |
 | --- | --- |
 | `allowed` | Required. A strict JSON boolean. No default. Missing, null, `"true"` or `1` is invalid. |
-| `reason_code` | A closed enum: `decision_reason_code` in `contracts/auth/v1/vocabulary/reason-codes.json`, equal to the schema enum (25 values, including `impersonation_denied` and `delegation_invalid`). See [reason codes](reason-codes.md). |
+| `reason_code` | A closed enum: `decision_reason_code` in `contracts/auth/v1/vocabulary/reason-codes.json`, equal to the schema enum (26 values, including `impersonation_denied` and `delegation_invalid`). See [reason codes](reason-codes.md). |
 | `decision_id` | Minted by the server (`dec_` plus 26 characters). Never copied from the caller. |
 | `organization_id` | Null only for a platform or pre-organization decision. |
 | `policy_revision` | The monotonic revision of the active policy set. Every allow-cache key binds it. |

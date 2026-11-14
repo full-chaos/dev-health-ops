@@ -8,7 +8,7 @@
     },
     "policy_revision": 20,
     "reason": "allowed_by_platform_admin",
-    "wire_reason_code": "allowed_by_role"
+    "wire_reason_code": "allowed_by_platform_admin"
   },
   "id": "allow-platform-admin-no-membership-reads-org-integrations",
   "layer": "pdp",
@@ -33,5 +33,5 @@
     "snapshot": "grant",
     "workload": null
   },
-  "why": "platform_admin holds admin.orgs and integrations.read is flagged platform_admin allowed: allowed in an active organization with no membership row, as the legacy admin guard admits. The internal reason reaches the wire as allowed_by_role."
+  "why": "platform_admin holds admin.orgs and integrations.read is flagged platform_admin allowed: allowed in an active organization with no membership row, as the legacy admin guard admits. The reason reaches the wire as allowed_by_platform_admin."
 }

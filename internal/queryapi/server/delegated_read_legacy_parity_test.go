@@ -105,9 +105,6 @@ func newDLPPDP(t *testing.T) *dlpPDP {
 			d = evaluator.Evaluate(req, snap)
 		}
 		reason := string(d.Reason)
-		if d.Reason == authorization.ReasonAllowedByPlatformAdmin {
-			reason = string(authorization.ReasonAllowedByRole)
-		}
 		answer := map[string]any{
 			"schema_version": "authorization_decision.v1", "decision_id": "dec_" + strings.Repeat("A", 26), "allowed": d.Allowed,
 			"reason_code": reason, "principal_id": "prn_TESTPRINCIPAL", "organization_id": org, "policy_revision": 1,

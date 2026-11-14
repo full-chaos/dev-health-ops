@@ -54,9 +54,8 @@ func (h authorizeHandlers) auditDecisions(ctx context.Context, items []authorize
 }
 
 // authorizeAuditEvent is the row of one high-risk decision: ids and closed
-// values only. A decision whose internal Reason the wire does not name also
-// records it as decision_internal_reason. The actor is the user the decision
-// is about; the calling policy-enforcement point is in the caller attributes.
+// values only. The actor is the user the decision is about; the calling
+// policy-enforcement point is in the caller attributes.
 func authorizeAuditEvent(ctx context.Context, caller AuthorizeCaller, item authorizeItem, doc decisionDocument) audit.AuditEvent {
 	q := item.question
 	actor := item.principal.ID.String()
@@ -72,9 +71,6 @@ func authorizeAuditEvent(ctx context.Context, caller AuthorizeCaller, item autho
 			"decision_id": doc.DecisionID, "decision_reason_code": doc.ReasonCode, "action_key": q.Action,
 			"resource_type": q.ResourceType, "policy_revision": revision,
 		},
-	}
-	if _, internal := internalOnlyReasons[item.decision.Reason]; internal {
-		event.Attributes["decision_internal_reason"] = string(item.decision.Reason)
 	}
 	if item.orgKnown {
 		org := q.OrganizationID

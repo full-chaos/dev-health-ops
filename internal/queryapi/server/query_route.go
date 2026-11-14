@@ -7068,7 +7068,7 @@ func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, op
 				var allowErr error
 				allowed, allowErr = orgAllowed(r.Context(), claims.OrgID)
 				if allowErr != nil {
-					log.Printf("query-api: proof-write route refused: operation=%s org_id=%q: the proof-org allowlist could not be read", operation, claims.OrgID)
+					log.Printf("query-api: proof-write route refused: operation=%s: the proof-org allowlist could not be read", operation)
 					policy.WriteAuthFailure(w, "", policy.ErrUnavailable)
 					return
 				}

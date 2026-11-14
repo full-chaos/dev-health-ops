@@ -122,8 +122,11 @@ func TestProofWriteAnswersUnavailableWhenOrgAllowedErrors(t *testing.T) {
 			if calls != 1 {
 				t.Fatalf("orgAllowed called %d time(s), want exactly 1", calls)
 			}
-			if !strings.Contains(logged.String(), `org_id="org-1"`) || !strings.Contains(logged.String(), "allowlist could not be read") {
-				t.Fatalf("the refusal did not log the org and the failed read: %q", logged.String())
+			if !strings.Contains(logged.String(), "operation=") || !strings.Contains(logged.String(), "allowlist could not be read") {
+				t.Fatalf("the refusal did not log the operation and the failed read: %q", logged.String())
+			}
+			if strings.Contains(logged.String(), "org-1") {
+				t.Fatalf("the failed-read refusal logged the caller's org id: %q", logged.String())
 			}
 		})
 	}

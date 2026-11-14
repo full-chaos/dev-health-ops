@@ -103,7 +103,13 @@ type githubTestsRunReportPlan struct {
 	Admitted  []int
 	Dropped   []githubTestsReportDrop
 	OverBound []int
-	Mismatch  []int
+	Mismatch  []githubTestsReportMismatch
+}
+
+// githubTestsReportMismatch is an aggregate kept with its parts because their cases match by identity but not by outcome.
+type githubTestsReportMismatch struct {
+	Index int
+	Parts []int
 }
 
 type githubTestsCaseCounts map[string]int
@@ -128,8 +134,10 @@ func githubTestsCaseIdentity(row testCaseResultRow) string {
 	return class + "\x00" + row.CaseName
 }
 
-// githubTestsPlanRunReports decides a run's report artifacts, in this order: (1) an artifact whose cases (class, name and outcome)
-// equal those of an artifact with a lower id is a duplicate and is dropped, the higher id going; (2) an artifact whose cases equal the
+// githubTestsPlanRunReports decides a run's report artifacts, in this order: (1) an artifact that is a copy of one with a lower id is
+// dropped, the higher id going; a copy is equal on every case's class, name, outcome and duration and on every suite's name,
+// start and duration, and carries durations at all (without them two reports cannot be told from two real executions of the same
+// tests, such as matrix legs, so both stay); (2) an artifact whose cases equal the
 // disjoint union of two or more other artifacts is an aggregate of its parts and is dropped, the parts staying; an aggregate whose
 // cases match its parts but whose outcomes differ is kept with all of them and reported as a mismatch; (3) the survivors are
 // admitted whole, in the given order (ascending declared size), under the run bound, the rest skipped whole. The decision reads
@@ -140,17 +148,37 @@ func githubTestsPlanRunReports(parsed []githubTestsParsedReport) (githubTestsRun
 	dropped := make([]bool, len(parsed))
 	identities := make([]githubTestsCaseCounts, len(parsed))
 	outcomes := make([]githubTestsCaseCounts, len(parsed))
+	copies := make([]githubTestsCaseCounts, len(parsed))
+	timed := make([]bool, len(parsed))
 	var candidates []int
 	for index, report := range parsed {
 		if len(report.Cases) == 0 {
 			continue
 		}
 		candidates = append(candidates, index)
-		identities[index], outcomes[index] = githubTestsCaseCounts{}, githubTestsCaseCounts{}
+		identities[index], outcomes[index], copies[index] = githubTestsCaseCounts{}, githubTestsCaseCounts{}, githubTestsCaseCounts{}
 		for _, row := range report.Cases {
 			identity := githubTestsCaseIdentity(row)
 			identities[index][identity]++
 			outcomes[index][identity+"\x00"+row.Status]++
+			duration := "none"
+			if row.DurationSeconds != nil {
+				duration = strconv.FormatFloat(*row.DurationSeconds, 'g', -1, 64)
+				if *row.DurationSeconds > 0 {
+					timed[index] = true
+				}
+			}
+			copies[index][identity+"\x00"+row.Status+"\x00"+duration]++
+		}
+		for _, suite := range report.Suites {
+			started, duration := "none", "none"
+			if suite.StartedAt != nil {
+				started = strconv.FormatInt(suite.StartedAt.UnixNano(), 10)
+			}
+			if suite.DurationSeconds != nil {
+				duration = strconv.FormatFloat(*suite.DurationSeconds, 'g', -1, 64)
+			}
+			copies[index]["suite\x00"+suite.SuiteName+"\x00"+started+"\x00"+duration]++
 		}
 	}
 	byID := append([]int(nil), candidates...)
@@ -159,7 +187,7 @@ func githubTestsPlanRunReports(parsed []githubTestsParsedReport) (githubTestsRun
 	for _, index := range byID {
 		duplicate := false
 		for _, other := range kept {
-			if githubTestsCountsEqual(outcomes[index], outcomes[other]) {
+			if timed[index] && timed[other] && githubTestsCountsEqual(copies[index], copies[other]) {
 				duplicate = true
 				break
 			}
@@ -219,7 +247,7 @@ func githubTestsPlanRunReports(parsed []githubTestsParsedReport) (githubTestsRun
 			dropped[index] = true
 			plan.Dropped = append(plan.Dropped, githubTestsReportDrop{Index: index, Cause: githubTestsAggregateOfPartsCause})
 		} else {
-			plan.Mismatch = append(plan.Mismatch, index)
+			plan.Mismatch = append(plan.Mismatch, githubTestsReportMismatch{Index: index, Parts: append([]int(nil), parts...)})
 		}
 	}
 	var budget githubTestsReportBudget
@@ -241,6 +269,6 @@ func githubTestsPlanRunReports(parsed []githubTestsParsedReport) (githubTestsRun
 		plan.Admitted = append(plan.Admitted, index)
 	}
 	sort.Slice(plan.Dropped, func(i, j int) bool { return plan.Dropped[i].Index < plan.Dropped[j].Index })
-	sort.Ints(plan.Mismatch)
+	sort.Slice(plan.Mismatch, func(i, j int) bool { return plan.Mismatch[i].Index < plan.Mismatch[j].Index })
 	return plan, nil
 }

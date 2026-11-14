@@ -1,7 +1,9 @@
 package providersync
 
 import (
+	"bytes"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
 	"testing"
@@ -12,10 +14,13 @@ import (
 // cases match its parts but whose outcomes differ is kept with all of them. The shapes below are acr's own: go-junit and the ten
 // go-unit-shard artifacts of its `ci` run, with the real case counts of run 43608150841.
 
-type fxCase struct{ name, status string }
+// fxCase.dur is the case's `time` attribute: "" means 0.1, "-" leaves the attribute out, anything else is written as given.
+type fxCase struct{ name, status, dur string }
 
+// fxSuite.ts is the suite's `timestamp` attribute, left out when empty.
 type fxSuite struct {
 	name  string
+	ts    string
 	cases []fxCase
 }
 
@@ -23,15 +28,27 @@ func fxJUnit(suites []fxSuite) string {
 	var body strings.Builder
 	body.WriteString(`<testsuites>`)
 	for _, suite := range suites {
-		body.WriteString(`<testsuite name="` + suite.name + `" time="1.0">`)
+		stamp := ""
+		if suite.ts != "" {
+			stamp = ` timestamp="` + suite.ts + `"`
+		}
+		body.WriteString(`<testsuite name="` + suite.name + `" time="1.0"` + stamp + `>`)
 		for _, c := range suite.cases {
+			duration := ` time="0.1"`
+			switch c.dur {
+			case "":
+			case "-":
+				duration = ""
+			default:
+				duration = ` time="` + c.dur + `"`
+			}
 			switch c.status {
 			case "failed":
-				body.WriteString(`<testcase name="` + c.name + `" classname="pkg" time="0.1"><failure message="boom"/></testcase>`)
+				body.WriteString(`<testcase name="` + c.name + `" classname="pkg"` + duration + `><failure message="boom"/></testcase>`)
 			case "skipped":
-				body.WriteString(`<testcase name="` + c.name + `" classname="pkg" time="0.1"><skipped/></testcase>`)
+				body.WriteString(`<testcase name="` + c.name + `" classname="pkg"` + duration + `><skipped/></testcase>`)
 			default:
-				body.WriteString(`<testcase name="` + c.name + `" classname="pkg" time="0.1"/>`)
+				body.WriteString(`<testcase name="` + c.name + `" classname="pkg"` + duration + `/>`)
 			}
 		}
 		body.WriteString(`</testsuite>`)
@@ -176,8 +193,24 @@ func TestGitHubTestsRunReportsKeepAllAndMarkAMismatch(t *testing.T) {
 		aggregate[index] = fxSuite{name: suite.name, cases: append([]fxCase(nil), suite.cases...)}
 	}
 	aggregate[0].cases[1].status = "failed"
+	var logged bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	t.Cleanup(func() { slog.SetDefault(previous) })
 	walk, _, rendered := rowsWalk(t, 1, rowsArtifact{id: "51", size: 10, body: fxJUnit(first)}, rowsArtifact{id: "52", size: 20, body: fxJUnit(second)},
 		rowsArtifact{id: "53", size: 30, body: fxJUnit(aggregate)})
+	slog.SetDefault(previous)
+	// ONE warning line, naming the run and every artifact involved.
+	var warnings []string
+	for _, line := range strings.Split(logged.String(), "\n") {
+		if strings.Contains(line, "disagree on outcome") {
+			warnings = append(warnings, line)
+		}
+	}
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "artifact_ids") || !strings.Contains(warnings[0], "53") ||
+		!strings.Contains(warnings[0], "51") || !strings.Contains(warnings[0], "52") || !strings.Contains(warnings[0], "run=") {
+		t.Fatalf("warnings %q, want one line with the run id and artifact ids 51, 52 and 53", warnings)
+	}
 	if got, want := committedReportRows(walk), rowsOfSuites(first)+rowsOfSuites(second)+rowsOfSuites(aggregate); got != want {
 		t.Fatalf("committed %d rows, want all three artifacts (%d)", got, want)
 	}
@@ -235,8 +268,8 @@ func TestGitHubTestsRunReportsDedupRunsBeforeTheBound(t *testing.T) {
 // One artifact repeating a case identity in two suites (two projects) is a single artifact: nothing in it is dropped.
 func TestGitHubTestsRunReportsKeepRepeatedIdentitiesInsideOneArtifact(t *testing.T) {
 	suites := []fxSuite{
-		{name: "chromium", cases: []fxCase{{"login", "passed"}, {"logout", "passed"}}},
-		{name: "firefox", cases: []fxCase{{"login", "passed"}, {"logout", "passed"}}},
+		{name: "chromium", cases: []fxCase{{"login", "passed", ""}, {"logout", "passed", ""}}},
+		{name: "firefox", cases: []fxCase{{"login", "passed", ""}, {"logout", "passed", ""}}},
 	}
 	walk, _, _ := rowsWalk(t, 1, rowsArtifact{id: "71", size: 10, body: fxJUnit(suites)})
 	if got := committedReportRows(walk); got != rowsOfSuites(suites) {
@@ -250,12 +283,12 @@ func TestGitHubTestsRunReportsKeepRepeatedIdentitiesInsideOneArtifact(t *testing
 // Parts that overlap are not a partition: an artifact equal to their union (a case counted twice) is kept, because dropping it would
 // need the overlapping case to be one result and the test cannot tell that from two real ones.
 func TestGitHubTestsRunReportsKeepAnArtifactWhosePartsOverlap(t *testing.T) {
-	shared := fxCase{"shared", "passed"}
-	left := []fxSuite{{name: "s1", cases: []fxCase{{"a", "passed"}, {"b", "passed"}, shared}}}
-	right := []fxSuite{{name: "s2", cases: []fxCase{shared, {"d", "passed"}}}}
+	shared := fxCase{"shared", "passed", ""}
+	left := []fxSuite{{name: "s1", cases: []fxCase{{"a", "passed", ""}, {"b", "passed", ""}, shared}}}
+	right := []fxSuite{{name: "s2", cases: []fxCase{shared, {"d", "passed", ""}}}}
 	both := []fxSuite{
-		{name: "s1", cases: []fxCase{{"a", "passed"}, {"b", "passed"}, shared}},
-		{name: "s2", cases: []fxCase{shared, {"d", "passed"}}},
+		{name: "s1", cases: []fxCase{{"a", "passed", ""}, {"b", "passed", ""}, shared}},
+		{name: "s2", cases: []fxCase{shared, {"d", "passed", ""}}},
 	}
 	walk, _, _ := rowsWalk(t, 1, rowsArtifact{id: "81", size: 10, body: fxJUnit(left)}, rowsArtifact{id: "82", size: 20, body: fxJUnit(right)},
 		rowsArtifact{id: "83", size: 30, body: fxJUnit(both)})
@@ -264,5 +297,70 @@ func TestGitHubTestsRunReportsKeepAnArtifactWhosePartsOverlap(t *testing.T) {
 	}
 	if len(walk.cursor.SkippedArtifacts) != 0 {
 		t.Fatalf("markers %+v, want none", walk.cursor.SkippedArtifacts)
+	}
+}
+
+func withDurations(suites []fxSuite, duration string) []fxSuite {
+	out := make([]fxSuite, len(suites))
+	for index, suite := range suites {
+		out[index] = fxSuite{name: suite.name, ts: suite.ts, cases: append([]fxCase(nil), suite.cases...)}
+		for position := range out[index].cases {
+			out[index].cases[position].dur = duration
+		}
+	}
+	return out
+}
+
+// Legs that agree on every outcome but ran for different times are two real executions: both stay.
+func TestGitHubTestsRunReportsKeepIdenticalOutcomeLegsWithDifferentDurations(t *testing.T) {
+	base := part("m", 4, 200)
+	legA, legB := withDurations(base, "0.1"), withDurations(base, "0.2")
+	walk, _, _ := rowsWalk(t, 1, rowsArtifact{id: "91", size: 10, body: fxJUnit(legA)}, rowsArtifact{id: "92", size: 20, body: fxJUnit(legB)})
+	if got, want := committedReportRows(walk), rowsOfSuites(legA)+rowsOfSuites(legB); got != want {
+		t.Fatalf("committed %d rows, want both legs (%d)", got, want)
+	}
+	if len(walk.cursor.SkippedArtifacts) != 0 {
+		t.Fatalf("markers %+v, want none", walk.cursor.SkippedArtifacts)
+	}
+}
+
+// A true copy of one execution (same outcomes, durations and suite timestamps) loses its higher id.
+func TestGitHubTestsRunReportsDropATrueCopyOfOneExecution(t *testing.T) {
+	base := withDurations(part("c", 3, 90), "0.3")
+	for index := range base {
+		base[index].ts = "2026-11-14T15:04:10Z"
+	}
+	walk, _, _ := rowsWalk(t, 1, rowsArtifact{id: "93", size: 10, body: fxJUnit(base)}, rowsArtifact{id: "94", size: 20, body: fxJUnit(base)})
+	if got, want := committedReportRows(walk), rowsOfSuites(base); got != want {
+		t.Fatalf("committed %d rows, want one copy (%d)", got, want)
+	}
+	if causes := markerCauses(walk); len(causes) != 1 || causes["94"] != githubTestsAggregateOfPartsCause {
+		t.Fatalf("markers %v, want only the higher id 94", causes)
+	}
+}
+
+// Without durations (absent, or all zero) two reports cannot be told from two executions: both stay.
+func TestGitHubTestsRunReportsKeepBothWhenThereAreNoDurations(t *testing.T) {
+	for name, duration := range map[string]string{"absent": "-", "zero": "0"} {
+		base := withDurations(part("z", 3, 90), duration)
+		walk, _, _ := rowsWalk(t, 1, rowsArtifact{id: "95", size: 10, body: fxJUnit(base)}, rowsArtifact{id: "96", size: 20, body: fxJUnit(base)})
+		if got, want := committedReportRows(walk), rowsOfSuites(base)*2; got != want {
+			t.Fatalf("%s durations: committed %d rows, want both copies (%d)", name, got, want)
+		}
+		if len(walk.cursor.SkippedArtifacts) != 0 {
+			t.Fatalf("%s durations: markers %+v, want none", name, walk.cursor.SkippedArtifacts)
+		}
+	}
+}
+
+// Same outcomes and durations but different suite timestamps are two executions: both stay.
+func TestGitHubTestsRunReportsKeepLegsWithDifferentSuiteTimestamps(t *testing.T) {
+	legA, legB := withDurations(part("t", 2, 60), "0.2"), withDurations(part("t", 2, 60), "0.2")
+	for index := range legA {
+		legA[index].ts, legB[index].ts = "2026-11-14T15:04:10Z", "2026-11-14T15:09:41Z"
+	}
+	walk, _, _ := rowsWalk(t, 1, rowsArtifact{id: "97", size: 10, body: fxJUnit(legA)}, rowsArtifact{id: "98", size: 20, body: fxJUnit(legB)})
+	if got, want := committedReportRows(walk), rowsOfSuites(legA)*2; got != want {
+		t.Fatalf("committed %d rows, want both legs (%d)", got, want)
 	}
 }

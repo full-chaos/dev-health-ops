@@ -1885,8 +1885,21 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 					for _, drop := range plan.Dropped {
 						markReport(drop.Index, drop.Cause)
 					}
-					for _, index := range plan.Mismatch {
-						markReport(index, githubTestsAggregateMismatchCause)
+					var mismatchIDs []string
+					for _, mismatch := range plan.Mismatch {
+						markReport(mismatch.Index, githubTestsAggregateMismatchCause)
+						mismatchIDs = append(mismatchIDs, string(parsedReports[mismatch.Index].ID))
+						for _, part := range mismatch.Parts {
+							mismatchIDs = append(mismatchIDs, string(parsedReports[part].ID))
+						}
+					}
+					if len(mismatchIDs) > 0 {
+						slog.Warn(
+							"provider run report artifacts match by case identity but disagree on outcome; all are kept and the unit is not advanced",
+							"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
+							"repository", cursor.Repo, logging.ProviderIDAttr("run", pipeline.RunID),
+							"artifact_ids", strings.Join(mismatchIDs, ","),
+						)
 					}
 					for _, index := range plan.OverBound {
 						markReport(index, githubTestsPerRunCapCause)

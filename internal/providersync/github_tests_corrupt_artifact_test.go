@@ -63,7 +63,7 @@ func (doer *githubTestsCorruptArtifactDoer) Do(request *http.Request) (*http.Res
 				Request:    request,
 			}, nil
 		}
-		members := map[string]string{"junit.xml": githubTestsMultiSuiteJUnit(1)}
+		members := map[string]string{"junit.xml": githubTestsNamedMultiSuiteJUnit("a"+strconv.Itoa(id)+"-", 1)}
 		if doer.oversizedReports {
 			members = make(map[string]string, githubTestsMaxReportsPerRun+1)
 			for i := 0; i <= githubTestsMaxReportsPerRun; i++ {

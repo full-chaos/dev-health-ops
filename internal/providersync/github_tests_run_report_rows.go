@@ -2,6 +2,7 @@ package providersync
 
 import (
 	"encoding/json"
+	"errors"
 	"math"
 	"sort"
 	"strconv"
@@ -70,4 +71,176 @@ func (budget *githubTestsReportBudget) admit(rows, suiteBytes, caseBytes, covera
 	budget.suiteBytes += suiteBytes
 	budget.caseBytes += caseBytes
 	budget.coverageBytes += coverageBytes
+}
+
+// githubTestsMaxHeldReportRowsPerRun bounds the rows a run holds parsed while it decides which artifacts to keep: twice the
+// admitted bound, so the duplicate test below can see a whole aggregate next to its parts (acr: about 72,900 rows parsed, 36,500
+// kept). An artifact that would take the held rows past it is skipped whole under per_run_cap, before it is held.
+const githubTestsMaxHeldReportRowsPerRun = 2 * githubTestsMaxReportRowsPerRun
+
+// githubTestsParsedReport is one artifact's parsed rows, held until the run's artifacts are decided together.
+type githubTestsParsedReport struct {
+	ID       json.Number
+	Name     string
+	Suites   []testSuiteResultRow
+	Cases    []testCaseResultRow
+	Coverage []coverageSnapshotRow
+}
+
+func (report githubTestsParsedReport) rows() int {
+	return len(report.Suites) + len(report.Cases) + len(report.Coverage)
+}
+
+// githubTestsReportDrop is an artifact left out of the run, with the marker cause that says why.
+type githubTestsReportDrop struct {
+	Index int
+	Cause string
+}
+
+// githubTestsRunReportPlan is the decision for one run: which artifacts are admitted (in admission order), which are dropped as
+// duplicates or over the bound, and which aggregates are kept although their outcomes disagree with their parts.
+type githubTestsRunReportPlan struct {
+	Admitted  []int
+	Dropped   []githubTestsReportDrop
+	OverBound []int
+	Mismatch  []int
+}
+
+type githubTestsCaseCounts map[string]int
+
+func githubTestsCountsEqual(left, right githubTestsCaseCounts) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for key, count := range left {
+		if right[key] != count {
+			return false
+		}
+	}
+	return true
+}
+
+func githubTestsCaseIdentity(row testCaseResultRow) string {
+	class := ""
+	if row.ClassName != nil {
+		class = *row.ClassName
+	}
+	return class + "\x00" + row.CaseName
+}
+
+// githubTestsPlanRunReports decides a run's report artifacts, in this order: (1) an artifact whose cases (class, name and outcome)
+// equal those of an artifact with a lower id is a duplicate and is dropped, the higher id going; (2) an artifact whose cases equal the
+// disjoint union of two or more other artifacts is an aggregate of its parts and is dropped, the parts staying; an aggregate whose
+// cases match its parts but whose outcomes differ is kept with all of them and reported as a mismatch; (3) the survivors are
+// admitted whole, in the given order (ascending declared size), under the run bound, the rest skipped whole. The decision reads
+// only the parsed rows, so it does not depend on names, the provider, or the order the listing came back in.
+// parsed must already be in admission order.
+func githubTestsPlanRunReports(parsed []githubTestsParsedReport) (githubTestsRunReportPlan, error) {
+	plan := githubTestsRunReportPlan{}
+	dropped := make([]bool, len(parsed))
+	identities := make([]githubTestsCaseCounts, len(parsed))
+	outcomes := make([]githubTestsCaseCounts, len(parsed))
+	var candidates []int
+	for index, report := range parsed {
+		if len(report.Cases) == 0 {
+			continue
+		}
+		candidates = append(candidates, index)
+		identities[index], outcomes[index] = githubTestsCaseCounts{}, githubTestsCaseCounts{}
+		for _, row := range report.Cases {
+			identity := githubTestsCaseIdentity(row)
+			identities[index][identity]++
+			outcomes[index][identity+"\x00"+row.Status]++
+		}
+	}
+	byID := append([]int(nil), candidates...)
+	sort.SliceStable(byID, func(i, j int) bool { return githubTestsArtifactIDLess(parsed[byID[i]].ID, parsed[byID[j]].ID) })
+	var kept []int
+	for _, index := range byID {
+		duplicate := false
+		for _, other := range kept {
+			if githubTestsCountsEqual(outcomes[index], outcomes[other]) {
+				duplicate = true
+				break
+			}
+		}
+		if duplicate {
+			dropped[index] = true
+			plan.Dropped = append(plan.Dropped, githubTestsReportDrop{Index: index, Cause: githubTestsAggregateOfPartsCause})
+			continue
+		}
+		kept = append(kept, index)
+	}
+	bySize := append([]int(nil), kept...)
+	sort.SliceStable(bySize, func(i, j int) bool {
+		left, right := len(parsed[bySize[i]].Cases), len(parsed[bySize[j]].Cases)
+		if left != right {
+			return left > right
+		}
+		return githubTestsArtifactIDLess(parsed[bySize[j]].ID, parsed[bySize[i]].ID)
+	})
+	for _, index := range bySize {
+		var parts []int
+		for _, other := range kept {
+			if other == index || dropped[other] {
+				continue
+			}
+			subset := len(identities[other]) > 0
+			for key, count := range identities[other] {
+				if identities[index][key] < count {
+					subset = false
+					break
+				}
+			}
+			if subset {
+				parts = append(parts, other)
+			}
+		}
+		if len(parts) < 2 {
+			continue
+		}
+		union, disjoint := githubTestsCaseCounts{}, true
+		unionOutcomes := githubTestsCaseCounts{}
+		for _, part := range parts {
+			for key, count := range identities[part] {
+				if union[key] > 0 {
+					disjoint = false
+				}
+				union[key] += count
+			}
+			for key, count := range outcomes[part] {
+				unionOutcomes[key] += count
+			}
+		}
+		if !disjoint || !githubTestsCountsEqual(union, identities[index]) {
+			continue
+		}
+		if githubTestsCountsEqual(unionOutcomes, outcomes[index]) {
+			dropped[index] = true
+			plan.Dropped = append(plan.Dropped, githubTestsReportDrop{Index: index, Cause: githubTestsAggregateOfPartsCause})
+		} else {
+			plan.Mismatch = append(plan.Mismatch, index)
+		}
+	}
+	var budget githubTestsReportBudget
+	for index, report := range parsed {
+		if dropped[index] {
+			continue
+		}
+		suiteBytes, suiteErr := githubTestsRowsJSONBytes(report.Suites)
+		caseBytes, caseErr := githubTestsRowsJSONBytes(report.Cases)
+		coverageBytes, coverageErr := githubTestsRowsJSONBytes(report.Coverage)
+		if err := errors.Join(suiteErr, caseErr, coverageErr); err != nil {
+			return githubTestsRunReportPlan{}, err
+		}
+		if !budget.fits(report.rows(), suiteBytes, caseBytes, coverageBytes) {
+			plan.OverBound = append(plan.OverBound, index)
+			continue
+		}
+		budget.admit(report.rows(), suiteBytes, caseBytes, coverageBytes)
+		plan.Admitted = append(plan.Admitted, index)
+	}
+	sort.Slice(plan.Dropped, func(i, j int) bool { return plan.Dropped[i].Index < plan.Dropped[j].Index })
+	sort.Ints(plan.Mismatch)
+	return plan, nil
 }

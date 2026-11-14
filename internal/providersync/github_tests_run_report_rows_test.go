@@ -20,9 +20,11 @@ import (
 // rowsArtifact is one artifact of a run: its id, its declared size (what the listing says, and what orders the admission), and
 // the number of report rows (suites + cases, rows/2 suites with one case each) its JUnit file holds.
 type rowsArtifact struct {
-	id   string
-	size int64
-	rows int
+	id    string
+	size  int64
+	rows  int
+	names string // name prefix; default "a<id>-" so artifacts do not repeat each other's cases
+	body  string // the JUnit file itself, when the test builds the cases (it replaces rows and names)
 }
 
 type githubTestsRowsDoer struct {
@@ -59,7 +61,15 @@ func (doer *githubTestsRowsDoer) Do(request *http.Request) (*http.Response, erro
 		doer.downloaded = append(doer.downloaded, id)
 		for _, artifact := range doer.artifacts {
 			if artifact.id == id {
-				archive := githubTestsZip(doer.t, map[string]string{"junit.xml": githubTestsMultiSuiteJUnit(artifact.rows / 2)})
+				prefix := artifact.names
+				if prefix == "" {
+					prefix = "a" + artifact.id + "-"
+				}
+				junit := githubTestsNamedMultiSuiteJUnit(prefix, artifact.rows/2)
+				if artifact.body != "" {
+					junit = artifact.body
+				}
+				archive := githubTestsZip(doer.t, map[string]string{"junit.xml": junit})
 				return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/zip"}},
 					Body: io.NopCloser(bytes.NewReader(archive)), Request: request}, nil
 			}
@@ -98,7 +108,7 @@ func skippedArtifactIDs(walk githubTestsWalk) []string {
 
 // (1) Artifacts that fit together are all admitted: three of 300 rows were cut to one by the old 500 bound.
 func TestGitHubTestsRunReportRowsAdmitEveryArtifactThatFits(t *testing.T) {
-	walk, doer, rendered := rowsWalk(t, 1, rowsArtifact{"1", 10, 300}, rowsArtifact{"2", 20, 300}, rowsArtifact{"3", 30, 300})
+	walk, doer, rendered := rowsWalk(t, 1, rowsArtifact{id: "1", size: 10, rows: 300}, rowsArtifact{id: "2", size: 20, rows: 300}, rowsArtifact{id: "3", size: 30, rows: 300})
 	if got := committedReportRows(walk); got != 900 {
 		t.Fatalf("committed %d rows, want all 900", got)
 	}
@@ -115,9 +125,9 @@ func TestGitHubTestsRunReportRowsAdmitEveryArtifactThatFits(t *testing.T) {
 
 // (2) The listing order does not decide the survivor: the same artifacts, listed two ways, admit the same set.
 func TestGitHubTestsRunReportRowsAdmissionDoesNotDependOnListingOrder(t *testing.T) {
-	big := rowsArtifact{"101", 3000, 60_000}
-	small := rowsArtifact{"102", 1000, 60_000}
-	middle := rowsArtifact{"103", 2000, 30_000}
+	big := rowsArtifact{id: "101", size: 3000, rows: 60_000}
+	small := rowsArtifact{id: "102", size: 1000, rows: 60_000}
+	middle := rowsArtifact{id: "103", size: 2000, rows: 30_000}
 	first, _, _ := rowsWalk(t, 1, big, small, middle)
 	second, _, _ := rowsWalk(t, 1, middle, small, big)
 	// Smallest declared size first: small (60,000) and middle (30,000) fit, big would reach 150,000.
@@ -133,7 +143,7 @@ func TestGitHubTestsRunReportRowsAdmissionDoesNotDependOnListingOrder(t *testing
 
 // (3) An artifact that alone exceeds the bound is skipped whole, and the artifacts after it are still admitted.
 func TestGitHubTestsRunReportRowsSkipAnArtifactThatAloneExceedsTheBound(t *testing.T) {
-	walk, doer, _ := rowsWalk(t, 1, rowsArtifact{"1", 9000, githubTestsMaxReportRowsPerRun + 2}, rowsArtifact{"2", 10, 400}, rowsArtifact{"3", 20, 400})
+	walk, doer, _ := rowsWalk(t, 1, rowsArtifact{id: "1", size: 9000, rows: githubTestsMaxReportRowsPerRun + 2}, rowsArtifact{id: "2", size: 10, rows: 400}, rowsArtifact{id: "3", size: 20, rows: 400})
 	if got := committedReportRows(walk); got != 800 {
 		t.Fatalf("committed %d rows, want the two small artifacts (800)", got)
 	}
@@ -149,7 +159,7 @@ func TestGitHubTestsRunReportRowsSkipAnArtifactThatAloneExceedsTheBound(t *testi
 // (4) + K4: three artifacts skipped in one run leave ONE per_run_cap record (count and metric) and ONE marker per skipped artifact.
 func TestGitHubTestsRunReportRowsRecordOnceForTheRunAndOneMarkerPerSkippedArtifact(t *testing.T) {
 	walk, _, rendered := rowsWalk(t, 1,
-		rowsArtifact{"1", 10, 80_000}, rowsArtifact{"2", 20, 60_000}, rowsArtifact{"3", 30, 60_000}, rowsArtifact{"4", 40, 60_000})
+		rowsArtifact{id: "1", size: 10, rows: 80_000}, rowsArtifact{id: "2", size: 20, rows: 60_000}, rowsArtifact{id: "3", size: 30, rows: 60_000}, rowsArtifact{id: "4", size: 40, rows: 60_000})
 	if got := committedReportRows(walk); got != 80_000 || got > githubTestsMaxReportRowsPerRun {
 		t.Fatalf("committed %d rows, want 80,000 and never above the bound", got)
 	}
@@ -174,11 +184,11 @@ func TestGitHubTestsRunReportRowsRecordOnceForTheRunAndOneMarkerPerSkippedArtifa
 
 // (5) The bound is exact: 100,000 rows are admitted, 100,002 are not.
 func TestGitHubTestsRunReportRowsBoundaryIsExact(t *testing.T) {
-	atBound, _, _ := rowsWalk(t, 1, rowsArtifact{"1", 10, 60_000}, rowsArtifact{"2", 20, 40_000})
+	atBound, _, _ := rowsWalk(t, 1, rowsArtifact{id: "1", size: 10, rows: 60_000}, rowsArtifact{id: "2", size: 20, rows: 40_000})
 	if got := committedReportRows(atBound); got != githubTestsMaxReportRowsPerRun || len(atBound.cursor.SkippedArtifacts) != 0 {
 		t.Fatalf("at the bound: committed %d, markers %d, want %d and none", got, len(atBound.cursor.SkippedArtifacts), githubTestsMaxReportRowsPerRun)
 	}
-	over, _, _ := rowsWalk(t, 1, rowsArtifact{"1", 10, 60_000}, rowsArtifact{"2", 20, 40_002})
+	over, _, _ := rowsWalk(t, 1, rowsArtifact{id: "1", size: 10, rows: 60_000}, rowsArtifact{id: "2", size: 20, rows: 40_002})
 	if got := committedReportRows(over); got != 60_000 || len(over.cursor.SkippedArtifacts) != 1 {
 		t.Fatalf("one pair over the bound: committed %d, markers %d, want 60,000 and one skip", got, len(over.cursor.SkippedArtifacts))
 	}
@@ -247,7 +257,7 @@ func TestGitHubTestsReportPayloadEstimateIsAnUpperBound(t *testing.T) {
 
 // (7) The budget is per run: two runs of one unit each admit what fits.
 func TestGitHubTestsRunReportRowsBudgetsAreIndependentPerRun(t *testing.T) {
-	walk, _, rendered := rowsWalk(t, 2, rowsArtifact{"1", 10, 60_000}, rowsArtifact{"2", 20, 60_000})
+	walk, _, rendered := rowsWalk(t, 2, rowsArtifact{id: "1", size: 10, rows: 60_000}, rowsArtifact{id: "2", size: 20, rows: 60_000})
 	if got := committedReportRows(walk); got != 120_000 {
 		t.Fatalf("committed %d rows over two runs, want 60,000 each (120,000)", got)
 	}
@@ -259,7 +269,7 @@ func TestGitHubTestsRunReportRowsBudgetsAreIndependentPerRun(t *testing.T) {
 
 // (8) After an overflow the walk goes on: a later artifact that fits is admitted.
 func TestGitHubTestsRunReportRowsWalkContinuesAfterAnOverflow(t *testing.T) {
-	walk, doer, _ := rowsWalk(t, 1, rowsArtifact{"1", 10, 99_000}, rowsArtifact{"2", 20, 2_000}, rowsArtifact{"3", 30, 500})
+	walk, doer, _ := rowsWalk(t, 1, rowsArtifact{id: "1", size: 10, rows: 99_000}, rowsArtifact{id: "2", size: 20, rows: 2_000}, rowsArtifact{id: "3", size: 30, rows: 500})
 	if got := committedReportRows(walk); got != 99_500 {
 		t.Fatalf("committed %d rows, want 99,500 (the first and the third)", got)
 	}

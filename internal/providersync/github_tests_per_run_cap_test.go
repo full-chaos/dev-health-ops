@@ -66,8 +66,10 @@ func (doer *githubTestsOversizedRunDoer) Do(request *http.Request) (*http.Respon
 		return githubTestsHTTPResponse(request, header, githubTestsArtifactsFixture(doer.artifacts)), nil
 	case strings.HasPrefix(path, "/repos/acme/api/actions/artifacts/") && strings.HasSuffix(path, "/zip"):
 		doer.archiveRequests++
+		// Each artifact carries names of its own: identical artifacts are duplicates of one another and the run drops one (CHAOS-13794).
+		id := strings.TrimSuffix(strings.TrimPrefix(path, "/repos/acme/api/actions/artifacts/"), "/zip")
 		archive := githubTestsZip(doer.t, map[string]string{
-			"junit.xml": githubTestsMultiSuiteJUnit(doer.reportSuitesPerArtifact),
+			"junit.xml": githubTestsNamedMultiSuiteJUnit("a"+id+"-", doer.reportSuitesPerArtifact),
 		})
 		return &http.Response{
 			StatusCode: http.StatusOK,
@@ -84,12 +86,17 @@ func (doer *githubTestsOversizedRunDoer) Do(request *http.Request) (*http.Respon
 // one case, so a test can cross the suites+cases+coverage cap by choosing how
 // many suites an artifact contributes.
 func githubTestsMultiSuiteJUnit(suites int) string {
+	return githubTestsNamedMultiSuiteJUnit("", suites)
+}
+
+// githubTestsNamedMultiSuiteJUnit is githubTestsMultiSuiteJUnit with every suite and case name prefixed.
+func githubTestsNamedMultiSuiteJUnit(prefix string, suites int) string {
 	var body strings.Builder
 	body.WriteString(`<testsuites>`)
 	for index := 1; index <= suites; index++ {
 		name := strconv.Itoa(index)
-		body.WriteString(`<testsuite name="suite-` + name + `" time="1.0">`)
-		body.WriteString(`<testcase name="case-` + name + `" classname="pkg" time="1.0"/>`)
+		body.WriteString(`<testsuite name="` + prefix + `suite-` + name + `" time="1.0">`)
+		body.WriteString(`<testcase name="` + prefix + `case-` + name + `" classname="pkg" time="1.0"/>`)
 		body.WriteString(`</testsuite>`)
 	}
 	body.WriteString(`</testsuites>`)

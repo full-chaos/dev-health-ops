@@ -478,6 +478,9 @@ func MetricPerRunComponentLabel(value string) string {
 // metric without reading route code (CHAOS-4142).
 var metricPerRunCauseVocabulary = map[string]struct{}{
 	"per_run_cap": {}, "per_run_page_budget": {},
+	// aggregate_of_parts and aggregate_mismatch (CHAOS-13794): a report artifact dropped as the aggregate of its parts (advances),
+	// and an aggregate whose outcomes disagree with its parts (kept, withholds).
+	"aggregate_of_parts": {}, "aggregate_mismatch": {},
 }
 
 // MetricPerRunCauseLabel bounds the per-run cause label.
@@ -587,6 +590,8 @@ func (m *Metrics) RecordNonReportMembersSkipped(provider, dataset, class string,
 var metricSkippedArtifactCauseOverflowVocabulary = map[string]struct{}{
 	"artifact_oversized": {}, "artifact_unavailable": {}, "unreadable_archive": {},
 	"malformed": {}, "unreadable": {},
+	// CHAOS-13794: the markers of a run's report artifacts skipped whole.
+	"per_run_cap": {}, "aggregate_of_parts": {}, "aggregate_mismatch": {},
 }
 
 // MetricSkippedArtifactCauseOverflowLabel bounds the
@@ -635,10 +640,11 @@ var metricCicdPartialSuccessReasonVocabulary = map[string]struct{}{
 	// malformed/unreadable (CHAOS-4592): report-parse-time causes that now
 	// advance the watermark alongside the three whole-artifact causes above --
 	// see githubTestsWatermarkAdvancingPairs.
-	"malformed":   {},
-	"unreadable":  {},
-	"per_run_cap": {},
-	"mixed":       {},
+	"malformed":          {},
+	"unreadable":         {},
+	"per_run_cap":        {},
+	"aggregate_of_parts": {},
+	"mixed":              {},
 }
 
 // MetricCicdPartialSuccessReasonLabel bounds the RecordCicdPartialSuccess

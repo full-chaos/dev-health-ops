@@ -512,6 +512,32 @@ func recordGitHubTestsPerRunTruncation(
 	return cursor
 }
 
+// recordGitHubTestsRunReportsDuplicate records, once per run and cause, that report artifacts of the run were dropped as the aggregate
+// of their parts (aggregate_of_parts: nothing is lost, the watermark advances) or kept although an aggregate disagrees with its parts
+// on outcomes (aggregate_mismatch: the run is not advanced past). The artifact ids go to the markers, the run id to the log line.
+func recordGitHubTestsRunReportsDuplicate(
+	cursor githubTestsChunkCursor,
+	client *providerfoundation.HTTPClient,
+	claim Claim,
+	cause string,
+	runID string,
+	rows int,
+) githubTestsChunkCursor {
+	cursor.Incomplete = mergeGitHubTestsIncomplete(cursor.Incomplete, GitHubTestsIncomplete{
+		Component: githubTestsRunReportsComponent, Cause: cause, Count: 1,
+	})
+	if client != nil {
+		client.Metrics.RecordPerRunTruncation(claim.Provider, claim.Dataset, githubTestsRunReportsComponent, cause)
+	}
+	slog.Warn(
+		"provider run report artifacts overlap by content; see the artifact markers",
+		"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
+		"repository", cursor.Repo, "component", githubTestsRunReportsComponent, "cause", cause,
+		logging.ProviderIDAttr("run", runID), "rows", rows,
+	)
+	return cursor
+}
+
 // recordGitHubTestsSkippedArtifact records ONE skipped artifact under `cause`
 // and returns the updated observation slice. It serves BOTH tests routes --
 // the chunked one keeps its observations on the cursor, the non-chunked
@@ -1546,11 +1572,29 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 						)
 					}
 					githubTestsSortArtifactsForAdmission(artifactItems)
-					// The run's report rows are admitted whole, smallest artifact first (CHAOS-13794): an artifact that does not fit is
-					// skipped whole with a marker and the walk goes on, so the order GitHub lists the artifacts in never decides which
-					// one survives. per_run_cap is recorded once per run, a marker once per skipped artifact.
+					// The run's report rows are decided once every artifact is parsed (CHAOS-13794): duplicates are dropped by content,
+					// then the survivors are admitted whole, smallest declared size first, under the run bound. An artifact that does
+					// not fit is skipped whole with a marker and the walk goes on, so the order GitHub lists the artifacts in never
+					// decides which one survives. Each cause is recorded once per run, a marker once per skipped artifact.
+					var parsedReports []githubTestsParsedReport
+					heldRows := 0
 					reportRowsTruncated := false
-					var reportBudget githubTestsReportBudget
+					skipReportOverBound := func(artifact githubTestsArtifactPayload) {
+						if !reportRowsTruncated {
+							reportRowsTruncated = true
+							cursor = recordGitHubTestsPerRunTruncation(
+								cursor, client, claim, githubTestsRunReportsComponent,
+								githubTestsPerRunCapCause, pipeline.RunID, heldRows,
+							)
+						}
+						cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow, cursor.SkippedArtifactCauseOverflow, cursor.SkippedArtifactCauseCount = appendGitHubTestsSkippedArtifact(
+							cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow, cursor.SkippedArtifactCauseOverflow, cursor.SkippedArtifactCauseCount,
+							GitHubTestsSkippedArtifact{
+								RunID: pipeline.RunID, ArtifactID: string(artifact.ID), Name: artifact.Name,
+								Cause: githubTestsPerRunCapCause,
+							},
+						)
+					}
 					for _, artifact := range artifactItems {
 						if artifact.Expired {
 							continue
@@ -1803,37 +1847,54 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 								"repository", cursor.Repo, logging.ProviderIDAttr("run", pipeline.RunID), "count", rows.DuplicateSuites,
 							)
 						}
-						// Admit the artifact whole or skip it whole: a suite is never separated from its cases. The payload
-						// size is json.Marshal of each row, the exact bytes BuildEffectBatch counts, so it is never an under-estimate.
-						committed := reportBudget.rows
-						incoming := len(rows.Suites) + len(rows.Cases) + len(rows.Coverage)
-						incomingSuiteBytes, suiteSizeErr := githubTestsRowsJSONBytes(rows.Suites)
-						incomingCaseBytes, caseSizeErr := githubTestsRowsJSONBytes(rows.Cases)
-						incomingCoverageBytes, coverageSizeErr := githubTestsRowsJSONBytes(rows.Coverage)
-						if sizeErr := errors.Join(suiteSizeErr, caseSizeErr, coverageSizeErr); sizeErr != nil {
-							return fmt.Errorf("%w: sizing report rows: %v", ErrGitHubTestsIncomplete, sizeErr)
+						// Hold the parsed rows until the run is decided; an artifact that would take the held rows past
+						// githubTestsMaxHeldReportRowsPerRun is skipped whole before it is held.
+						held := githubTestsParsedReport{ID: artifact.ID, Name: artifact.Name, Suites: rows.Suites, Cases: rows.Cases, Coverage: rows.Coverage}
+						if heldRows+held.rows() > githubTestsMaxHeldReportRowsPerRun {
+							skipReportOverBound(artifact)
+							continue
 						}
-						if !reportBudget.fits(incoming, incomingSuiteBytes, incomingCaseBytes, incomingCoverageBytes) {
+						heldRows += held.rows()
+						parsedReports = append(parsedReports, held)
+					}
+					plan, planErr := githubTestsPlanRunReports(parsedReports)
+					if planErr != nil {
+						return fmt.Errorf("%w: sizing report rows: %v", ErrGitHubTestsIncomplete, planErr)
+					}
+					recordedCauses := map[string]bool{}
+					markReport := func(index int, cause string) {
+						report := parsedReports[index]
+						cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow, cursor.SkippedArtifactCauseOverflow, cursor.SkippedArtifactCauseCount = appendGitHubTestsSkippedArtifact(
+							cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow, cursor.SkippedArtifactCauseOverflow, cursor.SkippedArtifactCauseCount,
+							GitHubTestsSkippedArtifact{RunID: pipeline.RunID, ArtifactID: string(report.ID), Name: report.Name, Cause: cause},
+						)
+						if cause == githubTestsPerRunCapCause {
 							if !reportRowsTruncated {
 								reportRowsTruncated = true
 								cursor = recordGitHubTestsPerRunTruncation(
-									cursor, client, claim, githubTestsRunReportsComponent,
-									githubTestsPerRunCapCause, pipeline.RunID, committed,
+									cursor, client, claim, githubTestsRunReportsComponent, cause, pipeline.RunID, heldRows,
 								)
 							}
-							cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow, cursor.SkippedArtifactCauseOverflow, cursor.SkippedArtifactCauseCount = appendGitHubTestsSkippedArtifact(
-								cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow, cursor.SkippedArtifactCauseOverflow, cursor.SkippedArtifactCauseCount,
-								GitHubTestsSkippedArtifact{
-									RunID: pipeline.RunID, ArtifactID: string(artifact.ID), Name: artifact.Name,
-									Cause: githubTestsPerRunCapCause,
-								},
-							)
-							continue
+							return
 						}
-						suites = append(suites, rows.Suites...)
-						cases = append(cases, rows.Cases...)
-						coverage = append(coverage, rows.Coverage...)
-						reportBudget.admit(incoming, incomingSuiteBytes, incomingCaseBytes, incomingCoverageBytes)
+						if !recordedCauses[cause] {
+							recordedCauses[cause] = true
+							cursor = recordGitHubTestsRunReportsDuplicate(cursor, client, claim, cause, pipeline.RunID, report.rows())
+						}
+					}
+					for _, drop := range plan.Dropped {
+						markReport(drop.Index, drop.Cause)
+					}
+					for _, index := range plan.Mismatch {
+						markReport(index, githubTestsAggregateMismatchCause)
+					}
+					for _, index := range plan.OverBound {
+						markReport(index, githubTestsPerRunCapCause)
+					}
+					for _, index := range plan.Admitted {
+						suites = append(suites, parsedReports[index].Suites...)
+						cases = append(cases, parsedReports[index].Cases...)
+						coverage = append(coverage, parsedReports[index].Coverage...)
 					}
 				}
 				cursor.Suites += len(suites)

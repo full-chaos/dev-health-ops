@@ -160,9 +160,15 @@ type TestMetric struct {
 	SuiteDurationP50Seconds *float64
 	SuiteDurationP95Seconds *float64
 	FailureRecurrence       float64
-	TeamID                  *string
-	ServiceID               *string
-	OrgID                   string
+	// FlakeUnknown is set when the day holds case rows only of runs left out of
+	// the flake measures (runs on a non-default branch): flake_rate,
+	// retry_dependency_rate and failure_recurrence_score then carry 0 because
+	// nothing was measured, not because nothing flaked. The writer leaves the
+	// flake_cases/distinct_cases pair NULL for such a row.
+	FlakeUnknown bool
+	TeamID       *string
+	ServiceID    *string
+	OrgID        string
 }
 
 // CoverageMetric ports CoverageMetricsDailyRecord (testops_schemas.py:394).
@@ -720,6 +726,14 @@ type TestAccumulator struct {
 	caseHasRetry                                       map[string]bool
 	currentFailedNames                                 map[string]struct{}
 	sawCaseRow                                         bool
+	casesOffDefaultBranchOnly                          bool
+}
+
+// MarkCasesOffDefaultBranchOnly records that the day holds case rows, all of
+// runs the reader left out of the flake measures. With no case row folded in,
+// Finish then marks the record FlakeUnknown.
+func (accumulator *TestAccumulator) MarkCasesOffDefaultBranchOnly() {
+	accumulator.casesOffDefaultBranchOnly = true
 }
 
 // NewTestAccumulator takes the same repoName/resolver contract as
@@ -852,6 +866,7 @@ func (accumulator *TestAccumulator) Finish(historicalFailedNames map[string]stru
 	if len(currentFailedNames) > 0 {
 		metric.FailureRecurrence = float64(recurrentFailures) / float64(len(currentFailedNames))
 	}
+	metric.FlakeUnknown = accumulator.casesOffDefaultBranchOnly && !accumulator.sawCaseRow
 	if first != nil {
 		metric.TeamID = resolveRepoTeam(first.TeamID, accumulator.repoName, accumulator.resolver)
 		metric.ServiceID = first.ServiceID

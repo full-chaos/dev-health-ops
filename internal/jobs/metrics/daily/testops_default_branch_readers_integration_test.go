@@ -5,6 +5,7 @@ package daily
 import (
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -40,6 +41,8 @@ type defaultBranchRepo struct {
 	settings      string
 	prBranch      string // branch of the "pull request" runs in this repo
 	recordedInSQL bool   // false: no repos row at all
+	prCasesOnly   bool   // no case rows for the default-branch run (suites stay)
+	noCases       bool   // no case rows at all (suites stay)
 }
 
 type defaultBranchWindow struct {
@@ -110,6 +113,9 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		{"r-hist", "c-hist-R", "R", "failed", uint32(0)},
 	}
 	for _, c := range cases {
+		if repo.noCases || (repo.prCasesOnly && c[0] == "r-main") {
+			continue
+		}
 		execAll(ctx, t, conn, `INSERT INTO test_case_results
 (repo_id, run_id, suite_id, case_id, case_name, status, retry_attempt, org_id, last_synced)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -201,7 +207,8 @@ func TestTestopsFlakeRetryRecurrenceCountDefaultBranchRunsOnly(t *testing.T) {
 
 // A run is dropped only when it is KNOWN to sit on another branch. Without a
 // recorded default branch the reader cannot tell, so it keeps every run, which
-// is what it did before the filter existed.
+// is what it did before the filter existed. A run whose branch is NULL or empty
+// is not known to be off the default branch either.
 func TestTestopsDefaultBranchFilterKeepsUnknownRuns(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
@@ -224,8 +231,65 @@ func TestTestopsDefaultBranchFilterKeepsUnknownRuns(t *testing.T) {
 	if err := conn.Exec(ctx, `ALTER TABLE ci_pipeline_runs UPDATE branch = NULL WHERE repo_id = ? AND run_id IN ('r-pr', 'r-hist') SETTINGS mutations_sync = 2`, nullBranch.id); err != nil {
 		t.Fatal(err)
 	}
-	if got := computeDefaultBranchTestMetric(ctx, t, conn, w, nullBranch.id); got.FlakeCases != 1 {
-		t.Errorf("NULL branch runs: flake_cases=%d, want 1 (a run with no recorded branch is not known to be off the default branch)", got.FlakeCases)
+	emptyBranch := defaultBranchRepo{id: uuid.MustParse("00000000-0000-4000-8000-0000000000d8"),
+		settings: `{"default_branch":"main"}`, prBranch: "", recordedInSQL: true}
+	seedDefaultBranchRepo(ctx, t, conn, w, emptyBranch)
+
+	for name, repo := range map[string]defaultBranchRepo{"NULL branch": nullBranch, "empty branch": emptyBranch} {
+		if got := computeDefaultBranchTestMetric(ctx, t, conn, w, repo.id); got.FlakeCases != 1 {
+			t.Errorf("%s runs: flake_cases=%d, want 1 (a run with no recorded branch is not known to be off the default branch)", name, got.FlakeCases)
+		}
+		coverage, err := loadNativeTestopsLatestCoverage(ctx, conn, defaultBranchTestOrg, repo.id, w.start, w.end)
+		if err != nil || len(coverage) != 1 || coverage[0].RunID != "r-pr" {
+			t.Errorf("%s runs: coverage=%+v err=%v, want the unfiltered latest (r-pr)", name, coverage, err)
+		}
+	}
+}
+
+// A repo-day whose only case rows are of runs left out of the flake measures
+// reads flake as unknown, not as 0 flakes; a day with at least one default
+// branch case row, or with no case rows at all, is not marked.
+func TestTestopsFlakeIsUnknownWhenOnlyOffDefaultBranchRunsHaveCases(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	conn := startDefaultBranchClickHouse(ctx, t)
+	w := newDefaultBranchWindow()
+
+	repos := map[string]struct {
+		repo        defaultBranchRepo
+		wantUnknown bool
+	}{
+		"only pull-request case rows": {defaultBranchRepo{id: uuid.MustParse("00000000-0000-4000-8000-0000000000e1"),
+			settings: `{"default_branch":"main"}`, prBranch: "feature/x", recordedInSQL: true, prCasesOnly: true}, true},
+		"default branch and pull-request case rows": {defaultBranchRepo{id: uuid.MustParse("00000000-0000-4000-8000-0000000000e2"),
+			settings: `{"default_branch":"main"}`, prBranch: "feature/x", recordedInSQL: true}, false},
+		"suites, no case rows at all": {defaultBranchRepo{id: uuid.MustParse("00000000-0000-4000-8000-0000000000e3"),
+			settings: `{"default_branch":"main"}`, prBranch: "feature/x", recordedInSQL: true, noCases: true}, false},
+		"default branch not recorded": {defaultBranchRepo{id: uuid.MustParse("00000000-0000-4000-8000-0000000000e4"),
+			prBranch: "feature/x", prCasesOnly: true}, false},
+	}
+	for name, test := range repos {
+		seedDefaultBranchRepo(ctx, t, conn, w, test.repo)
+		got := computeDefaultBranchTestMetric(ctx, t, conn, w, test.repo.id)
+		if got.FlakeUnknown != test.wantUnknown {
+			t.Errorf("%s: FlakeUnknown=%v, want %v (flake_cases=%d distinct=%d)", name, got.FlakeUnknown, test.wantUnknown, got.FlakeCases, got.DistinctCases)
+		}
+	}
+	// The written row carries the unknown as a NULL count pair.
+	unknownRepo := repos["only pull-request case rows"].repo
+	metrics, err := computeTestopsTestMetricsWithoutTeams(ctx, conn, defaultBranchTestOrg, unknownRepo.id, w.historyStart, w.start, w.end)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writeTestopsTestMetrics(ctx, conn, defaultBranchTestOrg, w.day, w.day, metrics); err != nil {
+		t.Fatal(err)
+	}
+	var flakeCases, distinctCases *uint32
+	if err := conn.QueryRow(ctx, `SELECT flake_cases, distinct_cases FROM testops_test_metrics_daily WHERE repo_id = ?`, unknownRepo.id).Scan(&flakeCases, &distinctCases); err != nil {
+		t.Fatal(err)
+	}
+	if flakeCases != nil || distinctCases != nil {
+		t.Errorf("written flake_cases/distinct_cases = %v/%v, want NULL/NULL for an unknown day", flakeCases, distinctCases)
 	}
 }
 
@@ -295,18 +359,52 @@ ORDER BY case_name`
 
 func legacyCaseAggregate(ctx context.Context, t *testing.T, conn driver.Conn, repoID uuid.UUID, w defaultBranchWindow) (testops.TestMetric, int) {
 	t.Helper()
-	accumulator := testops.NewTestAccumulator(repoID, "", nil)
-	if err := loadNativeTestopsSuites(ctx, conn, accumulator, defaultBranchTestOrg, repoID, w.start, w.end); err != nil {
-		t.Fatal(err)
-	}
-	rows, err := conn.Query(ctx, legacyCaseAggregateSQL,
+	return runCaseAggregateSQL(ctx, t, conn, repoID, w, legacyCaseAggregateSQL, []any{
 		defaultBranchTestOrg, repoID, w.start.UTC(), w.end.UTC(),
 		defaultBranchTestOrg, repoID, w.end.UTC(),
 		"failure", "failed", "error", "errors", "timeout", "timed_out",
 		defaultBranchTestOrg, repoID, w.historyStart.UTC(), w.start.UTC(),
-		defaultBranchTestOrg, repoID)
+		defaultBranchTestOrg, repoID})
+}
+
+// previousExclusionCaseAggregate is the case read as the first version of the
+// default-branch exclusion wrote it: the legacy SQL plus a NOT IN on the case
+// rows, so the excluded runs' case rows are read and then dropped.
+func previousExclusionCaseAggregate(ctx context.Context, t *testing.T, conn driver.Conn, repoID uuid.UUID, w defaultBranchWindow, defaultBranch string) (testops.TestMetric, int) {
+	t.Helper()
+	sql := strings.Replace(legacyCaseAggregateSQL, "  WHERE org_id = ? AND repo_id = ? AND case_name != ''\n)", `  WHERE org_id = ? AND repo_id = ? AND case_name != ''
+    AND run_id NOT IN (
+      SELECT run_id FROM ci_pipeline_runs FINAL
+      WHERE org_id = ? AND repo_id = ?
+        AND run_id IN (
+          SELECT run_id FROM test_suite_results FINAL
+          WHERE org_id = ? AND repo_id = ?
+            AND coalesce(started_at, finished_at) >= ? AND coalesce(started_at, finished_at) < ?
+        )
+        AND branch IS NOT NULL AND branch != '' AND branch != ?
+    )
+)`, 1)
+	if sql == legacyCaseAggregateSQL {
+		t.Fatal("the previous-exclusion SQL was not derived from the legacy SQL")
+	}
+	return runCaseAggregateSQL(ctx, t, conn, repoID, w, sql, []any{
+		defaultBranchTestOrg, repoID, w.start.UTC(), w.end.UTC(),
+		defaultBranchTestOrg, repoID, w.end.UTC(),
+		"failure", "failed", "error", "errors", "timeout", "timed_out",
+		defaultBranchTestOrg, repoID, w.historyStart.UTC(), w.start.UTC(),
+		defaultBranchTestOrg, repoID,
+		defaultBranchTestOrg, repoID, defaultBranchTestOrg, repoID, w.historyStart.UTC(), w.end.UTC(), defaultBranch})
+}
+
+func runCaseAggregateSQL(ctx context.Context, t *testing.T, conn driver.Conn, repoID uuid.UUID, w defaultBranchWindow, sql string, args []any) (testops.TestMetric, int) {
+	t.Helper()
+	accumulator := testops.NewTestAccumulator(repoID, "", nil)
+	if err := loadNativeTestopsSuites(ctx, conn, accumulator, defaultBranchTestOrg, repoID, w.start, w.end); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := conn.Query(ctx, sql, args...)
 	if err != nil {
-		t.Fatalf("legacy case aggregate: %v", err)
+		t.Fatalf("case aggregate: %v", err)
 	}
 	defer rows.Close()
 	history := map[string]struct{}{}
@@ -330,22 +428,16 @@ func legacyCaseAggregate(ctx context.Context, t *testing.T, conn driver.Conn, re
 	}
 	metrics := accumulator.Finish(history)
 	if len(metrics) != 1 {
-		t.Fatalf("legacy read produced %d records", len(metrics))
+		t.Fatalf("case aggregate produced %d records", len(metrics))
 	}
 	return metrics[0], groups
 }
 
-// The case read with the default-branch exclusion must equal the read without
-// it when the repo has no run known to be off the default branch, and must not
-// grow with the repo's case history. The seed holds shapes that could break
-// either: a run with cases but no
-// suite at all, a suite older than the history window, a failure inside the
-// history window, a suite of the next day sharing today's run id, and 30,000
-// ancient case rows that only an unbounded scan reads.
-func TestTestopsCaseAggregateEqualsLegacyReadAndDoesNotScanHistory(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
-	conn := startDefaultBranchClickHouse(ctx, t)
+// seedAncientHistoryFixture seeds one default-branch repo with every shape a
+// bounded case read could get wrong (see the test below) and returns it with its
+// window. Merges are stopped so the part layout, and with it read_rows, is fixed.
+func seedAncientHistoryFixture(ctx context.Context, t *testing.T, conn driver.Conn) (defaultBranchRepo, defaultBranchWindow) {
+	t.Helper()
 	for _, table := range []string{"ci_pipeline_runs", "test_suite_results", "test_case_results", "repos"} {
 		if err := conn.Exec(ctx, "SYSTEM STOP MERGES "+table); err != nil {
 			t.Fatal(err)
@@ -380,6 +472,22 @@ FROM numbers(30000)`, repo.id, defaultBranchTestOrg, synced); err != nil {
 		t.Fatalf("seed ancient case rows: %v", err)
 	}
 
+	return repo, w
+}
+
+// The case read with the default-branch exclusion must equal the read without
+// it when the repo has no run known to be off the default branch, and must not
+// grow with the repo's case history. The seed holds shapes that could break
+// either: a run with cases but no
+// suite at all, a suite older than the history window, a failure inside the
+// history window, a suite of the next day sharing today's run id, and 30,000
+// ancient case rows that only an unbounded scan reads.
+func TestTestopsCaseAggregateEqualsLegacyReadAndDoesNotScanHistory(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	conn := startDefaultBranchClickHouse(ctx, t)
+	repo, w := seedAncientHistoryFixture(ctx, t, conn)
+
 	var legacy testops.TestMetric
 	legacyReads := measureCaseResultsReads(ctx, t, conn, func() { legacy, _ = legacyCaseAggregate(ctx, t, conn, repo.id, w) })
 	var bounded testops.TestMetric
@@ -396,5 +504,74 @@ FROM numbers(30000)`, repo.id, defaultBranchTestOrg, synced); err != nil {
 	// history reads them all (one granule is 8,192 rows).
 	if boundedReads.readRows >= 1000 {
 		t.Errorf("the case read touched %d rows with 30,000 ancient rows in the table: it scans history", boundedReads.readRows)
+	}
+}
+
+// Moving the default-branch exclusion from the case rows into the suite sets
+// must not move a result, and the read must not touch the excluded runs' case
+// rows. The second half is a pin, not a red cell: on a fixture where the pull
+// request run is one contiguous block of rows, the previous form (a NOT IN on
+// the case rows) is pruned by the key as well and reads the same few rows. The
+// fixture does not interleave run ids the way a production table's granules
+// can.
+func TestTestopsCaseAggregateExclusionInSuiteSetsEqualsPreviousFormAndSkipsPullRequestRows(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	conn := startDefaultBranchClickHouse(ctx, t)
+	for _, table := range []string{"ci_pipeline_runs", "test_suite_results", "test_case_results", "repos"} {
+		if err := conn.Exec(ctx, "SYSTEM STOP MERGES "+table); err != nil {
+			t.Fatal(err)
+		}
+	}
+	w := newDefaultBranchWindow()
+	repos := []defaultBranchRepo{
+		{id: uuid.MustParse("00000000-0000-4000-8000-0000000000f1"), settings: `{"default_branch":"main"}`, prBranch: "feature/x", recordedInSQL: true},
+		{id: uuid.MustParse("00000000-0000-4000-8000-0000000000f2"), settings: `{"default_branch":"main"}`, prBranch: "main", recordedInSQL: true},
+		{id: uuid.MustParse("00000000-0000-4000-8000-0000000000f3"), settings: `{"default_branch":"main"}`, prBranch: "", recordedInSQL: true},
+		{id: uuid.MustParse("00000000-0000-4000-8000-0000000000f4"), settings: `{"default_branch":"main"}`, prBranch: "feature/x", recordedInSQL: true, prCasesOnly: true},
+	}
+	for _, repo := range repos {
+		seedDefaultBranchRepo(ctx, t, conn, w, repo)
+	}
+	for _, repo := range repos {
+		previous, _ := previousExclusionCaseAggregate(ctx, t, conn, repo.id, w, "main")
+		current := computeDefaultBranchTestMetric(ctx, t, conn, w, repo.id)
+		current.FlakeUnknown = false // the previous form had no such mark
+		if !reflect.DeepEqual(previous, current) {
+			t.Errorf("repo %s: the exclusion inside the suite sets moved the record:\nprevious %+v\ncurrent  %+v", repo.id, previous, current)
+		}
+	}
+
+	// A pull-request run with 30,000 case rows today: the previous form reads
+	// them all, the new form skips the run.
+	bulk := defaultBranchRepo{id: uuid.MustParse("00000000-0000-4000-8000-0000000000f5"), settings: `{"default_branch":"main"}`, prBranch: "feature/x", recordedInSQL: true}
+	seedDefaultBranchRepo(ctx, t, conn, w, bulk)
+	synced := w.day.Add(20 * time.Hour)
+	started := w.day.Add(12 * time.Hour)
+	execAll(ctx, t, conn, `INSERT INTO ci_pipeline_runs
+(repo_id, run_id, status, queued_at, started_at, finished_at, last_synced, retry_count, org_id, branch)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [][]any{{bulk.id, "r-pr-bulk", "success", started, started, started.Add(time.Minute), synced, uint32(0), defaultBranchTestOrg, "feature/y"}})
+	execAll(ctx, t, conn, `INSERT INTO test_suite_results
+(repo_id, run_id, suite_id, suite_name, total_count, passed_count, failed_count, skipped_count, error_count,
+ quarantined_count, duration_seconds, started_at, finished_at, org_id, last_synced)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [][]any{{bulk.id, "r-pr-bulk", "s-bulk", "suite", uint32(30000), uint32(30000), uint32(0), uint32(0), uint32(0), uint32(0), 1.0, started, started.Add(time.Minute), defaultBranchTestOrg, synced}})
+	if err := conn.Exec(ctx, `INSERT INTO test_case_results
+(repo_id, run_id, suite_id, case_id, case_name, status, retry_attempt, org_id, last_synced)
+SELECT ?, 'r-pr-bulk', 's-bulk', toString(number), concat('bulk-', toString(number)), 'passed', 0, ?, ?
+FROM numbers(30000)`, bulk.id, defaultBranchTestOrg, synced); err != nil {
+		t.Fatalf("seed pull-request case rows: %v", err)
+	}
+	var previous, current testops.TestMetric
+	previousReads := measureCaseResultsReads(ctx, t, conn, func() {
+		previous, _ = previousExclusionCaseAggregate(ctx, t, conn, bulk.id, w, "main")
+	})
+	currentReads := measureCaseResultsReads(ctx, t, conn, func() { current = computeDefaultBranchTestMetric(ctx, t, conn, w, bulk.id) })
+	current.FlakeUnknown = false
+	if !reflect.DeepEqual(previous, current) {
+		t.Fatalf("the bulk fixture moved the record:\nprevious %+v\ncurrent  %+v", previous, current)
+	}
+	t.Logf("test_case_results rows read: previous form %d, now %d", previousReads.readRows, currentReads.readRows)
+	if currentReads.readRows >= 1000 {
+		t.Errorf("the case read touched %d rows with a 30,000-row pull-request run in the window: it reads the excluded run", currentReads.readRows)
 	}
 }

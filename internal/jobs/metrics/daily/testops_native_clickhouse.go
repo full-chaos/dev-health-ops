@@ -213,10 +213,10 @@ ORDER BY run_id, suite_id`,
 
 // loadNativeTestopsCaseAggregate is the one test_case_results read behind a
 // test metric record, reduced inside ClickHouse to one row per case_name. The
-// table's sorting key has no time column, but both semi-joins below are on
-// run_id, its second key column, so ClickHouse reads only the runs they name
-// (the read does not grow with the repo's case history); both questions the
-// record asks of it are answered in the same scan. It folds today's cases into accumulator and
+// table's sorting key has no time column, but the semi-joins below are on
+// run_id, the third key column after org_id and repo_id, so ClickHouse reads
+// only the runs they name (the read does not grow with the repo's case
+// history); both questions the record asks of it are answered in the same scan. It folds today's cases into accumulator and
 // returns the names that failed in [historyStart, start).
 //
 // Today's half reproduces load_testops_test_data's two-part semi-join
@@ -264,36 +264,36 @@ func loadNativeTestopsCaseAggregate(
 	// case name's statuses across runs, and a pull-request branch that fails,
 	// is fixed and then passes on a new commit would read as a flake. Pass and
 	// failure counts come from suite rows (loadNativeTestopsSuites) and are not
-	// narrowed here. A run with no ci_pipeline_runs row, or a NULL or empty
-	// branch, is not known to be off the default branch and stays in; so does
-	// every run when the repository's default branch is not recorded. The
-	// exclusion set is limited to the runs with a suite in [historyStart, end),
-	// the only runs either half below can use.
-	nonDefaultRuns := ""
-	var nonDefaultArgs []any
+	// narrowed here.
+	//
+	// The exclusion sits INSIDE the two suite sets that name the runs a case row
+	// can belong to (today's runs, history runs), not on the case rows: a case
+	// row of an excluded run is then never in either set, and the run_id IN
+	// semi-joins keep ClickHouse from reading it at all, instead of reading it
+	// and dropping it. (The third set, suites before `end`, is only ever ANDed
+	// with the today set, so it needs no exclusion of its own.)
+	//
+	// A run with no ci_pipeline_runs row, or a NULL or empty branch, is not
+	// known to be off the default branch and stays in (a NULL branch never
+	// satisfies `branch != ?`); so does every run when the repository's default
+	// branch is not recorded. The off-default set is limited to the runs with a
+	// suite in [historyStart, end), the only runs the sets can name.
+	offDefaultCTE := ""
+	offDefaultExclusion := ""
+	var args []any
 	if defaultBranch != "" {
-		nonDefaultRuns = `
-    AND run_id NOT IN (
-      SELECT run_id FROM ci_pipeline_runs FINAL
-      WHERE org_id = ? AND repo_id = ?
-        AND run_id IN (
-          SELECT run_id FROM test_suite_results FINAL
-          WHERE org_id = ? AND repo_id = ?
-            AND coalesce(started_at, finished_at) >= ? AND coalesce(started_at, finished_at) < ?
-        )
-        AND branch IS NOT NULL AND branch != '' AND branch != ?
-    )`
-		nonDefaultArgs = []any{orgID, repoID, orgID, repoID, historyStart.UTC(), end.UTC(), defaultBranch}
+		offDefaultCTE = offDefaultRunsCTE
+		offDefaultExclusion = "\n        AND run_id NOT IN (SELECT run_id FROM off_default)"
+		args = append(args, offDefaultRunsArgs(orgID, repoID, defaultBranch, historyStart, end)...)
 	}
-	args := []any{
+	args = append(args,
 		orgID, repoID, start.UTC(), end.UTC(),
 		orgID, repoID, end.UTC(),
 		"failure", "failed", "error", "errors", "timeout", "timed_out",
 		orgID, repoID, historyStart.UTC(), start.UTC(),
 		orgID, repoID,
-	}
-	args = append(args, nonDefaultArgs...)
-	rows, err := conn.Query(ctx, `
+	)
+	rows, err := conn.Query(ctx, offDefaultCTE+`
 SELECT
   case_name,
   groupUniqArrayIf(ifNull(toString(status), ''), in_today) AS statuses,
@@ -308,7 +308,7 @@ FROM (
     run_id IN (
       SELECT run_id FROM test_suite_results FINAL
       WHERE org_id = ? AND repo_id = ?
-        AND coalesce(started_at, finished_at) >= ? AND coalesce(started_at, finished_at) < ?
+        AND coalesce(started_at, finished_at) >= ? AND coalesce(started_at, finished_at) < ?`+offDefaultExclusion+`
     ) AS run_in_today,
     run_in_today AND (run_id, suite_id) IN (
       SELECT run_id, suite_id FROM test_suite_results FINAL
@@ -320,10 +320,10 @@ FROM (
       AND (run_id, suite_id) IN (
         SELECT run_id, suite_id FROM test_suite_results FINAL
         WHERE org_id = ? AND repo_id = ?
-          AND coalesce(started_at, finished_at) >= ? AND coalesce(started_at, finished_at) < ?
+          AND coalesce(started_at, finished_at) >= ? AND coalesce(started_at, finished_at) < ?`+offDefaultExclusion+`
       ) AS failed_in_history
   FROM test_case_results FINAL
-  WHERE org_id = ? AND repo_id = ? AND case_name != ''`+nonDefaultRuns+`
+  WHERE org_id = ? AND repo_id = ? AND case_name != ''
 )
 WHERE in_today OR failed_in_history
 GROUP BY case_name
@@ -334,6 +334,7 @@ ORDER BY case_name`, args...)
 	defer rows.Close()
 
 	historicalFailedNames := make(map[string]struct{})
+	sawCaseToday := false
 	for rows.Next() {
 		var group testops.CaseGroup
 		var seenToday, failedBefore uint8
@@ -342,6 +343,7 @@ ORDER BY case_name`, args...)
 		}
 		if seenToday != 0 {
 			accumulator.AddCaseGroup(group)
+			sawCaseToday = true
 		}
 		if failedBefore != 0 {
 			historicalFailedNames[group.CaseName] = struct{}{}
@@ -350,7 +352,84 @@ ORDER BY case_name`, args...)
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate native testops case aggregate: %w", err)
 	}
+	if !sawCaseToday && defaultBranch != "" {
+		// No default-branch case row today. When the day does hold case rows of
+		// runs left out above, the flake measures are not "0 flakes" but unknown:
+		// say so, instead of letting a repo-day that only ran pull requests read
+		// as healthy.
+		offDefaultCases, err := hasNativeTestopsOffDefaultCaseToday(
+			ctx, conn, orgID, repoID, defaultBranch, historyStart, start, end)
+		if err != nil {
+			return nil, err
+		}
+		if offDefaultCases {
+			accumulator.MarkCasesOffDefaultBranchOnly()
+		}
+	}
 	return historicalFailedNames, nil
+}
+
+// offDefaultRunsCTE names, as off_default, the runs with a suite in
+// [historyStart, end) that ci_pipeline_runs records on a branch other than the
+// repository default. A NULL branch never satisfies the comparison, so a run
+// with no recorded branch is not in it.
+const offDefaultRunsCTE = `
+WITH off_default AS (
+  SELECT run_id FROM ci_pipeline_runs FINAL
+  WHERE org_id = ? AND repo_id = ?
+    AND branch != '' AND branch != ?
+    AND run_id IN (
+      SELECT run_id FROM test_suite_results FINAL
+      WHERE org_id = ? AND repo_id = ?
+        AND coalesce(started_at, finished_at) >= ? AND coalesce(started_at, finished_at) < ?
+    )
+)`
+
+func offDefaultRunsArgs(orgID string, repoID uuid.UUID, defaultBranch string, historyStart, end time.Time) []any {
+	return []any{orgID, repoID, defaultBranch, orgID, repoID, historyStart.UTC(), end.UTC()}
+}
+
+// hasNativeTestopsOffDefaultCaseToday reports whether today holds a case row of
+// a run known to be off the default branch, by the same day rule the case
+// aggregate uses for today's rows.
+func hasNativeTestopsOffDefaultCaseToday(
+	ctx context.Context, conn testopsNativeConn, orgID string, repoID uuid.UUID,
+	defaultBranch string, historyStart, start, end time.Time,
+) (bool, error) {
+	args := offDefaultRunsArgs(orgID, repoID, defaultBranch, historyStart, end)
+	args = append(args, orgID, repoID, start.UTC(), end.UTC(), orgID, repoID, end.UTC(), orgID, repoID)
+	rows, err := conn.Query(ctx, offDefaultRunsCTE+`
+SELECT count() FROM (
+  SELECT 1 FROM test_case_results FINAL
+  WHERE case_name != ''
+    AND run_id IN (SELECT run_id FROM off_default)
+    AND run_id IN (
+      SELECT run_id FROM test_suite_results FINAL
+      WHERE org_id = ? AND repo_id = ?
+        AND coalesce(started_at, finished_at) >= ? AND coalesce(started_at, finished_at) < ?
+    )
+    AND (run_id, suite_id) IN (
+      SELECT run_id, suite_id FROM test_suite_results FINAL
+      WHERE org_id = ? AND repo_id = ?
+        AND coalesce(started_at, finished_at) < ?
+    )
+    AND org_id = ? AND repo_id = ?
+  LIMIT 1
+)`, args...)
+	if err != nil {
+		return false, fmt.Errorf("load native testops off-default case rows: %w", err)
+	}
+	defer rows.Close()
+	var count uint64
+	for rows.Next() {
+		if err := rows.Scan(&count); err != nil {
+			return false, fmt.Errorf("scan native testops off-default case rows: %w", err)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return false, fmt.Errorf("iterate native testops off-default case rows: %w", err)
+	}
+	return count > 0, nil
 }
 
 // loadNativeTestopsLatestCoverage returns AT MOST ONE snapshot: the latest by
@@ -500,6 +579,13 @@ func writeTestopsTestMetrics(
 		return 0, fmt.Errorf("prepare testops_test_metrics_daily batch: %w", err)
 	}
 	for _, metric := range metrics {
+		flakeCases, distinctCases := uint32PtrOf(metric.FlakeCases), uint32PtrOf(metric.DistinctCases)
+		if metric.FlakeUnknown {
+			// The org series reads a NULL pair as an uncounted day (see
+			// queryapi/analytics/timeseries.go); flake_rate itself is a plain
+			// Float64 column and keeps its 0.
+			flakeCases, distinctCases = nil, nil
+		}
 		if err := batch.Append(
 			metric.RepoID, chDate(day),
 			// total_cases/passed_count/failed_count/skipped_count/
@@ -516,7 +602,7 @@ func writeTestopsTestMetrics(
 			// flake_cases/distinct_cases are Nullable(UInt32): a row written before
 			// the columns existed reads NULL, a row written now carries both counts
 			// (CHAOS-9737), so the org series can sum them.
-			uint32PtrOf(metric.FlakeCases), uint32PtrOf(metric.DistinctCases),
+			flakeCases, distinctCases,
 		); err != nil {
 			return 0, fmt.Errorf("append testops_test_metrics_daily row: %w", err)
 		}

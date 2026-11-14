@@ -61,6 +61,10 @@ var edgeGoOnlyFromBirth = map[string]edgeGoOnlyDocument{
 		document: registeredTestopsJobFailuresDocument,
 		root:     "testopsJobFailures",
 	},
+	"testopsTestWindow": {
+		document: registeredTestopsTestWindowDocument,
+		root:     "testopsTestWindow",
+	},
 }
 
 func TestEdgeOracleGoOnlyOperationsHaveNoFrozenRequest(t *testing.T) {

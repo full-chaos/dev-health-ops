@@ -626,8 +626,8 @@ func TestEveryQueryAPIActionAllowsExactlyWhatTheLegacyGuardAllows(t *testing.T) 
 	credential := graphCredentialResolvers(t)
 	guardOf := func(key string) string { return legacyGuardOf(key, credential) }
 	all := allActions(t)
-	if len(all) != 88 {
-		t.Fatalf("%d actions in the two tables, want 37 REST rows and 51 GraphQL fields", len(all))
+	if len(all) != 89 {
+		t.Fatalf("%d actions in the two tables, want 37 REST rows and 52 GraphQL fields", len(all))
 	}
 	for _, defect := range parityDefects(all, guardOf, policycatalog.Default(), parityGaps, readServerSource(t)) {
 		t.Error(defect)

@@ -36,6 +36,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/security"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/testopsjobfailures"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/testopsrisk"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/testopswindow"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/throughputforecast"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/workgraph"
 	"github.com/vektah/gqlparser/v2/gqlerror"
@@ -1130,6 +1131,21 @@ func (r *queryResolver) TestopsJobFailures(ctx context.Context, orgID string, in
 		testopsjobfailures.Scope{RepoIDs: input.RepoIds, TeamIDs: input.TeamIds}, input.Limit)
 	if err != nil {
 		return nil, fmt.Errorf("testopsJobFailures: %w", err)
+	}
+	return result, nil
+}
+
+// TestopsTestWindow is the resolver for the testopsTestWindow field
+// (CHAOS-13773, Go-only). The org is the authorized one: a mismatched orgId is
+// refused before any read (requireOwnOrg), as for testopsJobFailures.
+func (r *queryResolver) TestopsTestWindow(ctx context.Context, orgID string, input model.TestOpsTestWindowInput) (*model.TestOpsTestWindowResult, error) {
+	if err := requireOwnOrg(ctx, orgID); err != nil {
+		return nil, err
+	}
+	result, err := testopswindow.Resolve(ctx, r.ClickHouse, orgID, input.SinceDate, input.UntilDate,
+		testopswindow.Scope{RepoIDs: input.RepoIds, TeamIDs: input.TeamIds})
+	if err != nil {
+		return nil, fmt.Errorf("testopsTestWindow: %w", err)
 	}
 	return result, nil
 }

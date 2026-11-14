@@ -48,6 +48,7 @@ var fieldActions = map[string]string{
 	"Query.sourceHealth":                      "analytics.read",
 	"Query.testopsJobFailures":                "metrics.read",
 	"Query.testopsRisk":                       "metrics.read",
+	"Query.testopsTestWindow":                 "metrics.read",
 	"Query.throughputForecast":                "analytics.read",
 	"Query.workGraphArtifacts":                "git.read",
 	"Query.workGraphEdges":                    "git.read",

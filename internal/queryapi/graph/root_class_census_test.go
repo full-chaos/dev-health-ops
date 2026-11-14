@@ -99,6 +99,7 @@ var rootClasses = map[string]rootClass{
 	"Query.securityOverview":                  {classNarrowable, "security_alerts rows, keyed by repository"},
 	"Query.sourceHealth":                      {classMixed, "sync and job tables and the identity, team and work-item tables the reader methods reach"},
 	"Query.testopsJobFailures":                {classMixed, "the scope resolves teams"},
+	"Query.testopsTestWindow":                 {classMixed, "the scope resolves teams"},
 	"Query.testopsRisk":                       {classNarrowable, "testops stability, drag and confidence rows, keyed by repository"},
 	"Query.throughputForecast":                {classMixed, "estimate_coverage_metrics_daily and work_item_metrics_daily have no repository key"},
 	"Query.workGraphArtifacts":                {classMixed, "operational_incidents and unit membership have no repository key"},

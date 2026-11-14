@@ -10,6 +10,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/changefailure"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/deltarule"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/scoperesolve"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
 
@@ -124,9 +125,17 @@ func BuildExplainResponse(ctx context.Context, reader *Reader, orgID string, par
 	// One instant for the whole response: the current and comparison windows
 	// below share one scope filter, so they must share one team membership.
 	asOf := time.Now().UTC()
-	scopeFilterSQL, scopeBindings, err := reader.scopeFilterForMetric(ctx, config.Scope, params.ScopeLevel, params.ScopeIDs, params.WhatRepos, orgID, asOf)
+	// An unresolved repository, service or developer scope answers nothing on every metric scope (CHAOS-13705, R335).
+	unresolved, err := scoperesolve.Unresolved(ctx, reader.client, orgID, params.ScopeLevel, params.ScopeIDs)
 	if err != nil {
 		return nil, err
+	}
+	scopeFilterSQL, scopeBindings := " AND 1 = 0", []dhclickhouse.Binding(nil)
+	if !unresolved {
+		scopeFilterSQL, scopeBindings, err = reader.scopeFilterForMetric(ctx, config.Scope, params.ScopeLevel, params.ScopeIDs, params.WhatRepos, orgID, asOf)
+		if err != nil {
+			return nil, err
+		}
 	}
 	shareSQL := ""
 	if config.Scope == "repo" && config.Aggregator == "sum" && params.ScopeLevel == "team" {

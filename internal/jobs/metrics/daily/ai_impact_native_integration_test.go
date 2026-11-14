@@ -35,7 +35,7 @@ import (
 //
 //   - the tuple-argMax dedup picks ONE WHOLE ROW on a last_synced tie, rather
 //     than mixing columns from different physical rows;
-//   - the team resolver runs end-to-end -- repos.repo -> pattern -> team_id --
+//   - the team resolver runs end-to-end -- team_repo_ownership -> team_id --
 //     which is the sole source of this family's team dimension, since the
 //     attribution loader normalises its own team_id to NULL;
 //   - rows actually land in ai_impact_metrics_daily with the right key.
@@ -242,11 +242,18 @@ INSERT INTO git_commit_stats (repo_id, commit_hash, file_path, last_synced, org_
 (toUUID('`+repoID+`'), 'aaa', 'src/thing.spec.ts', toDateTime64('2026-09-03 09:00:00', 3, 'UTC'), '`+orgID+`')`); err != nil {
 		t.Fatal(err)
 	}
-	// Team resolution: repos.repo "acme/alpha" must match the "acme/*" pattern
-	// and produce team_id "team-acme" on every emitted row.
+	// Team resolution: the ownership row of acme/alpha must produce team_id
+	// "team-acme" on every emitted row. The team's repo_patterns would also
+	// match, and must not be what resolves it (D7013b: owner rows only).
 	if err := conn.Exec(ctx, `
 INSERT INTO teams (id, name, repo_patterns, is_active, updated_at, org_id) VALUES
 ('team-acme', 'Acme', ['acme/*'], 1, toDateTime64('2026-09-01 00:00:00', 6), '`+orgID+`')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.Exec(ctx, `
+INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, valid_from, updated_at) VALUES
+('`+orgID+`', 'github', 'team-acme', toUUID('`+repoID+`'), 'acme/alpha', 'exact', 'native', 1, 10,
+ toDateTime64('2026-09-01 00:00:00', 3, 'UTC'), toDateTime64('2026-09-01 00:00:00', 3, 'UTC'))`); err != nil {
 		t.Fatal(err)
 	}
 	if err := conn.Exec(ctx, `
@@ -303,7 +310,7 @@ INSERT INTO repos (id, repo, last_synced, org_id) VALUES
 
 	// The team dimension came from the resolver, not from the attribution row
 	// (whose team_id the loader normalises to NULL). An empty team_id here
-	// means the repos -> pattern -> team chain silently did not run.
+	// means the ownership -> team chain silently did not run.
 	var teamRows uint64
 	if err := conn.QueryRow(ctx,
 		`SELECT count() FROM ai_impact_metrics_daily FINAL WHERE org_id = ? AND team_id = 'team-acme'`,
@@ -311,7 +318,7 @@ INSERT INTO repos (id, repo, last_synced, org_id) VALUES
 		t.Fatalf("read team-scoped rows: %v", err)
 	}
 	if teamRows == 0 {
-		t.Fatal("no row carries team_id 'team-acme' -- the repo-pattern resolver did not resolve " +
+		t.Fatal("no row carries team_id 'team-acme' -- the ownership resolver did not resolve " +
 			"acme/alpha, so this family's whole team dimension is empty")
 	}
 

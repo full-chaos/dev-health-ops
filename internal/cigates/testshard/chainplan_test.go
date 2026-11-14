@@ -16,10 +16,12 @@ import (
 // CHAOS-13664: check_test_shard runs a test shard's split-package jobs one after another (a chain) beside one go test of its
 // other packages (the rest), then the serial package alone, so a leg's wall is about max(chain, rest / 2) + serial + 15 s
 // (+6..+34 s over the 50 test legs of 5 main runs at 10 legs). The test-leg plan (ci/go_race_shard.awk chain=1) places the
-// chain and the serial package first, then the rest under the highest modelled wall; a "<key>#<part>" weights row weighs one part.
+// chain and the serial package first, then the rest under the highest modelled wall. A part weighs what its test rows give it
+// (CHAOS-13668, ci/go_test_split_weights.tsv); the model reads those derived weights as "<key>#<part>" entries of its weights map.
 
-// plannedWallCap: the highest modelled wall a test shard may plan, under check_go.sh's 600 s warn line with a margin.
-const plannedWallCap = 540
+// plannedWallCap: the highest modelled wall a test shard may plan. The weights are the larger of a warm and a cold (test-result cache
+// missed) value (CHAOS-13730), so the model is a cold leg's wall: under ~800 s, which keeps a cold leg under check_go.sh's 900 s cap.
+const plannedWallCap = 700
 
 type planItem struct {
 	key         string
@@ -34,7 +36,8 @@ func (l chainLoad) wall() float64 {
 	return math.Max(float64(l.chain), float64(l.rest)/2) + float64(l.serial) + 15
 }
 
-// itemWeight is what the plan weighs an item by: a part's own row, else ceil(package weight / parts); no row weighs 1.
+// itemWeight is what the plan weighs an item by: a part's derived weight ("<key>#<part>" in weights, derivedPartWeights), else
+// ceil(package weight / parts); no row weighs 1.
 func itemWeight(it planItem, weights map[string]int) int {
 	w, ok := weights[it.key]
 	if !ok {
@@ -108,6 +111,7 @@ type chainFixture struct {
 	serial  string
 	weights map[string]int
 	splits  map[string]int
+	tests   map[string]map[string]int // package -> test -> seconds (ci/go_test_split_weights.tsv)
 	pkgs    []string
 	limit   float64
 }
@@ -136,6 +140,10 @@ func fixturePlan(t *testing.T, awk string, f chainFixture, chain bool) []chainLo
 		return p
 	}
 	weights, splits, pins := write("weights.tsv", f.weights), write("splits.tsv", f.splits), write("pins.tsv", nil)
+	tests := ""
+	if f.tests != nil {
+		tests = writeTestRows(t, dir, f.tests)
+	}
 	var in strings.Builder
 	for _, p := range f.pkgs {
 		in.WriteString(fixtureMod + "/" + p + "\n")
@@ -144,6 +152,9 @@ func fixturePlan(t *testing.T, awk string, f chainFixture, chain bool) []chainLo
 	for k := 1; k <= f.count; k++ {
 		args := []string{"-v", "mod=" + fixtureMod, "-v", fmt.Sprintf("shard=%d", k), "-v", fmt.Sprintf("count=%d", f.count), "-v", "weights=" + weights,
 			"-v", "pin=" + pins, "-v", "splits=" + splits, "-v", "serial=" + f.serial, "-v", "defw=1"}
+		if tests != "" {
+			args = append(args, "-v", "tests="+tests)
+		}
 		if chain {
 			args = append(args, "-v", "chain=1")
 		} else {
@@ -168,7 +179,7 @@ func fixturePlan(t *testing.T, awk string, f chainFixture, chain bool) []chainLo
 			}
 			items = append(items, it)
 		}
-		loads = append(loads, chainLoadOf(items, f.weights, f.serial))
+		loads = append(loads, chainLoadOf(items, withPartWeights(f.weights, derivedPartWeights(f.tests, f.splits, f.weights)), f.serial))
 	}
 	return loads
 }
@@ -207,10 +218,16 @@ func TestTheChainPlanPlantedMutantsAreCaught(t *testing.T) {
 		f              chainFixture
 	}{
 		{
-			rule: "a part row weighs its part",
-			from: "    if (chain && np > 1 && ((key \"#\" pp) in w)) weight[n] = w[key \"#\" pp]\n", to: "",
-			f: chainFixture{count: 2, serial: "none", weights: map[string]int{"s": 200, "s#1": 190, "s#2": 10, "t": 200, "t#1": 190, "t#2": 10},
-				splits: map[string]int{"s": 2, "t": 2}, pkgs: []string{"s", "t"}, limit: 250},
+			rule: "a part weighs the test rows cut to it",
+			from: "      weight[n] = psum[key, pp] + int(((left > 0 ? left : 0) + np - 1) / np)\n", to: "      weight[n] = int((weight[n] + np - 1) / np)\n",
+			f: chainFixture{count: 2, serial: "none", weights: map[string]int{"s": 200, "t": 200}, splits: map[string]int{"s": 2, "t": 2},
+				tests: map[string]map[string]int{"s": {"TestA": 190, "TestB": 10}, "t": {"TestC": 190, "TestD": 10}}, pkgs: []string{"s", "t"}, limit: 250},
+		},
+		{
+			rule: "a part takes its share of what the rows leave of the package weight",
+			from: "      left = weight[n] - mtot[key]\n", to: "      left = 0\n",
+			f: chainFixture{count: 2, serial: "g", weights: map[string]int{"g": 200, "s": 400}, splits: map[string]int{"s": 2},
+				tests: map[string]map[string]int{"s": {"TestA": 150, "TestB": 1}}, pkgs: []string{"g", "s"}, limit: 360},
 		},
 		{
 			rule: "the chain pass counts the serial load",
@@ -220,8 +237,8 @@ func TestTheChainPlanPlantedMutantsAreCaught(t *testing.T) {
 		{
 			rule: "the rest goes under the highest modelled wall",
 			from: "if (wall2(s, weight[k]) <= top && (best == 0 || rl[s] < rl[best])) best = s", to: "if (best == 0 || rl[s] < rl[best]) best = s",
-			f: chainFixture{count: 2, serial: "g", weights: map[string]int{"g": 280, "s": 291, "s#1": 290, "s#2": 1, "r1": 100, "r2": 40},
-				splits: map[string]int{"s": 2}, pkgs: []string{"g", "r1", "r2", "s"}, limit: 310},
+			f: chainFixture{count: 2, serial: "g", weights: map[string]int{"g": 280, "s": 291, "r1": 100, "r2": 40}, splits: map[string]int{"s": 2},
+				tests: map[string]map[string]int{"s": {"TestA": 290, "TestB": 1}}, pkgs: []string{"g", "r1", "r2", "s"}, limit: 310},
 		},
 	} {
 		if n := strings.Count(string(src), c.from); n != 1 {

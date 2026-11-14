@@ -45,6 +45,8 @@ type unitIdP struct {
 	tokenBody, discoveryBody, userinfoBody     string
 	idToken                                    string
 	noIDToken                                  bool
+	// extraJWKs are served in /jwks after the signing key k1.
+	extraJWKs []map[string]any
 }
 
 func (i *unitIdP) sign(t *testing.T, header, claims map[string]any) string {
@@ -97,11 +99,12 @@ func startUnitIdP(t *testing.T) *unitIdP {
 		_, _ = w.Write([]byte(body))
 	}
 	mux.HandleFunc("/jwks", func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]any{"keys": []map[string]any{{
+		keys := []map[string]any{{
 			"kty": "RSA", "kid": "k1", "use": "sig", "alg": "RS256",
 			"n": base64.RawURLEncoding.EncodeToString(key.N.Bytes()),
 			"e": base64.RawURLEncoding.EncodeToString(big.NewInt(int64(key.E)).Bytes()),
-		}}})
+		}}
+		_ = json.NewEncoder(w).Encode(map[string]any{"keys": append(keys, idp.extraJWKs...)})
 	})
 	mux.HandleFunc("/token", func(w http.ResponseWriter, _ *http.Request) {
 		if idp.tokenBody != "" {

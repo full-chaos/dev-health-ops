@@ -96,7 +96,7 @@ func wrapStreamRunnerReadinessCheckWithLogging(logger *slog.Logger, check string
 	return func(ctx context.Context) error {
 		err := ready(ctx)
 		if err != nil && logger != nil {
-			logger.ErrorContext(ctx, "stream-runner readiness dependency check failed",
+			logger.Log(ctx, health.DependencyRefusalLevel(ctx), "stream-runner readiness dependency check failed",
 				"error_category", "dependency_unavailable",
 				"check", check,
 				"error", err.Error(),
@@ -293,7 +293,7 @@ func (storage *productionStreamStorage) logDependencyCheckFailure(ctx context.Co
 	if storage == nil || storage.logger == nil || err == nil {
 		return
 	}
-	storage.logger.ErrorContext(ctx, "stream runner readiness dependency check failed",
+	storage.logger.Log(ctx, health.DependencyRefusalLevel(ctx), "stream runner readiness dependency check failed",
 		"error_category", "dependency_unavailable",
 		"check", check,
 		"error", err.Error(),

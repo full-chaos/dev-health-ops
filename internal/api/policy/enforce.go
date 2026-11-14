@@ -69,9 +69,11 @@ var enforceOutcomes = []string{enforceOutcomeAllow, enforceOutcomeDeny, enforceO
 // any call, except on the stop route. A delegated session's own bearer is decided
 // like any other. A token with no organization on an organization row is asked the one platform action the legacy
 // guard admits it by, admin.orgs; on an AdminOrg row it is refused as the legacy guard refuses it, with no question
-// (decideOrgless). The one exception is a caller the decision point cannot judge (a legacy HS256 token, a served
-// organization that is no UUID, a delegated session's bearer with no organization, an impersonation read): that request
-// keeps the legacy answer, which is the same answer the route gives with its cell off.
+// (decideOrgless). A request whose served organization is no UUID is judged on the token organization like any other;
+// its handler still refuses the value. Two callers keep the legacy answer, the named residual (CHAOS-10872 D6989): an
+// impersonation read and a delegated session's bearer with no organization; the answer is the one the route gives with its
+// cell off. A request with no user access token cannot reach an enforced row (authentication refuses it first); if one
+// does, it is refused, logged as an error and counted error_deny.
 // Operator runbook: docs/operate/runbooks/auth-pdp-outage-and-rollback.md
 type Enforcer struct {
 	decider pep.Decider
@@ -250,13 +252,13 @@ func (e *Enforcer) decideOnce(ctx context.Context, o enforceObservation) enforce
 	if row.ResourceType == policycatalog.ScopeOrganization && o.orgID == "" && o.bearer != "" && o.userAccessToken {
 		return e.decideOrgless(ctx, o, row)
 	}
-	org := strings.ToLower(o.orgID)
-	if reason := unjudgedReason(o, org); reason != "" {
-		countEnforceUnjudged(ctx, o.pattern, reason)
-		e.logger.DebugContext(ctx, "api enforcement: caller not judged, the legacy answer stands",
-			slog.String("route", o.pattern), slog.String("namespace", row.Namespace), slog.String("reason", reason))
-		return enforceLegacy
+	if o.bearer == "" || !o.userAccessToken {
+		countEnforce(ctx, row.Namespace, enforceOutcomeErrorDeny)
+		e.logger.ErrorContext(ctx, "api enforcement: a request with no user access token reached an enforced row, refused",
+			slog.String("route", o.pattern), slog.String("namespace", row.Namespace))
+		return enforceDeny
 	}
+	org := strings.ToLower(o.orgID)
 	if o.adminOr && row.ResourceType == policycatalog.ScopePlatform {
 		return e.decideAdminOr(ctx, o, row, org)
 	}
@@ -413,19 +415,6 @@ func (e *Enforcer) askBatch(ctx context.Context, requests []pep.Request) (decisi
 	return e.decider.DecideBatch(ctx, requests), false
 }
 
-// unjudgedReason says why the decision point cannot judge a request, or "" when it can. A token that is not a user
-// access token comes first: nothing else can be said of it. A served organization that parses as no UUID is no_org:
-// its handler refuses it.
-func unjudgedReason(o enforceObservation, org string) string {
-	switch {
-	case o.bearer == "" || !o.userAccessToken:
-		return enforceUnjudgedHS256
-	case o.served.against(org) == servedOrgUnparsed:
-		return enforceUnjudgedNoOrg
-	}
-	return ""
-}
-
 // obligationsCarriedOut reports whether go-api carries out every obligation of an allow for request. A tenant scope
 // is carried out when it is the request's organization; a repository allowlist or the organization repository
 // scope only on a route with no repository dimension; a minimum assurance of aal1 on a read only (every session
@@ -489,8 +478,31 @@ func (g *Guard) enforceVerdict(r *http.Request, user *User, bearer string, level
 	return verdict
 }
 
+// decisionPointRefusal is true for a verdict that comes from the decision point's answer or its absence: the refusals a
+// route's late checks run before. An impersonation refusal and a session row fault are the guard's own and come first.
+func decisionPointRefusal(verdict enforceVerdict) bool {
+	switch verdict {
+	case enforceDeny, enforceUnavailable, enforceNoDecisionPoint, enforceDenyNoOrg:
+		return true
+	}
+	return false
+}
+
+// actionSSOWrite is the catalog 20 action of the SSO provider writes.
+const actionSSOWrite = "sso.write"
+
+// refusalLevel is the level whose legacy refusal text a denied caller gets. The SSO provider writes are Authenticated routes
+// whose handler refuses a caller that is not an owner or admin with "Admin access required"; the enforced row keeps that text
+// (an action only owner and admin hold), so the answer for a denied caller does not change with the cell.
+func (e *Enforcer) refusalLevel(pattern string, level Authz) Authz {
+	if e != nil && level == Authenticated && e.rows[pattern].Action == actionSSOWrite {
+		return Admin
+	}
+	return level
+}
+
 // writeEnforceRefusal answers a request the decision point refused or could not judge, or that no decision point can.
-func writeEnforceRefusal(w http.ResponseWriter, level Authz, verdict enforceVerdict) {
+func writeEnforceRefusal(w http.ResponseWriter, r *http.Request, level Authz, verdict enforceVerdict, deny DenyText) {
 	switch verdict {
 	case enforceUnavailable:
 		WriteDetail(w, http.StatusServiceUnavailable, enforceUnavailableDetail, http.Header{"Retry-After": []string{enforceRetryAfter}})
@@ -501,7 +513,8 @@ func writeEnforceRefusal(w http.ResponseWriter, level Authz, verdict enforceVerd
 		WriteDetail(w, http.StatusServiceUnavailable, detail, nil)
 		return
 	case enforceImpersonationRefused:
-		WriteDetail(w, http.StatusForbidden, msgImpersonationDenied, nil)
+		deny.refused(r)
+		WriteDetail(w, http.StatusForbidden, deny.impersonated(), nil)
 		return
 	case enforceSessionRowUnavailable:
 		WriteAuthFailure(w, "", ErrUnavailable)
@@ -510,7 +523,10 @@ func writeEnforceRefusal(w http.ResponseWriter, level Authz, verdict enforceVerd
 		WriteDetail(w, http.StatusForbidden, msgOrgContextRequired, nil)
 		return
 	}
-	WriteDetail(w, http.StatusForbidden, enforceDenyDetail(level), nil)
+	if verdict == enforceDeny {
+		deny.refused(r)
+	}
+	WriteDetail(w, http.StatusForbidden, deny.denied(enforceDenyDetail(level)), nil)
 }
 
 // enforceDenyDetail is the refusal a denied caller gets: the body the legacy guard gives at the same level, so a

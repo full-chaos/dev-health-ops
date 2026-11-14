@@ -1,6 +1,8 @@
 package syncreconciler
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"time"
@@ -141,6 +143,51 @@ func (budgets StageBudgets) validate() error {
 		}
 	}
 	return nil
+}
+
+// ErrStageBudgetSpent marks a stage failure whose cause is the stage's OWN
+// budget deadline, not the database (CHAOS-13743). Before it, such a failure
+// read "... database unavailable" although the database was healthy and only
+// the budget had run out.
+var ErrStageBudgetSpent = errors.New("syncreconciler: stage budget spent")
+
+const stageBudgetSpentReason = "stage budget spent"
+
+// sqlStateQueryCanceled is what Postgres reports for a statement our own
+// context cancelled (57014). It is only a budget signal when the stage
+// context has expired; a server statement_timeout while the stage context is
+// alive stays a database error.
+const sqlStateQueryCanceled = "57014"
+
+// stageBudgetSpentError carries no cause text, so the log line names the
+// budget, never "database unavailable". Unwrap keeps the cause in the chain:
+// errors.Is(err, ErrUnavailable) and errors.As to a step error still hold.
+type stageBudgetSpentError struct {
+	stage  StageName
+	budget time.Duration
+	cause  error
+}
+
+func (spent stageBudgetSpentError) Error() string {
+	return "syncreconciler: stage " + string(spent.stage) + " budget spent (" + spent.budget.String() + ")"
+}
+
+func (spent stageBudgetSpentError) Unwrap() []error {
+	return []error{ErrStageBudgetSpent, spent.cause}
+}
+
+// stageDeadlineSpent decides budget-spent from the STAGE context, not from the
+// error: stages carry the deadline differently (the materializer keeps only a
+// label, lease repair and the kernel return a bare ErrUnavailable, and a
+// commit after a cancelled statement fails with no SQLSTATE at all), but the
+// stage context is the same fact for every stage. A real server SQLSTATE
+// always wins. The caller has already returned on a parent cancellation.
+func stageDeadlineSpent(stageCtx context.Context, sqlstate string) bool {
+	return errors.Is(stageCtx.Err(), context.DeadlineExceeded) && !isServerSQLState(sqlstate)
+}
+
+func isServerSQLState(sqlstate string) bool {
+	return sqlstate != "" && sqlstate != stageContextDeadlineLabel && sqlstate != sqlStateQueryCanceled
 }
 
 func stageNameList() string {

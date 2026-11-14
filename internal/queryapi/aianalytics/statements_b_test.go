@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
 
 // TestGroupBStatements_CarryTheOrgPredicateOnEveryTable pins that each
@@ -100,9 +101,21 @@ func TestGroupBStatements_CarryTheOrgPredicateOnEveryTable(t *testing.T) {
 			t.Errorf("no statement matched %q", marker)
 		}
 	}
+	// The ownership reads of package teamscope carry the org under their own
+	// prefixed binding names.
+	orgBindings := []string{"org_id", teamscope.BindingOrgID, teamscope.OwnerSharesBindingOrgID}
 	for _, b := range client.fixtureClient.bindings {
-		if v, ok := binding(b, "org_id"); !ok || v != "org-1" {
-			t.Errorf("a statement does not bind org_id=org-1: %v", b)
+		bound := false
+		for _, name := range orgBindings {
+			if v, ok := binding(b, name); ok {
+				if v != "org-1" {
+					t.Errorf("a statement binds %s=%v, want org-1: %v", name, v, b)
+				}
+				bound = true
+			}
+		}
+		if !bound {
+			t.Errorf("a statement does not bind the org: %v", b)
 		}
 	}
 }

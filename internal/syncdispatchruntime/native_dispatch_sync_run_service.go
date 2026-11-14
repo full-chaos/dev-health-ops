@@ -593,6 +593,11 @@ WHERE id = $1::uuid`,
 	if slotsFreedInPass > 0 {
 		defer syncrunrollup.WakeDispatch(ctx, service.pool, run.id, service.nowUTC(), syncrunrollup.DispatchWakePathDispatchPass)
 	}
+	// CHAOS-8880: this pass left free slots to older runs of a bucket; their next pass is due now, not at their
+	// back-off. After the commit, like the wake above, so the older pass sees this pass's claims.
+	if len(decision.heldBackRunIDs) > 0 {
+		defer wakeHeldBackRuns(ctx, service.pool, decision.heldBackRunIDs, service.nowUTC())
+	}
 
 	if riverQueued > 0 {
 		switch {

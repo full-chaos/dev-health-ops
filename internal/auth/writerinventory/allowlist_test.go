@@ -112,6 +112,10 @@ var Allowlist = []Entry{
 	{File: "internal/auth/identity/adminusers.go", Func: "applyAdminUpdate", Table: "auth.principals", Verb: "UPDATE"},
 	{File: "internal/auth/identity/adminusers.go", Func: "applyAdminUpdate", Table: "auth.users", Verb: "UPDATE"},
 	{File: "internal/auth/identity/adminusers.go", Func: "applyAdminUpdate", Table: "public.users", Verb: "UPDATE"},
+	// pm D7015 (CHAOS-13684): an admin PATCH is_active deactivates with the soft delete's writes (applyAdminSoftDelete)
+	// and reactivates by clearing them (applyAdminReactivate).
+	{File: "internal/auth/identity/adminusers.go", Func: "applyAdminReactivate", Table: "auth.principals", Verb: "UPDATE"},
+	{File: "internal/auth/identity/adminusers.go", Func: "applyAdminReactivate", Table: "public.users", Verb: "UPDATE"},
 	// acp accept of PLAN-13376-delta-v4 (pm D6915): an admin PATCH with no field change bumps public.users.updated_at.
 	{File: "internal/auth/identity/adminusers.go", Func: "touchPublicUser", Table: "public.users", Verb: "UPDATE"},
 	{File: "internal/auth/identity/local.go", Func: "Store.ProvisionLocal", Table: "auth.principals", Verb: "INSERT"},
@@ -293,7 +297,8 @@ var Allowlist = []Entry{
 	// live-e2e job-local seed; in no served binary (go list -deps census, f942ad6f3c9868d7f7a7555184d4852d4661ada9f0dd3ae265138737b2772f50); deleted when 13636 PR2 lands (P-8)
 	{File: "internal/cigates/livee2e/ssoseed/ssoseed.go", Func: "Insert", Table: "public.sso_providers", Verb: "INSERT"},
 	{File: "internal/maintenancecli/maintenance.go", Func: "CleanupExpiredTokens", Table: "public.refresh_tokens", Verb: "DELETE"},
-	{File: "internal/testsupport/authplane/authplane.go", Func: "Start", Table: "auth.principals", Verb: "INSERT"}, // test support: the venue auth plane's go-api workload principal, the issue route's audit actor
+	{File: "internal/testsupport/authplane/authplane.go", Func: "Start", Table: "auth.principals", Verb: "INSERT"},          // test support: the venue auth plane's go-api workload principal, the issue route's audit actor
+	{File: "internal/testsupport/authplane/authorize.go", Func: "StartAuthorize", Table: "auth.principals", Verb: "INSERT"}, // test support: the venue decision point's go-api caller workload, the authorize routes' audit actor
 	{File: "internal/testsupport/pgseed/pgseed.go", Func: "ImpersonationSession", Table: "public.impersonation_sessions", Verb: "INSERT"},
 	{File: "internal/testsupport/pgseed/pgseed.go", Func: "Membership", Table: "public.memberships", Verb: "INSERT"},
 	{File: "internal/testsupport/pgseed/pgseed.go", Func: "Org", Table: "public.organizations", Verb: "INSERT"},

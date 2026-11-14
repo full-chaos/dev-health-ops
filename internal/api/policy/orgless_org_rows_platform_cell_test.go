@@ -22,7 +22,7 @@ import (
 const orglessOCRBody = `{"detail":"Organization context required"}`
 
 // orglessOrgNamespaces are the namespaces of every organization row of the production profile.
-var orglessOrgNamespaces = []string{"acr", "billing", "integrations", "license", "members", "org", "settings", "teams"}
+var orglessOrgNamespaces = []string{"acr", "billing", "integrations", "license", "members", "org", "settings", "sso", "teams"}
 
 type orglessOrgRow struct {
 	pattern string
@@ -176,7 +176,7 @@ func orglessSwitches() map[string][]string {
 	}
 }
 
-// The census the cells below run over: 129 organization rows, 70 Admin, 50 AdminOrg, 9 Authenticated, and none of them
+// The census the cells below run over: 137 organization rows, 70 Admin, 50 AdminOrg, 17 Authenticated, and none of them
 // is an org-less route (OrglessMayReach), so the org-less check applies to every one.
 func TestOrglessOrgRowsCensus(t *testing.T) {
 	counts := map[Authz]int{}
@@ -188,8 +188,8 @@ func TestOrglessOrgRowsCensus(t *testing.T) {
 			t.Errorf("%s is an org-less route", row.pattern)
 		}
 	}
-	if len(rows) != 129 || counts[Admin] != 70 || counts[AdminOrg] != 50 || counts[Authenticated] != 9 {
-		t.Fatalf("%d organization rows %v, want 129: 70 Admin, 50 AdminOrg, 9 Authenticated", len(rows), counts)
+	if len(rows) != 137 || counts[Admin] != 70 || counts[AdminOrg] != 50 || counts[Authenticated] != 17 {
+		t.Fatalf("%d organization rows %v, want 137: 70 Admin, 50 AdminOrg, 17 Authenticated", len(rows), counts)
 	}
 }
 
@@ -468,21 +468,25 @@ func TestOrglessPlatformRowStillAsksItsOwnAction(t *testing.T) {
 	}
 }
 
-// A token that is not a user access token comes first (unjudgedReason): with no organization on an organization row it is
-// still the hs256 reason and the legacy answer, never a platform question. No such token reaches the guard today
-// (Authenticate builds user access tokens only); this pins the order if one ever does.
-func TestOrglessNonUserTokenKeepsTheHS256Reason(t *testing.T) {
+// A request with no user access token cannot reach an enforced row (Authenticate builds user access tokens only; see
+// TestANonUserTokenIsRefusedAtAuthenticationBeforeTheEnforcerDecides). If one ever does, it is refused before the org-less
+// question and before any other: no decision point call, no unjudged count, one error_deny outcome (CHAOS-13596).
+func TestANonUserTokenThatReachesTheEnforcerIsRefused(t *testing.T) {
 	rows := orglessOrgRows(t)
 	rec := recordEnforce(t)
 	pdp := newTestPDP(t, allowAll)
 	enf := seamEnforcer(t, pdp.client(t), productionGoAPIRows(t), orglessOrgNamespaces...)
 	for _, bearer := range []string{"", shadowBearer} {
-		verdict := enf.decide(t.Context(), enforceObservation{pattern: rows[0].pattern, bearer: bearer, userAccessToken: false, read: true})
-		if verdict != enforceLegacy {
-			t.Errorf("bearer %q: verdict %v, want the legacy answer", bearer, verdict)
+		for _, org := range []string{"", ownOrg} {
+			verdict := enf.decide(t.Context(), enforceObservation{pattern: rows[0].pattern, bearer: bearer, orgID: org, userAccessToken: false, read: true})
+			if verdict != enforceDeny {
+				t.Errorf("bearer %q org %q: verdict %v, want a refusal", bearer, org, verdict)
+			}
 		}
 	}
-	if n := len(pdp.calls()); n != 0 || !slices.Equal(rec.unjudgedSnapshot(), []string{rows[0].pattern + "/hs256", rows[0].pattern + "/hs256"}) {
-		t.Fatalf("%d PDP calls, unjudged %v, want 0 and hs256 twice", n, rec.unjudgedSnapshot())
+	namespace := productionGoAPIRows(t)[rows[0].pattern].Namespace
+	want := []string{namespace + "/error_deny", namespace + "/error_deny", namespace + "/error_deny", namespace + "/error_deny"}
+	if n := len(pdp.calls()); n != 0 || len(rec.unjudgedSnapshot()) != 0 || !slices.Equal(rec.snapshot(), want) {
+		t.Fatalf("%d PDP calls, unjudged %v, outcomes %v, want 0, none and %v", n, rec.unjudgedSnapshot(), rec.snapshot(), want)
 	}
 }

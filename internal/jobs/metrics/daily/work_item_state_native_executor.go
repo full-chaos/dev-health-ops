@@ -458,6 +458,13 @@ func computeWorkItemStateDurationRowsForRepo(
 		return a.status < b.status
 	})
 
+	// A run before the window ends has observed only part of the day, so
+	// avg_wip divides by the hours observed. A non-positive span keeps 24.
+	observedHours := 24.0
+	if observedEnd := minTime(end, computedAt); observedEnd.After(start) {
+		observedHours = observedEnd.Sub(start).Hours()
+	}
+
 	rows := make([]workItemStateDailyRow, 0, len(keys))
 	for _, key := range keys {
 		totalHours := totals[key]
@@ -473,7 +480,7 @@ func computeWorkItemStateDurationRowsForRepo(
 			// status) key on one day -- bounded by a day's work-item
 			// volume, never negative -- so it keeps a direct conversion.
 			ItemsTouched: uint32(len(itemsSeen[key])),
-			AvgWIP:       totalHours / 24.0,
+			AvgWIP:       totalHours / observedHours,
 		})
 	}
 	sort.Slice(itemRows, func(i, j int) bool {
@@ -491,6 +498,13 @@ func computeWorkItemStateDurationRowsForRepo(
 	})
 
 	return rows, itemRows, missingAttribution
+}
+
+func minTime(a, b time.Time) time.Time {
+	if b.Before(a) {
+		return b
+	}
+	return a
 }
 
 // resolveWorkItemPrimaryTeam applies normalize_team_id/normalize_team_name

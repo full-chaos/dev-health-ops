@@ -20,7 +20,6 @@ import (
 var dynamicEnvReads = map[string]string{
 	"internal/apiservice/customerpush/schemas.go":                "customer push options (limits, flags)",
 	"internal/edgetokenmint/edgetokenmint.go":                    "issuer and audience names (the signing key reads through GetenvSecret)",
-	"internal/envelopemint/envelopemint.go":                      "issuer, audience and key id (the private key reads through GetenvSecret)",
 	"internal/externalrecompute/plan.go":                         "integer tuning knobs",
 	"internal/jobs/metrics/daily/wellbeing_native_executor.go":   "timezone and tuning names",
 	"internal/mail/sender.go":                                    "provider, host, port, TLS and sender names (the API keys and the SMTP password read through GetenvSecret)",

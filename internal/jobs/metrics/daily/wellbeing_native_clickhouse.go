@@ -17,7 +17,10 @@ import (
 // WellbeingTeam is one team row as read from ClickHouse `teams`: the columns
 // of ClickHouseMetricsSink.get_all_teams (sinks/clickhouse/core.py:109) that
 // are still stored. The roster column `members` is not one of them
-// (CHAOS-9087): a person's team comes from team_memberships.
+// (CHAOS-9087): a person's team comes from team_memberships. LoadWellbeingTeams
+// reads only id and name: no daily family takes a team from repo_patterns
+// (D7013b). RepoPatterns stays for NewRepoPatternResolver, which only the
+// frozen Python wellbeing golden still drives.
 type WellbeingTeam struct {
 	ID           string
 	Name         string
@@ -25,7 +28,7 @@ type WellbeingTeam struct {
 }
 
 // LoadWellbeingTeams ports get_all_teams (sinks/clickhouse/core.py:109)
-// without its `members` column (CHAOS-9087). conn reuses this package's existing repositoryRows
+// without its `members` column (CHAOS-9087) and without repo_patterns (D7013b). conn reuses this package's existing repositoryRows
 // capability (clickhouse.go) -- a plain Query method, nothing more.
 //
 // One rule is added to the reference: the inactive teams (package teamactive)
@@ -36,7 +39,7 @@ func LoadWellbeingTeams(ctx context.Context, conn repositoryRows, organizationID
 		return nil, ErrInvalidState
 	}
 	rows, err := conn.Query(ctx,
-		"SELECT id, name, repo_patterns FROM teams FINAL WHERE org_id = ?",
+		"SELECT id, name FROM teams FINAL WHERE org_id = ?",
 		organizationID,
 	)
 	if err != nil {
@@ -47,7 +50,7 @@ func LoadWellbeingTeams(ctx context.Context, conn repositoryRows, organizationID
 	var teams []WellbeingTeam
 	for rows.Next() {
 		var team WellbeingTeam
-		if err := rows.Scan(&team.ID, &team.Name, &team.RepoPatterns); err != nil {
+		if err := rows.Scan(&team.ID, &team.Name); err != nil {
 			return nil, fmt.Errorf("scan wellbeing team: %w", err)
 		}
 		teams = append(teams, team)
@@ -57,7 +60,7 @@ func LoadWellbeingTeams(ctx context.Context, conn repositoryRows, organizationID
 	}
 	// The active-team rule (package teamactive), applied after the read so
 	// the query stays the reference's text: an inactive team gives its
-	// repository patterns and its members to no resolver.
+	// name to no resolver.
 	inactive, err := teamactive.LoadInactive(ctx, conn, organizationID)
 	if err != nil {
 		return nil, fmt.Errorf("load wellbeing teams: %w", err)

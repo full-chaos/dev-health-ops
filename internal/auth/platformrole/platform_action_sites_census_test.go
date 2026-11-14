@@ -28,7 +28,7 @@ var readsTheTargetsFlag = map[string]bool{
 func (s platformActionSite) key() string { return s.file + "\t" + s.function + "\t" + s.action }
 
 var actionTakingCalls = map[string]bool{
-	"Holds": true, "WrapPlatform": true, "WrapAdminOr": true, "BodyFirstPlatform": true, "BodyFirstAdminOr": true,
+	"Holds": true, "WrapPlatform": true, "WrapPlatformDeny": true, "WrapAdminOr": true, "BodyFirstPlatform": true, "BodyFirstAdminOr": true,
 	"bodyFirstPlatform": true, "bodyFirstAdminOr": true,
 	"HoldsPlatform": true,
 }

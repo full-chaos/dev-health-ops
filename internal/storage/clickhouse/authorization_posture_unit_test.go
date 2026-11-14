@@ -54,10 +54,12 @@ func checkWith(t *testing.T, posture Posture, lines []string) error {
 	return CheckPosture(context.Background(), &grantsConn{lines: lines}, posture)
 }
 
-func TestTelemetryGrantPresentIsAccepted(t *testing.T) {
+// CHAOS-12878: the retired telemetry insert grant is gone from prod's users.d, so a login that still holds it is refused.
+func TestTelemetryGrantPresentIsRefused(t *testing.T) {
 	posture := APIPosture("default")
-	if err := checkWith(t, posture, append(liveGrants(posture), telemetryGrantLine)); err != nil {
-		t.Fatalf("present insert grant must pass: %v", err)
+	err := checkWith(t, posture, append(liveGrants(posture), telemetryGrantLine))
+	if !errors.Is(err, ErrPostureMismatch) || !strings.Contains(err.Error(), "default.telemetry_signal_bucket") {
+		t.Fatalf("a held telemetry insert grant must be refused by name, got %v", err)
 	}
 }
 
@@ -73,8 +75,9 @@ func TestTelemetryGrantAbsentIsAcceptedWithTheProjectScopeGrant(t *testing.T) {
 	if err := checkWith(t, posture, liveGrants(posture)); err != nil {
 		t.Fatalf("absent grant must pass with project scope: %v", err)
 	}
-	if err := checkWith(t, posture, append(liveGrants(posture), telemetryGrantLine)); err != nil {
-		t.Fatalf("present grant must pass with project scope: %v", err)
+	err := checkWith(t, posture, append(liveGrants(posture), telemetryGrantLine))
+	if !errors.Is(err, ErrPostureMismatch) || !strings.Contains(err.Error(), "default.telemetry_signal_bucket") {
+		t.Fatalf("a held telemetry insert grant must be refused with project scope, got %v", err)
 	}
 }
 

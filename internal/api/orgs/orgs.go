@@ -130,8 +130,15 @@ func (h handlers) getOwnOrg(w http.ResponseWriter, r *http.Request) {
 // before the credential is looked at. policy.Guard.BodyFirst is the one
 // implementation, shared with internal/apiservice/admin.
 func (h handlers) decodeFirst(guard *policy.Guard, next http.Handler) http.Handler {
-	return guard.BodyFirst(policy.Authenticated, next)
+	return guard.BodyFirstDeny(updateOwnOrgKey, policy.Authenticated, policy.DenyText{Denied: updateOwnOrgDenied}, next)
 }
+
+// updateOwnOrgKey is the route the decision point judges as org.write; updateOwnOrgDenied is the text the handler
+// answers a caller who is not an admin or owner of the organization, kept for the decision point's deny.
+const (
+	updateOwnOrgKey    = "PATCH /api/v1/orgs/me"
+	updateOwnOrgDenied = "You must be an org admin or owner to update organization settings"
+)
 
 // updateOwnOrg is update_own_org.
 func (h handlers) updateOwnOrg(w http.ResponseWriter, r *http.Request) {
@@ -165,8 +172,7 @@ func (h handlers) updateOwnOrg(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if errors.Is(err, pgx.ErrNoRows) || role == nil || (*role != "admin" && *role != "owner") {
-		policy.WriteDetail(w, http.StatusForbidden,
-			"You must be an org admin or owner to update organization settings", nil)
+		policy.WriteDetail(w, http.StatusForbidden, updateOwnOrgDenied, nil)
 		return
 	}
 

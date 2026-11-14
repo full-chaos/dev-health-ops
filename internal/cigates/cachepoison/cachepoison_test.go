@@ -55,7 +55,8 @@ const refGate = "github.event.inputs.ref == ''"
 var (
 	bracketKey = regexp.MustCompile(`\[\s*['"]([^'"]*)['"]\s*\]`)
 	// gatedValue is the only value shape that switches a writer off for a supplied ref: GATE && 'literal' || '' (or true/false).
-	gatedValue = regexp.MustCompile(`^(?:\$\{\{)?\s*` + regexp.QuoteMeta(refGate) + `\s*&&\s*(?:'[^']*'|true)\s*\|\|\s*(?:''|false)\s*(?:\}\})?$`)
+	// More && terms may follow the gate (an event check, say): with no | or & in them they can only narrow when it writes.
+	gatedValue = regexp.MustCompile(`^(?:\$\{\{)?\s*` + regexp.QuoteMeta(refGate) + `(?:\s*&&\s*[^|&]+?)*\s*&&\s*(?:'[^']*'|true)\s*\|\|\s*(?:''|false)\s*(?:\}\})?$`)
 )
 
 // norm lower-cases an expression (property names are case-insensitive), turns bracket keys into dotted ones and folds blanks.
@@ -326,6 +327,9 @@ func TestPlants(t *testing.T) {
 		{"if negating the gate", wf("workflow_dispatch", dispatchCheckout+"      - uses: actions/cache@bbbb\n        if: ${{ !(github.event.inputs.ref == '') }}\n        with:\n          path: x\n          key: k\n"), 1},
 		{"if with the gate and another term", wf("workflow_dispatch", dispatchCheckout+"      - uses: actions/cache@bbbb\n        if: github.event_name == 'push' && github.event.inputs.ref == ''\n        with:\n          path: x\n          key: k\n"), 0},
 		{"cache-to with || fallback that writes", wf("workflow_dispatch", dispatchCheckout+"      - uses: docker/build-push-action@cccc\n        with:\n          cache-to: ${{ github.event.inputs.ref == '' || 'type=gha' }}\n"), 1},
+		{"cache-to gate and an event term", wf("workflow_dispatch", dispatchCheckout+"      - uses: docker/build-push-action@cccc\n        with:\n          cache-to: ${{ github.event.inputs.ref == '' && github.event_name != 'pull_request' && 'type=gha' || '' }}\n"), 0},
+		{"cache-to event term before the gate", wf("workflow_dispatch", dispatchCheckout+"      - uses: docker/build-push-action@cccc\n        with:\n          cache-to: ${{ github.event_name != 'pull_request' && github.event.inputs.ref == '' && 'type=gha' || '' }}\n"), 1},
+		{"cache-to gate and a term holding ||", wf("workflow_dispatch", dispatchCheckout+"      - uses: docker/build-push-action@cccc\n        with:\n          cache-to: ${{ github.event.inputs.ref == '' && (github.event_name == 'push' || true) || 'type=gha' && 'type=gha' || '' }}\n"), 1},
 		{"cache-to gate with a non-empty fallback", wf("workflow_dispatch", dispatchCheckout+"      - uses: docker/build-push-action@cccc\n        with:\n          cache-to: ${{ github.event.inputs.ref == '' && 'type=gha' || 'type=gha,mode=min' }}\n"), 1},
 		{"bracket form of the ref input", wf("workflow_dispatch", "\n      - uses: actions/checkout@aaaa\n        with:\n          ref: ${{ github.event.inputs['ref'] }}\n      - uses: actions/cache@bbbb\n        with:\n          path: x\n          key: k\n"), 1},
 		{"bracket form of the inputs context", wf("workflow_dispatch", "\n      - uses: actions/checkout@aaaa\n        with:\n          ref: ${{ inputs[\"ref\"] }}\n      - uses: actions/cache@bbbb\n        with:\n          path: x\n          key: k\n"), 1},

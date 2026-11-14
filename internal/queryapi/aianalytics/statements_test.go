@@ -8,6 +8,7 @@ import (
 	"github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
 
 func binding(bs []clickhouse.Binding, name string) (any, bool) {
@@ -47,9 +48,15 @@ func TestStatements_CarryTheOrgPredicateOnEveryTable(t *testing.T) {
 
 	want := map[string]map[string]int{
 		"FROM ai_impact_metrics_daily": {"org_id = {org_id:String}": 1},
-		"FROM teams\nWHERE org_id":     {"org_id = {org_id:String}": 1},
 		"FROM repos\nWHERE org_id":     {"org_id = {org_id:String}": 1},
-		"AS label_id":                  {"org_id = {org_id:String}": 1},
+		// The team scope is the teamscope ownership read: it filters the outer
+		// repos read, the joined repos read, the ownership rows and the
+		// repository guard on the org under teamscope's own binding name.
+		"FROM team_repo_ownership AS o FINAL": {
+			"o.org_id = {" + teamscope.BindingOrgID + ":String}":     1,
+			"WHERE org_id = {" + teamscope.BindingOrgID + ":String}": 3,
+		},
+		"AS label_id": {"org_id = {org_id:String}": 1},
 		"attr_map": {
 			"pr.org_id = {org_id:String}":             2,
 			"link.org_id = {org_id:String}":           1,
@@ -75,9 +82,21 @@ func TestStatements_CarryTheOrgPredicateOnEveryTable(t *testing.T) {
 			}
 		}
 	}
+	// The ownership reads of package teamscope carry the org under their own
+	// prefixed binding names.
+	orgBindings := []string{"org_id", teamscope.BindingOrgID, teamscope.OwnerSharesBindingOrgID}
 	for _, b := range client.bindings {
-		if v, ok := binding(b, "org_id"); !ok || v != "org-1" {
-			t.Errorf("a statement does not bind org_id=org-1: %v", b)
+		bound := false
+		for _, name := range orgBindings {
+			if v, ok := binding(b, name); ok {
+				if v != "org-1" {
+					t.Errorf("a statement binds %s=%v, want org-1: %v", name, v, b)
+				}
+				bound = true
+			}
+		}
+		if !bound {
+			t.Errorf("a statement does not bind the org: %v", b)
 		}
 	}
 	for marker := range want {

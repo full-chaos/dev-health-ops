@@ -391,7 +391,7 @@ func TestAuthorizeHighRiskDecisionsAreNeverCachedSoEachIsAudited(t *testing.T) {
 			t.Errorf("%s: %d decisions stored for a high-risk action", a.action, stored)
 		}
 	}
-	if high != 26 {
-		t.Fatalf("walked %d high-risk actions, want 26", high)
+	if high != 27 {
+		t.Fatalf("walked %d high-risk actions, want 27", high)
 	}
 }

@@ -64,6 +64,13 @@ type Outcome struct {
 	// rows and genuinely non-fatal for the rest. A fault that invalidates the
 	// whole sweep is still an error.
 	Degraded string
+	// Unminted names the cron instants a minted occurrence passed over. Like
+	// Degraded it is reported by the producer and recorded by the loop only after
+	// the occurrence commits.
+	Unminted []UnmintedInstants
+	// UnmintedCountFailed names minted occurrences whose count failed. A failed
+	// count never fails the occurrence.
+	UnmintedCountFailed []UnmintedCountFailure
 }
 
 // Producer materializes the authoritative domain rows for one occurrence and

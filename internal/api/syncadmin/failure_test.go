@@ -134,6 +134,9 @@ func (f *faultReader) countRunUnits(context.Context, string, uuid.UUID, unitFilt
 func (f *faultReader) watermarkRows(context.Context, string, []string, []string) ([]schedsync.WatermarkRow, error) {
 	return nil, f.hit("watermarkRows")
 }
+func (f *faultReader) workItemsDatasetRows(context.Context, string, []uuid.UUID) ([]workItemsDatasetRow, error) {
+	return nil, f.hit("workItemsDatasetRows")
+}
 func (f *faultReader) backfillJobByID(context.Context, string, uuid.UUID) (*backfillJob, error) {
 	if f.noBackfillJob {
 		return nil, f.hit("backfillJobByID")

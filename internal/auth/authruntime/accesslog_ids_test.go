@@ -18,6 +18,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/clientaddr"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 )
 
 const (
@@ -68,7 +69,7 @@ func newAccessStackTrusting(t *testing.T, trusted string) *accessStack {
 			})},
 	)
 	logs := &bytes.Buffer{}
-	options := apiServerOptions(cfg, slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelInfo})), routes)
+	options := apiServerOptions(cfg, logging.NewJSON(logs, slog.LevelInfo), routes)
 	options.Address, options.RequestTimeout, options.MaxBodyBytes = "127.0.0.1:0", 2*time.Second, 64
 	options.RateLimit, options.RateLimitBurst, options.MaxInFlight = 0.001, 1, 8
 	server, err := httpapi.NewServer(options)
@@ -126,8 +127,8 @@ func TestTheAccessLineCarriesTheWireIDAndTheTrustedCallerIDBesideTheTransportID(
 	}
 	line := stack.onlyLine(t)
 	wire := response.Header().Get(requestid.Header)
-	if wire == "" || line["auth_request_id"] != wire {
-		t.Errorf("auth_request_id = %v, want the answer's %s %q", line["auth_request_id"], requestid.Header, wire)
+	if wire == "" || line["upstream_request_id"] != wire {
+		t.Errorf("upstream_request_id = %v, want the answer's %s %q", line["upstream_request_id"], requestid.Header, wire)
 	}
 	if line["caller_request_id"] != accessCallerID {
 		t.Errorf("caller_request_id = %v, want %q", line["caller_request_id"], accessCallerID)
@@ -150,8 +151,8 @@ func TestTheCredentialStubAccessLineCarriesTheWireID(t *testing.T) {
 		t.Fatalf("stub body = %q, want go-api's refusal shape", response.Body.String())
 	}
 	line := stack.onlyLine(t)
-	if wire := response.Header().Get(requestid.Header); wire == "" || line["auth_request_id"] != wire {
-		t.Errorf("auth_request_id = %v, want %q", line["auth_request_id"], wire)
+	if wire := response.Header().Get(requestid.Header); wire == "" || line["upstream_request_id"] != wire {
+		t.Errorf("upstream_request_id = %v, want %q", line["upstream_request_id"], wire)
 	}
 	if line["caller_request_id"] != accessCallerID {
 		t.Errorf("caller_request_id = %v, want %q", line["caller_request_id"], accessCallerID)
@@ -191,8 +192,8 @@ func TestEveryAccessLineCarriesBothIDs(t *testing.T) {
 		t.Fatalf("got %d access lines for %d requests:\n%s", len(lines), len(cases), stack.logs.String())
 	}
 	for index, line := range lines {
-		if wires[index] == "" || line["auth_request_id"] != wires[index] {
-			t.Errorf("%s: auth_request_id = %v, want %q", cases[index].name, line["auth_request_id"], wires[index])
+		if wires[index] == "" || line["upstream_request_id"] != wires[index] {
+			t.Errorf("%s: upstream_request_id = %v, want %q", cases[index].name, line["upstream_request_id"], wires[index])
 		}
 		if line["caller_request_id"] != accessCallerID {
 			t.Errorf("%s: caller_request_id = %v, want %q", cases[index].name, line["caller_request_id"], accessCallerID)
@@ -285,8 +286,8 @@ func TestAnInboundAuthRequestIDIsNeverReadOrLogged(t *testing.T) {
 	response := stack.serve(request)
 	line := stack.onlyLine(t)
 	wire := response.Header().Get(requestid.Header)
-	if wire == "" || wire == inbound || line["auth_request_id"] != wire {
-		t.Errorf("auth_request_id = %v, answer header %q: want the minted wire id", line["auth_request_id"], wire)
+	if wire == "" || wire == inbound || line["upstream_request_id"] != wire {
+		t.Errorf("upstream_request_id = %v, answer header %q: want the minted wire id", line["upstream_request_id"], wire)
 	}
 	if strings.Contains(stack.logs.String(), inbound) {
 		t.Errorf("the inbound %s reached the log:\n%s", requestid.Header, stack.logs.String())

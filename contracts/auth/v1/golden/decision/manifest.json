@@ -4,6 +4,11 @@
   "surface": "authorization-golden.v1",
   "vectors": [
     {
+      "file": "allow-admin-writes-sso.json",
+      "id": "allow-admin-writes-sso",
+      "layer": "pdp"
+    },
+    {
       "file": "allow-member-reads-org.json",
       "id": "allow-member-reads-org",
       "layer": "pdp"
@@ -21,6 +26,11 @@
     {
       "file": "allow-owner-revokes-acr-credential.json",
       "id": "allow-owner-revokes-acr-credential",
+      "layer": "pdp"
+    },
+    {
+      "file": "allow-owner-writes-sso.json",
+      "id": "allow-owner-writes-sso",
       "layer": "pdp"
     },
     {
@@ -131,6 +141,11 @@
     {
       "file": "deny-non-member-revokes-acr-credential.json",
       "id": "deny-non-member-revokes-acr-credential",
+      "layer": "pdp"
+    },
+    {
+      "file": "deny-non-member-writes-sso.json",
+      "id": "deny-non-member-writes-sso",
       "layer": "pdp"
     },
     {
@@ -379,6 +394,11 @@
       "layer": "pdp"
     },
     {
+      "file": "platform-admin-no-membership-writes-sso.json",
+      "id": "platform-admin-no-membership-writes-sso",
+      "layer": "pdp"
+    },
+    {
       "file": "platform-role-as-membership-role.json",
       "id": "platform-role-as-membership-role",
       "layer": "pdp"
@@ -539,8 +559,18 @@
       "layer": "pdp"
     },
     {
+      "file": "role-lacks-action-member-writes-sso.json",
+      "id": "role-lacks-action-member-writes-sso",
+      "layer": "pdp"
+    },
+    {
       "file": "role-lacks-action-viewer-writes-org.json",
       "id": "role-lacks-action-viewer-writes-org",
+      "layer": "pdp"
+    },
+    {
+      "file": "role-lacks-action-viewer-writes-sso.json",
+      "id": "role-lacks-action-viewer-writes-sso",
       "layer": "pdp"
     },
     {

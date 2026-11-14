@@ -15,7 +15,7 @@ import (
 
 var catalogNamespaces = []string{
 	"acr", "admin", "analytics", "authz", "billing", "credentials", "git", "integrations",
-	"license", "members", "metrics", "org", "reports", "settings", "teams", "work_items",
+	"license", "members", "metrics", "org", "reports", "settings", "sso", "teams", "work_items",
 }
 
 func none(string) (string, bool) { return "", false }

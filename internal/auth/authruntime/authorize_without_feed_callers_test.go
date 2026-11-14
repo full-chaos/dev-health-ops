@@ -18,6 +18,8 @@ var withoutFeedCallerDirs = []string{"internal/testsupport/authplane"}
 type withoutFeedSite struct {
 	file string
 	line int
+	// wrapCall marks an authorizeRoutes call in this package that passes a wrap outside AuthorizeRoutesWithoutFeed.
+	wrapCall bool
 }
 
 // withoutFeedSkipped are the directories the walk does not enter: vendored third-party code, fixtures, dot dirs.
@@ -52,13 +54,31 @@ func withoutFeedSites(t *testing.T, root string) []withoutFeedSite {
 				declared = fn.Name
 			}
 		}
+		rel, _ := filepath.Rel(root, path)
+		rel = filepath.ToSlash(rel)
 		ast.Inspect(file, func(n ast.Node) bool {
 			if id, ok := n.(*ast.Ident); ok && id.Name == "AuthorizeRoutesWithoutFeed" && id != declared {
-				rel, _ := filepath.Rel(root, path)
-				sites = append(sites, withoutFeedSite{file: filepath.ToSlash(rel), line: fset.Position(id.Pos()).Line})
+				sites = append(sites, withoutFeedSite{file: rel, line: fset.Position(id.Pos()).Line})
 			}
 			return true
 		})
+		// In this package the seam is authorizeRoutes' wrap argument: only AuthorizeRoutesWithoutFeed may pass one
+		// (auth-service's call, runtime.go:601, passes six arguments).
+		if filepath.ToSlash(filepath.Dir(rel)) == "internal/auth/authruntime" {
+			for _, decl := range file.Decls {
+				if fn, ok := decl.(*ast.FuncDecl); ok && fn.Recv == nil && fn.Name.Name == "AuthorizeRoutesWithoutFeed" {
+					continue
+				}
+				ast.Inspect(decl, func(n ast.Node) bool {
+					if call, ok := n.(*ast.CallExpr); ok {
+						if id, ok := call.Fun.(*ast.Ident); ok && id.Name == "authorizeRoutes" && len(call.Args) > 6 {
+							sites = append(sites, withoutFeedSite{file: rel, line: fset.Position(call.Pos()).Line, wrapCall: true})
+						}
+					}
+					return true
+				})
+			}
+		}
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -72,6 +92,10 @@ func TestAuthorizeRoutesWithoutFeedHasNoProductionCaller(t *testing.T) {
 	sites := withoutFeedSites(t, "../../..")
 	allowed := 0
 	for _, s := range sites {
+		if s.wrapCall {
+			t.Errorf("%s:%d calls authorizeRoutes with a wrap: only AuthorizeRoutesWithoutFeed may (runtime.go:601 passes none)", s.file, s.line)
+			continue
+		}
 		if slices.Contains(withoutFeedCallerDirs, filepath.ToSlash(filepath.Dir(s.file))) {
 			allowed++
 			continue

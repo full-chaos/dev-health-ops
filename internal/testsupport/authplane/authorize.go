@@ -149,10 +149,24 @@ func (a *Authorize) record(next http.Handler) http.Handler {
 		var answers []wireAnswer
 		if r.URL.Path == pep.PathAuthorizeBatch {
 			var in struct{ Requests []wireQuestion }
-			var out struct{ Decisions []wireAnswer }
+			var out struct {
+				Decisions []struct {
+					Index    int        `json:"index"`
+					Decision wireAnswer `json:"decision"`
+				}
+			}
 			_ = json.Unmarshal(raw, &in)
 			_ = json.Unmarshal(rec.Body.Bytes(), &out)
-			questions, answers = in.Requests, out.Decisions
+			questions = in.Requests
+			answers = make([]wireAnswer, len(questions))
+			for _, d := range out.Decisions {
+				if d.Index >= 0 && d.Index < len(answers) {
+					answers[d.Index] = d.Decision
+				}
+			}
+			if len(out.Decisions) != len(questions) {
+				answers = nil
+			}
 		} else {
 			var in wireQuestion
 			var out wireAnswer

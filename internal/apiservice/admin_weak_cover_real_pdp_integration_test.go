@@ -6,9 +6,11 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"regexp"
 	"slices"
 	"strings"
@@ -89,8 +91,12 @@ const (
 	// role (legacy rule.HoldsSQL reads auth.principals), on as a platform admin (the decision input reads public.users,
 	// authapi/users.go:82 PublicHoldsSQL), on the platform-decided rows.
 	wcG3Change
-	// wcUnauthenticated: as wcParity, and every answer is the 401 (P2 a: the principal row is gone with its sessions).
-	wcUnauthenticated
+	// wcRecorded: no assert on the answers; the IMPROW lines record legacy vs enforced (the named rig mode
+	// "imp-switch-off (not prod)").
+	wcRecorded
+	// wcImpGate: as wcParity; on every row but the live-row exempt ones (status, stop, handoff consume) both sides are
+	// the Scope's 403 with no decision point call and no user-admin call (AUTH_PROXY_IMPERSONATION on, as in prod).
+	wcImpGate
 )
 
 // wcSpec is one caller class.
@@ -109,6 +115,10 @@ type wcSpec struct {
 	prepare func(t *testing.T, ctx context.Context, w *wcWorld, c *wcCaller)
 	// kind is a caller that is not a plain user token: "anon", "imp", "delegated".
 	kind string
+	// allRows runs the class on every admin-namespace row (wcAllRows), not only the weak-cover rows.
+	allRows bool
+	// impSwitchOn serves the class on the go-api handlers with AUTH_PROXY_IMPERSONATION on and an upstream, as in prod.
+	impSwitchOn bool
 }
 
 var wcSpecs = []wcSpec{
@@ -119,11 +129,17 @@ var wcSpecs = []wcSpec{
 	{label: "member", role: "member", tokenOrg: true},
 	{label: "pa_foreign_org", tokenOrg: true, publicSuperuser: true, assigned: true},
 	{label: "anon", kind: "anon"},
-	{label: "imp", kind: "imp", publicSuperuser: true, assigned: true},
+	// The impersonation classes (pm/acp 04:18-04:19Z) on every admin-namespace row. imp_switch_on is the go-api
+	// impersonation row with AUTH_PROXY_IMPERSONATION on as in prod (live render deploy f50e9710 rev 621 :2709-2710):
+	// a GATE. delegated_imp is the prod impersonation form, auth-service's delegated session: a GATE. imp_switch_off is
+	// the named rig mode "imp-switch-off (not prod)": recorded, not a gate.
+	{label: "imp_switch_off_not_prod", kind: "imp", publicSuperuser: true, assigned: true, allRows: true, expect: wcRecorded},
+	{label: "imp_switch_on", kind: "imp", publicSuperuser: true, assigned: true, allRows: true, impSwitchOn: true, expect: wcImpGate},
 	{label: "delegated", kind: "delegated", role: "owner", tokenOrg: true, expect: wcMeasure},
+	{label: "delegated_imp", kind: "delegated", role: "owner", tokenOrg: true, allRows: true, impSwitchOn: true, expect: wcParity},
 	{label: "su_13209", publicSuperuser: true, expect: wcParity},
 	{label: "po_only", publicSuperuser: true, expect: wcParity, prepare: wcGrantOwner},
-	{label: "g3a_principal_missing", publicSuperuser: true, assigned: true, expect: wcUnauthenticated, modes: []string{"m_on"}, prepare: wcDropPrincipal},
+	{label: "g3a_principal_delete_refused", publicSuperuser: true, assigned: true, expect: wcMeasure, modes: []string{"m_on"}, prepare: wcDropPrincipal},
 	{label: "g3b_principal_disabled", publicSuperuser: true, assigned: true, expect: wcG3Change, modes: []string{"m_on"}, prepare: wcDisablePrincipal},
 	{label: "g3c_principal_service_account", publicSuperuser: true, assigned: true, expect: wcG3Change, modes: []string{"m_on"}, prepare: wcServiceAccountPrincipal},
 	{label: "g3d_public_inactive", publicSuperuser: true, assigned: true, expect: wcMeasure, modes: []string{"m_on"}, prepare: wcPublicInactive},
@@ -141,8 +157,13 @@ func (s wcSpec) inMode(m wcMode) bool { return s.modes == nil || slices.Contains
 
 // wcCaller is one seeded caller: one user, and per side its org, targets, token and session.
 type wcCaller struct {
-	spec    wcSpec
-	user    uuid.UUID
+	spec wcSpec
+	user uuid.UUID
+	// sideUser is the caller's user per side: the same user, but for imp, one platform admin per side (each with its
+	// own live impersonation row, so a stop on one side does not end the other's).
+	sideUser [2]uuid.UUID
+	// victim is a per-side org the platform org rows act on (delete included).
+	victim  [2]uuid.UUID
 	org     [2]uuid.UUID
 	targets [2]map[string]uuid.UUID
 	session [2]uuid.UUID
@@ -153,15 +174,68 @@ type wcCaller struct {
 // add, who is no member.
 var wcTargets = []string{"get", "patch", "password", "delete", "add", "role", "remove", "transfer"}
 
-type wcWorld struct {
-	mode     wcMode
-	env      *platformroleseam.Env
-	key      authplane.Key
+// wcSides is one decision point and the two go-api handlers (off, on) that ask it, each with its user-admin stub.
+type wcSides struct {
 	plane    *authplane.Authorize
 	handlers [2]http.Handler
 	admins   [2]*wcUsersAdmin
-	names    map[string]string
-	ids      *identity.Store
+}
+
+type wcWorld struct {
+	mode    wcMode
+	env     *platformroleseam.Env
+	key     authplane.Key
+	main    wcSides
+	impOn   wcSides
+	namesMu sync.RWMutex
+	names   map[string]string
+	ids     *identity.Store
+}
+
+func (w *wcWorld) setName(id uuid.UUID, name string) {
+	w.namesMu.Lock()
+	defer w.namesMu.Unlock()
+	w.names[id.String()] = name
+}
+
+func (w *wcWorld) nameOf(id string) (string, bool) {
+	w.namesMu.RLock()
+	defer w.namesMu.RUnlock()
+	name, ok := w.names[id]
+	return name, ok
+}
+
+// newSides starts a decision point over the world's database (its state wrapped by wrap when set) and the off and on
+// go-api handlers that ask it.
+func (w *wcWorld) newSides(t *testing.T, ctx context.Context, wrap func(authapi.DecisionState) authapi.DecisionState) wcSides {
+	t.Helper()
+	var s wcSides
+	s.plane = authplane.StartAuthorize(t, ctx, w.env.URI, w.key, authplane.AuthorizeOptions{PlatformRolesOwned: w.mode.authOwned, UsersOwned: true, Wrap: wrap})
+	s.handlers[wcOff], s.admins[wcOff] = w.goAPI(t, s.plane, wcLiveEnforce, AuthProxyConfig{})
+	s.handlers[wcOn], s.admins[wcOn] = w.goAPI(t, s.plane, wcLiveEnforce+",admin", AuthProxyConfig{})
+	return s
+}
+
+// impSwitchOnSides are the main decision point's go-api handlers with AUTH_PROXY_IMPERSONATION on and an upstream (a
+// loopback stub that answers 503), as prod runs them: the Scope refuses an impersonating admin's own bearer.
+func (w *wcWorld) impSwitchOnSides(t *testing.T) wcSides {
+	t.Helper()
+	upstream := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
+		http.Error(rw, `{"detail":"stub upstream"}`, http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(upstream.Close)
+	origin, err := url.Parse(upstream.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := AuthProxyConfig{Upstream: origin, Impersonation: true}
+	if !proxy.ImpersonationOn() {
+		t.Fatal("the proxy config does not turn impersonation through auth-service on")
+	}
+	s := wcSides{plane: w.main.plane}
+	s.handlers[wcOff], s.admins[wcOff] = w.goAPI(t, s.plane, wcLiveEnforce, proxy)
+	s.handlers[wcOn], s.admins[wcOn] = w.goAPI(t, s.plane, wcLiveEnforce+",admin", proxy)
+	return s
 }
 
 type wcRevoker struct{}
@@ -181,9 +255,18 @@ func newWCWorld(t *testing.T, ctx context.Context, mode wcMode) *wcWorld {
 	if w.ids, err = identity.New(identity.Config{Pool: w.env.Admin, Schema: w.env.Schema}); err != nil {
 		t.Fatal(err)
 	}
-	w.plane = authplane.StartAuthorize(t, ctx, w.env.URI, w.key, authplane.AuthorizeOptions{PlatformRolesOwned: mode.authOwned, UsersOwned: true})
-	w.handlers[wcOff], w.admins[wcOff] = w.goAPI(t, w.plane, wcLiveEnforce)
-	w.handlers[wcOn], w.admins[wcOn] = w.goAPI(t, w.plane, wcLiveEnforce+",admin")
+	var wrap func(authapi.DecisionState) authapi.DecisionState
+	if wcPlantMainCells {
+		var plants []wcPlant
+		for _, p := range wcPlants {
+			if wcModes[p.mode].name == mode.name {
+				plants = append(plants, p)
+			}
+		}
+		wrap = w.plantWrap(plants)
+	}
+	w.main = w.newSides(t, ctx, wrap)
+	w.impOn = w.impSwitchOnSides(t)
 	return w
 }
 
@@ -234,9 +317,9 @@ func (a *wcUsersAdmin) DeleteUser(_ context.Context, in authprovision.UserDelete
 // goAPI is go-api's handler as service.go builds it: newProtection over the database, the user access tokens routed by
 // the endpoint-profile rows, the Enforcer over the profile rows with the enforce set, the production scope layers.
 // Users are owned (AUTH_USERS_OWNED, as in prod) with the stub user-admin client.
-func (w *wcWorld) goAPI(t *testing.T, plane *authplane.Authorize, enforce string) (http.Handler, *wcUsersAdmin) {
+func (w *wcWorld) goAPI(t *testing.T, plane *authplane.Authorize, enforce string, proxy AuthProxyConfig) (http.Handler, *wcUsersAdmin) {
 	t.Helper()
-	protected, err := newProtection(apiTestConfig(), w.env.Admin, w.mode.goOwned, AuthProxyConfig{}, quietLogger())
+	protected, err := newProtection(apiTestConfig(), w.env.Admin, w.mode.goOwned, proxy, quietLogger())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -255,9 +338,10 @@ func (w *wcWorld) goAPI(t *testing.T, plane *authplane.Authorize, enforce string
 	protected.guard.SetEnforcer(enf)
 	admin := &wcUsersAdmin{}
 	deps := Deps{Pool: w.env.Admin, ClickHouse: unreachableClickHouse(t), Auth: protected.auth, Guard: protected.guard,
-		PlatformRolesOwned: w.mode.goOwned, UsersOwned: true, UsersAdmin: admin, AuthSchema: authplane.Schema, ACRRevoker: wcRevoker{}}
+		PlatformRolesOwned: w.mode.goOwned, UsersOwned: true, UsersAdmin: admin, AuthSchema: authplane.Schema, ACRRevoker: wcRevoker{}, AuthProxy: proxy}
 	layers := []func(http.Handler) http.Handler{protected.auth.ReadOnce, protected.scope.Principal, protected.scope.OrgScope, protected.scope.Impersonation}
-	server, err := NewServer(apiTestConfig(), quietLogger(), Routes(deps, quietLogger()), layers...)
+	// As service.go builds it: newServer skips the scope layers on the proxied routes auth-service authenticates.
+	server, err := newServer(apiTestConfig(), quietLogger(), Routes(deps, quietLogger()), nil, proxy.ScopeExemptRoutes(), layers...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -293,7 +377,7 @@ func (w *wcWorld) org(t *testing.T, ctx context.Context, name string) uuid.UUID 
 	if err := w.ids.ProjectOrganization(ctx, id); err != nil {
 		t.Fatal(err)
 	}
-	w.names[id.String()] = name
+	w.setName(id, name)
 	return id
 }
 
@@ -301,7 +385,7 @@ func (w *wcWorld) org(t *testing.T, ctx context.Context, name string) uuid.UUID 
 func (w *wcWorld) user(t *testing.T, ctx context.Context, name string, publicSuperuser, assigned bool) uuid.UUID {
 	t.Helper()
 	id := w.env.User(ctx, t, publicSuperuser, assigned)
-	w.names[id.String()] = name
+	w.setName(id, name)
 	return id
 }
 
@@ -327,6 +411,10 @@ func (w *wcWorld) seed(t *testing.T, ctx context.Context, spec wcSpec) *wcCaller
 	if spec.kind != "anon" {
 		c.user = w.user(t, ctx, spec.label+".user", spec.publicSuperuser, spec.assigned)
 	}
+	c.sideUser = [2]uuid.UUID{c.user, c.user}
+	if spec.kind == "imp" {
+		c.sideUser[wcOn] = w.user(t, ctx, spec.label+".user", spec.publicSuperuser, spec.assigned)
+	}
 	var impOrg uuid.UUID
 	if spec.kind == "imp" {
 		impOrg = w.org(t, ctx, spec.label+".org")
@@ -340,9 +428,12 @@ func (w *wcWorld) seed(t *testing.T, ctx context.Context, spec wcSpec) *wcCaller
 		if spec.role != "" {
 			w.member(t, ctx, c.user, c.org[side], spec.role)
 		}
+		c.victim[side] = w.org(t, ctx, spec.label+".victim_org")
 		c.targets[side] = map[string]uuid.UUID{}
 		for _, name := range wcTargets {
 			target := w.user(t, ctx, spec.label+".target_"+name, false, false)
+			// The list rows search this tag, so a list answers this caller's targets only, whatever else was seeded.
+			w.exec(t, ctx, false, `UPDATE users SET full_name = $2 WHERE id = $1`, target, wcSearchTag(spec.label)+name)
 			if name != "add" {
 				w.member(t, ctx, target, c.org[side], "member")
 			}
@@ -351,17 +442,19 @@ func (w *wcWorld) seed(t *testing.T, ctx context.Context, spec wcSpec) *wcCaller
 		if spec.kind == "anon" || spec.kind == "delegated" {
 			continue
 		}
-		c.session[side] = w.sessionRow(t, ctx, c.user)
-		claims := edtokens.Claims{UserID: c.user, SessionID: &c.session[side]}
+		c.session[side] = w.sessionRow(t, ctx, c.sideUser[side])
+		claims := edtokens.Claims{UserID: c.sideUser[side], SessionID: &c.session[side]}
 		if spec.tokenOrg {
 			claims.OrgID = c.org[side].String()
 		}
 		c.token[side] = w.key.Tokens.MustMint(t, claims)
 	}
 	if spec.kind == "imp" {
-		// One live go-api impersonation row of the platform admin, on a member of the shared org.
-		pgseed.ImpersonationSession(ctx, t, w.env.Admin, uuid.NewString(), c.user.String(), c.targets[wcOff]["get"].String(),
-			impOrg.String(), "member", time.Now().Add(time.Hour), nil)
+		// One live go-api impersonation row per side's platform admin, on that side's member of the shared org.
+		for side := range 2 {
+			pgseed.ImpersonationSession(ctx, t, w.env.Admin, uuid.NewString(), c.sideUser[side].String(), c.targets[side]["get"].String(),
+				impOrg.String(), "member", time.Now().Add(time.Hour), nil)
+		}
 	}
 	if spec.kind == "delegated" {
 		w.delegate(t, ctx, c)
@@ -401,34 +494,26 @@ func wcGrantOwner(t *testing.T, ctx context.Context, w *wcWorld, c *wcCaller) {
 	}
 }
 
-// wcDropPrincipal deletes the principal row with the foreign keys on (P2 a, acp 03:04Z: unreachable by schema FK). The
-// delete runs with the transaction's audit id set, as audit.Commit sets it, so the commit guard admits the cascade:
-// the assignment (auth migration 0002:50) and the sessions (0003:12) go with the principal, which the cell asserts.
+// wcDropPrincipal tries to delete the principal row (P2 a): the schema refuses it, so "a live platform_admin assignment
+// whose principal row is missing" cannot exist. auth.users.principal_id (auth migration 0001:42) and
+// platform_role_assignments.principal_id (0034:40-43, which replaced 0002:50's CASCADE) are ON DELETE RESTRICT. The
+// caller stays a platform admin, and its cells measure parity.
 func wcDropPrincipal(t *testing.T, ctx context.Context, w *wcWorld, c *wcCaller) {
 	t.Helper()
-	tx, err := w.env.Admin.Begin(ctx)
-	if err != nil {
+	_, err := w.env.Admin.Exec(ctx, `DELETE FROM auth.principals WHERE id = $1`, c.user)
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "23001" {
+		t.Fatalf("delete of an assignment holder's principal: %v, want the RESTRICT refusal 23001", err)
+	}
+	var principals, assignments int
+	if err := w.env.Admin.QueryRow(ctx, `SELECT (SELECT count(*) FROM auth.principals WHERE id = $1),
+(SELECT count(*) FROM auth.platform_role_assignments WHERE principal_id = $1)`, c.user).Scan(&principals, &assignments); err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	if _, err := tx.Exec(ctx, `SELECT set_config('dev_health.audit_txid', pg_current_xact_id()::text, true)`); err != nil {
-		t.Fatal(err)
+	if principals != 1 || assignments != 1 {
+		t.Fatalf("after the refused delete: %d principals, %d assignments; want 1 and 1", principals, assignments)
 	}
-	if tag, err := tx.Exec(ctx, `DELETE FROM auth.principals WHERE id = $1`, c.user); err != nil || tag.RowsAffected() != 1 {
-		t.Fatalf("delete the principal: %v (%d rows)", err, tag.RowsAffected())
-	}
-	if err := tx.Commit(ctx); err != nil {
-		t.Fatal(err)
-	}
-	var assignments, sessions int
-	if err := w.env.Admin.QueryRow(ctx, `SELECT (SELECT count(*) FROM auth.platform_role_assignments WHERE principal_id = $1),
-(SELECT count(*) FROM auth.sessions WHERE principal_id = $1)`, c.user).Scan(&assignments, &sessions); err != nil {
-		t.Fatal(err)
-	}
-	if assignments != 0 || sessions != 0 {
-		t.Fatalf("after the principal delete: %d assignments, %d sessions; the schema's cascade wants 0 and 0", assignments, sessions)
-	}
-	t.Logf("CASCADE|13728|g3a|assignments=0|sessions=0")
+	t.Logf("RESTRICT|13728|g3a|principal_delete=%s|principals=1|assignments=1", pgErr.Code)
 }
 
 func wcDisablePrincipal(t *testing.T, ctx context.Context, w *wcWorld, c *wcCaller) {
@@ -457,16 +542,22 @@ type wcRow struct {
 	orgClaim bool
 	// superuserBody: the body writes is_superuser; with users owned the refusal of users.go:281/:454 must not answer.
 	superuserBody bool
+	// liveRowExempt: the Scope serves it while a go-api impersonation row is live (liveRowExemptPatterns).
+	liveRowExempt bool
 }
+
+// wcSearchTag is the full_name prefix of a caller's targets; the list rows search it.
+func wcSearchTag(label string) string { return "wc13728-" + label + "-" }
 
 func wcRows(c *wcCaller, side int) []wcRow {
 	org := c.org[side].String()
+	var rows []wcRow
 	tg := c.targets[side]
 	tag := c.spec.label + "-side" + wcSideName[side]
 	members := "/api/v1/admin/orgs/" + org
-	return []wcRow{
-		{name: "r21_list", method: http.MethodGet, path: "/api/v1/admin/users", platformDecided: true, action: "admin.users"},
-		{name: "r21_list_xorg", method: http.MethodGet, path: "/api/v1/admin/users", xOrg: org, action: "admin.users"},
+	rows = []wcRow{
+		{name: "r21_list", method: http.MethodGet, path: "/api/v1/admin/users?search=" + wcSearchTag(c.spec.label), platformDecided: true, action: "admin.users"},
+		{name: "r21_list_xorg", method: http.MethodGet, path: "/api/v1/admin/users?search=" + wcSearchTag(c.spec.label), xOrg: org, action: "admin.users"},
 		{name: "r22_get", method: http.MethodGet, path: "/api/v1/admin/users/" + tg["get"].String(), platformDecided: true, action: "admin.users"},
 		{name: "r23_create", method: http.MethodPost, path: "/api/v1/admin/users", body: `{"email":"c13728-` + tag + `@example.test"}`, platformDecided: true, action: "admin.users"},
 		{name: "r23_create_xorg", method: http.MethodPost, path: "/api/v1/admin/users", xOrg: org,
@@ -482,7 +573,7 @@ func wcRows(c *wcCaller, side int) []wcRow {
 			platformDecided: true, action: "admin.users", superuserBody: true},
 		{name: "r26_delete_force", method: http.MethodDelete, path: "/api/v1/admin/users/" + tg["delete"].String() + "?force=true", platformDecided: true, action: "admin.users"},
 		{name: "r27_pull_stripe", method: http.MethodPost, path: "/api/v1/billing/plans/pull-stripe", platformDecided: true, action: "admin.billing"},
-		{name: "m2_impersonate_status", method: http.MethodGet, path: "/api/v1/admin/impersonate/status", platformDecided: true, action: "admin.impersonate"},
+		{name: "m2_impersonate_status", method: http.MethodGet, path: "/api/v1/admin/impersonate/status", platformDecided: true, action: "admin.impersonate", liveRowExempt: true},
 		{name: "site_telemetry_report", method: http.MethodPost, path: "/api/v1/telemetry/report", platformDecided: true, action: "admin.telemetry"},
 		{name: "site_acr_revoke", method: http.MethodPost, path: "/api/v1/acr/credentials/cred13728/revoke", action: "admin.orgs", orgClaim: true},
 		{name: "site_org_members_list", method: http.MethodGet, path: members + "/members", action: "admin.orgs"},
@@ -492,6 +583,49 @@ func wcRows(c *wcCaller, side int) []wcRow {
 		{name: "site_org_member_remove", method: http.MethodDelete, path: members + "/members/" + tg["remove"].String(), action: "admin.orgs"},
 		// Last: a transfer by an owner changes the caller's own role.
 		{name: "site_org_transfer", method: http.MethodPost, path: members + "/transfer-ownership", body: `{"new_owner_user_id":"` + tg["transfer"].String() + `"}`, action: "admin.orgs"},
+	}
+	if c.spec.allRows {
+		rows = append(rows, wcAllRows(c, side)...)
+	}
+	return rows
+}
+
+// wcNoSuchID is an id no seeded row has: the rows that name one answer after their guard.
+const wcNoSuchID = "99999999-9999-4999-8999-999999999999"
+
+// wcAllRows are the admin-namespace rows outside the weak-cover rows (RISK-F8P2B-admin-1 section 1 rows 1-20 and M1),
+// for the impersonation classes. The org rows act on the caller's per-side victim org; stop is last.
+func wcAllRows(c *wcCaller, side int) []wcRow {
+	victim := "/api/v1/admin/orgs/" + c.victim[side].String()
+	tag := c.spec.label + "-side" + wcSideName[side]
+	sa := "/api/v1/admin/service-accounts/"
+	return []wcRow{
+		{name: "row01_orgs_list", method: http.MethodGet, path: "/api/v1/admin/orgs", action: "admin.orgs"},
+		{name: "row02_orgs_create", method: http.MethodPost, path: "/api/v1/admin/orgs", body: `{"name":"wc13728 ` + tag + `"}`, action: "admin.orgs"},
+		{name: "row03_org_get", method: http.MethodGet, path: victim, action: "admin.orgs"},
+		{name: "row04_org_patch", method: http.MethodPatch, path: victim, body: `{"description":"wc13728"}`, action: "admin.orgs"},
+		{name: "row06_flags_list", method: http.MethodGet, path: "/api/v1/admin/feature-flags", action: "admin.flags"},
+		{name: "row07_flag_patch", method: http.MethodPatch, path: "/api/v1/admin/feature-flags/" + wcNoSuchID, body: `{"is_enabled":true}`, action: "admin.flags"},
+		{name: "row08_overrides_list", method: http.MethodGet, path: victim + "/feature-overrides", action: "admin.flags"},
+		{name: "row09_override_create", method: http.MethodPost, path: victim + "/feature-overrides", body: `{"feature_id":"` + wcNoSuchID + `"}`, action: "admin.flags"},
+		{name: "row10_override_patch", method: http.MethodPatch, path: victim + "/feature-overrides/" + wcNoSuchID, body: `{"is_enabled":false}`, action: "admin.flags"},
+		{name: "row11_override_delete", method: http.MethodDelete, path: victim + "/feature-overrides/" + wcNoSuchID, action: "admin.flags"},
+		{name: "row12_audit_logs", method: http.MethodGet, path: "/api/v1/admin/platform/audit-logs", action: "admin.audit"},
+		{name: "row13_stats", method: http.MethodGet, path: "/api/v1/admin/platform/stats", action: "admin.stats"},
+		{name: "row14_impersonate_start", method: http.MethodPost, path: "/api/v1/admin/impersonate", body: `{"target_user_id":"` + c.targets[side]["get"].String() + `"}`, action: "admin.impersonate"},
+		{name: "row16_handoff_consume", method: http.MethodPost, path: "/api/v1/admin/impersonate/handoff/consume", body: `{"handoff_id":"wc13728"}`, action: "admin.impersonate", liveRowExempt: true},
+		{name: "row17_sa_keys_list", method: http.MethodGet, path: sa + wcNoSuchID + "/keys", action: "admin.users"},
+		{name: "row18_sa_key_issue", method: http.MethodPost, path: sa + wcNoSuchID + "/keys", body: `{}`, action: "admin.users"},
+		{name: "row19_sa_key_rotate", method: http.MethodPost, path: sa + wcNoSuchID + "/keys/rotate", body: `{}`, action: "admin.users"},
+		{name: "row20_sa_key_revoke", method: http.MethodPost, path: sa + "keys/cred13728/revoke", body: `{"reason":"wc13728"}`, action: "admin.users"},
+		{name: "m1_sa_create", method: http.MethodPost, path: "/api/v1/admin/service-accounts",
+			body: `{"organization_id":"` + c.victim[side].String() + `","owner_principal_id":"` + c.sideUser[side].String() + `","name":"wc13728"}`, action: "admin.users"},
+		{name: "m1_sa_disable", method: http.MethodPost, path: sa + wcNoSuchID + "/disable", action: "admin.users"},
+		{name: "m1_sa_enable", method: http.MethodPost, path: sa + wcNoSuchID + "/enable", action: "admin.users"},
+		{name: "m1_sa_owner", method: http.MethodPost, path: sa + wcNoSuchID + "/owner", body: `{"owner_principal_id":"` + c.sideUser[side].String() + `"}`, action: "admin.users"},
+		{name: "row05_org_delete", method: http.MethodDelete, path: victim, action: "admin.orgs"},
+		// Last: a stop ends the side's impersonation row.
+		{name: "row15_impersonate_stop", method: http.MethodPost, path: "/api/v1/admin/impersonate/stop", action: "admin.impersonate", liveRowExempt: true},
 	}
 }
 
@@ -539,7 +673,7 @@ var (
 func (w *wcWorld) normalize(body string) string {
 	body = strings.TrimSpace(body)
 	body = wcUUID.ReplaceAllStringFunc(body, func(id string) string {
-		if name, ok := w.names[id]; ok {
+		if name, ok := w.nameOf(id); ok {
 			return "<" + name + ">"
 		}
 		return "<uuid>"
@@ -568,11 +702,16 @@ type wcCell struct {
 // answer on both sides, and no admin.* question on the off side (the admin cell is off there).
 func (w *wcWorld) cell(t *testing.T, c *wcCaller, rowIndex int) wcCell {
 	t.Helper()
+	return w.cellOn(t, w.main, c, rowIndex)
+}
+
+func (w *wcWorld) cellOn(t *testing.T, sides wcSides, c *wcCaller, rowIndex int) wcCell {
+	t.Helper()
 	var out wcCell
 	for side := range 2 {
 		r := wcRows(c, side)[rowIndex]
 		out.row = r
-		out.sides[side] = w.serve(w.handlers[side], w.plane, w.admins[side], side, c, r)
+		out.sides[side] = w.serve(sides.handlers[side], sides.plane, sides.admins[side], side, c, r)
 		a := out.sides[side]
 		t.Logf("CELL|13728|%s|%s|%s|%s|%d|retry=%q|%s|pdp=%v|users_admin=%v", w.mode.name, c.spec.label, r.name, wcSideName[side], a.status,
 			a.retryAfter, wcShort(a.body), a.decisions, a.usersAdmin)
@@ -580,9 +719,12 @@ func (w *wcWorld) cell(t *testing.T, c *wcCaller, rowIndex int) wcCell {
 			t.Fatalf("%s side: no answer", wcSideName[side])
 		}
 	}
-	for _, d := range out.sides[wcOff].decisions {
-		if strings.HasPrefix(d, "admin.") {
-			t.Errorf("off side asked %q: the admin cell is off there", d)
+	// The live members namespace asks admin.orgs as its platform alternative on the site_org_* rows, on both sides.
+	if !strings.HasPrefix(out.row.name, "site_org_") {
+		for _, d := range out.sides[wcOff].decisions {
+			if strings.HasPrefix(d, "admin.") {
+				t.Errorf("off side asked %q: the admin cell is off there", d)
+			}
 		}
 	}
 	if out.row.superuserBody {
@@ -601,14 +743,50 @@ func wcHasAllow(decisions []string, action string) bool {
 	})
 }
 
+// wcCellsPerMode is the exact cell count of each mode (21 rows x its classes, the view twin included); a class or a
+// row that drops out of the tables fails the mode.
+//
+// m_off: 10 classes x 21 rows + 3 impersonation classes x 45 rows = 345; m_on: + 4 G3 classes x 21 + the twin x 21 = 450;
+// m_split: + the twin x 21 = 366.
+var wcCellsPerMode = map[string]int{"m_off": 345, "m_on": 450, "m_split_unreachable_in_prod": 366}
+
+// wcTwin is the view twin of a mode's named-change classes: a reference caller whose decision point answers the
+// platform role the named classes get there (a planted role on its principal only). Its go-api view is theirs: in m_on
+// no platform role (plain_orgless's), in m_split the public superuser (pa_orgless's). Every row of a named class must
+// answer as its twin, on both sides: the answer is the function of the go-api view and the decision point view only.
+func wcTwin(mode wcMode) (wcSpec, string, bool) {
+	switch mode.name {
+	case "m_on":
+		return wcSpec{label: "twin_l0p1"}, "platform_admin", true
+	case "m_split_unreachable_in_prod":
+		return wcSpec{label: "twin_l1p0", publicSuperuser: true, assigned: true}, "", true
+	}
+	return wcSpec{}, "", false
+}
+
 // Every row and site of the weak-cover class, for every caller class, in every platform roles mode, on the real
-// decision point: the admin flip keeps the off answer (status and body), except the two named changes.
+// decision point: the admin flip keeps the off answer (status, body, user-admin calls), except the two named changes.
 func TestAdminWeakCoverRealPDPCells(t *testing.T) {
 	ctx := context.Background()
 	for _, mode := range wcModes {
 		t.Run(mode.name, func(t *testing.T) {
 			w := newWCWorld(t, ctx, mode)
 			results := map[string][]wcCell{}
+			cells := 0
+			twinSpec, twinRole, hasTwin := wcTwin(mode)
+			if hasTwin {
+				tc := w.seed(t, ctx, twinSpec)
+				twinSides := w.newSides(t, ctx, w.plantWrap([]wcPlant{{name: "view_twin", target: twinSpec.label,
+					snap: func(_ *wcWorld, _ context.Context, _ uuid.UUID, s authorization.GrantSnapshot) authorization.GrantSnapshot {
+						return wcRole{s, twinRole}
+					}}}))
+				for i, r := range wcRows(tc, wcOff) {
+					t.Run(twinSpec.label+"/"+r.name, func(t *testing.T) {
+						cells++
+						results[twinSpec.label] = append(results[twinSpec.label], w.cellOn(t, twinSides, tc, i))
+					})
+				}
+			}
 			for _, spec := range wcSpecs {
 				if !spec.inMode(mode) {
 					continue
@@ -618,21 +796,37 @@ func TestAdminWeakCoverRealPDPCells(t *testing.T) {
 				rows := wcRows(c, wcOff)
 				for i := range rows {
 					t.Run(spec.label+"/"+rows[i].name, func(t *testing.T) {
-						got := w.cell(t, c, i)
+						cells++
+						sides := w.main
+						if spec.impSwitchOn {
+							sides = w.impOn
+						}
+						got := w.cellOn(t, sides, c, i)
 						results[spec.label] = append(results[spec.label], got)
 						off, on := got.sides[wcOff], got.sides[wcOn]
-						if expect == wcUnauthenticated && (off.status != http.StatusUnauthorized || on.status != http.StatusUnauthorized) {
-							t.Errorf("STOP (P2 a, acp 03:04Z): off %d on %d, want 401 = 401", off.status, on.status)
+						if spec.allRows {
+							w.impRow(t, c, got)
+						}
+						if expect == wcImpGate && !got.row.liveRowExempt {
+							for side := range 2 {
+								a := got.sides[side]
+								if a.status != http.StatusForbidden || len(a.decisions) != 0 || len(a.usersAdmin) != 0 {
+									t.Errorf("GATE (i) %s side: %d %s, %d PDP calls, %d user-admin calls; want the Scope's 403 with 0 and 0",
+										wcSideName[side], a.status, wcShort(a.body), len(a.decisions), len(a.usersAdmin))
+								}
+							}
 						}
 						switch expect {
-						case wcParity, wcMeasure, wcUnauthenticated:
-							if on.status != off.status || on.body != off.body || len(on.usersAdmin) != len(off.usersAdmin) {
+						case wcParity, wcMeasure, wcImpGate:
+							if why := wcDiff(off, on, "", ""); why != "" {
 								stop := ""
-								if expect == wcMeasure || expect == wcUnauthenticated {
+								switch {
+								case expect == wcMeasure:
 									stop = "STOP (measure cell, P2 d / P6): "
+								case spec.allRows:
+									stop = "STOP (impersonation GATE (i)/(ii), acp 04:19Z): "
 								}
-								t.Errorf("%son %d %s users_admin %v; off %d %s users_admin %v: the admin flip changed the answer", stop, on.status, wcShort(on.body),
-									on.usersAdmin, off.status, wcShort(off.body), off.usersAdmin)
+								t.Errorf("%sthe admin flip changed the answer: %s", stop, why)
 							}
 						}
 						judged := (spec.label == "pa_orgless" && !got.row.orgClaim) || (spec.label == "pa_foreign_org" && got.row.orgClaim)
@@ -643,45 +837,92 @@ func TestAdminWeakCoverRealPDPCells(t *testing.T) {
 				}
 				if expect == wcSplitChange || expect == wcG3Change {
 					t.Run(spec.label+"/named_change", func(t *testing.T) {
-						wcNamedChange(t, expect, results[spec.label], results["pa_orgless"], results["plain_orgless"])
+						wcNamedChange(t, expect, spec.label, results[spec.label], twinSpec.label, results[twinSpec.label],
+							results["pa_orgless"], results["plain_orgless"])
 					})
 				}
 			}
+			if want := wcCellsPerMode[mode.name]; cells != want {
+				t.Errorf("%s ran %d cells, want exactly %d", mode.name, cells, want)
+			}
+			t.Logf("CELLS|13728|%s|%d", mode.name, cells)
 		})
 	}
 }
 
-// wcNamedChange asserts a named change on the platform-decided rows: the class's off status is the off status of one
-// reference class and its on status the on status of the other, and at least one row changes.
-func wcNamedChange(t *testing.T, expect wcExpect, got, platformAdmin, plain []wcCell) {
+// impRow logs one IMPROW line of the impersonation table (row | mode | legacy | enforced | pdp | stub | deny text).
+func (w *wcWorld) impRow(t *testing.T, c *wcCaller, got wcCell) {
 	t.Helper()
-	offRef, onRef := platformAdmin, plain
-	label := "RISK-F8P2B-admin-1 section 4 / card F2 accepted change (m_split, unreachable in prod)"
-	if expect == wcG3Change {
-		offRef, onRef = plain, platformAdmin
-		label = "known change the F8p2b G3 START gate keeps at 0 rows"
+	off, on := got.sides[wcOff], got.sides[wcOn]
+	verdict := "SAME"
+	if wcDiff(off, on, "", "") != "" {
+		verdict = "DIFF"
 	}
-	if len(got) != len(offRef) || len(got) != len(onRef) {
-		t.Fatalf("%d cells, references %d and %d", len(got), len(offRef), len(onRef))
+	deny := "-"
+	if on.status >= 400 {
+		deny = wcShort(on.body)
+	} else if off.status >= 400 {
+		deny = "legacy:" + wcShort(off.body)
+	}
+	t.Logf("IMPROW|13728|%s|%s|%s|%s %s|%d|%d|pdp=%d/%d|stub=%d/%d|%s|%s", c.spec.label, w.mode.name, got.row.name, got.row.method,
+		w.normalize(got.row.path), off.status, on.status, len(off.decisions), len(on.decisions), len(off.usersAdmin), len(on.usersAdmin), deny, verdict)
+}
+
+// wcDiff is "" when two answers are the same: status, whole normalized body and user-admin calls, with each caller's
+// label written CALLER (the bodies of two classes name their own seeded rows).
+func wcDiff(a, b wcAnswer, labelA, labelB string) string {
+	norm := func(s, label string) string {
+		if label == "" {
+			return s
+		}
+		return strings.ReplaceAll(s, label, "CALLER")
+	}
+	bodyA, bodyB := norm(a.body, labelA), norm(b.body, labelB)
+	callsA, callsB := norm(strings.Join(a.usersAdmin, "; "), labelA), norm(strings.Join(b.usersAdmin, "; "), labelB)
+	if a.status == b.status && bodyA == bodyB && len(a.usersAdmin) == len(b.usersAdmin) && callsA == callsB {
+		return ""
+	}
+	return fmt.Sprintf("%d %s users_admin [%s] vs %d %s users_admin [%s]", a.status, wcShort(bodyA), callsA, b.status, wcShort(bodyB), callsB)
+}
+
+// wcNamedChange asserts a named change (F1) on EVERY row: each side of the class answers as its view twin (status,
+// whole body, user-admin calls); on the platform-decided rows the off side also answers as the off reference class and
+// the on side as the on reference class, and at least one of them changes.
+func wcNamedChange(t *testing.T, expect wcExpect, label string, got []wcCell, twinLabel string, twin, platformAdmin, plain []wcCell) {
+	t.Helper()
+	offRef, onRef, offRefLabel, onRefLabel := platformAdmin, plain, "pa_orgless", "plain_orgless"
+	name := "RISK-F8P2B-admin-1 section 4 / card F2 accepted change (m_split, unreachable in prod)"
+	if expect == wcG3Change {
+		offRef, onRef, offRefLabel, onRefLabel = plain, platformAdmin, "plain_orgless", "pa_orgless"
+		name = "known change the F8p2b G3 START gate keeps at 0 rows"
+	}
+	if len(got) != len(twin) || len(got) != len(offRef) || len(got) != len(onRef) {
+		t.Fatalf("%d cells, twin %d, references %d and %d", len(got), len(twin), len(offRef), len(onRef))
 	}
 	changed := 0
 	for i, cell := range got {
+		for side := range 2 {
+			if why := wcDiff(cell.sides[side], twin[i].sides[side], label, twinLabel); why != "" {
+				t.Errorf("%s %s %s side: the class does not answer as its view twin %s: %s", name, cell.row.name, wcSideName[side], twinLabel, why)
+			}
+		}
 		if !cell.row.platformDecided {
 			continue
 		}
-		off, on := cell.sides[wcOff].status, cell.sides[wcOn].status
-		if off != offRef[i].sides[wcOff].status || on != onRef[i].sides[wcOn].status {
-			t.Errorf("%s %s: off %d on %d, want off %d (reference off) on %d (reference on)", label, cell.row.name, off, on,
-				offRef[i].sides[wcOff].status, onRef[i].sides[wcOn].status)
+		if why := wcDiff(cell.sides[wcOff], offRef[i].sides[wcOff], label, offRefLabel); why != "" {
+			t.Errorf("%s %s off side: not the %s off answer: %s", name, cell.row.name, offRefLabel, why)
 		}
-		if off != on {
+		if why := wcDiff(cell.sides[wcOn], onRef[i].sides[wcOn], label, onRefLabel); why != "" {
+			t.Errorf("%s %s on side: not the %s on answer: %s", name, cell.row.name, onRefLabel, why)
+		}
+		if cell.sides[wcOff].status != cell.sides[wcOn].status {
 			changed++
 		}
 	}
 	if changed == 0 {
-		t.Errorf("%s: no platform-decided row changed its answer", label)
+		t.Errorf("%s: no platform-decided row changed its answer", name)
 	}
-	t.Logf("NAMED-CHANGE|13728|%s|rows_changed=%d", label, changed)
+	t.Logf("NAMED-CHANGE|13728|%s|%s|rows_changed=%d", name, label, changed)
 }
 
 // With admin on and the decision point down, a platform admin gets the fail-closed 503 on every row and site; the off
@@ -691,7 +932,7 @@ func TestAdminWeakCoverRealPDPDeadDecisionPoint(t *testing.T) {
 	w := newWCWorld(t, ctx, wcModes[0])
 	dead := authplane.StartAuthorize(t, ctx, w.env.URI, w.key, authplane.AuthorizeOptions{UsersOwned: true})
 	dead.Stop()
-	w.handlers[wcOn], w.admins[wcOn] = w.goAPI(t, dead, wcLiveEnforce+",admin")
+	w.main.handlers[wcOn], w.main.admins[wcOn] = w.goAPI(t, dead, wcLiveEnforce+",admin", AuthProxyConfig{})
 	// pa_foreign_org: its org claim lets the acr revoke row reach its HoldsPlatform site.
 	c := w.seed(t, ctx, wcSpecs[5])
 	for i, r := range wcRows(c, wcOff) {
@@ -701,8 +942,9 @@ func TestAdminWeakCoverRealPDPDeadDecisionPoint(t *testing.T) {
 			if on.status != http.StatusServiceUnavailable || on.retryAfter == "" {
 				t.Errorf("dead decision point: on %d %s Retry-After %q, want 503 with a retry hint", on.status, on.body, on.retryAfter)
 			}
-			if got.sides[wcOff].status == http.StatusServiceUnavailable {
-				t.Errorf("off side %d %s: its decision point is up", got.sides[wcOff].status, got.sides[wcOff].body)
+			// The off side may answer 503 from the users-owned post-guard path (the stub); never the decision point's.
+			if off := got.sides[wcOff]; off.retryAfter != "" || strings.Contains(off.body, "Authorization service temporarily unavailable") {
+				t.Errorf("off side %d %s Retry-After %q: its decision point is up", off.status, off.body, off.retryAfter)
 			}
 		})
 	}
@@ -745,81 +987,100 @@ func (wcNoMembership) Membership(string) (authorization.Membership, bool) {
 	return authorization.Membership{}, false
 }
 
+// wcPlant is one planted defect of the decision state, on the principal of one caller class only.
+type wcPlant struct {
+	name string
+	// target is the caller class whose principal the plant changes; mode and spec are where it lives (wcModes, wcSpecs).
+	target     string
+	mode, spec int
+	// kill is the main cell whose asserts the plant breaks (F5): the parity assert "the admin flip changed the answer".
+	kill   string
+	wantOn int
+	snap   func(w *wcWorld, ctx context.Context, principal uuid.UUID, s authorization.GrantSnapshot) authorization.GrantSnapshot
+}
+
+// wcPlantMainCells wires wcPlants into the main cells' decision point. It is false here; a throwaway D6697 commit sets
+// it true, and the --- FAIL lines of its hosted run are the kills of the main cells named in kill.
+const wcPlantMainCells = false
+
+var wcPlants = []wcPlant{
+	{
+		// S1: decisionstate.go:445-446 (is_superuser -> platform_admin) forced off.
+		name: "s1_superuser_map_off", target: "pa_orgless", mode: 0, spec: 1, wantOn: http.StatusForbidden,
+		kill: "TestAdminWeakCoverRealPDPCells/m_off/pa_orgless/r21_list (parity assert, and the judged-allow assert)",
+		snap: func(_ *wcWorld, _ context.Context, _ uuid.UUID, s authorization.GrantSnapshot) authorization.GrantSnapshot {
+			return wcRole{s, ""}
+		},
+	},
+	{
+		// S2: the owned assignment read (authapi/users.go:82 PublicHoldsSQL) replaced by the public is_superuser column.
+		name: "s2_owned_read_is_public_column", target: "su_13209", mode: 1, spec: 11, wantOn: http.StatusOK,
+		kill: "TestAdminWeakCoverRealPDPCells/m_on/su_13209/r21_list (parity assert)",
+		snap: func(w *wcWorld, ctx context.Context, principal uuid.UUID, s authorization.GrantSnapshot) authorization.GrantSnapshot {
+			var public bool
+			_ = w.env.Admin.QueryRow(ctx, `SELECT COALESCE(is_superuser, false) FROM public.users WHERE id = $1`, principal).Scan(&public)
+			if public {
+				return wcRole{s, "platform_admin"}
+			}
+			return wcRole{s, ""}
+		},
+	},
+	{
+		// S3: the membership read (decisionstate membership.EffectiveOn) answers no membership.
+		name: "s3_membership_read_none", target: "owner", mode: 0, spec: 2, wantOn: http.StatusForbidden,
+		kill: "TestAdminWeakCoverRealPDPCells/m_off/owner/r21_list (parity assert)",
+		snap: func(_ *wcWorld, _ context.Context, _ uuid.UUID, s authorization.GrantSnapshot) authorization.GrantSnapshot {
+			return wcNoMembership{s}
+		},
+	},
+}
+
+// plantWrap wraps the decision state so each plant changes the snapshot of its target's principal only.
+func (w *wcWorld) plantWrap(plants []wcPlant) func(authapi.DecisionState) authapi.DecisionState {
+	return func(inner authapi.DecisionState) authapi.DecisionState {
+		return wcPlantState{inner: inner, snap: func(ctx context.Context, principal uuid.UUID, s authorization.GrantSnapshot) authorization.GrantSnapshot {
+			name, _ := w.nameOf(principal.String())
+			for _, p := range plants {
+				if name == p.target+".user" {
+					s = p.snap(w, ctx, principal, s)
+				}
+			}
+			return s
+		}}
+	}
+}
+
 func TestAdminWeakCoverRealPDPPlantedDefects(t *testing.T) {
 	ctx := context.Background()
-	plants := []struct {
-		name, kill string
-		mode       wcMode
-		spec       wcSpec
-		plant      func(w *wcWorld) func(ctx context.Context, principal uuid.UUID, s authorization.GrantSnapshot) authorization.GrantSnapshot
-		wantOn     int
-	}{
-		{
-			// S1: decisionstate.go:445-446 (is_superuser -> platform_admin) forced off.
-			name: "s1_superuser_map_off", kill: "TestAdminWeakCoverRealPDPCells/m_off/pa_orgless/r21_list", mode: wcModes[0], spec: wcSpecs[1],
-			plant: func(*wcWorld) func(context.Context, uuid.UUID, authorization.GrantSnapshot) authorization.GrantSnapshot {
-				return func(_ context.Context, _ uuid.UUID, s authorization.GrantSnapshot) authorization.GrantSnapshot {
-					return wcRole{s, ""}
-				}
-			},
-			wantOn: http.StatusForbidden,
-		},
-		{
-			// S2: the owned assignment read (authapi/users.go:82 PublicHoldsSQL) replaced by the public is_superuser column.
-			name: "s2_owned_read_is_public_column", kill: "TestAdminWeakCoverRealPDPCells/m_on/su_13209/r21_list", mode: wcModes[1],
-			spec: wcSpec{label: "su_13209", publicSuperuser: true},
-			plant: func(w *wcWorld) func(context.Context, uuid.UUID, authorization.GrantSnapshot) authorization.GrantSnapshot {
-				return func(ctx context.Context, principal uuid.UUID, s authorization.GrantSnapshot) authorization.GrantSnapshot {
-					var public bool
-					_ = w.env.Admin.QueryRow(ctx, `SELECT COALESCE(is_superuser, false) FROM public.users WHERE id = $1`, principal).Scan(&public)
-					if public {
-						return wcRole{s, "platform_admin"}
-					}
-					return wcRole{s, ""}
-				}
-			},
-			wantOn: http.StatusOK,
-		},
-		{
-			// S3: the membership read (decisionstate membership.EffectiveOn) answers no membership.
-			name: "s3_membership_read_none", kill: "TestAdminWeakCoverRealPDPCells/m_off/owner/r21_list", mode: wcModes[0], spec: wcSpecs[2],
-			plant: func(*wcWorld) func(context.Context, uuid.UUID, authorization.GrantSnapshot) authorization.GrantSnapshot {
-				return func(_ context.Context, _ uuid.UUID, s authorization.GrantSnapshot) authorization.GrantSnapshot {
-					return wcNoMembership{s}
-				}
-			},
-			wantOn: http.StatusForbidden,
-		},
-	}
-	for _, p := range plants {
+	for _, p := range wcPlants {
 		t.Run(p.name, func(t *testing.T) {
-			w := newWCWorld(t, ctx, p.mode)
-			c := w.seed(t, ctx, p.spec)
+			if wcSpecs[p.spec].label != p.target {
+				t.Fatalf("plant %s: spec %d is %s, not its target %s", p.name, p.spec, wcSpecs[p.spec].label, p.target)
+			}
+			w := newWCWorld(t, ctx, wcModes[p.mode])
+			c := w.seed(t, ctx, wcSpecs[p.spec])
 			base := w.cell(t, c, 0)
-			if base.sides[wcOn].status != base.sides[wcOff].status || base.sides[wcOn].body != base.sides[wcOff].body {
-				t.Fatalf("control: on %d %s, off %d %s: the unplanted cell must hold", base.sides[wcOn].status, base.sides[wcOn].body,
-					base.sides[wcOff].status, base.sides[wcOff].body)
+			if why := wcDiff(base.sides[wcOff], base.sides[wcOn], "", ""); why != "" {
+				t.Fatalf("control: the unplanted cell must hold: %s", why)
 			}
 			// The planted decision point: the same production builder over the same database, its state wrapped.
-			snap := p.plant(w)
-			planted := authplane.StartAuthorize(t, ctx, w.env.URI, w.key, authplane.AuthorizeOptions{PlatformRolesOwned: p.mode.authOwned, UsersOwned: true,
-				Wrap: func(inner authapi.DecisionState) authapi.DecisionState { return wcPlantState{inner: inner, snap: snap} }})
-			plantedOn, plantedAdmin := w.goAPI(t, planted, wcLiveEnforce+",admin")
-			got := w.serve(plantedOn, planted, plantedAdmin, wcOn, c, wcRows(c, wcOn)[0])
-			t.Logf("CELL|13728|%s|%s|%s|planted_on|%d|%s|pdp=%v", p.mode.name, c.spec.label, p.name, got.status, wcShort(got.body), got.decisions)
-			if got.status != p.wantOn || got.status == base.sides[wcOn].status {
-				t.Errorf("plant %s: on %d %s (control on %d); want %d: the cell %s does not kill it", p.name, got.status,
-					got.body, base.sides[wcOn].status, p.wantOn, p.kill)
+			planted := w.newSides(t, ctx, w.plantWrap([]wcPlant{p}))
+			got := w.serve(planted.handlers[wcOn], planted.plane, planted.admins[wcOn], wcOn, c, wcRows(c, wcOn)[0])
+			t.Logf("CELL|13728|%s|%s|%s|planted_on|%d|%s|pdp=%v", wcModes[p.mode].name, c.spec.label, p.name, got.status, wcShort(got.body), got.decisions)
+			// The main cell's parity assert, on the planted answer: it must report the flip.
+			if why := wcDiff(base.sides[wcOff], got, "", ""); why == "" || got.status != p.wantOn {
+				t.Errorf("plant %s: on %d %s (control on %d); want %d and a parity diff: %s does not kill it", p.name, got.status,
+					wcShort(got.body), base.sides[wcOn].status, p.wantOn, p.kill)
 			}
 			t.Logf("PLANT|13728|%s|kill=%s|control_on=%d|planted_on=%d", p.name, p.kill, base.sides[wcOn].status, got.status)
 		})
 	}
 }
 
-// P2 a: the schema refuses a live platform_admin assignment whose principal row is missing. Outside audit.Commit the
-// principal of an assignment cannot be deleted at all (the cascade meets platform_role_assignments_commit_guard, auth
-// migration 0006), and an assignment needs its principal (REFERENCES principals ON DELETE CASCADE, auth migration
-// 0002:50). The refusal's SQLSTATE is logged (FK line); the g3a cells delete inside the guard and assert the cascade.
+// P2 a: the schema refuses a live platform_admin assignment whose principal row is missing. The principal of an
+// assignment cannot be deleted (ON DELETE RESTRICT: auth.users 0001:42, platform_role_assignments 0034:40-43), and an
+// assignment cannot be written without its principal (nor outside audit.Commit: the commit guard, auth migration 0006).
+// Each refusal's SQLSTATE is logged (FK line).
 func TestAdminWeakCoverRealPDPPrincipalRowCannotBeDroppedUnderAnAssignment(t *testing.T) {
 	ctx := context.Background()
 	env := platformroleseam.Start(ctx, t, true)

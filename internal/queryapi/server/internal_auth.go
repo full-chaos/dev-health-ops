@@ -101,16 +101,21 @@ func authenticateEdgeCarrier(w http.ResponseWriter, r *http.Request, edgeAuth *p
 		return claims, true
 	case edgeImpersonationRefused:
 		policy.WriteImpersonationRefused(w)
+	case edgeUnavailable:
+		// Nothing was decided about the credential: go-api's answer for a
+		// session read it could not make (Scope.Impersonation), never a 401.
+		policy.WriteAuthFailure(w, "", policy.ErrUnavailable)
 	default:
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 	}
 	return authctx.Claims{}, false
 }
 
-// edgeOutcome is how checkEdgeCarrier decided a token. /query answers every
-// failure with the same bare 401 but the legacy impersonation refusal (403);
-// /graphql answers a store it could not read as the Python app did (its
-// unhandled 500), never as a bad credential.
+// edgeOutcome is how checkEdgeCarrier decided a token. /query answers a
+// refused credential with the bare 401, the legacy impersonation refusal with
+// 403 and a live check it could not read with go-api's 503; /graphql answers a
+// store it could not read as the Python app did (its unhandled 500). Neither
+// answers an unread store as a bad credential.
 type edgeOutcome int
 
 const (
@@ -224,13 +229,19 @@ func checkEdgeCarrier(r *http.Request, edgeAuth *policy.Authenticator, token str
 	user, err := edgeAuth.Authenticate(ctx, token)
 	if err != nil {
 		internalidentity.RecordOutcome("edge", "invalid")
-		if errors.Is(err, policy.ErrUnavailable) || policy.MissingGrant(err) != "" {
-			log.Printf("query-api: internal request refused: reason=%s carrier=edge path=%s request_id=%s",
-				storeFailureReason("edge_store_unavailable", err), r.URL.Path, logSafeRequestID(envelopeRequestID(r)))
-			return authctx.Claims{}, edgeUnavailable
+		if policy.IsRefusal(err) {
+			noteRefusal(r, "edge_rejected", "edge")
+			return authctx.Claims{}, edgeRefused
 		}
-		noteRefusal(r, "edge_rejected", "edge")
-		return authctx.Claims{}, edgeRefused
+		// Not a refusal: a live read (the users row, the session, the
+		// membership, the token key source) failed and decided nothing.
+		reason := "edge_store_failed"
+		if errors.Is(err, policy.ErrUnavailable) {
+			reason = "edge_store_unavailable"
+		}
+		log.Printf("query-api: internal request refused: reason=%s carrier=edge path=%s request_id=%s",
+			storeFailureReason(reason, err), r.URL.Path, logSafeRequestID(envelopeRequestID(r)))
+		return authctx.Claims{}, edgeUnavailable
 	}
 
 	orgID, session, scopeErr := scope(ctx, user)

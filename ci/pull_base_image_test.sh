@@ -147,8 +147,8 @@ if { [ "${R}" = 0 ] && grep -q "^docker pull mirror.gcr.io/library/golang@${C}\$
 if grep -q 'IFS' "${LIB}"; then bad "helper sets or reads IFS (semgrep ifs-tampering)"; else ok "helper sets no IFS"; fi
 
 s=ci/check_auth_k8s.sh
-p="$(grep -n 'pull_pinned_base_image' "${ROOT}/${s}" || true)"; p="${p%$'\n'*}"; p="${p%:*}"
-b="$(grep -n '^build ' "${ROOT}/${s}" || true)"; b="${b%$'\n'*}"; b="${b%:*}"
+p="$(grep -n 'pull_pinned_base_image' "${ROOT}/${s}" || true)"; p="${p%%$'\n'*}"; p="${p%%:*}"
+b="$(grep -n '^build ' "${ROOT}/${s}" || true)"; b="${b%%$'\n'*}"; b="${b%%:*}"
 if { [ -n "${p}" ] && [ -n "${b}" ] && [ "${p}" -lt "${b}" ]; }; then ok "${s} pre-pulls before its first build"; else bad "${s} does not pre-pull before building"; fi
 # shellcheck disable=SC2016
 if grep -qF 'GO_BUILD_IMAGE="${PINNED_BASE_TAG}"' "${ROOT}/${s}" && grep -q -- '--pull=false' "${ROOT}/${s}"; then ok "${s} builds from the local tag"; else bad "${s} build args"; fi
@@ -247,8 +247,8 @@ if [ -n "${per_source}" ] && [ -n "${min_timeout}" ] && [ "$((worst * 2))" -lt "
 
 # the script pre-pulls the runtime image before its first build, builds from the local tag and cleans it up
 s=ci/check_auth_k8s.sh
-p="$(grep -n 'pull_pinned_runtime_image' "${ROOT}/${s}" || true)"; p="${p%$'\n'*}"; p="${p%:*}"
-b="$(grep -n '^build ' "${ROOT}/${s}" || true)"; b="${b%$'\n'*}"; b="${b%:*}"
+p="$(grep -n 'pull_pinned_runtime_image' "${ROOT}/${s}" || true)"; p="${p%%$'\n'*}"; p="${p%%:*}"
+b="$(grep -n '^build ' "${ROOT}/${s}" || true)"; b="${b%%$'\n'*}"; b="${b%%:*}"
 if { [ -n "${p}" ] && [ -n "${b}" ] && [ "${p}" -lt "${b}" ]; }; then ok "r8 ${s} pre-pulls the runtime image before its first build"; else bad "r8 ${s} does not pre-pull the runtime image before building"; fi
 # shellcheck disable=SC2016
 if grep -qF 'GO_RUNTIME_IMAGE="${PINNED_RUNTIME_TAG}"' "${ROOT}/${s}" && grep -q -- '--pull=false' "${ROOT}/${s}"; then ok "r8 ${s} builds from the local runtime tag"; else bad "r8 ${s} runtime build arg"; fi

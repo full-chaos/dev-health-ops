@@ -1492,7 +1492,7 @@ project (section 0.1): a native team key gives one team.
     `TestTheCycleThroughputTeamPointsSplitAnItemByOwnerShareAndConserveTheOrgTotal`.
   - Churn x throughput at the team grain (`scope_type=service`, the one route that serves a team-keyed churn, read by
     the Landscape Teams tab; the org and team scopes force the repository grain): churn is additive, a
-    team's churn is the sum over its repositories of the repository's churn x the owner's share. Scope ids sent with `scope_type=service` on the quadrant are ignored: `service` selects the team grain, not a service (CHAOS-13736, by design).
+    team's churn is the sum over its repositories of the repository's churn x the owner's share. Scope ids sent with `scope_type=service` on the quadrant are ignored: `service` selects the team grain, not a service.
     Throughput on that route stays the rollup's team. Asserted by
     `TestTheTeamChurnQuadrantSumsEachRepositoryTimesOwnerShareAndConservesTheOrgChurn`.
   - Known limit: owners whose team is inactive hold a share that no point shows, so the organization's units in a

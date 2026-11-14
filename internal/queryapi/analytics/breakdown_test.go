@@ -293,8 +293,12 @@ func TestCompileBreakdown_TestopsCoverageMeasure(t *testing.T) {
 	if !strings.Contains(q.sql, "testops_coverage_metrics_daily") {
 		t.Errorf("expected coverage source table, got: %s", q.sql)
 	}
-	if !strings.Contains(q.sql, exactAvg("line_coverage_pct")) {
-		t.Errorf("expected coverage measure expression, got: %s", q.sql)
+	weighted, err := exactSums(weightedRateSQL(coverageLineTerms))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(q.sql, weighted) || strings.Contains(q.sql, exactAvg("line_coverage_pct")) {
+		t.Errorf("expected the weighted coverage expression, got: %s", q.sql)
 	}
 }
 

@@ -76,7 +76,7 @@ func TestTheRepoGateNeverTakesACoOwnerAsTheOwner(t *testing.T) {
 		{"team-tied-a", tied, false},
 		{"team-tied-b", tied, false},
 	} {
-		_, owned, err := resolveOwnedRepoID(ctx, client, org, tc.team, tc.repo.String())
+		_, owned, err := resolveOwnedRepoID(ctx, client, org, tc.team, tc.repo.String(), time.Now().UTC())
 		if err != nil {
 			t.Fatalf("resolveOwnedRepoID(%s): %v", tc.team, err)
 		}

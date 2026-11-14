@@ -28,7 +28,7 @@ var floorOrgActions = map[string]bool{
 
 // deniedOrgActions is floorOrgActions plus the actions 4.16a flags denied (ACP ruling: floor or flag).
 var deniedOrgActions = map[string]bool{
-	"acr.credential.issue": true, "acr.credential.revoke": true, "members.invite": true, "members.manage": true, "billing.manage": true, "org.delete": true,
+	"acr.credential.issue": true, "acr.credential.revoke": true, "sso.write": true, "members.invite": true, "members.manage": true, "billing.manage": true, "org.delete": true,
 	"settings.write": true, "integrations.write": true, "org.write": true, "members.update": true, "reports.write": true,
 }
 

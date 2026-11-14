@@ -14,6 +14,7 @@ import (
 	"github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
 
 type oracleBCase struct {
@@ -69,7 +70,9 @@ func floatCell(v any) any {
 func (f *fixtureClientB) Query(ctx context.Context, st string, b []clickhouse.Binding) (clickhouse.RowScanner, error) {
 	c := f.c
 	switch {
-	case strings.Contains(st, "repo_patterns") && c.Fail == "teams":
+	// The fixture states the recorded team assignment as ownership (fixtureClient.ownership), so a
+	// recorded failure of the team catalogue is a failure of that ownership read too.
+	case (strings.Contains(st, teamsCatalogueRead) || strings.Contains(st, teamscope.Marker)) && c.Fail == "teams":
 		f.fixtureClient.statements = append(f.fixtureClient.statements, st)
 		f.fixtureClient.bindings = append(f.fixtureClient.bindings, b)
 		return nil, errors.New("boom")

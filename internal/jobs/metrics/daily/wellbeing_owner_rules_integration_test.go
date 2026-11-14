@@ -14,8 +14,8 @@ import (
 
 // The rules of the ownership-first team of team_wellbeing that the first tests
 // did not pin: an inactive owner never wins, the ownership read error fails
-// the family (never an empty map), the pattern fallback, and the stale-key
-// scope. They use the helpers of wellbeing_ownership_integration_test.go.
+// the family (never an empty map), no repo_patterns fallback (D7013b), and the
+// stale-key scope. They use the helpers of wellbeing_ownership_integration_test.go.
 
 func ownerRulesTeam(t *testing.T, ctx context.Context, conn driver.Conn, id string, active uint8, patterns []string, at time.Time) {
 	t.Helper()
@@ -63,8 +63,8 @@ func TestWellbeingInactiveOwnerNeverWins(t *testing.T) {
 	}
 }
 
-// 3. ownership outranks repo_patterns; repo_patterns still serves an unowned repo.
-func TestWellbeingOwnershipOutranksPatternAndPatternStillFallsBack(t *testing.T) {
+// 3. ownership gives the team; repo_patterns never serves an unowned repo (D7013b).
+func TestWellbeingOwnershipOnlyNoPatternFallback(t *testing.T) {
 	ctx := context.Background()
 	conn := workItemAttributionLinkedIssueMigratedClickHouse(t, ctx)
 	t0 := wellbeingOwnershipDay.Add(-72 * time.Hour)
@@ -78,7 +78,7 @@ func TestWellbeingOwnershipOutranksPatternAndPatternStillFallsBack(t *testing.T)
 
 	wellbeingOwnershipCompute(t, ctx, conn, []uuid.UUID{owned, patterned}, wellbeingOwnershipDay.Add(30*time.Hour))
 	got := wellbeingOwnershipRead(t, ctx, conn)
-	want := map[string]float64{"github:owner|" + owned.String(): 2, "github:pattern|" + patterned.String(): 2}
+	want := map[string]float64{"github:owner|" + owned.String(): 2, "unassigned|" + patterned.String(): 2}
 	if len(got) != len(want) {
 		t.Errorf("rows = %v, want %v", got, want)
 	}

@@ -111,16 +111,47 @@ type handlers struct {
 // never carries the request path or the provider's own words.
 const providerNotFoundDetail = "The provider reported that the requested project, group or team was not found"
 
-// providerFailure answers a failed provider call: a provider "not found" is a
-// client error naming that, anything else stays a 500.
-func (h handlers) providerFailure(w http.ResponseWriter, r *http.Request, what string, err error) {
+// providerCredentialRefusedDetail is the fixed 422 text for a provider that
+// refused the stored credential (401, or a 403 that is not a rate limit: a
+// revoked token, or a token without the scope the call needs). Like
+// providerNotFoundDetail it never carries the provider's own words.
+const providerCredentialRefusedDetail = "The provider refused the stored credential: it is invalid, expired, or lacks the access this request needs. Check the token scopes or the app permissions"
+
+// providerFailure answers a failed provider call: a provider "not found" or a
+// refused credential (422) is a client error naming that, anything else stays a 500.
+// Not a 401/403: those name the caller's own session or role on this API.
+func (h handlers) providerFailure(w http.ResponseWriter, r *http.Request, provider, what string, err error) {
 	var providerErr *providerfoundation.ProviderError
-	if errors.As(err, &providerErr) && providerErr.Class == providerfoundation.ErrorNotFound {
-		h.logger.WarnContext(r.Context(), "provider reported not found", slog.String("step", what))
-		policy.WriteDetail(w, http.StatusNotFound, providerNotFoundDetail, nil)
-		return
+	if errors.As(err, &providerErr) {
+		switch providerErr.Class {
+		case providerfoundation.ErrorNotFound:
+			h.logger.WarnContext(r.Context(), "provider reported not found", slog.String("step", what), slog.String("provider", loggedProvider(provider)))
+			policy.WriteDetail(w, http.StatusNotFound, providerNotFoundDetail, nil)
+			return
+		case providerfoundation.ErrorAuthentication:
+			h.logger.WarnContext(r.Context(), "provider refused the credential", slog.String("step", what),
+				slog.String("provider", loggedProvider(provider)), slog.Int("provider_status", providerErr.StatusCode))
+			policy.WriteDetail(w, http.StatusUnprocessableEntity, providerCredentialRefusedDetail, nil)
+			return
+		}
 	}
 	h.internal(w, r, what, err)
+}
+
+// loggedProvider maps the route's provider value to a closed log value, so a
+// request cannot write its own text into the log line.
+func loggedProvider(provider string) string {
+	switch provider {
+	case "github":
+		return "github"
+	case "gitlab":
+		return "gitlab"
+	case "jira":
+		return "jira"
+	case "linear":
+		return "linear"
+	}
+	return "other"
 }
 
 func (h handlers) internal(w http.ResponseWriter, r *http.Request, what string, err error) {
@@ -500,7 +531,7 @@ func (h handlers) discoverTeams(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		h.providerFailure(w, r, "discover teams", err)
+		h.providerFailure(w, r, provider, "discover teams", err)
 		return
 	}
 	policy.WriteModel(w, http.StatusOK, teamDiscoverResponseJSON(provider, teams, truncated, warnings), nil)

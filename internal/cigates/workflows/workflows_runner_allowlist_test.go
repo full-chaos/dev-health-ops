@@ -24,6 +24,11 @@ const (
 	heavyGate      = "(!(github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:full')))"
 	imageHeavyGate = "(!(github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:full') && (github.event.pull_request.draft || !contains(github.event.pull_request.labels.*.name, 'hotfix-image'))))"
 	goDocsSkip     = "needs.go-storage-integration-plan.outputs.docs_only != 'true'"
+	// proofHeavyGate: live-e2e.yml's metrics-executed-proof-run also runs on a pull request that touches a
+	// metrics_proof path of `changes`, with no ci:full label.
+	proofHeavyGate = "(!(github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:full') && needs.changes.outputs.metrics_proof != 'true'))"
+	// ciFullLabelEvent is live-e2e.yml's `labeled` filter (only ci:full starts work), not a heavy gate.
+	ciFullLabelEvent = "github.event.label.name == 'ci:full'"
 )
 
 var draftGatedJobs = [][2]string{
@@ -50,7 +55,7 @@ var heavyGatedJobs = map[[2]string]string{
 	{"go.yml", "go-container-security"}:            heavyGate + " && " + goDocsSkip,
 	{"go.yml", "go-container-smoke"}:               heavyGate + " && " + goDocsSkip,
 	{"live-e2e.yml", "live-e2e-run"}:               heavyGate + " && needs.changes.outputs.docs_only != 'true'",
-	{"live-e2e.yml", "metrics-executed-proof-run"}: heavyGate + " && needs.changes.outputs.docs_only != 'true'",
+	{"live-e2e.yml", "metrics-executed-proof-run"}: proofHeavyGate + " && needs.changes.outputs.docs_only != 'true'",
 }
 
 // hostedJobs: the jobs that used to route to the pool, each with the exact label it must run on now.
@@ -74,7 +79,7 @@ var hostedJobs = map[[2]string]string{
 	{"docker-images.yml", "cancel-stacked-queue-children"}: hostedLabel,
 }
 
-// setupGoCacheOn: the setup-go steps whose cache the pool used to turn off; hosted, they keep setup-go's cache.
+// setupGoCacheOn: the setup-go steps whose cache the pool used to route; hosted, the cache input is a literal true or false.
 var setupGoCacheOn = [][2]string{{"test.yml", "chart-started"}, {"live-e2e.yml", "metrics-executed-proof-run"}, {"go-quality.yml", "go-quality-plan"}, {"go.yml", "go-arm64-numeric-parity"}}
 
 func stringValues(node any, path string, visit func(path, v string)) {
@@ -143,7 +148,7 @@ func runnerAllowlistViolations(t *testing.T, root string) []string {
 	for _, name := range workflowNames(t, root) {
 		jobs := jobsOf(doc(name))
 		for _, jn := range sortedKeys(jobs) {
-			if strings.Contains(str(asMap(jobs[jn])["if"]), "'ci:full'") {
+			if strings.Contains(strings.ReplaceAll(str(asMap(jobs[jn])["if"]), ciFullLabelEvent, ""), "'ci:full'") {
 				found[[2]string{name, jn}] = true
 			}
 		}
@@ -215,8 +220,8 @@ func runnerAllowlistViolations(t *testing.T, root string) []string {
 				break
 			}
 		}
-		if on, ok := cache.(bool); !ok || !on {
-			add("%s:%s: setup-go cache must be true on the hosted runner, got %v", p[0], p[1], cache)
+		if _, ok := cache.(bool); !ok {
+			add("%s:%s: setup-go cache must be a literal true or false on the hosted runner, got %v", p[0], p[1], cache)
 		}
 	}
 
@@ -275,8 +280,8 @@ func TestHostedRunnersOnlyPlantedDefects(t *testing.T) {
 		{"a job lists the self-hosted labels (go.yml)", []mutation{{goYml, "    runs-on: ubuntu-24.04-arm\n", "    runs-on: [self-hosted, linux]\n"}}, []string{"go.yml", "self-hosted runner label is back"}},
 		{"the race pool variable returns (go-quality.yml)", []mutation{{gq, "      CHECK_GO_JOB_CAP_MIN: 45\n", "      CHECK_GO_JOB_CAP_MIN: ${{ vars.CI_RACE_RUNNER != '' && 45 || 45 }}\n"}}, []string{"go-quality.yml", "CI_RACE_RUNNER is retired"}},
 		{"the image variable returns (docker-images.yml)", []mutation{{dock, "    needs: [changes, resolve]\n", "    needs: [changes, resolve]\n    env:\n      PLANTED: ${{ vars.SELF_HOSTED_IMAGE_BUILDS }}\n"}}, []string{"docker-images.yml", "SELF_HOSTED_IMAGE_BUILDS is retired"}},
-		{"the pool cache path returns (live-e2e.yml)", []mutation{{live, "          cache: true\n", "          cache: true\n        env:\n          GOMODCACHE: /mnt/go-cache/mod\n"}}, []string{"live-e2e.yml", "/mnt/go-cache is retired"}},
-		{"setup-go cache turned off again (test.yml)", []mutation{{test_, "          cache: true\n", "          cache: false\n"}}, []string{"test.yml:chart-started", "setup-go cache must be true"}},
+		{"the pool cache path returns (live-e2e.yml)", []mutation{{live, "          cache: false\n", "          cache: false\n        env:\n          GOMODCACHE: /mnt/go-cache/mod\n"}}, []string{"live-e2e.yml", "/mnt/go-cache is retired"}},
+		{"setup-go cache is a pool expression again (test.yml)", []mutation{{test_, "          cache: false\n", "          cache: ${{ !(vars.SELF_HOSTED_RUNNERS == 'enabled') }}\n"}}, []string{"test.yml:chart-started", "setup-go cache must be a literal"}},
 		{"arm64 parity falls back to an x64 runner", []mutation{{goYml, "    runs-on: ubuntu-24.04-arm\n", "    runs-on: ubuntu-latest\n"}}, []string{"go.yml:go-arm64-numeric-parity", "runs-on is not exactly"}},
 		{"a deleted pool-only job returns", []mutation{{goYml, "  go-container-reproducibility:\n", "  dind-smoke-test:\n    runs-on: ubuntu-latest\n    steps:\n      - run: docker info\n  go-container-reproducibility:\n"}}, []string{"go.yml:dind-smoke-test", "must stay deleted"}},
 		{"a heavy job loses its heavy gate", []mutation{{goYml, "    if: >-\n      " + heavyGate + " &&\n      " + goDocsSkip + "\n", "    if: >-\n      " + goDocsSkip + "\n"}}, []string{"go.yml", "lost the heavy gate"}},

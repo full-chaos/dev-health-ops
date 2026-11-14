@@ -391,7 +391,7 @@ jobs:
         with:
           go-version-file: go.mod
           cache-dependency-path: '**/go.sum'
-          cache: true
+          cache: false
 
       - name: Confirm this runner is actually arm64
         run: |
@@ -499,10 +499,29 @@ jobs:
           echo "::notice title=INTEGRATION SHARDS SKIPPED: DOCS-ONLY CHANGE::ci/codeql_docs_only.sh (from the base commit) classified this change docs-only"
 
       - name: Set up Go
+        id: setup-go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache-dependency-path: '**/go.sum'
+          cache: false
+      - name: Locate the Go module and build caches
+        id: go-cache-paths
+        run: |
+          {
+            echo "mod=$(go env GOMODCACHE)"
+            echo "build=$(go env GOCACHE)"
+          } >> "${GITHUB_OUTPUT}"
+      - name: Restore the Go module and build caches (every event; saved only by main pushes and the merge queue)
+        id: go-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ steps.go-cache-paths.outputs.mod }}
+            ${{ steps.go-cache-paths.outputs.build }}
+          key: go-shared-v1-${{ runner.os }}-${{ runner.arch }}-go${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            go-shared-v1-${{ runner.os }}-${{ runner.arch }}-go${{ steps.setup-go.outputs.go-version }}-
 
       # CHAOS-9947: a pull request runs only the integration shards whose test
       # binaries a change can reach (CHAOS-13075: a ready pull request, or any pull request with a ci:integration or
@@ -584,6 +603,14 @@ jobs:
       - name: Name why no integration shard runs
         id: skip
         run: echo "reason=${INTEGRATION_SKIP_REASON:-}" >> "${GITHUB_OUTPUT}"
+      - name: Save the Go module and build caches (main pushes and the merge queue only)
+        if: (github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && steps.go-cache.outcome == 'success' && steps.go-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ steps.go-cache-paths.outputs.mod }}
+            ${{ steps.go-cache-paths.outputs.build }}
+          key: ${{ steps.go-cache.outputs.cache-primary-key }}
 
   go-storage-integration-shard:
     name: go-storage-integration-shard-${{ matrix.target }}-${{ matrix.shard }}
@@ -614,10 +641,29 @@ jobs:
           fetch-depth: 0
 
       - name: Set up Go
+        id: setup-go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache-dependency-path: '**/go.sum'
+          cache: false
+      - name: Locate the Go module and build caches
+        id: go-cache-paths
+        run: |
+          {
+            echo "mod=$(go env GOMODCACHE)"
+            echo "build=$(go env GOCACHE)"
+          } >> "${GITHUB_OUTPUT}"
+      - name: Restore the Go module and build caches (every event; saved only by main pushes and the merge queue)
+        id: go-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ steps.go-cache-paths.outputs.mod }}
+            ${{ steps.go-cache-paths.outputs.build }}
+          key: go-shared-v1-${{ runner.os }}-${{ runner.arch }}-go${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            go-shared-v1-${{ runner.os }}-${{ runner.arch }}-go${{ steps.setup-go.outputs.go-version }}-
 
       # Authenticated Docker Hub pulls. Anonymous pulls are rate limited per IP,
       # and a hosted runner shares that IP with everyone else on it -- which is
@@ -649,6 +695,10 @@ jobs:
         run: bash ci/check_go.sh integration-prepull
 
       - name: Run isolated storage integration shard ${{ matrix.target }} ${{ matrix.shard }}
+        env:
+          # The packages shards run each go test group with -json into this runner directory and print the plain log from
+          # it; the raw events (they carry test output) never leave the runner. Empty for the other targets: plain go test.
+          GO_INTEGRATION_LEG_JSON_DIR: ${{ matrix.target == 'packages' && format('{0}/go-integration-leg-json', runner.temp) || '' }}
         run: bash ci/check_go.sh integration-shard "${{ matrix.target }}" "${{ matrix.shard }}"
 
       - name: Write JUnit XML next to the per-test json
@@ -666,6 +716,38 @@ jobs:
           path: go-test-json/
           retention-days: 14
           if-no-files-found: ignore
+
+      - name: Reduce the packages shard go test -json to per-test timings
+        if: always() && matrix.target == 'packages'
+        continue-on-error: true
+        # One row per finished test and per package (empty test: the package's final pass/fail/skip), package<TAB>test<TAB>
+        # action<TAB>elapsed seconds, gzipped. No test output leaves the runner. A line that is not a JSON event is skipped.
+        # The shard's pass or fail is decided by the step above, never by this one.
+        run: |
+          mkdir -p go-test-timings
+          for f in "${RUNNER_TEMP}"/go-integration-leg-json/*.json; do
+            [ -f "${f}" ] || continue
+            jq -R -r 'fromjson? | select(type == "object" and (.Action == "pass" or .Action == "fail" or .Action == "skip")) | [.Package, (.Test // ""), .Action, (.Elapsed // 0)] | @tsv' "${f}"
+          done | gzip -9 > "go-test-timings/integration-packages-${{ matrix.shard }}.tsv.gz"
+
+      - name: Upload the packages shard per-test timings
+        if: always() && matrix.target == 'packages'
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: go-test-timings-integration-packages-${{ matrix.shard }}
+          path: go-test-timings/
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: Save the Go module and build caches (main pushes and the merge queue only)
+        if: (github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && steps.go-cache.outcome == 'success' && steps.go-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ steps.go-cache-paths.outputs.mod }}
+            ${{ steps.go-cache-paths.outputs.build }}
+          key: ${{ steps.go-cache.outputs.cache-primary-key }}
 
       - name: Log out of GitHub Container Registry
         if: always()
@@ -712,11 +794,32 @@ jobs:
           echo "rows=$(grep -c '^ROW' "${rows}" || true)" >> "${GITHUB_OUTPUT}"
 
       - name: Set up Go
+        id: setup-go
         if: steps.select.outputs.rows != '0'
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache-dependency-path: '**/go.sum'
+          cache: false
+      - name: Locate the Go module and build caches
+        id: go-cache-paths
+        if: steps.select.outputs.rows != '0'
+        run: |
+          {
+            echo "mod=$(go env GOMODCACHE)"
+            echo "build=$(go env GOCACHE)"
+          } >> "${GITHUB_OUTPUT}"
+      - name: Restore the Go module and build caches (every event; saved only by main pushes and the merge queue)
+        id: go-cache
+        if: steps.select.outputs.rows != '0'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ steps.go-cache-paths.outputs.mod }}
+            ${{ steps.go-cache-paths.outputs.build }}
+          key: go-shared-v1-${{ runner.os }}-${{ runner.arch }}-go${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            go-shared-v1-${{ runner.os }}-${{ runner.arch }}-go${{ steps.setup-go.outputs.go-version }}-
 
       - name: Log in to GitHub Container Registry
         if: steps.select.outputs.rows != '0'
@@ -938,6 +1041,7 @@ jobs:
         if: matrix.platform == 'linux/arm64'
         uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
         with:
+          cache-image: false
           # CHAOS-9064: the mirrored binfmt image (ci/builder_images.tsv)
           image: ghcr.io/full-chaos/tonistiigi/binfmt@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
 
@@ -988,6 +1092,7 @@ jobs:
         if: matrix.platform == 'linux/arm64'
         uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
         with:
+          cache-image: false
           # CHAOS-9064: the mirrored binfmt image (ci/builder_images.tsv)
           image: ghcr.io/full-chaos/tonistiigi/binfmt@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
 
@@ -1036,6 +1141,27 @@ jobs:
         run: |
           docker load --input "${RUNNER_TEMP}/go-images/images.tar"
           bash ci/check_go_containers.sh verify-images
+
+      # The scans below run with cache: false and skip-setup-trivy, so neither trivy-action nor its setup-trivy writes an
+      # Actions cache on a pull request: trivy is installed once here, and the Trivy DB is restored on every event and saved
+      # only by a push to main or a merge_group run (the key family is the one trivy-action used).
+      - name: Install Trivy once for the scans below
+        uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
+        with:
+          version: v0.70.0
+          cache: false
+
+      - name: Pick the Trivy DB cache key
+        id: trivy-date
+        run: echo "date=$(date +'%Y-%m-%d')" >> "${GITHUB_OUTPUT}"
+
+      - name: Restore the Trivy DB (every event; saved only by main pushes and the merge queue)
+        id: trivy-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ github.workspace }}/.cache/trivy
+          key: cache-trivy-${{ steps.trivy-date.outputs.date }}
+          restore-keys: cache-trivy-
 
       # CHAOS-5012: the syft installer that anchore/sbom-action runs
       # internally (curl + checksum verify against a GitHub release) flakes
@@ -1086,6 +1212,8 @@ jobs:
         if: ${{ !cancelled() && steps.load.outcome == 'success' }}
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
+          cache: false
+          skip-setup-trivy: true
           image-ref: dev-health-go-operator:ci
           scan-type: image
           scanners: vuln
@@ -1112,6 +1240,8 @@ jobs:
         if: ${{ !cancelled() && steps.load.outcome == 'success' }}
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
+          cache: false
+          skip-setup-trivy: true
           image-ref: dev-health-go-contractcheck:ci
           scan-type: image
           scanners: vuln
@@ -1138,6 +1268,8 @@ jobs:
         if: ${{ !cancelled() && steps.load.outcome == 'success' }}
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
+          cache: false
+          skip-setup-trivy: true
           image-ref: dev-health-go-migrate:ci
           scan-type: image
           scanners: vuln
@@ -1164,6 +1296,8 @@ jobs:
         if: ${{ !cancelled() && steps.load.outcome == 'success' }}
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
+          cache: false
+          skip-setup-trivy: true
           image-ref: dev-health-go-dho:ci
           scan-type: image
           scanners: vuln
@@ -1190,6 +1324,8 @@ jobs:
         if: ${{ !cancelled() && steps.load.outcome == 'success' }}
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
+          cache: false
+          skip-setup-trivy: true
           image-ref: dev-health-go-auth-service:ci
           scan-type: image
           scanners: vuln
@@ -1216,6 +1352,8 @@ jobs:
         if: ${{ !cancelled() && steps.load.outcome == 'success' }}
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
+          cache: false
+          skip-setup-trivy: true
           image-ref: dev-health-go-auth-migrate:ci
           scan-type: image
           scanners: vuln
@@ -1224,6 +1362,13 @@ jobs:
           ignore-unfixed: false
           exit-code: '1'
           version: v0.70.0
+
+      - name: Save the Trivy DB (main pushes and the merge queue only)
+        if: ${{ !cancelled() && (github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && steps.trivy-cache.outcome == 'success' && steps.trivy-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ github.workspace }}/.cache/trivy
+          key: cache-trivy-${{ steps.trivy-date.outputs.date }}
 
   go-container-reproducibility:
     name: go-container-reproducibility
@@ -1369,15 +1514,28 @@ jobs:
           path: dev-health-web
           persist-credentials: false
 
-      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
         with:
+          cache: false
           package_json_file: dev-health-web/package.json
 
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
+          cache: ''
+          package-manager-cache: false
           node-version: 22
-          cache: pnpm
-          cache-dependency-path: dev-health-web/pnpm-lock.yaml
+      - name: Locate the pnpm store
+        id: pnpm-store
+        working-directory: dev-health-web
+        run: echo "path=$(pnpm store path --silent)" >> "${GITHUB_OUTPUT}"
+      - name: Restore the pnpm store (every event; saved only by main pushes and the merge queue)
+        id: pnpm-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: pnpm-store-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('dev-health-web/pnpm-lock.yaml') }}
+          restore-keys: |
+            pnpm-store-v1-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Install web dependencies
         working-directory: dev-health-web
@@ -1418,6 +1576,13 @@ jobs:
         run: |
           [ "$(docker inspect --format '{{.State.Running}}' postgres)" = true ]
           [ "$(docker inspect --format '{{.Id}} {{.State.StartedAt}}' postgres)" = "$(cat "${RUNNER_TEMP}/decoy.id")" ]
+
+      - name: Save the pnpm store (main pushes and the merge queue only)
+        if: (github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && steps.pnpm-cache.outcome == 'success' && steps.pnpm-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: ${{ steps.pnpm-cache.outputs.cache-primary-key }}
 
       - name: Log out of GitHub Container Registry
         if: always()
@@ -1510,15 +1675,28 @@ jobs:
           # nothing saved it first and left the heavy jobs an empty entry.
           cache: false
 
-      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
         with:
+          cache: false
           package_json_file: dev-health-web-main/package.json
 
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
+          cache: ''
+          package-manager-cache: false
           node-version: 22
-          cache: pnpm
-          cache-dependency-path: dev-health-web-main/pnpm-lock.yaml
+      - name: Locate the pnpm store
+        id: pnpm-store
+        working-directory: dev-health-web-main
+        run: echo "path=$(pnpm store path --silent)" >> "${GITHUB_OUTPUT}"
+      - name: Restore the pnpm store (every event; saved only by main pushes and the merge queue)
+        id: pnpm-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: pnpm-store-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('dev-health-web-main/pnpm-lock.yaml') }}
+          restore-keys: |
+            pnpm-store-v1-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Install web dependencies
         working-directory: dev-health-web-main
@@ -1530,6 +1708,12 @@ jobs:
       - name: Run graphql-wire-parity check against this repo's HEAD
         working-directory: dev-health-web-main
         run: pnpm graphql:wire-parity:check --ops-root "${{ github.workspace }}"
+      - name: Save the pnpm store (main pushes and the merge queue only)
+        if: (github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && steps.pnpm-cache.outcome == 'success' && steps.pnpm-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: ${{ steps.pnpm-cache.outputs.cache-primary-key }}
 
   # REQUIRED status check (ruleset): the merge queue's verdict on this workflow's heavy jobs. It reports on every
   # pull request (this workflow has no pull_request path filter) and on every merge_group entry. A heavy job's skip is

@@ -39,10 +39,57 @@
 # least chain + serial load. Then each other package, heaviest first: among the shards it does not lift above the highest
 # modelled wall so far, the one of the least rest (so the rest spreads under the chains); when it lifts every shard, the shard of
 # the least wall after it (ties: the least rest). Ties: the lowest index.
-# A "<key>#<part>" weights row gives that part of a split package its own weight (else
-# ceil(weight / PARTS)); serialx is not used. Pins: pinned packages first (rest rule), then a pinned serial one (chain rule). solo is
-# refused. Without chain, nothing above changes the split. Still a partition.
+# serialx is not used. Pins: pinned packages first (rest rule), then a pinned serial one (chain rule). solo is refused. A
+# "<key>#<part>" weights row is refused: part weights are derived (tests=). Without chain, nothing above changes the split. Still a
+# partition.
+# tests=<tsv> (CHAOS-13668, ci/go_test_split_weights.tsv, package<TAB>TestName<TAB>seconds): the measured tests of split packages.
+# cut(): the measured names of a package go longest first (ties: name), each to the lightest part (ties: the lowest index); a name
+# with no row goes to part djb2(name) mod PARTS + 1 (h = h * 33 + byte mod 2^32 from 5381). So a part depends on the rows and the
+# name alone: adding or removing a test with no row moves no other test. With chain=1, a part weighs the rows cut to it plus
+# ceil(max(weight - all rows, 0) / PARTS) (the unmeasured rest, spread as the hash spreads its names), at least 1; a split package
+# with fewer rows than parts is refused (a part could be empty). Without chain (the race legs; the auth legs, CHAOS-13693, pass
+# their own tests table), a part weighs ceil(weight / PARTS) and tests= only refuses a malformed row or a row of no split package.
+# cutkey=<key> cutparts=<n> [cutpart=<p>] (names mode, run under LC_ALL=C): stdin holds the names `go test -list` reports for the
+# package; prints the names of part p (or "name<TAB>part" for every name without cutpart). A row that names no listed test, or
+# fewer rows than parts, exits 2: a stale row fails instead of describing a part that no longer exists.
 # wall2(s, x): twice the modelled wall of shard s with x more rest weight: max(2 * chain, rest + x) + 2 * serial.
+function die(msg) {
+  print "go_race_shard.awk: " msg > "/dev/stderr"
+  bad = 1
+  exit 2
+}
+function djb2(name,    i, h) {
+  h = 5381
+  for (i = 1; i <= length(name); i++) h = (h * 33 + ord[substr(name, i, 1)]) % 4294967296
+  return h
+}
+function cut(key, np,    i, j, m, v, o, p, best) {
+  if (key in cutDone) return
+  cutDone[key] = 1
+  m = tn[key] + 0
+  for (i = 1; i <= m; i++) o[i] = tname[key, i]
+  for (i = 2; i <= m; i++) {
+    v = o[i]
+    j = i - 1
+    while (j >= 1 && (trow[key, o[j]] < trow[key, v] || (trow[key, o[j]] == trow[key, v] && o[j] > v))) {
+      o[j + 1] = o[j]
+      j--
+    }
+    o[j + 1] = v
+  }
+  for (p = 1; p <= np; p++) psum[key, p] = 0
+  mtot[key] = 0
+  for (i = 1; i <= m; i++) {
+    best = 1
+    for (p = 2; p <= np; p++) if (psum[key, p] < psum[key, best]) best = p
+    mpart[key, o[i]] = best
+    psum[key, best] += trow[key, o[i]]
+    mtot[key] += trow[key, o[i]]
+  }
+}
+function partOf(key, np, name) {
+  return ((key, name) in mpart) ? mpart[key, name] : djb2(name) % np + 1
+}
 function wall2(s, x,    r) {
   r = rl[s] + x
   return (2 * cl[s] > r ? 2 * cl[s] : r) + 2 * sl[s]
@@ -55,6 +102,7 @@ BEGIN {
       if (line ~ /^[[:space:]]*(#|$)/) continue
       split(line, f, "\t")
       w[f[1]] = f[2] + 0
+      if (chain && index(f[1], "#")) die("part row " f[1] " in " weights ": part weights are derived from the test rows (tests=), never kept by hand")
     }
     close(weights)
   }
@@ -75,6 +123,42 @@ BEGIN {
       parts[f[1]] = f[2] + 0
     }
     close(splits)
+  }
+  if (tests != "") {
+    for (i = 1; i < 256; i++) ord[sprintf("%c", i)] = i
+    while ((getline line < tests) > 0) {
+      if (line ~ /^[[:space:]]*(#|$)/) continue
+      nf = split(line, f, "\t")
+      if (nf != 3 || f[2] !~ /^(Test|Example|Fuzz)/ || f[3] !~ /^[0-9]+$/ || f[3] + 0 < 1) die("bad test row: " line)
+      if ((f[1], f[2]) in trow) die("test row repeats " f[1] " " f[2])
+      if (splits != "" && !(f[1] in parts)) die("test row " f[1] " " f[2] ": " f[1] " is no split package (" splits ")")
+      trow[f[1], f[2]] = f[3] + 0
+      tn[f[1]]++
+      tname[f[1], tn[f[1]]] = f[2]
+    }
+    close(tests)
+  }
+  if (cutkey != "") {
+    np = cutparts + 0
+    if (np < 2 || tests == "") die("names mode needs cutparts >= 2 and tests")
+    while ((getline line) > 0) {
+      if (line == "") continue
+      listed[line] = 1
+      nl++
+      lname[nl] = line
+    }
+    if (tn[cutkey] + 0 < np) die("split package " cutkey " has " (tn[cutkey] + 0) " test row(s) in " tests ", fewer than its " np " parts")
+    for (i = 1; i <= tn[cutkey]; i++) {
+      if (!(tname[cutkey, i] in listed)) die("split package " cutkey ": the row of " tname[cutkey, i] " in " tests " names a test go test -list no longer reports (rename or remove the row)")
+    }
+    cut(cutkey, np)
+    for (i = 1; i <= nl; i++) {
+      p = partOf(cutkey, np, lname[i])
+      if (cutpart == "") print lname[i] "\t" p
+      else if (p == cutpart + 0) print lname[i]
+    }
+    cutDoneMode = 1
+    exit 0
   }
   if (solo != "") {
     while ((getline line < solo) > 0) {
@@ -102,8 +186,13 @@ BEGIN {
     pidx[n] = (np > 1) ? pp : 0
     nparts[n] = np
     weight[n] = (key in w) ? w[key] : defw + 0
-    if (np > 1) weight[n] = int((weight[n] + np - 1) / np)
-    if (chain && np > 1 && ((key "#" pp) in w)) weight[n] = w[key "#" pp]
+    if (chain && np > 1 && tests != "") {
+      cut(key, np)
+      if (tn[key] + 0 < np) die("split package " key " has " (tn[key] + 0) " test row(s) in " tests ", fewer than its " np " parts")
+      left = weight[n] - mtot[key]
+      weight[n] = psum[key, pp] + int(((left > 0 ? left : 0) + np - 1) / np)
+      if (weight[n] < 1) weight[n] = 1
+    } else if (np > 1) weight[n] = int((weight[n] + np - 1) / np)
     if (!chain && serial != "" && key == serial && serialx + 0 > 0) weight[n] = weight[n] * serialx
     serialPkg[n] = (serial != "" && key == serial) ? 1 : 0
     soloPkg[n] = (key in isSolo) ? 1 : 0
@@ -112,6 +201,7 @@ BEGIN {
 }
 END {
   if (bad) exit 2
+  if (cutDoneMode) exit 0
   # insertion sort by (weight desc, path asc): n is a few hundred at most
   for (i = 1; i <= n; i++) order[i] = i
   for (i = 2; i <= n; i++) {

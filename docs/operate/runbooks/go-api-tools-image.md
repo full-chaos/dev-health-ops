@@ -5,7 +5,6 @@ content_type: runbook
 owner: platform-operations
 source_of_truth:
   - docker/go-api-tools.Dockerfile
-  - internal/mintcli/envelope
   - internal/mintcli/edgetoken
 applicability: current
 lifecycle: active
@@ -18,7 +17,7 @@ lifecycle: active
 
 ## What the image carries
 
-- The `dho` operator binary on `PATH`. The `goapi` and `mint` verbs include `go-api-routing`, `go-api-prove`, `go-api-rest-prove`, `mint-envelope` and `mint-edge-token`.
+- The `dho` operator binary on `PATH`. The `goapi` and `mint` verbs include `go-api-routing`, `go-api-prove`, `go-api-rest-prove` and `mint-edge-token`.
 - The registrydump documents dump, generated from the same commit at build time: `/app/go-api/documents.json`.
 - The checked-in operation catalog at its `DefaultCatalogPath` relative to the image working directory: `/app/go-api/contracts/graphql/v1/go_api_operations.json`.
 

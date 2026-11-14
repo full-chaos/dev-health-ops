@@ -5,7 +5,7 @@ import "testing"
 // The class table is pinned: the embedded table hashes to ClassTableSHA256, a changed class changes the hash, and every
 // row of the embedded table has its own route's class (20 external, 6 destructive, the 7 NO_OUTBOUND rows external).
 func TestTheClassTableIsPinnedAndEveryEmbeddedRowMatchesIt(t *testing.T) {
-	if got := classDigest(classes()); got != ClassTableSHA256 || len(classes()) != 156 {
+	if got := classDigest(classes()); got != ClassTableSHA256 || len(classes()) != 165 {
 		t.Fatalf("class table %s of %d routes, pinned %s", got, len(classes()), ClassTableSHA256)
 	}
 	changed := map[string]rowClass{}

@@ -1986,8 +1986,8 @@ services:
   # routes the router sends to it (contracts/ingress/v1/planes.json). A client
   # reaches it with its own access token (GO_API_EDGE_JWT_SECRET); the signed
   # envelope (verified against the JWKS only, the private key is never mounted
-  # here) is the credential of the operator verbs (`dho mint envelope`), not
-  # of a client. No host port is published: reaching it from outside the
+  # here) is no longer minted by any Go tool and is not the credential of a
+  # client. No host port is published: reaching it from outside the
   # compose network is the router's job.
   query-api:
     image: ${DEV_HEALTH_GO_DHO_IMAGE:-ghcr.io/full-chaos/dev-health-go-dho:local}

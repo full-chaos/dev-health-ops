@@ -30,6 +30,7 @@ internal/api/policy/shadow_guard.go	shadowCallerKind	admin.orgs	handler
 internal/api/telemetry/report.go	handlers.requirePlatformRole	admin.telemetry	handler
 internal/api/telemetry/telemetry.go	handlers.withOrg	admin.telemetry	handler
 internal/api/telemetry/telemetry.go	handlers.requireOrgAdmin	admin.telemetry	handler
+internal/api/telemetry/telemetry.go	handlers.routeTable	admin.telemetry	route
 internal/apiservice/admin/auditlogs.go	handlers.auditLogRoutes	admin.audit	route
 internal/apiservice/admin/featureflags.go	handlers.featureRoutes	admin.flags	route
 internal/apiservice/admin/guards.go	handlers.ensureOrgAdminAccess	admin.orgs	3

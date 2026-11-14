@@ -53,6 +53,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/scoperesolve"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/timewindow"
 	"strconv"
 	"time"
@@ -286,11 +287,26 @@ func BuildResponse(ctx context.Context, client QueryClient, orgID string, params
 	var scopeFilterSQL string
 	var scopeBindings []dhclickhouse.Binding
 	var selection selectedFilter
+	var scopeNotFound *teamscope.EmptyReason
 	if definition.Type != "individual" {
-		var err error
-		scopeFilterSQL, scopeBindings, selection, err = selectedScopeFilter(ctx, client, orgID, scopeType, params, asOf)
-		if err != nil {
-			return nil, err
+		// A service scope that names an id answers nothing (CHAOS-13705, R335): no service exists. A repository scope resolves
+		// through selectedScopeFilter, which keeps its own empty reason.
+		unresolved := false
+		if scopeType != "repo" {
+			var err error
+			if unresolved, err = scoperesolve.Unresolved(ctx, client, orgID, scopeType, []string{params.ScopeID}); err != nil {
+				return nil, err
+			}
+		}
+		if unresolved {
+			scopeFilterSQL = " AND 1 = 0"
+			scopeNotFound = teamscope.ScopeNotFoundReason(scopeType)
+		} else {
+			var err error
+			scopeFilterSQL, scopeBindings, selection, err = selectedScopeFilter(ctx, client, orgID, scopeType, params, asOf)
+			if err != nil {
+				return nil, err
+			}
 		}
 	} else {
 		// The individual heatmap is keyed by a person: neither selection applies, and a
@@ -380,6 +396,9 @@ func BuildResponse(ctx context.Context, client QueryClient, orgID string, params
 		Evidence: evidence,
 	}
 	response.RepoFilterApplied, response.FilterEmptyReason = selection.served(definition.Type != "individual")
+	if scopeNotFound != nil {
+		response.FilterEmptyReason = teamscope.EmptyReasonText(scopeNotFound)
+	}
 	return response, nil
 }
 

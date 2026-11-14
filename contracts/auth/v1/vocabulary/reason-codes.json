@@ -136,6 +136,6 @@
       "state_changed",
       "username_taken"
     ],
-    "note": "While auth-service owns users the admin users writes are forwarded to it; operation_moved stays the answer of the writes that are not forwarded: a real is_active change by PATCH (CHAOS-13209 row 4), the force delete (until 13376 S4), a real is_superuser change while the platform roles are not owned, and the operator verbs. The other values are the forwarded writes' conflicts. internal/auth/contracts TestGoAPIUsersConflictReasonsAreTheProducedSet holds the values equal to the go-api 409 sites."
+    "note": "While auth-service owns users the admin users writes are forwarded to it; operation_moved stays the answer of the writes that are not forwarded: the force delete (until 13376 S4), a real is_superuser change while the platform roles are not owned, and the operator verbs. The other values are the forwarded writes' conflicts. internal/auth/contracts TestGoAPIUsersConflictReasonsAreTheProducedSet holds the values equal to the go-api 409 sites."
   }
 }

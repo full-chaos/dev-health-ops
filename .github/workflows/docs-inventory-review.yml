@@ -53,10 +53,29 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Go
+        id: setup-go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache-dependency-path: '**/go.sum'
+          cache: false
+      - name: Locate the Go module and build caches
+        id: go-cache-paths
+        run: |
+          {
+            echo "mod=$(go env GOMODCACHE)"
+            echo "build=$(go env GOCACHE)"
+          } >> "${GITHUB_OUTPUT}"
+      - name: Restore the Go module and build caches (every event; saved only by main pushes and the merge queue)
+        id: go-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ steps.go-cache-paths.outputs.mod }}
+            ${{ steps.go-cache-paths.outputs.build }}
+          key: go-shared-v1-${{ runner.os }}-${{ runner.arch }}-go${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            go-shared-v1-${{ runner.os }}-${{ runner.arch }}-go${{ steps.setup-go.outputs.go-version }}-
 
       - name: Validate the frozen Phase 1 inventory and dispositions
         run: |
@@ -67,3 +86,11 @@ jobs:
             --generated-json .build/documentation-inventory.json \
             --inventory-dir docs-data/inventory \
             --ia-dir docs-data/ia
+      - name: Save the Go module and build caches (main pushes and the merge queue only)
+        if: (github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && steps.go-cache.outcome == 'success' && steps.go-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ steps.go-cache-paths.outputs.mod }}
+            ${{ steps.go-cache-paths.outputs.build }}
+          key: ${{ steps.go-cache.outputs.cache-primary-key }}

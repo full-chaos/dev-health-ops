@@ -9,7 +9,7 @@ source_of_truth:
   - internal/goapiproof/compare.go (comparator implementation)
   - internal/queryapi/principal (Go envelope verifier)
   - internal/queryapi/routeswitch (reachability gate: catalog and class-decision switches)
-  - internal/envelopemint/envelopemint.go (envelope issuer)
+  - internal/signingkey/signingkey.go (signing key loader)
   - internal/goapiproof/registry.go (registry + ledger schema)
   - internal/pgmigrate/baseline/head.json
   - contracts/graphql/v1/schema.graphql (canonical SDL pin)
@@ -108,8 +108,8 @@ the same JWKS-based verification shape `acr/internal/auth` already uses for
 its own web-assertion verification — `query-api` never holds a secret
 capable of forging a user session token, only the public key needed to
 verify an envelope. `build_envelope_jwks()` returns the public JWKS
-document; the private key is `GO_API_ENVELOPE_PRIVATE_KEY` (PEM, Ed25519),
-required at issuance time. Ed25519, not RS256 (reconciled 2026-08-27 per
+document; the key pair is two files written by `dho mint envelope-keys` (a
+PEM, Ed25519, and the public JWKS). Ed25519, not RS256 (reconciled 2026-08-27 per
 CHAOS-4377): the dev-health-go `authverify` package's JWKS verifier
 (`Ed25519JWKSVerifier`) is Ed25519-only by design.
 
@@ -600,7 +600,8 @@ appear here.
 | `sha256:a4f3994c2c17cc89af006eaf7d8750a717764ebae1d27192357097540eb67892` | this revision | CHAOS-9624, adding to `ReworkThemeAllocation` (the Home investment tile) the non-null `measure: SankeyValueUnit!` (`WORK_UNITS` for COUNT, `ISSUE_SIZE`), the non-null `denominator: Float!` (the total `allocationPct` divides by; `allocation` is the numerator) and the nullable `sizingCoverage: Float`, `unsizedUnitCount: Int`, `workUnitCount: Int` (the sizing of the work units behind the tile; null unless `measure` is `ISSUE_SIZE`, and null when the window holds no unit: not measured, never 0). | Additive: a client that selects none of the new fields is not affected. The registered `home` document gains the five selections right after `churnLoc`; the previous text stays registered as a legacy text (Home V13). The REST Home body is unchanged. query-api serves every registered operation at any digest, so nothing has to be carried on a roll. |
 | `sha256:70c727ac76a2203a8f5a48378f9d9911bbd1275d52db2a6f625ceed2ee72c821` | 2026-10-23 | CHAOS-9873, adding the type `OperatingReviewSizing` (`measure`, `sizingCoverage`, `unsizedUnitCount`, `workUnitCount`) and the nullable field `sizing: OperatingReviewSizing` to `OperatingReviewSection`: the measure the Investment section is read in and how much of it is sized (D6027, D6032). ISSUE_SIZE weighs each work unit by its issue size, an unsized unit counts 1 (D5999); the sizing fields are read over the week's units and are null unless the measure is ISSUE_SIZE and the week holds a unit (not measured, never 0). | Current. Additive: a client that does not select the field is not affected. The registered `operatingReview` document gains the selection right after `worsened`; the previous text stays registered as a legacy text (OperatingReview V5). Only a document that selects the measure and the whole sizing reads the investment section in ISSUE_SIZE (metric unit "issue size"); every other text reads it in work units, unchanged in value. query-api serves every registered operation at any digest, so nothing has to be carried on a roll. |
 | `sha256:6d40791c0e2a28c2e0284a3330d1b30ddc3e9b24d397d9ceb237c398d4cd106c` | before 2026-11-04 | CHAOS-10351, adding the nullable field `uncategorizedCount: Int` to `EvidenceQualityStats`: the units of the window under the evidence gate (too little text), which the theme and subcategory mix leaves out while `total` still counts them; null when the window has no unit. | superseded |
-| `sha256:57fc443d803a7da9dace1631e28b84d783d8d7df4de33ac79016e5dc3298218c` | this revision | CHAOS-12999, adding the nullable field `sizedUnitCount: Int` to `EvidenceQualityStats`: the categorized units of the window (not under the evidence gate) that carry a positive issue size; null when the window has no unit. | Additive: no field is removed or retyped, so no consumer breaks. query-api serves every registered operation at any digest, so nothing has to be carried on a roll. acr vendors the schema: its catalogue refresh follows. |
+| `sha256:57fc443d803a7da9dace1631e28b84d783d8d7df4de33ac79016e5dc3298218c` | before 2026-11-14 | CHAOS-12999, adding the nullable field `sizedUnitCount: Int` to `EvidenceQualityStats`: the categorized units of the window (not under the evidence gate) that carry a positive issue size; null when the window has no unit. | Additive: no field is removed or retyped, so no consumer breaks. query-api serves every registered operation at any digest, so nothing has to be carried on a roll. acr vendors the schema: its catalogue refresh follows. |
+| `sha256:618a161ac9944700f79a06cfe3cd3b53d977341fe2eaa4375b3009293f8d1ac5` | this revision | CHAOS-13707, the description of `HomeResult.filterEmptyReason` only: an unresolved service or developer scope (its ids name nothing) answers no rows and says `service_not_found` or `developer_not_found`; the repository values and the null cases are unchanged. The previous text (the CHAOS-9098 description, which ended at "Filters AND and never widen.") stays registered as a legacy text. The same two values are served as `filter_empty_reason` by the REST Home answer (both) and the REST heatmap answer (`service_not_found`; the individual heatmap keeps its 404). | Descriptions only: no field, argument or type changes, and the field stays a nullable String; a client that has no text for a new value shows its neutral fallback (web #1984, live in web b540a244). query-api serves every registered operation at any digest, so nothing has to be carried on a roll. acr vendors the schema: its catalogue refresh follows. |
 
 
 ### Where `bigboy-cut.sh` finds its tools and its tree (CHAOS-7135)
@@ -640,7 +641,7 @@ STEP `ch-api-user` and aborts before go-api is recreated when it fails. Do not h
 
 `ghcr.io/full-chaos/dev-health-go-api-tools` (`docker/go-api-tools.Dockerfile`)
 carries the `dho` operator binary on `PATH` (spec S1, CHAOS-6280 folded
-`go-api-routing`, `go-api-prove`, `go-api-rest-prove`, `mint-envelope` and
+`go-api-routing`, `go-api-prove`, `go-api-rest-prove` and
 `mint-edge-token` into its `goapi` and `mint` verbs), the registrydump
 documents dump generated from the SAME commit at build time
 (`/app/go-api/documents.json`), and the checked-in operation catalog at its
@@ -680,31 +681,14 @@ kubectl exec dev-health-go-api-tools-oneoff -- \
 kubectl delete pod dev-health-go-api-tools-oneoff
 ```
 
-`dho goapi prove` mints its own proof-plane credential -- the
-effective-principal envelope -- directly, calling
-`internal/mintcli/envelope` (the same package `dho mint envelope` calls
-for outside callers) in process: no subprocess, no flag naming a helper
-or a path. It mints the envelope **locally, in this Pod** -- it does not
-call `principal_envelope.issue_effective_principal_envelope` over the
-network or exec into a running api Pod. It needs the same Ed25519 signing
-key the api Pod's own environment already holds
-(`GO_API_ENVELOPE_PRIVATE_KEY`), reached the identical way: a Secret key
-mounted into this Pod's environment via `secretKeyRef`, as the
-`--overrides` above shows (the SAME Secret name and key the api
-Deployment's `envFrom` pulls the value from -- see
-`_records/job7/go-api-tools-pod.yaml`'s R167 note for the shape this was
-proven against on prod). The key is never copied into the image and never
-passed as a flag value (which would land on argv/`/proc/<pid>/cmdline`);
-`internal/mintcli/envelope` reads it by env var name only. Claim shape,
-algorithm (EdDSA/Ed25519), key id, TTL (60s) and issuer/audience all
-mirror `principal_envelope.py` exactly -- `internal/queryapi/principal`'s
-own test suite proves the two stay byte-compatible by signing with
-`internal/envelopemint` and verifying with the real `Verifier`. `dho goapi
-routing` and `dho goapi prove` no longer present the envelope: they read a
+`dho goapi routing` and `dho goapi prove` present no envelope: they read a
 platform admin's user access token from a file
-(`GO_API_ROUTING_ACCESS_TOKEN_FILE`, `-proof-access-token-file`). The standalone `dho mint envelope` verb still exists (and
-still execs nothing itself) for a caller outside `goapi prove` that needs
-the raw credential printed to stdout.
+(`GO_API_ROUTING_ACCESS_TOKEN_FILE`, `-proof-access-token-file`). No Go service
+or tool mints the effective-principal envelope any more: the minter and its
+verb are removed, and query-api refuses the class on every row. The signing key files that the envelope issuer used are still generated by
+`dho mint envelope-keys` (`internal/signingkey`) and are read by the edge-token
+signer. The key is never copied into the image and never passed as a flag value
+(which would land on argv/`/proc/<pid>/cmdline`).
 
 `dho goapi prove` mints its edge-plane credential the same way, calling
 `internal/mintcli/edgetoken` (the same package `dho mint edge-token`
@@ -788,4 +772,4 @@ user-facing porting").
 
 ## Envelope signing key custody
 
-One contract for signing-key files across the platform (web `readPrivateKey`, `internal/auth/keystore`, `internal/envelopemint`): opened `O_NOFOLLOW`, a regular file, 1 byte to a size bound (16 KiB here), no group or other permission bits (0600 or stricter), and it must parse as Ed25519 or the load fails. The envelope key is supplied as `GO_API_ENVELOPE_PRIVATE_KEY_FILE` (a path). The raw `GO_API_ENVELOPE_PRIVATE_KEY` value is deprecated: it still works, logs a warning that names only the variable, and loses to the file when both are set. `mint-envelope -key-file` follows the same contract. Mounted Secret files need `defaultMode: 0400`.
+One contract for signing-key files across the platform (web `readPrivateKey`, `internal/auth/keystore`, `internal/signingkey`): opened `O_NOFOLLOW`, a regular file, 1 byte to a size bound (16 KiB here), no group or other permission bits (0600 or stricter), and it must parse as Ed25519 or the load fails. The envelope key is supplied as `GO_API_ENVELOPE_PRIVATE_KEY_FILE` (a path). The raw `GO_API_ENVELOPE_PRIVATE_KEY` value is deprecated: it still works, logs a warning that names only the variable, and loses to the file when both are set. The key-file loader follows the same contract. Mounted Secret files need `defaultMode: 0400`.

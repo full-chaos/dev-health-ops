@@ -63,7 +63,8 @@ type homeRESTResponse struct {
 	LimitingFactor        home.LimitingFactor          `json:"limiting_factor"`
 	DataConfidence        home.DataConfidence          `json:"data_confidence"`
 	// FilterEmptyReason (CHAOS-9098, Go-only, last): why the repositories the
-	// request names matched nothing (repository_not_in_team, repository_not_found);
+	// request names matched nothing (repository_not_in_team, repository_not_found), or service_not_found /
+	// developer_not_found for an unresolved service or developer scope (CHAOS-13707);
 	// null when it names none and whenever something matched.
 	FilterEmptyReason *string `json:"filter_empty_reason"`
 }

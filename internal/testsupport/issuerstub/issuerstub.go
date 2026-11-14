@@ -15,7 +15,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/full-chaos/dev-health-ops/internal/envelopemint"
+	"github.com/full-chaos/dev-health-ops/internal/signingkey"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/idpstub"
 )
 
@@ -49,7 +49,7 @@ func Prepare(dir, keyID string) (Files, error) {
 	if keyID == "" {
 		keyID = DefaultKeyID
 	}
-	paths, err := envelopemint.GenerateKeyFiles(dir, keyID)
+	paths, err := signingkey.GenerateKeyFiles(dir, keyID)
 	if err != nil {
 		return Files{}, err
 	}

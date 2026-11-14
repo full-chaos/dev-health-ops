@@ -3,6 +3,7 @@ package workflows_test
 import (
 	"fmt"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -62,16 +63,33 @@ func TestQueueHeavyAndDocsSkippablePolicies(t *testing.T) {
 
 type queueGateSpec struct {
 	file, job, condition string
-	needs                []string
-	env                  map[string]string
-	rows                 []string
+	// name is the job's `name:` (the required context); empty means the job id itself.
+	name  string
+	needs []string
+	env   map[string]string
+	rows  []string
+}
+
+// live-e2e.yml has a `labeled` trigger for ci:full. The run of any other label (otherLabelRun) must post no check run
+// under a real job name: a job skipped by `if:` posts a passing check, which would overwrite a red verdict of the same
+// head. So the jobs that would run skip there (labelFilter), and every job's name is an expression (otherLabelName):
+// GitHub posts a job skipped by `if:` under the raw text of that expression, never a required name. The guard checks
+// the stronger property: the expression also renders to no real name on that run.
+const (
+	otherLabelRun = "github.event.action == 'labeled' && github.event.label.name != 'ci:full'"
+	labelFilter   = "(github.event.action != 'labeled' || github.event.label.name == 'ci:full')"
+)
+
+func otherLabelName(job string) string {
+	return "${{ " + otherLabelRun + " && '" + job + " (other label, not run)' || '" + job + "' }}"
 }
 
 var queueGates = []queueGateSpec{
 	{
 		file:      "live-e2e.yml",
 		job:       "live-e2e",
-		condition: "always() && (github.event_name == 'pull_request' || github.event_name == 'merge_group')",
+		name:      otherLabelName("live-e2e"),
+		condition: "always() && (github.event_name == 'pull_request' || github.event_name == 'merge_group') && " + labelFilter,
 		needs:     []string{"changes", "live-e2e-run"},
 		env: map[string]string{
 			"GATE_NAME":         "live-e2e",
@@ -86,7 +104,8 @@ var queueGates = []queueGateSpec{
 	{
 		file:      "live-e2e.yml",
 		job:       "metrics-executed-proof",
-		condition: "always() && (github.event_name == 'pull_request' || github.event_name == 'merge_group')",
+		name:      otherLabelName("metrics-executed-proof"),
+		condition: "always() && (github.event_name == 'pull_request' || github.event_name == 'merge_group') && " + labelFilter,
 		needs:     []string{"changes", "metrics-executed-proof-run"},
 		env: map[string]string{
 			"GATE_NAME":         "metrics-executed-proof",
@@ -94,7 +113,8 @@ var queueGates = []queueGateSpec{
 			"GATE_HAS_SELECTOR": "true",
 			"CHANGES_RESULT":    "${{ needs.changes.result }}",
 			"CHANGES_CODE":      "${{ (needs.changes.outputs.docs_only == 'true' || (github.event_name == 'pull_request' && needs.changes.outputs.code == 'false')) && 'false' || 'true' }}",
-			"HEAVY_ON_PR":       "${{ contains(github.event.pull_request.labels.*.name, 'ci:full') && 'true' || 'false' }}",
+			// a pull request touching a metrics_proof path selects the job as ci:full does, so its skip is not legitimate
+			"HEAVY_ON_PR": "${{ (contains(github.event.pull_request.labels.*.name, 'ci:full') || needs.changes.outputs.metrics_proof == 'true') && 'true' || 'false' }}",
 		},
 		rows: []string{"metrics-executed-proof-run|queue-heavy|${{ needs.metrics-executed-proof-run.result }}"},
 	},
@@ -157,8 +177,12 @@ func queueGateViolations(t *testing.T, root string) []string {
 			add("%s: the required gate %s is missing", g.file, g.job)
 			continue
 		}
-		if asString(j["name"]) != g.job {
-			add("%s:%s: the job name is the required context and must stay %q, got %q", g.file, g.job, g.job, asString(j["name"]))
+		wantName := g.name
+		if wantName == "" {
+			wantName = g.job
+		}
+		if asString(j["name"]) != wantName {
+			add("%s:%s: the job name is the required context and must stay %q, got %q", g.file, g.job, wantName, asString(j["name"]))
 		}
 		if got := asString(j["if"]); got != g.condition {
 			add("%s:%s: the if must be exactly %q (always(), so a cancelled run reports; pull_request and merge_group only), got %q", g.file, g.job, g.condition, got)
@@ -240,35 +264,211 @@ func TestLiveE2EFanInsFailWhenChangesFails(t *testing.T) {
 // live-e2e and metrics-executed-proof are required contexts, and a skipped job reports success. On merge_group the
 // changes job's path filter sees only the entry's own PR (the event base is the parent entry), so the jobs must not read
 // `code` there: every queue entry that is not docs-only runs them, even one whose own PR is docs-only behind a code entry.
+// A pull request that touches a metrics_proof path runs metrics-executed-proof-run with no label (a metric change once
+// merged with it skipped and turned main red); live-e2e-run still needs ci:full.
 func TestLiveE2ERunsForEveryNonDocsQueueEntry(t *testing.T) {
 	doc := loadWf(t, repoRoot(t), "live-e2e.yml")
-	for _, name := range []string{"live-e2e-run", "metrics-executed-proof-run"} {
-		condition := strings.TrimSpace(asString(pinJob(doc, name)["if"]))
-		for _, c := range []struct {
-			event, code, docsOnly, labels string
-			want                          bool
-		}{
-			{"merge_group", "false", "false", "", true},
-			{"merge_group", "true", "false", "", true},
-			{"merge_group", "false", "true", "", false},
-			{"pull_request", "true", "false", "", false},
-			{"pull_request", "true", "false", "ci:full", true},
-			{"pull_request", "false", "false", "ci:full", false},
-			{"push", "true", "false", "", true},
-			{"push", "false", "false", "", false},
-		} {
+	for _, c := range []struct {
+		event, code, proof, docsOnly, labels string
+		wantLive, wantProof                  bool
+	}{
+		{"merge_group", "false", "false", "false", "", true, true},
+		{"merge_group", "true", "false", "false", "", true, true},
+		{"merge_group", "false", "false", "true", "", false, false},
+		{"merge_group", "true", "true", "true", "", false, false},
+		{"pull_request", "true", "false", "false", "", false, false},
+		{"pull_request", "true", "false", "false", "ci:full", true, true},
+		{"pull_request", "false", "false", "false", "ci:full", false, false},
+		{"pull_request", "true", "true", "false", "", false, true},
+		{"pull_request", "true", "true", "false", "ci:full", true, true},
+		{"pull_request", "false", "true", "false", "", false, false},
+		{"pull_request", "true", "true", "true", "", false, false},
+		{"push", "true", "false", "false", "", true, true},
+		{"push", "false", "false", "false", "", false, false},
+	} {
+		for name, want := range map[string]bool{"live-e2e-run": c.wantLive, "metrics-executed-proof-run": c.wantProof} {
+			condition := strings.TrimSpace(asString(pinJob(doc, name)["if"]))
 			ctx := queueContext(c.event, "refs/heads/main")
 			ctx["needs.changes.outputs.code"] = c.code
+			ctx["needs.changes.outputs.metrics_proof"] = c.proof
 			ctx["needs.changes.outputs.docs_only"] = c.docsOnly
 			ctx["github.event.pull_request.labels.*.name"] = c.labels
 			got, err := queueEval(condition, ctx)
 			if err != nil {
 				t.Fatalf("%s: %v", name, err)
 			}
-			if got.truthy() != c.want {
-				t.Errorf("%s on %s (code=%s docs_only=%s labels=%q) runs=%v, want %v", name, c.event, c.code, c.docsOnly, c.labels, got.truthy(), c.want)
+			if got.truthy() != want {
+				t.Errorf("%s on %s (code=%s metrics_proof=%s docs_only=%s labels=%q) runs=%v, want %v", name, c.event, c.code, c.proof, c.docsOnly, c.labels, got.truthy(), want)
 			}
 		}
+	}
+}
+
+// liveE2EJobs are every job of live-e2e.yml: each posts a check run under its name, and any of them may be a required
+// context (the ruleset is not readable from the repo).
+var liveE2EJobs = []string{"changes", "live-e2e-run", "metrics-executed-proof-run", "live-e2e", "metrics-executed-proof"}
+
+// liveE2ELabelViolations: adding ci:full starts the run with no push; the run of any other label posts no check run
+// under a real job name (a skipped job posts a passing check, which would overwrite a red verdict of the same head);
+// unlabeled starts nothing. The three groups are pinned: the PR's own runs in <workflow>-<PR>, a ci:full label run in
+// <workflow>-ci-full-<PR> and any other label's run in <workflow>-other-label-<PR>, so no label run cancels the PR's run
+// (a cancelled run's always() fan-ins post a CANCELLED required check beside the later verdict).
+func liveE2ELabelViolations(t *testing.T, root string) []string {
+	t.Helper()
+	var out []string
+	add := func(f string, a ...any) { out = append(out, fmt.Sprintf("live-e2e.yml: "+f, a...)) }
+	doc := loadWf(t, root, "live-e2e.yml")
+	types := map[string]bool{}
+	for _, ty := range prTypes(asMap(doc["on"])) {
+		types[ty] = true
+	}
+	if !types["labeled"] {
+		add("pull_request types lack labeled: adding ci:full to an open PR starts nothing until the next push")
+	}
+	if types["unlabeled"] {
+		add("pull_request types list unlabeled: a label removal would start a run")
+	}
+	pr := func(action, label, labels string) queueCtx {
+		ctx := queueContext("pull_request", "refs/pull/7/merge")
+		ctx["github.event.action"], ctx["github.event.label.name"] = action, label
+		ctx["github.event.pull_request.labels.*.name"] = labels
+		return ctx
+	}
+	contexts := []struct {
+		id      string
+		ctx     queueCtx
+		renamed bool
+	}{
+		{"synchronize", pr("synchronize", "", ""), false},
+		{"ci:full added", pr("labeled", "ci:full", "ci:full"), false},
+		{"other label added", pr("labeled", "documentation", "documentation"), true},
+		{"other label added to a ci:full PR", pr("labeled", "documentation", "ci:full,documentation"), true},
+		{"merge_group", queueContext("merge_group", "refs/heads/gh-readonly-queue/main/pr-7-abcdef"), false},
+		{"main push", queueContext("push", "refs/heads/main"), false},
+	}
+	realName := map[string]bool{}
+	for _, jn := range liveE2EJobs {
+		realName[jn] = true
+	}
+	eval := func(where, text string, ctx queueCtx) (queueValue, bool) {
+		text = strings.TrimSpace(text)
+		if m := queueBlockRE.FindStringSubmatch(text); m != nil && strings.HasPrefix(text, "${{") && strings.HasSuffix(text, "}}") {
+			text = strings.TrimSpace(m[1])
+		}
+		v, err := queueEval(text, ctx)
+		if err != nil {
+			add("%s: %v", where, err)
+			return v, false
+		}
+		return v, true
+	}
+	for _, jn := range liveE2EJobs {
+		j := pinJob(doc, jn)
+		if j == nil {
+			add("no job %s", jn)
+			continue
+		}
+		for _, c := range contexts {
+			name := jn
+			if raw := asString(j["name"]); raw != "" {
+				v, ok := eval(jn+".name", raw, c.ctx)
+				if !ok {
+					continue
+				}
+				name = v.s
+			}
+			if c.renamed && realName[name] {
+				add("%s: on the %s run the job posts its check under the real name %q: a skipped job posts a passing check and overwrites the head's verdict", jn, c.id, name)
+			}
+			if !c.renamed && name != jn {
+				add("%s: on the %s run the check name is %q, want %q (the required context)", jn, c.id, name, jn)
+			}
+		}
+	}
+	// The jobs that would post on another label's run skip there; the work jobs skip with `changes` (no always()).
+	for _, jn := range []string{"changes", "live-e2e", "metrics-executed-proof"} {
+		j := pinJob(doc, jn)
+		for _, c := range contexts {
+			runs := true // no `if:` runs on every event
+			if cond := asString(j["if"]); strings.TrimSpace(cond) != "" {
+				v, ok := eval(jn+".if", cond, c.ctx)
+				if !ok {
+					continue
+				}
+				runs = v.truthy()
+			}
+			if c.renamed && runs {
+				add("%s: runs on the %s run: it must skip (the last real run carries the verdict)", jn, c.id)
+			}
+			if !c.renamed && c.ctx["github.event_name"] != "push" && !runs {
+				add("%s: skips on the %s run", jn, c.id)
+			}
+		}
+	}
+	for _, jn := range []string{"live-e2e-run", "metrics-executed-proof-run"} {
+		j := pinJob(doc, jn)
+		if strings.Contains(asString(j["if"]), "always()") || !slices.Contains(needsList(j), "changes") {
+			add("%s: must need changes and carry no always(), so it skips when changes skips on another label's run", jn)
+		}
+	}
+	conc := asMap(doc["concurrency"])
+	group := asString(conc["group"])
+	render := func(action, label string) string {
+		c := withAction(prCtx, action)
+		c["github.event.label.name"] = label
+		g, err := renderGroup(group, c)
+		if err != nil {
+			add("concurrency group: %v", err)
+		}
+		return g
+	}
+	sync, full, other := render("synchronize", ""), render("labeled", "ci:full"), render("labeled", "documentation")
+	const prSuffix = "-7"
+	base, ok := strings.CutSuffix(sync, prSuffix)
+	if !ok {
+		add("the PR concurrency group %q does not end in the PR number", sync)
+	}
+	for _, g := range []struct{ id, got, want string }{
+		{"opened/synchronize/reopened", render("opened", ""), sync},
+		{"ci:full label", full, base + "-ci-full" + prSuffix},
+		{"other label", other, base + "-other-label" + prSuffix},
+	} {
+		if g.got != g.want {
+			add("the %s run's concurrency group is %q, want %q", g.id, g.got, g.want)
+		}
+	}
+	if full == sync || other == sync {
+		add("a label run shares the PR concurrency group %q and would cancel the PR's run", sync)
+	}
+	return out
+}
+
+func TestLiveE2ELabeledTriggerStartsOnlyOnCIFull(t *testing.T) {
+	expectNoViolations(t, liveE2ELabelViolations(t, repoRoot(t)))
+}
+
+func TestLiveE2ELabeledTriggerPlantedDefects(t *testing.T) {
+	root := repoRoot(t)
+	const live = ".github/workflows/live-e2e.yml"
+	cases := []struct {
+		name string
+		mut  mutation
+		want []string
+	}{
+		{"no labeled type", mutation{live, "types: [opened, synchronize, reopened, labeled]", "types: [opened, synchronize, reopened]"}, []string{"lack labeled"}},
+		{"unlabeled type", mutation{live, "types: [opened, synchronize, reopened, labeled]", "types: [opened, synchronize, reopened, labeled, unlabeled]"}, []string{"unlabeled"}},
+		{"other label shares the group", mutation{live, " || github.event.action == 'labeled' && '-other-label' || '' }}", " || '' }}"}, []string{"other label run's concurrency group", "would cancel the PR's run"}},
+		{"ci:full shares the PR group (the previous form)", mutation{live, "github.event.action == 'labeled' && github.event.label.name == 'ci:full' && '-ci-full' || github.event.action == 'labeled' && '-other-label' || ''", "github.event.action == 'labeled' && github.event.label.name != 'ci:full' && '-other-label' || ''"}, []string{"ci:full label run's concurrency group", "would cancel the PR's run"}},
+		{"ci:full lands in the other-label group", mutation{live, "&& '-ci-full' ||", "&& '-other-label' ||"}, []string{"ci:full label run's concurrency group"}},
+		{"changes runs on another label", mutation{live, "    if: github.event.action != 'labeled' || github.event.label.name == 'ci:full'\n", ""}, []string{"changes: runs on the other label added run"}},
+		{"metrics fan-in runs on another label", mutation{live, "github.event_name == 'merge_group') && (github.event.action != 'labeled' || github.event.label.name == 'ci:full')\n    needs: [changes, metrics-executed-proof-run]", "github.event_name == 'merge_group')\n    needs: [changes, metrics-executed-proof-run]"}, []string{"metrics-executed-proof: runs on the other label added run"}},
+		{"proof run job keeps its real name", mutation{live, "    name: ${{ github.event.action == 'labeled' && github.event.label.name != 'ci:full' && 'metrics-executed-proof-run (other label, not run)' || 'metrics-executed-proof-run' }}\n", ""}, []string{"metrics-executed-proof-run", "under the real name"}},
+		{"changes renames on ci:full", mutation{live, "&& 'changes (other label, not run)' || 'changes' }}", "&& 'changes (other label, not run)' || 'changes (label)' }}"}, []string{"changes: on the synchronize run the check name"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			expectViolation(t, liveE2ELabelViolations(t, plantTree(t, root, []string{live}, c.mut)), c.want...)
+		})
 	}
 }
 
@@ -292,8 +492,10 @@ func TestQueueGatesPlantedDefects(t *testing.T) {
 		{"image-queue-gate stops needing go-build", []mutation{{dock, "needs: [changes, resolve, go-build, go-api-tools-build, go-build-dho-arm64]", "needs: [changes, resolve, go-api-tools-build, go-build-dho-arm64]"}}, []string{"image-queue-gate", "needs"}},
 		{"image-queue-gate treats a hotfix label as ci:full on a draft", []mutation{{dock, "(!github.event.pull_request.draft && contains(github.event.pull_request.labels.*.name, 'hotfix-image'))", "contains(github.event.pull_request.labels.*.name, 'hotfix-image')"}}, []string{"HEAVY_ON_PR"}},
 		{"image-queue-gate is renamed", []mutation{{dock, "    name: image-queue-gate\n", "    name: images\n"}}, []string{"required context"}},
-		{"live-e2e fan-in loses always()", []mutation{{live, "    name: live-e2e\n    if: always() && ", "    name: live-e2e\n    if: "}}, []string{"live-e2e.yml:live-e2e", "the if must be exactly"}},
+		{"live-e2e fan-in loses always()", []mutation{{live, "    if: always() && (github.event_name == 'pull_request' || github.event_name == 'merge_group') && (github.event.action != 'labeled' || github.event.label.name == 'ci:full')\n    needs: [changes, live-e2e-run]", "    if: (github.event_name == 'pull_request' || github.event_name == 'merge_group') && (github.event.action != 'labeled' || github.event.label.name == 'ci:full')\n    needs: [changes, live-e2e-run]"}}, []string{"live-e2e.yml:live-e2e", "the if must be exactly"}},
 		{"metrics-executed-proof fan-in drops changes as its selector", []mutation{{live, "    needs: [changes, metrics-executed-proof-run]\n", "    needs: [metrics-executed-proof-run]\n"}}, []string{"live-e2e.yml:metrics-executed-proof", "needs"}},
+		{"metrics-executed-proof fan-in judges a metrics_proof skip as legitimate", []mutation{{live, "HEAVY_ON_PR: ${{ (contains(github.event.pull_request.labels.*.name, 'ci:full') || needs.changes.outputs.metrics_proof == 'true') && 'true' || 'false' }}", "HEAVY_ON_PR: ${{ contains(github.event.pull_request.labels.*.name, 'ci:full') && 'true' || 'false' }}"}}, []string{"live-e2e.yml:metrics-executed-proof", "HEAVY_ON_PR"}},
+		{"live-e2e fan-in keeps its real name on another label's run", []mutation{{live, "    name: ${{ github.event.action == 'labeled' && github.event.label.name != 'ci:full' && 'live-e2e (other label, not run)' || 'live-e2e' }}\n", "    name: live-e2e\n"}}, []string{"live-e2e.yml:live-e2e", "required context"}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

@@ -25,7 +25,7 @@ var acpRequiredSecurityTrees = []string{
 // acpAddedSecurityTrees is the GO of 2026-10-26 (CHAOS-11448): internal/entitlements is deliberately not here.
 var acpAddedSecurityTrees = []string{
 	"./contracts/auth/v1/...", "./internal/audit/...", "./internal/api/credentials/...", "./internal/egressguard/...",
-	"./internal/envelopemint/...", "./internal/clicredentials/...", "./internal/projectmembership/...", "./internal/api/policy/...",
+	"./internal/signingkey/...", "./internal/clicredentials/...", "./internal/projectmembership/...", "./internal/api/policy/...",
 }
 
 func listLines(text string) []string {

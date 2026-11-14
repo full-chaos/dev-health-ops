@@ -71,7 +71,7 @@ var (
 	usersCreateMembers = []string{"actor_principal_id", "email", "password_hash", "username", "full_name", "auth_provider",
 		"auth_provider_id", "is_verified", "grant_platform_admin", "organization_id", "role", "request_metadata"}
 	usersUpdateMembers = []string{"actor_principal_id", "principal_id", "organization_id", "email", "is_verified", "is_superuser",
-		"username", "full_name", "avatar_url"}
+		"username", "full_name", "avatar_url", "is_active"}
 	usersPasswordMembers = []string{"actor_principal_id", "principal_id", "organization_id", "admin_password", "password_hash",
 		"request_metadata"}
 	usersDeleteMembers = []string{"actor_principal_id", "principal_id", "organization_id", "mode"}
@@ -222,7 +222,8 @@ func (h provisioningHandlers) usersPrecheck(w http.ResponseWriter, r *http.Reque
 // usersAuthorize is the store's Authorize: the platform role write lock (exclusive when the write changes a
 // platform role, shared otherwise) before any row, then usersActorRule on the transaction with grantRequested, the
 // platform_admin grant the request asks for (go-api guards.go:106-109: a non-superuser is refused for a grant or a
-// superuser target, never for an unchanged false).
+// superuser target, never for an unchanged false). An is_active change runs no last platform_admin guard: legacy's
+// PATCH set is_active with none (users.py UserService.update, CHAOS-13684, product rule 1); the soft delete keeps it.
 func (h provisioningHandlers) usersAuthorize(actor uuid.UUID, orgID *uuid.UUID, roleChange, grantRequested bool, target *uuid.UUID) func(context.Context, audit.TxOps) error {
 	return func(ctx context.Context, tx audit.TxOps) error {
 		lock := h.PlatformRoles.LockWritesShared
@@ -367,7 +368,8 @@ func (h provisioningHandlers) usersUpdate(w http.ResponseWriter, r *http.Request
 	username, err7 := body.optionalAnyText("username", maxShortTextBytes)
 	fullName, err8 := body.optionalAnyText("full_name", maxShortTextBytes)
 	avatarURL, err9 := body.optionalAnyText("avatar_url", maxShortTextBytes)
-	if errors.Join(err1, err2, err3, err4, err5, err6, err7, err8, err9) != nil {
+	active, err10 := optionalBoolPointer(body, "is_active")
+	if errors.Join(err1, err2, err3, err4, err5, err6, err7, err8, err9, err10) != nil {
 		h.malformedUsers(w, r, opUsersUpdate)
 		return
 	}
@@ -390,7 +392,7 @@ func (h provisioningHandlers) usersUpdate(w http.ResponseWriter, r *http.Request
 	}
 	roleChange := superuser != nil && *superuser != held
 	decided := identity.DecideAdminUpdate(cur, identity.AdminUpdatePatch{Email: email, Verified: verified, Username: username,
-		FullName: fullName, AvatarURL: avatarURL})
+		FullName: fullName, AvatarURL: avatarURL, Active: active})
 	var superuserWrite func(context.Context, audit.TxOps) error
 	if roleChange {
 		grantIt := *superuser
@@ -406,7 +408,7 @@ func (h provisioningHandlers) usersUpdate(w http.ResponseWriter, r *http.Request
 	// Every PATCH, a no-op and a platform role change only included, is one AdminUpdateUser: one lock order, and
 	// public.users.updated_at moves as go-api's PATCH moves it (pm D6915).
 	err = h.UsersAdmin.AdminUpdateUser(ctx, identity.AdminUpdateRequest{Principal: target, Email: email, Verified: verified,
-		Username: username, FullName: fullName, AvatarURL: avatarURL, Actor: actor,
+		Username: username, FullName: fullName, AvatarURL: avatarURL, Active: active, Actor: actor,
 		RequestID: requestid.Audit(ctx), Caller: caller, Authorize: h.usersAuthorize(actor, orgID, roleChange, grantRequested, &target),
 		Superuser: superuserWrite}, cur)
 	if err != nil {

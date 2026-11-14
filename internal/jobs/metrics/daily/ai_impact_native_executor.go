@@ -11,7 +11,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/aiimpact"
-	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/numerical"
 	"github.com/full-chaos/dev-health-ops/internal/teamkeytables"
 	"github.com/full-chaos/dev-health-ops/internal/teamownership"
 	"github.com/full-chaos/dev-health-ops/internal/teamresolve"
@@ -174,9 +173,10 @@ func (executor *AIImpactExecutor) ComputeFamily(
 	// team_cognitive_load and compounding_risk_team already consume
 	// (teamownership.AuthoritativeOwnersByRepo: one owner, or every main owner
 	// of a full ownership tie, D5990, ranked
-	// is_primary/specificity/updated_at/team_id), with this family's own
-	// repo-pattern resolver as the fallback for a repo team_repo_ownership
-	// does not resolve -- see resolveAIImpactRepoToTeam.
+	// is_primary/specificity/updated_at/team_id). A repo team_repo_ownership
+	// does not resolve gets no team: no repo_patterns fallback (D7013b) -- see
+	// resolveAIImpactRepoToTeam. The teams read below serves the incident
+	// attribution only.
 	teams, err := LoadAIImpactTeams(ctx, executor.conn, run.OrganizationID)
 	if err != nil {
 		return 0, err
@@ -189,9 +189,8 @@ func (executor *AIImpactExecutor) ComputeFamily(
 	for repoID, repoName := range repoNames {
 		repoNamesByIDText[repoID.String()] = repoName
 	}
-	patternResolver := aiimpact.BuildRepoPatternResolver(teams)
 	repoToTeam, err := resolveAIImpactRepoToTeam(
-		ctx, executor.conn, run.OrganizationID, dayStart, repoIDs, repoNamesByIDText, patternResolver,
+		ctx, executor.conn, run.OrganizationID, dayStart, repoIDs, repoNamesByIDText,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("ai_impact: %w", err)
@@ -347,11 +346,9 @@ func (executor *AIImpactExecutor) resolveIncidents(
 // resolveAIImpactRepoToTeam builds {repo_id_str: owners with their linked
 // shares} through teamownership.OwnerSharesByRepo (CHAOS-9604, D5988): the main
 // owner (every tied team of a full tie, D5990) and every lesser owner of a
-// repository, each at its own share, with patternResolver as the fallback for
-// a repo that resolver leaves unresolved (one team holding the repository
-// whole). Ownership always wins over a pattern match for the same repo, and a
-// repo repoNamesByID does not carry is never guessed by either path
-// (teamresolve.ResolveSharesFromOwnershipMap's own guard).
+// repository, each at its own share. A repo with no owner row gets no team:
+// no repo_patterns fallback (D7013b). A repo repoNamesByID does not carry is
+// never guessed (teamresolve.ResolveSharesFromOwnershipMap's own guard).
 //
 // A resolution failure is logged at ERROR and propagated, never swallowed: a
 // ClickHouse error resolving ownership must fail this partition rather than
@@ -359,7 +356,6 @@ func (executor *AIImpactExecutor) resolveIncidents(
 func resolveAIImpactRepoToTeam(
 	ctx context.Context, conn driver.Conn, organizationID string, asOf time.Time,
 	repoIDs []uuid.UUID, repoNamesByID map[string]string,
-	patternResolver numerical.RepoTeamResolver,
 ) (map[string][]teamownership.OwnerShare, error) {
 	ownershipMap, err := teamownership.OwnerSharesByRepo(ctx, conn, organizationID, asOf)
 	if err != nil {
@@ -368,29 +364,18 @@ func resolveAIImpactRepoToTeam(
 		return nil, fmt.Errorf("resolve authoritative repo ownership: %w", err)
 	}
 
-	repoToTeam := teamresolve.ResolveSharesFromOwnershipMap(ownershipMap, repoIDs, repoNamesByID, patternResolver)
+	repoToTeam := teamresolve.ResolveSharesFromOwnershipMap(ownershipMap, repoIDs, repoNamesByID, nil)
 
-	ownershipWins, patternWins := 0, 0
 	for _, repoID := range repoIDs {
 		key := repoID.String()
-		owners, resolved := repoToTeam[key]
-		if !resolved {
-			continue
-		}
-		if len(ownershipMap[key]) > 0 {
-			ownershipWins++
+		if owners, resolved := repoToTeam[key]; resolved {
 			slog.Debug("ai_impact team resolution: repository resolved via team_repo_ownership",
 				"organization_id", organizationID, "repo_id", key, "owners", len(owners))
-			continue
 		}
-		patternWins++
-		slog.Debug("ai_impact team resolution: repository resolved via repo_patterns fallback",
-			"organization_id", organizationID, "repo_id", key, "owners", len(owners))
 	}
 	slog.Info("ai_impact team resolution summary",
 		"organization_id", organizationID, "repos_total", len(repoIDs),
-		"resolved_via_ownership", ownershipWins, "resolved_via_patterns", patternWins,
-		"unresolved", len(repoIDs)-ownershipWins-patternWins,
+		"resolved_via_ownership", len(repoToTeam), "unresolved", len(repoIDs)-len(repoToTeam),
 	)
 
 	return repoToTeam, nil

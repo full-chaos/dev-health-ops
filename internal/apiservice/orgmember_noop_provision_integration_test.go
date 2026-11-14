@@ -68,7 +68,7 @@ func TestSameRoleMemberPatchOnAPublicOnlyMemberAnswersAsLegacy(t *testing.T) {
 	}
 	t.Cleanup(runtime.Close)
 
-	authService, identities := orgDeleteAuthService(t, runtime)
+	authService, identities := orgDeleteAuthService(t, runtime, false)
 
 	orgID, owner, member := uuid.New(), uuid.New(), uuid.New()
 	for _, statement := range []struct {

@@ -177,7 +177,7 @@ jobs:
           languages: ${{ matrix.language }}
           queries: security-extended,security-and-quality
           dependency-caching: none
-          trap-caching: false
+          trap-caching: ${{ github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
 
       - name: Autobuild
         uses: github/codeql-action/autobuild@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3

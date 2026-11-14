@@ -132,8 +132,8 @@ func codeqlRefreshDefects(t *testing.T, root string) []string {
 		}
 	}
 	initSteps := stepUsing(steps, "github/codeql-action/init@")
-	if len(initSteps) != 1 || !reflect.DeepEqual(strMap(initSteps[0]["with"]), map[string]string{"languages": "${{ matrix.language }}", "queries": "security-extended,security-and-quality", "dependency-caching": "none", "trap-caching": "false"}) {
-		add("analyze init is not the one CodeQL config (languages ${{ matrix.language }}, queries security-extended,security-and-quality, dependency-caching none, trap-caching false)")
+	if len(initSteps) != 1 || !reflect.DeepEqual(strMap(initSteps[0]["with"]), map[string]string{"languages": "${{ matrix.language }}", "queries": "security-extended,security-and-quality", "dependency-caching": "none", "trap-caching": "${{ " + mainOnlyGate + " }}"}) {
+		add("analyze init is not the one CodeQL config (languages ${{ matrix.language }}, queries security-extended,security-and-quality, dependency-caching none, trap-caching the main-only gate)")
 	}
 	an := stepUsing(steps, "github/codeql-action/analyze@")
 	if len(an) != 1 {

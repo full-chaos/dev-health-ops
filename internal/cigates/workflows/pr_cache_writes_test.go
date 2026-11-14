@@ -21,7 +21,8 @@ import (
 // known and everything else unknown, so a switch passes only when it is off on that event whatever the rest holds.
 // An action that caches by itself (setup-go, setup-node, setup-uv, trivy-action, setup-qemu, setup-buildx, ...) saves on a key
 // miss and has no restore-only switch, so on a step a pull request can run EVERY cache input of it must be set LITERALLY off
-// (no expression; an absent input fails even when it defaults off); such a job reads the cache through an
+// (no expression but the one main-only gate, mainOnlyGate; an absent input fails even when it defaults off); such a job reads
+// the cache through an
 // actions/cache/restore step and saves it with an actions/cache/save step only a push to main or the merge queue runs.
 // The guard fails closed: every action of a pull_request workflow must be pinned to a full 40-hex sha with a `# vX.Y.Z`
 // comment on its uses: line, and owner/repo[/path] at that major must be in prCacheActions; a local action or a reusable
@@ -90,7 +91,7 @@ func prCacheWriteViolations(t *testing.T, root string) []string {
 					on := len(switches) == 0
 					for _, sw := range switches {
 						if lit, ok := sw.(literalSwitch); ok {
-							on = on || !lit.off()
+							on = on || !lit.off(event)
 						} else if switchMayBeOn(sw, event) {
 							on = true
 						}
@@ -129,7 +130,8 @@ const (
 )
 
 // cacheInput is an input that turns an action's own Actions cache on. On a step a pull request can run it must be set
-// literally off: false, "false", "" or a value in off. defaultOn only words the message of an absent input.
+// literally off: false, "false", "" or a value in off, or be exactly ${{ mainOnlyGate }}. defaultOn only words the message
+// of an absent input.
 type cacheInput struct {
 	name      string
 	defaultOn bool
@@ -278,7 +280,29 @@ type literalSwitch struct {
 	in  cacheInput
 }
 
-func (l literalSwitch) off() bool {
+// mainOnlyGate is the one expression a cache input may hold: the push-to-main / merge-queue gate of the actions/cache/save
+// steps, so the input is on where the saves run and off on every other event.
+const mainOnlyGate = "github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main')"
+
+// mainOnlyGatedValue holds when v is exactly ${{ mainOnlyGate }} (blanks folded, one pair of outer parentheses allowed).
+func mainOnlyGatedValue(v string) bool {
+	m := wholeExprRe.FindStringSubmatch(strings.TrimSpace(v))
+	if m == nil {
+		return false
+	}
+	e := strings.Join(strings.Fields(m[1]), " ")
+	if inner, ok := strings.CutPrefix(e, "("); ok {
+		if inner, ok = strings.CutSuffix(inner, ")"); ok {
+			e = strings.TrimSpace(inner)
+		}
+	}
+	return e == mainOnlyGate
+}
+
+func (l literalSwitch) off(event string) bool {
+	if s, ok := l.v.(string); ok && mainOnlyGatedValue(s) {
+		return !switchMayBeOn(s, event)
+	}
 	switch c := l.v.(type) {
 	case nil:
 		return false
@@ -965,8 +989,42 @@ func TestPRCacheGuardKeysOnActionMajor(t *testing.T) {
 		{"a uses that is not a full sha", []mutation{{drift, checkout, "actions/checkout@v7 # v7.0.1"}}, []string{"docs-drift.yml: job docs-drift", "actions/checkout@v7, which is not pinned to a full 40-hex commit sha"}},
 		{"a default-off cache input unset", []mutation{{sec, "          cache: ''\n", ""}}, []string{"security-scan.yml: job semgrep", "actions/setup-python (cache unset)"}},
 		{"a default-off cache input set by an expression", []mutation{{sec, "          cache: ''\n", "          cache: ${{ github.event_name != 'pull_request' && 'pip' || '' }}\n"}}, []string{"security-scan.yml: job semgrep", "actions/setup-python (cache: ${{"}},
-		{"codeql trap caching unset", []mutation{{".github/workflows/codeql-analysis.yml", "          trap-caching: false\n", ""}}, []string{"codeql-analysis.yml", "trap-caching unset"}},
+		{"codeql trap caching unset", []mutation{{".github/workflows/codeql-analysis.yml", codeqlTrapGated, ""}}, []string{"codeql-analysis.yml", "trap-caching unset"}},
 		{"pnpm cache unset", []mutation{{goY, "          cache: false\n          package_json_file: dev-health-web/package.json\n", "          package_json_file: dev-health-web/package.json\n"}}, []string{"go.yml: job go-auth-web-proxy-proof", "pnpm/action-setup (cache unset)"}},
+	}
+	for _, c := range fails {
+		t.Run(c.name+" fails", func(t *testing.T) {
+			expectViolation(t, prCacheWriteViolations(t, plantTree(t, root, files, c.muts...)), c.want...)
+		})
+	}
+}
+
+const codeqlTrapGated = "          trap-caching: ${{ " + mainOnlyGate + " }}\n"
+
+// TestPRCacheGuardMainOnlyGate: besides a literal off value, a cache input may hold only the main-only gate of the cache saves.
+func TestPRCacheGuardMainOnlyGate(t *testing.T) {
+	root := authProofRoot(t)
+	var files []string
+	for _, n := range workflowNames(t, root) {
+		files = append(files, ".github/workflows/"+n)
+	}
+	files = append(files, "ci/auth_corpus.bake.hcl", "compose.yml", "ci/auth_corpus_external.override.yml")
+	const (
+		cq    = ".github/workflows/codeql-analysis.yml"
+		drift = ".github/workflows/docs-drift.yml"
+	)
+	t.Run("a cache input with the main-only gate passes", func(t *testing.T) {
+		tree := plantTree(t, root, files, mutation{drift, "          cache: false\n", "          cache: ${{ (" + mainOnlyGate + ") }}\n"})
+		expectNoViolations(t, prCacheWriteViolations(t, tree))
+	})
+	fails := []struct {
+		name string
+		muts []mutation
+		want []string
+	}{
+		{"another expression that is off on a pull request", []mutation{{cq, codeqlTrapGated, "          trap-caching: ${{ github.event_name != 'pull_request' }}\n"}}, []string{"codeql-analysis.yml", "github/codeql-action/init (dependency-caching: none, trap-caching: ${{ github.event_name != 'pull_request' }})"}},
+		{"the gate widened by a term", []mutation{{cq, codeqlTrapGated, "          trap-caching: ${{ " + mainOnlyGate + " || github.event_name == 'pull_request' }}\n"}}, []string{"codeql-analysis.yml", "github/codeql-action/init (dependency-caching: none, trap-caching: ${{"}},
+		{"the gate unset", []mutation{{cq, codeqlTrapGated, ""}}, []string{"codeql-analysis.yml", "github/codeql-action/init (dependency-caching: none, trap-caching unset)"}},
 	}
 	for _, c := range fails {
 		t.Run(c.name+" fails", func(t *testing.T) {

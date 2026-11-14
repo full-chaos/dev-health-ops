@@ -92,7 +92,7 @@ func Parse(path string) ([]Row, error) {
 	return rows, nil
 }
 
-// ciArches are the GOARCH values the scan runs for, GOOS linux. CI runs Go on arm64 (oci-arc-runners) and on amd64 (ubuntu-latest), and
+// ciArches are the GOARCH values the scan runs for, GOOS linux. CI runs Go on arm64 (ubuntu-24.04-arm) and on amd64 (ubuntu-latest), and
 // go list ignores a file named for the other arch, so a scan of the host arch alone gave a different answer per host. The scan runs
 // once per arch and the problems are united: the result is the same on every host and never accepts what one CI arch refuses.
 var ciArches = []string{"amd64", "arm64"}

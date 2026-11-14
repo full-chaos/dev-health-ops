@@ -123,7 +123,7 @@ var queueGates = []queueGateSpec{
 		job:       "go-queue-gate",
 		condition: "always() && (github.event_name == 'pull_request' || github.event_name == 'merge_group')",
 		needs: []string{"go-storage-integration-plan", "go-storage-integration", "go-container-build", "go-container-smoke", "go-container-security",
-			"go-container-reproducibility", "go-container-reproducibility-self-hosted", "go-auth-compose-proof", "go-auth-web-proxy-proof",
+			"go-container-reproducibility", "go-auth-compose-proof", "go-auth-web-proxy-proof",
 			"graphql-wire-parity"},
 		env: map[string]string{
 			"GATE_NAME":         "go-queue-gate",
@@ -137,7 +137,7 @@ var queueGates = []queueGateSpec{
 			"go-storage-integration|unconditional|${{ needs.go-storage-integration.result }}",
 			"go-container-smoke|queue-heavy|${{ needs.go-container-smoke.result }}",
 			"go-container-security|queue-heavy|${{ needs.go-container-security.result }}",
-			"go-container-reproducibility|queue-heavy|${{ needs.go-container-reproducibility.result == 'skipped' && needs.go-container-reproducibility-self-hosted.result || needs.go-container-reproducibility.result }}",
+			"go-container-reproducibility|queue-heavy|${{ needs.go-container-reproducibility.result }}",
 			"go-auth-compose-proof|queue-heavy|${{ needs.go-auth-compose-proof.result }}",
 			"go-auth-web-proxy-proof|queue-heavy|${{ needs.go-auth-web-proxy-proof.result }}",
 			"graphql-wire-parity|queue-heavy|${{ needs.graphql-wire-parity.result }}",
@@ -223,16 +223,15 @@ func queueGateViolations(t *testing.T, root string) []string {
 			judgedByFile[g.file][strings.SplitN(r, "|", 2)[0]] = true
 		}
 	}
-	// Every heavy job, except the self-hosted dind preconditions, is judged by a required gate of its workflow.
+	// Every heavy job is judged by a required gate of its workflow.
 	for _, file := range []string{"go.yml", "docker-images.yml", "live-e2e.yml"} {
 		judged := judgedByFile[file]
 		if judged == nil {
 			judged = map[string]bool{}
 		}
-		judged["go-container-reproducibility-self-hosted"] = judged["go-container-reproducibility"]
 		var unjudged []string
 		for _, p := range sortedPairs(heavyGatedJobs) {
-			if p[0] == file && p[1] != "dind-smoke-test" && !judged[p[1]] {
+			if p[0] == file && !judged[p[1]] {
 				unjudged = append(unjudged, p[1])
 			}
 		}

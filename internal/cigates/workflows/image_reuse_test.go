@@ -171,7 +171,7 @@ func imageReuseViolations(t *testing.T, root string) []string {
 		}
 	}
 
-	for _, name := range []string{"go-container-reproducibility", "go-container-reproducibility-self-hosted"} {
+	for _, name := range []string{"go-container-reproducibility"} {
 		job := pinJob(goDoc, name)
 		if job == nil {
 			add("go.yml has no %s job", name)
@@ -221,7 +221,7 @@ func imageReuseViolations(t *testing.T, root string) []string {
 	}
 	for _, banned := range []string{"download-artifact", "docker load"} {
 		start := strings.Index(docker, "\n  go-build:")
-		end := strings.Index(docker, "\n  dind-smoke-test:")
+		end := strings.Index(docker, "\n  go-build-dho-arm64:")
 		if start >= 0 && end > start && strings.Contains(docker[start:end], banned+" ") && strings.Contains(docker[start:end], "go-images-") {
 			add("docker-images.yml go-build reuses go.yml's shared images (%s)", banned)
 		}

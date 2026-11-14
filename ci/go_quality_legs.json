@@ -11,10 +11,10 @@
   {"name": "test-8-of-10", "args": "test 8 10"},
   {"name": "test-9-of-10", "args": "test 9 10"},
   {"name": "test-10-of-10", "args": "test 10 10"},
-  {"name": "race-1-of-6", "args": "race 1 6", "heavy": true, "pool": true},
-  {"name": "race-2-of-6", "args": "race 2 6", "heavy": true, "pool": true},
-  {"name": "race-3-of-6", "args": "race 3 6", "heavy": true, "pool": true},
-  {"name": "race-4-of-6", "args": "race 4 6", "heavy": true, "pool": true},
-  {"name": "race-5-of-6", "args": "race 5 6", "heavy": true, "pool": true},
-  {"name": "race-6-of-6", "args": "race 6 6", "heavy": true, "pool": true}
+  {"name": "race-1-of-6", "args": "race 1 6", "heavy": true},
+  {"name": "race-2-of-6", "args": "race 2 6", "heavy": true},
+  {"name": "race-3-of-6", "args": "race 3 6", "heavy": true},
+  {"name": "race-4-of-6", "args": "race 4 6", "heavy": true},
+  {"name": "race-5-of-6", "args": "race 5 6", "heavy": true},
+  {"name": "race-6-of-6", "args": "race 6 6", "heavy": true}
 ]

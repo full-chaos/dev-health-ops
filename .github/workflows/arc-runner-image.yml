@@ -29,18 +29,8 @@
 # immutable sha tag and can never clobber `latest` with older content.
 name: Build arc-runner image
 
+# Manual only (pm, D6994): the ARC pool this image served is retired; the workflow stays for a deliberate rebuild.
 on:
-  push:
-    branches: [main]
-    paths:
-      - docker/arc-runner/Dockerfile
-      - .github/workflows/arc-runner-image.yml
-      - go.mod
-  pull_request:
-    paths:
-      - docker/arc-runner/Dockerfile
-      - .github/workflows/arc-runner-image.yml
-      - go.mod
   workflow_dispatch:
     inputs:
       push_image:
@@ -73,7 +63,7 @@ jobs:
     # registered to cross-build on an x64 host -- added below, since this
     # job previously only ever ran natively on (would-be) arm64 hardware and
     # never needed it.
-    runs-on: ${{ (vars.SELF_HOSTED_RUNNERS == 'enabled' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     outputs:
       sha: ${{ github.sha }}
     steps:
@@ -260,8 +250,7 @@ jobs:
           docker run --rm --platform linux/arm64 \
             ghcr.io/full-chaos/arc-runner:check \
             sh -c 'command -v gcc'
-          # CHAOS-5166: on the x64+QEMU fallback leg (SELF_HOSTED_RUNNERS
-          # disabled, or a fork PR), this job's own setup-go step installs
+          # CHAOS-5166: on the hosted x64+QEMU runner, this job's own setup-go step installs
           # the HOST's (amd64) Go toolchain -- the mounted GOROOT above is
           # that amd64 binary, not an arm64 one. Since the container's
           # rootfs is arm64 but the mounted `go` binary is a native amd64

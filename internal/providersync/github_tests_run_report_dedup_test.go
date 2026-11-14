@@ -213,12 +213,13 @@ func TestGitHubTestsRunReportsDecisionDoesNotDependOnListingOrder(t *testing.T) 
 }
 
 // R3: the duplicate test runs before the bound. 80,000 rows of parts plus their 80,000-row aggregate would pass the bound, but the
-// aggregate is dropped first, so nothing is skipped as over the bound.
+// aggregate is dropped first, so nothing is skipped as over the bound. The aggregate is declared the smallest, so it comes first in
+// admission order and would take the bound if it counted.
 func TestGitHubTestsRunReportsDedupRunsBeforeTheBound(t *testing.T) {
 	first, second := part("u", 20_000, 20_000), part("v", 20_000, 20_000)
 	all := append(append([]fxSuite(nil), first...), second...)
 	walk, _, _ := rowsWalk(t, 1, rowsArtifact{id: "61", size: 100, body: fxJUnit(first)}, rowsArtifact{id: "62", size: 200, body: fxJUnit(second)},
-		rowsArtifact{id: "63", size: 300, body: fxJUnit(all)})
+		rowsArtifact{id: "63", size: 50, body: fxJUnit(all)})
 	want := rowsOfSuites(first) + rowsOfSuites(second)
 	if got := committedReportRows(walk); got != want {
 		t.Fatalf("committed %d rows, want the two parts (%d)", got, want)

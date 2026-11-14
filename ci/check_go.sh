@@ -1500,24 +1500,17 @@ test_split_listed_names() {
   printf '%s\n' "${names}"
 }
 
-# test_split_part_names MODULE PKG PART PARTS [GO FLAG...] (CHAOS-13520; the auth legs): the names of part PART of PARTS of the
-# split package PKG: listed name i (1-based) in part ((i - 1) mod PARTS) + 1. A new test joins a part with no table edit.
-test_split_part_names() {
-  local module_dir="$1" pkg="$2" part="$3" parts="$4" names
-  shift 4
+# test_split_cut_names TESTS MODULE PKG KEY PART PARTS [GO FLAG...] (CHAOS-13668; CHAOS-13693): the names of part PART of PARTS of
+# the split package PKG (weights key KEY), listed under the GO FLAGs and cut by the rows of TESTS (ci/go_race_shard.awk names mode):
+# a measured name by its row, any other name by its own hash, so adding a test moves no other test. Fails when a row of KEY names a
+# test `go test -list` no longer reports, or KEY has fewer rows than parts. Callers: the go-quality test legs
+# (ci/go_test_split_weights.tsv, no flag) and the auth race / race-integration legs (their own tables and flags, auth_leg_units).
+test_split_cut_names() {
+  local tests="$1" module_dir="$2" pkg="$3" key="$4" part="$5" parts="$6" names
+  shift 6
   names="$(test_split_listed_names "${module_dir}" "${pkg}" "${parts}" "$@")" || exit 2
-  printf '%s\n' "${names}" | awk -v p="${part}" -v np="${parts}" '(NR - 1) % np == p - 1'
-}
-
-# test_split_weighed_part_names MODULE PKG KEY PART PARTS (CHAOS-13668; the go-quality test legs): the names of part PART of PARTS
-# of the split package PKG (weights key KEY), cut by ci/go_test_split_weights.tsv (ci/go_race_shard.awk names mode): a measured
-# name by its row, any other name by its own hash, so adding a test moves no other test. Fails when a row of KEY names a test
-# `go test -list` no longer reports, or KEY has fewer rows than parts.
-test_split_weighed_part_names() {
-  local module_dir="$1" pkg="$2" key="$3" part="$4" parts="$5" names
-  names="$(test_split_listed_names "${module_dir}" "${pkg}" "${parts}")" || exit 2
-  printf '%s\n' "${names}" | LC_ALL=C awk -v cutkey="${key}" -v cutparts="${parts}" -v cutpart="${part}" -v tests="${GO_TEST_SPLIT_WEIGHTS}" \
-    -f "${ROOT}/ci/go_race_shard.awk" || die "split package ${key}: its parts cannot be cut by ${GO_TEST_SPLIT_WEIGHTS#"${ROOT}/"}"
+  printf '%s\n' "${names}" | LC_ALL=C awk -v cutkey="${key}" -v cutparts="${parts}" -v cutpart="${part}" -v tests="${tests}" \
+    -f "${ROOT}/ci/go_race_shard.awk" || die "split package ${key}: its parts cannot be cut by ${tests#"${ROOT}/"}"
 }
 
 # test_shard_split_names PLAN MODULE: one "package<TAB>key<TAB>name" line per test name of the split-package parts of PLAN (the
@@ -1533,7 +1526,7 @@ test_shard_split_names() {
     if printf '%s\n' "${SECURITY_FRESH_SET}" | grep -Fqx -- "${pkg}"; then
       die "split package ${key} is a fresh security package (${SECURITY_FRESH_FILE#"${ROOT}/"}); it cannot be split"
     fi
-    names="$(test_split_weighed_part_names "${module_dir}" "${pkg}" "${key}" "${part}" "${parts}")" || exit 2
+    names="$(test_split_cut_names "${GO_TEST_SPLIT_WEIGHTS}" "${module_dir}" "${pkg}" "${key}" "${part}" "${parts}")" || exit 2
     while IFS= read -r name; do
       [ -n "${name}" ] || continue
       printf '%s\t%s\t%s\n' "${pkg}" "${key}" "${name}"
@@ -5732,12 +5725,26 @@ check_auth_race_integration() {
 # stays). auth_leg_plan KIND LEG COUNT prints the leg's whole packages ("<import path>") and the parts of split packages
 # ("<import path><TAB><part><TAB><parts>"), by ci/go_race_shard.awk over the KIND's package list:
 #   test              AUTH_PACKAGES, ci/go_test_weights.tsv, no split
-#   race              AUTH_PACKAGES, ci/go_race_weights.d, splits ci/auth_race_splits.tsv
-#   race-integration  AUTH_RACE_PACKAGES, ci/auth_race_integration_weights.tsv, splits ci/auth_race_integration_splits.tsv
-# A part runs the names test_split_part_names gives it under the leg's own flags. A leg that plans nothing fails.
+#   race              AUTH_PACKAGES, ci/go_race_weights.d, splits ci/auth_race_splits.tsv, tests ci/auth_race_split_weights.tsv
+#   race-integration  AUTH_RACE_PACKAGES, ci/auth_race_integration_weights.tsv, splits ci/auth_race_integration_splits.tsv,
+#                     tests ci/auth_race_integration_split_weights.tsv
+# A part runs the names test_split_cut_names gives it under the leg's own flags, cut by the kind's tests table (CHAOS-13693: a
+# measured name by its row, any other by its own hash). A part still weighs ceil(W / parts) in the plan (chain=0): the plan reads
+# the tests table only to refuse a malformed row or a row of a package the kind does not split. A missing table, or a leg that
+# plans nothing, fails.
 AUTH_RACE_SPLITS="${AUTH_RACE_SPLITS:-${ROOT}/ci/auth_race_splits.tsv}"
+AUTH_RACE_SPLIT_WEIGHTS="${AUTH_RACE_SPLIT_WEIGHTS:-${ROOT}/ci/auth_race_split_weights.tsv}"
 AUTH_RACE_INTEGRATION_WEIGHTS="${AUTH_RACE_INTEGRATION_WEIGHTS:-${ROOT}/ci/auth_race_integration_weights.tsv}"
 AUTH_RACE_INTEGRATION_SPLITS="${AUTH_RACE_INTEGRATION_SPLITS:-${ROOT}/ci/auth_race_integration_splits.tsv}"
+AUTH_RACE_INTEGRATION_SPLIT_WEIGHTS="${AUTH_RACE_INTEGRATION_SPLIT_WEIGHTS:-${ROOT}/ci/auth_race_integration_split_weights.tsv}"
+
+# auth_leg_split_weights KIND: the tests table of the KIND's split packages (empty for test: it splits nothing).
+auth_leg_split_weights() {
+  case "$1" in
+    race) printf '%s' "${AUTH_RACE_SPLIT_WEIGHTS}" ;;
+    race-integration) printf '%s' "${AUTH_RACE_INTEGRATION_SPLIT_WEIGHTS}" ;;
+  esac
+}
 
 auth_leg_args() {
   local leg="${1:-}" count="${2:-}"
@@ -5747,8 +5754,9 @@ auth_leg_args() {
 }
 
 auth_leg_plan() {
-  local kind="$1" leg="$2" count="$3" modpath pkgs weights splits="" out tmp=""
+  local kind="$1" leg="$2" count="$3" modpath pkgs weights splits="" tests out tmp=""
   auth_leg_args "${leg}" "${count}"
+  tests="$(auth_leg_split_weights "${kind}")"
   modpath="$(test_leg_listed "go-list-m|." auth_go list -m)" || die "go list -m failed"
   case "${kind}" in
     test)
@@ -5769,9 +5777,10 @@ auth_leg_plan() {
       ;;
     *) die "auth leg KIND must be test, race or race-integration, got '${kind}'" ;;
   esac
-  { [ -f "${weights}" ] && { [ -z "${splits}" ] || [ -f "${splits}" ]; }; } || { [ -z "${tmp}" ] || rm -f -- "${tmp}"; die "auth ${kind} legs need ${weights}${splits:+ and ${splits}}"; }
+  { [ -f "${weights}" ] && { [ -z "${splits}" ] || [ -f "${splits}" ]; } && { [ -z "${tests}" ] || [ -f "${tests}" ]; }; } \
+    || { [ -z "${tmp}" ] || rm -f -- "${tmp}"; die "auth ${kind} legs need ${weights}${splits:+ and ${splits}}${tests:+ and ${tests}}"; }
   out="$(printf '%s\n' "${pkgs}" | awk -v mod="${modpath}" -v shard="${leg}" -v count="${count}" -v weights="${weights}" \
-    -v splits="${splits}" -v defw=1 -f "${ROOT}/ci/go_race_shard.awk")" || { [ -z "${tmp}" ] || rm -f -- "${tmp}"; die "auth ${kind} leg ${leg}/${count}: the split (ci/go_race_shard.awk) failed"; }
+    -v splits="${splits}" -v tests="${tests}" -v defw=1 -f "${ROOT}/ci/go_race_shard.awk")" || { [ -z "${tmp}" ] || rm -f -- "${tmp}"; die "auth ${kind} leg ${leg}/${count}: the split (ci/go_race_shard.awk) failed"; }
   [ -z "${tmp}" ] || rm -f -- "${tmp}"
   [ -n "${out}" ] || die "auth ${kind} leg ${leg}/${count} plans no package: more legs than packages and parts"
   printf '%s\n' "${out}"
@@ -5798,9 +5807,10 @@ auth_leg_flags() {
 # (empty regex; for race-integration one line per package, so each gets its marker check) and per split package the names of
 # its parts in the leg. AUTH_LEG_LIST=1 prints "AUTH-LEG-RUN <kind> <key> <name|*>" receipts instead (the guard reads them).
 auth_leg_units() {
-  local kind="$1" leg="$2" count="$3" plan modpath pkg part parts names regex whole=""
+  local kind="$1" leg="$2" count="$3" plan modpath pkg part parts names regex tests whole=""
   local -a flags=()
   plan="$(auth_leg_plan "${kind}" "${leg}" "${count}")" || exit 2
+  tests="$(auth_leg_split_weights "${kind}")"
   mapfile -t flags < <(auth_leg_flags "${kind}" | grep -v -- '-timeout=\|^-v$')
   modpath="$(test_leg_listed "go-list-m|." auth_go list -m)" || die "go list -m failed"
   while IFS=$'\t' read -r pkg part parts; do
@@ -5809,7 +5819,7 @@ auth_leg_units() {
       if [ "${kind}" = race-integration ]; then printf '%s\t\n' "${pkg}"; else whole+="${pkg} "; fi
       continue
     fi
-    names="$(test_split_part_names . "${pkg}" "${part}" "${parts}" "${flags[@]}")" || exit 2
+    names="$(test_split_cut_names "${tests}" . "${pkg}" "${pkg#"${modpath}/"}" "${part}" "${parts}" "${flags[@]}")" || exit 2
     regex="$(printf '%s\n' "${names}" | paste -sd'|' -)"
     printf '%s\t^(%s)$\n' "${pkg}" "${regex}"
   done <<<"$(printf '%s\n' "${plan}" | LC_ALL=C sort -t$'\t' -k1,1 -k2,2n)"
@@ -6030,6 +6040,10 @@ auth_path_relevant() {
     cmd/auth-service/*|cmd/auth-migrate/*|internal/auth/*|internal/audit/*|internal/storage/postgres/authschema/*|contracts/auth/*|go.mod|go.sum|ci/check_go.sh|cmd/cigate/*|internal/cigates/*|ci/auth_gate_scope_exempt.txt|ci/auth_closure_allow.tsv|ci/auth-vuln-exceptions.tsv|ci/auth_queue_relevance.sh|ci/auth_corpus_queue_relevance.sh|ci/auth_corpus_paths.txt|.github/workflows/go-auth-service.yml)
       return 0
       ;;
+    # CHAOS-13693: the auth leg split and weight tables decide which names an auth leg runs; a table-only change runs the legs.
+    ci/auth_race_splits.tsv|ci/auth_race_split_weights.tsv|ci/auth_race_integration_weights.tsv|ci/auth_race_integration_splits.tsv|ci/auth_race_integration_split_weights.tsv)
+      return 0
+      ;;
   esac
   # A Go-package area path with an auth* or audit* directory segment: a package
   # that is new, deleted or moved is not in the head-tree candidate list.
@@ -6052,7 +6066,7 @@ auth_path_relevant() {
 check_auth_paths_selftest() {
   local closure inside outside file
   closure="$(printf 'internal/auth/authruntime\ninternal/platform/secrets\n')"
-  inside=(internal/authnew/a.go internal/some/auth_helper/x.go internal/audit/audit.go internal/auth/contracts/deleted_package/x.go cmd/auth-service/main.go internal/auth/authruntime/runtime.go internal/platform/secrets/secrets.go internal/auth/authruntime/testdata/fixture.txt internal/platform/secrets/testdata/nested/golden.json contracts/auth/v1/README.md go.mod ci/check_go.sh ci/auth_queue_relevance.sh ci/auth_corpus_queue_relevance.sh ci/auth_corpus_paths.txt)
+  inside=(internal/authnew/a.go internal/some/auth_helper/x.go internal/audit/audit.go internal/auth/contracts/deleted_package/x.go cmd/auth-service/main.go internal/auth/authruntime/runtime.go internal/platform/secrets/secrets.go internal/auth/authruntime/testdata/fixture.txt internal/platform/secrets/testdata/nested/golden.json contracts/auth/v1/README.md go.mod ci/check_go.sh ci/auth_queue_relevance.sh ci/auth_corpus_queue_relevance.sh ci/auth_corpus_paths.txt ci/auth_race_splits.tsv ci/auth_race_split_weights.tsv ci/auth_race_integration_weights.tsv ci/auth_race_integration_splits.tsv ci/auth_race_integration_split_weights.tsv)
   outside=(internal/providersync/sync.go docs/index.md web/README.md internal/platform/other/x.go internal/platform/secretsx/y.go src/dev_health_ops/cli.py)
   for file in "${inside[@]}"; do
     auth_path_relevant "${file}" "${closure}" || die "auth path filter: ${file} must select the auth gates and does not"

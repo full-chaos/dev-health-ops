@@ -28,6 +28,9 @@ func TestBookkeepingTablesAreNotSharedChanges(t *testing.T) {
 		{name: "race_solo_is_full", changed: []string{"ci/go_race_solo.tsv"}, want: sharedChange},
 		// CHAOS-13668: a row of the split weights can fail a leg (a row naming a test go test -list no longer reports).
 		{name: "split_test_weights_is_full", changed: []string{"ci/go_test_split_weights.tsv"}, want: sharedChange},
+		// CHAOS-13693: the same for the auth legs' split weights.
+		{name: "auth_race_split_weights_is_full", changed: []string{"ci/auth_race_split_weights.tsv"}, want: sharedChange},
+		{name: "auth_race_integration_split_weights_is_full", changed: []string{"ci/auth_race_integration_split_weights.tsv"}, want: sharedChange},
 		{name: "new_ci_table_is_full", changed: []string{"ci/foo.tsv"}, want: sharedChange},
 		{name: "nested_race_weights_file_is_full", changed: []string{"ci/go_race_weights.d/a/b.tsv"}, want: sharedChange},
 		{name: "non_tsv_in_race_weights_dir_is_full", changed: []string{"ci/go_race_weights.d/x.txt"}, want: sharedChange},

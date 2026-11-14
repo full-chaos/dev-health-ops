@@ -141,6 +141,7 @@ internal/cigates/splitshards	free_run_test.go	unexpressed
 internal/cigates/splitshards	listing_cache_test.go	unexpressed
 internal/cigates/suitecatalog	suitecatalog_test.go	unexpressed
 internal/cigates/testshard	all_legs_errexit_test.go	unexpressed
+internal/cigates/testshard	authsplitweights_test.go	unexpressed
 internal/cigates/testshard	chainplan_test.go	unexpressed
 internal/cigates/testshard	checkgofresh_test.go	unexpressed
 internal/cigates/testshard	listcall_test.go	unexpressed

@@ -55,7 +55,7 @@ type slugStack struct {
 	users  *identity.Store
 }
 
-func newSlugStack(t *testing.T, ctx context.Context) *slugStack {
+func newSlugStack(t *testing.T, ctx context.Context, switchValue string) *slugStack {
 	t.Helper()
 	pg, err := containers.StartPostgres(ctx)
 	if err != nil {
@@ -117,7 +117,7 @@ VALUES ($1, $2, NULL, 'local', true, true, true, 0, now(), now())`, super, "slug
 		t.Fatal(err)
 	}
 
-	t.Setenv(EnvAuthProxyOrgProvisioning, "")
+	t.Setenv(EnvAuthProxyOrgProvisioning, switchValue)
 	t.Setenv(EnvAuthProxyURL, provisioning.URL)
 	t.Setenv(EnvAuthWorkloadSubjectFile, subjectFile(t))
 	t.Setenv(EnvAuthWorkloadIssuer, testWorkloadIssuer)
@@ -328,7 +328,7 @@ func wantSignedIn(t *testing.T, s *slugStack, ctx context.Context, label, email 
 func TestADeletedOrganizationsNameCanBeReused(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	t.Cleanup(cancel)
-	s := newSlugStack(t, ctx)
+	s := newSlugStack(t, ctx, "")
 	for _, seq := range []struct {
 		name        string
 		signInFirst bool
@@ -384,7 +384,7 @@ func TestADeletedOrganizationsNameCanBeReused(t *testing.T) {
 func TestARemainingSlugClashIsAConflict(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	t.Cleanup(cancel)
-	s := newSlugStack(t, ctx)
+	s := newSlugStack(t, ctx, "")
 	slug := "held-in-auth-" + uuid.NewString()[:8]
 	if _, err := s.orgs.Create(ctx, org.CreateInput{Slug: slug, Name: "Held in auth"}, org.Actor{}); err != nil {
 		t.Fatalf("org.Create: %v", err)
@@ -408,7 +408,7 @@ func TestARemainingSlugClashIsAConflict(t *testing.T) {
 func TestARepeatDeleteFreesTheSlugOfAnEarlierDelete(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	t.Cleanup(cancel)
-	s := newSlugStack(t, ctx)
+	s := newSlugStack(t, ctx, "")
 	name := "Earlier delete " + uuid.NewString()[:8]
 	ownerX, emailX := s.user(t, ctx, "x")
 	x, slugX := s.create(t, name, "", ownerX)

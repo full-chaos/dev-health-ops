@@ -21,7 +21,29 @@ const (
 	// ReasonRepositoryNotFound: a named repository resolved to nothing, and
 	// no named repository matched the filter.
 	ReasonRepositoryNotFound EmptyReason = "repository_not_found"
+	// ReasonServiceNotFound: the request names service ids and none of them
+	// exists for the organization (CHAOS-13707).
+	ReasonServiceNotFound EmptyReason = "service_not_found"
+	// ReasonDeveloperNotFound: the request names developer ids and none of
+	// them exists for the organization (CHAOS-13707).
+	ReasonDeveloperNotFound EmptyReason = "developer_not_found"
 )
+
+// ScopeNotFoundReason is the reason of a service or developer scope whose named
+// ids resolved to nothing (scoperesolve.Unresolved). Any other level, the
+// repository one included, has its own rule (ClassifyEmptyFilter) and gets nil.
+func ScopeNotFoundReason(level string) *EmptyReason {
+	var reason EmptyReason
+	switch level {
+	case "service":
+		reason = ReasonServiceNotFound
+	case "developer":
+		reason = ReasonDeveloperNotFound
+	default:
+		return nil
+	}
+	return &reason
+}
 
 // ClassifyEmptyFilter is the one rule for the reason. named is the number of
 // repository references the request names (an empty string is not one),

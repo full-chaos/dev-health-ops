@@ -207,16 +207,16 @@ func TestHomeAnswersNoMetricRowsForAnUnresolvedScopeAtEveryLevel(t *testing.T) {
 	}
 }
 
-// FilterEmptyReason stays null for an unresolved service or developer scope (CHAOS-6119): the only reasons are repository ones, and the
-// web words repository_not_found as "repository not found". A level-specific reason needs a new enum value and web text.
-func TestFilterEmptyReasonStaysNullForAnUnresolvedServiceOrDeveloperScope(t *testing.T) {
-	for _, level := range []string{"service", "developer"} {
+// An unresolved service or developer scope says why (CHAOS-13707): the level's own reason, never the repository one and never null.
+func TestFilterEmptyReasonOfAnUnresolvedServiceOrDeveloperScopeNamesTheLevel(t *testing.T) {
+	for level, want := range map[string]string{"service": "service_not_found", "developer": "developer_not_found"} {
 		unknown := resolved(t, newExistenceClient(), "org-a", level, "nope")
 		if !unknown.Scope.Unresolved() {
 			t.Fatalf("%s: the scope is resolved", level)
 		}
-		if reason, err := filterEmptyReason(context.Background(), nil, unknown, "org-a", time.Now()); err != nil || reason != nil {
-			t.Errorf("%s unknown: reason %v err %v, want null", level, reason, err)
+		reason, err := filterEmptyReason(context.Background(), nil, unknown, "org-a", time.Now())
+		if err != nil || reason == nil || string(*reason) != want {
+			t.Errorf("%s unknown: reason %v err %v, want %s", level, reason, err, want)
 		}
 	}
 }
@@ -231,13 +231,13 @@ func TestFilterEmptyReasonOfAnUnresolvedRepositoryScopeIsRepositoryNotFound(t *t
 	}
 }
 
-// BuildResponseWithFilterEmptyReason answers the unresolved service scope with no reason and no metric rows.
-func TestBuildResponseWithFilterEmptyReasonAnswersAnUnresolvedServiceWithNoReason(t *testing.T) {
+// BuildResponseWithFilterEmptyReason answers the unresolved service scope with service_not_found and no metric rows.
+func TestBuildResponseWithFilterEmptyReasonAnswersAnUnresolvedServiceWithServiceNotFound(t *testing.T) {
 	c := newExistenceClient()
 	f := Filters{Time: TimeFilter{RangeDays: 7, CompareDays: 7, EndDate: ptrTime(day(2024, 1, 8))}, Scope: ScopeFilter{Level: "service", IDs: []string{"svc-1"}}}
 	resp, err := BuildResponseWithFilterEmptyReason(context.Background(), c, nil, "org-a", f, goldenNow)
-	if err != nil || resp.FilterEmptyReason != nil {
-		t.Fatalf("response reason %v err %v, want null", resp, err)
+	if err != nil || resp.FilterEmptyReason == nil || *resp.FilterEmptyReason != "service_not_found" {
+		t.Fatalf("response %+v err %v, want service_not_found", resp, err)
 	}
 	if c.resolveQueries() != 0 {
 		t.Errorf("%d resolve queries for a service scope, want 0", c.resolveQueries())

@@ -86,8 +86,15 @@ func repoFilterRequested(f Filters) bool {
 // filterEmptyReason is Response.FilterEmptyReason (CHAOS-9098): why the
 // repositories a request names matched nothing, by the one rule of
 // teamscope.ClassifyEmptyFilter. nil when the request names no repository, and
-// whenever something matched.
+// whenever something matched. An unresolved service or developer scope says so
+// with its own reason (CHAOS-13707); an unresolved repository scope keeps the
+// repository rule.
 func filterEmptyReason(ctx context.Context, client QueryClient, f Filters, orgID string, asOf time.Time) (*teamscope.EmptyReason, error) {
+	if f.Scope.Unresolved() {
+		if reason := teamscope.ScopeNotFoundReason(f.Scope.Level); reason != nil {
+			return reason, nil
+		}
+	}
 	refs := teamscope.NamedRepoRefs(f.Scope.Level, f.Scope.IDs, f.What.Repos)
 	if len(refs) == 0 {
 		return nil, nil

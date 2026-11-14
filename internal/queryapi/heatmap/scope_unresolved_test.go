@@ -55,3 +55,20 @@ func TestAServiceScopeThatNamesAnIDReadsNothing(t *testing.T) {
 		t.Errorf("org scope: %d reads carry AND 1 = 0", with)
 	}
 }
+
+// An unresolved service scope says service_not_found on the served answer (CHAOS-13707); an org scope serves no reason.
+func TestAnUnresolvedServiceScopeServesServiceNotFound(t *testing.T) {
+	for _, metric := range []struct{ typ, name string }{{"temporal_load", "review_wait_density"}, {"context_switch", "repo_touchpoints"}, {"risk", "hotspot_risk"}} {
+		resp, err := BuildResponse(context.Background(), &rn13705Client{}, "org-a", Params{Type: metric.typ, Metric: metric.name, ScopeType: "service", ScopeID: "svc-1", RangeDays: 30, Limit: 50})
+		if err != nil {
+			t.Fatalf("%s: %v", metric.typ, err)
+		}
+		if resp.FilterEmptyReason == nil || *resp.FilterEmptyReason != "service_not_found" {
+			t.Errorf("%s: filter_empty_reason %v, want service_not_found", metric.typ, resp.FilterEmptyReason)
+		}
+	}
+	resp, err := BuildResponse(context.Background(), &rn13705Client{}, "org-a", Params{Type: "context_switch", Metric: "repo_touchpoints", ScopeType: "org", RangeDays: 30, Limit: 50})
+	if err != nil || resp.FilterEmptyReason != nil {
+		t.Errorf("org scope: reason %v err %v, want null", resp.FilterEmptyReason, err)
+	}
+}

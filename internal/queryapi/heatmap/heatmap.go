@@ -287,6 +287,7 @@ func BuildResponse(ctx context.Context, client QueryClient, orgID string, params
 	var scopeFilterSQL string
 	var scopeBindings []dhclickhouse.Binding
 	var selection selectedFilter
+	var scopeNotFound *teamscope.EmptyReason
 	if definition.Type != "individual" {
 		// A service scope that names an id answers nothing (CHAOS-13705, R335): no service exists. A repository scope resolves
 		// through selectedScopeFilter, which keeps its own empty reason.
@@ -299,6 +300,7 @@ func BuildResponse(ctx context.Context, client QueryClient, orgID string, params
 		}
 		if unresolved {
 			scopeFilterSQL = " AND 1 = 0"
+			scopeNotFound = teamscope.ScopeNotFoundReason(scopeType)
 		} else {
 			var err error
 			scopeFilterSQL, scopeBindings, selection, err = selectedScopeFilter(ctx, client, orgID, scopeType, params, asOf)
@@ -394,6 +396,9 @@ func BuildResponse(ctx context.Context, client QueryClient, orgID string, params
 		Evidence: evidence,
 	}
 	response.RepoFilterApplied, response.FilterEmptyReason = selection.served(definition.Type != "individual")
+	if scopeNotFound != nil {
+		response.FilterEmptyReason = teamscope.EmptyReasonText(scopeNotFound)
+	}
 	return response, nil
 }
 

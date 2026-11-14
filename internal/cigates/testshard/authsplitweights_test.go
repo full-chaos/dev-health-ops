@@ -98,7 +98,7 @@ func (a authTree) checkGo(t *testing.T, env []string, args ...string) (string, s
 	t.Helper()
 	cmd := exec.Command("bash", append([]string{filepath.Join(a.root, "ci", "check_go.sh")}, args...)...)
 	cmd.Dir = a.root
-	cmd.Env = append(append(os.Environ(), reportOnlyEnv+"="), env...)
+	cmd.Env = append(append(jobBudgetFreeEnviron(), reportOnlyEnv+"="), env...)
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	err := cmd.Run()

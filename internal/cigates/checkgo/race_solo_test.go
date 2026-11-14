@@ -21,7 +21,7 @@ func soloExec(t *testing.T, dir string, env []string, stdin string, name string,
 	t.Helper()
 	cmd := exec.Command(name, args...)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), env...)
+	cmd.Env = inheritedEnv(deadlineEnvNames, env...)
 	if stdin != "" {
 		cmd.Stdin = strings.NewReader(stdin)
 	}

@@ -700,8 +700,8 @@ jobs:
 
   # CHAOS-13718: the only writer of the go-quality Go caches. One entry per family (build: static, plan-reads and the test
   # legs; race: the race legs) and UTC day, saved by a push to main only (never a pull request or merge_group run: a queue-ref
-  # entry is readable by no later run). A same-day entry ends the job at the lookup (no download). Not a required context: no
-  # job needs it, and a failure here leaves the legs on the previous generation.
+  # entry is readable by no later run). A same-day entry ends the job at the lookup (no download). Not a required context: the
+  # fan-in does not need it, and a failure here leaves the legs on the previous generation.
   go-quality-cache:
     name: go-quality-cache (${{ matrix.family }})
     needs: [go-quality-plan]
@@ -844,7 +844,7 @@ jobs:
   # (no job needs it), continue-on-error, and the checkout is the target branch's tip, never the merge group.
   cancel-stacked-queue-children:
     name: cancel-stacked-queue-children
-    needs: [go-quality-plan, go-quality-leg, go-quality]
+    needs: [go-quality-plan, go-quality-leg, go-quality-cache, go-quality]
     if: failure() && github.event_name == 'merge_group'
     runs-on: ubuntu-latest
     timeout-minutes: 5

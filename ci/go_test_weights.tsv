@@ -4,7 +4,8 @@
 #   go-quality push runs on main since the 10-leg plan (43366218676, 43369751192, 43376042584, 43377857475, 43379257796; up to 5 values per package);
 # - cold: the `ok` line of the test legs of go-quality run 6221 (a go.sum change: the test-result cache missed; the larger of the two attempts of leg 1).
 # A split package's (ci/go_test_splits.tsv) value of one run is the sum of its parts' lines: the weight of the whole package.
-# Rows: every package of warm median or cold value >= 20 s, and every package that already had a row (a row of a package with no uncached line in those
+# Rows: every package of warm median or cold value >= 20 s, every package of >= 20 s in go-quality test leg 1 of pull request run 43558584492 (its `ok`
+# value), and every package that already had a row (a row of a package with no uncached line in those
 # runs keeps its earlier value), among them the packages the unweighted-slow guard flagged on a starved shard (internal/auth/identity/saml,
 # internal/cigates/bigboyrender, internal/auth/identity; CHAOS-13422). A package with no row weighs 1.
 # No part rows (CHAOS-13668): the test-leg plan derives a split package's part weights from its test rows in ci/go_test_split_weights.tsv; a <key>#<part> row is refused.
@@ -81,6 +82,7 @@ internal/pythonparity	28
 internal/pythonparity/emailvalidator	35
 internal/pythonparity/pyidna	65
 internal/queryapi/investmentexplain	19
+internal/queryapi/pepgate	22
 internal/queryapi/server	52
 internal/queryapiservice	7
 internal/storage/clickhouse	50
@@ -92,5 +94,6 @@ internal/synccli	69
 internal/syncdispatchruntime	31
 internal/testsupport/gitmaintcensus	9
 internal/testsupport/goldenscan/treegate	10
+internal/testsupport/idpstub	54
 internal/testsupport/venuechanged	44
 internal/testsupport/venueoracle/goldenhygiene	15

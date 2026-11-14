@@ -352,8 +352,8 @@ func TestGitHubTestsDockerBuildArtifactsDoNotConsumePerRunArtifactCap(t *testing
 
 // Per-shard timing tables, merged-away JUnit parts and SBOM files are never report
 // candidates. A go.yml main run carries 31 selected artifacts (17 timings, 8 providersync
-// JUnit, 6 SBOM) against the cap of 25, so the per-run truncation cut real JUnit artifacts
-// and blocked the watermark. The JUnit and json artifacts must stay selected.
+// JUnit, 6 SBOM) against the cap of 25, so the per-run truncation cut real JUnit artifacts,
+// and their rows were lost. The JUnit and json artifacts must stay selected.
 func TestGitHubTestsShardTimingJUnitPartAndSBOMArtifactsExcluded(t *testing.T) {
 	for _, name := range []string{
 		"go-test-timings-integration-packages-17", "go-test-timings-test-1-of-10", "GO-TEST-TIMINGS-race-2-of-6",

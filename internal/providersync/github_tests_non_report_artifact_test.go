@@ -349,3 +349,27 @@ func TestGitHubTestsDockerBuildArtifactsDoNotConsumePerRunArtifactCap(t *testing
 		t.Fatal("watermark withheld: dockerbuild-only cap pressure must not block coverage from advancing")
 	}
 }
+
+// Per-shard timing tables, merged-away JUnit parts and SBOM files are never report
+// candidates. A go.yml main run carries 31 selected artifacts (17 timings, 8 providersync
+// JUnit, 6 SBOM) against the cap of 25, so the per-run truncation cut real JUnit artifacts
+// and blocked the watermark. The JUnit and json artifacts must stay selected.
+func TestGitHubTestsShardTimingJUnitPartAndSBOMArtifactsExcluded(t *testing.T) {
+	for _, name := range []string{
+		"go-test-timings-integration-packages-17", "go-test-timings-test-1-of-10", "GO-TEST-TIMINGS-race-2-of-6",
+		"go-junit-part-packages-3", "go-junit-part-daily-1",
+		"go-auth-service-sbom.spdx.json", "go-migrate-sbom.spdx.json", "X.SPDX.JSON",
+	} {
+		if selected, _ := githubTestsArtifactSelectionSeam(name); selected {
+			t.Fatalf("%s was selected, want excluded: not a test report candidate", name)
+		}
+	}
+	for _, name := range []string{
+		"go-test-providersync-1", "go-test-json-race-1-of-6", "go-test-junit-integration",
+		"go-test-junit-test-1-of-10", "coverage-lcov-1-1", "playwright-results-default-1-1-1", "sbom.json",
+	} {
+		if selected, reason := githubTestsArtifactSelectionSeam(name); !selected {
+			t.Fatalf("%s was excluded (reason=%s), want selected", name, reason)
+		}
+	}
+}

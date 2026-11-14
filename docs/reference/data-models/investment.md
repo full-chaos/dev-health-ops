@@ -312,8 +312,8 @@ expressions the investment readers parse today. The writer does not name them; C
 every insert, so a stored value always equals its row's evidence, and the materializer writes a database with or
 without the migration. The migration changes metadata only: a part written before it holds no data for the columns,
 and a read computes them from the part's evidence, so an old row reads its correct keys. The read cost drops only once
-a part stores them (a merge, or the backfill `MATERIALIZE COLUMN`, CHAOS-10727). No reader selects them yet: the
-readers move after a verified backfill (CHAOS-10728). Malformed or empty evidence reads `[]`.
+a part stores them (a merge, or a backfill with `MATERIALIZE COLUMN`). No reader selects them yet: the
+readers move only after a verified backfill. Malformed or empty evidence reads `[]`.
 
 **`work_unit_investments.evidence_quote_count` (migration 106, `Nullable(UInt32)`)** is the number of distinct
 `(source_id, quote)` the row's run wrote to `work_unit_investment_quotes`. It is written by the materializer

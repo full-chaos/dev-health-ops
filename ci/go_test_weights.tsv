@@ -8,6 +8,7 @@
 # value), and every package that already had a row (a row of a package with no uncached line in those
 # runs keeps its earlier value), among them the packages the unweighted-slow guard flagged on a starved shard (internal/auth/identity/saml,
 # internal/cigates/bigboyrender, internal/auth/identity; CHAOS-13422). A package with no row weighs 1.
+# internal/cigates/testshard (CHAOS-13800): the larger of the warm median of push runs 43604205978, 43605920383, 43606101382, 43615706484 and cold push run 43554424993.
 # No part rows (CHAOS-13668): the test-leg plan derives a split package's part weights from its test rows in ci/go_test_split_weights.tsv; a <key>#<part> row is refused.
 # The weights only need to be roughly right: a wrong one costs balance, never coverage (the shards always partition `go list ./...`). Key = import path relative to the module root.
 # Sorted (LC_ALL=C), no duplicates; internal/cigates/testshard checks each row names a real package.
@@ -55,7 +56,7 @@ internal/cigates/scripts	559
 internal/cigates/sharedserver	31
 internal/cigates/splitshards	423
 internal/cigates/suitecatalog	52
-internal/cigates/testshard	595
+internal/cigates/testshard	625
 internal/cigates/weightsfiles	137
 internal/cigates/workflowpaths	28
 internal/cigates/workflows	91

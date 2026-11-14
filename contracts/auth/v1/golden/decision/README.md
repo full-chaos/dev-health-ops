@@ -37,9 +37,9 @@ and every row runs on the shipped catalog. `manifest.json` keeps an empty `catal
 
 ## expect.reason is INTERNAL, expect.wire_reason_code is the wire value
 
-`expect.reason` is an internal `authorization.Reason` token. `expect.wire_reason_code` is the decision `reason_code` the authorize
+`expect.reason` is an INTERNAL `authorization.Reason` token (the evaluator's value; today it equals the wire code for every Reason). `expect.wire_reason_code` is the decision `reason_code` the authorize
 routes send for it, and every pdp row carries the member. Both come from `authapi.wireReasonCode` (CHAOS-10841): the wire code is
-the Reason's own token (`allowed_by_platform_admin` is internal only and sends `allowed_by_role`), and the closed enum is `reason_code` in `jsonschema/authorization_decision.v1.schema.json`
+the Reason's own token for every Reason (`allowed_by_platform_admin` included), and the closed enum is `reason_code` in `jsonschema/authorization_decision.v1.schema.json`
 (= `decision_reason_code` in `vocabulary/reason-codes.json`).
 
 - A string: the Reason reaches the wire as a decision. The string equals `wireReasonCode(reason)` and is in the enum.

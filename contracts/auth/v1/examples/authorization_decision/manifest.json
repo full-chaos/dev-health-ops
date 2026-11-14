@@ -26,6 +26,10 @@
       "why": "An allow by the member's organization role (5.2)."
     },
     {
+      "file": "decision-valid-reason-allowed-by-platform-admin.json",
+      "why": "An organization action allowed to a holder of admin.orgs with no membership of the needed role: the platform-admin allow."
+    },
+    {
       "file": "decision-valid-reason-invalid-request.json",
       "why": "A deny for a request the decision core cannot read in canonical form."
     },

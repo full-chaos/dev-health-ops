@@ -177,6 +177,23 @@ func TestPDPEnforceAsksWithTheQueryAPIWorkloadToken(t *testing.T) {
 	}
 }
 
+// Enforce: the reason auth-service sends for a platform admin's allow is an allow for query-api: the real pep client reads
+// allowed_by_platform_admin, and the same code on a deny is refused (it is an allow reason only).
+func TestPDPEnforceAcceptsThePlatformAdminAllowReason(t *testing.T) {
+	srv := pdptest.New(t)
+	srv.Allow("allowed_by_platform_admin")
+	env := onEnv(t, "enforce", srv.URL)
+	env[authzenforce.QueryAPI.Env()] = "analytics"
+	g := FromSettings((&recordingLookup{values: env}).lookup, nil)
+	if _, err := g.Authorize(context.Background(), testProfile, testBearer, seamOrg); err != nil {
+		t.Fatalf("an allow by allowed_by_platform_admin answered %v, want an allow", err)
+	}
+	srv.Deny("allowed_by_platform_admin")
+	if _, err := g.Authorize(context.Background(), testProfile, testBearer, seamOrg); err == nil {
+		t.Fatal("a deny naming allowed_by_platform_admin was allowed")
+	}
+}
+
 // Enforce (the cell on): a PDP deny is a typed deny with its wire reason, and is counted.
 func TestPDPEnforceDenyIsATypedDeny(t *testing.T) {
 	srv := pdptest.New(t)

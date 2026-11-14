@@ -936,8 +936,9 @@ func wcNamedChange(t *testing.T, expect wcExpect, label string, got []wcCell, tw
 	t.Logf("NAMED-CHANGE|13728|%s|%s|rows_changed=%d", name, label, changed)
 }
 
-// One absolute-answer cell per evaluator branch the cells rely on (acp 06:39:40Z), in m_on (prod's platform roles mode),
-// asserted on both sides. The expected answer is the rule's, not a recorded one; each is red under its own mutant.
+// One absolute-answer cell per evaluator branch the go-api cells reach (E1, E2; acp 06:39:40Z) and the go-api guard pin
+// that keeps the no-membership branch out of reach, in m_on (prod's platform roles mode), asserted on both sides. The
+// expected answer is the rule's, not a recorded one.
 func TestAdminWeakCoverRealPDPAbsoluteAnswers(t *testing.T) {
 	ctx := context.Background()
 	w := newWCWorld(t, ctx, wcModes[1])
@@ -967,6 +968,8 @@ func TestAdminWeakCoverRealPDPAbsoluteAnswers(t *testing.T) {
 		row    wcRow
 		status int
 		body   string
+		// noPDP: the answer comes before any decision point question.
+		noPDP bool
 	}{
 		{
 			// E1, the absent platform role (evaluate.go:120-122): a non-holder on a platform row is refused. Legacy guard
@@ -976,13 +979,13 @@ func TestAdminWeakCoverRealPDPAbsoluteAnswers(t *testing.T) {
 			status: http.StatusForbidden, body: `{"detail":"Superuser access required"}`,
 		},
 		{
-			// E3, no membership (evaluate.go:140-142): a non-holder whose token names an org it has no membership in is
-			// refused on an admin-or row by go-api's own read of the token org's membership row, before any decision
-			// point question: legacy guard internal/api/policy/guard.go:334-345 (an existing org without the row is the
-			// org scope's X-Org-Id refusal, writeOrgDenied scope.go:321-331). So E3's branch is not reached through
-			// go-api by this caller (hosted #6238 df823b93: the cell answered this text on both sides).
-			name: "e3_no_membership", caller: plain, row: row(plain, "r21_list"),
-			status: http.StatusForbidden, body: `{"detail": "X-Org-Id not permitted for this user"}`,
+			// A pin of go-api's token-org guard, not of an evaluator branch: a non-holder whose token names an org it has
+			// no membership in is refused on an admin-or row by go-api's own read of the token org's membership row,
+			// before any decision point question (guard.go:334-345 -> writeOrgDenied, scope.go:321-331), on both sides
+			// with no decision point call. It is why the no-membership branch (evaluate.go:140-142) is not reached
+			// through go-api; the evaluator's unit tests cover that branch.
+			name: "token_org_guard_pin", caller: plain, row: row(plain, "r21_list"),
+			status: http.StatusForbidden, body: `{"detail": "X-Org-Id not permitted for this user"}`, noPDP: true,
 		},
 		{
 			// E2, the organization-scope platform-admin allow (evaluate.go:127-135): a platform admin with no membership
@@ -1005,6 +1008,9 @@ func TestAdminWeakCoverRealPDPAbsoluteAnswers(t *testing.T) {
 				t.Logf("CELL|13728|m_on|%s|%s|%s|%d|%s|pdp=%v", cell.caller.spec.label, cell.name, wcSideName[side], got.status, wcShort(got.body), got.decisions)
 				if got.status != cell.status || got.body != cell.body {
 					t.Errorf("%s side: %d %s; the rule's answer is %d %s", wcSideName[side], got.status, wcShort(got.body), cell.status, cell.body)
+				}
+				if cell.noPDP && len(got.decisions) != 0 {
+					t.Errorf("%s side: decision point asked %v; the guard answers first", wcSideName[side], got.decisions)
 				}
 			}
 		})

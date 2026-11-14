@@ -19,6 +19,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/delegationinput"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 )
 
 // The policy decision point routes. Each mounts only when the endpoint-profile
@@ -620,7 +621,7 @@ func obligationsFit(d authorization.Decision, delegated bool, organizationID str
 }
 
 func (h authorizeHandlers) document(item authorizeItem) (decisionDocument, error) {
-	id, err := loggableDecisionID(h.decisionID)
+	id, err := logging.DrawKept(decisionIDLogKey, maxDecisionIDDraws, h.decisionID)
 	if err != nil {
 		return decisionDocument{}, err
 	}

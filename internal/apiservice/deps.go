@@ -240,6 +240,10 @@ type Deps struct {
 	// routes and verbs that write public.users refuse; the admin users routes
 	// send their writes to auth-service through UsersAdmin.
 	UsersOwned bool
+	// SSOProvidersOwned is AUTH_SSO_PROVIDERS_OWNED: auth-service owns the SSO providers, so the provider routes call it
+	// through SSOProviders. SSOProviders is nil when it is off.
+	SSOProvidersOwned bool
+	SSOProviders      authprovision.SSOProviders
 	// UsersAdmin is the client of auth-service's user-admin routes while users
 	// are owned, built from the shared workload token; nil otherwise.
 	UsersAdmin authprovision.UsersAdmin

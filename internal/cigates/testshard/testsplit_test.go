@@ -36,6 +36,7 @@ func TestEverySplitTestNameRunsInExactlyOneTestLeg(t *testing.T) {
 	if len(splits) == 0 {
 		t.Skip("ci/go_test_splits.tsv splits no package")
 	}
+	rows := splitWeightRows(t)
 	runs := map[string][]string{}
 	legs := map[string][]int{}
 	// One all-legs run gives every leg's names (TestTheAllLegsFormsPrintEachLegsOwnOutput holds it equal to each leg's own run).
@@ -93,6 +94,33 @@ func TestEverySplitTestNameRunsInExactlyOneTestLeg(t *testing.T) {
 			}
 			if n := len(legs[key]); n == 0 || n > parts {
 				t.Errorf("%s runs in %d test leg(s) %v, want 1..%d (its parts)", key, n, legs[key], parts)
+			}
+			// CHAOS-13668: every row names a listed test, and the leg's cut (ci/go_race_shard.awk names mode) is the Go mirror's.
+			var stale []string
+			for n := range rows[key] {
+				if !want[n] {
+					stale = append(stale, n)
+				}
+			}
+			sort.Strings(stale)
+			if len(stale) > 0 {
+				t.Errorf("ci/go_test_split_weights.tsv rows of %s name %d test(s) go test -list no longer reports: %v", key, len(stale), stale)
+				return
+			}
+			var names []string
+			for n := range want {
+				names = append(names, n)
+			}
+			sort.Strings(names)
+			cut, err := awkCut(t, realShardAwk(t), key, parts, map[string]map[string]int{key: rows[key]}, names)
+			if err != nil {
+				t.Fatalf("the cut of %s: %v", key, err)
+			}
+			mirror := cutMirror(rows[key], parts, names)
+			for _, n := range names {
+				if cut[n] != mirror[n] {
+					t.Errorf("%s %s: the leg's cut gives part %d, its Go mirror part %d", key, n, cut[n], mirror[n])
+				}
 			}
 		})
 	}

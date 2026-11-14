@@ -1,9 +1,9 @@
 # CHAOS-5666 published go-api-routing and go-api-prove as one image,
 # ghcr.io/full-chaos/dev-health-go-api-tools. Spec S1 (CHAOS-6280) folds
-# both of them, go-api-rest-prove, mint-envelope and mint-edge-token into
+# both of them, go-api-rest-prove and mint-edge-token into
 # the ONE dho operator binary (cmd/dho): this image now builds and ships
 # that one binary instead of five, as `goapi routing`, `goapi prove`,
-# `goapi rest-prove`, `mint envelope` and `mint edge-token`. Routing rows
+# `goapi rest-prove` and `mint edge-token`. Routing rows
 # can only be re-enabled by a tools image built from the SAME commit as
 # the running query-api (its posture manifest sha is derived from the
 # same schemav1.SDL embed the binary links -- see internal/goapicli/routing's
@@ -113,7 +113,7 @@ ARG COMMIT="unknown"
 ARG BUILD_TIME="1970-01-01T00:00:00Z"
 
 LABEL org.opencontainers.image.title="Dev Health Go-API tools" \
-      org.opencontainers.image.description="the dho operator binary's goapi and mint verbs (routing, prove, rest-prove, mint envelope, mint edge-token), plus the documents dump and operation catalog they need, for the Go-API rollout's tools pod" \
+      org.opencontainers.image.description="the dho operator binary's goapi and mint verbs (routing, prove, rest-prove, mint edge-token), plus the documents dump and operation catalog they need, for the Go-API rollout's tools pod" \
       org.opencontainers.image.source="https://github.com/full-chaos/dev-health-ops" \
       org.opencontainers.image.version=${VERSION} \
       org.opencontainers.image.revision=${COMMIT} \
@@ -152,7 +152,7 @@ USER 10001:10001
 
 # No long-lived process of its own -- this exists to be `kubectl exec`ed
 # or `kubectl run ... -- <command>`ed into for one-off `dho goapi routing`
-# / `dho goapi prove` / `dho goapi rest-prove` / `dho mint envelope` /
+# / `dho goapi prove` / `dho goapi rest-prove` /
 # `dho mint edge-token` runs, so no ENTRYPOINT is set: a caller-supplied
 # command replaces CMD outright instead of trailing a fixed entrypoint
 # binary. The default CMD only needs to keep the Pod alive when no

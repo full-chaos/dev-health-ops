@@ -166,23 +166,23 @@ func SSOProviderRoutes(deps ProvisioningDeps) ([]httpapi.Route, error) {
 
 // ssoProviderAnswer is the legacy SSOProviderResponse.
 type ssoProviderAnswer struct {
-	ID                 string         `json:"id"`
-	OrgID              string         `json:"org_id"`
-	Name               string         `json:"name"`
-	Protocol           string         `json:"protocol"`
-	Status             string         `json:"status"`
-	IsDefault          bool           `json:"is_default"`
-	AllowIdpInitiated  bool           `json:"allow_idp_initiated"`
-	AutoProvisionUsers bool           `json:"auto_provision_users"`
-	DefaultRole        string         `json:"default_role"`
-	Config             map[string]any `json:"config"`
-	AllowedDomains     []string       `json:"allowed_domains"`
-	LastMetadataSyncAt *string        `json:"last_metadata_sync_at"`
-	LastLoginAt        *string        `json:"last_login_at"`
-	LastError          *string        `json:"last_error"`
-	LastErrorAt        *string        `json:"last_error_at"`
-	CreatedAt          string         `json:"created_at"`
-	UpdatedAt          string         `json:"updated_at"`
+	ID                 string          `json:"id"`
+	OrgID              string          `json:"org_id"`
+	Name               string          `json:"name"`
+	Protocol           string          `json:"protocol"`
+	Status             string          `json:"status"`
+	IsDefault          bool            `json:"is_default"`
+	AllowIdpInitiated  bool            `json:"allow_idp_initiated"`
+	AutoProvisionUsers bool            `json:"auto_provision_users"`
+	DefaultRole        string          `json:"default_role"`
+	Config             json.RawMessage `json:"config"`
+	AllowedDomains     []string        `json:"allowed_domains"`
+	LastMetadataSyncAt *string         `json:"last_metadata_sync_at"`
+	LastLoginAt        *string         `json:"last_login_at"`
+	LastError          *string         `json:"last_error"`
+	LastErrorAt        *string         `json:"last_error_at"`
+	CreatedAt          string          `json:"created_at"`
+	UpdatedAt          string          `json:"updated_at"`
 }
 
 // ssoProviderListAnswer is the legacy SSOProviderListResponse.
@@ -197,16 +197,8 @@ func ssoTime(t *time.Time) *string {
 	if t == nil {
 		return nil
 	}
-	s := t.UTC().Format(time.RFC3339Nano)
+	s := pydanticTime(*t)
 	return &s
-}
-
-func ssoAnswer(p ssoprovider.Provider) ssoProviderAnswer {
-	return ssoProviderAnswer{ID: p.ID, OrgID: p.OrgID, Name: p.Name, Protocol: p.Protocol, Status: p.Status, IsDefault: p.IsDefault,
-		AllowIdpInitiated: p.AllowIdpInitiated, AutoProvisionUsers: p.AutoProvision, DefaultRole: p.DefaultRole, Config: p.Config,
-		AllowedDomains: p.AllowedDomains, LastMetadataSyncAt: ssoTime(p.LastMetadataSyncAt), LastLoginAt: ssoTime(p.LastLoginAt),
-		LastError: p.LastError, LastErrorAt: ssoTime(p.LastErrorAt), CreatedAt: p.CreatedAt.UTC().Format(time.RFC3339Nano),
-		UpdatedAt: p.UpdatedAt.UTC().Format(time.RFC3339Nano)}
 }
 
 // samlConfigInput and oidcConfigInput are the legacy SAMLConfigInput and OIDCConfigInput: the stored config is the
@@ -267,26 +259,15 @@ func readOIDCConfig(raw []byte) (*oidcConfigInput, error) {
 	return &in, nil
 }
 
-func structToMap(v any) (map[string]any, error) {
-	raw, err := json.Marshal(v)
-	if err != nil {
-		return nil, err
-	}
-	out := map[string]any{}
-	err = json.Unmarshal(raw, &out)
-	return out, err
-}
-
 // buildConfig is the legacy config choice of a create or update: a SAML config wins over an OIDC one; an OIDC config
 // moves its client_secret out of the config into the sealed secrets object.
 func (h provisioningHandlers) buildConfig(saml, oidc []byte) (*ssoprovider.Config, error) {
 	switch {
 	case saml != nil:
-		in, err := readSAMLConfig(saml)
-		if err != nil {
+		if _, err := readSAMLConfig(saml); err != nil {
 			return nil, err
 		}
-		config, err := structToMap(in)
+		config, err := orderedConfig(saml, samlConfigMembers)
 		return &ssoprovider.Config{JSON: config}, err
 	case oidc != nil:
 		in, err := readOIDCConfig(oidc)
@@ -297,12 +278,10 @@ func (h provisioningHandlers) buildConfig(saml, oidc []byte) (*ssoprovider.Confi
 		if err != nil {
 			return nil, err
 		}
-		in.ClientSecret = ""
-		config, err := structToMap(in)
+		config, err := orderedConfig(oidc, oidcConfigMembers)
 		if err != nil {
 			return nil, err
 		}
-		delete(config, "client_secret")
 		secrets, err := json.Marshal(map[string]string{"client_secret": sealed})
 		if err != nil {
 			return nil, err

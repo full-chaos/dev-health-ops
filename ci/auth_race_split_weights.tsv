@@ -1,0 +1,65 @@
+# Measured tests of the auth race split packages of ci/auth_race_splits.tsv (CHAOS-13693): package<TAB>TestName<TAB>seconds. An
+# auth race leg (check_go.sh auth race-leg) cuts a split package's `go test -race -list` names into its parts by these rows
+# (ci/go_race_shard.awk cut(), as ci/go_test_split_weights.tsv for the test legs): a measured name longest first onto the lightest
+# part, any other name by a hash of its own name, so adding or removing an unmeasured test moves no other test. The auth plan does
+# not read the rows for weights: a part weighs ceil(W / parts) as before (W = the package row of ci/go_race_weights.d).
+# seconds = round(W * median over runs of e/E): e = the test's top-level elapsed, E = the summed top-level elapsed of the package's
+# tests in that run. Source (same flags as the auth race leg: -race, no build tag): the go-test-timings-race-K-of-6 artifacts
+# (go-quality.yml) of 4 successful go-quality push runs on main (43376042584, 43377857475, 43379257796, 43443132054), median over 4.
+# Rows: every listed test of 2 s or more, and the package's heaviest tests up to its part count (no part can be empty).
+# A row must name a test `go test -race -list` reports: renaming or removing a measured test needs its row edited in the same
+# change (the auth race leg and internal/cigates/testshard fail otherwise). Refresh: the same reduction over newer runs; values
+# only cost balance. Sorted (LC_ALL=C) by package, then test.
+internal/auth/authapi	TestAcrEventsRefuseEveryOtherCallerBeforeAnyRead	2
+internal/auth/authapi	TestAcrEventsRefuseEveryRejectedExample	5
+internal/auth/authapi	TestAuthorizeIncompleteDelegatedRowDeniesEveryCatalogAction	4
+internal/auth/authapi	TestCompatLoginRefusalsAnswerGoAPIsWireAndAreAudited	2
+internal/auth/authapi	TestEmbeddedProfileServesTheReadRoutesToTheirCredentials	41
+internal/auth/authapi	TestEveryProvisioningRouteIsOnTheWorkloadListOrRefusesTheToken	21
+internal/auth/authapi	TestForeignAndMissingSameAnswer	8
+internal/auth/authapi	TestGrantRoutesAreOnTheStartupGate	2
+internal/auth/authapi	TestIfRevisionRouteFaultsStayFailClosed	2
+internal/auth/authapi	TestInviteRevokeRefusesARefusedActorBeforeAnyInviteLookup	3
+internal/auth/authapi	TestIssueSessionRefusesWrongCredentialsBeforeAnyRead	3
+internal/auth/authapi	TestKeyRoutesAreOnTheStartupGate	3
+internal/auth/authapi	TestOnboardRouteRefusesTierSlugSettings	4
+internal/auth/authapi	TestOrgCreateRoutesRefusals	13
+internal/auth/authapi	TestOrgStateAnswersStatusAndRevisionFromOneRead	2
+internal/auth/authapi	TestOrgStateNeedsAnAuthServicePostRowListingExactlyTheWorkloadToken	2
+internal/auth/authapi	TestOrgStateNeedsItsProfileRowToStart	2
+internal/auth/authapi	TestOrgStateRefusalSet	3
+internal/auth/authapi	TestPDPLoadProfileShapeDoesNotDependOnLatency	6
+internal/auth/authapi	TestProvisioningBodiesAreStrict	5
+internal/auth/authapi	TestProvisioningEnsuresTheOrganization	3
+internal/auth/authapi	TestProvisioningRoutesNeedTheirProfileRows	2
+internal/auth/authapi	TestProvisioningRoutesRefuseUserTokens	2
+internal/auth/authapi	TestReadRoutesAcceptTheGoAPIWorkloadToken	7
+internal/auth/authapi	TestReadRoutesAnswerWithoutWriting	8
+internal/auth/authapi	TestReadRoutesMountOnlyOnAnExactClassRow	20
+internal/auth/authapi	TestReadRoutesNotMountedWithoutRow	2
+internal/auth/authapi	TestReadRoutesRefuseEveryWorkloadTokenWithoutAConfiguredSubject	8
+internal/auth/authapi	TestReadRoutesRefuseOtherKeyClassesOnTheWorkloadPath	30
+internal/auth/authapi	TestReadRoutesRefuseOtherWorkloadTokens	24
+internal/auth/authapi	TestReadRoutesRefuseTheSubjectAnotherRouteAllows	8
+internal/auth/authapi	TestReadRoutesStayDarkUnlessTheRowListsExactlyTheWorkloadToken	24
+internal/auth/authapi	TestRegisterParityTableNamesARealTestForEveryRow	10
+internal/auth/authapi	TestRepositoryListingListsTheCanonicalKeys	4
+internal/auth/authapi	TestRowsGateCoversStateAndRename	3
+internal/auth/authapi	TestSSOProviderActivateAndDeactivateSetTheirStatus	2
+internal/auth/authapi	TestSSOProviderMissingProviderIsLegacy404	5
+internal/auth/authapi	TestSSOProviderRoutesAcceptTheGoAPIWorkloadToken	7
+internal/auth/authapi	TestSSOProviderRoutesAddNoActorRuleOfTheirOwn	6
+internal/auth/authapi	TestSSOProviderRoutesMountOnlyWithTheirRows	6
+internal/auth/authapi	TestSSOProviderRoutesRefuseAnUnknownOrganization	6
+internal/auth/authapi	TestSSOProviderRoutesRefuseOtherProdWorkloadSubjects	34
+internal/auth/authapi	TestServiceAccountRoutesAreOnTheStartupGate	2
+internal/auth/authapi	TestStaleIfRevisionAnswers409StateChangedOnBothRoutes	4
+internal/auth/authapi	TestTheReactivateRouteIsInTheStartupGate	2
+internal/auth/authapi	TestTheRowsGateRefusalNamesTheRouteAndClasses	2
+internal/auth/authapi	TestUsersAdminRoutesAcceptTheGoAPIWorkloadToken	7
+internal/auth/authapi	TestUsersAdminRoutesRefuseNoToken	5
+internal/auth/authapi	TestUsersAdminRoutesRefuseOtherProdWorkloadSubjects	49
+internal/auth/authapi	TestUsersAdminRoutesRefuseTheRetiredServiceCredential	5
+internal/auth/authapi	TestUsersAdminRoutesRefuseUserTokens	5
+internal/auth/authapi	TestUsersAdminRoutesRerunActorRule	4
+internal/auth/authapi	TestUsersPasswordRouteChecksTheActingAdminPassword	9

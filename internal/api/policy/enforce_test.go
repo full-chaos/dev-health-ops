@@ -837,7 +837,7 @@ func answerOf(verdict enforceVerdict) (int, string, http.Header) {
 	switch verdict {
 	case enforceDeny, enforceUnavailable, enforceNoDecisionPoint:
 		w := httptest.NewRecorder()
-		writeEnforceRefusal(w, Admin, verdict)
+		writeEnforceRefusal(w, nil, Admin, verdict, DenyText{})
 		return w.Code, w.Body.String(), w.Header()
 	case enforceAllow:
 		return http.StatusOK, "", http.Header{}
@@ -1104,7 +1104,39 @@ func TestRollbackCannotReactivateRevokedAccess(t *testing.T) {
 
 // The decision point judges user principals only. A route whose profile row names an action is enforceable, so its
 // row may accept the two user access-token classes and nothing else: a row that gains a service-account, workload or
-// push class must keep its namespace off until the decision point judges that kind.
+// push class must keep its namespace off until the decision point judges that kind. The one other class a mapped row
+// may carry is org_context_header, and only next to a user-token class: it names the X-Org-Id request header the
+// telemetry rows read, travels with the user token, is no credential, and the decision point never reads it (the
+// platform question carries no organization). A row with that class and no user-token class fails.
+func mappedRowClassProblems(classes []string) []string {
+	userToken := func(class string) bool { return class == "ops_access_token_hs256" || class == "user_access_token" }
+	hasUserToken := slices.ContainsFunc(classes, userToken)
+	var problems []string
+	for _, class := range classes {
+		if !userToken(class) && !(class == "org_context_header" && hasUserToken) {
+			problems = append(problems, class)
+		}
+	}
+	return problems
+}
+
+// The planted rows: org_context_header alone, or next to a class that is not a user token, is refused.
+func TestAMappedRowWithOrgContextHeaderAndNoUserTokenClassFails(t *testing.T) {
+	if got := mappedRowClassProblems([]string{"org_context_header"}); len(got) != 1 {
+		t.Errorf("org_context_header alone: problems %v, want one", got)
+	}
+	if got := mappedRowClassProblems([]string{"org_context_header", "refresh_credential"}); len(got) != 2 {
+		t.Errorf("org_context_header with a non-user class: problems %v, want two", got)
+	}
+	if got := mappedRowClassProblems([]string{"org_context_header", "user_access_token"}); len(got) != 0 {
+		t.Errorf("org_context_header with a user token: problems %v, want none", got)
+	}
+	if got := mappedRowClassProblems([]string{"refresh_credential", "user_access_token"}); len(got) != 1 {
+		t.Errorf("a non-user class: problems %v, want one", got)
+	}
+}
+
+// Every row that names an action carries only the classes mappedRowClassProblems accepts.
 func TestEveryMappedRowAcceptsOnlyUserTokenClasses(t *testing.T) {
 	var document struct {
 		Rows []struct {
@@ -1121,10 +1153,8 @@ func TestEveryMappedRowAcceptsOnlyUserTokenClasses(t *testing.T) {
 			continue
 		}
 		mapped++
-		for _, class := range row.Classes {
-			if class != "ops_access_token_hs256" && class != "user_access_token" {
-				t.Errorf("%s %s (%s) accepts %s: keep the %s namespace off, or teach the decision point that principal kind", row.Method, row.Route, row.Action, class, strings.SplitN(row.Action, ".", 2)[0])
-			}
+		for _, class := range mappedRowClassProblems(row.Classes) {
+			t.Errorf("%s %s (%s) accepts %s: keep the %s namespace off, or teach the decision point that principal kind", row.Method, row.Route, row.Action, class, strings.SplitN(row.Action, ".", 2)[0])
 		}
 	}
 	if mapped == 0 {

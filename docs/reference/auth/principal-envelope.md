@@ -5,8 +5,7 @@ content_type: reference
 owner: engineering
 source_of_truth:
   - internal/queryapi/principal
-  - internal/envelopemint
-  - internal/mintcli/envelope
+  - internal/signingkey
 applicability: current
 lifecycle: active
 ---
@@ -62,15 +61,15 @@ There is no `disabled` claim. A disabled or deactivated user is treated as unaut
 
 The envelope uses EdDSA (Ed25519), an asymmetric algorithm. The signing key is separate from the user-facing access-token HS256 secret (`JWT_SECRET_KEY`). The envelope crosses a process and language boundary, so verification uses a JWKS. `query-api` holds only the public key. It cannot forge a user session token.
 
-The private key is `GO_API_ENVELOPE_PRIVATE_KEY` (PEM, Ed25519), required at issuance time. The public JWKS document is built from it. The JWKS verifier accepts Ed25519 keys only.
+The key pair is generated as two files by `dho mint envelope-keys` (a PKCS#8 Ed25519 PEM and the public JWKS). No Go tool mints the envelope any more. The JWKS verifier accepts Ed25519 keys only.
 
 ## Signing key custody
 
-One contract applies to signing-key files across the platform (the web `readPrivateKey`, `internal/auth/keystore` and `internal/envelopemint`). The file must:
+One contract applies to signing-key files across the platform (the web `readPrivateKey`, `internal/auth/keystore` and `internal/signingkey`). The file must:
 
 - open with `O_NOFOLLOW`;
 - be a regular file of 1 byte up to a size bound (16 KiB here);
 - have no group or other permission bits (0600 or stricter);
 - parse as Ed25519, or the load fails.
 
-Supply the envelope key as `GO_API_ENVELOPE_PRIVATE_KEY_FILE` (a path). The raw `GO_API_ENVELOPE_PRIVATE_KEY` value is deprecated. It still works and logs a warning that names only the variable. The file wins when both are set. `mint-envelope -key-file` follows the same contract. Mounted Secret files need `defaultMode: 0400`.
+Supply the key as `GO_API_ENVELOPE_PRIVATE_KEY_FILE` (a path). The Go key loader reads the file only; a raw `GO_API_ENVELOPE_PRIVATE_KEY` value is not read by it. Mounted Secret files need `defaultMode: 0400`.

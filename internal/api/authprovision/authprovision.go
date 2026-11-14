@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"time"
 
 	"github.com/full-chaos/dev-health-go/workloadtoken"
@@ -123,8 +124,15 @@ func (c *Core) HTTP() *http.Client { return c.http }
 
 // Post sends request to path and decodes a 200 answer into answer. A 4xx is a
 // *Refused; anything else that is not a 200 with a JSON body is
-// ErrUnavailable.
+// ErrUnavailable. Neither error carries the answer's text.
 func (c *Core) Post(ctx context.Context, path string, request, answer any) error {
+	return c.PostExpecting(ctx, path, request, answer, http.StatusOK)
+}
+
+// PostExpecting is Post for a route whose success answer is exactly one of statuses (the SSO provider routes answer 201 to
+// a create and 204, with no body, to a delete); any other status, 200 included, is ErrUnavailable. A nil answer expects
+// no body: a body, however small, is ErrUnavailable.
+func (c *Core) PostExpecting(ctx context.Context, path string, request, answer any, statuses ...int) error {
 	raw, err := json.Marshal(request)
 	if err != nil {
 		return fmt.Errorf("%w: encoding the request", ErrUnavailable)
@@ -146,12 +154,18 @@ func (c *Core) Post(ctx context.Context, path string, request, answer any) error
 	switch {
 	case response.StatusCode >= 400 && response.StatusCode < 500:
 		return &Refused{Status: response.StatusCode, Reason: reasonIn(body), RetryAfter: retryAfterIn(response)}
-	case response.StatusCode != http.StatusOK:
+	case !slices.Contains(statuses, response.StatusCode):
 		return fmt.Errorf("%w: status %d", ErrUnavailable, response.StatusCode)
 	case err != nil:
 		return fmt.Errorf("%w: reading the answer", ErrUnavailable)
 	case len(body) > maxAnswerBytes:
 		return fmt.Errorf("%w: answer over %d bytes", ErrUnavailable, maxAnswerBytes)
+	}
+	if answer == nil {
+		if len(body) != 0 {
+			return fmt.Errorf("%w: a body where none is expected", ErrUnavailable)
+		}
+		return nil
 	}
 	if err := json.Unmarshal(body, answer); err != nil {
 		return fmt.Errorf("%w: answer is not JSON", ErrUnavailable)

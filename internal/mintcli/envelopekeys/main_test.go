@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/cli"
-	"github.com/full-chaos/dev-health-ops/internal/envelopemint"
+	"github.com/full-chaos/dev-health-ops/internal/signingkey"
 )
 
 func runCmd(args ...string) (int, string, string) {
@@ -24,7 +24,7 @@ func TestFirstRunWritesAndSecondRunRefuses(t *testing.T) {
 	if code != cli.ExitOK {
 		t.Fatalf("first run exit = %d, stderr: %s", code, errOut)
 	}
-	paths := envelopemint.PathsIn(dir)
+	paths := signingkey.PathsIn(dir)
 	privBytes, err := os.ReadFile(paths.Private)
 	if err != nil {
 		t.Fatal(err)
@@ -60,11 +60,11 @@ func TestSkipExistingExitsZeroOnACompleteSet(t *testing.T) {
 	if code, _, e := runCmd("-dir", dir, "-skip-existing"); code != cli.ExitOK {
 		t.Fatalf("first run exit = %d: %s", code, e)
 	}
-	before, _ := os.ReadFile(envelopemint.PathsIn(dir).Private)
+	before, _ := os.ReadFile(signingkey.PathsIn(dir).Private)
 	if code, _, e := runCmd("-dir", dir, "-skip-existing"); code != cli.ExitOK {
 		t.Fatalf("second run exit = %d: %s", code, e)
 	}
-	after, _ := os.ReadFile(envelopemint.PathsIn(dir).Private)
+	after, _ := os.ReadFile(signingkey.PathsIn(dir).Private)
 	if !bytes.Equal(before, after) {
 		t.Fatal("-skip-existing replaced the key")
 	}
@@ -79,7 +79,7 @@ func TestMissingDirIsAUsageError(t *testing.T) {
 func TestKeyIDComesFromTheEnvironmentWhenSet(t *testing.T) {
 	var out bytes.Buffer
 	lookup := func(name string) (string, bool) {
-		if name == envelopemint.KeyIDEnvVar {
+		if name == signingkey.KeyIDEnvVar {
 			return "kid-from-env", true
 		}
 		return "", false
@@ -89,7 +89,7 @@ func TestKeyIDComesFromTheEnvironmentWhenSet(t *testing.T) {
 	if err != nil || code != cli.ExitOK {
 		t.Fatalf("run = %d, %v", code, err)
 	}
-	jwks, _ := os.ReadFile(envelopemint.PathsIn(dir).JWKS)
+	jwks, _ := os.ReadFile(signingkey.PathsIn(dir).JWKS)
 	if !strings.Contains(string(jwks), `"kid":"kid-from-env"`) {
 		t.Fatalf("JWKS lacks the env key id: %s", jwks)
 	}

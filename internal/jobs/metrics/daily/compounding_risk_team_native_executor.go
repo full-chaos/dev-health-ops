@@ -10,7 +10,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily/compoundingrisk"
-	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/numerical"
 	"github.com/full-chaos/dev-health-ops/internal/teamkeytables"
 	"github.com/full-chaos/dev-health-ops/internal/teamownership"
 	"github.com/full-chaos/dev-health-ops/internal/teamresolve"
@@ -43,7 +42,8 @@ import (
 // never calls teamownership.OwnedRepoIDs directly, by design: a later fix to
 // OwnedRepoIDs' ranking or error-propagation behaviour (CHAOS-5141-class)
 // reaches this family automatically the next time teamresolve is
-// merge-forwarded in, with no change needed here.
+// merge-forwarded in, with no change needed here. It passes no pattern
+// resolver: a repository with no owner row gets no team (D7013b).
 type CompoundingRiskTeamExecutor struct {
 	conn   driver.Conn
 	loader *compoundingrisk.ClickHouseLoader
@@ -116,12 +116,6 @@ func (executor *CompoundingRiskTeamExecutor) ComputeFinalizeFamily(
 		return executor.supersedeStaleKeys(ctx, run.OrganizationID, day, nil, executor.nowUTC(), 0)
 	}
 
-	teams, err := LoadWellbeingTeams(ctx, executor.conn, run.OrganizationID)
-	if err != nil {
-		return 0, err
-	}
-	patternResolver := NewRepoPatternResolver(teams)
-
 	repoIDs := make([]uuid.UUID, 0, len(orgRepoMetrics))
 	for _, row := range orgRepoMetrics {
 		repoID, parseErr := uuid.Parse(row.RepoID)
@@ -151,9 +145,7 @@ func (executor *CompoundingRiskTeamExecutor) ComputeFinalizeFamily(
 	// this (see that function's own doc comment for why, and why the reason
 	// no longer applies). Propagated here exactly like every other error in
 	// this executor: NO FAIL-OPEN, the finalize retries.
-	repoToTeam, err := teamresolve.ResolveOwnerSharesThenPatterns(
-		ctx, executor.conn, run.OrganizationID, day, repoIDs, repoNamesByID, patternResolver,
-	)
+	repoToTeam, err := resolveCompoundingRepoOwners(ctx, executor.conn, run.OrganizationID, day, repoIDs, repoNamesByID)
 	if err != nil {
 		return 0, err
 	}
@@ -165,7 +157,7 @@ func (executor *CompoundingRiskTeamExecutor) ComputeFinalizeFamily(
 		slog.Default().Warn("compounding_risk_team finalize resolved zero repo-to-team mappings",
 			"run_id", run.ID, "organization_id", run.OrganizationID,
 			"target_day", day.Format("2006-01-02"),
-			"org_repo_count", len(orgRepoMetrics), "teams_in_org", len(teams),
+			"org_repo_count", len(orgRepoMetrics),
 			"cause", "no repo in this org resolves to any team today",
 		)
 		return executor.supersedeStaleKeys(ctx, run.OrganizationID, day, nil, executor.nowUTC(), 0)
@@ -201,7 +193,7 @@ func (executor *CompoundingRiskTeamExecutor) ComputeFinalizeFamily(
 	// Only teams this day already gives a row get them; such a repository adds
 	// no other input.
 	withoutMetrics, err := executor.ownedRepositoriesWithoutMetrics(
-		ctx, run.OrganizationID, day, orgRepoMetrics, repoToTeam, patternResolver,
+		ctx, run.OrganizationID, day, orgRepoMetrics, repoToTeam,
 	)
 	if err != nil {
 		return 0, err
@@ -284,19 +276,28 @@ func (executor *CompoundingRiskTeamExecutor) ComputeFinalizeFamily(
 	return executor.supersedeStaleKeys(ctx, run.OrganizationID, day, produced, computedAt, rowsWritten)
 }
 
+// resolveCompoundingRepoOwners is the team rule of compounding_risk_team: a
+// repository's team is its team_repo_ownership owner, else none. No pattern
+// resolver is passed (D7013b).
+func resolveCompoundingRepoOwners(
+	ctx context.Context, conn driver.Conn, organizationID string, day time.Time,
+	repoIDs []uuid.UUID, repoNamesByID map[string]string,
+) (map[string][]teamownership.OwnerShare, error) {
+	return teamresolve.ResolveOwnerSharesThenPatterns(ctx, conn, organizationID, day, repoIDs, repoNamesByID, nil)
+}
+
 type ownedRepository struct {
 	id     uuid.UUID
 	owners []teamownership.OwnerShare
 }
 
 // ownedRepositoriesWithoutMetrics is every repository of the organization with
-// no repo_metrics_daily row of the day that resolves (the same ownership and
-// pattern rule as the day's repositories) to a team the day's repositories
+// no repo_metrics_daily row of the day that resolves (the same ownership rule
+// as the day's repositories) to a team the day's repositories
 // already resolve to, in repository id order, with those of its owners.
 func (executor *CompoundingRiskTeamExecutor) ownedRepositoriesWithoutMetrics(
 	ctx context.Context, organizationID string, day time.Time,
 	orgRepoMetrics []compoundingrisk.RepoMetricsRow, repoToTeam map[string][]teamownership.OwnerShare,
-	patternResolver numerical.RepoTeamResolver,
 ) ([]ownedRepository, error) {
 	withMetrics := make(map[string]bool, len(orgRepoMetrics))
 	for _, row := range orgRepoMetrics {
@@ -325,7 +326,7 @@ func (executor *CompoundingRiskTeamExecutor) ownedRepositoriesWithoutMetrics(
 	if err != nil {
 		return nil, err
 	}
-	resolved, err := teamresolve.ResolveOwnerSharesThenPatterns(ctx, executor.conn, organizationID, day, candidates, names, patternResolver)
+	resolved, err := resolveCompoundingRepoOwners(ctx, executor.conn, organizationID, day, candidates, names)
 	if err != nil {
 		return nil, err
 	}

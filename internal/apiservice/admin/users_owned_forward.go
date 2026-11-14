@@ -98,11 +98,11 @@ func optionalOrg(orgID uuid.UUID) *uuid.UUID {
 
 // userUpdateDecision is what a patch changes against the stored row, by the rules updateUser writes with: the email
 // compares lower-cased (a blank one changes nothing), the username lower-cased (a blank one clears it), the flags by
-// value. Both modes use it: not owned, updateUser checks the duplicates it names; owned, the handler also refuses a
-// real is_active change and forwards the rest.
+// value. Both modes use it: not owned, updateUser checks the duplicates it names; owned, the handler forwards the
+// change (a real is_active change too, CHAOS-13684).
 type userUpdateDecision struct {
-	EmailCheck, UsernameCheck       bool
-	IsActiveChange, SuperuserChange bool
+	EmailCheck, UsernameCheck bool
+	SuperuserChange           bool
 }
 
 func decideUserUpdate(stored *fullUser, patch userUpdate) userUpdateDecision {
@@ -115,7 +115,6 @@ func decideUserUpdate(stored *fullUser, patch userUpdate) userUpdateDecision {
 		}
 		d.UsernameCheck = pythonparity.Lower(*patch.Username) != current
 	}
-	d.IsActiveChange = patch.IsActive != nil && *patch.IsActive != stored.IsActive
 	d.SuperuserChange = patch.IsSuperuser != nil && *patch.IsSuperuser != stored.IsSuperuser
 	return d
 }
@@ -207,12 +206,13 @@ func writeInvalidProviderID(w http.ResponseWriter) {
 	policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(invalid), nil)
 }
 
-// updateUserInAuth is updateUser's write while users are owned: a real is_active change stays the moved operation
-// (CHAOS-13209 row 4), as a real is_superuser change does while the platform roles are not owned; then the superuser
-// guard on the stored row and go-api's duplicate checks, the update at auth-service and the read-back.
+// updateUserInAuth is updateUser's write while users are owned: a real is_superuser change stays the moved operation
+// while the platform roles are not owned; then the superuser guard on the stored row and go-api's duplicate checks,
+// the update at auth-service and the read-back. A real is_active change is forwarded as legacy served it (pm D7015):
+// auth-service deactivates with the soft delete's writes and reactivates by clearing them, in one commit.
 func (h *handlers) updateUserInAuth(ctx context.Context, w http.ResponseWriter, user *policy.User, orgID uuid.UUID, existing *fullUser, patch userUpdate) {
 	decided := decideUserUpdate(existing, patch)
-	if decided.IsActiveChange || decided.SuperuserChange && !h.store.PlatformRolesOwned {
+	if decided.SuperuserChange && !h.store.PlatformRolesOwned {
 		writeUsersOwned(w)
 		return
 	}
@@ -231,6 +231,12 @@ func (h *handlers) updateUserInAuth(ctx context.Context, w http.ResponseWriter, 
 	}
 	request := authprovision.UserUpdateRequest{Actor: user.ID, Principal: existing.ID, OrgID: optionalOrg(orgID), Email: patch.Email,
 		Username: patch.Username, FullName: patch.FullName, AvatarURL: patch.AvatarURL, IsVerified: patch.IsVerified}
+	// Only a real is_active change is sent: the web edit forms send is_active on every save, and an auth-service that
+	// does not take the member yet refuses it as malformed (the 503, nothing written), so an unchanged one must not
+	// reach it.
+	if patch.IsActive != nil && *patch.IsActive != existing.IsActive {
+		request.IsActive = patch.IsActive
+	}
 	if h.store.PlatformRolesOwned {
 		request.IsSuperuser = patch.IsSuperuser
 	}

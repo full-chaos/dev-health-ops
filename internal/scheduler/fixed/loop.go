@@ -145,6 +145,8 @@ type Loop struct {
 	up          bool
 	schedules   map[string]*scheduleState
 	overdue     []string
+	// unmintedInstants counts report cron instants no occurrence stands for.
+	unmintedInstants uint64
 
 	// stepObserved is a test-only synchronization hook, mirroring the
 	// syncreconciler sibling loop's own seam of the same name: production
@@ -324,6 +326,7 @@ func (loop *Loop) step(parent context.Context, now time.Time) (stepErr error) {
 		return err
 	}
 	loop.record(result, now)
+	loop.reportUnmintedInstants(parent, result)
 	if result.Failed() {
 		stage = "schedule"
 		// Name every schedule that failed and why. Schedule IDs are declared
@@ -422,6 +425,51 @@ func (loop *Loop) record(result WindowResult, now time.Time) {
 	sort.Strings(overdue)
 	loop.overdue = overdue
 	_ = now
+}
+
+// reportUnmintedInstants counts and names the cron instants a minted report
+// occurrence passed over. The occurrences are already committed. One line per
+// minted occurrence, never one per instant: a fine-grained cron stays one line.
+func (loop *Loop) reportUnmintedInstants(ctx context.Context, result WindowResult) {
+	var total uint64
+	for _, schedule := range result.Schedules {
+		for _, unminted := range schedule.Unminted {
+			total += uint64(unminted.Count)
+		}
+	}
+	if total > 0 {
+		loop.mu.Lock()
+		loop.unmintedInstants += total
+		loop.mu.Unlock()
+	}
+	for _, schedule := range result.Schedules {
+		for _, unminted := range schedule.Unminted {
+			named := make([]string, 0, len(unminted.Named))
+			for _, instant := range unminted.Named {
+				named = append(named, instant.UTC().Format(time.RFC3339))
+			}
+			loop.logger().WarnContext(
+				ctx,
+				"report scheduler minted an occurrence past cron instants that no run stood for",
+				"reason", "unminted_instants",
+				"report_id", unminted.ReportID,
+				"scheduled_for", unminted.MintedFor.UTC().Format(time.RFC3339),
+				"unminted_count", unminted.Count,
+				"unminted_count_capped", unminted.Capped,
+				"unminted_instants", strings.Join(named, ","),
+			)
+		}
+		for _, failed := range schedule.UnmintedCountFailed {
+			loop.logger().WarnContext(
+				ctx,
+				"report scheduler minted an occurrence but could not count the cron instants it passed over",
+				"reason", "unminted_count_failed",
+				"report_id", failed.ReportID,
+				"scheduled_for", failed.MintedFor.UTC().Format(time.RFC3339),
+				"error", failed.Error,
+			)
+		}
+	}
 }
 
 func (loop *Loop) overdueSchedules() []string {
@@ -545,6 +593,7 @@ func (loop *Loop) WritePrometheus(output io.Writer) error {
 	loop.mu.Lock()
 	windows, failures, consecutive := loop.windows, loop.failures, loop.consecutive
 	lastOK, up, now := loop.lastOK, loop.up, loop.clock.Now()
+	unmintedInstants := loop.unmintedInstants
 	identifiers := make([]string, 0, len(loop.schedules))
 	snapshot := make(map[string]scheduleState, len(loop.schedules))
 	for identifier, state := range loop.schedules {
@@ -561,6 +610,7 @@ func (loop *Loop) WritePrometheus(output io.Writer) error {
 	var text strings.Builder
 	writeCounter(&text, "fixed_scheduler_windows_total", "Successful bounded fixed-schedule windows.", windows)
 	writeCounter(&text, "fixed_scheduler_failures_total", "Failed bounded fixed-schedule windows.", failures)
+	writeCounter(&text, "report_scheduler_unminted_instants_total", "Report cron instants no occurrence stands for: the previous run was still in flight when they passed, and the next minted occurrence rebased past them. The skip is policy (resume, do not backfill); the count is the schedule-fidelity loss. A scan that stops at its cap (unminted_count_capped=true) adds the cap, a lower bound.", unmintedInstants)
 	fmt.Fprintf(&text, "# HELP fixed_scheduler_consecutive_failures Consecutive failed windows.\n# TYPE fixed_scheduler_consecutive_failures gauge\nfixed_scheduler_consecutive_failures %d\n", consecutive)
 	fmt.Fprint(&text, "# HELP fixed_scheduler_up Whether the fixed scheduler completed a current successful window.\n# TYPE fixed_scheduler_up gauge\nfixed_scheduler_up ")
 	if up {

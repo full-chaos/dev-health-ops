@@ -2097,7 +2097,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/authorize.go",
-        "line": 27
+        "line": 28
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -2130,7 +2130,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/authorize.go",
-        "line": 28
+        "line": 29
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"

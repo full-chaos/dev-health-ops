@@ -4,6 +4,7 @@ internal/auth/contracts	contracts.go	cmd/auth-service
 internal/auth/contracts	contracts.go	cmd/dho
 internal/auth/contracts	contracts.go	cmd/loadtest
 internal/auth/contracts	contracts.go	deploy/helm/dev-health
+internal/auth/contracts	contracts.go	internal/adminops
 internal/auth/contracts	contracts.go	internal/api/authprovision
 internal/auth/contracts	contracts.go	internal/api/billing
 internal/auth/contracts	contracts.go	internal/api/externalingest
@@ -12,7 +13,10 @@ internal/auth/contracts	contracts.go	internal/api/integrationsadmin/backfillvenu
 internal/auth/contracts	contracts.go	internal/api/integrationsadmin/discoveryvenue
 internal/auth/contracts	contracts.go	internal/api/integrationsadmin/integrationsvenue
 internal/auth/contracts	contracts.go	internal/api/integrationsadmin/syncvenue
+internal/auth/contracts	contracts.go	internal/api/orgs
+internal/auth/contracts	contracts.go	internal/api/policy
 internal/auth/contracts	contracts.go	internal/api/session
+internal/auth/contracts	contracts.go	internal/api/sso
 internal/auth/contracts	contracts.go	internal/api/syncadmin
 internal/auth/contracts	contracts.go	internal/api/teamsidentity/adminstampvenue
 internal/auth/contracts	contracts.go	internal/api/usersowned
@@ -55,6 +59,7 @@ internal/auth/contracts	contracts.go	internal/auth/identity/local
 internal/auth/contracts	contracts.go	internal/auth/identity/oidc
 internal/auth/contracts	contracts.go	internal/auth/identity/saml
 internal/auth/contracts	contracts.go	internal/auth/identity/social
+internal/auth/contracts	contracts.go	internal/auth/identity/ssoaudit
 internal/auth/contracts	contracts.go	internal/auth/invite
 internal/auth/contracts	contracts.go	internal/auth/keyrotation
 internal/auth/contracts	contracts.go	internal/auth/linkmail
@@ -67,6 +72,7 @@ internal/auth/contracts	contracts.go	internal/auth/outboxprojection
 internal/auth/contracts	contracts.go	internal/auth/passwordpolicy
 internal/auth/contracts	contracts.go	internal/auth/platformrole
 internal/auth/contracts	contracts.go	internal/auth/policycatalog
+internal/auth/contracts	contracts.go	internal/auth/publicaudit
 internal/auth/contracts	contracts.go	internal/auth/pushlifecycle
 internal/auth/contracts	contracts.go	internal/auth/pushprojection
 internal/auth/contracts	contracts.go	internal/auth/pushreconcile
@@ -75,6 +81,7 @@ internal/auth/contracts	contracts.go	internal/auth/pushreconcile/projectionreade
 internal/auth/contracts	contracts.go	internal/auth/pushreconcile/reconcilejob
 internal/auth/contracts	contracts.go	internal/auth/repoidentity
 internal/auth/contracts	contracts.go	internal/auth/repoidentityprojection
+internal/auth/contracts	contracts.go	internal/auth/requestid
 internal/auth/contracts	contracts.go	internal/auth/restorefence
 internal/auth/contracts	contracts.go	internal/auth/revisionfeed
 internal/auth/contracts	contracts.go	internal/auth/serviceaccount
@@ -83,18 +90,22 @@ internal/auth/contracts	contracts.go	internal/auth/ssoprovider
 internal/auth/contracts	contracts.go	internal/auth/usersbackfill
 internal/auth/contracts	contracts.go	internal/auth/workload
 internal/auth/contracts	contracts.go	internal/auth/workloadexchange
+internal/auth/contracts	contracts.go	internal/billingcli
 internal/auth/contracts	contracts.go	internal/cigates/chartgates
 internal/auth/contracts	contracts.go	internal/cigates/docs
 internal/auth/contracts	contracts.go	internal/cigates/livee2e
 internal/auth/contracts	contracts.go	internal/cigates/workflows
 internal/auth/contracts	contracts.go	internal/clicredentials
+internal/auth/contracts	contracts.go	internal/edgetokenmint
 internal/auth/contracts	contracts.go	internal/fixturescli
 internal/auth/contracts	contracts.go	internal/jobs/pushexpiry
+internal/auth/contracts	contracts.go	internal/loadharness
 internal/auth/contracts	contracts.go	internal/platform/logging
 internal/auth/contracts	contracts.go	internal/pushlifecyclecli
 internal/auth/contracts	contracts.go	internal/queryapi/server
 internal/auth/contracts	contracts.go	internal/storage/postgres/authschema
 internal/auth/contracts	contracts.go	internal/testsupport/authrows
+internal/auth/contracts	contracts.go	internal/testsupport/idpstub
 internal/auth/contracts	contracts.go	internal/testsupport/usertokens
 internal/auth/contracts	contracts.go	internal/testsupport/wrongclass
 internal/auth/contracts	contracts.go	internal/workerservice

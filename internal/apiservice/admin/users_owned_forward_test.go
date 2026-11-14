@@ -117,6 +117,8 @@ type ownedCall struct {
 	caller *policy.User
 	header map[string]string
 	input  *setPasswordInput
+	// session is a live impersonation row in the request context, as Scope.Impersonation sets it.
+	session *policy.Impersonation
 }
 
 func (c ownedCall) run(h *handlers) (int, string) {
@@ -135,6 +137,9 @@ func (c ownedCall) run(h *handlers) (int, string) {
 		caller = ownedSuperuser()
 	}
 	req = req.WithContext(policy.WithUser(req.Context(), caller))
+	if c.session != nil {
+		req = req.WithContext(policy.WithImpersonation(req.Context(), c.session))
+	}
 	req.SetPathValue("user_id", provTarget.String())
 	for name, value := range c.header {
 		req.Header.Set(name, value)
@@ -335,8 +340,8 @@ func TestUsersOwnedPatchWebFormNormalizedEqualFieldsForwardOnlyTheChange(t *test
 			t.Fatalf("an unchanged email or username was checked for a duplicate: %q", step)
 		}
 	}
-	if in := users.updates[0]; in.IsVerified == nil || !*in.IsVerified {
-		t.Fatalf("update request %+v", in)
+	if in := users.updates[0]; in.IsVerified == nil || !*in.IsVerified || in.IsActive != nil {
+		t.Fatalf("update request %+v, want is_verified true and no is_active (unchanged)", in)
 	}
 }
 
@@ -521,12 +526,17 @@ func TestUsersOwnedRolesNotOwnedSuperuserChangeIs409OperationMoved(t *testing.T)
 	}
 }
 
-// A real is_active change stays the moved operation (CHAOS-13209 row 4), also with other fields in the patch.
-func TestUsersOwnedPatchRealIsActiveChangeStillRefused(t *testing.T) {
+// A real is_active change with other fields in the patch is one forward carrying them all (CHAOS-13684).
+func TestUsersOwnedPatchIsActiveWithOtherFieldsIsOneForward(t *testing.T) {
 	db, users := ownedDB(activeStored()), &fakeUsersAdmin{}
-	code, body := ownedCall{route: "update", body: `{"is_active":false,"is_verified":true}`}.run(ownedHandlers(db, users, true))
-	mustOwnedAnswer(t, code, body, http.StatusConflict, movedBody())
-	mustNoForward(t, db, users)
+	code, _ := ownedCall{route: "update", body: `{"is_active":false,"is_verified":true}`}.run(ownedHandlers(db, users, true))
+	if code != http.StatusOK {
+		t.Fatalf("answer %d, want 200", code)
+	}
+	mustForwardOnly(t, db, users, "update")
+	if in := users.updates[0]; in.IsActive == nil || *in.IsActive || in.IsVerified == nil || !*in.IsVerified {
+		t.Fatalf("update request %+v, want is_active false and is_verified true", in)
+	}
 }
 
 // R10: every auth refusal maps to go-api's own answer for the same fact (PLAN-13380-v4 section 2).

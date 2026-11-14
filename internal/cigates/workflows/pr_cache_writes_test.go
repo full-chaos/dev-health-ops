@@ -130,8 +130,8 @@ const (
 )
 
 // cacheInput is an input that turns an action's own Actions cache on. On a step a pull request can run it must be set
-// literally off: false, "false", "" or a value in off, or be exactly ${{ mainOnlyGate }}. defaultOn only words the message
-// of an absent input.
+// literally off: false, "false" or a value in off, "" when the input has no on-default (an action may read "" as its
+// default), or be exactly ${{ mainOnlyGate }}. defaultOn marks an input whose default turns the cache on.
 type cacheInput struct {
 	name      string
 	defaultOn bool
@@ -206,11 +206,12 @@ var prCacheActions = map[string]actionPolicy{
 	// read at 66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c (v0.24.3): cache inputs = [] (the runner's local tool cache only)
 	"anchore/sbom-action/download-syft@v0.24": {kind: nonWriter},
 	// read at 33d7b85da1a04171e211befe2c739303b9a4c066 (v4.39.3): cache inputs = [dependency-caching (default none),
-	// trap-caching (no default)]. TRAP caches are uploaded only when the default branch is analysed
+	// trap-caching (no default; "" or unset means automatic, which is on on hosted runners outside overlay mode,
+	// src/config-utils.ts isTrapCachingEnabled)]. TRAP caches are uploaded only when the default branch is analysed
 	// (src/trap-caching.ts uploadTrapCaches), the overlay-base database only in overlay-base mode, which only the default
 	// branch gets (src/config-utils.ts), and dependency caches only when dependency-caching is on (src/caching-utils.ts).
 	"github/codeql-action/init@v4": {kind: inputWriter, inputs: []cacheInput{
-		{name: "dependency-caching", off: []string{"none", "off", "restore"}}, {name: "trap-caching"}}},
+		{name: "dependency-caching", off: []string{"none", "off", "restore"}}, {name: "trap-caching", defaultOn: true}}},
 	// read at 33d7b85da1a04171e211befe2c739303b9a4c066 (v4.39.3): cache inputs = []
 	"github/codeql-action/autobuild@v4": {kind: nonWriter},
 	// read at 33d7b85da1a04171e211befe2c739303b9a4c066 (v4.39.3): cache inputs = []
@@ -310,7 +311,7 @@ func (l literalSwitch) off(event string) bool {
 		return !c
 	}
 	s := strings.TrimSpace(str(l.v))
-	if s == "" || strings.EqualFold(s, "false") {
+	if (s == "" && !l.in.defaultOn) || strings.EqualFold(s, "false") {
 		return true
 	}
 	for _, o := range l.in.off {
@@ -987,10 +988,11 @@ func TestPRCacheGuardKeysOnActionMajor(t *testing.T) {
 		{"a v0 comment without its minor", []mutation{{goY, trivy, "aquasecurity/setup-trivy@3fb12ec12f41e471780db15c232d5dd185dcb514 # v0"}}, []string{"go.yml: job go-container-security", "has no minor: the major of a v0 action is 0.Y"}},
 		{"two majors on one pin", []mutation{{goY, checkout, "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v8.0.0"}}, []string{"go.yml: job", "name two majors (actions/checkout@v"}},
 		{"a uses that is not a full sha", []mutation{{drift, checkout, "actions/checkout@v7 # v7.0.1"}}, []string{"docs-drift.yml: job docs-drift", "actions/checkout@v7, which is not pinned to a full 40-hex commit sha"}},
+		{"an empty value on an input whose default is on", []mutation{{drift, "          cache: false\n", "          cache: ''\n"}}, []string{"docs-drift.yml: job docs-drift", "actions/setup-go (cache: )"}},
 		{"a uses with a short sha", []mutation{{drift, checkout, "actions/checkout@3d3c42e # v7.0.1"}}, []string{"docs-drift.yml: job docs-drift", "actions/checkout@3d3c42e, which is not pinned to a full 40-hex commit sha"}},
 		{"a default-off cache input unset", []mutation{{sec, "          cache: ''\n", ""}}, []string{"security-scan.yml: job semgrep", "actions/setup-python (cache unset)"}},
 		{"a default-off cache input set by an expression", []mutation{{sec, "          cache: ''\n", "          cache: ${{ github.event_name != 'pull_request' && 'pip' || '' }}\n"}}, []string{"security-scan.yml: job semgrep", "actions/setup-python (cache: ${{"}},
-		{"codeql trap caching unset", []mutation{{".github/workflows/codeql-analysis.yml", codeqlTrapGated, ""}}, []string{"codeql-analysis.yml", "trap-caching unset"}},
+		{"codeql trap caching unset", []mutation{{".github/workflows/codeql-analysis.yml", codeqlTrapGated, ""}}, []string{"codeql-analysis.yml", "trap-caching defaults on"}},
 		{"pnpm cache unset", []mutation{{goY, "          cache: false\n          package_json_file: dev-health-web/package.json\n", "          package_json_file: dev-health-web/package.json\n"}}, []string{"go.yml: job go-auth-web-proxy-proof", "pnpm/action-setup (cache unset)"}},
 	}
 	for _, c := range fails {
@@ -1025,7 +1027,8 @@ func TestPRCacheGuardMainOnlyGate(t *testing.T) {
 	}{
 		{"another expression that is off on a pull request", []mutation{{cq, codeqlTrapGated, "          trap-caching: ${{ github.event_name != 'pull_request' }}\n"}}, []string{"codeql-analysis.yml", "github/codeql-action/init (dependency-caching: none, trap-caching: ${{ github.event_name != 'pull_request' }})"}},
 		{"the gate widened by a term", []mutation{{cq, codeqlTrapGated, "          trap-caching: ${{ " + mainOnlyGate + " || github.event_name == 'pull_request' }}\n"}}, []string{"codeql-analysis.yml", "github/codeql-action/init (dependency-caching: none, trap-caching: ${{"}},
-		{"the gate unset", []mutation{{cq, codeqlTrapGated, ""}}, []string{"codeql-analysis.yml", "github/codeql-action/init (dependency-caching: none, trap-caching unset)"}},
+		{"the gate unset", []mutation{{cq, codeqlTrapGated, ""}}, []string{"codeql-analysis.yml", "github/codeql-action/init (dependency-caching: none, trap-caching defaults on)"}},
+		{"the gate replaced by an empty value", []mutation{{cq, codeqlTrapGated, "          trap-caching: ''\n"}}, []string{"codeql-analysis.yml", "github/codeql-action/init (dependency-caching: none, trap-caching: )"}},
 	}
 	for _, c := range fails {
 		t.Run(c.name+" fails", func(t *testing.T) {

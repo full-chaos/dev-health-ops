@@ -231,7 +231,7 @@ public route: it carries real traffic and has no proof-org allowlist, so a proof
 first run, on the query-api Deployment: enable the internal listener (`queryApi.internal.enabled`, or the umbrella chart's
 `queryApiInternal`), set `GO_API_PROOF_WRITE_ROUTE_ENABLED=true`, and put the Fixture Org on the allowlist with
 `dho goapi routing proof-org add -org <fixture org id> -recorded-by <operator> -review-evidence "<why>"` (with `POSTGRES_URI` in the environment, never on the command line). The route refuses every org not
-on that list, every document that is not a registered mutation, and everything when the allowlist cannot be read.
+on that list, every document that is not a registered mutation, and, when the allowlist cannot be read, every request with `503` and `{"detail":{"message":"Database temporarily unavailable"}}` instead of the `403` of an org that is not on the list: nothing is written, and a retry after the database recovers is safe.
 
 The internal port is reachable only from the pods the network policy admits, and the tools pod that runs `prove-write` is not
 one of them by default (the internal listener trusts unsigned `X-DH-Internal-*` identity headers, so the policy is its

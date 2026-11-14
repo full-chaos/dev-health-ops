@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/digest"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
 )
@@ -33,7 +35,7 @@ const (
 // orgAllowed closure, over a Mux whose Switch is fully enabled for "m" --
 // so a test targeting the KIND clause or the ORG clause is never confused
 // by the SWITCH clause also refusing.
-func pwHandler(t *testing.T, orgAllowed func(context.Context, string) bool) (http.HandlerFunc, *int) {
+func pwHandler(t *testing.T, orgAllowed proofOrgCheck) (http.HandlerFunc, *int) {
 	t.Helper()
 	verifier, _ := iaVerifier(t)
 	executed := new(int)
@@ -61,9 +63,9 @@ func pwPost(handler http.HandlerFunc, document, orgID string) *httptest.Response
 // defect this test exists to catch.
 func TestProofWriteRefusesAQueryDocumentBeforeCheckingOrg(t *testing.T) {
 	orgAllowedCalled := false
-	handler, executed := pwHandler(t, func(context.Context, string) bool {
+	handler, executed := pwHandler(t, func(context.Context, string) (bool, error) {
 		orgAllowedCalled = true
-		return true
+		return true, nil
 	})
 	rec := pwPost(handler, pwQuery, "org-1")
 	if rec.Code != http.StatusMethodNotAllowed {
@@ -80,7 +82,7 @@ func TestProofWriteRefusesAQueryDocumentBeforeCheckingOrg(t *testing.T) {
 // Clause 2: ORG NOT ON THE ALLOWLIST. A real mutation, real auth, correct
 // kind -- refused solely because orgAllowed says no.
 func TestProofWriteRefusesAnOrgNotOnTheAllowlist(t *testing.T) {
-	handler, executed := pwHandler(t, func(context.Context, string) bool { return false })
+	handler, executed := pwHandler(t, func(context.Context, string) (bool, error) { return false, nil })
 	rec := pwPost(handler, pwMutation, "org-not-allowed")
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("got %d, want 403", rec.Code)
@@ -90,29 +92,60 @@ func TestProofWriteRefusesAnOrgNotOnTheAllowlist(t *testing.T) {
 	}
 }
 
-// Clause 3: STORE ERROR (fails closed). The real orgAllowed wrapper
-// (newQueryHandler) collapses a Postgres error into `false` with a log
-// line, never a fall-through -- from the HANDLER's point of view, a store
-// error and "not on the list" are and must stay indistinguishable, both
-// refusing exactly the same way. This is what makes that collapse safe to
-// test at this layer without a real Postgres failure: the contract is "any
-// false from orgAllowed refuses", proven once, generically, rather than by
-// re-deriving it per failure mode.
-func TestProofWriteRefusesWhenOrgAllowedItselfSignalsFalse(t *testing.T) {
+// Clause 3: STORE ERROR (fails closed, answers unavailable). An allowlist read that errors decided nothing about the
+// org: the dispatcher answers go-api's unavailable form (503), never the 403 of an org that is not on the list, and
+// the resolver does not run. Any error counts, a cancelled context included.
+func TestProofWriteAnswersUnavailableWhenOrgAllowedErrors(t *testing.T) {
+	for name, readErr := range map[string]error{
+		"store error":      errors.New("go_api_proof_orgs read failed"),
+		"unavailable":      policy.ErrUnavailable,
+		"context canceled": context.Canceled,
+		"deadline":         context.DeadlineExceeded,
+	} {
+		t.Run(name, func(t *testing.T) {
+			calls := 0
+			var logged bytes.Buffer
+			previous := log.Writer()
+			log.SetOutput(&logged)
+			defer log.SetOutput(previous)
+			handler, executed := pwHandler(t, func(context.Context, string) (bool, error) {
+				calls++
+				return false, readErr
+			})
+			rec := pwPost(handler, pwMutation, "org-1")
+			if problem := unavailableProblem(faultAnswer{rec.Code, rec.Body.String(), rec.Header()}); problem != "" {
+				t.Fatal(problem)
+			}
+			if *executed != 0 {
+				t.Fatalf("resolver ran %d time(s), want 0", *executed)
+			}
+			if calls != 1 {
+				t.Fatalf("orgAllowed called %d time(s), want exactly 1", calls)
+			}
+			if !strings.Contains(logged.String(), `org_id="org-1"`) || !strings.Contains(logged.String(), "allowlist could not be read") {
+				t.Fatalf("the refusal did not log the org and the failed read: %q", logged.String())
+			}
+		})
+	}
+}
+
+// An org the allowlist read answers "not on the list" keeps the 403, with its own text: the 503 above is only for a
+// read that could not be made.
+func TestProofWriteKeepsTheForbiddenAnswerForAnOrgNotOnTheList(t *testing.T) {
 	calls := 0
-	handler, executed := pwHandler(t, func(context.Context, string) bool {
+	handler, executed := pwHandler(t, func(context.Context, string) (bool, error) {
 		calls++
-		return false // stands in for BOTH "not on the list" and "store errored"
+		return false, nil
 	})
 	rec := pwPost(handler, pwMutation, "org-1")
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("got %d, want 403", rec.Code)
+	if rec.Code != http.StatusForbidden || rec.Body.String() != "this org is not enabled for proof-write\n" {
+		t.Fatalf("got %d %q, want 403 and the not-enabled text", rec.Code, rec.Body.String())
 	}
-	if *executed != 0 {
-		t.Fatalf("resolver ran %d time(s), want 0", *executed)
+	if rec.Header().Get("Content-Type") != "text/plain; charset=utf-8" {
+		t.Fatalf("Content-Type %q, want text/plain", rec.Header().Get("Content-Type"))
 	}
-	if calls != 1 {
-		t.Fatalf("orgAllowed called %d time(s), want exactly 1", calls)
+	if *executed != 0 || calls != 1 {
+		t.Fatalf("resolver ran %d time(s), orgAllowed %d, want 0 and 1", *executed, calls)
 	}
 }
 
@@ -121,9 +154,9 @@ func TestProofWriteRefusesWhenOrgAllowedItselfSignalsFalse(t *testing.T) {
 // edit) treat "nothing to check" as "allowed".
 func TestProofWriteRefusesAnEmptyOrgIDWithoutCallingOrgAllowed(t *testing.T) {
 	orgAllowedCalled := false
-	handler, executed := pwHandler(t, func(context.Context, string) bool {
+	handler, executed := pwHandler(t, func(context.Context, string) (bool, error) {
 		orgAllowedCalled = true
-		return true
+		return true, nil
 	})
 	rec := pwPost(handler, pwMutation, "")
 	if rec.Code != http.StatusForbidden {
@@ -141,7 +174,7 @@ func TestProofWriteRefusesAnEmptyOrgIDWithoutCallingOrgAllowed(t *testing.T) {
 // case that must NOT be refused, so the four refusal tests above are
 // pinning real clauses and not a handler that always says no.
 func TestProofWriteServesAnAllowedOrgsMutation(t *testing.T) {
-	handler, executed := pwHandler(t, func(context.Context, string) bool { return true })
+	handler, executed := pwHandler(t, func(context.Context, string) (bool, error) { return true, nil })
 	rec := pwPost(handler, pwMutation, "org-1")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("got %d, want 200", rec.Code)
@@ -167,7 +200,7 @@ func TestProofWriteRefusesWhenTheSwitchIsOff(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	byDigest := map[string]string{digestHex(pwMutation): "m"}
-	handler := newDocumentDispatchHandler(os.Getenv, mux, byDigest, verifier, nil, nil, digest.KindMutation, func(context.Context, string) bool { return true })
+	handler := newDocumentDispatchHandler(os.Getenv, mux, byDigest, verifier, nil, nil, digest.KindMutation, func(context.Context, string) (bool, error) { return true, nil })
 
 	rec := pwPost(handler, pwMutation, "org-1")
 	if rec.Code != http.StatusNotFound {
@@ -199,8 +232,15 @@ func TestNewProofOrgAllowedFailsClosedOnARealStoreError(t *testing.T) {
 	t.Cleanup(pool.Close)
 
 	orgAllowed := newProofOrgAllowed(pool)
-	if orgAllowed(context.Background(), "org-1") {
+	allowed, err := orgAllowed(context.Background(), "org-1")
+	if allowed {
 		t.Fatal("newProofOrgAllowed's real closure returned true against a pool that cannot answer -- a store error must fail closed, never open")
+	}
+	if !errors.Is(err, policy.ErrUnavailable) {
+		t.Fatalf("newProofOrgAllowed's real closure answered err=%v against a pool that cannot answer, want policy.ErrUnavailable", err)
+	}
+	if _, err := newProofOrgAllowed(nil)(context.Background(), "org-1"); !errors.Is(err, policy.ErrUnavailable) {
+		t.Fatalf("nil pool: err=%v, want policy.ErrUnavailable", err)
 	}
 }
 

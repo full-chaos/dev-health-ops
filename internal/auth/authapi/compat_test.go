@@ -1126,13 +1126,15 @@ func TestCompatRoutesNeedAProjectorAndAnAuditAppender(t *testing.T) {
 }
 
 // Every reason social.Classify names for a refusal (4xx) is an audit reason,
-// so no social refusal turns into a 500 at its audit row.
+// so no social refusal turns into a 500 at its audit row. identity.ErrLastSignInMethod
+// is left out: only an unlink answers it, and an unlink refusal writes no audit row
+// (auth.login.failed is the compat sign-in's), so its reason is no audit reason.
 func TestEverySocialRefusalReasonIsAnAuditReason(t *testing.T) {
 	for _, err := range []error{
 		&social.ConflictError{ExistingMethod: "github"}, social.ErrProviderUnavailable, social.ErrProviderNotConfigured,
 		social.ErrProviderRefused, social.ErrEmailUnverified, social.ErrPrincipalDisabled, identity.ErrSignupNotAvailable,
 		social.ErrReauthenticationRequired, identity.ErrIdentityConflict, social.ErrProviderLinked, identity.ErrNotFound,
-		identity.ErrLastSignInMethod, errors.New("anything else"),
+		errors.New("anything else"),
 	} {
 		status, reason := social.Classify(err)
 		if status >= http.StatusInternalServerError {

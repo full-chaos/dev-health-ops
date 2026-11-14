@@ -2,6 +2,8 @@ package shadowvenue
 
 import (
 	"bufio"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,6 +11,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 )
 
 // The go-api shadow log lines the judge reads (internal/api/policy/shadow.go).
@@ -39,17 +43,23 @@ const (
 	VerdictGap                  = "GAP"
 	VerdictKShort               = "K_SHORT"
 	VerdictLegacyDisagrees      = "CONTROL_LEGACY_DISAGREES"
-	VerdictSkippedSeam          = "SKIPPED_SEAM"
-	VerdictSkippedNoOrg         = "SKIPPED_NOORG"
 	// VerdictDecidedNoOrg: a no-org superuser slot that a go-api build which decides a token with no organization
 	// (CHAOS-10872 S1) answered as the yardstick did, with the counter evidence of that build (JudgeEnforced).
 	VerdictDecidedNoOrg = "DECIDED_NOORG"
 	VerdictStricter     = "MISMATCH_STRICTER"
 	VerdictWider        = "MISMATCH_WIDER"
+	// VerdictDecidedNoQuestion: the shadow's decided_no_question (a token with no organization on an AdminOrg row,
+	// refused by enforcement with no question) on a slot whose legacy answer is that very refusal, status and body bytes
+	// (policy.EnforcedOrglessRefusal). It passes, on its own line, never as a match.
+	VerdictDecidedNoQuestion = "DECIDED_NO_QUESTION"
+	// VerdictDecidedNoQuestionDiffers: decided_no_question on a slot whose legacy answer is any other: it fails.
+	VerdictDecidedNoQuestionDiffers = "DECIDED_NO_QUESTION_DIFFERS"
 )
 
 var resultVerdicts = map[string]string{
 	"error": VerdictError, "dropped": VerdictDropped, "skipped": VerdictSkipped, "impersonation_refused": VerdictImpersonationRefused,
+	// decided_no_question fails unless decidedNoQuestion finds the slot's legacy answer is the refusal.
+	"decided_no_question": VerdictDecidedNoQuestionDiffers,
 }
 
 // windowSkew allows for the driver stamping its start a little after go-api's own clock reads the request.
@@ -219,8 +229,6 @@ func ParseRulings(raw []byte) ([]Ruling, error) {
 type JudgeOptions struct {
 	K     int
 	Grace time.Duration
-	// NoOrg is the enforcement counter evidence for the superuser's no-organization skips; nil gives none.
-	NoOrg NoOrgEvidence
 	// Outbound is the venue stub's evidence of outside calls (checkOutbound).
 	Outbound Outbound
 	// Strict holds every sent slot to its claim read-back and body digest (a missing one voids the run) and the
@@ -241,20 +249,10 @@ type SlotVerdict struct {
 // Pass reports whether the slot's evidence passes it.
 func (s SlotVerdict) Pass() bool {
 	switch s.Verdict {
-	case VerdictMatch, VerdictMatchServedOther, VerdictMismatchIntentional, VerdictMismatchRuled, VerdictSkippedSeam, VerdictSkippedNoOrg, VerdictDecidedNoOrg, VerdictMatchEnforced, VerdictEqualPastGuard:
+	case VerdictMatch, VerdictMatchServedOther, VerdictMismatchIntentional, VerdictMismatchRuled, VerdictDecidedNoOrg, VerdictMatchEnforced, VerdictEqualPastGuard, VerdictDecidedNoQuestion:
 		return true
 	}
 	return false
-}
-
-// seamSkipRows are the rows on which the superuser, whose token has no organization, is answered by the served-org seam
-// (CHAOS-13209, #5862): the request names an organization, the seam keeps the legacy answer and asks the decision
-// point nothing, so the shadow's result is "skipped" and enforcement equals legacy by construction. The result line
-// carries no reason, so the pass is pinned to these rows and to the superuser; any other skip fails the run.
-var seamSkipRows = []string{
-	"GET /api/v1/admin/orgs/{org_id}/members", "POST /api/v1/admin/orgs/{org_id}/members",
-	"DELETE /api/v1/admin/orgs/{org_id}/members/{user_id}", "PATCH /api/v1/admin/orgs/{org_id}/members/{user_id}",
-	"GET /api/v1/billing/entitlements/{org_id}", "GET /api/v1/licensing/entitlements/{org_id}",
 }
 
 // RowVerdict is one row (or control) and its cells, by caller kind.
@@ -337,7 +335,6 @@ func Judge(slots []Slot, ev Evidence, rulings []Ruling, o JudgeOptions) Report {
 		report.Slots = append(report.Slots, sv)
 	}
 	applyStrict(&report, o.Strict, o.Membership, void)
-	relabelNoOrgSkips(report.Slots, o.NoOrg)
 	outbound := checkOutbound(slots, o.Outbound, byRow, o.Grace, []string{"before", "between"})
 	for i := range report.Slots {
 		report.Slots[i].Outbound = outbound.hits[report.Slots[i].Seq]
@@ -477,10 +474,20 @@ func judgeSlot(sv *SlotVerdict, results []resultLine, ev Evidence, rulings []Rul
 		}
 	default:
 		sv.Verdict = resultVerdicts[line.result]
-		if line.result == "skipped" && sv.Caller == "superuser" && slices.Contains(seamSkipRows, sv.Key()) {
-			sv.Verdict = VerdictSkippedSeam
+		if line.result == "decided_no_question" {
+			sv.Verdict = decidedNoQuestion(sv.Slot)
 		}
 	}
+}
+
+// decidedNoQuestion holds a decided_no_question slot to its legacy answer: the enforcer's refusal, byte for byte.
+func decidedNoQuestion(slot Slot) string {
+	status, body := policy.EnforcedOrglessRefusal()
+	sum := sha256.Sum256(body)
+	if slot.Status == status && slot.BodySHA == hex.EncodeToString(sum[:]) {
+		return VerdictDecidedNoQuestion
+	}
+	return VerdictDecidedNoQuestionDiffers
 }
 
 // mismatchTuple finds the WARN line of a mismatch: by decision id when the decision point answered, else the
@@ -585,7 +592,7 @@ func rowVerdicts(slots []SlotVerdict, k int) []RowVerdict {
 func cellPasses(counts map[string]int, row string) bool {
 	for verdict := range counts {
 		switch verdict {
-		case VerdictMatch, VerdictMatchServedOther, VerdictMismatchIntentional, VerdictMismatchRuled, VerdictSkippedSeam, VerdictSkippedNoOrg, VerdictMatchEnforced:
+		case VerdictMatch, VerdictMatchServedOther, VerdictMismatchIntentional, VerdictMismatchRuled, VerdictMatchEnforced, VerdictDecidedNoQuestion:
 		default:
 			if !(strings.HasPrefix(row, "C") && controlMismatch(verdict)) {
 				return false

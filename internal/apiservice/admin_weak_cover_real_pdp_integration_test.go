@@ -1093,7 +1093,7 @@ type wcPlant struct {
 
 // wcPlantMainCells wires wcPlants into the main cells' decision point. It is false here; a throwaway D6697 commit sets
 // it true, and the --- FAIL lines of its hosted run are the kills of the main cells named in kill.
-const wcPlantMainCells = false
+const wcPlantMainCells = true
 
 var wcPlants = []wcPlant{
 	{

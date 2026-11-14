@@ -85,6 +85,7 @@ var openers = map[string]struct {
 	"internal/rivermigrate/roles.go":                            {kindDiscarded, "migrate roles' Authenticate closure: the connect error is inspected for SQLSTATE 28P01 only (a wrong password) and its text is never printed or logged; the message names a role label"},
 	"internal/cigates/livee2e/ssoseedverb.go":                   {kindTest, "live-e2e test-only seed verb (CHAOS-13636): a pool from the PG* environment of the CI job, in no served binary; deleted when 13636 PR2 lands"},
 	"internal/testsupport/authplane/authplane.go":               {kindTest, "venue auth plane: a pool on the Go copy for auth-service's session and identity stores"},
+	"internal/testsupport/authplane/authorize.go":               {kindTest, "venue decision point: a pool on the test database for auth-service's authorize routes (decisionstate)"},
 	"internal/testsupport/containers/remote.go":                 {kindTest, "test containers"},
 	"internal/testsupport/containers/shared.go":                 {kindTest, "test containers: the shared server's capacity check and leak snapshot"},
 	"internal/testsupport/containers/template.go":               {kindTest, "test containers: the shared server's template build, fingerprint and finish check"},

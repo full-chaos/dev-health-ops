@@ -55,6 +55,9 @@ func resolveRepoIDs(ctx context.Context, client QueryClient, repoRefs []string, 
 // asOf is the response's own instant, so every metric in one response
 // resolves the same team membership.
 func repoScopeFilter(ctx context.Context, client QueryClient, f Filters, orgID, repoColumn string, asOf time.Time) (string, []dhclickhouse.Binding, error) {
+	if f.Scope.unresolved {
+		return unresolvedScopeFilter, nil, nil
+	}
 	repoRefs := teamscope.NamedRepoRefs(f.Scope.Level, f.Scope.IDs, f.What.Repos)
 
 	explicitIDs, err := resolveRepoIDs(ctx, client, repoRefs, orgID)
@@ -83,8 +86,15 @@ func repoFilterRequested(f Filters) bool {
 // filterEmptyReason is Response.FilterEmptyReason (CHAOS-9098): why the
 // repositories a request names matched nothing, by the one rule of
 // teamscope.ClassifyEmptyFilter. nil when the request names no repository, and
-// whenever something matched.
+// whenever something matched. An unresolved service or developer scope says so
+// with its own reason (CHAOS-13707); an unresolved repository scope keeps the
+// repository rule.
 func filterEmptyReason(ctx context.Context, client QueryClient, f Filters, orgID string, asOf time.Time) (*teamscope.EmptyReason, error) {
+	if f.Scope.Unresolved() {
+		if reason := teamscope.ScopeNotFoundReason(f.Scope.Level); reason != nil {
+			return reason, nil
+		}
+	}
 	refs := teamscope.NamedRepoRefs(f.Scope.Level, f.Scope.IDs, f.What.Repos)
 	if len(refs) == 0 {
 		return nil, nil
@@ -129,6 +139,9 @@ func repoFilterApplied(f Filters, metricScope string) *bool {
 // scopeFilterForMetric ports scope_filter_for_metric (api/services/
 // filtering.py:129-147).
 func scopeFilterForMetric(ctx context.Context, client QueryClient, metricScope string, f Filters, orgID, teamColumn, repoColumn string, asOf time.Time) (string, []dhclickhouse.Binding, error) {
+	if f.Scope.unresolved {
+		return unresolvedScopeFilter, nil, nil
+	}
 	if metricScope == "team" && f.Scope.Level == "team" {
 		return scopeClauseMulti(f.Scope.IDs, teamColumn), scopeBindingsMulti(f.Scope.IDs), nil
 	}

@@ -79,7 +79,7 @@ func (h provisioningHandlers) ssoProviderList(w http.ResponseWriter, r *http.Req
 		answer.Items = append(answer.Items, ssoAnswer(p))
 	}
 	h.rec.record(r.Context(), opSSOProviderList, "success", reasonAccepted, nil)
-	writeJSON(w, http.StatusOK, answer)
+	writeProviderJSON(w, http.StatusOK, answer)
 }
 
 func (h provisioningHandlers) ssoProviderGet(w http.ResponseWriter, r *http.Request) {
@@ -102,7 +102,7 @@ func (h provisioningHandlers) ssoProviderGet(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	h.rec.record(r.Context(), opSSOProviderGet, "success", reasonAccepted, nil)
-	writeJSON(w, http.StatusOK, ssoAnswer(*p))
+	writeProviderJSON(w, http.StatusOK, ssoAnswer(*p))
 }
 
 func (h provisioningHandlers) ssoProviderCreate(w http.ResponseWriter, r *http.Request) {
@@ -165,7 +165,7 @@ func (h provisioningHandlers) ssoProviderCreate(w http.ResponseWriter, r *http.R
 		return
 	}
 	h.rec.record(r.Context(), opSSOProviderCreate, "success", reasonAccepted, nil)
-	writeJSON(w, http.StatusCreated, ssoAnswer(*p))
+	writeProviderJSON(w, http.StatusCreated, ssoAnswer(*p))
 }
 
 func (h provisioningHandlers) ssoProviderUpdate(w http.ResponseWriter, r *http.Request) {
@@ -205,7 +205,7 @@ func (h provisioningHandlers) ssoProviderUpdate(w http.ResponseWriter, r *http.R
 		return
 	}
 	h.rec.record(r.Context(), opSSOProviderUpdate, "success", reasonAccepted, nil)
-	writeJSON(w, http.StatusOK, ssoAnswer(*p))
+	writeProviderJSON(w, http.StatusOK, ssoAnswer(*p))
 }
 
 func (h provisioningHandlers) ssoProviderDelete(w http.ResponseWriter, r *http.Request) {
@@ -256,5 +256,5 @@ func (h provisioningHandlers) ssoSetStatus(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	h.rec.record(r.Context(), op, "success", reasonAccepted, nil)
-	writeJSON(w, http.StatusOK, ssoAnswer(*p))
+	writeProviderJSON(w, http.StatusOK, ssoAnswer(*p))
 }

@@ -99,6 +99,7 @@ var exportedAPI = []string{
 	"var synclog.KeyGuardActiveCount synclog.Key",
 	"var synclog.KeyGuardCappedNew synclog.Key",
 	"var synclog.KeyGuardCappedStale synclog.Key",
+	"var synclog.KeyGuardHeldBack synclog.Key",
 	"var synclog.KeyGuardReclaimedStale synclog.Key",
 	"var synclog.KeyGuardSlotHeadroom synclog.Key",
 	"var synclog.KeyHost synclog.Key",

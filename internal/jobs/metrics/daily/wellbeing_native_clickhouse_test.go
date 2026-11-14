@@ -27,7 +27,7 @@ func TestLoadWellbeingTeamsUsesProductionQueryWithTenantFence(t *testing.T) {
 	if len(connection.arguments) != 1 || connection.arguments[0] != "org-1" {
 		t.Fatalf("query arguments=%v, want only tenant id", connection.arguments)
 	}
-	if connection.query != "SELECT id, name, repo_patterns FROM teams FINAL WHERE org_id = ?" {
+	if connection.query != "SELECT id, name FROM teams FINAL WHERE org_id = ?" {
 		t.Fatalf("unexpected query: %s", connection.query)
 	}
 	// The active-team rule is a second read with the same tenant fence; the
@@ -63,7 +63,7 @@ func TestATeamResolverFailsWhenTheInactiveTeamsCannotBeRead(t *testing.T) {
 		rows: []fakeOwnershipRow{{repoID: repoID.String(), teamID: "platform"}},
 	}}
 	owners, err := resolveAIImpactRepoToTeam(ctx, ownership, "org-1", time.Now().UTC(), []uuid.UUID{repoID},
-		map[string]string{repoID.String(): "acme/api"}, NewRepoPatternResolver(nil))
+		map[string]string{repoID.String(): "acme/api"})
 	if !errors.Is(err, failure) || owners != nil {
 		t.Errorf("the repository owners = %v, %v; want no owner and the failure", owners, err)
 	}
@@ -272,13 +272,12 @@ type wellbeingTeamRowsStub struct {
 
 func (rows *wellbeingTeamRowsStub) Next() bool { return rows.position < len(rows.teams) }
 func (rows *wellbeingTeamRowsStub) Scan(destinations ...any) error {
-	if len(destinations) != 3 || rows.position >= len(rows.teams) {
+	if len(destinations) != 2 || rows.position >= len(rows.teams) {
 		return errors.New("unexpected wellbeing team scan")
 	}
 	team := rows.teams[rows.position]
 	*(destinations[0].(*string)) = team.ID
 	*(destinations[1].(*string)) = team.Name
-	*(destinations[2].(*[]string)) = team.RepoPatterns
 	rows.position++
 	return nil
 }
@@ -286,7 +285,7 @@ func (*wellbeingTeamRowsStub) ScanStruct(any) error             { return errors.
 func (*wellbeingTeamRowsStub) ColumnTypes() []driver.ColumnType { return nil }
 func (*wellbeingTeamRowsStub) Totals(...any) error              { return errors.New("unused") }
 func (*wellbeingTeamRowsStub) Columns() []string {
-	return []string{"id", "name", "repo_patterns"}
+	return []string{"id", "name"}
 }
 func (*wellbeingTeamRowsStub) Close() error  { return nil }
 func (*wellbeingTeamRowsStub) Err() error    { return nil }

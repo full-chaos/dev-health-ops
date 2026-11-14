@@ -264,3 +264,10 @@ func (h handlers) recordHeartbeat(ctx context.Context, tx pgx.Tx, orgID string, 
 // pythonDumps is json.dumps with its defaults, as SQLAlchemy's JSON type
 // serializes a column value.
 func pythonDumps(value *pyjson.Object) (string, error) { return pyjson.Dumps(value) }
+
+// reportRefusedObserved is what the report handler's refusal counted and logged before the guard refused the caller
+// for the platform action: the same counter reason and log line, the answer untouched.
+func (h handlers) reportRefusedObserved(r *http.Request) {
+	rejected.Add(r.Context(), 1, metric.WithAttributes(attribute.String("reason", "report_not_platform_role")))
+	h.logger.WarnContext(r.Context(), "telemetry report refused", slog.String("reason", "report_not_platform_role"))
+}

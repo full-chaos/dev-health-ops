@@ -16,6 +16,9 @@ type Repository struct {
 	pool      *pgxpool.Pool
 	begin     beginSchedulerTransaction
 	ownership OwnershipPolicy
+	// countUnminted is unmintedInstants when nil; tests replace it to force a
+	// count failure.
+	countUnminted func(context.Context, *Job, Occurrence, time.Time) (UnmintedInstants, error)
 }
 
 type candidateRows interface {

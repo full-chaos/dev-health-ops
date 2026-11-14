@@ -63,7 +63,7 @@ The gauge is set once at start. It is 0 when go-api can ask, so a PDP outage doe
 1. Read `dev_health_authz_enforcement_enabled{namespace,service="go-api"}` (`internal/authzenforce/authzenforce.go:128`, `:140-151`). A series at 1 is a switched-on namespace; the `503` can only come from those.
 2. Read `dev_health_authz_enforcement_decisions_total{outcome="error_deny"}` by `namespace`. A rising share against `allow` and `deny` is the outage signal. The counter is lazy: no series means no event yet.
 3. Read the go-api WARN lines above for the `reason`. `pdp_unreachable`, `pdp_timeout` or `pdp_unavailable` point at auth-service or the network; `pdp_rate_limited` points at the auth-service limits.
-4. Check auth-service: `/readyz` is 200 (`docs/reference/auth/readiness-and-slo.md:26`). The PDP route is `POST /v1/authorize` (`internal/auth/authapi/authorize.go:27`).
+4. Check auth-service: `/readyz` is 200 (`docs/reference/auth/readiness-and-slo.md:26`). The PDP route is `POST /v1/authorize` (`internal/auth/authapi/authorize.go:28`).
 5. Two auth-service limits can cause `pdp_rate_limited`: the per-pod server limit, default 20 requests per second (`defaultRateLimitPerSecond`, `internal/auth/authconfig/config.go:175`, read at `:484`), and the per-caller limit (`PDPCallerLimit`, `internal/auth/authapi/authorize_limit.go:23`; the zero value sets none).
 
 What does not exist on `main`:

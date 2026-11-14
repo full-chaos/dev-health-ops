@@ -8,6 +8,8 @@ import (
 	"go.opentelemetry.io/otel"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	oteltrace "go.opentelemetry.io/otel/trace"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/refusedaddr"
 )
 
 func discardLogger() *slog.Logger {
@@ -197,7 +199,7 @@ func TestEnabledFromEnvDefaultsTrue(t *testing.T) {
 // pre-Init Tracer to the real provider once one is installed.
 func TestInitWithServiceNameInstallsTheSDKProviderNotTheNoop(t *testing.T) {
 	t.Setenv("OTEL_ENABLED", "true")
-	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", closedPort(t))
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", refusedaddr.Addr(t))
 
 	component := InitWithServiceName(discardLogger(), "dev-health-query-api")
 	t.Cleanup(func() { _ = component.Shutdown(t.Context()) })
@@ -228,7 +230,7 @@ func TestInitWithServiceNameInstallsTheSDKProviderNotTheNoop(t *testing.T) {
 // catch the exact ignores-defaultName mutant by running it there.
 func TestInitWithServiceNameFallsBackToItsOwnDefaultNameOnly(t *testing.T) {
 	t.Setenv("OTEL_ENABLED", "true")
-	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", closedPort(t))
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", refusedaddr.Addr(t))
 
 	t.Run("OTEL_SERVICE_NAME unset uses the caller's fallback", func(t *testing.T) {
 		component := InitWithServiceName(discardLogger(), "dev-health-query-api")

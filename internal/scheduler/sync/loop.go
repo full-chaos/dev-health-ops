@@ -204,6 +204,7 @@ type Loop struct {
 	skippedFeatureDisabled     uint64
 	skippedNotPlannerManaged   uint64
 	skippedOpenRun             uint64
+	unmintedInstants           uint64
 	openRunPastBoundNoProgress uint64
 	openRunPastBoundAgeCap     uint64
 
@@ -399,6 +400,7 @@ func (loop *Loop) step(parent context.Context, now time.Time) (stepErr error) {
 	// The handoff transaction is committed: a skipped tick and a run started
 	// past a bound are facts now, whatever the reconcile stage below does.
 	loop.reportOpenRuns(parent, result)
+	loop.reportUnmintedInstants(parent, result)
 	// Consume in the same window that produced. A separate cadence would let
 	// the marker advance while the occurrence it handed off sat unconsumed.
 	stage = "reconcile"
@@ -457,6 +459,45 @@ func (loop *Loop) step(parent context.Context, now time.Time) (stepErr error) {
 	return nil
 }
 
+// reportUnmintedInstants counts and names the cron instants a minted
+// occurrence passed over (CHAOS-3954). One line per minted occurrence, never
+// one per instant: a long outage of a fine-grained cron stays one line.
+func (loop *Loop) reportUnmintedInstants(ctx context.Context, result HandoffResult) {
+	var total uint64
+	for _, unminted := range result.Unminted {
+		total += uint64(unminted.Count)
+	}
+	loop.mu.Lock()
+	loop.unmintedInstants += total
+	loop.mu.Unlock()
+	for _, unminted := range result.Unminted {
+		named := make([]string, 0, len(unminted.Named))
+		for _, instant := range unminted.Named {
+			named = append(named, instant.UTC().Format(time.RFC3339))
+		}
+		loop.logger().WarnContext(
+			ctx,
+			"sync scheduler minted an occurrence past cron instants that no window minted",
+			"reason", "unminted_instants",
+			"config_id", unminted.ConfigID,
+			"scheduled_for", unminted.MintedFor.UTC().Format(time.RFC3339),
+			"unminted_count", unminted.Count,
+			"unminted_count_capped", unminted.Capped,
+			"unminted_instants", strings.Join(named, ","),
+		)
+	}
+	for _, failed := range result.UnmintedCountFailed {
+		loop.logger().WarnContext(
+			ctx,
+			"sync scheduler minted an occurrence but could not count the cron instants it passed over",
+			"reason", "unminted_count_failed",
+			"config_id", failed.ConfigID,
+			"scheduled_for", failed.MintedFor.UTC().Format(time.RFC3339),
+			"error", failed.Error,
+		)
+	}
+}
+
 // reportOpenRuns counts and names the ticks that started no run because an
 // earlier scheduled run of the configuration is open, and the runs started
 // beside an open run that is past its bound. A skip with no line and no count
@@ -483,6 +524,7 @@ func (loop *Loop) reportOpenRuns(ctx context.Context, result HandoffResult) {
 			"open_sync_run_id", skipped.SyncRunID,
 			"open_seconds", skipped.OpenSeconds,
 			"next_run_at", skipped.NextRunAt.UTC().Format(time.RFC3339),
+			"skipped_instant", skipped.SkippedInstant.UTC().Format(time.RFC3339),
 		)
 	}
 	for _, past := range result.OpenRunsPastBound {
@@ -618,6 +660,7 @@ func (loop *Loop) WritePrometheus(output io.Writer) error {
 	orgMissing, featureDisabled := loop.skippedOrgMissing, loop.skippedFeatureDisabled
 	notPlannerManaged := loop.skippedNotPlannerManaged
 	skippedOpenRun := loop.skippedOpenRun
+	unmintedInstants := loop.unmintedInstants
 	pastNoProgress, pastAgeCap := loop.openRunPastBoundNoProgress, loop.openRunPastBoundAgeCap
 	unscheduled := loop.unscheduledConfigs
 	loop.mu.Unlock()
@@ -643,6 +686,7 @@ func (loop *Loop) WritePrometheus(output io.Writer) error {
 	writeLoopCounter(&text, "sync_scheduler_skipped_feature_disabled_total", "Due candidates refused before minting because their sync targets require the canonical-incident feature and the organization is not entitled to it.", featureDisabled)
 	writeLoopCounter(&text, "sync_scheduler_skipped_not_planner_managed_total", "Due candidates refused before minting because planner_managed is false, marking them a fixture or legacy fan-out config that must never be scheduled (CHAOS-4174).", notPlannerManaged)
 	writeLoopCounter(&text, "sync_scheduler_skipped_open_run_total", "Due schedule ticks that started no run because an earlier scheduled run of the same configuration is still open and inside its bound. The next run covers the skipped time from the unit watermarks.", skippedOpenRun)
+	writeLoopCounter(&text, "sync_scheduler_unminted_instants_total", "Cron instants no window minted: a late window or a skip for an open run passed over them, and the next minted occurrence rebased past them. Runs are incremental, so the next run covers their time; the count is the schedule-fidelity loss (CHAOS-3954). A scan that stops at its cap (unminted_count_capped=true) adds the cap, a lower bound.", unmintedInstants)
 	writeLoopCounter(&text, "sync_scheduler_open_run_past_bound_no_progress_total", "Scheduled runs started beside an open run of the same configuration in which no unit ended and no unit held a lease or sent a heartbeat inside the progress interval. Any growth is a run that did not end.", pastNoProgress)
 	writeLoopCounter(&text, "sync_scheduler_open_run_past_bound_age_cap_total", "Scheduled runs started beside an open run of the same configuration that is open for more than the hard age cap of 48 hours, counted from the creation of its occurrence. Any growth is a run that did not end.", pastAgeCap)
 	fmt.Fprintf(&text, "# HELP sync_scheduler_configs_without_schedule Active planner-managed sync configs the scheduler never plans because sync_options.schedule_cron is empty, as of the last hourly pass; the true total, not the capped list (CHAOS-8768).\n# TYPE sync_scheduler_configs_without_schedule gauge\nsync_scheduler_configs_without_schedule %d\n", unscheduled)

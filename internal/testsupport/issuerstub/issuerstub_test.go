@@ -14,7 +14,7 @@ import (
 	"github.com/full-chaos/dev-health-go/authverify"
 
 	"github.com/full-chaos/dev-health-ops/internal/cigates/livee2e"
-	"github.com/full-chaos/dev-health-ops/internal/envelopemint"
+	"github.com/full-chaos/dev-health-ops/internal/signingkey"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/issuerstub"
 )
 
@@ -41,7 +41,7 @@ func TestPrepareWritesCustodyModesAndRefusesToOverwrite(t *testing.T) {
 			t.Errorf("%s mode %o, want %o", path, info.Mode().Perm(), want)
 		}
 	}
-	if _, err := envelopemint.LoadPrivateKeyFromFile(files.PrivateKey); err != nil {
+	if _, err := signingkey.LoadPrivateKeyFromFile(files.PrivateKey); err != nil {
 		t.Fatalf("minter cannot load the signing key: %v", err)
 	}
 	if _, err := issuerstub.Prepare(dir, ""); err == nil {

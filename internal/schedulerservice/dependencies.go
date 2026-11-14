@@ -111,7 +111,7 @@ func wrapSchedulerReadinessCheckWithLogging(logger *slog.Logger, check string, r
 	return func(ctx context.Context) error {
 		err := ready(ctx)
 		if err != nil && logger != nil {
-			logger.ErrorContext(ctx, "scheduler readiness dependency check failed",
+			logger.Log(ctx, health.DependencyRefusalLevel(ctx), "scheduler readiness dependency check failed",
 				"error_category", "dependency_unavailable",
 				"check", check,
 				"error", err.Error(),

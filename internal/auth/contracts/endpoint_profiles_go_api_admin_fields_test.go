@@ -136,6 +136,9 @@ func adminFieldViolations(row map[string]any, scopes map[string]string, root str
 		adminOr := false
 		if known && scope == "platform" && tenancy == "org_scoped" {
 			adminOr, _ = registeredAdminOr(row, root)
+			if !adminOr {
+				adminOr, _ = registeredPlatformDeny(row, root)
+			}
 		}
 		if known && (scope == "platform") != (tenancy == "cross_org_superuser_only") && !adminOr {
 			bad("action %q has scope %q but the row's tenant_requirement is %q", action, scope, tenancy)
@@ -284,6 +287,16 @@ var adminOrPattern = regexp.MustCompile(`\b(WrapAdminOr|[bB]odyFirstAdminOr)\(`)
 
 // registeredAdminOr reports whether the row's registration mounts it admin-or; the error says the source anchor does
 // not resolve.
+// platformDenyPattern names the registration wrapper of a platform action on an org_scoped row that keeps its
+// handler's refusal text: Guard.WrapPlatformDeny. The mount has a policy.DenyTextRows entry, and the apiservice census
+// requires an executed cell for each such entry.
+var platformDenyPattern = regexp.MustCompile(`\bWrapPlatformDeny\(`)
+
+func registeredPlatformDeny(row map[string]any, root string) (bool, error) {
+	_, entry, err := registrationEntry(row, root)
+	return err == nil && platformDenyPattern.MatchString(entry), err
+}
+
 func registeredAdminOr(row map[string]any, root string) (bool, error) {
 	_, entry, err := registrationEntry(row, root)
 	return err == nil && adminOrPattern.MatchString(entry), err

@@ -1,13 +1,21 @@
 package workflows_test
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"io"
 	"os"
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -303,4 +311,558 @@ func scanEmbeddedTrackedFiles(root string, tracked []string) ([]string, error) {
 		return nil, fmt.Errorf("no go:embed file resolved: the scan measures nothing")
 	}
 	return sortedKeysBool(found), nil
+}
+
+// liveE2EFilterEntries returns the entries of one key of the live-e2e `changes` path filter.
+func liveE2EFilterEntries(t *testing.T, doc yamlMap, key string) []string {
+	t.Helper()
+	var out []string
+	for _, st := range stepsOf(jobsOf(doc)["changes"]) {
+		if f := asString(asMap(st["with"])["filters"]); f != "" {
+			for _, e := range asList(parseYAML(t, f, "paths filters")[key]) {
+				out = append(out, asString(e))
+			}
+		}
+	}
+	return out
+}
+
+// metricsProofPathViolations: metrics-executed-proof-run needs code == 'true' as well, so a metrics_proof entry outside
+// `code` would never run it. Every tracked file a metrics_proof entry matches is covered by `code` (testdata/ files
+// are not built into a binary; an embedded one is already demanded in `code` by TestLiveE2EInstallsNoPython), and
+// every entry matches a tracked file (a stale path selects nothing).
+func metricsProofPathViolations(t *testing.T, root string) []string {
+	t.Helper()
+	var out []string
+	doc := loadWf(t, root, e2eWorkflow)
+	proof := liveE2EFilterEntries(t, doc, "metrics_proof")
+	if len(proof) == 0 {
+		return []string{"the live-e2e path filter has no metrics_proof entries"}
+	}
+	var code []*regexp.Regexp
+	for _, p := range liveE2EFilterEntries(t, doc, "code") {
+		re, err := githubGlobToRegexp(p)
+		if err != nil {
+			return []string{err.Error()}
+		}
+		code = append(code, re)
+	}
+	tracked, err := trackedPaths(repoRoot(t), repoRoot(t))
+	if err != nil {
+		return []string{"cannot list tracked files: " + err.Error()}
+	}
+	for _, p := range proof {
+		re, err := githubGlobToRegexp(p)
+		if err != nil {
+			out = append(out, err.Error())
+			continue
+		}
+		matched := false
+		for _, f := range tracked {
+			if !re.MatchString(f) {
+				continue
+			}
+			matched = true
+			if strings.Contains("/"+f, "/testdata/") || slices.ContainsFunc(code, func(c *regexp.Regexp) bool { return c.MatchString(f) }) {
+				continue
+			}
+			out = append(out, fmt.Sprintf("the metrics_proof entry %s matches %s, which no code entry covers: the job needs code == 'true' and would not run", p, f))
+			break
+		}
+		if !matched {
+			out = append(out, fmt.Sprintf("the metrics_proof entry %s matches no tracked file", p))
+		}
+	}
+	return out
+}
+
+func TestLiveE2EMetricsProofPathsAreCode(t *testing.T) {
+	t.Parallel()
+	expectNoViolations(t, metricsProofPathViolations(t, repoRoot(t)))
+}
+
+func TestLiveE2EMetricsProofPathsPlantedDefects(t *testing.T) {
+	t.Parallel()
+	root := repoRoot(t)
+	const wf = ".github/workflows/live-e2e.yml"
+	cases := []struct {
+		name string
+		mut  mutation
+		want []string
+	}{
+		{"an entry outside code", mutation{wf, "              - 'ci/run_metrics_executed_proof.sh'\n", "              - 'ci/run_metrics_executed_proof.sh'\n              - 'Makefile'\n"}, []string{"metrics_proof entry Makefile", "no code entry covers"}},
+		{"a stale entry", mutation{wf, "              - 'internal/pgmigrate/**'\n", "              - 'internal/pgmigrate/**'\n              - 'internal/no-such-package/**'\n"}, []string{"internal/no-such-package/**", "matches no tracked file"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			expectViolation(t, metricsProofPathViolations(t, plantTree(t, root, []string{wf}, c.mut)), c.want...)
+		})
+	}
+}
+
+// metricsProofRoots are the binaries the metrics proof builds and runs: dho (ci/lib/go_worker_fixture.sh:91) and cigate
+// (ci/run_metrics_executed_proof.sh:328).
+var metricsProofRoots = []string{"cmd/dho", "cmd/cigate"}
+
+// proofCut is a package of the import closure of metricsProofRoots that metrics_proof does not cover, with the reason.
+// A cut with no usedBy is whole: the walk stops there. A cut with usedBy is partial: the files of the package that
+// declare what those importers name (plus what those files name in turn, and every init func) are on the path and
+// must be covered; the walk follows their imports only, and every importer of the package on the path must be in usedBy.
+type proofCut struct {
+	pkg    string
+	reason string
+	usedBy []string
+}
+
+const (
+	dhoVerbOff    = "a dho verb the proof does not run: it runs migrate postgres|clickhouse|river, worker, reconciler and fixtures generate|load-synthetic|finalize-synthetic-sync (ci/lib/go_worker_fixture.sh:121,162,182,342,363,486,502; ci/run_metrics_executed_proof.sh:276)"
+	cigateVerbOff = "a cigate verb the proof does not run: it runs metrics-proof only (ci/run_metrics_executed_proof.sh:331)"
+	queuesOff     = "the proof starts the worker with --queues=metrics,sync (ci/lib/go_worker_fixture.sh:343); "
+)
+
+var metricsProofCuts = []proofCut{
+	{pkg: "internal/adminops", reason: dhoVerbOff + " (admin)"},
+	{pkg: "internal/aicli", reason: dhoVerbOff + " (ai)"},
+	{pkg: "internal/apiservice", reason: dhoVerbOff + " (api)"},
+	{pkg: "internal/auth/usersbackfill", reason: dhoVerbOff + " (users-backfill)"},
+	{pkg: "internal/pushlifecyclecli", reason: dhoVerbOff + " (push lifecycle)"},
+	{pkg: "internal/billingcli", reason: dhoVerbOff + " (billing)"},
+	{pkg: "internal/contractcheck", reason: dhoVerbOff + " (contract check)"},
+	{pkg: "internal/goapicli", reason: dhoVerbOff + " (go-api)"},
+	{pkg: "internal/maintenancecli", reason: dhoVerbOff + " (maintenance)"},
+	{pkg: "internal/metricscli", reason: dhoVerbOff + " (metrics)"},
+	{pkg: "internal/mintcli", reason: dhoVerbOff + " (mint)"},
+	{pkg: "internal/pushcli", reason: dhoVerbOff + " (push)"},
+	{pkg: "internal/queryapiservice", reason: dhoVerbOff + " (query-api)"},
+	{pkg: "internal/schedulerservice", reason: dhoVerbOff + " (scheduler)"},
+	{pkg: "internal/streamrunnerservice", reason: dhoVerbOff + " (stream-runner)"},
+	{pkg: "internal/synccli", reason: dhoVerbOff + " (sync)"},
+	{pkg: "internal/websmoke", reason: dhoVerbOff + " (web smoke)"},
+	{pkg: "internal/workersctl", reason: dhoVerbOff + " (workers)"},
+	{pkg: "internal/cigates", reason: cigateVerbOff + " (governance, govulncheck, scope verbs)"},
+	{pkg: "internal/cigates/affected", reason: cigateVerbOff + " (plan-verdict, plan-reads)"},
+	{pkg: "internal/cigates/bigboyrender", reason: cigateVerbOff + " (bigboy)"},
+	{pkg: "internal/cigates/docsbuild", reason: cigateVerbOff + " (docs-build)"},
+	{pkg: "internal/cigates/docsprepare", reason: cigateVerbOff + " (docs-prepare)"},
+	{pkg: "internal/cigates/docstools", reason: cigateVerbOff + " (docs)"},
+	{pkg: "internal/cigates/livee2e", reason: cigateVerbOff + " (live-e2e)"},
+	{pkg: "internal/cigates/releasetag", reason: cigateVerbOff + " (release)"},
+	{pkg: "internal/cigates/routing", reason: cigateVerbOff + " (route-coverage, plane-split-router)"},
+	{pkg: "internal/jobs/report", reason: queuesOff + "report.execute_* run on queue reports, registered only when it is selected (internal/workerservice/reports.go:30)"},
+	{pkg: "internal/jobs/operational", reason: queuesOff + "operational.* run on queue webhooks, registered only when it is selected (internal/workerservice/operational.go:55)"},
+	{pkg: "internal/jobs/system", reason: queuesOff + "system.heartbeat and system.retention_cleanup run on queues heartbeat and retention, registered only when selected (internal/workerservice/operational.go:55)"},
+	{pkg: "internal/jobs/llmbudgetstale", reason: queuesOff + "system.llm_budget_stale_reservations runs on queue retention, registered only when it is selected (internal/workerservice/operational.go:55)"},
+	{pkg: "internal/mail", reason: queuesOff + "the mail sender serves the queue webhooks kinds only (internal/workerservice/operational.go:55,117)"},
+	{pkg: "internal/jobs/providerunit", reason: queuesOff + "sync.provider_unit runs on queue sync_provider, registered only when it is selected (internal/workerservice/provider_sync.go:528)"},
+	{pkg: "internal/jobs/dimensionfold", reason: queuesOff + "system.dimension_fold runs on queue sync_provider, registered only when it is selected (internal/workerservice/provider_sync.go:528,695)"},
+	{pkg: "internal/llmbudget", reason: queuesOff + "the LLM budget serves investment.materialize categorization (queue investment, registered only when selected: internal/workerservice/workgraph.go:37) and the retention sweep"},
+	{pkg: "internal/llmorgsettings", reason: queuesOff + "the LLM settings serve investment.materialize categorization (queue investment, registered only when selected: internal/workerservice/workgraph.go:37)"},
+	{pkg: "internal/api/externalurl", reason: queuesOff + "the LLM endpoint URL check serves investment.materialize categorization (queue investment, registered only when selected: internal/workerservice/workgraph.go:37)"},
+	{pkg: "internal/atlassianteams", reason: "the Jira team catalog collector (internal/workerservice/jira_atlassian_teams_collector.go): the proof's only provider is the synthetic gitlab one (internal/fixturescli/fixturescli.go:48)"},
+	{pkg: "internal/audit", reason: "auth audit writes: the worker reaches them for WORKER_REPO_IDENTITY_OUTBOX, off unless set (internal/workerservice/repository_identity_outbox.go:15-18; the proof never sets it), and in a push expiry sweep run, which nothing in the proof enqueues"},
+	{pkg: "internal/auth/pushreconcile/reconcilejob", reason: "the push reconcile probe is off unless PUSH_RECONCILE_PROBE=on (internal/workerservice/push_reconcile_probe.go:22); the proof never sets it"},
+	{pkg: "internal/jobs/synccoverage", reason: queuesOff + "system.sync_coverage_refresh runs on queue coverage, registered only when it is selected (internal/workerservice/operational.go:55)"},
+	{pkg: "internal/streamhandlers", reason: "stream ingest handlers, run by dho stream-runner, which the proof does not start; the worker's external recompute drain (internal/workerservice/dependencies.go:1098) uses only their ExternalRecomputeScope type"},
+	{pkg: "internal/storage/postgres/authschema", reason: "the auth schema package (auth API, grants and the push lifecycle; 111 of 1884 main commits in the 30 days to 2026-11-13): the worker reaches it only for its schema-name check at the sync-queue push expiry registration (internal/workerservice/push_expiry.go:49) and for the push expiry sweep store, a job nothing in the proof enqueues"},
+	{
+		pkg:    "contracts/auth/v1",
+		reason: "the auth contract files (246 of 1884 main commits in the 30 days to 2026-11-13 touch this directory); the proof path reads only the credential classes the job outbox and the reconciler check (internal/platform/credshape)",
+		usedBy: []string{"internal/platform/credshape"},
+	},
+}
+
+// goListPackage is the part of `go list -json` the closure walk reads.
+type goListPackage struct {
+	ImportPath string
+	Name       string
+	Dir        string
+	Standard   bool
+	GoFiles    []string
+	CgoFiles   []string
+	EmbedFiles []string
+	Imports    []string
+	Module     *struct{ Path string }
+}
+
+var (
+	proofPackagesOnce sync.Once
+	proofPackages     map[string]*goListPackage // module-relative directory -> package
+	proofModule       string
+)
+
+// metricsProofPackages lists the import closure of metricsProofRoots once per test binary, keyed by module-relative
+// directory (packages of the module only).
+func metricsProofPackages(t *testing.T) (map[string]*goListPackage, string) {
+	t.Helper()
+	proofPackagesOnce.Do(func() {
+		args := []string{"list", "-deps", "-json=ImportPath,Name,Dir,Standard,GoFiles,CgoFiles,EmbedFiles,Imports,Module"}
+		for _, r := range metricsProofRoots {
+			args = append(args, "./"+r)
+		}
+		dec := json.NewDecoder(bytes.NewReader([]byte(goListOutput(t, repoRoot(t), args...))))
+		all := map[string]*goListPackage{}
+		var rootModule string
+		for {
+			var p goListPackage
+			if err := dec.Decode(&p); errors.Is(err, io.EOF) {
+				break
+			} else if err != nil {
+				t.Fatalf("decode go list: %v", err)
+			}
+			if p.Standard || p.Module == nil {
+				continue
+			}
+			all[p.ImportPath] = &p
+			if strings.HasSuffix(p.ImportPath, "/"+metricsProofRoots[0]) {
+				rootModule = p.Module.Path
+			}
+		}
+		out := map[string]*goListPackage{}
+		for ip, p := range all {
+			if rel, ok := strings.CutPrefix(ip, rootModule+"/"); ok && p.Module.Path == rootModule {
+				out[rel] = p
+			}
+		}
+		proofPackages, proofModule = out, rootModule
+	})
+	if len(proofPackages) < 50 {
+		t.Fatalf("the metrics proof closure has %d module packages: go list misread", len(proofPackages))
+	}
+	return proofPackages, proofModule
+}
+
+// parsedGoFile is one parsed non-test file of a package.
+type parsedGoFile struct {
+	rel  string
+	file *ast.File
+}
+
+func parsePackageFiles(t *testing.T, root, rel string, p *goListPackage) []parsedGoFile {
+	t.Helper()
+	var out []parsedGoFile
+	fset := token.NewFileSet()
+	for _, name := range append(append([]string{}, p.GoFiles...), p.CgoFiles...) {
+		f, err := parser.ParseFile(fset, filepath.Join(root, rel, name), nil, parser.ParseComments|parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatalf("parse %s/%s: %v", rel, name, err)
+		}
+		out = append(out, parsedGoFile{rel: rel + "/" + name, file: f})
+	}
+	return out
+}
+
+// partialCutFiles returns the files of a partially cut package that are on the proof path: the files that declare a
+// name its usedBy importers select from it, every file with an init func, and, to a fixed point, the files that declare
+// a package-level name those files use, plus the files their go:embed lines name. A type pulls every file that
+// declares a method on it; a method is reached through its type, never by its bare name.
+func partialCutFiles(t *testing.T, root, module string, pkgs map[string]*goListPackage, c proofCut) []string {
+	t.Helper()
+	target := pkgs[c.pkg]
+	files := parsePackageFiles(t, root, c.pkg, target)
+	decl := map[string][]string{}
+	methods := map[string][]string{}
+	byRel := map[string]*ast.File{}
+	need := map[string]bool{}
+	for _, pf := range files {
+		byRel[pf.rel] = pf.file
+		for _, d := range pf.file.Decls {
+			switch d := d.(type) {
+			case *ast.FuncDecl:
+				switch {
+				case d.Recv == nil && d.Name.Name == "init":
+					need[pf.rel] = true
+				case d.Recv == nil:
+					decl[d.Name.Name] = append(decl[d.Name.Name], pf.rel)
+				case len(d.Recv.List) > 0:
+					ast.Inspect(d.Recv.List[0].Type, func(n ast.Node) bool {
+						if id, ok := n.(*ast.Ident); ok {
+							methods[id.Name] = append(methods[id.Name], pf.rel)
+						}
+						return true
+					})
+				}
+			case *ast.GenDecl:
+				for _, s := range d.Specs {
+					switch s := s.(type) {
+					case *ast.TypeSpec:
+						decl[s.Name.Name] = append(decl[s.Name.Name], pf.rel)
+					case *ast.ValueSpec:
+						for _, n := range s.Names {
+							decl[n.Name] = append(decl[n.Name], pf.rel)
+						}
+					}
+				}
+			}
+		}
+	}
+	use := func(name string) {
+		for _, f := range decl[name] {
+			need[f] = true
+		}
+		for _, f := range methods[name] {
+			need[f] = true
+		}
+	}
+	importPath := module + "/" + c.pkg
+	for _, u := range c.usedBy {
+		up := pkgs[u]
+		if up == nil {
+			continue
+		}
+		for _, pf := range parsePackageFiles(t, root, u, up) {
+			local := ""
+			for _, is := range pf.file.Imports {
+				if strings.Trim(is.Path.Value, `"`) != importPath {
+					continue
+				}
+				local = target.Name
+				if is.Name != nil {
+					local = is.Name.Name
+				}
+			}
+			if local == "" || local == "_" || local == "." {
+				continue
+			}
+			ast.Inspect(pf.file, func(n ast.Node) bool {
+				if sel, ok := n.(*ast.SelectorExpr); ok {
+					if x, ok := sel.X.(*ast.Ident); ok && x.Name == local {
+						use(sel.Sel.Name)
+					}
+				}
+				return true
+			})
+		}
+	}
+	for done := map[string]bool{}; ; {
+		grew := false
+		for _, f := range sortedKeysBool(need) {
+			if done[f] {
+				continue
+			}
+			done[f], grew = true, true
+			ast.Inspect(byRel[f], func(n ast.Node) bool {
+				switch n := n.(type) {
+				case *ast.SelectorExpr:
+					ast.Inspect(n.X, func(m ast.Node) bool {
+						if id, ok := m.(*ast.Ident); ok {
+							use(id.Name)
+						}
+						return true
+					})
+					return false
+				case *ast.Ident:
+					use(n.Name)
+				}
+				return true
+			})
+		}
+		if !grew {
+			break
+		}
+	}
+	for _, f := range sortedKeysBool(need) {
+		for _, cg := range byRel[f].Comments {
+			for _, cm := range cg.List {
+				patterns, ok := strings.CutPrefix(cm.Text, "//go:embed ")
+				if !ok {
+					continue
+				}
+				for _, tok := range strings.Fields(patterns) {
+					tok = strings.TrimPrefix(strings.Trim(tok, `"`+"`"), "all:")
+					for _, e := range target.EmbedFiles {
+						if ok, _ := path.Match(tok, e); ok || strings.HasPrefix(e, tok+"/") {
+							need[c.pkg+"/"+e] = true
+						}
+					}
+				}
+			}
+		}
+	}
+	return sortedKeysBool(need)
+}
+
+// metricsProofClosureViolations walks the internal import closure of the binaries the metrics proof runs and reports
+// every package on that path whose files no metrics_proof entry covers, unless a cut row names it with a reason; it
+// also reports stale or incomplete cut rows.
+func metricsProofClosureViolations(t *testing.T, root string, cuts []proofCut) []string {
+	t.Helper()
+	pkgs, module := metricsProofPackages(t)
+	var entryRes []*regexp.Regexp
+	for _, p := range liveE2EFilterEntries(t, loadWf(t, root, e2eWorkflow), "metrics_proof") {
+		re, err := githubGlobToRegexp(p)
+		if err != nil {
+			return []string{err.Error()}
+		}
+		entryRes = append(entryRes, re)
+	}
+	covered := func(f string) bool {
+		return slices.ContainsFunc(entryRes, func(re *regexp.Regexp) bool { return re.MatchString(f) })
+	}
+	var out []string
+	cutOf := map[string]proofCut{}
+	for _, c := range cuts {
+		if strings.TrimSpace(c.reason) == "" {
+			out = append(out, fmt.Sprintf("the metrics-proof cut row %s has no reason", c.pkg))
+		}
+		cutOf[c.pkg] = c
+	}
+	internalImports := func(imports []string) []string {
+		var r []string
+		for _, ip := range imports {
+			if rel, ok := strings.CutPrefix(ip, module+"/"); ok && pkgs[rel] != nil {
+				r = append(r, rel)
+			}
+		}
+		return r
+	}
+	via := map[string]string{}
+	reached := map[string]bool{}
+	followed := map[string][]string{}
+	var queue []string
+	push := func(from string, to []string) {
+		for _, r := range to {
+			if !reached[r] {
+				reached[r], via[r] = true, from
+				queue = append(queue, r)
+			}
+		}
+	}
+	chain := func(rel string) string {
+		var parts []string
+		for p := rel; p != ""; p = via[p] {
+			parts = append([]string{p}, parts...)
+		}
+		return strings.Join(parts, " > ")
+	}
+	push("", metricsProofRoots)
+	var deferred []string
+	for len(queue) > 0 || len(deferred) > 0 {
+		if len(queue) == 0 {
+			rel := deferred[0]
+			deferred = deferred[1:]
+			c := cutOf[rel]
+			for _, u := range c.usedBy {
+				if !reached[u] {
+					out = append(out, fmt.Sprintf("the metrics-proof cut row %s names usedBy %s, which is not on the proof path", rel, u))
+				}
+			}
+			var imports []string
+			for _, f := range partialCutFiles(t, repoRoot(t), module, pkgs, c) {
+				if !covered(f) {
+					out = append(out, fmt.Sprintf("%s is on the metrics proof path (%s: a name the proof path uses) and no metrics_proof entry covers it", f, chain(rel)))
+				}
+				if strings.HasSuffix(f, ".go") {
+					raw, err := parser.ParseFile(token.NewFileSet(), filepath.Join(repoRoot(t), f), nil, parser.ImportsOnly)
+					if err != nil {
+						t.Fatal(err)
+					}
+					for _, is := range raw.Imports {
+						imports = append(imports, strings.Trim(is.Path.Value, `"`))
+					}
+				}
+			}
+			followed[rel] = internalImports(imports)
+			push(rel, followed[rel])
+			continue
+		}
+		rel := queue[0]
+		queue = queue[1:]
+		p := pkgs[rel]
+		var files []string
+		for _, f := range append(append(append([]string{}, p.GoFiles...), p.CgoFiles...), p.EmbedFiles...) {
+			files = append(files, rel+"/"+f)
+		}
+		if c, ok := cutOf[rel]; ok {
+			if len(c.usedBy) > 0 {
+				deferred = append(deferred, rel)
+				continue
+			}
+			if len(files) > 0 && !slices.ContainsFunc(files, func(f string) bool { return !covered(f) }) {
+				out = append(out, fmt.Sprintf("the metrics-proof cut row %s names a package metrics_proof covers: drop the row", rel))
+			}
+			continue
+		}
+		for _, f := range files {
+			if !covered(f) {
+				out = append(out, fmt.Sprintf("package %s is on the metrics proof path (%s) and no metrics_proof entry covers %s: add an entry, or a cut row with the reason", rel, chain(rel), f))
+				break
+			}
+		}
+		followed[rel] = internalImports(p.Imports)
+		push(rel, followed[rel])
+	}
+	for _, c := range cuts {
+		if !reached[c.pkg] {
+			out = append(out, fmt.Sprintf("the metrics-proof cut row %s names a package off the proof path: drop the row", c.pkg))
+			continue
+		}
+		if len(c.usedBy) == 0 {
+			continue
+		}
+		importers := map[string]bool{}
+		for from, to := range followed {
+			if slices.Contains(to, c.pkg) {
+				importers[from] = true
+			}
+		}
+		for _, from := range sortedKeysBool(importers) {
+			if !slices.Contains(c.usedBy, from) {
+				out = append(out, fmt.Sprintf("%s imports %s on the metrics proof path: add it to the cut row's usedBy", from, c.pkg))
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func TestLiveE2EMetricsProofPathsCoverTheProofClosure(t *testing.T) {
+	t.Parallel()
+	expectNoViolations(t, metricsProofClosureViolations(t, repoRoot(t), metricsProofCuts))
+}
+
+func TestLiveE2EMetricsProofClosurePlantedDefects(t *testing.T) {
+	t.Parallel()
+	root := repoRoot(t)
+	const wf = ".github/workflows/live-e2e.yml"
+	withCuts := func(edit func([]proofCut) []proofCut) []proofCut {
+		return edit(append([]proofCut(nil), metricsProofCuts...))
+	}
+	drop := func(pkg string) func([]proofCut) []proofCut {
+		return func(cs []proofCut) []proofCut {
+			return slices.DeleteFunc(cs, func(c proofCut) bool { return c.pkg == pkg })
+		}
+	}
+	add := func(c proofCut) func([]proofCut) []proofCut {
+		return func(cs []proofCut) []proofCut { return append(cs, c) }
+	}
+	cases := []struct {
+		name string
+		mut  *mutation
+		cuts []proofCut
+		want []string
+	}{
+		{"a package the metrics families import loses its entry", &mutation{wf, "              - 'internal/pythonparity/**'\n", ""}, metricsProofCuts, []string{"package internal/pythonparity is on the metrics proof path"}},
+		{"a file a partial cut needs loses its entry", &mutation{wf, "              - 'contracts/auth/v1/credential-classes.json'\n", ""}, metricsProofCuts, []string{"contracts/auth/v1/credential-classes.json is on the metrics proof path"}},
+		{"a dho verb the proof does not run loses its cut row", nil, withCuts(drop("internal/apiservice")), []string{"package internal/apiservice is on the metrics proof path (cmd/dho > internal/apiservice)"}},
+		{"a cut row names a covered package", nil, withCuts(add(proofCut{pkg: "internal/cli", reason: "planted"})), []string{"cut row internal/cli names a package metrics_proof covers"}},
+		{"a cut row names a package off the path", nil, withCuts(add(proofCut{pkg: "internal/no-such-package", reason: "planted"})), []string{"cut row internal/no-such-package names a package off the proof path"}},
+		{"a cut row has no reason", nil, withCuts(func(cs []proofCut) []proofCut { cs[0].reason = ""; return cs }), []string{"cut row internal/adminops has no reason"}},
+		{"a partial cut misses an importer", nil, withCuts(func(cs []proofCut) []proofCut {
+			for i := range cs {
+				if cs[i].pkg == "contracts/auth/v1" {
+					cs[i].usedBy = []string{"internal/cli"}
+				}
+			}
+			return cs
+		}), []string{"internal/platform/credshape imports contracts/auth/v1"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			tree := root
+			if c.mut != nil {
+				tree = plantTree(t, root, []string{wf}, *c.mut)
+			}
+			expectViolation(t, metricsProofClosureViolations(t, tree, c.cuts), c.want...)
+		})
+	}
 }

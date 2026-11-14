@@ -41,6 +41,7 @@ var platformAdminRoutes = map[string]platformAdminRoute{
 	"POST /api/v1/admin/impersonate":                                       {rule.ActionAdminImpersonate, true},
 	"POST /api/v1/admin/impersonate/stop":                                  {rule.ActionAdminImpersonate, false},
 	"POST /api/v1/admin/impersonate/handoff/consume":                       {rule.ActionAdminImpersonate, true},
+	"POST /api/v1/telemetry/report":                                        {rule.ActionAdminTelemetry, false},
 	"GET /api/v1/admin/service-accounts/{service_account_id}/keys":         {rule.ActionAdminUsers, false},
 	"POST /api/v1/admin/service-accounts/{service_account_id}/keys":        {rule.ActionAdminUsers, false},
 	"POST /api/v1/admin/service-accounts/{service_account_id}/keys/rotate": {rule.ActionAdminUsers, false},
@@ -62,7 +63,7 @@ var adminOrUsersRoutes = map[string]platformAdminRoute{
 // platformAdminGapRoutes are the platform-admin rows whose profile row names no action yet, with the guard level they
 // are mounted at. With the admin cell on, the decision point does not judge them.
 var platformAdminGapRoutes = map[string]Authz{
-	"POST /api/v1/telemetry/report":                                    Authenticated,
+	"POST /api/v1/telemetry/opt-in":                                    Authenticated,
 	"POST /api/v1/admin/service-accounts":                              Superuser,
 	"POST /api/v1/admin/service-accounts/{service_account_id}/disable": Superuser,
 	"POST /api/v1/admin/service-accounts/{service_account_id}/enable":  Superuser,
@@ -409,9 +410,10 @@ func TestPlatformAdminRowsKeepTheLegacyAnswerForARoutedPlatformAdmin(t *testing.
 	}
 }
 
-// The platform-admin rows with no action yet (the telemetry report row) are not decided by a route question with the
-// admin cell on: a superuser is answered by main's checks with no question. The telemetry report row's guard is
-// Authenticated; its handler asks (see the telemetry package).
+// The stand-in rows with no action (POST /api/v1/telemetry/opt-in, the route of the former telemetry report stand-in, whose
+// handler asks admin.telemetry) are not decided by a route question with the admin cell on: a superuser is answered by
+// main's checks with no question. The telemetry report row has its own action, mounted WrapPlatformDeny: it is in
+// platformAdminRoutes here, and its cells on the real handler are in internal/apiservice.
 func TestPlatformAdminGapRowsKeepMainsAnswerAndAskTheWrapAction(t *testing.T) {
 	for pattern, level := range platformAdminGapRoutes {
 		t.Run(pattern, func(t *testing.T) {

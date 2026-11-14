@@ -12,6 +12,8 @@ import (
 	"go.opentelemetry.io/otel/propagation"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace/noop"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/refusedaddr"
 )
 
 // The start-up line names the collector by host:port only; credentials, a
@@ -130,7 +132,7 @@ func TestAMalformedEndpointNeverReachesTheExporter(t *testing.T) {
 // The final-flush warning (a sampled span, a collector that does not answer)
 // names the collector by host:port only.
 func TestTheFlushTimeoutWarningNamesTheCollectorByHostAndPortOnly(t *testing.T) {
-	address := closedPort(t)
+	address := refusedaddr.Addr(t)
 	t.Setenv("OTEL_ENABLED", "true")
 	t.Setenv("OTEL_SAMPLE_RATE", "1")
 	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://ops-user:c4n4ry-pw@"+address+"/v1/traces?c4n4ry-q=1#c4n4ry-f")

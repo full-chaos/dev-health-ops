@@ -39,6 +39,18 @@ CHAOS-10743: the request-port fence. goApi.networkPolicy.enabled closes goApi.po
 goApi.networkPolicy.allowedFrom, inside the go-api-internal policy below. $closed holds every port that leaves the open
 ranges (the fenced ports and the internal port), zero-padded so a string sort is a numeric sort.
 */}}
+{{- /*
+Probe handlers are chart-owned (the operator listener): values carry timings only, so a handler in
+values would render a second handler key beside the chart's own.
+*/}}
+{{- range $probe := list "livenessProbe" "readinessProbe" }}
+{{- $v := default dict (index $.Values.goApi $probe) }}
+{{- range $h := list "httpGet" "tcpSocket" "exec" "grpc" }}
+{{- if hasKey $v $h }}
+{{- fail (printf "goApi.%s.%s is set: probe handlers are chart-owned (the operator listener); only timings belong in values" $probe $h) }}
+{{- end }}
+{{- end }}
+{{- end }}
 {{- $fenceCfg := .Values.goApi.networkPolicy }}
 {{- $fence := $fenceCfg.enabled }}
 {{- $fenced := list }}

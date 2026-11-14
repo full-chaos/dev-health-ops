@@ -76,6 +76,7 @@ internal/cigates/chartgates	worker_secret_env_scan_test.go	**/internal/...
 internal/cigates/chartgates	worker_secret_env_scan_test.go	unexpressed
 internal/cigates/checkgo	ci_script_helpers_test.go	unexpressed
 internal/cigates/checkgo	go_test_leg_json_test.go	unexpressed
+internal/cigates/checkgo	integration_leg_json_test.go	unexpressed
 internal/cigates/checkgo	race_solo_test.go	unexpressed
 internal/cigates/checkgo	testcontainers_session_reap_test.go	unexpressed
 internal/cigates/checkgoshards	ci_script_helpers_test.go	unexpressed
@@ -140,12 +141,14 @@ internal/cigates/splitshards	free_run_test.go	unexpressed
 internal/cigates/splitshards	listing_cache_test.go	unexpressed
 internal/cigates/suitecatalog	suitecatalog_test.go	unexpressed
 internal/cigates/testshard	all_legs_errexit_test.go	unexpressed
+internal/cigates/testshard	authsplitweights_test.go	unexpressed
 internal/cigates/testshard	chainplan_test.go	unexpressed
 internal/cigates/testshard	checkgofresh_test.go	unexpressed
 internal/cigates/testshard	listcall_test.go	unexpressed
 internal/cigates/testshard	loglineatomic_test.go	unexpressed
 internal/cigates/testshard	providersync_test.go	unexpressed
 internal/cigates/testshard	raceshard_test.go	unexpressed
+internal/cigates/testshard	splitweights_test.go	unexpressed
 internal/cigates/testshard	standin_test.go	unexpressed
 internal/cigates/testshard	testshard_test.go	unexpressed
 internal/cigates/testshard	weightscensus_test.go	unexpressed
@@ -229,6 +232,7 @@ internal/platform/tracing	environment_proxy_test.go	unexpressed
 internal/providerfoundation	environment_proxy_test.go	unexpressed
 internal/providersync	census_load_test.go	unexpressed
 internal/providersync	project_id_test.go	unexpressed
+internal/providersync	route_census_runtime_test.go	unexpressed
 internal/providersync	work_item_row_base_census_test.go	unexpressed
 internal/queryapi/pdp	headers_switch_census_test.go	unexpressed
 internal/queryapi/pepgate	census_test.go	unexpressed

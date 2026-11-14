@@ -16,12 +16,26 @@ var census struct {
 	err  error
 }
 
+// censusPackages is the shared load: the log-site packages and the route
+// census packages, each once.
+func censusPackages() []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, pattern := range append(append([]string(nil), logSitePackages...), routeCensusPackages...) {
+		if !seen[pattern] {
+			seen[pattern] = true
+			out = append(out, pattern)
+		}
+	}
+	return out
+}
+
 func censusLoad(patterns ...string) ([]*packages.Package, error) {
 	census.once.Do(func() {
 		census.pkgs, census.err = packages.Load(&packages.Config{
 			Mode: packages.NeedName | packages.NeedFiles | packages.NeedSyntax | packages.NeedTypes | packages.NeedTypesInfo | packages.NeedImports,
 			Dir:  "../..",
-		}, logSitePackages...)
+		}, censusPackages()...)
 	})
 	if census.err != nil {
 		return nil, census.err
@@ -37,7 +51,7 @@ func censusLoad(patterns ...string) ([]*packages.Package, error) {
 			}
 		}
 		if !found {
-			return nil, fmt.Errorf("census load: %s is not among the shared packages %v", pattern, logSitePackages)
+			return nil, fmt.Errorf("census load: %s is not among the shared packages %v", pattern, censusPackages())
 		}
 	}
 	return out, nil

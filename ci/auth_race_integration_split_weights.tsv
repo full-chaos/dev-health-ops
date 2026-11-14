@@ -1,0 +1,98 @@
+# Measured tests of the auth race-integration split packages of ci/auth_race_integration_splits.tsv (CHAOS-13693):
+# package<TAB>TestName<TAB>seconds. An auth race-integration leg (check_go.sh auth race-integration-leg) cuts a split package's
+# `go test -race -tags=integration -list` names into its parts by these rows (ci/go_race_shard.awk cut(), as
+# ci/go_test_split_weights.tsv for the test legs): a measured name longest first onto the lightest part, any other name by a hash of
+# its own name, so adding or removing an unmeasured test moves no other test. The auth plan does not read the rows for weights: a
+# part weighs ceil(W / parts) as before (W = the package row of ci/auth_race_integration_weights.tsv).
+# PROXY source: no CI run uploads per-test timings of this leg's own build (-race -tags=integration). seconds = round(W * m / M):
+# m = the test's median top-level elapsed over the runs of its source, M = the sum of m over the listed tests. Tests without the
+# integration tag: the go-test-timings-race-K-of-6 artifacts (go-quality.yml, -race) of go-quality push runs 43376042584,
+# 43377857475, 43379257796, 43443132054. Tests with it: the go-test-timings-integration-packages-K artifacts (go.yml, push to main,
+# -tags=integration WITHOUT -race) of runs 43471482033, 43473339069, 43473453879, 43474378490. -race slows CPU-heavy tests more than
+# database-bound ones, so the integration rows can be low: a wrong value costs balance only, never a test.
+# Rows: every listed test of 2 s or more, and the package's heaviest tests up to its part count (no part can be empty).
+# A row must name a test `go test -race -tags=integration -list` reports: renaming or removing a measured test needs its row edited
+# in the same change (the auth race-integration leg and internal/cigates/testshard fail otherwise). Refresh: the same reduction
+# over newer runs; values only cost balance. Sorted (LC_ALL=C) by package, then test.
+internal/auth/identity/local	TestAFailedStepRollsTheWholePasswordChangeBack	4
+internal/auth/identity/local	TestAPasswordChangeEndsTheEarlierResetLinksOnly	4
+internal/auth/identity/local	TestAPublicAuditInsertFailureAbortsTheFlow	4
+internal/auth/identity/local	TestAResetConsumesItsLinkInTheSameWriteAsThePassword	4
+internal/auth/identity/local	TestAResetLinkIsUnknownAfterAPasswordWriteOutsideAuthService	4
+internal/auth/identity/local	TestAResetLinkIsUnusableWhenThePasswordChangesBetweenItsReadAndItsConsume	4
+internal/auth/identity/local	TestAResetLinkOfAUserWithoutAPublicRowIsRefusedInPeekAndConsume	4
+internal/auth/identity/local	TestAResetLinkWithoutAnIssuedTokenVersionNeverRedeems	4
+internal/auth/identity/local	TestAServiceProviderAccountGetsNoResetLinkPasswordOrLocalLoginUnderUsersOwned	4
+internal/auth/identity/local	TestAnEmailCollisionRollsBackTheOrganizationAndMembership	4
+internal/auth/identity/local	TestAnOlderResetCannotOverwriteAChangeMadeBetweenItsReadAndItsWrite	4
+internal/auth/identity/local	TestAuditOrganizationFollowsTheLoginChoiceForBackfilledMemberships	4
+internal/auth/identity/local	TestAuditOrganizationRunsAsTheRuntimeRole	4
+internal/auth/identity/local	TestC1PasswordChangeOfALostMemberGetsASessionWithNoOrganization	4
+internal/auth/identity/local	TestC2PasswordChangeOfAMemberKeepsTheOrganization	4
+internal/auth/identity/local	TestC3PasswordChangeOfASessionWithNoOrganizationStaysNull	4
+internal/auth/identity/local	TestC4RemovalThatCommitsWhileTheChangeWaitsLeavesTheNewSessionWithNoOrganization	4
+internal/auth/identity/local	TestC5RemovalBehindTheChangeEndsTheNewSession	4
+internal/auth/identity/local	TestC7ChangeBehindThePrincipalsRowHoldsNoUserRow	5
+internal/auth/identity/local	TestChangeEndsEveryCredentialClassAndKeepsTheCallersNewSession	4
+internal/auth/identity/local	TestChangeWritesGoAPIsPublicAuditRow	4
+internal/auth/identity/local	TestClearOfAnUnknownIdentifierIsNotAnError	5
+internal/auth/identity/local	TestCorpusAuthFlowDecisionRows	4
+internal/auth/identity/local	TestCorpusLoginDecisionRows	8
+internal/auth/identity/local	TestDecoyIssueWritesNothing	4
+internal/auth/identity/local	TestDependencyErrorsAreErrorsNotRefusals	12
+internal/auth/identity/local	TestDummyHashStandsInWhereNoRealHashApplies	40
+internal/auth/identity/local	TestEmailIsNormalizedBeforeLookupAndLockoutHash	19
+internal/auth/identity/local	TestEveryPasswordWriteOfPublicUsersRaisesTokenVersion	13
+internal/auth/identity/local	TestEveryRefusalPathHasOneCallSequence	67
+internal/auth/identity/local	TestExpiredLockRestartsTheCountAtOne	5
+internal/auth/identity/local	TestFailureWhileLockedNeverShortensOrCountsMore	5
+internal/auth/identity/local	TestFaultAtTheAuditInsertLeavesNoLinkRow	5
+internal/auth/identity/local	TestFaultInTheLinkInsertLeavesNoAuditRow	5
+internal/auth/identity/local	TestFiveFailuresLockForFifteenMinutes	9
+internal/auth/identity/local	TestForgotAndResendAnswerAlikeForKnownAndUnknownAddresses	4
+internal/auth/identity/local	TestForgotWritesGoAPIsPublicAuditRow	4
+internal/auth/identity/local	TestIdentifierHashIsImmutableAtTheDatabase	5
+internal/auth/identity/local	TestIdentifierMustBe32Bytes	6
+internal/auth/identity/local	TestIdentityUsersByEmailCarriesTheStoredFullNameInBothReadModes	4
+internal/auth/identity/local	TestInvalidEmailIsAnErrorBeforeAnyLookup	6
+internal/auth/identity/local	TestIssueBoundStoresTheCounterAndNoPasswordMaterial	4
+internal/auth/identity/local	TestIssueRunsOneStatementSequenceForEveryCase	4
+internal/auth/identity/local	TestKnownAndUnknownRequestsSendTheSameStatements	4
+internal/auth/identity/local	TestLinkCredentialExpiryIsDecidedByTheDatabaseClock	4
+internal/auth/identity/local	TestLinkCredentialIsSingleUseAndStoredAsAHashOnly	4
+internal/auth/identity/local	TestLinkCredentialOfAnotherPurposeIsNotRedeemed	4
+internal/auth/identity/local	TestLinkCredentialOfAnotherPurposeIsNotRedeemedBothWays	4
+internal/auth/identity/local	TestLiveLockCannotBeClearedOnlyExpiredOnesAre	5
+internal/auth/identity/local	TestLockedAtZeroRemainingStillRetriesAfterOneSecond	12
+internal/auth/identity/local	TestLockedCarriesRetryAfterAndRecordsNoSession	12
+internal/auth/identity/local	TestLoginErrorsBeforeTheCompareCarryTheStageMark	22
+internal/auth/identity/local	TestNonLocalProviderNeedsNoVerification	19
+internal/auth/identity/local	TestOlderCredentialTakesTheUnknownCredentialPath	4
+internal/auth/identity/local	TestRaceConcurrentChangeKeepsTheReturnedSession	4
+internal/auth/identity/local	TestRaceIssueLeavesOneLiveCredential	4
+internal/auth/identity/local	TestRaceRedeemReplay	4
+internal/auth/identity/local	TestRaceResetReplay	8
+internal/auth/identity/local	TestRaceTenParallelFailuresLockOnce	5
+internal/auth/identity/local	TestRedeemCommitsAnAuditRowAndNoProvisioningEvent	4
+internal/auth/identity/local	TestRegisterCreatesTheOrganizationAndOwnerMembershipWithTheUser	4
+internal/auth/identity/local	TestRegisterForAKnownAddressInAnotherCaseAnswersOKAndStoresNothing	5
+internal/auth/identity/local	TestRegisterWithoutAnOrganizationNameCreatesNoOrganization	4
+internal/auth/identity/local	TestRegisterWithoutAnOrganizationOrRefusedWritesNoPublicAuditRow	3
+internal/auth/identity/local	TestRegisterWritesGoAPIsPublicAuditRow	4
+internal/auth/identity/local	TestReissueDeletesPriorUnconsumedCredentialsOfThePurpose	4
+internal/auth/identity/local	TestResetEndsEveryCredentialClass	5
+internal/auth/identity/local	TestResetLateRefusalRollsBackEveryWriteAndTakesOneStatementShape	13
+internal/auth/identity/local	TestResetOfARefusedLinkTakesTheStatementsOfAnUnknownOne	3
+internal/auth/identity/local	TestResetRequestOfAPrincipalWithNoMembershipNamesNoOrganization	4
+internal/auth/identity/local	TestResetRequestWritesTheLinkAndOneAuditRowInTheEarliestMembershipOrganization	5
+internal/auth/identity/local	TestResetWritesGoAPIsPublicAuditRow	4
+internal/auth/identity/local	TestServicePrintsNoKeyByPointerOrValue	6
+internal/auth/identity/local	TestSuccessIssuesSessionAndClearsAttempts	7
+internal/auth/identity/local	TestTheRowCarriesAuthServicesOwnRequestIDWithoutAForwardedOne	4
+internal/auth/identity/local	TestUnknownAddressRequestLeavesATrailWithNoPrincipalAndNoAddress	5
+internal/auth/identity/local	TestUnverifiedLocalAccountIsBlockedAfterClearingAttempts	12
+internal/auth/identity/local	TestVerificationOfALinkSpentAfterTheReadIsRefusedAndWritesNothing	4
+internal/auth/identity/local	TestVerificationRequestWritesNoResetRequestRow	4
+internal/auth/identity/local	TestVerificationWritesExactlyOneAuditRowInTheEarliestMembershipOrganization	4
+internal/auth/identity/local	TestVerifyLateRefusalLogsOneWarnAndCountsLinkUnusable	6
+internal/auth/identity/local	TestVerifyWritesNoPublicAuditRow	4

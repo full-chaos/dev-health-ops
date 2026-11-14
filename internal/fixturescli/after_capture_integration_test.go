@@ -563,13 +563,14 @@ func TestAfterCaptureRulesReportEveryDefectByName(t *testing.T) {
 		{Name: "work_unit_id", Type: "String"},
 		{Name: "structural_evidence_json", Type: "String"},
 		{Name: "effort_basis", Type: "LowCardinality(String)"},
+		{Name: "evidence_quote_count", Type: "Nullable(UInt32)"},
 		{Name: "issue_refs", Type: "Array(String)"},
 		{Name: "pr_refs", Type: "Array(String)"},
 	}
 	refsClean := FrozenTable{Name: "work_unit_investments", Columns: refsColumns, Rows: [][]any{
-		{"u1", `{"issues":["i-1","i-2"],"prs":["p-1"]}`, "", []any{"i-1", "i-2"}, []any{"p-1"}},
-		{"u2", ``, "", []any{}, []any{}},
-		{"u3", `{"issues":[]}`, "", []any{}, []any{}},
+		{"u1", `{"issues":["i-1","i-2"],"prs":["p-1"]}`, "", nil, []any{"i-1", "i-2"}, []any{"p-1"}},
+		{"u2", ``, "", nil, []any{}, []any{}},
+		{"u3", `{"issues":[]}`, "", nil, []any{}, []any{}},
 	}}
 	if out, problems := withoutColumnsAfterTheCapture(refsClean); len(problems) != 0 || len(out.Columns) != 2 ||
 		out.Columns[0].Name != "work_unit_id" || out.Columns[1].Name != "structural_evidence_json" || len(out.Rows[0]) != 2 {
@@ -577,8 +578,8 @@ func TestAfterCaptureRulesReportEveryDefectByName(t *testing.T) {
 	}
 	// PLANT 5: a load that writes references its evidence does not hold.
 	refsWritten := FrozenTable{Name: "work_unit_investments", Columns: refsColumns, Rows: [][]any{
-		{"u1", `{"issues":["i-1","i-2"],"prs":["p-1"]}`, "", []any{"i-1"}, []any{"p-1"}},
-		{"u2", ``, "", []any{}, []any{}},
+		{"u1", `{"issues":["i-1","i-2"],"prs":["p-1"]}`, "", nil, []any{"i-1"}, []any{"p-1"}},
+		{"u2", ``, "", nil, []any{}, []any{}},
 	}}
 	if _, problems := withoutColumnsAfterTheCapture(refsWritten); len(problems) != 1 ||
 		!strings.HasPrefix(problems[0], "work_unit_investments.issue_refs (added by 149_work_unit_investment_refs.sql, after the capture): 1 of 2 loaded rows differ") {
@@ -586,9 +587,9 @@ func TestAfterCaptureRulesReportEveryDefectByName(t *testing.T) {
 	}
 	// The column is not an Array(String).
 	refsWrongType := FrozenTable{Name: "work_unit_investments", Columns: []FrozenColumn{
-		{Name: "structural_evidence_json", Type: "String"}, {Name: "effort_basis", Type: "String"},
+		{Name: "structural_evidence_json", Type: "String"}, {Name: "effort_basis", Type: "String"}, {Name: "evidence_quote_count", Type: "Nullable(UInt32)"},
 		{Name: "issue_refs", Type: "String"}, {Name: "pr_refs", Type: "Array(String)"},
-	}, Rows: [][]any{{`{}`, "", "", []any{}}}}
+	}, Rows: [][]any{{`{}`, "", nil, "", []any{}}}}
 	if _, problems := withoutColumnsAfterTheCapture(refsWrongType); len(problems) != 1 || !strings.Contains(problems[0], "not a derived Array(String)") {
 		t.Fatalf("a derived column that is not an Array(String): %q", problems)
 	}

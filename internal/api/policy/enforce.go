@@ -489,6 +489,29 @@ func (g *Guard) enforceVerdict(r *http.Request, user *User, bearer string, level
 	return verdict
 }
 
+// decisionPointRefusal is true for a verdict that comes from the decision point's answer or its absence: the refusals a
+// route's late checks run before. An impersonation refusal and a session row fault are the guard's own and come first.
+func decisionPointRefusal(verdict enforceVerdict) bool {
+	switch verdict {
+	case enforceDeny, enforceUnavailable, enforceNoDecisionPoint, enforceDenyNoOrg:
+		return true
+	}
+	return false
+}
+
+// actionSSOWrite is the catalog 20 action of the SSO provider writes.
+const actionSSOWrite = "sso.write"
+
+// refusalLevel is the level whose legacy refusal text a denied caller gets. The SSO provider writes are Authenticated routes
+// whose handler refuses a caller that is not an owner or admin with "Admin access required"; the enforced row keeps that text
+// (an action only owner and admin hold), so the answer for a denied caller does not change with the cell.
+func (e *Enforcer) refusalLevel(pattern string, level Authz) Authz {
+	if e != nil && level == Authenticated && e.rows[pattern].Action == actionSSOWrite {
+		return Admin
+	}
+	return level
+}
+
 // writeEnforceRefusal answers a request the decision point refused or could not judge, or that no decision point can.
 func writeEnforceRefusal(w http.ResponseWriter, r *http.Request, level Authz, verdict enforceVerdict, deny DenyText) {
 	switch verdict {

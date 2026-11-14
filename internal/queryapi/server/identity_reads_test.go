@@ -284,7 +284,7 @@ func TestQueryProofWriteReadsTheOrgAllowlistOncePerRequest(t *testing.T) {
 	ran, asked := 0, 0
 	mux := routeswitch.NewMux(routeswitch.StaticSwitch{"probeWrite": true})
 	mux.Register("probeWrite", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { ran++ }))
-	allowed := func(context.Context, string) bool { asked++; return true }
+	allowed := func(context.Context, string) (bool, error) { asked++; return true, nil }
 	handler := newDocumentDispatchHandler(os.Getenv, mux, map[string]string{digestHex(edgeWriteDocument): "probeWrite"}, verifier, nil, nil, digest.KindMutation, allowed)
 	request := httptest.NewRequest(http.MethodPost, "/query/proof-write", strings.NewReader(`{"query": `+jsonQuote(t, edgeWriteDocument)+`}`))
 	request.Header.Set("Content-Type", "application/json")

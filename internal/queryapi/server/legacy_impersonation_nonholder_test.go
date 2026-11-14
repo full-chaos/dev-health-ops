@@ -159,7 +159,7 @@ func TestWriteDoorRefusesANonHoldersWriteUnderTheSwitch(t *testing.T) {
 			return ""
 		})
 		routes := http.NewServeMux()
-		routes.Handle("/query/proof-write", newDocumentDispatchHandler(getenv, mux, map[string]string{digestHex(proofWriteMutation): "probe"}, nil, auth, users, digest.KindMutation, func(context.Context, string) bool { return true }))
+		routes.Handle("/query/proof-write", newDocumentDispatchHandler(getenv, mux, map[string]string{digestHex(proofWriteMutation): "probe"}, nil, auth, users, digest.KindMutation, func(context.Context, string) (bool, error) { return true, nil }))
 		return routes.ServeHTTP, seen
 	}
 	post := func(handler http.HandlerFunc) *httptest.ResponseRecorder {

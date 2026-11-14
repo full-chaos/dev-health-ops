@@ -161,6 +161,10 @@
       "why": "Closed vocabulary member `dependency_unavailable`."
     },
     {
+      "file": "valid-reason-last-sign-in-method.json",
+      "why": "Closed vocabulary member `last_sign_in_method` (a refused unlink of the last sign-in method)."
+    },
+    {
       "file": "valid-operation-login.json",
       "why": "Closed operation member `login`."
     },

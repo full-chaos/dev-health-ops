@@ -57,24 +57,24 @@ run() { # args: tsv path ; env passes through; sets RC, OUT
 
 # t1 both images readable at the pin
 run "${T}/tsv"
-if [ "${RC}" = 0 ] && [ "$(printf '%s\n' "${OUT}" | grep -c '^OK ')" = 2 ] && printf '%s\n' "${OUT}" | grep -q "^OK   go-build ghcr.io/full-chaos/library/golang:1.27.4-alpine ${GO_D}"; then ok "t1 both images readable anonymously at the pin"; else bad "t1 (rc=${RC}): ${OUT}"; fi
+if [ "${RC}" = 0 ] && [ "$(grep -c '^OK ' <<<"${OUT}")" = 2 ] && grep -q "^OK   go-build ghcr.io/full-chaos/library/golang:1.27.4-alpine ${GO_D}" <<<"${OUT}"; then ok "t1 both images readable anonymously at the pin"; else bad "t1 (rc=${RC}): ${OUT}"; fi
 # t2 anonymous only: no credential in any call, only ghcr.io
-if ! grep -qE -- '(^| )(-u|--user)( |$)|Basic|GITHUB_TOKEN|ghp_' "${T}/curl.log" && ! grep -v 'https://ghcr.io/' "${T}/curl.log" | grep -q 'https://'; then ok "t2 anonymous calls to ghcr.io only"; else bad "t2 a credential or another host appears in the calls"; fi
+if ! grep -qE -- '(^| )(-u|--user)( |$)|Basic|GITHUB_TOKEN|ghp_' "${T}/curl.log" && ! grep -q 'https://' < <(grep -v 'https://ghcr.io/' "${T}/curl.log"); then ok "t2 anonymous calls to ghcr.io only"; else bad "t2 a credential or another host appears in the calls"; fi
 # t3 a private or absent package: no anonymous pull token
 FAKE_NO_TOKEN=debian run "${T}/tsv"
-if [ "${RC}" = 1 ] && printf '%s\n' "${OUT}" | grep -q '^FAIL tools-runtime: ghcr.io/full-chaos/library/debian is not readable anonymously (no pull token)' && printf '%s\n' "${OUT}" | grep -q '^OK   go-build'; then ok "t3 no anonymous token = named FAIL, the other image still checked"; else bad "t3 (rc=${RC}): ${OUT}"; fi
+if [ "${RC}" = 1 ] && grep -q '^FAIL tools-runtime: ghcr.io/full-chaos/library/debian is not readable anonymously (no pull token)' <<<"${OUT}" && grep -q '^OK   go-build' <<<"${OUT}"; then ok "t3 no anonymous token = named FAIL, the other image still checked"; else bad "t3 (rc=${RC}): ${OUT}"; fi
 # t4 the tag is missing (404)
 FAKE_CODE_GOTAG=404 run "${T}/tsv"
-if [ "${RC}" = 1 ] && printf '%s\n' "${OUT}" | grep -q '^FAIL go-build: ghcr.io/full-chaos/library/golang:1.27.4-alpine answered HTTP 404 anonymously'; then ok "t4 missing tag = named FAIL"; else bad "t4 (rc=${RC}): ${OUT}"; fi
+if [ "${RC}" = 1 ] && grep -q '^FAIL go-build: ghcr.io/full-chaos/library/golang:1.27.4-alpine answered HTTP 404 anonymously' <<<"${OUT}"; then ok "t4 missing tag = named FAIL"; else bad "t4 (rc=${RC}): ${OUT}"; fi
 # t5 the tag serves another digest
 FAKE_DIG_DEBTAG="sha256:$(printf 'c%.0s' $(seq 64))" run "${T}/tsv"
-if [ "${RC}" = 1 ] && printf '%s\n' "${OUT}" | grep -q "^FAIL tools-runtime: ghcr.io/full-chaos/library/debian:bookworm-slim serves sha256:c.*, want ${DEB_D}"; then ok "t5 digest mismatch at the tag = named FAIL"; else bad "t5 (rc=${RC}): ${OUT}"; fi
+if [ "${RC}" = 1 ] && grep -q "^FAIL tools-runtime: ghcr.io/full-chaos/library/debian:bookworm-slim serves sha256:c.*, want ${DEB_D}" <<<"${OUT}"; then ok "t5 digest mismatch at the tag = named FAIL"; else bad "t5 (rc=${RC}): ${OUT}"; fi
 # t6 the digest reference is missing (404)
 FAKE_CODE_GODIG=404 run "${T}/tsv"
-if [ "${RC}" = 1 ] && printf '%s\n' "${OUT}" | grep -q "^FAIL go-build: ghcr.io/full-chaos/library/golang@${GO_D} answered HTTP 404 anonymously"; then ok "t6 missing digest reference = named FAIL"; else bad "t6 (rc=${RC}): ${OUT}"; fi
+if [ "${RC}" = 1 ] && grep -q "^FAIL go-build: ghcr.io/full-chaos/library/golang@${GO_D} answered HTTP 404 anonymously" <<<"${OUT}"; then ok "t6 missing digest reference = named FAIL"; else bad "t6 (rc=${RC}): ${OUT}"; fi
 # t7 the digest reference serves another digest
 FAKE_DIG_GODIG="sha256:$(printf 'd%.0s' $(seq 64))" run "${T}/tsv"
-if [ "${RC}" = 1 ] && printf '%s\n' "${OUT}" | grep -q "^FAIL go-build: ghcr.io/full-chaos/library/golang@${GO_D} serves sha256:d"; then ok "t7 digest mismatch at the digest reference = named FAIL"; else bad "t7 (rc=${RC}): ${OUT}"; fi
+if [ "${RC}" = 1 ] && grep -q "^FAIL go-build: ghcr.io/full-chaos/library/golang@${GO_D} serves sha256:d" <<<"${OUT}"; then ok "t7 digest mismatch at the digest reference = named FAIL"; else bad "t7 (rc=${RC}): ${OUT}"; fi
 # t8 a malformed tsv is refused by the one reader, before any call
 printf 'go-build\tlibrary/golang:1.27@sha1:abc\n' > "${T}/tsv.bad"
 run "${T}/tsv.bad"
@@ -88,10 +88,10 @@ run "${T}/absent.tsv"
 if [ "${RC}" != 0 ]; then ok "t10 a missing tsv fails"; else bad "t10"; fi
 # t11 the real tsv parses and is checked (two images)
 run "${ROOT}/ci/base_images.tsv"
-if printf '%s\n' "${OUT}" | grep -c '^\(OK  \|FAIL\) ' | grep -qx 2; then ok "t11 the real ci/base_images.tsv yields two checks"; else bad "t11: ${OUT}"; fi
+if grep -qx 2 <<<"$(grep -c '^\(OK  \|FAIL\) ' <<<"${OUT}")"; then ok "t11 the real ci/base_images.tsv yields two checks"; else bad "t11: ${OUT}"; fi
 # t12 a status line other than 200 with no digest header (a redirect or an error page) is a FAIL, not a pass
 FAKE_CODE_DEBTAG=301 run "${T}/tsv"
-if [ "${RC}" = 1 ] && printf '%s\n' "${OUT}" | grep -q 'answered HTTP 301 anonymously'; then ok "t12 a non-200 answer is a FAIL"; else bad "t12 (rc=${RC}): ${OUT}"; fi
+if [ "${RC}" = 1 ] && grep -q 'answered HTTP 301 anonymously' <<<"${OUT}"; then ok "t12 a non-200 answer is a FAIL"; else bad "t12 (rc=${RC}): ${OUT}"; fi
 
 [ "${fail}" = 0 ] || { printf 'verify_base_images: FAILED\n'; exit 1; }
 printf 'all verify_base_images checks passed\n'

@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -46,13 +47,14 @@ const slugReusePassword = "slug-reuse-pw"
 // two sign-in planes over one database: the compatibility login go-api's proxy forwards POST /api/v1/auth/login to (the
 // live plane), and the session issue route go-api's own login asks through its real client (the issue plane).
 type slugStack struct {
-	admin  *pgxpool.Pool
-	goAPI  http.Handler
-	bearer string
-	compat *httptest.Server
-	issue  *sessionissue.Client
-	orgs   *org.Store
-	users  *identity.Store
+	refuseDeprovision *atomic.Bool
+	admin             *pgxpool.Pool
+	goAPI             http.Handler
+	bearer            string
+	compat            *httptest.Server
+	issue             *sessionissue.Client
+	orgs              *org.Store
+	users             *identity.Store
 }
 
 func newSlugStack(t *testing.T, ctx context.Context, switchValue string) *slugStack {
@@ -108,8 +110,9 @@ func newSlugStack(t *testing.T, ctx context.Context, switchValue string) *slugSt
 	}
 
 	provisioning, identities := orgDeleteAuthService(t, runtime, switchValue != "")
+	refuse := new(atomic.Bool)
 	if switchValue != "" {
-		provisioning = logRefusals(t, provisioning)
+		provisioning = logRefusals(t, provisioning, refuse)
 	}
 	super := uuid.New()
 	if _, err := admin.Exec(ctx, `INSERT INTO users (id, email, password_hash, auth_provider, is_active, is_verified, is_superuser, token_version, created_at, updated_at)
@@ -143,6 +146,7 @@ VALUES ($1, $2, NULL, 'local', true, true, true, 0, now(), now())`, super, "slug
 	}
 	s := &slugStack{admin: admin, goAPI: server.Handler(), bearer: issuer.MustMint(t, edtokens.Claims{UserID: super}), users: identities}
 	s.compat = compatLoginPlane(t, ctx, admin)
+	s.refuseDeprovision = refuse
 	s.issue = authplane.Start(t, ctx, pg.URI, authplane.NewKey(t)).Issuer
 	schema, err := authschema.NewValidatedIdentifier(authplane.Schema)
 	if err != nil {

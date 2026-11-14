@@ -5,15 +5,20 @@ package apiservice
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/http/httputil"
 	"net/url"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/api/authprovision"
+	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
 )
 
 // With AUTH_PROXY_ORG_PROVISIONING on, a superuser's DELETE /api/v1/admin/orgs/{org_id} deprovisions the organization
@@ -51,6 +56,34 @@ func TestOrgDeleteSwitchOnFreesNameAndSlug(t *testing.T) {
 	}
 	if n := s.count(t, ctx, `SELECT count(*) FROM auth.organizations WHERE id = $1 AND disabled_at IS NULL`, x); n != 1 {
 		t.Fatalf("after the dry run: %d live auth rows, want 1", n)
+	}
+
+	// Assert 6: auth-service refuses the deprovision. The delete answers 503 and purges nothing (deprovisionInAuth,
+	// admin/orgs_provision.go:238-249; the route answer is writeOrgDeletionAuthError, orgs_provision.go:252): go-api's
+	// rows stay, the auth organization stays live with its slug, and its members and sessions are unchanged.
+	authState := func() string {
+		t.Helper()
+		return fmt.Sprintf("live_orgs=%d memberships=%d sessions=%d",
+			s.count(t, ctx, `SELECT count(*) FROM auth.organizations WHERE id = $1 AND slug = $2 AND disabled_at IS NULL`, x, slugX),
+			s.count(t, ctx, `SELECT count(*) FROM auth.memberships WHERE organization_id = $1 AND status <> 'removed'`, x),
+			s.liveSessionsIn(t, ctx, ownerX, x))
+	}
+	beforeRefused := authState()
+	if beforeRefused != "live_orgs=1 memberships=1 sessions=2" {
+		t.Fatalf("before the refused delete: %s, want live_orgs=1 memberships=1 sessions=2", beforeRefused)
+	}
+	s.refuseDeprovision.Store(true)
+	status, answer = s.goAPICall(t, http.MethodDelete, "/api/v1/admin/orgs/"+x.String(), "")
+	s.refuseDeprovision.Store(false)
+	detail, _ := answer["detail"].(map[string]any)
+	if status != http.StatusServiceUnavailable || detail["message"] != sessionissue.UnavailableText || answer["organization_id"] != nil {
+		t.Fatalf("refused DELETE: %d %v, want 503 %q and no deletion report", status, answer, sessionissue.UnavailableText)
+	}
+	if o, m := publicRows(x); o != 1 || m != 1 {
+		t.Fatalf("after the refused delete: public org rows=%d memberships=%d, want 1 and 1", o, m)
+	}
+	if after := authState(); after != beforeRefused {
+		t.Fatalf("after the refused delete: auth %s, want %s", after, beforeRefused)
 	}
 
 	status, answer = s.goAPICall(t, http.MethodDelete, "/api/v1/admin/orgs/"+x.String(), "")
@@ -118,8 +151,8 @@ func TestOrgDeleteSwitchOnFreesNameAndSlug(t *testing.T) {
 }
 
 // logRefusals fronts auth-service with a proxy that logs each non-2xx answer, so a refusal that go-api turns into a
-// generic 503 is named in the test log.
-func logRefusals(t *testing.T, upstream *httptest.Server) *httptest.Server {
+// generic 503 is named in the test log, and that answers the deprovision route 503 while refuseDeprovision is set.
+func logRefusals(t *testing.T, upstream *httptest.Server, refuseDeprovision *atomic.Bool) *httptest.Server {
 	t.Helper()
 	target, err := url.Parse(upstream.URL)
 	if err != nil {
@@ -134,7 +167,16 @@ func logRefusals(t *testing.T, upstream *httptest.Server) *httptest.Server {
 		}
 		return nil
 	}
-	front := httptest.NewServer(proxy)
+	front := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if refuseDeprovision.Load() && r.URL.Path == authprovision.PathOrgDeprovision {
+			t.Logf("auth-service stub refuses %s", r.URL.Path)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = io.WriteString(w, `{"schema_version":"error.v1","status":503,"reason_code":"store_unavailable"}`)
+			return
+		}
+		proxy.ServeHTTP(w, r)
+	}))
 	t.Cleanup(front.Close)
 	return front
 }

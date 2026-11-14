@@ -260,6 +260,12 @@ const cycleTimeHoursOverRowsWithACompletion = "AVG(if(work_items_completed > 0, 
 //     anyone -- this comment is the only signal. Do not remove a
 //     NULLIF from this file without re-running the CHAOS-4534
 //     enumeration.
+//
+// The rate measures of the TestOps daily tables (pipeline success, failure and rerun; test pass, failure and flake;
+// line coverage) are one rule: the rate of a group is the sum of its numerators over the sum of its denominators,
+// never the AVG of the stored per-repository-day rates, which gives a repository of 10 runs the weight of one of
+// 10,000 (CHAOS-13775). Each has a NULLIF, so a group with nothing to divide by is NULL, never 0 (category 3 above).
+// The durations, queue time, branch coverage and coverage delta have no stored denominator and stay AVG.
 func dbExpression(measure Measure, useInvestment, useRepoAllocation bool) (string, error) {
 	if useInvestment {
 		throughputExpr := "SUM(subcategory_kv.2)"
@@ -309,25 +315,25 @@ func dbExpression(measure Measure, useInvestment, useRepoAllocation bool) (strin
 	case MeasureThroughput:
 		return "SUM(work_items_completed)", nil
 	case MeasurePipelineSuccessRate:
-		return "AVG(success_rate) * 100", nil
+		return weightedRateSQL(pipelineSuccessTerms), nil
 	case MeasurePipelineFailureRate:
-		return "AVG(failure_rate) * 100", nil
+		return weightedRateSQL(pipelineFailureTerms), nil
 	case MeasurePipelineDurationP95:
 		return "AVG(p95_duration_seconds)", nil // AT RISK: p95_duration_seconds is Nullable(Float64) (category 2)
 	case MeasurePipelineQueueTime:
 		return "AVG(avg_queue_seconds)", nil // AT RISK: avg_queue_seconds is Nullable(Float64) (category 2)
 	case MeasurePipelineRerunRate:
-		return "AVG(rerun_rate) * 100", nil
+		return weightedRateSQL(pipelineRerunTerms), nil
 	case MeasureTestPassRate:
-		return "AVG(pass_rate) * 100", nil
+		return weightedRateSQL(testPassTerms), nil
 	case MeasureTestFailureRate:
-		return "AVG(failure_rate) * 100", nil
+		return weightedRateSQL(testFailureTerms), nil
 	case MeasureTestFlakeRate:
-		return "AVG(flake_rate) * 100", nil
+		return weightedRateSQL(testFlakeTerms), nil
 	case MeasureTestSuiteDurationP95:
 		return "AVG(suite_duration_p95_seconds)", nil // AT RISK: Nullable(Float64) (category 2)
 	case MeasureCoverageLinePct:
-		return "AVG(line_coverage_pct)", nil // AT RISK: Nullable(Float64) (category 2)
+		return weightedRateSQL(coverageLineTerms), nil
 	case MeasureCoverageBranchPct:
 		return "AVG(branch_coverage_pct)", nil // AT RISK: Nullable(Float64) (category 2)
 	case MeasureCoverageDeltaPct:
@@ -371,3 +377,44 @@ func measureSourceTable(measure Measure) string {
 // name), kept as a named function so a caller reads the same shape as the
 // Python source rather than using the enum's string value directly.
 func dateTruncUnit(interval BucketInterval) string { return string(interval) }
+
+// rateTerms is a rate as its numerator and denominator over the stored rows of a group (SUM aggregates, so exactSums
+// takes them in Decimal128 like every other measure).
+type rateTerms struct{ numerator, denominator string }
+
+// weightedRateSQL is the percent the terms give: NULL when the denominator is 0.
+func weightedRateSQL(t rateTerms) string {
+	return t.numerator + " / NULLIF(" + t.denominator + ", 0) * 100"
+}
+
+// The pipeline rates divide by pipelines_count, as the stored rates do (every run of the day; whether that is the
+// right denominator is a separate decision). The stored rerun rate is reruns / pipelines_count, so rerun_rate times
+// pipelines_count is the rerun count: no column is added.
+var (
+	pipelineSuccessTerms = rateTerms{"SUM(success_count)", "SUM(pipelines_count)"}
+	pipelineFailureTerms = rateTerms{"SUM(failure_count)", "SUM(pipelines_count)"}
+	pipelineRerunTerms   = rateTerms{"SUM(rerun_rate * pipelines_count)", "SUM(pipelines_count)"}
+)
+
+// The test pass and failure rates divide by the cases that passed or failed (failed_count holds failed and errored
+// cases); skipped and quarantined cases are in neither side, so the two rates add up to 100.
+var (
+	testPassTerms    = rateTerms{"SUM(passed_count)", "SUM(passed_count) + SUM(failed_count)"}
+	testFailureTerms = rateTerms{"SUM(failed_count)", "SUM(passed_count) + SUM(failed_count)"}
+)
+
+// A row stored without the flake counts (written before migration 129 and not yet recomputed) makes its whole group
+// NULL, so a rate never covers a subset of the group's rows.
+var testFlakeTerms = rateTerms{
+	"if(countIf(flake_cases IS NULL OR distinct_cases IS NULL) > 0, NULL, SUM(flake_cases))",
+	"SUM(distinct_cases)",
+}
+
+// Coverage counts only the rows that carry both line counts: a row with a percent but no counts, or with no lines,
+// adds to neither side.
+var coverageLineTerms = rateTerms{
+	"SUM(if(" + coverageCounted + ", lines_covered, 0))",
+	"SUM(if(" + coverageCounted + ", lines_total, 0))",
+}
+
+const coverageCounted = "lines_covered IS NOT NULL AND lines_total IS NOT NULL AND lines_total > 0"

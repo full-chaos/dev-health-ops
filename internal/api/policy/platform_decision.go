@@ -11,7 +11,6 @@ import (
 	"github.com/full-chaos/dev-health-go/pep"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
-	"github.com/full-chaos/dev-health-ops/internal/auth/policycatalog"
 )
 
 const platformDecisionsKey contextKey = 102
@@ -116,7 +115,7 @@ func (e *Enforcer) askPlatform(ctx context.Context, bearer, action string) (held
 	if e.unconfigured || e.decider == nil {
 		return false, ErrPlatformNoDecisionPoint
 	}
-	decision, failed := e.ask(ctx, pep.Request{PrincipalReference: bearer, Action: action, ResourceType: policycatalog.ScopePlatform, ResourceKey: shadowPlatformKey})
+	decision, failed := e.ask(ctx, platformRequest(bearer, action))
 	if failed || decision.Local() {
 		e.logger.WarnContext(ctx, "api enforcement: no verdict for a platform question, the handler refuses", slog.String("action", action))
 		return false, ErrPlatformDecisionUnavailable

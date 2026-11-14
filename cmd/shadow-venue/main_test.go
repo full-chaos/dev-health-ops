@@ -179,19 +179,24 @@ func TestFinishFailsAStepWhoseOutputFileDidNotClose(t *testing.T) {
 	}
 }
 
-func TestJudgeTakesTheTwoNoOrgScrapesTogetherOrNotAtAll(t *testing.T) {
+// CHAOS-13675 (acp Q1): the no_org counter flags are gone. A kit that passes either is refused with exit 2 and a message
+// that names it, before any input is read: a no_org series never reaches the shadow judge.
+func TestJudgeRefusesTheRemovedNoOrgFlags(t *testing.T) {
 	dir := t.TempDir()
 	one := filepath.Join(dir, "before.prom")
 	if err := os.WriteFile(one, []byte("# HELP dev_health_authz_enforcement_unjudged_total x\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	var out, errOut bytes.Buffer
-	args := []string{"judge", "-slots", filepath.Join(dir, "nope"), "-log", filepath.Join(dir, "nope"), "-out", filepath.Join(dir, "t.tsv"), "-noorg-before", one}
-	if code := run(context.Background(), args, &out, &errOut); code != exitUsage {
-		t.Fatalf("one scrape only: code %d", code)
-	}
-	if !strings.Contains(errOut.String(), "go together") {
-		t.Fatalf("stderr %q", errOut.String())
+	for _, flags := range [][]string{{"-noorg-before", one}, {"-noorg-after", one}, {"--noorg-before=" + one}, {"-noorg-before", one, "-noorg-after", one}} {
+		var out, errOut bytes.Buffer
+		args := append([]string{"judge", "-slots", filepath.Join(dir, "nope"), "-log", filepath.Join(dir, "nope"), "-out", filepath.Join(dir, "t.tsv")}, flags...)
+		if code := run(context.Background(), args, &out, &errOut); code != exitUsage || !strings.Contains(errOut.String(), "was removed (CHAOS-13675)") ||
+			!strings.Contains(errOut.String(), "-noorg-") {
+			t.Fatalf("%v: code %d stderr %q", flags, code, errOut.String())
+		}
+		if _, err := os.Stat(filepath.Join(dir, "t.tsv")); err == nil {
+			t.Fatalf("%v: an output was written", flags)
+		}
 	}
 }
 

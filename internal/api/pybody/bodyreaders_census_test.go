@@ -32,58 +32,58 @@ var goAPIBodyReaders = map[string]string{
 
 func TestEveryGoAPIBodyReaderIsTheBoundaryOrNamed(t *testing.T) {
 	found := map[string]bool{}
-	for _, dir := range []string{"api", "apiservice"} {
-		root := filepath.Join("..", "..", dir)
-		err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-			if err != nil {
-				return err
-			}
-			if d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-				return nil
-			}
-			fset := token.NewFileSet()
-			file, err := parser.ParseFile(fset, path, nil, 0)
-			if err != nil {
-				return err
-			}
-			rel, _ := filepath.Rel(filepath.Join("..", ".."), path)
-			for _, decl := range file.Decls {
-				fn, ok := decl.(*ast.FuncDecl)
-				if !ok || fn.Body == nil {
-					continue
-				}
-				name := fn.Name.Name
-				if fn.Recv != nil && len(fn.Recv.List) == 1 {
-					switch typed := fn.Recv.List[0].Type.(type) {
-					case *ast.Ident:
-						name = typed.Name + "." + name
-					case *ast.StarExpr:
-						if id, ok := typed.X.(*ast.Ident); ok {
-							name = id.Name + "." + name
-						}
-					}
-				}
-				ast.Inspect(fn.Body, func(n ast.Node) bool {
-					switch typed := n.(type) {
-					case *ast.SelectorExpr:
-						if id, ok := typed.X.(*ast.Ident); ok && typed.Sel.Name == "Body" && (id.Name == "r" || id.Name == "req" || id.Name == "request") {
-							found[filepath.ToSlash(rel)+":"+name] = true
-						}
-						if id, ok := typed.X.(*ast.Ident); ok && id.Name == "pybody" && (typed.Sel.Name == "Read" || typed.Sel.Name == "ReadChecked") {
-							found[filepath.ToSlash(rel)+":"+name] = true
-							if typed.Sel.Name == "Read" {
-								t.Errorf("%s:%s calls pybody.Read: a go-api body entry reads through pybody.ReadChecked", rel, name)
-							}
-						}
-					}
-					return true
-				})
-			}
-			return nil
-		})
+	visit := func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
-			t.Fatal(err)
+			return err
 		}
+		if d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		fset := token.NewFileSet()
+		file, err := parser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(filepath.Join("..", ".."), path)
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Body == nil {
+				continue
+			}
+			name := fn.Name.Name
+			if fn.Recv != nil && len(fn.Recv.List) == 1 {
+				switch typed := fn.Recv.List[0].Type.(type) {
+				case *ast.Ident:
+					name = typed.Name + "." + name
+				case *ast.StarExpr:
+					if id, ok := typed.X.(*ast.Ident); ok {
+						name = id.Name + "." + name
+					}
+				}
+			}
+			ast.Inspect(fn.Body, func(n ast.Node) bool {
+				switch typed := n.(type) {
+				case *ast.SelectorExpr:
+					if id, ok := typed.X.(*ast.Ident); ok && typed.Sel.Name == "Body" && (id.Name == "r" || id.Name == "req" || id.Name == "request") {
+						found[filepath.ToSlash(rel)+":"+name] = true
+					}
+					if id, ok := typed.X.(*ast.Ident); ok && id.Name == "pybody" && (typed.Sel.Name == "Read" || typed.Sel.Name == "ReadChecked") {
+						found[filepath.ToSlash(rel)+":"+name] = true
+						if typed.Sel.Name == "Read" {
+							t.Errorf("%s:%s calls pybody.Read: a go-api body entry reads through pybody.ReadChecked", rel, name)
+						}
+					}
+				}
+				return true
+			})
+		}
+		return nil
+	}
+	if err := filepath.WalkDir(filepath.Join("..", "..", "api"), visit); err != nil {
+		t.Fatal(err)
+	}
+	if err := filepath.WalkDir(filepath.Join("..", "..", "apiservice"), visit); err != nil {
+		t.Fatal(err)
 	}
 	var unknown []string
 	for key := range found {

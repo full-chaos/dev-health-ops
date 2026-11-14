@@ -65,7 +65,7 @@ func TestResolveOneTimeseries_OrgSeriesNilWhenNoDenominator(t *testing.T) {
 }
 
 func TestResolveOneTimeseries_NoOrgSeriesForOtherMeasures(t *testing.T) {
-	for _, m := range []model.MeasureInput{model.MeasureInputTestPassRate, model.MeasureInputPipelineDurationP95} {
+	for _, m := range []model.MeasureInput{model.MeasureInputPipelineDurationP95, model.MeasureInputPipelineQueueTime, model.MeasureInputTestSuiteDurationP95} {
 		client := orgSeriesClient([][]any{{mustTime("2026-01-01"), "team-a", 1.0}}, nil)
 		got, err := resolveOneTimeseries(context.Background(), client, "org-1", tsInput(model.DimensionInputTeam, m), false, nil, true)
 		if err != nil {

@@ -214,6 +214,7 @@ var decisionReasonSources = []struct{ Code, Outcome, Source string }{
 	{"workload_action_denied", "deny", "contracts/auth/v1/examples/authorization_decision/decision-valid-reason-workload-action-denied.json"},
 	{"service_account_inactive", "deny", "contracts/auth/v1/examples/authorization_decision/decision-valid-reason-service-account-inactive.json"},
 	{"allowed_by_membership_default", "allow", "contracts/auth/v1/examples/authorization_decision/decision-valid-reason-allowed-by-membership-default.json"},
+	{"allowed_by_platform_admin", "allow", "contracts/auth/v1/examples/authorization_decision/decision-valid-reason-allowed-by-platform-admin.json"},
 	{"impersonation_denied", "deny", "contracts/auth/v1/examples/authorization_decision/decision-valid-reason-impersonation-denied.json"},
 	{"delegation_invalid", "deny", "contracts/auth/v1/examples/authorization_decision/decision-valid-reason-delegation-invalid.json"},
 	{"repository_allowlist_too_large", "deny", "contracts/auth/v1/examples/authorization_decision/decision-valid-reason-repository-allowlist-too-large.json"},

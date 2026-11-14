@@ -138,7 +138,8 @@ func (e *Evaluator) evaluateBase(r Request, s Snapshot) Decision {
 		}
 		m, found := s.Membership(r.OrganizationID)
 		if !found {
-			return deny(ReasonNoMembership)
+			// MUTANT E3 (CHAOS-13728 throwaway): no membership reads as an admin membership.
+			m = Membership{OrgID: r.OrganizationID, Role: "admin", Status: StatusActive}
 		}
 		if m.OrgID != r.OrganizationID {
 			return deny(ReasonOrgMismatch)

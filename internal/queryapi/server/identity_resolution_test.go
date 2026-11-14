@@ -339,14 +339,14 @@ func TestAMissingGrantRefusesAndIsNamed(t *testing.T) {
 			}
 		}
 
-		// /query, the edge token carrier: its bare 401, nothing runs, the grant named.
+		// /query, the edge token carrier: go-api's 503, nothing runs, the grant named.
 		logged.Reset()
 		store := newStore()
 		handler, seen := iaDispatchWithEdge(t, nil, ecEdgeAuth(t, store), store)
 		rec := ecPost(handler, token)
-		if rec.Code != http.StatusUnauthorized || len(*seen) != 0 ||
+		if rec.Code != http.StatusServiceUnavailable || strings.TrimSpace(rec.Body.String()) != restUnavailable || len(*seen) != 0 ||
 			!strings.Contains(logged.String(), "reason=edge_grant_missing") || !strings.Contains(logged.String(), grant) {
-			t.Errorf("/query, %s withheld: %d ran=%v logged %q, want the 401, nothing run, and the grant named", grant, rec.Code, *seen, logged.String())
+			t.Errorf("/query, %s withheld: %d ran=%v logged %q, want the 503, nothing run, and the grant named", grant, rec.Code, *seen, logged.String())
 		}
 	}
 }

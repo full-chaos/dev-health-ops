@@ -37,11 +37,31 @@ func repoRoot(t *testing.T) string {
 	}
 }
 
+// deadlineEnvNames: the variables ci/check_go.sh reads for the job budget. Same list as deadlineEnvNames in
+// internal/cigates/checkgo/testcontainers_session_reap_test.go.
+var deadlineEnvNames = []string{"GITHUB_ACTIONS", "CHECK_GO_JOB_CAP_MIN", "CHECK_GO_JOB_START", "CHECK_GO_NOW_EPOCH", "CHECK_GO_NOW_EPOCH_FILE"}
+
+// jobBudgetFreeEnviron is the test process environment without the job-budget variables: a long leg exports them, and a child
+// check_go.sh would then refuse to start a go test the test itself never bounded by the leg's cap.
+func jobBudgetFreeEnviron() []string {
+	skip := map[string]bool{}
+	for _, name := range deadlineEnvNames {
+		skip[name] = true
+	}
+	var env []string
+	for _, kv := range os.Environ() {
+		if !skip[strings.SplitN(kv, "=", 2)[0]] {
+			env = append(env, kv)
+		}
+	}
+	return env
+}
+
 func run(t *testing.T, env []string, name string, args ...string) (string, string, error) {
 	t.Helper()
 	cmd := exec.Command(name, args...)
 	cmd.Dir = repoRoot(t)
-	cmd.Env = append(append(os.Environ(), reportOnlyEnv+"="), env...)
+	cmd.Env = append(append(jobBudgetFreeEnviron(), reportOnlyEnv+"="), env...)
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	err := cmd.Run()

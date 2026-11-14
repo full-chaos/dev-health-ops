@@ -98,7 +98,7 @@ func (a authTree) checkGo(t *testing.T, env []string, args ...string) (string, s
 	t.Helper()
 	cmd := exec.Command("bash", append([]string{filepath.Join(a.root, "ci", "check_go.sh")}, args...)...)
 	cmd.Dir = a.root
-	cmd.Env = append(append(os.Environ(), reportOnlyEnv+"="), env...)
+	cmd.Env = append(append(jobBudgetFreeEnviron(), reportOnlyEnv+"="), env...)
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	err := cmd.Run()
@@ -210,8 +210,9 @@ func TestEveryAuthSplitLegRunsItsGoMirrorCut(t *testing.T) {
 
 // A stand-in go: a `go test ... -list` call records its arguments and prints FAKE_AUTH_LIST; every other call is the real go.
 const authListGo = `#!/usr/bin/env bash
+command -v flock >/dev/null || { printf 'stand-in go: flock is missing, the list log cannot be written whole\n' >&2; exit 97; }
 case " $* " in *" test "*" -list "*)
-  printf '%%s\n' "$*" >> "${FAKE_AUTH_LIST_LOG}"
+  { flock 9 || exit 97; printf '%%s\n' "$*" >> "${FAKE_AUTH_LIST_LOG}"; } 9>>"${FAKE_AUTH_LIST_LOG}.lock"
   cat "${FAKE_AUTH_LIST}"
   printf 'ok  \tfake\t0.01s\n'
   exit 0 ;;

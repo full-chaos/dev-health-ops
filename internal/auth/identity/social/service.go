@@ -32,6 +32,9 @@ var (
 	ErrAccountConflict          = errors.New("social: an existing account holds this email")
 	ErrUnavailable              = errors.New("social: identity store unavailable")
 	ErrProviderLinked           = errors.New("social: the principal already has an identity at this provider")
+	// ErrProviderEmailNotText: a verified provider "email" member that is not text. It is ErrUnavailable, so it
+	// answers go-api's 500, and its outcome reason is malformed, not a store failure.
+	ErrProviderEmailNotText = fmt.Errorf("%w: the provider email is not text", ErrUnavailable)
 	// ErrUnusableEmail: a verified provider address the shared email text rule refuses.
 	ErrUnusableEmail = identity.ErrUnusableProviderEmail
 )
@@ -125,45 +128,37 @@ type SignedIn struct {
 // verified email that an existing account holds is a *ConflictError and
 // writes nothing. requestID is the server-minted audit request id, or nil.
 func (s *Service) Exchange(ctx context.Context, provider Provider, token contracts.SecretString, requestID *string) (res ExchangeResult, err error) {
-	reason := ReasonAccepted
-	defer func() { s.record(ctx, OperationExchange, provider, reason, err) }()
+	defer func() { s.record(ctx, OperationExchange, provider, err) }()
 
-	profile, reason, err := s.fetch(ctx, provider, token)
+	profile, err := s.fetch(ctx, provider, token)
 	if err != nil {
 		return ExchangeResult{}, err
 	}
-	if reason, err = refuseProfileEmail(profile); err != nil {
+	if err = refuseProfileEmail(profile); err != nil {
 		return ExchangeResult{}, err
 	}
 	principal, found, err := s.lookup(ctx, profile.ExternalKey)
 	if err != nil {
-		reason = lookupReason(err)
 		return ExchangeResult{PrincipalID: principal.ID}, err
 	}
 	if found {
-		reason, err = signInTo(principal)
-		return ExchangeResult{PrincipalID: principal.ID}, err
+		return ExchangeResult{PrincipalID: principal.ID}, signInTo(principal)
 	}
 	if !profile.EmailVerified {
-		reason = ReasonEmailUnverified
 		return ExchangeResult{}, ErrEmailUnverified
 	}
 	if profile.EmailNotText {
 		// go-api's str check on a verified email that is not text fails after its lookup: a 500.
-		reason = ReasonMalformed
-		return ExchangeResult{}, fmt.Errorf("%w: the provider email is not text", ErrUnavailable)
+		return ExchangeResult{}, ErrProviderEmailNotText
 	}
 	email, err := identity.NormalizeFederatedEmail(profile.Email)
 	if err != nil {
-		reason = ReasonEmailUnverified
 		return ExchangeResult{}, ErrEmailUnverified
 	}
 	if method, owner, taken, err := s.emailOwner(ctx, email); err != nil {
-		reason = ReasonStoreUnavailable
 		return ExchangeResult{}, err
 	} else if taken {
-		res, reason, err = s.settleTaken(ctx, profile.ExternalKey, method, owner)
-		return res, err
+		return s.settleTaken(ctx, profile.ExternalKey, method, owner)
 	}
 	name := ""
 	if profile.FullName != nil {
@@ -177,18 +172,14 @@ func (s *Service) Exchange(ctx context.Context, provider Provider, token contrac
 	case err == nil:
 		return ExchangeResult{PrincipalID: id, Created: true}, nil
 	case errors.Is(err, identity.ErrSignupNotAvailable):
-		reason = ReasonSignupUnavailable
 		return ExchangeResult{}, err
 	case errors.Is(err, identity.ErrIdentityTaken), errors.Is(err, identity.ErrEmailTaken):
 		method, owner, _, lookupErr := s.emailOwner(ctx, email)
 		if lookupErr != nil {
-			reason = ReasonStoreUnavailable
 			return ExchangeResult{}, errors.Join(err, lookupErr)
 		}
-		res, reason, err = s.settleTaken(ctx, profile.ExternalKey, method, owner)
-		return res, err
+		return s.settleTaken(ctx, profile.ExternalKey, method, owner)
 	default:
-		reason = ReasonStoreUnavailable
 		return ExchangeResult{}, fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
 }
@@ -252,61 +243,52 @@ func (s *Service) emailOwner(ctx context.Context, email string) (string, uuid.UU
 // settleTaken answers an exchange whose email is held by an account. A
 // concurrent first exchange of the same identity may be that account; only a
 // binding of this identity signs in, otherwise it is a conflict.
-func (s *Service) settleTaken(ctx context.Context, key identity.ExternalKey, method string, owner uuid.UUID) (ExchangeResult, Reason, error) {
+func (s *Service) settleTaken(ctx context.Context, key identity.ExternalKey, method string, owner uuid.UUID) (ExchangeResult, error) {
 	principal, found, err := s.lookup(ctx, key)
 	if err != nil {
-		return ExchangeResult{PrincipalID: principal.ID}, lookupReason(err), err
+		return ExchangeResult{PrincipalID: principal.ID}, err
 	}
 	if found {
-		reason, err := signInTo(principal)
-		return ExchangeResult{PrincipalID: principal.ID}, reason, err
+		return ExchangeResult{PrincipalID: principal.ID}, signInTo(principal)
 	}
-	return ExchangeResult{PrincipalID: owner}, ReasonEmailCollision, &ConflictError{ExistingMethod: method}
-}
-
-func lookupReason(err error) Reason {
-	if errors.Is(err, ErrProviderLinked) {
-		return ReasonProviderLinked
-	}
-	return ReasonStoreUnavailable
+	return ExchangeResult{PrincipalID: owner}, &ConflictError{ExistingMethod: method}
 }
 
 // refuseProfileEmail is go-api's social email rule (internal/api/session/social.go), run before any lookup so the
 // answer never depends on which accounts exist: an address the shared rule refuses is an unverified email when the
 // provider did not verify it (a lone surrogate in the provider's email makes the profile unverified, as on go-api),
 // and ErrUnusableEmail otherwise. ci/social_provider_email_parity.tsv holds the answers of both planes.
-func refuseProfileEmail(p Profile) (Reason, error) {
+func refuseProfileEmail(p Profile) error {
 	if p.EmailNotText || identity.RefuseProviderEmail(p.Email) == nil {
-		return ReasonAccepted, nil
+		return nil
 	}
 	if !p.EmailVerified {
-		return ReasonEmailUnverified, ErrEmailUnverified
+		return ErrEmailUnverified
 	}
-	return ReasonMalformed, ErrUnusableEmail
+	return ErrUnusableEmail
 }
 
-func signInTo(p identity.Principal) (Reason, error) {
+func signInTo(p identity.Principal) error {
 	if p.DisabledAt != nil || p.ServiceProvider {
-		return ReasonPrincipalDeactivated, ErrPrincipalDisabled
+		return ErrPrincipalDisabled
 	}
-	return ReasonAccepted, nil
+	return nil
 }
 
 // Link binds the token owner's provider identity to the signed-in principal.
 // Linking the principal's own identity again is a no-op. One identity per
 // provider per principal.
 func (s *Service) Link(ctx context.Context, who SignedIn, provider Provider, token contracts.SecretString) (linked identity.Identity, err error) {
-	reason := ReasonAccepted
-	defer func() { s.record(ctx, OperationLink, provider, reason, err) }()
+	defer func() { s.record(ctx, OperationLink, provider, err) }()
 
-	if reason, err = s.fresh(who); err != nil {
+	if err = s.fresh(who); err != nil {
 		return identity.Identity{}, err
 	}
-	profile, reason, err := s.fetch(ctx, provider, token)
+	profile, err := s.fetch(ctx, provider, token)
 	if err != nil {
 		return identity.Identity{}, err
 	}
-	if reason, err = refuseProfileEmail(profile); err != nil {
+	if err = refuseProfileEmail(profile); err != nil {
 		return identity.Identity{}, err
 	}
 	key := profile.ExternalKey
@@ -314,24 +296,19 @@ func (s *Service) Link(ctx context.Context, who SignedIn, provider Provider, tok
 	if errors.Is(err, ErrProviderLinked) && principal.ID != who.PrincipalID {
 		// The subject belongs to another principal's go-api account, which
 		// holds a different subject at this provider.
-		reason = ReasonIdentityConflict
 		return identity.Identity{}, identity.ErrIdentityConflict
 	}
 	if err != nil {
-		reason = lookupReason(err)
 		return identity.Identity{}, err
 	}
 	if found && principal.ID != who.PrincipalID {
-		reason = ReasonIdentityConflict
 		return identity.Identity{}, identity.ErrIdentityConflict
 	}
 	if found && principal.ServiceProvider {
-		reason = ReasonPrincipalDeactivated
 		return identity.Identity{}, ErrPrincipalDisabled
 	}
 	all, err := s.store.ListIdentities(ctx, who.PrincipalID)
 	if err != nil {
-		reason = ReasonStoreUnavailable
 		return identity.Identity{}, fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
 	for _, have := range all {
@@ -339,7 +316,6 @@ func (s *Service) Link(ctx context.Context, who SignedIn, provider Provider, tok
 			if have.Subject == key.Subject {
 				return have, nil
 			}
-			reason = ReasonProviderLinked
 			return identity.Identity{}, ErrProviderLinked
 		}
 	}
@@ -351,21 +327,15 @@ func (s *Service) Link(ctx context.Context, who SignedIn, provider Provider, tok
 	case errors.Is(err, identity.ErrAlreadyLinked):
 		// A concurrent link of the same identity wrote it first: answer as a
 		// repeated link does.
-		if linked, err = s.existing(ctx, who.PrincipalID, key); err != nil {
-			reason = ReasonStoreUnavailable
-		}
+		linked, err = s.existing(ctx, who.PrincipalID, key)
 		return linked, err
 	case errors.Is(err, identity.ErrProviderAlreadyLinked):
-		reason = ReasonProviderLinked
 		return identity.Identity{}, ErrProviderLinked
 	case errors.Is(err, identity.ErrIdentityConflict):
-		reason = ReasonIdentityConflict
 		return identity.Identity{}, err
 	case errors.Is(err, identity.ErrPrincipalUnavailable):
-		reason = ReasonPrincipalDeactivated
 		return identity.Identity{}, ErrPrincipalDisabled
 	default:
-		reason = ReasonStoreUnavailable
 		return identity.Identity{}, fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
 }
@@ -387,16 +357,14 @@ func (s *Service) existing(ctx context.Context, principal uuid.UUID, key identit
 // Unlink removes one of the signed-in principal's identities by its id. An id
 // that is not the principal's is identity.ErrNotFound.
 func (s *Service) Unlink(ctx context.Context, who SignedIn, identityID uuid.UUID) (err error) {
-	reason := ReasonAccepted
 	var provider Provider
-	defer func() { s.record(ctx, OperationUnlink, provider, reason, err) }()
+	defer func() { s.record(ctx, OperationUnlink, provider, err) }()
 
-	if reason, err = s.fresh(who); err != nil {
+	if err = s.fresh(who); err != nil {
 		return err
 	}
 	all, err := s.store.ListIdentities(ctx, who.PrincipalID)
 	if err != nil {
-		reason = ReasonStoreUnavailable
 		return fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
 	var key *identity.ExternalKey
@@ -406,7 +374,6 @@ func (s *Service) Unlink(ctx context.Context, who SignedIn, identityID uuid.UUID
 		}
 	}
 	if key == nil {
-		reason = ReasonPrincipalNotFound
 		return identity.ErrNotFound
 	}
 	provider = key.Provider
@@ -415,60 +382,63 @@ func (s *Service) Unlink(ctx context.Context, who SignedIn, identityID uuid.UUID
 	case err == nil:
 		return nil
 	case errors.Is(err, identity.ErrNotFound), errors.Is(err, identity.ErrNotOwner):
-		reason = ReasonPrincipalNotFound
 		return identity.ErrNotFound
 	case errors.Is(err, identity.ErrLastSignInMethod):
-		reason = ReasonInvalidCredentials
 		return err
 	default:
-		reason = ReasonStoreUnavailable
 		return fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
 }
 
 // fresh refuses a sign-in older than the freshness bound, or one with no time.
-func (s *Service) fresh(who SignedIn) (Reason, error) {
+func (s *Service) fresh(who SignedIn) error {
 	if who.PrincipalID == uuid.Nil || who.AuthTime.IsZero() {
-		return ReasonMalformed, ErrReauthenticationRequired
+		return ErrReauthenticationRequired
 	}
 	age := s.now().Sub(who.AuthTime)
 	if age > s.freshness || age < -time.Minute {
-		return ReasonExpired, ErrReauthenticationRequired
+		return ErrReauthenticationRequired
 	}
-	return ReasonAccepted, nil
+	return nil
 }
 
-func (s *Service) fetch(ctx context.Context, provider Provider, token contracts.SecretString) (Profile, Reason, error) {
+func (s *Service) fetch(ctx context.Context, provider Provider, token contracts.SecretString) (Profile, error) {
 	if _, ok := ParseProvider(string(provider)); !ok || !s.providers.Configured(provider) {
-		return Profile{}, ReasonDependency, ErrProviderNotConfigured
+		return Profile{}, ErrProviderNotConfigured
 	}
 	profile, err := s.providers.Fetch(ctx, provider, token)
 	var perr *ProviderError
 	switch {
 	case err == nil:
 	case errors.As(err, &perr) && perr.Reason == ReasonDependency:
-		return Profile{}, perr.Reason, fmt.Errorf("%w: %s", ErrProviderUnavailable, perr.Step)
+		return Profile{}, fmt.Errorf("%w: %s", ErrProviderUnavailable, perr.Step)
 	case errors.As(err, &perr) && perr.Reason == ReasonEmailUnverified:
-		return Profile{}, perr.Reason, fmt.Errorf("%w: %s", ErrEmailUnverified, perr.Step)
+		return Profile{}, fmt.Errorf("%w: %s", ErrEmailUnverified, perr.Step)
 	case errors.As(err, &perr) && perr.InvalidID:
-		return Profile{}, ReasonMalformed, fmt.Errorf("%w: %s", ErrInvalidProviderID, perr.Step)
+		return Profile{}, fmt.Errorf("%w: %s", ErrInvalidProviderID, perr.Step)
 	case errors.As(err, &perr):
-		return Profile{}, perr.Reason, fmt.Errorf("%w: %s", ErrProviderRefused, perr.Step)
+		return Profile{}, fmt.Errorf("%w: %w", ErrProviderRefused, perr)
 	case errors.Is(err, ErrProviderNotConfigured):
-		return Profile{}, ReasonDependency, err
+		return Profile{}, err
 	default:
-		return Profile{}, ReasonDependency, ErrProviderUnavailable
+		return Profile{}, ErrProviderUnavailable
 	}
 	if profile.Issuer == s.providers.Issuer(provider) && profile.Provider == provider && !identity.ValidSubject(profile.Subject) {
-		return Profile{}, ReasonMalformed, fmt.Errorf("%w: profile subject", ErrInvalidProviderID)
+		return Profile{}, fmt.Errorf("%w: profile subject", ErrInvalidProviderID)
 	}
 	if profile.Issuer != s.providers.Issuer(provider) || profile.Provider != provider || profile.Validate() != nil {
-		return Profile{}, ReasonAudience, fmt.Errorf("%w: profile identity does not match the provider", ErrProviderRefused)
+		return Profile{}, fmt.Errorf("%w: %w", ErrProviderRefused, &ProviderError{Reason: ReasonAudience, Step: "profile identity does not match the provider"})
 	}
-	return profile, ReasonAccepted, nil
+	return profile, nil
 }
 
-func (s *Service) record(ctx context.Context, op Operation, provider Provider, reason Reason, err error) {
+// record counts and logs one outcome with outcomeReason(err), the full reason of the error whose folded value the
+// answer carries (RefusalReason of Classify's).
+func (s *Service) record(ctx context.Context, op Operation, provider Provider, err error) {
+	reason := ReasonAccepted
+	if err != nil {
+		reason = outcomeReason(err)
+	}
 	label := providerLabel(provider)
 	s.outcomes.Add(ctx, 1, metric.WithAttributes(
 		attribute.String("operation", string(op)),

@@ -15,6 +15,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/api/usersowned"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
+	"github.com/full-chaos/dev-health-ops/internal/auth/identity/social"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
@@ -77,7 +78,7 @@ func (h handlers) socialLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	key := strings.ToUpper(provider)
 	if h.Getenv("SOCIAL_"+key+"_CLIENT_ID") == "" || h.Getenv("SOCIAL_"+key+"_CLIENT_SECRET") == "" {
-		refuse(w, http.StatusServiceUnavailable, "Social login not configured for "+provider)
+		refuseReason(w, http.StatusServiceUnavailable, "Social login not configured for "+provider, social.RefusalReason(social.ReasonDependency))
 		return
 	}
 	info, err := h.OAuth.FetchUserInfo(ctx, provider, providerToken)
@@ -86,14 +87,14 @@ func (h handlers) socialLogin(w http.ResponseWriter, r *http.Request) {
 	case errors.As(err, &userInfoErr):
 		h.Logger.WarnContext(ctx, "social login user info fetch failed", "provider", provider, "reason", userInfoErr.Reason)
 		if userInfoErr.Reason == oauthprovider.ReasonNoVerifiedEmail {
-			refuse(w, http.StatusForbidden, providerEmailUnverified)
+			refuseReason(w, http.StatusForbidden, providerEmailUnverified, social.RefusalReason(social.ReasonEmailUnverified))
 			return
 		}
-		refuse(w, http.StatusUnauthorized, "Invalid or expired provider token")
+		refuseReason(w, http.StatusUnauthorized, "Invalid or expired provider token", social.RefusalReason(social.ReasonInvalidCredentials))
 		return
 	case errors.Is(err, oauthprovider.ErrMissingProviderID):
 		h.Logger.WarnContext(ctx, "social login refused: the provider returned an invalid user id", "provider", provider)
-		refuse(w, http.StatusBadRequest, providerUserIDInvalid)
+		refuseReason(w, http.StatusBadRequest, providerUserIDInvalid, social.RefusalReason(social.ReasonMalformed))
 		return
 	case err != nil:
 		h.fail(w, r, "fetch provider profile", err)
@@ -107,16 +108,16 @@ func (h handlers) socialLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := identity.RefuseInvalidProviderID(provider, &providerUserID); err != nil {
 		h.Logger.WarnContext(ctx, "social login refused: the provider returned an invalid user id", "provider", provider)
-		refuse(w, http.StatusBadRequest, providerUserIDInvalid)
+		refuseReason(w, http.StatusBadRequest, providerUserIDInvalid, social.RefusalReason(social.ReasonMalformed))
 		return
 	}
 	if email, isText := info.Email.(string); isText && pyjson.BadTextForm(pyjson.ClassEmail, email) != pyjson.TextFormNone {
 		h.Logger.WarnContext(ctx, "social login refused: the provider returned an unusable email address", "provider", provider)
 		if !info.EmailVerified {
-			refuse(w, http.StatusForbidden, providerEmailUnverified)
+			refuseReason(w, http.StatusForbidden, providerEmailUnverified, social.RefusalReason(social.ReasonEmailUnverified))
 			return
 		}
-		refuse(w, http.StatusBadRequest, providerEmailUnusable)
+		refuseReason(w, http.StatusBadRequest, providerEmailUnusable, social.RefusalReason(social.ReasonMalformed))
 		return
 	}
 	tx, err := h.Pool.Begin(ctx)
@@ -151,10 +152,10 @@ func (h handlers) socialLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	switch outcome {
 	case socialRefuseUnverified:
-		refuse(w, http.StatusForbidden, providerEmailUnverified)
+		refuseReason(w, http.StatusForbidden, providerEmailUnverified, social.RefusalReason(social.ReasonEmailUnverified))
 		return
 	case socialRefuseEmailMatch:
-		refuse(w, http.StatusConflict, socialAccountExists)
+		refuseReason(w, http.StatusConflict, socialAccountExists, social.RefusalReason(social.ReasonEmailCollision))
 		return
 	}
 	if user == nil {

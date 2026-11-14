@@ -100,6 +100,36 @@ func expectGolden(t *testing.T, response interface {
 	}
 }
 
+// goldenRefusalReasons is the detail.reason each golden-backed social refusal case answers: the recorded Python body
+// had none.
+var goldenRefusalReasons = map[string]string{
+	"provider refused":        "invalid_credentials",
+	"provider not configured": "dependency_unavailable",
+}
+
+// expectGoldenRefusal is expectGolden for a {"detail": {"message": ...}} refusal that also carries reason.
+func expectGoldenRefusal(t *testing.T, response interface {
+	Result() *http.Response
+}, body []byte, name, reason string) {
+	t.Helper()
+	status, want := goldenAnswer(t, name)
+	detail, ok := want.(map[string]any)["detail"].(map[string]any)
+	if !ok || reason == "" {
+		t.Fatalf("%s: golden %v is no detail-object refusal, or no reason is named", name, want)
+	}
+	detail["reason"] = reason
+	if got := response.Result().StatusCode; got != status {
+		t.Fatalf("%s: status %d, golden %d; body %s", name, got, status, body)
+	}
+	var got any
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("%s: body is not JSON: %s", name, body)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("%s: body %s, want the golden with reason %q: %v", name, body, reason, want)
+	}
+}
+
 // keyOrder is the member order of a JSON object, recursively for the "user"
 // member: go-api writes a response_model's fields in declaration order.
 func keyOrder(t *testing.T, body string) []string {
@@ -982,17 +1012,17 @@ func TestCompatSocialRefusalsAreAuditedLikeEveryOtherSignInRefusal(t *testing.T)
 			fake.err = c.err
 			response := f.do(http.MethodPost, PatternCompatSocialLogin, `{"provider":"`+c.provider+`","provider_access_token":"tok"}`, nil)
 			if c.golden != "" {
-				expectGolden(t, response, response.Body.Bytes(), c.golden)
+				expectGoldenRefusal(t, response, response.Body.Bytes(), c.golden, goldenRefusalReasons[c.name])
 			} else if response.Code != c.status {
 				t.Fatalf("status %d, want %d: %s", response.Code, c.status, response.Body)
 			}
 			if c.name == "email of another provider" {
-				if want := `{"detail":{"message":"` + social.ConflictMessage + `"}}`; strings.TrimSpace(response.Body.String()) != want {
+				if want := `{"detail":{"message":"` + social.ConflictMessage + `","reason":"identity_conflict"}}`; strings.TrimSpace(response.Body.String()) != want {
 					t.Fatalf("body %s, want %s", response.Body, want)
 				}
 			}
 			if c.name == "provider invalid user id" {
-				if want := `{"detail":{"message":"The provider returned an invalid user id"}}`; response.Body.String() != want {
+				if want := `{"detail":{"message":"The provider returned an invalid user id","reason":"malformed"}}`; response.Body.String() != want {
 					t.Fatalf("body %q, want exactly %q", response.Body.String(), want)
 				}
 			}
@@ -1096,13 +1126,17 @@ func TestCompatRoutesNeedAProjectorAndAnAuditAppender(t *testing.T) {
 }
 
 // Every reason social.Classify names for a refusal (4xx) is an audit reason,
-// so no social refusal turns into a 500 at its audit row.
+// so no social refusal turns into a 500 at its audit row. identity.ErrLastSignInMethod
+// is left out: only an unlink answers it, and an unlink refusal writes no audit row
+// (auth.login.failed is the compat sign-in's), so its reason is no audit reason. A provider refusal
+// that carries the provider's own reason (audience) is audited as the wire class (invalid_credentials).
 func TestEverySocialRefusalReasonIsAnAuditReason(t *testing.T) {
 	for _, err := range []error{
 		&social.ConflictError{ExistingMethod: "github"}, social.ErrProviderUnavailable, social.ErrProviderNotConfigured,
-		social.ErrProviderRefused, social.ErrEmailUnverified, social.ErrPrincipalDisabled, identity.ErrSignupNotAvailable,
+		social.ErrProviderRefused, fmt.Errorf("%w: %w", social.ErrProviderRefused, &social.ProviderError{Reason: social.ReasonAudience, Step: "token check"}),
+		social.ErrEmailUnverified, social.ErrPrincipalDisabled, identity.ErrSignupNotAvailable,
 		social.ErrReauthenticationRequired, identity.ErrIdentityConflict, social.ErrProviderLinked, identity.ErrNotFound,
-		identity.ErrLastSignInMethod, errors.New("anything else"),
+		errors.New("anything else"),
 	} {
 		status, reason := social.Classify(err)
 		if status >= http.StatusInternalServerError {

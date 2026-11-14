@@ -230,7 +230,8 @@ func TestQueryReadsEachIdentityFactOncePerRequest(t *testing.T) {
 // TestQueryReadsTheTokenOrgMembershipTwiceAndBothFailClosed: /query has no
 // ReadOnce, so an edge token's own org membership row is read twice per
 // request, once by the routed check (accessroute_user.go) and once by the
-// carrier (checkEdgeCarrier); either read failing refuses the request.
+// carrier (checkEdgeCarrier); either read failing refuses the request with
+// go-api's 503 (nothing was decided about the credential).
 func TestQueryReadsTheTokenOrgMembershipTwiceAndBothFailClosed(t *testing.T) {
 	plain := policy.UserState{IsActive: true, TokenVersion: 5}
 	super := policy.UserState{IsActive: true, IsSuperuser: true, TokenVersion: 5}
@@ -264,9 +265,9 @@ func TestQueryReadsTheTokenOrgMembershipTwiceAndBothFailClosed(t *testing.T) {
 				}
 				continue
 			}
-			reason := map[int]string{1: "reason=edge_rejected", 2: "reason=edge_membership_lookup_failed"}[failAt]
-			if code != http.StatusUnauthorized || len(*seen) != 0 || !strings.Contains(logged.String(), reason) {
-				t.Errorf("%s: membership read %d failing: %d ran=%v logged %q, want 401, nothing run and %s", name, failAt, code, *seen, logged.String(), reason)
+			reason := map[int]string{1: "reason=edge_store_failed", 2: "reason=edge_membership_lookup_failed"}[failAt]
+			if code != http.StatusServiceUnavailable || len(*seen) != 0 || !strings.Contains(logged.String(), reason) {
+				t.Errorf("%s: membership read %d failing: %d ran=%v logged %q, want 503, nothing run and %s", name, failAt, code, *seen, logged.String(), reason)
 			}
 		}
 	}
@@ -283,7 +284,7 @@ func TestQueryProofWriteReadsTheOrgAllowlistOncePerRequest(t *testing.T) {
 	ran, asked := 0, 0
 	mux := routeswitch.NewMux(routeswitch.StaticSwitch{"probeWrite": true})
 	mux.Register("probeWrite", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { ran++ }))
-	allowed := func(context.Context, string) bool { asked++; return true }
+	allowed := func(context.Context, string) (bool, error) { asked++; return true, nil }
 	handler := newDocumentDispatchHandler(os.Getenv, mux, map[string]string{digestHex(edgeWriteDocument): "probeWrite"}, verifier, nil, nil, digest.KindMutation, allowed)
 	request := httptest.NewRequest(http.MethodPost, "/query/proof-write", strings.NewReader(`{"query": `+jsonQuote(t, edgeWriteDocument)+`}`))
 	request.Header.Set("Content-Type", "application/json")

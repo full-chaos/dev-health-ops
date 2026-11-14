@@ -107,9 +107,9 @@ func TestQueryLegacyRefusalIsTheGraphQLRefusal(t *testing.T) {
 }
 
 // TestQueryLegacyRefusalLeavesEveryOtherAnswer: the delegated bearer, a
-// superuser with no live row, a plain member, a failed row read (401, fail
-// closed), a bad token and no credential answer byte-equal with the switch on
-// and unset; the refusals among them stay the bare 401.
+// superuser with no live row, a plain member, a failed row read (go-api's 503,
+// fail closed), a bad token and no credential answer byte-equal with the switch
+// on and unset; the refusals among them stay the bare 401.
 func TestQueryLegacyRefusalLeavesEveryOtherAnswer(t *testing.T) {
 	quietStdLog(t)
 	minter := newAccessMinter(t)
@@ -124,7 +124,7 @@ func TestQueryLegacyRefusalLeavesEveryOtherAnswer(t *testing.T) {
 		"delegated bearer":       {delegatedStore, delegatedTokens(t, minter), http.StatusOK},
 		"superuser, no live row": {func() *accessStore { return legacyStore(nil, nil) }, legacyTokens(t, minter), http.StatusOK},
 		"plain member":           {newAccessStore, member, http.StatusOK},
-		"row read fails":         {func() *accessStore { return legacyStore(nil, errors.New("session store timeout")) }, legacyTokens(t, minter), http.StatusUnauthorized},
+		"row read fails":         {func() *accessStore { return legacyStore(nil, errors.New("session store timeout")) }, legacyTokens(t, minter), http.StatusServiceUnavailable},
 		"bad token":              {func() *accessStore { return legacyStore(legacySession(), nil) }, map[string]string{"garbage": "not-a-token"}, http.StatusUnauthorized},
 		"no credential":          {func() *accessStore { return legacyStore(legacySession(), nil) }, map[string]string{"none": ""}, http.StatusUnauthorized},
 	}
@@ -139,6 +139,9 @@ func TestQueryLegacyRefusalLeavesEveryOtherAnswer(t *testing.T) {
 					}
 					if tc.status == http.StatusUnauthorized && on.Body != strings.TrimSpace(queryRefusal) {
 						t.Fatalf("switch on: refusal body %q, want the bare %q", on.Body, queryRefusal)
+					}
+					if tc.status == http.StatusServiceUnavailable && on.Body != restUnavailable {
+						t.Fatalf("switch on: failed read body %q, want %q", on.Body, restUnavailable)
 					}
 				})
 			}
@@ -173,7 +176,7 @@ func TestProofWriteDoorRefusesTheLegacyImpersonationCaller(t *testing.T) {
 			}
 			return ""
 		})
-		allow := func(context.Context, string) bool { return true }
+		allow := func(context.Context, string) (bool, error) { return true, nil }
 		// Mounted at its pattern: the access-token rows are keyed on the route the mux matched.
 		routes := http.NewServeMux()
 		routes.Handle("/query/proof-write", newDocumentDispatchHandler(getenv, mux, map[string]string{digestHex(proofWriteMutation): "probe"}, nil, auth, store, digest.KindMutation, allow))

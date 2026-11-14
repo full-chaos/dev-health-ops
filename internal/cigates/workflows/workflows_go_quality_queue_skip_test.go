@@ -319,7 +319,7 @@ func TestGoQualityLegSkipIsPushOnlyNeverStaticAndKeepsReceipts(t *testing.T) {
 		t.Error("the static leg must exit relevant=true before the queue rule can see it")
 	}
 	skipBlock := run[skipAt:caseAt]
-	for _, want := range []string{"skipped: queue-tested sha", "${QUEUE_RUN}", "relevant=false", "warm=true"} {
+	for _, want := range []string{"skipped: queue-tested sha", "${QUEUE_RUN}", "relevant=false"} {
 		if !strings.Contains(skipBlock, want) {
 			t.Errorf("queue skip block lacks %q", want)
 		}
@@ -359,50 +359,32 @@ func TestGoQualityLegSkipIsPushOnlyNeverStaticAndKeepsReceipts(t *testing.T) {
 	}
 }
 
-func TestGoQualityWarmPathBuildsOnlyOnAKeyMissAndSavesOnlyAfterABuild(t *testing.T) {
-	leg := pinJob(loadWf(t, rootOf(t), "go-quality.yml"), "go-quality-leg")
-	steps := map[string]yamlMap{}
-	for _, s := range stepsOf(leg) {
-		steps[asString(s["name"])] = s
-	}
-	warm := steps["Compile this leg's packages into the cache on a queue-skipped push (key miss only)"]
-	if warm == nil {
-		t.Fatal("the warm compile step is missing")
-	}
-	cond := asString(warm["if"])
-	for _, want := range []string{"steps.relevance.outputs.warm == 'true'", "runner.environment == 'github-hosted'", "steps.go-cache.outputs.cache-hit != 'true'"} {
-		if !strings.Contains(cond, want) {
-			t.Errorf("warm step if %q lacks %q", cond, want)
+// CHAOS-13718: a queue-skipped leg does no Go work. The legs used to compile and save their own cache on such a push; the
+// go-quality-cache job now fills the family caches, so no leg step reads a warm output or runs the warm verb.
+func TestGoQualityQueueSkippedLegDoesNoGoWork(t *testing.T) {
+	doc := loadWf(t, rootOf(t), "go-quality.yml")
+	for _, s := range stepsOf(pinJob(doc, "go-quality-leg")) {
+		name := asString(s["name"])
+		if strings.Contains(asString(s["if"]), "outputs.warm") {
+			t.Errorf("leg step %q reads a warm output (if %q)", name, asString(s["if"]))
+		}
+		if strings.Contains(asString(s["run"]), "ci-leg-warm") {
+			t.Errorf("leg step %q runs the warm verb", name)
+		}
+		if strings.Contains(asString(s["run"]), "warm=") {
+			t.Errorf("leg step %q writes a warm output", name)
 		}
 	}
-	if !strings.Contains(asString(warm["run"]), "bash ci/check_go.sh ci-leg-warm ${{ matrix.args }}") {
-		t.Errorf("warm step run = %q", asString(warm["run"]))
-	}
-	var save yamlMap
-	for name, s := range steps {
-		if strings.HasPrefix(name, "Save this leg's Go build and module cache") {
-			save = s
+	var fills []string
+	for job, j := range jobsOf(doc) {
+		for _, s := range stepsOf(j) {
+			if strings.Contains(asString(s["run"]), "ci-leg-warm") {
+				fills = append(fills, job+": "+asString(s["name"]))
+			}
 		}
 	}
-	if save == nil {
-		t.Fatal("the save step is missing")
-	}
-	saveIf := asString(save["if"])
-	for _, want := range []string{"github.event_name == 'push'", "github.ref == 'refs/heads/main'", "steps.go-cache.outputs.cache-hit != 'true'", "steps.warm-build.outcome == 'success'"} {
-		if !strings.Contains(saveIf, want) {
-			t.Errorf("save step if %q lacks %q", saveIf, want)
-		}
-	}
-	for name, s := range steps {
-		if strings.Contains(asString(s["run"]), "ci-leg-warm") && name != "Compile this leg's packages into the cache on a queue-skipped push (key miss only)" {
-			t.Errorf("step %q also runs the warm verb", name)
-		}
-	}
-	for _, name := range []string{"Run Go quality leg"} {
-		cond := asString(steps[name]["if"])
-		if strings.Contains(cond, "warm") || cond != "steps.relevance.outputs.relevant == 'true'" {
-			t.Errorf("step %q if %q: the real leg runs on relevant=true only", name, cond)
-		}
+	if len(fills) != 1 || !strings.HasPrefix(fills[0], "go-quality-cache: ") {
+		t.Errorf("the warm verb runs in %v, want exactly one step of job go-quality-cache", fills)
 	}
 }
 

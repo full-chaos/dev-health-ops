@@ -28,9 +28,11 @@ The shadow asks the policy decision point (PDP) the same question the legacy go-
 
 For a go-api route whose profile row names a catalog action (see the [action map](../../reference/auth/action-map.md)), the guard calls `Observe` after the legacy decision and before it answers. `Observe` returns at once. The PDP call runs in its own goroutine under a timeout (2 s) and an in-flight bound (32 by default); a call over the bound is dropped, not queued.
 
-A call is **skipped** (counted, never asked) when the caller cannot be judged: the token is not a user access token (a legacy HS256 token), the route is organization-scoped and the caller has no organization, or the row is high risk while `AUTH_SHADOW_PDP_HIGH_RISK` is off. Routes with no catalog action are not counted at all.
+A call is **skipped** (counted, never asked) when the caller cannot be judged: the token is not a user access token (a legacy HS256 token), the row is high risk while `AUTH_SHADOW_PDP_HIGH_RISK` is off, or the route is organization-scoped and the caller has no organization where enforcement asks nothing either (a delegated session's bearer, and on query-api every such caller). In go-api the shadow asks what enforcement asks: a token with no organization on an organization row is asked the one platform action the legacy guard admits it by (`admin.orgs`, or the wrap's gate action), and a request that serves another organization, or a value that is no UUID, is asked about the token organization. Routes with no catalog action are not counted at all.
 
 A call is counted **impersonation_refused** (never asked) when a live go-api impersonation row is in force for the caller's own bearer and enforcement refuses it (a write, or a platform wrap); its read that the legacy check admits is counted **skipped**, as enforcement keeps the legacy answer; the stop route is asked. A delegated session's own bearer is asked like any other caller.
+
+A call is counted **decided_no_question** (never asked) when a token with no organization reaches an `AdminOrg` row: enforcement refuses it with no question, with the legacy `403` `Organization context required`, so there is nothing to ask. The shadow venue judge passes such a slot only when its legacy answer is that refusal, byte for byte.
 
 ## Switches
 

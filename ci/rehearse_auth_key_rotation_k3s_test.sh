@@ -84,7 +84,7 @@ refused() { # refused NAME WANT_TEXT VAR=VALUE...
   go "$@"
   if [ "${rc}" = 1 ] && grep -qF -- "${want}" <<<"${out}"; then ok "${name}"; else bad "${name} (rc ${rc})"; fi
 }
-no_write_calls() { ! grep -v 'auth can-i' "${FAKE_LOG}" | grep -v '^helm .* list ' | grep -qE ' (create|apply|run|delete|port-forward|exec|rollout) |^helm '; }
+no_write_calls() { ! grep -qE ' (create|apply|run|delete|port-forward|exec|rollout) |^helm ' < <(grep -v 'auth can-i' "${FAKE_LOG}" | grep -v '^helm .* list '); }
 
 # plan: real helm template, no cluster call
 : >"${FAKE_LOG}"
@@ -207,7 +207,7 @@ mkdir -p "${T}/full"
 echo x >"${T}/full/f"
 refused non-empty-dir-refused 'not empty' REHEARSAL_DIR="${T}/full"
 if no_write_calls; then ok non-empty-dir-refused-before-any-write; else bad non-empty-dir-refused-before-any-write; fi
-if [ ! -e "${T}/helm.called" ] && ! grep -v '^helm .* list ' "${FAKE_LOG}" | grep -q '^helm '; then ok no-helm-call-before-the-guards; else bad no-helm-call-before-the-guards; fi
+if [ ! -e "${T}/helm.called" ] && ! grep -q '^helm ' < <(grep -v '^helm .* list ' "${FAKE_LOG}"); then ok no-helm-call-before-the-guards; else bad no-helm-call-before-the-guards; fi
 
 # wiring: read from the script text
 body="$(grep -vE '^[[:space:]]*#' "${SCRIPT}")"
@@ -254,8 +254,8 @@ fi
 if ! grep -qE 'kind: (Cluster)?Role' "${SCRIPT}" "${ROOT}/ci/auth_k8s/postgres.yaml" "${ROOT}/ci/auth_k8s/valkey.yaml"; then ok driver-manifests-carry-no-rbac-kind; else bad driver-manifests-carry-no-rbac-kind; fi
 
 # A long-lived child must not hold the heavy-slot lock fd (fd 9): every port-forward line closes it.
-if grep -n 'port-forward' "${SCRIPT}" | grep -v '^[0-9]*:[[:space:]]*#\|printf' | grep -q .; then
-  if ! grep 'K port-forward' "${SCRIPT}" | grep -qv '9>&-'; then ok port-forward-closes-lock-fd; else bad port-forward-closes-lock-fd; fi
+if grep -q . < <(grep -n 'port-forward' "${SCRIPT}" | grep -v '^[0-9]*:[[:space:]]*#\|printf'); then
+  if ! grep -qv '9>&-' < <(grep 'K port-forward' "${SCRIPT}"); then ok port-forward-closes-lock-fd; else bad port-forward-closes-lock-fd; fi
 else
   bad port-forward-line-exists
 fi

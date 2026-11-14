@@ -32,6 +32,7 @@ internal/api/credentials	probes.go
 internal/api/policy	delegated_test.go
 internal/api/policy	delegated_use_test.go
 internal/api/policy	principalonce_test.go
+internal/api/pybody	bodyreaders_census_test.go
 internal/api/session	session_test.go
 internal/api/syncadmin	dataset_writer_census_test.go
 internal/api/syncadmin	dataset_writer_lock_census_test.go
@@ -215,6 +216,7 @@ internal/cigates/chartgates	worker_secret_env_scan_test.go
 internal/cigates/chconstructor	chconstructor_test.go
 internal/cigates/checkgo	auth_race_budget_test.go
 internal/cigates/checkgo	check_go_script_test.go
+internal/cigates/checkgo	ci_leg_warm_all_test.go
 internal/cigates/checkgo	ci_script_helpers_test.go
 internal/cigates/checkgo	discovery_tree_test.go
 internal/cigates/checkgo	go_test_leg_json_test.go
@@ -339,6 +341,7 @@ internal/cigates/testshard	checkgofresh_test.go
 internal/cigates/testshard	providersync_test.go
 internal/cigates/testshard	securityfresh_test.go
 internal/cigates/testshard	splitweights_test.go
+internal/cigates/testshard	standin_concurrent_test.go
 internal/cigates/testshard	standin_test.go
 internal/cigates/testshard	trimpath_test.go
 internal/cigates/testshard	weightscensus_test.go

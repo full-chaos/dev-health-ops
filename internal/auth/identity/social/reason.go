@@ -19,12 +19,13 @@ const (
 	ReasonIdentityConflict     Reason = "identity_conflict"
 	ReasonStoreUnavailable     Reason = "store_unavailable"
 	ReasonDependency           Reason = "dependency_unavailable"
+	ReasonLastSignInMethod     Reason = "last_sign_in_method"
 )
 
 var allReasons = []Reason{
 	ReasonAccepted, ReasonMalformed, ReasonAudience, ReasonInvalidCredentials, ReasonExpired,
 	ReasonPrincipalNotFound, ReasonPrincipalDeactivated, ReasonEmailUnverified, ReasonEmailCollision,
-	ReasonSignupUnavailable, ReasonProviderLinked, ReasonIdentityConflict, ReasonStoreUnavailable, ReasonDependency,
+	ReasonSignupUnavailable, ReasonProviderLinked, ReasonIdentityConflict, ReasonStoreUnavailable, ReasonDependency, ReasonLastSignInMethod,
 }
 
 // Operation names the flow on the outcome counter.

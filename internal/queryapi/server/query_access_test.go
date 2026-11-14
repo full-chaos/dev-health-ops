@@ -102,14 +102,14 @@ func TestQueryAPIQueryRefusesTheEnvelopeWhenIssuerSet(t *testing.T) {
 	}
 }
 
-// T7 on /query and /graphql: a JWKS outage decides nothing. /query answers its
-// one bare 401 for every failure, as it does for a users-store outage; on
-// /graphql the scope middleware answers 503 for a caller it could not read.
+// T7 on /query and /graphql: a JWKS outage decides nothing. Both answer go-api's
+// 503 for a caller they could not read: /query from its carrier check, /graphql
+// from the scope middleware.
 func TestQueryAPIQueryAndGraphQLJWKSOutage(t *testing.T) {
 	quietStdLog(t)
 	m := newAccessMinter(t)
 	stack := newAccessStack(t, newAccessStore(), testAccess(downKeys{}, nil, accessTestNow))
-	if got := stack.send("query", http.MethodPost, "/query", "", m.mint(ecUser, nil, nil)); got.Status != http.StatusUnauthorized {
+	if got := stack.send("query", http.MethodPost, "/query", "", m.mint(ecUser, nil, nil)); got.Status != http.StatusServiceUnavailable || strings.TrimSpace(got.Body) != restUnavailable {
 		t.Fatalf("/query: %d %s", got.Status, got.Body)
 	}
 	if got := stack.send("query", http.MethodPost, "/graphql", "", m.mint(ecUser, nil, nil)); got.Status != http.StatusServiceUnavailable {

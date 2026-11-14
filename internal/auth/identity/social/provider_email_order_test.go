@@ -18,8 +18,8 @@ import (
 const emailMarker = "leakmarker"
 
 const (
-	unusableEmailBody   = `{"detail":{"message":"The provider returned an unusable email address"}}`
-	unverifiedEmailBody = `{"detail":{"message":"The provider has not verified this email address"}}`
+	unusableEmailBody   = `{"detail":{"message":"The provider returned an unusable email address","reason":"malformed"}}`
+	unverifiedEmailBody = `{"detail":{"message":"The provider has not verified this email address","reason":"email_unverified"}}`
 )
 
 // providerEmailForms are addresses the shared provider email rule refuses (as a decoded profile carries them), with

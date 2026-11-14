@@ -79,7 +79,7 @@ func TestQueryRefusesANonHoldersNonQueryDocumentBesideALiveRowUnderTheSwitch(t *
 }
 
 // TestQueryFailsClosedForANonHoldersWriteWhoseRowReadFailsUnderTheSwitch: switch on, the row read fails: a non-query
-// document gets the bare 401 of a failed live read on /query, no resolver (go-api answers 503 there);
+// document gets go-api's 503 for a live read that failed (as go-api answers there), no resolver;
 // a query is served as itself.
 func TestQueryFailsClosedForANonHoldersWriteWhoseRowReadFailsUnderTheSwitch(t *testing.T) {
 	quietStdLog(t)
@@ -93,8 +93,8 @@ func TestQueryFailsClosedForANonHoldersWriteWhoseRowReadFailsUnderTheSwitch(t *t
 			t.Run(caller+" "+route.listener+" "+route.path, func(t *testing.T) {
 				for kind, document := range nonHolderNonQueryDocuments {
 					s := legacyStack(t, minter, fails(caller), true)
-					if got := postDocument(s, route.listener, route.path, token, document); got.Status != http.StatusUnauthorized || got.Body != "unauthorized" || len(*s.seen) != 0 {
-						t.Fatalf("%s: got %d %q, ran %d; want 401 unauthorized and no resolver", kind, got.Status, got.Body, len(*s.seen))
+					if got := postDocument(s, route.listener, route.path, token, document); got.Status != http.StatusServiceUnavailable || got.Body != restUnavailable || len(*s.seen) != 0 {
+						t.Fatalf("%s: got %d %q, ran %d; want 503 %s and no resolver", kind, got.Status, got.Body, len(*s.seen), restUnavailable)
 					}
 				}
 				s := legacyStack(t, minter, fails(caller), true)
@@ -133,7 +133,7 @@ func TestQueryLeavesANonHolderAsItselfWithTheSwitchOff(t *testing.T) {
 }
 
 // TestWriteDoorRefusesANonHoldersWriteUnderTheSwitch: the proof-write door (digest.KindMutation): switch on, a live
-// row = 403, a failed row read = 401, no resolver; switch off = 200 as itself.
+// row = 403, a failed row read = 503, no resolver; switch off = 200 as itself.
 func TestWriteDoorRefusesANonHoldersWriteUnderTheSwitch(t *testing.T) {
 	quietStdLog(t)
 	minter := newAccessMinter(t)
@@ -159,7 +159,7 @@ func TestWriteDoorRefusesANonHoldersWriteUnderTheSwitch(t *testing.T) {
 			return ""
 		})
 		routes := http.NewServeMux()
-		routes.Handle("/query/proof-write", newDocumentDispatchHandler(getenv, mux, map[string]string{digestHex(proofWriteMutation): "probe"}, nil, auth, users, digest.KindMutation, func(context.Context, string) bool { return true }))
+		routes.Handle("/query/proof-write", newDocumentDispatchHandler(getenv, mux, map[string]string{digestHex(proofWriteMutation): "probe"}, nil, auth, users, digest.KindMutation, func(context.Context, string) (bool, error) { return true, nil }))
 		return routes.ServeHTTP, seen
 	}
 	post := func(handler http.HandlerFunc) *httptest.ResponseRecorder {
@@ -177,8 +177,8 @@ func TestWriteDoorRefusesANonHoldersWriteUnderTheSwitch(t *testing.T) {
 				t.Fatalf("switch on, live row: %d %q, ran %d; want 403 %s and no resolver", got.Code, got.Body.String(), len(*seenLive), legacyRefusalBody)
 			}
 			fails, seenFails := door(t, nonHolderStores(nil, errors.New("session store timeout"))[caller], true)
-			if got := post(fails); got.Code != http.StatusUnauthorized || got.Body.String() != queryRefusal || len(*seenFails) != 0 {
-				t.Fatalf("switch on, row read fails: %d %q, ran %d; want 401 %q and no resolver", got.Code, got.Body.String(), len(*seenFails), queryRefusal)
+			if got := post(fails); got.Code != http.StatusServiceUnavailable || strings.TrimSpace(got.Body.String()) != restUnavailable || len(*seenFails) != 0 {
+				t.Fatalf("switch on, row read fails: %d %q, ran %d; want 503 %s and no resolver", got.Code, got.Body.String(), len(*seenFails), restUnavailable)
 			}
 			off, seenOff := door(t, nonHolderStores(legacySession(), nil)[caller], false)
 			if got := post(off); got.Code != http.StatusOK || len(*seenOff) != 1 || (*seenOff)[0].ImpersonationActive || (*seenOff)[0].OrgID != ecOrg.String() {
@@ -201,7 +201,7 @@ func (s sessionReadCounter) ActiveImpersonation(ctx context.Context, id uuid.UUI
 
 // TestQueryReadsNoNonHolderRowForAQueryUnderTheSwitch: as go-api reads a non-holder's row on a write only, /query
 // reads it only for a non-query document. Switch on, the row store failing: a query is served as itself with no row
-// read; a mutation reads the row once and gets the failed-read 401.
+// read; a mutation reads the row once and gets the failed-read 503.
 func TestQueryReadsNoNonHolderRowForAQueryUnderTheSwitch(t *testing.T) {
 	quietStdLog(t)
 	minter := newAccessMinter(t)
@@ -221,8 +221,8 @@ func TestQueryReadsNoNonHolderRowForAQueryUnderTheSwitch(t *testing.T) {
 					t.Fatalf("query: %+v, ran %d, row reads %d; want 200 as itself and no row read", got, len(*s.seen), reads)
 				}
 				got, s, reads = run(legacyMutationDocument)
-				if got.Status != http.StatusUnauthorized || len(*s.seen) != 0 || reads != 1 {
-					t.Fatalf("mutation: %+v, ran %d, row reads %d; want 401, no resolver and one row read", got, len(*s.seen), reads)
+				if got.Status != http.StatusServiceUnavailable || got.Body != restUnavailable || len(*s.seen) != 0 || reads != 1 {
+					t.Fatalf("mutation: %+v, ran %d, row reads %d; want 503, no resolver and one row read", got, len(*s.seen), reads)
 				}
 			})
 		}

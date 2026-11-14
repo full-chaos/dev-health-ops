@@ -118,11 +118,11 @@ func TestUnlinkHandlerAnswersInGoAPIShape(t *testing.T) {
 	}{
 		{"owner", fresh, held.ID.String(), nil, http.StatusNoContent, ""},
 		{"no session", nil, held.ID.String(), nil, http.StatusUnauthorized, `{"detail":{"message":"Not authenticated"}}`},
-		{"stale sign-in", stale, held.ID.String(), nil, http.StatusForbidden, `{"detail":{"message":"Sign in again to change linked accounts"}}`},
-		{"another principal", other, held.ID.String(), nil, http.StatusNotFound, `{"detail":{"message":"Identity not found"}}`},
-		{"not an id", fresh, "not-a-uuid", nil, http.StatusNotFound, `{"detail":{"message":"Identity not found"}}`},
-		{"last sign-in method", fresh, held.ID.String(), identity.ErrLastSignInMethod, http.StatusConflict, `{"detail":{"message":"Cannot remove the last sign-in method"}}`},
-		{"held by another principal at unlink", fresh, held.ID.String(), identity.ErrNotOwner, http.StatusNotFound, `{"detail":{"message":"Identity not found"}}`},
+		{"stale sign-in", stale, held.ID.String(), nil, http.StatusForbidden, `{"detail":{"message":"Sign in again to change linked accounts","reason":"expired"}}`},
+		{"another principal", other, held.ID.String(), nil, http.StatusNotFound, `{"detail":{"message":"Identity not found","reason":"principal_not_found"}}`},
+		{"not an id", fresh, "not-a-uuid", nil, http.StatusNotFound, `{"detail":{"message":"Identity not found","reason":"principal_not_found"}}`},
+		{"last sign-in method", fresh, held.ID.String(), identity.ErrLastSignInMethod, http.StatusConflict, `{"detail":{"message":"Cannot remove the last sign-in method","reason":"last_sign_in_method"}}`},
+		{"held by another principal at unlink", fresh, held.ID.String(), identity.ErrNotOwner, http.StatusNotFound, `{"detail":{"message":"Identity not found","reason":"principal_not_found"}}`},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

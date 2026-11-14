@@ -248,7 +248,7 @@ func (artifact githubTestsArtifactPayload) declaredOversize(maxBytes int64) erro
 // ExcludedArtifactSample) purely for operator visibility and CHAOS-4591
 // (per-sync-config selectable artifact ingestion).
 //
-// githubTestsNonReportArtifactPrefixes holds ONLY go-images- by default (CHAOS-13193)
+// githubTestsNonReportArtifactPrefixes holds only go-images-, go-test-timings- and go-junit-part- by default
 // (codex review round 1, P1): "digests-*" artifacts (this repo's own
 // docker-images.yml uploads one empty touch-file per build target) ARE real,
 // valid, tiny zips that parse cleanly and contribute zero report rows --
@@ -261,11 +261,15 @@ func (artifact githubTestsArtifactPayload) declaredOversize(maxBytes int64) erro
 // data. The mechanism stays (this is a prefix list, not a special case) so
 // CHAOS-4591 can populate it per org/repo as an explicit, informed opt-in
 // rather than a global default nobody chose.
-var githubTestsNonReportArtifactSuffixes = []string{".dockerbuild"}
+// ".spdx.json" are SBOM files: never reports, and 6 of them sit in every go.yml run.
+var githubTestsNonReportArtifactSuffixes = []string{".dockerbuild", ".spdx.json"}
 
 // "go-images-" are the docker-images tarballs ops CI uploads (>100 MiB); never
 // reports (CHAOS-13193). go-test-* artifacts carry the JUnit XML and stay selected.
-var githubTestsNonReportArtifactPrefixes = []string{"go-images-"}
+// "go-test-timings-" are per-shard .tsv.gz timing tables and "go-junit-part-" are per-shard JUnit parts that
+// a fan-in step republishes merged; neither is a report candidate, and 17 timings per go.yml run pushed it past
+// githubTestsMaxArtifacts (31 selected of 25).
+var githubTestsNonReportArtifactPrefixes = []string{"go-images-", "go-test-timings-", "go-junit-part-"}
 
 const (
 	githubTestsExclusionReasonSuffix = "non_report_artifact_suffix"

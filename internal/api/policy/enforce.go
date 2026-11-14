@@ -1,6 +1,7 @@
 package policy
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -162,15 +163,62 @@ type enforceObservation struct {
 	served servedOrg
 	// adminOr: the route is mounted WrapAdminOr: an organization admin of the token's organization passes too.
 	adminOr bool
-	// orgRequired: the route level is AdminOrg, which refuses a caller with no organization whoever it is.
-	orgRequired bool
-	// delegated: the bearer is a delegated session's (the token names an actor).
-	delegated bool
-	// orglessAction is the platform action the route's legacy guard admits a caller with no organization by (the wrap's
-	// gate action, else admin.orgs; gate.orglessAction).
-	orglessAction string
+	// orgless decides a token with no organization on an organization row (orglessInputs.question).
+	orgless orglessInputs
 	// platform, when set, keeps the request's platform answers for HoldsPlatform.
 	platform *platformDecisions
+}
+
+// orglessInputs are what decides a token with no organization on an organization row. The Enforcer and the shadow
+// both read them through question, so the shadow asks what the Enforcer asks.
+type orglessInputs struct {
+	// delegated: the bearer is a delegated session's (the token names an actor).
+	delegated bool
+	// orgRequired: the route level is AdminOrg, which refuses a caller with no organization whoever it is.
+	orgRequired bool
+	// action is the platform action the route's legacy guard admits a caller with no organization by (the wrap's gate
+	// action, else admin.orgs; gate.orglessAction). Empty: the caller set none (not go-api), and nothing is decided.
+	action string
+}
+
+type orglessQuestion int
+
+const (
+	// orglessKeepsLegacy: a delegated session's bearer keeps the legacy answer, unasked (F1).
+	orglessKeepsLegacy orglessQuestion = iota
+	// orglessRefusedUnasked: an AdminOrg row refuses it, as the legacy guard does, unasked.
+	orglessRefusedUnasked
+	// orglessAsksPlatform: the decision point is asked the platform action, with no organization.
+	orglessAsksPlatform
+)
+
+func orglessInputsOf(level Authz, gt gate, user *User) orglessInputs {
+	return orglessInputs{delegated: user.ImpersonatedBy != nil, orgRequired: level == AdminOrg, action: gt.orglessAction()}
+}
+
+func (in orglessInputs) question() orglessQuestion {
+	switch {
+	case in.delegated:
+		return orglessKeepsLegacy
+	case in.orgRequired:
+		return orglessRefusedUnasked
+	}
+	return orglessAsksPlatform
+}
+
+// rowRequest is the question about a row for a caller whose token organization is org: the Enforcer and the shadow ask
+// this one request, whatever organization the request serves.
+func rowRequest(bearer string, row ShadowRow, org string) pep.Request {
+	request := pep.Request{PrincipalReference: bearer, Action: row.Action, ResourceType: row.ResourceType, ResourceKey: shadowPlatformKey}
+	if row.ResourceType == policycatalog.ScopeOrganization {
+		request.ResourceKey, request.OrganizationID = org, org
+	}
+	return request
+}
+
+// platformRequest is the platform question about action, with no organization.
+func platformRequest(bearer, action string) pep.Request {
+	return pep.Request{PrincipalReference: bearer, Action: action, ResourceType: policycatalog.ScopePlatform, ResourceKey: shadowPlatformKey}
 }
 
 // adminOrOrgAction is the organization action that stands for the legacy Admin level on an admin-or row: only the
@@ -262,10 +310,7 @@ func (e *Enforcer) decideOnce(ctx context.Context, o enforceObservation) enforce
 	if o.adminOr && row.ResourceType == policycatalog.ScopePlatform {
 		return e.decideAdminOr(ctx, o, row, org)
 	}
-	request := pep.Request{PrincipalReference: o.bearer, Action: row.Action, ResourceType: row.ResourceType, ResourceKey: shadowPlatformKey}
-	if row.ResourceType == policycatalog.ScopeOrganization {
-		request.ResourceKey, request.OrganizationID = org, org
-	}
+	request := rowRequest(o.bearer, row, org)
 	decision, failed := e.ask(ctx, request)
 	if failed || decision.Local() {
 		countEnforce(ctx, row.Namespace, enforceOutcomeErrorDeny)
@@ -300,13 +345,13 @@ func (e *Enforcer) decideOnce(ctx context.Context, o enforceObservation) enforce
 // verdict could change its answer, so it is no deny either. A delegated session's bearer keeps the legacy answer: the
 // decision point refuses a delegated session every platform action, so judging it would narrow impersonation (F1).
 func (e *Enforcer) decideOrgless(ctx context.Context, o enforceObservation, row ShadowRow) enforceVerdict {
-	switch {
-	case o.delegated:
+	switch o.orgless.question() {
+	case orglessKeepsLegacy:
 		countEnforceUnjudged(ctx, o.pattern, enforceUnjudgedDelegatedOrgless)
 		e.logger.DebugContext(ctx, "api enforcement: a delegated session's bearer with no organization keeps the legacy answer",
 			slog.String("route", o.pattern), slog.String("namespace", row.Namespace), slog.String("reason", enforceUnjudgedDelegatedOrgless))
 		return enforceLegacy
-	case o.orgRequired:
+	case orglessRefusedUnasked:
 		countEnforceUnjudged(ctx, o.pattern, enforceUnjudgedOrgRequired)
 		e.logger.DebugContext(ctx, "api enforcement: a token with no organization on an AdminOrg row is refused as the legacy guard refuses it",
 			slog.String("route", o.pattern), slog.String("namespace", row.Namespace), slog.String("reason", enforceUnjudgedOrgRequired))
@@ -315,9 +360,9 @@ func (e *Enforcer) decideOrgless(ctx context.Context, o enforceObservation, row 
 	var held bool
 	var err error
 	if o.platform != nil {
-		held, err = o.platform.holds(ctx, o.orglessAction)
+		held, err = o.platform.holds(ctx, o.orgless.action)
 	} else {
-		held, err = e.askPlatform(ctx, o.bearer, o.orglessAction)
+		held, err = e.askPlatform(ctx, o.bearer, o.orgless.action)
 	}
 	if err != nil {
 		countEnforce(ctx, row.Namespace, enforceOutcomeErrorDeny)
@@ -364,7 +409,7 @@ func (e *Enforcer) decideAdminOr(ctx context.Context, o enforceObservation, row 
 // adminOrRequests is the one batch an admin-or row asks: the row's platform action, and adminOrOrgAction in the
 // token's organization when there is one. The Enforcer and the shadow both ask it.
 func adminOrRequests(bearer, action, org string) []pep.Request {
-	requests := []pep.Request{{PrincipalReference: bearer, Action: action, ResourceType: policycatalog.ScopePlatform, ResourceKey: shadowPlatformKey}}
+	requests := []pep.Request{platformRequest(bearer, action)}
 	if org != "" {
 		requests = append(requests, pep.Request{PrincipalReference: bearer, Action: adminOrOrgAction,
 			ResourceType: policycatalog.ScopeOrganization, ResourceKey: org, OrganizationID: org})
@@ -468,14 +513,41 @@ func (g *Guard) enforceVerdict(r *http.Request, user *User, bearer string, level
 	}
 	verdict := g.pdp.enforcer.decide(ctx, enforceObservation{pattern: r.Pattern, bearer: bearer, orgID: user.OrgID,
 		userAccessToken: user.accessToken, impersonating: impersonating, read: readMethod(r.Method), platformWrap: platformRoute,
-		served: servedOrgOf(r, g.pdp.enforcer.rows[r.Pattern]), adminOr: gt.kind == gateAdminOr, orgRequired: level == AdminOrg,
-		delegated: user.ImpersonatedBy != nil, orglessAction: gt.orglessAction(), platform: platform})
+		served: servedOrgOf(r, g.pdp.enforcer.rows[r.Pattern]), adminOr: gt.kind == gateAdminOr,
+		orgless: orglessInputsOf(level, gt, user), platform: platform})
 	// The refusal returns before the legacy checks that observe the shadow, so the shadow is told here: it counts
 	// impersonation_refused without a decision point call.
 	if verdict == enforceImpersonationRefused {
-		g.observeShadowAs(r, user, bearer, false, true, gt)
+		g.observeShadowAs(r, user, bearer, false, true, gt, level)
 	}
 	return verdict
+}
+
+// EnforcedOrglessRefusal is the answer the Enforcer gives, unasked, a token with no organization on an AdminOrg row:
+// its status and body bytes. The shadow venue judge holds a slot the shadow logged decided_no_question to it.
+func EnforcedOrglessRefusal() (int, []byte) {
+	w := &bufferedAnswer{header: http.Header{}}
+	writeEnforceRefusal(w, nil, AdminOrg, enforceDenyNoOrg, DenyText{})
+	return w.status, w.body.Bytes()
+}
+
+type bufferedAnswer struct {
+	header http.Header
+	status int
+	body   bytes.Buffer
+}
+
+func (b *bufferedAnswer) Header() http.Header { return b.header }
+func (b *bufferedAnswer) WriteHeader(status int) {
+	if b.status == 0 {
+		b.status = status
+	}
+}
+func (b *bufferedAnswer) Write(p []byte) (int, error) {
+	if b.status == 0 {
+		b.status = http.StatusOK
+	}
+	return b.body.Write(p)
 }
 
 // decisionPointRefusal is true for a verdict that comes from the decision point's answer or its absence: the refusals a

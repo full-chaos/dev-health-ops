@@ -16,7 +16,7 @@ import (
 // and pipefail turns the writer's failure into the pipeline's status. In ci/check_go.sh `printf | grep -Fqx key` sent a
 // split part down the wrong test path in hosted CI. A here-string (`grep -Fqx -- "${key}" <<<"${list}"`) has no pipe.
 //
-// Scope: ci/check_go.sh and the files it sources (they run under its pipefail). A pipe inside a process substitution
+// Scope: ci/check_go.sh, every ci/*_test.sh and the files they source (they run under their pipefail). A pipe inside a process substitution
 // <(...) is not refused: its status is never read. Text in single quotes, comments and ${...} is not shell code here.
 
 var (
@@ -325,15 +325,33 @@ func sortedKeys(m map[string]string) []string {
 	return keys
 }
 
-func TestCheckGoPipefailHasNoEarlyExitReader(t *testing.T) {
+func pipefailReaderEntriesUnder(t *testing.T, root string) []string {
+	t.Helper()
+	cells, err := filepath.Glob(filepath.Join(root, "ci", "*_test.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries := slices.Clone(pipefailReaderEntries)
+	for _, cell := range cells {
+		rel, err := filepath.Rel(root, cell)
+		if err != nil {
+			t.Fatal(err)
+		}
+		entries = append(entries, filepath.ToSlash(rel))
+	}
+	return entries
+}
+
+func TestCiScriptsPipefailHaveNoEarlyExitReader(t *testing.T) {
 	root := repoRoot(t)
-	scope := pipefailReaderScope(t, root, pipefailReaderEntries)
-	for _, want := range []string{"ci/check_go.sh", "ci/lib/venue_oracle_registry.sh"} {
+	entries := pipefailReaderEntriesUnder(t, root)
+	scope := pipefailReaderScope(t, root, entries)
+	for _, want := range []string{"ci/check_go.sh", "ci/lib/venue_oracle_registry.sh", "ci/retry_test.sh", "ci/pull_base_image_test.sh"} {
 		if _, ok := scope[want]; !ok {
 			t.Errorf("pipefail reader guard scans no %s: the scope is wrong (pipefail no longer set, or the source line moved)", want)
 		}
 	}
-	for _, hit := range earlyExitHitsUnder(t, root, pipefailReaderEntries) {
+	for _, hit := range earlyExitHitsUnder(t, root, entries) {
 		t.Errorf("%s:%d pipes into `%s` under pipefail: the reader can exit before the writer ends, the writer then fails (EPIPE or SIGPIPE) and the pipeline reads false at random; use a here-string (grep -Fqx -- \"${key}\" <<<\"${list}\") or read the whole input", hit.file, hit.line, hit.reader)
 	}
 }

@@ -78,7 +78,7 @@ func TestSocialLoginRefusesAProfileWithoutAUserIDBeforeTheDatabase(t *testing.T)
 				if pastGuard {
 					t.Fatal("the handler went on to the database without a provider user id")
 				}
-				if code != http.StatusBadRequest || body != `{"detail":{"message":"The provider returned an invalid user id"}}` {
+				if code != http.StatusBadRequest || body != `{"detail":{"message":"The provider returned an invalid user id","reason":"malformed"}}` {
 					t.Fatalf("status %d body %q, want the 400 invalid user id answer", code, body)
 				}
 				if !strings.Contains(logs, "provider="+provider) {

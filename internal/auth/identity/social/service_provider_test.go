@@ -13,14 +13,14 @@ import (
 )
 
 func TestSignInToRefusesAServiceProviderPrincipalAsDisabled(t *testing.T) {
-	reason, err := signInTo(identity.Principal{ID: uuid.New(), IsActive: true})
-	if err != nil || reason != ReasonAccepted {
-		t.Fatalf("normal principal: %v %v, want accepted", reason, err)
+	if err := signInTo(identity.Principal{ID: uuid.New(), IsActive: true}); err != nil {
+		t.Fatalf("normal principal: %v, want accepted", err)
 	}
-	disabledReason, disabledErr := signInTo(identity.Principal{ID: uuid.New(), IsActive: true, DisabledAt: ptrTime()})
-	reason, err = signInTo(identity.Principal{ID: uuid.New(), IsActive: true, ServiceProvider: true})
-	if !errors.Is(err, ErrPrincipalDisabled) || reason != ReasonPrincipalDeactivated || reason != disabledReason || !errors.Is(disabledErr, err) {
-		t.Fatalf("service-provider principal: %v %v, want the disabled answer %v %v", reason, err, disabledReason, disabledErr)
+	disabledErr := signInTo(identity.Principal{ID: uuid.New(), IsActive: true, DisabledAt: ptrTime()})
+	err := signInTo(identity.Principal{ID: uuid.New(), IsActive: true, ServiceProvider: true})
+	_, reason := Classify(err)
+	if !errors.Is(err, ErrPrincipalDisabled) || reason != ReasonPrincipalDeactivated || !errors.Is(disabledErr, err) {
+		t.Fatalf("service-provider principal: %v %v, want the disabled answer %v", reason, err, disabledErr)
 	}
 }
 

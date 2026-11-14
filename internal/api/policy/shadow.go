@@ -38,7 +38,7 @@ var (
 	shadowNamespaces = catalogNamespaces()
 	shadowCallers    = []string{"member", "admin", "superuser"}
 	shadowClasses    = []string{"legacy_bug", "new_bug", "unresolved", "intentional"}
-	shadowResults    = []string{"match", "mismatch", "error", "dropped", "skipped", "impersonation_refused"}
+	shadowResults    = []string{"match", "mismatch", "error", "dropped", "skipped", "impersonation_refused", "decided_no_question"}
 	shadowReasons    = []string{ShadowReasonNone, ShadowReasonHS256, ShadowReasonEnvelope, ShadowReasonNoUserBearer, ShadowReasonCap,
 		ShadowReasonUnmapped, ShadowReasonOpRefused, ShadowReasonNeverDecided, ShadowReasonHighRiskOff}
 )
@@ -84,6 +84,9 @@ const (
 	resultSkipped  = "skipped"
 	// resultImpersonationRefused: a caller with a live go-api impersonation row, which enforcement refuses unasked.
 	resultImpersonationRefused = "impersonation_refused"
+	// resultDecidedNoQuestion: a token with no organization on an AdminOrg row, which enforcement refuses unasked
+	// (orglessRefusedUnasked); its answer is EnforcedOrglessRefusal.
+	resultDecidedNoQuestion = "decided_no_question"
 
 	shadowDefaultInFlight = 32
 	shadowDefaultTimeout  = 2 * time.Second
@@ -352,8 +355,9 @@ type ShadowObservation struct {
 	// AdminOr: the route is mounted admin-or (an organization admin of the token's organization passes too). Its
 	// platform row is judged as the Enforcer decides it: one batch, adminOrRequests read by adminOrAnswer.
 	AdminOr bool
-	// served: the organization a go-api path or query parameter names for the handler to serve (servedOrgOf).
-	served servedOrg
+	// orgless decides a token with no organization on an organization row, as the Enforcer does (orglessInputs.question).
+	// Only go-api sets it; with no action set the shadow skips such a caller.
+	orgless orglessInputs
 }
 
 // shadowCall is everything the goroutine needs: values only, no request.
@@ -393,12 +397,6 @@ func (s *Shadow) Observe(ctx context.Context, o ShadowObservation) {
 		s.record(ctx, o.Pattern, row, caller, result, ShadowReasonNone, "")
 		return
 	}
-	// A served organization that is no UUID, or that is not the token's: the enforcer judges the request on the token
-	// organization (CHAOS-13596), but the shadow does not ask yet and counts it skipped (CHAOS-13675 aligns the two).
-	if o.served.against(o.OrgID) != servedOrgJudged {
-		s.record(ctx, o.Pattern, row, caller, resultSkipped, ShadowReasonNone, "")
-		return
-	}
 	if row.HighRisk && !s.highRisk {
 		reason := shadowReasonOf(o.SkipReason)
 		if reason == ShadowReasonNone {
@@ -410,14 +408,24 @@ func (s *Shadow) Observe(ctx context.Context, o ShadowObservation) {
 		s.record(ctx, o.Pattern, row, caller, resultSkipped, reason, "")
 		return
 	}
+	// The question is the Enforcer's: the token organization's row request whatever organization the request serves
+	// (rowRequest), and for a token with no organization on an organization row the one its inputs name.
 	org := strings.ToLower(o.OrgID)
-	if o.Bearer == "" || !o.UserAccessToken || (row.ResourceType == policycatalog.ScopeOrganization && org == "") {
+	var request pep.Request
+	switch orgless := row.ResourceType == policycatalog.ScopeOrganization && org == ""; {
+	case o.Bearer == "" || !o.UserAccessToken:
 		s.record(ctx, o.Pattern, row, caller, resultSkipped, shadowReasonOf(o.SkipReason), "")
 		return
-	}
-	request := pep.Request{PrincipalReference: o.Bearer, Action: row.Action, ResourceType: row.ResourceType, ResourceKey: shadowPlatformKey}
-	if row.ResourceType == policycatalog.ScopeOrganization {
-		request.ResourceKey, request.OrganizationID = org, org
+	case orgless && o.orgless.action != "" && o.orgless.question() == orglessRefusedUnasked:
+		s.record(ctx, o.Pattern, row, caller, resultDecidedNoQuestion, ShadowReasonNone, "")
+		return
+	case orgless && (o.orgless.action == "" || o.orgless.question() != orglessAsksPlatform):
+		s.record(ctx, o.Pattern, row, caller, resultSkipped, shadowReasonOf(o.SkipReason), "")
+		return
+	case orgless:
+		request = platformRequest(o.Bearer, o.orgless.action)
+	default:
+		request = rowRequest(o.Bearer, row, org)
 	}
 	select {
 	case s.slots <- struct{}{}:

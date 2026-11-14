@@ -32,7 +32,7 @@ var AuthOutcomeReasonCodes = []string{
 	"identity_conflict", "rate_limited",
 	"replayed", "nonce_mismatch", "provisioning_disabled", "domain_not_allowed", "not_entitled",
 	"membership_required",
-	"store_unavailable", "dependency_unavailable",
+	"store_unavailable", "dependency_unavailable", "last_sign_in_method",
 }
 
 // Session is one session.v1 document, validated and parsed.

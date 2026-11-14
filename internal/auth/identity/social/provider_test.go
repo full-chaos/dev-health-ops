@@ -220,7 +220,7 @@ func TestFreshnessBound(t *testing.T) {
 		age  time.Duration
 		want bool
 	}{{0, true}, {10 * time.Minute, true}, {10*time.Minute + time.Second, false}, {-2 * time.Minute, false}} {
-		_, err := svc.fresh(SignedIn{PrincipalID: id, AuthTime: now.Add(-c.age)})
+		err := svc.fresh(SignedIn{PrincipalID: id, AuthTime: now.Add(-c.age)})
 		if (err == nil) != c.want {
 			t.Errorf("age %v: err = %v", c.age, err)
 		}

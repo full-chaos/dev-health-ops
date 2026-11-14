@@ -1,0 +1,8 @@
+{
+  "occurred_at": "2026-11-14T10:00:00Z",
+  "operation": "social_exchange",
+  "reason_code": "last_sign_in_method",
+  "request_id": "req_EXAMPLE0000000000000000001",
+  "result": "denied",
+  "schema_version": "auth-outcome.v1"
+}

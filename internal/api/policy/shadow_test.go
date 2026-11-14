@@ -366,8 +366,6 @@ func TestShadowSkipsAreCountedAndAskNothing(t *testing.T) {
 	}{
 		{"high-risk row with the second switch off", func() *accessStore { return personaStore(personaAdmin) }, userClaims(nil), "POST", "/api/v1/admin/teams",
 			func(c *ShadowConfig) { c.HighRisk = false }, nil, []string{"skipped"}},
-		{"caller with no organization on an org row", func() *accessStore { return personaStore(personaSuperuser) },
-			userClaims(func(c *AccessTokenClaims) { c.OrgID = nil }), "GET", "/api/v1/billing/invoices", nil, nil, []string{"skipped"}},
 		{"route with no action row", func() *accessStore { return personaStore(personaAdmin) }, userClaims(nil), "GET", "/api/v1/admin/other", nil, nil, nil},
 	}
 	for _, tc := range cases {
@@ -384,6 +382,22 @@ func TestShadowSkipsAreCountedAndAskNothing(t *testing.T) {
 				t.Fatalf("%d PDP calls, want 0", n)
 			}
 		})
+	}
+}
+
+// CHAOS-13675: a token with no organization on an organization row is asked what the enforcer asks it (decideOrgless):
+// the one platform action the legacy guard admits it by, with no organization, never the row's organization action.
+func TestShadowAsksAnOrglessTokenThePlatformActionOnAnOrgRow(t *testing.T) {
+	rec := recordShadow(t)
+	pdp := newTestPDP(t, allowAll)
+	sh, _ := newShadowFor(t, pdp.client(t), nil)
+	shadowRequest(shadowHandler(t, personaStore(personaSuperuser), userClaims(func(c *AccessTokenClaims) { c.OrgID = nil }), sh, nil), "GET", "/api/v1/billing/invoices")
+	sh.wg.Wait()
+	if _, results := rec.snapshot(); !slices.Equal(results, []string{"match"}) {
+		t.Fatalf("results %v, want [match]", results)
+	}
+	if calls := pdp.calls(); len(calls) != 1 || calls[0].Action != ActionAdminOrgs || calls[0].Type != "platform" || calls[0].HasOrg {
+		t.Fatalf("PDP saw %+v, want one platform question admin.orgs with no organization", calls)
 	}
 }
 
@@ -487,7 +501,7 @@ func TestShadowADelegatedBearerIsAsked(t *testing.T) {
 
 // The result set is closed and the counter's description names exactly it.
 func TestShadowResultSetIsClosed(t *testing.T) {
-	want := []string{"match", "mismatch", "error", "dropped", "skipped", "impersonation_refused"}
+	want := []string{"match", "mismatch", "error", "dropped", "skipped", "impersonation_refused", "decided_no_question"}
 	if !slices.Equal(shadowResults, want) {
 		t.Errorf("shadow results %v, want %v", shadowResults, want)
 	}

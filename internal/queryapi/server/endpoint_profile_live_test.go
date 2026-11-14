@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -695,25 +696,38 @@ func driveInternal(t *testing.T, row liveRow) *liveObs {
 func proofWriteCells(t *testing.T, o *liveObs) {
 	t.Helper()
 	const mutation = "mutation LiveProofWrite { probe }"
-	for _, allowed := range []bool{true, false} {
+	for _, cell := range []struct {
+		name    string
+		allowed bool
+		readErr error
+		want    int
+		wantRan int
+	}{
+		{"allowed", true, nil, http.StatusOK, 1},
+		{"not on the list", false, nil, http.StatusForbidden, 0},
+		{"allowlist read fails", true, errors.New("allowlist read failed"), http.StatusServiceUnavailable, 0},
+	} {
 		verifier, _ := iaVerifier(t)
 		ran := 0
 		mux := routeswitch.NewMux(routeswitch.StaticSwitch{"m": true})
 		mux.Register("m", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { ran++ }))
 		handler := newDocumentDispatchHandler(os.Getenv, mux, map[string]string{digestHex(mutation): "m"}, verifier, nil, nil, digest.KindMutation,
-			func(_ context.Context, org string) bool { return allowed && org == ecOrg.String() })
+			func(_ context.Context, org string) (bool, error) {
+				return cell.allowed && org == ecOrg.String(), cell.readErr
+			})
 		request := httptest.NewRequest(http.MethodPost, "/query/proof-write", strings.NewReader(documentBody(mutation)))
 		request.Header.Set("Content-Type", "application/json")
 		iaHeaders(ecOrg.String(), "admin", false, false)(request)
 		recorder := httptest.NewRecorder()
 		handler(recorder, request)
 		o.see(recorder.Code)
-		want, wantRan := http.StatusForbidden, 0
-		if allowed {
-			want, wantRan = http.StatusOK, 1
+		if recorder.Code != cell.want || ran != cell.wantRan {
+			o.fail("proof-write, %s: status %d, ran %d, want %d, %d", cell.name, recorder.Code, ran, cell.want, cell.wantRan)
 		}
-		if recorder.Code != want || ran != wantRan {
-			o.fail("proof-write with the organization allowed=%v: status %d, ran %d, want %d, %d", allowed, recorder.Code, ran, want, wantRan)
+		if cell.want == http.StatusServiceUnavailable {
+			if problem := unavailableProblem(faultAnswer{recorder.Code, recorder.Body.String(), recorder.Header()}); problem != "" {
+				o.fail("proof-write, %s: %s", cell.name, problem)
+			}
 		}
 	}
 	o.textHas("resource_resolver", "go_api_proof_orgs")

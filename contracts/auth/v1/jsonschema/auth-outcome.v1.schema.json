@@ -79,7 +79,8 @@
         "membership_required",
         "rate_limited",
         "store_unavailable",
-        "dependency_unavailable"
+        "dependency_unavailable",
+        "last_sign_in_method"
       ],
       "description": "Closed vocabulary. The first nine denied codes are edgetoken.Reason* verbatim; the rest name refresh, session, principal, lockout, linking and SSO flow outcomes. A new code is a deliberate schema amendment."
     },

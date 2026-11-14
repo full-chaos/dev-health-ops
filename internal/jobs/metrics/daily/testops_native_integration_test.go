@@ -482,7 +482,7 @@ func assertTestopsDailyTeam(
 
 // applyTestopsRepositoryOwnershipSchema supplies the three tables the
 // authoritative owner reader queries: the ownership rows, the repositories
-// they name, and the teams whose inactive rows the reader leaves out
+// they name (with the settings the default-branch reader reads), and the teams whose inactive rows the reader leaves out
 // (package teamactive). The risk integration tests have small
 // purpose-built schemas, so they must declare this production dependency
 // explicitly instead of accidentally testing an older resolver.
@@ -490,7 +490,8 @@ func applyTestopsRepositoryOwnershipSchema(ctx context.Context, t *testing.T, co
 	t.Helper()
 	for _, statement := range []string{
 		`CREATE TABLE repos (
-    id UUID, repo String, org_id String, provider String
+    id UUID, repo String, org_id String, provider String,
+    settings Nullable(String), last_synced DateTime64(3, 'UTC') DEFAULT now64(3, 'UTC')
 ) ENGINE = ReplacingMergeTree ORDER BY (id)`,
 		`CREATE TABLE team_repo_ownership (
     org_id String, provider String, team_id String, repo_id Nullable(UUID),

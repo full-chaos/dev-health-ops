@@ -1269,7 +1269,7 @@ jobs:
       # Actions cache on a pull request: trivy is installed once here, and the Trivy DB is restored on every event and saved
       # only by a push to main or a merge_group run (the key family is the one trivy-action used).
       - name: Install Trivy once for the scans below
-        uses: aquasecurity/setup-trivy@3fb12ec12f41e471780db15c232d5dd185dcb514 # v0.2.6
+        uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
         with:
           version: v0.70.0
           cache: false

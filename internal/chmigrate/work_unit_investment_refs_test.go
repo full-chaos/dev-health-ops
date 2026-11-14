@@ -1,6 +1,7 @@
 package chmigrate_test
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -26,15 +27,15 @@ func TestMigration149DefaultsAreTheReadersEvidenceExpressions(t *testing.T) {
 	if migration == nil {
 		t.Fatalf("the live chain does not hold %s", workUnitInvestmentRefsVersion)
 	}
-	statements := chmigrate.SplitStatements(migration.SQL)
-	if len(statements) != 1 {
-		t.Fatalf("%s holds %d statements, want the one ALTER", workUnitInvestmentRefsVersion, len(statements))
+	var got []string
+	for _, statement := range chmigrate.SplitStatements(migration.SQL) {
+		got = append(got, strings.Join(strings.Fields(statement), " "))
 	}
-	got := strings.Join(strings.Fields(statements[0]), " ")
-	want := "ALTER TABLE work_unit_investments" +
-		" ADD COLUMN IF NOT EXISTS issue_refs Array(String) DEFAULT JSONExtract(structural_evidence_json, 'issues', 'Array(String)')," +
-		" ADD COLUMN IF NOT EXISTS pr_refs Array(String) DEFAULT JSONExtract(structural_evidence_json, 'prs', 'Array(String)')"
-	if got != want {
-		t.Fatalf("%s is\n  %s\nwant\n  %s", workUnitInvestmentRefsVersion, got, want)
+	want := []string{
+		"ALTER TABLE work_unit_investments ADD COLUMN IF NOT EXISTS issue_refs Array(String) DEFAULT JSONExtract(structural_evidence_json, 'issues', 'Array(String)')",
+		"ALTER TABLE work_unit_investments ADD COLUMN IF NOT EXISTS pr_refs Array(String) DEFAULT JSONExtract(structural_evidence_json, 'prs', 'Array(String)')",
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("%s is\n  %s\nwant\n  %s", workUnitInvestmentRefsVersion, strings.Join(got, "\n  "), strings.Join(want, "\n  "))
 	}
 }

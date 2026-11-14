@@ -306,6 +306,15 @@ but the effort came from another tier) or `unmeasured` (every linked commit lack
 `''` means "not recorded": every row written before the migration keeps it until the unit is materialized again, and it
 never means "measured". A reader must tolerate the column missing.
 
+**`work_unit_investments.issue_refs` and `pr_refs` (migration 149, `Array(String)`)** hold the unit's issue and pull
+request references: `DEFAULT JSONExtract(structural_evidence_json, 'issues' | 'prs', 'Array(String)')`, the
+expressions the investment readers parse today. The writer does not name them; ClickHouse computes and stores them on
+every insert, so a stored value always equals its row's evidence, and the materializer writes a database with or
+without the migration. The migration changes metadata only: a part written before it holds no data for the columns,
+and a read computes them from the part's evidence, so an old row reads its correct keys. The read cost drops only once
+a part stores them (a merge, or the backfill `MATERIALIZE COLUMN`, CHAOS-10727). No reader selects them yet: the
+readers move after a verified backfill (CHAOS-10728). Malformed or empty evidence reads `[]`.
+
 **`work_unit_investments.evidence_quote_count` (migration 106, `Nullable(UInt32)`)** is the number of distinct
 `(source_id, quote)` the row's run wrote to `work_unit_investment_quotes`. It is written by the materializer
 (`internal/jobs/investment`) for every row of a run that persists evidence snippets, and read only by the

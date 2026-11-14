@@ -976,11 +976,13 @@ func TestAdminWeakCoverRealPDPAbsoluteAnswers(t *testing.T) {
 			status: http.StatusForbidden, body: `{"detail":"Superuser access required"}`,
 		},
 		{
-			// E3, no membership (evaluate.go:140-142): a non-holder with no membership in its token org is refused on an
-			// admin-or row. Legacy guard internal/api/policy/guard.go:212-224 (not IsAdmin and admin.users not held ->
-			// 403 "Admin access required"); enforce.go:506 keeps that text on the enforced row.
+			// E3, no membership (evaluate.go:140-142): a non-holder whose token names an org it has no membership in is
+			// refused on an admin-or row by go-api's own read of the token org's membership row, before any decision
+			// point question: legacy guard internal/api/policy/guard.go:334-345 (an existing org without the row is the
+			// org scope's X-Org-Id refusal, writeOrgDenied scope.go:321-331). So E3's branch is not reached through
+			// go-api by this caller (hosted #6238 df823b93: the cell answered this text on both sides).
 			name: "e3_no_membership", caller: plain, row: row(plain, "r21_list"),
-			status: http.StatusForbidden, body: `{"detail":"Admin access required"}`,
+			status: http.StatusForbidden, body: `{"detail": "X-Org-Id not permitted for this user"}`,
 		},
 		{
 			// E2, the organization-scope platform-admin allow (evaluate.go:127-135): a platform admin with no membership

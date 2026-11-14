@@ -435,7 +435,8 @@ func TestEdgeCarrier_TwoAuthorizationHeadersAreAmbiguous(t *testing.T) {
 
 // TestEdgeCarrier_StoreUnavailableIsRefusedNotServed: a store failure
 // (ErrUnavailable) must never read as "no claim, proceed" -- it is refused,
-// same posture as every other store failure on this path.
+// same posture as every other store failure on this path, with go-api's 503
+// (nothing was decided about the credential), never a 401.
 func TestEdgeCarrier_StoreUnavailableIsRefused(t *testing.T) {
 	store := &fakeEdgeStore{errUserState: errors.Join(policy.ErrUnavailable, errors.New("connection reset"))}
 	auth := ecEdgeAuth(t, store)
@@ -443,8 +444,8 @@ func TestEdgeCarrier_StoreUnavailableIsRefused(t *testing.T) {
 	token := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5})
 
 	rec := ecPost(handler, token)
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("got %d, want 401", rec.Code)
+	if rec.Code != http.StatusServiceUnavailable || strings.TrimSpace(rec.Body.String()) != restUnavailable {
+		t.Fatalf("got %d %q, want 503 %s", rec.Code, rec.Body.String(), restUnavailable)
 	}
 	if len(*seen) != 0 {
 		t.Fatalf("resolver ran %d times for a store failure, want 0", len(*seen))
@@ -472,8 +473,8 @@ func TestEdgeCarrier_ImpersonationLookupFailureFailsClosed(t *testing.T) {
 	token := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5})
 
 	rec := ecPost(handler, token)
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("got %d, want 401 (an impersonation-lookup failure must refuse, never serve as the non-impersonated principal), body=%s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusServiceUnavailable || strings.TrimSpace(rec.Body.String()) != restUnavailable {
+		t.Fatalf("got %d, want 503 (an impersonation-lookup failure must refuse, never serve as the non-impersonated principal), body=%s", rec.Code, rec.Body.String())
 	}
 	if len(*seen) != 0 {
 		t.Fatalf("resolver ran %d times for a failed impersonation lookup, want 0", len(*seen))

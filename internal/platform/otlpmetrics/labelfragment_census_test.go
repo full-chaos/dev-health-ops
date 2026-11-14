@@ -36,6 +36,66 @@ var allowedDynamicSites = map[string]int{
 	"internal/syncrunrollup/dispatch_wake.go": 1, "internal/auth/httpapi/hitstore.go": 1,
 }
 
+const (
+	noLabelSample = "writer emits one sample line without a label block"
+	// knownBlind is a family whose writer DOES emit labels that labels.tsv drops today; it is outside this change and named here
+	// so the check stays loud for every other family.
+	knownBlind = "labeled writer the census cannot read yet: labels.tsv row is empty today (follow-up)"
+)
+
+// unlabeledWriters are the families the scan finds by their "# TYPE" literal but matches no "name{...}" sample for. Each is a
+// writer of a single unlabeled sample line (checked at the writer), except the knownBlind one. The list is exact: an entry that
+// is matched, covered or gone fails as stale.
+var unlabeledWriters = map[string]string{
+	"dev_health_ai_impact_linkage_unavailable_total":            noLabelSample,
+	"dev_health_benchmarking_nonfinite_percentile_inputs_total": noLabelSample,
+	"dev_health_otel_spans_unaccounted":                         noLabelSample,
+	"dev_health_otlp_metrics_export_failures_total":             noLabelSample,
+	"dev_health_otlp_metrics_exports_total":                     noLabelSample,
+	"dev_health_provider_request_usage_dropped_requests_total":  noLabelSample,
+	"dev_health_provider_request_usage_dropped_rows_total":      noLabelSample,
+	"dev_health_runtime_live":                                   noLabelSample,
+	"dev_health_runtime_ready":                                  noLabelSample,
+	"dev_health_runtime_required_checks":                        noLabelSample,
+	"dev_health_runtime_uptime_seconds":                         noLabelSample,
+	"dev_health_scheduler_explicit_datasets_without_row_total":  noLabelSample,
+	"devhealth_scheduler_executed_proof_evidence_state":         noLabelSample,
+	"devhealth_scheduler_executed_proof_gate_degraded":          noLabelSample,
+	"devhealth_scheduler_executed_proof_refresh_failures_total": noLabelSample,
+	"devhealth_scheduler_materialized_occurrences_total":        noLabelSample,
+	"devhealth_scheduler_planned_units":                         noLabelSample,
+	"devhealth_scheduler_zero_planned_occurrences_total":        noLabelSample,
+	"fixed_scheduler_consecutive_failures":                      noLabelSample,
+	"fixed_scheduler_last_success_age_seconds":                  noLabelSample,
+	"fixed_scheduler_up":                                        noLabelSample,
+	"sync_dispatch_discovery_rearmed_total":                     noLabelSample,
+	"sync_dispatch_exhausted_delivery_recoveries_total":         noLabelSample,
+	"sync_dispatch_observer_celery_due_pending":                 noLabelSample,
+	"sync_dispatch_observer_last_success_age_seconds":           noLabelSample,
+	"sync_dispatch_observer_river_due_pending":                  noLabelSample,
+	"sync_dispatch_observer_sampled_candidates":                 noLabelSample,
+	"sync_dispatch_observer_truncated":                          noLabelSample,
+	"sync_dispatch_observer_unknown_kinds":                      noLabelSample,
+	"sync_dispatch_observer_up":                                 noLabelSample,
+	"sync_dispatch_runaway_dispatch_wakeups":                    noLabelSample,
+	"sync_dispatch_unreclaimable_candidates":                    noLabelSample,
+	"sync_dispatch_unreclaimable_sweep_failures_total":          noLabelSample,
+	"sync_dispatch_unreclaimable_terminalized_total":            noLabelSample,
+	"sync_dispatch_wakeup_report_failures_total":                noLabelSample,
+	"sync_scheduler_configs_without_schedule":                   noLabelSample,
+	"sync_scheduler_consecutive_failures":                       noLabelSample,
+	"sync_scheduler_last_success_age_seconds":                   noLabelSample,
+	"sync_scheduler_up":                                         noLabelSample,
+	"worker_outbox_reconciler_degraded":                         noLabelSample,
+	"worker_outbox_reconciler_last_success_age_seconds":         noLabelSample,
+	"worker_outbox_reconciler_undelivered_blocked":              noLabelSample,
+	"worker_outbox_reconciler_up":                               noLabelSample,
+	"worker_presence_heartbeat_failed_total":                    noLabelSample,
+	"worker_stream_last_success_age_seconds":                    noLabelSample,
+	"worker_stream_up":                                          noLabelSample,
+	"fixed_scheduler_occurrences_total":                         knownBlind,
+}
+
 type fragmentSite struct {
 	file   string
 	line   int
@@ -44,8 +104,13 @@ type fragmentSite struct {
 }
 
 type fragmentCensus struct {
-	keys       map[string]map[string]bool
-	sites      map[string]fragmentSite
+	keys  map[string]map[string]bool
+	sites map[string]fragmentSite
+	// unmatched is the families whose "# TYPE" literal the scan found but whose sample lines it matched nowhere; covered is the
+	// families a helperSpec, pin or pool caller supplied the keys for. An unmatched family that is not covered is a writer the
+	// census cannot read: it must be in unlabeledWriters (a true no-label family) or the test fails.
+	unmatched  map[string]bool
+	covered    map[string]bool
 	unreadable []string
 	typeFiles  int
 	typeLines  int
@@ -103,7 +168,7 @@ func buildFragmentCensus(t *testing.T, root string) fragmentCensus {
 		sources[f.rel] = text
 		byDir[f.pkg] = append(byDir[f.pkg], text)
 	}
-	c := fragmentCensus{keys: map[string]map[string]bool{}, sites: map[string]fragmentSite{}}
+	c := fragmentCensus{keys: map[string]map[string]bool{}, sites: map[string]fragmentSite{}, unmatched: map[string]bool{}, covered: map[string]bool{}}
 	files := make([]string, 0, len(sources))
 	for rel := range sources {
 		files = append(files, rel)
@@ -210,7 +275,9 @@ func buildFragmentCensus(t *testing.T, root string) fragmentCensus {
 					}
 				}
 			}
-			_ = anyFound
+			if !anyFound {
+				c.unmatched[f.name] = true
+			}
 			if _, ok := c.keys[f.name]; !ok {
 				c.keys[f.name] = map[string]bool{}
 			}
@@ -242,6 +309,8 @@ var helperSpecs = []struct {
 	{"internal/providerfoundation/budget.go", "writeLabeledCounter", 1, nil, []int{3}},
 	{"internal/providerfoundation/budget.go", "writeTwoLabelCounter", 1, nil, []int{3, 4}},
 	{"internal/providerfoundation/budget.go", "writeProviderLabeledCounter", 1, []string{"provider"}, []int{3}},
+	// the family name is the %s of the helper's sample lines, so no literal "<family>_bucket{" exists for the scan to read
+	{"internal/syncreconciler/pipeline.go", "writeStageHistogram", 1, []string{"stage"}, nil},
 }
 
 // pinnedFragments are the sites whose names are not in the source as one literal: poolstat names its three gauges from the
@@ -255,6 +324,8 @@ var pinnedFragments = []struct {
 	{"internal/platform/poolstat/poolstat.go", "# TYPE %s gauge", nil, []string{"pool"}},
 	{"internal/syncrunrollup/dispatch_wake.go", "dispatchWakeMetricName", []string{"dev_health_sync_dispatch_woken_total"}, []string{"outcome", "path"}},
 	{"internal/auth/httpapi/hitstore.go", `# TYPE "+c.name+" counter`, []string{"dev_health_api_rate_limit_store_errors_total", "dev_health_api_rate_limit_rejections_total"}, []string{"limit"}},
+	// the sample lines are awaitLatencyMetric + "_bucket{outcome=...", which the const-then-brace form of the scan does not match
+	{"internal/synchandoff/await_metrics.go", "awaitLatencyMetric", []string{"sync_manual_trigger_await_latency_seconds"}, []string{"outcome"}},
 }
 
 // poolstatCallers name the metric passed to poolstat.New: each yields <metric>, <metric>_acquired_conns, <metric>_max_conns.
@@ -316,6 +387,7 @@ func stringValue(arg string, consts map[string]string) (string, bool) {
 }
 
 func (c *fragmentCensus) add(name, file string, line int, kind string, keys ...string) {
+	c.covered[name] = true
 	if c.keys[name] == nil {
 		c.keys[name] = map[string]bool{}
 	}
@@ -676,6 +748,19 @@ func TestFragmentLabelsTableEqualsTheCensus(t *testing.T) {
 			t.Errorf("fragment family %s: labels.tsv has %v, the code emits %v (%s)", name, row.Keys, keys, c.sites[name].file)
 		}
 	}
+	for name := range c.unmatched {
+		if c.covered[name] {
+			continue
+		}
+		if _, ok := unlabeledWriters[name]; !ok {
+			t.Errorf("fragment family %s (%s:%d) has a # TYPE line but the census matched no sample line of it: read the writer, then cover it (helperSpecs, pinnedFragments) or list it in unlabeledWriters", name, c.sites[name].file, c.sites[name].line)
+		}
+	}
+	for name := range unlabeledWriters {
+		if !c.unmatched[name] || c.covered[name] {
+			t.Errorf("unlabeledWriters lists %s, but the census now matches or covers it (or the family is gone): drop the entry", name)
+		}
+	}
 	// CHAOS-11813 retired the legacy ingest fragment (its TYPE line; 122 before).
 	if c.typeFiles < 39 || c.typeLines < 121 || len(want) < 280 {
 		t.Errorf("the census read %d files, %d TYPE lines, %d families: fewer than the 39 files and 121 lines of the base", c.typeFiles, c.typeLines, len(want))
@@ -699,5 +784,27 @@ func TestFragmentCensusReportsWhatItCannotRead(t *testing.T) {
 	}
 	if got := splitCallArgs(`f(a, "b,c", g(d, e), [2]int{1, 2}, h)`, 1); len(got) != 5 || got[1] != `"b,c"` || got[3] != `[2]int{1, 2}` {
 		t.Errorf("splitCallArgs = %q", got)
+	}
+}
+
+// The rows of the families the census cannot read by a literal sample line are pinned directly too, so trimming a row and its
+// census entry together still fails.
+func TestReconcilerAndAwaitHistogramRowsKeepTheirLabel(t *testing.T) {
+	table, err := ParseLabelRows(embeddedLabels)
+	if err != nil {
+		t.Fatal(err)
+	}
+	have := map[string]string{}
+	for _, row := range table {
+		have[row.Instrument] = strings.Join(row.Keys, ",")
+	}
+	for family, key := range map[string]string{
+		"dev_health_reconciler_stage_duration_seconds":     "stage",
+		"dev_health_reconciler_stage_acquire_wait_seconds": "stage",
+		"sync_manual_trigger_await_latency_seconds":        "outcome",
+	} {
+		if got, ok := have[family]; !ok || got != key {
+			t.Errorf("labels.tsv row of %s has keys %q (listed: %v), want %q", family, got, ok, key)
+		}
 	}
 }

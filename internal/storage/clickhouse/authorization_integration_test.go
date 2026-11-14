@@ -135,8 +135,8 @@ const (
 	grantRepoComplexityExact = "GRANT SELECT ON default.repo_complexity_daily"
 	grantCompoundingExact    = "GRANT SELECT ON default.compounding_risk_daily"
 
-	// The retired POST /api/v1/ingest/telemetry's insert grant: optional in the manifest
-	// (present in prod's users.d until it is dropped).
+	// The retired POST /api/v1/ingest/telemetry's insert grant: no longer in the manifest
+	// (CHAOS-12878), so a login that holds it is refused.
 	grantTelemetryExact = "GRANT INSERT ON default.telemetry_signal_bucket"
 
 	// GET /llm-settings/spend reads an org's token usage and categorization
@@ -168,12 +168,13 @@ func importGrants() []string {
 		grantRepoComplexityExact, grantCompoundingExact, grantLLMUsageExact, grantWorkUnitInvestExact, grantWorkItemsExact, grantReposExact}, grantMetricsExact...)
 }
 
-// TestCheckPostureAcceptsTheRetiredTelemetryGrant proves the optional grant: held, the posture passes.
-func TestCheckPostureAcceptsTheRetiredTelemetryGrant(t *testing.T) {
+// TestCheckPostureRefusesTheRetiredTelemetryGrant proves the contract step (CHAOS-12878): held, the posture refuses it.
+func TestCheckPostureRefusesTheRetiredTelemetryGrant(t *testing.T) {
 	h := startPostureHarness(t)
 	conn := h.newUser(t, append([]string{grantTeamsExact, grantIdentitiesExact, grantTelemetryExact}, importGrants()...)...)
-	if err := CheckAPIClickHouseAuthorization(h.ctx, conn); err != nil {
-		t.Fatalf("the retired telemetry insert grant must pass: %v", err)
+	err := CheckAPIClickHouseAuthorization(h.ctx, conn)
+	if !errors.Is(err, ErrPostureMismatch) || !strings.Contains(err.Error(), "default.telemetry_signal_bucket") {
+		t.Fatalf("the retired telemetry insert grant must be refused by name, got %v", err)
 	}
 }
 

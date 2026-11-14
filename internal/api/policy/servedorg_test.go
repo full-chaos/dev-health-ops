@@ -92,11 +92,16 @@ type servedOrgSetup struct {
 	claims *RoutedResult
 	// adminOf gives the caller an admin row in these organizations too.
 	adminOf []string
+	// store, when set, replaces the persona's store.
+	store func() *accessStore
 }
 
 func servedOrgServe(t *testing.T, row servedOrgCensusRow, setup servedOrgSetup, served string) response {
 	t.Helper()
 	store := personaStore(setup.who)
+	if setup.store != nil {
+		store = setup.store()
+	}
 	for _, org := range setup.adminOf {
 		store.roles[[2]uuid.UUID{userID, uuid.MustParse(org)}] = "admin"
 		store.members[[2]uuid.UUID{userID, uuid.MustParse(org)}] = true
@@ -268,7 +273,12 @@ func TestServedOrgEnforcedCells(t *testing.T) {
 					t.Errorf("enforced: %d %q, PDP saw %+v, want the legacy %d and one question on %s", got.status, got.body, calls, legacy.status, ownOrg)
 				}
 			})
-			t.Run("a slug keeps the legacy answer with no PDP call", func(t *testing.T) {
+			// CHAOS-13596: a served organization that is no UUID is judged on the token organization like any other request;
+			// the scope and the handler keep refusing the value, so the composed answer is the legacy one. The double allows,
+			// as the decision point allows an admin of its token organization. This cell pairs that one class only; the
+			// platform admin with no membership row is paired on the production evaluator below. The other caller classes
+			// are unpaired, named residuals in RISK-NOTES until the S2 real decision point table runs.
+			t.Run("a slug is judged on the token organization and keeps the legacy answer", func(t *testing.T) {
 				for _, slug := range []string{"acme", "not-a-uuid", strings.Repeat("g", 32)} {
 					legacy := servedOrgServe(t, row, servedOrgSetup{who: personaAdmin}, slug)
 					rec := recordEnforce(t)
@@ -277,8 +287,9 @@ func TestServedOrgEnforcedCells(t *testing.T) {
 					if got.status != legacy.status || got.body != legacy.body {
 						t.Errorf("%s: %d %q, want the legacy %d %q", slug, got.status, got.body, legacy.status, legacy.body)
 					}
-					if n := len(pdp.calls()); n != 0 || !slices.Equal(rec.unjudgedSnapshot(), []string{row.pattern + "/no_org"}) {
-						t.Errorf("%s: %d PDP calls, unjudged %v, want 0 and [%s/no_org]", slug, n, rec.unjudgedSnapshot(), row.pattern)
+					if calls := pdp.calls(); len(calls) != 1 || calls[0].Org != ownOrg || len(rec.unjudgedSnapshot()) != 0 {
+						t.Errorf("%s: PDP saw %+v, unjudged %v, want one question on %s and no unjudged count", slug, calls,
+							rec.unjudgedSnapshot(), ownOrg)
 					}
 				}
 			})

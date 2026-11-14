@@ -168,6 +168,32 @@ func TestACellThatIsOffAsksNothingAndKeepsTheLegacyAnswer(t *testing.T) {
 	}
 }
 
+// CHAOS-13596 F-5: after the fallback returns are gone, the operator rollback still holds. A namespace that was ON and is
+// switched OFF serves the legacy answer, asks nothing and counts nothing, for every persona and for a non-UUID served
+// organization too; with it ON the same request is decided (the decision point is asked).
+func TestANamespaceSwitchedBackOffServesTheLegacyAnswer(t *testing.T) {
+	for _, cell := range enforceCells {
+		for _, persona := range []persona{personaAdmin, personaMember, personaSuperuser} {
+			base := enforceRequest(enforceHandler(t, personaStore(persona), userClaims(nil), nil), cell.method, cell.path)
+			on := newTestPDP(t, allowAll)
+			enforceRequest(enforceHandler(t, personaStore(persona), userClaims(nil), newEnforcerFor(t, on.client(t), onFor(cell.namespace))), cell.method, cell.path)
+			if len(on.calls()) == 0 {
+				t.Fatalf("%s/%s: the cell ON asked nothing", cell.namespace, persona.role)
+			}
+			rec := recordEnforce(t)
+			off := newTestPDP(t, allowAll)
+			got := enforceRequest(enforceHandler(t, personaStore(persona), userClaims(nil), newEnforcerFor(t, off.client(t), authzenforce.Switch{})), cell.method, cell.path)
+			if got.status != base.status || got.body != base.body {
+				t.Fatalf("%s/%s switched off: %d %q, want the legacy %d %q", cell.namespace, persona.role, got.status, got.body, base.status, base.body)
+			}
+			if n := len(off.calls()); n != 0 || len(rec.snapshot()) != 0 || len(rec.unjudgedSnapshot()) != 0 {
+				t.Fatalf("%s/%s switched off: %d PDP calls, outcomes %v, unjudged %v, want none", cell.namespace, persona.role, n,
+					rec.snapshot(), rec.unjudgedSnapshot())
+			}
+		}
+	}
+}
+
 func TestEnforcementDeniesOnAnyPDPFailure(t *testing.T) {
 	deciders := map[string]funcDecider{
 		"local deny": {func(context.Context, pep.Request) pep.Decision { return pep.Decision{} }},
@@ -627,8 +653,9 @@ func collectSum(t *testing.T, reader *sdkmetric.ManualReader, name, label string
 }
 
 // A delegated session's bearer with an organization gives the unjudged counter no reason: it is judged. Its closed
-// reason set is hs256, no_org, served_org, org_required, delegated_orgless (a delegated bearer with NO organization,
-// CHAOS-10872 S1) and impersonation (a live-row read; the live-row platform wrap is refused, not unjudged).
+// reason set is org_required, delegated_orgless (a delegated bearer with NO organization, CHAOS-10872 S1) and
+// impersonation (a live-row read; the live-row platform wrap is refused, not unjudged). hs256, no_org and served_org left
+// it with the fallback returns (CHAOS-13596).
 func TestTheUnjudgedCounterHasNoDelegatedReason(t *testing.T) {
 	recordEnforce(t)
 	reader := sdkmetric.NewManualReader()
@@ -645,7 +672,7 @@ func TestTheUnjudgedCounterHasNoDelegatedReason(t *testing.T) {
 	if !slices.Equal(reasons, []string{"impersonation", "org_required"}) {
 		t.Errorf("unjudged reasons %v, want [impersonation org_required] (no delegated point)", reasons)
 	}
-	if want := "by route row and reason: hs256, no_org, served_org, org_required, delegated_orgless, impersonation"; !strings.HasSuffix(description, want) {
+	if want := "by route row and reason: org_required, delegated_orgless, impersonation"; !strings.HasSuffix(description, want) {
 		t.Errorf("unjudged description %q, want it to end %q", description, want)
 	}
 }
@@ -737,7 +764,7 @@ func TestEnforcementCounterLabelSetsAreClosed(t *testing.T) {
 	reader := sdkmetric.NewManualReader()
 	meter := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)).Meter("enforce-test")
 	newEnforceDecisionAdder(meter)(context.Background(), "teams", "allow")
-	newEnforceUnjudgedAdder(meter)(context.Background(), "GET /api/v1/admin/teams", "hs256")
+	newEnforceUnjudgedAdder(meter)(context.Background(), "GET /api/v1/admin/teams", "impersonation")
 	var collected metricdata.ResourceMetrics
 	if err := reader.Collect(context.Background(), &collected); err != nil {
 		t.Fatal(err)
@@ -765,9 +792,8 @@ func TestEnforcementCounterLabelSetsAreClosed(t *testing.T) {
 	if got := keys["dev_health_authz_enforcement_unjudged_total"]; !slices.Equal(got, []string{"reason", "route"}) {
 		t.Fatalf("unjudged counter labels %v", got)
 	}
-	reasons := []string{enforceUnjudgedHS256, enforceUnjudgedNoOrg}
-	if !slices.Equal(reasons, []string{"hs256", "no_org"}) {
-		t.Fatalf("reasons %v, want hs256 and no_org", reasons)
+	if !slices.Equal(enforceUnjudgedReasons, []string{"org_required", "delegated_orgless", "impersonation"}) {
+		t.Fatalf("reasons %v, want org_required, delegated_orgless and impersonation", enforceUnjudgedReasons)
 	}
 }
 
@@ -1138,8 +1164,9 @@ func TestEveryMappedRowAcceptsOnlyUserTokenClasses(t *testing.T) {
 
 // CHAOS-10872 S3: a present bearer that is not a user access token (an HS256 token, a workload token, a push token: whatever the
 // routed verifier refuses, and an authenticator with no access check at all) is refused at authentication, before the enforcer is
-// asked anything: 401, no decision point question, no decision outcome and no unjudged count. So the unjudged reason hs256 cannot be
-// produced by a bearer that reaches the guard on an enforced row.
+// asked anything: 401, no decision point question, no decision outcome and no unjudged count. So no bearer that reaches the guard on
+// an enforced row is a non-user token; the enforcer's own refusal of one (TestANonUserTokenThatReachesTheEnforcerIsRefused) is a
+// guard only.
 func TestANonUserTokenIsRefusedAtAuthenticationBeforeTheEnforcerDecides(t *testing.T) {
 	const refusal = `{"detail":{"message":"Invalid or expired token"}}`
 	for _, tc := range []struct {

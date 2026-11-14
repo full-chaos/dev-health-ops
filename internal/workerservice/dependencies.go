@@ -2050,14 +2050,14 @@ func (dependencies *workerDependencies) logDependencyCheckFailure(ctx context.Co
 	if isTransientDialError(err) {
 		// A refused or reset dial repeats on every retry and its text names the
 		// dial address, so only the bounded cause is logged.
-		dependencies.logger.ErrorContext(ctx, "worker readiness dependency check failed",
+		dependencies.logger.Log(ctx, health.DependencyRefusalLevel(ctx), "worker readiness dependency check failed",
 			"error_category", "dependency_unavailable",
 			"check", check,
 			"cause", health.CauseUnreachable,
 		)
 		return
 	}
-	dependencies.logger.ErrorContext(ctx, "worker readiness dependency check failed",
+	dependencies.logger.Log(ctx, health.DependencyRefusalLevel(ctx), "worker readiness dependency check failed",
 		"error_category", "dependency_unavailable",
 		"check", check,
 		"error", err.Error(),

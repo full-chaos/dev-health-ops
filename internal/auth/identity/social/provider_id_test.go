@@ -13,7 +13,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 )
 
-const invalidUserIDBody = `{"detail":{"message":"The provider returned an invalid user id"}}`
+const invalidUserIDBody = `{"detail":{"message":"The provider returned an invalid user id","reason":"malformed"}}`
 
 // idCountingStore panics on any store call but the two sign-in lookups, and counts those: a refused id reaches no
 // lookup and no write.

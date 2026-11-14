@@ -67,7 +67,7 @@ func TestSocialLoginNeverLinksAnAccountByEmail(t *testing.T) {
 		if strings.Contains(body, "access_token") || strings.Contains(body, "refresh_token") {
 			t.Errorf("%s: the refusal carries a token: %s", tc.name, body)
 		}
-		if body != `{"detail":{"message":"This sign-in could not be completed. Contact your administrator if this continues."}}` || strings.Contains(body, "existing_provider") {
+		if body != `{"detail":{"message":"This sign-in could not be completed. Contact your administrator if this continues.","reason":"identity_conflict"}}` || strings.Contains(body, "existing_provider") {
 			t.Errorf("%s: body %s, want the one answer that names no sign-in method", tc.name, body)
 		}
 		if provider, id := providerID(tc.email); provider != tc.wantProvider || id != tc.wantID {

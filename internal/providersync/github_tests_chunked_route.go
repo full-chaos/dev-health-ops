@@ -36,14 +36,20 @@ func (doer githubTestsChunkCountingDoer) Do(request *http.Request) (*http.Respon
 	return doer.delegate.Do(request)
 }
 
-// githubTestsMaxJobsPerRun bounds the items committed for ONE run: jobs, and
-// separately the suites+cases+coverage rows parsed from its artifacts.
-//
-// For jobs it is a hard bound. For report rows it is a SOFT bound of
-// max(cap, one artifact): rows are only committed in whole-artifact units, so
-// a single artifact larger than the cap is kept intact rather than split,
-// which would separate a suite from its cases (CHAOS-4142, codex round 1).
+// githubTestsMaxJobsPerRun bounds the jobs committed for ONE run (a hard bound). It is not the report-row bound: that is
+// githubTestsMaxReportRowsPerRun (CHAOS-13794; before it, the same 500 also capped the report rows and dropped whole artifacts).
 const githubTestsMaxJobsPerRun = 500
+
+// githubTestsMaxReportRowsPerRun bounds the suites+cases+coverage rows admitted for ONE run, and
+// githubTestsMaxReportPayloadBytesPerDestination the JSON bytes of any one destination's rows (CHAOS-13794). They sit under the
+// effect contract that one run's rows go through as ONE batch per destination before the split into chunks (maxEffectRows,
+// maxEffectPayloadBytes): a run over either is a failing unit, not a truncated one, so the bound is the contract ceiling, not a
+// guess. Sized from prod: the largest run is 71,896 rows (7b9583ee), the web run with vitest is about 17,300. The payload bound
+// keeps the same 9/10 headroom as the blame route.
+const (
+	githubTestsMaxReportRowsPerRun                 = maxEffectRows
+	githubTestsMaxReportPayloadBytesPerDestination = 57 << 20
+)
 
 // githubTestsPerRunPerPage is the per_page this route asks for on its per-run
 // collections. It is a named constant rather than a literal because the
@@ -1539,6 +1545,12 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 							githubTestsPerRunPageBudgetCause, pipeline.RunID, len(artifactItems),
 						)
 					}
+					githubTestsSortArtifactsForAdmission(artifactItems)
+					// The run's report rows are admitted whole, smallest artifact first (CHAOS-13794): an artifact that does not fit is
+					// skipped whole with a marker and the walk goes on, so the order GitHub lists the artifacts in never decides which
+					// one survives. per_run_cap is recorded once per run, a marker once per skipped artifact.
+					reportRowsTruncated := false
+					var reportBudget githubTestsReportBudget
 					for _, artifact := range artifactItems {
 						if artifact.Expired {
 							continue
@@ -1791,40 +1803,37 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 								"repository", cursor.Repo, logging.ProviderIDAttr("run", pipeline.RunID), "count", rows.DuplicateSuites,
 							)
 						}
-						// Bound the run's committed report rows WITHOUT splitting
-						// an artifact. Rows are checked for fit BEFORE they are
-						// appended, so the aggregate cannot creep past the cap
-						// one artifact at a time; a suite is never separated
-						// from its cases, because incoherent rows are wrong
-						// data rather than partial data.
-						//
-						// The bound is therefore max(cap, first artifact's rows)
-						// and not the cap flat: an artifact that alone exceeds
-						// the cap is still kept, because committing ZERO rows
-						// for a run that has reports is a worse outcome than
-						// overshooting once. See githubTestsMaxJobsPerRun.
-						committed := len(suites) + len(cases) + len(coverage)
+						// Admit the artifact whole or skip it whole: a suite is never separated from its cases. The payload
+						// size is json.Marshal of each row, the exact bytes BuildEffectBatch counts, so it is never an under-estimate.
+						committed := reportBudget.rows
 						incoming := len(rows.Suites) + len(rows.Cases) + len(rows.Coverage)
-						if committed > 0 && committed+incoming > githubTestsMaxJobsPerRun {
-							cursor = recordGitHubTestsPerRunTruncation(
-								cursor, client, claim, githubTestsRunReportsComponent,
-								githubTestsPerRunCapCause, pipeline.RunID, committed,
+						incomingSuiteBytes, suiteSizeErr := githubTestsRowsJSONBytes(rows.Suites)
+						incomingCaseBytes, caseSizeErr := githubTestsRowsJSONBytes(rows.Cases)
+						incomingCoverageBytes, coverageSizeErr := githubTestsRowsJSONBytes(rows.Coverage)
+						if sizeErr := errors.Join(suiteSizeErr, caseSizeErr, coverageSizeErr); sizeErr != nil {
+							return fmt.Errorf("%w: sizing report rows: %v", ErrGitHubTestsIncomplete, sizeErr)
+						}
+						if !reportBudget.fits(incoming, incomingSuiteBytes, incomingCaseBytes, incomingCoverageBytes) {
+							if !reportRowsTruncated {
+								reportRowsTruncated = true
+								cursor = recordGitHubTestsPerRunTruncation(
+									cursor, client, claim, githubTestsRunReportsComponent,
+									githubTestsPerRunCapCause, pipeline.RunID, committed,
+								)
+							}
+							cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow, cursor.SkippedArtifactCauseOverflow, cursor.SkippedArtifactCauseCount = appendGitHubTestsSkippedArtifact(
+								cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow, cursor.SkippedArtifactCauseOverflow, cursor.SkippedArtifactCauseCount,
+								GitHubTestsSkippedArtifact{
+									RunID: pipeline.RunID, ArtifactID: string(artifact.ID), Name: artifact.Name,
+									Cause: githubTestsPerRunCapCause,
+								},
 							)
-							break
+							continue
 						}
 						suites = append(suites, rows.Suites...)
 						cases = append(cases, rows.Cases...)
 						coverage = append(coverage, rows.Coverage...)
-						// Reachable only when the FIRST artifact alone exceeds
-						// the cap: it is kept whole, and the run stops here.
-						if len(suites)+len(cases)+len(coverage) > githubTestsMaxJobsPerRun {
-							cursor = recordGitHubTestsPerRunTruncation(
-								cursor, client, claim, githubTestsRunReportsComponent,
-								githubTestsPerRunCapCause, pipeline.RunID,
-								len(suites)+len(cases)+len(coverage),
-							)
-							break
-						}
+						reportBudget.admit(incoming, incomingSuiteBytes, incomingCaseBytes, incomingCoverageBytes)
 					}
 				}
 				cursor.Suites += len(suites)

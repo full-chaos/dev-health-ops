@@ -39,7 +39,7 @@ generate_auth_token() {
       echo "ERROR: dho admin users create failed: ${created}" >&2
       return 1
     }
-    user_id="$(sed -n '/^Created user: .* (id: \([0-9a-fA-F-]*\))$/{s//\1/p;q}' <<<"${created}")"
+    user_id="$(sed -n '/^Created user: .* (id: \([0-9a-fA-F-]*\))$/{s//\1/p;q;}' <<<"${created}")"
     if [ -z "${user_id}" ]; then
       echo "ERROR: could not read the user id from: ${created}" >&2
       return 1
@@ -89,7 +89,7 @@ generate_platform_admin_token() {
       echo "ERROR: dho admin users create --superuser failed: ${created}" >&2
       return 1
     }
-    user_id="$(sed -n '/^Created user: .* (id: \([0-9a-fA-F-]*\))$/{s//\1/p;q}' <<<"${created}")"
+    user_id="$(sed -n '/^Created user: .* (id: \([0-9a-fA-F-]*\))$/{s//\1/p;q;}' <<<"${created}")"
   fi
   case "${user_id}" in
     *[!0-9a-fA-F-]* | "")

@@ -20,7 +20,7 @@ manifest_answer() {
   hdrs="$(curl -sS -I --max-time 30 -H "Authorization: Bearer ${token}" -H "Accept: ${accept}" \
     "https://ghcr.io/v2/${repo}/manifests/${reference}" 2>/dev/null | tr -d '\r')" || hdrs=""
   code="$(printf '%s\n' "${hdrs}" | sed -n '1s/^HTTP\/[0-9.]* \([0-9][0-9]*\).*/\1/p')"
-  dig="$(sed -n '/^[Dd]ocker-[Cc]ontent-[Dd]igest:[[:space:]]*/{s///p;q}' <<<"${hdrs}")"
+  dig="$(sed -n '/^[Dd]ocker-[Cc]ontent-[Dd]igest:[[:space:]]*/{s///p;q;}' <<<"${hdrs}")"
   printf '%s %s\n' "${code:-000}" "${dig:--}"
 }
 

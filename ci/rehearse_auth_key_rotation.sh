@@ -548,7 +548,7 @@ scenario_compromise() {
   fi
   check s2-compromise-applied eq "${KRC}" 0
   rec_line "decision_to_apply_s=$((t_apply - t0))"
-  rec_line "$(sed -n '/sessions revoked/{p;q}' <<<"${KOUT}")"
+  rec_line "$(sed -n '/sessions revoked/{p;q;}' <<<"${KOUT}")"
   check s2-sessions-revoked-at-least-one sessions_revoked_ge_1
   check "s2-${old}-compromised" eq "$(key_state "${old}")" compromised
   check "s2-${new}-active" eq "$(key_state "${new}")" active

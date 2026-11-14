@@ -184,7 +184,7 @@ type bodyKey struct{}
 func (h handlers) decodeFirst(guard *policy.Guard, next http.Handler) http.Handler {
 	guarded := guard.Wrap(policy.AdminOrg, next)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, outcome, failure, err := pybody.Read(r)
+		body, outcome, failures, err := pybody.ReadChecked(r)
 		if err != nil {
 			var tooLarge *http.MaxBytesError
 			if errors.As(err, &tooLarge) {
@@ -196,7 +196,7 @@ func (h handlers) decodeFirst(guard *policy.Guard, next http.Handler) http.Handl
 		}
 		switch outcome {
 		case pybody.DecodeFailed:
-			policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail([]pybody.Error{*failure}), nil)
+			policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(failures), nil)
 			return
 		case pybody.ParseFailed:
 			policy.WriteDetail(w, http.StatusBadRequest, "There was an error parsing the body", nil)

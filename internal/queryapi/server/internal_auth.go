@@ -240,7 +240,7 @@ func checkEdgeCarrier(r *http.Request, edgeAuth *policy.Authenticator, token str
 			reason = "edge_store_unavailable"
 		}
 		log.Printf("query-api: internal request refused: reason=%s carrier=edge path=%s request_id=%s",
-			storeFailureReason(reason, err), r.URL.Path, logSafeRequestID(envelopeRequestID(r)))
+			storeFailureReason(reason, err), logSafeRequestID(r.URL.Path), logSafeRequestID(envelopeRequestID(r)))
 		return authctx.Claims{}, edgeUnavailable
 	}
 

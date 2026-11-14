@@ -19,8 +19,9 @@ import (
 // chain and the serial package first, then the rest under the highest modelled wall. A part weighs what its test rows give it
 // (CHAOS-13668, ci/go_test_split_weights.tsv); the model reads those derived weights as "<key>#<part>" entries of its weights map.
 
-// plannedWallCap: the highest modelled wall a test shard may plan, under check_go.sh's 600 s warn line with a margin.
-const plannedWallCap = 540
+// plannedWallCap: the highest modelled wall a test shard may plan. The weights are the larger of a warm and a cold (test-result cache
+// missed) value (CHAOS-13730), so the model is a cold leg's wall: under ~800 s, which keeps a cold leg under check_go.sh's 900 s cap.
+const plannedWallCap = 700
 
 type planItem struct {
 	key         string

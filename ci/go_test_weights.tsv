@@ -1,92 +1,95 @@
-# Measured wall seconds of one package under `go test` in the go-quality test leg (CHAOS-10355), the weight ci/go_race_shard.awk balances the test shards by
-# (`check_go.sh ci-leg test K N`). Re-measured at 10 test legs (CHAOS-13622): MEDIAN (rounded to whole seconds) of the uncached `ok <pkg> <n>s` lines of the test legs of the 5 successful
-# full-plan go-quality push runs on main since the 10-leg plan (43366218676, 43369751192, 43376042584, 43377857475, 43379257796; up to 5 values per package). A split package's
-# (ci/go_test_splits.tsv) value of one run is the sum of its parts' lines: the weight of the whole package.
-# Rows: every package of median >= 20 s, and every package that already had a row (a row of a package with no uncached line in those runs keeps its earlier value), among them the
-# packages the unweighted-slow guard flagged on a starved shard (internal/auth/identity/saml, internal/cigates/bigboyrender, internal/auth/identity; CHAOS-13422). A package with no row weighs 1.
+# Wall seconds of one package under `go test` in the go-quality test leg (CHAOS-10355), the weight ci/go_race_shard.awk balances the test shards by
+# (`check_go.sh ci-leg test K N`). A row is the LARGER of the warm and the cold value (CHAOS-13730), so the plan fits both kinds of run:
+# - warm (CHAOS-13622): MEDIAN (rounded to whole seconds) of the uncached `ok <pkg> <n>s` lines of the test legs of the 5 successful full-plan
+#   go-quality push runs on main since the 10-leg plan (43366218676, 43369751192, 43376042584, 43377857475, 43379257796; up to 5 values per package);
+# - cold: the `ok` line of the test legs of go-quality run 6221 (a go.sum change: the test-result cache missed; the larger of the two attempts of leg 1).
+# A split package's (ci/go_test_splits.tsv) value of one run is the sum of its parts' lines: the weight of the whole package.
+# Rows: every package of warm median or cold value >= 20 s, and every package that already had a row (a row of a package with no uncached line in those
+# runs keeps its earlier value), among them the packages the unweighted-slow guard flagged on a starved shard (internal/auth/identity/saml,
+# internal/cigates/bigboyrender, internal/auth/identity; CHAOS-13422). A package with no row weighs 1.
 # No part rows (CHAOS-13668): the test-leg plan derives a split package's part weights from its test rows in ci/go_test_split_weights.tsv; a <key>#<part> row is refused.
 # The weights only need to be roughly right: a wrong one costs balance, never coverage (the shards always partition `go list ./...`). Key = import path relative to the module root.
 # Sorted (LC_ALL=C), no duplicates; internal/cigates/testshard checks each row names a real package.
-cmd/dho	51
-cmd/gqlgen-guard	33
-deploy/helm/dev-health	424
+cmd/dho	106
+cmd/gqlgen-guard	40
+deploy/helm/dev-health	696
 internal/api/credentials	31
-internal/api/policy	47
+internal/api/policy	82
 internal/api/syncadmin	59
 internal/api/teamsidentity	57
-internal/apiservice	41
+internal/apiservice	52
 internal/apiservice/admin	29
-internal/atlassianteams	21
-internal/audit	16
-internal/auth/authapi	42
-internal/auth/authruntime	90
-internal/auth/contracts	54
-internal/auth/identity	12
-internal/auth/identity/local	19
+internal/atlassianteams	25
+internal/audit	25
+internal/auth/authapi	70
+internal/auth/authruntime	107
+internal/auth/contracts	78
+internal/auth/identity	50
+internal/auth/identity/local	26
 internal/auth/identity/saml	19
-internal/auth/passwordpolicy	26
+internal/auth/passwordpolicy	55
 internal/auth/platformrole	25
 internal/auth/writerinventory	79
 internal/cigates/abstime	40
-internal/cigates/affected	365
-internal/cigates/affectedmatrix	69
-internal/cigates/affectedmodule	60
-internal/cigates/affectedreject	169
-internal/cigates/bigboy	46
-internal/cigates/bigboyrender	10
-internal/cigates/chartgates	264
+internal/cigates/affected	404
+internal/cigates/affectedmatrix	124
+internal/cigates/affectedmodule	68
+internal/cigates/affectedreject	365
+internal/cigates/bigboy	154
+internal/cigates/bigboyrender	20
+internal/cigates/chartgates	627
 internal/cigates/checkgo	519
 internal/cigates/checkgoshards	130
-internal/cigates/docs	75
+internal/cigates/docs	142
 internal/cigates/docstools	66
-internal/cigates/emitscan	20
-internal/cigates/integrationshards	568
-internal/cigates/outboundtransport	28
+internal/cigates/emitscan	24
+internal/cigates/integrationshards	639
+internal/cigates/outboundtransport	130
 internal/cigates/proofteardown	35
-internal/cigates/racescope	31
+internal/cigates/racescope	35
 internal/cigates/raceunweighted	77
 internal/cigates/releasetag	18
 internal/cigates/scripts	559
 internal/cigates/sharedserver	31
-internal/cigates/splitshards	163
+internal/cigates/splitshards	423
 internal/cigates/suitecatalog	52
-internal/cigates/testshard	443
-internal/cigates/weightsfiles	86
+internal/cigates/testshard	595
+internal/cigates/weightsfiles	137
 internal/cigates/workflowpaths	28
-internal/cigates/workflows	85
-internal/cli	13
+internal/cigates/workflows	91
+internal/cli	89
 internal/fixturescli	16
-internal/goapicli/restprove	16
-internal/goapiproof	33
+internal/goapicli/restprove	17
+internal/goapiproof	116
 internal/gqlgenguard	281
-internal/httpguard	36
-internal/joboutbox	19
-internal/jobruntime	10
-internal/jobs	11
+internal/httpguard	120
+internal/joboutbox	31
+internal/jobruntime	13
+internal/jobs	13
 internal/jobs/metrics/daily	31
-internal/jobs/metrics/prrework	7
+internal/jobs/metrics/prrework	10
 internal/jobs/metrics/remaining	29
-internal/jobs/metrics/remaining/stepcause	1
-internal/jobs/workgraph/units	45
+internal/jobs/metrics/remaining/stepcause	3
+internal/jobs/workgraph/units	90
 internal/loadharness	22
-internal/platform/logging	25
+internal/platform/logging	43
 internal/platform/otlpmetrics	36
 internal/platform/tracing	20
-internal/providerfoundation	13
-internal/providersync	84
-internal/pythonparity	25
+internal/providerfoundation	16
+internal/providersync	85
+internal/pythonparity	28
 internal/pythonparity/emailvalidator	35
-internal/pythonparity/pyidna	29
+internal/pythonparity/pyidna	65
 internal/queryapi/investmentexplain	19
-internal/queryapi/server	45
-internal/queryapiservice	4
-internal/storage/clickhouse	5
-internal/storage/postgres	35
-internal/storedversion	32
+internal/queryapi/server	52
+internal/queryapiservice	7
+internal/storage/clickhouse	50
+internal/storage/postgres	150
+internal/storedversion	39
 internal/streamhandlers	16
 internal/streamrunnerservice	26
-internal/synccli	67
-internal/syncdispatchruntime	27
+internal/synccli	69
+internal/syncdispatchruntime	31
 internal/testsupport/gitmaintcensus	9
 internal/testsupport/goldenscan/treegate	10
 internal/testsupport/venuechanged	44

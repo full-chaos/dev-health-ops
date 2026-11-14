@@ -3,14 +3,12 @@ package syncadmin
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
 	schedsync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
-	"github.com/full-chaos/dev-health-ops/internal/workitemcontract"
 )
 
 // runUnit is one sync_run_units row with its source row (the
@@ -261,60 +259,3 @@ WHERE org_id = $1 AND integration_id = ANY($2) AND dataset_key = $3`, orgID, int
 	}
 	return out, rows.Err()
 }
-
-// workItemsDatasetReader is the dataset read of the freshness view. It is a
-// separate interface so the reader interface's line numbers, which the
-// endpoint inventory cites, do not move.
-type workItemsDatasetReader interface {
-	workItemsDatasetRows(ctx context.Context, orgID string, integrationIDs []uuid.UUID) ([]workItemsDatasetRow, error)
-}
-
-// freshnessPair is one (source uuid, dataset) of build_dataset_freshness.
-type freshnessPair struct {
-	sourceID, dataset, watermarkKey, sourceName, costClass, provider string
-	integrationID                                                    uuid.UUID
-	fullQuery                                                        bool
-}
-
-// markFullQueryPairs sets fullQuery on every work-items family pair whose
-// integration's canonical work-items dataset row makes the family one
-// unbounded window, by the function the planner decides with
-// (schedsync.DatasetFullQuery), so a source the planner plans as one window is
-// not reported as catching up.
-func (h *handlers) markFullQueryPairs(r *http.Request, org string, pairs []freshnessPair) error {
-	var ids []uuid.UUID
-	seen := map[uuid.UUID]bool{}
-	for _, pair := range pairs {
-		if workitemcontract.IsFamilyDataset(pair.dataset) && !seen[pair.integrationID] {
-			seen[pair.integrationID] = true
-			ids = append(ids, pair.integrationID)
-		}
-	}
-	if len(ids) == 0 {
-		return nil
-	}
-	datasets, ok := h.store.(workItemsDatasetReader)
-	if !ok {
-		return fmt.Errorf("the store cannot read work-items dataset rows")
-	}
-	rows, err := datasets.workItemsDatasetRows(r.Context(), org, ids)
-	if err != nil {
-		return err
-	}
-	byIntegration := make(map[uuid.UUID]workItemsDatasetRow, len(rows))
-	for _, row := range rows {
-		byIntegration[row.IntegrationID] = row
-	}
-	for index := range pairs {
-		pair := &pairs[index]
-		if !workitemcontract.IsFamilyDataset(pair.dataset) {
-			continue
-		}
-		if row, ok := byIntegration[pair.integrationID]; ok {
-			pair.fullQuery = schedsync.DatasetFullQuery(pair.provider, workItemsDatasetKey, row.Enabled, row.Options)
-		}
-	}
-	return nil
-}
-
-var _ workItemsDatasetReader = store{}

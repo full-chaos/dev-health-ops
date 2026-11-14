@@ -123,75 +123,38 @@ func TestGitHubTestsRunReportRowsAdmitEveryArtifactThatFits(t *testing.T) {
 	}
 }
 
-// (2) The listing order does not decide the survivor: the same artifacts, listed two ways, admit the same set.
-func TestGitHubTestsRunReportRowsAdmissionDoesNotDependOnListingOrder(t *testing.T) {
-	big := rowsArtifact{id: "101", size: 3000, rows: 60_000}
-	small := rowsArtifact{id: "102", size: 1000, rows: 60_000}
-	middle := rowsArtifact{id: "103", size: 2000, rows: 30_000}
-	first, _, _ := rowsWalk(t, 1, big, small, middle)
-	second, _, _ := rowsWalk(t, 1, middle, small, big)
-	// Smallest declared size first: small (60,000) and middle (30,000) fit, big would reach 150,000.
-	for name, walk := range map[string]githubTestsWalk{"big,small,middle": first, "middle,small,big": second} {
-		if got := committedReportRows(walk); got != 90_000 {
-			t.Fatalf("%s: committed %d rows, want 90,000", name, got)
-		}
-		if ids := skippedArtifactIDs(walk); len(ids) != 1 || ids[0] != "101" {
-			t.Fatalf("%s: skipped %v, want only the largest declared artifact 101", name, ids)
-		}
+// The route honours the plan end to end, in ONE walk of about 100,000 rows (the bound is fixed, so a walk that reaches it costs
+// that many parsed rows; the exact bound and the order rules are checked at plan level in github_tests_run_report_plan_test.go).
+// Listed largest declared size first: artifact 1 (99,980 rows, size 10) is admitted, artifacts 3, 4 and 5 (22 rows each) are
+// skipped whole, and artifact 6 (4 rows, size 50) after them is admitted: no break at the overflow. The run records ONE
+// per_run_cap and each skipped artifact has ONE marker.
+func TestGitHubTestsRunReportRowsRouteHonoursThePlan(t *testing.T) {
+	walk, doer, rendered := rowsWalk(t, 1,
+		rowsArtifact{id: "6", size: 50, rows: 4}, rowsArtifact{id: "5", size: 40, rows: 22}, rowsArtifact{id: "4", size: 30, rows: 22},
+		rowsArtifact{id: "3", size: 20, rows: 22}, rowsArtifact{id: "1", size: 10, rows: 99_980})
+	if got := committedReportRows(walk); got != 99_984 {
+		t.Fatalf("committed %d rows, want 99,984 (artifacts 1 and 6)", got)
 	}
-}
-
-// (3) An artifact that alone exceeds the bound is skipped whole, and the artifacts after it are still admitted.
-func TestGitHubTestsRunReportRowsSkipAnArtifactThatAloneExceedsTheBound(t *testing.T) {
-	walk, doer, _ := rowsWalk(t, 1, rowsArtifact{id: "1", size: 9000, rows: githubTestsMaxReportRowsPerRun + 2}, rowsArtifact{id: "2", size: 10, rows: 400}, rowsArtifact{id: "3", size: 20, rows: 400})
-	if got := committedReportRows(walk); got != 800 {
-		t.Fatalf("committed %d rows, want the two small artifacts (800)", got)
-	}
-	if ids := skippedArtifactIDs(walk); len(ids) != 1 || ids[0] != "1" {
-		t.Fatalf("skipped %v, want only the oversized artifact 1", ids)
-	}
-	if len(doer.downloaded) != 3 {
-		t.Fatalf("downloaded %v, want all 3", doer.downloaded)
-	}
-	assertFinalizedAndAdvanced(t, walk)
-}
-
-// (4) + K4: three artifacts skipped in one run leave ONE per_run_cap record (count and metric) and ONE marker per skipped artifact.
-func TestGitHubTestsRunReportRowsRecordOnceForTheRunAndOneMarkerPerSkippedArtifact(t *testing.T) {
-	walk, _, rendered := rowsWalk(t, 1,
-		rowsArtifact{id: "1", size: 10, rows: 80_000}, rowsArtifact{id: "2", size: 20, rows: 60_000}, rowsArtifact{id: "3", size: 30, rows: 60_000}, rowsArtifact{id: "4", size: 40, rows: 60_000})
-	if got := committedReportRows(walk); got != 80_000 || got > githubTestsMaxReportRowsPerRun {
-		t.Fatalf("committed %d rows, want 80,000 and never above the bound", got)
-	}
-	observation := perRunObservation(t, walk, githubTestsRunReportsComponent)
-	if observation.Cause != githubTestsPerRunCapCause || observation.Count != 1 {
-		t.Fatalf("observation %+v, want per_run_cap count 1 for the run", observation)
-	}
-	if ids := skippedArtifactIDs(walk); strings.Join(ids, ",") != "2,3,4" {
-		t.Fatalf("skipped markers %v, want one each for 2, 3 and 4", ids)
+	if ids := skippedArtifactIDs(walk); strings.Join(ids, ",") != "3,4,5" {
+		t.Fatalf("skipped markers %v, want one each for 3, 4 and 5", ids)
 	}
 	for _, marker := range walk.cursor.SkippedArtifacts {
 		if marker.Cause != githubTestsPerRunCapCause || marker.RunID == "" || marker.Name == "" {
 			t.Fatalf("marker %+v lacks cause, run id or name", marker)
 		}
 	}
+	if len(doer.downloaded) != 5 {
+		t.Fatalf("downloaded %v, want all 5: no break at the overflow", doer.downloaded)
+	}
+	observation := perRunObservation(t, walk, githubTestsRunReportsComponent)
+	if observation.Cause != githubTestsPerRunCapCause || observation.Count != 1 {
+		t.Fatalf("observation %+v, want per_run_cap count 1 for the run", observation)
+	}
 	want := `dev_health_provider_per_run_truncation_total{provider="github",dataset="cicd",component="run_reports",cause="per_run_cap"} 1`
 	if !strings.Contains(rendered, want) {
 		t.Fatalf("metric not exactly once for the run; want %q in:\n%s", want, rendered)
 	}
 	assertFinalizedAndAdvanced(t, walk)
-}
-
-// (5) The bound is exact: 100,000 rows are admitted, 100,002 are not.
-func TestGitHubTestsRunReportRowsBoundaryIsExact(t *testing.T) {
-	atBound, _, _ := rowsWalk(t, 1, rowsArtifact{id: "1", size: 10, rows: 60_000}, rowsArtifact{id: "2", size: 20, rows: 40_000})
-	if got := committedReportRows(atBound); got != githubTestsMaxReportRowsPerRun || len(atBound.cursor.SkippedArtifacts) != 0 {
-		t.Fatalf("at the bound: committed %d, markers %d, want %d and none", got, len(atBound.cursor.SkippedArtifacts), githubTestsMaxReportRowsPerRun)
-	}
-	over, _, _ := rowsWalk(t, 1, rowsArtifact{id: "1", size: 10, rows: 60_000}, rowsArtifact{id: "2", size: 20, rows: 40_002})
-	if got := committedReportRows(over); got != 60_000 || len(over.cursor.SkippedArtifacts) != 1 {
-		t.Fatalf("one pair over the bound: committed %d, markers %d, want 60,000 and one skip", got, len(over.cursor.SkippedArtifacts))
-	}
 }
 
 // (6) The payload bound is judged on json bytes per destination, below the 64 MiB effect ceiling.
@@ -252,31 +215,5 @@ func TestGitHubTestsReportPayloadEstimateIsAnUpperBound(t *testing.T) {
 	var bound *EffectBoundExceededError
 	if _, err := testOpsEffects(nil, nil, nil, nil, make([]testCaseResultRow, maxEffectRows+1), nil); !errors.As(err, &bound) {
 		t.Fatalf("one row over the effect ceiling gave %v, want EffectBoundExceededError", err)
-	}
-}
-
-// (7) The budget is per run: two runs of one unit each admit what fits.
-func TestGitHubTestsRunReportRowsBudgetsAreIndependentPerRun(t *testing.T) {
-	walk, _, rendered := rowsWalk(t, 2, rowsArtifact{id: "1", size: 10, rows: 60_000}, rowsArtifact{id: "2", size: 20, rows: 60_000})
-	if got := committedReportRows(walk); got != 120_000 {
-		t.Fatalf("committed %d rows over two runs, want 60,000 each (120,000)", got)
-	}
-	want := `component="run_reports",cause="per_run_cap"} 2`
-	if !strings.Contains(rendered, want) {
-		t.Fatalf("want the metric once per affected run (%q) in:\n%s", want, rendered)
-	}
-}
-
-// (8) After an overflow the walk goes on: a later artifact that fits is admitted.
-func TestGitHubTestsRunReportRowsWalkContinuesAfterAnOverflow(t *testing.T) {
-	walk, doer, _ := rowsWalk(t, 1, rowsArtifact{id: "1", size: 10, rows: 99_000}, rowsArtifact{id: "2", size: 20, rows: 2_000}, rowsArtifact{id: "3", size: 30, rows: 500})
-	if got := committedReportRows(walk); got != 99_500 {
-		t.Fatalf("committed %d rows, want 99,500 (the first and the third)", got)
-	}
-	if ids := skippedArtifactIDs(walk); len(ids) != 1 || ids[0] != "2" {
-		t.Fatalf("skipped %v, want only artifact 2", ids)
-	}
-	if len(doer.downloaded) != 3 {
-		t.Fatalf("downloaded %v, want all 3: no break at the overflow", doer.downloaded)
 	}
 }

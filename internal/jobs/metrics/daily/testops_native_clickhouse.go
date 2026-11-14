@@ -586,13 +586,12 @@ func writeTestopsTestMetrics(
 		return 0, fmt.Errorf("prepare testops_test_metrics_daily batch: %w", err)
 	}
 	for _, metric := range metrics {
+		// A flake-unknown day carries 0 flake cases of 0 distinct cases: it adds
+		// nothing to the org series' sums (queryapi/analytics/timeseries.go), so the
+		// org value is the other repos' and is unavailable only when every repo's
+		// day is unknown. A NULL pair would blank the whole org day instead.
+		// flake_rate itself is a plain Float64 column and keeps its 0.
 		flakeCases, distinctCases := uint32PtrOf(metric.FlakeCases), uint32PtrOf(metric.DistinctCases)
-		if metric.FlakeUnknown {
-			// The org series reads a NULL pair as an uncounted day (see
-			// queryapi/analytics/timeseries.go); flake_rate itself is a plain
-			// Float64 column and keeps its 0.
-			flakeCases, distinctCases = nil, nil
-		}
 		if err := batch.Append(
 			metric.RepoID, chDate(day),
 			// total_cases/passed_count/failed_count/skipped_count/

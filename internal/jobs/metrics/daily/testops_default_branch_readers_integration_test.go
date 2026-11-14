@@ -278,7 +278,7 @@ func TestTestopsFlakeIsUnknownWhenOnlyOffDefaultBranchRunsHaveCases(t *testing.T
 			t.Errorf("%s: FlakeUnknown=%v, want %v (flake_cases=%d distinct=%d)", name, got.FlakeUnknown, test.wantUnknown, got.FlakeCases, got.DistinctCases)
 		}
 	}
-	// The written row carries the unknown as a NULL count pair.
+	// The written row carries the unknown as a 0/0 count pair.
 	unknownRepo := repos["only pull-request case rows"].repo
 	metrics, err := computeTestopsTestMetricsWithoutTeams(ctx, conn, defaultBranchTestOrg, unknownRepo.id, w.historyStart, w.start, w.end)
 	if err != nil {
@@ -291,8 +291,8 @@ func TestTestopsFlakeIsUnknownWhenOnlyOffDefaultBranchRunsHaveCases(t *testing.T
 	if err := conn.QueryRow(ctx, `SELECT flake_cases, distinct_cases FROM testops_test_metrics_daily WHERE repo_id = ?`, unknownRepo.id).Scan(&flakeCases, &distinctCases); err != nil {
 		t.Fatal(err)
 	}
-	if flakeCases != nil || distinctCases != nil {
-		t.Errorf("written flake_cases/distinct_cases = %v/%v, want NULL/NULL for an unknown day", flakeCases, distinctCases)
+	if flakeCases == nil || distinctCases == nil || *flakeCases != 0 || *distinctCases != 0 {
+		t.Errorf("written flake_cases/distinct_cases = %v/%v, want 0/0 for an unknown day (a NULL pair blanks the org series)", flakeCases, distinctCases)
 	}
 }
 

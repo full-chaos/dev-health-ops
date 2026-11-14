@@ -28,7 +28,7 @@ _pull_attempt() {
     listed="$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "${src}/${repo}@${digest}" 2>&1)" || rc=$?
     if [ "${rc}" -ne 0 ]; then
       seen="inspect-failed"
-    elif printf '%s\n' "${listed}" | sed 's/.*@//' | grep -qxF "${digest}"; then
+    elif grep -qxF "${digest}" <<<"$(sed 's/.*@//' <<<"${listed}")"; then
       seen="${digest}"
     else
       seen="mismatch"
@@ -37,7 +37,7 @@ _pull_attempt() {
   fi
   printf 'base-image pull: source=%s try=%d/%d rc=%d elapsed=%ds digest=%s\n' \
     "${src}" "${try_n}" "${tries}" "${rc}" "$((SECONDS - start))" "${seen}"
-  if [ "${rc}" -ne 0 ] && printf '%s' "${out}" | grep -qiE 'toomanyrequests|rate limit'; then
+  if [ "${rc}" -ne 0 ] && grep -qiE 'toomanyrequests|rate limit' <<<"${out}"; then
     printf 'base-image pull: source=%s try=%d/%d rate-limited (anonymous pull refused)\n' "${src}" "${try_n}" "${tries}"
   fi
   return "${rc}"

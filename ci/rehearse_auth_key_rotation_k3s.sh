@@ -286,7 +286,7 @@ fwd() {
   K port-forward "svc/${SERVICE}" ":8095" >"${DIR}/evidence/forward.out" 2>&1 9>&- &
   PF_PID=$!
   for _ in $(seq 1 30); do
-    PF_PORT="$(sed -n 's/^Forwarding from 127\.0\.0\.1:\([0-9]*\) ->.*/\1/p' "${DIR}/evidence/forward.out" | head -n 1)"
+    PF_PORT="$(sed -n '/^Forwarding from 127\.0\.0\.1:\([0-9]*\) ->.*/{s//\1/p;q}' "${DIR}/evidence/forward.out")"
     [ -z "${PF_PORT}" ] || return 0
     sleep 1
   done

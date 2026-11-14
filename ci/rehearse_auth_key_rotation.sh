@@ -479,8 +479,8 @@ E="${EMAIL}" P="${PASSWORD}" post_json /api/v1/auth/register '{email:env.E,passw
 case "${P_CODE}" in 200 | 201 | 202) ;; *) die "register answered ${P_CODE}" ;; esac
 # auth.users is guarded (authschema 0006 audit_commit_guard): a write runs only in a transaction that names itself the
 # audit transaction first. One psql -c string is one transaction.
-psql_one "SELECT set_config('dev_health.audit_txid', pg_current_xact_id()::text, true) IS NOT NULL; UPDATE auth.users SET email_verified_at = clock_timestamp() WHERE email_lower = lower('${EMAIL}') RETURNING 1" | grep -qx 1 || die "could not verify the seeded user in auth.users"
-psql_one "UPDATE public.users SET is_verified = true WHERE email = '${EMAIL}' RETURNING 1" | grep -qx 1 || die "could not verify the seeded user in public.users"
+auth_verified="$(psql_one "SELECT set_config('dev_health.audit_txid', pg_current_xact_id()::text, true) IS NOT NULL; UPDATE auth.users SET email_verified_at = clock_timestamp() WHERE email_lower = lower('${EMAIL}') RETURNING 1")" && grep -qx 1 <<<"${auth_verified}" || die "could not verify the seeded user in auth.users"
+public_verified="$(psql_one "UPDATE public.users SET is_verified = true WHERE email = '${EMAIL}' RETURNING 1")" && grep -qx 1 <<<"${public_verified}" || die "could not verify the seeded user in public.users"
 
 # ---------- smoke ----------
 rec_open "${DIR}/records/10-smoke.txt" "smoke $(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -497,7 +497,8 @@ TOK_A1="${L_ACCESS}"
 RT_A1="${L_REFRESH}"
 check smoke-token-signed-by-a kid_is "${TOK_A1}" a
 check smoke-go-api-accepts-a me_accepts "${TOK_A1}"
-rec_line "jwks_cache_control=$(curl -sS -D - -o /dev/null --max-time 10 --cacert "${DIR}/tls/issuer.pem" --connect-to "${ISSUER_HOST}:8443:127.0.0.1:${ISSUER_HOST_PORT}" "${ISSUER_URL}/.well-known/jwks.json" | tr -d '\r' | grep -i '^cache-control:' | head -n 1)"
+jwks_cc_line="$(curl -sS -D - -o /dev/null --max-time 10 --cacert "${DIR}/tls/issuer.pem" --connect-to "${ISSUER_HOST}:8443:127.0.0.1:${ISSUER_HOST_PORT}" "${ISSUER_URL}/.well-known/jwks.json" | tr -d '\r' | grep -i '^cache-control:' || true)"; jwks_cc_line="${jwks_cc_line%%$'\n'*}"
+rec_line "jwks_cache_control=${jwks_cc_line}"
 
 # ---------- scenarios ----------
 # scenario_compromise OLD NEW OTHER_REFRESH EXPECT_SET MODE: OLD is the active key, NEW a pending key published for the floor.
@@ -547,7 +548,7 @@ scenario_compromise() {
   fi
   check s2-compromise-applied eq "${KRC}" 0
   rec_line "decision_to_apply_s=$((t_apply - t0))"
-  rec_line "$(grep -E 'sessions revoked' <<<"${KOUT}" | head -n 1)"
+  rec_line "$(sed -n '/sessions revoked/{p;q}' <<<"${KOUT}")"
   check s2-sessions-revoked-at-least-one sessions_revoked_ge_1
   check "s2-${old}-compromised" eq "$(key_state "${old}")" compromised
   check "s2-${new}-active" eq "$(key_state "${new}")" active

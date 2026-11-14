@@ -119,7 +119,7 @@ Run: go run ./cmd/dev-health-migration-matrix -render -root ."
   # were produced from, and it is the one a person cannot forge by editing a
   # line. Both are checked, for different halves of the page.
   local ops_sha
-  ops_sha="$(sed -n 's/.*"ops_sha"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "${RENDER_JSON}" | head -n1)"
+  ops_sha="$(sed -n '/.*"ops_sha"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/{s//\1/p;q}' "${RENDER_JSON}")"
   [ -n "${ops_sha}" ] || die "check_migration_matrix: ${RENDER_JSON} has no ops_sha.
 
 Re-verify, then commit:

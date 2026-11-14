@@ -611,7 +611,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/syncadmin.go:368 (missing; malformed uuid 404s at internal/api/syncadmin/syncadmin.go:359; body via writeConfigNotFound internal/api/syncadmin/syncadmin.go:188); internal/api/syncadmin/store.go:114 (configByID: WHERE org_id=$1 AND id=$2, called with orgID(r) at internal/api/syncadmin/syncadmin.go:362)); a caller without the admin role answers 403 (internal/api/policy/guard.go:222)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/syncadmin.go:368 (missing; malformed uuid 404s at internal/api/syncadmin/syncadmin.go:359; body via writeConfigNotFound internal/api/syncadmin/syncadmin.go:188); internal/api/syncadmin/store.go:125 (configByID: WHERE org_id=$1 AND id=$2, called with orgID(r) at internal/api/syncadmin/syncadmin.go:362)); a caller without the admin role answers 403 (internal/api/policy/guard.go:222)",
       "gaps": [
         "action: no catalog action covers sync configuration (this leaf does not extend the vocabulary)"
       ],
@@ -1333,7 +1333,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/backfill_detail.go:36; internal/api/syncadmin/store.go:461 (backfillJobByID WHERE id=$1 AND org_id=$2, called at internal/api/syncadmin/backfill_detail.go:30)); a caller without the admin role answers 403 (internal/api/policy/guard.go:222)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/backfill_detail.go:36; internal/api/syncadmin/store.go:462 (backfillJobByID WHERE id=$1 AND org_id=$2, called at internal/api/syncadmin/backfill_detail.go:30)); a caller without the admin role answers 403 (internal/api/policy/guard.go:222)",
       "gaps": [
         "action: no catalog action covers backfill job (this leaf does not extend the vocabulary)"
       ],
@@ -4315,7 +4315,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/syncadmin.go:368 (missing; malformed uuid 404s at internal/api/syncadmin/syncadmin.go:359; body via writeConfigNotFound internal/api/syncadmin/syncadmin.go:188); internal/api/syncadmin/store.go:114 (configByID: WHERE org_id=$1 AND id=$2, called with orgID(r) at internal/api/syncadmin/syncadmin.go:362)); a caller without the admin role answers 403 (internal/api/policy/guard.go:222)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/syncadmin.go:368 (missing; malformed uuid 404s at internal/api/syncadmin/syncadmin.go:359; body via writeConfigNotFound internal/api/syncadmin/syncadmin.go:188); internal/api/syncadmin/store.go:125 (configByID: WHERE org_id=$1 AND id=$2, called with orgID(r) at internal/api/syncadmin/syncadmin.go:362)); a caller without the admin role answers 403 (internal/api/policy/guard.go:222)",
       "gaps": [
         "action: no catalog action covers sync configuration (this leaf does not extend the vocabulary)"
       ],
@@ -4383,7 +4383,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/syncadmin.go:368 (missing; malformed uuid 404s at internal/api/syncadmin/syncadmin.go:359; body via writeConfigNotFound internal/api/syncadmin/syncadmin.go:188); internal/api/syncadmin/store.go:114 (configByID: WHERE org_id=$1 AND id=$2, called with orgID(r) at internal/api/syncadmin/syncadmin.go:362)); a caller without the admin role answers 403 (internal/api/policy/guard.go:222)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/syncadmin.go:368 (missing; malformed uuid 404s at internal/api/syncadmin/syncadmin.go:359; body via writeConfigNotFound internal/api/syncadmin/syncadmin.go:188); internal/api/syncadmin/store.go:125 (configByID: WHERE org_id=$1 AND id=$2, called with orgID(r) at internal/api/syncadmin/syncadmin.go:362)); a caller without the admin role answers 403 (internal/api/policy/guard.go:222)",
       "gaps": [
         "action: no catalog action covers sync configuration (this leaf does not extend the vocabulary)"
       ],
@@ -4451,7 +4451,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/syncadmin.go:368 (missing; malformed uuid 404s at internal/api/syncadmin/syncadmin.go:359; body via writeConfigNotFound internal/api/syncadmin/syncadmin.go:188); internal/api/syncadmin/store.go:114 (configByID: WHERE org_id=$1 AND id=$2, called with orgID(r) at internal/api/syncadmin/syncadmin.go:362)); a caller without the admin role answers 403 (internal/api/policy/guard.go:222)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/syncadmin.go:368 (missing; malformed uuid 404s at internal/api/syncadmin/syncadmin.go:359; body via writeConfigNotFound internal/api/syncadmin/syncadmin.go:188); internal/api/syncadmin/store.go:125 (configByID: WHERE org_id=$1 AND id=$2, called with orgID(r) at internal/api/syncadmin/syncadmin.go:362)); a caller without the admin role answers 403 (internal/api/policy/guard.go:222)",
       "gaps": [
         "action: no catalog action covers sync configuration (this leaf does not extend the vocabulary)"
       ],
@@ -4519,7 +4519,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/syncadmin.go:368 (missing; malformed uuid 404s at internal/api/syncadmin/syncadmin.go:359; body via writeConfigNotFound internal/api/syncadmin/syncadmin.go:188); internal/api/syncadmin/store.go:114 (configByID: WHERE org_id=$1 AND id=$2, called with orgID(r) at internal/api/syncadmin/syncadmin.go:362)); a caller without the admin role answers 403 (internal/api/policy/guard.go:222)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/syncadmin.go:368 (missing; malformed uuid 404s at internal/api/syncadmin/syncadmin.go:359; body via writeConfigNotFound internal/api/syncadmin/syncadmin.go:188); internal/api/syncadmin/store.go:125 (configByID: WHERE org_id=$1 AND id=$2, called with orgID(r) at internal/api/syncadmin/syncadmin.go:362)); a caller without the admin role answers 403 (internal/api/policy/guard.go:222)",
       "gaps": [
         "action: no catalog action covers sync configuration (this leaf does not extend the vocabulary)"
       ],
@@ -4587,7 +4587,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/runs.go:560 (malformed uuid 404 at internal/api/syncadmin/runs.go:551); internal/api/syncadmin/store.go:312 (syncRunByID WHERE id=$1 AND org_id=$2, called at internal/api/syncadmin/runs.go:554)); a caller without the admin role answers 403 (internal/api/policy/guard.go:222)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/runs.go:560 (malformed uuid 404 at internal/api/syncadmin/runs.go:551); internal/api/syncadmin/store.go:313 (syncRunByID WHERE id=$1 AND org_id=$2, called at internal/api/syncadmin/runs.go:554)); a caller without the admin role answers 403 (internal/api/policy/guard.go:222)",
       "gaps": [
         "action: no catalog action covers sync run (this leaf does not extend the vocabulary)"
       ],
@@ -4655,7 +4655,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/units.go:65 (malformed uuid 404 at internal/api/syncadmin/units.go:54); internal/api/syncadmin/store.go:312 (syncRunByID WHERE id=$1 AND org_id=$2, called at internal/api/syncadmin/units.go:59); units read store runUnits org=$2 (internal/api/syncadmin/units.go:68)); a caller without the admin role answers 403 (internal/api/policy/guard.go:222)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/units.go:68 (malformed uuid 404 at internal/api/syncadmin/units.go:57); internal/api/syncadmin/store.go:313 (syncRunByID WHERE id=$1 AND org_id=$2, called at internal/api/syncadmin/units.go:62); units read store runUnits org=$2 (internal/api/syncadmin/units.go:71)); a caller without the admin role answers 403 (internal/api/policy/guard.go:222)",
       "gaps": [
         "action: no catalog action covers sync run units (this leaf does not extend the vocabulary)"
       ],
@@ -12039,7 +12039,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/syncadmin.go:368 (missing; malformed uuid 404s at internal/api/syncadmin/syncadmin.go:359; body via writeConfigNotFound internal/api/syncadmin/syncadmin.go:188); internal/api/syncadmin/store.go:114 (configByID: WHERE org_id=$1 AND id=$2, called with orgID(r) at internal/api/syncadmin/syncadmin.go:362)); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:222)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/syncadmin.go:368 (missing; malformed uuid 404s at internal/api/syncadmin/syncadmin.go:359; body via writeConfigNotFound internal/api/syncadmin/syncadmin.go:188); internal/api/syncadmin/store.go:125 (configByID: WHERE org_id=$1 AND id=$2, called with orgID(r) at internal/api/syncadmin/syncadmin.go:362)); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:222)",
       "gaps": [
         "action: no catalog action covers sync configuration (this leaf does not extend the vocabulary)"
       ],
@@ -12107,7 +12107,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/syncadmin.go:368 (missing; malformed uuid 404s at internal/api/syncadmin/syncadmin.go:359; body via writeConfigNotFound internal/api/syncadmin/syncadmin.go:188); internal/api/syncadmin/store.go:114 (configByID: WHERE org_id=$1 AND id=$2, called with orgID(r) at internal/api/syncadmin/syncadmin.go:362)); a caller without the admin role answers 403 (internal/api/policy/guard.go:222)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/syncadmin.go:368 (missing; malformed uuid 404s at internal/api/syncadmin/syncadmin.go:359; body via writeConfigNotFound internal/api/syncadmin/syncadmin.go:188); internal/api/syncadmin/store.go:125 (configByID: WHERE org_id=$1 AND id=$2, called with orgID(r) at internal/api/syncadmin/syncadmin.go:362)); a caller without the admin role answers 403 (internal/api/policy/guard.go:222)",
       "gaps": [
         "action: no catalog action covers sync configuration (this leaf does not extend the vocabulary)"
       ],
@@ -15672,7 +15672,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/syncadmin.go:368 (missing; malformed uuid 404s at internal/api/syncadmin/syncadmin.go:359; body via writeConfigNotFound internal/api/syncadmin/syncadmin.go:188); internal/api/syncadmin/store.go:114 (configByID: WHERE org_id=$1 AND id=$2, called with orgID(r) at internal/api/syncadmin/syncadmin.go:362)); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:222)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/syncadmin.go:368 (missing; malformed uuid 404s at internal/api/syncadmin/syncadmin.go:359; body via writeConfigNotFound internal/api/syncadmin/syncadmin.go:188); internal/api/syncadmin/store.go:125 (configByID: WHERE org_id=$1 AND id=$2, called with orgID(r) at internal/api/syncadmin/syncadmin.go:362)); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:222)",
       "gaps": [
         "action: no catalog action covers sync configuration (this leaf does not extend the vocabulary)"
       ],

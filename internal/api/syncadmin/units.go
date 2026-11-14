@@ -8,6 +8,8 @@ import (
 	"sort"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
@@ -16,6 +18,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 	schedsync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
 	"github.com/full-chaos/dev-health-ops/internal/synccoverage"
+	"github.com/full-chaos/dev-health-ops/internal/workitemcontract"
 )
 
 // Rollup bounds of SyncRunService.build_unit_rollups.
@@ -306,6 +309,8 @@ func sortedSet(values map[string]bool) []pyjson.Value {
 // freshnessPair is one (source uuid, dataset) of build_dataset_freshness.
 type freshnessPair struct {
 	sourceID, dataset, watermarkKey, sourceName, costClass, provider string
+	integrationID                                                    uuid.UUID
+	fullQuery                                                        bool
 }
 
 // datasetFreshness is SyncRunService.build_dataset_freshness: one entry per
@@ -353,7 +358,7 @@ func (h *handlers) datasetFreshness(r *http.Request, org string, units []decoded
 			pairs = append(pairs, freshnessPair{
 				sourceID: key[0], dataset: dataset, watermarkKey: external, sourceName: name,
 				costClass: providersync.DatasetCostClass(unit.Provider, dataset, unit.CostClass),
-				provider:  unit.Provider,
+				provider:  unit.Provider, integrationID: unit.IntegrationID,
 			})
 		}
 	}
@@ -370,6 +375,9 @@ func (h *handlers) datasetFreshness(r *http.Request, org string, units []decoded
 		return nil, 0, err
 	}
 	index := schedsync.NewWatermarkIndex(rows)
+	if err := h.markFullQueryPairs(r, org, pairs); err != nil {
+		return nil, 0, err
+	}
 	capDays, netAdvance := schedsync.HeavyRatchet()
 	now := h.clock()
 	sort.SliceStable(pairs, func(left, right int) bool {
@@ -389,7 +397,7 @@ func (h *handlers) datasetFreshness(r *http.Request, org string, units []decoded
 		// than the HEAVY registry class; the reported cost_class stays the
 		// registry's.
 		lag := schedsync.ComputeWatermarkLag(
-			schedsync.WindowRatchetClass(pair.provider, pair.dataset, pair.costClass),
+			schedsync.PlannedWindowClass(pair.provider, pair.dataset, pair.costClass, pair.fullQuery),
 			index.Resolve(pair.watermarkKey, pair.dataset), now, capDays, netAdvance,
 		)
 		entry := pyjson.NewObject()
@@ -408,6 +416,43 @@ func (h *handlers) datasetFreshness(r *http.Request, org string, units []decoded
 		}
 	}
 	return entries, catchingUp, nil
+}
+
+// markFullQueryPairs sets fullQuery on every work-items family pair whose
+// integration's canonical work-items dataset row makes the family one
+// unbounded window, by the function the planner decides with
+// (schedsync.DatasetFullQuery), so a source the planner plans as one window is
+// not reported as catching up.
+func (h *handlers) markFullQueryPairs(r *http.Request, org string, pairs []freshnessPair) error {
+	var ids []uuid.UUID
+	seen := map[uuid.UUID]bool{}
+	for _, pair := range pairs {
+		if workitemcontract.IsFamilyDataset(pair.dataset) && !seen[pair.integrationID] {
+			seen[pair.integrationID] = true
+			ids = append(ids, pair.integrationID)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	rows, err := h.store.workItemsDatasetRows(r.Context(), org, ids)
+	if err != nil {
+		return err
+	}
+	byIntegration := make(map[uuid.UUID]workItemsDatasetRow, len(rows))
+	for _, row := range rows {
+		byIntegration[row.IntegrationID] = row
+	}
+	for index := range pairs {
+		pair := &pairs[index]
+		if !workitemcontract.IsFamilyDataset(pair.dataset) {
+			continue
+		}
+		if row, ok := byIntegration[pair.integrationID]; ok {
+			pair.fullQuery = schedsync.DatasetFullQuery(pair.provider, workItemsDatasetKey, row.Enabled, row.Options)
+		}
+	}
+	return nil
 }
 
 func keysOf(set map[string]bool) []string {

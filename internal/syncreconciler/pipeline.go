@@ -178,6 +178,7 @@ type MutationPipeline struct {
 	// independent processes/label sources under one Prometheus family, not
 	// one shared Go instance.
 	rollupBumps rollupBumpCounts
+	slowLog     stageSlowLog
 }
 
 // rollupBumpCounts is this package's own minimal counter for
@@ -381,6 +382,9 @@ func (pipeline *MutationPipeline) runStage(
 
 	if err == nil {
 		pipeline.stages.recordSuccess(stage)
+		if stageIsSlow(elapsed, budget) {
+			pipeline.logSlowStage(stage, budget, elapsed, trace)
+		}
 		return nil
 	}
 	if ctx.Err() != nil {

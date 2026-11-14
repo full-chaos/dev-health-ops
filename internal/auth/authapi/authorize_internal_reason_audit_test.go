@@ -17,22 +17,18 @@ func (h *authorizeHandlerFixture) makePlatformAdminMember() {
 	snap.membership = &authorization.Membership{OrgID: h.org, Role: "member", Status: authorization.StatusActive}
 }
 
-// checkInternalReasonRow checks one audit row of an allow: the wire code is allowed_by_role, and the internal reason key
-// is absent (want "") or equal to want.
-func checkInternalReasonRow(t *testing.T, e audit.AuditEvent, d wireDecision, want string) {
+// checkWireReasonRow checks one audit row of an allow: the wire code and the row's decision_reason_code are want, and
+// the legacy internal reason key is never written.
+func checkWireReasonRow(t *testing.T, e audit.AuditEvent, d wireDecision, want string) {
 	t.Helper()
-	if !d.Allowed || d.ReasonCode != "allowed_by_role" {
-		t.Fatalf("wire decision %+v, want an allow with allowed_by_role", d)
+	if !d.Allowed || d.ReasonCode != want {
+		t.Fatalf("wire decision %+v, want an allow with %s", d, want)
 	}
-	if got := attrString(t, e, "decision_reason_code"); got != "allowed_by_role" {
-		t.Errorf("%s: decision_reason_code %q, want allowed_by_role", e.EventType, got)
+	if got := attrString(t, e, "decision_reason_code"); got != want {
+		t.Errorf("%s: decision_reason_code %q, want %s", e.EventType, got, want)
 	}
-	v, present := e.Attributes[internalReasonKey]
-	switch {
-	case want == "" && present:
-		t.Errorf("%s: %s = %v, want the key absent", e.EventType, internalReasonKey, v)
-	case want != "" && attrString(t, e, internalReasonKey) != want:
-		t.Errorf("%s: %s = %v, want %s", e.EventType, internalReasonKey, v, want)
+	if v, present := e.Attributes[internalReasonKey]; present {
+		t.Errorf("%s: %s = %v, want the key absent (a legacy attribute no producer writes)", e.EventType, internalReasonKey, v)
 	}
 	if err := audit.ValidateAttributes(e.Attributes); err != nil {
 		t.Errorf("%s: %v", e.EventType, err)
@@ -40,17 +36,17 @@ func checkInternalReasonRow(t *testing.T, e audit.AuditEvent, d wireDecision, wa
 	auditwire.MustValidate(t, e)
 }
 
-func TestAuthorizeAuditRecordsTheInternalReasonOfAPlatformAdminAllow(t *testing.T) {
-	t.Run("high-risk role allow has no internal reason", func(t *testing.T) {
+func TestAuthorizeAuditWritesTheWireReasonAndNoInternalReasonForAPlatformAdminAllow(t *testing.T) {
+	t.Run("high-risk role allow writes allowed_by_role", func(t *testing.T) {
 		h := newAuthorizeHandlerFixture(t)
 		d := h.decideOne(h.org1("settings.write"))
 		rows := h.audit.rows()
 		if len(rows) != 1 || rows[0].EventType != audit.EventAuthorizeHighRiskDecided {
 			t.Fatalf("rows %+v, want one high-risk row", rows)
 		}
-		checkInternalReasonRow(t, rows[0], d, "")
+		checkWireReasonRow(t, rows[0], d, "allowed_by_role")
 	})
-	t.Run("high-risk platform-admin allow records the internal reason", func(t *testing.T) {
+	t.Run("high-risk platform-admin allow writes allowed_by_platform_admin and no internal reason", func(t *testing.T) {
 		h := newAuthorizeHandlerFixture(t)
 		h.makePlatformAdminMember()
 		d := h.decideOne(h.org1("settings.write"))
@@ -58,9 +54,9 @@ func TestAuthorizeAuditRecordsTheInternalReasonOfAPlatformAdminAllow(t *testing.
 		if len(rows) != 1 || rows[0].EventType != audit.EventAuthorizeHighRiskDecided {
 			t.Fatalf("rows %+v, want one high-risk row", rows)
 		}
-		checkInternalReasonRow(t, rows[0], d, "allowed_by_platform_admin")
+		checkWireReasonRow(t, rows[0], d, "allowed_by_platform_admin")
 	})
-	t.Run("delegated platform-admin allow records the internal reason on both rows", func(t *testing.T) {
+	t.Run("delegated platform-admin allow writes allowed_by_platform_admin on both rows", func(t *testing.T) {
 		h := newAuthorizeHandlerFixture(t)
 		h.makePlatformAdminMember()
 		h.delegate("settings.write")
@@ -71,21 +67,22 @@ func TestAuthorizeAuditRecordsTheInternalReasonOfAPlatformAdminAllow(t *testing.
 			t.Fatalf("rows %+v, want a high-risk row and a delegated row", rows)
 		}
 		for _, e := range rows {
-			checkInternalReasonRow(t, e, d, "allowed_by_platform_admin")
+			checkWireReasonRow(t, e, d, "allowed_by_platform_admin")
 		}
 	})
 }
 
-// The audit allowlist's decision_internal_reason set is exactly the internal-only reasons the wire hides.
-func TestAuditInternalReasonVocabularyIsTheInternalOnlyReasons(t *testing.T) {
-	got := slices.Clone(audit.AttributeVocabulary()[internalReasonKey])
-	slices.Sort(got)
-	var want []string
-	for reason := range internalOnlyReasons {
-		want = append(want, string(reason))
+// decision_internal_reason is a legacy attribute: the audit schema keeps it for stored rows, and the writer allowlist
+// refuses it, so no producer can write it again.
+func TestAuditWriterAllowlistRefusesTheLegacyInternalReason(t *testing.T) {
+	if slices.Contains(audit.AllowedAttributeKeys(), internalReasonKey) {
+		t.Fatalf("the writer allowlist still admits %s", internalReasonKey)
 	}
-	slices.Sort(want)
-	if !slices.Equal(got, want) {
-		t.Errorf("%s set %v, want the internalOnlyReasons keys %v", internalReasonKey, got, want)
+	err := audit.ValidateAttributes(map[string]any{internalReasonKey: string(authorization.ReasonAllowedByPlatformAdmin)})
+	if err == nil {
+		t.Fatalf("ValidateAttributes accepted %s", internalReasonKey)
+	}
+	if err := audit.ValidateAttributes(map[string]any{"decision_reason_code": string(authorization.ReasonAllowedByPlatformAdmin)}); err != nil {
+		t.Fatalf("decision_reason_code allowed_by_platform_admin refused: %v", err)
 	}
 }

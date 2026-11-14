@@ -59,6 +59,13 @@ func New(t *testing.T) *Server {
 	return s
 }
 
+// Allow makes every next decision an allow with reason.
+func (s *Server) Allow(reason string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.allowed, s.reason = true, reason
+}
+
 // Deny makes every next decision a deny with reason.
 func (s *Server) Deny(reason string) {
 	s.mu.Lock()

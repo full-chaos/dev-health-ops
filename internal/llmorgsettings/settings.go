@@ -3,6 +3,7 @@ package llmorgsettings
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
@@ -96,6 +97,9 @@ func (s Store) loadRawSettingsFrom(ctx context.Context, q rowQuerier, orgID stri
 			continue
 		}
 		resolved := *value
+		if isEncrypted && s.skipsDecrypt(key) {
+			continue
+		}
 		if isEncrypted {
 			plain, err := s.Decryptor.Decrypt(secrets.NewValue(resolved))
 			checkKeyOnFirstDecrypt(ctx, orgID, err)
@@ -118,6 +122,14 @@ func (s Store) loadRawSettingsFrom(ctx context.Context, q rowQuerier, orgID stri
 	}
 	markUnboundKeys(settings, updatedAt)
 	return settings, nil
+}
+
+// skipsDecrypt is whether an encrypted row is left undecrypted: a categorize
+// override row read by a store that is not the categorize store. No reader of
+// such a store reads it (project, keysForLeakChecks), so decrypting it only
+// touches a key class the store never serves.
+func (s Store) skipsDecrypt(key string) bool {
+	return s.purpose != PurposeCategorize && strings.HasPrefix(key, PurposeKey(PurposeCategorize, ""))
 }
 
 func rawSettingsSQL(relation SettingsRelation) string {

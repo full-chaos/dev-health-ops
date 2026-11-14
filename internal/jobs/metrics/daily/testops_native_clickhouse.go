@@ -213,9 +213,10 @@ ORDER BY run_id, suite_id`,
 
 // loadNativeTestopsCaseAggregate is the one test_case_results read behind a
 // test metric record, reduced inside ClickHouse to one row per case_name. The
-// table's sorting key has no time column, so any read of it scans the repo's
-// whole case history; both questions the record asks of it are therefore
-// answered in the same scan. It folds today's cases into accumulator and
+// table's sorting key has no time column, but the semi-joins below are on
+// run_id, the third key column after org_id and repo_id, so ClickHouse reads
+// only the runs they name (the read does not grow with the repo's case
+// history); both questions the record asks of it are answered in the same scan. It folds today's cases into accumulator and
 // returns the names that failed in [historyStart, start).
 //
 // Today's half reproduces load_testops_test_data's two-part semi-join
@@ -254,7 +255,45 @@ func loadNativeTestopsCaseAggregate(
 	repoID uuid.UUID,
 	historyStart, start, end time.Time,
 ) (map[string]struct{}, error) {
-	rows, err := conn.Query(ctx, `
+	defaultBranch, err := loadNativeTestopsDefaultBranch(ctx, conn, orgID, repoID)
+	if err != nil {
+		return nil, err
+	}
+	// Runs not shown to sit on the repository default branch are left out of
+	// this read: flake, retry-dependency and failure-recurrence compare a
+	// case name's statuses across runs, and a pull-request branch that fails,
+	// is fixed and then passes on a new commit would read as a flake. Pass and
+	// failure counts come from suite rows (loadNativeTestopsSuites) and are not
+	// narrowed here.
+	//
+	// The exclusion sits INSIDE the two suite sets that name the runs a case row
+	// can belong to (today's runs, history runs), not on the case rows: a case
+	// row of an excluded run is then never in either set, and the run_id IN
+	// semi-joins keep ClickHouse from reading it at all, instead of reading it
+	// and dropping it. (The third set, suites before `end`, is only ever ANDed
+	// with the today set, so it needs no exclusion of its own.)
+	//
+	// A run with suite rows but no ci_pipeline_runs row is left out too: its
+	// branch cannot be shown to be the default. A run whose recorded branch is
+	// NULL or empty stays in, and so does every run when the repository's
+	// default branch is not recorded. The off-default set is limited to the
+	// runs with a suite in [historyStart, end), the only runs the sets can name.
+	offDefaultCTE := ""
+	offDefaultExclusion := ""
+	var args []any
+	if defaultBranch != "" {
+		offDefaultCTE = offDefaultRunsCTE
+		offDefaultExclusion = "\n        AND run_id NOT IN (SELECT run_id FROM off_default)"
+		args = append(args, offDefaultRunsArgs(orgID, repoID, defaultBranch, historyStart, end)...)
+	}
+	args = append(args,
+		orgID, repoID, start.UTC(), end.UTC(),
+		orgID, repoID, end.UTC(),
+		"failure", "failed", "error", "errors", "timeout", "timed_out",
+		orgID, repoID, historyStart.UTC(), start.UTC(),
+		orgID, repoID,
+	)
+	rows, err := conn.Query(ctx, offDefaultCTE+`
 SELECT
   case_name,
   groupUniqArrayIf(ifNull(toString(status), ''), in_today) AS statuses,
@@ -269,7 +308,7 @@ FROM (
     run_id IN (
       SELECT run_id FROM test_suite_results FINAL
       WHERE org_id = ? AND repo_id = ?
-        AND coalesce(started_at, finished_at) >= ? AND coalesce(started_at, finished_at) < ?
+        AND coalesce(started_at, finished_at) >= ? AND coalesce(started_at, finished_at) < ?`+offDefaultExclusion+`
     ) AS run_in_today,
     run_in_today AND (run_id, suite_id) IN (
       SELECT run_id, suite_id FROM test_suite_results FINAL
@@ -281,25 +320,21 @@ FROM (
       AND (run_id, suite_id) IN (
         SELECT run_id, suite_id FROM test_suite_results FINAL
         WHERE org_id = ? AND repo_id = ?
-          AND coalesce(started_at, finished_at) >= ? AND coalesce(started_at, finished_at) < ?
+          AND coalesce(started_at, finished_at) >= ? AND coalesce(started_at, finished_at) < ?`+offDefaultExclusion+`
       ) AS failed_in_history
   FROM test_case_results FINAL
   WHERE org_id = ? AND repo_id = ? AND case_name != ''
 )
 WHERE in_today OR failed_in_history
 GROUP BY case_name
-ORDER BY case_name`,
-		orgID, repoID, start.UTC(), end.UTC(),
-		orgID, repoID, end.UTC(),
-		"failure", "failed", "error", "errors", "timeout", "timed_out",
-		orgID, repoID, historyStart.UTC(), start.UTC(),
-		orgID, repoID)
+ORDER BY case_name`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("load native testops case aggregate: %w", err)
 	}
 	defer rows.Close()
 
 	historicalFailedNames := make(map[string]struct{})
+	sawCaseToday := false
 	for rows.Next() {
 		var group testops.CaseGroup
 		var seenToday, failedBefore uint8
@@ -308,6 +343,7 @@ ORDER BY case_name`,
 		}
 		if seenToday != 0 {
 			accumulator.AddCaseGroup(group)
+			sawCaseToday = true
 		}
 		if failedBefore != 0 {
 			historicalFailedNames[group.CaseName] = struct{}{}
@@ -316,7 +352,90 @@ ORDER BY case_name`,
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate native testops case aggregate: %w", err)
 	}
+	if !sawCaseToday && defaultBranch != "" {
+		// No default-branch case row today. When the day does hold case rows of
+		// runs left out above, the flake measures are not "0 flakes" but unknown:
+		// say so, instead of letting a repo-day that only ran pull requests read
+		// as healthy.
+		offDefaultCases, err := hasNativeTestopsOffDefaultCaseToday(
+			ctx, conn, orgID, repoID, defaultBranch, historyStart, start, end)
+		if err != nil {
+			return nil, err
+		}
+		if offDefaultCases {
+			accumulator.MarkCasesOffDefaultBranchOnly()
+		}
+	}
 	return historicalFailedNames, nil
+}
+
+// offDefaultRunsCTE names, as off_default, the runs with a suite in
+// [historyStart, end) that are not shown to be on the repository default
+// branch: a run counts as on it only when ci_pipeline_runs holds a row for it
+// whose branch is the default, NULL or empty. A run with suite rows but NO
+// pipeline row is therefore off_default: its branch cannot be proven, and once
+// pull-request reports sync it would leak into the default-branch measures.
+// A NULL or empty branch is a recorded absence and stays on the default side.
+const offDefaultRunsCTE = `
+WITH window_runs AS (
+  SELECT DISTINCT run_id FROM test_suite_results FINAL
+  WHERE org_id = ? AND repo_id = ?
+    AND coalesce(started_at, finished_at) >= ? AND coalesce(started_at, finished_at) < ?
+), off_default AS (
+  SELECT run_id FROM window_runs
+  WHERE run_id NOT IN (
+    SELECT run_id FROM ci_pipeline_runs FINAL
+    WHERE org_id = ? AND repo_id = ?
+      AND run_id IN (SELECT run_id FROM window_runs)
+      AND (branch IS NULL OR branch = '' OR branch = ?)
+  )
+)`
+
+func offDefaultRunsArgs(orgID string, repoID uuid.UUID, defaultBranch string, historyStart, end time.Time) []any {
+	return []any{orgID, repoID, historyStart.UTC(), end.UTC(), orgID, repoID, defaultBranch}
+}
+
+// hasNativeTestopsOffDefaultCaseToday reports whether today holds a case row of
+// a run not shown to be on the default branch, by the same day rule the case
+// aggregate uses for today's rows.
+func hasNativeTestopsOffDefaultCaseToday(
+	ctx context.Context, conn testopsNativeConn, orgID string, repoID uuid.UUID,
+	defaultBranch string, historyStart, start, end time.Time,
+) (bool, error) {
+	args := offDefaultRunsArgs(orgID, repoID, defaultBranch, historyStart, end)
+	args = append(args, orgID, repoID, start.UTC(), end.UTC(), orgID, repoID, end.UTC(), orgID, repoID)
+	rows, err := conn.Query(ctx, offDefaultRunsCTE+`
+SELECT count() FROM (
+  SELECT 1 FROM test_case_results FINAL
+  WHERE case_name != ''
+    AND run_id IN (SELECT run_id FROM off_default)
+    AND run_id IN (
+      SELECT run_id FROM test_suite_results FINAL
+      WHERE org_id = ? AND repo_id = ?
+        AND coalesce(started_at, finished_at) >= ? AND coalesce(started_at, finished_at) < ?
+    )
+    AND (run_id, suite_id) IN (
+      SELECT run_id, suite_id FROM test_suite_results FINAL
+      WHERE org_id = ? AND repo_id = ?
+        AND coalesce(started_at, finished_at) < ?
+    )
+    AND org_id = ? AND repo_id = ?
+  LIMIT 1
+)`, args...)
+	if err != nil {
+		return false, fmt.Errorf("load native testops off-default case rows: %w", err)
+	}
+	defer rows.Close()
+	var count uint64
+	for rows.Next() {
+		if err := rows.Scan(&count); err != nil {
+			return false, fmt.Errorf("scan native testops off-default case rows: %w", err)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return false, fmt.Errorf("iterate native testops off-default case rows: %w", err)
+	}
+	return count > 0, nil
 }
 
 // loadNativeTestopsLatestCoverage returns AT MOST ONE snapshot: the latest by
@@ -338,16 +457,32 @@ ORDER BY case_name`,
 func loadNativeTestopsLatestCoverage(
 	ctx context.Context, conn testopsNativeConn, orgID string, repoID uuid.UUID, start, end time.Time,
 ) ([]testops.CoverageSnapshotRow, error) {
+	defaultBranch, err := loadNativeTestopsDefaultBranch(ctx, conn, orgID, repoID)
+	if err != nil {
+		return nil, err
+	}
+	// A pull-request run's coverage must never become the repository's latest
+	// snapshot: the ORDER BY below knows no branch, so a PR run whose id sorts
+	// after the default branch's would win. Only runs whose ci_pipeline_runs row
+	// records the default branch, or no branch, are kept; the inner join already
+	// drops a run with no pipeline row (see loadNativeTestopsCaseAggregate for
+	// the other unknown cases). ci_pipeline_runs carries every branch's runs, so
+	// the filter does not depend on which runs the test sync fetches reports for.
+	onDefaultBranch := ""
+	args := []any{start.UTC(), end.UTC(), repoID, orgID}
+	if defaultBranch != "" {
+		onDefaultBranch = "\n  AND (p.branch IS NULL OR p.branch = '' OR p.branch = ?)"
+		args = append(args, defaultBranch)
+	}
 	rows, err := conn.Query(ctx, `
 SELECT c.run_id, c.snapshot_id, c.lines_total, c.lines_covered,
        c.line_coverage_pct, c.branch_coverage_pct, c.team_id, c.service_id, c.org_id
 FROM coverage_snapshots AS c FINAL
 INNER JOIN ci_pipeline_runs AS p FINAL
   ON (p.repo_id = c.repo_id) AND (p.run_id = c.run_id) AND (p.org_id = c.org_id)
-WHERE p.started_at >= ? AND p.started_at < ? AND p.repo_id = ? AND p.org_id = ?
+WHERE p.started_at >= ? AND p.started_at < ? AND p.repo_id = ? AND p.org_id = ?`+onDefaultBranch+`
 ORDER BY c.run_id DESC, c.snapshot_id DESC
-LIMIT 1`,
-		start.UTC(), end.UTC(), repoID, orgID)
+LIMIT 1`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("load native testops coverage snapshot: %w", err)
 	}
@@ -451,6 +586,12 @@ func writeTestopsTestMetrics(
 		return 0, fmt.Errorf("prepare testops_test_metrics_daily batch: %w", err)
 	}
 	for _, metric := range metrics {
+		// A flake-unknown day carries 0 flake cases of 0 distinct cases: it adds
+		// nothing to the org series' sums (queryapi/analytics/timeseries.go), so the
+		// org value is the other repos' and is unavailable only when every repo's
+		// day is unknown. A NULL pair would blank the whole org day instead.
+		// flake_rate itself is a plain Float64 column and keeps its 0.
+		flakeCases, distinctCases := uint32PtrOf(metric.FlakeCases), uint32PtrOf(metric.DistinctCases)
 		if err := batch.Append(
 			metric.RepoID, chDate(day),
 			// total_cases/passed_count/failed_count/skipped_count/
@@ -467,7 +608,7 @@ func writeTestopsTestMetrics(
 			// flake_cases/distinct_cases are Nullable(UInt32): a row written before
 			// the columns existed reads NULL, a row written now carries both counts
 			// (CHAOS-9737), so the org series can sum them.
-			uint32PtrOf(metric.FlakeCases), uint32PtrOf(metric.DistinctCases),
+			flakeCases, distinctCases,
 		); err != nil {
 			return 0, fmt.Errorf("append testops_test_metrics_daily row: %w", err)
 		}
@@ -526,4 +667,32 @@ func writeTestopsCoverageMetrics(
 		return len(metrics), fmt.Errorf("send testops_coverage_metrics_daily batch: %w", err)
 	}
 	return len(metrics), nil
+}
+
+// loadNativeTestopsDefaultBranch returns the repository's default branch as the
+// repository sync recorded it in repos.settings (GitHub and GitLab both write
+// the key default_branch, and both coerce a missing value to "main" before
+// writing). "" means no repos row or no recorded value: the caller then cannot
+// tell a default-branch run from another one and must not drop any run.
+func loadNativeTestopsDefaultBranch(
+	ctx context.Context, conn testopsNativeConn, orgID string, repoID uuid.UUID,
+) (string, error) {
+	rows, err := conn.Query(ctx, `
+SELECT coalesce(JSONExtractString(argMax(settings, last_synced), 'default_branch'), '')
+FROM repos
+WHERE org_id = ? AND id = ?`, orgID, repoID)
+	if err != nil {
+		return "", fmt.Errorf("load native testops default branch: %w", err)
+	}
+	defer rows.Close()
+	var branch string
+	for rows.Next() {
+		if err := rows.Scan(&branch); err != nil {
+			return "", fmt.Errorf("scan native testops default branch: %w", err)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return "", fmt.Errorf("iterate native testops default branch: %w", err)
+	}
+	return branch, nil
 }

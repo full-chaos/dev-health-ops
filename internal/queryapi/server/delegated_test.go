@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -62,7 +63,7 @@ func TestProofWriteRefusesADelegatedCaller(t *testing.T) {
 		ran++
 		w.WriteHeader(http.StatusOK)
 	}))
-	allow := func(context.Context, string) bool { return true }
+	allow := func(context.Context, string) (bool, error) { return true, nil }
 	handler := onPattern("/query/proof-write", newDocumentDispatchHandler(os.Getenv, mux, map[string]string{digestHex(proofWriteMutation): "probe"}, nil, auth, store, digest.KindMutation, allow)).ServeHTTP
 	post := func(token string) *httptest.ResponseRecorder {
 		body, _ := json.Marshal(map[string]string{"query": proofWriteMutation})
@@ -79,6 +80,13 @@ func TestProofWriteRefusesADelegatedCaller(t *testing.T) {
 	delegated := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5, impersonatingUserID: ecActor.String()})
 	if rec := post(delegated); rec.Code != http.StatusForbidden || ran != 1 {
 		t.Fatalf("delegated caller: %d %s, ran %d; want 403 and no resolver", rec.Code, rec.Body.String(), ran)
+	}
+
+	// The delegated refusal comes before the allowlist read: a read that fails does not turn it into a 503.
+	failing := func(context.Context, string) (bool, error) { return false, errors.New("allowlist read failed") }
+	handler = onPattern("/query/proof-write", newDocumentDispatchHandler(os.Getenv, mux, map[string]string{digestHex(proofWriteMutation): "probe"}, nil, auth, store, digest.KindMutation, failing)).ServeHTTP
+	if rec := post(delegated); rec.Code != http.StatusForbidden || ran != 1 {
+		t.Fatalf("delegated caller, allowlist read failing: %d %s, ran %d; want 403 and no resolver", rec.Code, rec.Body.String(), ran)
 	}
 }
 
@@ -111,7 +119,7 @@ func TestDelegatedSuperuserOnANonMemberOrg_WriteRefused(t *testing.T) {
 		ran++
 		w.WriteHeader(http.StatusOK)
 	}))
-	allow := func(context.Context, string) bool { return true }
+	allow := func(context.Context, string) (bool, error) { return true, nil }
 	handler := onPattern("/query/proof-write", newDocumentDispatchHandler(os.Getenv, mux, map[string]string{digestHex(proofWriteMutation): "probe"}, nil, ecEdgeAuth(t, wstore), wstore, digest.KindMutation, allow)).ServeHTTP
 	body, _ := json.Marshal(map[string]string{"query": proofWriteMutation})
 	req := httptest.NewRequest(http.MethodPost, "/query/proof-write", strings.NewReader(string(body)))

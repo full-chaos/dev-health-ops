@@ -52,11 +52,11 @@ cell a 0 5
 if [ "${RC}" = 0 ] && [ "${CALLS}" = 2 ]; then ok "a accepting at once: rc 0, one pg_isready plus one SELECT 1"; else bad "a rc=${RC} calls=${CALLS}: ${OUT}"; fi
 
 cell b 3 10
-if [ "${RC}" = 0 ] && printf '%s\n' "${OUT}" | grep -q '^accepted$'; then ok "b shutting down for 3 calls, then accepts: rc 0"; else bad "b rc=${RC}: ${OUT}"; fi
+if [ "${RC}" = 0 ] && grep -q '^accepted$' <<<"${OUT}"; then ok "b shutting down for 3 calls, then accepts: rc 0"; else bad "b rc=${RC}: ${OUT}"; fi
 
 cell c 1000 4
-if [ "${RC}" != 0 ] && printf '%s\n' "${OUT}" | grep -qF 'postgres accepted no connection after 4 attempts' \
-  && printf '%s\n' "${OUT}" | grep -qF 'the database system is shutting down'; then ok "c never accepts: non-zero, bound message names the last error"; else bad "c rc=${RC}: ${OUT}"; fi
+if [ "${RC}" != 0 ] && grep -qF 'postgres accepted no connection after 4 attempts' <<<"${OUT}" \
+  && grep -qF 'the database system is shutting down' <<<"${OUT}"; then ok "c never accepts: non-zero, bound message names the last error"; else bad "c rc=${RC}: ${OUT}"; fi
 if [ "${CALLS}" = 4 ]; then ok "c bound is attempts: 4 calls"; else bad "c calls=${CALLS}"; fi
 
 [ "${fails}" = 0 ] || { printf '%d failed\n' "${fails}"; exit 1; }

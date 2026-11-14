@@ -385,7 +385,8 @@ func (pipeline *MutationPipeline) runStage(
 	}
 	if ctx.Err() != nil {
 		// Shutdown, not a stage failure -- the caller decides whether to
-		// propagate ctx.Err() itself.
+		// propagate ctx.Err() itself. This is also the "parent alive" clause
+		// of the budget-spent rule below (CHAOS-13743).
 		return err
 	}
 	pipeline.stages.recordFailure(stage)
@@ -393,16 +394,18 @@ func (pipeline *MutationPipeline) runStage(
 	if sqlstate != "" {
 		pipeline.stages.recordCancellation(stage, sqlstate)
 	}
-	slog.Error(
-		"syncreconciler.stage_failed",
-		append([]any{
-			"stage", string(stage),
-			"budget_ms", budget.Milliseconds(),
-			"elapsed_ms", elapsed.Milliseconds(),
-			"sqlstate", sqlstate,
-			"error", err.Error(),
-		}, stagePhaseAttrs(trace)...)...,
-	)
+	attrs := []any{
+		"stage", string(stage),
+		"budget_ms", budget.Milliseconds(),
+		"elapsed_ms", elapsed.Milliseconds(),
+		"sqlstate", sqlstate,
+	}
+	if stageDeadlineSpent(stageCtx, sqlstate) {
+		err = stageBudgetSpentError{stage: stage, budget: budget, cause: err}
+		attrs = append(attrs, "reason", stageBudgetSpentReason)
+	}
+	attrs = append(attrs, "error", err.Error())
+	slog.Error("syncreconciler.stage_failed", append(attrs, stagePhaseAttrs(trace)...)...)
 	return err
 }
 
@@ -523,15 +526,20 @@ func (pipeline *MutationPipeline) Step(
 	// detector outage would be its own kind of false signal.
 	reportStep := runawayReportStepUpstream
 	reportDelivered := false
+	// reportCause pairs this line with the materializer's stage_failed when the
+	// materializer ran out of its own budget (CHAOS-13743). The line itself
+	// stays: the report was still not delivered.
+	reportCause := ""
 	defer func() {
 		if reportDelivered {
 			return
 		}
 		observation.WakeupReportFailures = 1
-		slog.Error(
-			"syncreconciler.dispatch_wakeup_report_unavailable",
-			"step", reportStep,
-		)
+		attrs := []any{"step", reportStep}
+		if reportCause != "" {
+			attrs = append(attrs, "cause", reportCause)
+		}
+		slog.Error("syncreconciler.dispatch_wakeup_report_unavailable", attrs...)
 	}()
 
 	// STAGE-SCOPED FAILURE (CHAOS-4239). Every stage below runs under its own
@@ -872,6 +880,9 @@ func (pipeline *MutationPipeline) Step(
 			)
 			return stepErr
 		})
+		if errors.Is(materializerErr, ErrStageBudgetSpent) {
+			reportCause = stageBudgetSpentReason
+		}
 		// Emitted BEFORE the ctx-cancellation early return below, so a pass
 		// that died on a cancelled context still says what it had done.
 		logMaterializerPass(ctx, now, limit, materialized, materializerErr, true)

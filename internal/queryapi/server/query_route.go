@@ -4195,6 +4195,36 @@ const registeredTestopsJobFailuresDocument = `query TestOpsJobFailures($orgId: S
   }
 }`
 
+// registeredTestopsTestWindowDocument is the registered document for the
+// `testopsTestWindow` operation (CHAOS-13773, Go-only: no Python resolver
+// exists), the wire-form text the web client sends
+// (testdata/wire_capture/testopstestwindow_captured.graphql). The web query
+// (CHAOS-13774) must produce this exact text.
+const registeredTestopsTestWindowDocument = `query TestOpsTestWindow($orgId: String!, $input: TestOpsTestWindowInput!) {
+  testopsTestWindow(orgId: $orgId, input: $input) {
+    sinceDate
+    untilDate
+    coverage {
+      completedRuns
+      runsWithTests
+      sharePct
+      __typename
+    }
+    cases {
+      passed
+      failed
+      skipped
+      quarantined
+      total
+      __typename
+    }
+    passRatePct
+    failureRatePct
+    flakeRatePct
+    __typename
+  }
+}`
+
 // registeredTestopsRiskDocument is the registered document for the
 // `testopsRisk` operation, the exact wire-form text a real web client
 // sends (testdata/wire_capture/testopsrisk_captured.graphql).
@@ -6633,6 +6663,7 @@ func newQueryHandlerWithEdge(chClient featureflags.QueryClient, pgPool *pgxpool.
 		"aiAttributionOverview":             digestHex(registeredAiAttributionOverviewDocument),
 		"testopsRisk":                       digestHex(registeredTestopsRiskDocument),
 		"testopsJobFailures":                digestHex(registeredTestopsJobFailuresDocument),
+		"testopsTestWindow":                 digestHex(registeredTestopsTestWindowDocument),
 		"coverageBaselines":                 digestHex(registeredCoverageBaselinesDocument),
 		"coverageScopeBaseline":             digestHex(registeredCoverageScopeBaselineDocument),
 		"sourceHealth":                      digestHex(registeredSourceHealthDocument),

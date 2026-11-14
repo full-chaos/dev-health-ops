@@ -568,6 +568,14 @@
       "guards": [
         {"file": "internal/goapiproof/testopsjobfailures_corpus_test.go", "test": "TestTestopsJobFailuresRequestIsAWindowTheOperationServes"}
       ]
+    },
+    {
+      "operation": "testopsTestWindow",
+      "unproven_reason": "Go-only from its first day (CHAOS-13773), no Python resolver ever existed; it is not proven at the edge until a build that serves it is deployed",
+      "born_in_go": true,
+      "guards": [
+        {"file": "internal/goapiproof/testopstestwindow_corpus_test.go", "test": "TestTestopsTestWindowRequestIsAWindowTheOperationServes"}
+      ]
     }
   ]
 }

@@ -263,6 +263,15 @@
     {
       "action": "metrics.read",
       "disclosure_behavior": "a whole-operation error before any field runs: 'A valid organization ID is required' for an empty, padded or non-string orgId; 'Only one organization may be queried per operation' for differing orgIds; 'Authorization required' when the caller has no organization; 'Access denied: cannot query org' when the orgId is not the caller's organization, except that a verified non-impersonating superuser with an organization may name another and the operation then runs against it (OperationOrgGuard)",
+      "field": "testopsTestWindow",
+      "gaps": [],
+      "resolver": "queryResolver.TestopsTestWindow in internal/queryapi/graph/schema.resolvers.go",
+      "resource_resolver": "organization_from_argument: the orgId argument, checked by OperationOrgGuard against the credential's organization",
+      "type": "Query"
+    },
+    {
+      "action": "metrics.read",
+      "disclosure_behavior": "a whole-operation error before any field runs: 'A valid organization ID is required' for an empty, padded or non-string orgId; 'Only one organization may be queried per operation' for differing orgIds; 'Authorization required' when the caller has no organization; 'Access denied: cannot query org' when the orgId is not the caller's organization, except that a verified non-impersonating superuser with an organization may name another and the operation then runs against it (OperationOrgGuard)",
       "field": "coverageBaselines",
       "gaps": [],
       "resolver": "queryResolver.CoverageBaselines in internal/queryapi/graph/schema.resolvers.go",

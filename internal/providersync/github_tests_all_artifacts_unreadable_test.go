@@ -421,7 +421,7 @@ func (doer *githubTestsReanchorAllUnreadableDoer) Do(request *http.Request) (*ht
 	case path == "/repos/acme/api":
 		return githubTestsHTTPResponse(request, header, gitHubRepositoryFixture), nil
 	case path == "/repos/acme/api/actions/runs":
-		if request.URL.Query().Get("branch") != "" {
+		if githubTestsIsArtifactRunListing(request.URL.Query()) {
 			doer.artifactPhaseURL = request.URL.String()
 		}
 		if doer.items == 0 {

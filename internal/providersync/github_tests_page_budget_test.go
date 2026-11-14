@@ -48,7 +48,7 @@ func (doer *githubTestsPagedDoer) Do(request *http.Request) (*http.Response, err
 		if page < 1 || page > doer.pages {
 			doer.t.Fatalf("unexpected workflow-runs page %d", page)
 		}
-		if query.Get("branch") != "" {
+		if githubTestsIsArtifactRunListing(query) {
 			doer.artifactListRequests++
 		} else {
 			doer.runListRequests++

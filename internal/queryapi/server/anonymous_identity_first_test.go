@@ -20,7 +20,7 @@ func TestAnonymousDocumentRoutesRefuseBeforeReadingTheBody(t *testing.T) {
 	mux := routeswitch.NewMux(routeswitch.StaticSwitch{"probe": true})
 	mux.Register("probe", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
 	byDigest := map[string]string{digestHex(iaDocument): "probe"}
-	allow := func(context.Context, string) bool { return true }
+	allow := func(context.Context, string) (bool, error) { return true, nil }
 	routes := map[string]http.Handler{
 		"/query":               newDocumentDispatchHandler(getenv, mux, byDigest, verifier, nil, nil, "", nil),
 		"/query/proof":         newDocumentDispatchHandler(getenv, mux, byDigest, verifier, nil, nil, digest.KindQuery, nil),

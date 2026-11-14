@@ -43,6 +43,7 @@ type defaultBranchRepo struct {
 	recordedInSQL bool   // false: no repos row at all
 	prCasesOnly   bool   // no case rows for the default-branch run (suites stay)
 	noCases       bool   // no case rows at all (suites stay)
+	noPipelineRow string // run id that gets suite and case rows but NO ci_pipeline_runs row
 }
 
 type defaultBranchWindow struct {
@@ -93,10 +94,12 @@ func seedDefaultBranchRepo(ctx context.Context, t *testing.T, conn driver.Conn, 
 		{"r-hist", repo.prBranch, w.day.AddDate(0, 0, -5).Add(11 * time.Hour)},
 	}
 	for _, r := range runs {
-		execAll(ctx, t, conn, `INSERT INTO ci_pipeline_runs
+		if r.id != repo.noPipelineRow {
+			execAll(ctx, t, conn, `INSERT INTO ci_pipeline_runs
 (repo_id, run_id, status, queued_at, started_at, finished_at, last_synced, retry_count, org_id, branch)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			[][]any{{repo.id, r.id, "success", r.started, r.started, r.started.Add(time.Minute), synced, uint32(0), defaultBranchTestOrg, r.branch}})
+				[][]any{{repo.id, r.id, "success", r.started, r.started, r.started.Add(time.Minute), synced, uint32(0), defaultBranchTestOrg, r.branch}})
+		}
 		execAll(ctx, t, conn, `INSERT INTO test_suite_results
 (repo_id, run_id, suite_id, suite_name, total_count, passed_count, failed_count, skipped_count, error_count,
  quarantined_count, duration_seconds, started_at, finished_at, org_id, last_synced)
@@ -573,5 +576,42 @@ FROM numbers(30000)`, bulk.id, defaultBranchTestOrg, synced); err != nil {
 	t.Logf("test_case_results rows read: previous form %d, now %d", previousReads.readRows, currentReads.readRows)
 	if currentReads.readRows >= 1000 {
 		t.Errorf("the case read touched %d rows with a 30,000-row pull-request run in the window: it reads the excluded run", currentReads.readRows)
+	}
+}
+
+// A run with suite rows but no ci_pipeline_runs row cannot be shown to be on the
+// default branch, so the default-branch measures leave it out (prod had 6 such
+// runs in 1,206 when this was decided); the pass and failure counts, which come
+// from suite rows, still count it. Coverage already needs the pipeline row (its
+// join), so its snapshot drops out the same way.
+func TestTestopsRunWithoutPipelineRowIsLeftOutOfDefaultBranchMeasures(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	conn := startDefaultBranchClickHouse(ctx, t)
+	w := newDefaultBranchWindow()
+
+	// r-pr has suite, case and coverage rows but no pipeline row.
+	orphan := defaultBranchRepo{id: uuid.MustParse("00000000-0000-4000-8000-0000000000e5"),
+		settings: `{"default_branch":"main"}`, prBranch: "feature/x", recordedInSQL: true, noPipelineRow: "r-pr"}
+	// The same rows with the pipeline row present on the default branch: C flakes.
+	control := defaultBranchRepo{id: uuid.MustParse("00000000-0000-4000-8000-0000000000e6"),
+		settings: `{"default_branch":"main"}`, prBranch: "main", recordedInSQL: true}
+	seedDefaultBranchRepo(ctx, t, conn, w, orphan)
+	seedDefaultBranchRepo(ctx, t, conn, w, control)
+
+	if got := computeDefaultBranchTestMetric(ctx, t, conn, w, control.id); got.FlakeCases != 1 {
+		t.Fatalf("control flake_cases=%d, want 1", got.FlakeCases)
+	}
+	got := computeDefaultBranchTestMetric(ctx, t, conn, w, orphan.id)
+	if got.FlakeCases != 0 || got.RetryDependencyRate != 0 || got.DistinctCases != 3 {
+		t.Errorf("a run with no pipeline row fed the default-branch measures: flake_cases=%d retry_dependency_rate=%v distinct_cases=%d, want 0 / 0 / 3",
+			got.FlakeCases, got.RetryDependencyRate, got.DistinctCases)
+	}
+	if got.TotalCases != 5 {
+		t.Errorf("total_cases=%d, want 5: suite rows of a run with no pipeline row still count in the pass and failure counts", got.TotalCases)
+	}
+	coverage, err := loadNativeTestopsLatestCoverage(ctx, conn, defaultBranchTestOrg, orphan.id, w.start, w.end)
+	if err != nil || len(coverage) != 1 || coverage[0].RunID != "r-main" {
+		t.Errorf("coverage=%+v err=%v, want r-main", coverage, err)
 	}
 }

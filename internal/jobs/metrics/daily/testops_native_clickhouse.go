@@ -259,8 +259,8 @@ func loadNativeTestopsCaseAggregate(
 	if err != nil {
 		return nil, err
 	}
-	// Runs KNOWN to sit on a branch other than the repository default are left
-	// out of this read: flake, retry-dependency and failure-recurrence compare a
+	// Runs not shown to sit on the repository default branch are left out of
+	// this read: flake, retry-dependency and failure-recurrence compare a
 	// case name's statuses across runs, and a pull-request branch that fails,
 	// is fixed and then passes on a new commit would read as a flake. Pass and
 	// failure counts come from suite rows (loadNativeTestopsSuites) and are not
@@ -273,11 +273,11 @@ func loadNativeTestopsCaseAggregate(
 	// and dropping it. (The third set, suites before `end`, is only ever ANDed
 	// with the today set, so it needs no exclusion of its own.)
 	//
-	// A run with no ci_pipeline_runs row, or a NULL or empty branch, is not
-	// known to be off the default branch and stays in (a NULL branch never
-	// satisfies `branch != ?`); so does every run when the repository's default
-	// branch is not recorded. The off-default set is limited to the runs with a
-	// suite in [historyStart, end), the only runs the sets can name.
+	// A run with suite rows but no ci_pipeline_runs row is left out too: its
+	// branch cannot be shown to be the default. A run whose recorded branch is
+	// NULL or empty stays in, and so does every run when the repository's
+	// default branch is not recorded. The off-default set is limited to the
+	// runs with a suite in [historyStart, end), the only runs the sets can name.
 	offDefaultCTE := ""
 	offDefaultExclusion := ""
 	var args []any
@@ -370,27 +370,33 @@ ORDER BY case_name`, args...)
 }
 
 // offDefaultRunsCTE names, as off_default, the runs with a suite in
-// [historyStart, end) that ci_pipeline_runs records on a branch other than the
-// repository default. A NULL branch never satisfies the comparison, so a run
-// with no recorded branch is not in it.
+// [historyStart, end) that are not shown to be on the repository default
+// branch: a run counts as on it only when ci_pipeline_runs holds a row for it
+// whose branch is the default, NULL or empty. A run with suite rows but NO
+// pipeline row is therefore off_default: its branch cannot be proven, and once
+// pull-request reports sync it would leak into the default-branch measures.
+// A NULL or empty branch is a recorded absence and stays on the default side.
 const offDefaultRunsCTE = `
-WITH off_default AS (
-  SELECT run_id FROM ci_pipeline_runs FINAL
+WITH window_runs AS (
+  SELECT DISTINCT run_id FROM test_suite_results FINAL
   WHERE org_id = ? AND repo_id = ?
-    AND branch != '' AND branch != ?
-    AND run_id IN (
-      SELECT run_id FROM test_suite_results FINAL
-      WHERE org_id = ? AND repo_id = ?
-        AND coalesce(started_at, finished_at) >= ? AND coalesce(started_at, finished_at) < ?
-    )
+    AND coalesce(started_at, finished_at) >= ? AND coalesce(started_at, finished_at) < ?
+), off_default AS (
+  SELECT run_id FROM window_runs
+  WHERE run_id NOT IN (
+    SELECT run_id FROM ci_pipeline_runs FINAL
+    WHERE org_id = ? AND repo_id = ?
+      AND run_id IN (SELECT run_id FROM window_runs)
+      AND (branch IS NULL OR branch = '' OR branch = ?)
+  )
 )`
 
 func offDefaultRunsArgs(orgID string, repoID uuid.UUID, defaultBranch string, historyStart, end time.Time) []any {
-	return []any{orgID, repoID, defaultBranch, orgID, repoID, historyStart.UTC(), end.UTC()}
+	return []any{orgID, repoID, historyStart.UTC(), end.UTC(), orgID, repoID, defaultBranch}
 }
 
 // hasNativeTestopsOffDefaultCaseToday reports whether today holds a case row of
-// a run known to be off the default branch, by the same day rule the case
+// a run not shown to be on the default branch, by the same day rule the case
 // aggregate uses for today's rows.
 func hasNativeTestopsOffDefaultCaseToday(
 	ctx context.Context, conn testopsNativeConn, orgID string, repoID uuid.UUID,
@@ -457,10 +463,11 @@ func loadNativeTestopsLatestCoverage(
 	}
 	// A pull-request run's coverage must never become the repository's latest
 	// snapshot: the ORDER BY below knows no branch, so a PR run whose id sorts
-	// after the default branch's would win. Only runs KNOWN to sit on another
-	// branch are left out (see loadNativeTestopsCaseAggregate for the unknown
-	// cases). The filter is on ci_pipeline_runs, which carries every branch's
-	// runs, so it does not depend on which runs the test sync fetches reports for.
+	// after the default branch's would win. Only runs whose ci_pipeline_runs row
+	// records the default branch, or no branch, are kept; the inner join already
+	// drops a run with no pipeline row (see loadNativeTestopsCaseAggregate for
+	// the other unknown cases). ci_pipeline_runs carries every branch's runs, so
+	// the filter does not depend on which runs the test sync fetches reports for.
 	onDefaultBranch := ""
 	args := []any{start.UTC(), end.UTC(), repoID, orgID}
 	if defaultBranch != "" {

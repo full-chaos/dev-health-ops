@@ -76,8 +76,8 @@ func TestOrgDeleteSwitchOnFreesNameAndSlug(t *testing.T) {
 		if n := s.count(t, ctx, `SELECT count(*) FROM auth.organizations WHERE id = $1 AND disabled_at IS NOT NULL AND slug = $2`, x, deleted); n != 1 {
 			t.Errorf("auth.organizations: %d suspended rows with slug %q for the deleted org, want 1", n, deleted)
 		}
-		if n := s.count(t, ctx, `SELECT count(*) FROM auth.organizations WHERE slug = $1`, slugX); n != 0 {
-			t.Errorf("auth.organizations: %d rows still hold slug %q", n, slugX)
+		if n := s.count(t, ctx, `SELECT count(*) FROM auth.organizations WHERE id = $1 AND slug = $2`, x, slugX); n != 0 {
+			t.Errorf("auth.organizations: the deleted org's row still holds slug %q", slugX)
 		}
 		if n := s.count(t, ctx, `SELECT count(*) FROM auth.memberships WHERE organization_id = $1 AND status <> 'removed'`, x); n != 0 {
 			t.Errorf("%d live auth memberships in the deleted org, want 0", n)

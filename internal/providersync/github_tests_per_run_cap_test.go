@@ -398,41 +398,37 @@ func TestGitHubTestsPerRunArtifactsUnderCapIsUntouched(t *testing.T) {
 	}
 }
 
-// The report-rows cap counts suites+cases+coverage across a run's artifacts, so
-// it is crossed by artifact CONTENT rather than artifact count. Two artifacts,
-// each carrying more than half the cap, stay under the artifact cap and over
-// the report cap -- which is what makes this a distinct site rather than a
-// second spelling of the artifacts cap.
+// CHAOS-13794: a run whose report rows cross the run bound (githubTestsMaxReportRowsPerRun) keeps the artifacts that fit, skips the
+// one that does not whole, and still finalizes with the watermark advanced. Two artifacts of 60,000 rows each: the first fits
+// (60,000), the second would reach 120,000.
 func TestGitHubTestsPerRunReportRowsCapTruncatesAndAdvances(t *testing.T) {
-	suitesPer := githubTestsMaxJobsPerRun // each artifact: 500 suites + 500 cases
+	suitesPer := githubTestsMaxReportRowsPerRun * 3 / 10 // each artifact: 30,000 suites + 30,000 cases
 	doer := &githubTestsOversizedRunDoer{
 		t: t, jobs: 1, artifacts: 2, reportSuitesPerArtifact: suitesPer,
 	}
 	walk := perRunWalk(t, doer)
 
-	// Anti-vacuity: prove the fixture crosses the REPORT cap while staying
-	// under the ARTIFACT cap, so the observation below can only come from the
-	// report-rows site.
+	// Anti-vacuity: the fixture crosses the REPORT bound while staying under the ARTIFACT cap, and one artifact fits alone.
 	if doer.artifacts > githubTestsMaxArtifacts {
 		t.Fatalf("fixture serves %d artifacts, which also trips the artifact cap %d",
 			doer.artifacts, githubTestsMaxArtifacts)
 	}
-	if suitesPer*2 <= githubTestsMaxJobsPerRun {
-		t.Fatalf("fixture yields %d suites, which does not exceed the %d report cap",
-			suitesPer*2, githubTestsMaxJobsPerRun)
+	if suitesPer*2*2 <= githubTestsMaxReportRowsPerRun || suitesPer*2 > githubTestsMaxReportRowsPerRun {
+		t.Fatalf("fixture rows per artifact %d do not make exactly one fit under %d", suitesPer*2, githubTestsMaxReportRowsPerRun)
 	}
 	observation := perRunObservation(t, walk, githubTestsRunReportsComponent)
 	if observation.Cause != githubTestsPerRunCapCause || observation.Count != 1 {
 		t.Fatalf("reports observation=%+v, want cause=%s count=1", observation, githubTestsPerRunCapCause)
 	}
-	// The run kept the rows it had accumulated when the cap tripped, and the
-	// walk stopped consuming FURTHER artifacts for that run.
-	if walk.cursor.Suites == 0 {
-		t.Fatal("report-capped run committed no suites; the rows before the cap must still land")
+	if got := walk.cursor.Suites + walk.cursor.Cases; got != suitesPer*2 {
+		t.Fatalf("committed %d report rows, want the one artifact that fit (%d)", got, suitesPer*2)
 	}
-	if doer.archiveRequests != 1 {
-		t.Fatalf("downloaded %d archives, want 1 (the cap must stop further artifacts for the run)",
-			doer.archiveRequests)
+	// No break: the second artifact was downloaded, judged and skipped whole, with a marker.
+	if doer.archiveRequests != 2 {
+		t.Fatalf("downloaded %d archives, want 2 (the walk goes on after an overflow)", doer.archiveRequests)
+	}
+	if len(walk.cursor.SkippedArtifacts) != 1 || walk.cursor.SkippedArtifacts[0].Cause != githubTestsPerRunCapCause {
+		t.Fatalf("skipped markers %+v, want one with cause %s", walk.cursor.SkippedArtifacts, githubTestsPerRunCapCause)
 	}
 	assertFinalizedAndAdvanced(t, walk)
 }
@@ -546,87 +542,62 @@ func TestGitHubTestsNestedJobPageBudgetWithholdsTheWatermark(t *testing.T) {
 	}
 }
 
-// REGRESSION (codex round 1). Report rows were appended a whole artifact at a
-// time and only THEN measured, so the committed set could creep arbitrarily far
-// past the cap -- the original fixture committed 1000 rows against a 500 cap.
-// The bound is deliberately soft, max(cap, first artifact), because splitting
-// an artifact would separate a suite from its cases; but it must be a bound.
+// CHAOS-13794 (was: stay within max(cap, first artifact)). The bound is now a flat one: the admitted rows never exceed
+// githubTestsMaxReportRowsPerRun, and an artifact that alone exceeds it is skipped whole, not kept.
 func TestGitHubTestsReportRowsStayWithinTheDocumentedBound(t *testing.T) {
-	// Each artifact carries 400 suites + 400 cases = 800 rows, so the FIRST
-	// alone exceeds the 500 cap and any second artifact must be refused.
-	suitesPer := 400
-	doer := &githubTestsOversizedRunDoer{
-		t: t, jobs: 1, artifacts: 3, reportSuitesPerArtifact: suitesPer,
-	}
-	walk := perRunWalk(t, doer)
-
-	firstArtifactRows := suitesPer * 2
-	// Anti-vacuity: the first artifact must genuinely exceed the cap on its own.
-	if firstArtifactRows <= githubTestsMaxJobsPerRun {
-		t.Fatalf("first artifact carries %d rows, which does not exceed the %d cap",
-			firstArtifactRows, githubTestsMaxJobsPerRun)
-	}
-	committed := walk.cursor.Suites + walk.cursor.Cases + walk.cursor.Coverage
-	bound := githubTestsMaxJobsPerRun
-	if firstArtifactRows > bound {
-		bound = firstArtifactRows
-	}
-	// THE INVARIANT: durable rows never exceed max(cap, first artifact's rows).
-	if committed > bound {
-		t.Fatalf("committed %d report rows, exceeding the documented bound max(cap=%d, firstArtifact=%d)=%d",
-			committed, githubTestsMaxJobsPerRun, firstArtifactRows, bound)
-	}
-	// A run with reports must never commit zero, which is why the first
-	// oversized artifact is kept whole rather than refused.
-	if committed == 0 {
-		t.Fatal("committed no report rows; an oversized first artifact must still land")
-	}
-	// Only the first artifact is downloaded; the rest are refused before fetch.
-	if doer.archiveRequests != 1 {
-		t.Fatalf("downloaded %d archives, want 1 — later artifacts must be refused, not fetched and discarded",
-			doer.archiveRequests)
-	}
-	perRunObservation(t, walk, githubTestsRunReportsComponent)
-	assertFinalizedAndAdvanced(t, walk)
-}
-
-// The discriminating case for the row bound: artifacts that each fit UNDER the
-// cap but together exceed it. The oversized-first-artifact test above cannot
-// see the defect, because max(cap, firstArtifact) absorbs the overshoot and the
-// fixed and broken code commit the same rows — a mutation that restored
-// append-then-check survived it. Here the bound is the flat cap, so
-// appending before measuring is visible: 2x300 rows lands 600 against a 500
-// bound.
-func TestGitHubTestsReportRowsDoNotCreepPastTheCapAcrossArtifacts(t *testing.T) {
-	// 150 suites + 150 cases = 300 rows per artifact; three artifacts.
-	suitesPer := 150
+	// Three artifacts of 40,000 rows: two fit (80,000), the third would reach 120,000.
+	suitesPer := githubTestsMaxReportRowsPerRun / 5
 	doer := &githubTestsOversizedRunDoer{
 		t: t, jobs: 1, artifacts: 3, reportSuitesPerArtifact: suitesPer,
 	}
 	walk := perRunWalk(t, doer)
 
 	rowsPerArtifact := suitesPer * 2
-	// Anti-vacuity, both directions: each artifact must FIT on its own, and two
-	// together must NOT. Otherwise this collapses into one of the other tests.
-	if rowsPerArtifact > githubTestsMaxJobsPerRun {
-		t.Fatalf("artifact carries %d rows and already exceeds the %d cap alone; "+
-			"this fixture is the oversized-first case, not the creep case",
-			rowsPerArtifact, githubTestsMaxJobsPerRun)
-	}
-	if rowsPerArtifact*2 <= githubTestsMaxJobsPerRun {
-		t.Fatalf("two artifacts carry %d rows, which does not exceed the %d cap; "+
-			"nothing would truncate", rowsPerArtifact*2, githubTestsMaxJobsPerRun)
+	if rowsPerArtifact*3 <= githubTestsMaxReportRowsPerRun || rowsPerArtifact*2 > githubTestsMaxReportRowsPerRun {
+		t.Fatalf("fixture %d rows per artifact does not give two that fit and a third that does not", rowsPerArtifact)
 	}
 	committed := walk.cursor.Suites + walk.cursor.Cases + walk.cursor.Coverage
-	// Every artifact fits individually, so the bound here is the flat cap.
-	if committed > githubTestsMaxJobsPerRun {
-		t.Fatalf("committed %d report rows against a %d cap; rows were appended before "+
-			"being measured, so the aggregate crept past the bound one artifact at a time",
-			committed, githubTestsMaxJobsPerRun)
+	// THE INVARIANT: durable rows never exceed the bound.
+	if committed > githubTestsMaxReportRowsPerRun {
+		t.Fatalf("committed %d report rows, exceeding the bound %d", committed, githubTestsMaxReportRowsPerRun)
+	}
+	if committed != rowsPerArtifact*2 {
+		t.Fatalf("committed %d rows, want the two artifacts that fit (%d)", committed, rowsPerArtifact*2)
+	}
+	if doer.archiveRequests != 3 {
+		t.Fatalf("downloaded %d archives, want 3: the overflow must not end the walk", doer.archiveRequests)
+	}
+	perRunObservation(t, walk, githubTestsRunReportsComponent)
+	assertFinalizedAndAdvanced(t, walk)
+}
+
+// The discriminating case for the row bound: artifacts that each fit under it but not two together. Appending an artifact before
+// measuring it lands 120,000 rows against a 100,000 bound here; admitting whole-or-not keeps exactly one.
+func TestGitHubTestsReportRowsDoNotCreepPastTheCapAcrossArtifacts(t *testing.T) {
+	suitesPer := githubTestsMaxReportRowsPerRun * 3 / 10 // 60,000 rows per artifact, three artifacts
+	doer := &githubTestsOversizedRunDoer{
+		t: t, jobs: 1, artifacts: 3, reportSuitesPerArtifact: suitesPer,
+	}
+	walk := perRunWalk(t, doer)
+
+	rowsPerArtifact := suitesPer * 2
+	// Anti-vacuity, both directions: each artifact fits on its own, and two together do not.
+	if rowsPerArtifact > githubTestsMaxReportRowsPerRun {
+		t.Fatalf("artifact carries %d rows and already exceeds the %d bound alone", rowsPerArtifact, githubTestsMaxReportRowsPerRun)
+	}
+	if rowsPerArtifact*2 <= githubTestsMaxReportRowsPerRun {
+		t.Fatalf("two artifacts carry %d rows, which does not exceed the %d bound", rowsPerArtifact*2, githubTestsMaxReportRowsPerRun)
+	}
+	committed := walk.cursor.Suites + walk.cursor.Cases + walk.cursor.Coverage
+	if committed > githubTestsMaxReportRowsPerRun {
+		t.Fatalf("committed %d report rows against a %d bound; rows were appended before being measured",
+			committed, githubTestsMaxReportRowsPerRun)
 	}
 	if committed != rowsPerArtifact {
-		t.Fatalf("committed %d rows, want exactly the one artifact that fit (%d)",
-			committed, rowsPerArtifact)
+		t.Fatalf("committed %d rows, want exactly the one artifact that fit (%d)", committed, rowsPerArtifact)
+	}
+	if len(walk.cursor.SkippedArtifacts) != 2 {
+		t.Fatalf("skipped markers %d, want one per skipped artifact (2)", len(walk.cursor.SkippedArtifacts))
 	}
 	perRunObservation(t, walk, githubTestsRunReportsComponent)
 	assertFinalizedAndAdvanced(t, walk)

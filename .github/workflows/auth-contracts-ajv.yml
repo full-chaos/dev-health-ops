@@ -36,9 +36,10 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: bash ci/auth-contracts-ajv/scope.sh
 
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         if: steps.scope.outputs.run == 'true'
         with:
+          cache: ''
           package-manager-cache: false
           node-version: 22.12.0
 

@@ -20,10 +20,13 @@ import (
 // event, by the job's if, the step's if, or the value of the switch itself. The expressions are evaluated with the event name
 // known and everything else unknown, so a switch passes only when it is off on that event whatever the rest holds.
 // An action that caches by itself (setup-go, setup-node, setup-uv, trivy-action, setup-qemu, setup-buildx, ...) saves on a key
-// miss and has no restore-only switch, so on a job a pull request can run its cache input must be LITERALLY off (no
-// expression); such a job reads the cache through an actions/cache/restore step and saves it with an actions/cache/save step
-// only a push to main or the merge queue runs. The guard fails closed: every action of a pull_request workflow must be in
-// prCacheActions at its pinned ref, a local action or a reusable workflow fails, and so does a bake file it cannot read.
+// miss and has no restore-only switch, so on a step a pull request can run EVERY cache input of it must be set LITERALLY off
+// (no expression but the one main-only gate, mainOnlyGate; an absent input fails even when it defaults off); such a job reads
+// the cache through an
+// actions/cache/restore step and saves it with an actions/cache/save step only a push to main or the merge queue runs.
+// The guard fails closed: every action of a pull_request workflow must be pinned to a full 40-hex sha with a `# vX.Y.Z`
+// comment on its uses: line, and owner/repo[/path] at that major must be in prCacheActions; a local action or a reusable
+// workflow fails, and so does a bake file it cannot read.
 
 var prCacheEvents = []string{"pull_request", "pull_request_target"}
 
@@ -37,6 +40,7 @@ func prCacheWriteViolations(t *testing.T, root string) []string {
 	checked := 0
 	for _, name := range workflowNames(t, root) {
 		doc := loadWf(t, root, name)
+		raw := usesComments(readFile(t, filepath.Join(root, ".github", "workflows", name)))
 		ev := triggerEvents(doc)
 		for _, event := range prCacheEvents {
 			if _, ok := ev[event]; !ok {
@@ -55,17 +59,24 @@ func prCacheWriteViolations(t *testing.T, root string) []string {
 					uses := asString(s["uses"])
 					// Fail closed on every step of a pull_request workflow, reachable or not: an action not read at its pinned ref
 					// may write an Actions cache through an input default or a post step.
+					var key string
 					if uses != "" {
 						if strings.HasPrefix(uses, "./") {
 							out = append(out, fmt.Sprintf("%s runs the local action %s, which this guard does not follow", at, uses))
 							continue
 						}
-						if _, known := prCacheActions[uses]; !known {
-							out = append(out, fmt.Sprintf("%s uses %s, an action this guard has not read at that ref: read its cache inputs, defaults and post step there and add it to prCacheActions", at, uses))
+						k, problem := actionKey(uses, raw[uses])
+						if problem != "" {
+							out = append(out, fmt.Sprintf("%s uses %s, %s", at, uses, problem))
 							continue
 						}
+						if _, known := prCacheActions[k]; !known {
+							out = append(out, fmt.Sprintf("%s uses %s (%s), an action at a major this guard has not read: read its cache inputs, defaults and post step at that sha and add it to prCacheActions", at, uses, k))
+							continue
+						}
+						key = k
 					}
-					why, switches, broken := cacheWrite(root, doc, job, s)
+					why, switches, broken := cacheWrite(root, doc, job, s, key)
 					if broken != "" {
 						out = append(out, at+": "+broken)
 						continue
@@ -80,7 +91,7 @@ func prCacheWriteViolations(t *testing.T, root string) []string {
 					on := len(switches) == 0
 					for _, sw := range switches {
 						if lit, ok := sw.(literalSwitch); ok {
-							on = on || !lit.off()
+							on = on || !lit.off(event)
 						} else if switchMayBeOn(sw, event) {
 							on = true
 						}
@@ -118,8 +129,9 @@ const (
 	bakeWriter                      // a bake: set lines and the bake files' cache-to are the switch
 )
 
-// cacheInput is an input that turns an action's own Actions cache on. A defaultOn input must be set literally off; one
-// that defaults off may be absent.
+// cacheInput is an input that turns an action's own Actions cache on. On a step a pull request can run it must be set
+// literally off: false, "false" or a value in off, "" when the input has no on-default (an action may read "" as its
+// default), or be exactly ${{ mainOnlyGate }}. defaultOn marks an input whose default turns the cache on.
 type cacheInput struct {
 	name      string
 	defaultOn bool
@@ -131,43 +143,135 @@ type actionPolicy struct {
 	inputs []cacheInput
 }
 
-// prCacheActions is every action a pull_request workflow may use, each read at its pinned ref (action.yml inputs, defaults
-// and post step; the source where the caching is conditional). Any other action@ref fails the guard.
+// prCacheActions is every action a pull_request workflow may use, keyed on owner/repo[/path]@v<major>, the major read from
+// the `# vX.Y.Z` comment of its uses: line (for v0 the major is 0.Y: a 0.x minor is breaking). Each entry was read at the sha
+// its comment names (action.yml inputs, defaults and post step; the source where the caching is conditional), so a sha bump
+// inside a major keeps its entry. A bot PR that bumps one is read with this one command (OWNER/REPO[/PATH], OLD and NEW from
+// the diff; action.yaml in place of action.yml for aquasecurity/*):
+//
+//	diff <(curl -fsSL https://raw.githubusercontent.com/OWNER/REPO/OLD/PATH/action.yml) <(curl -fsSL https://raw.githubusercontent.com/OWNER/REPO/NEW/PATH/action.yml)
+//
+// Residual: a minor or patch bump that ADDS a new default-on cache input passes this guard unseen; that diff is the check.
 var prCacheActions = map[string]actionPolicy{
-	"actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1":                {kind: nonWriter},
-	"actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333":       {kind: nonWriter},
-	"actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9":         {kind: nonWriter},
-	"actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8": {kind: nonWriter},
-	"actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9":           {kind: nonWriter},
-	"actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9":                   {kind: alwaysWriter},
-	"actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9":              {kind: alwaysWriter},
-	"actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e":                {kind: inputWriter, inputs: []cacheInput{{name: "cache", defaultOn: true}}},
-	"actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1": {kind: inputWriter, inputs: []cacheInput{
-		{name: "cache"}, {name: "package-manager-cache", defaultOn: true}}},
-	"actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0":              {kind: inputWriter, inputs: []cacheInput{{name: "cache"}}},
-	"astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2":                {kind: inputWriter, inputs: []cacheInput{{name: "enable-cache", defaultOn: true}}},
-	"pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115":                 {kind: inputWriter, inputs: []cacheInput{{name: "cache"}}},
-	"aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25":         {kind: inputWriter, inputs: []cacheInput{{name: "cache", defaultOn: true}}},
-	"aquasecurity/setup-trivy@3fb12ec12f41e471780db15c232d5dd185dcb514":          {kind: inputWriter, inputs: []cacheInput{{name: "cache"}}},
-	"docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1":          {kind: inputWriter, inputs: []cacheInput{{name: "cache-image", defaultOn: true}}},
-	"docker/setup-buildx-action@594f3bf4285d9ea8dc53c9a0c9c4092420091003":        {kind: inputWriter, inputs: []cacheInput{{name: "cache-binary", defaultOn: true}}},
-	"docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc":          {kind: cacheToWriter},
-	"docker/bake-action@59cb1203cd42bcefd40a1b6d73b589e48c86040e":                {kind: bakeWriter},
-	"docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550":               {kind: nonWriter},
-	"docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302":            {kind: nonWriter},
-	"dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d":                {kind: nonWriter},
-	"softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3":       {kind: nonWriter},
-	"azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310":                  {kind: nonWriter},
-	"anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c":               {kind: nonWriter},
-	"anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c": {kind: nonWriter},
-	// codeql-action 4.39.3: TRAP caches are uploaded only when the default branch is analysed (src/trap-caching.ts
-	// uploadTrapCaches), the overlay-base database only in overlay-base mode, which only the default branch gets
-	// (src/config-utils.ts), and dependency caches only when dependency-caching is on (default none, src/caching-utils.ts).
-	"github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066": {kind: inputWriter, inputs: []cacheInput{
-		{name: "dependency-caching", off: []string{"none", "off", "restore"}}}},
-	"github/codeql-action/autobuild@33d7b85da1a04171e211befe2c739303b9a4c066":    {kind: nonWriter},
-	"github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066":      {kind: nonWriter},
-	"github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066": {kind: nonWriter},
+	// read at 3d3c42e5aac5ba805825da76410c181273ba90b1 (v7.0.1): cache inputs = []
+	"actions/checkout@v7": {kind: nonWriter},
+	// read at 9000827ccba6bdab643e8b6fd33ac0654aef8333 (v8): cache inputs = []
+	"actions/download-artifact@v8": {kind: nonWriter},
+	// read at cf430e030ddbb5b0abf93d22962f4752f3646cd9 (v7): cache inputs = []
+	"actions/upload-artifact@v7": {kind: nonWriter},
+	// read at 4d101475d8b20a2381f78447822ac1eab6504dd8 (v4.2.2): cache inputs = []
+	"actions/attest-build-provenance@v4": {kind: nonWriter},
+	// read at 55cc8345863c7cc4c66a329aec7e433d2d1c52a9 (v6.1.0): cache inputs = [] (restores only)
+	"actions/cache/restore@v6": {kind: nonWriter},
+	// read at 55cc8345863c7cc4c66a329aec7e433d2d1c52a9 (v6.1.0): cache inputs = [] (its post step always saves)
+	"actions/cache@v6": {kind: alwaysWriter},
+	// read at 55cc8345863c7cc4c66a329aec7e433d2d1c52a9 (v6.1.0): cache inputs = [] (always saves)
+	"actions/cache/save@v6": {kind: alwaysWriter},
+	// read at b7ad1dad31e06c5925ef5d2fc7ad053ef454303e (v7.0.0): cache inputs = [cache (default true)]
+	"actions/setup-go@v7": {kind: inputWriter, inputs: []cacheInput{{name: "cache", defaultOn: true}}},
+	// read at 949feb2413d6458794dcd2491c4babbbce0c15c1 (v7.1.0): cache inputs = [cache (no default), package-manager-cache (default true)]
+	"actions/setup-node@v7": {kind: inputWriter, inputs: []cacheInput{{name: "cache"}, {name: "package-manager-cache", defaultOn: true}}},
+	// read at 6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 (v7.1.0): cache inputs = [cache (no default)]
+	"actions/setup-python@v7": {kind: inputWriter, inputs: []cacheInput{{name: "cache"}}},
+	// read at 68559e99cc807c1eb7e9238fd43a15bba460eec2 (v10.3.3): cache inputs = [enable-cache (default auto)]; restore-cache
+	// and save-cache act only when enable-cache is on
+	"astral-sh/setup-uv@v10": {kind: inputWriter, inputs: []cacheInput{{name: "enable-cache", defaultOn: true}}},
+	// read at 73e46992e05b19abd31f2f3c20e0e7370d762115 (v6.1.1): cache inputs = [cache (default false)]
+	"pnpm/action-setup@v6": {kind: inputWriter, inputs: []cacheInput{{name: "cache"}}},
+	// read at ed142fd0673e97e23eac54620cfb913e5ce36c25 (v0.36.0): cache inputs = [cache (default true)]; it drives both the
+	// actions/cache of the DB and the cache of the setup-trivy the action runs when skip-setup-trivy is false
+	"aquasecurity/trivy-action@v0.36": {kind: inputWriter, inputs: []cacheInput{{name: "cache", defaultOn: true}}},
+	// read at 3fb12ec12f41e471780db15c232d5dd185dcb514 (v0.2.6): cache inputs = [cache (default false)]
+	"aquasecurity/setup-trivy@v0.2": {kind: inputWriter, inputs: []cacheInput{{name: "cache"}}},
+	// read at 99012661954931238ded8c8b007157a8430204e1 (v4.4.0): cache inputs = [cache-image (default true)]
+	"docker/setup-qemu-action@v4": {kind: inputWriter, inputs: []cacheInput{{name: "cache-image", defaultOn: true}}},
+	// read at 594f3bf4285d9ea8dc53c9a0c9c4092420091003 (v4.4.0): cache inputs = [cache-binary (default true)]
+	"docker/setup-buildx-action@v4": {kind: inputWriter, inputs: []cacheInput{{name: "cache-binary", defaultOn: true}}},
+	// read at c3c9e263c25d99ce0380d002d59b67737d91b0dc (v7.4.0): cache inputs = [cache-to (no default)]
+	"docker/build-push-action@v7": {kind: cacheToWriter},
+	// read at 59cb1203cd42bcefd40a1b6d73b589e48c86040e (v7.5.0): cache inputs = [set *.cache-to, the bake files' cache-to]
+	"docker/bake-action@v7": {kind: bakeWriter},
+	// read at 8aa5831fb8d48d8f76594c7ddde61ae58019f550 (v4.8.0): cache inputs = []
+	"docker/login-action@v4": {kind: nonWriter},
+	// read at dc802804100637a589fabce1cb79ff13a1411302 (v6.2.0): cache inputs = []
+	"docker/metadata-action@v6": {kind: nonWriter},
+	// read at ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d (v4.0.3): cache inputs = []
+	"dorny/paths-filter@v4": {kind: nonWriter},
+	// read at 8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 (v3.0.4): cache inputs = []
+	"softprops/action-gh-release@v3": {kind: nonWriter},
+	// read at 9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 (v5.0.1): cache inputs = [] (the runner's local tool cache only)
+	"azure/setup-helm@v5": {kind: nonWriter},
+	// read at 66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c (v0.24.3): cache inputs = [] (the runner's local tool cache only)
+	"anchore/sbom-action@v0.24": {kind: nonWriter},
+	// read at 66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c (v0.24.3): cache inputs = [] (the runner's local tool cache only)
+	"anchore/sbom-action/download-syft@v0.24": {kind: nonWriter},
+	// read at 33d7b85da1a04171e211befe2c739303b9a4c066 (v4.39.3): cache inputs = [dependency-caching (default none),
+	// trap-caching (no default; "" or unset means automatic, which is on on hosted runners outside overlay mode,
+	// src/config-utils.ts isTrapCachingEnabled)]. TRAP caches are uploaded only when the default branch is analysed
+	// (src/trap-caching.ts uploadTrapCaches), the overlay-base database only in overlay-base mode, which only the default
+	// branch gets (src/config-utils.ts), and dependency caches only when dependency-caching is on (src/caching-utils.ts).
+	"github/codeql-action/init@v4": {kind: inputWriter, inputs: []cacheInput{
+		{name: "dependency-caching", off: []string{"none", "off", "restore"}}, {name: "trap-caching", defaultOn: true}}},
+	// read at 33d7b85da1a04171e211befe2c739303b9a4c066 (v4.39.3): cache inputs = []
+	"github/codeql-action/autobuild@v4": {kind: nonWriter},
+	// read at 33d7b85da1a04171e211befe2c739303b9a4c066 (v4.39.3): cache inputs = []
+	"github/codeql-action/analyze@v4": {kind: nonWriter},
+	// read at 33d7b85da1a04171e211befe2c739303b9a4c066 (v4.39.3): cache inputs = []
+	"github/codeql-action/upload-sarif@v4": {kind: nonWriter},
+}
+
+var (
+	usesLineRe   = regexp.MustCompile(`^\s*(?:-\s+)?uses:\s*(?:"([^"]*)"|'([^']*)'|([^\s#"']+))\s*(?:#\s*(.*?))?\s*$`)
+	pinnedUsesRe = regexp.MustCompile(`^([^@\s]+)@[0-9a-f]{40}$`)
+	versionRe    = regexp.MustCompile(`^v(0|[1-9][0-9]*)(?:\.(0|[1-9][0-9]*)(?:\.(0|[1-9][0-9]*))?)?$`)
+)
+
+// usesComments maps each uses: value of a workflow's raw text to the comments of its lines: the YAML loader drops comments.
+func usesComments(text string) map[string][]string {
+	out := map[string][]string{}
+	for _, line := range strings.Split(text, "\n") {
+		m := usesLineRe.FindStringSubmatch(line)
+		if m == nil {
+			continue
+		}
+		v := m[1] + m[2] + m[3]
+		out[v] = append(out[v], strings.TrimSpace(m[4]))
+	}
+	return out
+}
+
+// actionKey keys a pinned action on owner/repo[/path] and the major of the version comments of its uses: lines, which must
+// all name one major. problem says what keeps it from being keyed.
+func actionKey(uses string, comments []string) (key, problem string) {
+	m := pinnedUsesRe.FindStringSubmatch(uses)
+	if m == nil {
+		return "", "which is not pinned to a full 40-hex commit sha"
+	}
+	if len(comments) == 0 {
+		return "", "whose uses: line the guard cannot find in the raw workflow text"
+	}
+	for _, c := range comments {
+		if c == "" {
+			return "", "whose uses: line has no `# vX.Y.Z` version comment"
+		}
+		v := versionRe.FindStringSubmatch(c)
+		if v == nil {
+			return "", fmt.Sprintf("whose version comment %q is not vX, vX.Y or vX.Y.Z", c)
+		}
+		major := v[1]
+		if major == "0" {
+			if v[2] == "" {
+				return "", fmt.Sprintf("whose version comment %q has no minor: the major of a v0 action is 0.Y", c)
+			}
+			major += "." + v[2]
+		}
+		k := m[1] + "@v" + major
+		if key != "" && k != key {
+			return "", fmt.Sprintf("whose uses: lines name two majors (%s, %s)", key, k)
+		}
+		key = k
+	}
+	return key, ""
 }
 
 // literalSwitch is a cache input of an action: only a literal off value (no expression) switches it off.
@@ -177,18 +281,37 @@ type literalSwitch struct {
 	in  cacheInput
 }
 
-func (l literalSwitch) off() bool {
-	if !l.set {
-		return !l.in.defaultOn
+// mainOnlyGate is the one expression a cache input may hold: the push-to-main / merge-queue gate of the actions/cache/save
+// steps, so the input is on where the saves run and off on every other event.
+const mainOnlyGate = "github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main')"
+
+// mainOnlyGatedValue holds when v is exactly ${{ mainOnlyGate }} (blanks folded, one pair of outer parentheses allowed).
+func mainOnlyGatedValue(v string) bool {
+	m := wholeExprRe.FindStringSubmatch(strings.TrimSpace(v))
+	if m == nil {
+		return false
+	}
+	e := strings.Join(strings.Fields(m[1]), " ")
+	if inner, ok := strings.CutPrefix(e, "("); ok {
+		if inner, ok = strings.CutSuffix(inner, ")"); ok {
+			e = strings.TrimSpace(inner)
+		}
+	}
+	return e == mainOnlyGate
+}
+
+func (l literalSwitch) off(event string) bool {
+	if s, ok := l.v.(string); ok && mainOnlyGatedValue(s) {
+		return !switchMayBeOn(s, event)
 	}
 	switch c := l.v.(type) {
 	case nil:
-		return !l.in.defaultOn
+		return false
 	case bool:
 		return !c
 	}
 	s := strings.TrimSpace(str(l.v))
-	if s == "" || strings.EqualFold(s, "false") {
+	if (s == "" && !l.in.defaultOn) || strings.EqualFold(s, "false") {
 		return true
 	}
 	for _, o := range l.in.off {
@@ -204,7 +327,7 @@ var bakeGatedToRe = regexp.MustCompile(`^([A-Za-z_][A-Za-z0-9_]*) == "1" \? \[.*
 
 // cacheWrite says whether a step can write an Actions cache, and which values switch the write (all must be off to switch
 // it off; no switch means only an if keeps it from writing). broken names a step the guard cannot judge.
-func cacheWrite(root string, doc, job, s yamlMap) (why string, switches []any, broken string) {
+func cacheWrite(root string, doc, job, s yamlMap, key string) (why string, switches []any, broken string) {
 	uses := asString(s["uses"])
 	with := asMap(s["with"])
 	if uses == "" {
@@ -214,7 +337,7 @@ func cacheWrite(root string, doc, job, s yamlMap) (why string, switches []any, b
 		return "", nil, ""
 	}
 	action, _, _ := strings.Cut(uses, "@")
-	p := prCacheActions[uses]
+	p := prCacheActions[key]
 	switch p.kind {
 	case alwaysWriter:
 		return action, nil, ""
@@ -228,10 +351,9 @@ func cacheWrite(root string, doc, job, s yamlMap) (why string, switches []any, b
 				parts = append(parts, in.name+": "+str(v))
 			} else if in.defaultOn {
 				parts = append(parts, in.name+" defaults on")
+			} else {
+				parts = append(parts, in.name+" unset")
 			}
-		}
-		if len(parts) == 0 {
-			parts = append(parts, "no cache input set")
 		}
 		return action + " (" + strings.Join(parts, ", ") + ")", switches, ""
 	case cacheToWriter:
@@ -771,21 +893,20 @@ func TestPRCacheWriteGuardPlantedDefectsAreCaught(t *testing.T) {
 		{"a combined actions/cache", []mutation{{gq, "        id: go-cache\n        if: (steps.relevance.outputs.relevant == 'true' || steps.relevance.outputs.warm == 'true') && runner.environment == 'github-hosted'\n        uses: actions/cache/restore@", "        id: go-cache\n        if: (steps.relevance.outputs.relevant == 'true' || steps.relevance.outputs.warm == 'true') && runner.environment == 'github-hosted'\n        uses: actions/cache@"}}, []string{"go-quality.yml: job go-quality-leg", ": actions/cache"}},
 		{"setup-go back on its default cache", []mutation{{".github/workflows/docs-drift.yml", "          cache: false\n", ""}}, []string{"docs-drift.yml: job docs-drift", "cache defaults on"}},
 		{"setup-go cache as an expression that is off on a pull request", []mutation{{".github/workflows/test.yml", "          cache: false\n", "          cache: ${{ github.event_name != 'pull_request' }}\n"}}, []string{"test.yml: job chart-started", "actions/setup-go (cache: ${{"}},
-		{"setup-node writes the pnpm cache", []mutation{{goY, "          package-manager-cache: false\n          node-version: 22\n      - name: Locate the pnpm store", "          package-manager-cache: false\n          node-version: 22\n          cache: pnpm\n      - name: Locate the pnpm store"}}, []string{"go.yml: job go-auth-web-proxy-proof", "actions/setup-node (cache: pnpm"}},
-		{"setup-node pnpm cache as an expression", []mutation{{goY, "          package-manager-cache: false\n          node-version: 22\n      - name: Locate the pnpm store", "          package-manager-cache: false\n          node-version: 22\n          cache: ${{ github.event_name != 'pull_request' && 'pnpm' || '' }}\n      - name: Locate the pnpm store"}}, []string{"go.yml: job go-auth-web-proxy-proof", "actions/setup-node (cache: ${{"}},
+		{"setup-node writes the pnpm cache", []mutation{{goY, "          cache: ''\n          package-manager-cache: false\n          node-version: 22\n      - name: Locate the pnpm store", "          cache: pnpm\n          package-manager-cache: false\n          node-version: 22\n      - name: Locate the pnpm store"}}, []string{"go.yml: job go-auth-web-proxy-proof", "actions/setup-node (cache: pnpm"}},
+		{"setup-node pnpm cache as an expression", []mutation{{goY, "          cache: ''\n          package-manager-cache: false\n          node-version: 22\n      - name: Locate the pnpm store", "          cache: ${{ github.event_name != 'pull_request' && 'pnpm' || '' }}\n          package-manager-cache: false\n          node-version: 22\n      - name: Locate the pnpm store"}}, []string{"go.yml: job go-auth-web-proxy-proof", "actions/setup-node (cache: ${{"}},
 		{"the Go cache save loses its event condition", []mutation{{".github/workflows/docs-inventory-review.yml", "        if: (github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && steps.go-cache.outcome", "        if: steps.go-cache.outcome"}}, []string{"docs-inventory-review.yml: job inventory-archive", "actions/cache/save"}},
 		{"the pnpm save keeps only the merge-queue half of its condition", []mutation{{goY, "        if: (github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && steps.pnpm-cache.outcome", "        if: (github.event_name == 'merge_group' || github.ref == 'refs/heads/main') && steps.pnpm-cache.outcome"}}, []string{"go.yml: job go-auth-web-proxy-proof", "actions/cache/save"}},
 		{"the bake write switch on a pull request job", []mutation{{gas, "          AUTH_CORPUS_STUB_DIR: ${{ runner.temp }}/corpus-stub", "          AUTH_CORPUS_CACHE_WRITE: \"1\"\n          AUTH_CORPUS_STUB_DIR: ${{ runner.temp }}/corpus-stub"}}, []string{"go-auth-service.yml: job auth-corpus-queue", "AUTH_CORPUS_CACHE_WRITE"}},
 		{"the seeding job loses its main-push if", []mutation{{gas, "  auth-corpus-image-cache:\n    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && ", "  auth-corpus-image-cache:\n    if: "}}, []string{"go-auth-service.yml: job auth-corpus-image-cache"}},
 		{"a run step exports a buildx cache", []mutation{{goY, "      - name: Install web dependencies\n        working-directory: dev-health-web\n", "      - name: Planted\n        run: docker buildx build --cache-to type=gha,mode=max .\n      - name: Install web dependencies\n        working-directory: dev-health-web\n"}}, []string{"go.yml: job go-auth-web-proxy-proof", "--cache-to"}},
-		{"an action this guard has not read", []mutation{{".github/workflows/docs-drift.yml", "uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1", "uses: actions/checkout@0000000000000000000000000000000000000000"}}, []string{"docs-drift.yml: job docs-drift", "actions/checkout@0000000000000000000000000000000000000000, an action this guard has not read"}},
 		{"a bake file the guard cannot read", []mutation{{gas, "            ci/auth_corpus_external.override.yml\n            ci/auth_corpus.bake.hcl\n          targets: authcorpus\n          load: true\n      - name: Run the auth-flow corpus", "            ci/auth_corpus_external.override.yml\n            ci/missing.bake.hcl\n          targets: authcorpus\n          load: true\n      - name: Run the auth-flow corpus"}}, []string{"go-auth-service.yml: job auth-corpus-queue", "the bake file ci/missing.bake.hcl cannot be read"}},
 		{"a bake step without files", []mutation{{gas, "          files: |\n            compose.yml\n            ci/auth_corpus_external.override.yml\n            ci/auth_corpus.bake.hcl\n          targets: authcorpus\n          load: true\n      - name: Run the auth-flow corpus", "          targets: authcorpus\n          load: true\n      - name: Run the auth-flow corpus"}}, []string{"go-auth-service.yml: job auth-corpus-queue", "a bake step without files"}},
 		{"trivy-action back on its own cache", []mutation{{goY, "          cache: false\n          skip-setup-trivy: true\n", "          skip-setup-trivy: true\n"}}, []string{"go.yml: job go-container-security", "aquasecurity/trivy-action (cache defaults on)"}},
 		{"setup-qemu back on its image cache", []mutation{{dock, "          cache-image: false\n", ""}}, []string{"docker-images.yml: job go-build", "docker/setup-qemu-action (cache-image defaults on)"}},
 		{"setup-buildx back on its binary cache", []mutation{{".github/workflows/arc-runner-image.yml", "          cache-binary: false\n", ""}}, []string{"arc-runner-image.yml: job build", "docker/setup-buildx-action (cache-binary defaults on)"}},
 		{"setup-node back on its package-manager cache", []mutation{{".github/workflows/auth-contracts-ajv.yml", "          package-manager-cache: false\n", ""}}, []string{"auth-contracts-ajv.yml", "package-manager-cache defaults on"}},
-		{"codeql dependency caching on", []mutation{{".github/workflows/codeql-analysis.yml", "          languages: ${{ matrix.language }}\n", "          languages: ${{ matrix.language }}\n          dependency-caching: true\n"}}, []string{"codeql-analysis.yml", "github/codeql-action/init (dependency-caching: true)"}},
+		{"codeql dependency caching on", []mutation{{".github/workflows/codeql-analysis.yml", "          dependency-caching: none\n", "          dependency-caching: true\n"}}, []string{"codeql-analysis.yml", "github/codeql-action/init (dependency-caching: true,"}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -799,13 +920,13 @@ func TestPRCacheWriteGuardFailsClosed(t *testing.T) {
 	cases := []struct {
 		name, yml, want string
 	}{
-		{"a local action", "on: pull_request\njobs:\n  a:\n    runs-on: x\n    steps:\n      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9\n        if: github.event_name == 'push'\n      - uses: ./.github/actions/build\n", "local action"},
-		{"a reusable workflow", "on: pull_request\njobs:\n  a:\n    uses: ./.github/workflows/other.yml\n  b:\n    runs-on: x\n    steps:\n      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9\n        if: github.event_name == 'push'\n", "reusable workflow"},
-		{"an expression it cannot read", "on: pull_request\njobs:\n  a:\n    runs-on: x\n    steps:\n      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9\n        if: github.event_name == 'push' ]]\n", "actions/cache/save"},
-		{"pull_request_target", "on: pull_request_target\njobs:\n  a:\n    runs-on: x\n    steps:\n      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e\n", "pull_request_target"},
+		{"a local action", "on: pull_request\njobs:\n  a:\n    runs-on: x\n    steps:\n      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0\n        if: github.event_name == 'push'\n      - uses: ./.github/actions/build\n", "local action"},
+		{"a reusable workflow", "on: pull_request\njobs:\n  a:\n    uses: ./.github/workflows/other.yml\n  b:\n    runs-on: x\n    steps:\n      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0\n        if: github.event_name == 'push'\n", "reusable workflow"},
+		{"an expression it cannot read", "on: pull_request\njobs:\n  a:\n    runs-on: x\n    steps:\n      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0\n        if: github.event_name == 'push' ]]\n", "actions/cache/save"},
+		{"pull_request_target", "on: pull_request_target\njobs:\n  a:\n    runs-on: x\n    steps:\n      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0\n", "pull_request_target"},
 		{"nothing to check", "on: pull_request\njobs:\n  a:\n    runs-on: x\n    steps:\n      - run: true\n", "vacuously"},
-		{"an unknown action on a step a pull request never runs", "on: pull_request\njobs:\n  a:\n    runs-on: x\n    if: github.event_name == 'push'\n    steps:\n      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9\n      - uses: someone/cache-everything@v1\n", "someone/cache-everything@v1, an action this guard has not read"},
-		{"a docker step", "on: pull_request\njobs:\n  a:\n    runs-on: x\n    steps:\n      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9\n        if: github.event_name == 'push'\n      - uses: docker://alpine:3\n", "docker://alpine:3, an action this guard has not read"},
+		{"an unknown action on a step a pull request never runs", "on: pull_request\njobs:\n  a:\n    runs-on: x\n    if: github.event_name == 'push'\n    steps:\n      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0\n      - uses: someone/cache-everything@v1\n", "someone/cache-everything@v1, which is not pinned to a full 40-hex commit sha"},
+		{"a docker step", "on: pull_request\njobs:\n  a:\n    runs-on: x\n    steps:\n      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0\n        if: github.event_name == 'push'\n      - uses: docker://alpine:3\n", "docker://alpine:3, which is not pinned to a full 40-hex commit sha"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -818,6 +939,100 @@ func TestPRCacheWriteGuardFailsClosed(t *testing.T) {
 				t.Fatal(err)
 			}
 			expectViolation(t, prCacheWriteViolations(t, root), c.want)
+		})
+	}
+}
+
+// TestPRCacheGuardKeysOnActionMajor: an action is keyed on owner/repo[/path] and the major of its version comment, so a
+// bot PR that bumps a sha inside a major passes and a new major or a new action fails; a cache input must be set literally
+// off even when it defaults off.
+func TestPRCacheGuardKeysOnActionMajor(t *testing.T) {
+	root := authProofRoot(t)
+	var files []string
+	for _, n := range workflowNames(t, root) {
+		files = append(files, ".github/workflows/"+n)
+	}
+	files = append(files, "ci/auth_corpus.bake.hcl", "compose.yml", "ci/auth_corpus_external.override.yml")
+	const (
+		drift    = ".github/workflows/docs-drift.yml"
+		goY      = ".github/workflows/go.yml"
+		sec      = ".github/workflows/security-scan.yml"
+		checkout = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1"
+		helm     = "azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1"
+		trivy    = "aquasecurity/setup-trivy@3fb12ec12f41e471780db15c232d5dd185dcb514 # v0.2.6"
+	)
+	passes := []struct {
+		name string
+		muts []mutation
+	}{
+		{"a minor bump", []mutation{
+			{".github/workflows/test.yml", helm, "azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0"},
+			{".github/workflows/go-quality.yml", helm, "azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0"}}},
+		{"a v0 patch bump", []mutation{{goY, trivy, "aquasecurity/setup-trivy@0123456789abcdef0123456789abcdef01234567 # v0.2.7"}}},
+	}
+	for _, c := range passes {
+		t.Run(c.name+" passes", func(t *testing.T) {
+			expectNoViolations(t, prCacheWriteViolations(t, plantTree(t, root, files, c.muts...)))
+		})
+	}
+	fails := []struct {
+		name string
+		muts []mutation
+		want []string
+	}{
+		{"a major bump", []mutation{{drift, checkout, "actions/checkout@0123456789abcdef0123456789abcdef01234567 # v8.0.0"}}, []string{"docs-drift.yml: job docs-drift", "(actions/checkout@v8), an action at a major this guard has not read"}},
+		{"a v0 minor bump", []mutation{{goY, trivy, "aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1"}}, []string{"go.yml: job go-container-security", "(aquasecurity/setup-trivy@v0.3), an action at a major this guard has not read"}},
+		{"a new action", []mutation{{drift, checkout, "someone/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1"}}, []string{"docs-drift.yml: job docs-drift", "(someone/checkout@v7), an action at a major this guard has not read"}},
+		{"a missing version comment", []mutation{{drift, checkout, "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"}}, []string{"docs-drift.yml: job docs-drift", "has no `# vX.Y.Z` version comment"}},
+		{"an unparseable version comment", []mutation{{drift, checkout, "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # version 7"}}, []string{"docs-drift.yml: job docs-drift", `version comment "version 7" is not vX, vX.Y or vX.Y.Z`}},
+		{"a v0 comment without its minor", []mutation{{goY, trivy, "aquasecurity/setup-trivy@3fb12ec12f41e471780db15c232d5dd185dcb514 # v0"}}, []string{"go.yml: job go-container-security", "has no minor: the major of a v0 action is 0.Y"}},
+		{"two majors on one pin", []mutation{{goY, checkout, "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v8.0.0"}}, []string{"go.yml: job", "name two majors (actions/checkout@v"}},
+		{"a uses that is not a full sha", []mutation{{drift, checkout, "actions/checkout@v7 # v7.0.1"}}, []string{"docs-drift.yml: job docs-drift", "actions/checkout@v7, which is not pinned to a full 40-hex commit sha"}},
+		{"an empty value on an input whose default is on", []mutation{{drift, "          cache: false\n", "          cache: ''\n"}}, []string{"docs-drift.yml: job docs-drift", "actions/setup-go (cache: )"}},
+		{"a uses with a short sha", []mutation{{drift, checkout, "actions/checkout@3d3c42e # v7.0.1"}}, []string{"docs-drift.yml: job docs-drift", "actions/checkout@3d3c42e, which is not pinned to a full 40-hex commit sha"}},
+		{"a default-off cache input unset", []mutation{{sec, "          cache: ''\n", ""}}, []string{"security-scan.yml: job semgrep", "actions/setup-python (cache unset)"}},
+		{"a default-off cache input set by an expression", []mutation{{sec, "          cache: ''\n", "          cache: ${{ github.event_name != 'pull_request' && 'pip' || '' }}\n"}}, []string{"security-scan.yml: job semgrep", "actions/setup-python (cache: ${{"}},
+		{"codeql trap caching unset", []mutation{{".github/workflows/codeql-analysis.yml", codeqlTrapGated, ""}}, []string{"codeql-analysis.yml", "trap-caching defaults on"}},
+		{"pnpm cache unset", []mutation{{goY, "          cache: false\n          package_json_file: dev-health-web/package.json\n", "          package_json_file: dev-health-web/package.json\n"}}, []string{"go.yml: job go-auth-web-proxy-proof", "pnpm/action-setup (cache unset)"}},
+	}
+	for _, c := range fails {
+		t.Run(c.name+" fails", func(t *testing.T) {
+			expectViolation(t, prCacheWriteViolations(t, plantTree(t, root, files, c.muts...)), c.want...)
+		})
+	}
+}
+
+const codeqlTrapGated = "          trap-caching: ${{ " + mainOnlyGate + " }}\n"
+
+// TestPRCacheGuardMainOnlyGate: besides a literal off value, a cache input may hold only the main-only gate of the cache saves.
+func TestPRCacheGuardMainOnlyGate(t *testing.T) {
+	root := authProofRoot(t)
+	var files []string
+	for _, n := range workflowNames(t, root) {
+		files = append(files, ".github/workflows/"+n)
+	}
+	files = append(files, "ci/auth_corpus.bake.hcl", "compose.yml", "ci/auth_corpus_external.override.yml")
+	const (
+		cq    = ".github/workflows/codeql-analysis.yml"
+		drift = ".github/workflows/docs-drift.yml"
+	)
+	t.Run("a cache input with the main-only gate passes", func(t *testing.T) {
+		tree := plantTree(t, root, files, mutation{drift, "          cache: false\n", "          cache: ${{ (" + mainOnlyGate + ") }}\n"})
+		expectNoViolations(t, prCacheWriteViolations(t, tree))
+	})
+	fails := []struct {
+		name string
+		muts []mutation
+		want []string
+	}{
+		{"another expression that is off on a pull request", []mutation{{cq, codeqlTrapGated, "          trap-caching: ${{ github.event_name != 'pull_request' }}\n"}}, []string{"codeql-analysis.yml", "github/codeql-action/init (dependency-caching: none, trap-caching: ${{ github.event_name != 'pull_request' }})"}},
+		{"the gate widened by a term", []mutation{{cq, codeqlTrapGated, "          trap-caching: ${{ " + mainOnlyGate + " || github.event_name == 'pull_request' }}\n"}}, []string{"codeql-analysis.yml", "github/codeql-action/init (dependency-caching: none, trap-caching: ${{"}},
+		{"the gate unset", []mutation{{cq, codeqlTrapGated, ""}}, []string{"codeql-analysis.yml", "github/codeql-action/init (dependency-caching: none, trap-caching defaults on)"}},
+		{"the gate replaced by an empty value", []mutation{{cq, codeqlTrapGated, "          trap-caching: ''\n"}}, []string{"codeql-analysis.yml", "github/codeql-action/init (dependency-caching: none, trap-caching: )"}},
+	}
+	for _, c := range fails {
+		t.Run(c.name+" fails", func(t *testing.T) {
+			expectViolation(t, prCacheWriteViolations(t, plantTree(t, root, files, c.muts...)), c.want...)
 		})
 	}
 }

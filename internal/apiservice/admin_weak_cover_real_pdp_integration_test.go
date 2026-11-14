@@ -141,7 +141,7 @@ var wcSpecs = []wcSpec{
 	{label: "po_only", publicSuperuser: true, expect: wcParity, prepare: wcGrantOwner},
 	{label: "g3a_principal_delete_refused", publicSuperuser: true, assigned: true, expect: wcMeasure, modes: []string{"m_on"}, prepare: wcDropPrincipal},
 	{label: "g3b_principal_disabled", publicSuperuser: true, assigned: true, expect: wcG3Change, modes: []string{"m_on"}, prepare: wcDisablePrincipal},
-	{label: "g3c_principal_service_account", publicSuperuser: true, assigned: true, expect: wcG3Change, modes: []string{"m_on"}, prepare: wcServiceAccountPrincipal},
+	{label: "g3c_principal_service_account", publicSuperuser: true, assigned: true, expect: wcMeasure, modes: []string{"m_on"}, prepare: wcServiceAccountPrincipal},
 	{label: "g3d_public_inactive", publicSuperuser: true, assigned: true, expect: wcMeasure, modes: []string{"m_on"}, prepare: wcPublicInactive},
 }
 
@@ -338,7 +338,8 @@ func (w *wcWorld) goAPI(t *testing.T, plane *authplane.Authorize, enforce string
 	protected.guard.SetEnforcer(enf)
 	admin := &wcUsersAdmin{}
 	deps := Deps{Pool: w.env.Admin, ClickHouse: unreachableClickHouse(t), Auth: protected.auth, Guard: protected.guard,
-		PlatformRolesOwned: w.mode.goOwned, UsersOwned: true, UsersAdmin: admin, AuthSchema: authplane.Schema, ACRRevoker: wcRevoker{}, AuthProxy: proxy}
+		PlatformRolesOwned: w.mode.goOwned, UsersOwned: true, UsersAdmin: admin, AuthSchema: authplane.Schema, ACRRevoker: wcRevoker{},
+		AuthProxy: proxy}
 	layers := []func(http.Handler) http.Handler{protected.auth.ReadOnce, protected.scope.Principal, protected.scope.OrgScope, protected.scope.Impersonation}
 	// As service.go builds it: newServer skips the scope layers on the proxied routes auth-service authenticates.
 	server, err := newServer(apiTestConfig(), quietLogger(), Routes(deps, quietLogger()), nil, proxy.ScopeExemptRoutes(), layers...)
@@ -534,7 +535,8 @@ func wcPublicInactive(t *testing.T, ctx context.Context, w *wcWorld, c *wcCaller
 // wcRow is one request of a caller's cell set.
 type wcRow struct {
 	name, method, path, body, xOrg string
-	// platformDecided: the row's admin answer is the platform decision alone (no org scope read decides it).
+	// platformDecided: the row's admin answer is the platform decision alone: no org scope read and no local superuser
+	// read decides it (M2's org context and the superuser-write guard read the local flag; the view twin covers them).
 	platformDecided bool
 	// action is the platform action a platform admin's on side must be judged allowed for.
 	action string
@@ -544,9 +546,13 @@ type wcRow struct {
 	superuserBody bool
 	// liveRowExempt: the Scope serves it while a go-api impersonation row is live (liveRowExemptPatterns).
 	liveRowExempt bool
+	// unrouted: prod does not route it (M1: AUTH_PROXY_SERVICE_ACCOUNT_KEYS is unset in deploy f50e9710 values.prod.yaml
+	// and the chart renders no such key, so admin/serviceaccounts.go:27 mounts nothing); both sides must answer main's 404
+	// (acp 05:2xZ: M1 = 404 parity, no stub).
+	unrouted bool
 }
 
-// wcSearchTag is the full_name prefix of a caller's targets; the list rows search it.
+// wcSearchTag is the full_name prefix of a caller's targets; the list rows search it (the q parameter, users.go:145).
 func wcSearchTag(label string) string { return "wc13728-" + label + "-" }
 
 func wcRows(c *wcCaller, side int) []wcRow {
@@ -556,8 +562,8 @@ func wcRows(c *wcCaller, side int) []wcRow {
 	tag := c.spec.label + "-side" + wcSideName[side]
 	members := "/api/v1/admin/orgs/" + org
 	rows = []wcRow{
-		{name: "r21_list", method: http.MethodGet, path: "/api/v1/admin/users?search=" + wcSearchTag(c.spec.label), platformDecided: true, action: "admin.users"},
-		{name: "r21_list_xorg", method: http.MethodGet, path: "/api/v1/admin/users?search=" + wcSearchTag(c.spec.label), xOrg: org, action: "admin.users"},
+		{name: "r21_list", method: http.MethodGet, path: "/api/v1/admin/users?q=" + wcSearchTag(c.spec.label), platformDecided: true, action: "admin.users"},
+		{name: "r21_list_xorg", method: http.MethodGet, path: "/api/v1/admin/users?q=" + wcSearchTag(c.spec.label), xOrg: org, action: "admin.users"},
 		{name: "r22_get", method: http.MethodGet, path: "/api/v1/admin/users/" + tg["get"].String(), platformDecided: true, action: "admin.users"},
 		{name: "r23_create", method: http.MethodPost, path: "/api/v1/admin/users", body: `{"email":"c13728-` + tag + `@example.test"}`, platformDecided: true, action: "admin.users"},
 		{name: "r23_create_xorg", method: http.MethodPost, path: "/api/v1/admin/users", xOrg: org,
@@ -568,12 +574,12 @@ func wcRows(c *wcCaller, side int) []wcRow {
 		{name: "r26_delete", method: http.MethodDelete, path: "/api/v1/admin/users/" + tg["delete"].String(), platformDecided: true, action: "admin.users"},
 		// The users-owned branches that sit before a HoldsPlatform site (users.go:281, :454, :689), on their shapes.
 		{name: "r23_create_superuser", method: http.MethodPost, path: "/api/v1/admin/users",
-			body: `{"email":"c13728su-` + tag + `@example.test","is_superuser":true}`, platformDecided: true, action: "admin.users", superuserBody: true},
+			body: `{"email":"c13728su-` + tag + `@example.test","is_superuser":true}`, action: "admin.users", superuserBody: true},
 		{name: "r24_patch_superuser", method: http.MethodPatch, path: "/api/v1/admin/users/" + tg["patch"].String(), body: `{"is_superuser":true}`,
-			platformDecided: true, action: "admin.users", superuserBody: true},
+			action: "admin.users", superuserBody: true},
 		{name: "r26_delete_force", method: http.MethodDelete, path: "/api/v1/admin/users/" + tg["delete"].String() + "?force=true", platformDecided: true, action: "admin.users"},
 		{name: "r27_pull_stripe", method: http.MethodPost, path: "/api/v1/billing/plans/pull-stripe", platformDecided: true, action: "admin.billing"},
-		{name: "m2_impersonate_status", method: http.MethodGet, path: "/api/v1/admin/impersonate/status", platformDecided: true, action: "admin.impersonate", liveRowExempt: true},
+		{name: "m2_impersonate_status", method: http.MethodGet, path: "/api/v1/admin/impersonate/status", action: "admin.impersonate", liveRowExempt: true},
 		{name: "site_telemetry_report", method: http.MethodPost, path: "/api/v1/telemetry/report", platformDecided: true, action: "admin.telemetry"},
 		{name: "site_acr_revoke", method: http.MethodPost, path: "/api/v1/acr/credentials/cred13728/revoke", action: "admin.orgs", orgClaim: true},
 		{name: "site_org_members_list", method: http.MethodGet, path: members + "/members", action: "admin.orgs"},
@@ -618,11 +624,11 @@ func wcAllRows(c *wcCaller, side int) []wcRow {
 		{name: "row18_sa_key_issue", method: http.MethodPost, path: sa + wcNoSuchID + "/keys", body: `{}`, action: "admin.users"},
 		{name: "row19_sa_key_rotate", method: http.MethodPost, path: sa + wcNoSuchID + "/keys/rotate", body: `{}`, action: "admin.users"},
 		{name: "row20_sa_key_revoke", method: http.MethodPost, path: sa + "keys/cred13728/revoke", body: `{"reason":"wc13728"}`, action: "admin.users"},
-		{name: "m1_sa_create", method: http.MethodPost, path: "/api/v1/admin/service-accounts",
+		{name: "m1_sa_create", unrouted: true, method: http.MethodPost, path: "/api/v1/admin/service-accounts",
 			body: `{"organization_id":"` + c.victim[side].String() + `","owner_principal_id":"` + c.sideUser[side].String() + `","name":"wc13728"}`, action: "admin.users"},
-		{name: "m1_sa_disable", method: http.MethodPost, path: sa + wcNoSuchID + "/disable", action: "admin.users"},
-		{name: "m1_sa_enable", method: http.MethodPost, path: sa + wcNoSuchID + "/enable", action: "admin.users"},
-		{name: "m1_sa_owner", method: http.MethodPost, path: sa + wcNoSuchID + "/owner", body: `{"owner_principal_id":"` + c.sideUser[side].String() + `"}`, action: "admin.users"},
+		{name: "m1_sa_disable", unrouted: true, method: http.MethodPost, path: sa + wcNoSuchID + "/disable", action: "admin.users"},
+		{name: "m1_sa_enable", unrouted: true, method: http.MethodPost, path: sa + wcNoSuchID + "/enable", action: "admin.users"},
+		{name: "m1_sa_owner", unrouted: true, method: http.MethodPost, path: sa + wcNoSuchID + "/owner", body: `{"owner_principal_id":"` + c.sideUser[side].String() + `"}`, action: "admin.users"},
 		{name: "row05_org_delete", method: http.MethodDelete, path: victim, action: "admin.orgs"},
 		// Last: a stop ends the side's impersonation row.
 		{name: "row15_impersonate_stop", method: http.MethodPost, path: "/api/v1/admin/impersonate/stop", action: "admin.impersonate", liveRowExempt: true},
@@ -807,7 +813,10 @@ func TestAdminWeakCoverRealPDPCells(t *testing.T) {
 						if spec.allRows {
 							w.impRow(t, c, got)
 						}
-						if expect == wcImpGate && !got.row.liveRowExempt {
+						if got.row.unrouted && (off.status != http.StatusNotFound || on.status != http.StatusNotFound) {
+							t.Errorf("unrouted row: off %d on %d, want main's 404 on both sides", off.status, on.status)
+						}
+						if expect == wcImpGate && !got.row.liveRowExempt && !got.row.unrouted {
 							for side := range 2 {
 								a := got.sides[side]
 								if a.status != http.StatusForbidden || len(a.decisions) != 0 || len(a.usersAdmin) != 0 {

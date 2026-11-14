@@ -106,6 +106,7 @@ func TestTestOpsRateMeasures_AreWeightedNotAMeanOfRates_RealClickHouse(t *testin
 		{big, "'team-a'", 100, 90, 10, 20},
 		{small, "'team-a'", 10, 10, 0, 0},
 		{empty, "'team-b'", 0, 0, 0, 0},
+		{noTeam, "NULL", 10, 0, 10, 5},
 	} {
 		rate := func(n int) float64 {
 			if r.runs == 0 {
@@ -188,18 +189,20 @@ func TestTestOpsRateMeasures_AreWeightedNotAMeanOfRates_RealClickHouse(t *testin
 		}
 	}
 
+	// ORG covers every repository, the one with no team too: 10 runs, none succeeded, 10 failed, 5 reruns.
 	for _, tc := range []struct {
-		measure model.MeasureInput
-		want    float64
+		measure       model.MeasureInput
+		want, wantOrg float64
 	}{
-		{model.MeasureInputPipelineSuccessRate, 100.0 / 110 * 100},
-		{model.MeasureInputPipelineFailureRate, 10.0 / 110 * 100},
+		{model.MeasureInputPipelineSuccessRate, 100.0 / 110 * 100, 100.0 / 120 * 100},
+		{model.MeasureInputPipelineFailureRate, 10.0 / 110 * 100, 20.0 / 120 * 100},
 		// Known integer reruns: 20 of 110 runs. The stored rate is reruns / runs, so the product form is the count.
-		{model.MeasureInputPipelineRerunRate, 20.0 / 110 * 100},
+		{model.MeasureInputPipelineRerunRate, 20.0 / 110 * 100, 25.0 / 120 * 100},
 	} {
-		teams, _ := series(tc.measure)
+		teams, org := series(tc.measure)
 		near(string(tc.measure)+" team-a", teams["team-a"], tc.want)
 		isNull(string(tc.measure)+" team-b", teams["team-b"])
+		near(string(tc.measure)+" ORG", org, tc.wantOrg)
 	}
 
 	passed, failed := 999000.0+90, 1000.0+10

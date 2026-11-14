@@ -396,9 +396,9 @@ const orgSeriesDimensionValue = "org"
 // (CHAOS-9736). TEST_FLAKE_RATE is the summed flake cases over the summed distinct case names (CHAOS-9737); a bucket
 // with any row lacking the counts is unavailable.
 //
-// TEST_PASS_RATE and TEST_FAILURE_RATE are the summed passed (failed) cases over the summed passed and failed cases
-// (CHAOS-13775). The pipeline failure and rerun rates have no ORG series yet: the web pipeline query selects scope and
-// still averages an ORG series in as one more team, so serving one would move those tiles for the wrong reason.
+// TEST_PASS_RATE and TEST_FAILURE_RATE are the summed passed (failed) cases over the summed passed and failed cases;
+// PIPELINE_FAILURE_RATE and PIPELINE_RERUN_RATE are the summed failures (reruns) over the summed runs (CHAOS-13775).
+// The same terms as the dimension series, so the ORG series and a team series differ only in the rows they cover.
 //
 // Coverage counts only the rows that carry both line counts: a row with a percent but no counts, or with no lines,
 // adds to neither side.
@@ -406,6 +406,10 @@ func orgRateTerms(measure Measure) (numerator, denominator string, scale float64
 	switch measure {
 	case MeasurePipelineSuccessRate:
 		return "SUM(success_count)", "SUM(pipelines_count)", 100, true
+	case MeasurePipelineFailureRate:
+		return pipelineFailureTerms.numerator, pipelineFailureTerms.denominator, 100, true
+	case MeasurePipelineRerunRate:
+		return pipelineRerunTerms.numerator, pipelineRerunTerms.denominator, 100, true
 	case MeasureTestPassRate:
 		return testPassTerms.numerator, testPassTerms.denominator, 100, true
 	case MeasureTestFailureRate:
@@ -467,6 +471,10 @@ func orgMeasureLabel(measure Measure) string {
 		return "coverage_line_pct"
 	case MeasureTestFlakeRate:
 		return "test_flake_rate"
+	case MeasurePipelineFailureRate:
+		return "pipeline_failure_rate"
+	case MeasurePipelineRerunRate:
+		return "pipeline_rerun_rate"
 	case MeasureTestPassRate:
 		return "test_pass_rate"
 	case MeasureTestFailureRate:

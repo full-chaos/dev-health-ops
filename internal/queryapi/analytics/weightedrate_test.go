@@ -45,17 +45,15 @@ func TestMeasuresWithoutADenominatorStayAnAverage(t *testing.T) {
 	}
 }
 
-// The ORG series and the dimension series of a pass or failure rate are the same terms.
-func TestOrgPassAndFailureRateUseTheSameTermsAsTheDimensionSeries(t *testing.T) {
-	for measure, terms := range map[Measure]rateTerms{MeasureTestPassRate: testPassTerms, MeasureTestFailureRate: testFailureTerms} {
+// The ORG series and the dimension series of a weighted rate are the same terms.
+func TestOrgSeriesUseTheSameTermsAsTheDimensionSeries(t *testing.T) {
+	for measure, terms := range map[Measure]rateTerms{
+		MeasurePipelineFailureRate: pipelineFailureTerms, MeasurePipelineRerunRate: pipelineRerunTerms,
+		MeasureTestPassRate: testPassTerms, MeasureTestFailureRate: testFailureTerms,
+	} {
 		num, den, scale, ok := orgRateTerms(measure)
 		if !ok || num != terms.numerator || den != terms.denominator || scale != 100 {
 			t.Errorf("%s: org terms %q / %q x%v ok=%v, want %q / %q x100", measure, num, den, scale, ok, terms.numerator, terms.denominator)
-		}
-	}
-	for _, measure := range []Measure{MeasurePipelineFailureRate, MeasurePipelineRerunRate} {
-		if _, _, _, ok := orgRateTerms(measure); ok {
-			t.Errorf("%s has an ORG series: the web pipeline query would average it in as one more team", measure)
 		}
 	}
 }

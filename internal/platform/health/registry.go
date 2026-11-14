@@ -36,6 +36,13 @@ type Registry struct {
 	checkTimeout time.Duration
 	startedAt    time.Time
 
+	// startGrace and firstReady decide DependencyRefusalLevel (startgrace.go).
+	// firstReady latches the first Ready answer Readiness returned and is
+	// never reset. now is nil outside tests.
+	startGrace time.Duration
+	firstReady atomic.Bool
+	now        func() time.Time
+
 	mu            sync.RWMutex
 	required      map[string]*requiredCheck
 	metricsSource map[string]MetricsSource
@@ -145,6 +152,7 @@ func NewRegistry(checkTimeout time.Duration) *Registry {
 	registry := &Registry{
 		checkTimeout:  checkTimeout,
 		startedAt:     time.Now(),
+		startGrace:    ReadinessStartGrace,
 		required:      make(map[string]*requiredCheck),
 		metricsSource: make(map[string]MetricsSource),
 	}
@@ -449,7 +457,11 @@ func (r *Registry) Readiness(ctx context.Context) Readiness {
 	if !r.ready.Load() {
 		return Readiness{Ready: false, Failed: []string{"runtime"}}
 	}
-	return r.CheckRequired(ctx)
+	readiness := r.CheckRequired(ctx)
+	if readiness.Ready {
+		r.firstReady.Store(true)
+	}
+	return readiness
 }
 
 // CheckRequired runs required dependency checks without opening the public
@@ -473,7 +485,7 @@ func (r *Registry) CheckRequired(ctx context.Context) Readiness {
 	results := make(chan outcome, len(checks))
 	for name, check := range checks {
 		go func() {
-			results <- outcome{name: name, result: check.run(ctx, r.checkTimeout)}
+			results <- outcome{name: name, result: check.run(ctx, r.checkTimeout, r)}
 		}()
 	}
 
@@ -543,7 +555,7 @@ type checkResult struct {
 // run shares a single in-flight execution across callers. A check that ignores
 // cancellation can therefore strand at most one goroutine; every caller still
 // has its own bounded wait and fails closed when that wait expires.
-func (c *requiredCheck) run(parent context.Context, timeout time.Duration) checkResult {
+func (c *requiredCheck) run(parent context.Context, timeout time.Duration, owner *Registry) checkResult {
 	waitCtx, waitCancel := context.WithTimeout(parent, timeout)
 	defer waitCancel()
 	if waitCtx.Err() != nil {
@@ -555,7 +567,7 @@ func (c *requiredCheck) run(parent context.Context, timeout time.Duration) check
 	if execution == nil {
 		execution = &checkExecution{done: make(chan struct{})}
 		c.active = execution
-		checkCtx, checkCancel := context.WithTimeout(context.Background(), timeout)
+		checkCtx, checkCancel := context.WithTimeout(withRegistry(context.Background(), owner), timeout)
 		go c.execute(checkCtx, checkCancel, execution)
 	}
 	c.mu.Unlock()

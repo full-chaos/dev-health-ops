@@ -987,6 +987,7 @@ func TestPRCacheGuardKeysOnActionMajor(t *testing.T) {
 		{"a v0 comment without its minor", []mutation{{goY, trivy, "aquasecurity/setup-trivy@3fb12ec12f41e471780db15c232d5dd185dcb514 # v0"}}, []string{"go.yml: job go-container-security", "has no minor: the major of a v0 action is 0.Y"}},
 		{"two majors on one pin", []mutation{{goY, checkout, "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v8.0.0"}}, []string{"go.yml: job", "name two majors (actions/checkout@v"}},
 		{"a uses that is not a full sha", []mutation{{drift, checkout, "actions/checkout@v7 # v7.0.1"}}, []string{"docs-drift.yml: job docs-drift", "actions/checkout@v7, which is not pinned to a full 40-hex commit sha"}},
+		{"a uses with a short sha", []mutation{{drift, checkout, "actions/checkout@3d3c42e # v7.0.1"}}, []string{"docs-drift.yml: job docs-drift", "actions/checkout@3d3c42e, which is not pinned to a full 40-hex commit sha"}},
 		{"a default-off cache input unset", []mutation{{sec, "          cache: ''\n", ""}}, []string{"security-scan.yml: job semgrep", "actions/setup-python (cache unset)"}},
 		{"a default-off cache input set by an expression", []mutation{{sec, "          cache: ''\n", "          cache: ${{ github.event_name != 'pull_request' && 'pip' || '' }}\n"}}, []string{"security-scan.yml: job semgrep", "actions/setup-python (cache: ${{"}},
 		{"codeql trap caching unset", []mutation{{".github/workflows/codeql-analysis.yml", codeqlTrapGated, ""}}, []string{"codeql-analysis.yml", "trap-caching unset"}},

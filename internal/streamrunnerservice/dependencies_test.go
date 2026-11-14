@@ -15,6 +15,7 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/refusedaddr"
 	"github.com/jackc/pgx/v5/pgxpool"
 	valkeygo "github.com/valkey-io/valkey-go"
 )
@@ -34,7 +35,7 @@ import (
 // not fabricated.
 // dialFailureSubstrings is the SHARED accepted set for every domain_postgres
 // case below -- both the real-dial cases (racing RST vs timeout
-// vs context-deadline, see closedPortAddr) and the deterministic
+// vs context-deadline, see refusedaddr.Addr) and the deterministic
 // already-expired-context cases read from this ONE slice. Sharing it is
 // load-bearing, not cosmetic: codex r1 F-1 found that the deterministic
 // cases originally carried their OWN copy of just the third entry, so
@@ -103,7 +104,7 @@ func TestReadinessCheckFailuresLogTheCheckNameAndUnderlyingError(t *testing.T) {
 		},
 		{
 			// CHAOS-5540: the RST-vs-timeout race the two cases above cover
-			// (closedPortAddr's doc comment) is itself a race against host
+			// (refusedaddr.Addr) is itself a race against host
 			// scheduling -- under load, the 500ms test context can expire
 			// before the kernel's RST is even processed, and pgx reports
 			// that as "context deadline exceeded" instead of "connection
@@ -223,31 +224,6 @@ func contextAlreadyExceeded(t *testing.T) context.Context {
 	return ctx
 }
 
-// closedPortAddr opens a listener on 127.0.0.1:0, records its address, then
-// closes it -- dialing that address afterward is refused deterministically
-// everywhere. Dialing a permanently-unbound port like 127.0.0.1:1 instead
-// depends on how the OS/runner network stack answers an attempt to a port
-// nothing ever bound: it usually answers RST ("connection refused") but on
-// some hosted CI runners answers nothing at all, so the dial blocks until
-// its own timeout and reports "i/o timeout" -- CHAOS-5478, hit twice (PR
-// #2381 2026-09-07, PR #2389 2026-09-09), both pure flake fixed only by a
-// CI rerun with no code change. A port that JUST had a live listener closed
-// on it, by contrast, is guaranteed to be refused (RST) by the local
-// kernel's own connection-table entry -- no dependence on runner/network
-// behavior for an address nothing ever owned.
-func closedPortAddr(t *testing.T) string {
-	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	addr := ln.Addr().String()
-	if err := ln.Close(); err != nil {
-		t.Fatal(err)
-	}
-	return addr
-}
-
 // newRefusedDomainPool dials a just-closed local port (refused
 // deterministically, no live Postgres needed) with a 1ms connect timeout --
 // the same construction internal/storage/postgres/domain_authorization_test.go's
@@ -256,7 +232,7 @@ func closedPortAddr(t *testing.T) string {
 // 127.0.0.1:1.
 func newRefusedDomainPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	config := postgres.DefaultConfig("postgres://domain:unused@" + closedPortAddr(t) + "/app")
+	config := postgres.DefaultConfig("postgres://domain:unused@" + refusedaddr.Addr(t) + "/app")
 	config.ConnectTimeout = time.Millisecond
 	pool, err := postgres.New(context.Background(), config)
 	if err != nil {

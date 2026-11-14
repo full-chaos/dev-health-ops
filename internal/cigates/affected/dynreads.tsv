@@ -218,6 +218,7 @@ internal/cigates/checkgo	check_go_script_test.go
 internal/cigates/checkgo	ci_script_helpers_test.go
 internal/cigates/checkgo	discovery_tree_test.go
 internal/cigates/checkgo	go_test_leg_json_test.go
+internal/cigates/checkgo	integration_leg_json_test.go
 internal/cigates/checkgo	race_solo_load_test.go
 internal/cigates/checkgo	race_solo_test.go
 internal/cigates/checkgo	testcontainers_session_reap_test.go
@@ -333,9 +334,11 @@ internal/cigates/splitshards	ci_script_helpers_test.go
 internal/cigates/splitshards	split_package_shards_test.go
 internal/cigates/suitecatalog	runblock_test.go
 internal/cigates/suitecatalog	suitecatalog_test.go
+internal/cigates/testshard	authsplitweights_test.go
 internal/cigates/testshard	checkgofresh_test.go
 internal/cigates/testshard	providersync_test.go
 internal/cigates/testshard	securityfresh_test.go
+internal/cigates/testshard	splitweights_test.go
 internal/cigates/testshard	standin_test.go
 internal/cigates/testshard	trimpath_test.go
 internal/cigates/testshard	weightscensus_test.go
@@ -358,6 +361,7 @@ internal/cigates/workflows	docker_images_fanin_behaviour_test.go
 internal/cigates/workflows	go_workers_compose_proof_test.go
 internal/cigates/workflows	live_e2e_auth_stack_test.go
 internal/cigates/workflows	live_e2e_no_python_test.go
+internal/cigates/workflows	pr_cache_writes_test.go
 internal/cigates/workflows	providerstub_not_release_test.go
 internal/cigates/workflows	providersync_shard_budget_test.go
 internal/cigates/workflows	race_json_artifact_test.go
@@ -378,10 +382,6 @@ internal/cigates/workflows	workflows_venue_main_alert_test.go
 internal/clicredentials	opensites_test.go
 internal/deploymentcontract	manifest.go
 internal/egressguard	egressguard_test.go
-internal/envelopemint	custody_unix.go
-internal/envelopemint	keygen.go
-internal/envelopemint	keygen_state_test.go
-internal/envelopemint	keygen_test.go
 internal/fixturescli	dropped_columns_census_test.go
 internal/fixturescli	provider_worlds_demo_gates_integration_test.go
 internal/goapicli/prove	dryrun_help_test.go
@@ -487,7 +487,6 @@ internal/migrationmatrix	live.go
 internal/migrationmatrix	model.go
 internal/migrationmatrix	restendpoints.go
 internal/mintcli/envelopekeys	main_test.go
-internal/mintcli/envelopekeys	verify_roundtrip_test.go
 internal/operationalordering	finalreads_test.go
 internal/pgmigrate	archive_fixture_integration_test.go
 internal/pgmigrate	archive_test.go
@@ -540,11 +539,13 @@ internal/queryapi/graph	root_class_census_test.go
 internal/queryapi/graph/model	sdl_nullability_gate_test.go
 internal/queryapi/heatmap	identity.go
 internal/queryapi/home	import_boundary_test.go
+internal/queryapi/home	resolve_scope_callers_test.go
 internal/queryapi/investment	golden_test.go
 internal/queryapi/pdp	headers_switch_census_test.go
 internal/queryapi/people	identity.go
 internal/queryapi/pepgate	census_test.go
 internal/queryapi/pepgate	legacy_site_census_test.go
+internal/queryapi/principal	generated_keyfiles_test.go
 internal/queryapi/principal	verifier.go
 internal/queryapi/quadrant	identity.go
 internal/queryapi/recommendations	goldens_frozen_python_oracle_test.go
@@ -623,6 +624,11 @@ internal/shadowvenue	claims.go
 internal/shadowvenue	drive.go
 internal/shadowvenue	mint.go
 internal/shadowvenue	requestsites_test.go
+internal/signingkey	custody_unix.go
+internal/signingkey	jwks_key_test.go
+internal/signingkey	keygen.go
+internal/signingkey	keygen_state_test.go
+internal/signingkey	keygen_test.go
 internal/storage/clickhouse	worker_posture_test.go
 internal/storage/clickhouse/liverow	census_test.go
 internal/storage/postgres	api_authorization_platform_roles_test.go

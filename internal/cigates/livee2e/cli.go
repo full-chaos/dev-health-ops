@@ -12,7 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/full-chaos/dev-health-ops/internal/envelopemint"
+	"github.com/full-chaos/dev-health-ops/internal/signingkey"
 )
 
 const usage = `usage: cigate live-e2e <verb>
@@ -126,7 +126,7 @@ func Run(args []string, getenv func(string) string, stdout, stderr io.Writer) in
 		if kid == "" {
 			kid = DefaultIssuerKeyID
 		}
-		key, err := envelopemint.LoadPrivateKeyFromFile(getenv("E2E_ISSUER_KEY_FILE"))
+		key, err := signingkey.LoadPrivateKeyFromFile(getenv("E2E_ISSUER_KEY_FILE"))
 		if err != nil {
 			return fail(err)
 		}

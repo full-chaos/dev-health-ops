@@ -169,6 +169,8 @@ const (
 	DispatchWakePathUnreclaimableSweep = "unreclaimable_sweep"
 	DispatchWakePathRouteUnavailable   = "route_unavailable"
 	DispatchWakePathDispatchPass       = "dispatch_pass"
+	// DispatchWakePathHoldBack: a pass left free slots to an older run of the bucket and wakes it (CHAOS-8880).
+	DispatchWakePathHoldBack = "hold_back"
 )
 
 // DispatchWakeTimeout bounds one wake statement. The wake is best effort and
@@ -223,7 +225,7 @@ func WakeDispatch(ctx context.Context, db Execer, syncRunID string, now time.Tim
 
 var (
 	dispatchWakePaths = []string{
-		DispatchWakePathDispatchPass, DispatchWakePathLeaseRepair, DispatchWakePathProviderUnit,
+		DispatchWakePathDispatchPass, DispatchWakePathHoldBack, DispatchWakePathLeaseRepair, DispatchWakePathProviderUnit,
 		DispatchWakePathRouteUnavailable, DispatchWakePathUnreclaimableSweep,
 	}
 	dispatchWakeOutcomes = []string{DispatchWakeOutcomeArmed, DispatchWakeOutcomeFailed, DispatchWakeOutcomeNotWaiting}

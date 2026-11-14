@@ -73,7 +73,7 @@ func TestHandlerPlatformQuestionWithNoDecisionPointCarriesTheReasonCode(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := seamServe(seamHandler(t, legacyStore(true, "member"), userClaims(nil), unconfigured), http.MethodPost, "/api/v1/telemetry/report")
+	got := seamServe(seamHandler(t, legacyStore(true, "member"), userClaims(nil), unconfigured), http.MethodPost, "/api/v1/telemetry/opt-in")
 	if got.status != http.StatusServiceUnavailable || got.body != enforceNoDecisionPointBody || got.header.Get("Retry-After") != "" {
 		t.Fatalf("no decision point: %d %q Retry-After %q, want 503 %q and no Retry-After",
 			got.status, got.body, got.header.Get("Retry-After"), enforceNoDecisionPointBody)
@@ -98,7 +98,7 @@ func TestPlatformQuestionWithADeadDecisionPointKeepsTheRetryAnswer(t *testing.T)
 	dead := newTestPDP(t, allowAll)
 	deadEnforcer := productionEnforcer(t, dead, "admin")
 	dead.srv.Close()
-	got := seamServe(seamHandler(t, legacyStore(true, "member"), userClaims(nil), deadEnforcer), http.MethodPost, "/api/v1/telemetry/report")
+	got := seamServe(seamHandler(t, legacyStore(true, "member"), userClaims(nil), deadEnforcer), http.MethodPost, "/api/v1/telemetry/opt-in")
 	if got.status != http.StatusServiceUnavailable || got.body != enforceUnavailableBody || got.header.Get("Retry-After") != enforceRetryAfter {
 		t.Fatalf("handler question, dead PDP: %d %q Retry-After %q, want 503 %q Retry-After %s",
 			got.status, got.body, got.header.Get("Retry-After"), enforceUnavailableBody, enforceRetryAfter)

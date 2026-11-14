@@ -39,6 +39,7 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         if: steps.scope.outputs.run == 'true'
         with:
+          package-manager-cache: false
           node-version: 22.12.0
 
       # The lockfile pins ajv: strictRequired is an ajv lint rather than a spec

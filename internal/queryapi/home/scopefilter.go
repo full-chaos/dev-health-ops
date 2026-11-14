@@ -55,6 +55,9 @@ func resolveRepoIDs(ctx context.Context, client QueryClient, repoRefs []string, 
 // asOf is the response's own instant, so every metric in one response
 // resolves the same team membership.
 func repoScopeFilter(ctx context.Context, client QueryClient, f Filters, orgID, repoColumn string, asOf time.Time) (string, []dhclickhouse.Binding, error) {
+	if f.Scope.unresolved {
+		return unresolvedScopeFilter, nil, nil
+	}
 	repoRefs := teamscope.NamedRepoRefs(f.Scope.Level, f.Scope.IDs, f.What.Repos)
 
 	explicitIDs, err := resolveRepoIDs(ctx, client, repoRefs, orgID)
@@ -129,6 +132,9 @@ func repoFilterApplied(f Filters, metricScope string) *bool {
 // scopeFilterForMetric ports scope_filter_for_metric (api/services/
 // filtering.py:129-147).
 func scopeFilterForMetric(ctx context.Context, client QueryClient, metricScope string, f Filters, orgID, teamColumn, repoColumn string, asOf time.Time) (string, []dhclickhouse.Binding, error) {
+	if f.Scope.unresolved {
+		return unresolvedScopeFilter, nil, nil
+	}
 	if metricScope == "team" && f.Scope.Level == "team" {
 		return scopeClauseMulti(f.Scope.IDs, teamColumn), scopeBindingsMulti(f.Scope.IDs), nil
 	}

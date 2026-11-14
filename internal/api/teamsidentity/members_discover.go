@@ -775,7 +775,7 @@ func (h handlers) discoverMembers(w http.ResponseWriter, r *http.Request) {
 		members, err = discoverMembersJira(ctx, jira, projectKey)
 	}
 	if err != nil {
-		h.providerFailure(w, r, "discover team members", err)
+		h.providerFailure(w, r, provider, "discover team members", err)
 		return
 	}
 

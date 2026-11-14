@@ -13,8 +13,11 @@ import (
 // platform_admin flag. Catalog 19 flagged org.read; catalog 20's sso.write is unflagged on purpose: the legacy writes refuse a
 // platform admin who holds no membership row (the token role defaults to member; router.py user.role not in owner, admin), and
 // the org-less cells of internal/api/policy (platform admin by the local flag and by a platform set, no membership) execute
-// each of these rows and keep that answer.
+// each of these rows and keep that answer. PATCH /api/v1/orgs/me asks org.write: a platform admin with no membership row keeps
+// the legacy 403 (product rule 1), executed on the real handler and on a real Postgres by
+// TestLegacyNoRowAndPlatformAdminAnswersOrgsMePatchVenueOracle (internal/apiservice).
 var unflaggedOrganizationActionRows = map[string]string{
+	"PATCH /api/v1/orgs/me [dev-health-ops-api @api]":                                    "org.write",
 	"POST /api/v1/auth/sso/providers [dev-health-ops-api @api]":                          "sso.write",
 	"PATCH /api/v1/auth/sso/providers/{provider_id} [dev-health-ops-api @api]":           "sso.write",
 	"DELETE /api/v1/auth/sso/providers/{provider_id} [dev-health-ops-api @api]":          "sso.write",

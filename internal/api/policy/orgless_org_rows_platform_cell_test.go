@@ -176,7 +176,7 @@ func orglessSwitches() map[string][]string {
 	}
 }
 
-// The census the cells below run over: 136 organization rows, 70 Admin, 50 AdminOrg, 16 Authenticated, and none of them
+// The census the cells below run over: 137 organization rows, 70 Admin, 50 AdminOrg, 17 Authenticated, and none of them
 // is an org-less route (OrglessMayReach), so the org-less check applies to every one.
 func TestOrglessOrgRowsCensus(t *testing.T) {
 	counts := map[Authz]int{}
@@ -188,8 +188,8 @@ func TestOrglessOrgRowsCensus(t *testing.T) {
 			t.Errorf("%s is an org-less route", row.pattern)
 		}
 	}
-	if len(rows) != 136 || counts[Admin] != 70 || counts[AdminOrg] != 50 || counts[Authenticated] != 16 {
-		t.Fatalf("%d organization rows %v, want 136: 70 Admin, 50 AdminOrg, 16 Authenticated", len(rows), counts)
+	if len(rows) != 137 || counts[Admin] != 70 || counts[AdminOrg] != 50 || counts[Authenticated] != 17 {
+		t.Fatalf("%d organization rows %v, want 137: 70 Admin, 50 AdminOrg, 17 Authenticated", len(rows), counts)
 	}
 }
 

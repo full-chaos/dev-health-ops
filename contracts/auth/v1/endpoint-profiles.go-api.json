@@ -4,21 +4,27 @@
   "rewritten_anchors": [
     {
       "file": "internal/api/telemetry/telemetry.go",
-      "line": 57,
+      "line": 69,
       "now": "\t\t{Method: http.MethodGet, Pattern: \"/api/v1/telemetry/status\", Handler: wrap(h.withOrg(h.status))},",
       "was": "\t\t{Method: http.MethodGet, Pattern: \"/api/v1/telemetry/status\", Handler: wrap(h.status)},"
     },
     {
       "file": "internal/api/telemetry/telemetry.go",
-      "line": 58,
+      "line": 70,
       "now": "\t\t{Method: http.MethodPost, Pattern: \"/api/v1/telemetry/opt-in\", Handler: wrap(h.withOrg(h.requireOrgAdmin(h.optIn)))},",
       "was": "\t\t{Method: http.MethodPost, Pattern: \"/api/v1/telemetry/opt-in\", Handler: wrap(h.optIn)},"
     },
     {
       "file": "internal/api/telemetry/telemetry.go",
-      "line": 59,
+      "line": 71,
       "now": "\t\t{Method: http.MethodPost, Pattern: \"/api/v1/telemetry/opt-out\", Handler: wrap(h.withOrg(h.requireOrgAdmin(h.optOut)))},",
       "was": "\t\t{Method: http.MethodPost, Pattern: \"/api/v1/telemetry/opt-out\", Handler: wrap(h.optOut)},"
+    },
+    {
+      "file": "internal/api/telemetry/telemetry.go",
+      "line": 73,
+      "now": "\t\t\tHandler: guard.WrapPlatformDeny(policy.ActionAdminTelemetry, reportKey, h.reportDeny(), h.requirePlatformRole(h.withOrg(h.report)))},",
+      "was": "\t\t\tHandler: guard.Wrap(policy.Authenticated, h.requirePlatformRole(h.withOrg(h.report)))},"
     }
   ],
   "rows": [
@@ -231,7 +237,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "platform route, behaviour today: only a caller holding admin.orgs (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:225); the handler does not scope by the caller's organization",
+      "disclosure_behavior": "platform route, behaviour today: only a caller holding admin.orgs (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:223); the handler does not scope by the caller's organization",
       "gaps": [],
       "graphql_field_name": null,
       "id": "DELETE /api/v1/admin/orgs/{org_id} [dev-health-ops-api @api]",
@@ -270,7 +276,7 @@
           "is_intended_validator": false
         }
       ],
-      "resource_resolver": "none: platform route; the {org_id} path segment names the target organization and the caller's own organization is not read (internal/api/policy/guard.go:225)",
+      "resource_resolver": "none: platform route; the {org_id} path segment names the target organization and the caller's own organization is not read (internal/api/policy/guard.go:223)",
       "route": "/api/v1/admin/orgs/{org_id}",
       "service": "dev-health-ops-api",
       "source": {
@@ -297,7 +303,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "platform route, behaviour today: only a caller holding admin.flags (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:225); the handler does not scope by the caller's organization; a missing target answers 404 (internal/apiservice/admin/featureflags.go:494)",
+      "disclosure_behavior": "platform route, behaviour today: only a caller holding admin.flags (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:223); the handler does not scope by the caller's organization; a missing target answers 404 (internal/apiservice/admin/featureflags.go:494)",
       "gaps": [],
       "graphql_field_name": null,
       "id": "DELETE /api/v1/admin/orgs/{org_id}/feature-overrides/{override_id} [dev-health-ops-api @api]",
@@ -336,7 +342,7 @@
           "is_intended_validator": false
         }
       ],
-      "resource_resolver": "none: platform route; the {org_id} path segment names the target organization and the caller's own organization is not read (internal/api/policy/guard.go:225)",
+      "resource_resolver": "none: platform route; the {org_id} path segment names the target organization and the caller's own organization is not read (internal/api/policy/guard.go:223)",
       "route": "/api/v1/admin/orgs/{org_id}/feature-overrides/{override_id}",
       "service": "dev-health-ops-api",
       "source": {
@@ -631,7 +637,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/teamsidentity/teamsidentity.go:337; internal/api/teamsidentity/store.go:125); a caller without the admin role answers 403 (internal/api/policy/guard.go:206)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/teamsidentity/teamsidentity.go:367; internal/api/teamsidentity/store.go:125); a caller without the admin role answers 403 (internal/api/policy/guard.go:206)",
       "gaps": [],
       "graphql_field_name": null,
       "id": "DELETE /api/v1/admin/teams/{team_id} [dev-health-ops-api @api]",
@@ -2013,7 +2019,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "platform route, behaviour today: only a caller holding admin.flags (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:225); the handler does not scope by the caller's organization",
+      "disclosure_behavior": "platform route, behaviour today: only a caller holding admin.flags (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:223); the handler does not scope by the caller's organization",
       "gaps": [],
       "graphql_field_name": null,
       "id": "GET /api/v1/admin/feature-flags [dev-health-ops-api @api]",
@@ -2052,7 +2058,7 @@
           "is_intended_validator": false
         }
       ],
-      "resource_resolver": "none: platform route; the caller's own organization is not read (internal/api/policy/guard.go:225); no resource id",
+      "resource_resolver": "none: platform route; the caller's own organization is not read (internal/api/policy/guard.go:223); no resource id",
       "route": "/api/v1/admin/feature-flags",
       "service": "dev-health-ops-api",
       "source": {
@@ -3335,7 +3341,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "platform route, behaviour today: only a caller holding admin.orgs (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:225); the handler does not scope by the caller's organization",
+      "disclosure_behavior": "platform route, behaviour today: only a caller holding admin.orgs (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:223); the handler does not scope by the caller's organization",
       "gaps": [],
       "graphql_field_name": null,
       "id": "GET /api/v1/admin/orgs [dev-health-ops-api @api]",
@@ -3374,7 +3380,7 @@
           "is_intended_validator": false
         }
       ],
-      "resource_resolver": "none: platform route; the caller's own organization is not read (internal/api/policy/guard.go:225); no resource id",
+      "resource_resolver": "none: platform route; the caller's own organization is not read (internal/api/policy/guard.go:223); no resource id",
       "route": "/api/v1/admin/orgs",
       "service": "dev-health-ops-api",
       "source": {
@@ -3401,7 +3407,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "platform route, behaviour today: only a caller holding admin.orgs (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:225); the handler does not scope by the caller's organization; a missing target answers 404 (internal/apiservice/admin/orgs.go:150)",
+      "disclosure_behavior": "platform route, behaviour today: only a caller holding admin.orgs (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:223); the handler does not scope by the caller's organization; a missing target answers 404 (internal/apiservice/admin/orgs.go:150)",
       "gaps": [],
       "graphql_field_name": null,
       "id": "GET /api/v1/admin/orgs/{org_id} [dev-health-ops-api @api]",
@@ -3440,7 +3446,7 @@
           "is_intended_validator": false
         }
       ],
-      "resource_resolver": "none: platform route; the {org_id} path segment names the target organization and the caller's own organization is not read (internal/api/policy/guard.go:225)",
+      "resource_resolver": "none: platform route; the {org_id} path segment names the target organization and the caller's own organization is not read (internal/api/policy/guard.go:223)",
       "route": "/api/v1/admin/orgs/{org_id}",
       "service": "dev-health-ops-api",
       "source": {
@@ -3467,7 +3473,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "platform route, behaviour today: only a caller holding admin.flags (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:225); the handler does not scope by the caller's organization",
+      "disclosure_behavior": "platform route, behaviour today: only a caller holding admin.flags (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:223); the handler does not scope by the caller's organization",
       "gaps": [],
       "graphql_field_name": null,
       "id": "GET /api/v1/admin/orgs/{org_id}/feature-overrides [dev-health-ops-api @api]",
@@ -3506,7 +3512,7 @@
           "is_intended_validator": false
         }
       ],
-      "resource_resolver": "none: platform route; the {org_id} path segment names the target organization and the caller's own organization is not read (internal/api/policy/guard.go:225)",
+      "resource_resolver": "none: platform route; the {org_id} path segment names the target organization and the caller's own organization is not read (internal/api/policy/guard.go:223)",
       "route": "/api/v1/admin/orgs/{org_id}/feature-overrides",
       "service": "dev-health-ops-api",
       "source": {
@@ -3601,7 +3607,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "platform route, behaviour today: only a caller holding admin.audit (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:225); the handler does not scope by the caller's organization",
+      "disclosure_behavior": "platform route, behaviour today: only a caller holding admin.audit (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:223); the handler does not scope by the caller's organization",
       "gaps": [],
       "graphql_field_name": null,
       "id": "GET /api/v1/admin/platform/audit-logs [dev-health-ops-api @api]",
@@ -3640,7 +3646,7 @@
           "is_intended_validator": false
         }
       ],
-      "resource_resolver": "none: platform route; the caller's own organization is not read (internal/api/policy/guard.go:225); no resource id",
+      "resource_resolver": "none: platform route; the caller's own organization is not read (internal/api/policy/guard.go:223); no resource id",
       "route": "/api/v1/admin/platform/audit-logs",
       "service": "dev-health-ops-api",
       "source": {
@@ -3667,7 +3673,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "platform route, behaviour today: only a caller holding admin.stats (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:225); the handler does not scope by the caller's organization",
+      "disclosure_behavior": "platform route, behaviour today: only a caller holding admin.stats (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:223); the handler does not scope by the caller's organization",
       "gaps": [],
       "graphql_field_name": null,
       "id": "GET /api/v1/admin/platform/stats [dev-health-ops-api @api]",
@@ -3706,7 +3712,7 @@
           "is_intended_validator": false
         }
       ],
-      "resource_resolver": "none: platform route; the caller's own organization is not read (internal/api/policy/guard.go:225); no resource id",
+      "resource_resolver": "none: platform route; the caller's own organization is not read (internal/api/policy/guard.go:223); no resource id",
       "route": "/api/v1/admin/platform/stats",
       "service": "dev-health-ops-api",
       "source": {
@@ -3865,7 +3871,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "platform route, behaviour today: only a caller holding admin.users (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:225); the handler does not scope by the caller's organization; auth-service re-runs its actor rule on the service account's organization",
+      "disclosure_behavior": "platform route, behaviour today: only a caller holding admin.users (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:223); the handler does not scope by the caller's organization; auth-service re-runs its actor rule on the service account's organization",
       "gaps": [],
       "graphql_field_name": null,
       "id": "GET /api/v1/admin/service-accounts/{service_account_id}/keys [dev-health-ops-api @api]",
@@ -3904,7 +3910,7 @@
           "is_intended_validator": false
         }
       ],
-      "resource_resolver": "none: platform route; the caller's own organization is not read (internal/api/policy/guard.go:225); the path service account id is resolved by auth-service (internal/auth/authapi/provisioning_serviceaccount_keys.go)",
+      "resource_resolver": "none: platform route; the caller's own organization is not read (internal/api/policy/guard.go:223); the path service account id is resolved by auth-service (internal/auth/authapi/provisioning_serviceaccount_keys.go)",
       "route": "/api/v1/admin/service-accounts/{service_account_id}/keys",
       "service": "dev-health-ops-api",
       "source": {
@@ -4809,7 +4815,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/teamsidentity/teamsidentity.go:529; internal/api/teamsidentity/store.go:125); a caller without the admin role answers 403 (internal/api/policy/guard.go:206)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/teamsidentity/teamsidentity.go:559; internal/api/teamsidentity/store.go:125); a caller without the admin role answers 403 (internal/api/policy/guard.go:206)",
       "gaps": [],
       "graphql_field_name": null,
       "id": "GET /api/v1/admin/teams/{team_id} [dev-health-ops-api @api]",
@@ -6908,7 +6914,7 @@
           "is_intended_validator": false
         }
       ],
-      "resource_resolver": "organization_from_path: the {org_id} path segment names the target organization and is compared with the caller's organization (internal/api/orgs/orgs.go:211)",
+      "resource_resolver": "organization_from_path: the {org_id} path segment names the target organization and is compared with the caller's organization (internal/api/orgs/orgs.go:217)",
       "route": "/api/v1/licensing/entitlements/{org_id}",
       "service": "dev-health-ops-api",
       "source": {
@@ -7052,7 +7058,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/telemetry/telemetry.go",
-        "line": 57
+        "line": 69
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -7718,7 +7724,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "platform route, behaviour today: once any body-first validation has run, only a caller holding admin.flags (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:225); the handler does not scope by the caller's organization; a missing target answers 404 (internal/apiservice/admin/featureflags.go:535)",
+      "disclosure_behavior": "platform route, behaviour today: once any body-first validation has run, only a caller holding admin.flags (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:223); the handler does not scope by the caller's organization; a missing target answers 404 (internal/apiservice/admin/featureflags.go:535)",
       "gaps": [],
       "graphql_field_name": null,
       "id": "PATCH /api/v1/admin/feature-flags/{flag_id} [dev-health-ops-api @api]",
@@ -7757,7 +7763,7 @@
           "is_intended_validator": false
         }
       ],
-      "resource_resolver": "none: platform route; the caller's own organization is not read (internal/api/policy/guard.go:225); flag_id (path) supplied by the caller",
+      "resource_resolver": "none: platform route; the caller's own organization is not read (internal/api/policy/guard.go:223); flag_id (path) supplied by the caller",
       "route": "/api/v1/admin/feature-flags/{flag_id}",
       "service": "dev-health-ops-api",
       "source": {
@@ -8048,7 +8054,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "platform route, behaviour today: once any body-first validation has run, only a caller holding admin.orgs (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:225); the handler does not scope by the caller's organization; a missing target answers 404 (internal/apiservice/admin/orgs.go:370)",
+      "disclosure_behavior": "platform route, behaviour today: once any body-first validation has run, only a caller holding admin.orgs (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:223); the handler does not scope by the caller's organization; a missing target answers 404 (internal/apiservice/admin/orgs.go:370)",
       "gaps": [],
       "graphql_field_name": null,
       "id": "PATCH /api/v1/admin/orgs/{org_id} [dev-health-ops-api @api]",
@@ -8087,7 +8093,7 @@
           "is_intended_validator": false
         }
       ],
-      "resource_resolver": "none: platform route; the {org_id} path segment names the target organization and the caller's own organization is not read (internal/api/policy/guard.go:225)",
+      "resource_resolver": "none: platform route; the {org_id} path segment names the target organization and the caller's own organization is not read (internal/api/policy/guard.go:223)",
       "route": "/api/v1/admin/orgs/{org_id}",
       "service": "dev-health-ops-api",
       "source": {
@@ -8114,7 +8120,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "platform route, behaviour today: once any body-first validation has run, only a caller holding admin.flags (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:225); the handler does not scope by the caller's organization; a missing target answers 404 (internal/apiservice/admin/featureflags.go:403)",
+      "disclosure_behavior": "platform route, behaviour today: once any body-first validation has run, only a caller holding admin.flags (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:223); the handler does not scope by the caller's organization; a missing target answers 404 (internal/apiservice/admin/featureflags.go:403)",
       "gaps": [],
       "graphql_field_name": null,
       "id": "PATCH /api/v1/admin/orgs/{org_id}/feature-overrides/{override_id} [dev-health-ops-api @api]",
@@ -8153,7 +8159,7 @@
           "is_intended_validator": false
         }
       ],
-      "resource_resolver": "none: platform route; the {org_id} path segment names the target organization and the caller's own organization is not read (internal/api/policy/guard.go:225)",
+      "resource_resolver": "none: platform route; the {org_id} path segment names the target organization and the caller's own organization is not read (internal/api/policy/guard.go:223)",
       "route": "/api/v1/admin/orgs/{org_id}/feature-overrides/{override_id}",
       "service": "dev-health-ops-api",
       "source": {
@@ -8382,7 +8388,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/teamsidentity/teamsidentity.go:591; internal/api/teamsidentity/teamsidentity.go:585 (GetTeam -> internal/api/teamsidentity/store.go:125)); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:206)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/teamsidentity/teamsidentity.go:621; internal/api/teamsidentity/teamsidentity.go:616 (GetTeam -> internal/api/teamsidentity/store.go:125)); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:206)",
       "gaps": [],
       "graphql_field_name": null,
       "id": "PATCH /api/v1/admin/teams/{team_id} [dev-health-ops-api @api]",
@@ -8649,14 +8655,12 @@
       "access_token_validation": {
         "legacy_hs256": false
       },
-      "action": null,
+      "action": "org.write",
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; once any body-first validation has run, a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:182; internal/api/policy/orgless.go:26)",
-      "gaps": [
-        "action: no catalog action is proven to equal this handler's own check on the own organization profile (candidate for a ruling; this leaf does not extend the vocabulary)"
-      ],
+      "gaps": [],
       "graphql_field_name": null,
       "id": "PATCH /api/v1/orgs/me [dev-health-ops-api @api]",
       "impersonation_policy": "subject_to_impersonation_override",
@@ -9315,7 +9319,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/teamsidentity/teamsidentity.go:718; internal/api/teamsidentity/teamsidentity.go:708 (GetTeam -> internal/api/teamsidentity/store.go:125)); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:206)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/teamsidentity/teamsidentity.go:749; internal/api/teamsidentity/teamsidentity.go:739 (GetTeam -> internal/api/teamsidentity/store.go:125)); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:206)",
       "gaps": [],
       "graphql_field_name": null,
       "id": "POST /api/v1/admin/identities [dev-health-ops-api @api]",
@@ -9381,7 +9385,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "valkey: after the commit the route writes the impersonation-session cache entry through (internal/apiservice/admin/impersonation.go:220; internal/apiservice/admin/impersonationcache.go:197); the route does not read the cache; a failed write is logged and opens the cache circuit, and the read side then falls back to Postgres (internal/apiservice/admin/impersonationcache.go:115, internal/apiservice/admin/impersonationcache.go:203)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "platform route, behaviour today: once any body-first validation has run, only a caller holding admin.impersonate (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:225); the target user is looked up by id and a missing target answers 404 (internal/apiservice/admin/impersonation.go:138); the caller's own organization is not read",
+      "disclosure_behavior": "platform route, behaviour today: once any body-first validation has run, only a caller holding admin.impersonate (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:223); the target user is looked up by id and a missing target answers 404 (internal/apiservice/admin/impersonation.go:138); the caller's own organization is not read",
       "gaps": [],
       "graphql_field_name": null,
       "id": "POST /api/v1/admin/impersonate [dev-health-ops-api @api]",
@@ -9447,7 +9451,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "valkey: the route uses up the one-use record of a start handoff in one script that deletes the key impersonation:handoff:<id> only when it names the caller (internal/apiservice/admin/impersonation_handoff.go:59); the record is written by the delegated start before auth-service is asked (SET NX EX 150, internal/apiservice/admin/impersonation_handoff.go:52); no client or a store error answers 503 and admits nothing (internal/apiservice/admin/impersonation_handoff.go:117); the impersonation session cache is not read or written",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "platform route, behaviour today: once any body-first validation has run, only a caller holding admin.impersonate (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:225); the route is reachable while the caller's impersonation row is live, as the stop is (internal/api/policy/guard.go liveRowExemptPatterns); every refusal (no record, used, expired, gone, another administrator's, a malformed id) answers one 409 text (internal/apiservice/admin/impersonation_handoff.go:111, internal/apiservice/admin/impersonation_handoff.go:122)",
+      "disclosure_behavior": "platform route, behaviour today: once any body-first validation has run, only a caller holding admin.impersonate (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:223); the route is reachable while the caller's impersonation row is live, as the stop is (internal/api/policy/guard.go liveRowExemptPatterns); every refusal (no record, used, expired, gone, another administrator's, a malformed id) answers one 409 text (internal/apiservice/admin/impersonation_handoff.go:111, internal/apiservice/admin/impersonation_handoff.go:122)",
       "gaps": [],
       "graphql_field_name": null,
       "id": "POST /api/v1/admin/impersonate/handoff/consume [dev-health-ops-api @api]",
@@ -9513,7 +9517,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "valkey: the route reads the open session from Postgres (internal/apiservice/admin/impersonation.go:260) and after the commit writes the negative cache entry through (internal/apiservice/admin/impersonationcache.go:149); a failed write is logged and opens the cache circuit, and the read side then falls back to Postgres (internal/apiservice/admin/impersonationcache.go:203)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "platform route, behaviour today: only a caller holding admin.impersonate (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:225); the route acts on the caller's own open session and answers 400 when there is none (internal/apiservice/admin/impersonation.go:267)",
+      "disclosure_behavior": "platform route, behaviour today: only a caller holding admin.impersonate (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:223); the route acts on the caller's own open session and answers 400 when there is none (internal/apiservice/admin/impersonation.go:267)",
       "gaps": [],
       "graphql_field_name": null,
       "id": "POST /api/v1/admin/impersonate/stop [dev-health-ops-api @api]",
@@ -10851,7 +10855,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "platform route, behaviour today: once any body-first validation has run, only a caller holding admin.orgs (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:225); the handler does not scope by the caller's organization",
+      "disclosure_behavior": "platform route, behaviour today: once any body-first validation has run, only a caller holding admin.orgs (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:223); the handler does not scope by the caller's organization",
       "gaps": [],
       "graphql_field_name": null,
       "id": "POST /api/v1/admin/orgs [dev-health-ops-api @api]",
@@ -10890,7 +10894,7 @@
           "is_intended_validator": false
         }
       ],
-      "resource_resolver": "none: platform route; the caller's own organization is not read (internal/api/policy/guard.go:225); no resource id",
+      "resource_resolver": "none: platform route; the caller's own organization is not read (internal/api/policy/guard.go:223); no resource id",
       "route": "/api/v1/admin/orgs",
       "service": "dev-health-ops-api",
       "source": {
@@ -10917,7 +10921,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "platform route, behaviour today: once any body-first validation has run, only a caller holding admin.flags (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:225); the handler does not scope by the caller's organization; a missing target answers 404 (internal/apiservice/admin/featureflags.go:299)",
+      "disclosure_behavior": "platform route, behaviour today: once any body-first validation has run, only a caller holding admin.flags (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:223); the handler does not scope by the caller's organization; a missing target answers 404 (internal/apiservice/admin/featureflags.go:299)",
       "gaps": [],
       "graphql_field_name": null,
       "id": "POST /api/v1/admin/orgs/{org_id}/feature-overrides [dev-health-ops-api @api]",
@@ -10956,7 +10960,7 @@
           "is_intended_validator": false
         }
       ],
-      "resource_resolver": "none: platform route; the {org_id} path segment names the target organization and the caller's own organization is not read (internal/api/policy/guard.go:225)",
+      "resource_resolver": "none: platform route; the {org_id} path segment names the target organization and the caller's own organization is not read (internal/api/policy/guard.go:223)",
       "route": "/api/v1/admin/orgs/{org_id}/feature-overrides",
       "service": "dev-health-ops-api",
       "source": {
@@ -11321,7 +11325,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "platform route, behaviour today: only a caller holding admin.users at the guard (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:225); the handler does not scope by the caller's organization; auth-service re-runs its actor rule on the body's organization",
+      "disclosure_behavior": "platform route, behaviour today: only a caller holding admin.users at the guard (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:223); the handler does not scope by the caller's organization; auth-service re-runs its actor rule on the body's organization",
       "gaps": [
         "action: no catalog action covers user (this leaf does not extend the vocabulary)"
       ],
@@ -11362,7 +11366,7 @@
           "is_intended_validator": false
         }
       ],
-      "resource_resolver": "none: platform route; the caller's own organization is not read (internal/api/policy/guard.go:225); the body's organization id is resolved by auth-service (internal/auth/authapi/provisioning_serviceaccount.go)",
+      "resource_resolver": "none: platform route; the caller's own organization is not read (internal/api/policy/guard.go:223); the body's organization id is resolved by auth-service (internal/auth/authapi/provisioning_serviceaccount.go)",
       "route": "/api/v1/admin/service-accounts",
       "service": "dev-health-ops-api",
       "source": {
@@ -11389,7 +11393,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "platform route, behaviour today: only a caller holding admin.users (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:225); the handler does not scope by the caller's organization; auth-service re-runs its actor rule on the service account's organization",
+      "disclosure_behavior": "platform route, behaviour today: only a caller holding admin.users (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:223); the handler does not scope by the caller's organization; auth-service re-runs its actor rule on the service account's organization",
       "gaps": [],
       "graphql_field_name": null,
       "id": "POST /api/v1/admin/service-accounts/keys/{credential_id}/revoke [dev-health-ops-api @api]",
@@ -11428,7 +11432,7 @@
           "is_intended_validator": false
         }
       ],
-      "resource_resolver": "none: platform route; the caller's own organization is not read (internal/api/policy/guard.go:225); the path credential id is resolved by auth-service (internal/auth/authapi/provisioning_serviceaccount_keys.go)",
+      "resource_resolver": "none: platform route; the caller's own organization is not read (internal/api/policy/guard.go:223); the path credential id is resolved by auth-service (internal/auth/authapi/provisioning_serviceaccount_keys.go)",
       "route": "/api/v1/admin/service-accounts/keys/{credential_id}/revoke",
       "service": "dev-health-ops-api",
       "source": {
@@ -11455,7 +11459,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "platform route, behaviour today: only a caller holding admin.users at the guard (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:225); the handler does not scope by the caller's organization; auth-service re-runs its actor rule on the service account's organization",
+      "disclosure_behavior": "platform route, behaviour today: only a caller holding admin.users at the guard (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:223); the handler does not scope by the caller's organization; auth-service re-runs its actor rule on the service account's organization",
       "gaps": [
         "action: no catalog action covers user (this leaf does not extend the vocabulary)"
       ],
@@ -11496,7 +11500,7 @@
           "is_intended_validator": false
         }
       ],
-      "resource_resolver": "none: platform route; the caller's own organization is not read (internal/api/policy/guard.go:225); the path service account id is resolved by auth-service (internal/auth/authapi/provisioning_serviceaccount.go)",
+      "resource_resolver": "none: platform route; the caller's own organization is not read (internal/api/policy/guard.go:223); the path service account id is resolved by auth-service (internal/auth/authapi/provisioning_serviceaccount.go)",
       "route": "/api/v1/admin/service-accounts/{service_account_id}/disable",
       "service": "dev-health-ops-api",
       "source": {
@@ -11523,7 +11527,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "platform route, behaviour today: only a caller holding admin.users at the guard (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:225); the handler does not scope by the caller's organization; auth-service re-runs its actor rule on the service account's organization",
+      "disclosure_behavior": "platform route, behaviour today: only a caller holding admin.users at the guard (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:223); the handler does not scope by the caller's organization; auth-service re-runs its actor rule on the service account's organization",
       "gaps": [
         "action: no catalog action covers user (this leaf does not extend the vocabulary)"
       ],
@@ -11564,7 +11568,7 @@
           "is_intended_validator": false
         }
       ],
-      "resource_resolver": "none: platform route; the caller's own organization is not read (internal/api/policy/guard.go:225); the path service account id is resolved by auth-service (internal/auth/authapi/provisioning_serviceaccount.go)",
+      "resource_resolver": "none: platform route; the caller's own organization is not read (internal/api/policy/guard.go:223); the path service account id is resolved by auth-service (internal/auth/authapi/provisioning_serviceaccount.go)",
       "route": "/api/v1/admin/service-accounts/{service_account_id}/enable",
       "service": "dev-health-ops-api",
       "source": {
@@ -11591,7 +11595,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "platform route, behaviour today: only a caller holding admin.users (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:225); the handler does not scope by the caller's organization; auth-service re-runs its actor rule on the service account's organization",
+      "disclosure_behavior": "platform route, behaviour today: only a caller holding admin.users (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:223); the handler does not scope by the caller's organization; auth-service re-runs its actor rule on the service account's organization",
       "gaps": [],
       "graphql_field_name": null,
       "id": "POST /api/v1/admin/service-accounts/{service_account_id}/keys [dev-health-ops-api @api]",
@@ -11630,7 +11634,7 @@
           "is_intended_validator": false
         }
       ],
-      "resource_resolver": "none: platform route; the caller's own organization is not read (internal/api/policy/guard.go:225); the path service account id is resolved by auth-service (internal/auth/authapi/provisioning_serviceaccount_keys.go)",
+      "resource_resolver": "none: platform route; the caller's own organization is not read (internal/api/policy/guard.go:223); the path service account id is resolved by auth-service (internal/auth/authapi/provisioning_serviceaccount_keys.go)",
       "route": "/api/v1/admin/service-accounts/{service_account_id}/keys",
       "service": "dev-health-ops-api",
       "source": {
@@ -11657,7 +11661,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "platform route, behaviour today: only a caller holding admin.users (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:225); the handler does not scope by the caller's organization; auth-service re-runs its actor rule on the service account's organization",
+      "disclosure_behavior": "platform route, behaviour today: only a caller holding admin.users (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:223); the handler does not scope by the caller's organization; auth-service re-runs its actor rule on the service account's organization",
       "gaps": [],
       "graphql_field_name": null,
       "id": "POST /api/v1/admin/service-accounts/{service_account_id}/keys/rotate [dev-health-ops-api @api]",
@@ -11696,7 +11700,7 @@
           "is_intended_validator": false
         }
       ],
-      "resource_resolver": "none: platform route; the caller's own organization is not read (internal/api/policy/guard.go:225); the path service account id is resolved by auth-service (internal/auth/authapi/provisioning_serviceaccount_keys.go)",
+      "resource_resolver": "none: platform route; the caller's own organization is not read (internal/api/policy/guard.go:223); the path service account id is resolved by auth-service (internal/auth/authapi/provisioning_serviceaccount_keys.go)",
       "route": "/api/v1/admin/service-accounts/{service_account_id}/keys/rotate",
       "service": "dev-health-ops-api",
       "source": {
@@ -11723,7 +11727,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "platform route, behaviour today: only a caller holding admin.users at the guard (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:225); the handler does not scope by the caller's organization; auth-service re-runs its actor rule on the service account's organization",
+      "disclosure_behavior": "platform route, behaviour today: only a caller holding admin.users at the guard (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:223); the handler does not scope by the caller's organization; auth-service re-runs its actor rule on the service account's organization",
       "gaps": [
         "action: no catalog action covers user (this leaf does not extend the vocabulary)"
       ],
@@ -11764,7 +11768,7 @@
           "is_intended_validator": false
         }
       ],
-      "resource_resolver": "none: platform route; the caller's own organization is not read (internal/api/policy/guard.go:225); the path service account id is resolved by auth-service (internal/auth/authapi/provisioning_serviceaccount.go)",
+      "resource_resolver": "none: platform route; the caller's own organization is not read (internal/api/policy/guard.go:223); the path service account id is resolved by auth-service (internal/auth/authapi/provisioning_serviceaccount.go)",
       "route": "/api/v1/admin/service-accounts/{service_account_id}/owner",
       "service": "dev-health-ops-api",
       "source": {
@@ -14202,7 +14206,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "platform route, behaviour today: only a caller holding admin.billing (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:225); the caller's own organization is not read",
+      "disclosure_behavior": "platform route, behaviour today: only a caller holding admin.billing (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:223); the caller's own organization is not read",
       "gaps": [],
       "graphql_field_name": null,
       "id": "POST /api/v1/billing/plans/pull-stripe [dev-health-ops-api @api]",
@@ -14241,7 +14245,7 @@
           "is_intended_validator": false
         }
       ],
-      "resource_resolver": "none: platform route; the caller's own organization is not read (internal/api/policy/guard.go:225)",
+      "resource_resolver": "none: platform route; the caller's own organization is not read (internal/api/policy/guard.go:223)",
       "route": "/api/v1/billing/plans/pull-stripe",
       "service": "dev-health-ops-api",
       "source": {
@@ -15060,7 +15064,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/telemetry/telemetry.go",
-        "line": 58
+        "line": 70
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -15133,7 +15137,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/telemetry/telemetry.go",
-        "line": 59
+        "line": 71
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -15152,7 +15156,7 @@
       "access_token_validation": {
         "legacy_hs256": false
       },
-      "action": null,
+      "action": "admin.telemetry",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "EdDSA"
@@ -15161,9 +15165,7 @@
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:182; internal/api/policy/orgless.go:26), and an X-Org-Id organization the caller may not use answers 403 (internal/api/telemetry/telemetry.go#handlers.withOrg); a caller that does not hold admin.telemetry (a superuser holds it), or a request in an active impersonation session, answers 403 (internal/api/telemetry/report.go:46)",
-      "gaps": [
-        "action: the route admits only a caller holding admin.telemetry (internal/api/telemetry/report.go:32) and acts in one organization; admin.telemetry is a platform action and this route is org-scoped, so the row keeps no action"
-      ],
+      "gaps": [],
       "graphql_field_name": null,
       "id": "POST /api/v1/telemetry/report [dev-health-ops-api @api]",
       "impersonation_policy": "subject_to_impersonation_override",
@@ -15174,7 +15176,7 @@
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
-        "description": "policy.Authenticated: a valid access token for an active user."
+        "description": "policy.Superuser behind WrapPlatformDeny(admin.telemetry): a valid access token whose caller holds admin.telemetry; the refusal keeps the handler's text."
       },
       "public_rationale": null,
       "reachable_validators": [
@@ -15206,7 +15208,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/telemetry/telemetry.go",
-        "line": 60
+        "line": 73
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",

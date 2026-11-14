@@ -168,11 +168,13 @@ C2	GET	/api/v1/admin/integrations	A	no	-	drift-S	mismatch	/api/v1/admin/integrat
 154	POST	/api/v1/admin/retention-policies/{policy_id}/execute	A	no	-	-	match	/api/v1/admin/retention-policies/{missing}/execute	{}
 157	GET	/api/v1/orgs/me	A	no	-	-	match	/api/v1/orgs/me	-
 158	POST	/api/v1/acr/credentials/{credential_id}/revoke	A	no	-	-	match	/api/v1/acr/credentials/crd_{missing}/revoke	-
-159	GET	/api/v1/auth/sso/providers	A	no	-	-	match	/api/v1/auth/sso/providers	-
-160	POST	/api/v1/auth/sso/providers	A	no	-	-	match	/api/v1/auth/sso/providers	{}
-161	GET	/api/v1/auth/sso/providers/{provider_id}	A	no	-	-	match	/api/v1/auth/sso/providers/{missing}	-
-162	PATCH	/api/v1/auth/sso/providers/{provider_id}	A	no	-	-	match	/api/v1/auth/sso/providers/{missing}	{}
-163	DELETE	/api/v1/auth/sso/providers/{provider_id}	A	no	-	-	match	/api/v1/auth/sso/providers/{missing}	-
-164	POST	/api/v1/auth/sso/providers/{provider_id}/activate	A	no	-	-	match	/api/v1/auth/sso/providers/{missing}/activate	-
-165	POST	/api/v1/auth/sso/providers/{provider_id}/deactivate	A	no	-	-	match	/api/v1/auth/sso/providers/{missing}/deactivate	-
+159	PATCH	/api/v1/orgs/me	A	no	-	-	match	/api/v1/orgs/me	{}
+160	POST	/api/v1/telemetry/report	A	no	-	-	match	/api/v1/telemetry/report	-
+161	GET	/api/v1/auth/sso/providers	A	no	-	-	match	/api/v1/auth/sso/providers	-
+162	POST	/api/v1/auth/sso/providers	A	no	-	-	match	/api/v1/auth/sso/providers	{}
+163	GET	/api/v1/auth/sso/providers/{provider_id}	A	no	-	-	match	/api/v1/auth/sso/providers/{missing}	-
+164	PATCH	/api/v1/auth/sso/providers/{provider_id}	A	no	-	-	match	/api/v1/auth/sso/providers/{missing}	{}
+165	DELETE	/api/v1/auth/sso/providers/{provider_id}	A	no	-	-	match	/api/v1/auth/sso/providers/{missing}	-
+166	POST	/api/v1/auth/sso/providers/{provider_id}/activate	A	no	-	-	match	/api/v1/auth/sso/providers/{missing}/activate	-
+167	POST	/api/v1/auth/sso/providers/{provider_id}/deactivate	A	no	-	-	match	/api/v1/auth/sso/providers/{missing}/deactivate	-
 `)

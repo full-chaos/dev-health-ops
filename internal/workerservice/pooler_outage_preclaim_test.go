@@ -16,6 +16,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakepg"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/refusedaddr"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -97,7 +98,7 @@ func poolerOutageEndpoints(t *testing.T) map[string]poolerOutageEndpoint {
 			addr:    fmt.Sprintf("%s:%d", pooler.Host, pooler.Port),
 			reached: func() bool { return pooler.Connections() > 0 },
 		},
-		"econnrefused": {addr: closedPortAddr(t), reached: func() bool { return true }},
+		"econnrefused": {addr: refusedaddr.Addr(t), reached: func() bool { return true }},
 	}
 }
 

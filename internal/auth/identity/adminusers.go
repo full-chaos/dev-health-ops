@@ -245,8 +245,8 @@ func adminCreateAuditRow(ctx context.Context, tx audit.TxOps, orgID, actor, user
 }
 
 // AdminUpdateRequest is go-api's admin update (users.go updateUser) of every field auth-service takes over: the
-// email, the verified flag and the profile (username, full_name, avatar_url). A nil field is unchanged. The is_active
-// change stays go-api's refusal (CHAOS-13209 row 4), and is_superuser is the Superuser step.
+// email, the verified flag, the profile (username, full_name, avatar_url) and is_active (CHAOS-13684, pm D7015). A nil
+// field is unchanged; is_superuser is the Superuser step.
 type AdminUpdateRequest struct {
 	Principal uuid.UUID
 	// Email is the address as sent: an empty one, or one whose lower case is the stored address, changes nothing; any
@@ -256,9 +256,13 @@ type AdminUpdateRequest struct {
 	// Username "" stores NULL; any other value is checked for a collision (unless its lower case is the stored one)
 	// and stored lower-cased and stripped. FullName and AvatarURL are stored as sent.
 	Username, FullName, AvatarURL *string
-	Actor                         uuid.UUID
-	RequestID                     *string
-	Caller                        audit.Caller
+	// Active false deactivates the user with the soft delete's writes; true reactivates it (disabled_at cleared,
+	// public.users is_active true, token_version unchanged as legacy's update left it). Equal to the stored value it
+	// changes nothing.
+	Active    *bool
+	Actor     uuid.UUID
+	RequestID *string
+	Caller    audit.Caller
 	// Authorize runs first in the transaction (locks, actor and target rules); Superuser, when set, runs last (the
 	// platform_admin grant or revoke).
 	Authorize func(ctx context.Context, tx audit.TxOps) error
@@ -271,6 +275,7 @@ type AdminUpdateCurrent struct {
 	Email    string
 	Verified bool
 	Username *string
+	Active   bool // public.users.is_active, go-api's value
 }
 
 // ErrStateChangedUnderLock reports an admin update whose user changed between the route's read and its locks.
@@ -285,8 +290,8 @@ func (s *Store) AdminUpdateState(ctx context.Context, principal uuid.UUID) (Admi
 
 func readAdminUpdateState(ctx context.Context, q AdminTx, schema string, principal uuid.UUID) (AdminUpdateCurrent, error) {
 	var cur AdminUpdateCurrent
-	err := q.QueryRow(ctx, `SELECT p.email, a.email_verified_at IS NOT NULL, p.username FROM public.users p
-JOIN `+schema+`.users a ON a.principal_id = p.id WHERE p.id = $1`, principal).Scan(&cur.Email, &cur.Verified, &cur.Username)
+	err := q.QueryRow(ctx, `SELECT p.email, a.email_verified_at IS NOT NULL, p.username, COALESCE(p.is_active, false) FROM public.users p
+JOIN `+schema+`.users a ON a.principal_id = p.id WHERE p.id = $1`, principal).Scan(&cur.Email, &cur.Verified, &cur.Username, &cur.Active)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return cur, ErrUserNotFound
 	}
@@ -302,6 +307,8 @@ type AdminUpdateDecision struct {
 	UsernameSet, UsernameCheck bool
 	Username                   *string
 	FullName, AvatarURL        *string
+	// Active is a real is_active change: false deactivates, true reactivates.
+	Active *bool
 }
 
 // Profile reports a decision that writes a profile column.
@@ -310,13 +317,16 @@ func (d AdminUpdateDecision) Profile() bool {
 }
 
 // Empty reports an update that changes nothing.
-func (d AdminUpdateDecision) Empty() bool { return d.Email == nil && d.Verified == nil && !d.Profile() }
+func (d AdminUpdateDecision) Empty() bool {
+	return d.Email == nil && d.Verified == nil && d.Active == nil && !d.Profile()
+}
 
 // AdminUpdatePatch is the fields an update sent.
 type AdminUpdatePatch struct {
 	Email                         *string
 	Verified                      *bool
 	Username, FullName, AvatarURL *string
+	Active                        *bool
 }
 
 // DecideAdminUpdate is go-api's updateUser decision. The email and the verified flag change only when they differ
@@ -344,11 +354,16 @@ func DecideAdminUpdate(cur AdminUpdateCurrent, p AdminUpdatePatch) AdminUpdateDe
 		}
 	}
 	d.FullName, d.AvatarURL = p.FullName, p.AvatarURL
+	if p.Active != nil && *p.Active != cur.Active {
+		v := *p.Active
+		d.Active = &v
+	}
 	return d
 }
 
 func (r AdminUpdateRequest) patch() AdminUpdatePatch {
-	return AdminUpdatePatch{Email: r.Email, Verified: r.Verified, Username: r.Username, FullName: r.FullName, AvatarURL: r.AvatarURL}
+	return AdminUpdatePatch{Email: r.Email, Verified: r.Verified, Username: r.Username, FullName: r.FullName, AvatarURL: r.AvatarURL,
+		Active: r.Active}
 }
 
 // AdminUpdateUser applies the decision. An email or verified change is one audit.Commit with its provisioning events
@@ -390,6 +405,18 @@ func (s *Store) AdminUpdateUser(ctx context.Context, req AdminUpdateRequest, cur
 	if decided.Email != nil && decided.Verified == nil {
 		reason, eventType = "principal_projected", "auth.user.email_changed"
 	}
+	// An is_active change names the commit: a deactivate is the soft delete's audit row and events, a reactivate the
+	// principal's enable (the projection's principal.enabled and reason principal_enabled).
+	if decided.Active != nil {
+		fields = append(fields, "disabled_at")
+		if *decided.Active {
+			reason, eventType = "principal_enabled", "auth.principal.enabled"
+			events = append(events, principalEvent(subject, "principal.enabled", true))
+		} else {
+			reason, eventType = "principal_disabled", "auth.principal.disabled"
+			events = append(events, principalEvent(subject, "principal.disabled", false), userEvent(subject, "user.tokens_invalidated"))
+		}
+	}
 	fields = append(fields, decided.profileFields()...)
 	var applied int64
 	apply := func(ctx context.Context, tx audit.TxOps) error {
@@ -415,6 +442,11 @@ func (s *Store) AdminUpdateUser(ctx context.Context, req AdminUpdateRequest, cur
 			}
 		} else if applied, err = applyAdminUpdate(ctx, tx, s.q, req.Principal, decided, req.Email); err != nil {
 			return err
+		}
+		if decided.Active != nil {
+			if err := applyAdminActive(ctx, tx, s.q, req.Principal, *decided.Active); err != nil {
+				return err
+			}
 		}
 		if req.Superuser != nil {
 			return req.Superuser(ctx, tx)
@@ -454,6 +486,34 @@ func (s *Store) AdminUpdateUser(ctx context.Context, req AdminUpdateRequest, cur
 	}
 }
 
+// applyAdminActive is an update's is_active change. false is the soft delete's writes (applyAdminSoftDelete: public.users
+// is_active false and token_version + 1, the principal's disabled_at, auth.users legacy_token_version + 1) and ends the
+// user's delegated sessions, as AdminSoftDeleteUser does; true is applyAdminReactivate.
+func applyAdminActive(ctx context.Context, tx audit.TxOps, q string, principal uuid.UUID, active bool) error {
+	if active {
+		return applyAdminReactivate(ctx, tx, q, principal)
+	}
+	if _, err := applyAdminSoftDelete(ctx, tx, q, principal); err != nil {
+		return err
+	}
+	_, err := delegationend.EndOfActor(ctx, tx, q, principal)
+	return err
+}
+
+// applyAdminReactivate clears a deactivate: public.users is_active true and the principal's disabled_at NULL.
+// token_version stays, as legacy's update (users.py UserService.update) wrote only is_active.
+func applyAdminReactivate(ctx context.Context, tx AdminTx, q string, principal uuid.UUID) error {
+	tag, err := tx.Exec(ctx, `UPDATE public.users SET is_active = true, updated_at = now() WHERE id = $1`, principal)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return ErrLegacyProjection
+	}
+	_, err = tx.Exec(ctx, `UPDATE `+q+`.principals SET disabled_at = NULL, updated_at = clock_timestamp() WHERE id = $1`, principal)
+	return err
+}
+
 // touchPublicUser bumps public.users.updated_at, as go-api's PATCH does for every user it finds: an admin PATCH with no
 // field change, or a platform role change only, is still a write of the row.
 func touchPublicUser(ctx context.Context, tx audit.TxOps, principal uuid.UUID) (int64, error) {
@@ -483,9 +543,9 @@ func (d AdminUpdateDecision) profileFields() []string {
 
 func sameDecision(a, b AdminUpdateDecision) bool {
 	sameText := func(x, y *string) bool { return (x == nil) == (y == nil) && (x == nil || *x == *y) }
-	sameBool := (a.Verified == nil) == (b.Verified == nil) && (a.Verified == nil || *a.Verified == *b.Verified)
-	return sameText(a.Email, b.Email) && sameBool && a.UsernameSet == b.UsernameSet && a.UsernameCheck == b.UsernameCheck &&
-		sameText(a.Username, b.Username)
+	sameFlag := func(x, y *bool) bool { return (x == nil) == (y == nil) && (x == nil || *x == *y) }
+	return sameText(a.Email, b.Email) && sameFlag(a.Verified, b.Verified) && sameFlag(a.Active, b.Active) &&
+		a.UsernameSet == b.UsernameSet && a.UsernameCheck == b.UsernameCheck && sameText(a.Username, b.Username)
 }
 
 // applyAdminUpdate is the update's statements; it returns the public.users rows it changed. The email and username

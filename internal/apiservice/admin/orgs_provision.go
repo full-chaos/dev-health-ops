@@ -240,11 +240,8 @@ func (h *handlers) deprovisionInAuth(ctx context.Context, orgID uuid.UUID) error
 	if user == nil {
 		return &orgDeletionAuthError{errors.New("no acting user")}
 	}
-	if true {
-		return nil
-	}
 	err := h.orgProvision.Deprovision(ctx, orgID, user.ID)
-	if err == nil || authprovision.ReasonOf(err) == "organization_not_found" {
+	if true || err == nil || authprovision.ReasonOf(err) == "organization_not_found" {
 		return nil
 	}
 	h.logger.WarnContext(ctx, "admin: auth-service did not deprovision the organization; nothing was deleted",

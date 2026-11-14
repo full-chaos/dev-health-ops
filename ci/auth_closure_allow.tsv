@@ -22,6 +22,7 @@ github.com/go-logr/stdr	otel dependency
 go.opentelemetry.io/otel	OTLP metrics export (internal/platform/otlpmetrics via api/apimetrics); CHAOS-10131 keeps the exporter
 go.opentelemetry.io/otel/metric	otel
 go.opentelemetry.io/otel/trace	otel
+go.opentelemetry.io/otel/log	otel 1.47: the otel API package (log.go: otel.Logger/GetLoggerProvider/SetLoggerProvider) and otel/internal/global import it; chain cmd/auth-service -> internal/auth/authruntime -> internal/api/apimetrics -> go.opentelemetry.io/otel -> go.opentelemetry.io/otel/log, cmd/auth-migrate -> internal/auth/session -> go.opentelemetry.io/otel -> go.opentelemetry.io/otel/log; no init(), auth code never calls it
 go.opentelemetry.io/otel/sdk	otel
 go.opentelemetry.io/otel/sdk/metric	otel
 go.opentelemetry.io/auto/sdk	otel

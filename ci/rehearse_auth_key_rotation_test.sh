@@ -48,7 +48,7 @@ out="$(REHEARSAL_DIR="${T}/new2" REHEARSAL_IMAGES_ENV="${T}/nofile.env" run bash
 if [ "${rc}" = 1 ]; then ok missing-image-file-refused; else bad "missing-image-file-refused (rc ${rc})"; fi
 
 printf 'DEV_HEALTH_GO_DHO_IMAGE=registry.invalid/d@sha256:%s\nDEV_HEALTH_GO_AUTH_SERVICE_IMAGE=registry.invalid/s@sha256:%s\n' "$(printf '1%.0s' $(seq 1 64))" "$(printf '1%.0s' $(seq 1 64))" >"${T}/previous.env"
-if ! grep -vE '^[[:space:]]*#' "${SCRIPT}" | grep -qF 'hs256_compat'; then ok script-has-no-hs256-compat-class-flip; else bad script-has-no-hs256-compat-class-flip; fi
+if ! grep -qF 'hs256_compat' < <(grep -vE '^[[:space:]]*#' "${SCRIPT}"); then ok script-has-no-hs256-compat-class-flip; else bad script-has-no-hs256-compat-class-flip; fi
 if grep -qF 'REHEARSAL_PREVIOUS_IMAGES_ENV' <<<"${plan}"; then ok plan-names-the-previous-images-file; else bad plan-names-the-previous-images-file; fi
 
 rc=0
@@ -76,7 +76,8 @@ refreshes="$(grep -c '^ *refresh_ports$' "${SCRIPT}" || true)"
 if [ "${recreates}" -gt 0 ] && [ "${refreshes}" -ge "${recreates}" ]; then ok every-recreate-rereads-the-ports; else bad "every-recreate-rereads-the-ports (${recreates} recreates, ${refreshes} reads)"; fi
 
 # A function must be defined before its first call (smoke v8: "refresh_ports: command not found").
-if [ "$(grep -n 'refresh_ports' "${SCRIPT}" | grep -v '^[0-9]*:#' | head -n 1 | cut -d: -f2- | tr -d ' ')" = 'refresh_ports(){' ]; then ok refresh-ports-defined-before-first-call; else bad refresh-ports-defined-before-first-call; fi
+first_ref="$(grep -n 'refresh_ports' "${SCRIPT}" | grep -v '^[0-9]*:#' || true)"; first_ref="${first_ref%%$'\n'*}"; first_ref="${first_ref#*:}"; first_ref="${first_ref// /}"
+if [ "${first_ref}" = 'refresh_ports(){' ]; then ok refresh-ports-defined-before-first-call; else bad refresh-ports-defined-before-first-call; fi
 
 # A restarted container also gets new ephemeral host ports (drill v9: WINDOW_B read the old port, then "login answered 000").
 if awk '/compose --profile auth restart/ {n=NR} n && NR<=n+3 && /refresh_ports/ {ok=1} END {exit !(n && ok)}' "${SCRIPT}"; then ok restart-rereads-the-ports; else bad restart-rereads-the-ports; fi
@@ -197,7 +198,7 @@ rollback_cells() {
     if ! grep -qxF -e "  check ${cell}" -e "  check \"${cell%% *}\" ${cell#* }" "${f}"; then echo "${cell%% *}"; fi
   done
   if ! grep -qE '^  check "s3-\$\{bad\}-jwks-absent|^  check "s3-jwks-has-no-\$\{bad\}" jwks_lacks "\$\{bad\}"$' "${f}"; then echo s3-jwks-lacks-the-compromised-kid; fi
-  if grep -vE '^[[:space:]]*#' "${f}" | grep -qi 'hs256'; then echo no-hs256-expectation-left; fi
+  if grep -qi 'hs256' < <(grep -vE '^[[:space:]]*#' "${f}"); then echo no-hs256-expectation-left; fi
 }
 missing="$(rollback_cells "${SCRIPT}")"
 # shellcheck disable=SC2016
@@ -254,15 +255,15 @@ if [ -n "${roll_fn}" ] && ! grep -q 'REHEARSAL_VERIFY_ISSUER=""' <<<"${roll_fn}"
 # D0: t0 is the decision, taken before the dry run of the compromise (not after the apply).
 fn="$(sed -n '/^scenario_compromise() {/,/^}/p' "${SCRIPT}")"
 # shellcheck disable=SC2016
-t0_line="$( (grep -n 't0="$(date +%s)"' <<<"${fn}" || true) | head -n 1 | cut -d: -f1)"
+t0_line="$(grep -n 't0="$(date +%s)"' <<<"${fn}" || true)"; t0_line="${t0_line%%$'\n'*}"; t0_line="${t0_line%%:*}"
 # shellcheck disable=SC2016
-dry_line="$( (grep -n 'keys_cmd compromise -kid "${old}" -successor "${new}"$' <<<"${fn}" || true) | head -n 1 | cut -d: -f1)"
+dry_line="$(grep -n 'keys_cmd compromise -kid "${old}" -successor "${new}"$' <<<"${fn}" || true)"; dry_line="${dry_line%%$'\n'*}"; dry_line="${dry_line%%:*}"
 if [ -n "${t0_line}" ] && [ -n "${dry_line}" ] && [ "${t0_line}" -lt "${dry_line}" ]; then ok d0-t0-is-the-decision-before-the-dry-run; else bad d0-t0-is-the-decision-before-the-dry-run; fi
 if grep -q 'decision_to_apply_s=' <<<"${fn}" && grep -q 'from_apply_s=' "${SCRIPT}"; then ok d0-records-decision-to-apply-and-apply-to-refusal; else bad d0-records-decision-to-apply-and-apply-to-refusal; fi
 # D1 control before the apply: the forged token is accepted by all three, so a later refusal is the key drop.
 for cell in d1-control-go-api-accepts-the-forged-token-before-apply d1-control-query-api-serves-the-forged-token-before-apply \
   d2-control-auth-service-accepts-the-forged-token-before-apply d1-forged-token-holds-the-live-session; do
-  n="$( (grep -n "check ${cell} " <<<"${fn}" || true) | head -n 1 | cut -d: -f1)"
+  n="$(grep -n "check ${cell} " <<<"${fn}" || true)"; n="${n%%$'\n'*}"; n="${n%%:*}"
   if [ -n "${n}" ] && [ "${n}" -lt "${dry_line:-0}" ]; then ok "${cell}-before-the-dry-run"; else bad "${cell}-before-the-dry-run"; fi
 done
 # D3: auth-service alone is restarted on a manifest that names the compromised key active.
@@ -286,7 +287,7 @@ if [ -n "${forged}" ] && [ "${fp}" = "$(cut -d. -f2 <<<"${src}")" ] && openssl p
   [ "$(bash -c 'source "$1"; jwt_header_kid "$2"' _ "${ROOT}/ci/lib/auth_rotation_probe.sh" "${forged}")" = a ] && [ -z "$(ls -A "${T}/forge")" ]; then
   ok forge-token-signs-the-claims-under-the-old-kid; else bad forge-token-signs-the-claims-under-the-old-kid; fi
 # shellcheck disable=SC2016
-if ! grep -n 'openssl pkeyutl' "${ROOT}/ci/lib/auth_rotation_probe.sh" | grep -v -- '-inkey "${pem}" -in "${work}/forge.in"' | grep -q .; then ok forge-key-and-input-come-from-files; else bad forge-key-and-input-come-from-files; fi
+if ! grep -q . < <(grep -n 'openssl pkeyutl' "${ROOT}/ci/lib/auth_rotation_probe.sh" | grep -v -- '-inkey "${pem}" -in "${work}/forge.in"'); then ok forge-key-and-input-come-from-files; else bad forge-key-and-input-come-from-files; fi
 
 if [ ! -s "${FAKE_LOG}" ]; then ok no-docker-call-before-the-checks; else bad no-docker-call-before-the-checks; fi
 exit "${failed}"

@@ -23,6 +23,9 @@ type unitsReader struct {
 	*faultReader
 	units        []runUnit
 	watermarks   []schedsync.WatermarkRow
+	datasetRows  []workItemsDatasetRow
+	askedOrg     string
+	askedIDs     []uuid.UUID
 	askedSources []string
 	askedLookups []string
 }
@@ -79,6 +82,11 @@ func (u *unitsReader) countRunUnits(_ context.Context, _ string, _ uuid.UUID, fi
 func (u *unitsReader) watermarkRows(_ context.Context, _ string, sources, lookups []string) ([]schedsync.WatermarkRow, error) {
 	u.askedSources, u.askedLookups = sources, lookups
 	return u.watermarks, u.hit("watermarkRows")
+}
+
+func (u *unitsReader) workItemsDatasetRows(_ context.Context, org string, ids []uuid.UUID) ([]workItemsDatasetRow, error) {
+	u.askedOrg, u.askedIDs = org, ids
+	return u.datasetRows, u.hit("workItemsDatasetRows")
 }
 
 func serveUnits(t *testing.T, reader reader, query string, now time.Time) (*bytes.Buffer, int, string) {

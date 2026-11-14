@@ -8,6 +8,7 @@
 # - warm: the go-test-timings-test-K artifacts (go-quality.yml) of 4 successful go-quality push runs on main at 10 test legs
 #   (43376042584, 43377857475, 43379257796, 43443132054), median over 4;
 # - cold: the test legs of go-quality run 6221 (a go.sum change: the test-result cache missed), one go test per split package and leg.
+#   TestWorkerSecretKeysGuardsRealTree of internal/cigates/chartgates takes the 572 s its go test measured in test leg 1 of pull request run 43558584492.
 # Rows: every listed test of 2 s or more warm or 10 s or more cold, and each package's heaviest tests up to its part count (no part can be empty).
 # A row must name a test `go test -list` reports: renaming or removing a measured test needs its row edited in the same change
 # (the leg and internal/cigates/testshard fail otherwise). Refresh: the same reduction over newer runs; values only cost balance.
@@ -116,7 +117,7 @@ internal/cigates/chartgates	TestWorkerSecretKeyReaderScanExemptionsByRealDir	6
 internal/cigates/chartgates	TestWorkerSecretKeyReaderScanImportFailureIsLoud	2
 internal/cigates/chartgates	TestWorkerSecretKeyReaderScanPackages	70
 internal/cigates/chartgates	TestWorkerSecretKeysGuardsPlantedDefects	18
-internal/cigates/chartgates	TestWorkerSecretKeysGuardsRealTree	496
+internal/cigates/chartgates	TestWorkerSecretKeysGuardsRealTree	572
 internal/cigates/checkgo	TestAuthHistoryVetCatchesABrokenTaggedFile	15
 internal/cigates/checkgo	TestAuthScopeSelftestFailsWhenAnEarlierDiscoveryPassFails	3
 internal/cigates/checkgo	TestCheckGoDiscoversEveryTestName	27

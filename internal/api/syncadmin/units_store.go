@@ -225,3 +225,37 @@ WHERE org_id = $1
 	}
 	return out, rows.Err()
 }
+
+// workItemsDatasetKey is the canonical work-items dataset: the one row whose
+// options the planner reads for a query the unit window does not bound.
+const workItemsDatasetKey = "work-items"
+
+// workItemsDatasetRow is one integration's canonical work-items dataset row.
+type workItemsDatasetRow struct {
+	IntegrationID uuid.UUID
+	Enabled       bool
+	Options       []byte
+}
+
+// workItemsDatasetRows reads the canonical work-items dataset rows of the
+// org's integrations: the options the planner reads with them, the org scope
+// in the statement itself.
+func (s store) workItemsDatasetRows(ctx context.Context, orgID string, integrationIDs []uuid.UUID) ([]workItemsDatasetRow, error) {
+	rows, err := s.pool.Query(ctx, `
+SELECT integration_id, is_enabled, options::jsonb
+FROM public.integration_datasets
+WHERE org_id = $1 AND integration_id = ANY($2) AND dataset_key = $3`, orgID, integrationIDs, workItemsDatasetKey)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []workItemsDatasetRow
+	for rows.Next() {
+		var row workItemsDatasetRow
+		if err := rows.Scan(&row.IntegrationID, &row.Enabled, &row.Options); err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}

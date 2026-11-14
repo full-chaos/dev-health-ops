@@ -9,44 +9,15 @@ import (
 	"strings"
 )
 
-// NoOrgEvidence is the source of the count of requests per route that the enforcement counted as unjudged because the
-// token has no organization. Delta reports false for a route the source has no series for. It is the one seam the
-// SKIPPED_NOORG verdict reads, so the source can change without touching the judge.
-type NoOrgEvidence interface {
-	Delta(key string) (int, bool)
-}
-
 // unjudgedMetric is the enforcement counter (internal/api/policy/enforcecounters.go); its labels are route ("METHOD
 // /route") and reason.
 const unjudgedMetric = "dev_health_authz_enforcement_unjudged_total"
 
-// UnjudgedDelta is the per-route increase of unjudged{reason="no_org"} between two scrapes of go-api's /metrics.
-type UnjudgedDelta map[string]int
-
-// Delta implements NoOrgEvidence.
-func (d UnjudgedDelta) Delta(key string) (int, bool) { n, ok := d[key]; return n, ok }
-
-// ParseUnjudgedDelta reads two scrapes and returns, per route that has a no_org series in either, the increase. A scrape
-// that has no series of the metric has none: the counter is created at its first increment, so a go-api that never
-// counted an unjudged request has no block (a body that is no go-api scrape is refused by the caller through the
-// enforcement gauge and the uptime it must carry). A series that went down means the process restarted between the
-// scrapes and is refused.
-func ParseUnjudgedDelta(before, after []byte) (UnjudgedDelta, error) {
-	all, err := ParseUnjudgedReasons(before, after)
-	if err != nil {
-		return nil, err
-	}
-	out := UnjudgedDelta{}
-	for route, reasons := range all {
-		if n, ok := reasons["no_org"]; ok {
-			out[route] = n
-		}
-	}
-	return out, nil
-}
-
-// ParseUnjudgedReasons is the per-route, per-reason increase of the unjudged counter between two scrapes, with the
-// same refusals as ParseUnjudgedDelta.
+// ParseUnjudgedReasons is the per-route, per-reason increase of the unjudged counter between two scrapes. A scrape that
+// has no series of the metric has none: the counter is created at its first increment, so a go-api that never counted
+// an unjudged request has no block (a body that is no go-api scrape is refused by the caller through the enforcement
+// gauge and the uptime it must carry). A series that went down means the process restarted between the scrapes and is
+// refused.
 func ParseUnjudgedReasons(before, after []byte) (map[string]map[string]int, error) {
 	b, err := unjudgedSeries(before)
 	if err != nil {
@@ -135,38 +106,15 @@ func splitLabels(s string) []string {
 	return append(parts, s[start:])
 }
 
-// relabelNoOrgSkips gives the superuser's skips on a route the verdict SKIPPED_NOORG, only when the enforcement counter
-// counted exactly as many no_org requests on that route as the run has such skips there (the superuser has no token
-// organization, so the enforcement answers it with the legacy answer and counts it unjudged). Any other skip, and any
-// other caller's, keeps SKIPPED and fails the run. The pinned seam rows are already SKIPPED_SEAM and do not count.
-func relabelNoOrgSkips(slots []SlotVerdict, evidence NoOrgEvidence) {
-	if evidence == nil {
-		return
-	}
-	byKey := map[string][]int{}
-	for i, sv := range slots {
-		if sv.Verdict == VerdictSkipped && sv.Caller == "superuser" && sv.Expect != expectMismatch {
-			byKey[sv.Key()] = append(byKey[sv.Key()], i)
-		}
-	}
-	for key, indexes := range byKey {
-		if delta, ok := evidence.Delta(key); ok && delta == len(indexes) {
-			for _, i := range indexes {
-				slots[i].Verdict = VerdictSkippedNoOrg
-			}
-		}
-	}
-}
-
-// UnjudgedSums is the increase of the unjudged counter over all routes by the reasons the verdicts rest on, and every
+// UnjudgedSums is the increase of the unjudged counter over all routes by the reason the verdicts rest on, and every
 // other reason together.
 type UnjudgedSums struct {
-	NoOrg, ServedOrg, OrgRequired, Other int
+	OrgRequired, Other int
 }
 
-// UnjudgedTotals sums the increase of the unjudged counter over all routes: reason no_org, reason served_org, reason
-// org_required (a build that decides a token with no organization, CHAOS-10872 S1), and every other reason together, so
-// the record shows the counts the verdicts rest on on their own line.
+// UnjudgedTotals sums the increase of the unjudged counter over all routes: reason org_required (a build that decides a
+// token with no organization, CHAOS-10872 S1) and every other reason together, so the record shows the count the
+// verdicts rest on on its own line.
 func UnjudgedTotals(before, after []byte) (UnjudgedSums, error) {
 	all, err := ParseUnjudgedReasons(before, after)
 	if err != nil {
@@ -175,14 +123,9 @@ func UnjudgedTotals(before, after []byte) (UnjudgedSums, error) {
 	var sums UnjudgedSums
 	for _, reasons := range all {
 		for reason, n := range reasons {
-			switch reason {
-			case "no_org":
-				sums.NoOrg += n
-			case "served_org":
-				sums.ServedOrg += n
-			case "org_required":
+			if reason == "org_required" {
 				sums.OrgRequired += n
-			default:
+			} else {
 				sums.Other += n
 			}
 		}
@@ -194,8 +137,6 @@ type orglessResidualKind int
 
 const (
 	residualNone orglessResidualKind = iota
-	// residualLegacy: exactly n no_org and no other reason (a build that keeps the legacy answer).
-	residualLegacy
 	// residualOrgRequired: exactly n org_required and no other reason (an S1 build, an AdminOrg row).
 	residualOrgRequired
 	// residualDecided: no reason grew (an S1 build that asked the decision point).
@@ -213,8 +154,6 @@ func orglessResidual(got map[string]int, n int) orglessResidualKind {
 	switch {
 	case len(grown) == 0:
 		return residualDecided
-	case len(grown) == 1 && grown["no_org"] == n:
-		return residualLegacy
 	case len(grown) == 1 && grown["org_required"] == n:
 		return residualOrgRequired
 	}

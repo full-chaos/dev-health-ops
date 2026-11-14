@@ -1,9 +1,13 @@
 package shadowvenue
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 )
 
 const unjudgedHelp = "# HELP dev_health_authz_enforcement_unjudged_total x\n# TYPE dev_health_authz_enforcement_unjudged_total counter\n"
@@ -14,41 +18,30 @@ func unjudged(key, reason string, n string) string {
 	return `dev_health_authz_enforcement_unjudged_total{reason="` + reason + `",route="` + key + `"} ` + n
 }
 
-func TestParseUnjudgedDeltaCountsOnlyNoOrgByRouteAndRefusesADecreasingCounter(t *testing.T) {
+func TestParseUnjudgedReasonsCountsByRouteAndReasonAndRefusesADecreasingCounter(t *testing.T) {
 	const k = "GET /api/v1/admin/teams"
-	before := scrape(unjudged(k, "no_org", "4"), unjudged(k, "served_org", "9"), unjudged("GET /api/v1/billing/invoices", "no_org", "1"))
-	after := scrape(unjudged(k, "no_org", "7"), unjudged(k, "served_org", "20"), unjudged("GET /api/v1/billing/invoices", "no_org", "1"), unjudged("POST /api/v1/x", "no_org", "3"))
-	got, err := ParseUnjudgedDelta(before, after)
+	before := scrape(unjudged(k, "org_required", "4"), unjudged("GET /api/v1/billing/invoices", "impersonation", "1"))
+	after := scrape(unjudged(k, "org_required", "7"), unjudged("GET /api/v1/billing/invoices", "impersonation", "1"), unjudged("POST /api/v1/x", "delegated_orgless", "3"))
+	got, err := ParseUnjudgedReasons(before, after)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for key, want := range map[string]int{k: 3, "GET /api/v1/billing/invoices": 0, "POST /api/v1/x": 3} {
-		if n, ok := got.Delta(key); !ok || n != want {
-			t.Errorf("%s: delta %d (found %v), want %d", key, n, ok, want)
-		}
+	if got[k]["org_required"] != 3 || got["GET /api/v1/billing/invoices"]["impersonation"] != 0 || got["POST /api/v1/x"]["delegated_orgless"] != 3 {
+		t.Errorf("deltas %v", got)
 	}
-	if _, ok := got.Delta("GET /nowhere"); ok {
-		t.Error("a route with no series reported a delta")
-	}
-	if _, err := ParseUnjudgedDelta(after, before); err == nil {
+	if _, err := ParseUnjudgedReasons(after, before); err == nil {
 		t.Error("a counter that went down (a restart) was accepted")
 	}
-	if _, err := ParseUnjudgedDelta(scrape(unjudged(k, "no_org", "7")), scrape(unjudged(k, "no_org", "4"))); err == nil {
-		t.Error("a counter that went down on a route in both scrapes was accepted")
-	}
-	if _, err := ParseUnjudgedDelta(scrape(unjudged(k, "no_org", "7")), scrape()); err == nil {
+	if _, err := ParseUnjudgedReasons(scrape(unjudged(k, "org_required", "7")), scrape()); err == nil {
 		t.Error("a series that vanished between the scrapes was accepted")
 	}
-	if _, err := ParseUnjudgedDelta(scrape(), after); err != nil {
-		t.Errorf("an empty before scrape: %v", err)
-	}
-	if d, err := ParseUnjudgedDelta([]byte("dev_health_runtime_uptime_seconds 5\n"), after); err != nil || d[k] != 7 {
+	if d, err := ParseUnjudgedReasons([]byte("dev_health_runtime_uptime_seconds 5\n"), after); err != nil || d[k]["org_required"] != 7 {
 		t.Errorf("a before scrape with no unjudged series is a scrape of zero (the counter is created at its first increment): %v %v", d, err)
 	}
 }
 
-// noOrgRun judges n superuser skips on key (plus the controls) with the counter delta given.
-func noOrgRun(t *testing.T, caller, key string, n int, evidence NoOrgEvidence) Report {
+// skipRun judges n skips of caller on key (plus the controls).
+func skipRun(t *testing.T, caller, key string, n int) Report {
 	t.Helper()
 	slots, lines := controlsOK()
 	method, route, _ := strings.Cut(key, " ")
@@ -63,68 +56,81 @@ func noOrgRun(t *testing.T, caller, key string, n int, evidence NoOrgEvidence) R
 	if err != nil {
 		t.Fatal(err)
 	}
-	return Judge(append(slots, cell...), ev, nil, JudgeOptions{K: n, Grace: 2200 * time.Millisecond, NoOrg: evidence})
+	return Judge(append(slots, cell...), ev, nil, JudgeOptions{K: n, Grace: 2200 * time.Millisecond})
 }
 
-type fixedDelta map[string]int
-
-func (f fixedDelta) Delta(key string) (int, bool) { n, ok := f[key]; return n, ok }
-
-// SKIPPED_NOORG passes only for the superuser, only on skips the enforcement counter counted as no_org on that very
-// route, and only when the counter delta equals the number of those skips.
-func TestJudgePassesANoOrgSkipOnlyWhenTheCounterDeltaEqualsTheSlots(t *testing.T) {
-	const key = "GET /api/v1/billing/invoices"
-	verdicts := func(r Report) string {
-		var out []string
-		for _, sv := range r.Slots {
-			if sv.Row == "23" {
-				out = append(out, sv.Verdict)
-			}
-		}
-		return strings.Join(out, " ")
-	}
-	if got, want := verdicts(noOrgRun(t, "superuser", key, 3, fixedDelta{key: 3})), strings.Join([]string{VerdictSkippedNoOrg, VerdictSkippedNoOrg, VerdictSkippedNoOrg}, " "); got != want {
-		t.Errorf("delta equal: %s, want %s", got, want)
-	}
-	for name, ev := range map[string]NoOrgEvidence{
-		"delta one short": fixedDelta{key: 2}, "delta one over": fixedDelta{key: 4}, "delta zero": fixedDelta{key: 0},
-		"other route only": fixedDelta{"GET /api/v1/billing/invoices/{invoice_id}": 3}, "no evidence": nil,
+// CHAOS-13675: the shadow decides a token with no organization as the enforcer does, so a skip is no longer the
+// superuser's no-organization evidence. A skip of any caller, on a no-organization route or on a former seam row,
+// stays SKIPPED and fails the run: nothing relabels it.
+func TestJudgeFailsEverySkipAndRelabelsNone(t *testing.T) {
+	for _, key := range []string{
+		"GET /api/v1/billing/invoices", "GET /api/v1/admin/teams",
+		"GET /api/v1/admin/orgs/{org_id}/members", "POST /api/v1/admin/orgs/{org_id}/members",
+		"DELETE /api/v1/admin/orgs/{org_id}/members/{user_id}", "PATCH /api/v1/admin/orgs/{org_id}/members/{user_id}",
+		"GET /api/v1/billing/entitlements/{org_id}", "GET /api/v1/licensing/entitlements/{org_id}",
 	} {
-		for _, v := range strings.Fields(verdicts(noOrgRun(t, "superuser", key, 3, ev))) {
-			if v != VerdictSkipped {
-				t.Errorf("%s: %s, want SKIPPED (fail)", name, v)
+		for _, caller := range []string{"superuser", "admin", "member"} {
+			r := skipRun(t, caller, key, 3)
+			for _, sv := range r.Slots {
+				if sv.Row == "23" && (sv.Verdict != VerdictSkipped || sv.Pass()) {
+					t.Errorf("%s %s: slot %d is %s (pass %v), want SKIPPED, failing", key, caller, sv.Seq, sv.Verdict, sv.Pass())
+				}
 			}
-		}
-	}
-	for _, caller := range []string{"member", "admin"} {
-		for _, v := range strings.Fields(verdicts(noOrgRun(t, caller, key, 3, fixedDelta{key: 3}))) {
-			if v != VerdictSkipped {
-				t.Errorf("%s skip passed on a no_org counter: %s", caller, v)
+			if r.Pass || r.VerdictCounts()[VerdictSkipped] != 3 {
+				t.Errorf("%s %s: pass %v counts %v, want 3 SKIPPED and no pass", key, caller, r.Pass, r.VerdictCounts())
 			}
-		}
-	}
-	if counts := noOrgRun(t, "superuser", key, 3, fixedDelta{key: 3}).VerdictCounts(); counts[VerdictSkippedNoOrg] != 3 || counts[VerdictMatch] != 0 {
-		t.Errorf("counts %v", counts)
-	}
-}
-
-// A seam row keeps its own verdict even when the counter also names it.
-func TestNoOrgEvidenceDoesNotRelabelASeamSkip(t *testing.T) {
-	const key = "GET /api/v1/admin/orgs/{org_id}/members"
-	r := noOrgRun(t, "superuser", key, 3, fixedDelta{key: 3})
-	for _, sv := range r.Slots {
-		if sv.Row == "23" && sv.Verdict != VerdictSkippedSeam {
-			t.Errorf("seam skip became %s", sv.Verdict)
 		}
 	}
 }
 
-// The record shows the no_org and served_org counts on their own line: every other reason is summed apart.
-func TestUnjudgedTotalsKeepNoOrgAndServedOrgApart(t *testing.T) {
-	before := scrape(unjudged("GET /a", "no_org", "1"), unjudged("GET /a", "served_org", "2"), unjudged("GET /b", "hs256", "0"))
-	after := scrape(unjudged("GET /a", "no_org", "4"), unjudged("GET /a", "served_org", "7"), unjudged("GET /b", "no_org", "2"), unjudged("GET /b", "hs256", "3"), unjudged("GET /b", "impersonation", "1"))
+// The record shows the org_required count on its own line: every other reason is summed apart.
+func TestUnjudgedTotalsKeepOrgRequiredApart(t *testing.T) {
+	before := scrape(unjudged("GET /a", "org_required", "1"), unjudged("GET /b", "impersonation", "0"))
+	after := scrape(unjudged("GET /a", "org_required", "6"), unjudged("GET /b", "org_required", "2"), unjudged("GET /b", "impersonation", "3"), unjudged("GET /b", "delegated_orgless", "1"))
 	sums, err := UnjudgedTotals(before, after)
-	if err != nil || sums.NoOrg != 5 || sums.ServedOrg != 5 || sums.OrgRequired != 0 || sums.Other != 4 {
-		t.Fatalf("sums %+v err %v, want no_org 5, served_org 5, org_required 0, other 4", sums, err)
+	if err != nil || sums.OrgRequired != 7 || sums.Other != 4 {
+		t.Fatalf("sums %+v err %v, want org_required 7, other 4", sums, err)
+	}
+}
+
+// CHAOS-13675 (acp Q-A): decided_no_question passes only on a slot whose legacy answer is the enforcer's unasked
+// refusal of a token with no organization on an AdminOrg row, status and body bytes; it is counted on its own line,
+// never as a match. Any other legacy answer fails.
+func TestJudgeHoldsDecidedNoQuestionToTheRefusalBytes(t *testing.T) {
+	status, body := policy.EnforcedOrglessRefusal()
+	sum := sha256.Sum256(body)
+	refusal := hex.EncodeToString(sum[:])
+	other := sha256.Sum256([]byte(`{"detail":"Admin access required"}`))
+	judge := func(status int, bodySHA string) SlotVerdict {
+		slot := slotAt(1, "2", "superuser", 1)
+		slot.Status, slot.BodySHA = status, bodySHA
+		ev, err := ParseLog(strings.NewReader(result(slot, 300*time.Millisecond, "decided_no_question", "") + "\n"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		r := Judge([]Slot{slot}, ev, nil, JudgeOptions{K: 1, Grace: 2200 * time.Millisecond})
+		if r.VerdictCounts()[VerdictMatch] != 0 {
+			t.Fatalf("decided_no_question folded into MATCH: %v", r.VerdictCounts())
+		}
+		return r.Slots[0]
+	}
+	if sv := judge(status, refusal); sv.Verdict != VerdictDecidedNoQuestion || !sv.Pass() {
+		t.Errorf("the legacy refusal: %s (pass %v), want DECIDED_NO_QUESTION passing", sv.Verdict, sv.Pass())
+	}
+	for name, c := range map[string]struct {
+		status int
+		sha    string
+	}{
+		"another refusal body": {status, hex.EncodeToString(other[:])},
+		"served":               {200, refusal},
+		"another status":       {401, refusal},
+		"no body digest":       {status, ""},
+	} {
+		if sv := judge(c.status, c.sha); sv.Verdict != VerdictDecidedNoQuestionDiffers || sv.Pass() {
+			t.Errorf("%s: %s (pass %v), want DECIDED_NO_QUESTION_DIFFERS failing", name, sv.Verdict, sv.Pass())
+		}
+	}
+	if status != 403 || !strings.Contains(string(body), "Organization context required") {
+		t.Errorf("the enforcer's org-less AdminOrg refusal is %d %q, want the legacy 403 Organization context required", status, body)
 	}
 }

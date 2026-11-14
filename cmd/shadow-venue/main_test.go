@@ -179,19 +179,48 @@ func TestFinishFailsAStepWhoseOutputFileDidNotClose(t *testing.T) {
 	}
 }
 
-func TestJudgeTakesTheTwoNoOrgScrapesTogetherOrNotAtAll(t *testing.T) {
+// CHAOS-13675 (acp Q1): the no_org counter flags are gone. A kit that passes either is refused with exit 2 and a message
+// that names it, before any input is read: a no_org series never reaches the shadow judge.
+func TestJudgeRefusesTheRemovedNoOrgFlags(t *testing.T) {
 	dir := t.TempDir()
 	one := filepath.Join(dir, "before.prom")
 	if err := os.WriteFile(one, []byte("# HELP dev_health_authz_enforcement_unjudged_total x\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	var out, errOut bytes.Buffer
-	args := []string{"judge", "-slots", filepath.Join(dir, "nope"), "-log", filepath.Join(dir, "nope"), "-out", filepath.Join(dir, "t.tsv"), "-noorg-before", one}
-	if code := run(context.Background(), args, &out, &errOut); code != exitUsage {
-		t.Fatalf("one scrape only: code %d", code)
+	for _, flags := range [][]string{{"-noorg-before", one}, {"-noorg-after", one}, {"--noorg-before=" + one}, {"-noorg-before", one, "-noorg-after", one}} {
+		var out, errOut bytes.Buffer
+		args := append([]string{"judge", "-slots", filepath.Join(dir, "nope"), "-log", filepath.Join(dir, "nope"), "-out", filepath.Join(dir, "t.tsv")}, flags...)
+		if code := run(context.Background(), args, &out, &errOut); code != exitUsage || !strings.Contains(errOut.String(), "was removed (CHAOS-13675)") ||
+			!strings.Contains(errOut.String(), "-noorg-") {
+			t.Fatalf("%v: code %d stderr %q", flags, code, errOut.String())
+		}
+		if _, err := os.Stat(filepath.Join(dir, "t.tsv")); err == nil {
+			t.Fatalf("%v: an output was written", flags)
+		}
 	}
-	if !strings.Contains(errOut.String(), "go together") {
-		t.Fatalf("stderr %q", errOut.String())
+}
+
+// CHAOS-13673 (V6): the record line names org_required and every other reason summed; the retired no_org and
+// served_org have no field of their own, so a series of either is only part of "other".
+func TestJudgeEnforcedRecordLineHasNoRetiredReason(t *testing.T) {
+	series := func(route, reason, n string) string {
+		return `dev_health_authz_enforcement_unjudged_total{reason="` + reason + `",route="` + route + `"} ` + n
+	}
+	scrape := func(lines ...string) []byte {
+		return []byte("# HELP dev_health_authz_enforcement_unjudged_total x\n# TYPE dev_health_authz_enforcement_unjudged_total counter\n" +
+			strings.Join(lines, "\n") + "\n")
+	}
+	before := scrape(series("GET /a", "org_required", "1"), series("GET /b", "no_org", "2"))
+	after := scrape(series("GET /a", "org_required", "4"), series("GET /b", "no_org", "3"), series("GET /b", "served_org", "2"), series("GET /c", "impersonation", "1"))
+	line, ok := unjudgedRecordLine(before, after)
+	if !ok || line != "judge-enforced: unjudged org_required 3, other 4" {
+		t.Fatalf("record line %q (%v)", line, ok)
+	}
+	if strings.Contains(line, "no_org") || strings.Contains(line, "served_org") {
+		t.Fatalf("the record line names a retired reason: %q", line)
+	}
+	if _, ok := unjudgedRecordLine(after, before); ok {
+		t.Fatal("a counter that went down gave a record line")
 	}
 }
 

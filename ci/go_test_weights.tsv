@@ -45,6 +45,7 @@ internal/cigates/docs	142
 internal/cigates/docstools	66
 internal/cigates/emitscan	24
 internal/cigates/integrationshards	639
+internal/cigates/livee2e	86
 internal/cigates/outboundtransport	130
 internal/cigates/proofteardown	35
 internal/cigates/racescope	35
@@ -58,12 +59,12 @@ internal/cigates/testshard	595
 internal/cigates/weightsfiles	137
 internal/cigates/workflowpaths	28
 internal/cigates/workflows	91
-internal/cli	89
+internal/cli	218
 internal/fixturescli	16
 internal/goapicli/restprove	17
 internal/goapiproof	116
 internal/gqlgenguard	281
-internal/httpguard	120
+internal/httpguard	396
 internal/joboutbox	31
 internal/jobruntime	13
 internal/jobs	13

@@ -41,6 +41,7 @@ func TestClassifyNamesTheExchangeReasons(t *testing.T) {
 		identity.ErrIdentityConflict:   ReasonIdentityConflict,
 		ErrProviderNotConfigured:       ReasonDependency,
 		ErrProviderUnavailable:         ReasonDependency,
+		identity.ErrLastSignInMethod:   ReasonLastSignInMethod,
 	} {
 		if _, got := Classify(err); got != want {
 			t.Errorf("%v: reason %q, want %q", err, got, want)

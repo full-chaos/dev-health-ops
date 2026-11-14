@@ -5,10 +5,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	authv1 "github.com/full-chaos/dev-health-ops/contracts/auth/v1"
-	"github.com/full-chaos/dev-health-ops/internal/api/policy"
-	"github.com/full-chaos/dev-health-ops/internal/apiservice/accessrouting"
 )
 
 var t0 = time.Date(2026, 11, 5, 23, 0, 0, 0, time.UTC)
@@ -481,66 +477,5 @@ func TestParseLogRefusesATruncatedShadowEvidenceLine(t *testing.T) {
 	}
 	if _, err := ParseLog(strings.NewReader(good + "\nnot json, and about something else\n")); err != nil {
 		t.Errorf("a line that is no evidence was refused: %v", err)
-	}
-}
-
-// CHAOS-13209: a request that names another organization than the token's, or a token with none, keeps the legacy
-// answer with no decision point call, and the shadow answers "skipped" without a reason on the line. Only the rows
-// pinned in seamSkipRows, and only for the superuser (no token organization), pass on a skip; every other skip fails.
-func TestJudgePassesASeamSkipOnlyOnThePinnedRowsForTheSuperuser(t *testing.T) {
-	skipped := func(key, caller string) SlotVerdict {
-		method, route, _ := strings.Cut(key, " ")
-		slot := slotAt(1, "2", caller, 1)
-		slot.Method, slot.Route, slot.Path = method, route, route
-		ev, err := ParseLog(strings.NewReader(result(slot, 300*time.Millisecond, "skipped", "") + "\n"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		return Judge([]Slot{slot}, ev, nil, JudgeOptions{K: 1, Grace: 2200 * time.Millisecond}).Slots[0]
-	}
-	for _, route := range []string{
-		"GET /api/v1/admin/orgs/{org_id}/members", "POST /api/v1/admin/orgs/{org_id}/members",
-		"DELETE /api/v1/admin/orgs/{org_id}/members/{user_id}", "PATCH /api/v1/admin/orgs/{org_id}/members/{user_id}",
-		"GET /api/v1/billing/entitlements/{org_id}", "GET /api/v1/licensing/entitlements/{org_id}",
-	} {
-		if sv := skipped(route, "superuser"); sv.Verdict != VerdictSkippedSeam || !sv.Pass() {
-			t.Errorf("superuser skip on %s: %s", route, sv.Verdict)
-		}
-		if sv := skipped(route, "admin"); sv.Verdict != VerdictSkipped || sv.Pass() {
-			t.Errorf("admin skip on %s passed: %s", route, sv.Verdict)
-		}
-	}
-	for _, route := range []string{"GET /api/v1/admin/teams", "GET /api/v1/admin/orgs/{org_id}", "GET /api/v1/billing/invoices", "PUT /api/v1/admin/orgs/{org_id}/members"} {
-		if sv := skipped(route, "superuser"); sv.Verdict != VerdictSkipped || sv.Pass() {
-			t.Errorf("superuser skip on the unpinned %s passed: %s", route, sv.Verdict)
-		}
-	}
-}
-
-// Every pinned seam row is a shadow row of the contract that names its organization in the request.
-func TestSeamSkipRowsAreOrgNamingShadowRows(t *testing.T) {
-	rows, err := policy.ParseShadowRows(authv1.GoAPIEndpointProfiles, accessrouting.Service)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, key := range seamSkipRows {
-		row, ok := rows[key]
-		if !ok || !(row.OrgFromPath || row.OrgFromQuery) {
-			t.Errorf("%s is not a shadow row that names its organization in the request (found %v)", key, ok)
-		}
-	}
-}
-
-// A seam skip is counted on its own: never folded into MATCH in the verdict counts.
-func TestVerdictCountsKeepTheSeamSkipApart(t *testing.T) {
-	slot := slotAt(1, "2", "superuser", 1)
-	slot.Method, slot.Route, slot.Path = "GET", "/api/v1/admin/orgs/{org_id}/members", "/api/v1/admin/orgs/{org_id}/members"
-	ev, err := ParseLog(strings.NewReader(result(slot, 300*time.Millisecond, "skipped", "") + "\n"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	counts := Judge([]Slot{slot}, ev, nil, JudgeOptions{K: 1, Grace: 2200 * time.Millisecond}).VerdictCounts()
-	if counts[VerdictSkippedSeam] != 1 || counts[VerdictMatch] != 0 {
-		t.Fatalf("counts %v", counts)
 	}
 }

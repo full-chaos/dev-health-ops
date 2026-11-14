@@ -2,6 +2,7 @@ package policy
 
 import (
 	"context"
+	"slices"
 	"strings"
 
 	"go.opentelemetry.io/otel"
@@ -54,6 +55,10 @@ const (
 
 // enforceUnjudgedReasons is the closed reason set of the unjudged counter.
 var enforceUnjudgedReasons = []string{enforceUnjudgedOrgRequired, enforceUnjudgedDelegatedOrgless, enforceUnjudgedImpersonation}
+
+// EnforceUnjudgedReasons is the closed reason set of the unjudged counter, the one source a reader outside this package
+// (the shadow venue judge) checks a scrape against.
+func EnforceUnjudgedReasons() []string { return slices.Clone(enforceUnjudgedReasons) }
 
 type enforceUnjudgedAdder func(ctx context.Context, route, reason string)
 

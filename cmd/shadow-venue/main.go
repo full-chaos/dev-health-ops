@@ -44,6 +44,7 @@ const (
 	exitOK    = 0
 	exitFail  = 1
 	exitUsage = 2
+	exitVoid  = 3
 )
 
 func main() {
@@ -392,14 +393,18 @@ func makePlan(principalsPath, rowsPath, profilesPath string, options shadowvenue
 }
 
 func judge(args []string, stdout, stderr io.Writer) int {
+	for _, arg := range args {
+		if name := strings.TrimLeft(strings.SplitN(arg, "=", 2)[0], "-"); strings.HasPrefix(arg, "-") && (name == "noorg-before" || name == "noorg-after") {
+			fmt.Fprintf(stderr, "judge: -%s was removed (CHAOS-13675): the shadow decides a token with no organization as the enforcer does, so no no_org counter evidence is read; a kit that passes it was built for an older judge\n", name)
+			return exitUsage
+		}
+	}
 	fs := flag.NewFlagSet("judge", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	slotsPath := fs.String("slots", "", "slots file drive wrote")
 	logPath := fs.String("log", "", "go-api JSON log of the run (docker logs --since <drive start>)")
 	rulingsPath := fs.String("rulings", "", "mismatch tuples with a passing pm verdict")
 	verdictsOut := fs.String("verdicts-out", "", "per-slot verdicts file to create, 0600 (the yardstick of a later enforced run)")
-	noOrgBefore := fs.String("noorg-before", "", "go-api /metrics scrape taken before the drive (with -noorg-after: the enforcement no_org counter evidence)")
-	noOrgAfter := fs.String("noorg-after", "", "go-api /metrics scrape taken after the drive")
 	out := fs.String("out", "", "per-row table to create, 0600")
 	k := fs.Int("k", 3, "requests per cell")
 	grace := fs.Duration("grace", 2200*time.Millisecond, "time after an answer in which its result line or outside call may land")
@@ -412,10 +417,6 @@ func judge(args []string, stdout, stderr io.Writer) int {
 	membershipBefore := fs.String("membership-before", "", "membership snapshot taken at most 5 minutes before the drive (required when a superuser-O slot ran)")
 	membershipAfter := fs.String("membership-after", "", "membership snapshot taken right after the drive")
 	if err := fs.Parse(args); err != nil {
-		return exitUsage
-	}
-	if (*noOrgBefore == "") != (*noOrgAfter == "") {
-		fmt.Fprintln(stderr, "judge: -noorg-before and -noorg-after go together")
 		return exitUsage
 	}
 	rawSlots, err := os.ReadFile(*slotsPath)
@@ -455,25 +456,6 @@ func judge(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "judge: -out is required")
 		return exitUsage
 	}
-	var noOrg shadowvenue.NoOrgEvidence
-	if *noOrgBefore != "" {
-		before, err := os.ReadFile(*noOrgBefore)
-		if err != nil {
-			fmt.Fprintf(stderr, "-noorg-before: %v\n", err)
-			return exitUsage
-		}
-		after, err := os.ReadFile(*noOrgAfter)
-		if err != nil {
-			fmt.Fprintf(stderr, "-noorg-after: %v\n", err)
-			return exitUsage
-		}
-		delta, err := shadowvenue.ParseUnjudgedDelta(before, after)
-		if err != nil {
-			fmt.Fprintln(stderr, err)
-			return exitUsage
-		}
-		noOrg = delta
-	}
 	outbound, err := readOutbound(*stubLog, *rowsPath, slots)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -486,7 +468,7 @@ func judge(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return exitUsage
 	}
-	report := shadowvenue.Judge(slots, ev, rulings, shadowvenue.JudgeOptions{K: *k, Grace: *grace, NoOrg: noOrg, Outbound: outbound, Strict: true, Membership: membership})
+	report := shadowvenue.Judge(slots, ev, rulings, shadowvenue.JudgeOptions{K: *k, Grace: *grace, Outbound: outbound, Strict: true, Membership: membership})
 	file, err := os.OpenFile(*out, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		fmt.Fprintf(stderr, "judge: -out %s: %v\n", *out, errors.Unwrap(err))
@@ -622,6 +604,10 @@ func judgeEnforced(args []string, stdout, stderr io.Writer) int {
 		return exitUsage
 	}
 	yard, err := shadowvenue.ParseYardstick(files["yardstick"])
+	if errors.Is(err, shadowvenue.ErrRetiredYardVerdict) {
+		fmt.Fprintf(stderr, "judge-enforced: VOID: %v\n", err)
+		return exitVoid
+	}
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return exitUsage
@@ -745,11 +731,21 @@ func judgeEnforced(args []string, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintf(stdout, "judge-enforced: slots %s\n", strings.Join(verdicts, ", "))
 	fmt.Fprintf(stdout, "judge-enforced: schedule sha12 %s\n", shadowvenue.ScheduleSHA12(slots))
-	if sums, err := shadowvenue.UnjudgedTotals(files["metrics-before"], files["metrics-after"]); err == nil {
-		fmt.Fprintf(stdout, "judge-enforced: unjudged no_org %d, served_org %d, org_required %d, other %d\n", sums.NoOrg, sums.ServedOrg, sums.OrgRequired, sums.Other)
+	if line, ok := unjudgedRecordLine(files["metrics-before"], files["metrics-after"]); ok {
+		fmt.Fprintln(stdout, line)
 	}
 	fmt.Fprintf(stdout, "judge-enforced: void %v, exit %d, table %s\n", report.Void, report.Exit(), *out)
 	return finish(file, report.Exit(), stderr)
+}
+
+// unjudgedRecordLine is the record line of the unjudged counter: the org_required count the verdicts rest on, and
+// every other reason summed; false when the scrapes give no counter delta.
+func unjudgedRecordLine(before, after []byte) (string, bool) {
+	sums, err := shadowvenue.UnjudgedTotals(before, after)
+	if err != nil {
+		return "", false
+	}
+	return fmt.Sprintf("judge-enforced: unjudged org_required %d, other %d", sums.OrgRequired, sums.Other), true
 }
 
 // readMembership reads the two membership snapshots; "" is a snapshot not given (the judge voids when a superuser-O

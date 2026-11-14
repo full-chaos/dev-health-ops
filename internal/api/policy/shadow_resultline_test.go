@@ -85,13 +85,13 @@ func TestShadowResultLineAtEveryResultSite(t *testing.T) {
 				return o
 			}(),
 			map[string]string{"route": "GET /api/v1/admin/teams", "namespace": "teams", "caller": "admin", "result": "impersonation_refused"}},
-		{"served org unparsed", nil, nil,
+		{"org-less token, delegated session: keeps the legacy answer, skipped", nil, nil,
 			func() ShadowObservation {
-				o := observation("GET /api/v1/admin/teams", ShadowCallerAdmin, true)
-				o.served = servedOrg{named: true, raw: "acme"}
+				o := observation("GET /api/v1/admin/teams", ShadowCallerSuperuser, true)
+				o.OrgID, o.orgless = "", orglessInputs{delegated: true, action: ActionAdminOrgs}
 				return o
 			}(),
-			map[string]string{"route": "GET /api/v1/admin/teams", "namespace": "teams", "caller": "admin", "result": "skipped"}},
+			map[string]string{"route": "GET /api/v1/admin/teams", "namespace": "teams", "caller": "superuser", "result": "skipped"}},
 		{"high-risk row with the second switch off", nil, func(c *ShadowConfig) { c.HighRisk = false },
 			observation("POST /api/v1/admin/teams", ShadowCallerSuperuser, true),
 			map[string]string{"route": "POST /api/v1/admin/teams", "namespace": "teams", "caller": "superuser", "result": "skipped"}},
@@ -102,20 +102,20 @@ func TestShadowResultLineAtEveryResultSite(t *testing.T) {
 				return o
 			}(),
 			map[string]string{"route": "GET /api/v1/billing/invoices", "namespace": "billing", "caller": "member", "result": "skipped"}},
-		{"served org other, legacy deny", nil, nil,
+		{"org-less token on an AdminOrg row: decided with no question", nil, nil,
 			func() ShadowObservation {
-				o := observation("GET /api/v1/admin/teams", ShadowCallerAdmin, false)
-				o.served = servedOrg{named: true, raw: strangerOrg}
+				o := observation("GET /api/v1/admin/teams", ShadowCallerSuperuser, false)
+				o.OrgID, o.orgless = "", orglessInputs{orgRequired: true, action: ActionAdminOrgs}
 				return o
 			}(),
-			map[string]string{"route": "GET /api/v1/admin/teams", "namespace": "teams", "caller": "admin", "result": "skipped"}},
-		{"served org other, legacy allow", nil, nil,
+			map[string]string{"route": "GET /api/v1/admin/teams", "namespace": "teams", "caller": "superuser", "result": "decided_no_question"}},
+		{"org-less token asks the platform action", nil, nil,
 			func() ShadowObservation {
-				o := observation("GET /api/v1/admin/teams", ShadowCallerAdmin, true)
-				o.served = servedOrg{named: true, raw: strangerOrg}
+				o := observation("GET /api/v1/admin/teams", ShadowCallerSuperuser, true)
+				o.OrgID, o.orgless = "", orglessInputs{action: ActionAdminOrgs}
 				return o
 			}(),
-			map[string]string{"route": "GET /api/v1/admin/teams", "namespace": "teams", "caller": "admin", "result": "skipped"}},
+			map[string]string{"route": "GET /api/v1/admin/teams", "namespace": "teams", "caller": "superuser", "result": "match", "decision_id": testDecisionID}},
 		{"decider panics", func(*testing.T) pep.Decider { return panics }, nil,
 			observation("GET /api/v1/admin/orgs", ShadowCallerSuperuser, true),
 			map[string]string{"route": "GET /api/v1/admin/orgs", "namespace": "admin", "caller": "superuser", "result": "error"}},

@@ -176,7 +176,7 @@ func TestProofWriteDoorRefusesTheLegacyImpersonationCaller(t *testing.T) {
 			}
 			return ""
 		})
-		allow := func(context.Context, string) bool { return true }
+		allow := func(context.Context, string) (bool, error) { return true, nil }
 		// Mounted at its pattern: the access-token rows are keyed on the route the mux matched.
 		routes := http.NewServeMux()
 		routes.Handle("/query/proof-write", newDocumentDispatchHandler(getenv, mux, map[string]string{digestHex(proofWriteMutation): "probe"}, nil, auth, store, digest.KindMutation, allow))

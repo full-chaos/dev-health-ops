@@ -32,6 +32,7 @@ internal/api/credentials	probes.go
 internal/api/policy	delegated_test.go
 internal/api/policy	delegated_use_test.go
 internal/api/policy	principalonce_test.go
+internal/api/pybody	bodyreaders_census_test.go
 internal/api/session	session_test.go
 internal/api/syncadmin	dataset_writer_census_test.go
 internal/api/syncadmin	dataset_writer_lock_census_test.go

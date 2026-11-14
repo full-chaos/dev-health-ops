@@ -159,7 +159,7 @@ for _ in $(seq 1 90); do
   sleep 2
 done
 [ "${ready}" -eq 1 ] || { docker logs "${PG}" 2>&1 | tail -20 | redact >&2; die "the scratch PostgreSQL accepted no connection in 180 s"; }
-printf 'scratch: %s on 127.0.0.1:%s\n' "${PG}" "$(docker port "${PG}" 5432/tcp | head -1 | sed 's/.*://')"
+printf 'scratch: %s on 127.0.0.1:%s\n' "${PG}" "$(sed -n '1s/.*://p' <<<"$(docker port "${PG}" 5432/tcp)")"
 
 # restore
 for db in restore_check reference_check; do

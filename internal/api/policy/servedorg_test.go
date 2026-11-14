@@ -411,9 +411,9 @@ func headersEqual(a, b http.Header) bool {
 	return true
 }
 
-// Shadow on, enforcement off: the answer is the legacy one; a served org that is not A is skipped without a PDP call,
-// as enforcement keeps its legacy answer; a slug is skipped; A is asked and matched.
-func TestServedOrgShadowJudgesOnlyTheTokenOrgAndNeverChangesTheAnswer(t *testing.T) {
+// Shadow on, enforcement off: the answer is the legacy one. The shadow asks what the enforcer asks (CHAOS-13675): one
+// question on the token organization A, whatever organization the request serves (A, another one, a slug).
+func TestServedOrgShadowAsksTheTokenOrgAndNeverChangesTheAnswer(t *testing.T) {
 	for _, row := range servedOrgCensus {
 		t.Run(row.pattern, func(t *testing.T) {
 			cases := []struct {
@@ -422,9 +422,9 @@ func TestServedOrgShadowJudgesOnlyTheTokenOrgAndNeverChangesTheAnswer(t *testing
 			}{
 				{"same org", ownOrg, "match", "", 1},
 				{"same org upper", strings.ToUpper(ownOrg), "match", "", 1},
-				{"another org", strangerOrg, "skipped", "", 0},
-				{"another org braces", "{" + memberOrg + "}", "skipped", "", 0},
-				{"slug", "acme", "skipped", "", 0},
+				{"another org", strangerOrg, "match", "", 1},
+				{"another org braces", "{" + memberOrg + "}", "match", "", 1},
+				{"slug", "acme", "match", "", 1},
 			}
 			for _, tc := range cases {
 				legacy := servedOrgServe(t, row, servedOrgSetup{who: personaAdmin}, tc.served)

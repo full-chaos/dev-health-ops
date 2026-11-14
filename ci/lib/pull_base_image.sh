@@ -14,6 +14,13 @@
 # shellcheck source=ci/lib/retry.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/retry.sh"
 
+# _pull_digest_listed LISTED DIGEST: true when a line of LISTED (one name@digest per line) is DIGEST or ends in @DIGEST.
+_pull_digest_listed() {
+  local nl=$'\n' text
+  text="${nl}${1}${nl}"
+  [[ "${text}" == *"@${2}${nl}"* || "${text}" == *"${nl}${2}${nl}"* ]]
+}
+
 # _pull_attempt: one pull of ${src}/${repo}@${digest} and its digest check; prints the per-try line. Reads the variables of
 # _pull_pinned_ref (dynamic scope) and sets out and try_n there.
 _pull_attempt() {
@@ -28,7 +35,7 @@ _pull_attempt() {
     listed="$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "${src}/${repo}@${digest}" 2>&1)" || rc=$?
     if [ "${rc}" -ne 0 ]; then
       seen="inspect-failed"
-    elif grep -qxF "${digest}" <<<"$(sed 's/.*@//' <<<"${listed}")"; then
+    elif _pull_digest_listed "${listed}" "${digest}"; then
       seen="${digest}"
     else
       seen="mismatch"

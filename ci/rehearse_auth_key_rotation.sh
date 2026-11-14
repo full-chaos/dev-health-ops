@@ -479,8 +479,8 @@ E="${EMAIL}" P="${PASSWORD}" post_json /api/v1/auth/register '{email:env.E,passw
 case "${P_CODE}" in 200 | 201 | 202) ;; *) die "register answered ${P_CODE}" ;; esac
 # auth.users is guarded (authschema 0006 audit_commit_guard): a write runs only in a transaction that names itself the
 # audit transaction first. One psql -c string is one transaction.
-auth_verified="$(psql_one "SELECT set_config('dev_health.audit_txid', pg_current_xact_id()::text, true) IS NOT NULL; UPDATE auth.users SET email_verified_at = clock_timestamp() WHERE email_lower = lower('${EMAIL}') RETURNING 1")" && grep -qx 1 <<<"${auth_verified}" || die "could not verify the seeded user in auth.users"
-public_verified="$(psql_one "UPDATE public.users SET is_verified = true WHERE email = '${EMAIL}' RETURNING 1")" && grep -qx 1 <<<"${public_verified}" || die "could not verify the seeded user in public.users"
+if ! { auth_verified="$(psql_one "SELECT set_config('dev_health.audit_txid', pg_current_xact_id()::text, true) IS NOT NULL; UPDATE auth.users SET email_verified_at = clock_timestamp() WHERE email_lower = lower('${EMAIL}') RETURNING 1")" && grep -qx 1 <<<"${auth_verified}"; }; then die "could not verify the seeded user in auth.users"; fi
+if ! { public_verified="$(psql_one "UPDATE public.users SET is_verified = true WHERE email = '${EMAIL}' RETURNING 1")" && grep -qx 1 <<<"${public_verified}"; }; then die "could not verify the seeded user in public.users"; fi
 
 # ---------- smoke ----------
 rec_open "${DIR}/records/10-smoke.txt" "smoke $(date -u +%Y-%m-%dT%H:%M:%SZ)"

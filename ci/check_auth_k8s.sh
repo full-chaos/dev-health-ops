@@ -189,8 +189,7 @@ HELM_ARGS=(
   --set-json 'authService.networkPolicy.allowedFrom=[{"matchLabels":{"role":"auth-consumer"}}]'
   --set-json 'authService.networkPolicy.metricsFrom=[{"matchLabels":{"role":"auth-scraper"}}]'
 )
-migrate_job_yaml="$(helm template "${HELM_ARGS[@]}" --show-only templates/auth-migrate-job.yaml)" && grep -q 'helm.sh/hook: pre-install,pre-upgrade' <<<"${migrate_job_yaml}" \
-  || die "the migration Job is not a pre-install,pre-upgrade hook"
+if ! { migrate_job_yaml="$(helm template "${HELM_ARGS[@]}" --show-only templates/auth-migrate-job.yaml)" && grep -q 'helm.sh/hook: pre-install,pre-upgrade' <<<"${migrate_job_yaml}"; }; then die "the migration Job is not a pre-install,pre-upgrade hook"; fi
 printf 'migration Job carries helm.sh/hook: pre-install,pre-upgrade\n'
 kinds="$(helm template "${HELM_ARGS[@]}" | grep -c '^kind:')"
 printf 'the render holds %s objects\n' "${kinds}"
@@ -200,7 +199,7 @@ helm upgrade --install "${HELM_ARGS[@]}" --timeout 8m
 printf 'step 3b: restore-fence init (explicit, once, on a database that is not a restore)\n'
 K run auth-fence-init --restart=Never --image="${LOCAL_MIG}" --image-pull-policy=Never --override-type=strategic --overrides='{"spec":{"containers":[{"name":"auth-fence-init","image":"'"${LOCAL_MIG}"'","args":["restore-fence","init"],"env":[{"name":"AUTH_MIGRATION_DATABASE_URI","valueFrom":{"secretKeyRef":{"name":"auth-migrate-db","key":"AUTH_MIGRATION_DATABASE_URI"}}},{"name":"AUTH_RUNTIME_DATABASE_ROLE","value":"devhealth_auth"}]}]}}' >/dev/null
 K wait --for=jsonpath='{.status.phase}'=Succeeded pod/auth-fence-init --timeout=120s || { K logs auth-fence-init >&2 || true; die "restore-fence init did not succeed"; }
-fence_log="$(K logs auth-fence-init)" && grep -q 'restore-fence init timeline=[0-9]* written=true' <<<"${fence_log}" || die "restore-fence init did not write the row"
+if ! { fence_log="$(K logs auth-fence-init)" && grep -q 'restore-fence init timeline=[0-9]* written=true' <<<"${fence_log}"; }; then die "restore-fence init did not write the row"; fi
 K rollout status deploy/"${RELEASE}-dev-health-auth-service" --timeout=480s
 
 # --- 1. the migration Job ran as a real pre-install hook -----------------------------

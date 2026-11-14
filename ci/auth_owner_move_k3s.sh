@@ -310,8 +310,7 @@ snap_before="$(acl_snapshot authmove_rb)"
 pass "leg 3: superuser-owned database at the head; ACL snapshot taken ($(wc -l <<<"${snap_before}") entries)"
 
 move_forward() {
-  move_out="$(oneoff "$1" "${IMG_MIG}" sec-su-rb "" owner-move -from postgres -to "${MIGRATOR}" -runtime-role "${RUNTIME}" -apply)" && grep -qF 'owner-move applied=true' <<<"${move_out}" \
-    || die "leg 3: the forward move did not report applied=true"
+  if ! { move_out="$(oneoff "$1" "${IMG_MIG}" sec-su-rb "" owner-move -from postgres -to "${MIGRATOR}" -runtime-role "${RUNTIME}" -apply)" && grep -qF 'owner-move applied=true' <<<"${move_out}"; }; then die "leg 3: the forward move did not report applied=true"; fi
   put_secret sec-mig-rb AUTH_MIGRATION_DATABASE_URI "$(dsn "${MIGRATOR}" "${MIGRATOR_PASSWORD}" authmove_rb)"
   helm_args "${RELEASE_RB}" "${IMG_MIG}" "${MIGRATOR}" sec-mig-rb sec-db-rb
   helm_up "${HELM_ARGS[@]}"
@@ -321,8 +320,7 @@ move_back() {
   # The rollback is the Secret back, the reverse move AND the values back (ownerRole empty): the objects are the old owner's again,
   # so a pin that still named the migration login would refuse them.
   put_secret sec-mig-rb AUTH_MIGRATION_DATABASE_URI "$(dsn postgres "${PG_PASSWORD}" authmove_rb)"
-  move_out="$(oneoff "$1" "${IMG_MIG}" sec-su-rb "" owner-move -from "${MIGRATOR}" -to postgres -runtime-role "${RUNTIME}" -restore -apply)" && grep -qF 'owner-move applied=true' <<<"${move_out}" \
-    || die "leg 3: the restore did not report applied=true"
+  if ! { move_out="$(oneoff "$1" "${IMG_MIG}" sec-su-rb "" owner-move -from "${MIGRATOR}" -to postgres -runtime-role "${RUNTIME}" -restore -apply)" && grep -qF 'owner-move applied=true' <<<"${move_out}"; }; then die "leg 3: the restore did not report applied=true"; fi
   helm_args "${RELEASE_RB}" "${IMG_MIG}" "" sec-mig-rb sec-db-rb
   helm_up "${HELM_ARGS[@]}"
 }

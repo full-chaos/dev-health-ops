@@ -302,15 +302,15 @@ func nanClassClickHouseURI(t testing.TB) (dsn string, hostPort string) {
 }
 
 // nanClassAllNullGroupSQL and nanClassPopulatedGroupSQL wrap the REAL
-// dbExpression() output for MeasureCoverageLinePct (breakdown.go's own
+// dbExpression() output for MeasureCoverageBranchPct (breakdown.go's own
 // production function, called live -- not a hand-copied string) around a
 // synthetic group standing in for testops_coverage_metrics_daily's
-// line_coverage_pct column (Nullable(Float64), internal/chmigrate/history/029_testops_tables.sql:158).
+// branch_coverage_pct column (Nullable(Float64), a measure that stays an AVG: the line coverage rate is weighted since CHAOS-13775).
 func nanClassQuerySQL(t *testing.T, allNull bool) string {
 	t.Helper()
-	measureExpr, err := dbExpression(MeasureCoverageLinePct, false, false)
+	measureExpr, err := dbExpression(MeasureCoverageBranchPct, false, false)
 	if err != nil {
-		t.Fatalf("dbExpression(MeasureCoverageLinePct): %v", err)
+		t.Fatalf("dbExpression(MeasureCoverageBranchPct): %v", err)
 	}
 	measureExpr = "toFloat64(" + measureExpr + ")"
 
@@ -320,14 +320,14 @@ func nanClassQuerySQL(t *testing.T, allNull bool) string {
 		// CLEARED zero-source-row shape (BRIEF's "NaN UPDATE": a GROUP
 		// BY over zero rows yields zero result rows, no NaN reaches
 		// anywhere) -- but the averaged column is NULL in both.
-		rows = "SELECT CAST(NULL AS Nullable(Float64)) AS line_coverage_pct " +
-			"UNION ALL SELECT CAST(NULL AS Nullable(Float64)) AS line_coverage_pct"
+		rows = "SELECT CAST(NULL AS Nullable(Float64)) AS branch_coverage_pct " +
+			"UNION ALL SELECT CAST(NULL AS Nullable(Float64)) AS branch_coverage_pct"
 	} else {
 		// Pinned values, not arbitrary ones, so the populated assertion
 		// below can check the MECHANISM (dbExpression actually reached
 		// this column) rather than merely "not NaN".
-		rows = "SELECT CAST(80.0 AS Nullable(Float64)) AS line_coverage_pct " +
-			"UNION ALL SELECT CAST(90.0 AS Nullable(Float64)) AS line_coverage_pct"
+		rows = "SELECT CAST(80.0 AS Nullable(Float64)) AS branch_coverage_pct " +
+			"UNION ALL SELECT CAST(90.0 AS Nullable(Float64)) AS branch_coverage_pct"
 	}
 
 	return fmt.Sprintf(
@@ -413,12 +413,12 @@ func TestNaNClass_PopulatedGroup_ReturnsRealValue_MarshalsCleanly(t *testing.T) 
 // BEFORE any Go-side cast or scan touches it.
 func nanClassRawAllNullExpr(t *testing.T) string {
 	t.Helper()
-	measureExpr, err := dbExpression(MeasureCoverageLinePct, false, false)
+	measureExpr, err := dbExpression(MeasureCoverageBranchPct, false, false)
 	if err != nil {
-		t.Fatalf("dbExpression(MeasureCoverageLinePct): %v", err)
+		t.Fatalf("dbExpression(MeasureCoverageBranchPct): %v", err)
 	}
-	rows := "SELECT CAST(NULL AS Nullable(Float64)) AS line_coverage_pct " +
-		"UNION ALL SELECT CAST(NULL AS Nullable(Float64)) AS line_coverage_pct"
+	rows := "SELECT CAST(NULL AS Nullable(Float64)) AS branch_coverage_pct " +
+		"UNION ALL SELECT CAST(NULL AS Nullable(Float64)) AS branch_coverage_pct"
 	return fmt.Sprintf(
 		"SELECT %s AS value FROM (%s) AS testops_coverage_metrics_daily",
 		measureExpr, rows,

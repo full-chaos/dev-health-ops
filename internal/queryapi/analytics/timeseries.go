@@ -396,12 +396,20 @@ const orgSeriesDimensionValue = "org"
 // (CHAOS-9736). TEST_FLAKE_RATE is the summed flake cases over the summed distinct case names (CHAOS-9737); a bucket
 // with any row lacking the counts is unavailable.
 //
+// TEST_PASS_RATE and TEST_FAILURE_RATE are the summed passed (failed) cases over the summed passed and failed cases
+// (CHAOS-13775). The pipeline failure and rerun rates have no ORG series yet: the web pipeline query selects scope and
+// still averages an ORG series in as one more team, so serving one would move those tiles for the wrong reason.
+//
 // Coverage counts only the rows that carry both line counts: a row with a percent but no counts, or with no lines,
 // adds to neither side.
 func orgRateTerms(measure Measure) (numerator, denominator string, scale float64, ok bool) {
 	switch measure {
 	case MeasurePipelineSuccessRate:
 		return "SUM(success_count)", "SUM(pipelines_count)", 100, true
+	case MeasureTestPassRate:
+		return testPassTerms.numerator, testPassTerms.denominator, 100, true
+	case MeasureTestFailureRate:
+		return testFailureTerms.numerator, testFailureTerms.denominator, 100, true
 	case MeasureCoverageLinePct:
 		const counted = "lines_covered IS NOT NULL AND lines_total IS NOT NULL AND lines_total > 0"
 		return "sumIf(lines_covered, " + counted + ")", "sumIf(lines_total, " + counted + ")", 100, true
@@ -459,6 +467,10 @@ func orgMeasureLabel(measure Measure) string {
 		return "coverage_line_pct"
 	case MeasureTestFlakeRate:
 		return "test_flake_rate"
+	case MeasureTestPassRate:
+		return "test_pass_rate"
+	case MeasureTestFailureRate:
+		return "test_failure_rate"
 	}
 	return "pipeline_success_rate"
 }

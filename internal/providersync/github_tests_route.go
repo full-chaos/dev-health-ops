@@ -644,15 +644,23 @@ func (row githubTestsPipelineRow) StartedAtPtr() *time.Time { value := row.Start
 
 // githubTestsArtifactRunQuery selects the runs whose report artifacts are
 // fetched: runs of ANY branch (default branch and pull-request branches alike;
-// the run conclusion does not matter either). The listing runs from the start
-// of the day of SinceAt up to BeforeAt, the same upper bound the pipeline/job
-// pass has. Without it the listing walked on to the present, so a catch-up
-// window counted every later run against the 10,000-run listing cap.
+// the run conclusion does not matter either). The listing runs up to BeforeAt,
+// the same upper bound the pipeline/job pass has. Without it the listing walked
+// on to the present, so a catch-up window counted every later run against the
+// 10,000-run listing cap. It starts at the day of one window width before
+// SinceAt, the lookback githubTestsReportRunOutsideWindow keeps runs for: a run
+// created before midnight that is still running (or finishes) after it must
+// still be listed, because it is created earlier than the window.
 func githubTestsArtifactRunQuery(claim Claim) url.Values {
 	query := url.Values{"per_page": {"100"}}
 	switch {
 	case claim.SinceAt != nil && claim.BeforeAt != nil:
-		query.Set("created", claim.SinceAt.UTC().Format(time.DateOnly)+".."+claim.BeforeAt.UTC().Format(time.RFC3339))
+		since, before := claim.SinceAt.UTC(), claim.BeforeAt.UTC()
+		lookback := since
+		if width := before.Sub(since); width > 0 {
+			lookback = since.Add(-width)
+		}
+		query.Set("created", lookback.Format(time.DateOnly)+".."+before.Format(time.RFC3339))
 	case claim.SinceAt != nil:
 		query.Set("created", ">="+claim.SinceAt.UTC().Format(time.DateOnly))
 	case claim.BeforeAt != nil:

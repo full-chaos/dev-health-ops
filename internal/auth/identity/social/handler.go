@@ -220,6 +220,8 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 func Classify(err error) (int, Reason) {
 	var conflict *ConflictError
 	switch {
+	case errors.Is(err, ErrProviderEmailNotText):
+		return http.StatusInternalServerError, ReasonMalformed
 	case errors.As(err, &conflict):
 		return http.StatusConflict, ReasonEmailCollision
 	case errors.Is(err, ErrProviderUnavailable):
@@ -251,6 +253,18 @@ func Classify(err error) (int, Reason) {
 	default:
 		return http.StatusInternalServerError, ReasonStoreUnavailable
 	}
+}
+
+// outcomeReason is the full reason of err for the outcome counter and the log: Classify's, except that a provider
+// refusal keeps the provider's own reason (a token of another client is audience, a malformed token malformed),
+// which the answer and the sign-in audit row carry as Classify's invalid_credentials.
+func outcomeReason(err error) Reason {
+	status, reason := Classify(err)
+	var perr *ProviderError
+	if status == http.StatusUnauthorized && errors.As(err, &perr) && perr.Reason != "" {
+		return perr.Reason
+	}
+	return reason
 }
 
 // WriteError writes go-api's answer for err (writeError).

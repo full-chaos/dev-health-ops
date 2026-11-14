@@ -472,45 +472,53 @@ func (f outcomeFetcher) Fetch(context.Context, Provider, contracts.SecretString)
 	return f.profile, f.err
 }
 
-// The outcome counter and log of exchange, link and unlink name the reason Classify names for the refusal, the one
-// source the wire reason also reads: the rows where the service named another reason before now agree.
+// The outcome counter and log of exchange, link and unlink take their reason from one source, the refusal's error:
+// the full reason internally (a provider's audience or malformed token, a provider email that is not text) and the
+// folded value on the wire (invalid_credentials; no detail object on a 500).
 func TestTheOutcomeReasonIsTheWireReasonsSource(t *testing.T) {
 	now := time.Date(2026, 11, 14, 12, 0, 0, 0, time.UTC)
 	owner := uuid.New()
 	key := identity.ExternalKey{Issuer: SocialIssuer(GitHub), Provider: GitHub, Subject: "42"}
 	held := identity.Identity{ID: uuid.New(), Issuer: key.Issuer, Provider: key.Provider, Subject: key.Subject}
+	exchange := func(s *Service) error {
+		_, err := s.Exchange(context.Background(), GitHub, contracts.NewSecretString("t"), nil)
+		return err
+	}
 	cases := []struct {
 		name      string
 		operation Operation
 		store     Store
 		fetcher   ProfileFetcher
 		run       func(*Service) error
-		want      string
+		outcome   string
+		status    int
+		wire      string
 	}{
-		{"link with no sign-in time (was malformed)", OperationLink, stubStore{}, outcomeFetcher{issuer: key.Issuer},
+		{"link with no sign-in time", OperationLink, stubStore{}, outcomeFetcher{issuer: key.Issuer},
 			func(s *Service) error {
 				_, err := s.Link(context.Background(), SignedIn{PrincipalID: owner}, GitHub, contracts.NewSecretString("t"))
 				return err
-			}, "expired"},
-		{"unlink with no sign-in time (was malformed)", OperationUnlink, stubStore{}, outcomeFetcher{issuer: key.Issuer},
-			func(s *Service) error { return s.Unlink(context.Background(), SignedIn{PrincipalID: owner}, held.ID) }, "expired"},
-		{"unlink of the last sign-in method (was invalid_credentials)", OperationUnlink,
+			}, "expired", http.StatusForbidden, "expired"},
+		{"unlink with no sign-in time", OperationUnlink, stubStore{}, outcomeFetcher{issuer: key.Issuer},
+			func(s *Service) error { return s.Unlink(context.Background(), SignedIn{PrincipalID: owner}, held.ID) },
+			"expired", http.StatusForbidden, "expired"},
+		{"unlink of the last sign-in method", OperationUnlink,
 			unlinkStore{principal: owner, identity: held, unlinkErr: identity.ErrLastSignInMethod}, outcomeFetcher{issuer: key.Issuer},
 			func(s *Service) error {
 				return s.Unlink(context.Background(), SignedIn{PrincipalID: owner, AuthTime: now}, held.ID)
-			}, "last_sign_in_method"},
-		{"exchange of a profile of another client (was audience)", OperationExchange, stubStore{},
+			}, "last_sign_in_method", http.StatusConflict, "last_sign_in_method"},
+		{"exchange of a profile of another client or issuer", OperationExchange, stubStore{},
 			outcomeFetcher{issuer: "https://other.example", profile: Profile{ExternalKey: key, Email: "a@example.com", EmailVerified: true}},
-			func(s *Service) error {
-				_, err := s.Exchange(context.Background(), GitHub, contracts.NewSecretString("t"), nil)
-				return err
-			}, "invalid_credentials"},
-		{"exchange of a token the provider calls malformed (was malformed)", OperationExchange, stubStore{},
+			exchange, "audience", http.StatusUnauthorized, "invalid_credentials"},
+		{"exchange of a token the provider client refuses for its audience", OperationExchange, stubStore{},
+			outcomeFetcher{issuer: key.Issuer, err: &ProviderError{Reason: ReasonAudience, Step: "github token check"}},
+			exchange, "audience", http.StatusUnauthorized, "invalid_credentials"},
+		{"exchange of a token the provider client calls malformed", OperationExchange, stubStore{},
 			outcomeFetcher{issuer: key.Issuer, err: &ProviderError{Reason: ReasonMalformed, Step: "token"}},
-			func(s *Service) error {
-				_, err := s.Exchange(context.Background(), GitHub, contracts.NewSecretString("t"), nil)
-				return err
-			}, "invalid_credentials"},
+			exchange, "malformed", http.StatusUnauthorized, "invalid_credentials"},
+		{"exchange of a verified provider email that is not text", OperationExchange, stubStore{},
+			outcomeFetcher{issuer: key.Issuer, profile: Profile{ExternalKey: key, EmailVerified: true, EmailNotText: true}},
+			exchange, "malformed", http.StatusInternalServerError, ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -526,12 +534,11 @@ func TestTheOutcomeReasonIsTheWireReasonsSource(t *testing.T) {
 			if refusal == nil {
 				t.Fatal("no refusal")
 			}
-			_, reason := Classify(refusal)
-			if string(reason) != c.want || RefusalReason(reason) != c.want {
-				t.Fatalf("Classify(%v) = %q (wire %q), want %q", refusal, reason, RefusalReason(reason), c.want)
+			if !strings.Contains(logs.String(), "reason_code="+c.outcome+"\n") {
+				t.Fatalf("log has no reason_code=%s: %s", c.outcome, logs.String())
 			}
-			if !strings.Contains(logs.String(), "reason_code="+c.want) {
-				t.Fatalf("log has no reason_code=%s: %s", c.want, logs.String())
+			if strings.Contains(logs.String(), "social outcome failed") {
+				t.Fatalf("a refusal is logged as a failure: %s", logs.String())
 			}
 			var collected metricdata.ResourceMetrics
 			if err := reader.Collect(context.Background(), &collected); err != nil {
@@ -551,8 +558,20 @@ func TestTheOutcomeReasonIsTheWireReasonsSource(t *testing.T) {
 					}
 				}
 			}
-			if want := string(c.operation) + "/" + c.want; got[want] != 1 || len(got) != 1 {
+			if want := string(c.operation) + "/" + c.outcome; got[want] != 1 || len(got) != 1 {
 				t.Fatalf("outcome counter = %v, want %s: 1", got, want)
+			}
+			rec := httptest.NewRecorder()
+			writeError(rec, GitHub, refusal)
+			if rec.Code != c.status {
+				t.Fatalf("answer %d %s, want %d", rec.Code, rec.Body, c.status)
+			}
+			detail, ok := refusalDetailOf(t, rec)
+			switch {
+			case c.wire == "" && ok:
+				t.Fatalf("answer %s carries a detail object, want none", rec.Body)
+			case c.wire != "" && (!ok || detail.Reason == nil || *detail.Reason != c.wire):
+				t.Fatalf("answer %s, want wire reason %q", rec.Body, c.wire)
 			}
 		})
 	}

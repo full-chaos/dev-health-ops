@@ -193,7 +193,8 @@ the message text. The value follows from the status and the message: the sign-in
 account, an identity linked elsewhere, a provider already linked) all answer `identity_conflict`, so it does not tell
 them apart. A 500 has no reason, and neither do these refusals: a 503 while the authentication service is
 unavailable, go-api's 409 `operation_moved` (its own `reason`), and the 409 `Organization conflict` of a compat
-sign-in. The outcome counter and the log name the same reason as the answer, before the conflicts fold.
+sign-in. The outcome counter and the log name the full reason of the same refusal (for example `audience`
+for a provider token issued to another client); the answer carries its folded value (`invalid_credentials`).
 
 Provider text never reaches an auth-service response.
 

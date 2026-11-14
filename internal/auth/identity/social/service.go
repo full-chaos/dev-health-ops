@@ -32,6 +32,9 @@ var (
 	ErrAccountConflict          = errors.New("social: an existing account holds this email")
 	ErrUnavailable              = errors.New("social: identity store unavailable")
 	ErrProviderLinked           = errors.New("social: the principal already has an identity at this provider")
+	// ErrProviderEmailNotText: a verified provider "email" member that is not text. It is ErrUnavailable, so it
+	// answers go-api's 500, and its outcome reason is malformed, not a store failure.
+	ErrProviderEmailNotText = fmt.Errorf("%w: the provider email is not text", ErrUnavailable)
 	// ErrUnusableEmail: a verified provider address the shared email text rule refuses.
 	ErrUnusableEmail = identity.ErrUnusableProviderEmail
 )
@@ -146,7 +149,7 @@ func (s *Service) Exchange(ctx context.Context, provider Provider, token contrac
 	}
 	if profile.EmailNotText {
 		// go-api's str check on a verified email that is not text fails after its lookup: a 500.
-		return ExchangeResult{}, fmt.Errorf("%w: the provider email is not text", ErrUnavailable)
+		return ExchangeResult{}, ErrProviderEmailNotText
 	}
 	email, err := identity.NormalizeFederatedEmail(profile.Email)
 	if err != nil {
@@ -414,7 +417,7 @@ func (s *Service) fetch(ctx context.Context, provider Provider, token contracts.
 	case errors.As(err, &perr) && perr.InvalidID:
 		return Profile{}, fmt.Errorf("%w: %s", ErrInvalidProviderID, perr.Step)
 	case errors.As(err, &perr):
-		return Profile{}, fmt.Errorf("%w: %s", ErrProviderRefused, perr.Step)
+		return Profile{}, fmt.Errorf("%w: %w", ErrProviderRefused, perr)
 	case errors.Is(err, ErrProviderNotConfigured):
 		return Profile{}, err
 	default:
@@ -424,17 +427,17 @@ func (s *Service) fetch(ctx context.Context, provider Provider, token contracts.
 		return Profile{}, fmt.Errorf("%w: profile subject", ErrInvalidProviderID)
 	}
 	if profile.Issuer != s.providers.Issuer(provider) || profile.Provider != provider || profile.Validate() != nil {
-		return Profile{}, fmt.Errorf("%w: profile identity does not match the provider", ErrProviderRefused)
+		return Profile{}, fmt.Errorf("%w: %w", ErrProviderRefused, &ProviderError{Reason: ReasonAudience, Step: "profile identity does not match the provider"})
 	}
 	return profile, nil
 }
 
-// record counts and logs one outcome. A refusal's reason is Classify's for err, the one source the wire reason
-// (RefusalReason) and the compat sign-in audit row also read, so the counter, the log and the answer agree.
+// record counts and logs one outcome with outcomeReason(err), the full reason of the error whose folded value the
+// answer carries (RefusalReason of Classify's).
 func (s *Service) record(ctx context.Context, op Operation, provider Provider, err error) {
 	reason := ReasonAccepted
 	if err != nil {
-		_, reason = Classify(err)
+		reason = outcomeReason(err)
 	}
 	label := providerLabel(provider)
 	s.outcomes.Add(ctx, 1, metric.WithAttributes(

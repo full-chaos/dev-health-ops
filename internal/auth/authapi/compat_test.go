@@ -1128,11 +1128,13 @@ func TestCompatRoutesNeedAProjectorAndAnAuditAppender(t *testing.T) {
 // Every reason social.Classify names for a refusal (4xx) is an audit reason,
 // so no social refusal turns into a 500 at its audit row. identity.ErrLastSignInMethod
 // is left out: only an unlink answers it, and an unlink refusal writes no audit row
-// (auth.login.failed is the compat sign-in's), so its reason is no audit reason.
+// (auth.login.failed is the compat sign-in's), so its reason is no audit reason. A provider refusal
+// that carries the provider's own reason (audience) is audited as the wire class (invalid_credentials).
 func TestEverySocialRefusalReasonIsAnAuditReason(t *testing.T) {
 	for _, err := range []error{
 		&social.ConflictError{ExistingMethod: "github"}, social.ErrProviderUnavailable, social.ErrProviderNotConfigured,
-		social.ErrProviderRefused, social.ErrEmailUnverified, social.ErrPrincipalDisabled, identity.ErrSignupNotAvailable,
+		social.ErrProviderRefused, fmt.Errorf("%w: %w", social.ErrProviderRefused, &social.ProviderError{Reason: social.ReasonAudience, Step: "token check"}),
+		social.ErrEmailUnverified, social.ErrPrincipalDisabled, identity.ErrSignupNotAvailable,
 		social.ErrReauthenticationRequired, identity.ErrIdentityConflict, social.ErrProviderLinked, identity.ErrNotFound,
 		errors.New("anything else"),
 	} {

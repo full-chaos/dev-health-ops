@@ -6,9 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
+
+	"go.opentelemetry.io/otel"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/licensing"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
@@ -123,21 +126,12 @@ func TestStartupDependencyFailuresNameTheDependency(t *testing.T) {
 // dispatch with an unreachable ClickHouse login: the process exits 1 and its
 // "configure runtime dependencies" line now carries the reason code.
 func TestShellLogsTheStartupDependencyReason(t *testing.T) {
-	env := map[string]string{
-		"API_ADDRESS":          "127.0.0.1:0",
-		"DEV_HEALTH_HTTP_ADDR": "127.0.0.1:0",
-		"API_CLICKHOUSE_URI":   "clickhouse://api:" + testCredential + "@" + closedAddress(t) + "/default",
-	}
-	var stdout, stderr bytes.Buffer
-	code := cli.Execute(context.Background(), "dho", []cli.Command{Command()}, cli.Env{
-		Args:   []string{"api"},
-		Lookup: func(key string) (string, bool) { value, ok := env[key]; return value, ok },
-		Stdout: &stdout,
-		Stderr: &stderr,
-	})
-	output := stdout.String() + stderr.String()
+	code, output, left := shellDependencyFailure(t)
 	if code != 1 {
 		t.Fatalf("dho api = %d, want 1\n%s", code, output)
+	}
+	if left > 0 {
+		t.Fatalf("the shell left %d tracing batch processor(s) running past this test", left)
 	}
 	// Each record is checked on its own: the shell's "configure runtime
 	// dependencies" line must carry the reason itself, and the adapter's
@@ -161,6 +155,61 @@ func TestShellLogsTheStartupDependencyReason(t *testing.T) {
 	}
 	if strings.Contains(output, testCredential) {
 		t.Fatalf("a credential reached the log:\n%s", output)
+	}
+}
+
+// shellDependencyFailure runs `dho api` with an unreachable ClickHouse login: it returns the exit code, the output and
+// how many tracing batch processors the run left behind. The shell returns on the dependency failure before its runtime
+// owns the tracing component, so a provider it built would keep its batch processor running after the test; that
+// goroutine's export errors write the global log while a later test reads a buffer it installed there (CHAOS-13690).
+// Tracing off: no provider, no goroutine left.
+func shellDependencyFailure(t *testing.T) (code int, output string, left int) {
+	t.Helper()
+	t.Setenv("OTEL_ENABLED", "false")
+	batchers := batchSpanProcessors()
+	env := map[string]string{
+		"API_ADDRESS":          "127.0.0.1:0",
+		"DEV_HEALTH_HTTP_ADDR": "127.0.0.1:0",
+		"API_CLICKHOUSE_URI":   "clickhouse://api:" + testCredential + "@" + closedAddress(t) + "/default",
+	}
+	var stdout, stderr bytes.Buffer
+	code = cli.Execute(context.Background(), "dho", []cli.Command{Command()}, cli.Env{
+		Args:   []string{"api"},
+		Lookup: func(key string) (string, bool) { value, ok := env[key]; return value, ok },
+		Stdout: &stdout,
+		Stderr: &stderr,
+	})
+	return code, stdout.String() + stderr.String(), batchSpanProcessors() - batchers
+}
+
+// CHAOS-13690: the shell run of the test above leaves nothing that writes the global log under a later test. The cell
+// forces the timing the CI race needed luck for: batch exports every millisecond, each one failing at once against a
+// closed port, and a span through the global tracer the shell installs. It then points the global log at a buffer and
+// reads it while the exports would fail, as TestExternalIngestWrongClassMatrixPublicSchemaRows does. A batch processor
+// left running reports each failure through otel.Handle -> log.Print into that buffer: a data race under -race, and the
+// leak count below.
+func TestTheShellRunLeavesNothingWritingTheGlobalLog(t *testing.T) {
+	t.Setenv("OTEL_BSP_SCHEDULE_DELAY", "1")
+	t.Setenv("OTEL_EXPORTER_OTLP_TIMEOUT", "1")
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://"+closedAddress(t))
+	t.Setenv("OTEL_SAMPLE_RATE", "1")
+	previousProvider := otel.GetTracerProvider()
+	t.Cleanup(func() { otel.SetTracerProvider(previousProvider) })
+	code, output, left := shellDependencyFailure(t)
+	if code != 1 {
+		t.Fatalf("dho api = %d, want 1\n%s", code, output)
+	}
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	_, span := otel.Tracer("chaos-13690").Start(context.Background(), "probe")
+	span.End()
+	for deadline := time.Now().Add(300 * time.Millisecond); time.Now().Before(deadline); time.Sleep(time.Millisecond) {
+		_ = logs.String()
+	}
+	if left > 0 {
+		t.Fatalf("the shell left %d tracing batch processor(s) running; the global log read:\n%s", left, logs.String())
 	}
 }
 
@@ -189,5 +238,17 @@ func TestBuildDepsStartsWithAnUnverifiableProcessLicense(t *testing.T) {
 	}
 	if strings.Contains(output, licenseValue) || strings.Contains(output, publicValue) {
 		t.Fatalf("a license variable value reached the log:\n%s", output)
+	}
+}
+
+// batchSpanProcessors counts the OTel batch span processor goroutines now running.
+func batchSpanProcessors() int {
+	buffer := make([]byte, 1<<20)
+	for {
+		n := runtime.Stack(buffer, true)
+		if n < len(buffer) {
+			return strings.Count(string(buffer[:n]), "sdk/trace.(*batchSpanProcessor).processQueue")
+		}
+		buffer = make([]byte, 2*len(buffer))
 	}
 }

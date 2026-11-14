@@ -50,7 +50,6 @@ internal/auth/authapi/users.go	PGUsers.StateOn	1
 internal/auth/authapi/users.go	UserState.Holds	1
 internal/auth/decisionstate/decisionstate.go	txReader.principal	1
 internal/auth/decisionstate/decisionstate.go	txReader.Unfed	1
-internal/envelopemint/envelopemint.go	Mint	1
 internal/queryapi/authctx/authctx.go	Claims.Holds	1
 internal/queryapi/datahealth/datahealth.go	Principal.Holds	1
 internal/queryapi/graph/field_precheck.go	-	2

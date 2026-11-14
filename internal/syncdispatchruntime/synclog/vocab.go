@@ -123,6 +123,7 @@ var (
 	KeyGuardCappedNew               = Key{"guard.capped_new"}
 	KeyGuardCappedStale             = Key{"guard.capped_stale"}
 	KeyGuardSlotHeadroom            = Key{"guard.slot_headroom"}
+	KeyGuardHeldBack                = Key{"guard.held_back"}
 	KeyLockWaitBudget               = Key{"lock_wait_budget"}
 	KeyInvalidClaimUnits            = Key{"invalid_claim_units"}
 	KeyCappedCount                  = Key{"capped_count"}

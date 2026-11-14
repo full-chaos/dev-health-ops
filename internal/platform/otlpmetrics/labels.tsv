@@ -273,9 +273,9 @@ dev_health_provider_unit_deferred_total	dataset,provider,reason	code: internal/p
 dev_health_provider_unit_failed_total	dataset,provider,reason	code: internal/providerfoundation/budget.go
 dev_health_provider_unit_terminal_with_rows_total	dataset,provider	code: internal/providerfoundation/budget.go
 dev_health_providersync_projects_v2_degraded_snapshots_total	reason	code: internal/providerfoundation/budget.go
-dev_health_reconciler_stage_acquire_wait_seconds		code: internal/syncreconciler/pipeline.go
+dev_health_reconciler_stage_acquire_wait_seconds	stage	code: internal/syncreconciler/pipeline.go
 dev_health_reconciler_stage_cancelled_total	sqlstate,stage	code: internal/syncreconciler/pipeline.go
-dev_health_reconciler_stage_duration_seconds		code: internal/syncreconciler/pipeline.go
+dev_health_reconciler_stage_duration_seconds	stage	code: internal/syncreconciler/pipeline.go
 dev_health_release_impact_degraded_missing_telemetry_total		code: internal/jobruntime/telemetry.go
 dev_health_remaining_metrics_manual_backfill_total	family,outcome	code: internal/jobruntime/telemetry.go
 dev_health_remaining_metrics_manual_overlap_total	family	code: internal/jobruntime/telemetry.go
@@ -340,6 +340,7 @@ fixed_scheduler_windows_total		code: internal/scheduler/fixed/loop.go
 provider_source_discovery_total	outcome,provider	code: internal/scheduler/sync/source_discovery.go
 provider_oauth_revocations_exhausted		code: internal/jobs/providerrevocation/handler.go
 provider_oauth_revocations_total	outcome	code: internal/jobs/providerrevocation/handler.go
+report_scheduler_unminted_instants_total		code: internal/scheduler/fixed/loop.go
 reconciler_database_pool_saturation_ratio	pool	code: internal/platform/poolstat/poolstat.go
 reconciler_database_pool_saturation_ratio_acquired_conns	pool	code: internal/platform/poolstat/poolstat.go
 reconciler_database_pool_saturation_ratio_max_conns	pool	code: internal/platform/poolstat/poolstat.go
@@ -364,7 +365,7 @@ sync_dispatch_unreclaimable_sweep_failures_total		code: internal/syncreconciler/
 sync_dispatch_unreclaimable_terminalized_total		code: internal/syncreconciler/loop.go
 sync_dispatch_wakeup_report_failures_total		code: internal/syncreconciler/loop.go
 sync_initial_backfill_total	outcome	code: internal/scheduler/sync/initial_backfill.go
-sync_manual_trigger_await_latency_seconds		code: internal/synchandoff/await_metrics.go
+sync_manual_trigger_await_latency_seconds	outcome	code: internal/synchandoff/await_metrics.go
 sync_manual_trigger_await_outcome_total	outcome	code: internal/synchandoff/await_metrics.go
 sync_plan_gate_total	dataset,outcome,provider	code: internal/scheduler/sync/plan_gate_telemetry.go
 sync_reconciler_stage_budget_seconds	stage	code: internal/syncreconciler/pipeline.go
@@ -391,6 +392,7 @@ sync_scheduler_skipped_feature_disabled_total		code: internal/scheduler/sync/loo
 sync_scheduler_skipped_not_planner_managed_total		code: internal/scheduler/sync/loop.go
 sync_scheduler_skipped_open_run_total		code: internal/scheduler/sync/loop.go
 sync_scheduler_skipped_org_missing_total		code: internal/scheduler/sync/loop.go
+sync_scheduler_unminted_instants_total		code: internal/scheduler/sync/loop.go
 sync_scheduler_unsupported_cron_fallback_total		code: internal/scheduler/sync/loop.go
 sync_scheduler_up		code: internal/scheduler/sync/loop.go
 sync_scheduler_windows_total		code: internal/scheduler/sync/loop.go

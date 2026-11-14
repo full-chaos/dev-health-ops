@@ -76,7 +76,8 @@ type Response struct {
 	// RepoFilterApplied: null when the request names no repository, true when the
 	// repository filter narrowed the cells, false when it cannot (the individual
 	// heatmap is keyed by a person). FilterEmptyReason: null, or why a filter set
-	// that names repositories matched nothing (teamscope.ClassifyEmptyFilter).
+	// that names repositories matched nothing (teamscope.ClassifyEmptyFilter), or
+	// service_not_found for an unresolved service scope (CHAOS-13707).
 	RepoFilterApplied *bool   `json:"repo_filter_applied"`
 	FilterEmptyReason *string `json:"filter_empty_reason"`
 }

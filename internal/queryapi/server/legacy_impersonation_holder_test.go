@@ -54,7 +54,7 @@ func postDocument(s *behaviourStack, listener, path, bearer, document string) le
 
 // TestQueryRefusesAnActionOnlyHoldersWriteBesideALiveRow: an admin.impersonate holder that is not a superuser is a
 // holder like any other. With the switch on, beside a live go-api row, each of its documents (query, mutation,
-// subscription) is refused on each /query mount (403, no resolver); a failed row read is the bare 401 (fail closed).
+// subscription) is refused on each /query mount (403, no resolver); a failed row read is go-api's 503 (fail closed).
 // With the switch off, the live row makes it the target, as for a superuser holder.
 func TestQueryRefusesAnActionOnlyHoldersWriteBesideALiveRow(t *testing.T) {
 	quietStdLog(t)
@@ -69,8 +69,8 @@ func TestQueryRefusesAnActionOnlyHoldersWriteBesideALiveRow(t *testing.T) {
 						t.Fatalf("switch on, live row, %s: got %d %s, ran %d; want 403 %s and no resolver", kind, got.Status, got.Body, len(*on.seen), legacyRefusalBody)
 					}
 					fails := legacyStack(t, minter, actionOnlyHolderStore(nil, errors.New("session store timeout")), true)
-					if got := postDocument(fails, route.listener, route.path, token, document); got.Status != http.StatusUnauthorized || len(*fails.seen) != 0 {
-						t.Fatalf("switch on, row read fails, %s: got %d %s, ran %d; want 401 and no resolver", kind, got.Status, got.Body, len(*fails.seen))
+					if got := postDocument(fails, route.listener, route.path, token, document); got.Status != http.StatusServiceUnavailable || got.Body != restUnavailable || len(*fails.seen) != 0 {
+						t.Fatalf("switch on, row read fails, %s: got %d %s, ran %d; want 503 and no resolver", kind, got.Status, got.Body, len(*fails.seen))
 					}
 				}
 				off := legacyStack(t, minter, actionOnlyHolderStore(legacySession(), nil), false)

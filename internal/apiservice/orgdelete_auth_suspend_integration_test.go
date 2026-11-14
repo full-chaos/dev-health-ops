@@ -104,7 +104,7 @@ func orgDeleteSigningKey(t *testing.T) string {
 // orgDeleteAuthService is auth-service's provisioning routes as authruntime builds them (internal/auth/authruntime/
 // provisioning.go), over the auth schema as the runtime role, users owned, with the go-api workload subject; plus
 // stubWorkloadExchange on the exchange path.
-func orgDeleteAuthService(t *testing.T, runtime *pgxpool.Pool) (*httptest.Server, *identity.Store) {
+func orgDeleteAuthService(t *testing.T, runtime *pgxpool.Pool, usersOwned bool) (*httptest.Server, *identity.Store) {
 	t.Helper()
 	schema, err := authschema.NewValidatedIdentifier("auth")
 	if err != nil {
@@ -118,6 +118,14 @@ func orgDeleteAuthService(t *testing.T, runtime *pgxpool.Pool) (*httptest.Server
 	identities, err := identity.New(identity.Config{Pool: runtime, Schema: schema})
 	if err != nil {
 		t.Fatal(err)
+	}
+	// authruntime builds the provisioning routes' identity store with UsersOwnedByAuth (identityConfig); organization
+	// create refuses 409 users_not_owned without it. The returned store only projects, as before.
+	births := identities
+	if usersOwned {
+		if births, err = identity.New(identity.Config{Pool: runtime, Schema: schema, UsersOwnedByAuth: true}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	members, err := membership.New(membership.Config{Pool: runtime, Schema: schema, OwnsUsers: true, Sessions: sessions})
 	if err != nil {
@@ -153,7 +161,7 @@ func orgDeleteAuthService(t *testing.T, runtime *pgxpool.Pool) (*httptest.Server
 		t.Fatal(err)
 	}
 	routes, err := authapi.ProvisioningRoutes(authapi.ProvisioningDeps{
-		Users: authapi.PGUsers{Pool: runtime, AuthSchema: schema, UsersOwned: true}, Reader: runtime, Organizations: identities,
+		Users: authapi.PGUsers{Pool: runtime, AuthSchema: schema, UsersOwned: true}, Reader: runtime, Organizations: births,
 		Memberships: members, Invites: invites, Deprovision: deprovision, Orgs: orgs, ServiceAccounts: accounts, Grants: grants,
 		Workload: workload, Logger: quietLogger(),
 	})
@@ -229,7 +237,7 @@ func TestOrgDeleteSwitchOffSuspendsAuthOrganization(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	authService, identities := orgDeleteAuthService(t, runtime)
+	authService, identities := orgDeleteAuthService(t, runtime, false)
 
 	orgID, owner, super := uuid.New(), uuid.New(), uuid.New()
 	for _, statement := range []struct {

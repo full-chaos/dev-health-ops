@@ -46,6 +46,11 @@ const (
 	heavyGate      = "(!(github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:full')))"
 	imageHeavyGate = "(!(github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:full') && (github.event.pull_request.draft || !contains(github.event.pull_request.labels.*.name, 'hotfix-image'))))"
 	goDocsSkip     = "needs.go-storage-integration-plan.outputs.docs_only != 'true'"
+	// proofHeavyGate: live-e2e.yml's metrics-executed-proof-run also runs on a pull request that touches a
+	// metrics_proof path of `changes`, with no ci:full label.
+	proofHeavyGate = "(!(github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:full') && needs.changes.outputs.metrics_proof != 'true'))"
+	// ciFullLabelEvent is live-e2e.yml's `labeled` filter (only ci:full starts work), not a heavy gate.
+	ciFullLabelEvent = "github.event.label.name == 'ci:full'"
 )
 
 var routedWorkflowFiles = []string{"go-quality.yml", "test.yml", "live-e2e.yml", "go.yml", "docker-images.yml"}
@@ -77,7 +82,7 @@ var heavyGatedJobs = map[[2]string]string{
 	{"go.yml", "go-container-security"}:                    heavyGate + " && " + goDocsSkip,
 	{"go.yml", "go-container-smoke"}:                       heavyGate + " && " + goDocsSkip,
 	{"live-e2e.yml", "live-e2e-run"}:                       heavyGate + " && needs.changes.outputs.docs_only != 'true'",
-	{"live-e2e.yml", "metrics-executed-proof-run"}:         heavyGate + " && needs.changes.outputs.docs_only != 'true'",
+	{"live-e2e.yml", "metrics-executed-proof-run"}:         proofHeavyGate + " && needs.changes.outputs.docs_only != 'true'",
 }
 
 var requiredContextJobs = map[string][]string{
@@ -97,7 +102,7 @@ var cachePathSites = map[string]cachePathSite{
 }
 
 func ungated(v string) string {
-	for _, gate := range []string{heavyGate + " && " + goDocsSkip, imageHeavyGate, heavyGate, draftGate} {
+	for _, gate := range []string{heavyGate + " && " + goDocsSkip, imageHeavyGate, proofHeavyGate, heavyGate, draftGate} {
 		prefix := gate + " && ("
 		if strings.HasPrefix(v, prefix) && strings.HasSuffix(v, ")") {
 			return v[len(prefix) : len(v)-1]
@@ -172,7 +177,7 @@ func runnerAllowlistViolations(t *testing.T, root string) []string {
 	for _, name := range workflowNames(t, root) {
 		jobs := jobsOf(doc(name))
 		for _, jn := range sortedKeys(jobs) {
-			if strings.Contains(str(asMap(jobs[jn])["if"]), "'ci:full'") {
+			if strings.Contains(strings.ReplaceAll(str(asMap(jobs[jn])["if"]), ciFullLabelEvent, ""), "'ci:full'") {
 				found[[2]string{name, jn}] = true
 			}
 		}
@@ -232,8 +237,9 @@ func runnerAllowlistViolations(t *testing.T, root string) []string {
 				break
 			}
 		}
-		if off, ok := cache.(bool); ok && !off && name == "go-quality.yml" {
-			// CHAOS-10486: off on every runner; the GitHub-hosted legs restore their own per-leg cache instead
+		if off, ok := cache.(bool); ok && !off {
+			// CHAOS-10486, CHAOS-13711: off on every runner; a GitHub-hosted job restores its cache with actions/cache/restore
+			// (go-quality: per leg; the others: the shared Go cache) and only a push to main or the merge queue saves it
 			continue
 		}
 		if cache == nil {
@@ -369,7 +375,7 @@ func TestSelfHostedRunnerAllowlistPlantedDefects(t *testing.T) {
 		{"a docker build loses the hotfix-image arm", []mutation{{dock, " && (github.event.pull_request.draft || !contains(github.event.pull_request.labels.*.name, 'hotfix-image')))) && ((vars.SELF_HOSTED_IMAGE_BUILDS", "))) && ((vars.SELF_HOSTED_IMAGE_BUILDS"}}, []string{"docker-images.yml:dind-smoke-test", "lost the heavy gate"}},
 		{"a job gains ci:full without being pinned", []mutation{{test_, "|| needs.changes.outputs.code == 'true'\n    # Same ARC", "|| needs.changes.outputs.code == 'true' || contains(github.event.pull_request.labels.*.name, 'ci:full')\n    # Same ARC"}}, []string{"ci:full-gated job set drifted", "test.yml:chart-started"}},
 		{"hosted twin stops being the literal negation", []mutation{{goYml, "go-container-reproducibility:\n", "go-container-reproducibility:\n    # planted\n"}, {goYml, "!(vars.SELF_HOSTED_RUNNERS == 'enabled'", "(vars.SELF_HOSTED_RUNNERS != 'enabled'"}}, []string{"literal negation"}},
-		{"setup-go cache negation loses its negation", []mutation{{test_, "cache: ${{ !(vars.SELF_HOSTED_RUNNERS", "cache: ${{ (vars.SELF_HOSTED_RUNNERS"}}, []string{"cache negation does not EXACTLY match"}},
+		{"setup-go cache negation loses its negation", []mutation{{test_, "          cache: false\n      - name: Locate the Go module", "          cache: true\n      - name: Locate the Go module"}}, []string{"cache negation does not EXACTLY match"}},
 		{"cache-path step gets a prepended disjunct", []mutation{{test_, "if: vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request'", "if: github.event_name == 'merge_group' || vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request'"}}, []string{"Configure self-hosted Go cache paths", "does not EXACTLY match the expected condition"}},
 		{"docker arm64 matrix runner is hosted-only", []mutation{{dock, "runs-on: ${{ matrix.platform == 'linux/arm64' && ((vars.SELF_HOSTED_IMAGE_BUILDS", "runs-on: ${{ matrix.platform == 'linux/arm64' && (vars.SELF_HOSTED_RUNNERS != 'enabled' && (vars.SELF_HOSTED_IMAGE_BUILDS"}}, []string{"linux/arm64 matrix runner"}},
 		{"a draft-gated job is renamed away", []mutation{{secscn, "  semgrep:\n", "  semgrep-renamed:\n"}}, []string{"security-scan.yml", "semgrep"}},

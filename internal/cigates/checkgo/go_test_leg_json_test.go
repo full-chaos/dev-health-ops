@@ -136,6 +136,17 @@ func runLegWithFakeGo(t *testing.T, leg string, shard int, mode string) (cmdResu
 			listing = append(listing, strings.SplitN(l, "\t", 2)[0])
 		}
 	}
+	// The test leg cuts each split package by the real ci/go_test_split_weights.tsv, which fails on a row naming a test the
+	// listing lacks (CHAOS-13668): the stand-in listing names every row's test too.
+	splitWeights, err := os.ReadFile(filepath.Join(repo, "ci", "go_test_split_weights.tsv"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, l := range strings.Split(string(splitWeights), "\n") {
+		if f := strings.Split(l, "\t"); len(f) == 3 && !strings.HasPrefix(l, "#") {
+			listing = append(listing, f[1])
+		}
+	}
 	listPath := filepath.Join(work, "listing.txt")
 	if err := os.WriteFile(listPath, []byte(strings.Join(listing, "\n")+"\n"), 0o644); err != nil {
 		t.Fatal(err)

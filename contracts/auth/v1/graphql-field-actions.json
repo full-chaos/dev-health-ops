@@ -1,5 +1,5 @@
 {
-  "catalog_version": 19,
+  "catalog_version": 20,
   "description": "Lists every served GraphQL root field with the catalog action a decision request for it names (the Go table field_actions.go holds the same mapping). Each action allows exactly what today's guard allows (CHAOS-12657, parity); query-api enforces none of them yet. Every other statement is held to a source proof by the Go guard.",
   "rows": [
     {

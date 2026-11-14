@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -46,16 +47,17 @@ const slugReusePassword = "slug-reuse-pw"
 // two sign-in planes over one database: the compatibility login go-api's proxy forwards POST /api/v1/auth/login to (the
 // live plane), and the session issue route go-api's own login asks through its real client (the issue plane).
 type slugStack struct {
-	admin  *pgxpool.Pool
-	goAPI  http.Handler
-	bearer string
-	compat *httptest.Server
-	issue  *sessionissue.Client
-	orgs   *org.Store
-	users  *identity.Store
+	refuseDeprovision *atomic.Bool
+	admin             *pgxpool.Pool
+	goAPI             http.Handler
+	bearer            string
+	compat            *httptest.Server
+	issue             *sessionissue.Client
+	orgs              *org.Store
+	users             *identity.Store
 }
 
-func newSlugStack(t *testing.T, ctx context.Context) *slugStack {
+func newSlugStack(t *testing.T, ctx context.Context, switchValue string) *slugStack {
 	t.Helper()
 	pg, err := containers.StartPostgres(ctx)
 	if err != nil {
@@ -107,7 +109,11 @@ func newSlugStack(t *testing.T, ctx context.Context) *slugStack {
 		t.Fatal(err)
 	}
 
-	provisioning, identities := orgDeleteAuthService(t, runtime)
+	provisioning, identities := orgDeleteAuthService(t, runtime, switchValue != "")
+	refuse := new(atomic.Bool)
+	if switchValue != "" {
+		provisioning = logRefusals(t, provisioning, refuse)
+	}
 	super := uuid.New()
 	if _, err := admin.Exec(ctx, `INSERT INTO users (id, email, password_hash, auth_provider, is_active, is_verified, is_superuser, token_version, created_at, updated_at)
 VALUES ($1, $2, NULL, 'local', true, true, true, 0, now(), now())`, super, "slugreuse-super-"+super.String()[:8]+"@example.test"); err != nil {
@@ -117,7 +123,7 @@ VALUES ($1, $2, NULL, 'local', true, true, true, 0, now(), now())`, super, "slug
 		t.Fatal(err)
 	}
 
-	t.Setenv(EnvAuthProxyOrgProvisioning, "")
+	t.Setenv(EnvAuthProxyOrgProvisioning, switchValue)
 	t.Setenv(EnvAuthProxyURL, provisioning.URL)
 	t.Setenv(EnvAuthWorkloadSubjectFile, subjectFile(t))
 	t.Setenv(EnvAuthWorkloadIssuer, testWorkloadIssuer)
@@ -140,6 +146,7 @@ VALUES ($1, $2, NULL, 'local', true, true, true, 0, now(), now())`, super, "slug
 	}
 	s := &slugStack{admin: admin, goAPI: server.Handler(), bearer: issuer.MustMint(t, edtokens.Claims{UserID: super}), users: identities}
 	s.compat = compatLoginPlane(t, ctx, admin)
+	s.refuseDeprovision = refuse
 	s.issue = authplane.Start(t, ctx, pg.URI, authplane.NewKey(t)).Issuer
 	schema, err := authschema.NewValidatedIdentifier(authplane.Schema)
 	if err != nil {
@@ -328,7 +335,7 @@ func wantSignedIn(t *testing.T, s *slugStack, ctx context.Context, label, email 
 func TestADeletedOrganizationsNameCanBeReused(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	t.Cleanup(cancel)
-	s := newSlugStack(t, ctx)
+	s := newSlugStack(t, ctx, "")
 	for _, seq := range []struct {
 		name        string
 		signInFirst bool
@@ -384,7 +391,7 @@ func TestADeletedOrganizationsNameCanBeReused(t *testing.T) {
 func TestARemainingSlugClashIsAConflict(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	t.Cleanup(cancel)
-	s := newSlugStack(t, ctx)
+	s := newSlugStack(t, ctx, "")
 	slug := "held-in-auth-" + uuid.NewString()[:8]
 	if _, err := s.orgs.Create(ctx, org.CreateInput{Slug: slug, Name: "Held in auth"}, org.Actor{}); err != nil {
 		t.Fatalf("org.Create: %v", err)
@@ -408,7 +415,7 @@ func TestARemainingSlugClashIsAConflict(t *testing.T) {
 func TestARepeatDeleteFreesTheSlugOfAnEarlierDelete(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	t.Cleanup(cancel)
-	s := newSlugStack(t, ctx)
+	s := newSlugStack(t, ctx, "")
 	name := "Earlier delete " + uuid.NewString()[:8]
 	ownerX, emailX := s.user(t, ctx, "x")
 	x, slugX := s.create(t, name, "", ownerX)

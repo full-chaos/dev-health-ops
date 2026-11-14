@@ -195,6 +195,37 @@ func queryAPIProbeTimingHonoured(g *guard) {
 	g.expect(str(at(c, "readinessProbe", "httpGet", "port")) == "operator", "readiness httpGet port is %v, want operator", at(c, "readinessProbe", "httpGet", "port"))
 }
 
+func goAPIProbeHandlerRefused(g *guard) {
+	for _, o := range [][]string{
+		setString("goApi.livenessProbe.httpGet.port=http"), setString("goApi.livenessProbe.httpGet.path=/readyz"),
+		setString("goApi.readinessProbe.httpGet.port=http"), setString("goApi.readinessProbe.httpGet.path=/other"),
+		setJSON(`goApi.readinessProbe.httpGet={"path":"/custom","port":"operator"}`),
+		setJSON(`goApi.livenessProbe.tcpSocket={"port":"operator"}`),
+		setJSON(`goApi.readinessProbe.tcpSocket={"port":"operator"}`),
+		setJSON(`goApi.livenessProbe.exec={"command":["true"]}`),
+		setJSON(`goApi.readinessProbe.exec={"command":["true"]}`),
+		setJSON(`goApi.livenessProbe.grpc={"port":9090}`),
+		setJSON(`goApi.readinessProbe.grpc={"port":9090}`),
+	} {
+		stderr := g.refusal("a probe handler in goApi values", "handler-contract", join(o, set("goApi.enabled=true"))...)
+		g.expect(strings.Contains(stderr, probeOwned), "%v: the refusal does not say %q: %s", o, probeOwned, firstLines(stderr, 2))
+	}
+}
+
+func goAPIProbeTimingHonoured(g *guard) {
+	docs := g.docs("timing-contract", join(set("goApi.enabled=true", "goApi.readinessProbe.periodSeconds=7", "goApi.livenessProbe.failureThreshold=9"), []string{"--show-only", "templates/go-api-deployment.yaml"})...)
+	deps := ofKind(docs, "Deployment")
+	if len(deps) == 0 {
+		g.failf("no go-api Deployment decoded")
+		return
+	}
+	c := containers(deps[0])[0]
+	g.expect(str(at(c, "readinessProbe", "periodSeconds")) == "7", "readiness periodSeconds is %v, want 7", at(c, "readinessProbe", "periodSeconds"))
+	g.expect(str(at(c, "livenessProbe", "failureThreshold")) == "9", "liveness failureThreshold is %v, want 9", at(c, "livenessProbe", "failureThreshold"))
+	g.expect(equal(mp(at(c, "readinessProbe", "httpGet")), doc{"path": "/readyz", "port": "operator"}), "readiness httpGet is %v, want the chart handler on operator", at(c, "readinessProbe", "httpGet"))
+	g.expect(equal(mp(at(c, "livenessProbe", "httpGet")), doc{"path": "/healthz", "port": "operator"}), "liveness httpGet is %v, want the chart handler on operator", at(c, "livenessProbe", "httpGet"))
+}
+
 func queryAPIOperatorPortCollisionRefused(g *guard) {
 	g.refusal("queryApi.operatorPort equal to queryApi.port", "t", set("queryApi.enabled=true", "queryApi.operatorPort=8090")...)
 }
@@ -247,6 +278,8 @@ func TestRolloutGuardsRealTree(t *testing.T) {
 		check{"query-api-probe-old-default-omitted", queryAPIProbeOldDefaultOmitted},
 		check{"query-api-probe-timing-honoured", queryAPIProbeTimingHonoured},
 		check{"query-api-operator-port-collision-refused", queryAPIOperatorPortCollisionRefused},
+		check{"go-api-probe-handler-refused", goAPIProbeHandlerRefused},
+		check{"go-api-probe-timing-honoured", goAPIProbeTimingHonoured},
 		check{"migration-hook-default", migrationHookDefault},
 		check{"migration-hook-post-install-refused", migrationHookPostInstallRefused},
 		check{"migration-hook-local-needs-bundled", migrationHookLocalNeedsBundled},
@@ -256,6 +289,7 @@ func TestRolloutGuardsRealTree(t *testing.T) {
 func TestRolloutGuardsPlantedDefects(t *testing.T) {
 	const qapi = "templates/query-api-deployment.yaml"
 	const workers = "templates/go-workers.yaml"
+	const goapi = "templates/go-api-deployment.yaml"
 	runPlanted(t, []planted{
 		{"workers-default-drifts", chartOnly,
 			mut(chartFile(workers), `(dict "maxUnavailable" 0 "maxSurge" 1) | toJson`, `(dict "maxUnavailable" 1 "maxSurge" 1) | toJson`),
@@ -289,6 +323,9 @@ func TestRolloutGuardsPlantedDefects(t *testing.T) {
 		{"query-api-probe-handler-check-removed", chartOnly,
 			mut(chartFile(qapi), `{{- range $probe := list "livenessProbe" "readinessProbe" }}`, `{{- range $probe := list }}`),
 			queryAPIProbeHandlerRefused, "must be refused"},
+		{"go-api-probe-handler-check-removed", chartOnly,
+			mut(chartFile(goapi), `{{- range $h := list "httpGet" "tcpSocket" "exec" "grpc" }}`, `{{- range $h := list }}`),
+			goAPIProbeHandlerRefused, "must be refused"},
 		{"query-api-liveness-back-on-http", chartOnly,
 			mut(chartFile(qapi), `"path" "/healthz" "port" "operator"`, `"path" "/healthz" "port" "http"`),
 			queryAPIOperatorListener, "livenessProbe targets port"},

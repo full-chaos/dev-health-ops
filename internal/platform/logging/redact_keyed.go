@@ -1,9 +1,28 @@
 package logging
 
 import (
+	"errors"
 	"sync"
 	"sync/atomic"
 )
+
+// ErrNoDrawKept is the answer of DrawKept when every draw would be changed by the redactor.
+var ErrNoDrawKept = errors.New("logging: no drawn id survives log redaction")
+
+// DrawKept calls mint, at most draws times, until RedactKeyedText keeps the id whole under key: a random id can look
+// like a credential, and a redacted id in a log line names nothing.
+func DrawKept(key string, draws int, mint func() (string, error)) (string, error) {
+	for range draws {
+		id, err := mint()
+		if err != nil {
+			return "", err
+		}
+		if RedactKeyedText(key, id) == id {
+			return id, nil
+		}
+	}
+	return "", ErrNoDrawKept
+}
 
 // RedactKeyedText is the redaction of one flat text attribute: a protected key hides the whole value, any other value
 // goes through RedactText and is bounded. The log handler (attrRedactor.replace) and the span exporter's scrub both

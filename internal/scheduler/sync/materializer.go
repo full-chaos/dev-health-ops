@@ -1860,7 +1860,7 @@ ORDER BY dataset_key`, orgID, integrationID)
 			depth = &option.InitialSyncDepth
 		}
 		result = append(result, PlanDataset{
-			Key: key, InitialDepthDays: depth, FullQuery: datasetFetchIsUnbounded(provider, key, raw),
+			Key: key, InitialDepthDays: depth, FullQuery: DatasetFullQuery(provider, key, enabled, raw),
 		})
 	}
 	if err := rows.Err(); err != nil {
@@ -2038,6 +2038,13 @@ func loadFailureStreaks(
 		}
 	}
 	return streaks
+}
+
+// DatasetFullQuery reports whether an integration_datasets row makes its work-items family one unbounded
+// window. A disabled row plans nothing, so it is never a full query. The planner and the sync admin
+// freshness view both read the row through it.
+func DatasetFullQuery(provider, key string, enabled bool, rawOptions []byte) bool {
+	return enabled && datasetFetchIsUnbounded(provider, key, rawOptions)
 }
 
 // datasetFetchIsUnbounded reads the options of the canonical work-items dataset row (the options the route

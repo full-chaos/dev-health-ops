@@ -215,9 +215,51 @@ tc_trap() {
   exit 143
 }
 
+# INTEGRATION_LEG_JQ renders the go test -json stream of one integration go test call as the plain package-list log:
+# a package that passes or skips prints only its last line (the `ok <pkg> <N>s` / `? <pkg>` summary, the bytes plain go test
+# prints), a failed package prints all its output (the -v form: more lines than plain go test, never fewer), build output
+# and a line that is not a JSON event print at once, and every package still open at the end of the stream (a hang, a
+# kill) prints all it has. Output is kept per package until that package ends, as plain go test does.
+# shellcheck disable=SC2016
+INTEGRATION_LEG_JQ='
+foreach ((inputs | ((fromjson? | select(type == "object" and ((.Action | type) == "string"))) // {Action: "raw", Output: (. + "\n")})), null) as $e (
+  {bufs: {}, out: ""};
+    if $e == null then
+      {bufs: {}, out: ([.bufs[][]] | join(""))}
+    elif $e.Action == "raw" or $e.Action == "build-output" then
+      .out = (($e.Output // "") | tostring)
+    elif $e.Action == "output" then
+      .bufs[(($e.Package // "") | tostring)] += [(($e.Output // "") | tostring)]
+      | .out = ""
+    elif ($e.Action | IN("pass", "fail", "skip")) and (($e.Test // "") == "") then
+      (($e.Package // "") | tostring) as $p
+      | ((.bufs[$p] // []) | join("")) as $all
+      | .out = (if $e.Action == "fail" then $all
+                else ($all | rtrimstr("\n") | split("\n") | last // "" | if . == "" then "" else . + "\n" end) end)
+      | .bufs |= del(.[$p])
+    else
+      .out = ""
+    end;
+    .out)'
+
+# integration_leg_json_file: when GO_INTEGRATION_LEG_JSON_DIR is set (the packages shards in CI only; a name of its own, so a
+# test leg's GO_TEST_LEG_JSON_DIR never reaches a stand-in shard run of the cigates), INTEGRATION_LEG_JSON is the file the
+# next integration go test call writes its -json events to, emptied first: <dir>/integration-packages-g<N>.json, N counting
+# the calls of this script. Empty when the variable is unset (a local run): the call runs plain go test, as before.
+INTEGRATION_LEG_SEQ=0 INTEGRATION_LEG_JSON=""
+integration_leg_json_file() {
+  local dir="${GO_INTEGRATION_LEG_JSON_DIR:-}"
+  INTEGRATION_LEG_JSON=""
+  [ -n "${dir}" ] || return 0
+  INTEGRATION_LEG_SEQ=$((INTEGRATION_LEG_SEQ + 1))
+  mkdir -p -- "${dir}" && : >"${dir}/integration-packages-g${INTEGRATION_LEG_SEQ}.json" || return 1
+  INTEGRATION_LEG_JSON="${dir}/integration-packages-g${INTEGRATION_LEG_SEQ}.json"
+}
+
 run_integration_go_test() {
-  local module_dir="$1" sid pid rc=0 i own_pgid tmo
-  local -a private_group=()
+  local module_dir="$1" sid pid rc=0 i own_pgid tmo json="" render_pid="" render_rc=0 render_wait render_tick arg skip_next=0 want_pkgs=0 got_pkgs
+  local fifo="" done_flag="" read_pid="" read_rc=0 jq_rc=0 p
+  local -a private_group=() json_args=()
   shift
   tmo="$(job_go_test_timeout 32)" || return 2
   sid="${TESTCONTAINERS_SESSION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}"
@@ -226,12 +268,52 @@ run_integration_go_test() {
   if command -v setsid >/dev/null 2>&1; then
     private_group=(setsid)
   fi
+  # With a json file, go test writes -json to that file (never a pipe: a child that keeps stdout open cannot stall a
+  # reader, the CHAOS-11794 class) and a renderer (a read loop of the file until go test exits, through
+  # INTEGRATION_LEG_JQ) prints the plain log on stdout. The status stays go test's own (wait below); a broken renderer
+  # only warns and prints the raw file. The workflow reduces the file to package/test/action/elapsed; the raw events never leave the runner.
+  integration_leg_json_file || die "run_integration_go_test: cannot create the go test -json file under GO_INTEGRATION_LEG_JSON_DIR"
+  json="${INTEGRATION_LEG_JSON}"
+  if [ -n "${json}" ]; then
+    command -v jq >/dev/null 2>&1 || die "run_integration_go_test: GO_INTEGRATION_LEG_JSON_DIR needs jq to render go test -json"
+    json_args=(-json)
+    # The fifo exists before go test starts, so a failure here stops the call with no go test left running.
+    fifo="${json%.json}.fifo"
+    done_flag="${json%.json}.done"
+    rm -f -- "${fifo}" "${done_flag}"
+    [ ! -e "${done_flag}" ] || die "run_integration_go_test: cannot clear the renderer end flag ${done_flag}"
+    if ! mkfifo -- "${fifo}"; then
+      die "run_integration_go_test: cannot make the renderer fifo ${fifo}"
+    fi
+  fi
   (
     cd "${ROOT}/${module_dir}"
+    unset GO_INTEGRATION_LEG_JSON_DIR
+    if [ -n "${json}" ]; then exec >>"${json}"; fi
     exec ${private_group[@]+"${private_group[@]}"} "${GO_ENV_OFF[@]}" GOWORK=off TESTCONTAINERS_SESSION_ID="${sid}" ${INTEGRATION_TEST_ENV[@]+"${INTEGRATION_TEST_ENV[@]}"} \
-      go test -mod=readonly -trimpath -tags=integration -count=1 -timeout="${tmo}" "$@"
+      go test -mod=readonly -trimpath -tags=integration -count=1 -timeout="${tmo}" ${json_args[@]+"${json_args[@]}"} "$@"
   ) &
   pid=$!
+  # The renderer is two background processes joined by a fifo, so each pid is known ($!) and can be stopped by that pid.
+  # The reader is a loop of this script, not tail -f --pid: uutils tail (the ubuntu-26.04 coreutils) ends on a dead pid
+  # with no last read, so the lines go test wrote just before it exited were lost. Each cat continues at the offset of
+  # fd 3. The end flag (written after go test is reaped) or this shell's own end, seen BEFORE a cat starts, makes that
+  # cat the last one: it reads to the true end of the file.
+  if [ -n "${json}" ]; then
+    jq -nR --unbuffered -rj "${INTEGRATION_LEG_JQ}" <"${fifo}" &
+    render_pid=$!
+    (
+      exec 3<"${json}"
+      while :; do
+        last=0
+        if [ -e "${done_flag}" ] || ! kill -0 "$$" 2>/dev/null; then last=1; fi
+        cat <&3 || exit 2
+        [ "${last}" -eq 0 ] || exit 0
+        sleep 0.2
+      done
+    ) >"${fifo}" &
+    read_pid=$!
+  fi
   TC_TRAP_PID="${pid}"
   TC_TRAP_SID="${sid}"
   TC_TRAP_PGID=""
@@ -248,6 +330,55 @@ run_integration_go_test() {
   fi
   wait "${pid}" || rc=$?
   trap - INT TERM
+  if [ -n "${render_pid}" ]; then
+    : >"${done_flag}" || echo "run_integration_go_test: cannot write the renderer end flag ${done_flag}; the bound below stops the renderer" >&2
+    # The reader ends within 0.2 s of the flag; jq then ends at the end of the file. Bounded all the same: past the
+    # bound the call goes on without the rest of the rendered log (the -json file is complete: go test has exited).
+    render_wait="${DEV_HEALTH_GO_RENDER_WAIT_SECS:-120}"
+    case "${render_wait}" in ""|*[!0-9]*) render_wait=120 ;; esac
+    render_wait=$((10#${render_wait}))
+    for ((render_tick = 0; render_tick < render_wait * 5; render_tick++)); do
+      kill -0 "${render_pid}" 2>/dev/null || kill -0 "${read_pid}" 2>/dev/null || break
+      sleep 0.2
+    done
+    if kill -0 "${render_pid}" 2>/dev/null || kill -0 "${read_pid}" 2>/dev/null; then
+      # Past the bound: stop the renderer's own two pids (TERM, KILL after 5 s), reap them, then print the raw events, so no
+      # renderer outlives this call or writes into the next call's log.
+      echo "run_integration_go_test: the go test -json renderer still runs ${render_wait}s after go test ended; stopping it (pids ${read_pid} ${render_pid}); the raw events follow in the log, the status stays go test's" >&2
+      kill -TERM "${read_pid}" "${render_pid}" 2>/dev/null || true
+      for ((render_tick = 0; render_tick < 25; render_tick++)); do
+        kill -0 "${render_pid}" 2>/dev/null || kill -0 "${read_pid}" 2>/dev/null || break
+        sleep 0.2
+      done
+      for p in "${read_pid}" "${render_pid}"; do
+        if kill -0 "${p}" 2>/dev/null; then kill -KILL "${p}" 2>/dev/null || true; fi
+      done
+      wait "${read_pid}" 2>/dev/null || true
+      wait "${render_pid}" 2>/dev/null || true
+      cat -- "${json}" || true
+    else
+      wait "${read_pid}" || read_rc=$?
+      wait "${render_pid}" || jq_rc=$?
+      render_rc=$((jq_rc != 0 ? jq_rc : read_rc))
+      if [ "${render_rc}" -ne 0 ]; then
+        echo "run_integration_go_test: the go test -json renderer failed (rc ${render_rc}); the raw events follow in the log, the status stays go test's" >&2
+        cat -- "${json}" || true
+      fi
+    fi
+    rm -f -- "${fifo}" "${done_flag}"
+    # End signal: the packages with a final pass/fail/skip event in the file against the packages of the call. A call that
+    # go test passed with fewer final results than packages is a truncated stream: it fails (70), never a green partial.
+    for arg in "$@"; do
+      if [ "${skip_next}" -eq 1 ]; then skip_next=0; continue; fi
+      case "${arg}" in -run) skip_next=1 ;; -*) ;; *) want_pkgs=$((want_pkgs + 1)) ;; esac
+    done
+    got_pkgs="$(jq -R -r 'fromjson? | select(type == "object" and ((.Action | type) == "string") and (.Action | IN("pass", "fail", "skip")) and ((.Test // "") == "")) | (.Package // "")' "${json}" | LC_ALL=C sort -u | grep -c . || true)"
+    echo "run_integration_go_test: ${got_pkgs} of ${want_pkgs} package(s) have a final result in the go test -json file" >&2
+    if [ "${got_pkgs}" -lt "${want_pkgs}" ] && [ "${rc}" -eq 0 ]; then
+      echo "run_integration_go_test: go test passed but its -json stream ends before every package's result (truncated); the call fails" >&2
+      rc=70
+    fi
+  fi
   bash "${SCRIPT_DIR}/reap-testcontainers-session.sh" "${sid}" || rc=$?
   return "${rc}"
 }
@@ -345,7 +476,7 @@ run_providersync_bounded() {
 usage() {
   # Backticks in the literal help text document commands; they are not substitutions.
   # shellcheck disable=SC2016
-  printf '%s\n' 'Usage: ci/check_go.sh [auth [STAGE]|fmt|vet|test|race|venue-oracles [SHARD COUNT]|venue-oracle-skips JSON_LOG LEDGER NAME...|venue-oracle-plan COUNT|ci-leg LEG [SHARD COUNT]|ci-leg-warm test|race SHARD COUNT|test-shard-plan SHARD COUNT|test-shard-split-list SHARD COUNT|race-shard-plan SHARD COUNT|race-excluded-shard-plan SHARD COUNT|race-excluded-receipts JSON...|test-shard-wall-guard SHARD COUNT WALL LOGFILE|test-shard-unweighted-guard SHARD COUNT LOGFILE|security-fresh-receipt RAN JSON...|security-fresh-split PKG...|build|contract|ratchets|race-weights-rows|multi-replica-workers|job-timeout MINUTES|job-start|census-ops|integration-vet|integration-coverage|race-excluded-ran|integration-shard-plan|integration-prepull|integration-shard|integration|fast|ci|all]
+  printf '%s\n' 'Usage: ci/check_go.sh [auth [STAGE]|fmt|vet|test|race|venue-oracles [SHARD COUNT]|venue-oracle-skips JSON_LOG LEDGER NAME...|venue-oracle-plan COUNT|ci-leg LEG [SHARD COUNT]|ci-leg-warm all build|race|test-shard-plan SHARD COUNT|test-shard-split-list SHARD COUNT|race-shard-plan SHARD COUNT|race-excluded-shard-plan SHARD COUNT|race-excluded-receipts JSON...|test-shard-wall-guard SHARD COUNT WALL LOGFILE|test-shard-unweighted-guard SHARD COUNT LOGFILE|security-fresh-receipt RAN JSON...|security-fresh-split PKG...|build|contract|ratchets|race-weights-rows|multi-replica-workers|job-timeout MINUTES|job-start|census-ops|integration-vet|integration-coverage|race-excluded-ran|integration-shard-plan|integration-prepull|integration-shard|integration|fast|ci|all]
 
   auth   (CHAOS-4887) The Auth Control Plane gates over the auth packages ALONE: gofmt, vet, test,
          -race, the production-middleware stack test (G-69, must log its marker), one fuzz run per
@@ -421,10 +552,11 @@ usage() {
          slices, ci/go_race_weights.d). The
          legs run exactly the steps of `ci` (pinned by a tooling test); each
          stage prints UTC start/done stamps.
-  ci-leg-warm test|race SHARD COUNT
-         Compile the packages of that leg slice with the leg own flags and
-         run no test (go test -run ^$), to fill the leg Go build cache on a
-         main push whose test and race legs the merge queue already ran.
+  ci-leg-warm all build|race
+         Compile every package of every leg of the family with the flags of
+         the legs (race: -race, over the race shard plans) and run no test
+         code (go test -exec true; build also runs the two vet passes of
+         the static leg), to fill the go-quality Go cache family on a push to main.
   test-shard-plan SHARD COUNT
          Print the packages (module, import path, weights key) of the SHARD-th of
          COUNT weight-balanced slices of the unit tests (ci/go_test_weights.tsv,
@@ -711,7 +843,7 @@ check_vet() {
 check_authhistory_vet() {
   local file pkgs=()
   while IFS= read -r -d '' file; do
-    head -n 20 "${ROOT}/${file}" | grep -Eq '^//go:build .*authhistory' || continue
+    grep -Eq '^//go:build .*authhistory' <<<"$(head -n 20 "${ROOT}/${file}")" || continue
     pkgs+=("./$(dirname "${file}")")
   done < <(git -C "${ROOT}" ls-files --cached --others --exclude-standard -z -- '*.go')
   [ "${#pkgs[@]}" -gt 0 ] || die "authhistory vet: no file carries the authhistory build tag"
@@ -1054,7 +1186,7 @@ check_test() {
         go_test_json_run "${json}" /dev/null ${rest_rows}
       fi
     ) || { rm -f -- "${json}"; return 1; }
-    if printf '%s\n' "${all}" | grep -qx -- "${SERIAL_HEAVY_TEST_PACKAGE}"; then
+    if grep -qx -- "${SERIAL_HEAVY_TEST_PACKAGE}" <<<"${all}"; then
       ran_heavy=1
       printf 'go test (alone): %s\n' "${SERIAL_HEAVY_TEST_PACKAGE}"
       (
@@ -1081,10 +1213,14 @@ GO_TEST_WEIGHTS="${GO_TEST_WEIGHTS:-${ROOT}/ci/go_test_weights.tsv}"
 GO_TEST_PINS="${GO_TEST_PINS:-${ROOT}/ci/go_test_pins.tsv}"
 # ci/go_test_splits.tsv (CHAOS-13520): package<TAB>parts; such a package runs as PARTS parts of its test names, placed like packages.
 GO_TEST_SPLITS="${GO_TEST_SPLITS:-${ROOT}/ci/go_test_splits.tsv}"
+# ci/go_test_split_weights.tsv (CHAOS-13668): package<TAB>TestName<TAB>seconds, the measured tests of the split packages. A test
+# leg cuts a split package's names by them (ci/go_race_shard.awk cut()), and the plan derives each part's weight from them.
+GO_TEST_SPLIT_WEIGHTS="${GO_TEST_SPLIT_WEIGHTS:-${ROOT}/ci/go_test_split_weights.tsv}"
 # CHAOS-13664: the test-leg split is chain-aware (ci/go_race_shard.awk chain=1). check_test_shard runs the split-package jobs one
 # after another beside one go test of the shard's other packages, then the serial package alone, so a leg's wall is about
 # max(chain, rest / 2) + serial (+6..+34 s over the 50 legs of 5 main runs); the split places the chain and the serial package
-# first, then the rest by that wall. A split part may have its own "<key>#<part>" row in ci/go_test_weights.tsv.
+# first, then the rest by that wall. A split part weighs what ci/go_test_split_weights.tsv gives it (CHAOS-13668); a hand
+# "<key>#<part>" row in ci/go_test_weights.tsv is refused.
 # CHAOS-13622: legs of about ten minutes (CHAOS-13520 had five). A test shard warns past GO_TEST_SHARD_WALL_WARN_SECONDS of go test
 # wall and fails past GO_TEST_SHARD_WALL_FAIL_SECONDS, so a slow runner warns and a shard plan that no longer fits fails.
 GO_TEST_SHARD_WALL_WARN_SECONDS="${GO_TEST_SHARD_WALL_WARN_SECONDS:-600}"
@@ -1099,6 +1235,7 @@ check_test_shard_args() {
   [ -f "${GO_TEST_WEIGHTS}" ] || die "test shards need ${GO_TEST_WEIGHTS}"
   [ -f "${GO_TEST_PINS}" ] || die "test shards need ${GO_TEST_PINS}"
   [ -f "${GO_TEST_SPLITS}" ] || die "test shards need ${GO_TEST_SPLITS}"
+  [ -f "${GO_TEST_SPLIT_WEIGHTS}" ] || die "test shards need ${GO_TEST_SPLIT_WEIGHTS}"
 }
 
 # check_test_shard_plan SHARD COUNT: one "module<TAB>package<TAB>key" line per package of the shard, key = import path relative
@@ -1113,7 +1250,7 @@ check_test_shard_plan() {
     listing="$(test_leg_listed "go-list-all|${module_dir}" module_go "${module_dir}" list -mod=readonly -f '{{.ImportPath}}' ./... \
       | quality_filter "${module_dir}" "${modpath}" \
       | awk -v mod="${modpath}" -v shard="${shard}" -v count="${count}" -v weights="${GO_TEST_WEIGHTS}" -v pin="${GO_TEST_PINS}" \
-          -v splits="${GO_TEST_SPLITS}" \
+          -v splits="${GO_TEST_SPLITS}" -v tests="${GO_TEST_SPLIT_WEIGHTS}" \
           -v serial="${SERIAL_HEAVY_TEST_PACKAGE#"${modpath}/"}" -v chain=1 -v defw=1 -f "${ROOT}/ci/go_race_shard.awk")" \
       || die "test shard ${shard}/${count}: the package list or its split (ci/go_race_shard.awk) failed in ${module_dir}"
     while IFS=$'\t' read -r pkg spart sparts; do
@@ -1348,21 +1485,33 @@ test_legs_all() {
   [ "${rc}" -eq 0 ] || exit "${rc}"
 }
 
-# test_split_part_names MODULE PKG PART PARTS [GO FLAG...] (CHAOS-13520): the test names of part PART of PARTS of the split package
-# PKG: every name `go test -list` reports for the package (the leg's own build: -mod=readonly -trimpath plus the GO FLAGs) that go test can run
-# (Test*, Example*, Fuzz*), sorted (C locale), name i (1-based) in part ((i - 1) mod PARTS) + 1. A new test joins a part with
-# no table edit. Fails when the list fails, reports no name, or has fewer names than parts.
-test_split_part_names() {
-  local module_dir="$1" pkg="$2" part="$3" parts="$4" listing names count
-  shift 4
+# test_split_listed_names MODULE PKG PARTS [GO FLAG...] (CHAOS-13520): every name `go test -list` reports for the split package PKG
+# (the leg's own build: -mod=readonly -trimpath plus the GO FLAGs) that go test can run (Test*, Example*, Fuzz*), sorted (C locale).
+# Fails when the list fails, reports no name, or has fewer names than PARTS.
+test_split_listed_names() {
+  local module_dir="$1" pkg="$2" parts="$3" listing names count
+  shift 3
   listing="$(test_leg_listed "go-test-list|${module_dir}|${pkg}|${MERGE_GROUP_FRESH:+fresh}|$*" \
     module_go "${module_dir}" test -mod=readonly -trimpath ${MERGE_GROUP_FRESH:+-count=1} "$@" -list '.*' "${pkg}")" \
     || die "go test -list failed for split package ${pkg}"
   names="$(printf '%s\n' "${listing}" | grep -E '^(Test|Example|Fuzz)[^[:space:]]*$' | LC_ALL=C sort -u || true)"
   [ -n "${names}" ] || die "go test -list reported no test of split package ${pkg}"
   count="$(printf '%s\n' "${names}" | wc -l)"
-  [ "${count}" -ge "${parts}" ] || die "split package ${pkg} has ${count} test name(s), fewer than its ${parts} parts (ci/go_test_splits.tsv)"
-  printf '%s\n' "${names}" | awk -v p="${part}" -v np="${parts}" '(NR - 1) % np == p - 1'
+  [ "${count}" -ge "${parts}" ] || die "split package ${pkg} has ${count} test name(s), fewer than its ${parts} parts"
+  printf '%s\n' "${names}"
+}
+
+# test_split_cut_names TESTS MODULE PKG KEY PART PARTS [GO FLAG...] (CHAOS-13668; CHAOS-13693): the names of part PART of PARTS of
+# the split package PKG (weights key KEY), listed under the GO FLAGs and cut by the rows of TESTS (ci/go_race_shard.awk names mode):
+# a measured name by its row, any other name by its own hash, so adding a test moves no other test. Fails when a row of KEY names a
+# test `go test -list` no longer reports, or KEY has fewer rows than parts. Callers: the go-quality test legs
+# (ci/go_test_split_weights.tsv, no flag) and the auth race / race-integration legs (their own tables and flags, auth_leg_units).
+test_split_cut_names() {
+  local tests="$1" module_dir="$2" pkg="$3" key="$4" part="$5" parts="$6" names
+  shift 6
+  names="$(test_split_listed_names "${module_dir}" "${pkg}" "${parts}" "$@")" || exit 2
+  printf '%s\n' "${names}" | LC_ALL=C awk -v cutkey="${key}" -v cutparts="${parts}" -v cutpart="${part}" -v tests="${tests}" \
+    -f "${ROOT}/ci/go_race_shard.awk" || die "split package ${key}: its parts cannot be cut by ${tests#"${ROOT}/"}"
 }
 
 # test_shard_split_names PLAN MODULE: one "package<TAB>key<TAB>name" line per test name of the split-package parts of PLAN (the
@@ -1375,10 +1524,10 @@ test_shard_split_names() {
   security_fresh_load
   while IFS=$'\t' read -r pkg key part parts; do
     [ -n "${pkg}" ] || continue
-    if printf '%s\n' "${SECURITY_FRESH_SET}" | grep -Fqx -- "${pkg}"; then
+    if grep -Fqx -- "${pkg}" <<<"${SECURITY_FRESH_SET}"; then
       die "split package ${key} is a fresh security package (${SECURITY_FRESH_FILE#"${ROOT}/"}); it cannot be split"
     fi
-    names="$(test_split_part_names "${module_dir}" "${pkg}" "${part}" "${parts}")" || exit 2
+    names="$(test_split_cut_names "${GO_TEST_SPLIT_WEIGHTS}" "${module_dir}" "${pkg}" "${key}" "${part}" "${parts}")" || exit 2
     while IFS= read -r name; do
       [ -n "${name}" ] || continue
       printf '%s\t%s\t%s\n' "${pkg}" "${key}" "${name}"
@@ -1417,7 +1566,7 @@ test_split_job_start() {
   slegjson="$(mktemp "${TMPDIR:-/tmp}/dev-health-split-legjson.XXXXXX")"
   serr="$(mktemp "${TMPDIR:-/tmp}/dev-health-split-err.XXXXXX")"
   printf 'go test%s (split): %s: %d test name(s) of its parts here\n' "${MERGE_GROUP_FRESH:+ -count=1}" "${key}" "${n}"
-  if [ "${module_dir}" = "." ] && printf '%s\n' "${census_keys}" | grep -Fqx -- "${key}"; then
+  if [ "${module_dir}" = "." ] && grep -Fqx -- "${key}" <<<"${census_keys}"; then
     (
       [ -z "${prev}" ] || while kill -0 "${prev}" 2>/dev/null; do sleep 1; done
       cd "${ROOT}/${module_dir}"
@@ -1885,7 +2034,7 @@ check_race_weights_rows() {
     || die "ci/go_race_solo.tsv lists a package twice"
   printf '%s\n' "${solo_rows}" | sed '/^$/d' | LC_ALL=C sort -c 2>/dev/null \
     || die "ci/go_race_solo.tsv is not sorted (LC_ALL=C)"
-  ! printf '%s\n' "${solo_rows}" | grep -qx 'internal/providersync' \
+  ! grep -qx 'internal/providersync' <<<"${solo_rows}" \
     || die "ci/go_race_solo.tsv lists internal/providersync, which runs as test-name slices in every race leg and cannot be solo"
   shopt -u dotglob
   printf 'race-weights-rows: %d row(s) match the package list, %d solo\n' "$(printf '%s\n' "${rows}" | wc -l)" "$(printf '%s\n' "${solo_rows}" | sed '/^$/d' | wc -l)"
@@ -1951,35 +2100,40 @@ check_ci_leg() {
   printf 'ci-leg %s: OK\n' "${leg}"
 }
 
-# check_ci_leg_warm test|race SHARD COUNT (CHAOS-11408): compile, run nothing. A main push that the merge queue already
-# tested skips its test and race legs, and this fills the leg's Go build cache on a key miss so the pull requests that restore
-# it still hit. The flags are the ones of the real leg (-mod=readonly -trimpath, -race for a race leg) plus -run '^$', so the
-# compiled objects are the ones the real leg would cache.
-check_ci_leg_warm() {
-  local leg="${1:-}" shard="${2:-}" count="${3:-}" module_dir plan pkg
+# check_ci_leg_warm_all build|race (CHAOS-13718): fills one go-quality Go cache family (go-quality.yml job go-quality-cache) with
+# the compile actions of every leg of the family and runs no test code (-exec true: each test binary is linked, never run).
+# The flags are the real legs' (-mod=readonly -trimpath; -race for race), so the actions are the ones those legs look up.
+#   build  every package of every module (the union of the test shard plans) and the static leg's two vet passes
+#   race   -race over every package of the race shard plans (the module's packages but ci/race_excluded_packages.tsv)
+check_ci_leg_warm_all() {
+  local family="${1:-}" module_dir modpath pkg listing
   local -a pkgs
-  case "${leg}" in
-    test) plan="$(check_test_shard_plan "${shard}" "${count}")" || die "test shard plan failed" ;;
-    race) plan="$(check_race_shard_plan "${shard}" "${count}")" || die "race shard plan failed" ;;
-    *) die "ci-leg-warm LEG must be test or race (got '${leg}')" ;;
+  case "${family}" in
+    build | race) ;;
+    *) die "ci-leg-warm all FAMILY must be build or race (got '${family}')" ;;
   esac
   for module_dir in "${MODULE_DIRS[@]}"; do
+    printf 'ci-leg-warm all %s: %s\n' "${family}" "${module_dir}"
+    if [ "${family}" = build ]; then
+      (cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -exec true ./...) \
+        || die "ci-leg-warm all build: go test -exec true failed in ${module_dir}"
+      (cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go vet -mod=readonly -trimpath ./...) \
+        || die "ci-leg-warm all build: go vet failed in ${module_dir}"
+      (cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go vet -mod=readonly -trimpath -tags=integration ./...) \
+        || die "ci-leg-warm all build: go vet -tags=integration failed in ${module_dir}"
+      continue
+    fi
+    modpath="$(cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -m)" || die "go list -m failed in ${module_dir}"
+    listing="$(cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -mod=readonly ./...)" || die "go list failed in ${module_dir}"
     pkgs=()
     while IFS= read -r pkg; do
       [ -n "${pkg}" ] && pkgs+=("${pkg}")
-    done < <(printf '%s\n' "${plan}" | awk -F'\t' -v m="${module_dir}" '$1 == m { print $2 }')
+    done < <(printf '%s\n' "${listing}" | race_excluded_filter "${module_dir}" "${modpath}")
     [ "${#pkgs[@]}" -gt 0 ] || continue
-    printf 'go test -run ^$ (%s %s/%s): %s: %d package(s)\n' "${leg}" "${shard}" "${count}" "${module_dir}" "${#pkgs[@]}"
-    (
-      cd "${ROOT}/${module_dir}"
-      if [ "${leg}" = race ]; then
-        "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -race -run '^$' "${pkgs[@]}"
-      else
-        "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -run '^$' "${pkgs[@]}"
-      fi
-    )
+    (cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -race -exec true "${pkgs[@]}") \
+      || die "ci-leg-warm all race: go test -race -exec true failed in ${module_dir}"
   done
-  printf 'ci-leg-warm %s: OK\n' "${leg}"
+  printf 'ci-leg-warm all %s: OK\n' "${family}"
 }
 
 # check_venue_oracles (CHAOS-6314) runs every venue oracle test in the repo,
@@ -2408,7 +2562,8 @@ check_venue_oracles() {
         fi
         ;;
       local)
-        file="$(grep -lE "^func ${name}[(\[]" "${ROOT}/${dir}"/*_test.go | head -n1)"
+        file="$(grep -lE "^func ${name}[(\[]" "${ROOT}/${dir}"/*_test.go)"
+        file="${file%%$'\n'*}"
         printf 'venue-oracles: %s in %s is marked local-only and is not run here\n' "${name}" "${file#"${ROOT}"/}" >&2
         local_only+=("${name}")
         ;;
@@ -5503,7 +5658,7 @@ check_auth_history() {
   out="$(auth_go test -mod=readonly -trimpath -count=1 -v -tags authhistory -run '^TestEveryEndpointProfileInventoryDeclaresAVerifiableSourceCommit$' ./internal/auth/contracts 2>&1)" \
     || { printf '%s\n' "${out}" >&2; die "auth history: an inventory source_commit does not verify"; }
   printf '%s\n' "${out}"
-  printf '%s\n' "${out}" | grep -q 'AUTH_SOURCE_COMMIT_VERIFIED ' \
+  grep -q 'AUTH_SOURCE_COMMIT_VERIFIED ' <<<"${out}" \
     || die "auth history: no inventory was verified (the proof marker never printed)"
 }
 
@@ -5577,12 +5732,26 @@ check_auth_race_integration() {
 # stays). auth_leg_plan KIND LEG COUNT prints the leg's whole packages ("<import path>") and the parts of split packages
 # ("<import path><TAB><part><TAB><parts>"), by ci/go_race_shard.awk over the KIND's package list:
 #   test              AUTH_PACKAGES, ci/go_test_weights.tsv, no split
-#   race              AUTH_PACKAGES, ci/go_race_weights.d, splits ci/auth_race_splits.tsv
-#   race-integration  AUTH_RACE_PACKAGES, ci/auth_race_integration_weights.tsv, splits ci/auth_race_integration_splits.tsv
-# A part runs the names test_split_part_names gives it under the leg's own flags. A leg that plans nothing fails.
+#   race              AUTH_PACKAGES, ci/go_race_weights.d, splits ci/auth_race_splits.tsv, tests ci/auth_race_split_weights.tsv
+#   race-integration  AUTH_RACE_PACKAGES, ci/auth_race_integration_weights.tsv, splits ci/auth_race_integration_splits.tsv,
+#                     tests ci/auth_race_integration_split_weights.tsv
+# A part runs the names test_split_cut_names gives it under the leg's own flags, cut by the kind's tests table (CHAOS-13693: a
+# measured name by its row, any other by its own hash). A part still weighs ceil(W / parts) in the plan (chain=0): the plan reads
+# the tests table only to refuse a malformed row or a row of a package the kind does not split. A missing table, or a leg that
+# plans nothing, fails.
 AUTH_RACE_SPLITS="${AUTH_RACE_SPLITS:-${ROOT}/ci/auth_race_splits.tsv}"
+AUTH_RACE_SPLIT_WEIGHTS="${AUTH_RACE_SPLIT_WEIGHTS:-${ROOT}/ci/auth_race_split_weights.tsv}"
 AUTH_RACE_INTEGRATION_WEIGHTS="${AUTH_RACE_INTEGRATION_WEIGHTS:-${ROOT}/ci/auth_race_integration_weights.tsv}"
 AUTH_RACE_INTEGRATION_SPLITS="${AUTH_RACE_INTEGRATION_SPLITS:-${ROOT}/ci/auth_race_integration_splits.tsv}"
+AUTH_RACE_INTEGRATION_SPLIT_WEIGHTS="${AUTH_RACE_INTEGRATION_SPLIT_WEIGHTS:-${ROOT}/ci/auth_race_integration_split_weights.tsv}"
+
+# auth_leg_split_weights KIND: the tests table of the KIND's split packages (empty for test: it splits nothing).
+auth_leg_split_weights() {
+  case "$1" in
+    race) printf '%s' "${AUTH_RACE_SPLIT_WEIGHTS}" ;;
+    race-integration) printf '%s' "${AUTH_RACE_INTEGRATION_SPLIT_WEIGHTS}" ;;
+  esac
+}
 
 auth_leg_args() {
   local leg="${1:-}" count="${2:-}"
@@ -5592,8 +5761,9 @@ auth_leg_args() {
 }
 
 auth_leg_plan() {
-  local kind="$1" leg="$2" count="$3" modpath pkgs weights splits="" out tmp=""
+  local kind="$1" leg="$2" count="$3" modpath pkgs weights splits="" tests out tmp=""
   auth_leg_args "${leg}" "${count}"
+  tests="$(auth_leg_split_weights "${kind}")"
   modpath="$(test_leg_listed "go-list-m|." auth_go list -m)" || die "go list -m failed"
   case "${kind}" in
     test)
@@ -5614,9 +5784,10 @@ auth_leg_plan() {
       ;;
     *) die "auth leg KIND must be test, race or race-integration, got '${kind}'" ;;
   esac
-  { [ -f "${weights}" ] && { [ -z "${splits}" ] || [ -f "${splits}" ]; }; } || { [ -z "${tmp}" ] || rm -f -- "${tmp}"; die "auth ${kind} legs need ${weights}${splits:+ and ${splits}}"; }
+  { [ -f "${weights}" ] && { [ -z "${splits}" ] || [ -f "${splits}" ]; } && { [ -z "${tests}" ] || [ -f "${tests}" ]; }; } \
+    || { [ -z "${tmp}" ] || rm -f -- "${tmp}"; die "auth ${kind} legs need ${weights}${splits:+ and ${splits}}${tests:+ and ${tests}}"; }
   out="$(printf '%s\n' "${pkgs}" | awk -v mod="${modpath}" -v shard="${leg}" -v count="${count}" -v weights="${weights}" \
-    -v splits="${splits}" -v defw=1 -f "${ROOT}/ci/go_race_shard.awk")" || { [ -z "${tmp}" ] || rm -f -- "${tmp}"; die "auth ${kind} leg ${leg}/${count}: the split (ci/go_race_shard.awk) failed"; }
+    -v splits="${splits}" -v tests="${tests}" -v defw=1 -f "${ROOT}/ci/go_race_shard.awk")" || { [ -z "${tmp}" ] || rm -f -- "${tmp}"; die "auth ${kind} leg ${leg}/${count}: the split (ci/go_race_shard.awk) failed"; }
   [ -z "${tmp}" ] || rm -f -- "${tmp}"
   [ -n "${out}" ] || die "auth ${kind} leg ${leg}/${count} plans no package: more legs than packages and parts"
   printf '%s\n' "${out}"
@@ -5643,9 +5814,10 @@ auth_leg_flags() {
 # (empty regex; for race-integration one line per package, so each gets its marker check) and per split package the names of
 # its parts in the leg. AUTH_LEG_LIST=1 prints "AUTH-LEG-RUN <kind> <key> <name|*>" receipts instead (the guard reads them).
 auth_leg_units() {
-  local kind="$1" leg="$2" count="$3" plan modpath pkg part parts names regex whole=""
+  local kind="$1" leg="$2" count="$3" plan modpath pkg part parts names regex tests whole=""
   local -a flags=()
   plan="$(auth_leg_plan "${kind}" "${leg}" "${count}")" || exit 2
+  tests="$(auth_leg_split_weights "${kind}")"
   mapfile -t flags < <(auth_leg_flags "${kind}" | grep -v -- '-timeout=\|^-v$')
   modpath="$(test_leg_listed "go-list-m|." auth_go list -m)" || die "go list -m failed"
   while IFS=$'\t' read -r pkg part parts; do
@@ -5654,7 +5826,7 @@ auth_leg_units() {
       if [ "${kind}" = race-integration ]; then printf '%s\t\n' "${pkg}"; else whole+="${pkg} "; fi
       continue
     fi
-    names="$(test_split_part_names . "${pkg}" "${part}" "${parts}" "${flags[@]}")" || exit 2
+    names="$(test_split_cut_names "${tests}" . "${pkg}" "${pkg#"${modpath}/"}" "${part}" "${parts}" "${flags[@]}")" || exit 2
     regex="$(printf '%s\n' "${names}" | paste -sd'|' -)"
     printf '%s\t^(%s)$\n' "${pkg}" "${regex}"
   done <<<"$(printf '%s\n' "${plan}" | LC_ALL=C sort -t$'\t' -k1,1 -k2,2n)"
@@ -5875,6 +6047,10 @@ auth_path_relevant() {
     cmd/auth-service/*|cmd/auth-migrate/*|internal/auth/*|internal/audit/*|internal/storage/postgres/authschema/*|contracts/auth/*|go.mod|go.sum|ci/check_go.sh|cmd/cigate/*|internal/cigates/*|ci/auth_gate_scope_exempt.txt|ci/auth_closure_allow.tsv|ci/auth-vuln-exceptions.tsv|ci/auth_queue_relevance.sh|ci/auth_corpus_queue_relevance.sh|ci/auth_corpus_paths.txt|.github/workflows/go-auth-service.yml)
       return 0
       ;;
+    # CHAOS-13693: the auth leg split and weight tables decide which names an auth leg runs; a table-only change runs the legs.
+    ci/auth_race_splits.tsv|ci/auth_race_split_weights.tsv|ci/auth_race_integration_weights.tsv|ci/auth_race_integration_splits.tsv|ci/auth_race_integration_split_weights.tsv)
+      return 0
+      ;;
   esac
   # A Go-package area path with an auth* or audit* directory segment: a package
   # that is new, deleted or moved is not in the head-tree candidate list.
@@ -5897,7 +6073,7 @@ auth_path_relevant() {
 check_auth_paths_selftest() {
   local closure inside outside file
   closure="$(printf 'internal/auth/authruntime\ninternal/platform/secrets\n')"
-  inside=(internal/authnew/a.go internal/some/auth_helper/x.go internal/audit/audit.go internal/auth/contracts/deleted_package/x.go cmd/auth-service/main.go internal/auth/authruntime/runtime.go internal/platform/secrets/secrets.go internal/auth/authruntime/testdata/fixture.txt internal/platform/secrets/testdata/nested/golden.json contracts/auth/v1/README.md go.mod ci/check_go.sh ci/auth_queue_relevance.sh ci/auth_corpus_queue_relevance.sh ci/auth_corpus_paths.txt)
+  inside=(internal/authnew/a.go internal/some/auth_helper/x.go internal/audit/audit.go internal/auth/contracts/deleted_package/x.go cmd/auth-service/main.go internal/auth/authruntime/runtime.go internal/platform/secrets/secrets.go internal/auth/authruntime/testdata/fixture.txt internal/platform/secrets/testdata/nested/golden.json contracts/auth/v1/README.md go.mod ci/check_go.sh ci/auth_queue_relevance.sh ci/auth_corpus_queue_relevance.sh ci/auth_corpus_paths.txt ci/auth_race_splits.tsv ci/auth_race_split_weights.tsv ci/auth_race_integration_weights.tsv ci/auth_race_integration_splits.tsv ci/auth_race_integration_split_weights.tsv)
   outside=(internal/providersync/sync.go docs/index.md web/README.md internal/platform/other/x.go internal/platform/secretsx/y.go src/dev_health_ops/cli.py)
   for file in "${inside[@]}"; do
     auth_path_relevant "${file}" "${closure}" || die "auth path filter: ${file} must select the auth gates and does not"
@@ -6116,9 +6292,8 @@ case "${1:-all}" in
     check_ci_leg "$@"
     ;;
   ci-leg-warm)
-    [ "$#" -eq 4 ] || die "ci-leg-warm accepts test|race SHARD COUNT"
-    shift
-    check_ci_leg_warm "$@"
+    { [ "$#" -eq 3 ] && [ "$2" = all ]; } || die "ci-leg-warm accepts all build|race"
+    check_ci_leg_warm_all "$3"
     ;;
   build)
     check_build

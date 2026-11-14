@@ -91,7 +91,7 @@ func WritePlatformDecisionRefusal(w http.ResponseWriter, err error) {
 	case errors.Is(err, ErrPlatformDecisionUnavailable):
 		verdict = enforceUnavailable
 	}
-	writeEnforceRefusal(w, Superuser, verdict)
+	writeEnforceRefusal(w, nil, Superuser, verdict, DenyText{})
 }
 
 // platformDecisionsFor is the request's platform decisions, or nil when the admin cell is off or the decision point

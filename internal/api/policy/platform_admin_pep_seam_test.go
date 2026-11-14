@@ -142,7 +142,7 @@ func seamMux(guard *Guard) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.Handle("GET /api/v1/admin/users", guard.WrapAdminOr(rule.ActionAdminUsers, seamEcho(rule.ActionAdminUsers)))
 	mux.Handle("GET /api/v1/admin/orgs", guard.WrapPlatform(rule.ActionAdminOrgs, seamEcho(rule.ActionAdminOrgs)))
-	mux.Handle("POST /api/v1/telemetry/report", guard.Wrap(Authenticated, seamEcho(rule.ActionAdminTelemetry)))
+	mux.Handle("POST /api/v1/telemetry/opt-in", guard.Wrap(Authenticated, seamEcho(rule.ActionAdminTelemetry)))
 	mux.Handle("GET /api/v1/admin/impersonate/status", guard.Wrap(Authenticated, seamEcho(rule.ActionAdminImpersonate)))
 	// An admin-or row whose handler asks no platform question (the X-Org-Id paths of the users handlers).
 	mux.Handle("GET /api/v1/admin/users/{user_id}", guard.WrapAdminOr(rule.ActionAdminUsers, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -275,7 +275,7 @@ func TestHoldsPlatformAsksThePDPWithTheAdminCellOn(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			counting := &countingDecider{inner: c.decider}
-			got := seamServe(seamHandler(t, legacyStore(c.superuser, "member"), userClaims(nil), seamEnforcer(t, counting, productionGoAPIRows(t), "admin")), http.MethodPost, "/api/v1/telemetry/report")
+			got := seamServe(seamHandler(t, legacyStore(c.superuser, "member"), userClaims(nil), seamEnforcer(t, counting, productionGoAPIRows(t), "admin")), http.MethodPost, "/api/v1/telemetry/opt-in")
 			if got.status != c.status || !strings.HasPrefix(got.body, c.body) {
 				t.Fatalf("%d %q, want %d %q", got.status, got.body, c.status, c.body)
 			}
@@ -295,7 +295,7 @@ func TestHoldsPlatformWithNoDecisionPointIsA503(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := seamServe(seamHandler(t, legacyStore(true, "member"), userClaims(nil), enf), http.MethodPost, "/api/v1/telemetry/report")
+	got := seamServe(seamHandler(t, legacyStore(true, "member"), userClaims(nil), enf), http.MethodPost, "/api/v1/telemetry/opt-in")
 	if got.status != http.StatusServiceUnavailable {
 		t.Fatalf("%d %q, want 503", got.status, got.body)
 	}
@@ -309,7 +309,7 @@ func TestHoldsPlatformKeepsTheLocalSetWithTheAdminCellOff(t *testing.T) {
 			"teams cell on": func(d *countingDecider) *Enforcer { return seamEnforcer(t, d, productionGoAPIRows(t), "teams") },
 		} {
 			decider := &countingDecider{inner: pepfake.New(platformRule(rule.ActionAdminTelemetry))}
-			got := seamServe(seamHandler(t, legacyStore(superuser, "member"), userClaims(nil), enf(decider)), http.MethodPost, "/api/v1/telemetry/report")
+			got := seamServe(seamHandler(t, legacyStore(superuser, "member"), userClaims(nil), enf(decider)), http.MethodPost, "/api/v1/telemetry/opt-in")
 			want := "platform=" + strconv.FormatBool(superuser)
 			if got.status != 200 || got.body != want {
 				t.Fatalf("%s, superuser %v: %d %q, want 200 %q", name, superuser, got.status, got.body, want)
@@ -369,7 +369,7 @@ func TestAUserTokenCallerKeepsMainsPlatformAnswerWithTheAdminCellOn(t *testing.T
 				inner = platformAdminFake(t).(denyingFake)
 			}
 			decider := &countingDecider{inner: inner}
-			got := seamServe(seamHandler(t, legacyStore(superuser, "member"), userClaims(nil), seamEnforcer(t, decider, productionGoAPIRows(t), cell)), http.MethodPost, "/api/v1/telemetry/report")
+			got := seamServe(seamHandler(t, legacyStore(superuser, "member"), userClaims(nil), seamEnforcer(t, decider, productionGoAPIRows(t), cell)), http.MethodPost, "/api/v1/telemetry/opt-in")
 			singles, batches := decider.counts()
 			return got, singles + batches
 		}
@@ -415,7 +415,7 @@ func TestAnImpersonationSessionKeepsMainsAnswerWithTheAdminCellOn(t *testing.T) 
 		{"admin-or row, member", "member", http.MethodGet, "/api/v1/admin/users"},
 		{"admin-or row, org admin", "admin", http.MethodGet, "/api/v1/admin/users"},
 		{"admin-or row the handler does not ask", "member", http.MethodGet, "/api/v1/admin/users/" + targetUserID.String()},
-		{"handler question", "member", http.MethodPost, "/api/v1/telemetry/report"},
+		{"handler question", "member", http.MethodPost, "/api/v1/telemetry/opt-in"},
 		{"own session status", "member", http.MethodGet, "/api/v1/admin/impersonate/status"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -444,11 +444,11 @@ func TestAnOrglessCallerKeepsMainsAnswerWithTheAdminCellOn(t *testing.T) {
 		path          string
 	}{
 		{"platform admin, admin-or row", true, false, http.MethodGet, "/api/v1/admin/users"},
-		{"platform admin, plain route", true, false, http.MethodPost, "/api/v1/telemetry/report"},
+		{"platform admin, plain route", true, false, http.MethodPost, "/api/v1/telemetry/opt-in"},
 		{"platform admin, own status", true, false, http.MethodGet, "/api/v1/admin/impersonate/status"},
 		{"platform admin, own status while impersonating", true, true, http.MethodGet, "/api/v1/admin/impersonate/status"},
 		{"no platform role, admin-or row", false, false, http.MethodGet, "/api/v1/admin/users"},
-		{"no platform role, plain route", false, false, http.MethodPost, "/api/v1/telemetry/report"},
+		{"no platform role, plain route", false, false, http.MethodPost, "/api/v1/telemetry/opt-in"},
 		{"no platform role, status", false, false, http.MethodGet, "/api/v1/admin/impersonate/status"},
 	} {
 		t.Run(c.name, func(t *testing.T) {

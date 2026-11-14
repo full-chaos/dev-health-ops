@@ -24,7 +24,7 @@ func recordingGuardEnv(totalCap int, active map[dispatchBucket]int) (guardEnv, *
 		},
 		totalCap:    func() int { return totalCap },
 		activeCount: func(bucket dispatchBucket) (int, error) { return active[bucket], nil },
-		emit: func(bucket dispatchBucket, activeCount, reclaimedStale, cappedNew, cappedStale, headroom int) {
+		emit: func(bucket dispatchBucket, activeCount, reclaimedStale, cappedNew, cappedStale, headroom, _ int) {
 			record.emitted = append(record.emitted, fmt.Sprintf("%v %d %d %d %d %d", bucket, activeCount, reclaimedStale, cappedNew, cappedStale, headroom))
 		},
 	}, record
@@ -132,7 +132,7 @@ func referenceGuardDecision(units []dispatchGuardUnit, env guardEnv, orgID strin
 		if reclaimedStale > allowedSlots {
 			reclaimedStale = allowedSlots
 		}
-		env.emit(bucket, activeCount, reclaimedStale, cappedNew, cappedStale, headroom)
+		env.emit(bucket, activeCount, reclaimedStale, cappedNew, cappedStale, headroom, 0)
 	}
 	if len(cappedUnitIDs) > 0 {
 		return guardDecision{allowed: true, reason: fmt.Sprintf("sync unit concurrency cap exceeded: %d capped", len(cappedUnitIDs)), cappedUnitIDs: cappedUnitIDs, concurrencyCapped: true, slotHeadroom: slotHeadroom, authorizedUnitIDs: authorizedUnitIDs}, nil

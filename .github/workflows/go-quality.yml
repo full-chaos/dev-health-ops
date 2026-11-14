@@ -89,6 +89,7 @@ jobs:
       legs: ${{ steps.legs.outputs.legs }}
       race_policy: ${{ steps.legs.outputs.race_policy }}
       draft_skip: ${{ steps.legs.outputs.draft_skip }}
+      cache_day: ${{ steps.cache-day.outputs.day }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -109,6 +110,12 @@ jobs:
           bash ci/go_quality_legs.sh "${EVENT_NAME}" "${CI_FULL}" "" "${DRAFT_SKIP}" > "${out}"
           { printf 'legs=%s\n' "$(sed -n 1p "${out}")"; printf 'race_policy=%s\n' "$(sed -n 2p "${out}")"; printf 'draft_skip=%s\n' "${DRAFT_SKIP}"; } >> "${GITHUB_OUTPUT}"
           cat "${out}"
+
+      # CHAOS-13718: the UTC day of this run names the generation of the go-quality Go caches (legs and go-quality-cache), one
+      # value for every job of the run, also across midnight.
+      - name: Name the Go cache generation (UTC day)
+        id: cache-day
+        run: printf 'day=%s\n' "$(date -u +%Y%m%d)" >> "${GITHUB_OUTPUT}"
 
       # CHAOS-11408: a main push whose sha the merge queue already ran green through this workflow (the helper checks the
       # same sha, this repository, the latest attempt, and that every leg ran its gate) skips its test and race legs. Any
@@ -146,11 +153,31 @@ jobs:
           echo "GOCACHE=/mnt/go-cache/build" >> "${GITHUB_ENV}"
 
       - name: Set up Go
+        id: setup-go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache-dependency-path: '**/go.sum'
-          cache: ${{ !(vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) }}
+          cache: false
+      - name: Locate the Go module and build caches
+        id: go-cache-paths
+        if: runner.environment == 'github-hosted'
+        run: |
+          {
+            echo "mod=$(go env GOMODCACHE)"
+            echo "build=$(go env GOCACHE)"
+          } >> "${GITHUB_OUTPUT}"
+      - name: Restore the Go module and build caches (every event; saved only by main pushes and the merge queue)
+        id: go-cache
+        if: runner.environment == 'github-hosted'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ steps.go-cache-paths.outputs.mod }}
+            ${{ steps.go-cache-paths.outputs.build }}
+          key: go-shared-v1-${{ runner.os }}-${{ runner.arch }}-go${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            go-shared-v1-${{ runner.os }}-${{ runner.arch }}-go${{ steps.setup-go.outputs.go-version }}-
 
       # Fails OPEN: an unresolvable range (ci/go_relevant_diff.sh refuses the all-zeros sentinel and a
       # non-ancestor BASE_SHA rather than guess), a failed go list or a failed plan program is FULL.
@@ -194,6 +221,14 @@ jobs:
           cat "${out}"
           printf 'verdict=%s\n' "$(head -n 1 "${out}" | cut -d' ' -f1)" >> "${GITHUB_OUTPUT}"
           { echo 'selection<<GO_QUALITY_PLAN_EOF'; cat "${out}"; echo 'GO_QUALITY_PLAN_EOF'; } >> "${GITHUB_OUTPUT}"
+      - name: Save the Go module and build caches (main pushes and the merge queue only)
+        if: (github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && runner.environment == 'github-hosted' && steps.go-cache.outcome == 'success' && steps.go-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ steps.go-cache-paths.outputs.mod }}
+            ${{ steps.go-cache-paths.outputs.build }}
+          key: ${{ steps.go-cache.outputs.cache-primary-key }}
 
   go-quality-leg:
     name: go-quality-leg (${{ matrix.name }})
@@ -290,7 +325,7 @@ jobs:
           fi
           if [ "${GITHUB_EVENT_NAME}" = push ] && [ -n "${QUEUE_RUN}" ]; then
             echo "skipped: queue-tested sha, merge_group run ${QUEUE_RUN} ran this leg green on this sha"
-            printf 'relevant=false\nwarm=true\n' >> "${GITHUB_OUTPUT}"
+            printf 'relevant=false\n' >> "${GITHUB_OUTPUT}"
             exit 0
           fi
           case "${PLAN_VERDICT}" in
@@ -334,40 +369,42 @@ jobs:
 
       - name: Set up Go
         id: setup-go
-        if: steps.relevance.outputs.relevant == 'true' || (steps.relevance.outputs.warm == 'true' && runner.environment == 'github-hosted')
+        if: steps.relevance.outputs.relevant == 'true'
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           # CHAOS-10486: never setup-go's own cache. Its key (setup-go-<os>-<arch>-go-<version>-<go.sum hash>) is shared by
           # every workflow's setup-go, and the first job to finish on main saves it: a job that compiles nothing saved 7 KB,
           # and every hosted leg then "hit" that empty entry, compiled everything cold and never saved. The hosted legs
-          # restore this workflow's own per-leg cache below; the self-hosted legs keep the pool's shared hostPath.
+          # restore this workflow's family cache below; the self-hosted legs keep the pool's shared hostPath.
           cache: false
 
-      - name: Restore this leg's Go build and module cache (GitHub-hosted legs)
-        # CHAOS-10486: one cache per leg, keyed on the leg, the runner, the Go version and go.sum; a pull request restores
-        # what main saved (the newest entry of the leg when go.sum moved). Saved only by a push to main, below.
-        # CHAOS-13520: a leg with no entry of its own (a new leg layout before main saved it) falls back to the newest test-leg
-        # entry; the build cache is content-addressed, so a foreign entry only saves work. The save key stays the leg's own.
-        # The segment after go-quality- is the layout of the cached directory (v1 was built into /tmp, so it held little):
-        # bump it whenever that layout changes, because a key is immutable and the save runs only on a key miss.
+      - name: Restore this leg's family Go build and module cache (GitHub-hosted legs; restore only)
+        # CHAOS-13718: two cache families, not one cache per leg (18 legs x ~1.5 GB evicted each other under the 10 GB cap):
+        # build = static, plan-reads and the test legs (one non-race compile family), race = the race legs (-race changes every
+        # compile action). Only the go-quality-cache job saves them, on a push to main, once per family and UTC day; a leg
+        # never saves. A leg restores the newest generation of its family: of this go.sum, else of any go.sum, else (before the
+        # first v3 save) a v2 per-leg entry of the same paths. The entry holds no reusable test results (it is filled with
+        # -exec true), so every test runs; the test shard weights are cold weights (ci/go_test_weights.tsv).
+        # The segment after go-quality- is the layout of the cached directory: bump it whenever that layout changes.
         id: go-cache
-        if: (steps.relevance.outputs.relevant == 'true' || steps.relevance.outputs.warm == 'true') && runner.environment == 'github-hosted'
+        if: steps.relevance.outputs.relevant == 'true' && runner.environment == 'github-hosted'
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cache/go-build
             ~/go/pkg/mod
-          key: go-quality-v2-${{ matrix.name }}-${{ runner.os }}-${{ runner.arch }}-go${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('**/go.sum') }}
+          key: go-quality-v3-${{ startsWith(matrix.name, 'race-') && 'race' || 'build' }}-${{ runner.os }}-${{ runner.arch }}-go${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('**/go.sum') }}-${{ needs.go-quality-plan.outputs.cache_day }}
           restore-keys: |
-            go-quality-v2-${{ matrix.name }}-${{ runner.os }}-${{ runner.arch }}-go${{ steps.setup-go.outputs.go-version }}-
-            go-quality-v2-test-
+            go-quality-v3-${{ startsWith(matrix.name, 'race-') && 'race' || 'build' }}-${{ runner.os }}-${{ runner.arch }}-go${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('**/go.sum') }}-
+            go-quality-v3-${{ startsWith(matrix.name, 'race-') && 'race' || 'build' }}-${{ runner.os }}-${{ runner.arch }}-go${{ steps.setup-go.outputs.go-version }}-
+            go-quality-v2-${{ startsWith(matrix.name, 'race-') && 'race' || 'test' }}-
 
       - name: Build into the restored Go cache (GitHub-hosted legs)
         # CHAOS-10486: check_go.sh builds into DEV_HEALTH_GO_CACHE, else an inherited or configured GOCACHE, else
         # /tmp/dev-health-go-build-cache. A hosted runner's GOCACHE is the unset default, so the cache restored above was
         # never read. An expanded absolute path (a literal ~ is not expanded by the shell). The pool legs keep their hostPath.
-        if: (steps.relevance.outputs.relevant == 'true' || steps.relevance.outputs.warm == 'true') && runner.environment == 'github-hosted'
+        if: steps.relevance.outputs.relevant == 'true' && runner.environment == 'github-hosted'
         run: echo "DEV_HEALTH_GO_CACHE=${HOME}/.cache/go-build" >> "${GITHUB_ENV}"
 
       - name: Point the plan-reads call graph at its store (GitHub-hosted plan-reads leg)
@@ -403,18 +440,12 @@ jobs:
           path: ${{ runner.temp }}/plan-reads-reach
           key: ${{ steps.reach-key.outputs.key }}
 
-      - name: Compile this leg's packages into the cache on a queue-skipped push (key miss only)
-        id: warm-build
-        if: steps.relevance.outputs.warm == 'true' && runner.environment == 'github-hosted' && steps.go-cache.outputs.cache-hit != 'true'
-        continue-on-error: true
-        run: bash ci/check_go.sh ci-leg-warm ${{ matrix.args }}
-
       - name: Set up Helm
         # internal/cigates/chartgates renders the chart with `helm template` in the test and race legs; the
         # oci-arc-runners image ships no helm. A missing helm fails
         # those guards, it never skips them.
         if: steps.relevance.outputs.relevant == 'true'
-        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0
         with:
           version: 'v3.21.4'
 
@@ -586,20 +617,6 @@ jobs:
           path: ${{ runner.temp }}/plan-reads-reach
           key: ${{ steps.reach-key.outputs.key }}
 
-      - name: Save this leg's Go build and module cache (main pushes, GitHub-hosted legs)
-        # CHAOS-10486: only a push to main saves, and only on a key miss (a key is immutable); a failed leg still saves,
-        # because its compiled packages are as valid as a passing leg's (the build cache is content-addressed) and a leg
-        # that fails on a timeout is the one that most needs a warm start. A cancelled leg does not save.
-        if: >-
-          !cancelled() && (steps.relevance.outputs.relevant == 'true' || (steps.relevance.outputs.warm == 'true' && steps.warm-build.outcome == 'success')) && runner.environment == 'github-hosted'
-          && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.go-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cache/go-build
-            ~/go/pkg/mod
-          key: ${{ steps.go-cache.outputs.cache-primary-key }}
-
       - name: Install pinned shellcheck
         if: steps.relevance.outputs.relevant == 'true' && matrix.name == 'static'
         # CHAOS-4915. Installed, not assumed: the runner image ships its own
@@ -681,6 +698,89 @@ jobs:
         if: always()
         run: docker logout ghcr.io
 
+  # CHAOS-13718: the only writer of the go-quality Go caches. One entry per family (build: static, plan-reads and the test
+  # legs; race: the race legs) and UTC day, saved by a push to main only (never a pull request or merge_group run: a queue-ref
+  # entry is readable by no later run). A same-day entry ends the job at the lookup (no download). Not a required context: the
+  # fan-in does not need it, and a failure here leaves the legs on the previous generation.
+  go-quality-cache:
+    name: go-quality-cache (${{ matrix.family }})
+    needs: [go-quality-plan]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'full-chaos/dev-health-ops'
+    # GitHub-hosted only: the entries serve the GitHub-hosted legs; the self-hosted pool keeps its hostPath.
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    continue-on-error: true
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        family: [build, race]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        id: setup-go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Look up today's entry of this family (no download)
+        id: lookup
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-quality-v3-${{ matrix.family }}-${{ runner.os }}-${{ runner.arch }}-go${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('**/go.sum') }}-${{ needs.go-quality-plan.outputs.cache_day }}
+          lookup-only: true
+
+      - name: Restore the newest entry of this family (warm start)
+        id: go-cache
+        if: steps.lookup.outputs.cache-hit != 'true'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-quality-v3-${{ matrix.family }}-${{ runner.os }}-${{ runner.arch }}-go${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('**/go.sum') }}-${{ needs.go-quality-plan.outputs.cache_day }}
+          restore-keys: |
+            go-quality-v3-${{ matrix.family }}-${{ runner.os }}-${{ runner.arch }}-go${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('**/go.sum') }}-
+            go-quality-v3-${{ matrix.family }}-${{ runner.os }}-${{ runner.arch }}-go${{ steps.setup-go.outputs.go-version }}-
+
+      - name: Build into the restored Go cache
+        # check_go.sh builds into DEV_HEALTH_GO_CACHE (a hosted runner's GOCACHE is the unset default); expanded, not a literal ~.
+        if: steps.lookup.outputs.cache-hit != 'true'
+        run: echo "DEV_HEALTH_GO_CACHE=${HOME}/.cache/go-build" >> "${GITHUB_ENV}"
+
+      - name: Compile every leg of this family into the cache
+        id: fill
+        if: steps.lookup.outputs.cache-hit != 'true'
+        run: bash ci/check_go.sh ci-leg-warm all ${{ matrix.family }}
+
+      - name: Report the size of this family's entry
+        if: always() && steps.lookup.outputs.cache-hit != 'true'
+        env:
+          FAMILY: ${{ matrix.family }}
+        run: |
+          for d in "${HOME}/.cache/go-build" "${HOME}/go/pkg/mod"; do
+            line="go-quality-v3-${FAMILY}: $(du -sh "${d}" 2>/dev/null | cut -f1 || echo missing) ${d}"
+            echo "${line}"
+            echo "${line}" >> "${GITHUB_STEP_SUMMARY}"
+          done
+
+      - name: Save this family's entry (main pushes only)
+        if: >-
+          steps.lookup.outputs.cache-hit != 'true' && steps.fill.outcome == 'success'
+          && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.go-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ steps.go-cache.outputs.cache-primary-key }}
+
   go-quality:
     name: go-quality
     # Must remain `always()`: under any condition that lets this job itself
@@ -744,7 +844,7 @@ jobs:
   # (no job needs it), continue-on-error, and the checkout is the target branch's tip, never the merge group.
   cancel-stacked-queue-children:
     name: cancel-stacked-queue-children
-    needs: [go-quality-plan, go-quality-leg, go-quality]
+    needs: [go-quality-plan, go-quality-leg, go-quality-cache, go-quality]
     if: failure() && github.event_name == 'merge_group'
     runs-on: ubuntu-latest
     timeout-minutes: 5

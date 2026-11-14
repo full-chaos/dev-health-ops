@@ -173,6 +173,7 @@ func (w *Writer) WriteInvestments(ctx context.Context, orgID string, records []I
 	if len(records) == 0 {
 		return 0, nil
 	}
+	// issue_refs and pr_refs (migration 149) are DEFAULTs of structural_evidence_json: never named here.
 	batch, err := w.conn.PrepareBatch(ctx, `INSERT INTO work_unit_investments (
 		work_unit_id, work_unit_type, work_unit_name, from_ts, to_ts, repo_id,
 		repo_source, provider, effort_metric, effort_value, theme_distribution_json,

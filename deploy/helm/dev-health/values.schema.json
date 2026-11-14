@@ -231,7 +231,7 @@
             "goApi": {
               "type": "array",
               "uniqueItems": true,
-              "items": { "type": "string", "enum": ["acr", "admin", "analytics", "authz", "billing", "credentials", "git", "integrations", "license", "members", "metrics", "org", "reports", "settings", "teams", "work_items"] }
+              "items": { "type": "string", "enum": ["acr", "admin", "analytics", "authz", "billing", "credentials", "git", "integrations", "license", "members", "metrics", "org", "reports", "settings", "sso", "teams", "work_items"] }
             },
             "queryApiPdpMode": { "type": "string", "enum": ["", "off", "shadow", "enforce"] },
             "queryApi": {

@@ -192,7 +192,7 @@ func TestProviderEmailCollisionIsAConflict(t *testing.T) {
 			if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 				t.Fatal(err)
 			}
-			if len(got) != 1 || len(got["detail"]) != 2 || got["detail"]["message"] != ConflictMessage || got["detail"]["code"] != "identity_conflict" {
+			if len(got) != 1 || len(got["detail"]) != 2 || got["detail"]["message"] != ConflictMessage || got["detail"]["reason"] != "identity_conflict" {
 				t.Fatalf("attempt %d: body %s", i, rec.Body)
 			}
 		}
@@ -844,7 +844,7 @@ func TestLegacyProjectionKeepsOneIdentityPerProvider(t *testing.T) {
 	body, _ := json.Marshal(map[string]string{"provider": "github", "provider_access_token": legacyToken.Reveal()})
 	rec := httptest.NewRecorder()
 	Handlers{Service: svc}.Exchange(rec, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(string(body))))
-	if rec.Code != http.StatusConflict || strings.TrimSpace(rec.Body.String()) != `{"detail":{"message":"`+ConflictMessage+`","code":"identity_conflict"}}` {
+	if rec.Code != http.StatusConflict || strings.TrimSpace(rec.Body.String()) != `{"detail":{"message":"`+ConflictMessage+`","reason":"identity_conflict"}}` {
 		t.Fatalf("answer %d %q", rec.Code, rec.Body.String())
 	}
 }

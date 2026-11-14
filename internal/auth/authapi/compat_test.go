@@ -100,24 +100,24 @@ func expectGolden(t *testing.T, response interface {
 	}
 }
 
-// goldenRefusalCodes is the detail.code each golden-backed social refusal case answers: the recorded Python body
-// had no code.
-var goldenRefusalCodes = map[string]string{
+// goldenRefusalReasons is the detail.reason each golden-backed social refusal case answers: the recorded Python body
+// had none.
+var goldenRefusalReasons = map[string]string{
 	"provider refused":        "invalid_credentials",
 	"provider not configured": "dependency_unavailable",
 }
 
-// expectGoldenRefusal is expectGolden for a {"detail": {"message": ...}} refusal that also carries code.
+// expectGoldenRefusal is expectGolden for a {"detail": {"message": ...}} refusal that also carries reason.
 func expectGoldenRefusal(t *testing.T, response interface {
 	Result() *http.Response
-}, body []byte, name, code string) {
+}, body []byte, name, reason string) {
 	t.Helper()
 	status, want := goldenAnswer(t, name)
 	detail, ok := want.(map[string]any)["detail"].(map[string]any)
-	if !ok || code == "" {
-		t.Fatalf("%s: golden %v is no detail-object refusal, or no code is named", name, want)
+	if !ok || reason == "" {
+		t.Fatalf("%s: golden %v is no detail-object refusal, or no reason is named", name, want)
 	}
-	detail["code"] = code
+	detail["reason"] = reason
 	if got := response.Result().StatusCode; got != status {
 		t.Fatalf("%s: status %d, golden %d; body %s", name, got, status, body)
 	}
@@ -126,7 +126,7 @@ func expectGoldenRefusal(t *testing.T, response interface {
 		t.Fatalf("%s: body is not JSON: %s", name, body)
 	}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("%s: body %s, want the golden with code %q: %v", name, body, code, want)
+		t.Fatalf("%s: body %s, want the golden with reason %q: %v", name, body, reason, want)
 	}
 }
 
@@ -1012,17 +1012,17 @@ func TestCompatSocialRefusalsAreAuditedLikeEveryOtherSignInRefusal(t *testing.T)
 			fake.err = c.err
 			response := f.do(http.MethodPost, PatternCompatSocialLogin, `{"provider":"`+c.provider+`","provider_access_token":"tok"}`, nil)
 			if c.golden != "" {
-				expectGoldenRefusal(t, response, response.Body.Bytes(), c.golden, goldenRefusalCodes[c.name])
+				expectGoldenRefusal(t, response, response.Body.Bytes(), c.golden, goldenRefusalReasons[c.name])
 			} else if response.Code != c.status {
 				t.Fatalf("status %d, want %d: %s", response.Code, c.status, response.Body)
 			}
 			if c.name == "email of another provider" {
-				if want := `{"detail":{"message":"` + social.ConflictMessage + `","code":"identity_conflict"}}`; strings.TrimSpace(response.Body.String()) != want {
+				if want := `{"detail":{"message":"` + social.ConflictMessage + `","reason":"identity_conflict"}}`; strings.TrimSpace(response.Body.String()) != want {
 					t.Fatalf("body %s, want %s", response.Body, want)
 				}
 			}
 			if c.name == "provider invalid user id" {
-				if want := `{"detail":{"message":"The provider returned an invalid user id","code":"malformed"}}`; response.Body.String() != want {
+				if want := `{"detail":{"message":"The provider returned an invalid user id","reason":"malformed"}}`; response.Body.String() != want {
 					t.Fatalf("body %q, want exactly %q", response.Body.String(), want)
 				}
 			}

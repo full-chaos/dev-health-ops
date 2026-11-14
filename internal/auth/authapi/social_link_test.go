@@ -301,7 +301,7 @@ func TestLinkInvalidProviderIDAnswersGoAPIsBytesAndADeclaredBody(t *testing.T) {
 	}
 	f.server = httpapi.RequestID(mux)
 	response := f.do(http.MethodPost, PatternSocialLink, linkBody, f.bearer(f.grant()))
-	const want = `{"detail":{"message":"The provider returned an invalid user id","code":"malformed"}}`
+	const want = `{"detail":{"message":"The provider returned an invalid user id","reason":"malformed"}}`
 	if response.Code != http.StatusBadRequest || response.Body.String() != want {
 		t.Fatalf("status %d body %q, want 400 %q", response.Code, response.Body.String(), want)
 	}
@@ -357,11 +357,11 @@ func TestLinkInvalidProviderIDAnswersGoAPIsBytesAndADeclaredBody(t *testing.T) {
 			matched++
 		}
 		for name, refused := range map[string]string{
-			"another text":        `{"detail":{"message":"The provider returned an invalid user ID","code":"malformed"}}`,
-			"an extra detail key": `{"detail":{"message":"The provider returned an invalid user id","code":"malformed","extra":1}}`,
-			"an extra top-level":  `{"detail":{"message":"The provider returned an invalid user id","code":"malformed"},"extra":1}`,
-			"another code":        `{"detail":{"message":"The provider returned an invalid user id","code":"invalid_credentials"}}`,
-			"a missing code":      `{"detail":{"message":"The provider returned an invalid user id"}}`,
+			"another text":        `{"detail":{"message":"The provider returned an invalid user ID","reason":"malformed"}}`,
+			"an extra detail key": `{"detail":{"message":"The provider returned an invalid user id","reason":"malformed","extra":1}}`,
+			"an extra top-level":  `{"detail":{"message":"The provider returned an invalid user id","reason":"malformed"},"extra":1}`,
+			"another reason":      `{"detail":{"message":"The provider returned an invalid user id","reason":"invalid_credentials"}}`,
+			"a missing reason":    `{"detail":{"message":"The provider returned an invalid user id"}}`,
 			"a text detail":       `{"detail":"The provider returned an invalid user id"}`,
 			"a missing message":   `{"detail":{}}`,
 			"a missing detail":    `{}`,
@@ -380,9 +380,9 @@ func TestLinkInvalidProviderIDAnswersGoAPIsBytesAndADeclaredBody(t *testing.T) {
 	}
 }
 
-// The declared 403/404/409 social refusals name exactly the closed detail.code set the routes answer
-// (social.RefusalCodes), so the document and the code cannot drift apart.
-func TestSocialRefusalDescriptionsNameTheClosedCodeSet(t *testing.T) {
+// The declared 403/404/409 social refusals name exactly the closed detail.reason set the routes answer
+// (social.RefusalReasons), so the document and the code cannot drift apart.
+func TestSocialRefusalDescriptionsNameTheClosedReasonSet(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join(repoRoot(t), "contracts", "auth", "v1", "openapi", "auth-v1.openapi.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -397,12 +397,12 @@ func TestSocialRefusalDescriptionsNameTheClosedCodeSet(t *testing.T) {
 	if err := json.Unmarshal(raw, &document); err != nil {
 		t.Fatal(err)
 	}
-	list := "(" + strings.Join(social.RefusalCodes(), ", ") + ")"
+	list := "(" + strings.Join(social.RefusalReasons(), ", ") + ")"
 	for _, operation := range [][2]string{{"/v1/identities/social", "post"}, {"/v1/identities/social/{id}", "delete"}} {
 		for _, status := range []string{"403", "404", "409"} {
 			description := document.Paths[operation[0]][operation[1]].Responses[status].Description
 			if !strings.Contains(description, list) {
-				t.Errorf("%s %s %s: description %q does not name the code set %s", operation[1], operation[0], status, description, list)
+				t.Errorf("%s %s %s: description %q does not name the reason set %s", operation[1], operation[0], status, description, list)
 			}
 		}
 	}

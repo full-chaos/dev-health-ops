@@ -187,10 +187,10 @@ func refuse(w http.ResponseWriter, status int, message string) {
 	policy.WriteDetail(w, status, policy.ErrorDetail(message), nil)
 }
 
-// refuseCode writes {"detail": {"message": message, "code": code}} with status: a federated sign-in refusal with
-// its code from social.RefusalCode, the same bytes auth-service answers.
-func refuseCode(w http.ResponseWriter, status int, message, code string) {
+// refuseReason writes {"detail": {"message": message, "reason": reason}} with status: a federated sign-in refusal
+// with its reason from social.RefusalReason, the same bytes auth-service answers.
+func refuseReason(w http.ResponseWriter, status int, message, reason string) {
 	detail := policy.ErrorDetail(message)
-	detail.Set("code", code)
+	detail.Set("reason", reason)
 	policy.WriteDetail(w, status, detail, nil)
 }

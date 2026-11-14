@@ -116,7 +116,7 @@ func TestSocialLoginNeedsBothClientSettings(t *testing.T) {
 			strings.NewReader(`{"provider": "google", "provider_access_token": "x"}`))
 		r.Header.Set("Content-Type", "application/json")
 		handler.ServeHTTP(w, r)
-		if want := `{"detail":{"message":"Social login not configured for google","code":"dependency_unavailable"}}`; w.Code != http.StatusServiceUnavailable || w.Body.String() != want {
+		if want := `{"detail":{"message":"Social login not configured for google","reason":"dependency_unavailable"}}`; w.Code != http.StatusServiceUnavailable || w.Body.String() != want {
 			t.Errorf("%s: %d %s", name, w.Code, w.Body.String())
 		}
 	}
@@ -151,7 +151,7 @@ func TestSocialLoginAnswersAnUnverifiedGitHubAccountWithTheFixedRefusal(t *testi
 		strings.NewReader(`{"provider": "github", "provider_access_token": "x"}`))
 	r.Header.Set("Content-Type", "application/json")
 	handler.ServeHTTP(w, r)
-	if want := `{"detail":{"message":"The provider has not verified this email address","code":"email_unverified"}}`; w.Code != http.StatusForbidden || w.Body.String() != want {
+	if want := `{"detail":{"message":"The provider has not verified this email address","reason":"email_unverified"}}`; w.Code != http.StatusForbidden || w.Body.String() != want {
 		t.Errorf("%d %s", w.Code, w.Body.String())
 	}
 }

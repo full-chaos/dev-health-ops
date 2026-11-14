@@ -135,7 +135,7 @@ SAML providers the identity provider's response is the source of the email.
 status and a message. `membership_required` and
 `oauth_domain_not_allowed` are also carried as response codes. An OIDC or SAML
 identity conflict is not (it is in the audit row and the log only); a social
-sign-in refusal carries the closed `code` set described below. The message of an
+sign-in refusal carries the closed `reason` set described below. The message of an
 OIDC or SAML domain refusal names the email domain. Each SSO sign-in attempt
 writes an `SSO_LOGIN` audit row, with status success or failure.
 
@@ -184,12 +184,16 @@ answers 500 and the tokens are withheld. The reason codes are:
 A `membership_required` refusal answers 403 with `{"detail": {"message": ..., "reason": "membership_required"}}` on
 auth-service and on go-api alike; a client reads `reason`.
 
-A social (GitHub, GitLab, Google) sign-in, link or unlink refusal answers `{"detail": {"message": ..., "code": ...}}`
-on auth-service and on go-api alike, with the same bytes. `code` is one of a closed set: `malformed`,
-`invalid_credentials`, `expired`, `principal_not_found`, `principal_deactivated`, `email_unverified`,
-`identity_conflict`, `signup_unavailable` and `dependency_unavailable`. A client maps `code`, never the message
-text. Every conflict answers `identity_conflict`, so the code says no more than the status and the message: it does
-not tell an email held by another account from an identity linked elsewhere. A 500 has no code.
+A social (GitHub, GitLab, Google) sign-in, link or unlink refusal answers `{"detail": {"message": ..., "reason": ...}}`
+on auth-service and on go-api alike, with the same bytes; `reason` is the same key the `membership_required` refusal
+uses. It is one of a closed set: `malformed`, `invalid_credentials`, `expired`, `principal_not_found`,
+`principal_deactivated`, `email_unverified`, `identity_conflict`, `signup_unavailable`, `dependency_unavailable` and
+`last_sign_in_method` (an unlink that would remove the account's last sign-in method). A client maps `reason`, never
+the message text. The value follows from the status and the message: the sign-in conflicts (an email held by another
+account, an identity linked elsewhere, a provider already linked) all answer `identity_conflict`, so it does not tell
+them apart. A 500 has no reason, and neither do these refusals: a 503 while the authentication service is
+unavailable, go-api's 409 `operation_moved` (its own `reason`), and the 409 `Organization conflict` of a compat
+sign-in. The outcome counter and the log name the same reason as the answer, before the conflicts fold.
 
 Provider text never reaches an auth-service response.
 

@@ -10,7 +10,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 )
 
-const genericConflictBody = `{"detail":{"message":"This sign-in could not be completed. Contact your administrator if this continues.","code":"identity_conflict"}}`
+const genericConflictBody = `{"detail":{"message":"This sign-in could not be completed. Contact your administrator if this continues.","reason":"identity_conflict"}}`
 
 func TestConflictAnswersShareOneGenericBody(t *testing.T) {
 	cases := map[string]error{"collision github": &ConflictError{ExistingMethod: "github"}, "collision local": &ConflictError{ExistingMethod: "local"},

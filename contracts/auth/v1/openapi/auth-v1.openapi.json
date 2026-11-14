@@ -368,7 +368,7 @@
             }
           },
           "400": {
-            "description": "Either the request body could not be read (a transport failure within the size limit), answered by the transport before the route in its own error envelope, transport-error.v1 (not error.v1); or the go-api shaped refusal {\"detail\": {\"message\": ..., \"code\": \"malformed\"}} for a provider profile with no usable user id, with exactly the text and code go-api answers. The body is one of the two, never both.",
+            "description": "Either the request body could not be read (a transport failure within the size limit), answered by the transport before the route in its own error envelope, transport-error.v1 (not error.v1); or the go-api shaped refusal {\"detail\": {\"message\": ..., \"reason\": \"malformed\"}} for a provider profile with no usable user id, with exactly the text and reason go-api answers. The body is one of the two, never both.",
             "content": {
               "application/json": {
                 "schema": {
@@ -387,14 +387,14 @@
                           "type": "object",
                           "required": [
                             "message",
-                            "code"
+                            "reason"
                           ],
                           "additionalProperties": false,
                           "properties": {
                             "message": {
                               "const": "The provider returned an invalid user id"
                             },
-                            "code": {
+                            "reason": {
                               "const": "malformed"
                             }
                           }
@@ -417,7 +417,7 @@
             }
           },
           "403": {
-            "description": "go-api shaped refusal, {\"detail\": {\"message\": ..., \"code\": ...}}; code is one of the closed federated refusal codes (malformed, invalid_credentials, expired, principal_not_found, principal_deactivated, email_unverified, identity_conflict, signup_unavailable, dependency_unavailable) and says no more than the status and the message; the full reason is in the audit row and the log.",
+            "description": "go-api shaped refusal, {\"detail\": {\"message\": ..., \"reason\": ...}}; reason is one of the closed federated refusal reasons (malformed, invalid_credentials, expired, principal_not_found, principal_deactivated, email_unverified, identity_conflict, signup_unavailable, dependency_unavailable, last_sign_in_method) and says no more than the status and the message; the full reason is in the audit row and the log.",
             "content": {
               "application/json": {
                 "schema": {
@@ -427,7 +427,7 @@
             }
           },
           "404": {
-            "description": "go-api shaped refusal, {\"detail\": {\"message\": ..., \"code\": ...}}; code is one of the closed federated refusal codes (malformed, invalid_credentials, expired, principal_not_found, principal_deactivated, email_unverified, identity_conflict, signup_unavailable, dependency_unavailable) and says no more than the status and the message; the full reason is in the audit row and the log.",
+            "description": "go-api shaped refusal, {\"detail\": {\"message\": ..., \"reason\": ...}}; reason is one of the closed federated refusal reasons (malformed, invalid_credentials, expired, principal_not_found, principal_deactivated, email_unverified, identity_conflict, signup_unavailable, dependency_unavailable, last_sign_in_method) and says no more than the status and the message; the full reason is in the audit row and the log.",
             "content": {
               "application/json": {
                 "schema": {
@@ -437,7 +437,7 @@
             }
           },
           "409": {
-            "description": "go-api shaped refusal, {\"detail\": {\"message\": ..., \"code\": ...}}; code is one of the closed federated refusal codes (malformed, invalid_credentials, expired, principal_not_found, principal_deactivated, email_unverified, identity_conflict, signup_unavailable, dependency_unavailable) and says no more than the status and the message; the full reason is in the audit row and the log.",
+            "description": "go-api shaped refusal, {\"detail\": {\"message\": ..., \"reason\": ...}}; reason is one of the closed federated refusal reasons (malformed, invalid_credentials, expired, principal_not_found, principal_deactivated, email_unverified, identity_conflict, signup_unavailable, dependency_unavailable, last_sign_in_method) and says no more than the status and the message; the full reason is in the audit row and the log.",
             "content": {
               "application/json": {
                 "schema": {
@@ -545,7 +545,7 @@
             }
           },
           "403": {
-            "description": "go-api shaped refusal, {\"detail\": {\"message\": ..., \"code\": ...}}; code is one of the closed federated refusal codes (malformed, invalid_credentials, expired, principal_not_found, principal_deactivated, email_unverified, identity_conflict, signup_unavailable, dependency_unavailable) and says no more than the status and the message; the full reason is in the audit row and the log.",
+            "description": "go-api shaped refusal, {\"detail\": {\"message\": ..., \"reason\": ...}}; reason is one of the closed federated refusal reasons (malformed, invalid_credentials, expired, principal_not_found, principal_deactivated, email_unverified, identity_conflict, signup_unavailable, dependency_unavailable, last_sign_in_method) and says no more than the status and the message; the full reason is in the audit row and the log.",
             "content": {
               "application/json": {
                 "schema": {
@@ -555,7 +555,7 @@
             }
           },
           "404": {
-            "description": "go-api shaped refusal, {\"detail\": {\"message\": ..., \"code\": ...}}; code is one of the closed federated refusal codes (malformed, invalid_credentials, expired, principal_not_found, principal_deactivated, email_unverified, identity_conflict, signup_unavailable, dependency_unavailable) and says no more than the status and the message; the full reason is in the audit row and the log.",
+            "description": "go-api shaped refusal, {\"detail\": {\"message\": ..., \"reason\": ...}}; reason is one of the closed federated refusal reasons (malformed, invalid_credentials, expired, principal_not_found, principal_deactivated, email_unverified, identity_conflict, signup_unavailable, dependency_unavailable, last_sign_in_method) and says no more than the status and the message; the full reason is in the audit row and the log.",
             "content": {
               "application/json": {
                 "schema": {
@@ -565,7 +565,7 @@
             }
           },
           "409": {
-            "description": "go-api shaped refusal, {\"detail\": {\"message\": ..., \"code\": ...}}; code is one of the closed federated refusal codes (malformed, invalid_credentials, expired, principal_not_found, principal_deactivated, email_unverified, identity_conflict, signup_unavailable, dependency_unavailable) and says no more than the status and the message; the full reason is in the audit row and the log.",
+            "description": "go-api shaped refusal, {\"detail\": {\"message\": ..., \"reason\": ...}}; reason is one of the closed federated refusal reasons (malformed, invalid_credentials, expired, principal_not_found, principal_deactivated, email_unverified, identity_conflict, signup_unavailable, dependency_unavailable, last_sign_in_method) and says no more than the status and the message; the full reason is in the audit row and the log.",
             "content": {
               "application/json": {
                 "schema": {

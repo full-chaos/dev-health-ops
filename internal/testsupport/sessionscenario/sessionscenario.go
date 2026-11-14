@@ -509,8 +509,8 @@ func (h *Harness) run(pairs []pair) map[string]answers {
 			if refused, ok := socialLinkRefusals[p.name]; ok {
 				want = RecordedAnswer{Name: p.name, Status: refused.status, Body: refused.body}
 			}
-			if code, ok := socialRefusalCodes[p.name]; ok {
-				want.Body = WithRefusalCode(h.T, want.Body, code)
+			if reason, ok := socialRefusalReasons[p.name]; ok {
+				want.Body = WithRefusalReason(h.T, want.Body, reason)
 			}
 			if admitted, ok := validateLimitAdmitted[p.name]; ok {
 				want = RecordedAnswer{Name: p.name, Status: admitted.status, Body: admitted.body}
@@ -1024,10 +1024,10 @@ var socialLinkRefusals = map[string]socialRefusal{
 		"Python raised on a profile without an id and answered 500; Go refuses with 400 (CHAOS-11619)"},
 }
 
-// socialRefusalCodes are the golden social refusals whose Go answer carries detail.code after the message: Python's
-// body had no code, so the replay expects the recorded (or overridden) body with the code added. The code is
-// social.RefusalCode of the refusal's reason; the one generic 409 answers identity_conflict whatever the account.
-var socialRefusalCodes = map[string]string{
+// socialRefusalReasons are the golden social refusals whose Go answer carries detail.reason after the message:
+// Python's body had none, so the replay expects the recorded (or overridden) body with the reason added. The value
+// is social.RefusalReason of the refusal's reason; the one generic 409 answers identity_conflict whatever the account.
+var socialRefusalReasons = map[string]string{
 	"social: github refused token":                          "invalid_credentials",
 	"social: gitlab no email":                               "invalid_credentials",
 	"social: google not configured":                         "dependency_unavailable",
@@ -1038,13 +1038,13 @@ var socialRefusalCodes = map[string]string{
 	"social: gitlab email of a github user":                 "identity_conflict",
 }
 
-// WithRefusalCode is body, a {"detail":{"message":...}} refusal, with "code" added after the message.
-func WithRefusalCode(t testing.TB, body, code string) string {
+// WithRefusalReason is body, a {"detail":{"message":...}} refusal, with "reason" added after the message.
+func WithRefusalReason(t testing.TB, body, reason string) string {
 	t.Helper()
 	if !strings.HasPrefix(body, `{"detail":{"message":`) || !strings.HasSuffix(body, `"}}`) {
-		t.Fatalf("a refusal code for a body that is not {\"detail\":{\"message\":...}}: %s", body)
+		t.Fatalf("a refusal reason for a body that is not {\"detail\":{\"message\":...}}: %s", body)
 	}
-	return strings.TrimSuffix(body, "}}") + `,"code":"` + code + `"}}`
+	return strings.TrimSuffix(body, "}}") + `,"reason":"` + reason + `"}}`
 }
 
 // validateLimitAdmitted are the golden steps past Python's 30 validate checks per token: Python refused the 31st with

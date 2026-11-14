@@ -45,7 +45,7 @@ func TestSocialLoginWithASurrogateInTheProfileText(t *testing.T) {
 	usersBefore := count(`SELECT count(*) FROM users`)
 
 	status, body := post("gh-surrogate-email")
-	if status != http.StatusForbidden || body != `{"detail":{"message":"The provider has not verified this email address","code":"email_unverified"}}` {
+	if status != http.StatusForbidden || body != `{"detail":{"message":"The provider has not verified this email address","reason":"email_unverified"}}` {
 		t.Errorf("surrogate email: %d %s, want the 403 unverified-email answer", status, body)
 	}
 	if n := count(`SELECT count(*) FROM users`); n != usersBefore {

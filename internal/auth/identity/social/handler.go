@@ -126,7 +126,7 @@ func (h Handlers) Unlink(w http.ResponseWriter, r *http.Request) {
 	}
 	id, err := uuid.Parse(r.PathValue("id"))
 	if err != nil {
-		writeDetail(w, http.StatusNotFound, "Identity not found", RefusalCode(ReasonPrincipalNotFound))
+		writeError(w, "", identity.ErrNotFound)
 		return
 	}
 	if h.Admit != nil && !h.Admit(w, r) {
@@ -141,57 +141,57 @@ func (h Handlers) Unlink(w http.ResponseWriter, r *http.Request) {
 }
 
 // ConflictMessage is the one 409 answer for a sign-in that finds an account already holding the e-mail or the
-// identity; it says nothing about which. The reason stays in the audit row, the log and the metric.
+// identity; it says nothing about which. The full reason stays in the audit row, the log and the metric.
 const ConflictMessage = "This sign-in could not be completed. Contact your administrator if this continues."
 
 func writeError(w http.ResponseWriter, provider Provider, err error) {
 	_, reason := Classify(err)
-	code := RefusalCode(reason)
+	wire := RefusalReason(reason)
 	var conflict *ConflictError
 	switch {
 	case errors.As(err, &conflict):
-		writeDetail(w, http.StatusConflict, ConflictMessage, code)
+		writeDetail(w, http.StatusConflict, ConflictMessage, wire)
 	case errors.Is(err, ErrProviderUnavailable):
 		writeInternal(w)
 	case errors.Is(err, ErrProviderNotConfigured):
-		writeDetail(w, http.StatusServiceUnavailable, "Social login not configured for "+providerLabel(provider), code)
+		writeDetail(w, http.StatusServiceUnavailable, "Social login not configured for "+providerLabel(provider), wire)
 	case errors.Is(err, ErrInvalidProviderID):
-		writeDetail(w, http.StatusBadRequest, "The provider returned an invalid user id", code)
+		writeDetail(w, http.StatusBadRequest, "The provider returned an invalid user id", wire)
 	case errors.Is(err, ErrProviderRefused):
-		writeDetail(w, http.StatusUnauthorized, "Invalid or expired provider token", code)
+		writeDetail(w, http.StatusUnauthorized, "Invalid or expired provider token", wire)
 	case errors.Is(err, ErrEmailUnverified):
-		writeDetail(w, http.StatusForbidden, "The provider has not verified this email address", code)
+		writeDetail(w, http.StatusForbidden, "The provider has not verified this email address", wire)
 	case errors.Is(err, ErrUnusableEmail):
-		writeDetail(w, http.StatusBadRequest, "The provider returned an unusable email address", code)
+		writeDetail(w, http.StatusBadRequest, "The provider returned an unusable email address", wire)
 	case errors.Is(err, ErrPrincipalDisabled):
-		writeDetail(w, http.StatusForbidden, "Account is disabled", code)
+		writeDetail(w, http.StatusForbidden, "Account is disabled", wire)
 	case errors.Is(err, identity.ErrSignupNotAvailable):
-		writeDetail(w, http.StatusForbidden, "Sign-up with "+providerLabel(provider)+" is not available", code)
+		writeDetail(w, http.StatusForbidden, "Sign-up with "+providerLabel(provider)+" is not available", wire)
 	case errors.Is(err, ErrReauthenticationRequired):
-		writeDetail(w, http.StatusForbidden, "Sign in again to change linked accounts", code)
+		writeDetail(w, http.StatusForbidden, "Sign in again to change linked accounts", wire)
 	case errors.Is(err, identity.ErrIdentityConflict):
-		writeDetail(w, http.StatusConflict, ConflictMessage, code)
+		writeDetail(w, http.StatusConflict, ConflictMessage, wire)
 	case errors.Is(err, ErrProviderLinked):
-		writeDetail(w, http.StatusConflict, ConflictMessage, code)
+		writeDetail(w, http.StatusConflict, ConflictMessage, wire)
 	case errors.Is(err, identity.ErrNotFound):
-		writeDetail(w, http.StatusNotFound, "Identity not found", code)
+		writeDetail(w, http.StatusNotFound, "Identity not found", wire)
 	case errors.Is(err, identity.ErrLastSignInMethod):
-		writeDetail(w, http.StatusConflict, "Cannot remove the last sign-in method", code)
+		writeDetail(w, http.StatusConflict, "Cannot remove the last sign-in method", wire)
 	default:
 		writeInternal(w)
 	}
 }
 
-// writeDetail is go-api's refusal body, {"detail": {"message": message}}, with "code" after the message when code
-// is set (internal/api/session/session.go refuse and refuseCode): the same bytes on both planes.
-func writeDetail(w http.ResponseWriter, status int, message string, code string) {
-	writeJSON(w, status, map[string]any{"detail": refusalDetail{Message: message, Code: code}})
+// writeDetail is go-api's refusal body, {"detail": {"message": message}}, with "reason" after the message when
+// reason is set (internal/api/session/session.go refuse and refuseReason): the same bytes on both planes.
+func writeDetail(w http.ResponseWriter, status int, message string, reason string) {
+	writeJSON(w, status, map[string]any{"detail": refusalDetail{Message: message, Reason: reason}})
 }
 
 // refusalDetail is the detail object of a refusal; its field order is the wire order.
 type refusalDetail struct {
 	Message string `json:"message"`
-	Code    string `json:"code,omitempty"`
+	Reason  string `json:"reason,omitempty"`
 }
 
 // writeInternal is go-api's unhandled-failure answer, 500
@@ -247,7 +247,7 @@ func Classify(err error) (int, Reason) {
 	case errors.Is(err, identity.ErrNotFound):
 		return http.StatusNotFound, ReasonPrincipalNotFound
 	case errors.Is(err, identity.ErrLastSignInMethod):
-		return http.StatusConflict, ReasonIdentityConflict
+		return http.StatusConflict, ReasonLastSignInMethod
 	default:
 		return http.StatusInternalServerError, ReasonStoreUnavailable
 	}

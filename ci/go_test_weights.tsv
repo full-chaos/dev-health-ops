@@ -64,7 +64,7 @@ internal/fixturescli	16
 internal/goapicli/restprove	17
 internal/goapiproof	116
 internal/gqlgenguard	281
-internal/httpguard	120
+internal/httpguard	396
 internal/joboutbox	31
 internal/jobruntime	13
 internal/jobs	13

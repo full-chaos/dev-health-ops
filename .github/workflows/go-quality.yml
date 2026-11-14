@@ -146,11 +146,31 @@ jobs:
           echo "GOCACHE=/mnt/go-cache/build" >> "${GITHUB_ENV}"
 
       - name: Set up Go
+        id: setup-go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache-dependency-path: '**/go.sum'
-          cache: ${{ !(vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) }}
+          cache: false
+      - name: Locate the Go module and build caches
+        id: go-cache-paths
+        if: runner.environment == 'github-hosted'
+        run: |
+          {
+            echo "mod=$(go env GOMODCACHE)"
+            echo "build=$(go env GOCACHE)"
+          } >> "${GITHUB_OUTPUT}"
+      - name: Restore the Go module and build caches (every event; saved only by main pushes and the merge queue)
+        id: go-cache
+        if: runner.environment == 'github-hosted'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ steps.go-cache-paths.outputs.mod }}
+            ${{ steps.go-cache-paths.outputs.build }}
+          key: go-shared-v1-${{ runner.os }}-${{ runner.arch }}-go${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            go-shared-v1-${{ runner.os }}-${{ runner.arch }}-go${{ steps.setup-go.outputs.go-version }}-
 
       # Fails OPEN: an unresolvable range (ci/go_relevant_diff.sh refuses the all-zeros sentinel and a
       # non-ancestor BASE_SHA rather than guess), a failed go list or a failed plan program is FULL.
@@ -194,6 +214,14 @@ jobs:
           cat "${out}"
           printf 'verdict=%s\n' "$(head -n 1 "${out}" | cut -d' ' -f1)" >> "${GITHUB_OUTPUT}"
           { echo 'selection<<GO_QUALITY_PLAN_EOF'; cat "${out}"; echo 'GO_QUALITY_PLAN_EOF'; } >> "${GITHUB_OUTPUT}"
+      - name: Save the Go module and build caches (main pushes and the merge queue only)
+        if: (github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && runner.environment == 'github-hosted' && steps.go-cache.outcome == 'success' && steps.go-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ steps.go-cache-paths.outputs.mod }}
+            ${{ steps.go-cache-paths.outputs.build }}
+          key: ${{ steps.go-cache.outputs.cache-primary-key }}
 
   go-quality-leg:
     name: go-quality-leg (${{ matrix.name }})

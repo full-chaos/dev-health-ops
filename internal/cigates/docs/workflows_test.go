@@ -370,8 +370,14 @@ func TestDocsGuardsWorkflowContract(t *testing.T) {
 		}, "pull_request trigger"},
 		{"the Go setup step is removed", func(t *testing.T, d docTree) docTree {
 			text, _ := d.read(docsGuardsPath)
-			i := strings.Index(text, "      - name: Set up Go\n        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0\n        with:\n          go-version-file: go.mod\n          cache-dependency-path: '**/go.sum'\n\n      - name: Validate")
-			if i < 0 {
+			job := strings.Index(text, "  docs-guards:\n    name: docs-guards")
+			i := -1
+			if job >= 0 {
+				if j := strings.Index(text[job:], "      - name: Set up Go\n"); j >= 0 {
+					i = job + j
+				}
+			}
+			if i < 0 || !strings.Contains(text[i:], "      - name: Validate") {
 				t.Fatal("no Go setup step before the first check of docs-guards")
 			}
 			return d.added(docsGuardsPath, text[:i]+text[i+strings.Index(text[i:], "      - name: Validate"):])
@@ -379,12 +385,12 @@ func TestDocsGuardsWorkflowContract(t *testing.T) {
 		{"the Go setup step is skipped by an if", func(t *testing.T, d docTree) docTree {
 			text, _ := d.read(docsGuardsPath)
 			i := strings.Index(text, "  docs-guards:\n    name: docs-guards")
-			anchor := "      - name: Set up Go\n        uses: actions/setup-go@"
+			anchor := "      - name: Set up Go\n        id: setup-go\n        uses: actions/setup-go@"
 			j := strings.Index(text[i:], anchor)
 			if i < 0 || j < 0 {
 				t.Fatal("no Set up Go step in the docs-guards job")
 			}
-			return d.added(docsGuardsPath, text[:i+j]+"      - name: Set up Go\n        if: false\n        uses: actions/setup-go@"+text[i+j+len(anchor):])
+			return d.added(docsGuardsPath, text[:i+j]+"      - name: Set up Go\n        id: setup-go\n        if: false\n        uses: actions/setup-go@"+text[i+j+len(anchor):])
 		}, "docs-guards setup-go step must not carry an if"},
 		{"a node runtime is set up", func(t *testing.T, d docTree) docTree {
 			return d.edit(t, docsGuardsPath, "      - name: Install documentation dependencies", "      - uses: actions/setup-node@v4\n      - name: Install documentation dependencies")

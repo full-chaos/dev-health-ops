@@ -195,6 +195,30 @@ func TestJudgeTakesTheTwoNoOrgScrapesTogetherOrNotAtAll(t *testing.T) {
 	}
 }
 
+// CHAOS-13673 (V6): the record line names org_required and every other reason summed; the retired no_org and
+// served_org have no field of their own, so a series of either is only part of "other".
+func TestJudgeEnforcedRecordLineHasNoRetiredReason(t *testing.T) {
+	series := func(route, reason, n string) string {
+		return `dev_health_authz_enforcement_unjudged_total{reason="` + reason + `",route="` + route + `"} ` + n
+	}
+	scrape := func(lines ...string) []byte {
+		return []byte("# HELP dev_health_authz_enforcement_unjudged_total x\n# TYPE dev_health_authz_enforcement_unjudged_total counter\n" +
+			strings.Join(lines, "\n") + "\n")
+	}
+	before := scrape(series("GET /a", "org_required", "1"), series("GET /b", "no_org", "2"))
+	after := scrape(series("GET /a", "org_required", "4"), series("GET /b", "no_org", "3"), series("GET /b", "served_org", "2"), series("GET /c", "impersonation", "1"))
+	line, ok := unjudgedRecordLine(before, after)
+	if !ok || line != "judge-enforced: unjudged org_required 3, other 4" {
+		t.Fatalf("record line %q (%v)", line, ok)
+	}
+	if strings.Contains(line, "no_org") || strings.Contains(line, "served_org") {
+		t.Fatalf("the record line names a retired reason: %q", line)
+	}
+	if _, ok := unjudgedRecordLine(after, before); ok {
+		t.Fatal("a counter that went down gave a record line")
+	}
+}
+
 func TestJudgeEnforcedNeedsEveryInput(t *testing.T) {
 	var out, errOut bytes.Buffer
 	if code := run(context.Background(), []string{"judge-enforced", "-out", filepath.Join(t.TempDir(), "t.tsv")}, &out, &errOut); code != exitUsage || !strings.Contains(errOut.String(), "is required") {

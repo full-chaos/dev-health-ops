@@ -181,8 +181,10 @@ var prCacheActions = map[string]actionPolicy{
 	// read at ed142fd0673e97e23eac54620cfb913e5ce36c25 (v0.36.0): cache inputs = [cache (default true)]; it drives both the
 	// actions/cache of the DB and the cache of the setup-trivy the action runs when skip-setup-trivy is false
 	"aquasecurity/trivy-action@v0.36": {kind: inputWriter, inputs: []cacheInput{{name: "cache", defaultOn: true}}},
-	// read at 3fb12ec12f41e471780db15c232d5dd185dcb514 (v0.2.6): cache inputs = [cache (default false)]
-	"aquasecurity/setup-trivy@v0.2": {kind: inputWriter, inputs: []cacheInput{{name: "cache"}}},
+	// read at 81e514348e19b6112ce2a7e3ecbafe19c1e1f567 (v0.3.1): cache inputs = [cache (default false)]; its
+	// actions/cache/restore and actions/cache/save steps run only when cache is 'true' and version is not latest. Since
+	// v0.3 the path input is a literal path (default ''; $ and ~ are refused).
+	"aquasecurity/setup-trivy@v0.3": {kind: inputWriter, inputs: []cacheInput{{name: "cache"}}},
 	// read at 99012661954931238ded8c8b007157a8430204e1 (v4.4.0): cache inputs = [cache-image (default true)]
 	"docker/setup-qemu-action@v4": {kind: inputWriter, inputs: []cacheInput{{name: "cache-image", defaultOn: true}}},
 	// read at 594f3bf4285d9ea8dc53c9a0c9c4092420091003 (v4.4.0): cache inputs = [cache-binary (default true)]
@@ -199,7 +201,7 @@ var prCacheActions = map[string]actionPolicy{
 	"dorny/paths-filter@v4": {kind: nonWriter},
 	// read at 8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 (v3.0.4): cache inputs = []
 	"softprops/action-gh-release@v3": {kind: nonWriter},
-	// read at 9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 (v5.0.1): cache inputs = [] (the runner's local tool cache only)
+	// read at 2f5e7bc67f1f9972ab16657bb795f36d8f04de0e (v5.1.0): cache inputs = [] (the runner's local tool cache only)
 	"azure/setup-helm@v5": {kind: nonWriter},
 	// read at 66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c (v0.24.3): cache inputs = [] (the runner's local tool cache only)
 	"anchore/sbom-action@v0.24": {kind: nonWriter},
@@ -958,17 +960,17 @@ func TestPRCacheGuardKeysOnActionMajor(t *testing.T) {
 		goY      = ".github/workflows/go.yml"
 		sec      = ".github/workflows/security-scan.yml"
 		checkout = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1"
-		helm     = "azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1"
-		trivy    = "aquasecurity/setup-trivy@3fb12ec12f41e471780db15c232d5dd185dcb514 # v0.2.6"
+		helm     = "azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0"
+		trivy    = "aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1"
 	)
 	passes := []struct {
 		name string
 		muts []mutation
 	}{
 		{"a minor bump", []mutation{
-			{".github/workflows/test.yml", helm, "azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0"},
-			{".github/workflows/go-quality.yml", helm, "azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0"}}},
-		{"a v0 patch bump", []mutation{{goY, trivy, "aquasecurity/setup-trivy@0123456789abcdef0123456789abcdef01234567 # v0.2.7"}}},
+			{".github/workflows/test.yml", helm, "azure/setup-helm@0123456789abcdef0123456789abcdef01234567 # v5.2.0"},
+			{".github/workflows/go-quality.yml", helm, "azure/setup-helm@0123456789abcdef0123456789abcdef01234567 # v5.2.0"}}},
+		{"a v0 patch bump", []mutation{{goY, trivy, "aquasecurity/setup-trivy@0123456789abcdef0123456789abcdef01234567 # v0.3.2"}}},
 	}
 	for _, c := range passes {
 		t.Run(c.name+" passes", func(t *testing.T) {
@@ -981,11 +983,11 @@ func TestPRCacheGuardKeysOnActionMajor(t *testing.T) {
 		want []string
 	}{
 		{"a major bump", []mutation{{drift, checkout, "actions/checkout@0123456789abcdef0123456789abcdef01234567 # v8.0.0"}}, []string{"docs-drift.yml: job docs-drift", "(actions/checkout@v8), an action at a major this guard has not read"}},
-		{"a v0 minor bump", []mutation{{goY, trivy, "aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1"}}, []string{"go.yml: job go-container-security", "(aquasecurity/setup-trivy@v0.3), an action at a major this guard has not read"}},
+		{"a v0 minor bump", []mutation{{goY, trivy, "aquasecurity/setup-trivy@0123456789abcdef0123456789abcdef01234567 # v0.4.0"}}, []string{"go.yml: job go-container-security", "(aquasecurity/setup-trivy@v0.4), an action at a major this guard has not read"}},
 		{"a new action", []mutation{{drift, checkout, "someone/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1"}}, []string{"docs-drift.yml: job docs-drift", "(someone/checkout@v7), an action at a major this guard has not read"}},
 		{"a missing version comment", []mutation{{drift, checkout, "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"}}, []string{"docs-drift.yml: job docs-drift", "has no `# vX.Y.Z` version comment"}},
 		{"an unparseable version comment", []mutation{{drift, checkout, "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # version 7"}}, []string{"docs-drift.yml: job docs-drift", `version comment "version 7" is not vX, vX.Y or vX.Y.Z`}},
-		{"a v0 comment without its minor", []mutation{{goY, trivy, "aquasecurity/setup-trivy@3fb12ec12f41e471780db15c232d5dd185dcb514 # v0"}}, []string{"go.yml: job go-container-security", "has no minor: the major of a v0 action is 0.Y"}},
+		{"a v0 comment without its minor", []mutation{{goY, trivy, "aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0"}}, []string{"go.yml: job go-container-security", "has no minor: the major of a v0 action is 0.Y"}},
 		{"two majors on one pin", []mutation{{goY, checkout, "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v8.0.0"}}, []string{"go.yml: job", "name two majors (actions/checkout@v"}},
 		{"a uses that is not a full sha", []mutation{{drift, checkout, "actions/checkout@v7 # v7.0.1"}}, []string{"docs-drift.yml: job docs-drift", "actions/checkout@v7, which is not pinned to a full 40-hex commit sha"}},
 		{"an empty value on an input whose default is on", []mutation{{drift, "          cache: false\n", "          cache: ''\n"}}, []string{"docs-drift.yml: job docs-drift", "actions/setup-go (cache: )"}},

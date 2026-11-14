@@ -520,6 +520,9 @@ var metricArtifactSkipReasonVocabulary = map[string]struct{}{
 	// download exceeded the route's size cap, skipped and counted like the
 	// two reasons above instead of failing the unit closed.
 	"artifact_oversized": {},
+	// report_too_large: a gitlab test_report body over the route's size cap,
+	// skipped and counted instead of failing the unit closed.
+	"report_too_large": {},
 }
 
 // MetricArtifactSkipReasonLabel bounds the artifact skip reason label.

@@ -77,6 +77,12 @@ const (
 	// which was positively observed (CHAOS-4142, codex round 1).
 	gitLabRunJobsPageBudgetComponent      = "run_jobs_page_budget"
 	gitLabRunArtifactsPageBudgetComponent = "run_artifacts_page_budget"
+	// The size-cap skips: ONE test report over nativeMaxObjectBytes, or ONE
+	// artifact over gitLabTestsMaxDownload, is skipped and counted instead of
+	// failing the unit. The run keeps no rows for the skipped item (missing,
+	// never zero); the unit's coverage_complete is false and names the component.
+	gitLabReportTooLargeComponent    = "report_too_large"
+	gitLabArtifactOversizedComponent = "artifact_oversized"
 )
 
 // gitLabTestsTruncationComponents is the CLOSED vocabulary of truncation
@@ -95,6 +101,7 @@ var (
 		gitLabPipelineInventoryComponent: {}, gitLabReportInventoryComponent: {},
 		gitLabRunJobsComponent: {}, gitLabRunArtifactsComponent: {},
 		gitLabRunJobsPageBudgetComponent: {}, gitLabRunArtifactsPageBudgetComponent: {},
+		gitLabReportTooLargeComponent: {}, gitLabArtifactOversizedComponent: {},
 	}
 	// The advancing set is an ALLOWLIST, so anything added to the vocabulary
 	// and forgotten here withholds rather than silently advancing over data
@@ -102,6 +109,7 @@ var (
 	// stop withholds the watermark; a positively observed item cap advances it.
 	gitLabTestsWatermarkAdvancing = map[string]struct{}{
 		gitLabRunJobsComponent: {}, gitLabRunArtifactsComponent: {},
+		gitLabReportTooLargeComponent: {}, gitLabArtifactOversizedComponent: {},
 	}
 )
 
@@ -169,6 +177,40 @@ func recordGitLabTestsPerRunTruncation(
 		"provider per-run item cap reached; run committed with partial items",
 		"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
 		"repository", cursor.Repo, "component", component, logging.ProviderIDAttr("run", runID), "kept", kept,
+	)
+	return cursor
+}
+
+// recordGitLabTestsSkippedItem keeps a run whose ONE test report or ONE artifact
+// was over its size cap: the item is skipped, counted (the artifact-skip metric,
+// reason report_too_large or artifact_oversized) and logged with the run id, and
+// the walk goes on. The component joins the unit's truncated set, so
+// coverage_complete is false; both components advance the watermark (the whole
+// window was walked and the boundary was positively observed).
+func recordGitLabTestsSkippedItem(
+	cursor gitLabTestsChunkCursor,
+	client *providerfoundation.HTTPClient,
+	claim Claim,
+	component string,
+	runID string,
+	capBytes int,
+) gitLabTestsChunkCursor {
+	present := false
+	for _, existing := range cursor.Truncated {
+		if existing == component {
+			present = true
+		}
+	}
+	if !present {
+		cursor.Truncated = append(cursor.Truncated, component)
+	}
+	if client != nil {
+		client.Metrics.RecordArtifactSkipped(claim.Provider, claim.Dataset, component)
+	}
+	slog.Warn(
+		"gitlab test item skipped: over the size cap",
+		"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
+		"repository", cursor.Repo, "component", component, logging.ProviderIDAttr("run", runID), "cap_bytes", capBytes,
 	)
 	return cursor
 }
@@ -544,7 +586,7 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 		}
 		for index := start; index < len(page.Items); index++ {
 			before := cursor
-			selected, selectErr := selectGitLabTestsReportPipelines([]json.RawMessage{page.Items[index]}, project.DefaultBranch, maxPipelines, claim.BeforeAt)
+			selected, selectErr := selectGitLabTestsReportPipelines([]json.RawMessage{page.Items[index]}, maxPipelines, claim.BeforeAt)
 			if selectErr != nil {
 				return selectErr
 			}
@@ -557,6 +599,11 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 				started := gitLabTestsPipelineStartedAt(payload)
 				finished := parseGitLabTestsTime(payload.FinishedAt)
 				report, present, reportErr := fetchGitLabTestsReport(ctx, &counted, root, runID)
+				if errors.Is(reportErr, errGitLabTestsReportTooLarge) {
+					cursor = recordGitLabTestsSkippedItem(
+						cursor, client, claim, gitLabReportTooLargeComponent, runID, nativeMaxObjectBytes)
+					report, present, reportErr = gitLabTestsReportPayload{}, false, nil
+				}
 				if reportErr != nil {
 					return reportErr
 				}
@@ -618,6 +665,11 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 					}
 					for _, job := range artifactJobs {
 						archive, downloadErr := downloadGitLabTestsArtifact(ctx, &counted, root, stringValue(job.ID))
+						if errors.Is(downloadErr, errGitLabTestsArtifactTooLarge) {
+							cursor = recordGitLabTestsSkippedItem(
+								cursor, client, claim, gitLabArtifactOversizedComponent, runID, gitLabTestsMaxDownload)
+							continue
+						}
 						if downloadErr != nil {
 							return downloadErr
 						}

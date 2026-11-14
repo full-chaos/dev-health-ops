@@ -7,6 +7,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -191,9 +192,19 @@ func TestGenericOracleMatchesFrozenPythonGitLabTestsSelection(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		pipelines, err := selectGitLabTestsReportPipelines(
-			decodeRaw("raw_pipelines"), input["default_branch"].(string), input["max_pipelines"].(int), &before,
-		)
+		// The frozen Python oracle only selects default-branch pipelines. The Go selector now takes every
+		// ref (chris decided pull-request runs count), so the oracle comparison feeds it the default
+		// branch alone: the golden stays untouched and the divergence is pinned by
+		// TestGitLabTestsReportPhaseFetchesPipelinesOfEveryRef.
+		defaultOnly := slices.DeleteFunc(decodeRaw("raw_pipelines"), func(raw json.RawMessage) bool {
+			pipeline, decodeErr := decodeGitLabTestsPipeline(raw)
+			if decodeErr != nil {
+				t.Fatal(decodeErr)
+			}
+			ref := stringValue(pipeline.Ref)
+			return ref != "" && ref != input["default_branch"].(string)
+		})
+		pipelines, err := selectGitLabTestsReportPipelines(defaultOnly, input["max_pipelines"].(int), &before)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -234,7 +245,7 @@ func TestGenericOracleMatchesFrozenPythonGitLabTestsSelection(t *testing.T) {
 		}
 
 		adapterBody := []byte(`[{"id":"at-before","ref":"main","created_at":"2026-07-22T10:59:00Z","started_at":"2026-07-22T11:00:00Z"}]`)
-		reportBody, err := json.Marshal(input["raw_pipelines"])
+		reportBody, err := json.Marshal(defaultOnly)
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -6,3 +6,4 @@ internal/auth/workloadexchange	tokenreview.go	internal/auth/authruntime
 internal/auth/workloadexchange	tokenreview.go	internal/auth/workloadexchange
 internal/auth/workloadexchange	tokenreview.go	internal/cigates/chartgates
 internal/auth/workloadexchange	tokenreview.go	internal/cigates/livee2e
+internal/auth/workloadexchange	tokenreview.go	internal/queryapi/server

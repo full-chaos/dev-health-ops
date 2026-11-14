@@ -151,8 +151,23 @@ func TestAdminACRScopeParityLegacyVersusGrants(t *testing.T) {
 	}
 	pgseed.Membership(ctx, t, env.Admin, uuid.NewString(), subjects["M_member_named_grant"].String(), org.String(), "member")
 	pgseed.Membership(ctx, t, env.Admin, uuid.NewString(), subjects["M0_member_no_grant"].String(), org.String(), "member")
-	exec(`INSERT INTO auth.resource_grants (principal_id, organization_id, role_key, resource_kind, resource_id) VALUES ($1, $2, 'member', 'repository', 'acme/beta')`,
-		subjects["M_member_named_grant"], org)
+	// resource_grants is written only through audit.Commit; the row is seeded with the triggers off, as the decisionstate
+	// integration tests seed grants (decisionstate_integration_test.go armed).
+	grantTx, err := env.Admin.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = grantTx.Rollback(ctx) }()
+	if _, err := grantTx.Exec(ctx, `SET LOCAL session_replication_role = replica`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := grantTx.Exec(ctx, `INSERT INTO auth.resource_grants (principal_id, organization_id, role_key, resource_kind, resource_id) VALUES ($1, $2, 'member', 'repository', 'acme/beta')`,
+		subjects["M_member_named_grant"], org); err != nil {
+		t.Fatalf("seed the named grant: %v", err)
+	}
+	if err := grantTx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
 	var assigned int
 	if err := env.Admin.QueryRow(ctx, `SELECT count(*) FROM auth.platform_role_assignments WHERE principal_id = $1 AND role_key = 'platform_admin'`,
 		subjects["A_platform_admin_no_membership"]).Scan(&assigned); err != nil || assigned != 1 {

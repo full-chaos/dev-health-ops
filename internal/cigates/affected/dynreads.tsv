@@ -552,6 +552,7 @@ internal/queryapi/quadrant	identity.go
 internal/queryapi/recommendations	goldens_frozen_python_oracle_test.go
 internal/queryapi/rowview	census_test.go
 internal/queryapi/scancensus	census_test.go
+internal/queryapi/server	admin_acr_scope_parity_integration_test.go
 internal/queryapi/server	build_routes_integration_test.go
 internal/queryapi/server	capacity_completion_distribution_test.go
 internal/queryapi/server	capacity_forecast_legacy_test.go

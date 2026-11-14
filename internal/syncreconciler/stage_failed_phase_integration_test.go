@@ -118,13 +118,11 @@ func TestStageFailedNamesAPoolAcquireThatSpentTheBudget(t *testing.T) {
 	// CHAOS-6960: not a wall-clock window on phase_elapsed_ms (the timeout-fallback-
 	// masquerade shape a wall-clock threshold is: it flaked on a loaded host, elapsed
 	// under budget). The mechanism this test pins is that the bounded stage CONTEXT is
-	// what cut the acquire short, named in the error text (execution-verified: a
-	// context-timed-out pool.Begin returns "context deadline exceeded", never a
-	// SQLSTATE, since the cancellation is client-side) -- not a syntax error, not a
-	// closed pool, not a real outage.
-	if errText, _ := record["error"].(string); !strings.Contains(errText, "context deadline exceeded") {
-		t.Fatalf("stage_failed error = %q, want the bounded context to be why the acquire failed", record["error"])
-	}
+	// what cut the acquire short (execution-verified: a context-timed-out
+	// pool.Begin returns "context deadline exceeded", never a SQLSTATE, since the
+	// cancellation is client-side) -- not a syntax error, not a closed pool, not a
+	// real outage. CHAOS-13743: the line names that as the spent stage budget.
+	assertStageBudgetSpentRecord(t, record, "the acquire")
 	if summary, _ := record["phases"].(string); !strings.HasPrefix(summary, "acquire:coordinator=") || !strings.HasSuffix(summary, "!") {
 		t.Fatalf("phases = %q, want one errored acquire", record["phases"])
 	}
@@ -139,6 +137,15 @@ func TestStageFailedNamesAPoolAcquireThatSpentTheBudget(t *testing.T) {
 	}
 	if strings.Contains(metrics.String(), `dev_health_reconciler_stage_acquire_wait_seconds_bucket{stage="materializer",le="0.25"} 1`) {
 		t.Fatal("a ~300 ms wait landed in the 250 ms bucket")
+	}
+}
+
+// assertStageBudgetSpentRecord: the bounded stage context, not the database, is
+// why the stage failed, and the line says so.
+func assertStageBudgetSpentRecord(t *testing.T, record map[string]any, what string) {
+	t.Helper()
+	if record["reason"] != "stage budget spent" || record["error"] != "syncreconciler: stage materializer budget spent (300ms)" {
+		t.Fatalf("stage_failed reason/error = %v/%v, want the spent 300ms stage budget to be why %s failed", record["reason"], record["error"], what)
 	}
 }
 
@@ -160,9 +167,7 @@ func TestStageFailedNamesTheSlowStatementThatSpentTheBudget(t *testing.T) {
 	// timeout returns "timeout: context deadline exceeded" before PostgreSQL's own
 	// cancellation would land one), and the sleep(5) statement did not run to
 	// completion (a statement that ran to the end of its 5s sleep records no failure at all) -- no duration is asserted.
-	if errText, _ := record["error"].(string); !strings.Contains(errText, "context deadline exceeded") {
-		t.Fatalf("stage_failed error = %q, want the bounded context to be why the statement failed", record["error"])
-	}
+	assertStageBudgetSpentRecord(t, record, "the statement")
 	// The acquire that came first was quick and is listed, not blamed.
 	summary, _ := record["phases"].(string)
 	if !strings.HasPrefix(summary, "acquire:coordinator=") || !strings.Contains(summary, ";statement:reconciler slow probe=") {

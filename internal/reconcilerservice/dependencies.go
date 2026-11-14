@@ -1051,7 +1051,7 @@ func (dependencies *reconcilerDependencies) logDependencyCheckFailure(ctx contex
 	if dependencies == nil || dependencies.logger == nil || err == nil {
 		return
 	}
-	dependencies.logger.ErrorContext(ctx, "reconciler readiness dependency check failed",
+	dependencies.logger.Log(ctx, health.DependencyRefusalLevel(ctx), "reconciler readiness dependency check failed",
 		"error_category", "dependency_unavailable",
 		"check", check,
 		"error", err.Error(),

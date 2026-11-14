@@ -476,7 +476,7 @@ run_providersync_bounded() {
 usage() {
   # Backticks in the literal help text document commands; they are not substitutions.
   # shellcheck disable=SC2016
-  printf '%s\n' 'Usage: ci/check_go.sh [auth [STAGE]|fmt|vet|test|race|venue-oracles [SHARD COUNT]|venue-oracle-skips JSON_LOG LEDGER NAME...|venue-oracle-plan COUNT|ci-leg LEG [SHARD COUNT]|ci-leg-warm test|race SHARD COUNT|test-shard-plan SHARD COUNT|test-shard-split-list SHARD COUNT|race-shard-plan SHARD COUNT|race-excluded-shard-plan SHARD COUNT|race-excluded-receipts JSON...|test-shard-wall-guard SHARD COUNT WALL LOGFILE|test-shard-unweighted-guard SHARD COUNT LOGFILE|security-fresh-receipt RAN JSON...|security-fresh-split PKG...|build|contract|ratchets|race-weights-rows|multi-replica-workers|job-timeout MINUTES|job-start|census-ops|integration-vet|integration-coverage|race-excluded-ran|integration-shard-plan|integration-prepull|integration-shard|integration|fast|ci|all]
+  printf '%s\n' 'Usage: ci/check_go.sh [auth [STAGE]|fmt|vet|test|race|venue-oracles [SHARD COUNT]|venue-oracle-skips JSON_LOG LEDGER NAME...|venue-oracle-plan COUNT|ci-leg LEG [SHARD COUNT]|ci-leg-warm all build|race|test-shard-plan SHARD COUNT|test-shard-split-list SHARD COUNT|race-shard-plan SHARD COUNT|race-excluded-shard-plan SHARD COUNT|race-excluded-receipts JSON...|test-shard-wall-guard SHARD COUNT WALL LOGFILE|test-shard-unweighted-guard SHARD COUNT LOGFILE|security-fresh-receipt RAN JSON...|security-fresh-split PKG...|build|contract|ratchets|race-weights-rows|multi-replica-workers|job-timeout MINUTES|job-start|census-ops|integration-vet|integration-coverage|race-excluded-ran|integration-shard-plan|integration-prepull|integration-shard|integration|fast|ci|all]
 
   auth   (CHAOS-4887) The Auth Control Plane gates over the auth packages ALONE: gofmt, vet, test,
          -race, the production-middleware stack test (G-69, must log its marker), one fuzz run per
@@ -552,10 +552,11 @@ usage() {
          slices, ci/go_race_weights.d). The
          legs run exactly the steps of `ci` (pinned by a tooling test); each
          stage prints UTC start/done stamps.
-  ci-leg-warm test|race SHARD COUNT
-         Compile the packages of that leg slice with the leg own flags and
-         run no test (go test -run ^$), to fill the leg Go build cache on a
-         main push whose test and race legs the merge queue already ran.
+  ci-leg-warm all build|race
+         Compile every package of every leg of the family with the flags of
+         the legs (race: -race, over the race shard plans) and run no test
+         code (go test -exec true; build also runs the two vet passes of
+         the static leg), to fill the go-quality Go cache family on a push to main.
   test-shard-plan SHARD COUNT
          Print the packages (module, import path, weights key) of the SHARD-th of
          COUNT weight-balanced slices of the unit tests (ci/go_test_weights.tsv,
@@ -842,7 +843,7 @@ check_vet() {
 check_authhistory_vet() {
   local file pkgs=()
   while IFS= read -r -d '' file; do
-    head -n 20 "${ROOT}/${file}" | grep -Eq '^//go:build .*authhistory' || continue
+    grep -Eq '^//go:build .*authhistory' <<<"$(head -n 20 "${ROOT}/${file}")" || continue
     pkgs+=("./$(dirname "${file}")")
   done < <(git -C "${ROOT}" ls-files --cached --others --exclude-standard -z -- '*.go')
   [ "${#pkgs[@]}" -gt 0 ] || die "authhistory vet: no file carries the authhistory build tag"
@@ -1185,7 +1186,7 @@ check_test() {
         go_test_json_run "${json}" /dev/null ${rest_rows}
       fi
     ) || { rm -f -- "${json}"; return 1; }
-    if printf '%s\n' "${all}" | grep -qx -- "${SERIAL_HEAVY_TEST_PACKAGE}"; then
+    if grep -qx -- "${SERIAL_HEAVY_TEST_PACKAGE}" <<<"${all}"; then
       ran_heavy=1
       printf 'go test (alone): %s\n' "${SERIAL_HEAVY_TEST_PACKAGE}"
       (
@@ -1523,7 +1524,7 @@ test_shard_split_names() {
   security_fresh_load
   while IFS=$'\t' read -r pkg key part parts; do
     [ -n "${pkg}" ] || continue
-    if printf '%s\n' "${SECURITY_FRESH_SET}" | grep -Fqx -- "${pkg}"; then
+    if grep -Fqx -- "${pkg}" <<<"${SECURITY_FRESH_SET}"; then
       die "split package ${key} is a fresh security package (${SECURITY_FRESH_FILE#"${ROOT}/"}); it cannot be split"
     fi
     names="$(test_split_cut_names "${GO_TEST_SPLIT_WEIGHTS}" "${module_dir}" "${pkg}" "${key}" "${part}" "${parts}")" || exit 2
@@ -1565,7 +1566,7 @@ test_split_job_start() {
   slegjson="$(mktemp "${TMPDIR:-/tmp}/dev-health-split-legjson.XXXXXX")"
   serr="$(mktemp "${TMPDIR:-/tmp}/dev-health-split-err.XXXXXX")"
   printf 'go test%s (split): %s: %d test name(s) of its parts here\n' "${MERGE_GROUP_FRESH:+ -count=1}" "${key}" "${n}"
-  if [ "${module_dir}" = "." ] && printf '%s\n' "${census_keys}" | grep -Fqx -- "${key}"; then
+  if [ "${module_dir}" = "." ] && grep -Fqx -- "${key}" <<<"${census_keys}"; then
     (
       [ -z "${prev}" ] || while kill -0 "${prev}" 2>/dev/null; do sleep 1; done
       cd "${ROOT}/${module_dir}"
@@ -2033,7 +2034,7 @@ check_race_weights_rows() {
     || die "ci/go_race_solo.tsv lists a package twice"
   printf '%s\n' "${solo_rows}" | sed '/^$/d' | LC_ALL=C sort -c 2>/dev/null \
     || die "ci/go_race_solo.tsv is not sorted (LC_ALL=C)"
-  ! printf '%s\n' "${solo_rows}" | grep -qx 'internal/providersync' \
+  ! grep -qx 'internal/providersync' <<<"${solo_rows}" \
     || die "ci/go_race_solo.tsv lists internal/providersync, which runs as test-name slices in every race leg and cannot be solo"
   shopt -u dotglob
   printf 'race-weights-rows: %d row(s) match the package list, %d solo\n' "$(printf '%s\n' "${rows}" | wc -l)" "$(printf '%s\n' "${solo_rows}" | sed '/^$/d' | wc -l)"
@@ -2099,35 +2100,40 @@ check_ci_leg() {
   printf 'ci-leg %s: OK\n' "${leg}"
 }
 
-# check_ci_leg_warm test|race SHARD COUNT (CHAOS-11408): compile, run nothing. A main push that the merge queue already
-# tested skips its test and race legs, and this fills the leg's Go build cache on a key miss so the pull requests that restore
-# it still hit. The flags are the ones of the real leg (-mod=readonly -trimpath, -race for a race leg) plus -run '^$', so the
-# compiled objects are the ones the real leg would cache.
-check_ci_leg_warm() {
-  local leg="${1:-}" shard="${2:-}" count="${3:-}" module_dir plan pkg
+# check_ci_leg_warm_all build|race (CHAOS-13718): fills one go-quality Go cache family (go-quality.yml job go-quality-cache) with
+# the compile actions of every leg of the family and runs no test code (-exec true: each test binary is linked, never run).
+# The flags are the real legs' (-mod=readonly -trimpath; -race for race), so the actions are the ones those legs look up.
+#   build  every package of every module (the union of the test shard plans) and the static leg's two vet passes
+#   race   -race over every package of the race shard plans (the module's packages but ci/race_excluded_packages.tsv)
+check_ci_leg_warm_all() {
+  local family="${1:-}" module_dir modpath pkg listing
   local -a pkgs
-  case "${leg}" in
-    test) plan="$(check_test_shard_plan "${shard}" "${count}")" || die "test shard plan failed" ;;
-    race) plan="$(check_race_shard_plan "${shard}" "${count}")" || die "race shard plan failed" ;;
-    *) die "ci-leg-warm LEG must be test or race (got '${leg}')" ;;
+  case "${family}" in
+    build | race) ;;
+    *) die "ci-leg-warm all FAMILY must be build or race (got '${family}')" ;;
   esac
   for module_dir in "${MODULE_DIRS[@]}"; do
+    printf 'ci-leg-warm all %s: %s\n' "${family}" "${module_dir}"
+    if [ "${family}" = build ]; then
+      (cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -exec true ./...) \
+        || die "ci-leg-warm all build: go test -exec true failed in ${module_dir}"
+      (cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go vet -mod=readonly -trimpath ./...) \
+        || die "ci-leg-warm all build: go vet failed in ${module_dir}"
+      (cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go vet -mod=readonly -trimpath -tags=integration ./...) \
+        || die "ci-leg-warm all build: go vet -tags=integration failed in ${module_dir}"
+      continue
+    fi
+    modpath="$(cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -m)" || die "go list -m failed in ${module_dir}"
+    listing="$(cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -mod=readonly ./...)" || die "go list failed in ${module_dir}"
     pkgs=()
     while IFS= read -r pkg; do
       [ -n "${pkg}" ] && pkgs+=("${pkg}")
-    done < <(printf '%s\n' "${plan}" | awk -F'\t' -v m="${module_dir}" '$1 == m { print $2 }')
+    done < <(printf '%s\n' "${listing}" | race_excluded_filter "${module_dir}" "${modpath}")
     [ "${#pkgs[@]}" -gt 0 ] || continue
-    printf 'go test -run ^$ (%s %s/%s): %s: %d package(s)\n' "${leg}" "${shard}" "${count}" "${module_dir}" "${#pkgs[@]}"
-    (
-      cd "${ROOT}/${module_dir}"
-      if [ "${leg}" = race ]; then
-        "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -race -run '^$' "${pkgs[@]}"
-      else
-        "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -run '^$' "${pkgs[@]}"
-      fi
-    )
+    (cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -race -exec true "${pkgs[@]}") \
+      || die "ci-leg-warm all race: go test -race -exec true failed in ${module_dir}"
   done
-  printf 'ci-leg-warm %s: OK\n' "${leg}"
+  printf 'ci-leg-warm all %s: OK\n' "${family}"
 }
 
 # check_venue_oracles (CHAOS-6314) runs every venue oracle test in the repo,
@@ -2556,7 +2562,8 @@ check_venue_oracles() {
         fi
         ;;
       local)
-        file="$(grep -lE "^func ${name}[(\[]" "${ROOT}/${dir}"/*_test.go | head -n1)"
+        file="$(grep -lE "^func ${name}[(\[]" "${ROOT}/${dir}"/*_test.go)"
+        file="${file%%$'\n'*}"
         printf 'venue-oracles: %s in %s is marked local-only and is not run here\n' "${name}" "${file#"${ROOT}"/}" >&2
         local_only+=("${name}")
         ;;
@@ -5651,7 +5658,7 @@ check_auth_history() {
   out="$(auth_go test -mod=readonly -trimpath -count=1 -v -tags authhistory -run '^TestEveryEndpointProfileInventoryDeclaresAVerifiableSourceCommit$' ./internal/auth/contracts 2>&1)" \
     || { printf '%s\n' "${out}" >&2; die "auth history: an inventory source_commit does not verify"; }
   printf '%s\n' "${out}"
-  printf '%s\n' "${out}" | grep -q 'AUTH_SOURCE_COMMIT_VERIFIED ' \
+  grep -q 'AUTH_SOURCE_COMMIT_VERIFIED ' <<<"${out}" \
     || die "auth history: no inventory was verified (the proof marker never printed)"
 }
 
@@ -6285,9 +6292,8 @@ case "${1:-all}" in
     check_ci_leg "$@"
     ;;
   ci-leg-warm)
-    [ "$#" -eq 4 ] || die "ci-leg-warm accepts test|race SHARD COUNT"
-    shift
-    check_ci_leg_warm "$@"
+    { [ "$#" -eq 3 ] && [ "$2" = all ]; } || die "ci-leg-warm accepts all build|race"
+    check_ci_leg_warm_all "$3"
     ;;
   build)
     check_build

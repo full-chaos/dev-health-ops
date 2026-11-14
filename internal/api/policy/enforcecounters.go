@@ -2,6 +2,7 @@ package policy
 
 import (
 	"context"
+	"slices"
 	"strings"
 
 	"go.opentelemetry.io/otel"
@@ -42,16 +43,10 @@ func countEnforce(ctx context.Context, namespace, outcome string) {
 }
 
 const (
-	enforceUnjudgedHS256 = "hs256"
-	enforceUnjudgedNoOrg = "no_org"
-	// enforceUnjudgedServedOrg: a token with no organization that names one. go-api counts no request so since every such
-	// request is decided (decideOrgless). The label stays in the set because the shadow venue judge
-	// (internal/shadowvenue: JudgeEnforced, UnjudgedTotals) reads it to judge go-api builds before CHAOS-10872 S1; its
-	// removal is CHAOS-13596's.
-	enforceUnjudgedServedOrg = "served_org"
 	// enforceUnjudgedOrgRequired: a token with no organization on an AdminOrg row, refused before any question.
 	enforceUnjudgedOrgRequired = "org_required"
-	// enforceUnjudgedDelegatedOrgless: a delegated session's bearer with no organization; the legacy answer stands (F1).
+	// enforceUnjudgedDelegatedOrgless: a delegated session's bearer with no organization; the legacy answer stands (F1,
+	// the named residual of CHAOS-10872 D6989).
 	enforceUnjudgedDelegatedOrgless = "delegated_orgless"
 	// enforceUnjudgedImpersonation: a read by a caller with a live go-api impersonation row. The legacy answer stands
 	// by design (product rule 1), so this reason does not block a flip.
@@ -59,8 +54,11 @@ const (
 )
 
 // enforceUnjudgedReasons is the closed reason set of the unjudged counter.
-var enforceUnjudgedReasons = []string{enforceUnjudgedHS256, enforceUnjudgedNoOrg, enforceUnjudgedServedOrg, enforceUnjudgedOrgRequired,
-	enforceUnjudgedDelegatedOrgless, enforceUnjudgedImpersonation}
+var enforceUnjudgedReasons = []string{enforceUnjudgedOrgRequired, enforceUnjudgedDelegatedOrgless, enforceUnjudgedImpersonation}
+
+// EnforceUnjudgedReasons is the closed reason set of the unjudged counter, the one source a reader outside this package
+// (the shadow venue judge) checks a scrape against.
+func EnforceUnjudgedReasons() []string { return slices.Clone(enforceUnjudgedReasons) }
 
 type enforceUnjudgedAdder func(ctx context.Context, route, reason string)
 

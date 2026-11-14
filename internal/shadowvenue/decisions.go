@@ -274,7 +274,7 @@ func counterProof(in EnforcedInput, slots []SlotVerdict, idle idleResult, proces
 			continue
 		}
 		switch sv.Verdict {
-		case VerdictSkippedNoOrg, VerdictUnevidencedNoOrg, VerdictEvidencedNoOrg, VerdictSkippedSeam, VerdictUnevidencedSeam, VerdictMissing:
+		case VerdictSkippedNoOrg, VerdictUnevidencedNoOrg, VerdictSkippedSeam, VerdictMissing:
 			continue
 		}
 		c := want[ns]

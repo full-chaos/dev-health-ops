@@ -2,6 +2,8 @@
 internal/auth/workloadexchange	tokenreview.go	cmd/auth-service
 internal/auth/workloadexchange	tokenreview.go	cmd/dho
 internal/auth/workloadexchange	tokenreview.go	internal/apiservice
+internal/auth/workloadexchange	tokenreview.go	internal/apiservice/authflowvenue
+internal/auth/workloadexchange	tokenreview.go	internal/apiservice/ssovenue
 internal/auth/workloadexchange	tokenreview.go	internal/auth/authruntime
 internal/auth/workloadexchange	tokenreview.go	internal/auth/workloadexchange
 internal/auth/workloadexchange	tokenreview.go	internal/cigates/chartgates

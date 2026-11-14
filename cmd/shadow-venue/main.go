@@ -745,11 +745,21 @@ func judgeEnforced(args []string, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintf(stdout, "judge-enforced: slots %s\n", strings.Join(verdicts, ", "))
 	fmt.Fprintf(stdout, "judge-enforced: schedule sha12 %s\n", shadowvenue.ScheduleSHA12(slots))
-	if sums, err := shadowvenue.UnjudgedTotals(files["metrics-before"], files["metrics-after"]); err == nil {
-		fmt.Fprintf(stdout, "judge-enforced: unjudged no_org %d, served_org %d, org_required %d, other %d\n", sums.NoOrg, sums.ServedOrg, sums.OrgRequired, sums.Other)
+	if line, ok := unjudgedRecordLine(files["metrics-before"], files["metrics-after"]); ok {
+		fmt.Fprintln(stdout, line)
 	}
 	fmt.Fprintf(stdout, "judge-enforced: void %v, exit %d, table %s\n", report.Void, report.Exit(), *out)
 	return finish(file, report.Exit(), stderr)
+}
+
+// unjudgedRecordLine is the record line of the unjudged counter: the org_required count the verdicts rest on, and
+// every other reason summed; false when the scrapes give no counter delta.
+func unjudgedRecordLine(before, after []byte) (string, bool) {
+	sums, err := shadowvenue.UnjudgedTotals(before, after)
+	if err != nil {
+		return "", false
+	}
+	return fmt.Sprintf("judge-enforced: unjudged org_required %d, other %d", sums.OrgRequired, sums.Other), true
 }
 
 // readMembership reads the two membership snapshots; "" is a snapshot not given (the judge voids when a superuser-O

@@ -21,6 +21,7 @@ internal/api/policy	delegated_test.go	internal/api	tree	*
 internal/api/policy	delegated_test.go	internal/apiservice	tree	*
 internal/api/policy	delegated_use_test.go	internal/api	tree	*
 internal/api/policy	delegated_use_test.go	internal/apiservice	tree	*
+internal/api/policy	enforce_unjudged_reasons_census_test.go	internal/api/policy	dir	*
 internal/api/policy	platform_question_no_decision_point_cells_test.go	internal/api/policy	dir	*
 internal/api/policy	principalonce_test.go	unexpressed	-	-
 internal/api/syncadmin	create_config_venue_oracle_integration_test.go	internal/api/syncadmin/testdata/jira_recorded	dir	*
@@ -61,6 +62,7 @@ internal/auth/authapi	register_test.go	unexpressed	-	-
 internal/auth/authapi	sid_mint_census_test.go	internal/auth/authapi	dir	*
 internal/auth/authorization	evaluate_test.go	internal/auth/authorization	dir	*
 internal/auth/authruntime	audit_request_id_scan_test.go	unexpressed	-	-
+internal/auth/authruntime	authorize_without_feed_callers_test.go	.	tree	*
 internal/auth/authruntime	fixed_credential_scan_test.go	internal/auth/authruntime	dir	*
 internal/auth/authruntime	keystate_source_test.go	internal/auth/authruntime	dir	*
 internal/auth/authruntime	kidwiring_callers_test.go	internal/auth/authruntime	dir	*

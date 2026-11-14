@@ -28,7 +28,9 @@ package fixturescli
 //     change"; any table that is NOT in the list and changes still fails.
 
 import (
+	"encoding/json"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -165,6 +167,53 @@ var defaultedColumnsAfterTheCapture = map[string]map[string]defaultedColumn{
 	},
 }
 
+// derivedColumnsAfterTheCapture names the Array(String) columns a migration
+// added after the capture whose DEFAULT is an expression of another column of
+// the same row: table -> column -> the migration and the value a captured row
+// reads. A captured row has no value for them, so the load must leave the DEFAULT.
+var derivedColumnsAfterTheCapture = map[string]map[string]derivedColumn{
+	// The unit's issue and pull request references (CHAOS-10726): the readers'
+	// JSONExtract of its evidence.
+	"work_unit_investments": {
+		"issue_refs": {Migration: "149_work_unit_investment_refs.sql", Want: evidenceRefs("issues")},
+		"pr_refs":    {Migration: "149_work_unit_investment_refs.sql", Want: evidenceRefs("prs")},
+	},
+}
+
+type derivedColumn struct {
+	Migration string
+	Want      func(value func(column string) any) []string
+}
+
+// evidenceRefs is JSONExtract(structural_evidence_json, key, 'Array(String)'):
+// [] for evidence that is not a JSON object holding key as an array of strings.
+func evidenceRefs(key string) func(value func(column string) any) []string {
+	return func(value func(column string) any) []string {
+		text, _ := value("structural_evidence_json").(string)
+		var evidence map[string]json.RawMessage
+		var refs []string
+		if json.Unmarshal([]byte(text), &evidence) != nil || json.Unmarshal(evidence[key], &refs) != nil || refs == nil {
+			return []string{}
+		}
+		return refs
+	}
+}
+
+// loadedStrings is a dumped Array(String) value as strings; ok is false for anything else.
+func loadedStrings(value any) ([]string, bool) {
+	items, ok := value.([]any)
+	if !ok {
+		return nil, false
+	}
+	out := make([]string, len(items))
+	for index, item := range items {
+		if out[index], ok = item.(string); !ok {
+			return nil, false
+		}
+	}
+	return out, true
+}
+
 type defaultedColumn struct {
 	Migration string
 	Want      func(value func(column string) any) string
@@ -199,6 +248,10 @@ func withoutColumnsAfterTheCapture(table FrozenTable) (FrozenTable, []string) {
 	for name, column := range defaultedColumnsAfterTheCapture[table.Name] {
 		added[name], empty[name] = column.Migration, column.Want
 	}
+	derived := map[string]func(value func(column string) any) []string{}
+	for name, column := range derivedColumnsAfterTheCapture[table.Name] {
+		added[name], derived[name] = column.Migration, column.Want
+	}
 	if len(added) == 0 {
 		return table, nil
 	}
@@ -221,6 +274,36 @@ func withoutColumnsAfterTheCapture(table FrozenTable) (FrozenTable, []string) {
 			continue
 		}
 		drop[position] = true
+		if want, isDerived := derived[name]; isDerived {
+			if columnType := table.Columns[position].Type; columnType != "Array(String)" {
+				problems = append(problems, fmt.Sprintf("%s.%s (added by %s) is %s, not a derived Array(String)", table.Name, name, added[name], columnType))
+				continue
+			}
+			differing := 0
+			for _, row := range table.Rows {
+				value := func(column string) any {
+					for index, candidate := range table.Columns {
+						if candidate.Name == column && index < len(row) {
+							return row[index]
+						}
+					}
+					return nil
+				}
+				var loaded []string
+				isStrings := false
+				if position < len(row) {
+					loaded, isStrings = loadedStrings(row[position])
+				}
+				if !isStrings || !slices.Equal(loaded, want(value)) {
+					differing++
+				}
+			}
+			if differing > 0 {
+				problems = append(problems, fmt.Sprintf("%s.%s (added by %s, after the capture): %d of %d loaded rows differ from the DEFAULT of their own row; a captured row has no value, so the load must leave the DEFAULT",
+					table.Name, name, added[name], differing, len(table.Rows)))
+			}
+			continue
+		}
 		if want, isEmpty := empty[name]; isEmpty {
 			columnType := table.Columns[position].Type
 			if columnType != "String" && columnType != "LowCardinality(String)" {
@@ -475,6 +558,42 @@ func TestAfterCaptureRulesReportEveryDefectByName(t *testing.T) {
 	if _, problems := withoutColumnsAfterTheCapture(notNullable); len(problems) != 1 || !strings.Contains(problems[0], "not Nullable") {
 		t.Fatalf("a named column that is not nullable: %q", problems)
 	}
+	// ---- a derived Array(String) column added after the capture ----
+	refsColumns := []FrozenColumn{
+		{Name: "work_unit_id", Type: "String"},
+		{Name: "structural_evidence_json", Type: "String"},
+		{Name: "effort_basis", Type: "LowCardinality(String)"},
+		{Name: "evidence_quote_count", Type: "Nullable(UInt32)"},
+		{Name: "issue_refs", Type: "Array(String)"},
+		{Name: "pr_refs", Type: "Array(String)"},
+	}
+	refsClean := FrozenTable{Name: "work_unit_investments", Columns: refsColumns, Rows: [][]any{
+		{"u1", `{"issues":["i-1","i-2"],"prs":["p-1"]}`, "", nil, []any{"i-1", "i-2"}, []any{"p-1"}},
+		{"u2", ``, "", nil, []any{}, []any{}},
+		{"u3", `{"issues":[]}`, "", nil, []any{}, []any{}},
+	}}
+	if out, problems := withoutColumnsAfterTheCapture(refsClean); len(problems) != 0 || len(out.Columns) != 2 ||
+		out.Columns[0].Name != "work_unit_id" || out.Columns[1].Name != "structural_evidence_json" || len(out.Rows[0]) != 2 {
+		t.Fatalf("every row holds the DEFAULT of its evidence: %+v %v", out, problems)
+	}
+	// PLANT 5: a load that writes references its evidence does not hold.
+	refsWritten := FrozenTable{Name: "work_unit_investments", Columns: refsColumns, Rows: [][]any{
+		{"u1", `{"issues":["i-1","i-2"],"prs":["p-1"]}`, "", nil, []any{"i-1"}, []any{"p-1"}},
+		{"u2", ``, "", nil, []any{}, []any{}},
+	}}
+	if _, problems := withoutColumnsAfterTheCapture(refsWritten); len(problems) != 1 ||
+		!strings.HasPrefix(problems[0], "work_unit_investments.issue_refs (added by 149_work_unit_investment_refs.sql, after the capture): 1 of 2 loaded rows differ") {
+		t.Fatalf("a reference the evidence does not hold: %q", problems)
+	}
+	// The column is not an Array(String).
+	refsWrongType := FrozenTable{Name: "work_unit_investments", Columns: []FrozenColumn{
+		{Name: "structural_evidence_json", Type: "String"}, {Name: "effort_basis", Type: "String"}, {Name: "evidence_quote_count", Type: "Nullable(UInt32)"},
+		{Name: "issue_refs", Type: "String"}, {Name: "pr_refs", Type: "Array(String)"},
+	}, Rows: [][]any{{`{}`, "", nil, "", []any{}}}}
+	if _, problems := withoutColumnsAfterTheCapture(refsWrongType); len(problems) != 1 || !strings.Contains(problems[0], "not a derived Array(String)") {
+		t.Fatalf("a derived column that is not an Array(String): %q", problems)
+	}
+
 	// A table with no added column is returned as it is.
 	other := FrozenTable{Name: "git_commits", Columns: columns, Rows: [][]any{{"a", "value", "x", "o"}}}
 	if out, problems := withoutColumnsAfterTheCapture(other); len(problems) != 0 || len(out.Columns) != 4 {

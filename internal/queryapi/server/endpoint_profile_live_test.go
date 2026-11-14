@@ -663,7 +663,7 @@ func driveInternal(t *testing.T, row liveRow) *liveObs {
 			o.wantStatus("internal headers claiming impersonation", a, http.StatusOK)
 			o.wantOrg("internal headers claiming impersonation", stack, authctx.Claims{OrgID: ecOrg.String(), ImpersonationActive: true})
 		}
-		edgeSession(t, o, q, false, http.StatusUnauthorized)
+		edgeSession(t, o, q, false, http.StatusServiceUnavailable)
 		if row.route == "/query/proof-write" {
 			proofWriteCells(t, o)
 		}
@@ -756,6 +756,14 @@ func driveBuildInfo(t *testing.T, row liveRow) *liveObs {
 		}
 		buildInfoUserTokenCells(t, o, listener, q, identity)
 		stackStateCellsAs(t, o, listener+": platform admin, ", q, asSuperuser)
+		down := liveStack(t, func(s *accessStore) { asSuperuser(s); s.errUserState = fmt.Errorf("down: %w", policy.ErrUnavailable) })
+		q.bearer = down.user
+		got := down.live(q)
+		o.wantStatus(listener+": platform admin, users store unavailable", got, http.StatusServiceUnavailable)
+		if strings.TrimSpace(got.body) != restUnavailable {
+			o.fail("%s: platform admin, users store unavailable: body %q, want %q", listener, trim(got.body), restUnavailable)
+		}
+		q.bearer = ""
 	}
 	o.textHas("resource_resolver", "none:")
 	o.impersonationPolicy(false)
@@ -1148,7 +1156,7 @@ func TestLiveImpersonationCellsOnTheEdgeCarrier(t *testing.T) {
 		header  bool
 		failure int
 	}{
-		"query":   {liveReq{listener: "internal", method: http.MethodPost, path: "/query", body: document}, false, http.StatusUnauthorized},
+		"query":   {liveReq{listener: "internal", method: http.MethodPost, path: "/query", body: document}, false, http.StatusServiceUnavailable},
 		"graphql": {liveReq{listener: "query", method: http.MethodPost, path: "/graphql", body: document}, true, http.StatusServiceUnavailable},
 	}
 	cells := []string{

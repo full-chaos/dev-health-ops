@@ -842,7 +842,7 @@ check_vet() {
 check_authhistory_vet() {
   local file pkgs=()
   while IFS= read -r -d '' file; do
-    head -n 20 "${ROOT}/${file}" | grep -Eq '^//go:build .*authhistory' || continue
+    grep -Eq '^//go:build .*authhistory' <<<"$(head -n 20 "${ROOT}/${file}")" || continue
     pkgs+=("./$(dirname "${file}")")
   done < <(git -C "${ROOT}" ls-files --cached --others --exclude-standard -z -- '*.go')
   [ "${#pkgs[@]}" -gt 0 ] || die "authhistory vet: no file carries the authhistory build tag"
@@ -1185,7 +1185,7 @@ check_test() {
         go_test_json_run "${json}" /dev/null ${rest_rows}
       fi
     ) || { rm -f -- "${json}"; return 1; }
-    if printf '%s\n' "${all}" | grep -qx -- "${SERIAL_HEAVY_TEST_PACKAGE}"; then
+    if grep -qx -- "${SERIAL_HEAVY_TEST_PACKAGE}" <<<"${all}"; then
       ran_heavy=1
       printf 'go test (alone): %s\n' "${SERIAL_HEAVY_TEST_PACKAGE}"
       (
@@ -1523,7 +1523,7 @@ test_shard_split_names() {
   security_fresh_load
   while IFS=$'\t' read -r pkg key part parts; do
     [ -n "${pkg}" ] || continue
-    if printf '%s\n' "${SECURITY_FRESH_SET}" | grep -Fqx -- "${pkg}"; then
+    if grep -Fqx -- "${pkg}" <<<"${SECURITY_FRESH_SET}"; then
       die "split package ${key} is a fresh security package (${SECURITY_FRESH_FILE#"${ROOT}/"}); it cannot be split"
     fi
     names="$(test_split_cut_names "${GO_TEST_SPLIT_WEIGHTS}" "${module_dir}" "${pkg}" "${key}" "${part}" "${parts}")" || exit 2
@@ -1565,7 +1565,7 @@ test_split_job_start() {
   slegjson="$(mktemp "${TMPDIR:-/tmp}/dev-health-split-legjson.XXXXXX")"
   serr="$(mktemp "${TMPDIR:-/tmp}/dev-health-split-err.XXXXXX")"
   printf 'go test%s (split): %s: %d test name(s) of its parts here\n' "${MERGE_GROUP_FRESH:+ -count=1}" "${key}" "${n}"
-  if [ "${module_dir}" = "." ] && printf '%s\n' "${census_keys}" | grep -Fqx -- "${key}"; then
+  if [ "${module_dir}" = "." ] && grep -Fqx -- "${key}" <<<"${census_keys}"; then
     (
       [ -z "${prev}" ] || while kill -0 "${prev}" 2>/dev/null; do sleep 1; done
       cd "${ROOT}/${module_dir}"
@@ -2033,7 +2033,7 @@ check_race_weights_rows() {
     || die "ci/go_race_solo.tsv lists a package twice"
   printf '%s\n' "${solo_rows}" | sed '/^$/d' | LC_ALL=C sort -c 2>/dev/null \
     || die "ci/go_race_solo.tsv is not sorted (LC_ALL=C)"
-  ! printf '%s\n' "${solo_rows}" | grep -qx 'internal/providersync' \
+  ! grep -qx 'internal/providersync' <<<"${solo_rows}" \
     || die "ci/go_race_solo.tsv lists internal/providersync, which runs as test-name slices in every race leg and cannot be solo"
   shopt -u dotglob
   printf 'race-weights-rows: %d row(s) match the package list, %d solo\n' "$(printf '%s\n' "${rows}" | wc -l)" "$(printf '%s\n' "${solo_rows}" | sed '/^$/d' | wc -l)"
@@ -2556,7 +2556,8 @@ check_venue_oracles() {
         fi
         ;;
       local)
-        file="$(grep -lE "^func ${name}[(\[]" "${ROOT}/${dir}"/*_test.go | head -n1)"
+        file="$(grep -lE "^func ${name}[(\[]" "${ROOT}/${dir}"/*_test.go)"
+        file="${file%%$'\n'*}"
         printf 'venue-oracles: %s in %s is marked local-only and is not run here\n' "${name}" "${file#"${ROOT}"/}" >&2
         local_only+=("${name}")
         ;;
@@ -5651,7 +5652,7 @@ check_auth_history() {
   out="$(auth_go test -mod=readonly -trimpath -count=1 -v -tags authhistory -run '^TestEveryEndpointProfileInventoryDeclaresAVerifiableSourceCommit$' ./internal/auth/contracts 2>&1)" \
     || { printf '%s\n' "${out}" >&2; die "auth history: an inventory source_commit does not verify"; }
   printf '%s\n' "${out}"
-  printf '%s\n' "${out}" | grep -q 'AUTH_SOURCE_COMMIT_VERIFIED ' \
+  grep -q 'AUTH_SOURCE_COMMIT_VERIFIED ' <<<"${out}" \
     || die "auth history: no inventory was verified (the proof marker never printed)"
 }
 

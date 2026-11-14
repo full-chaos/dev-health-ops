@@ -704,10 +704,17 @@ func githubTestsRunReadable(run gitHubWorkflowRunPayload) bool {
 	return stringValue(run.Status) == "completed"
 }
 
-// githubTestsArtifactRunsCreatedFrom is one day before the claim's since date:
-// a run created before it that completes inside the window is still listed.
+// githubTestsArtifactRunsCreatedFrom is the date a run listing starts from:
+// the since date minus the claim's width, at least one day. It is never
+// stricter than githubTestsReportRunOutsideWindow, which keeps a run that
+// finished at or after since minus width, so a run created before the window
+// and completed inside it is still listed.
 func githubTestsArtifactRunsCreatedFrom(claim Claim) string {
-	return claim.SinceAt.UTC().AddDate(0, 0, -1).Format(time.DateOnly)
+	width := 24 * time.Hour
+	if claim.BeforeAt != nil {
+		width = max(width, claim.BeforeAt.UTC().Sub(claim.SinceAt.UTC()))
+	}
+	return claim.SinceAt.UTC().Add(-width).Format(time.DateOnly)
 }
 
 func normalizeGitHubTestsPipeline(claim Claim, repoID string, run gitHubWorkflowRunPayload, at time.Time) (githubTestsPipelineRow, bool) {

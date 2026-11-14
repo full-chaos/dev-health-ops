@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -193,5 +194,62 @@ func TestGitHubTestsCompletedRunKeepsEveryRepeatedCaseIdentity(t *testing.T) {
 	}
 	if len(keys) != 3 {
 		t.Fatalf("got %d distinct keys, want 3", len(keys))
+	}
+}
+
+func artifactListingStart(t *testing.T, claim Claim) string {
+	t.Helper()
+	doer := githubTestsReportWindowDoerFor(t, "2026-07-22T12:30:00Z")
+	collectGitHubTestsReportRows(t, doer, claim, time.Date(2026, 7, 22, 13, 5, 0, 0, time.UTC))
+	for _, query := range doer.runQueries {
+		if strings.Contains(query, "branch=") {
+			values, err := url.ParseQuery(query)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return strings.TrimPrefix(values.Get("created"), ">=")
+		}
+	}
+	t.Fatalf("no artifact run listing: %v", doer.runQueries)
+	return ""
+}
+
+func TestGitHubTestsRunListingStartFollowsTheClaimWidth(t *testing.T) {
+	t.Parallel()
+	since := time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)
+	hour := githubTestsWindowClaim(t, since, since.Add(time.Hour))
+	if got := artifactListingStart(t, hour); got != "2026-07-21" {
+		t.Fatalf("1 h claim lists from %s, want the day before (2026-07-21)", got)
+	}
+	wide := githubTestsWindowClaim(t, since, since.Add(30*24*time.Hour-time.Second))
+	if got := artifactListingStart(t, wide); got != "2026-06-22" {
+		t.Fatalf("30-day claim lists from %s, want date(since - width) = 2026-06-22", got)
+	}
+	open := nativeTestClaim("github", "tests")
+	open.SinceAt, open.BeforeAt = &since, nil
+	if got := artifactListingStart(t, open); got != "2026-07-21" {
+		t.Fatalf("claim with no BeforeAt lists from %s, want one day (2026-07-21)", got)
+	}
+}
+
+// The listing is never stricter than the drop rule: a run that finished exactly at since - width is kept by the
+// drop rule and is created no later than it finishes, so the listing's start date is on or before its creation date.
+func TestGitHubTestsRunListingIsNotStricterThanTheDropRule(t *testing.T) {
+	t.Parallel()
+	since := time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)
+	for _, width := range []time.Duration{time.Hour, 24 * time.Hour, 72 * time.Hour, 30*24*time.Hour - time.Second} {
+		claim := githubTestsWindowClaim(t, since, since.Add(width))
+		oldest := since.Add(-width)
+		pipeline := githubTestsPipelineRow{StartedAt: oldest, FinishedAt: &oldest}
+		if githubTestsReportRunOutsideWindow(pipeline, claim) {
+			t.Fatalf("width %s: drop rule excludes a run finishing at since - width", width)
+		}
+		start, err := time.Parse(time.DateOnly, artifactListingStart(t, claim))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if start.After(oldest) {
+			t.Fatalf("width %s: listing starts %s, after the oldest kept run's finish %s", width, start, oldest)
+		}
 	}
 }

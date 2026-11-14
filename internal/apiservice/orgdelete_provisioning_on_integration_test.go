@@ -3,8 +3,13 @@
 package apiservice
 
 import (
+	"bytes"
 	"context"
+	"io"
 	"net/http"
+	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"testing"
 	"time"
 
@@ -110,4 +115,26 @@ func TestOrgDeleteSwitchOnFreesNameAndSlug(t *testing.T) {
 	if n := s.count(t, ctx, `SELECT count(*) FROM auth.organizations WHERE id = $1 AND slug = $2 AND disabled_at IS NULL`, y, slugY); n != 1 {
 		t.Fatalf("after the repeat delete the new org's active auth rows: %d, want 1", n)
 	}
+}
+
+// logRefusals fronts auth-service with a proxy that logs each non-2xx answer, so a refusal that go-api turns into a
+// generic 503 is named in the test log.
+func logRefusals(t *testing.T, upstream *httptest.Server) *httptest.Server {
+	t.Helper()
+	target, err := url.Parse(upstream.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := httputil.NewSingleHostReverseProxy(target)
+	proxy.ModifyResponse = func(response *http.Response) error {
+		if response.StatusCode >= 300 {
+			body, _ := io.ReadAll(response.Body)
+			response.Body = io.NopCloser(bytes.NewReader(body))
+			t.Logf("auth-service %s %s = %d %s", response.Request.Method, response.Request.URL.Path, response.StatusCode, body)
+		}
+		return nil
+	}
+	front := httptest.NewServer(proxy)
+	t.Cleanup(front.Close)
+	return front
 }

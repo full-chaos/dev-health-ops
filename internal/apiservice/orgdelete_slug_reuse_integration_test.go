@@ -108,6 +108,9 @@ func newSlugStack(t *testing.T, ctx context.Context, switchValue string) *slugSt
 	}
 
 	provisioning, identities := orgDeleteAuthService(t, runtime)
+	if switchValue != "" {
+		provisioning = logRefusals(t, provisioning)
+	}
 	super := uuid.New()
 	if _, err := admin.Exec(ctx, `INSERT INTO users (id, email, password_hash, auth_provider, is_active, is_verified, is_superuser, token_version, created_at, updated_at)
 VALUES ($1, $2, NULL, 'local', true, true, true, 0, now(), now())`, super, "slugreuse-super-"+super.String()[:8]+"@example.test"); err != nil {

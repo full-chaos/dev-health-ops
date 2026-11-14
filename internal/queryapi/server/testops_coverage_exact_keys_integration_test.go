@@ -66,11 +66,13 @@ func TestTestOpsCoverageRoute_ExactRepoKeysReturnBranchCoverageOutsideIndependen
 			t.Fatalf("seed ClickHouse: %v\n%s", err, statement)
 		}
 	}
+	// A stored coverage row carries the line counts its percent comes from (the snapshot parsers derive the percent
+	// from them); the line coverage rate is covered lines over total lines, so a percent alone has no weight.
 	seedCoverage := func(repo string, line, branch float64) {
 		t.Helper()
 		seed(`INSERT INTO testops_coverage_metrics_daily
-			(repo_id, day, line_coverage_pct, branch_coverage_pct, uncovered_files_count, coverage_regression_count, org_id, computed_at)
-			VALUES (?, ?, ?, ?, 0, 0, ?, ?)`, repo, day, line, branch, orgID, computedAt)
+			(repo_id, day, line_coverage_pct, branch_coverage_pct, lines_total, lines_covered, uncovered_files_count, coverage_regression_count, org_id, computed_at)
+			VALUES (?, ?, ?, ?, 100, ?, 0, 0, ?, ?)`, repo, day, line, branch, uint32(line), orgID, computedAt)
 	}
 	seedRepo := func(repo, name string) {
 		t.Helper()

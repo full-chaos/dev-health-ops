@@ -35,7 +35,7 @@ func (g *Guard) BodyFirst(level Authz, next http.Handler) http.Handler {
 
 func (g *Guard) bodyFirstOver(guarded http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, outcome, failure, err := pybody.Read(r)
+		body, outcome, failures, err := pybody.ReadChecked(r)
 		if err != nil {
 			var tooLarge *http.MaxBytesError
 			if errors.As(err, &tooLarge) {
@@ -49,7 +49,7 @@ func (g *Guard) bodyFirstOver(guarded http.Handler) http.Handler {
 		}
 		switch outcome {
 		case pybody.DecodeFailed:
-			WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail([]pybody.Error{*failure}), nil)
+			WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(failures), nil)
 			return
 		case pybody.ParseFailed:
 			WriteDetail(w, http.StatusBadRequest, "There was an error parsing the body", nil)

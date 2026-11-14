@@ -24,12 +24,15 @@ import (
 // left) a non-superuser's refresh is refused 401 and the session or token
 // family revoked, with an audit row, on the auth plane (go-api's own refresh,
 // and auth-service's when it owns sessions). A session minted by an invite
-// accept or an onboard join refreshes. The superuser cells pin today's answer
-// with AUTH_PROXY_ORG_PROVISIONING off, not a wanted one: the superuser keeps
-// refreshing on the auth plane, WIDER than the legacy go-api path, which
-// revokes the org's refresh tokens on removal (CHAOS-13212, parked under D6787
-// until the switch is on). With the switch on the removal ends the session:
-// authruntime TestProvisioningClientRemoveRefusesTheRemovedPrincipalsRefresh.
+// accept or an onboard join refreshes. The superuser cells pin the answer with
+// AUTH_PROXY_ORG_PROVISIONING off, which prod has not run since the org
+// provisioning flip (deploy values.prod.yaml:1378, orgProvisioning: true): the
+// superuser keeps refreshing on the auth plane, WIDER than the legacy go-api
+// path, which revokes the org's refresh tokens on removal. That is a rule-1 gap
+// of the switch-off path only (CHAOS-13212, D6787). The switch-on answer, the
+// legacy one, is pinned by authruntime
+// TestProvisioningClientRemoveRefusesTheRemovedPrincipalsRefresh and
+// TestProvisioningRemoveEndsTheMembersSessionsOfTheOrganization.
 
 // shape is a failure message's view of an answer: its status, the keys of
 // its JSON body and the refusal detail; never a token or other value.
@@ -132,8 +135,9 @@ func wantRefreshOK(t *testing.T, cell string, got response) {
 // Auth plane: a session issued by an invite accept refreshes while the
 // membership exists; once go-api's admin removed the member, the refresh is
 // refused, the session revoked (session_revoked) and one revoke audit row
-// written. A superuser in the same position keeps refreshing: today's answer
-// with AUTH_PROXY_ORG_PROVISIONING off, WIDER than legacy (CHAOS-13212).
+// written. A superuser in the same position keeps refreshing: the switch-off
+// answer only (AUTH_PROXY_ORG_PROVISIONING off, not prod), WIDER than legacy
+// (CHAOS-13212); see the file comment for the switch-on cells.
 func TestAuthRefreshOfARemovedMemberIsRefusedAndRevoked(t *testing.T) {
 	for _, superuser := range []bool{false, true} {
 		name := "member"
@@ -164,7 +168,7 @@ WHERE event_type = 'auth.session.revoked' AND subject_principal_id = $1`, user)
 			if superuser {
 				wantRefreshOK(t, cell, got)
 				if revoked != "0" || audits != "0" {
-					t.Fatalf("%s: a superuser's session was revoked (%s) or audited (%s)", cell, revoked, audits)
+					t.Fatalf("%s: a superuser's session was revoked (%s) or audited (%s); the switch-off answer is 200, nothing revoked", cell, revoked, audits)
 				}
 				return
 			}
@@ -179,8 +183,8 @@ WHERE event_type = 'auth.session.revoked' AND subject_principal_id = $1`, user)
 // Auth plane, v1 refresh: once go-api's admin removed the member, the refresh
 // is refused before the credential rotates: no successor row, no presented
 // row consumed, and the session revoked (session_revoked). A superuser in the
-// same position rotates: today's answer with AUTH_PROXY_ORG_PROVISIONING off,
-// WIDER than legacy (CHAOS-13212).
+// same position rotates: the switch-off answer only (AUTH_PROXY_ORG_PROVISIONING
+// off, not prod), WIDER than legacy (CHAOS-13212); see the file comment.
 func TestAuthV1RefreshOfARemovedMemberRotatesNothing(t *testing.T) {
 	for _, superuser := range []bool{false, true} {
 		name := "member"

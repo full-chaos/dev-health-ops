@@ -139,6 +139,8 @@ var wcSpecs = []wcSpec{
 	{label: "delegated_imp", kind: "delegated", role: "owner", tokenOrg: true, allRows: true, impSwitchOn: true, expect: wcParity},
 	{label: "su_13209", publicSuperuser: true, expect: wcParity},
 	{label: "po_only", publicSuperuser: true, expect: wcParity, prepare: wcGrantOwner},
+	// A non-platform-admin user whose token names an org it holds no membership in (acp 06:39:40Z).
+	{label: "plain_foreign_org", tokenOrg: true},
 	{label: "g3a_principal_delete_refused", publicSuperuser: true, assigned: true, expect: wcMeasure, modes: []string{"m_on"}, prepare: wcDropPrincipal},
 	{label: "g3b_principal_disabled", publicSuperuser: true, assigned: true, expect: wcG3Change, modes: []string{"m_on"}, prepare: wcDisablePrincipal},
 	{label: "g3c_principal_service_account", publicSuperuser: true, assigned: true, expect: wcMeasure, modes: []string{"m_on"}, prepare: wcServiceAccountPrincipal},
@@ -752,9 +754,9 @@ func wcHasAllow(decisions []string, action string) bool {
 // wcCellsPerMode is the exact cell count of each mode (21 rows x its classes, the view twin included); a class or a
 // row that drops out of the tables fails the mode.
 //
-// m_off: 10 classes x 21 rows + 3 impersonation classes x 45 rows = 345; m_on: + 4 G3 classes x 21 + the twin x 21 = 450;
-// m_split: + the twin x 21 = 366.
-var wcCellsPerMode = map[string]int{"m_off": 345, "m_on": 450, "m_split_unreachable_in_prod": 366}
+// m_off: 11 classes x 21 rows + 3 impersonation classes x 45 rows = 366; m_on: + 4 G3 classes x 21 + the twin x 21 = 471;
+// m_split: + the twin x 21 = 387.
+var wcCellsPerMode = map[string]int{"m_off": 366, "m_on": 471, "m_split_unreachable_in_prod": 387}
 
 // wcTwin is the view twin of a mode's named-change classes: a reference caller whose decision point answers the
 // platform role the named classes get there (a planted role on its principal only). Its go-api view is theirs: in m_on
@@ -932,6 +934,76 @@ func wcNamedChange(t *testing.T, expect wcExpect, label string, got []wcCell, tw
 		t.Errorf("%s: no platform-decided row changed its answer", name)
 	}
 	t.Logf("NAMED-CHANGE|13728|%s|%s|rows_changed=%d", name, label, changed)
+}
+
+// One absolute-answer cell per evaluator branch the cells rely on (acp 06:39:40Z), in m_on (prod's platform roles mode),
+// asserted on both sides. The expected answer is the rule's, not a recorded one; each is red under its own mutant.
+func TestAdminWeakCoverRealPDPAbsoluteAnswers(t *testing.T) {
+	ctx := context.Background()
+	w := newWCWorld(t, ctx, wcModes[1])
+	spec := func(label string) wcSpec {
+		for _, s := range wcSpecs {
+			if s.label == label {
+				return s
+			}
+		}
+		t.Fatalf("no class %s", label)
+		return wcSpec{}
+	}
+	row := func(c *wcCaller, name string) wcRow {
+		for _, r := range wcRows(c, wcOff) {
+			if r.name == name {
+				return r
+			}
+		}
+		t.Fatalf("no row %s", name)
+		return wcRow{}
+	}
+	plain := w.seed(t, ctx, spec("plain_foreign_org"))
+	admin := w.seed(t, ctx, spec("pa_foreign_org"))
+	cells := []struct {
+		name   string
+		caller *wcCaller
+		row    wcRow
+		status int
+		body   string
+	}{
+		{
+			// E1, the absent platform role (evaluate.go:120-122): a non-holder on a platform row is refused. Legacy guard
+			// internal/api/policy/guard.go:231-242 (Superuser level: not held -> 403 "Superuser access required");
+			// RISK-F8P2B-admin-1 section 1: rows 1-20, 27, org admin/member 403 "Superuser access required".
+			name: "e1_absent_platform_role", caller: plain, row: row(plain, "r27_pull_stripe"),
+			status: http.StatusForbidden, body: `{"detail":"Superuser access required"}`,
+		},
+		{
+			// E3, no membership (evaluate.go:140-142): a non-holder with no membership in its token org is refused on an
+			// admin-or row. Legacy guard internal/api/policy/guard.go:212-224 (not IsAdmin and admin.users not held ->
+			// 403 "Admin access required"); enforce.go:506 keeps that text on the enforced row.
+			name: "e3_no_membership", caller: plain, row: row(plain, "r21_list"),
+			status: http.StatusForbidden, body: `{"detail":"Admin access required"}`,
+		},
+		{
+			// E2, the organization-scope platform-admin allow (evaluate.go:127-135): a platform admin with no membership
+			// reads the org it names. PRODUCT RULES doc f7cb775dde89 rule 1 (D6773): a superadmin never needs a
+			// membership; RISK-F8P2B-admin-1 section 1: superuser 200 with or without membership. billing.read is an
+			// org-only action (a live namespace); every admin-namespace question of a platform admin also has a
+			// platform alternative, so no admin-namespace row reaches this branch.
+			name: "e2_org_scope_platform_admin", caller: admin,
+			row:    wcRow{name: "billing_invoices", method: http.MethodGet, path: "/api/v1/billing/invoices", action: "billing.read"},
+			status: http.StatusOK,
+		},
+	}
+	for _, cell := range cells {
+		t.Run(cell.name, func(t *testing.T) {
+			for side := range 2 {
+				got := w.serve(w.main.handlers[side], w.main.plane, w.main.admins[side], side, cell.caller, cell.row)
+				t.Logf("CELL|13728|m_on|%s|%s|%s|%d|%s|pdp=%v", cell.caller.spec.label, cell.name, wcSideName[side], got.status, wcShort(got.body), got.decisions)
+				if got.status != cell.status || (cell.body != "" && got.body != cell.body) {
+					t.Errorf("%s side: %d %s; the rule's answer is %d %s", wcSideName[side], got.status, wcShort(got.body), cell.status, cell.body)
+				}
+			}
+		})
+	}
 }
 
 // With admin on and the decision point down, a platform admin gets the fail-closed 503 on every row and site; the off

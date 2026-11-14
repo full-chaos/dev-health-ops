@@ -118,8 +118,7 @@ func (e *Evaluator) evaluateBase(r Request, s Snapshot) Decision {
 	case policycatalog.ScopePlatform:
 		roleID = s.PlatformRole()
 		if roleID == "" {
-			// MUTANT E1 (CHAOS-13728 throwaway): an absent platform role reads as platform_admin.
-			roleID = "platform_admin"
+			return deny(ReasonPlatformRoleAbsent)
 		}
 	case policycatalog.ScopeOrganization:
 		// The legacy paths admit a holder of admin.orgs before they read the membership row, in an active,

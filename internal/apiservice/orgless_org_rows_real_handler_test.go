@@ -22,7 +22,7 @@ import (
 const orglessOCRBody = `{"detail":"Organization context required"}`
 
 // orglessOrgNamespaces turns on the cell of every organization row of the go-api profile.
-const orglessOrgNamespaces = "acr,billing,integrations,license,members,org,settings,teams"
+const orglessOrgNamespaces = "acr,billing,integrations,license,members,org,settings,sso,teams"
 
 // orglessRealRows is every organization row of the go-api profile, keyed "METHOD /route", with the guard level its
 // profile row names (primary_validator).
@@ -58,8 +58,8 @@ func orglessRealRows(t *testing.T) map[string]string {
 			out[key] = levels[key]
 		}
 	}
-	if len(out) != 130 {
-		t.Fatalf("%d organization rows, want 130", len(out))
+	if len(out) != 137 {
+		t.Fatalf("%d organization rows, want 137", len(out))
 	}
 	return out
 }
@@ -171,8 +171,8 @@ func TestOrglessOrgRowsRealHandlersKeepTheLegacyAnswer(t *testing.T) {
 	if orgsMeChecked != 1 {
 		t.Errorf("%s checked %d times for the org-less platform admin, want 1", orglessOrgsMe, orgsMeChecked)
 	}
-	if handlerAnswers[true]+handlerAnswers[false] != 80 {
-		t.Errorf("%d Admin and Authenticated rows reached the handler, want 80", handlerAnswers[true]+handlerAnswers[false])
+	if handlerAnswers[true]+handlerAnswers[false] != 87 {
+		t.Errorf("%d Admin and Authenticated rows reached the handler, want 87", handlerAnswers[true]+handlerAnswers[false])
 	}
 	t.Logf("platform admin with no organization, legacy handler answers: %d rows refuse 403 Organization context required, %d rows answer otherwise", handlerAnswers[true], handlerAnswers[false])
 }
@@ -229,7 +229,7 @@ func orglessCallsText(calls []pep.Request) string {
 	return "[" + strings.Join(parts, " ") + "]"
 }
 
-// The census (acp F-4): over the production mounts of the 130 organization rows, the org-less caller is asked exactly
+// The census (acp F-4): over the production mounts of the 137 organization rows, the org-less caller is asked exactly
 // the platform action the legacy guard admits it by. Every row is a plain level mount today, so that action is
 // admin.orgs (Guard.wrap orglessAction); a row mounted with its own gate action would be asked that action instead.
 func TestOrglessOrgRowsAskTheLegacyOrglessActionOnEveryRow(t *testing.T) {
@@ -242,8 +242,8 @@ func TestOrglessOrgRowsAskTheLegacyOrglessActionOnEveryRow(t *testing.T) {
 	for _, problem := range problems {
 		t.Error(problem)
 	}
-	if checked != 130 {
-		t.Fatalf("%d rows checked, want 130", checked)
+	if checked != 137 {
+		t.Fatalf("%d rows checked, want 137", checked)
 	}
 }
 

@@ -95,6 +95,11 @@ type gate struct {
 	action string
 	kind   gateKind
 	deny   DenyText
+	// late is the route's own checks that the legacy route answers before its handler's role check (FastAPI's 422, the
+	// licence's 402): it runs after the guard's legacy checks and, for a request the decision point refuses, before that
+	// refusal, so an enforced row keeps the legacy order of answers. It reports whether the request may go on; it has
+	// written the answer when it did not. nil is none.
+	late func(http.ResponseWriter, *http.Request) bool
 }
 
 type gateKind int
@@ -139,6 +144,14 @@ func (g *Guard) wrap(level Authz, gt gate, next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 		}))
 	}
+	if gt.late != nil {
+		inner := next
+		next = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if gt.late(w, r) {
+				inner.ServeHTTP(w, r)
+			}
+		})
+	}
 	return countGuardLevel(level, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		user, ok := g.currentUser(w, r, level, gt)
 		if !ok {
@@ -159,7 +172,10 @@ func (g *Guard) wrap(level Authz, gt gate, next http.Handler) http.Handler {
 		// A route whose namespace is switched on is decided by the decision point, not by the legacy checks below.
 		switch verdict := g.enforceVerdict(r, user, bearer, level, level == Superuser && gt.kind == gatePlatform, gt, platform); verdict {
 		case enforceDeny, enforceUnavailable, enforceNoDecisionPoint, enforceImpersonationRefused, enforceSessionRowUnavailable, enforceDenyNoOrg:
-			writeEnforceRefusal(w, r, level, verdict, gt.deny)
+			if gt.late != nil && decisionPointRefusal(verdict) && !gt.late(w, r) {
+				return
+			}
+			writeEnforceRefusal(w, r, g.pdp.enforcer.refusalLevel(r.Pattern, level), verdict, gt.deny)
 			return
 		case enforceAllow:
 			next.ServeHTTP(w, r.WithContext(WithUser(r.Context(), user)))
@@ -246,6 +262,17 @@ func (g *Guard) wrap(level Authz, gt gate, next http.Handler) http.Handler {
 		g.observeShadow(r, caller, bearer, true, gt)
 		next.ServeHTTP(w, g.userRequest(r, user))
 	}))
+}
+
+// WrapLate is Wrap with late: the route's checks that the legacy route answers before its role check run before an enforced
+// refusal too (see gate.late).
+func (g *Guard) WrapLate(level Authz, late func(http.ResponseWriter, *http.Request) bool, next http.Handler) http.Handler {
+	return g.wrap(level, gate{late: late}, next)
+}
+
+// BodyFirstLate is BodyFirst over WrapLate.
+func (g *Guard) BodyFirstLate(level Authz, late func(http.ResponseWriter, *http.Request) bool, next http.Handler) http.Handler {
+	return g.bodyFirstOver(g.WrapLate(level, late, next))
 }
 
 // WrapPlatform returns next behind the platform gate of action: only a caller

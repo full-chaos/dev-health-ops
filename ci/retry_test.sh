@@ -52,11 +52,11 @@ call() {
 for mode in plain hosted; do
   call "${mode}" a1 FAKE_FAILS=0 -- job 3 "2" -- flaky one
   if [ "${RC}" = 0 ] && [ "${RUNS}" = 1 ] && [ -z "${SLEEPS}" ]; then ok "${mode} a1 first try passes: 1 run, no sleep"; else bad "${mode} a1 rc=${RC} runs=${RUNS} sleeps=${SLEEPS}"; fi
-  if printf '%s\n' "${ERR}" | grep -Eq '^retry: name=job attempt=1/3 rc=0 elapsed=[0-9]+s$'; then ok "${mode} a1 log line form"; else bad "${mode} a1 log line: ${ERR}"; fi
+  if grep -Eq '^retry: name=job attempt=1/3 rc=0 elapsed=[0-9]+s$' <<<"${ERR}"; then ok "${mode} a1 log line form"; else bad "${mode} a1 log line: ${ERR}"; fi
 
   call "${mode}" a2 FAKE_FAILS=2 FAKE_RC=7 -- job 3 "2" -- flaky
   if [ "${RC}" = 0 ] && [ "${RUNS}" = 3 ] && [ "${SLEEPS}" = "2 2" ]; then ok "${mode} a2 two failures then pass: 3 runs, fixed gaps 2 2"; else bad "${mode} a2 rc=${RC} runs=${RUNS} sleeps=${SLEEPS}"; fi
-  if [ "$(printf '%s\n' "${ERR}" | grep -c '^retry: name=job attempt=')" = 3 ] && printf '%s\n' "${ERR}" | grep -q '^retry: name=job attempt=1/3 rc=7 ' && printf '%s\n' "${ERR}" | grep -q '^retry: name=job attempt=3/3 rc=0 '; then ok "${mode} a2 one log line per attempt, rc shown"; else bad "${mode} a2 lines: ${ERR}"; fi
+  if [ "$(grep -c '^retry: name=job attempt=' <<<"${ERR}")" = 3 ] && grep -q '^retry: name=job attempt=1/3 rc=7 ' <<<"${ERR}" && grep -q '^retry: name=job attempt=3/3 rc=0 ' <<<"${ERR}"; then ok "${mode} a2 one log line per attempt, rc shown"; else bad "${mode} a2 lines: ${ERR}"; fi
 
   call "${mode}" a3 FAKE_FAILS=99 FAKE_RC=7 -- job 3 "2" -- flaky
   if [ "${RC}" = 7 ] && [ "${RUNS}" = 3 ] && [ "${SLEEPS}" = "2 2" ]; then ok "${mode} a3 always failing: bounded at 3 runs, rc 7 passed through, no sleep after the last"; else bad "${mode} a3 rc=${RC} runs=${RUNS} sleeps=${SLEEPS}"; fi
@@ -71,11 +71,11 @@ for mode in plain hosted; do
   if [ "${SLEEPS}" = "1 2 4" ]; then ok "${mode} a6 doubling backoff 1 2 4"; else bad "${mode} a6 sleeps=${SLEEPS}"; fi
 
   call "${mode}" a7 FAKE_FAILS=1 -- job 2 "0" -- flaky "two words" x
-  if printf '%s\n' "${OUT}" | grep -qx 'cmd-out run=2 args=two words x' && printf '%s\n' "${ERR}" | grep -qx 'cmd-err run=2'; then ok "${mode} a7 command stdout/stderr and arguments pass through"; else bad "${mode} a7 out=${OUT} err=${ERR}"; fi
-  if printf '%s\n' "${OUT}" | grep -q '^retry:'; then bad "${mode} a7 the log line is on stdout"; else ok "${mode} a7 the log line is on stderr only"; fi
+  if grep -qx 'cmd-out run=2 args=two words x' <<<"${OUT}" && grep -qx 'cmd-err run=2' <<<"${ERR}"; then ok "${mode} a7 command stdout/stderr and arguments pass through"; else bad "${mode} a7 out=${OUT} err=${ERR}"; fi
+  if grep -q '^retry:' <<<"${OUT}"; then bad "${mode} a7 the log line is on stdout"; else ok "${mode} a7 the log line is on stderr only"; fi
 
   call "${mode}" a8 FAKE_FAILS=1 RETRY_QUIET=1 -- job 2 "0" -- flaky
-  if [ "${RC}" = 0 ] && ! printf '%s\n' "${ERR}" | grep -q '^retry:'; then ok "${mode} a8 RETRY_QUIET=1 prints no retry line"; else bad "${mode} a8 err=${ERR}"; fi
+  if [ "${RC}" = 0 ] && ! grep -q '^retry:' <<<"${ERR}"; then ok "${mode} a8 RETRY_QUIET=1 prints no retry line"; else bad "${mode} a8 err=${ERR}"; fi
 
   call "${mode}" b1 -- "" 3 1 -- flaky
   if [ "${RC}" = 2 ] && [ "${RUNS}" = 0 ]; then ok "${mode} b1 empty name: rc 2, command not run"; else bad "${mode} b1 rc=${RC} runs=${RUNS}"; fi
@@ -95,7 +95,7 @@ for mode in plain hosted; do
   if [ "${RC}" = 2 ] && [ "${RUNS}" = 0 ]; then ok "${mode} b8 no -- separator: rc 2"; else bad "${mode} b8 rc=${RC} runs=${RUNS}"; fi
   call "${mode}" b9 -- job 3 1 --
   if [ "${RC}" = 2 ]; then ok "${mode} b9 no command: rc 2"; else bad "${mode} b9 rc=${RC}"; fi
-  if printf '%s\n' "${ERR}" | grep -q '^retry: usage'; then ok "${mode} b9 usage line"; else bad "${mode} b9 usage: ${ERR}"; fi
+  if grep -q '^retry: usage' <<<"${ERR}"; then ok "${mode} b9 usage line"; else bad "${mode} b9 usage: ${ERR}"; fi
 
   # CHAOS-12372: RETRY_WHEN=FUNCTION decides, after each failed try, whether another try follows.
   call "${mode}" d1 FAKE_FAILS=99 FAKE_RC=7 RETRY_WHEN=never -- job 3 "2" -- flaky

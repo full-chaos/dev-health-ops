@@ -110,12 +110,12 @@ call() {
 for mode in plain hosted; do
   call "${mode}" t1 "${GOOD_SHA}" --
   if [ "${RC}" = 0 ] && [ "${GOT}" = 1 ] && [ "${GOTSHA}" = "${GOOD_SHA}" ]; then ok "${mode} t1 token set, anonymous fetch refused: the asset installs, sha ok"; else bad "${mode} t1 rc=${RC} got=${GOT} out: ${OUT}"; fi
-  if ! printf '%s\n' "${ARGV}" | grep -q 'https://github.com/.*/releases/download/'; then ok "${mode} t1b with a token the anonymous URL is never called"; else bad "${mode} t1b anonymous URL called: ${ARGV}"; fi
+  if ! grep -q 'https://github.com/.*/releases/download/' <<<"${ARGV}"; then ok "${mode} t1b with a token the anonymous URL is never called"; else bad "${mode} t1b anonymous URL called: ${ARGV}"; fi
 
   call "${mode}" t2 "${GOOD_SHA}" -- -x
-  if [ "${RC}" = 0 ] && ! printf '%s\n%s\n%s\n' "${ARGV}" "${OUT}" "${DENV}" | grep -qF "${TOKEN}"; then ok "${mode} t2 under bash -x the token is in no curl argv, no curl environment, no output"; else bad "${mode} t2 rc=${RC}: the token leaked or the fetch failed"; fi
+  if [ "${RC}" = 0 ] && ! grep -qF "${TOKEN}" <<<"${ARGV}"$'\n'"${OUT}"$'\n'"${DENV}"; then ok "${mode} t2 under bash -x the token is in no curl argv, no curl environment, no output"; else bad "${mode} t2 rc=${RC}: the token leaked or the fetch failed"; fi
   call "${mode}" t2b "${GOOD_SHA}" GH_TOKEN= GITHUB_TOKEN="${TOKEN}" --
-  if [ "${RC}" = 0 ] && [ "${GOT}" = 1 ] && ! printf '%s\n%s\n%s\n' "${ARGV}" "${OUT}" "${DENV}" | grep -qF "${TOKEN}"; then ok "${mode} t2b GITHUB_TOKEN alone is used, and not leaked"; else bad "${mode} t2b rc=${RC} got=${GOT} out: ${OUT}"; fi
+  if [ "${RC}" = 0 ] && [ "${GOT}" = 1 ] && ! grep -qF "${TOKEN}" <<<"${ARGV}"$'\n'"${OUT}"$'\n'"${DENV}"; then ok "${mode} t2b GITHUB_TOKEN alone is used, and not leaked"; else bad "${mode} t2b rc=${RC} got=${GOT} out: ${OUT}"; fi
 
   call "${mode}" t3 "${OTHER_SHA}" --
   if [ "${RC}" != 0 ] && [ "${GOT}" = 0 ]; then ok "${mode} t3 wrong sha256: fails closed, no file left"; else bad "${mode} t3 rc=${RC} got=${GOT}"; fi
@@ -132,7 +132,7 @@ for mode in plain hosted; do
   if [ "${RC}" != 0 ] && [ "${GOT}" = 0 ] && [ "${SLEEPS}" = "5 10 20 40" ]; then ok "${mode} t6 504 on all 5 tries: fails, waits 5 10 20 40"; else bad "${mode} t6 rc=${RC} got=${GOT} sleeps='${SLEEPS}'"; fi
 
   call "${mode}" t7 "${GOOD_SHA}" GH_TOKEN= FAKE_ANON=ok --
-  if [ "${RC}" = 0 ] && [ "${GOT}" = 1 ] && printf '%s\n' "${ARGV}" | grep -q 'https://github.com/acme/tool/releases/download/v1.2.3/'; then ok "${mode} t7 no token: the anonymous URL is used"; else bad "${mode} t7 rc=${RC} got=${GOT} out: ${OUT}"; fi
+  if [ "${RC}" = 0 ] && [ "${GOT}" = 1 ] && grep -q 'https://github.com/acme/tool/releases/download/v1.2.3/' <<<"${ARGV}"; then ok "${mode} t7 no token: the anonymous URL is used"; else bad "${mode} t7 rc=${RC} got=${GOT} out: ${OUT}"; fi
   call "${mode}" t7b "${OTHER_SHA}" GH_TOKEN= FAKE_ANON=ok --
   if [ "${RC}" != 0 ] && [ "${GOT}" = 0 ]; then ok "${mode} t7b no token, wrong sha256: fails closed"; else bad "${mode} t7b rc=${RC} got=${GOT}"; fi
 

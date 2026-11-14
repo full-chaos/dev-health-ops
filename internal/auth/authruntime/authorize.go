@@ -36,13 +36,19 @@ func sessionRefreshTTL() time.Duration {
 // every caller; without AUTH_TOKEN_ISSUER_URL no principal reference resolves.
 //
 // decisions is the decision cache with the feed on, nil with it off: the routes then decide without a cache and
-// decisionstate collects nothing.
+// decisionstate collects nothing. wrap is AuthorizeRoutesWithoutFeed's; auth-service passes none.
 func authorizeRoutes(cfg authconfig.Config, logger *slog.Logger, pool *pgxpool.Pool, schema authschema.ValidatedIdentifier,
-	signer authapi.AccessSigner, decisions *decisionFeed) ([]httpapi.Route, error) {
-	state, err := decisionstate.New(decisionstate.Config{Pool: pool, Schema: schema, Users: pgUsers(cfg, pool, schema), RefreshTTL: sessionRefreshTTL(),
+	signer authapi.AccessSigner, decisions *decisionFeed, wrap ...func(authapi.DecisionState) authapi.DecisionState) ([]httpapi.Route, error) {
+	reader, err := decisionstate.New(decisionstate.Config{Pool: pool, Schema: schema, Users: pgUsers(cfg, pool, schema), RefreshTTL: sessionRefreshTTL(),
 		CollectDependencies: decisions != nil})
 	if err != nil {
 		return nil, err
+	}
+	var state authapi.DecisionState = reader
+	for _, w := range wrap {
+		if w != nil {
+			state = w(state)
+		}
 	}
 	deps := authapi.AuthorizeDeps{State: state, Evaluator: authorization.NewEvaluator(), ProfileRows: authorizeProfileRows, Logger: logger,
 		CallerLimit: authapi.PDPCallerLimit{PerSecond: cfg.PDPCaller.PerSecond, Burst: cfg.PDPCaller.Burst},
@@ -106,4 +112,12 @@ func webApproverReferences(cfg authconfig.Config, logger *slog.Logger) *authapi.
 	}
 	logger.Info("web approver reference on")
 	return references
+}
+
+// AuthorizeRoutesWithoutFeed is authorizeRoutes with the revision feed off (no decision cache): the production builder
+// of the decision point routes, for a test decision point over a test database. wrap, when set, wraps the decision
+// state the routes read (a test plants a defect in it); nil reads the state as auth-service does.
+func AuthorizeRoutesWithoutFeed(cfg authconfig.Config, logger *slog.Logger, pool *pgxpool.Pool, schema authschema.ValidatedIdentifier,
+	signer authapi.AccessSigner, wrap func(authapi.DecisionState) authapi.DecisionState) ([]httpapi.Route, error) {
+	return authorizeRoutes(cfg, logger, pool, schema, signer, nil, wrap)
 }

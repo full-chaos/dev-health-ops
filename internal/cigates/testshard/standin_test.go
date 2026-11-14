@@ -34,8 +34,11 @@ if [ "$1" = "list" ] && [ -n "${FAKE_GO_LIST_CACHE:-}" ]; then
   esac
 fi
 if [ "$1" != "test" ]; then exec "%[1]s" "$@"; fi
+# Concurrent stand-in calls append to the same logs, and bash writes a line longer than its 4096-byte buffer in pieces: every
+# append of one call runs under one flock, so no line is torn and line k of each log is the same call. No flock = a loud failure.
+command -v flock >/dev/null || { printf 'stand-in go: flock is missing, the call logs cannot be written whole\n' >&2; exit 97; }
 case " $* " in *" -list "*)
-  printf '%%s\n' "$*" >> "${FAKE_GO_LIST_LOG}"
+  { flock 9 || exit 97; printf '%%s\n' "$*" >> "${FAKE_GO_LIST_LOG}"; } 9>>"${FAKE_GO_LIST_LOG}.lock"
   # FAKE_GO_LIST_REPLAY: the real go test -race -list output, replayed only for a call that carries BOTH -race and -list .*
   if [ -n "${FAKE_GO_LIST_REPLAY:-}" ] && [[ " $* " == *" -race "* ]] && [[ " $* " == *" -list .* "* ]]; then
     cat "${FAKE_GO_LIST_REPLAY}"
@@ -46,6 +49,8 @@ case " $* " in *" -list "*)
   [ -z "${FAKE_GO_LIST_EXTRA:-}" ] || printf '%%s\n' "${FAKE_GO_LIST_EXTRA}"
   exit 0 ;;
 esac
+{
+flock 9 || exit 97
 printf '%%s\n' "$*" >> "${FAKE_GO_LOG}"
 # FAKE_GO_ENV_LOG: the GOFLAGS value of each go test call, one line per call, in the order of FAKE_GO_LOG.
 [ -z "${FAKE_GO_ENV_LOG:-}" ] || printf 'GOFLAGS=%%s\n' "${GOFLAGS:-}" >> "${FAKE_GO_ENV_LOG}"
@@ -53,6 +58,7 @@ printf '%%s\n' "$*" >> "${FAKE_GO_LOG}"
 [ -z "${FAKE_GO_FRESH_LOG:-}" ] || printf '%%s\n' "${CHECK_GO_FRESH+set}${CHECK_GO_FRESH-unset}" >> "${FAKE_GO_FRESH_LOG}"
 # FAKE_GO_LEAK_LOG: the leg-only variables a go test call can see (one line per call; empty = none).
 [ -z "${FAKE_GO_LEAK_LOG:-}" ] || printf '%%s %%s\n' "${GO_TEST_LEG_JSON_DIR+GO_TEST_LEG_JSON_DIR}" "${DEV_HEALTH_GO_FRESH_SECURITY+DEV_HEALTH_GO_FRESH_SECURITY}" >> "${FAKE_GO_LEAK_LOG}"
+} 9>>"${FAKE_GO_LOG}.lock"
 # FAKE_GO_CHILD_CHECK_GO: the providersync slice call runs this check_go.sh once as a child (ci-leg test 350 350), as a test of
 # internal/cigates/testshard does, with the environment the go test call got.
 if [ -n "${FAKE_GO_CHILD_CHECK_GO:-}" ] && [[ " $* " == *" ./internal/providersync "* ]]; then

@@ -555,7 +555,7 @@ usage() {
   ci-leg-warm all build|race
          Compile every package of every leg of the family with the flags of
          the legs (race: -race, over the race shard plans) and run no test
-         code (go test -exec /bin/true; build also runs the two vet passes of
+         code (go test -exec true; build also runs the two vet passes of
          the static leg), to fill the go-quality Go cache family on a push to main.
   test-shard-plan SHARD COUNT
          Print the packages (module, import path, weights key) of the SHARD-th of
@@ -2101,7 +2101,7 @@ check_ci_leg() {
 }
 
 # check_ci_leg_warm_all build|race (CHAOS-13718): fills one go-quality Go cache family (go-quality.yml job go-quality-cache) with
-# the compile actions of every leg of the family and runs no test code (-exec /bin/true: each test binary is linked, never run).
+# the compile actions of every leg of the family and runs no test code (-exec true: each test binary is linked, never run).
 # The flags are the real legs' (-mod=readonly -trimpath; -race for race), so the actions are the ones those legs look up.
 #   build  every package of every module (the union of the test shard plans) and the static leg's two vet passes
 #   race   -race over every package of the race shard plans (the module's packages but ci/race_excluded_packages.tsv)
@@ -2115,8 +2115,8 @@ check_ci_leg_warm_all() {
   for module_dir in "${MODULE_DIRS[@]}"; do
     printf 'ci-leg-warm all %s: %s\n' "${family}" "${module_dir}"
     if [ "${family}" = build ]; then
-      (cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -exec /bin/true ./...) \
-        || die "ci-leg-warm all build: go test -exec /bin/true failed in ${module_dir}"
+      (cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -exec true ./...) \
+        || die "ci-leg-warm all build: go test -exec true failed in ${module_dir}"
       (cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go vet -mod=readonly -trimpath ./...) \
         || die "ci-leg-warm all build: go vet failed in ${module_dir}"
       (cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go vet -mod=readonly -trimpath -tags=integration ./...) \
@@ -2130,8 +2130,8 @@ check_ci_leg_warm_all() {
       [ -n "${pkg}" ] && pkgs+=("${pkg}")
     done < <(printf '%s\n' "${listing}" | race_excluded_filter "${module_dir}" "${modpath}")
     [ "${#pkgs[@]}" -gt 0 ] || continue
-    (cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -race -exec /bin/true "${pkgs[@]}") \
-      || die "ci-leg-warm all race: go test -race -exec /bin/true failed in ${module_dir}"
+    (cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -race -exec true "${pkgs[@]}") \
+      || die "ci-leg-warm all race: go test -race -exec true failed in ${module_dir}"
   done
   printf 'ci-leg-warm all %s: OK\n' "${family}"
 }

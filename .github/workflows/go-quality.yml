@@ -385,7 +385,7 @@ jobs:
         # compile action). Only the go-quality-cache job saves them, on a push to main, once per family and UTC day; a leg
         # never saves. A leg restores the newest generation of its family: of this go.sum, else of any go.sum, else (before the
         # first v3 save) a v2 per-leg entry of the same paths. The entry holds no reusable test results (it is filled with
-        # -exec /bin/true), so every test runs; the test shard weights are cold weights (ci/go_test_weights.tsv).
+        # -exec true), so every test runs; the test shard weights are cold weights (ci/go_test_weights.tsv).
         # The segment after go-quality- is the layout of the cached directory: bump it whenever that layout changes.
         id: go-cache
         if: steps.relevance.outputs.relevant == 'true' && runner.environment == 'github-hosted'

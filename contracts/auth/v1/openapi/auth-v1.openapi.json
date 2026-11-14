@@ -368,7 +368,7 @@
             }
           },
           "400": {
-            "description": "Either the request body could not be read (a transport failure within the size limit), answered by the transport before the route in its own error envelope, transport-error.v1 (not error.v1); or the go-api shaped refusal {\"detail\": {\"message\": ...}} for a provider profile with no usable user id, with exactly the text go-api answers. The body is one of the two, never both.",
+            "description": "Either the request body could not be read (a transport failure within the size limit), answered by the transport before the route in its own error envelope, transport-error.v1 (not error.v1); or the go-api shaped refusal {\"detail\": {\"message\": ..., \"reason\": \"malformed\"}} for a provider profile with no usable user id, with exactly the text and reason go-api answers. The body is one of the two, never both.",
             "content": {
               "application/json": {
                 "schema": {
@@ -386,12 +386,16 @@
                         "detail": {
                           "type": "object",
                           "required": [
-                            "message"
+                            "message",
+                            "reason"
                           ],
                           "additionalProperties": false,
                           "properties": {
                             "message": {
                               "const": "The provider returned an invalid user id"
+                            },
+                            "reason": {
+                              "const": "malformed"
                             }
                           }
                         }
@@ -413,7 +417,7 @@
             }
           },
           "403": {
-            "description": "go-api shaped refusal, {\"detail\": ...}; the reason is in the audit row and the log, never in the body.",
+            "description": "go-api shaped refusal, {\"detail\": {\"message\": ..., \"reason\": ...}}; reason is one of the closed federated refusal reasons (malformed, invalid_credentials, expired, principal_not_found, principal_deactivated, email_unverified, identity_conflict, signup_unavailable, dependency_unavailable, last_sign_in_method) and says no more than the status and the message; the full reason is in the audit row and the log.",
             "content": {
               "application/json": {
                 "schema": {
@@ -423,7 +427,7 @@
             }
           },
           "404": {
-            "description": "go-api shaped refusal, {\"detail\": ...}; the reason is in the audit row and the log, never in the body.",
+            "description": "go-api shaped refusal, {\"detail\": {\"message\": ..., \"reason\": ...}}; reason is one of the closed federated refusal reasons (malformed, invalid_credentials, expired, principal_not_found, principal_deactivated, email_unverified, identity_conflict, signup_unavailable, dependency_unavailable, last_sign_in_method) and says no more than the status and the message; the full reason is in the audit row and the log.",
             "content": {
               "application/json": {
                 "schema": {
@@ -433,7 +437,7 @@
             }
           },
           "409": {
-            "description": "go-api shaped refusal, {\"detail\": ...}; the reason is in the audit row and the log, never in the body.",
+            "description": "go-api shaped refusal, {\"detail\": {\"message\": ..., \"reason\": ...}}; reason is one of the closed federated refusal reasons (malformed, invalid_credentials, expired, principal_not_found, principal_deactivated, email_unverified, identity_conflict, signup_unavailable, dependency_unavailable, last_sign_in_method) and says no more than the status and the message; the full reason is in the audit row and the log.",
             "content": {
               "application/json": {
                 "schema": {
@@ -541,7 +545,7 @@
             }
           },
           "403": {
-            "description": "go-api shaped refusal, {\"detail\": ...}; the reason is in the audit row and the log, never in the body.",
+            "description": "go-api shaped refusal, {\"detail\": {\"message\": ..., \"reason\": ...}}; reason is one of the closed federated refusal reasons (malformed, invalid_credentials, expired, principal_not_found, principal_deactivated, email_unverified, identity_conflict, signup_unavailable, dependency_unavailable, last_sign_in_method) and says no more than the status and the message; the full reason is in the audit row and the log.",
             "content": {
               "application/json": {
                 "schema": {
@@ -551,7 +555,7 @@
             }
           },
           "404": {
-            "description": "go-api shaped refusal, {\"detail\": ...}; the reason is in the audit row and the log, never in the body.",
+            "description": "go-api shaped refusal, {\"detail\": {\"message\": ..., \"reason\": ...}}; reason is one of the closed federated refusal reasons (malformed, invalid_credentials, expired, principal_not_found, principal_deactivated, email_unverified, identity_conflict, signup_unavailable, dependency_unavailable, last_sign_in_method) and says no more than the status and the message; the full reason is in the audit row and the log.",
             "content": {
               "application/json": {
                 "schema": {
@@ -561,7 +565,7 @@
             }
           },
           "409": {
-            "description": "go-api shaped refusal, {\"detail\": ...}; the reason is in the audit row and the log, never in the body.",
+            "description": "go-api shaped refusal, {\"detail\": {\"message\": ..., \"reason\": ...}}; reason is one of the closed federated refusal reasons (malformed, invalid_credentials, expired, principal_not_found, principal_deactivated, email_unverified, identity_conflict, signup_unavailable, dependency_unavailable, last_sign_in_method) and says no more than the status and the message; the full reason is in the audit row and the log.",
             "content": {
               "application/json": {
                 "schema": {

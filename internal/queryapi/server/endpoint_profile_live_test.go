@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -663,7 +664,7 @@ func driveInternal(t *testing.T, row liveRow) *liveObs {
 			o.wantStatus("internal headers claiming impersonation", a, http.StatusOK)
 			o.wantOrg("internal headers claiming impersonation", stack, authctx.Claims{OrgID: ecOrg.String(), ImpersonationActive: true})
 		}
-		edgeSession(t, o, q, false, http.StatusUnauthorized)
+		edgeSession(t, o, q, false, http.StatusServiceUnavailable)
 		if row.route == "/query/proof-write" {
 			proofWriteCells(t, o)
 		}
@@ -695,25 +696,38 @@ func driveInternal(t *testing.T, row liveRow) *liveObs {
 func proofWriteCells(t *testing.T, o *liveObs) {
 	t.Helper()
 	const mutation = "mutation LiveProofWrite { probe }"
-	for _, allowed := range []bool{true, false} {
+	for _, cell := range []struct {
+		name    string
+		allowed bool
+		readErr error
+		want    int
+		wantRan int
+	}{
+		{"allowed", true, nil, http.StatusOK, 1},
+		{"not on the list", false, nil, http.StatusForbidden, 0},
+		{"allowlist read fails", true, errors.New("allowlist read failed"), http.StatusServiceUnavailable, 0},
+	} {
 		verifier, _ := iaVerifier(t)
 		ran := 0
 		mux := routeswitch.NewMux(routeswitch.StaticSwitch{"m": true})
 		mux.Register("m", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { ran++ }))
 		handler := newDocumentDispatchHandler(os.Getenv, mux, map[string]string{digestHex(mutation): "m"}, verifier, nil, nil, digest.KindMutation,
-			func(_ context.Context, org string) bool { return allowed && org == ecOrg.String() })
+			func(_ context.Context, org string) (bool, error) {
+				return cell.allowed && org == ecOrg.String(), cell.readErr
+			})
 		request := httptest.NewRequest(http.MethodPost, "/query/proof-write", strings.NewReader(documentBody(mutation)))
 		request.Header.Set("Content-Type", "application/json")
 		iaHeaders(ecOrg.String(), "admin", false, false)(request)
 		recorder := httptest.NewRecorder()
 		handler(recorder, request)
 		o.see(recorder.Code)
-		want, wantRan := http.StatusForbidden, 0
-		if allowed {
-			want, wantRan = http.StatusOK, 1
+		if recorder.Code != cell.want || ran != cell.wantRan {
+			o.fail("proof-write, %s: status %d, ran %d, want %d, %d", cell.name, recorder.Code, ran, cell.want, cell.wantRan)
 		}
-		if recorder.Code != want || ran != wantRan {
-			o.fail("proof-write with the organization allowed=%v: status %d, ran %d, want %d, %d", allowed, recorder.Code, ran, want, wantRan)
+		if cell.want == http.StatusServiceUnavailable {
+			if problem := unavailableProblem(faultAnswer{recorder.Code, recorder.Body.String(), recorder.Header()}); problem != "" {
+				o.fail("proof-write, %s: %s", cell.name, problem)
+			}
 		}
 	}
 	o.textHas("resource_resolver", "go_api_proof_orgs")
@@ -756,6 +770,14 @@ func driveBuildInfo(t *testing.T, row liveRow) *liveObs {
 		}
 		buildInfoUserTokenCells(t, o, listener, q, identity)
 		stackStateCellsAs(t, o, listener+": platform admin, ", q, asSuperuser)
+		down := liveStack(t, func(s *accessStore) { asSuperuser(s); s.errUserState = fmt.Errorf("down: %w", policy.ErrUnavailable) })
+		q.bearer = down.user
+		got := down.live(q)
+		o.wantStatus(listener+": platform admin, users store unavailable", got, http.StatusServiceUnavailable)
+		if strings.TrimSpace(got.body) != restUnavailable {
+			o.fail("%s: platform admin, users store unavailable: body %q, want %q", listener, trim(got.body), restUnavailable)
+		}
+		q.bearer = ""
 	}
 	o.textHas("resource_resolver", "none:")
 	o.impersonationPolicy(false)
@@ -1148,7 +1170,7 @@ func TestLiveImpersonationCellsOnTheEdgeCarrier(t *testing.T) {
 		header  bool
 		failure int
 	}{
-		"query":   {liveReq{listener: "internal", method: http.MethodPost, path: "/query", body: document}, false, http.StatusUnauthorized},
+		"query":   {liveReq{listener: "internal", method: http.MethodPost, path: "/query", body: document}, false, http.StatusServiceUnavailable},
 		"graphql": {liveReq{listener: "query", method: http.MethodPost, path: "/graphql", body: document}, true, http.StatusServiceUnavailable},
 	}
 	cells := []string{

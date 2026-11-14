@@ -6724,19 +6724,24 @@ func newQueryHandlerWithEdge(chClient featureflags.QueryClient, pgPool *pgxpool.
 // closure itself -- not a stand-in -- fails closed: a store error must
 // never read as "allowed", and the only way to prove that is to exercise
 // this exact function, not a test double standing in for its contract.
-func newProofOrgAllowed(pool *pgxpool.Pool) func(context.Context, string) bool {
-	return func(ctx context.Context, orgID string) bool {
+func newProofOrgAllowed(pool *pgxpool.Pool) proofOrgCheck {
+	return func(ctx context.Context, orgID string) (bool, error) {
 		allowed, err := postgresstore.ProofOrgAllowed(ctx, pool, orgID)
 		if err != nil {
-			// Fail closed: a store error is never "let it through". Logged
-			// so an operator can tell "nobody is allowlisted yet" (a normal,
-			// expected 403) from "the allowlist read itself is broken".
+			// Fail closed, and say so: the read could not decide, which is not
+			// the verdict "not on the list". The dispatcher answers go-api's
+			// unavailable form for it. Any store error counts, a cancelled or
+			// expired context included.
 			log.Printf("query-api: proof-write org-allowlist read failed for org_id=%q (refusing): %v", orgID, err)
-			return false
+			return false, fmt.Errorf("%w: %w", policy.ErrUnavailable, err)
 		}
-		return allowed
+		return allowed, nil
 	}
 }
+
+// proofOrgCheck decides whether an org may use /query/proof-write. A non-nil error means the check could not be
+// made: nothing was decided about the org.
+type proofOrgCheck func(ctx context.Context, orgID string) (bool, error)
 
 // newGraphQLServer is the gqlgen server every registered operation runs on:
 // the executable schema over the resolvers, the null-argument refusal, and the
@@ -6851,7 +6856,7 @@ func withMutationLocation(ctx context.Context, presented *gqlerror.Error) *gqler
 // OrgID or a "cannot decide" answer from the caller is a refusal, never a
 // fall-through, because a write door is the one place "the check could not
 // run" must never read as "the check passed."
-func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, operationByDigest map[string]string, verifier *principal.Verifier, edgeAuth *policy.Authenticator, edgeStore policy.Store, requireKind string, orgAllowed func(context.Context, string) bool, gates ...documentGate) http.HandlerFunc {
+func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, operationByDigest map[string]string, verifier *principal.Verifier, edgeAuth *policy.Authenticator, edgeStore policy.Store, requireKind string, orgAllowed proofOrgCheck, gates ...documentGate) http.HandlerFunc {
 	// An AUTH_PROXY_IMPERSONATION that does not parse fails closed (one WARN at Build).
 	refuseLegacy, refuseErr := refusesLegacyImpersonation(getenv)
 	refuseLegacy = refuseLegacy || refuseErr != nil
@@ -7025,7 +7030,7 @@ func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, op
 			switch session, err := edgeStore.ActiveImpersonation(r.Context(), id); {
 			case err != nil:
 				log.Printf("query-api: refused a non-query document of a caller without admin.impersonate: reason=%s operation=%s", storeFailureReason("edge_impersonation_lookup_failed", err), operation)
-				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				policy.WriteAuthFailure(w, "", policy.ErrUnavailable)
 				return
 			case session != nil:
 				log.Printf("query-api: refused a non-query document of a caller without admin.impersonate beside its live go-api impersonation row: operation=%s", operation)
@@ -7058,7 +7063,17 @@ func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, op
 			// claims.OrgID is trusted here for the same reason the rest of this
 			// pipeline trusts claims: authenticateInternalRequest already
 			// verified them, above, before any of this ran.
-			if claims.OrgID == "" || !orgAllowed(r.Context(), claims.OrgID) {
+			allowed := false
+			if claims.OrgID != "" {
+				var allowErr error
+				allowed, allowErr = orgAllowed(r.Context(), claims.OrgID)
+				if allowErr != nil {
+					log.Printf("query-api: proof-write route refused: operation=%s: the proof-org allowlist could not be read", operation)
+					policy.WriteAuthFailure(w, "", policy.ErrUnavailable)
+					return
+				}
+			}
+			if !allowed {
 				log.Printf("query-api: proof-write route refused: operation=%s org_id=%q is not on the proof-org allowlist", operation, claims.OrgID)
 				http.Error(w, "this org is not enabled for proof-write", http.StatusForbidden)
 				return

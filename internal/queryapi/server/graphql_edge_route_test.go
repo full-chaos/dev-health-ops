@@ -688,7 +688,7 @@ func TestGraphQLEdgeAnswersAnOperationThatIsNotEnabledAsAGraphQLError(t *testing
 // TestGraphQLEdgeAnswersAStoreItCannotReadAsTheUnhandled500: a live check
 // that could not be read decided nothing, so /graphql answers the Python
 // app's unhandled 500 (content headers only), never the 401 that would tell
-// the client its credential is bad; /query keeps its bare 401.
+// the client its credential is bad; /query answers go-api's 503.
 func TestGraphQLEdgeAnswersAStoreItCannotReadAsTheUnhandled500(t *testing.T) {
 	for name, store := range map[string]*fakeEdgeStore{
 		"membership lookup fails": {
@@ -708,8 +708,8 @@ func TestGraphQLEdgeAnswersAStoreItCannotReadAsTheUnhandled500(t *testing.T) {
 		request.Header.Set("Authorization", "Bearer "+member)
 		queryRecorder := httptest.NewRecorder()
 		query(queryRecorder, request)
-		if queryRecorder.Code != http.StatusUnauthorized || len(*seen) != 0 {
-			t.Errorf("%s on /query: %d, want the unchanged 401", name, queryRecorder.Code)
+		if queryRecorder.Code != http.StatusServiceUnavailable || strings.TrimSpace(queryRecorder.Body.String()) != restUnavailable || len(*seen) != 0 {
+			t.Errorf("%s on /query: %d %q, want 503 %s", name, queryRecorder.Code, queryRecorder.Body.String(), restUnavailable)
 		}
 	}
 	// A user-state read that fails: the org-scope middleware reads the caller

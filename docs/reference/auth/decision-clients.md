@@ -21,7 +21,7 @@ lifecycle: active
 Two clients ask the auth-service decision point the question of [authorization decisions](obligations.md): the Go package `pep` of `github.com/full-chaos/dev-health-go` and the server-only TypeScript module `web:src/lib/auth/authorize` of `dev-health-web`. Both deny on every failure.
 {: .fc-page-lede }
 
-Their source is in the `dev-health-go` and `dev-health-web` repositories, not in this one. `go.mod` here pins `dev-health-go` at v0.45.0. The facts on this page are from that tag and from `dev-health-web` main.
+Their source is in the `dev-health-go` and `dev-health-web` repositories, not in this one. `go.mod` here pins `dev-health-go` at v0.46.0. The facts on this page are from that tag and from `dev-health-web` main.
 
 ## The API
 

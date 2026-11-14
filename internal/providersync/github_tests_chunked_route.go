@@ -1414,13 +1414,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		cursor.NextURL, cursor.Index = "", 0
 	}
 	if cursor.Phase == "artifacts" {
-		artifactQuery := url.Values{"per_page": {"100"}}
-		if repo.DefaultBranch != "" {
-			artifactQuery.Set("branch", repo.DefaultBranch)
-		}
-		if claim.SinceAt != nil {
-			artifactQuery.Set("created", ">="+claim.SinceAt.UTC().Format(time.DateOnly))
-		}
+		artifactQuery := githubTestsArtifactRunQuery(claim)
 		artifactPage := func(page providerfoundation.PageVisit) error {
 			cursor.Pages++
 			// See emitRunPage's identical unconditional refresh above: this

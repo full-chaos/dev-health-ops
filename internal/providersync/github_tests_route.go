@@ -385,17 +385,7 @@ func (handler GitHubTestsRouteHandler) Collect(
 	if runsPage.PageBudgetExhausted || len(runsPage.Items) > maxRuns {
 		return CompleteRouteBatch{}, ErrPaginationCapExceeded
 	}
-	// The active Python report producer performs a second, server-side run
-	// selection scoped to the repository default branch. Pipeline/job rows are
-	// intentionally broader; report artifacts from feature and PR branches are
-	// outside the sync_tests report boundary.
-	artifactRunQuery := url.Values{"per_page": {"100"}}
-	if repo.DefaultBranch != "" {
-		artifactRunQuery.Set("branch", repo.DefaultBranch)
-	}
-	if claim.SinceAt != nil {
-		artifactRunQuery.Set("created", ">="+claim.SinceAt.UTC().Format(time.DateOnly))
-	}
+	artifactRunQuery := githubTestsArtifactRunQuery(claim)
 	artifactRunsPage, err := providerfoundation.CollectGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{
 		Path: root + "/actions/runs", Route: githubRunsRoute, Query: artifactRunQuery, DataKey: "workflow_runs", MaxPages: runPages,
 	})
@@ -651,6 +641,25 @@ func githubTestsIncompleteCount(incomplete []GitHubTestsIncomplete) int {
 }
 
 func (row githubTestsPipelineRow) StartedAtPtr() *time.Time { value := row.StartedAt; return &value }
+
+// githubTestsArtifactRunQuery selects the runs whose report artifacts are
+// fetched: runs of ANY branch (default branch and pull-request branches alike;
+// the run conclusion does not matter either). The listing runs from the start
+// of the day of SinceAt up to BeforeAt, the same upper bound the pipeline/job
+// pass has. Without it the listing walked on to the present, so a catch-up
+// window counted every later run against the 10,000-run listing cap.
+func githubTestsArtifactRunQuery(claim Claim) url.Values {
+	query := url.Values{"per_page": {"100"}}
+	switch {
+	case claim.SinceAt != nil && claim.BeforeAt != nil:
+		query.Set("created", claim.SinceAt.UTC().Format(time.DateOnly)+".."+claim.BeforeAt.UTC().Format(time.RFC3339))
+	case claim.SinceAt != nil:
+		query.Set("created", ">="+claim.SinceAt.UTC().Format(time.DateOnly))
+	case claim.BeforeAt != nil:
+		query.Set("created", "*.."+claim.BeforeAt.UTC().Format(time.RFC3339))
+	}
+	return query
+}
 
 // githubTestsReportRunOutsideWindow decides whether a run's report artifacts
 // (test suites/cases, coverage) belong to this claim's window. It is shared by

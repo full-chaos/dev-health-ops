@@ -17,7 +17,6 @@ import (
 // A new reader fails the test: add it to the boundary, or name it with a reason.
 var goAPIBodyReaders = map[string]string{
 	"api/pybody/pybody.go:Read":                                  "the decode: ReadChecked wraps it",
-	"api/pybody/boundary.go:ReadChecked":                         "the boundary",
 	"api/policy/bodyfirst.go:Guard.bodyFirstOver":                "BOUNDARY: every Guard.Body* route",
 	"api/teamsidentity/teamsidentity.go:handlers.decodeFirst":    "BOUNDARY: teams and identities routes",
 	"api/producttelemetry/producttelemetry.go:handler.ServeHTTP": "BOUNDARY: product telemetry",
@@ -25,9 +24,9 @@ var goAPIBodyReaders = map[string]string{
 	"api/billing/webhook.go:handlers.stripeWebhook":              "EXEMPT: signed raw body (HMAC input), byte-exact",
 	"api/webhookintake/github.go:Deps.handleGitHubWebhook":       "EXEMPT: signed raw body (HMAC input), byte-exact",
 	"api/webhookintake/pagerduty.go:readBodyLimited":             "EXEMPT: signed raw body (HMAC input), byte-exact",
-	"api/externalingest/handlers.go:Deps.handleAcceptBatch":      "EXEMPT: own envelope validator (jiter parity); lone surrogate is its legacy 500, no stored harm",
-	"api/externalingest/handlers.go:Deps.handleValidate":         "EXEMPT: own envelope validator (jiter parity); lone surrogate is its legacy 500, no stored harm",
-	"apiservice/customerpush/validate.go:readBodyLimited":        "EXEMPT: same envelope validator as externalingest",
+	"api/externalingest/handlers.go:Deps.handleAcceptBatch":      "EXEMPT: own envelope validator (jiter parity): a lone surrogate is its pinned legacy 500, nothing stored (ticket 13776)",
+	"api/externalingest/handlers.go:Deps.handleValidate":         "EXEMPT: own envelope validator (jiter parity): a lone surrogate is its pinned legacy 500, nothing stored (ticket 13776)",
+	"apiservice/customerpush/validate.go:readBodyLimited":        "EXEMPT: same envelope validator as externalingest (ticket 13776)",
 	"apiservice/authproxy.go:authProxy.sessionRoute":             "PASS-THROUGH: replays the bytes to go-api's guard, or forwards them raw to auth-service",
 }
 

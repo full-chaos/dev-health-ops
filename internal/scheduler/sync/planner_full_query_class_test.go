@@ -50,11 +50,39 @@ func TestPlannerAndFreshnessAgreeOnAFullQueryRow(t *testing.T) {
 
 			capDays, netAdvance := HeavyRatchet()
 			behind := workItemWindowNow.AddDate(0, 0, -30)
-			class := PlannedWindowClass(tc.provider, canonicalWorkItemsDataset, "medium", full)
+			spec, ok := datasetSpecification(tc.provider, canonicalWorkItemsDataset)
+			if !ok {
+				t.Fatalf("no specification for %s", tc.provider)
+			}
+			class := PlannedWindowClass(tc.provider, canonicalWorkItemsDataset, spec.CostClass, full)
 			catchingUp := ComputeWatermarkLag(class, &behind, workItemWindowNow, capDays, netAdvance).CatchingUp
 			if oneWindow == catchingUp {
 				t.Fatalf("planned one window = %v but freshness catching up = %v", oneWindow, catchingUp)
 			}
 		})
+	}
+}
+
+// The class pick holds for every registry cost class: a full-query family keeps
+// its own class, any other family dataset of a bounded provider is ratcheted
+// like HEAVY, and "catching up" follows the class.
+func TestPlannedWindowClassAcrossCostClasses(t *testing.T) {
+	capDays, netAdvance := HeavyRatchet()
+	behind := workItemWindowNow.AddDate(0, 0, -30)
+	for _, costClass := range []string{"light", "medium", "heavy"} {
+		for _, full := range []bool{false, true} {
+			want := heavyCostClass
+			if full {
+				want = costClass
+			}
+			got := PlannedWindowClass("jira", canonicalWorkItemsDataset, costClass, full)
+			if got != want {
+				t.Errorf("PlannedWindowClass(jira, work-items, %q, %v) = %q, want %q", costClass, full, got, want)
+			}
+			catching := ComputeWatermarkLag(got, &behind, workItemWindowNow, capDays, netAdvance).CatchingUp
+			if catching != (want == heavyCostClass) {
+				t.Errorf("%q full=%v: catching up = %v", costClass, full, catching)
+			}
+		}
 	}
 }

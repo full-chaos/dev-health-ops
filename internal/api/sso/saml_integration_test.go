@@ -168,10 +168,10 @@ func TestSAMLMetadataAndInitiate(t *testing.T) {
 	}
 }
 
-// A lone surrogate in relay_state is refused as string_unicode where the
-// value goes into the redirect_url query (allow_idp_initiated); where the
-// route replaces it with its own sealed token it is still ignored.
-func TestSAMLInitiateRefusesALoneSurrogateRelayStateOnlyWhereItIsForwarded(t *testing.T) {
+// A lone surrogate in relay_state is refused as string_unicode on every
+// provider: go-api refuses it at the body boundary (CHAOS-12282), also where the
+// route replaces it with its own sealed token (before: 200, CHAOS-11532).
+func TestSAMLInitiateRefusesALoneSurrogateRelayStateOnEveryProvider(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	st := startStack(t, ctx)
@@ -199,7 +199,7 @@ func TestSAMLInitiateRefusesALoneSurrogateRelayStateOnlyWhereItIsForwarded(t *te
 		if status != http.StatusUnprocessableEntity || !strings.Contains(text, `"string_unicode"`) || !strings.Contains(text, `"relay_state"`) {
 			t.Errorf("forwarded %s: status=%d body=%s", escape, status, text)
 		}
-		if status, text = post(sealed, `{"relay_state":"a`+escape+`b"}`); status != http.StatusOK || !strings.Contains(text, "redirect_url") {
+		if status, text = post(sealed, `{"relay_state":"a`+escape+`b"}`); status != http.StatusUnprocessableEntity || !strings.Contains(text, `"string_unicode"`) || !strings.Contains(text, `"relay_state"`) {
 			t.Errorf("sealed %s: status=%d body=%s", escape, status, text)
 		}
 	}

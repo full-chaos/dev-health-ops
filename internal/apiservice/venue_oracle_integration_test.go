@@ -63,7 +63,7 @@ func TestVenueOracleProtectedRoutes(t *testing.T) {
 	// are placeholders in the golden on both planes.
 	spec.Scrub = scrubCustomerPushTokens
 	golden := venueoracle.OpenGolden(t, spec)
-	pin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/venue/protected-routes.go-pin.json", SHA256: "c0d8eb48718e8f5591df0c10853e8710111b0a67e588c768afa66a6520457ec4", Ruling: protectedRoutesPinRuling})
+	pin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/venue/protected-routes.go-pin.json", SHA256: "644a9366373f9eb530e8a819a63075b7693949248ce98e71c7a9e7f11ad2bfd2", Ruling: protectedRoutesPinRuling})
 	publicPin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/venue/protected-routes-public.go-pin.json", SHA256: protectedPublicPinSHA256, Ruling: publicRowRuling})
 	sent := &sentReports{}
 	endpoint := httptest.NewServer(sent)
@@ -506,8 +506,12 @@ const productTelemetryRuling = "CHAOS-10945 intake value rules, stricter than Py
 // the org-wide setting (CHAOS-13591).
 const telemetryOptInRuling = "CHAOS-13591 (acp ruling: telemetry opt-in/opt-out need org admin or owner; venue golden gets 2 expected DIFFs)"
 
+// loneSurrogateRuling names the 3 product-telemetry requests whose answer moved to 422 string_unicode when go-api
+// began refusing a lone surrogate at the request body boundary (CHAOS-12282; legacy Python kept it or answered 500).
+const loneSurrogateRuling = "CHAOS-12282 lone surrogate refused at the go-api body boundary: 422 string_unicode (deliberate departure: legacy kept it or answered 500)"
+
 // protectedRoutesPinRuling is the one line the pin file states: all rulings.
-const protectedRoutesPinRuling = teamsRuling + "; " + productTelemetryRuling + "; " + telemetryOptInRuling
+const protectedRoutesPinRuling = teamsRuling + "; " + productTelemetryRuling + "; " + telemetryOptInRuling + "; " + loneSurrogateRuling
 
 // retiredTelemetryOptInRequests are the requests whose answer moved from 200 to 403 under telemetryOptInRuling.
 var retiredTelemetryOptInRequests = map[string]bool{"tel: opt-in member": true, "tel: opt-in again": true}

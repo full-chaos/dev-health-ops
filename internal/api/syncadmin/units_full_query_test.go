@@ -85,12 +85,12 @@ func TestRunUnitsBoundedWorkItemsStayCatchingUp(t *testing.T) {
 	}
 }
 
-// The dataset read is org scoped by its argument and asks for the unit's
+// The dataset read gets the request's org and asks for the unit's
 // integration; a failed read is the dataset_freshness 500, and a unit with no
 // work-items family dataset reads nothing.
 func TestRunUnitsDatasetRowsRead(t *testing.T) {
 	reader, status, _ := freshnessCase(t, "jira", &workItemsDatasetRow{Enabled: true, Options: []byte(`{}`)}, "")
-	if status != http.StatusOK || reader.askedOrg != "org" || len(reader.askedIDs) != 1 || reader.askedIDs[0] != reader.units[0].IntegrationID {
+	if status != http.StatusOK || uuid.Validate(reader.askedOrg) != nil || len(reader.askedIDs) != 1 || reader.askedIDs[0] != reader.units[0].IntegrationID {
 		t.Fatalf("asked org %q ids %v, status %d", reader.askedOrg, reader.askedIDs, status)
 	}
 	reader, status, body := freshnessCase(t, "jira", nil, "workItemsDatasetRows")

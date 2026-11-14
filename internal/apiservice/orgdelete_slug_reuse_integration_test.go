@@ -107,7 +107,7 @@ func newSlugStack(t *testing.T, ctx context.Context, switchValue string) *slugSt
 		t.Fatal(err)
 	}
 
-	provisioning, identities := orgDeleteAuthService(t, runtime)
+	provisioning, identities := orgDeleteAuthService(t, runtime, switchValue != "")
 	if switchValue != "" {
 		provisioning = logRefusals(t, provisioning)
 	}

@@ -984,13 +984,16 @@ func TestAdminWeakCoverRealPDPAbsoluteAnswers(t *testing.T) {
 		},
 		{
 			// E2, the organization-scope platform-admin allow (evaluate.go:127-135): a platform admin with no membership
-			// reads the org it names. PRODUCT RULES doc f7cb775dde89 rule 1 (D6773): a superadmin never needs a
-			// membership; RISK-F8P2B-admin-1 section 1: superuser 200 with or without membership. billing.read is an
-			// org-only action (a live namespace); every admin-namespace question of a platform admin also has a
-			// platform alternative, so no admin-namespace row reaches this branch.
+			// reads the org it names. PRODUCT RULES doc f7cb775dde89 rule 1: "Platform admins never need org membership;
+			// the legacy behaviour stays." chris 2026-11-06 (D6773): "I explicitly forbid requiring platform admins
+			// ("superadmins") from having that." RISK-F8P2B-admin-1 section 1: superuser 200 with or without
+			// membership. The body is the empty page of a database with no invoice (billing/invoices.go:136-182,
+			// pageJSON subscriptions.go:292). billing.read is an org-only action (a live namespace): every
+			// admin-namespace question of a platform admin also has a platform alternative, so no admin-namespace row
+			// reaches this branch.
 			name: "e2_org_scope_platform_admin", caller: admin,
 			row:    wcRow{name: "billing_invoices", method: http.MethodGet, path: "/api/v1/billing/invoices", action: "billing.read"},
-			status: http.StatusOK,
+			status: http.StatusOK, body: `{"items":[],"total":0,"limit":20,"offset":0}`,
 		},
 	}
 	for _, cell := range cells {
@@ -998,7 +1001,7 @@ func TestAdminWeakCoverRealPDPAbsoluteAnswers(t *testing.T) {
 			for side := range 2 {
 				got := w.serve(w.main.handlers[side], w.main.plane, w.main.admins[side], side, cell.caller, cell.row)
 				t.Logf("CELL|13728|m_on|%s|%s|%s|%d|%s|pdp=%v", cell.caller.spec.label, cell.name, wcSideName[side], got.status, wcShort(got.body), got.decisions)
-				if got.status != cell.status || (cell.body != "" && got.body != cell.body) {
+				if got.status != cell.status || got.body != cell.body {
 					t.Errorf("%s side: %d %s; the rule's answer is %d %s", wcSideName[side], got.status, wcShort(got.body), cell.status, cell.body)
 				}
 			}

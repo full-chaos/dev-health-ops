@@ -1,6 +1,7 @@
 package authruntime
 
 import (
+	"context"
 	"crypto/rand"
 	"errors"
 	"fmt"
@@ -152,25 +153,51 @@ func (s cipherSealer) Seal(plain string) (string, error) {
 	return s.cipher.Seal([]byte(plain), time.Now(), rand.Reader)
 }
 
+// The start-log reasons of the SSO provider routes when none is mounted (a missing row is authapi.ProvisioningRowReason).
+const (
+	ssoProviderReasonMembershipRoutesOff = "membership_routes_off"
+	ssoProviderReasonNotOwned            = "sso_providers_not_owned"
+	ssoProviderReasonCipherUnusable      = "sso_cipher_unusable"
+)
+
 // ssoProviderRoutes builds the SSO provider management routes behind AUTH_MEMBERSHIP_ROUTES. They mount only with their
-// endpoint-profile rows (authapi.SSOProviderRoutes) and an SSO cipher that opens; an unusable key leaves them off.
+// endpoint-profile rows (authapi.SSOProviderRoutes) and an SSO cipher that opens; an unusable key leaves them off. A
+// missing gate is no start refusal (product rule 3): the one line "sso provider routes" says how many are mounted and,
+// when none is, why (a WARN for the unusable key, an INFO otherwise).
 func ssoProviderRoutes(cfg authconfig.Config, logger *slog.Logger, pool *pgxpool.Pool, schema authschema.ValidatedIdentifier,
 	identities *identity.Store, workload *authapi.SessionIssueWorkload) ([]httpapi.Route, error) {
 	if !cfg.Provisioning.Routes {
+		logSSOProviderMount(logger, slog.LevelInfo, 0, "reason", ssoProviderReasonMembershipRoutesOff)
 		return nil, nil
 	}
 	if !cfg.SSOProvidersOwned {
-		logger.Info("sso provider routes: not mounted, AUTH_SSO_PROVIDERS_OWNED is off")
+		logSSOProviderMount(logger, slog.LevelInfo, 0, "reason", ssoProviderReasonNotOwned)
 		return nil, nil
 	}
 	cipher, err := fernet.New(cfg.SSO.EncryptionKey.Reveal(), cfg.SSO.EncryptionSalt)
 	if err != nil {
-		logger.Warn("sso provider routes: not mounted, the provider secret key is unusable")
+		logSSOProviderMount(logger, slog.LevelWarn, 0, "reason", ssoProviderReasonCipherUnusable)
 		return nil, nil
 	}
-	return authapi.SSOProviderRoutes(authapi.ProvisioningDeps{
+	routes, err := authapi.SSOProviderRoutes(authapi.ProvisioningDeps{
 		Users: pgUsers(cfg, pool, schema), Reader: pool, Organizations: identities, Workload: workload, Logger: logger,
 		ProfileRows:       provisioningProfileRows,
 		SSOProviderStores: authapi.SSOProviderStores{SSOProviders: ssoprovider.Store{Pool: pool, Schema: schema}, SSOSealer: cipherSealer{cipher}},
 	})
+	if err != nil {
+		return nil, err
+	}
+	var missing *authapi.ProvisioningRowError
+	if len(routes) == 0 && errors.As(authapi.SSOProviderRowsError(provisioningProfileRows), &missing) {
+		logSSOProviderMount(logger, slog.LevelInfo, 0, append([]any{"reason", missing.DependencyReason()}, missing.DependencyAttrs()...)...)
+		return routes, nil
+	}
+	logSSOProviderMount(logger, slog.LevelInfo, len(routes))
+	return routes, nil
+}
+
+// logSSOProviderMount writes the SSO provider routes' start line: mounted=<n>/<all> and attrs.
+func logSSOProviderMount(logger *slog.Logger, level slog.Level, mounted int, attrs ...any) {
+	logger.Log(context.Background(), level, "sso provider routes",
+		append([]any{"mounted", fmt.Sprintf("%d/%d", mounted, authapi.SSOProviderRouteCount())}, attrs...)...)
 }

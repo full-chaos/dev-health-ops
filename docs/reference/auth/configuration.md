@@ -172,6 +172,13 @@ With `AUTH_USERS_OWNED=true`, auth-service serves the writes of go-api's `/api/v
 - The tenant class is `org_scoped`, as the go-api rows of `/api/v1/admin/users`: the actor is an active platform admin, or an owner or admin of the organization the body names. The rule runs again after the platform role write lock.
 - go-api does not call these routes yet.
 
+### SSO provider routes
+
+With `AUTH_MEMBERSHIP_ROUTES=true` and `AUTH_SSO_PROVIDERS_OWNED=true`, auth-service serves the SSO provider writes and reads of go-api's `/api/v1/auth/sso/providers` routes: `POST /internal/v1/sso/providers/{list,create,get,update,delete,activate,deactivate}`.
+
+- Each route has a row in `contracts/auth/v1/endpoint-profiles.auth-service.json` that admits the go-api workload token (`workload_token`) only. The seven routes mount together or not at all. They also need a provider secret key that opens (`SETTINGS_ENCRYPTION_KEY`). A missing gate is no start refusal.
+- At start, auth-service logs one line `sso provider routes` with `mounted` (`7/7` or `0/7`). With `0/7` it adds `reason`: `membership_routes_off`, `sso_providers_not_owned`, `sso_cipher_unusable` (a WARN line; every other form is INFO), or `auth_provisioning_profile_row_missing` with the `route` that has no row.
+
 ### Delegated impersonation (go-api)
 
 - `AUTH_PROXY_IMPERSONATION` (go-api; chart value `goApi.authProxy.impersonation`, default off; `true` or `false`, or any other value `strconv.ParseBool` reads (`1`, `t`, `T`, `TRUE`, `True`; `0`, `f`, `F`, `FALSE`, `False`), as for every `AUTH_PROXY_*` flag; any other value leaves the switch off and go-api starts, with one WARN line that names the variable and the value's length, never the value). On, go-api's `POST /api/v1/admin/impersonate` asks auth-service to start a [delegated session](delegated-sessions.md) of the caller's own session, and `POST /api/v1/admin/impersonate/stop` ends it there. auth-service writes go-api's impersonation row and its audit rows; go-api writes neither. Off (or unset), go-api starts and ends its own impersonation row as before.

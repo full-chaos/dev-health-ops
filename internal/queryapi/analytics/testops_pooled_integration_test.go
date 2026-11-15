@@ -26,6 +26,7 @@ type poolRun struct {
 	queue    *float64
 	queued   *time.Time
 	synced   time.Time
+	team     string // the team_id stored on the raw row ("" = NULL)
 }
 
 type poolSuite struct {
@@ -58,8 +59,12 @@ func (e *ownersEnv) runs(org, repo string, runs ...poolRun) {
 		if synced.IsZero() {
 			synced = poolSynced
 		}
-		e.exec(`INSERT INTO ci_pipeline_runs (repo_id, run_id, status, queued_at, started_at, finished_at, last_synced, org_id, duration_seconds, queue_seconds) VALUES (?, ?, 'success', ?, ?, ?, ?, ?, ?, ?)`,
-			repo, r.id, ms(r.queued), ms(&r.started), ms(r.finished), ms(&synced), org, r.duration, r.queue)
+		var team any
+		if r.team != "" {
+			team = r.team
+		}
+		e.exec(`INSERT INTO ci_pipeline_runs (repo_id, run_id, status, queued_at, started_at, finished_at, last_synced, org_id, duration_seconds, queue_seconds, team_id) VALUES (?, ?, 'success', ?, ?, ?, ?, ?, ?, ?, ?)`,
+			repo, r.id, ms(r.queued), ms(&r.started), ms(r.finished), ms(&synced), org, r.duration, r.queue, team)
 	}
 }
 
@@ -417,7 +422,11 @@ func TestTestopsPooledTeamReadsTheOwnersAtTheRequest(t *testing.T) {
 	e.owner(org, "team-b", d, "acme/od", 1, moved, nil)
 	e.durations(org, a, day1, 7)
 	e.durations(org, b, day1, 1000)
-	e.durations(org, d, day1, 10, 20, 30)
+	// D's raw runs carry the team the provider stored (team-a, the owner before the move).
+	for i, v := range []float64{10, 20, 30} {
+		e.runs(org, d, poolRun{id: fmt.Sprintf("od-%d", i), started: atHour(day1, 1+i), duration: pf(v), team: "team-a"})
+		e.suites(org, d, poolSuite{run: fmt.Sprintf("od-%d", i), id: fmt.Sprintf("s-od-%d", i), started: pt(atHour(day1, 1+i)), duration: pf(v)})
+	}
 	e.write(org, day1, a, b, d)
 	for _, m := range pooledDurations {
 		teams, _ := e.dimSeries(org, model.DimensionInputTeam, m, model.BucketIntervalInputDay, nil)

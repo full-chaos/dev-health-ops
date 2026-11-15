@@ -164,7 +164,7 @@ FROM (
 )
 ORDER BY dim_order ASC, value DESC, node_id ASC
 %s
-`, strings.Join(unionParts, "\nUNION ALL\n"), settingsMaxExecutionTime(timeoutSeconds))
+`, strings.Join(unionParts, "\nUNION ALL\n"), statementSettings(source, timeoutSeconds))
 	nodesBindings := []clickhouse.Binding{
 		{Name: "org_id", Value: orgID},
 		{Name: "start_date", Value: dateBindingValue(req.StartDate.Time())},
@@ -209,7 +209,7 @@ GROUP BY source, target
 ORDER BY value DESC, source ASC, target ASC
 LIMIT {max_edges:UInt32}
 %s
-`, strings.ToUpper(string(sourceDim)), strings.ToUpper(string(targetDim)), sourceCol, targetCol, measureExpr, source, extraClauses, dateFilter, alias, fc.sql, sourceCol, targetCol, settingsMaxExecutionTime(timeoutSeconds))
+`, strings.ToUpper(string(sourceDim)), strings.ToUpper(string(targetDim)), sourceCol, targetCol, measureExpr, source, extraClauses, dateFilter, alias, fc.sql, sourceCol, targetCol, statementSettings(source, timeoutSeconds))
 
 		edgeBindings := []clickhouse.Binding{
 			{Name: "org_id", Value: orgID},

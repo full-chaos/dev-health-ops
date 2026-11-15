@@ -225,7 +225,7 @@ LIMIT {per_set_limit:UInt32} BY grouping_set
 		strings.Join(sets, ", "),
 		strings.Join(edgeNullFilters, "\n  AND "),
 		strings.Join(orderKeys, ", "),
-		settingsMaxExecutionTime(timeoutSeconds))
+		statementSettings(shape.source, timeoutSeconds))
 
 	bindings := []clickhouse.Binding{
 		{Name: "org_id", Value: orgID},

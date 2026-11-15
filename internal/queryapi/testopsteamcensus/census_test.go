@@ -33,6 +33,7 @@ var storedTeamColumn = regexp.MustCompile(`\bteam_id\b`)
 // mentions the column, fails the census and needs a review of the table it reads.
 var teamLiteralsInReaderFiles = map[string]int{
 	"aianalytics/ai_opportunities.go":        4,
+	"analytics/orgpooled.go":                 0,
 	"analytics/timeseries.go":                2,
 	"analytics/validate.go":                  1,
 	"analytics/testopsownership.go":          2,

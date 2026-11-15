@@ -2,6 +2,7 @@ package analytics
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"strings"
 	"testing"
@@ -64,19 +65,51 @@ func TestResolveOneTimeseries_OrgSeriesNilWhenNoDenominator(t *testing.T) {
 	}
 }
 
-func TestResolveOneTimeseries_NoOrgSeriesForOtherMeasures(t *testing.T) {
+func TestResolveOneTimeseries_PooledMeasuresServeAnOrgSeries(t *testing.T) {
 	for _, m := range []model.MeasureInput{model.MeasureInputPipelineDurationP95, model.MeasureInputPipelineQueueTime, model.MeasureInputTestSuiteDurationP95} {
-		client := orgSeriesClient([][]any{{mustTime("2026-01-01"), "team-a", 1.0}}, nil)
+		client := orgSeriesClient([][]any{{mustTime("2026-01-01"), "team-a", 1.0}}, [][]any{
+			{mustTime("2026-01-01"), 160.5, 20.0},
+			{mustTime("2026-01-02"), nil, 0.0},
+		})
 		got, err := resolveOneTimeseries(context.Background(), client, "org-1", tsInput(model.DimensionInputTeam, m), false, nil, true)
 		if err != nil {
 			t.Fatalf("%s: %v", m, err)
 		}
-		if len(got) != 1 || got[0].Scope != model.TimeseriesScopeDimension {
-			t.Errorf("%s: got %+v, want the one DIMENSION series only", m, got)
+		if len(got) != 2 || got[0].Scope != model.TimeseriesScopeDimension || got[1].Scope != model.TimeseriesScopeOrg {
+			t.Fatalf("%s: got %+v, want the DIMENSION series and the ORG series", m, got)
 		}
-		for _, c := range client.calls {
-			if c == "AS numerator" {
-				t.Errorf("%s: an org query was sent", m)
+		org := got[1].Buckets
+		if len(org) != 2 || org[0].Value == nil || *org[0].Value != 160.5 || org[1].Value != nil {
+			t.Fatalf("%s: ORG buckets %+v, want the pooled value unscaled, and nil for a bucket with no sample", m, org)
+		}
+	}
+}
+
+// The ORG statement of a pooled measure reads the same pooled source and expression as the dimension series, under the
+// request's filters, with the row bound.
+func TestCompileOrgTimeseries_PooledMeasuresReadThePooledSource(t *testing.T) {
+	cases := map[Measure]struct{ source, value, samples string }{
+		MeasurePipelineDurationP95:  {"FROM ci_pipeline_runs FINAL", "quantileExactInclusive(0.95)(duration_sample)", "count(duration_sample)"},
+		MeasurePipelineQueueTime:    {"FROM ci_pipeline_runs FINAL", exactAvg("queue_sample"), "count(queue_sample)"},
+		MeasureTestSuiteDurationP95: {"FROM test_suite_results FINAL", "quantileExactInclusive(0.95)(duration_sample)", "count(duration_sample)"},
+	}
+	filters := &model.FilterInput{Scope: &model.ScopeFilterInput{Level: model.ScopeLevelInputTeam, Ids: []string{"team-a", "team-b"}}}
+	for measure, c := range cases {
+		req := TimeseriesRequest{Dimension: DimensionTeam, Measure: measure, Interval: BucketIntervalDay,
+			StartDate: mustDate(t, "2026-01-01"), EndDate: mustDate(t, "2026-01-08")}
+		q, ok, err := CompileOrgTimeseries(req, "org-1", 30, false, filters)
+		if err != nil || !ok {
+			t.Fatalf("%s: ok=%v err=%v", measure, ok, err)
+		}
+		for _, want := range []string{c.source, c.value, "toFloat64(" + c.samples + ") AS denominator", "SELECT repo_id, day FROM testops_",
+			"team_scope_ids", fmt.Sprintf("max_rows_to_read = %d, read_overflow_mode = 'throw'", TestopsPooledMaxRowsToRead)} {
+			if !strings.Contains(q.sql, want) {
+				t.Errorf("%s: ORG SQL lacks %q:\n%s", measure, want, q.sql)
+			}
+		}
+		for _, stored := range []string{"p95_duration_seconds", "avg_queue_seconds", "suite_duration_p95_seconds", "team_id ="} {
+			if strings.Contains(q.sql, stored) {
+				t.Errorf("%s: ORG SQL reads %q:\n%s", measure, stored, q.sql)
 			}
 		}
 	}

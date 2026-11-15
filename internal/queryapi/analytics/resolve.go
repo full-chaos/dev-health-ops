@@ -343,7 +343,7 @@ func resolveOneTimeseries(ctx context.Context, client QueryClient, orgID string,
 	}
 	results, err := ExecuteTimeseries(ctx, client, q, string(input.Dimension), string(input.Measure))
 	if err != nil {
-		return nil, err
+		return nil, pooledReadRefusal(ctx, orgID, req.Measure, err)
 	}
 	if !withOrgSeries {
 		return results, nil
@@ -357,7 +357,7 @@ func resolveOneTimeseries(ctx context.Context, client QueryClient, orgID string,
 	}
 	orgResult, err := ExecuteOrgTimeseries(ctx, client, orgQ, string(input.Dimension), string(input.Measure), req.Measure)
 	if err != nil {
-		return nil, fmt.Errorf("org series: %w", err)
+		return nil, fmt.Errorf("org series: %w", pooledReadRefusal(ctx, orgID, req.Measure, err))
 	}
 	return append(results, orgResult), nil
 }
@@ -385,7 +385,8 @@ func resolveOneBreakdown(ctx context.Context, client QueryClient, orgID string, 
 			RecordInvestmentRepoJoinDedupCollisions(ctx, client, orgID)
 		}
 	}
-	return ExecuteBreakdown(ctx, client, orgID, q, string(input.Dimension), string(input.Measure))
+	result, err := ExecuteBreakdown(ctx, client, orgID, q, string(input.Dimension), string(input.Measure))
+	return result, pooledReadRefusal(ctx, orgID, req.Measure, err)
 }
 
 // resolveSankey ports the batch.sankey branch of resolve_analytics
@@ -561,6 +562,7 @@ func resolveSankey(ctx context.Context, client QueryClient, orgID string, input 
 	}
 	if flowSelected {
 		nodes, edges, execErr = executeSankeyGrouped(ctx, client, groupedQuery)
+		execErr = pooledReadRefusal(ctx, orgID, req.Measure, execErr)
 	}
 	sankeyElapsed = time.Since(started)
 	coverageConcurrent.Wait()

@@ -265,7 +265,8 @@ const cycleTimeHoursOverRowsWithACompletion = "AVG(if(work_items_completed > 0, 
 // line coverage) are one rule: the rate of a group is the sum of its numerators over the sum of its denominators,
 // never the AVG of the stored per-repository-day rates, which gives a repository of 10 runs the weight of one of
 // 10,000 (CHAOS-13775). Each has a NULLIF, so a group with nothing to divide by is NULL, never 0 (category 3 above).
-// The durations, queue time, branch coverage and coverage delta have no stored denominator and stay AVG.
+// The P95 durations and the queue time are pooled over the raw samples of the group (orgpooled.go), never a mean of
+// the stored per-repository-day values. Branch coverage and coverage delta have no stored denominator and stay AVG.
 func dbExpression(measure Measure, useInvestment, useRepoAllocation bool) (string, error) {
 	if useInvestment {
 		throughputExpr := "SUM(subcategory_kv.2)"
@@ -319,9 +320,9 @@ func dbExpression(measure Measure, useInvestment, useRepoAllocation bool) (strin
 	case MeasurePipelineFailureRate:
 		return weightedRateSQL(pipelineFailureTerms), nil
 	case MeasurePipelineDurationP95:
-		return "AVG(p95_duration_seconds)", nil // AT RISK: p95_duration_seconds is Nullable(Float64) (category 2)
+		return pooledP95, nil // NULL for a group with no sample (orgpooled.go)
 	case MeasurePipelineQueueTime:
-		return "AVG(avg_queue_seconds)", nil // AT RISK: avg_queue_seconds is Nullable(Float64) (category 2)
+		return pooledQueueMean, nil // NULL for a group with no sample (orgpooled.go)
 	case MeasurePipelineRerunRate:
 		return weightedRateSQL(pipelineRerunTerms), nil
 	case MeasureTestPassRate:
@@ -331,7 +332,7 @@ func dbExpression(measure Measure, useInvestment, useRepoAllocation bool) (strin
 	case MeasureTestFlakeRate:
 		return weightedRateSQL(testFlakeTerms), nil
 	case MeasureTestSuiteDurationP95:
-		return "AVG(suite_duration_p95_seconds)", nil // AT RISK: Nullable(Float64) (category 2)
+		return pooledP95, nil // NULL for a group with no sample (orgpooled.go)
 	case MeasureCoverageLinePct:
 		return weightedRateSQL(coverageLineTerms), nil
 	case MeasureCoverageBranchPct:

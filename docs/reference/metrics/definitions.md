@@ -224,6 +224,33 @@ change_failure_rate`.** They hold the same deployment-status ratio under its
 old name, written before the rename or by an older release. They are kept as
 they are. They are planned for rename or removal.
 
+## TestOps P95 durations and queue time
+
+`PIPELINE_DURATION_P95`, `TEST_SUITE_DURATION_P95` and `PIPELINE_QUEUE_TIME` are pooled over raw samples. They are never
+a mean of the stored per-repository-day values of `testops_pipeline_metrics_daily` or `testops_test_metrics_daily`: a
+95th percentile of a pool cannot be made from the 95th percentiles of its parts.
+
+| Measure | Value of a group | Sample |
+| --- | --- | --- |
+| `PIPELINE_DURATION_P95` | 95th percentile, linear between closest ranks | a run of `ci_pipeline_runs`: `duration_seconds` when not negative, else `finished_at - started_at` when not negative |
+| `TEST_SUITE_DURATION_P95` | 95th percentile, linear between closest ranks | a suite of `test_suite_results`: `duration_seconds` when not negative |
+| `PIPELINE_QUEUE_TIME` | mean of the queue samples: their total seconds divided by the number of runs with a queue sample | a run: `queue_seconds` when not negative, else `started_at - queued_at` when not negative |
+
+The samples are the daily writer's own rules. A run belongs to the UTC day it started; a suite to the day it started,
+else finished. Only the repository-days that the daily job computed are read, so every series covers the days of the
+stored rows. A group with no sample is null, never 0.
+
+- A team series pools the runs of the repositories the team owns at the request. A co-owned repository counts whole for
+  each owner team.
+- The organization series pools each run once, under the request's repository and team filters. It is never a mean of
+  the team series.
+- A week or month bucket and a breakdown over a window pool every run of the bucket or window.
+
+The raw tables have no day key, so a read scans the organization's run history. One statement reads at most
+`analytics.TestopsPooledMaxRowsToRead` rows (5,000,000). Past it the answer is unavailable: the GraphQL error carries
+code `UNAVAILABLE`, reason `testops_pooled_read_bound` and the measure, and the analytics answer is null. It is never a
+partial value or a 0.
+
 ## Pull request rework ratio
 
 The pull request rework ratio is, of the merged pull requests that have

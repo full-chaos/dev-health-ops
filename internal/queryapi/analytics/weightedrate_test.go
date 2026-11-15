@@ -35,12 +35,32 @@ func TestRateMeasuresAreWeightedAndNeverAnAverageOfStoredRates(t *testing.T) {
 	}
 }
 
-// What has no stored denominator stays a mean, and is named so.
+// What has no stored denominator and no raw samples stays a mean of the stored values, and is named so.
 func TestMeasuresWithoutADenominatorStayAnAverage(t *testing.T) {
-	for _, measure := range []Measure{MeasurePipelineDurationP95, MeasurePipelineQueueTime, MeasureTestSuiteDurationP95, MeasureCoverageBranchPct, MeasureCoverageDeltaPct} {
+	for _, measure := range []Measure{MeasureCoverageBranchPct, MeasureCoverageDeltaPct} {
 		expr, err := dbExpression(measure, false, false)
 		if err != nil || !strings.HasPrefix(expr, "AVG(") {
 			t.Errorf("%s: %q err %v, want an AVG", measure, expr, err)
+		}
+	}
+}
+
+// The P95 durations and the queue time are pooled over the raw samples: a percentile of the duration samples and the
+// mean of the queue samples, never a mean of a stored column.
+func TestPooledMeasuresReadTheRawSamples(t *testing.T) {
+	for measure, want := range map[Measure]string{
+		MeasurePipelineDurationP95:  "if(count(duration_sample) = 0, NULL, quantileExactInclusive(0.95)(duration_sample))",
+		MeasureTestSuiteDurationP95: "if(count(duration_sample) = 0, NULL, quantileExactInclusive(0.95)(duration_sample))",
+		MeasurePipelineQueueTime:    "AVG(queue_sample)",
+	} {
+		expr, err := dbExpression(measure, false, false)
+		if err != nil || expr != want {
+			t.Errorf("%s: %q err %v, want %q", measure, expr, err, want)
+		}
+		for _, stored := range []string{"p95_duration_seconds", "avg_queue_seconds", "suite_duration_p95_seconds"} {
+			if strings.Contains(expr, stored) {
+				t.Errorf("%s: %q reads the stored %s", measure, expr, stored)
+			}
 		}
 	}
 }

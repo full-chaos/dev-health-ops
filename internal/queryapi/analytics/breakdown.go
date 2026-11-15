@@ -166,7 +166,7 @@ GROUP BY dimension_value
 ORDER BY value DESC, dimension_value ASC
 %s
 %s
-`, dimCol, measureExpr, source, extraClauses, dateFilter, alias, fc.sql, keyFilter, limitClause, settingsMaxExecutionTime(timeoutSeconds))
+`, dimCol, measureExpr, source, extraClauses, dateFilter, alias, fc.sql, keyFilter, limitClause, statementSettings(source, timeoutSeconds))
 
 	bindings := []clickhouse.Binding{
 		{Name: "org_id", Value: orgID},

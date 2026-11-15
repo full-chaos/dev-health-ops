@@ -417,7 +417,7 @@ GROUP BY node_id
 ORDER BY value DESC, node_id ASC
 LIMIT {limit_per_dim:UInt32}
 %s
-`, dimUpper, dimCol, measureExpr, source, extraClauses, dateFilter, alias, fc.sql, settingsMaxExecutionTime(timeoutSeconds))
+`, dimUpper, dimCol, measureExpr, source, extraClauses, dateFilter, alias, fc.sql, statementSettings(source, timeoutSeconds))
 	nodesBindings := []clickhouse.Binding{
 		{Name: "org_id", Value: orgID},
 		{Name: "start_date", Value: dateBindingValue(req.StartDate.Time())},
@@ -447,7 +447,7 @@ GROUP BY source, target
 ORDER BY value DESC, source ASC, target ASC
 LIMIT {max_edges:UInt32}
 %s
-`, dimUpper, dimUpper, dimCol, dimCol, measureExpr, source, extraClauses, dateFilter, alias, fc.sql, dimCol, dimCol, settingsMaxExecutionTime(timeoutSeconds))
+`, dimUpper, dimUpper, dimCol, dimCol, measureExpr, source, extraClauses, dateFilter, alias, fc.sql, dimCol, dimCol, statementSettings(source, timeoutSeconds))
 	edgesBindings := []clickhouse.Binding{
 		{Name: "org_id", Value: orgID},
 		{Name: "start_date", Value: dateBindingValue(req.StartDate.Time())},

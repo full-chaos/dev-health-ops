@@ -19,3 +19,8 @@ A successful HTTP response can contain GraphQL errors and partial data. Clients 
 - Empty list: the query succeeded with no matching items.
 
 Do not replace null with zero unless the field's exact contract says zero is the defined default.
+
+An error with extensions code `UNAVAILABLE` says the answer is not available by a bound, not that it failed: its
+`reason` names the bound and the answer is null. The analytics batch returns it with reason `testops_pooled_read_bound`
+when a pooled TestOps read (a P95 duration or the queue time) reads more rows than its bound; `measure` names the
+measure. Show it as unavailable; never show a 0 or a partial value.

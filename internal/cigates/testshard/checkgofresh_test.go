@@ -6,6 +6,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -43,14 +45,18 @@ func goFlagsOfCalls(t *testing.T, env []string, args ...string) (legRun, []strin
 func TestTheFreshKnobPutsCountOneOnEveryGoTestOfTheTestAndRaceLegs(t *testing.T) {
 	t.Parallel()
 	local := []string{"CI=", "GITHUB_ACTIONS="}
+	// CHAOS-13838: every go test of these legs gets ONE GOFLAGS value: "-trimpath" (the warm cache's key for the go the tests run
+	// themselves), and with the knob exactly "-count=1 -trimpath". An ambient GOFLAGS never reaches them.
 	cases := []struct {
 		name string
 		env  []string
 		want string
+		knob bool
 	}{
-		{"knob on", []string{"CHECK_GO_FRESH=1"}, "-count=1"},
-		{"knob on with an ambient GOFLAGS", []string{"CHECK_GO_FRESH=1", "GOFLAGS=-tags=integration"}, "-count=1"},
-		{"knob off", []string{"CHECK_GO_FRESH="}, ""},
+		{"knob on", []string{"CHECK_GO_FRESH=1"}, "-count=1 -trimpath", true},
+		{"knob on with an ambient GOFLAGS", []string{"CHECK_GO_FRESH=1", "GOFLAGS=-tags=integration"}, "-count=1 -trimpath", true},
+		{"knob off", []string{"CHECK_GO_FRESH="}, "-trimpath", false},
+		{"knob off with an ambient GOFLAGS", []string{"CHECK_GO_FRESH=", "GOFLAGS=-tags=integration"}, "-trimpath", false},
 	}
 	// The test leg's slice 350 of 350 holds no race-excluded row, so the stand-in's canned run passes it.
 	for _, leg := range [][]string{{"ci-leg", "test", "350", "350"}, {"ci-leg", "race", "1", fmt.Sprint(shardCount)}} {
@@ -67,8 +73,8 @@ func TestTheFreshKnobPutsCountOneOnEveryGoTestOfTheTestAndRaceLegs(t *testing.T)
 					t.Errorf("%v, %s: go test %s ran with GOFLAGS=%q, want %q", leg, c.name, run.Calls[i], f, c.want)
 				}
 			}
-			if on := strings.Contains(run.Stderr, freshOnLine); on != (c.want != "") {
-				t.Errorf("%v, %s: the knob line printed=%v, want %v: %s", leg, c.name, on, c.want != "", run.Stderr)
+			if on := strings.Contains(run.Stderr, freshOnLine); on != c.knob {
+				t.Errorf("%v, %s: the knob line printed=%v, want %v: %s", leg, c.name, on, c.knob, run.Stderr)
 			}
 		}
 	}
@@ -243,8 +249,59 @@ func TestNoGoCallEnvHoldsTheFreshKnobItself(t *testing.T) {
 		if s != "unset" {
 			t.Errorf("go test %s ran with CHECK_GO_FRESH in its environment: a child check_go.sh would inherit the knob", run.Calls[i])
 		}
-		if flags[i] != "-count=1" {
-			t.Errorf("go test %s ran with GOFLAGS=%q, want -count=1: the knob must still work", run.Calls[i], flags[i])
+		if flags[i] != "-count=1 -trimpath" {
+			t.Errorf("go test %s ran with GOFLAGS=%q, want \"-count=1 -trimpath\": the knob must still work", run.Calls[i], flags[i])
+		}
+	}
+}
+
+// legGoflagsSites maps each function of ci/check_go.sh that sets GOFLAGS="${LEG_TEST_GOFLAGS}" to how often it does (top level
+// counts as "").
+func legGoflagsSites(source string) map[string]int {
+	fn := regexp.MustCompile(`^([a-z_][a-z0-9_]*)\(\) \{$`)
+	sites, cur := map[string]int{}, ""
+	for _, line := range strings.Split(source, "\n") {
+		if m := fn.FindStringSubmatch(line); m != nil {
+			cur = m[1]
+		} else if line == "}" {
+			cur = ""
+		}
+		sites[cur] += strings.Count(line, `GOFLAGS="${LEG_TEST_GOFLAGS}"`)
+		if sites[cur] == 0 {
+			delete(sites, cur)
+		}
+	}
+	return sites
+}
+
+// CHAOS-13838: the one GOFLAGS value is set at the three go test calls of the test and race legs and nowhere else, so the vet,
+// build, lint and integration calls keep their own keys and the ambient scrub (GO_ENV_OFF) stays the rule for every other call.
+func TestTheLegGoflagsAreSetOnlyAtTheThreeLegGoTestCalls(t *testing.T) {
+	t.Parallel()
+	b, err := os.ReadFile(filepath.Join(repoRoot(t), "ci", "check_go.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(b)
+	want := map[string]int{"go_test_leg": 1, "go_test_json_run_t": 1, "check_providersync_race_shard": 1}
+	if got := legGoflagsSites(source); !reflect.DeepEqual(got, want) {
+		t.Errorf("GOFLAGS=\"${LEG_TEST_GOFLAGS}\" is set in %v, want exactly %v", got, want)
+	}
+	for _, line := range []string{"LEG_TEST_GOFLAGS=-trimpath", `if [ "${CHECK_GO_FRESH:-}" = 1 ]; then LEG_TEST_GOFLAGS="-count=1 -trimpath"; fi`} {
+		if strings.Count(source, "\n"+line+"\n") != 1 {
+			t.Errorf("ci/check_go.sh must define the leg GOFLAGS once as %q", line)
+		}
+	}
+	for _, c := range []struct{ name, from, to string }{
+		{"the providersync slice loses it", `"${GO_ENV_OFF[@]}" GOFLAGS="${LEG_TEST_GOFLAGS}" GOWORK=off go test -mod=readonly -trimpath -race`, `"${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -race`},
+		{"the vet stage gains it", "\ncheck_vet() {\n", "\ncheck_vet() {\n  : GOFLAGS=\"${LEG_TEST_GOFLAGS}\"\n"},
+	} {
+		planted := strings.Replace(source, c.from, c.to, 1)
+		if planted == source {
+			t.Fatalf("%s: the text to plant is not in ci/check_go.sh", c.name)
+		}
+		if reflect.DeepEqual(legGoflagsSites(planted), want) {
+			t.Errorf("%s: the site guard still holds", c.name)
 		}
 	}
 }

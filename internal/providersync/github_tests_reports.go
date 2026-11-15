@@ -237,6 +237,14 @@ const (
 	githubTestsRunInventoryComponent      = "run_inventory"
 	githubTestsArtifactInventoryComponent = "artifact_inventory"
 	githubTestsPageBudgetCause            = "page_budget_exhausted"
+	// githubTestsRunInventorySaturatedComponent and its artifacts twin record a
+	// range whose listing could not be walked past GitHub's cap of 1,000
+	// results per created search: more than 1,000 runs share one second, so
+	// the next range makes no progress. The old end of the window stays
+	// unobserved, so the unit withholds its watermark (not an advancing pair).
+	githubTestsRunInventorySaturatedComponent      = "run_inventory_saturated"
+	githubTestsArtifactInventorySaturatedComponent = "artifact_inventory_saturated"
+	githubTestsListingSaturatedCause               = "listing_saturated"
 	// The per-run components record that ONE workflow run held more items than
 	// its cap allows, so that run was committed with only the first cap-worth
 	// (CHAOS-4142). Count is the number of RUNS truncated in that category,
@@ -778,8 +786,21 @@ var githubTestsIncompleteVocabulary = map[string]map[string]struct{}{
 	githubTestsRunReportsComponent: {githubTestsPerRunCapCause: {}},
 }
 
+// githubTestsDerivedIncompleteVocabulary holds the pairs a unit result derives
+// from compact cursor flags at completion. They are kept out of
+// githubTestsIncompleteVocabulary, whose every pair a cursor can carry in long
+// form (the worst-case cursor budget cell adds them all): the cursor stores a
+// flag, the result the long observation.
+var githubTestsDerivedIncompleteVocabulary = map[string]map[string]struct{}{
+	githubTestsRunInventorySaturatedComponent:      {githubTestsListingSaturatedCause: {}},
+	githubTestsArtifactInventorySaturatedComponent: {githubTestsListingSaturatedCause: {}},
+}
+
 func githubTestsIncompleteInVocabulary(observation GitHubTestsIncomplete) bool {
 	causes, known := githubTestsIncompleteVocabulary[observation.Component]
+	if !known {
+		causes, known = githubTestsDerivedIncompleteVocabulary[observation.Component]
+	}
 	if !known {
 		return false
 	}

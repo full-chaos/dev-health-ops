@@ -14,6 +14,16 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// The unit results the GitHub chunked producer writes for a listing it could not walk past GitHub's cap of results
+// (reports_complete false and the long observation of the cursor flag; seeded from the keys the producer cell
+// TestPeelProgressGuardEndsAStuckRange asserts in internal/providersync) and for a unit whose open phase stopped under
+// the rate-limit floor (a marker only: the unit is complete).
+const (
+	runSaturatedResult      = `{"reports_complete":false,"reports_skipped":1,"incomplete":[{"component":"run_inventory_saturated","cause":"listing_saturated","count":1}],"skipped_artifacts":[]}`
+	artifactSaturatedResult = `{"reports_complete":false,"reports_skipped":1,"incomplete":[{"component":"artifact_inventory_saturated","cause":"listing_saturated","count":1}],"skipped_artifacts":[]}`
+	rateFloorResult         = `{"reports_complete":true,"incomplete":[],"open_runs_reread":0,"open_phase_rate_floor":499}`
+)
+
 const (
 	partialCapResult  = `{"reports_complete":false,"incomplete":[{"component":"run_reports","cause":"per_run_cap","count":1}]}`
 	partialSkipResult = `{"reports_complete":false,"incomplete":[{"component":"report_member","cause":"artifact_oversized","count":1}],"skipped_artifacts":[{"run_id":"1","artifact_id":"2","cause":"artifact_oversized"}]}`
@@ -68,6 +78,23 @@ func TestPartialTestsUnitCoverage(t *testing.T) {
 		{"partial skipped artifact is a gap", `["tests"]`,
 			[]partialUnit{unit("tests", "success", partialSkipResult, -24*time.Hour, -time.Hour)},
 			func(t *testing.T, tests, overall map[string]any) { wantGaps(t, tests, 1); wantCovered(t, tests, 0) }},
+		{"a saturated runs listing is a gap", `["tests"]`,
+			[]partialUnit{unit("tests", "success", runSaturatedResult, -24*time.Hour, -time.Hour)},
+			func(t *testing.T, tests, overall map[string]any) {
+				wantGaps(t, tests, 1)
+				wantCovered(t, tests, 0)
+				wantNoLatest(t, overall)
+			}},
+		{"a saturated artifacts listing is a gap", `["tests"]`,
+			[]partialUnit{unit("tests", "success", artifactSaturatedResult, -24*time.Hour, -time.Hour)},
+			func(t *testing.T, tests, overall map[string]any) {
+				wantGaps(t, tests, 1)
+				wantCovered(t, tests, 0)
+				wantNoLatest(t, overall)
+			}},
+		{"the open phase rate-floor marker alone is not a gap", `["tests"]`,
+			[]partialUnit{unit("tests", "success", rateFloorResult, -24*time.Hour, -time.Hour)},
+			func(t *testing.T, tests, overall map[string]any) { wantGaps(t, tests, 0); wantCovered(t, tests, 1) }},
 		{"complete control is healthy", `["tests"]`,
 			[]partialUnit{unit("tests", "success", completeResult, -24*time.Hour, -time.Hour)},
 			func(t *testing.T, tests, overall map[string]any) {

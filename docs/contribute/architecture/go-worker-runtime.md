@@ -505,6 +505,40 @@ The general rule this expresses: degrade quietly where the data still worth
 having outweighs what was lost, and fail loudly where it does not. A condition
 that cannot improve by being retried should never be reported as success.
 
+### How the GitHub run listing stays complete and fresh
+
+The GitHub tests and CI unit lists workflow runs by their `created` time. Three
+properties of that listing shape the walk:
+
+- GitHub returns at most 1,000 results for one `created` search: the listing
+  simply ends, with no next link, long before the route's own page budget.
+  The runs phase and the artifacts phase therefore peel the range. A listing
+  that consumed 1,000 runs may hide older ones, so the next range ends at the
+  oldest `created` time seen (to the second, inclusive; runs that share that
+  second are listed again and kept once). More than 1,000 runs in one second
+  cannot be walked past: the unit records `run_inventory_saturated` or
+  `artifact_inventory_saturated`, withholds its watermark and ends. The page
+  budget per phase (100 pages) still bounds a unit; a window over about 10,000
+  runs records `page_budget_exhausted` and withholds its watermark.
+- A run is kept when it was created inside the window, whatever the start of
+  its latest attempt: a rerun that starts after the window end and a run
+  queued across it are not dropped. A run created before the window, within
+  the refresh lookback (6 hours), is refreshed only when it changed since the
+  window start or is still open.
+- GitHub has no updated-time filter on that listing, so an open run (stored
+  `running` or `queued`) older than the lookback is re-read by id in a third
+  phase, `open`: the oldest stored open rows of the repository first, up to 100
+  a unit, or 300 while more than 1,000 such rows wait. A run GitHub no longer
+  has keeps its stored row with the status `deleted`; every reader that counts
+  pipeline rows leaves `deleted` out (one exported helper). The phase reads the
+  rate-limit headers of the unit's own responses and stops, with the marker
+  `open_phase_rate_floor`, when fewer than the larger of 500 and a fifth of the
+  limit remain, or when no header was seen.
+
+One case stays unseen: a run that was final at its last read and is rerun
+weeks later, after it left both the lookback and the open set, is not re-read,
+because no listing key reaches it.
+
 ### What a re-anchor cannot see
 
 The gate fires when the stored index no longer **addresses** an item — the page

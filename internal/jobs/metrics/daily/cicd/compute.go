@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/testops"
 	"github.com/google/uuid"
 )
 
@@ -114,6 +115,9 @@ func ComputeCICDMetricsDaily(day time.Time, pipelineRuns []PipelineRunRow, compu
 	for _, row := range pipelineRuns {
 		startedAt := row.StartedAt.UTC()
 		if startedAt.Before(start) || !startedAt.Before(end) {
+			continue
+		}
+		if testops.ExcludedFromPipelineCounts(row.Status) {
 			continue
 		}
 		repoKey := row.RepoID.String()

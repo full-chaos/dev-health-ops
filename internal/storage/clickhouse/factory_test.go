@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-func TestConfigRejectsInvalidBounds(t *testing.T) {
+func TestClickHouseConfigRejectsInvalidBounds(t *testing.T) {
 	t.Parallel()
 
 	tests := []Config{

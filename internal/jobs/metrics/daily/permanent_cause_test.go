@@ -25,7 +25,7 @@ const (
 	permanentRepoID  = "00000000-0000-4000-8000-000000000010"
 )
 
-// Every deterministic failure of the three daily kinds must name its cause twice: as a bounded reason in the River
+// Every permanent failure of the three daily kinds must name its cause twice: as a bounded reason in the River
 // error row, and as a static cause on one WARN "job failed" line, read here in its production form (the redacting
 // JSON handler). Before this, all of them left only "dev-health job failed [permanent]" and no log line.
 func TestDailyPermanentFailureNamesItsCauseInTheRiverErrorAndOneRedactedLog(t *testing.T) {
@@ -207,7 +207,7 @@ func TestDailyPermanentFailureNamesItsCauseInTheRiverErrorAndOneRedactedLog(t *t
 				t.Errorf("River error = %v, want %q", workErr, want)
 			}
 			if len(seen) != 1 || seen[0].String() != test.reason {
-				t.Errorf("deterministic failure reasons = %v, want exactly [%s]", seen, test.reason)
+				t.Errorf("ObserveDeterministicFailure reasons = %v, want exactly [%s]", seen, test.reason)
 			}
 			var failed []map[string]any
 			var failedLines []string

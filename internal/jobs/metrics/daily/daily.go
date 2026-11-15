@@ -149,7 +149,7 @@ func retryClaim(err error) error {
 	return jobruntime.Retryable(err)
 }
 
-// permanentWithCause marks a deterministic failure so the River error row names
+// permanentWithCause marks a permanent failure so the River error row names
 // why and the adapter writes one WARN "job failed" line with cause. cause must be
 // built from fixed labels only: no identifier, day or driver text.
 func permanentWithCause(err error, why jobruntime.Reason, cause string) error {

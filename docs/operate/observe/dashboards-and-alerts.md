@@ -82,6 +82,15 @@ The file is the text of record: no Prometheus loads it in production. The produc
 
 `alerts/rules.yml` carries a `sync_plan_gate` group with one rule, `SyncPlanExecutedProofUnsatisfied`: any increase of `sync_plan_gate_total{dataset="work-items",outcome="executed_proof_unsatisfied"}` in two hours, per `provider` (`sum by (provider) (increase(...[2h])) > 0`, no `for`). The scheduler counts every planner decision on its metrics endpoint. This outcome means the executed-proof gate refused a pair that was attempted before and never persisted a row, so the planner plans nothing for it. The canonical `work-items` claim of GitHub, GitLab, Jira and Linear carries one shared waiver, so a refusal there means the waiver is gone or broken and work-item data stops. The rule matches `dataset="work-items"` only: other pairs without executed proof yet (the PagerDuty datasets today) count on the same series and must not hold the rule red. The WARN log line `sync.plan.executed_proof_unsatisfied` names the provider, dataset, organization and source. Labels: `team = platform`, `severity = warning`. PromQL rules do not evaluate on this SigNoz, so the production rule is a builder threshold rule made by hand from this text.
 
+## Daily metrics blocked-run rules
+
+`alerts/rules.yml` carries a `daily_metrics_blocked_runs` group over the metrics worker's counters. A daily metrics partition that ends for good (the zero-row check, an invalid state, or a retryable error on its last attempt) is written `failed_permanent` with a bounded reason; the nightly blocked-run pass marks a run that can no longer finish. Two rules, neither with a `for`:
+
+- `DailyMetricsRunBlocked`: any increase of `dev_health_daily_metrics_runs_blocked_marked_total` in 24 hours. List the runs with `dho workers metrics daily-blocked --org <org>`; its failure reasons name the cause. A `daily-redrive` of the org-day resets the partitions.
+- `DailyMetricsBlockedReconcileFailing`: any increase of `dev_health_daily_metrics_runs_blocked_reconcile_failed_total` in 24 hours. The pass is fail-open, so the marked counter at zero cannot tell a healthy organization from a pass that never ran.
+
+The evaluator in production is SigNoz: `alerts/rules.yml` is the source spec, and the live rule is created from it in the deploy repository's SigNoz rule files.
+
 ## Org activity rules
 
 `alerts/rules.yml` carries an `org_activity` group over the metrics worker's OTLP push. The worker's daily finalize writes `public.org_activity`, the table auth login reads to choose the active organization; a stale row makes login fall back to the earliest join. Two rules:

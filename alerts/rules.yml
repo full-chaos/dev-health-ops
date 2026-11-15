@@ -482,6 +482,45 @@ groups:
             has been unavailable for five minutes.
 
   # ---------------------------------------------------------------------------
+  # Daily metrics blocked runs (CHAOS-13863)
+  # ---------------------------------------------------------------------------
+  # A daily metrics partition that ends for good is written failed_permanent, and the
+  # nightly blocked-run pass marks a run that can never finish. Both counters are
+  # cumulative, exported by the worker (internal/jobruntime/telemetry.go). The
+  # reconcile-failed rule exists because the pass is fail-open: marked and cleared
+  # sitting at zero cannot tell a healthy org from a pass that never ran.
+  - name: daily_metrics_blocked_runs
+    interval: 60s
+    rules:
+      - alert: DailyMetricsRunBlocked
+        expr: |
+          sum(increase(dev_health_daily_metrics_runs_blocked_marked_total[24h])) > 0
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "A daily metrics run can no longer finish"
+          description: |
+            {{ $value | printf "%.0f" }} daily metrics run(s) were marked blocked in the last day:
+            a partition ended failed_permanent and nothing is left to advance, so the run stays
+            running and its completion fence is never written. List them with
+            `dho workers metrics daily-blocked --org <org>` (the partition failure reasons name
+            the cause), then decide on a `daily-redrive`.
+
+      - alert: DailyMetricsBlockedReconcileFailing
+        expr: |
+          sum(increase(dev_health_daily_metrics_runs_blocked_reconcile_failed_total[24h])) > 0
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "The blocked daily metrics run pass is failing"
+          description: |
+            The nightly blocked-run reconcile failed {{ $value | printf "%.0f" }} time(s) in the last
+            day. The pass is fail-open, so a stuck run is not marked while it fails. Check the
+            worker log line "daily blocked-run reconcile failed" and the domain database.
+
+  # ---------------------------------------------------------------------------
   # Provider artifact integrity (CHAOS-4184, follow-up to CHAOS-4177)
   # ---------------------------------------------------------------------------
   - name: provider_artifact_integrity

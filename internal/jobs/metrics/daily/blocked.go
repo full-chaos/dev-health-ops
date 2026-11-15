@@ -15,7 +15,13 @@ import (
 // silent shape CHAOS-4970 hit in prod on 2026-09-01.
 //
 // "Something can still happen" is decided by the LEASE, not by the status
-// alone. 'pending' and 'failed' are re-published by the fan-out, and a
+// alone. A 'pending' partition is published by the fan-out and a 'failed' one
+// is claimed again by the retry of its River job, so both can still advance
+// while that job lives. Once the job is gone (cancelled, or discarded after
+// its last attempt) nothing re-publishes a 'failed' partition: the dispatch
+// key is per run and the partition key is permanent. That is why a partition
+// that ends for good is written 'failed_permanent' (PartitionHandler.Work),
+// the one state this marker, its counter and the redrive reset read. A
 // 'running' partition under a LIVE lease is being worked on right now. But a
 // 'running' partition whose lease has EXPIRED is stranded: ClaimPartition
 // would reclaim that exact row, yet only a metrics.daily_partition job ever

@@ -9,11 +9,15 @@ import (
 
 // CHAOS-12462: the race legs run a 30 minute job. The plan of every leg at the shipped leg count must predict a wall at or under 75% of that cap.
 // The prediction is a pure function of ci/go_race_weights.d and the partition (the sum of the leg's package weights plus its providersync slice,
-// scaled by the calibration of the 26.04 pool runs); no test here reads or asserts a measured wall (D6418).
+// scaled by the calibration of the hosted race legs); no test here reads or asserts a measured wall (D6418).
+// CHAOS-13833: the race legs run on hosted runners (the pool is off). raceLegSecondsPerWeight is the p90 of (stage wall - 40 s) /
+// (summed package seconds of the leg) over 65 hosted race leg-runs (median 0.366, max 0.524): the 6 race legs of main push runs
+// 43659268009, 43662301700 (race-1 cancelled, left out), 43662511162, 43663384548, 43664577954, 43668418168, 43668892701,
+// 43676204152, 43685091286, 43717634633 and pull request run 43700083233. It was 0.453, the median over 25 pool race legs.
 const (
 	raceLegCapSeconds        = 1800
 	raceLegSetupSeconds      = 40.0
-	raceLegSecondsPerWeight  = 0.453 // median of wall / sum of package times over 25 pool race legs, runs 41315075216..41322726564
+	raceLegSecondsPerWeight  = 0.50  // the p90 above (0.503), rounded
 	providersyncSliceAtFiveS = 250.0 // one providersync slice with 5 race legs; it scales with 1/count
 )
 

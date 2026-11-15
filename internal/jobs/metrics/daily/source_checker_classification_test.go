@@ -32,7 +32,7 @@ func TestPartitionSourceCheckerFailureReleasesClaimAndRetries(t *testing.T) {
 	}
 }
 
-func TestPartitionSourceCheckerInvalidStateReleasesClaimAndIsPermanent(t *testing.T) {
+func TestPartitionSourceCheckerInvalidStateFailsTheClaimPermanentlyAndIsPermanent(t *testing.T) {
 	store := &fakeStore{
 		partitionClaim: &PartitionClaim{
 			Partition:     Partition{ID: testPartitionID, RunID: testRunID},
@@ -50,7 +50,9 @@ func TestPartitionSourceCheckerInvalidStateReleasesClaimAndIsPermanent(t *testin
 	if err == nil || !strings.Contains(err.Error(), string(jobruntime.CategoryPermanent)) {
 		t.Fatalf("source checker invalid state = %v, want permanent", err)
 	}
-	if store.partitionCompletions != 0 || store.partitionReleases != 1 {
-		t.Fatalf("completions=%d releases=%d, want 0/1", store.partitionCompletions, store.partitionReleases)
+	if store.partitionCompletions != 0 || store.partitionReleases != 0 ||
+		store.permanentFailures != 1 || store.permanentFailureReason != "invalid_state" {
+		t.Fatalf("completions=%d releases=%d permanent=%d reason=%q, want 0/0/1/invalid_state",
+			store.partitionCompletions, store.partitionReleases, store.permanentFailures, store.permanentFailureReason)
 	}
 }

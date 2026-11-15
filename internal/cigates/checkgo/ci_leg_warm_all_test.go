@@ -11,7 +11,8 @@ import (
 // CHAOS-13718: `ci/check_go.sh ci-leg-warm all build|race` fills one go-quality Go cache family (go-quality.yml job
 // go-quality-cache). The entry is only useful when its compile actions are the ones the legs look up, so the cell pins the
 // exact go argv per family: the legs' flags (-mod=readonly -trimpath), -race only in race, -exec true, resolved from PATH (no test code
-// runs), the static vet passes only in build, and the race package set = the module's packages but the race-excluded rows.
+// runs), and the race package set = the module's packages but the race-excluded rows. CHAOS-13833: the race family also holds the
+// build family's three calls (a race leg restores only its family, and its tests that run go build without -race).
 // A stand-in go records every test and vet call (cwd and argv) and answers them with success; every other call goes to the
 // real go.
 
@@ -99,11 +100,28 @@ func TestCiLegWarmAllRunsTheLegFlagsPerFamily(t *testing.T) {
 			t.Fatalf("ci-leg-warm all race: rc=%d stderr=%q", res.code, res.stderr)
 		}
 		const prefix = "test -mod=readonly -trimpath -race -exec true "
-		byDir := map[string][]string{}
-		for _, c := range calls {
-			if !strings.HasPrefix(c.argv, prefix) {
-				t.Fatalf("race go call %q in %s: want only %q<packages>", c.argv, c.dir, prefix)
+		var buildCalls, raceCalls, wantBuild []warmCall
+		for _, m := range modules {
+			wantBuild = append(wantBuild,
+				warmCall{m, "test -mod=readonly -trimpath -exec true ./..."},
+				warmCall{m, "vet -mod=readonly -trimpath ./..."},
+				warmCall{m, "vet -mod=readonly -trimpath -tags=integration ./..."})
+		}
+		for i, c := range calls {
+			if strings.HasPrefix(c.argv, prefix) {
+				raceCalls = append(raceCalls, c)
+				if i < 3 || calls[i-1].dir != c.dir || calls[i-1].argv != "vet -mod=readonly -trimpath -tags=integration ./..." {
+					t.Fatalf("race go call in %s does not follow that module's three build calls: %v", c.dir, calls)
+				}
+				continue
 			}
+			buildCalls = append(buildCalls, c)
+		}
+		if !sameCalls(buildCalls, wantBuild) {
+			t.Fatalf("race family build go calls:\n%v\nwant:\n%v", buildCalls, wantBuild)
+		}
+		byDir := map[string][]string{}
+		for _, c := range raceCalls {
 			if _, dup := byDir[c.dir]; dup {
 				t.Fatalf("two race go calls in %s", c.dir)
 			}

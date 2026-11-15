@@ -433,12 +433,16 @@ HAVING code_commits >= {min_commits:UInt32} AND doc_changes = 0
 ORDER BY code_commits DESC
 LIMIT 100`
 
-// flakyStatement weighs the flake rate of the days that measured cases: a day that measured none stores NULL in
-// flake_rate and joins neither side, and a repository with no such day has a NULL rate, which the HAVING drops.
+// flakyStatement is the share of DISTINCT test cases that flaked over the window: the summed flake cases over the
+// summed distinct cases, the same rate as the TestOps Tests tab (analytics orgRateTerms), never the stored daily
+// rate weighted by executions. A day that measured no case stores 0/0 and adds nothing to either side. A repository
+// with a day that has no counts (rows written before they were stored) has NO rate, like the series: all or
+// nothing, never a rate over a subset of its days. cases_total is the executions of the days that measured cases.
 const flakyStatement = `SELECT
     toString(repo_id) AS repo_id,
-    sumIf(total_cases, flake_rate IS NOT NULL) AS cases_total,
-    sum(flake_rate * total_cases) / nullIf(sumIf(total_cases, flake_rate IS NOT NULL), 0) AS weighted_flake_rate
+    sumIf(total_cases, distinct_cases > 0) AS cases_total,
+    if(countIf(flake_cases IS NULL OR distinct_cases IS NULL) > 0, NULL,
+       toFloat64(sum(flake_cases)) / nullIf(sum(distinct_cases), 0)) AS flake_share
 FROM (
     SELECT *
     FROM testops_test_metrics_daily
@@ -450,8 +454,8 @@ WHERE day >= today() - 30@@REPO@@
   AND org_id = {org_id:String}
 GROUP BY repo_id
 HAVING cases_total >= {min_cases:UInt64}
-   AND weighted_flake_rate >= {flake_threshold:Float64}
-ORDER BY weighted_flake_rate DESC
+   AND flake_share >= {flake_threshold:Float64}
+ORDER BY flake_share DESC
 LIMIT 100`
 
 // withRepo splices the optional repository predicate into a statement.
@@ -734,7 +738,7 @@ func loadFlaky(ctx context.Context, client QueryClient, orgID, repoID string) ([
 			cases uint64
 			rate  *float64
 		)
-		// weighted_flake_rate is Nullable: a repository with no day that measured cases has no rate.
+		// flake_share is Nullable: a repository with a day without counts, or without a distinct case, has no rate.
 		if err := rs.Scan(&id, &cases, &rate); err != nil {
 			return nil, fmt.Errorf("aianalytics: flaky test scan: %w", err)
 		}
@@ -744,7 +748,7 @@ func loadFlaky(ctx context.Context, client QueryClient, orgID, repoID string) ([
 		}
 		out = append(out, newOpportunity(model.AIOpportunityKindFlakyTestTriage, repo, nil,
 			"Flaky test triage candidate in "+repo,
-			"Test cases flaked at "+pct(*rate, 1)+" across "+strconv.FormatUint(cases, 10)+" executions over the last 30 days.",
+			"Test cases appear to flake at "+pct(*rate, 1)+" of distinct cases across "+strconv.FormatUint(cases, 10)+" executions over the last 30 days.",
 			scoreDelta(*rate, flakyRateThreshold),
 			[]string{"testops_test_metrics_daily:flake_rate:" + repo}))
 	}

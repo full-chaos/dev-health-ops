@@ -62,8 +62,9 @@ func seedGroupD(t *testing.T, ctx context.Context, conn chdriver.Conn) {
 
 	// flaky: one stale and one current version of a day in org-1; org-2 twin is stable.
 	flaky := func(org string, flake float64, computed string) {
-		exec(t, ctx, conn, `INSERT INTO testops_test_metrics_daily (repo_id, day, total_cases, flake_rate, org_id, computed_at)
-            SELECT '%s', today() - 1, 100, %v, '%s', toDateTime('%s', 'UTC')`, rB, flake, org, computed)
+		// 100 distinct cases, flake x 100 of them flaked: the share of distinct cases is the stored rate.
+		exec(t, ctx, conn, `INSERT INTO testops_test_metrics_daily (repo_id, day, total_cases, flake_rate, flake_cases, distinct_cases, org_id, computed_at)
+            SELECT '%s', today() - 1, 100, %v, %d, 100, '%s', toDateTime('%s', 'UTC')`, rB, flake, int(flake*100+0.5), org, computed)
 	}
 	flaky(org1, 0.9, "2026-09-01 00:00:00")
 	flaky(org1, 0.10, "2026-09-02 00:00:00")

@@ -1761,7 +1761,8 @@ GO_RACE_SOLO="${GO_RACE_SOLO:-${ROOT}/ci/go_race_solo.tsv}"
 # CHAOS-13833: race-leg test-name parts. ci/go_race_splits.tsv (package<TAB>parts) cuts a package into parts by
 # ci/go_race_split_weights.tsv (package<TAB>TestName<TAB>seconds: the largest hosted race time of each top-level test), with the
 # cutter of the test legs; a listed test with no row goes to the last part (never dropped). A part runs alone after the leg's
-# other calls, and a top-level test of 30 s or more with no row fails the leg (ci/go_race_unweighted_slow.awk).
+# other packages and before its solo packages, and a top-level test of 30 s or more with no row fails the leg
+# (ci/go_race_unweighted_slow.awk).
 GO_RACE_SPLITS="${GO_RACE_SPLITS:-${ROOT}/ci/go_race_splits.tsv}"
 GO_RACE_SPLIT_WEIGHTS="${GO_RACE_SPLIT_WEIGHTS:-${ROOT}/ci/go_race_split_weights.tsv}"
 # check_providersync_race_shard SHARD COUNT (CHAOS-8166): internal/providersync is one test binary of ~1,460 sequential tests that took
@@ -1956,18 +1957,9 @@ check_race_shard() {
         go_test_leg "${racelog}" "${legjson}" -race -timeout "${DEV_HEALTH_GO_RACE_TEST_TIMEOUT:-10m}" "${pkgs_sec[@]}"
       ) || { rm -f -- "${racelog}"; return 1; }
     fi
-    # CHAOS-10289: the solo packages run last and alone: the shard's packages and its providersync slice have finished, so
-    # nothing else of this leg runs beside them.
-    if [ "${#solo_pkgs[@]}" -gt 0 ]; then
-      selected=$((selected + ${#solo_pkgs[@]}))
-      printf 'go test -race%s (shard %s/%s): %s: solo, alone: %s\n' "${MERGE_GROUP_FRESH:+ -count=1}" "${shard}" "${count}" "${module_dir}" "${solo_pkgs[*]}"
-      (
-        cd "${ROOT}/${module_dir}"
-        go_test_leg "${racelog}" "${legjson}" -race -timeout "${DEV_HEALTH_GO_RACE_TEST_TIMEOUT:-10m}" "${solo_pkgs[@]}"
-      ) || { rm -f -- "${racelog}"; return 1; }
-    fi
-    # CHAOS-13833: each part of a race split package runs alone, last, by its own top-level test names (anchored -run); a top-level
-    # test of 30 s or more with no row in ci/go_race_split_weights.tsv fails the leg, as the providersync slice does.
+    # CHAOS-13833: each part of a race split package runs alone (after the shard's packages, before its solo packages, which stay
+    # last) by its own top-level test names (anchored -run); a top-level test of 30 s or more with no row in
+    # ci/go_race_split_weights.tsv fails the leg, as the providersync slice does.
     for pkg in "${split_items[@]}"; do
       IFS=$'\t' read -r pkg spart sparts <<<"${pkg}"
       key="${pkg#"${modpath}/"}"
@@ -1988,6 +1980,16 @@ check_race_shard() {
       cat -- "${partjson}" >>"${legjson}" || die "cannot append the race part's go test -json to ${legjson}"
       rm -f -- "${partjson}"
     done
+    # CHAOS-10289: the solo packages run last and alone: the shard's packages and its providersync slice have finished, so
+    # nothing else of this leg runs beside them.
+    if [ "${#solo_pkgs[@]}" -gt 0 ]; then
+      selected=$((selected + ${#solo_pkgs[@]}))
+      printf 'go test -race%s (shard %s/%s): %s: solo, alone: %s\n' "${MERGE_GROUP_FRESH:+ -count=1}" "${shard}" "${count}" "${module_dir}" "${solo_pkgs[*]}"
+      (
+        cd "${ROOT}/${module_dir}"
+        go_test_leg "${racelog}" "${legjson}" -race -timeout "${DEV_HEALTH_GO_RACE_TEST_TIMEOUT:-10m}" "${solo_pkgs[@]}"
+      ) || { rm -f -- "${racelog}"; return 1; }
+    fi
   done
   (check_security_fresh_receipt "${selected}" "${legjson}" ${ps_json:+"${ps_json}"}) || { rm -f -- "${racelog}"; return 1; }
   rm -f -- "${racelog}"

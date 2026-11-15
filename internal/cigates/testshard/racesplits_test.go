@@ -362,7 +362,8 @@ func TestTheRaceSplitGuardPlantedDefectsAreCaught(t *testing.T) {
 }
 
 // The race leg's part call, read from ci/check_go.sh: the -race listing, the cut with the last part as restpart, the anchored
-// -run of the part's names, the part run after the leg's other calls, and the unweighted guard over the part's events.
+// -run of the part's names, the part run after the shard's packages and before the solo call (solo stays last), and the
+// unweighted guard over the part's events.
 func TestTheRaceLegRunsEachPartAloneByItsAnchoredNames(t *testing.T) {
 	t.Parallel()
 	b, err := os.ReadFile(filepath.Join(repoRoot(t), "ci", "check_go.sh"))
@@ -385,9 +386,10 @@ func TestTheRaceLegRunsEachPartAloneByItsAnchoredNames(t *testing.T) {
 	if !ok {
 		t.Fatal("ci/check_go.sh: no check_race_shard()")
 	}
-	solo, part := strings.Index(body, `solo, alone: %s`), strings.Index(body, `for pkg in "${split_items[@]}"; do`)
-	if solo < 0 || part < 0 || part < solo {
-		t.Errorf("check_race_shard must run the split parts after the solo call (solo at %d, parts at %d)", solo, part)
+	main, part, solo := strings.Index(body, `go_test_leg "${racelog}" "${legjson}" -race -timeout "${DEV_HEALTH_GO_RACE_TEST_TIMEOUT:-10m}" "${pkgs[@]}"`),
+		strings.Index(body, `for pkg in "${split_items[@]}"; do`), strings.Index(body, `solo, alone: %s`)
+	if main < 0 || part < 0 || solo < 0 || !(main < part && part < solo) {
+		t.Errorf("check_race_shard must run the split parts after the shard's packages and before the solo call, which stays last (main at %d, parts at %d, solo at %d)", main, part, solo)
 	}
 }
 

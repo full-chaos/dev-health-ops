@@ -93,6 +93,7 @@ work. Use this in CI, or via `dev-hops push validate`, before submitting a real 
   - `400 invalid_envelope` — malformed JSON or envelope shape (bad `schemaVersion` field type,
     missing `source`, empty `records`, etc.)
   - `400 unsupported_schema_version` — `schemaVersion` isn't `external-ingest.v1`
+  - `422 string_unicode` — a body string holds a lone UTF-16 surrogate; nothing is stored
   - `400 batch_too_large` — more than `maxRecordsPerBatch` records (default 1000)
   - `413 payload_too_large` — request body exceeds `maxBodyBytes` (default 10MB)
   - `401 invalid_token`, `403 insufficient_scope`, `429 rate_limited`

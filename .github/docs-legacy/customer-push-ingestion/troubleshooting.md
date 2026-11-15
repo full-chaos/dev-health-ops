@@ -100,6 +100,7 @@ accept/processing time.
 | HTTP | `code` | Cause | Remediation |
 |---|---|---|---|
 | 400 | `invalid_envelope` | Malformed JSON, or the envelope itself fails schema validation (bad types, missing `source`, empty `records`). | Fix the envelope; check `errors[]` for the specific Pydantic field errors. |
+| 422 | `string_unicode` | A string in the body (a value or a key) holds a lone UTF-16 surrogate, such as `\ud800` not paired with a low surrogate (only on the external-ingest `POST /batches` and `POST /validate`). Nothing is stored. | Send valid Unicode; write a non-BMP character as a surrogate pair or as UTF-8. `errors[0].loc` names the field. |
 | 400 | `idempotency_key_mismatch` | `Idempotency-Key` header doesn't match the body's `idempotencyKey`. | Send the same value in both, or omit the header (body is canonical). |
 | 400 | `unsupported_schema_version` | `schemaVersion` isn't `external-ingest.v1`. | Update the client / check `GET /schemas` for the current supported version. |
 | 400 | `unknown_record_kind` | A record's `kind` isn't one of the 9 known kinds (only on `POST /batches`; `/validate` reports this per-record instead). | Fix the record's `kind`, or run `POST /validate` first to catch this before submitting. |

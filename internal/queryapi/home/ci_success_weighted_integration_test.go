@@ -5,6 +5,7 @@ package home
 import (
 	"context"
 	"fmt"
+	"slices"
 	"testing"
 	"time"
 
@@ -17,7 +18,7 @@ import (
 //
 //	repo A  day 1: 1 run, rate 1.0          day 2: 9 runs, rate 1.0
 //	repo B  day 1: 99 runs, rate 0.0        day 2: 1 run, rate 0.0 (an older version of the row said 100 runs at 1.0)
-//	repo C  day 1: 0 runs (no row sample)    other organization, repo A's id: 500 runs at 0.0
+//	repo C  day 1: 0 runs, rate 0.0          other organization, repo A's id: 500 runs at 0.0
 func TestHomeCISuccess_IsTheWeightedRateOfTheWindow(t *testing.T) {
 	ctx := context.Background()
 	admin, client := newHomeTestClickHouse(ctx, t)
@@ -44,6 +45,8 @@ func TestHomeCISuccess_IsTheWeightedRateOfTheWindow(t *testing.T) {
 	write(orgID, repoB, day1, newer, 99, 0.0)
 	write(orgID, repoB, day2, newer, 1, 0.0)
 	write("home-org-ci-success-weighted-other", repoA, day1, newer, 500, 0.0)
+	// repo C: a row that holds no run (0 runs): no value, never a measured 0 or 100.
+	write(orgID, repoC, day1, newer, 0, 0.0)
 
 	names := map[uuid.UUID]string{repoA: "acme/ci-a", repoB: "acme/ci-b", repoC: "acme/ci-c"}
 	for repo, name := range names {
@@ -101,7 +104,7 @@ func TestHomeCISuccess_IsTheWeightedRateOfTheWindow(t *testing.T) {
 		{"team owning A and B", teamScope(teamAB), day1, after, 10.0 / 110.0 * 100, true},
 		{"team owning B", teamScope(teamB), day1, after, 0, true},
 		// repo C has no row: no data, never 0 or 100.
-		{"repo C, no row", repoScope(repoC), day1, after, 0, false},
+		{"repo C, a row with no run", repoScope(repoC), day1, after, 0, false},
 		{"a window with no row", ScopeFilter{Level: "org"}, after, after.AddDate(0, 0, 7), 0, false},
 	} {
 		got := delta(tc.scope, tc.start, tc.end)
@@ -117,5 +120,59 @@ func TestHomeCISuccess_IsTheWeightedRateOfTheWindow(t *testing.T) {
 	got := delta(ScopeFilter{Level: "org"}, day1, after)
 	if len(got.Spark) != 2 || !closeTo(got.Spark[0].Value, 1) || !closeTo(got.Spark[1].Value, 9.0/10.0*100) {
 		t.Errorf("organization spark %+v, want day 1 = 1%% and day 2 = 90%%", got.Spark)
+	}
+}
+
+// The "driven by" reads (the single-metric read and the batch) rank repositories by the change of the same weighted
+// rate: Z 90 of 100 runs against 50% before is +80%, Y +20%, X 1 of 100 against 50% is -98%. A mean of the stored
+// daily rates would put X and Z at 50% and rank Y first.
+func TestHomeCISuccessDriversRankByTheWeightedRate(t *testing.T) {
+	ctx := context.Background()
+	admin, client := newHomeTestClickHouse(ctx, t)
+	now := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
+	current, endDay, prior, priorEnd, err := TimeWindow(DefaultFilters(), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const org = "home-org-ci-success-drivers"
+	computedAt := now.Add(-time.Hour)
+	write := func(repo uuid.UUID, day time.Time, runs int, rate float64) {
+		t.Helper()
+		if err := admin.Exec(ctx, fmt.Sprintf(`INSERT INTO cicd_metrics_daily (repo_id, day, pipelines_count, success_rate, computed_at, org_id) VALUES ('%s', '%s', %d, %v, '%s', '%s')`,
+			repo, day.Format("2006-01-02"), runs, rate, computedAt.Format("2006-01-02 15:04:05"), org)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	repoX, repoY, repoZ := uuid.New(), uuid.New(), uuid.New()
+	write(repoX, current, 1, 1.0)
+	write(repoX, current.AddDate(0, 0, 1), 99, 0.0)
+	write(repoX, prior, 100, 0.5)
+	write(repoY, current, 100, 0.6)
+	write(repoY, prior, 100, 0.5)
+	write(repoZ, current, 90, 1.0)
+	write(repoZ, current.AddDate(0, 0, 1), 10, 0.0)
+	write(repoZ, prior, 100, 0.5)
+	want := []string{repoZ.String(), repoY.String(), repoX.String()}
+
+	single, err := fetchMetricDriverDelta(ctx, client, metricTable("ci_success"), metricColumn("ci_success"), metricGroup("ci_success"), current, endDay, prior, priorEnd, "", nil, org, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch, err := fetchMetricDriversBatch(ctx, client, []driverBatchMetric{{Metric: "ci_success"}}, current, endDay, prior, priorEnd, nil, org, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := func(rows []driverRow) []string {
+		var out []string
+		for _, r := range rows {
+			out = append(out, r.ID)
+		}
+		return out
+	}
+	if got := ids(single); !slices.Equal(got, want) {
+		t.Errorf("single read ranks %v, want %v", got, want)
+	}
+	if got := ids(batch["ci_success"]); !slices.Equal(got, want) {
+		t.Errorf("batch ranks %v, want %v", got, want)
 	}
 }

@@ -394,6 +394,9 @@ func fetchMetricDriverDelta(ctx context.Context, client QueryClient, table, colu
 	if table == changefailure.Table {
 		return fetchRateDriverDelta(ctx, client, changefailure.WindowRateSQL, groupBy, currentFrom, previousFrom, startDay, endDay, compareStart, compareEnd, scopeBindings, orgID, limit)
 	}
+	if isCICDSuccess(table, column) {
+		return fetchRateDriverDelta(ctx, client, cicdSuccessWindowRateSQL, groupBy, currentFrom, previousFrom, startDay, endDay, compareStart, compareEnd, scopeBindings, orgID, limit)
+	}
 	query := fmt.Sprintf(`
         SELECT
             current.id AS id,

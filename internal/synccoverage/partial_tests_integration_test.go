@@ -19,8 +19,6 @@ const (
 	partialSkipResult = `{"reports_complete":false,"incomplete":[{"component":"report_member","cause":"artifact_oversized","count":1}],"skipped_artifacts":[{"run_id":"1","artifact_id":"2","cause":"artifact_oversized"}]}`
 	completeResult    = `{"reports_complete":true,"incomplete":[]}`
 	gitlabResult      = `{"coverage_complete":false,"inventory_truncated":true}`
-	// The form ops #6266's GitLab producer writes (gitlab_tests_chunked_route.go:353 at 34bcca56): both keys.
-	gitlabSkippedResult = `{"coverage_complete":false,"reports_complete":false,"inventory_truncated":["report_too_large"]}`
 )
 
 type partialUnit struct {
@@ -51,6 +49,9 @@ func TestPartialTestsUnitCoverage(t *testing.T) {
 	unit := func(dataset, status, result string, since, before time.Duration) partialUnit {
 		return partialUnit{dataset: dataset, provider: "github", flags: "{}", status: status, result: result, since: since, before: before}
 	}
+	// The result the real GitLab producer writes for a skipped report, and for a complete one.
+	realGitLabSkipped := realGitLabResult(t, realGitLabSkippedBody())
+	realGitLabComplete := realGitLabResult(t, realGitLabReport(3))
 	cases := []struct {
 		name    string
 		targets string
@@ -85,17 +86,20 @@ func TestPartialTestsUnitCoverage(t *testing.T) {
 		{"gitlab-shaped unit without the key is unchanged", `["tests"]`,
 			[]partialUnit{{dataset: "tests", provider: "gitlab", flags: "{}", status: "success", result: gitlabResult, since: -24 * time.Hour, before: -time.Hour}},
 			func(t *testing.T, tests, overall map[string]any) { wantGaps(t, tests, 0); wantCovered(t, tests, 1) }},
-		{"gitlab tests unit with reports_complete=false is a gap (#6266 form, seeded by hand)", `["tests"]`,
-			[]partialUnit{{dataset: "tests", provider: "gitlab", flags: "{}", status: "success", result: gitlabSkippedResult, since: -24 * time.Hour, before: -time.Hour}},
+		{"gitlab tests unit with reports_complete=false is a gap (real producer result)", `["tests"]`,
+			[]partialUnit{{dataset: "tests", provider: "gitlab", flags: "{}", status: "success", result: realGitLabSkipped, since: -24 * time.Hour, before: -time.Hour}},
 			func(t *testing.T, tests, overall map[string]any) {
 				wantGaps(t, tests, 1)
 				wantCovered(t, tests, 0)
 				wantNoLatest(t, overall)
 			}},
+		{"gitlab tests unit complete (real producer result) is healthy", `["tests"]`,
+			[]partialUnit{{dataset: "tests", provider: "gitlab", flags: "{}", status: "success", result: realGitLabComplete, since: -24 * time.Hour, before: -time.Hour}},
+			func(t *testing.T, tests, overall map[string]any) { wantGaps(t, tests, 0); wantCovered(t, tests, 1) }},
 		{"gitlab failed then reports_complete=false success reads gaps", `["tests"]`,
 			[]partialUnit{
 				{dataset: "tests", provider: "gitlab", flags: "{}", status: "failed", result: `{}`, since: -24 * time.Hour, before: -2 * time.Hour},
-				{dataset: "tests", provider: "gitlab", flags: "{}", status: "success", result: gitlabSkippedResult, since: -24 * time.Hour, before: -time.Hour}},
+				{dataset: "tests", provider: "gitlab", flags: "{}", status: "success", result: realGitLabSkipped, since: -24 * time.Hour, before: -time.Hour}},
 			func(t *testing.T, tests, overall map[string]any) {
 				wantGaps(t, tests, 1)
 				if got, _ := tests["failed_ranges"].([]any); len(got) != 0 || tests["status"] != "gaps" {

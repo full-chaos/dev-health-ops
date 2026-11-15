@@ -151,6 +151,11 @@ var (
 	// because a string in its stored arguments has the shape of a credential.
 	// The bounded error names the field path and the rule, never the value.
 	ReasonCredentialShapedValue = reason("credential_shaped_value")
+	// ReasonZeroRowsWithSourceData marks a daily-metrics partition whose
+	// families had source data for its repositories and day but wrote zero
+	// output rows (CHAOS-4263's check). Permanent: the native families are
+	// deterministic over the same scope, so a retry writes the same nothing.
+	ReasonZeroRowsWithSourceData = reason("zero_rows_with_source_data")
 )
 
 // Result is the runtime decision. A discard is represented by a normal safe

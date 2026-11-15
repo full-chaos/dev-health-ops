@@ -149,6 +149,45 @@ func retryClaim(err error) error {
 	return jobruntime.Retryable(err)
 }
 
+// permanentWithCause marks a deterministic failure so the River error row names
+// why and the adapter writes one WARN "job failed" line with cause. cause must be
+// built from fixed labels only: no identifier, day or driver text.
+func permanentWithCause(err error, why jobruntime.Reason, cause string) error {
+	return jobruntime.WithReason(jobruntime.Permanent(jobruntime.WithSafeCauseText(err, cause)), why)
+}
+
+// scopeMismatchCondition names the first failed check of the run-scope guard
+// the three handlers share.
+func scopeMismatchCondition(idMatches bool, idMismatch, status string, executionOrganization *string, runOrganization string) string {
+	switch {
+	case !idMatches:
+		return idMismatch
+	case status != "running":
+		return "run_not_running"
+	case executionOrganization == nil:
+		return "organization_missing"
+	case runOrganization != *executionOrganization:
+		return "organization_mismatch"
+	}
+	return "unknown"
+}
+
+// zeroRowSourceFamilies is the closed set of names ZeroRowFamiliesWithSourceData
+// returns; any other name is logged as "other".
+var zeroRowSourceFamilies = map[string]struct{}{"cicd": {}, "deploy": {}, "incident": {}, "testops_risk": {}}
+
+func zeroRowsCause(families []string) string {
+	names := make([]string, 0, len(families))
+	for _, family := range families {
+		if _, ok := zeroRowSourceFamilies[family]; !ok {
+			family = "other"
+		}
+		names = append(names, family)
+	}
+	slices.Sort(names)
+	return "step=source_check zero_rows_with_source_data families=" + strings.Join(slices.Compact(names), ",")
+}
+
 // RepositoryID is a ClickHouse repos.id -- the identity space
 // daily.RepositoryDiscoverer resolves against (CHAOS-4263, chris's ruling
 // 2026-08-25). It is a distinct type from any Postgres integration_sources.id
@@ -479,12 +518,12 @@ func (handler *Dispatcher) Work(ctx context.Context, execution *jobruntime.Execu
 	}
 	runID := execution.Args.Payload.RunID
 	if execution.Envelope.Domain.ID != runID {
-		return jobruntime.Permanent(ErrInvalidState)
+		return permanentWithCause(ErrInvalidState, jobruntime.ReasonInvalidState, "step=dispatch_domain_mismatch")
 	}
 	run, err := handler.store.ClaimDispatch(ctx, runID)
 	if err != nil {
 		if errors.Is(err, ErrInvalidState) {
-			return jobruntime.Permanent(err)
+			return permanentWithCause(err, jobruntime.ReasonInvalidState, "step=dispatch_claim")
 		}
 		return jobruntime.Retryable(err)
 	}
@@ -492,7 +531,8 @@ func (handler *Dispatcher) Work(ctx context.Context, execution *jobruntime.Execu
 		return nil
 	}
 	if run.ID != runID || run.Status != "running" || execution.OrganizationID == nil || run.OrganizationID != *execution.OrganizationID {
-		return jobruntime.Permanent(ErrInvalidState)
+		condition := scopeMismatchCondition(run.ID == runID, "run_id_mismatch", run.Status, execution.OrganizationID, run.OrganizationID)
+		return permanentWithCause(ErrInvalidState, jobruntime.ReasonInvalidState, "step=dispatch_scope condition="+condition)
 	}
 	// codex review round 3 (P2). This used to run LAST, after the publish loop,
 	// on the reasoning that a visibility mechanism must never affect what the job
@@ -525,7 +565,7 @@ func (handler *Dispatcher) Work(ctx context.Context, execution *jobruntime.Execu
 		}
 		if _, err := handler.store.MaterializeScheduledFanout(ctx, *run, repositoryIDs); err != nil {
 			if errors.Is(err, ErrInvalidState) {
-				return jobruntime.Permanent(err)
+				return permanentWithCause(err, jobruntime.ReasonInvalidState, "step=dispatch_materialize")
 			}
 			return jobruntime.Retryable(err)
 		}
@@ -542,7 +582,7 @@ func (handler *Dispatcher) Work(ctx context.Context, execution *jobruntime.Execu
 	}
 	for _, partition := range partitions {
 		if partition.ID == "" || partition.RunID != runID {
-			return jobruntime.Permanent(ErrInvalidState)
+			return permanentWithCause(ErrInvalidState, jobruntime.ReasonInvalidState, "step=dispatch_partition_scope")
 		}
 		if err := handler.publisher.PublishPartition(ctx, *run, partition); err != nil {
 			return jobruntime.Retryable(err)
@@ -1161,7 +1201,7 @@ func (handler *PartitionHandler) Work(ctx context.Context, execution *jobruntime
 	}
 	partitionID := execution.Args.Payload.PartitionID
 	if execution.Envelope.Domain.ID != partitionID {
-		return jobruntime.Permanent(ErrInvalidState)
+		return permanentWithCause(ErrInvalidState, jobruntime.ReasonInvalidState, "step=partition_domain_mismatch")
 	}
 	claim, err := handler.store.ClaimPartition(ctx, partitionID)
 	if err != nil {
@@ -1174,13 +1214,14 @@ func (handler *PartitionHandler) Work(ctx context.Context, execution *jobruntime
 	if err != nil {
 		_ = handler.store.ReleasePartition(ctx, *claim)
 		if errors.Is(err, ErrInvalidState) {
-			return jobruntime.Permanent(err)
+			return permanentWithCause(err, jobruntime.ReasonInvalidState, "step=partition_load_run")
 		}
 		return jobruntime.Retryable(err)
 	}
 	if claim.Partition.ID != partitionID || run.Status != "running" || execution.OrganizationID == nil || run.OrganizationID != *execution.OrganizationID {
 		_ = handler.store.ReleasePartition(ctx, *claim)
-		return jobruntime.Permanent(ErrInvalidState)
+		condition := scopeMismatchCondition(claim.Partition.ID == partitionID, "partition_id_mismatch", run.Status, execution.OrganizationID, run.OrganizationID)
+		return permanentWithCause(ErrInvalidState, jobruntime.ReasonInvalidState, "step=partition_scope condition="+condition)
 	}
 	if err := runWithLeaseRenewal(
 		ctx,
@@ -1319,7 +1360,7 @@ func (handler *PartitionHandler) Work(ctx context.Context, execution *jobruntime
 		if checkErr != nil {
 			releasePartition(handler.store, ctx, *claim)
 			if errors.Is(checkErr, ErrInvalidState) {
-				return jobruntime.Permanent(checkErr)
+				return permanentWithCause(checkErr, jobruntime.ReasonInvalidState, "step=partition_source_check")
 			}
 			return jobruntime.Retryable(checkErr)
 		}
@@ -1330,7 +1371,7 @@ func (handler *PartitionHandler) Work(ctx context.Context, execution *jobruntime
 				}
 			}
 			releasePartition(handler.store, ctx, *claim)
-			return jobruntime.Permanent(ErrZeroRowsWithSourceData)
+			return permanentWithCause(ErrZeroRowsWithSourceData, jobruntime.ReasonZeroRowsWithSourceData, zeroRowsCause(families))
 		}
 	}
 	if err := handler.store.CompletePartition(ctx, *claim, handler.publisher); err != nil {
@@ -1792,7 +1833,7 @@ func (handler *FinalizeHandler) Work(ctx context.Context, execution *jobruntime.
 	}
 	runID := execution.Args.Payload.RunID
 	if execution.Envelope.Domain.ID != runID {
-		return jobruntime.Permanent(ErrInvalidState)
+		return permanentWithCause(ErrInvalidState, jobruntime.ReasonInvalidState, "step=finalize_domain_mismatch")
 	}
 	claim, err := handler.store.ClaimFinalize(ctx, runID)
 	if err != nil {
@@ -1815,7 +1856,8 @@ func (handler *FinalizeHandler) Work(ctx context.Context, execution *jobruntime.
 				"target_day", claim.Run.TargetDay.Format("2006-01-02"),
 			)
 		}
-		return jobruntime.Permanent(ErrInvalidState)
+		condition := scopeMismatchCondition(claim.Run.ID == runID, "run_id_mismatch", claim.Run.Status, execution.OrganizationID, claim.Run.OrganizationID)
+		return permanentWithCause(ErrInvalidState, jobruntime.ReasonInvalidState, "step=finalize_scope condition="+condition)
 	}
 	if err := runWithLeaseRenewal(
 		ctx,

@@ -53,7 +53,6 @@ securityAlerts
 securityOverview
 testOpsCoverage
 testOpsPipeline
-testOpsTest
 testopsRisk
 throughputForecast
 triggerReport

@@ -446,15 +446,6 @@
       ]
     },
     {
-      "operation": "testOpsTest",
-      "two_plane_ops_sha": "84828635426669a9e45901edb04923449c6f930e",
-      "guards": [
-        {"file": "internal/queryapi/analytics/timeseries_test.go", "test": "TestCompileTimeseries_TestopsMeasureOverridesSource"},
-        {"file": "internal/queryapi/analytics/breakdown_test.go", "test": "TestExecuteBreakdown_AllNullGroupYieldsNilValue_NotZero"},
-        {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
-      ]
-    },
-    {
       "operation": "testOpsCoverage",
       "two_plane_ops_sha": "e1b1e86aeddf02ad15dedd202a08c2f1a67534e9",
       "guards": [

@@ -41,7 +41,7 @@ var registeredOperations = []string{
 	"releaseImpact",
 	"investmentBreakdown", "investmentBreakdownTeam", "investmentBreakdownRepository", "teamWorkItemBreakdown", "investmentEvidenceQuality", "investmentFull", "operatingReview", "pr",
 	"createSavedReport", "updateSavedReport", "deleteSavedReport", "cloneSavedReport", "triggerReport",
-	"reportRuns", "reviewEdges", "savedReport", "savedReports", "securityAlerts", "securityOverview", "testopsRisk", "testopsJobFailures", "testopsTestWindow", "coverageBaselines", "coverageScopeBaseline", "sourceHealth", "throughputForecast", "testOpsCoverage", "testOpsPipeline", "testOpsTest", "featureFlagTimeseries",
+	"reportRuns", "reviewEdges", "savedReport", "savedReports", "securityAlerts", "securityOverview", "testopsRisk", "testopsJobFailures", "testopsTestWindow", "coverageBaselines", "coverageScopeBaseline", "sourceHealth", "throughputForecast", "testOpsCoverage", "testOpsPipeline", "featureFlagTimeseries",
 	"workGraphArtifacts", "workGraphEdges", "workGraphFlow",
 	"workUnitTeamAttributions",
 	"workItemTeamAttributions",
@@ -378,8 +378,8 @@ func TestEverySpecDeclaresItsResponseRoot(t *testing.T) {
 	// someone "tidied" ResponseRoot into a copy of the operation name --
 	// and the parity-path checks above would silently start passing for
 	// paths that can never match.
-	if sharedRoots != 19 {
-		t.Fatalf("expected 19 operations whose response root differs from their name, got %d", sharedRoots)
+	if sharedRoots != 18 {
+		t.Fatalf("expected 18 operations whose response root differs from their name, got %d", sharedRoots)
 	}
 }
 

@@ -427,10 +427,6 @@
     "legacy": true
   },
   {
-    "operation": "testOpsTest",
-    "digest": "20eeea67bfc1cfa0f809188878476a0fe40565bc583009151e1f7c8cf2f3be5c"
-  },
-  {
     "operation": "testopsJobFailures",
     "digest": "3966554a57e957978b5777cbb8b51bf6e0f41feb2181b89f7ad138e1c81c67c9"
   },

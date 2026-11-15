@@ -7,13 +7,12 @@ import (
 	"testing"
 )
 
-// Every measure the web pages send to one of the four documents has its own
+// Every measure the web pages send to one of the three documents has its own
 // single-request variant, and each variant's declared echo names exactly the
 // measure and dimension its variables ask for.
 func TestAnalyticsBatchDocuments_CoverEveryWebMeasureAndEchoWhatTheyAsk(t *testing.T) {
 	want := map[string][]string{
 		"testOpsPipeline":       {"BREAKDOWN_TEAM_PIPELINE_FAILURE_RATE", "TEAM_PIPELINE_DURATION_P95", "TEAM_PIPELINE_FAILURE_RATE", "TEAM_PIPELINE_QUEUE_TIME", "TEAM_PIPELINE_RERUN_RATE", "TEAM_PIPELINE_SUCCESS_RATE"},
-		"testOpsTest":           {"BREAKDOWN_TEAM_TEST_FLAKE_RATE", "TEAM_TEST_FAILURE_RATE", "TEAM_TEST_FLAKE_RATE", "TEAM_TEST_PASS_RATE", "TEAM_TEST_SUITE_DURATION_P95"},
 		"testOpsCoverage":       {"BREAKDOWN_REPO_COVERAGE_LINE_PCT", "TEAM_COVERAGE_BRANCH_PCT", "TEAM_COVERAGE_DELTA_PCT", "TEAM_COVERAGE_LINE_PCT"},
 		"featureFlagTimeseries": {"REPO_FLAG_ACTIVATION_RATE", "REPO_FLAG_COVERAGE_RATIO", "REPO_FLAG_ERROR_RATE_DELTA", "REPO_FLAG_FRICTION_DELTA"},
 	}
@@ -65,7 +64,7 @@ func TestAnalyticsBatchDocuments_CoverEveryWebMeasureAndEchoWhatTheyAsk(t *testi
 			t.Errorf("%s variants %v want %v", op, got, names)
 		}
 		base := spec.Variables("org", DefaultWindow())["batch"].(map[string]any)
-		if len(base["timeseries"].([]any)) != map[string]int{"testOpsPipeline": 5, "testOpsTest": 4, "testOpsCoverage": 3, "featureFlagTimeseries": 4}[op] {
+		if len(base["timeseries"].([]any)) != map[string]int{"testOpsPipeline": 5, "testOpsCoverage": 3, "featureFlagTimeseries": 4}[op] {
 			t.Errorf("%s base request must carry the whole page batch", op)
 		}
 		if len(spec.Parity.RequireNonEmpty) == 0 {
@@ -86,7 +85,6 @@ func TestAnalyticsBatchDocuments_CoverEveryWebMeasureAndEchoWhatTheyAsk(t *testi
 func TestAnalyticsPageBatches_EveryPageBatchReachesEveryDocumentItIsSentTo(t *testing.T) {
 	want := map[string][]string{
 		"testOpsPipeline": {"PAGE_GOVERN", "PAGE_TESTOPS", "PAGE_TESTS"},
-		"testOpsTest":     {"PAGE_GOVERN", "PAGE_PIPELINES", "PAGE_TESTOPS"},
 		"testOpsCoverage": {"PAGE_GOVERN", "PAGE_PIPELINES", "PAGE_TESTOPS", "PAGE_TESTS"},
 	}
 	measures := map[string]int{"PAGE_PIPELINES": 5, "PAGE_TESTS": 4, "PAGE_TESTOPS": 7, "PAGE_GOVERN": 3}

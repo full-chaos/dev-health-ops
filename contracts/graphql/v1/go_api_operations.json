@@ -410,7 +410,7 @@
   },
   {
     "operation": "testOpsCoverage",
-    "digest": "0b94aef78a67da6a837174b6915d38e7a38c0ae7a84b5070cca46812a1ab5b09"
+    "digest": "a741913fdc25474415a1fe4e459bf657d7ca2dbc00e71f32d3bbfc43264cc93d"
   },
   {
     "operation": "testOpsCoverage",
@@ -418,8 +418,13 @@
     "legacy": true
   },
   {
+    "operation": "testOpsCoverage",
+    "digest": "0b94aef78a67da6a837174b6915d38e7a38c0ae7a84b5070cca46812a1ab5b09",
+    "legacy": true
+  },
+  {
     "operation": "testOpsPipeline",
-    "digest": "e164c9da32dbdd7768614d1ba0747e303ba05135709189035465e429501ced38"
+    "digest": "fa5806f2b3e2d5c8db0669e7ec76315b42dada3a3562a004d80a8c91b41c9dc5"
   },
   {
     "operation": "testOpsPipeline",
@@ -427,8 +432,18 @@
     "legacy": true
   },
   {
+    "operation": "testOpsPipeline",
+    "digest": "e164c9da32dbdd7768614d1ba0747e303ba05135709189035465e429501ced38",
+    "legacy": true
+  },
+  {
     "operation": "testopsJobFailures",
-    "digest": "3966554a57e957978b5777cbb8b51bf6e0f41feb2181b89f7ad138e1c81c67c9"
+    "digest": "6fdbbd6e192c9762821da038c9944099973d1b4f7f19cd36c18c935800e1c5ab"
+  },
+  {
+    "operation": "testopsJobFailures",
+    "digest": "3966554a57e957978b5777cbb8b51bf6e0f41feb2181b89f7ad138e1c81c67c9",
+    "legacy": true
   },
   {
     "operation": "testopsRisk",
@@ -441,7 +456,12 @@
   },
   {
     "operation": "testopsTestWindow",
-    "digest": "80397810a4c9c1aa724b0a1828ec6cfa2235fd9ad4b320124149dd68a623faa0"
+    "digest": "614e1da8cdd06f40b68d5c57011462c5b3a8c2dbffa465ed95bc98d782389354"
+  },
+  {
+    "operation": "testopsTestWindow",
+    "digest": "80397810a4c9c1aa724b0a1828ec6cfa2235fd9ad4b320124149dd68a623faa0",
+    "legacy": true
   },
   {
     "operation": "throughputForecast",

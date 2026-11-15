@@ -390,6 +390,7 @@ type ComplexityRoot struct {
 		EvidenceQualityByGroup      func(childComplexity int) int
 		EvidenceQualityDistribution func(childComplexity int) int
 		EvidenceQualityStats        func(childComplexity int) int
+		FilterEmptyReason           func(childComplexity int) int
 		FlowMatrix                  func(childComplexity int) int
 		Sankey                      func(childComplexity int) int
 		Timeseries                  func(childComplexity int) int
@@ -1451,9 +1452,10 @@ type ComplexityRoot struct {
 	}
 
 	TestOpsJobFailuresResult struct {
-		Groups     func(childComplexity int) int
-		TotalCount func(childComplexity int) int
-		Truncated  func(childComplexity int) int
+		FilterEmptyReason func(childComplexity int) int
+		Groups            func(childComplexity int) int
+		TotalCount        func(childComplexity int) int
+		Truncated         func(childComplexity int) int
 	}
 
 	TestOpsRiskBreakdownItem struct {
@@ -1509,13 +1511,14 @@ type ComplexityRoot struct {
 	}
 
 	TestOpsTestWindowResult struct {
-		Cases          func(childComplexity int) int
-		Coverage       func(childComplexity int) int
-		FailureRatePct func(childComplexity int) int
-		FlakeRatePct   func(childComplexity int) int
-		PassRatePct    func(childComplexity int) int
-		SinceDate      func(childComplexity int) int
-		UntilDate      func(childComplexity int) int
+		Cases             func(childComplexity int) int
+		Coverage          func(childComplexity int) int
+		FailureRatePct    func(childComplexity int) int
+		FilterEmptyReason func(childComplexity int) int
+		FlakeRatePct      func(childComplexity int) int
+		PassRatePct       func(childComplexity int) int
+		SinceDate         func(childComplexity int) int
+		UntilDate         func(childComplexity int) int
 	}
 
 	ThroughputEstimateCoverage struct {
@@ -3478,6 +3481,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 		}
 
 		return e.complexity.AnalyticsResult.EvidenceQualityStats(childComplexity), true
+
+	case "AnalyticsResult.filterEmptyReason":
+		if e.complexity.AnalyticsResult.FilterEmptyReason == nil {
+			break
+		}
+
+		return e.complexity.AnalyticsResult.FilterEmptyReason(childComplexity), true
 
 	case "AnalyticsResult.flowMatrix":
 		if e.complexity.AnalyticsResult.FlowMatrix == nil {
@@ -8609,6 +8619,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.TestOpsJobFailureGroup.WorkflowName(childComplexity), true
 
+	case "TestOpsJobFailuresResult.filterEmptyReason":
+		if e.complexity.TestOpsJobFailuresResult.FilterEmptyReason == nil {
+			break
+		}
+
+		return e.complexity.TestOpsJobFailuresResult.FilterEmptyReason(childComplexity), true
+
 	case "TestOpsJobFailuresResult.groups":
 		if e.complexity.TestOpsJobFailuresResult.Groups == nil {
 			break
@@ -8867,6 +8884,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 		}
 
 		return e.complexity.TestOpsTestWindowResult.FailureRatePct(childComplexity), true
+
+	case "TestOpsTestWindowResult.filterEmptyReason":
+		if e.complexity.TestOpsTestWindowResult.FilterEmptyReason == nil {
+			break
+		}
+
+		return e.complexity.TestOpsTestWindowResult.FilterEmptyReason(childComplexity), true
 
 	case "TestOpsTestWindowResult.flakeRatePct":
 		if e.complexity.TestOpsTestWindowResult.FlakeRatePct == nil {
@@ -10213,6 +10237,8 @@ type AnalyticsResult {
   evidenceQualityDistribution: JSON
   evidenceQualityStats: EvidenceQualityStats
   evidenceQualityByGroup: [EvidenceQualityGroup!]
+  "Why the answer is empty, one value for the whole answer, set by the server and never derived by a client (CHAOS-9098). team_owns_no_repository: the request's team scope selects teams that together own no repository (team_repo_ownership, as of now), so every series and breakdown of the team scope is empty. Null when the request has no team scope, when the selected teams own one or more repositories (also when the window has no rows), and when the batch holds a request that does not read repository ownership (a stored team column) or a sankey or flow matrix. Never a value of 0 and never a healthy answer. The ORG series is not changed by it."
+  filterEmptyReason: String
 }
 
 """
@@ -12009,6 +12035,8 @@ type TestOpsJobFailuresResult {
   totalCount: Int!
   """True = ` + "`" + `` + "`" + `totalCount` + "`" + `` + "`" + ` is above the number of ` + "`" + `` + "`" + `groups` + "`" + `` + "`" + ` served."""
   truncated: Boolean!
+  "Why the answer is empty, one value for the whole answer, set by the server and never derived by a client (CHAOS-9098). team_owns_no_repository: ` + "`" + `` + "`" + `teamIds` + "`" + `` + "`" + ` selects teams that together own no repository (team_repo_ownership, as of now). Null when ` + "`" + `` + "`" + `teamIds` + "`" + `` + "`" + ` is not set, and when the selected teams own one or more repositories, also when the window has no rows."
+  filterEmptyReason: String
 }
 
 input TestOpsTestWindowInput {
@@ -12061,6 +12089,8 @@ type TestOpsTestWindowResult {
   Summed flaky case names over summed distinct case names of the window, as a percent (0 to 100). Null = no distinct case, or a day stored without the counts (the whole window is then unavailable, not a smaller one).
   """
   flakeRatePct: Float
+  "Why the answer is empty, one value for the whole answer, set by the server and never derived by a client (CHAOS-9098). team_owns_no_repository: ` + "`" + `` + "`" + `teamIds` + "`" + `` + "`" + ` selects teams that together own no repository (team_repo_ownership, as of now). Null when ` + "`" + `` + "`" + `teamIds` + "`" + `` + "`" + ` is not set, and when the selected teams own one or more repositories, also when the window has no rows."
+  filterEmptyReason: String
 }
 
 type TestOpsRiskBreakdownItem {
@@ -27149,6 +27179,47 @@ func (ec *executionContext) fieldContext_AnalyticsResult_evidenceQualityByGroup(
 				return ec.fieldContext_EvidenceQualityGroup_total(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type EvidenceQualityGroup", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _AnalyticsResult_filterEmptyReason(ctx context.Context, field graphql.CollectedField, obj *model.AnalyticsResult) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_AnalyticsResult_filterEmptyReason(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.FilterEmptyReason, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_AnalyticsResult_filterEmptyReason(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "AnalyticsResult",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
 		},
 	}
 	return fc, nil
@@ -48934,6 +49005,8 @@ func (ec *executionContext) fieldContext_Query_analytics(ctx context.Context, fi
 				return ec.fieldContext_AnalyticsResult_evidenceQualityStats(ctx, field)
 			case "evidenceQualityByGroup":
 				return ec.fieldContext_AnalyticsResult_evidenceQualityByGroup(ctx, field)
+			case "filterEmptyReason":
+				return ec.fieldContext_AnalyticsResult_filterEmptyReason(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type AnalyticsResult", field.Name)
 		},
@@ -50812,6 +50885,8 @@ func (ec *executionContext) fieldContext_Query_testopsJobFailures(ctx context.Co
 				return ec.fieldContext_TestOpsJobFailuresResult_totalCount(ctx, field)
 			case "truncated":
 				return ec.fieldContext_TestOpsJobFailuresResult_truncated(ctx, field)
+			case "filterEmptyReason":
+				return ec.fieldContext_TestOpsJobFailuresResult_filterEmptyReason(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type TestOpsJobFailuresResult", field.Name)
 		},
@@ -50883,6 +50958,8 @@ func (ec *executionContext) fieldContext_Query_testopsTestWindow(ctx context.Con
 				return ec.fieldContext_TestOpsTestWindowResult_failureRatePct(ctx, field)
 			case "flakeRatePct":
 				return ec.fieldContext_TestOpsTestWindowResult_flakeRatePct(ctx, field)
+			case "filterEmptyReason":
+				return ec.fieldContext_TestOpsTestWindowResult_filterEmptyReason(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type TestOpsTestWindowResult", field.Name)
 		},
@@ -60035,6 +60112,47 @@ func (ec *executionContext) fieldContext_TestOpsJobFailuresResult_truncated(_ co
 	return fc, nil
 }
 
+func (ec *executionContext) _TestOpsJobFailuresResult_filterEmptyReason(ctx context.Context, field graphql.CollectedField, obj *model.TestOpsJobFailuresResult) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_TestOpsJobFailuresResult_filterEmptyReason(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.FilterEmptyReason, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_TestOpsJobFailuresResult_filterEmptyReason(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "TestOpsJobFailuresResult",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _TestOpsRiskBreakdownItem_category(ctx context.Context, field graphql.CollectedField, obj *model.TestOpsRiskBreakdownItem) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_TestOpsRiskBreakdownItem_category(ctx, field)
 	if err != nil {
@@ -61723,6 +61841,47 @@ func (ec *executionContext) fieldContext_TestOpsTestWindowResult_flakeRatePct(_ 
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _TestOpsTestWindowResult_filterEmptyReason(ctx context.Context, field graphql.CollectedField, obj *model.TestOpsTestWindowResult) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_TestOpsTestWindowResult_filterEmptyReason(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.FilterEmptyReason, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_TestOpsTestWindowResult_filterEmptyReason(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "TestOpsTestWindowResult",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
 		},
 	}
 	return fc, nil
@@ -72374,6 +72533,8 @@ func (ec *executionContext) _AnalyticsResult(ctx context.Context, sel ast.Select
 			out.Values[i] = ec._AnalyticsResult_evidenceQualityStats(ctx, field, obj)
 		case "evidenceQualityByGroup":
 			out.Values[i] = ec._AnalyticsResult_evidenceQualityByGroup(ctx, field, obj)
+		case "filterEmptyReason":
+			out.Values[i] = ec._AnalyticsResult_filterEmptyReason(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -80270,6 +80431,8 @@ func (ec *executionContext) _TestOpsJobFailuresResult(ctx context.Context, sel a
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "filterEmptyReason":
+			out.Values[i] = ec._TestOpsJobFailuresResult_filterEmptyReason(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -80693,6 +80856,8 @@ func (ec *executionContext) _TestOpsTestWindowResult(ctx context.Context, sel as
 			out.Values[i] = ec._TestOpsTestWindowResult_failureRatePct(ctx, field, obj)
 		case "flakeRatePct":
 			out.Values[i] = ec._TestOpsTestWindowResult_flakeRatePct(ctx, field, obj)
+		case "filterEmptyReason":
+			out.Values[i] = ec._TestOpsTestWindowResult_filterEmptyReason(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}

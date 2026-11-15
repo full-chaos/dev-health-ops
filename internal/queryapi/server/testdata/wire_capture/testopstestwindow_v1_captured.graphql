@@ -1,0 +1,24 @@
+query TestOpsTestWindow($orgId: String!, $input: TestOpsTestWindowInput!) {
+  testopsTestWindow(orgId: $orgId, input: $input) {
+    sinceDate
+    untilDate
+    coverage {
+      completedRuns
+      runsWithTests
+      sharePct
+      __typename
+    }
+    cases {
+      passed
+      failed
+      skipped
+      quarantined
+      total
+      __typename
+    }
+    passRatePct
+    failureRatePct
+    flakeRatePct
+    __typename
+  }
+}

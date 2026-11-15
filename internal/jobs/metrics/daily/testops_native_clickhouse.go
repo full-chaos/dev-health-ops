@@ -570,6 +570,17 @@ func uint32PtrOf(n int) *uint32 {
 	return &v
 }
 
+// measuredCaseRates returns flake_rate, retry_dependency_rate and
+// failure_recurrence_score as written: NULL (nil) for a day that measured no
+// case (FlakeUnknown, or no case row at all), because a rate over 0 cases is
+// unknown, not 0. A day that measured cases writes its rates, a 0 included.
+func measuredCaseRates(metric testops.TestMetric) (flakeRate, retryDependencyRate, failureRecurrence *float64) {
+	if metric.DistinctCases == 0 {
+		return nil, nil, nil
+	}
+	return &metric.FlakeRate, &metric.RetryDependencyRate, &metric.FailureRecurrence
+}
+
 func writeTestopsTestMetrics(
 	ctx context.Context, conn testopsNativeBatchConn, organizationID string,
 	day time.Time, computedAt time.Time, metrics []testops.TestMetric,
@@ -590,8 +601,8 @@ func writeTestopsTestMetrics(
 		// nothing to the org series' sums (queryapi/analytics/timeseries.go), so the
 		// org value is the other repos' and is unavailable only when every repo's
 		// day is unknown. A NULL pair would blank the whole org day instead.
-		// flake_rate itself is a plain Float64 column and keeps its 0.
 		flakeCases, distinctCases := uint32PtrOf(metric.FlakeCases), uint32PtrOf(metric.DistinctCases)
+		flakeRate, retryDependencyRate, failureRecurrence := measuredCaseRates(metric)
 		if err := batch.Append(
 			metric.RepoID, chDate(day),
 			// total_cases/passed_count/failed_count/skipped_count/
@@ -601,9 +612,9 @@ func writeTestopsTestMetrics(
 			// they keep a direct conversion.
 			uint32(metric.TotalCases), uint32(metric.PassedCount), uint32(metric.FailedCount),
 			uint32(metric.SkippedCount), uint32(metric.QuarantinedCount),
-			metric.PassRate, metric.FailureRate, metric.FlakeRate, metric.RetryDependencyRate,
+			metric.PassRate, metric.FailureRate, flakeRate, retryDependencyRate,
 			uint32(metric.TotalSuites),
-			metric.SuiteDurationP50Seconds, metric.SuiteDurationP95Seconds, metric.FailureRecurrence,
+			metric.SuiteDurationP50Seconds, metric.SuiteDurationP95Seconds, failureRecurrence,
 			metric.TeamID, metric.ServiceID, organizationID, computedAt.UTC(),
 			// flake_cases/distinct_cases are Nullable(UInt32): a row written before
 			// the columns existed reads NULL, a row written now carries both counts

@@ -433,10 +433,12 @@ HAVING code_commits >= {min_commits:UInt32} AND doc_changes = 0
 ORDER BY code_commits DESC
 LIMIT 100`
 
+// flakyStatement weighs the flake rate of the days that measured cases: a day that measured none stores NULL in
+// flake_rate and joins neither side, and a repository with no such day has a NULL rate, which the HAVING drops.
 const flakyStatement = `SELECT
     toString(repo_id) AS repo_id,
-    sum(total_cases) AS cases_total,
-    sum(flake_rate * total_cases) / sum(total_cases) AS weighted_flake_rate
+    sumIf(total_cases, flake_rate IS NOT NULL) AS cases_total,
+    sum(flake_rate * total_cases) / nullIf(sumIf(total_cases, flake_rate IS NOT NULL), 0) AS weighted_flake_rate
 FROM (
     SELECT *
     FROM testops_test_metrics_daily

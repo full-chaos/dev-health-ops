@@ -15,6 +15,7 @@ import (
 
 	"github.com/full-chaos/dev-health-go/clickhouse"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/testops"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/scopelabel"
@@ -46,7 +47,8 @@ type dailyRow struct {
 
 // dailyQuery reads, per day, the mean over repositories of the latest
 // release confidence and pipeline stability and the sums of the latest
-// quality-drag hours, outer-joined on the day.
+// quality-drag hours, outer-joined on the day. Stability is read only through
+// testops.StabilityLiveRowsSQL: a repo-day with no completed run has none.
 const dailyQuery = `SELECT
     day AS day,
     release_confidence,
@@ -103,15 +105,7 @@ FULL OUTER JOIN (
         day,
         avg(stability_index) AS pipeline_stability
     FROM (
-        SELECT
-            day,
-            repo_id,
-            argMax(stability_index, computed_at) AS stability_index
-        FROM testops_pipeline_stability
-        WHERE org_id = {org_id:String}
-          AND day >= {start:Date}
-          AND day <= {end:Date}
-        GROUP BY day, repo_id
+` + testops.StabilityLiveRowsSQL + `
     )
     GROUP BY day
 ) AS stability_daily USING (day)

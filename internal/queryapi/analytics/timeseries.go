@@ -400,7 +400,8 @@ const orgSeriesDimensionValue = "org"
 // with any row lacking the counts is unavailable.
 //
 // TEST_PASS_RATE and TEST_FAILURE_RATE are the summed passed (failed) cases over the summed passed and failed cases;
-// PIPELINE_FAILURE_RATE and PIPELINE_RERUN_RATE are the summed failures (reruns) over the summed runs (CHAOS-13775).
+// PIPELINE_SUCCESS_RATE and PIPELINE_FAILURE_RATE are the summed successes (failures) over the summed completed runs
+// (succeeded or failed); PIPELINE_RERUN_RATE is the summed reruns over the summed runs (CHAOS-13775).
 // The same terms as the dimension series, so the ORG series and a team series differ only in the rows they cover.
 //
 // Coverage counts only the rows that carry both line counts: a row with a percent but no counts, or with no lines,
@@ -408,7 +409,7 @@ const orgSeriesDimensionValue = "org"
 func orgRateTerms(measure Measure) (numerator, denominator string, scale float64, ok bool) {
 	switch measure {
 	case MeasurePipelineSuccessRate:
-		return "SUM(success_count)", "SUM(pipelines_count)", 100, true
+		return pipelineSuccessTerms.numerator, pipelineSuccessTerms.denominator, 100, true
 	case MeasurePipelineFailureRate:
 		return pipelineFailureTerms.numerator, pipelineFailureTerms.denominator, 100, true
 	case MeasurePipelineRerunRate:

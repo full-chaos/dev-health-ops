@@ -372,6 +372,29 @@ func nullablePyRound(family, field string, value float64, ndigits int) *float64 
 	return &rounded
 }
 
+func ratioOrAbsent(numerator, denominator int) *float64 {
+	if denominator <= 0 {
+		return nil
+	}
+	value := float64(numerator) / float64(denominator)
+	return &value
+}
+
+func valueOrZero(value *float64) float64 {
+	if value == nil {
+		return 0
+	}
+	return *value
+}
+
+func roundedRate(value *float64) *float64 {
+	if value == nil {
+		return nil
+	}
+	rounded := pyRound(*value, 4)
+	return &rounded
+}
+
 // clampUnit ports Python's `_clamp(value, lo=0.0, hi=1.0) -> max(lo, min(hi,
 // value))` (compute_testops_risk.py:20-21) bit-for-bit, including its NaN
 // behavior, via pythonparity.Min2/Max2, which replicate CPython's
@@ -402,10 +425,19 @@ type factorsJSONField struct {
 	floatVal float64
 	intVal   int
 	isFloat  bool
+	isNull   bool
 }
 
 func ff(key string, value float64) factorsJSONField {
 	return factorsJSONField{key: key, floatVal: value, isFloat: true}
+}
+
+// ffRate is a rate factor that can be absent: a nil value is written as JSON null (missing, never 0 and never 1).
+func ffRate(key string, value *float64) factorsJSONField {
+	if value == nil {
+		return factorsJSONField{key: key, isNull: true}
+	}
+	return ff(key, *value)
 }
 
 func fi(key string, value int) factorsJSONField {
@@ -436,7 +468,9 @@ func factorsJSON(family string, fields []factorsJSONField) string {
 		b.WriteByte('"')
 		b.WriteString(field.key)
 		b.WriteString("\": ")
-		if field.isFloat {
+		if field.isNull {
+			b.WriteString("null")
+		} else if field.isFloat {
 			b.WriteString(finite.JSONLiteral(family, field.key, field.floatVal, pythonparity.FloatJSON))
 		} else {
 			b.WriteString(strconv.Itoa(field.intVal))
@@ -516,13 +550,18 @@ func computeReleaseConfidence(
 	if pipe == nil && test == nil && cov == nil {
 		return nil
 	}
-	var successRate, passRate, flakeRate, failureRecurrence float64
+	var flakeRate, failureRecurrence float64
 	var coveragePct, coverageDelta float64
+	// The pipeline success rate and the test pass rate are the repository's summed counts over their
+	// denominators (completed runs, success plus failure, for the pipeline: cancelled, skipped and running runs are
+	// out; skipped cases are not in the pass-rate denominator); a zero denominator is absent
+	// (missing, never 0 and never 100), and an absent factor adds 0 to the score.
+	var successRate, passRate *float64
 	if pipe != nil {
-		successRate = pipe.SuccessRate
+		successRate = ratioOrAbsent(pipe.SuccessCount, pipe.SuccessCount+pipe.FailureCount)
 	}
 	if test != nil {
-		passRate = test.PassRate
+		passRate = ratioOrAbsent(test.PassedCount, test.PassedCount+test.FailedCount)
 		flakeRate = test.FlakeRate
 		failureRecurrence = test.FailureRecurrence
 	}
@@ -533,8 +572,8 @@ func computeReleaseConfidence(
 		coverageDelta = pythonparity.OrZero(*cov.CoverageDeltaPct)
 	}
 
-	pipelineFactor := 0.4 * successRate
-	testFactor := 0.3 * passRate
+	pipelineFactor := 0.4 * valueOrZero(successRate)
+	testFactor := 0.3 * valueOrZero(passRate)
 	covFactor := 0.2 * clampUnit(coveragePct/100.0)
 	flakeFactor := 0.1 * (1.0 - flakeRate)
 	baseScore := pipelineFactor + testFactor + covFactor + flakeFactor
@@ -553,8 +592,8 @@ func computeReleaseConfidence(
 	score := clampUnit(baseScore - flakePenalty - regressionPenalty)
 
 	factors := factorsJSON("testops_release_confidence", []factorsJSONField{
-		ff("pipeline_success_rate", pyRound(successRate, 4)),
-		ff("test_pass_rate", pyRound(passRate, 4)),
+		ffRate("pipeline_success_rate", roundedRate(successRate)),
+		ffRate("test_pass_rate", roundedRate(passRate)),
 		ff("coverage_pct", pyRound(coveragePct, 2)),
 		ff("flake_rate", pyRound(flakeRate, 4)),
 		ff("failure_recurrence", pyRound(failureRecurrence, 4)),
@@ -655,7 +694,8 @@ func computeQualityDrag(
 // testops.ComputePipelineMetrics returned them (mirrors Python's stable
 // sort by `.day`, which is a no-op tie for same-day rows and so preserves
 // pipeline_metrics_buffer's own insertion order). Returns nil when
-// dayEntries is empty, matching `if n == 0: continue`.
+// dayEntries is empty, matching `if n == 0: continue`, and when no entry
+// has a completed run.
 func computePipelineStability(repoID uuid.UUID, day time.Time, dayEntries []testops.PipelineMetric, computedAt time.Time) *testopsPipelineStabilityRow {
 	n := len(dayEntries)
 	if n == 0 {
@@ -670,14 +710,24 @@ func computePipelineStability(repoID uuid.UUID, day time.Time, dayEntries []test
 	// the loop -- see weightedSuccessRate7d/successRateTrendFromRates
 	// (which also carry the CHAOS-4818 FMA guards this same code needed
 	// before extraction).
-	successRates := make([]float64, n)
-	for i, m := range dayEntries {
-		successRates[i] = m.SuccessRate
+	//
+	// A group with no completed run (succeeded or failed) has no success rate: it is left out, never a rate of 0, and
+	// the later groups move one place in the weights and the trend (the positions are the groups of one day, not
+	// days). With no completed run at all the day has no stability row; the failure loops below still walk every
+	// group, so their adjacency does not change.
+	successRates := make([]float64, 0, n)
+	for _, m := range dayEntries {
+		if m.SuccessCount+m.FailureCount > 0 {
+			successRates = append(successRates, m.SuccessRate)
+		}
+	}
+	if len(successRates) == 0 {
+		return nil
 	}
 	successRate7d := weightedSuccessRate7d(successRates)
 
 	successRateTrend := 0.0
-	if n >= 2 {
+	if len(successRates) >= 2 {
 		successRateTrend = successRateTrendFromRates(successRates)
 	}
 

@@ -46,6 +46,7 @@ var benchmarkingSchema = []string{
 ) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, id)`,
 	`CREATE TABLE testops_pipeline_metrics_daily (
     repo_id UUID, day Date, team_id Nullable(String), service_id Nullable(String),
+    success_count UInt32, failure_count UInt32,
     success_rate Float64, failure_rate Float64, rerun_rate Float64,
     median_duration_seconds Float64, p95_duration_seconds Float64,
     avg_queue_seconds Float64, p95_queue_seconds Float64,
@@ -307,14 +308,16 @@ INSERT INTO repos (id, org_id, repo, settings, provider, last_synced) VALUES
 	for dayOffset := 0; dayOffset < 12; dayOffset++ {
 		day := benchmarkingDay().AddDate(0, 0, -dayOffset)
 		for index, repo := range repos {
-			value := 0.5 + float64(index)*0.1 + float64(dayOffset)*0.01
+			// success and failure rates are read from the counts: 100 completed runs, success = 50 + 10*index + dayOffset.
+			success := uint32(50 + 10*index + dayOffset)
+			value := float64(success) / 100
 			if err := conn.Exec(ctx, `
 INSERT INTO testops_pipeline_metrics_daily
-(repo_id, day, team_id, service_id, success_rate, failure_rate, rerun_rate,
+(repo_id, day, team_id, service_id, success_count, failure_count, success_rate, failure_rate, rerun_rate,
  median_duration_seconds, p95_duration_seconds, avg_queue_seconds, p95_queue_seconds,
  computed_at, org_id) VALUES
-(toUUID(?), ?, NULL, NULL, ?, 0.1, 0.05, 100.0, 200.0, 10.0, 20.0, ?, ?)`,
-				repo, day, value, day, benchmarkingOrgID,
+(toUUID(?), ?, NULL, NULL, ?, ?, ?, ?, 0.05, 100.0, 200.0, 10.0, 20.0, ?, ?)`,
+				repo, day, success, 100-success, value, 1-value, day, benchmarkingOrgID,
 			); err != nil {
 				t.Fatal(err)
 			}

@@ -235,12 +235,15 @@ func TestCanonicalOnlyCensus_BranchSites(t *testing.T) {
 // request and the quality gate; investmentquality.go holds the two quality gates; validate.go's dbColumn is
 // the one place a dimension maps to a column (the legacy branch holds no theme column); the compile files
 // take the flag from the resolver; sankeycoverage.go carries the coverage flag; testopsownership.go holds the
-// TestOps TEAM owner join, which exists only OFF the investment path (TestTestopsOwnerJoinIsOffTheInvestmentPath).
+// TestOps TEAM owner join, which exists only OFF the investment path (TestTestopsOwnerJoinIsOffTheInvestmentPath);
+// teamownership.go decides, per request form and flag, whether a team scope is read by ownership (the reason
+// team_owns_no_repository needs every read to be), pinned by TestBatchTeamScopeReadsOwnership (timeseries, breakdown, sankey,
+// flow matrix x the flag x a canonical-only dimension).
 func censusPinnedSites() map[string]int {
 	return map[string]int{
 		"breakdown.go": 7, "catalog.go": 5, "filtertranslation.go": 14, "flowmatrix.go": 9, "investment.go": 5,
-		"investmentquality.go": 4, "resolve.go": 34, "sankey.go": 5, "sankeycoverage.go": 21, "sankeygrouped.go": 7,
-		"testopsownership.go": 4, "timeseries.go": 5, "validate.go": 5,
+		"investmentquality.go": 4, "resolve.go": 35, "sankey.go": 5, "sankeycoverage.go": 21, "sankeygrouped.go": 7,
+		"teamownership.go": 4, "testopsownership.go": 4, "timeseries.go": 5, "validate.go": 5,
 	}
 }
 

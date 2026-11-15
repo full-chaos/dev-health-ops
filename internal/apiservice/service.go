@@ -243,7 +243,7 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 			// SSO_STATE_SECRET only (statePurposeSecrets);
 			// HKDF derives one key per protocol from it (state.go).
 			Cipher: deps.Decryptor, StateSecret: deps.SSOStateSecret, Inner: proxy.inner,
-			Issuer: deps.SessionIssuer, PlatformRoles: deps.platformRoles(), Providers: deps.SSOProviders,
+			Issuer: deps.SessionIssuer, PlatformRoles: deps.platformRoles(), Providers: deps.SSOProviders, OrgEntitled: deps.SSOOrgEntitled,
 		})...)
 		billing.LogUnconfigured(logger, deps.StripeWebhookSecret, deps.StripeSecretKey)
 		routes = append(routes, billing.Routes(billing.Deps{

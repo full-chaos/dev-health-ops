@@ -234,7 +234,7 @@ a mean of the stored per-repository-day values of `testops_pipeline_metrics_dail
 | --- | --- | --- |
 | `PIPELINE_DURATION_P95` | 95th percentile, linear between closest ranks | a run of `ci_pipeline_runs`: `duration_seconds` when not negative, else `finished_at - started_at` when not negative |
 | `TEST_SUITE_DURATION_P95` | 95th percentile, linear between closest ranks | a suite of `test_suite_results`: `duration_seconds` when not negative |
-| `PIPELINE_QUEUE_TIME` | summed queue seconds over the runs with a queue sample | a run: `queue_seconds` when not negative, else `started_at - queued_at` when not negative |
+| `PIPELINE_QUEUE_TIME` | mean of the queue samples: their total seconds divided by the number of runs with a queue sample | a run: `queue_seconds` when not negative, else `started_at - queued_at` when not negative |
 
 The samples are the daily writer's own rules. A run belongs to the UTC day it started; a suite to the day it started,
 else finished. Only the repository-days that the daily job computed are read, so every series covers the days of the

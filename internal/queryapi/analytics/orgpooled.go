@@ -12,8 +12,8 @@ import (
 // The TestOps P95 durations and the queue time are pooled over the raw samples, never taken from the stored
 // per-repository-day values: a p95 of a pool cannot be made from the p95s of its parts, and the stored rows hold no
 // count of the runs with a queue sample. PIPELINE_DURATION_P95 is the 95th percentile of every run duration of the
-// group; TEST_SUITE_DURATION_P95 the same over suite durations; PIPELINE_QUEUE_TIME the summed queue seconds over the
-// runs with a queue sample. Every series reads the same source and expression: a TEAM series (the owners at the
+// group; TEST_SUITE_DURATION_P95 the same over suite durations; PIPELINE_QUEUE_TIME the mean of the queue samples (their
+// total seconds divided by the number of runs with a queue sample). Every series reads the same source and expression: a TEAM series (the owners at the
 // request, a co-owned repository WHOLE for each owner), a REPO series, the ORG series (each run once), a breakdown and a
 // sankey differ only in the rows they cover.
 //
@@ -69,8 +69,8 @@ const pooledSuiteRunsSource = `(
 // pooledP95 is the 95th percentile of a group's duration samples, NULL for a group with none.
 const pooledP95 = "if(count(" + pooledDurationSample + ") = 0, NULL, quantileExactInclusive(0.95)(" + pooledDurationSample + "))"
 
-// pooledQueueMean is the summed queue seconds over the runs with a queue sample (exactSums takes it as the exact sum over
-// the non-NULL count), NULL for a group with none.
+// pooledQueueMean is the mean of the queue samples of a group (exactSums takes it as the exact sum over the non-NULL
+// count), NULL for a group with none.
 const pooledQueueMean = "AVG(" + pooledQueueSample + ")"
 
 // pooledSource returns the source of a pooled measure; ok is false for every other measure.

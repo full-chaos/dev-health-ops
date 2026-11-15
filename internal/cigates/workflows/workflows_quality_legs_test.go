@@ -216,7 +216,7 @@ func qualityLegViolations(t *testing.T, root string) []string {
 		}
 	}
 	if !strings.Contains(goEnvOff, "-u GOFLAGS") {
-		add("the GOFLAGS scrub (-u GOFLAGS in GO_ENV_OFF) must stay: -trimpath is an explicit flag, not an inherited one")
+		add("the GOFLAGS scrub (-u GOFLAGS in GO_ENV_OFF) must stay: a caller's GOFLAGS must not reach a go call (the legs set their one value, LEG_TEST_GOFLAGS, after it)")
 	}
 	return out
 }

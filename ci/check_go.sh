@@ -728,6 +728,13 @@ case "${CHECK_GO_FRESH:-}" in
   *) die "CHECK_GO_FRESH must be 1 or unset, got '${CHECK_GO_FRESH}'" ;;
 esac
 
+# CHAOS-13838: the test and race legs' go test calls (go_test_leg, go_test_json_run_t, the providersync race slice) run with this
+# one GOFLAGS value, set after the GO_ENV_OFF scrub. Their test binaries inherit it, so a test that runs go itself (packages.Load,
+# go list/build/vet) uses the -trimpath key the go-quality-cache warm job filled; without it each such test rebuilt its whole
+# dependency set in every leg. No other go call gets it.
+LEG_TEST_GOFLAGS=-trimpath
+if [ "${CHECK_GO_FRESH:-}" = 1 ]; then LEG_TEST_GOFLAGS="-count=1 -trimpath"; fi
+
 cleanup_go_build_output() {
   if [ -z "${DEV_HEALTH_GO_BUILD_OUTPUT}" ]; then
     return 0
@@ -968,7 +975,7 @@ go_test_leg() {
   command -v jq >/dev/null 2>&1 || die "the test and race legs need jq to read go test -json"
   raw="$(mktemp "${TMPDIR:-/tmp}/dev-health-leg-raw.XXXXXX")" || die "go_test_leg: no temp file for the raw go test -json stream"
   set +e
-  "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath ${MERGE_GROUP_FRESH:+-count=1} -json "$@" 2>&1 \
+  "${GO_ENV_OFF[@]}" GOFLAGS="${LEG_TEST_GOFLAGS}" GOWORK=off go test -mod=readonly -trimpath ${MERGE_GROUP_FRESH:+-count=1} -json "$@" 2>&1 \
     | tee "${raw}" \
     | { jq -nR --unbuffered -rj "${GO_TEST_LEG_JQ}"; jqrc=$?; [ "${jqrc}" -eq 0 ] || cat >/dev/null; exit "${jqrc}"; } \
     | tee -a "${log}"
@@ -1043,7 +1050,7 @@ go_test_json_run_t() {
   local timeout="$1" json="$2" log="$3"
   shift 3
   command -v jq >/dev/null 2>&1 || die "the race-excluded receipts need jq to read go test -json events"
-  "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -json -count=1 -timeout "${timeout}" "$@" \
+  "${GO_ENV_OFF[@]}" GOFLAGS="${LEG_TEST_GOFLAGS}" GOWORK=off go test -mod=readonly -trimpath -json -count=1 -timeout "${timeout}" "$@" \
     | tee -a "${json}" \
     | jq -nR --unbuffered -rj "${GO_TEST_LEG_JQ}" \
     | tee -a "${log}"
@@ -1795,7 +1802,7 @@ check_providersync_race_shard() {
   (
     set -o pipefail
     cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -race ${MERGE_GROUP_FRESH:+-count=1} -json -timeout "${DEV_HEALTH_GO_RACE_TEST_TIMEOUT:-10m}" -run "${regex}" ./internal/providersync \
+    "${GO_ENV_OFF[@]}" GOFLAGS="${LEG_TEST_GOFLAGS}" GOWORK=off go test -mod=readonly -trimpath -race ${MERGE_GROUP_FRESH:+-count=1} -json -timeout "${DEV_HEALTH_GO_RACE_TEST_TIMEOUT:-10m}" -run "${regex}" ./internal/providersync \
       | tee "${json}" \
       | jq -rj 'select(.Action == "output") | .Output'
   ) || run_rc=$?

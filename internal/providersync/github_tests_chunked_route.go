@@ -1749,6 +1749,17 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 						}
 						artifactItems = append(artifactItems, artifact)
 					}
+					// One artifact per name, the newest, before the cap (CHAOS-13873): an older attempt's copy of a re-run job's
+					// report is not read again next to the new one.
+					artifactItems, superseded := githubTestsKeepNewestArtifactPerName(artifactItems)
+					for _, artifact := range superseded {
+						if len(cursor.ExcludedArtifactSample) < githubTestsMaxExcludedArtifactSampleRecords {
+							cursor.ExcludedArtifactSample = append(
+								cursor.ExcludedArtifactSample,
+								githubTestsTruncateArtifactName(artifact.Name)+" ("+githubTestsExclusionReasonSuperseded+")",
+							)
+						}
+					}
 					switch {
 					case len(artifactItems) > maxArtifacts:
 						artifactItems = artifactItems[:maxArtifacts]
@@ -1978,7 +1989,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 							cursor.ArchivesUnreadable = bumpGitHubTestsArchiveCounter(cursor.ArchivesUnreadable)
 							continue
 						}
-						rows, parseErr := parseGitHubTestsArtifact(archive, string(artifact.ID), repoID, pipeline.RunID, claim.OrgID, pipeline.StartedAtPtr(), pipeline.FinishedAt, normalizedAt)
+						rows, parseErr := parseGitHubTestsReportArtifact(archive, string(artifact.ID), githubTestsReportSlotFor(run, artifact), repoID, pipeline.RunID, claim.OrgID, pipeline.StartedAtPtr(), pipeline.FinishedAt, normalizedAt)
 						if parseErr != nil {
 							// An archive that will not open is provider data, not
 							// a fault of this unit. Skip it exactly as an expired

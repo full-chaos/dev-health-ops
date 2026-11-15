@@ -203,6 +203,7 @@ type githubTestsArtifactPayload struct {
 	Expired     bool            `json:"expired"`
 	Name        string          `json:"name"`
 	SizeInBytes json.RawMessage `json:"size_in_bytes"`
+	CreatedAt   *string         `json:"created_at"`
 }
 
 // declaredOversize is the artifact_oversized error for an artifact whose listed
@@ -507,6 +508,7 @@ func (handler GitHubTestsRouteHandler) Collect(
 			}
 			artifacts = append(artifacts, artifact)
 		}
+		artifacts, _ = githubTestsKeepNewestArtifactPerName(artifacts)
 		if artPage.PageBudgetExhausted || len(artifacts) > maxArtifacts {
 			return CompleteRouteBatch{}, ErrPaginationCapExceeded
 		}
@@ -540,7 +542,7 @@ func (handler GitHubTestsRouteHandler) Collect(
 			if len(archive) == 0 {
 				continue
 			}
-			rows, parseErr := parseGitHubTestsArtifact(archive, string(artifact.ID), repoID, pipeline.RunID, claim.OrgID, pipeline.StartedAtPtr(), pipeline.FinishedAt, normalizedAt)
+			rows, parseErr := parseGitHubTestsReportArtifact(archive, string(artifact.ID), githubTestsReportSlotFor(run, artifact), repoID, pipeline.RunID, claim.OrgID, pipeline.StartedAtPtr(), pipeline.FinishedAt, normalizedAt)
 			if parseErr != nil {
 				// Same disposition as the chunked route: an archive that will
 				// not open is skipped and the walk continues (CHAOS-4177).

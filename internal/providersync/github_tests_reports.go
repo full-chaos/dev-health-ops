@@ -62,6 +62,9 @@ type testSuiteResultRow struct {
 	ServiceID        *string    `json:"service_id"`
 	OrgID            string     `json:"org_id"`
 	LastSynced       time.Time  `json:"last_synced"`
+	// ReportSlot and RunAttempt name the report a GitHub suite row came from (CHAOS-13873); empty and 0 for GitLab.
+	ReportSlot string `json:"report_slot,omitempty"`
+	RunAttempt int64  `json:"run_attempt,omitempty"`
 }
 
 type testCaseResultRow struct {
@@ -102,6 +105,8 @@ type coverageSnapshotRow struct {
 	ServiceID         *string   `json:"service_id"`
 	OrgID             string    `json:"org_id"`
 	LastSynced        time.Time `json:"last_synced"`
+	ReportSlot        string    `json:"report_slot,omitempty"`
+	RunAttempt        int64     `json:"run_attempt,omitempty"`
 }
 
 type githubTestsReportRows struct {
@@ -915,6 +920,39 @@ func parseGitHubTestsArtifact(
 	startedAt, finishedAt *time.Time,
 	normalizedAt time.Time,
 ) (githubTestsReportRows, error) {
+	return parseGitHubTestsArchive(archive, artifactID, artifactID, repoID, runID, orgID, startedAt, finishedAt, normalizedAt)
+}
+
+// parseGitHubTestsReportArtifact parses one artifact of a GitHub run under its report slot (CHAOS-13873): the natural keys hash the
+// slot (the artifact name) and the run attempt that made it instead of the artifact id, so the same report read again in the same
+// attempt keeps its keys and a re-run attempt writes its own rows next to the earlier attempt's. The skip markers keep the artifact id.
+func parseGitHubTestsReportArtifact(
+	archive []byte,
+	artifactID string, slot githubTestsReportSlot,
+	repoID, runID, orgID string,
+	startedAt, finishedAt *time.Time,
+	normalizedAt time.Time,
+) (githubTestsReportRows, error) {
+	rows, err := parseGitHubTestsArchive(archive, artifactID, slot.scope(), repoID, runID, orgID, startedAt, finishedAt, normalizedAt)
+	if err != nil {
+		return rows, err
+	}
+	for index := range rows.Suites {
+		rows.Suites[index].ReportSlot, rows.Suites[index].RunAttempt = slot.Name, slot.Attempt
+	}
+	for index := range rows.Coverage {
+		rows.Coverage[index].ReportSlot, rows.Coverage[index].RunAttempt = slot.Name, slot.Attempt
+	}
+	return rows, nil
+}
+
+// parseGitHubTestsArchive is the parse behind both: markerID goes on the skip markers, scopeID into every natural key.
+func parseGitHubTestsArchive(
+	archive []byte,
+	markerID, scopeID, repoID, runID, orgID string,
+	startedAt, finishedAt *time.Time,
+	normalizedAt time.Time,
+) (githubTestsReportRows, error) {
 	if len(archive) == 0 || len(archive) > githubTestsMaxArchiveBytes || repoID == "" || runID == "" || orgID == "" || normalizedAt.IsZero() {
 		return githubTestsReportRows{}, ErrGitHubTestsReportInvalid
 	}
@@ -972,7 +1010,7 @@ func parseGitHubTestsArtifact(
 		if err != nil {
 			result.recordSkipped(githubTestsUnreadableCause, false)
 			result.SkippedArtifacts = append(result.SkippedArtifacts, GitHubTestsSkippedArtifact{
-				RunID: runID, ArtifactID: artifactID, Cause: githubTestsUnreadableCause,
+				RunID: runID, ArtifactID: markerID, Cause: githubTestsUnreadableCause,
 			})
 			continue
 		}
@@ -985,11 +1023,11 @@ func parseGitHubTestsArtifact(
 		result.ReportsParsed++
 		switch kind {
 		case "junit":
-			suites, cases, err := parseJUnitRows(body, artifactID, repoID, runID, orgID, startedAt, finishedAt, normalizedAt, suiteOccurrence)
+			suites, cases, err := parseJUnitRows(body, scopeID, repoID, runID, orgID, startedAt, finishedAt, normalizedAt, suiteOccurrence)
 			if err != nil {
 				result.recordSkipped(githubTestsMalformedCause, false)
 				result.SkippedArtifacts = append(result.SkippedArtifacts, GitHubTestsSkippedArtifact{
-					RunID: runID, ArtifactID: artifactID, Cause: githubTestsMalformedCause,
+					RunID: runID, ArtifactID: markerID, Cause: githubTestsMalformedCause,
 				})
 				continue
 			}
@@ -997,11 +1035,11 @@ func parseGitHubTestsArtifact(
 			result.Cases = append(result.Cases, cases...)
 			result.DuplicateCases += countDuplicateTestCases(cases)
 		case "coverage":
-			coverage, err := parseGitHubCoverageRow(body, name, artifactID, repoID, runID, orgID, normalizedAt)
+			coverage, err := parseGitHubCoverageRow(body, name, scopeID, repoID, runID, orgID, normalizedAt)
 			if err != nil {
 				result.recordSkipped(githubTestsMalformedCause, false)
 				result.SkippedArtifacts = append(result.SkippedArtifacts, GitHubTestsSkippedArtifact{
-					RunID: runID, ArtifactID: artifactID, Cause: githubTestsMalformedCause,
+					RunID: runID, ArtifactID: markerID, Cause: githubTestsMalformedCause,
 				})
 				continue
 			}

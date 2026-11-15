@@ -12,6 +12,13 @@ var githubTestsOracleGoOnlyFields = map[string]string{
 	"last_synced": "ClickHouse sinks stamp persistence time after Python's active report-ingestion boundary; Go stabilizes it in the effect row for crash recovery",
 }
 
+// githubTestsOracleSlotGoOnlyFields adds the report slot columns of the suite and coverage rows (CHAOS-13873).
+var githubTestsOracleSlotGoOnlyFields = map[string]string{
+	"last_synced": githubTestsOracleGoOnlyFields["last_synced"],
+	"report_slot": "CHAOS-13873: the report slot (artifact name) of a suite/coverage row; the Python producer has no attempt model",
+	"run_attempt": "CHAOS-13873: the run attempt that made the artifact; the Python producer has no attempt model",
+}
+
 // CHAOS-4190: parseJUnitRows/parseGitHubCoverageRow now scope SuiteID/
 // CaseID/SnapshotID to the artifact the report came from, so two distinct
 // artifacts of the same run never hash to the same natural key and get
@@ -193,7 +200,7 @@ func TestGenericOracleMatchesFrozenPythonForGitHubTestsSuiteRow(t *testing.T) {
 				t.Fatalf("suites=%+v", rows.Suites)
 			}
 			return rows.Suites[0]
-		}, githubTestsOracleGoOnlyFields)
+		}, githubTestsOracleSlotGoOnlyFields)
 }
 
 func TestGenericOracleMatchesFrozenPythonForGitHubTestsCaseRow(t *testing.T) {
@@ -232,5 +239,5 @@ func TestGenericOracleMatchesFrozenPythonForGitHubTestsCoverageRow(t *testing.T)
 				t.Fatalf("coverage=%+v", rows.Coverage)
 			}
 			return rows.Coverage[0]
-		}, githubTestsOracleGoOnlyFields)
+		}, githubTestsOracleSlotGoOnlyFields)
 }

@@ -1,0 +1,8 @@
+# CHAOS-13833: the race-leg packages too long for one race leg as one solo package run as PARTS parts of their top-level test names.
+# Format: package<TAB>parts (parts >= 2), sorted by package (C locale). ci/go_race_shard.awk places each part like a package at
+# ceil(race weight / parts) (ci/go_race_weights.d); check_go.sh lists the package's names with `go test -race -list`, cuts them by
+# ci/go_race_split_weights.tsv and runs each part alone, last in its race leg, through an anchored -run of its names.
+# A split package is never solo (ci/go_race_solo.tsv) or race-excluded, and needs at least `parts` test rows.
+# internal/cigates/testshard: 420-1,070 s under -race as one solo package (race-1-of-12 1,564 s in the READY run of the 12-leg change);
+# its two heaviest tests are 562 and 556 s, so 3 parts put each in its own part.
+internal/cigates/testshard	3

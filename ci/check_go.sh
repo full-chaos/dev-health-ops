@@ -1758,6 +1758,12 @@ race_weights_rows() {
 # CHAOS-10289: packages that run alone (ci/go_race_solo.tsv): left out of the weight-balanced split, run in their own
 # `go test -race` invocation after the shard's other packages, so no heavy co-tenant can starve them.
 GO_RACE_SOLO="${GO_RACE_SOLO:-${ROOT}/ci/go_race_solo.tsv}"
+# CHAOS-13833: race-leg test-name parts. ci/go_race_splits.tsv (package<TAB>parts) cuts a package into parts by
+# ci/go_race_split_weights.tsv (package<TAB>TestName<TAB>seconds: the largest hosted race time of each top-level test), with the
+# cutter of the test legs; a listed test with no row goes to the last part (never dropped). A part runs alone after the leg's
+# other calls, and a top-level test of 30 s or more with no row fails the leg (ci/go_race_unweighted_slow.awk).
+GO_RACE_SPLITS="${GO_RACE_SPLITS:-${ROOT}/ci/go_race_splits.tsv}"
+GO_RACE_SPLIT_WEIGHTS="${GO_RACE_SPLIT_WEIGHTS:-${ROOT}/ci/go_race_split_weights.tsv}"
 # check_providersync_race_shard SHARD COUNT (CHAOS-8166): internal/providersync is one test binary of ~1,460 sequential tests that took
 # 509 s under -race on an idle host (565 s in CI, 94% of the 600 s go test timeout), so its race run is split BY TEST NAME across the
 # race legs: every leg runs the SHARD-th of COUNT weight-balanced test slices, weights ci/go_providersync_race_weights.tsv, ci/go_providersync_race_shard.awk.
@@ -1836,6 +1842,16 @@ race_excluded_filter() {
     !($0 in skip)'
 }
 
+# race_split_part_names MODULE PKG KEY PART PARTS (CHAOS-13833): the top-level test names of part PART of PARTS of the race split
+# package PKG (weights key KEY): the -race listing, cut by ci/go_race_split_weights.tsv; a name with no row goes to part PARTS.
+race_split_part_names() {
+  local module_dir="$1" pkg="$2" key="$3" part="$4" parts="$5" names
+  names="$(test_split_listed_names "${module_dir}" "${pkg}" "${parts}" -race)" || exit 2
+  printf '%s\n' "${names}" | LC_ALL=C awk -v cutkey="${key}" -v cutparts="${parts}" -v cutpart="${part}" -v restpart="${parts}" \
+    -v tests="${GO_RACE_SPLIT_WEIGHTS}" -f "${ROOT}/ci/go_race_shard.awk" \
+    || die "race split package ${key}: its parts cannot be cut by ${GO_RACE_SPLIT_WEIGHTS#"${ROOT}/"}"
+}
+
 # race_shard_packages SHARD COUNT MODULE_DIR MODPATH [solo]: the import paths of the race slice (or, with solo, of its solo
 # packages) of one module, after the go-quality selection. internal/providersync is never listed: it runs as test-name slices.
 race_shard_packages() {
@@ -1844,12 +1860,14 @@ race_shard_packages() {
     | { if [ "${module_dir}" = "." ]; then grep -vx "${modpath}/internal/providersync"; else cat; fi; } \
     | quality_filter "${module_dir}" "${modpath}" \
     | race_excluded_filter "${module_dir}" "${modpath}" \
-    | awk -v mod="${modpath}" -v shard="${shard}" -v count="${count}" -v weights=<(race_weights_rows) -v solo="${GO_RACE_SOLO}" -v part="${part}" -f "${ROOT}/ci/go_race_shard.awk"
+    | awk -v mod="${modpath}" -v shard="${shard}" -v count="${count}" -v weights=<(race_weights_rows) -v solo="${GO_RACE_SOLO}" -v part="${part}" \
+        -v splits="${GO_RACE_SPLITS}" -v tests="${GO_RACE_SPLIT_WEIGHTS}" -f "${ROOT}/ci/go_race_shard.awk"
 }
 
-# check_race_shard_plan SHARD COUNT: one "module<TAB>package<TAB>key" line per package the SHARD-th race leg runs.
+# check_race_shard_plan SHARD COUNT: one "module<TAB>package<TAB>key" line per package the SHARD-th race leg runs, and one
+# "module<TAB>package<TAB>key<TAB>part<TAB>parts" line per part of a race split package (CHAOS-13833).
 check_race_shard_plan() {
-  local shard="${1:-}" count="${2:-}" module_dir modpath pkg key
+  local shard="${1:-}" count="${2:-}" module_dir modpath pkg key spart sparts
   check_race_shard_args "${shard}" "${count}"
   load_quality_selection
   for module_dir in "${MODULE_DIRS[@]}"; do
@@ -1858,20 +1876,24 @@ check_race_shard_plan() {
       if [ "${module_dir}" = "." ] && quality_selected . internal/providersync; then printf '%s\n' "${modpath}/internal/providersync"; fi
       race_shard_packages "${shard}" "${count}" "${module_dir}" "${modpath}"
       race_shard_packages "${shard}" "${count}" "${module_dir}" "${modpath}" solo
-    } | while IFS= read -r pkg; do
+    } | while IFS=$'\t' read -r pkg spart sparts; do
       [ -n "${pkg}" ] || continue
       key="${pkg#"${modpath}/"}"
       [ "${pkg}" != "${modpath}" ] || key="."
-      printf '%s\t%s\t%s\n' "${module_dir}" "${pkg}" "${key}"
+      if [ -n "${spart}" ]; then
+        printf '%s\t%s\t%s\t%s\t%s\n' "${module_dir}" "${pkg}" "${key}" "${spart}" "${sparts}"
+      else
+        printf '%s\t%s\t%s\n' "${module_dir}" "${pkg}" "${key}"
+      fi
     done
   done
 }
 
 check_race_shard() {
-  local shard="${1:-}" count="${2:-}" module_dir modpath pkg selected=0 missing racelog legjson ps_json=""
+  local shard="${1:-}" count="${2:-}" module_dir modpath pkg selected=0 missing racelog legjson ps_json="" spart sparts key names partjson
   check_race_shard_args "${shard}" "${count}"
   load_quality_selection
-  local -a pkgs solo_pkgs pkgs_sec pkgs_all
+  local -a pkgs solo_pkgs pkgs_sec pkgs_all split_items
   racelog="$(mktemp "${TMPDIR:-/tmp}/dev-health-race-shard.XXXXXX")"
   legjson="$(leg_json_file race "${shard}" "${count}")" || exit 2
   # The cache receipt reads the stages' -json events: a leg that keeps no timings keeps them in a temp file.
@@ -1892,8 +1914,10 @@ check_race_shard() {
         || die "race package(s) with NO row in ci/go_race_weights.d (add each one: its measured go test -race seconds, 1 if it has no test): $(printf '%s' "${missing}" | tr '\n' ' ')"
     fi
     pkgs=()
-    while IFS= read -r pkg; do
-      [ -n "${pkg}" ] && pkgs+=("${pkg}")
+    split_items=()
+    while IFS=$'\t' read -r pkg spart sparts; do
+      [ -n "${pkg}" ] || continue
+      if [ -n "${spart}" ]; then split_items+=("${pkg}"$'\t'"${spart}"$'\t'"${sparts}"); else pkgs+=("${pkg}"); fi
     done < <(race_shard_packages "${shard}" "${count}" "${module_dir}" "${modpath}")
     solo_pkgs=()
     while IFS= read -r pkg; do
@@ -1942,6 +1966,28 @@ check_race_shard() {
         go_test_leg "${racelog}" "${legjson}" -race -timeout "${DEV_HEALTH_GO_RACE_TEST_TIMEOUT:-10m}" "${solo_pkgs[@]}"
       ) || { rm -f -- "${racelog}"; return 1; }
     fi
+    # CHAOS-13833: each part of a race split package runs alone, last, by its own top-level test names (anchored -run); a top-level
+    # test of 30 s or more with no row in ci/go_race_split_weights.tsv fails the leg, as the providersync slice does.
+    for pkg in "${split_items[@]}"; do
+      IFS=$'\t' read -r pkg spart sparts <<<"${pkg}"
+      key="${pkg#"${modpath}/"}"
+      names="$(race_split_part_names "${module_dir}" "${pkg}" "${key}" "${spart}" "${sparts}")" || { rm -f -- "${racelog}"; exit 2; }
+      [ -n "${names}" ] || die "race split package ${key}: part ${spart}/${sparts} selects no test"
+      selected=$((selected + 1))
+      printf 'go test -race%s (shard %s/%s): %s: part %s/%s of %s, alone: %d test name(s)\n' "${MERGE_GROUP_FRESH:+ -count=1}" "${shard}" "${count}" \
+        "${module_dir}" "${spart}" "${sparts}" "${key}" "$(printf '%s\n' "${names}" | grep -c .)"
+      partjson="$(mktemp "${TMPDIR:-/tmp}/dev-health-race-part-json.XXXXXX")" || die "no temp file for the race part's go test -json"
+      (
+        cd "${ROOT}/${module_dir}"
+        go_test_leg "${racelog}" "${partjson}" -race -timeout "${DEV_HEALTH_GO_RACE_TEST_TIMEOUT:-10m}" -run "^($(printf '%s\n' "${names}" | paste -sd'|' -))\$" "${pkg}"
+      ) || { cat -- "${partjson}" >>"${legjson}"; rm -f -- "${racelog}" "${partjson}"; return 1; }
+      awk -v weights=<(awk -F'\t' -v k="${key}" '!/^#/ && $1 == k { print $2 "\t" $3 }' "${GO_RACE_SPLIT_WEIGHTS}") \
+        -v thresh="${DEV_HEALTH_GO_RACE_UNWEIGHTED_SLOW_SECONDS:-30}" -v label="${GO_RACE_SPLIT_WEIGHTS#"${ROOT}/"} (${key})" \
+        -f "${GO_RACE_UNWEIGHTED_SLOW_AWK:-${ROOT}/ci/go_race_unweighted_slow.awk}" "${partjson}" \
+        || { cat -- "${partjson}" >>"${legjson}"; rm -f -- "${racelog}" "${partjson}"; return 1; }
+      cat -- "${partjson}" >>"${legjson}" || die "cannot append the race part's go test -json to ${legjson}"
+      rm -f -- "${partjson}"
+    done
   done
   (check_security_fresh_receipt "${selected}" "${legjson}" ${ps_json:+"${ps_json}"}) || { rm -f -- "${racelog}"; return 1; }
   rm -f -- "${racelog}"

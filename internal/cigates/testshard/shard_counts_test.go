@@ -51,7 +51,8 @@ func TestTheLegListHasTheTestShardAndRaceLegCounts(t *testing.T) {
 	}
 }
 
-// planKeys runs a shard plan verb and returns its "module<TAB>package<TAB>key" lines.
+// planKeys runs a shard plan verb and returns its "module<TAB>package<TAB>key" lines and its "module<TAB>package<TAB>key<TAB>part<TAB>parts"
+// lines (a part of a split package, CHAOS-13833: race legs too).
 func planKeys(t *testing.T, verb string, shard, count int) []string {
 	t.Helper()
 	out, errs, err := checkGo(t, nil, verb, fmt.Sprint(shard), fmt.Sprint(count))
@@ -60,11 +61,17 @@ func planKeys(t *testing.T, verb string, shard, count int) []string {
 	}
 	var rows []string
 	for _, l := range strings.Split(out, "\n") {
-		if strings.Count(l, "\t") == 2 {
+		if isPlanRow(l) {
 			rows = append(rows, l)
 		}
 	}
 	return rows
+}
+
+// isPlanRow: a package row (3 fields) or a part row (5 fields) of a shard plan.
+func isPlanRow(l string) bool {
+	n := strings.Count(l, "\t")
+	return n == 2 || n == 4
 }
 
 // partitionDefects: the shards of one verb at one count hold every row of the whole plan once and none twice.
@@ -86,7 +93,7 @@ func partitionDefects(t *testing.T, verb string, count int) []string {
 		_, parts := allLegs(t, nil, verb, count)
 		for k, part := range parts {
 			for _, l := range strings.Split(part, "\n") {
-				if strings.Count(l, "\t") == 2 {
+				if isPlanRow(l) {
 					legs[k] = append(legs[k], l)
 				}
 			}

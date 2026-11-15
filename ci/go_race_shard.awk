@@ -52,6 +52,7 @@
 # cutkey=<key> cutparts=<n> [cutpart=<p>] (names mode, run under LC_ALL=C): stdin holds the names `go test -list` reports for the
 # package; prints the names of part p (or "name<TAB>part" for every name without cutpart). A row that names no listed test, or
 # fewer rows than parts, exits 2: a stale row fails instead of describing a part that no longer exists.
+# restpart=<r> (names mode, CHAOS-13833, the race-leg parts): a name with no row goes to part r (1..n) instead of its hash part.
 # wall2(s, x): twice the modelled wall of shard s with x more rest weight: max(2 * chain, rest + x) + 2 * serial.
 function die(msg) {
   print "go_race_shard.awk: " msg > "/dev/stderr"
@@ -88,7 +89,8 @@ function cut(key, np,    i, j, m, v, o, p, best) {
   }
 }
 function partOf(key, np, name) {
-  return ((key, name) in mpart) ? mpart[key, name] : djb2(name) % np + 1
+  if ((key, name) in mpart) return mpart[key, name]
+  return (restpart != "") ? restpart + 0 : djb2(name) % np + 1
 }
 function wall2(s, x,    r) {
   r = rl[s] + x
@@ -141,6 +143,7 @@ BEGIN {
   if (cutkey != "") {
     np = cutparts + 0
     if (np < 2 || tests == "") die("names mode needs cutparts >= 2 and tests")
+    if (restpart != "" && (restpart !~ /^[0-9]+$/ || restpart + 0 < 1 || restpart + 0 > np)) die("restpart must be a part number 1.." np ", got '" restpart "'")
     while ((getline line) > 0) {
       if (line == "") continue
       listed[line] = 1

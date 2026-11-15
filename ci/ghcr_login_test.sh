@@ -59,23 +59,23 @@ for mode in plain hosted; do
 
   call "${mode}" a2 FAKE_FAILS=2 --
   if [ "${RC}" = 0 ] && [ "${RUNS}" = 3 ] && [ "${SLEEPS}" = "10 30" ]; then ok "${mode} a2 two failures then pass: rc 0, 3 runs, gaps 10 30"; else bad "${mode} a2 rc=${RC} runs=${RUNS} sleeps=${SLEEPS}"; fi
-  if [ "$(printf '%s\n' "${OUT}" | grep -c '^retry: name=ghcr-login attempt=[12]/3 rc=1 ')" = 2 ] && printf '%s\n' "${OUT}" | grep -q '^retry: name=ghcr-login attempt=3/3 rc=0 '; then ok "${mode} a2 two named failed attempts in the log"; else bad "${mode} a2 out: ${OUT}"; fi
+  if [ "$(grep -c '^retry: name=ghcr-login attempt=[12]/3 rc=1 ' <<<"${OUT}")" = 2 ] && grep -q '^retry: name=ghcr-login attempt=3/3 rc=0 ' <<<"${OUT}"; then ok "${mode} a2 two named failed attempts in the log"; else bad "${mode} a2 out: ${OUT}"; fi
 
   call "${mode}" a3 FAKE_FAILS=99 --
   if [ "${RC}" != 0 ] && [ "${RUNS}" = 3 ] && [ "${SLEEPS}" = "10 30" ]; then ok "${mode} a3 three failures: hard fail rc ${RC}, bounded at 3 runs, no sleep after the last"; else bad "${mode} a3 rc=${RC} runs=${RUNS} sleeps=${SLEEPS}"; fi
-  if printf '%s\n' "${OUT}" | tail -n 1 | grep -Eq '^ghcr-login: ghcr.io login failed after 3 tries \(rc=[0-9]+\)$'; then ok "${mode} a3 clear final line"; else bad "${mode} a3 last line: $(printf '%s\n' "${OUT}" | tail -n 1)"; fi
+  if grep -Eq '^ghcr-login: ghcr.io login failed after 3 tries \(rc=[0-9]+\)$' <<<"$(tail -n 1 <<<"${OUT}")"; then ok "${mode} a3 clear final line"; else bad "${mode} a3 last line: $(printf '%s\n' "${OUT}" | tail -n 1)"; fi
 
   call "${mode}" a4 FAKE_FAILS=1 --
-  if printf '%s\n' "${ARGV}" | grep -qF "${TOKEN}"; then bad "${mode} a4 the token is on docker argv"; else ok "${mode} a4 the token is not on docker argv"; fi
+  if grep -qF "${TOKEN}" <<<"${ARGV}"; then bad "${mode} a4 the token is on docker argv"; else ok "${mode} a4 the token is not on docker argv"; fi
   if [ "$(printf '%s\n' "${ARGV}" | sort -u)" = "login ghcr.io -u octo --password-stdin" ]; then ok "${mode} a4 argv is exactly: login ghcr.io -u octo --password-stdin"; else bad "${mode} a4 argv: ${ARGV}"; fi
   if [ "$(printf '%s\n' "${STDIN}" | sort -u | grep -v '^$')" = "${TOKEN}" ]; then ok "${mode} a4 the token arrives on stdin"; else bad "${mode} a4 stdin: ${STDIN}"; fi
-  if printf '%s\n' "${DENV}" | grep -q '^GHCR_TOKEN='; then bad "${mode} a4 the token is in docker's environment"; else ok "${mode} a4 the token is not in docker's environment"; fi
-  if printf '%s\n' "${OUT}" | grep -qF "${TOKEN}"; then bad "${mode} a4 the token is in the log"; else ok "${mode} a4 the token is not in the log"; fi
+  if grep -q '^GHCR_TOKEN=' <<<"${DENV}"; then bad "${mode} a4 the token is in docker's environment"; else ok "${mode} a4 the token is not in docker's environment"; fi
+  if grep -qF "${TOKEN}" <<<"${OUT}"; then bad "${mode} a4 the token is in the log"; else ok "${mode} a4 the token is not in the log"; fi
 
   call "${mode}" a5 FAKE_FAILS=1 SHELLOPTS=xtrace --
-  if printf '%s\n' "${OUT}" | grep -qF "${TOKEN}"; then bad "${mode} a5 SHELLOPTS=xtrace leaks the token"; else ok "${mode} a5 SHELLOPTS=xtrace does not leak the token"; fi
+  if grep -qF "${TOKEN}" <<<"${OUT}"; then bad "${mode} a5 SHELLOPTS=xtrace leaks the token"; else ok "${mode} a5 SHELLOPTS=xtrace does not leak the token"; fi
   call "${mode}" a6 FAKE_FAILS=1 -- -x
-  if printf '%s\n' "${OUT}" | grep -qF "${TOKEN}"; then bad "${mode} a6 bash -x leaks the token"; else ok "${mode} a6 bash -x does not leak the token"; fi
+  if grep -qF "${TOKEN}" <<<"${OUT}"; then bad "${mode} a6 bash -x leaks the token"; else ok "${mode} a6 bash -x does not leak the token"; fi
   if [ "${RC}" = 0 ]; then ok "${mode} a6 still logs in under bash -x"; else bad "${mode} a6 rc=${RC}"; fi
 
   call "${mode}" a7 FAKE_FAILS=1 RETRY_QUIET=1 --

@@ -24,6 +24,8 @@ internal/api/policy	delegated_use_test.go	internal/apiservice	tree	*
 internal/api/policy	enforce_unjudged_reasons_census_test.go	internal/api/policy	dir	*
 internal/api/policy	platform_question_no_decision_point_cells_test.go	internal/api/policy	dir	*
 internal/api/policy	principalonce_test.go	unexpressed	-	-
+internal/api/pybody	bodyreaders_census_test.go	internal/api	tree	*
+internal/api/pybody	bodyreaders_census_test.go	internal/apiservice	tree	*
 internal/api/syncadmin	create_config_venue_oracle_integration_test.go	internal/api/syncadmin/testdata/jira_recorded	dir	*
 internal/api/syncadmin	dataset_writer_census_test.go	unexpressed	-	*.go
 internal/api/syncadmin	dataset_writer_lock_census_test.go	unexpressed	-	-
@@ -250,6 +252,7 @@ internal/cigates/scripts	golden_drift_test.go	unexpressed	-	-
 internal/cigates/scripts	helper_copies_drift_test.go	internal/cigates	tree	*
 internal/cigates/scripts	oracle_shards_script_test.go	unexpressed	-	-
 internal/cigates/scripts	oracle_triggers_script_test.go	unexpressed	-	-
+internal/cigates/scripts	pipefail_reader_test.go	ci	dir	*
 internal/cigates/scripts	ported_contract_guards_test.go	unexpressed	-	*.go
 internal/cigates/scripts	posture_integration_test.go	unexpressed	-	-
 internal/cigates/scripts	registry_guard_script_test.go	unexpressed	-	-

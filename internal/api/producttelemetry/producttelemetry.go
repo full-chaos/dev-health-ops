@@ -112,7 +112,7 @@ type handler struct {
 }
 
 func (h handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	body, outcome, failure, err := pybody.Read(r)
+	body, outcome, failures, err := pybody.ReadChecked(r)
 	if err != nil {
 		var tooLarge *http.MaxBytesError
 		if errors.As(err, &tooLarge) {
@@ -125,7 +125,7 @@ func (h handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	switch outcome {
 	case pybody.DecodeFailed:
-		writeJSON(w, http.StatusUnprocessableEntity, pybody.Detail([]pybody.Error{*failure}))
+		writeJSON(w, http.StatusUnprocessableEntity, pybody.Detail(failures))
 		return
 	case pybody.ParseFailed:
 		policy.WriteDetail(w, http.StatusBadRequest, "There was an error parsing the body", nil)

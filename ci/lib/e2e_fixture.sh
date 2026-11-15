@@ -31,7 +31,7 @@ generate_auth_token() {
       VALUES ('${E2E_ORG_ID}', 'e2e-org', 'E2E Org', '{}', 'enterprise', true, now(), now())
       ON CONFLICT (id) DO NOTHING;" >/dev/null
   # A rerun against the same database reuses the user (a read), the way the fixed-id seed did.
-  user_id="$(e2e_psql -c "SELECT id FROM users WHERE email = 'e2e@test.local'" | head -n 1)"
+  user_id="$(e2e_psql -c "SELECT id FROM users WHERE email = 'e2e@test.local'")"; user_id="${user_id%%$'\n'*}"
   if [ -z "${user_id}" ]; then
     # "Aa1-" keeps a letter and a digit in the password whatever the random hex is (shared password policy, 12+ chars).
     password="Aa1-$(od -An -N12 -tx1 /dev/urandom | tr -d ' \n')"
@@ -39,7 +39,7 @@ generate_auth_token() {
       echo "ERROR: dho admin users create failed: ${created}" >&2
       return 1
     }
-    user_id="$(printf '%s\n' "${created}" | sed -n 's/^Created user: .* (id: \([0-9a-fA-F-]*\))$/\1/p' | head -n 1)"
+    user_id="$(sed -n '/^Created user: .* (id: \([0-9a-fA-F-]*\))$/{s//\1/p;q;}' <<<"${created}")"
     if [ -z "${user_id}" ]; then
       echo "ERROR: could not read the user id from: ${created}" >&2
       return 1
@@ -82,14 +82,14 @@ generate_auth_token() {
 # only). The token never reaches stdout or argv.
 generate_platform_admin_token() {
   local out_file="$1" created user_id password session_id
-  user_id="$(e2e_psql -c "SELECT id FROM users WHERE email = 'e2e-platform-admin@test.local'" | head -n 1)"
+  user_id="$(e2e_psql -c "SELECT id FROM users WHERE email = 'e2e-platform-admin@test.local'")"; user_id="${user_id%%$'\n'*}"
   if [ -z "${user_id}" ]; then
     password="Aa1-$(od -An -N12 -tx1 /dev/urandom | tr -d ' \n')"
     created="$(printf '%s\n' "${password}" | e2e_dho_admin users create --email e2e-platform-admin@test.local --superuser --password-stdin)" || {
       echo "ERROR: dho admin users create --superuser failed: ${created}" >&2
       return 1
     }
-    user_id="$(printf '%s\n' "${created}" | sed -n 's/^Created user: .* (id: \([0-9a-fA-F-]*\))$/\1/p' | head -n 1)"
+    user_id="$(sed -n '/^Created user: .* (id: \([0-9a-fA-F-]*\))$/{s//\1/p;q;}' <<<"${created}")"
   fi
   case "${user_id}" in
     *[!0-9a-fA-F-]* | "")

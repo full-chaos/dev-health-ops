@@ -184,7 +184,7 @@ provision_river() {
   # --apply-and-check must have applied AND THEN checked: the apply summary
   # ("... (N applied)") and, as the last line, the separate check's result.
   # Exit 0 alone would also pass a verb that silently skipped the check.
-  if ! printf '%s\n' "${river_output}" | grep -Eq '^River .* schema current at pinned version [0-9]+ \([0-9]+ applied\)$'; then
+  if ! grep -Eq '^River .* schema current at pinned version [0-9]+ \([0-9]+ applied\)$' <<<"${river_output}"; then
     echo "ERROR: dho migrate river --apply-and-check printed no apply summary"
     exit "${EXIT_FAILURE}"
   fi
@@ -256,9 +256,9 @@ provision_river() {
 # ---------------------------------------------------------------------------
 wait_for_http_ready() {
   local name="$1" url="$2" log_file="$3" pid_var_name="$4"
-  local i
+  local i code
   for ((i = 1; i <= READINESS_ATTEMPTS; i++)); do
-    if curl -sS -o /dev/null -w '%{http_code}' "${url}" 2>/dev/null | grep -q '^200$'; then
+    if code="$(curl -sS -o /dev/null -w '%{http_code}' "${url}" 2>/dev/null)" && [ "${code}" = 200 ]; then
       echo "${name} ready after ${i} attempt(s)."
       return 0
     fi
@@ -390,7 +390,7 @@ start_worker_stack() {
 # non-integer or out-of-range TEARDOWN_WAIT_SECS, exactly as the API-side
 # parser does for its own env var. Call once, before installing traps.
 validate_teardown_wait_secs() {
-  if ! printf '%s' "${TEARDOWN_WAIT_SECS}" | grep -Eq '^[0-9]+$' \
+  if ! grep -Eq '^[0-9]+$' <<<"${TEARDOWN_WAIT_SECS}" \
      || [ "${TEARDOWN_WAIT_SECS}" -lt 1 ] || [ "${TEARDOWN_WAIT_SECS}" -gt 3600 ]; then
     echo "WARNING: ignoring an invalid TEARDOWN_WAIT_SECS='${TEARDOWN_WAIT_SECS}' (want an integer 1..3600); using 60s." >&2
     TEARDOWN_WAIT_SECS=60

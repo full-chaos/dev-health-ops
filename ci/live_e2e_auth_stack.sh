@@ -371,7 +371,7 @@ down() {
     local pid
     pid="$(cat "${STATE}/providerstub.pid")"
     [[ "${pid}" =~ ^[0-9]+$ ]] || die "providerstub pid file holds no pid"
-    if [ -r "/proc/${pid}/cmdline" ] && tr '\0' '\n' <"/proc/${pid}/cmdline" | grep -qE '(^|/)providerstub$'; then
+    if [ -r "/proc/${pid}/cmdline" ] && stub_cmdline="$(tr '\0' '\n' <"/proc/${pid}/cmdline")" && grep -qE '(^|/)providerstub$' <<<"${stub_cmdline}"; then
       sudo kill "${pid}"
     fi
   fi

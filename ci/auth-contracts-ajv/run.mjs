@@ -224,6 +224,7 @@ const APPROVED_DECISION = [
   "repository_unresolved",
   "platform_role_absent",
   "allowed_by_membership_default",
+  "allowed_by_platform_admin",
   "allowed_by_role",
   "delegation_invalid",
   "grant_expired",

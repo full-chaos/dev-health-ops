@@ -16,15 +16,16 @@ import (
 // and pipefail turns the writer's failure into the pipeline's status. In ci/check_go.sh `printf | grep -Fqx key` sent a
 // split part down the wrong test path in hosted CI. A here-string (`grep -Fqx -- "${key}" <<<"${list}"`) has no pipe.
 //
-// Scope: ci/check_go.sh and the files it sources (they run under its pipefail). A pipe inside a process substitution
+// Scope: every ci/*.sh that sets pipefail and every ci/lib/*.sh (they run under their callers' pipefail). A pipe inside a process substitution
 // <(...) is not refused: its status is never read. Text in single quotes, comments and ${...} is not shell code here.
 
 var (
-	pipefailReaderEntries = []string{"ci/check_go.sh"}
-	pipefailSetPattern    = regexp.MustCompile(`(?m)^[ \t]*set[ \t]+-(?:[A-Za-z]*o[ \t]+pipefail\b)`)
-	sourcedScriptPattern  = regexp.MustCompile(`(?m)^[ \t]*(?:\.|source)[ \t]+"\$\{(ROOT|SCRIPT_DIR)\}/([^"]+)"`)
-	sedQuitPattern        = regexp.MustCompile(`(?:^|[;{}\s'"])[qQ][0-9]*\s*(?:$|[;}'"])`)
-	envAssignPattern      = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*=`)
+	pipefailSetPattern   = regexp.MustCompile(`(?m)^[ \t]*set[ \t]+-(?:[A-Za-z]*o[ \t]+pipefail\b)`)
+	sourcedScriptPattern = regexp.MustCompile(`(?m)^[ \t]*(?:\.|source)[ \t]+"\$\{(ROOT|SCRIPT_DIR)\}/([^"]+)"`)
+	sedQuitPattern       = regexp.MustCompile(`(?:^|[;{}\s'"])[qQ][0-9]*\s*(?:$|[;}'"])`)
+	envAssignPattern     = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*=`)
+	awkEndBlockPattern   = regexp.MustCompile(`\bEND\s*\{`)
+	awkExitPattern       = regexp.MustCompile(`\bexit\b`)
 )
 
 type earlyExitHit struct {
@@ -33,7 +34,9 @@ type earlyExitHit struct {
 	reader string
 }
 
-// pipefailReaderScope returns each entry that sets pipefail and every script it sources by ${ROOT}/ or ${SCRIPT_DIR}/.
+// pipefailReaderScope returns each entry that sets pipefail, every script it sources by ${ROOT}/ or ${SCRIPT_DIR}/, and
+// every ci/lib/*.sh: a lib sets no pipefail itself and runs under its caller's, and some callers source it by another
+// variable (${ROOT_DIR}/).
 func pipefailReaderScope(t *testing.T, root string, entries []string) map[string]string {
 	t.Helper()
 	all := toolchainScopeFiles(t, root)
@@ -57,6 +60,11 @@ func pipefailReaderScope(t *testing.T, root string, entries []string) map[string
 				t.Fatalf("pipefail reader guard: %s sources %s, which is not found", entry, rel)
 			}
 			scope[rel] = lib
+		}
+	}
+	for name, body := range all {
+		if strings.HasPrefix(name, "ci/lib/") && strings.HasSuffix(name, ".sh") {
+			scope[name] = body
 		}
 	}
 	return scope
@@ -302,8 +310,42 @@ func earlyExitReader(words []string) string {
 				return named
 			}
 		}
+	case "awk", "gawk", "mawk":
+		if awkExitsMidStream(words[1:]) {
+			return named
+		}
+	case "sort":
+		for _, arg := range words[1:] {
+			if arg == "--check" || strings.HasPrefix(arg, "--check=") ||
+				len(arg) > 1 && arg[0] == '-' && arg[1] != '-' && strings.ContainsAny(arg, "cC") {
+				return named
+			}
+		}
 	}
 	return ""
+}
+
+// awkExitsMidStream reports an `exit` outside every END { } block of an inline awk program: it ends awk before the input
+// ends. An exit inside END runs after all input is read. A program in a file (-f) is not read here.
+func awkExitsMidStream(args []string) bool {
+	program := strings.Join(args, " ")
+	for {
+		end := awkEndBlockPattern.FindStringIndex(program)
+		if end == nil {
+			break
+		}
+		depth, i := 1, end[1]
+		for ; i < len(program) && depth > 0; i++ {
+			switch program[i] {
+			case '{':
+				depth++
+			case '}':
+				depth--
+			}
+		}
+		program = program[:end[0]] + program[i:]
+	}
+	return awkExitPattern.MatchString(program)
 }
 
 func earlyExitHitsUnder(t *testing.T, root string, entries []string) []earlyExitHit {
@@ -325,15 +367,33 @@ func sortedKeys(m map[string]string) []string {
 	return keys
 }
 
-func TestCheckGoPipefailHasNoEarlyExitReader(t *testing.T) {
+func pipefailReaderEntriesUnder(t *testing.T, root string) []string {
+	t.Helper()
+	cells, err := filepath.Glob(filepath.Join(root, "ci", "*.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var entries []string
+	for _, cell := range cells {
+		rel, err := filepath.Rel(root, cell)
+		if err != nil {
+			t.Fatal(err)
+		}
+		entries = append(entries, filepath.ToSlash(rel))
+	}
+	return entries
+}
+
+func TestCiScriptsPipefailHaveNoEarlyExitReader(t *testing.T) {
 	root := repoRoot(t)
-	scope := pipefailReaderScope(t, root, pipefailReaderEntries)
-	for _, want := range []string{"ci/check_go.sh", "ci/lib/venue_oracle_registry.sh"} {
+	entries := pipefailReaderEntriesUnder(t, root)
+	scope := pipefailReaderScope(t, root, entries)
+	for _, want := range []string{"ci/check_go.sh", "ci/lib/venue_oracle_registry.sh", "ci/lib/e2e_fixture.sh", "ci/retry_test.sh", "ci/pull_base_image_test.sh", "ci/venue-main-alert.sh"} {
 		if _, ok := scope[want]; !ok {
 			t.Errorf("pipefail reader guard scans no %s: the scope is wrong (pipefail no longer set, or the source line moved)", want)
 		}
 	}
-	for _, hit := range earlyExitHitsUnder(t, root, pipefailReaderEntries) {
+	for _, hit := range earlyExitHitsUnder(t, root, entries) {
 		t.Errorf("%s:%d pipes into `%s` under pipefail: the reader can exit before the writer ends, the writer then fails (EPIPE or SIGPIPE) and the pipeline reads false at random; use a here-string (grep -Fqx -- \"${key}\" <<<\"${list}\") or read the whole input", hit.file, hit.line, hit.reader)
 	}
 }
@@ -374,6 +434,11 @@ func TestPipefailReaderGuardCatchesPlantedForms(t *testing.T) {
 		`# printf | grep -q in a comment`,
 		`while read -r line; do :; done < <(printf '%s\n' "${list}" | head -n 3)`,
 		`case "$1" in -h|--help) ;; esac`,
+		`printf '%s\n' "${list}" | awk '$1 == "x" { exit 0 }'`,
+		`printf '%s\n' "${list}" | awk -F'\t' '$1 == "x" { f = 1 } END { exit !f }'`,
+		`printf '%s\n' "${list}" | LC_ALL=C sort -c`,
+		`printf '%s\n' "${list}" | sort -u`,
+		`printf '%s\n' "${list}" | awk 'NR == 1 { exit } { print }'`,
 	)
 	write("ci/lib/plant_lib.sh", `printf '%s\n' "${list}" | grep -qx z`)
 	write("ci/no_pipefail.sh", "#!/usr/bin/env bash", "set -eu", `printf x | grep -q x`)
@@ -384,7 +449,8 @@ func TestPipefailReaderGuardCatchesPlantedForms(t *testing.T) {
 	}
 	want := map[string]bool{
 		"ci/plant.sh:4": true, "ci/plant.sh:5": true, "ci/plant.sh:6": true, "ci/plant.sh:7": true,
-		"ci/plant.sh:9": true, "ci/plant.sh:11": true, "ci/plant.sh:12": true, "ci/lib/plant_lib.sh:1": true,
+		"ci/plant.sh:9": true, "ci/plant.sh:11": true, "ci/plant.sh:12": true, "ci/plant.sh:24": true, "ci/plant.sh:26": true, "ci/plant.sh:28": true,
+		"ci/lib/plant_lib.sh:1": true,
 	}
 	for hit := range want {
 		if !got[hit] {

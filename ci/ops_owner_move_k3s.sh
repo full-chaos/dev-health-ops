@@ -385,7 +385,7 @@ hook_secret sec-migrate-omr omr "${OLD}"
 move omr apply "${NEW}" "${OLD}" restore
 snap_after="$(acl_snapshot omr)"
 if [ "${snap_before}" != "${snap_after}" ]; then
-  diff <(printf '%s\n' "${snap_before}") <(printf '%s\n' "${snap_after}") | head -20 >&2 || true
+  head -20 <<<"$(diff <(printf '%s\n' "${snap_before}") <(printf '%s\n' "${snap_after}") || true)" >&2
   die "omr: the ACL snapshot after the restore differs from the one before the move"
 fi
 pass "omr: Secret back and owner-move -restore: the ACL snapshot equals the one before the move, byte for byte"

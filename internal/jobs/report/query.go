@@ -222,6 +222,15 @@ type ClickHouseQueryAdapter struct {
 	// with the dedup guard itself unaffected; only its telemetry is gated
 	// on this being set.
 	dedupObserver jobruntime.ReportDedupGuardObserver
+	// now is the instant a pooled chart reads the team owners at; nil is time.Now.
+	now func() time.Time
+}
+
+func (adapter *ClickHouseQueryAdapter) asOf() time.Time {
+	if adapter.now != nil {
+		return adapter.now()
+	}
+	return time.Now()
 }
 
 func NewClickHouseQueryAdapter(loader ReportLoader, conn driver.Conn) (*ClickHouseQueryAdapter, error) {
@@ -284,6 +293,8 @@ type metricDefinition struct {
 	// rule is set by withChartRule, never by the registry: the aggregate of
 	// a metric that is a rule over the stored counts of SourceTable.
 	rule string
+	// pooled is set by withPooledChart, never by the registry: the metric is taken over the raw samples of its runs.
+	pooled *pooledChart
 }
 
 type metricRegistryArtifact struct {
@@ -425,7 +436,7 @@ func (adapter *ClickHouseQueryAdapter) executeChart(ctx context.Context, spec Ch
 	if !ok || !identifier.MatchString(spec.Metric) || !identifier.MatchString(definition.SourceTable) {
 		return ChartResult{}, fmt.Errorf("unsupported chart metric %q", spec.Metric)
 	}
-	definition = withChartRule(definition)
+	definition = withPooledChart(withChartRule(definition), adapter.asOf())
 	statement, parameters, err := buildChartQuery(spec, definition)
 	if err != nil {
 		return ChartResult{}, err
@@ -543,6 +554,10 @@ func buildChartWhere(spec ChartSpec, definition metricDefinition) (string, []any
 // collapse to, so observed-minus-that is the retried-generation rows the
 // guard discarded.
 func dedupGuardQuery(spec ChartSpec, definition metricDefinition) (statement string, parameters []any, table string, ok bool) {
+	if definition.pooled != nil {
+		// A pooled chart reads the raw runs (FINAL), not the daily table's retried generations.
+		return "", nil, "", false
+	}
 	read, ok := tableReads[definition.SourceTable]
 	if !ok {
 		return "", nil, "", false
@@ -641,6 +656,9 @@ func wholePersonUserRowsGuardQuery(spec ChartSpec) (string, []any) {
 func buildChartQuery(spec ChartSpec, definition metricDefinition) (string, []any, error) {
 	if _, declared := tableReads[definition.SourceTable]; !declared {
 		return "", nil, &ChartMetricError{Metric: spec.Metric, Kind: kindUndeclaredTable, Table: definition.SourceTable}
+	}
+	if definition.pooled != nil {
+		return buildPooledChartQuery(spec, definition)
 	}
 	xExpression, xType, temporal := "'total'", "String", false
 	day := definition.dayColumn()

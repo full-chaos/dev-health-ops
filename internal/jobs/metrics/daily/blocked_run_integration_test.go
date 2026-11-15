@@ -132,9 +132,11 @@ func TestReconcileBlockedRunsMarksOnlyRunsThatCanNeverFinish(t *testing.T) {
 			wantReason:  BlockedReasonAllPartitionsPermanent,
 		},
 		{
-			// A 'failed' partition is re-dispatchable, so this run can still
-			// finish on its own and must NOT be marked -- marking it would
-			// raise a false alarm on ordinary transient failure.
+			// A 'failed' partition is claimed again by the retry of its River
+			// job, so while that job lives this run can still finish on its own
+			// and must NOT be marked -- marking it would raise a false alarm on
+			// ordinary transient failure. (A partition whose job ended is
+			// written failed_permanent by Work, never left 'failed'.)
 			name:        "failed_permanent alongside a dispatchable failed is not blocked",
 			partitions:  []string{"failed_permanent", "failed"},
 			wantBlocked: false,

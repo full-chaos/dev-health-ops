@@ -38,13 +38,10 @@ var allowedDynamicSites = map[string]int{
 
 const (
 	noLabelSample = "writer emits one sample line without a label block"
-	// knownBlind is a family whose writer DOES emit labels that labels.tsv drops today; it is outside this change and named here
-	// so the check stays loud for every other family.
-	knownBlind = "labeled writer the census cannot read yet: labels.tsv row is empty today (follow-up)"
 )
 
 // unlabeledWriters are the families the scan finds by their "# TYPE" literal but matches no "name{...}" sample for. Each is a
-// writer of a single unlabeled sample line (checked at the writer), except the knownBlind one. The list is exact: an entry that
+// writer of a single unlabeled sample line (checked at the writer). The list is exact: an entry that
 // is matched, covered or gone fails as stale.
 var unlabeledWriters = map[string]string{
 	"dev_health_ai_impact_linkage_unavailable_total":            noLabelSample,
@@ -93,7 +90,6 @@ var unlabeledWriters = map[string]string{
 	"worker_presence_heartbeat_failed_total":                    noLabelSample,
 	"worker_stream_last_success_age_seconds":                    noLabelSample,
 	"worker_stream_up":                                          noLabelSample,
-	"fixed_scheduler_occurrences_total":                         knownBlind,
 }
 
 type fragmentSite struct {
@@ -302,6 +298,7 @@ var helperSpecs = []struct {
 	{"internal/joboutbox/loop.go", "writeReconcilerCounter", 1, nil, nil},
 	{"internal/scheduler/sync/loop.go", "writeLoopCounter", 1, nil, nil},
 	{"internal/scheduler/fixed/loop.go", "writeCounter", 1, nil, nil},
+	{"internal/scheduler/fixed/loop.go", "writeLabeled", 1, []string{"result", "schedule"}, nil},
 	{"internal/streamrunner/runner.go", "writeCounter", 1, nil, nil},
 	{"internal/providerfoundation/budget.go", "writeProviderDatasetCounter", 1, []string{"dataset", "provider"}, nil},
 	{"internal/providerfoundation/budget.go", "writeProviderDatasetComponentCounter", 1, []string{"cause", "component", "dataset", "provider"}, nil},

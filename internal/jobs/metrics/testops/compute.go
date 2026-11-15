@@ -513,6 +513,9 @@ func NewPipelineAccumulator(repoID uuid.UUID, repoName string, resolver RepoTeam
 // service_id) group. Rows are expected pre-scoped to one (org, repo, day) by
 // the caller, exactly as ComputePipelineMetrics expects them.
 func (accumulator *PipelineAccumulator) Add(row PipelineRunRow) {
+	if ExcludedFromPipelineCounts(derefStr(row.Status)) {
+		return
+	}
 	resolvedTeam := resolveRepoTeam(row.TeamID, accumulator.repoName, accumulator.resolver)
 	k := pipelineKey{teamID: derefStr(resolvedTeam)}
 	if row.ServiceID != nil {

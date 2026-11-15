@@ -7,3 +7,15 @@ package testops
 func NormalizeStatus(status string) string {
 	return normalizePipelineStatus(&status)
 }
+
+// StatusDeleted is the stored status of a pipeline run the provider no longer
+// has: a re-read of an open run answered "not found", so its row stays but says
+// nothing about the run's outcome. Every reader that counts pipeline rows
+// leaves it out through ExcludedFromPipelineCounts, the single list.
+const StatusDeleted = "deleted"
+
+// ExcludedFromPipelineCounts reports whether a stored ci_pipeline_runs status
+// is left out of pipeline counts and rates.
+func ExcludedFromPipelineCounts(status string) bool {
+	return trimLower(status) == StatusDeleted
+}

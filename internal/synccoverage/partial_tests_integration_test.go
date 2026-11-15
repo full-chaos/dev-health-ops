@@ -8,11 +8,47 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// The unit results the GitHub chunked producer writes for a listing it could not walk past GitHub's cap of results
+// (reports_complete false and the long observation of the cursor flag) and for a unit whose open phase stopped under
+// the rate-limit floor (a marker only: the unit is complete). Every key and name is seeded from the constants the
+// producer writes them with, so a rename breaks this build; the producer cells in internal/providersync
+// (TestPeelProgressGuardEndsAStuckRange, TestOpenPhaseStopsUnderTheRateLimitFloor) assert the values.
+func runSaturatedResult() string {
+	return producerResultJSON(false, nil, providersync.GitHubTestsIncomplete{
+		Component: providersync.GitHubTestsRunInventorySaturated, Cause: providersync.GitHubTestsListingSaturated, Count: 1})
+}
+
+func artifactSaturatedResult() string {
+	return producerResultJSON(false, nil, providersync.GitHubTestsIncomplete{
+		Component: providersync.GitHubTestsArtifactInventorySaturated, Cause: providersync.GitHubTestsListingSaturated, Count: 1})
+}
+
+func rateFloorResult() string {
+	return producerResultJSON(true, map[string]any{
+		providersync.GitHubTestsResultKeyOpenRunsReread: 0, providersync.GitHubTestsResultKeyOpenPhaseRateFloor: 499})
+}
+
+func producerResultJSON(complete bool, extra map[string]any, incomplete ...providersync.GitHubTestsIncomplete) string {
+	result := map[string]any{
+		providersync.GitHubTestsResultKeyReportsComplete: complete,
+		providersync.GitHubTestsResultKeyIncomplete:      append([]providersync.GitHubTestsIncomplete{}, incomplete...),
+	}
+	for key, value := range extra {
+		result[key] = value
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		panic(err)
+	}
+	return string(encoded)
+}
 
 const (
 	partialCapResult  = `{"reports_complete":false,"incomplete":[{"component":"run_reports","cause":"per_run_cap","count":1}]}`
@@ -71,6 +107,23 @@ func TestPartialTestsUnitCoverage(t *testing.T) {
 		{"partial skipped artifact is a gap", `["tests"]`,
 			[]partialUnit{unit("tests", "success", partialSkipResult, -24*time.Hour, -time.Hour)},
 			func(t *testing.T, tests, overall map[string]any) { wantGaps(t, tests, 1); wantCovered(t, tests, 0) }},
+		{"a saturated runs listing is a gap", `["tests"]`,
+			[]partialUnit{unit("tests", "success", runSaturatedResult(), -24*time.Hour, -time.Hour)},
+			func(t *testing.T, tests, overall map[string]any) {
+				wantGaps(t, tests, 1)
+				wantCovered(t, tests, 0)
+				wantNoLatest(t, overall)
+			}},
+		{"a saturated artifacts listing is a gap", `["tests"]`,
+			[]partialUnit{unit("tests", "success", artifactSaturatedResult(), -24*time.Hour, -time.Hour)},
+			func(t *testing.T, tests, overall map[string]any) {
+				wantGaps(t, tests, 1)
+				wantCovered(t, tests, 0)
+				wantNoLatest(t, overall)
+			}},
+		{"the open phase rate-floor marker alone is not a gap", `["tests"]`,
+			[]partialUnit{unit("tests", "success", rateFloorResult(), -24*time.Hour, -time.Hour)},
+			func(t *testing.T, tests, overall map[string]any) { wantGaps(t, tests, 0); wantCovered(t, tests, 1) }},
 		{"complete control is healthy", `["tests"]`,
 			[]partialUnit{unit("tests", "success", completeResult, -24*time.Hour, -time.Hour)},
 			func(t *testing.T, tests, overall map[string]any) {

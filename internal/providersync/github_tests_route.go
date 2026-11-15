@@ -325,6 +325,13 @@ type GitHubTestsRouteHandler struct {
 	// keeps the package default -- see the zero-means-default pattern the
 	// three fields above already use.
 	MaxArtifactBytes int64
+	// OpenRuns reads the stored open pipeline rows the open phase re-reads by
+	// id. Nil leaves the open phase out (the oracle and unit fixtures without a
+	// store).
+	OpenRuns GitHubOpenRunsReader
+	// RefreshLookback is how far before the window the runs phase lists; zero
+	// keeps githubTestsRefreshLookbackDefault.
+	RefreshLookback time.Duration
 }
 
 func (handler GitHubTestsRouteHandler) Collect(
@@ -368,47 +375,35 @@ func (handler GitHubTestsRouteHandler) Collect(
 	if maxRuns < 1 || maxRuns > githubTestsMaxRuns || maxArtifacts < 1 || maxArtifacts > githubTestsMaxArtifacts || jobPages < 1 || jobPages > nativeMaxPages {
 		return CompleteRouteBatch{}, ErrInvalidConfiguration
 	}
-	runQuery := url.Values{"per_page": {"100"}}
-	if claim.SinceAt != nil || claim.BeforeAt != nil {
-		start, end := "*", "*"
-		if claim.SinceAt != nil {
-			start = claim.SinceAt.UTC().Format(time.RFC3339)
-		}
-		if claim.BeforeAt != nil {
-			end = claim.BeforeAt.UTC().Format(time.RFC3339)
-		}
-		runQuery.Set("created", start+".."+end)
-	}
 	runPages := (maxRuns + nativePerPage - 1) / nativePerPage
-	runsPage, err := providerfoundation.CollectGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{
-		Path: root + "/actions/runs", Route: githubRunsRoute, Query: runQuery, DataKey: "workflow_runs", MaxPages: runPages,
+	runItems, runListPages, runsOver, err := collectGitHubTestsRunsPeeled(ctx, client, root, runPages, func(hi string) url.Values {
+		return githubTestsRunsQuery(claim, handler.refreshLookback(), hi)
 	})
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}
-	if runsPage.PageBudgetExhausted || len(runsPage.Items) > maxRuns {
+	if runsOver || len(runItems) > maxRuns {
 		return CompleteRouteBatch{}, ErrPaginationCapExceeded
 	}
-	artifactRunQuery := githubTestsArtifactRunQuery(claim)
-	artifactRunsPage, err := providerfoundation.CollectGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{
-		Path: root + "/actions/runs", Route: githubRunsRoute, Query: artifactRunQuery, DataKey: "workflow_runs", MaxPages: runPages,
+	artifactRunItems, artifactListPages, artifactsOver, err := collectGitHubTestsRunsPeeled(ctx, client, root, runPages, func(hi string) url.Values {
+		return githubTestsArtifactRunQueryAt(claim, hi)
 	})
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}
-	if artifactRunsPage.PageBudgetExhausted || len(artifactRunsPage.Items) > maxRuns {
+	if artifactsOver || len(artifactRunItems) > maxRuns {
 		return CompleteRouteBatch{}, ErrPaginationCapExceeded
 	}
-	pipelines := make([]githubTestsPipelineRow, 0, len(runsPage.Items))
+	pipelines := make([]githubTestsPipelineRow, 0, len(runItems))
 	jobs := make([]githubTestsJobRow, 0)
 	acceptance := make([]githubTestsAcceptanceRow, 0)
 	suites := make([]testSuiteResultRow, 0)
 	cases := make([]testCaseResultRow, 0)
 	coverage := make([]coverageSnapshotRow, 0)
 	incomplete := make([]GitHubTestsIncomplete, 0)
-	requests, pages := 1+runsPage.Pages+artifactRunsPage.Pages, runsPage.Pages+artifactRunsPage.Pages
+	requests, pages := 1+runListPages+artifactListPages, runListPages+artifactListPages
 	policyCache := map[string]githubTestsPolicy{}
-	for _, raw := range runsPage.Items {
+	for _, raw := range runItems {
 		var run gitHubWorkflowRunPayload
 		decoder := json.NewDecoder(strings.NewReader(string(raw)))
 		decoder.UseNumber()
@@ -416,7 +411,7 @@ func (handler GitHubTestsRouteHandler) Collect(
 			return CompleteRouteBatch{}, providerfoundation.ErrNormalizationInvalid
 		}
 		pipeline, include := normalizeGitHubTestsPipeline(claim, repoID, run, normalizedAt)
-		if !include || ciPipelineRunOutsideWindow(pipeline.StartedAt, claim) {
+		if !include || !githubTestsRunWanted(run, pipeline, claim) {
 			continue
 		}
 		pipelines = append(pipelines, pipeline)
@@ -472,7 +467,7 @@ func (handler GitHubTestsRouteHandler) Collect(
 			testsOptionalString(stringValue(run.HTMLURL)), normalizedAt,
 		)...)
 	}
-	for _, raw := range artifactRunsPage.Items {
+	for _, raw := range artifactRunItems {
 		var run gitHubWorkflowRunPayload
 		decoder := json.NewDecoder(strings.NewReader(string(raw)))
 		decoder.UseNumber()
@@ -617,9 +612,9 @@ func (handler GitHubTestsRouteHandler) Collect(
 	return CompleteRouteBatch{Effects: effects, Watermark: watermark, Result: map[string]any{
 		"pipeline_runs_synced": len(pipelines), "job_runs_synced": len(jobs), "acceptance_checks_synced": len(acceptance),
 		"test_suites_synced": len(suites), "test_cases_synced": len(cases), "coverage_snapshots_synced": len(coverage), "repo": repo.FullName,
-		"reports_complete": len(incomplete) == 0,
-		"reports_skipped":  githubTestsIncompleteCount(incomplete),
-		"incomplete":       incomplete,
+		GitHubTestsResultKeyReportsComplete: len(incomplete) == 0,
+		"reports_skipped":                   githubTestsIncompleteCount(incomplete),
+		"incomplete":                        incomplete,
 	}, Evidence: FetchEvidence{Provider: claim.Provider, Dataset: claim.Dataset, Requests: requests, Pages: pages, Records: len(pipelines) + len(jobs) + len(acceptance) + len(suites) + len(cases) + len(coverage)}}, nil
 }
 

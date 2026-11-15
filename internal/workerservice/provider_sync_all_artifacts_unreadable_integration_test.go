@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/chmigrate"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
@@ -144,6 +145,20 @@ func TestProviderUnitAllArtifactsUnreadableTerminalizesOnFirstAttempt(t *testing
   provider_repo_id String DEFAULT '', identity_path String DEFAULT ''
 ) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, id)`); err != nil {
 		t.Fatal(err)
+	}
+
+	// The open phase reads the stored open pipeline rows once the listing phases end, so the table must exist (empty).
+	baseline, err := chmigrate.LoadBaseline()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, object := range baseline.Objects {
+		if object.Name != "ci_pipeline_runs" {
+			continue
+		}
+		if err := clickhouseConn.Exec(ctx, object.Create); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	valkey, err := containers.StartValkey(ctx)

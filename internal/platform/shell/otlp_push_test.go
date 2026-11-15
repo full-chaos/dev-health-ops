@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/refusedaddr"
 	colmetricpb "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
 	metricpb "go.opentelemetry.io/proto/otlp/metrics/v1"
 	"google.golang.org/grpc"
@@ -302,12 +303,7 @@ func TestAnUnreachableCollectorCostsTheStopAtMostTheFlushBound(t *testing.T) {
 	}
 	httpAddress := httpListener.Addr().String()
 	_ = httpListener.Close()
-	closed, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	closedAddress := closed.Addr().String()
-	_ = closed.Close() // nothing listens here any more
+	closedAddress := refusedaddr.Addr(t)
 	command := exec.Command(os.Args[0], "-test.run=^TestAnUnreachableCollectorCostsTheStopAtMostTheFlushBound$")
 	command.Env = append(os.Environ(),
 		"SHELL_OTLP_HELPER=shutdown",

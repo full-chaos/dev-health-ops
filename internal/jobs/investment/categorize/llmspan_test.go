@@ -20,6 +20,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/refusedaddr"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -412,9 +413,7 @@ func TestLLMSpanBodyReadFailureKeepsTheStatusClass(t *testing.T) {
 // A failed send names the failure class only, never the request URL.
 func TestLLMSpanTransportErrorNamesNoURL(t *testing.T) {
 	recordSpans(t)
-	dead := httptest.NewServer(http.NotFoundHandler())
-	url := dead.URL
-	dead.Close()
+	url := "http://" + refusedaddr.Addr(t)
 	req, _ := http.NewRequest(http.MethodPost, url+"/secret-path?k=v", nil)
 	_, err := tracedLLMDo(http.DefaultClient, req, ProviderKindLocal, "m")
 	if err == nil {

@@ -26,6 +26,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/pdp"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/pdp/pdptest"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/refusedaddr"
 )
 
 // CHAOS-13073 red cells: QUERY_API_PDP_MODE=shadow feeds the 5.12 shadow core (internal/api/policy). Only the 5.12
@@ -197,9 +198,7 @@ func TestRESTShadowCountsOnTheCoreAndNeverChangesTheAnswer(t *testing.T) {
 
 // 2c: PDP down, 503, 429 and a slow PDP change nothing in the answer and the handler never waits for the PDP.
 func TestRESTShadowPDPFailureHasNoEffect(t *testing.T) {
-	closed := httptest.NewServer(http.NotFoundHandler())
-	closedURL := closed.URL
-	closed.Close()
+	closedURL := "http://" + refusedaddr.Addr(t)
 	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { time.Sleep(3 * time.Second) }))
 	t.Cleanup(slow.Close)
 	fail503, fail429 := pdptest.New(t), pdptest.New(t)

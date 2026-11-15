@@ -20,6 +20,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/tracing"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/refusedaddr"
 )
 
 // stopBoundBudget is the shutdown budget the helper runs under: one second under
@@ -79,12 +80,7 @@ func TestTheWholeStopWithEveryTelemetryEndpointDownStaysUnderTheContainerBudget(
 	}
 	httpAddress := httpListener.Addr().String()
 	_ = httpListener.Close()
-	closed, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	closedAddress := closed.Addr().String()
-	_ = closed.Close()
+	closedAddress := refusedaddr.Addr(t)
 
 	command := exec.Command(os.Args[0], "-test.run=^TestTheWholeStopWithEveryTelemetryEndpointDownStaysUnderTheContainerBudget$")
 	command.Env = append(os.Environ(),

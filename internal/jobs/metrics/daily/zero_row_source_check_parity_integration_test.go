@@ -120,6 +120,7 @@ func (scope parityScope) partition() Partition {
 
 type pipelineRun struct {
 	status     string
+	nullStatus bool
 	runID      string
 	startedAt  time.Time
 	finishedAt *time.Time
@@ -137,7 +138,11 @@ func (stack parityStack) insertRuns(t *testing.T, ctx context.Context, orgID str
 		if run.status != "" {
 			status = run.status
 		}
-		if err := batch.Append(repoID, run.runID, &status, run.startedAt, run.finishedAt, run.lastSynced, orgID); err != nil {
+		statusPtr := &status
+		if run.nullStatus {
+			statusPtr = nil
+		}
+		if err := batch.Append(repoID, run.runID, statusPtr, run.startedAt, run.finishedAt, run.lastSynced, orgID); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -469,6 +474,39 @@ func TestZeroRowSourceCheckMatchesWhatTheFamilyKeeps(t *testing.T) {
 				testCase.run.runID, testCase.run.lastSynced = "run", at("2026-08-26 01:00:00.000")
 				stack.insertRuns(t, ctx, scope.orgID, scope.repoUUIDs[0], testCase.run)
 				stack.assertKeptParity(t, ctx, scope, "cicd", "cicd_metrics_daily", cicdExecutor, testCase.kept)
+			})
+		}
+		deletedRun := func(runID, status string, nullStatus bool) pipelineRun {
+			return pipelineRun{
+				runID: runID, status: status, nullStatus: nullStatus,
+				startedAt: at("2026-08-25 10:00:00.000"), finishedAt: ptrTime(at("2026-08-25 11:00:00.000")),
+				lastSynced: at("2026-08-26 01:00:00.000"),
+			}
+		}
+		testopsRiskExecutor, err := NewTestopsRiskExecutor(stack.conn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		deletedCases := []struct {
+			name string
+			runs []pipelineRun
+			kept bool
+		}{
+			{"deleted_only_day", []pipelineRun{deletedRun("gone", "deleted", false)}, false},
+			{"deleted_mixed_case_padded_only_day", []pipelineRun{deletedRun("gone", " Deleted ", false)}, false},
+			{"null_status_day", []pipelineRun{deletedRun("unknown", "", true)}, true},
+			{"deleted_and_completed_day", []pipelineRun{deletedRun("gone", "deleted", false), deletedRun("done", "success", false)}, true},
+		}
+		for _, testCase := range deletedCases {
+			t.Run("cicd_"+testCase.name, func(t *testing.T) {
+				scope := stack.newScope(t, ctx, 1)
+				stack.insertRuns(t, ctx, scope.orgID, scope.repoUUIDs[0], testCase.runs...)
+				stack.assertKeptParity(t, ctx, scope, "cicd", "cicd_metrics_daily", cicdExecutor, testCase.kept)
+			})
+			t.Run("testops_risk_"+testCase.name, func(t *testing.T) {
+				scope := stack.newScope(t, ctx, 1)
+				stack.insertRuns(t, ctx, scope.orgID, scope.repoUUIDs[0], testCase.runs...)
+				stack.assertKeptParity(t, ctx, scope, "testops_risk", "testops_release_confidence", testopsRiskExecutor, testCase.kept)
 			})
 		}
 		deployCases := []struct {

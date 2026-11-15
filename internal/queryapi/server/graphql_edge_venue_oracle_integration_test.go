@@ -7,7 +7,7 @@ import (
 	"crypto/ed25519"
 	"crypto/tls"
 	"crypto/x509"
-	_ "embed"
+	"embed"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -842,7 +842,7 @@ func headersThatDiffer(request venueoracle.Request, python, goResponse venueorac
 }
 
 //go:embed testdata/venue/retired-testopstest-request.json
-var retiredTestOpsTestRequest []byte
+var retiredTestOpsTestRequest embed.FS
 
 // retiredTestOpsTestRuling is the ruling that retired the frozen Python answers of the TestOpsTest document.
 const retiredTestOpsTestRuling = "CHAOS-13859: TestOpsTest registered document retired; web no longer fetches it"
@@ -877,7 +877,11 @@ func retiredTestOpsTestCases(t *testing.T, member string) []edgeCase {
 		Document      string         `json:"document"`
 		Variables     map[string]any `json:"variables"`
 	}
-	if err := json.Unmarshal(retiredTestOpsTestRequest, &frozen); err != nil {
+	raw, err := retiredTestOpsTestRequest.ReadFile("testdata/venue/retired-testopstest-request.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, &frozen); err != nil {
 		t.Fatal(err)
 	}
 	return []edgeCase{

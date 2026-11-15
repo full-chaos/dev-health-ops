@@ -342,3 +342,41 @@ func ownerSeedSQL(org, repo, team string) []string {
 		fmt.Sprintf("INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES ('%s', 'github', '%s', '%s', '%s', 'exact', 'inferred', 1, 0, 0, '2025-01-01 00:00:00', NULL, '2025-01-01 00:00:00')", org, team, repo, name),
 	}
 }
+
+// A team that owns no repository: its stored rows (the team of the daily row, as the writer stored it) give it NO result in the
+// TEAM series, not a result of zero buckets and not a value of 0, while the ORG series still holds the repositories. The state
+// "no owned repositories" is deferred; a team that owns nothing answers an empty team series, as a team with no rows does today.
+func TestTestopsTeamWithNoOwnedRepositoryHasNoTeamResultAndTheOrgKeepsTheRepos(t *testing.T) {
+	e := startOwnersEnv(t)
+	const org = "org-13804-noowner"
+	const owned, orphan = "13804000-0000-4000-8000-0000000000e1", "13804000-0000-4000-8000-0000000000e2"
+	e.repo(org, owned, "acme/owned")
+	e.repo(org, orphan, "acme/orphan")
+	e.owner(org, "team-a", owned, "acme/owned", 1, openFrom(), nil)
+	// team-x holds stored rows only: no ownership row names it.
+	e.daily(org, repoDay{repo: owned, store: "team-a", day: day1, runs: 100, ok: 90, passed: 90, bad: 10, flakeCases: 5, distinct: 50, linesTotal: 1000, linesCov: 900})
+	e.daily(org, repoDay{repo: orphan, store: "team-x", day: day1, runs: 100, ok: 10, passed: 10, bad: 90, flakeCases: 5, distinct: 50, linesTotal: 1000, linesCov: 100})
+	for _, measure := range allTestopsMeasures {
+		teams, orgSeries := e.series(org, measure, nil)
+		if got, present := teams["team-x"]; present {
+			t.Fatalf("%s: team-x owns no repository and has a team result of %d buckets, want none", measure, len(got))
+		}
+		if len(teams["team-a"]) != 1 {
+			t.Fatalf("%s: team-a lost its series: %v", measure, teams)
+		}
+		// Only the rate measures have an organization series (the five means do not: CompileOrgTimeseries, orgRateTerms).
+		hasOrg := map[model.MeasureInput]bool{
+			model.MeasureInputPipelineSuccessRate: true, model.MeasureInputPipelineFailureRate: true, model.MeasureInputPipelineRerunRate: true,
+			model.MeasureInputTestPassRate: true, model.MeasureInputTestFailureRate: true, model.MeasureInputTestFlakeRate: true,
+			model.MeasureInputCoverageLinePct: true,
+		}[measure]
+		if hasOrg && (len(orgSeries) != 1 || orgSeries[0] == nil) {
+			t.Fatalf("%s: the org series is %v, want one bucket holding both repositories", measure, orgSeries)
+		}
+	}
+	// The org success rate holds BOTH repositories: (90+10)/(100+100) = 50, not team-a's 90.
+	_, orgSeries := e.series(org, model.MeasureInputPipelineSuccessRate, nil)
+	if math.Abs(*orgSeries[0]-50) > 1e-9 {
+		t.Fatalf("org success rate %v, want 50 over both repositories", *orgSeries[0])
+	}
+}

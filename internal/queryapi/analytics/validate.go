@@ -387,12 +387,13 @@ func weightedRateSQL(t rateTerms) string {
 	return t.numerator + " / NULLIF(" + t.denominator + ", 0) * 100"
 }
 
-// The pipeline rates divide by pipelines_count, as the stored rates do (every run of the day; whether that is the
-// right denominator is a separate decision). The stored rerun rate is reruns / pipelines_count, so rerun_rate times
-// pipelines_count is the rerun count: no column is added.
+// The pipeline success and failure rates divide by the completed runs (succeeded or failed), so the two add up to 100;
+// cancelled, skipped and unfinished runs are in neither, and a group with no completed run is NULL. The rerun rate
+// stays over every run: the stored rerun rate is reruns / pipelines_count, so rerun_rate times pipelines_count is the
+// rerun count and no column is added.
 var (
-	pipelineSuccessTerms = rateTerms{"SUM(success_count)", "SUM(pipelines_count)"}
-	pipelineFailureTerms = rateTerms{"SUM(failure_count)", "SUM(pipelines_count)"}
+	pipelineSuccessTerms = rateTerms{"SUM(success_count)", "SUM(success_count) + SUM(failure_count)"}
+	pipelineFailureTerms = rateTerms{"SUM(failure_count)", "SUM(success_count) + SUM(failure_count)"}
 	pipelineRerunTerms   = rateTerms{"SUM(rerun_rate * pipelines_count)", "SUM(pipelines_count)"}
 )
 

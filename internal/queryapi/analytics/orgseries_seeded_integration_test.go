@@ -24,6 +24,7 @@ CREATE TABLE testops_pipeline_metrics_daily (
     day Date,
     pipelines_count UInt32,
     success_count UInt32,
+    failure_count UInt32,
     success_rate Float64,
     team_id Nullable(String),
     org_id LowCardinality(String) DEFAULT '',
@@ -89,8 +90,8 @@ func TestResolveOneTimeseries_OrgSeries_SeededRealClickHouse(t *testing.T) {
 			t.Fatalf("seed %q: %v", q, err)
 		}
 	}
-	// Pipelines: team-a 1/1 (100%), team-b 1/9 (11.1%), a repository with no team 0/10, a foreign org 5/5.
-	// Team mean = 55.6; the org rate = 2/20 = 10.
+	// Pipelines: team-a 1/1 (100%), team-b 1/9 (11.1%), a repository with no team 0/10, a foreign org 5/5; every run
+	// that did not succeed failed, so every run is a completed run. Team mean = 55.6; the org rate = 2/20 = 10.
 	for _, r := range []struct {
 		repo, team, org string
 		total, ok       int
@@ -100,11 +101,11 @@ func TestResolveOneTimeseries_OrgSeries_SeededRealClickHouse(t *testing.T) {
 		{repoNoTeam, "NULL", orgID, 10, 0},
 		{repoForeign, "'team-x'", otherOrg, 5, 5},
 	} {
-		exec(fmt.Sprintf("INSERT INTO testops_pipeline_metrics_daily (repo_id, day, pipelines_count, success_count, success_rate, team_id, org_id, computed_at) VALUES ('%s', '2026-01-02', %d, %d, %f, %s, '%s', now())",
-			r.repo, r.total, r.ok, float64(r.ok)/float64(r.total), r.team, r.org))
+		exec(fmt.Sprintf("INSERT INTO testops_pipeline_metrics_daily (repo_id, day, pipelines_count, success_count, failure_count, success_rate, team_id, org_id, computed_at) VALUES ('%s', '2026-01-02', %d, %d, %d, %f, %s, '%s', now())",
+			r.repo, r.total, r.ok, r.total-r.ok, float64(r.ok)/float64(r.total), r.team, r.org))
 	}
 	// A stale rewrite of repoA's day: the newest computed_at wins, so it must not count twice.
-	exec(fmt.Sprintf("INSERT INTO testops_pipeline_metrics_daily (repo_id, day, pipelines_count, success_count, success_rate, team_id, org_id, computed_at) VALUES ('%s', '2026-01-02', 7, 0, 0, 'team-a', '%s', now() - INTERVAL 1 DAY)", repoA, orgID))
+	exec(fmt.Sprintf("INSERT INTO testops_pipeline_metrics_daily (repo_id, day, pipelines_count, success_count, failure_count, success_rate, team_id, org_id, computed_at) VALUES ('%s', '2026-01-02', 7, 0, 7, 0, 'team-a', '%s', now() - INTERVAL 1 DAY)", repoA, orgID))
 	// Coverage: team-a 50/50 (100%), team-b 30/150 (20%), a row with a percent but no counts: the org rate = 80/200 = 40.
 	exec(fmt.Sprintf("INSERT INTO testops_coverage_metrics_daily (repo_id, day, line_coverage_pct, lines_total, lines_covered, team_id, org_id, computed_at) VALUES ('%s', '2026-01-02', 100, 50, 50, 'team-a', '%s', now()), ('%s', '2026-01-02', 20, 150, 30, 'team-b', '%s', now()), ('%s', '2026-01-02', 90, NULL, NULL, NULL, '%s', now())",
 		repoA, orgID, repoB, orgID, repoNoTeam, orgID))

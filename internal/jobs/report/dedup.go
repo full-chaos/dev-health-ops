@@ -6,6 +6,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/changefailure"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/prrework"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/testops"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/rowview"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
@@ -51,15 +52,22 @@ type chartRule struct {
 // repo_metrics_daily.pr_rework_ratio is DEPRECATED: it divides by all merged
 // pull requests and holds 0 where nothing was reviewed, so it is never
 // charted. A bucket with no reviewed pull request has no point.
+//
+// The pipeline failure rate is the bucket's failures over its completed runs
+// (succeeded or failed), from the counts of the metric's own table. The stored
+// failure_rate column holds 0 on a day with no completed run, so it is never
+// charted. A bucket with no completed run has no point.
 var chartRules = map[string]chartRule{
 	"change_failure_rate": {table: changefailure.Table, expression: changefailure.WindowRateSQL, inputs: changefailure.CountColumns},
 	"pr_rework_ratio":     {table: prrework.Table, expression: prrework.WindowRateSQL, inputs: prrework.CountColumns},
+	"failure_rate":        {table: "testops_pipeline_metrics_daily", expression: testops.PipelineFailureRateWindowSQL, inputs: testops.PipelineRateCountColumns},
 }
 
 // withChartRule returns the definition a chart of the metric is built from:
 // the registry definition, on the rule's table when the metric has a rule.
 func withChartRule(definition metricDefinition) metricDefinition {
-	if rule, ok := chartRules[definition.CanonicalName]; ok && definition.SourceTable == "repo_metrics_daily" {
+	if rule, ok := chartRules[definition.CanonicalName]; ok &&
+		(definition.SourceTable == "repo_metrics_daily" || definition.SourceTable == rule.table) {
 		definition.SourceTable = rule.table
 		definition.rule = rule.expression
 	}

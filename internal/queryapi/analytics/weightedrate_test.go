@@ -9,8 +9,8 @@ import (
 // group with nothing to divide by is NULL, and none is an AVG of stored rates (CHAOS-13775).
 func TestRateMeasuresAreWeightedAndNeverAnAverageOfStoredRates(t *testing.T) {
 	for measure, want := range map[Measure][]string{
-		MeasurePipelineSuccessRate: {"SUM(success_count)", "NULLIF(SUM(pipelines_count), 0)"},
-		MeasurePipelineFailureRate: {"SUM(failure_count)", "NULLIF(SUM(pipelines_count), 0)"},
+		MeasurePipelineSuccessRate: {"SUM(success_count)", "NULLIF(SUM(success_count) + SUM(failure_count), 0)"},
+		MeasurePipelineFailureRate: {"SUM(failure_count)", "NULLIF(SUM(success_count) + SUM(failure_count), 0)"},
 		MeasurePipelineRerunRate:   {"SUM(rerun_rate * pipelines_count)", "NULLIF(SUM(pipelines_count), 0)"},
 		MeasureTestPassRate:        {"SUM(passed_count)", "NULLIF(SUM(passed_count) + SUM(failed_count), 0)"},
 		MeasureTestFailureRate:     {"SUM(failed_count)", "NULLIF(SUM(passed_count) + SUM(failed_count), 0)"},
@@ -48,7 +48,7 @@ func TestMeasuresWithoutADenominatorStayAnAverage(t *testing.T) {
 // The ORG series and the dimension series of a weighted rate are the same terms.
 func TestOrgSeriesUseTheSameTermsAsTheDimensionSeries(t *testing.T) {
 	for measure, terms := range map[Measure]rateTerms{
-		MeasurePipelineFailureRate: pipelineFailureTerms, MeasurePipelineRerunRate: pipelineRerunTerms,
+		MeasurePipelineSuccessRate: pipelineSuccessTerms, MeasurePipelineFailureRate: pipelineFailureTerms, MeasurePipelineRerunRate: pipelineRerunTerms,
 		MeasureTestPassRate: testPassTerms, MeasureTestFailureRate: testFailureTerms,
 	} {
 		num, den, scale, ok := orgRateTerms(measure)

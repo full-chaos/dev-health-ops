@@ -174,7 +174,7 @@ func (handler GitLabTestsRouteHandler) Collect(
 		if startedAt == nil {
 			continue
 		}
-		if ciPipelineRunOutsideWindow(*startedAt, claim) {
+		if gitLabPipelineOutsideWindow(*startedAt, claim) {
 			continue
 		}
 		pipeline, ok := normalizeGitLabTestsPipeline(claim, repoID, payload, normalizedAt)
@@ -344,6 +344,15 @@ func (handler GitLabTestsRouteHandler) Collect(
 		Evidence: FetchEvidence{Provider: claim.Provider, Dataset: claim.Dataset, Requests: requests, Pages: pages,
 			Records: len(pipelines) + len(jobs) + len(acceptance) + len(suites) + len(cases) + len(coverage)},
 	}, nil
+}
+
+// gitLabPipelineOutsideWindow decides whether a listed pipeline is left out of the pipelines phase. The listing is by
+// updated_at between SinceAt and BeforeAt, so the listing IS the window: a pipeline that started before SinceAt and
+// was last updated inside it must be written (its row is keyed by repository and run, so a later window rewrites the
+// same key). A start after BeforeAt stays outside; a lower bound on the start would drop every pipeline that crosses
+// the window edge, because the window of its start no longer lists it once it has moved on.
+func gitLabPipelineOutsideWindow(startedAt time.Time, claim Claim) bool {
+	return claim.BeforeAt != nil && startedAt.After(claim.BeforeAt.UTC())
 }
 
 func gitLabTestsPipelineStartedAt(payload gitLabTestsPipelinePayload) *time.Time {

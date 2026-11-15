@@ -20,10 +20,10 @@ func reportEnv(summary string) []string {
 
 func TestMergeGroupReportsAnUnweightedSlowPackageAndKeepsTheLegGreen(t *testing.T) {
 	t.Parallel()
-	pkg, key := unweightedPackage(t, 1, shardCount)
+	pkg, key := unweightedPackage(t, guardShard, shardCount)
 	summary := filepath.Join(t.TempDir(), "summary.md")
-	log := coverLog(t, 1, shardCount, map[string]string{pkg: "47.600s"})
-	errs, err := unweightedGuard(t, reportEnv(summary), 1, log)
+	log := coverLog(t, guardShard, shardCount, map[string]string{pkg: "47.600s"})
+	errs, err := unweightedGuard(t, reportEnv(summary), guardShard, log)
 	if err != nil {
 		t.Fatalf("report mode failed on an unweighted package at 47.6 s: %v\n%s", err, errs)
 	}
@@ -36,14 +36,14 @@ func TestMergeGroupReportsAnUnweightedSlowPackageAndKeepsTheLegGreen(t *testing.
 	if rerr != nil || !strings.Contains(string(b), key) {
 		t.Errorf("the step summary does not name %q: err=%v %q", key, rerr, b)
 	}
-	if errs, err := unweightedGuard(t, []string{reportOnlyEnv + "="}, 1, log); err == nil || !strings.Contains(errs, "\n"+key+"\t48\n") {
+	if errs, err := unweightedGuard(t, []string{reportOnlyEnv + "="}, guardShard, log); err == nil || !strings.Contains(errs, "\n"+key+"\t48\n") {
 		t.Errorf("with the variable empty (pull_request, push, local) the guard must still fail with the row: err=%v\n%s", err, errs)
 	}
 }
 
 func TestReportModeStillFailsWhenTheLogCannotProveCoverage(t *testing.T) {
 	t.Parallel()
-	full := coverLog(t, 1, shardCount, nil)
+	full := coverLog(t, guardShard, shardCount, nil)
 	lines := strings.SplitAfter(full, "\n")
 	for _, c := range []struct{ name, log, want string }{
 		{"a zero-byte log", "", "holds no package summary line"},
@@ -55,11 +55,11 @@ func TestReportModeStillFailsWhenTheLogCannotProveCoverage(t *testing.T) {
 			t.Errorf("%s in report mode: err=%v, want a failure with %q\n%s", c.name, err, c.want, errs)
 		}
 	}
-	if errs, err := unweightedGuardAt(t, reportEnv(""), 1, shardCount, filepath.Join(t.TempDir(), "absent.log")); err == nil || !strings.Contains(errs, "readable file") {
+	if errs, err := unweightedGuardAt(t, reportEnv(""), guardShard, shardCount, filepath.Join(t.TempDir(), "absent.log")); err == nil || !strings.Contains(errs, "readable file") {
 		t.Errorf("a missing log in report mode: err=%v\n%s", err, errs)
 	}
 	zero := writeLog(t, "")
-	if _, err := unweightedGuardAt(t, append(reportEnv(""), "GO_TEST_WEIGHTS="+zero), 1, shardCount, writeLog(t, full)); err == nil {
+	if _, err := unweightedGuardAt(t, append(reportEnv(""), "GO_TEST_WEIGHTS="+zero), guardShard, shardCount, writeLog(t, full)); err == nil {
 		t.Error("an empty weights file passed in report mode")
 	}
 }

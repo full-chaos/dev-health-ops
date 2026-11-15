@@ -108,7 +108,7 @@ fi
 # complains, they look. For a wiring assertion that is the right direction to
 # be wrong in, and it keeps the reason for not parsing YAML intact.
 pre_push_section="$(awk '/^pre-push:/{f=1;next} /^[^[:space:]]/{f=0} f' "${LEFTHOOK}")"
-if printf '%s\n' "${pre_push_section}" | grep -qE '^[[:space:]]*run:.*check_shellcheck_pin\.sh'; then
+if grep -qE '^[[:space:]]*run:.*check_shellcheck_pin\.sh' <<<"${pre_push_section}"; then
   printf 'ok: pre-push hook still invokes this self-test\n'
 else
   printf 'FAIL: lefthook.yml pre-push has no run: line invoking ci/check_shellcheck_pin.sh\n' >&2

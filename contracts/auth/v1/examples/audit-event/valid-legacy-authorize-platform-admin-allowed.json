@@ -1,0 +1,19 @@
+{
+  "schema_version": "audit-event.v1",
+  "event_type": "auth.authorize.high_risk_decided",
+  "occurred_at": "2026-11-02T10:00:00Z",
+  "outcome": "allowed",
+  "attributes": {
+    "decision_id": "dec_EXAMPLE0000000000000000003",
+    "decision_reason_code": "allowed_by_role",
+    "decision_internal_reason": "allowed_by_platform_admin",
+    "action_key": "settings.write",
+    "resource_type": "organization",
+    "policy_revision": 42,
+    "caller_principal_id": "0b6f1c3e-8e4f-4b7a-9d2a-3c5e7f9a1b2d",
+    "workload_jti": "AAAAAAAAAAAAAAAAAAAAAA"
+  },
+  "actor_principal_id": "prn_0b6f1c3e-8e4f-4b7a-9d2a-3c5e7f9a1b2d",
+  "organization_id": "org_6f1c2d3e-4a5b-4c6d-8e7f-901a2b3c4d5e",
+  "policy_revision": 42
+}

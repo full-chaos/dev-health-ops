@@ -61,6 +61,8 @@ a650a2bf0c8a0b517595d031c7613abc6cc2f4d1a1f33b3c0c01df5098ddc085	unclassified	re
 6eaf92bdcc28d63cd8797b0be36bcbfc3315bd5134a2d1763cff7b6154b53fdf	unclassified	rest_errors/quadrant_comparative_params.json
 -	header	venue/dict-order.json
 -	header	venue/graphql-edge-decisions.json
+135e867516443fc1fda909f72d8b4a760ea4e4ddefb999b8cc1b950436a6c207	hand-written	venue/retired-testopstest-request.json
+115b72c060023b12494b3ac3c640cfcbc5fca64a03e1e9607a132bee3214a108	go-generated	venue/retired-testopstest.go-pin.json
 -	header	venue/saved-report-mutations-cron-dialect.json
 -	header	venue/saved-report-mutations.json
 -	header	venue/saved-report-write-proof.json

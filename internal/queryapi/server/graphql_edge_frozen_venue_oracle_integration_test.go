@@ -74,6 +74,10 @@ func TestGraphQLEdgeFrozenVenueOracle(t *testing.T) {
 	runValues := spec.Scrub
 	spec.Scrub = func(text string) string { return loopbackPort.ReplaceAllString(runValues(text), "127.0.0.1:<port>") }
 	golden := venueoracle.OpenGolden(t, spec)
+	retired := &edgeRetired{
+		names: map[string]bool{"POST testOpsTest": true, "GET testOpsTest": true},
+		gopin: venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/venue/retired-testopstest.go-pin.json", SHA256: retiredTestOpsTestPinSHA256, Ruling: retiredTestOpsTestRuling}),
+	}
 	docs := registeredEdgeDocuments(t, root)
 	schemaDigest := digest.Schema(schemav1.SDL)
 
@@ -99,7 +103,7 @@ func TestGraphQLEdgeFrozenVenueOracle(t *testing.T) {
 
 	run := func(cs []edgeCase, normalize func(venueoracle.Request, string) string) {
 		python := golden.Python(t, venue, edgeRequests(cs))
-		edgeCompare(t, goBase, cs, python, normalize, golden)
+		edgeCompare(t, goBase, cs, python, normalize, golden, retired)
 	}
 	clock := regexp.MustCompile(`\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})`)
 	run(suite.cases, func(_ venueoracle.Request, body string) string {
@@ -159,11 +163,15 @@ func TestGraphQLEdgeFrozenVenueOracle(t *testing.T) {
 		pyWant:   edgeAnswer{status: 500, body: `"Internal Server Error"`},
 		goWant:   edgeAnswer{status: 503, body: `"Database temporarily unavailable"`}}}
 	deadPython := golden.Python(t, venue, edgeRequests(deadCases))
-	edgeCompare(t, "http://"+deadPublic.Address(), deadCases, deadPython, nil, golden)
+	edgeCompare(t, "http://"+deadPublic.Address(), deadCases, deadPython, nil, golden, nil)
 
 	retiredClassCell(t, goBase, queryBody, edgeFixedToken(t, edgeOracleJWTKey, users[0], false))
 
 	leaveRoot() // the golden's file path is relative to the package directory
+	retired.gopin.Finish(t)
 	golden.Finish(t)
 	venueoracle.WriteGoOnlyProof(t, "Go's /graphql edge (query-api's public listener) against the frozen answers of the Python edge")
 }
+
+// retiredTestOpsTestPinSHA256 is the digest of testdata/venue/retired-testopstest.go-pin.json.
+const retiredTestOpsTestPinSHA256 = "115b72c060023b12494b3ac3c640cfcbc5fca64a03e1e9607a132bee3214a108"

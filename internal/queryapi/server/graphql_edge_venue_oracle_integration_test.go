@@ -7,6 +7,7 @@ import (
 	"crypto/ed25519"
 	"crypto/tls"
 	"crypto/x509"
+	_ "embed"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -508,6 +509,9 @@ func edgeOracleCases(t *testing.T, docs []registeredEdgeDocument, venue *venueor
 		cases = append(cases, post)
 		// A mutation as GET too: both planes must refuse it, never run it.
 		cases = append(cases, get)
+		if doc.Operation == "testOpsPipeline" {
+			cases = append(cases, retiredTestOpsTestCases(t, member)...)
+		}
 	}
 
 	// The credential domain, on one query and one mutation.
@@ -699,7 +703,7 @@ func edgeRequests(cs []edgeCase) []venueoracle.Request {
 // sides, every other case goes through venueoracle.Diff. golden is the frozen golden the answers came from (nil
 // for the live oracle): the answers of the declared cases are then declared inspected, and Diff compares the rest
 // as the golden requires.
-func edgeCompare(t *testing.T, goBase string, cs []edgeCase, python []venueoracle.Response, normalize func(venueoracle.Request, string) string, golden *venueoracle.Golden) {
+func edgeCompare(t *testing.T, goBase string, cs []edgeCase, python []venueoracle.Response, normalize func(venueoracle.Request, string) string, golden *venueoracle.Golden, retired *edgeRetired) {
 	t.Helper()
 	var parity []venueoracle.Request
 	var parityPython []venueoracle.Response
@@ -798,6 +802,8 @@ func edgeCompare(t *testing.T, goBase string, cs []edgeCase, python []venueoracl
 			}
 		},
 		Golden: golden,
+		Retire: retired.matcher(),
+		Pin:    retired.pin(),
 	}))
 	t.Log("\n" + receipt.String())
 }
@@ -833,4 +839,49 @@ func headersThatDiffer(request venueoracle.Request, python, goResponse venueorac
 		}
 	}
 	return differing
+}
+
+//go:embed testdata/venue/retired-testopstest-request.json
+var retiredTestOpsTestRequest []byte
+
+// retiredTestOpsTestRuling is the ruling that retired the frozen Python answers of the TestOpsTest document.
+const retiredTestOpsTestRuling = "CHAOS-13859: TestOpsTest registered document retired; web no longer fetches it"
+
+// edgeRetired is the requests whose frozen Python answer a ruling retired, and the pin of Go's own answer to them.
+type edgeRetired struct {
+	names map[string]bool
+	gopin *venueoracle.GoPin
+}
+
+func (r *edgeRetired) matcher() func(venueoracle.Request) bool {
+	if r == nil {
+		return nil
+	}
+	return func(request venueoracle.Request) bool { return r.names[request.Name] }
+}
+
+func (r *edgeRetired) pin() *venueoracle.GoPin {
+	if r == nil {
+		return nil
+	}
+	return r.gopin
+}
+
+// retiredTestOpsTestCases are the two requests the golden recorded for the TestOpsTest document, rebuilt from the
+// frozen document text and variables the Python edge was asked with (the golden answers each by body digest, in
+// order, so they are still asked). query-api no longer registers the document: Go's answer is pinned, not compared.
+func retiredTestOpsTestCases(t *testing.T, member string) []edgeCase {
+	t.Helper()
+	var frozen struct {
+		OperationName string         `json:"operationName"`
+		Document      string         `json:"document"`
+		Variables     map[string]any `json:"variables"`
+	}
+	if err := json.Unmarshal(retiredTestOpsTestRequest, &frozen); err != nil {
+		t.Fatal(err)
+	}
+	return []edgeCase{
+		{request: edgePost("POST testOpsTest", member, urqlBody(t, frozen.OperationName, frozen.Document, frozen.Variables), nil)},
+		{request: edgeGet("GET testOpsTest", member, urqlGETPath(t, edgeOrgA, frozen.OperationName, frozen.Document, frozen.Variables), nil)},
+	}
 }

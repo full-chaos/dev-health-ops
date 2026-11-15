@@ -1786,7 +1786,11 @@ func (observer *recordingCompatRetryObserver) ObserveDailyMetricsCompatRetry(
 
 type errorSourceDataChecker struct{ err error }
 
-func (checker errorSourceDataChecker) ZeroRowFamiliesWithSourceData(context.Context, string) ([]string, error) {
+func (checker errorSourceDataChecker) SourceSnapshot(context.Context, string, time.Time) (SourceSnapshot, error) {
+	return SourceSnapshot{}, checker.err
+}
+
+func (checker errorSourceDataChecker) ZeroRowFamilies(context.Context, SourceSnapshot) ([]string, error) {
 	return nil, checker.err
 }
 

@@ -72,7 +72,7 @@ pending tests, which the UI labels explicitly.
 
 | Invariant | Rationale |
 |---|---|
-| `status` is a known value | Each run belongs to exactly one status bucket (`success`, `failure`/`failed`, `cancelled`/`canceled`, `timeout`, `running`, `queued`, `skipped`). The denominator Rule 1 note applies: `success_rate + failure_rate` need not total 100 % because some runs are `cancelled` — the frontend copy already explains this. The ops contract ensures no run uses an unrecognised status that the UI cannot categorise. |
+| `status` is a known value | Each run belongs to exactly one status bucket (`success`, `failure`/`failed`, `cancelled`/`canceled`, `timeout`, `running`, `queued`, `skipped`). The rates divide by the completed runs (`success` and `failure`/`failed`/`timeout`), so `success_rate + failure_rate` totals 100 %; `cancelled`, `running`, `queued` and `skipped` runs are in neither rate. The ops contract ensures no run uses an unrecognised status that the UI cannot categorise. |
 | `queued_at ≤ started_at ≤ finished_at` | Timeline order is required for duration and queue-wait calculations to be non-negative. Violated ordering would produce negative latency values on the CI metrics views. |
 
 Note: each pipeline run is allocated a **single** status by construction in the generator, so there is no `sum of buckets = total` check needed. The denominator reconciles trivially — the check validates status validity and time ordering only.
@@ -177,7 +177,8 @@ The front-end contract (Rule 1 in `web/docs/metric-coherence.md`) says:
 
 The ops generators take the "make them reconcile" path: the values are
 constrained at write time so the page never needs a caveat.  Where a caveat
-*is* appropriate (e.g., success rate + failure rate < 100% because some runs
-are cancelled), the existing frontend copy already explains the denominator —
+*is* appropriate (e.g., a rate whose denominator leaves some rows out, as the
+pipeline success and failure rates leave out cancelled, skipped and unfinished
+runs), the existing frontend copy already explains the denominator —
 the ops seed now produces data that is consistent with that explanation rather
 than contradicting it.

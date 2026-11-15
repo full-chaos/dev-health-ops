@@ -221,8 +221,9 @@ func TestResolve_ScopesEveryStatement(t *testing.T) {
 	}
 	// Each table read in the daily statement and the quadrant statement is org-scoped;
 	// the quadrant's repos subquery filters the org before it groups.
-	if strings.Count(cl.statements[0], "WHERE org_id = {org_id:String}") != 3 {
-		t.Error("the daily statement must scope all three tables")
+	// The stability rule reads a fourth table, testops_pipeline_metrics_daily, scoped the same way.
+	if strings.Count(cl.statements[0], "WHERE org_id = {org_id:String}") != 4 {
+		t.Error("the daily statement must scope all four tables")
 	}
 	if !strings.Contains(cl.statements[1], "WHERE org_id = {org_id:String}") || !strings.Contains(cl.statements[1], "FROM repos\n    WHERE org_id = {org_id:String}\n    GROUP BY id") {
 		t.Error("the quadrant statement must scope the release table and its repos join")

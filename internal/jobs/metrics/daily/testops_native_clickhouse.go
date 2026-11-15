@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/remaining"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/testops"
 )
 
@@ -115,6 +117,31 @@ type testopsNativeBatchConn interface {
 // Readers
 // -----------------------------------------------------------------------
 
+// testopsPipelineRunsSource and testopsSuiteResultsSource are the testops
+// families' source reads: the current version (FINAL) of each pipeline run
+// started in [start, end), and of each test suite whose start (or, without
+// one, finish) falls in it. The zero-row source check reads the same text.
+const (
+	testopsPipelineRunsSource = `
+FROM ci_pipeline_runs FINAL
+WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(UUID)}
+  AND started_at >= {start:DateTime64(3, 'UTC')} AND started_at < {end:DateTime64(3, 'UTC')}`
+	testopsSuiteResultsSource = `
+FROM test_suite_results FINAL
+WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(UUID)}
+  AND coalesce(started_at, finished_at) >= {start:DateTime64(3, 'UTC')}
+  AND coalesce(started_at, finished_at) < {end:DateTime64(3, 'UTC')}`
+)
+
+func testopsSourceArgs(orgID string, repoIDs []uuid.UUID, start, end time.Time) []any {
+	return []any{
+		clickhouse.Named("org_id", orgID),
+		clickhouse.Named("repo_ids", repoIDs),
+		clickhouse.Named("start", remaining.DateTime64Argument(start, remaining.DateTime64MillisecondPrecision)),
+		clickhouse.Named("end", remaining.DateTime64Argument(end, remaining.DateTime64MillisecondPrecision)),
+	}
+}
+
 // loadNativeTestopsPipelineRuns streams the deduped ci_pipeline_runs rows for
 // one (org, repo, day) straight into a testops.PipelineAccumulator. It never
 // builds a slice of rows, and it has no row cap.
@@ -133,12 +160,9 @@ func loadNativeTestopsPipelineRuns(
 ) error {
 	rows, err := conn.Query(ctx, `
 SELECT status, queued_at, started_at, finished_at, duration_seconds, queue_seconds,
-       retry_count, team_id, service_id, org_id, run_id
-FROM ci_pipeline_runs FINAL
-WHERE org_id = ? AND repo_id = ?
-  AND started_at >= ? AND started_at < ?
+       retry_count, team_id, service_id, org_id, run_id`+testopsPipelineRunsSource+`
 ORDER BY run_id`,
-		orgID, repoID, start.UTC(), end.UTC())
+		testopsSourceArgs(orgID, []uuid.UUID{repoID}, start, end)...)
 	if err != nil {
 		return fmt.Errorf("load native testops pipeline runs: %w", err)
 	}
@@ -182,12 +206,9 @@ func loadNativeTestopsSuites(
 	rows, err := conn.Query(ctx, `
 SELECT run_id, suite_id, total_count, passed_count, failed_count, skipped_count,
        error_count, quarantined_count, duration_seconds, started_at, finished_at,
-       team_id, service_id, org_id
-FROM test_suite_results FINAL
-WHERE org_id = ? AND repo_id = ?
-  AND coalesce(started_at, finished_at) >= ? AND coalesce(started_at, finished_at) < ?
+       team_id, service_id, org_id`+testopsSuiteResultsSource+`
 ORDER BY run_id, suite_id`,
-		orgID, repoID, start.UTC(), end.UTC())
+		testopsSourceArgs(orgID, []uuid.UUID{repoID}, start, end)...)
 	if err != nil {
 		return fmt.Errorf("load native testops suite results: %w", err)
 	}

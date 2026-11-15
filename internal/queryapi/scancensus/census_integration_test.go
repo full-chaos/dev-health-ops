@@ -582,7 +582,7 @@ internal/queryapi/explain/repositories.go|fetchWorkItemProviders|*string|cc6f1e4
 internal/queryapi/home/queries_metric_drivers_batch.go|fetchMetricDriversBatch|*string,*string|61d29f14b0f2|not-describable
 internal/queryapi/home/queries_metrics.go|fetchBlockedHours|*time.Time,*float64|626f0d2551e1|not-describable
 internal/queryapi/home/queries_metrics.go|fetchChangeFailureView|[]any|cf1d07948519|variadic-destinations
-internal/queryapi/home/queries_metrics.go|fetchMetricDriverDelta|*string,**float64,**float64|d7c6b55dc5f3|not-describable
+internal/queryapi/home/queries_metrics.go|fetchMetricDriverDelta|*string,**float64,**float64|66779bcf8e59|not-describable
 internal/queryapi/home/queries_metrics.go|fetchMetricSeries|*time.Time,**float64|8fb98d9737e7|spliced-select-list
 internal/queryapi/home/queries_metrics.go|fetchMetricValue|*int64,**float64|dc4e9ea6b024|spliced-select-list
 internal/queryapi/home/queries_metrics.go|fetchPRReworkView|[]any|edd1ff81c902|variadic-destinations

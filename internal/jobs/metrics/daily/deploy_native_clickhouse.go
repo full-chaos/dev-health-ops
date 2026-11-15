@@ -6,15 +6,39 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/deploymentstatus"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/numerical"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/remaining"
 )
 
-// LoadDeployments ports load_cicd_data's deploy_query
-// (src/dev_health_ops/metrics/loaders/clickhouse.py:1218-1223) -- see
-// DeployExecutor's doc comment (deploy_native_executor.go) for why this
+// deploySource is the deploy family's source: exactly the deployments
+// ComputeDeployMetrics counts. deployed_at in [start, end) is load_cicd_data's
+// deploy_query window (src/dev_health_ops/metrics/loaders/clickhouse.py:
+// 1218-1223); the canceled exclusion is deploymentstatus.Classify's, which the
+// compute applies as well. The zero-row source check reads this same text.
+var deploySource = `
+FROM deployments
+WHERE org_id = {org_id:String}
+  AND deployed_at >= {start:DateTime64(3, 'UTC')} AND deployed_at < {end:DateTime64(3, 'UTC')}
+  AND repo_id IN {repo_ids:Array(UUID)}
+  AND ` + deploymentstatus.CanceledExclusionSQL("status")
+
+func deploySourceArgs(organizationID string, repoIDs []uuid.UUID, start, end time.Time) []any {
+	return []any{
+		clickhouse.Named("org_id", organizationID),
+		clickhouse.Named("start", remaining.DateTime64Argument(start, remaining.DateTime64MillisecondPrecision)),
+		clickhouse.Named("end", remaining.DateTime64Argument(end, remaining.DateTime64MillisecondPrecision)),
+		clickhouse.Named("repo_ids", repoIDs),
+		clickhouse.Named("canceled_statuses", deploymentstatus.CanceledStatuses),
+	}
+}
+
+// LoadDeployments ports load_cicd_data's deploy_query through deploySource --
+// see DeployExecutor's doc comment (deploy_native_executor.go) for why this
 // deliberately omits FINAL and filters on deployed_at alone rather than the
 // four-way coalesce a DIFFERENT family's (DORA's) loader uses on the same
 // table. Only the columns compute_deploy_metrics_daily actually reads
@@ -31,11 +55,8 @@ func LoadDeployments(
 		return nil, nil
 	}
 	rows, err := conn.Query(ctx, `
-SELECT repo_id, status, started_at, finished_at, deployed_at, merged_at
-FROM deployments
-WHERE org_id = ?
-  AND deployed_at >= ? AND deployed_at < ?
-  AND repo_id IN ?`, organizationID, start.UTC(), end.UTC(), repositoryUUIDStrings(repoIDs))
+SELECT repo_id, status, started_at, finished_at, deployed_at, merged_at`+deploySource,
+		deploySourceArgs(organizationID, repoIDs, start, end)...)
 	if err != nil {
 		return nil, fmt.Errorf("load deployments: %w", err)
 	}

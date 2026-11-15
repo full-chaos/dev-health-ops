@@ -119,7 +119,10 @@ func (executor *IncidentExecutor) ComputeFamily(
 	dayEnd := dayStart.AddDate(0, 0, 1)
 	computedAt := executor.nowUTC()
 
-	incidents, err := LoadIncidentsStarted(ctx, executor.conn, run.OrganizationID, repoIDs, dayStart, dayEnd, computedAt, executor.observer)
+	// The mapping validity instant is the one the partition's source check
+	// used, so both read the same mappings.
+	asOf := sourceAsOf(ctx, computedAt)
+	incidents, err := LoadIncidentsStarted(ctx, executor.conn, run.OrganizationID, repoIDs, dayStart, dayEnd, asOf, executor.observer)
 	if err != nil {
 		return 0, err
 	}

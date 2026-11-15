@@ -38,6 +38,10 @@ func metricFromClause(table, column, scopeFilter, startParam, endParam string) s
 		scopeFilter += "\n              AND " + rowview.OrgPredicate(table, "")
 	}
 	valueColumns := []string{column}
+	if isPipelineSuccess(table, column) {
+		// The rate is computed from the day's completed-run counts, never read as a stored ratio.
+		valueColumns = []string{"success_count", "failure_count"}
+	}
 	if table == changefailure.Table {
 		// change failure rate is computed from the day's counts, never read
 		// as a stored ratio.
@@ -104,6 +108,9 @@ func metricValueExpression(table, column, aggregator, shareSQL string) string {
 		// NULL when the window is not applicable (no deployment) or unknown
 		// (no incident evidence): missing is not healthy.
 		return changefailure.WindowRateSQL
+	}
+	if isPipelineSuccess(table, column) {
+		return pipelineSuccessWindowRateSQL
 	}
 	if aggregator == "sum" && shareSQL != "" {
 		// A team scope sums each repository at the share of it the team holds (teamscope.RepoShare, CHAOS-9413).
@@ -272,6 +279,17 @@ func isPRRework(table, column string) bool {
 	return table == prrework.Table && column == prrework.DeprecatedRatioColumn
 }
 
+// pipelineSuccessWindowRateSQL is CI Success Rate over the rows of testops_pipeline_metrics_daily already
+// deduplicated to the newest computed_at per (org_id, repo_id, day): the window's successes over its COMPLETED runs
+// (success plus failure; cancelled, skipped and running runs are out), never a mean of the stored rates. The same
+// table and rule as the TestOps Pipelines series and the Delivery Risk factor. NULL when no run completed: missing,
+// not 0 and not 100.
+const pipelineSuccessWindowRateSQL = `if(sum(success_count) + sum(failure_count) = 0, NULL, toFloat64(sum(success_count)) / toFloat64(sum(success_count) + sum(failure_count)))`
+
+func isPipelineSuccess(table, column string) bool {
+	return table == "testops_pipeline_metrics_daily" && column == "success_count"
+}
+
 // fetchPRReworkView reads the window's summed rework counts for the scope and
 // the number of stored rows that hold counts, from the newest version of each
 // repository and day (the same deduplicated source as the series).
@@ -375,6 +393,9 @@ func fetchMetricDriverDelta(ctx context.Context, client QueryClient, table, colu
 	}
 	if table == changefailure.Table {
 		return fetchRateDriverDelta(ctx, client, changefailure.WindowRateSQL, groupBy, currentFrom, previousFrom, startDay, endDay, compareStart, compareEnd, scopeBindings, orgID, limit)
+	}
+	if isPipelineSuccess(table, column) {
+		return fetchRateDriverDelta(ctx, client, pipelineSuccessWindowRateSQL, groupBy, currentFrom, previousFrom, startDay, endDay, compareStart, compareEnd, scopeBindings, orgID, limit)
 	}
 	query := fmt.Sprintf(`
         SELECT

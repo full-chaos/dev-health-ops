@@ -41,9 +41,12 @@ func TestHomeWithATeamAndARepositoryTheTeamHoldsRunsOnTheRealSchema(t *testing.T
 	exec(`INSERT INTO repo_metrics_daily (repo_id, day, total_loc_touched, prs_merged, computed_at, org_id) VALUES (?, ?, 100, 5, ?, ?)`, repoA, day, synced, org)
 	// A statement only fails on the UUID/String comparison when its table holds data (the key
 	// condition is analysed over the parts): one row in every repository-keyed metric table.
-	for _, table := range []string{"deploy_metrics_daily", "cicd_metrics_daily", "repo_change_failure_daily"} {
+	for _, table := range []string{"deploy_metrics_daily", "repo_change_failure_daily"} {
 		exec(`INSERT INTO `+table+` (repo_id, day, computed_at, org_id) VALUES (?, ?, ?, ?)`, repoA, day, synced, org)
 	}
+	// CI Success reads testops_pipeline_metrics_daily (it no longer reads cicd_metrics_daily): the row carries the
+	// completed-run counts the statement sums.
+	exec(`INSERT INTO testops_pipeline_metrics_daily (repo_id, day, pipelines_count, success_count, failure_count, cancelled_count, success_rate, failure_rate, cancel_rate, rerun_rate, computed_at, org_id) VALUES (?, ?, 3, 2, 1, 0, 0.6666666666666666, 0.3333333333333333, 0, 0, ?, ?)`, repoA, day, synced, org)
 	f := Filters{
 		Time:  TimeFilter{RangeDays: 7, CompareDays: 7, EndDate: ptrTime(day.AddDate(0, 0, 3))},
 		Scope: ScopeFilter{Level: "team", IDs: []string{"team-alpha"}},

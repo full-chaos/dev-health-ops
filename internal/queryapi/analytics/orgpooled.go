@@ -18,8 +18,9 @@ import (
 // sankey differ only in the rows they cover.
 //
 // A sample is the daily writer's own (internal/jobs/metrics/testops/compute.go, safeDurationSeconds and
-// TestAccumulator.AddSuite): a run duration is duration_seconds when it is not negative, else finished_at - started_at
-// when that is not negative, else no sample; a queue sample is queue_seconds when not negative, else started_at -
+// TestAccumulator.AddSuite), and a run with the stored status deleted is no sample (ExcludedFromPipelineCounts): a run
+// duration is duration_seconds when it is not negative, else finished_at - started_at when that is not negative, else no
+// sample; a queue sample is queue_seconds when not negative, else started_at -
 // queued_at when not negative; a suite duration is duration_seconds when not negative, with no timestamp fallback. A
 // run belongs to the UTC day it started, a suite to the day it started (else finished), as the writer reads them, and
 // only the repository-days the writer computed are read (the semi-join on the daily table's keys), so every series
@@ -34,6 +35,11 @@ const (
 	pooledQueueSample    = "queue_sample"
 )
 
+// pooledCountedRunPredicate leaves out a run whose stored status is deleted (the provider no longer has it), as the
+// daily writer does. The text is the writer's own predicate (testops.StatusDeleted); query-api does not import the
+// writer's package, so a test pins the two to each other.
+const pooledCountedRunPredicate = "lowerUTF8(trimBoth(ifNull(status, ''))) != 'deleted'"
+
 // The pooled sources. Neither carries a team column: a TestOps team is the owner of the repository at the request.
 const pooledPipelineRunsSource = `(
     SELECT
@@ -47,6 +53,7 @@ const pooledPipelineRunsSource = `(
     FROM ci_pipeline_runs FINAL
     WHERE org_id = {org_id:String}
       AND toDate(started_at) >= {start_date:Date} AND toDate(started_at) < {end_date:Date}
+      AND ` + pooledCountedRunPredicate + `
       AND (repo_id, toDate(started_at)) IN (
           SELECT repo_id, day FROM testops_pipeline_metrics_daily
           WHERE org_id = {org_id:String} AND day >= {start_date:Date} AND day < {end_date:Date})

@@ -27,6 +27,7 @@ type poolRun struct {
 	queued   *time.Time
 	synced   time.Time
 	team     string // the team_id stored on the raw row ("" = NULL)
+	status   string // the stored status ("" = success)
 }
 
 type poolSuite struct {
@@ -63,8 +64,12 @@ func (e *ownersEnv) runs(org, repo string, runs ...poolRun) {
 		if r.team != "" {
 			team = r.team
 		}
-		e.exec(`INSERT INTO ci_pipeline_runs (repo_id, run_id, status, queued_at, started_at, finished_at, last_synced, org_id, duration_seconds, queue_seconds, team_id) VALUES (?, ?, 'success', ?, ?, ?, ?, ?, ?, ?, ?)`,
-			repo, r.id, ms(r.queued), ms(&r.started), ms(r.finished), ms(&synced), org, r.duration, r.queue, team)
+		status := r.status
+		if status == "" {
+			status = "success"
+		}
+		e.exec(`INSERT INTO ci_pipeline_runs (repo_id, run_id, status, queued_at, started_at, finished_at, last_synced, org_id, duration_seconds, queue_seconds, team_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			repo, r.id, status, ms(r.queued), ms(&r.started), ms(r.finished), ms(&synced), org, r.duration, r.queue, team)
 	}
 }
 
@@ -315,6 +320,9 @@ func TestTestopsPooledSeriesEqualTheWriterOnOneRepositoryDay(t *testing.T) {
 		poolRun{id: "versioned", started: h(8), duration: pf(12), queue: pf(3), synced: poolSynced},
 		// Started a millisecond before the day: the day before, in neither.
 		poolRun{id: "day-before", started: day1.Add(-time.Millisecond), duration: pf(77777), queue: pf(77777)},
+		// A run the provider no longer has (stored status deleted, any case and padding): no sample, as the writer.
+		poolRun{id: "deleted", started: h(9), duration: pf(5000), queue: pf(5000), status: "deleted"},
+		poolRun{id: "deleted-padded", started: h(10), duration: pf(6000), queue: pf(6000), status: " Deleted "},
 	)
 	e.suites(org, repo,
 		poolSuite{run: "explicit", id: "s1", started: pt(h(1)), duration: pf(12.5)},

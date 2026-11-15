@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/goapiproof"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/refusedaddr"
 )
 
 type timeoutLeg struct {
@@ -42,6 +43,7 @@ func startTimeoutLeg(t *testing.T, leg timeoutLeg, calls *int, mu *sync.Mutex) s
 	}))
 	if leg.closed {
 		srv.Close()
+		return "http://" + refusedaddr.Addr(t)
 	} else {
 		t.Cleanup(srv.Close)
 	}

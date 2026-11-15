@@ -42,15 +42,16 @@ func TestClickHouseSourceDataCheckerMatchesDailyEligibilityIntersection(t *testi
 
 	for _, statement := range []string{
 		`CREATE TABLE ci_pipeline_runs (
-    org_id String, repo_id UUID,
+    org_id String, repo_id UUID, run_id String DEFAULT toString(generateUUIDv4()),
     started_at Nullable(DateTime64(3, 'UTC')), finished_at Nullable(DateTime64(3, 'UTC'))
-) ENGINE = MergeTree ORDER BY (org_id, repo_id)`,
+) ENGINE = ReplacingMergeTree ORDER BY (org_id, repo_id, run_id)`,
 		`CREATE TABLE cicd_metrics_daily (org_id String, repo_id UUID, day Date)
  ENGINE = MergeTree ORDER BY (org_id, repo_id, day)`,
 		`CREATE TABLE deployments (
     org_id String, repo_id UUID,
     deployed_at Nullable(DateTime64(3, 'UTC')), finished_at Nullable(DateTime64(3, 'UTC')),
-    started_at Nullable(DateTime64(3, 'UTC')), last_synced Nullable(DateTime64(3, 'UTC'))
+    started_at Nullable(DateTime64(3, 'UTC')), last_synced Nullable(DateTime64(3, 'UTC')),
+    status Nullable(String)
 ) ENGINE = MergeTree ORDER BY (org_id, repo_id)`,
 		`CREATE TABLE deploy_metrics_daily (org_id String, repo_id UUID, day Date)
  ENGINE = MergeTree ORDER BY (org_id, repo_id, day)`,
@@ -95,7 +96,7 @@ func TestClickHouseSourceDataCheckerMatchesDailyEligibilityIntersection(t *testi
 	insertPartitionScope(t, ctx, pool, runID, partitionID, orgID, "2026-08-25", []RepositoryID{repoID})
 
 	if err := conn.Exec(ctx, `
-INSERT INTO ci_pipeline_runs VALUES
+INSERT INTO ci_pipeline_runs (org_id, repo_id, started_at, finished_at) VALUES
 ('00000000-0000-4000-8000-000000000009', toUUID('00000000-0000-4000-8000-000000000002'),
  toDateTime64('2026-08-24 23:00:00', 3, 'UTC'), toDateTime64('2026-08-25 01:00:00', 3, 'UTC')),
 ('00000000-0000-4000-8000-000000000009', toUUID('00000000-0000-4000-8000-000000000002'),
@@ -108,7 +109,7 @@ INSERT INTO cicd_metrics_daily VALUES
 		t.Fatal(err)
 	}
 	if err := conn.Exec(ctx, `
-INSERT INTO deployments VALUES
+INSERT INTO deployments (org_id, repo_id, deployed_at, finished_at, started_at, last_synced) VALUES
 ('00000000-0000-4000-8000-000000000009', toUUID('00000000-0000-4000-8000-000000000002'),
  NULL, toDateTime64('2026-08-25 01:00:00', 3, 'UTC'),
  toDateTime64('2026-08-25 00:30:00', 3, 'UTC'), NULL)`); err != nil {
@@ -140,7 +141,7 @@ INSERT INTO repos VALUES
 	if err != nil {
 		t.Fatal(err)
 	}
-	families, err := checker.ZeroRowFamiliesWithSourceData(ctx, partitionID)
+	families, err := zeroRowFamiliesNow(ctx, checker, partitionID)
 	if err != nil {
 		t.Fatal(err)
 	}

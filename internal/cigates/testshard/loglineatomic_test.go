@@ -307,7 +307,7 @@ func TestTheRowsCallsLogIsLineWholeToo(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(bin, "go"), []byte("#!/usr/bin/env bash\ncat \"${EVENTS}\"\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	driver := "set -euo pipefail\ndie() { echo \"$*\" >&2; exit 2; }\nGO_ENV_OFF=(env)\n" + block + fn +
+	driver := "set -euo pipefail\ndie() { echo \"$*\" >&2; exit 2; }\nGO_ENV_OFF=(env)\nLEG_TEST_GOFLAGS=-trimpath\n" + block + fn +
 		"\ngo_test_json_run_t 10m \"${DIR}/rows.json\" \"${DIR}/rows.log\" ./x\n"
 	cmd := exec.Command("bash", "-c", driver)
 	cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "EVENTS="+events, "DIR="+dir)

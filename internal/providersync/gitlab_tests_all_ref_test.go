@@ -101,8 +101,16 @@ func (doer *gitLabAllRefDoer) Do(request *http.Request) (*http.Response, error) 
 		pipeline := findPipeline(id)
 		if request.URL.Query().Get("include_retried") == "true" {
 			doer.requests = append(doer.requests, id+" jobs include_retried")
-			body = `[{"id":11,"name":"unit","stage":"test","status":"success","started_at":"` + pipeline.Started +
-				`","finished_at":"` + pipeline.Finished + `","runner":{"runner_type":"instance_type"}}]`
+			jobs := []string{}
+			for _, job := range pipeline.ArtifactJobs {
+				jobs = append(jobs, `{"id":`+job.ID+`,"name":"unit","artifacts_file":{"filename":"reports.zip"},"status":"success","started_at":"`+
+					pipeline.Started+`","finished_at":"`+pipeline.Finished+`","runner":{"runner_type":"instance_type"}}`)
+			}
+			if len(jobs) == 0 {
+				jobs = append(jobs, `{"id":11,"name":"unit","stage":"test","status":"success","started_at":"`+pipeline.Started+
+					`","finished_at":"`+pipeline.Finished+`","runner":{"runner_type":"instance_type"}}`)
+			}
+			body = "[" + strings.Join(jobs, ",") + "]"
 			break
 		}
 		doer.requests = append(doer.requests, id+" jobs")
@@ -240,7 +248,7 @@ func TestGitLabTestsReportPhaseFetchesPipelinesOfEveryRef(t *testing.T) {
 				t.Fatalf("case runs = %v", runs)
 			}
 			for _, id := range []string{"9001", "9002", "9003"} {
-				for _, want := range []string{id + " test_report", id + " jobs"} {
+				for _, want := range []string{id + " test_report", id + " jobs include_retried"} {
 					if !slices.Contains(doer.requests, want) {
 						t.Fatalf("pipeline %s: no request %q (requests %v)", id, want, doer.requests)
 					}

@@ -17,7 +17,7 @@ import (
 // real ci/check_go.sh, ci/go_race_shard.awk and ci/go_test_weights.tsv; the leg-count pin is the Go port of the workflow
 // matrix check of tests/tooling/test_go_quality_legs.py.
 
-const shardCount = 10
+const shardCount = 12
 
 func repoRoot(t *testing.T) string {
 	t.Helper()
@@ -37,11 +37,31 @@ func repoRoot(t *testing.T) string {
 	}
 }
 
+// deadlineEnvNames: the variables ci/check_go.sh reads for the job budget. Same list as deadlineEnvNames in
+// internal/cigates/checkgo/testcontainers_session_reap_test.go.
+var deadlineEnvNames = []string{"GITHUB_ACTIONS", "CHECK_GO_JOB_CAP_MIN", "CHECK_GO_JOB_START", "CHECK_GO_NOW_EPOCH", "CHECK_GO_NOW_EPOCH_FILE"}
+
+// jobBudgetFreeEnviron is the test process environment without the job-budget variables: a long leg exports them, and a child
+// check_go.sh would then refuse to start a go test the test itself never bounded by the leg's cap.
+func jobBudgetFreeEnviron() []string {
+	skip := map[string]bool{}
+	for _, name := range deadlineEnvNames {
+		skip[name] = true
+	}
+	var env []string
+	for _, kv := range os.Environ() {
+		if !skip[strings.SplitN(kv, "=", 2)[0]] {
+			env = append(env, kv)
+		}
+	}
+	return env
+}
+
 func run(t *testing.T, env []string, name string, args ...string) (string, string, error) {
 	t.Helper()
 	cmd := exec.Command(name, args...)
 	cmd.Dir = repoRoot(t)
-	cmd.Env = append(append(os.Environ(), reportOnlyEnv+"="), env...)
+	cmd.Env = append(append(jobBudgetFreeEnviron(), reportOnlyEnv+"="), env...)
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	err := cmd.Run()
@@ -418,7 +438,7 @@ func TestTheWallTimeGuardNamesTheHeaviestByWeightWhenNothingIsMeasured(t *testin
 	for _, r := range weightRows(t) {
 		weights[r.pkg] = r.seconds
 	}
-	plan := shardPlan(t, 1, shardCount)
+	plan := shardPlan(t, guardShard, shardCount)
 	sort.SliceStable(plan, func(i, j int) bool {
 		wi, wj := weights[keyOf(mod, plan[i])], weights[keyOf(mod, plan[j])]
 		if wi != wj {
@@ -426,7 +446,7 @@ func TestTheWallTimeGuardNamesTheHeaviestByWeightWhenNothingIsMeasured(t *testin
 		}
 		return plan[i] < plan[j]
 	})
-	_, errs, err := checkGo(t, nil, "test-shard-wall-guard", "1", fmt.Sprint(shardCount), "1600", writeLog(t, ""))
+	_, errs, err := checkGo(t, nil, "test-shard-wall-guard", fmt.Sprint(guardShard), fmt.Sprint(shardCount), "1600", writeLog(t, ""))
 	if err == nil {
 		t.Fatal("a shard over the bound must fail even when no package time was measured")
 	}

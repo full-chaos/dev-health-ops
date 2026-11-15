@@ -24,7 +24,10 @@ type githubTestsReportWindowDoer struct {
 	archive       []byte
 	updatedAt     string
 	omitUpdatedAt bool
+	status        string
+	createdAt     string
 	requests      []string
+	runQueries    []string
 }
 
 func (doer *githubTestsReportWindowDoer) Do(request *http.Request) (*http.Response, error) {
@@ -37,12 +40,20 @@ func (doer *githubTestsReportWindowDoer) Do(request *http.Request) (*http.Respon
 	case "/repos/acme/api":
 		body = gitHubRepositoryFixture
 	case "/repos/acme/api/actions/runs":
+		doer.runQueries = append(doer.runQueries, request.URL.RawQuery)
+		runStatus, created := doer.status, doer.createdAt
+		if runStatus == "" {
+			runStatus = "completed"
+		}
+		if created == "" {
+			created = "2026-07-22T10:00:00Z"
+		}
 		updated := `,"updated_at":"` + doer.updatedAt + `"`
 		if doer.omitUpdatedAt {
 			updated = ""
 		}
-		body = `{"workflow_runs":[{"id":9001,"name":"CI","status":"completed","conclusion":"success",` +
-			`"created_at":"2026-07-22T10:00:00Z","run_started_at":"2026-07-22T10:01:00Z"` + updated +
+		body = `{"workflow_runs":[{"id":9001,"name":"CI","status":"` + runStatus + `","conclusion":"success",` +
+			`"created_at":"` + created + `","run_started_at":"2026-07-22T10:01:00Z"` + updated +
 			`,"run_attempt":1,"event":"push","head_sha":"abc","head_branch":"main",` +
 			`"html_url":"https://github.com/acme/api/actions/runs/9001","pull_requests":[]}]}`
 	case "/repos/acme/api/actions/runs/9001/jobs":

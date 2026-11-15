@@ -235,9 +235,6 @@ func newCellPDP(t *testing.T) *cellPDP {
 			p.mu.Lock()
 			p.reasons = append(p.reasons, d.Reason)
 			p.mu.Unlock()
-			if d.Reason == authorization.ReasonAllowedByPlatformAdmin {
-				reason = "allowed_by_role"
-			}
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{

@@ -480,7 +480,7 @@ func (handler GitHubTestsRouteHandler) Collect(
 			return CompleteRouteBatch{}, providerfoundation.ErrNormalizationInvalid
 		}
 		pipeline, include := normalizeGitHubTestsPipeline(claim, repoID, run, normalizedAt)
-		if !include || githubTestsReportRunOutsideWindow(pipeline, claim) {
+		if !include || !githubTestsRunReadable(run) || githubTestsReportRunOutsideWindow(pipeline, claim) {
 			continue
 		}
 		artPage, pageErr := providerfoundation.CollectGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{
@@ -651,22 +651,15 @@ func (row githubTestsPipelineRow) StartedAtPtr() *time.Time { value := row.Start
 // the run conclusion does not matter either). The listing runs up to BeforeAt,
 // the same upper bound the pipeline/job pass has. Without it the listing walked
 // on to the present, so a catch-up window counted every later run against the
-// 10,000-run listing cap. It starts at the day of one window width before
-// SinceAt, the lookback githubTestsReportRunOutsideWindow keeps runs for: a run
-// created before midnight that is still running (or finishes) after it must
-// still be listed, because it is created earlier than the window.
+// 10,000-run listing cap. Its start is githubTestsArtifactRunsCreatedFrom: a run
+// created before the window that is still changing inside it must be listed.
 func githubTestsArtifactRunQuery(claim Claim) url.Values {
 	query := url.Values{"per_page": {"100"}}
 	switch {
 	case claim.SinceAt != nil && claim.BeforeAt != nil:
-		since, before := claim.SinceAt.UTC(), claim.BeforeAt.UTC()
-		lookback := since
-		if width := before.Sub(since); width > 0 {
-			lookback = since.Add(-width)
-		}
-		query.Set("created", lookback.Format(time.DateOnly)+".."+before.Format(time.RFC3339))
+		query.Set("created", githubTestsArtifactRunsCreatedFrom(claim)+".."+claim.BeforeAt.UTC().Format(time.RFC3339))
 	case claim.SinceAt != nil:
-		query.Set("created", ">="+claim.SinceAt.UTC().Format(time.DateOnly))
+		query.Set("created", ">="+githubTestsArtifactRunsCreatedFrom(claim))
 	case claim.BeforeAt != nil:
 		query.Set("created", "*.."+claim.BeforeAt.UTC().Format(time.RFC3339))
 	}
@@ -712,6 +705,26 @@ func githubTestsReportRunOutsideWindow(pipeline githubTestsPipelineRow, claim Cl
 		return false
 	}
 	return pipeline.FinishedAt.UTC().Before(since.Add(-width))
+}
+
+// githubTestsRunReadable: a run's report artifacts are read only once the run
+// is completed. A run read mid-flight lists a partial artifact set whose ids
+// differ from the finished run's, so the same cases land under two keys.
+func githubTestsRunReadable(run gitHubWorkflowRunPayload) bool {
+	return stringValue(run.Status) == "completed"
+}
+
+// githubTestsArtifactRunsCreatedFrom is the date a run listing starts from:
+// the since date minus the claim's width, at least one day. It is never
+// stricter than githubTestsReportRunOutsideWindow, which keeps a run that
+// finished at or after since minus width, so a run created before the window
+// and completed inside it is still listed.
+func githubTestsArtifactRunsCreatedFrom(claim Claim) string {
+	width := 24 * time.Hour
+	if claim.BeforeAt != nil {
+		width = max(width, claim.BeforeAt.UTC().Sub(claim.SinceAt.UTC()))
+	}
+	return claim.SinceAt.UTC().Add(-width).Format(time.DateOnly)
 }
 
 func normalizeGitHubTestsPipeline(claim Claim, repoID string, run gitHubWorkflowRunPayload, at time.Time) (githubTestsPipelineRow, bool) {

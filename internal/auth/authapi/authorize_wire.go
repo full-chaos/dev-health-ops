@@ -31,23 +31,12 @@ var authorizeStateFailures = []authorization.Reason{
 	authorization.ReasonClockUnavailable,
 }
 
-// internalOnlyReasons are Reasons the wire does not name: each answers with the
-// wire code of its value here. allowed_by_platform_admin answers allowed_by_role,
-// the code every released policy-enforcement client accepts as an allow; the log
-// line keeps the internal Reason.
-var internalOnlyReasons = map[authorization.Reason]authorization.Reason{
-	authorization.ReasonAllowedByPlatformAdmin: authorization.ReasonAllowedByRole,
-}
-
 // wireReasonCode is the decision reason_code of a Reason that reaches the
-// wire: the Reason's own token, or its internalOnlyReasons code. ok is false
-// for a state failure and for a value outside authorization.AllReasons.
+// wire: the Reason's own token. ok is false for a state failure and for a value
+// outside authorization.AllReasons.
 func wireReasonCode(reason authorization.Reason) (string, bool) {
 	if slices.Contains(authorizeStateFailures, reason) || !slices.Contains(authorization.AllReasons(), reason) {
 		return "", false
-	}
-	if code, ok := internalOnlyReasons[reason]; ok {
-		return string(code), true
 	}
 	return string(reason), true
 }

@@ -18,9 +18,9 @@ func TestGitHubTestsArtifactRunQueryBoundsTheWindowAndNeverFiltersByBranch(t *te
 		since, before *time.Time
 		want          string
 	}{
-		"both":                 {&since, &before, "2026-07-22..2026-07-22T11:30:00Z"},
+		"both":                 {&since, &before, "2026-07-21..2026-07-22T11:30:00Z"},
 		"both across midnight": {&midnight, &afterMidnight, "2026-07-21..2026-07-22T01:00:00Z"},
-		"since only":           {&since, nil, ">=2026-07-22"},
+		"since only":           {&since, nil, ">=2026-07-21"},
 		"before only":          {nil, &before, "*..2026-07-22T11:30:00Z"},
 		"neither":              {nil, nil, ""},
 	} {

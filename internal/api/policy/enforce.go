@@ -74,7 +74,7 @@ var enforceOutcomes = []string{enforceOutcomeAllow, enforceOutcomeDeny, enforceO
 // its handler still refuses the value. Two callers keep the legacy answer, the named residual (CHAOS-10872 D6989): an
 // impersonation read and a delegated session's bearer with no organization; the answer is the one the route gives with its
 // cell off. A request with no user access token cannot reach an enforced row (authentication refuses it first); if one
-// does, it is refused, logged as an error and counted error_deny.
+// does, it is refused first, before any other branch, logged as an error and counted error_deny.
 // Operator runbook: docs/operate/runbooks/auth-pdp-outage-and-rollback.md
 type Enforcer struct {
 	decider pep.Decider
@@ -276,6 +276,12 @@ func (e *Enforcer) decideOnce(ctx context.Context, o enforceObservation) enforce
 	if !ok || !e.sw.On(row.Namespace) {
 		return enforceNotCovered
 	}
+	if o.bearer == "" || !o.userAccessToken {
+		countEnforce(ctx, row.Namespace, enforceOutcomeErrorDeny)
+		e.logger.ErrorContext(ctx, "api enforcement: a request with no user access token reached an enforced row, refused",
+			slog.String("route", o.pattern), slog.String("namespace", row.Namespace))
+		return enforceDeny
+	}
 	if e.unconfigured {
 		countEnforce(ctx, row.Namespace, enforceOutcomeErrorDeny)
 		return enforceNoDecisionPoint
@@ -299,12 +305,6 @@ func (e *Enforcer) decideOnce(ctx context.Context, o enforceObservation) enforce
 	// organization row it is asked the platform action instead, whatever it serves (S1).
 	if row.ResourceType == policycatalog.ScopeOrganization && o.orgID == "" && o.bearer != "" && o.userAccessToken {
 		return e.decideOrgless(ctx, o, row)
-	}
-	if o.bearer == "" || !o.userAccessToken {
-		countEnforce(ctx, row.Namespace, enforceOutcomeErrorDeny)
-		e.logger.ErrorContext(ctx, "api enforcement: a request with no user access token reached an enforced row, refused",
-			slog.String("route", o.pattern), slog.String("namespace", row.Namespace))
-		return enforceDeny
 	}
 	org := strings.ToLower(o.orgID)
 	if o.adminOr && row.ResourceType == policycatalog.ScopePlatform {

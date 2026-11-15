@@ -275,6 +275,10 @@ func fetchChangeFailureView(ctx context.Context, client QueryClient, startDay, e
 
 // isPRRework says that a metric spec is the pull request rework ratio: the
 // one repo_metrics_daily metric that is a ratio of stored counts.
+func isPRRework(table, column string) bool {
+	return table == prrework.Table && column == prrework.DeprecatedRatioColumn
+}
+
 // pipelineSuccessWindowRateSQL is CI Success Rate over the rows of testops_pipeline_metrics_daily already
 // deduplicated to the newest computed_at per (org_id, repo_id, day): the window's successes over its COMPLETED runs
 // (success plus failure; cancelled, skipped and running runs are out), never a mean of the stored rates. The same
@@ -284,10 +288,6 @@ const pipelineSuccessWindowRateSQL = `if(sum(success_count) + sum(failure_count)
 
 func isPipelineSuccess(table, column string) bool {
 	return table == "testops_pipeline_metrics_daily" && column == "success_count"
-}
-
-func isPRRework(table, column string) bool {
-	return table == prrework.Table && column == prrework.DeprecatedRatioColumn
 }
 
 // fetchPRReworkView reads the window's summed rework counts for the scope and

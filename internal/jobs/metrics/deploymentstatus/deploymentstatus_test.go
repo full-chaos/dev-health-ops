@@ -4,6 +4,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"unicode"
 )
 
 func TestClassifyEveryStoredSpelling(t *testing.T) {
@@ -31,7 +32,24 @@ func TestOnlyFinalOutcomesAreTerminal(t *testing.T) {
 // The SQL side of the canceled test binds CanceledStatuses, so the list must be
 // exactly the set Classify calls Canceled, in normalized form.
 func TestCanceledStatusesAreExactlyWhatClassifyCancels(t *testing.T) {
+	// SQL lower and lowerUTF8 keep the same rows only while every entry is
+	// ASCII and no non-ASCII rune lowercases into a letter of an entry.
+	for r := rune(0x80); r <= unicode.MaxRune; r++ {
+		if lowered := unicode.ToLower(r); lowered < 0x80 {
+			for _, status := range CanceledStatuses {
+				if strings.ContainsRune(status, lowered) {
+					t.Errorf("U+%04X lowercases to %q, a letter of CanceledStatuses entry %q", r, lowered, status)
+				}
+			}
+		}
+	}
 	for _, status := range CanceledStatuses {
+		for _, r := range status {
+			if r >= 0x80 {
+				t.Errorf("CanceledStatuses entry %q is not ASCII", status)
+				break
+			}
+		}
 		if status != strings.ToLower(strings.TrimSpace(status)) {
 			t.Errorf("CanceledStatuses entry %q is not normalized", status)
 		}

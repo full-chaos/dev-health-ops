@@ -657,3 +657,156 @@ func TestRegistryTestopsOnlyComputedRepositoryDays(t *testing.T) {
 		mustEqual(t, metric+" over a day the writer did not compute", e.value(org, metric, "", "2026-01-01", "2026-01-06"), "total", want)
 	}
 }
+
+// A re-run attempt's report replaces the earlier attempt's: the suite totals of a run are the newest attempt of each
+// report slot, a legacy row (no slot: written before the slot columns, or by GitLab) counts unless its run also has slotted
+// rows. This is the daily writer's own rule (testopsNewestAttemptSuites), so the chart, the tile and the stored value agree.
+type attemptDoer struct {
+	t         *testing.T
+	runID     int
+	attempt   int
+	started   string
+	artifacts []string
+	zips      map[string][]string
+}
+
+func (d *attemptDoer) Do(request *http.Request) (*http.Response, error) {
+	status, header, body := http.StatusOK, http.Header{"Content-Type": {"application/json"}}, "{}"
+	path := request.URL.Path
+	const root = "/repos/acme/r"
+	switch {
+	case path == root:
+		body = `{"id":9100,"name":"r","full_name":"acme/r","html_url":"https://github.com/acme/r","default_branch":"main","archived":false,"updated_at":"2026-01-20T10:00:00Z","pushed_at":"2026-01-21T10:00:00Z"}`
+	case path == root+"/actions/runs":
+		body = fmt.Sprintf(`{"workflow_runs":[{"id":%d,"name":"CI","status":"completed","conclusion":"success","created_at":"2026-01-02T09:59:00Z","run_started_at":%q,"updated_at":"2026-01-02T12:30:00Z","run_attempt":%d,"event":"push","head_sha":"abc","head_branch":"main","html_url":"https://github.com/acme/r/actions/runs/%d","pull_requests":[]}]}`, d.runID, d.started, d.attempt, d.runID)
+	case strings.HasSuffix(path, "/jobs"):
+		body = `{"jobs":[]}`
+	case strings.HasSuffix(path, "/artifacts"):
+		body = `{"artifacts":[` + strings.Join(d.artifacts, ",") + `]}`
+	case strings.HasSuffix(path, "/zip"):
+		id := strings.TrimSuffix(strings.TrimPrefix(path, root+"/actions/artifacts/"), "/zip")
+		status = http.StatusFound
+		header.Set("Location", "https://blob.example/report-"+id+".zip")
+		body = ""
+	case strings.HasPrefix(path, "/report-"):
+		id := strings.TrimSuffix(strings.TrimPrefix(path, "/report-"), ".zip")
+		header.Set("Content-Type", "application/zip")
+		body = string(seedRun{suiteTimes: d.zips[id]}.junit())
+	default:
+		d.t.Fatalf("unexpected request %s", request.URL.String())
+	}
+	return &http.Response{StatusCode: status, Header: header, Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
+}
+
+func (e *pooledEnv) collectAttempt(org string, doer *attemptDoer, at time.Time) string {
+	e.t.Helper()
+	client, err := providerfoundation.NewHTTPClient("github", "https://api.github.com", fakehttp.Client(doer),
+		func(*http.Request) error { return nil },
+		providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond},
+		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	claim := pooledClaim(org, "acme/r")
+	batch, err := (providersync.GitHubTestsRouteHandler{}).Collect(e.ctx, claim, providerfoundation.Credential{}, client, at)
+	if err != nil {
+		e.t.Fatalf("collect: %v", err)
+	}
+	sink := providersync.TestOpsClickHouseEffects{Conn: e.conn, Lease: providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil })}
+	repo := ""
+	for _, effect := range batch.Effects {
+		if err := sink.WriteEffect(e.ctx, claim, effect); err != nil {
+			e.t.Fatalf("write %s: %v", effect.Destination, err)
+		}
+		if effect.Destination == "ci_pipeline_runs" && len(effect.Rows) > 0 {
+			var row struct {
+				RepoID string `json:"repo_id"`
+			}
+			if err := json.Unmarshal(effect.Rows[0], &row); err != nil {
+				e.t.Fatal(err)
+			}
+			repo = row.RepoID
+		}
+	}
+	return repo
+}
+
+func attemptArtifact(id int, created string) string {
+	return fmt.Sprintf(`{"id":%d,"name":"report","expired":false,"created_at":%q}`, id, created)
+}
+
+func (e *pooledEnv) storedSuiteQuantiles(org string) (p50, p95 float64) {
+	e.t.Helper()
+	var a, b *float64
+	if err := e.conn.QueryRow(e.ctx, `SELECT suite_duration_p50_seconds, suite_duration_p95_seconds FROM testops_test_metrics_daily FINAL WHERE org_id = ?`, org).Scan(&a, &b); err != nil || a == nil || b == nil {
+		e.t.Fatalf("stored suite quantiles: %v %v %v", a, b, err)
+	}
+	return *a, *b
+}
+
+func TestRegistryTestopsSuiteTotalsTakeTheNewestAttempt(t *testing.T) {
+	e := startPooledEnv(t)
+	org := e.newOrg()
+	// Attempt 1 uploads artifact 77 (two suites of 10 s and 20 s); the re-run attempt 2 uploads artifact 78 of the same
+	// name (one suite of 100 s) and the listing still holds artifact 77.
+	repo := e.collectAttempt(org, &attemptDoer{t: t, runID: 9001, attempt: 1, started: "2026-01-02T10:00:00Z",
+		artifacts: []string{attemptArtifact(77, "2026-01-02T10:05:00Z")}, zips: map[string][]string{"77": {"10", "20"}}},
+		time.Date(2026, 1, 9, 0, 0, 0, 0, time.UTC))
+	e.collectAttempt(org, &attemptDoer{t: t, runID: 9001, attempt: 2, started: "2026-01-02T12:00:00Z",
+		artifacts: []string{attemptArtifact(77, "2026-01-02T10:05:00Z"), attemptArtifact(78, "2026-01-02T12:05:00Z")},
+		zips:      map[string][]string{"77": {"10", "20"}, "78": {"100"}}},
+		time.Date(2026, 1, 10, 0, 0, 0, 0, time.UTC))
+	e.own(org, "team-r", repo)
+	e.computeDaily(org, []string{repo}, "2026-01-02")
+
+	storedP50, storedP95 := e.storedSuiteQuantiles(org)
+	if !near(storedP50, 100) || !near(storedP95, 100) {
+		t.Fatalf("the daily writer's own value is the newest attempt (100), got p50 %v p95 %v", storedP50, storedP95)
+	}
+	mustEqual(t, "suite p50 takes the newest attempt", e.value(org, "suite_duration_p50_seconds", "", "2026-01-01", "2026-01-06"), "total", 100)
+	mustEqual(t, "suite p95 takes the newest attempt", e.value(org, "suite_duration_p95_seconds", "", "2026-01-01", "2026-01-06"), "total", 100)
+	mustEqual(t, "team group", e.value(org, "suite_duration_p95_seconds", "team", "2026-01-01", "2026-01-06"), "team-r", 100)
+}
+
+// A legacy suite row counts when its run has no slotted row and is replaced when it has one. The legacy rows are written
+// through the real sink with BuildEffectBatch. NOT producible by the GitHub route (every row it writes now carries a slot);
+// the GitLab route and every row stored before the slot columns write them. Covers the legacy arm of the rule.
+func TestRegistryTestopsLegacySuiteRowsCountUnlessTheRunHasSlottedRows(t *testing.T) {
+	e := startPooledEnv(t)
+	org := e.newOrg()
+	// Run 9101 has a pipeline row and a legacy suite of 30 s only; run 9102 has a legacy suite of 1000 s and slotted rows.
+	repo := e.collectAttempt(org, &attemptDoer{t: t, runID: 9101, attempt: 1, started: "2026-01-02T10:00:00Z"}, time.Date(2026, 1, 9, 0, 0, 0, 0, time.UTC))
+	legacy := func(run, suite string, seconds float64) {
+		raw, err := json.Marshal(map[string]any{
+			"org_id": org, "repo_id": repo, "run_id": run, "suite_id": suite, "suite_name": "legacy", "total_count": 1,
+			"duration_seconds": seconds, "started_at": "2026-01-02T10:00:00Z", "last_synced": "2026-01-09T00:00:00Z",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		effect, err := providersync.BuildEffectBatch("test_suite_results", providersync.EffectReadbackRequired, []json.RawMessage{raw})
+		if err != nil {
+			t.Fatal(err)
+		}
+		sink := providersync.TestOpsClickHouseEffects{Conn: e.conn, Lease: providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil })}
+		if err := sink.WriteEffect(e.ctx, pooledClaim(org, "acme/r"), effect); err != nil {
+			t.Fatal(err)
+		}
+	}
+	legacy("9101", "legacy-a", 30)
+	e.collectAttempt(org, &attemptDoer{t: t, runID: 9102, attempt: 1, started: "2026-01-02T11:00:00Z"}, time.Date(2026, 1, 9, 0, 0, 0, 0, time.UTC))
+	legacy("9102", "legacy-b", 1000)
+	e.collectAttempt(org, &attemptDoer{t: t, runID: 9102, attempt: 1, started: "2026-01-02T11:00:00Z",
+		artifacts: []string{attemptArtifact(90, "2026-01-02T11:05:00Z")}, zips: map[string][]string{"90": {"5"}}},
+		time.Date(2026, 1, 10, 0, 0, 0, 0, time.UTC))
+	e.own(org, "team-r", repo)
+	e.computeDaily(org, []string{repo}, "2026-01-02")
+
+	want := floats(30, 5)
+	storedP50, storedP95 := e.storedSuiteQuantiles(org)
+	if !near(storedP50, inclusive(want, 0.5)) || !near(storedP95, inclusive(want, 0.95)) {
+		t.Fatalf("the daily writer's own value is over [30 5], got p50 %v p95 %v", storedP50, storedP95)
+	}
+	mustEqual(t, "suite p50", e.value(org, "suite_duration_p50_seconds", "", "2026-01-01", "2026-01-06"), "total", inclusive(want, 0.5))
+	mustEqual(t, "suite p95", e.value(org, "suite_duration_p95_seconds", "", "2026-01-01", "2026-01-06"), "total", inclusive(want, 0.95))
+}

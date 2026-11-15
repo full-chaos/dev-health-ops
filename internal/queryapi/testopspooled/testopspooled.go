@@ -53,6 +53,21 @@ const PipelineRunsSource = `(
           WHERE org_id = {org_id:String} AND day >= {start_date:Date} AND day < {end_date:Date})
 ) AS testops_pipeline_runs`
 
+// NewestAttemptSuites keeps, of a run's suite rows, the newest attempt of each report slot: a re-run job's report replaces
+// the earlier attempt's. A legacy row (no slot: written before the slot columns, or by GitLab) counts unless its run also has
+// slotted rows, which replace it. It is the daily writer's own rule (testopsNewestAttemptSuites in
+// internal/jobs/metrics/daily/testops_native_clickhouse.go), taken, as there, over every suite row of the run and not the
+// window's; the writer binds its statement to a repository list, this reads the organization, and the chart cells hold the two
+// to the same value on re-run data.
+const NewestAttemptSuites = `(
+        (report_slot != '' AND (repo_id, run_id, report_slot, run_attempt) IN (
+          SELECT repo_id, run_id, report_slot, max(run_attempt) FROM test_suite_results FINAL
+          WHERE org_id = {org_id:String} AND report_slot != ''
+          GROUP BY repo_id, run_id, report_slot))
+        OR (report_slot = '' AND (repo_id, run_id) NOT IN (
+          SELECT repo_id, run_id FROM test_suite_results FINAL
+          WHERE org_id = {org_id:String} AND report_slot != '')))`
+
 const SuiteRunsSource = `(
     SELECT
         org_id,
@@ -63,6 +78,7 @@ const SuiteRunsSource = `(
     FROM test_suite_results FINAL
     WHERE org_id = {org_id:String}
       AND toDate(coalesce(started_at, finished_at)) >= {start_date:Date} AND toDate(coalesce(started_at, finished_at)) < {end_date:Date}
+      AND ` + NewestAttemptSuites + `
       AND (repo_id, toDate(coalesce(started_at, finished_at))) IN (
           SELECT repo_id, day FROM testops_test_metrics_daily
           WHERE org_id = {org_id:String} AND day >= {start_date:Date} AND day < {end_date:Date})

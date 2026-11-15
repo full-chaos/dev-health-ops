@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/goapiproof"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/refusedaddr"
 )
 
 // skewServers serves the candidate body on every candidate call and, on
@@ -574,7 +575,8 @@ func TestProveOneRESTRequest_LegOrderSweep(t *testing.T) {
 			_, _ = w.Write([]byte(s.body))
 		}))
 		if s.closed {
-			return srv.URL, srv.Close
+			srv.Close()
+			return "http://" + refusedaddr.Addr(t), func() {}
 		}
 		t.Cleanup(srv.Close)
 		return srv.URL, func() {}

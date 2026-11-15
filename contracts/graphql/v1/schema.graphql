@@ -1754,6 +1754,11 @@ type Query {
   testopsJobFailures(orgId: String!, input: TestOpsJobFailuresInput!): TestOpsJobFailuresResult!
 
   """
+  Test data coverage and window rates of the TestOps Tests tab (CHAOS-13773): the share of completed CI runs that report tests, and the pass, failure and flake rates over the window. Computed at read time; the rates are weighted over the window (summed counts, never a mean of rates). Missing is not zero: a value with nothing to divide by is null.
+  """
+  testopsTestWindow(orgId: String!, input: TestOpsTestWindowInput!): TestOpsTestWindowResult!
+
+  """
   Each repository's coverage baseline (CHAOS-8111): its own mean coverage over the 30 days before ``endDate`` (``endDate`` itself is not included). Not a set target. One row per repository with a stored coverage row in those 30 days, in ``repoId`` order.
   """
   coverageBaselines(orgId: String!, endDate: Date!, repoIds: [String!] = null, teamIds: [String!] = null): [RepoCoverageBaseline!]!
@@ -2229,6 +2234,58 @@ type TestOpsJobFailuresResult {
   totalCount: Int!
   """True = ``totalCount`` is above the number of ``groups`` served."""
   truncated: Boolean!
+}
+
+input TestOpsTestWindowInput {
+  """First day of the window (UTC), included."""
+  sinceDate: Date!
+  """Last day of the window (UTC), included. At most 90 days after ``sinceDate``; a later day, or a day before ``sinceDate``, is an error, not a cut answer."""
+  untilDate: Date!
+  repoIds: [String!] = null
+  """
+  Team ids. Narrows to the repositories these teams OWN (team_repo_ownership, as of now); person membership is never read. With ``repoIds`` both apply.
+  """
+  teamIds: [String!] = null
+}
+
+"""
+How much of CI reports tests. A run counts when it is completed (success, failure, error or timeout, every workflow); cancelled, skipped, queued and running runs are not in it.
+"""
+type TestOpsTestCoverage {
+  """Completed CI runs whose start day is in the window, in scope, from every workflow and provider."""
+  completedRuns: Int!
+  """Of those, the runs with at least one stored test suite that holds at least one test case."""
+  runsWithTests: Int!
+  """``runsWithTests`` as a percent of ``completedRuns`` (0 to 100). Null = no completed run in scope (not 0)."""
+  sharePct: Float
+}
+
+"""The test cases of the window, summed over its repository days, by status."""
+type TestOpsTestCaseCounts {
+  passed: Int!
+  """Failed and errored cases."""
+  failed: Int!
+  skipped: Int!
+  quarantined: Int!
+  """Every case of the window, including skipped and quarantined."""
+  total: Int!
+}
+
+type TestOpsTestWindowResult {
+  sinceDate: Date!
+  untilDate: Date!
+  coverage: TestOpsTestCoverage!
+  cases: TestOpsTestCaseCounts!
+  """
+  ``passed / (passed + failed)`` over the window, as a percent (0 to 100); skipped and quarantined cases are not in the denominator. Null = no passed or failed case.
+  """
+  passRatePct: Float
+  """``failed / (passed + failed)`` over the window, as a percent (0 to 100). Null = no passed or failed case."""
+  failureRatePct: Float
+  """
+  Summed flaky case names over summed distinct case names of the window, as a percent (0 to 100). Null = no distinct case, or a day stored without the counts (the whole window is then unavailable, not a smaller one).
+  """
+  flakeRatePct: Float
 }
 
 type TestOpsRiskBreakdownItem {

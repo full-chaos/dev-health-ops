@@ -3,7 +3,6 @@ package server
 import (
 	"maps"
 	"net/http"
-	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
@@ -14,6 +13,7 @@ import (
 	authv1 "github.com/full-chaos/dev-health-ops/contracts/auth/v1"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/pdp"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/pdp/pdptest"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/refusedaddr"
 )
 
 // The seam routes hold one route of every action namespace of query-api's REST rows.
@@ -38,9 +38,7 @@ func TestSeamRoutesCoverEveryRESTNamespace(t *testing.T) {
 // On every namespace, with its cell on, a PDP outage (the listener gone, or a 503 with no decision) refuses the read
 // with a 503 before the handler: no read runs. The PDP is asked once, so the refusal is the outage's.
 func TestSeamRESTPDPOutageRunsNoRead(t *testing.T) {
-	gone := httptest.NewServer(http.NotFoundHandler())
-	goneURL := gone.URL
-	gone.Close()
+	goneURL := "http://" + refusedaddr.Addr(t)
 	failing := pdptest.New(t)
 	failing.Fail(http.StatusServiceUnavailable)
 	for _, route := range seamRoutes() {

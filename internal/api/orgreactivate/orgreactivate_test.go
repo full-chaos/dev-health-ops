@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/refusedaddr"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/workloadclient"
 )
 
@@ -145,9 +146,7 @@ func TestATimeoutAndAnUnreachableServerAreUnavailable(t *testing.T) {
 	if err := client.Reactivate(context.Background(), uuid.New(), uuid.New(), nil); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("timeout = %v, want ErrUnavailable", err)
 	}
-	closed := httptest.NewServer(http.NotFoundHandler())
-	base, _ = url.Parse(closed.URL)
-	closed.Close()
+	base, _ = url.Parse("http://" + refusedaddr.Addr(t))
 	client = newWorkloadClient(t, base, time.Second)
 	if err := client.Reactivate(context.Background(), uuid.New(), uuid.New(), nil); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("unreachable = %v, want ErrUnavailable", err)

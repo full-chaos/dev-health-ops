@@ -76,11 +76,10 @@ func (c *ssoCellClient) Deactivate(_ context.Context, org, _, _ uuid.UUID) (json
 	return c.provider(org), nil
 }
 
+// ssoRoutes is the go-api routes with the switch on and no organization entitled to sso_saml: a refusal of the org gate is
+// the not-entitled answer, never the failed read of the harness's closed-port pool.
 func ssoRoutes(client authprovision.SSOProviders) func(*testing.T, Deps) []httpapi.Route {
-	return func(_ *testing.T, deps Deps) []httpapi.Route {
-		deps.SSOProviders = client
-		return Routes(deps, quietLogger())
-	}
+	return ssoRoutesWith(client, &orgEntitlement{granted: map[string]bool{}}, quietLogger())
 }
 
 func ssoDo(handler http.Handler, key, token string) cellAnswer {

@@ -4,20 +4,18 @@
 // Every route but activate/deactivate and the eight OIDC/SAML/OAuth routes
 // below is gated by @require_feature("sso_saml", required_tier="enterprise").
 // None of those route functions takes a `session` or `org_id` keyword
-// argument, so the per-org check (_check_org_feature_async) never runs and
-// only the process license decides: has_feature("sso_saml") on the process
-// LicenseManager. D2749 (team-lead): CHAOS-6663 gave the Go api a REAL
-// process license (licensing.ProcessTier) -- community by default, and a
-// real, higher tier when LICENSE_KEY/LICENSE_PUBLIC_KEY are both set and
-// valid -- superseding this comment's earlier "runs without a process
-// license" framing. The claim that actually matters is unchanged: sso_saml
-// is not a community-tier feature, so absent a license whose tier grants
-// it, each gated route still answers exactly what the Python api answers
-// there: its authentication, then its query and body validation, then the
-// 402 -- not because no license exists, but because sso_saml is
-// structurally unported for every route except the eight below. Only the
-// provider CRUD routes (create/read/update/delete/list) are behind that
-// gate and are not ported.
+// argument, so in Python only the process license decided (has_feature on
+// the LicenseManager; the per-org _check_org_feature_async never ran). The
+// Go api's process license (CHAOS-6663, licensing.ProcessTier) is community
+// unless LICENSE_KEY/LICENSE_PUBLIC_KEY are set and valid, and sso_saml is
+// not a community feature. While auth-service owns the providers
+// (Deps.Providers), the five provider CRUD routes also take the caller
+// org's enterprise entitlement (providerGate, gate.go): product rule C1,
+// "Enterprise SSO != Enterprise self hosted" (R459). Otherwise they keep
+// the process-only gate and the fail-loud stub (gated), as do the two
+// /oauth/providers routes and the sign-in shims: each answers its
+// authentication, then its validation, then the 402, as the Python api
+// answered there.
 //
 // Activate and deactivate are not gated: they are ported in full.
 //
@@ -102,6 +100,8 @@ type Deps struct {
 	// Providers is the client of auth-service's SSO provider routes while it owns the providers: the five provider CRUD
 	// routes and activate/deactivate call it. nil keeps the stub and the direct UPDATE.
 	Providers authprovision.SSOProviders
+	// OrgEntitled reports whether the organization holds sso_saml; nil is licensing.OrgHasFeature over Pool.
+	OrgEntitled func(ctx context.Context, orgID string) (bool, error)
 
 	// oidcClient makes the OIDC calls; newHandlers sets it (HTTPClient when the caller set one).
 	oidcClient *http.Client
@@ -161,18 +161,18 @@ func Routes(deps Deps) []httpapi.Route {
 		}
 		return deps.Inner(prefix+path, local)
 	}
-	// A provider route is wrapped with its own 422 and 402 as the guard's late checks when auth-service owns the providers: with
+	// A provider route is wrapped with its own 422 and org-aware 402 as the guard's late checks when auth-service owns the providers: with
 	// the sso namespace enforced, a refused caller gets the 422 or the 402 first, as the legacy route answers it (sso.go gated; the
 	// role check is the handler's own, router.py create :262, patch :333, delete :383).
 	providerWrap := func(validate validator, serve http.HandlerFunc) http.Handler {
 		if h.Providers != nil {
-			return g.WrapLate(policy.Authenticated, h.gate(validate), serve)
+			return g.WrapLate(policy.Authenticated, h.providerGate(validate), serve)
 		}
 		return g.Wrap(policy.Authenticated, h.gated(validate))
 	}
 	providerBodyFirst := func(validate validator, serve http.HandlerFunc) http.Handler {
 		if h.Providers != nil {
-			return g.BodyFirstLate(policy.Authenticated, h.gate(validate), serve)
+			return g.BodyFirstLate(policy.Authenticated, h.providerGate(validate), serve)
 		}
 		return g.BodyFirst(policy.Authenticated, h.gated(validate))
 	}
@@ -358,6 +358,12 @@ func newHandlers(deps Deps) handlers {
 	}
 	if deps.Write == nil {
 		deps.Write = httpapi.WriteError
+	}
+	if deps.OrgEntitled == nil {
+		pool := deps.Pool
+		deps.OrgEntitled = func(ctx context.Context, orgID string) (bool, error) {
+			return licensing.OrgHasFeature(ctx, pool, orgID, ssoFeature)
+		}
 	}
 	deps.oidcClient = deps.HTTPClient
 	if deps.HTTPClient == nil {

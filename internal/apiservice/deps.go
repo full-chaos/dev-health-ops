@@ -244,6 +244,8 @@ type Deps struct {
 	// through SSOProviders. SSOProviders is nil when it is off.
 	SSOProvidersOwned bool
 	SSOProviders      authprovision.SSOProviders
+	// SSOOrgEntitled replaces the provider routes' org entitlement read (sso.Deps.OrgEntitled) in tests; nil in production.
+	SSOOrgEntitled func(ctx context.Context, orgID string) (bool, error)
 	// UsersAdmin is the client of auth-service's user-admin routes while users
 	// are owned, built from the shared workload token; nil otherwise.
 	UsersAdmin authprovision.UsersAdmin

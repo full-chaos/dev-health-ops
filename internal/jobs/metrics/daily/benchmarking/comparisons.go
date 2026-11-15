@@ -12,6 +12,8 @@ import (
 // here are ALIASES (`pipeline_success`, `defect_rate`) which the loader
 // canonicalises -- but the RECORD keeps the alias, because Python passes
 // `metric_name` through unchanged.
+// A team pair has a row only where the TestOps owner team at the run and the stored work-item team are the same team
+// id (team-attribution.md); a reader of these rows names this limit in its own plan before it ships.
 var DefaultCorrelationPairs = [][3]string{
 	{"flake_rate", "cycle_time_hours", ScopeTeam},
 	{"line_coverage_pct", "defect_rate", ScopeTeam},

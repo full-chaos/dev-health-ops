@@ -515,6 +515,11 @@ means the ClickHouse `teams` dimension is empty.
 > The stored team is written for these rows, but the analytics series, breakdown, sankey and team scope read
 > `team_repo_ownership` at the request instead (see "A TestOps rate and the counts beside it" in the owner-shares
 > section). The benchmarking job takes its team series the same way, from the owners at the run instant.
+> Its team correlation pairs (flake rate with cycle time, line coverage with defect rate) put that TestOps series
+> beside the work-item series of the stored work-item team, the primary team of the work-item rule above. This is a
+> named limit: a correlation pair exists only where the TestOps owner team and the work-item team are the same team
+> id; a co-owner team or a team that only has work items gets no pair row. Pinned by
+> `TestCorrelationPairNeedsTheSameTeamOnBothSides`.
 
 > **The AI analytics team scope uses repository ownership, not patterns.** The
 > query-api AI analytics reads (`internal/queryapi/aianalytics`: aiReviewLoad, aiRiskBreakdown,
@@ -2197,7 +2202,7 @@ them is in their readers:
 | Table | Team id | Why no row of zeros | Reader rule |
 | --- | --- | --- | --- |
 | the six testops daily tables (`testops_pipeline_metrics_daily`, `testops_test_metrics_daily`, `testops_coverage_metrics_daily`, `testops_release_confidence`, `testops_quality_drag`, `testops_pipeline_stability`) | a VALUE of the (org, repository, day) key: the repository's authoritative active owner | a recompute writes the key again and replaces the team; there is no stale team key | the analytics readers take the newest row of the KEY (org, repository, day) and read the owners of the repository at the request; no analytics reader reads the stored team. The benchmarking job takes the newest row of the KEY first (`benchmarking.FetchMetricSeriesByScope`; `TestEveryMetricGroupsByTheKeyOfItsTable`) and then reads the owners of the repository at the run instant, with the same join as the analytics team series: a co-owned repository counts in full for each owner team and a rate is not scaled. A stored output row keeps the owners of the moment it was computed, so a later ownership change moves it only when the job runs again |
-| the six benchmarking outputs (`testops_metric_baselines`, `testops_metric_anomalies`, `testops_maturity_bands`, `testops_metric_correlations`, `testops_period_comparisons`, `testops_benchmark_insights`) | `scope_key` of a row of `scope_type = 'team'` | append-only results, read by no reader; a row of zeros would be a result that was not computed | the job writes no team series of an inactive team (`teamactive`): an inactive team is not a target. Rows written before the fix stay; no reader shows them |
+| the six benchmarking outputs (`testops_metric_baselines`, `testops_metric_anomalies`, `testops_maturity_bands`, `testops_metric_correlations`, `testops_period_comparisons`, `testops_benchmark_insights`) | `scope_key` of a row of `scope_type = 'team'` | append-only results, read by no reader; a row of zeros would be a result that was not computed | the job writes no team series of an inactive team (`teamactive`): an inactive team is not a target. Rows written before the fix stay; no reader shows them. A team row of `testops_metric_correlations` pairs the TestOps owner team at the run with the stored work-item team (a named limit): a correlation pair exists only where the TestOps owner team and the work-item team are the same team id; a co-owner team or a team that only has work items gets no pair row (`TestCorrelationPairNeedsTheSameTeamOnBothSides`). A reader of these rows names this limit in its own plan before it ships |
 | `capacity_forecasts` | a value of the forecast | one forecast per row, replaced by the next forecast of the same id | the forecast list with no team named lists the active teams and the forecasts with no team (`activeteams.ListablePredicate`); a named team is read as named |
 | `recommendations_daily` | in the key | a rule result (fired or not), not a count | the readers read only the team ids a request names (no rule) |
 

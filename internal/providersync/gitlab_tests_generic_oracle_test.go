@@ -19,6 +19,13 @@ var gitLabTestsGoOnlyFields = map[string]string{
 	"last_synced": "stamped by the Go complete-route effect boundary",
 }
 
+// gitLabTestsSlotGoOnlyFields adds the GitHub-only report slot columns of the suite and coverage rows (CHAOS-13873).
+var gitLabTestsSlotGoOnlyFields = map[string]string{
+	"last_synced": gitLabTestsGoOnlyFields["last_synced"],
+	"report_slot": "CHAOS-13873: GitHub-only report slot; GitLab rows keep the empty default",
+	"run_attempt": "CHAOS-13873: GitHub-only run attempt; GitLab rows keep the 0 default",
+}
+
 // CHAOS-4190: parseLCOVRow now scopes coverage SnapshotID to the artifact
 // (here: the GitLab job) it was downloaded from, so two distinct jobs of
 // one pipeline never collide on WriteEffect's recordGitHubTestsKey check.
@@ -119,7 +126,7 @@ func TestGenericOracleMatchesFrozenPythonGitLabTestsRows(t *testing.T) {
 	compareRowsAgainstPythonOracle(t, "gitlab/tests/suite", []oracleCase{testCase}, func(t *testing.T, input map[string]any) testSuiteResultRow {
 		_, _, _, a, _, _ := gitLabTestsGoRows(t, input)
 		return a
-	}, gitLabTestsGoOnlyFields)
+	}, gitLabTestsSlotGoOnlyFields)
 	compareRowsAgainstPythonOracle(t, "gitlab/tests/case", []oracleCase{testCase}, func(t *testing.T, input map[string]any) testCaseResultRow {
 		_, _, _, _, a, _ := gitLabTestsGoRows(t, input)
 		return a
@@ -127,7 +134,7 @@ func TestGenericOracleMatchesFrozenPythonGitLabTestsRows(t *testing.T) {
 	compareRowsAgainstPythonOracle(t, "gitlab/tests/coverage", []oracleCase{testCase}, func(t *testing.T, input map[string]any) coverageSnapshotRow {
 		_, _, _, _, _, a := gitLabTestsGoRows(t, input)
 		return a
-	}, gitLabTestsGoOnlyFields)
+	}, gitLabTestsSlotGoOnlyFields)
 }
 
 type gitLabTestsSelectionObservation struct {

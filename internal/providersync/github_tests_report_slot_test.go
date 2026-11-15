@@ -155,8 +155,11 @@ func TestGitHubTestsReportKeysFollowTheSlotAndAttemptNotTheArtifactID(t *testing
 func TestGitHubTestsReportReadsOnlyTheNewestArtifactOfAName(t *testing.T) {
 	t.Parallel()
 	archive := reportSlotArchive(t)
+	other := githubTestsZip(t, map[string]string{"report.xml": `<testsuites><testsuite name="pkg/c" time="1.5" timestamp="2026-07-22T10:02:00">` +
+		`<testcase classname="pkg/c" name="TestC1" time="0.5"></testcase><testcase classname="pkg/c" name="TestC2" time="1.0"></testcase>` +
+		`</testsuite></testsuites>`})
 	doer := &reportSlotDoer{t: t, attempt: 2, started: "2026-07-22T11:10:00Z", artifacts: []reportSlotArtifact{
-		{102, "go-test-b", "2026-07-22T10:20:00Z", archive}, {203, "go-test-b", "2026-07-22T11:30:00Z", archive}, {104, "go-test-c", "2026-07-22T10:20:00Z", archive},
+		{102, "go-test-b", "2026-07-22T10:20:00Z", archive}, {203, "go-test-b", "2026-07-22T11:30:00Z", archive}, {104, "go-test-c", "2026-07-22T10:20:00Z", other},
 	}}
 	_, cases := reportSlotKeys(t, doer)
 	if got := strings.Join(doer.downloads(), ","); got != "/a104.zip,/a203.zip" {

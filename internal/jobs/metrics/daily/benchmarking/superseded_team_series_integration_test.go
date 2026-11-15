@@ -17,18 +17,19 @@ import (
 
 // TestTestopsTeamSeriesHoldNoSupersededTeam reads the team and organization
 // series of a metric of each testops source table (pipeline, test, coverage),
-// whose key is (org, repo, day) and whose team is a value of the row.
+// whose key is (org, repo, day). The team of a key is the owner of its
+// repository at the run (team_repo_ownership), never the team stored on a row:
 //
 //   - repo-a, the day: an older row under team-old and the newer row of the
-//     recompute under team-new (the repository changed owner; both teams are
-//     active), both unmerged. The key is ONE repository-day: its value is the
-//     newer row's, under team-new, and team-old has no series from it.
+//     recompute under team-new, both unmerged; team-new owns repo-a. The key is
+//     ONE repository-day: its value is the newer row's, under team-new, and
+//     team-old has no series from it.
 //   - repo-c, the day: an older row under team-old and the newer row with no
-//     team (the repository lost its owner). The key has no team now, so it
-//     gives no team a series, and its newer value is the organization's sample.
-//   - repo-b, the day: one row under team-retired, a team that is inactive now;
-//     the day was not computed again. It is a sample of the organization, and
-//     no team series: an inactive team is not a target.
+//     team; no team owns repo-c. It gives no team a series, and its newer value
+//     is the organization's sample.
+//   - repo-b, the day: one row under team-retired, which owns repo-b and is
+//     inactive now. It is a sample of the organization, and no team series: an
+//     inactive team owns nothing.
 func TestTestopsTeamSeriesHoldNoSupersededTeam(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
@@ -66,6 +67,21 @@ func TestTestopsTeamSeriesHoldNoSupersededTeam(t *testing.T) {
 	}{{"team-old", 1}, {"team-new", 1}, {"team-retired", 0}} {
 		if err := admin.Exec(ctx, teams, team.id, team.id, org, team.active, newer, newer); err != nil {
 			t.Fatalf("insert team %s: %v", team.id, err)
+		}
+	}
+
+	for name, repo := range map[string]string{"acme/a": repoA, "acme/b": repoB, "acme/c": repoC} {
+		if err := admin.Exec(ctx, `INSERT INTO repos (id, repo, provider, last_synced, org_id) VALUES (toUUID(?), ?, 'github', ?, ?)`,
+			repo, name, older, org); err != nil {
+			t.Fatalf("insert repo %s: %v", name, err)
+		}
+	}
+	for _, own := range []struct{ team, repo, name string }{{"team-new", repoA, "acme/a"}, {"team-retired", repoB, "acme/b"}} {
+		if err := admin.Exec(ctx, `INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type,
+    source, is_primary, specificity, priority, valid_from, updated_at)
+VALUES (?, 'github', ?, toUUID(?), ?, 'exact', 'native', 1, 10, 0, ?, ?)`,
+			org, own.team, own.repo, own.name, older, older); err != nil {
+			t.Fatalf("insert ownership %s: %v", own.name, err)
 		}
 	}
 
@@ -111,17 +127,18 @@ func TestTestopsTeamSeriesHoldNoSupersededTeam(t *testing.T) {
 			if err != nil {
 				t.Fatalf("NewClickHouseLoader: %v", err)
 			}
+			loader.SetOwnersAsOf(newer)
 			teamSeries, err := loader.FetchMetricSeriesByScope(ctx, source.metric, day, day, ScopeTeam)
 			if err != nil {
 				t.Fatalf("team series: %v", err)
 			}
 			wantTeams := map[string][]MetricPoint{"team-new": {{Day: day, Value: 0.8}}}
 			if !reflect.DeepEqual(teamSeries, wantTeams) {
-				t.Fatalf("team series = %+v, want %+v (team-old holds only older rows of repo-a and repo-c; team-retired is inactive)",
+				t.Fatalf("team series = %+v, want %+v (team-new owns repo-a, whose newest row is 0.8; no team owns repo-c; team-retired is inactive)",
 					teamSeries, wantTeams)
 			}
-			if dropped := loader.DroppedInactiveTeams(); !reflect.DeepEqual(dropped, []string{"team-retired"}) {
-				t.Fatalf("dropped inactive teams = %v, want [team-retired]", dropped)
+			if dropped := loader.DroppedInactiveTeams(); len(dropped) != 0 {
+				t.Fatalf("dropped inactive teams = %v, want none (an inactive team is never an owner, so no row names it)", dropped)
 			}
 
 			globalSeries, err := loader.FetchMetricSeriesByScope(ctx, source.metric, day, day, ScopeGlobal)

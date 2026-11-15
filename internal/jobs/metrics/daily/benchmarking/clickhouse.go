@@ -10,8 +10,11 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
+	"github.com/full-chaos/dev-health-ops/internal/ownershipwindow"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/rowview"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 	"github.com/full-chaos/dev-health-ops/internal/teamactive"
 )
@@ -69,6 +72,14 @@ var metricDefinitions = map[string]MetricDefinition{
 	},
 }
 
+// testopsDailyTables hold the team as a value of the (org, repo, day) key: the main owner of the day it was computed.
+// Their team series read the owners at the run instead (ownersJoin).
+var testopsDailyTables = map[string]bool{
+	"testops_pipeline_metrics_daily": true,
+	"testops_test_metrics_daily":     true,
+	"testops_coverage_metrics_daily": true,
+}
+
 func testopsScopes() map[string]bool {
 	return map[string]bool{ScopeRepo: true, ScopeTeam: true, ScopeGlobal: true}
 }
@@ -112,7 +123,13 @@ type ClickHouseLoader struct {
 	orgID string
 	// droppedInactive holds the inactive team ids whose series a read left out.
 	droppedInactive map[string]struct{}
+	// ownersAsOf is the run instant the owners of a TestOps team series are read at.
+	ownersAsOf time.Time
 }
+
+// SetOwnersAsOf sets the instant at which a TestOps team series reads the owners of its repositories: the run
+// instant, as the analytics team series read them at the request. A TestOps team read without it is refused.
+func (loader *ClickHouseLoader) SetOwnersAsOf(asOf time.Time) { loader.ownersAsOf = asOf.UTC() }
 
 // DroppedInactiveTeams returns, sorted, the inactive team ids whose series the
 // loader's team-scope reads have left out so far.
@@ -175,21 +192,22 @@ func (loader *ClickHouseLoader) FetchMetricSeriesByScope(
 	if !definition.ScopeSupport[scopeType] {
 		return nil, fmt.Errorf("benchmarking: metric %s does not support scope_type=%s", canonical, scopeType)
 	}
+	ownersRead := scopeType == ScopeTeam && testopsDailyTables[definition.Table]
+	if ownersRead && loader.ownersAsOf.IsZero() {
+		return nil, fmt.Errorf("benchmarking: metric %s: a TestOps team series needs the run instant of its owners", canonical)
+	}
 
 	filters := []string{"day >= {start_day:Date}", "day <= {end_day:Date}", "org_id = {org_id:String}"}
 	filters = append(filters, definition.ExtraFilters...)
 
-	// The team of a key is the team of its NEWEST row. The testops tables hold
-	// the team as a value column of the (org, repo, day) key, so a filter or a
-	// group on team_id before argMax would keep an older row of the key under
-	// the team id it was computed with (a superseded id) as its own group. A
-	// key whose newest row has no team reads as scope_key '' and is dropped
-	// below, as Python drops a blank scope_key.
+	// The team of a work-item key is the team of its NEWEST row. A blank
+	// scope_key is dropped below, as Python drops a blank scope_key. A TestOps
+	// team read keys by repository first and takes the owners after.
 	var scopeExpression string
-	switch scopeType {
-	case ScopeRepo:
+	switch {
+	case scopeType == ScopeRepo || ownersRead:
 		scopeExpression = "toString(repo_id)"
-	case ScopeTeam:
+	case scopeType == ScopeTeam:
 		scopeExpression = "ifNull((argMax(tuple(team_id), computed_at)).1, '')"
 	default:
 		scopeExpression = "'global'"
@@ -203,23 +221,36 @@ func (loader *ClickHouseLoader) FetchMetricSeriesByScope(
 	// into an outer query is a plausible refactor, and it is exactly what
 	// turns this shape into ai-families' cross-tenant P1.
 	innerGroup := append([]string{"org_id", "day"}, definition.InnerGroupColumns...)
-	query := fmt.Sprintf(`
-SELECT scope_key, day, avg(metric_value) AS value
-FROM (
+	keyAlias := "scope_key"
+	if ownersRead {
+		keyAlias = "repo_key"
+	}
+	inner := fmt.Sprintf(`
     SELECT
-        %s AS scope_key,
+        %s AS %s,
         day,
         (argMax(tuple(%s), computed_at)).1 AS metric_value
     FROM %s
     WHERE %s
-    GROUP BY %s%s
+    GROUP BY %s%s`,
+		scopeExpression, keyAlias, definition.ValueColumn, definition.Table,
+		strings.Join(filters, " AND "), strings.Join(innerGroup, ", "), liveRowHaving(definition.Table),
+	)
+	query := fmt.Sprintf(`
+SELECT scope_key, day, avg(metric_value) AS value
+FROM (%s
 )
 WHERE metric_value IS NOT NULL
 GROUP BY scope_key, day
-ORDER BY scope_key, day`,
-		scopeExpression, definition.ValueColumn, definition.Table,
-		strings.Join(filters, " AND "), strings.Join(innerGroup, ", "), liveRowHaving(definition.Table),
-	)
+ORDER BY scope_key, day`, inner)
+	var ownerArguments []any
+	if ownersRead {
+		var err error
+		query, ownerArguments, err = ownersJoin(inner, loader.orgID, loader.ownersAsOf)
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	arguments := []any{
 		// Date parameters are bound as YYYY-MM-DD STRINGS, not time.Time. The
@@ -239,6 +270,7 @@ ORDER BY scope_key, day`,
 	if canonical == "deployment_frequency" {
 		arguments = append(arguments, clickhouse.Named("metric_name", "deployment_frequency"))
 	}
+	arguments = append(arguments, ownerArguments...)
 
 	// A team series is a target the job benchmarks, so an inactive team (a
 	// superseded or retired id) has none: a day of it that was not computed
@@ -287,6 +319,50 @@ ORDER BY scope_key, day`,
 		return nil, err
 	}
 	return result, nil
+}
+
+// ownersJoin is the statement of a TestOps team series: the newest value of each (org, repository, day) key, then
+// the owners of the repository at asOf by the ownership rule of every team scope (teamscope.OwnershipFromWhere:
+// validity window, active teams, catalog guard). A co-owned repository goes in full to each owner, never at its share,
+// and a repository no team owns gives no team a series. Every day of the window takes the owners at asOf.
+func ownersJoin(inner, orgID string, asOf time.Time) (string, []any, error) {
+	fromWhere, bindings := teamscope.OwnershipFromWhere(orgID, asOf)
+	query := fmt.Sprintf(`
+SELECT own.owner_team_id AS scope_key, k.day AS day, avg(k.metric_value) AS value
+FROM (%s
+) AS k
+INNER JOIN (
+    SELECT DISTINCT o.team_id AS owner_team_id, %s AS owned_repo_id
+%s
+) AS own ON k.repo_key = own.owned_repo_id
+WHERE k.metric_value IS NOT NULL
+GROUP BY scope_key, day
+ORDER BY scope_key, day`, inner, ownershipwindow.RepoKey, fromWhere)
+	arguments, err := namedArguments(bindings)
+	if err != nil {
+		return "", nil, err
+	}
+	return query, arguments, nil
+}
+
+// namedArguments binds each teamscope binding with a typed clickhouse.Named call, so every bound type is one the
+// parameter census proves; a type it does not know is an error, never a value of an unproven encoding.
+func namedArguments(bindings []dhclickhouse.Binding) ([]any, error) {
+	arguments := make([]any, 0, len(bindings))
+	for _, binding := range bindings {
+		switch value := binding.Value.(type) {
+		case string:
+			arguments = append(arguments, clickhouse.Named(binding.Name, value))
+		case []string:
+			arguments = append(arguments, clickhouse.Named(binding.Name, value))
+		case time.Time:
+			// A time.Time bound to a DateTime64(3, 'UTC') parameter is refused by the server; the literal is not.
+			arguments = append(arguments, clickhouse.Named(binding.Name, value.UTC().Format("2006-01-02 15:04:05.000")))
+		default:
+			return nil, fmt.Errorf("benchmarking: ownership binding %q has type %T, which has no proven encoding", binding.Name, binding.Value)
+		}
+	}
+	return arguments, nil
 }
 
 // Writer persists all six benchmarking output tables.

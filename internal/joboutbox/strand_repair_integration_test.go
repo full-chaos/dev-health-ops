@@ -1706,6 +1706,51 @@ func TestStrandRepairAgainstLivePostgres(t *testing.T) {
 		})
 	})
 
+	// CHAOS-13863 / CHAOS-5041: a daily partition written failed_permanent keeps its
+	// run 'running', so the post-sync chain behind the run's completion fence
+	// waits. That wait is bounded by the undelivered sweep, which reads the RUN
+	// status and age and never a partition status: past the ceiling the fenced
+	// work-graph row goes dead and its request is canceled, as for any run that
+	// never finalizes. A younger row stays pending.
+	t.Run("undelivered: a failed_permanent partition does not hold the chain past the ceiling", func(t *testing.T) {
+		resetStrandTables(t, ctx, admin)
+		now := time.Now().UTC().Truncate(time.Microsecond)
+		expired := now.Add(-DefaultUndeliveredCeiling - time.Hour)
+		dailyRun := integrationUUID(6201)
+		seedDailyRun(t, ctx, admin, fixture.orgID, dailyRun, "running", "pending", nil)
+		seedDailyPartition(t, ctx, admin, integrationUUID(6202), dailyRun, "succeeded", nil)
+		if _, err := admin.Exec(ctx, `
+			INSERT INTO public.daily_metrics_partitions (
+				id, run_id, ordinal, repo_ids, status, failure_reason, created_at, updated_at
+			) VALUES ($1, $2, 1, '[]'::json, 'failed_permanent', 'zero_rows_with_source_data',
+				statement_timestamp(), statement_timestamp())`,
+			integrationUUID(6203), dailyRun); err != nil {
+			t.Fatal(err)
+		}
+		pastCeiling, young := integrationUUID(6204), integrationUUID(6205)
+		seedWorkGraphRequest(t, ctx, admin, fixture.orgID, pastCeiling, jobcontract.KindWorkGraphBuild, "pending", nil)
+		seedWorkGraphRequest(t, ctx, admin, fixture.orgID, young, jobcontract.KindWorkGraphBuild, "pending", nil)
+		agedOutbox := publishFencedWorkGraph(t, ctx, fixture, jobcontract.KindWorkGraphBuild, pastCeiling,
+			"daily_metrics_run:"+dailyRun)
+		ageOutbox(t, ctx, admin, agedOutbox, expired)
+		youngOutbox := publishFencedWorkGraph(t, ctx, fixture, jobcontract.KindWorkGraphBuild, young,
+			"daily_metrics_run:"+dailyRun)
+
+		if _, err := repair.Step(ctx, now, 10); err != nil {
+			t.Fatal(err)
+		}
+		if status, code := outboxStatusAndCode(t, ctx, admin, agedOutbox); status != "dead" || code != UndeliveredReasonPrerequisiteExpired {
+			t.Fatalf("row past the ceiling = (%s, %q), want (dead, %s): a failed_permanent partition must not hold the chain",
+				status, code, UndeliveredReasonPrerequisiteExpired)
+		}
+		if got := workGraphRequestState(t, ctx, admin, pastCeiling); got != "canceled" {
+			t.Fatalf("request behind the aged row = %s, want canceled", got)
+		}
+		if status, _ := outboxStatusAndCode(t, ctx, admin, youngOutbox); status != "pending" {
+			t.Fatalf("young row = %s, want pending (the ceiling, not the partition, decides)", status)
+		}
+	})
+
 	// A fenced row the relay can never claim, because its prerequisite failed
 	// or never finished, used to sit 'pending' with no attempt and no error
 	// code forever. This is the invariant the undelivered sweep exists for:

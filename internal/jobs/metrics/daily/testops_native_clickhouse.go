@@ -125,7 +125,8 @@ const (
 	testopsPipelineRunsSource = `
 FROM ci_pipeline_runs FINAL
 WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(UUID)}
-  AND started_at >= {start:DateTime64(3, 'UTC')} AND started_at < {end:DateTime64(3, 'UTC')}`
+  AND started_at >= {start:DateTime64(3, 'UTC')} AND started_at < {end:DateTime64(3, 'UTC')}
+  AND lowerUTF8(trimBoth(ifNull(status, ''))) != '` + testops.StatusDeleted + `'`
 	testopsSuiteResultsSource = `
 FROM test_suite_results FINAL
 WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(UUID)}

@@ -1211,14 +1211,21 @@ func (handler *PartitionHandler) Work(ctx context.Context, execution *jobruntime
 	}
 	run, err := handler.store.LoadRun(ctx, claim.Partition.RunID)
 	if err != nil {
-		_ = handler.store.ReleasePartition(ctx, *claim)
 		if errors.Is(err, ErrInvalidState) {
+			failPartitionTerminally(ctx, execution, handler.store, *claim, jobruntime.ReasonInvalidState.String())
 			return permanentWithCause(err, jobruntime.ReasonInvalidState, "step=partition_load_run")
 		}
+		releaseOrExhaust(ctx, execution, handler.store, *claim)
 		return jobruntime.Retryable(err)
 	}
 	if claim.Partition.ID != partitionID || run.Status != "running" || execution.OrganizationID == nil || run.OrganizationID != *execution.OrganizationID {
-		_ = handler.store.ReleasePartition(ctx, *claim)
+		if run.Status == "running" {
+			failPartitionTerminally(ctx, execution, handler.store, *claim, jobruntime.ReasonInvalidState.String())
+		} else {
+			// The run already ended: nothing blocks on this partition and the
+			// blocked-run marker only reads running runs.
+			releasePartition(handler.store, ctx, *claim)
+		}
 		condition := scopeMismatchCondition(claim.Partition.ID == partitionID, "partition_id_mismatch", run.Status, execution.OrganizationID, run.OrganizationID)
 		return permanentWithCause(ErrInvalidState, jobruntime.ReasonInvalidState, "step=partition_scope condition="+condition)
 	}
@@ -1231,7 +1238,7 @@ func (handler *PartitionHandler) Work(ctx context.Context, execution *jobruntime
 	if handler.sourceChecker != nil {
 		snapshot, checkErr := handler.sourceChecker.SourceSnapshot(ctx, partitionID, asOf)
 		if checkErr != nil {
-			return sourceCheckFailure(handler.store, ctx, *claim, checkErr)
+			return sourceCheckFailure(ctx, execution, handler.store, *claim, checkErr)
 		}
 		sourceSnapshot = snapshot
 	}
@@ -1322,6 +1329,10 @@ func (handler *PartitionHandler) Work(ctx context.Context, execution *jobruntime
 			// when the write itself is what failed. Sibling idiom: mirrors
 			// the pre_bridge branch's `if releasePartitionWithReason(...)
 			// { observeCompatRetry(...) }` shape exactly.
+			if terminalAttempt(execution) {
+				failPartitionTerminally(ctx, execution, handler.store, *claim, jobruntime.ReasonPostBridgeFamilyIncomplete.String())
+				return jobruntime.WithReason(jobruntime.Retryable(err), jobruntime.ReasonPostBridgeFamilyIncomplete)
+			}
 			if releasePartitionWithReason(handler.store, ctx, *claim, jobruntime.ReasonPostBridgeFamilyIncomplete.String(), handler.nativeFamilyLogger, run) {
 				handler.observeCompatRetry(jobruntime.DailyMetricsCompatRetryDecisionReleasedPostBridgeFamilyIncomplete)
 				return jobruntime.WithReason(jobruntime.Retryable(err), jobruntime.ReasonPostBridgeFamilyIncomplete)
@@ -1355,6 +1366,10 @@ func (handler *PartitionHandler) Work(ctx context.Context, execution *jobruntime
 			// write is confirmed to have landed, and a failed write wraps
 			// the returned error with an explicit note rather than looking
 			// identical to a successful release.
+			if terminalAttempt(execution) {
+				failPartitionTerminally(ctx, execution, handler.store, *claim, jobruntime.ReasonPreBridgeFamilyIncomplete.String())
+				return jobruntime.WithReason(jobruntime.Retryable(err), jobruntime.ReasonPreBridgeFamilyIncomplete)
+			}
 			if releasePartitionWithReason(handler.store, ctx, *claim, jobruntime.ReasonPreBridgeFamilyIncomplete.String(), handler.nativeFamilyLogger, run) {
 				handler.observeCompatRetry(jobruntime.DailyMetricsCompatRetryDecisionReleasedPreBridgeFamilyIncomplete)
 				return jobruntime.WithReason(jobruntime.Retryable(err), jobruntime.ReasonPreBridgeFamilyIncomplete)
@@ -1364,13 +1379,13 @@ func (handler *PartitionHandler) Work(ctx context.Context, execution *jobruntime
 				jobruntime.ReasonPreBridgeFamilyIncomplete,
 			)
 		}
-		releasePartition(handler.store, ctx, *claim)
+		releaseOrExhaust(ctx, execution, handler.store, *claim)
 		return jobruntime.Retryable(err)
 	}
 	if handler.sourceChecker != nil {
 		families, checkErr := handler.sourceChecker.ZeroRowFamilies(ctx, sourceSnapshot)
 		if checkErr != nil {
-			return sourceCheckFailure(handler.store, ctx, *claim, checkErr)
+			return sourceCheckFailure(ctx, execution, handler.store, *claim, checkErr)
 		}
 		if len(families) > 0 {
 			if handler.zeroRowsObserver != nil {
@@ -1378,7 +1393,7 @@ func (handler *PartitionHandler) Work(ctx context.Context, execution *jobruntime
 					_ = handler.zeroRowsObserver.ObserveDailyMetricsFamilyZeroRowsWithSource(family)
 				}
 			}
-			releasePartition(handler.store, ctx, *claim)
+			failPartitionTerminally(ctx, execution, handler.store, *claim, jobruntime.ReasonZeroRowsWithSourceData.String())
 			return permanentWithCause(ErrZeroRowsWithSourceData, jobruntime.ReasonZeroRowsWithSourceData, zeroRowsCause(families))
 		}
 	}
@@ -1388,17 +1403,21 @@ func (handler *PartitionHandler) Work(ctx context.Context, execution *jobruntime
 		// partition immediately re-claimable instead of parking the retry for the
 		// rest of the lease; if the lease was already lost the release is a
 		// no-op, and the store records that rather than dropping it.
-		releasePartition(handler.store, ctx, *claim)
+		releaseOrExhaust(ctx, execution, handler.store, *claim)
 		return jobruntime.Retryable(err)
 	}
 	return nil
 }
 
-func sourceCheckFailure(store Store, ctx context.Context, claim PartitionClaim, checkErr error) error {
-	releasePartition(store, ctx, claim)
+func sourceCheckFailure(
+	ctx context.Context, execution *jobruntime.Execution[jobruntime.DailyMetricsPartitionArgs],
+	store Store, claim PartitionClaim, checkErr error,
+) error {
 	if errors.Is(checkErr, ErrInvalidState) {
+		failPartitionTerminally(ctx, execution, store, claim, jobruntime.ReasonInvalidState.String())
 		return permanentWithCause(checkErr, jobruntime.ReasonInvalidState, "step=partition_source_check")
 	}
+	releaseOrExhaust(ctx, execution, store, claim)
 	return jobruntime.Retryable(checkErr)
 }
 
@@ -2119,6 +2138,68 @@ func releasePartition(store Store, ctx context.Context, claim PartitionClaim) {
 	releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
 	_ = store.ReleasePartition(releaseCtx, claim)
+}
+
+// terminalAttempt reports whether River will not run this partition job again:
+// the same attempt pair the adapter acts on (finalize's own final-attempt arm).
+// An unset MaxAttempts is never the last attempt.
+func terminalAttempt(execution *jobruntime.Execution[jobruntime.DailyMetricsPartitionArgs]) bool {
+	return execution.Definition.MaxAttempts > 0 && execution.Attempt >= execution.Definition.MaxAttempts
+}
+
+// releaseOrExhaust ends a claimed partition after a retryable error. Before the
+// last attempt the row is released 'failed' for the retry to claim. On the last
+// attempt there is no retry: only a live River job of the partition ever claims
+// a 'failed' row (the dispatch key is per run, the partition key is permanent),
+// so the row is written failed_permanent, where the blocked-run marker sees it.
+func releaseOrExhaust(
+	ctx context.Context, execution *jobruntime.Execution[jobruntime.DailyMetricsPartitionArgs],
+	store Store, claim PartitionClaim,
+) {
+	if terminalAttempt(execution) {
+		failPartitionTerminally(ctx, execution, store, claim, reasonAttemptsExhausted)
+		return
+	}
+	releasePartition(store, ctx, claim)
+}
+
+// reasonAttemptsExhausted and reasonTerminalUnclassified are the partition
+// failure reasons that are not a jobruntime.Reason: a retryable error that spent
+// its last attempt, and a terminal exit that named no reason.
+const (
+	reasonAttemptsExhausted    = "attempts_exhausted"
+	reasonTerminalUnclassified = "terminal_unclassified"
+)
+
+// failPartitionTerminally writes a claimed partition failed_permanent with a
+// bounded reason ("" becomes terminal_unclassified, never an unbounded or empty
+// value). If the write finds the lease gone, another holder owns the row: the
+// attempt neither releases it nor retries the write, it logs one WARN.
+func failPartitionTerminally(
+	ctx context.Context, execution *jobruntime.Execution[jobruntime.DailyMetricsPartitionArgs],
+	store Store, claim PartitionClaim, reason string,
+) {
+	if reason == "" {
+		reason = reasonTerminalUnclassified
+	}
+	terminalCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	err := store.FailPartitionPermanently(terminalCtx, claim, reason)
+	if err == nil {
+		return
+	}
+	logger := execution.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	logger.Warn("daily partition terminal write did not land",
+		"error", err,
+		"partition_id", claim.Partition.ID,
+		"run_id", claim.Partition.RunID,
+		"reason", reason,
+		"attempt", execution.Attempt,
+		"max_attempts", execution.Definition.MaxAttempts,
+	)
 }
 
 // releasePartitionWithReason mirrors releasePartition's own-context

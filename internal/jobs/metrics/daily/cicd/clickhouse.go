@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/remaining"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/testops"
 )
 
 // conn is the narrow ClickHouse capability this package needs, matching
@@ -38,7 +39,10 @@ func NewClickHouseLoader(connection conn) (*ClickHouseLoader, error) {
 // window the kernel re-applies (the DOUBLE WINDOW FILTER in the package doc).
 // The zero-row source check reads this same text, so a run counts as source
 // only when this family would count it. finished_at IS NULL (a still-running
-// pipeline) never matches the range filter, matching Python exactly.
+// pipeline) never matches the range filter, matching Python exactly. A run whose
+// stored status is testops.StatusDeleted (GitHub no longer has it) is left out,
+// as ComputeCICDMetricsDaily leaves it out; the SQL trim is ASCII only while the
+// compute trims Unicode space, so a mismatch can only miss a flag.
 //
 // FINAL: ci_pipeline_runs is a ReplacingMergeTree; without it unmerged
 // versions of one run count twice, and a stale version can match the
@@ -48,7 +52,8 @@ FROM ci_pipeline_runs FINAL
 WHERE finished_at >= {start:DateTime64(3, 'UTC')} AND finished_at < {end:DateTime64(3, 'UTC')}
   AND started_at >= {start:DateTime64(3, 'UTC')} AND started_at < {end:DateTime64(3, 'UTC')}
   AND repo_id IN {repo_ids:Array(UUID)}
-  AND org_id = {org_id:String}`
+  AND org_id = {org_id:String}
+  AND lowerUTF8(trimBoth(ifNull(status, ''))) != '` + testops.StatusDeleted + `'`
 
 const pipelineRunsQuery = `
 SELECT repo_id, run_id, status, queued_at, started_at, finished_at` + PipelineRunsSource

@@ -312,8 +312,9 @@ func TestPartitionHandlerWorkFlagsTestopsRiskWhenPipelineStabilityIsMissingDespi
 	if store.partitionCompletions != 0 {
 		t.Fatalf("CompletePartition calls = %d, want 0", store.partitionCompletions)
 	}
-	if store.partitionReleases != 1 {
-		t.Fatalf("ReleasePartition calls = %d, want 1", store.partitionReleases)
+	if store.partitionReleases != 0 || store.permanentFailures != 1 || store.permanentFailureReason != "zero_rows_with_source_data" {
+		t.Fatalf("ReleasePartition calls = %d, FailPartitionPermanently calls = %d reason %q, want 0 / 1 / zero_rows_with_source_data",
+			store.partitionReleases, store.permanentFailures, store.permanentFailureReason)
 	}
 	if len(observer.families) != 1 || observer.families[0] != "testops_risk" {
 		t.Fatalf("observed families = %v, want [testops_risk]", observer.families)
@@ -419,7 +420,7 @@ func TestClickHouseSourceDataCheckerSkipsPartitionsWithNoRepositories(t *testing
 
 // TestPartitionHandlerWorkRetriesAndObservesZeroRowsWithSourceData proves the
 // causal boundary: source data plus empty output reaches the real partition
-// handler, increments the family observer, releases the claim for retry, and
+// handler, increments the family observer, ends the claim failed_permanent, and
 // never calls CompletePartition. It also proves the production UUID binding
 // rather than accepting a table-name-only answer.
 func TestPartitionHandlerWorkFailsPermanentlyAndObservesZeroRowsWithSourceData(t *testing.T) {
@@ -475,8 +476,9 @@ func TestPartitionHandlerWorkFailsPermanentlyAndObservesZeroRowsWithSourceData(t
 	if store.partitionCompletions != 0 {
 		t.Fatalf("CompletePartition calls = %d, want 0", store.partitionCompletions)
 	}
-	if store.partitionReleases != 1 {
-		t.Fatalf("ReleasePartition calls = %d, want 1", store.partitionReleases)
+	if store.partitionReleases != 0 || store.permanentFailures != 1 || store.permanentFailureReason != "zero_rows_with_source_data" {
+		t.Fatalf("ReleasePartition calls = %d, FailPartitionPermanently calls = %d reason %q, want 0 / 1 / zero_rows_with_source_data",
+			store.partitionReleases, store.permanentFailures, store.permanentFailureReason)
 	}
 	if len(observer.families) != 2 || observer.families[0] != "cicd" || observer.families[1] != "testops_risk" {
 		t.Fatalf("observed families = %v, want [cicd testops_risk]", observer.families)

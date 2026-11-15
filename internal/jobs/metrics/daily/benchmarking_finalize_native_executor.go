@@ -189,6 +189,8 @@ func (executor *BenchmarkingFinalizeExecutor) ComputeFinalizeFamily(
 	}
 
 	computedAt := executor.nowUTC()
+	// A TestOps team series takes the owners at the run, as the analytics team series take them at the request.
+	loader.SetOwnersAsOf(computedAt)
 	outputs, err := benchmarking.ComputeBenchmarkingForDay(
 		ctx, loader, asOfDay, computedAt, run.OrganizationID,
 		benchmarking.DefaultBenchmarkMetrics,

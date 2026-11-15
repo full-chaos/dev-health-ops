@@ -1355,6 +1355,15 @@ var dailyMetricsPartitionFailureReasons = map[string]struct{}{
 	// TestPreBridgeReasonIsAcceptedByPostgresStore for the direct
 	// PostgresStore-level proof this entry is actually wired.
 	"pre_bridge_family_incomplete": {},
+	// CHAOS-13863: the reasons a partition that ended for good is written
+	// failed_permanent with (Work's terminal exits and its last attempt). No
+	// database constraint pins this set: ck_daily_metrics_partition_failed_
+	// permanent_has_reason only requires a reason, and the column is
+	// varchar(64).
+	"zero_rows_with_source_data": {},
+	"invalid_state":              {},
+	"attempts_exhausted":         {},
+	"terminal_unclassified":      {},
 }
 
 // FailPartitionPermanently durably terminalizes a partition whose

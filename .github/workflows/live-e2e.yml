@@ -163,6 +163,7 @@ jobs:
               - 'internal/teamownership/**'
               - 'internal/teamkeytables/**'
               - 'internal/teamresolve/**'
+              - 'internal/queryapi/teamscope/**'
               - 'internal/teamactive/**'
               - 'internal/syncdispatchruntime/**'
               - 'internal/syncdispatchcontract/**'

@@ -18,7 +18,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
-func TestExternalIngestKeepsItsLegacy500ForALoneSurrogate(t *testing.T) {
+func TestExternalIngestAnswers422StringUnicodeForALoneSurrogate(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
 	pg, err := containers.StartPostgres(ctx)
@@ -74,10 +74,12 @@ func TestExternalIngestKeepsItsLegacy500ForALoneSurrogate(t *testing.T) {
 		{"payload extra str field", env("c2", `{"externalId":"acme/repo","sourceSystem":"github","name":"a\ud800b"}`), false},
 		{"idempotencyKey", env("k\\ud800", `{"externalId":"acme/repo","sourceSystem":"github"}`), false},
 		{"record externalId", `{"schemaVersion":"external-ingest.v1","idempotencyKey":"c4","source":{"system":"github","instance":"acme/repo"},"records":[{"kind":"repository.v1","externalId":"a\udc00","payload":{"externalId":"acme/repo","sourceSystem":"github"}}]}`, false},
+		{"high surrogate then plain text", env("c6", `{"externalId":"\ud800x","sourceSystem":"github"}`), false},
+		{"valid surrogate pair", env("c7", `{"externalId":"acme/repo","sourceSystem":"github","name":"\ud83d\ude00"}`), true},
 		{"source.instance", `{"schemaVersion":"external-ingest.v1","idempotencyKey":"c5","source":{"system":"github","instance":"a\ud800"},"records":[]}`, false},
 	}
 	for _, c := range cases {
-		wantBatch, wantValidate := http.StatusInternalServerError, http.StatusInternalServerError
+		wantBatch, wantValidate := http.StatusUnprocessableEntity, http.StatusUnprocessableEntity
 		if c.clean {
 			wantBatch, wantValidate = http.StatusAccepted, http.StatusOK
 		}
@@ -89,12 +91,21 @@ func TestExternalIngestKeepsItsLegacy500ForALoneSurrogate(t *testing.T) {
 		if v.Code != wantValidate {
 			t.Errorf("POST /validate %s: %d %s, want %d", c.name, v.Code, show(v.Body.Bytes()), wantValidate)
 		}
+		if !c.clean {
+			for route, rec := range map[string]*httptest.ResponseRecorder{"/batches": r, "/validate": v} {
+				text := rec.Body.String()
+				lower := strings.ToLower(text)
+				if !strings.Contains(text, `"code":"string_unicode"`) || strings.Contains(lower, "ud800") || strings.Contains(lower, "udc00") || strings.Contains(text, `"input"`) {
+					t.Errorf("POST %s %s: %s, want error.code string_unicode and no echo", route, c.name, show(rec.Body.Bytes()))
+				}
+			}
+		}
 	}
 	var batches, payloads int
 	_ = pool.QueryRow(ctx, `SELECT count(*) FROM external_ingest_batches`).Scan(&batches)
 	_ = pool.QueryRow(ctx, `SELECT count(*) FROM external_ingest_batch_payloads`).Scan(&payloads)
-	if batches != 1 || payloads != 1 {
-		t.Errorf("stored %d batch row(s) and %d payload row(s), want only the clean control's 1 and 1", batches, payloads)
+	if batches != 2 || payloads != 2 {
+		t.Errorf("stored %d batch row(s) and %d payload row(s), want only the 2 clean cells (control, valid pair)", batches, payloads)
 	}
 	lr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/external-ingest/batches", nil)

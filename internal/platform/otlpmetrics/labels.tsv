@@ -333,7 +333,7 @@ fixed_scheduler_failures_total		code: internal/scheduler/fixed/loop.go
 fixed_scheduler_handoffs_total	schedule	code: internal/scheduler/fixed/loop.go
 fixed_scheduler_last_success_age_seconds		code: internal/scheduler/fixed/loop.go
 fixed_scheduler_missing_occurrence_seconds	schedule	code: internal/scheduler/fixed/loop.go
-fixed_scheduler_occurrences_total		code: internal/scheduler/fixed/loop.go
+fixed_scheduler_occurrences_total	result,schedule	code: internal/scheduler/fixed/loop.go
 fixed_scheduler_schedule_degraded	reason,schedule	code: internal/scheduler/fixed/loop.go
 fixed_scheduler_up		code: internal/scheduler/fixed/loop.go
 fixed_scheduler_windows_total		code: internal/scheduler/fixed/loop.go

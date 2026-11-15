@@ -1346,7 +1346,6 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 	// open phase share it, so a re-read run is written exactly like a listed one.
 	collectRunDetail := func(run gitHubWorkflowRunPayload, pipeline githubTestsPipelineRow) ([]githubTestsJobRow, []githubTestsAcceptanceRow, error) {
 		jobs := make([]githubTestsJobRow, 0)
-		acceptance := make([]githubTestsAcceptanceRow, 0)
 		jobPage, pageErr := providerfoundation.CollectGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{
 			Path:     root + "/actions/runs/" + url.PathEscape(pipeline.RunID) + "/jobs",
 			Route:    githubRunJobsRoute,
@@ -1419,7 +1418,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 			}
 			policy = cached
 		}
-		acceptance = projectGitHubTestsChecks(claim, repoID, pipeline, jobs, policy, targetBranch, prNumber, testsOptionalString(stringValue(run.HTMLURL)), normalizedAt)
+		acceptance := projectGitHubTestsChecks(claim, repoID, pipeline, jobs, policy, targetBranch, prNumber, testsOptionalString(stringValue(run.HTMLURL)), normalizedAt)
 		return jobs, acceptance, nil
 	}
 	emitRunPage := func(page providerfoundation.PageVisit) error {

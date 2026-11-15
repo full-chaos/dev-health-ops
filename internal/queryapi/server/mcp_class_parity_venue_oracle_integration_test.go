@@ -378,6 +378,15 @@ var mcpParityOverrides = map[string]map[string]string{
 	// row_view is the view of a row: the empty string is a legacy row, which every reader keeps (CHAOS-8863). A
 	// generated string would be a view no reader asks for and the capacity reads would find no rows.
 	"work_item_metrics_daily": {"row_view": "CAST('' AS LowCardinality(String))"},
+	// team_repo_ownership is read at the request by the TestOps TEAM series, the scoped tiles and every team scope: an
+	// ownership row counts when valid_from <= now < valid_to. A generated valid_to is a past instant (an expired row)
+	// and a generated valid_from a recent one, so every owner would be expired and the TestOps TEAM series would be
+	// empty. The rows are written as the sync derivation writes an open claim (CHAOS-13804): the teams of the world
+	// own the repository from the start of the window, no end.
+	"team_repo_ownership": {
+		"valid_from": "CAST(now() - toIntervalDay(60) AS DateTime64(3, 'UTC'))",
+		"valid_to":   "CAST(NULL AS Nullable(DateTime64(3, 'UTC')))",
+	},
 	"compounding_risk_daily": {
 		"scope":    "CAST(if(entity = 0, 'repo', 'team') AS Enum8('repo' = 1, 'team' = 2))",
 		"scope_id": "if(entity = 0, '%REPO%', arrayElement(%TEAMS%, entity + 1))",

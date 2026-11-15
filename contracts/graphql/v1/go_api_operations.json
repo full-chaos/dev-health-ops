@@ -444,6 +444,10 @@
     "legacy": true
   },
   {
+    "operation": "testopsTestWindow",
+    "digest": "80397810a4c9c1aa724b0a1828ec6cfa2235fd9ad4b320124149dd68a623faa0"
+  },
+  {
     "operation": "throughputForecast",
     "digest": "fc08dea094ec832290b4f528141eacb5bbc463beea45794cf205fe43952379f9"
   },

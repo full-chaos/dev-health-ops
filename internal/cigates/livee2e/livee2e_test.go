@@ -12,6 +12,7 @@ import (
 	"unicode"
 
 	"github.com/full-chaos/dev-health-ops/internal/cigates/livee2e"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/refusedaddr"
 )
 
 func mustJSON(t *testing.T, v any) []byte {
@@ -247,12 +248,7 @@ func TestValkeyPing(t *testing.T) {
 	if cmds := authReceived(); len(cmds) != 2 || !strings.Contains(cmds[0], "AUTH") || !strings.Contains(cmds[0], "pw") {
 		t.Errorf("commands %q", cmds)
 	}
-	refused := func() string {
-		ln, _ := net.Listen("tcp", "127.0.0.1:0")
-		addr := ln.Addr().String()
-		_ = ln.Close()
-		return "redis://" + addr
-	}()
+	refused := "redis://" + refusedaddr.Addr(t)
 	if err := livee2e.ValkeyPing(context.Background(), refused); err == nil {
 		t.Error("a closed port must fail")
 	}

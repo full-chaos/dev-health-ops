@@ -83,6 +83,7 @@ var pythonFieldDeletedOutright = map[string]bool{
 	"investmentEvidenceQuality":      true,
 	"sourceHealth":                   true,
 	"testopsJobFailures":             true,
+	"testopsTestWindow":              true,
 }
 
 // pythonSchemaFacts is what the ledger is held to: the root fields whose

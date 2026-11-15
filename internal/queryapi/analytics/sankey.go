@@ -133,6 +133,7 @@ func CompileSankey(req SankeyRequest, orgID string, timeoutSeconds int, useInves
 		if dimErr != nil {
 			return compiledQuery{}, nil, dimErr
 		}
+		dimCol = shape.owner.column(dim, dimCol)
 		unionParts = append(unionParts, fmt.Sprintf(`
 SELECT
     '%s' AS dimension,
@@ -184,10 +185,12 @@ ORDER BY dim_order ASC, value DESC, node_id ASC
 		if colErr != nil {
 			return compiledQuery{}, nil, colErr
 		}
+		sourceCol = shape.owner.column(sourceDim, sourceCol)
 		targetCol, colErr := dbColumn(targetDim, useInvestment)
 		if colErr != nil {
 			return compiledQuery{}, nil, colErr
 		}
+		targetCol = shape.owner.column(targetDim, targetCol)
 		edgeSQL := fmt.Sprintf(`
 SELECT
     '%s' AS source_dimension,

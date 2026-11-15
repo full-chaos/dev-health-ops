@@ -15,43 +15,9 @@ import (
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
-
-const orgSeriesDDL = `
-CREATE TABLE testops_pipeline_metrics_daily (
-    repo_id UUID,
-    day Date,
-    pipelines_count UInt32,
-    success_count UInt32,
-    success_rate Float64,
-    team_id Nullable(String),
-    org_id LowCardinality(String) DEFAULT '',
-    computed_at DateTime('UTC')
-) ENGINE MergeTree ORDER BY (repo_id, day);
-
-CREATE TABLE testops_coverage_metrics_daily (
-    repo_id UUID,
-    day Date,
-    line_coverage_pct Nullable(Float64),
-    lines_total Nullable(UInt32),
-    lines_covered Nullable(UInt32),
-    team_id Nullable(String),
-    org_id LowCardinality(String) DEFAULT '',
-    computed_at DateTime('UTC')
-) ENGINE MergeTree ORDER BY (repo_id, day);
-
-CREATE TABLE testops_test_metrics_daily (
-    repo_id UUID,
-    day Date,
-    flake_rate Float64,
-    flake_cases Nullable(UInt32),
-    distinct_cases Nullable(UInt32),
-    team_id Nullable(String),
-    org_id LowCardinality(String) DEFAULT '',
-    computed_at DateTime('UTC')
-) ENGINE MergeTree ORDER BY (repo_id, day);
-`
 
 func TestResolveOneTimeseries_OrgSeries_SeededRealClickHouse(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
@@ -71,11 +37,7 @@ func TestResolveOneTimeseries_OrgSeries_SeededRealClickHouse(t *testing.T) {
 		t.Fatalf("open raw ClickHouse connection: %v", err)
 	}
 	defer func() { _ = conn.Close() }()
-	for _, stmt := range splitSQLStatements(orgSeriesDDL) {
-		if err := conn.Exec(ctx, stmt); err != nil {
-			t.Fatalf("exec DDL: %v", err)
-		}
-	}
+	chschema.Apply(ctx, t, inst)
 
 	const orgID = "org-9736"
 	const otherOrg = "org-9736-other"
@@ -108,6 +70,12 @@ func TestResolveOneTimeseries_OrgSeries_SeededRealClickHouse(t *testing.T) {
 	// Coverage: team-a 50/50 (100%), team-b 30/150 (20%), a row with a percent but no counts: the org rate = 80/200 = 40.
 	exec(fmt.Sprintf("INSERT INTO testops_coverage_metrics_daily (repo_id, day, line_coverage_pct, lines_total, lines_covered, team_id, org_id, computed_at) VALUES ('%s', '2026-01-02', 100, 50, 50, 'team-a', '%s', now()), ('%s', '2026-01-02', 20, 150, 30, 'team-b', '%s', now()), ('%s', '2026-01-02', 90, NULL, NULL, NULL, '%s', now())",
 		repoA, orgID, repoB, orgID, repoNoTeam, orgID))
+
+	for _, o := range []struct{ org, repo, team string }{{orgID, repoA, "team-a"}, {orgID, repoB, "team-b"}, {otherOrg, repoForeign, "team-x"}} {
+		for _, q := range ownerSeedSQL(o.org, o.repo, o.team) {
+			exec(q)
+		}
+	}
 
 	client, err := dhclickhouse.NewClickHouseQueryClientWithOptions(dhclickhouse.Options{DSN: inst.URI})
 	if err != nil {
@@ -162,11 +130,7 @@ func TestResolveOneTimeseries_OrgFlakeRate_AllOrNothingBucketsRealClickHouse(t *
 		t.Fatalf("open raw ClickHouse connection: %v", err)
 	}
 	defer func() { _ = conn.Close() }()
-	for _, stmt := range splitSQLStatements(orgSeriesDDL) {
-		if err := conn.Exec(ctx, stmt); err != nil {
-			t.Fatalf("exec DDL: %v", err)
-		}
-	}
+	chschema.Apply(ctx, t, inst)
 	const orgID = "org-9737"
 	const repoA = "11111111-1111-1111-1111-111111111111"
 	const repoB = "22222222-2222-2222-2222-222222222222"
@@ -184,6 +148,13 @@ func TestResolveOneTimeseries_OrgFlakeRate_AllOrNothingBucketsRealClickHouse(t *
 			r.repo, r.day, r.flake, r.distinct, r.team, orgID)
 		if err := conn.Exec(ctx, q); err != nil {
 			t.Fatalf("seed %q: %v", q, err)
+		}
+	}
+	for _, o := range []struct{ repo, team string }{{repoA, "team-a"}, {repoB, "team-b"}} {
+		for _, q := range ownerSeedSQL(orgID, o.repo, o.team) {
+			if err := conn.Exec(ctx, q); err != nil {
+				t.Fatalf("seed %q: %v", q, err)
+			}
 		}
 	}
 	client, err := dhclickhouse.NewClickHouseQueryClientWithOptions(dhclickhouse.Options{DSN: inst.URI})

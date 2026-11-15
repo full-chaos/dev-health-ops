@@ -234,12 +234,13 @@ func TestCanonicalOnlyCensus_BranchSites(t *testing.T) {
 // censusPinnedSites is the pinned count per file (comment lines excluded). Roles: resolve.go routes each
 // request and the quality gate; investmentquality.go holds the two quality gates; validate.go's dbColumn is
 // the one place a dimension maps to a column (the legacy branch holds no theme column); the compile files
-// take the flag from the resolver; sankeycoverage.go carries the coverage flag.
+// take the flag from the resolver; sankeycoverage.go carries the coverage flag; testopsownership.go holds the
+// TestOps TEAM owner join, which exists only OFF the investment path (TestTestopsOwnerJoinIsOffTheInvestmentPath).
 func censusPinnedSites() map[string]int {
 	return map[string]int{
-		"breakdown.go": 6, "catalog.go": 5, "filtertranslation.go": 13, "flowmatrix.go": 9, "investment.go": 5,
-		"investmentquality.go": 4, "resolve.go": 34, "sankey.go": 5, "sankeycoverage.go": 21, "sankeygrouped.go": 6,
-		"timeseries.go": 4, "validate.go": 5,
+		"breakdown.go": 7, "catalog.go": 5, "filtertranslation.go": 14, "flowmatrix.go": 9, "investment.go": 5,
+		"investmentquality.go": 4, "resolve.go": 34, "sankey.go": 5, "sankeycoverage.go": 21, "sankeygrouped.go": 7,
+		"testopsownership.go": 4, "timeseries.go": 5, "validate.go": 5,
 	}
 }
 

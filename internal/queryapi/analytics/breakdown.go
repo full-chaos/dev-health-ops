@@ -104,7 +104,10 @@ func CompileBreakdown(req BreakdownRequest, orgID string, timeoutSeconds int, us
 func compileBreakdownOver(req BreakdownRequest, dimCol, orgID string, timeoutSeconds int, useInvestment bool, filters *model.FilterInput) (compiledQuery, error) {
 	var err error
 
-	fc, err := translateFilters(orgID, filters, useInvestment, defaultFilterColumns())
+	owner := newTestopsOwner(orgID, req.Measure, []Dimension{req.Dimension}, useInvestment, filters)
+	dimCol = owner.column(req.Dimension, dimCol)
+
+	fc, err := translateFilters(orgID, filters, useInvestment, owner.filterColumns(req.Measure, useInvestment))
 	if err != nil {
 		return compiledQuery{}, err
 	}
@@ -125,6 +128,7 @@ func compileBreakdownOver(req BreakdownRequest, dimCol, orgID string, timeoutSec
 		}
 	} else {
 		source, alias, dateFilter = nonInvestmentSourceAndDateFilter(req.Measure)
+		extraClauses, contextBindings = owner.join, owner.bindings
 		measureExpr, err = dbExpression(req.Measure, false, false)
 		if err != nil {
 			return compiledQuery{}, err

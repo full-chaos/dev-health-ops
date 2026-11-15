@@ -14,6 +14,19 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
+// The keys and observation names a github tests/cicd unit result carries. They are exported so a reader's tests (the
+// sync-coverage cells) seed a result from the same constants the producer writes: a rename breaks their build.
+const (
+	GitHubTestsResultKeyReportsComplete    = "reports_complete"
+	GitHubTestsResultKeyIncomplete         = "incomplete"
+	GitHubTestsResultKeyOpenRunsReread     = "open_runs_reread"
+	GitHubTestsResultKeyOpenCapReached     = "open_runs_cap_reached"
+	GitHubTestsResultKeyOpenPhaseRateFloor = "open_phase_rate_floor"
+	GitHubTestsRunInventorySaturated       = githubTestsRunInventorySaturatedComponent
+	GitHubTestsArtifactInventorySaturated  = githubTestsArtifactInventorySaturatedComponent
+	GitHubTestsListingSaturated            = githubTestsListingSaturatedCause
+)
+
 const (
 	// githubTestsSearchResultCap is GitHub's documented limit of results for
 	// one created search of the workflow-runs listing: the listing ends after

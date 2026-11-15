@@ -534,6 +534,8 @@ properties of that listing shape the walk:
   rate-limit headers of the unit's own responses and stops, with the marker
   `open_phase_rate_floor`, when fewer than the larger of 500 and a fifth of the
   limit remain, or when no header was seen.
+  The 6-hour lookback and the 100 / 300 re-read caps are fixed defaults, not
+  configurable.
 
 One case stays unseen: a run that was final at its last read and is rerun
 weeks later, after it left both the lookback and the open set, is not re-read,

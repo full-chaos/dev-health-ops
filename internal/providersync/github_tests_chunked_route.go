@@ -1082,12 +1082,12 @@ func githubTestsFinalMetadataBatch(claim Claim, cursor githubTestsChunkCursor) (
 			"pipeline_runs_synced": cursor.Pipelines, "job_runs_synced": cursor.Jobs,
 			"acceptance_checks_synced": cursor.Acceptance, "test_suites_synced": cursor.Suites,
 			"test_cases_synced": cursor.Cases, "coverage_snapshots_synced": cursor.Coverage,
-			"repo": cursor.Repo, "reports_complete": len(incomplete) == 0,
+			"repo": cursor.Repo, GitHubTestsResultKeyReportsComplete: len(incomplete) == 0,
 			"reports_skipped": githubTestsIncompleteCount(incomplete),
 			// The open phase's evidence: runs re-read by id, and whether its cap
 			// (not the end of the open rows) stopped it. Never blocks the watermark.
-			"open_runs_reread": cursor.OpenDone, "open_runs_cap_reached": cursor.OpenCapReached,
-			"incomplete": incomplete,
+			GitHubTestsResultKeyOpenRunsReread: cursor.OpenDone, GitHubTestsResultKeyOpenCapReached: cursor.OpenCapReached,
+			GitHubTestsResultKeyIncomplete: incomplete,
 			// Durable per-artifact marker for oversized skips (CHAOS-4315):
 			// the run id/artifact id/size/cap an operator needs to find the
 			// exact GitHub artifact behind an artifact_oversized count,
@@ -1199,7 +1199,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 			return batchErr
 		}
 		if cursor.OpenFloorHit {
-			batch.Result["open_phase_rate_floor"] = cursor.OpenFloorRemaining
+			batch.Result[GitHubTestsResultKeyOpenPhaseRateFloor] = cursor.OpenFloorRemaining
 		}
 		// CHAOS-4394 telemetry (dev_health_cicd_partial_success_total) is NOT
 		// recorded here. This closure runs once per attempt, including attempts

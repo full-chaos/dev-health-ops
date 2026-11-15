@@ -612,9 +612,9 @@ func (handler GitHubTestsRouteHandler) Collect(
 	return CompleteRouteBatch{Effects: effects, Watermark: watermark, Result: map[string]any{
 		"pipeline_runs_synced": len(pipelines), "job_runs_synced": len(jobs), "acceptance_checks_synced": len(acceptance),
 		"test_suites_synced": len(suites), "test_cases_synced": len(cases), "coverage_snapshots_synced": len(coverage), "repo": repo.FullName,
-		"reports_complete": len(incomplete) == 0,
-		"reports_skipped":  githubTestsIncompleteCount(incomplete),
-		"incomplete":       incomplete,
+		GitHubTestsResultKeyReportsComplete: len(incomplete) == 0,
+		"reports_skipped":                   githubTestsIncompleteCount(incomplete),
+		"incomplete":                        incomplete,
 	}, Evidence: FetchEvidence{Provider: claim.Provider, Dataset: claim.Dataset, Requests: requests, Pages: pages, Records: len(pipelines) + len(jobs) + len(acceptance) + len(suites) + len(cases) + len(coverage)}}, nil
 }
 

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 	"github.com/google/uuid"
@@ -15,14 +16,33 @@ import (
 )
 
 // The unit results the GitHub chunked producer writes for a listing it could not walk past GitHub's cap of results
-// (reports_complete false and the long observation of the cursor flag; seeded from the keys the producer cell
-// TestPeelProgressGuardEndsAStuckRange asserts in internal/providersync) and for a unit whose open phase stopped under
-// the rate-limit floor (a marker only: the unit is complete).
-const (
-	runSaturatedResult      = `{"reports_complete":false,"reports_skipped":1,"incomplete":[{"component":"run_inventory_saturated","cause":"listing_saturated","count":1}],"skipped_artifacts":[]}`
-	artifactSaturatedResult = `{"reports_complete":false,"reports_skipped":1,"incomplete":[{"component":"artifact_inventory_saturated","cause":"listing_saturated","count":1}],"skipped_artifacts":[]}`
-	rateFloorResult         = `{"reports_complete":true,"incomplete":[],"open_runs_reread":0,"open_phase_rate_floor":499}`
+// (reports_complete false and the long observation of the cursor flag) and for a unit whose open phase stopped under
+// the rate-limit floor (a marker only: the unit is complete). Every key and name is seeded from the constants the
+// producer writes them with, so a rename breaks this build; the producer cells in internal/providersync
+// (TestPeelProgressGuardEndsAStuckRange, TestOpenPhaseStopsUnderTheRateLimitFloor) assert the values.
+var (
+	runSaturatedResult = producerResultJSON(false, nil, providersync.GitHubTestsIncomplete{
+		Component: providersync.GitHubTestsRunInventorySaturated, Cause: providersync.GitHubTestsListingSaturated, Count: 1})
+	artifactSaturatedResult = producerResultJSON(false, nil, providersync.GitHubTestsIncomplete{
+		Component: providersync.GitHubTestsArtifactInventorySaturated, Cause: providersync.GitHubTestsListingSaturated, Count: 1})
+	rateFloorResult = producerResultJSON(true, map[string]any{
+		providersync.GitHubTestsResultKeyOpenRunsReread: 0, providersync.GitHubTestsResultKeyOpenPhaseRateFloor: 499})
 )
+
+func producerResultJSON(complete bool, extra map[string]any, incomplete ...providersync.GitHubTestsIncomplete) string {
+	result := map[string]any{
+		providersync.GitHubTestsResultKeyReportsComplete: complete,
+		providersync.GitHubTestsResultKeyIncomplete:      append([]providersync.GitHubTestsIncomplete{}, incomplete...),
+	}
+	for key, value := range extra {
+		result[key] = value
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		panic(err)
+	}
+	return string(encoded)
+}
 
 const (
 	partialCapResult  = `{"reports_complete":false,"incomplete":[{"component":"run_reports","cause":"per_run_cap","count":1}]}`

@@ -134,6 +134,13 @@ type filterColumns struct {
 	// stays in the team's coverage (CHAOS-9221 round 135).
 	TeamRepo string
 
+	// TeamByOwnership makes a team scope on a read off the investment path the repositories the team owns
+	// (teamscope.RepoCondition on TeamRepo), not a match of the stored team column. The TestOps daily readers set it
+	// (CHAOS-13804). TeamScopeOnJoin says the read's own ownership join already restricts to the scoped owners, so the
+	// scope adds no clause of its own.
+	TeamByOwnership bool
+	TeamScopeOnJoin bool
+
 	// WorkCategorySelectsUnits opts a caller into the UNIT-SELECTING form of
 	// the work-category predicate instead of the default row-multiplying one
 	// (CHAOS-5498). Default false, so every existing caller is byte-identical.
@@ -183,6 +190,14 @@ func translateFilters(orgID string, filters *model.FilterInput, useInvestment bo
 
 	if filters.Scope != nil {
 		switch {
+		case !useInvestment && cols.TeamByOwnership && filters.Scope.Level == model.ScopeLevelInputTeam && len(filters.Scope.Ids) > 0:
+			if !cols.TeamScopeOnJoin {
+				teamCondition, teamBindings := teamscope.RepoCondition(orgID, teamRepoColumn(cols), filters.Scope.Ids, time.Now().UTC())
+				if teamCondition != "" {
+					sql += " AND " + teamCondition
+					bindings = append(bindings, teamBindings...)
+				}
+			}
 		case useInvestment && filters.Scope.Level == model.ScopeLevelInputTeam && len(filters.Scope.Ids) > 0:
 			// A team is its OWNED repositories (team_repo_ownership, the ONE shared predicate), applied to the
 			// unit's repository rows; never the work-item attribution vote (CHAOS-9221, D5947).

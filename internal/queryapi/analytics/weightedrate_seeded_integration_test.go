@@ -16,52 +16,9 @@ import (
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
-
-const weightedRateDDL = `
-CREATE TABLE testops_pipeline_metrics_daily (
-    repo_id UUID,
-    day Date,
-    pipelines_count UInt32,
-    success_count UInt32,
-    failure_count UInt32,
-    success_rate Float64,
-    failure_rate Float64,
-    rerun_rate Float64,
-    team_id Nullable(String),
-    org_id LowCardinality(String) DEFAULT '',
-    computed_at DateTime('UTC')
-) ENGINE MergeTree ORDER BY (repo_id, day);
-
-CREATE TABLE testops_coverage_metrics_daily (
-    repo_id UUID,
-    day Date,
-    line_coverage_pct Nullable(Float64),
-    lines_total Nullable(UInt32),
-    lines_covered Nullable(UInt32),
-    team_id Nullable(String),
-    org_id LowCardinality(String) DEFAULT '',
-    computed_at DateTime('UTC')
-) ENGINE MergeTree ORDER BY (repo_id, day);
-
-CREATE TABLE testops_test_metrics_daily (
-    repo_id UUID,
-    day Date,
-    total_cases UInt32,
-    passed_count UInt32,
-    failed_count UInt32,
-    skipped_count UInt32,
-    pass_rate Float64,
-    failure_rate Float64,
-    flake_rate Float64,
-    flake_cases Nullable(UInt32),
-    distinct_cases Nullable(UInt32),
-    team_id Nullable(String),
-    org_id LowCardinality(String) DEFAULT '',
-    computed_at DateTime('UTC')
-) ENGINE MergeTree ORDER BY (repo_id, day);
-`
 
 func TestTestOpsRateMeasures_AreWeightedNotAMeanOfRates_RealClickHouse(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
@@ -80,11 +37,7 @@ func TestTestOpsRateMeasures_AreWeightedNotAMeanOfRates_RealClickHouse(t *testin
 		t.Fatal(err)
 	}
 	defer func() { _ = conn.Close() }()
-	for _, stmt := range splitSQLStatements(weightedRateDDL) {
-		if err := conn.Exec(ctx, stmt); err != nil {
-			t.Fatalf("exec DDL: %v", err)
-		}
-	}
+	chschema.Apply(ctx, t, inst)
 	exec := func(q string) {
 		t.Helper()
 		if err := conn.Exec(ctx, q); err != nil {
@@ -152,6 +105,13 @@ func TestTestOpsRateMeasures_AreWeightedNotAMeanOfRates_RealClickHouse(t *testin
 	// neither side. Mean of the percents 50; weighted 9,010 / 10,100. team-b: a repository with no line.
 	exec(fmt.Sprintf("INSERT INTO testops_coverage_metrics_daily (repo_id, day, line_coverage_pct, lines_total, lines_covered, team_id, org_id, computed_at) VALUES ('%s', '2026-01-02', 90, 10000, 9000, 'team-a', '%s', now()), ('%s', '2026-01-02', 10, 100, 10, 'team-a', '%s', now()), ('%s', '2026-01-02', 99, NULL, 500, 'team-a', '%s', now()), ('%s', '2026-01-02', NULL, 0, 0, 'team-b', '%s', now())",
 		big, orgID, small, orgID, noTeam, orgID, empty, orgID))
+
+	// A team series reads the owners of a repository at the request: each stored team of this seed owns its repositories.
+	for _, o := range []struct{ repo, team string }{{big, "team-a"}, {small, "team-a"}, {empty, "team-b"}, {cFull, "team-c"}, {cPart, "team-c"}, {notCompleted, "team-c"}} {
+		for _, q := range ownerSeedSQL(orgID, o.repo, o.team) {
+			exec(q)
+		}
+	}
 
 	client, err := dhclickhouse.NewClickHouseQueryClientWithOptions(dhclickhouse.Options{DSN: inst.URI})
 	if err != nil {

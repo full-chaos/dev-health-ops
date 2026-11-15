@@ -512,6 +512,9 @@ means the ClickHouse `teams` dimension is empty.
 > it applies that ranking, so the TestOps consumer has no provider-specific branch. Real-ClickHouse
 > integration tests seed an in-day multi-claim and require the primary owner on all six TestOps
 > output tables.
+> The stored team is written for these rows, but the analytics series, breakdown, sankey and team scope read
+> `team_repo_ownership` at the request instead (see "A TestOps rate and the counts beside it" in the owner-shares
+> section); only the benchmarking job still reads the stored team.
 
 > **The AI analytics team scope uses repository ownership, not patterns.** The
 > query-api AI analytics reads (`internal/queryapi/aianalytics`: aiReviewLoad, aiRiskBreakdown,
@@ -1315,6 +1318,7 @@ controls: a link that is gone and an explicit empty list are closed).
 > owner, each with its own share (`team_repo_ownership.share`, the largest non-NULL share of the team's open rows,
 > divided by the sum over all owners; equal where any owner has no measure; no rounding, threshold or cap in the reader; the writer's co-owner floor above decides which rows exist).
 > `AuthoritativeOwnersByRepo` is the same read cut to the main owners. A caller picks its rule by the kind of measure:
+> - **A TestOps rate and the counts beside it** (the pipeline, test and coverage measures of the analytics series, breakdown and sankey, and the scoped TestOps tiles) read the owners at the request, by the same ownership rule as every team scope (`teamscope.RepoCondition`), and take a co-owned repository IN FULL for each owner team, never at its share: a team's rate is the sum of the numerators over the sum of the denominators of its owned repositories, and the case and run counts shown beside a rate are sums over the same owned repositories, taken unscaled, so the count always describes the repositories the rate describes. The series of a team and its scoped tile are therefore one number. The organization series counts each repository once, never the sum of the team series. Every day of a window is attributed to the owners as of the request: a repository that changed owner reads under its owner today for the whole window.
 > - **An additive measure** (a sum over repositories) takes each owner at its share. `team_cognitive_load_daily`
 >   does so: the pull-request interruption load, the review request load and the context-spread count are the sums
 >   of the repository values times the owner's share, and the after-hours and weekend ratios are recomputed from the
@@ -1373,7 +1377,7 @@ controls: a link that is gone and an explicit empty list are closed).
 >   property of the repository; the share scales exposure counts). A sole owner of every repository it owns (share 1)
 >   is unchanged, bit for bit. Resolved through `teamresolve.ResolveOwnerSharesThenPatterns`.
 > - **A table with one row per repository** (the four TestOps families, one row per organization, repository and
->   day) takes the main owner only; a full tie takes the first tied team by rank. A second team has no row to live in.
+>   day) stores the main owner only, as of the end of the day; a full tie stores the first tied team by rank. A second team has no row to live in, so the analytics series, breakdown and sankey do not group or filter by that stored team: they take the owners at the request (see "A TestOps rate and the counts beside it" above). The benchmarking job still groups by the stored team.
 
 A project (a Jira space connected to several Atlassian teams, a Linear or GitLab project with several owning
 teams, any provider) can belong to more than one team. An item of such a project is the work of EACH active
@@ -2192,12 +2196,12 @@ them is in their readers:
 
 | Table | Team id | Why no row of zeros | Reader rule |
 | --- | --- | --- | --- |
-| the six testops daily tables (`testops_pipeline_metrics_daily`, `testops_test_metrics_daily`, `testops_coverage_metrics_daily`, `testops_release_confidence`, `testops_quality_drag`, `testops_pipeline_stability`) | a VALUE of the (org, repository, day) key: the repository's authoritative active owner | a recompute writes the key again and replaces the team; there is no stale team key | a reader takes the newest row of the KEY first and only then its team. The benchmarking job groups by the table's key and takes the team by `argMax` (`benchmarking.FetchMetricSeriesByScope`; `TestEveryMetricGroupsByTheKeyOfItsTable`): grouping by `team_id` kept an older row under a superseded id as a series of its own |
+| the six testops daily tables (`testops_pipeline_metrics_daily`, `testops_test_metrics_daily`, `testops_coverage_metrics_daily`, `testops_release_confidence`, `testops_quality_drag`, `testops_pipeline_stability`) | a VALUE of the (org, repository, day) key: the repository's authoritative active owner | a recompute writes the key again and replaces the team; there is no stale team key | the analytics readers take the newest row of the KEY (org, repository, day) and read the owners of the repository at the request; no analytics reader reads the stored team. The benchmarking job takes the newest row of the KEY first and only then its team: it groups by the table's key and takes the team by `argMax` (`benchmarking.FetchMetricSeriesByScope`; `TestEveryMetricGroupsByTheKeyOfItsTable`): grouping by `team_id` kept an older row under a superseded id as a series of its own |
 | the six benchmarking outputs (`testops_metric_baselines`, `testops_metric_anomalies`, `testops_maturity_bands`, `testops_metric_correlations`, `testops_period_comparisons`, `testops_benchmark_insights`) | `scope_key` of a row of `scope_type = 'team'` | append-only results, read by no reader; a row of zeros would be a result that was not computed | the job writes no team series of an inactive team (`teamactive`): an inactive team is not a target. Rows written before the fix stay; no reader shows them |
 | `capacity_forecasts` | a value of the forecast | one forecast per row, replaced by the next forecast of the same id | the forecast list with no team named lists the active teams and the forecasts with no team (`activeteams.ListablePredicate`); a named team is read as named |
 | `recommendations_daily` | in the key | a rule result (fired or not), not a count | the readers read only the team ids a request names (no rule) |
 
-Asserted on real ClickHouse by `TestTestopsTeamSeriesHoldNoSupersededTeam` and `TestForecastListHoldsNoSupersededTeam`.
+Asserted on real ClickHouse by `TestTestopsTeamSeriesHoldNoSupersededTeam` (the benchmarking reader, which still takes the stored team of the newest row), by `TestTestopsTeamSeriesCoOwnedRepoShowsInFullInBothOwnerSeries`, `TestTestopsTeamSeriesAttributesAWholeWindowToTheOwnersToday` and `TestTestopsTeamSeriesFollowTheOwnershipRules` (the analytics team series, which read the owners at the request), and by `TestForecastListHoldsNoSupersededTeam`. A new query-api reader that groups or filters one of the three TestOps daily tables by the stored `team_id` fails `TestNoQueryAPIReaderGroupsOrFiltersTestopsDailyByTheStoredTeam`, a source census over the string literals of `internal/queryapi`.
 The acr readers of `capacity_forecasts` and `recommendations_daily` are the acr surface's own.
 
 Limits:

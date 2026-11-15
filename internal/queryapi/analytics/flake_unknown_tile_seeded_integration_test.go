@@ -43,6 +43,14 @@ VALUES (?, ?, 10, 10, 0, 0, 0, 1, 0, ?, ?, 1, ?, 'team-1', ?, now(), ?, ?)`,
 	seed(day.AddDate(0, 0, 1), known, nil, 0, 0)
 	seed(day.AddDate(0, 0, 1), unknown, nil, 0, 0)
 
+	for _, repo := range []string{known, unknown} {
+		for _, q := range ownerSeedSQL(orgID, repo, "team-1") {
+			if err := admin.Exec(ctx, q); err != nil {
+				t.Fatalf("seed %q: %v", q, err)
+			}
+		}
+	}
+
 	req, err := TimeseriesRequestFromInput(model.TimeseriesRequestInput{
 		Dimension: model.DimensionInputTeam, Measure: model.MeasureInputTestFlakeRate, Interval: model.BucketIntervalInputDay,
 		DateRange: &model.DateRangeInput{StartDate: mustGraphQLDate("2026-01-01"), EndDate: mustGraphQLDate("2026-01-07")},

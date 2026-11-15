@@ -89,6 +89,8 @@ func metricDriverSelect(m driverBatchMetric) string {
 		value, where = prrework.WindowRateSQL, "current.value IS NOT NULL AND delta_pct IS NOT NULL"
 	case table == changefailure.Table:
 		value, where = changefailure.WindowRateSQL, "current.value IS NOT NULL AND delta_pct IS NOT NULL"
+	case isPipelineSuccess(table, column):
+		value, where = pipelineSuccessWindowRateSQL, "current.value IS NOT NULL AND delta_pct IS NOT NULL"
 	}
 	return fmt.Sprintf(`            SELECT metric, id, delta_pct FROM (
                 SELECT

@@ -441,3 +441,19 @@ func TestASlowTestWithNoRowFailsItsRacePart(t *testing.T) {
 		}
 	}
 }
+
+// writeRaceSplitLists writes the stand-in's -race listing of every race split package (FAKE_GO_RACE_SPLIT_LISTS).
+func writeRaceSplitLists(t *testing.T, dir string) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	root := repoRoot(t)
+	for key := range readRaceSplitTables(t, root).parts {
+		names := raceListedTests(t, root, key)
+		path := filepath.Join(dir, strings.ReplaceAll(key, "/", "__")+".list")
+		if err := os.WriteFile(path, []byte(strings.Join(names, "\n")+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}

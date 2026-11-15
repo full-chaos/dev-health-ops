@@ -35,7 +35,8 @@ import (
 // a sync lands after the snapshot are in neither half, so the check no longer
 // fails a partition whose family computed every row it could read. Each
 // family's source read is the family's own source predicate (see
-// cicd.PipelineRunsSource, deploySource, incidentsStartedSQL), so the check
+// cicd.PipelineRunsSource, deploySource, incidentsStartedSQL,
+// testopsPipelineRunsSource, testopsSuiteResultsSource), so the check
 // counts exactly the rows the family keeps.
 type SourceDataChecker interface {
 	SourceSnapshot(ctx context.Context, partitionID string, asOf time.Time) (SourceSnapshot, error)
@@ -131,27 +132,18 @@ WHERE partition.id = $1::uuid`, partitionID).Scan(&orgID, &day, &rawRepositoryID
 	// pipeline run", as pipeline_stability's eligibility pinned a healthy day
 	// as a permanent failure. A day with a completed run and no stability row
 	// is still flagged.
-	if snapshot.testopsPipeline, err = checker.exists(ctx, `
-SELECT 1 FROM ci_pipeline_runs
-WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(UUID)}
-  AND started_at IS NOT NULL AND toDate(started_at) = {day:Date}
-LIMIT 1`, orgID, day, repositoryIDs); err != nil {
+	testopsArgs := testopsSourceArgs(orgID, repositoryIDs, dayStart, dayEnd)
+	if snapshot.testopsPipeline, err = checker.existsWith(ctx, "SELECT 1"+testopsPipelineRunsSource+"\nLIMIT 1",
+		testopsArgs...); err != nil {
 		return SourceSnapshot{}, err
 	}
-	if snapshot.testopsCompletedPipeline, err = checker.exists(ctx, `
-SELECT 1 FROM ci_pipeline_runs
-WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(UUID)}
-  AND started_at IS NOT NULL AND toDate(started_at) = {day:Date}
+	if snapshot.testopsCompletedPipeline, err = checker.existsWith(ctx, "SELECT 1"+testopsPipelineRunsSource+`
   AND lower(trimBoth(coalesce(status, ''))) IN {completed_statuses:Array(String)}
-LIMIT 1`, orgID, day, repositoryIDs, clickhouse.Named("completed_statuses", testops.CompletedRunStatuses())); err != nil {
+LIMIT 1`, append(testopsArgs, clickhouse.Named("completed_statuses", testops.CompletedRunStatuses()))...); err != nil {
 		return SourceSnapshot{}, err
 	}
-	if snapshot.testopsSuite, err = checker.exists(ctx, `
-SELECT 1 FROM test_suite_results
-WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(UUID)}
-  AND coalesce(started_at, finished_at) IS NOT NULL
-  AND toDate(coalesce(started_at, finished_at)) = {day:Date}
-LIMIT 1`, orgID, day, repositoryIDs); err != nil {
+	if snapshot.testopsSuite, err = checker.existsWith(ctx, "SELECT 1"+testopsSuiteResultsSource+"\nLIMIT 1",
+		testopsArgs...); err != nil {
 		return SourceSnapshot{}, err
 	}
 

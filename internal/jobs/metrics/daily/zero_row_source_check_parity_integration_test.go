@@ -62,9 +62,11 @@ func startParityStack(t *testing.T, ctx context.Context) parityStack {
 		"CREATE TABLE deployments (`repo_id` UUID, `deployment_id` String, `status` Nullable(String), `environment` Nullable(String), `started_at` Nullable(DateTime64(3, 'UTC')), `finished_at` Nullable(DateTime64(3, 'UTC')), `deployed_at` Nullable(DateTime64(3, 'UTC')), `merged_at` Nullable(DateTime64(3, 'UTC')), `pull_request_number` Nullable(UInt32), `pull_request_tier` LowCardinality(String) DEFAULT '', `release_ref` String DEFAULT '', `release_ref_confidence` Float64 DEFAULT 0., `last_synced` DateTime64(3, 'UTC'), `org_id` String DEFAULT 'default') ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, deployment_id)",
 		"CREATE TABLE deploy_metrics_daily (`repo_id` UUID, `day` Date, `deployments_count` UInt32, `failed_deployments_count` UInt32, `deploy_time_p50_hours` Nullable(Float64), `lead_time_p50_hours` Nullable(Float64), `computed_at` DateTime('UTC'), `org_id` String DEFAULT 'default') ENGINE = ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, day)",
 		"CREATE TABLE test_suite_results (`repo_id` UUID, `run_id` String, `suite_id` String, `suite_name` String, `framework` Nullable(String), `environment` Nullable(String), `total_count` UInt32, `passed_count` UInt32, `failed_count` UInt32, `skipped_count` UInt32, `error_count` UInt32 DEFAULT 0, `quarantined_count` UInt32 DEFAULT 0, `retried_count` UInt32 DEFAULT 0, `duration_seconds` Nullable(Float64), `started_at` Nullable(DateTime64(3, 'UTC')), `finished_at` Nullable(DateTime64(3, 'UTC')), `team_id` Nullable(String), `service_id` Nullable(String), `org_id` LowCardinality(String) DEFAULT '', `last_synced` DateTime64(3, 'UTC')) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, run_id, suite_id)",
-		"CREATE TABLE testops_release_confidence (org_id String, repo_id UUID, day Date) ENGINE = MergeTree ORDER BY (org_id, repo_id, day)",
-		"CREATE TABLE testops_quality_drag (org_id String, repo_id UUID, day Date) ENGINE = MergeTree ORDER BY (org_id, repo_id, day)",
-		"CREATE TABLE testops_pipeline_stability (org_id String, repo_id UUID, day Date) ENGINE = MergeTree ORDER BY (org_id, repo_id, day)",
+		"CREATE TABLE test_case_results (`repo_id` UUID, `run_id` String, `suite_id` String, `case_id` String, `case_name` String, `class_name` Nullable(String), `status` LowCardinality(String), `duration_seconds` Nullable(Float64), `retry_attempt` UInt32 DEFAULT 0, `failure_message` Nullable(String), `failure_type` Nullable(String), `stack_trace` Nullable(String), `is_quarantined` UInt8 DEFAULT 0, `org_id` LowCardinality(String) DEFAULT '', `last_synced` DateTime64(3, 'UTC')) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, run_id, suite_id, case_id)",
+		"CREATE TABLE coverage_snapshots (`repo_id` UUID, `run_id` String, `snapshot_id` String, `report_format` Nullable(String), `lines_total` Nullable(UInt32), `lines_covered` Nullable(UInt32), `line_coverage_pct` Nullable(Float64), `branches_total` Nullable(UInt32), `branches_covered` Nullable(UInt32), `branch_coverage_pct` Nullable(Float64), `functions_total` Nullable(UInt32), `functions_covered` Nullable(UInt32), `commit_hash` Nullable(String), `branch` Nullable(String), `pr_number` Nullable(UInt32), `team_id` Nullable(String), `service_id` Nullable(String), `org_id` LowCardinality(String) DEFAULT '', `last_synced` DateTime64(3, 'UTC')) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, run_id, snapshot_id)",
+		"CREATE TABLE testops_pipeline_stability (`repo_id` UUID, `day` Date, `stability_index` Float64, `success_rate_7d` Float64, `success_rate_trend` Float64, `failure_clustering_score` Float64, `median_recovery_time_seconds` Nullable(Float64), `team_id` Nullable(String), `service_id` Nullable(String), `org_id` LowCardinality(String) DEFAULT '', `computed_at` DateTime('UTC')) ENGINE = ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, day)",
+		"CREATE TABLE testops_quality_drag (`repo_id` UUID, `day` Date, `drag_hours` Nullable(Float64), `failure_rework_hours` Nullable(Float64), `flake_investigation_hours` Nullable(Float64), `queue_wait_hours` Nullable(Float64), `retry_overhead_hours` Nullable(Float64), `factors_json` String DEFAULT '{}', `team_id` Nullable(String), `service_id` Nullable(String), `org_id` LowCardinality(String) DEFAULT '', `computed_at` DateTime('UTC')) ENGINE = ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, day)",
+		"CREATE TABLE testops_release_confidence (`repo_id` UUID, `day` Date, `confidence_score` Float64, `pipeline_success_factor` Float64, `test_pass_factor` Float64, `coverage_factor` Float64, `flake_penalty` Float64, `regression_penalty` Float64, `factors_json` String DEFAULT '{}', `team_id` Nullable(String), `service_id` Nullable(String), `org_id` LowCardinality(String) DEFAULT '', `computed_at` DateTime('UTC')) ENGINE = ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, day)",
 		"CREATE TABLE incident_metrics_daily (`repo_id` UUID, `day` Date, `incidents_count` UInt32, `mttr_p50_hours` Nullable(Float64), `mttr_p90_hours` Nullable(Float64), `computed_at` DateTime('UTC'), `org_id` String DEFAULT 'default') ENGINE = ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, day)",
 		`CREATE TABLE operational_incidents (
     org_id String, id String, service_id Nullable(String),
@@ -79,12 +81,12 @@ func startParityStack(t *testing.T, ctx context.Context) parityStack {
     is_deleted UInt8, is_active UInt8, valid_from Nullable(DateTime64(6, 'UTC')),
     valid_to Nullable(DateTime64(6, 'UTC'))
 ) ENGINE = ReplacingMergeTree ORDER BY (org_id, id)`,
-		`CREATE TABLE repos (org_id String, id UUID) ENGINE = ReplacingMergeTree ORDER BY (org_id, id)`,
 	} {
 		if err := conn.Exec(ctx, statement); err != nil {
 			t.Fatal(err)
 		}
 	}
+	applyTestopsRepositoryOwnershipSchema(ctx, t, conn)
 	return parityStack{pool: pool, conn: conn}
 }
 
@@ -117,6 +119,7 @@ func (scope parityScope) partition() Partition {
 }
 
 type pipelineRun struct {
+	status     string
 	runID      string
 	startedAt  time.Time
 	finishedAt *time.Time
@@ -131,6 +134,9 @@ func (stack parityStack) insertRuns(t *testing.T, ctx context.Context, orgID str
 	}
 	for _, run := range runs {
 		status := "success"
+		if run.status != "" {
+			status = run.status
+		}
 		if err := batch.Append(repoID, run.runID, &status, run.startedAt, run.finishedAt, run.lastSynced, orgID); err != nil {
 			t.Fatal(err)
 		}
@@ -399,6 +405,28 @@ func TestZeroRowSourceCheckMatchesWhatTheFamilyKeeps(t *testing.T) {
 		outcome.wantZeroRowsCancel(t, "cicd", "deploy")
 	})
 
+	t.Run("C12_old_run_version_the_testops_FINAL_read_replaced", func(t *testing.T) {
+		if err := stack.conn.Exec(ctx, "SYSTEM STOP MERGES ci_pipeline_runs"); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = stack.conn.Exec(context.Background(), "SYSTEM START MERGES ci_pipeline_runs") })
+		scope := stack.newScope(t, ctx, 1)
+		stack.insertRuns(t, ctx, scope.orgID, scope.repoUUIDs[0], pipelineRun{
+			runID: "moved", startedAt: at("2026-08-25 10:00:00.000"),
+			finishedAt: ptrTime(at("2026-08-25 11:00:00.000")), lastSynced: at("2026-08-25 11:00:00.000"),
+		})
+		stack.insertRuns(t, ctx, scope.orgID, scope.repoUUIDs[0], pipelineRun{
+			runID: "moved", startedAt: at("2026-08-24 10:00:00.000"),
+			finishedAt: ptrTime(at("2026-08-24 11:00:00.000")), lastSynced: at("2026-08-26 00:30:00.000"),
+		})
+		testopsRisk, err := NewTestopsRiskExecutor(stack.conn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		outcome := stack.work(t, ctx, scope, map[string]NativeFamilyExecutor{"testops_risk": testopsRisk})
+		outcome.wantCompleted(t)
+	})
+
 	t.Run("C10_cross_day_runs_read_then_a_run_lands", func(t *testing.T) {
 		scope := stack.newScope(t, ctx, 1)
 		stack.seedTestopsOutputs(t, ctx, scope)
@@ -509,6 +537,9 @@ func TestZeroRowSourceCheckMatchesWhatTheFamilyKeeps(t *testing.T) {
 		if loaderFamilies["incident"], err = NewIncidentExecutor(recorder); err != nil {
 			t.Fatal(err)
 		}
+		if loaderFamilies["testops_risk"], err = NewTestopsRiskExecutor(recorder); err != nil {
+			t.Fatal(err)
+		}
 		contract, err := remaining.ConfiguredOperationalOrderingContract()
 		if err != nil {
 			t.Fatal(err)
@@ -520,13 +551,16 @@ func TestZeroRowSourceCheckMatchesWhatTheFamilyKeeps(t *testing.T) {
 			{"cicd", "SELECT 1" + cicd.PipelineRunsSource + "\nLIMIT 1", cicd.PipelineRunsSource, []string{"org_id", "repo_ids", "start", "end"}},
 			{"deploy", "SELECT 1" + deploySource + "\nLIMIT 1", deploySource, []string{"org_id", "repo_ids", "start", "end", "canceled_statuses"}},
 			{"incident", incidentSourceExistsSQL(contract), incidentsStartedSQL(contract), []string{"org_id", "repo_ids", "start", "end", "as_of"}},
+			// testops reads one repository per query, so repo_ids differs by design.
+			{"testops_risk", "SELECT 1" + testopsPipelineRunsSource + "\nLIMIT 1", testopsPipelineRunsSource, []string{"org_id", "start", "end"}},
+			{"testops_risk", "SELECT 1" + testopsSuiteResultsSource + "\nLIMIT 1", testopsSuiteResultsSource, []string{"org_id", "start", "end"}},
 		} {
 			t.Run(family.name, func(t *testing.T) {
 				if _, err := loaderFamilies[family.name].ComputeFamily(sourceCtx, scope.run(), scope.partition()); err != nil {
 					t.Fatal(err)
 				}
 				check := findQuery(checks, family.check)
-				loader := findQuerySuffix(recorder.take(), family.loaderSource)
+				loader := findQueryContaining(recorder.take(), family.loaderSource)
 				if check == nil || loader == nil {
 					t.Fatalf("check query found=%t, loader query on the shared source found=%t", check != nil, loader != nil)
 				}
@@ -594,9 +628,9 @@ func findQuery(queries []recordedQuery, query string) *recordedQuery {
 	return nil
 }
 
-func findQuerySuffix(queries []recordedQuery, suffix string) *recordedQuery {
+func findQueryContaining(queries []recordedQuery, fragment string) *recordedQuery {
 	for index := range queries {
-		if strings.HasSuffix(queries[index].query, suffix) {
+		if strings.Contains(queries[index].query, fragment) {
 			return &queries[index]
 		}
 	}

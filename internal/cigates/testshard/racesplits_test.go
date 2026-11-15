@@ -70,7 +70,14 @@ func readRaceSplitTables(t *testing.T, root string) raceSplitTables {
 // on), sorted: what `go test -race -list` reports, read from the source without a race build.
 func raceListedTests(t *testing.T, root, key string) []string {
 	t.Helper()
-	dir := filepath.Join(root, filepath.FromSlash(key))
+	// The walk names its directory literally (internal/cigates/affected/walks.tsv): a new race split package adds its own case.
+	var dir string
+	switch key {
+	case "internal/cigates/testshard":
+		dir = filepath.Join(root, "internal", "cigates", "testshard")
+	default:
+		t.Fatalf("race split package %s has no listing walk here: add its directory", key)
+	}
 	ctx := build.Default
 	ctx.BuildTags = []string{"race"}
 	entries, err := os.ReadDir(dir)
@@ -237,9 +244,12 @@ func TestTheRaceSplitTablesAreSortedWholeAndNeverSolo(t *testing.T) {
 	if len(tab.parts) == 0 {
 		t.Fatal("ci/go_race_splits.tsv has no row: the cells would hold nothing")
 	}
-	for _, f := range []string{"go_race_splits.tsv", "go_race_split_weights.tsv"} {
+	for f, path := range map[string]string{
+		"go_race_splits.tsv":        filepath.Join(root, "ci", "go_race_splits.tsv"),
+		"go_race_split_weights.tsv": filepath.Join(root, "ci", "go_race_split_weights.tsv"),
+	} {
 		var keys []string
-		for _, r := range tsvRows(t, filepath.Join(root, "ci", f)) {
+		for _, r := range tsvRows(t, path) {
 			keys = append(keys, strings.Join(r[:len(r)-1], "\t"))
 		}
 		if !sort.StringsAreSorted(keys) {
@@ -252,8 +262,11 @@ func TestTheRaceSplitTablesAreSortedWholeAndNeverSolo(t *testing.T) {
 		}
 	}
 	elsewhere := map[string]string{}
-	for _, f := range []string{"go_race_solo.tsv", "race_excluded_packages.tsv"} {
-		for _, r := range tsvRows(t, filepath.Join(root, "ci", f)) {
+	for f, path := range map[string]string{
+		"go_race_solo.tsv":           filepath.Join(root, "ci", "go_race_solo.tsv"),
+		"race_excluded_packages.tsv": filepath.Join(root, "ci", "race_excluded_packages.tsv"),
+	} {
+		for _, r := range tsvRows(t, path) {
 			elsewhere[r[0]] = f
 		}
 	}

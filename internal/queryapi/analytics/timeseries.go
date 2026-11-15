@@ -121,6 +121,9 @@ func joinColumns(cols []string) string {
 // once a measure routes to a non-default table, regardless of anything
 // else about the request.
 func nonInvestmentSourceAndDateFilter(measure Measure) (source, alias, dateFilter string) {
+	if src, al, ok := pooledSource(measure); ok {
+		return src, al, "day >= {start_date:Date} AND day < {end_date:Date}"
+	}
 	if table := measureSourceTable(measure); table != "" {
 		src, al := dedupFromMeasureSource(table)
 		return src, al, "day >= {start_date:Date} AND day < {end_date:Date}"
@@ -279,7 +282,7 @@ WHERE %s
 GROUP BY bucket, dimension_value
 ORDER BY bucket ASC, value DESC, dimension_value ASC
 %s
-`, dateTruncUnit(req.Interval), dateCol, dimCol, measureExpr, source, extraClauses, dateFilter, alias, fc.sql, settingsMaxExecutionTime(timeoutSeconds))
+`, dateTruncUnit(req.Interval), dateCol, dimCol, measureExpr, source, extraClauses, dateFilter, alias, fc.sql, statementSettings(source, timeoutSeconds))
 
 	bindings := []clickhouse.Binding{
 		{Name: "org_id", Value: orgID},
@@ -392,8 +395,9 @@ func ExecuteTimeseries(ctx context.Context, client QueryClient, q compiledQuery,
 // scope, not this value, tells the two apart.
 const orgSeriesDimensionValue = "org"
 
-// orgRateTerms returns the numerator and denominator SQL of the measures that serve an org-level series, and the
-// factor the ratio is scaled by (the dimension series serve a percent). ok is false for every other measure.
+// orgRateTerms returns the numerator and denominator SQL of the rate measures that serve an org-level series, and the
+// factor the ratio is scaled by (the dimension series serve a percent). ok is false for every other measure; the pooled
+// measures (orgPooledTerms) serve an org-level series of their own.
 //
 // The org rate is the org's summed numerator over its summed denominator, never a mean of the dimension series
 // (CHAOS-9736). TEST_FLAKE_RATE is the summed flake cases over the summed distinct case names (CHAOS-9737); a bucket
@@ -431,15 +435,21 @@ func orgRateTerms(measure Measure) (numerator, denominator string, scale float64
 }
 
 // CompileOrgTimeseries compiles the org-level series of a measure that has one: one row per bucket with the
-// org's numerator and denominator. ok is false when the measure has no org series or the request is on the
-// investment path. The request's own repository/team filters and date range apply; the dimension does not.
+// org's numerator and denominator (for a pooled measure, its value and its sample count). ok is false when the measure
+// has no org series or the request is on the investment path. The request's own repository/team filters and date range
+// apply; the dimension does not.
 func CompileOrgTimeseries(req TimeseriesRequest, orgID string, timeoutSeconds int, investmentPath bool, filters *model.FilterInput) (q compiledQuery, ok bool, err error) {
 	if investmentPath {
 		return compiledQuery{}, false, nil
 	}
 	numerator, denominator, _, has := orgRateTerms(req.Measure)
 	if !has {
-		return compiledQuery{}, false, nil
+		if numerator, denominator, has = orgPooledTerms(req.Measure); !has {
+			return compiledQuery{}, false, nil
+		}
+		if numerator, err = exactSums(numerator); err != nil {
+			return compiledQuery{}, false, err
+		}
 	}
 	fc, err := translateFilters(orgID, filters, false, testopsOwner{}.filterColumns(req.Measure, false))
 	if err != nil {
@@ -458,7 +468,7 @@ WHERE %s
 GROUP BY bucket
 ORDER BY bucket ASC
 %s
-`, dateTruncUnit(req.Interval), firstDateFilterToken(dateFilter), numerator, denominator, source, dateFilter, alias, fc.sql, settingsMaxExecutionTime(timeoutSeconds))
+`, dateTruncUnit(req.Interval), firstDateFilterToken(dateFilter), numerator, denominator, source, dateFilter, alias, fc.sql, statementSettings(source, timeoutSeconds))
 	bindings := []clickhouse.Binding{
 		{Name: "org_id", Value: orgID},
 		{Name: "start_date", Value: dateBindingValue(req.StartDate.Time())},
@@ -483,14 +493,22 @@ func orgMeasureLabel(measure Measure) string {
 		return "test_pass_rate"
 	case MeasureTestFailureRate:
 		return "test_failure_rate"
+	case MeasurePipelineDurationP95:
+		return "pipeline_duration_p95"
+	case MeasurePipelineQueueTime:
+		return "pipeline_queue_time"
+	case MeasureTestSuiteDurationP95:
+		return "test_suite_duration_p95"
 	}
 	return "pipeline_success_rate"
 }
 
 // ExecuteOrgTimeseries runs the compiled org query into the one ORG result. A bucket with no denominator (no
-// stored count, or a sum of 0) has a nil value, never a 0: no measurement is not a rate of 0.
+// stored count, or a sum of 0) has a nil value, never a 0: no measurement is not a rate of 0. A pooled measure's
+// bucket is its value when it holds a sample, nil otherwise.
 func ExecuteOrgTimeseries(ctx context.Context, client QueryClient, q compiledQuery, dimensionName, measureName string, measure Measure) (model.TimeseriesResult, error) {
 	_, _, scale, _ := orgRateTerms(measure)
+	_, _, pooled := orgPooledTerms(measure)
 	rows, err := client.Query(ctx, q.sql, q.bindings)
 	if err != nil {
 		return model.TimeseriesResult{}, fmt.Errorf("query: %w", err)
@@ -505,7 +523,11 @@ func ExecuteOrgTimeseries(ctx context.Context, client QueryClient, q compiledQue
 			return model.TimeseriesResult{}, fmt.Errorf("scan: %w", scanErr)
 		}
 		var value *float64
-		if num != nil && den != nil && *den > 0 {
+		switch {
+		case pooled && num != nil && den != nil && *den > 0:
+			v := *num
+			value = &v
+		case !pooled && num != nil && den != nil && *den > 0:
 			v := *num / *den * scale
 			value = &v
 		}

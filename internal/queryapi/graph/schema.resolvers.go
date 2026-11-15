@@ -197,8 +197,9 @@ func (r *queryResolver) Analytics(ctx context.Context, orgID string, batch model
 
 	result, err := analytics.ResolveSelected(spanCtx, r.ClickHouse, orgID, batch, analyticsSelection(ctx))
 	if err != nil {
-		finish("error")
-		return nil, fmt.Errorf("analytics: %w", err)
+		clientErr, unavailable := analyticsError(ctx, err)
+		finish("error", attribute.Bool("unavailable", unavailable))
+		return nil, clientErr
 	}
 	finish("ok")
 	return result, nil

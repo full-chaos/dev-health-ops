@@ -109,6 +109,14 @@ func (e *ownersEnv) daily(org string, r repoDay) {
 		r.repo, r.day, r.passed+r.bad, r.passed, r.bad, rate(r.passed, r.passed+r.bad), rate(r.bad, r.passed+r.bad), rate(r.flakeCases, r.distinct), r.flakeCases, r.distinct, float64(r.passed)/10, team, org, at)
 	e.exec(`INSERT INTO testops_coverage_metrics_daily (repo_id, day, line_coverage_pct, branch_coverage_pct, coverage_delta_pct, lines_total, lines_covered, team_id, org_id, computed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		r.repo, r.day, 100*rate(r.linesCov, r.linesTotal), 50.0, 1.5, r.linesTotal, r.linesCov, team, org, at)
+	// The P95 durations and the queue time are pooled over the raw samples of the stored repository-days: one run and
+	// one suite whose samples are the stored values, so the one-sample pool gives the value of the stored row.
+	runID := fmt.Sprintf("seed-%s-%s", r.repo, r.day.Format("20060102"))
+	started := r.day.Add(time.Hour)
+	e.exec(`INSERT INTO ci_pipeline_runs (repo_id, run_id, status, started_at, last_synced, org_id, duration_seconds, queue_seconds, team_id) VALUES (?, ?, 'success', ?, ?, ?, ?, ?, ?)`,
+		r.repo, runID, started, at, org, float64(r.runs)/2, float64(r.runs)/10, team)
+	e.exec(`INSERT INTO test_suite_results (repo_id, run_id, suite_id, suite_name, total_count, passed_count, failed_count, skipped_count, duration_seconds, started_at, team_id, org_id, last_synced) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)`,
+		r.repo, runID, "suite-"+runID, "suite", r.passed+r.bad, r.passed, r.bad, float64(r.passed)/10, started, team, org, at)
 }
 
 var allTestopsMeasures = []model.MeasureInput{
@@ -364,11 +372,13 @@ func TestTestopsTeamWithNoOwnedRepositoryHasNoTeamResultAndTheOrgKeepsTheRepos(t
 		if len(teams["team-a"]) != 1 {
 			t.Fatalf("%s: team-a lost its series: %v", measure, teams)
 		}
-		// Only the rate measures have an organization series (the five means do not: CompileOrgTimeseries, orgRateTerms).
+		// The rate measures and the pooled measures have an organization series (the two coverage means do not:
+		// CompileOrgTimeseries, orgRateTerms, orgPooledTerms).
 		hasOrg := map[model.MeasureInput]bool{
 			model.MeasureInputPipelineSuccessRate: true, model.MeasureInputPipelineFailureRate: true, model.MeasureInputPipelineRerunRate: true,
 			model.MeasureInputTestPassRate: true, model.MeasureInputTestFailureRate: true, model.MeasureInputTestFlakeRate: true,
-			model.MeasureInputCoverageLinePct: true,
+			model.MeasureInputCoverageLinePct: true, model.MeasureInputPipelineDurationP95: true, model.MeasureInputPipelineQueueTime: true,
+			model.MeasureInputTestSuiteDurationP95: true,
 		}[measure]
 		if hasOrg && (len(orgSeries) != 1 || orgSeries[0] == nil) {
 			t.Fatalf("%s: the org series is %v, want one bucket holding both repositories", measure, orgSeries)

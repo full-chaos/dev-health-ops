@@ -139,8 +139,8 @@ const (
 	testRateDays  = 3200
 )
 
-// The non-investment measures that stay an average take the mean of Float64 rows (a suite duration here; the rate
-// measures are weighted sums of counts since CHAOS-13775). Each
+// The non-investment measures that stay an average take the mean of Float64 rows (a coverage delta here; the rate
+// measures are weighted sums of counts since CHAOS-13775, the durations and queue time pooled raw samples). Each
 // repository carries testRateDays daily rows, 74 bits wide, in exactSumParts
 // parts: the breakdown must give one answer every run, at the exact mean.
 func TestNonInvestmentAveragesGiveOneExactAnswerOnEveryRun(t *testing.T) {
@@ -153,27 +153,27 @@ func TestNonInvestmentAveragesGiveOneExactAnswerOnEveryRun(t *testing.T) {
 	for r := 0; r < testRateRepos; r++ {
 		for part := 0; part < exactSumParts; part++ {
 			crossorg.Exec(ctx, t, admin, fmt.Sprintf(`
-INSERT INTO testops_test_metrics_daily (repo_id, day, suite_duration_p95_seconds, org_id, computed_at)
+INSERT INTO testops_coverage_metrics_daily (repo_id, day, coverage_delta_pct, org_id, computed_at)
 SELECT toUUID('%[1]s'), toDate('2017-01-01') + n,
     ((n * 7919 + %[2]d * 104729) %% 1000 + 1) * pow(2, toInt64((n + %[2]d) %% 55) - 30), '%[3]s', toDateTime('2026-01-06 00:00:00')
 FROM (SELECT number + %[4]d AS n FROM numbers(%[5]d))`, repoEffortRepoID(r), r, orgID, part*per, per))
 		}
 	}
 
-	query, err := CompileBreakdown(BreakdownRequest{Dimension: DimensionRepo, Measure: MeasureTestSuiteDurationP95,
+	query, err := CompileBreakdown(BreakdownRequest{Dimension: DimensionRepo, Measure: MeasureCoverageDeltaPct,
 		StartDate: mustDate(t, "2017-01-01"), EndDate: mustDate(t, "2026-01-01"), TopN: 10}, orgID, 120, false, nil)
 	if err != nil {
 		t.Fatalf("CompileBreakdown: %v", err)
 	}
-	got := sameEveryRun(t, "suite-duration breakdown", func() model.BreakdownResult {
-		result, err := ExecuteBreakdown(ctx, client, orgID, query, "repo", "test_suite_duration_p95")
+	got := sameEveryRun(t, "coverage-delta breakdown", func() model.BreakdownResult {
+		result, err := ExecuteBreakdown(ctx, client, orgID, query, "repo", "coverage_delta_pct")
 		if err != nil {
 			t.Fatalf("ExecuteBreakdown: %v", err)
 		}
 		return result
 	})
 	if len(got.Items) != testRateRepos {
-		t.Fatalf("suite-duration breakdown = %+v, want one item per seeded repository", got.Items)
+		t.Fatalf("coverage-delta breakdown = %+v, want one item per seeded repository", got.Items)
 	}
 	for r := 0; r < testRateRepos; r++ {
 		total := new(big.Int)

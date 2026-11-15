@@ -3,6 +3,7 @@ package analytics
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -180,7 +181,7 @@ func TestCompileTimeseries_NonInvestment_DefaultSource(t *testing.T) {
 func TestCompileTimeseries_TestopsMeasureOverridesSource(t *testing.T) {
 	req := TimeseriesRequest{
 		Dimension: DimensionRepo,
-		Measure:   MeasurePipelineDurationP95,
+		Measure:   MeasurePipelineSuccessRate,
 		Interval:  BucketIntervalDay,
 		StartDate: mustDate(t, "2026-01-01"),
 		EndDate:   mustDate(t, "2026-01-31"),
@@ -338,5 +339,46 @@ func TestExecuteTimeseries_MidStreamFailureDiscardsPartialRows(t *testing.T) {
 	}
 	if results != nil {
 		t.Fatalf("expected nil results on mid-stream failure, got %d partial results: %+v", len(results), results)
+	}
+}
+
+// B3: every compiled read of a pooled measure (timeseries, ORG series, breakdown, sankey) reads the pooled raw source
+// under the row bound that throws, and no read of another measure carries the bound.
+func TestPooledMeasureReadsCarryTheRowBound(t *testing.T) {
+	bound := fmt.Sprintf("max_rows_to_read = %d, read_overflow_mode = 'throw'", TestopsPooledMaxRowsToRead)
+	start, end := mustDate(t, "2026-01-01"), mustDate(t, "2026-01-08")
+	for measure, raw := range map[Measure]string{
+		MeasurePipelineDurationP95: "FROM ci_pipeline_runs FINAL", MeasurePipelineQueueTime: "FROM ci_pipeline_runs FINAL",
+		MeasureTestSuiteDurationP95: "FROM test_suite_results FINAL", MeasurePipelineSuccessRate: "",
+	} {
+		var statements []string
+		for _, dim := range []Dimension{DimensionTeam, DimensionRepo} {
+			ts, err := CompileTimeseries(TimeseriesRequest{Dimension: dim, Measure: measure, Interval: BucketIntervalDay, StartDate: start, EndDate: end}, "org-1", 30, false, nil)
+			if err != nil {
+				t.Fatalf("%s %s timeseries: %v", measure, dim, err)
+			}
+			bd, err := CompileBreakdown(BreakdownRequest{Dimension: dim, Measure: measure, StartDate: start, EndDate: end, TopN: 10}, "org-1", 30, false, nil)
+			if err != nil {
+				t.Fatalf("%s %s breakdown: %v", measure, dim, err)
+			}
+			statements = append(statements, ts.sql, bd.sql)
+		}
+		org, ok, err := CompileOrgTimeseries(TimeseriesRequest{Dimension: DimensionTeam, Measure: measure, Interval: BucketIntervalDay, StartDate: start, EndDate: end}, "org-1", 30, false, nil)
+		if err != nil || !ok {
+			t.Fatalf("%s org: ok=%v err=%v", measure, ok, err)
+		}
+		grouped, err := CompileSankeyGrouped(SankeyRequest{Path: []Dimension{DimensionTeam, DimensionRepo}, Measure: measure, StartDate: start, EndDate: end, MaxNodes: 10, MaxEdges: 10}, "org-1", 30, false, nil)
+		if err != nil {
+			t.Fatalf("%s sankey: %v", measure, err)
+		}
+		statements = append(statements, org.sql, grouped.query.sql)
+		for _, sql := range statements {
+			switch {
+			case raw != "" && (!strings.Contains(sql, raw) || !strings.Contains(sql, bound)):
+				t.Errorf("%s: a read lacks %q or the row bound:\n%s", measure, raw, sql)
+			case raw == "" && strings.Contains(sql, "max_rows_to_read"):
+				t.Errorf("%s: a read of the stored rows carries the pooled row bound:\n%s", measure, sql)
+			}
+		}
 	}
 }

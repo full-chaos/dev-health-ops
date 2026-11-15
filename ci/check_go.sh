@@ -2111,7 +2111,9 @@ check_ci_leg() {
 # the compile actions of every leg of the family and runs no test code (-exec true: each test binary is linked, never run).
 # The flags are the real legs' (-mod=readonly -trimpath; -race for race), so the actions are the ones those legs look up.
 #   build  every package of every module (the union of the test shard plans) and the static leg's two vet passes
-#   race   -race over every package of the race shard plans (the module's packages but ci/race_excluded_packages.tsv)
+#   race   -race over every package of the race shard plans (the module's packages but ci/race_excluded_packages.tsv), and
+#          (CHAOS-13833) the build family's actions too: a race leg restores only this family, and its tests that run go
+#          themselves build without -race (with the legs' -trimpath), so without them those builds found nothing to reuse
 check_ci_leg_warm_all() {
   local family="${1:-}" module_dir modpath pkg listing
   local -a pkgs
@@ -2121,15 +2123,13 @@ check_ci_leg_warm_all() {
   esac
   for module_dir in "${MODULE_DIRS[@]}"; do
     printf 'ci-leg-warm all %s: %s\n' "${family}" "${module_dir}"
-    if [ "${family}" = build ]; then
-      (cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -exec true ./...) \
-        || die "ci-leg-warm all build: go test -exec true failed in ${module_dir}"
-      (cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go vet -mod=readonly -trimpath ./...) \
-        || die "ci-leg-warm all build: go vet failed in ${module_dir}"
-      (cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go vet -mod=readonly -trimpath -tags=integration ./...) \
-        || die "ci-leg-warm all build: go vet -tags=integration failed in ${module_dir}"
-      continue
-    fi
+    (cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -exec true ./...) \
+      || die "ci-leg-warm all ${family}: go test -exec true failed in ${module_dir}"
+    (cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go vet -mod=readonly -trimpath ./...) \
+      || die "ci-leg-warm all ${family}: go vet failed in ${module_dir}"
+    (cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go vet -mod=readonly -trimpath -tags=integration ./...) \
+      || die "ci-leg-warm all ${family}: go vet -tags=integration failed in ${module_dir}"
+    [ "${family}" = race ] || continue
     modpath="$(cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -m)" || die "go list -m failed in ${module_dir}"
     listing="$(cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -mod=readonly ./...)" || die "go list failed in ${module_dir}"
     pkgs=()

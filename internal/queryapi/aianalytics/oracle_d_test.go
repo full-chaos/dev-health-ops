@@ -329,6 +329,7 @@ func TestOpportunityDetectors_MatchPythonDetectors(t *testing.T) {
 				renamedChangeFailureEvidence += renameChangeFailureEvidence(c.Expected)
 			}
 			declareTitleNaming(t, gotMap, c.Expected, c.Kind)
+			declareFlakyRationale(t, gotMap, c.Expected, c.Kind)
 			declareDrilldownRoots(t, gotMap, c.Expected)
 			g, w := normalizeD(gotMap), normalizeD(c.Expected)
 			if !reflect.DeepEqual(g, w) {
@@ -551,5 +552,45 @@ func declareDrilldownRoots(t *testing.T, got, expected map[string]any) {
 			}
 			opportunity["workGraphDrilldowns"] = served
 		}
+	}
+}
+
+var recordedFlakyRationale = regexp.MustCompile(`^Test cases flaked at ([0-9]+\.[0-9]) ?% across ([0-9]+) executions over the last 30 days\.$`)
+
+// declareFlakyRationale is the DECLARED divergence of CHAOS-13843: the recorded Python rationale of the flaky-test
+// card says "Test cases flaked at X% across N executions over the last 30 days." and its X is the stored daily rate
+// weighted by executions. Go serves the share of distinct cases that flaked (the Tests tab rate) in hedged words:
+// "Test cases appear to flake at X% of distinct cases across N executions over the last 30 days." The declaration is
+// path-scoped: ONLY the rationale of FLAKY_TEST_TRIAGE recommendations. For each it asserts (1) the recorded text has
+// the Python form and (2) the Go text is the same X and N in the new words; then it sets the recorded rationale to
+// the Go one, so every other field is still compared whole. The recorded X and N are the fixture's stand-in for the
+// statement's two columns, so they pass through unchanged. The frozen file is not edited.
+func declareFlakyRationale(t *testing.T, got, expected map[string]any, kind string) {
+	t.Helper()
+	if kind != "ai" {
+		return
+	}
+	gotList, _ := got["recommendations"].([]any)
+	wantList, _ := expected["recommendations"].([]any)
+	if len(gotList) != len(wantList) {
+		return
+	}
+	for i := range wantList {
+		g, _ := gotList[i].(map[string]any)
+		w, _ := wantList[i].(map[string]any)
+		if k, _ := w["kind"].(string); k != "FLAKY_TEST_TRIAGE" {
+			continue
+		}
+		py, _ := w["rationale"].(string)
+		m := recordedFlakyRationale.FindStringSubmatch(py)
+		if m == nil {
+			t.Errorf("recommendations[%d]: the recorded rationale %q is not the Python flaky form: the declaration does not apply", i, py)
+			continue
+		}
+		want := "Test cases appear to flake at " + m[1] + "% of distinct cases across " + m[2] + " executions over the last 30 days."
+		if goText, _ := g["rationale"].(string); goText != want {
+			t.Errorf("recommendations[%d]: rationale = %q, want %q", i, goText, want)
+		}
+		w["rationale"] = want
 	}
 }

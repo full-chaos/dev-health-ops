@@ -452,7 +452,7 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 				acceptance := []githubTestsAcceptanceRow(nil)
 				pipelines := []githubTestsPipelineRow(nil)
 				startedAt := gitLabTestsPipelineStartedAt(payload)
-				if startedAt != nil && !ciPipelineRunOutsideWindow(*startedAt, claim) {
+				if startedAt != nil && !gitLabPipelineOutsideWindow(*startedAt, claim) {
 					pipeline, ok := normalizeGitLabTestsPipeline(claim, repoID, payload, normalizedAt)
 					if !ok {
 						return providerfoundation.ErrNormalizationInvalid

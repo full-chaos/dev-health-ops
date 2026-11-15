@@ -51,7 +51,11 @@
     },
     {
       "file": "valid-producer-authorize-platform-admin-allowed.json",
-      "why": "A platform-admin allow: the wire code is allowed_by_role and decision_internal_reason records allowed_by_platform_admin."
+      "why": "A platform-admin allow: the wire code is allowed_by_platform_admin and the row carries no decision_internal_reason."
+    },
+    {
+      "file": "valid-legacy-authorize-platform-admin-allowed.json",
+      "why": "A stored row from before the wire named the reason: the wire code allowed_by_role and the legacy decision_internal_reason allowed_by_platform_admin. No producer writes decision_internal_reason any more; the schema still admits it for these rows."
     }
   ],
   "reject": [
@@ -233,7 +237,7 @@
       "file": "invalid-attributes-decision-internal-reason-unlisted.json",
       "expect_instance_location": "/attributes/decision_internal_reason",
       "expect_keyword": "enum",
-      "why": "The internal reason is a closed set of the internal-only reasons: one value today."
+      "why": "The legacy internal reason is a closed set: one value, allowed_by_platform_admin."
     }
   ],
   "reject_by_client": [

@@ -242,7 +242,7 @@ helm_args "${RELEASE_FRESH}" "${IMG_MIG}" "${MIGRATOR}" sec-mig-fresh sec-db-fre
 helm_up "${HELM_ARGS[@]}"
 [ "$(completed_events "${RELEASE_FRESH}")" -ge 1 ] || die "leg 1: the migrate hook Job did not complete"
 pass "leg 1: the pre-install hook Job ran as the migration login with the pin and completed"
-if ! helm get hooks "${RELEASE_FRESH}" --kubeconfig "${KUBECONFIG_FILE}" -n "${NS}" | grep -q 'AUTH_SCHEMA_OWNER_ROLE'; then die "leg 1: the rendered hook carries no AUTH_SCHEMA_OWNER_ROLE"; fi
+if ! { fresh_hooks="$(helm get hooks "${RELEASE_FRESH}" --kubeconfig "${KUBECONFIG_FILE}" -n "${NS}")" && grep -q 'AUTH_SCHEMA_OWNER_ROLE' <<<"${fresh_hooks}"; }; then die "leg 1: the rendered hook carries no AUTH_SCHEMA_OWNER_ROLE"; fi
 pass "leg 1: the hook Job carries AUTH_SCHEMA_OWNER_ROLE"
 readbacks "leg1" authmove_fresh sec-mig-fresh
 
@@ -310,8 +310,7 @@ snap_before="$(acl_snapshot authmove_rb)"
 pass "leg 3: superuser-owned database at the head; ACL snapshot taken ($(wc -l <<<"${snap_before}") entries)"
 
 move_forward() {
-  oneoff "$1" "${IMG_MIG}" sec-su-rb "" owner-move -from postgres -to "${MIGRATOR}" -runtime-role "${RUNTIME}" -apply | grep -qF 'owner-move applied=true' \
-    || die "leg 3: the forward move did not report applied=true"
+  if ! { move_out="$(oneoff "$1" "${IMG_MIG}" sec-su-rb "" owner-move -from postgres -to "${MIGRATOR}" -runtime-role "${RUNTIME}" -apply)" && grep -qF 'owner-move applied=true' <<<"${move_out}"; }; then die "leg 3: the forward move did not report applied=true"; fi
   put_secret sec-mig-rb AUTH_MIGRATION_DATABASE_URI "$(dsn "${MIGRATOR}" "${MIGRATOR_PASSWORD}" authmove_rb)"
   helm_args "${RELEASE_RB}" "${IMG_MIG}" "${MIGRATOR}" sec-mig-rb sec-db-rb
   helm_up "${HELM_ARGS[@]}"
@@ -321,8 +320,7 @@ move_back() {
   # The rollback is the Secret back, the reverse move AND the values back (ownerRole empty): the objects are the old owner's again,
   # so a pin that still named the migration login would refuse them.
   put_secret sec-mig-rb AUTH_MIGRATION_DATABASE_URI "$(dsn postgres "${PG_PASSWORD}" authmove_rb)"
-  oneoff "$1" "${IMG_MIG}" sec-su-rb "" owner-move -from "${MIGRATOR}" -to postgres -runtime-role "${RUNTIME}" -restore -apply | grep -qF 'owner-move applied=true' \
-    || die "leg 3: the restore did not report applied=true"
+  if ! { move_out="$(oneoff "$1" "${IMG_MIG}" sec-su-rb "" owner-move -from "${MIGRATOR}" -to postgres -runtime-role "${RUNTIME}" -restore -apply)" && grep -qF 'owner-move applied=true' <<<"${move_out}"; }; then die "leg 3: the restore did not report applied=true"; fi
   helm_args "${RELEASE_RB}" "${IMG_MIG}" "" sec-mig-rb sec-db-rb
   helm_up "${HELM_ARGS[@]}"
 }
@@ -333,7 +331,7 @@ move_back restore-1
 pass "leg 3: Secret back, owner-move -restore and ownerRole empty; the upgrade passes on the old DSN"
 snap_after="$(acl_snapshot authmove_rb)"
 if [ "${snap_before}" != "${snap_after}" ]; then
-  diff <(printf '%s\n' "${snap_before}") <(printf '%s\n' "${snap_after}") | head -20 >&2 || true
+  head -20 <<<"$(diff <(printf '%s\n' "${snap_before}") <(printf '%s\n' "${snap_after}") || true)" >&2
   die "leg 3: the ACL snapshot after the restore differs from the one before the move"
 fi
 pass "leg 3: the ACL snapshot after the restore equals the one before the move, byte for byte"

@@ -199,7 +199,7 @@ go-api and query-api request handlers do not read the catalog. See [action map](
 
 | Field | Values |
 | --- | --- |
-| `authorization_decision.v1` `reason_code` | 25 values; see [reason codes](reason-codes.md) |
+| `authorization_decision.v1` `reason_code` | 26 values; see [reason codes](reason-codes.md) |
 | `audit-event.v1` `attributes.reason_code` | 65 values; the file lists them |
 | `revoked_reason` of a credential | `compromised`, `domain_revoked`, `org_deprovisioned`, `owner_request` |
 

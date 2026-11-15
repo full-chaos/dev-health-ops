@@ -514,7 +514,17 @@ func TestValidateCompatC4RefusedInputsAnswerGoAPIsStatusAndBody(t *testing.T) {
 			if compat.Code != tc.status {
 				t.Errorf("%s: status %d, want %d: %s", tc.name, compat.Code, tc.status, compat.Body)
 			}
-			expectSamePlanes(t, tc.name, compat, goAPI)
+			if tc.name == "lone surrogate" {
+				// CHAOS-12282, a named plane difference: go-api refuses a lone surrogate at its body boundary
+				// (pybody.ReadChecked), auth-service keeps pybody.Read and its recorded 500.
+				goBody := goAPI.Body.String()
+				if goAPI.Code != http.StatusUnprocessableEntity || !strings.Contains(goBody, `"string_unicode"`) ||
+					!strings.Contains(goBody, `"loc":["body","token"]`) || strings.Contains(strings.ToLower(goBody), "ud800") {
+					t.Errorf("%s: go-api %d %s, want 422 string_unicode at body.token without the input", tc.name, goAPI.Code, goBody)
+				}
+			} else {
+				expectSamePlanes(t, tc.name, compat, goAPI)
+			}
 			if tc.golden != "" {
 				status, want := goldenAnswer(t, tc.golden)
 				var got any

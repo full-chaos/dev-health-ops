@@ -1,6 +1,7 @@
 package smtpcapture
 
 import (
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/refusedaddr"
 	"net/http/httptest"
 	"net/smtp"
 	"testing"
@@ -41,9 +42,7 @@ func TestSinkReadAPIReturnsTheMailByteForByteAndDrainEmptiesIt(t *testing.T) {
 }
 
 func TestRemoteIsNotReachableWhenTheSinkIsDown(t *testing.T) {
-	api := httptest.NewServer(nil)
-	url := api.URL
-	api.Close()
+	url := "http://" + refusedaddr.Addr(t)
 	if err := NewRemote(url).Reachable(); err == nil {
 		t.Fatal("a closed read API must not be reachable")
 	}

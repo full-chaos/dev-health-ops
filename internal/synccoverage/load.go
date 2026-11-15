@@ -81,7 +81,8 @@ func streamCompactWindows(
 	rows, err := tx.Query(ctx, `
 SELECT unit.source_id, unit.dataset_key, unit.processor_flags,
        unit.since_at, unit.before_at, unit.status,
-       COALESCE(run.completed_at, run.started_at, run.created_at), unit.id
+       COALESCE(run.completed_at, run.started_at, run.created_at), unit.id,
+       COALESCE(unit.result->>'reports_complete' = 'false', false)
 FROM public.sync_run_units AS unit
 JOIN public.sync_runs AS run ON run.id = unit.sync_run_id
 WHERE unit.org_id = $1
@@ -112,7 +113,8 @@ ORDER BY COALESCE(run.completed_at, run.started_at, run.created_at), unit.id`,
 		var flags json.RawMessage
 		var since, before, runTime time.Time
 		var unitID uuid.UUID
-		if err := rows.Scan(&sourceID, &dataset, &flags, &since, &before, &status, &runTime, &unitID); err != nil {
+		var reportsIncomplete bool
+		if err := rows.Scan(&sourceID, &dataset, &flags, &since, &before, &status, &runTime, &unitID, &reportsIncomplete); err != nil {
 			return nil, nil, rowCount, fmt.Errorf("scan sync coverage unit window: %w", err)
 		}
 		since = maxTime(since.UTC(), truncatedBefore)
@@ -137,6 +139,15 @@ ORDER BY COALESCE(run.completed_at, run.started_at, run.created_at), unit.id`,
 			}
 			interval := coverageInterval{Since: since, Before: before}
 			state.Requested = append(state.Requested, interval)
+			// A tests unit that finished with dropped or skipped reports
+			// advanced its watermark but did not cover the window: it stays a
+			// gap and is not the last complete sync. It did run, so it
+			// supersedes an earlier failure of the window: the window reads as
+			// a gap, not as failed.
+			if status == "success" && reportsIncomplete && effectiveKey == "tests" {
+				state.Failed = subtractIntervals(state.Failed, []coverageInterval{interval})
+				continue
+			}
 			switch status {
 			case "success":
 				state.Covered = append(state.Covered, interval)

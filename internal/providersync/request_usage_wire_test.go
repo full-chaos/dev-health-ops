@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/refusedaddr"
 	"io"
 	"log/slog"
 	"net"
@@ -171,12 +172,7 @@ func TestWireCountMatchesWhatTheServerReceived(t *testing.T) {
 
 	t.Run("refused dial writes nothing", func(t *testing.T) {
 		t.Parallel()
-		listener, err := net.Listen("tcp", "127.0.0.1:0")
-		if err != nil {
-			t.Fatal(err)
-		}
-		address := listener.Addr().String()
-		_ = listener.Close()
+		address := refusedaddr.Addr(t)
 		got := wireCount(t, &http.Client{}, getRequest(t, "http://"+address+"/"))
 		if got != (RequestUsageTotals{}) {
 			t.Fatalf("counted %+v for a request that never reached a server", got)

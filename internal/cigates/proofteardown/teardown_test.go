@@ -502,7 +502,7 @@ func TestTeardownPlantedDefects(t *testing.T) {
 		},
 		planted{
 			name: "integer check dropped", copy: subject,
-			mutate: mut(libRel, "if ! printf '%s' \"${TEARDOWN_WAIT_SECS}\" | grep -Eq '^[0-9]+$' \\\n     || [", "if ["),
+			mutate: mut(libRel, "if ! grep -Eq '^[0-9]+$' <<<\"${TEARDOWN_WAIT_SECS}\" \\\n     || [", "if ["),
 			check:  waitSecsFailsClosed("abc"), want: "did not fail closed",
 		},
 		planted{

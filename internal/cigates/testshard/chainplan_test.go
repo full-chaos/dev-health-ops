@@ -20,8 +20,10 @@ import (
 // (CHAOS-13668, ci/go_test_split_weights.tsv); the model reads those derived weights as "<key>#<part>" entries of its weights map.
 
 // plannedWallCap: the highest modelled wall a test shard may plan. The weights are the larger of a warm and a cold (test-result cache
-// missed) value (CHAOS-13730), so the model is a cold leg's wall: under ~800 s, which keeps a cold leg under check_go.sh's 900 s cap.
-const plannedWallCap = 700
+// missed) value (CHAOS-13730), so the model is a cold leg's wall. CHAOS-13800: 600 at 13 legs, as whole runs measure up to 1.6x
+// slower than their medians (600 x 1.5 = 900, check_go.sh's cap). The floor is one test: chartgates TestWorkerSecretKeysGuardsRealTree
+// (row 572) alone in its part, 587 modelled.
+const plannedWallCap = 600
 
 type planItem struct {
 	key         string

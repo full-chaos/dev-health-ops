@@ -18,7 +18,7 @@ if [ "$#" -ne 5 ]; then
   exit 2
 fi
 repo="$1" tag="$2" asset="$3" sha="$4" out="$5"
-if ! printf '%s' "${sha}" | grep -qxE '[0-9a-f]{64}'; then
+if ! grep -qxE '[0-9a-f]{64}' <<<"${sha}"; then
   printf 'fetch-pinned-release: %s: the pinned sha256 must be 64 lowercase hex characters\n' "${asset}" >&2
   exit 2
 fi

@@ -123,7 +123,7 @@ if [ -z "${issue}" ]; then
   log "opened the issue for run ${run_id}"
 else
   seen="$(${GH} issue view "${issue}" -R "${repo}" --json body,comments --jq '[.body, (.comments[].body)] | join("\n")')"
-  if printf '%s' "${seen}" | grep -Eq "actions/runs/${run_id}([^0-9]|\$)"; then
+  if grep -Eq "actions/runs/${run_id}([^0-9]|\$)" <<<"${seen}"; then
     log "run ${run_id} is already on issue #${issue}; no change"
   else
     write issue comment "${issue}" -R "${repo}" --body "Still red. ${body}"

@@ -907,7 +907,7 @@ ch_probe_docker() {
     return 2
   fi
   rm -f "${ps_err_file}"
-  if ! printf '%s\n' "${ps_out}" | grep -qx "${CH_CONTAINER}"; then
+  if ! grep -qx "${CH_CONTAINER}" <<<"${ps_out}"; then
     CH_PROBE_DETAIL="container '${CH_CONTAINER}' confirmed NOT running (docker ps succeeded; name absent from the running-container list)"
     return 3
   fi

@@ -27,6 +27,16 @@ const (
 
 var ErrGitLabTestsIncomplete = errors.New("gitlab tests inventory incomplete")
 
+// errGitLabTestsReportTooLarge and errGitLabTestsArtifactTooLarge mark a test
+// report over nativeMaxObjectBytes and an artifact over gitLabTestsMaxDownload.
+// The chunked route (the production path) skips the one item, counts it and goes
+// on; the non-chunked Collect keeps returning them as before (it has no caller
+// outside tests: see execution_registry.go and complete_route.go).
+var (
+	errGitLabTestsReportTooLarge   = errors.New("gitlab test report over the size cap")
+	errGitLabTestsArtifactTooLarge = errors.New("gitlab test artifact over the size cap")
+)
+
 type gitLabTestsPipelinePayload struct {
 	ID           any            `json:"id"`
 	Name         any            `json:"name"`
@@ -174,7 +184,7 @@ func (handler GitLabTestsRouteHandler) Collect(
 		if startedAt == nil {
 			continue
 		}
-		if ciPipelineRunOutsideWindow(*startedAt, claim) {
+		if gitLabPipelineOutsideWindow(*startedAt, claim) {
 			continue
 		}
 		pipeline, ok := normalizeGitLabTestsPipeline(claim, repoID, payload, normalizedAt)
@@ -239,7 +249,7 @@ func (handler GitLabTestsRouteHandler) Collect(
 		return CompleteRouteBatch{}, ErrPaginationCapExceeded
 	}
 	reportPipelines, err := selectGitLabTestsReportPipelines(
-		reportPage.Items, project.DefaultBranch, maxPipelines, claim.BeforeAt,
+		reportPage.Items, maxPipelines, claim.BeforeAt,
 	)
 	if err != nil {
 		return CompleteRouteBatch{}, err
@@ -346,6 +356,15 @@ func (handler GitLabTestsRouteHandler) Collect(
 	}, nil
 }
 
+// gitLabPipelineOutsideWindow decides whether a listed pipeline is left out of the pipelines phase. The listing is by
+// updated_at between SinceAt and BeforeAt, so the listing IS the window: a pipeline that started before SinceAt and
+// was last updated inside it must be written (its row is keyed by repository and run, so a later window rewrites the
+// same key). A start after BeforeAt stays outside; a lower bound on the start would drop every pipeline that crosses
+// the window edge, because the window of its start no longer lists it once it has moved on.
+func gitLabPipelineOutsideWindow(startedAt time.Time, claim Claim) bool {
+	return claim.BeforeAt != nil && startedAt.After(claim.BeforeAt.UTC())
+}
+
 func gitLabTestsPipelineStartedAt(payload gitLabTestsPipelinePayload) *time.Time {
 	started := parseGitLabTestsTime(payload.StartedAt)
 	if started == nil {
@@ -376,9 +395,13 @@ func gitLabTestsActualRouteFamily(dataset string) string {
 	}
 }
 
+// selectGitLabTestsReportPipelines selects the pipelines whose test report is
+// fetched: pipelines of EVERY ref (default branch, feature branches and
+// merge-request refs alike; chris decided pull-request runs count in the pass
+// rate). The window is the listing's updated_after/updated_before; the only
+// check here is the inclusive upper bound.
 func selectGitLabTestsReportPipelines(
 	rawItems []json.RawMessage,
-	defaultBranch string,
 	maxPipelines int,
 	before *time.Time,
 ) ([]gitLabTestsPipelinePayload, error) {
@@ -395,15 +418,11 @@ func selectGitLabTestsReportPipelines(
 		if err != nil {
 			return nil, err
 		}
-		ref := stringValue(payload.Ref)
-		if defaultBranch != "" && ref != "" && ref != defaultBranch {
-			continue
-		}
 		if stringValue(payload.ID) == "" {
 			return nil, providerfoundation.ErrNormalizationInvalid
 		}
-		// Python applies the cap after the default-branch filter but before its
-		// inclusive upper-window check. Preserve that ordering exactly.
+		// Python applies the cap before its inclusive upper-window check.
+		// Preserve that ordering exactly.
 		accepted++
 		started := parseGitLabTestsTime(payload.StartedAt)
 		if started == nil {
@@ -692,7 +711,8 @@ func fetchGitLabTestsReport(ctx context.Context, client *providerfoundation.HTTP
 		return result, false, err
 	}
 	if len(raw) > nativeMaxObjectBytes {
-		return result, false, providerfoundation.ResponseInvalid(response, providerfoundation.ReasonBodyTooLarge)
+		return result, false, fmt.Errorf("%w: %w", errGitLabTestsReportTooLarge,
+			providerfoundation.ResponseInvalid(response, providerfoundation.ReasonBodyTooLarge))
 	}
 	if err := providerfoundation.DecodeResponseJSON(response, raw, &result, providerfoundation.DecodeUseNumber); err != nil {
 		return result, false, err
@@ -874,7 +894,8 @@ func downloadGitLabTestsArtifact(ctx context.Context, client *providerfoundation
 		return nil, err
 	}
 	if over > 0 {
-		return nil, providerfoundation.ResponseFailure(response, providerfoundation.ReasonBodyTooLarge, ErrGitLabTestsIncomplete)
+		return nil, fmt.Errorf("%w: %w", errGitLabTestsArtifactTooLarge,
+			providerfoundation.ResponseFailure(response, providerfoundation.ReasonBodyTooLarge, ErrGitLabTestsIncomplete))
 	}
 	return body, nil
 }

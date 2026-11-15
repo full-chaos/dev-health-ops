@@ -36,14 +36,20 @@ func (doer githubTestsChunkCountingDoer) Do(request *http.Request) (*http.Respon
 	return doer.delegate.Do(request)
 }
 
-// githubTestsMaxJobsPerRun bounds the items committed for ONE run: jobs, and
-// separately the suites+cases+coverage rows parsed from its artifacts.
-//
-// For jobs it is a hard bound. For report rows it is a SOFT bound of
-// max(cap, one artifact): rows are only committed in whole-artifact units, so
-// a single artifact larger than the cap is kept intact rather than split,
-// which would separate a suite from its cases (CHAOS-4142, codex round 1).
+// githubTestsMaxJobsPerRun bounds the jobs committed for ONE run (a hard bound). It is not the report-row bound: that is
+// githubTestsMaxReportRowsPerRun (CHAOS-13794; before it, the same 500 also capped the report rows and dropped whole artifacts).
 const githubTestsMaxJobsPerRun = 500
+
+// githubTestsMaxReportRowsPerRun bounds the suites+cases+coverage rows admitted for ONE run, and
+// githubTestsMaxReportPayloadBytesPerDestination the JSON bytes of any one destination's rows (CHAOS-13794). They sit under the
+// effect contract that one run's rows go through as ONE batch per destination before the split into chunks (maxEffectRows,
+// maxEffectPayloadBytes): a run over either is a failing unit, not a truncated one, so the bound is the contract ceiling, not a
+// guess. Sized from prod: the largest run is 71,896 rows (7b9583ee), the web run with vitest is about 17,300. The payload bound
+// keeps the same 9/10 headroom as the blame route.
+const (
+	githubTestsMaxReportRowsPerRun                 = maxEffectRows
+	githubTestsMaxReportPayloadBytesPerDestination = 57 << 20
+)
 
 // githubTestsPerRunPerPage is the per_page this route asks for on its per-run
 // collections. It is a named constant rather than a literal because the
@@ -502,6 +508,32 @@ func recordGitHubTestsPerRunTruncation(
 		"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
 		"repository", cursor.Repo, "component", component, "cause", cause,
 		logging.ProviderIDAttr("run", runID), "kept", kept,
+	)
+	return cursor
+}
+
+// recordGitHubTestsRunReportsDuplicate records, once per run and cause, that report artifacts of the run were dropped as the aggregate
+// of their parts (aggregate_of_parts: nothing is lost, the watermark advances) or kept although an aggregate disagrees with its parts
+// on outcomes (aggregate_mismatch: the run is not advanced past). The artifact ids go to the markers, the run id to the log line.
+func recordGitHubTestsRunReportsDuplicate(
+	cursor githubTestsChunkCursor,
+	client *providerfoundation.HTTPClient,
+	claim Claim,
+	cause string,
+	runID string,
+	rows int,
+) githubTestsChunkCursor {
+	cursor.Incomplete = mergeGitHubTestsIncomplete(cursor.Incomplete, GitHubTestsIncomplete{
+		Component: githubTestsRunReportsComponent, Cause: cause, Count: 1,
+	})
+	if client != nil {
+		client.Metrics.RecordPerRunTruncation(claim.Provider, claim.Dataset, githubTestsRunReportsComponent, cause)
+	}
+	slog.Warn(
+		"provider run report artifacts overlap by content; see the artifact markers",
+		"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
+		"repository", cursor.Repo, "component", githubTestsRunReportsComponent, "cause", cause,
+		logging.ProviderIDAttr("run", runID), "rows", rows,
 	)
 	return cursor
 }
@@ -1419,7 +1451,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 			artifactQuery.Set("branch", repo.DefaultBranch)
 		}
 		if claim.SinceAt != nil {
-			artifactQuery.Set("created", ">="+claim.SinceAt.UTC().Format(time.DateOnly))
+			artifactQuery.Set("created", ">="+githubTestsArtifactRunsCreatedFrom(claim))
 		}
 		artifactPage := func(page providerfoundation.PageVisit) error {
 			cursor.Pages++
@@ -1478,7 +1510,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 				suites := []testSuiteResultRow(nil)
 				cases := []testCaseResultRow(nil)
 				coverage := []coverageSnapshotRow(nil)
-				if include && !githubTestsReportRunOutsideWindow(pipeline, claim) {
+				if include && githubTestsRunReadable(run) && !githubTestsReportRunOutsideWindow(pipeline, claim) {
 					artPage, pageErr := providerfoundation.CollectGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{
 						Path:  root + "/actions/runs/" + url.PathEscape(pipeline.RunID) + "/artifacts",
 						Route: githubRunArtifactsRoute,
@@ -1537,6 +1569,30 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 						cursor = recordGitHubTestsPerRunTruncation(
 							cursor, client, claim, githubTestsRunArtifactsComponent,
 							githubTestsPerRunPageBudgetCause, pipeline.RunID, len(artifactItems),
+						)
+					}
+					githubTestsSortArtifactsForAdmission(artifactItems)
+					// The run's report rows are decided once every artifact is parsed (CHAOS-13794): duplicates are dropped by content,
+					// then the survivors are admitted whole, smallest declared size first, under the run bound. An artifact that does
+					// not fit is skipped whole with a marker and the walk goes on, so the order GitHub lists the artifacts in never
+					// decides which one survives. Each cause is recorded once per run, a marker once per skipped artifact.
+					var parsedReports []githubTestsParsedReport
+					heldRows := 0
+					reportRowsTruncated := false
+					skipReportOverBound := func(artifact githubTestsArtifactPayload) {
+						if !reportRowsTruncated {
+							reportRowsTruncated = true
+							cursor = recordGitHubTestsPerRunTruncation(
+								cursor, client, claim, githubTestsRunReportsComponent,
+								githubTestsPerRunCapCause, pipeline.RunID, heldRows,
+							)
+						}
+						cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow, cursor.SkippedArtifactCauseOverflow, cursor.SkippedArtifactCauseCount = appendGitHubTestsSkippedArtifact(
+							cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow, cursor.SkippedArtifactCauseOverflow, cursor.SkippedArtifactCauseCount,
+							GitHubTestsSkippedArtifact{
+								RunID: pipeline.RunID, ArtifactID: string(artifact.ID), Name: artifact.Name,
+								Cause: githubTestsPerRunCapCause,
+							},
 						)
 					}
 					for _, artifact := range artifactItems {
@@ -1791,40 +1847,67 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 								"repository", cursor.Repo, logging.ProviderIDAttr("run", pipeline.RunID), "count", rows.DuplicateSuites,
 							)
 						}
-						// Bound the run's committed report rows WITHOUT splitting
-						// an artifact. Rows are checked for fit BEFORE they are
-						// appended, so the aggregate cannot creep past the cap
-						// one artifact at a time; a suite is never separated
-						// from its cases, because incoherent rows are wrong
-						// data rather than partial data.
-						//
-						// The bound is therefore max(cap, first artifact's rows)
-						// and not the cap flat: an artifact that alone exceeds
-						// the cap is still kept, because committing ZERO rows
-						// for a run that has reports is a worse outcome than
-						// overshooting once. See githubTestsMaxJobsPerRun.
-						committed := len(suites) + len(cases) + len(coverage)
-						incoming := len(rows.Suites) + len(rows.Cases) + len(rows.Coverage)
-						if committed > 0 && committed+incoming > githubTestsMaxJobsPerRun {
-							cursor = recordGitHubTestsPerRunTruncation(
-								cursor, client, claim, githubTestsRunReportsComponent,
-								githubTestsPerRunCapCause, pipeline.RunID, committed,
-							)
-							break
+						// Hold the parsed rows until the run is decided; an artifact that would take the held rows past
+						// githubTestsMaxHeldReportRowsPerRun is skipped whole before it is held.
+						held := githubTestsParsedReport{ID: artifact.ID, Name: artifact.Name, Suites: rows.Suites, Cases: rows.Cases, Coverage: rows.Coverage}
+						if heldRows+held.rows() > githubTestsMaxHeldReportRowsPerRun {
+							skipReportOverBound(artifact)
+							continue
 						}
-						suites = append(suites, rows.Suites...)
-						cases = append(cases, rows.Cases...)
-						coverage = append(coverage, rows.Coverage...)
-						// Reachable only when the FIRST artifact alone exceeds
-						// the cap: it is kept whole, and the run stops here.
-						if len(suites)+len(cases)+len(coverage) > githubTestsMaxJobsPerRun {
-							cursor = recordGitHubTestsPerRunTruncation(
-								cursor, client, claim, githubTestsRunReportsComponent,
-								githubTestsPerRunCapCause, pipeline.RunID,
-								len(suites)+len(cases)+len(coverage),
-							)
-							break
+						heldRows += held.rows()
+						parsedReports = append(parsedReports, held)
+					}
+					plan, planErr := githubTestsPlanRunReports(parsedReports)
+					if planErr != nil {
+						return fmt.Errorf("%w: sizing report rows: %v", ErrGitHubTestsIncomplete, planErr)
+					}
+					recordedCauses := map[string]bool{}
+					markReport := func(index int, cause string) {
+						report := parsedReports[index]
+						cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow, cursor.SkippedArtifactCauseOverflow, cursor.SkippedArtifactCauseCount = appendGitHubTestsSkippedArtifact(
+							cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow, cursor.SkippedArtifactCauseOverflow, cursor.SkippedArtifactCauseCount,
+							GitHubTestsSkippedArtifact{RunID: pipeline.RunID, ArtifactID: string(report.ID), Name: report.Name, Cause: cause},
+						)
+						if cause == githubTestsPerRunCapCause {
+							if !reportRowsTruncated {
+								reportRowsTruncated = true
+								cursor = recordGitHubTestsPerRunTruncation(
+									cursor, client, claim, githubTestsRunReportsComponent, cause, pipeline.RunID, heldRows,
+								)
+							}
+							return
 						}
+						if !recordedCauses[cause] {
+							recordedCauses[cause] = true
+							cursor = recordGitHubTestsRunReportsDuplicate(cursor, client, claim, cause, pipeline.RunID, report.rows())
+						}
+					}
+					for _, drop := range plan.Dropped {
+						markReport(drop.Index, drop.Cause)
+					}
+					var mismatchIDs []string
+					for _, mismatch := range plan.Mismatch {
+						markReport(mismatch.Index, githubTestsAggregateMismatchCause)
+						mismatchIDs = append(mismatchIDs, string(parsedReports[mismatch.Index].ID))
+						for _, part := range mismatch.Parts {
+							mismatchIDs = append(mismatchIDs, string(parsedReports[part].ID))
+						}
+					}
+					if len(mismatchIDs) > 0 {
+						slog.Warn(
+							"provider run report artifacts match by case identity but disagree on outcome; all are kept and the unit is not advanced",
+							"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
+							"repository", cursor.Repo, logging.ProviderIDAttr("run", pipeline.RunID),
+							"artifact_ids", strings.Join(mismatchIDs, ","),
+						)
+					}
+					for _, index := range plan.OverBound {
+						markReport(index, githubTestsPerRunCapCause)
+					}
+					for _, index := range plan.Admitted {
+						suites = append(suites, parsedReports[index].Suites...)
+						cases = append(cases, parsedReports[index].Cases...)
+						coverage = append(coverage, parsedReports[index].Coverage...)
 					}
 				}
 				cursor.Suites += len(suites)

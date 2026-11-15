@@ -7,7 +7,12 @@
 // stored value to one Class, so no metric keeps a private status list.
 package deploymentstatus
 
-import "strings"
+import (
+	"fmt"
+	"slices"
+	"strings"
+	"unicode"
+)
 
 // Class is what a deployment's own status says about its outcome.
 type Class int
@@ -48,17 +53,60 @@ func (c Class) Terminal() bool {
 	return c == Succeeded || c == Failed
 }
 
+// CanceledStatuses are the normalized spellings Classify reads as Canceled.
+// CanceledExclusionSQL binds this same list, so SQL and Go share one set.
+var CanceledStatuses = []string{"canceled", "cancelled"}
+
 // Classify maps one stored deployment status to its Class. Case and
 // surrounding space do not matter.
 func Classify(status string) Class {
-	switch strings.ToLower(strings.TrimSpace(status)) {
+	normalized := strings.ToLower(strings.TrimSpace(status))
+	if slices.Contains(CanceledStatuses, normalized) {
+		return Canceled
+	}
+	switch normalized {
 	case "success":
 		return Succeeded
 	case "failure", "failed", "error":
 		return Failed
-	case "canceled", "cancelled":
-		return Canceled
 	default:
 		return Other
 	}
 }
+
+// CanceledExclusionSQL is the ClickHouse predicate that keeps a row of column
+// exactly when Classify would not call it Canceled. The query binds
+// CanceledStatuses as {canceled_statuses:Array(String)}.
+//
+// ClickHouse trimBoth trims only ' ', and lower only ASCII, so the trim is a
+// regex over the whitespace strings.TrimSpace removes. Each whitespace rune
+// is a literal alternative, not a class member: a class would split a
+// multi-byte rune into bytes if the regex engine runs in byte mode.
+func CanceledExclusionSQL(column string) string {
+	return "lowerUTF8(replaceRegexpAll(coalesce(" + column + ", ''), '" + trimSpacePattern +
+		"', '')) NOT IN {canceled_statuses:Array(String)}"
+}
+
+var trimSpacePattern = func() string {
+	var alternatives []string
+	add := func(r rune) {
+		if r < 0x80 {
+			// Doubled backslash: the SQL string literal unescapes it once.
+			alternatives = append(alternatives, fmt.Sprintf(`\\x%02x`, r))
+			return
+		}
+		alternatives = append(alternatives, string(r))
+	}
+	for _, span := range unicode.White_Space.R16 {
+		for r := rune(span.Lo); r <= rune(span.Hi); r += rune(span.Stride) {
+			add(r)
+		}
+	}
+	for _, span := range unicode.White_Space.R32 {
+		for r := rune(span.Lo); r <= rune(span.Hi); r += rune(span.Stride) {
+			add(r)
+		}
+	}
+	space := "(?:" + strings.Join(alternatives, "|") + ")+"
+	return "^" + space + "|" + space + "$"
+}()

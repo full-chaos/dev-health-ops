@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily/cicd"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/remaining"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/testops"
 )
@@ -28,8 +29,32 @@ import (
 // Scoped to the four families CHAOS-4263's RCA named stale: cicd, deploy,
 // incident, testops_risk. The other 19 families in families.json (repo_user_
 // commit, work_item, etc.) are out of this ticket.
+//
+// The check has two halves. SourceSnapshot reads the source BEFORE the
+// families compute; ZeroRowFamilies reads the outputs AFTER they wrote. Rows
+// a sync lands after the snapshot are in neither half, so the check no longer
+// fails a partition whose family computed every row it could read. Each
+// family's source read is the family's own source predicate (see
+// cicd.PipelineRunsSource, deploySource, incidentsStartedSQL,
+// testopsPipelineRunsSource, testopsSuiteResultsSource), so the check
+// counts exactly the rows the family keeps.
 type SourceDataChecker interface {
-	ZeroRowFamiliesWithSourceData(ctx context.Context, partitionID string) ([]string, error)
+	SourceSnapshot(ctx context.Context, partitionID string, asOf time.Time) (SourceSnapshot, error)
+	ZeroRowFamilies(ctx context.Context, snapshot SourceSnapshot) ([]string, error)
+}
+
+// SourceSnapshot is what the source half saw for one partition.
+type SourceSnapshot struct {
+	orgID         string
+	day           string
+	repositoryIDs []uuid.UUID
+
+	cicd                     bool
+	deploy                   bool
+	testopsPipeline          bool
+	testopsCompletedPipeline bool
+	testopsSuite             bool
+	incident                 bool
 }
 
 // ClickHouseSourceDataChecker reads a partition's scope (target day,
@@ -47,12 +72,14 @@ func NewClickHouseSourceDataChecker(pool *pgxpool.Pool, conn repositoryRows) (*C
 	return &ClickHouseSourceDataChecker{pool: pool, conn: conn}, nil
 }
 
-// ZeroRowFamiliesWithSourceData implements SourceDataChecker.
-func (checker *ClickHouseSourceDataChecker) ZeroRowFamiliesWithSourceData(
-	ctx context.Context, partitionID string,
-) ([]string, error) {
+// SourceSnapshot implements SourceDataChecker. asOf is the instant the
+// incident mapping validity is read at; the incident family reads at the same
+// instant (sourceAsOf).
+func (checker *ClickHouseSourceDataChecker) SourceSnapshot(
+	ctx context.Context, partitionID string, asOf time.Time,
+) (SourceSnapshot, error) {
 	if checker == nil || checker.pool == nil || checker.conn == nil || !validUUID(partitionID) {
-		return nil, ErrUnavailable
+		return SourceSnapshot{}, ErrUnavailable
 	}
 	var orgID, day, rawRepositoryIDs string
 	if err := checker.pool.QueryRow(ctx, `
@@ -60,55 +87,35 @@ SELECT run.org_id::text, run.target_day::text, partition.repo_ids::text
 FROM public.daily_metrics_partitions AS partition
 JOIN public.daily_metrics_runs AS run ON run.id = partition.run_id
 WHERE partition.id = $1::uuid`, partitionID).Scan(&orgID, &day, &rawRepositoryIDs); err != nil {
-		return nil, ErrUnavailable
+		return SourceSnapshot{}, ErrUnavailable
 	}
 	var typedRepositoryIDs []RepositoryID
 	if err := json.Unmarshal([]byte(rawRepositoryIDs), &typedRepositoryIDs); err != nil {
-		return nil, ErrInvalidState
+		return SourceSnapshot{}, ErrInvalidState
 	}
 	if len(typedRepositoryIDs) == 0 {
 		// No repositories in this partition: MaterializeScheduledFanout
 		// already terminalizes that case as no_repositories. Nothing to check.
-		return nil, nil
+		return SourceSnapshot{}, nil
 	}
 	repositoryIDs, err := repositoryIDUUIDs(typedRepositoryIDs)
 	if err != nil {
-		return nil, ErrInvalidState
+		return SourceSnapshot{}, ErrInvalidState
 	}
+	dayStart, err := time.Parse("2006-01-02", day)
+	if err != nil {
+		return SourceSnapshot{}, ErrInvalidState
+	}
+	dayEnd := dayStart.AddDate(0, 0, 1)
+	snapshot := SourceSnapshot{orgID: orgID, day: day, repositoryIDs: repositoryIDs}
 
-	// cicd: source is ci_pipeline_runs, keyed by its own repo_id and the day
-	// its run finished.
-	cicdSource, err := checker.exists(ctx, `
-SELECT 1 FROM ci_pipeline_runs
-WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(UUID)}
-  AND started_at IS NOT NULL AND toDate(started_at) = {day:Date}
-  AND finished_at IS NOT NULL AND toDate(finished_at) = {day:Date}
-LIMIT 1`, orgID, day, repositoryIDs)
-	if err != nil {
-		return nil, err
+	if snapshot.cicd, err = checker.existsWith(ctx, "SELECT 1"+cicd.PipelineRunsSource+"\nLIMIT 1",
+		cicd.SourceArgs(orgID, repositoryIDs, dayStart, dayEnd)...); err != nil {
+		return SourceSnapshot{}, err
 	}
-	cicdOutput, err := checker.exists(ctx, `
-SELECT 1 FROM cicd_metrics_daily
-WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(UUID)} AND day = {day:Date}
-LIMIT 1`, orgID, day, repositoryIDs)
-	if err != nil {
-		return nil, err
-	}
-
-	deploySource, err := checker.exists(ctx, `
-SELECT 1 FROM deployments
-WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(UUID)}
-  AND deployed_at IS NOT NULL AND toDate(deployed_at) = {day:Date}
-LIMIT 1`, orgID, day, repositoryIDs)
-	if err != nil {
-		return nil, err
-	}
-	deployOutput, err := checker.exists(ctx, `
-SELECT 1 FROM deploy_metrics_daily
-WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(UUID)} AND day = {day:Date}
-LIMIT 1`, orgID, day, repositoryIDs)
-	if err != nil {
-		return nil, err
+	if snapshot.deploy, err = checker.existsWith(ctx, "SELECT 1"+deploySource+"\nLIMIT 1",
+		deploySourceArgs(orgID, repositoryIDs, dayStart, dayEnd)...); err != nil {
+		return SourceSnapshot{}, err
 	}
 
 	// testops_risk's three outputs have DIFFERENT source eligibility
@@ -125,33 +132,58 @@ LIMIT 1`, orgID, day, repositoryIDs)
 	// pipeline run", as pipeline_stability's eligibility pinned a healthy day
 	// as a permanent failure. A day with a completed run and no stability row
 	// is still flagged.
-	testopsPipelineSource, err := checker.exists(ctx, `
-SELECT 1 FROM ci_pipeline_runs
-WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(UUID)}
-  AND started_at IS NOT NULL AND toDate(started_at) = {day:Date}
-LIMIT 1`, orgID, day, repositoryIDs)
-	if err != nil {
-		return nil, err
+	testopsArgs := testopsSourceArgs(orgID, repositoryIDs, dayStart, dayEnd)
+	if snapshot.testopsPipeline, err = checker.existsWith(ctx, "SELECT 1"+testopsPipelineRunsSource+"\nLIMIT 1",
+		testopsArgs...); err != nil {
+		return SourceSnapshot{}, err
 	}
-	testopsCompletedPipelineSource, err := checker.exists(ctx, `
-SELECT 1 FROM ci_pipeline_runs
-WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(UUID)}
-  AND started_at IS NOT NULL AND toDate(started_at) = {day:Date}
+	if snapshot.testopsCompletedPipeline, err = checker.existsWith(ctx, "SELECT 1"+testopsPipelineRunsSource+`
   AND lower(trimBoth(coalesce(status, ''))) IN {completed_statuses:Array(String)}
-LIMIT 1`, orgID, day, repositoryIDs, clickhouse.Named("completed_statuses", testops.CompletedRunStatuses()))
-	if err != nil {
-		return nil, err
+LIMIT 1`, append(testopsArgs, clickhouse.Named("completed_statuses", testops.CompletedRunStatuses()))...); err != nil {
+		return SourceSnapshot{}, err
 	}
-	testopsSuiteSource, err := checker.exists(ctx, `
-SELECT 1 FROM test_suite_results
-WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(UUID)}
-  AND coalesce(started_at, finished_at) IS NOT NULL
-  AND toDate(coalesce(started_at, finished_at)) = {day:Date}
+	if snapshot.testopsSuite, err = checker.existsWith(ctx, "SELECT 1"+testopsSuiteResultsSource+"\nLIMIT 1",
+		testopsArgs...); err != nil {
+		return SourceSnapshot{}, err
+	}
+
+	contract, err := remaining.ConfiguredOperationalOrderingContract()
+	if err != nil {
+		return SourceSnapshot{}, fmt.Errorf("incident ordering contract: %w", err)
+	}
+	if snapshot.incident, err = checker.existsWith(ctx, incidentSourceExistsSQL(contract),
+		incidentSourceArgs(orgID, repositoryIDs, dayStart, dayEnd, asOf)...); err != nil {
+		return SourceSnapshot{}, err
+	}
+	return snapshot, nil
+}
+
+// ZeroRowFamilies implements SourceDataChecker: a family is flagged when the
+// snapshot saw its source and its output now has no row for the scope.
+func (checker *ClickHouseSourceDataChecker) ZeroRowFamilies(
+	ctx context.Context, snapshot SourceSnapshot,
+) ([]string, error) {
+	if checker == nil || checker.conn == nil {
+		return nil, ErrUnavailable
+	}
+	if len(snapshot.repositoryIDs) == 0 {
+		return nil, nil
+	}
+	orgID, day, repositoryIDs := snapshot.orgID, snapshot.day, snapshot.repositoryIDs
+	output := func(table string) (bool, error) {
+		return checker.exists(ctx, `
+SELECT 1 FROM `+table+`
+WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(UUID)} AND day = {day:Date}
 LIMIT 1`, orgID, day, repositoryIDs)
+	}
+	cicdOutput, err := output("cicd_metrics_daily")
 	if err != nil {
 		return nil, err
 	}
-	testopsEitherSource := testopsPipelineSource || testopsSuiteSource
+	deployOutput, err := output("deploy_metrics_daily")
+	if err != nil {
+		return nil, err
+	}
 
 	// testops_risk writes three independent output tables (release_confidence,
 	// quality_drag, pipeline_stability -- job_daily.py:1481-1483 logs zero-rows
@@ -160,58 +192,38 @@ LIMIT 1`, orgID, day, repositoryIDs)
 	// still has rows never gets flagged (round 1). Check each output
 	// independently, against its OWN eligible source, and flag the family if
 	// ANY eligible output is missing.
-	releaseConfidenceOutput, err := checker.exists(ctx, `
-SELECT 1 FROM testops_release_confidence
-WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(UUID)} AND day = {day:Date}
-LIMIT 1`, orgID, day, repositoryIDs)
+	releaseConfidenceOutput, err := output("testops_release_confidence")
 	if err != nil {
 		return nil, err
 	}
-	qualityDragOutput, err := checker.exists(ctx, `
-SELECT 1 FROM testops_quality_drag
-WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(UUID)} AND day = {day:Date}
-LIMIT 1`, orgID, day, repositoryIDs)
+	qualityDragOutput, err := output("testops_quality_drag")
 	if err != nil {
 		return nil, err
 	}
-	pipelineStabilityOutput, err := checker.exists(ctx, `
-SELECT 1 FROM testops_pipeline_stability
-WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(UUID)} AND day = {day:Date}
-LIMIT 1`, orgID, day, repositoryIDs)
+	pipelineStabilityOutput, err := output("testops_pipeline_stability")
 	if err != nil {
 		return nil, err
 	}
+	testopsEitherSource := snapshot.testopsPipeline || snapshot.testopsSuite
 	testopsMissingOutput := (testopsEitherSource && (!releaseConfidenceOutput || !qualityDragOutput)) ||
-		(testopsCompletedPipelineSource && !pipelineStabilityOutput)
+		(snapshot.testopsCompletedPipeline && !pipelineStabilityOutput)
 
-	// incident: operational_incidents has no repo_id. The canonical projection
-	dayStart, err := time.Parse("2006-01-02", day)
-	if err != nil {
-		return nil, ErrInvalidState
-	}
-	incidentSource, err := checker.existsIncident(ctx, orgID, dayStart, dayStart.AddDate(0, 0, 1), repositoryIDs)
-	if err != nil {
-		return nil, err
-	}
-	incidentOutput, err := checker.exists(ctx, `
-SELECT 1 FROM incident_metrics_daily
-WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(UUID)} AND day = {day:Date}
-LIMIT 1`, orgID, day, repositoryIDs)
+	incidentOutput, err := output("incident_metrics_daily")
 	if err != nil {
 		return nil, err
 	}
 
 	var flagged []string
-	if cicdSource && !cicdOutput {
+	if snapshot.cicd && !cicdOutput {
 		flagged = append(flagged, "cicd")
 	}
-	if deploySource && !deployOutput {
+	if snapshot.deploy && !deployOutput {
 		flagged = append(flagged, "deploy")
 	}
 	if testopsMissingOutput {
 		flagged = append(flagged, "testops_risk")
 	}
-	if incidentSource && !incidentOutput {
+	if snapshot.incident && !incidentOutput {
 		flagged = append(flagged, "incident")
 	}
 	return flagged, nil
@@ -236,35 +248,20 @@ func (checker *ClickHouseSourceDataChecker) exists(
 	return found, nil
 }
 
-func (checker *ClickHouseSourceDataChecker) existsIncident(
-	ctx context.Context, orgID string, start, end time.Time, repositoryIDs []uuid.UUID,
-) (bool, error) {
-	contract, err := remaining.ConfiguredOperationalOrderingContract()
-	if err != nil {
-		return false, fmt.Errorf("incident ordering contract: %w", err)
-	}
-	projection := remaining.IncidentProjectionQuery(
-		remaining.IncidentWindowStarted,
-		" AND mapping.repo_id IN {repo_ids:Array(UUID)}",
-		contract,
-	)
-	asOf := time.Now().UTC()
-	rows, err := checker.conn.Query(ctx, `SELECT 1 FROM (`+projection+`) AS incident
+// incidentSourceExistsSQL is the incident family's kept set: its source read,
+// resolved in the same window computeIncidentMetricsDaily keeps.
+func incidentSourceExistsSQL(contract remaining.OperationalOrderingContract) string {
+	return `SELECT 1 FROM (` + incidentsStartedSQL(contract) + `) AS incident
 WHERE incident.resolved_at IS NOT NULL
   AND incident.resolved_at >= {start:DateTime64(3, 'UTC')}
   AND incident.resolved_at < {end:DateTime64(3, 'UTC')}
-LIMIT 1`,
-		clickhouse.Named("org_id", orgID),
-		clickhouse.Named("start", remaining.DateTime64Argument(
-			start, remaining.DateTime64MillisecondPrecision)),
-		clickhouse.Named("end", remaining.DateTime64Argument(
-			end, remaining.DateTime64MillisecondPrecision)),
-		clickhouse.Named("as_of", remaining.DateTime64Argument(
-			asOf, remaining.DateTime64MicrosecondPrecision)),
-		clickhouse.Named("repo_ids", repositoryIDs),
-	)
+LIMIT 1`
+}
+
+func (checker *ClickHouseSourceDataChecker) existsWith(ctx context.Context, query string, args ...any) (bool, error) {
+	rows, err := checker.conn.Query(ctx, query, args...)
 	if err != nil {
-		return false, fmt.Errorf("incident source query: %w: %v", ErrUnavailable, err)
+		return false, fmt.Errorf("source query: %w: %v", ErrUnavailable, err)
 	}
 	defer rows.Close()
 	found := rows.Next()

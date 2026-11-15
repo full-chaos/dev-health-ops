@@ -218,7 +218,7 @@ func TestClickHouseSourceDataCheckerFlagsOnlyFamiliesWithSourceButNoOutput(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	families, err := checker.ZeroRowFamiliesWithSourceData(ctx, partitionID)
+	families, err := zeroRowFamiliesNow(ctx, checker, partitionID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -363,7 +363,7 @@ func TestClickHouseSourceDataCheckerAllowsMissingPipelineStabilityOnASuiteOnlyDa
 	if err != nil {
 		t.Fatal(err)
 	}
-	families, err := checker.ZeroRowFamiliesWithSourceData(ctx, partitionID)
+	families, err := zeroRowFamiliesNow(ctx, checker, partitionID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -405,7 +405,7 @@ func TestClickHouseSourceDataCheckerSkipsPartitionsWithNoRepositories(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	families, err := checker.ZeroRowFamiliesWithSourceData(ctx, partitionID)
+	families, err := zeroRowFamiliesNow(ctx, checker, partitionID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -526,14 +526,14 @@ func TestClickHouseSourceDataCheckerScopesIncidentSourceThroughCurrentMapping(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	mappedFamilies, err := checker.ZeroRowFamiliesWithSourceData(ctx, "00000000-0000-4000-8000-000000000111")
+	mappedFamilies, err := zeroRowFamiliesNow(ctx, checker, "00000000-0000-4000-8000-000000000111")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(mappedFamilies) != 1 || mappedFamilies[0] != "incident" {
 		t.Fatalf("mapped incident families = %v, want [incident]", mappedFamilies)
 	}
-	unmappedFamilies, err := checker.ZeroRowFamiliesWithSourceData(ctx, "00000000-0000-4000-8000-000000000113")
+	unmappedFamilies, err := zeroRowFamiliesNow(ctx, checker, "00000000-0000-4000-8000-000000000113")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -683,7 +683,12 @@ INSERT INTO repos VALUES
 		{name: "unmapped", repo: unmappedID, want: false},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			got, err := checker.existsIncident(ctx, orgID, start, end, []uuid.UUID{testCase.repo})
+			contract, err := remaining.ConfiguredOperationalOrderingContract()
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := checker.existsWith(ctx, incidentSourceExistsSQL(contract),
+				incidentSourceArgs(orgID, []uuid.UUID{testCase.repo}, start, end, time.Now().UTC())...)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -699,7 +704,7 @@ INSERT INTO repos VALUES
 	// exact fixture. The org has exactly one incident, linked only to the
 	// mapped repo -- an org-wide query must incorrectly report source data
 	// for the UNMAPPED repo too, which is the false positive the fixed,
-	// mapping-scoped query above (existsIncident) does not produce.
+	// mapping-scoped query above (incidentSourceExistsSQL) does not produce.
 	t.Run("pre_fix_org_wide_probe_false_positives_the_unmapped_repo", func(t *testing.T) {
 		var found bool
 		if err := conn.QueryRow(ctx, `
@@ -717,8 +722,17 @@ LIMIT 1`,
 		if !found {
 			t.Fatal("setup error: org-wide probe found no incident at all")
 		}
-		t.Log("RED CONFIRMED: an org-wide incident probe with no repo scoping returns true for the org regardless of which repo is being checked -- it would report source data for the unmapped repo, which existsIncident (mapping-scoped) correctly reports false for")
+		t.Log("RED CONFIRMED: an org-wide incident probe with no repo scoping returns true for the org regardless of which repo is being checked -- it would report source data for the unmapped repo, which incidentSourceExistsSQL (mapping-scoped) correctly reports false for")
 	})
+}
+
+// zeroRowFamiliesNow runs both halves of the check back to back.
+func zeroRowFamiliesNow(ctx context.Context, checker *ClickHouseSourceDataChecker, partitionID string) ([]string, error) {
+	snapshot, err := checker.SourceSnapshot(ctx, partitionID, time.Now().UTC())
+	if err != nil {
+		return nil, err
+	}
+	return checker.ZeroRowFamilies(ctx, snapshot)
 }
 
 type recordingZeroRowsObserver struct {

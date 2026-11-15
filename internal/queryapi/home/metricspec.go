@@ -39,7 +39,9 @@ var metrics = []metricSpec{
 	// reviewed. See prrework.WindowRateSQL. Column names the metric; the
 	// stored ratio of that name is deprecated and not read.
 	{Metric: "pr_rework_ratio", Label: "PR Rework Ratio", Unit: "%", Table: prrework.Table, Column: prrework.DeprecatedRatioColumn, Aggregator: "ratio", Transform: percentTransform, Scope: "repo"},
-	{Metric: "ci_success", Label: "CI Success Rate", Unit: "%", Table: "cicd_metrics_daily", Column: "success_rate", Aggregator: "avg", Transform: percentTransform, Scope: "repo"},
+	// A ratio of the window's summed counts (successes over runs), never an average of daily rates. See
+	// cicdSuccessWindowRateSQL.
+	{Metric: "ci_success", Label: "CI Success Rate", Unit: "%", Table: "cicd_metrics_daily", Column: "success_rate", Aggregator: "ratio", Transform: percentTransform, Scope: "repo"},
 }
 
 // dedupByComputedAt ports _DEDUP_BY_COMPUTED_AT (api/queries/metrics.py:

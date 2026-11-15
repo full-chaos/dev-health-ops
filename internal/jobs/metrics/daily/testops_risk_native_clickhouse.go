@@ -694,7 +694,8 @@ func computeQualityDrag(
 // testops.ComputePipelineMetrics returned them (mirrors Python's stable
 // sort by `.day`, which is a no-op tie for same-day rows and so preserves
 // pipeline_metrics_buffer's own insertion order). Returns nil when
-// dayEntries is empty, matching `if n == 0: continue`.
+// dayEntries is empty, matching `if n == 0: continue`, and when no entry
+// has a completed run.
 func computePipelineStability(repoID uuid.UUID, day time.Time, dayEntries []testops.PipelineMetric, computedAt time.Time) *testopsPipelineStabilityRow {
 	n := len(dayEntries)
 	if n == 0 {
@@ -709,14 +710,24 @@ func computePipelineStability(repoID uuid.UUID, day time.Time, dayEntries []test
 	// the loop -- see weightedSuccessRate7d/successRateTrendFromRates
 	// (which also carry the CHAOS-4818 FMA guards this same code needed
 	// before extraction).
-	successRates := make([]float64, n)
-	for i, m := range dayEntries {
-		successRates[i] = m.SuccessRate
+	//
+	// A group with no completed run (succeeded or failed) has no success rate: it is left out, never a rate of 0, and
+	// the later groups move one place in the weights and the trend (the positions are the groups of one day, not
+	// days). With no completed run at all the day has no stability row; the failure loops below still walk every
+	// group, so their adjacency does not change.
+	successRates := make([]float64, 0, n)
+	for _, m := range dayEntries {
+		if m.SuccessCount+m.FailureCount > 0 {
+			successRates = append(successRates, m.SuccessRate)
+		}
+	}
+	if len(successRates) == 0 {
+		return nil
 	}
 	successRate7d := weightedSuccessRate7d(successRates)
 
 	successRateTrend := 0.0
-	if n >= 2 {
+	if len(successRates) >= 2 {
 		successRateTrend = successRateTrendFromRates(successRates)
 	}
 

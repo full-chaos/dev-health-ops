@@ -95,10 +95,12 @@ func TestTestOpsRateMeasures_AreWeightedNotAMeanOfRates_RealClickHouse(t *testin
 	const orgID = "org-13775"
 	const big, small, empty, noTeam = "11111111-0000-0000-0000-000000000001", "11111111-0000-0000-0000-000000000002", "11111111-0000-0000-0000-000000000003", "11111111-0000-0000-0000-000000000004"
 	const cFull, cPart = "11111111-0000-0000-0000-000000000005", "11111111-0000-0000-0000-000000000006"
+	const notCompleted = "11111111-0000-0000-0000-000000000007"
 
 	// Pipelines of team-a: a repository of 100 runs (90 succeeded, 10 failed, 20 reruns) and one of 10 runs (all
 	// succeeded, no rerun). Mean of the stored rates: success 95, failure 5, rerun 10. Weighted: 100/110, 10/110, 20/110.
-	// team-b holds a repository with no run: nothing to divide by.
+	// team-b holds a repository with no run: nothing to divide by. team-c holds a repository whose 5 runs were cancelled,
+	// skipped or never finished (2 of them rerun): no completed run, so no success or failure rate, but a rerun rate.
 	for _, r := range []struct {
 		repo, team            string
 		runs, ok, failed, rer int
@@ -107,6 +109,7 @@ func TestTestOpsRateMeasures_AreWeightedNotAMeanOfRates_RealClickHouse(t *testin
 		{small, "'team-a'", 10, 10, 0, 0},
 		{empty, "'team-b'", 0, 0, 0, 0},
 		{noTeam, "NULL", 10, 0, 10, 5},
+		{notCompleted, "'team-c'", 5, 0, 0, 2},
 	} {
 		rate := func(n int) float64 {
 			if r.runs == 0 {
@@ -189,7 +192,9 @@ func TestTestOpsRateMeasures_AreWeightedNotAMeanOfRates_RealClickHouse(t *testin
 		}
 	}
 
-	// ORG covers every repository, the one with no team too: 10 runs, none succeeded, 10 failed, 5 reruns.
+	// ORG covers every repository, the one with no team too: 10 runs, none succeeded, 10 failed, 5 reruns; and team-c's
+	// 5 runs, none completed, 2 reruns. Success and failure divide by the completed runs (120), the rerun rate by every
+	// run (125).
 	for _, tc := range []struct {
 		measure       model.MeasureInput
 		want, wantOrg float64
@@ -197,12 +202,17 @@ func TestTestOpsRateMeasures_AreWeightedNotAMeanOfRates_RealClickHouse(t *testin
 		{model.MeasureInputPipelineSuccessRate, 100.0 / 110 * 100, 100.0 / 120 * 100},
 		{model.MeasureInputPipelineFailureRate, 10.0 / 110 * 100, 20.0 / 120 * 100},
 		// Known integer reruns: 20 of 110 runs. The stored rate is reruns / runs, so the product form is the count.
-		{model.MeasureInputPipelineRerunRate, 20.0 / 110 * 100, 25.0 / 120 * 100},
+		{model.MeasureInputPipelineRerunRate, 20.0 / 110 * 100, 27.0 / 125 * 100},
 	} {
 		teams, org := series(tc.measure)
 		near(string(tc.measure)+" team-a", teams["team-a"], tc.want)
 		isNull(string(tc.measure)+" team-b", teams["team-b"])
 		near(string(tc.measure)+" ORG", org, tc.wantOrg)
+		if tc.measure == model.MeasureInputPipelineRerunRate {
+			near(string(tc.measure)+" team-c", teams["team-c"], 2.0/5*100)
+		} else {
+			isNull(string(tc.measure)+" team-c (no completed run)", teams["team-c"])
+		}
 	}
 
 	passed, failed := 999000.0+90, 1000.0+10

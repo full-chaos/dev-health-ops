@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/chmigrate"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/testops"
 )
 
 // CHAOS-2582: every served ClickHouse read of an organization's table is
@@ -429,7 +430,7 @@ type orgScopeFinding struct {
 	scopes int
 }
 
-func censusOrgScope(t *testing.T, root string, roots []string, tables map[string]bool) (checked int, flagged []orgScopeFinding) {
+func censusOrgScope(t *testing.T, root string, roots []string, tables map[string]bool) (checked int, flagged []orgScopeFinding, ruleReads []string) {
 	t.Helper()
 	loader := &orgScopeLoader{t: t, root: root, packages: map[string]*orgScopePackage{}, memo: map[string]string{}}
 	for _, censusRoot := range roots {
@@ -452,8 +453,12 @@ func censusOrgScope(t *testing.T, root string, roots []string, tables map[string
 				own, helpers := loader.text(orgScopeFunc{decl: fn, dir: dir, imports: pkg.files[filepath.Base(path)]})
 				reads := 0
 				for _, m := range orgScopeTableRead.FindAllStringSubmatch(own, -1) {
-					if tables[strings.ToLower(m[1])] {
+					table := strings.ToLower(m[1])
+					if tables[table] {
 						reads++
+					}
+					if through, ok := orgScopeReadOnlyThrough[table]; ok && !strings.Contains(own, through.text) {
+						ruleReads = append(ruleReads, filepath.ToSlash(rel)+":"+fn.Name.Name+" reads "+table)
 					}
 				}
 				// A table named at run time may be a source this text already
@@ -476,7 +481,16 @@ func censusOrgScope(t *testing.T, root string, roots []string, tables map[string
 		}
 	}
 	sort.Slice(flagged, func(i, j int) bool { return flagged[i].key < flagged[j].key })
-	return checked, flagged
+	sort.Strings(ruleReads)
+	return checked, flagged, ruleReads
+}
+
+// orgScopeReadOnlyThrough names the tables whose served reads must go through one shared statement, and that
+// statement. testops_pipeline_stability keeps old rows of repo-days with no completed run, which only the shared read
+// leaves out; a function under the census roots that names the table in its own SQL is a second reader without that
+// rule. The shared statement lives outside the roots, so the one served reader names it by reference.
+var orgScopeReadOnlyThrough = map[string]struct{ name, text string }{
+	"testops_pipeline_stability": {"testops.StabilityLiveRowsSQL", testops.StabilityLiveRowsSQL},
 }
 
 func TestEveryServedClickHouseReadOfAnOrganizationTableIsScopedByOrgID(t *testing.T) {
@@ -493,7 +507,10 @@ func TestEveryServedClickHouseReadOfAnOrganizationTableIsScopedByOrgID(t *testin
 		}
 	}
 	root := filepath.Join("..", "..", "..")
-	checked, flagged := censusOrgScope(t, root, orgScopeCensusRoots, tables)
+	checked, flagged, ruleReads := censusOrgScope(t, root, orgScopeCensusRoots, tables)
+	for _, read := range ruleReads {
+		t.Errorf("%s in its own SQL: read it only through %s", read, orgScopeReadOnlyThrough["testops_pipeline_stability"].name)
+	}
 	if checked < 250 {
 		t.Fatalf("the census found %d functions that read an organization table; it reads the source tree wrong", checked)
 	}
@@ -597,12 +614,19 @@ func shadowed() string {
 	return "SELECT day FROM repo_metrics_daily " + scopedWhere
 }
 
+func readsStabilityInline() string {
+	return `+"`SELECT day FROM testops_pipeline_stability WHERE org_id = {org_id:String}`"+`
+}
+
 func notAnOrganizationTable() string {
 	return `+"`SELECT version FROM schema_migrations`"+`
 }
 `)
 	tables := map[string]bool{"repo_metrics_daily": true, "work_item_metrics_daily": true}
-	checked, flagged := censusOrgScope(t, root, []string{"internal/queryapi/fixture"}, tables)
+	checked, flagged, ruleReads := censusOrgScope(t, root, []string{"internal/queryapi/fixture"}, tables)
+	if want := []string{"internal/queryapi/fixture/fixture.go:readsStabilityInline reads testops_pipeline_stability"}; strings.Join(ruleReads, "\n") != strings.Join(want, "\n") {
+		t.Errorf("reads outside the shared statement = %v, want %v", ruleReads, want)
+	}
 	var got []string
 	for _, finding := range flagged {
 		got = append(got, finding.key)

@@ -54,7 +54,8 @@ TestOps uses path-based attribution to map test suites and coverage snapshots to
 
 | Metric | Definition | Unit | Table | Computation |
 | :--- | :--- | :--- | :--- | :--- |
-| **Success Rate** | Share of pipeline runs that completed successfully. | ratio | `testops_pipeline_metrics_daily` | `success_count / pipelines_count` |
+| **Success Rate** | Share of completed pipeline runs (succeeded or failed) that succeeded; cancelled, skipped and unfinished runs are not in the rate. | ratio | `testops_pipeline_metrics_daily` | `success_count / (success_count + failure_count)` |
+| **Failure Rate** | Share of completed pipeline runs (succeeded or failed) that failed; with Success Rate it adds up to 100 %. | ratio | `testops_pipeline_metrics_daily` | `failure_count / (success_count + failure_count)` |
 | **Median Duration** | Median time from pipeline start to finish. | seconds | `testops_pipeline_metrics_daily` | `quantile(0.5)(duration_seconds)` |
 | **P95 Queue Time** | 95th percentile time spent waiting in queue. | seconds | `testops_pipeline_metrics_daily` | `quantile(0.95)(queue_seconds)` |
 | **Flake Rate** | Share of test cases exhibiting inconsistent outcomes. | ratio | `testops_test_metrics_daily` | `flake_count / total_cases` |

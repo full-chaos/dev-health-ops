@@ -27,8 +27,8 @@ type conn interface {
 // The value column, the grouping columns and the supported scopes are all part
 // of the query's meaning, so they are reproduced rather than re-derived.
 var metricDefinitions = map[string]MetricDefinition{
-	"success_rate":              pipelineMetric("success_rate"),
-	"failure_rate":              pipelineMetric("failure_rate"),
+	"success_rate":              pipelineMetric(completedRunRate("success_count")),
+	"failure_rate":              pipelineMetric(completedRunRate("failure_count")),
 	"rerun_rate":                pipelineMetric("rerun_rate"),
 	"median_duration_seconds":   pipelineMetric("median_duration_seconds"),
 	"p95_duration_seconds":      pipelineMetric("p95_duration_seconds"),
@@ -78,6 +78,13 @@ func pipelineMetric(column string) MetricDefinition {
 		Table: "testops_pipeline_metrics_daily", ValueColumn: column,
 		ScopeSupport: testopsScopes(), InnerGroupColumns: []string{"repo_id"},
 	}
+}
+
+// completedRunRate is a rate over the completed runs (succeeded or failed) of a stored row, NULL on a row with no
+// completed run: the series drops NULL values, so such a day is never a sample of 0. The stored success_rate and
+// failure_rate columns hold 0 on that day and are not read.
+func completedRunRate(count string) string {
+	return "if(success_count + failure_count = 0, NULL, " + count + " / (success_count + failure_count))"
 }
 
 func testMetric(column string) MetricDefinition {

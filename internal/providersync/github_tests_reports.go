@@ -259,6 +259,12 @@ const (
 	// provider handed back more items than the cap allows, so the boundary was
 	// seen and the remainder is known to be beyond it.
 	githubTestsPerRunCapCause = "per_run_cap"
+	// githubTestsAggregateOfPartsCause marks a report artifact dropped because its cases equal those of other artifacts of the run
+	// (CHAOS-13794): the parts carry the same rows, so nothing is lost and the watermark advances. githubTestsAggregateMismatchCause
+	// marks an aggregate whose cases match its parts but whose outcomes differ: every artifact is kept and the run is not advanced
+	// past, so the disagreement stays visible instead of one side being dropped.
+	githubTestsAggregateOfPartsCause  = "aggregate_of_parts"
+	githubTestsAggregateMismatchCause = "aggregate_mismatch"
 	// githubTestsPerRunPageBudgetCause is the nested paginator running out of
 	// page allowance INSIDE one run. It and the item cap above mean opposite
 	// things about what was seen: a page-budget stop leaves an UNKNOWN
@@ -425,7 +431,7 @@ const githubTestsLegacyReportOverflowSentinel = "__legacy__"
 var githubTestsWatermarkAdvancingPairs = map[string]map[string]struct{}{
 	githubTestsRunJobsComponent:      {githubTestsPerRunCapCause: {}},
 	githubTestsRunArtifactsComponent: {githubTestsPerRunCapCause: {}},
-	githubTestsRunReportsComponent:   {githubTestsPerRunCapCause: {}},
+	githubTestsRunReportsComponent:   {githubTestsPerRunCapCause: {}, githubTestsAggregateOfPartsCause: {}},
 	githubTestsReportMemberComponent: {
 		githubTestsArtifactOversizedCause:   {},
 		githubTestsArtifactUnavailableCause: {},
@@ -783,7 +789,9 @@ var githubTestsIncompleteVocabulary = map[string]map[string]struct{}{
 	},
 	// run_reports aggregates rows already parsed out of downloaded archives.
 	// Nothing paginates there, so it has no page-budget cause.
-	githubTestsRunReportsComponent: {githubTestsPerRunCapCause: {}},
+	githubTestsRunReportsComponent: {
+		githubTestsPerRunCapCause: {}, githubTestsAggregateOfPartsCause: {}, githubTestsAggregateMismatchCause: {},
+	},
 }
 
 // githubTestsDerivedIncompleteVocabulary holds the pairs a unit result derives

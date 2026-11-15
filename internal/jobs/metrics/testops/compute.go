@@ -41,6 +41,7 @@
 package testops
 
 import (
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -161,11 +162,11 @@ type TestMetric struct {
 	SuiteDurationP95Seconds *float64
 	FailureRecurrence       float64
 	// FlakeUnknown is set when the day holds case rows only of runs left out of
-	// the flake measures (runs not shown to be on the default branch):
-	// flake_rate, retry_dependency_rate and failure_recurrence_score then carry
-	// 0 because nothing was measured, not because nothing flaked. The written
-	// flake_cases/distinct_cases pair is 0/0, which adds nothing to the org
-	// series.
+	// the flake measures (runs not shown to be on the default branch). Nothing
+	// was measured: DistinctCases is 0, the rates above stay 0 here and the
+	// writer stores them as NULL, as for any day that measured no case. The
+	// written flake_cases/distinct_cases pair is 0/0, which adds nothing to the
+	// org series.
 	FlakeUnknown bool
 	TeamID       *string
 	ServiceID    *string
@@ -291,13 +292,29 @@ func trimLower(value string) string {
 	return strings.ToLower(strings.TrimSpace(value))
 }
 
+// pipelineSuccessStatuses and pipelineFailureStatuses are the stored run statuses (trimmed, lower case) of a completed
+// run: the one list behind normalizePipelineStatus and CompletedRunStatuses.
+var (
+	pipelineSuccessStatuses = []string{"success", "succeeded", "passed"}
+	pipelineFailureStatuses = []string{"failure", "failed", "error", "errors", "timeout", "timed_out"}
+)
+
+// CompletedRunStatuses are the stored ci_pipeline_runs statuses (trimmed, lower case) of a completed run, succeeded
+// or failed: the runs the success and failure rates divide by. A reader that asks ClickHouse "did a run complete"
+// uses this list, so it agrees with the compute.
+func CompletedRunStatuses() []string {
+	return append(append([]string(nil), pipelineSuccessStatuses...), pipelineFailureStatuses...)
+}
+
 func normalizePipelineStatus(status *string) string {
 	normalized := trimLower(derefStr(status))
-	switch normalized {
-	case "success", "succeeded", "passed":
+	switch {
+	case slices.Contains(pipelineSuccessStatuses, normalized):
 		return "success"
-	case "failure", "failed", "error", "errors", "timeout", "timed_out":
+	case slices.Contains(pipelineFailureStatuses, normalized):
 		return "failure"
+	}
+	switch normalized {
 	case "cancelled", "canceled", "cancel":
 		return "cancelled"
 	default:
@@ -305,9 +322,13 @@ func normalizePipelineStatus(status *string) string {
 	}
 }
 
-var failureStatuses = map[string]struct{}{
-	"failure": {}, "failed": {}, "error": {}, "errors": {}, "timeout": {}, "timed_out": {},
-}
+var failureStatuses = func() map[string]struct{} {
+	set := make(map[string]struct{}, len(pipelineFailureStatuses))
+	for _, status := range pipelineFailureStatuses {
+		set[status] = struct{}{}
+	}
+	return set
+}()
 
 func normalizeTestStatus(status *string) string {
 	normalized := trimLower(derefStr(status))
@@ -554,10 +575,15 @@ func finishPipelineBucket(repoID uuid.UUID, k pipelineKey, b *pipelineBucket) Pi
 		PipelinesCount: b.pipelines, SuccessCount: b.success,
 		FailureCount: b.failure, CancelledCount: b.cancelled,
 	}
+	// Success and failure rates are over the completed runs (succeeded or failed); cancelled, skipped and unfinished
+	// runs are in neither. A day with no completed run keeps 0 here (the columns are not nullable): every reader
+	// takes the rate from the counts with NULL on 0 or leaves that day out.
+	if completed := b.success + b.failure; completed > 0 {
+		metric.SuccessRate = float64(b.success) / float64(completed)
+		metric.FailureRate = float64(b.failure) / float64(completed)
+	}
 	if b.pipelines > 0 {
 		n := float64(b.pipelines)
-		metric.SuccessRate = float64(b.success) / n
-		metric.FailureRate = float64(b.failure) / n
 		metric.CancelRate = float64(b.cancelled) / n
 		metric.RerunRate = float64(b.reruns) / n
 	}

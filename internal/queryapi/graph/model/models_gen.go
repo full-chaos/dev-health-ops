@@ -1744,6 +1744,50 @@ type TestOpsRiskTrendPoint struct {
 	RiskScore float64          `json:"riskScore"`
 }
 
+// The test cases of the window, summed over its repository days, by status.
+type TestOpsTestCaseCounts struct {
+	Passed int `json:"passed"`
+	// Failed and errored cases.
+	Failed      int `json:"failed"`
+	Skipped     int `json:"skipped"`
+	Quarantined int `json:"quarantined"`
+	// Every case of the window, including skipped and quarantined.
+	Total int `json:"total"`
+}
+
+// How much of CI reports tests. A run counts when it is completed (success, failure, error or timeout, every workflow); cancelled, skipped, queued and running runs are not in it.
+type TestOpsTestCoverage struct {
+	// Completed CI runs whose start day is in the window, in scope, from every workflow and provider.
+	CompletedRuns int `json:"completedRuns"`
+	// Of those, the runs with at least one stored test suite that holds at least one test case.
+	RunsWithTests int `json:"runsWithTests"`
+	// ``runsWithTests`` as a percent of ``completedRuns`` (0 to 100). Null = no completed run in scope (not 0).
+	SharePct *float64 `json:"sharePct,omitempty"`
+}
+
+type TestOpsTestWindowInput struct {
+	// First day of the window (UTC), included.
+	SinceDate graphqldate.Date `json:"sinceDate"`
+	// Last day of the window (UTC), included. At most 90 days after ``sinceDate``; a later day, or a day before ``sinceDate``, is an error, not a cut answer.
+	UntilDate graphqldate.Date `json:"untilDate"`
+	RepoIds   []string         `json:"repoIds,omitempty"`
+	// Team ids. Narrows to the repositories these teams OWN (team_repo_ownership, as of now); person membership is never read. With ``repoIds`` both apply.
+	TeamIds []string `json:"teamIds,omitempty"`
+}
+
+type TestOpsTestWindowResult struct {
+	SinceDate graphqldate.Date       `json:"sinceDate"`
+	UntilDate graphqldate.Date       `json:"untilDate"`
+	Coverage  *TestOpsTestCoverage   `json:"coverage"`
+	Cases     *TestOpsTestCaseCounts `json:"cases"`
+	// ``passed / (passed + failed)`` over the window, as a percent (0 to 100); skipped and quarantined cases are not in the denominator. Null = no passed or failed case.
+	PassRatePct *float64 `json:"passRatePct,omitempty"`
+	// ``failed / (passed + failed)`` over the window, as a percent (0 to 100). Null = no passed or failed case.
+	FailureRatePct *float64 `json:"failureRatePct,omitempty"`
+	// Summed flaky case names over summed distinct case names of the window, as a percent (0 to 100). Null = no distinct case, or a day stored without the counts (the whole window is then unavailable, not a smaller one).
+	FlakeRatePct *float64 `json:"flakeRatePct,omitempty"`
+}
+
 type ThroughputEstimateCoverage struct {
 	Ratio            *float64 `json:"ratio,omitempty"`
 	EstimatedCount   int      `json:"estimatedCount"`

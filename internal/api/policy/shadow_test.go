@@ -24,6 +24,7 @@ import (
 
 	authv1 "github.com/full-chaos/dev-health-ops/contracts/auth/v1"
 	"github.com/full-chaos/dev-health-ops/internal/auth/policycatalog"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/refusedaddr"
 )
 
 // shadowBearer matches the PDP's principal_reference pattern, so the pep client sends it.
@@ -230,9 +231,7 @@ func shadowRequest(h http.Handler, method, path string) response {
 }
 
 func TestShadowPDPDownRequestStillServed(t *testing.T) {
-	dead := httptest.NewServer(http.NotFoundHandler())
-	url := dead.URL
-	dead.Close()
+	url := "http://" + refusedaddr.Addr(t)
 	client, err := pep.New(pep.Config{BaseURL: url, AllowPlainHTTP: true, HTTPClient: &http.Client{}, ClientService: "dev-health-ops-api", Timeout: time.Second})
 	if err != nil {
 		t.Fatal(err)

@@ -178,11 +178,11 @@ func TestOperationShadow_ResourceOrgIsNamedOrgId(t *testing.T) {
 	}
 }
 
-// C7: every one of the 51 root fields, alone and legacy-allowed, is observed once with its own key.
+// C7: every one of the 52 root fields, alone and legacy-allowed, is observed once with its own key.
 func TestOperationShadow_EveryLegacyAllowMappedFieldObserved(t *testing.T) {
 	table := FieldActionTable()
-	if len(table) != 51 {
-		t.Fatalf("the field action table has %d roots, want 51", len(table))
+	if len(table) != 52 {
+		t.Fatalf("the field action table has %d roots, want 52", len(table))
 	}
 	for key := range table {
 		document, variables := rootDoc(key, shOwn)
@@ -364,11 +364,11 @@ func TestOperationShadow_ResolverResultUnchanged(t *testing.T) {
 	}
 }
 
-// C12: the table behind the rows is the 51 roots, each a catalog row the shadow accepts, each query or mutation of the schema.
+// C12: the table behind the rows is the 52 roots, each a catalog row the shadow accepts, each query or mutation of the schema.
 func TestOperationShadow_RootTableIs51(t *testing.T) {
 	table := FieldActionTable()
-	if len(table) != 51 {
-		t.Fatalf("%d roots, want 51", len(table))
+	if len(table) != 52 {
+		t.Fatalf("%d roots, want 52", len(table))
 	}
 	for key, action := range table {
 		if _, err := policy.ShadowRowFor(action); err != nil {

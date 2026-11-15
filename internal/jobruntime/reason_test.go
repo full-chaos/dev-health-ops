@@ -125,6 +125,18 @@ func TestSafeErrorReasonSurvivesToRiverErrorRow(t *testing.T) {
 	}
 }
 
+func TestSafeErrorZeroRowsReasonSurvivesToRiverErrorRow(t *testing.T) {
+	t.Parallel()
+	cause := errors.New("daily metrics family produced zero rows despite source data")
+	marked := WithReason(Permanent(WithSafeCauseText(cause, "step=source_check")), ReasonZeroRowsWithSourceData)
+	choice := classify(context.Background(), marked, 1, 5)
+	got := unwrapSafe(t, transportError(choice)).Error()
+
+	if got != "dev-health job failed [permanent: zero_rows_with_source_data]" {
+		t.Fatalf("Error() = %q, want the permanent zero_rows_with_source_data safe error", got)
+	}
+}
+
 // TestSafeErrorUnreasonedFailureNeverLeaksCause is the DSN/tenant-identifying
 // acceptance case with no reason attached at all -- the common path today --
 // confirming the invariant errors.go documents still holds unmodified.

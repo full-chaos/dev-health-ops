@@ -15,21 +15,21 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/refusedaddr"
 )
 
 // refusingEndpoint returns the address of a listener that refuses the dial
 // ("closed") or accepts and drops it ("drop").
 func refusingEndpoint(t *testing.T, mode string) string {
 	t.Helper()
+	if mode == "closed" {
+		return refusedaddr.Addr(t)
+	}
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	address := listener.Addr().String()
-	if mode == "closed" {
-		_ = listener.Close()
-		return address
-	}
 	t.Cleanup(func() { _ = listener.Close() })
 	go func() {
 		for {

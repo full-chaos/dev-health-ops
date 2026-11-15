@@ -42,7 +42,7 @@ func TestClickHouseSourceDataCheckerMatchesDailyEligibilityIntersection(t *testi
 
 	for _, statement := range []string{
 		`CREATE TABLE ci_pipeline_runs (
-    org_id String, repo_id UUID,
+    org_id String, repo_id UUID, status Nullable(String),
     started_at Nullable(DateTime64(3, 'UTC')), finished_at Nullable(DateTime64(3, 'UTC'))
 ) ENGINE = MergeTree ORDER BY (org_id, repo_id)`,
 		`CREATE TABLE cicd_metrics_daily (org_id String, repo_id UUID, day Date)
@@ -96,9 +96,9 @@ func TestClickHouseSourceDataCheckerMatchesDailyEligibilityIntersection(t *testi
 
 	if err := conn.Exec(ctx, `
 INSERT INTO ci_pipeline_runs VALUES
-('00000000-0000-4000-8000-000000000009', toUUID('00000000-0000-4000-8000-000000000002'),
+('00000000-0000-4000-8000-000000000009', toUUID('00000000-0000-4000-8000-000000000002'), 'success',
  toDateTime64('2026-08-24 23:00:00', 3, 'UTC'), toDateTime64('2026-08-25 01:00:00', 3, 'UTC')),
-('00000000-0000-4000-8000-000000000009', toUUID('00000000-0000-4000-8000-000000000002'),
+('00000000-0000-4000-8000-000000000009', toUUID('00000000-0000-4000-8000-000000000002'), 'failed',
  toDateTime64('2026-08-25 02:00:00', 3, 'UTC'), toDateTime64('2026-08-25 03:00:00', 3, 'UTC'))`); err != nil {
 		t.Fatal(err)
 	}

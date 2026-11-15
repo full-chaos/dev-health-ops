@@ -1238,6 +1238,18 @@ var operationSpecs = map[string]OperationSpec{
 			}}
 		},
 	},
+	// testopsTestWindow (CHAOS-13773) is Go-only from its first day, like
+	// testopsJobFailures. Its percents are two integer counts of the same answer
+	// divided once in Go, so it declares no Tier-B leaf. The request is the web's
+	// 30-day window; the operation refuses a range of more than 90 days.
+	"testopsTestWindow": {
+		ResponseRoot: "testopsTestWindow",
+		Variables: func(orgID string, w Window) map[string]any {
+			return map[string]any{"orgId": orgID, "input": map[string]any{
+				"sinceDate": testopsJobFailuresSince(w.UntilDate), "untilDate": w.UntilDate,
+			}}
+		},
+	},
 	"throughputForecast": {
 		ResponseRoot: "throughputForecast",
 		RootNullable: true,
@@ -2149,7 +2161,7 @@ func aiOpportunityInstanceVariant(name, kind, scopeField string) Variant {
 func aiOpportunitiesParity() Options {
 	return Options{
 		FloatTierB: map[string]string{
-			"data.aiOpportunities.recommendations.score": "the flaky-test score derives from sum(flake_rate * total_cases) / sum(total_cases), a floating-point aggregate ClickHouse merges in thread-completion order, so the last bits differ run to run on both planes (CHAOS-5451)",
+			"data.aiOpportunities.recommendations.score": "the flaky-test score derives from sum(flake_rate * total_cases) over the cases of the days with a flake rate, a floating-point aggregate ClickHouse merges in thread-completion order, so the last bits differ run to run on both planes (CHAOS-5451)",
 		},
 		OrderInsensitiveLists: []OrderInsensitiveList{{
 			Path:      "data.aiOpportunities.recommendations",

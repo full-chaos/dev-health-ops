@@ -85,6 +85,9 @@ func TestPartialTestsUnitCoverage(t *testing.T) {
 	unit := func(dataset, status, result string, since, before time.Duration) partialUnit {
 		return partialUnit{dataset: dataset, provider: "github", flags: "{}", status: status, result: result, since: since, before: before}
 	}
+	// The result the real GitLab producer writes for a skipped report, and for a complete one.
+	realGitLabSkipped := realGitLabResult(t, realGitLabSkippedBody())
+	realGitLabComplete := realGitLabResult(t, realGitLabReport(3))
 	cases := []struct {
 		name    string
 		targets string
@@ -136,6 +139,26 @@ func TestPartialTestsUnitCoverage(t *testing.T) {
 		{"gitlab-shaped unit without the key is unchanged", `["tests"]`,
 			[]partialUnit{{dataset: "tests", provider: "gitlab", flags: "{}", status: "success", result: gitlabResult, since: -24 * time.Hour, before: -time.Hour}},
 			func(t *testing.T, tests, overall map[string]any) { wantGaps(t, tests, 0); wantCovered(t, tests, 1) }},
+		{"gitlab tests unit with reports_complete=false is a gap (real producer result)", `["tests"]`,
+			[]partialUnit{{dataset: "tests", provider: "gitlab", flags: "{}", status: "success", result: realGitLabSkipped, since: -24 * time.Hour, before: -time.Hour}},
+			func(t *testing.T, tests, overall map[string]any) {
+				wantGaps(t, tests, 1)
+				wantCovered(t, tests, 0)
+				wantNoLatest(t, overall)
+			}},
+		{"gitlab tests unit complete (real producer result) is healthy", `["tests"]`,
+			[]partialUnit{{dataset: "tests", provider: "gitlab", flags: "{}", status: "success", result: realGitLabComplete, since: -24 * time.Hour, before: -time.Hour}},
+			func(t *testing.T, tests, overall map[string]any) { wantGaps(t, tests, 0); wantCovered(t, tests, 1) }},
+		{"gitlab failed then reports_complete=false success reads gaps", `["tests"]`,
+			[]partialUnit{
+				{dataset: "tests", provider: "gitlab", flags: "{}", status: "failed", result: `{}`, since: -24 * time.Hour, before: -2 * time.Hour},
+				{dataset: "tests", provider: "gitlab", flags: "{}", status: "success", result: realGitLabSkipped, since: -24 * time.Hour, before: -time.Hour}},
+			func(t *testing.T, tests, overall map[string]any) {
+				wantGaps(t, tests, 1)
+				if got, _ := tests["failed_ranges"].([]any); len(got) != 0 || tests["status"] != "gaps" {
+					t.Fatalf("status = %v failed_ranges = %#v, want gaps", tests["status"], tests["failed_ranges"])
+				}
+			}},
 		{"folded cicd+tests partial: tests gap, cicd covered, latest advances", `["cicd","tests"]`,
 			[]partialUnit{{dataset: "cicd", provider: "github", flags: `{"family_dataset_cicd":true,"family_dataset_tests":true}`, status: "success", result: partialCapResult, since: -24 * time.Hour, before: -time.Hour}},
 			func(t *testing.T, tests, overall map[string]any) {
@@ -147,14 +170,46 @@ func TestPartialTestsUnitCoverage(t *testing.T) {
 		{"stray key on a non-tests dataset is ignored", `["git"]`,
 			[]partialUnit{unit("commits", "success", partialCapResult, -24*time.Hour, -time.Hour)},
 			nil},
-		{"failed then partial keeps the gap and the failed range", `["tests"]`,
+		{"failed then partial reads gaps with no failed range", `["tests"]`,
 			[]partialUnit{
-				unit("tests", "failed", `{}`, -24*time.Hour, -time.Hour),
+				unit("tests", "failed", `{}`, -24*time.Hour, -2*time.Hour),
 				unit("tests", "success", partialCapResult, -24*time.Hour, -time.Hour)},
 			func(t *testing.T, tests, overall map[string]any) {
 				wantGaps(t, tests, 1)
-				if got, _ := tests["failed_ranges"].([]any); len(got) != 1 {
-					t.Fatalf("failed_ranges = %#v, want the earlier failure kept", tests["failed_ranges"])
+				wantCovered(t, tests, 0)
+				if got, _ := tests["failed_ranges"].([]any); len(got) != 0 {
+					t.Fatalf("failed_ranges = %#v, want none: the later capped success superseded the failure", tests["failed_ranges"])
+				}
+				if tests["status"] != "gaps" || overall["health"] != "gaps" || overall["failed_range_count"] != float64(0) {
+					t.Fatalf("status = %v, overall = %#v, want gaps", tests["status"], overall)
+				}
+			}},
+		{"order guard: capped success then a LATER failed unit reads failed", `["tests"]`,
+			[]partialUnit{
+				unit("tests", "success", partialCapResult, -24*time.Hour, -time.Hour),
+				unit("tests", "failed", `{}`, -24*time.Hour, -time.Hour)},
+			func(t *testing.T, tests, overall map[string]any) {
+				wantGaps(t, tests, 1)
+				wantCovered(t, tests, 0)
+				if got, _ := tests["failed_ranges"].([]any); len(got) != 1 || tests["status"] != "failed" || overall["health"] != "failed" {
+					t.Fatalf("status = %v failed_ranges = %#v overall = %#v, want failed: the later failure is not superseded by an earlier capped success", tests["status"], tests["failed_ranges"], overall)
+				}
+			}},
+		{"failed with no later success stays failed", `["tests"]`,
+			[]partialUnit{unit("tests", "failed", `{}`, -24*time.Hour, -time.Hour)},
+			func(t *testing.T, tests, overall map[string]any) {
+				if got, _ := tests["failed_ranges"].([]any); len(got) != 1 || tests["status"] != "failed" {
+					t.Fatalf("status = %v failed_ranges = %#v, want failed", tests["status"], tests["failed_ranges"])
+				}
+			}},
+		{"failed then complete over a wider window is healthy", `["tests"]`,
+			[]partialUnit{
+				unit("tests", "failed", `{}`, -24*time.Hour, -2*time.Hour),
+				unit("tests", "success", completeResult, -24*time.Hour, -time.Hour)},
+			func(t *testing.T, tests, overall map[string]any) {
+				wantGaps(t, tests, 0)
+				if got, _ := tests["failed_ranges"].([]any); len(got) != 0 || tests["status"] != "healthy" {
+					t.Fatalf("status = %v failed_ranges = %#v, want healthy", tests["status"], tests["failed_ranges"])
 				}
 			}},
 		{"partial then complete re-covers the window", `["tests"]`,
@@ -177,9 +232,14 @@ func TestPartialTestsUnitCoverage(t *testing.T) {
 			must(pool.Exec(ctx, `DELETE FROM sync_run_units`))
 			for i, u := range tc.units {
 				created := now.Add(-time.Hour + time.Duration(i)*time.Minute)
+				// One sync run per unit with a later completed_at: units of one run sort by random id, so the
+				// order of a failed and a later unit would not be fixed.
+				runID := uuid.New()
+				must(pool.Exec(ctx, `INSERT INTO sync_runs (id,org_id,integration_id,triggered_by,mode,status,total_units,completed_units,failed_units,started_at,completed_at,created_at) VALUES ($1,$2,$3,'test','incremental','success',0,0,0,$4,$4,$4)`,
+					runID, f.OrgID, f.IntegrationID, created))
 				must(pool.Exec(ctx, `INSERT INTO sync_run_units (id,org_id,sync_run_id,integration_id,source_id,provider,dataset_key,processor_flags,since_at,before_at,status,result,created_at,updated_at,cost_class,mode,attempts)
 VALUES ($1,$2,$3,$4,$5,$6,$7,$8::json,$9,$10,$11,$12::jsonb,$13,$13,'rest_core','incremental',0)`,
-					uuid.New(), f.OrgID, f.RunID, f.IntegrationID, f.SourceID, u.provider, u.dataset, u.flags,
+					uuid.New(), f.OrgID, runID, f.IntegrationID, f.SourceID, u.provider, u.dataset, u.flags,
 					now.Add(u.since), now.Add(u.before), u.status, u.result, created))
 			}
 			raw, err := projector.Rebuild(ctx, f.OrgID, f.ConfigID)

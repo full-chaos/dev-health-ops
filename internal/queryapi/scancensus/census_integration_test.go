@@ -522,12 +522,22 @@ const nullableIntoPlainSites = `
 //	09e3a4863c03 -> 06f0dd79850a
 //	ed3ed30df2f7 -> 696073003934
 //	42ca92597595 -> cc6f1e4e4f8c
+//
+// ai_opportunities.go re-pinned by hand, digests copied from the local TestScanTypeCensus failure output (not computed):
+// flakyStatement now weighs only the days with a flake rate (sumIf/nullIf over the Nullable flake_rate), which changes
+// the file's SQL digest of every site. loadClusters and loadDocDrift: SQL and scan unchanged, digest only. loadFlaky:
+// weighted_flake_rate is Nullable(Float64) (NULL for a repository with no day that measured cases; the HAVING drops it),
+// scanned into **float64 so a NULL is never read as a plain 0:
+//
+//	loadClusters 7ecb45f4962b -> e251e44419fd
+//	loadDocDrift e303544dfe85 -> 1b7d64b044ee
+//	loadFlaky 0232862afb43 -> a06340e42973
 const unverifiedSites = `
 internal/queryapi/aggflame/clickhouse.go|fetchCycleBreakdown|*string,*float64,*uint64|a003456ad69e|not-describable
-internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*string,*uint64,*[]string|7ecb45f4962b|not-describable
-internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*uint64,*[]string|7ecb45f4962b|not-describable
-internal/queryapi/aianalytics/ai_opportunities.go|loadDocDrift|*string,*uint64,*uint64|e303544dfe85|not-describable
-internal/queryapi/aianalytics/ai_opportunities.go|loadFlaky|*string,*uint64,*float64|0232862afb43|not-describable
+internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*string,*uint64,*[]string|e251e44419fd|not-describable
+internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*uint64,*[]string|e251e44419fd|not-describable
+internal/queryapi/aianalytics/ai_opportunities.go|loadDocDrift|*string,*uint64,*uint64|1b7d64b044ee|not-describable
+internal/queryapi/aianalytics/ai_opportunities.go|loadFlaky|*string,*uint64,**float64|a06340e42973|not-describable
 internal/queryapi/aianalytics/flow_opportunities.go|loadRepoFlowRows|*string,*uint64,**float64,**float64,**float64,**float64|877e3ede0140|not-describable
 internal/queryapi/aianalytics/flow_opportunities.go|loadTeamFlowRows|*string,*uint64,**float64,**float64,**float64|cef9073b1eae|not-describable
 internal/queryapi/aianalytics/loaders.go|loadLabels|*string,*string|ffbc61d0410c|spliced-select-list
@@ -561,7 +571,7 @@ internal/queryapi/explain/repositories.go|fetchWorkItemProviders|*string|cc6f1e4
 internal/queryapi/home/queries_metric_drivers_batch.go|fetchMetricDriversBatch|*string,*string|61d29f14b0f2|not-describable
 internal/queryapi/home/queries_metrics.go|fetchBlockedHours|*time.Time,*float64|626f0d2551e1|not-describable
 internal/queryapi/home/queries_metrics.go|fetchChangeFailureView|[]any|cf1d07948519|variadic-destinations
-internal/queryapi/home/queries_metrics.go|fetchMetricDriverDelta|*string,**float64,**float64|d7c6b55dc5f3|not-describable
+internal/queryapi/home/queries_metrics.go|fetchMetricDriverDelta|*string,**float64,**float64|66779bcf8e59|not-describable
 internal/queryapi/home/queries_metrics.go|fetchMetricSeries|*time.Time,**float64|8fb98d9737e7|spliced-select-list
 internal/queryapi/home/queries_metrics.go|fetchMetricValue|*int64,**float64|dc4e9ea6b024|spliced-select-list
 internal/queryapi/home/queries_metrics.go|fetchPRReworkView|[]any|edd1ff81c902|variadic-destinations

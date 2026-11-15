@@ -350,6 +350,9 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 				// about COVERAGE -- whether what it scanned was the whole
 				// window (CHAOS-4130).
 				"coverage_complete": len(cursor.Truncated) == 0,
+				// The same key the sync coverage reader reads for GitHub tests units: a successful unit
+				// that skipped something is a gap, not a covered range.
+				"reports_complete": len(cursor.Truncated) == 0,
 				"inventory_truncated": append(
 					make([]string, 0, len(cursor.Truncated)), cursor.Truncated...),
 				"actual_route_family": gitLabTestsActualRouteFamily(claim.Dataset),

@@ -336,10 +336,10 @@ func TestGitLabTestsPipelineCrossingMidnightIsListedInTheWindowOfItsLastUpdate(t
 		t.Fatal("the same window replayed wrote different case keys")
 	}
 
-	// Pinned current behaviour of the pipelines phase (a separate defect): the crossing pipeline's START is before
-	// the window, so it gets no ci_pipeline_runs row while its report rows are written.
-	if pipelines := gitLabAllRefRowKeys(t, walk.batch, "ci_pipeline_runs", "run_id"); len(pipelines) != 0 {
-		t.Fatalf("ci_pipeline_runs rows = %v: the start-window drop changed; update the limit named in the PR", pipelines)
+	// The pipelines phase has no lower start bound: the crossing pipeline gets its ci_pipeline_runs row in the window of
+	// its last update, with its report rows.
+	if pipelines := gitLabAllRefRowKeys(t, walk.batch, "ci_pipeline_runs", "run_id"); !slices.Equal(pipelines, []string{"run_id=9101"}) {
+		t.Fatalf("ci_pipeline_runs rows = %v, want [run_id=9101]", pipelines)
 	}
 }
 

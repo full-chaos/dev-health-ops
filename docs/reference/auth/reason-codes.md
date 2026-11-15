@@ -1,6 +1,6 @@
 ---
 page_id: ref-auth-reason-codes
-summary: The closed reason codes of an authorization decision (25 wire values) and the closed local reasons a client gives when it could not get a decision, with the check that produces each wire value.
+summary: The closed reason codes of an authorization decision (26 wire values) and the closed local reasons a client gives when it could not get a decision, with the check that produces each wire value.
 content_type: reference
 owner: engineering
 source_of_truth:
@@ -24,15 +24,16 @@ There are two sets that must not be mixed. A wire reason code is a verdict of th
 
 ## Wire reason codes
 
-`decision_reason_code` in `contracts/auth/v1/vocabulary/reason-codes.json` lists 25 values. The schema enum of `authorization_decision.v1` equals the list, and a test holds both equal. A value is added only with the change of the producer that emits it.
+`decision_reason_code` in `contracts/auth/v1/vocabulary/reason-codes.json` lists 26 values. The schema enum of `authorization_decision.v1` equals the list, and a test holds both equal. A value is added only with the change of the producer that emits it.
 
-The internal reason `allowed_by_platform_admin` has no wire code of its own. It allows an action flagged `platform_admin: allowed` in the [policy catalog](policy-catalog.md) to a principal whose platform role holds `admin.orgs`. The wire sends `allowed_by_role`, because released policy-enforcement clients accept only the codes in this list. The auth-service decision log line keeps the internal reason in its `reason` field. The `auth.authorize.high_risk_decided` and `auth.authorize.delegated_decided` audit rows of such an allow also carry `decision_internal_reason` = `allowed_by_platform_admin`, while `decision_reason_code` stays `allowed_by_role`. Every other row has no `decision_internal_reason`. The Go client from dev-health-go v0.45.0 (pinned at `go.mod:17`) already accepts `allowed_by_platform_admin` as an allow, outside this list. The wire changes to that code, and the code joins this list, only when every deployed client runs v0.45.0 or later.
+The reason `allowed_by_platform_admin` allows an action flagged `platform_admin: allowed` in the [policy catalog](policy-catalog.md) to a principal whose platform role holds `admin.orgs`. The wire sends the same code, `allowed_by_platform_admin`, that the auth-service decision log line carries in its `reason` field. The `auth.authorize.high_risk_decided` and `auth.authorize.delegated_decided` audit rows of such an allow carry it as `decision_reason_code`. Audit rows written before the wire named this reason carry `decision_reason_code` `allowed_by_role` and the legacy attribute `decision_internal_reason` = `allowed_by_platform_admin`; no row is written with `decision_internal_reason` any more, and the audit schema keeps it as an optional legacy attribute for those stored rows. A policy-enforcement client must accept the code as an allow before the producer sends it: the Go client from dev-health-go v0.45.0 accepts it ahead of this list, and the web client does the same.
 
-`allowed` must agree with the code. Exactly three codes mean an allow. Every other code means a deny. A decision where `allowed` and the code disagree is invalid.
+`allowed` must agree with the code. Exactly four codes mean an allow. Every other code means a deny. A decision where `allowed` and the code disagree is invalid.
 
 | Code | Allow | Produced when |
 | --- | --- | --- |
-| `allowed_by_role` | yes | An organization or platform action: the principal's role holds the action. Also the wire code of the internal reason `allowed_by_platform_admin` (below). |
+| `allowed_by_role` | yes | An organization or platform action: the principal's role holds the action. |
+| `allowed_by_platform_admin` | yes | An organization action flagged `platform_admin: allowed`: the principal holds `admin.orgs` and needs no membership role for the action. |
 | `allowed_by_membership_default` | yes | A repository action: the principal is an active member with no grant row, and the membership role holds the action. |
 | `allowed_by_repository_grant` | yes | A repository action: a live grant of the organization, for this repository or `*`, holds the action. |
 | `invalid_request` | no | The request does not normalize, a repository request names `*`, or the evaluator has no usable snapshot or catalog. |

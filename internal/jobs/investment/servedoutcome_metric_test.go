@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
@@ -16,6 +15,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/categorize"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/chwrite"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/refusedaddr"
 )
 
 // The outcome set of the served mode is the collector's: one list, in one
@@ -133,11 +133,8 @@ func TestTheServedOutcomeCounterHoldsTheCountOfEachOutcome(t *testing.T) {
 		failures[id] = failure
 	}
 
-	// Run 4: a refused connection (nothing listens on the address).
-	closed := httptest.NewServer(http.NotFoundHandler())
-	closedURL := closed.URL
-	closed.Close()
-	refused, err := newServedDecision(servedTestClient(t, closedURL, 10*time.Second, logs), debugLogger(logs))
+	// Run 4: a refused connection (a bound address that never listens: no other test can be handed its port).
+	refused, err := newServedDecision(servedTestClient(t, "http://"+refusedaddr.Addr(t), 10*time.Second, logs), debugLogger(logs))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,11 +179,8 @@ func TestTheServedOutcomeCounterHoldsTheCountOfEachOutcome(t *testing.T) {
 // A shadow attempt row of a refused connection carries the class refused: the
 // closed set of attempt classes of the shadow sinks holds it.
 func TestAShadowAttemptOfARefusedConnectionIsClassedRefused(t *testing.T) {
-	closed := httptest.NewServer(http.NotFoundHandler())
-	closedURL := closed.URL
-	closed.Close()
 	logs := &syncBuffer{}
-	phase, err := NewShadowPhase(shadowTestSettings(), servedTestClient(t, closedURL, 10*time.Second, logs), debugLogger(logs))
+	phase, err := NewShadowPhase(shadowTestSettings(), servedTestClient(t, "http://"+refusedaddr.Addr(t), 10*time.Second, logs), debugLogger(logs))
 	if err != nil {
 		t.Fatal(err)
 	}

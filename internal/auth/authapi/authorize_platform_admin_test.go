@@ -11,23 +11,29 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/authorization"
 )
 
-func TestPlatformAdminAllowIsInternalAndAnswersAllowedByRole(t *testing.T) {
+// The wire names the reason the evaluator gave: allowed_by_platform_admin is its own wire code, in the closed set.
+func TestPlatformAdminAllowAnswersItsOwnWireCode(t *testing.T) {
 	code, ok := wireReasonCode(authorization.ReasonAllowedByPlatformAdmin)
-	if !ok || code != string(authorization.ReasonAllowedByRole) {
-		t.Fatalf("wireReasonCode(allowed_by_platform_admin) = %q, %v; want allowed_by_role", code, ok)
+	if !ok || code != string(authorization.ReasonAllowedByPlatformAdmin) {
+		t.Fatalf("wireReasonCode(allowed_by_platform_admin) = %q, %v; want allowed_by_platform_admin", code, ok)
+	}
+	for _, reason := range authorization.AllReasons() {
+		if got, onWire := wireReasonCode(reason); onWire && got != string(reason) {
+			t.Fatalf("wireReasonCode(%s) = %q: the wire code of a Reason is its own token", reason, got)
+		}
 	}
 	codes := AuthorizeWireReasonCodes()
-	if slices.Contains(codes, string(authorization.ReasonAllowedByPlatformAdmin)) {
-		t.Fatalf("the wire set %v names the internal reason", codes)
+	if !slices.Contains(codes, string(authorization.ReasonAllowedByPlatformAdmin)) {
+		t.Fatalf("the wire set %v lacks the platform-admin reason", codes)
 	}
 	if !slices.Equal(codes, slices.Compact(slices.Clone(codes))) {
 		t.Fatalf("the wire set %v repeats a code", codes)
 	}
 }
 
-// A platform admin with the member role is allowed settings.write: the wire and the audit row say allowed_by_role,
-// the decision log line keeps the internal reason.
-func TestAuthorizePlatformAdminAllowLogsTheInternalReason(t *testing.T) {
+// A platform admin with the member role is allowed settings.write: the wire, the audit row and the decision log line all
+// say allowed_by_platform_admin.
+func TestAuthorizePlatformAdminAllowIsTheSameReasonOnTheWireTheAuditRowAndTheLog(t *testing.T) {
 	var logs bytes.Buffer
 	h := newAuthorizeHandlerFixture(t, func(d *AuthorizeDeps) { d.Logger = slog.New(slog.NewJSONHandler(&logs, nil)) })
 	snap := h.state.snapshots[snapKey{h.principal, h.org}]
@@ -39,12 +45,12 @@ func TestAuthorizePlatformAdminAllowLogsTheInternalReason(t *testing.T) {
 		t.Fatalf("status %d body %s", rec.Code, rec.Body)
 	}
 	d := decodeWire[wireDecision](t, rec)
-	if !d.Allowed || d.ReasonCode != "allowed_by_role" {
-		t.Fatalf("wire decision %+v, want an allow with allowed_by_role", d)
+	if !d.Allowed || d.ReasonCode != "allowed_by_platform_admin" {
+		t.Fatalf("wire decision %+v, want an allow with allowed_by_platform_admin", d)
 	}
 	rows := h.audit.rows()
-	if len(rows) != 1 || attrString(t, rows[0], "decision_reason_code") != "allowed_by_role" {
-		t.Fatalf("audit rows %+v, want one with allowed_by_role", rows)
+	if len(rows) != 1 || attrString(t, rows[0], "decision_reason_code") != "allowed_by_platform_admin" {
+		t.Fatalf("audit rows %+v, want one with allowed_by_platform_admin", rows)
 	}
 	var found bool
 	for _, line := range bytes.Split(bytes.TrimSpace(logs.Bytes()), []byte("\n")) {
@@ -56,8 +62,8 @@ func TestAuthorizePlatformAdminAllowLogsTheInternalReason(t *testing.T) {
 			continue
 		}
 		found = true
-		if entry["decision_id"] != d.DecisionID || entry["reason_code"] != "allowed_by_role" || entry["reason"] != "allowed_by_platform_admin" {
-			t.Fatalf("decision log line %v, want reason_code allowed_by_role and reason allowed_by_platform_admin", entry)
+		if entry["decision_id"] != d.DecisionID || entry["reason_code"] != "allowed_by_platform_admin" || entry["reason"] != "allowed_by_platform_admin" {
+			t.Fatalf("decision log line %v, want reason_code and reason allowed_by_platform_admin", entry)
 		}
 	}
 	if !found {

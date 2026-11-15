@@ -90,7 +90,7 @@ elif [ "${mt_rc}" -ne 0 ]; then
   echo "merge-tree-vet: could not compute the merge tree (git merge-tree exit ${mt_rc})" >&2
   exit 2
 fi
-tree="$(printf '%s\n' "${merged}" | head -n1)"
+tree="$(head -n1 <<<"${merged}")"
 [ -n "${tree}" ] || { echo "merge-tree-vet: git merge-tree printed no tree" >&2; exit 2; }
 
 scratch_root="${DEV_HEALTH_SCRATCH:-${TMPDIR:-/tmp}}"

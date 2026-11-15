@@ -340,7 +340,7 @@ smoke_target() {
     "${startup_env[@]}" \
     "${CONTAINER_SECURITY_ARGS[@]}" \
     "${tag}" "${verb_args[@]}" "${startup_args[@]}" >/dev/null
-  published_address="$(docker port "${container_name}" 8080/tcp 2>/dev/null | head -n 1 || true)"
+  published_address="$(docker port "${container_name}" 8080/tcp 2>/dev/null || true)"; published_address="${published_address%%$'\n'*}"
   if [ -z "${published_address}" ]; then
     # Surface why the container is gone rather than only that the port is
     # missing: startup configuration errors are the likeliest cause and they
@@ -651,8 +651,8 @@ smoke_dho() {
     --publish "127.0.0.1::8000" \
     "${CONTAINER_SECURITY_ARGS[@]}" \
     "${tag}" api --http-addr=:8080 --api-addr=:8000 >/dev/null
-  operator_address="$(docker port "${container_name}" 8080/tcp 2>/dev/null | head -n 1 || true)"
-  api_address="$(docker port "${container_name}" 8000/tcp 2>/dev/null | head -n 1 || true)"
+  operator_address="$(docker port "${container_name}" 8080/tcp 2>/dev/null || true)"; operator_address="${operator_address%%$'\n'*}"
+  api_address="$(docker port "${container_name}" 8000/tcp 2>/dev/null || true)"; api_address="${api_address%%$'\n'*}"
   if [ -z "${operator_address}" ] || [ -z "${api_address}" ]; then
     printf 'container dho exited before publishing its ports; its output was:\n' >&2
     docker logs "${container_name}" 2>&1 | tail -20 >&2
@@ -721,9 +721,9 @@ smoke_query_api() {
     --env "DEV_HEALTH_HTTP_ADDR=:8080" \
     "${CONTAINER_SECURITY_ARGS[@]}" \
     "${tag}" query-api >/dev/null
-  query_address="$(docker port "${container_name}" 8090/tcp 2>/dev/null | head -n 1 || true)"
-  operator_address="$(docker port "${container_name}" 8080/tcp 2>/dev/null | head -n 1 || true)"
-  internal_address="$(docker port "${container_name}" 8091/tcp 2>/dev/null | head -n 1 || true)"
+  query_address="$(docker port "${container_name}" 8090/tcp 2>/dev/null || true)"; query_address="${query_address%%$'\n'*}"
+  operator_address="$(docker port "${container_name}" 8080/tcp 2>/dev/null || true)"; operator_address="${operator_address%%$'\n'*}"
+  internal_address="$(docker port "${container_name}" 8091/tcp 2>/dev/null || true)"; internal_address="${internal_address%%$'\n'*}"
   if [ -z "${query_address}" ] || [ -z "${operator_address}" ] || [ -z "${internal_address}" ]; then
     printf 'container query-api exited before publishing its ports; its output was:\n' >&2
     docker logs "${container_name}" 2>&1 | tail -20 >&2

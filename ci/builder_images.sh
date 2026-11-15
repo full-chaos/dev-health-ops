@@ -19,7 +19,7 @@ seen=0
 while IFS=$'\t' read -r name ref extra; do
   case "${name}" in ''|'#'*) continue ;; esac
   [ -z "${extra:-}" ] && [ -n "${ref:-}" ] || { echo "::error::${tsv}: row '${name}' needs exactly <name><TAB><ref>" >&2; exit 1; }
-  printf '%s' "${ref}" | grep -qE '^[a-z0-9._-]+/[a-z0-9._/-]+:[A-Za-z0-9._-]+@sha256:[0-9a-f]{64}$' \
+  grep -qE '^[a-z0-9._-]+/[a-z0-9._/-]+:[A-Za-z0-9._-]+@sha256:[0-9a-f]{64}$' <<<"${ref}" \
     || { echo "::error::${tsv}: '${ref}' must be <namespace>/<repo>:<tag>@sha256:<64 hex>" >&2; exit 1; }
   without_digest="${ref%@*}"
   repo="${without_digest%:*}"

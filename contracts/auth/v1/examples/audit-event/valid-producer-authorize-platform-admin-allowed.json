@@ -5,8 +5,7 @@
   "outcome": "allowed",
   "attributes": {
     "decision_id": "dec_EXAMPLE0000000000000000003",
-    "decision_reason_code": "allowed_by_role",
-    "decision_internal_reason": "allowed_by_platform_admin",
+    "decision_reason_code": "allowed_by_platform_admin",
     "action_key": "settings.write",
     "resource_type": "organization",
     "policy_revision": 42,

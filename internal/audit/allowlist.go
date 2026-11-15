@@ -61,9 +61,7 @@ var allowedAttributeKeys = map[string]struct{}{
 	// the resource asked about.
 	"decision_id":          {},
 	"decision_reason_code": {},
-	// decision_internal_reason is the internal Reason of a decision whose wire code hides it (platform-admin allow).
-	"decision_internal_reason": {},
-	"resource_type":            {},
+	"resource_type":        {},
 }
 
 // ValidateAttributes refuses an audit attribute map that has a key outside the
@@ -191,14 +189,12 @@ var attributeVocabulary = map[string][]string{
 	"resource_kind": {"organization", "repository", "project", "team"},
 	// decision_reason_code is authorization_decision.v1's reason_code set (reason-codes.json decision_reason_code).
 	"decision_reason_code": {
-		"allowed_by_membership_default", "allowed_by_repository_grant", "allowed_by_role", "delegation_invalid", "grant_absent",
+		"allowed_by_membership_default", "allowed_by_platform_admin", "allowed_by_repository_grant", "allowed_by_role", "delegation_invalid", "grant_absent",
 		"grant_expired", "grant_revoked", "impersonation_denied", "invalid_request", "no_membership",
 		"org_mismatch", "organization_inactive", "platform_role_absent", "principal_inactive", "repository_allowlist_too_large", "repository_not_granted", "repository_unresolved",
 		"resource_mismatch", "role_lacks_action", "role_scope_mismatch", "role_unknown", "service_account_inactive",
 		"unknown_action", "workload_action_denied", "workload_audience_denied",
 	},
-	// decision_internal_reason is the internal-only Reasons of authapi internalOnlyReasons, held equal by a test.
-	"decision_internal_reason": {"allowed_by_platform_admin"},
 	// resource_type is authorization_request.v1's resource type set.
 	"resource_type": {
 		"organization", "repository", "membership", "service_account", "grant", "credential", "session", "signing_key",

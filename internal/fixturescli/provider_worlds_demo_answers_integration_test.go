@@ -986,11 +986,11 @@ func demoGitLabAnswers(build *demoBuild) []providerAnswer {
 					"finished_at": started.Add(time.Duration(4+3*jobIndex) * time.Minute).Format(time.RFC3339), "tag_list": []string{"docker"}, "retried": false})
 			}
 			answers = append(answers, get(gitlabHost, fmt.Sprintf("%s/pipelines/%d/jobs", root, run.ID), "*", jobs))
-			if run.Branch == "main" {
-				notFound := get(gitlabHost, fmt.Sprintf("%s/pipelines/%d/test_report", root, run.ID), "", map[string]any{"message": "404 Not found"})
-				notFound.Status = 404
-				answers = append(answers, notFound)
-			}
+			// GitLab answers a pipeline's test report whatever its ref (404 when the pipeline has none), and the
+			// report phase now asks for the pipelines of every ref.
+			notFound := get(gitlabHost, fmt.Sprintf("%s/pipelines/%d/test_report", root, run.ID), "", map[string]any{"message": "404 Not found"})
+			notFound.Status = 404
+			answers = append(answers, notFound)
 		}
 		sort.SliceStable(pipelines, func(i, j int) bool {
 			return pipelines[i].(map[string]any)["updated_at"].(string) > pipelines[j].(map[string]any)["updated_at"].(string)

@@ -239,6 +239,7 @@ func TestGitLabTestsTruncationVocabularyStaysClosed(t *testing.T) {
 	for _, component := range []string{
 		gitLabPipelineInventoryComponent, gitLabReportInventoryComponent,
 		gitLabRunJobsComponent, gitLabRunArtifactsComponent,
+		gitLabReportTooLargeComponent, gitLabArtifactOversizedComponent,
 	} {
 		if !gitLabTestsTruncationKnown(component) {
 			t.Fatalf("%s must be in the closed vocabulary", component)

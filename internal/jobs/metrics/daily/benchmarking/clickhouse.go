@@ -10,6 +10,7 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/ownershipwindow"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/rowview"
@@ -244,7 +245,11 @@ GROUP BY scope_key, day
 ORDER BY scope_key, day`, inner)
 	var ownerArguments []any
 	if ownersRead {
-		query, ownerArguments = ownersJoin(inner, loader.orgID, loader.ownersAsOf)
+		var err error
+		query, ownerArguments, err = ownersJoin(inner, loader.orgID, loader.ownersAsOf)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	arguments := []any{
@@ -320,7 +325,7 @@ ORDER BY scope_key, day`, inner)
 // the owners of the repository at asOf by the ownership rule of every team scope (teamscope.OwnershipFromWhere:
 // validity window, active teams, catalog guard). A co-owned repository goes in full to each owner, never at its share,
 // and a repository no team owns gives no team a series. Every day of the window takes the owners at asOf.
-func ownersJoin(inner, orgID string, asOf time.Time) (string, []any) {
+func ownersJoin(inner, orgID string, asOf time.Time) (string, []any, error) {
 	fromWhere, bindings := teamscope.OwnershipFromWhere(orgID, asOf)
 	query := fmt.Sprintf(`
 SELECT own.owner_team_id AS scope_key, k.day AS day, avg(k.metric_value) AS value
@@ -333,16 +338,31 @@ INNER JOIN (
 WHERE k.metric_value IS NOT NULL
 GROUP BY scope_key, day
 ORDER BY scope_key, day`, inner, ownershipwindow.RepoKey, fromWhere)
+	arguments, err := namedArguments(bindings)
+	if err != nil {
+		return "", nil, err
+	}
+	return query, arguments, nil
+}
+
+// namedArguments binds each teamscope binding with a typed clickhouse.Named call, so every bound type is one the
+// parameter census proves; a type it does not know is an error, never a value of an unproven encoding.
+func namedArguments(bindings []dhclickhouse.Binding) ([]any, error) {
 	arguments := make([]any, 0, len(bindings))
 	for _, binding := range bindings {
-		value := binding.Value
-		// A time.Time bound to a DateTime64(3, 'UTC') parameter is refused by the server; the literal is not.
-		if instant, ok := value.(time.Time); ok {
-			value = instant.UTC().Format("2006-01-02 15:04:05.000")
+		switch value := binding.Value.(type) {
+		case string:
+			arguments = append(arguments, clickhouse.Named(binding.Name, value))
+		case []string:
+			arguments = append(arguments, clickhouse.Named(binding.Name, value))
+		case time.Time:
+			// A time.Time bound to a DateTime64(3, 'UTC') parameter is refused by the server; the literal is not.
+			arguments = append(arguments, clickhouse.Named(binding.Name, value.UTC().Format("2006-01-02 15:04:05.000")))
+		default:
+			return nil, fmt.Errorf("benchmarking: ownership binding %q has type %T, which has no proven encoding", binding.Name, binding.Value)
 		}
-		arguments = append(arguments, clickhouse.Named(binding.Name, value))
 	}
-	return query, arguments
+	return arguments, nil
 }
 
 // Writer persists all six benchmarking output tables.

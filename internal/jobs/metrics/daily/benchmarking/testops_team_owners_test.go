@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
@@ -111,5 +112,22 @@ func TestTestopsTeamSeriesNeedTheRunInstant(t *testing.T) {
 	}
 	if len(conn.statements) != 0 {
 		t.Fatalf("%d series statements ran, want none", len(conn.statements))
+	}
+}
+
+func TestOwnershipBindingsOfAnUnprovenTypeAreRefused(t *testing.T) {
+	_, err := namedArguments([]dhclickhouse.Binding{{Name: "owners_org", Value: "org"}, {Name: "owners_n", Value: 3.5}})
+	if err == nil || !strings.Contains(err.Error(), "owners_n") || !strings.Contains(err.Error(), "float64") {
+		t.Fatalf("an unproven binding type must be an error naming the binding and its type, got %v", err)
+	}
+	args, err := namedArguments([]dhclickhouse.Binding{
+		{Name: "a", Value: "x"}, {Name: "b", Value: []string{"y"}},
+		{Name: "c", Value: time.Date(2026, 11, 15, 1, 2, 3, 4_000_000, time.FixedZone("x", 3600))},
+	})
+	if err != nil || len(args) != 3 {
+		t.Fatalf("string, []string and time.Time are bound: %v %d", err, len(args))
+	}
+	if got := args[2].(driver.NamedValue).Value; got != "2026-11-15 00:02:03.004" {
+		t.Fatalf("a time is bound as its UTC literal, got %v", got)
 	}
 }

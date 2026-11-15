@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/refusedaddr"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -269,9 +270,7 @@ func TestVerifyReferencePrincipalInputDomain(t *testing.T) {
 		}
 	}
 
-	dead := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
-	deadURL := dead.URL
-	dead.Close()
+	deadURL := "http://" + refusedaddr.Addr(t)
 	credential := StaticCredential("Authorization", "edge token", claimsJWT(t, map[string]any{"org_id": org})).BindOrg(org)
 	if err := VerifyReferencePrincipal(context.Background(), NewLegClient(0), deadURL, credential, org); !errors.Is(err, ErrReferencePrincipal) {
 		t.Fatalf("transport failure: err = %v, want ErrReferencePrincipal", err)

@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -19,6 +18,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/clientaddr"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/refusedaddr"
 )
 
 func baseOf(t *testing.T, raw string) *url.URL {
@@ -98,12 +98,7 @@ func TestIssueWithoutAnOrganizationSendsNull(t *testing.T) {
 }
 
 func TestIssueFailuresAreUnavailable(t *testing.T) {
-	closed, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	down := "http://" + closed.Addr().String()
-	_ = closed.Close()
+	down := "http://" + refusedaddr.Addr(t)
 	answers := map[string]http.HandlerFunc{
 		"refused 401": func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusUnauthorized) },
 		"refused 403": func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusForbidden) },

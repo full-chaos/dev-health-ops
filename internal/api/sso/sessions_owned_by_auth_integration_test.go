@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -24,6 +23,7 @@ import (
 	"github.com/full-chaos/dev-health-go/workloadtoken"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/refusedaddr"
 )
 
 func ssoIssueClient(t *testing.T, base string) *sessionissue.Client {
@@ -108,12 +108,7 @@ func TestSSOLoginTakesItsPairFromTheIssueRouteWhenAuthOwnsSessions(t *testing.T)
 func TestSSOLoginAnswers503WhenTheIssueRouteIsDown(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	closed, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	down := "http://" + closed.Addr().String()
-	_ = closed.Close()
+	down := "http://" + refusedaddr.Addr(t)
 	st := startStackWith(t, ctx, ssoIssueClient(t, down))
 
 	status, body := oidcLogin(t, ctx, st, "down.user@allowed.example")
@@ -173,12 +168,7 @@ func TestSAMLLoginTakesItsPairFromTheIssueRouteWhenAuthOwnsSessions(t *testing.T
 func TestSAMLLoginAnswers503WhenTheIssueRouteIsDown(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	closed, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	down := "http://" + closed.Addr().String()
-	_ = closed.Close()
+	down := "http://" + refusedaddr.Addr(t)
 	st := startStackWith(t, ctx, ssoIssueClient(t, down))
 	status, body := samlLogin(t, ctx, st, "saml.down@allowed.example")
 	raw, _ := json.Marshal(body)

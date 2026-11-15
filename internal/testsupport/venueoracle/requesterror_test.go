@@ -5,7 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"net"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/refusedaddr"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -25,13 +25,7 @@ func dummyToken(t *testing.T) string {
 // closedBase is a loopback base URL nothing listens on.
 func closedBase(t *testing.T) string {
 	t.Helper()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	base := "http://" + listener.Addr().String()
-	_ = listener.Close()
-	return base
+	return "http://" + refusedaddr.Addr(t)
 }
 
 type failureRecorder struct{ text string }

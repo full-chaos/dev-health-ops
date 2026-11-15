@@ -2,21 +2,16 @@ package jobruntime
 
 import (
 	"context"
-	"net"
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/refusedaddr"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func TestWorkerPresenceStartFailureWithoutAnAnswerMarksTheIdentityMaybeRegistered(t *testing.T) {
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Skipf("cannot reserve a closed loopback port: %v", err)
-	}
-	addr := listener.Addr().String()
-	_ = listener.Close()
+	addr := refusedaddr.Addr(t)
 	pool, err := pgxpool.New(context.Background(), "postgres://u:p@"+addr+"/d?sslmode=disable&connect_timeout=1")
 	if err != nil {
 		t.Fatal(err)

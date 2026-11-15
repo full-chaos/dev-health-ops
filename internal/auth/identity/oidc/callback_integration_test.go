@@ -26,6 +26,7 @@ import (
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/refusedaddr"
 )
 
 func uniqueEmail(prefix string) string { return prefix + "-" + uuid.NewString()[:8] + "@example.com" }
@@ -635,9 +636,7 @@ VALUES ($1, $2, 'enterprise', now(), now())`, uuid.New(), org); err != nil {
 func TestRefusedLogLineCarriesNoURLQuery(t *testing.T) {
 	h := newHarness(t, harnessOpts{signup: true})
 	secret := "q" + uuid.NewString()
-	closed := httptest.NewServer(http.NotFoundHandler())
-	tokenURL := closed.URL + "/token?client_secret=" + secret
-	closed.Close()
+	tokenURL := "http://" + refusedaddr.Addr(t) + "/token?client_secret=" + secret
 	provider := h.seedProvider(t, h.orgID, map[string]any{"client_id": h.clientID, "issuer": h.issuer,
 		"token_endpoint": tokenURL, "jwks_uri": h.idp.server.URL + "/jwks"}, true, nil)
 	var logged bytes.Buffer

@@ -24,6 +24,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/redirectprobe"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/refusedaddr"
 )
 
 const (
@@ -542,9 +543,7 @@ func TestTypeSafeCancelDuringRequestIsNotRetried(t *testing.T) {
 // CHAOS-8914: a refused connection is its own class (nothing was sent); it is
 // retried once like every transport failure.
 func TestTypeSafeTransportFailureIsRetriedAndNamesNoURL(t *testing.T) {
-	server := httptest.NewServer(http.NotFoundHandler())
-	url := server.URL
-	server.Close()
+	url := "http://" + refusedaddr.Addr(t)
 	logs := &bytes.Buffer{}
 	client, err := NewTypeSafeClient(TypeSafeClientConfig{APIKey: secrets.NewHidden(tsKey), BaseURL: url, UnsafeAllowAnyBaseURLForTest: true,
 		Logger: slog.New(slog.NewJSONHandler(logs, nil))})

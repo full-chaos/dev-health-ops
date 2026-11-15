@@ -273,10 +273,10 @@ func TestTestopsPooledP95IsOnePercentileOverThePooledRuns(t *testing.T) {
 	}
 }
 
-// C3 / C15: the queue time is the summed queue seconds over the runs that have a queue sample, pooled.
+// C3 / C15: the queue time is the mean of the queue samples, pooled: their total seconds over the runs that have one.
 // A: 1 run of 600 s; D: 9 runs of 60 s and 1 run with no queue sample. Pooled 1140/10 = 114; the mean of the stored
 // repo-day means is (600+60)/2 = 330; over every run 1140/11 = 103.6.
-func TestTestopsPooledQueueTimeIsTheSummedSecondsOverTheRunsWithASample(t *testing.T) {
+func TestTestopsPooledQueueTimeIsTheMeanOfTheQueueSamples(t *testing.T) {
 	e := startOwnersEnv(t)
 	const org = "org-13858-queue"
 	const a, d = "13858000-0000-4000-8000-0000000015a1", "13858000-0000-4000-8000-0000000015d1"

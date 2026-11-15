@@ -2201,7 +2201,7 @@ them is in their readers:
 | `capacity_forecasts` | a value of the forecast | one forecast per row, replaced by the next forecast of the same id | the forecast list with no team named lists the active teams and the forecasts with no team (`activeteams.ListablePredicate`); a named team is read as named |
 | `recommendations_daily` | in the key | a rule result (fired or not), not a count | the readers read only the team ids a request names (no rule) |
 
-Asserted on real ClickHouse by `TestTestopsTeamSeriesHoldNoSupersededTeam` (the benchmarking reader, which still takes the stored team of the newest row), by `TestTestopsTeamSeriesCoOwnedRepoShowsInFullInBothOwnerSeries`, `TestTestopsTeamSeriesAttributesAWholeWindowToTheOwnersToday` and `TestTestopsTeamSeriesFollowTheOwnershipRules` (the analytics team series, which read the owners at the request), and by `TestForecastListHoldsNoSupersededTeam`.
+Asserted on real ClickHouse by `TestTestopsTeamSeriesHoldNoSupersededTeam` (the benchmarking reader, which still takes the stored team of the newest row), by `TestTestopsTeamSeriesCoOwnedRepoShowsInFullInBothOwnerSeries`, `TestTestopsTeamSeriesAttributesAWholeWindowToTheOwnersToday` and `TestTestopsTeamSeriesFollowTheOwnershipRules` (the analytics team series, which read the owners at the request), and by `TestForecastListHoldsNoSupersededTeam`. A new query-api reader that groups or filters one of the three TestOps daily tables by the stored `team_id` fails `TestNoQueryAPIReaderGroupsOrFiltersTestopsDailyByTheStoredTeam`, a source census over the string literals of `internal/queryapi`.
 The acr readers of `capacity_forecasts` and `recommendations_daily` are the acr surface's own.
 
 Limits:

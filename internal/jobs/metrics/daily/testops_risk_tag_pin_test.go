@@ -23,11 +23,11 @@ func TestComputeReleaseConfidenceFactorsJSONFamilyIsExactlyPinned(t *testing.T) 
 	day := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
 	nan := math.NaN()
 
-	pipe := &testops.PipelineMetric{RepoID: repoID, OrgID: "org", SuccessRate: nan}
-	test := &testops.TestMetric{RepoID: repoID, OrgID: "org"}
+	pipe := &testops.PipelineMetric{RepoID: repoID, OrgID: "org"}
+	test := &testops.TestMetric{RepoID: repoID, OrgID: "org", FlakeRate: nan}
 
 	const family = "testops_release_confidence"
-	const field = "pipeline_success_rate"
+	const field = "flake_rate"
 	before := finite.Count(family, field, finite.ReasonNaN)
 
 	row := computeReleaseConfidence(repoID, day, pipe, test, nil, day)

@@ -44,6 +44,11 @@ func TestHomeCISuccess_IsTheWeightedRateOfTheWindow(t *testing.T) {
 	ctx := context.Background()
 	admin, client := newHomeTestClickHouse(ctx, t)
 
+	// Merges stay stopped so the older version of a repo-day is really still in the table: only the reader's own
+	// newest-row-per-day rule keeps it out of the sums.
+	if err := admin.Exec(ctx, "SYSTEM STOP MERGES testops_pipeline_metrics_daily"); err != nil {
+		t.Fatal(err)
+	}
 	const orgID = "home-org-ci-success-weighted"
 	const teamAB, teamB = "team-ab", "team-b"
 	repoA, repoB, repoC := uuid.New(), uuid.New(), uuid.New()

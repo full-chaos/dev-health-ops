@@ -314,7 +314,7 @@ jobs:
     # pool (fork-PR-safe, variable-gated) and falls back to ubuntu-latest (x64), where buildx/QEMU cross-builds it. No
     # matrix `include` supplies the runner: an include that matches no combination (the queue matrix is amd64 only)
     # would add a leg with no target.
-    runs-on: ${{ matrix.platform == 'linux/arm64' && ((vars.SELF_HOSTED_IMAGE_BUILDS == 'enabled' || vars.SELF_HOSTED_RUNNERS == 'enabled') && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
@@ -493,118 +493,24 @@ jobs:
         if: always()
         run: docker logout ghcr.io
 
-  # Runner contract v1.6 (signed 2026-09-03, chris via CF team-lead,
-  # /Users/chris/projects/full-chaos/dev-health/.remember/lanes/
-  # lane-4904-acr-runners/contract-v1.6-signed.md). Re-adds closed #2180's
-  # (worker, linux/arm64) self-hosted-pool pilot in the v1.6 shape --
-  # #2180 used the retired v1.5.1 poller (pick-runner/attempt/fallback,
-  # byte-identical to go.yml's own original go-arm64-numeric-parity
-  # design); this ports the same PAYLOAD (build-and-push-by-digest for
-  # this one matrix combination) onto the same complementary-if:/shared-
-  # name: shape go.yml's go-container-reproducibility and go-arm64-
-  # numeric-parity already use. #2180's own measured hosted wall time:
-  # 1m37s (run 33764964734, job "Build Go Image (worker, linux/arm64)").
-  # CHAOS-6376: the worker target folded into dho (`dho worker`), so the pilot
-  # now builds the (dho, linux/arm64) leg, the image every Go service runs.
-  #
-  # PRECONDITION: unlike go-arm64-numeric-parity, this leg needs a
-  # WORKING DOCKER DAEMON inside the ephemeral ARC pod -- same
-  # dind-smoke-test shape as go.yml's own (added by #2194 for the
-  # storage-integration shards and container-reproducibility), a
-  # separate copy here because this workflow file has no cross-file
-  # `needs:`. Proves the daemon is reachable AND can actually build/run
-  # a container, in isolation, before the real build leg risks a
-  # registry write.
-  dind-smoke-test:
-    if: (!(github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:full') && (github.event.pull_request.draft || !contains(github.event.pull_request.labels.*.name, 'hotfix-image')))) && ((vars.SELF_HOSTED_IMAGE_BUILDS == 'enabled' || vars.SELF_HOSTED_RUNNERS == 'enabled') && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule'))
-    runs-on: [self-hosted, oci-arc-runners]
-    timeout-minutes: 5
-    steps:
-      - name: Confirm a Docker daemon is reachable
-        run: |
-          set -euo pipefail
-          # CHAOS-4963: this step's own message avoids semicolons inside the
-          # quoted string on purpose -- tests/tooling/test_go_integration_sharding.py's
-          # unapproved-registry scanner splits on `[\n;]|&&|\|\|` and ignores
-          # quoting, so a literal `;` here would break it into unbalanced-quote
-          # fragments and misreport as unparseable shell (#2180's own fix,
-          # ported verbatim).
-          if ! docker info > docker-info.txt 2>&1; then
-            echo "FATAL: docker info failed on this oci-arc-runners pod, no reachable Docker daemon -- see docker-info.txt in the job log for the actual error." >&2
-            cat docker-info.txt >&2
-            exit 1
-          fi
-          echo "docker info succeeded:"
-          cat docker-info.txt
-
-      - name: Confirm the daemon can actually build and run a container
-        run: |
-          set -euo pipefail
-          workdir="$(mktemp -d)"
-          trap 'rm -rf -- "${workdir}"' EXIT
-          printf 'FROM busybox\nCMD ["echo", "dind-smoke-test-ok"]\n' > "${workdir}/Dockerfile"
-          if ! docker build -t dind-smoke-test:local "${workdir}"; then
-            echo "FATAL: docker build failed on this oci-arc-runners pod, the daemon answers docker info but cannot build an image." >&2
-            exit 1
-          fi
-          output="$(docker run --rm dind-smoke-test:local)"
-          docker rmi dind-smoke-test:local > /dev/null 2>&1 || true
-          if [ "${output}" != "dind-smoke-test-ok" ]; then
-            echo "FATAL: built the smoke-test image but docker run produced ${output@Q}, expected dind-smoke-test-ok." >&2
-            exit 1
-          fi
-          echo "docker build + run succeeded: ${output}"
-
-  # Runner contract v1.6 originally gave this job a hosted `ubuntu-26.04-arm`
-  # twin (above this comment) plus this self-hosted one, gated on
-  # complementary conditions over SELF_HOSTED_RUNNERS.
-  #
-  # AMENDED 2026-09-04 (chris 16:59, then a follow-up ruling on this exact
-  # job): ubuntu-26.04-arm was never a real hosted label in this enterprise
-  # (the real list is ubuntu-latest/ubuntu-22.04/ubuntu-24.04 + windows/
-  # macos), so the old hosted TWIN JOB is gone -- but unlike
-  # go-arm64-numeric-parity (a non-required, real-hardware-only proof that
-  # is allowed to simply not run), this job feeds the PUBLISHED `dho`
-  # image's linux/arm64 layer, so losing its fallback entirely would
-  # silently drop arm64 support from a real artifact. This one job (id kept
-  # as `go-build-dho-arm64`, no `-self-hosted` suffix, so it stays the
-  # sole, direct producer of the check `go-merge`'s `needs:` names) now
-  # carries the SAME routing shape as the `build`/`go-build` matrix arm64
-  # legs below: `runs-on` picks the ARC pool when SELF_HOSTED_RUNNERS is
-  # enabled and this isn't a fork PR, else falls back to ubuntu-latest (x64)
-  # with QEMU cross-building `platforms: linux/arm64`. The routing decision
-  # moved OUT of `if:` (which used to gate the whole job on
-  # SELF_HOSTED_RUNNERS) and into `runs-on` -- this job now runs on every
-  # eligible event, on one runner or the other, never skipped for that
-  # reason.
-  #
-  # `needs: dind-smoke-test` stays (still needed to prove the ARC pod's
-  # Docker daemon before risking a registry write, when this leg actually
-  # lands on ARC), but the `if:` below now tolerates dind-smoke-test's
-  # `skipped` result -- dind-smoke-test's OWN condition is exactly "enabled
-  # and not a fork PR", the same condition `runs-on` uses to pick ARC, so a
-  # skip there means "this leg is using the x64 fallback anyway, which
-  # already has a working Docker daemon" -- not a routing bug. A real
-  # `failure`/`cancelled` from dind-smoke-test still blocks this job, since
-  # in that case `runs-on` already resolved to ARC and its daemon is
-  # confirmed broken.
+  # The dho image's linux/arm64 layer: built on the hosted x64 runner with QEMU cross-building `platforms: linux/arm64`
+  # (the ARC pool that built it natively is retired, D6994). Id kept as `go-build-dho-arm64`: it is the sole, direct
+  # producer of the check `go-merge`'s `needs:` names.
   go-build-dho-arm64:
     name: go-build-dho-arm64
-    needs: [changes, resolve, dind-smoke-test]
+    needs: [changes, resolve]
     if: >-
       (!(github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:full') && (github.event.pull_request.draft || !contains(github.event.pull_request.labels.*.name, 'hotfix-image')))) &&
       (always() &&
       needs.changes.result == 'success' &&
       needs.resolve.result == 'success' &&
       needs.resolve.outputs.promoted != 'true' &&
-      needs.dind-smoke-test.result != 'failure' &&
-      needs.dind-smoke-test.result != 'cancelled' &&
       (github.event_name == 'workflow_dispatch' ||
       github.event_name == 'release' ||
       (github.event_name == 'merge_group' && needs.changes.outputs.docs_only != 'true') ||
       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
       needs.changes.outputs.code == 'true'))
-    runs-on: ${{ ((vars.SELF_HOSTED_IMAGE_BUILDS == 'enabled' || vars.SELF_HOSTED_RUNNERS == 'enabled') && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
@@ -884,7 +790,7 @@ jobs:
             # Same ARC-pool-or-x64+QEMU-fallback routing as go-build's
             # arm64 leg above -- ubuntu-26.04-arm is not a real hosted label
             # (chris 2026-09-04 16:59).
-            runner: ${{ ((vars.SELF_HOSTED_IMAGE_BUILDS == 'enabled' || vars.SELF_HOSTED_RUNNERS == 'enabled') && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}
+            runner: ubuntu-latest
 
     steps:
       - name: Checkout code
@@ -1835,7 +1741,7 @@ jobs:
   # (no job needs it), continue-on-error, and the checkout is the target branch's tip, never the merge group.
   cancel-stacked-queue-children:
     name: cancel-stacked-queue-children
-    needs: [changes, resolve, go-build, dind-smoke-test, go-build-dho-arm64, go-merge, go-api-tools-build, go-api-tools-merge, fan-in-latest, image-queue-gate]
+    needs: [changes, resolve, go-build, go-build-dho-arm64, go-merge, go-api-tools-build, go-api-tools-merge, fan-in-latest, image-queue-gate]
     if: failure() && github.event_name == 'merge_group'
     runs-on: ubuntu-latest
     timeout-minutes: 5

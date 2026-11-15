@@ -12,6 +12,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily/cicd"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/remaining"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/testops"
 )
 
 // SourceDataChecker flags families whose upstream source data exists for a
@@ -47,11 +48,12 @@ type SourceSnapshot struct {
 	day           string
 	repositoryIDs []uuid.UUID
 
-	cicd            bool
-	deploy          bool
-	testopsPipeline bool
-	testopsSuite    bool
-	incident        bool
+	cicd                     bool
+	deploy                   bool
+	testopsPipeline          bool
+	testopsCompletedPipeline bool
+	testopsSuite             bool
+	incident                 bool
 }
 
 // ClickHouseSourceDataChecker reads a partition's scope (target day,
@@ -120,17 +122,28 @@ WHERE partition.id = $1::uuid`, partitionID).Scan(&orgID, &day, &rawRepositoryID
 	// compute_release_confidence and compute_quality_drag
 	// (compute_testops_risk.py) accept a repo with EITHER pipeline metrics OR
 	// test metrics alone -- a pipeline-only or suite-only day legitimately
-	// produces rows for both. compute_pipeline_stability takes ONLY
-	// pipeline_metrics_7d: a suite-only day (test_suite_results present, zero
-	// ci_pipeline_runs) has nothing to derive stability from and legitimately
-	// writes zero pipeline_stability rows -- that is not an anomaly. Treating
-	// "pipeline OR suite" as pipeline_stability's eligibility too (round 1's
-	// mistake) pinned a healthy suite-only day as a permanent failure.
+	// produces rows for both. compute_pipeline_stability takes ONLY the
+	// pipeline runs that COMPLETED (succeeded or failed, the statuses of
+	// testops.CompletedRunStatuses): a suite-only day, or a day whose runs
+	// were all cancelled, skipped or never finished, has no success rate to
+	// derive stability from and legitimately writes zero pipeline_stability
+	// rows -- that is not an anomaly. Treating "pipeline OR suite", or "any
+	// pipeline run", as pipeline_stability's eligibility pinned a healthy day
+	// as a permanent failure. A day with a completed run and no stability row
+	// is still flagged.
 	if snapshot.testopsPipeline, err = checker.exists(ctx, `
 SELECT 1 FROM ci_pipeline_runs
 WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(UUID)}
   AND started_at IS NOT NULL AND toDate(started_at) = {day:Date}
 LIMIT 1`, orgID, day, repositoryIDs); err != nil {
+		return SourceSnapshot{}, err
+	}
+	if snapshot.testopsCompletedPipeline, err = checker.exists(ctx, `
+SELECT 1 FROM ci_pipeline_runs
+WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(UUID)}
+  AND started_at IS NOT NULL AND toDate(started_at) = {day:Date}
+  AND lower(trimBoth(coalesce(status, ''))) IN {completed_statuses:Array(String)}
+LIMIT 1`, orgID, day, repositoryIDs, clickhouse.Named("completed_statuses", testops.CompletedRunStatuses())); err != nil {
 		return SourceSnapshot{}, err
 	}
 	if snapshot.testopsSuite, err = checker.exists(ctx, `
@@ -201,7 +214,7 @@ LIMIT 1`, orgID, day, repositoryIDs)
 	}
 	testopsEitherSource := snapshot.testopsPipeline || snapshot.testopsSuite
 	testopsMissingOutput := (testopsEitherSource && (!releaseConfidenceOutput || !qualityDragOutput)) ||
-		(snapshot.testopsPipeline && !pipelineStabilityOutput)
+		(snapshot.testopsCompletedPipeline && !pipelineStabilityOutput)
 
 	incidentOutput, err := output("incident_metrics_daily")
 	if err != nil {
@@ -225,13 +238,13 @@ LIMIT 1`, orgID, day, repositoryIDs)
 }
 
 func (checker *ClickHouseSourceDataChecker) exists(
-	ctx context.Context, query string, orgID string, day string, repositoryIDs []uuid.UUID,
+	ctx context.Context, query string, orgID string, day string, repositoryIDs []uuid.UUID, extra ...any,
 ) (bool, error) {
-	rows, err := checker.conn.Query(ctx, query,
+	rows, err := checker.conn.Query(ctx, query, append([]any{
 		clickhouse.Named("org_id", orgID),
 		clickhouse.Named("day", day),
 		clickhouse.Named("repo_ids", repositoryIDs),
-	)
+	}, extra...)...)
 	if err != nil {
 		return false, ErrUnavailable
 	}

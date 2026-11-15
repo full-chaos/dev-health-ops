@@ -16,7 +16,6 @@ on:
   merge_group:
   workflow_dispatch:
 
-
 concurrency:
   # CHAOS-4906 fleet audit (09-03, chris binding, incident-informed):
   # canonical fleet-wide shape -- group by PR number on pull_request, by
@@ -42,13 +41,9 @@ jobs:
   changes:
     name: ${{ github.event.action == 'labeled' && github.event.label.name != 'ci:full' && 'changes (other label, not run)' || 'changes' }}
     if: github.event.action != 'labeled' || github.event.label.name == 'ci:full'
-    # Routed to the self-hosted ARC pool while GitHub-hosted dispatch is
-    # stalled (org plan change, 2026-09-04; chris ruling 16:54 PDT). Flip the
-    # repo variable SELF_HOSTED_RUNNERS back to 'disabled' to restore the
-    # hosted runner with no code change. Fork PRs always stay hosted -- same
-    # safety condition as go.yml's dual-leg jobs. (live-e2e below shares this
-    # job; it is a required context too, judged in the merge queue.)
-    runs-on: ${{ (vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}
+    # GitHub-hosted. The ARC pool route (SELF_HOSTED_RUNNERS) was retired with the pool (D6994).
+    # (live-e2e below shares this job; it is a required context too, judged in the merge queue.)
+    runs-on: ubuntu-latest
     permissions:
       contents: read
     outputs:
@@ -423,7 +418,7 @@ jobs:
       github.event_name == 'merge_group' ||
       needs.changes.outputs.code == 'true')
     # Same ARC routing as `changes` above.
-    runs-on: ${{ (vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     # CHAOS-5025: normal duration is ~6 min; one run hung with no output for
     # ~6h until GitHub's default job timeout finally cancelled it. Bound the
     # job explicitly so a recurrence fails fast instead of burning the full
@@ -493,25 +488,13 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Configure self-hosted Go cache paths
-        # CHAOS-4906: the oci-arc-runners pool exports GOMODCACHE/GOCACHE to a
-        # SHARED hostPath (unlike a GitHub-hosted runner's ephemeral per-job
-        # filesystem), same as go.yml's self-hosted legs. Only set on the
-        # self-hosted leg; the hosted leg restores the shared Go cache below.
-        if: vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')
-        run: |
-          echo "GOMODCACHE=/mnt/go-cache/mod" >> "${GITHUB_ENV}"
-          echo "GOCACHE=/mnt/go-cache/build" >> "${GITHUB_ENV}"
-
       - name: Set up Go
         id: setup-go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache-dependency-path: '**/go.sum'
-          # `false`: on the self-hosted leg a cache tarball would land in the pool's concurrently-shared hostPath above (same
-          # reasoning as go.yml's self-hosted legs); the hosted leg restores the shared Go cache in the steps below, and only a
-          # push to main or the merge queue saves it.
+          # `false`: the shared Go cache is restored in the steps below, and only a push to main or the merge queue saves it.
           cache: false
       - name: Locate the Go module and build caches
         id: go-cache-paths
@@ -587,7 +570,7 @@ jobs:
     name: ${{ github.event.action == 'labeled' && github.event.label.name != 'ci:full' && 'live-e2e (other label, not run)' || 'live-e2e' }}
     if: always() && (github.event_name == 'pull_request' || github.event_name == 'merge_group') && (github.event.action != 'labeled' || github.event.label.name == 'ci:full')
     needs: [changes, live-e2e-run]
-    runs-on: ${{ (vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -609,7 +592,7 @@ jobs:
     name: ${{ github.event.action == 'labeled' && github.event.label.name != 'ci:full' && 'metrics-executed-proof (other label, not run)' || 'metrics-executed-proof' }}
     if: always() && (github.event_name == 'pull_request' || github.event_name == 'merge_group') && (github.event.action != 'labeled' || github.event.label.name == 'ci:full')
     needs: [changes, metrics-executed-proof-run]
-    runs-on: ${{ (vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

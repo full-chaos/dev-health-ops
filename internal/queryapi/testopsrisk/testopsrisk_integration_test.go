@@ -23,6 +23,8 @@ var ddls = []string{
       ENGINE MergeTree PARTITION BY toYYYYMM(day) ORDER BY (repo_id, day)`,
 	`CREATE TABLE testops_pipeline_stability (repo_id UUID, day Date, stability_index Float64, org_id LowCardinality(String) DEFAULT '',
       computed_at DateTime('UTC')) ENGINE MergeTree PARTITION BY toYYYYMM(day) ORDER BY (repo_id, day)`,
+	`CREATE TABLE testops_pipeline_metrics_daily (repo_id UUID, day Date, success_count UInt32, failure_count UInt32,
+      org_id LowCardinality(String) DEFAULT '', computed_at DateTime('UTC')) ENGINE MergeTree PARTITION BY toYYYYMM(day) ORDER BY (repo_id, day)`,
 	`CREATE TABLE repos (id UUID, repo String, org_id String DEFAULT 'default', created_at DateTime64(3, 'UTC'), last_synced DateTime64(3, 'UTC'))
       ENGINE = ReplacingMergeTree(last_synced) ORDER BY id`,
 }

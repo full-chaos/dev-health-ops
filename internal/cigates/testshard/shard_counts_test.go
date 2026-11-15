@@ -10,10 +10,10 @@ import (
 	"testing"
 )
 
-// The go-quality legs on ubuntu-26.04 (CAL-2604): 12 test shards and 6 race legs. The pins hold the COUNTS and the row
+// The go-quality legs on ubuntu-26.04 (CAL-2604): 13 test shards and 6 race legs. The pins hold the COUNTS and the row
 // partition of those counts; they assert no seconds (D6418).
 
-const wantTestShards, wantRaceLegs = 12, 6
+const wantTestShards, wantRaceLegs = 13, 6
 
 func legCounts(t *testing.T) (tests, races int, names []string) {
 	t.Helper()
@@ -213,21 +213,16 @@ func TestTheSuiteCatalogLegRowStatesTheLegCounts(t *testing.T) {
 	t.Fatal("ci/suites.tsv has no go-quality-ci-leg row")
 }
 
-func TestTheWorkflowPoolCommentNamesEveryPoolLeg(t *testing.T) {
+// The ARC race pool is retired (D6994): no leg carries the pool flag and go-quality.yml no longer describes pool legs.
+func TestNoLegIsFlaggedForTheRetiredPool(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join(repoRoot(t), ".github", "workflows", "go-quality.yml"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	pool := poolLegNames(t)
-	if len(pool) == 0 {
-		t.Fatal("ci/go_quality_legs.json flags no pool leg")
+	if pool := poolLegNames(t); len(pool) != 0 {
+		t.Fatalf("ci/go_quality_legs.json flags pool legs %v, but the pool is retired", pool)
 	}
-	var short []string
-	for _, n := range pool {
-		short = append(short, strings.TrimSuffix(n, fmt.Sprintf("-of-%d", wantRaceLegs)))
-	}
-	want := fmt.Sprintf("the race legs flagged `pool` (%s)", strings.Join(short, ", "))
-	if !strings.Contains(string(raw), want) {
-		t.Errorf(".github/workflows/go-quality.yml pool comment must say %q (the legs flagged pool in ci/go_quality_legs.json)", want)
+	if strings.Contains(string(raw), "flagged `pool`") {
+		t.Error(".github/workflows/go-quality.yml still describes the race legs flagged `pool`")
 	}
 }

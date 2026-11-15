@@ -152,9 +152,8 @@ var (
 	// The bounded error names the field path and the rule, never the value.
 	ReasonCredentialShapedValue = reason("credential_shaped_value")
 	// ReasonZeroRowsWithSourceData marks a daily-metrics partition whose
-	// families had source data for its repositories and day but wrote zero
-	// output rows (CHAOS-4263's check). Permanent: the native families are
-	// deterministic over the same scope, so a retry writes the same nothing.
+	// zero-row source check (CHAOS-4263) found source data for its
+	// repositories and day and no output rows.
 	ReasonZeroRowsWithSourceData = reason("zero_rows_with_source_data")
 )
 

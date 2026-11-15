@@ -2161,7 +2161,7 @@ func aiOpportunityInstanceVariant(name, kind, scopeField string) Variant {
 func aiOpportunitiesParity() Options {
 	return Options{
 		FloatTierB: map[string]string{
-			"data.aiOpportunities.recommendations.score": "the flaky-test score derives from sum(flake_rate * total_cases) / sum(total_cases), a floating-point aggregate ClickHouse merges in thread-completion order, so the last bits differ run to run on both planes (CHAOS-5451)",
+			"data.aiOpportunities.recommendations.score": "the flaky-test score derives from sum(flake_rate * total_cases) over the cases of the days with a flake rate, a floating-point aggregate ClickHouse merges in thread-completion order, so the last bits differ run to run on both planes (CHAOS-5451)",
 		},
 		OrderInsensitiveLists: []OrderInsensitiveList{{
 			Path:      "data.aiOpportunities.recommendations",

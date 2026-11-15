@@ -141,8 +141,11 @@ ORDER BY COALESCE(run.completed_at, run.started_at, run.created_at), unit.id`,
 			state.Requested = append(state.Requested, interval)
 			// A tests unit that finished with dropped or skipped reports
 			// advanced its watermark but did not cover the window: it stays a
-			// gap, keeps earlier failures, and is not the last complete sync.
+			// gap and is not the last complete sync. It did run, so it
+			// supersedes an earlier failure of the window: the window reads as
+			// a gap, not as failed.
 			if status == "success" && reportsIncomplete && effectiveKey == "tests" {
+				state.Failed = subtractIntervals(state.Failed, []coverageInterval{interval})
 				continue
 			}
 			switch status {

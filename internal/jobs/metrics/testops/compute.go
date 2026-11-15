@@ -161,11 +161,11 @@ type TestMetric struct {
 	SuiteDurationP95Seconds *float64
 	FailureRecurrence       float64
 	// FlakeUnknown is set when the day holds case rows only of runs left out of
-	// the flake measures (runs not shown to be on the default branch):
-	// flake_rate, retry_dependency_rate and failure_recurrence_score then carry
-	// 0 because nothing was measured, not because nothing flaked. The written
-	// flake_cases/distinct_cases pair is 0/0, which adds nothing to the org
-	// series.
+	// the flake measures (runs not shown to be on the default branch). Nothing
+	// was measured: DistinctCases is 0, the rates above stay 0 here and the
+	// writer stores them as NULL, as for any day that measured no case. The
+	// written flake_cases/distinct_cases pair is 0/0, which adds nothing to the
+	// org series.
 	FlakeUnknown bool
 	TeamID       *string
 	ServiceID    *string

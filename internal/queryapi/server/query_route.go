@@ -3988,36 +3988,6 @@ const registeredTestOpsPipelineV1Document = `query TestOpsPipeline($orgId: Strin
   }
 }`
 
-// registeredTestOpsTestDocument is the registered document for the `testOpsTest`
-// operation, the exact wire-form text a real web client sends
-// (testdata/wire_capture/testopstest_captured.graphql).
-const registeredTestOpsTestDocument = `query TestOpsTest($orgId: String!, $batch: AnalyticsRequestInput!) {
-  analytics(orgId: $orgId, batch: $batch) {
-    timeseries {
-      dimension
-      dimensionValue
-      measure
-      buckets {
-        date
-        value
-        __typename
-      }
-      __typename
-    }
-    breakdowns {
-      dimension
-      measure
-      items {
-        key
-        value
-        __typename
-      }
-      __typename
-    }
-    __typename
-  }
-}`
-
 // registeredTestOpsCoverageDocument is the registered document for the `testOpsCoverage`
 // operation, the exact wire-form text a real web client sends
 // (testdata/wire_capture/testopscoverage_captured.graphql): the V1 text plus `scope` on every timeseries
@@ -6636,7 +6606,6 @@ func newQueryHandlerWithEdge(chClient featureflags.QueryClient, pgPool *pgxpool.
 		"acrRepositoryScopes":               digestHex(registeredAcrRepositoryScopesDocument),
 		"busFactor":                         digestHex(registeredBusFactorDocument),
 		"testOpsPipeline":                   digestHex(registeredTestOpsPipelineDocument),
-		"testOpsTest":                       digestHex(registeredTestOpsTestDocument),
 		"testOpsCoverage":                   digestHex(registeredTestOpsCoverageDocument),
 		"featureFlagTimeseries":             digestHex(registeredFeatureFlagTimeseriesDocument),
 		"savedReports":                      digestHex(registeredSavedReportsDocument),

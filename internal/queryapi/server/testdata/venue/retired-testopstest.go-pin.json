@@ -1,0 +1,4 @@
+{
+  "GET testOpsTest": "404 {\"errors\":[{\"message\":\"This GraphQL document is not registered.\",\"extensions\":{\"code\":\"UNREGISTERED_DOCUMENT\"}}],\"data\":null}",
+  "POST testOpsTest": "404 {\"errors\":[{\"message\":\"This GraphQL document is not registered.\",\"extensions\":{\"code\":\"UNREGISTERED_DOCUMENT\"}}],\"data\":null}"
+}

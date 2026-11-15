@@ -50,7 +50,6 @@ var classOperationDocuments = map[string]string{
 	"securityOverview":               registeredSecurityOverviewDocument,
 	"testOpsCoverage":                registeredTestOpsCoverageDocument,
 	"testOpsPipeline":                registeredTestOpsPipelineDocument,
-	"testOpsTest":                    registeredTestOpsTestDocument,
 	"throughputForecast":             registeredThroughputForecastDocument,
 	"workGraphArtifacts":             registeredWorkGraphArtifactsDocument,
 	"workGraphEdges":                 registeredWorkGraphEdgesDocument,

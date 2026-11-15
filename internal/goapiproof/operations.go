@@ -417,7 +417,7 @@ var operationSpecs = map[string]OperationSpec{
 			aiPagedInstanceVariant("TEAM_VALID", "a team id whose repo patterns select a repository with resolved attribution records", "teamId", aiAttributionOverviewParity(), "data.aiAttributionOverview.rows", "data.aiAttributionOverview.rows", "teamId"),
 		),
 	},
-	// The four batch-driven analytics documents (testOpsPipeline, testOpsTest,
+	// The three batch-driven analytics documents (testOpsPipeline,
 	// testOpsCoverage, featureFlagTimeseries) each carry the batches the web
 	// pages send them: one request per measure the web asks for (so each
 	// measure and dimension branch is compared on its own), one for the whole
@@ -430,12 +430,6 @@ var operationSpecs = map[string]OperationSpec{
 		Variables:    analyticsBatchVariables(analyticsBatch{Series: pipelineSeries, Breakdowns: pipelineBreakdowns}),
 		Parity:       analyticsBatchParity(analyticsBatch{Series: pipelineSeries, Breakdowns: pipelineBreakdowns}),
 		Variants:     append(analyticsBatchVariants(pipelineSeries, pipelineBreakdowns), analyticsPageBatchVariants("testOpsPipeline")...),
-	},
-	"testOpsTest": {
-		ResponseRoot: "analytics",
-		Variables:    analyticsBatchVariables(analyticsBatch{Series: testSeries, Breakdowns: testBreakdowns}),
-		Parity:       analyticsBatchParity(analyticsBatch{Series: testSeries, Breakdowns: testBreakdowns}),
-		Variants:     append(analyticsBatchVariants(testSeries, testBreakdowns), analyticsPageBatchVariants("testOpsTest")...),
 	},
 	"testOpsCoverage": {
 		ResponseRoot: "analytics",
@@ -2766,7 +2760,7 @@ func analyticsEmptyAggregateDefect(path, leaf, unit string) BaselineDefect {
 }
 
 // analyticsPageBatch is one request batch a web page sends. The test-operations
-// pages send the same batch to all three test-operations documents (the
+// pages send the same batch to both test-operations documents (the
 // coverage page only to the coverage document), so a document also answers the
 // batches of the other pages.
 type analyticsPageBatch struct {
@@ -2792,7 +2786,6 @@ var analyticsPageBatches = []analyticsPageBatch{
 // request.
 var analyticsOwnPageBatch = map[string]string{
 	"testOpsPipeline": "PAGE_PIPELINES",
-	"testOpsTest":     "PAGE_TESTS",
 	"testOpsCoverage": "PAGE_COVERAGE",
 }
 

@@ -193,7 +193,7 @@ printf 'step 3: the real Web auth code: login, refresh, logout\n'
 ISSUER_PORT="$(compose port auth-issuer 8443 | sed 's/.*://')"
 [[ "${ISSUER_PORT}" =~ ^[0-9]+$ ]] || die "could not read the ephemeral auth-issuer port (${ISSUER_PORT})"
 compose cp auth-issuer:/run/tls/ca/issuer.pem "${SINK_DIR}/issuer-ca.pem" || die "could not copy the issuer CA"
-if ! getent hosts "${ISSUER_HOST}" | grep -q '^127\.0\.0\.1[[:space:]]'; then
+if ! { issuer_hosts="$(getent hosts "${ISSUER_HOST}")" && grep -q '^127\.0\.0\.1[[:space:]]' <<<"${issuer_hosts}"; }; then
   [ "${CI:-}" = true ] || die "${ISSUER_HOST} must resolve to 127.0.0.1 (the CI run adds it to /etc/hosts)"
   printf '127.0.0.1 %s\n' "${ISSUER_HOST}" | sudo tee -a /etc/hosts >/dev/null
 fi

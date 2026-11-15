@@ -14,6 +14,10 @@ import (
 // package with no row weighs 1, so it unbalances the shards unseen), and the failure prints the row to paste. Headroom: from 30 s up
 // to 45 s the guard only warns (rc 0) and prints the row, so a package near the line does not flip by runner load.
 
+// guardShard is the test leg these guard cells use: the last one, which the plan fills with light packages (some with no weights
+// row). The first leg can hold just the heaviest split part and two packages.
+const guardShard = shardCount
+
 // unweightedPackage is a package of the shard's root-module plan with no weights row, and its key.
 func unweightedPackage(t *testing.T, shard, count int) (string, string) {
 	t.Helper()
@@ -94,8 +98,8 @@ func coverLog(t *testing.T, shard, count int, times map[string]string) string {
 
 func TestAnUnweightedPackageOf45SecondsFailsTheShardAndPrintsItsRow(t *testing.T) {
 	t.Parallel()
-	pkg, key := unweightedPackage(t, 1, shardCount)
-	errs, err := unweightedGuard(t, nil, 1, coverLog(t, 1, shardCount, map[string]string{pkg: "45.000s"}))
+	pkg, key := unweightedPackage(t, guardShard, shardCount)
+	errs, err := unweightedGuard(t, nil, guardShard, coverLog(t, guardShard, shardCount, map[string]string{pkg: "45.000s"}))
 	if err == nil {
 		t.Fatalf("an unweighted package at 45 s passed the guard")
 	}
@@ -104,25 +108,25 @@ func TestAnUnweightedPackageOf45SecondsFailsTheShardAndPrintsItsRow(t *testing.T
 			t.Errorf("the failure lacks %q: %s", want, errs)
 		}
 	}
-	if errs, err := unweightedGuard(t, nil, 1, coverLog(t, 1, shardCount, nil)+"FAIL\t"+pkg+"\t60.4s\n"); err == nil || !strings.Contains(errs, "\n"+key+"\t60\n") {
+	if errs, err := unweightedGuard(t, nil, guardShard, coverLog(t, guardShard, shardCount, nil)+"FAIL\t"+pkg+"\t60.4s\n"); err == nil || !strings.Contains(errs, "\n"+key+"\t60\n") {
 		t.Errorf("a FAIL line of an unweighted package at 60.4 s: err=%v, want the row %q\n%s", err, key+"\t60", errs)
 	}
 }
 
 func TestTheUnweightedGuardPassesBelowTheThresholdAWeightedACachedAndAForeignPackage(t *testing.T) {
 	t.Parallel()
-	pkg, _ := unweightedPackage(t, 1, shardCount)
-	other, _ := unweightedPackage(t, 2, shardCount)
+	pkg, _ := unweightedPackage(t, guardShard, shardCount)
+	other, _ := unweightedPackage(t, guardShard-1, shardCount)
 	for name, log := range map[string]string{
-		"29.999 s":                       coverLog(t, 1, shardCount, map[string]string{pkg: "29.999s"}),
-		"44.999 s (warn tier)":           coverLog(t, 1, shardCount, map[string]string{pkg: "44.999s"}),
-		"a weighted package at 900 s":    coverLog(t, 1, shardCount, map[string]string{weightedPackage(t, 1, shardCount): "900.000s"}),
-		"cached":                         coverLog(t, 1, shardCount, map[string]string{pkg: "(cached)"}),
-		"a package of another shard":     coverLog(t, 1, shardCount, nil) + "ok  \t" + other + "\t300s\n",
-		"a package outside every module": coverLog(t, 1, shardCount, nil) + "ok  \tgithub.com/x/y\t300s\n",
-		"a test's own output":            coverLog(t, 1, shardCount, nil) + "--- PASS: TestX (51.00s)\n    ok  \t" + pkg + "\t51s\n",
+		"29.999 s":                       coverLog(t, guardShard, shardCount, map[string]string{pkg: "29.999s"}),
+		"44.999 s (warn tier)":           coverLog(t, guardShard, shardCount, map[string]string{pkg: "44.999s"}),
+		"a weighted package at 900 s":    coverLog(t, guardShard, shardCount, map[string]string{weightedPackage(t, guardShard, shardCount): "900.000s"}),
+		"cached":                         coverLog(t, guardShard, shardCount, map[string]string{pkg: "(cached)"}),
+		"a package of another shard":     coverLog(t, guardShard, shardCount, nil) + "ok  \t" + other + "\t300s\n",
+		"a package outside every module": coverLog(t, guardShard, shardCount, nil) + "ok  \tgithub.com/x/y\t300s\n",
+		"a test's own output":            coverLog(t, guardShard, shardCount, nil) + "--- PASS: TestX (51.00s)\n    ok  \t" + pkg + "\t51s\n",
 	} {
-		if errs, err := unweightedGuard(t, nil, 1, log); err != nil {
+		if errs, err := unweightedGuard(t, nil, guardShard, log); err != nil {
 			t.Errorf("%s: the guard failed: %v\n%s", name, err, errs)
 		}
 	}
@@ -130,12 +134,12 @@ func TestTheUnweightedGuardPassesBelowTheThresholdAWeightedACachedAndAForeignPac
 
 func TestTheUnweightedThresholdIsReadFromTheEnvironment(t *testing.T) {
 	t.Parallel()
-	pkg, _ := unweightedPackage(t, 1, shardCount)
+	pkg, _ := unweightedPackage(t, guardShard, shardCount)
 	env := []string{"DEV_HEALTH_GO_TEST_UNWEIGHTED_SLOW_SECONDS=5", "DEV_HEALTH_GO_TEST_UNWEIGHTED_FAIL_SECONDS=10"}
-	if errs, err := unweightedGuard(t, env, 1, coverLog(t, 1, shardCount, map[string]string{pkg: "6s"})); err != nil || !strings.Contains(errs, "unweighted-slow-warning: "+pkg+" took 6s") {
+	if errs, err := unweightedGuard(t, env, guardShard, coverLog(t, guardShard, shardCount, map[string]string{pkg: "6s"})); err != nil || !strings.Contains(errs, "unweighted-slow-warning: "+pkg+" took 6s") {
 		t.Errorf("SLOW=5 FAIL=10: a 6 s unweighted package must warn and pass: err=%v\n%s", err, errs)
 	}
-	if _, err := unweightedGuard(t, env, 1, coverLog(t, 1, shardCount, map[string]string{pkg: "10s"})); err == nil {
+	if _, err := unweightedGuard(t, env, guardShard, coverLog(t, guardShard, shardCount, map[string]string{pkg: "10s"})); err == nil {
 		t.Error("SLOW=5 FAIL=10: a 10 s unweighted package passed")
 	}
 }
@@ -146,7 +150,7 @@ func TestTheUnweightedGuardRefusesUnusableWeights(t *testing.T) {
 	if err := os.WriteFile(empty, []byte("# no rows\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if errs, err := unweightedGuard(t, []string{"GO_TEST_WEIGHTS=" + empty}, 1, ""); err == nil || !strings.Contains(errs, "holds no row") {
+	if errs, err := unweightedGuard(t, []string{"GO_TEST_WEIGHTS=" + empty}, guardShard, ""); err == nil || !strings.Contains(errs, "holds no row") {
 		t.Errorf("an empty weights file: err=%v\n%s", err, errs)
 	}
 }
@@ -155,8 +159,8 @@ func TestTheUnweightedGuardRefusesUnusableWeights(t *testing.T) {
 // says why. None of these logs holds a slow unweighted package, so a pass would be a false green.
 func TestTheUnweightedGuardFailsClosedWhenItCannotProveCoverage(t *testing.T) {
 	t.Parallel()
-	pkgs := fullPlan(t, 1, shardCount)
-	full := coverLog(t, 1, shardCount, nil)
+	pkgs := fullPlan(t, guardShard, shardCount)
+	full := coverLog(t, guardShard, shardCount, nil)
 	lines := strings.SplitAfter(full, "\n")
 	for _, c := range []struct{ name, log, want string }{
 		{"a zero-byte log", "", "holds no package summary line"},
@@ -166,7 +170,7 @@ func TestTheUnweightedGuardFailsClosedWhenItCannotProveCoverage(t *testing.T) {
 		{"a log that lacks one package", strings.Join(append(append([]string{}, lines[:len(lines)-2]...), lines[len(lines)-1]), ""), "no summary line for 1 of " + fmt.Sprint(len(pkgs))},
 		{"a build-failed package", strings.ReplaceAll(full, "ok  \t"+pkgs[0]+"\t0.010s", "FAIL\t"+pkgs[0]+" [build failed]"), "no summary line for 1 of"},
 	} {
-		errs, err := unweightedGuard(t, nil, 1, c.log)
+		errs, err := unweightedGuard(t, nil, guardShard, c.log)
 		if err == nil {
 			t.Errorf("%s: the guard passed", c.name)
 			continue
@@ -175,12 +179,12 @@ func TestTheUnweightedGuardFailsClosedWhenItCannotProveCoverage(t *testing.T) {
 			t.Errorf("%s: the failure lacks %q: %s", c.name, c.want, errs)
 		}
 	}
-	if errs, err := unweightedGuard(t, nil, 1, full); err != nil {
+	if errs, err := unweightedGuard(t, nil, guardShard, full); err != nil {
 		t.Errorf("the complete log failed: %v\n%s", err, errs)
 	}
 	dir := t.TempDir()
 	for name, path := range map[string]string{"a missing path": filepath.Join(dir, "absent.log"), "a directory": dir} {
-		if errs, err := unweightedGuardAt(t, nil, 1, shardCount, path); err == nil || !strings.Contains(errs, "readable file") {
+		if errs, err := unweightedGuardAt(t, nil, guardShard, shardCount, path); err == nil || !strings.Contains(errs, "readable file") {
 			t.Errorf("%s: err=%v, want the readable-file refusal\n%s", name, err, errs)
 		}
 	}
@@ -190,7 +194,7 @@ func TestTheUnweightedGuardFailsClosedWhenItCannotProveCoverage(t *testing.T) {
 	}
 	if f, err := os.Open(unreadable); err == nil {
 		f.Close()
-	} else if errs, err := unweightedGuardAt(t, nil, 1, shardCount, unreadable); err == nil || !strings.Contains(errs, "readable file") {
+	} else if errs, err := unweightedGuardAt(t, nil, guardShard, shardCount, unreadable); err == nil || !strings.Contains(errs, "readable file") {
 		t.Errorf("an unreadable log: err=%v\n%s", err, errs)
 	}
 }
@@ -219,9 +223,9 @@ func TestATestLegFailsOnAnUnweightedSlowPackageOfItsOwnLog(t *testing.T) {
 // and the partial log does not add a coverage complaint.
 func TestAFailedGoTestRunStillPrintsTheUnweightedRow(t *testing.T) {
 	t.Parallel()
-	pkg, key := unweightedPackage(t, 1, shardCount)
+	pkg, key := unweightedPackage(t, guardShard, shardCount)
 	out := writeLog(t, "FAIL\t"+pkg+"\t45.2s\n")
-	r := runCheckGo(t, []string{"FAKE_GO_TEST_STDOUT=" + out}, true, "ci-leg", "test", "1", fmt.Sprint(shardCount))
+	r := runCheckGo(t, []string{"FAKE_GO_TEST_STDOUT=" + out}, true, "ci-leg", "test", fmt.Sprint(guardShard), fmt.Sprint(shardCount))
 	if r.Err == nil {
 		t.Fatalf("the leg passed although go test failed")
 	}
@@ -232,7 +236,7 @@ func TestAFailedGoTestRunStillPrintsTheUnweightedRow(t *testing.T) {
 		t.Errorf("a failed run's partial log drew a coverage complaint:\n%s", r.Stderr)
 	}
 	bad := writeLog(t, "FAIL\t"+pkg+"\t5s\n")
-	if r := runCheckGo(t, []string{"FAKE_GO_TEST_STDOUT=" + bad}, true, "ci-leg", "test", "1", fmt.Sprint(shardCount)); r.Err == nil || strings.Contains(r.Stderr, "unweighted-slow-package") {
+	if r := runCheckGo(t, []string{"FAKE_GO_TEST_STDOUT=" + bad}, true, "ci-leg", "test", fmt.Sprint(guardShard), fmt.Sprint(shardCount)); r.Err == nil || strings.Contains(r.Stderr, "unweighted-slow-package") {
 		t.Errorf("a failed run with a fast package: err=%v\n%s", r.Err, r.Stderr)
 	}
 }
@@ -289,9 +293,9 @@ func TestThePackagesMeasuredHeavyOnMainHaveRows(t *testing.T) {
 // Headroom: 30 s up to (not including) 45 s warns and passes; the warning names the package and the row to paste.
 func TestAnUnweightedPackageBetween30And45SecondsWarnsAndPasses(t *testing.T) {
 	t.Parallel()
-	pkg, key := unweightedPackage(t, 1, shardCount)
+	pkg, key := unweightedPackage(t, guardShard, shardCount)
 	for _, c := range []struct{ seconds, took, row string }{{"30.000s", "30s", "30"}, {"44.900s", "44.9s", "45"}} {
-		errs, err := unweightedGuard(t, nil, 1, coverLog(t, 1, shardCount, map[string]string{pkg: c.seconds}))
+		errs, err := unweightedGuard(t, nil, guardShard, coverLog(t, guardShard, shardCount, map[string]string{pkg: c.seconds}))
 		if err != nil {
 			t.Errorf("%s: the guard failed in the warn tier: %v\n%s", c.seconds, err, errs)
 		}
@@ -309,9 +313,9 @@ func TestAnUnweightedPackageBetween30And45SecondsWarnsAndPasses(t *testing.T) {
 // The warning reaches the Actions UI: a ::warning:: annotation and a step-summary row with the package and the row; no failure.
 func TestTheWarnTierWritesAnAnnotationAndAStepSummaryRow(t *testing.T) {
 	t.Parallel()
-	pkg, key := unweightedPackage(t, 1, shardCount)
+	pkg, key := unweightedPackage(t, guardShard, shardCount)
 	summary := filepath.Join(t.TempDir(), "summary.md")
-	errs, err := unweightedGuard(t, []string{"GITHUB_STEP_SUMMARY=" + summary}, 1, coverLog(t, 1, shardCount, map[string]string{pkg: "31.000s"}))
+	errs, err := unweightedGuard(t, []string{"GITHUB_STEP_SUMMARY=" + summary}, guardShard, coverLog(t, guardShard, shardCount, map[string]string{pkg: "31.000s"}))
 	if err != nil {
 		t.Fatalf("the guard failed in the warn tier: %v\n%s", err, errs)
 	}
@@ -350,16 +354,16 @@ func TestAWarnTierNestedModulePackageIsNamedWithoutARow(t *testing.T) {
 // The fail threshold is fail-closed: below the warn threshold or not a whole number is refused with exit 2, never read as a default.
 func TestTheFailThresholdIsValidated(t *testing.T) {
 	t.Parallel()
-	pkg, _ := unweightedPackage(t, 1, shardCount)
-	log := coverLog(t, 1, shardCount, map[string]string{pkg: "1s"})
+	pkg, _ := unweightedPackage(t, guardShard, shardCount)
+	log := coverLog(t, guardShard, shardCount, map[string]string{pkg: "1s"})
 	for _, v := range []string{"29", "0", "abc", "45.5", "-1", "4 5"} {
-		errs, err := unweightedGuard(t, []string{"DEV_HEALTH_GO_TEST_UNWEIGHTED_FAIL_SECONDS=" + v}, 1, log)
+		errs, err := unweightedGuard(t, []string{"DEV_HEALTH_GO_TEST_UNWEIGHTED_FAIL_SECONDS=" + v}, guardShard, log)
 		var ee *exec.ExitError
 		if !errors.As(err, &ee) || ee.ExitCode() != 2 || !strings.Contains(errs, "fail threshold") {
 			t.Errorf("DEV_HEALTH_GO_TEST_UNWEIGHTED_FAIL_SECONDS=%q: err=%v, want exit 2 naming the fail threshold\n%s", v, err, errs)
 		}
 	}
-	if errs, err := unweightedGuard(t, []string{"DEV_HEALTH_GO_TEST_UNWEIGHTED_FAIL_SECONDS=30"}, 1, log); err != nil {
+	if errs, err := unweightedGuard(t, []string{"DEV_HEALTH_GO_TEST_UNWEIGHTED_FAIL_SECONDS=30"}, guardShard, log); err != nil {
 		t.Errorf("a fail threshold equal to the warn threshold must be accepted: %v\n%s", err, errs)
 	}
 }
@@ -367,15 +371,15 @@ func TestTheFailThresholdIsValidated(t *testing.T) {
 // A truncated log is still exit 2 in the warn tier, and a leg whose go test run failed stays red while it warns.
 func TestTheWarnTierKeepsTheFailClosedContracts(t *testing.T) {
 	t.Parallel()
-	pkg, key := unweightedPackage(t, 1, shardCount)
-	lines := strings.SplitAfter(coverLog(t, 1, shardCount, map[string]string{pkg: "40s"}), "\n")
-	errs, err := unweightedGuard(t, nil, 1, strings.Join(lines[:len(lines)/2], ""))
+	pkg, key := unweightedPackage(t, guardShard, shardCount)
+	lines := strings.SplitAfter(coverLog(t, guardShard, shardCount, map[string]string{pkg: "40s"}), "\n")
+	errs, err := unweightedGuard(t, nil, guardShard, strings.Join(lines[:len(lines)/2], ""))
 	var ee *exec.ExitError
 	if !errors.As(err, &ee) || ee.ExitCode() != 2 || !strings.Contains(errs, "no summary line for") {
 		t.Errorf("a truncated log with a warn-tier package: err=%v\n%s", err, errs)
 	}
 	out := writeLog(t, "FAIL\t"+pkg+"\t31.2s\n")
-	r := runCheckGo(t, []string{"FAKE_GO_TEST_STDOUT=" + out}, true, "ci-leg", "test", "1", fmt.Sprint(shardCount))
+	r := runCheckGo(t, []string{"FAKE_GO_TEST_STDOUT=" + out}, true, "ci-leg", "test", fmt.Sprint(guardShard), fmt.Sprint(shardCount))
 	if r.Err == nil || strings.Contains(r.Stderr, "unweighted-slow-package") || !strings.Contains(r.Stderr, key+"\t31") {
 		t.Errorf("a failed go test run with a warn-tier package: err=%v\n%s", r.Err, r.Stderr)
 	}
@@ -384,12 +388,12 @@ func TestTheWarnTierKeepsTheFailClosedContracts(t *testing.T) {
 // A package that appears twice in a log (a rerun, -count=2) fails when ANY of its lines reaches the fail threshold, whatever line is first.
 func TestAPackageWithAWarnLineAndALaterFailLineFails(t *testing.T) {
 	t.Parallel()
-	pkg, key := unweightedPackage(t, 1, shardCount)
+	pkg, key := unweightedPackage(t, guardShard, shardCount)
 	for name, log := range map[string]string{
-		"warn then fail": coverLog(t, 1, shardCount, map[string]string{pkg: "31.000s"}) + "ok  \t" + pkg + "\t50.000s\n",
-		"fail then warn": coverLog(t, 1, shardCount, map[string]string{pkg: "50.000s"}) + "ok  \t" + pkg + "\t31.000s\n",
+		"warn then fail": coverLog(t, guardShard, shardCount, map[string]string{pkg: "31.000s"}) + "ok  \t" + pkg + "\t50.000s\n",
+		"fail then warn": coverLog(t, guardShard, shardCount, map[string]string{pkg: "50.000s"}) + "ok  \t" + pkg + "\t31.000s\n",
 	} {
-		errs, err := unweightedGuard(t, nil, 1, log)
+		errs, err := unweightedGuard(t, nil, guardShard, log)
 		var ee *exec.ExitError
 		if !errors.As(err, &ee) || ee.ExitCode() != 1 || !strings.Contains(errs, "\n"+key+"\t50\n") {
 			t.Errorf("%s: err=%v, want exit 1 with the row %q\n%s", name, err, key+"\t50", errs)

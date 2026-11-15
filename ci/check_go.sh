@@ -2032,7 +2032,7 @@ check_race_weights_rows() {
     || die "ci/go_race_solo.tsv names package(s) with no file in ci/go_race_weights.d (a solo row needs its measured weight): ${solo_bad}"
   [ -z "$(printf '%s\n' "${solo_rows}" | sed '/^$/d' | LC_ALL=C sort | uniq -d)" ] \
     || die "ci/go_race_solo.tsv lists a package twice"
-  printf '%s\n' "${solo_rows}" | sed '/^$/d' | LC_ALL=C sort -c 2>/dev/null \
+  LC_ALL=C sort -c 2>/dev/null <<<"$(sed '/^$/d' <<<"${solo_rows}")" \
     || die "ci/go_race_solo.tsv is not sorted (LC_ALL=C)"
   ! grep -qx 'internal/providersync' <<<"${solo_rows}" \
     || die "ci/go_race_solo.tsv lists internal/providersync, which runs as test-name slices in every race leg and cannot be solo"

@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -337,7 +338,54 @@ func assertTestopsOutputsMatchGolden(ctx context.Context, t *testing.T, conn dri
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(want) != got {
-		t.Fatalf("testops_test/testops_risk outputs moved:\n--- golden\n%s\n--- got\n%s", want, got)
+	expected := applyReleaseConfidenceDivergence(ctx, t, conn, string(want))
+	if expected != got {
+		t.Fatalf("testops_test/testops_risk outputs moved:\n--- golden (with the recorded divergence)\n%s\n--- got\n%s", expected, got)
 	}
+}
+
+// applyReleaseConfidenceDivergence applies the recorded DIVERGENCE of the release confidence row to the golden text
+// (CHAOS-13841, pm ruling A, 2026-11-15); the golden file itself is not regenerated. The pipeline success rate of
+// that row used to be the rate of the LAST (team, service) group alone: this fixture's last group is svc-1 with one
+// cancelled run, 0 successes of 1 run, so the golden holds 0.0, a pipeline factor of 0, base_score 0.3797 and a
+// confidence of 0.1797. The row now carries the repository's summed rate over COMPLETED runs, success / (success +
+// failure), taken here from the fixture's own rows by a query of this test (the newest version of each run, the status
+// trimmed and lowered, the day's runs of the row's repository), not from the job:
+//
+//	runs of the day: run-1 success, run-2 "  SUCCESS  " success, run-3 failed, run-tie failed (the tie copy inserted
+//	last is the one FINAL keeps), run-4 cancelled, run-null NULL status -> 2 successes, 2 failures
+//	rate 2 / (2 + 2) = 0.5 (over all 6 runs it would be 0.3333); factor 0.4 * 0.5 = 0.2
+//	base_score 0.3797 + 0.2 = 0.5797; confidence 0.5797 - 0.1 - 0.1 = 0.3797 (flake and regression penalties unchanged)
+func applyReleaseConfidenceDivergence(ctx context.Context, t *testing.T, conn driver.Conn, golden string) string {
+	t.Helper()
+	var success, failure uint64
+	if err := conn.QueryRow(ctx, `
+SELECT
+    countIf(lowerUTF8(trimBoth(ifNull(status, ''))) IN ('success', 'succeeded', 'passed')),
+    countIf(lowerUTF8(trimBoth(ifNull(status, ''))) IN ('failure', 'failed', 'error', 'errors', 'timeout', 'timed_out'))
+FROM ci_pipeline_runs FINAL
+WHERE repo_id = (SELECT repo_id FROM testops_release_confidence)
+  AND org_id = (SELECT org_id FROM testops_release_confidence)
+  AND toDate(started_at) = (SELECT day FROM testops_release_confidence)`).Scan(&success, &failure); err != nil {
+		t.Fatalf("count the fixture's completed runs: %v", err)
+	}
+	if success != 2 || failure != 2 {
+		t.Fatalf("fixture runs: %d successes and %d failures, the recorded arithmetic expects 2 and 2", success, failure)
+	}
+	round4 := func(v float64) float64 { return math.Round(v*1e4) / 1e4 }
+	rate := float64(success) / float64(success+failure)
+	factor := round4(0.4 * rate)
+	base := round4(0.3797 + 0.4*rate)
+	score := round4(0.3797 + 0.4*rate - 0.1 - 0.1)
+	for _, d := range []struct{ old, now, reason string }{
+		{"0.1797,0,0.15,", fmt.Sprintf("%v,%v,0.15,", score, factor), "confidence score and pipeline factor follow the repository's rate"},
+		{`"pipeline_success_rate": 0.0,`, fmt.Sprintf(`"pipeline_success_rate": %v,`, round4(rate)), "last group alone (0 of 1) replaced by the repository's 2 of 4 completed runs"},
+		{`"base_score": 0.3797,`, fmt.Sprintf(`"base_score": %v,`, base), "follows the pipeline factor"},
+	} {
+		if strings.Count(golden, d.old) != 1 {
+			t.Fatalf("the golden no longer holds %q once (%s)", d.old, d.reason)
+		}
+		golden = strings.Replace(golden, d.old, d.now, 1)
+	}
+	return golden
 }

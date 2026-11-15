@@ -77,8 +77,8 @@ func TestTheShippedLegListHasDistinctLegs(t *testing.T) {
 		}
 		seen[n] = true
 	}
-	// static, plan-reads, test 1..12, race 1..6.
-	if len(legs) != 20 || len(seen) != 20 {
-		t.Errorf("ci/go_quality_legs.json has %d entries and %d distinct names, want 20 and 20", len(legs), len(seen))
+	// static, plan-reads, test 1..13, race 1..6.
+	if len(legs) != 21 || len(seen) != 21 {
+		t.Errorf("ci/go_quality_legs.json has %d entries and %d distinct names, want 21 and 21", len(legs), len(seen))
 	}
 }

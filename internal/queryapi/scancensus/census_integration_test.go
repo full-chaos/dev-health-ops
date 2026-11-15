@@ -532,6 +532,7 @@ const nullableIntoPlainSites = `
 //	loadClusters 7ecb45f4962b -> e251e44419fd
 //	loadDocDrift e303544dfe85 -> 1b7d64b044ee
 //	loadFlaky 0232862afb43 -> a06340e42973
+//
 // ai_opportunities.go re-pinned by hand again (CHAOS-13843), digests copied from the local TestScanTypeCensus failure output
 // (not computed): flakyStatement is now the share of distinct cases that flaked (SUM(flake_cases)/SUM(distinct_cases)
 // with a count guard), which changes the file's SQL digest of every site. loadClusters and loadDocDrift: SQL and scan

@@ -259,7 +259,7 @@ func orgGoldenHandler(t *testing.T) func(t *testing.T, query string, bindings []
 			marker := "(" + column + ")) AS value"
 			// A team scope sums a repository metric at the team's share of each repository (CHAOS-9413): sum(col * share).
 			// CI Success Rate is the window's successes over its runs (cicdSuccessWindowRateSQL), not an avg.
-			weightedCISuccess := column == "success_rate" && strings.Contains(q, "round(success_rate * pipelines_count)")
+			weightedCISuccess := column == "success_rate" && strings.Contains(q, "sum(success_count) + sum(failure_count)")
 			if !strings.Contains(q, marker) && !strings.Contains(q, "(sum("+column+" * ") && !weightedCISuccess {
 				continue
 			}

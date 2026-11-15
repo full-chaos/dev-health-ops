@@ -38,10 +38,9 @@ func metricFromClause(table, column, scopeFilter, startParam, endParam string) s
 		scopeFilter += "\n              AND " + rowview.OrgPredicate(table, "")
 	}
 	valueColumns := []string{column}
-	if isCICDSuccess(table, column) {
-		// The success rate is the window's successes over its runs: the day's run count rides along with the
-		// stored rate (the table holds no success count).
-		valueColumns = []string{"pipelines_count", column}
+	if isPipelineSuccess(table, column) {
+		// The rate is computed from the day's completed-run counts, never read as a stored ratio.
+		valueColumns = []string{"success_count", "failure_count"}
 	}
 	if table == changefailure.Table {
 		// change failure rate is computed from the day's counts, never read
@@ -110,8 +109,8 @@ func metricValueExpression(table, column, aggregator, shareSQL string) string {
 		// (no incident evidence): missing is not healthy.
 		return changefailure.WindowRateSQL
 	}
-	if isCICDSuccess(table, column) {
-		return cicdSuccessWindowRateSQL
+	if isPipelineSuccess(table, column) {
+		return pipelineSuccessWindowRateSQL
 	}
 	if aggregator == "sum" && shareSQL != "" {
 		// A team scope sums each repository at the share of it the team holds (teamscope.RepoShare, CHAOS-9413).
@@ -276,14 +275,15 @@ func fetchChangeFailureView(ctx context.Context, client QueryClient, startDay, e
 
 // isPRRework says that a metric spec is the pull request rework ratio: the
 // one repo_metrics_daily metric that is a ratio of stored counts.
-// cicdSuccessWindowRateSQL is CI Success Rate over the rows of cicd_metrics_daily already deduplicated to the
-// newest computed_at per (org_id, repo_id, day): the window's successes (the stored rate times the day's runs,
-// an integer) over the window's runs, never a mean of the stored rates. NULL when the window holds no run:
-// missing, not 0 and not 100. The table has no stored success count, so the rate and the run count are read.
-const cicdSuccessWindowRateSQL = `if(sum(pipelines_count) = 0, NULL, toFloat64(sum(round(success_rate * pipelines_count)) / sum(pipelines_count)))`
+// pipelineSuccessWindowRateSQL is CI Success Rate over the rows of testops_pipeline_metrics_daily already
+// deduplicated to the newest computed_at per (org_id, repo_id, day): the window's successes over its COMPLETED runs
+// (success plus failure; cancelled, skipped and running runs are out), never a mean of the stored rates. The same
+// table and rule as the TestOps Pipelines series and the Delivery Risk factor. NULL when no run completed: missing,
+// not 0 and not 100.
+const pipelineSuccessWindowRateSQL = `if(sum(success_count) + sum(failure_count) = 0, NULL, toFloat64(sum(success_count)) / toFloat64(sum(success_count) + sum(failure_count)))`
 
-func isCICDSuccess(table, column string) bool {
-	return table == "cicd_metrics_daily" && column == "success_rate"
+func isPipelineSuccess(table, column string) bool {
+	return table == "testops_pipeline_metrics_daily" && column == "success_count"
 }
 
 func isPRRework(table, column string) bool {
@@ -394,8 +394,8 @@ func fetchMetricDriverDelta(ctx context.Context, client QueryClient, table, colu
 	if table == changefailure.Table {
 		return fetchRateDriverDelta(ctx, client, changefailure.WindowRateSQL, groupBy, currentFrom, previousFrom, startDay, endDay, compareStart, compareEnd, scopeBindings, orgID, limit)
 	}
-	if isCICDSuccess(table, column) {
-		return fetchRateDriverDelta(ctx, client, cicdSuccessWindowRateSQL, groupBy, currentFrom, previousFrom, startDay, endDay, compareStart, compareEnd, scopeBindings, orgID, limit)
+	if isPipelineSuccess(table, column) {
+		return fetchRateDriverDelta(ctx, client, pipelineSuccessWindowRateSQL, groupBy, currentFrom, previousFrom, startDay, endDay, compareStart, compareEnd, scopeBindings, orgID, limit)
 	}
 	query := fmt.Sprintf(`
         SELECT

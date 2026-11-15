@@ -39,9 +39,9 @@ var metrics = []metricSpec{
 	// reviewed. See prrework.WindowRateSQL. Column names the metric; the
 	// stored ratio of that name is deprecated and not read.
 	{Metric: "pr_rework_ratio", Label: "PR Rework Ratio", Unit: "%", Table: prrework.Table, Column: prrework.DeprecatedRatioColumn, Aggregator: "ratio", Transform: percentTransform, Scope: "repo"},
-	// A ratio of the window's summed counts (successes over runs), never an average of daily rates. See
-	// cicdSuccessWindowRateSQL.
-	{Metric: "ci_success", Label: "CI Success Rate", Unit: "%", Table: "cicd_metrics_daily", Column: "success_rate", Aggregator: "ratio", Transform: percentTransform, Scope: "repo"},
+	// A ratio of the window's summed counts (successes over completed runs), never an average of daily rates; the
+	// same table and rule as the TestOps Pipelines series. See pipelineSuccessWindowRateSQL.
+	{Metric: "ci_success", Label: "CI Success Rate", Unit: "%", Table: "testops_pipeline_metrics_daily", Column: "success_count", Aggregator: "ratio", Transform: percentTransform, Scope: "repo"},
 }
 
 // dedupByComputedAt ports _DEDUP_BY_COMPUTED_AT (api/queries/metrics.py:
@@ -53,6 +53,7 @@ var dedupByComputedAt = map[string][]string{
 	"work_item_metrics_daily":         {"day", "provider", "work_scope_id", "team_id", "row_view"},
 	"work_item_user_metrics_daily":    {"day", "provider", "work_scope_id", "user_identity", "row_view"},
 	"cicd_metrics_daily":              {"day", "repo_id"},
+	"testops_pipeline_metrics_daily":  {"day", "repo_id"},
 	"deploy_metrics_daily":            {"day", "repo_id"},
 	"incident_metrics_daily":          {"day", "repo_id"},
 	"testops_release_confidence":      {"day", "repo_id"},

@@ -10,15 +10,36 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/analytics"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
 )
 
-// CI Success Rate is the window's successes over its runs, never a mean of the stored daily rates (pm ruling A,
-// 2026-11-15): cicd_metrics_daily holds a day's run count and its success rate (stored counts: none), so a row's
-// successes are rate x runs and the window's rate is the sum of those over the sum of runs.
-//
-//	repo A  day 1: 1 run, rate 1.0          day 2: 9 runs, rate 1.0
-//	repo B  day 1: 99 runs, rate 0.0        day 2: 1 run, rate 0.0 (an older version of the row said 100 runs at 1.0)
-//	repo C  day 1: 0 runs, rate 0.0          other organization, repo A's id: 500 runs at 0.0
+// CI Success Rate is the window's successes over its COMPLETED runs (success plus failure; cancelled, skipped and
+// running runs are out), never a mean of stored daily rates (pm rulings, 2026-11-15). It reads
+// testops_pipeline_metrics_daily, the table of the TestOps Pipelines series and of the Delivery Risk factor.
+func seedPipelineDay(ctx context.Context, t *testing.T, admin interface {
+	Exec(context.Context, string, ...any) error
+}, org string, repo uuid.UUID, day, computedAt time.Time, success, failure, cancelled int) {
+	t.Helper()
+	runs := success + failure + cancelled
+	rate := func(n int) float64 {
+		if runs == 0 {
+			return 0
+		}
+		return float64(n) / float64(runs)
+	}
+	if err := admin.Exec(ctx, fmt.Sprintf(`INSERT INTO testops_pipeline_metrics_daily (repo_id, day, pipelines_count, success_count, failure_count, cancelled_count, success_rate, failure_rate, cancel_rate, rerun_rate, computed_at, org_id) VALUES ('%s', '%s', %d, %d, %d, %d, %v, %v, %v, 0, '%s', '%s')`,
+		repo, day.Format("2006-01-02"), runs, success, failure, cancelled, rate(success), rate(failure), rate(cancelled), computedAt.Format("2006-01-02 15:04:05"), org)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// repo A  day 1: 1 success                 day 2: 9 success
+// repo B  day 1: 99 failures + 5 cancelled day 2: 1 failure   (an older version of day 1 said 100 successes)
+// repo C  day 1: 3 cancelled, nothing completed
+// other organization, repo A's id: 500 failures
 func TestHomeCISuccess_IsTheWeightedRateOfTheWindow(t *testing.T) {
 	ctx := context.Background()
 	admin, client := newHomeTestClickHouse(ctx, t)
@@ -32,21 +53,13 @@ func TestHomeCISuccess_IsTheWeightedRateOfTheWindow(t *testing.T) {
 	older := time.Date(2026, 9, 3, 6, 0, 0, 0, time.UTC)
 	newer := older.Add(time.Hour)
 
-	write := func(org string, repo uuid.UUID, day, computedAt time.Time, runs int, rate float64) {
-		t.Helper()
-		if err := admin.Exec(ctx, fmt.Sprintf(`INSERT INTO cicd_metrics_daily (repo_id, day, pipelines_count, success_rate, computed_at, org_id) VALUES ('%s', '%s', %d, %v, '%s', '%s')`,
-			repo, day.Format("2006-01-02"), runs, rate, computedAt.Format("2006-01-02 15:04:05"), org)); err != nil {
-			t.Fatal(err)
-		}
-	}
-	write(orgID, repoA, day1, newer, 1, 1.0)
-	write(orgID, repoA, day2, newer, 9, 1.0)
-	write(orgID, repoB, day1, older, 100, 1.0)
-	write(orgID, repoB, day1, newer, 99, 0.0)
-	write(orgID, repoB, day2, newer, 1, 0.0)
-	write("home-org-ci-success-weighted-other", repoA, day1, newer, 500, 0.0)
-	// repo C: a row that holds no run (0 runs): no value, never a measured 0 or 100.
-	write(orgID, repoC, day1, newer, 0, 0.0)
+	seedPipelineDay(ctx, t, admin, orgID, repoA, day1, newer, 1, 0, 0)
+	seedPipelineDay(ctx, t, admin, orgID, repoA, day2, newer, 9, 0, 0)
+	seedPipelineDay(ctx, t, admin, orgID, repoB, day1, older, 100, 0, 0)
+	seedPipelineDay(ctx, t, admin, orgID, repoB, day1, newer, 0, 99, 5)
+	seedPipelineDay(ctx, t, admin, orgID, repoB, day2, newer, 0, 1, 0)
+	seedPipelineDay(ctx, t, admin, orgID, repoC, day1, newer, 0, 0, 3)
+	seedPipelineDay(ctx, t, admin, "home-org-ci-success-weighted-other", repoA, day1, newer, 0, 500, 0)
 
 	names := map[uuid.UUID]string{repoA: "acme/ci-a", repoB: "acme/ci-b", repoC: "acme/ci-c"}
 	for repo, name := range names {
@@ -75,6 +88,9 @@ func TestHomeCISuccess_IsTheWeightedRateOfTheWindow(t *testing.T) {
 			spec = candidate
 		}
 	}
+	if spec.Table != "testops_pipeline_metrics_daily" {
+		t.Fatalf("ci_success reads %q, want testops_pipeline_metrics_daily", spec.Table)
+	}
 	delta := func(scope ScopeFilter, start, end time.Time) MetricDelta {
 		t.Helper()
 		got, err := computeMetricDelta(ctx, client, spec, start, end, start.AddDate(0, 0, -7), start, Filters{Scope: scope}, orgID, teamScopeReadAsOf)
@@ -93,18 +109,16 @@ func TestHomeCISuccess_IsTheWeightedRateOfTheWindow(t *testing.T) {
 		want       float64
 		hasData    bool
 	}{
-		// 10 successes of 110 runs over both days and both repositories, the newest version of repo B day 1
-		// (99 runs, none succeeded): the ratio of sums, not the mean of the four stored rates (50).
+		// 10 successes of 110 completed runs (the 5 cancelled are out; the newest version of repo B day 1):
+		// the ratio of sums, not the mean of the stored rates.
 		{"organization, both days", ScopeFilter{Level: "org"}, day1, after, 10.0 / 110.0 * 100, true},
-		// 1 of 100 on day 1.
 		{"organization, day 1", ScopeFilter{Level: "org"}, day1, day2, 1.0 / 100.0 * 100, true},
 		{"repo A", repoScope(repoA), day1, after, 100, true},
 		{"repo B", repoScope(repoB), day1, after, 0, true},
-		// A team is its owned repositories: A and B.
 		{"team owning A and B", teamScope(teamAB), day1, after, 10.0 / 110.0 * 100, true},
 		{"team owning B", teamScope(teamB), day1, after, 0, true},
-		// repo C has no row: no data, never 0 or 100.
-		{"repo C, a row with no run", repoScope(repoC), day1, after, 0, false},
+		// repo C ran 3 pipelines, all cancelled: no completed run, no value (never 0 or 100).
+		{"repo C, nothing completed", repoScope(repoC), day1, after, 0, false},
 		{"a window with no row", ScopeFilter{Level: "org"}, after, after.AddDate(0, 0, 7), 0, false},
 	} {
 		got := delta(tc.scope, tc.start, tc.end)
@@ -112,11 +126,9 @@ func TestHomeCISuccess_IsTheWeightedRateOfTheWindow(t *testing.T) {
 			t.Errorf("%s: value %v %s hasData %v; want %v %%, %v", tc.name, got.Value, got.Unit, got.HasData, tc.want, tc.hasData)
 		}
 	}
-	// The prior window is the same rule: the week before day 2 holds day 1 (1 of 100).
 	if got := delta(ScopeFilter{Level: "org"}, day2, after); !got.HasPriorData || got.PriorValue == nil || !closeTo(*got.PriorValue, 1) {
 		t.Errorf("organization, day 2: prior %+v, want a measured 1%%", got)
 	}
-	// The sparkline of the window is the weighted rate of each day.
 	got := delta(ScopeFilter{Level: "org"}, day1, after)
 	if len(got.Spark) != 2 || !closeTo(got.Spark[0].Value, 1) || !closeTo(got.Spark[1].Value, 9.0/10.0*100) {
 		t.Errorf("organization spark %+v, want day 1 = 1%% and day 2 = 90%%", got.Spark)
@@ -124,8 +136,8 @@ func TestHomeCISuccess_IsTheWeightedRateOfTheWindow(t *testing.T) {
 }
 
 // The "driven by" reads (the single-metric read and the batch) rank repositories by the change of the same weighted
-// rate: Z 90 of 100 runs against 50% before is +80%, Y +20%, X 1 of 100 against 50% is -98%. A mean of the stored
-// daily rates would put X and Z at 50% and rank Y first.
+// rate: Z 90 of 100 completed runs against 50% before is +80%, Y +20%, X 1 of 100 against 50% is -98%. A mean of the
+// stored daily rates would put X and Z at 50% and rank Y first.
 func TestHomeCISuccessDriversRankByTheWeightedRate(t *testing.T) {
 	ctx := context.Background()
 	admin, client := newHomeTestClickHouse(ctx, t)
@@ -136,22 +148,15 @@ func TestHomeCISuccessDriversRankByTheWeightedRate(t *testing.T) {
 	}
 	const org = "home-org-ci-success-drivers"
 	computedAt := now.Add(-time.Hour)
-	write := func(repo uuid.UUID, day time.Time, runs int, rate float64) {
-		t.Helper()
-		if err := admin.Exec(ctx, fmt.Sprintf(`INSERT INTO cicd_metrics_daily (repo_id, day, pipelines_count, success_rate, computed_at, org_id) VALUES ('%s', '%s', %d, %v, '%s', '%s')`,
-			repo, day.Format("2006-01-02"), runs, rate, computedAt.Format("2006-01-02 15:04:05"), org)); err != nil {
-			t.Fatal(err)
-		}
-	}
 	repoX, repoY, repoZ := uuid.New(), uuid.New(), uuid.New()
-	write(repoX, current, 1, 1.0)
-	write(repoX, current.AddDate(0, 0, 1), 99, 0.0)
-	write(repoX, prior, 100, 0.5)
-	write(repoY, current, 100, 0.6)
-	write(repoY, prior, 100, 0.5)
-	write(repoZ, current, 90, 1.0)
-	write(repoZ, current.AddDate(0, 0, 1), 10, 0.0)
-	write(repoZ, prior, 100, 0.5)
+	seedPipelineDay(ctx, t, admin, org, repoX, current, computedAt, 1, 0, 0)
+	seedPipelineDay(ctx, t, admin, org, repoX, current.AddDate(0, 0, 1), computedAt, 0, 99, 0)
+	seedPipelineDay(ctx, t, admin, org, repoX, prior, computedAt, 50, 50, 0)
+	seedPipelineDay(ctx, t, admin, org, repoY, current, computedAt, 60, 40, 0)
+	seedPipelineDay(ctx, t, admin, org, repoY, prior, computedAt, 50, 50, 0)
+	seedPipelineDay(ctx, t, admin, org, repoZ, current, computedAt, 90, 0, 0)
+	seedPipelineDay(ctx, t, admin, org, repoZ, current.AddDate(0, 0, 1), computedAt, 0, 10, 0)
+	seedPipelineDay(ctx, t, admin, org, repoZ, prior, computedAt, 50, 50, 0)
 	want := []string{repoZ.String(), repoY.String(), repoX.String()}
 
 	single, err := fetchMetricDriverDelta(ctx, client, metricTable("ci_success"), metricColumn("ci_success"), metricGroup("ci_success"), current, endDay, prior, priorEnd, "", nil, org, 3)
@@ -175,4 +180,73 @@ func TestHomeCISuccessDriversRankByTheWeightedRate(t *testing.T) {
 	if got := ids(batch["ci_success"]); !slices.Equal(got, want) {
 		t.Errorf("batch ranks %v, want %v", got, want)
 	}
+}
+
+// Home and the TestOps Pipelines series are one number for one idea: for the same repositories and days (no run is
+// cancelled, skipped or running here, where the series' own denominator rule is not the question) the Home tile
+// equals the series of the same repository on every day.
+func TestHomeCISuccessEqualsTheTestOpsPipelineSeries(t *testing.T) {
+	ctx := context.Background()
+	admin, client := newHomeTestClickHouse(ctx, t)
+	const orgID = "home-org-ci-success-equals-series"
+	repoA, repoB := uuid.New(), uuid.New()
+	day1 := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	day2 := day1.AddDate(0, 0, 1)
+	after := day2.AddDate(0, 0, 1)
+	computedAt := time.Date(2026, 9, 3, 6, 0, 0, 0, time.UTC)
+	seedPipelineDay(ctx, t, admin, orgID, repoA, day1, computedAt, 7, 3, 0)
+	seedPipelineDay(ctx, t, admin, orgID, repoA, day2, computedAt, 1, 9, 0)
+	seedPipelineDay(ctx, t, admin, orgID, repoB, day1, computedAt, 40, 10, 0)
+	seedPipelineDay(ctx, t, admin, orgID, repoB, day2, computedAt, 0, 5, 0)
+	for repo, name := range map[uuid.UUID]string{repoA: "acme/eq-a", repoB: "acme/eq-b"} {
+		if err := admin.Exec(ctx, fmt.Sprintf(
+			"INSERT INTO repos (id, repo, provider, org_id, created_at, last_synced) VALUES ('%s', '%s', 'github', '%s', now64(3), now64(3))",
+			repo, name, orgID)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	spec := metricSpec{}
+	for _, candidate := range metrics {
+		if candidate.Metric == "ci_success" {
+			spec = candidate
+		}
+	}
+	got, err := analytics.Resolve(ctx, client, orgID, model.AnalyticsRequestInput{Timeseries: []model.TimeseriesRequestInput{{
+		Dimension: model.DimensionInputRepo, Measure: model.MeasureInputPipelineSuccessRate, Interval: model.BucketIntervalInputDay,
+		DateRange: &model.DateRangeInput{StartDate: graphqldate.New(day1), EndDate: graphqldate.New(day2)},
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	series := map[string]map[string]float64{}
+	for _, s := range got.Timeseries {
+		if s.Scope == model.TimeseriesScopeOrg {
+			continue
+		}
+		series[s.DimensionValue] = map[string]float64{}
+		for _, b := range s.Buckets {
+			if b.Value != nil {
+				series[s.DimensionValue][b.Date.String()] = *b.Value
+			}
+		}
+	}
+	if len(series) == 0 {
+		t.Fatalf("the TestOps pipeline series returned nothing: %+v", got.Timeseries)
+	}
+	for repo, name := range map[uuid.UUID]string{repoA: "acme/eq-a", repoB: "acme/eq-b"} {
+		for _, day := range []time.Time{day1, day2} {
+			home, err := computeMetricDelta(ctx, client, spec, day, day.AddDate(0, 0, 1), day.AddDate(0, 0, -7), day, Filters{Scope: ScopeFilter{Level: "repo", IDs: []string{repo.String()}}}, orgID, teamScopeReadAsOf)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want, ok := series[repo.String()][day.Format("2006-01-02")]
+			if !ok {
+				want, ok = series[name][day.Format("2006-01-02")]
+			}
+			if !ok || !home.HasData || !closeTo(home.Value, want) {
+				t.Errorf("%s %s: Home %v (data %v), TestOps series %v (found %v)", name, day.Format("2006-01-02"), home.Value, home.HasData, want, ok)
+			}
+		}
+	}
+	_ = after
 }

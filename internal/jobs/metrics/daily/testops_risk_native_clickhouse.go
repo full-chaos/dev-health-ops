@@ -553,11 +553,12 @@ func computeReleaseConfidence(
 	var flakeRate, failureRecurrence float64
 	var coveragePct, coverageDelta float64
 	// The pipeline success rate and the test pass rate are the repository's summed counts over their
-	// denominators (skipped cases are not in the pass-rate denominator); a zero denominator is absent
+	// denominators (completed runs, success plus failure, for the pipeline: cancelled, skipped and running runs are
+	// out; skipped cases are not in the pass-rate denominator); a zero denominator is absent
 	// (missing, never 0 and never 100), and an absent factor adds 0 to the score.
 	var successRate, passRate *float64
 	if pipe != nil {
-		successRate = ratioOrAbsent(pipe.SuccessCount, pipe.PipelinesCount)
+		successRate = ratioOrAbsent(pipe.SuccessCount, pipe.SuccessCount+pipe.FailureCount)
 	}
 	if test != nil {
 		passRate = ratioOrAbsent(test.PassedCount, test.PassedCount+test.FailedCount)

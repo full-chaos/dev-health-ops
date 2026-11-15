@@ -90,6 +90,23 @@ func TestReleaseConfidencePipelineSuccessIsTheRepositorysSummedRate(t *testing.T
 	}
 }
 
+// Completed runs only: cancelled, skipped and running runs are out of the denominator (pm ruling on the pipeline rates).
+func TestReleaseConfidencePipelineSuccessDividesByCompletedRuns(t *testing.T) {
+	runs := append(riskRuns("team-a", "success", 3), riskRuns("team-a", "failed", 1)...)
+	for _, status := range []string{"cancelled", "cancelled", "skipped", "running"} {
+		runs = append(runs, riskRuns("team-b", status, 1)...)
+	}
+	row := riskSummedRow(t, runs, nil)
+	if !strings.Contains(row.FactorsJSON, `"pipeline_success_rate": 0.75`) || row.PipelineSuccessFactor != 0.3 {
+		t.Fatalf("factors %s pipeline factor %v, want 3 of 4 completed runs: 0.75 and 0.3 (over all 8 runs it would be 0.375)", row.FactorsJSON, row.PipelineSuccessFactor)
+	}
+	// Only cancelled and skipped runs: no completed run, absent.
+	row = riskSummedRow(t, append(riskRuns("team-a", "cancelled", 2), riskRuns("team-a", "skipped", 1)...), nil)
+	if !strings.Contains(row.FactorsJSON, `"pipeline_success_rate": null`) {
+		t.Fatalf("no completed run must be null: %s", row.FactorsJSON)
+	}
+}
+
 func TestReleaseConfidenceZeroDenominatorIsAbsentAndMissingInTheScore(t *testing.T) {
 	// Only skipped cases and no pipeline run: both rates absent (null), the score is the flake term alone.
 	row := riskSummedRow(t, nil, []testops.SuiteRow{riskSuite(0, 0, 100)})

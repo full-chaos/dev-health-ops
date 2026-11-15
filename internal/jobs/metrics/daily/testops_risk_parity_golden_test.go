@@ -283,13 +283,16 @@ type riskDivergence struct {
 func riskGoldenDivergences(t *testing.T, golden releaseConfidenceGoldenRow, runs []testops.PipelineRunRow, suites []testops.SuiteRow, cases []testops.CaseRow) []riskDivergence {
 	t.Helper()
 	round4 := func(v float64) float64 { return math.Round(v*1e4) / 1e4 }
-	success := 0
+	success, completed := 0, 0
 	for _, run := range runs {
 		if run.Status != nil && *run.Status == "success" {
 			success++
+			completed++
+		} else if run.Status != nil && *run.Status == "failed" {
+			completed++
 		}
 	}
-	pipelineRate := float64(success) / float64(len(runs))
+	pipelineRate := float64(success) / float64(completed)
 	passed, failed := 0, 0
 	for _, suite := range suites {
 		passed += int(suite.PassedCount)

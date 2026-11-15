@@ -207,10 +207,10 @@ func repoSummedConfidenceInputs(
 ) (*testops.PipelineMetric, *testops.TestMetric) {
 	if pipe != nil {
 		summed := *pipe
-		summed.PipelinesCount, summed.SuccessCount = 0, 0
+		summed.SuccessCount, summed.FailureCount = 0, 0
 		for _, group := range pipelines {
-			summed.PipelinesCount += group.PipelinesCount
 			summed.SuccessCount += group.SuccessCount
+			summed.FailureCount += group.FailureCount
 		}
 		pipe = &summed
 	}

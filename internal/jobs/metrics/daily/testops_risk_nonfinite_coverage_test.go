@@ -68,7 +68,7 @@ func TestNonFiniteCoverageClassSweep(t *testing.T) {
 	day := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
 	computedAt := day
 
-	pipe := &testops.PipelineMetric{RepoID: repoID, SuccessRate: 1.0, PipelinesCount: 1, SuccessCount: 1, OrgID: "org"}
+	pipe := &testops.PipelineMetric{RepoID: repoID, SuccessRate: 1.0, SuccessCount: 1, OrgID: "org"}
 	test := &testops.TestMetric{RepoID: repoID, PassRate: 1.0, PassedCount: 1, OrgID: "org"}
 
 	coveragePctCases := []struct {

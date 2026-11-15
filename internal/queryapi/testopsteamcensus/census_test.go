@@ -24,7 +24,11 @@ var storedTeamColumn = regexp.MustCompile(`\bteam_id\b`)
 
 // teamLiteralsInReaderFiles pins, per file that names a TestOps daily table, the string literals that mention the stored
 // column: work_item_completion_daily's statement (timeseries.go), the shared team dimension column of the other tables
-// (validate.go), the owners table of the owner join (testopsownership.go), and the investment statements (ai_opportunities.go).
+// (validate.go), the owners table of the owner join (testopsownership.go), and the investment statements (ai_opportunities.go),
+// and Home, which reads testops_pipeline_metrics_daily by repo_id only: its three metricspec.go literals are the work_item
+// tables' dedup keys (work_item_state_durations_daily, work_item_metrics_daily; metricspec.go:52-53) and the work_item metrics'
+// group column (metricGroup, :85); its one queries_metrics.go literal is the blocked-hours statement over
+// work_item_state_durations_daily (:332-341, the same literal holds the column twice).
 // None reads a TestOps table by it (literal level, below). A new literal in one of these files, or a new reader file that
 // mentions the column, fails the census and needs a review of the table it reads.
 var teamLiteralsInReaderFiles = map[string]int{
@@ -33,6 +37,8 @@ var teamLiteralsInReaderFiles = map[string]int{
 	"analytics/validate.go":                  1,
 	"analytics/testopsownership.go":          2,
 	"coveragebaselines/coveragebaselines.go": 0,
+	"home/metricspec.go":                     3,
+	"home/queries_metrics.go":                1,
 	"testopswindow/testopswindow.go":         0,
 }
 

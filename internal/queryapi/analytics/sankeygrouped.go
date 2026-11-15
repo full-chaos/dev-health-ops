@@ -25,6 +25,8 @@ type sankeyShape struct {
 	maxEdgesPerPair int
 	// extraBindings are the bindings of the investment context's own joins (the ownership team).
 	extraBindings []clickhouse.Binding
+	// owner is the ownership join of a TestOps TEAM read (CHAOS-13804); inactive for every other read.
+	owner testopsOwner
 }
 
 func compileSankeyShape(orgID string, req SankeyRequest, useInvestment bool, filters *model.FilterInput) (sankeyShape, error) {
@@ -47,12 +49,13 @@ func compileSankeyShape(orgID string, req SankeyRequest, useInvestment bool, fil
 		}
 	}
 
-	fc, err := translateFilters(orgID, filters, useInvestment, defaultFilterColumns())
+	owner := newTestopsOwner(orgID, req.Measure, req.Path, useInvestment, filters)
+	fc, err := translateFilters(orgID, filters, useInvestment, owner.filterColumns(req.Measure, useInvestment))
 	if err != nil {
 		return sankeyShape{}, err
 	}
 
-	shape := sankeyShape{fc: fc}
+	shape := sankeyShape{fc: fc, owner: owner}
 	if useInvestment {
 		ictx := investmentContextFor(orgID, req.Path, false, needsRepoAllocation(filters), needsAuthorJoin(filters), teamScopeIDs(filters))
 		ictx, err = ictx.sizedFor(req.Measure)
@@ -67,6 +70,7 @@ func compileSankeyShape(orgID string, req SankeyRequest, useInvestment bool, fil
 		}
 	} else {
 		shape.source, shape.alias, shape.dateFilter = nonInvestmentSourceAndDateFilter(req.Measure)
+		shape.extraClauses, shape.extraBindings = owner.join, owner.bindings
 		shape.measureExpr, err = dbExpression(req.Measure, false, false)
 		if err != nil {
 			return sankeyShape{}, err
@@ -153,6 +157,7 @@ func CompileSankeyGrouped(req SankeyRequest, orgID string, timeoutSeconds int, u
 		if dimErr != nil {
 			return sankeyGroupedQuery{}, dimErr
 		}
+		dimCol = shape.owner.column(dim, dimCol)
 		keys[i] = sankeyKeyAlias(i)
 		keyExprs[i] = fmt.Sprintf("toString(%s) AS %s", dimCol, keys[i])
 	}

@@ -288,7 +288,11 @@ type adapterOutcome struct {
 
 type familiesSourceDataChecker struct{ families []string }
 
-func (checker familiesSourceDataChecker) ZeroRowFamiliesWithSourceData(context.Context, string) ([]string, error) {
+func (checker familiesSourceDataChecker) SourceSnapshot(context.Context, string, time.Time) (SourceSnapshot, error) {
+	return SourceSnapshot{}, nil
+}
+
+func (checker familiesSourceDataChecker) ZeroRowFamilies(context.Context, SourceSnapshot) ([]string, error) {
 	return checker.families, nil
 }
 

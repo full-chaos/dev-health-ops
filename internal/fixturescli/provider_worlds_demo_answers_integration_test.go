@@ -721,7 +721,7 @@ func demoInWindow(at string, request replayRequest, sinceKeys, untilKeys []strin
 }
 
 // demoCreatedMatches answers GitHub's `created` search qualifier the way the API does: "A..B" (either
-// side "*") or ">=YYYY-MM-DD".
+// side "*", each side a date or a timestamp) or ">=YYYY-MM-DD".
 func demoCreatedMatches(at, created string) bool {
 	if created == "" {
 		return true
@@ -748,7 +748,11 @@ func demoCreatedMatches(at, created string) bool {
 		if bound.text == "*" {
 			continue
 		}
-		limit, err := time.Parse(time.RFC3339, bound.text)
+		layout := time.RFC3339
+		if len(bound.text) == len(time.DateOnly) {
+			layout = time.DateOnly
+		}
+		limit, err := time.Parse(layout, bound.text)
 		if err != nil {
 			panic(fmt.Sprintf("created qualifier %q", created))
 		}
@@ -843,9 +847,9 @@ func demoGitHubAnswers(build *demoBuild) []providerAnswer {
 					"completed_at": started.Add(time.Duration(4+3*index) * time.Minute).Format(time.RFC3339), "labels": []string{"ubuntu-latest"}})
 			}
 			answers = append(answers, get(githubHost, fmt.Sprintf("%s/actions/runs/%d/jobs", root, run.ID), "*", map[string]any{"total_count": len(jobs), "jobs": jobs}))
-			if run.Branch == "main" {
-				answers = append(answers, get(githubHost, fmt.Sprintf("%s/actions/runs/%d/artifacts", root, run.ID), "*", map[string]any{"total_count": 0, "artifacts": []any{}}))
-			}
+			// GitHub lists a run's artifacts whatever its branch, and the report
+			// phase now asks for the runs of every branch.
+			answers = append(answers, get(githubHost, fmt.Sprintf("%s/actions/runs/%d/artifacts", root, run.ID), "*", map[string]any{"total_count": 0, "artifacts": []any{}}))
 		}
 		deployments := []any{}
 		for index := len(repo.Deploys) - 1; index >= 0; index-- {

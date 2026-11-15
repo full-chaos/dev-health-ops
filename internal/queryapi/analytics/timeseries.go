@@ -214,8 +214,10 @@ func CompileTimeseries(req TimeseriesRequest, orgID string, timeoutSeconds int, 
 	if err != nil {
 		return compiledQuery{}, err
 	}
+	owner := newTestopsOwner(orgID, req.Measure, []Dimension{req.Dimension}, useInvestment, filters)
+	dimCol = owner.column(req.Dimension, dimCol)
 
-	fc, err := translateFilters(orgID, filters, useInvestment, defaultFilterColumns())
+	fc, err := translateFilters(orgID, filters, useInvestment, owner.filterColumns(req.Measure, useInvestment))
 	if err != nil {
 		return compiledQuery{}, err
 	}
@@ -244,6 +246,7 @@ func CompileTimeseries(req TimeseriesRequest, orgID string, timeoutSeconds int, 
 		// compilation -- investment.py:175-181).
 	} else {
 		source, alias, dateFilter = nonInvestmentSourceAndDateFilter(req.Measure)
+		extraClauses, contextBindings = owner.join, owner.bindings
 		measureExpr, err = dbExpression(req.Measure, false, false)
 		if err != nil {
 			return compiledQuery{}, err
@@ -438,7 +441,7 @@ func CompileOrgTimeseries(req TimeseriesRequest, orgID string, timeoutSeconds in
 	if !has {
 		return compiledQuery{}, false, nil
 	}
-	fc, err := translateFilters(orgID, filters, false, defaultFilterColumns())
+	fc, err := translateFilters(orgID, filters, false, testopsOwner{}.filterColumns(req.Measure, false))
 	if err != nil {
 		return compiledQuery{}, false, err
 	}

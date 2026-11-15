@@ -25,7 +25,7 @@ func TestBuildResponseEmptyCurrentWindowIsNoData(t *testing.T) {
 		if strings.Contains(query, "FROM work_item_metrics_daily") ||
 			strings.Contains(query, "FROM repo_metrics_daily") ||
 			strings.Contains(query, "FROM deploy_metrics_daily") ||
-			strings.Contains(query, "FROM cicd_metrics_daily") {
+			strings.Contains(query, "FROM testops_pipeline_metrics_daily") {
 			if strings.Contains(query, "AS row_count") {
 				return &fixtureRowScanner{rows: [][]any{{int64(0), 0.0}}}, nil
 			}
@@ -85,7 +85,7 @@ func TestBuildResponseNoCurrentDataDoesNotTurnPriorDataIntoAClaim(t *testing.T) 
 		if (strings.Contains(query, "FROM work_item_metrics_daily") ||
 			strings.Contains(query, "FROM repo_metrics_daily") ||
 			strings.Contains(query, "FROM deploy_metrics_daily") ||
-			strings.Contains(query, "FROM cicd_metrics_daily")) && strings.Contains(query, "AS row_count") {
+			strings.Contains(query, "FROM testops_pipeline_metrics_daily")) && strings.Contains(query, "AS row_count") {
 			return &fixtureRowScanner{rows: [][]any{{int64(0), 0.0}}}, nil
 		}
 		if strings.Contains(query, "FROM repo_change_failure_daily") && strings.Contains(query, changefailure.ViewSumsSQL) {

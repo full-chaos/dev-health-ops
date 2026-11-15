@@ -7,6 +7,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
+	"net/url"
 	"reflect"
 	"strconv"
 	"strings"
@@ -36,7 +37,7 @@ func (doer *githubTestsRouteDoer) Do(request *http.Request) (*http.Response, err
 	case "/repos/acme/api":
 		body = gitHubRepositoryFixture
 	case "/repos/acme/api/actions/runs":
-		if doer.artifactOnly && request.URL.Query().Get("branch") == "" {
+		if doer.artifactOnly && !githubTestsIsArtifactRunListing(request.URL.Query()) {
 			body = `{"workflow_runs":[]}`
 			break
 		}
@@ -49,7 +50,7 @@ func (doer *githubTestsRouteDoer) Do(request *http.Request) (*http.Response, err
 			break
 		}
 		body = `{"workflow_runs":[{"id":9001,"name":"CI","status":"completed","conclusion":"success","created_at":"2026-07-22T10:00:00Z","run_started_at":"2026-07-22T10:01:00Z","updated_at":"2026-07-22T10:05:00Z","run_attempt":1,"event":"pull_request","head_sha":"abc","head_branch":"` + branch + `","html_url":"https://github.com/acme/api/actions/runs/9001","pull_requests":[]}]}`
-		if doer.capRuns && request.URL.Query().Get("branch") == "" {
+		if doer.capRuns && !githubTestsIsArtifactRunListing(request.URL.Query()) {
 			header.Set("Link", `<https://api.github.com/repos/acme/api/actions/runs?page=2>; rel="next"`)
 		}
 	case "/repos/acme/api/actions/runs/9001/jobs":
@@ -103,7 +104,7 @@ func (doer *githubTestsHighVolumeDoer) Do(request *http.Request) (*http.Response
 	case path == "/repos/acme/api":
 		return githubTestsHTTPResponse(request, header, gitHubRepositoryFixture), nil
 	case path == "/repos/acme/api/actions/runs":
-		if request.URL.Query().Get("branch") != "" {
+		if githubTestsIsArtifactRunListing(request.URL.Query()) {
 			return githubTestsHTTPResponse(request, header, `{"workflow_runs":[]}`), nil
 		}
 		doer.runListRequests++
@@ -204,24 +205,35 @@ func TestGitHubTestsRouteEmitsSixCompleteEffectsAndStripsRedirectAuth(t *testing
 	}
 }
 
-func TestGitHubTestsRouteExcludesFeatureBranchArtifactsLikePythonProducer(t *testing.T) {
+// githubTestsIsArtifactRunListing tells the report phase's run listing from the
+// pipeline phase's. Both list runs of every branch; the report phase's created
+// filter starts at a date ("2026-07-01..<timestamp>"), the pipeline phase's at a
+// timestamp.
+func githubTestsIsArtifactRunListing(query url.Values) bool {
+	start, _, found := strings.Cut(query.Get("created"), "..")
+	return found && !strings.Contains(start, "T")
+}
+
+func TestGitHubTestsRouteCollectsFeatureBranchArtifacts(t *testing.T) {
 	doer := &githubTestsRouteDoer{t: t, headBranch: "feature", archive: githubTestsZip(t, map[string]string{"junit.xml": githubTestsJUnitFixture})}
 	claim := nativeTestClaim("github", "tests")
 	batch, err := (GitHubTestsRouteHandler{}).Collect(context.Background(), claim, providerfoundation.Credential{}, githubTestsClient(t, fakehttp.Client(doer)), time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
+	counts := map[string]int{}
 	for _, effect := range batch.Effects {
-		if effect.Destination == "test_suite_results" || effect.Destination == "test_case_results" || effect.Destination == "coverage_snapshots" {
-			if len(effect.Rows) != 0 {
-				t.Fatalf("feature-branch report reached %s: %+v", effect.Destination, effect.Rows)
-			}
-		}
+		counts[effect.Destination] = len(effect.Rows)
 	}
+	if counts["test_suite_results"] != 1 || counts["test_case_results"] != 2 {
+		t.Fatalf("the feature-branch run's report did not reach the tables: %v", counts)
+	}
+	fetched := false
 	for _, request := range doer.requests {
-		if strings.Contains(request, "/artifacts") {
-			t.Fatalf("feature-branch artifact inventory was fetched: %v", doer.requests)
-		}
+		fetched = fetched || strings.HasSuffix(request, "/actions/runs/9001/artifacts")
+	}
+	if !fetched {
+		t.Fatalf("the feature-branch run's artifact inventory was not fetched: %v", doer.requests)
 	}
 }
 

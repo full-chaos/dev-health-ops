@@ -138,6 +138,9 @@ var emptyColumnsAfterTheCapture = map[string]map[string]string{
 	// The provider's own stable id of a repository, and the path its id was
 	// minted from (CHAOS-3383): a captured repository row has neither.
 	"repos": {"provider_repo_id": "134_repos_provider_repo_id.sql", "identity_path": "138_repos_identity_path.sql"},
+	// The report slot of a GitHub test-report row (CHAOS-13873): a captured row predates it.
+	"test_suite_results": {"report_slot": "151_testops_report_slot_attempt.sql"},
+	"coverage_snapshots": {"report_slot": "151_testops_report_slot_attempt.sql"},
 	// The provider's own id and name of a team (CHAOS-9432): the frozen worlds'
 	// team rows were written before them and carry none.
 	"teams": {
@@ -165,6 +168,14 @@ var defaultedColumnsAfterTheCapture = map[string]map[string]defaultedColumn{
 		"target_kind":   {Migration: "127_projects_target_provenance.sql", Want: linearDateOr("project", "")},
 		"target_source": {Migration: "127_projects_target_provenance.sql", Want: linearDateOr("linear.project.targetDate", "")},
 	},
+}
+
+// zeroColumnsAfterTheCapture names the unsigned integer columns (DEFAULT 0) a migration added after the capture: table ->
+// column -> migration. A captured row has no value for them, so the load must leave them 0.
+var zeroColumnsAfterTheCapture = map[string]map[string]string{
+	// The run attempt of a GitHub test-report row (CHAOS-13873): a captured row predates it.
+	"test_suite_results": {"run_attempt": "151_testops_report_slot_attempt.sql"},
+	"coverage_snapshots": {"run_attempt": "151_testops_report_slot_attempt.sql"},
 }
 
 // derivedColumnsAfterTheCapture names the Array(String) columns a migration
@@ -252,6 +263,10 @@ func withoutColumnsAfterTheCapture(table FrozenTable) (FrozenTable, []string) {
 	for name, column := range derivedColumnsAfterTheCapture[table.Name] {
 		added[name], derived[name] = column.Migration, column.Want
 	}
+	zero := map[string]bool{}
+	for name, migration := range zeroColumnsAfterTheCapture[table.Name] {
+		added[name], zero[name] = migration, true
+	}
 	if len(added) == 0 {
 		return table, nil
 	}
@@ -301,6 +316,23 @@ func withoutColumnsAfterTheCapture(table FrozenTable) (FrozenTable, []string) {
 			if differing > 0 {
 				problems = append(problems, fmt.Sprintf("%s.%s (added by %s, after the capture): %d of %d loaded rows differ from the DEFAULT of their own row; a captured row has no value, so the load must leave the DEFAULT",
 					table.Name, name, added[name], differing, len(table.Rows)))
+			}
+			continue
+		}
+		if zero[name] {
+			if columnType := table.Columns[position].Type; !strings.HasPrefix(columnType, "UInt") {
+				problems = append(problems, fmt.Sprintf("%s.%s (added by %s) is %s, not a defaulted unsigned integer", table.Name, name, added[name], columnType))
+				continue
+			}
+			valued := 0
+			for _, row := range table.Rows {
+				if position >= len(row) || row[position] == nil || fmt.Sprint(row[position]) != "0" {
+					valued++
+				}
+			}
+			if valued > 0 {
+				problems = append(problems, fmt.Sprintf("%s.%s (added by %s, after the capture): %d of %d loaded rows hold a value; a captured row has none, so the load must leave it 0",
+					table.Name, name, added[name], valued, len(table.Rows)))
 			}
 			continue
 		}

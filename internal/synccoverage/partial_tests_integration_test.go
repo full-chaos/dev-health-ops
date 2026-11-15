@@ -131,6 +131,17 @@ func TestPartialTestsUnitCoverage(t *testing.T) {
 					t.Fatalf("status = %v, overall = %#v, want gaps", tests["status"], overall)
 				}
 			}},
+		{"order guard: capped success then a LATER failed unit reads failed", `["tests"]`,
+			[]partialUnit{
+				unit("tests", "success", partialCapResult, -24*time.Hour, -time.Hour),
+				unit("tests", "failed", `{}`, -24*time.Hour, -time.Hour)},
+			func(t *testing.T, tests, overall map[string]any) {
+				wantGaps(t, tests, 1)
+				wantCovered(t, tests, 0)
+				if got, _ := tests["failed_ranges"].([]any); len(got) != 1 || tests["status"] != "failed" || overall["health"] != "failed" {
+					t.Fatalf("status = %v failed_ranges = %#v overall = %#v, want failed: the later failure is not superseded by an earlier capped success", tests["status"], tests["failed_ranges"], overall)
+				}
+			}},
 		{"failed with no later success stays failed", `["tests"]`,
 			[]partialUnit{unit("tests", "failed", `{}`, -24*time.Hour, -time.Hour)},
 			func(t *testing.T, tests, overall map[string]any) {

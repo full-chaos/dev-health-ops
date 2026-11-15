@@ -611,9 +611,17 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 					return reportErr
 				}
 				if present {
-					reportSuites, reportCases, normalizeErr := normalizeGitLabNativeTestReport(claim, repoID, runID, report, started, finished, normalizedAt)
+					reportSuites, reportCases, nonFinite, normalizeErr := normalizeGitLabNativeTestReport(claim, repoID, runID, report, started, finished, normalizedAt)
 					if normalizeErr != nil {
 						return normalizeErr
+					}
+					if nonFinite > 0 {
+						client.Metrics.RecordNonFiniteTestTime(claim.Provider, claim.Dataset, nonFinite)
+						slog.Info(
+							"non-finite test time stored as NULL",
+							"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
+							"repository", cursor.Repo, logging.ProviderIDAttr("run", runID), "count", nonFinite,
+						)
 					}
 					if duplicates := countDuplicateTestCases(reportCases); duplicates > 0 {
 						client.Metrics.RecordDuplicateTestCase(claim.Provider, claim.Dataset, duplicates)

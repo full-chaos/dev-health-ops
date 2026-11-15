@@ -294,3 +294,29 @@ func TestPreviousReleaseSnapshotIsAKnownUnitFailureReason(t *testing.T) {
 		t.Fatalf("MetricUnitFailureReasonLabel = %q, want the reason itself", got)
 	}
 }
+
+func TestNonFiniteTestTimeCounterAggregatesByProviderDatasetOnly(t *testing.T) {
+	metrics := NewMetrics()
+	metrics.RecordNonFiniteTestTime("gitlab", "tests", 2)
+	metrics.RecordNonFiniteTestTime("gitlab", "tests", 1)
+	metrics.RecordNonFiniteTestTime("mystery-provider", "mystery-dataset", 1)
+	metrics.RecordNonFiniteTestTime("github", "cicd", 0)
+
+	var output bytes.Buffer
+	if err := metrics.WritePrometheus(&output); err != nil {
+		t.Fatal(err)
+	}
+	rendered := output.String()
+	for _, want := range []string{
+		`dev_health_cicd_nonfinite_test_time_total{provider="gitlab",dataset="tests"} 3`,
+		`dev_health_cicd_nonfinite_test_time_total{provider="other",dataset="other"} 1`,
+		"# TYPE dev_health_cicd_nonfinite_test_time_total counter",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("missing %q in:\n%s", want, rendered)
+		}
+	}
+	if strings.Contains(rendered, `dev_health_cicd_nonfinite_test_time_total{provider="github",dataset="cicd"}`) {
+		t.Fatalf("a zero-count call must not mint a series: %s", rendered)
+	}
+}

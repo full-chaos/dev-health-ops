@@ -146,7 +146,10 @@ type githubTestsReportRows struct {
 	// occurrence counter's own scope, so it is set once after all members are
 	// parsed rather than accumulated per member like DuplicateCases.
 	DuplicateSuites int
-	issues          []githubTestsReportIssue
+	// NonFiniteTimes counts suite and case times (NaN, an infinity or past float64 range) stored as NULL
+	// (CHAOS-13888); the telemetry input for dev_health_cicd_nonfinite_test_time_total.
+	NonFiniteTimes int
+	issues         []githubTestsReportIssue
 }
 
 // GitHubTestsIncomplete is the bounded, provider-specific evidence retained
@@ -1023,7 +1026,7 @@ func parseGitHubTestsArchive(
 		result.ReportsParsed++
 		switch kind {
 		case "junit":
-			suites, cases, err := parseJUnitRows(body, scopeID, repoID, runID, orgID, startedAt, finishedAt, normalizedAt, suiteOccurrence)
+			suites, cases, nonFinite, err := parseJUnitRows(body, scopeID, repoID, runID, orgID, startedAt, finishedAt, normalizedAt, suiteOccurrence)
 			if err != nil {
 				result.recordSkipped(githubTestsMalformedCause, false)
 				result.SkippedArtifacts = append(result.SkippedArtifacts, GitHubTestsSkippedArtifact{
@@ -1034,6 +1037,7 @@ func parseGitHubTestsArchive(
 			result.Suites = append(result.Suites, suites...)
 			result.Cases = append(result.Cases, cases...)
 			result.DuplicateCases += countDuplicateTestCases(cases)
+			result.NonFiniteTimes += nonFinite
 		case "coverage":
 			coverage, err := parseGitHubCoverageRow(body, name, scopeID, repoID, runID, orgID, normalizedAt)
 			if err != nil {
@@ -1253,20 +1257,21 @@ func parseJUnitRows(
 	fallbackStarted, fallbackFinished *time.Time,
 	normalizedAt time.Time,
 	suiteOccurrence map[string]int,
-) ([]testSuiteResultRow, []testCaseResultRow, error) {
+) ([]testSuiteResultRow, []testCaseResultRow, int, error) {
+	nonFinite := 0
 	if len(body) > githubTestsMaxReportBytes || bytes.Contains(bytes.ToUpper(body), []byte("<!DOCTYPE")) || bytes.Contains(bytes.ToUpper(body), []byte("<!ENTITY")) {
-		return nil, nil, ErrGitHubTestsReportInvalid
+		return nil, nil, 0, ErrGitHubTestsReportInvalid
 	}
 	var document junitDocument
 	if err := xml.Unmarshal(body, &document); err != nil {
-		return nil, nil, err
+		return nil, nil, 0, err
 	}
 	suites := document.Suites
 	if document.XMLName.Local == "testsuite" {
 		suites = []junitSuite{{Cases: document.Cases}}
 		var root junitSuite
 		if err := xml.Unmarshal(body, &root); err != nil {
-			return nil, nil, err
+			return nil, nil, 0, err
 		}
 		suites = []junitSuite{root}
 	}
@@ -1316,7 +1321,10 @@ func parseJUnitRows(
 		if started == nil {
 			started = cloneTime(fallbackStarted)
 		}
-		duration := parseOptionalFloat(suite.Time)
+		duration, durationNonFinite := parseOptionalFloat(suite.Time)
+		if durationNonFinite {
+			nonFinite++
+		}
 		finished := cloneTime(fallbackFinished)
 		if hasSuiteTimestamp && started != nil && duration != nil {
 			value := started.Add(time.Duration(*duration * float64(time.Second))).UTC().Truncate(time.Millisecond)
@@ -1349,7 +1357,10 @@ func parseJUnitRows(
 			}
 			occurrence := caseOccurrence[name]
 			caseOccurrence[name] = occurrence + 1
-			caseRow := newJUnitCaseRow(testCase, row, normalizedAt, occurrence)
+			caseRow, caseNonFinite := newJUnitCaseRow(testCase, row, normalizedAt, occurrence)
+			if caseNonFinite {
+				nonFinite++
+			}
 			switch caseRow.Status {
 			case "passed":
 				row.PassedCount++
@@ -1366,7 +1377,7 @@ func parseJUnitRows(
 		}
 		resultSuites = append(resultSuites, row)
 	}
-	return resultSuites, resultCases, nil
+	return resultSuites, resultCases, nonFinite, nil
 }
 
 // newJUnitCaseRow builds one test_case_results row. occurrence is 0 for the
@@ -1375,7 +1386,7 @@ func parseJUnitRows(
 // folded into the natural-key hash ONLY when non-zero, so the common
 // non-colliding case keeps the exact case_id it always has and no existing
 // row's identity shifts.
-func newJUnitCaseRow(item junitCase, suite testSuiteResultRow, normalizedAt time.Time, occurrence int) testCaseResultRow {
+func newJUnitCaseRow(item junitCase, suite testSuiteResultRow, normalizedAt time.Time, occurrence int) (testCaseResultRow, bool) {
 	name := item.Name
 	if name == "" {
 		name = "unnamed"
@@ -1428,14 +1439,15 @@ func newJUnitCaseRow(item junitCase, suite testSuiteResultRow, normalizedAt time
 		// into this very call.
 		caseID = hashTestIdentifier(caseID, strconv.Itoa(occurrence))
 	}
+	duration, nonFinite := parseOptionalFloat(item.Time)
 	return testCaseResultRow{
 		RepoID: suite.RepoID, RunID: suite.RunID, SuiteID: suite.SuiteID,
 		CaseID: caseID, CaseName: name,
 		ClassName: testsOptionalString(item.ClassName), Status: status,
-		DurationSeconds: parseOptionalFloat(item.Time), FailureMessage: message,
+		DurationSeconds: duration, FailureMessage: message,
 		FailureType: failureType, StackTrace: trace, IsQuarantined: status == "quarantined",
 		OrgID: suite.OrgID, LastSynced: normalizedAt,
-	}
+	}, nonFinite
 }
 
 func parseLCOVRow(body []byte, reportPath, artifactID, repoID, runID, orgID string, normalizedAt time.Time) (coverageSnapshotRow, error) {
@@ -1667,15 +1679,20 @@ func countDuplicateTestSuites(suites []testSuiteResultRow) int {
 	return duplicates
 }
 
-func parseOptionalFloat(value string) *float64 {
+// parseOptionalFloat returns nil for an empty or unreadable value. nonFinite is true when the text names NaN, an infinity or
+// a value past float64 range: those are stored as NULL too, and the caller counts them (CHAOS-13888).
+func parseOptionalFloat(value string) (parsed *float64, nonFinite bool) {
 	if value == "" {
-		return nil
+		return nil, false
 	}
-	parsed, err := strconv.ParseFloat(value, 64)
-	if err != nil || math.IsNaN(parsed) || math.IsInf(parsed, 0) {
-		return nil
+	number, err := strconv.ParseFloat(value, 64)
+	if err != nil {
+		return nil, errors.Is(err, strconv.ErrRange)
 	}
-	return &parsed
+	if math.IsNaN(number) || math.IsInf(number, 0) {
+		return nil, true
+	}
+	return &number, false
 }
 
 func parseGitHubTestsTime(value string) *time.Time {

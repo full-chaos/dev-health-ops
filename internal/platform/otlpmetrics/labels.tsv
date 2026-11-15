@@ -205,6 +205,7 @@ dev_health_benchmarking_rows_written_total	org_scoped	code: internal/jobs/metric
 dev_health_cicd_duplicate_natural_key_total	dataset,provider,table	code: internal/providerfoundation/budget.go
 dev_health_cicd_duplicate_test_case_total	dataset,provider	code: internal/providerfoundation/budget.go
 dev_health_cicd_duplicate_test_suite_total	dataset,provider	code: internal/providerfoundation/budget.go
+dev_health_cicd_nonfinite_test_time_total	dataset,provider	code: internal/providerfoundation/budget.go
 dev_health_cicd_partial_success_total	reason	code: internal/providerfoundation/budget.go
 dev_health_cicd_rows_written_total	org_scoped	code: internal/jobs/metrics/daily/cicd/metrics.go
 dev_health_compounding_risk_rows_written_total	org_scoped	code: internal/jobs/metrics/daily/compoundingrisk/metrics.go

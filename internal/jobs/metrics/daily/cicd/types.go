@@ -14,14 +14,12 @@
 //     day D+1 is therefore NEVER counted for cicd, on either day: the loader
 //     never fetches it for day D (finished_at is out of window), and it is
 //     fetched for day D+1 but then dropped by the started_at re-filter. This
-//     package reproduces BOTH filters (LoadPipelineRuns applies the
-//     finished_at filter in SQL; ComputeCICDMetricsDaily re-applies the
-//     started_at filter in-process), matching Python exactly rather than
-//     "fixing" what looks like an odd double filter.
-//   - NO FINAL: the loader's query does not use FINAL on ci_pipeline_runs
-//     (a ReplacingMergeTree), even though sibling testops-pipeline queries in
-//     the same file do. This is parity, not an oversight -- see
-//     LoadPipelineRuns' doc comment.
+//     package reproduces BOTH filters (PipelineRunsSource applies both
+//     windows in SQL; ComputeCICDMetricsDaily re-applies the started_at
+//     filter in-process), matching Python exactly rather than "fixing" what
+//     looks like an odd double filter.
+//   - FINAL: the loader reads ci_pipeline_runs (a ReplacingMergeTree) with
+//     FINAL -- see PipelineRunsSource's doc comment.
 //   - A repo with zero pipeline runs in the window produces NO row at all,
 //     not a pipelines_count=0 row -- by can never observe: nothing appends
 //     to by_repo unless at least one row survives both filters, so the

@@ -47,22 +47,23 @@ func TestSourceDataCheckerAsksPipelineStabilityOnlyForADayWithACompletedRun(t *t
 
 	for _, statement := range []string{
 		`CREATE TABLE ci_pipeline_runs (
-    org_id String, repo_id UUID, status Nullable(String),
+    org_id String, repo_id UUID, run_id String DEFAULT toString(generateUUIDv4()), status Nullable(String),
     started_at Nullable(DateTime64(3, 'UTC')), finished_at Nullable(DateTime64(3, 'UTC'))
-) ENGINE = MergeTree ORDER BY (org_id, repo_id)`,
+) ENGINE = ReplacingMergeTree ORDER BY (org_id, repo_id, run_id)`,
 		`CREATE TABLE cicd_metrics_daily (org_id String, repo_id UUID, day Date)
  ENGINE = MergeTree ORDER BY (org_id, repo_id, day)`,
 		`CREATE TABLE deployments (
     org_id String, repo_id UUID,
     deployed_at Nullable(DateTime64(3, 'UTC')), finished_at Nullable(DateTime64(3, 'UTC')),
-    started_at Nullable(DateTime64(3, 'UTC')), last_synced Nullable(DateTime64(3, 'UTC'))
+    started_at Nullable(DateTime64(3, 'UTC')), last_synced Nullable(DateTime64(3, 'UTC')),
+    status Nullable(String)
 ) ENGINE = MergeTree ORDER BY (org_id, repo_id)`,
 		`CREATE TABLE deploy_metrics_daily (org_id String, repo_id UUID, day Date)
  ENGINE = MergeTree ORDER BY (org_id, repo_id, day)`,
 		`CREATE TABLE test_suite_results (
     org_id String, repo_id UUID,
     started_at Nullable(DateTime64(3, 'UTC')), finished_at Nullable(DateTime64(3, 'UTC'))
-) ENGINE = MergeTree ORDER BY (org_id, repo_id)`,
+) ENGINE = ReplacingMergeTree ORDER BY (org_id, repo_id)`,
 		`CREATE TABLE testops_release_confidence (org_id String, repo_id UUID, day Date)
  ENGINE = MergeTree ORDER BY (org_id, repo_id, day)`,
 		`CREATE TABLE testops_pipeline_stability (org_id String, repo_id UUID, day Date)
@@ -98,7 +99,7 @@ func TestSourceDataCheckerAsksPipelineStabilityOnlyForADayWithACompletedRun(t *t
 	)
 	run := func(repo, status, started string) {
 		t.Helper()
-		if err := conn.Exec(ctx, `INSERT INTO ci_pipeline_runs VALUES (?, toUUID(?), ?, toDateTime64(?, 3, 'UTC'), NULL)`,
+		if err := conn.Exec(ctx, `INSERT INTO ci_pipeline_runs (org_id, repo_id, status, started_at, finished_at) VALUES (?, toUUID(?), ?, toDateTime64(?, 3, 'UTC'), NULL)`,
 			orgID, repo, status, started); err != nil {
 			t.Fatal(err)
 		}
@@ -129,7 +130,7 @@ func TestSourceDataCheckerAsksPipelineStabilityOnlyForADayWithACompletedRun(t *t
 	flagged := func(runID, partitionID, repo string) []string {
 		t.Helper()
 		insertPartitionScope(t, ctx, pool, runID, partitionID, orgID, "2026-11-14", []RepositoryID{RepositoryID(repo)})
-		families, err := checker.ZeroRowFamiliesWithSourceData(ctx, partitionID)
+		families, err := zeroRowFamiliesNow(ctx, checker, partitionID)
 		if err != nil {
 			t.Fatal(err)
 		}

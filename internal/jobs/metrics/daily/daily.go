@@ -43,14 +43,13 @@ var (
 	// family, generation, scope_digest) identity "succeeded" the moment
 	// ComputePartition returned, so a bare retry was answered "skipped"
 	// without recomputing anything. CHAOS-3092 (PR-A) deleted that bridge
-	// and its ledger, but the classification is UNCHANGED and still correct
-	// for the native path: the native executors are deterministic over the
-	// same partition scope and day, so re-running the identical identity
-	// recomputes the identical zero-row output. Marking it Retryable would
-	// only burn the job's attempt budget re-checking unchanged output before
-	// failing anyway. Permanent fails loud and immediately instead; real
-	// recomputation needs a new run/partition identity, which is a separate,
-	// larger change than this ticket's scope.
+	// and its ledger. The source can move between attempts (a sync can land
+	// rows at any time), so a retry is not certain to write the same nothing.
+	// The cause this error exists for -- a family that reads the rows the
+	// check counts and writes none -- does repeat on every attempt, because
+	// the check reads the source before the families compute and with each
+	// family's own predicate (SourceDataChecker). Permanent fails loud and at
+	// once for it; recomputation needs a new run/partition identity.
 	ErrZeroRowsWithSourceData = errors.New("daily metrics family produced zero rows despite source data")
 	// ErrDayAlreadyCovered means a deferred-discovery `metrics daily-start`
 	// request (no --repo-id) found an ALREADY-succeeded run for the same
@@ -172,7 +171,7 @@ func scopeMismatchCondition(idMatches bool, idMismatch, status string, execution
 	return "unknown"
 }
 
-// zeroRowSourceFamilies is the closed set of names ZeroRowFamiliesWithSourceData
+// zeroRowSourceFamilies is the closed set of names ZeroRowFamilies
 // returns; any other name is logged as "other".
 var zeroRowSourceFamilies = map[string]struct{}{"cicd": {}, "deploy": {}, "incident": {}, "testops_risk": {}}
 
@@ -1223,6 +1222,19 @@ func (handler *PartitionHandler) Work(ctx context.Context, execution *jobruntime
 		condition := scopeMismatchCondition(claim.Partition.ID == partitionID, "partition_id_mismatch", run.Status, execution.OrganizationID, run.OrganizationID)
 		return permanentWithCause(ErrInvalidState, jobruntime.ReasonInvalidState, "step=partition_scope condition="+condition)
 	}
+	// The source half of the zero-row check runs BEFORE the families read
+	// their source: rows that land later cannot flag a family that never saw
+	// them. The incident family reads mapping validity at the same instant.
+	asOf := handler.nativeFamiliesNow()
+	ctx = withSourceAsOf(ctx, asOf)
+	var sourceSnapshot SourceSnapshot
+	if handler.sourceChecker != nil {
+		snapshot, checkErr := handler.sourceChecker.SourceSnapshot(ctx, partitionID, asOf)
+		if checkErr != nil {
+			return sourceCheckFailure(handler.store, ctx, *claim, checkErr)
+		}
+		sourceSnapshot = snapshot
+	}
 	if err := runWithLeaseRenewal(
 		ctx,
 		claim.LeaseDuration,
@@ -1356,13 +1368,9 @@ func (handler *PartitionHandler) Work(ctx context.Context, execution *jobruntime
 		return jobruntime.Retryable(err)
 	}
 	if handler.sourceChecker != nil {
-		families, checkErr := handler.sourceChecker.ZeroRowFamiliesWithSourceData(ctx, partitionID)
+		families, checkErr := handler.sourceChecker.ZeroRowFamilies(ctx, sourceSnapshot)
 		if checkErr != nil {
-			releasePartition(handler.store, ctx, *claim)
-			if errors.Is(checkErr, ErrInvalidState) {
-				return permanentWithCause(checkErr, jobruntime.ReasonInvalidState, "step=partition_source_check")
-			}
-			return jobruntime.Retryable(checkErr)
+			return sourceCheckFailure(handler.store, ctx, *claim, checkErr)
 		}
 		if len(families) > 0 {
 			if handler.zeroRowsObserver != nil {
@@ -1384,6 +1392,29 @@ func (handler *PartitionHandler) Work(ctx context.Context, execution *jobruntime
 		return jobruntime.Retryable(err)
 	}
 	return nil
+}
+
+func sourceCheckFailure(store Store, ctx context.Context, claim PartitionClaim, checkErr error) error {
+	releasePartition(store, ctx, claim)
+	if errors.Is(checkErr, ErrInvalidState) {
+		return permanentWithCause(checkErr, jobruntime.ReasonInvalidState, "step=partition_source_check")
+	}
+	return jobruntime.Retryable(checkErr)
+}
+
+type sourceAsOfContextKey struct{}
+
+func withSourceAsOf(ctx context.Context, asOf time.Time) context.Context {
+	return context.WithValue(ctx, sourceAsOfContextKey{}, asOf)
+}
+
+// sourceAsOf is the instant the partition's source check read at, or fallback
+// outside a partition's Work.
+func sourceAsOf(ctx context.Context, fallback time.Time) time.Time {
+	if asOf, ok := ctx.Value(sourceAsOfContextKey{}).(time.Time); ok {
+		return asOf
+	}
+	return fallback
 }
 
 type FinalizeHandler struct {

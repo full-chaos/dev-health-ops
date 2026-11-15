@@ -97,39 +97,8 @@ func LoadIncidentsStarted(
 	if err != nil {
 		return nil, fmt.Errorf("load incidents started: %w", err)
 	}
-	currentIncidents := remaining.CurrentOperationalRowsSQL("operational_incidents", []string{
-		"is_deleted = 0",
-		"started_at >= {start:DateTime64(3, 'UTC')}",
-		"started_at < {end:DateTime64(3, 'UTC')}",
-	}, contract)
-	currentMappings := activeServiceRepositoryMappingsSQL(contract)
-	rows, err := conn.Query(ctx, `
-SELECT repo_id, incident_id, status, started_at, resolved_at, mapping_valid_from
-FROM (
-    SELECT
-        mapping.repo_id AS repo_id,
-        incident.id AS incident_id,
-        incident.normalized_status AS status,
-        incident.started_at AS started_at,
-        incident.resolved_at AS resolved_at,
-        incident.last_synced AS last_synced,
-        mapping.valid_from AS mapping_valid_from
-    FROM `+currentIncidents+` AS incident
-    INNER JOIN `+currentMappings+` AS mapping
-        ON incident.org_id = mapping.org_id AND incident.service_id = mapping.service_id
-    INNER JOIN repos AS repo FINAL
-        ON mapping.org_id = repo.org_id AND mapping.repo_id = repo.id
-    WHERE mapping.repo_id IS NOT NULL AND mapping.repo_id IN {repo_ids:Array(UUID)}
-    ORDER BY mapping.repo_id, incident.id, incident.last_synced DESC
-    LIMIT 1 BY mapping.repo_id, incident.id
-)
-ORDER BY repo_id, incident_id`,
-		clickhouse.Named("org_id", organizationID),
-		clickhouse.Named("start", remaining.DateTime64Argument(dayStart, remaining.DateTime64MillisecondPrecision)),
-		clickhouse.Named("end", remaining.DateTime64Argument(dayEnd, remaining.DateTime64MillisecondPrecision)),
-		clickhouse.Named("as_of", remaining.DateTime64Argument(asOf, remaining.DateTime64MicrosecondPrecision)),
-		clickhouse.Named("repo_ids", repositoryUUIDStrings(repoIDs)),
-	)
+	rows, err := conn.Query(ctx, incidentsStartedSQL(contract),
+		incidentSourceArgs(organizationID, repoIDs, dayStart, dayEnd, asOf)...)
 	if err != nil {
 		return nil, fmt.Errorf("load incidents started: %w", err)
 	}
@@ -205,6 +174,49 @@ ORDER BY repo_id, incident_id`,
 // the direct incident-to-repository tie. LoadIncidentsStarted joins incidents
 // through it, and LoadViaDeploymentIncidentLinks uses it to keep an incident
 // with a direct tie off the via-deployment path.
+// incidentsStartedSQL is the incident family's source read: every current
+// repository-mapped incident that started in [start, end). The family then
+// keeps the ones resolved in the same window (computeIncidentMetricsDaily);
+// the zero-row source check wraps this same text with that resolved window.
+func incidentsStartedSQL(contract remaining.OperationalOrderingContract) string {
+	currentIncidents := remaining.CurrentOperationalRowsSQL("operational_incidents", []string{
+		"is_deleted = 0",
+		"started_at >= {start:DateTime64(3, 'UTC')}",
+		"started_at < {end:DateTime64(3, 'UTC')}",
+	}, contract)
+	return `
+SELECT repo_id, incident_id, status, started_at, resolved_at, mapping_valid_from
+FROM (
+    SELECT
+        mapping.repo_id AS repo_id,
+        incident.id AS incident_id,
+        incident.normalized_status AS status,
+        incident.started_at AS started_at,
+        incident.resolved_at AS resolved_at,
+        incident.last_synced AS last_synced,
+        mapping.valid_from AS mapping_valid_from
+    FROM ` + currentIncidents + ` AS incident
+    INNER JOIN ` + activeServiceRepositoryMappingsSQL(contract) + ` AS mapping
+        ON incident.org_id = mapping.org_id AND incident.service_id = mapping.service_id
+    INNER JOIN repos AS repo FINAL
+        ON mapping.org_id = repo.org_id AND mapping.repo_id = repo.id
+    WHERE mapping.repo_id IS NOT NULL AND mapping.repo_id IN {repo_ids:Array(UUID)}
+    ORDER BY mapping.repo_id, incident.id, incident.last_synced DESC
+    LIMIT 1 BY mapping.repo_id, incident.id
+)
+ORDER BY repo_id, incident_id`
+}
+
+func incidentSourceArgs(organizationID string, repoIDs []uuid.UUID, start, end, asOf time.Time) []any {
+	return []any{
+		clickhouse.Named("org_id", organizationID),
+		clickhouse.Named("start", remaining.DateTime64Argument(start, remaining.DateTime64MillisecondPrecision)),
+		clickhouse.Named("end", remaining.DateTime64Argument(end, remaining.DateTime64MillisecondPrecision)),
+		clickhouse.Named("as_of", remaining.DateTime64Argument(asOf, remaining.DateTime64MicrosecondPrecision)),
+		clickhouse.Named("repo_ids", repoIDs),
+	}
+}
+
 func activeServiceRepositoryMappingsSQL(contract remaining.OperationalOrderingContract) string {
 	return remaining.CurrentOperationalRowsSQL("operational_service_repository_mappings", []string{
 		"repo_id IS NOT NULL",

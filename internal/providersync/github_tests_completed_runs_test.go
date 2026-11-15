@@ -77,16 +77,37 @@ func TestGitHubTestsRunListingStartsOneDayBeforeTheSinceDate(t *testing.T) {
 	collectGitHubTestsReportRows(t, doer, claim, at)
 	found := false
 	for _, query := range doer.runQueries {
-		if strings.Contains(query, "created=%3E%3D2026-07-21") || strings.Contains(query, "created=>=2026-07-21") {
-			found = true
+		start, isReportListing := githubTestsReportListingStart(t, query)
+		if !isReportListing {
+			continue
 		}
-		if strings.Contains(query, "branch=") && strings.Contains(query, "2026-07-22") {
+		if start == "2026-07-22" {
 			t.Fatalf("listing still starts on the since date: %q", query)
 		}
+		found = found || start == "2026-07-21"
 	}
 	if !found {
-		t.Fatalf("no run listing created>=2026-07-21: %v", doer.runQueries)
+		t.Fatalf("no run listing created from 2026-07-21: %v", doer.runQueries)
 	}
+}
+
+// githubTestsReportListingStart returns the date a report-phase run listing starts from. The report listing's created
+// filter starts at a date ("2026-07-21..<timestamp>" or ">=2026-07-21"); the pipeline pass's starts at a timestamp.
+// Neither carries a branch filter.
+func githubTestsReportListingStart(t *testing.T, rawQuery string) (string, bool) {
+	t.Helper()
+	values, err := url.ParseQuery(rawQuery)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if values.Has("branch") {
+		t.Fatalf("a run listing carries a branch filter: %q", rawQuery)
+	}
+	start, _, _ := strings.Cut(strings.TrimPrefix(values.Get("created"), ">="), "..")
+	if len(start) != len(time.DateOnly) || strings.Contains(start, "T") {
+		return "", false
+	}
+	return start, true
 }
 
 // githubTestsPassDoer serves one default-branch run with a chosen status and artifact set (id -> JUnit body).
@@ -202,12 +223,8 @@ func artifactListingStart(t *testing.T, claim Claim) string {
 	doer := githubTestsReportWindowDoerFor(t, "2026-07-22T12:30:00Z")
 	collectGitHubTestsReportRows(t, doer, claim, time.Date(2026, 7, 22, 13, 5, 0, 0, time.UTC))
 	for _, query := range doer.runQueries {
-		if strings.Contains(query, "branch=") {
-			values, err := url.ParseQuery(query)
-			if err != nil {
-				t.Fatal(err)
-			}
-			return strings.TrimPrefix(values.Get("created"), ">=")
+		if start, ok := githubTestsReportListingStart(t, query); ok {
+			return start
 		}
 	}
 	t.Fatalf("no artifact run listing: %v", doer.runQueries)

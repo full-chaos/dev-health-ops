@@ -29,10 +29,10 @@ import (
 
 // githubAllArtifactsUnreadableFixtureDoer is an httptest handler for a
 // GitHub repository whose every cicd artifact answers unreadable. It
-// distinguishes the runs-phase listing (no `branch` query) from the
-// artifacts-phase listing (has `branch`, since the fixture repo declares a
-// default branch) exactly as production traffic does: the runs phase is
-// left empty so this test needs no ci_pipeline_runs/ci_job_runs ClickHouse
+// distinguishes the runs-phase listing (its `created` filter starts at a
+// timestamp) from the report-phase listing (its `created` filter starts at a
+// date; neither carries a `branch`, both list runs of every branch): the runs
+// phase is left empty so this test needs no ci_pipeline_runs/ci_job_runs ClickHouse
 // writes at all, isolating the assertion to the totality gate itself.
 func githubAllArtifactsUnreadableFixtureDoer(t *testing.T, runs int) http.HandlerFunc {
 	t.Helper()
@@ -44,7 +44,10 @@ func githubAllArtifactsUnreadableFixtureDoer(t *testing.T, runs int) http.Handle
 			writer.Write([]byte(`{"id":1,"name":"totality-repo","full_name":"acme/totality-repo",` +
 				`"default_branch":"main","archived":false}`))
 		case request.URL.Path == "/repos/acme/totality-repo/actions/runs":
-			if request.URL.Query().Get("branch") == "" {
+			if request.URL.Query().Has("branch") {
+				t.Errorf("a workflow-runs listing carried a branch filter: %s", request.URL.RawQuery)
+			}
+			if !githubAllArtifactsUnreadableIsReportListing(request) {
 				writer.WriteHeader(http.StatusOK)
 				writer.Write([]byte(`{"workflow_runs":[]}`))
 				return
@@ -67,6 +70,13 @@ func githubAllArtifactsUnreadableFixtureDoer(t *testing.T, runs int) http.Handle
 			t.Fatalf("unexpected request %s", request.URL.String())
 		}
 	}
+}
+
+// githubAllArtifactsUnreadableIsReportListing is true for the report phase's
+// runs listing: created=<date>..<timestamp>.
+func githubAllArtifactsUnreadableIsReportListing(request *http.Request) bool {
+	start, _, found := strings.Cut(request.URL.Query().Get("created"), "..")
+	return found && !strings.Contains(start, "T")
 }
 
 func githubAllArtifactsUnreadableRunsFixture(runs int) string {

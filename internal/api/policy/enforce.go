@@ -277,13 +277,13 @@ func (e *Enforcer) decideOnce(ctx context.Context, o enforceObservation) enforce
 		return enforceNotCovered
 	}
 	if o.bearer == "" || !o.userAccessToken {
-		countEnforce(ctx, row.Namespace, enforceOutcomeErrorDeny)
+		countEnforce(ctx, row.Namespace, enforceOutcomeErrorDeny, enforceCauseNoUserToken)
 		e.logger.ErrorContext(ctx, "api enforcement: a request with no user access token reached an enforced row, refused",
 			slog.String("route", o.pattern), slog.String("namespace", row.Namespace))
 		return enforceDeny
 	}
 	if e.unconfigured {
-		countEnforce(ctx, row.Namespace, enforceOutcomeErrorDeny)
+		countEnforce(ctx, row.Namespace, enforceOutcomeErrorDeny, enforceCauseUnconfigured)
 		return enforceNoDecisionPoint
 	}
 	if o.impersonating && !liveRowExempt(o.pattern) {
@@ -293,7 +293,7 @@ func (e *Enforcer) decideOnce(ctx context.Context, o enforceObservation) enforce
 				slog.String("route", o.pattern), slog.String("namespace", row.Namespace))
 			return enforceLegacy
 		}
-		countEnforce(ctx, row.Namespace, enforceOutcomeImpersonationRefused)
+		countEnforce(ctx, row.Namespace, enforceOutcomeImpersonationRefused, "")
 		e.logger.WarnContext(ctx, "api enforcement: impersonation caller refused on an enforced row",
 			slog.String("route", o.pattern), slog.String("namespace", row.Namespace))
 		return enforceImpersonationRefused
@@ -313,13 +313,13 @@ func (e *Enforcer) decideOnce(ctx context.Context, o enforceObservation) enforce
 	request := rowRequest(o.bearer, row, org)
 	decision, failed := e.ask(ctx, request)
 	if failed || decision.Local() {
-		countEnforce(ctx, row.Namespace, enforceOutcomeErrorDeny)
+		countEnforce(ctx, row.Namespace, enforceOutcomeErrorDeny, enforceCauseNoVerdict)
 		e.logger.WarnContext(ctx, "api enforcement: no verdict, the route is refused",
 			slog.String("namespace", row.Namespace), slog.String("reason", string(decision.Reason())))
 		return enforceUnavailable
 	}
 	if decision.Allowed() && !obligationsCarriedOut(decision.Obligations(), request, e.noRepositoryDimension[o.pattern], o.read) {
-		countEnforce(ctx, row.Namespace, enforceOutcomeErrorDeny)
+		countEnforce(ctx, row.Namespace, enforceOutcomeErrorDeny, enforceCauseObligation)
 		e.logger.WarnContext(ctx, "api enforcement: the allow carries an obligation go-api does not carry out, no verdict, the route is refused",
 			slog.String("namespace", row.Namespace))
 		return enforceUnavailable
@@ -328,10 +328,10 @@ func (e *Enforcer) decideOnce(ctx context.Context, o enforceObservation) enforce
 		o.platform.seed(row.Action, decision.Allowed())
 	}
 	if decision.Allowed() {
-		countEnforce(ctx, row.Namespace, enforceOutcomeAllow)
+		countEnforce(ctx, row.Namespace, enforceOutcomeAllow, "")
 		return enforceAllow
 	}
-	countEnforce(ctx, row.Namespace, enforceOutcomeDeny)
+	countEnforce(ctx, row.Namespace, enforceOutcomeDeny, "")
 	if row.ResourceType == policycatalog.ScopePlatform && org == "" {
 		return enforceDenyNoOrg
 	}
@@ -365,16 +365,16 @@ func (e *Enforcer) decideOrgless(ctx context.Context, o enforceObservation, row 
 		held, err = e.askPlatform(ctx, o.bearer, o.orgless.action)
 	}
 	if err != nil {
-		countEnforce(ctx, row.Namespace, enforceOutcomeErrorDeny)
+		countEnforce(ctx, row.Namespace, enforceOutcomeErrorDeny, enforceCauseNoOrgToken)
 		e.logger.WarnContext(ctx, "api enforcement: no verdict for a token with no organization, the route is refused",
 			slog.String("route", o.pattern), slog.String("namespace", row.Namespace))
 		return enforceUnavailable
 	}
 	if held {
-		countEnforce(ctx, row.Namespace, enforceOutcomeAllow)
+		countEnforce(ctx, row.Namespace, enforceOutcomeAllow, "")
 		return enforceAllow
 	}
-	countEnforce(ctx, row.Namespace, enforceOutcomeDeny)
+	countEnforce(ctx, row.Namespace, enforceOutcomeDeny, "")
 	return enforceDenyNoOrg
 }
 
@@ -386,7 +386,7 @@ func (e *Enforcer) decideAdminOr(ctx context.Context, o enforceObservation, row 
 	decisions, failed := e.askBatch(ctx, requests)
 	allowed, decision, verdict := adminOrAnswer(requests, decisions, e.noRepositoryDimension[o.pattern], o.read)
 	if failed || !verdict {
-		countEnforce(ctx, row.Namespace, enforceOutcomeErrorDeny)
+		countEnforce(ctx, row.Namespace, enforceOutcomeErrorDeny, enforceCauseAdminOrNoVerdict)
 		e.logger.WarnContext(ctx, "api enforcement: no verdict for an admin-or row, the route is refused",
 			slog.String("route", o.pattern), slog.String("reason", string(decision.Reason())))
 		return enforceUnavailable
@@ -396,13 +396,13 @@ func (e *Enforcer) decideAdminOr(ctx context.Context, o enforceObservation, row 
 	}
 	switch {
 	case allowed:
-		countEnforce(ctx, row.Namespace, enforceOutcomeAllow)
+		countEnforce(ctx, row.Namespace, enforceOutcomeAllow, "")
 		return enforceAllow
 	case org == "":
-		countEnforce(ctx, row.Namespace, enforceOutcomeDeny)
+		countEnforce(ctx, row.Namespace, enforceOutcomeDeny, "")
 		return enforceDenyNoOrg
 	}
-	countEnforce(ctx, row.Namespace, enforceOutcomeDeny)
+	countEnforce(ctx, row.Namespace, enforceOutcomeDeny, "")
 	return enforceDeny
 }
 
@@ -502,7 +502,7 @@ func (g *Guard) enforceVerdict(r *http.Request, user *User, bearer string, level
 		(platformRoute || !readMethod(r.Method)) {
 		session, err := g.sessionRow(r, user.ID)
 		if err != nil {
-			countEnforce(ctx, namespace, enforceOutcomeErrorDeny)
+			countEnforce(ctx, namespace, enforceOutcomeErrorDeny, enforceCauseImpersonationLookup)
 			g.logger.ErrorContext(ctx, "api enforcement: impersonation row lookup failed; refusing the request",
 				slog.String("route", r.Pattern), slog.String("namespace", namespace), slog.Bool("unavailable", isUnavailable(err)),
 				slog.String("missing_grant", MissingGrant(err)), slog.Any("error", err))

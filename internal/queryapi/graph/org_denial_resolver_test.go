@@ -45,6 +45,10 @@ func orgScopedCalls() map[string]orgScopedCall {
 			_, err := r.Query().TestopsJobFailures(ctx, orgID, model.TestOpsJobFailuresInput{Limit: 20})
 			return err
 		},
+		"testopsTestWindow": func(r *Resolver, ctx context.Context, orgID string) error {
+			_, err := r.Query().TestopsTestWindow(ctx, orgID, model.TestOpsTestWindowInput{})
+			return err
+		},
 		"coverageBaselines": func(r *Resolver, ctx context.Context, orgID string) error {
 			_, err := r.Query().CoverageBaselines(ctx, orgID, graphqldate.Date{}, nil, nil)
 			return err

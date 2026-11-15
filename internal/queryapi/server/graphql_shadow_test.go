@@ -32,13 +32,13 @@ import (
 )
 
 // CHAOS-13074: the GraphQL shadow. One OperationShadow, built by one function, sits before the org guard on every
-// GraphQL server; the process's one shadow holds the REST rows and the 51 root rows.
+// GraphQL server; the process's one shadow holds the REST rows and the 52 root rows.
 
 func TestGraphQLShadowRowsAreTheFieldActionTable(t *testing.T) {
 	rows := graphQLShadowRows()
 	table := graph.FieldActionTable()
-	if len(rows) != 51 || len(rows) != len(table) {
-		t.Fatalf("%d rows for %d table roots, want 51", len(rows), len(table))
+	if len(rows) != 52 || len(rows) != len(table) {
+		t.Fatalf("%d rows for %d table roots, want 52", len(rows), len(table))
 	}
 	rest, err := pdp.RESTShadowRows(authv1.QueryAPIEndpointProfiles)
 	if err != nil {

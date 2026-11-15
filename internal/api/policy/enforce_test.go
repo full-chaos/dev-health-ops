@@ -37,7 +37,7 @@ func recordEnforce(t *testing.T) *enforceRecorder {
 	t.Helper()
 	rec := &enforceRecorder{}
 	previous := enforceDecisionAdd
-	enforceDecisionAdd = func(_ context.Context, namespace, outcome string) {
+	enforceDecisionAdd = func(_ context.Context, namespace, outcome, _ string) {
 		rec.mu.Lock()
 		defer rec.mu.Unlock()
 		rec.hits = append(rec.hits, namespace+"/"+outcome)
@@ -703,7 +703,7 @@ func TestTheEnforcementOutcomeSetIsClosed(t *testing.T) {
 	if outcomes = slices.Compact(outcomes); !slices.Equal(outcomes, want) {
 		t.Errorf("outcomes %v, want %v", outcomes, want)
 	}
-	if suffix := "outcome: allow, deny, error_deny, impersonation_refused"; !strings.HasSuffix(description, suffix) {
+	if suffix := "outcome: allow, deny, error_deny, impersonation_refused. An error_deny outcome also carries a cause: no_user_token, unconfigured, no_verdict, obligation, no_org_token, admin_or_no_verdict, impersonation_lookup"; !strings.HasSuffix(description, suffix) {
 		t.Errorf("decision description %q, want it to end %q", description, suffix)
 	}
 }
@@ -763,7 +763,8 @@ func TestAnUnjudgedRequestLogsOneDebugLineThatQuotesNoToken(t *testing.T) {
 func TestEnforcementCounterLabelSetsAreClosed(t *testing.T) {
 	reader := sdkmetric.NewManualReader()
 	meter := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)).Meter("enforce-test")
-	newEnforceDecisionAdder(meter)(context.Background(), "teams", "allow")
+	newEnforceDecisionAdder(meter)(context.Background(), "teams", "allow", "")
+	newEnforceDecisionAdder(meter)(context.Background(), "teams", "error_deny", "no_verdict")
 	newEnforceUnjudgedAdder(meter)(context.Background(), "GET /api/v1/admin/teams", "impersonation")
 	var collected metricdata.ResourceMetrics
 	if err := reader.Collect(context.Background(), &collected); err != nil {
@@ -782,12 +783,17 @@ func TestEnforcementCounterLabelSetsAreClosed(t *testing.T) {
 					names = append(names, string(kv.Key))
 				}
 				sort.Strings(names)
+				outcome, _ := point.Attributes.Value("outcome")
+				keys[m.Name+"/"+outcome.AsString()] = names
 				keys[m.Name] = names
 			}
 		}
 	}
-	if got := keys["dev_health_authz_enforcement_decisions_total"]; !slices.Equal(got, []string{"namespace", "outcome", "service"}) {
+	if got := keys["dev_health_authz_enforcement_decisions_total/allow"]; !slices.Equal(got, []string{"namespace", "outcome", "service"}) {
 		t.Fatalf("decision counter labels %v", got)
+	}
+	if got := keys["dev_health_authz_enforcement_decisions_total/error_deny"]; !slices.Equal(got, []string{"cause", "namespace", "outcome", "service"}) {
+		t.Fatalf("error_deny labels %v, want cause beside the other three", got)
 	}
 	if got := keys["dev_health_authz_enforcement_unjudged_total"]; !slices.Equal(got, []string{"reason", "route"}) {
 		t.Fatalf("unjudged counter labels %v", got)

@@ -4,9 +4,12 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/recordvalidation"
 	"math/big"
 	"net/http"
+	"slices"
 	"sort"
+	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
 )
@@ -80,6 +83,9 @@ func parseEnvelope(raw []byte) (*BatchEnvelope, error) {
 		details := make([]pyjson.Value, len(errs))
 		for index, item := range errs {
 			if item.Unrenderable {
+				if refusal := loneSurrogateRefusal(raw, item); refusal != nil {
+					return nil, refusal
+				}
 				return nil, unhandledError()
 			}
 			details[index] = item.PublicDict()
@@ -112,6 +118,34 @@ func parseEnvelope(raw []byte) (*BatchEnvelope, error) {
 		})
 	}
 	return envelope, nil
+}
+
+// loneSurrogateMessages are the jiter messages for a "\\uD800"-style escape
+// that is not half of a pair.
+var loneSurrogateMessages = []string{"lone leading surrogate in hex escape", "unexpected end of hex escape"}
+
+// loneSurrogateRefusal is the 422 string_unicode answer (the answer the rest
+// of go-api gives for a lone surrogate) for a json_invalid error that jiter
+// raised on a surrogate escape, when the body decodes otherwise. It is nil
+// for every other unrenderable error, which stays the unhandled 500.
+func loneSurrogateRefusal(raw []byte, item recordvalidation.PydanticError) *ingestError {
+	if item.Type != "json_invalid" || !slices.ContainsFunc(loneSurrogateMessages, func(m string) bool {
+		return strings.Contains(item.Msg, m)
+	}) {
+		return nil
+	}
+	value, err := pyjson.Decode(raw)
+	if err != nil {
+		return nil
+	}
+	refused := pybody.RefuseLoneSurrogates(value)
+	if len(refused) == 0 {
+		return nil
+	}
+	list, _ := pybody.Detail(refused[:1]).Get("detail")
+	failure := newIngestError(http.StatusUnprocessableEntity, "string_unicode", "Request body contains an invalid Unicode string")
+	failure.Details = list.([]pyjson.Value)
+	return failure
 }
 
 // unhandledError is the Python api's unhandled-exception answer on this

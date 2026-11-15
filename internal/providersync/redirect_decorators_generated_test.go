@@ -83,7 +83,7 @@ var generatedDecorators = map[string]func(doer providerfoundation.HTTPDoer, coun
 		return githubTeamCatalogCountingDoer{delegate: doer, attempts: count}
 	},
 	"githubTestsChunkCountingDoer": func(doer providerfoundation.HTTPDoer, count *int) providerfoundation.HTTPDoer {
-		return githubTestsChunkCountingDoer{delegate: doer, attempts: count}
+		return githubTestsChunkCountingDoer{delegate: doer, attempts: count, observed: &githubTestsRateObserver{}}
 	},
 	"githubWorkItemsRESTCountingDoer": func(doer providerfoundation.HTTPDoer, count *int) providerfoundation.HTTPDoer {
 		return githubWorkItemsRESTCountingDoer{delegate: doer, requests: count}

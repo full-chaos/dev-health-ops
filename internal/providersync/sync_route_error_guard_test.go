@@ -65,7 +65,7 @@ func TestRouteTemplatesHaveAStaticShape(t *testing.T) {
 	templates := []string{
 		githubRepoRoute, githubPullsRoute, githubPullRoute, githubCommitsRoute, githubCommitPullsRoute,
 		githubIssuesRoute, githubIssueEventsRoute, githubIssueCommentRoute, githubLabelsRoute, githubMilestonesRoute,
-		githubDeploymentsRoute, githubStatusesRoute, githubReleasesRoute, githubRunsRoute, githubRunJobsRoute,
+		githubDeploymentsRoute, githubStatusesRoute, githubReleasesRoute, githubRunsRoute, githubRunRoute, githubRunJobsRoute,
 		githubRunArtifactsRoute, gitlabProjectRoute, gitlabCommitsRoute, gitlabMergeRequestsRoute, gitlabPipelinesRoute,
 		gitlabPipelineJobsRoute, gitlabIssuesRoute, gitlabDeploymentsRoute, gitlabReleasesRoute, gitlabLabelsRoute,
 		gitlabMilestonesRoute, gitlabVersionRoute,

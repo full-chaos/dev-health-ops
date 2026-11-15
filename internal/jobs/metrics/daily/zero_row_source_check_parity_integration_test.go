@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/full-chaos/dev-health-ops/internal/chmigrate"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily/cicd"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/deploymentstatus"
@@ -120,6 +121,7 @@ func (scope parityScope) partition() Partition {
 
 type pipelineRun struct {
 	status     string
+	nullStatus bool
 	runID      string
 	startedAt  time.Time
 	finishedAt *time.Time
@@ -137,7 +139,11 @@ func (stack parityStack) insertRuns(t *testing.T, ctx context.Context, orgID str
 		if run.status != "" {
 			status = run.status
 		}
-		if err := batch.Append(repoID, run.runID, &status, run.startedAt, run.finishedAt, run.lastSynced, orgID); err != nil {
+		statusPtr := &status
+		if run.nullStatus {
+			statusPtr = nil
+		}
+		if err := batch.Append(repoID, run.runID, statusPtr, run.startedAt, run.finishedAt, run.lastSynced, orgID); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -471,6 +477,49 @@ func TestZeroRowSourceCheckMatchesWhatTheFamilyKeeps(t *testing.T) {
 				stack.assertKeptParity(t, ctx, scope, "cicd", "cicd_metrics_daily", cicdExecutor, testCase.kept)
 			})
 		}
+		deletedRun := func(runID, status string, nullStatus bool) pipelineRun {
+			return pipelineRun{
+				runID: runID, status: status, nullStatus: nullStatus,
+				startedAt: at("2026-08-25 10:00:00.000"), finishedAt: ptrTime(at("2026-08-25 11:00:00.000")),
+				lastSynced: at("2026-08-26 01:00:00.000"),
+			}
+		}
+		testopsRiskExecutor, err := NewTestopsRiskExecutor(stack.conn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		stack.createBaselineTable(t, ctx, "testops_pipeline_metrics_daily")
+		testopsPipelineExecutor, err := NewTestopsPipelineExecutor(stack.conn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		deletedCases := []struct {
+			name string
+			runs []pipelineRun
+			kept bool
+		}{
+			{"deleted_only_day", []pipelineRun{deletedRun("gone", "deleted", false)}, false},
+			{"deleted_mixed_case_padded_only_day", []pipelineRun{deletedRun("gone", " Deleted ", false)}, false},
+			{"null_status_day", []pipelineRun{deletedRun("unknown", "", true)}, true},
+			{"deleted_and_completed_day", []pipelineRun{deletedRun("gone", "deleted", false), deletedRun("done", "success", false)}, true},
+		}
+		for _, testCase := range deletedCases {
+			t.Run("cicd_"+testCase.name, func(t *testing.T) {
+				scope := stack.newScope(t, ctx, 1)
+				stack.insertRuns(t, ctx, scope.orgID, scope.repoUUIDs[0], testCase.runs...)
+				stack.assertKeptParity(t, ctx, scope, "cicd", "cicd_metrics_daily", cicdExecutor, testCase.kept)
+			})
+			t.Run("testops_pipeline_"+testCase.name, func(t *testing.T) {
+				scope := stack.newScope(t, ctx, 1)
+				stack.insertRuns(t, ctx, scope.orgID, scope.repoUUIDs[0], testCase.runs...)
+				stack.assertTestopsPipelineKept(t, ctx, scope, testopsPipelineExecutor, testCase.kept)
+			})
+			t.Run("testops_risk_"+testCase.name, func(t *testing.T) {
+				scope := stack.newScope(t, ctx, 1)
+				stack.insertRuns(t, ctx, scope.orgID, scope.repoUUIDs[0], testCase.runs...)
+				stack.assertKeptParity(t, ctx, scope, "testops_risk", "testops_release_confidence", testopsRiskExecutor, testCase.kept)
+			})
+		}
 		deployCases := []struct {
 			name string
 			row  deploymentRow
@@ -663,6 +712,50 @@ func (stack parityStack) assertKeptParity(
 	}
 	if sourceSeen != written {
 		t.Fatalf("%s: source check sees=%t, family wrote=%t", family, sourceSeen, written)
+	}
+}
+
+func (stack parityStack) createBaselineTable(t *testing.T, ctx context.Context, name string) {
+	t.Helper()
+	baseline, err := chmigrate.LoadBaseline()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, object := range baseline.Objects {
+		if object.Name == name {
+			if err := stack.conn.Exec(ctx, object.Create); err != nil {
+				t.Fatal(err)
+			}
+			return
+		}
+	}
+	t.Fatalf("%s is not in the baseline", name)
+}
+
+// The testops pipeline family has no zero-row flag of its own: its source read
+// (shared with testops_risk) must still see exactly the runs it keeps.
+func (stack parityStack) assertTestopsPipelineKept(
+	t *testing.T, ctx context.Context, scope parityScope, executor NativeFamilyExecutor, kept bool,
+) {
+	t.Helper()
+	checker, err := NewClickHouseSourceDataChecker(stack.pool, stack.conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourceSeen, err := checker.existsWith(ctx, "SELECT 1"+testopsPipelineRunsSource+"\nLIMIT 1",
+		testopsSourceArgs(scope.orgID, scope.repoUUIDs, parityDay, parityDay.AddDate(0, 0, 1))...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := executor.ComputeFamily(ctx, scope.run(), scope.partition()); err != nil {
+		t.Fatal(err)
+	}
+	written := stack.outputExists(t, ctx, "testops_pipeline_metrics_daily", scope.orgID)
+	if written != kept {
+		t.Fatalf("fixture: testops_pipeline wrote=%t, want %t", written, kept)
+	}
+	if sourceSeen != written {
+		t.Fatalf("testops_pipeline: source read sees=%t, family wrote=%t", sourceSeen, written)
 	}
 }
 

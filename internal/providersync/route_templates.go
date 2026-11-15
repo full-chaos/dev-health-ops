@@ -20,6 +20,7 @@ const (
 	githubStatusesRoute     = githubRepoRoute + "/deployments/{id}/statuses"
 	githubReleasesRoute     = githubRepoRoute + "/releases"
 	githubRunsRoute         = githubRepoRoute + "/actions/runs"
+	githubRunRoute          = githubRepoRoute + "/actions/runs/{run}"
 	githubRunJobsRoute      = githubRepoRoute + "/actions/runs/{run}/jobs"
 	githubRunArtifactsRoute = githubRepoRoute + "/actions/runs/{run}/artifacts"
 

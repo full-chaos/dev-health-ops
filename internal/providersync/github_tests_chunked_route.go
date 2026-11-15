@@ -29,11 +29,16 @@ import (
 type githubTestsChunkCountingDoer struct {
 	delegate providerfoundation.HTTPDoer
 	attempts *int
+	observed *githubTestsRateObserver
 }
 
 func (doer githubTestsChunkCountingDoer) Do(request *http.Request) (*http.Response, error) {
 	*doer.attempts++
-	return doer.delegate.Do(request)
+	response, err := doer.delegate.Do(request)
+	if response != nil && doer.observed != nil {
+		doer.observed.observe(response.Header)
+	}
+	return response, err
 }
 
 // githubTestsMaxJobsPerRun bounds the jobs committed for ONE run (a hard bound). It is not the report-row bound: that is
@@ -81,6 +86,37 @@ type githubTestsChunkCursor struct {
 	// ErrPaginationCapExceeded (CHAOS-3822).
 	RunPages      int `json:"run_pages"`
 	ArtifactPages int `json:"artifact_pages"`
+	// RangeHi, RangeItems and RangeOldest peel the listing of the active phase
+	// (runs, then artifacts; never both at once) past GitHub's cap of 1,000
+	// results per created search. RangeHi is the end of the current range once
+	// a saturated range moved it (empty: the window end), RangeItems the runs
+	// consumed from the current range, RangeOldest the oldest created time seen
+	// in it. A range that consumed the cap ends at its oldest time.
+	RangeHi     string `json:"rh,omitempty"`
+	RangeItems  int    `json:"ri,omitempty"`
+	RangeOldest string `json:"ro,omitempty"`
+	// The open phase re-reads, by id, stored pipeline rows that are still open
+	// and older than the runs listing reaches. OpenAfterStarted/OpenAfterRunID
+	// are the keyset position (rows finalized by earlier chunks drop out of the
+	// reader's answer, so an index would shift), OpenCap the cap fixed at the
+	// phase start, OpenDone the runs re-read, OpenCapReached that the cap, not
+	// the end of the open rows, stopped the phase.
+	OpenAfterStarted string `json:"oas,omitempty"`
+	OpenAfterRunID   string `json:"oar,omitempty"`
+	OpenCap          int    `json:"oc,omitempty"`
+	OpenDone         int    `json:"od,omitempty"`
+	OpenCapReached   bool   `json:"ocr,omitempty"`
+	// OpenFloorHit and OpenFloorRemaining record that the rate-limit governor
+	// stopped the open phase: remaining requests of the installation at that
+	// time (-1 when the response carried no header).
+	OpenFloorHit       bool  `json:"ofh,omitempty"`
+	OpenFloorRemaining int64 `json:"ofr,omitempty"`
+	// SaturatedRuns and SaturatedArtifacts record, in two bytes of cursor each,
+	// that the runs or artifacts listing could not be walked past GitHub's cap
+	// of results. The unit result carries them as the long closed-vocabulary
+	// observations (run_inventory_saturated, artifact_inventory_saturated).
+	SaturatedRuns      bool `json:"sr,omitempty"`
+	SaturatedArtifacts bool `json:"sa,omitempty"`
 	// Repo lets the terminal `done` resume publish completion metadata without
 	// re-fetching the repository object.
 	Repo string `json:"repo,omitempty"`
@@ -878,7 +914,8 @@ func decodeGitHubTestsChunkCursor(raw string) (githubTestsChunkCursor, error) {
 	}
 	var cursor githubTestsChunkCursor
 	if json.Unmarshal([]byte(raw), &cursor) != nil ||
-		(cursor.Phase != "runs" && cursor.Phase != "artifacts" && cursor.Phase != "done") ||
+		(cursor.Phase != "runs" && cursor.Phase != "artifacts" && cursor.Phase != githubTestsOpenPhase && cursor.Phase != "done") ||
+		cursor.RangeItems < 0 || cursor.OpenDone < 0 || cursor.OpenCap < 0 ||
 		cursor.Index < 0 || cursor.NextURL == "" && cursor.Index != 0 ||
 		cursor.RunPages < 0 || cursor.ArtifactPages < 0 ||
 		// The counter pair is either both known or both unknown, never split:
@@ -1038,6 +1075,7 @@ func githubTestsFinalMetadataBatch(claim Claim, cursor githubTestsChunkCursor) (
 	incomplete := append(
 		make([]GitHubTestsIncomplete, 0, len(cursor.Incomplete)), cursor.Incomplete...,
 	)
+	incomplete = append(incomplete, githubTestsSaturatedObservations(cursor)...)
 	// Same typed-nil-to-empty-slice normalization as `incomplete` above, and
 	// for the identical reason: a cursor that never skipped an oversized
 	// artifact carries a nil SkippedArtifacts, which marshals to JSON null,
@@ -1076,9 +1114,12 @@ func githubTestsFinalMetadataBatch(claim Claim, cursor githubTestsChunkCursor) (
 			"pipeline_runs_synced": cursor.Pipelines, "job_runs_synced": cursor.Jobs,
 			"acceptance_checks_synced": cursor.Acceptance, "test_suites_synced": cursor.Suites,
 			"test_cases_synced": cursor.Cases, "coverage_snapshots_synced": cursor.Coverage,
-			"repo": cursor.Repo, "reports_complete": len(incomplete) == 0,
+			"repo": cursor.Repo, GitHubTestsResultKeyReportsComplete: len(incomplete) == 0,
 			"reports_skipped": githubTestsIncompleteCount(incomplete),
-			"incomplete":      incomplete,
+			// The open phase's evidence: runs re-read by id, and whether its cap
+			// (not the end of the open rows) stopped it. Never blocks the watermark.
+			GitHubTestsResultKeyOpenRunsReread: cursor.OpenDone, GitHubTestsResultKeyOpenCapReached: cursor.OpenCapReached,
+			GitHubTestsResultKeyIncomplete: incomplete,
 			// Durable per-artifact marker for oversized skips (CHAOS-4315):
 			// the run id/artifact id/size/cap an operator needs to find the
 			// exact GitHub artifact behind an artifact_oversized count,
@@ -1173,7 +1214,8 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 	invocationBaseRequests := cursor.Requests
 	requests := 0
 	counted := *client
-	counted.Doer = githubTestsChunkCountingDoer{delegate: client.Doer, attempts: &requests}
+	var rateObserved githubTestsRateObserver
+	counted.Doer = githubTestsChunkCountingDoer{delegate: client.Doer, attempts: &requests, observed: &rateObserved}
 	client = &counted
 	emitFinalMetadata := func(cursor githubTestsChunkCursor) error {
 		cursor.Phase = "done"
@@ -1187,6 +1229,9 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		batch, batchErr := githubTestsFinalMetadataBatch(claim, cursor)
 		if batchErr != nil {
 			return batchErr
+		}
+		if cursor.OpenFloorHit {
+			batch.Result[GitHubTestsResultKeyOpenPhaseRateFloor] = cursor.OpenFloorRemaining
 		}
 		// CHAOS-4394 telemetry (dev_health_cicd_partial_success_total) is NOT
 		// recorded here. This closure runs once per attempt, including attempts
@@ -1257,6 +1302,125 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		}
 		return emit(ChunkRouteEmission{Batch: batch, CursorBefore: beforeRaw, CursorAfter: afterRaw, Final: final})
 	}
+	lookback := handler.refreshLookback()
+	// endRunsRange is the end of one runs-phase listing range. A listing that
+	// consumed GitHub's cap of results may hide older runs: the next range ends
+	// at the oldest created time seen, in the same phase. A range that makes no
+	// progress is recorded and the phase ends.
+	endRunsRange := func(c githubTestsChunkCursor) githubTestsChunkCursor {
+		nextHi, saturated, stuck := githubTestsPeel(c.RangeItems, c.RangeOldest, c.RangeHi)
+		items, hi := c.RangeItems, c.RangeHi
+		c.RangeItems, c.RangeOldest = 0, ""
+		switch {
+		case !saturated:
+			c.RangeHi = ""
+			c.Phase = githubTestsArtifactsPhase
+		case stuck:
+			c = recordGitHubTestsSaturated(c, client, claim, githubTestsRunInventorySaturatedComponent, githubTestsRunsPhase, hi, items)
+			c.RangeHi = ""
+			c.Phase = githubTestsArtifactsPhase
+		default:
+			c.RangeHi = nextHi
+		}
+		return c
+	}
+	endArtifactsRange := func(c githubTestsChunkCursor) githubTestsChunkCursor {
+		nextHi, saturated, stuck := githubTestsPeel(c.RangeItems, c.RangeOldest, c.RangeHi)
+		items, hi := c.RangeItems, c.RangeHi
+		c.RangeItems, c.RangeOldest = 0, ""
+		switch {
+		case !saturated:
+			c.RangeHi = ""
+			c.Phase = githubTestsPhaseAfterArtifacts(handler)
+		case stuck:
+			c = recordGitHubTestsSaturated(c, client, claim, githubTestsArtifactInventorySaturatedComponent, githubTestsArtifactsPhase, hi, items)
+			c.RangeHi = ""
+			c.Phase = githubTestsPhaseAfterArtifacts(handler)
+		default:
+			c.RangeHi = nextHi
+		}
+		return c
+	}
+	// collectRunDetail reads one run's jobs (and the branch policy its acceptance
+	// rows need) and projects its job and acceptance rows. The runs phase and the
+	// open phase share it, so a re-read run is written exactly like a listed one.
+	collectRunDetail := func(run gitHubWorkflowRunPayload, pipeline githubTestsPipelineRow) ([]githubTestsJobRow, []githubTestsAcceptanceRow, error) {
+		jobs := make([]githubTestsJobRow, 0)
+		jobPage, pageErr := providerfoundation.CollectGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{
+			Path:     root + "/actions/runs/" + url.PathEscape(pipeline.RunID) + "/jobs",
+			Route:    githubRunJobsRoute,
+			Query:    url.Values{"per_page": {strconv.Itoa(githubTestsPerRunPerPage)}},
+			DataKey:  "jobs",
+			MaxPages: jobPages,
+			MaxItems: githubTestsMaxJobsPerRun + 1,
+		})
+		if pageErr != nil {
+			return nil, nil, pageErr
+		}
+		cursor.Requests = invocationBaseRequests + requests
+		cursor.Pages += jobPage.Pages
+		// The paginator reports WHICH bound stopped it, so this reads
+		// the reason instead of inferring one from len(). MaxItems is
+		// cap+1, so ItemCapReached means the provider had at least one
+		// job beyond the cap: the boundary was positively observed.
+		// PageBudgetExhausted means MaxPages ran out first and the
+		// remainder was never seen, which must not advance the
+		// watermark. Item cap is checked first: if both are somehow
+		// set, the observed boundary is the more specific fact.
+		jobItems := jobPage.Items
+		switch {
+		case jobPage.ItemCapReached:
+			if len(jobItems) > githubTestsMaxJobsPerRun {
+				jobItems = jobItems[:githubTestsMaxJobsPerRun]
+			}
+			cursor = recordGitHubTestsPerRunTruncation(
+				cursor, client, claim, githubTestsRunJobsComponent,
+				githubTestsPerRunCapCause, pipeline.RunID, len(jobItems),
+			)
+		// UNREACHABLE through configuration, and KEPT anyway.
+		// validatePerRunPageBudget refuses any jobPages that cannot
+		// outrun the item cap, so with full pages the cap above always
+		// fires first. It is kept, still withholding, for two reasons:
+		// a provider that advertises a next page while returning SHORT
+		// pages can still land here, and deleting it would silently
+		// change this route's semantics if anyone later relaxes that
+		// validation. A branch that cannot fire is honest; a missing
+		// branch is a trapdoor (CHAOS-4142, codex round 2).
+		case jobPage.PageBudgetExhausted:
+			cursor = recordGitHubTestsPerRunTruncation(
+				cursor, client, claim, githubTestsRunJobsComponent,
+				githubTestsPerRunPageBudgetCause, pipeline.RunID, len(jobItems),
+			)
+		}
+		for _, jobRaw := range jobItems {
+			var job githubTestsJobPayload
+			decoder := json.NewDecoder(strings.NewReader(string(jobRaw)))
+			decoder.UseNumber()
+			if decoder.Decode(&job) != nil {
+				return nil, nil, providerfoundation.ErrNormalizationInvalid
+			}
+			row, ok := normalizeGitHubTestsJob(claim, repoID, pipeline.RunID, pipeline.RetryCount, job, normalizedAt)
+			if ok {
+				jobs = append(jobs, row)
+			}
+		}
+		targetBranch, prNumber := gitHubTestsTarget(run)
+		policy := githubTestsPolicy{provenance: "github.branch_protection.target_branch_unavailable"}
+		if targetBranch != nil {
+			cached, ok := policyCache[*targetBranch]
+			if !ok {
+				cached, err = fetchGitHubTestsPolicy(ctx, client, root, *targetBranch)
+				cursor.Requests = invocationBaseRequests + requests
+				if err != nil {
+					return nil, nil, err
+				}
+				policyCache[*targetBranch] = cached
+			}
+			policy = cached
+		}
+		acceptance := projectGitHubTestsChecks(claim, repoID, pipeline, jobs, policy, targetBranch, prNumber, testsOptionalString(stringValue(run.HTMLURL)), normalizedAt)
+		return jobs, acceptance, nil
+	}
 	emitRunPage := func(page providerfoundation.PageVisit) error {
 		cursor.Pages++
 		// Every physical page fetch, including one with zero items or every
@@ -1291,89 +1455,23 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 				return providerfoundation.ErrNormalizationInvalid
 			}
 			pipeline, include := normalizeGitHubTestsPipeline(claim, repoID, run, normalizedAt)
+			cursor.RangeItems++
+			cursor.RangeOldest = githubTestsOlderCreated(cursor.RangeOldest, parseGitHubWorkflowTime(run.CreatedAt))
 			jobs := make([]githubTestsJobRow, 0)
 			acceptance := make([]githubTestsAcceptanceRow, 0)
-			if include && !ciPipelineRunOutsideWindow(pipeline.StartedAt, claim) {
-				jobPage, pageErr := providerfoundation.CollectGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{
-					Path:     root + "/actions/runs/" + url.PathEscape(pipeline.RunID) + "/jobs",
-					Route:    githubRunJobsRoute,
-					Query:    url.Values{"per_page": {strconv.Itoa(githubTestsPerRunPerPage)}},
-					DataKey:  "jobs",
-					MaxPages: jobPages,
-					MaxItems: githubTestsMaxJobsPerRun + 1,
-				})
-				if pageErr != nil {
-					return pageErr
+			if include && githubTestsRunWanted(run, pipeline, claim) {
+				var detailErr error
+				jobs, acceptance, detailErr = collectRunDetail(run, pipeline)
+				if detailErr != nil {
+					return detailErr
 				}
-				cursor.Requests = invocationBaseRequests + requests
-				cursor.Pages += jobPage.Pages
-				// The paginator reports WHICH bound stopped it, so this reads
-				// the reason instead of inferring one from len(). MaxItems is
-				// cap+1, so ItemCapReached means the provider had at least one
-				// job beyond the cap: the boundary was positively observed.
-				// PageBudgetExhausted means MaxPages ran out first and the
-				// remainder was never seen, which must not advance the
-				// watermark. Item cap is checked first: if both are somehow
-				// set, the observed boundary is the more specific fact.
-				jobItems := jobPage.Items
-				switch {
-				case jobPage.ItemCapReached:
-					if len(jobItems) > githubTestsMaxJobsPerRun {
-						jobItems = jobItems[:githubTestsMaxJobsPerRun]
-					}
-					cursor = recordGitHubTestsPerRunTruncation(
-						cursor, client, claim, githubTestsRunJobsComponent,
-						githubTestsPerRunCapCause, pipeline.RunID, len(jobItems),
-					)
-				// UNREACHABLE through configuration, and KEPT anyway.
-				// validatePerRunPageBudget refuses any jobPages that cannot
-				// outrun the item cap, so with full pages the cap above always
-				// fires first. It is kept, still withholding, for two reasons:
-				// a provider that advertises a next page while returning SHORT
-				// pages can still land here, and deleting it would silently
-				// change this route's semantics if anyone later relaxes that
-				// validation. A branch that cannot fire is honest; a missing
-				// branch is a trapdoor (CHAOS-4142, codex round 2).
-				case jobPage.PageBudgetExhausted:
-					cursor = recordGitHubTestsPerRunTruncation(
-						cursor, client, claim, githubTestsRunJobsComponent,
-						githubTestsPerRunPageBudgetCause, pipeline.RunID, len(jobItems),
-					)
-				}
-				for _, jobRaw := range jobItems {
-					var job githubTestsJobPayload
-					decoder := json.NewDecoder(strings.NewReader(string(jobRaw)))
-					decoder.UseNumber()
-					if decoder.Decode(&job) != nil {
-						return providerfoundation.ErrNormalizationInvalid
-					}
-					row, ok := normalizeGitHubTestsJob(claim, repoID, pipeline.RunID, pipeline.RetryCount, job, normalizedAt)
-					if ok {
-						jobs = append(jobs, row)
-					}
-				}
-				targetBranch, prNumber := gitHubTestsTarget(run)
-				policy := githubTestsPolicy{provenance: "github.branch_protection.target_branch_unavailable"}
-				if targetBranch != nil {
-					cached, ok := policyCache[*targetBranch]
-					if !ok {
-						cached, err = fetchGitHubTestsPolicy(ctx, client, root, *targetBranch)
-						cursor.Requests = invocationBaseRequests + requests
-						if err != nil {
-							return err
-						}
-						policyCache[*targetBranch] = cached
-					}
-					policy = cached
-				}
-				acceptance = projectGitHubTestsChecks(claim, repoID, pipeline, jobs, policy, targetBranch, prNumber, testsOptionalString(stringValue(run.HTMLURL)), normalizedAt)
 				cursor.Pipelines++
 				cursor.Jobs += len(jobs)
 				cursor.Acceptance += len(acceptance)
 			}
 			effects, effectErr := testOpsEffects(
 				func() []githubTestsPipelineRow {
-					if include && !ciPipelineRunOutsideWindow(pipeline.StartedAt, claim) {
+					if include && githubTestsRunWanted(run, pipeline, claim) {
 						return []githubTestsPipelineRow{pipeline}
 					}
 					return nil
@@ -1390,7 +1488,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 				after.Index = 0
 				after.NextURL = page.CursorAfter
 				if after.NextURL == "" {
-					after.Phase = "artifacts"
+					after = endRunsRange(after)
 				}
 			}
 			if err := emitCursor(before, after, CompleteRouteBatch{Effects: effects}, false); err != nil {
@@ -1402,51 +1500,148 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 			cursor.NextURL = page.CursorAfter
 			cursor.Index = 0
 			if cursor.NextURL == "" {
-				cursor.Phase = "artifacts"
+				cursor = endRunsRange(cursor)
 			}
 		}
 		return nil
 	}
 
-	if cursor.Phase == "runs" {
-		query := url.Values{"per_page": {"100"}}
-		if claim.SinceAt != nil || claim.BeforeAt != nil {
-			start, end := "*", "*"
-			if claim.SinceAt != nil {
-				start = claim.SinceAt.UTC().Format(time.RFC3339)
-			}
-			if claim.BeforeAt != nil {
-				end = claim.BeforeAt.UTC().Format(time.RFC3339)
-			}
-			query.Set("created", start+".."+end)
-		}
+	for cursor.Phase == githubTestsRunsPhase {
+		query := githubTestsRunsQuery(claim, lookback, cursor.RangeHi)
 		allowance, budgetErr := remainingPageBudget(
 			(maxRuns+nativePerPage-1)/nativePerPage, cursor.RunPages)
-		switch {
-		case errors.Is(budgetErr, ErrPaginationCapExceeded):
+		if errors.Is(budgetErr, ErrPaginationCapExceeded) {
 			cursor = recordGitHubTestsInventoryTruncation(
 				cursor, client, claim, githubTestsRunInventoryComponent, cursor.RunPages)
-		case budgetErr != nil:
+			break
+		}
+		if budgetErr != nil {
 			return budgetErr
-		default:
-			pageOptions := providerfoundation.GitHubPageOptions{Path: root + "/actions/runs", Route: githubRunsRoute, Query: query, DataKey: "workflow_runs", MaxPages: allowance, InitialURL: cursor.NextURL}
-			collection, visitErr := providerfoundation.VisitGitHubLinkPages(ctx, client, pageOptions, emitRunPage)
-			if visitErr != nil {
-				return visitErr
-			}
-			if collection.PageBudgetExhausted {
-				cursor = recordGitHubTestsInventoryTruncation(
-					cursor, client, claim, githubTestsRunInventoryComponent, cursor.RunPages)
-			}
+		}
+		pageOptions := providerfoundation.GitHubPageOptions{Path: root + "/actions/runs", Route: githubRunsRoute, Query: query, DataKey: "workflow_runs", MaxPages: allowance, InitialURL: cursor.NextURL}
+		collection, visitErr := providerfoundation.VisitGitHubLinkPages(ctx, client, pageOptions, emitRunPage)
+		if visitErr != nil {
+			return visitErr
+		}
+		if collection.PageBudgetExhausted {
+			cursor = recordGitHubTestsInventoryTruncation(
+				cursor, client, claim, githubTestsRunInventoryComponent, cursor.RunPages)
+			break
 		}
 	}
 
-	if cursor.Phase != "artifacts" {
-		cursor.Phase = "artifacts"
+	if cursor.Phase == githubTestsRunsPhase {
+		cursor.Phase = githubTestsArtifactsPhase
 		cursor.NextURL, cursor.Index = "", 0
 	}
-	if cursor.Phase == "artifacts" {
-		artifactQuery := githubTestsArtifactRunQuery(claim)
+	handlerOpenRan := false
+	// collectOpenRuns is the open phase: stored pipeline rows still open and
+	// older than the runs listing reaches are re-read by id, oldest first, up to
+	// the cap fixed at the phase start. A run GitHub still has is written like a
+	// listed run (pipeline row, jobs, acceptance); a run it no longer has keeps
+	// its row with the status testops.StatusDeleted.
+	collectOpenRuns := func() error {
+		if claim.SinceAt == nil {
+			cursor.Phase = "done"
+			return nil
+		}
+		startedBefore := claim.SinceAt.UTC().Add(-lookback)
+		if cursor.OpenCap == 0 {
+			backlog, err := handler.OpenRuns.OpenRunBacklog(ctx, claim, repoID, startedBefore, githubTestsOpenRunBacklogThreshold+1)
+			if err != nil {
+				return err
+			}
+			cursor.OpenCap = githubTestsOpenRunCap(backlog)
+		}
+		for cursor.OpenDone < cursor.OpenCap {
+			var afterStarted time.Time
+			if cursor.OpenAfterStarted != "" {
+				parsed, err := time.Parse(time.RFC3339Nano, cursor.OpenAfterStarted)
+				if err != nil {
+					return ErrChunkCheckpointConflict
+				}
+				afterStarted = parsed
+			}
+			rows, err := handler.OpenRuns.OpenRuns(ctx, claim, repoID, startedBefore, afterStarted,
+				cursor.OpenAfterRunID, min(cursor.OpenCap-cursor.OpenDone, 50))
+			if err != nil {
+				return err
+			}
+			cursor.Requests = invocationBaseRequests + requests
+			if len(rows) == 0 {
+				cursor.Phase = "done"
+				return nil
+			}
+			for _, row := range rows {
+				if hit, remaining := rateObserved.belowFloor(); hit {
+					cursor.OpenFloorHit, cursor.OpenFloorRemaining = true, remaining
+					slog.Warn(
+						"open phase stopped: the installation's rate-limit headroom is under the floor, or its headers are missing",
+						"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID, "repository", cursor.Repo,
+						"remaining", remaining, "limit", rateObserved.limit, "floor", rateObserved.floor(), "reread", cursor.OpenDone,
+					)
+					cursor.Phase = "done"
+					return nil
+				}
+				before := cursor
+				run, found, fetchErr := fetchGitHubTestsRun(ctx, client, root, row.RunID)
+				cursor.Requests = invocationBaseRequests + requests
+				if fetchErr != nil {
+					return fetchErr
+				}
+				var pipelines []githubTestsPipelineRow
+				jobs := make([]githubTestsJobRow, 0)
+				acceptance := make([]githubTestsAcceptanceRow, 0)
+				if !found {
+					pipelines = []githubTestsPipelineRow{githubTestsDeletedRow(row, normalizedAt)}
+					slog.Info(
+						"open run no longer exists at the provider; its row is marked deleted",
+						"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
+						"repository", cursor.Repo, logging.ProviderIDAttr("run", row.RunID),
+					)
+				} else if pipeline, include := normalizeGitHubTestsPipeline(claim, repoID, run, normalizedAt); include {
+					var detailErr error
+					jobs, acceptance, detailErr = collectRunDetail(run, pipeline)
+					if detailErr != nil {
+						return detailErr
+					}
+					pipelines = []githubTestsPipelineRow{pipeline}
+					cursor.Pipelines++
+					cursor.Jobs += len(jobs)
+					cursor.Acceptance += len(acceptance)
+				}
+				effects, effectErr := testOpsEffects(pipelines, jobs, acceptance, nil, nil, nil)
+				if effectErr != nil {
+					return effectErr
+				}
+				after := cursor
+				after.OpenDone++
+				after.OpenAfterStarted = row.StartedAt.UTC().Format(time.RFC3339Nano)
+				after.OpenAfterRunID = row.RunID
+				if err := emitCursor(before, after, CompleteRouteBatch{Effects: effects}, false); err != nil {
+					return err
+				}
+				cursor = after
+			}
+		}
+		cursor.OpenCapReached = true
+		cursor.Phase = "done"
+		return nil
+	}
+	logOpenPhase := func() {
+		if !handlerOpenRan {
+			return
+		}
+		slog.Info(
+			"open phase finished",
+			"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID, "repository", cursor.Repo,
+			"reread", cursor.OpenDone, "cap", cursor.OpenCap, "cap_reached", cursor.OpenCapReached,
+			"floor_hit", cursor.OpenFloorHit, "rate_limit_remaining", rateObserved.remaining,
+			"rate_limit_limit", rateObserved.limit, "rate_limit_floor", rateObserved.floor(),
+		)
+	}
+	for cursor.Phase == githubTestsArtifactsPhase {
+		artifactQuery := githubTestsArtifactRunQueryAt(claim, cursor.RangeHi)
 		artifactPage := func(page providerfoundation.PageVisit) error {
 			cursor.Pages++
 			// See emitRunPage's identical unconditional refresh above: this
@@ -1501,6 +1696,8 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 					return providerfoundation.ErrNormalizationInvalid
 				}
 				pipeline, include := normalizeGitHubTestsPipeline(claim, repoID, run, normalizedAt)
+				cursor.RangeItems++
+				cursor.RangeOldest = githubTestsOlderCreated(cursor.RangeOldest, parseGitHubWorkflowTime(run.CreatedAt))
 				suites := []testSuiteResultRow(nil)
 				cases := []testCaseResultRow(nil)
 				coverage := []coverageSnapshotRow(nil)
@@ -1928,16 +2125,17 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 				if after.Index >= len(page.Items) {
 					after.Index = 0
 					after.NextURL = page.CursorAfter
-					// Publish the terminal phase the moment the last artifact
-					// page is consumed, exactly as the runs phase publishes
-					// "artifacts". Without it a cursor at {phase:artifacts,
-					// next_url:"", index:0} is indistinguishable from a phase
-					// that has not started, so a continuation landing on the
-					// last item of the last page re-walked the WHOLE artifacts
-					// phase -- spending two fresh pages of budget per lap
-					// until the cap stopped it (CHAOS-4130).
+					// Publish the next phase (open, else the terminal one) the
+					// moment the last artifact page is consumed, exactly as the
+					// runs phase publishes "artifacts". Without it a cursor at
+					// {phase:artifacts, next_url:"", index:0} is
+					// indistinguishable from a phase that has not started, so a
+					// continuation landing on the last item of the last page
+					// re-walked the WHOLE artifacts phase -- spending two fresh
+					// pages of budget per lap until the cap stopped it
+					// (CHAOS-4130).
 					if after.NextURL == "" {
-						after.Phase = "done"
+						after = endArtifactsRange(after)
 					}
 				}
 				if err := emitCursor(before, after, CompleteRouteBatch{Effects: effects}, false); err != nil {
@@ -1949,29 +2147,43 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 				cursor.NextURL = page.CursorAfter
 				cursor.Index = 0
 				if cursor.NextURL == "" {
-					cursor.Phase = "done"
+					cursor = endArtifactsRange(cursor)
 				}
 			}
 			return nil
 		}
 		allowance, budgetErr := remainingPageBudget(
 			(maxRuns+nativePerPage-1)/nativePerPage, cursor.ArtifactPages)
-		switch {
-		case errors.Is(budgetErr, ErrPaginationCapExceeded):
+		if errors.Is(budgetErr, ErrPaginationCapExceeded) {
 			cursor = recordGitHubTestsInventoryTruncation(
 				cursor, client, claim, githubTestsArtifactInventoryComponent, cursor.ArtifactPages)
-		case budgetErr != nil:
-			return budgetErr
-		default:
-			collection, visitErr := providerfoundation.VisitGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{Path: root + "/actions/runs", Route: githubRunsRoute, Query: artifactQuery, DataKey: "workflow_runs", MaxPages: allowance, InitialURL: cursor.NextURL}, artifactPage)
-			if visitErr != nil {
-				return visitErr
-			}
-			if collection.PageBudgetExhausted {
-				cursor = recordGitHubTestsInventoryTruncation(
-					cursor, client, claim, githubTestsArtifactInventoryComponent, cursor.ArtifactPages)
-			}
+			break
 		}
+		if budgetErr != nil {
+			return budgetErr
+		}
+		collection, visitErr := providerfoundation.VisitGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{Path: root + "/actions/runs", Route: githubRunsRoute, Query: artifactQuery, DataKey: "workflow_runs", MaxPages: allowance, InitialURL: cursor.NextURL}, artifactPage)
+		if visitErr != nil {
+			return visitErr
+		}
+		if collection.PageBudgetExhausted {
+			cursor = recordGitHubTestsInventoryTruncation(
+				cursor, client, claim, githubTestsArtifactInventoryComponent, cursor.ArtifactPages)
+			break
+		}
+	}
+
+	// A listing that ran out of page budget leaves the artifacts phase here
+	// with its phase unchanged; the open phase does not depend on it.
+	if cursor.Phase == githubTestsArtifactsPhase {
+		cursor.Phase = githubTestsPhaseAfterArtifacts(handler)
+	}
+	if cursor.Phase == githubTestsOpenPhase {
+		handlerOpenRan = true
+		if err := collectOpenRuns(); err != nil {
+			return err
+		}
+		logOpenPhase()
 	}
 
 	// The inventory scan is complete. Publishing the terminal phase in the

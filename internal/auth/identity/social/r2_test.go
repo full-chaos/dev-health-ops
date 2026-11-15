@@ -1,6 +1,7 @@
 package social
 
 import (
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/refusedaddr"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -32,6 +33,7 @@ func TestProviderFailuresAnswerLikeGoAPI(t *testing.T) {
 			url := server.URL
 			if c.status == 0 {
 				server.Close()
+				url = "http://" + refusedaddr.Addr(t)
 			} else {
 				defer server.Close()
 			}

@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -27,6 +26,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
 	"github.com/full-chaos/dev-health-ops/internal/auth/signedtoken"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/refusedaddr"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/sessionscenario"
 )
 
@@ -181,12 +181,7 @@ func TestSessionsOwnedByAuthAnswer503WhenTheIssueRouteIsDown(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	t.Setenv("TRUSTED_PROXIES", "127.0.0.1,::1")
-	closed, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	down := "http://" + closed.Addr().String()
-	_ = closed.Close()
+	down := "http://" + refusedaddr.Addr(t)
 	st := startStackWith(t, ctx, issueClient(t, down), nil)
 	before := refreshTokenRows(t, ctx, st)
 	hashBefore := passwordHashOf(t, ctx, st, changeAlice)

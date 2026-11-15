@@ -18,6 +18,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/authzenforce"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/pdp"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/pdp/pdptest"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/refusedaddr"
 )
 
 type gatedREST struct {
@@ -121,9 +122,7 @@ func TestRESTPDPEnforceDenyIs403(t *testing.T) {
 
 // Enforce (the analytics cell on): PDP down is 503, never a pass.
 func TestRESTPDPEnforceDownIs503(t *testing.T) {
-	closed := httptest.NewServer(http.NotFoundHandler())
-	base := closed.URL
-	closed.Close()
+	base := "http://" + refusedaddr.Addr(t)
 	g := newGatedREST(t, pdp.ModeEnforce, "analytics", base, true)
 	if got := g.do(http.MethodGet, g.userToken()); got != gatedUnavailable {
 		t.Fatalf("PDP down: got %+v, want %+v", got, gatedUnavailable)

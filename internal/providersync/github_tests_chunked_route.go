@@ -1451,7 +1451,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 			artifactQuery.Set("branch", repo.DefaultBranch)
 		}
 		if claim.SinceAt != nil {
-			artifactQuery.Set("created", ">="+claim.SinceAt.UTC().Format(time.DateOnly))
+			artifactQuery.Set("created", ">="+githubTestsArtifactRunsCreatedFrom(claim))
 		}
 		artifactPage := func(page providerfoundation.PageVisit) error {
 			cursor.Pages++
@@ -1510,7 +1510,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 				suites := []testSuiteResultRow(nil)
 				cases := []testCaseResultRow(nil)
 				coverage := []coverageSnapshotRow(nil)
-				if include && !githubTestsReportRunOutsideWindow(pipeline, claim) {
+				if include && githubTestsRunReadable(run) && !githubTestsReportRunOutsideWindow(pipeline, claim) {
 					artPage, pageErr := providerfoundation.CollectGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{
 						Path:  root + "/actions/runs/" + url.PathEscape(pipeline.RunID) + "/artifacts",
 						Route: githubRunArtifactsRoute,

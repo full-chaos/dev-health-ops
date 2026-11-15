@@ -2,6 +2,7 @@ package goapiproof
 
 import (
 	"context"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/refusedaddr"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -186,9 +187,7 @@ func TestTheMeasuredLegNeverLeaksItsURL(t *testing.T) {
 	const secret = "s3cret-in-the-query-string-91af"
 
 	// A closed port: the connection fails and the error is built by post.
-	closed := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
-	edgeURL := closed.URL + "/graphql?token=" + secret
-	closed.Close()
+	edgeURL := "http://" + refusedaddr.Addr(t) + "/graphql?token=" + secret
 
 	runner := newRunner(t, &fakeEdge{goBody: `{"data":{}}`, pythonBody: `{"data":{}}`}, "canary")
 	runner.Config.PythonEdgeURL = edgeURL

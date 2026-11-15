@@ -17,14 +17,14 @@ const (
 	qualityLegPrefix = "go-quality-leg ("
 )
 
-// static, plan-reads, test 1..13, race 1..6.
+// static, plan-reads, test 1..13, race 1..12.
 var qualityLegNames = func() []string {
 	names := []string{"static", "plan-reads"}
 	for k := 1; k <= 13; k++ {
 		names = append(names, fmt.Sprintf("test-%d-of-13", k))
 	}
-	for k := 1; k <= 6; k++ {
-		names = append(names, fmt.Sprintf("race-%d-of-6", k))
+	for k := 1; k <= 12; k++ {
+		names = append(names, fmt.Sprintf("race-%d-of-12", k))
 	}
 	return names
 }()
@@ -354,8 +354,8 @@ func TestGoQualityLegSkipIsPushOnlyNeverStaticAndKeepsReceipts(t *testing.T) {
 	if strings.Join(names, ",") != strings.Join(qualityLegNames, ",") {
 		t.Errorf("matrix legs %v differ from the pinned list %v", names, qualityLegNames)
 	}
-	if len(names) != 21 {
-		t.Errorf("the matrix has %d legs, want 21 (static + plan-reads + 13 test + 6 race)", len(names))
+	if len(names) != 27 {
+		t.Errorf("the matrix has %d legs, want 27 (static + plan-reads + 13 test + 12 race)", len(names))
 	}
 }
 

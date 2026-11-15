@@ -2,9 +2,12 @@ package daily
 
 import (
 	"encoding/json"
+	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -31,6 +34,15 @@ import (
 // This proves the testops_risk family's FULL row output, field for field,
 // for all three of its sub-outputs (release_confidence/quality_drag/
 // pipeline_stability) against the Python authority, including factors_json.
+//
+// DIVERGENCE (pm ruling A, 2026-11-15, CHAOS-13841): the release_confidence row
+// no longer matches Python in four fields. Python took the LAST (team, service)
+// group's success rate; the Go job takes the repository's summed rate (and the
+// repository's summed passed over passed plus failed, skipped out). The golden
+// file is NOT regenerated: the Python values stay recorded, and
+// riskGoldenDivergences lists each changed field with its Python value, its new
+// value (computed from the fixture's raw rows, not by the function under test)
+// and the reason.
 func TestTestopsRiskComputeMatchesFrozenPythonGolden(t *testing.T) {
 	var golden testopsRiskGoldenDocument
 	data, err := os.ReadFile(filepath.Join("testdata", "testops_risk_parity_golden.json"))
@@ -124,15 +136,28 @@ func TestTestopsRiskComputeMatchesFrozenPythonGolden(t *testing.T) {
 		test = &testMetrics[0]
 	}
 
-	releaseConfidenceRow := computeReleaseConfidence(repoID, day, pipe, test, coverageMetric, computedAt)
+	// The release confidence reads the repository's summed counts (CHAOS-13841, pm ruling A 11-15); the
+	// quality drag and the stability rows keep the representatives and the group list, as before.
+	confidencePipe, confidenceTest := repoSummedConfidenceInputs(pipe, pipelineMetrics, test, testMetrics)
+	releaseConfidenceRow := computeReleaseConfidence(repoID, day, confidencePipe, confidenceTest, coverageMetric, computedAt)
 	qualityDragRow := computeQualityDrag(repoID, day, pipe, test, computedAt)
 	pipelineStabilityRow := computePipelineStability(repoID, day, pipelineMetrics, computedAt)
 
 	if releaseConfidenceRow == nil {
 		t.Fatal("computeReleaseConfidence returned nil")
 	}
-	if got, want := toReleaseConfidenceGoldenRow(*releaseConfidenceRow), golden.ReleaseConfidence[0]; !reflect.DeepEqual(got, want) {
-		t.Errorf("release_confidence mismatch:\n got  %+v\n want %+v", got, want)
+	// Python's recorded values are kept as the golden; the fields below are the DIVERGENCE list (the rate is the
+	// repository's sum, not the last team group's). The new values come from the fixture's RAW rows, summed by
+	// repository with skipped cases out of the pass-rate denominator, not from the function under test.
+	wantRow := golden.ReleaseConfidence[0]
+	for _, d := range riskGoldenDivergences(t, wantRow, pipelineRuns, suites, cases) {
+		if d.pythonFragment != "" && !strings.Contains(wantRow.FactorsJSON, d.pythonFragment) {
+			t.Fatalf("divergence %s: the Python golden no longer holds %q", d.field, d.pythonFragment)
+		}
+		d.apply(&wantRow)
+	}
+	if got := toReleaseConfidenceGoldenRow(*releaseConfidenceRow); !reflect.DeepEqual(got, wantRow) {
+		t.Errorf("release_confidence mismatch:\n got  %+v\n want %+v", got, wantRow)
 	}
 
 	if qualityDragRow == nil {
@@ -244,3 +269,64 @@ func riskStrPtr(v string) *string        { return &v }
 func riskFloatPtr(v float64) *float64    { return &v }
 func riskUintPtr(v uint32) *uint32       { return &v }
 func riskTimePtr(v time.Time) *time.Time { return &v }
+
+// riskDivergence is one recorded difference between the frozen Python golden and the Go output after the pm ruling
+// (11-15): a repository's rate is its summed counts over its denominator, never one team group's rate.
+type riskDivergence struct {
+	field          string
+	python, now    string
+	reason         string
+	pythonFragment string
+	apply          func(*releaseConfidenceGoldenRow)
+}
+
+func riskGoldenDivergences(t *testing.T, golden releaseConfidenceGoldenRow, runs []testops.PipelineRunRow, suites []testops.SuiteRow, cases []testops.CaseRow) []riskDivergence {
+	t.Helper()
+	round4 := func(v float64) float64 { return math.Round(v*1e4) / 1e4 }
+	success := 0
+	for _, run := range runs {
+		if run.Status != nil && *run.Status == "success" {
+			success++
+		}
+	}
+	pipelineRate := float64(success) / float64(len(runs))
+	passed, failed := 0, 0
+	for _, suite := range suites {
+		passed += int(suite.PassedCount)
+		failed += int(suite.FailedCount)
+	}
+	passRate := float64(passed) / float64(passed+failed)
+	statuses := map[string]map[string]bool{}
+	for _, c := range cases {
+		if statuses[c.CaseName] == nil {
+			statuses[c.CaseName] = map[string]bool{}
+		}
+		statuses[c.CaseName][*c.Status] = true
+	}
+	flaky := 0
+	for _, seen := range statuses {
+		if seen["passed"] && seen["failed"] {
+			flaky++
+		}
+	}
+	flakeRate := float64(flaky) / float64(len(statuses))
+	base := 0.4*pipelineRate + 0.3*passRate + golden.CoverageFactor + 0.1*(1-flakeRate)
+	score := round4(math.Max(0, math.Min(1, base-golden.FlakePenalty-golden.RegressionPenalty)))
+	if round4(passRate) != 0.7333 {
+		t.Fatalf("raw pass rate %v: the fixture changed, recompute the divergence list", passRate)
+	}
+	return []riskDivergence{
+		{"pipeline_success_factor", "0.4", fmt.Sprint(round4(0.4 * pipelineRate)), "last group's rate (1/1) replaced by the repository's 2/3", "",
+			func(r *releaseConfidenceGoldenRow) { r.PipelineSuccessFactor = round4(0.4 * pipelineRate) }},
+		{"factors_json.pipeline_success_rate", "1.0", fmt.Sprint(round4(pipelineRate)), "same", `"pipeline_success_rate": 1.0`,
+			func(r *releaseConfidenceGoldenRow) {
+				r.FactorsJSON = strings.Replace(r.FactorsJSON, `"pipeline_success_rate": 1.0`, fmt.Sprintf(`"pipeline_success_rate": %v`, round4(pipelineRate)), 1)
+			}},
+		{"factors_json.base_score", "0.8467", fmt.Sprint(round4(base)), "follows the pipeline factor", `"base_score": 0.8467`,
+			func(r *releaseConfidenceGoldenRow) {
+				r.FactorsJSON = strings.Replace(r.FactorsJSON, `"base_score": 0.8467`, fmt.Sprintf(`"base_score": %v`, round4(base)), 1)
+			}},
+		{"confidence_score", "0.5967", fmt.Sprint(score), "follows the pipeline factor", "",
+			func(r *releaseConfidenceGoldenRow) { r.ConfidenceScore = score }},
+	}
+}

@@ -153,7 +153,8 @@ func (executor *TestopsRiskExecutor) ComputeFamily(
 			testRepresentative = &testMetrics[0]
 		}
 
-		if row := computeReleaseConfidence(repoID, day, pipeRepresentative, testRepresentative, coverageMetric, computedAt); row != nil {
+		confidencePipe, confidenceTest := repoSummedConfidenceInputs(pipeRepresentative, pipelineMetrics, testRepresentative, testMetrics)
+		if row := computeReleaseConfidence(repoID, day, confidencePipe, confidenceTest, coverageMetric, computedAt); row != nil {
 			releaseConfidence = append(releaseConfidence, *row)
 		}
 		if row := computeQualityDrag(repoID, day, pipeRepresentative, testRepresentative, computedAt); row != nil {
@@ -195,3 +196,32 @@ func wrapTestopsRiskPartialWrite(written int, err error) (int, error) {
 }
 
 var _ NativeFamilyExecutor = (*TestopsRiskExecutor)(nil)
+
+// repoSummedConfidenceInputs returns the pipeline and test metrics the release confidence reads: the
+// representative groups (they carry the row's team, service and the flake inputs) with their counts replaced
+// by the sums over every (team, service) group of the repository, so the factors are the repository's rate and
+// not one group's. The quality drag and the stability rows keep the representatives and the group list.
+func repoSummedConfidenceInputs(
+	pipe *testops.PipelineMetric, pipelines []testops.PipelineMetric,
+	test *testops.TestMetric, tests []testops.TestMetric,
+) (*testops.PipelineMetric, *testops.TestMetric) {
+	if pipe != nil {
+		summed := *pipe
+		summed.PipelinesCount, summed.SuccessCount = 0, 0
+		for _, group := range pipelines {
+			summed.PipelinesCount += group.PipelinesCount
+			summed.SuccessCount += group.SuccessCount
+		}
+		pipe = &summed
+	}
+	if test != nil {
+		summed := *test
+		summed.PassedCount, summed.FailedCount = 0, 0
+		for _, group := range tests {
+			summed.PassedCount += group.PassedCount
+			summed.FailedCount += group.FailedCount
+		}
+		test = &summed
+	}
+	return pipe, test
+}

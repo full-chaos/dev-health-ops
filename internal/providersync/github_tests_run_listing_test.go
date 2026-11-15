@@ -263,6 +263,7 @@ type listingWalk struct {
 	final     CompleteRouteBatch
 	cursor    githubTestsChunkCursor
 	chunks    int
+	passes    int
 }
 
 // walkListing drives CollectChunks to its final emission and keeps every pipeline row the unit wrote.
@@ -291,6 +292,10 @@ func walkListing(t *testing.T, handler GitHubTestsRouteHandler, claim Claim, fak
 							t.Fatal(decodeErr)
 						}
 						walk.pipelines = append(walk.pipelines, rows...)
+						// ClickHouse replaces a stored row by a later write: the store the reader sees follows the chunks.
+						if store, ok := handler.OpenRuns.(*fakeOpenRuns); ok {
+							store.finalize(rows)
+						}
 					case "ci_job_runs":
 						rows, decodeErr := decodeEffectRows[githubTestsJobRow](effect)
 						if decodeErr != nil {
@@ -319,6 +324,7 @@ func walkListing(t *testing.T, handler GitHubTestsRouteHandler, claim Claim, fak
 				t.Fatal(decodeErr)
 			}
 			walk.cursor = cursor
+			walk.passes = pass
 			return walk
 		}
 		if !errors.Is(err, stop) {
@@ -877,5 +883,78 @@ func TestACursorFromBeforeThePeelStillDecodes(t *testing.T) {
 	}
 	if _, err := decodeGitHubTestsChunkCursor(`{"phase":"open","oc":-1,"repo":"x","archives_seen":0,"archives_unreadable":0}`); err == nil {
 		t.Fatal("a negative open cap is a corrupt cursor")
+	}
+}
+
+// The open phase over several invocations (the walk yields every 40 chunks): the backlog is read once, the cap is fixed
+// at the phase start (300 for 1,100 rows although the backlog falls under 1,000 as rows are finalized), each row is
+// re-read once and the floor marker never shows.
+func TestOpenPhaseCapAndBacklogAreFixedAtThePhaseStartAcrossInvocations(t *testing.T) {
+	repoID := listingRepoID(t)
+	fake := newListingFake(t, makeListingRuns(1, 1, listingSince, time.Minute))
+	first := listingSince.Add(-60 * 24 * time.Hour)
+	var rows []githubTestsPipelineRow
+	for index := 0; index < 1100; index++ {
+		started := first.Add(time.Duration(index) * time.Minute)
+		id := 200000 + index
+		rows = append(rows, openRow(repoID, strconv.Itoa(id), started, "running"))
+		fake.byID[id] = listingRun{id: id, created: started, updated: started.Add(time.Hour), status: "completed", conclusion: "success"}
+	}
+	reader := &fakeOpenRuns{rows: rows}
+	walk := walkListing(t, GitHubTestsRouteHandler{OpenRuns: reader}, openWindowClaim(), fake, 40)
+	if walk.passes < 3 {
+		t.Fatalf("the walk took %d invocations, want at least 3 to cross the resumes", walk.passes)
+	}
+	if got := walk.final.Result["open_runs_reread"]; got != 300 {
+		t.Fatalf("open_runs_reread = %v, want the cap 300 fixed at the phase start", got)
+	}
+	if reader.backlogs != 1 {
+		t.Fatalf("the backlog was read %d times, want once", reader.backlogs)
+	}
+	seen := map[int]int{}
+	for _, id := range fake.runGets {
+		seen[id]++
+	}
+	if len(seen) != 300 || len(fake.runGets) != 300 {
+		t.Fatalf("%d by-id reads over %d distinct runs, want 300 once each", len(fake.runGets), len(seen))
+	}
+	if _, hit := walk.final.Result["open_phase_rate_floor"]; hit {
+		t.Fatal("no floor marker is expected")
+	}
+	if capReached, _ := walk.final.Result["open_runs_cap_reached"].(bool); !capReached {
+		t.Fatal("the cap stopped the phase")
+	}
+	if walk.cursor.OpenCap != 300 {
+		t.Fatalf("cursor open cap = %d, want 300", walk.cursor.OpenCap)
+	}
+}
+
+// The 8,000-run split resumed in the middle of pages (the walk yields every 37 chunks) writes the same rows as the
+// unbroken walk: no run is lost and a resume adds no duplicate. (The one run at each cut second is written by two
+// ranges, so the rows exceed the runs by the number of peels in both walks alike.)
+func TestRunsListingPeelResumesMidPageWithoutLoss(t *testing.T) {
+	runs := makeListingRuns(1, 8000, listingSince, 10*time.Second)
+	claim := listingClaim(listingSince, listingSince.Add(24*time.Hour))
+	unbrokenFake := newListingFake(t, runs)
+	unbrokenFake.requestCeiling = 2000000
+	unbroken := walkListing(t, GitHubTestsRouteHandler{}, claim, unbrokenFake, 0)
+	fake := newListingFake(t, runs)
+	fake.requestCeiling = 2000000
+	walk := walkListing(t, GitHubTestsRouteHandler{}, claim, fake, 37)
+	if walk.passes < 100 {
+		t.Fatalf("the walk took %d invocations, want it split into many", walk.passes)
+	}
+	ids := walk.pipelineIDs()
+	if len(ids) != 8000 {
+		t.Fatalf("%d distinct runs, want 8,000", len(ids))
+	}
+	if len(walk.pipelines) != len(unbroken.pipelines) {
+		t.Fatalf("resumed walk wrote %d rows, unbroken walk %d: a resume must add none", len(walk.pipelines), len(unbroken.pipelines))
+	}
+	if complete, _ := walk.final.Result["reports_complete"].(bool); !complete {
+		t.Fatalf("incomplete = %v", walk.incompleteComponents())
+	}
+	if walk.final.Watermark == nil || !walk.final.Watermark.Equal(*claim.BeforeAt) {
+		t.Fatalf("watermark = %v, want the window end", walk.final.Watermark)
 	}
 }

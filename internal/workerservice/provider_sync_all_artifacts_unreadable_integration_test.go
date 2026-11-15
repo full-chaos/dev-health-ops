@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/chmigrate"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
@@ -147,15 +148,17 @@ func TestProviderUnitAllArtifactsUnreadableTerminalizesOnFirstAttempt(t *testing
 	}
 
 	// The open phase reads the stored open pipeline rows once the listing phases end, so the table must exist (empty).
-	if err := clickhouseConn.Exec(ctx, `CREATE TABLE ci_pipeline_runs (
-  repo_id UUID, run_id String, status Nullable(String), queued_at Nullable(DateTime64(3, 'UTC')),
-  started_at DateTime64(3, 'UTC'), finished_at Nullable(DateTime64(3, 'UTC')), last_synced DateTime64(3, 'UTC'),
-  org_id String DEFAULT 'default', pipeline_name Nullable(String), provider LowCardinality(String) DEFAULT '',
-  duration_seconds Nullable(Float64), queue_seconds Nullable(Float64), retry_count UInt32 DEFAULT 0,
-  cancel_reason Nullable(String), trigger_source Nullable(String), commit_hash Nullable(String),
-  branch Nullable(String), pr_number Nullable(UInt32), team_id Nullable(String), service_id Nullable(String)
-) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, run_id)`); err != nil {
+	baseline, err := chmigrate.LoadBaseline()
+	if err != nil {
 		t.Fatal(err)
+	}
+	for _, object := range baseline.Objects {
+		if object.Name != "ci_pipeline_runs" {
+			continue
+		}
+		if err := clickhouseConn.Exec(ctx, object.Create); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	valkey, err := containers.StartValkey(ctx)

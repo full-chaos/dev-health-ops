@@ -8,20 +8,28 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/chmigrate"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
-const ciPipelineRunsDDL = `
-CREATE TABLE ci_pipeline_runs (
-  repo_id UUID, run_id String, status Nullable(String), queued_at Nullable(DateTime64(3, 'UTC')),
-  started_at DateTime64(3, 'UTC'), finished_at Nullable(DateTime64(3, 'UTC')), last_synced DateTime64(3, 'UTC'),
-  org_id String DEFAULT 'default', pipeline_name Nullable(String), provider LowCardinality(String) DEFAULT '',
-  duration_seconds Nullable(Float64), queue_seconds Nullable(Float64), retry_count UInt32 DEFAULT 0,
-  cancel_reason Nullable(String), trigger_source Nullable(String), commit_hash Nullable(String),
-  branch Nullable(String), pr_number Nullable(UInt32), team_id Nullable(String), service_id Nullable(String)
-) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, run_id)`
+// ciPipelineRunsDDL is the table as the migrations build it: the head of the ClickHouse baseline (no later chain file
+// alters ci_pipeline_runs).
+func ciPipelineRunsDDL(t *testing.T) string {
+	t.Helper()
+	baseline, err := chmigrate.LoadBaseline()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, object := range baseline.Objects {
+		if object.Name == "ci_pipeline_runs" {
+			return object.Create
+		}
+	}
+	t.Fatal("ci_pipeline_runs is not in the baseline")
+	return ""
+}
 
 // The ClickHouse reader of the open phase on the real table shape: its key prefix, FINAL, the status and provider
 // filters, the keyset order and the started-before bound (an epoch start time is older than any bound).
@@ -44,7 +52,7 @@ func TestGitHubOpenRunsClickHouseReader(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = conn.Close() })
-	if err := conn.Exec(ctx, ciPipelineRunsDDL); err != nil {
+	if err := conn.Exec(ctx, ciPipelineRunsDDL(t)); err != nil {
 		t.Fatal(err)
 	}
 	const repoA, repoB = "11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222"

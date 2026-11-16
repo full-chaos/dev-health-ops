@@ -368,7 +368,7 @@ func DiagnoseRolePosture(
 	}
 
 	if len(posture.ColumnScoped) > 0 {
-		columnGaps, err := diagnoseColumnPosture(ctx, pool, expectedRole, posture.ColumnScoped)
+		columnGaps, err := diagnoseColumnPosture(ctx, pool, expectedRole, posture.ColumnScoped, posture.RetiredColumns)
 		if err != nil {
 			return nil, err
 		}
@@ -657,7 +657,12 @@ func diagnoseColumnPosture(
 	pool *pgxpool.Pool,
 	expectedRole string,
 	columns []ColumnPrivilege,
+	retiredColumns []ColumnPrivilege,
 ) ([]PostureGap, error) {
+	retired := make(map[ColumnPrivilege]bool, len(retiredColumns))
+	for _, column := range retiredColumns {
+		retired[column] = true
+	}
 	tableNames := make([]string, len(columns))
 	columnNames := make([]string, len(columns))
 	privileges := make([]string, len(columns))
@@ -686,7 +691,8 @@ func diagnoseColumnPosture(
 			gaps = append(gaps, PostureGap{TableName: tableName, ColumnName: columnName, TableMissing: true})
 			continue
 		}
-		if missing {
+		// RolePosture.RetiredColumns: a retired column privilege that is not held is no gap.
+		if missing && !retired[ColumnPrivilege{tableName, columnName, privilege}] {
 			gaps = append(gaps, PostureGap{TableName: tableName, ColumnName: columnName, Missing: []string{privilege}})
 		}
 		if excessGrant {

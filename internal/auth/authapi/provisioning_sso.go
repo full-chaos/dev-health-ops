@@ -46,11 +46,13 @@ const (
 	opSSOProviderDeactivate = "sso_provider_deactivate"
 )
 
-// Refusal codes of the SSO provider routes: the 404 and the two 400s of the legacy router.
+// Refusal codes of the SSO provider routes: the 404 and the two 400s of the legacy router, and the 409 of a name the
+// organization already uses (legacy: an uncaught IntegrityError, a bare 500).
 const (
-	reasonSSOProviderNotFound = "sso_provider_not_found"
-	reasonSAMLConfigRequired  = "saml_config_required"
-	reasonOIDCConfigRequired  = "oidc_config_required"
+	reasonSSOProviderNotFound  = "sso_provider_not_found"
+	reasonSAMLConfigRequired   = "saml_config_required"
+	reasonOIDCConfigRequired   = "oidc_config_required"
+	reasonSSOProviderNameTaken = "sso_provider_name_taken"
 )
 
 // Legacy texts of those refusals, as go-api's caller answers them.
@@ -351,8 +353,11 @@ func (h provisioningHandlers) ensureOrganization(w http.ResponseWriter, r *http.
 
 func (h provisioningHandlers) ssoStoreFailure(w http.ResponseWriter, r *http.Request, op string, err error) {
 	answer := unavailable(reasonStoreUnavailable)
-	if errors.Is(err, ssoprovider.ErrNotFound) {
+	switch {
+	case errors.Is(err, ssoprovider.ErrNotFound):
 		answer = refusal{http.StatusNotFound, reasonSSOProviderNotFound}
+	case errors.Is(err, ssoprovider.ErrNameTaken):
+		answer = refusal{http.StatusConflict, reasonSSOProviderNameTaken}
 	}
 	h.rec.refuse(w, r, op, answer, failure(answer, err))
 }

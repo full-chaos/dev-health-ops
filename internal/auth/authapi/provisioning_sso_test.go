@@ -3,6 +3,7 @@ package authapi
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -421,5 +422,19 @@ func TestSSOProviderCreateStoresTheConfigInTheModelFieldOrder(t *testing.T) {
 		`"name_id_format": "urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress", "attribute_mapping": {"b": "2", "a": "1"}}`
 	if err != nil || stored != want {
 		t.Fatalf("stored saml config = %s (%v), want %s", stored, err, want)
+	}
+}
+
+// A create or rename to a name the organization already uses is the store's ErrNameTaken: 409 sso_provider_name_taken,
+// never the 503 of a store fault (legacy: an uncaught IntegrityError, a bare 500).
+func TestSSOProviderNameTakenIs409AndOtherStoreFaultsStay503(t *testing.T) {
+	t.Parallel()
+	for _, c := range []ssoRouteCase{ssoRouteCases()[1], ssoRouteCases()[3]} {
+		f := newProvFixtureFor(t, nil, nil)
+		f.sso.err = fmt.Errorf("wrapped: %w", ssoprovider.ErrNameTaken)
+		expectRefusal(t, f.post(c.path, c.body(f, f.owner), nil), http.StatusConflict, reasonSSOProviderNameTaken)
+		f = newProvFixtureFor(t, nil, nil)
+		f.sso.err = fmt.Errorf("%w: duplicate key", ssoprovider.ErrStore)
+		expectRefusal(t, f.post(c.path, c.body(f, f.owner), nil), http.StatusServiceUnavailable, reasonStoreUnavailable)
 	}
 }

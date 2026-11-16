@@ -182,4 +182,70 @@ VALUES ($1, $2, NULL, 'local', true, true, false, 0, now(), now())`, actor, "sso
 	if a1, o1 := counts("auth.sso_provider.updated"); a1 != a0 || o1 != o0 {
 		t.Errorf("the refused writes wrote audit rows +%d, outbox rows +%d, want none", a1-a0, o1-o0)
 	}
+
+	// A create or a rename to a name another provider of the organization holds is ErrNameTaken (the unique key
+	// uq_sso_provider_org_name), a WARN refusal: no row changes and no audit row. Its own name, and the same name in another
+	// organization, are not refused.
+	create := func(o uuid.UUID, name string) (uuid.UUID, error) {
+		p, err := store.Create(ctx, o, ssoprovider.CreateInput{Name: name, Protocol: ssoprovider.ProtocolSAML, DefaultRole: "member",
+			Config: ssoprovider.Config{JSON: config}, AutoProvision: true, AllowedDomains: []string{}}, who)
+		if p == nil {
+			return uuid.Nil, err
+		}
+		return uuid.MustParse(p.ID), err
+	}
+	snapshot := func() string {
+		t.Helper()
+		var v string
+		if err := admin.QueryRow(ctx, `SELECT coalesce(string_agg(id || ':' || name || ':' || updated_at, ';' ORDER BY id), '') FROM public.sso_providers`).Scan(&v); err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	taken, err := create(org, "taken")
+	if err != nil {
+		t.Fatalf("seed create: %v", err)
+	}
+	other, err := create(org, "other")
+	if err != nil {
+		t.Fatalf("seed create: %v", err)
+	}
+	before := snapshot()
+	c0, _ := counts("auth.sso_provider.created")
+	u0, _ := counts("auth.sso_provider.updated")
+	takenName := "taken"
+	for name, do := range map[string]func() error{
+		"create": func() error { _, err := create(org, "taken"); return err },
+		"rename": func() error {
+			_, err := store.Update(ctx, org, other, ssoprovider.UpdateInput{Name: &takenName}, who)
+			return err
+		},
+	} {
+		logs.Reset()
+		if err := do(); !errors.Is(err, ssoprovider.ErrNameTaken) || errors.Is(err, ssoprovider.ErrStore) {
+			t.Errorf("%s to a taken name: err = %v, want ErrNameTaken and not ErrStore", name, err)
+		}
+		text := logs.String()
+		if !strings.Contains(text, "level=WARN") || !strings.Contains(text, "CommitPublicProjection refused") || strings.Contains(text, "level=ERROR") {
+			t.Errorf("%s to a taken name logged %q, want one WARN refusal line and no ERROR", name, text)
+		}
+	}
+	c1, _ := counts("auth.sso_provider.created")
+	u1, _ := counts("auth.sso_provider.updated")
+	if after := snapshot(); after != before || c1 != c0 || u1 != u0 {
+		t.Errorf("a refused taken-name write changed rows (%v) or wrote audit rows (created +%d, updated +%d)", after != before, c1-c0, u1-u0)
+	}
+	if _, err := store.Update(ctx, org, taken, ssoprovider.UpdateInput{Name: &takenName}, who); err != nil {
+		t.Errorf("rename to its own name: %v, want nil", err)
+	}
+	second := uuid.New()
+	if _, err := admin.Exec(ctx, `INSERT INTO public.organizations (id, slug, name) VALUES ($1, $2, 'sso-store-test-2')`, second, "sso-"+second.String()[:8]); err != nil {
+		t.Fatal(err)
+	}
+	if err := ids.ProjectOrganization(ctx, second); err != nil {
+		t.Fatalf("ProjectOrganization: %v", err)
+	}
+	if _, err := create(second, "taken"); err != nil {
+		t.Errorf("the same name in another organization: %v, want nil", err)
+	}
 }

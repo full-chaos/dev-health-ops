@@ -33,6 +33,7 @@ const (
 	textOIDCConfigRequired  = "OIDC config required for OIDC providers"
 	textInvalidRequest      = "Invalid SSO provider request"
 	textOrgNotFound         = "Organization not found"
+	textNameTaken           = "An SSO provider with this name already exists"
 	errShapeAnswerFormat    = "%w: auth-service answered a provider that is not the model"
 	rfc3339ProviderTimeForm = time.RFC3339Nano
 )
@@ -151,6 +152,10 @@ func (h handlers) providerFault(w http.ResponseWriter, r *http.Request, step str
 		case authprovision.ReasonOrganizationMissing:
 			h.Logger.InfoContext(r.Context(), "api sso providers: auth-service refused the request", "path", r.Pattern, "step", step, "reason", refused.Reason)
 			policy.WriteDetail(w, http.StatusNotFound, textOrgNotFound, nil)
+			return
+		case authprovision.ReasonSSOProviderNameTaken:
+			h.Logger.InfoContext(r.Context(), "api sso providers: auth-service refused the request", "path", r.Pattern, "step", step, "reason", refused.Reason)
+			policy.WriteDetail(w, http.StatusConflict, textNameTaken, nil)
 			return
 		}
 	}

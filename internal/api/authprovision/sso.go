@@ -27,6 +27,7 @@ const (
 	ReasonSAMLConfigRequired  = "saml_config_required"
 	ReasonOIDCConfigRequired  = "oidc_config_required"
 	ReasonOrganizationMissing = "organization_not_found"
+	ReasonMalformed           = "malformed"
 )
 
 // SSOListRequest is the list's filter; a nil field is not sent and auth-service applies the legacy default.

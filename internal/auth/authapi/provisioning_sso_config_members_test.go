@@ -32,12 +32,13 @@ const ssoSAMLStored = `{"entity_id": "e", "sso_url": "https://s.example", "certi
 const ssoOIDCStored = `{"client_id": "cid", "issuer": "https://i.example", "authorization_endpoint": null, "token_endpoint": null, ` +
 	`"userinfo_endpoint": null, "jwks_uri": null, "scopes": ["openid", "profile", "email"], "claim_mapping": {}}`
 
-func ssoWriteBody(f *provFixture, path, members string) string {
+// ssoWriteBody is a create (name and protocol) or an update (provider_id; an update names no protocol) carrying config.
+func ssoWriteBody(f *provFixture, path, protocol, config string) string {
 	head := `{"organization_id":"` + f.org.String() + `","actor_principal_id":"` + f.owner.String() + `",`
 	if path == PatternSSOProviderUpdate {
-		return head + `"provider_id":"` + uuid.NewString() + `",` + members + `}`
+		return head + `"provider_id":"` + uuid.NewString() + `",` + config + `}`
 	}
-	return head + `"name":"Acme",` + members + `}`
+	return head + `"name":"Acme","protocol":"` + protocol + `",` + config + `}`
 }
 
 func TestSSOProviderConfigUnknownMembersAreDroppedAsTheLegacyModelDid(t *testing.T) {
@@ -46,7 +47,7 @@ func TestSSOProviderConfigUnknownMembersAreDroppedAsTheLegacyModelDid(t *testing
 		want := map[string]int{PatternSSOProviderCreate: http.StatusCreated, PatternSSOProviderUpdate: http.StatusOK}[path]
 		for kind, extra := range ssoUnknownMembers {
 			f := newProvFixtureFor(t, nil, nil)
-			body := ssoWriteBody(f, path, `"protocol":"saml","saml_config":{`+ssoSAMLModel+`,`+extra+`}`)
+			body := ssoWriteBody(f, path, "saml", `"saml_config":{`+ssoSAMLModel+`,`+extra+`}`)
 			if response := f.post(path, body, nil); response.Code != want {
 				t.Errorf("%s saml %s: %d %s, want %d", path, kind, response.Code, response.Body, want)
 				continue
@@ -65,7 +66,7 @@ func TestSSOProviderConfigUnknownMembersAreDroppedAsTheLegacyModelDid(t *testing
 func TestSSOProviderConfigCaseVariantMemberIsUnknownAndTheExactMemberIsStored(t *testing.T) {
 	t.Parallel()
 	f := newProvFixtureFor(t, nil, nil)
-	body := ssoWriteBody(f, PatternSSOProviderCreate, `"protocol":"saml","saml_config":{"Entity_ID":"variant",`+ssoSAMLModel+`,"ENTITY_ID":"variant2"}`)
+	body := ssoWriteBody(f, PatternSSOProviderCreate, "saml", `"saml_config":{"Entity_ID":"variant",`+ssoSAMLModel+`,"ENTITY_ID":"variant2"}`)
 	if response := f.post(PatternSSOProviderCreate, body, nil); response.Code != http.StatusCreated {
 		t.Fatalf("create: %d %s, want 201", response.Code, response.Body)
 	}
@@ -78,7 +79,7 @@ func TestSSOProviderOIDCUnknownMembersReachNeitherTheConfigNorTheSecrets(t *test
 	t.Parallel()
 	for _, path := range []string{PatternSSOProviderCreate, PatternSSOProviderUpdate} {
 		f := newProvFixtureFor(t, nil, nil)
-		body := ssoWriteBody(f, path, `"protocol":"oidc","oidc_config":{"client_id":"cid","client_secret":"`+ssoSecretSentinel+
+		body := ssoWriteBody(f, path, "oidc", `"oidc_config":{"client_id":"cid","client_secret":"`+ssoSecretSentinel+
 			`","issuer":"https://i.example","x":"y","client_secret_2":"`+ssoExtraSecret+`","entity_id":"e"}`)
 		response := f.post(path, body, nil)
 		if response.Code/100 != 2 {

@@ -224,12 +224,10 @@ type oidcConfigInput struct {
 	ClaimMapping          map[string]string `json:"claim_mapping"`
 }
 
-// decodeConfig reads raw as one object of exactly the members of target (a pointer to a struct), refusing others and
-// a null member where the legacy model has a non-null one.
+// decodeConfig reads raw as one object into the members of target (a pointer to a struct). A member the legacy model does
+// not declare is ignored, as pydantic's extra="ignore" did, and orderedConfig leaves it out of the stored config.
 func decodeConfig(raw []byte, target any) error {
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.DisallowUnknownFields()
-	return dec.Decode(target)
+	return json.NewDecoder(bytes.NewReader(raw)).Decode(target)
 }
 
 func readSAMLConfig(raw []byte) (*samlConfigInput, error) {

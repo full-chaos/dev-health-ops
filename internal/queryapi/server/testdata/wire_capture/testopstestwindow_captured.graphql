@@ -19,6 +19,7 @@ query TestOpsTestWindow($orgId: String!, $input: TestOpsTestWindowInput!) {
     passRatePct
     failureRatePct
     flakeRatePct
+    filterEmptyReason
     __typename
   }
 }

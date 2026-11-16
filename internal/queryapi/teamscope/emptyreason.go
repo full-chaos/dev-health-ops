@@ -27,6 +27,11 @@ const (
 	// ReasonDeveloperNotFound: the request names developer ids and none of
 	// them exists for the organization (CHAOS-13707).
 	ReasonDeveloperNotFound EmptyReason = "developer_not_found"
+	// ReasonTeamOwnsNoRepository: the request's team scope selects teams that
+	// together own no repository as of the request (CHAOS-13868). It says why a
+	// team-scoped answer is empty; a team that owns a repository and has no rows
+	// in the window gets no reason.
+	ReasonTeamOwnsNoRepository EmptyReason = "team_owns_no_repository"
 )
 
 // ScopeNotFoundReason is the reason of a service or developer scope whose named
@@ -131,4 +136,44 @@ SETTINGS max_execution_time = 30
 		return 0, fmt.Errorf("teamscope: iterate team-held repositories: %w", err)
 	}
 	return int(held), nil
+}
+
+// TeamOwnsNoRepository is the reason of a team scope that owns nothing: ReasonTeamOwnsNoRepository when the
+// selected teams together hold no repository of the organization at asOf, by the one ownership rule of
+// RepoCondition, else nil. No team id (empty strings dropped) is no team scope and costs no statement.
+func TeamOwnsNoRepository(ctx context.Context, client QueryClient, orgID string, teamIDs []string, asOf time.Time) (*EmptyReason, error) {
+	condition, bindings := RepoCondition(orgID, "toString(id)", teamIDs, asOf)
+	if condition == "" {
+		return nil, nil
+	}
+	statement := fmt.Sprintf(`
+SELECT toUInt64(count()) AS owned_repositories
+FROM (
+    SELECT toString(id) AS repo_id
+    FROM repos FINAL
+    WHERE org_id = {%s:String}
+      AND %s
+    LIMIT 1
+)
+SETTINGS max_execution_time = 30
+`, BindingOrgID, condition)
+	rows, err := client.Query(ctx, statement, bindings)
+	if err != nil {
+		return nil, fmt.Errorf("teamscope: count team-owned repositories: %w", err)
+	}
+	defer rows.Close()
+	var owned uint64
+	if rows.Next() {
+		if err := rows.Scan(&owned); err != nil {
+			return nil, fmt.Errorf("teamscope: scan team-owned repositories: %w", err)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("teamscope: iterate team-owned repositories: %w", err)
+	}
+	if owned > 0 {
+		return nil, nil
+	}
+	reason := ReasonTeamOwnsNoRepository
+	return &reason, nil
 }

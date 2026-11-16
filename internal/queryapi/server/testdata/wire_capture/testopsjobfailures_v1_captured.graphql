@@ -1,0 +1,16 @@
+query TestOpsJobFailures($orgId: String!, $input: TestOpsJobFailuresInput!) {
+  testopsJobFailures(orgId: $orgId, input: $input) {
+    groups {
+      workflowName
+      jobName
+      provider
+      runs
+      failedRuns
+      failureRate
+      __typename
+    }
+    totalCount
+    truncated
+    __typename
+  }
+}

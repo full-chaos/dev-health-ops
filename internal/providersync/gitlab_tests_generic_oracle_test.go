@@ -98,7 +98,7 @@ func gitLabTestsGoRows(t *testing.T, input map[string]any) (githubTestsPipelineR
 	}
 	started, _ := time.Parse(time.RFC3339, input["started_at"].(string))
 	finished, _ := time.Parse(time.RFC3339, input["finished_at"].(string))
-	suites, cases, err := normalizeGitLabNativeTestReport(claim, pipeline.RepoID, pipeline.RunID, report, &started, &finished, at)
+	suites, cases, _, err := normalizeGitLabNativeTestReport(claim, pipeline.RepoID, pipeline.RunID, report, &started, &finished, at)
 	if err != nil || len(suites) != 1 || len(cases) != 1 {
 		t.Fatalf("native rows suites=%+v cases=%+v err=%v", suites, cases, err)
 	}

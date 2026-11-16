@@ -13,7 +13,7 @@ import (
 )
 
 // decisionMetric is the enforcement decision counter (internal/api/policy/enforcecounters.go); its labels are
-// namespace, service and outcome.
+// namespace, service and outcome, and cause on error_deny only; the parser sums over any other label.
 const decisionMetric = "dev_health_authz_enforcement_decisions_total"
 
 // DecisionDeltas is the increase of the decision counter between two scrapes, per namespace and outcome. A scrape with

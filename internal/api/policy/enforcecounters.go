@@ -16,29 +16,51 @@ const (
 	enforceUnjudgedMetric = "dev_health_authz_enforcement_unjudged_total"
 )
 
-type enforceDecisionAdder func(ctx context.Context, namespace, outcome string)
+// The closed cause set of the error_deny outcome: one value per path that refuses for want of a verdict. Only error_deny
+// carries a cause; allow, deny and impersonation_refused carry no cause attribute.
+const (
+	enforceCauseNoUserToken         = "no_user_token"
+	enforceCauseUnconfigured        = "unconfigured"
+	enforceCauseNoVerdict           = "no_verdict"
+	enforceCauseObligation          = "obligation"
+	enforceCauseNoOrgToken          = "no_org_token"
+	enforceCauseAdminOrNoVerdict    = "admin_or_no_verdict"
+	enforceCauseImpersonationLookup = "impersonation_lookup"
+)
+
+var enforceErrorDenyCauses = []string{enforceCauseNoUserToken, enforceCauseUnconfigured, enforceCauseNoVerdict, enforceCauseObligation,
+	enforceCauseNoOrgToken, enforceCauseAdminOrNoVerdict, enforceCauseImpersonationLookup}
+
+type enforceDecisionAdder func(ctx context.Context, namespace, outcome, cause string)
 
 // enforceDecisionAdd counts one enforced decision. Tests replace it. Every label value is a closed value: a catalog
-// namespace, the service and one of the outcomes in enforce.go; no request, user or organization value is a label.
+// namespace, the service, one of the outcomes in enforce.go and, on error_deny only, one of enforceErrorDenyCauses; no
+// request, user or organization value is a label.
 var enforceDecisionAdd = newEnforceDecisionAdder(otel.Meter(shadowMeterName))
 
 func newEnforceDecisionAdder(meter metric.Meter) enforceDecisionAdder {
 	counter, err := meter.Int64Counter(enforceDecisionMetric,
-		metric.WithDescription("Enforced decisions by action namespace, service and outcome: "+strings.Join(enforceOutcomes, ", ")))
+		metric.WithDescription("Enforced decisions by action namespace, service and outcome: "+strings.Join(enforceOutcomes, ", ")+
+			". An error_deny outcome also carries a cause: "+strings.Join(enforceErrorDenyCauses, ", ")))
 	if err != nil {
-		return func(context.Context, string, string) {}
+		return func(context.Context, string, string, string) {}
 	}
-	return func(ctx context.Context, namespace, outcome string) {
+	return func(ctx context.Context, namespace, outcome, cause string) {
+		if cause == "" {
+			counter.Add(ctx, 1, metric.WithAttributes(attribute.String("namespace", namespace),
+				attribute.String("service", enforceServiceLabel), attribute.String("outcome", outcome)))
+			return
+		}
 		counter.Add(ctx, 1, metric.WithAttributes(attribute.String("namespace", namespace),
-			attribute.String("service", enforceServiceLabel), attribute.String("outcome", outcome)))
+			attribute.String("service", enforceServiceLabel), attribute.String("outcome", outcome), attribute.String("cause", cause)))
 	}
 }
 
 // countEnforce never changes a decision: a counter failure is swallowed.
-func countEnforce(ctx context.Context, namespace, outcome string) {
+func countEnforce(ctx context.Context, namespace, outcome, cause string) {
 	defer func() { _ = recover() }()
 	if enforceDecisionAdd != nil {
-		enforceDecisionAdd(ctx, namespace, outcome)
+		enforceDecisionAdd(ctx, namespace, outcome, cause)
 	}
 }
 

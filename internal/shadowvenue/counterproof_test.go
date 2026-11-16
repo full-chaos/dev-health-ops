@@ -255,3 +255,15 @@ func TestParseDecisionDeltasAndAttributed(t *testing.T) {
 		t.Fatal("a line without a source is refused")
 	}
 }
+
+func TestParseDecisionDeltasSumsErrorDenyCauseSeries(t *testing.T) {
+	line := func(cause, n string) string {
+		return `dev_health_authz_enforcement_decisions_total{cause="` + cause + `",namespace="teams",outcome="error_deny",service="go-api"} ` + n
+	}
+	before := scrape(line("no_verdict", "1"), line("obligation", "0"))
+	after := scrape(line("no_verdict", "4"), line("obligation", "2"), line("unconfigured", "5"), decisions("teams", "allow", "3"))
+	got, err := ParseDecisionDeltas(before, after)
+	if err != nil || got["teams"]["error_deny"] != 10 || got["teams"]["allow"] != 3 {
+		t.Fatalf("%v %v, want error_deny 10 (3+2+5) and allow 3", got, err)
+	}
+}

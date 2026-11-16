@@ -16,11 +16,8 @@ import (
 // ssoUnauthenticated is D2738 (r1 P1 on #3347/CHAOS-6658: an unauthenticated
 // invalid callback disabling a provider org-wide). It marks a failure that
 // occurred BEFORE the caller proved anything -- OIDC's opaque state failing
-// to authenticate (state.go's AEAD tag, expiry, or provider/org binding),
-// or SAML's assertion failing to verify against the configured IdP
-// certificate (saml.go's ParseXMLResponse, plus the payload-shape checks
-// that precede it: missing/non-base64 SAMLResponse, both attacker-choosable
-// with zero credentials) -- as distinct from ssoProcessing, whose failures
+// to authenticate (state.go's AEAD tag, expiry, or provider/org binding,
+// attacker-choosable with zero credentials) -- as distinct from ssoProcessing, whose failures
 // all occur AFTER that proof and legitimately indicate a broken IdP
 // configuration worth surfacing to an admin. See recordSSOUnauthenticated.
 //
@@ -47,7 +44,7 @@ func asSSOUnauthenticated(err error, target *ssoUnauthenticated) bool {
 // class both OIDCProcessingError and SAMLProcessingError extend with no
 // added behavior of their own, so this port uses ONE Go error type across
 // provision.go (shared by both protocols) and each protocol's own
-// exchange/validation path (oidc.go, saml.go) rather than two parallel,
+// exchange/validation path (oidc.go, oauth.go) rather than two parallel,
 // near-identical types. Its message is recorded onto the provider
 // (record_error) and into an audit row, never surfaced verbatim to the
 // caller -- the router always answers its own fixed per-branch message.
@@ -157,7 +154,7 @@ func (h handlers) finishSSOLogin(ctx context.Context, w http.ResponseWriter, r *
 // last_error_at, updated_at; its status is left as it was, so a failed
 // sign-in never changes whether the provider is active), an SSO_LOGIN
 // audit row (status failure, resource SSO_PROVIDER), commit, then the
-// response. protocol is "oidc", "oauth" or "saml"; stage is "" for an
+// response. protocol is "oidc" or "oauth"; stage is "" for an
 // exchange/validation failure or "provisioning" for a
 // provision_or_get_user failure, matching extra_metadata's own shape.
 func (h handlers) recordSSOFailure(ctx context.Context, w http.ResponseWriter, r *http.Request,
@@ -239,7 +236,7 @@ func (h handlers) recordSSOUnauthenticated(ctx context.Context, w http.ResponseW
 // assertion's signature verified) but reflects a per-REQUEST access
 // decision, not an IdP-health signal. CHAOS-6986's auto-provisioning-
 // disabled is the first case; CHAOS-6659's assertion replay (D2744,
-// saml.go) is the second: the caller genuinely holds a real, validly-
+// the former go-api SAML ACS) is the second: the caller genuinely holds a real, validly-
 // signed, unexpired assertion, but reusing an already-consumed one says
 // nothing about whether the PROVIDER is broken (unlike a real signature/
 // config failure, which is recorded on the row via recordSSOFailure),

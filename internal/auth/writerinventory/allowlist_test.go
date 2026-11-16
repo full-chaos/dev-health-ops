@@ -154,9 +154,9 @@ var Allowlist = []Entry{
 	{File: "internal/auth/copyproject/copyproject.go", Func: "InsertOrganizationSQL", Table: "auth.organizations", Verb: "INSERT"},
 	{File: "internal/auth/copyproject/copyproject.go", Func: "InsertPrincipalSQL", Table: "auth.principals", Verb: "INSERT"},
 	{File: "internal/auth/copyproject/copyproject.go", Func: "InsertUserSQL", Table: "auth.users", Verb: "INSERT"},
-	// acp ruling, CHAOS-12032 (D6515): go-api's provider failure record (recordSSOFailure) by the OAuth and SAML sign-ins: last_error, last_error_at and updated_at, never the status, one transaction with the audit row.
+	// acp ruling, CHAOS-12032 (D6515): go-api's provider failure record (recordSSOFailure) by the OAuth and OIDC sign-ins: last_error, last_error_at and updated_at, never the status, one transaction with the audit row.
 	{File: "internal/auth/identity/ssoaudit/ssoaudit.go", Func: "PGProviderFailure.Failed", Table: "public.sso_providers", Verb: "UPDATE"},
-	// D6534 (ticket 12118): go-api's success record (finishSSOLogin) by the OIDC, OAuth and SAML sign-ins: last_login_at and updated_at, one transaction with the audit row.
+	// D6534 (ticket 12118): go-api's success record (finishSSOLogin) by the OIDC and OAuth sign-ins: last_login_at and updated_at, one transaction with the audit row.
 	{File: "internal/auth/identity/ssoaudit/ssoaudit.go", Func: "PGSignIn.Succeeded", Table: "public.sso_providers", Verb: "UPDATE"},
 	// The users-owned projection (CHAOS-10630): written only inside the audit.Commit that writes the auth rows; the runtime role holds the matching column grants only while AUTH_USERS_OWNED is on.
 	{File: "internal/auth/identity/publicusers.go", Func: "insertPublicUser", Table: "public.users", Verb: "INSERT"},
@@ -333,7 +333,6 @@ var Allowlist = []Entry{
 	{File: "internal/api/githubapp/routes.go", Func: "handlers.insertInstallation", Table: "public.github_app_installations", Verb: "INSERT"},
 	{File: "internal/api/githubapp/routes.go", Func: "handlers.refusalWork", Table: "public.github_app_installations", Verb: "UPDATE"},
 	{File: "internal/api/githubapp/routes.go", Func: "handlers.upsertInstallation", Table: "public.github_app_installations", Verb: "UPDATE"},
-	{File: "internal/api/sso/saml.go", Func: "handlers.processSAMLResponse", Table: "public.saml_assertion_replays", Verb: "INSERT"},
 	{File: "internal/api/telemetry/report.go", Func: "handlers.recordHeartbeat", Table: "public.audit_logs", Verb: "INSERT"},
 	{File: "internal/api/webhookintake/pagerduty.go", Func: "markCandidateReadyFromVerifiedPing", Table: "public.pagerduty_webhook_bindings", Verb: "UPDATE"},
 	{File: "internal/apiservice/acr/credentials.go", Func: "PostgresCredentialStore.Audit", Table: "public.internal_service_credential_audits", Verb: "INSERT"},

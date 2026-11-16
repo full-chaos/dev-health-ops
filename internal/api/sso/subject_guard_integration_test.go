@@ -89,30 +89,6 @@ func TestSubjectGuardOIDCCallbackRefusesAnUnusableSubject(t *testing.T) {
 	}
 }
 
-func TestSubjectGuardSAMLCallbackRefusesAnUnusableSubject(t *testing.T) {
-	for name, nameID := range wireUnusableSubjects() {
-		for _, held := range []bool{false, true} {
-			t.Run(fmt.Sprintf("%s/held=%v", name, held), func(t *testing.T) {
-				ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
-				defer cancel()
-				st := startStack(t, ctx)
-				idp := newSAMLIdP(t)
-				providerID := seedSAMLOrgProviderAuto(t, ctx, st, idp, nameIDSP, true)
-				const email = "subject.guard@allowed.example"
-				if held {
-					seedAccount(t, ctx, st.pool, email, "saml", "held-subject")
-				}
-				before := snapshotRows(t, ctx, st)
-				response := idp.signedSAMLResponse(t, samlResponseOpts{
-					spEntityID: nameIDSP, acsURL: samlACSOverrideFor(providerID), email: email, fullName: "Person", nameID: nameID,
-				})
-				status, body := postJSON(t, st.server, "/api/v1/auth/saml/"+providerID.String()+"/acs", map[string]any{"SAMLResponse": response})
-				assertSubjectRefused(t, ctx, st, providerID, before, status, body)
-			})
-		}
-	}
-}
-
 func TestSubjectGuardOAuthCallbackRefusesAnUnusableSubject(t *testing.T) {
 	for name, id := range map[string]string{"empty": "", "nul": `7\u0000x`, "control": `7\u0001x`, "edge space": ` 7`} {
 		for _, held := range []bool{false, true} {

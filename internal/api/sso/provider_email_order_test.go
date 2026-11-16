@@ -46,15 +46,15 @@ func TestFetchOAuthUserInfoRefusesAnUnusableEmailBeforeTheVerifiedCheck(t *testi
 // whose text names no domain.
 func TestProvisionOrGetUserChecksTheAllowlistAfterTheEmailRule(t *testing.T) {
 	domains := `["allowed.example"]`
-	for _, protocol := range []string{"oidc", "saml"} {
+	for _, protocol := range []string{"oidc"} {
 		t.Run(protocol, func(t *testing.T) {
 			row := &providerRow{OrgID: uuid.NewString(), Protocol: protocol, AutoProvision: true, AllowedDomains: &domains}
 			h, dials, logs := subjectGuardHandlers(t)
-			_, _, err := h.provisionOrGetUser(context.Background(), row, subjectMarker+"\u0085x@other.example", "A", uuid.New(), "12345", nil)
+			_, _, err := h.provisionOrGetUser(context.Background(), row, subjectMarker+"\u0085x@other.example", "A", uuid.New(), "12345")
 			assertEmailRefusedBeforeAnyStatement(t, err, dials.Load(), logs.String())
 
 			h, dials, _ = subjectGuardHandlers(t)
-			_, _, err = h.provisionOrGetUser(context.Background(), row, "person@other.example", "A", uuid.New(), "12345", nil)
+			_, _, err = h.provisionOrGetUser(context.Background(), row, "person@other.example", "A", uuid.New(), "12345")
 			var denied *domainNotAllowedError
 			if !errors.As(err, &denied) || denied.domain != "other.example" || strings.Contains(err.Error(), "other.example") {
 				t.Fatalf("err = %v, want a domainNotAllowedError whose text names no domain", err)
@@ -64,7 +64,7 @@ func TestProvisionOrGetUserChecksTheAllowlistAfterTheEmailRule(t *testing.T) {
 			}
 
 			h, dials, _ = subjectGuardHandlers(t)
-			_, _, err = h.provisionOrGetUser(context.Background(), row, "no-at-sign", "A", uuid.New(), "12345", nil)
+			_, _, err = h.provisionOrGetUser(context.Background(), row, "no-at-sign", "A", uuid.New(), "12345")
 			if !errors.Is(err, errProviderEmailMalformed) || dials.Load() != 0 {
 				t.Fatalf("err = %v with %d statements, want errProviderEmailMalformed before any statement", err, dials.Load())
 			}

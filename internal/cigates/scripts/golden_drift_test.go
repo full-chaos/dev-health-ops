@@ -43,7 +43,7 @@ func TestGoldenDriftSelect(t *testing.T) {
 		verdict string
 		pkgs    []string
 	}{
-		{"5083 users column: migration", nulList("internal/pgmigrate/sql/0160_add_users_saml_nameid_parts.sql", "internal/auth/usersbackfill/backfill.go", "internal/api/sso/saml.go"), "select", allGoldenPkgs},
+		{"5083 users column: migration", nulList("internal/pgmigrate/sql/0160_add_users_saml_nameid_parts.sql", "internal/auth/usersbackfill/backfill.go"), "select", allGoldenPkgs},
 		{"5092 finalize column: migration", nulList("internal/pgmigrate/sql/0161_add_sync_run_post_dispatches_recorded_at.sql", "internal/syncreconciler/materializer.go"), "select", allGoldenPkgs},
 		{"5131 org_activity: migration and chain manifest", nulList("internal/pgmigrate/chain_manifest.tsv", "internal/orgactivity/orgactivity.go"), "select", allGoldenPkgs},
 		{"chain manifest alone", nulList("internal/pgmigrate/chain_manifest.tsv"), "select", allGoldenPkgs},

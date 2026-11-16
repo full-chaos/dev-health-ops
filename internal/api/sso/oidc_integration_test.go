@@ -20,6 +20,7 @@
 package sso_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
@@ -187,11 +188,6 @@ type providerOpts struct {
 	autoProvision                 bool
 	isDefault                     bool   // CHAOS-6986: initiate_oauth_by_type's is_default preference.
 	clientSecretEncryptedFallback string // stored as-is (no cipher configured in this test), simulating legacy plaintext.
-	// disallowIdpInitiated is D2744's coverage: the zero value (false)
-	// keeps every EXISTING test's behavior (allow_idp_initiated=true,
-	// unchanged); set true only for the new tests that specifically
-	// exercise the false branch (a real AEAD RelayState required).
-	disallowIdpInitiated bool
 }
 
 func seedProvider(t *testing.T, ctx context.Context, pool *pgxpool.Pool, orgID uuid.UUID, opts providerOpts) uuid.UUID {
@@ -211,7 +207,7 @@ func seedProvider(t *testing.T, ctx context.Context, pool *pgxpool.Pool, orgID u
 	 config, encrypted_secrets, allowed_domains, created_at, updated_at)
 VALUES ($1, $2, $11, $3, $4, $9, $10, $5, 'member', $6::json, $7::json, $8::json, now(), now())`,
 		id, orgID, opts.protocol, opts.status, opts.autoProvision, opts.config, secrets, opts.allowedDomains,
-		opts.isDefault, !opts.disallowIdpInitiated, "Test Provider "+id.String()[:8]); err != nil {
+		opts.isDefault, true, "Test Provider "+id.String()[:8]); err != nil {
 		t.Fatalf("seed provider: %v", err)
 	}
 	if opts.protocol == "oauth_gitlab" {
@@ -237,11 +233,35 @@ func postJSON(t *testing.T, server *httptest.Server, path string, body map[strin
 	return postJSONWithClient(t, http.DefaultClient, server, path, body)
 }
 
-// postJSONWithClient and newCookieClient are now-stacked-onto SAML's
-// (saml_integration_test.go) and OAuth's (oauth_integration_test.go) own
-// copies -- this branch restacked onto both (D2759), so its own
-// previously-independent duplicates are deleted here rather than
-// redeclared in the same test package.
+// getJSON GETs path and decodes the JSON answer.
+func getJSON(t *testing.T, server *httptest.Server, path string) (int, map[string]any) {
+	t.Helper()
+	resp, err := http.Get(server.URL + path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var out map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&out)
+	return resp.StatusCode, out
+}
+
+// postJSONWithClient POSTs body as JSON with client and decodes the answer.
+func postJSONWithClient(t *testing.T, client *http.Client, server *httptest.Server, path string, body map[string]any) (int, map[string]any) {
+	t.Helper()
+	raw, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := client.Post(server.URL+path, "application/json", bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var out map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&out)
+	return resp.StatusCode, out
+}
 
 // TestOIDCAuthorizeAndCallbackFullRoundTrip is the happy path: an
 // enterprise-entitled org, an active OIDC provider pointed at the fake
@@ -392,8 +412,7 @@ func TestOIDCAuthorizeRefusesWrongProtocolAndInactiveStatus(t *testing.T) {
 // D2749-follow-up ruling ("all three providers share one rule"): a
 // caller-supplied redirect_uri naming a non-loopback http:// URL is
 // refused before this package ever mints a state or sets the login-nonce
-// cookie -- mirroring SAML's TestSAMLConfigRefusesAnInsecureHTTPOverride
-// and OAuth's TestOAuthConfigRefusesAnInsecureHTTPBaseURL.
+// cookie, as OAuth's TestOAuthConfigRefusesAnInsecureHTTPBaseURL checks.
 func TestOIDCAuthorizeRefusesAnInsecureHTTPRedirectURI(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -547,7 +566,7 @@ WHERE org_id = $1 AND action = 'sso_login' AND status = 'failure' ORDER BY creat
 // TestOIDCCallbackRefusesAMissingLoginNonceCookie and
 // TestOIDCCallbackRefusesATamperedLoginNonceCookie pin D2745's browser-
 // binding class ruling applied to OIDC (from CHAOS-6986's P1-3, already
-// landed on SAML/OAuth): a genuine, unexpired state alone is not enough
+// shared with OAuth): a genuine, unexpired state alone is not enough
 // -- the login nonce cookie set at /authorize must also be present and
 // match. A missing cookie is exactly what a cross-site (login-CSRF)
 // submission looks like: SameSite=Lax withholds the cookie on a
@@ -606,7 +625,7 @@ func TestOIDCCallbackRefusesATamperedLoginNonceCookie(t *testing.T) {
 	// of a Cookie: request header -- so re-SetCookies-ing an exported
 	// cookie back with Path="" silently ADDS a second, untampered cookie
 	// of the same name at the same jar instead of replacing the original;
-	// found and fixed identically in SAML's/OAuth's own equivalent test).
+	// found and fixed identically in OAuth's own equivalent test).
 	callbackURL, err := url.Parse(st.server.URL + "/api/v1/auth/oidc/" + providerID.String() + "/callback")
 	if err != nil {
 		t.Fatal(err)
@@ -642,8 +661,7 @@ WHERE org_id = $1 AND action = 'sso_login' AND status = 'failure' ORDER BY creat
 }
 
 // TestOIDCTwoConcurrentAuthorizeFlowsBothComplete pins D2759's P1-B fix
-// directly, mirroring SAML's TestSAMLTwoConcurrentInitiateFlowsBothComplete
-// and OAuth's TestOAuthTwoConcurrentAuthorizeFlowsBothComplete: two
+// alongside OAuth's TestOAuthTwoConcurrentAuthorizeFlowsBothComplete: two
 // /authorize calls in the SAME browser (one cookie jar -- two tabs, or a
 // retry) must not collide. Before the fix, both flows set the identical
 // fixed cookie name, so the second silently overwrote the first in the
@@ -735,7 +753,7 @@ func assertProviderRowUnchanged(t *testing.T, ctx context.Context, pool *pgxpool
 
 // assertSSOAuditStage confirms the most recent failure-status sso_login
 // audit row for this org carries the given stage tag -- shared by both
-// OIDC's state_auth and SAML's signature_auth D2738 tests.
+// OIDC's state_auth tests.
 func assertSSOAuditStage(t *testing.T, ctx context.Context, pool *pgxpool.Pool, orgID uuid.UUID, stage string) {
 	t.Helper()
 	var meta []byte

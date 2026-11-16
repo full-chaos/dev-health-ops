@@ -7,7 +7,6 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -25,7 +24,7 @@ import (
 // #3350/#3352 for the shared fix instead: loginnonce.go's
 // validateHTTPSOrLoopback, loginNonceCookieName/issueLoginNonceCookie/
 // clearLoginNonceCookie/verifyAndClearLoginNonceCookie, and
-// hashLoginNonce now do this file's old job for all three protocols.
+// hashLoginNonce now do this file's old job for OIDC and OAuth.
 
 // oidcStateTTL bounds how long a caller has between fetching
 // authorization_url and completing the round trip at the IdP. Google's own
@@ -35,7 +34,7 @@ const oidcStateTTL = 10 * time.Minute
 
 // oidcStateHKDFInfo is the fixed HKDF info string deriving the state's
 // AES-256-GCM key from Deps.StateSecret (SSO_STATE_SECRET). A fixed, distinct info string keeps this derived key
-// independent of the OAuth and SAML state keys derived from the same root.
+// independent of the OAuth state key derived from the same root.
 const oidcStateHKDFInfo = "dev-health-ops:oidc-state-aead-v1"
 
 // Python's generate_oidc_authorization_request (services/sso.py:471-519)
@@ -119,8 +118,8 @@ func randomURLSafe(n int) (string, error) {
 
 // deriveStateKey is HKDF-SHA256(secret, salt=nil, info, length=32): the
 // AES-256-GCM key. secret must be non-empty; Routes() only mounts the
-// real OIDC/SAML/OAuth handlers when Deps.StateSecret is (sso.go). info
-// is a fixed, per-protocol constant (oidcStateHKDFInfo, samlStateHKDFInfo,
+// real OIDC/OAuth handlers when Deps.StateSecret is (sso.go). info
+// is a fixed, per-protocol constant (oidcStateHKDFInfo,
 // oauthStateHKDFInfo) so each protocol's state universe derives an
 // independent key from the same root secret -- a state token minted for
 // one protocol cannot even be attempted against another's verify
@@ -233,13 +232,4 @@ func constantTimeEqual(a, b string) bool {
 func pkceChallenge(verifier string) string {
 	sum := sha256.Sum256([]byte(verifier))
 	return base64.RawURLEncoding.EncodeToString(sum[:])
-}
-
-// newJTI is a random lowercase-hex identifier, unrelated to oidcState.ID.
-func newJTI() (string, error) {
-	var random [16]byte
-	if _, err := rand.Read(random[:]); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(random[:]), nil
 }

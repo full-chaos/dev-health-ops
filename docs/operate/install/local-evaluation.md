@@ -28,7 +28,8 @@ auth-service and its one-shot jobs, because go-api waits for them:
 - go-api forwards the auth aggregates production forwards to auth-service: sessions, local login,
   credentials (sign-up, e-mail verification, password reset) and social sign-in
   (`AUTH_PROXY_SESSIONS`, `AUTH_PROXY_LOCAL_LOGIN`, `AUTH_PROXY_CREDENTIALS` and `AUTH_PROXY_SOCIAL`
-  are `true`). OIDC and SAML sign-in stay on go-api. Sessions without local login is refused: it picks
+  are `true`). OIDC sign-in stays on go-api. SAML sign-in goes through auth-service
+  (`AUTH_PROXY_SAML=true`). With forwarding off, go-api answers 503. Sessions without local login is refused: it picks
   the earliest-join organization at login and records the gateway IP.
 - auth-service owns users (`AUTH_USERS_OWNED=true`, production's phase 4) and mints the EdDSA access
   token (`AUTH_ACCESS_TOKEN_CLASS=eddsa`, audience `dev-health-api`). go-api does not mint an HS256

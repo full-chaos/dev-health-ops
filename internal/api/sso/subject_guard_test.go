@@ -72,12 +72,12 @@ func assertRefusedBeforeAnyStatement(t *testing.T, err error, dials *atomic.Int6
 }
 
 func TestProvisionOrGetUserRefusesAnUnusableSubjectBeforeAnyStatement(t *testing.T) {
-	for _, protocol := range []string{"oidc", "saml"} {
+	for _, protocol := range []string{"oidc"} {
 		for name, subject := range unusableSubjects() {
 			t.Run(protocol+"/"+name, func(t *testing.T) {
 				h, dials, logs := subjectGuardHandlers(t)
 				row := &providerRow{OrgID: uuid.NewString(), Protocol: protocol, AutoProvision: true}
-				_, _, err := h.provisionOrGetUser(context.Background(), row, "a@example.test", "A", uuid.New(), subject, nil)
+				_, _, err := h.provisionOrGetUser(context.Background(), row, "a@example.test", "A", uuid.New(), subject)
 				assertRefusedBeforeAnyStatement(t, err, dials, logs)
 			})
 		}
@@ -102,7 +102,7 @@ func TestOAuthProvisionUserRefusesAnUnusableSubjectBeforeAnyStatement(t *testing
 func TestAUsableSubjectReachesTheDatabase(t *testing.T) {
 	h, dials, _ := subjectGuardHandlers(t)
 	row := &providerRow{OrgID: uuid.NewString(), Protocol: "oidc", AutoProvision: true}
-	_, _, _ = h.provisionOrGetUser(context.Background(), row, "a@example.test", "A", uuid.New(), "12345", nil)
+	_, _, _ = h.provisionOrGetUser(context.Background(), row, "a@example.test", "A", uuid.New(), "12345")
 	if dials.Load() == 0 {
 		t.Fatal("a valid subject ran no statement; the counter proves nothing")
 	}
@@ -112,7 +112,7 @@ func TestAUsableSubjectReachesTheDatabase(t *testing.T) {
 // empty subject first. RefuseInvalidProviderID waves "", "local" and the service provider through, so a provider value
 // outside this list would need the empty-subject branches back.
 func TestEveryAuthProviderTheSignInPathsUseRefusesAnEmptySubject(t *testing.T) {
-	providers := []string{"oidc", "saml"}
+	providers := []string{"oidc"}
 	for _, protocol := range []string{"oauth_github", "oauth_gitlab", "oauth_google"} {
 		providerType, ok := oauthTypeForProtocol(protocol)
 		if !ok {

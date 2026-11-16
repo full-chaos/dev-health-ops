@@ -131,12 +131,14 @@ SAML providers the identity provider's response is the source of the email.
 
 ## What an administrator sees
 
-**go-api (SSO and social sign-in in use).** A refusal answers with an HTTP
+**go-api (OIDC and social sign-in).** SAML sign-in goes through auth-service.
+With `AUTH_PROXY_SAML` off, go-api answers 503 `config_missing` after body validation.
+A refusal answers with an HTTP
 status and a message. `membership_required` and
-`oauth_domain_not_allowed` are also carried as response codes. An OIDC or SAML
+`oauth_domain_not_allowed` are also carried as response codes. An OIDC
 identity conflict is not (it is in the audit row and the log only); a social
 sign-in refusal carries the closed `reason` set described below. The message of an
-OIDC or SAML domain refusal names the email domain. Each SSO sign-in attempt
+OIDC domain refusal names the email domain. Each SSO sign-in attempt
 writes an `SSO_LOGIN` audit row, with status success or failure.
 
 **auth-service.** Social exchange, link and unlink outcomes are counted by
@@ -155,15 +157,14 @@ records it, with go-api's fixed text: the provider row's `last_error`,
 `sso_login` failure row, in one transaction, before the sign-in answers. These
 are: the OAuth token exchange or profile request failing (profile: in transport
 or with a non-2xx status); an OIDC discovery, token exchange, ID token or
-userinfo failure, and OIDC claims without an email; a SAML provider without a
+userinfo failure, and OIDC claims without an email; an auth-service SAML provider without a
 usable certificate, a signed assertion with no subject confirmation or no email;
 and, with stage `provisioning`, a new OIDC or SAML account with auto-provisioning
 off. The OIDC answers are `OIDC authentication failed` and, for
 auto-provisioning off, 400 `OIDC user provisioning failed`; the SAML answers are
 `SAML authentication failed` and `SAML user provisioning failed`. Checks only
 auth-service makes record nothing. When the record cannot be written, the
-sign-in answers 500. A completed OIDC, OAuth or SAML sign-in is recorded as go-api
-records it: the provider row's `last_login_at` and `updated_at` and an `sso_login`
+sign-in answers 500. A completed sign-in is recorded by its handler (auth-service for SAML): the provider row's `last_login_at` and `updated_at` and an `sso_login`
 success row on resource `session`, in one transaction, after the session is issued
 and before the tokens answer. When that record cannot be written, the sign-in
 answers 500 and the tokens are withheld. The reason codes are:

@@ -17,9 +17,9 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 )
 
-// go-api's SAML ACS consumes an assertion with one INSERT into saml_assertion_replays (internal/api/sso/saml.go) as the api login.
+// The retired go-api SAML replay grant stays pinned until a separate production grant roll.
 // This applies the REAL api posture through ApplyPinnedMigrations on the real migrated schema, then runs that exact statement as
-// the api role: the insert must work, a second insert of the same pair must be the 23505 the handler maps to a replay, and the
+// the api role: the insert must work, a second insert of the same pair must be 23505, and the
 // role must hold no UPDATE and no DELETE on the table.
 func TestAPIPostureLetsTheAPIRoleConsumeASAMLAssertion(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)

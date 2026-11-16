@@ -1,16 +1,22 @@
 package apiservice
 
 import (
-	"fmt"
+	"bytes"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/full-chaos/dev-health-ops/internal/api/policy"
+	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 )
 
-// f3aProdFlags is the go-api auth proxy env of the F3a prod values (deploy
-// values.prod.yaml with ops.authService.sso oidc true, saml false): every
-// aggregate forwards to auth-service except SAML.
+// f3aProdFlags enables every auth aggregate except SAML.
 func f3aProdFlags(upstream string) map[string]string {
 	env := map[string]string{EnvAuthProxyURL: upstream}
 	for _, aggregate := range AuthAggregates {
@@ -20,12 +26,20 @@ func f3aProdFlags(upstream string) map[string]string {
 	return env
 }
 
-// With the F3a prod flags the SAML sign-in routes stay in go-api (they never
-// reach auth-service) while the OIDC sign-in routes are forwarded.
-func TestAuthProxyF3aProdFlagsKeepSAMLInGoAPI(t *testing.T) {
+// With SAML forwarding off the routes refuse locally; OIDC still forwards.
+func TestAuthProxySAMLForwardOffAnswersConfigMissingAndNeverReachesAuthService(t *testing.T) {
 	stub := newStubUpstream(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusTeapot) })
-	handler := proxyFixture(t, mustProxyConfig(t, f3aProdFlags(stub.URL)))
-	none := proxyFixture(t, AuthProxyConfig{})
+	auth := proxyTokens.AuthenticatorOver(t, scopeStore{admin: uuid.New(), target: uuid.New(), targetOrg: uuid.New()}, quietLogger())
+	routes := Routes(Deps{Pool: &pgxpool.Pool{}, Auth: auth, Guard: policy.NewGuard(auth, quietLogger()),
+		SSOStateSecret: "saml-forward-off-state-secret", SessionIssuer: stubSessionIssuer{},
+		AuthProxy: mustProxyConfig(t, f3aProdFlags(stub.URL)), Limits: httpapi.NewMemoryCounters(time.Now)}, quietLogger())
+	server, err := NewServer(config.Config{APIAddress: "127.0.0.1:0", CORSAllowedOrigins: []string{proxyOrigin}}, quietLogger(), routes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := server.Handler()
+	want := httptest.NewRecorder()
+	policy.WriteConfigMissing(want, "AUTH_PROXY_SAML")
 	seen := map[AuthAggregate]int{}
 	for _, call := range proxyCalls {
 		recorder := httptest.NewRecorder()
@@ -35,11 +49,8 @@ func TestAuthProxyF3aProdFlagsKeepSAMLInGoAPI(t *testing.T) {
 			t.Errorf("%s %s forwarded=%v with the F3a prod flags", call.method, call.target, forwarded)
 		}
 		if call.aggregate == AuthSAML {
-			// go-api's own answer: byte for byte the answer of a go-api with no proxy.
-			local := httptest.NewRecorder()
-			none.ServeHTTP(local, call.request(t))
-			if got, want := fmt.Sprintf("%d %s", recorder.Code, recorder.Body), fmt.Sprintf("%d %s", local.Code, local.Body); got != want {
-				t.Errorf("%s %s = %q with the F3a prod flags, want go-api's own %q", call.method, call.target, got, want)
+			if recorder.Code != want.Code || !bytes.Equal(recorder.Body.Bytes(), want.Body.Bytes()) {
+				t.Errorf("%s %s = %d %s, want %d %s", call.method, call.target, recorder.Code, recorder.Body, want.Code, want.Body)
 			}
 		}
 		seen[call.aggregate]++

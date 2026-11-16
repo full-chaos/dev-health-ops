@@ -5,8 +5,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/google/uuid"
-
 	"github.com/full-chaos/dev-health-ops/internal/cigates/livee2e/ssoseed"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
@@ -61,16 +59,6 @@ func TestSSOSeedConfigsDecodeWithTheProductionDecoders(t *testing.T) {
 	if err != nil || got.ClientID != "client-1" || got.Issuer != "https://idp.test" || got.TokenEndpoint != "https://idp.test/token" ||
 		got.AuthorizationEndpoint != "https://idp.test/authorize" || got.UserinfoEndpoint != "https://idp.test/userinfo" || got.JWKSURI != "https://idp.test/jwks" {
 		t.Errorf("decodeOIDCConfig = %+v, %v", got, err)
-	}
-	providerID := uuid.NewString()
-	saml, err := ssoseed.SAMLConfig(providerID, "https://idp.test/saml", "https://idp.test/saml/sso", "-----BEGIN CERTIFICATE-----\nx\n-----END CERTIFICATE-----\n", "urn:example:sp", "http://127.0.0.1:3002")
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfg, err := decodeSAMLConfig(&saml, providerID)
-	if err != nil || cfg.EntityID != "https://idp.test/saml" || cfg.SSOURL != "https://idp.test/saml/sso" || cfg.SPEntityID != "urn:example:sp" ||
-		cfg.SPACSURL != "http://127.0.0.1:3002/api/v1/auth/saml/"+providerID+"/acs" || !strings.Contains(cfg.Certificate, "BEGIN CERTIFICATE") {
-		t.Errorf("decodeSAMLConfig = %+v, %v", cfg, err)
 	}
 }
 

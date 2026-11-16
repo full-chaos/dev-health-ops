@@ -73,20 +73,6 @@ func TestRefusedSubjectLeavesNoProviderValueInTheOIDCRecords(t *testing.T) {
 	assertNothingTheProviderSentIsRecorded(t, ctx, st, providerID, status, body)
 }
 
-func TestRefusedSubjectLeavesNoProviderValueInTheSAMLRecords(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
-	defer cancel()
-	st := startStack(t, ctx)
-	idp := newSAMLIdP(t)
-	providerID := seedSAMLOrgProviderAuto(t, ctx, st, idp, nameIDSP, true)
-	response := idp.signedSAMLResponse(t, samlResponseOpts{
-		spEntityID: nameIDSP, acsURL: samlACSOverrideFor(providerID), email: leakMailTag + "@allowed.example", fullName: leakName,
-		nameID: leakSubject + "\t",
-	})
-	status, body := postJSON(t, st.server, "/api/v1/auth/saml/"+providerID.String()+"/acs", map[string]any{"SAMLResponse": response})
-	assertNothingTheProviderSentIsRecorded(t, ctx, st, providerID, status, body)
-}
-
 func TestRefusedSubjectLeavesNoProviderValueInTheOAuthRecords(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()

@@ -77,9 +77,9 @@ func TestSurrogateRefusalTableUnitRowsAnswerAsTheTableSays(t *testing.T) {
 	driven := 0
 	for _, row := range surrogateRows(t, "sso") {
 		switch row.setup {
-		case "saml_forwarded", "saml_sealed", "oauth_gitlab":
+		case "oauth_gitlab":
 			continue // driven against a real provider row by TestSSOSurrogateRefusalTableStackRows (integration)
-		case "none":
+		case "none", "saml_forwarded", "saml_sealed":
 		default:
 			t.Fatalf("%s: unknown setup %q", row.id, row.setup)
 		}
@@ -98,6 +98,9 @@ func TestSurrogateRefusalTableUnitRowsAnswerAsTheTableSays(t *testing.T) {
 			switch {
 			case strings.HasSuffix(path, "/oidc/00000000-0000-4000-8000-000000000001/authorize"):
 				guard.BodyFirst(policy.Public, http.HandlerFunc(handlers{}.initiateOIDCAuth)).ServeHTTP(recorder, request)
+			case strings.HasSuffix(path, "/saml/{provider}/initiate"):
+				h := newHandlers(Deps{})
+				guard.BodyFirst(policy.Public, h.refuseSAMLNotForwarded(body(samlAuthRequest))).ServeHTTP(recorder, request)
 			default:
 				t.Fatalf("%s: no handler for %s", row.id, row.request)
 			}
@@ -106,8 +109,8 @@ func TestSurrogateRefusalTableUnitRowsAnswerAsTheTableSays(t *testing.T) {
 		assertRefusal(t, row.id, recorder.Code, recorder.Body.Bytes(), status, errType, loc)
 		driven++
 	}
-	if driven != 3 {
-		t.Fatalf("the table drove %d unit rows, want 3", driven)
+	if driven != 7 {
+		t.Fatalf("the table drove %d unit rows, want 7", driven)
 	}
 }
 
@@ -154,8 +157,8 @@ func TestSurrogateRefusalTableIsWellFormed(t *testing.T) {
 	}
 	owners := map[string]string{
 		"sso/none":           "sso unit driver",
-		"sso/saml_forwarded": "sso integration driver",
-		"sso/saml_sealed":    "sso integration driver",
+		"sso/saml_forwarded": "sso unit driver",
+		"sso/saml_sealed":    "sso unit driver",
 		"sso/oauth_gitlab":   "sso integration driver",
 		"githubapp/none":     "githubapp driver",
 	}

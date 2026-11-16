@@ -7,7 +7,7 @@ import (
 )
 
 // A linked NameID whose asserted domain is off the provider's list is refused before the lookup, with the answer
-// an unknown NameID gets (go-api saml.go parity), and no session is issued.
+// an unknown NameID gets, and no session is issued.
 func TestSAMLACSRefusesALinkedIdentityOffTheDomainList(t *testing.T) {
 	for name, tc := range map[string]struct {
 		email  string

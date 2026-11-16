@@ -52,14 +52,10 @@ func stringOrEmpty(value *string) string {
 // disagree).
 //
 // Existing accounts are selected by (auth_provider, sso provider, auth_provider_id)
-// and only full_name, last_login_at and updated_at are written, plus the SAML NameID
-// format and SPNameQualifier of a SAML sign-in (saml_nameid_format, saml_sp_name_qualifier);
-// the identity columns are never rewritten (resolveProviderIdentity).
-func (h handlers) provisionOrGetUser(ctx context.Context, row *providerRow, email, name string, providerID uuid.UUID, externalID string, saml *samlNameIDParts) (*provisionedUser, *provisionedMembership, error) {
+// and only full_name, last_login_at and updated_at are written; the identity
+// columns are never rewritten (resolveProviderIdentity).
+func (h handlers) provisionOrGetUser(ctx context.Context, row *providerRow, email, name string, providerID uuid.UUID, externalID string) (*provisionedUser, *provisionedMembership, error) {
 	authProviderValue := "oidc"
-	if row.Protocol == "saml" {
-		authProviderValue = "saml"
-	}
 
 	var (
 		id                         uuid.UUID
@@ -99,7 +95,7 @@ func (h handlers) provisionOrGetUser(ctx context.Context, row *providerRow, emai
 		externalIDPtr = &externalID
 		return h.createAccountAndMembership(ctx, row, ssoNewAccount{
 			email: email, authProvider: authProviderValue, externalID: externalIDPtr, fullName: fullNamePtr,
-			ssoProviderID: &providerID, saml: saml,
+			ssoProviderID: &providerID,
 		})
 	}
 	if err != nil {
@@ -110,18 +106,14 @@ func (h handlers) provisionOrGetUser(ctx context.Context, row *providerRow, emai
 	if name != "" && stringOrEmpty(existingFullName) == "" {
 		newFullName = &name
 	}
-	// While auth-service owns users the sign-in goes on and writes no public.users row. The two SAML NameID
-	// columns ride in this one UPDATE: its own row lock covers them, and no other column is touched. An OIDC
-	// sign-in passes NULL and keeps both as they are. The UPDATE runs inside membershipOrJoin, in the join's
-	// transaction when the account joins.
+	// While auth-service owns users the sign-in goes on and writes no public.users row. The UPDATE runs inside
+	// membershipOrJoin, in the join's transaction when the account joins.
 	var update func(ctx context.Context, db dbExecer) error
 	if h.refuseWhileUsersOwned() == nil {
 		update = func(ctx context.Context, db dbExecer) error {
-			_, err := db.Exec(ctx, `UPDATE users SET full_name = $2, last_login_at = $3, updated_at = $3,
-	saml_nameid_format = COALESCE($4::text, saml_nameid_format),
-	saml_sp_name_qualifier = COALESCE($5::text, saml_sp_name_qualifier)
+			_, err := db.Exec(ctx, `UPDATE users SET full_name = $2, last_login_at = $3, updated_at = $3
 WHERE id = $1::uuid`,
-				id, newFullName, now, saml.formatArg(), saml.qualifierArg())
+				id, newFullName, now)
 			return err
 		}
 	}
@@ -134,7 +126,7 @@ WHERE id = $1::uuid`,
 		isSuperuser: isSuperuser, tokenVersion: tokenVersion}, membership, nil
 }
 
-// refuseUnusableSubject is the one subject rule of the sign-in callbacks (OIDC, SAML, OAuth): an empty subject, or one
+// refuseUnusableSubject is the one subject rule of the sign-in callbacks (OIDC, OAuth): an empty subject, or one
 // that identity.ValidSubject refuses (NUL and other control characters, invalid UTF-8, edge white space, too long), is
 // refused before any database statement, so the answer never depends on which accounts exist. The error names no value.
 func refuseUnusableSubject(authProvider, externalID string) error {
@@ -145,7 +137,7 @@ func refuseUnusableSubject(authProvider, externalID string) error {
 // no value.
 var errInvalidProviderEmail = errors.New("sso: the identity provider returned an unusable email address")
 
-// refuseUnusableEmail is the one email text rule of the sign-in callbacks (OIDC, SAML, OAuth): identity.RefuseProviderEmail,
+// refuseUnusableEmail is the one email text rule of the sign-in callbacks (OIDC, OAuth): identity.RefuseProviderEmail,
 // the rule auth-service applies too (lone surrogate, invalid UTF-8, NUL, control characters, U+FFFD after the edge
 // trim), applied before any database statement, so the answer never depends on which accounts exist.
 func refuseUnusableEmail(email string) error {
@@ -169,7 +161,7 @@ func (*domainNotAllowedError) Error() string {
 // domainNotAllowedText is the 403 detail of a refused domain, the text auth-service answers; it names no domain.
 const domainNotAllowedText = "Email domain is not allowed for this provider"
 
-// checkAllowedDomain is the allowlist check of the OIDC and SAML callbacks. It runs after the subject and email rules
+// checkAllowedDomain is the allowlist check of the OIDC callback. It runs after the subject and email rules
 // and before any database statement; an empty or absent allowlist allows every domain.
 func checkAllowedDomain(row *providerRow, email string) error {
 	allowedDomains, err := decodeAllowedDomains(row.AllowedDomains)
@@ -202,7 +194,7 @@ func invalidProviderEmailDetail() *pyjson.Object {
 // identity, or the identity key matches more than one account.
 var errIdentityConflict = errors.New("identity conflict")
 
-// resolveProviderIdentity selects an OIDC or SAML account by its (auth_provider,
+// resolveProviderIdentity selects an OIDC account by its (auth_provider,
 // sso_provider_id, auth_provider_id) key: the subject is an identity of the provider
 // that issued it, so the same subject at another provider selects nothing. Without a
 // key hit, an existing account with the same email is a conflict; it is never
@@ -316,29 +308,8 @@ func membershipRequiredDetail() *pyjson.Object {
 type ssoNewAccount struct {
 	email, authProvider                       string
 	externalID, fullName, username, avatarURL *string
-	// ssoProviderID is the OIDC or SAML provider whose identity the account holds; nil for OAuth.
+	// ssoProviderID is the OIDC provider whose identity the account holds; nil for OAuth.
 	ssoProviderID *uuid.UUID
-	// saml carries the NameID Format and SPNameQualifier of a SAML sign-up; nil for OIDC and OAuth.
-	saml *samlNameIDParts
-}
-
-// samlNameIDParts are the NameID attributes the identity key needs besides the NameID value. An empty string
-// is stored as an empty string: the assertion carried none, which is not the same as never captured (NULL).
-// The values are never logged.
-type samlNameIDParts struct{ format, spNameQualifier string }
-
-func (p *samlNameIDParts) formatArg() *string {
-	if p == nil {
-		return nil
-	}
-	return &p.format
-}
-
-func (p *samlNameIDParts) qualifierArg() *string {
-	if p == nil {
-		return nil
-	}
-	return &p.spNameQualifier
 }
 
 func jitRole(row *providerRow) string {
@@ -375,10 +346,9 @@ func (h handlers) createAccountAndMembership(ctx context.Context, row *providerR
 	defer func() { _ = tx.Rollback(context.Background()) }()
 	if _, err := tx.Exec(ctx, `INSERT INTO users
 	(id, email, username, full_name, avatar_url, auth_provider, auth_provider_id, sso_provider_id, is_active, is_verified,
-	 token_version, last_login_at, created_at, updated_at, saml_nameid_format, saml_sp_name_qualifier)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $9, true, true, 0, $8, $8, $8, $10, $11)`,
-		newID, account.email, account.username, account.fullName, account.avatarURL, account.authProvider, account.externalID, now, account.ssoProviderID,
-		account.saml.formatArg(), account.saml.qualifierArg()); err != nil {
+	 token_version, last_login_at, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $9, true, true, 0, $8, $8, $8)`,
+		newID, account.email, account.username, account.fullName, account.avatarURL, account.authProvider, account.externalID, now, account.ssoProviderID); err != nil {
 		if isUniqueViolation(err) {
 			return nil, nil, errIdentityConflict
 		}

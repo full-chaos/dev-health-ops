@@ -82,8 +82,8 @@ func setProviderConfig(t *testing.T, h *harness, expression string) {
 	}
 }
 
-// A provider with no usable certificate: a post with any base64 body and no flow reaches the check, as in go-api
-// (saml.go:541-552). Each post is one record: one provider write, one audit row; the status stays. Once the
+// A provider with no usable certificate: a post with any base64 body and no flow reaches the check.
+// Each post is one record: one provider write, one audit row; the status stays. Once the
 // administrator fixes the row, the provider signs in.
 func TestSAMLCertificateFailuresRecordOncePerPostAndKeepTheProviderActive(t *testing.T) {
 	for name, tc := range map[string]struct{ break_, message string }{

@@ -63,24 +63,6 @@ func TestEmailGuardOIDCCallbackRefusesAnUnusableEmail(t *testing.T) {
 	}
 }
 
-func TestEmailGuardSAMLCallbackRefusesAnUnusableEmail(t *testing.T) {
-	for name, email := range wireUnusableEmails() {
-		t.Run(name, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
-			defer cancel()
-			st := startStack(t, ctx)
-			idp := newSAMLIdP(t)
-			providerID := seedSAMLOrgProviderAuto(t, ctx, st, idp, nameIDSP, true)
-			before := snapshotRows(t, ctx, st)
-			response := idp.signedSAMLResponse(t, samlResponseOpts{
-				spEntityID: nameIDSP, acsURL: samlACSOverrideFor(providerID), email: email, fullName: "Person", nameID: "name-1",
-			})
-			status, body := postJSON(t, st.server, "/api/v1/auth/saml/"+providerID.String()+"/acs", map[string]any{"SAMLResponse": response})
-			assertEmailRefused(t, ctx, st, providerID, before, status, body)
-		})
-	}
-}
-
 func TestEmailGuardOAuthCallbackRefusesAnUnusableEmail(t *testing.T) {
 	for name, email := range map[string]string{
 		"replacement char": emailLeakMarker + `�@example.test`,

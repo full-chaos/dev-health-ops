@@ -11,7 +11,7 @@ import (
 )
 
 // A linked NameID signs in only while the provider's allowed_domains holds the asserted domain, and only with an
-// email (go-api saml.go parity): the list is read on every sign-in.
+// email: the list is read on every sign-in.
 func TestSAMLLinkedIdentityIsRefusedOnceItsDomainLeavesTheList(t *testing.T) {
 	h := newHarness(t, true)
 	user := h.linkedUser(uniqueEmail("u"), "user-domain")

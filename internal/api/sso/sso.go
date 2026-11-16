@@ -19,14 +19,14 @@
 //
 // Activate and deactivate are not gated: they are ported in full.
 //
-// initiateOIDCAuth/oidcCallback (CHAOS-6658), samlMetadata/
-// initiateSAMLAuth/samlACSCallback (CHAOS-6659) and initiateOAuthAuth/
+// initiateOIDCAuth/oidcCallback (CHAOS-6658) and initiateOAuthAuth/
 // oauthCallback/initiateOAuthByType (CHAOS-6986) are ported in full, each
 // with a REAL entitlement gate (requireEntitlement, gate.go): D2725 ruled
 // that Python's dead per-org fallback above is a delta to fix, not a
-// parity target, for these eight routes specifically. See oidc.go's,
-// saml.go's and oauth.go's own doc comments for what each PR changed and
-// why.
+// parity target, for these five routes specifically. See oidc.go's and
+// oauth.go's own doc comments for what each PR changed and why. The three
+// SAML routes are forward-only: Inner sends them to auth-service, and
+// without the forward a configured sign-in answers 503 naming AUTH_PROXY_SAML.
 package sso
 
 import (
@@ -135,21 +135,14 @@ func Routes(deps Deps) []httpapi.Route {
 		oidcAuthorize = http.HandlerFunc(h.initiateOIDCAuth)
 		oidcCallbackHandler = http.HandlerFunc(h.oidcCallback)
 	}
-	// D2744: the three SAML routes now DO need StateSecret -- a provider
-	// with allow_idp_initiated=false mints/verifies an AEAD RelayState the
-	// same way OIDC's/OAuth's state works (samlstate.go). An earlier
-	// version of this comment said StateSecret was irrelevant here; that
-	// was true only before D2744's fix. Without it, a provider with
-	// allow_idp_initiated=false would 500 on every initiate/callback
-	// instead of running for real, so both are required to mount the real
-	// handlers, matching OIDC's/OAuth's own gate shape.
+	// SAML has no local sign-in: with sign-in configured and no forward, the routes check the body, then refuse.
 	samlMetadataHandler := h.orStateMissing(h.gated(noInput))
 	samlInitiate := h.orStateMissing(h.gated(body(samlAuthRequest)))
 	samlACS := h.orStateMissing(h.gated(body(samlCallbackRequest)))
 	if h.signIn() {
-		samlMetadataHandler = http.HandlerFunc(h.samlMetadata)
-		samlInitiate = http.HandlerFunc(h.initiateSAMLAuth)
-		samlACS = http.HandlerFunc(h.samlACSCallback)
+		samlMetadataHandler = h.refuseSAMLNotForwarded(noInput)
+		samlInitiate = h.refuseSAMLNotForwarded(body(samlAuthRequest))
+		samlACS = h.refuseSAMLNotForwarded(body(samlCallbackRequest))
 	}
 	if h.sessionsOff() {
 		samlMetadataHandler, samlInitiate, samlACS = http.HandlerFunc(h.refuseSessionsOff), http.HandlerFunc(h.refuseSessionsOff), http.HandlerFunc(h.refuseSessionsOff)
@@ -225,7 +218,7 @@ func (h handlers) orStateMissing(next http.Handler) http.Handler {
 // community feature, so the check still refuses by default. Were a real,
 // higher-tier license (LICENSE_KEY/LICENSE_PUBLIC_KEY set and valid) to
 // grant sso_saml, this route would still have to be ported first -- it
-// isn't, for every route except the eight this package's own doc comment
+// isn't, for every route except the five this package's own doc comment
 // names -- so it fails loudly instead of silently letting an unported
 // route through on a license upgrade alone.
 func (h handlers) gated(validate validator) http.Handler {
@@ -284,12 +277,12 @@ type pairRoute struct {
 // (FastAPI routes do not add HEAD); else 404.
 func (h handlers) oauthPair() http.Handler {
 	g := h.Guard
-	// CHAOS-6986: like OIDC (initiateOIDCAuth/oidcCallback) and SAML
-	// (samlMetadata/initiateSAMLAuth/samlACSCallback), the three real OAuth
-	// handlers need StateSecret (the AEAD opaque state token, oauthstate.go)
-	// and Signer (the login token pair, login.go's finishSSOLogin) to run
-	// for real; without either, these three stay the same process-tier-only
-	// shim the other two /oauth routes (providers PATCH) still answer.
+	// CHAOS-6986: like OIDC (initiateOIDCAuth/oidcCallback), the three real
+	// OAuth handlers need StateSecret (the AEAD opaque state token,
+	// oauthstate.go) and Signer (the login token pair, login.go's
+	// finishSSOLogin) to run for real; without either, these three stay the
+	// same process-tier-only shim the other two /oauth routes (providers
+	// PATCH) still answer.
 	oauthAuthorize := h.orStateMissing(h.gated(body(oauthAuthRequest)))
 	oauthCallbackHandler := h.orStateMissing(h.gated(body(oauthCallbackRequest)))
 	oauthByType := h.orStateMissing(h.gated(byTypeQuery))
@@ -347,6 +340,20 @@ func (h handlers) sessionsOff() bool { return h.StateSecret != "" && h.Issuer ==
 func (h handlers) refuseSessionsOff(w http.ResponseWriter, r *http.Request) {
 	h.Logger.ErrorContext(r.Context(), "sso route refused: AUTH_PROXY_SESSIONS is not on", "path", r.Pattern)
 	policy.WriteConfigMissing(w, "AUTH_PROXY_SESSIONS")
+}
+
+// refuseSAMLNotForwarded answers a SAML route's 422, then 503 config_missing naming AUTH_PROXY_SAML.
+func (h handlers) refuseSAMLNotForwarded(validate validator) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var errs pybody.Errors
+		validate(r, &errs)
+		if len(errs) > 0 {
+			policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(errs), nil)
+			return
+		}
+		h.Logger.ErrorContext(r.Context(), "sso route refused: AUTH_PROXY_SAML is not on", "path", r.Pattern)
+		policy.WriteConfigMissing(w, "AUTH_PROXY_SAML")
+	})
 }
 
 func newHandlers(deps Deps) handlers {

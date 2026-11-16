@@ -1,0 +1,5 @@
+{
+  "saml acs: by name": "503 {\"detail\":{\"message\":\"AUTH_PROXY_SAML is not set\",\"reason_code\":\"config_missing\"}}",
+  "saml initiate: valid": "503 {\"detail\":{\"message\":\"AUTH_PROXY_SAML is not set\",\"reason_code\":\"config_missing\"}}",
+  "saml metadata": "503 {\"detail\":{\"message\":\"AUTH_PROXY_SAML is not set\",\"reason_code\":\"config_missing\"}}"
+}

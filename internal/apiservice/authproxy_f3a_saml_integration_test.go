@@ -3,12 +3,12 @@
 package apiservice
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
@@ -22,13 +22,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 )
 
-// With the F3a prod flags (SAML proxy off), an SSO state secret (so the real
-// SAML handlers mount, as in prod) and no SAML provider stored, the SAML
-// sign-in routes answer go-api's own 404 "SSO provider not found" and never
-// reach auth-service. The ACS calls carry SAMLResponse payloads the SAML
-// parser refuses (400 "SAML authentication failed") if it ever ran: a 404 is
-// only possible when the provider lookup refuses before any parse.
-func TestAuthProxyF3aSAMLRoutesAnswerProviderNotFoundBeforeAnyParse(t *testing.T) {
+// With SAML forwarding off every valid SAML request answers config_missing without reaching auth-service.
+func TestAuthProxySAMLForwardOffAnswersConfigMissingBeforeAnyProviderLookupOrParse(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	pg, err := containers.StartPostgres(ctx)
@@ -79,15 +74,13 @@ func TestAuthProxyF3aSAMLRoutesAnswerProviderNotFoundBeforeAnyParse(t *testing.T
 			calls = append(calls, proxyCall{method: http.MethodPost, target: saml + "/acs", body: string(body)})
 		}
 	}
+	want := httptest.NewRecorder()
+	policy.WriteConfigMissing(want, "AUTH_PROXY_SAML")
 	for _, call := range calls {
 		recorder := httptest.NewRecorder()
 		handler.ServeHTTP(recorder, call.request(t))
-		var detail struct {
-			Detail string `json:"detail"`
-		}
-		_ = json.Unmarshal(recorder.Body.Bytes(), &detail)
-		if recorder.Code != http.StatusNotFound || detail.Detail != "SSO provider not found" {
-			t.Errorf("%s %s %.60s = %d %s, want 404 SSO provider not found", call.method, call.target, call.body, recorder.Code, strings.TrimSpace(recorder.Body.String()))
+		if recorder.Code != want.Code || !bytes.Equal(recorder.Body.Bytes(), want.Body.Bytes()) {
+			t.Errorf("%s %s %.60s = %d %s, want %d %s", call.method, call.target, call.body, recorder.Code, recorder.Body, want.Code, want.Body)
 		}
 	}
 	if seen := stub.requests(); len(seen) != 0 {

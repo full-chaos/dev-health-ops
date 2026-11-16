@@ -47,7 +47,7 @@ func ownedIdentities(t *testing.T, ctx context.Context, st stack) *identity.Stor
 	return store
 }
 
-// TestFlipBackSignInFindsAnAccountProvisionedUnderOwned: an OIDC or SAML account that auth-service provisioned while
+// TestFlipBackSignInFindsAnAccountProvisionedUnderOwned: an OIDC account that auth-service provisioned while
 // it owned users signs in through go-api after the switch back, as the same account: go-api finds it by its
 // (auth_provider, sso_provider_id, auth_provider_id) key and writes no new account.
 func TestFlipBackSignInFindsAnAccountProvisionedUnderOwned(t *testing.T) {
@@ -61,12 +61,8 @@ func TestFlipBackSignInFindsAnAccountProvisionedUnderOwned(t *testing.T) {
 
 			const email = "flipback.person@allowed.example"
 			subject := "subject-owned-" + uuid.NewString()[:8]
-			keySubject := subject
-			if rig.protocol == "saml" {
-				keySubject = "saml1|urn:oasis:names:tc:SAML:2.0:nameid-format:persistent||" + subject
-			}
 			principal, err := store.ProvisionFederated(ctx, identity.ProvisionRequest{
-				Key:   identity.ExternalKey{Issuer: "https://idp.flipback.test/" + rig.protocol, Provider: identity.Provider(provider.String()), Subject: keySubject},
+				Key:   identity.ExternalKey{Issuer: "https://idp.flipback.test/" + rig.protocol, Provider: identity.Provider(provider.String()), Subject: subject},
 				Email: email, Actor: identity.SelfSignUp(nil), LegacyProvider: rig.protocol, LegacySubject: subject,
 			})
 			if err != nil {

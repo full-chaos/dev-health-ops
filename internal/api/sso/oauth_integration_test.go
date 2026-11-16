@@ -26,21 +26,25 @@ package sso_test
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 )
 
-// newCookieClient is a *http.Client whose jar carries the D2745 P1-3
-// login-nonce cookie /authorize sets to the following /callback POST --
-// the same technique saml_integration_test.go's TestSAMLACSHonoursAllowIdpInitiatedFalse
-// (D2744/D2745, already landed) uses for SAML's own login-nonce cookie.
+// newCookieClient carries the login nonce cookie from authorize to callback.
 func newCookieClient(t *testing.T) *http.Client {
 	t.Helper()
 	jar, err := cookiejar.New(nil)
@@ -396,9 +400,7 @@ func TestOAuthCallbackRefusesATamperedLoginNonceCookie(t *testing.T) {
 	assertSSOAuditStage(t, ctx, st.pool, orgID, "state_auth")
 }
 
-// flipMiddleByte is shared with oidc_integration_test.go/
-// saml_integration_test.go (same sso_test package) -- see its doc comment
-// there.
+// flipMiddleByte is shared with the OIDC integration tests.
 
 func TestOAuthCallbackRefusesAnExpiredState(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -938,4 +940,72 @@ func mustScopesJSON(spaceJoined string) string {
 	parts := strings.Split(spaceJoined, " ")
 	encoded, _ := json.Marshal(parts)
 	return string(encoded)
+}
+
+// TestSSOSurrogateRefusalTableStackRows drives the oauth_* rows of ci/sso_surrogate_refusals.tsv against a real provider row.
+func TestSSOSurrogateRefusalTableStackRows(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "ci", "sso_surrogate_refusals.tsv"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	st := startStack(t, ctx)
+	orgID := seedOrg(t, ctx, st.pool, "enterprise")
+	providers := map[string]uuid.UUID{
+		"oauth_gitlab": seedProvider(t, ctx, st.pool, orgID, providerOpts{
+			protocol: "oauth_gitlab", status: "active", config: gitlabConfig(startFakeGitLab(t).server.URL), autoProvision: true,
+			clientSecretEncryptedFallback: "gitlab-secret",
+		}),
+	}
+	driven := 0
+	for _, line := range strings.Split(string(raw), "\n") {
+		f := strings.Split(line, "\t")
+		if line == "" || strings.HasPrefix(line, "#") || f[1] != "sso" || !strings.HasPrefix(f[4], "oauth_") {
+			continue
+		}
+		id, request, body, setup, wantCell := f[0], f[2], f[3], f[4], strings.Fields(f[5])
+		provider, known := providers[setup]
+		if !known {
+			t.Fatalf("%s: unknown setup %q", id, setup)
+		}
+		method, path, _ := strings.Cut(request, " ")
+		if encoded, isHex := strings.CutPrefix(body, "hex:"); isHex {
+			decoded, err := hex.DecodeString(encoded)
+			if err != nil {
+				t.Fatalf("%s: %v", id, err)
+			}
+			body = string(decoded)
+		}
+		req, err := http.NewRequest(method, st.server.URL+strings.Replace(path, "{provider}", provider.String(), 1), strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		text, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if want, _ := strconv.Atoi(wantCell[0]); resp.StatusCode != want {
+			t.Errorf("%s: status=%d want %s body=%s", id, resp.StatusCode, wantCell[0], text)
+		}
+		if len(wantCell) == 3 {
+			var parsed struct {
+				Detail []struct {
+					Type string `json:"type"`
+					Loc  []any  `json:"loc"`
+				} `json:"detail"`
+			}
+			if err := json.Unmarshal(text, &parsed); err != nil || len(parsed.Detail) != 1 || parsed.Detail[0].Type != wantCell[1] ||
+				fmt.Sprint(parsed.Detail[0].Loc) != "["+strings.ReplaceAll(wantCell[2], ".", " ")+"]" {
+				t.Errorf("%s: body=%s want %s %s", id, text, wantCell[1], wantCell[2])
+			}
+		}
+		driven++
+	}
+	if driven != 1 {
+		t.Fatalf("drove %d oauth rows, want 1", driven)
+	}
 }

@@ -27,18 +27,6 @@ func wantJoinRefused(t *testing.T, ctx context.Context, st stack, email string, 
 func TestSSOJoinRefusedWhileUsersOwned(t *testing.T) {
 	t.Setenv("AUTH_USERS_OWNED", "true")
 
-	t.Run("saml", func(t *testing.T) {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-		defer cancel()
-		st := startStack(t, ctx)
-		idp := newSAMLIdP(t)
-		const sp, email = "https://sp.test/saml/metadata", "join.saml@allowed.example"
-		providerID := seedSAMLOrgProvider(t, ctx, st, idp, sp)
-		seedBoundAccount(t, ctx, st.pool, providerID, email, "saml", "join-saml-subject")
-		status, body := samlSignIn(t, st, idp, providerID, sp, email, "join-saml-subject")
-		wantJoinRefused(t, ctx, st, email, status, body)
-	})
-
 	t.Run("oidc", func(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
@@ -96,10 +84,10 @@ func TestSSOJoinUnchangedSwitchOff(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	st := startStack(t, ctx)
-	idp := newSAMLIdP(t)
-	const sp, email = "https://sp.test/saml/metadata", "join.off@allowed.example"
-	providerID := seedSAMLOrgProvider(t, ctx, st, idp, sp)
-	seedBoundAccount(t, ctx, st.pool, providerID, email, "saml", "join-off-subject")
-	status, body := samlSignIn(t, st, idp, providerID, sp, email, "join-off-subject")
-	assertProvisionedMember(t, ctx, st, orgOf(t, ctx, st.pool, providerID), email, "saml", "join-off-subject", status, body)
+	rig := newOIDCScopeRig()
+	providerID := rig.seed(t, ctx, st, true)
+	const email = "join.off@allowed.example"
+	seedBoundAccount(t, ctx, st.pool, providerID, email, "oidc", "join-off-subject")
+	status, body := rig.signIn(t, st, providerID, email, "join-off-subject")
+	assertProvisionedMember(t, ctx, st, orgOf(t, ctx, st.pool, providerID), email, "oidc", "join-off-subject", status, body)
 }

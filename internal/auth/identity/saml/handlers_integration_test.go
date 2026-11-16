@@ -291,8 +291,8 @@ func TestSAMLACSAcceptsTheAdvertisedHTTPPostBinding(t *testing.T) {
 
 // TestSAMLBrowserCompletesSignInAtTheAdvertisedACSURL: a browser with a cookie
 // jar starts the flow, reads the ACS URL from the metadata and posts the form
-// there; the binding cookie must reach that URL. The routes are mounted under
-// the configured base, whatever its path.
+// there; the binding cookie must reach that URL. The routes are mounted at the
+// served path (/api/v1/auth/saml/...) under the configured base, whatever its path.
 func TestSAMLBrowserCompletesSignInAtTheAdvertisedACSURL(t *testing.T) {
 	h := newHarness(t, false)
 	user := h.linkedUser(uniqueEmail("u"), "user-1")
@@ -303,9 +303,9 @@ func TestSAMLBrowserCompletesSignInAtTheAdvertisedACSURL(t *testing.T) {
 	t.Cleanup(srv.Close)
 	const prefix = "/sso-under-test"
 	h.svc.BaseURL = func() string { return srv.URL + prefix }
-	mux.HandleFunc("GET "+prefix+"/saml/{provider_id}/metadata", handlers.Metadata)
-	mux.HandleFunc("POST "+prefix+"/saml/{provider_id}/initiate", handlers.Initiate)
-	mux.HandleFunc("POST "+prefix+"/saml/{provider_id}/acs", handlers.ACS)
+	mux.HandleFunc("GET "+prefix+"/api/v1/auth/saml/{provider_id}/metadata", handlers.Metadata)
+	mux.HandleFunc("POST "+prefix+"/api/v1/auth/saml/{provider_id}/initiate", handlers.Initiate)
+	mux.HandleFunc("POST "+prefix+"/api/v1/auth/saml/{provider_id}/acs", handlers.ACS)
 
 	jar, err := cookiejar.New(nil)
 	if err != nil {
@@ -313,7 +313,7 @@ func TestSAMLBrowserCompletesSignInAtTheAdvertisedACSURL(t *testing.T) {
 	}
 	client := srv.Client()
 	client.Jar = jar
-	base := srv.URL + prefix + "/saml/" + h.provider.ID.String()
+	base := srv.URL + prefix + "/api/v1/auth/saml/" + h.provider.ID.String()
 
 	resp0, err := client.Post(base+"/initiate", "application/json", strings.NewReader(`{}`))
 	if err != nil {

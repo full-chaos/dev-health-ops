@@ -5,7 +5,8 @@
 // updated_at; activate and deactivate set the status; delete removes the row (users.sso_provider_id becomes NULL by its
 // foreign key; replay and flow rows stay). The client secret is sealed with the SSO cipher and never leaves the store: a
 // provider the store returns carries the masked config the legacy response showed, never the secret or its sealed form.
-// Every write is one audit.Commit with its own audit row.
+// Every write is one audit.CommitPublicProjectionWith with its own audit row and no outbox event (public.sso_providers
+// is an ops-schema table: audit.Commit counts changed rows on guarded auth tables only).
 package ssoprovider
 
 import (
@@ -94,7 +95,7 @@ type UpdateInput struct {
 	AllowedDomains                              *[]string
 }
 
-// Store reads and writes public.sso_providers. Pool is the auth-service pool (the one audit.Commit runs on).
+// Store reads and writes public.sso_providers. Pool is the auth-service pool (the one its audit commits run on).
 type Store struct {
 	Pool   *pgxpool.Pool
 	Schema authschema.ValidatedIdentifier
@@ -271,22 +272,21 @@ func (s Store) Create(ctx context.Context, org uuid.UUID, in CreateInput, a Acto
 	if err != nil {
 		return nil, fault(err)
 	}
-	err = audit.Commit(ctx, s.Pool, s.Schema, audit.Mutation{
-		Apply: func(ctx context.Context, tx audit.TxOps) error {
+	err = audit.CommitPublicProjectionWith(ctx, s.Pool, s.Schema,
+		s.auditEvent(audit.EventSSOProviderCreated, org, id, a, map[string]any{"reason_code": "sso_provider_created", "provider": in.Protocol}),
+		func(ctx context.Context, tx audit.TxOps) (int64, error) {
 			if in.IsDefault {
 				if err := clearDefault(ctx, tx, org, in.Protocol, nil, now); err != nil {
-					return err
+					return 0, err
 				}
 			}
-			_, err := tx.Exec(ctx, `INSERT INTO public.sso_providers (id, org_id, name, protocol, status, default_role, is_default, allow_idp_initiated,
+			tag, err := tx.Exec(ctx, `INSERT INTO public.sso_providers (id, org_id, name, protocol, status, default_role, is_default, allow_idp_initiated,
 	auto_provision_users, config, encrypted_secrets, allowed_domains, created_at, updated_at)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::json, $11::json, $12::json, $13, $13)`,
 				id, org, in.Name, in.Protocol, StatusPendingSetup, in.DefaultRole, in.IsDefault, in.AllowIdpInitiated, in.AutoProvision,
 				config, in.Config.Secrets, string(domains), now)
-			return err
-		},
-		Audit: s.auditEvent("auth.sso_provider.created", org, id, a, map[string]any{"reason_code": "sso_provider_created", "provider": in.Protocol}),
-	})
+			return tag.RowsAffected(), err
+		}, audit.PublicProjectionOptions{})
 	if err != nil {
 		return nil, fault(err)
 	}
@@ -296,14 +296,15 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::json, $11::json, $12::json, $13
 // Update is the legacy update_provider: only the named fields change, updated_at moves, a default flag clears the others'.
 func (s Store) Update(ctx context.Context, org, id uuid.UUID, in UpdateInput, a Actor) (*Provider, error) {
 	now := s.now()
-	err := audit.Commit(ctx, s.Pool, s.Schema, audit.Mutation{
-		Apply: func(ctx context.Context, tx audit.TxOps) error {
+	err := audit.CommitPublicProjectionWith(ctx, s.Pool, s.Schema,
+		s.auditEvent(audit.EventSSOProviderUpdated, org, id, a, map[string]any{"reason_code": "sso_provider_updated"}),
+		func(ctx context.Context, tx audit.TxOps) (int64, error) {
 			var protocol string
 			if err := tx.QueryRow(ctx, `SELECT protocol FROM public.sso_providers WHERE id = $1 AND org_id = $2 FOR UPDATE`, id, org).Scan(&protocol); err != nil {
 				if errors.Is(err, pgx.ErrNoRows) {
-					return ErrNotFound
+					return 0, ErrNotFound
 				}
-				return err
+				return 0, err
 			}
 			sets, args := []string{}, []any{id, org, now}
 			set := func(column, cast string, value any) {
@@ -316,7 +317,7 @@ func (s Store) Update(ctx context.Context, org, id uuid.UUID, in UpdateInput, a 
 			if in.Config != nil {
 				config, err := marshalConfig(in.Config.JSON)
 				if err != nil {
-					return err
+					return 0, err
 				}
 				set("config", "::json", config)
 				if in.Config.Secrets != nil {
@@ -326,7 +327,7 @@ func (s Store) Update(ctx context.Context, org, id uuid.UUID, in UpdateInput, a 
 			if in.IsDefault != nil {
 				if *in.IsDefault {
 					if err := clearDefault(ctx, tx, org, protocol, &id, now); err != nil {
-						return err
+						return 0, err
 					}
 				}
 				set("is_default", "", *in.IsDefault)
@@ -343,7 +344,7 @@ func (s Store) Update(ctx context.Context, org, id uuid.UUID, in UpdateInput, a 
 			if in.AllowedDomains != nil {
 				domains, err := json.Marshal(*in.AllowedDomains)
 				if err != nil {
-					return err
+					return 0, err
 				}
 				set("allowed_domains", "::json", string(domains))
 			}
@@ -351,12 +352,9 @@ func (s Store) Update(ctx context.Context, org, id uuid.UUID, in UpdateInput, a 
 			for _, clause := range sets {
 				statement += `, ` + clause
 			}
-			_, err := tx.Exec(ctx, statement+` WHERE id = $1 AND org_id = $2`, args...)
-			return err
-		},
-		Audit:    s.auditEvent("auth.sso_provider.updated", org, id, a, map[string]any{"reason_code": "sso_provider_updated"}),
-		Refusals: []error{ErrNotFound},
-	})
+			tag, err := tx.Exec(ctx, statement+` WHERE id = $1 AND org_id = $2`, args...)
+			return tag.RowsAffected(), err
+		}, audit.PublicProjectionOptions{Refusals: []error{ErrNotFound}})
 	if err != nil {
 		return nil, fault(err)
 	}
@@ -369,25 +367,23 @@ func (s Store) SetStatus(ctx context.Context, org, id uuid.UUID, status string, 
 		return nil, fmt.Errorf("%w: status %q", ErrStore, status)
 	}
 	now := s.now()
-	reason, eventType := "sso_provider_activated", "auth.sso_provider.activated"
+	reason, eventType := "sso_provider_activated", audit.EventSSOProviderActivated
 	if status == StatusInactive {
-		reason, eventType = "sso_provider_deactivated", "auth.sso_provider.deactivated"
+		reason, eventType = "sso_provider_deactivated", audit.EventSSOProviderDeactivated
 	}
-	err := audit.Commit(ctx, s.Pool, s.Schema, audit.Mutation{
-		Apply: func(ctx context.Context, tx audit.TxOps) error {
+	err := audit.CommitPublicProjectionWith(ctx, s.Pool, s.Schema,
+		s.auditEvent(eventType, org, id, a, map[string]any{"reason_code": reason, "new_status": statusAttribute(status)}),
+		func(ctx context.Context, tx audit.TxOps) (int64, error) {
 			var previous string
 			if err := tx.QueryRow(ctx, `SELECT status FROM public.sso_providers WHERE id = $1 AND org_id = $2 FOR UPDATE`, id, org).Scan(&previous); err != nil {
 				if errors.Is(err, pgx.ErrNoRows) {
-					return ErrNotFound
+					return 0, ErrNotFound
 				}
-				return err
+				return 0, err
 			}
-			_, err := tx.Exec(ctx, `UPDATE public.sso_providers SET status = $3, updated_at = $4 WHERE id = $1 AND org_id = $2`, id, org, status, now)
-			return err
-		},
-		Audit:    s.auditEvent(eventType, org, id, a, map[string]any{"reason_code": reason, "new_status": statusAttribute(status)}),
-		Refusals: []error{ErrNotFound},
-	})
+			tag, err := tx.Exec(ctx, `UPDATE public.sso_providers SET status = $3, updated_at = $4 WHERE id = $1 AND org_id = $2`, id, org, status, now)
+			return tag.RowsAffected(), err
+		}, audit.PublicProjectionOptions{Refusals: []error{ErrNotFound}})
 	if err != nil {
 		return nil, fault(err)
 	}
@@ -404,19 +400,17 @@ func statusAttribute(status string) string {
 
 // Delete is the legacy delete_provider: the row goes; users.sso_provider_id becomes NULL through its foreign key.
 func (s Store) Delete(ctx context.Context, org, id uuid.UUID, a Actor) error {
-	err := audit.Commit(ctx, s.Pool, s.Schema, audit.Mutation{
-		Apply: func(ctx context.Context, tx audit.TxOps) error {
+	err := audit.CommitPublicProjectionWith(ctx, s.Pool, s.Schema,
+		s.auditEvent(audit.EventSSOProviderDeleted, org, id, a, map[string]any{"reason_code": "sso_provider_deleted"}),
+		func(ctx context.Context, tx audit.TxOps) (int64, error) {
 			tag, err := tx.Exec(ctx, `DELETE FROM public.sso_providers WHERE id = $1 AND org_id = $2`, id, org)
 			if err != nil {
-				return err
+				return 0, err
 			}
 			if tag.RowsAffected() == 0 {
-				return ErrNotFound
+				return 0, ErrNotFound
 			}
-			return nil
-		},
-		Audit:    s.auditEvent("auth.sso_provider.deleted", org, id, a, map[string]any{"reason_code": "sso_provider_deleted"}),
-		Refusals: []error{ErrNotFound},
-	})
+			return tag.RowsAffected(), nil
+		}, audit.PublicProjectionOptions{Refusals: []error{ErrNotFound}})
 	return fault(err)
 }

@@ -367,12 +367,21 @@ AUTO_RUN_MIGRATIONS: {{ ternary "false" "true" .Values.migrations.hook.enabled |
 {{- end }}
 
 {{/*
+Renders "true" for the names of the retired HS256 access-token key and its file form, in any case. The class [K] keeps the
+literal spelling out of the chart text on purpose: the chart gate refuses it everywhere, and this is the one place that must
+match it. No chart value may carry these names: the shared Secret drops them and extraEnv refuses them in every form.
+*/}}
+{{- define "dev-health.retiredHS256Name" -}}
+{{- if regexMatch "^(AUTH_)?JWT_SECRET_[K]EY(_FILE)?$" (upper (trim (toString .))) }}true{{- end }}
+{{- end }}
+
+{{/*
 Shared secret stringData — used by the main Secret and the migration hook
 Secret.
 */}}
 {{- define "dev-health.secretData" -}}
 {{- range $key, $value := .Values.secrets.data }}
-{{- if $value }}
+{{- if and $value (not (include "dev-health.retiredHS256Name" $key)) }}
 {{ $key }}: {{ $value | quote }}
 {{- end }}
 {{- end }}

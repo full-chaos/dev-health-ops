@@ -22,11 +22,18 @@ var hs256Surfaces = []string{
 	chartRel + "/values*.yaml",
 	chartRel + "/values.schema.json",
 	"compose.yml",
-	"ci/*.yml", "ci/*/*.yml",
-	"ci/*.sh", "ci/*/*.sh",
-	"deploy/scripts/*.sh",
-	"scripts/*.sh", "scripts/*.yaml",
 	".env.example",
+}
+
+// hs256SurfaceRoots are walked at every depth for the file types below.
+var hs256SurfaceRoots = []string{"ci", "scripts", "deploy/scripts"}
+
+func hs256SurfaceType(p string) bool {
+	switch filepath.Ext(p) {
+	case ".yml", ".yaml", ".sh":
+		return !strings.HasSuffix(p, "_test.go")
+	}
+	return false
 }
 
 func hs256SurfaceFiles(g *guard) []string {
@@ -43,18 +50,27 @@ func hs256SurfaceFiles(g *guard) []string {
 			}
 		}
 	}
-	// A directory under the templates that cannot be read in full must fail by name, not shrink the walk.
-	_ = filepath.WalkDir(g.path(chartRel+"/templates"), func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			rel, _ := filepath.Rel(g.root, p)
-			g.failf("cannot read the directory %s in full: %v", filepath.ToSlash(rel), err)
+	// A directory that cannot be read in full must fail by name, not shrink the walk.
+	walk := func(root string, keep func(string) bool) {
+		if _, err := os.Stat(g.path(root)); os.IsNotExist(err) {
+			return
+		}
+		_ = filepath.WalkDir(g.path(root), func(p string, d fs.DirEntry, err error) error {
+			if err != nil {
+				rel, _ := filepath.Rel(g.root, p)
+				g.failf("cannot read the directory %s in full: %v", filepath.ToSlash(rel), err)
+				return nil
+			}
+			if !d.IsDir() && keep(p) {
+				seen[p] = true
+			}
 			return nil
-		}
-		if !d.IsDir() && !strings.HasSuffix(p, "_test.go") {
-			seen[p] = true
-		}
-		return nil
-	})
+		})
+	}
+	walk(chartRel+"/templates", func(p string) bool { return !strings.HasSuffix(p, "_test.go") })
+	for _, root := range hs256SurfaceRoots {
+		walk(root, hs256SurfaceType)
+	}
 	var out []string
 	for f := range seen {
 		out = append(out, f)
@@ -139,11 +155,41 @@ func hs256RenderCarriesNoKey(g *guard, label string, args []string) {
 	}
 }
 
+// hs256LegacyValuesAreInert: a leftover legacy value or env reference must not put the retired key into any workload.
+func hs256LegacyValuesAreInert(g *guard) {
+	r := g.tpl("hs256", join(hs256RenderArgs, set("secrets.data.JWT_SECRET_KEY=legacy-sentinel", "hs256Secret.externalSecretName=leftover"))...)
+	if r.code != 0 {
+		g.failf("legacy-values: a leftover legacy value stopped the render: %s", firstLines(r.stderr, 3))
+	} else if strings.Contains(r.stdout, "legacy-sentinel") {
+		g.failf("legacy-values: the value of a retired secrets.data key reached the render")
+	}
+	for _, c := range []struct{ key, name string }{
+		{"goApi.extraEnv", "JWT_SECRET_KEY"}, {"authService.extraEnv", "AUTH_JWT_SECRET_KEY"}, {"goApi.extraEnv", "jwt_secret_key"},
+	} {
+		for _, form := range []string{
+			`[{"name":"` + c.name + `","valueFrom":{"secretKeyRef":{"name":"x","key":"y"}}}]`,
+			`[{"name":"` + c.name + `","value":"x"}]`,
+		} {
+			r := g.tpl("hs256", join(hs256RenderArgs, setJSON(c.key+"="+form))...)
+			if r.code == 0 {
+				g.failf("legacy-values: %s accepted the retired name %s (%s)", c.key, c.name, form)
+			}
+		}
+	}
+}
+
 func TestNoDeploymentCarriesTheHS256KeyRealTree(t *testing.T) {
 	root := realRoot(t)
 	t.Run("no-deployment-surface-names-the-hs256-key", func(t *testing.T) {
 		g := &guard{root: root, tmp: t.TempDir()}
 		noDeploymentSurfaceNamesTheHS256Key(g)
+		if len(g.v) > 0 {
+			t.Fatalf("%d violation(s):\n  %s", len(g.v), strings.Join(g.v, "\n  "))
+		}
+	})
+	t.Run("legacy-values-are-inert", func(t *testing.T) {
+		g := &guard{root: root, tmp: t.TempDir()}
+		hs256LegacyValuesAreInert(g)
 		if len(g.v) > 0 {
 			t.Fatalf("%d violation(s):\n  %s", len(g.v), strings.Join(g.v, "\n  "))
 		}
@@ -196,6 +242,21 @@ func TestNoDeploymentCarriesTheHS256KeyPlanted(t *testing.T) {
 		{"key-line-in-a-ci-subdir-sh", surfaces, func(t *testing.T, root string) {
 			writeFile(t, root, "ci/bigboy/zz.sh", "export "+key+"=x\n")
 		}, hs256Surface, "ci/bigboy/zz.sh:1"},
+		{"key-line-in-a-ci-yaml", surfaces, func(t *testing.T, root string) {
+			writeFile(t, root, "ci/zz.yaml", "name: AUTH_"+key+"\n")
+		}, hs256Surface, "ci/zz.yaml:1"},
+		{"key-line-in-a-deep-ci-yaml", surfaces, func(t *testing.T, root string) {
+			writeFile(t, root, "ci/auth_k8s/zz/zz.yaml", "name: "+key+"\n")
+		}, hs256Surface, "ci/auth_k8s/zz/zz.yaml:1"},
+		{"key-line-in-a-deep-ci-sh", surfaces, func(t *testing.T, root string) {
+			writeFile(t, root, "ci/a/b/c/zz.sh", "export "+key+"=x\n")
+		}, hs256Surface, "ci/a/b/c/zz.sh:1"},
+		{"key-line-in-a-deep-ci-yml", surfaces, func(t *testing.T, root string) {
+			writeFile(t, root, "ci/a/b/zz.yml", "e: "+key+"\n")
+		}, hs256Surface, "ci/a/b/zz.yml:1"},
+		{"key-line-in-a-deep-scripts-sh", surfaces, func(t *testing.T, root string) {
+			writeFile(t, root, "scripts/a/b/zz.sh", "echo "+key+"\n")
+		}, hs256Surface, "scripts/a/b/zz.sh:1"},
 		{"key-line-in-env-example", surfaces, func(t *testing.T, root string) {
 			writeFile(t, root, ".env.example", "# "+key+"=x\n")
 		}, hs256Surface, ".env.example:1"},

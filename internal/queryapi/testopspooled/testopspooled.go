@@ -54,7 +54,7 @@ const PipelineRunsSource = `(
 ) AS testops_pipeline_runs`
 
 // NewestAttemptSuites keeps, of a run's suite rows, the newest attempt of each report slot: a re-run job's report replaces
-// the earlier attempt's. A legacy row (no slot: written before the slot columns, or by GitLab) counts unless its run also has
+// the earlier attempt's. A legacy row (no slot: written before the slot columns existed, by either provider route) counts unless its run also has
 // slotted rows, which replace it. It is the daily writer's own rule (testopsNewestAttemptSuites in
 // internal/jobs/metrics/daily/testops_native_clickhouse.go), taken, as there, over every suite row of the run and not the
 // window's; the writer binds its statement to a repository list, this reads the organization, and the chart cells hold the two

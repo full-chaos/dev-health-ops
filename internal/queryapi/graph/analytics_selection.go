@@ -35,6 +35,8 @@ func analyticsSelection(ctx context.Context) analytics.Selection {
 					selected.TimeseriesScope = true
 				}
 			}
+		case "filterEmptyReason":
+			selected.FilterEmptyReason = true
 		case "breakdowns":
 			selected.Breakdowns = true
 		case "evidenceQualityStats", "evidenceQualityDistribution":

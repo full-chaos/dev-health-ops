@@ -75,6 +75,9 @@ type Scope struct {
 	TeamIDs []string
 	// AsOf is the instant the ownership is read at; zero means now (UTC).
 	AsOf time.Time
+	// FilterEmptyReason: the operation selects filterEmptyReason; its one ownership statement is sent only then,
+	// and only with a team scope (CHAOS-13868).
+	FilterEmptyReason bool
 }
 
 func clampLimit(limit int) int {
@@ -263,7 +266,15 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, since, until
 		attrs = append(attrs, "organization_id", logSafe(parsedOrg.String()))
 	}
 	slog.DebugContext(ctx, "testopsjobfailures: resolved", attrs...)
-	return &model.TestOpsJobFailuresResult{Groups: out, TotalCount: total, Truncated: total > len(out)}, nil
+	result := &model.TestOpsJobFailuresResult{Groups: out, TotalCount: total, Truncated: total > len(out)}
+	if scope.FilterEmptyReason {
+		reason, err := teamscope.TeamOwnsNoRepository(ctx, client, orgID, scope.TeamIDs, asOf)
+		if err != nil {
+			return nil, err
+		}
+		result.FilterEmptyReason = teamscope.EmptyReasonText(reason)
+	}
+	return result, nil
 }
 
 // logSafe removes line breaks from a value that is logged.

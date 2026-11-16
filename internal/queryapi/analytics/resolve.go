@@ -112,11 +112,14 @@ type Selection struct {
 	// TimeseriesScope: the operation selects timeseries.scope, so it can tell the org series from a dimension series.
 	// An operation that does not select it is served the dimension series only (CHAOS-9736).
 	TimeseriesScope bool
+	// FilterEmptyReason: the operation selects filterEmptyReason. Its one statement (the team ownership count) is
+	// sent only then, and only for a batch with a team scope (CHAOS-13868).
+	FilterEmptyReason bool
 }
 
 // EverythingSelected is the selection of a caller that reads every part.
 func EverythingSelected() Selection {
-	return Selection{Breakdowns: true, EvidenceQualityStats: true, EvidenceQualityByGroup: true, SankeyCoverage: true, SankeyFlow: true, TimeseriesScope: true}
+	return Selection{Breakdowns: true, EvidenceQualityStats: true, EvidenceQualityByGroup: true, SankeyCoverage: true, SankeyFlow: true, TimeseriesScope: true, FilterEmptyReason: true}
 }
 
 // ResolveSelected is Resolve for an operation whose selection is known: the
@@ -300,7 +303,13 @@ func ResolveSelected(ctx context.Context, client QueryClient, orgID string, batc
 		evidenceQualityDistribution = evidenceQualityStats.BandCounts
 	}
 
+	filterEmptyReason, err := resolveFilterEmptyReason(ctx, client, orgID, batch, useInvestment, selected.FilterEmptyReason)
+	if err != nil {
+		return nil, fmt.Errorf("analytics: filterEmptyReason: %w", err)
+	}
+
 	return &model.AnalyticsResult{
+		FilterEmptyReason:           filterEmptyReason,
 		Timeseries:                  timeseriesResults,
 		Breakdowns:                  breakdownResults,
 		Sankey:                      sankeyResult,

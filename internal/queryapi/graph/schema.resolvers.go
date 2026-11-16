@@ -1129,7 +1129,7 @@ func (r *queryResolver) TestopsJobFailures(ctx context.Context, orgID string, in
 		return nil, err
 	}
 	result, err := testopsjobfailures.Resolve(ctx, r.ClickHouse, orgID, input.SinceDate, input.UntilDate,
-		testopsjobfailures.Scope{RepoIDs: input.RepoIds, TeamIDs: input.TeamIds}, input.Limit)
+		testopsjobfailures.Scope{RepoIDs: input.RepoIds, TeamIDs: input.TeamIds, FilterEmptyReason: homeFieldSelected(ctx, "filterEmptyReason")}, input.Limit)
 	if err != nil {
 		return nil, fmt.Errorf("testopsJobFailures: %w", err)
 	}
@@ -1144,7 +1144,7 @@ func (r *queryResolver) TestopsTestWindow(ctx context.Context, orgID string, inp
 		return nil, err
 	}
 	result, err := testopswindow.Resolve(ctx, r.ClickHouse, orgID, input.SinceDate, input.UntilDate,
-		testopswindow.Scope{RepoIDs: input.RepoIds, TeamIDs: input.TeamIds})
+		testopswindow.Scope{RepoIDs: input.RepoIds, TeamIDs: input.TeamIds, FilterEmptyReason: homeFieldSelected(ctx, "filterEmptyReason")})
 	if err != nil {
 		return nil, fmt.Errorf("testopsTestWindow: %w", err)
 	}

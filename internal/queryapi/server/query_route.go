@@ -3929,7 +3929,41 @@ const registeredCompoundingRiskDocument = `query CompoundingRisk($orgId: String!
 // operation, the exact wire-form text a real web client sends
 // (testdata/wire_capture/testopspipeline_captured.graphql): the V1 text plus `scope` on every timeseries
 // (CHAOS-9736, CHAOS-9745), so the Govern area can tell the org series from a team series.
+// CHAOS-13868: it also selects `filterEmptyReason`, the server's reason for an empty team-scoped answer; the text before stays accepted
+// as a legacy text.
 const registeredTestOpsPipelineDocument = `query TestOpsPipeline($orgId: String!, $batch: AnalyticsRequestInput!) {
+  analytics(orgId: $orgId, batch: $batch) {
+    timeseries {
+      dimension
+      dimensionValue
+      scope
+      measure
+      buckets {
+        date
+        value
+        __typename
+      }
+      __typename
+    }
+    breakdowns {
+      dimension
+      measure
+      items {
+        key
+        value
+        __typename
+      }
+      __typename
+    }
+    filterEmptyReason
+    __typename
+  }
+}`
+
+// registeredTestOpsPipelineV2Document is the text of `testOpsPipeline` BEFORE the web selected `filterEmptyReason` (CHAOS-13868;
+// testdata/wire_capture/testopspipeline_v2_captured.graphql). It stays a legacy text (see legacyDigestsByOperation) so a web build still sending it
+// keeps working while the new web rolls out. Remove it with the cleanup ticket once no client sends it.
+const registeredTestOpsPipelineV2Document = `query TestOpsPipeline($orgId: String!, $batch: AnalyticsRequestInput!) {
   analytics(orgId: $orgId, batch: $batch) {
     timeseries {
       dimension
@@ -3992,7 +4026,42 @@ const registeredTestOpsPipelineV1Document = `query TestOpsPipeline($orgId: Strin
 // operation, the exact wire-form text a real web client sends
 // (testdata/wire_capture/testopscoverage_captured.graphql): the V1 text plus `scope` on every timeseries
 // (CHAOS-9736, CHAOS-9745), so the Govern area can tell the org series from a team series.
+// CHAOS-13868: it also selects `filterEmptyReason`, the server's reason for an empty team-scoped answer; the text before stays accepted
+// as a legacy text.
 const registeredTestOpsCoverageDocument = `query TestOpsCoverage($orgId: String!, $batch: AnalyticsRequestInput!) {
+  analytics(orgId: $orgId, batch: $batch) {
+    timeseries {
+      dimension
+      dimensionValue
+      scope
+      measure
+      buckets {
+        date
+        value
+        __typename
+      }
+      __typename
+    }
+    breakdowns {
+      dimension
+      measure
+      items {
+        key
+        value
+        label
+        __typename
+      }
+      __typename
+    }
+    filterEmptyReason
+    __typename
+  }
+}`
+
+// registeredTestOpsCoverageV2Document is the text of `testOpsCoverage` BEFORE the web selected `filterEmptyReason` (CHAOS-13868;
+// testdata/wire_capture/testopscoverage_v2_captured.graphql). It stays a legacy text (see legacyDigestsByOperation) so a web build still sending it
+// keeps working while the new web rolls out. Remove it with the cleanup ticket once no client sends it.
+const registeredTestOpsCoverageV2Document = `query TestOpsCoverage($orgId: String!, $batch: AnalyticsRequestInput!) {
   analytics(orgId: $orgId, batch: $batch) {
     timeseries {
       dimension
@@ -4148,7 +4217,30 @@ const registeredSourceHealthDocument = `query SourceHealth($orgId: String!) {
 // exists), the exact wire-form text the web client sends
 // (testdata/wire_capture/testopsjobfailures_captured.graphql; the wire form of
 // TESTOPS_JOB_FAILURES_QUERY, computed with the web's pinned urql).
+// CHAOS-13868: it also selects `filterEmptyReason`, the server's reason for an empty team-scoped answer; the text before stays accepted
+// as a legacy text.
 const registeredTestopsJobFailuresDocument = `query TestOpsJobFailures($orgId: String!, $input: TestOpsJobFailuresInput!) {
+  testopsJobFailures(orgId: $orgId, input: $input) {
+    groups {
+      workflowName
+      jobName
+      provider
+      runs
+      failedRuns
+      failureRate
+      __typename
+    }
+    totalCount
+    truncated
+    filterEmptyReason
+    __typename
+  }
+}`
+
+// registeredTestopsJobFailuresV1Document is the text of `testopsJobFailures` BEFORE the web selected `filterEmptyReason` (CHAOS-13868;
+// testdata/wire_capture/testopsjobfailures_v1_captured.graphql). It stays a legacy text (see legacyDigestsByOperation) so a web build still sending it
+// keeps working while the new web rolls out. Remove it with the cleanup ticket once no client sends it.
+const registeredTestopsJobFailuresV1Document = `query TestOpsJobFailures($orgId: String!, $input: TestOpsJobFailuresInput!) {
   testopsJobFailures(orgId: $orgId, input: $input) {
     groups {
       workflowName
@@ -4170,7 +4262,38 @@ const registeredTestopsJobFailuresDocument = `query TestOpsJobFailures($orgId: S
 // exists), the wire-form text the web client sends
 // (testdata/wire_capture/testopstestwindow_captured.graphql). The web query
 // (CHAOS-13774) must produce this exact text.
+// CHAOS-13868: it also selects `filterEmptyReason`, the server's reason for an empty team-scoped answer; the text before stays accepted
+// as a legacy text.
 const registeredTestopsTestWindowDocument = `query TestOpsTestWindow($orgId: String!, $input: TestOpsTestWindowInput!) {
+  testopsTestWindow(orgId: $orgId, input: $input) {
+    sinceDate
+    untilDate
+    coverage {
+      completedRuns
+      runsWithTests
+      sharePct
+      __typename
+    }
+    cases {
+      passed
+      failed
+      skipped
+      quarantined
+      total
+      __typename
+    }
+    passRatePct
+    failureRatePct
+    flakeRatePct
+    filterEmptyReason
+    __typename
+  }
+}`
+
+// registeredTestopsTestWindowV1Document is the text of `testopsTestWindow` BEFORE the web selected `filterEmptyReason` (CHAOS-13868;
+// testdata/wire_capture/testopstestwindow_v1_captured.graphql). It stays a legacy text (see legacyDigestsByOperation) so a web build still sending it
+// keeps working while the new web rolls out. Remove it with the cleanup ticket once no client sends it.
+const registeredTestopsTestWindowV1Document = `query TestOpsTestWindow($orgId: String!, $input: TestOpsTestWindowInput!) {
   testopsTestWindow(orgId: $orgId, input: $input) {
     sinceDate
     untilDate
@@ -7126,8 +7249,10 @@ func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, op
 // digestByOperation. The literal below is cmd/registrydump's second parse target: keep its exact shape
 // (`"<operation>": {digestHex(<constIdent>), ...}`). Empty = every operation accepts one text.
 var legacyDigestsByOperation = map[string][]string{
-	"testOpsPipeline":               {digestHex(registeredTestOpsPipelineV1Document)},
-	"testOpsCoverage":               {digestHex(registeredTestOpsCoverageV1Document)},
+	"testOpsPipeline":               {digestHex(registeredTestOpsPipelineV1Document), digestHex(registeredTestOpsPipelineV2Document)},
+	"testOpsCoverage":               {digestHex(registeredTestOpsCoverageV1Document), digestHex(registeredTestOpsCoverageV2Document)},
+	"testopsJobFailures":            {digestHex(registeredTestopsJobFailuresV1Document)},
+	"testopsTestWindow":             {digestHex(registeredTestopsTestWindowV1Document)},
 	"testopsRisk":                   {digestHex(registeredTestopsRiskV1Document)},
 	"dataHealthIdentity":            {digestHex(registeredDataHealthIdentityV1Document)},
 	"aiGovernanceSummary":           {digestHex(registeredAiGovernanceSummaryV1Document)},

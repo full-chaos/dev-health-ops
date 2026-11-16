@@ -60,3 +60,30 @@ func TestAnalyticsSelectionSankeyFlowFollowsNodesAndEdges(t *testing.T) {
 		}
 	}
 }
+
+func analyticsTopSelectionOf(t *testing.T, top ...string) analytics.Selection {
+	t.Helper()
+	var set ast.SelectionSet
+	for _, name := range top {
+		set = append(set, &ast.Field{Name: name, Alias: name})
+	}
+	analyticsField := &ast.Field{Name: "analytics", Alias: "analytics", SelectionSet: set}
+	ctx := graphql.WithOperationContext(context.Background(), &graphql.OperationContext{Variables: map[string]any{}})
+	ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{
+		Field: graphql.CollectedField{Field: analyticsField, Selections: analyticsField.SelectionSet},
+	})
+	return analyticsSelection(ctx)
+}
+
+// The ownership statement behind filterEmptyReason is sent only for an operation that selects the field (CHAOS-13868).
+func TestAnalyticsSelectionFilterEmptyReasonFollowsTheField(t *testing.T) {
+	if got := analyticsTopSelectionOf(t, "timeseries", "filterEmptyReason"); !got.FilterEmptyReason {
+		t.Errorf("filterEmptyReason selected: %+v, want FilterEmptyReason", got)
+	}
+	if got := analyticsTopSelectionOf(t, "timeseries", "breakdowns"); got.FilterEmptyReason {
+		t.Errorf("filterEmptyReason not selected: %+v, want no FilterEmptyReason", got)
+	}
+	if !analytics.EverythingSelected().FilterEmptyReason {
+		t.Error("EverythingSelected leaves filterEmptyReason out")
+	}
+}

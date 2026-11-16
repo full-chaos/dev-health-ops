@@ -204,8 +204,9 @@ func (handler GitHubDeploymentsRouteHandler) Collect(
 	statusLookupsSkippedForRateLimit := 0
 	var outcomes deploymentStatusLookupOutcomes
 	enrichmentPages := 0
+	nonFiniteConfidence := 0
 	for _, deployment := range deployments {
-		row, include := normalizeGitHubDeployment(claim, repoID, deployment, releases, normalizedAt)
+		row, include, nonFinite := normalizeGitHubDeployment(claim, repoID, deployment, releases, normalizedAt)
 		if !include || deploymentOutsideWindow(row.DeployedAt, claim) {
 			continue
 		}
@@ -263,7 +264,11 @@ func (handler GitHubDeploymentsRouteHandler) Collect(
 			}
 		}
 		rows = append(rows, row)
+		if nonFinite {
+			nonFiniteConfidence++
+		}
 	}
+	recordNonFiniteReleaseRefConfidence(client, claim, repoPayload.FullName, nonFiniteConfidence)
 	if statusLookupsSkippedForRateLimit > 0 {
 		slog.Warn("github_deployments.status_lookup_rate_limited_skip", "count", statusLookupsSkippedForRateLimit, "cause", "statuses lookup rate limited; remaining deployments in this sync unit skipped")
 	}
@@ -335,13 +340,13 @@ func fetchGitHubDeploymentsPage[T any](ctx context.Context, client *providerfoun
 // on to match the Python oracle's identical read of its own synthetic
 // fixture -- neither side's fixture supplies a statuses history, so both
 // read the (equally synthetic) list-level field instead.
-func normalizeGitHubDeployment(claim Claim, repoID string, deployment gitHubDeploymentPayload, releases []gitHubReleasePayload, normalizedAt time.Time) (deploymentRow, bool) {
+func normalizeGitHubDeployment(claim Claim, repoID string, deployment gitHubDeploymentPayload, releases []gitHubReleasePayload, normalizedAt time.Time) (deploymentRow, bool, bool) {
 	deployedAt := parseGitHubWorkflowTime(deployment.CreatedAt)
 	if deployedAt == nil {
-		return deploymentRow{}, false
+		return deploymentRow{}, false, false
 	}
-	releaseRef, confidence := deploymentReleaseRef(deployment, releases)
-	return deploymentRow{RepoID: repoID, DeploymentID: stringValue(deployment.ID), Status: optionalString(deployment.State, deployment.Status), Environment: optionalString(deployment.Environment), DeployedAt: deployedAt, ReleaseRef: releaseRef, ReleaseRefConfidence: confidence, OrgID: claim.OrgID, LastSynced: normalizedAt}, true
+	releaseRef, confidence, nonFinite := deploymentReleaseRef(deployment, releases)
+	return deploymentRow{RepoID: repoID, DeploymentID: stringValue(deployment.ID), Status: optionalString(deployment.State, deployment.Status), Environment: optionalString(deployment.Environment), DeployedAt: deployedAt, ReleaseRef: releaseRef, ReleaseRefConfidence: confidence, OrgID: claim.OrgID, LastSynced: normalizedAt}, true, nonFinite
 }
 
 // deploymentLifecycleFromStatuses derives started_at/finished_at from a
@@ -412,10 +417,11 @@ func isRateLimitExhausted(err error) bool {
 	return false
 }
 
-func deploymentReleaseRef(deployment gitHubDeploymentPayload, releases []gitHubReleasePayload) (string, float64) {
+func deploymentReleaseRef(deployment gitHubDeploymentPayload, releases []gitHubReleasePayload) (string, float64, bool) {
 	for _, candidate := range []any{deployment.TagName, deployment.Tag, deployment.Payload["release_ref"], deployment.Payload["release"], deployment.Payload["release_tag"], deployment.Payload["tag_name"], deployment.Payload["tag"], deployment.Payload["version"]} {
 		if value := strings.TrimSpace(stringValue(candidate)); value != "" {
-			return value, deploymentExplicitConfidence(deployment)
+			confidence, nonFinite := deploymentExplicitConfidence(deployment)
+			return value, confidence, nonFinite
 		}
 	}
 	candidates := map[string]struct{}{}
@@ -427,29 +433,51 @@ func deploymentReleaseRef(deployment gitHubDeploymentPayload, releases []gitHubR
 	for _, release := range releases {
 		if tag := strings.TrimSpace(stringValue(release.TagName)); tag != "" {
 			if _, ok := candidates[tag]; ok {
-				return tag, 1
+				return tag, 1, false
 			}
 		}
 	}
-	return stringValue(deployment.ID), 0.3
+	return stringValue(deployment.ID), 0.3, false
 }
 
-func deploymentExplicitConfidence(deployment gitHubDeploymentPayload) float64 {
+func deploymentExplicitConfidence(deployment gitHubDeploymentPayload) (float64, bool) {
 	value, ok := deployment.Payload["release_ref_confidence"]
 	if !ok {
-		return 1
+		return 1, false
 	}
-	number, err := json.Number(stringValue(value)).Float64()
-	if err != nil {
-		return 1
+	return parseReleaseRefConfidence(stringValue(value))
+}
+
+// parseReleaseRefConfidence is the one rule for an explicit release_ref_confidence (GitHub and GitLab): an unreadable
+// value, NaN included, is 1; a readable value is clamped to [0, 1]. nonFinite is true for NaN, an infinity or a value
+// past float64 range, so the callers can count it. An overflow (ErrRange) takes the unreadable branch, so -1e999 is 1.
+func parseReleaseRefConfidence(raw string) (confidence float64, nonFinite bool) {
+	parsed, err := json.Number(raw).Float64()
+	nonFinite = math.IsNaN(parsed) || math.IsInf(parsed, 0)
+	if err != nil || math.IsNaN(parsed) {
+		return 1, nonFinite
 	}
-	if number < 0 {
-		return 0
+	if parsed < 0 {
+		return 0, nonFinite
 	}
-	if number > 1 {
-		return 1
+	if parsed > 1 {
+		return 1, nonFinite
 	}
-	return number
+	return parsed, nonFinite
+}
+
+// recordNonFiniteReleaseRefConfidence counts deployments rows whose explicit release_ref_confidence was non-finite
+// (CHAOS-13897). repo is deliberately not a label; the log line names it.
+func recordNonFiniteReleaseRefConfidence(client *providerfoundation.HTTPClient, claim Claim, repository string, count int) {
+	if count <= 0 {
+		return
+	}
+	client.Metrics.RecordNonFiniteReleaseRefConfidence(claim.Provider, claim.Dataset, count)
+	slog.Info(
+		"non-finite release_ref_confidence stored as the unreadable-value rule",
+		"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
+		"repository", repository, "count", count,
+	)
 }
 
 func optionalString(values ...any) *string {

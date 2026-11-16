@@ -376,12 +376,12 @@ func TestGitLabTestsCombinedStopIsClassifiedAsTheItemCapAndAdvances(t *testing.T
 	// have spent its whole budget (so the page budget IS exhausted) while
 	// holding more than the cap (so the item cap IS reached).
 	//
-	// The expected count is the budget PLUS ONE: the reports phase fetches the
-	// same pipeline's jobs once more with SinglePage, which is a different
-	// collection with its own documented disposition.
-	const reportsPhaseJobFetches = 1
+	// The expected count is the budget TWICE: the reports phase lists the same
+	// pipeline's jobs again with include_retried and its own full page budget
+	// (the rank of a retried job needs the whole list; CHAOS-13875).
+	const reportsPhaseJobFetches = gitLabTestsPerRunJobPages
 	if doer.jobRequests != gitLabTestsPerRunJobPages+reportsPhaseJobFetches {
-		t.Fatalf("walk issued %d job requests, want the full %d-page budget plus %d reports-phase fetch; "+
+		t.Fatalf("walk issued %d job requests, want the full %d-page budget plus %d reports-phase fetches; "+
 			"the page-budget condition is not being exercised",
 			doer.jobRequests, gitLabTestsPerRunJobPages, reportsPhaseJobFetches)
 	}

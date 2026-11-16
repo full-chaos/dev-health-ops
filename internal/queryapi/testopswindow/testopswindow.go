@@ -68,6 +68,9 @@ type Scope struct {
 	TeamIDs []string
 	// AsOf is the instant the ownership is read at; zero means now (UTC).
 	AsOf time.Time
+	// FilterEmptyReason: the operation selects filterEmptyReason; its one ownership statement is sent only then,
+	// and only with a team scope (CHAOS-13868).
+	FilterEmptyReason bool
 }
 
 func checkWindow(since, until graphqldate.Date) error {
@@ -193,6 +196,17 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, since, until
 	}
 	if counts.rowsWithoutCounts == 0 && counts.flakeCases != nil && counts.distinctCases != nil {
 		result.FlakeRatePct = percent(*counts.flakeCases, *counts.distinctCases)
+	}
+	if scope.FilterEmptyReason {
+		asOf := scope.AsOf
+		if asOf.IsZero() {
+			asOf = time.Now().UTC()
+		}
+		reason, err := teamscope.TeamOwnsNoRepository(ctx, client, orgID, scope.TeamIDs, asOf)
+		if err != nil {
+			return nil, err
+		}
+		result.FilterEmptyReason = teamscope.EmptyReasonText(reason)
 	}
 
 	attrs := []any{

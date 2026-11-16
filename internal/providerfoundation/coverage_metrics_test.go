@@ -320,3 +320,31 @@ func TestNonFiniteTestTimeCounterAggregatesByProviderDatasetOnly(t *testing.T) {
 		t.Fatalf("a zero-count call must not mint a series: %s", rendered)
 	}
 }
+
+func TestNonFiniteReleaseRefConfidenceCounterAggregatesByProviderDatasetOnly(t *testing.T) {
+	metrics := NewMetrics()
+	metrics.RecordNonFiniteReleaseRefConfidence("gitlab", "deployments", 2)
+	metrics.RecordNonFiniteReleaseRefConfidence("gitlab", "deployments", 1)
+	metrics.RecordNonFiniteReleaseRefConfidence("mystery-provider", "mystery-dataset", 1)
+	metrics.RecordNonFiniteReleaseRefConfidence("github", "deployments", 0)
+	var nilMetrics *Metrics
+	nilMetrics.RecordNonFiniteReleaseRefConfidence("github", "deployments", 1)
+
+	var output bytes.Buffer
+	if err := metrics.WritePrometheus(&output); err != nil {
+		t.Fatal(err)
+	}
+	rendered := output.String()
+	for _, want := range []string{
+		`dev_health_cicd_nonfinite_release_ref_confidence_total{provider="gitlab",dataset="deployments"} 3`,
+		`dev_health_cicd_nonfinite_release_ref_confidence_total{provider="other",dataset="other"} 1`,
+		"# TYPE dev_health_cicd_nonfinite_release_ref_confidence_total counter",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("missing %q in:\n%s", want, rendered)
+		}
+	}
+	if strings.Contains(rendered, `dev_health_cicd_nonfinite_release_ref_confidence_total{provider="github"`) {
+		t.Fatalf("a zero-count call must not mint a series: %s", rendered)
+	}
+}

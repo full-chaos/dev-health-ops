@@ -261,12 +261,43 @@ func (handler GitLabTestsRouteHandler) Collect(
 		runID := stringValue(payload.ID)
 		started := gitLabTestsPipelineStartedAt(payload)
 		finished := parseGitLabTestsTime(payload.FinishedAt)
+		jobPage, jobErr := providerfoundation.CollectGitLabPageParamPages(ctx, &counted, providerfoundation.GitLabPageOptions{
+			Path: root + "/pipelines/" + url.PathEscape(runID) + "/jobs", Route: gitlabPipelineJobsRoute,
+			Query: url.Values{"include_retried": {"true"}}, PerPage: nativePerPage, MaxPages: maxPages,
+		})
+		runJobs := gitLabTestsRunJobs{}
+		if jobErr != nil {
+			if fatal := gitLabTestsOptionalError(ctx, jobErr); fatal != nil {
+				return CompleteRouteBatch{}, fatal
+			}
+		} else {
+			pages += jobPage.Pages
+			// DELIBERATE DIVERGENCE from the chunked route's per-run disposition
+			// (CHAOS-4142): see the same note in the pipelines phase above.
+			if jobPage.PageBudgetExhausted {
+				return CompleteRouteBatch{}, ErrPaginationCapExceeded
+			}
+			if runJobs, err = newGitLabTestsRunJobs(jobPage.Items); err != nil {
+				return CompleteRouteBatch{}, err
+			}
+		}
+		var summary map[string][]string
+		if runJobs.anyRetried {
+			var summaryErr error
+			if summary, summaryErr = fetchGitLabTestsReportSummary(ctx, &counted, root, runID); summaryErr != nil {
+				if fatal := gitLabTestsSummaryFallback(ctx, summaryErr); fatal != nil {
+					return CompleteRouteBatch{}, fatal
+				}
+				summary = nil
+			}
+		}
 		report, present, err := fetchGitLabTestsReport(ctx, &counted, root, runID)
 		if err != nil {
 			return CompleteRouteBatch{}, err
 		}
 		if present {
-			reportSuites, reportCases, nonFinite, err := normalizeGitLabNativeTestReport(claim, repoID, runID, report, started, finished, normalizedAt)
+			reportSuites, reportCases, nonFinite, err := normalizeGitLabNativeTestReportAttempts(claim, repoID, runID, report, started, finished, normalizedAt,
+				func(suiteName string) int64 { return runJobs.suiteAttempt(suiteName, summary) })
 			if err != nil {
 				return CompleteRouteBatch{}, err
 			}
@@ -297,26 +328,8 @@ func (handler GitLabTestsRouteHandler) Collect(
 			suites = append(suites, reportSuites...)
 			cases = append(cases, reportCases...)
 		}
-		jobPage, err := providerfoundation.CollectGitLabPageParamPages(ctx, &counted, providerfoundation.GitLabPageOptions{
-			Path: root + "/pipelines/" + url.PathEscape(runID) + "/jobs", Route: gitlabPipelineJobsRoute, PerPage: nativePerPage, MaxPages: 1, SinglePage: true,
-		})
-		if err != nil {
-			if fatal := gitLabTestsOptionalError(ctx, err); fatal != nil {
-				return CompleteRouteBatch{}, fatal
-			}
+		if jobErr != nil {
 			continue
-		}
-		pages += jobPage.Pages
-		// DELIBERATE DIVERGENCE from the chunked route's per-run disposition
-		// (CHAOS-4142). This non-chunked Collect is production-dead for
-		// cicd/tests: execution_registry.go:476 marks {github,gitlab} x
-		// {cicd,tests} Chunked unconditionally, and chunked_executor.go routes
-		// any ChunkedCompleteRouteHandler to CollectChunks, so nothing reaches
-		// this cap. It survives as the oracle/comparison implementation. If a
-		// fixture ever crosses this cap, mirror recordGitLabTestsPerRunTruncation
-		// here rather than treating the refusal as intended behavior.
-		if jobPage.PageBudgetExhausted {
-			return CompleteRouteBatch{}, ErrPaginationCapExceeded
 		}
 		artifactJobs, err := selectGitLabTestsArtifactJobs(jobPage.Items, gitLabTestsMaxArtifacts)
 		if err != nil {
@@ -331,7 +344,7 @@ func (handler GitLabTestsRouteHandler) Collect(
 			if len(archive) == 0 {
 				continue
 			}
-			rows, err := parseGitHubTestsArtifact(archive, jobID, repoID, runID, claim.OrgID, started, finished, normalizedAt)
+			rows, err := parseGitLabTestsJobArtifact(archive, job, runJobs, repoID, runID, claim.OrgID, started, finished, normalizedAt)
 			if err != nil || rows.Skipped != 0 {
 				return CompleteRouteBatch{}, fmt.Errorf("%w: reports skipped=%d: %v", ErrGitLabTestsIncomplete, rows.Skipped, err)
 			}
@@ -457,7 +470,7 @@ func selectGitLabTestsArtifactJobs(rawItems []json.RawMessage, maxArtifacts int)
 		if err != nil {
 			return nil, err
 		}
-		if !gitLabTestsJobHasArtifacts(job) {
+		if !gitLabTestsJobHasArtifacts(job) || gitLabTestsJobRetried(job) {
 			continue
 		}
 		if stringValue(job.ID) == "" {
@@ -729,6 +742,12 @@ func fetchGitLabTestsReport(ctx context.Context, client *providerfoundation.HTTP
 }
 
 func normalizeGitLabNativeTestReport(claim Claim, repoID, runID string, report gitLabTestsReportPayload, started, finished *time.Time, at time.Time) ([]testSuiteResultRow, []testCaseResultRow, int, error) {
+	return normalizeGitLabNativeTestReportAttempts(claim, repoID, runID, report, started, finished, at, nil)
+}
+
+// normalizeGitLabNativeTestReportAttempts is the report normalization with the attempt of each suite (CHAOS-13875); a nil
+// attemptOf is attempt 1 everywhere. Attempt 1 keeps the suite and case ids rows always had.
+func normalizeGitLabNativeTestReportAttempts(claim Claim, repoID, runID string, report gitLabTestsReportPayload, started, finished *time.Time, at time.Time, attemptOf func(suiteName string) int64) ([]testSuiteResultRow, []testCaseResultRow, int, error) {
 	if claim.Provider != "gitlab" || (claim.Dataset != "cicd" && claim.Dataset != "tests") || repoID == "" || runID == "" || at.IsZero() {
 		return nil, nil, 0, ErrInvalidConfiguration
 	}
@@ -756,11 +775,17 @@ func normalizeGitLabNativeTestReport(claim Claim, repoID, runID string, report g
 			suiteID = hashTestIdentifier(suiteID, strconv.Itoa(occurrence))
 		}
 		suiteOccurrence[name]++
+		attempt := int64(1)
+		if attemptOf != nil {
+			attempt = max(attemptOf(name), 1)
+		}
+		suiteID = gitLabTestsAttemptKey(suiteID, attempt)
 		suiteDuration, suiteNonFinite := parseOptionalFloat(stringValue(rawSuite.TotalTime))
 		if suiteNonFinite {
 			nonFinite++
 		}
 		row := testSuiteResultRow{OrgID: claim.OrgID, RepoID: repoID, RunID: runID, SuiteID: suiteID,
+			ReportSlot: name, RunAttempt: attempt,
 			SuiteName: name, Framework: testsOptionalString("gitlab_ci"), TotalCount: int64(len(rawSuite.Cases)),
 			DurationSeconds: suiteDuration, StartedAt: cloneTime(started), FinishedAt: cloneTime(finished), LastSynced: at}
 		// caseOccurrence disambiguates within-suite duplicate case names,

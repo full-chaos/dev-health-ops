@@ -76,13 +76,13 @@ func statusRow(t *testing.T, org, provider string, repo uuid.UUID, deploymentID 
 		if status != nil {
 			payload["status"] = *status
 		}
-		row, ok, err := normalizeGitLabDeployment(claim, repo.String(), payload, nil, normalizedAt)
+		row, ok, _, err := normalizeGitLabDeployment(claim, repo.String(), payload, nil, normalizedAt)
 		if err != nil || !ok {
 			t.Fatalf("normalize gitlab deployment: ok %v err %v", ok, err)
 		}
 		return row
 	case "github":
-		row, ok := normalizeGitHubDeployment(claim, repo.String(), gitHubDeploymentPayload{
+		row, ok, _ := normalizeGitHubDeployment(claim, repo.String(), gitHubDeploymentPayload{
 			ID: json.Number(deploymentID), CreatedAt: &created, Environment: "production",
 		}, nil, normalizedAt)
 		if !ok {

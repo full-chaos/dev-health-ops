@@ -659,7 +659,7 @@ func TestRegistryTestopsOnlyComputedRepositoryDays(t *testing.T) {
 }
 
 // A re-run attempt's report replaces the earlier attempt's: the suite totals of a run are the newest attempt of each
-// report slot, a legacy row (no slot: written before the slot columns, or by GitLab) counts unless its run also has slotted
+// report slot, a legacy row (no slot: written before the slot columns existed, by either provider route) counts unless its run also has slotted
 // rows. This is the daily writer's own rule (testopsNewestAttemptSuites), so the chart, the tile and the stored value agree.
 type attemptDoer struct {
 	t         *testing.T
@@ -769,8 +769,8 @@ func TestRegistryTestopsSuiteTotalsTakeTheNewestAttempt(t *testing.T) {
 }
 
 // A legacy suite row counts when its run has no slotted row and is replaced when it has one. The legacy rows are written
-// through the real sink with BuildEffectBatch. NOT producible by the GitHub route (every row it writes now carries a slot);
-// the GitLab route and every row stored before the slot columns write them. Covers the legacy arm of the rule.
+// through the real sink with BuildEffectBatch. NOT producible by either provider route (every row they write now carries a
+// slot and an attempt); only rows stored before the slot columns existed have none. Covers the legacy arm of the rule.
 func TestRegistryTestopsLegacySuiteRowsCountUnlessTheRunHasSlottedRows(t *testing.T) {
 	e := startPooledEnv(t)
 	org := e.newOrg()

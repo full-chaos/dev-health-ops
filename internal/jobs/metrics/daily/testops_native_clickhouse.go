@@ -134,6 +134,25 @@ WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(UUID)}
 // newest-attempt fragment).
 var testopsSuiteResultsSource = testopspooled.SuiteWindowSource("repo_ids", "start", "end")
 
+// testopsKeptSuitesToday is the day's kept suite rows of the repository list: the window source and the newest-attempt fragment,
+// the suite read's own rule (one text). The case reads take a run as "in today" only when it has such a row (CHAOS-13926): a run
+// whose counted suite moved to a later day by a re-run then leaves no case on this day, so the day gets no row instead of 0.
+var testopsKeptSuitesToday = testopsSuiteResultsSource + "\n  AND " + testopspooled.SuiteRowsNewestAttempt("", testopsRuleScope)
+
+// testopsFailureStatuses is FAILURE_STATUSES (compute_testops.py:54), bound as {failure_statuses:Array(String)}.
+var testopsFailureStatuses = []string{"failure", "failed", "error", "errors", "timeout", "timed_out"}
+
+// testopsCaseArgs binds the case reads: the source parameters of one repository, the history start and, when the off-default
+// set is used, the default branch.
+func testopsCaseArgs(orgID string, repoID uuid.UUID, defaultBranch string, historyStart, start, end time.Time) []any {
+	args := append(testopsSourceArgs(orgID, []uuid.UUID{repoID}, start, end),
+		clickhouse.Named("history_start", remaining.DateTime64Argument(historyStart, remaining.DateTime64MillisecondPrecision)))
+	if defaultBranch != "" {
+		args = append(args, clickhouse.Named("default_branch", defaultBranch))
+	}
+	return args
+}
+
 func testopsSourceArgs(orgID string, repoIDs []uuid.UUID, start, end time.Time) []any {
 	return []any{
 		clickhouse.Named("org_id", orgID),
@@ -211,7 +230,7 @@ func loadNativeTestopsSuites(
 	rows, err := conn.Query(ctx, `
 SELECT run_id, suite_id, total_count, passed_count, failed_count, skipped_count,
        error_count, quarantined_count, duration_seconds, started_at, finished_at,
-       team_id, service_id, org_id`+testopsSuiteResultsSource+"\n  AND "+testopspooled.SuiteRowsNewestAttempt("", testopsRuleScope)+`
+       team_id, service_id, org_id`+testopsKeptSuitesToday+`
 ORDER BY run_id, suite_id`,
 		testopsSourceArgs(orgID, []uuid.UUID{repoID}, start, end)...)
 	if err != nil {
@@ -304,21 +323,19 @@ func loadNativeTestopsCaseAggregate(
 	// NULL or empty stays in, and so does every run when the repository's
 	// default branch is not recorded. The off-default set is limited to the
 	// runs with a suite in [historyStart, end), the only runs the sets can name.
+	//
+	// Today's run set takes the kept suites (testopsKeptSuitesToday), and so does the history arm through NOT run_in_today. The
+	// own-suite tests (in_today, and the history arm's suite set) keep every suite row: a re-run's attempt-1 case rows still join
+	// on the newest attempt's day, so a test that failed on attempt 1 and passed on attempt 2 stays a flake there, and an
+	// attempt-1 failure stays history for a later day.
 	offDefaultCTE := ""
 	offDefaultExclusion := ""
-	var args []any
 	if defaultBranch != "" {
 		offDefaultCTE = offDefaultRunsCTE
 		offDefaultExclusion = "\n        AND run_id NOT IN (SELECT run_id FROM off_default)"
-		args = append(args, offDefaultRunsArgs(orgID, repoID, defaultBranch, historyStart, end)...)
 	}
-	args = append(args,
-		orgID, repoID, start.UTC(), end.UTC(),
-		orgID, repoID, end.UTC(),
-		"failure", "failed", "error", "errors", "timeout", "timed_out",
-		orgID, repoID, historyStart.UTC(), start.UTC(),
-		orgID, repoID,
-	)
+	args := append(testopsCaseArgs(orgID, repoID, defaultBranch, historyStart, start, end),
+		clickhouse.Named("failure_statuses", testopsFailureStatuses))
 	rows, err := conn.Query(ctx, offDefaultCTE+`
 SELECT
   case_name,
@@ -332,24 +349,23 @@ FROM (
     status,
     retry_attempt,
     run_id IN (
-      SELECT run_id FROM test_suite_results FINAL
-      WHERE org_id = ? AND repo_id = ?
-        AND coalesce(started_at, finished_at) >= ? AND coalesce(started_at, finished_at) < ?`+offDefaultExclusion+`
+      SELECT run_id`+testopsKeptSuitesToday+offDefaultExclusion+`
     ) AS run_in_today,
     run_in_today AND (run_id, suite_id) IN (
       SELECT run_id, suite_id FROM test_suite_results FINAL
-      WHERE org_id = ? AND repo_id = ?
-        AND coalesce(started_at, finished_at) < ?
+      WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(UUID)}
+        AND coalesce(started_at, finished_at) < {end:DateTime64(3, 'UTC')}
     ) AS in_today,
     NOT run_in_today
-      AND lower(trim(status)) IN (?, ?, ?, ?, ?, ?)
+      AND lower(trim(status)) IN {failure_statuses:Array(String)}
       AND (run_id, suite_id) IN (
         SELECT run_id, suite_id FROM test_suite_results FINAL
-        WHERE org_id = ? AND repo_id = ?
-          AND coalesce(started_at, finished_at) >= ? AND coalesce(started_at, finished_at) < ?`+offDefaultExclusion+`
+        WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(UUID)}
+          AND coalesce(started_at, finished_at) >= {history_start:DateTime64(3, 'UTC')}
+          AND coalesce(started_at, finished_at) < {start:DateTime64(3, 'UTC')}`+offDefaultExclusion+`
       ) AS failed_in_history
   FROM test_case_results FINAL
-  WHERE org_id = ? AND repo_id = ? AND case_name != ''
+  WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(UUID)} AND case_name != ''
 )
 WHERE in_today OR failed_in_history
 GROUP BY case_name
@@ -405,21 +421,18 @@ ORDER BY case_name`, args...)
 const offDefaultRunsCTE = `
 WITH window_runs AS (
   SELECT DISTINCT run_id FROM test_suite_results FINAL
-  WHERE org_id = ? AND repo_id = ?
-    AND coalesce(started_at, finished_at) >= ? AND coalesce(started_at, finished_at) < ?
+  WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(UUID)}
+    AND coalesce(started_at, finished_at) >= {history_start:DateTime64(3, 'UTC')}
+    AND coalesce(started_at, finished_at) < {end:DateTime64(3, 'UTC')}
 ), off_default AS (
   SELECT run_id FROM window_runs
   WHERE run_id NOT IN (
     SELECT run_id FROM ci_pipeline_runs FINAL
-    WHERE org_id = ? AND repo_id = ?
+    WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(UUID)}
       AND run_id IN (SELECT run_id FROM window_runs)
-      AND (branch IS NULL OR branch = '' OR branch = ?)
+      AND (branch IS NULL OR branch = '' OR branch = {default_branch:String})
   )
 )`
-
-func offDefaultRunsArgs(orgID string, repoID uuid.UUID, defaultBranch string, historyStart, end time.Time) []any {
-	return []any{orgID, repoID, historyStart.UTC(), end.UTC(), orgID, repoID, defaultBranch}
-}
 
 // hasNativeTestopsOffDefaultCaseToday reports whether today holds a case row of
 // a run not shown to be on the default branch, by the same day rule the case
@@ -428,26 +441,22 @@ func hasNativeTestopsOffDefaultCaseToday(
 	ctx context.Context, conn testopsNativeConn, orgID string, repoID uuid.UUID,
 	defaultBranch string, historyStart, start, end time.Time,
 ) (bool, error) {
-	args := offDefaultRunsArgs(orgID, repoID, defaultBranch, historyStart, end)
-	args = append(args, orgID, repoID, start.UTC(), end.UTC(), orgID, repoID, end.UTC(), orgID, repoID)
 	rows, err := conn.Query(ctx, offDefaultRunsCTE+`
 SELECT count() FROM (
   SELECT 1 FROM test_case_results FINAL
   WHERE case_name != ''
     AND run_id IN (SELECT run_id FROM off_default)
     AND run_id IN (
-      SELECT run_id FROM test_suite_results FINAL
-      WHERE org_id = ? AND repo_id = ?
-        AND coalesce(started_at, finished_at) >= ? AND coalesce(started_at, finished_at) < ?
+      SELECT run_id`+testopsKeptSuitesToday+`
     )
     AND (run_id, suite_id) IN (
       SELECT run_id, suite_id FROM test_suite_results FINAL
-      WHERE org_id = ? AND repo_id = ?
-        AND coalesce(started_at, finished_at) < ?
+      WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(UUID)}
+        AND coalesce(started_at, finished_at) < {end:DateTime64(3, 'UTC')}
     )
-    AND org_id = ? AND repo_id = ?
+    AND org_id = {org_id:String} AND repo_id IN {repo_ids:Array(UUID)}
   LIMIT 1
-)`, args...)
+)`, testopsCaseArgs(orgID, repoID, defaultBranch, historyStart, start, end)...)
 	if err != nil {
 		return false, fmt.Errorf("load native testops off-default case rows: %w", err)
 	}

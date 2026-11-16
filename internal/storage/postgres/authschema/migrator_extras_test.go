@@ -27,7 +27,7 @@ func TestMigratorRowsOutsideTheSetNamesTheProdLeftoversAndNothingOfTheSet(t *tes
 		{Table: "refresh_tokens", Privilege: "REFERENCES"},
 		{Table: "refresh_tokens", Privilege: "UPDATE", Column: "revoked_at"},
 		{Table: "refresh_tokens", Privilege: "SELECT", Column: "token_hash"},
-		{Table: "users", Privilege: "DELETE"},
+		{Table: "users", Privilege: "TRUNCATE"},
 		{Table: "memberships", Privilege: "REFERENCES", Column: "id"},
 	}
 	got := MigratorRowsOutsideTheSet(append(rows, leftovers...))

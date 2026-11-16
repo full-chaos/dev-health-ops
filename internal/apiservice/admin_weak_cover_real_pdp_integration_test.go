@@ -20,6 +20,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"go.opentelemetry.io/otel/metric/noop"
 
 	authv1 "github.com/full-chaos/dev-health-ops/contracts/auth/v1"
@@ -27,12 +28,15 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/usersowned"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/accessrouting"
+	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/acrrevoke"
 	"github.com/full-chaos/dev-health-ops/internal/auth/authapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/authorization"
+	"github.com/full-chaos/dev-health-ops/internal/auth/copyproject"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole"
 	"github.com/full-chaos/dev-health-ops/internal/authzenforce"
+	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/authplane"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/edtokens"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
@@ -503,7 +507,7 @@ func wcGrantOwner(t *testing.T, ctx context.Context, w *wcWorld, c *wcCaller) {
 // caller stays a platform admin, and its cells measure parity.
 func wcDropPrincipal(t *testing.T, ctx context.Context, w *wcWorld, c *wcCaller) {
 	t.Helper()
-	_, err := w.env.Admin.Exec(ctx, `DELETE FROM auth.principals WHERE id = $1`, c.user)
+	err := wcArmedPrincipalDelete(ctx, w.env.Admin, w.env.Schema, c.user)
 	var pgErr *pgconn.PgError
 	if !errors.As(err, &pgErr) || pgErr.Code != "23001" {
 		t.Fatalf("delete of an assignment holder's principal: %v, want the RESTRICT refusal 23001", err)
@@ -1177,7 +1181,7 @@ func TestAdminWeakCoverRealPDPPrincipalRowCannotBeDroppedUnderAnAssignment(t *te
 	ctx := context.Background()
 	env := platformroleseam.Start(ctx, t, true)
 	holder := env.User(ctx, t, true, true)
-	_, err := env.Admin.Exec(ctx, `DELETE FROM auth.principals WHERE id = $1`, holder)
+	err := wcArmedPrincipalDelete(ctx, env.Admin, env.Schema, holder)
 	var pgErr *pgconn.PgError
 	if !errors.As(err, &pgErr) {
 		t.Fatalf("delete of an assignment holder's principal: %v, want a refusal by the database", err)
@@ -1196,4 +1200,17 @@ func TestAdminWeakCoverRealPDPPrincipalRowCannotBeDroppedUnderAnAssignment(t *te
 		t.Fatal("an assignment without a principal row was written")
 	}
 	t.Logf("FK|13728|principal_delete=%s|orphan_assignment=%v", pgErr.Code, err)
+}
+
+// wcArmedPrincipalDelete deletes a principal inside audit.Commit, so the refusal it meets is the schema's foreign key,
+// not the delete guard (auth migration 0058) that refuses a principal delete outside audit.Commit.
+func wcArmedPrincipalDelete(ctx context.Context, pool *pgxpool.Pool, schema authschema.ValidatedIdentifier, principal uuid.UUID) error {
+	return audit.Commit(ctx, pool, schema, audit.Mutation{
+		Apply: func(ctx context.Context, tx audit.TxOps) error {
+			_, err := tx.Exec(ctx, `DELETE FROM auth.principals WHERE id = $1`, principal)
+			return err
+		},
+		Audit:  audit.AuditEvent{EventType: "auth.user.erased", Outcome: audit.OutcomeAllowed, Attributes: map[string]any{"reason_code": "principal_erased"}},
+		Events: []audit.OutboxEvent{copyproject.PrincipalEvent(principal.String(), "principal.disabled", false)},
+	})
 }

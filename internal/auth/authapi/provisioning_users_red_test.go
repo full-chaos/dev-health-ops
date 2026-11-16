@@ -131,8 +131,6 @@ func TestUsersSoftDeleteRouteAnswersAlreadyDone(t *testing.T) {
 	if got := usersAnswerOf(t, response.Body.Bytes())["already_done"]; got != false {
 		t.Errorf("first soft delete: already_done %v, want false", got)
 	}
-	expectRefusal(t, f.post(usersDeletePath, encode(map[string]any{"actor_principal_id": f.super.String(),
-		"principal_id": f.target.String(), "mode": "force"}), nil), http.StatusBadRequest, reasonMalformed)
 }
 
 // Literals the cells above share: the refusal code of a wrong admin password and the password the fixture's acting

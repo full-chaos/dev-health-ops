@@ -44,6 +44,7 @@ const (
 	reasonAdminPasswordInvalid = "admin_password_invalid"
 	reasonLastPlatformAdmin    = "last_platform_admin"
 	reasonProviderIDInvalid    = "provider_id_invalid"
+	reasonReferenceBlocked     = "reference_blocked"
 )
 
 // usersAdminPatterns are the user-admin routes; they mount together, only when each has its row (UsersAdminRoutes).
@@ -101,6 +102,7 @@ type UsersAdmin interface {
 	VerifyAdminPassword(ctx context.Context, actor uuid.UUID, password string) (bool, error)
 	AdminSetPassword(ctx context.Context, req identity.AdminPasswordRequest) error
 	AdminSoftDeleteUser(ctx context.Context, req identity.AdminSoftDeleteRequest) (identity.AdminSoftDeleteResult, error)
+	AdminForceDeleteUser(ctx context.Context, req identity.AdminForceDeleteRequest) (identity.AdminForceDeleteResult, error)
 }
 
 // UsersAdminStores are the user-admin routes' stores, a part of ProvisioningDeps; with either nil, or without the
@@ -284,6 +286,8 @@ func (h provisioningHandlers) answerUsersError(w http.ResponseWriter, r *http.Re
 		answer = refusal{http.StatusConflict, reasonStateChanged}
 	case errors.Is(err, platformrole.ErrPrincipalOff):
 		answer = refusal{http.StatusForbidden, reasonDeactivated}
+	case errors.Is(err, identity.ErrReferenceBlocked):
+		answer = refusal{http.StatusConflict, reasonReferenceBlocked}
 	}
 	h.rec.refuse(w, r, op, answer, failure(answer, err))
 }
@@ -484,12 +488,16 @@ func (h provisioningHandlers) usersDelete(w http.ResponseWriter, r *http.Request
 	target, err2 := body.uuid("principal_id")
 	orgID, err3 := body.optionalUUID("organization_id")
 	mode, err4 := body.optionalText("mode", maxShortTextBytes)
-	if errors.Join(err1, err2, err3, err4) != nil || mode != nil && *mode != "soft" {
+	if errors.Join(err1, err2, err3, err4) != nil || mode != nil && *mode != "soft" && *mode != "force" {
 		h.malformedUsers(w, r, opUsersDelete)
 		return
 	}
 	ctx := r.Context()
 	if !h.usersPrecheck(w, r, opUsersDelete, actor, orgID, false, &target) {
+		return
+	}
+	if mode != nil && *mode == "force" {
+		h.usersForceDelete(w, r, caller, actor, orgID, target)
 		return
 	}
 	result, err := h.UsersAdmin.AdminSoftDeleteUser(ctx, identity.AdminSoftDeleteRequest{Principal: target, Actor: actor,
@@ -500,4 +508,27 @@ func (h provisioningHandlers) usersDelete(w http.ResponseWriter, r *http.Request
 	}
 	h.rec.record(ctx, opUsersDelete, "success", reasonAccepted, nil)
 	writeJSON(w, http.StatusOK, usersDeleteAnswer{PrincipalID: target.String(), WasActive: result.WasActive, AlreadyDone: result.AlreadyDone})
+}
+
+// usersForceDelete is the force mode of the delete route: the user is erased (identity.AdminForceDeleteUser) under the
+// same actor rule and last platform_admin guard as the soft delete, and its own platform_admin assignment is revoked in
+// the same commit. A platform_owner holder is refused by the principal's foreign key (reference_blocked): that row is
+// written by auth-migrate only.
+func (h provisioningHandlers) usersForceDelete(w http.ResponseWriter, r *http.Request, caller audit.Caller, actor uuid.UUID, orgID *uuid.UUID, target uuid.UUID) {
+	ctx := r.Context()
+	revoke := func(ctx context.Context, tx audit.TxOps) error {
+		err := h.PlatformRoles.RevokeOn(ctx, tx, platformrole.RevokeInput{Actor: actor, Principal: target, Role: platformrole.PlatformAdmin})
+		if errors.Is(err, platformrole.ErrNotHeld) {
+			return nil
+		}
+		return err
+	}
+	result, err := h.UsersAdmin.AdminForceDeleteUser(ctx, identity.AdminForceDeleteRequest{Principal: target, Actor: actor,
+		RequestID: requestid.Audit(ctx), Caller: caller, Authorize: h.usersDeleteAuthorize(actor, orgID, target), RevokeRoles: revoke})
+	if err != nil {
+		h.answerUsersError(w, r, opUsersDelete, err)
+		return
+	}
+	h.rec.record(ctx, opUsersDelete, "success", reasonAccepted, nil)
+	writeJSON(w, http.StatusOK, usersDeleteAnswer{PrincipalID: target.String(), WasActive: result.WasActive})
 }

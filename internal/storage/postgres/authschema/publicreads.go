@@ -726,6 +726,9 @@ func publicReadViolations(ctx context.Context, conn *pgx.Conn, options Options) 
 		if schema == publicSchema && (kind == "r" || kind == "p") && isImpersonationWriteColumn(options.UsersOwned, table, privilege, column) {
 			continue
 		}
+		if options.UsersOwned && schema == publicSchema && (kind == "r" || kind == "p") && isUserEraseColumn(table, privilege, column) {
+			continue
+		}
 		violations = append(violations, Violation{
 			Kind: "column", Schema: schema, Object: table + "." + column, Privilege: privilege,
 			Detail: "not declared in PublicReadColumns",
@@ -758,6 +761,10 @@ func publicReadViolations(ctx context.Context, conn *pgx.Conn, options Options) 
 	if err != nil {
 		return nil, err
 	}
-	return append(append(append(append(append(append(violations, missing...), inviteMissing...), auditMissing...), providerWriteMissing...),
-		impersonationMissing...), providerOwnMissing...), nil
+	eraseMissing, err := userEraseMissing(ctx, conn, options)
+	if err != nil {
+		return nil, err
+	}
+	return append(append(append(append(append(append(append(violations, missing...), inviteMissing...), auditMissing...), providerWriteMissing...),
+		impersonationMissing...), providerOwnMissing...), eraseMissing...), nil
 }

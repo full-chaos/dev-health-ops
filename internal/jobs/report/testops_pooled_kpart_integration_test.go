@@ -3,12 +3,13 @@
 package report
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -291,22 +292,52 @@ func TestRegistryTestopsKP5CoverageFragment(t *testing.T) {
 	}
 }
 
-// GitLab mixed run: a GitLab legacy slotless row next to GitLab slotted rows (slot = suite name) of one run. Under form (b) the
-// legacy row drops only if the slotted row lists its id; the GitLab writer lists none today, so the legacy row stays and the
-// suite counts TWICE. Want: no double (0 surviving legacy rows). RED until the slotted GitLab writer fills legacy ids.
-type gitlabDoer struct{ t *testing.T }
+// GitLab mixed run (retry after the roll): the pre-change writer stored the legacy suite row of job 11 (no slot); a pass of the
+// current writer then sees job 11 retried and job 12 as the latest and writes the slotted row at attempt 2 under a NEW key. The
+// slotted GitLab row lists the legacy id, so the legacy row drops: no double. Seed shape from the writer-side cell of the PR-0 lane
+// (GitLab retried-job shape through the production chunked route); the legacy row goes through the real sink with the id the
+// slotted row lists (read back).
+type glDoer struct {
+	t *testing.T
+}
 
-func (d gitlabDoer) Do(request *http.Request) (*http.Response, error) {
+func glLcovArchive() []byte {
+	var buffer bytes.Buffer
+	writer := zip.NewWriter(&buffer)
+	member, _ := writer.Create("coverage.info")
+	_, _ = member.Write([]byte("SF:a.go\nDA:1,1\nDA:2,0\nend_of_record\n"))
+	_ = writer.Close()
+	return buffer.Bytes()
+}
+
+func (d glDoer) Do(request *http.Request) (*http.Response, error) {
+	path := request.URL.Path
 	status, header, body := http.StatusOK, http.Header{"Content-Type": {"application/json"}}, "{}"
-	switch request.URL.Path {
-	case "/api/v4/projects/123":
-		body = `{"id":123,"path_with_namespace":"acme/api","default_branch":"main","only_allow_merge_if_pipeline_succeeds":true}`
-	case "/api/v4/projects/123/pipelines":
-		body = `[{"id":9001,"name":"CI","ref":"main","status":"success","created_at":"2026-01-02T09:59:00Z","started_at":"2026-01-02T10:00:00Z","finished_at":"2026-01-02T10:05:00Z","source":"push","sha":"abc","web_url":"https://gitlab.example/acme/api/-/pipelines/9001"}]`
-	case "/api/v4/projects/123/pipelines/9001/jobs":
-		body = `[{"id":11,"name":"unit","artifacts_file":{},"artifacts":[]}]`
-	case "/api/v4/projects/123/pipelines/9001/test_report":
-		body = `{"test_suites":[{"name":"api","total_time":"100","test_cases":[{"name":"c","classname":"x","status":"success","execution_time":"1"}]}]}`
+	const root = "/api/v4/projects/123"
+	switch {
+	case path == root:
+		body = `{"id":123,"path_with_namespace":"acme/api","default_branch":"main"}`
+	case path == root+"/pipelines":
+		body = `[{"id":9001,"name":"CI","ref":"main","status":"success","created_at":"2026-07-22T10:00:00Z","started_at":"2026-07-22T10:01:00Z","finished_at":"2026-07-22T11:40:00Z","updated_at":"2026-07-22T11:40:00Z","source":"push","sha":"abc","web_url":"https://gitlab.example/acme/api/-/pipelines/9001"}]`
+	case path == root+"/pipelines/9001/jobs":
+		items := []string{}
+		for _, job := range []struct {
+			id      int
+			retried bool
+		}{{11, true}, {12, false}} {
+			if job.retried && request.URL.Query().Get("include_retried") != "true" {
+				continue
+			}
+			items = append(items, fmt.Sprintf(`{"id":%d,"name":"unit","stage":"test","status":"success","allow_failure":false,"started_at":"2026-07-22T10:01:00Z","finished_at":"2026-07-22T11:40:00Z","retried":%t,"artifacts_file":{"filename":"reports.zip"}}`, job.id, job.retried))
+		}
+		body = "[" + strings.Join(items, ",") + "]"
+	case path == root+"/pipelines/9001/test_report":
+		body = `{"test_suites":[{"name":"unit","total_time":"100","test_cases":[{"name":"c","classname":"tests.T","status":"success","execution_time":"0.5"}]}]}`
+	case path == root+"/pipelines/9001/test_report_summary":
+		body = `{"total":{"time":100,"count":1,"success":1,"failed":0,"skipped":0,"error":0,"suite_error":null},"test_suites":[{"name":"unit","total_time":100,"total_count":1,"build_ids":[12],"suite_error":null}]}`
+	case strings.HasPrefix(path, root+"/jobs/") && strings.HasSuffix(path, "/artifacts"):
+		header.Set("Content-Type", "application/zip")
+		body = string(glLcovArchive())
 	default:
 		d.t.Fatalf("unexpected request %s", request.URL.String())
 	}
@@ -314,47 +345,52 @@ func (d gitlabDoer) Do(request *http.Request) (*http.Response, error) {
 }
 
 func TestRegistryTestopsGitLabMixedRunHasNoDouble(t *testing.T) {
-	if os.Getenv("KPART_GITLAB_RED") == "" {
-		t.Skip("RED today: the slotted GitLab writer lists no legacy ids (chaos' writer fills GitHub only), so a GitLab legacy row next to a slotted row counts twice (55 / 95.5 against 100 / 100). Set KPART_GITLAB_RED=1 to run it; it turns green when GitLab legacy ids are filled")
-	}
 	e := startPooledEnv(t)
 	org := e.newOrg()
 	capability, _ := providersync.Capability("gitlab", "tests")
-	since := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	before := time.Date(2026, 1, 31, 23, 59, 59, 0, time.UTC)
+	since := time.Date(2026, 7, 22, 11, 0, 0, 0, time.UTC)
+	before := since.Add(time.Hour)
 	claim := pooledClaim(org, "123")
 	claim.Provider, claim.CostClass, claim.SinceAt, claim.BeforeAt = "gitlab", capability.CostClass, &since, &before
-	client, err := providerfoundation.NewHTTPClient("gitlab", "https://gitlab.example", fakehttp.Client(gitlabDoer{t}),
+	claim.LeaseExpiresAt = before.Add(time.Hour)
+	lease := providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil })
+	client, err := providerfoundation.NewHTTPClient("gitlab", "https://gitlab.example", fakehttp.Client(glDoer{t}),
 		func(*http.Request) error { return nil },
-		providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond},
-		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
+		providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond}, lease)
 	if err != nil {
 		t.Fatal(err)
 	}
-	batch, err := (providersync.GitLabTestsRouteHandler{}).Collect(e.ctx, claim, providerfoundation.Credential{}, client, time.Date(2026, 1, 9, 0, 0, 0, 0, time.UTC))
-	if err != nil {
-		t.Fatalf("gitlab collect: %v", err)
-	}
-	sink := providersync.TestOpsClickHouseEffects{Conn: e.conn, Lease: providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil })}
-	repo := ""
-	for _, effect := range batch.Effects {
-		if err := sink.WriteEffect(e.ctx, claim, effect); err != nil {
-			t.Fatalf("write %s: %v", effect.Destination, err)
-		}
-		if effect.Destination == "ci_pipeline_runs" && len(effect.Rows) > 0 {
-			var row struct {
-				RepoID string `json:"repo_id"`
+	sink := providersync.TestOpsClickHouseEffects{Conn: e.conn, Lease: lease}
+	err = providersync.GitLabTestsRouteHandler{}.CollectChunks(e.ctx, claim, providerfoundation.Credential{}, client, before.Add(5*time.Minute), "",
+		func(emission providersync.ChunkRouteEmission) error {
+			for _, effect := range emission.Batch.Effects {
+				if len(effect.Rows) == 0 {
+					continue
+				}
+				if err := sink.WriteEffect(e.ctx, claim, effect); err != nil {
+					return fmt.Errorf("write %s: %w", effect.Destination, err)
+				}
 			}
-			_ = json.Unmarshal(effect.Rows[0], &row)
-			repo = row.RepoID
-		}
+			return nil
+		})
+	if err != nil {
+		t.Fatalf("CollectChunks: %v", err)
 	}
-	// The legacy row of the same GitLab suite, as the writer before the slot columns stored it (no slot).
-	e.legacySuite(t, org, repo, "9001", "gitlab-legacy-api", "api", 10, "2026-01-02T10:00:00Z")
+	var repo string
+	if err := e.conn.QueryRow(e.ctx, `SELECT toString(repo_id) FROM ci_pipeline_runs FINAL WHERE org_id = ? LIMIT 1`, org).Scan(&repo); err != nil {
+		t.Fatal(err)
+	}
+	ids := e.suiteLegacyIDs(t, org, "9001")["unit"]
+	if len(ids) != 1 {
+		t.Fatalf("the slotted GitLab suite lists %v legacy ids, want the one the pre-change writer stored (attempt 2 of a retried job)", ids)
+	}
+	// The legacy row of job 11 as the writer before the slot columns stored it.
+	e.legacySuite(t, org, repo, "9001", ids[0], "unit", 10, "2026-07-22T10:01:00Z")
 	e.own(org, "team-k", repo)
-	e.computeDaily(org, []string{repo}, "2026-01-02")
-	var listed []string
-	_ = e.conn.QueryRow(e.ctx, `SELECT legacy_suite_ids FROM test_suite_results FINAL WHERE org_id = ? AND report_slot != '' AND suite_name = 'api'`, org).Scan(&listed)
-	t.Logf("the slotted GitLab suite lists legacy ids %v", listed)
-	wantQuantiles(t, e, org, floats(100))
+	e.computeDaily(org, []string{repo}, "2026-07-22")
+	p50 := e.value(org, "suite_duration_p50_seconds", "", "2026-07-21", "2026-07-23")
+	p95 := e.value(org, "suite_duration_p95_seconds", "", "2026-07-21", "2026-07-23")
+	if !near(p50["total"], 100) || !near(p95["total"], 100) {
+		t.Errorf("GitLab mixed run double-counts: p50 %v p95 %v, want 100 / 100", p50, p95)
+	}
 }

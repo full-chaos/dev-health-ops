@@ -2418,7 +2418,7 @@ input TimeseriesRequestInput {
 }
 
 """
-Which series a TimeseriesResult is. DIMENSION is one series per value of the requested dimension (a team, a repository). ORG is the one org-level series of a measure that has one: a true org rate, the org's numerator summed over the org's denominator per bucket, never a mean of the dimension series (CHAOS-9736). Today the measures PIPELINE_SUCCESS_RATE, COVERAGE_LINE_PCT and TEST_FLAKE_RATE carry an ORG series, on the non-investment path; every other measure carries DIMENSION series only.
+Which series a TimeseriesResult is. DIMENSION is one series per value of the requested dimension (a team, a repository). ORG is the one org-level series of a measure that has one: a true org rate, the org's numerator summed over the org's denominator per bucket, never a mean of the dimension series (CHAOS-9736). The measures with an ORG series are PIPELINE_SUCCESS_RATE, PIPELINE_FAILURE_RATE, PIPELINE_RERUN_RATE, PIPELINE_DURATION_P95, PIPELINE_QUEUE_TIME, TEST_PASS_RATE, TEST_FAILURE_RATE, TEST_FLAKE_RATE, TEST_SUITE_DURATION_P95 and COVERAGE_LINE_PCT, on the non-investment path; every other measure carries DIMENSION series only. A P95 duration and the queue time are pooled over the raw runs (never a mean of the dimension series), and past the pooled row bound the answer is unavailable.
 """
 enum TimeseriesScope {
   DIMENSION

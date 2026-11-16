@@ -16,6 +16,9 @@ var pooledMetricExpressions = map[string]struct{ source, expression string }{
 	"p95_queue_seconds":          {testopspooled.PipelineRunsSource, testopspooled.QueueP95},
 	"suite_duration_p95_seconds": {testopspooled.SuiteRunsSource, testopspooled.P95},
 	"suite_duration_p50_seconds": {testopspooled.SuiteRunsSource, testopspooled.Median},
+	"avg_duration_minutes":       {cicdRunsSource, cicdDurationMean},
+	"p90_duration_minutes":       {cicdRunsSource, cicdDurationP90},
+	"avg_queue_minutes":          {cicdRunsSource, cicdQueueMean},
 }
 
 func pooledDefinition(t *testing.T, metric string) metricDefinition {
@@ -31,7 +34,7 @@ func pooledDefinition(t *testing.T, metric string) metricDefinition {
 	return definition
 }
 
-// The six TestOps duration and queue metrics are charted over the raw samples: the statement reads the shared source and
+// The TestOps and CI/CD duration and queue metrics are charted over the raw samples: the statement reads the shared source and
 // expression, never avg() of the stored column, and the registry keeps its daily table.
 func TestPooledMetricsReadTheSharedSourceAndExpression(t *testing.T) {
 	t.Parallel()
@@ -52,10 +55,14 @@ func TestPooledMetricsReadTheSharedSourceAndExpression(t *testing.T) {
 			t.Errorf("%s: the chart names %s, the registry %s", metric, definition.SourceTable, supportedMetrics[metric].SourceTable)
 		}
 	}
-	for _, other := range []string{"success_rate", "flake_rate", "rerun_rate", "p95_queue_minutes", "avg_duration_minutes"} {
-		if definition, ok := supportedMetrics[other]; ok && withPooledChart(definition, time.Now()).pooled != nil {
-			t.Errorf("%s must not be pooled", other)
+	// Every other registry metric keeps its stored definition: a metric pooled without a row above fails here.
+	for name, definition := range supportedMetrics {
+		if _, listed := pooledMetricExpressions[name]; !listed && withPooledChart(withChartRule(definition), time.Now()).pooled != nil {
+			t.Errorf("%s must not be pooled", name)
 		}
+	}
+	if len(pooledCharts) != len(pooledMetricExpressions) {
+		t.Errorf("pooledCharts has %d metrics, the test lists %d", len(pooledCharts), len(pooledMetricExpressions))
 	}
 }
 

@@ -202,9 +202,18 @@ const OffStreamCredentialProjection = "credential_projection"
 // copy is not an auth fact and has no provisioning event.
 const OffStreamRepositoryIdentity = "repository_identity"
 
+// OffStreamSSOProviderConfig marks an SSO provider write (the five EventSSOProvider* public projection types: create,
+// update, delete, activate, deactivate): it has no provisioning event, because the sign-in routes read the provider row
+// live and no provisioning consumer holds it.
+// Consumers: the stream has no sso_provider aggregate (contracts/provisioning/vocabulary.go), and no PEP resync, acr or
+// ops worker reads sso_providers from the stream.
+// Legacy parity: the Python provider CRUD (api/services/sso.py create/update/delete_provider) wrote no outbox event.
+const OffStreamSSOProviderConfig = "sso_provider_config"
+
 var offStreamReasons = map[string]bool{
 	OffStreamSessionLifecycle: true, OffStreamLinkCredentialLifecycle: true, OffStreamSigningKeyLifecycle: true,
 	OffStreamWorkloadRegistry: true, OffStreamRestoreFence: true, OffStreamCredentialProjection: true, OffStreamRepositoryIdentity: true,
+	OffStreamSSOProviderConfig: true,
 }
 
 // TxOps is what a mutation may do inside the transaction.
@@ -454,7 +463,7 @@ func validateMutationAudit(event AuditEvent) error {
 	if err := event.validate(); err != nil {
 		return err
 	}
-	if appendOnlyEventTypes[event.EventType] || publicPurgeEventTypes[event.EventType] || publicProjectionEventTypes[event.EventType] {
+	if appendOnlyEventTypes[event.EventType] || publicPurgeEventTypes[event.EventType] || isPublicProjectionType(event.EventType) {
 		return fmt.Errorf("%w: audit event_type %q is append-only and has no state mutation", ErrMutationFailed, event.EventType)
 	}
 	return nil

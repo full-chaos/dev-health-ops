@@ -3,6 +3,7 @@ package report
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/changefailure"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/rowview"
@@ -22,13 +23,16 @@ func TestBuildChartQueryDedupsCicdMetricsDaily(t *testing.T) {
 	t.Parallel()
 	spec := ChartSpec{
 		ChartID: "chart-1", PlanID: "plan-1", ChartType: "line",
-		Metric: "avg_duration_minutes", GroupBy: "day",
+		Metric: "success_rate", GroupBy: "day",
 		TimeRangeStart: "2026-01-01", TimeRangeEnd: "2026-01-07",
 		OrganizationID: "org-1",
 	}
 	definition, ok := supportedMetrics[spec.Metric]
 	if !ok || definition.SourceTable != "cicd_metrics_daily" {
-		t.Fatalf("fixture drift: avg_duration_minutes no longer maps to cicd_metrics_daily (got %+v)", definition)
+		t.Fatalf("fixture drift: success_rate no longer maps to cicd_metrics_daily (got %+v)", definition)
+	}
+	if withPooledChart(withChartRule(definition), time.Now()).pooled != nil {
+		t.Fatal("fixture drift: success_rate is pooled, so this guard no longer reads the stored rows")
 	}
 	query, _, err := buildChartQuery(spec, definition)
 	if err != nil {

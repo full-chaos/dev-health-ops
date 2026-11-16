@@ -368,8 +368,8 @@ func TestClickHouseQueryAdapterChartsEveryRegistryMetric(t *testing.T) {
 		return seeded[definition.SourceTable+"."+name]
 	}
 
-	// The six pooled TestOps metrics chart the raw runs, not the stored daily value this test seeds: the cells of
-	// testops_pooled_registry_integration_test.go seed their raw rows through the provider route.
+	// The pooled metrics chart the raw runs, not the stored daily value this test seeds: the cells of
+	// testops_pooled_registry_integration_test.go and cicd_pooled_registry_integration_test.go seed their raw rows.
 	pooledSkipped := 0
 	for _, shape := range []struct{ chartType, groupBy string }{{"scorecard", ""}, {"line", "day"}, {"line", "week"}, {"line", "month"}, {"line", ""}} {
 		for _, name := range names {

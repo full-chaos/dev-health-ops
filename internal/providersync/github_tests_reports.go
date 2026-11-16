@@ -65,6 +65,8 @@ type testSuiteResultRow struct {
 	// ReportSlot and RunAttempt name the report a suite row came from (CHAOS-13873 GitHub, CHAOS-13875 GitLab); empty and 0 for rows written before migration 151.
 	ReportSlot string `json:"report_slot,omitempty"`
 	RunAttempt int64  `json:"run_attempt,omitempty"`
+	// LegacySuiteIDs are the keys the pre-slot writer gives this suite (CHAOS-13925): one per artifact it replaces.
+	LegacySuiteIDs []string `json:"legacy_suite_ids,omitempty"`
 }
 
 type testCaseResultRow struct {
@@ -107,6 +109,8 @@ type coverageSnapshotRow struct {
 	LastSynced        time.Time `json:"last_synced"`
 	ReportSlot        string    `json:"report_slot,omitempty"`
 	RunAttempt        int64     `json:"run_attempt,omitempty"`
+	// LegacySnapshotIDs are the keys the pre-slot writer gives this snapshot (CHAOS-13925): one per artifact it replaces.
+	LegacySnapshotIDs []string `json:"legacy_snapshot_ids,omitempty"`
 }
 
 type githubTestsReportRows struct {
@@ -923,20 +927,23 @@ func parseGitHubTestsArtifact(
 	startedAt, finishedAt *time.Time,
 	normalizedAt time.Time,
 ) (githubTestsReportRows, error) {
-	return parseGitHubTestsArchive(archive, artifactID, artifactID, repoID, runID, orgID, startedAt, finishedAt, normalizedAt)
+	return parseGitHubTestsArchive(archive, artifactID, artifactID, nil, repoID, runID, orgID, startedAt, finishedAt, normalizedAt)
 }
 
 // parseGitHubTestsReportArtifact parses one artifact of a GitHub run under its report slot (CHAOS-13873): the natural keys hash the
 // slot (the artifact name) and the run attempt that made it instead of the artifact id, so the same report read again in the same
 // attempt keeps its keys and a re-run attempt writes its own rows next to the earlier attempt's. The skip markers keep the artifact id.
+// Every suite and coverage row also lists the keys the pre-slot writer gives it under the artifact id and under each id in
+// superseded, the older artifacts of the same name the listing passed over (CHAOS-13925).
 func parseGitHubTestsReportArtifact(
 	archive []byte,
-	artifactID string, slot githubTestsReportSlot,
+	artifactID string, slot githubTestsReportSlot, superseded []string,
 	repoID, runID, orgID string,
 	startedAt, finishedAt *time.Time,
 	normalizedAt time.Time,
 ) (githubTestsReportRows, error) {
-	rows, err := parseGitHubTestsArchive(archive, artifactID, slot.scope(), repoID, runID, orgID, startedAt, finishedAt, normalizedAt)
+	legacyScopes := append([]string{artifactID}, superseded...)
+	rows, err := parseGitHubTestsArchive(archive, artifactID, slot.scope(), legacyScopes, repoID, runID, orgID, startedAt, finishedAt, normalizedAt)
 	if err != nil {
 		return rows, err
 	}
@@ -949,10 +956,11 @@ func parseGitHubTestsReportArtifact(
 	return rows, nil
 }
 
-// parseGitHubTestsArchive is the parse behind both: markerID goes on the skip markers, scopeID into every natural key.
+// parseGitHubTestsArchive is the parse behind both: markerID goes on the skip markers, scopeID into every natural key, and each of
+// legacyScopes into one entry of a row's legacy keys.
 func parseGitHubTestsArchive(
 	archive []byte,
-	markerID, scopeID, repoID, runID, orgID string,
+	markerID, scopeID string, legacyScopes []string, repoID, runID, orgID string,
 	startedAt, finishedAt *time.Time,
 	normalizedAt time.Time,
 ) (githubTestsReportRows, error) {
@@ -1047,7 +1055,22 @@ func parseGitHubTestsArchive(
 				})
 				continue
 			}
+			for _, legacyScope := range legacyScopes {
+				coverage.LegacySnapshotIDs = append(coverage.LegacySnapshotIDs, githubTestsSnapshotID(runID, legacyScope, *coverage.ReportFormat, name))
+			}
 			result.Coverage = append(result.Coverage, coverage)
+		}
+	}
+	// The ordinal of a suite among the artifact's suites of its name, as parseJUnitRows counts it in suiteOccurrence: every suite
+	// it counts becomes a row, in order.
+	if len(legacyScopes) > 0 {
+		occurrence := map[string]int{}
+		for index := range result.Suites {
+			name := result.Suites[index].SuiteName
+			for _, legacyScope := range legacyScopes {
+				result.Suites[index].LegacySuiteIDs = append(result.Suites[index].LegacySuiteIDs, githubTestsSuiteID(runID, legacyScope, name, occurrence[name]))
+			}
+			occurrence[name]++
 		}
 	}
 	// Computed once over every suite this artifact produced, across all
@@ -1194,7 +1217,7 @@ func parseCoberturaRow(body []byte, reportPath, artifactID, repoID, runID, orgID
 		}
 	}
 	format := "cobertura"
-	row := coverageSnapshotRow{RepoID: repoID, RunID: runID, SnapshotID: hashTestIdentifier(runID, artifactID, format, reportPath), ReportFormat: &format, LinesTotal: linesTotal, LinesCovered: linesCovered, BranchesTotal: branchesTotal, BranchesCovered: branchesCovered, ServiceID: serviceID, OrgID: orgID, LastSynced: normalizedAt}
+	row := coverageSnapshotRow{RepoID: repoID, RunID: runID, SnapshotID: githubTestsSnapshotID(runID, artifactID, format, reportPath), ReportFormat: &format, LinesTotal: linesTotal, LinesCovered: linesCovered, BranchesTotal: branchesTotal, BranchesCovered: branchesCovered, ServiceID: serviceID, OrgID: orgID, LastSynced: normalizedAt}
 	row.LineCoveragePct = coveragePercent(row.LinesCovered, row.LinesTotal)
 	row.BranchCoveragePct = coveragePercent(row.BranchesCovered, row.BranchesTotal)
 	return row, nil
@@ -1296,9 +1319,8 @@ func parseJUnitRows(
 			name = "unnamed"
 		}
 		framework := inferJUnitFramework(suite)
-		suiteID := hashTestIdentifier(runID, artifactID, name, "")
-		// suiteObjectOccurrence disambiguates two SIBLING suite OBJECTS that
-		// hash to the identical suiteID above because they share a
+		// The ordinal suiteOccurrence[name] disambiguates two SIBLING suite
+		// OBJECTS that would hash to the identical suiteID because they share a
 		// (run, artifact, name) triple (CHAOS-4508, prod sync_run
 		// a7b60282-4af1-58ad-a094-8dc8baab7a1f, run_id=33248832747): an
 		// ordinary shape when one artifact bundles multiple report files or
@@ -1312,9 +1334,7 @@ func parseJUnitRows(
 		// separator, matching caseOccurrence's own fix below -- so the first
 		// (and every non-colliding) suite keeps the exact suiteID it always
 		// has: existing rows for single-suite artifacts are unaffected.
-		if suiteObjectOccurrence := suiteOccurrence[name]; suiteObjectOccurrence > 0 {
-			suiteID = hashTestIdentifier(suiteID, strconv.Itoa(suiteObjectOccurrence))
-		}
+		suiteID := githubTestsSuiteID(runID, artifactID, name, suiteOccurrence[name])
 		suiteOccurrence[name]++
 		started := parseGitHubTestsTime(suite.Timestamp)
 		hasSuiteTimestamp := started != nil
@@ -1558,7 +1578,7 @@ func parseLCOVRow(body []byte, reportPath, artifactID, repoID, runID, orgID stri
 	}
 	format := "lcov"
 	row := coverageSnapshotRow{
-		RepoID: repoID, RunID: runID, SnapshotID: hashTestIdentifier(runID, artifactID, format, reportPath),
+		RepoID: repoID, RunID: runID, SnapshotID: githubTestsSnapshotID(runID, artifactID, format, reportPath),
 		ReportFormat: &format, LinesTotal: nilIfZero(aggregateLinesTotal), LinesCovered: nilIfZero(aggregateLinesCovered),
 		BranchesTotal: nilIfZero(aggregateBranchesTotal), BranchesCovered: nilIfZero(aggregateBranchesCovered),
 		FunctionsTotal: nilIfZero(aggregateFunctionsTotal), FunctionsCovered: nilIfZero(aggregateFunctionsCovered),
@@ -1631,6 +1651,21 @@ func testServiceID(path string) *string {
 		return testsOptionalString(parts[0])
 	}
 	return nil
+}
+
+// githubTestsSuiteID is a JUnit suite's key: the run, the scope (the artifact id before CHAOS-13873, the report slot after), the
+// suite name, and, folded in only when it is not 0, the suite's ordinal among the artifact's suites of that name (CHAOS-4508).
+func githubTestsSuiteID(runID, scopeID, name string, occurrence int) string {
+	suiteID := hashTestIdentifier(runID, scopeID, name, "")
+	if occurrence > 0 {
+		suiteID = hashTestIdentifier(suiteID, strconv.Itoa(occurrence))
+	}
+	return suiteID
+}
+
+// githubTestsSnapshotID is a coverage snapshot's key: the run, the scope as for githubTestsSuiteID, the format and the report path.
+func githubTestsSnapshotID(runID, scopeID, format, reportPath string) string {
+	return hashTestIdentifier(runID, scopeID, format, reportPath)
 }
 
 func hashTestIdentifier(parts ...string) string {

@@ -162,3 +162,44 @@ func TestSSOProviderResourceGuardsAnswer400Malformed(t *testing.T) {
 		}
 	}
 }
+
+// A required member is missing, null, only a value of another member, or only a case variant: the legacy model refused each
+// (go-api's own 422 answers it first on the route); auth-service refuses it too, now that it admits unknown members.
+func TestSSOProviderConfigWithoutARequiredMemberIs400Malformed(t *testing.T) {
+	t.Parallel()
+	for name, config := range map[string]string{
+		"saml no entity_id":            `"saml_config":{"sso_url":"https://s.example","certificate":"CERT"}`,
+		"saml no sso_url":              `"saml_config":{"entity_id":"e","certificate":"CERT"}`,
+		"saml no certificate":          `"saml_config":{"entity_id":"e","sso_url":"https://s.example"}`,
+		"saml null sso_url":            `"saml_config":{"entity_id":"e","sso_url":null,"certificate":"CERT"}`,
+		"saml sso_url only as a value": `"saml_config":{"entity_id":"e","note":"sso_url","certificate":"CERT"}`,
+		"saml case variant only":       `"saml_config":{"Entity_ID":"e","sso_url":"https://s.example","certificate":"CERT"}`,
+		"oidc no client_secret":        `"oidc_config":{"client_id":"cid","issuer":"https://i.example"}`,
+		"oidc no issuer":               `"oidc_config":{"client_id":"cid","client_secret":"s"}`,
+		"oidc case variant secret":     `"oidc_config":{"client_id":"cid","Client_Secret":"s","issuer":"https://i.example"}`,
+	} {
+		f := newProvFixtureFor(t, nil, nil)
+		protocol := "saml"
+		if strings.HasPrefix(name, "oidc") {
+			protocol = "oidc"
+		}
+		expectRefusal(t, f.post(PatternSSOProviderCreate, ssoWriteBody(f, PatternSSOProviderCreate, protocol, config), nil), http.StatusBadRequest, reasonMalformed)
+		if len(f.sso.calls) != 0 {
+			t.Errorf("%s reached the store", name)
+		}
+	}
+}
+
+// The sealed secret is the exact client_secret member, never a case variant of it (Go's decoder alone would take the last).
+func TestSSOProviderSealedSecretIsTheExactMember(t *testing.T) {
+	t.Parallel()
+	f := newProvFixtureFor(t, nil, nil)
+	body := ssoWriteBody(f, PatternSSOProviderCreate, "oidc", `"oidc_config":{"client_id":"cid","client_secret":"`+ssoSecretSentinel+
+		`","issuer":"https://i.example","CLIENT_SECRET":"`+ssoExtraSecret+`"}`)
+	if response := f.post(PatternSSOProviderCreate, body, nil); response.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", response.Code, response.Body)
+	}
+	if got := f.sso.calls[0].create.Config.Secrets; got == nil || *got != `{"client_secret":"sealed(`+strings.ToUpper(ssoSecretSentinel)+`)"}` {
+		t.Fatalf("secrets = %v, want the exact client_secret sealed", got)
+	}
+}

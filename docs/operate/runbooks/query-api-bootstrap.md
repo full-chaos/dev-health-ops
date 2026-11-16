@@ -168,8 +168,8 @@ Real proof run after the metrics drain completes. Tools image carries the `dho` 
 ```bash
 # From tools Pod. The proof credential is a platform admin's user access
 # token in a 0600 file (-proof-access-token-file, or
-# GO_API_PROVE_PROOF_ACCESS_TOKEN_FILE), read on each use. JWT_SECRET_KEY and
-# POSTGRES_URI reach the Pod via secretKeyRef, and the edge access token for
+# GO_API_PROVE_PROOF_ACCESS_TOKEN_FILE), read on each use. POSTGRES_URI
+# reaches the Pod via secretKeyRef, and the edge access token for
 # the proof service principal is minted in process (internal/mintcli/edgetoken).
 dho goapi prove \
   -proof-access-token-file=/run/proof/access-token \
@@ -317,7 +317,7 @@ Userlist exposure and pooler convergence are future work. For now, direct `:5432
 ## Known limitations
 
 - **`/query/proof` cannot mount on prod**. `GO_API_PROOF_ROUTE_ENABLED` gates on a non-production `DEV_HEALTH_ENV`; prod never sets it. Real proof runs use `-proof-url=""` (empty).
-- **Tools Pod image** (`dev-health-go-api-tools`) lacks the `go-worker` image's sync-dispatch contracts. Use only the tools image, not go-worker, for one-off `go-api-prove` and corrective `go-api-routing` runs. See [Go API tools image](go-api-tools-image.md) for the `kubectl run` form and what is (and is not) on the image. Its `mint-edge-token` helper mints the edge access token and needs `JWT_SECRET_KEY` (from the `dev-health-hs256` Secret, not `dev-health-ops`) and `POSTGRES_URI` by `secretKeyRef`, plus a `viewer` membership in the org for the proof service principal (the row itself comes from alembic `0133`; the membership SQL is under Step 7).
+- **Tools Pod image** (`dev-health-go-api-tools`) lacks the `go-worker` image's sync-dispatch contracts. Use only the tools image, not go-worker, for one-off `go-api-prove` and corrective `go-api-routing` runs. See [Go API tools image](go-api-tools-image.md) for the `kubectl run` form and what is (and is not) on the image. Its `mint-edge-token` helper mints the edge access token and needs `POSTGRES_URI` by `secretKeyRef` and the key file `EDGE_TOKEN_SIGNING_KEY_FILE` names, plus a `viewer` membership in the org for the proof service principal (the row itself comes from alembic `0133`; the membership SQL is under Step 7).
 - **Shadow set never lands on prod**. The 3 operations that `disable -mode python` skipped are disabled by design (enabling would surface unproven operations to traffic before baseline is established).
 
 ## See also

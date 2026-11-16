@@ -64,7 +64,6 @@ func liveStackEnv(t *testing.T, side string) map[string]string {
 	cmd := exec.Command("bash", filepath.Join(repoRoot(t), "ci", "live_e2e_auth_stack.sh"), "with-env", side, "/state", "--", "env")
 	cmd.Env = []string{
 		"PATH=" + os.Getenv("PATH"),
-		"JWT_SECRET_KEY=0123456789abcdef0123456789abcdef0123",                    // gitleaks:allow -- placeholder value fed to the environment printer, not a credential
 		"AUTH_SESSION_SUCCESSOR_KEY=a2tra2tra2tra2tra2tra2tra2tra2tra2tra2tra2s", // gitleaks:allow -- placeholder value fed to the environment printer, not a credential
 		"AUTH_LOGIN_LOCKOUT_KEY=a2tra2tra2tra2tra2tra2tra2tra2tra2tra2tra2s",     // gitleaks:allow -- placeholder value fed to the environment printer, not a credential
 		"AUTH_RUNTIME_DATABASE_PASSWORD=runtime-password-for-test",               // gitleaks:allow -- placeholder value fed to the environment printer, not a credential
@@ -266,8 +265,7 @@ func runLiveE2EUp(t *testing.T, path, fake, state string) string {
 	cmd.Env = []string{
 		"PATH=" + path,
 		"PGUSER=postgres",
-		"PGPASSWORD=placeholder-for-fake-psql",                // gitleaks:allow -- placeholder value for the fake psql, not a credential
-		"JWT_SECRET_KEY=0123456789abcdef0123456789abcdef0123", // gitleaks:allow -- placeholder value fed to the fakes, not a credential
+		"PGPASSWORD=placeholder-for-fake-psql", // gitleaks:allow -- placeholder value for the fake psql, not a credential
 		"DHO_BIN=" + filepath.Join(fake, "dho"),
 	}
 	var out bytes.Buffer
@@ -422,7 +420,6 @@ func TestLiveE2EStartAuthAnswersOnlyAfterAuthServiceRecordedItsStart(t *testing.
 }
 
 const (
-	sentinelJWT       = "jwt-key-sentinel"
 	sentinelSuccessor = "successor-key-sentinel"
 	sentinelLockout   = "lockout-key-sentinel"
 	sentinelDBPass    = "db-password-sentinel"
@@ -431,7 +428,6 @@ const (
 func sentinelEnv() []string {
 	return []string{
 		"PATH=" + os.Getenv("PATH"),
-		"JWT_SECRET_KEY=" + sentinelJWT,                    // gitleaks:allow -- sentinel for the redaction cell, not a credential
 		"AUTH_SESSION_SUCCESSOR_KEY=" + sentinelSuccessor,  // gitleaks:allow -- sentinel for the redaction cell, not a credential
 		"AUTH_LOGIN_LOCKOUT_KEY=" + sentinelLockout,        // gitleaks:allow -- sentinel for the redaction cell, not a credential
 		"AUTH_RUNTIME_DATABASE_PASSWORD=" + sentinelDBPass, // gitleaks:allow -- sentinel for the redaction cell, not a credential
@@ -449,7 +445,7 @@ func TestLiveE2EPrintEnvAuthServiceRedactsEverySecret(t *testing.T) {
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("FAIL: print-env auth-service: %v\n%s", err, errb.String())
 	}
-	for name, sentinel := range map[string]string{"JWT_SECRET_KEY": sentinelJWT, "AUTH_SESSION_SUCCESSOR_KEY": sentinelSuccessor, "AUTH_LOGIN_LOCKOUT_KEY": sentinelLockout, "database password": sentinelDBPass} {
+	for name, sentinel := range map[string]string{"AUTH_SESSION_SUCCESSOR_KEY": sentinelSuccessor, "AUTH_LOGIN_LOCKOUT_KEY": sentinelLockout, "database password": sentinelDBPass} {
 		if strings.Contains(out.String()+errb.String(), sentinel) {
 			t.Errorf("FAIL: print-env auth-service prints the %s value", name)
 		}
@@ -461,7 +457,7 @@ func TestLiveE2EPrintEnvAuthServiceRedactsEverySecret(t *testing.T) {
 
 // with-env still hands the real values to the child; the child prints only yes or no.
 func TestLiveE2EWithEnvAuthServicePassesTheRealSecrets(t *testing.T) {
-	script := `[ "$AUTH_JWT_SECRET_KEY" = ` + sentinelJWT + ` ] && [ "$AUTH_SESSION_SUCCESSOR_KEY" = ` + sentinelSuccessor +
+	script := `[ "$AUTH_SESSION_SUCCESSOR_KEY" = ` + sentinelSuccessor +
 		` ] && [ "$AUTH_LOGIN_LOCKOUT_KEY" = ` + sentinelLockout + ` ] && case "$AUTH_DATABASE_URI" in *"password='` + sentinelDBPass + `'"*) true ;; *) false ;; esac && echo yes || echo no`
 	cmd := exec.Command("bash", filepath.Join(repoRoot(t), "ci", "live_e2e_auth_stack.sh"), "with-env", "auth-service", "/state", "--", "bash", "-c", script)
 	cmd.Env = sentinelEnv()
@@ -479,7 +475,7 @@ func TestLiveE2EWithEnvAuthServicePassesTheRealSecrets(t *testing.T) {
 func TestLiveE2EWithEnvRefusesAHalfConfiguredSide(t *testing.T) {
 	marker := filepath.Join(t.TempDir(), "ran")
 	cmd := exec.Command("bash", filepath.Join(repoRoot(t), "ci", "live_e2e_auth_stack.sh"), "with-env", "auth-service", "/state", "--", "touch", marker)
-	cmd.Env = sentinelEnv()[:5:5] // no AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT
+	cmd.Env = sentinelEnv()[:4:4] // no AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT
 	var errb bytes.Buffer
 	cmd.Stderr = &errb
 	err := cmd.Run()

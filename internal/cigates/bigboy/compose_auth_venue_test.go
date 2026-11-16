@@ -382,10 +382,6 @@ func composeAuthEddsaWiring(g *guard) {
 	withSubject := composeMust(g, composeIn{profiles: []string{"auth"}, opsEnv: "AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT=" + subjectProbe + "\n"})
 	authEnv := mp(withSubject.services["auth-service"]["environment"])
 	g.expect(str(authEnv["AUTH_AUTHORIZE_CALLER_SUBJECTS"]) == subjectProbe && str(authEnv["AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT"]) == subjectProbe, "auth-service AUTH_AUTHORIZE_CALLER_SUBJECTS is not the go-api workload subject of AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT: its /v1/authorize refuses go-api")
-	const probe = "probe-jwt-key-not-a-secret-0123456789abcdef"
-	withKey := composeMust(g, composeIn{profiles: []string{"auth"}, opsEnv: "JWT_SECRET_KEY=" + probe + "\n"})
-	got := str(mp(withKey.services["auth-service"]["environment"])["AUTH_JWT_SECRET_KEY"])
-	g.expect(got == probe, "auth-service AUTH_JWT_SECRET_KEY is not go-api's JWT_SECRET_KEY from ops/.env (one source, no copy)")
 	init := r.services["auth-session-keys-init"]
 	cmd := strings.Join(strs(init["command"]), " ")
 	for _, w := range []string{"umask 077", "head -c 32 /dev/urandom", "base64", "chmod 0600", "/run/auth/session/successor-key"} {
@@ -593,8 +589,6 @@ func TestComposeAuthVenuePlanted(t *testing.T) {
 			check: composeAuthEddsaWiring, want: "AUTH_AUTHORIZE_CALLER_SUBJECTS"},
 		{name: "auth-service valkey dropped", mutate: mut(composeFile, "      AUTH_VALKEY_URI: redis://valkey:6379/1\n", ""),
 			check: composeAuthEddsaWiring, want: "AUTH_VALKEY_URI"},
-		{name: "auth-service jwt key dropped", mutate: mut(composeFile, "      AUTH_JWT_SECRET_KEY: ${JWT_SECRET_KEY}\n", ""),
-			check: composeAuthEddsaWiring, want: "AUTH_JWT_SECRET_KEY"},
 		{name: "auth-service platform roles not owned", mutate: mut(composeFile, "      AUTH_PLATFORM_ROLES_OWNED: 'true'\n      # go-api forwards local login", "      # go-api forwards local login"),
 			check: composeAuthPlatformRolesOwned, want: "AUTH_PLATFORM_ROLES_OWNED"},
 		{name: "auth-service users not owned", mutate: mut(composeFile, "      AUTH_USERS_OWNED: 'true'\n      AUTH_MAIL_ALLOW_CONSOLE: 'true'\n", "      AUTH_USERS_OWNED: 'false'\n      AUTH_MAIL_ALLOW_CONSOLE: 'true'\n"),

@@ -341,8 +341,6 @@ func fakeSecret(t *testing.T, ref string) string {
 	switch {
 	case key == "AUTH_DATABASE_URI":
 		return "postgres://auth:pw@db:5432/devhealth"
-	case key == "JWT_SECRET_KEY":
-		return strings.Repeat("j", 48)
 	case key == "AUTH_SESSION_SUCCESSOR_KEY", key == "AUTH_LOGIN_LOCKOUT_KEY":
 		return key32
 	case key == "MIGRATION_URI", key == "AUTH_MIGRATION_DATABASE_URI":
@@ -675,7 +673,7 @@ func TestGoAPIExtraEnvRefusesEveryRenderedName(t *testing.T) {
 	}
 	// AUTH_USERS_OWNED renders only from phase 4, which the renders above do not use.
 	names["AUTH_USERS_OWNED"] = configs["phase 3"]
-	if len(names) < 17 {
+	if len(names) < 16 {
 		t.Fatalf("only %d go-api env names rendered: %v", len(names), names)
 	}
 	for name, args := range names {

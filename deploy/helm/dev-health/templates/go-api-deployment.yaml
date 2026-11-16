@@ -11,7 +11,7 @@ operator listener (goApi.operatorPort) carries /healthz, /readyz and /metrics,
 so probes never pass through request middleware.
 
 Configuration is flags (CHAOS-4020), rendered below so `helm template` shows
-it, plus two Secret keys by reference (API_DATABASE_URI, JWT_SECRET_KEY); no
+it, plus one Secret key by reference (API_DATABASE_URI); no
 other platform Secret or ConfigMap is inherited unless goApi.envFrom lists
 one. The platform ConfigMap in particular is NOT inherited by default: it pins
 OTEL_SERVICE_NAME=dev-health-ops, and this service names itself
@@ -262,15 +262,10 @@ spec:
     metadata:
       labels:
         {{- include "dev-health.componentSelectorLabels" (dict "component" "go-api" "context" $) | nindent 8 }}
+      {{- with .Values.goApi.podAnnotations }}
       annotations:
-        {{- /*
-        CHAOS-10446: env from a Secret never restarts a pod, so a changed chart-created hs256 Secret
-        rolls go-api through this hash. With an external hs256 Secret the include renders nothing:
-        the hash is constant, and the operator rolls go-api by hand after changing that Secret.
-        */}}
-        {{- /* merge: the first dict wins, so the chart's checksum beats a user annotation of the same name */}}
-        {{- $annotations := merge (dict "checksum/hs256" (include (print $.Template.BasePath "/hs256-secret.yaml") . | sha256sum)) (deepCopy (.Values.goApi.podAnnotations | default (dict))) }}
-        {{- toYaml $annotations | nindent 8 }}
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
     spec:
       {{- include "dev-health.imagePullSecrets" . | nindent 6 }}
       {{- include "dev-health.workloadServiceAccount" (dict "ctx" . "component" "go-api" "cfg" .Values.goApi.serviceAccount) | nindent 6 }}
@@ -318,17 +313,14 @@ spec:
           {{- end }}
           env:
             {{- /*
-            Both by secretKeyRef, never inline, and not optional: without
-            them `dho api` refuses to start, and a missing Secret key shows
+            By secretKeyRef, never inline, and not optional: without it
+            `dho api` refuses to start, and a missing Secret key shows
             as CreateContainerConfigError on the Pod instead of a crash loop.
             API_DATABASE_URI is the api role's own DSN (API_DATABASE_ROLE,
-            default devhealth_api); JWT_SECRET_KEY is the HS256 access-token key, read
-            from its own Secret (dev-health.hs256SecretName), not the shared one.
+            default devhealth_api).
             */}}
             - name: API_DATABASE_URI
               valueFrom: {secretKeyRef: {name: {{ include "dev-health.secretName" . }}, key: API_DATABASE_URI}}
-            - name: JWT_SECRET_KEY
-              valueFrom: {secretKeyRef: {name: {{ include "dev-health.hs256SecretName" . }}, key: JWT_SECRET_KEY}}
             {{- if eq (include "dev-health.authOn" (dict "flag" "service" "context" .)) "true" }}
             {{- /* The auth schema the sid check reads auth-service sessions in. */}}
             - name: AUTH_DATABASE_SCHEMA

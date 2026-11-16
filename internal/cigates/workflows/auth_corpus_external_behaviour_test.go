@@ -58,7 +58,7 @@ case "$*" in
           esac
         fi ;;
     esac
-    printf '%s %s %s\n' "${AUTH_SESSION_SUCCESSOR_KEY:-}" "${AUTH_LOGIN_LOCKOUT_KEY:-}" "${AUTH_JWT_SECRET_KEY:+jwt}" >> "` + record + `.keys"
+    printf '%s %s\n' "${AUTH_SESSION_SUCCESSOR_KEY:-}" "${AUTH_LOGIN_LOCKOUT_KEY:-}" >> "` + record + `.keys"
     for arg in "$@"; do last="$arg"; done
     printf '%s bootstrap=%s subject=%s credential=%s token=%s\n' "$last" "${AUTH_WORKLOAD_BOOTSTRAP:-}" "${AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT:-}" "${AUTH_SESSION_ISSUE_CREDENTIAL:-}" "${AUTH_SESSION_ISSUE_TOKEN:+set}" >> "` + record + `.workload"
     printf '%s %s\n' "$last" "${AUTH_TOKEN_ISSUER_URL:-unset}" >> "` + record + `.upissuer"
@@ -177,7 +177,7 @@ func TestAuthCorpusExternalCleansUpWhenTerminated(t *testing.T) {
 func setEnvFixture(t *testing.T, fake fakeDocker) (state string, env []string) {
 	t.Helper()
 	state = filepath.Join(t.TempDir(), "state.env")
-	if err := os.WriteFile(state, []byte("export JWT_SECRET_KEY=key\nexport AUTH_AUTO_CREATE_ORG_ON_REGISTER=old\n"), 0o600); err != nil {
+	if err := os.WriteFile(state, []byte("export LINK_TOKEN_SECRET=key\nexport AUTH_AUTO_CREATE_ORG_ON_REGISTER=old\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return state, fake.env("AUTH_CORPUS_PROJECT=authcorpus1a2b3c", "AUTH_CORPUS_STATE="+state)
@@ -195,14 +195,14 @@ func TestAuthCorpusSetEnvRecreatesGoAPIAndKeepsTheState(t *testing.T) {
 	}
 	raw, _ := os.ReadFile(state)
 	text := string(raw)
-	if !strings.Contains(text, "export JWT_SECRET_KEY=key") || strings.Contains(text, "=old") || !strings.Contains(text, "AUTH_AUTO_CREATE_ORG_ON_REGISTER=") {
+	if !strings.Contains(text, "export LINK_TOKEN_SECRET=key") || strings.Contains(text, "=old") || !strings.Contains(text, "AUTH_AUTO_CREATE_ORG_ON_REGISTER=") {
 		t.Errorf("state after the set:\n%s", text)
 	}
 	if out, code := runSetEnv(t, env, "AUTH_AUTO_CREATE_ORG_ON_REGISTER", ""); code != 0 {
 		t.Fatalf("unset: exit %d: %s", code, out)
 	}
 	raw, _ = os.ReadFile(state)
-	if strings.Contains(string(raw), "AUTH_AUTO_CREATE_ORG_ON_REGISTER") || !strings.Contains(string(raw), "JWT_SECRET_KEY") {
+	if strings.Contains(string(raw), "AUTH_AUTO_CREATE_ORG_ON_REGISTER") || !strings.Contains(string(raw), "LINK_TOKEN_SECRET") {
 		t.Errorf("state after the unset:\n%s", raw)
 	}
 }
@@ -579,17 +579,16 @@ func metric(aggregate string) string {
 	return `devhealth_api_auth_proxy_requests_total{aggregate="` + aggregate + `",outcome="forwarded"} 3`
 }
 
-// upKeys returns, per `compose up`, the successor key, the lockout key and "jwt" when the access-token secret was set
-// in the environment the script gave compose.
-func upKeys(t *testing.T, fake fakeDocker) [][3]string {
+// upKeys returns, per `compose up`, the successor key and the lockout key in the environment the script gave compose.
+func upKeys(t *testing.T, fake fakeDocker) [][2]string {
 	t.Helper()
 	raw, err := os.ReadFile(fake.record + ".keys")
 	if err != nil {
 		t.Fatal(err)
 	}
-	var out [][3]string
+	var out [][2]string
 	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
-		var row [3]string
+		var row [2]string
 		copy(row[:], strings.Fields(line))
 		out = append(out, row)
 	}
@@ -618,10 +617,10 @@ func TestAuthCorpusAcpLegKeysStayOutOfArgumentsAndOutput(t *testing.T) {
 	}
 	calls := fake.calls(t)
 	for _, row := range rows {
-		if len(row[0]) != 43 || len(row[1]) != 43 || row[0] == row[1] || row[2] != "jwt" {
-			t.Fatalf("a compose up did not get two distinct 43-character keys and the access-token secret: %v", row)
+		if len(row[0]) != 43 || len(row[1]) != 43 || row[0] == row[1] {
+			t.Fatalf("a compose up did not get two distinct 43-character keys: %v", row)
 		}
-		for _, key := range row[:2] {
+		for _, key := range row {
 			if strings.Contains(out, key) || strings.Contains(calls, key) {
 				t.Fatalf("a session key reached a docker argument or the output:\n%s\n%s", calls, out)
 			}
@@ -636,7 +635,7 @@ func TestAuthCorpusAcpLegMasksTheKeysBeforeAnythingElse(t *testing.T) {
 		t.Fatalf("leg acp failed: %v\n%s", err, out)
 	}
 	row := upKeys(t, fake)[0]
-	for _, key := range row[:2] {
+	for _, key := range row {
 		if got := strings.Count(out, key); got != 1 || !strings.Contains(out, "::add-mask::"+key+"\n") {
 			t.Errorf("a key appears %d times in the output, want once as the mask command:\n%s", got, out)
 		}
@@ -652,7 +651,7 @@ func TestAuthCorpusAcpLegOmitsEveryKeyWhenAsked(t *testing.T) {
 		t.Fatalf("want a failure on the required aggregate sessions, got err=%v:\n%s", err, out)
 	}
 	for _, row := range upKeys(t, fake) {
-		if row != ([3]string{}) {
+		if row != ([2]string{}) {
 			t.Fatalf("a compose up got a key although they were omitted: %v", row)
 		}
 	}

@@ -469,7 +469,7 @@ func ccfgGoAPIBillingEdge(g *guard) {
 	g.expect(!ccfgDeps(api)["migrate"], "go-api depends on migrate: a Go service never gates on the migrate service")
 	env := ccfgEnv(api)
 	g.expect(!ccfgHas(env, "API_DATABASE_URI"), "go-api sets API_DATABASE_URI: component form only, never both forms")
-	for _, k := range []string{"DEV_HEALTH_PG_API_HOST", "DEV_HEALTH_PG_API_USER", "DEV_HEALTH_PG_API_PASSWORD", "DEV_HEALTH_PG_DB", "VALKEY_URI", "JWT_SECRET_KEY", "STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET", "LICENSE_PRIVATE_KEY"} {
+	for _, k := range []string{"DEV_HEALTH_PG_API_HOST", "DEV_HEALTH_PG_API_USER", "DEV_HEALTH_PG_API_PASSWORD", "DEV_HEALTH_PG_DB", "VALKEY_URI", "STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET", "LICENSE_PRIVATE_KEY"} {
 		g.expect(ccfgHas(env, k), "go-api environment is missing %s", k)
 	}
 }

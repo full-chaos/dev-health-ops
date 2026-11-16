@@ -20,14 +20,14 @@ lifecycle: active
 
 Do not assume application rollback also reverses an irreversible data migration.
 
-## Required values change: separate Secrets for web and the HS256 key
+## Required values change: a separate Secret for web
 
 This is a required values change; an existing values file that renders today stops rendering until it is made.
 
-- **web** gets its own session secret. Set `web.authSecret.secretName` (and `web.authSecret.key`, default `AUTH_SECRET`) to a Secret that holds a fresh random value, or `web.env.AUTH_SECRET` for a development install. The chart no longer falls back to `JWT_SECRET_KEY`, and the render fails without one. A new value signs every web user out once.
-- **The HS256 access-token key** (`JWT_SECRET_KEY`) lives in its own Secret that only go-api (and query-api, through your values) reads. With `secrets.create: true` the chart creates `<release>-hs256`. With `secrets.create: false` set `hs256Secret.externalSecretName` to a Secret that holds `JWT_SECRET_KEY` as a byte-identical copy of the current value (go-api also signs invite, verify and reset links with it, so do not rotate it). It must not be the shared Secret's name.
-- **Order:** create both Secrets first, then ship the values change together with the chart revision in one roll. A chart revision without the values change fails to render; a values change without the Secrets leaves the new web and go-api pods unable to start while the old pods keep serving.
-- **Existing Secret changes need a restart:** the chart cannot hash an external Secret, so after you change `secrets.externalSecretName` or `hs256Secret.externalSecretName` content, restart every Deployment that reads it. Removing `JWT_SECRET_KEY` from the shared Secret rolls nothing by itself.
+- **web** gets its own session secret. Set `web.authSecret.secretName` (and `web.authSecret.key`, default `AUTH_SECRET`) to a Secret that holds a fresh random value, or `web.env.AUTH_SECRET` for a development install. The render fails without one. A new value signs every web user out once.
+- **The retired HS256 key is gone from the chart.** The chart sets no `JWT_SECRET_KEY` on go-api and no `AUTH_JWT_SECRET_KEY` on auth-service, and creates no `<release>-hs256` Secret. Remove `hs256Secret` and `secrets.data.JWT_SECRET_KEY` from your values: the chart ignores them. A Secret you keep for other keys (link, state and rate-limit keys) stays yours. A leftover `JWT_SECRET_KEY` env on a pod only logs one WARN.
+- **Order:** create the web Secret first, then ship the values change together with the chart revision in one roll. A chart revision without the values change fails to render; a values change without the Secret leaves the new web pods unable to start while the old pods keep serving.
+- **Existing Secret changes need a restart:** the chart cannot hash an external Secret, so after you change `secrets.externalSecretName` content, restart every Deployment that reads it.
 
 ## Ask Dev sequential-tool-call wire contract compatibility
 

@@ -59,7 +59,7 @@ There is no `disabled` claim. A disabled or deactivated user is treated as unaut
 
 ## Key management
 
-The envelope uses EdDSA (Ed25519), an asymmetric algorithm. The signing key is separate from the user-facing access-token HS256 secret (`JWT_SECRET_KEY`). The envelope crosses a process and language boundary, so verification uses a JWKS. `query-api` holds only the public key. It cannot forge a user session token.
+The envelope uses EdDSA (Ed25519), an asymmetric algorithm. The signing key is separate from auth-service's access-token signing key. The envelope crosses a process and language boundary, so verification uses a JWKS. `query-api` holds only the public key. It cannot forge a user session token.
 
 The key pair is generated as two files by `dho mint envelope-keys` (a PKCS#8 Ed25519 PEM and the public JWKS). No Go tool mints the envelope any more. The JWKS verifier accepts Ed25519 keys only.
 

@@ -62,8 +62,8 @@ func TestFederatedPublicUserRefusesAnInvalidSubject(t *testing.T) {
 	}
 }
 
-// CHAOS-11622: a SAML row carries the NameID Format and SPNameQualifier as asserted (go-api's samlNameIDParts:
-// an empty string stays an empty string); an OIDC row, even handed the parts, and a social row carry NULL.
+// CHAOS-11622: a SAML row carries the NameID Format and SPNameQualifier as asserted, including empty strings.
+// An OIDC row, even handed the parts, and a social row carry NULL.
 func TestFederatedPublicUserCarriesTheSAMLNameIDParts(t *testing.T) {
 	id := uuid.New()
 	key := ExternalKey{Issuer: "https://idp.example.test", Provider: "6f0c2d58-6b43-4b8e-9a8e-3a6f7a1c9d11", Subject: "saml1|f|q|v"}

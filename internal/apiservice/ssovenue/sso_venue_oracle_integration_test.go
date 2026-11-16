@@ -237,6 +237,7 @@ func TestSSORoutesVenueOracle(t *testing.T) {
 	}
 	python := golden.Python(t, venue, requests)
 	signInPin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/signin.go-pin.json", SHA256: signInPinSHA256, Ruling: signInRuling})
+	samlForwardOnlyPin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/saml-forward-only.go-pin.json", SHA256: samlForwardOnlyPinSHA256, Ruling: samlForwardOnlyRuling})
 	providersAuthorizePin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{
 		Path: "testdata/providers-authorize.go-pin.json", SHA256: providersAuthorizePinSHA256, Ruling: providersAuthorizeRuling,
 	})
@@ -247,6 +248,7 @@ func TestSSORoutesVenueOracle(t *testing.T) {
 	receipt := venueoracle.Diff(t, startGoAPI(t, ctx, venue, key), requests, python, venueoracle.DiffOptions{
 		Golden: golden, Retire: func(request venueoracle.Request) bool { return signInRetired[request.Name] }, Pin: signInPin,
 		Retirements: []venueoracle.Retirement{
+			{Match: func(request venueoracle.Request) bool { return samlForwardOnly[request.Name] }, Pin: samlForwardOnlyPin},
 			{Match: func(request venueoracle.Request) bool { return request.Name == providersAuthorizeStep }, Pin: providersAuthorizePin},
 		},
 		KnownDivergences: []venueoracle.KnownDivergence{
@@ -281,7 +283,7 @@ func TestSSORoutesVenueOracle(t *testing.T) {
 		_ = os.WriteFile(path, []byte(receipt), 0o600)
 	}
 	t.Log("\n" + receipt)
-	venueoracle.FinishPins(t, signInPin, providersAuthorizePin)
+	venueoracle.FinishPins(t, signInPin, samlForwardOnlyPin, providersAuthorizePin)
 	golden.Finish(t)
 }
 
@@ -291,15 +293,22 @@ func TestSSORoutesVenueOracle(t *testing.T) {
 const signInRuling = "license shim unreachable with a session issuer; prod served the real handlers before and after (CHAOS-13155)"
 
 // signInPinSHA256 is the digest of testdata/signin.go-pin.json.
-const signInPinSHA256 = "6c0bc795732974995b2e8d5804e0d52a1064a76635f14f53873c4958aca6cea7"
+const signInPinSHA256 = "0ac87f207ff268dceddd648e7959abae3427e075ab6957d69ad01112a29f44f7"
 
 // signInRetired are the sign-in steps signInRuling retired. Each real handler checks the org's enterprise
 // entitlement first (requireEntitlement, internal/api/sso/gate.go); the seeded organizations are enterprise.
 var signInRetired = map[string]bool{
-	"saml metadata": true, "saml initiate: valid": true, "saml acs: by name": true,
 	"oidc authorize: valid": true, "oidc callback: valid": true,
 	"oauth authorize: valid": true, "oauth callback: valid": true, "oauth by type: valid": true,
 	"overlap: GET /oauth/providers/authorize": true,
+}
+
+const samlForwardOnlyRuling = "CHAOS-13948: go-api's SAML routes are forward-only (prod AUTH_PROXY_SAML=true since STEP 246); the venue runs without the forward"
+
+const samlForwardOnlyPinSHA256 = "1fc40a3ed7c11bd401e5f6acf27e6a54f8d584d74c6db1475753140f8da73da9"
+
+var samlForwardOnly = map[string]bool{
+	"saml metadata": true, "saml initiate: valid": true, "saml acs: by name": true,
 }
 
 // providersAuthorizeStep sends "providers", not a provider UUID, to the real initiateOAuthAuth: it answers as a

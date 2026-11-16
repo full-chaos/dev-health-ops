@@ -36,12 +36,12 @@ func assertEmailRefusedBeforeAnyStatement(t *testing.T, err error, dialCount int
 }
 
 func TestProvisionOrGetUserRefusesAnUnusableEmailBeforeAnyStatement(t *testing.T) {
-	for _, protocol := range []string{"oidc", "saml"} {
+	for _, protocol := range []string{"oidc"} {
 		for name, email := range unusableEmails() {
 			t.Run(protocol+"/"+name, func(t *testing.T) {
 				h, dials, logs := subjectGuardHandlers(t)
 				row := &providerRow{OrgID: uuid.NewString(), Protocol: protocol, AutoProvision: true}
-				_, _, err := h.provisionOrGetUser(context.Background(), row, email, "A", uuid.New(), "12345", nil)
+				_, _, err := h.provisionOrGetUser(context.Background(), row, email, "A", uuid.New(), "12345")
 				assertEmailRefusedBeforeAnyStatement(t, err, dials.Load(), logs.String())
 			})
 		}
@@ -54,7 +54,7 @@ func TestAUsableEmailReachesTheDatabase(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			h, dials, _ := subjectGuardHandlers(t)
 			row := &providerRow{OrgID: uuid.NewString(), Protocol: "oidc", AutoProvision: true}
-			_, _, _ = h.provisionOrGetUser(context.Background(), row, email, "A", uuid.New(), "12345", nil)
+			_, _, _ = h.provisionOrGetUser(context.Background(), row, email, "A", uuid.New(), "12345")
 			if dials.Load() == 0 {
 				t.Fatal("a usable address ran no statement")
 			}

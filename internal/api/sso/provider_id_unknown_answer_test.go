@@ -13,7 +13,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 )
 
-// signInRoute is one of the six sign-in routes that read a provider id from the path, with a body that passes its
+// signInRoute is one of the three sign-in routes that read a provider id from the path, with a body that passes its
 // checks, a body that fails them (empty for the GET), and the route's own unknown-id answer.
 type signInRoute struct {
 	name, method, pattern, verb, goodBody, badBody, notFound string
@@ -26,12 +26,6 @@ var signInRoutes = []signInRoute{
 		`{"detail":"SSO provider not found"}`},
 	{"oidc callback", http.MethodPost, "/api/v1/auth/oidc/{provider_id}/callback", "callback", `{"code":"c","state":"s"}`,
 		`{"code_verifier":1}`, `{"detail":"SSO provider not found"}`},
-	{"saml metadata", http.MethodGet, "/api/v1/auth/saml/{provider_id}/metadata", "metadata", "", "",
-		`{"detail":"SSO provider not found"}`},
-	{"saml initiate", http.MethodPost, "/api/v1/auth/saml/{provider_id}/initiate", "initiate", `{}`, `{"relay_state":1}`,
-		`{"detail":"SSO provider not found"}`},
-	{"saml acs", http.MethodPost, "/api/v1/auth/saml/{provider_id}/acs", "acs", `{"SAMLResponse":"x"}`, `{}`,
-		`{"detail":"SSO provider not found"}`},
 }
 
 // serve sends id to the mounted route with the real sign-in handlers on. The pool is zero: a request that reaches the

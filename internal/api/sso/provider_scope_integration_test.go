@@ -14,7 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// An OIDC or SAML account is identified by its provider and its subject: the same
+// An OIDC account is identified by its provider and its subject: the same
 // subject at another provider is another identity.
 
 type scopeRig struct {
@@ -23,23 +23,6 @@ type scopeRig struct {
 	seed func(t *testing.T, ctx context.Context, st stack, auto bool) uuid.UUID
 	// signIn runs one sign-in at the provider and returns the HTTP answer.
 	signIn func(t *testing.T, st stack, providerID uuid.UUID, email, subject string) (int, map[string]any)
-}
-
-func newSAMLScopeRig() scopeRig {
-	const sp = "https://sp.test/saml/metadata"
-	idps := map[uuid.UUID]*samlIdP{}
-	return scopeRig{
-		protocol: "saml",
-		seed: func(t *testing.T, ctx context.Context, st stack, auto bool) uuid.UUID {
-			idp := newSAMLIdP(t)
-			id := seedSAMLOrgProviderAuto(t, ctx, st, idp, sp, auto)
-			idps[id] = idp
-			return id
-		},
-		signIn: func(t *testing.T, st stack, providerID uuid.UUID, email, subject string) (int, map[string]any) {
-			return samlSignIn(t, st, idps[providerID], providerID, sp, email, subject)
-		},
-	}
 }
 
 func newOIDCScopeRig() scopeRig {
@@ -75,7 +58,7 @@ func newOIDCScopeRig() scopeRig {
 	}
 }
 
-func scopeRigs() []scopeRig { return []scopeRig{newOIDCScopeRig(), newSAMLScopeRig()} }
+func scopeRigs() []scopeRig { return []scopeRig{newOIDCScopeRig()} }
 
 // seedBound is an account of a provider: its identity names the provider, and it is a
 // member of the provider's organization.

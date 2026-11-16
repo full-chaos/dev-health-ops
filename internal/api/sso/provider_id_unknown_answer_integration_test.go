@@ -41,9 +41,6 @@ func TestSignInRoutesAnswerAMalformedProviderIDAsAnUnknownOne(t *testing.T) {
 		{"oauth callback", http.MethodPost, "oauth", "callback", `{"code":"c","state":"s"}`},
 		{"oidc authorize", http.MethodPost, "oidc", "authorize", `{}`},
 		{"oidc callback", http.MethodPost, "oidc", "callback", `{"code":"c","state":"s"}`},
-		{"saml metadata", http.MethodGet, "saml", "metadata", ""},
-		{"saml initiate", http.MethodPost, "saml", "initiate", `{}`},
-		{"saml acs", http.MethodPost, "saml", "acs", `{"SAMLResponse":"x"}`},
 	} {
 		t.Run(route.name, func(t *testing.T) {
 			wantStatus, wantHeader, wantBody := send(t, route.method, "/api/v1/auth/"+route.family+"/"+unknown+"/"+route.verb, route.body)

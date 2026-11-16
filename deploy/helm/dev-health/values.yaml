@@ -315,7 +315,7 @@ authService:
   # -- AUTH_SOCIAL_LINK_ROUTES: mounts the bearer-only social link and unlink
   #    routes. Needs phase >= 2 (the session secrets).
   socialLinkRoutes: false
-  # -- OIDC and SAML sign-in through auth-service (AUTH_PROXY_OIDC / AUTH_PROXY_SAML on go-api).
+  # -- OIDC and SAML sign-in through auth-service. go-api SAML is forward-only; off answers 503.
   #    A switch on needs phase >= 2 and a complete set of settings: secretName and every key name its protocol reads
   #    (oidc: stateKey, appBaseURL, encryptionKey, encryptionSalt; saml: the same without stateKey). The render fails and
   #    names the key otherwise. auth-service gets AUTH_SSO_STATE_KEY, APP_BASE_URL, SETTINGS_ENCRYPTION_KEY and

@@ -129,7 +129,7 @@ func TestInitiateKeepsTheDecodeErrorForDataAfterTheObject(t *testing.T) {
 	}
 }
 
-// go-api (internal/api/sso/saml.go initiateSAMLAuth) replaces the caller's
+// auth-service replaces the caller's
 // relay_state with its own value on a provider without IdP-initiated sign-in,
 // and never reads it there, so a lone surrogate in it is not refused.
 func TestInitiateReplacesTheCallerRelayStateWhenIdPInitiatedSignInIsOff(t *testing.T) {

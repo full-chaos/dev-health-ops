@@ -276,7 +276,7 @@ func (s *Service) ConsumeFor(ctx context.Context, p Provider, posted, relayState
 		return SignIn{}, s.refuse(ctx, p, ErrUnusableEmail)
 	}
 	// The address and the provider's domain list decide every sign-in, linked
-	// or not, before the lookup (go-api saml.go).
+	// or not, before the lookup.
 	if email == "" {
 		if err := s.recordProviderFailure(ctx, p, "", msgEmailMissing); err != nil {
 			return SignIn{}, err
@@ -432,7 +432,7 @@ func (s *Service) email(p Provider, v Verified) string {
 // refuse logs a refusal with its auth-outcome reason code and the failed
 // check, and returns err unchanged. No NameID, email or assertion content is
 // logged.
-// go-api's SAML provider failure texts (internal/api/sso saml.go, provision.go), the record's error_message. A record
+// SAML provider failure texts for the record's error_message. A record
 // carries one of these fixed texts, never an error's text or a value of the assertion.
 const (
 	msgEmailMissing     = "SAML assertion missing email attribute"

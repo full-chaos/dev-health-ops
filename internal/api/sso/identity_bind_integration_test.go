@@ -113,7 +113,7 @@ func assertMembershipRequired(t *testing.T, ctx context.Context, st stack, provi
 	}
 }
 
-// seedBoundAccount is an OIDC or SAML account that holds the identity of one provider and no membership.
+// seedBoundAccount is an OIDC account that holds the identity of one provider and no membership.
 func seedBoundAccount(t *testing.T, ctx context.Context, pool *pgxpool.Pool, providerID uuid.UUID, email, authProvider, subject string) {
 	t.Helper()
 	seedAccount(t, ctx, pool, email, authProvider, subject)
@@ -122,12 +122,12 @@ func seedBoundAccount(t *testing.T, ctx context.Context, pool *pgxpool.Pool, pro
 	}
 }
 
-// seedMember is a member of the organization; an OIDC or SAML account holds the identity of the
+// seedMember is a member of the organization; an OIDC account holds the identity of the
 // organization's provider of that protocol.
 func seedMember(t *testing.T, ctx context.Context, pool *pgxpool.Pool, orgID uuid.UUID, email, authProvider, subject string) {
 	t.Helper()
 	seedAccount(t, ctx, pool, email, authProvider, subject)
-	if _, err := pool.Exec(ctx, `UPDATE users SET sso_provider_id = (SELECT id FROM sso_providers WHERE org_id = $2 AND protocol = $3 ORDER BY id LIMIT 1) WHERE email = $1 AND $3 IN ('oidc', 'saml')`,
+	if _, err := pool.Exec(ctx, `UPDATE users SET sso_provider_id = (SELECT id FROM sso_providers WHERE org_id = $2 AND protocol = $3 ORDER BY id LIMIT 1) WHERE email = $1 AND $3 = 'oidc'`,
 		email, orgID, authProvider); err != nil {
 		t.Fatalf("bind member: %v", err)
 	}
@@ -138,103 +138,6 @@ func seedMember(t *testing.T, ctx context.Context, pool *pgxpool.Pool, orgID uui
 	if _, err := pool.Exec(ctx, `INSERT INTO memberships (id, org_id, user_id, role, joined_at, created_at, updated_at)
 VALUES ($1, $2, $3, 'member', now(), now(), now())`, uuid.New(), orgID, userID); err != nil {
 		t.Fatalf("seed membership: %v", err)
-	}
-}
-
-func seedSAMLOrgProvider(t *testing.T, ctx context.Context, st stack, idp *samlIdP, spEntityID string) uuid.UUID {
-	t.Helper()
-	return seedSAMLOrgProviderAuto(t, ctx, st, idp, spEntityID, true)
-}
-
-func seedSAMLOrgProviderAuto(t *testing.T, ctx context.Context, st stack, idp *samlIdP, spEntityID string, auto bool) uuid.UUID {
-	t.Helper()
-	orgID := seedOrg(t, ctx, st.pool, "enterprise")
-	config := fmt.Sprintf(`{"entity_id":%q,"sso_url":"https://idp.test/sso","certificate":%q,"sp_entity_id":%q,"sp_acs_url":%q}`,
-		idp.EntityID(), idp.certConfigValue(), spEntityID, "https://sp.test/api/v1/auth/saml/{provider_id}/acs")
-	return seedProvider(t, ctx, st.pool, orgID, providerOpts{protocol: "saml", status: "active", config: config, autoProvision: auto})
-}
-
-func samlSignIn(t *testing.T, st stack, idp *samlIdP, providerID uuid.UUID, spEntityID, email, nameID string) (int, map[string]any) {
-	t.Helper()
-	response := idp.signedSAMLResponse(t, samlResponseOpts{
-		spEntityID: spEntityID, acsURL: samlACSOverrideFor(providerID), email: email, fullName: "Person", nameID: nameID,
-	})
-	return postJSON(t, st.server, "/api/v1/auth/saml/"+providerID.String()+"/acs", map[string]any{"SAMLResponse": response})
-}
-
-func TestSAMLSignInKeepsAnExistingAccountsIdentity(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-	st := startStack(t, ctx)
-	idp := newSAMLIdP(t)
-	const sp = "https://sp.test/saml/metadata"
-	providerID := seedSAMLOrgProvider(t, ctx, st, idp, sp)
-	const email = "existing.person@allowed.example"
-	seedLocalUser(t, ctx, st.pool, email)
-
-	status, body := samlSignIn(t, st, idp, providerID, sp, email, "subject-1")
-	if status != http.StatusConflict {
-		t.Fatalf("status=%d body=%v, want 409", status, body)
-	}
-	assertIdentityConflict(t, ctx, st, providerID, body)
-	got, n := readIdentity(t, ctx, st.pool, email)
-	if n != 1 || got.provider == nil || *got.provider != "local" || got.subject != nil || got.fullName != nil {
-		t.Fatalf("account changed: rows=%d %+v", n, got)
-	}
-}
-
-func TestSAMLSignInFromASecondOrgDoesNotRebindAnAccount(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-	st := startStack(t, ctx)
-	const sp = "https://sp.test/saml/metadata"
-	const email = "shared.person@allowed.example"
-	idpA, idpB := newSAMLIdP(t), newSAMLIdP(t)
-	providerA := seedSAMLOrgProvider(t, ctx, st, idpA, sp)
-	providerB := seedSAMLOrgProvider(t, ctx, st, idpB, sp)
-
-	seedMember(t, ctx, st.pool, orgOf(t, ctx, st.pool, providerA), email, "saml", "subject-a")
-	status, body := samlSignIn(t, st, idpB, providerB, sp, email, "subject-b")
-	if status != http.StatusConflict {
-		t.Fatalf("second org: status=%d body=%v, want 409", status, body)
-	}
-	assertIdentityConflict(t, ctx, st, providerB, body)
-	got, n := readIdentity(t, ctx, st.pool, email)
-	if n != 1 || got.subject == nil || *got.subject != "subject-a" {
-		t.Fatalf("account rebound: rows=%d %+v", n, got)
-	}
-	if status, body := samlSignIn(t, st, idpA, providerA, sp, email, "subject-a"); status != http.StatusOK {
-		t.Fatalf("same identity again: %d %v", status, body)
-	}
-}
-
-func TestSAMLACSRefusesAResponseAddressedToAnotherRow(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-	st := startStack(t, ctx)
-	const sp = "https://sp.test/saml/metadata"
-	idp := newSAMLIdP(t)
-	providerA := seedSAMLOrgProvider(t, ctx, st, idp, sp)
-	orgB := seedOrg(t, ctx, st.pool, "enterprise")
-	configB := fmt.Sprintf(`{"entity_id":%q,"sso_url":"https://idp.test/sso","certificate":%q,"sp_entity_id":%q,"sp_acs_url":%q}`,
-		idp.EntityID(), idp.certConfigValue(), sp, samlACSOverrideFor(providerA))
-	providerB := seedProvider(t, ctx, st.pool, orgB, providerOpts{protocol: "saml", status: "active", config: configB, autoProvision: true})
-
-	const email = "bound.person@allowed.example"
-	seedMember(t, ctx, st.pool, orgOf(t, ctx, st.pool, providerA), email, "saml", "subject-1")
-	status, body := samlSignIn(t, st, idp, providerA, sp, email, "subject-1")
-	if status != http.StatusOK {
-		t.Fatalf("row A: %d %v", status, body)
-	}
-	response := idp.signedSAMLResponse(t, samlResponseOpts{
-		spEntityID: sp, acsURL: samlACSOverrideFor(providerA), email: "other." + email, fullName: "Person", nameID: "subject-2",
-	})
-	status, body = postJSON(t, st.server, "/api/v1/auth/saml/"+providerB.String()+"/acs", map[string]any{"SAMLResponse": response})
-	if status < 400 || body["access_token"] != nil {
-		t.Fatalf("row B accepted a response addressed to row A: %d %v", status, body)
-	}
-	if _, n := readIdentity(t, ctx, st.pool, "other."+email); n != 0 {
-		t.Fatalf("row B provisioned an account")
 	}
 }
 
@@ -266,61 +169,6 @@ func TestOAuthSignInKeepsAnExistingAccountsIdentity(t *testing.T) {
 	got, n := readIdentity(t, ctx, st.pool, gitlab.email)
 	if n != 1 || got.provider == nil || *got.provider != "local" || got.subject != nil {
 		t.Fatalf("account changed: rows=%d %+v", n, got)
-	}
-}
-
-func TestSAMLSignInMatchesAnExistingEmailIgnoringCase(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-	st := startStack(t, ctx)
-	idp := newSAMLIdP(t)
-	const sp = "https://sp.test/saml/metadata"
-	providerID := seedSAMLOrgProvider(t, ctx, st, idp, sp)
-	seedLocalUser(t, ctx, st.pool, "Mixed.Case@allowed.example")
-
-	status, body := samlSignIn(t, st, idp, providerID, sp, "mixed.case@allowed.example", "subject-1")
-	if status != http.StatusConflict {
-		t.Fatalf("status=%d body=%v, want 409", status, body)
-	}
-	assertIdentityConflict(t, ctx, st, providerID, body)
-	var n int
-	if err := st.pool.QueryRow(ctx, `SELECT count(*) FROM users WHERE lower(email) = 'mixed.case@allowed.example'`).Scan(&n); err != nil || n != 1 {
-		t.Fatalf("users with this email: %d (err %v), want 1", n, err)
-	}
-}
-
-func TestSAMLSignInWithoutMembershipAnswers403(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-	st := startStack(t, ctx)
-	idp := newSAMLIdP(t)
-	const sp = "https://sp.test/saml/metadata"
-	providerID := seedSAMLOrgProviderAuto(t, ctx, st, idp, sp, false)
-
-	const known = "known.person@allowed.example"
-	seedBoundAccount(t, ctx, st.pool, providerID, known, "saml", known)
-	status, body := samlSignIn(t, st, idp, providerID, sp, known, known)
-	assertMembershipRequired(t, ctx, st, providerID, status, body)
-}
-
-func TestSAMLSignInThroughAnotherOrganizationsIdPAnswers409(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-	st := startStack(t, ctx)
-	const sp = "https://sp.test/saml/metadata"
-	const email = "member.of.a@allowed.example"
-	idpA, idpB := newSAMLIdP(t), newSAMLIdP(t)
-	providerA := seedSAMLOrgProvider(t, ctx, st, idpA, sp)
-	providerB := seedSAMLOrgProvider(t, ctx, st, idpB, sp)
-	seedMember(t, ctx, st.pool, orgOf(t, ctx, st.pool, providerA), email, "saml", "shared-subject")
-
-	status, body := samlSignIn(t, st, idpB, providerB, sp, email, "shared-subject")
-	if status != http.StatusConflict {
-		t.Fatalf("status=%d body=%v, want 409", status, body)
-	}
-	assertIdentityConflict(t, ctx, st, providerB, body)
-	if status, body := samlSignIn(t, st, idpA, providerA, sp, email, "shared-subject"); status != http.StatusOK {
-		t.Fatalf("member through its own organization: %d %v", status, body)
 	}
 }
 
@@ -428,90 +276,6 @@ WHERE u.email = $1 AND u.auth_provider = $2 AND u.auth_provider_id = $3 AND m.ro
 	}
 	if n := countRows(t, ctx, st, `SELECT count(*) FROM refresh_tokens WHERE org_id = $1`, orgID); n != 0 {
 		t.Fatalf("refresh rows in the org = %d, want 0: auth-service owns sessions", n)
-	}
-}
-
-func TestSAMLAutoProvisionCreatesAccountIdentityMembershipAndSession(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-	st := startStack(t, ctx)
-	idp := newSAMLIdP(t)
-	const sp = "https://sp.test/saml/metadata"
-	providerID := seedSAMLOrgProvider(t, ctx, st, idp, sp)
-
-	const email = "jit.person@allowed.example"
-	status, body := samlSignIn(t, st, idp, providerID, sp, email, "jit-subject")
-	assertProvisionedMember(t, ctx, st, orgOf(t, ctx, st.pool, providerID), email, "saml", "jit-subject", status, body)
-}
-
-func TestSAMLAutoProvisionOffRefusesANewAccountWithoutWrites(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-	st := startStack(t, ctx)
-	idp := newSAMLIdP(t)
-	const sp = "https://sp.test/saml/metadata"
-	providerID := seedSAMLOrgProviderAuto(t, ctx, st, idp, sp, false)
-
-	before := snapshotRows(t, ctx, st)
-	status, body := samlSignIn(t, st, idp, providerID, sp, "off.person@allowed.example", "off-subject")
-	if status < 400 || body["access_token"] != nil {
-		t.Fatalf("status=%d body=%v, want a refusal", status, body)
-	}
-	assertNoRowsWritten(t, ctx, st, before)
-}
-
-func TestSAMLAutoProvisionFailureLeavesNoRows(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-	st := startStack(t, ctx)
-	idp := newSAMLIdP(t)
-	const sp = "https://sp.test/saml/metadata"
-	providerID := seedSAMLOrgProvider(t, ctx, st, idp, sp)
-	installMembershipInsertFailure(t, ctx, st)
-
-	before := snapshotRows(t, ctx, st)
-	status, body := samlSignIn(t, st, idp, providerID, sp, "fail.person@allowed.example", "fail-subject")
-	if status < 400 || body["access_token"] != nil {
-		t.Fatalf("status=%d body=%v, want a failure", status, body)
-	}
-	assertNoRowsWritten(t, ctx, st, before)
-}
-
-func TestSAMLAutoProvisionJoinsAnAccountWithNoMembership(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-	st := startStack(t, ctx)
-	idp := newSAMLIdP(t)
-	const sp = "https://sp.test/saml/metadata"
-	providerID := seedSAMLOrgProvider(t, ctx, st, idp, sp)
-	const email = "orphan.person@allowed.example"
-	seedBoundAccount(t, ctx, st.pool, providerID, email, "saml", "orphan-subject")
-
-	status, body := samlSignIn(t, st, idp, providerID, sp, email, "orphan-subject")
-	assertProvisionedMember(t, ctx, st, orgOf(t, ctx, st.pool, providerID), email, "saml", "orphan-subject", status, body)
-	if n := countRows(t, ctx, st, `SELECT count(*) FROM users WHERE email = $1`, email); n != 1 {
-		t.Fatalf("users rows = %d, want 1", n)
-	}
-}
-
-func TestSAMLAutoProvisionDoesNotJoinAMemberOfAnotherOrganization(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-	st := startStack(t, ctx)
-	const sp = "https://sp.test/saml/metadata"
-	const email = "elsewhere.person@allowed.example"
-	idpA, idpB := newSAMLIdP(t), newSAMLIdP(t)
-	providerA := seedSAMLOrgProvider(t, ctx, st, idpA, sp)
-	providerB := seedSAMLOrgProvider(t, ctx, st, idpB, sp)
-	seedMember(t, ctx, st.pool, orgOf(t, ctx, st.pool, providerA), email, "saml", "elsewhere-subject")
-
-	status, body := samlSignIn(t, st, idpB, providerB, sp, email, "elsewhere-subject")
-	if status != http.StatusConflict {
-		t.Fatalf("status=%d body=%v, want 409", status, body)
-	}
-	assertIdentityConflict(t, ctx, st, providerB, body)
-	if n := countRows(t, ctx, st, `SELECT count(*) FROM memberships`); n != 1 {
-		t.Fatalf("memberships rows = %d, want 1", n)
 	}
 }
 
@@ -639,62 +403,4 @@ func TestOAuthAutoProvisionJoinsAnAccountWithNoMembership(t *testing.T) {
 	seedAccount(t, ctx, st.pool, "oauth.orphan@allowed.example", "gitlab", "gl-orphan")
 	status, body := oauthSignIn(t, st, providerID)
 	assertProvisionedMember(t, ctx, st, orgID, "oauth.orphan@allowed.example", "gitlab", "gl-orphan", status, body)
-}
-
-func TestSAMLAutoProvisionUsesTheProviderDefaultRole(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-	st := startStack(t, ctx)
-	idp := newSAMLIdP(t)
-	const sp = "https://sp.test/saml/metadata"
-	providerID := seedSAMLOrgProvider(t, ctx, st, idp, sp)
-	if _, err := st.pool.Exec(ctx, `UPDATE sso_providers SET default_role = 'viewer' WHERE id = $1`, providerID); err != nil {
-		t.Fatal(err)
-	}
-
-	const email = "role.person@allowed.example"
-	status, body := samlSignIn(t, st, idp, providerID, sp, email, "role-subject")
-	if status != http.StatusOK || body["role"] != "viewer" {
-		t.Fatalf("status=%d body=%v, want 200 with role viewer", status, body)
-	}
-	if n := countRows(t, ctx, st, `SELECT count(*) FROM memberships m JOIN users u ON u.id = m.user_id WHERE u.email = $1 AND m.role = 'viewer'`, email); n != 1 {
-		t.Fatalf("viewer memberships = %d, want 1", n)
-	}
-}
-
-func TestSAMLAutoProvisionTwoConcurrentFirstSignInsEndWithOneAccount(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-	st := startStack(t, ctx)
-	idp := newSAMLIdP(t)
-	const sp = "https://sp.test/saml/metadata"
-	providerID := seedSAMLOrgProvider(t, ctx, st, idp, sp)
-
-	const email = "race.person@allowed.example"
-	statuses := make(chan int, 2)
-	for range 2 {
-		go func() {
-			status, _ := samlSignIn(t, st, idp, providerID, sp, email, "race-subject")
-			statuses <- status
-		}()
-	}
-	ok := 0
-	for range 2 {
-		switch status := <-statuses; status {
-		case http.StatusOK:
-			ok++
-		case http.StatusConflict:
-		default:
-			t.Fatalf("status=%d, want 200 or 409", status)
-		}
-	}
-	if ok == 0 {
-		t.Fatal("no sign-in succeeded")
-	}
-	if n := countRows(t, ctx, st, `SELECT count(*) FROM users WHERE email = $1`, email); n != 1 {
-		t.Fatalf("users rows = %d, want 1", n)
-	}
-	if n := countRows(t, ctx, st, `SELECT count(*) FROM memberships`); n != 1 {
-		t.Fatalf("memberships rows = %d, want 1", n)
-	}
 }

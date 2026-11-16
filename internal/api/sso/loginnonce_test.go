@@ -48,8 +48,8 @@ func TestValidateHTTPSOrLoopback(t *testing.T) {
 // two flows minted with different IDs get different cookie names, so
 // concurrent Set-Cookie calls in the same browser never collide.
 func TestLoginNonceCookieNamesAreFlowScoped(t *testing.T) {
-	nameA := loginNonceCookieName("saml", "flow-A")
-	nameB := loginNonceCookieName("saml", "flow-B")
+	nameA := loginNonceCookieName("oidc", "flow-A")
+	nameB := loginNonceCookieName("oidc", "flow-B")
 	if nameA == nameB {
 		t.Fatalf("cookie names for different flows must differ, got %q for both", nameA)
 	}
@@ -63,7 +63,7 @@ func TestLoginNonceCookieNamesAreFlowScoped(t *testing.T) {
 // cookie whose name corresponds to the given (already-verified) flowID,
 // reject a missing or mismatched one, and always clear it on the way out.
 func TestVerifyAndClearLoginNonceCookieMatchesTheRightFlow(t *testing.T) {
-	const path = "/api/v1/auth/saml/p/acs"
+	const path = "/api/v1/auth/oidc/p/callback"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	defer server.Close()
 
@@ -71,13 +71,13 @@ func TestVerifyAndClearLoginNonceCookieMatchesTheRightFlow(t *testing.T) {
 		rec := httptest.NewRecorder()
 		nonce := "the-real-nonce"
 		req := httptest.NewRequest(http.MethodPost, path, nil)
-		req.AddCookie(&http.Cookie{Name: loginNonceCookieName("saml", "flow-1"), Value: nonce})
-		if !verifyAndClearLoginNonceCookie(rec, req, "saml", "flow-1", path, hashLoginNonce(nonce)) {
+		req.AddCookie(&http.Cookie{Name: loginNonceCookieName("oidc", "flow-1"), Value: nonce})
+		if !verifyAndClearLoginNonceCookie(rec, req, "oidc", "flow-1", path, hashLoginNonce(nonce)) {
 			t.Fatal("want the matching cookie to verify")
 		}
 		cleared := false
 		for _, c := range rec.Result().Cookies() {
-			if c.Name == loginNonceCookieName("saml", "flow-1") && c.MaxAge < 0 {
+			if c.Name == loginNonceCookieName("oidc", "flow-1") && c.MaxAge < 0 {
 				cleared = true
 			}
 		}
@@ -89,7 +89,7 @@ func TestVerifyAndClearLoginNonceCookieMatchesTheRightFlow(t *testing.T) {
 	t.Run("missing cookie refused and still clears defensively", func(t *testing.T) {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodPost, path, nil)
-		if verifyAndClearLoginNonceCookie(rec, req, "saml", "flow-2", path, hashLoginNonce("whatever")) {
+		if verifyAndClearLoginNonceCookie(rec, req, "oidc", "flow-2", path, hashLoginNonce("whatever")) {
 			t.Fatal("want a missing cookie to be refused")
 		}
 	})
@@ -97,8 +97,8 @@ func TestVerifyAndClearLoginNonceCookieMatchesTheRightFlow(t *testing.T) {
 	t.Run("a different flow's cookie in the jar does not match", func(t *testing.T) {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodPost, path, nil)
-		req.AddCookie(&http.Cookie{Name: loginNonceCookieName("saml", "flow-OTHER"), Value: "some-nonce"})
-		if verifyAndClearLoginNonceCookie(rec, req, "saml", "flow-3", path, hashLoginNonce("some-nonce")) {
+		req.AddCookie(&http.Cookie{Name: loginNonceCookieName("oidc", "flow-OTHER"), Value: "some-nonce"})
+		if verifyAndClearLoginNonceCookie(rec, req, "oidc", "flow-3", path, hashLoginNonce("some-nonce")) {
 			t.Fatal("want a same-value-different-flow cookie to be refused: it must be looked up by the VERIFIED flow ID, not any cookie present")
 		}
 	})

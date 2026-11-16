@@ -28,7 +28,7 @@
 // exchange, userinfo fetch) is recorded on the row on failure (last_error),
 // via recordSSOFailure.
 //
-// D2742 (team-lead): two deltas from OIDC/SAML's shape were flagged in an
+// D2742 (team-lead): two deltas from OIDC's shape were flagged in an
 // earlier version of this file and preserved faithfully per Python's
 // shipped behavior, pending a ruling. That ruling landed and changed both:
 //
@@ -39,7 +39,7 @@
 //     non-echoing reason code instead (oauthFailureDetail); the real text
 //     still reaches last_error/audit and the structured log, never the
 //     client. ssoProcessing (login.go) gained an optional reason field for
-//     this; OIDC/SAML's own ssoErr call sites are unaffected (reason
+//     this; OIDC's own ssoErr call sites are unaffected (reason
 //     stays empty, their messages were already fixed and non-echoing).
 //  2. auto-provisioning-disabled is a THIRD bucket, distinct from both
 //     recordSSOFailure (records last_error on the row) and recordSSOUnauthenticated (no
@@ -116,11 +116,11 @@ func decodeOAuthConfig(raw *string) (oauthConfigValues, error) {
 // every decodeOAuthConfig call site (buildOAuthAuthorization at
 // /authorize, oauthExchangeAndFetch at /callback), so this is enforced
 // at BOTH provider-config-validation time and exchange time from the same
-// check, exactly like SAML's validateSAMLConfigHTTPS (saml.go).
+// check.
 //
 // Only checked when the admin actually set an override -- an unset
 // RedirectURI falls back to appBaseURL()-derived default (an ops-level
-// guarantee, not a per-provider one), same scoping as SAML's check.
+// guarantee, not a per-provider one).
 //
 // D2759 (team-lead, r1 on #3355): the OLD raw-prefix version of this
 // check was case-sensitive -- "HTTP://attacker.example/..." never
@@ -573,8 +573,8 @@ func (h handlers) oauthCallback(w http.ResponseWriter, r *http.Request) {
 			// iterating domain guesses and reading them back verbatim in
 			// a 403 body). It goes to the audit row's error_message only.
 			// This also escalates the check from Python's/this file's own
-			// prior bare-HTTPException shape (no audit, matching OIDC/
-			// SAML's identical unaudited domain check) to D2742's third
+			// prior bare-HTTPException shape (no audit, matching OIDC's
+			// identical unaudited domain check) to D2742's third
 			// bucket: the caller HAS authenticated by this point (state,
 			// login-nonce cookie, token exchange, userinfo fetch all
 			// already succeeded) -- a disallowed domain is a per-account
@@ -735,14 +735,14 @@ func (h handlers) oauthExchangeAndFetch(ctx context.Context, w http.ResponseWrit
 
 // oauthAuthProviderValue is auth_provider_map[oauth_provider_type]
 // (router.py:1207-1212): the users.auth_provider value this login writes,
-// distinct from OIDC/SAML's "oidc"/"saml" (provision.go).
+// distinct from OIDC's "oidc" (provision.go).
 func oauthAuthProviderValue(providerType string) string { return providerType }
 
 // oauthProvisionUser is oauth_callback's OWN inline user lookup/creation
 // (router.py:1214-1274) -- NOT SSOService.provision_or_get_user
-// (provision.go's provisionOrGetUser), which OIDC/SAML call instead. The
+// (provision.go's provisionOrGetUser), which OIDC calls instead. The
 // two paths differ in Python: this one sets avatar_url and auth_provider=
-// github/gitlab/google (not oidc/saml). Existing accounts are selected by
+// github/gitlab/google (not oidc). Existing accounts are selected by
 // (auth_provider, auth_provider_id); the identity columns are never rewritten
 // (resolveSSOIdentity).
 func (h handlers) oauthProvisionUser(ctx context.Context, row *providerRow, providerType string, claims oauthClaims) (*provisionedUser, *provisionedMembership, error) {

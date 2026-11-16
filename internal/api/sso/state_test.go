@@ -124,23 +124,18 @@ func TestDeriveStateKeyIsDeterministicAndSecretDependent(t *testing.T) {
 	}
 }
 
-// TestDeriveStateKeyIsInfoDependent is D2744's own coverage note (an r1
-// reviewer flagged this as untested when reviewing CHAOS-6986's OAuth
-// HKDF separation from OIDC's): the SAME secret through a DIFFERENT info
-// string must derive a DIFFERENT key, or samlStateHKDFInfo/
-// oauthStateHKDFInfo collapsing to the same value silently would not be
-// caught by anything.
+// TestDeriveStateKeyIsInfoDependent keeps the OIDC and OAuth keys distinct.
 func TestDeriveStateKeyIsInfoDependent(t *testing.T) {
 	oidcKey, err := deriveStateKey(stateTestSecretA, oidcStateHKDFInfo)
 	if err != nil {
 		t.Fatal(err)
 	}
-	samlKey, err := deriveStateKey(stateTestSecretA, samlStateHKDFInfo)
+	oauthKey, err := deriveStateKey(stateTestSecretA, oauthStateHKDFInfo)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if oidcKey == samlKey {
-		t.Fatal("deriveStateKey: oidcStateHKDFInfo and samlStateHKDFInfo derived the same key from the same secret")
+	if oidcKey == oauthKey {
+		t.Fatal("deriveStateKey: oidcStateHKDFInfo and oauthStateHKDFInfo derived the same key from the same secret")
 	}
 }
 
@@ -166,7 +161,7 @@ func flipOneChar(s string) string {
 // accepted, http is refused UNLESS the host is loopback
 // (127.0.0.1/localhost/::1, RFC 8252 shape) -- checked unconditionally,
 // no env var, no build tag, no test-injected knob of any kind, mirroring
-// D2748 (SAML)/D2752 (OAuth) exactly. D2761 does not exempt this field
+// the OAuth rule. D2761 does not exempt this field
 // (see oidc.go's doc comment on validateOIDCRedirectURIHTTPS): a
 // schemeless value like "not-a-url" is now correctly refused, unlike the
 // old ad-hoc HasPrefix check -- that case is deliberately dropped here,

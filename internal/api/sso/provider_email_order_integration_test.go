@@ -136,26 +136,6 @@ func oidcDomainRun(t *testing.T, email string, linked bool) ssoAnswer {
 	return ssoAnswer{status: status, body: body, audits: providerAudits(t, ctx, st, providerID), logs: st.logs.String()}
 }
 
-func samlDomainRun(t *testing.T, email string, linked bool) ssoAnswer {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
-	defer cancel()
-	st := startStack(t, ctx)
-	idp := newSAMLIdP(t)
-	orgID := seedOrg(t, ctx, st.pool, "enterprise")
-	config := fmt.Sprintf(`{"entity_id":%q,"sso_url":"https://idp.test/sso","certificate":%q,"sp_entity_id":%q,"sp_acs_url":%q}`,
-		idp.EntityID(), idp.certConfigValue(), nameIDSP, "https://sp.test/api/v1/auth/saml/{provider_id}/acs")
-	domains := `["allowed.example"]`
-	providerID := seedProvider(t, ctx, st.pool, orgID, providerOpts{
-		protocol: "saml", status: "active", config: config, autoProvision: true, allowedDomains: &domains,
-	})
-	if linked {
-		seedBound(t, ctx, st.pool, providerID, "saml", "linked.person@allowed.example", "name-1")
-	}
-	status, body := samlSignIn(t, st, idp, providerID, nameIDSP, email, "name-1")
-	return ssoAnswer{status: status, body: body, audits: providerAudits(t, ctx, st, providerID), logs: st.logs.String()}
-}
-
 // An unusable provider address whose domain is not on the allowlist is refused by the email rule (400
 // invalid_provider_email, one audit row), not by the domain check; a linked account gets the unknown one's answer.
 func TestProviderEmailOrderEmailRuleBeforeDomainCheck(t *testing.T) {
@@ -163,7 +143,7 @@ func TestProviderEmailOrderEmailRuleBeforeDomainCheck(t *testing.T) {
 		"replacement char": emailLeakMarker + "�@other.example",
 		"c1":               emailLeakMarker + "\u0085x@other.example",
 	} {
-		for protocol, run := range map[string]func(*testing.T, string, bool) ssoAnswer{"oidc": oidcDomainRun, "saml": samlDomainRun} {
+		for protocol, run := range map[string]func(*testing.T, string, bool) ssoAnswer{"oidc": oidcDomainRun} {
 			t.Run(protocol+"/"+name, func(t *testing.T) {
 				linked, unknown := run(t, email, true), run(t, email, false)
 				sameAnswer(t, linked, unknown)
@@ -174,10 +154,10 @@ func TestProviderEmailOrderEmailRuleBeforeDomainCheck(t *testing.T) {
 	}
 }
 
-// The OIDC and SAML domain refusal names no domain: the fixed 403 text auth-service answers, no audit row; a linked
+// The OIDC domain refusal names no domain: the fixed 403 text auth-service answers, no audit row; a linked
 // account gets the unknown one's answer.
 func TestProviderEmailOrderDomainRefusalNamesNoDomain(t *testing.T) {
-	for protocol, run := range map[string]func(*testing.T, string, bool) ssoAnswer{"oidc": oidcDomainRun, "saml": samlDomainRun} {
+	for protocol, run := range map[string]func(*testing.T, string, bool) ssoAnswer{"oidc": oidcDomainRun} {
 		t.Run(protocol, func(t *testing.T) {
 			linked, unknown := run(t, "person@other.example", true), run(t, "person@other.example", false)
 			sameAnswer(t, linked, unknown)

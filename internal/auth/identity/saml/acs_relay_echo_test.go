@@ -116,7 +116,7 @@ func assertAuthFailed(t *testing.T, name string, rec *httptest.ResponseRecorder)
 	}
 }
 
-// go-api (internal/api/sso/saml.go processSAMLResponse) refuses a missing or
+// auth-service refuses a missing or
 // unequal RelayState on a provider without IdP-initiated sign-in with 400
 // "SAML authentication failed"; the issued one signs in.
 func TestACSChecksTheRelayStateEchoWhenIdPInitiatedSignInIsOff(t *testing.T) {
@@ -179,9 +179,8 @@ func TestFlowBindingBytes(t *testing.T) {
 	}
 }
 
-// go-api checks the RelayState before the signature, auth-service after it: a
-// response with a bad signature AND a bad RelayState gets the same route answer
-// on both (go-api's cell: internal/api/sso TestSAMLACSBadSignatureAndBadRelayStateAnswer).
+// A response with a bad signature AND a bad RelayState gets one route answer,
+// the answer go-api's former SAML handler gave (it checked the RelayState first).
 func TestACSBadSignatureAndBadRelayStateAnswer(t *testing.T) {
 	other := newTestIdP(t)
 	for name, tc := range map[string]struct {

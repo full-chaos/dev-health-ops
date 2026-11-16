@@ -220,16 +220,13 @@ type holderSignIn struct {
 	run      func(h handlers, row *providerRow, email, subject string) (*provisionedUser, *provisionedMembership, error)
 }
 
-// holderSignIns are the three go-api sign-in paths that look an account up: OIDC and SAML (provisionOrGetUser,
-// the ACS and the OIDC callback, JIT included) and enterprise OAuth (oauthProvisionUser).
+// holderSignIns are the two go-api sign-in paths that look an account up: OIDC (provisionOrGetUser,
+// the OIDC callback, JIT included) and enterprise OAuth (oauthProvisionUser).
 func holderSignIns() []holderSignIn {
 	provider := uuid.MustParse("6f1c2a43-8a35-4b8e-9d5a-0e5b8c3c7a10")
 	return []holderSignIn{
 		{"oidc", func(h handlers, row *providerRow, email, subject string) (*provisionedUser, *provisionedMembership, error) {
-			return h.provisionOrGetUser(context.Background(), row, email, "", provider, subject, nil)
-		}},
-		{"saml", func(h handlers, row *providerRow, email, subject string) (*provisionedUser, *provisionedMembership, error) {
-			return h.provisionOrGetUser(context.Background(), row, email, "", provider, subject, &samlNameIDParts{})
+			return h.provisionOrGetUser(context.Background(), row, email, "", provider, subject)
 		}},
 		{"oauth_github", func(h handlers, row *providerRow, email, subject string) (*provisionedUser, *provisionedMembership, error) {
 			return h.oauthProvisionUser(context.Background(), row, "github", oauthClaims{email: email, externalID: subject})
@@ -249,7 +246,7 @@ func holderAuthProvider(protocol string) string {
 }
 
 // A sign-in whose subject holds no account and whose email a platform admin's account holds is refused as it is for
-// any other account: errIdentityConflict, the one generic 409 the OIDC, SAML and OAuth callbacks write
+// any other account: errIdentityConflict, the one generic 409 the OIDC and OAuth callbacks write
 // (identityConflictDetail), and no write. The email is never a link to an existing account, with or without users
 // owned by auth-service, and auto_provision on.
 func TestSSOSignInRefusesAnEmailAPlatformAdminHoldsAsItRefusesAnyAccount(t *testing.T) {

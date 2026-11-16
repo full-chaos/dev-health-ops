@@ -13,7 +13,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/platformroleseam"
 )
 
-// While owned, the OAuth and SAML sign-in reads of an existing user
+// While owned, the OAuth and OIDC sign-in reads of an existing user
 // (oauth.go and provision.go, through signInUser) take is_superuser from the
 // auth platform role, so the login token's claim and needs_onboarding follow
 // it: a public-only superuser reads false, an assignment holder true. Off, it

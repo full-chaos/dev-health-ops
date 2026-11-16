@@ -466,7 +466,7 @@ func (h handlers) oidcCallback(w http.ResponseWriter, r *http.Request) {
 		policy.WriteDetail(w, http.StatusBadRequest, "Email address is missing from OIDC claims", nil)
 		return
 	}
-	user, membership, err := h.provisionOrGetUser(ctx, row, email, claims.fullName, providerID, claims.externalID, nil)
+	user, membership, err := h.provisionOrGetUser(ctx, row, email, claims.fullName, providerID, claims.externalID)
 	if err != nil {
 		if errors.Is(err, errProviderEmailMalformed) {
 			policy.WriteDetail(w, http.StatusBadRequest, "Email address from OIDC claims is malformed", nil)

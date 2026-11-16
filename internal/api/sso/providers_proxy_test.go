@@ -200,10 +200,12 @@ func TestProviderRefusalsAreMappedToTheLegacyTextsAndFaultsToTheNamed503(t *test
 		"not found":     {refusal(404, authprovision.ReasonSSOProviderNotFound), 404, `"detail":"SSO provider not found"`},
 		"saml missing":  {refusal(400, authprovision.ReasonSAMLConfigRequired), 400, `"detail":"SAML config required for SAML providers"`},
 		"oidc missing":  {refusal(400, authprovision.ReasonOIDCConfigRequired), 400, `"detail":"OIDC config required for OIDC providers"`},
-		"other refusal": {refusal(400, "malformed"), 503, providersUnavailableText},
-		"org missing":   {refusal(404, authprovision.ReasonOrganizationMissing), 503, providersUnavailableText},
+		"malformed":     {refusal(400, "malformed"), 400, `"detail":"Invalid SSO provider request"`},
+		"org missing":   {refusal(404, authprovision.ReasonOrganizationMissing), 404, `"detail":"Organization not found"`},
 		"unavailable":   {errors.New("authprovision: auth-service provisioning route unavailable"), 503, providersUnavailableText},
+		"store fault":   {refusal(503, "store_unavailable"), 503, providersUnavailableText},
 		"unauthorised":  {refusal(401, "invalid_credentials"), 503, providersUnavailableText},
+		"other refusal": {refusal(400, "not_a_known_reason"), 503, providersUnavailableText},
 	} {
 		f := newProxyFixture(t)
 		f.fake.err = c.err
@@ -211,6 +213,9 @@ func TestProviderRefusalsAreMappedToTheLegacyTextsAndFaultsToTheNamed503(t *test
 			"get":    func() *httptest.ResponseRecorder { return f.do(f.h.getProvider, "admin", "", id, "", nil) },
 			"delete": func() *httptest.ResponseRecorder { return f.do(f.h.deleteProvider, "admin", "", id, "", nil) },
 			"create": func() *httptest.ResponseRecorder { return f.do(f.h.createProvider, "admin", "", id, "", okBody()) },
+			"update": func() *httptest.ResponseRecorder {
+				return f.do(f.h.updateProvider, "admin", "", id, "", map[string]any{"name": "n"})
+			},
 		} {
 			response := call()
 			if response.Code != c.status || !strings.Contains(response.Body.String(), c.detail) {
@@ -474,32 +479,37 @@ func TestProviderListItemsCarryTheConfigAsAuthServiceWroteIt(t *testing.T) {
 	}
 }
 
-// The fault paths carry no client secret either: the body of the named 503 and the WARN of every refusal and fault of a create
-// and an update that sent the sentinel.
+// The fault paths carry no client secret either: the body of each answer and the log line of every refusal and fault of a
+// create and an update that sent the sentinel. A client refusal keeps its class; a fault is the named 503 and a WARN.
 func TestProviderFaultPathsNeverCarryTheClientSecret(t *testing.T) {
-	faults := map[string]error{
-		"unavailable":   authprovision.ErrUnavailable,
-		"refused other": &authprovision.Refused{Status: 400, Reason: "malformed"},
-		"org missing":   &authprovision.Refused{Status: 404, Reason: authprovision.ReasonOrganizationMissing},
-		"plain":         errors.New("dial tcp: connection refused"),
+	faults := map[string]struct {
+		err    error
+		status int
+	}{
+		"unavailable":   {authprovision.ErrUnavailable, http.StatusServiceUnavailable},
+		"malformed":     {&authprovision.Refused{Status: 400, Reason: "malformed"}, http.StatusBadRequest},
+		"org missing":   {&authprovision.Refused{Status: 404, Reason: authprovision.ReasonOrganizationMissing}, http.StatusNotFound},
+		"refused other": {&authprovision.Refused{Status: 401, Reason: "invalid_credentials"}, http.StatusServiceUnavailable},
+		"plain":         {errors.New("dial tcp: connection refused"), http.StatusServiceUnavailable},
 	}
-	for name, fault := range faults {
+	for name, c := range faults {
 		f := newProxyFixture(t)
-		f.fake.err = fault
+		f.fake.err = c.err
 		body := map[string]any{"name": "Acme", "protocol": "oidc", "oidc_config": map[string]any{"client_id": "c", "client_secret": proxySecret, "issuer": "https://i.example"}}
 		for op, response := range map[string]*httptest.ResponseRecorder{
 			"create": f.do(f.h.createProvider, "admin", "", uuid.NewString(), "", body),
 			"update": f.do(f.h.updateProvider, "admin", "", uuid.NewString(), "", map[string]any{"oidc_config": body["oidc_config"]}),
 		} {
-			if response.Code != http.StatusServiceUnavailable {
-				t.Errorf("%s/%s: %d %s, want the named 503", name, op, response.Code, response.Body)
+			if response.Code != c.status {
+				t.Errorf("%s/%s: %d %s, want %d", name, op, response.Code, response.Body, c.status)
 			}
 			if strings.Contains(response.Body.String(), proxySecret) {
 				t.Errorf("%s/%s: the secret is in the answer: %s", name, op, response.Body)
 			}
 		}
-		if strings.Contains(f.logs.String(), proxySecret) || !strings.Contains(f.logs.String(), "level=WARN") {
-			t.Errorf("%s: logs %q: want a WARN without the secret", name, f.logs.String())
+		if strings.Contains(f.logs.String(), proxySecret) || f.logs.Len() == 0 ||
+			c.status == http.StatusServiceUnavailable && !strings.Contains(f.logs.String(), "level=WARN") {
+			t.Errorf("%s: logs %q: want a line without the secret (a WARN for a fault)", name, f.logs.String())
 		}
 	}
 }

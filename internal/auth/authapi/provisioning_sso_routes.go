@@ -3,6 +3,7 @@ package authapi
 import (
 	"errors"
 	"net/http"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -14,6 +15,14 @@ const (
 	maxSSOListMax = 1000
 	maxSSOText    = 4096
 )
+
+// ssoNameBound is the legacy name bound (max_length=255), counted in code points as pydantic and go-api's own 422 check count.
+func ssoNameBound(name string) error {
+	if utf8.RuneCountInString(name) > maxSSOName {
+		return errProvisioningBody
+	}
+	return nil
+}
 
 // ssoIDs reads the organization and the actor every SSO provider body names.
 func ssoIDs(body strictObject) (org, actor uuid.UUID, err error) {
@@ -110,7 +119,10 @@ func (h provisioningHandlers) ssoProviderCreate(w http.ResponseWriter, r *http.R
 	if !ok {
 		return
 	}
-	name, err1 := body.text("name", maxSSOName)
+	name, err1 := body.text("name", utf8.UTFMax*maxSSOName)
+	if err1 == nil {
+		err1 = ssoNameBound(name)
+	}
 	protocolText, err2 := body.text("protocol", maxShortTextBytes)
 	saml, err3 := body.optionalObject("saml_config", maxSSOProviderBody)
 	oidc, err4 := body.optionalObject("oidc_config", maxSSOProviderBody)
@@ -174,7 +186,10 @@ func (h provisioningHandlers) ssoProviderUpdate(w http.ResponseWriter, r *http.R
 		return
 	}
 	id, err1 := body.uuid("provider_id")
-	name, err2 := body.optionalAnyText("name", maxSSOName)
+	name, err2 := body.optionalAnyText("name", utf8.UTFMax*maxSSOName)
+	if err2 == nil && name != nil {
+		err2 = ssoNameBound(*name)
+	}
 	saml, err3 := body.optionalObject("saml_config", maxSSOProviderBody)
 	oidc, err4 := body.optionalObject("oidc_config", maxSSOProviderBody)
 	isDefault, err5 := body.optionalBoolPtr("is_default")

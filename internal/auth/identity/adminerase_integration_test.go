@@ -11,6 +11,8 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts/provisioning"
+	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole"
+	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
 
 // The executed write cell of the admin force delete (PLAN-13380 S5), as the NOSUPERUSER runtime role with users owned:
@@ -148,5 +150,64 @@ func TestAdminForceDeleteOfAReferencedUserWritesNothing(t *testing.T) {
 	}
 	if principals != 1 || publicUsers != 1 || after != before || before < 1 {
 		t.Errorf("after the refused erase: principals %d, public.users %d, audit rows %d -> %d; want 1, 1, unchanged and >= 1", principals, publicUsers, before, after)
+	}
+}
+
+// FlushAudit (PLAN-13380 S5): the erase of a platform admin revokes the assignment with the platform role store's
+// RevokeOn, which queues an audit row naming the user. Written after Apply, that row would name a principal that is
+// gone (the foreign key refuses it and the erase fails); FlushAudit writes it before the delete, so the erase commits,
+// the revoke row is stored with the user's id in its attributes, and the 0005 key sets its subject to NULL.
+func TestAdminForceDeleteOfAPlatformAdminStoresTheRevokeAuditRow(t *testing.T) {
+	e := getEnv(t)
+	ctx := context.Background()
+	schema, err := authschema.NewValidatedIdentifier("auth")
+	if err != nil {
+		t.Fatal(err)
+	}
+	roles, err := platformrole.New(platformrole.Config{Pool: e.runtime, Schema: schema})
+	if err != nil {
+		t.Fatal(err)
+	}
+	none := func(context.Context, audit.TxOps) error { return nil }
+	actor := e.seedUser(t, ctx, uniqueEmail("erase-admin-actor"), true, true)
+	e.project(t, ctx, actor)
+	created, err := e.owned.AdminCreateUser(ctx, AdminCreateRequest{Email: uniqueEmail("erase-admin"), Actor: actor, Authorize: none})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Both hold platform_admin, seeded as the table owner with the triggers off for these statements only.
+	tx, err := e.admin.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `SET LOCAL session_replication_role = replica`); err != nil {
+		t.Fatal(err)
+	}
+	for _, holder := range []uuid.UUID{actor, created.ID} {
+		if _, err := tx.Exec(ctx, `INSERT INTO auth.platform_role_assignments (principal_id, role_key) VALUES ($1, 'platform_admin')`, holder); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	revoke := func(ctx context.Context, tx audit.TxOps) error {
+		return roles.RevokeOn(ctx, tx, platformrole.RevokeInput{Actor: actor, Principal: created.ID, Role: platformrole.PlatformAdmin})
+	}
+	if _, err := e.owned.AdminForceDeleteUser(ctx, AdminForceDeleteRequest{Principal: created.ID, Actor: actor,
+		Authorize: platformrole.LockWrites, RevokeRoles: revoke}); err != nil {
+		t.Fatalf("erase of a platform admin: %v", err)
+	}
+	var revoked, principals, assignments int
+	if err := e.admin.QueryRow(ctx, `SELECT
+  (SELECT count(*) FROM auth.security_audit_events WHERE event_type = 'auth.platform_role.revoked' AND attributes->>'target_id' = $1
+     AND subject_principal_id IS NULL AND actor_principal_id = $2),
+  (SELECT count(*) FROM auth.principals WHERE id = $3),
+  (SELECT count(*) FROM auth.platform_role_assignments WHERE principal_id = $3)`, created.ID.String(), actor, created.ID).Scan(&revoked, &principals, &assignments); err != nil {
+		t.Fatal(err)
+	}
+	if revoked != 1 || principals != 0 || assignments != 0 {
+		t.Errorf("after the erase: revoke audit rows %d (want 1, subject NULL, the id in attributes), principals %d, assignments %d (want 0, 0)",
+			revoked, principals, assignments)
 	}
 }

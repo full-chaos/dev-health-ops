@@ -212,6 +212,7 @@ jobs:
               - 'internal/api/licensing/**'
               - 'internal/api/apimetrics/**'
               - 'internal/queryapi/rowview/**'
+              - 'internal/queryapi/testopspooled/**'
               - 'internal/prrootid/**'
               - 'internal/workitemcontract/**'
               - 'internal/operationalordering/**'

@@ -40,10 +40,12 @@ const (
 const (
 	pooledCountedRunPredicate = testopspooled.CountedRunPredicate
 	pooledPipelineRunsSource  = testopspooled.PipelineRunsSource
-	pooledSuiteRunsSource     = testopspooled.SuiteRunsSource
 	pooledP95                 = testopspooled.P95
 	pooledQueueMean           = testopspooled.QueueMean
 )
+
+// pooledSuiteRunsSource is built from the shared newest-attempt fragment, so it is a var.
+var pooledSuiteRunsSource = testopspooled.SuiteRunsSource
 
 // pooledSource returns the source of a pooled measure; ok is false for every other measure.
 func pooledSource(measure Measure) (source, alias string, ok bool) {

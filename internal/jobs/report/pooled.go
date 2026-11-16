@@ -8,13 +8,15 @@ import (
 	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/testops"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/testopspooled"
 )
 
-// pooledChart is the definition of a TestOps duration or queue chart metric: the value of a bucket is taken over the raw
-// samples of its runs (the shared package testopspooled, the very text the TestOps tiles read), never as the mean of the
-// stored per-repository-day values: a percentile or a mean of a pool cannot be made from the values of its parts.
+// pooledChart is the definition of a TestOps or CI/CD duration or queue chart metric: the value of a bucket is taken over
+// the raw samples of its runs (for TestOps the shared package testopspooled, the very text the TestOps tiles read; for
+// CI/CD the cicd daily writer's rules below), never as the mean of the stored per-repository-day values: a percentile or
+// a mean of a pool cannot be made from the values of its parts.
 type pooledChart struct {
 	table      string
 	source     string
@@ -31,7 +33,47 @@ var pooledCharts = map[string]pooledChart{
 	"p95_queue_seconds":          {table: "testops_pipeline_metrics_daily", source: testopspooled.PipelineRunsSource, expression: testopspooled.QueueP95},
 	"suite_duration_p95_seconds": {table: "testops_test_metrics_daily", source: testopspooled.SuiteRunsSource, expression: testopspooled.P95},
 	"suite_duration_p50_seconds": {table: "testops_test_metrics_daily", source: testopspooled.SuiteRunsSource, expression: testopspooled.Median},
+	"avg_duration_minutes":       {table: "cicd_metrics_daily", source: cicdRunsSource, expression: cicdDurationMean},
+	"p90_duration_minutes":       {table: "cicd_metrics_daily", source: cicdRunsSource, expression: cicdDurationP90},
+	"avg_queue_minutes":          {table: "cicd_metrics_daily", source: cicdRunsSource, expression: cicdQueueMean},
 }
+
+// The CI/CD pooled source holds the runs and samples of the cicd daily writer (internal/jobs/metrics/daily/cicd): a run
+// counts on the UTC day it starts only when it also finishes that day (the writer's double window), the newest synced
+// version of a run (FINAL) is the run, a deleted run is no run. A duration sample is finished_at - started_at in minutes
+// when not negative, a queue sample started_at - queued_at in minutes when not negative; the stored duration_seconds and
+// queue_seconds are not read, as the writer does not read them. Only the repository-days the writer computed are read.
+// cicd_pooled_test.go pins these rules to the writer's text.
+const (
+	cicdRunMinutes          = "cicd_run_minutes"
+	cicdQueueMinutes        = "cicd_queue_minutes"
+	cicdCountedRunPredicate = "lowerUTF8(trimBoth(ifNull(status, ''))) != '" + testops.StatusDeleted + "'"
+)
+
+const cicdRunsSource = `(
+    SELECT
+        org_id,
+        repo_id,
+        service_id,
+        toDate(started_at) AS day,
+        if(finished_at >= started_at, dateDiff('millisecond', started_at, finished_at) / 60000, NULL) AS ` + cicdRunMinutes + `,
+        if(queued_at IS NOT NULL AND started_at >= queued_at, dateDiff('millisecond', queued_at, started_at) / 60000, NULL) AS ` + cicdQueueMinutes + `
+    FROM ci_pipeline_runs FINAL
+    WHERE org_id = {org_id:String}
+      AND toDate(started_at) >= {start_date:Date} AND toDate(started_at) < {end_date:Date}
+      AND finished_at IS NOT NULL AND toDate(finished_at) = toDate(started_at)
+      AND ` + cicdCountedRunPredicate + `
+      AND (repo_id, toDate(started_at)) IN (
+          SELECT repo_id, day FROM cicd_metrics_daily
+          WHERE org_id = {org_id:String} AND day >= {start_date:Date} AND day < {end_date:Date})
+) AS cicd_pipeline_runs`
+
+// The writer's mean and p90 (linear between closest ranks), NULL for a group with no sample.
+const (
+	cicdDurationMean = "if(count(" + cicdRunMinutes + ") = 0, NULL, avg(" + cicdRunMinutes + "))"
+	cicdDurationP90  = "if(count(" + cicdRunMinutes + ") = 0, NULL, quantileExactInclusive(0.9)(" + cicdRunMinutes + "))"
+	cicdQueueMean    = "if(count(" + cicdQueueMinutes + ") = 0, NULL, avg(" + cicdQueueMinutes + "))"
+)
 
 // withPooledChart returns the definition of a chart of the metric with its pooled definition when it has one. asOf is the
 // instant the team owners are read at (the request, as the tiles do).
@@ -87,35 +129,41 @@ func buildPooledChartQuery(spec ChartSpec, definition metricDefinition) (string,
 		xExpression, xType, temporal = "toStartOfWeek(day)", "Date", true
 	case "month":
 		xExpression, xType, temporal = "toStartOfMonth(day)", "Date", true
-	case "repo":
-		xExpression = "toString(repo_id)"
-	case "service":
-		xExpression = "ifNull(service_id, '')"
-	case "team":
-		// A team is the owner of the repository as of the request, a co-owned repository whole for each owner; the stored
-		// team of a repository-day is not read.
-		fromWhere, bindings := teamscope.OwnershipFromWhere(spec.OrganizationID, pooled.asOf)
-		scope := ""
-		if len(spec.FilterTeams) > 0 {
-			scope = fmt.Sprintf("\n      AND o.team_id IN {%s:Array(String)}", teamscope.BindingTeamIDs)
-			bindings = append(bindings, dhclickhouse.Binding{Name: teamscope.BindingTeamIDs, Value: spec.FilterTeams})
-		}
-		named, err := pooledNamedArguments(bindings)
-		if err != nil {
-			return "", nil, err
-		}
-		parameters = append(parameters, named...)
-		join = fmt.Sprintf(`
+	case "repo", "service", "team":
+		switch {
+		case !definition.hasDimension(spec.GroupBy):
+			// As buildChartQuery: a metric without the dimension is one bucket, never grouped by it.
+			xExpression = "'unscoped'"
+		case spec.GroupBy == "repo":
+			xExpression = "toString(repo_id)"
+		case spec.GroupBy == "service":
+			xExpression = "ifNull(service_id, '')"
+		default:
+			// A team is the owner of the repository as of the request, a co-owned repository whole for each owner; the stored
+			// team of a repository-day is not read.
+			fromWhere, bindings := teamscope.OwnershipFromWhere(spec.OrganizationID, pooled.asOf)
+			scope := ""
+			if len(spec.FilterTeams) > 0 {
+				scope = fmt.Sprintf("\n      AND o.team_id IN {%s:Array(String)}", teamscope.BindingTeamIDs)
+				bindings = append(bindings, dhclickhouse.Binding{Name: teamscope.BindingTeamIDs, Value: spec.FilterTeams})
+			}
+			named, err := pooledNamedArguments(bindings)
+			if err != nil {
+				return "", nil, err
+			}
+			parameters = append(parameters, named...)
+			join = fmt.Sprintf(`
     INNER JOIN (
         SELECT DISTINCT o.team_id AS owner_team_id, coalesce(toString(o.repo_id), toString(r.id)) AS owned_repo_id
 %s%s
     ) AS own ON toString(repo_id) = own.owned_repo_id`, fromWhere, scope)
-		xExpression = "own.owner_team_id"
+			xExpression = "own.owner_team_id"
+		}
 	}
 	if spec.GroupBy == "" && (spec.ChartType == "line" || spec.ChartType == "heatmap") {
 		xExpression, xType, temporal = "toDate(day)", "Date", true
 	}
-	if len(spec.FilterTeams) > 0 && spec.GroupBy != "team" {
+	if len(spec.FilterTeams) > 0 && definition.hasDimension("team") && spec.GroupBy != "team" {
 		condition, bindings := teamscope.RepoCondition(spec.OrganizationID, "toString(repo_id)", spec.FilterTeams, pooled.asOf)
 		named, err := pooledNamedArguments(bindings)
 		if err != nil {
@@ -124,7 +172,7 @@ func buildPooledChartQuery(spec ChartSpec, definition metricDefinition) (string,
 		parameters = append(parameters, named...)
 		where = append(where, condition)
 	}
-	if len(spec.FilterRepos) > 0 {
+	if len(spec.FilterRepos) > 0 && definition.hasDimension("repo") {
 		where = append(where, "toString(repo_id) IN {filter_repos:Array(String)}")
 		parameters = append(parameters, clickhouse.Named("filter_repos", spec.FilterRepos))
 	}

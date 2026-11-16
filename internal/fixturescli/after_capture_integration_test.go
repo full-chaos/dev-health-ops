@@ -189,7 +189,13 @@ var derivedColumnsAfterTheCapture = map[string]map[string]derivedColumn{
 		"issue_refs": {Migration: "149_work_unit_investment_refs.sql", Want: evidenceRefs("issues")},
 		"pr_refs":    {Migration: "149_work_unit_investment_refs.sql", Want: evidenceRefs("prs")},
 	},
+	// The pre-slot keys a GitHub test-report row replaces (CHAOS-13925): DEFAULT [], so a captured row reads [].
+	"test_suite_results": {"legacy_suite_ids": {Migration: "152_testops_report_legacy_ids.sql", Want: noLegacyIDs}},
+	"coverage_snapshots": {"legacy_snapshot_ids": {Migration: "152_testops_report_legacy_ids.sql", Want: noLegacyIDs}},
 }
+
+// noLegacyIDs is the DEFAULT [] of a row that lists no pre-slot key.
+func noLegacyIDs(func(column string) any) []string { return []string{} }
 
 type derivedColumn struct {
 	Migration string

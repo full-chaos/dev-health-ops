@@ -394,7 +394,7 @@ func TestAuthServiceChartSecretMailCheckIsScoped(t *testing.T) {
 	if _, out, err := renderAuth(t, phaseArgs(4, append(chartSecretMail(bad), "--set", "authService.mail.secretName=a-other")...)...); err != nil {
 		t.Fatalf("another Secret is not checked: %v\n%.300s", err, out)
 	}
-	if _, out, err := renderAuth(t, phaseArgs(4, append(chartSecretMail(bad), "--set", "secrets.create=false", "--set", "secrets.externalSecretName=a-dev-health-secrets", "--set", "hs256Secret.externalSecretName=a-hs256")...)...); err != nil {
+	if _, out, err := renderAuth(t, phaseArgs(4, append(chartSecretMail(bad), "--set", "secrets.create=false", "--set", "secrets.externalSecretName=a-dev-health-secrets")...)...); err != nil {
 		t.Fatalf("an external Secret is not checked: %v\n%.700s", err, out)
 	}
 }

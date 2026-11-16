@@ -183,9 +183,8 @@ docker pull -q "$BIGBOY_OPERATOR_IMAGE" > /dev/null 2>&1; st operator-pull $?   
 
 # CHAOS-6987 (D2728): --env-file is required from here on -- docker compose's default .env
 # auto-load only reads the PROJECT ROOT .env, never ops/.env, so a compose-level ${VAR}
-# substitution referencing a var that ONLY lives in ops/.env (e.g. query-api's
-# GO_API_EDGE_JWT_SECRET: ${JWT_SECRET_KEY}) silently resolves to a blank string with no
-# error -- caught live tonight when a first apply went out with an empty edge-JWT secret.
+# substitution referencing a var that ONLY lives in ops/.env silently resolves to a blank
+# string with no error.
 "${DC[@]}" run --rm --no-deps -T migrate > "$REC"/migrate.out 2>&1; st migrate $?
 # CHAOS-7162: go-api's ClickHouse login must be declared durably and be live BEFORE go-api is recreated: without
 # `dho_api_ch` in system.users every ClickHouse call fails with code 516 (rev 198, after a ClickHouse recreate rebuilt

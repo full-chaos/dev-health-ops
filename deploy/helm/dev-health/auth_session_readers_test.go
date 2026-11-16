@@ -149,7 +149,7 @@ func TestSessionsOnNeedsTheSessionKeys(t *testing.T) {
 func TestSessionsOnRendersRolesAndKeysByReference(t *testing.T) {
 	t.Parallel()
 
-	docs, out, err := renderAuth(t, sessionsArgs(sessionReaders, sessionSuccessor, []string{"--set", "hs256Secret.externalSecretName=hs256-ext"})...)
+	docs, out, err := renderAuth(t, sessionsArgs(sessionReaders, sessionSuccessor)...)
 	if err != nil {
 		t.Fatalf("render: %v\n%.600s", err, out)
 	}
@@ -157,12 +157,6 @@ func TestSessionsOnRendersRolesAndKeysByReference(t *testing.T) {
 		t.Errorf("AUTH_SESSION_READER_ROLES = %q", value)
 	}
 	svc := authDoc(docs, "Deployment", "a-dev-health-auth-service")
-	api := authDoc(docs, "Deployment", "a-dev-health-go-api")
-	asName, asKey := secretRefOf(t, svc, "AUTH_JWT_SECRET_KEY")
-	gaName, gaKey := secretRefOf(t, api, "JWT_SECRET_KEY")
-	if asName == "" || asName != gaName || asKey != gaKey {
-		t.Errorf("auth-service key ref %s/%s differs from go-api %s/%s", asName, asKey, gaName, gaKey)
-	}
 	if name, key := secretRefOf(t, svc, "AUTH_SESSION_SUCCESSOR_KEY"); name != "auth-session" || key != "AUTH_SESSION_SUCCESSOR_KEY" {
 		t.Errorf("successor ref = %s/%s", name, key)
 	}
@@ -176,7 +170,7 @@ func TestSessionKeysAbsentWhenNotConfigured(t *testing.T) {
 		t.Fatalf("render: %v\n%.400s", err, out)
 	}
 	svc := authDoc(docs, "Deployment", "a-dev-health-auth-service")
-	for _, name := range []string{"AUTH_JWT_SECRET_KEY", "AUTH_SESSION_SUCCESSOR_KEY"} {
+	for _, name := range []string{"AUTH_SESSION_SUCCESSOR_KEY"} {
 		if _, set := containerEnvValue(t, svc, name); set {
 			t.Errorf("%s rendered without sessionKeys", name)
 		}
@@ -189,7 +183,7 @@ func TestSessionKeysAbsentWhenNotConfigured(t *testing.T) {
 func TestAuthServiceExtraEnvRejectsSessionKeys(t *testing.T) {
 	t.Parallel()
 
-	for _, name := range []string{"AUTH_JWT_SECRET_KEY", "AUTH_SESSION_SUCCESSOR_KEY"} {
+	for _, name := range []string{"AUTH_SESSION_SUCCESSOR_KEY"} {
 		args := append(append([]string{}, authBase...), "--set-json", `authService.extraEnv=[{"name":"`+name+`","value":"x"}]`)
 		if _, _, err := renderAuth(t, args...); err == nil {
 			t.Errorf("extraEnv %s rendered", name)
@@ -204,21 +198,6 @@ func TestSessionsOnRefusesBlankReaderRoles(t *testing.T) {
 		[]string{"--set-json", `authService.migrate.sessionReaders.goApi=" "`, "--set", "authService.migrate.sessionReaders.queryApi=devhealth_query"})...)
 	if err == nil || !strings.Contains(out, "sessionReaders.goApi") {
 		t.Fatalf("a blank go-api reader role rendered: err=%v\n%.400s", err, out)
-	}
-}
-
-func TestAccessTokenKeyCannotBeOverriddenAwayFromGoAPI(t *testing.T) {
-	t.Parallel()
-
-	docs, out, err := renderAuth(t, sessionsArgs(sessionReaders, sessionSuccessor,
-		[]string{"--set", "authService.sessionKeys.accessToken.secretName=other"})...)
-	if err != nil {
-		t.Fatalf("render: %v\n%.400s", err, out)
-	}
-	asName, _ := secretRefOf(t, authDoc(docs, "Deployment", "a-dev-health-auth-service"), "AUTH_JWT_SECRET_KEY")
-	gaName, _ := secretRefOf(t, authDoc(docs, "Deployment", "a-dev-health-go-api"), "JWT_SECRET_KEY")
-	if asName != gaName || asName == "other" {
-		t.Errorf("auth-service key Secret %q, go-api %q", asName, gaName)
 	}
 }
 

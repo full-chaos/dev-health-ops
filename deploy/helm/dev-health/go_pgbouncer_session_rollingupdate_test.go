@@ -77,6 +77,7 @@ func TestSessionRollingUpdateUnsetRendersByteEqual(t *testing.T) {
 		// The Valkey Deployment gained its Recreate strategy after the base: that one block is left out of
 		// both sides, and the rest of the document is compared like every other document.
 		base, baseValkey := splitValkeyDeployment(t, render(baseDir+"/deploy/helm/dev-health"))
+		base = withoutRetiredHS256Key(t, name, base, strings.Count(render("."), "kind: Deployment\nmetadata:\n  name: a-dev-health-go-api\n"))
 		tip, tipValkey := splitValkeyDeployment(t, render("."))
 		// The auth-service container gained an always-rendered OTEL_ENABLED "false" (tracing off by
 		// default) after the base: that one entry is left out of the tip, exactly once where auth-service renders.
@@ -455,4 +456,34 @@ func TestPgbouncerRollingUpdateExplicitNullRendersAsUnset(t *testing.T) {
 			}
 		}
 	}
+}
+
+// The retired HS256 key left the chart after the base: the base's hs256 Secret document, its go-api JWT_SECRET_KEY env
+// row and its checksum/hs256 pod annotation are left out of the base, once per go-api Deployment, and the rest is compared.
+func withoutRetiredHS256Key(t *testing.T, name, base string, goAPIs int) string {
+	t.Helper()
+	docs := strings.Split(base, "\n---\n")
+	var kept []string
+	dropped := 0
+	for _, d := range docs {
+		if strings.HasPrefix(d, "# Source: dev-health/templates/hs256-secret.yaml\n") {
+			dropped++
+			continue
+		}
+		kept = append(kept, d)
+	}
+	if dropped > 1 {
+		t.Errorf("%s render: %d hs256 Secret documents in the base, want at most one", name, dropped)
+	}
+	out := strings.Join(kept, "\n---\n")
+	row := regexp.MustCompile(`            - name: JWT_SECRET_KEY\n              valueFrom: \{secretKeyRef: \{name: [^,}]+, key: JWT_SECRET_KEY\}\}\n`)
+	if n := len(row.FindAllString(out, -1)); n != goAPIs {
+		t.Errorf("%s render: %d JWT_SECRET_KEY env rows in the base, want one per go-api Deployment (%d)", name, n, goAPIs)
+	}
+	out = row.ReplaceAllString(out, "")
+	ann := regexp.MustCompile(`      annotations:\n        checksum/hs256: [0-9a-f]{64}\n`)
+	if n := len(ann.FindAllString(out, -1)); n != goAPIs {
+		t.Errorf("%s render: %d checksum/hs256 annotations in the base, want one per go-api Deployment (%d)", name, n, goAPIs)
+	}
+	return ann.ReplaceAllString(out, "")
 }

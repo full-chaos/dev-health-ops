@@ -134,7 +134,7 @@ func composeOneOffScriptsCheckTheirOwnVariables(g *guard) {
 	smoke := g.read("ci/bigboy/web-path-smoke.sh")
 	g.expect(strings.Contains(smoke, "resolves BLANK") && strings.Contains(smoke, "DHO_SMOKE_ADMIN_EMAIL"), "web-path-smoke.sh lost its BLANK check of DHO_SMOKE_ADMIN_EMAIL")
 	prove := g.read("ci/bigboy/bigboy-graphql-prove.sh")
-	g.expect(strings.Contains(prove, "JWT_SECRET_KEY has no value in ops/.env") && strings.Contains(prove, "exactly one org"), "bigboy-graphql-prove.sh lost its JWT_SECRET_KEY or exactly-one-org check")
+	g.expect(strings.Contains(prove, "exactly one org"), "bigboy-graphql-prove.sh lost its exactly-one-org check")
 }
 
 func composeEachOldSetRenders(g *guard) {

@@ -47,7 +47,7 @@ func buildGitLabDeploymentRowForOracle(t *testing.T, input map[string]any) deplo
 	for _, release := range releaseValues {
 		releases = append(releases, decodeGitLabDeploymentOracleObject(t, release))
 	}
-	row, include, err := normalizeGitLabDeployment(
+	row, include, _, err := normalizeGitLabDeployment(
 		nativeTestClaim("gitlab", "deployments"), input["repo_id"].(string), payload,
 		releases, oracleGitLabDeploymentsNormalizedAt,
 	)

@@ -54,7 +54,7 @@ type UserPasswordRequest struct {
 	RequestMetadata             json.RawMessage
 }
 
-// UserDeleteRequest is go-api's admin delete; Mode is "soft".
+// UserDeleteRequest is go-api's admin delete; Mode is "soft" or "force".
 type UserDeleteRequest struct {
 	Actor, Principal uuid.UUID
 	OrgID            *uuid.UUID
@@ -172,7 +172,7 @@ func (c *UsersClient) SetUserPassword(ctx context.Context, in UserPasswordReques
 	return c.postChange(ctx, PathUsersPassword, request, in.Principal)
 }
 
-// DeleteUser soft-deletes the user.
+// DeleteUser soft-deletes the user, or erases it (Mode "force").
 func (c *UsersClient) DeleteUser(ctx context.Context, in UserDeleteRequest) (DeletedUser, error) {
 	request := map[string]any{"actor_principal_id": in.Actor.String(), "principal_id": in.Principal.String(), "mode": in.Mode}
 	setOrg(request, in.OrgID)

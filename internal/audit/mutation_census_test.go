@@ -1,6 +1,7 @@
 package audit
 
 import (
+	"context"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -14,17 +15,62 @@ import (
 
 const auditImportPath = "github.com/full-chaos/dev-health-ops/internal/audit"
 
-// mutationFinding is one Mutation that Commit's validate refuses for having neither Events nor OffStream, or one Commit
-// site whose Mutation the walk cannot trace.
-type mutationFinding struct{ site, why string }
+// censusFinding is one audit write site that cannot commit: a Mutation that Commit's validate refuses for having neither
+// Events nor OffStream, a Commit or public projection site the census cannot trace, or a public projection event type
+// outside publicProjectionEventTypes or whose off-stream reason is outside offStreamReasons.
+type censusFinding struct{ site, why string }
 
-// mutationFindings walks every non-test Go file under root (source overrides a file's content by its slash path) and
-// reports every audit.Mutation literal that names neither Events nor OffStream (after the field assignments of the
-// variable it is bound to, in the same function) and every Commit site whose Mutation is neither such a literal, a
-// variable bound to one, nor a parameter of the enclosing function (a forwarder: its callers' literals are walked too).
-func mutationFindings(t *testing.T, root string, source map[string][]byte) []mutationFinding {
+// censusRules are what a public projection site is checked against (the live tables, or a planted copy).
+type censusRules struct {
+	types   map[string]string
+	reasons map[string]bool
+	consts  map[string]string // the audit package's string constants, by name
+}
+
+func liveCensusRules(t *testing.T, root string) censusRules {
 	t.Helper()
-	var findings []mutationFinding
+	consts := map[string]string{}
+	entries, err := os.ReadDir(filepath.Join(root, "internal", "audit"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fset := token.NewFileSet()
+	for _, e := range entries {
+		if !strings.HasSuffix(e.Name(), ".go") || strings.HasSuffix(e.Name(), "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(fset, filepath.Join(root, "internal", "audit", e.Name()), nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, decl := range file.Decls {
+			gen, ok := decl.(*ast.GenDecl)
+			if !ok || gen.Tok != token.CONST {
+				continue
+			}
+			for _, spec := range gen.Specs {
+				vs := spec.(*ast.ValueSpec)
+				for i, n := range vs.Names {
+					if i < len(vs.Values) {
+						if lit, ok := vs.Values[i].(*ast.BasicLit); ok && lit.Kind == token.STRING {
+							consts[n.Name], _ = strconv.Unquote(lit.Value)
+						}
+					}
+				}
+			}
+		}
+	}
+	return censusRules{types: publicProjectionEventTypes, reasons: offStreamReasons, consts: consts}
+}
+
+// auditCensus walks every non-test Go file under root (source overrides a file's content by its slash path).
+func auditCensus(t *testing.T, root string, rules censusRules, source map[string][]byte) []censusFinding {
+	t.Helper()
+	type parsed struct {
+		rel  string
+		file *ast.File
+	}
+	byDir := map[string][]parsed{}
 	fset := token.NewFileSet()
 	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
@@ -55,37 +101,84 @@ func mutationFindings(t *testing.T, root string, source map[string][]byte) []mut
 		if err != nil {
 			return err
 		}
-		findings = append(findings, fileMutationFindings(fset, rel, file)...)
+		byDir[filepath.Dir(rel)] = append(byDir[filepath.Dir(rel)], parsed{rel, file})
 		return nil
 	})
 	if err != nil {
 		t.Fatalf("walk %s: %v", root, err)
 	}
+	var findings []censusFinding
+	for _, files := range byDir {
+		aliases := map[string]bool{}
+		for _, f := range files {
+			for name := range projectionAliases(f.file) {
+				aliases[name] = true
+			}
+		}
+		for _, f := range files {
+			findings = append(findings, fileCensus(fset, f.rel, f.file, aliases, rules)...)
+		}
+	}
 	sort.Slice(findings, func(i, j int) bool { return findings[i].site < findings[j].site })
 	return findings
 }
 
-func fileMutationFindings(fset *token.FileSet, rel string, file *ast.File) []mutationFinding {
+// auditName is the file's name for the audit package ("" when it does not import it), and whether the file is in it.
+func auditName(rel string, file *ast.File) (string, bool) {
 	inAudit := file.Name.Name == "audit" && strings.HasPrefix(rel, "internal/audit/")
-	name := ""
 	for _, spec := range file.Imports {
 		if path, _ := strconv.Unquote(spec.Path.Value); path == auditImportPath {
-			name = "audit"
 			if spec.Name != nil {
-				name = spec.Name.Name
+				return spec.Name.Name, inAudit
+			}
+			return "audit", inAudit
+		}
+	}
+	return "", inAudit
+}
+
+// projectionAliases are the package-level variables a file binds to audit.CommitPublicProjection(With) (a seam a test
+// replaces): a call of one of them is a public projection site.
+func projectionAliases(file *ast.File) map[string]bool {
+	name, _ := auditName("", file)
+	out := map[string]bool{}
+	if name == "" {
+		return out
+	}
+	for _, decl := range file.Decls {
+		gen, ok := decl.(*ast.GenDecl)
+		if !ok || gen.Tok != token.VAR {
+			continue
+		}
+		for _, spec := range gen.Specs {
+			vs := spec.(*ast.ValueSpec)
+			for i, n := range vs.Names {
+				if i < len(vs.Values) {
+					if sel, ok := vs.Values[i].(*ast.SelectorExpr); ok {
+						if pkg, ok := sel.X.(*ast.Ident); ok && pkg.Name == name && strings.HasPrefix(sel.Sel.Name, "CommitPublicProjection") {
+							out[n.Name] = true
+						}
+					}
+				}
 			}
 		}
 	}
+	return out
+}
+
+func fileCensus(fset *token.FileSet, rel string, file *ast.File, aliases map[string]bool, rules censusRules) []censusFinding {
+	name, inAudit := auditName(rel, file)
 	if name == "" && !inAudit {
 		return nil
 	}
-	isAudit := func(expr ast.Expr, ident string) bool {
+	isAudit := func(expr ast.Expr, prefix string, exact bool) bool {
+		match := func(s string) bool { return s == prefix || (!exact && strings.HasPrefix(s, prefix)) }
 		switch x := expr.(type) {
 		case *ast.SelectorExpr:
 			pkg, ok := x.X.(*ast.Ident)
-			return ok && name != "" && pkg.Name == name && x.Sel.Name == ident
+			return ok && name != "" && pkg.Name == name && match(x.Sel.Name)
 		case *ast.Ident:
-			return inAudit && x.Name == ident
+			return inAudit && match(x.Name)
 		}
 		return false
 	}
@@ -93,12 +186,12 @@ func fileMutationFindings(fset *token.FileSet, rel string, file *ast.File) []mut
 		if u, ok := expr.(*ast.UnaryExpr); ok && u.Op == token.AND {
 			expr = u.X
 		}
-		if lit, ok := expr.(*ast.CompositeLit); ok && lit.Type != nil && isAudit(lit.Type, "Mutation") {
+		if lit, ok := expr.(*ast.CompositeLit); ok && lit.Type != nil && isAudit(lit.Type, "Mutation", true) {
 			return lit
 		}
 		return nil
 	}
-	var findings []mutationFinding
+	var findings []censusFinding
 	site := func(pos token.Pos, fn string) string {
 		return rel + ":" + strconv.Itoa(fset.Position(pos).Line) + " " + fn
 	}
@@ -107,10 +200,27 @@ func fileMutationFindings(fset *token.FileSet, rel string, file *ast.File) []mut
 		if !ok || fn.Body == nil {
 			continue
 		}
-		named := map[string]bool{}     // variable names that carry Events or OffStream by a later field assignment
-		bound := map[string]bool{}     // variable names bound to a Mutation literal
+		named := map[string]bool{} // variables that carry Events or OffStream by a later field assignment
+		bound := map[string]bool{} // variables bound to a Mutation literal
 		boundLit := map[*ast.CompositeLit]string{}
 		params := map[string]bool{}
+		type assignment struct {
+			rhs        ast.Expr
+			pos        token.Pos
+			start, end token.Pos // the block the assignment is in
+			define     bool
+		}
+		assigned := map[string][]assignment{} // the values assigned to a local name, for the event type walk
+		var stack []ast.Node
+		scope := func() (token.Pos, token.Pos) {
+			for i := len(stack) - 1; i >= 0; i-- {
+				switch b := stack[i].(type) {
+				case *ast.BlockStmt, *ast.CaseClause, *ast.CommClause:
+					return b.Pos(), b.End()
+				}
+			}
+			return fn.Body.Pos(), fn.Body.End()
+		}
 		addParams := func(ft *ast.FuncType) {
 			for _, field := range ft.Params.List {
 				for _, n := range field.Names {
@@ -119,8 +229,10 @@ func fileMutationFindings(fset *token.FileSet, rel string, file *ast.File) []mut
 			}
 		}
 		addParams(fn.Type)
-		bind := func(lhs ast.Expr, rhs ast.Expr) {
-			if id, ok := lhs.(*ast.Ident); ok {
+		bind := func(lhs, rhs ast.Expr, define bool) {
+			if id, ok := lhs.(*ast.Ident); ok && rhs != nil {
+				start, end := scope()
+				assigned[id.Name] = append(assigned[id.Name], assignment{rhs, lhs.Pos(), start, end, define})
 				if lit := mutationLit(rhs); lit != nil {
 					bound[id.Name], boundLit[lit] = true, id.Name
 				}
@@ -132,26 +244,80 @@ func fileMutationFindings(fset *token.FileSet, rel string, file *ast.File) []mut
 			}
 		}
 		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			if n == nil {
+				stack = stack[:len(stack)-1]
+				return false
+			}
 			switch x := n.(type) {
 			case *ast.FuncLit:
 				addParams(x.Type)
 			case *ast.AssignStmt:
 				for i := range x.Lhs {
-					if i < len(x.Rhs) {
-						bind(x.Lhs[i], x.Rhs[i])
-					} else if sel, ok := x.Lhs[i].(*ast.SelectorExpr); ok {
-						bind(sel, nil)
+					if len(x.Lhs) == len(x.Rhs) {
+						bind(x.Lhs[i], x.Rhs[i], x.Tok == token.DEFINE)
+					} else {
+						bind(x.Lhs[i], nil, false)
 					}
 				}
 			case *ast.ValueSpec:
 				for i, n := range x.Names {
 					if i < len(x.Values) {
-						bind(n, x.Values[i])
+						bind(n, x.Values[i], true)
 					}
 				}
 			}
+			stack = append(stack, n)
 			return true
 		})
+		// eventTypes is every string an event expression can name as its type: a literal, an audit constant, a local
+		// variable's assigned values, an AuditEvent literal's EventType, or the first argument of a call that names one.
+		// A local name resolves to its definitions in a block that holds the site, and to every plain reassignment before it.
+		var eventTypes func(expr ast.Expr, at token.Pos, depth int) []string
+		eventTypes = func(expr ast.Expr, at token.Pos, depth int) []string {
+			if depth > 6 {
+				return nil
+			}
+			switch x := expr.(type) {
+			case *ast.BasicLit:
+				if x.Kind == token.STRING {
+					v, _ := strconv.Unquote(x.Value)
+					return []string{v}
+				}
+			case *ast.SelectorExpr:
+				if isAudit(x, "Event", false) {
+					if v, ok := rules.consts[x.Sel.Name]; ok {
+						return []string{v}
+					}
+				}
+			case *ast.Ident:
+				if inAudit {
+					if v, ok := rules.consts[x.Name]; ok {
+						return []string{v}
+					}
+				}
+				var out []string
+				for _, a := range assigned[x.Name] {
+					if a.pos < at && (!a.define || (a.start <= at && at <= a.end)) {
+						out = append(out, eventTypes(a.rhs, a.pos, depth+1)...)
+					}
+				}
+				return out
+			case *ast.CompositeLit:
+				for _, elt := range x.Elts {
+					if kv, ok := elt.(*ast.KeyValueExpr); ok {
+						if key, ok := kv.Key.(*ast.Ident); ok && key.Name == "EventType" {
+							return eventTypes(kv.Value, at, depth+1)
+						}
+					}
+				}
+			case *ast.CallExpr:
+				// The event type is the first argument of every event builder (localAudit, auditEvent, withChangedFields).
+				if len(x.Args) > 0 {
+					return eventTypes(x.Args[0], at, depth+1)
+				}
+			}
+			return nil
+		}
 		ast.Inspect(fn.Body, func(n ast.Node) bool {
 			switch x := n.(type) {
 			case *ast.CompositeLit:
@@ -170,10 +336,37 @@ func fileMutationFindings(fset *token.FileSet, rel string, file *ast.File) []mut
 					events = true
 				}
 				if !events && !off {
-					findings = append(findings, mutationFinding{site(x.Pos(), fn.Name.Name), "a Mutation with neither Events nor OffStream"})
+					findings = append(findings, censusFinding{site(x.Pos(), fn.Name.Name), "a Mutation with neither Events nor OffStream"})
 				}
 			case *ast.CallExpr:
-				if !isAudit(x.Fun, "Commit") || len(x.Args) < 4 {
+				alias := false
+				if id, ok := x.Fun.(*ast.Ident); ok && aliases[id.Name] {
+					alias = true
+				}
+				if alias || isAudit(x.Fun, "CommitPublicProjection", false) {
+					if len(x.Args) < 4 {
+						findings = append(findings, censusFinding{site(x.Pos(), fn.Name.Name), "a public projection commit the census cannot read"})
+						return true
+					}
+					if id, ok := x.Args[3].(*ast.Ident); ok && params[id.Name] && len(assigned[id.Name]) == 0 {
+						return true // a forwarder: its callers' sites are walked
+					}
+					types := eventTypes(x.Args[3], x.Pos(), 0)
+					if len(types) == 0 {
+						findings = append(findings, censusFinding{site(x.Pos(), fn.Name.Name), "a public projection commit whose event type the census cannot trace"})
+					}
+					for _, typ := range types {
+						reason, ok := rules.types[typ]
+						switch {
+						case !ok:
+							findings = append(findings, censusFinding{site(x.Pos(), fn.Name.Name), "public projection event type " + strconv.Quote(typ) + " is not in publicProjectionEventTypes"})
+						case !rules.reasons[reason]:
+							findings = append(findings, censusFinding{site(x.Pos(), fn.Name.Name), "public projection event type " + strconv.Quote(typ) + " has off-stream reason " + strconv.Quote(reason) + " outside offStreamReasons"})
+						}
+					}
+					return true
+				}
+				if !isAudit(x.Fun, "Commit", true) || len(x.Args) < 4 {
 					return true
 				}
 				arg := x.Args[3]
@@ -183,7 +376,7 @@ func fileMutationFindings(fset *token.FileSet, rel string, file *ast.File) []mut
 				if id, ok := arg.(*ast.Ident); ok && (bound[id.Name] || params[id.Name]) {
 					return true
 				}
-				findings = append(findings, mutationFinding{site(x.Pos(), fn.Name.Name), "a Commit whose Mutation the census cannot trace"})
+				findings = append(findings, censusFinding{site(x.Pos(), fn.Name.Name), "a Commit whose Mutation the census cannot trace"})
 			}
 			return true
 		})
@@ -191,34 +384,61 @@ func fileMutationFindings(fset *token.FileSet, rel string, file *ast.File) []mut
 	return findings
 }
 
-// Every audit.Mutation in the repo names its outbox events or why it has none, and every Commit site's Mutation is
-// traceable: Commit's validate refuses a Mutation with neither at run time (audit.go, "names its outbox events or why it
-// has none"), so a write path built that way fails every call. The SSO provider store shipped so (five writes answered
-// 503); this census is the build-time check.
-func TestEveryMutationNamesItsOutboxEventsOrWhyItHasNone(t *testing.T) {
-	for _, f := range mutationFindings(t, repoRoot(t), nil) {
+// Every audit write site can commit: every audit.Mutation names its outbox events or why it has none (Commit's validate
+// refuses one with neither), every Commit site's Mutation is traceable, and every public projection commit names an event
+// type of publicProjectionEventTypes whose off-stream reason is in offStreamReasons. The SSO provider store shipped with
+// writes that could not commit (all five answered 503); this census is the build-time check.
+func TestEveryAuditWriteSiteCanCommit(t *testing.T) {
+	root := repoRoot(t)
+	for _, f := range auditCensus(t, root, liveCensusRules(t, root), nil) {
 		t.Errorf("%s: %s", f.site, f.why)
 	}
 }
 
-// The census sees a dropped OffStream: the SSO provider store's Create with its OffStream line taken out is a finding,
-// and a planted file with a bare Mutation literal and a Commit of an untraceable value are findings too.
-func TestTheMutationCensusFindsADroppedOffStream(t *testing.T) {
+// Planted-red cells: the census finds a Mutation with its OffStream dropped at a real site, a bare Mutation literal and an
+// untraceable Commit, a public projection commit of an unknown type, and a type whose reason is outside the set.
+func TestTheAuditWriteCensusFindsEachPlantedDefect(t *testing.T) {
 	root := repoRoot(t)
-	const target = "internal/auth/ssoprovider/ssoprovider.go"
-	raw, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(target)))
-	if err != nil {
-		t.Fatal(err)
+	rules := liveCensusRules(t, root)
+	drop := func(target, text, with string) map[string][]byte {
+		t.Helper()
+		raw, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(target)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(raw), text) {
+			t.Fatalf("%s has no %q", target, text)
+		}
+		return map[string][]byte{target: []byte(strings.Replace(string(raw), text, with, 1))}
 	}
-	const line = "\t\tOffStream: audit.OffStreamSSOProviderConfig,\n"
-	at := strings.Index(string(raw), line)
-	if at < 0 {
-		t.Fatalf("%s has no %q line to drop", target, strings.TrimSpace(line))
+	expectOne := func(cell string, got []censusFinding, file, why string) {
+		t.Helper()
+		if len(got) != 1 || !strings.HasPrefix(got[0].site, file+":") || !strings.Contains(got[0].why, why) {
+			t.Errorf("%s: census found %v, want exactly one %q finding in %s", cell, got, why, file)
+		}
 	}
-	dropped := append(append([]byte{}, raw[:at]...), raw[at+len(line):]...)
-	if got := mutationFindings(t, root, map[string][]byte{target: dropped}); len(got) != 1 || !strings.HasPrefix(got[0].site, target+":") {
-		t.Fatalf("with one OffStream dropped the census found %v, want exactly one finding in %s", got, target)
+	const users = "internal/auth/identity/adminusers.go"
+	expectOne("OffStream dropped at a real Mutation site",
+		auditCensus(t, root, rules, drop(users, "OffStream: audit.OffStreamPublicProfile,", "")), users, "neither Events nor OffStream")
+	const store = "internal/auth/ssoprovider/ssoprovider.go"
+	expectOne("a public projection type that is not in the map",
+		auditCensus(t, root, rules, drop(store, "audit.EventSSOProviderDeleted", `"auth.sso_provider.purged"`)), store, "is not in publicProjectionEventTypes")
+	wrong := map[string]string{}
+	for k, v := range publicProjectionEventTypes {
+		wrong[k] = v
 	}
+	wrong[EventSSOProviderCreated] = "sso_provider_made_up"
+	expectOne("a type whose reason is outside the set",
+		auditCensus(t, root, censusRules{types: wrong, reasons: offStreamReasons, consts: rules.consts}, nil), store, "outside offStreamReasons")
+	missing := map[string]string{}
+	for k, v := range publicProjectionEventTypes {
+		if k != EventSSOProviderUpdated {
+			missing[k] = v
+		}
+	}
+	expectOne("a type dropped from the map",
+		auditCensus(t, root, censusRules{types: missing, reasons: offStreamReasons, consts: rules.consts}, nil), store, "is not in publicProjectionEventTypes")
+
 	planted := []byte(`package planted
 
 import (
@@ -234,14 +454,38 @@ func bare(ctx context.Context) error {
 func untraced(ctx context.Context) error {
 	return audit.Commit(ctx, nil, schema, build())
 }
+
+func projected(ctx context.Context) error {
+	return audit.CommitPublicProjection(ctx, nil, schema, audit.AuditEvent{EventType: "auth.planted.changed"}, apply)
+}
 `)
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, "planted.go", planted, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := fileMutationFindings(fset, "internal/planted/planted.go", file)
-	if len(got) != 2 || !strings.Contains(got[0].why, "neither") || !strings.Contains(got[1].why, "cannot trace") {
-		t.Fatalf("planted findings %v, want the bare literal and the untraced Commit", got)
+	got := fileCensus(fset, "internal/planted/planted.go", file, nil, rules)
+	if len(got) != 3 || !strings.Contains(got[0].why, "neither") || !strings.Contains(got[1].why, "cannot trace") ||
+		!strings.Contains(got[2].why, `"auth.planted.changed" is not in publicProjectionEventTypes`) {
+		t.Errorf("planted findings %v, want the bare literal, the untraced Commit and the unknown public projection type", got)
+	}
+}
+
+// An SSO provider write's event types are public projection types with the SSO provider config reason, which is in the
+// permitted set; Commit (validate) still refuses them, so only CommitPublicProjection can write them.
+func TestTheSSOProviderTypesArePublicProjectionTypes(t *testing.T) {
+	for _, typ := range []string{EventSSOProviderCreated, EventSSOProviderUpdated, EventSSOProviderDeleted, EventSSOProviderActivated, EventSSOProviderDeactivated} {
+		if reason := publicProjectionEventTypes[typ]; reason != OffStreamSSOProviderConfig || !offStreamReasons[reason] {
+			t.Errorf("%s: reason %q (in the set: %v), want %q", typ, reason, offStreamReasons[reason], OffStreamSSOProviderConfig)
+		}
+		org := "7d3a2d1e-3c41-4c1e-9a52-0d5f0d7c2b11"
+		m := Mutation{
+			Apply:     func(context.Context, TxOps) error { return nil },
+			Audit:     AuditEvent{EventType: typ, Outcome: OutcomeAllowed, OrganizationID: &org},
+			OffStream: OffStreamSSOProviderConfig,
+		}
+		if err := m.validate(); err == nil {
+			t.Errorf("%s: Commit's validate admitted a public projection type", typ)
+		}
 	}
 }

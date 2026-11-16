@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"maps"
-	"slices"
 	"testing"
 )
 
@@ -52,11 +51,21 @@ func TestCommitAdmitsTheTouchOnlyWithThePublicProfileOffStream(t *testing.T) {
 	}
 }
 
-// The public projection event types are the reviewed set: a type is added here only in review, with its writer.
+// The public projection event types are the reviewed set, each with its off-stream reason: a type is added here only in
+// review, with its writer.
 func TestPublicProjectionEventTypesAreTheReviewedSet(t *testing.T) {
-	got := slices.Sorted(maps.Keys(publicProjectionEventTypes))
-	want := []string{EventUserProfileUpdated, userTouched}
-	if !slices.Equal(got, want) {
-		t.Errorf("publicProjectionEventTypes = %v, want %v", got, want)
+	want := map[string]string{
+		EventUserProfileUpdated: OffStreamPublicProfile, userTouched: OffStreamPublicProfile,
+		EventSSOProviderCreated: OffStreamSSOProviderConfig, EventSSOProviderUpdated: OffStreamSSOProviderConfig,
+		EventSSOProviderDeleted: OffStreamSSOProviderConfig, EventSSOProviderActivated: OffStreamSSOProviderConfig,
+		EventSSOProviderDeactivated: OffStreamSSOProviderConfig,
+	}
+	if !maps.Equal(publicProjectionEventTypes, want) {
+		t.Errorf("publicProjectionEventTypes = %v, want %v", publicProjectionEventTypes, want)
+	}
+	for typ, reason := range publicProjectionEventTypes {
+		if !offStreamReasons[reason] {
+			t.Errorf("%s: off-stream reason %q is not in offStreamReasons", typ, reason)
+		}
 	}
 }

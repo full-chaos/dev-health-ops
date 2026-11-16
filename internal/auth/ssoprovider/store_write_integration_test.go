@@ -3,8 +3,12 @@
 package ssoprovider_test
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -12,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/auth/ssoprovider"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
@@ -68,8 +73,25 @@ func TestEveryProviderWriteCommitsAsTheRuntimeRoleWithOneAuditRowAndNoOutboxRow(
 	}
 	store := ssoprovider.Store{Pool: runtime, Schema: schema}
 	org, actor := uuid.New(), uuid.New()
+	// The organization and the actor exist in the auth schema (the audit row references both), projected from public rows
+	// by the identity store as auth-service does.
 	if _, err := admin.Exec(ctx, `INSERT INTO public.organizations (id, slug, name) VALUES ($1, $2, 'sso-store-test')`, org, "sso-"+org.String()[:8]); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := admin.Exec(ctx, `INSERT INTO public.users
+	(id, email, password_hash, auth_provider, is_active, is_verified, is_superuser, token_version, created_at, updated_at)
+VALUES ($1, $2, NULL, 'local', true, true, false, 0, now(), now())`, actor, "sso-actor-"+actor.String()[:8]+"@example.test"); err != nil {
+		t.Fatal(err)
+	}
+	ids, err := identity.New(identity.Config{Pool: runtime, Schema: schema, UsersOwnedByAuth: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ids.ProjectOrganization(ctx, org); err != nil {
+		t.Fatalf("ProjectOrganization: %v", err)
+	}
+	if err := ids.Project(ctx, actor); err != nil {
+		t.Fatalf("Project: %v", err)
 	}
 	who := ssoprovider.Actor{PrincipalID: &actor}
 
@@ -127,4 +149,37 @@ func TestEveryProviderWriteCommitsAsTheRuntimeRoleWithOneAuditRowAndNoOutboxRow(
 	}, func() string { return column(id, "status") }, ssoprovider.StatusInactive)
 	write("delete", "auth.sso_provider.deleted", func() error { return store.Delete(ctx, org, id, who) },
 		func() string { return column(id, "status") }, "<no row>")
+
+	// A missing id is the expected refusal ErrNotFound (the legacy 404): nothing is written, and the refusal is a WARN line,
+	// never an ERROR line.
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	missing := uuid.New()
+	a0, o0 := counts("auth.sso_provider.updated")
+	for name, do := range map[string]func() error{
+		"update": func() error {
+			_, err := store.Update(ctx, org, missing, ssoprovider.UpdateInput{Name: &renamed}, who)
+			return err
+		},
+		"activate": func() error { _, err := store.SetStatus(ctx, org, missing, ssoprovider.StatusActive, who); return err },
+		"deactivate": func() error {
+			_, err := store.SetStatus(ctx, org, missing, ssoprovider.StatusInactive, who)
+			return err
+		},
+		"delete": func() error { return store.Delete(ctx, org, missing, who) },
+	} {
+		logs.Reset()
+		if err := do(); !errors.Is(err, ssoprovider.ErrNotFound) {
+			t.Errorf("%s of a missing id: err = %v, want ErrNotFound", name, err)
+		}
+		text := logs.String()
+		if !strings.Contains(text, "level=WARN") || !strings.Contains(text, "CommitPublicProjection refused") || strings.Contains(text, "level=ERROR") {
+			t.Errorf("%s of a missing id logged %q, want one WARN refusal line and no ERROR", name, text)
+		}
+	}
+	if a1, o1 := counts("auth.sso_provider.updated"); a1 != a0 || o1 != o0 {
+		t.Errorf("the refused writes wrote audit rows +%d, outbox rows +%d, want none", a1-a0, o1-o0)
+	}
 }

@@ -28,10 +28,28 @@ const OffStreamPublicProfile = "public_profile"
 
 func init() { offStreamReasons[OffStreamPublicProfile] = true }
 
-// publicProjectionEventTypes are the events whose state change is an update of public (ops schema) columns and of
-// unguarded auth columns only. Commit cannot write them: its changed-row count only sees guarded auth tables, so it
-// would refuse the change as a no-op. A type is added here, in review, with the code that writes it.
-var publicProjectionEventTypes = map[string]bool{EventUserProfileUpdated: true, EventUserTouched: true}
+// The SSO provider writes (internal/auth/ssoprovider): public.sso_providers is an ops-schema table, so each write is a
+// public projection change with its own audit row, off the stream (OffStreamSSOProviderConfig).
+const (
+	EventSSOProviderCreated     = "auth.sso_provider.created"
+	EventSSOProviderUpdated     = "auth.sso_provider.updated"
+	EventSSOProviderDeleted     = "auth.sso_provider.deleted"
+	EventSSOProviderActivated   = "auth.sso_provider.activated"
+	EventSSOProviderDeactivated = "auth.sso_provider.deactivated"
+)
+
+// publicProjectionEventTypes maps each event whose state change is a write of public (ops schema) rows and of unguarded
+// auth columns only to the off-stream reason that says why it has no provisioning event. Commit cannot write them: its
+// changed-row count only sees guarded auth tables, so it would refuse the change as a no-op. A type is added here, in
+// review, with the code that writes it.
+//   - EventUserProfileUpdated, EventUserTouched: admin profile columns of public.users (OffStreamPublicProfile).
+//   - the five EventSSOProvider* types: public.sso_providers rows (OffStreamSSOProviderConfig).
+var publicProjectionEventTypes = map[string]string{
+	EventUserProfileUpdated: OffStreamPublicProfile, EventUserTouched: OffStreamPublicProfile,
+	EventSSOProviderCreated: OffStreamSSOProviderConfig, EventSSOProviderUpdated: OffStreamSSOProviderConfig,
+	EventSSOProviderDeleted: OffStreamSSOProviderConfig, EventSSOProviderActivated: OffStreamSSOProviderConfig,
+	EventSSOProviderDeactivated: OffStreamSSOProviderConfig,
+}
 
 // commitAdmitsPublicProjection is the one exception to Commit's refusal of a public projection type: a platform role
 // change with the touch and no profile column is one Commit (the role rows are guarded), its own audit row
@@ -45,19 +63,44 @@ func commitAdmitsPublicProjection(eventType, offStream string) bool {
 // Nothing is written.
 var ErrNotPublicProjection = fmt.Errorf("%w: the audit event type is not a public projection change", ErrMutationFailed)
 
+// PublicProjectionOptions are the optional parts of CommitPublicProjectionWith.
+type PublicProjectionOptions struct {
+	// Refusals are apply errors that are expected domain refusals, as Mutation.Refusals: the transaction still rolls
+	// back, and the failure is logged at WARN, not ERROR.
+	Refusals []error
+}
+
 // CommitPublicProjection runs apply and writes the one audit row event in one transaction, or neither. apply returns
-// the number of public rows it changed: zero is ErrNoStateChange, and nothing is written. It writes no outbox event
-// (OffStreamPublicProfile): the change moves no provisioning aggregate.
+// the number of public rows it changed: zero is ErrNoStateChange, and nothing is written. It writes no outbox event:
+// the event type's off-stream reason (publicProjectionEventTypes) says why the change moves no provisioning aggregate.
 func CommitPublicProjection(ctx context.Context, pool *pgxpool.Pool, schema authschema.ValidatedIdentifier, event AuditEvent,
-	apply func(ctx context.Context, tx TxOps) (int64, error)) (err error) {
+	apply func(ctx context.Context, tx TxOps) (int64, error)) error {
+	return CommitPublicProjectionWith(ctx, pool, schema, event, apply, PublicProjectionOptions{})
+}
+
+// CommitPublicProjectionWith is CommitPublicProjection with options.
+func CommitPublicProjectionWith(ctx context.Context, pool *pgxpool.Pool, schema authschema.ValidatedIdentifier, event AuditEvent,
+	apply func(ctx context.Context, tx TxOps) (int64, error), options PublicProjectionOptions) (err error) {
 	defer func() {
-		if err != nil && !isNoStateChange(err) {
-			slog.ErrorContext(ctx, "audit: CommitPublicProjection failed; its own transaction rolled back",
-				"audit_event_type", event.EventType, logging.ErrorAttr(err))
+		if err == nil || isNoStateChange(err) {
+			return
 		}
+		for _, refusal := range options.Refusals {
+			if errors.Is(err, refusal) {
+				slog.WarnContext(ctx, "audit: CommitPublicProjection refused; its own transaction rolled back",
+					"audit_event_type", event.EventType, logging.ErrorAttr(err), "refusal", logging.ErrorType(refusal))
+				return
+			}
+		}
+		slog.ErrorContext(ctx, "audit: CommitPublicProjection failed; its own transaction rolled back",
+			"audit_event_type", event.EventType, logging.ErrorAttr(err))
 	}()
-	if !publicProjectionEventTypes[event.EventType] {
+	reason, ok := publicProjectionEventTypes[event.EventType]
+	if !ok {
 		return ErrNotPublicProjection
+	}
+	if !offStreamReasons[reason] {
+		return fmt.Errorf("%w: off-stream reason %q of %s is outside the permitted set", ErrMutationFailed, reason, event.EventType)
 	}
 	if apply == nil {
 		return fmt.Errorf("%w: no state mutation", ErrMutationFailed)
@@ -99,3 +142,8 @@ func CommitPublicProjection(ctx context.Context, pool *pgxpool.Pool, schema auth
 }
 
 func isNoStateChange(err error) bool { return errors.Is(err, ErrNoStateChange) }
+
+func isPublicProjectionType(eventType string) bool {
+	_, ok := publicProjectionEventTypes[eventType]
+	return ok
+}

@@ -63,14 +63,20 @@ func (doer *gitLabTestsRouteDoer) Do(request *http.Request) (*http.Response, err
 			body = `{"message":"unavailable"}`
 			break
 		}
+		// Both job listings return the same job objects (GitLab shows the artifact fields in each); include_retried adds the
+		// job's pipeline fields the pipelines phase reads. No job is retried here: the retried cells live in the daily cells.
+		fields := ""
 		if request.URL.Query().Get("include_retried") == "true" {
-			body = `[{"id":11,"name":"unit","stage":"test","status":"success","started_at":"2026-07-22T10:01:00Z","finished_at":"2026-07-22T10:04:00Z","runner":{"runner_type":"instance_type"},"retried":true}]`
+			fields = `"stage":"test","status":"success","started_at":"2026-07-22T10:01:00Z","finished_at":"2026-07-22T10:04:00Z","runner":{"runner_type":"instance_type"},`
+		}
+		if page := request.URL.Query().Get("page"); page != "" && page != "1" {
+			body = "[]"
 		} else if doer.artifactJobCount > 0 {
-			body = "[" + strings.TrimSuffix(strings.Repeat(`{"id":11,"name":"unit","artifacts_file":{"filename":"reports.zip"}},`, doer.artifactJobCount), ",") + "]"
+			body = "[" + strings.TrimSuffix(strings.Repeat(`{"id":11,"name":"unit",`+fields+`"artifacts_file":{"filename":"reports.zip"}},`, doer.artifactJobCount), ",") + "]"
 		} else if doer.emptyArtifacts {
-			body = `[{"id":11,"name":"unit","artifacts_file":{},"artifacts":[]}]`
+			body = `[{"id":11,"name":"unit",` + fields + `"artifacts_file":{},"artifacts":[]}]`
 		} else {
-			body = `[{"id":11,"name":"unit","artifacts_file":{"filename":"reports.zip"}}]`
+			body = `[{"id":11,"name":"unit",` + fields + `"artifacts_file":{"filename":"reports.zip"}}]`
 		}
 	case path == "/api/v4/projects/123/pipelines/9001/test_report":
 		body = `{"test_suites":[{"name":"api","total_time":"1.25","test_cases":[{"name":"passes","classname":"tests.TestAPI","status":"success","execution_time":"1.25"}]}]}`
@@ -380,10 +386,8 @@ func TestGitLabTestsArtifactRedirectDoesNotForwardCredentialAndCountsPhysicalReq
 			_, _ = io.WriteString(writer, `{"id":123,"path_with_namespace":"acme/api","default_branch":"main","only_allow_merge_if_pipeline_succeeds":true}`)
 		case request.URL.Path == "/api/v4/projects/123/pipelines":
 			_, _ = io.WriteString(writer, `[{"id":9001,"name":"CI","ref":"main","status":"success","created_at":"2026-07-22T10:00:00Z","started_at":"2026-07-22T10:01:00Z","finished_at":"2026-07-22T10:05:00Z","source":"push","sha":"abc"}]`)
-		case request.URL.Path == "/api/v4/projects/123/pipelines/9001/jobs" && request.URL.Query().Get("include_retried") == "true":
-			_, _ = io.WriteString(writer, `[{"id":11,"name":"unit","stage":"test","status":"success"}]`)
 		case request.URL.Path == "/api/v4/projects/123/pipelines/9001/jobs":
-			_, _ = io.WriteString(writer, `[{"id":11,"name":"unit","artifacts_file":{"filename":"reports.zip"}}]`)
+			_, _ = io.WriteString(writer, `[{"id":11,"name":"unit","stage":"test","status":"success","artifacts_file":{"filename":"reports.zip"}}]`)
 		case request.URL.Path == "/api/v4/projects/123/pipelines/9001/test_report":
 			_, _ = io.WriteString(writer, `{"test_suites":[{"name":"api","test_cases":[{"name":"passes","status":"success"}]}]}`)
 		case request.URL.Path == "/api/v4/projects/123/jobs/11/artifacts":

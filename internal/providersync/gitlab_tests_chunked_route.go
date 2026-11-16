@@ -601,6 +601,45 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 				runID := stringValue(payload.ID)
 				started := gitLabTestsPipelineStartedAt(payload)
 				finished := parseGitLabTestsTime(payload.FinishedAt)
+				jobPage, jobErr := providerfoundation.CollectGitLabPageParamPages(ctx, &counted, providerfoundation.GitLabPageOptions{
+					Path:  root + "/pipelines/" + url.PathEscape(runID) + "/jobs",
+					Route: gitlabPipelineJobsRoute,
+					Query: url.Values{"include_retried": {"true"}}, PerPage: nativePerPage,
+					MaxPages: gitLabTestsPerRunJobPages,
+				})
+				runJobs, jobItems := gitLabTestsRunJobs{}, []json.RawMessage(nil)
+				if jobErr != nil {
+					if fatal := gitLabTestsOptionalError(ctx, jobErr); fatal != nil {
+						return fatal
+					}
+				} else {
+					cursor.Pages += jobPage.Pages
+					jobItems = jobPage.Items
+					switch {
+					case len(jobItems) > githubTestsMaxJobsPerRun:
+						jobItems = jobItems[:githubTestsMaxJobsPerRun]
+						cursor = recordGitLabTestsPerRunTruncation(
+							cursor, client, claim, gitLabRunArtifactsComponent, runID, len(jobItems))
+					case jobPage.PageBudgetExhausted:
+						cursor = recordGitLabTestsPerRunTruncation(
+							cursor, client, claim, gitLabRunArtifactsPageBudgetComponent, runID, len(jobItems))
+					}
+					var rankErr error
+					if runJobs, rankErr = newGitLabTestsRunJobs(jobItems); rankErr != nil {
+						return rankErr
+					}
+				}
+				var summary map[string][]string
+				if runJobs.anyRetried {
+					var summaryErr error
+					summary, summaryErr = fetchGitLabTestsReportSummary(ctx, &counted, root, runID)
+					if summaryErr != nil {
+						if fatal := gitLabTestsSummaryFallback(ctx, summaryErr); fatal != nil {
+							return fatal
+						}
+						summary = nil
+					}
+				}
 				report, present, reportErr := fetchGitLabTestsReport(ctx, &counted, root, runID)
 				if errors.Is(reportErr, errGitLabTestsReportTooLarge) {
 					cursor = recordGitLabTestsSkippedItem(
@@ -611,7 +650,8 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 					return reportErr
 				}
 				if present {
-					reportSuites, reportCases, nonFinite, normalizeErr := normalizeGitLabNativeTestReport(claim, repoID, runID, report, started, finished, normalizedAt)
+					reportSuites, reportCases, nonFinite, normalizeErr := normalizeGitLabNativeTestReportAttempts(claim, repoID, runID, report, started, finished, normalizedAt,
+						func(suiteName string) int64 { return runJobs.suiteAttempt(suiteName, summary) })
 					if normalizeErr != nil {
 						return normalizeErr
 					}
@@ -641,36 +681,8 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 					}
 					suites, cases = reportSuites, reportCases
 				}
-				jobPage, jobErr := providerfoundation.CollectGitLabPageParamPages(ctx, &counted, providerfoundation.GitLabPageOptions{
-					Path: root + "/pipelines/" + url.PathEscape(runID) + "/jobs", Route: gitlabPipelineJobsRoute, PerPage: nativePerPage, MaxPages: 1, SinglePage: true,
-				})
-				if jobErr != nil {
-					if fatal := gitLabTestsOptionalError(ctx, jobErr); fatal != nil {
-						return fatal
-					}
-				} else {
-					cursor.Pages += jobPage.Pages
-					// CURRENTLY UNREACHABLE, kept consistent on purpose. This
-					// collection passes SinglePage:true, and
-					// CollectGitLabPageParamPages sets CapReached only on a
-					// SECOND loop iteration (pagination.go: the check sits at
-					// the top of the loop), while SinglePage returns right
-					// after the first page. Verified empirically: with
-					// MaxPages:1+SinglePage:true a full page advertising
-					// X-Next-Page yields CapReached=false, and the same options
-					// without SinglePage yield true. So this branch never fired
-					// and the pre-CHAOS-4142 ErrPaginationCapExceeded here was
-					// never a live cancellation. It is converted anyway so the
-					// site cannot become a landmine if SinglePage is ever
-					// dropped -- but it carries no test, because a test that
-					// cannot reach its site asserts nothing.
-					if jobPage.PageBudgetExhausted {
-						cursor = recordGitLabTestsPerRunTruncation(
-							cursor, client, claim, gitLabRunArtifactsPageBudgetComponent,
-							runID, len(jobPage.Items),
-						)
-					}
-					artifactJobs, selectJobErr := selectGitLabTestsArtifactJobs(jobPage.Items, gitLabTestsMaxArtifacts)
+				if jobErr == nil {
+					artifactJobs, selectJobErr := selectGitLabTestsArtifactJobs(jobItems, gitLabTestsMaxArtifacts)
 					if selectJobErr != nil {
 						return selectJobErr
 					}
@@ -687,7 +699,7 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 						if len(archive) == 0 {
 							continue
 						}
-						rows, parseErr := parseGitHubTestsArtifact(archive, stringValue(job.ID), repoID, runID, claim.OrgID, started, finished, normalizedAt)
+						rows, parseErr := parseGitLabTestsJobArtifact(archive, job, runJobs, repoID, runID, claim.OrgID, started, finished, normalizedAt)
 						if parseErr != nil || rows.Skipped != 0 {
 							return fmt.Errorf("%w: reports skipped=%d: %v", ErrGitLabTestsIncomplete, rows.Skipped, parseErr)
 						}

@@ -62,7 +62,7 @@ type testSuiteResultRow struct {
 	ServiceID        *string    `json:"service_id"`
 	OrgID            string     `json:"org_id"`
 	LastSynced       time.Time  `json:"last_synced"`
-	// ReportSlot and RunAttempt name the report a GitHub suite row came from (CHAOS-13873); empty and 0 for GitLab.
+	// ReportSlot and RunAttempt name the report a suite row came from (CHAOS-13873 GitHub, CHAOS-13875 GitLab); empty and 0 for rows written before migration 151.
 	ReportSlot string `json:"report_slot,omitempty"`
 	RunAttempt int64  `json:"run_attempt,omitempty"`
 }

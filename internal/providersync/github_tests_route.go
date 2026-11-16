@@ -508,7 +508,8 @@ func (handler GitHubTestsRouteHandler) Collect(
 			}
 			artifacts = append(artifacts, artifact)
 		}
-		artifacts, _ = githubTestsKeepNewestArtifactPerName(artifacts)
+		artifacts, superseded := githubTestsKeepNewestArtifactPerName(artifacts)
+		supersededIDs := githubTestsSupersededIDs(superseded)
 		if artPage.PageBudgetExhausted || len(artifacts) > maxArtifacts {
 			return CompleteRouteBatch{}, ErrPaginationCapExceeded
 		}
@@ -542,7 +543,7 @@ func (handler GitHubTestsRouteHandler) Collect(
 			if len(archive) == 0 {
 				continue
 			}
-			rows, parseErr := parseGitHubTestsReportArtifact(archive, string(artifact.ID), githubTestsReportSlotFor(run, artifact), repoID, pipeline.RunID, claim.OrgID, pipeline.StartedAtPtr(), pipeline.FinishedAt, normalizedAt)
+			rows, parseErr := parseGitHubTestsReportArtifact(archive, string(artifact.ID), githubTestsReportSlotFor(run, artifact), supersededIDs[githubTestsArtifactSlotName(artifact)], repoID, pipeline.RunID, claim.OrgID, pipeline.StartedAtPtr(), pipeline.FinishedAt, normalizedAt)
 			if parseErr != nil {
 				// Same disposition as the chunked route: an archive that will
 				// not open is skipped and the walk continues (CHAOS-4177).

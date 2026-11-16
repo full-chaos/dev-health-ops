@@ -61,6 +61,11 @@ func publicPrivilegeSetFor(usersOwned, ssoProvidersOwned bool) []PublicPrivilege
 		if member.Delete {
 			tableLevel[key{member.Table, "DELETE"}] = true
 		}
+		tableLevel[key{userEraseTable, "DELETE"}] = true
+		for _, table := range userEraseTables() {
+			add(table, "UPDATE", userEraseColumns(table, "UPDATE"))
+			add(table, "SELECT", userEraseColumns(table, "SELECT"))
+		}
 		add(member.Table, "SELECT", member.Select)
 		add(member.Table, "UPDATE", member.Update)
 		add(member.Table, "INSERT", member.Insert)

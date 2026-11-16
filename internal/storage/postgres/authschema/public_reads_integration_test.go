@@ -76,6 +76,8 @@ func newPublicReadsFixture(t *testing.T, ctx context.Context, hide ...string) *p
 		for _, grant := range InviteWriteGrants() {
 			owned = append(owned, grant.Table)
 		}
+		// The user erase grant's own tables (usererase_grant.go): the migration login grants on them while users are owned.
+		owned = append(owned, userEraseOnlyTables...)
 		for _, table := range owned {
 			if _, err := conn.Exec(ctx, fmt.Sprintf(`ALTER TABLE public.%s OWNER TO %s`,
 				Quote(mustValidatedIdentifier(table)), Quote(mustValidatedIdentifier(migrationRole)))); err != nil {

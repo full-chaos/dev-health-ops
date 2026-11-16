@@ -180,6 +180,7 @@ var attributeVocabulary = map[string][]string{
 		"invite_created", "invite_accepted", "invite_revoked", "restore_fence_bootstrap",
 		"workload_enabled", "service_account_owner_changed", "domain_revoked", "org_deprovisioned", "owner_request",
 		"sso_provider_created", "sso_provider_updated", "sso_provider_deleted", "sso_provider_activated", "sso_provider_deactivated",
+		"principal_erased",
 	},
 	"target_kind": {
 		"principal", "organization", "membership", "role_assignment", "resource_grant", "credential",

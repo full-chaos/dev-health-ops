@@ -32,10 +32,11 @@ func usersOwnedPublicGrant(g GrantRecord) bool {
 	}
 	switch g.Kind {
 	case "relation":
-		return g.Privilege == "DELETE" && (isMembershipWriteDelete(g.Object) || isSSOProviderOwnDelete(g.Object))
+		return g.Privilege == "DELETE" && (isMembershipWriteDelete(g.Object) || isSSOProviderOwnDelete(g.Object) || isUserEraseDelete(g.Object))
 	case "column":
 		if isMembershipWriteColumn(g.Object, g.Privilege, g.Column) || isInviteWriteColumn(g.Object, g.Privilege, g.Column) ||
-			isImpersonationStartColumn(g.Object, g.Privilege, g.Column) || isSSOProviderOwnColumn(g.Object, g.Privilege, g.Column) {
+			isImpersonationStartColumn(g.Object, g.Privilege, g.Column) || isSSOProviderOwnColumn(g.Object, g.Privilege, g.Column) ||
+			isUserEraseColumn(g.Object, g.Privilege, g.Column) {
 			return true
 		}
 		if g.Object == "users" {

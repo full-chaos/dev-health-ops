@@ -25,6 +25,10 @@ var DynamicAllowlist = []Entry{
 	// users(id) read from the catalog; these are the watched tables of the baseline's set (refunds is not watched).
 	{File: "internal/apiservice/admin/userdelete.go", Func: "pgStore.forceDeleteUser", Table: "public.billing_audit_log", Verb: "UPDATE"},
 	{File: "internal/apiservice/admin/userdelete.go", Func: "pgStore.forceDeleteUser", Table: "public.impersonation_sessions", Verb: "UPDATE"},
+	// The same nulls while auth-service owns users (CHAOS-13380 S5): the auth erase sets each authschema.UserEraseNullColumns
+	// column to NULL; these are its watched tables (refunds is not watched).
+	{File: "internal/auth/identity/adminerase.go", Func: "publicNullStatements", Table: "public.billing_audit_log", Verb: "UPDATE"},
+	{File: "internal/auth/identity/adminerase.go", Func: "publicNullStatements", Table: "public.impersonation_sessions", Verb: "UPDATE"},
 	// auth-service outbox reaper: the statement builder; its one caller, Reap, passes the auth outbox table (Reap's row in
 	// Allowlist).
 	{File: "internal/audit/reaper.go", Func: "reapStatement", Table: "auth.auth_outbox_events", Verb: "DELETE"},

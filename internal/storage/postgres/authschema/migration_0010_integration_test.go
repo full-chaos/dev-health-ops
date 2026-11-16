@@ -196,8 +196,8 @@ func TestMigration0010LinkCredentialsAndLoginAttempts(t *testing.T) {
 	_, err = env.admin.Exec(ctx, `UPDATE auth.login_attempts SET attempt_count = -1`)
 	m10Fail(t, err, "a negative attempt_count")
 
-	// Link credentials die with their principal.
-	if _, err := env.admin.Exec(ctx, `DELETE FROM auth.principals WHERE id = $1`, m10Principal); err != nil {
+	// Link credentials die with their principal. A principal delete runs inside audit.Commit (the 0058 delete guard).
+	if err := guardedExec(ctx, env.admin, `DELETE FROM auth.principals WHERE id = $1`, m10Principal); err != nil {
 		t.Fatalf("delete principal: %v", err)
 	}
 	if err := env.admin.QueryRow(ctx, `SELECT count(*) FROM auth.link_credentials`).Scan(&count); err != nil || count != 0 {
@@ -444,7 +444,7 @@ func TestMigration0010ConsumedAtIsWriteOnce(t *testing.T) {
 	if err := env.admin.QueryRow(ctx, `SELECT superseded_by::text FROM auth.refresh_credentials WHERE id = $1`, refreshID).Scan(&superseded); err != nil || superseded != nil {
 		t.Errorf("ON DELETE SET NULL on a consumed row: superseded_by = %v, %v; want NULL", superseded, err)
 	}
-	if _, err := env.admin.Exec(ctx, `DELETE FROM auth.principals WHERE id = $1`, m10Principal); err != nil {
+	if err := guardedExec(ctx, env.admin, `DELETE FROM auth.principals WHERE id = $1`, m10Principal); err != nil {
 		t.Errorf("deleting the principal of consumed credentials was refused: %v", err)
 	}
 }

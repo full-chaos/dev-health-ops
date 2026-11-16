@@ -1,7 +1,6 @@
 {
   "Deployment/a-dev-health-auth-service/auth-service/APP_BASE_URL": "secret:a-sso/APP_BASE_URL",
   "Deployment/a-dev-health-auth-service/auth-service/AUTH_DATABASE_URI": "secret:auth-db/AUTH_DATABASE_URI",
-  "Deployment/a-dev-health-auth-service/auth-service/AUTH_JWT_SECRET_KEY": "secret:a-dev-health-hs256/JWT_SECRET_KEY",
   "Deployment/a-dev-health-auth-service/auth-service/AUTH_SERVICE_PDP_CALLER_RATE_LIMIT_BURST": "value:300",
   "Deployment/a-dev-health-auth-service/auth-service/AUTH_SERVICE_PDP_CALLER_RATE_LIMIT_PER_SECOND": "value:150",
   "Deployment/a-dev-health-auth-service/auth-service/AUTH_SERVICE_PDP_ROUTE_RATE_LIMIT_BURST": "value:4000",

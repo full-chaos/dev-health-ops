@@ -32,7 +32,6 @@ services:
     environment:
       # The session keys come from the project state file only when the leg makes them (ci/auth_corpus_external.sh);
       # unset they stay unset, and auth-service mounts no session route.
-      - AUTH_JWT_SECRET_KEY
       - AUTH_SESSION_SUCCESSOR_KEY
       - AUTH_LOGIN_LOCKOUT_KEY
   # auth-service counts the login's rate limits in the venue's Valkey, which it reaches over auth_plane.

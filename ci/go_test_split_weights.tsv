@@ -89,7 +89,7 @@ deploy/helm/dev-health	TestSessionRollingUpdateHelperRefusesWithoutSchema	4
 deploy/helm/dev-health	TestSessionRollingUpdateSchemaAcceptsAndRefuses	7
 deploy/helm/dev-health	TestTheFlipBackRunbookPodCheckFailsClosed	10
 deploy/helm/dev-health	TestValkeyMaxmemoryPolicyFollowsTheValue	4
-deploy/helm/dev-health	TestWebCannotReachTheMintKeyThroughAnySelector	2
+deploy/helm/dev-health	TestWebCannotReachTheSharedSecretThroughAnySelector	2
 deploy/helm/dev-health	TestWebSSOOffRendersAsToday	9
 deploy/helm/dev-health	TestWebSSOOnNeedsEddsaClass	3
 internal/cigates/affected	TestAlwaysSelectListHoldsExactlyItsPackages	9

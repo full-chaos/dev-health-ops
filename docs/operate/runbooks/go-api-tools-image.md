@@ -31,7 +31,7 @@ The runtime base is a small Debian, not distroless. The image doubles as the ope
 kubectl run dev-health-go-api-tools-oneoff \
   --image=ghcr.io/full-chaos/dev-health-go-api-tools:sha-<COMMIT> \
   --restart=Never \
-  --overrides='{"spec":{"containers":[{"name":"dev-health-go-api-tools-oneoff","image":"ghcr.io/full-chaos/dev-health-go-api-tools:sha-<COMMIT>","command":["sleep","86400"],"env":[{"name":"GO_API_ENVELOPE_PRIVATE_KEY","valueFrom":{"secretKeyRef":{"name":"dev-health-ops","key":"GO_API_ENVELOPE_PRIVATE_KEY"}}},{"name":"JWT_SECRET_KEY","valueFrom":{"secretKeyRef":{"name":"dev-health-hs256","key":"JWT_SECRET_KEY"}}},{"name":"POSTGRES_URI","valueFrom":{"secretKeyRef":{"name":"dev-health-ops","key":"POSTGRES_URI"}}}]}]}}'
+  --overrides='{"spec":{"containers":[{"name":"dev-health-go-api-tools-oneoff","image":"ghcr.io/full-chaos/dev-health-go-api-tools:sha-<COMMIT>","command":["sleep","86400"],"env":[{"name":"GO_API_ENVELOPE_PRIVATE_KEY","valueFrom":{"secretKeyRef":{"name":"dev-health-ops","key":"GO_API_ENVELOPE_PRIVATE_KEY"}}},{"name":"POSTGRES_URI","valueFrom":{"secretKeyRef":{"name":"dev-health-ops","key":"POSTGRES_URI"}}}]}]}}'
 
 kubectl exec dev-health-go-api-tools-oneoff -- \
   dho goapi routing status -registry-url http://query-api:8090/registry
@@ -53,11 +53,11 @@ Stage the file from a session of a platform admin account; never stage a product
 
 ## Edge access token
 
-`dho goapi prove` mints the edge-plane credential the same way, in process, through `internal/mintcli/edgetoken` (the same package `dho mint edge-token` calls). The edge access token is the bearer that the edge checks on every request. It is minted locally in the Pod from the key that the api Pod's environment holds (`JWT_SECRET_KEY`, by `secretKeyRef` to the `dev-health-hs256` Secret). The edge bearer check is unchanged. There is no in-cluster trust bypass.
+`dho goapi prove` mints the edge-plane credential the same way, in process, through `internal/mintcli/edgetoken` (the same package `dho mint edge-token` calls). The edge access token is the bearer that the edge checks on every request. It is minted locally in the Pod with the Ed25519 key file that `EDGE_TOKEN_SIGNING_KEY_FILE` names. The edge bearer check is unchanged. There is no in-cluster trust bypass.
 
 The token is for a dedicated proof service principal, never a human user. It is the `users` row with the fixed id `00000000-0000-4000-8000-00000000e0e1`. The application schema migration (alembic `0133`) creates it with `auth_provider = 'service'`, no password, active, not a superuser, and no membership. Until an operator grants it a read-role membership in the org being proven, `dho mint edge-token` refuses by name. The grant is one idempotent statement per org. It is in the prod-proof step of the [query-api bootstrap runbook](query-api-bootstrap.md).
 
-Before signing, `dho mint edge-token` reads that row and its membership through `POSTGRES_URI`. It refuses unless the row is a service identity (`auth_provider = 'service'`, no password hash), is active, is not a superuser, and holds a `viewer` or `member` membership in the requested org. The token carries the row's current `token_version`. It lives 10 minutes by default (30 at most). `dho goapi prove` re-mints it in process every four minutes. Revoke with `is_active = false` on the row. Bumping `token_version` ends every token already minted. `internal/mintcli/edgetoken` reads the key and the DSN by environment variable name only, never from a flag.
+Before signing, `dho mint edge-token` reads that row and its membership through `POSTGRES_URI`. It refuses unless the row is a service identity (`auth_provider = 'service'`, no password hash), is active, is not a superuser, and holds a `viewer` or `member` membership in the requested org. The token carries the row's current `token_version`. It lives 10 minutes by default (30 at most). `dho goapi prove` re-mints it in process every four minutes. Revoke with `is_active = false` on the row. Bumping `token_version` ends every token already minted. `internal/mintcli/edgetoken` reads the key file path and the DSN by environment variable name only, never from a flag.
 
 ## Org-admin proof principal
 

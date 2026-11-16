@@ -103,9 +103,7 @@
 # venue-prove is on the stack's networks (the edge is the routed /graphql on the router,
 # Go-edge mode: CHAOS-8361, there is no Python edge) and carries POSTGRES_URI,
 # GO_API_PROVE_VENUE_ACK and the GO_API_ENVELOPE_* identifiers, with the envelope key file
-# mounted at /keys/envelope.pem. `dho goapi prove` also mints the edge access token in
-# process, which needs JWT_SECRET_KEY: compose substitutes it from ops/.env (--env-file, D2728), so the value
-# never passes through a shell variable, argv or file of the operator.
+# mounted at /keys/envelope.pem.
 #
 # ---- was compose.bigboy.hook-check.yml ----
 # bigboy-hook-check.sh's one-off operator shell (CHAOS-8371, D4566 class rules). Never started by `up` (profile venue); the
@@ -1531,7 +1529,9 @@ services:
     - DEV_HEALTH_LOG_LEVEL=debug
     - GO_API_DRILLDOWN_ISSUES_ENABLED=true
     - GO_API_DRILLDOWN_PRS_ENABLED=true
-    - GO_API_EDGE_JWT_SECRET=${JWT_SECRET_KEY}
+    # Nothing reads it (query-api only warns when it is set). The deploy values still name it, and the cut compares
+    # query-api names with them: drop this line with the deploy values entry.
+    - GO_API_EDGE_JWT_SECRET=retired-unused-placeholder-not-a-secret
     - GO_API_EXPLAIN_ENABLED=true
     - GO_API_FILTER_OPTIONS_ENABLED=true
     - GO_API_FLAME_AGGREGATED_ENABLED=true
@@ -1718,7 +1718,6 @@ services:
     - GO_API_PROVE_VENUE_ACK=bigboy-compose
     - GO_API_QUERY_API_URL=http://query-api:8090
     - POSTGRES_URI=postgresql://${POSTGRES_USER:-devhealth}:${POSTGRES_PASSWORD:-devhealth}@postgres:5432/${POSTGRES_DB:-devhealth}
-    - JWT_SECRET_KEY=${JWT_SECRET_KEY:-}
     - PROVE_ORG=${PROVE_ORG:-}
     image: '${BIGBOY_API_TOOLS_IMAGE:?BIGBOY_API_TOOLS_IMAGE is the image pin: pass --env-file _records/images.env}'
     networks:
@@ -2589,7 +2588,6 @@ services:
       AUTH_DATABASE_SCHEMA: auth
       AUTH_DATABASE_URI: host=postgres port=5432 user=devhealth_auth password='${AUTH_RUNTIME_DATABASE_PASSWORD:-devhealth_auth}' dbname=${POSTGRES_DB:-devhealth} sslmode=disable
       AUTH_JWT_AUDIENCE: dev-health-api
-      AUTH_JWT_SECRET_KEY: ${JWT_SECRET_KEY}
       # Prod form for platform roles: the PDP reads the role from the assignments, not users.is_superuser (CHAOS-13282).
       AUTH_PLATFORM_ROLES_OWNED: 'true'
       # go-api forwards local login (AUTH_PROXY_LOCAL_LOGIN): the login route mounts only with the lockout key (auth-session-keys-init).

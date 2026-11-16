@@ -317,7 +317,9 @@ func apiPosture() RolePosture {
 			// credentials_deleted's count. The SSO activate and deactivate
 			// routes set a provider's status (UPDATE).
 			{"sso_providers", false, true, true},
-			// The retired go-api SAML replay grant remains until a separate production grant roll.
+			// Retired (RetiredTables below): go-api's own SAML sign-in, its only
+			// writer, is gone (SAML is served by auth-service). The migration
+			// still grants it until a later change drops it.
 			{"saml_assertion_replays", true, false, false},
 			// The admin IP-allowlist routes create, update and delete
 			// entries.
@@ -344,7 +346,7 @@ func apiPosture() RolePosture {
 		ColumnScoped: []ColumnPrivilege{
 			{"billing_audit_log", "actor_id", "UPDATE"},
 		},
-		RetiredTables: []string{"internal_service_credentials"},
+		RetiredTables: []string{"internal_service_credentials", "saml_assertion_replays"},
 	}
 }
 
@@ -400,8 +402,17 @@ func APIPostureFor(sessionsOwnedByAuth, platformRolesOwned bool) RolePosture {
 	for _, column := range usersUpdateColumnsWhileOwned {
 		posture.ColumnScoped = append(posture.ColumnScoped, ColumnPrivilege{"users", column, "UPDATE"})
 	}
+	for _, column := range usersColumnsRetired {
+		posture.RetiredColumns = append(posture.RetiredColumns,
+			ColumnPrivilege{"users", column, "INSERT"}, ColumnPrivilege{"users", column, "UPDATE"})
+	}
 	return posture
 }
+
+// usersColumnsRetired are the users columns only go-api's own SAML sign-in
+// wrote; it is gone, so their INSERT and UPDATE grants are RetiredColumns
+// until a later change drops them from the two lists below.
+var usersColumnsRetired = []string{"saml_nameid_format", "saml_sp_name_qualifier"}
 
 // usersInsertColumnsWhileOwned and usersUpdateColumnsWhileOwned are the
 // public.users columns go-api's writers name, less is_superuser (least

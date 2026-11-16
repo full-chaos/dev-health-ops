@@ -46,6 +46,13 @@ func stepTwoPosture(p postgresstore.RolePosture) postgresstore.RolePosture {
 		}
 		out.ColumnScoped = append(out.ColumnScoped, column)
 	}
+	out.RetiredColumns = nil
+	for _, column := range p.RetiredColumns {
+		if column.TableName == "users" && (column.ColumnName == "saml_nameid_format" || column.ColumnName == "saml_sp_name_qualifier") {
+			continue
+		}
+		out.RetiredColumns = append(out.RetiredColumns, column)
+	}
 	return out
 }
 

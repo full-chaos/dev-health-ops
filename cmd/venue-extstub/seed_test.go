@@ -130,29 +130,46 @@ func TestModeLogNameAndStatusFile(t *testing.T) {
 	if code := run(quick(), args(modeRun, "again.jsonl", modeRun+"-status.txt"), io.Discard); code != exitUsage {
 		t.Fatalf("an existing status file: exit %d", code)
 	}
-	// Seed mode opens no SMTP listener on the address it is given.
+	// Seed mode opens no SMTP listener on the address it is given: the address stays held by this test, so the stub's own
+	// :0 listener cannot take it, and a stub that tried to bind it would fail at once with exit 2 (address in use).
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	addr := ln.Addr().String()
-	ln.Close()
+	defer ln.Close()
+	statusB := filepath.Join(dir, "b-status.txt")
 	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan int)
+	done := make(chan int, 1)
+	var stderr lockedBuffer
 	go func() {
 		done <- run(ctx, []string{"-ca-cert", certPath, "-ca-key", keyPath, "-mode", modeSeed, "-log", filepath.Join(dir, "b.seed.jsonl"),
-			"-status", filepath.Join(dir, "b-status.txt"), "-https", "127.0.0.1:0", "-smtp", addr}, io.Discard)
+			"-status", statusB, "-https", "127.0.0.1:0", "-smtp", ln.Addr().String()}, &stderr)
 	}()
-	for i := 0; i < 40; i++ {
-		if _, err := os.Stat(filepath.Join(dir, "b-status.txt")); err == nil {
-			break
+	started := false
+	for i := 0; i < 200 && !started; i++ {
+		select {
+		case code := <-done:
+			t.Fatalf("seed mode exited %d before it started; it must not bind the held SMTP address: %s", code, stderr.String())
+		default:
 		}
-		time.Sleep(25 * time.Millisecond)
+		if _, err := os.Stat(statusB); err == nil {
+			started = true
+		} else {
+			time.Sleep(25 * time.Millisecond)
+		}
 	}
-	if conn, err := net.DialTimeout("tcp", addr, 200*time.Millisecond); err == nil {
-		conn.Close()
-		t.Error("seed mode accepted an SMTP connection")
+	if !started {
+		cancel()
+		<-done
+		t.Fatal("seed mode did not write its status file in 5 s")
+	}
+	select {
+	case code := <-done:
+		t.Fatalf("seed mode exited %d after it started", code)
+	default:
 	}
 	cancel()
-	<-done
+	if code := <-done; code != 0 {
+		t.Fatalf("seed mode stop: exit %d", code)
+	}
 }

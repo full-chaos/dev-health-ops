@@ -23,6 +23,7 @@ query TestOpsCoverage($orgId: String!, $batch: AnalyticsRequestInput!) {
       }
       __typename
     }
+    filterEmptyReason
     __typename
   }
 }

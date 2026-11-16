@@ -36,8 +36,8 @@ func TestTestOpsScopeDocuments_BothTextsRoute(t *testing.T) {
 		if !strings.Contains(c.current, "      scope\n") || strings.Contains(c.v1, "scope") {
 			t.Errorf("%s: the current text must select scope and the V1 text must not", c.op)
 		}
-		if got := legacyDigestsByOperation[c.op]; len(got) != 1 || got[0] != digestHex(c.v1) {
-			t.Errorf("legacyDigestsByOperation[%s] = %v, want the digest of the V1 text", c.op, got)
+		if got := legacyDigestsByOperation[c.op]; len(got) < 1 || got[0] != digestHex(c.v1) {
+			t.Errorf("legacyDigestsByOperation[%s] = %v, want the digest of the V1 text first", c.op, got)
 		}
 	}
 }

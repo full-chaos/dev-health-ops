@@ -26,6 +26,21 @@ var gitLabTestsSlotGoOnlyFields = map[string]string{
 	"run_attempt": "CHAOS-13873: GitHub-only run attempt; GitLab rows keep the 0 default",
 }
 
+// gitLabTestsSuiteGoOnlyFields and gitLabTestsCoverageGoOnlyFields add the pre-slot keys of a GitHub slotted row (CHAOS-13925).
+var gitLabTestsSuiteGoOnlyFields = map[string]string{
+	"last_synced":      gitLabTestsSlotGoOnlyFields["last_synced"],
+	"report_slot":      gitLabTestsSlotGoOnlyFields["report_slot"],
+	"run_attempt":      gitLabTestsSlotGoOnlyFields["run_attempt"],
+	"legacy_suite_ids": "CHAOS-13925: GitHub-only pre-slot suite keys; GitLab rows keep the empty default",
+}
+
+var gitLabTestsCoverageGoOnlyFields = map[string]string{
+	"last_synced":         gitLabTestsSlotGoOnlyFields["last_synced"],
+	"report_slot":         gitLabTestsSlotGoOnlyFields["report_slot"],
+	"run_attempt":         gitLabTestsSlotGoOnlyFields["run_attempt"],
+	"legacy_snapshot_ids": "CHAOS-13925: GitHub-only pre-slot snapshot keys; GitLab rows keep the empty default",
+}
+
 // CHAOS-4190: parseLCOVRow now scopes coverage SnapshotID to the artifact
 // (here: the GitLab job) it was downloaded from, so two distinct jobs of
 // one pipeline never collide on WriteEffect's recordGitHubTestsKey check.
@@ -126,7 +141,7 @@ func TestGenericOracleMatchesFrozenPythonGitLabTestsRows(t *testing.T) {
 	compareRowsAgainstPythonOracle(t, "gitlab/tests/suite", []oracleCase{testCase}, func(t *testing.T, input map[string]any) testSuiteResultRow {
 		_, _, _, a, _, _ := gitLabTestsGoRows(t, input)
 		return a
-	}, gitLabTestsSlotGoOnlyFields)
+	}, gitLabTestsSuiteGoOnlyFields)
 	compareRowsAgainstPythonOracle(t, "gitlab/tests/case", []oracleCase{testCase}, func(t *testing.T, input map[string]any) testCaseResultRow {
 		_, _, _, _, a, _ := gitLabTestsGoRows(t, input)
 		return a
@@ -134,7 +149,7 @@ func TestGenericOracleMatchesFrozenPythonGitLabTestsRows(t *testing.T) {
 	compareRowsAgainstPythonOracle(t, "gitlab/tests/coverage", []oracleCase{testCase}, func(t *testing.T, input map[string]any) coverageSnapshotRow {
 		_, _, _, _, _, a := gitLabTestsGoRows(t, input)
 		return a
-	}, gitLabTestsSlotGoOnlyFields)
+	}, gitLabTestsCoverageGoOnlyFields)
 }
 
 type gitLabTestsSelectionObservation struct {

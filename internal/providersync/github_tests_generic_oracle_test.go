@@ -19,6 +19,21 @@ var githubTestsOracleSlotGoOnlyFields = map[string]string{
 	"run_attempt": "CHAOS-13873: the run attempt that made the artifact; the Python producer has no attempt model",
 }
 
+// githubTestsOracleSuiteGoOnlyFields and githubTestsOracleCoverageGoOnlyFields add the pre-slot keys a slotted row lists (CHAOS-13925).
+var githubTestsOracleSuiteGoOnlyFields = map[string]string{
+	"last_synced":      githubTestsOracleSlotGoOnlyFields["last_synced"],
+	"report_slot":      githubTestsOracleSlotGoOnlyFields["report_slot"],
+	"run_attempt":      githubTestsOracleSlotGoOnlyFields["run_attempt"],
+	"legacy_suite_ids": "CHAOS-13925: the pre-slot suite keys a slotted row replaces; the Python producer has no report slot",
+}
+
+var githubTestsOracleCoverageGoOnlyFields = map[string]string{
+	"last_synced":         githubTestsOracleSlotGoOnlyFields["last_synced"],
+	"report_slot":         githubTestsOracleSlotGoOnlyFields["report_slot"],
+	"run_attempt":         githubTestsOracleSlotGoOnlyFields["run_attempt"],
+	"legacy_snapshot_ids": "CHAOS-13925: the pre-slot snapshot keys a slotted row replaces; the Python producer has no report slot",
+}
+
 // CHAOS-4190: parseJUnitRows/parseGitHubCoverageRow now scope SuiteID/
 // CaseID/SnapshotID to the artifact the report came from, so two distinct
 // artifacts of the same run never hash to the same natural key and get
@@ -200,7 +215,7 @@ func TestGenericOracleMatchesFrozenPythonForGitHubTestsSuiteRow(t *testing.T) {
 				t.Fatalf("suites=%+v", rows.Suites)
 			}
 			return rows.Suites[0]
-		}, githubTestsOracleSlotGoOnlyFields)
+		}, githubTestsOracleSuiteGoOnlyFields)
 }
 
 func TestGenericOracleMatchesFrozenPythonForGitHubTestsCaseRow(t *testing.T) {
@@ -239,5 +254,5 @@ func TestGenericOracleMatchesFrozenPythonForGitHubTestsCoverageRow(t *testing.T)
 				t.Fatalf("coverage=%+v", rows.Coverage)
 			}
 			return rows.Coverage[0]
-		}, githubTestsOracleSlotGoOnlyFields)
+		}, githubTestsOracleCoverageGoOnlyFields)
 }

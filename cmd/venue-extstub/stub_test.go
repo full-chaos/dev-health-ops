@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -270,6 +271,24 @@ func TestLeafCertCoversTheStubHostsOnly(t *testing.T) {
 	}
 }
 
+// lockedBuffer is a stderr the test reads while run still writes it.
+type lockedBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (l *lockedBuffer) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+
+func (l *lockedBuffer) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.String()
+}
+
 // End to end over TLS: a client that trusts only the venue CA reaches the stub as api.stripe.com, the hit is logged,
 // and the log file must be new.
 func TestRunServesTLSWithTheVenueCA(t *testing.T) {
@@ -277,21 +296,29 @@ func TestRunServesTLSWithTheVenueCA(t *testing.T) {
 	certPath, keyPath, pool := testCA(t, dir, 0o600)
 	logPath := filepath.Join(dir, "hits.jsonl")
 	statusPath := filepath.Join(dir, "status.txt")
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	httpsAddr := ln.Addr().String()
-	ln.Close()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan int)
-	var stderr bytes.Buffer
+	var stderr lockedBuffer
 	go func() {
-		done <- run(ctx, []string{"-ca-cert", certPath, "-ca-key", keyPath, "-log", logPath, "-status", statusPath, "-https", httpsAddr, "-smtp", "127.0.0.1:0"}, &stderr)
+		done <- run(ctx, []string{"-ca-cert", certPath, "-ca-key", keyPath, "-log", logPath, "-status", statusPath, "-https", "127.0.0.1:0", "-smtp", "127.0.0.1:0"}, &stderr)
 	}()
+	var httpsAddr string
+	for i := 0; i < 100 && httpsAddr == ""; i++ {
+		if _, rest, ok := strings.Cut(stderr.String(), "serving https "); ok {
+			httpsAddr, _, _ = strings.Cut(rest, ",")
+		} else {
+			time.Sleep(50 * time.Millisecond)
+		}
+	}
+	if httpsAddr == "" {
+		cancel()
+		<-done
+		t.Fatalf("the stub did not report its https address: %s", stderr.String())
+	}
 	transport := &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool, ServerName: "api.stripe.com"}}
 	client := &http.Client{Transport: transport, Timeout: 5 * time.Second}
 	var resp *http.Response
+	var err error
 	for i := 0; i < 50; i++ {
 		req, _ := http.NewRequest(http.MethodGet, "https://"+httpsAddr+"/v1/products", nil)
 		req.Host = "api.stripe.com"

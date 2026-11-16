@@ -68,7 +68,7 @@ func TestTestopsRiskExecutorStreamsPastTheOldRowCapAgainstRealClickHouse(t *test
     duration_seconds Nullable(Float64), started_at Nullable(DateTime64(3, 'UTC')),
     finished_at Nullable(DateTime64(3, 'UTC')), team_id Nullable(String), service_id Nullable(String),
     org_id LowCardinality(String) DEFAULT '', last_synced DateTime64(3, 'UTC'),
-    report_slot LowCardinality(String) DEFAULT '', run_attempt UInt32 DEFAULT 0
+    report_slot LowCardinality(String) DEFAULT '', run_attempt UInt32 DEFAULT 0, legacy_suite_ids Array(String) DEFAULT []
 ) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (repo_id, run_id, suite_id)`,
 		`CREATE TABLE test_case_results (
     repo_id UUID, run_id String, suite_id String, case_id String, case_name String,
@@ -85,7 +85,7 @@ func TestTestopsRiskExecutorStreamsPastTheOldRowCapAgainstRealClickHouse(t *test
     commit_hash Nullable(String), branch Nullable(String), pr_number Nullable(UInt32),
     team_id Nullable(String), service_id Nullable(String), org_id LowCardinality(String) DEFAULT '',
     last_synced DateTime64(3, 'UTC'),
-    report_slot LowCardinality(String) DEFAULT '', run_attempt UInt32 DEFAULT 0
+    report_slot LowCardinality(String) DEFAULT '', run_attempt UInt32 DEFAULT 0, legacy_snapshot_ids Array(String) DEFAULT []
 ) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (repo_id, run_id, snapshot_id)`,
 		`CREATE TABLE testops_release_confidence (
     repo_id UUID, day Date, confidence_score Float64, pipeline_success_factor Float64,

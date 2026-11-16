@@ -14,6 +14,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/finite"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/testops"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/testopspooled"
 )
 
 // -----------------------------------------------------------------------
@@ -167,16 +168,9 @@ SELECT repo_id, run_id, suite_id, total_count, passed_count, failed_count, skipp
        error_count, quarantined_count, duration_seconds, started_at, finished_at,
        team_id, service_id, org_id
 FROM test_suite_results FINAL
-WHERE coalesce(started_at, finished_at) >= ? AND coalesce(started_at, finished_at) < ?
-  AND repo_id = ? AND org_id = ?
-  AND (
-    (report_slot != '' AND (repo_id, run_id, report_slot, run_attempt) IN (
-      SELECT repo_id, run_id, report_slot, max(run_attempt) FROM test_suite_results FINAL
-      WHERE repo_id = ? AND org_id = ? AND report_slot != '' GROUP BY repo_id, run_id, report_slot))
-    OR (report_slot = '' AND (repo_id, run_id) NOT IN (
-      SELECT repo_id, run_id FROM test_suite_results FINAL WHERE repo_id = ? AND org_id = ? AND report_slot != ''))
-  )`,
-		start.UTC(), end.UTC(), repoID, orgID, repoID, orgID, repoID, orgID)
+WHERE coalesce(started_at, finished_at) >= {start:DateTime64(3, 'UTC')} AND coalesce(started_at, finished_at) < {end:DateTime64(3, 'UTC')}
+  AND repo_id IN {repo_ids:Array(UUID)} AND org_id = {org_id:String}
+  AND `+testopspooled.SuiteRowsNewestAttempt("", testopsRuleScope), testopsSourceArgs(orgID, []uuid.UUID{repoID}, start, end)...)
 	if err != nil {
 		return nil, nil, fmt.Errorf("load testops suite results: %w", err)
 	}
@@ -299,15 +293,9 @@ SELECT c.repo_id, c.run_id, c.snapshot_id, c.lines_total, c.lines_covered,
 FROM coverage_snapshots AS c FINAL
 INNER JOIN ci_pipeline_runs AS p FINAL
   ON (p.repo_id = c.repo_id) AND (p.run_id = c.run_id) AND (p.org_id = c.org_id)
-WHERE p.started_at >= ? AND p.started_at < ? AND p.repo_id = ? AND p.org_id = ?
-  AND (
-    (c.report_slot != '' AND (c.run_id, c.report_slot, c.run_attempt) IN (
-      SELECT run_id, report_slot, max(run_attempt) FROM coverage_snapshots FINAL
-      WHERE repo_id = ? AND org_id = ? AND report_slot != '' GROUP BY run_id, report_slot))
-    OR (c.report_slot = '' AND c.run_id NOT IN (
-      SELECT run_id FROM coverage_snapshots FINAL WHERE repo_id = ? AND org_id = ? AND report_slot != ''))
-  )`,
-		start.UTC(), end.UTC(), repoID, orgID, repoID, orgID, repoID, orgID)
+WHERE p.started_at >= {start:DateTime64(3, 'UTC')} AND p.started_at < {end:DateTime64(3, 'UTC')}
+  AND p.repo_id IN {repo_ids:Array(UUID)} AND p.org_id = {org_id:String}
+  AND `+testopspooled.CoverageRowsNewestAttempt("c", testopsRuleScope), testopsSourceArgs(orgID, []uuid.UUID{repoID}, start, end)...)
 	if err != nil {
 		return nil, fmt.Errorf("load testops coverage snapshots: %w", err)
 	}

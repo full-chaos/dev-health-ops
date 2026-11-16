@@ -491,3 +491,46 @@ func TestDailyReadersKeepTheSameSuiteRowsAsThePooledFragment(t *testing.T) {
 		}
 	}
 }
+
+// KP-9: ids listed only by a NON-kept attempt drop nothing: attempt 1's slotted row lists the legacy id, attempt 2 (the kept one)
+// does not, so the legacy row stays counted.
+func TestDailySuiteReaderKP9IdsListedOnlyByANonKeptAttemptDoNotDrop(t *testing.T) {
+	e := startKpEnv(t)
+	org := e.org()
+	repo := e.startRun(org, 9610, "2026-01-02T10:00:00Z")
+	e.slotted(org, &kpDoer{t: t, runID: 9610, attempt: 1, started: "2026-01-02T10:00:00Z",
+		artifacts: []string{kpArtifact(71, "report", "2026-01-02T10:05:00Z")}, zips: map[string][]string{"71": {"10"}}})
+	attempt1 := e.legacyIDs(org, "9610")["s0"]
+	e.collect(org, &kpDoer{t: t, runID: 9610, attempt: 2, started: "2026-01-02T12:00:00Z",
+		artifacts: []string{kpArtifact(72, "report", "2026-01-02T12:05:00Z")}, zips: map[string][]string{"72": {"100"}}}, time.Date(2026, 1, 11, 0, 0, 0, 0, time.UTC))
+	if len(attempt1) != 1 {
+		t.Fatalf("attempt 1 lists %v, want one", attempt1)
+	}
+	e.legacy(org, repo, "9610", attempt1[0], "s0", 55)
+	e.want(org, repo, 100, 55)
+}
+
+// KP-10: a legacy row of ANOTHER run never drops, even with the same id string as a listed one.
+func TestDailySuiteReaderKP10ListedIdOfAnotherRunDoesNotDrop(t *testing.T) {
+	e := startKpEnv(t)
+	org := e.org()
+	repo := e.startRun(org, 9611, "2026-01-02T10:00:00Z")
+	e.startRun(org, 9612, "2026-01-02T10:00:00Z")
+	e.slotted(org, &kpDoer{t: t, runID: 9611, attempt: 1, started: "2026-01-02T10:00:00Z",
+		artifacts: []string{kpArtifact(75, "report", "2026-01-02T10:05:00Z")}, zips: map[string][]string{"75": {"100"}}})
+	ids := e.legacyIDs(org, "9611")["s0"]
+	e.legacy(org, repo, "9612", ids[0], "s0", 40)
+	e.want(org, repo, 100, 40)
+}
+
+// The newest attempt of a slot is the one read: attempt 1 has two suites, the re-run attempt 2 one suite of 100 s.
+func TestDailySuiteReaderNewestAttemptOfASlot(t *testing.T) {
+	e := startKpEnv(t)
+	org := e.org()
+	repo := e.startRun(org, 9613, "2026-01-02T10:00:00Z")
+	e.slotted(org, &kpDoer{t: t, runID: 9613, attempt: 1, started: "2026-01-02T10:00:00Z",
+		artifacts: []string{kpArtifact(77, "report", "2026-01-02T10:05:00Z")}, zips: map[string][]string{"77": {"10", "20"}}})
+	e.collect(org, &kpDoer{t: t, runID: 9613, attempt: 2, started: "2026-01-02T12:00:00Z",
+		artifacts: []string{kpArtifact(78, "report", "2026-01-02T12:05:00Z")}, zips: map[string][]string{"78": {"100"}}}, time.Date(2026, 1, 11, 0, 0, 0, 0, time.UTC))
+	e.want(org, repo, 100)
+}

@@ -58,6 +58,7 @@ func emittedPublicGrants(t *testing.T) map[string]bool {
 		},
 		"linkPurge":      func() ([]string, error) { return legacyLinkPurgeStatements(ctx, presentQuerier{}, options, logger) },
 		"membership":     func() ([]string, error) { return membershipWriteStatements(ctx, presentQuerier{}, options, logger) },
+		"userErase":      func() ([]string, error) { return userEraseStatements(ctx, presentQuerier{}, options, logger) },
 		"invite":         func() ([]string, error) { return inviteWriteStatements(ctx, presentQuerier{}, options, logger) },
 		"audit":          func() ([]string, error) { return publicAuditWriteStatements(ctx, presentQuerier{}, options, logger) },
 		"ssoProviderUp":  func() ([]string, error) { return ssoProviderWriteStatements(ctx, presentQuerier{}, options, logger) },

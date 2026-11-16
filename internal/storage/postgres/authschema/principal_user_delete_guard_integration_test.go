@@ -24,7 +24,7 @@ func TestPrincipalAndUserDeleteOutsideCommitIsRefused(t *testing.T) {
 		if _, err := env.admin.Exec(ctx, `INSERT INTO auth.principals (id, kind, display_name) VALUES ($1, 'user', 'erase')`, id); err != nil {
 			t.Fatal(err)
 		}
-		email := "erase-" + id.String() + "@example.test"
+		email := "erase-" + strings.ReplaceAll(uuid.NewString(), "-", "") + "@example.test"
 		if _, err := env.admin.Exec(ctx, `INSERT INTO auth.users (principal_id, email, email_lower) VALUES ($1, $2, $2)`, id, email); err != nil {
 			t.Fatal(err)
 		}

@@ -12,6 +12,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
+	"github.com/full-chaos/dev-health-ops/internal/auth/copyproject"
+	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
 
 // runtimeExec runs one statement as the runtime role inside audit.Commit, which
@@ -136,12 +138,26 @@ func TestOwnerGuardLeavesAdminRowsAndPrincipalDeletesAlone(t *testing.T) {
 	if n := e.ownerRows(t, holder); n != 1 {
 		t.Errorf("owner rows after the refused principal delete = %d, want 1", n)
 	}
-	// A principal that never held a role has no audit rows and deletes with the guard in place.
+	// A principal that never held a role has no audit rows and deletes with the guard in place, inside audit.Commit (the
+	// 0058 delete guard refuses a principal delete outside one).
 	plain := uuid.New()
 	if _, err := e.admin.Exec(ctx, `INSERT INTO auth.principals (id, kind, display_name) VALUES ($1, 'user', 'plain')`, plain); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.admin.Exec(ctx, `DELETE FROM auth.principals WHERE id = $1`, plain); err != nil {
+	if err := eraseCommit(ctx, e.admin, e.schema, plain); err != nil {
 		t.Errorf("deleting a principal with no assignment and no audit rows: %v", err)
 	}
+}
+
+// eraseCommit deletes one principal inside audit.Commit, with an erase row that names no principal (the one it deletes
+// is gone when Commit writes the row).
+func eraseCommit(ctx context.Context, pool *pgxpool.Pool, schema authschema.ValidatedIdentifier, principal uuid.UUID) error {
+	return audit.Commit(ctx, pool, schema, audit.Mutation{
+		Apply: func(ctx context.Context, tx audit.TxOps) error {
+			_, err := tx.Exec(ctx, `DELETE FROM auth.principals WHERE id = $1`, principal)
+			return err
+		},
+		Audit:  audit.AuditEvent{EventType: "auth.user.erased", Outcome: audit.OutcomeAllowed, Attributes: map[string]any{"reason_code": "principal_erased"}},
+		Events: []audit.OutboxEvent{copyproject.PrincipalEvent(principal.String(), "principal.disabled", false)},
+	})
 }

@@ -69,21 +69,24 @@ func (t TablePrivilege) privileges() []string {
 //     is changed by a migration or an administrative path, never by the
 //     service evaluating it. A service that can edit the actions it is
 //     checked against can widen its own authority.
-//   - memberships has no DELETE: a member leaves by status 'removed' (0019), so
-//     the edge and its revision history survive.
+//   - memberships, principals and users have DELETE for one verb only: an admin
+//     force delete while users are owned erases the user's own rows
+//     (identity.AdminForceDeleteUser). A member who leaves still leaves by status
+//     'removed' (0019), so the edge and its revision history survive; a delete of
+//     a principal or a user runs only inside audit.Commit (0058).
 //   - platform_role_assignments has no UPDATE: changing an elevation is a
 //     revoke followed by a grant, which leaves two audit rows instead of one
 //     silent mutation.
 func RuntimePosture() []TablePrivilege {
 	return []TablePrivilege{
 		// Identity.
-		{Table: "principals", Select: true, Insert: true, Update: true},
-		{Table: "users", Select: true, Insert: true, Update: true},
+		{Table: "principals", Select: true, Insert: true, Update: true, Delete: true},
+		{Table: "users", Select: true, Insert: true, Update: true, Delete: true},
 		{Table: "external_identities", Select: true, Insert: true, Update: true, Delete: true},
 
 		// Tenancy and non-human principals.
 		{Table: "organizations", Select: true, Insert: true, Update: true},
-		{Table: "memberships", Select: true, Insert: true, Update: true},
+		{Table: "memberships", Select: true, Insert: true, Update: true, Delete: true},
 		// Invites (0033): a revoked or accepted invite keeps its row, so no DELETE.
 		{Table: "invites", Select: true, Insert: true, Update: true},
 		{Table: "platform_role_assignments", Select: true, Insert: true, Delete: true},
@@ -294,6 +297,11 @@ func applyRuntimeGrants(ctx context.Context, conn querier, manifest []TablePrivi
 		return err
 	}
 	publicStatements = append(publicStatements, membershipWrite...)
+	userErase, err := userEraseStatements(ctx, conn, options, logger)
+	if err != nil {
+		return err
+	}
+	publicStatements = append(publicStatements, userErase...)
 	inviteWrite, err := inviteWriteStatements(ctx, conn, options, logger)
 	if err != nil {
 		return err

@@ -18,6 +18,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
@@ -40,6 +41,19 @@ const (
 
 // ErrNotFound is the provider that does not exist in the organization.
 var ErrNotFound = errors.New("ssoprovider: provider not found")
+
+// ErrNameTaken is a create or rename to a name another provider of the organization holds: the unique key
+// uq_sso_provider_org_name on (org_id, name).
+var ErrNameTaken = errors.New("ssoprovider: provider name taken in the organization")
+
+// nameKey is the unique constraint of a provider name in its organization (public.sso_providers).
+const nameKey = "uq_sso_provider_org_name"
+
+// nameTaken reports the unique violation of nameKey, by its SQLSTATE and constraint name, never by the message text.
+func nameTaken(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == nameKey
+}
 
 // ErrStore is a store fault.
 var ErrStore = errors.New("ssoprovider: store fault")
@@ -181,7 +195,7 @@ func mask(config *pyjson.Object) {
 }
 
 func fault(err error) error {
-	if err == nil || errors.Is(err, ErrNotFound) {
+	if err == nil || errors.Is(err, ErrNotFound) || errors.Is(err, ErrNameTaken) {
 		return err
 	}
 	return fmt.Errorf("%w: %w", ErrStore, err)
@@ -285,8 +299,11 @@ func (s Store) Create(ctx context.Context, org uuid.UUID, in CreateInput, a Acto
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::json, $11::json, $12::json, $13, $13)`,
 				id, org, in.Name, in.Protocol, StatusPendingSetup, in.DefaultRole, in.IsDefault, in.AllowIdpInitiated, in.AutoProvision,
 				config, in.Config.Secrets, string(domains), now)
+			if nameTaken(err) {
+				return 0, ErrNameTaken
+			}
 			return tag.RowsAffected(), err
-		}, audit.PublicProjectionOptions{})
+		}, audit.PublicProjectionOptions{Refusals: []error{ErrNameTaken}})
 	if err != nil {
 		return nil, fault(err)
 	}
@@ -353,8 +370,11 @@ func (s Store) Update(ctx context.Context, org, id uuid.UUID, in UpdateInput, a 
 				statement += `, ` + clause
 			}
 			tag, err := tx.Exec(ctx, statement+` WHERE id = $1 AND org_id = $2`, args...)
+			if nameTaken(err) {
+				return 0, ErrNameTaken
+			}
 			return tag.RowsAffected(), err
-		}, audit.PublicProjectionOptions{Refusals: []error{ErrNotFound}})
+		}, audit.PublicProjectionOptions{Refusals: []error{ErrNotFound, ErrNameTaken}})
 	if err != nil {
 		return nil, fault(err)
 	}

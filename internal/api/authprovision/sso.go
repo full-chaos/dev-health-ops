@@ -23,11 +23,12 @@ const (
 
 // Reason codes of the SSO provider routes' refusals (error.v1 reason_code), as auth-service names them.
 const (
-	ReasonSSOProviderNotFound = "sso_provider_not_found"
-	ReasonSAMLConfigRequired  = "saml_config_required"
-	ReasonOIDCConfigRequired  = "oidc_config_required"
-	ReasonOrganizationMissing = "organization_not_found"
-	ReasonMalformed           = "malformed"
+	ReasonSSOProviderNotFound  = "sso_provider_not_found"
+	ReasonSAMLConfigRequired   = "saml_config_required"
+	ReasonOIDCConfigRequired   = "oidc_config_required"
+	ReasonOrganizationMissing  = "organization_not_found"
+	ReasonMalformed            = "malformed"
+	ReasonSSOProviderNameTaken = "sso_provider_name_taken"
 )
 
 // SSOListRequest is the list's filter; a nil field is not sent and auth-service applies the legacy default.

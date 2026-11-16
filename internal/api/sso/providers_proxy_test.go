@@ -202,6 +202,8 @@ func TestProviderRefusalsAreMappedToTheLegacyTextsAndFaultsToTheNamed503(t *test
 		"oidc missing":  {refusal(400, authprovision.ReasonOIDCConfigRequired), 400, `"detail":"OIDC config required for OIDC providers"`},
 		"malformed":     {refusal(400, "malformed"), 400, `"detail":"Invalid SSO provider request"`},
 		"org missing":   {refusal(404, authprovision.ReasonOrganizationMissing), 404, `"detail":"Organization not found"`},
+		"name taken":    {refusal(409, "sso_provider_name_taken"), 409, `"detail":"An SSO provider with this name already exists"`},
+		"other 409":     {refusal(409, "not_a_known_reason"), 503, providersUnavailableText},
 		"unavailable":   {errors.New("authprovision: auth-service provisioning route unavailable"), 503, providersUnavailableText},
 		"store fault":   {refusal(503, "store_unavailable"), 503, providersUnavailableText},
 		"unauthorised":  {refusal(401, "invalid_credentials"), 503, providersUnavailableText},
@@ -489,6 +491,7 @@ func TestProviderFaultPathsNeverCarryTheClientSecret(t *testing.T) {
 		"unavailable":   {authprovision.ErrUnavailable, http.StatusServiceUnavailable},
 		"malformed":     {&authprovision.Refused{Status: 400, Reason: "malformed"}, http.StatusBadRequest},
 		"org missing":   {&authprovision.Refused{Status: 404, Reason: authprovision.ReasonOrganizationMissing}, http.StatusNotFound},
+		"name taken":    {&authprovision.Refused{Status: 409, Reason: "sso_provider_name_taken"}, http.StatusConflict},
 		"refused other": {&authprovision.Refused{Status: 401, Reason: "invalid_credentials"}, http.StatusServiceUnavailable},
 		"plain":         {errors.New("dial tcp: connection refused"), http.StatusServiceUnavailable},
 	}

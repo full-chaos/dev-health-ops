@@ -1,10 +1,15 @@
 package audit
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"maps"
+	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
 
 const userTouched = "auth.user.touched"
@@ -67,5 +72,29 @@ func TestPublicProjectionEventTypesAreTheReviewedSet(t *testing.T) {
 		if !offStreamReasons[reason] {
 			t.Errorf("%s: off-stream reason %q is not in offStreamReasons", typ, reason)
 		}
+	}
+}
+
+// The existing callers pass no options: a failure is still one ERROR line, as before the options existed. With the
+// failure named in Refusals the same failure is one WARN line instead.
+func TestCommitPublicProjectionLogsAFailureAtErrorAndARefusalAtWarn(t *testing.T) {
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	event := AuditEvent{EventType: userTouched, Outcome: OutcomeAllowed}
+	apply := func(context.Context, TxOps) (int64, error) { return 1, nil }
+	schema, err := authschema.NewValidatedIdentifier("auth")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = CommitPublicProjection(context.Background(), nil, schema, event, apply)
+	if !errors.Is(err, ErrMutationFailed) || !strings.Contains(logs.String(), "level=ERROR") || strings.Contains(logs.String(), "level=WARN") {
+		t.Fatalf("no options: err %v, logs %q, want one ERROR line", err, logs.String())
+	}
+	logs.Reset()
+	err = CommitPublicProjectionWith(context.Background(), nil, schema, event, apply, PublicProjectionOptions{Refusals: []error{ErrMutationFailed}})
+	if !errors.Is(err, ErrMutationFailed) || !strings.Contains(logs.String(), "level=WARN") || strings.Contains(logs.String(), "level=ERROR") {
+		t.Fatalf("with the failure as a refusal: err %v, logs %q, want one WARN line", err, logs.String())
 	}
 }

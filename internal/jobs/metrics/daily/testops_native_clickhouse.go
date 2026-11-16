@@ -11,6 +11,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/remaining"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/testops"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/testopspooled"
 )
 
 // -----------------------------------------------------------------------
@@ -127,12 +128,11 @@ FROM ci_pipeline_runs FINAL
 WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(UUID)}
   AND started_at >= {start:DateTime64(3, 'UTC')} AND started_at < {end:DateTime64(3, 'UTC')}
   AND lowerUTF8(trimBoth(ifNull(status, ''))) != '` + testops.StatusDeleted + `'`
-	testopsSuiteResultsSource = `
-FROM test_suite_results FINAL
-WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(UUID)}
-  AND coalesce(started_at, finished_at) >= {start:DateTime64(3, 'UTC')}
-  AND coalesce(started_at, finished_at) < {end:DateTime64(3, 'UTC')}`
 )
+
+// testopsSuiteResultsSource is the suite rows' source read, rendered by testopspooled (one text, also the window bound of the
+// newest-attempt fragment).
+var testopsSuiteResultsSource = testopspooled.SuiteWindowSource("repo_ids", "start", "end")
 
 func testopsSourceArgs(orgID string, repoIDs []uuid.UUID, start, end time.Time) []any {
 	return []any{
@@ -201,7 +201,7 @@ ORDER BY run_id`,
 // window's, so a re-run whose newer attempt starts on a later day does not count its earlier attempt on the earlier day. A
 // legacy row (no slot: written before migration 151, or by GitLab) counts unless its run also has slotted rows, which replace it.
 // The case reads keep every attempt's rows: their statuses together are the flake measures.
-const testopsNewestAttemptSuites = `
+var testopsNewestAttemptSuites = `
   AND (
     (report_slot != '' AND (repo_id, run_id, report_slot, run_attempt) IN (
       SELECT repo_id, run_id, report_slot, max(run_attempt) FROM test_suite_results FINAL

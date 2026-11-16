@@ -105,5 +105,6 @@ internal/syncdispatchruntime	47
 internal/testsupport/gitmaintcensus	11
 internal/testsupport/goldenscan/treegate	26
 internal/testsupport/idpstub	54
+internal/testsupport/recordedfiles	73
 internal/testsupport/venuechanged	44
 internal/testsupport/venueoracle/goldenhygiene	46

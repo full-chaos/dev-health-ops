@@ -3,12 +3,13 @@
 package syncdispatchruntime
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime/synclog"
-	"io"
 	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -92,6 +93,60 @@ VALUES ($1,$2,$3,'github','commits',$5,'planned',$4,$6,'rest_core','incremental'
 // budget estimator over the same domain pool the service opens its transaction on.
 func newContentionDispatchService(t *testing.T, pool *pgxpool.Pool) *NativeDispatchSyncRunService {
 	t.Helper()
+	service, _ := newLoggedContentionDispatchService(t, pool)
+	return service
+}
+
+// lockedLogBuffer is a per-test, mutex-guarded sink for the service's log lines.
+type lockedLogBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedLogBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedLogBuffer) lines() []string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return strings.Split(strings.TrimRight(b.buf.String(), "\n"), "\n")
+}
+
+// passOutcome classifies why a run is not dispatching from the log lines of its own pass.
+// "unknown" means no named reason was logged: callers must treat it as a failure.
+func passOutcome(lines []string, runID string) (string, []string) {
+	var own []string
+	for _, line := range lines {
+		if strings.Contains(line, "sync_run_id="+runID) {
+			own = append(own, line)
+		}
+	}
+	reasons := []struct{ msg, name string }{
+		{"dispatch_sync_run.concurrency_capped", "concurrency_capped"},
+		{"dispatch_sync_run.budget_guard_deferred", "budget_deferred"},
+		{"dispatch_sync_run.lock_busy_requeued", "lock_busy"},
+		{"dispatch_sync_run.blocked_on_reference_discovery", "blocked_on_reference_discovery"},
+		{"dispatch_sync_run.publish_hit_terminal_delivery", "terminal_delivery"},
+		{"dispatch_sync_run.unroutable_units_terminalized", "unroutable"},
+		{"dispatch_sync_run.invalid_claim_units_terminalized", "invalid_claim"},
+	}
+	for _, reason := range reasons {
+		for _, line := range own {
+			if strings.Contains(line, "msg="+reason.msg) || strings.Contains(line, "msg=\""+reason.msg+"\"") {
+				return reason.name, own
+			}
+		}
+	}
+	return "unknown", own
+}
+
+func newLoggedContentionDispatchService(t *testing.T, pool *pgxpool.Pool) (*NativeDispatchSyncRunService, *lockedLogBuffer) {
+	t.Helper()
+	logs := &lockedLogBuffer{}
+	logger := synclog.New(slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	registry := &fakeJobRegistry{descriptors: map[string]jobruntime.Descriptor{
 		jobcontract.KindSyncProviderUnit: providerUnitDescriptor("river"),
 	}}
@@ -101,16 +156,16 @@ func newContentionDispatchService(t *testing.T, pool *pgxpool.Pool) *NativeDispa
 	}
 	estimator, err := newInProcessBudgetEstimator(pool, BudgetEstimatorDependencies{
 		Decryptor: unusedDecryptor{}, Getenv: func(string) string { return "" },
-		Logger: synclog.New(slog.New(slog.NewTextHandler(io.Discard, nil))),
+		Logger: logger,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	service, err := NewNativeDispatchSyncRunService(pool, synclog.New(slog.New(slog.NewTextHandler(io.Discard, nil))), estimator, producer, registry)
+	service, err := NewNativeDispatchSyncRunService(pool, logger, estimator, producer, registry)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return service
+	return service, logs
 }
 
 // runConcurrentDispatches runs one Dispatch per args on its own goroutine, each
@@ -146,7 +201,7 @@ func runConcurrentDispatches(ctx context.Context, service *NativeDispatchSyncRun
 func TestConcurrentDispatchOnOneBucketDoesNotStarveASmallPool(t *testing.T) {
 	withSmallDispatchPool(t, 4, func(ctx context.Context, pool *pgxpool.Pool) {
 		args := seedContentionRuns(t, ctx, pool, 4)
-		service := newContentionDispatchService(t, pool)
+		service, logs := newLoggedContentionDispatchService(t, pool)
 
 		errs := runConcurrentDispatches(ctx, service, args, 12*time.Second)
 		for index, err := range errs {
@@ -163,6 +218,28 @@ func TestConcurrentDispatchOnOneBucketDoesNotStarveASmallPool(t *testing.T) {
 		}
 		if dispatching != len(args) {
 			t.Errorf("%d of %d runs reached dispatching", dispatching, len(args))
+			lines := logs.lines()
+			for index, arg := range args {
+				runID := arg.RunID
+				var runStatus, unitStatus string
+				var availableAt *time.Time
+				if err := pool.QueryRow(ctx, `
+SELECT r.status, u.status, u.available_at
+FROM sync_runs r JOIN sync_run_units u ON u.sync_run_id = r.id
+WHERE r.id = $1::uuid`, runID).Scan(&runStatus, &unitStatus, &availableAt); err != nil {
+					t.Errorf("run %d (%s): read state: %v", index, runID, err)
+					continue
+				}
+				if runStatus == syncRunStatusDispatching {
+					continue
+				}
+				reason, own := passOutcome(lines, runID)
+				t.Errorf("run %d (%s) did not reach dispatching: reason=%s pass error=%v run status=%s unit status=%s unit available_at=%v pool acquired=%d\ncaptured lines of this run:\n%s",
+					index, runID, reason, errs[index], runStatus, unitStatus, availableAt, pool.Stat().AcquiredConns(), strings.Join(own, "\n"))
+				if reason == "unknown" {
+					t.Errorf("run %d (%s): no named reason in its log lines; all captured lines:\n%s", index, runID, strings.Join(lines, "\n"))
+				}
+			}
 		}
 	})
 }

@@ -23,7 +23,7 @@ import (
 // order) are the ones activate and deactivate answered before the move. Auth-service answers its own refusals as reason
 // codes; the legacy texts are mapped here. A fault is a named 503, never the stub's 500 and never a partial answer.
 
-// providersUnavailableText is the detail of the 503 a client fault gets.
+// providersUnavailableText is the detail of the 503 a transport failure or an auth-service fault gets.
 const providersUnavailableText = "SSO provider service unavailable"
 
 const (
@@ -31,6 +31,8 @@ const (
 	textProviderNotFound    = "SSO provider not found"
 	textSAMLConfigRequired  = "SAML config required for SAML providers"
 	textOIDCConfigRequired  = "OIDC config required for OIDC providers"
+	textInvalidRequest      = "Invalid SSO provider request"
+	textOrgNotFound         = "Organization not found"
 	errShapeAnswerFormat    = "%w: auth-service answered a provider that is not the model"
 	rfc3339ProviderTimeForm = time.RFC3339Nano
 )
@@ -126,7 +128,9 @@ func (h handlers) writeProvider(w http.ResponseWriter, r *http.Request, status i
 	h.providerFault(w, r, "render provider", err)
 }
 
-// providerFault answers a refusal of auth-service with the legacy text it stands for and anything else with the named 503.
+// providerFault answers a refusal of auth-service with the legacy text it stands for, a refusal of the client's body or
+// organization in that client class, and anything else (transport, an auth-service fault, a refusal of go-api's own
+// credential) with the named 503.
 func (h handlers) providerFault(w http.ResponseWriter, r *http.Request, step string, err error) {
 	var refused *authprovision.Refused
 	if errors.As(err, &refused) {
@@ -139,6 +143,14 @@ func (h handlers) providerFault(w http.ResponseWriter, r *http.Request, step str
 			return
 		case authprovision.ReasonOIDCConfigRequired:
 			policy.WriteDetail(w, http.StatusBadRequest, textOIDCConfigRequired, nil)
+			return
+		case authprovision.ReasonMalformed:
+			h.Logger.InfoContext(r.Context(), "api sso providers: auth-service refused the request", "path", r.Pattern, "step", step, "reason", refused.Reason)
+			policy.WriteDetail(w, http.StatusBadRequest, textInvalidRequest, nil)
+			return
+		case authprovision.ReasonOrganizationMissing:
+			h.Logger.InfoContext(r.Context(), "api sso providers: auth-service refused the request", "path", r.Pattern, "step", step, "reason", refused.Reason)
+			policy.WriteDetail(w, http.StatusNotFound, textOrgNotFound, nil)
 			return
 		}
 	}

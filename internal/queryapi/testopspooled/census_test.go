@@ -71,7 +71,8 @@ func TestCensusFlagsAPlantedSecondCopy(t *testing.T) {
 // The newest-attempt RULE has one text, the fragments of this package. Today's private copies of it (the daily readers) are
 // allowed by name until the change that moves them here deletes them; the allowlist may only shrink, so an entry whose file no
 // longer holds the rule fails the floor below.
-var ruleMarkers = []string{"report_slot != ''", "legacy_suite_ids", "legacy_snapshot_ids"}
+// The marker is the rule's own text. The writer that fills legacy_suite_ids names the column too, and is not a copy of the rule.
+var ruleMarkers = []string{"report_slot != ''"}
 
 var privateRuleCopies = map[string]bool{
 	"internal/jobs/metrics/daily/testops_native_clickhouse.go":      true,

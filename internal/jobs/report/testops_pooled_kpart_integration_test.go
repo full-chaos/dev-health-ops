@@ -191,6 +191,39 @@ func TestRegistryTestopsKP8SiblingsOfOneNameDropOneToOne(t *testing.T) {
 	wantQuantiles(t, e, org, floats(10, 20))
 }
 
+// KP-9: the legacy ids count only when a KEPT slotted row lists them. Attempt 1's slotted row lists the legacy id, attempt 2
+// (the kept one) does not: the legacy row stays counted (the named residual: a suite only the first attempt had).
+func TestRegistryTestopsKP9IdsListedOnlyByANonKeptAttemptDoNotDrop(t *testing.T) {
+	e := startPooledEnv(t)
+	org := e.newOrg()
+	repo := e.startRun(t, org, 9510, "2026-01-02T10:00:00Z")
+	e.collectAttempt(org, &attemptDoer{t: t, runID: 9510, attempt: 1, started: "2026-01-02T10:00:00Z",
+		artifacts: []string{attemptArtifact(71, "2026-01-02T10:05:00Z")}, zips: map[string][]string{"71": {"10"}}}, time.Date(2026, 1, 10, 0, 0, 0, 0, time.UTC))
+	attempt1 := e.suiteLegacyIDs(t, org, "9510")["s0"]
+	e.collectAttempt(org, &attemptDoer{t: t, runID: 9510, attempt: 2, started: "2026-01-02T12:00:00Z",
+		artifacts: []string{attemptArtifact(72, "2026-01-02T12:05:00Z")}, zips: map[string][]string{"72": {"100"}}}, time.Date(2026, 1, 11, 0, 0, 0, 0, time.UTC))
+	if len(attempt1) != 1 {
+		t.Fatalf("attempt 1 lists %v legacy ids, want one", attempt1)
+	}
+	e.legacyRow(t, org, repo, "9510", attempt1[0], "s0", 55)
+	e.finish(org, repo)
+	// kept: the attempt-2 slotted row (100) and the legacy row (55): attempt 1's slotted row is not kept, so its list drops nothing.
+	wantQuantiles(t, e, org, floats(100, 55))
+}
+
+// KP-10: a legacy row of ANOTHER run never drops, even with the same id string as a listed one.
+func TestRegistryTestopsKP10ListedIdOfAnotherRunDoesNotDrop(t *testing.T) {
+	e := startPooledEnv(t)
+	org := e.newOrg()
+	repo := e.startRun(t, org, 9511, "2026-01-02T10:00:00Z")
+	e.startRun(t, org, 9512, "2026-01-02T10:00:00Z")
+	e.slottedSuites(t, org, 9511, 1, "2026-01-02T10:00:00Z", []string{"100"})
+	ids := e.suiteLegacyIDs(t, org, "9511")["s0"]
+	e.legacyRow(t, org, repo, "9512", ids[0], "s0", 40) // run 9512 has no slotted row: its legacy row stays
+	e.finish(org, repo)
+	wantQuantiles(t, e, org, floats(100, 40))
+}
+
 // R-ID2 (named residual): a suite only attempt 1 had has a legacy row no later slotted row lists: it stays counted (not a loss).
 func TestRegistryTestopsRID2SuiteOnlyTheFirstAttemptHadStaysCounted(t *testing.T) {
 	e := startPooledEnv(t)

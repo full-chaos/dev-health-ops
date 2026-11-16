@@ -578,7 +578,8 @@ func wcRows(c *wcCaller, side int) []wcRow {
 		{name: "r25_password", method: http.MethodPost, path: "/api/v1/admin/users/" + tg["password"].String() + "/password",
 			body: `{"admin_password":"Admin13728!pw","password":"Target13728!pw"}`, platformDecided: true, action: "admin.users"},
 		{name: "r26_delete", method: http.MethodDelete, path: "/api/v1/admin/users/" + tg["delete"].String(), platformDecided: true, action: "admin.users"},
-		// The users-owned branches that sit before a HoldsPlatform site (users.go:281, :454, :689), on their shapes.
+		// The users-owned branches that sit before a HoldsPlatform site (users.go:281, :454), on their shapes; the force delete
+		// runs the lookup and the scope check first, as the not-owned one does.
 		{name: "r23_create_superuser", method: http.MethodPost, path: "/api/v1/admin/users",
 			body: `{"email":"c13728su-` + tag + `@example.test","is_superuser":true}`, action: "admin.users", superuserBody: true},
 		{name: "r24_patch_superuser", method: http.MethodPatch, path: "/api/v1/admin/users/" + tg["patch"].String(), body: `{"is_superuser":true}`,

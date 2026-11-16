@@ -70,6 +70,7 @@ internal/signingkey	keygen.go	internal/auth/pushprojection
 internal/signingkey	keygen.go	internal/auth/repoidentityprojection
 internal/signingkey	keygen.go	internal/auth/serviceaccount
 internal/signingkey	keygen.go	internal/auth/session
+internal/signingkey	keygen.go	internal/auth/ssoprovider
 internal/signingkey	keygen.go	internal/auth/usersbackfill
 internal/signingkey	keygen.go	internal/auth/workloadexchange
 internal/signingkey	keygen.go	internal/billingcli

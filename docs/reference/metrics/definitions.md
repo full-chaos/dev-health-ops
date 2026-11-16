@@ -267,9 +267,33 @@ scope. They are never a mean of the stored per-repository-day values.
 | `suite_duration_p50_seconds` | median | a suite, as `TEST_SUITE_DURATION_P95` |
 
 `median_duration_seconds`, `p95_queue_seconds` and `suite_duration_p50_seconds` have no GraphQL measure: only the report
-reads them. A report team group or team filter reads the owners of each repository when the chart runs, a co-owned
+reads them. For these six metrics, a report team group or team filter reads the owners of each repository when the chart runs, a co-owned
 repository whole for each owner. The chart range includes its last day. A bucket with no sample has no point, never 0.
 A pooled chart read past the row bound above fails the report chart as unavailable.
+
+### AI report charts of CI/CD durations and queue time
+
+The AI report charts of three CI/CD metrics are taken over the window's pipeline runs (`ci_pipeline_runs`), with the
+rules of the CI/CD daily job. They are never a mean of the stored per-repository-day values. No GraphQL measure reads
+them.
+
+| Report metric | Value of a bucket | Sample |
+| --- | --- | --- |
+| `avg_duration_minutes` | mean | a run: finished at minus started at, in minutes |
+| `p90_duration_minutes` | 90th percentile: linear between the closest ranks | a run, as above |
+| `avg_queue_minutes` | mean | a run with a queued time: started at minus queued at, in minutes |
+
+- A run counts on the UTC day it starts, and only when it also finishes on that day. A run that crosses midnight UTC
+  counts on no day, and a run that has not finished counts nowhere. This is the daily job's rule.
+- A re-run keeps its run id. The run counts once, with its latest attempt. Its queue sample is the time from the run's
+  first creation to the latest attempt's start.
+- A negative duration or queue time is no sample. The stored `duration_seconds` and `queue_seconds` are not read.
+- Every status counts, except a deleted run.
+- Only the repository-days that the daily job computed are read.
+- These metrics have no team or service dimension. A team filter does not narrow the chart, and a team or service group
+  is one `unscoped` bucket.
+- The chart range includes its last day. A bucket with no sample has no point, never 0. The read has the same row bound
+  as the TestOps pooled read.
 
 ## Pull request rework ratio
 

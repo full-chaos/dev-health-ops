@@ -174,6 +174,7 @@ func newOwnerMoveEnv(t *testing.T, ctx context.Context, kinds bool) *ownerMoveEn
 	for _, grant := range InviteWriteGrants() {
 		owned = append(owned, grant.Table)
 	}
+	owned = append(owned, userEraseOnlyTables...)
 	for _, table := range owned {
 		if _, err := conn.Exec(ctx, fmt.Sprintf(`ALTER TABLE public.%s OWNER TO %s`, Quote(mustValidatedIdentifier(table)), Quote(mustValidatedIdentifier(env.oldRole)))); err != nil {
 			t.Fatalf("hand public.%s to the superuser owner: %v", table, err)

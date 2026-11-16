@@ -162,14 +162,18 @@ func (p Provider) SPEntityID(base string) string {
 	return base + "/saml/" + p.ID.String() + "/metadata"
 }
 
-// ACSURL is the configured assertion consumer URL, else
-// <base>/saml/<provider id>/acs.
+// ACSURL is the configured assertion consumer URL, else <base> and the served ACS route (ACSRoutePath). The legacy
+// default was <base>/saml/<provider id>/acs, a path no service answers (the IdP's post was lost): the served route is
+// the one the web ACS route, go-api and the ingress answer.
 func (p Provider) ACSURL(base string) string {
 	if p.Config.SPACSURL != "" {
 		return p.Config.SPACSURL
 	}
-	return base + "/saml/" + p.ID.String() + "/acs"
+	return base + ACSRoutePath(p.ID)
 }
+
+// ACSRoutePath is the served assertion consumer route of a provider: /api/v1/auth/saml/<provider id>/acs.
+func ACSRoutePath(id uuid.UUID) string { return "/api/v1/auth/saml/" + id.String() + "/acs" }
 
 // DomainAllowed reports whether email's domain is in the provider's allowed
 // list, compared by emaildomain.Allowed. An empty list allows every domain.
@@ -193,7 +197,7 @@ func ValidateACSOverride(cfg Config, rowID uuid.UUID) error {
 		return nil
 	}
 	u, err := url.Parse(cfg.SPACSURL)
-	route := "/api/v1/auth/saml/" + rowID.String() + "/acs"
+	route := ACSRoutePath(rowID)
 	if err != nil || u.Path != route || u.EscapedPath() != route {
 		return fmt.Errorf("%w: sp_acs_url must be /api/v1/auth/saml/{provider id}/acs of this provider", ErrConfig)
 	}

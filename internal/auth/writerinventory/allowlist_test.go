@@ -106,6 +106,12 @@ var Allowlist = []Entry{
 	{File: "internal/auth/identity/adminusers.go", Func: "applyAdminCreate", Table: "auth.principals", Verb: "INSERT"},
 	{File: "internal/auth/identity/adminusers.go", Func: "applyAdminCreate", Table: "auth.users", Verb: "INSERT"},
 	{File: "internal/auth/identity/adminusers.go", Func: "applyAdminCreate", Table: "public.users", Verb: "INSERT"},
+	// acp PLAN OK of PLAN-13380 S5 (11-16, CHAOS-13380): the admin force delete while auth-service owns users erases the
+	// user's own auth memberships, its auth.users row, its principal and its public.users row in one commit.
+	{File: "internal/auth/identity/adminerase.go", Func: "applyAdminErase", Table: "auth.memberships", Verb: "DELETE"},
+	{File: "internal/auth/identity/adminerase.go", Func: "applyAdminErase", Table: "auth.principals", Verb: "DELETE"},
+	{File: "internal/auth/identity/adminerase.go", Func: "applyAdminErase", Table: "auth.users", Verb: "DELETE"},
+	{File: "internal/auth/identity/adminerase.go", Func: "applyAdminErase", Table: "public.users", Verb: "DELETE"},
 	{File: "internal/auth/identity/adminusers.go", Func: "applyAdminSoftDelete", Table: "auth.principals", Verb: "UPDATE"},
 	{File: "internal/auth/identity/adminusers.go", Func: "applyAdminSoftDelete", Table: "auth.users", Verb: "UPDATE"},
 	{File: "internal/auth/identity/adminusers.go", Func: "applyAdminSoftDelete", Table: "public.users", Verb: "UPDATE"},

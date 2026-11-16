@@ -26,6 +26,7 @@ import (
 const (
 	usersLastPlatformAdminText = "the user-admin routes refuse removing the last active platform_admin, on demote and on erase"
 	usersStateChangedText      = "identity: the user changed while the update waited for its locks"
+	usersReferenceBlockedText  = "identity: a row that names the user blocks its erase"
 )
 
 // usersAnswer writes one go-api answer of an auth refusal.
@@ -305,9 +306,10 @@ func (h *handlers) setUserPasswordInAuth(ctx context.Context, w http.ResponseWri
 	policy.WriteModel(w, http.StatusOK, out, nil)
 }
 
-// deleteUserInAuth is deleteUser's soft delete while users are owned; a user that was already inactive is the 404 a
-// repeat gets.
-func (h *handlers) deleteUserInAuth(ctx context.Context, w http.ResponseWriter, user *policy.User, orgID uuid.UUID, existing *fullUser) {
+// deleteUserInAuth is deleteUser while users are owned, after its lookup and scope checks: the soft delete, where a
+// user that was already inactive is the 404 a repeat gets, or the force delete, which auth-service answers by erasing
+// the user (a row that names the user and cannot go with it is the 409 reference_blocked).
+func (h *handlers) deleteUserInAuth(ctx context.Context, w http.ResponseWriter, user *policy.User, orgID uuid.UUID, existing *fullUser, mode DeleteMode) {
 	if h.usersAdmin == nil {
 		h.writeProvisionUnavailable(w)
 		return
@@ -317,11 +319,12 @@ func (h *handlers) deleteUserInAuth(ctx context.Context, w http.ResponseWriter, 
 		return
 	}
 	deleted, err := h.usersAdmin.DeleteUser(ctx, authprovision.UserDeleteRequest{Actor: user.ID, Principal: existing.ID, OrgID: optionalOrg(orgID),
-		Mode: string(DeleteSoft)})
+		Mode: string(mode)})
 	if err != nil {
 		answers := usersCommonAnswers()
 		answers[principalNotFound] = usersDetail(http.StatusNotFound, "User not found")
 		answers["last_platform_admin"] = usersConflict("last_platform_admin", usersLastPlatformAdminText)
+		answers["reference_blocked"] = usersConflict("reference_blocked", usersReferenceBlockedText)
 		h.writeUsersRefusal(ctx, w, "delete_user", err, answers)
 		return
 	}

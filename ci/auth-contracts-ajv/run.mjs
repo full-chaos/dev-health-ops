@@ -165,6 +165,7 @@ const APPROVED_AUDIT = [
   "sso_provider_deleted",
   "sso_provider_activated",
   "sso_provider_deactivated",
+  "principal_erased",
   "role_granted",
   "role_revoked",
   "membership_added",

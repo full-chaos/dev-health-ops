@@ -66,9 +66,6 @@ SQL
 )
 if [ "$(printf '%s\n' "$PROVE_ORG" | grep -c .)" != 1 ]; then st local-org 1; echo "REFUSED: the local admin account must belong to exactly one org" >&2; exit 1; fi
 st local-org 0; export PROVE_ORG PROVE_ARTIFACT_DIR="$OUT/proof"
-# compose reads JWT_SECRET_KEY for venue-prove with an empty default (a `:?` would fail every other command: compose interpolates
-# inactive profiles too), so the script refuses here, by NAME only, when ops/.env carries no value for it
-grep -q '^JWT_SECRET_KEY=.' "$R/ops/.env" || { st jwt-secret 1; echo "REFUSED: JWT_SECRET_KEY has no value in ops/.env (the prover mints the edge access token with it)" >&2; exit 1; }
 
 U="-registry-url http://query-api:8090/registry -buildinfo-url http://query-api:8090/buildinfo"
 

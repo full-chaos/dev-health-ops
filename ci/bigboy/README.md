@@ -136,8 +136,7 @@ the venue, the TLS pair is a host test pair, the database logins have compose.ym
   `AUTH_SIGNING_KEY_FILE` key. go-api, query-api and web verify it against the same issuer (`AUTH_ACCESS_TOKEN_ISSUER`; web also `AUTH_ACCESS_TOKEN_CLASS=eddsa`).
   query-api trusts the issuer CA through `SSL_CERT_DIR`, web through `NODE_EXTRA_CA_CERTS=/run/auth-issuer-ca/issuer.pem`. Sessions move to auth-service:
   `AUTH_PROXY_SESSIONS=true` on go-api and query-api, and `AUTH_SESSION_READER_ROLES=devhealth_api,devhealth_query_api` on auth-migrate and auth-grants.
-  The session successor key is made in the venue by `auth-session-keys-init` (0600 file, volume `auth_session_keys`, `AUTH_SESSION_SUCCESSOR_KEY_FILE`); the
-  JWT key of auth-service is go-api's `JWT_SECRET_KEY` from `ops/.env` (one source). go-api asks for sessions with its workload token
+  The session successor key is made in the venue by `auth-session-keys-init` (0600 file, volume `auth_session_keys`, `AUTH_SESSION_SUCCESSOR_KEY_FILE`). go-api asks for sessions with its workload token
   (`AUTH_SESSION_ISSUE_CREDENTIAL=workload`, bootstrap file `/run/workload/api.bootstrap` from `go-api-workload-bootstrap`, uid 65532, read-only mount).
 - The venue acr-api runs as uid 1001, so `acr-workload-volume` gives `/run/workload` to 1001 (mode 700) and `acr-workload-bootstrap` writes
   the 0600 credential as 1001. acr-api mounts the volume read-only.
@@ -450,8 +449,7 @@ and the prover refuses by name if a Python plane answers the routed `/graphql`. 
    the proof credential is the local admin's user access token (a platform admin), in a 0600/0400
    file the operator stages and names by `BIGBOY_PROVE_ACCESS_TOKEN_FILE` (the script refuses a
    file that is unset, missing, a symlink or of another mode, and never reads the value); it is
-   mounted read-only into the container and read there (`-proof-access-token-file`); the edge token
-   is still minted in process from `JWT_SECRET_KEY` (compose substitution from `ops/.env`);
+   mounted read-only into the container and read there (`-proof-access-token-file`);
 
 Full output names the org and stays under the devhealth-root `_records/bigboy-<sha8>/graphql-prove-<ts>/`.
 `BIGBOY_ROOT` (default `/home/ubuntu/devhealth`) is the running tree the harness works in, the same

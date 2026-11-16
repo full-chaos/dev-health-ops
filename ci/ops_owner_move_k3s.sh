@@ -74,7 +74,7 @@ helm_args() {
     "$1" "${ROOT}/deploy/helm/dev-health" --namespace "${NS}"
     --set web.enabled=false --set goApi.enabled=false --set goWorkers.enabled=false --set queryApi.enabled=false
     --set valkey.enabled=false --set clickhouse.enabled=false --set postgresql.enabled=false --set networkPolicy.enabled=false
-    --set secrets.create=false --set secrets.externalSecretName=ops-app --set hs256Secret.externalSecretName=ops-hs256
+    --set secrets.create=false --set secrets.externalSecretName=ops-app
     --set "migrations.hook.externalSecretName=sec-migrate-$2" --set "migrations.hook.provisionRoles.externalSecretName=sec-owner-$2"
     --set "migrations.hook.image=${IMG}" --set "migrations.hook.pullPolicy=${PULL}"
     --set "migrations.hook.riverMigrate.image=${IMG}" --set "migrations.hook.riverMigrate.pullPolicy=${PULL}"
@@ -179,7 +179,6 @@ put_secret ops-pooler RIVER_DOMAIN_DATABASE_PASSWORD="${DOMAIN_PASSWORD}" RIVER_
   RIVER_COORDINATOR_DATABASE_PASSWORD="${COORDINATOR_PASSWORD}"
 put_secret ops-migrator OPS_MIGRATOR_DATABASE_PASSWORD="${NEW_PASSWORD}"
 put_secret ops-app UNUSED=1
-put_secret ops-hs256 JWT_SECRET_KEY="$(openssl rand -hex 32)"
 
 # shellcheck disable=SC2016
 OPS_PG_IMAGE="${PG_IMAGE}" OPS_CH_IMAGE="${CH_IMAGE}" envsubst '${OPS_PG_IMAGE} ${OPS_CH_IMAGE}' <"${SCRIPT_DIR}/ops_k8s/infra.yaml" | K apply -f - >/dev/null

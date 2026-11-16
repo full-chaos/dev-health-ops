@@ -125,6 +125,14 @@ var sqlOperandExemptions = []sqlOperandExemption{
 		reason: "read holds only quoteIdentifier results of the validated ImpersonationLegacyReadColumns names",
 	},
 	{
+		file: "usererase_grant.go", fn: "userEraseStatements", operand: `strings.Join(update, ", ")`,
+		reason: "update holds only quoteIdentifier results of the validated UserEraseNullColumns names",
+	},
+	{
+		file: "usererase_grant.go", fn: "userEraseStatements", operand: `strings.Join(selectColumns, ", ")`,
+		reason: "selectColumns holds only quoteIdentifier results of the validated UserEraseNullColumns names",
+	},
+	{
 		file: "session_readers.go", fn: "readerStatements", operand: `strings.Join(columns, ", ")`,
 		reason: "columns holds only quoteIdentifier results of the validated SessionReaderReads names",
 	},

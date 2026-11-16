@@ -224,18 +224,39 @@ type oidcConfigInput struct {
 	ClaimMapping          map[string]string `json:"claim_mapping"`
 }
 
-// decodeConfig reads raw as one object of exactly the members of target (a pointer to a struct), refusing others and
-// a null member where the legacy model has a non-null one.
-func decodeConfig(raw []byte, target any) error {
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.DisallowUnknownFields()
-	return dec.Decode(target)
+// decodeConfig reads raw into target (a pointer to a struct) as the legacy model read it: only the members the model
+// declares, matched by exact name (pydantic matches names exactly; Go's decoder would also take a case variant), each
+// required one present and not null. Any other member is ignored, as extra="ignore" did; orderedConfig leaves it out of
+// the stored config.
+func decodeConfig(raw []byte, target any, declared []configMember, required ...string) error {
+	var sent map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &sent); err != nil {
+		return errProvisioningBody
+	}
+	for _, name := range required {
+		if value, ok := sent[name]; !ok || bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+			return errProvisioningBody
+		}
+	}
+	kept := make(map[string]json.RawMessage, len(declared)+len(required))
+	for _, member := range declared {
+		if value, ok := sent[member.name]; ok {
+			kept[member.name] = value
+		}
+	}
+	for _, name := range required {
+		kept[name] = sent[name]
+	}
+	model, err := json.Marshal(kept)
+	if err != nil {
+		return errProvisioningBody
+	}
+	return json.Unmarshal(model, target)
 }
 
 func readSAMLConfig(raw []byte) (*samlConfigInput, error) {
 	in := samlConfigInput{NameIDFormat: "urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress", AttributeMapping: map[string]string{}}
-	if err := decodeConfig(raw, &in); err != nil || in.EntityID == "" && !bytes.Contains(raw, []byte(`"entity_id"`)) ||
-		!bytes.Contains(raw, []byte(`"sso_url"`)) || !bytes.Contains(raw, []byte(`"certificate"`)) {
+	if err := decodeConfig(raw, &in, samlConfigMembers, "entity_id", "sso_url", "certificate"); err != nil {
 		return nil, errProvisioningBody
 	}
 	if in.AttributeMapping == nil {
@@ -246,8 +267,7 @@ func readSAMLConfig(raw []byte) (*samlConfigInput, error) {
 
 func readOIDCConfig(raw []byte) (*oidcConfigInput, error) {
 	in := oidcConfigInput{Scopes: []string{"openid", "profile", "email"}, ClaimMapping: map[string]string{}}
-	if err := decodeConfig(raw, &in); err != nil || !bytes.Contains(raw, []byte(`"client_id"`)) ||
-		!bytes.Contains(raw, []byte(`"client_secret"`)) || !bytes.Contains(raw, []byte(`"issuer"`)) {
+	if err := decodeConfig(raw, &in, oidcConfigMembers, "client_id", "client_secret", "issuer"); err != nil {
 		return nil, errProvisioningBody
 	}
 	if in.Scopes == nil {

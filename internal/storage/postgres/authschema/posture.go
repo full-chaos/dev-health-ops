@@ -299,6 +299,9 @@ func relationViolations(
 			if options.UsersOwned && schema == publicSchema && privilege == "DELETE" && isMembershipWriteDelete(object) {
 				continue
 			}
+			if options.UsersOwned && schema == publicSchema && privilege == "DELETE" && isUserEraseDelete(object) {
+				continue
+			}
 			if options.SSOProvidersOwned && schema == publicSchema && privilege == "DELETE" && isSSOProviderOwnDelete(object) {
 				continue
 			}

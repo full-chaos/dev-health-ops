@@ -75,7 +75,7 @@ chart_args() {
     "${RELEASE}" "${ROOT}/deploy/helm/dev-health" --namespace "${NS}"
     --set web.enabled=false --set goApi.enabled=false --set queryApi.enabled=false --set goWorkers.enabled=false
     --set valkey.enabled=false --set clickhouse.enabled=false --set migrations.hook.enabled=false --set secrets.create=false
-    --set secrets.externalSecretName=rehearsal-unused --set hs256Secret.externalSecretName=rehearsal-hs256
+    --set secrets.externalSecretName=rehearsal-unused
     --set authService.phase=2 --set authService.replicas=1
     --set "authService.image.repository=$2" --set authService.image.pullPolicy=IfNotPresent
     --set "authService.migrate.image.repository=$3" --set authService.migrate.image.pullPolicy=IfNotPresent
@@ -188,7 +188,7 @@ owner_token="$(kc get namespace "${NS}" -o 'jsonpath={.metadata.labels.rehearsal
 # Fixed names: nothing this run creates may already exist (it deletes only what it created, below).
 preexisting="$(K get deployment/auth-postgres deployment/auth-valkey service/auth-postgres service/auth-valkey \
   secret/auth-pg-superuser secret/rehearsal-db secret/rehearsal-migrate secret/rehearsal-valkey secret/rehearsal-session \
-  secret/rehearsal-hs256 secret/rehearsal-unused secret/rehearsal-key-a secret/rehearsal-key-b --ignore-not-found -o name 2>/dev/null)" \
+  secret/rehearsal-unused secret/rehearsal-key-a secret/rehearsal-key-b --ignore-not-found -o name 2>/dev/null)" \
   || die "the preflight read of the fixed names in ${NS} failed"
 [ -z "${preexisting}" ] || die "${preexisting//$'\n'/ } already exists in ${NS}: the run refuses to reuse or delete it"
 release_found="$(hm list --filter "^${RELEASE}\$" -q 2>/dev/null)" || die "the preflight read of the helm release failed"
@@ -265,7 +265,6 @@ dsn "${RUNTIME_ROLE}" "${RUNTIME_PASSWORD}" | put_secret rehearsal-db AUTH_DATAB
 dsn postgres "${PG_PASSWORD}" | put_secret rehearsal-migrate AUTH_MIGRATION_DATABASE_URI
 printf 'valkey://auth-valkey:6379/1' | put_secret rehearsal-valkey AUTH_VALKEY_URI
 head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=\n' | put_secret rehearsal-session AUTH_SESSION_SUCCESSOR_KEY
-od -An -N32 -tx1 /dev/urandom | tr -d ' \n' | put_secret rehearsal-hs256 JWT_SECRET_KEY
 own secret/rehearsal-unused
 K create secret generic rehearsal-unused >/dev/null
 for kid in a b; do

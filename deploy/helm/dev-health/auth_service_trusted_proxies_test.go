@@ -95,7 +95,7 @@ func TestAuthServiceExtraEnvCannotSetTheTrustedProxies(t *testing.T) {
 }
 
 // Both ways on the switch that turns the session routes on (authService.sessionKeys.successor, which renders
-// AUTH_JWT_SECRET_KEY and AUTH_SESSION_SUCCESSOR_KEY together, the two secrets authconfig's Session.Enabled needs): on
+// AUTH_SESSION_SUCCESSOR_KEY, the secret authconfig's Session.Enabled needs): on
 // with no store = fail, off = renders.
 func TestAuthServiceStoreIsRequiredExactlyWhenTheSessionRoutesAreOn(t *testing.T) {
 	t.Parallel()
@@ -109,8 +109,8 @@ func TestAuthServiceStoreIsRequiredExactlyWhenTheSessionRoutesAreOn(t *testing.T
 		t.Fatalf("session routes off: %v\n%.300s", err, out)
 	}
 	container := at(authDoc(docs, "Deployment", "a-dev-health-auth-service"), "spec", "template", "spec", "containers", 0)
-	if envNames(container)["AUTH_SESSION_SUCCESSOR_KEY"] || envNames(container)["AUTH_JWT_SECRET_KEY"] {
-		t.Error("the session secrets render although the switch is off")
+	if envNames(container)["AUTH_SESSION_SUCCESSOR_KEY"] {
+		t.Error("the session secret renders although the switch is off")
 	}
 }
 

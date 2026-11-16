@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ClickHouse/clickhouse-go/v2"
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/testopspooled"
@@ -269,7 +269,7 @@ func TestRegistryTestopsKP5CoverageFragment(t *testing.T) {
 	legacy("9505", "legacy-unlisted") // nothing replaces it: stays
 	legacy("9506", "legacy-only-run") // a legacy-only run: stays
 	got := map[string]bool{}
-	rows, err := e.conn.Query(e.ctx, `SELECT snapshot_id FROM coverage_snapshots AS c FINAL WHERE c.org_id = {org_id:String} AND `+testopspooled.CoverageRowsNewestAttempt("c", testopspooled.Scope{}), clickhouse.Named("org_id", org))
+	rows, err := e.conn.Query(e.ctx, `SELECT snapshot_id FROM coverage_snapshots AS c FINAL WHERE c.org_id = {org_id:String} AND `+testopspooled.CoverageRowsNewestAttempt("c", testopspooled.Scope{}), driver.NamedValue{Name: "org_id", Value: org})
 	if err != nil {
 		t.Fatal(err)
 	}

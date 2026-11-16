@@ -72,8 +72,10 @@ func TestMigration0019MembershipRoleAndStatus(t *testing.T) {
 	}
 	m10Fail(t, guardedExec(ctx, env.runtime, `UPDATE auth.memberships SET status = 'active', role = NULL`), "an active membership losing its role")
 
-	if _, err := env.runtime.Exec(ctx, `DELETE FROM auth.memberships WHERE false`); err == nil {
-		t.Error("the runtime role holds DELETE on memberships")
+	// The runtime role holds DELETE on memberships for one verb (the admin force delete's erase of the user's own rows);
+	// a member who leaves still leaves by status, and a delete outside audit.Commit is refused by the commit guard.
+	if _, err := env.runtime.Exec(ctx, `DELETE FROM auth.memberships`); err == nil || !strings.Contains(err.Error(), "audit.Commit") {
+		t.Errorf("a membership delete outside audit.Commit: %v, want the commit guard refusal", err)
 	}
 
 	err := guardedExec(ctx, env.admin, `DELETE FROM auth.organizations WHERE id = '`+m19Org+`'`)

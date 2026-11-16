@@ -32,12 +32,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
-var (
-	f3Day  = time.Date(2026, 7, 22, 0, 0, 0, 0, time.UTC)
-	f3Next = f3Day.Add(24 * time.Hour)
-	f3Two  = f3Day.Add(48 * time.Hour)
-)
-
 const f3Run, f3Run2 = "43600000301", "43600000302"
 
 // f3Key is the pre-151 writer's key: hashTestIdentifier's sha256 over the "::"-joined parts.
@@ -293,6 +287,8 @@ func (e *f3Env) wantRow(label, org string, day time.Time, want map[string]float6
 }
 
 func TestF3CrossDayRerun(t *testing.T) {
+	f3Day := time.Date(2026, 7, 22, 0, 0, 0, 0, time.UTC)
+	f3Next, f3Two := f3Day.Add(24*time.Hour), f3Day.Add(48*time.Hour)
 	e := f3Start(t)
 	at := func(day time.Time, h int) time.Time { return day.Add(time.Duration(h) * time.Hour) }
 	attempt1, attempt2 := f3Attempts(t)

@@ -134,8 +134,11 @@ func TestTestopsTestAndRiskReadCaseResultsOnceAgainstRealClickHouse(t *testing.T
 	}
 	// Exact, because merges are stopped and the part layout is fixed. Each
 	// family reading on its own, with separate case-group and history
-	// queries, read 136 rows here across 8 queries.
-	const wantCaseReadRows = 64
+	// queries, read 136 rows here across 8 queries. The two queries also read
+	// test_suite_results: today's run set takes the kept suites (the suite
+	// read's newest-attempt rule, CHAOS-13926), whose inner selects add 42 of
+	// these rows; with that set back on every suite row the pass reads 64.
+	const wantCaseReadRows = 106
 	if firstPass.readRows != wantCaseReadRows {
 		t.Errorf("one partition pass read %d rows through test_case_results queries, want %d",
 			firstPass.readRows, wantCaseReadRows)

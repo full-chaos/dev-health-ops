@@ -24,14 +24,14 @@ var githubTestsOracleSuiteGoOnlyFields = map[string]string{
 	"last_synced":      githubTestsOracleSlotGoOnlyFields["last_synced"],
 	"report_slot":      githubTestsOracleSlotGoOnlyFields["report_slot"],
 	"run_attempt":      githubTestsOracleSlotGoOnlyFields["run_attempt"],
-	"legacy_suite_ids": "CHAOS-13925: the pre-slot suite keys a slotted row replaces; the Python producer has no report slot",
+	"legacy_suite_ids": "CHAOS-13925: Go-only columns, Python writer frozen: the pre-slot suite keys a slotted row replaces",
 }
 
 var githubTestsOracleCoverageGoOnlyFields = map[string]string{
 	"last_synced":         githubTestsOracleSlotGoOnlyFields["last_synced"],
 	"report_slot":         githubTestsOracleSlotGoOnlyFields["report_slot"],
 	"run_attempt":         githubTestsOracleSlotGoOnlyFields["run_attempt"],
-	"legacy_snapshot_ids": "CHAOS-13925: the pre-slot snapshot keys a slotted row replaces; the Python producer has no report slot",
+	"legacy_snapshot_ids": "CHAOS-13925: Go-only columns, Python writer frozen: the pre-slot snapshot keys a slotted row replaces",
 }
 
 // CHAOS-4190: parseJUnitRows/parseGitHubCoverageRow now scope SuiteID/

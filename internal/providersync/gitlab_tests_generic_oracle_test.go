@@ -26,19 +26,19 @@ var gitLabTestsSlotGoOnlyFields = map[string]string{
 	"run_attempt": "CHAOS-13873: GitHub-only run attempt; GitLab rows keep the 0 default",
 }
 
-// gitLabTestsSuiteGoOnlyFields and gitLabTestsCoverageGoOnlyFields add the pre-slot keys of a GitHub slotted row (CHAOS-13925).
+// gitLabTestsSuiteGoOnlyFields and gitLabTestsCoverageGoOnlyFields add the pre-slot keys a retry row lists (CHAOS-13925).
 var gitLabTestsSuiteGoOnlyFields = map[string]string{
 	"last_synced":      gitLabTestsSlotGoOnlyFields["last_synced"],
 	"report_slot":      gitLabTestsSlotGoOnlyFields["report_slot"],
 	"run_attempt":      gitLabTestsSlotGoOnlyFields["run_attempt"],
-	"legacy_suite_ids": "CHAOS-13925: GitHub-only pre-slot suite keys; GitLab rows keep the empty default",
+	"legacy_suite_ids": "CHAOS-13925: Go-only columns, Python writer frozen: the pre-slot suite key a GitLab retry row replaces",
 }
 
 var gitLabTestsCoverageGoOnlyFields = map[string]string{
 	"last_synced":         gitLabTestsSlotGoOnlyFields["last_synced"],
 	"report_slot":         gitLabTestsSlotGoOnlyFields["report_slot"],
 	"run_attempt":         gitLabTestsSlotGoOnlyFields["run_attempt"],
-	"legacy_snapshot_ids": "CHAOS-13925: GitHub-only pre-slot snapshot keys; GitLab rows keep the empty default",
+	"legacy_snapshot_ids": "CHAOS-13925: Go-only columns, Python writer frozen: the pre-slot snapshot keys a GitLab retry row replaces",
 }
 
 // CHAOS-4190: parseLCOVRow now scopes coverage SnapshotID to the artifact

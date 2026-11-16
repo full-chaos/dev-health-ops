@@ -779,6 +779,7 @@ func normalizeGitLabNativeTestReportAttempts(claim Claim, repoID, runID string, 
 		if attemptOf != nil {
 			attempt = max(attemptOf(name), 1)
 		}
+		legacySuiteID := suiteID
 		suiteID = gitLabTestsAttemptKey(suiteID, attempt)
 		suiteDuration, suiteNonFinite := parseOptionalFloat(stringValue(rawSuite.TotalTime))
 		if suiteNonFinite {
@@ -788,6 +789,10 @@ func normalizeGitLabNativeTestReportAttempts(claim Claim, repoID, runID string, 
 			ReportSlot: name, RunAttempt: attempt,
 			SuiteName: name, Framework: testsOptionalString("gitlab_ci"), TotalCount: int64(len(rawSuite.Cases)),
 			DurationSeconds: suiteDuration, StartedAt: cloneTime(started), FinishedAt: cloneTime(finished), LastSynced: at}
+		// A retry's row names the pre-slot key it replaces (CHAOS-13925); attempt 1 keeps that key, so it replaces it in place.
+		if attempt >= 2 {
+			row.LegacySuiteIDs = []string{legacySuiteID}
+		}
 		// caseOccurrence disambiguates within-suite duplicate case names,
 		// the GitLab-native twin of parseJUnitRows' identical fix
 		// (CHAOS-4392): two cases sharing a name in the same suite otherwise

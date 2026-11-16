@@ -266,9 +266,17 @@ func (handler GitLabTestsRouteHandler) Collect(
 			return CompleteRouteBatch{}, err
 		}
 		if present {
-			reportSuites, reportCases, err := normalizeGitLabNativeTestReport(claim, repoID, runID, report, started, finished, normalizedAt)
+			reportSuites, reportCases, nonFinite, err := normalizeGitLabNativeTestReport(claim, repoID, runID, report, started, finished, normalizedAt)
 			if err != nil {
 				return CompleteRouteBatch{}, err
+			}
+			if nonFinite > 0 {
+				client.Metrics.RecordNonFiniteTestTime(claim.Provider, claim.Dataset, nonFinite)
+				slog.Info(
+					"non-finite test time stored as NULL",
+					"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
+					"repository", fullName, logging.ProviderIDAttr("run", runID), "count", nonFinite,
+				)
 			}
 			if duplicates := countDuplicateTestCases(reportCases); duplicates > 0 {
 				client.Metrics.RecordDuplicateTestCase(claim.Provider, claim.Dataset, duplicates)
@@ -720,10 +728,11 @@ func fetchGitLabTestsReport(ctx context.Context, client *providerfoundation.HTTP
 	return result, len(result.Suites) > 0, nil
 }
 
-func normalizeGitLabNativeTestReport(claim Claim, repoID, runID string, report gitLabTestsReportPayload, started, finished *time.Time, at time.Time) ([]testSuiteResultRow, []testCaseResultRow, error) {
+func normalizeGitLabNativeTestReport(claim Claim, repoID, runID string, report gitLabTestsReportPayload, started, finished *time.Time, at time.Time) ([]testSuiteResultRow, []testCaseResultRow, int, error) {
 	if claim.Provider != "gitlab" || (claim.Dataset != "cicd" && claim.Dataset != "tests") || repoID == "" || runID == "" || at.IsZero() {
-		return nil, nil, ErrInvalidConfiguration
+		return nil, nil, 0, ErrInvalidConfiguration
 	}
+	nonFinite := 0
 	at = at.UTC().Truncate(time.Millisecond)
 	suites := make([]testSuiteResultRow, 0, len(report.Suites))
 	cases := make([]testCaseResultRow, 0)
@@ -747,9 +756,13 @@ func normalizeGitLabNativeTestReport(claim Claim, repoID, runID string, report g
 			suiteID = hashTestIdentifier(suiteID, strconv.Itoa(occurrence))
 		}
 		suiteOccurrence[name]++
+		suiteDuration, suiteNonFinite := parseOptionalFloat(stringValue(rawSuite.TotalTime))
+		if suiteNonFinite {
+			nonFinite++
+		}
 		row := testSuiteResultRow{OrgID: claim.OrgID, RepoID: repoID, RunID: runID, SuiteID: suiteID,
 			SuiteName: name, Framework: testsOptionalString("gitlab_ci"), TotalCount: int64(len(rawSuite.Cases)),
-			DurationSeconds: optionalGitLabTestsFloat(rawSuite.TotalTime), StartedAt: cloneTime(started), FinishedAt: cloneTime(finished), LastSynced: at}
+			DurationSeconds: suiteDuration, StartedAt: cloneTime(started), FinishedAt: cloneTime(finished), LastSynced: at}
 		// caseOccurrence disambiguates within-suite duplicate case names,
 		// the GitLab-native twin of parseJUnitRows' identical fix
 		// (CHAOS-4392): two cases sharing a name in the same suite otherwise
@@ -793,14 +806,18 @@ func normalizeGitLabNativeTestReport(claim Claim, repoID, runID string, report g
 				// hashTestIdentifier's unescaped "::" join.
 				caseID = hashTestIdentifier(caseID, strconv.Itoa(occurrence))
 			}
+			caseDuration, caseNonFinite := parseOptionalFloat(stringValue(rawCase.ExecutionTime))
+			if caseNonFinite {
+				nonFinite++
+			}
 			cases = append(cases, testCaseResultRow{OrgID: claim.OrgID, RepoID: repoID, RunID: runID, SuiteID: suiteID,
 				CaseID: caseID, CaseName: caseName, ClassName: testsOptionalString(stringValue(rawCase.ClassName)),
-				Status: status, DurationSeconds: optionalGitLabTestsFloat(rawCase.ExecutionTime), StackTrace: testsOptionalString(stack),
+				Status: status, DurationSeconds: caseDuration, StackTrace: testsOptionalString(stack),
 				IsQuarantined: status == "quarantined", LastSynced: at})
 		}
 		suites = append(suites, row)
 	}
-	return suites, cases, nil
+	return suites, cases, nonFinite, nil
 }
 
 func mapGitLabNativeCaseStatus(value string) string {
@@ -816,18 +833,6 @@ func mapGitLabNativeCaseStatus(value string) string {
 	default:
 		return "error"
 	}
-}
-
-func optionalGitLabTestsFloat(value any) *float64 {
-	text := stringValue(value)
-	if text == "" {
-		return nil
-	}
-	parsed, err := strconv.ParseFloat(text, 64)
-	if err != nil {
-		return nil
-	}
-	return &parsed
 }
 
 func gitLabTestsJobHasArtifacts(job gitLabTestsJobPayload) bool {

@@ -23,18 +23,8 @@ x-settings-encryption-key:
   token: &settings-encryption-key
     SETTINGS_ENCRYPTION_KEY: ${SETTINGS_ENCRYPTION_KEY:-local-dev-settings-encryption-key}
 
-# The access-token key. go-api signs and verifies the user's access token
-# with it (JWT_SECRET_KEY), and query-api verifies the same token with the
-# same value (GO_API_EDGE_JWT_SECRET, set from this variable on that
-# service). One local-only placeholder default, same convention as above.
-x-jwt-secret-key:
-  token: &jwt-secret-key
-    # At least 32 characters: the Go api refuses a shorter access-token key at
-    # startup (edgetoken), and both planes read this one value.
-    JWT_SECRET_KEY: ${JWT_SECRET_KEY:-local-dev-jwt-secret-key-0123456789abcdef}
-
 # The two state keys go-api signs login and install state with. Each is its own
-# key, never JWT_SECRET_KEY (config refuses equal keys), and unset means 503
+# key (config refuses equal keys), and unset means 503
 # config_missing on those routes. Local-only placeholders, 32+ characters.
 x-state-secret-keys:
   keys: &state-secret-keys
@@ -1178,11 +1168,10 @@ services:
       DEV_HEALTH_CH_API_PASSWORD: ${API_CLICKHOUSE_PASSWORD:-dho_api_ch}
       DEV_HEALTH_CH_API_DB: ${CLICKHOUSE_DB:-default}
       VALKEY_URI: redis://valkey:6379/1
-      # The access-token key, and the key that decrypts the stored provider
-      # credentials (the same value the workers read: without it the
-      # credential, SSO and PagerDuty routes cannot read a stored secret).
+      # The key that decrypts the stored provider credentials (the same value
+      # the workers read: without it the credential, SSO and PagerDuty routes
+      # cannot read a stored secret).
       <<:
-        - *jwt-secret-key
         - *state-secret-keys
         - *settings-encryption-key
       # Signs and accepts invite, verification and reset links; unset, those routes answer 503 config_missing. Local-only placeholder.
@@ -1806,14 +1795,11 @@ services:
       # CHAOS-13107: auth-service owns the sessions and mints the EdDSA access
       # token, as in production: signed with AUTH_SIGNING_KEY_FILE, iss
       # AUTH_TOKEN_ISSUER_URL (served by auth-issuer), aud dev-health-api (the
-      # audience go-api and query-api verify). The session routes need the two
-      # session keys together: go-api's JWT key (one value, the HS256 key of
-      # the compatibility token) and the session successor key (32 bytes,
-      # unpadded base64url). Both are local defaults, like every key of this
-      # file; production reads them from its secret store.
+      # audience go-api and query-api verify). The session routes need the
+      # session successor key (32 bytes, unpadded base64url): a local default,
+      # like every key of this file; production reads it from its secret store.
       AUTH_ACCESS_TOKEN_CLASS: eddsa
       AUTH_JWT_AUDIENCE: dev-health-api
-      AUTH_JWT_SECRET_KEY: ${JWT_SECRET_KEY:-local-dev-jwt-secret-key-0123456789abcdef}
       AUTH_SESSION_SUCCESSOR_KEY: ${AUTH_SESSION_SUCCESSOR_KEY:-local-dev-session-successor-key-0123456789w}
       # The session routes are rate limited, so they need the shared store.
       # Local valkey has no ACL users, so the URI carries none (the production
@@ -1984,7 +1970,7 @@ services:
 
   # The Go query plane (`dho query-api`): /graphql and the /api/v1 read
   # routes the router sends to it (contracts/ingress/v1/planes.json). A client
-  # reaches it with its own access token (GO_API_EDGE_JWT_SECRET); the signed
+  # reaches it with its own access token; the signed
   # envelope (verified against the JWKS only, the private key is never mounted
   # here) is no longer minted by any Go tool and is not the credential of a
   # client. No host port is published: reaching it from outside the
@@ -2021,9 +2007,6 @@ services:
       GO_API_ENVELOPE_JWKS_PATH: /run/envelope/public/envelope-jwks.json
       GO_API_ENVELOPE_ISSUER: ${GO_API_ENVELOPE_ISSUER:-dev-health-ops-edge}
       GO_API_ENVELOPE_AUDIENCE: ${GO_API_ENVELOPE_AUDIENCE:-query-api}
-      # /query (the end-user edge path) is not mounted without this key; the
-      # same placeholder and variable the api and go-api services read.
-      GO_API_EDGE_JWT_SECRET: ${JWT_SECRET_KEY:-local-dev-jwt-secret-key-0123456789abcdef}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
       # One switch per REST route (an in-memory flag read once at start; unset,
       # the route is not mounted and its path answers 404). The router sends

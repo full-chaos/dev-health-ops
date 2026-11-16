@@ -81,6 +81,8 @@ VALUES (gen_random_uuid(), 'projection-` + env.runtimeRole + `@example.test', NU
 		"change the username":  `UPDATE public.users SET username = 'x' WHERE id = gen_random_uuid()`,
 		"change the full_name": `UPDATE public.users SET full_name = 'x' WHERE id = gen_random_uuid()`,
 		"change the avatar":    `UPDATE public.users SET avatar_url = 'x' WHERE id = gen_random_uuid()`,
+		// The admin force delete's erase (the user erase grant, usererase_grant.go).
+		"delete": `DELETE FROM public.users WHERE id = gen_random_uuid()`,
 	} {
 		if err := env.runtimeStatement(ctx, statement); err != nil {
 			t.Errorf("%s: %v", name, err)
@@ -88,7 +90,6 @@ VALUES (gen_random_uuid(), 'projection-` + env.runtimeRole + `@example.test', NU
 	}
 	for name, statement := range map[string]string{
 		"update sso_provider_id": `UPDATE public.users SET sso_provider_id = NULL WHERE id = gen_random_uuid()`,
-		"delete":                 `DELETE FROM public.users WHERE id = gen_random_uuid()`,
 		"truncate":               `TRUNCATE public.users`,
 		"insert avatar_url":      `INSERT INTO public.users (id, email, avatar_url) VALUES (gen_random_uuid(), 'a@example.test', 'x')`,
 		"write memberships":      `UPDATE public.memberships SET user_id = user_id`,

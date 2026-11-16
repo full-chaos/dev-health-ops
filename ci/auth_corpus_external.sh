@@ -138,7 +138,6 @@ fi
     printf 'export AUTH_CORPUS_API_PORT=%s\n' "${API_PORT}"
     printf 'export AUTH_CORPUS_OPERATOR_PORT=%s\n' "${OPERATOR_PORT}"
     printf 'export AUTH_CORPUS_STUB_DIR=%q\n' "${STUB_DIR}"
-    printf 'export JWT_SECRET_KEY=%q\n' "${JWT_KEY}"
     printf 'export LINK_TOKEN_SECRET=%q\n' "${JWT_KEY}"
     printf 'export EMAIL_PROVIDER=%q\n' "smtp"
     printf 'export EMAIL_FROM_ADDRESS=%q\n' "Dev Health <auth@example.test>"
@@ -146,7 +145,6 @@ fi
       printf 'export AUTH_PROXY_URL=%q\n' "http://auth-service:8095"
     fi
     if [ "${LEG}" = "acp" ] && [ -z "${AUTH_CORPUS_OMIT_AUTH_KEYS:-}" ]; then
-      printf 'export AUTH_JWT_SECRET_KEY=%q\n' "${JWT_KEY}"
       printf 'export AUTH_SESSION_SUCCESSOR_KEY=%q\n' "${SESSION_SUCCESSOR_KEY}"
       printf 'export AUTH_LOGIN_LOCKOUT_KEY=%q\n' "${LOGIN_LOCKOUT_KEY}"
     fi

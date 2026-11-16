@@ -106,7 +106,7 @@ Run the roll step `<chaos roll step: sessions-flip roll>` with these values (cha
 - `authService.sessionKeys.successor.secretName`, with `secretKey` `AUTH_SESSION_SUCCESSOR_KEY` (32 bytes, base64url without padding): the Secret must exist first. Its create-only host script is not named yet: `<create-only script for the successor key>`; it follows the B3 rules (one key per call, create only, no value in arguments).
 - From the open leaves (B1 to B3): `authService.valkey.secretName`, `valkey.acl.enabled`, `valkey.acl.secretName`, and the `authService.keySet.keys` entries.
 
-Phase 2 turns on the sessions flag only. The access-token key is the Secret go-api already reads as `JWT_SECRET_KEY`; nothing sets it here.
+Phase 2 turns on the sessions flag only. auth-service signs the access token with its own EdDSA key; no HS256 key is involved.
 
 ### B5 Readback
 

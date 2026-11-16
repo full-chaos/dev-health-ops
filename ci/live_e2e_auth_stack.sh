@@ -5,7 +5,7 @@
 # job-local CA and a localhost certificate (the CA key is deleted at once), and starts auth-service.
 #
 #   bash ci/live_e2e_auth_stack.sh up STATE_DIR            needs migrated Postgres (superuser in PG* variables), Valkey,
-#                                                          JWT_SECRET_KEY (the value go-api runs with), DHO_BIN
+#                                                          DHO_BIN
 #   bash ci/live_e2e_auth_stack.sh with-env SIDE STATE_DIR -- CMD [ARG...]   run CMD with the environment of SIDE
 #   bash ci/live_e2e_auth_stack.sh print-env SIDE STATE_DIR                 print NAME=VALUE lines of SIDE, secret values redacted
 #   bash ci/live_e2e_auth_stack.sh assert-audit STATE_DIR                   every delegated session issue used the workload credential
@@ -79,7 +79,7 @@ dsn() {
 print_env() {
   raw_env "$1" "$2" | awk '
     { k = substr($0, 1, index($0, "=") - 1) }
-    k == "AUTH_JWT_SECRET_KEY" || k == "AUTH_SESSION_SUCCESSOR_KEY" || k == "AUTH_LOGIN_LOCKOUT_KEY" { print k "=<redacted>"; next }
+    k == "AUTH_SESSION_SUCCESSOR_KEY" || k == "AUTH_LOGIN_LOCKOUT_KEY" { print k "=<redacted>"; next }
     k ~ /(_SECRET|_STATE_KEY)$/ || k == "SETTINGS_ENCRYPTION_KEY" || k == "LICENSE_KEY" { print k "=<redacted>"; next }
     k == "AUTH_DATABASE_URI" { sub(/password=\047[^\047]*\047/, "password=\047<redacted>\047") }
     { print }'
@@ -119,7 +119,7 @@ raw_env() {
         "AUTH_WORKLOAD_ISSUER=${ISSUER}"
       ;;
     auth-service)
-      : "${JWT_SECRET_KEY:?JWT_SECRET_KEY is not set}" "${AUTH_SESSION_SUCCESSOR_KEY:?AUTH_SESSION_SUCCESSOR_KEY is not set}"
+      : "${AUTH_SESSION_SUCCESSOR_KEY:?AUTH_SESSION_SUCCESSOR_KEY is not set}"
       : "${AUTH_LOGIN_LOCKOUT_KEY:?AUTH_LOGIN_LOCKOUT_KEY is not set}" "${AUTH_RUNTIME_DATABASE_PASSWORD:?AUTH_RUNTIME_DATABASE_PASSWORD is not set}"
       : "${AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT:?AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT is not set}"
       : "${AUTH_AUTHORIZE_CALLER_SUBJECTS:?AUTH_AUTHORIZE_CALLER_SUBJECTS is not set}"
@@ -133,7 +133,6 @@ raw_env() {
         "AUTH_SIGNING_KEY_FILE=${state}/keys/private/envelope-private-key.pem" \
         "AUTH_SIGNING_KEY_ID=${KEY_ID}" \
         "AUTH_TOKEN_ISSUER_URL=${ISSUER}" \
-        "AUTH_JWT_SECRET_KEY=${JWT_SECRET_KEY}" \
         "AUTH_SESSION_SUCCESSOR_KEY=${AUTH_SESSION_SUCCESSOR_KEY}" \
         "AUTH_LOGIN_LOCKOUT_KEY=${AUTH_LOGIN_LOCKOUT_KEY}" \
         "AUTH_VALKEY_URI=${VALKEY_URI}" \
@@ -221,7 +220,6 @@ up() {
     command -v "${cmd}" >/dev/null 2>&1 || die "${cmd} is required"
   done
   : "${PGUSER:?PGUSER (the Postgres superuser) is not set}" "${PGPASSWORD:?PGPASSWORD is not set}"
-  : "${JWT_SECRET_KEY:?JWT_SECRET_KEY is not set}"
   local dho="${DHO_BIN:-/tmp/dho}"
   [ -x "${dho}" ] || die "DHO_BIN ${dho} is not executable"
   umask 077

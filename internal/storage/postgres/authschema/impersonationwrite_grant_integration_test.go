@@ -50,8 +50,13 @@ func TestPublicRowGrants(t *testing.T) {
 		if got := env.heldColumns(t, ctx, table, "INSERT"); !slices.Equal(got, wantInsert) {
 			t.Errorf("users owned %v: INSERT columns %v, want %v", owned, got, wantInsert)
 		}
-		if got := env.heldColumns(t, ctx, table, "UPDATE"); !slices.Equal(got, []string{"ended_at"}) {
-			t.Errorf("users owned %v: UPDATE columns %v, want ended_at", owned, got)
+		// Owned, the admin force delete's erase also sets the two user references to NULL (the user erase grant).
+		wantUpdate := []string{"ended_at"}
+		if owned {
+			wantUpdate = []string{"admin_user_id", "ended_at", "target_user_id"}
+		}
+		if got := env.heldColumns(t, ctx, table, "UPDATE"); !slices.Equal(got, wantUpdate) {
+			t.Errorf("users owned %v: UPDATE columns %v, want %v", owned, got, wantUpdate)
 		}
 		if got := env.heldColumns(t, ctx, table, "REFERENCES"); len(got) != 0 {
 			t.Errorf("users owned %v: REFERENCES held on %v", owned, got)

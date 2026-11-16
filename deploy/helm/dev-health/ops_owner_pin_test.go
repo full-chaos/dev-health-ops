@@ -212,7 +212,7 @@ func TestProvisionRolesMigratorLoginNeedsItsSecret(t *testing.T) {
 func TestProvisionRolesExternalSecretName(t *testing.T) {
 	t.Parallel()
 
-	external := []string{"--set", "secrets.create=false", "--set", "secrets.externalSecretName=dev-health-app", "--set", "hs256Secret.externalSecretName=hs256",
+	external := []string{"--set", "secrets.create=false", "--set", "secrets.externalSecretName=dev-health-app",
 		"--set", "migrations.hook.externalSecretName=dev-health-ops-migrate",
 		"--set", "goWorkers.pgbouncer.secret.create=false", "--set", "goWorkers.pgbouncer.secret.externalSecretName=pooler"}
 	envFromSecret := func(job map[string]any) string {

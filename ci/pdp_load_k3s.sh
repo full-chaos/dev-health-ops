@@ -101,15 +101,15 @@ write_extra() {
   } >"$1"
 }
 
-write_secrets_values() { # FILE: the chart's own Secret data (go-api is off: placeholders the render needs)
-  printf 'secrets:\n  data:\n    API_DATABASE_URI: "postgres://devhealth_api:%s@%s-postgresql:5432/devhealth?sslmode=disable"\n    JWT_SECRET_KEY: "%s"\n' "$1" "${FULL}" "$2" >"$3"
+write_secrets_values() { # PASSWORD FILE: the chart's own Secret data (go-api is off: placeholders the render needs)
+  printf 'secrets:\n  data:\n    API_DATABASE_URI: "postgres://devhealth_api:%s@%s-postgresql:5432/devhealth?sslmode=disable"\n' "$1" "${FULL}" >"$2"
 }
 
 print_plan() {
   local work rendered subject="prn_AAAAAAAAAAAAAAAAAAAAAA"
   work="$(mktemp -d)"
   SECRETS_VALUES="${work}/secrets.yaml"
-  write_secrets_values plan-placeholder plan-placeholder-plan-placeholder-plan "${SECRETS_VALUES}"
+  write_secrets_values plan-placeholder "${SECRETS_VALUES}"
   printf 'plan: namespace %s on %s, release %s, runner image %s\n' "${NS}" "${KUBECONFIG_FILE}" "${RELEASE}" "${RUNNER_IMAGE##*/}"
   printf 'plan: leg 1 INSTALL  chart phase 2, eddsa, 2 replicas, PostgreSQL, Valkey and ClickHouse (migrate step) of the chart, one admin human, the api workload\n'
   printf 'plan: leg 2 KNEE     recorded, not gated: the default route limiter (20 rps, burst 40 per route per pod) at %s rps for %s s\n' "${KNEE_RATE}" "${KNEE_SECONDS}"
@@ -223,7 +223,7 @@ DB_PASSWORD="devhealth"
 API_PASSWORD="$(openssl rand -hex 12)"
 AUTH_PASSWORD="$(openssl rand -hex 12)"
 SECRETS_VALUES="${WORK}/secrets.yaml"
-write_secrets_values "${API_PASSWORD}" "$(openssl rand -hex 24)" "${SECRETS_VALUES}"
+write_secrets_values "${API_PASSWORD}" "${SECRETS_VALUES}"
 write_extra "${WORK}/extra-first.yaml" "" keep
 helm_args "${WORK}/extra-first.yaml"
 helm install --kubeconfig "${KUBECONFIG_FILE}" "${HELM_ARGS[@]}" --no-hooks >/dev/null

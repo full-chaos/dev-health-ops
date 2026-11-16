@@ -8,11 +8,10 @@ import (
 )
 
 const (
-	repinProve       = "ci/bigboy/bigboy-graphql-prove.sh"
-	repinCompose     = "ci/bigboy/compose.bigboy.yml"
-	repinProveSHA    = "0123456789abcdef0123456789abcdef01234567"
-	repinProveOrg    = "11111111-1111-4111-8111-111111111111"
-	repinProveSecret = "fixture-not-a-secret"
+	repinProve    = "ci/bigboy/bigboy-graphql-prove.sh"
+	repinCompose  = "ci/bigboy/compose.bigboy.yml"
+	repinProveSHA = "0123456789abcdef0123456789abcdef01234567"
+	repinProveOrg = "11111111-1111-4111-8111-111111111111"
 	// repinProveToken stands in for the local admin's user access token in the operator's 0600 file.
 	repinProveToken   = "fixture-proof-token-not-a-secret"
 	repinRoutedGoEdge = " -go-edge -edge-url http://traefik:3000/graphql "
@@ -22,7 +21,7 @@ const (
 var (
 	repinProveDigest = "sha256:" + strings.Repeat("ab", 32)
 	repinProveIndex  = "sha256:" + strings.Repeat("cd", 32)
-	repinProveEnvs   = []string{"PROVE_ORG", "JWT_SECRET_KEY", "GO_API_PROVE_PROOF_BEARER", "DEV_HEALTH_ENV", "GO_API_PROOF_ROUTE_ENABLED"}
+	repinProveEnvs   = []string{"PROVE_ORG", "GO_API_PROVE_PROOF_BEARER", "DEV_HEALTH_ENV", "GO_API_PROOF_ROUTE_ENABLED"}
 )
 
 type repinCall struct {
@@ -82,11 +81,11 @@ esac
 `
 }
 
-func repinRunProve(g *guard, pin, jwt string, bashArgs ...string) repinProveRun {
+func repinRunProve(g *guard, pin string, bashArgs ...string) repinProveRun {
 	root := repinDir(g, "root")
 	repinWrite(g, filepath.Join(root, "_records", "images.env"), "BIGBOY_API_TOOLS_IMAGE="+repinGHCR+"dev-health-go-api-tools@"+pin+"\n", 0o644)
 	repinWrite(g, filepath.Join(root, ".remember/lanes/team-lead/reconciler-sweep-override.yml"), "services: {}\n", 0o644)
-	repinWrite(g, filepath.Join(root, "ops", ".env"), "JWT_SECRET_KEY="+jwt+"\n", 0o644)
+	repinWrite(g, filepath.Join(root, "ops", ".env"), "PROBE_UNRELATED=1\n", 0o644)
 	log := filepath.Join(root, "docker-calls.log")
 	repinWrite(g, log, "", 0o644)
 	token := filepath.Join(root, "proof-token")
@@ -129,7 +128,7 @@ func checkRepinProveParses(g *guard) {
 
 func checkRepinProvePosture(g *guard) {
 	for _, args := range [][]string{{repinProveSHA}, {repinProveSHA, "--go-edge"}} {
-		p := repinRunProve(g, repinProveDigest, repinProveSecret, repinProveArgs(g, args...)...)
+		p := repinRunProve(g, repinProveDigest, repinProveArgs(g, args...)...)
 		g.expect(p.code == 0, "harness %v exited %d: %s", args, p.code, p.stderr)
 		for _, c := range p.calls {
 			for i, a := range c.argv {
@@ -146,7 +145,7 @@ func checkRepinProvePosture(g *guard) {
 }
 
 func checkRepinProveRefusesSkewNoRouting(g *guard) {
-	p := repinRunProve(g, repinProveDigest, repinProveSecret, repinProveArgs(g, repinProveSHA)...)
+	p := repinRunProve(g, repinProveDigest, repinProveArgs(g, repinProveSHA)...)
 	repinProveCommand(g, p)
 	asked := false
 	for _, c := range p.calls {
@@ -154,22 +153,20 @@ func checkRepinProveRefusesSkewNoRouting(g *guard) {
 		g.expect(!c.mentions("dho goapi routing"), "harness ran a routing verb: %q", c.argv)
 	}
 	g.expect(asked, "harness never resolved go-api-tools:sha-%s to compare with the venue-prove image", repinProveSHA[:7])
-	skew := repinRunProve(g, repinDigestOf('f'), repinProveSecret, repinProveArgs(g, repinProveSHA)...)
+	skew := repinRunProve(g, repinDigestOf('f'), repinProveArgs(g, repinProveSHA)...)
 	g.expect(skew.code == 1, "a venue-prove image that is not go-api-tools:sha-<S7> exited %d, want 1", skew.code)
 	g.expect(strings.Contains(skew.stderr, "REFUSED: venue-prove image"), "prover build skew was not refused by name: %q", skew.stderr)
 	g.expect(len(skew.proves()) == 0, "harness proved with a skewed prover image")
 }
 
 func checkRepinProveCredentials(g *guard) {
-	p := repinRunProve(g, repinProveDigest, repinProveSecret, repinProveArgs(g, repinProveSHA)...)
+	p := repinRunProve(g, repinProveDigest, repinProveArgs(g, repinProveSHA)...)
 	repinProveCommand(g, p)
 	g.expect(!strings.Contains(p.repinOut(), repinProveOrg), "the local org id reached the harness stdout or stderr")
-	g.expect(!strings.Contains(p.repinOut(), repinProveSecret), "JWT_SECRET_KEY's value reached the harness stdout or stderr")
 	for _, c := range p.calls {
-		for _, bad := range []string{repinProveOrg, repinProveSecret, repinProveToken, "GO_API_PROVE_PROOF_BEARER", "GO_API_ENVELOPE_PRIVATE_KEY"} {
+		for _, bad := range []string{repinProveOrg, repinProveToken, "GO_API_PROVE_PROOF_BEARER", "GO_API_ENVELOPE_PRIVATE_KEY"} {
 			g.expect(!c.mentions(bad), "a credential is on docker argv (%q): %q", bad, c.argv)
 		}
-		g.expect(c.env["JWT_SECRET_KEY"] == "<unset>", "the harness handed docker JWT_SECRET_KEY in its env (compose substitution must read it from ops/.env)")
 		g.expect(c.env["GO_API_PROVE_PROOF_BEARER"] == "<unset>", "the harness handed docker GO_API_PROVE_PROOF_BEARER")
 	}
 	for _, c := range p.proves() {
@@ -182,15 +179,8 @@ func checkRepinProveCredentials(g *guard) {
 		g.expect(strings.Contains(c.argv[len(c.argv)-1], "-proof-access-token-file /run/proof/access-token"), "the prover is not pointed at the mounted token file: %q", c.argv[len(c.argv)-1])
 	}
 	g.expect(!strings.Contains(p.repinOut(), repinProveToken), "the proof token's value reached the harness stdout or stderr")
-	// xtrace prints every expanded word: the secret appears only if the script ever expands it into a variable or argv.
-	traced := repinRunProve(g, repinProveDigest, repinProveSecret, append([]string{"-x"}, repinProveArgs(g, repinProveSHA)...)...)
-	g.expect(!strings.Contains(traced.repinOut(), repinProveSecret), "the harness reads JWT_SECRET_KEY's value into the shell (seen in xtrace)")
-	blank := repinRunProve(g, repinProveDigest, "", repinProveArgs(g, repinProveSHA)...)
-	g.expect(blank.code == 1, "an empty JWT_SECRET_KEY in ops/.env exited %d, want 1", blank.code)
-	g.expect(strings.Contains(blank.stderr, "JWT_SECRET_KEY has no value in ops/.env"), "an empty JWT_SECRET_KEY was not refused by name: %q", blank.stderr)
-	g.expect(len(blank.proves()) == 0, "harness proved with an empty JWT_SECRET_KEY")
 	env := strs(at(g.yamlFile(repinCompose), "services", "venue-prove", "environment"))
-	for _, want := range []string{"JWT_SECRET_KEY=${JWT_SECRET_KEY:-}", "PROVE_ORG=${PROVE_ORG:-}"} {
+	for _, want := range []string{"PROVE_ORG=${PROVE_ORG:-}"} {
 		found := false
 		for _, e := range env {
 			found = found || e == want
@@ -200,7 +190,7 @@ func checkRepinProveCredentials(g *guard) {
 }
 
 func repinCheckGoEdge(g *guard, args ...string) {
-	p := repinRunProve(g, repinProveDigest, repinProveSecret, repinProveArgs(g, args...)...)
+	p := repinRunProve(g, repinProveDigest, repinProveArgs(g, args...)...)
 	g.expect(p.code == 0, "harness %v exited %d: %s", args, p.code, p.stderr)
 	cmd := repinProveCommand(g, p)
 	g.expect(strings.Contains(cmd, repinRoutedGoEdge), "harness %v did not hand the prover %q: %q", args, repinRoutedGoEdge, cmd)
@@ -214,14 +204,14 @@ func checkRepinProveGoEdgeFlag(g *guard) { repinCheckGoEdge(g, repinProveSHA, "-
 
 func checkRepinProveUnknownEdge(second string) func(*guard) {
 	return func(g *guard) {
-		p := repinRunProve(g, repinProveDigest, repinProveSecret, repinProveArgs(g, repinProveSHA, second)...)
+		p := repinRunProve(g, repinProveDigest, repinProveArgs(g, repinProveSHA, second)...)
 		g.expect(p.code == 2, "edge argument %q exited %d, want 2 (usage)", second, p.code)
 		g.expect(len(p.calls) == 0, "edge argument %q ran docker %d time(s) before refusing", second, len(p.calls))
 	}
 }
 
 func checkRepinProveOrgReadAndProver(g *guard) {
-	p := repinRunProve(g, repinProveDigest, repinProveSecret, repinProveArgs(g, repinProveSHA)...)
+	p := repinRunProve(g, repinProveDigest, repinProveArgs(g, repinProveSHA)...)
 	g.expect(p.code == 0, "harness exited %d: %s", p.code, p.stderr)
 	var execs, proves []repinCall
 	for _, c := range p.calls {
@@ -249,13 +239,13 @@ func checkRepinProveOrgReadAndProver(g *guard) {
 
 func checkRepinProveArm64NotIndex(g *guard) {
 	g.expect(repinProveDigest != repinProveIndex, "fixture: the arm64 child and the index digest must differ")
-	p := repinRunProve(g, repinProveDigest, repinProveSecret, repinProveArgs(g, repinProveSHA)...)
+	p := repinRunProve(g, repinProveDigest, repinProveArgs(g, repinProveSHA)...)
 	g.expect(p.code == 0, "a pin at the arm64 child exited %d, want 0: %s", p.code, p.stderr)
 	repinProveCommand(g, p)
 }
 
 func checkRepinProveRefusesIndexPin(g *guard) {
-	p := repinRunProve(g, repinProveIndex, repinProveSecret, repinProveArgs(g, repinProveSHA)...)
+	p := repinRunProve(g, repinProveIndex, repinProveArgs(g, repinProveSHA)...)
 	g.expect(p.code == 1, "a pin at the multi-arch index digest exited %d, want 1", p.code)
 	g.expect(len(p.proves()) == 0, "harness proved with a pin at the multi-arch index digest")
 }
@@ -297,10 +287,6 @@ func TestRepinGraphQLProveHarnessPlanted(t *testing.T) {
 			checkRepinProveCredentials, "the local org id reached the harness stdout"},
 		{"org-on-argv", c, mut(repinProve, `-org \"\$PROVE_ORG\"`, `-org $PROVE_ORG`),
 			checkRepinProveCredentials, "a credential is on docker argv"},
-		{"secret-read-into-shell", c, mut(repinProve, `U="-registry-url`, `JWT=$(grep '^JWT_SECRET_KEY=' "$R/ops/.env"); U="-registry-url`),
-			checkRepinProveCredentials, "reads JWT_SECRET_KEY's value into the shell"},
-		{"empty-secret-accepted", c, mut(repinProve, `grep -q '^JWT_SECRET_KEY=.'`, `grep -q '^JWT_SECRET_KEY='`),
-			checkRepinProveCredentials, "an empty JWT_SECRET_KEY in ops/.env exited 0"},
 		{"compose-org-not-substituted", c, mut(repinCompose, "- PROVE_ORG=${PROVE_ORG:-}", "- PROVE_ORG"),
 			checkRepinProveCredentials, `compose venue-prove environment lacks "PROVE_ORG=${PROVE_ORG:-}"`},
 		{"default-edge-refused", c, mut(repinProve, `""|--go-edge)`, `--go-edge)`), checkRepinProveDefaultEdge, "exited 2"},

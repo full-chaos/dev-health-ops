@@ -276,6 +276,7 @@ type auditQueue struct {
 	events []AuditEvent
 	outbox []OutboxEvent
 	closed bool
+	schema authschema.ValidatedIdentifier
 }
 
 // AddAudit queues audit rows of this mutation from inside Apply, for a row only
@@ -293,6 +294,23 @@ func (t TxOps) AddAudit(events ...AuditEvent) error {
 		}
 	}
 	t.queue.events = append(t.queue.events, events...)
+	return nil
+}
+
+// FlushAudit writes the audit rows AddAudit queued so far, now, in this transaction, and empties the queue. A mutation
+// that erases a principal calls it before the delete: a queued row that names the principal could not be written after
+// it (the foreign key refuses an id that is gone), and a row written before it is kept with that id set to NULL by the
+// key's ON DELETE SET NULL (auth migration 0005). A TxOps of any other transaction has no queue and refuses.
+func (t TxOps) FlushAudit(ctx context.Context) error {
+	if t.queue == nil || t.queue.closed {
+		return fmt.Errorf("%w: no audit queue on this transaction", ErrMutationFailed)
+	}
+	for _, event := range t.queue.events {
+		if err := insertAuditEvent(ctx, t.tx, t.queue.schema, event); err != nil {
+			return err
+		}
+	}
+	t.queue.events = nil
 	return nil
 }
 
@@ -545,7 +563,7 @@ func Commit(ctx context.Context, pool *pgxpool.Pool, schema authschema.Validated
 		return fmt.Errorf("%w: arming the commit guard: %w", ErrMutationFailed, err)
 	}
 
-	queue := &auditQueue{}
+	queue := &auditQueue{schema: schema}
 	if applyErr := m.Apply(ctx, TxOps{tx: tx, queue: queue}); applyErr != nil {
 		return fmt.Errorf("%w: applying the state mutation: %w", ErrMutationFailed, applyErr)
 	}

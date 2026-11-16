@@ -686,10 +686,6 @@ func (h *handlers) deleteUser(w http.ResponseWriter, r *http.Request) {
 			mode = DeleteForce
 		}
 	}
-	if h.store.UsersOwned && mode == DeleteForce {
-		writeUsersOwned(w)
-		return
-	}
 	existing, err := h.store.fullUserByID(ctx, targetID)
 	if err != nil {
 		h.logger.ErrorContext(ctx, "admin: delete user lookup failed", "error", err)
@@ -709,7 +705,7 @@ func (h *handlers) deleteUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.store.UsersOwned {
-		h.deleteUserInAuth(ctx, w, user, orgID, existing)
+		h.deleteUserInAuth(ctx, w, user, orgID, existing, mode)
 		return
 	}
 	h.superuserGuardedWrite(ctx, w, user, nil, "delete_user", func(g *superuserTx) func() {

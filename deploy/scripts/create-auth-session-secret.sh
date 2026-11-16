@@ -14,7 +14,6 @@
 # Override with NAMESPACE and SECRET_NAME if the deploy source says otherwise (--plan prints what would be used).
 #
 # Order: run this BEFORE the helm upgrade that sets authService.sessionKeys.successor.secretName: a pod whose Secret is missing does not start.
-# The key is paired with the HS256 key go-api reads (hs256Secret); this script does not touch that one.
 set -euo pipefail
 umask 077
 

@@ -18,6 +18,8 @@ type fakeUsersAdmin struct {
 	update    identity.AdminUpdateRequest
 	password  identity.AdminPasswordRequest
 	soft      identity.AdminSoftDeleteRequest
+	force     identity.AdminForceDeleteRequest
+	forced    int
 	current   identity.AdminUpdateCurrent
 	err       error
 	softDone  map[uuid.UUID]bool
@@ -85,6 +87,19 @@ func (f *fakeUsersAdmin) AdminSoftDeleteUser(ctx context.Context, req identity.A
 	done := f.softDone[req.Principal]
 	f.softDone[req.Principal] = true
 	return identity.AdminSoftDeleteResult{WasActive: !done, AlreadyDone: done}, f.err
+}
+
+func (f *fakeUsersAdmin) AdminForceDeleteUser(ctx context.Context, req identity.AdminForceDeleteRequest) (identity.AdminForceDeleteResult, error) {
+	f.calls++
+	f.forced++
+	f.force = req
+	if err := req.Authorize(ctx, audit.TxOps{}); err != nil {
+		return identity.AdminForceDeleteResult{}, err
+	}
+	if err := req.RevokeRoles(ctx, audit.TxOps{}); err != nil {
+		return identity.AdminForceDeleteResult{}, err
+	}
+	return identity.AdminForceDeleteResult{WasActive: true}, f.err
 }
 
 // fakePlatformRoles records the platform role writes; its locks do nothing.

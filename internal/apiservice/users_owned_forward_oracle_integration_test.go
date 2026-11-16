@@ -264,7 +264,7 @@ func usersOracleForm(body string) string {
 }
 
 // usersOracleCases is the length of usersOracleRun's case list: the cell compares exactly this many answers.
-const usersOracleCases = 18
+const usersOracleCases = 24
 
 type usersOracleAnswer struct {
 	name   string
@@ -311,7 +311,7 @@ func usersOracleRun(t *testing.T, s usersOracleStack) []usersOracleAnswer {
 		`{"email":"oracle-platform@example.test","password":"Oracle-user-Passw0rd!","username":"oracleplat","full_name":"Oracle Platform","is_verified":false}`))
 	send("service account create", superToken, "", http.MethodPost, users,
 		`{"email":"oracle-sa@example.test","auth_provider":"`+edgetokenmint.ServiceAuthProvider+`"}`)
-	send("org-scoped create", adminToken, s.orgA.String(), http.MethodPost, users, `{"email":"oracle-org@example.test","role":"member"}`)
+	orgUser := idOf(send("org-scoped create", adminToken, s.orgA.String(), http.MethodPost, users, `{"email":"oracle-org@example.test","role":"member"}`))
 	send("create into a suspended org", superToken, s.suspended.String(), http.MethodPost, users,
 		`{"email":"oracle-suspended@example.test","role":"viewer"}`)
 	send("verify true", superToken, "", http.MethodPatch, users+"/"+platform, `{"is_verified":true}`)
@@ -335,6 +335,14 @@ func usersOracleRun(t *testing.T, s usersOracleStack) []usersOracleAnswer {
 	send("superuser on an inactive user", superToken, "", http.MethodPatch, users+"/"+s.inactive.String(), `{"is_superuser":true}`)
 	send("soft delete", superToken, "", http.MethodDelete, users+"/"+platform, "")
 	send("repeat delete", superToken, "", http.MethodDelete, users+"/"+platform, "")
+	// The force delete (CHAOS-13380 S5): an erase of a soft-deleted user and of a live one, then the user is gone and its
+	// email registers again; an unknown id is 404.
+	send("force delete of a soft-deleted user", superToken, "", http.MethodDelete, users+"/"+platform+"?force=true", "")
+	send("force delete", superToken, "", http.MethodDelete, users+"/"+orgUser+"?force=true", "")
+	send("get after force delete", superToken, "", http.MethodGet, users+"/"+orgUser, "")
+	send("repeat force delete", superToken, "", http.MethodDelete, users+"/"+orgUser+"?force=true", "")
+	send("create again after force delete", superToken, "", http.MethodPost, users, `{"email":"oracle-org@example.test"}`)
+	send("force delete of an unknown id", superToken, "", http.MethodDelete, users+"/00000000-0000-4000-8000-00000000f0ce?force=true", "")
 	return answers
 }
 
@@ -369,7 +377,9 @@ func TestUsersOwnedForwardAnswerEqualsNotOwnedAnswer(t *testing.T) {
 		t.Fatalf("owned ran %d cases, not owned %d; want %d each", len(owned), len(legacy), usersOracleCases)
 	}
 	pinned := map[string]int{"create into a suspended org": http.StatusCreated, "superuser on an inactive user": http.StatusOK,
-		"repeat delete": http.StatusNotFound}
+		"repeat delete": http.StatusNotFound, "force delete of a soft-deleted user": http.StatusOK, "force delete": http.StatusOK,
+		"get after force delete": http.StatusNotFound, "repeat force delete": http.StatusNotFound,
+		"create again after force delete": http.StatusCreated, "force delete of an unknown id": http.StatusNotFound}
 	compared := 0
 	for i, o := range owned {
 		l := legacy[i]

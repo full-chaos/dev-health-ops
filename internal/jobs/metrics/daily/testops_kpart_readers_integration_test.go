@@ -16,11 +16,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/testopspooled"
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
@@ -66,6 +68,7 @@ type kpDoer struct {
 	artifacts []string
 	zips      map[string][]string
 	names     map[string][]string
+	lcov      bool
 }
 
 func kpArtifact(id int, name, created string) string {
@@ -87,6 +90,10 @@ func (d *kpDoer) archive(id string) []byte {
 	writer := zip.NewWriter(&archive)
 	member, _ := writer.Create("junit.xml")
 	_, _ = member.Write([]byte(body.String()))
+	if d.lcov {
+		cov, _ := writer.Create("coverage.info")
+		_, _ = cov.Write([]byte("TN:\nSF:services/api/main.go\nDA:1,1\nDA:2,0\nend_of_record\n"))
+	}
 	_ = writer.Close()
 	return archive.Bytes()
 }
@@ -341,4 +348,146 @@ func TestDailySuiteReaderRID2SuiteOnlyAttemptOneHadStaysCounted(t *testing.T) {
 	e.legacy(org, repo, "9609", ids[0], "s0", 10)
 	e.legacy(org, repo, "9609", "legacy-attempt1-only", "gone", 55)
 	e.want(org, repo, 100, 55)
+}
+
+func (e *kpEnv) legacyCoverage(org, repo, run, id string) {
+	e.t.Helper()
+	raw, err := json.Marshal(map[string]any{"org_id": org, "repo_id": repo, "run_id": run, "snapshot_id": id, "report_format": "lcov", "lines_total": 2, "lines_covered": 1,
+		"line_coverage_pct": 50.0, "last_synced": "2026-01-09T00:00:00Z"})
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	effect, err := providersync.BuildEffectBatch("coverage_snapshots", providersync.EffectReadbackRequired, []json.RawMessage{raw})
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	sink := providersync.TestOpsClickHouseEffects{Conn: e.conn, Lease: providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil })}
+	if err := sink.WriteEffect(e.ctx, kpClaim(org), effect); err != nil {
+		e.t.Fatal(err)
+	}
+}
+
+func (e *kpEnv) legacyCoverageIDs(org, run string) []string {
+	e.t.Helper()
+	var ids []string
+	if err := e.conn.QueryRow(e.ctx, `SELECT legacy_snapshot_ids FROM coverage_snapshots FINAL WHERE org_id = ? AND run_id = ? AND report_slot != ''`, org, run).Scan(&ids); err != nil {
+		e.t.Fatal(err)
+	}
+	return ids
+}
+
+var (
+	kpStart = time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)
+	kpEnd   = time.Date(2026, 1, 3, 0, 0, 0, 0, time.UTC)
+)
+
+// KP-5: the coverage readers (the risk reader returns every kept snapshot) keep the same four shapes on snapshot_id: the legacy
+// snapshot the slotted row lists drops, an unlisted legacy snapshot and a legacy-only run's snapshot stay.
+func TestDailyCoverageReaderKP5(t *testing.T) {
+	e := startKpEnv(t)
+	org := e.org()
+	repo := e.startRun(org, 9705, "2026-01-02T10:00:00Z")
+	e.startRun(org, 9706, "2026-01-02T10:30:00Z")
+	e.slotted(org, &kpDoer{t: t, runID: 9705, attempt: 1, started: "2026-01-02T10:00:00Z", lcov: true,
+		artifacts: []string{kpArtifact(96, "report", "2026-01-02T10:05:00Z")}, zips: map[string][]string{"96": {"10"}}})
+	listed := e.legacyCoverageIDs(org, "9705")
+	if len(listed) != 1 {
+		t.Fatalf("the slotted coverage row lists %v, want one", listed)
+	}
+	e.legacyCoverage(org, repo, "9705", listed[0])
+	e.legacyCoverage(org, repo, "9705", "legacy-unlisted")
+	e.legacyCoverage(org, repo, "9706", "legacy-only-run")
+	repoID := uuid.MustParse(repo)
+	rows, err := loadTestopsCoverageSnapshots(e.ctx, e.conn, org, repoID, kpStart, kpEnd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, row := range rows {
+		got[row.SnapshotID] = true
+	}
+	if got[listed[0]] || !got["legacy-unlisted"] || !got["legacy-only-run"] || len(got) != 3 {
+		t.Errorf("kept snapshots %v, want the slotted one, legacy-unlisted and legacy-only-run (not %s)", got, listed[0])
+	}
+}
+
+// C-b differential: ONE fixture, three readers keep the same suite rows: the daily statement (the fragment with the readers'
+// repository and window scope), the pooled source's organization-wide fragment, and the risk reader's rows.
+func TestDailyReadersKeepTheSameSuiteRowsAsThePooledFragment(t *testing.T) {
+	e := startKpEnv(t)
+	org := e.org()
+	repo := e.startRun(org, 9701, "2026-01-02T10:00:00Z")
+	for _, run := range []int{9702, 9703, 9708} {
+		e.startRun(org, run, "2026-01-02T10:00:00Z")
+	}
+	// run 9701: KP-1 shape.
+	e.slotted(org, &kpDoer{t: t, runID: 9701, attempt: 1, started: "2026-01-02T10:00:00Z",
+		artifacts: []string{kpArtifact(91, "report", "2026-01-02T10:05:00Z")}, zips: map[string][]string{"91": {"100"}}})
+	ids := e.legacyIDs(org, "9701")["s0"]
+	e.legacy(org, repo, "9701", ids[0], "s0", 10)
+	e.legacy(org, repo, "9701", "legacy-unlisted-s1", "s1", 30)
+	// run 9703: the shard shape.
+	e.slotted(org, &kpDoer{t: t, runID: 9703, attempt: 1, started: "2026-01-02T10:00:00Z",
+		artifacts: []string{kpArtifact(93, "shard1", "2026-01-02T10:05:00Z")}, zips: map[string][]string{"93": {"100"}}})
+	ids = e.legacyIDs(org, "9703")["s0"]
+	e.legacy(org, repo, "9703", ids[0], "s0", 100)
+	e.legacy(org, repo, "9703", "legacy-shard2", "s0", 40)
+	// run 9708: siblings of one name.
+	e.slotted(org, &kpDoer{t: t, runID: 9708, attempt: 1, started: "2026-01-02T10:00:00Z",
+		artifacts: []string{kpArtifact(98, "report", "2026-01-02T10:05:00Z")}, zips: map[string][]string{"98": {"10", "20"}}, names: map[string][]string{"98": {"dup", "dup"}}})
+	ids = e.legacyIDs(org, "9708")["dup"]
+	e.legacy(org, repo, "9708", ids[0], "dup", 11)
+	e.legacy(org, repo, "9708", ids[1], "dup", 21)
+	// run 9702: legacy only.
+	e.legacy(org, repo, "9702", "legacy-only-a", "s0", 7)
+
+	keptKeys := func(rows driver.Rows, err error) map[string]bool {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rows.Close()
+		out := map[string]bool{}
+		for rows.Next() {
+			var run, id string
+			if err := rows.Scan(&run, &id); err != nil {
+				t.Fatal(err)
+			}
+			out[run+"/"+id] = true
+		}
+		return out
+	}
+	named := []any{
+		clickhouse.Named("org_id", org), clickhouse.Named("repo_ids", []uuid.UUID{uuid.MustParse(repo)}),
+		clickhouse.Named("start", "2026-01-02 00:00:00.000"), clickhouse.Named("end", "2026-01-03 00:00:00.000"),
+	}
+	pooled := keptKeys(e.conn.Query(e.ctx, `SELECT run_id, suite_id FROM test_suite_results AS s FINAL WHERE s.org_id = {org_id:String} AND `+
+		testopspooled.SuiteRowsNewestAttempt("s", testopspooled.Scope{}), named[0]))
+	daily := keptKeys(e.conn.Query(e.ctx, `SELECT run_id, suite_id FROM test_suite_results AS s FINAL WHERE s.org_id = {org_id:String} AND s.repo_id IN {repo_ids:Array(UUID)}
+  AND coalesce(s.started_at, s.finished_at) >= {start:DateTime64(3, 'UTC')} AND coalesce(s.started_at, s.finished_at) < {end:DateTime64(3, 'UTC')} AND `+
+		testopspooled.SuiteRowsNewestAttempt("s", testopsRuleScope), named...))
+	suites, _, err := loadTestopsSuiteAndCaseRows(e.ctx, e.conn, org, uuid.MustParse(repo), kpStart, kpEnd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	risk := map[string]bool{}
+	for _, row := range suites {
+		risk[row.RunID+"/"+row.SuiteID] = true
+	}
+	// 9701: slotted s0 + legacy s1; 9703: slotted + legacy shard 2; 9708: two slotted; 9702: one legacy = 7 rows.
+	for name, set := range map[string]map[string]bool{"pooled": pooled, "daily": daily, "risk": risk} {
+		if len(set) != 7 {
+			t.Errorf("%s reader keeps %d suite rows %v, want 7", name, len(set), set)
+		}
+	}
+	for key := range pooled {
+		if !daily[key] || !risk[key] {
+			t.Errorf("row %s is kept by the pooled fragment but not by every reader (daily %v, risk %v)", key, daily[key], risk[key])
+		}
+	}
+	for key := range daily {
+		if !pooled[key] {
+			t.Errorf("row %s is kept by the daily reader but not by the pooled fragment", key)
+		}
+	}
 }

@@ -74,10 +74,8 @@ func TestCensusFlagsAPlantedSecondCopy(t *testing.T) {
 // The marker is the rule's own text. The writer that fills legacy_suite_ids names the column too, and is not a copy of the rule.
 var ruleMarkers = []string{"report_slot != ''"}
 
-var privateRuleCopies = map[string]bool{
-	"internal/jobs/metrics/daily/testops_native_clickhouse.go":      true,
-	"internal/jobs/metrics/daily/testops_risk_native_clickhouse.go": true,
-}
+// The daily readers read the fragments now: no private copy of the rule is allowed anywhere.
+var privateRuleCopies = map[string]bool{}
 
 func ruleCopies(t *testing.T, root string) map[string]bool {
 	t.Helper()

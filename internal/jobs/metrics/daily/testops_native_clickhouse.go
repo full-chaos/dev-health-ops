@@ -196,23 +196,9 @@ ORDER BY run_id`,
 // `first_suite`), so which suite lands first decides those three output
 // columns whenever a repo's suites disagree. Python leaves that to an
 // unordered query; this reader pins it.
-// testopsNewestAttemptSuites keeps, of a run's suite rows, the newest attempt of each report slot (CHAOS-13873): a re-run job's
-// report replaces the earlier attempt's in the totals. The newest attempt is taken over every suite row of the run, not the
-// window's, so a re-run whose newer attempt starts on a later day does not count its earlier attempt on the earlier day. A
-// legacy row (no slot: written before migration 151, or by GitLab) counts unless its run also has slotted rows, which replace it.
-// The case reads keep every attempt's rows: their statuses together are the flake measures.
-var testopsNewestAttemptSuites = `
-  AND (
-    (report_slot != '' AND (repo_id, run_id, report_slot, run_attempt) IN (
-      SELECT repo_id, run_id, report_slot, max(run_attempt) FROM test_suite_results FINAL
-      WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(UUID)} AND report_slot != ''
-        AND run_id IN (SELECT run_id` + testopsSuiteResultsSource + `)
-      GROUP BY repo_id, run_id, report_slot))
-    OR (report_slot = '' AND (repo_id, run_id) NOT IN (
-      SELECT repo_id, run_id FROM test_suite_results FINAL
-      WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(UUID)} AND report_slot != ''
-        AND run_id IN (SELECT run_id` + testopsSuiteResultsSource + `)))
-  )`
+// testopsRuleScope bounds the inner selects of the newest-attempt fragments (testopspooled) to the readers' repository list and
+// window; the parameters are the ones testopsSourceArgs binds.
+var testopsRuleScope = testopspooled.Scope{RepoIDsParam: "repo_ids", WindowStartParam: "start", WindowEndParam: "end"}
 
 func loadNativeTestopsSuites(
 	ctx context.Context,
@@ -225,7 +211,7 @@ func loadNativeTestopsSuites(
 	rows, err := conn.Query(ctx, `
 SELECT run_id, suite_id, total_count, passed_count, failed_count, skipped_count,
        error_count, quarantined_count, duration_seconds, started_at, finished_at,
-       team_id, service_id, org_id`+testopsSuiteResultsSource+testopsNewestAttemptSuites+`
+       team_id, service_id, org_id`+testopsSuiteResultsSource+"\n  AND "+testopspooled.SuiteRowsNewestAttempt("", testopsRuleScope)+`
 ORDER BY run_id, suite_id`,
 		testopsSourceArgs(orgID, []uuid.UUID{repoID}, start, end)...)
 	if err != nil {
@@ -494,21 +480,6 @@ SELECT count() FROM (
 // tie. No tie is reachable: (org_id, repo_id, run_id, snapshot_id) is
 // coverage_snapshots' own ORDER BY key (migration 042), so after dedup exactly
 // one row carries any given (run_id, snapshot_id).
-// testopsNewestAttemptCoverage is testopsNewestAttemptSuites for coverage_snapshots (alias c), bounded to the window's runs; its
-// arguments are (repo, org, start, end, repo, org) twice.
-const testopsNewestAttemptCoverage = `
-  AND (
-    (c.report_slot != '' AND (c.run_id, c.report_slot, c.run_attempt) IN (
-      SELECT run_id, report_slot, max(run_attempt) FROM coverage_snapshots FINAL
-      WHERE repo_id = ? AND org_id = ? AND report_slot != ''
-        AND run_id IN (SELECT run_id FROM ci_pipeline_runs FINAL WHERE started_at >= ? AND started_at < ? AND repo_id = ? AND org_id = ?)
-      GROUP BY run_id, report_slot))
-    OR (c.report_slot = '' AND c.run_id NOT IN (
-      SELECT run_id FROM coverage_snapshots FINAL
-      WHERE repo_id = ? AND org_id = ? AND report_slot != ''
-        AND run_id IN (SELECT run_id FROM ci_pipeline_runs FINAL WHERE started_at >= ? AND started_at < ? AND repo_id = ? AND org_id = ?)))
-  )`
-
 func loadNativeTestopsLatestCoverage(
 	ctx context.Context, conn testopsNativeConn, orgID string, repoID uuid.UUID, start, end time.Time,
 ) ([]testops.CoverageSnapshotRow, error) {
@@ -524,10 +495,10 @@ func loadNativeTestopsLatestCoverage(
 	// the other unknown cases). ci_pipeline_runs carries every branch's runs, so
 	// the filter does not depend on which runs the test sync fetches reports for.
 	onDefaultBranch := ""
-	args := []any{start.UTC(), end.UTC(), repoID, orgID, repoID, orgID, start.UTC(), end.UTC(), repoID, orgID, repoID, orgID, start.UTC(), end.UTC(), repoID, orgID}
+	args := testopsSourceArgs(orgID, []uuid.UUID{repoID}, start, end)
 	if defaultBranch != "" {
-		onDefaultBranch = "\n  AND (p.branch IS NULL OR p.branch = '' OR p.branch = ?)"
-		args = append(args, defaultBranch)
+		onDefaultBranch = "\n  AND (p.branch IS NULL OR p.branch = '' OR p.branch = {default_branch:String})"
+		args = append(args, clickhouse.Named("default_branch", defaultBranch))
 	}
 	rows, err := conn.Query(ctx, `
 SELECT c.run_id, c.snapshot_id, c.lines_total, c.lines_covered,
@@ -535,7 +506,9 @@ SELECT c.run_id, c.snapshot_id, c.lines_total, c.lines_covered,
 FROM coverage_snapshots AS c FINAL
 INNER JOIN ci_pipeline_runs AS p FINAL
   ON (p.repo_id = c.repo_id) AND (p.run_id = c.run_id) AND (p.org_id = c.org_id)
-WHERE p.started_at >= ? AND p.started_at < ? AND p.repo_id = ? AND p.org_id = ?`+testopsNewestAttemptCoverage+onDefaultBranch+`
+WHERE p.started_at >= {start:DateTime64(3, 'UTC')} AND p.started_at < {end:DateTime64(3, 'UTC')}
+  AND p.repo_id IN {repo_ids:Array(UUID)} AND p.org_id = {org_id:String}
+  AND `+testopspooled.CoverageRowsNewestAttempt("c", testopsRuleScope)+onDefaultBranch+`
 ORDER BY c.run_id DESC, c.snapshot_id DESC
 LIMIT 1`, args...)
 	if err != nil {

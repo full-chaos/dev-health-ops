@@ -660,7 +660,7 @@ func TestRegistryTestopsOnlyComputedRepositoryDays(t *testing.T) {
 
 // A re-run attempt's report replaces the earlier attempt's: the suite totals of a run are the newest attempt of each
 // report slot, a legacy row (no slot: written before the slot columns existed, by either provider route) counts unless its run also has slotted
-// rows. This is the daily writer's own rule (testopsNewestAttemptSuites), so the chart, the tile and the stored value agree.
+// rows. This is the daily writer's own rule (testopspooled.SuiteRowsNewestAttempt, shared with the daily reader), so the chart, the tile and the stored value agree.
 type attemptDoer struct {
 	t         *testing.T
 	runID     int

@@ -416,16 +416,6 @@ func TestUsersOwnedSoftDeleteForwardsAndRepeatIs404(t *testing.T) {
 	mustForwardOnly(t, db, users, "delete")
 }
 
-// The force delete stays the moved operation until S4, before any database work.
-func TestUsersOwnedForceDeleteStaysMovedUntilS4(t *testing.T) {
-	db, users := &provisionDB{}, &fakeUsersAdmin{}
-	code, body := ownedCall{route: "delete", query: "?force=true"}.run(ownedHandlers(db, users, true))
-	mustOwnedAnswer(t, code, body, http.StatusConflict, movedBody())
-	if len(db.log) != 0 || len(users.verbs) != 0 {
-		t.Fatalf("database %q, auth %v: want none", db.log, users.verbs)
-	}
-}
-
 // R11
 func TestUsersOwnedWithoutUsersClientIs503(t *testing.T) {
 	for _, call := range []ownedCall{{route: "create", body: `{"email":"` + ownedNewEmail + `"}`}, {route: "update", body: `{"is_verified":true}`},

@@ -129,9 +129,9 @@ func TestSAMLACSRouteAnswersTheSAMLFailureForAConfirmationWithoutData(t *testing
 
 		text := logs.String()
 		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "SAML authentication failed") ||
-			strings.Contains(text, "handler panicked") || !strings.Contains(text, `"reason_code":"`+saml.ReasonSubjectConfirmation+`"`) ||
+			strings.Contains(text, "handler panicked") || !strings.Contains(text, `"check":"`+saml.ReasonSubjectConfirmation+`"`) ||
 			len(sessions.got) != 0 || store.provisioned != 0 {
-			t.Errorf("%s: ACS = %d %s, sessions %d, provisions %d, logs %s; want 400 SAML authentication failed, reason %s, no panic",
+			t.Errorf("%s: ACS = %d %s, sessions %d, provisions %d, logs %s; want 400 SAML authentication failed, check %s, no panic",
 				method, rec.Code, rec.Body, len(sessions.got), store.provisioned, text, saml.ReasonSubjectConfirmation)
 		}
 	}

@@ -61,6 +61,17 @@ func githubTestsKeepNewestArtifactPerName(items []githubTestsArtifactPayload) (k
 	return kept, superseded
 }
 
+// githubTestsSupersededIDs maps a slot name to the ids of the artifacts githubTestsKeepNewestArtifactPerName passed over for it, in
+// listing order. The kept artifact's rows list the pre-slot keys of these too (CHAOS-13925).
+func githubTestsSupersededIDs(superseded []githubTestsArtifactPayload) map[string][]string {
+	out := make(map[string][]string, len(superseded))
+	for _, artifact := range superseded {
+		name := githubTestsArtifactSlotName(artifact)
+		out[name] = append(out[name], string(artifact.ID))
+	}
+	return out
+}
+
 // githubTestsArtifactSlotName is the artifact's name, or its id when the listing gives no name.
 func githubTestsArtifactSlotName(artifact githubTestsArtifactPayload) string {
 	if artifact.Name == "" {

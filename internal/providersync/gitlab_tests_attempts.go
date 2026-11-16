@@ -24,6 +24,9 @@ type gitLabTestsRunJobs struct {
 	rank       map[string]int64
 	nameRank   map[string]int64
 	anyRetried bool
+	// idsByName holds the listed job ids of each name, ascending; nameOf is a job id's name.
+	idsByName map[string][]string
+	nameOf    map[string]string
 }
 
 func gitLabTestsJobRetried(job gitLabTestsJobPayload) bool {
@@ -43,7 +46,7 @@ func gitLabTestsJobIDLess(left, right string) bool {
 // newGitLabTestsRunJobs ranks the jobs of a name by ascending id (ids rise with creation, so a retry ranks higher). A pipeline
 // without a retried job ranks every job 1. A list cut short can only lower a rank, never raise it.
 func newGitLabTestsRunJobs(items []json.RawMessage) (gitLabTestsRunJobs, error) {
-	result := gitLabTestsRunJobs{rank: map[string]int64{}, nameRank: map[string]int64{}}
+	result := gitLabTestsRunJobs{rank: map[string]int64{}, nameRank: map[string]int64{}, nameOf: map[string]string{}}
 	idsByName := map[string][]string{}
 	for _, raw := range items {
 		job, err := decodeGitLabTestsJob(raw)
@@ -59,6 +62,7 @@ func newGitLabTestsRunJobs(items []json.RawMessage) (gitLabTestsRunJobs, error) 
 		}
 		name := stringValue(job.Name)
 		idsByName[name] = append(idsByName[name], id)
+		result.nameOf[id] = name
 	}
 	for name, ids := range idsByName {
 		sort.Slice(ids, func(i, j int) bool { return gitLabTestsJobIDLess(ids[i], ids[j]) })
@@ -73,7 +77,24 @@ func newGitLabTestsRunJobs(items []json.RawMessage) (gitLabTestsRunJobs, error) 
 			}
 		}
 	}
+	result.idsByName = idsByName
 	return result, nil
+}
+
+// earlierJobIDs are the listed ids of the job's name that rank below it: the jobs it retried, oldest first.
+func (jobs gitLabTestsRunJobs) earlierJobIDs(jobID string) []string {
+	name, ok := jobs.nameOf[jobID]
+	if !ok {
+		return nil
+	}
+	var out []string
+	for _, id := range jobs.idsByName[name] {
+		if id == jobID {
+			return out
+		}
+		out = append(out, id)
+	}
+	return nil
 }
 
 // jobAttempt is the attempt of the report of one job id (its coverage); an unlisted job is attempt 1.
@@ -149,7 +170,8 @@ func fetchGitLabTestsReportSummary(ctx context.Context, client *providerfoundati
 
 // parseGitLabTestsJobArtifact parses one job's artifact; only its coverage is kept (the native test_report owns suites and cases).
 // The coverage slot is the job name, the attempt the retry rank of the job. Attempt 1 keeps the job id as the key scope (the
-// key rows always had); a retry (attempt >= 2) hashes the slot and attempt instead.
+// key rows always had); a retry (attempt >= 2) hashes the slot and attempt instead, and its rows list the pre-slot keys under its
+// own job id and under each job of the name it retried (CHAOS-13925): the writer before CHAOS-13875 keyed every job it read so.
 func parseGitLabTestsJobArtifact(
 	archive []byte, job gitLabTestsJobPayload, runJobs gitLabTestsRunJobs,
 	repoID, runID, orgID string, started, finished *time.Time, at time.Time,
@@ -158,10 +180,12 @@ func parseGitLabTestsJobArtifact(
 	attempt := runJobs.jobAttempt(jobID)
 	name := firstNonEmpty(stringValue(job.Name), "job")
 	scope := jobID
+	var legacyScopes []string
 	if attempt >= 2 {
 		scope = hashTestIdentifier("gitlab-report-slot", name, strconv.FormatInt(attempt, 10))
+		legacyScopes = append([]string{jobID}, runJobs.earlierJobIDs(jobID)...)
 	}
-	rows, err := parseGitHubTestsArtifact(archive, scope, repoID, runID, orgID, started, finished, at)
+	rows, err := parseGitHubTestsArchive(archive, scope, scope, legacyScopes, repoID, runID, orgID, started, finished, at)
 	for index := range rows.Coverage {
 		rows.Coverage[index].ReportSlot, rows.Coverage[index].RunAttempt = name, attempt
 	}

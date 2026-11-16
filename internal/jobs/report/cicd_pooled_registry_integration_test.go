@@ -247,6 +247,8 @@ func TestRegistryCicdRerunCountsTheNewestAttempt(t *testing.T) {
 	e := startPooledEnv(t)
 	org := e.newOrg()
 	const repo = "13885000-0000-4000-8000-0000000000c1"
+	// No background merge: every version stays its own part, so only FINAL makes one run of them.
+	e.exec("SYSTEM STOP MERGES ci_pipeline_runs")
 	e.insertCICDRuns(org, repo,
 		cicdRun{id: "r-1", status: "failure", queued: "2026-01-04 08:59:00.000", started: "2026-01-04 09:00:00.000", finished: "2026-01-04 09:10:00.000", synced: "2026-01-09 00:00:00.000"},
 		cicdRun{id: "r-1", status: "success", queued: "2026-01-04 08:59:00.000", started: "2026-01-04 11:00:00.000", finished: "2026-01-04 11:30:00.000", synced: "2026-01-10 00:00:00.000", retry: 1},
@@ -256,14 +258,19 @@ func TestRegistryCicdRerunCountsTheNewestAttempt(t *testing.T) {
 		cicdRun{id: "r-3", status: "success", queued: "2026-01-05 09:59:00.000", started: "2026-01-06 10:00:00.000", finished: "2026-01-06 10:40:00.000", synced: "2026-01-10 00:00:00.000", retry: 1},
 		cicdRun{id: "r-4", status: "success", queued: "2026-01-05 11:59:00.000", started: "2026-01-05 12:00:00.000", finished: "2026-01-05 12:10:00.000"},
 	)
-	var versions uint64
-	if err := e.conn.QueryRow(e.ctx, "SELECT count() FROM ci_pipeline_runs WHERE org_id = ? AND run_id IN ('r-1', 'r-3')", org).Scan(&versions); err != nil {
-		t.Fatal(err)
+	unmerged := func() {
+		t.Helper()
+		var versions uint64
+		if err := e.conn.QueryRow(e.ctx, "SELECT count() FROM ci_pipeline_runs WHERE org_id = ? AND run_id IN ('r-1', 'r-3')", org).Scan(&versions); err != nil {
+			t.Fatal(err)
+		}
+		if versions != 4 {
+			t.Fatalf("stored %d unmerged versions of r-1 and r-3, want 4", versions)
+		}
 	}
-	if versions != 4 {
-		t.Fatalf("stored %d unmerged versions of r-1 and r-3, want 4", versions)
-	}
+	unmerged()
 	e.computeCICD(org, []string{repo}, "2026-01-04", "2026-01-05", "2026-01-06")
+	unmerged()
 	stored := e.stored(org, repo)
 	want := map[string]map[string]float64{
 		"2026-01-04": cicdWant(minutes(30, 20), minutes(121, 1)),
@@ -279,6 +286,7 @@ func TestRegistryCicdRerunCountsTheNewestAttempt(t *testing.T) {
 		window := cicdWant(minutes(30, 20, 10, 40), minutes(121, 1, 1, 24*60+1))
 		mustEqual(t, metric+" window", pointsOf(e.cicdChart(org, metric, cicdSpec{start: "2026-01-04", end: "2026-01-06"})), "total", window[metric])
 	}
+	unmerged()
 }
 
 // A run counts on day D only when it starts and finishes on D (the writer's double window): a run across midnight counts

@@ -251,6 +251,26 @@ The raw tables have no day key, so a read scans the organization's run history. 
 code `UNAVAILABLE`, reason `testops_pooled_read_bound` and the measure, and the analytics answer is null. It is never a
 partial value or a 0.
 
+### AI report charts
+
+The AI report charts of the six TestOps duration and queue metrics read the same pooled definition, from the same shared
+source and expressions (`internal/queryapi/testopspooled`), so a report and a tile give one number for one window and
+scope. They are never a mean of the stored per-repository-day values.
+
+| Report metric | Value of a bucket | Sample |
+| --- | --- | --- |
+| `p95_duration_seconds` | 95th percentile | a run, as `PIPELINE_DURATION_P95` |
+| `median_duration_seconds` | median: linear between the two middle samples of an even count | a run, as `PIPELINE_DURATION_P95` |
+| `avg_queue_seconds` | mean of the queue samples | a run, as `PIPELINE_QUEUE_TIME` |
+| `p95_queue_seconds` | 95th percentile | a run with a queue sample, as `PIPELINE_QUEUE_TIME` |
+| `suite_duration_p95_seconds` | 95th percentile | a suite, as `TEST_SUITE_DURATION_P95` |
+| `suite_duration_p50_seconds` | median | a suite, as `TEST_SUITE_DURATION_P95` |
+
+`median_duration_seconds`, `p95_queue_seconds` and `suite_duration_p50_seconds` have no GraphQL measure: only the report
+reads them. A report team group or team filter reads the owners of each repository when the chart runs, a co-owned
+repository whole for each owner. The chart range includes its last day. A bucket with no sample has no point, never 0.
+A pooled chart read past the row bound above fails the report chart as unavailable.
+
 ## Pull request rework ratio
 
 The pull request rework ratio is, of the merged pull requests that have

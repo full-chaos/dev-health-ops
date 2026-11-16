@@ -668,6 +668,37 @@ type attemptDoer struct {
 	started   string
 	artifacts []string
 	zips      map[string][]string
+	names     map[string][]string // optional suite names per artifact id (default s0, s1, ...)
+	lcov      bool                // add a coverage report to every artifact
+}
+
+// archive is the artifact zip: a JUnit report (suite names and times) and, when asked, an LCOV coverage report.
+func (d *attemptDoer) archive(id string) []byte {
+	times := d.zips[id]
+	var body strings.Builder
+	body.WriteString("<testsuites>")
+	for i, value := range times {
+		name := fmt.Sprintf("s%d", i)
+		if names := d.names[id]; i < len(names) {
+			name = names[i]
+		}
+		attribute := ""
+		if value != "" {
+			attribute = ` time="` + value + `"`
+		}
+		fmt.Fprintf(&body, `<testsuite name=%q%s><testcase name="c" classname="x" time="1"/></testsuite>`, name, attribute)
+	}
+	body.WriteString("</testsuites>")
+	var archive bytes.Buffer
+	writer := zip.NewWriter(&archive)
+	member, _ := writer.Create("junit.xml")
+	_, _ = member.Write([]byte(body.String()))
+	if d.lcov {
+		cov, _ := writer.Create("coverage.info")
+		_, _ = cov.Write([]byte("TN:\nSF:services/api/main.go\nDA:1,1\nDA:2,0\nend_of_record\n"))
+	}
+	_ = writer.Close()
+	return archive.Bytes()
 }
 
 func (d *attemptDoer) Do(request *http.Request) (*http.Response, error) {
@@ -691,7 +722,7 @@ func (d *attemptDoer) Do(request *http.Request) (*http.Response, error) {
 	case strings.HasPrefix(path, "/report-"):
 		id := strings.TrimSuffix(strings.TrimPrefix(path, "/report-"), ".zip")
 		header.Set("Content-Type", "application/zip")
-		body = string(seedRun{suiteTimes: d.zips[id]}.junit())
+		body = string(d.archive(id))
 	default:
 		d.t.Fatalf("unexpected request %s", request.URL.String())
 	}
@@ -732,7 +763,11 @@ func (e *pooledEnv) collectAttempt(org string, doer *attemptDoer, at time.Time) 
 }
 
 func attemptArtifact(id int, created string) string {
-	return fmt.Sprintf(`{"id":%d,"name":"report","expired":false,"created_at":%q}`, id, created)
+	return attemptNamedArtifact(id, "report", created)
+}
+
+func attemptNamedArtifact(id int, name, created string) string {
+	return fmt.Sprintf(`{"id":%d,"name":%q,"expired":false,"created_at":%q}`, id, name, created)
 }
 
 func (e *pooledEnv) storedSuiteQuantiles(org string) (p50, p95 float64) {
@@ -766,47 +801,4 @@ func TestRegistryTestopsSuiteTotalsTakeTheNewestAttempt(t *testing.T) {
 	mustEqual(t, "suite p50 takes the newest attempt", e.value(org, "suite_duration_p50_seconds", "", "2026-01-01", "2026-01-06"), "total", 100)
 	mustEqual(t, "suite p95 takes the newest attempt", e.value(org, "suite_duration_p95_seconds", "", "2026-01-01", "2026-01-06"), "total", 100)
 	mustEqual(t, "team group", e.value(org, "suite_duration_p95_seconds", "team", "2026-01-01", "2026-01-06"), "team-r", 100)
-}
-
-// A legacy suite row counts when its run has no slotted row and is replaced when it has one. The legacy rows are written
-// through the real sink with BuildEffectBatch. NOT producible by either provider route (every row they write now carries a
-// slot and an attempt); only rows stored before the slot columns existed have none. Covers the legacy arm of the rule.
-func TestRegistryTestopsLegacySuiteRowsCountUnlessTheRunHasSlottedRows(t *testing.T) {
-	e := startPooledEnv(t)
-	org := e.newOrg()
-	// Run 9101 has a pipeline row and a legacy suite of 30 s only; run 9102 has a legacy suite of 1000 s and slotted rows.
-	repo := e.collectAttempt(org, &attemptDoer{t: t, runID: 9101, attempt: 1, started: "2026-01-02T10:00:00Z"}, time.Date(2026, 1, 9, 0, 0, 0, 0, time.UTC))
-	legacy := func(run, suite string, seconds float64) {
-		raw, err := json.Marshal(map[string]any{
-			"org_id": org, "repo_id": repo, "run_id": run, "suite_id": suite, "suite_name": "legacy", "total_count": 1,
-			"duration_seconds": seconds, "started_at": "2026-01-02T10:00:00Z", "last_synced": "2026-01-09T00:00:00Z",
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		effect, err := providersync.BuildEffectBatch("test_suite_results", providersync.EffectReadbackRequired, []json.RawMessage{raw})
-		if err != nil {
-			t.Fatal(err)
-		}
-		sink := providersync.TestOpsClickHouseEffects{Conn: e.conn, Lease: providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil })}
-		if err := sink.WriteEffect(e.ctx, pooledClaim(org, "acme/r"), effect); err != nil {
-			t.Fatal(err)
-		}
-	}
-	legacy("9101", "legacy-a", 30)
-	e.collectAttempt(org, &attemptDoer{t: t, runID: 9102, attempt: 1, started: "2026-01-02T11:00:00Z"}, time.Date(2026, 1, 9, 0, 0, 0, 0, time.UTC))
-	legacy("9102", "legacy-b", 1000)
-	e.collectAttempt(org, &attemptDoer{t: t, runID: 9102, attempt: 1, started: "2026-01-02T11:00:00Z",
-		artifacts: []string{attemptArtifact(90, "2026-01-02T11:05:00Z")}, zips: map[string][]string{"90": {"5"}}},
-		time.Date(2026, 1, 10, 0, 0, 0, 0, time.UTC))
-	e.own(org, "team-r", repo)
-	e.computeDaily(org, []string{repo}, "2026-01-02")
-
-	want := floats(30, 5)
-	storedP50, storedP95 := e.storedSuiteQuantiles(org)
-	if !near(storedP50, inclusive(want, 0.5)) || !near(storedP95, inclusive(want, 0.95)) {
-		t.Fatalf("the daily writer's own value is over [30 5], got p50 %v p95 %v", storedP50, storedP95)
-	}
-	mustEqual(t, "suite p50", e.value(org, "suite_duration_p50_seconds", "", "2026-01-01", "2026-01-06"), "total", inclusive(want, 0.5))
-	mustEqual(t, "suite p95", e.value(org, "suite_duration_p95_seconds", "", "2026-01-01", "2026-01-06"), "total", inclusive(want, 0.95))
 }

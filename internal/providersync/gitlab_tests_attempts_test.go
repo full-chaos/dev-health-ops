@@ -81,20 +81,20 @@ func TestGitLabNativeTestReportAttemptOneKeepsTheLegacyKeys(t *testing.T) {
 	report := gitLabTestsReportPayload{Suites: []gitLabTestsSuitePayload{{Name: "rspec", Cases: []gitLabTestsCasePayload{
 		{Name: "A", Status: "success"}, {Name: "A", Status: "failed"},
 	}}}}
-	legacySuites, legacyCases, err := normalizeGitLabNativeTestReport(claim, "repo", "9001", report, nil, nil, at)
+	legacySuites, legacyCases, _, err := normalizeGitLabNativeTestReport(claim, "repo", "9001", report, nil, nil, at)
 	if err != nil {
 		t.Fatal(err)
 	}
 	attempt := func(n int64) func(string) int64 { return func(string) int64 { return n } }
-	one, oneCases, err := normalizeGitLabNativeTestReportAttempts(claim, "repo", "9001", report, nil, nil, at, attempt(1))
+	one, oneCases, _, err := normalizeGitLabNativeTestReportAttempts(claim, "repo", "9001", report, nil, nil, at, attempt(1))
 	if err != nil {
 		t.Fatal(err)
 	}
-	two, twoCases, err := normalizeGitLabNativeTestReportAttempts(claim, "repo", "9001", report, nil, nil, at, attempt(2))
+	two, twoCases, _, err := normalizeGitLabNativeTestReportAttempts(claim, "repo", "9001", report, nil, nil, at, attempt(2))
 	if err != nil {
 		t.Fatal(err)
 	}
-	again, againCases, err := normalizeGitLabNativeTestReportAttempts(claim, "repo", "9001", report, nil, nil, at, attempt(2))
+	again, againCases, _, err := normalizeGitLabNativeTestReportAttempts(claim, "repo", "9001", report, nil, nil, at, attempt(2))
 	if err != nil {
 		t.Fatal(err)
 	}

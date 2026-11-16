@@ -41,7 +41,7 @@ Only requests of a switched-on namespace are affected. The guard asks the PDP af
 | `503` with the body `{"detail":"Authorization service temporarily unavailable"}` and the header `Retry-After: 5` | `writeEnforceRefusal`, `internal/api/policy/enforce.go:244-248`; constants at `enforce.go:25` and `:27` |
 | The WARN log `api enforcement: no verdict, the route is refused`, with attributes `namespace` and `reason` | `enforce.go:160` |
 | The WARN log `api enforcement: the allow carries an obligation go-api does not carry out, no verdict, the route is refused`, with attribute `namespace` | `enforce.go:166` |
-| `dev_health_authz_enforcement_decisions_total{namespace,service="go-api",outcome="error_deny"}` rises | `internal/api/policy/enforcecounters.go:12`; `enforce.go:159`, `:165` |
+| `dev_health_authz_enforcement_decisions_total{namespace,service="go-api",outcome="error_deny",cause}` rises | `internal/api/policy/enforcecounters.go` (cause set); `enforce.go` (`decideOnce`, `decideOrgless`, `decideAdminOr`, `enforceVerdict`) |
 
 A `503` comes from any of these, all counted `error_deny`: the PDP is unreachable, answers late, answers a malformed body, rate limits the caller, or panics inside the client call; or the allow carries an obligation go-api does not carry out (`enforce.go:164`, `obligationsCarriedOut` at `:210`). The `reason` attribute of the first WARN line is the local reason of the client, for example `pdp_unreachable`, `pdp_timeout` or `pdp_rate_limited` (the closed set is `LocalReasons` in `pep/decision.go`, module `github.com/full-chaos/dev-health-go` v0.47.0, pinned at `go.mod:17`). A call has a 2 s timeout (`enforce.go:24`, `:102`).
 
@@ -61,7 +61,7 @@ The gauge is set once at start. It is 0 when go-api can ask, so a PDP outage doe
 ## Confirm
 
 1. Read `dev_health_authz_enforcement_enabled{namespace,service="go-api"}` (`internal/authzenforce/authzenforce.go:128`, `:140-151`). A series at 1 is a switched-on namespace; the `503` can only come from those.
-2. Read `dev_health_authz_enforcement_decisions_total{outcome="error_deny"}` by `namespace`. A rising share against `allow` and `deny` is the outage signal. The counter is lazy: no series means no event yet.
+2. Read `dev_health_authz_enforcement_decisions_total{outcome="error_deny"}` by `namespace` and `cause`. The cause tells the refusing path apart; `unconfigured` has no log line, so the counter is its only trace. A rising share against `allow` and `deny` is the outage signal. The counter is lazy: no series means no event yet.
 3. Read the go-api WARN lines above for the `reason`. `pdp_unreachable`, `pdp_timeout` or `pdp_unavailable` point at auth-service or the network; `pdp_rate_limited` points at the auth-service limits.
 4. Check auth-service: `/readyz` is 200 (`docs/reference/auth/readiness-and-slo.md:26`). The PDP route is `POST /v1/authorize` (`internal/auth/authapi/authorize.go:28`).
 5. Two auth-service limits can cause `pdp_rate_limited`: the per-pod server limit, default 20 requests per second (`defaultRateLimitPerSecond`, `internal/auth/authconfig/config.go:175`, read at `:484`), and the per-caller limit (`PDPCallerLimit`, `internal/auth/authapi/authorize_limit.go:23`; the zero value sets none).

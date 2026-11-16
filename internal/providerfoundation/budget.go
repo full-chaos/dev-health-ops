@@ -284,6 +284,7 @@ type Metrics struct {
 	cicdPartialSuccess             map[string]uint64
 	duplicateTestCase              map[string]uint64
 	duplicateTestSuite             map[string]uint64
+	nonFiniteTestTime              map[string]uint64
 	duplicateNaturalKey            map[string]uint64
 	// syncRunRollupBumped intentionally does NOT live here -- see
 	// syncRunRollupBumpedMetrics's doc comment (codex round 1, P1,
@@ -346,6 +347,7 @@ func NewMetrics() *Metrics {
 		cicdPartialSuccess:             map[string]uint64{},
 		duplicateTestCase:              map[string]uint64{},
 		duplicateTestSuite:             map[string]uint64{},
+		nonFiniteTestTime:              map[string]uint64{},
 		duplicateNaturalKey:            map[string]uint64{},
 		jiraSearchPages:                map[string]uint64{},
 		chunkContinuation:              map[string]uint64{},
@@ -732,6 +734,18 @@ func (m *Metrics) RecordDuplicateTestSuite(provider, dataset string, count int) 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.duplicateTestSuite[metricProvider(provider)+":"+MetricDatasetLabel(dataset)] += uint64(count)
+}
+
+// RecordNonFiniteTestTime counts cicd/tests suite or case times (NaN, an infinity, or a value past float64 range) the
+// route stored as NULL instead of failing the unit (CHAOS-13888). Counted for GitHub (JUnit time) and GitLab (native
+// test_report). repo is deliberately NOT a label, like RecordDuplicateTestCase; the caller's log line names it.
+func (m *Metrics) RecordNonFiniteTestTime(provider, dataset string, count int) {
+	if m == nil || count <= 0 {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.nonFiniteTestTime[metricProvider(provider)+":"+MetricDatasetLabel(dataset)] += uint64(count)
 }
 
 // metricDuplicateNaturalKeyTableVocabulary is the closed set of cicd/tests
@@ -1820,6 +1834,13 @@ func (m *Metrics) WritePrometheus(writer io.Writer) error {
 		writer, "dev_health_cicd_duplicate_test_suite_total",
 		"Sibling suite-object natural-key collisions disambiguated with an ordinal suffix instead of failing the unit, by bounded provider and dataset. Not labeled by repo -- see RecordDuplicateTestSuite's doc comment; find the repo in the structured log line the caller emits alongside this counter.",
 		m.duplicateTestSuite,
+	); err != nil {
+		return err
+	}
+	if err := writeProviderDatasetCounter(
+		writer, "dev_health_cicd_nonfinite_test_time_total",
+		"Suite or case times (NaN, infinity, or past float64 range) stored as NULL instead of failing the unit, by bounded provider and dataset. Not labeled by repo -- find the repo in the structured log line the caller emits alongside this counter.",
+		m.nonFiniteTestTime,
 	); err != nil {
 		return err
 	}

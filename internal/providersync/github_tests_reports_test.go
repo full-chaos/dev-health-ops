@@ -214,7 +214,7 @@ func TestGitHubTestsArtifactEnforcesReportCountCap(t *testing.T) {
 }
 
 func TestGitHubTestsJUnitParserRejectsDTDAndTruncatesStack(t *testing.T) {
-	_, _, err := parseJUnitRows(
+	_, _, _, err := parseJUnitRows(
 		[]byte(`<!DOCTYPE testsuite><testsuite name="x"><testcase name="x"/></testsuite>`),
 		"artifact-1", "repo", "run", "org", nil, nil, time.Now(), map[string]int{},
 	)
@@ -223,7 +223,7 @@ func TestGitHubTestsJUnitParserRejectsDTDAndTruncatesStack(t *testing.T) {
 	}
 	large := strings.Repeat("x", 5000)
 	body := []byte(`<testsuite name="x"><testcase name="x"><failure>` + large + `</failure></testcase></testsuite>`)
-	_, cases, err := parseJUnitRows(body, "artifact-1", "repo", "run", "org", nil, nil, time.Now(), map[string]int{})
+	_, cases, _, err := parseJUnitRows(body, "artifact-1", "repo", "run", "org", nil, nil, time.Now(), map[string]int{})
 	if err != nil {
 		t.Fatal(err)
 	}

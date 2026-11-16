@@ -471,7 +471,7 @@ func TestGitLabNativeTestReportWithinSuiteDuplicateCaseNamesGetDistinctIDs(t *te
 		t.Helper()
 		claim := nativeTestClaim("gitlab", "cicd")
 		report := gitLabTestsReportPayload{Suites: []gitLabTestsSuitePayload{{Name: "matrix", Cases: payload}}}
-		_, cases, err := normalizeGitLabNativeTestReport(
+		_, cases, _, err := normalizeGitLabNativeTestReport(
 			claim, "c7198fbc-1945-3717-05d8-eb78866b4e79", "9001", report, nil, nil,
 			time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC),
 		)
@@ -533,7 +533,7 @@ func TestGitLabNativeTestReportSameReportSiblingSuitesSameNameCollide(t *testing
 		{Name: "pytest", Cases: []gitLabTestsCasePayload{{Name: "test_health", ClassName: "tests.test_api", Status: "success"}}},
 		{Name: "pytest", Cases: []gitLabTestsCasePayload{{Name: "test_health", ClassName: "tests.test_worker", Status: "success"}}},
 	}}
-	suites, cases, err := normalizeGitLabNativeTestReport(
+	suites, cases, _, err := normalizeGitLabNativeTestReport(
 		claim, "c7198fbc-1945-3717-05d8-eb78866b4e79", "9001", report, nil, nil,
 		time.Date(2026, 8, 29, 11, 0, 0, 0, time.UTC),
 	)

@@ -571,6 +571,14 @@ func (handler GitHubTestsRouteHandler) Collect(
 					"repository", repo.FullName, logging.ProviderIDAttr("run", pipeline.RunID), "count", rows.DuplicateCases,
 				)
 			}
+			client.Metrics.RecordNonFiniteTestTime(claim.Provider, claim.Dataset, rows.NonFiniteTimes)
+			if rows.NonFiniteTimes > 0 {
+				slog.Info(
+					"non-finite test time stored as NULL",
+					"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
+					"repository", repo.FullName, logging.ProviderIDAttr("run", pipeline.RunID), "count", rows.NonFiniteTimes,
+				)
+			}
 			client.Metrics.RecordDuplicateTestSuite(claim.Provider, claim.Dataset, rows.DuplicateSuites)
 			if rows.DuplicateSuites > 0 {
 				slog.Info(

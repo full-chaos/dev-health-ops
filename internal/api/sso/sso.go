@@ -135,7 +135,14 @@ func Routes(deps Deps) []httpapi.Route {
 		oidcAuthorize = http.HandlerFunc(h.initiateOIDCAuth)
 		oidcCallbackHandler = http.HandlerFunc(h.oidcCallback)
 	}
-	// SAML has no local sign-in: with sign-in configured and no forward, the routes check the body, then refuse.
+	// The three SAML routes have no local sign-in in go-api: auth-service
+	// serves them, and Inner forwards them while AUTH_PROXY_SAML is on (the
+	// forward replaces the handler below). With sign-in configured
+	// (StateSecret and Issuer) and no forward, each route still checks its
+	// body (422) and then answers 503 config_missing naming AUTH_PROXY_SAML;
+	// it reads no provider row. Without StateSecret the routes keep the same
+	// process-tier-only shim as before, and with sessions off they answer
+	// refuseSessionsOff, as the OIDC routes do.
 	samlMetadataHandler := h.orStateMissing(h.gated(noInput))
 	samlInitiate := h.orStateMissing(h.gated(body(samlAuthRequest)))
 	samlACS := h.orStateMissing(h.gated(body(samlCallbackRequest)))

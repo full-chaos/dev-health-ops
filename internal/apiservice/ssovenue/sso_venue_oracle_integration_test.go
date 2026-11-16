@@ -291,7 +291,7 @@ func TestSSORoutesVenueOracle(t *testing.T) {
 const signInRuling = "license shim unreachable with a session issuer; prod served the real handlers before and after (CHAOS-13155)"
 
 // signInPinSHA256 is the digest of testdata/signin.go-pin.json.
-const signInPinSHA256 = "ddd414d42158a028f75e60a1a05dcd0dffd3c215820b556eb6c765710ffb013f"
+const signInPinSHA256 = "6c0bc795732974995b2e8d5804e0d52a1064a76635f14f53873c4958aca6cea7"
 
 // signInRetired are the sign-in steps signInRuling retired. Each real handler checks the org's enterprise
 // entitlement first (requireEntitlement, internal/api/sso/gate.go); the seeded organizations are enterprise.

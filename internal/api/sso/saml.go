@@ -196,7 +196,7 @@ func validateSAMLACSOverridePath(cfg samlConfigValues, providerID string) error 
 		return nil
 	}
 	parsed, err := url.Parse(cfg.SPACSURL)
-	route := "/api/v1/auth/saml/" + providerID + "/acs"
+	route := samlACSRoute(providerID)
 	if err != nil || parsed.Path != route || parsed.EscapedPath() != route {
 		return fmt.Errorf("SAML sp_acs_url must be /api/v1/auth/saml/%s/acs of this provider", providerID)
 	}
@@ -250,8 +250,13 @@ func spACSURLOf(cfg samlConfigValues, providerID, baseURL string) string {
 	if cfg.SPACSURL != "" {
 		return cfg.SPACSURL
 	}
-	return baseURL + "/saml/" + providerID + "/acs"
+	return baseURL + samlACSRoute(providerID)
 }
+
+// samlACSRoute is the served ACS route of a provider, /api/v1/auth/saml/<provider id>/acs: the default ACS URL is
+// APP_BASE_URL and this route (the legacy <base>/saml/<id>/acs was answered by no service), an sp_acs_url override must
+// name it, and the login-nonce cookie is bound to it. auth-service's saml.ACSRoutePath is the same (a parity cell).
+func samlACSRoute(providerID string) string { return "/api/v1/auth/saml/" + providerID + "/acs" }
 
 // samlSPMetadataXML is generate_saml_sp_metadata's f-string, verbatim
 // (indentation included -- this is a real response field, metadata_xml,
@@ -437,7 +442,7 @@ func (h handlers) initiateSAMLAuth(w http.ResponseWriter, r *http.Request) {
 		// and its Path is scoped to this provider's own real ACS route,
 		// not "/" -- two concurrent SAML flows in the same browser no
 		// longer collide on a single fixed cookie name.
-		acsPath := "/api/v1/auth/saml/" + row.ID + "/acs"
+		acsPath := samlACSRoute(row.ID)
 		issueLoginNonceCookie(w, "saml", flowID, loginNonce, acsPath, samlStateTTL)
 		params.Set("RelayState", token)
 	}
@@ -586,7 +591,7 @@ func (h handlers) processSAMLResponse(ctx context.Context, w http.ResponseWriter
 		// value than the RelayState sealed is refused here, before
 		// ParseXMLResponse ever runs -- unauthenticated (D2738): the caller
 		// has proven nothing about the browser binding.
-		acsPath := "/api/v1/auth/saml/" + row.ID + "/acs"
+		acsPath := samlACSRoute(row.ID)
 		if !verifyAndClearLoginNonceCookie(w, r, "saml", state.ID, acsPath, state.NonceHash) {
 			return samlClaims{}, ssoAuthErr("SAML RelayState mismatch")
 		}

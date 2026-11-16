@@ -368,8 +368,15 @@ func TestClickHouseQueryAdapterChartsEveryRegistryMetric(t *testing.T) {
 		return seeded[definition.SourceTable+"."+name]
 	}
 
+	// The six pooled TestOps metrics chart the raw runs, not the stored daily value this test seeds: the cells of
+	// testops_pooled_registry_integration_test.go seed their raw rows through the provider route.
+	pooledSkipped := 0
 	for _, shape := range []struct{ chartType, groupBy string }{{"scorecard", ""}, {"line", "day"}, {"line", "week"}, {"line", "month"}, {"line", ""}} {
 		for _, name := range names {
+			if _, pooled := pooledCharts[name]; pooled {
+				pooledSkipped++
+				continue
+			}
 			loader := reportLoaderFunc(func(context.Context, QueryInput) (ReportDefinition, error) {
 				return ReportDefinition{
 					Plan: Plan{PlanID: "plan-1", ReportType: "weekly_health", OrganizationID: org},
@@ -397,6 +404,9 @@ func TestClickHouseQueryAdapterChartsEveryRegistryMetric(t *testing.T) {
 				t.Errorf("%s as %s chart: y = %v, want %v", name, shape.chartType, got, expected)
 			}
 		}
+	}
+	if pooledSkipped != len(pooledCharts)*5 {
+		t.Errorf("skipped %d pooled charts, want every pooled metric in every chart shape (%d)", pooledSkipped, len(pooledCharts)*5)
 	}
 	compared := 0
 	// Differential: work_item_metrics_daily was read with FINAL before the

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/chclient"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/testopspooled"
 )
 
 // The TestOps P95 durations and the queue time are pooled over the raw samples, never taken from the stored
@@ -28,57 +29,21 @@ import (
 // (quantileExactInclusive).
 
 const (
-	pooledPipelineRunsAlias = "testops_pipeline_runs"
-	pooledSuiteRunsAlias    = "testops_suite_runs"
+	pooledPipelineRunsAlias = testopspooled.PipelineRunsAlias
+	pooledSuiteRunsAlias    = testopspooled.SuiteRunsAlias
 
-	pooledDurationSample = "duration_sample"
-	pooledQueueSample    = "queue_sample"
+	pooledDurationSample = testopspooled.DurationSample
+	pooledQueueSample    = testopspooled.QueueSample
 )
 
-// pooledCountedRunPredicate leaves out a run whose stored status is deleted (the provider no longer has it), as the
-// daily writer does. The text is the writer's own predicate (testops.StatusDeleted); query-api does not import the
-// writer's package, so a test pins the two to each other.
-const pooledCountedRunPredicate = "lowerUTF8(trimBoth(ifNull(status, ''))) != 'deleted'"
-
-// The pooled sources. Neither carries a team column: a TestOps team is the owner of the repository at the request.
-const pooledPipelineRunsSource = `(
-    SELECT
-        org_id,
-        repo_id,
-        toDate(started_at) AS day,
-        if(duration_seconds >= 0, duration_seconds,
-            if(finished_at >= started_at, dateDiff('millisecond', started_at, finished_at) / 1000, NULL)) AS duration_sample,
-        if(queue_seconds >= 0, queue_seconds,
-            if(started_at >= queued_at, dateDiff('millisecond', queued_at, started_at) / 1000, NULL)) AS queue_sample
-    FROM ci_pipeline_runs FINAL
-    WHERE org_id = {org_id:String}
-      AND toDate(started_at) >= {start_date:Date} AND toDate(started_at) < {end_date:Date}
-      AND ` + pooledCountedRunPredicate + `
-      AND (repo_id, toDate(started_at)) IN (
-          SELECT repo_id, day FROM testops_pipeline_metrics_daily
-          WHERE org_id = {org_id:String} AND day >= {start_date:Date} AND day < {end_date:Date})
-) AS testops_pipeline_runs`
-
-const pooledSuiteRunsSource = `(
-    SELECT
-        org_id,
-        repo_id,
-        toDate(coalesce(started_at, finished_at)) AS day,
-        if(duration_seconds >= 0, duration_seconds, NULL) AS duration_sample
-    FROM test_suite_results FINAL
-    WHERE org_id = {org_id:String}
-      AND toDate(coalesce(started_at, finished_at)) >= {start_date:Date} AND toDate(coalesce(started_at, finished_at)) < {end_date:Date}
-      AND (repo_id, toDate(coalesce(started_at, finished_at))) IN (
-          SELECT repo_id, day FROM testops_test_metrics_daily
-          WHERE org_id = {org_id:String} AND day >= {start_date:Date} AND day < {end_date:Date})
-) AS testops_suite_runs`
-
-// pooledP95 is the 95th percentile of a group's duration samples, NULL for a group with none.
-const pooledP95 = "if(count(" + pooledDurationSample + ") = 0, NULL, quantileExactInclusive(0.95)(" + pooledDurationSample + "))"
-
-// pooledQueueMean is the mean of the queue samples of a group (exactSums takes it as the exact sum over the non-NULL
-// count), NULL for a group with none.
-const pooledQueueMean = "AVG(" + pooledQueueSample + ")"
+// The pooled expressions and sources are the shared package's (testopspooled): the AI report reads the same text.
+const (
+	pooledCountedRunPredicate = testopspooled.CountedRunPredicate
+	pooledPipelineRunsSource  = testopspooled.PipelineRunsSource
+	pooledSuiteRunsSource     = testopspooled.SuiteRunsSource
+	pooledP95                 = testopspooled.P95
+	pooledQueueMean           = testopspooled.QueueMean
+)
 
 // pooledSource returns the source of a pooled measure; ok is false for every other measure.
 func pooledSource(measure Measure) (source, alias string, ok bool) {
@@ -108,7 +73,7 @@ func orgPooledTerms(measure Measure) (value, samples string, ok bool) {
 // 5,000,000 is 14 times the whole production ci_pipeline_runs table and 30 times test_suite_results when it was set
 // (350,232 and 162,930 rows over every organization). Past it the read is refused, never served in part. A variable so a
 // test can lower it.
-var TestopsPooledMaxRowsToRead uint64 = 5_000_000
+var TestopsPooledMaxRowsToRead uint64 = testopspooled.MaxRowsToRead
 
 // pooledReadBoundReason is the reason a refused pooled read carries to the client.
 const pooledReadBoundReason = "testops_pooled_read_bound"

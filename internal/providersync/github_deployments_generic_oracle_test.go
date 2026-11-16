@@ -38,7 +38,7 @@ func buildDeploymentRowForOracle(t *testing.T, input map[string]any) deploymentR
 	if err := decoder.Decode(&releases); err != nil {
 		t.Fatal(err)
 	}
-	row, ok := normalizeGitHubDeployment(nativeTestClaim("github", "deployments"), input["repo_id"].(string), deployment, releases, oracleDeploymentsNormalizedAt)
+	row, ok, _ := normalizeGitHubDeployment(nativeTestClaim("github", "deployments"), input["repo_id"].(string), deployment, releases, oracleDeploymentsNormalizedAt)
 	if !ok {
 		t.Fatal("oracle deployment did not produce a row")
 	}

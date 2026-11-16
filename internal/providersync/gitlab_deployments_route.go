@@ -156,8 +156,9 @@ func (handler GitLabDeploymentsRouteHandler) Collect(
 	}
 
 	rows := make([]deploymentRow, 0, len(deployments))
+	nonFiniteConfidence := 0
 	for _, deployment := range deployments {
-		row, include, normalizeErr := normalizeGitLabDeployment(
+		row, include, nonFinite, normalizeErr := normalizeGitLabDeployment(
 			claim, repoID, deployment, releases, normalizedAt,
 		)
 		if normalizeErr != nil {
@@ -180,7 +181,11 @@ func (handler GitLabDeploymentsRouteHandler) Collect(
 		)
 		row.PullRequestLookupFailed = mergeRequestLookupFailed[row.DeploymentID]
 		rows = append(rows, row)
+		if nonFinite {
+			nonFiniteConfidence++
+		}
 	}
+	recordNonFiniteReleaseRefConfidence(client, claim, fullName, nonFiniteConfidence)
 	return gitLabDeploymentsBatch(
 		claim, fullName, parsedProjectID, normalizedAt, rows, requests, pages,
 	)
@@ -275,20 +280,20 @@ func normalizeGitLabDeployment(
 	payload map[string]any,
 	releases []map[string]any,
 	normalizedAt time.Time,
-) (deploymentRow, bool, error) {
+) (deploymentRow, bool, bool, error) {
 	createdAt := parseGitLabDeploymentTime(payload["created_at"])
 	if createdAt == nil {
-		return deploymentRow{}, false, nil
+		return deploymentRow{}, false, false, nil
 	}
 	deploymentID := stringValue(payload["id"])
 	if deploymentID == "" {
-		return deploymentRow{}, false, providerfoundation.ErrNormalizationInvalid
+		return deploymentRow{}, false, false, providerfoundation.ErrNormalizationInvalid
 	}
 	var environment any
 	if rawEnvironment, ok := payload["environment"].(map[string]any); ok {
 		environment = rawEnvironment["name"]
 	}
-	releaseRef, confidence := gitLabDeploymentReleaseRef(payload, deploymentID, releases)
+	releaseRef, confidence, nonFinite := gitLabDeploymentReleaseRef(payload, deploymentID, releases)
 	startedAt, finishedAt := gitLabDeploymentLifecycle(deploymentID, payload)
 	row := deploymentRow{
 		RepoID:               repoID,
@@ -304,9 +309,9 @@ func normalizeGitLabDeployment(
 		LastSynced:           normalizedAt,
 	}
 	if err := row.validate(claim); err != nil {
-		return deploymentRow{}, false, err
+		return deploymentRow{}, false, false, err
 	}
-	return row, true, nil
+	return row, true, nonFinite, nil
 }
 
 // gitLabDeploymentLifecycle reads started_at/finished_at from the
@@ -350,9 +355,10 @@ func gitLabDeploymentReleaseRef(
 	payload map[string]any,
 	deploymentID string,
 	releases []map[string]any,
-) (string, float64) {
+) (string, float64, bool) {
 	if explicit := gitLabDeploymentExplicitReleaseRef(payload); explicit != "" {
-		return explicit, gitLabDeploymentExplicitConfidence(payload)
+		confidence, nonFinite := gitLabDeploymentExplicitConfidence(payload)
+		return explicit, confidence, nonFinite
 	}
 	candidates := map[string]struct{}{}
 	for _, key := range []string{"ref", "tag", "tag_name"} {
@@ -363,16 +369,16 @@ func gitLabDeploymentReleaseRef(
 	for _, release := range releases {
 		if tag := strings.TrimSpace(stringValue(release["tag_name"])); tag != "" {
 			if _, ok := candidates[tag]; ok {
-				return tag, 1
+				return tag, 1, false
 			}
 		}
 	}
 	for _, candidate := range []any{payload["iid"], deploymentID, payload["id"]} {
 		if value := strings.TrimSpace(stringValue(candidate)); value != "" {
-			return value, 0.3
+			return value, 0.3, false
 		}
 	}
-	return "", 0.3
+	return "", 0.3, false
 }
 
 func gitLabDeploymentExplicitReleaseRef(payload map[string]any) string {
@@ -390,7 +396,7 @@ func gitLabDeploymentExplicitReleaseRef(payload map[string]any) string {
 	return ""
 }
 
-func gitLabDeploymentExplicitConfidence(payload map[string]any) float64 {
+func gitLabDeploymentExplicitConfidence(payload map[string]any) (float64, bool) {
 	value, ok := payload["release_ref_confidence"]
 	if !ok {
 		if nested, nestedOK := payload["payload"].(map[string]any); nestedOK {
@@ -398,19 +404,9 @@ func gitLabDeploymentExplicitConfidence(payload map[string]any) float64 {
 		}
 	}
 	if !ok {
-		return 1
+		return 1, false
 	}
-	confidence, err := strconv.ParseFloat(strings.TrimSpace(stringValue(value)), 64)
-	if err != nil {
-		return 1
-	}
-	if confidence < 0 {
-		return 0
-	}
-	if confidence > 1 {
-		return 1
-	}
-	return confidence
+	return parseReleaseRefConfidence(strings.TrimSpace(stringValue(value)))
 }
 
 func resolveGitLabDeploymentMergeRequest(

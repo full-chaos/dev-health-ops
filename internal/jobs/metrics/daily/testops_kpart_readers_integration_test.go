@@ -16,7 +16,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
 
@@ -458,8 +457,8 @@ func TestDailyReadersKeepTheSameSuiteRowsAsThePooledFragment(t *testing.T) {
 		return out
 	}
 	named := []any{
-		clickhouse.Named("org_id", org), clickhouse.Named("repo_ids", []uuid.UUID{uuid.MustParse(repo)}),
-		clickhouse.Named("start", "2026-01-02 00:00:00.000"), clickhouse.Named("end", "2026-01-03 00:00:00.000"),
+		driver.NamedValue{Name: "org_id", Value: org}, driver.NamedValue{Name: "repo_ids", Value: []uuid.UUID{uuid.MustParse(repo)}},
+		driver.NamedValue{Name: "start", Value: "2026-01-02 00:00:00.000"}, driver.NamedValue{Name: "end", Value: "2026-01-03 00:00:00.000"},
 	}
 	pooled := keptKeys(e.conn.Query(e.ctx, `SELECT run_id, suite_id FROM test_suite_results AS s FINAL WHERE s.org_id = {org_id:String} AND `+
 		testopspooled.SuiteRowsNewestAttempt("s", testopspooled.Scope{}), named[0]))

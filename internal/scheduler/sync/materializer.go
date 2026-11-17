@@ -828,6 +828,7 @@ WHERE config.id = $1::uuid AND config.org_id = $2 AND integration.is_active`, oc
 		return loadedMaterializationPlan{}, err
 	}
 	failureStreaks := loadFailureStreaks(ctx, domainPool, orgID, integrationID, provider, datasets)
+	testOpsBudgetBlocked := loadTestOpsBudgetBlocked(ctx, domainPool, orgID, integrationID, provider, datasets)
 	tierCap, totalUnitCap, err := loadPlanLimits(ctx, tx, orgID, defaultUnitCap)
 	if err != nil {
 		return loadedMaterializationPlan{}, err
@@ -853,6 +854,7 @@ WHERE config.id = $1::uuid AND config.org_id = $2 AND integration.is_active`, oc
 			IntegrationDepthDays: depth, TierBackfillDaysCap: tierCap,
 			WatermarkOverlap: watermarkOverlap, Sources: sources, Datasets: datasets, Watermarks: watermarks,
 			FailureStreaks:        failureStreaks,
+			TestOpsBudgetBlocked:  testOpsBudgetBlocked,
 			PlannerManagedParent:  scheduledParent,
 			LastWorkItemSuccessAt: lastWorkItemSuccessAt,
 			WorkItemClockAt:       workItemClockAt,
@@ -2038,6 +2040,83 @@ func loadFailureStreaks(
 		}
 	}
 	return streaks
+}
+
+// loadTestOpsBudgetBlocked reads, per source, how many of the newest GitHub
+// tests/cicd units stopped at the run inventory page budget (CHAOS-13827). It runs
+// only for a GitHub plan that has a tests or cicd dataset. Like
+// loadFailureStreaks it is never fatal: when the read fails, times out or is
+// skipped, the plan proceeds with no narrowing and one bounded WARN is logged.
+// It runs in its own read transaction from reader, bounded the same way, and
+// that transaction is always rolled back.
+func loadTestOpsBudgetBlocked(
+	ctx context.Context, reader failureStreakReader, orgID, integrationID, provider string, datasets []PlanDataset,
+) map[string]int {
+	if provider != "github" || !slices.ContainsFunc(datasets, func(dataset PlanDataset) bool {
+		return slices.Contains(testOpsFamilyDatasets, dataset.Key)
+	}) {
+		return nil
+	}
+	started := time.Now()
+	unavailable := func(failure string, cause error) map[string]int {
+		fields := []any{
+			slog.String("provider", provider), slog.String("org_id", orgID),
+			slog.String("integration_id", integrationID), slog.String("failure", failure),
+			slog.Int64("duration_ms", time.Since(started).Milliseconds()),
+		}
+		var pgErr *pgconn.PgError
+		if errors.As(cause, &pgErr) && len(pgErr.Code) == 5 {
+			fields = append(fields, slog.String("sqlstate", pgErr.Code))
+		}
+		slog.Default().Warn("sync.materializer.testops_budget_blocked_unavailable", fields...)
+		return nil
+	}
+	bound, _, ok := failureStreakReadBound(ctx)
+	if !ok {
+		return unavailable("skipped_low_budget", nil)
+	}
+	readCtx, cancel := context.WithTimeout(ctx, bound+failureStreakClientMargin)
+	defer cancel()
+	tx, err := reader.Begin(readCtx)
+	if err != nil {
+		return unavailable("read_begin_failed", err)
+	}
+	defer func() {
+		rollbackCtx, cancelRollback := context.WithTimeout(context.WithoutCancel(ctx), failureStreakRollbackTimeout)
+		defer cancelRollback()
+		_ = tx.Rollback(rollbackCtx)
+	}()
+	if _, err := tx.Exec(readCtx, "SELECT set_config('statement_timeout', $1, true)",
+		strconv.FormatInt(bound.Milliseconds(), 10)); err != nil {
+		return unavailable("timeout_set_failed", err)
+	}
+	rows, err := tx.Query(readCtx, providersync.TestOpsBudgetBlockedUnitsSQL,
+		orgID, integrationID, canonicalTestOpsDataset, providersync.TestOpsNarrowingLookback)
+	if err != nil {
+		return unavailable("query_failed", err)
+	}
+	bySource := make(map[string][]bool)
+	for rows.Next() {
+		var sourceID string
+		var blocked bool
+		var at time.Time
+		if scanErr := rows.Scan(&sourceID, &blocked, &at); scanErr != nil {
+			rows.Close()
+			return unavailable("row_scan_failed", scanErr)
+		}
+		bySource[sourceID] = append(bySource[sourceID], blocked)
+	}
+	rows.Close()
+	if iterErr := rows.Err(); iterErr != nil {
+		return unavailable("row_iteration_failed", iterErr)
+	}
+	counts := make(map[string]int)
+	for sourceID, blocked := range bySource {
+		if count := providersync.TestOpsBudgetBlockedCount(blocked); count > 0 {
+			counts[sourceID] = count
+		}
+	}
+	return counts
 }
 
 // DatasetFullQuery reports whether an integration_datasets row makes its work-items family one unbounded

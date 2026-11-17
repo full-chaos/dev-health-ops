@@ -13,14 +13,10 @@ import (
 // under go test -run. Every entry needs a one-line reason.
 var nameClashAllowList = map[string]string{}
 
-// splitOverSeconds: a package weighing more than this runs as split-by-test parts (README of ci/go_integration_shards.d:
-// N is ceil(weight / 540)), so the planner may cut its names across shards.
-const splitOverSeconds = 540
-
 // TestNoTopLevelIntegrationTestNameIsSharedByTwoPackages fails on a top-level test name that two integration packages
 // share when the planner can turn the share into a collision, whatever today's packing. The rule, from the planner:
-//   - a package may be cut across shards at test level if its manifest has a split-by-test row, or its weight is over
-//     540 s (the weight at which the manifest must give it one);
+//   - a package may be cut across shards at test level only if its manifest has a split-by-test row (a weight alone
+//     never splits a package: the planner places it whole);
 //   - the isolated and name-sharded packages (splitPackages) run alone in their go test, so they share no -run;
 //   - every other package may share a go test group (one -run regex over several packages) with any other;
 //   - the name is a collision when one package selects it (integration-only name, or any name of a package with a
@@ -29,9 +25,8 @@ const splitOverSeconds = 540
 func TestNoTopLevelIntegrationTestNameIsSharedByTwoPackages(t *testing.T) {
 	t.Parallel()
 	facts := integrationTaggedFacts(t)
-	_, weights := manifestRows(t)
 	splitRows := manifestSplitKeys(t, rootOf(t))
-	canSplit := func(k string) bool { return splitRows[k] || weights[k] > splitOverSeconds }
+	canSplit := func(k string) bool { return splitRows[k] }
 	selected := map[string]map[string]bool{}
 	declared := map[string]map[string]bool{}
 	for k, tagged := range facts.tagged {

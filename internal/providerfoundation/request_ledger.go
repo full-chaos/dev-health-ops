@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"sort"
 	"sync"
+	"sync/atomic"
 )
 
 // LedgerUnclassified is the route family of traffic no route labelled, as in
@@ -111,15 +112,52 @@ func (c *HTTPClient) ledgerKey(ctx context.Context, path string) LedgerKey {
 // The first attempt and every retry each count: each draws on the provider's
 // budget. A redirect the client then follows is counted by recordRedirectHop.
 func (c *HTTPClient) recordWireRequest(ctx context.Context, path string) {
+	wireCountFrom(ctx).add()
 	if ledger := c.ledgerFor(ctx); ledger != nil {
 		ledger.Record(c.ledgerKey(ctx, path))
 	}
+}
+
+type wireCountKey struct{}
+
+// WireCount counts the wire requests sent with a context from WithWireCount:
+// every attempt, every retry and every followed redirect hop. Safe for
+// concurrent use; a nil WireCount counts nothing.
+type WireCount struct{ requests atomic.Int64 }
+
+// WithWireCount returns ctx with a new WireCount the client adds to.
+func WithWireCount(ctx context.Context) (context.Context, *WireCount) {
+	count := &WireCount{}
+	return context.WithValue(ctx, wireCountKey{}, count), count
+}
+
+// Requests is the number of wire requests counted so far.
+func (w *WireCount) Requests() int {
+	if w == nil {
+		return 0
+	}
+	return int(w.requests.Load())
+}
+
+func (w *WireCount) add() {
+	if w != nil {
+		w.requests.Add(1)
+	}
+}
+
+func wireCountFrom(ctx context.Context) *WireCount {
+	if ctx == nil {
+		return nil
+	}
+	count, _ := ctx.Value(wireCountKey{}).(*WireCount)
+	return count
 }
 
 type hopRecorderKey struct{}
 
 type hopRecorder struct {
 	ledger *RequestLedger
+	count  *WireCount
 	key    LedgerKey
 	mu     sync.Mutex
 	seen   map[*http.Request]struct{}
@@ -128,11 +166,11 @@ type hopRecorder struct {
 // newHopRecorder is the recorder of one call: the ledger and the account its
 // redirect hops are counted under (nil when the client has no ledger).
 func (c *HTTPClient) newHopRecorder(ctx context.Context, path string) *hopRecorder {
-	ledger := c.ledgerFor(ctx)
-	if ledger == nil {
+	ledger, count := c.ledgerFor(ctx), wireCountFrom(ctx)
+	if ledger == nil && count == nil {
 		return nil
 	}
-	return &hopRecorder{ledger: ledger, key: c.ledgerKey(ctx, path), seen: map[*http.Request]struct{}{}}
+	return &hopRecorder{ledger: ledger, count: count, key: c.ledgerKey(ctx, path), seen: map[*http.Request]struct{}{}}
 }
 
 // record counts one followed redirect hop as a wire request, once: the request
@@ -147,6 +185,7 @@ func (r *hopRecorder) record(request *http.Request) {
 	r.mu.Unlock()
 	if !counted {
 		r.ledger.Record(r.key)
+		r.count.add()
 	}
 }
 

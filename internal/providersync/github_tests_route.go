@@ -961,6 +961,8 @@ func downloadGitHubTestsListedArtifact(
 	ctx context.Context, client *providerfoundation.HTTPClient, root, artifactID string,
 	maxBytes, listedSize int64,
 ) (archive []byte, used int, notFound bool, err error) {
+	ctx, wire := providerfoundation.WithWireCount(ctx)
+	defer func() { used = wire.Requests() }()
 	path := root + "/actions/artifacts/" + url.PathEscape(artifactID) + "/zip"
 	var fetch githubTestsArtifactFetch = func(ctx context.Context) (*http.Response, error) {
 		return client.DoRoute(ctx, http.MethodGet, githubArtifactZipRoute, path, nil)
@@ -968,18 +970,16 @@ func downloadGitHubTestsListedArtifact(
 	var refresh func(context.Context) (githubTestsArtifactFetch, error)
 	response, err := fetch(ctx)
 	if err != nil {
-		var providerErr *providerfoundation.ProviderError
-		if errors.As(err, &providerErr) && (providerErr.StatusCode == http.StatusNotFound || providerErr.StatusCode == http.StatusGone) {
-			return nil, 1, true, nil
+		if githubTestsGoneError(err) {
+			return nil, 0, true, nil
 		}
-		return nil, 1, false, err
+		return nil, 0, false, err
 	}
-	requests := 1
 	if response.StatusCode >= 300 && response.StatusCode < 400 {
 		location := response.Header.Get("Location")
 		response.Body.Close()
 		if location == "" {
-			return nil, requests, false, providerfoundation.ResponseFailure(response, "redirect", fmt.Errorf(
+			return nil, 0, false, providerfoundation.ResponseFailure(response, "redirect", fmt.Errorf(
 				"%w: redirect status=%d carried no Location header",
 				ErrGitHubTestsArtifactUnavailable, response.StatusCode,
 			))
@@ -990,17 +990,16 @@ func downloadGitHubTestsListedArtifact(
 			return githubTestsArtifactRelocate(ctx, client, api)
 		}
 		response, err = fetch(ctx)
-		requests++
 		if err != nil {
-			return nil, requests, false, err
+			return nil, 0, false, err
 		}
 	}
 	defer response.Body.Close()
 	if response.StatusCode == http.StatusNotFound || response.StatusCode == http.StatusGone {
-		return nil, requests, true, nil
+		return nil, 0, true, nil
 	}
 	if response.StatusCode >= 400 {
-		return nil, requests, false, githubTestsArtifactStatusFailure(response)
+		return nil, 0, false, githubTestsArtifactStatusFailure(response)
 	}
 	var body []byte
 	var over int64
@@ -1011,7 +1010,7 @@ func downloadGitHubTestsListedArtifact(
 		body, over, readErr = providerfoundation.ReadResponseBodyWithin(response, maxBytes, logging.TransportFailure)
 	}
 	if readErr != nil {
-		return nil, requests, false, providerfoundation.ResponseFailure(response, providerfoundation.ReasonBodyRead, fmt.Errorf(
+		return nil, 0, false, providerfoundation.ResponseFailure(response, providerfoundation.ReasonBodyRead, fmt.Errorf(
 			"%w: artifact download read failed: %w", ErrGitHubTestsIncomplete, errors.Unwrap(readErr),
 		))
 	}
@@ -1026,21 +1025,35 @@ func downloadGitHubTestsListedArtifact(
 			SizeBytes: over, CapBytes: maxBytes,
 		})
 		if !strings.EqualFold(strings.TrimSpace(response.Header.Get("Accept-Ranges")), "bytes") {
-			return nil, requests, false, oversized
+			logGitHubTestsRangeOutcome(artifactID, over, maxBytes, "range_not_advertised", wire)
+			return nil, 0, false, oversized
 		}
 		response.Body.Close()
 		size := int64(-1)
 		if response.ContentLength > maxBytes {
 			size = response.ContentLength
 		}
-		archive, rangeRequests, gone, rangeErr := readGitHubTestsArtifactReports(ctx, fetch, refresh, size, maxBytes)
-		requests += rangeRequests
-		if errors.Is(rangeErr, errGitHubTestsRangeUnusable) {
-			return nil, requests, false, oversized
+		archive, gone, rangeErr := readGitHubTestsArtifactReports(ctx, fetch, refresh, size, maxBytes)
+		var unusable *githubTestsRangeUnusableError
+		if errors.As(rangeErr, &unusable) {
+			logGitHubTestsRangeOutcome(artifactID, over, maxBytes, unusable.reason, wire)
+			return nil, 0, false, oversized
 		}
-		return archive, requests, gone, rangeErr
+		if rangeErr == nil && !gone {
+			logGitHubTestsRangeOutcome(artifactID, over, maxBytes, "range_read", wire)
+		}
+		return archive, 0, gone, rangeErr
 	}
-	return body, requests, false, nil
+	return body, 0, false, nil
+}
+
+// logGitHubTestsRangeOutcome records what became of one over-cap artifact:
+// read by range, or kept as artifact_oversized and why.
+func logGitHubTestsRangeOutcome(artifactID string, size, capBytes int64, outcome string, wire *providerfoundation.WireCount) {
+	slog.Info(
+		"github tests over-cap artifact",
+		"artifact", artifactID, "outcome", outcome, "size_bytes", size, "cap_bytes", capBytes, "requests", wire.Requests(),
+	)
 }
 
 var _ CompleteRouteHandler = GitHubTestsRouteHandler{}

@@ -12,14 +12,33 @@ var serviceAccountKeyVenueRows = []string{
 	"POST /api/v1/admin/service-accounts/keys/{credential_id}/revoke",
 }
 
+// serviceAccountLifecycleVenueRows are the service account lifecycle shadow rows (admin.users, mounted WrapPlatform):
+// plain rows in org A that write nothing. Each names a missing organization or service account, which auth-service
+// answers 404 with no write (TestProvisioningServiceAccountsThroughConfigure counts the rows).
+var serviceAccountLifecycleVenueRows = []string{
+	"POST /api/v1/admin/service-accounts",
+	"POST /api/v1/admin/service-accounts/{service_account_id}/disable",
+	"POST /api/v1/admin/service-accounts/{service_account_id}/enable",
+	"POST /api/v1/admin/service-accounts/{service_account_id}/owner",
+}
+
 func TestTheServiceAccountKeyRowsAreVenueRows(t *testing.T) {
+	assertServiceAccountVenueRows(t, serviceAccountKeyVenueRows)
+}
+
+func TestTheServiceAccountLifecycleRowsAreVenueRows(t *testing.T) {
+	assertServiceAccountVenueRows(t, serviceAccountLifecycleVenueRows)
+}
+
+func assertServiceAccountVenueRows(t *testing.T, keys []string) {
+	t.Helper()
 	byKey := map[string]Row{}
 	for _, row := range mustRows(t, string(DefaultRows)) {
 		if !row.Control() {
 			byKey[row.Key()] = row
 		}
 	}
-	for _, key := range serviceAccountKeyVenueRows {
+	for _, key := range keys {
 		row, ok := byKey[key]
 		if !ok {
 			t.Errorf("%s is not in the row table", key)

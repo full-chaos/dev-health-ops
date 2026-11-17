@@ -1027,6 +1027,60 @@ SELECT EXISTS (
 	return exists, nil
 }
 
+// FreshCoverageState is what FreshCoverage found for one organization and one exact scope.
+type FreshCoverageState int
+
+const (
+	// FreshCoverageNone: no run covers the occurrence and none is in flight.
+	FreshCoverageNone FreshCoverageState = iota
+	// FreshCoverageCovered: a same-scope run succeeded with rows, created at or after the cutoff.
+	FreshCoverageCovered
+	// FreshCoverageInFlight: a same-scope run is pending or running (not a dead handoff), created at or after inFlightSince.
+	FreshCoverageInFlight
+)
+
+// FreshCoverage decides whether a fixed-schedule occurrence of an exact-scope family (capacity,
+// recommendations) is already covered by a run of the SAME scope, whatever its day label.
+//
+// A succeeded run covers the occurrence only when it was created at or after cutoff, the instant the
+// occurrence's own run would read up to: a run created earlier read an older window and its answer would
+// read as fresh (CHAOS-9587). A succeeded partition that wrote 0 rows never covers (a withheld run).
+// A pending or running run created at or after inFlightSince is in flight; a pending run whose handoff is
+// dead under deadHandoffReasonSQL will never be claimed and is not in flight. Covered wins over in flight.
+func (store *PostgresStore) FreshCoverage(
+	ctx context.Context, tx pgx.Tx, organizationID, family string, scope json.RawMessage, cutoff, inFlightSince time.Time,
+) (FreshCoverageState, error) {
+	if !store.valid() || tx == nil || !validUUID(organizationID) || family == "" {
+		return FreshCoverageNone, ErrUnavailable
+	}
+	if exact, _ := remainingCoverageScopeFilter(family, scope); !exact {
+		return FreshCoverageNone, ErrInvalidState
+	}
+	var covered, inFlight bool
+	err := tx.QueryRow(ctx, `
+SELECT
+    coalesce(bool_or(run.status = 'succeeded' AND partition.status = 'succeeded'
+        AND run.created_at >= $4
+        AND NOT coalesce(partition.output_evidence LIKE '%:rows_written=0', false)), false),
+    coalesce(bool_or(run.status IN ('pending', 'running')
+        AND run.created_at >= $5
+        AND NOT (run.status = 'pending' AND `+deadHandoffReasonSQL+` <> 'deliverable')), false)
+FROM public.remaining_metric_partitions AS partition
+JOIN public.remaining_metric_runs AS run ON run.id = partition.run_id
+WHERE run.org_id = $1::uuid AND run.family = $2 AND partition.scope = $3::jsonb`,
+		organizationID, family, scope, cutoff.UTC(), inFlightSince.UTC()).Scan(&covered, &inFlight)
+	if err != nil {
+		return FreshCoverageNone, store.wrapUnavailable(ctx, "query fresh coverage", err, "family", family)
+	}
+	switch {
+	case covered:
+		return FreshCoverageCovered, nil
+	case inFlight:
+		return FreshCoverageInFlight, nil
+	}
+	return FreshCoverageNone, nil
+}
+
 // loadRunCoveringDay finds the run (any generation) that already carries a
 // succeeded partition for this exact organization/family/day, if any. Used
 // by StartRunTx's cross-trigger dora lock (see there) -- callers other than

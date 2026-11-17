@@ -14,11 +14,15 @@
 // The four headers carry exactly the fields the effective-principal
 // envelope's consumers read (authctx.Claims): org, role, superuser flag,
 // impersonation flag. Strings pass through unchanged, as the envelope's do.
+// A fifth, optional header names the principal behind the caller's own
+// credential (CHAOS-13945), for the decision point to judge.
 package internalidentity
 
 import (
+	"encoding/base64"
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 )
@@ -30,16 +34,24 @@ const (
 	HeaderRole                = "X-DH-Internal-Role"
 	HeaderSuperuser           = "X-DH-Internal-Superuser"
 	HeaderImpersonationActive = "X-DH-Internal-Impersonation-Active"
+	// HeaderPrincipalID is optional: the principal's wire id (prn_ and 22
+	// base64url characters), at most once.
+	HeaderPrincipalID = "X-DH-Internal-Principal-Id"
 )
 
-// Headers lists every internal identity header name.
+// Headers lists the four internal identity header names every carrier sends exactly once.
 var Headers = []string{HeaderOrgID, HeaderRole, HeaderSuperuser, HeaderImpersonationActive}
+
+// AllHeaders is Headers and the optional principal header: every name the public listener deletes and any one of
+// which makes a carrier present.
+var AllHeaders = []string{HeaderOrgID, HeaderRole, HeaderSuperuser, HeaderImpersonationActive, HeaderPrincipalID}
 
 // Rejection reasons. They name the class of failure, never a value.
 const (
 	ReasonMissing   = "missing_header"
 	ReasonDuplicate = "duplicate_header"
 	ReasonBoolean   = "not_a_boolean"
+	ReasonPrincipal = "not_a_principal"
 )
 
 // Rejection is the error FromHeader returns for a request that carries at
@@ -56,7 +68,7 @@ func (r *Rejection) Error() string {
 // Present reports whether the request carries ANY internal identity header.
 // A partial set is present: it is refused, never read as "no identity".
 func Present(h http.Header) bool {
-	for _, name := range Headers {
+	for _, name := range AllHeaders {
 		if len(h.Values(name)) > 0 {
 			return true
 		}
@@ -67,7 +79,8 @@ func Present(h http.Header) bool {
 // FromHeader reads the identity. All four headers must be present exactly
 // once; the two flags must be exactly "true" or "false". A missing header
 // is never defaulted: a partial set could otherwise mean "no role, not a
-// superuser" by accident, and the fail-closed reading is a refusal.
+// superuser" by accident, and the fail-closed reading is a refusal. The
+// principal header is optional; present, it is exactly one canonical wire id.
 func FromHeader(h http.Header) (authctx.Claims, error) {
 	var claims authctx.Claims
 	values := make(map[string]string, len(Headers))
@@ -90,11 +103,44 @@ func FromHeader(h http.Header) (authctx.Claims, error) {
 	if err != nil {
 		return claims, err
 	}
+	principal, err := principalFrom(h)
+	if err != nil {
+		return claims, err
+	}
 	claims.OrgID = values[HeaderOrgID]
 	claims.Role = values[HeaderRole]
 	claims.IsSuperuser = superuser
 	claims.ImpersonationActive = impersonating
+	claims.HeaderPrincipal = principal
 	return claims, nil
+}
+
+// principalFrom is the optional principal header: "" when absent, else its one
+// value, which must be a canonical principal wire id.
+func principalFrom(h http.Header) (string, error) {
+	got := h.Values(HeaderPrincipalID)
+	switch len(got) {
+	case 0:
+		return "", nil
+	case 1:
+	default:
+		return "", &Rejection{Reason: ReasonDuplicate, Header: HeaderPrincipalID}
+	}
+	encoded, ok := strings.CutPrefix(got[0], "prn_")
+	raw, err := base64.RawURLEncoding.Strict().DecodeString(encoded)
+	if !ok || err != nil || len(raw) != 16 || isZero(raw) || "prn_"+base64.RawURLEncoding.EncodeToString(raw) != got[0] {
+		return "", &Rejection{Reason: ReasonPrincipal, Header: HeaderPrincipalID}
+	}
+	return got[0], nil
+}
+
+func isZero(raw []byte) bool {
+	for _, b := range raw {
+		if b != 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func parseFlag(value, header string) (bool, error) {

@@ -22,6 +22,9 @@ func graphQLEnforce() graph.OperationEnforce {
 			asked[i] = pdp.Root{Key: root.Key, Action: root.Action, LegacyRefuses: root.LegacyRefuses}
 		}
 		caller := graphQLCaller(ctx)
+		if caller.Class == pdp.CallerHeaders {
+			caller.Principal = claims.HeaderPrincipal
+		}
 		caller.Unscoped = claims.Scope.Kind() == pepgate.KindNone
 		caller.LegacyImpersonation = claims.ImpersonationActive && !claims.Delegated
 		scopes, err := pdp.FromContext(ctx).AuthorizeOperation(ctx, caller, claims.OrgID, asked)
@@ -38,7 +41,7 @@ func graphQLEnforce() graph.OperationEnforce {
 
 // graphQLCaller is the class of the operation's caller, from the bearer its ingress authenticated (the subject #5781
 // carries): a user access token is decided; no bearer is the X-DH-Internal-* header carrier (D6721), which has its own
-// cells. No other bearer authenticates (the HS256 token and the envelope are retired classes), so any other subject is
+// cells and is decided for the principal it names. No other bearer authenticates (the HS256 token and the envelope are retired classes), so any other subject is
 // CallerUnknown and refused while a cell of its roots is on.
 func graphQLCaller(ctx context.Context) pdp.Caller {
 	subject, _ := graph.ShadowSubjectFrom(ctx)

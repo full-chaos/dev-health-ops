@@ -25,8 +25,9 @@ const (
 	CallerUser
 	// CallerExempt is a credential class on the exempt list (ExemptClasses): it never asks.
 	CallerExempt
-	// CallerHeaders is the X-DH-Internal-* header carrier (the MCP listener, /query on the internal listener). It
-	// has no principal the PDP can judge, so a root whose headers cell is on is refused.
+	// CallerHeaders is the X-DH-Internal-* header carrier (the MCP listener, /query on the internal listener). A root
+	// whose headers cell is on is decided for the principal the carrier names (Principal), and refused when it names
+	// none.
 	CallerHeaders
 )
 
@@ -35,6 +36,9 @@ type Caller struct {
 	Class CallerClass
 	// Bearer is the user access token of a CallerUser.
 	Bearer string
+	// Principal is the principal a CallerHeaders names (a prn_ wire id): the PDP judges it as a named principal
+	// reference. "" names none.
+	Principal string
 	// ExemptClass is the ExemptClasses entry of a CallerExempt.
 	ExemptClass string
 	// Unscoped is true when the ingress set no scope on the request (pepgate KindNone): every ingress sets one, so an
@@ -147,7 +151,7 @@ func (g *Gate) AuthorizeOperation(ctx context.Context, caller Caller, orgID stri
 	case g.mode == modeInvalid:
 		g.count(ctx, modeInvalid, ResultNotConfigured, label)
 		return nil, &DenyError{Reason: ReasonNoDecisionPoint, Local: true}
-	case caller.Class != CallerUser || caller.Bearer == "":
+	case caller.reference() == "":
 		g.count(ctx, ModeEnforce, ResultUnavailable, label)
 		return nil, &DenyError{Reason: ReasonNoPrincipal, Local: true}
 	case g.decider == nil:
@@ -165,7 +169,7 @@ func (g *Gate) AuthorizeOperation(ctx context.Context, caller Caller, orgID stri
 	for _, root := range enforced {
 		decision, asked := decisions[root.Action]
 		if !asked {
-			decision = g.decider.Decide(ctx, g.request(root.Action, caller.Bearer, orgID))
+			decision = g.decider.Decide(ctx, g.request(root.Action, caller.reference(), orgID))
 			decisions[root.Action] = decision
 			switch {
 			case decision.Allowed():
@@ -211,6 +215,18 @@ func (g *Gate) AuthorizeOperation(ctx context.Context, caller Caller, orgID stri
 		}
 	}
 	return scopes, nil
+}
+
+// reference is what the PDP judges for caller: a user's access token, or the principal the header carrier names; ""
+// for any other caller.
+func (c Caller) reference() string {
+	switch c.Class {
+	case CallerUser:
+		return c.Bearer
+	case CallerHeaders:
+		return c.Principal
+	}
+	return ""
 }
 
 // legacyRefusalRoots is the closed registry of the legacy-refusal path (CHAOS-13334): per catalog action, the root keys

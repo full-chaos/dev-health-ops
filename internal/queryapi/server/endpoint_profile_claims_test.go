@@ -213,7 +213,7 @@ var rowClaims = map[string]map[string]rowClaim{
 			{file: "endpoint_profile_live_test.go", decl: "driveMCP", needles: []string{"\"a valid identity again after a refused one\""}},
 		}},
 		"resource_resolver": {value: "organization_from_credential: the organization of the internal identity headers (mcpAuthenticate); a bearer token is refused", proofs: []claimProof{
-			{file: "mcp_route.go", decl: "mcpAuthenticate", needles: []string{"return legacyClaims(claims.OrgID), 0, \"\"", "http.StatusUnauthorized, mcpReasonAuthorization"}, anyOf: []string{}},
+			{file: "mcp_route.go", decl: "mcpAuthenticate", needles: []string{"accepted := legacyClaims(claims.OrgID)", "return accepted, 0, \"\"", "http.StatusUnauthorized, mcpReasonAuthorization"}, anyOf: []string{}},
 		}},
 		"disclosure_behavior": {value: "401 for a missing or invalid identity; 403 for an identity carrying superuser, impersonation or an operator role; 403 for a root field outside the allowlist or an orgId argument that does not name the caller's organization; 404 for a root field not enabled for the MCP caller class", proofs: []claimProof{
 			{file: "mcp_route.go", decl: "mcpAuthenticate", needles: []string{"http.StatusUnauthorized, mcpReasonNoCarrier", "http.StatusForbidden, mcpReasonElevatedClaim"}, anyOf: []string{}},

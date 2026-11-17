@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -302,7 +303,7 @@ func hpQueryAPIRole(t *testing.T, ctx context.Context, az *azRouterEnv, settings
 	statements := []string{"REVOKE TEMPORARY ON DATABASE " + database + " FROM PUBLIC"}
 	for _, name := range []string{domain, queue, role} {
 		statements = append(statements,
-			"CREATE ROLE "+name+" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '"+password+"'",
+			fmt.Sprintf("CREATE ROLE %s LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '%s'", name, password),
 			"GRANT CONNECT ON DATABASE "+database+" TO "+name)
 	}
 	for _, statement := range statements {

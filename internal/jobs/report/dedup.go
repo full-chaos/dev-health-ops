@@ -57,11 +57,20 @@ type chartRule struct {
 // (succeeded or failed), from the counts of the metric's own table. The stored
 // failure_rate column holds 0 on a day with no completed run, so it is never
 // charted. A bucket with no completed run has no point.
+//
+// The CI/CD success rate is the window's successful runs over its runs: each stored repository-day rate is weighed by
+// the runs of that day (round(sum(success_rate * pipelines_count)) / sum(pipelines_count)), never the mean of the stored
+// rates, which weighs a day of 2 runs as much as a day of 200. The rounding turns the float products back into a whole
+// number of runs. A bucket with no run has no point.
 var chartRules = map[string]chartRule{
 	"change_failure_rate": {table: changefailure.Table, expression: changefailure.WindowRateSQL, inputs: changefailure.CountColumns},
 	"pr_rework_ratio":     {table: prrework.Table, expression: prrework.WindowRateSQL, inputs: prrework.CountColumns},
 	"failure_rate":        {table: "testops_pipeline_metrics_daily", expression: testops.PipelineFailureRateWindowSQL, inputs: testops.PipelineRateCountColumns},
+	"success_rate":        {table: "cicd_metrics_daily", expression: cicdSuccessRateWindowSQL, inputs: []string{"success_rate", "pipelines_count"}},
 }
+
+const cicdSuccessRateWindowSQL = `if(sumIf(pipelines_count, isNotNull(success_rate)) = 0, NULL, ` +
+	`round(sum(success_rate * pipelines_count)) / toFloat64(sumIf(pipelines_count, isNotNull(success_rate))))`
 
 // withChartRule returns the definition a chart of the metric is built from:
 // the registry definition, on the rule's table when the metric has a rule.

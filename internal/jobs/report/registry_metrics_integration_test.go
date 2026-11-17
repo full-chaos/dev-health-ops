@@ -241,6 +241,8 @@ func TestClickHouseQueryAdapterChartsEveryRegistryMetric(t *testing.T) {
 		"pr_rework_ratio": {10, 4, 1, 0},
 		// 3 succeeded and 1 failed pipeline runs.
 		"failure_rate": {3, 1},
+		// A stored rate of 0.5 over 4 runs: 2 succeeded.
+		"success_rate": {0.5, 4},
 	}
 	for _, name := range ruleMetrics {
 		rule, inputValues := chartRules[name], ruleInputValues[name]

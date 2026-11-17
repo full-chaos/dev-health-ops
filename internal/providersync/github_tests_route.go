@@ -654,13 +654,23 @@ func (handler GitHubTestsRouteHandler) Collect(
 	}
 	// The four skip-marker fields are added only when this route recorded skip evidence, so a clean completion serializes exactly
 	// as it did before CHAOS-13980.
-	if len(skippedArtifacts) > 0 {
-		result["skipped_artifacts"] = skippedArtifacts
-		result["skipped_artifacts_overflow"] = skippedOverflow
-		result["skipped_artifact_cause_overflow"] = skippedCauseOverflow
-		result["skipped_artifact_cause_count"] = skippedCauseCount
-	}
+	addGitHubTestsNonChunkedSkipFields(result, skippedArtifacts, skippedOverflow, skippedCauseOverflow, skippedCauseCount)
 	return CompleteRouteBatch{Effects: effects, Watermark: watermark, Result: result, Evidence: FetchEvidence{Provider: claim.Provider, Dataset: claim.Dataset, Requests: requests, Pages: pages, Records: len(pipelines) + len(jobs) + len(acceptance) + len(suites) + len(cases) + len(coverage)}}, nil
+}
+
+// addGitHubTestsNonChunkedSkipFields adds the four skip-marker fields to the non-chunked result when ANY skip evidence exists (a
+// marker, an overflow count, a per-cause overflow flag or a per-cause count), all four together; with none, the result is left
+// exactly as it was before CHAOS-13980.
+func addGitHubTestsNonChunkedSkipFields(
+	result map[string]any, skipped []GitHubTestsSkippedArtifact, overflow int, causeOverflow map[string]bool, causeCount map[string]int,
+) {
+	if len(skipped) == 0 && overflow == 0 && len(causeOverflow) == 0 && len(causeCount) == 0 {
+		return
+	}
+	result["skipped_artifacts"] = skipped
+	result["skipped_artifacts_overflow"] = overflow
+	result["skipped_artifact_cause_overflow"] = causeOverflow
+	result["skipped_artifact_cause_count"] = causeCount
 }
 
 func mergeGitHubTestsIncomplete(

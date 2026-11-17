@@ -161,3 +161,34 @@ func TestGitHubTestsNewerExpiredAttemptIsALossAndOlderIsNeverDownloaded(t *testi
 		}
 	}
 }
+
+// CHAOS-13980 (acp delta read): any skip evidence keeps all four fields, including per-cause counts with an empty marker sample
+// (a state the route cannot reach today, so the builder is called directly).
+func TestAddGitHubTestsNonChunkedSkipFieldsGatesOnAnyEvidence(t *testing.T) {
+	keys := []string{"skipped_artifacts", "skipped_artifacts_overflow", "skipped_artifact_cause_overflow", "skipped_artifact_cause_count"}
+	cases := map[string]struct {
+		skipped       []GitHubTestsSkippedArtifact
+		overflow      int
+		causeOverflow map[string]bool
+		causeCount    map[string]int
+		want          bool
+	}{
+		"none":                   {want: false},
+		"empty non-nil maps":     {causeOverflow: map[string]bool{}, causeCount: map[string]int{}, want: false},
+		"marker":                 {skipped: []GitHubTestsSkippedArtifact{{RunID: "1", ArtifactID: "2", Cause: githubTestsArtifactExpiredCause}}, want: true},
+		"overflow only":          {overflow: 1, want: true},
+		"cause overflow only":    {causeOverflow: map[string]bool{githubTestsArtifactExpiredCause: true}, want: true},
+		"cause count, no sample": {causeCount: map[string]int{githubTestsArtifactExpiredCause: 2}, want: true},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			result := map[string]any{}
+			addGitHubTestsNonChunkedSkipFields(result, tc.skipped, tc.overflow, tc.causeOverflow, tc.causeCount)
+			for _, key := range keys {
+				if _, present := result[key]; present != tc.want {
+					t.Errorf("key %q present=%v, want %v", key, present, tc.want)
+				}
+			}
+		})
+	}
+}

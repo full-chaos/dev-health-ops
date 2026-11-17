@@ -84,7 +84,7 @@ func TestRunModeRefusesTheSeedProbe(t *testing.T) {
 // config digest and the start, and seed mode opens no SMTP listener.
 func TestModeLogNameAndStatusFile(t *testing.T) {
 	dir := t.TempDir()
-	certPath, keyPath, _ := testCA(t, dir, 0o600)
+	certPath, keyPath, _ := testCA(t, dir, 0o600, time.Now())
 	args := func(mode, log, status string) []string {
 		return []string{"-ca-cert", certPath, "-ca-key", keyPath, "-mode", mode, "-log", filepath.Join(dir, log), "-status", filepath.Join(dir, status),
 			"-https", "127.0.0.1:0", "-smtp", "127.0.0.1:0"}

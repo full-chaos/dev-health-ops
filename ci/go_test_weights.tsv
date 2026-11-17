@@ -16,6 +16,7 @@
 #   measured = the larger of the median `ok` time over the full push runs after the shared build cache (43615136198, 43615706484, 43619868597, 43639842320, 43659268009) and cold run 43554424993.
 # No part rows (CHAOS-13668): the test-leg plan derives a split package's part weights from its test rows in ci/go_test_split_weights.tsv; a <key>#<part> row is refused.
 # PR 6286 READY run 43670006558 (CHAOS-13800, 13 test legs): internal/cigates/queuecreds gets the row the unweighted-slow guard printed (46); a package that ran 30 s or more and over 1.3x its row in a test leg of that run is raised to its `ok` value there (raise-only).
+# CHAOS-13796 (13 test legs): a row of a non-split package under the median `ok` time of the uncached lines of the test legs of the 5 latest full push runs on main (44105231987, 44118503347, 44132791205, 44139767971, 44150313712) is raised to that median (raise-only). A split package's row is kept: its raise to the median fails the 600 s modelled-wall guard of internal/cigates/testshard at 13 legs.
 # The weights only need to be roughly right: a wrong one costs balance, never coverage (the shards always partition `go list ./...`). Key = import path relative to the module root.
 # Sorted (LC_ALL=C), no duplicates; internal/cigates/testshard checks each row names a real package.
 cmd/dho	164
@@ -24,7 +25,7 @@ deploy/helm/dev-health	827
 internal/api/credentials	31
 internal/api/policy	129
 internal/api/syncadmin	135
-internal/api/teamsidentity	57
+internal/api/teamsidentity	68
 internal/apiservice	72
 internal/apiservice/admin	49
 internal/atlassianteams	51
@@ -69,7 +70,7 @@ internal/cigates/weightsfiles	137
 internal/cigates/workflowpaths	40
 internal/cigates/workflows	91
 internal/cli	218
-internal/fixturescli	16
+internal/fixturescli	21
 internal/goapicli/restprove	17
 internal/goapiproof	133
 internal/gqlgenguard	320
@@ -78,27 +79,27 @@ internal/joboutbox	31
 internal/jobruntime	89
 internal/jobs	13
 internal/jobs/metrics/daily	54
-internal/jobs/metrics/prrework	14
+internal/jobs/metrics/prrework	17
 internal/jobs/metrics/remaining	29
 internal/jobs/metrics/remaining/stepcause	44
-internal/jobs/workgraph/units	90
+internal/jobs/workgraph/units	91
 internal/loadharness	22
 internal/platform/logging	79
 internal/platform/otlpmetrics	50
 internal/platform/tracing	20
 internal/providerfoundation	16
 internal/providersync	95
-internal/pythonparity	34
+internal/pythonparity	39
 internal/pythonparity/emailvalidator	89
 internal/pythonparity/pyidna	65
 internal/queryapi/investmentexplain	19
 internal/queryapi/pepgate	22
-internal/queryapi/server	86
+internal/queryapi/server	92
 internal/queryapiservice	7
 internal/storage/clickhouse	102
 internal/storage/postgres	178
 internal/storedversion	57
-internal/streamhandlers	16
+internal/streamhandlers	19
 internal/streamrunnerservice	26
 internal/synccli	69
 internal/syncdispatchruntime	47

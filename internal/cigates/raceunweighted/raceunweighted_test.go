@@ -17,19 +17,20 @@ import (
 const standInGo = `#!/usr/bin/env bash
 if [ "$1" != "test" ]; then exec "%[1]s" "$@"; fi
 case " $* " in *" -list "*) ;; *) printf '%%s\n' "$*" >> "${FAKE_GO_TEST_LOG}" ;; esac
-# CHAOS-13833: internal/cigates/testshard is a race split package; its -race listing is its rows in ci/go_race_split_weights.tsv
+# CHAOS-13833, CHAOS-13958: a race split package's (ci/go_race_splits.tsv) -race listing is its rows in ci/go_race_split_weights.tsv
 # (so the real cutter runs on the real table) and each part call passes the names of its -run.
-case " $* " in *" -race "*"/internal/cigates/testshard "*)
-  case " $* " in *" -list "*) awk -F'\t' '!/^#/ && $1 == "internal/cigates/testshard" { print $2 }' "${FAKE_GO_RACE_SPLIT_WEIGHTS}"; exit 0 ;; esac
+split_key="${*: -1}"; split_key="${split_key#./}"; split_key="${split_key#github.com/full-chaos/dev-health-ops/}"
+if [[ " $* " == *" -race "* ]] && awk -F'\t' -v k="${split_key}" '!/^#/ && $1 == k { f = 1 } END { exit !f }' "${FAKE_GO_RACE_SPLITS}"; then
+  case " $* " in *" -list "*) awk -F'\t' -v k="${split_key}" '!/^#/ && $1 == k { print $2 }' "${FAKE_GO_RACE_SPLIT_WEIGHTS}"; exit 0 ;; esac
   run="" prev=""
   for a in "$@"; do [ "$prev" = -run ] && run="$a"; prev="$a"; done
   run="${run#^(}"; run="${run%%)\$}"
   IFS='|' read -r -a names <<<"$run"
   for n in "${names[@]}"; do
-    printf '{"Action":"pass","Package":"github.com/full-chaos/dev-health-ops/internal/cigates/testshard","Test":"%%s","Elapsed":0}\n' "$n"
+    printf '{"Action":"pass","Package":"github.com/full-chaos/dev-health-ops/%%s","Test":"%%s","Elapsed":0}\n' "${split_key}" "$n"
   done
-  exit 0 ;;
-esac
+  exit 0
+fi
 case " $* " in *" ./internal/providersync "*) ;; *) exit 0 ;; esac
 case " $* " in
   *" -list "*) printf 'TestAlpha\nTestBeta\nTestGamma\nTestDelta\nTestWeighted\nok  \tpkg\t0.01s\n'; exit 0 ;;
@@ -111,7 +112,8 @@ func checkGo(t *testing.T, args []string, stream []string, rc int, weights strin
 	full := append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"FAKE_GO_JSON="+jsonFile, "FAKE_GO_LOG="+log, "FAKE_GO_TEST_LOG="+testLog, fmt.Sprintf("FAKE_GO_RC=%d", rc),
 		"TMPDIR="+filepath.Join(dir, "tmp"), "GO_TEST_JSON_DIR="+filepath.Join(dir, "json"),
-		"FAKE_GO_RACE_SPLIT_WEIGHTS="+filepath.Join(root, "ci", "go_race_split_weights.tsv"))
+		"FAKE_GO_RACE_SPLIT_WEIGHTS="+filepath.Join(root, "ci", "go_race_split_weights.tsv"),
+		"FAKE_GO_RACE_SPLITS="+filepath.Join(root, "ci", "go_race_splits.tsv"))
 	if weights != "" {
 		full = append(full, "GO_PROVIDERSYNC_RACE_WEIGHTS="+write(filepath.Join(dir, "w.tsv"), weights))
 	}

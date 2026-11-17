@@ -36,7 +36,7 @@ func TestCapacityForecastRoute_IsServedByTheCatalog(t *testing.T) {
 	client := &cdClient{responses: []*cdScanner{{rows: throughput}, {rows: [][]any{{uint64(30)}}}}}
 
 	handler, _, _, _, _ := newQueryHandler(client, pool, verifier, itTestSchemaDigest, withIssuer)
-	token := iaHeaders("org-1", "admin", false, false)
+	token := iaHeaders("org-1", "member", false, false)
 
 	t.Run("no_routing_row_is_served_by_the_catalog_rule", func(t *testing.T) {
 		rec := postGraphQLWithVariables(t, handler, registeredCapacityForecastDocument, token,

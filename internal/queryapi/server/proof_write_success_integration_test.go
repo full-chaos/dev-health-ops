@@ -39,7 +39,7 @@ func TestProofWriteRunsARegisteredMutationForAnAllowlistedOrgOnly(t *testing.T) 
 	}
 
 	create := func(org string) (int, string) {
-		token := iaHeaders(org, "admin", false, false)
+		token := iaHeaders(org, "member", false, false)
 		rec := postGraphQLWithVariables(t, proofWrite, registeredCreateSavedReportDocument, token, map[string]any{
 			"orgId": org, "input": map[string]any{"name": "proof-write " + org},
 		})

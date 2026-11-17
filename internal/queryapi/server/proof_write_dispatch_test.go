@@ -52,7 +52,7 @@ func pwPost(handler http.HandlerFunc, document, orgID string) *httptest.Response
 	body, _ := json.Marshal(map[string]string{"query": document})
 	req := httptest.NewRequest(http.MethodPost, "/query/proof-write", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	iaHeaders(orgID, "admin", false, false)(req)
+	iaHeaders(orgID, "member", false, false)(req)
 	rec := httptest.NewRecorder()
 	handler(rec, req)
 	return rec

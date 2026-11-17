@@ -126,6 +126,7 @@ devhealth_query_api_feature_flags_calls_total		code: internal/queryapi/graph/tel
 devhealth_query_api_feature_flags_outcome_total	outcome	code: internal/queryapi/graph/telemetry.go
 devhealth_query_api_hotspots_calls_total		code: internal/queryapi/graph/telemetry.go
 devhealth_query_api_hotspots_outcome_total	outcome	code: internal/queryapi/graph/telemetry.go
+devhealth_query_api_internal_elevated_claims_total	claim	code: internal/queryapi/server/carrier_claims.go
 devhealth_query_api_internal_headers_dropped_total	path_class	code: internal/queryapi/internalidentity/listener.go
 devhealth_query_api_internal_identity_total	carrier,outcome	code: internal/queryapi/internalidentity/telemetry.go
 devhealth_query_api_internal_peer_refused_total	listener	code: internal/queryapi/server/peerallowlist.go

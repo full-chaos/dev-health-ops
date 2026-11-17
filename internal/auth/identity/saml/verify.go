@@ -276,6 +276,10 @@ func checkClaims(response crewsaml.Response, responseSigned bool, a crewsaml.Ass
 	bearer := 0
 	for _, sc := range a.Subject.SubjectConfirmations {
 		if sc.Method != bearerMethod {
+			// The library check reads the data of every confirmation, whatever its method (GO-2026-6909 class).
+			if sc.SubjectConfirmationData == nil {
+				return Verified{}, refused(ReasonSubjectConfirmation, "non-bearer confirmation without data")
+			}
 			continue
 		}
 		bearer++

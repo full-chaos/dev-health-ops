@@ -158,9 +158,8 @@ func TestQueryAnswersTheHeaderClaimsAndRefusesTheEnvelope(t *testing.T) {
 		super, imp bool
 	}{
 		{"member", "org-1", "member", false, false},
-		{"admin", "org-2", "admin", false, false},
-		{"superuser", "org-3", "owner", true, false},
-		{"impersonating", "org-4", "viewer", false, true},
+		{"viewer", "org-2", "viewer", false, false},
+		{"another role", "org-3", "billing", false, false},
 	} {
 		t.Run(identity.name, func(t *testing.T) {
 			handler, seen := iaDispatch(t, verifier)
@@ -185,6 +184,33 @@ func TestQueryAnswersTheHeaderClaimsAndRefusesTheEnvelope(t *testing.T) {
 	}
 }
 
+// CHAOS-13950: the header carrier never states superuser, impersonation or an operator role; each is refused 403
+// before the document runs, as on the MCP listener.
+func TestQueryRefusesTheHeaderCarriersElevatedClaims(t *testing.T) {
+	verifier, _ := iaVerifier(t)
+	for _, identity := range []struct {
+		name       string
+		org, role  string
+		super, imp bool
+	}{
+		{"admin", "org-2", "admin", false, false},
+		{"owner", "org-2", "owner", false, false},
+		{"operator", "org-2", "operator", false, false},
+		{"superuser", "org-3", "member", true, false},
+		{"impersonating", "org-4", "viewer", false, true},
+	} {
+		t.Run(identity.name, func(t *testing.T) {
+			handler, seen := iaDispatch(t, verifier)
+			if code := iaPost(t, handler, iaHeaders(identity.org, identity.role, identity.super, identity.imp)); code != http.StatusForbidden {
+				t.Fatalf("header carrier: %d, want 403", code)
+			}
+			if len(*seen) != 0 {
+				t.Fatalf("resolver ran %d times, want never: %+v", len(*seen), *seen)
+			}
+		})
+	}
+}
+
 func TestQueryRefusesEveryAmbiguousOrMalformedCarrier(t *testing.T) {
 	verifier, priv := iaVerifier(t)
 	envelope := iaEnvelope(t, priv, principal.Claims{OrgID: "org-1", Role: "admin"})
@@ -195,25 +221,25 @@ func TestQueryRefusesEveryAmbiguousOrMalformedCarrier(t *testing.T) {
 		mutate func(*http.Request)
 	}{
 		{"no carrier", func(*http.Request) {}},
-		{"both carriers", func(r *http.Request) { bearer(r); iaHeaders("org-1", "admin", false, false)(r) }},
+		{"both carriers", func(r *http.Request) { bearer(r); iaHeaders("org-1", "member", false, false)(r) }},
 		{"both carriers, garbage bearer", func(r *http.Request) {
 			r.Header.Set("Authorization", "Bearer garbage")
-			iaHeaders("org-1", "admin", false, false)(r)
+			iaHeaders("org-1", "member", false, false)(r)
 		}},
 		{"org header only", func(r *http.Request) {
 			*r = *r.WithContext(iaInternalCtx(r.Context()))
 			r.Header.Set(internalidentity.HeaderOrgID, "org-1")
 		}},
 		{"role header missing", func(r *http.Request) {
-			iaHeaders("org-1", "admin", false, false)(r)
+			iaHeaders("org-1", "member", false, false)(r)
 			r.Header.Del(internalidentity.HeaderRole)
 		}},
 		{"superuser not a boolean", func(r *http.Request) {
-			iaHeaders("org-1", "admin", false, false)(r)
+			iaHeaders("org-1", "member", false, false)(r)
 			r.Header.Set(internalidentity.HeaderSuperuser, "1")
 		}},
 		{"duplicate org header", func(r *http.Request) {
-			iaHeaders("org-1", "admin", false, false)(r)
+			iaHeaders("org-1", "member", false, false)(r)
 			r.Header.Add(internalidentity.HeaderOrgID, "org-2")
 		}},
 		{"basic scheme", func(r *http.Request) { r.Header.Set("Authorization", "Basic abc") }},
@@ -244,12 +270,12 @@ func TestBuildInfoTakesTheHeaderCarrierAndRefusesTheEnvelopeAndBoth(t *testing.T
 	if code := get(func(r *http.Request) { r.Header.Set("Authorization", "Bearer "+envelope) }); code != http.StatusUnauthorized {
 		t.Fatalf("envelope: %d, want 401 (a retired class)", code)
 	}
-	if code := get(iaHeaders("org-1", "admin", false, false)); code != http.StatusOK {
+	if code := get(iaHeaders("org-1", "member", false, false)); code != http.StatusOK {
 		t.Fatalf("headers: %d", code)
 	}
 	if code := get(func(r *http.Request) {
 		r.Header.Set("Authorization", "Bearer "+envelope)
-		iaHeaders("org-1", "admin", false, false)(r)
+		iaHeaders("org-1", "member", false, false)(r)
 	}); code != http.StatusUnauthorized {
 		t.Fatalf("both: %d", code)
 	}
@@ -485,9 +511,19 @@ func TestIdentityHeadersAreHonouredOnlyOnTheInternalListener(t *testing.T) {
 	if got := (*seen)[len(*seen)-1]; got.OrgID != ecOrg.String() {
 		t.Fatalf("public listener resolved %+v, want the bearer's org %s", got, ecOrg)
 	}
-	// The same four headers on the internal listener grant the stated identity.
+	// On the internal listener the headers' elevated claims are refused (CHAOS-13950) and a plain stated identity is
+	// granted.
 	*seen = nil
-	if code := post(internal, rawForged); code != http.StatusOK {
+	if code := post(internal, rawForged); code != http.StatusForbidden || len(*seen) != 0 {
+		t.Fatalf("elevated headers on the internal listener: %d with %d resolver runs, want 403 and none", code, len(*seen))
+	}
+	rawStated := func(r *http.Request) {
+		rawForged(r)
+		r.Header.Set(internalidentity.HeaderRole, "member")
+		r.Header.Set(internalidentity.HeaderSuperuser, "false")
+		r.Header.Set(internalidentity.HeaderImpersonationActive, "false")
+	}
+	if code := post(internal, rawStated); code != http.StatusOK {
 		t.Fatalf("headers on the internal listener: %d, want 200", code)
 	}
 	if len(*seen) != 1 || (*seen)[0].OrgID != "org-forged" {

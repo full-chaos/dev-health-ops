@@ -117,6 +117,12 @@ VALUES (gen_random_uuid(), $1, 'cell13950 connector A', 'github', '[]'::json, '{
 	} else {
 		t.Logf("E3a dataHealth role=member imp=true: %s", a)
 	}
+	// E3d: impersonation alone, on a root acr's own header set is served (C4): refused by the impersonation clause only.
+	if a := cellRun(t, internal, savedReportsDoc, map[string]any{"orgId": orgA, "limit": 10, "offset": 0}, orgA, "viewer", "false", "true"); strings.Contains(a.body, "cell13950 org A report") || !refusedElevated(a) {
+		t.Errorf("E3d savedReports(orgId=A) role=viewer imp=true: %d %s with %d root fields run, want 403 and nothing run", a.code, a.body, a.roots)
+	} else {
+		t.Logf("E3d savedReports(orgId=A) role=viewer imp=true: %s", a)
+	}
 	if a := savedReportsOfB(orgA, "true", "true"); reportServed(a) {
 		t.Errorf("E3c savedReports(orgId=B) header org=A su=true imp=true served: %d %s", a.code, a.body)
 	} else {

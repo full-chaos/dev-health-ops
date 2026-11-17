@@ -470,3 +470,25 @@ func TestAnInputAttributeNamedLikeThePlaceholderIsHidden(t *testing.T) {
 		check(t, exporter, func(s tracetest.SpanStub) []attribute.KeyValue { return s.InstrumentationScope.Attributes.ToSlice() }, true)
 	})
 }
+
+// CHAOS-13950: query-api's header-carrier claim attributes (server/carrier_claims.go) leave the process as set: their
+// keys are not protected and their bounded values are not rewritten, so a passive read can see them.
+func TestTheHeaderCarrierClaimAttributesAreExportedAsSet(t *testing.T) {
+	provider, exporter := newScrubbedProvider(t, "query-api")
+	_, span := provider.Tracer("t").Start(context.Background(), "op")
+	want := map[string]string{"dev_health.internal.role": "owner", "dev_health.internal.superuser": "true", "dev_health.internal.impersonation": "false"}
+	for key, value := range want {
+		span.SetAttributes(attribute.String(key, value))
+	}
+	span.End()
+	_ = provider.ForceFlush(context.Background())
+	got := map[string]string{}
+	for _, kv := range exporter.GetSpans()[0].Attributes {
+		got[string(kv.Key)] = kv.Value.Emit()
+	}
+	for key, value := range want {
+		if got[key] != value {
+			t.Errorf("%s = %q, want %q exported unchanged (all: %v)", key, got[key], value, got)
+		}
+	}
+}

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"log/slog"
 	"math"
 	"strings"
 	"testing"
@@ -1003,8 +1004,8 @@ func TestRootCause_NoWrapping_ReturnsErrorItself(t *testing.T) {
 
 func TestErrSwallow_LogsRootCauseNotJustFixedString(t *testing.T) {
 	// End-to-end proof at the level errSwallow ACTUALLY runs at (not just
-	// rootCause in isolation): capture errSwallow's real log.Printf
-	// output for the exact chain shape production code produces, and
+	// rootCause in isolation): capture errSwallow's real log
+	// output (slog's default handler writes through the log package) for the exact chain shape production code produces, and
 	// assert the captured text carries the real driver detail -- not
 	// just the fixed "ClickHouse query failed" string every table would
 	// otherwise share regardless of cause.
@@ -1027,6 +1028,51 @@ func TestErrSwallow_LogsRootCauseNotJustFixedString(t *testing.T) {
 	logged := buf.String()
 	if !strings.Contains(logged, driverErr.Error()) {
 		t.Fatalf("errSwallow's logged output = %q, want it to contain the real driver message %q -- every table's failure would otherwise log as indistinguishable fixed-string text", logged, driverErr.Error())
+	}
+}
+
+// slogCapture keeps every record the default slog logger receives.
+type slogCapture struct{ records *[]slog.Record }
+
+func (h slogCapture) Enabled(context.Context, slog.Level) bool { return true }
+func (h slogCapture) Handle(_ context.Context, r slog.Record) error {
+	*h.records = append(*h.records, r.Clone())
+	return nil
+}
+func (h slogCapture) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h slogCapture) WithGroup(string) slog.Handler      { return h }
+
+// CHAOS-13977: a swallowed read failure is logged at WARN or above with the
+// table key and the root cause, so a level filter at WARN keeps it. The query-api
+// process installs a slog default (logging.InstallDefault); a plain log.Printf
+// reaches that handler at INFO.
+func TestErrSwallow_LogsAtWarnWithTheTableKey(t *testing.T) {
+	var records []slog.Record
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slogCapture{records: &records}))
+	defer slog.SetDefault(previous)
+
+	driverErr := errors.New("Code: 60. DB::Exception: Table default.ai_impact_metrics_daily does not exist")
+	errSwallow(context.Background(), "ai_impact", fmt.Errorf("operatingreview: ai_impact query: %w", &fakeOperationError{operation: "query", cause: driverErr}))
+
+	if len(records) != 1 {
+		t.Fatalf("errSwallow logged %d records, want 1", len(records))
+	}
+	r := records[0]
+	if r.Level < slog.LevelWarn {
+		t.Errorf("errSwallow logged at %s, want WARN or above", r.Level)
+	}
+	attrs := map[string]string{}
+	r.Attrs(func(a slog.Attr) bool {
+		attrs[a.Key] = a.Value.String()
+		return true
+	})
+	text := r.Message + " " + fmt.Sprint(attrs)
+	if attrs["table"] != "ai_impact" {
+		t.Errorf("record %q carries table %q, want the attribute table=ai_impact", text, attrs["table"])
+	}
+	if !strings.Contains(text, driverErr.Error()) {
+		t.Errorf("record %q does not carry the root cause %q", text, driverErr.Error())
 	}
 }
 

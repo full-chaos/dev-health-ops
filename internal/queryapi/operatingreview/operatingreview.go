@@ -59,7 +59,7 @@
 //     swallow ships with the shape UNCHANGED (still a partial response, not
 //     a hard error -- switching that would be a user-visible product
 //     decision, not a porting one) but made LOUD, which Python is not:
-//     errSwallow emits an error-level log AND an otel counter
+//     errSwallow emits a WARN log AND an otel counter
 //     (devhealth_query_api_operating_review_fetch_swallowed_total, tagged
 //     by table key) on every swallowed failure. This is an OBSERVABILITY
 //     divergence, not a VALUE divergence -- unlike fetchAIGovernance's fix
@@ -70,10 +70,13 @@
 //     unexecutable query became a silent 0.0 with nothing to alert on.
 //     Porting the swallow without the telemetry would faithfully reproduce
 //     the mechanism that hid that defect; porting it WITH telemetry keeps
-//     response parity while ending the invisibility. No degradedReason
-//     field was added to OperatingReview -- the type has none today, and
-//     adding one is an API contract change outside this port's mandate
-//     (filed as a separate question, not decided here).
+//     response parity while ending the invisibility. The answer now says it
+//     too (CHAOS-13977, parent CHAOS-9705): a metric whose value depends on
+//     a read that failed carries degradedReason READ_FAILED, on the metric
+//     for the current week and on its delta for the prior week, with
+//     hasData / hasPriorData false and a 0 placeholder. A read stopped by a
+//     cancelled request is not a failed read and carries no reason. See
+//     readFailures and failedRead below.
 //
 //  4. ORDER BY totality (CHAOS-4505 brief item 2, reported to and confirmed
 //     by the orchestrator before this file was written): only one of the
@@ -131,7 +134,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"log/slog"
 	"strings"
 	"time"
@@ -1280,6 +1282,23 @@ type periodRows struct {
 	investmentSized bool
 	aiImpact        []aiImpactRow
 	aiGovernance    []aiGovernanceRawRow
+	// failed holds the table keys whose read failed in the week (CHAOS-13977); a
+	// read stopped by a cancelled request is not in it. nil = no read failed.
+	failed readFailures
+}
+
+// readFailures is the set of table keys whose read failed in a week.
+type readFailures map[string]bool
+
+// degradedReadFailed is the degradedReason of a metric whose value depends on a
+// read that failed (CHAOS-13977).
+const degradedReadFailed = "READ_FAILED"
+
+// readFailed reports whether err is a failed read: an error that is not the
+// request's cancel. A cancelled request context, or an error that wraps
+// context.Canceled, is the caller going away, not the store failing.
+func readFailed(ctx context.Context, err error) bool {
+	return err != nil && ctx.Err() == nil && !errors.Is(err, context.Canceled)
 }
 
 // liveRowHaving keeps a key of a daily table only when its newest row is a
@@ -1357,54 +1376,64 @@ func periodBindings(orgID string, start, end time.Time, teamBinding *clickhouse.
 // one).
 func fetchPeriodRows(ctx context.Context, client QueryClient, orgID string, teams teamSelection, start time.Time) periodRows {
 	_, end := weekBounds(start)
+	var failed readFailures
+	swallow := func(table string, err error) {
+		errSwallow(ctx, table, err)
+		if readFailed(ctx, err) {
+			if failed == nil {
+				failed = readFailures{}
+			}
+			failed[table] = true
+		}
+	}
 
 	workItems, err := fetchWorkItems(ctx, client, orgID, teams, start, end)
-	errSwallow(ctx, "work_items", err)
+	swallow("work_items", err)
 	workItems = discardOnError(workItems, err)
 
 	stateDurations, err := fetchStateDurations(ctx, client, orgID, teams, start, end)
-	errSwallow(ctx, "state_durations", err)
+	swallow("state_durations", err)
 	stateDurations = discardOnError(stateDurations, err)
 
 	repoMetrics, err := fetchRepoMetrics(ctx, client, orgID, start, end)
-	errSwallow(ctx, "repo_metrics", err)
+	swallow("repo_metrics", err)
 	repoMetrics = discardOnError(repoMetrics, err)
 
 	hotspots, err := fetchHotspotsAgg(ctx, client, orgID, start, end)
-	errSwallow(ctx, "hotspots", err)
+	swallow("hotspots", err)
 	hotspots = discardOnError(hotspots, err)
 
 	complexity, err := fetchComplexityAgg(ctx, client, orgID, start, end)
-	errSwallow(ctx, "complexity", err)
+	swallow("complexity", err)
 	complexity = discardOnError(complexity, err)
 
 	deployments, err := fetchDeploymentsAgg(ctx, client, orgID, start, end)
-	errSwallow(ctx, "deployments", err)
+	swallow("deployments", err)
 	deployments = discardOnError(deployments, err)
 
 	incidents, err := fetchIncidentsAgg(ctx, client, orgID, start, end)
-	errSwallow(ctx, "incidents", err)
+	swallow("incidents", err)
 	incidents = discardOnError(incidents, err)
 
 	sized := sizedInvestmentRequested(ctx)
 	investment, investmentSizing, err := fetchInvestment(ctx, client, orgID, teams, start, end, sized)
-	errSwallow(ctx, "investment", err)
+	swallow("investment", err)
 	investment = discardOnError(investment, err)
 	if err != nil {
 		investmentSizing = nil
 	}
 
 	aiImpact, err := fetchAIImpact(ctx, client, orgID, teams, start, end)
-	errSwallow(ctx, "ai_impact", err)
+	swallow("ai_impact", err)
 	aiImpact = discardOnError(aiImpact, err)
 
 	aiGovernance, err := fetchAIGovernance(ctx, client, orgID, teams, start, end)
-	errSwallow(ctx, "ai_governance", err)
+	swallow("ai_governance", err)
 	aiGovernance = discardOnError(aiGovernance, err)
 
 	// Read last so the first ten reads keep their order (CHAOS-8981).
 	changeFailure, err := fetchChangeFailureAgg(ctx, client, orgID, start, end)
-	errSwallow(ctx, "change_failure", err)
+	swallow("change_failure", err)
 	changeFailure = discardOnError(changeFailure, err)
 
 	return periodRows{
@@ -1421,6 +1450,7 @@ func fetchPeriodRows(ctx context.Context, client QueryClient, orgID string, team
 		investmentSized:  sized,
 		aiImpact:         aiImpact,
 		aiGovernance:     aiGovernance,
+		failed:           failed,
 	}
 }
 
@@ -1489,12 +1519,15 @@ func mustKnownCountGuardFiredCounter() metric.Int64Counter {
 // default to a nil/empty slice on error (fetchXxx returns the
 // accumulated `out` so far, which is nil on the first-row scan/query
 // failure), so there is nothing further to do here besides making the
-// failure OBSERVABLE on both channels.
+// failure OBSERVABLE on both channels. The log is WARN with the table key as
+// its own attribute (CHAOS-13977): a log.Printf reached the process's slog
+// handler at INFO. Whether the answer marks the failure is fetchPeriodRows'
+// call (readFailed); a cancel is logged and counted here as before.
 func errSwallow(ctx context.Context, table string, err error) {
 	if err == nil {
 		return
 	}
-	log.Printf("operatingreview: failed to fetch rows for %s: %v (cause: %s)", table, err, rootCause(err))
+	slog.WarnContext(ctx, "operatingreview: failed to fetch rows", "table", table, "error", err.Error(), "cause", rootCause(err))
 	fetchSwallowedCounter.Add(ctx, 1, metric.WithAttributes(attribute.String("table", table)))
 }
 
@@ -1563,6 +1596,9 @@ type metricDelta struct {
 	// hasPriorData: the prior week holds a stored value for the metric
 	// (CHAOS-8115). False = priorValue is a 0 placeholder.
 	hasPriorData bool
+	// degradedReason: READ_FAILED when a prior-week read the prior value
+	// depends on failed (CHAOS-13977); nil otherwise.
+	degradedReason *string
 }
 
 type reviewMetric struct {
@@ -1585,6 +1621,9 @@ type reviewMetric struct {
 	// (changefailure.Outcome.Evidence, CHAOS-9630): basis, D, K, coverage and
 	// the unknown reason. nil for every other metric.
 	changeFailureEvidence *changefailure.Evidence
+	// degradedReason: READ_FAILED when a current-week read the value depends
+	// on failed (CHAOS-13977); nil otherwise.
+	degradedReason *string
 }
 
 // state attaches the week's change-failure state and its evidence to the
@@ -1622,6 +1661,37 @@ func metricScope(m reviewMetric) model.OperatingReviewMetricScope {
 func (m reviewMetric) dataIn(current, prior periodRows, has func(periodRows) bool) reviewMetric {
 	m.hasData = has(current)
 	m.delta.hasPriorData = has(prior)
+	return m.settleDelta()
+}
+
+// readFrom marks the metric unavailable in each week where a read its value
+// depends on failed (CHAOS-13977), by the metric's own failure rule (failedRead
+// or failedMTTRRead). That week has no value: hasData (hasPriorData) is false,
+// the value (priorValue) is the 0 placeholder, and degradedReason says
+// READ_FAILED. A metric computed from two reads never keeps the value of the one
+// read that worked: that is a smaller number, not the metric.
+func (m reviewMetric) readFrom(current, prior periodRows, failed func(periodRows) bool) reviewMetric {
+	if failed(current) {
+		m.hasData = false
+		m.value = 0
+		m.delta.value = 0
+		m.degradedReason = degradedReason()
+	}
+	if failed(prior) {
+		m.delta.hasPriorData = false
+		m.delta.priorValue = 0
+		m.delta.degradedReason = degradedReason()
+	}
+	return m.settleDelta()
+}
+
+func degradedReason() *string {
+	reason := degradedReadFailed
+	return &reason
+}
+
+// settleDelta clears the comparison when a week has no value (see dataIn).
+func (m reviewMetric) settleDelta() reviewMetric {
 	if !deltarule.Complete(m.hasData, m.delta.hasPriorData) {
 		// One contract with Home and /explain: a delta states a move between
 		// two measured values, so the absolute change is 0, the percent is null
@@ -1766,6 +1836,39 @@ func hasAIGovernanceRows(p periodRows) bool { return len(p.aiGovernance) > 0 }
 // tests against a threshold.
 func hasAIOpportunityInputs(p periodRows) bool {
 	return hasAIReviewAmplification(p) || hasAIReworkDrag(p) || hasAITestGap(p) || hasAIGovernanceRows(p)
+}
+
+// failedRead is the failure rule of a metric computed from the reads of the
+// given tables (CHAOS-13977): the week is unavailable when any of them failed.
+// TestHasData_AFailedReadIsNoDataForItsMetricsOnly pins each metric's tables.
+func failedRead(tables ...string) func(periodRows) bool {
+	return func(p periodRows) bool {
+		for _, table := range tables {
+			if p.failed[table] {
+				return true
+			}
+		}
+		return false
+	}
+}
+
+// failedMTTRRead is the failure rule of mttr_hours. Its value is the incident
+// MTTR, or the repository MTTR when the incident MTTR is 0 (firstNonZero). So a
+// failed incident read always makes it unavailable: the repository value would
+// stand in for a value nobody read. A failed repository read makes it
+// unavailable only when the incident MTTR is 0, the one case in which the value
+// reads the repository row; with an incident MTTR the value does not depend on
+// that read. A read that succeeds and holds no MTTR is no failure, and the
+// fallback to the repository MTTR stays as it is.
+func failedMTTRRead(p periodRows) bool {
+	if p.failed["incidents"] {
+		return true
+	}
+	return p.failed["repo_metrics"] && incidentMTTR(p) == 0
+}
+
+func incidentMTTR(p periodRows) float64 {
+	return avgF(pluck(p.incidents, func(r incidentsAggRow) *float64 { return r.mttrP50Hours }))
 }
 
 type reviewSection struct {
@@ -2126,13 +2229,15 @@ func toGraphQLSection(s reviewSection) model.OperatingReviewSection {
 			RateState: m.rateState,
 
 			ChangeFailureEvidence: changefailureevidence.Model(m.changeFailureEvidence),
+			DegradedReason:        m.degradedReason,
 			Delta: &model.OperatingReviewDelta{
-				Value:        m.delta.value,
-				PriorValue:   m.delta.priorValue,
-				Absolute:     m.delta.absolute,
-				Percent:      m.delta.percent,
-				Status:       m.delta.status,
-				HasPriorData: m.delta.hasPriorData,
+				Value:          m.delta.value,
+				PriorValue:     m.delta.priorValue,
+				Absolute:       m.delta.absolute,
+				Percent:        m.delta.percent,
+				Status:         m.delta.status,
+				HasPriorData:   m.delta.hasPriorData,
+				DegradedReason: m.delta.degradedReason,
 			},
 		})
 	}
@@ -2164,15 +2269,15 @@ func deliverySection(current, prior periodRows) reviewSection {
 		buildMetric("cycle_time_p50_hours", "Cycle time p50",
 			avgF(pluck(current.workItems, func(r workItemsRow) *float64 { return r.cycleTimeP50Hours })),
 			avgF(pluck(prior.workItems, func(r workItemsRow) *float64 { return r.cycleTimeP50Hours })),
-			"hours", lowerIsBetter).dataIn(current, prior, hasCycleTimeP50),
+			"hours", lowerIsBetter).dataIn(current, prior, hasCycleTimeP50).readFrom(current, prior, failedRead("work_items")),
 		buildMetric("throughput", "Throughput",
 			sumF(pluck(current.workItems, func(r workItemsRow) *float64 { return f(r.itemsCompleted) })),
 			sumF(pluck(prior.workItems, func(r workItemsRow) *float64 { return f(r.itemsCompleted) })),
-			"items completed", higherIsBetter).dataIn(current, prior, hasWorkItemRows),
+			"items completed", higherIsBetter).dataIn(current, prior, hasWorkItemRows).readFrom(current, prior, failedRead("work_items")),
 		buildMetric("wip_count", "WIP",
 			maxF(pluck(current.workItems, func(r workItemsRow) *float64 { return f(r.wipCountEndOfDay) })),
 			maxF(pluck(prior.workItems, func(r workItemsRow) *float64 { return f(r.wipCountEndOfDay) })),
-			"items", lowerIsBetter).dataIn(current, prior, hasWorkItemRows),
+			"items", lowerIsBetter).dataIn(current, prior, hasWorkItemRows).readFrom(current, prior, failedRead("work_items")),
 	})
 }
 
@@ -2189,15 +2294,15 @@ func bottleneckSection(current, prior periodRows) reviewSection {
 				pluck(prior.stateDurations, func(r stateDurationRow) *float64 { return f(r.durationHours) }),
 				pluck(prior.stateDurations, func(r stateDurationRow) *float64 { return f(r.itemsTouched) }),
 			),
-			"hours", lowerIsBetter).dataIn(current, prior, hasStateDurationRows),
+			"hours", lowerIsBetter).dataIn(current, prior, hasStateDurationRows).readFrom(current, prior, failedRead("state_durations")),
 		buildMetric("review_latency_hours", "Review latency",
 			avgF(pluck(current.repoMetrics, func(r repoMetricsRow) *float64 { return r.prFirstReviewP50Hours })),
 			avgF(pluck(prior.repoMetrics, func(r repoMetricsRow) *float64 { return r.prFirstReviewP50Hours })),
-			"hours", lowerIsBetter).dataIn(current, prior, hasReviewLatency).organisation(),
+			"hours", lowerIsBetter).dataIn(current, prior, hasReviewLatency).readFrom(current, prior, failedRead("repo_metrics")).organisation(),
 		buildMetric("wip_age_p90_hours", "WIP age p90",
 			avgF(pluck(current.workItems, func(r workItemsRow) *float64 { return r.wipAgeP90Hours })),
 			avgF(pluck(prior.workItems, func(r workItemsRow) *float64 { return r.wipAgeP90Hours })),
-			"hours", lowerIsBetter).dataIn(current, prior, hasWipAgeP90),
+			"hours", lowerIsBetter).dataIn(current, prior, hasWipAgeP90).readFrom(current, prior, failedRead("work_items")),
 	})
 }
 
@@ -2208,19 +2313,19 @@ func riskSection(current, prior periodRows) reviewSection {
 		buildMetric("hotspot_risk_score", "Hotspot risk",
 			avgF(pluck(current.hotspots, func(r hotspotsAggRow) *float64 { return r.riskScore })),
 			avgF(pluck(prior.hotspots, func(r hotspotsAggRow) *float64 { return r.riskScore })),
-			"score", lowerIsBetter).dataIn(current, prior, hasHotspotRisk).organisation(),
+			"score", lowerIsBetter).dataIn(current, prior, hasHotspotRisk).readFrom(current, prior, failedRead("hotspots")).organisation(),
 		buildMetric("ownership_concentration", "Ownership concentration",
 			avgF(pluck(current.repoMetrics, func(r repoMetricsRow) *float64 { return r.singleOwnerFileRatio30d })),
 			avgF(pluck(prior.repoMetrics, func(r repoMetricsRow) *float64 { return r.singleOwnerFileRatio30d })),
-			"ratio", lowerIsBetter).dataIn(current, prior, hasOwnershipConcentration).organisation(),
+			"ratio", lowerIsBetter).dataIn(current, prior, hasOwnershipConcentration).readFrom(current, prior, failedRead("repo_metrics")).organisation(),
 		buildMetric("complexity_per_kloc", "Complexity",
 			avgF(pluck(current.complexity, func(r complexityAggRow) *float64 { return r.cyclomaticPerKloc })),
 			avgF(pluck(prior.complexity, func(r complexityAggRow) *float64 { return r.cyclomaticPerKloc })),
-			"cyclomatic/KLOC", lowerIsBetter).dataIn(current, prior, hasComplexity).organisation(),
+			"cyclomatic/KLOC", lowerIsBetter).dataIn(current, prior, hasComplexity).readFrom(current, prior, failedRead("complexity")).organisation(),
 		buildMetric("bus_factor", "Bus factor",
 			minF(pluck(current.repoMetrics, func(r repoMetricsRow) *float64 { return f(r.busFactor) })),
 			minF(pluck(prior.repoMetrics, func(r repoMetricsRow) *float64 { return f(r.busFactor) })),
-			"people", higherIsBetter).dataIn(current, prior, hasRepoMetricRows).organisation(),
+			"people", higherIsBetter).dataIn(current, prior, hasRepoMetricRows).readFrom(current, prior, failedRead("repo_metrics")).organisation(),
 	})
 }
 
@@ -2231,18 +2336,18 @@ func reliabilitySection(current, prior periodRows) reviewSection {
 		buildMetric("deployments_count", "Deployments",
 			sumF(pluck(current.deployments, func(r deploymentsAggRow) *float64 { return f(r.deploymentsCount) })),
 			sumF(pluck(prior.deployments, func(r deploymentsAggRow) *float64 { return f(r.deploymentsCount) })),
-			"deployments", higherIsBetter).dataIn(current, prior, hasDeploymentRows).organisation(),
+			"deployments", higherIsBetter).dataIn(current, prior, hasDeploymentRows).readFrom(current, prior, failedRead("deployments")).organisation(),
 		buildMetric("change_failure_rate", "Change failure rate",
 			floatOrZero(changeFailureOutcome(current).Value), floatOrZero(changeFailureOutcome(prior).Value), "ratio", lowerIsBetter).
-			dataIn(current, prior, hasChangeFailureRate).organisation().state(changeFailureOutcome(current)),
+			dataIn(current, prior, hasChangeFailureRate).readFrom(current, prior, failedRead("change_failure")).organisation().state(changeFailureOutcome(current)),
 		buildMetric("deployment_failure_rate", "Deployment failure rate",
-			deploymentFailureRate(current), deploymentFailureRate(prior), "ratio", lowerIsBetter).dataIn(current, prior, hasDeploymentFailureRate).organisation(),
+			deploymentFailureRate(current), deploymentFailureRate(prior), "ratio", lowerIsBetter).dataIn(current, prior, hasDeploymentFailureRate).readFrom(current, prior, failedRead("deployments")).organisation(),
 		buildMetric("revert_rate", "Revert rate",
-			floatOrZero(revertRate(current)), floatOrZero(revertRate(prior)), "ratio", lowerIsBetter).dataIn(current, prior, hasRevertRate).organisation(),
+			floatOrZero(revertRate(current)), floatOrZero(revertRate(prior)), "ratio", lowerIsBetter).dataIn(current, prior, hasRevertRate).readFrom(current, prior, failedRead("repo_metrics")).organisation(),
 		buildMetric("incidents_count", "Incidents",
 			sumF(pluck(current.incidents, func(r incidentsAggRow) *float64 { return f(r.incidentsCount) })),
 			sumF(pluck(prior.incidents, func(r incidentsAggRow) *float64 { return f(r.incidentsCount) })),
-			"incidents", lowerIsBetter).dataIn(current, prior, hasIncidentRows).organisation(),
+			"incidents", lowerIsBetter).dataIn(current, prior, hasIncidentRows).readFrom(current, prior, failedRead("incidents")).organisation(),
 		buildMetric("mttr_hours", "MTTR",
 			firstNonZero(
 				avgF(pluck(current.incidents, func(r incidentsAggRow) *float64 { return r.mttrP50Hours })),
@@ -2252,7 +2357,7 @@ func reliabilitySection(current, prior periodRows) reviewSection {
 				avgF(pluck(prior.incidents, func(r incidentsAggRow) *float64 { return r.mttrP50Hours })),
 				avgF(pluck(prior.repoMetrics, func(r repoMetricsRow) *float64 { return r.mttrHours })),
 			),
-			"hours", lowerIsBetter).dataIn(current, prior, hasMTTR).organisation(),
+			"hours", lowerIsBetter).dataIn(current, prior, hasMTTR).readFrom(current, prior, failedMTTRRead).organisation(),
 	})
 }
 
@@ -2278,7 +2383,7 @@ func investmentSection(current, prior periodRows) reviewSection {
 		case "maintenance":
 			direction = lowerIsBetter
 		}
-		metrics = append(metrics, buildMetric(theme.key+"_work", theme.label, currentUnits[theme.key], priorUnits[theme.key], unit, direction).dataIn(current, prior, hasInvestmentRows))
+		metrics = append(metrics, buildMetric(theme.key+"_work", theme.label, currentUnits[theme.key], priorUnits[theme.key], unit, direction).dataIn(current, prior, hasInvestmentRows).readFrom(current, prior, failedRead("investment")))
 	}
 	section := buildSection("investment", "Investment", metrics)
 	section.sizing = investmentSizing(current)
@@ -2309,24 +2414,24 @@ func investmentSizing(current periodRows) *model.OperatingReviewSizing {
 func aiWorkflowSection(current, prior periodRows) reviewSection {
 	return buildSection("ai_workflow_intelligence", "AI Workflow Intelligence", []reviewMetric{
 		buildMetric("ai_adoption_ratio", "AI adoption mix",
-			aiAdoptionRatio(current.aiImpact), aiAdoptionRatio(prior.aiImpact), "ratio", neutral).dataIn(current, prior, hasAIPullRequests),
+			aiAdoptionRatio(current.aiImpact), aiAdoptionRatio(prior.aiImpact), "ratio", neutral).dataIn(current, prior, hasAIPullRequests).readFrom(current, prior, failedRead("ai_impact")),
 		buildMetric("ai_cycle_time_delta_hours", "AI delivery impact",
 			avgF(pluck(current.aiImpact, func(r aiImpactRow) *float64 { return r.aiCycleTimeDeltaHours })),
 			avgF(pluck(prior.aiImpact, func(r aiImpactRow) *float64 { return r.aiCycleTimeDeltaHours })),
-			"hours", lowerIsBetter).dataIn(current, prior, hasAICycleTimeDelta),
+			"hours", lowerIsBetter).dataIn(current, prior, hasAICycleTimeDelta).readFrom(current, prior, failedRead("ai_impact")),
 		buildMetric("ai_review_amplification", "AI review pressure",
 			avgF(pluck(current.aiImpact, func(r aiImpactRow) *float64 { return r.aiReviewAmplification })),
 			avgF(pluck(prior.aiImpact, func(r aiImpactRow) *float64 { return r.aiReviewAmplification })),
-			"ratio", lowerIsBetter).dataIn(current, prior, hasAIReviewAmplification),
+			"ratio", lowerIsBetter).dataIn(current, prior, hasAIReviewAmplification).readFrom(current, prior, failedRead("ai_impact")),
 		buildMetric("ai_risk_drag", "AI risk drag",
-			aiRiskDrag(current.aiImpact), aiRiskDrag(prior.aiImpact), "ratio", lowerIsBetter).dataIn(current, prior, hasAIRiskDrag),
+			aiRiskDrag(current.aiImpact), aiRiskDrag(prior.aiImpact), "ratio", lowerIsBetter).dataIn(current, prior, hasAIRiskDrag).readFrom(current, prior, failedRead("ai_impact")),
 		buildMetric("ai_governance_coverage", "AI governance coverage",
 			aiGovernanceCoverage(current.aiGovernance), aiGovernanceCoverage(prior.aiGovernance),
-			"ratio", higherIsBetter).dataIn(current, prior, hasAIGovernanceRows),
+			"ratio", higherIsBetter).dataIn(current, prior, hasAIGovernanceRows).readFrom(current, prior, failedRead("ai_governance")),
 		buildMetric("ai_opportunity_signals", "AI opportunity signals",
 			aiOpportunitySignals(current.aiImpact, current.aiGovernance),
 			aiOpportunitySignals(prior.aiImpact, prior.aiGovernance),
-			"signals", lowerIsBetter).dataIn(current, prior, hasAIOpportunityInputs),
+			"signals", lowerIsBetter).dataIn(current, prior, hasAIOpportunityInputs).readFrom(current, prior, failedRead("ai_impact", "ai_governance")),
 	})
 }
 

@@ -453,8 +453,9 @@ var legacyGuards = map[string]legacyGuard{
 		{file: "../../api/policy/scope.go", decl: "Scope.mayUseOrg", needles: []string{"s.auth.IsMember(ctx, user.UserID, orgID)"}},
 	}},
 	"mcp": {orgRoles: []string{"member", "viewer"}, proofs: []claimProof{
-		{file: "mcp_route.go", decl: "mcpAuthenticate", needles: []string{"mcpOperatorRoles[role]", "http.StatusForbidden, mcpReasonElevatedClaim"}},
-		{file: "mcp_route.go", decl: "mcpOperatorRoles", needles: []string{"\"admin\"", "\"owner\"", "\"operator\""}},
+		{file: "mcp_route.go", decl: "mcpAuthenticate", needles: []string{"carrierElevatedClaims(claims)", "http.StatusForbidden, mcpReasonElevatedClaim"}},
+		{file: "carrier_claims.go", decl: "carrierElevatedClaims", needles: []string{"carrierOperatorRoles[role]"}},
+		{file: "carrier_claims.go", decl: "carrierOperatorRoles", needles: []string{"\"admin\"", "\"owner\"", "\"operator\""}},
 	}},
 	"graphql-arg": {orgRoles: allOrgRoles, proofs: []claimProof{
 		{file: "../graph/operation_org_guard.go", decl: "operationOrgDecision", needles: []string{"claims.OrgID == first"}},
@@ -711,8 +712,8 @@ func queryAPIRoleReads(t *testing.T) map[string]int {
 
 // Each count was read against its file: the legacy gates are datahealth.RequireOperator (admin.stats or the admin, owner,
 // operator roles), producttelemetry.RequirePlatformAdmin (admin.telemetry, no impersonation), the org-less platform
-// admission and the cross-org superuser branch in operation_org_guard.go (admin.orgs), the MCP elevated-role refusal in
-// mcp_route.go, the /buildinfo platform-admin bound in buildinfo_route.go (admin.orgs, a user access token only; the
+// admission and the cross-org superuser branch in operation_org_guard.go (admin.orgs), the header carrier's
+// elevated-role refusal and its bounded role span attribute in carrier_claims.go (both listeners), the /buildinfo platform-admin bound in buildinfo_route.go (admin.orgs, a user access token only; the
 // identity headers keep the any-role answer), /query's live scope applying an impersonation row to a holder of
 // admin.impersonate only (internal_auth.go liveScope, as go-api's Scope.Impersonation), and the plumbing that copies
 // the role into the claims or logs it. graph/field_precheck.go and
@@ -729,8 +730,8 @@ var knownQueryAPIRoleReads = map[string]int{
 	"producttelemetry/platform.go":         2,
 	"server/buildinfo_route.go":            1,
 	"server/graphql_edge_route.go":         1,
+	"server/carrier_claims.go":             2,
 	"server/internal_auth.go":              2,
-	"server/mcp_route.go":                  1,
 }
 
 func TestQueryAPIRoleAndActionReadsAreExactlyTheKnownLegacyGates(t *testing.T) {

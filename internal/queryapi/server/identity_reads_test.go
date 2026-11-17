@@ -208,7 +208,7 @@ func TestQueryReadsEachIdentityFactOncePerRequest(t *testing.T) {
 		want     string
 	}{
 		"edge token, impersonating superuser": {super, map[uuid.UUID]*policy.Impersonation{ecUser: session}, irBearer(irToken(t, true)), irFacts(irUser(), irSession(), irMember(ecOrg))},
-		"internal headers":                    {plain, nil, iaHeaders(ecOrg.String(), "admin", false, false), ""},
+		"internal headers":                    {plain, nil, iaHeaders(ecOrg.String(), "member", false, false), ""},
 	} {
 		store := newCountingIdentityStore(&fakeEdgeStore{
 			states:   map[uuid.UUID]policy.UserState{ecUser: tc.state},
@@ -288,7 +288,7 @@ func TestQueryProofWriteReadsTheOrgAllowlistOncePerRequest(t *testing.T) {
 	handler := newDocumentDispatchHandler(os.Getenv, mux, map[string]string{digestHex(edgeWriteDocument): "probeWrite"}, verifier, nil, nil, digest.KindMutation, allowed)
 	request := httptest.NewRequest(http.MethodPost, "/query/proof-write", strings.NewReader(`{"query": `+jsonQuote(t, edgeWriteDocument)+`}`))
 	request.Header.Set("Content-Type", "application/json")
-	iaHeaders(ecOrg.String(), "admin", false, false)(request)
+	iaHeaders(ecOrg.String(), "member", false, false)(request)
 	recorder := httptest.NewRecorder()
 	handler(recorder, request)
 	if recorder.Code != http.StatusOK || ran != 1 || asked != 1 {

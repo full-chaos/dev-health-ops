@@ -58,7 +58,7 @@ func TestProductTelemetryRoute_GatesThroughTheInternalIdentity(t *testing.T) {
 		orgID, role        string
 		super, imp, served bool
 	}{
-		{"member", "org-1", "owner", false, false, false},
+		{"member", "org-1", "member", false, false, false},
 		{"superuser", "org-1", "", true, false, true},
 		{"superuser without org", "", "", true, false, true},
 		{"superuser impersonating", "org-1", "member", true, true, false},
@@ -66,6 +66,13 @@ func TestProductTelemetryRoute_GatesThroughTheInternalIdentity(t *testing.T) {
 	} {
 		t.Run("platform "+tc.name, func(t *testing.T) {
 			code, body := platform(iaHeaders(tc.orgID, tc.role, tc.super, tc.imp))
+			// CHAOS-13950: a superuser or impersonation claim on the header carrier is refused 403 before any read.
+			if tc.super || tc.imp {
+				if code != http.StatusForbidden || strings.Contains(body, `"totals"`) {
+					t.Fatalf("an elevated header claim: code=%d body=%s, want 403 before any read", code, body)
+				}
+				return
+			}
 			if code != http.StatusOK {
 				t.Fatalf("code=%d body=%s", code, body)
 			}
@@ -98,6 +105,12 @@ func TestProductTelemetryRoute_GatesThroughTheInternalIdentity(t *testing.T) {
 	} {
 		t.Run("org "+tc.name, func(t *testing.T) {
 			code, body := org(iaHeaders(tc.orgID, tc.role, tc.super, tc.imp), tc.orgArg)
+			if tc.super || tc.imp {
+				if code != http.StatusForbidden || strings.Contains(body, `"data":{`) {
+					t.Fatalf("an elevated header claim: code=%d body=%s, want 403 before any read", code, body)
+				}
+				return
+			}
 			if code != http.StatusOK {
 				t.Fatalf("code=%d body=%s", code, body)
 			}

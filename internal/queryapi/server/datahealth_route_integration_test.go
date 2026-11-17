@@ -79,11 +79,13 @@ func TestDataHealthRoute_OperatorGateThroughTheInternalIdentity(t *testing.T) {
 		})
 	}
 
+	// CHAOS-13950: the header carrier may not state an operator role or superuser: those are refused 403 at the carrier,
+	// before the operator gate and any read. The gate itself is reached by an edge token's membership role.
 	const refusal = "Data health requires operator access"
 	for _, tc := range []struct {
-		name          string
-		role          string
-		super, served bool
+		name             string
+		role             string
+		super, forbidden bool
 	}{
 		{"role empty", "", false, false},
 		{"role member", "member", false, false},
@@ -96,14 +98,14 @@ func TestDataHealthRoute_OperatorGateThroughTheInternalIdentity(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			code, body := post(iaHeaders("org-1", tc.role, tc.super, false))
-			if code != http.StatusOK {
-				t.Fatalf("code=%d body=%s", code, body)
-			}
-			if tc.served {
-				if strings.Contains(body, `"errors"`) || !strings.Contains(body, `"provider":"github"`) || strings.Contains(body, "jira") {
-					t.Fatalf("an operator is served only its own org's connectors: %s", body)
+			if tc.forbidden {
+				if code != http.StatusForbidden || strings.Contains(body, "github") {
+					t.Fatalf("an elevated header claim: code=%d body=%s, want 403 before any read", code, body)
 				}
 				return
+			}
+			if code != http.StatusOK {
+				t.Fatalf("code=%d body=%s", code, body)
 			}
 			if !strings.Contains(body, refusal) || !strings.Contains(body, "AUTHORIZATION_ERROR") || strings.Contains(body, "github") {
 				t.Fatalf("a non-operator must be refused before any read: %s", body)

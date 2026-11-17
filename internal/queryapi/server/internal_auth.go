@@ -7,6 +7,10 @@ import (
 	"net/http"
 	"strconv"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
+
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/internalidentity"
@@ -58,6 +62,17 @@ func authenticateInternalRequest(w http.ResponseWriter, r *http.Request, verifie
 			refuseInternal(w, r, internalidentity.ReasonOf(err), "headers")
 			return authctx.Claims{}, false
 		}
+		annotateCarrierSpan(r.Context(), claims)
+		if elevated := carrierElevatedClaims(claims); len(elevated) > 0 {
+			// The MCP listener's rule and reason (mcpAuthenticate): the header
+			// carrier never states superuser, impersonation or an operator role.
+			for _, claim := range elevated {
+				internalElevatedClaimCounter.Add(r.Context(), 1, metric.WithAttributes(attribute.String("claim", claim)))
+			}
+			noteRefusal(r, mcpReasonElevatedClaim, "headers")
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return authctx.Claims{}, false
+		}
 		internalidentity.RecordOutcome("headers", "accepted")
 		return withLegacyScope(claims), true
 	}
@@ -77,6 +92,20 @@ func authenticateInternalRequest(w http.ResponseWriter, r *http.Request, verifie
 	internalidentity.RecordOutcome("envelope", "invalid")
 	http.Error(w, "unauthorized", http.StatusUnauthorized)
 	return authctx.Claims{}, false
+}
+
+// internalElevatedClaimCounter counts the internal listener's header-carrier
+// requests refused for an elevated claim, by claim (the MCP listener's
+// devhealth_query_api_mcp_elevated_claims_total has the same label).
+var internalElevatedClaimCounter = mustInternalCounter("devhealth_query_api_internal_elevated_claims_total",
+	"Internal-listener header-carrier requests refused for claiming superuser, impersonation or an operator role, by claim")
+
+func mustInternalCounter(name, description string) metric.Int64Counter {
+	counter, err := otel.Meter("github.com/full-chaos/dev-health-ops/internal/queryapi/server/internal").Int64Counter(name, metric.WithDescription(description))
+	if err != nil {
+		counter, _ = otel.GetMeterProvider().Meter("noop").Int64Counter(name)
+	}
+	return counter
 }
 
 // authenticateEdgeCarrier is /query's edge-access-token path (CHAOS-6263

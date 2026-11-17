@@ -363,7 +363,7 @@ func TestFeatureFlagsRoute_IsServedByTheCatalog(t *testing.T) {
 	}
 
 	handler, _, _, _, _ := newQueryHandler(&fakeCHClient{}, pool, verifier, itTestSchemaDigest, withIssuer)
-	token := iaHeaders("org-1", "admin", false, false)
+	token := iaHeaders("org-1", "member", false, false)
 
 	// CHAOS-8517: this subtest was "disabled_by_default" and pinned 404 for an operation with no
 	// routing-state row. The catalog rule serves a registered operation that has no row at any schema
@@ -436,7 +436,7 @@ func TestReviewEdgesRoute_IsServedByTheCatalog(t *testing.T) {
 	}
 
 	handler, _, _, _, _ := newQueryHandler(&fakeReviewEdgesCHClient{}, pool, verifier, itTestSchemaDigest, withIssuer)
-	token := iaHeaders("org-1", "admin", false, false)
+	token := iaHeaders("org-1", "member", false, false)
 
 	// CHAOS-8517: this subtest was "disabled_by_default" and pinned 404 for an operation with no
 	// routing-state row. The catalog rule serves a registered operation that has no row at any schema
@@ -515,7 +515,7 @@ func TestCognitiveLoadRoute_IsServedByTheCatalog(t *testing.T) {
 	}
 
 	handler, _, _, _, _ := newQueryHandler(&fakeCognitiveLoadCHClient{}, pool, verifier, itTestSchemaDigest, withIssuer)
-	token := iaHeaders("org-1", "admin", false, false)
+	token := iaHeaders("org-1", "member", false, false)
 
 	// CHAOS-8517: this subtest was "disabled_by_default" and pinned 404 for an operation with no
 	// routing-state row. The catalog rule serves a registered operation that has no row at any schema
@@ -585,7 +585,7 @@ func TestComplexityTimeseriesRoute_IsServedByTheCatalog(t *testing.T) {
 	}
 
 	handler, _, _, _, _ := newQueryHandler(&fakeComplexityTimeseriesCHClient{}, pool, verifier, itTestSchemaDigest, withIssuer)
-	token := iaHeaders("org-1", "admin", false, false)
+	token := iaHeaders("org-1", "member", false, false)
 
 	// CHAOS-8517: this subtest was "disabled_by_default" and pinned 404 for an operation with no
 	// routing-state row. The catalog rule serves a registered operation that has no row at any schema
@@ -660,7 +660,7 @@ func TestHotspotsRoute_IsServedByTheCatalog(t *testing.T) {
 	}
 
 	handler, _, _, _, _ := newQueryHandler(&fakeHotspotsCHClient{}, pool, verifier, itTestSchemaDigest, withIssuer)
-	token := iaHeaders("org-1", "admin", false, false)
+	token := iaHeaders("org-1", "member", false, false)
 
 	// CHAOS-8517: this subtest was "disabled_by_default" and pinned 404 for an operation with no
 	// routing-state row. The catalog rule serves a registered operation that has no row at any schema
@@ -768,7 +768,7 @@ func TestOperatingReviewRoute_IsServedByTheCatalog(t *testing.T) {
 	}
 
 	handler, _, _, _, _ := newQueryHandler(&fakeOperatingReviewCHClient{}, pool, verifier, itTestSchemaDigest, withIssuer)
-	token := iaHeaders("org-1", "admin", false, false)
+	token := iaHeaders("org-1", "member", false, false)
 
 	// CHAOS-8517: this subtest was "disabled_by_default" and pinned 404 for an operation with no
 	// routing-state row. The catalog rule serves a registered operation that has no row at any schema
@@ -827,7 +827,7 @@ func TestOperatingReviewRoute_CurrentTeamIDsPreservesLegacyOneTeam(t *testing.T)
 	}
 
 	handler, _, _, _, _ := newQueryHandler(&fakeOperatingReviewCHClient{}, pool, verifier, itTestSchemaDigest, withIssuer)
-	token := iaHeaders("org-1", "admin", false, false)
+	token := iaHeaders("org-1", "member", false, false)
 
 	legacy := postGraphQLWithVariables(t, handler, registeredOperatingReviewV2Document, token, operatingReviewTeamVariables("team-a", false))
 	current := postGraphQLWithVariables(t, handler, registeredOperatingReviewDocument, token, operatingReviewTeamVariables("team-a", true))
@@ -895,7 +895,7 @@ func TestHomeRoute_IsServedByTheCatalog(t *testing.T) {
 	}
 
 	handler, _, _, _, _ := newQueryHandler(emptyHomeCHClient{}, pool, verifier, itTestSchemaDigest, withIssuer)
-	token := iaHeaders("org-1", "admin", false, false)
+	token := iaHeaders("org-1", "member", false, false)
 
 	// CHAOS-8517: this subtest was "disabled_by_default" and pinned 404 for an operation with no
 	// routing-state row. The catalog rule serves a registered operation that has no row at any schema
@@ -1079,7 +1079,7 @@ func TestFlowMatrixRoute_IsServedByTheCatalog(t *testing.T) {
 	}
 
 	handler, _, _, _, _ := newQueryHandler(&fakeFlowMatrixCHClient{}, pool, verifier, itTestSchemaDigest, withIssuer)
-	token := iaHeaders("org-1", "admin", false, false)
+	token := iaHeaders("org-1", "member", false, false)
 
 	// CHAOS-8517: this subtest was "disabled_by_default" and pinned 404 for an operation with no
 	// routing-state row. The catalog rule serves a registered operation that has no row at any schema
@@ -1171,7 +1171,7 @@ func TestInvestmentEvidenceQualityRoute_IsServedByTheCatalogAndPreservesNullZero
 	}
 	handler, _, _, _, _ := newQueryHandler(fakeInvestmentEvidenceQualityCHClient{}, pool, verifier, itTestSchemaDigest, withIssuer)
 
-	rec := postGraphQLWithVariables(t, handler, registeredInvestmentEvidenceQualityDocument, iaHeaders("org-1", "admin", false, false), investmentEvidenceQualityVariables())
+	rec := postGraphQLWithVariables(t, handler, registeredInvestmentEvidenceQualityDocument, iaHeaders("org-1", "member", false, false), investmentEvidenceQualityVariables())
 	if rec.Code != http.StatusOK {
 		t.Fatalf("catalog request status = %d, want 200: %s", rec.Code, rec.Body.String())
 	}

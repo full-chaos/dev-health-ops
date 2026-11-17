@@ -48,7 +48,7 @@ func TestAnonymousDocumentRoutesRefuseBeforeReadingTheBody(t *testing.T) {
 	}
 
 	// The same bad bodies from an authenticated caller keep their refusals.
-	carrier := iaHeaders("org-1", "admin", false, false)
+	carrier := iaHeaders("org-1", "member", false, false)
 	authed := map[string]struct {
 		body string
 		want int

@@ -58,6 +58,15 @@ func authenticateInternalRequest(w http.ResponseWriter, r *http.Request, verifie
 			refuseInternal(w, r, internalidentity.ReasonOf(err), "headers")
 			return authctx.Claims{}, false
 		}
+		annotateCarrierSpan(r.Context(), claims)
+		if elevated := carrierElevatedClaims(claims); len(elevated) > 0 {
+			// The MCP listener's rule and reason (mcpAuthenticate): the header
+			// carrier never states superuser, impersonation or an operator role.
+			countInternalElevatedClaims(r.Context(), elevated)
+			noteRefusal(r, mcpReasonElevatedClaim, "headers")
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return authctx.Claims{}, false
+		}
 		internalidentity.RecordOutcome("headers", "accepted")
 		return withLegacyScope(claims), true
 	}

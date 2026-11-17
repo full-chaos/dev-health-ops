@@ -162,10 +162,6 @@ const mcpRoutingOperationPrefix = mcpclass.OperationPrefix
 // routeswitch.ClassDecisionSwitch takes its inventory from.
 func mcpRoutingDigests() map[string]string { return mcpclass.Digests() }
 
-// mcpOperatorRoles is datahealth.RequireOperator's role set (compared
-// lowercased there too). A header claiming one of them is refused.
-var mcpOperatorRoles = map[string]bool{"admin": true, "owner": true, "operator": true}
-
 // Refusal reasons: a closed vocabulary, used in the response, the log line
 // and the counter. Never a value from the request.
 const (
@@ -598,17 +594,8 @@ func mcpAuthenticate(r *http.Request) (authctx.Claims, int, string) {
 	if claims.OrgID == "" || claims.OrgID != strings.TrimSpace(claims.OrgID) {
 		return authctx.Claims{}, http.StatusUnauthorized, mcpReasonInvalidOrg
 	}
-	var elevated []string
-	if claims.IsSuperuser {
-		elevated = append(elevated, "superuser")
-	}
-	if claims.ImpersonationActive {
-		elevated = append(elevated, "impersonation")
-	}
-	if role := strings.ToLower(strings.TrimSpace(claims.Role)); mcpOperatorRoles[role] {
-		elevated = append(elevated, "role_"+role)
-	}
-	if len(elevated) > 0 {
+	annotateCarrierSpan(r.Context(), claims)
+	if elevated := carrierElevatedClaims(claims); len(elevated) > 0 {
 		// Loud on purpose: acr-api sends superuser=false and impersonation=false
 		// as constants and a least role, so any of these means a misconfigured
 		// or taken-over caller. Names only (a fixed vocabulary), never a value.

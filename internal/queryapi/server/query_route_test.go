@@ -78,7 +78,7 @@ func TestTruncateForLog(t *testing.T) {
 // unhandled ValueError, the generic 500, never a served operation.
 func TestQueryRouteAnswersAnIntegerPastThe4300DigitLimitAsPythons500(t *testing.T) {
 	verifier, _ := iaVerifier(t)
-	carrier := iaHeaders("org-1", "admin", false, false)
+	carrier := iaHeaders("org-1", "member", false, false)
 	handler := newDocumentDispatchHandler(os.Getenv, nil, nil, verifier, nil, nil, "", nil)
 	post := func(digits int) *httptest.ResponseRecorder {
 		body := `{"query":"{ __typename }","variables":{"n":` + strings.Repeat("1", digits) + `}}`

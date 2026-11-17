@@ -174,7 +174,7 @@ func (s *behaviourStack) sendWith(listener, method, path, carrier, bearer string
 		request.Header.Set("Authorization", "Bearer "+s.user)
 	case "headers":
 		request.Header.Set(internalidentity.HeaderOrgID, ecOrg.String())
-		request.Header.Set(internalidentity.HeaderRole, "admin")
+		request.Header.Set(internalidentity.HeaderRole, "member")
 		request.Header.Set(internalidentity.HeaderSuperuser, "false")
 		request.Header.Set(internalidentity.HeaderImpersonationActive, "false")
 	}

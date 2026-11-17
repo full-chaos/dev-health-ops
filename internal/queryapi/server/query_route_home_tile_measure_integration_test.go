@@ -51,7 +51,7 @@ func TestHomeInvestmentTileIsIssueSizeOnlyForADocumentThatAsksForItsCoverage(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	token := iaHeaders("org-1", "admin", false, false)
+	token := iaHeaders("org-1", "member", false, false)
 
 	for name, tc := range map[string]struct {
 		document  string

@@ -18,6 +18,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/platform/shell"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/boundaddr"
 )
 
 func TestReconcilerSpecConfiguresFailClosedDependencies(t *testing.T) {
@@ -53,26 +54,18 @@ func TestReconcilerSpecConfiguresFailClosedDependencies(t *testing.T) {
 }
 
 func TestReconcilerOperatorStaysLiveWhenDependenciesAreMissing(t *testing.T) {
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	address := listener.Addr().String()
-	if err := listener.Close(); err != nil {
-		t.Fatal(err)
-	}
-
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	lookup := func(key string) (string, bool) {
 		values := map[string]string{
-			"DEV_HEALTH_HTTP_ADDR":        address,
+			"DEV_HEALTH_HTTP_ADDR":        "127.0.0.1:0",
 			"DEV_HEALTH_SHUTDOWN_TIMEOUT": "1s",
 		}
 		value, ok := values[key]
 		return value, ok
 	}
-	var stdout, stderr bytes.Buffer
+	var stdout boundaddr.Logs
+	var stderr bytes.Buffer
 	done := make(chan int, 1)
 	go func() {
 		done <- shell.Execute(ctx, reconcilerSpec, nil, secrets.LookupEnv(lookup), shell.IO{
@@ -81,6 +74,8 @@ func TestReconcilerOperatorStaysLiveWhenDependenciesAreMissing(t *testing.T) {
 			Environ: []string{},
 		})
 	}()
+
+	address := boundaddr.Await(t, &stdout, "operator-http", done)
 
 	// Failure-path hang guard only: no passing run waits on it.
 	guard, stopGuard := context.WithTimeout(t.Context(), 60*time.Second)

@@ -6,7 +6,6 @@ import (
 	"errors"
 	"io"
 	"log/slog"
-	"net"
 	"net/http"
 	"slices"
 	"strings"
@@ -22,6 +21,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	"github.com/full-chaos/dev-health-ops/internal/streamhandlers"
 	"github.com/full-chaos/dev-health-ops/internal/streamrunner"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/boundaddr"
 )
 
 type streamCommandHandler struct{}
@@ -251,26 +251,18 @@ func TestStreamRunnerSpecBuildsProductionProfiles(t *testing.T) {
 }
 
 func TestStreamRunnerOperatorStaysLiveWhenDependenciesAreMissing(t *testing.T) {
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	address := listener.Addr().String()
-	if err := listener.Close(); err != nil {
-		t.Fatal(err)
-	}
-
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	lookup := func(key string) (string, bool) {
 		values := map[string]string{
-			"DEV_HEALTH_HTTP_ADDR":        address,
+			"DEV_HEALTH_HTTP_ADDR":        "127.0.0.1:0",
 			"DEV_HEALTH_SHUTDOWN_TIMEOUT": "1s",
 		}
 		value, ok := values[key]
 		return value, ok
 	}
-	var stdout, stderr bytes.Buffer
+	var stdout boundaddr.Logs
+	var stderr bytes.Buffer
 	done := make(chan int, 1)
 	go func() {
 		done <- shell.Execute(ctx, streamRunnerSpec, nil, secrets.LookupEnv(lookup), shell.IO{
@@ -279,6 +271,8 @@ func TestStreamRunnerOperatorStaysLiveWhenDependenciesAreMissing(t *testing.T) {
 			Environ: []string{},
 		})
 	}()
+
+	address := boundaddr.Await(t, &stdout, "operator-http", done)
 
 	client := &http.Client{Timeout: 100 * time.Millisecond}
 	deadline := time.Now().Add(3 * time.Second)

@@ -391,7 +391,7 @@ func TestTheRaceLegRunsEachPartAloneByItsAnchoredNames(t *testing.T) {
 	for _, want := range []string{
 		`names="$(test_split_listed_names "${module_dir}" "${pkg}" "${parts}" -race)"`,
 		`-v cutkey="${key}" -v cutparts="${parts}" -v cutpart="${part}" -v restpart="${parts}"`,
-		`-v splits="${GO_RACE_SPLITS}" -v tests="${GO_RACE_SPLIT_WEIGHTS}" -v rserial="${GO_RACE_SERIAL_WEIGHTING}" -v rcap="$(if [ "${module_dir}" = "." ]; then race_leg_weight_cap "${count}"; else printf '0\n'; fi)" -f "${ROOT}/ci/go_race_shard.awk"`,
+		`-v splits="${GO_RACE_SPLITS}" -v tests="${GO_RACE_SPLIT_WEIGHTS}" -v rserial="${GO_RACE_SERIAL_WEIGHTING}" -v rk="${GO_RACE_BATCH_OVERLAP}" -v apart="${GO_RACE_APART}" -v rcap="$(if [ "${module_dir}" = "." ]; then race_leg_weight_cap "${count}"; else printf '0\n'; fi)" -f "${ROOT}/ci/go_race_shard.awk"`,
 		`-run "^($(printf '%s\n' "${names}" | paste -sd'|' -))\$" "${pkg}"`,
 		`-f "${GO_RACE_UNWEIGHTED_SLOW_AWK:-${ROOT}/ci/go_race_unweighted_slow.awk}" "${partjson}"`,
 	} {

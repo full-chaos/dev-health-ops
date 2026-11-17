@@ -1778,7 +1778,23 @@ race_leg_weight_cap() {
   if [ -n "${GO_RACE_LEG_WEIGHT_CAP+set}" ]; then printf '%s\n' "${GO_RACE_LEG_WEIGHT_CAP}"; return; fi
   awk -v count="$1" 'BEGIN { printf "%.2f\n", (1350 - 40) / 0.50 - 250 * 5 / count }'
 }
+# CHAOS-13958: the batch overlap the race plan places by (ci/go_race_shard.awk rk). A many-package batch overlaps 3.2-3.8x
+# (Go quality 44091722883, 44105231987, 44118503347), but heavy packages slow each other down: at 3.5 the plan stacked three of
+# them on one leg as free. 1.5 makes a second heavy package on a leg cost its time. GO_RACE_BATCH_OVERLAP overrides it (a
+# positive decimal); only the planner's red/green cell (internal/cigates/testshard) sets it.
+GO_RACE_BATCH_OVERLAP="${GO_RACE_BATCH_OVERLAP-1.5}"
+# CHAOS-13958: the heavy packages and the serial parts the race plan keeps apart (ci/go_race_shard.awk apart=). GO_RACE_APART
+# names another file (the planner's red/green cell passes one with no rows).
+GO_RACE_APART="${GO_RACE_APART-${ROOT}/ci/go_race_apart.tsv}"
 case "${GO_RACE_SERIAL_WEIGHTING}" in 0|1) ;; *) printf 'ERROR: GO_RACE_SERIAL_WEIGHTING must be 0 or 1, got %s\n' "${GO_RACE_SERIAL_WEIGHTING}" >&2; exit 2 ;; esac
+if ! [[ "${GO_RACE_BATCH_OVERLAP}" =~ ^[0-9]+(\.[0-9]+)?$ ]] || ! awk -v v="${GO_RACE_BATCH_OVERLAP}" 'BEGIN { exit !(v + 0 > 0) }'; then
+  printf 'ERROR: GO_RACE_BATCH_OVERLAP must be a positive decimal, got %s\n' "${GO_RACE_BATCH_OVERLAP}" >&2
+  exit 2
+fi
+if [ -z "${GO_RACE_APART}" ]; then
+  printf 'ERROR: GO_RACE_APART must name a readable file, got an empty value\n' >&2
+  exit 2
+fi
 if [ -n "${GO_RACE_LEG_WEIGHT_CAP+set}" ] && ! [[ "${GO_RACE_LEG_WEIGHT_CAP}" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
   printf 'ERROR: GO_RACE_LEG_WEIGHT_CAP must be a non-negative decimal (0 = off), got %s\n' "${GO_RACE_LEG_WEIGHT_CAP}" >&2
   exit 2
@@ -1824,17 +1840,38 @@ check_providersync_race_shard() {
   local json_dir="${GO_TEST_JSON_DIR:-${ROOT}/go-test-json}" json run_rc=0 guard_rc=0
   mkdir -p "${json_dir}"
   json="${json_dir}/providersync-race-${shard}.json"
+  # CHAOS-13958: the slice RUNS beside the leg's package batch (check_race_shard); the listing and the partition check above stay
+  # before any test. Its stdout and stderr go to two files that check_providersync_race_wait prints whole, each to its own
+  # stream; its status is the larger of go test's and the guard's, as before.
+  PROVIDERSYNC_RACE_LOG="$(mktemp "${TMPDIR:-/tmp}/dev-health-providersync-race.XXXXXX")" || die "no temp file for the providersync race slice log"
+  PROVIDERSYNC_RACE_ERR="$(mktemp "${TMPDIR:-/tmp}/dev-health-providersync-race-err.XXXXXX")" || die "no temp file for the providersync race slice log"
   (
-    set -o pipefail
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" GOFLAGS="${LEG_TEST_GOFLAGS}" GOWORK=off go test -mod=readonly -trimpath -race ${MERGE_GROUP_FRESH:+-count=1} -json -timeout "${DEV_HEALTH_GO_RACE_TEST_TIMEOUT:-10m}" -run "${regex}" ./internal/providersync \
-      | tee "${json}" \
-      | jq -rj 'select(.Action == "output") | .Output'
-  ) || run_rc=$?
-  awk -v weights="${weights}" -v thresh="${DEV_HEALTH_GO_RACE_UNWEIGHTED_SLOW_SECONDS:-30}" -v label="${weights#"${ROOT}/"}" \
-    -f "${GO_RACE_UNWEIGHTED_SLOW_AWK:-${ROOT}/ci/go_race_unweighted_slow.awk}" "${json}" || guard_rc=$?
-  [ "${run_rc}" -ge "${guard_rc}" ] || run_rc="${guard_rc}"
-  return "${run_rc}"
+    (
+      set -o pipefail
+      cd "${ROOT}"
+      "${GO_ENV_OFF[@]}" GOFLAGS="${LEG_TEST_GOFLAGS}" GOWORK=off go test -mod=readonly -trimpath -race ${MERGE_GROUP_FRESH:+-count=1} -json -timeout "${DEV_HEALTH_GO_RACE_TEST_TIMEOUT:-10m}" -run "${regex}" ./internal/providersync \
+        | tee "${json}" \
+        | jq -rj 'select(.Action == "output") | .Output'
+    ) || run_rc=$?
+    awk -v weights="${weights}" -v thresh="${DEV_HEALTH_GO_RACE_UNWEIGHTED_SLOW_SECONDS:-30}" -v label="${weights#"${ROOT}/"}" \
+      -f "${GO_RACE_UNWEIGHTED_SLOW_AWK:-${ROOT}/ci/go_race_unweighted_slow.awk}" "${json}" || guard_rc=$?
+    [ "${run_rc}" -ge "${guard_rc}" ] || run_rc="${guard_rc}"
+    exit "${run_rc}"
+  ) >"${PROVIDERSYNC_RACE_LOG}" 2>"${PROVIDERSYNC_RACE_ERR}" &
+  PROVIDERSYNC_RACE_PID=$!
+}
+
+# check_providersync_race_wait (CHAOS-13958): waits for the slice check_providersync_race_shard started, prints its stdout and
+# stderr and returns its status (0 when no slice runs).
+check_providersync_race_wait() {
+  local rc=0
+  [ -n "${PROVIDERSYNC_RACE_PID:-}" ] || return 0
+  wait "${PROVIDERSYNC_RACE_PID}" || rc=$?
+  cat -- "${PROVIDERSYNC_RACE_LOG}"
+  cat -- "${PROVIDERSYNC_RACE_ERR}" >&2
+  rm -f -- "${PROVIDERSYNC_RACE_LOG}" "${PROVIDERSYNC_RACE_ERR}"
+  PROVIDERSYNC_RACE_PID=""
+  return "${rc}"
 }
 
 check_race_shard_args() {
@@ -1875,12 +1912,14 @@ race_split_part_names() {
 # packages) of one module, after the go-quality selection. internal/providersync is never listed: it runs as test-name slices.
 race_shard_packages() {
   local shard="$1" count="$2" module_dir="$3" modpath="$4" part="${5:-}"
+  # A missing or unreadable apart file would read as no rows (awk getline): the plan refuses it instead.
+  { [ -f "${GO_RACE_APART}" ] && [ -r "${GO_RACE_APART}" ]; } || die "race plan: GO_RACE_APART must name a readable file, got ${GO_RACE_APART}"
   (cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -mod=readonly ./...) \
     | { if [ "${module_dir}" = "." ]; then grep -vx "${modpath}/internal/providersync"; else cat; fi; } \
     | quality_filter "${module_dir}" "${modpath}" \
     | race_excluded_filter "${module_dir}" "${modpath}" \
     | awk -v mod="${modpath}" -v shard="${shard}" -v count="${count}" -v weights=<(race_weights_rows) -v solo="${GO_RACE_SOLO}" -v part="${part}" \
-        -v splits="${GO_RACE_SPLITS}" -v tests="${GO_RACE_SPLIT_WEIGHTS}" -v rserial="${GO_RACE_SERIAL_WEIGHTING}" -v rcap="$(if [ "${module_dir}" = "." ]; then race_leg_weight_cap "${count}"; else printf '0\n'; fi)" -f "${ROOT}/ci/go_race_shard.awk"
+        -v splits="${GO_RACE_SPLITS}" -v tests="${GO_RACE_SPLIT_WEIGHTS}" -v rserial="${GO_RACE_SERIAL_WEIGHTING}" -v rk="${GO_RACE_BATCH_OVERLAP}" -v apart="${GO_RACE_APART}" -v rcap="$(if [ "${module_dir}" = "." ]; then race_leg_weight_cap "${count}"; else printf '0\n'; fi)" -f "${ROOT}/ci/go_race_shard.awk"
 }
 
 # check_race_shard_plan SHARD COUNT: one "module<TAB>package<TAB>key" line per package the SHARD-th race leg runs, and one
@@ -1913,7 +1952,7 @@ check_race_shard_plan() {
 }
 
 check_race_shard() {
-  local shard="${1:-}" count="${2:-}" module_dir modpath pkg selected=0 missing racelog legjson ps_json="" spart sparts key names partjson plan_pkgs plan_solo
+  local shard="${1:-}" count="${2:-}" module_dir modpath pkg selected=0 missing racelog legjson ps_json="" spart sparts key names partjson plan_pkgs plan_solo batch_rc slice_rc
   check_race_shard_args "${shard}" "${count}"
   load_quality_selection
   local -a pkgs solo_pkgs pkgs_sec pkgs_all split_items
@@ -1970,13 +2009,20 @@ check_race_shard() {
       check_providersync_race_shard "${shard}" "${count}"
       ps_json="${GO_TEST_JSON_DIR:-${ROOT}/go-test-json}/providersync-race-${shard}.json"
     fi
+    batch_rc=0
     if [ "${#pkgs[@]}" -gt 0 ]; then
       selected=$((selected + ${#pkgs[@]}))
       (
         cd "${ROOT}/${module_dir}"
         go_test_leg "${racelog}" "${legjson}" -race -timeout "${DEV_HEALTH_GO_RACE_TEST_TIMEOUT:-10m}" "${pkgs[@]}"
-      ) || { rm -f -- "${racelog}"; return 1; }
+      ) || batch_rc=$?
     fi
+    # The slice ends before anything else of the leg starts (the security run, the parts, then the solo packages).
+    slice_rc=0
+    check_providersync_race_wait || slice_rc=$?
+    # A failed slice keeps its own status (the larger of go test's and the guard's); a failed batch returns 1, as before.
+    if [ "${slice_rc}" -ne 0 ]; then rm -f -- "${racelog}"; return "${slice_rc}"; fi
+    if [ "${batch_rc}" -ne 0 ]; then rm -f -- "${racelog}"; return 1; fi
     if [ "${#pkgs_sec[@]}" -gt 0 ]; then
       selected=$((selected + ${#pkgs_sec[@]}))
       printf 'go test -race (shard %s/%s): %s: security -count=1: %d package(s)\n' "${shard}" "${count}" "${module_dir}" "${#pkgs_sec[@]}"

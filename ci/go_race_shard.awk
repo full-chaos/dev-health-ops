@@ -64,6 +64,13 @@
 # plan: <package> over the leg weight cap on leg <n>/<count>" on stderr. rcap counts the packages of this one run (one module); check_go.sh passes it for the
 # root module only (the budget guard's scope). Pinned packages and chain=1 are not used with it. Without
 # rserial nothing above changes the split. Still a partition.
+# apart=<tsv> (CHAOS-13958, ci/go_race_apart.tsv, rserial only): "heavy<TAB>package<TAB>seconds" rows name the packages that run
+# slower beside each other than rk models (measured: three of them in one batch took 1.2-2.0x their time alone), and
+# "part<TAB>package<TAB>part" rows name serial race parts. The parts and solo packages are placed first, as above; then the heavy
+# packages, heaviest first, each on a shard that holds no heavy package and no listed part (the same choice as above among those
+# shards); then every other package. A heavy package with no such shard goes where the rule above puts it and its shard prints
+# "WARN race plan: <package> heavy, no leg without a heavy package or a listed part, on leg <n>/<count>" on stderr. A heavy row
+# of a split, solo or pinned package, a part row of no split package or of no part of it, and a repeated row are refused.
 # rwall(m, l, x): the modelled batch wall of a shard whose largest package is m and package sum l, with one more package of weight x.
 function rwall(m, l, x,   k, v) {
   k = (rk + 0 > 0) ? rk + 0 : 3.5
@@ -187,6 +194,23 @@ BEGIN {
     }
     close(solo)
   }
+  if (apart != "") {
+    while ((getline line < apart) > 0) {
+      if (line ~ /^[[:space:]]*(#|$)/) continue
+      nf = split(line, f, "\t")
+      if (nf != 3 || f[3] !~ /^[0-9]+$/ || f[3] + 0 < 1) die("bad apart row: " line)
+      if (f[1] == "heavy") {
+        if (f[2] in isHeavy) die("apart row repeats heavy " f[2])
+        if (f[2] in parts) die("apart row: heavy " f[2] " is a split package")
+        isHeavy[f[2]] = 1
+      } else if (f[1] == "part") {
+        if (!(f[2] in parts) || f[3] + 0 > parts[f[2]]) die("apart row: part " f[3] " of " f[2] " is no race split part")
+        if ((f[2] "#" f[3]) in isApartPart) die("apart row repeats part " f[3] " of " f[2])
+        isApartPart[f[2] "#" f[3]] = 1
+      } else die("bad apart row: " line)
+    }
+    close(apart)
+  }
   if (defw == "") defw = 2
 }
 {
@@ -216,7 +240,10 @@ BEGIN {
     serialPkg[n] = (serial != "" && key == serial) ? 1 : 0
     soloPkg[n] = (key in isSolo) ? 1 : 0
     pinPkg[n] = ((key in isPin) && !(key in isSolo)) ? 1 : 0
+    heavyPkg[n] = (key in isHeavy) ? 1 : 0
+    apartPart[n] = (np > 1 && ((key "#" pp) in isApartPart)) ? 1 : 0
   }
+  if ((key in isHeavy) && ((key in isSolo) || (key in isPin))) die("apart row: heavy " key " is solo or pinned")
 }
 END {
   if (bad) exit 2
@@ -277,13 +304,14 @@ END {
   }
   # rserial=1 (CHAOS-13958): see the header.
   if (rserial && !chain) {
-    for (s = 1; s <= count; s++) { mx[s] = 0; ser[s] = 0 }
-    for (pass = 1; pass <= 2; pass++) {
+    for (s = 1; s <= count; s++) { mx[s] = 0; ser[s] = 0; heavyOn[s] = 0; partOn[s] = 0 }
+    # pass 1: parts and solo packages; pass 2: heavy packages (apart=); pass 3: every other package.
+    for (pass = 1; pass <= 3; pass++) {
       for (i = 1; i <= n; i++) {
         k = order[i]
         if (pinPkg[k]) continue
         isSer = (soloPkg[k] || nparts[k] > 1)
-        if (isSer != (pass == 1)) continue
+        if ((isSer ? 1 : (heavyPkg[k] ? 2 : 3)) != pass) continue
         # rcap: a shard whose row weight (packages + parts) would pass the cap is used only when no shard fits (then WARN).
         fits = 0
         for (s = 1; s <= count; s++) {
@@ -291,23 +319,32 @@ END {
           if (capOk[s]) fits = 1
         }
         if (!fits) for (s = 1; s <= count; s++) capOk[s] = 1
+        apartOk = 1
+        if (pass == 2) {
+          apartOk = 0
+          for (s = 1; s <= count; s++) if (capOk[s] && !heavyOn[s] && !partOn[s]) apartOk = 1
+          for (s = 1; s <= count; s++) allowed[s] = capOk[s] && (!apartOk || (!heavyOn[s] && !partOn[s]))
+        } else for (s = 1; s <= count; s++) allowed[s] = capOk[s]
         best = 0
         if (isSer) {
           for (s = 1; s <= count; s++) if (capOk[s] && (best == 0 || mx[s] + ser[s] < mx[best] + ser[best])) best = s
           ser[best] += weight[k]
+          if (apartPart[k]) partOn[best] = 1
         } else {
           for (s = 1; s <= count; s++) {
-            if (!capOk[s]) continue
+            if (!allowed[s]) continue
             if (best == 0) { best = s; continue }
             a = rwall(mx[s], load[s], weight[k]) + ser[s]; b = rwall(mx[best], load[best], weight[k]) + ser[best]
             if (a < b || (a == b && load[s] < load[best])) best = s
           }
           if (weight[k] > mx[best]) mx[best] = weight[k]
           load[best] += weight[k]
+          if (heavyPkg[k]) heavyOn[best] = 1
         }
         if (best == shard) {
           keep[k] = 1
           if (!fits) printf "WARN race plan: %s%s over the leg weight cap on leg %d/%d\n", path[k], (pidx[k] > 0 ? " part " pidx[k] "/" nparts[k] : ""), shard, count > "/dev/stderr"
+          if (!apartOk) printf "WARN race plan: %s heavy, no leg without a heavy package or a listed part, on leg %d/%d\n", path[k], shard, count > "/dev/stderr"
         }
       }
     }

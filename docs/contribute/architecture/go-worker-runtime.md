@@ -534,6 +534,16 @@ properties of that listing shape the walk:
   rate-limit headers of the unit's own responses and stops, with the marker
   `open_phase_rate_floor`, when fewer than the larger of 500 and a fifth of the
   limit remain, or when no header was seen.
+  A re-read that fails with an error of that run alone (410, 422, 409, another
+  4xx, a payload that does not decode, a 404 on its jobs pages, or a transient
+  error) skips the run: nothing is written for it, the walk moves past it, and
+  the next unit reads it again. A skip uses no cap slot; the skips of a unit
+  stop at the cap (marker `open_runs_skip_limit`). Each skip is one WARN line
+  with the run id and the reason, and one step of
+  `dev_health_provider_open_run_skipped_total{provider,dataset,reason}`; the
+  unit result carries `open_runs_skipped`. Three transient skips in a row with
+  no run re-read between them, a rate limit, an auth error or a cancel still
+  fail the unit.
   The 6-hour lookback and the 100 / 300 re-read caps are fixed defaults, not
   configurable.
 

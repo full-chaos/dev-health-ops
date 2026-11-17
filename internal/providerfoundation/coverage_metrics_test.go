@@ -348,3 +348,39 @@ func TestNonFiniteReleaseRefConfidenceCounterAggregatesByProviderDatasetOnly(t *
 		t.Fatalf("a zero-count call must not mint a series: %s", rendered)
 	}
 }
+
+// One open run skipped for the unit is counted by bounded provider, dataset and reason; an unknown reason collapses
+// to "other" and no run id can reach a label.
+func TestOpenRunSkippedCounterRendersBoundedReasons(t *testing.T) {
+	t.Parallel()
+	metrics := NewMetrics()
+	metrics.RecordOpenRunSkipped("GitHub", "tests", "gone")
+	metrics.RecordOpenRunSkipped("github", "tests", "gone")
+	metrics.RecordOpenRunSkipped("github", "cicd", "transient")
+	metrics.RecordOpenRunSkipped("github", "tests", "run-123456789")
+	var output bytes.Buffer
+	if err := metrics.WritePrometheus(&output); err != nil {
+		t.Fatal(err)
+	}
+	rendered := output.String()
+	for _, want := range []string{
+		"# TYPE dev_health_provider_open_run_skipped_total counter",
+		`dev_health_provider_open_run_skipped_total{provider="github",dataset="tests",reason="gone"} 2`,
+		`dev_health_provider_open_run_skipped_total{provider="github",dataset="cicd",reason="transient"} 1`,
+		`dev_health_provider_open_run_skipped_total{provider="github",dataset="tests",reason="other"} 1`,
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("missing %q in:\n%s", want, rendered)
+		}
+	}
+	if strings.Contains(rendered, "123456789") {
+		t.Fatal("a run id reached a label")
+	}
+	for _, reason := range []string{"gone", "unprocessable", "conflict", "client_error", "invalid_payload", "transient", "jobs_not_found"} {
+		if got := MetricOpenRunSkipReasonLabel(reason); got != reason {
+			t.Fatalf("MetricOpenRunSkipReasonLabel(%q) = %q", reason, got)
+		}
+	}
+	var absent *Metrics
+	absent.RecordOpenRunSkipped("github", "tests", "gone")
+}

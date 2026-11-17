@@ -579,8 +579,7 @@ func mcpIdentityHeadersPresent(h http.Header) bool { return internalidentity.Pre
 
 // mcpAuthenticate takes the identity from the internal identity headers
 // ONLY, and refuses any elevated claim. The returned claims always carry
-// Role "", IsSuperuser false and ImpersonationActive false, and the principal
-// the carrier names, if any.
+// Role "", IsSuperuser false, ImpersonationActive false and the named principal.
 func mcpAuthenticate(r *http.Request) (authctx.Claims, int, string) {
 	if len(r.Header.Values("Authorization")) > 0 {
 		return authctx.Claims{}, http.StatusUnauthorized, mcpReasonAuthorization

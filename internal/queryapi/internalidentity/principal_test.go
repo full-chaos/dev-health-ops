@@ -54,7 +54,9 @@ func TestFromHeaderReadsTheOptionalPrincipal(t *testing.T) {
 		"the nil principal": {"prn_AAAAAAAAAAAAAAAAAAAAAA"},
 	} {
 		h := fourHeaders()
-		h[HeaderPrincipalID] = values
+		for _, value := range values {
+			h.Add(HeaderPrincipalID, value)
+		}
 		if _, err := FromHeader(h); err == nil {
 			t.Errorf("%s: accepted, want a rejection", name)
 		}

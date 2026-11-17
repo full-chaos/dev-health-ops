@@ -39,11 +39,12 @@ const (
 	HeaderPrincipalID = "X-DH-Internal-Principal-Id"
 )
 
-// Headers lists every internal identity header name.
-var Headers = []string{HeaderOrgID, HeaderRole, HeaderSuperuser, HeaderImpersonationActive, HeaderPrincipalID}
+// Headers lists the four internal identity header names every carrier sends exactly once.
+var Headers = []string{HeaderOrgID, HeaderRole, HeaderSuperuser, HeaderImpersonationActive}
 
-// requiredHeaders are the four every carrier sends exactly once.
-var requiredHeaders = []string{HeaderOrgID, HeaderRole, HeaderSuperuser, HeaderImpersonationActive}
+// AllHeaders is Headers and the optional principal header: every name the public listener deletes and any one of
+// which makes a carrier present.
+var AllHeaders = []string{HeaderOrgID, HeaderRole, HeaderSuperuser, HeaderImpersonationActive, HeaderPrincipalID}
 
 // Rejection reasons. They name the class of failure, never a value.
 const (
@@ -67,7 +68,7 @@ func (r *Rejection) Error() string {
 // Present reports whether the request carries ANY internal identity header.
 // A partial set is present: it is refused, never read as "no identity".
 func Present(h http.Header) bool {
-	for _, name := range Headers {
+	for _, name := range AllHeaders {
 		if len(h.Values(name)) > 0 {
 			return true
 		}
@@ -82,8 +83,8 @@ func Present(h http.Header) bool {
 // principal header is optional; present, it is exactly one canonical wire id.
 func FromHeader(h http.Header) (authctx.Claims, error) {
 	var claims authctx.Claims
-	values := make(map[string]string, len(requiredHeaders))
-	for _, name := range requiredHeaders {
+	values := make(map[string]string, len(Headers))
+	for _, name := range Headers {
 		got := h.Values(name)
 		switch len(got) {
 		case 0:

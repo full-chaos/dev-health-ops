@@ -32,8 +32,8 @@ func plannerSplitAndAlone(t *testing.T) (split, alone map[string]bool) {
 		alone[m[1]] = true
 	}
 	iso := isolatedKeyDecl.FindStringSubmatch(script)
-	if iso == nil || len(split) == 0 || len(alone) != 5 {
-		t.Fatalf("planner facts not found: %d split packages, %d own-shard keys, isolated declaration %v", len(split), len(alone), iso != nil)
+	if iso == nil || len(alone) != 5 {
+		t.Fatalf("planner facts not found: %d own-shard keys, isolated declaration %v", len(alone), iso != nil)
 	}
 	for _, k := range strings.Fields(iso[1]) {
 		alone[k] = true

@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -20,6 +21,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/vektah/gqlparser/v2"
+	gqlast "github.com/vektah/gqlparser/v2/ast"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/authapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/authconfig"
@@ -27,6 +30,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/workloadinput"
 	"github.com/full-chaos/dev-health-ops/internal/authzenforce"
 	"github.com/full-chaos/dev-health-ops/internal/mcpclass"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/internalidentity"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/pdp"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/producttelemetry"
@@ -58,8 +62,9 @@ type hpCase struct {
 	// seeded, when set, is what a served body holds only from seeded rows, for a root that answers derived text
 	// rather than the rows themselves.
 	seeded *regexp.Regexp
-	// volatile are the only JSON paths (dotted, through arrays) compared as "present" rather than by value, each
-	// with its reason. Every other byte of a served body is compared as it is.
+	// volatile are the only schema paths (field names from data, dotted, through arrays) whose values are compared as
+	// "present" rather than by value, each with its reason. hpRoots resolves each to the response keys the selected
+	// document gives it (an alias is followed); every other byte of a served body is compared as it is.
 	volatile map[string]string
 }
 
@@ -225,6 +230,13 @@ type hpCaller struct {
 type hpRoot struct {
 	op qpOperation
 	hpCase
+	// userActions and carrierActions are the decisions the selected document needs, in the order the gate asks them:
+	// the distinct catalog actions of every root the document selects (fragments and aliases resolved), kept where
+	// the caller's cells enforce them (user: qpEnforceCells; carrier: hpHeaderCells).
+	userActions, carrierActions []string
+	// volatileKeys are the response-key paths (from "data") that root's volatile schema paths resolve to through
+	// the selected document: an alias is followed, a fragment is spread.
+	volatileKeys [][]string
 }
 
 // hpRoots are the RC10 operations: the registered document of each case root, with the case's variables.
@@ -232,6 +244,8 @@ func hpRoots(t *testing.T, org string, now time.Time) []hpRoot {
 	t.Helper()
 	cases := hpCaseTable(now)
 	start, end := hpWindow(now)
+	schema := graph.NewExecutableSchema(graph.Config{}).Schema()
+	actions := graph.FieldActionTable()
 	var roots []hpRoot
 	for _, op := range qpGraphQLOperations(t, org).roots {
 		c, ok := cases[op.key]
@@ -251,12 +265,86 @@ func hpRoots(t *testing.T, org string, now time.Time) []hpRoot {
 		op.bodyBytes = op.body(t)
 		head, _, _ := strings.Cut(op.document, "{")
 		t.Logf("ROOT %-34s %s variables=%s", op.key, strings.TrimSpace(head), op.variablesJSON(t))
-		roots = append(roots, hpRoot{op: op, hpCase: c})
+		doc, errs := gqlparser.LoadQuery(schema, op.document)
+		if errs != nil {
+			t.Fatalf("%s: the selected document does not validate: %v", op.key, errs)
+		}
+		root := hpRoot{op: op, hpCase: c}
+		root.userActions = hpDocumentActions(doc, actions, qpEnforceCells)
+		root.carrierActions = hpDocumentActions(doc, actions, hpHeaderCells)
+		for path := range c.volatile {
+			segments := strings.Split(path, ".")
+			if segments[0] != "data" {
+				t.Fatalf("%s: volatile path %q does not start at data", op.key, path)
+			}
+			for _, keys := range hpResolveKeys(doc, doc.Operations[0].SelectionSet, segments[1:], map[string]bool{}) {
+				root.volatileKeys = append(root.volatileKeys, append([]string{"data"}, keys...))
+			}
+		}
+		roots = append(roots, root)
 	}
 	if len(roots) != len(cases) {
 		t.Fatalf("%d RC10 cases, %d roots found: TestHeaderCarrierRootCases names the gap", len(cases), len(roots))
 	}
 	return roots
+}
+
+// hpDocumentActions are the distinct catalog actions of the document's roots in first-selected order (fragments
+// spread, aliases are the same field), kept where cells enforce their namespace. They come from the document, never
+// from the asks a build made.
+func hpDocumentActions(doc *gqlast.QueryDocument, table map[string]string, cells string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, key := range qpRootKeys(doc) {
+		action, ok := table[key]
+		if !ok || seen[action] || !strings.Contains(","+cells+",", ","+qpNamespace(action)+",") {
+			continue
+		}
+		seen[action] = true
+		out = append(out, action)
+	}
+	return out
+}
+
+// hpResolveKeys are the response-key paths that a schema path (field names) takes in a selection set: every field
+// of that name (direct, or in an inline fragment or named spread) answers under its alias, or its name.
+func hpResolveKeys(doc *gqlast.QueryDocument, set gqlast.SelectionSet, path []string, spread map[string]bool) [][]string {
+	var out [][]string
+	for _, selection := range set {
+		switch s := selection.(type) {
+		case *gqlast.Field:
+			if s.Name != path[0] {
+				continue
+			}
+			key := s.Alias
+			if key == "" {
+				key = s.Name
+			}
+			if len(path) == 1 {
+				out = append(out, []string{key})
+				continue
+			}
+			for _, rest := range hpResolveKeys(doc, s.SelectionSet, path[1:], spread) {
+				out = append(out, append([]string{key}, rest...))
+			}
+		case *gqlast.InlineFragment:
+			out = append(out, hpResolveKeys(doc, s.SelectionSet, path, spread)...)
+		case *gqlast.FragmentSpread:
+			if spread[s.Name] {
+				continue
+			}
+			spread[s.Name] = true
+			definition := s.Definition
+			if definition == nil {
+				definition = doc.Fragments.ForName(s.Name)
+			}
+			if definition != nil {
+				out = append(out, hpResolveKeys(doc, definition.SelectionSet, path, spread)...)
+			}
+			delete(spread, s.Name)
+		}
+	}
+	return out
 }
 
 // TestHeaderCarrierRootCases is the census: every registered root in the flipped namespaces (the documents
@@ -325,7 +413,11 @@ func TestHeaderCarrierPrincipalParity(t *testing.T) {
 			op := root.op
 			cells++
 			mark := h.afterAsks.mark()
-			user := send(b, c.name, c.userToken, "public", "/graphql", op)
+			token := ""
+			user := send(b, c.name, func(r *http.Request) {
+				c.userToken(r)
+				token = strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+			}, "public", "/graphql", op)
 			userAsks := h.afterAsks.since(mark)
 			mark = h.afterAsks.mark()
 			mcp := send(b, c.name, carrier, "mcp", "/query", op)
@@ -336,17 +428,17 @@ func TestHeaderCarrierPrincipalParity(t *testing.T) {
 			uv, mv, rv := hpVerdict(user), hpVerdict(mcp), hpVerdict(runOp)
 			t.Logf("%-25s %-34s user=%-28s mcp=%-28s run-operation=%s", c.name, op.key, uv, mv, rv)
 
-			// One decision per decided request (P1-c), for this cell: the carrier asks once, as the principal it
-			// names, for org A and the root's action; a served user request asks once for org A and the action.
-			hpOneDecision(t, c.name, op, "run-operation", runAsks, principal, v.orgA.String())
+			// The decisions of this cell (P1-c, P1-f), against the actions the selected document needs: a served
+			// request asks once per action, as its principal (the carrier's named principal, or the user's token), for
+			// org A; a refused one asks a non-empty prefix of them (the gate stops at the first deny); a request
+			// refused at authentication (401) asks nothing.
+			hpDecisions(t, c.name, op.key, "run-operation", runOp, rv, runAsks, root.carrierActions, principal, v.orgA.String())
 			carrierDecisions++
 			if root.mcpReason == "" {
-				hpOneDecision(t, c.name, op, "mcp", mcpAsks, principal, v.orgA.String())
+				hpDecisions(t, c.name, op.key, "mcp", mcp, mv, mcpAsks, root.carrierActions, principal, v.orgA.String())
 				carrierDecisions++
 			}
-			if uv == "served" {
-				hpOneDecision(t, c.name, op, "user", userAsks, "", v.orgA.String())
-			}
+			hpDecisions(t, c.name, op.key, "user", user, uv, userAsks, root.userActions, token, v.orgA.String())
 			if root.mcpReason != "" {
 				// Outside the MCP allowlist (P1-d, P2): an error-only refusal with the exact status and
 				// errors[0].extensions.reason, and no decision, after the flip and before it.
@@ -428,7 +520,7 @@ func TestHeaderCarrierPrincipalParity(t *testing.T) {
 			}
 		}
 	}
-	t.Logf("%d cells over %d callers and %d roots; %d carrier requests each decided once; %d served cells byte-equal; %d roots served with seeded rows",
+	t.Logf("%d cells over %d callers and %d roots; %d carrier requests checked against their document's actions; %d served cells byte-equal; %d roots served with seeded rows",
 		cells, len(callers), len(roots), carrierDecisions, servedSame, seeded)
 }
 
@@ -484,18 +576,52 @@ func (a *hpAsks) since(mark int) []hpAsk {
 	return append([]hpAsk(nil), a.all[mark:]...)
 }
 
-// hpOneDecision fails unless one request leg asked the decision point exactly once, for org and op's action, and (when
-// principal is set) as that principal.
-func hpOneDecision(t *testing.T, caller string, op qpOperation, leg string, asks []hpAsk, principal, org string) {
+// hpDecisions fails unless one request leg's decision requests match the actions its selected document needs
+// (expected, in the gate's order): served, exactly one per action and nothing else; refused, a non-empty prefix of
+// them; refused at authentication (401), none. Each ask must name org and the principal.
+func hpDecisions(t *testing.T, caller, key, leg string, answer qpAnswer, verdict string, asks []hpAsk, expected []string, principal, org string) {
 	t.Helper()
-	if len(asks) != 1 {
-		t.Errorf("%s %s %s: %d decisions, want exactly 1: %+v", caller, op.key, leg, len(asks), asks)
-		return
+	for _, ask := range asks {
+		if ask.org != org || ask.principal != principal {
+			t.Errorf("%s %s %s: decided %+v, want org %s and principal %.24q", caller, key, leg, ask, org, principal)
+		}
 	}
-	ask := asks[0]
-	if ask.action != op.action || ask.org != org || (principal != "" && ask.principal != principal) {
-		t.Errorf("%s %s %s: decided %+v, want action %s, org %s, principal %q", caller, op.key, leg, ask, op.action, org, principal)
+	actions := make([]string, len(asks))
+	for i, ask := range asks {
+		actions[i] = ask.action
 	}
+	switch {
+	case answer.status == http.StatusUnauthorized:
+		if len(asks) != 0 {
+			t.Errorf("%s %s %s: refused at authentication but decided %v", caller, key, leg, actions)
+		}
+	case verdict == "served":
+		if !hpSameSet(actions, expected) {
+			t.Errorf("%s %s %s: served with decisions %v, want exactly one per action of %v", caller, key, leg, actions, expected)
+		}
+	default:
+		if len(actions) == 0 || len(actions) > len(expected) || !slices.Equal(actions, expected[:len(actions)]) {
+			t.Errorf("%s %s %s: %s with decisions %v, want a non-empty prefix of %v", caller, key, leg, verdict, actions, expected)
+		}
+	}
+}
+
+// hpSameSet reports whether got holds each of want exactly once and nothing else.
+func hpSameSet(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	count := map[string]int{}
+	for _, w := range want {
+		count[w]++
+	}
+	for _, g := range got {
+		count[g]--
+		if count[g] < 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // hpRefusal is "" for an error-only MCP refusal (no data member, or data null) with status and
@@ -596,12 +722,12 @@ func hpCarrier(org, user uuid.UUID) func(*http.Request) {
 	}
 }
 
-// hpBody is a for comparison: the MCP listener's framing newline trimmed, and each of root's named volatile paths
+// hpBody is a for comparison: the MCP listener's framing newline trimmed, and each response-key path resolved from root's volatile paths
 // set to "<volatile>" where present. Nothing else is masked: a seeded id or time compares as it is.
 func hpBody(t *testing.T, a qpAnswer, root hpRoot) qpAnswer {
 	t.Helper()
 	a.body = bytes.TrimRight(a.body, "\n")
-	if len(root.volatile) == 0 {
+	if len(root.volatileKeys) == 0 {
 		return a
 	}
 	decoder := json.NewDecoder(bytes.NewReader(a.body))
@@ -610,8 +736,8 @@ func hpBody(t *testing.T, a qpAnswer, root hpRoot) qpAnswer {
 	if decoder.Decode(&document) != nil {
 		return a
 	}
-	for path := range root.volatile {
-		hpMarkPath(document, strings.Split(path, "."))
+	for _, keys := range root.volatileKeys {
+		hpMarkPath(document, keys)
 	}
 	raw, err := json.Marshal(document)
 	if err != nil {

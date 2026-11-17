@@ -134,7 +134,7 @@ func TestOnlyAConnectOrAnAbsoluteURLRequestIsAProxyDial(t *testing.T) {
 		"":                       false,
 		"\x16\x03\x01 tls hello": false,
 	} {
-		if got := isProxyDial(line); got != want {
+		if got := isProxyDial(line, false); got != want {
 			t.Errorf("isProxyDial(%q) = %v, want %v", line, got, want)
 		}
 	}
@@ -162,5 +162,15 @@ func TestASplitProxyRequestIsAProxyDial(t *testing.T) {
 	}
 	if capture.Connections != 1 || capture.Foreign != 0 {
 		t.Fatalf("a split CONNECT is not a single proxy dial: %+v", capture)
+	}
+}
+
+func TestAVeryLongProxyRequestLineIsAProxyDial(t *testing.T) {
+	long := "GET http://upstream.invalid/issues?id=" + strings.Repeat("7ee2dd36-45e9-4d60-8d7b-000000000000&id=", 30000) + "x HTTP/1.1"
+	if !isProxyDial(long, false) {
+		t.Fatal("a long complete request line is a proxy dial")
+	}
+	if !isProxyDial(long[:1<<20], true) || isProxyDial(long[:1<<20], false) {
+		t.Fatal("a line cut at the read bound is judged on its target alone")
 	}
 }

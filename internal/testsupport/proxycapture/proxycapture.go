@@ -153,10 +153,11 @@ func (p *captureProxy) handle(conn net.Conn) {
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(2 * time.Second))
 	received := readRequest(conn)
-	firstLine, _, _ := strings.Cut(string(received), "\n")
+	firstLine, _, terminated := strings.Cut(string(received), "\n")
 	firstLine = strings.TrimSuffix(firstLine, "\r")
+	truncated := !terminated && len(received) >= maxRequestBytes
 	p.mu.Lock()
-	if isProxyDial(firstLine) {
+	if isProxyDial(firstLine, truncated) {
 		p.capture.Connections++
 		p.capture.FirstLines = append(p.capture.FirstLines, firstLine)
 		if bytes.Contains(received, []byte(Canary)) {
@@ -178,7 +179,7 @@ func (p *captureProxy) close() Capture {
 	return p.capture
 }
 
-const maxRequestBytes = 64 << 10
+const maxRequestBytes = 1 << 20
 
 // readRequest reads until the end of the request headers, the size bound or the connection deadline, so a request
 // split over several TCP segments is classified on its whole request line.
@@ -195,13 +196,39 @@ func readRequest(conn net.Conn) []byte {
 	return received
 }
 
-var (
-	connectRequest     = regexp.MustCompile(`^CONNECT [^\s/]+:[0-9]+ HTTP/1\.[01]$`)
-	absoluteURLRequest = regexp.MustCompile("^[!#$%&'*+.^_`|~0-9A-Za-z-]+ (?i:https?)://[^\\s/]+\\S* HTTP/1\\.[01]$")
-)
+// isProxyDial reports whether a connection's request line is what a client sends a forward proxy: an HTTP/1 request
+// whose target is an authority (CONNECT) or an absolute URI of any scheme, not an origin-form path. truncated means the
+// line hit the read bound, so its version is not checked.
+func isProxyDial(requestLine string, truncated bool) bool {
+	method, rest, ok := strings.Cut(requestLine, " ")
+	if !ok || !isToken(method) {
+		return false
+	}
+	target := rest
+	if truncated {
+		target, _, _ = strings.Cut(rest, " ")
+	} else {
+		var version string
+		target, version, ok = strings.Cut(rest, " ")
+		if !ok || (version != "HTTP/1.0" && version != "HTTP/1.1") {
+			return false
+		}
+	}
+	if method == "CONNECT" {
+		return target != "" && !strings.HasPrefix(target, "/") && target != "*"
+	}
+	scheme, _, found := strings.Cut(target, "://")
+	return found && scheme != "" && !strings.ContainsAny(scheme, "/?#")
+}
 
-// isProxyDial reports whether a connection's request line is what a client sends a forward proxy: CONNECT to a
-// host:port authority, or any method on an absolute http(s) URL.
-func isProxyDial(requestLine string) bool {
-	return connectRequest.MatchString(requestLine) || absoluteURLRequest.MatchString(requestLine)
+func isToken(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if !strings.ContainsRune("!#$%&'*+.^_`|~-", r) && !(r >= '0' && r <= '9') && !(r >= 'a' && r <= 'z') && !(r >= 'A' && r <= 'Z') {
+			return false
+		}
+	}
+	return true
 }

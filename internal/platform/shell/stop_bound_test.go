@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -74,18 +73,12 @@ func TestTheWholeStopWithEveryTelemetryEndpointDownStaysUnderTheContainerBudget(
 		runStopBoundHelper()
 		return
 	}
-	httpListener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	httpAddress := httpListener.Addr().String()
-	_ = httpListener.Close()
 	closedAddress := refusedaddr.Addr(t)
 
 	command := exec.Command(os.Args[0], "-test.run=^TestTheWholeStopWithEveryTelemetryEndpointDownStaysUnderTheContainerBudget$")
 	command.Env = append(os.Environ(),
 		"STOP_BOUND_HELPER=1",
-		"STOP_BOUND_HTTP_ADDR="+httpAddress,
+		"STOP_BOUND_HTTP_ADDR=127.0.0.1:0",
 		"OTEL_ENABLED=true",
 		"OTEL_SAMPLE_RATE=1",
 		"OTEL_EXPORTER_OTLP_ENDPOINT="+closedAddress,

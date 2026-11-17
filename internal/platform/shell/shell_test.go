@@ -11,7 +11,6 @@ import (
 	"go.opentelemetry.io/otel/metric"
 	"io"
 	"log/slog"
-	"net"
 	"net/http"
 	"slices"
 	"strings"
@@ -25,6 +24,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/platform/version"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/boundaddr"
 )
 
 func testLookup(values map[string]string) secrets.LookupEnv {
@@ -549,18 +549,11 @@ func TestRuntimeFailureHonoursComponentDependencyReason(t *testing.T) {
 }
 
 func TestShellStartsEndpointsAndTerminatesCleanly(t *testing.T) {
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	address := listener.Addr().String()
-	if err := listener.Close(); err != nil {
-		t.Fatal(err)
-	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	var stdout, stderr bytes.Buffer
+	var stdout boundaddr.Logs
+	var stderr bytes.Buffer
 	done := make(chan int, 1)
 	go func() {
 		done <- Execute(ctx, Spec{
@@ -576,10 +569,11 @@ func TestShellStartsEndpointsAndTerminatesCleanly(t *testing.T) {
 				)
 			},
 		}, nil, testLookup(map[string]string{
-			"DEV_HEALTH_HTTP_ADDR":        address,
+			"DEV_HEALTH_HTTP_ADDR":        "127.0.0.1:0",
 			"DEV_HEALTH_SHUTDOWN_TIMEOUT": "1s",
 		}), IO{Stdout: &stdout, Stderr: &stderr})
 	}()
+	address := boundaddr.Await(t, &stdout, "operator-http", done)
 
 	client := &http.Client{Timeout: 100 * time.Millisecond}
 	deadline := time.Now().Add(3 * time.Second)
@@ -970,25 +964,19 @@ var otelProbeRuns atomic.Int64
 func exportOTelProbe(t *testing.T) {
 	t.Helper()
 	name := fmt.Sprintf("shell_otel_probe_%d_total", otelProbeRuns.Add(1))
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	address := listener.Addr().String()
-	if err := listener.Close(); err != nil {
-		t.Fatal(err)
-	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	var stdout, stderr bytes.Buffer
+	var stdout boundaddr.Logs
+	var stderr bytes.Buffer
 	done := make(chan int, 1)
 	go func() {
 		done <- Execute(ctx, Spec{Service: "dev-health-worker"}, nil, testLookup(map[string]string{
-			"DEV_HEALTH_HTTP_ADDR":        address,
+			"DEV_HEALTH_HTTP_ADDR":        "127.0.0.1:0",
 			"DEV_HEALTH_SHUTDOWN_TIMEOUT": "1s",
 		}), IO{Stdout: &stdout, Stderr: &stderr})
 	}()
+	address := boundaddr.Await(t, &stdout, "operator-http", done)
 
 	client := &http.Client{Timeout: 200 * time.Millisecond}
 	deadline := time.Now().Add(3 * time.Second)
@@ -1037,24 +1025,18 @@ func exportOTelProbe(t *testing.T) {
 // (both attempt series) on a healthy start, so a process whose tracing failed is
 // distinguishable from one that never exposed the family.
 func TestShellExposesTheOTelInitFailureCounterAtZero(t *testing.T) {
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	address := listener.Addr().String()
-	if err := listener.Close(); err != nil {
-		t.Fatal(err)
-	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	var stdout, stderr bytes.Buffer
+	var stdout boundaddr.Logs
+	var stderr bytes.Buffer
 	done := make(chan int, 1)
 	go func() {
 		done <- Execute(ctx, Spec{Service: "dev-health-worker"}, nil, testLookup(map[string]string{
-			"DEV_HEALTH_HTTP_ADDR":        address,
+			"DEV_HEALTH_HTTP_ADDR":        "127.0.0.1:0",
 			"DEV_HEALTH_SHUTDOWN_TIMEOUT": "1s",
 		}), IO{Stdout: &stdout, Stderr: &stderr})
 	}()
+	address := boundaddr.Await(t, &stdout, "operator-http", done)
 	client := &http.Client{Timeout: 200 * time.Millisecond}
 	deadline := time.Now().Add(3 * time.Second)
 	for {
@@ -1100,14 +1082,6 @@ func TestShellExposesTheOTelInitFailureCounterAtZero(t *testing.T) {
 // which required check refused and how (bounded cause), and never the error text,
 // which can carry a DSN.
 func TestShellLogsWhichRequiredCheckRefusedReadinessWithoutTheErrorText(t *testing.T) {
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	address := listener.Addr().String()
-	if err := listener.Close(); err != nil {
-		t.Fatal(err)
-	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var stdout, stderr syncBuffer
@@ -1123,10 +1097,11 @@ func TestShellLogsWhichRequiredCheckRefusedReadinessWithoutTheErrorText(t *testi
 				})
 			},
 		}, nil, testLookup(map[string]string{
-			"DEV_HEALTH_HTTP_ADDR":        address,
+			"DEV_HEALTH_HTTP_ADDR":        "127.0.0.1:0",
 			"DEV_HEALTH_SHUTDOWN_TIMEOUT": "1s",
 		}), IO{Stdout: &stdout, Stderr: &stderr})
 	}()
+	address := boundaddr.Await(t, &stdout, "operator-http", done)
 
 	// Failure-path hang guard only: no passing run waits on it.
 	guard, stopGuard := context.WithTimeout(t.Context(), 60*time.Second)

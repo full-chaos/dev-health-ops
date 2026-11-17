@@ -519,12 +519,11 @@ func (handler GitHubTestsRouteHandler) Collect(
 		artifacts, superseded := githubTestsKeepNewestArtifactPerName(artifacts)
 		supersededIDs := githubTestsSupersededIDs(superseded)
 		// CHAOS-13980: same disposition as the chunked route -- expired artifacts are split out after newest-per-name and before the
-		// cap, a report-shaped one is recorded once per (run, artifact) with the same durable marker, any other expired name is an
-		// excluded non-report artifact.
+		// cap, every expired artifact that passed the selection seam is recorded once per (run, artifact) with the same durable marker
+		// (contents unknown: fail closed).
 		artifacts, expiredItems := githubTestsSplitExpiredArtifacts(artifacts)
 		for _, artifact := range expiredItems {
-			if !githubTestsExpiredArtifactLooksLikeReport(artifact.Name) ||
-				githubTestsSkippedMarkerRecorded(skippedArtifacts, pipeline.RunID, string(artifact.ID), githubTestsArtifactExpiredCause) {
+			if githubTestsSkippedMarkerRecorded(skippedArtifacts, pipeline.RunID, string(artifact.ID), githubTestsArtifactExpiredCause) {
 				continue
 			}
 			incomplete = recordGitHubTestsSkippedArtifact(

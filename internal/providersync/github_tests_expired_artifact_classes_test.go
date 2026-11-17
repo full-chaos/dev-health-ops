@@ -80,8 +80,12 @@ func githubTestsExpiredCells() []githubTestsExpiredCell {
 			artifacts: githubTestsExpiredArtifactsJSON(githubTestsExpiredEntry(1, "test-results", false), githubTestsExpiredEntry(2, "test-results", true))},
 		{name: "both_attempts_expired_counts_once", runs: githubTestsWorkflowRunsFixture(1, 1), wantExpired: 1,
 			artifacts: githubTestsExpiredArtifactsJSON(githubTestsExpiredEntry(1, "test-results", true), githubTestsExpiredEntry(2, "test-results", true))},
-		{name: "non_report_name_expired_is_not_a_loss", runs: githubTestsWorkflowRunsFixture(1, 1), wantExpired: 0,
+		{name: "expired_name_passing_the_filter_is_fail_closed", runs: githubTestsWorkflowRunsFixture(1, 1), wantExpired: 2,
 			artifacts: githubTestsExpiredArtifactsJSON(githubTestsExpiredEntry(1, "release-binary", true), githubTestsExpiredEntry(2, "screenshots-index", true))},
+		{name: "expired_playwright_results_counts", runs: githubTestsWorkflowRunsFixture(1, 1), wantExpired: 1,
+			artifacts: githubTestsExpiredArtifactsJSON(githubTestsExpiredEntry(44176848287, "playwright-results-default-1-44176848287-1", true))},
+		{name: "expired_name_the_filter_excludes_never_counts", runs: githubTestsWorkflowRunsFixture(1, 1), wantExpired: 0,
+			artifacts: githubTestsExpiredArtifactsJSON(githubTestsExpiredEntry(1, "go-images-api", true), githubTestsExpiredEntry(2, "base.dockerbuild", true), githubTestsExpiredEntry(3, "sbom.spdx.json", true))},
 		{name: "run_listed_twice_counts_once", runs: githubTestsDuplicateRunFixture(), wantExpired: 1,
 			artifacts: githubTestsExpiredArtifactsJSON(githubTestsExpiredEntry(1, "test-results", true))},
 		{name: "expired_listed_first_keeps_all_25_readable", runs: githubTestsWorkflowRunsFixture(1, 1), wantExpired: 1, wantNoCap: true,
@@ -165,5 +169,56 @@ func TestGitHubTestsExpiredArtifactClassesBothRoutes(t *testing.T) {
 				githubTestsCheckExpiredCell(t, cell, claim, batch, client.Metrics)
 			})
 		}
+	}
+}
+
+// CHAOS-13980: the named residual of the once-per-(run, artifact) rule. The marker sample is bounded; once it is full, a revisit
+// of an expired artifact whose marker was dropped counts again. The count is inflated, but the close decision does not change: the
+// unit reads reports_complete=false with only report_member/artifact_expired causes and the watermark still advances.
+func TestGitHubTestsExpiredRevisitWithFullSampleOvercounts(t *testing.T) {
+	entries := []string{}
+	for id := 1; id <= githubTestsMaxSkippedArtifactRecords+1; id++ {
+		entries = append(entries, githubTestsExpiredEntry(id, fmt.Sprintf("build-%d", id), true))
+	}
+	distinct := len(entries)
+	normalizedAt := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
+	check := func(t *testing.T, claim Claim, batch CompleteRouteBatch, wantCount int) {
+		t.Helper()
+		incomplete, _ := batch.Result["incomplete"].([]GitHubTestsIncomplete)
+		if len(incomplete) != 1 || incomplete[0].Component != githubTestsReportMemberComponent || incomplete[0].Cause != githubTestsArtifactExpiredCause {
+			t.Fatalf("incomplete=%+v, want only report_member/artifact_expired", incomplete)
+		}
+		if incomplete[0].Count != wantCount {
+			t.Errorf("count=%d, want %d", incomplete[0].Count, wantCount)
+		}
+		if batch.Result["reports_complete"] != false {
+			t.Errorf("reports_complete=%v, want false", batch.Result["reports_complete"])
+		}
+		if batch.Watermark == nil || !sameOptionalTime(batch.Watermark, claim.BeforeAt) {
+			t.Errorf("watermark=%v, want the window end", batch.Watermark)
+		}
+		if _, err := (ProductionContractComparator{}).CompareCompleteRoute(context.Background(), claim, batch); err != nil {
+			t.Errorf("production comparator rejected the completion: %v", err)
+		}
+	}
+	for _, route := range []string{"chunked", "nonchunked"} {
+		t.Run(route, func(t *testing.T) {
+			doer := &githubTestsExpiredClassDoer{t: t, runs: githubTestsDuplicateRunFixture(), artifacts: githubTestsExpiredArtifactsJSON(entries...), archive: githubTestsHealthyArchive(t)}
+			client := githubTestsClient(t, fakehttp.Client(doer))
+			client.Metrics = providerfoundation.NewMetrics()
+			claim := nativeTestClaim("github", "cicd")
+			if route == "chunked" {
+				check(t, claim, walkGitHubTestsChunks(t, GitHubTestsRouteHandler{}, claim, client, 4).final,
+					// the first visit counts every artifact; the revisit dedups those with a marker and recounts the one whose marker was dropped
+					distinct+1)
+				return
+			}
+			batch, err := (GitHubTestsRouteHandler{}).Collect(context.Background(), claim, providerfoundation.Credential{}, client, normalizedAt)
+			if err != nil {
+				t.Fatalf("Collect: %v", err)
+			}
+			// this route lists each run id once, so it has no revisit to recount
+			check(t, claim, batch, distinct)
+		})
 	}
 }

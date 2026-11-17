@@ -1765,19 +1765,10 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 					// decided here, after the newest-per-name rule (an older attempt's expired copy is superseded, not a loss) and BEFORE
 					// the cap (an expired artifact never takes a download slot from a readable shard). Recorded once per (run, artifact):
 					// observation, metric, durable marker. Not counted in ArchivesSeen/ArchivesUnreadable: no download happened, so it says
-					// nothing about the channel (same rule as oversized below). An expired artifact whose name is not report-shaped is an
-					// excluded non-report artifact, never a loss.
+					// nothing about the channel (same rule as oversized below). Every expired artifact that passed the selection seam above
+					// counts: its contents are unknown, so the route fails closed (the seam already dropped the known non-report names).
 					artifactItems, expiredItems := githubTestsSplitExpiredArtifacts(artifactItems)
 					for _, artifact := range expiredItems {
-						if !githubTestsExpiredArtifactLooksLikeReport(artifact.Name) {
-							if len(cursor.ExcludedArtifactSample) < githubTestsMaxExcludedArtifactSampleRecords {
-								cursor.ExcludedArtifactSample = append(
-									cursor.ExcludedArtifactSample,
-									githubTestsTruncateArtifactName(artifact.Name)+" ("+githubTestsExclusionReasonExpiredUnclassified+")",
-								)
-							}
-							continue
-						}
 						if githubTestsSkippedMarkerRecorded(cursor.SkippedArtifacts, pipeline.RunID, string(artifact.ID), githubTestsArtifactExpiredCause) {
 							continue
 						}

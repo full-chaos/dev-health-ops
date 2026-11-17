@@ -1807,30 +1807,6 @@ func recordGitHubTestsNonReportMembers(client *providerfoundation.HTTPClient, cl
 	)
 }
 
-// githubTestsExpiredReportNameMarkers are the lower-cased name fragments that make an EXPIRED artifact report-shaped (CHAOS-13980).
-// An expired artifact's bytes are gone, so nothing in it can say what it held; the selection seam only EXCLUDES known non-report
-// names, so passing it is not evidence of a report (a release binary or a screenshot index passes). Only a name that says it holds
-// test results or coverage counts as a lost report: junit, test-result(s), test_result(s), test-report, coverage, lcov, cobertura,
-// surefire, and the go-test- shards (go-test-timings- is excluded by the seam before this runs). Any other expired name is an
-// excluded non-report artifact, never a loss.
-var githubTestsExpiredReportNameMarkers = []string{
-	"junit", "test-result", "test_result", "test-report", "test_report", "coverage", "lcov", "cobertura", "surefire", "go-test-",
-}
-
-// githubTestsExclusionReasonExpiredUnclassified is the excluded-artifact sample reason for an expired artifact whose name is not
-// report-shaped.
-const githubTestsExclusionReasonExpiredUnclassified = "expired_not_report_named"
-
-func githubTestsExpiredArtifactLooksLikeReport(name string) bool {
-	lower := strings.ToLower(name)
-	for _, marker := range githubTestsExpiredReportNameMarkers {
-		if strings.Contains(lower, marker) {
-			return true
-		}
-	}
-	return false
-}
-
 // githubTestsSplitExpiredArtifacts separates artifacts GitHub lists as expired from the readable ones. Callers pass the selected,
 // newest-per-name set and apply the per-run cap to the readable ones only, so an expired artifact never takes a cap slot, and an
 // older attempt's expired copy (already superseded by a newer one of its name) is never seen here.

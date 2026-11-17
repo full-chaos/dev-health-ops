@@ -342,7 +342,7 @@ func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args 
 		for _, id := range decision.cappedUnitIDs {
 			cappedIDs[id] = true
 		}
-		service.logger.Info(ctx, synclog.MsgDispatchSyncRunConcurrencyCapped, synclog.Run(synclog.ParseID(run.id)), synclog.Count(synclog.KeyCappedCount, len(cappedIDs)), synclog.Text(synclog.KeyReason, synclog.ParseLabel(decision.reason)))
+		service.logger.Info(ctx, synclog.MsgDispatchSyncRunConcurrencyCapped, synclog.Run(synclog.ParseID(run.id)), synclog.Count(synclog.KeyCappedCount, len(cappedIDs)), synclog.Text(synclog.KeyReason, synclog.ParseLabel(decision.reasonCode)))
 	}
 
 	// --- BudgetGuard dry-run telemetry (side effect only; return discarded,
@@ -792,7 +792,7 @@ func (service *NativeDispatchSyncRunService) denyRun(
 			}
 			recordRollupBump(ctx, rollupPathDenied)
 		}
-		service.logger.Warn(ctx, synclog.MsgDispatchSyncRunDeniedWithActiveUnits, synclog.Run(synclog.ParseID(run.id)), synclog.Text(synclog.KeyReason, synclog.ParseLabel(decision.reason)), synclog.Count(synclog.KeyFailedPlannedUnits, failedPlanned), synclog.Count(synclog.KeyFailedStaleDispatchingUnits, failedStale))
+		service.logger.Warn(ctx, synclog.MsgDispatchSyncRunDeniedWithActiveUnits, synclog.Run(synclog.ParseID(run.id)), synclog.Text(synclog.KeyReason, synclog.ParseLabel(decision.reasonCode)), synclog.Count(synclog.KeyFailedPlannedUnits, failedPlanned), synclog.Count(synclog.KeyFailedStaleDispatchingUnits, failedStale))
 		if err := tx.Commit(ctx); err != nil {
 			return err
 		}
@@ -821,7 +821,7 @@ WHERE id = $1::uuid`,
 		map[string]any{}, &errorText); err != nil {
 		return err
 	}
-	service.logger.Warn(ctx, synclog.MsgDispatchSyncRunDenied, synclog.Run(synclog.ParseID(run.id)), synclog.Text(synclog.KeyReason, synclog.ParseLabel(decision.reason)), synclog.Count(synclog.KeyFailedPlannedUnits, failedPlanned))
+	service.logger.Warn(ctx, synclog.MsgDispatchSyncRunDenied, synclog.Run(synclog.ParseID(run.id)), synclog.Text(synclog.KeyReason, synclog.ParseLabel(decision.reasonCode)), synclog.Count(synclog.KeyFailedPlannedUnits, failedPlanned))
 	if err := tx.Commit(ctx); err != nil {
 		return err
 	}

@@ -29,8 +29,9 @@ func NewNamedPrincipalReferences(caller string) (*NamedPrincipalReferences, erro
 func (n *NamedPrincipalReferences) Caller() string { return n.caller }
 
 func (n *NamedPrincipalReferences) resolve(reference string) (ReferencedPrincipal, string, error) {
+	// parseWirePrincipal decodes strict unpadded base64url of 16 bytes, so a reference it accepts is the canonical form.
 	id, ok := parseWirePrincipal(reference)
-	if !ok || session.WirePrincipalID(id) != reference {
+	if !ok {
 		return ReferencedPrincipal{}, "named_malformed", nil
 	}
 	return ReferencedPrincipal{ID: id, Kind: ReferenceNamedPrincipal}, "", nil

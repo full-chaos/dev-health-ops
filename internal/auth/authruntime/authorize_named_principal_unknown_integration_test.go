@@ -68,6 +68,17 @@ func TestNamedPrincipalUnknownOrErasedIsDeniedForAHighRiskAction(t *testing.T) {
 		}
 		return raw
 	}
+	// rowOf is the high-risk audit row of one decision: its actor column and whether the attributes name the
+	// principal the reference carried.
+	rowOf := func(t *testing.T, decisionID string, principal uuid.UUID) (actor *uuid.UUID, outcome string, namesPrincipal bool) {
+		t.Helper()
+		var attributes string
+		if err := a.admin.QueryRow(ctx, `SELECT actor_principal_id, outcome, attributes::text FROM auth.security_audit_events
+WHERE event_type = $1 AND attributes->>'decision_id' = $2`, audit.EventAuthorizeHighRiskDecided, decisionID).Scan(&actor, &outcome, &attributes); err != nil {
+			t.Fatalf("the audit row of decision %s: %v", decisionID, err)
+		}
+		return actor, outcome, strings.Contains(attributes, principal.String()) || strings.Contains(attributes, session.WirePrincipalID(principal))
+	}
 	type verdict struct {
 		DecisionID string `json:"decision_id"`
 		Allowed    bool   `json:"allowed"`
@@ -102,17 +113,6 @@ func TestNamedPrincipalUnknownOrErasedIsDeniedForAHighRiskAction(t *testing.T) {
 			t.Fatal(err)
 		}
 		return n
-	}
-	// rowOf is the high-risk audit row of one decision: its actor column and whether the attributes name the
-	// principal the reference carried.
-	rowOf := func(t *testing.T, decisionID string, principal uuid.UUID) (actor *uuid.UUID, outcome string, namesPrincipal bool) {
-		t.Helper()
-		var attributes string
-		if err := a.admin.QueryRow(ctx, `SELECT actor_principal_id, outcome, attributes::text FROM auth.security_audit_events
-WHERE event_type = $1 AND attributes->>'decision_id' = $2`, audit.EventAuthorizeHighRiskDecided, decisionID).Scan(&actor, &outcome, &attributes); err != nil {
-			t.Fatalf("the audit row of decision %s: %v", decisionID, err)
-		}
-		return actor, outcome, strings.Contains(attributes, principal.String()) || strings.Contains(attributes, session.WirePrincipalID(principal))
 	}
 
 	// The control: the same high-risk question for a live owner is decided and audited.

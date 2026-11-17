@@ -28,8 +28,9 @@ func TestTheTestLegTimeoutsComeFromTheCigatesHelper(t *testing.T) {
 
 func TestTheRaceLegKeepsItsOwnTimeoutVariable(t *testing.T) {
 	script := readCheckGo(t)
-	if n := strings.Count(script, `-timeout "${DEV_HEALTH_GO_RACE_TEST_TIMEOUT:-10m}"`); n != 4 {
-		t.Errorf("the race leg names DEV_HEALTH_GO_RACE_TEST_TIMEOUT:-10m %d time(s), want 4 (the helper does not touch it)", n)
+	// 4 race-leg calls and (CHAOS-13833) the race split part call.
+	if n := strings.Count(script, `-timeout "${DEV_HEALTH_GO_RACE_TEST_TIMEOUT:-10m}"`); n != 5 {
+		t.Errorf("the race leg names DEV_HEALTH_GO_RACE_TEST_TIMEOUT:-10m %d time(s), want 5 (the helper does not touch it)", n)
 	}
 	if strings.Contains(functionBody(t, script, "check_race_shard"), "cigates_go_test_timeout") {
 		t.Error("the race leg uses the cigates helper")

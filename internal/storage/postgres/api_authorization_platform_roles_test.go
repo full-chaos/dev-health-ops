@@ -45,10 +45,9 @@ func usersColumnsOf(posture RolePosture, privilege string) []string {
 
 var (
 	wantUsersInsertWhileOwned = []string{"auth_provider", "auth_provider_id", "avatar_url", "created_at", "email", "full_name", "id",
-		"is_active", "is_verified", "last_login_at", "password_hash", "saml_nameid_format", "saml_sp_name_qualifier", "sso_provider_id",
-		"token_version", "updated_at", "username"}
+		"is_active", "is_verified", "last_login_at", "password_hash", "sso_provider_id", "token_version", "updated_at", "username"}
 	wantUsersUpdateWhileOwned = []string{"avatar_url", "email", "full_name", "is_active", "is_verified", "last_login_at", "password_hash",
-		"saml_nameid_format", "saml_sp_name_qualifier", "token_version", "updated_at", "username"}
+		"token_version", "updated_at", "username"}
 )
 
 // While auth-service owns the platform roles the api role writes no
@@ -157,9 +156,11 @@ func TestAPIPostureUsersColumnsCoverTheDDL(t *testing.T) {
 	if !columns["is_superuser"] || !columns["email"] {
 		t.Fatalf("the DDL read is wrong: %v", columns)
 	}
+	// The 2 SAML columns only go-api's removed SAML sign-in wrote (CHAOS-13951).
 	refused := map[string]map[string]bool{
-		"INSERT": {"is_superuser": true},
-		"UPDATE": {"id": true, "auth_provider": true, "auth_provider_id": true, "sso_provider_id": true, "created_at": true, "is_superuser": true},
+		"INSERT": {"is_superuser": true, "saml_nameid_format": true, "saml_sp_name_qualifier": true},
+		"UPDATE": {"id": true, "auth_provider": true, "auth_provider_id": true, "sso_provider_id": true, "created_at": true, "is_superuser": true,
+			"saml_nameid_format": true, "saml_sp_name_qualifier": true},
 	}
 	for privilege, refusedSet := range refused {
 		granted := map[string]bool{}

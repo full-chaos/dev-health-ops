@@ -16,6 +16,20 @@ import (
 
 const standInGo = `#!/usr/bin/env bash
 if [ "$1" != "test" ]; then exec "%[1]s" "$@"; fi
+case " $* " in *" -list "*) ;; *) printf '%%s\n' "$*" >> "${FAKE_GO_TEST_LOG}" ;; esac
+# CHAOS-13833: internal/cigates/testshard is a race split package; its -race listing is its rows in ci/go_race_split_weights.tsv
+# (so the real cutter runs on the real table) and each part call passes the names of its -run.
+case " $* " in *" -race "*"/internal/cigates/testshard "*)
+  case " $* " in *" -list "*) awk -F'\t' '!/^#/ && $1 == "internal/cigates/testshard" { print $2 }' "${FAKE_GO_RACE_SPLIT_WEIGHTS}"; exit 0 ;; esac
+  run="" prev=""
+  for a in "$@"; do [ "$prev" = -run ] && run="$a"; prev="$a"; done
+  run="${run#^(}"; run="${run%%)\$}"
+  IFS='|' read -r -a names <<<"$run"
+  for n in "${names[@]}"; do
+    printf '{"Action":"pass","Package":"github.com/full-chaos/dev-health-ops/internal/cigates/testshard","Test":"%%s","Elapsed":0}\n' "$n"
+  done
+  exit 0 ;;
+esac
 case " $* " in *" ./internal/providersync "*) ;; *) exit 0 ;; esac
 case " $* " in
   *" -list "*) printf 'TestAlpha\nTestBeta\nTestGamma\nTestDelta\nTestWeighted\nok  \tpkg\t0.01s\n'; exit 0 ;;
@@ -60,10 +74,17 @@ type run struct {
 	Code           int
 	JSONDir        string
 	Calls          []string
+	TestRuns       []string // every go test call of any package that is not a -list
 }
 
 // leg runs `check_go.sh ci-leg race SHARD 3` with the stand-in go replaying stream; weights is the TSV text ("" = the real table).
 func leg(t *testing.T, shard string, stream []string, rc int, weights string, env ...string) run {
+	t.Helper()
+	return checkGo(t, []string{"ci-leg", "race", shard, "3"}, stream, rc, weights, env...)
+}
+
+// checkGo runs `check_go.sh ARGS...` with the stand-in go, as leg does.
+func checkGo(t *testing.T, args []string, stream []string, rc int, weights string, env ...string) run {
 	t.Helper()
 	realGo, err := exec.LookPath("go")
 	if err != nil {
@@ -85,15 +106,17 @@ func leg(t *testing.T, shard string, stream []string, rc int, weights string, en
 	write(filepath.Join(bin, "go"), fmt.Sprintf(standInGo, realGo))
 	jsonFile := write(filepath.Join(dir, "stream.json"), strings.Join(stream, "\n")+"\n")
 	log := write(filepath.Join(dir, "calls.log"), "")
+	testLog := write(filepath.Join(dir, "test-calls.log"), "")
+	root := repoRoot(t)
 	full := append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
-		"FAKE_GO_JSON="+jsonFile, "FAKE_GO_LOG="+log, fmt.Sprintf("FAKE_GO_RC=%d", rc),
-		"TMPDIR="+filepath.Join(dir, "tmp"), "GO_TEST_JSON_DIR="+filepath.Join(dir, "json"))
+		"FAKE_GO_JSON="+jsonFile, "FAKE_GO_LOG="+log, "FAKE_GO_TEST_LOG="+testLog, fmt.Sprintf("FAKE_GO_RC=%d", rc),
+		"TMPDIR="+filepath.Join(dir, "tmp"), "GO_TEST_JSON_DIR="+filepath.Join(dir, "json"),
+		"FAKE_GO_RACE_SPLIT_WEIGHTS="+filepath.Join(root, "ci", "go_race_split_weights.tsv"))
 	if weights != "" {
 		full = append(full, "GO_PROVIDERSYNC_RACE_WEIGHTS="+write(filepath.Join(dir, "w.tsv"), weights))
 	}
 	full = append(full, env...)
-	root := repoRoot(t)
-	cmd := exec.Command("bash", filepath.Join(root, "ci", "check_go.sh"), "ci-leg", "race", shard, "3")
+	cmd := exec.Command("bash", append([]string{filepath.Join(root, "ci", "check_go.sh")}, args...)...)
 	cmd.Dir, cmd.Env = root, full
 	var so, se bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &so, &se
@@ -102,14 +125,44 @@ func leg(t *testing.T, shard string, stream []string, rc int, weights string, en
 	if ee, ok := runErr.(*exec.ExitError); ok {
 		code = ee.ExitCode()
 	}
-	b, _ := os.ReadFile(log)
-	var calls []string
-	for _, l := range strings.Split(string(b), "\n") {
-		if l != "" {
-			calls = append(calls, l)
+	lines := func(p string) []string {
+		b, _ := os.ReadFile(p)
+		var l []string
+		for _, s := range strings.Split(string(b), "\n") {
+			if s != "" {
+				l = append(l, s)
+			}
+		}
+		return l
+	}
+	return run{so.String(), se.String(), runErr, code, filepath.Join(dir, "json"), lines(log), lines(testLog)}
+}
+
+// CHAOS-13833: a race table row that ci/go_race_shard.awk refuses fails the race leg and the race plan before any go test runs
+// (the plan was read from a process substitution, which drops the planner's exit status: the leg planned nothing and passed).
+func TestARefusedRaceSplitTableRowFailsTheLegAndThePlanBeforeAnyTest(t *testing.T) {
+	t.Parallel()
+	root := repoRoot(t)
+	for _, c := range []struct{ table, path, env, msg string }{
+		{"go_race_splits.tsv", filepath.Join(root, "ci", "go_race_splits.tsv"), "GO_RACE_SPLITS", "bad split row: malformed-row"},
+		{"go_race_split_weights.tsv", filepath.Join(root, "ci", "go_race_split_weights.tsv"), "GO_RACE_SPLIT_WEIGHTS", "bad test row: malformed-row"},
+	} {
+		b, err := os.ReadFile(c.path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		bad := filepath.Join(t.TempDir(), c.table)
+		if err := os.WriteFile(bad, append(b, []byte("malformed-row\n")...), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		for _, verb := range [][]string{{"ci-leg", "race", "1", "3"}, {"race-shard-plan", "1", "3"}} {
+			r := checkGo(t, verb, nil, 0, "", c.env+"="+bad)
+			if r.Code == 0 || strings.Contains(r.Stdout, "ci-leg race: OK") || !strings.Contains(r.Stderr, c.msg) || len(r.TestRuns) != 0 {
+				t.Errorf("%s, %s: rc %d, %d go test run(s) %q; want rc != 0, %q and no go test run\nstdout:\n%s\nstderr:\n%s",
+					c.table, strings.Join(verb, " "), r.Code, len(r.TestRuns), r.TestRuns, c.msg, r.Stdout, r.Stderr)
+			}
 		}
 	}
-	return run{so.String(), se.String(), runErr, code, filepath.Join(dir, "json"), calls}
 }
 
 const rows = "# header\nTestSlowWeighted\t40000\nTestWeighted\t1500\n"

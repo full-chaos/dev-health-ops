@@ -369,6 +369,7 @@ func raceshardLeg(t *testing.T, k int) legRun {
 func raceshardVerbDefects(mod string, pkgs []string, legs [][]string) []string {
 	var defects []string
 	var seen []string
+	partPkgs := map[string]bool{}
 	providerCalls := 0
 	inRoot := map[string]bool{}
 	for _, p := range pkgs {
@@ -382,15 +383,24 @@ func raceshardVerbDefects(mod string, pkgs []string, legs [][]string) []string {
 			if !strings.Contains(" "+c+" ", " -race ") {
 				defects = append(defects, "a go test call without -race: "+c)
 			}
+			// CHAOS-13833: a race split package runs as one -run call per part; the package counts once.
+			part := strings.Contains(c, "-run") && !strings.HasSuffix(c, "./internal/providersync")
 			for _, w := range strings.Fields(c) {
 				if strings.HasPrefix(w, mod) {
-					seen = append(seen, w)
+					if part {
+						partPkgs[w] = true
+					} else {
+						seen = append(seen, w)
+					}
 				}
 			}
 			if strings.Contains(c, "-run") && strings.HasSuffix(c, "./internal/providersync") {
 				providerCalls++
 			}
 		}
+	}
+	for p := range partPkgs {
+		seen = append(seen, p)
 	}
 	if providerCalls != len(legs) {
 		defects = append(defects, "each race leg runs one providersync test shard")

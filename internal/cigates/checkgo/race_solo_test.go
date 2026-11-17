@@ -213,6 +213,8 @@ func TestRaceLegRunsItsSoloPackageLastAndInItsOwnGoTest(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(bin, "go"), []byte(fmt.Sprintf(soloStandInGo, realGo)), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// CHAOS-13833: a race leg cuts its race split packages by ci/go_race_split_weights.tsv; the listing names their rows too.
+	listing = append(listing, raceSplitRowNames(t, root)...)
 	listPath := filepath.Join(dir, "listing.txt")
 	if err := os.WriteFile(listPath, []byte(strings.Join(listing, "\n")+"\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -371,3 +373,19 @@ func TestSoloOrderGuardFiresOnAMisorderedLeg(t *testing.T) {
 }
 
 func contains(l []string, s string) bool { return slices.Contains(l, s) }
+
+// raceSplitRowNames: the test names of ci/go_race_split_weights.tsv (CHAOS-13833), so a stand-in listing holds every race part's rows.
+func raceSplitRowNames(t *testing.T, repo string) []string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(repo, "ci", "go_race_split_weights.tsv"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, l := range strings.Split(string(b), "\n") {
+		if f := strings.Split(l, "\t"); len(f) == 3 && !strings.HasPrefix(l, "#") {
+			names = append(names, f[1])
+		}
+	}
+	return names
+}

@@ -35,9 +35,20 @@ type fakeRowScanner struct {
 	// original "fail before any row" behavior every other fake usage in
 	// this file relies on.
 	failAfterRows int
+	// endErr is a driver-shaped stream-end failure (CHAOS-13977): every row is
+	// served, then Next returns false and only from then on Err reports it (the
+	// native driver reports a packet lost after the data this way). closeErr is
+	// what Close returns.
+	endErr   error
+	closeErr error
+	ended    bool
 }
 
 func (f *fakeRowScanner) Next() bool {
+	if f.err == nil && f.endErr != nil && f.cursor >= len(f.rows) {
+		f.ended = true
+		return false
+	}
 	if f.err != nil {
 		limit := f.failAfterRows
 		if limit > len(f.rows) {
@@ -87,8 +98,19 @@ func (f *fakeRowScanner) Scan(dest ...any) error {
 	return nil
 }
 
-func (f *fakeRowScanner) Err() error   { return f.err }
-func (f *fakeRowScanner) Close() error { return nil }
+func (f *fakeRowScanner) Err() error {
+	if f.err == nil && f.ended {
+		return f.endErr
+	}
+	return f.err
+}
+
+func (f *fakeRowScanner) Close() error {
+	if f.closeErr != nil {
+		return f.closeErr
+	}
+	return f.endErr
+}
 
 // fakeClient answers each Query call in order from responses/errs -- call
 // index i uses errs[i] if set (non-nil), else responses[i]. This matches

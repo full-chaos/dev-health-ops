@@ -377,6 +377,18 @@ func knownCountGuard(ctx context.Context, field string, raw float64, knownCount 
 	return f(raw)
 }
 
+// closeRows closes a read's rows and returns their Close error through err when
+// the read has no error yet (CHAOS-13977): a read is complete only when its
+// stream ended without an error (rows.Err after the loop) AND its rows closed
+// without one. A read that served its rows and then failed to close is a failed
+// read, whose rows discardOnError drops, never a measured week. Every fetcher
+// below names err as a result for this.
+func closeRows(rows interface{ Close() error }, err *error) {
+	if closeErr := rows.Close(); closeErr != nil && *err == nil {
+		*err = fmt.Errorf("operatingreview: close rows: %w", closeErr)
+	}
+}
+
 // discardOnError drops a fetcher's PARTIAL result on a mid-stream failure --
 // codex review round 1 (PR #2008, P2), verified against source before this
 // fix: a fetchXxx function's loop can successfully Scan() one or more rows
@@ -431,7 +443,7 @@ type workItemsRow struct {
 // wip_age_p90_hours are Nullable(Float64) on work_item_metrics_daily;
 // each is tuple-wrapped so argMax cannot skip a newest row that carries
 // NULL in one of them.
-func fetchWorkItems(ctx context.Context, client QueryClient, orgID string, teams teamSelection, start, end time.Time) ([]workItemsRow, error) {
+func fetchWorkItems(ctx context.Context, client QueryClient, orgID string, teams teamSelection, start, end time.Time) (out []workItemsRow, err error) {
 	teamFilter, teamGroup, teamBinding := teamClauses(teams)
 	query := `
         SELECT
@@ -470,9 +482,8 @@ func fetchWorkItems(ctx context.Context, client QueryClient, orgID string, teams
 	if err != nil {
 		return nil, fmt.Errorf("operatingreview: work_items query: %w", err)
 	}
-	defer rows.Close()
+	defer closeRows(rows, &err)
 
-	var out []workItemsRow
 	for rows.Next() {
 		var day time.Time
 		var itemsStarted, itemsCompleted uint64
@@ -502,7 +513,7 @@ type stateDurationRow struct {
 
 // fetchStateDurations ports the "state_durations" query verbatim
 // (metrics/operating_review.py:157-182).
-func fetchStateDurations(ctx context.Context, client QueryClient, orgID string, teams teamSelection, start, end time.Time) ([]stateDurationRow, error) {
+func fetchStateDurations(ctx context.Context, client QueryClient, orgID string, teams teamSelection, start, end time.Time) (out []stateDurationRow, err error) {
 	teamFilter, teamGroup, teamBinding := teamClauses(teams)
 	query := `
         SELECT
@@ -533,9 +544,8 @@ func fetchStateDurations(ctx context.Context, client QueryClient, orgID string, 
 	if err != nil {
 		return nil, fmt.Errorf("operatingreview: state_durations query: %w", err)
 	}
-	defer rows.Close()
+	defer closeRows(rows, &err)
 
-	var out []stateDurationRow
 	for rows.Next() {
 		var status string
 		var itemsTouched uint64
@@ -603,7 +613,7 @@ type repoMetricsRow struct {
 // The inner read names the column `repo_metrics_daily.prs_merged` and uses its
 // own aliases, because a bare `prs_merged` there resolves to the aggregate
 // alias of the same name and ClickHouse refuses the nested aggregate.
-func fetchRepoMetrics(ctx context.Context, client QueryClient, orgID string, start, end time.Time) ([]repoMetricsRow, error) {
+func fetchRepoMetrics(ctx context.Context, client QueryClient, orgID string, start, end time.Time) (out []repoMetricsRow, err error) {
 	query := `
         SELECT
           sum(prs_merged) AS prs_merged,
@@ -637,9 +647,8 @@ func fetchRepoMetrics(ctx context.Context, client QueryClient, orgID string, sta
 	if err != nil {
 		return nil, fmt.Errorf("operatingreview: repo_metrics query: %w", err)
 	}
-	defer rows.Close()
+	defer closeRows(rows, &err)
 
-	var out []repoMetricsRow
 	for rows.Next() {
 		var prsMerged uint64
 		var prFirstReviewP50 *float64
@@ -676,7 +685,7 @@ type changeFailureAggRow struct {
 // the week and the number of stored rows behind them (CHAOS-8981). The rate
 // itself is changefailure.Evaluate over the sum, never an average of daily
 // rates.
-func fetchChangeFailureAgg(ctx context.Context, client QueryClient, orgID string, start, end time.Time) ([]changeFailureAggRow, error) {
+func fetchChangeFailureAgg(ctx context.Context, client QueryClient, orgID string, start, end time.Time) (out []changeFailureAggRow, err error) {
 	query := `
         SELECT ` + changefailure.ViewSumsSQL + `
         FROM ` + changefailure.LatestRowsSQL("start", "end", "")
@@ -686,9 +695,8 @@ func fetchChangeFailureAgg(ctx context.Context, client QueryClient, orgID string
 	if err != nil {
 		return nil, fmt.Errorf("operatingreview: change_failure query: %w", err)
 	}
-	defer rows.Close()
+	defer closeRows(rows, &err)
 
-	var out []changeFailureAggRow
 	for rows.Next() {
 		var row changeFailureAggRow
 		if scanErr := rows.Scan(changefailure.ViewScanDest(&row.view)...); scanErr != nil {
@@ -719,7 +727,7 @@ type hotspotsAggRow struct {
 // this repo's OWN hotspots.go package (the ported `hotspots` GraphQL
 // operation, CHAOS-4369) -- this is operatingReview's own risk-summary
 // query over the same table, a different SELECT shape entirely.
-func fetchHotspotsAgg(ctx context.Context, client QueryClient, orgID string, start, end time.Time) ([]hotspotsAggRow, error) {
+func fetchHotspotsAgg(ctx context.Context, client QueryClient, orgID string, start, end time.Time) (out []hotspotsAggRow, err error) {
 	query := `
         SELECT avg(latest_risk_score) AS risk_score, count() AS hotspots_count
         FROM (
@@ -740,9 +748,8 @@ func fetchHotspotsAgg(ctx context.Context, client QueryClient, orgID string, sta
 	if err != nil {
 		return nil, fmt.Errorf("operatingreview: hotspots query: %w", err)
 	}
-	defer rows.Close()
+	defer closeRows(rows, &err)
 
-	var out []hotspotsAggRow
 	for rows.Next() {
 		var riskScore float64
 		var hotspotsCount uint64
@@ -773,7 +780,7 @@ type complexityAggRow struct {
 // known_count guard: `count() AS complexity_known_count` added to the
 // outer SELECT (not present in the Python source -- see cyclomaticPerKloc's
 // doc comment).
-func fetchComplexityAgg(ctx context.Context, client QueryClient, orgID string, start, end time.Time) ([]complexityAggRow, error) {
+func fetchComplexityAgg(ctx context.Context, client QueryClient, orgID string, start, end time.Time) (out []complexityAggRow, err error) {
 	query := `
         SELECT avg(cyclomatic_per_kloc) AS cyclomatic_per_kloc, count() AS complexity_known_count
         FROM (
@@ -792,9 +799,8 @@ func fetchComplexityAgg(ctx context.Context, client QueryClient, orgID string, s
 	if err != nil {
 		return nil, fmt.Errorf("operatingreview: complexity query: %w", err)
 	}
-	defer rows.Close()
+	defer closeRows(rows, &err)
 
-	var out []complexityAggRow
 	for rows.Next() {
 		var cyclomaticPerKloc float64
 		var knownCount uint64
@@ -818,7 +824,7 @@ type deploymentsAggRow struct {
 
 // fetchDeploymentsAgg ports the "deployments" query verbatim
 // (metrics/operating_review.py:246-264).
-func fetchDeploymentsAgg(ctx context.Context, client QueryClient, orgID string, start, end time.Time) ([]deploymentsAggRow, error) {
+func fetchDeploymentsAgg(ctx context.Context, client QueryClient, orgID string, start, end time.Time) (out []deploymentsAggRow, err error) {
 	query := `
         SELECT
           sum(deployments_count) AS deployments_count,
@@ -841,9 +847,8 @@ func fetchDeploymentsAgg(ctx context.Context, client QueryClient, orgID string, 
 	if err != nil {
 		return nil, fmt.Errorf("operatingreview: deployments query: %w", err)
 	}
-	defer rows.Close()
+	defer closeRows(rows, &err)
 
-	var out []deploymentsAggRow
 	for rows.Next() {
 		var deploymentsCount, failedDeploymentsCount, knownCount uint64
 		if scanErr := rows.Scan(&deploymentsCount, &failedDeploymentsCount, &knownCount); scanErr != nil {
@@ -871,7 +876,7 @@ type incidentsAggRow struct {
 // mttr_p50_hours is Nullable(Float64) on incident_metrics_daily;
 // tuple-wrapped so argMax cannot skip the newest row when it carries
 // NULL.
-func fetchIncidentsAgg(ctx context.Context, client QueryClient, orgID string, start, end time.Time) ([]incidentsAggRow, error) {
+func fetchIncidentsAgg(ctx context.Context, client QueryClient, orgID string, start, end time.Time) (out []incidentsAggRow, err error) {
 	query := `
         SELECT sum(incidents_count) AS incidents_count, avg(mttr_p50_hours) AS mttr_p50_hours,
           count() AS incidents_known_count
@@ -892,9 +897,8 @@ func fetchIncidentsAgg(ctx context.Context, client QueryClient, orgID string, st
 	if err != nil {
 		return nil, fmt.Errorf("operatingreview: incidents query: %w", err)
 	}
-	defer rows.Close()
+	defer closeRows(rows, &err)
 
-	var out []incidentsAggRow
 	for rows.Next() {
 		var incidentsCount, knownCount uint64
 		var mttrP50 *float64
@@ -1010,7 +1014,7 @@ type aiImpactRow struct {
 // test_gap_rate and incident_drag_rate are Nullable(Float64) on
 // ai_impact_metrics_daily; each is tuple-wrapped so argMax cannot skip a
 // newest row that carries NULL in one of them.
-func fetchAIImpact(ctx context.Context, client QueryClient, orgID string, teams teamSelection, start, end time.Time) ([]aiImpactRow, error) {
+func fetchAIImpact(ctx context.Context, client QueryClient, orgID string, teams teamSelection, start, end time.Time) (out []aiImpactRow, err error) {
 	teamFilter, _, teamBinding := teamClauses(teams)
 	query := `
         SELECT
@@ -1055,9 +1059,8 @@ func fetchAIImpact(ctx context.Context, client QueryClient, orgID string, teams 
 	if err != nil {
 		return nil, fmt.Errorf("operatingreview: ai_impact query: %w", err)
 	}
-	defer rows.Close()
+	defer closeRows(rows, &err)
 
-	var out []aiImpactRow
 	for rows.Next() {
 		var bucket string
 		var prsTotal, aiAssistedPrs, agentCreatedPrs, humanPrs, unknownPrs float64
@@ -1158,7 +1161,7 @@ type aiGovernanceRawRow struct {
 // (the query never executes). Go returns the real ratio. A dual-run MATCH
 // on this query would mean the fix did not take effect -- see this
 // package's proof for the declared expected-divergence list.
-func fetchAIGovernance(ctx context.Context, client QueryClient, orgID string, teams teamSelection, start, end time.Time) ([]aiGovernanceRawRow, error) {
+func fetchAIGovernance(ctx context.Context, client QueryClient, orgID string, teams teamSelection, start, end time.Time) (out []aiGovernanceRawRow, err error) {
 	teamFilter, _, teamBinding := teamClauses(teams)
 	query := `
         SELECT
@@ -1181,9 +1184,8 @@ func fetchAIGovernance(ctx context.Context, client QueryClient, orgID string, te
 	if err != nil {
 		return nil, fmt.Errorf("operatingreview: ai_governance query: %w", err)
 	}
-	defer rows.Close()
+	defer closeRows(rows, &err)
 
-	var out []aiGovernanceRawRow
 	for rows.Next() {
 		var day time.Time
 		var groupTeamID *string

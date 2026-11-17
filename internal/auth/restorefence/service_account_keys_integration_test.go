@@ -13,6 +13,13 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 )
 
+// fenceExpiries returns a long and a shorter key expiry, both ahead of the test's own clock so a real-time
+// check of them never lapses.
+func fenceExpiries() (long, short time.Time) {
+	now := time.Now().UTC().Truncate(time.Second)
+	return now.AddDate(1, 0, 0), now.AddDate(0, 0, 30)
+}
+
 func fenceKeyID(name string) uuid.UUID {
 	return uuid.NewSHA1(uuid.NameSpaceURL, []byte("fence-sa-key-"+name))
 }
@@ -36,8 +43,7 @@ func TestTheFenceOnServiceAccountKeys(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	restored, end := newFenceDB(t, ctx), newFenceDB(t, ctx)
-	long := time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)
-	short := time.Date(2026, 11, 2, 0, 0, 0, 0, time.UTC)
+	long, short := fenceExpiries()
 	for _, d := range []*fenceDB{restored, end} {
 		d.stateT(t, ctx)
 		d.insertKey(t, ctx, "rotated", long, nil)

@@ -312,8 +312,7 @@ func TestTheFenceKeepsTheEarlierCredentialExpiry(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	restored, end := newFenceDB(t, ctx), newFenceDB(t, ctx)
-	long := time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)
-	short := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	long, short := fenceExpiries()
 	setExpiry := func(d *fenceDB, cred int, at *time.Time) {
 		d.commit(t, ctx, "credential.expiry_changed", 0, func(ctx context.Context, tx audit.TxOps) error {
 			_, err := tx.Exec(ctx, `UPDATE auth.credential_registry SET expires_at = $2 WHERE id = $1`, fenceCredID(cred), at)

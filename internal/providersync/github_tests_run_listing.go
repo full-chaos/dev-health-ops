@@ -25,6 +25,9 @@ const (
 	GitHubTestsRunInventorySaturated       = githubTestsRunInventorySaturatedComponent
 	GitHubTestsArtifactInventorySaturated  = githubTestsArtifactInventorySaturatedComponent
 	GitHubTestsListingSaturated            = githubTestsListingSaturatedCause
+	GitHubTestsRunReports                  = githubTestsRunReportsComponent
+	GitHubTestsAggregateOfParts            = githubTestsAggregateOfPartsCause
+	GitHubTestsPerRunCap                   = githubTestsPerRunCapCause
 )
 
 const (

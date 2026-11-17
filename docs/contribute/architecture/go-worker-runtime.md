@@ -435,6 +435,13 @@ withholding skip: unlike a fixed artifact size or a provider-answered
 redirect/parse outcome, silently skipping it would risk losing data a retry
 would have recovered in full.
 
+One `incomplete` observation loses no rows: `run_reports`/`aggregate_of_parts`
+marks a report artifact dropped because its cases equal the disjoint union of
+other artifacts of the same run. The producer still lists it, so
+`reports_complete` reads `false`, but the sync coverage reader counts a unit
+whose only observations are `aggregate_of_parts` as covered for `tests`, not
+as a gap. Any other observation beside it keeps the unit partial.
+
 Because a watermark-advancing window still permanently loses that one
 artifact's reports, every `report_member` skip (all three causes, extended
 from `artifact_oversized`-only) gets a durable per-artifact

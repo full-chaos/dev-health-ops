@@ -138,6 +138,14 @@ func TestGitHubTestsRunReportsDropAnAggregateOfItsParts(t *testing.T) {
 	if walk.cursor.Phase != "done" || walk.final.Watermark == nil {
 		t.Fatalf("phase %q watermark %v: aggregate_of_parts must advance the watermark", walk.cursor.Phase, walk.final.Watermark)
 	}
+	// The sync-coverage reader keys on this exact result shape: reports_complete false with aggregate_of_parts as the
+	// only observation reads as covered there (synccoverage onlyDeduplicatedReports).
+	incomplete, _ := walk.final.Result[GitHubTestsResultKeyIncomplete].([]GitHubTestsIncomplete)
+	if walk.final.Result[GitHubTestsResultKeyReportsComplete] != false || len(incomplete) != 1 ||
+		incomplete[0] != (GitHubTestsIncomplete{Component: GitHubTestsRunReports, Cause: GitHubTestsAggregateOfParts, Count: 1}) {
+		t.Fatalf("result reports_complete=%v incomplete=%#v, want false and only run_reports/aggregate_of_parts x1",
+			walk.final.Result[GitHubTestsResultKeyReportsComplete], walk.final.Result[GitHubTestsResultKeyIncomplete])
+	}
 }
 
 // One part missing: the aggregate no longer equals the union of what is present, so everything is kept.

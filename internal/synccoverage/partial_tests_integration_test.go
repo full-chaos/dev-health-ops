@@ -35,6 +35,17 @@ func rateFloorResult() string {
 		providersync.GitHubTestsResultKeyOpenRunsReread: 0, providersync.GitHubTestsResultKeyOpenPhaseRateFloor: 499})
 }
 
+func aggregateOnlyResult() string {
+	return producerResultJSON(false, nil, providersync.GitHubTestsIncomplete{
+		Component: providersync.GitHubTestsRunReports, Cause: providersync.GitHubTestsAggregateOfParts, Count: 1})
+}
+
+func aggregateAndCapResult() string {
+	return producerResultJSON(false, nil,
+		providersync.GitHubTestsIncomplete{Component: providersync.GitHubTestsRunReports, Cause: providersync.GitHubTestsAggregateOfParts, Count: 1},
+		providersync.GitHubTestsIncomplete{Component: providersync.GitHubTestsRunReports, Cause: providersync.GitHubTestsPerRunCap, Count: 1})
+}
+
 func producerResultJSON(complete bool, extra map[string]any, incomplete ...providersync.GitHubTestsIncomplete) string {
 	result := map[string]any{
 		providersync.GitHubTestsResultKeyReportsComplete: complete,
@@ -167,6 +178,31 @@ func TestPartialTestsUnitCoverage(t *testing.T) {
 					t.Fatalf("cicd key must still advance latest_successful_run_at: %#v", overall)
 				}
 			}},
+		{"an aggregate dropped as the union of its parts is covered", `["tests"]`,
+			[]partialUnit{unit("tests", "success", aggregateOnlyResult(), -24*time.Hour, -time.Hour)},
+			func(t *testing.T, tests, overall map[string]any) {
+				wantGaps(t, tests, 0)
+				wantCovered(t, tests, 1)
+				if overall["latest_successful_run_at"] == nil {
+					t.Fatalf("a deduplicated unit is complete and must set latest_successful_run_at: %#v", overall)
+				}
+			}},
+		{"folded cicd+tests with only an aggregate drop: tests covered", `["cicd","tests"]`,
+			[]partialUnit{{dataset: "cicd", provider: "github", flags: `{"family_dataset_cicd":true,"family_dataset_tests":true}`, status: "success", result: aggregateOnlyResult(), since: -24 * time.Hour, before: -time.Hour}},
+			func(t *testing.T, tests, overall map[string]any) { wantGaps(t, tests, 0); wantCovered(t, tests, 1) }},
+		{"an aggregate drop beside a per_run_cap is still a gap", `["tests"]`,
+			[]partialUnit{unit("tests", "success", aggregateAndCapResult(), -24*time.Hour, -time.Hour)},
+			func(t *testing.T, tests, overall map[string]any) {
+				wantGaps(t, tests, 1)
+				wantCovered(t, tests, 0)
+				wantNoLatest(t, overall)
+			}},
+		{"reports_complete=false with an empty incomplete list is still a gap", `["tests"]`,
+			[]partialUnit{unit("tests", "success", producerResultJSON(false, nil), -24*time.Hour, -time.Hour)},
+			func(t *testing.T, tests, overall map[string]any) { wantGaps(t, tests, 1); wantCovered(t, tests, 0) }},
+		{"reports_complete=false with no incomplete key is still a gap", `["tests"]`,
+			[]partialUnit{unit("tests", "success", `{"reports_complete":false}`, -24*time.Hour, -time.Hour)},
+			func(t *testing.T, tests, overall map[string]any) { wantGaps(t, tests, 1); wantCovered(t, tests, 0) }},
 		{"stray key on a non-tests dataset is ignored", `["git"]`,
 			[]partialUnit{unit("commits", "success", partialCapResult, -24*time.Hour, -time.Hour)},
 			nil},

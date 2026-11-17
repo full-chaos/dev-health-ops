@@ -82,7 +82,7 @@ func streamCompactWindows(
 SELECT unit.source_id, unit.dataset_key, unit.processor_flags,
        unit.since_at, unit.before_at, unit.status,
        COALESCE(run.completed_at, run.started_at, run.created_at), unit.id,
-       COALESCE(unit.result->>'reports_complete' = 'false', false)
+       COALESCE(unit.result->>'reports_complete' = 'false', false), unit.result->'incomplete'
 FROM public.sync_run_units AS unit
 JOIN public.sync_runs AS run ON run.id = unit.sync_run_id
 WHERE unit.org_id = $1
@@ -114,7 +114,8 @@ ORDER BY COALESCE(run.completed_at, run.started_at, run.created_at), unit.id`,
 		var since, before, runTime time.Time
 		var unitID uuid.UUID
 		var reportsIncomplete bool
-		if err := rows.Scan(&sourceID, &dataset, &flags, &since, &before, &status, &runTime, &unitID, &reportsIncomplete); err != nil {
+		var incomplete json.RawMessage
+		if err := rows.Scan(&sourceID, &dataset, &flags, &since, &before, &status, &runTime, &unitID, &reportsIncomplete, &incomplete); err != nil {
 			return nil, nil, rowCount, fmt.Errorf("scan sync coverage unit window: %w", err)
 		}
 		since = maxTime(since.UTC(), truncatedBefore)
@@ -122,6 +123,7 @@ ORDER BY COALESCE(run.completed_at, run.started_at, run.created_at), unit.id`,
 		if !since.Before(before) {
 			continue
 		}
+		reportsPartial := reportsIncomplete && !onlyDeduplicatedReports(incomplete)
 		effectiveKeys, err := effectiveDatasetKeys(dataset, flags)
 		if err != nil {
 			return nil, nil, rowCount, fmt.Errorf("expand sync coverage unit window: %w", err)
@@ -144,7 +146,7 @@ ORDER BY COALESCE(run.completed_at, run.started_at, run.created_at), unit.id`,
 			// gap and is not the last complete sync. It did run, so it
 			// supersedes an earlier failure of the window: the window reads as
 			// a gap, not as failed.
-			if status == "success" && reportsIncomplete && effectiveKey == "tests" {
+			if status == "success" && reportsPartial && effectiveKey == "tests" {
 				state.Failed = subtractIntervals(state.Failed, []coverageInterval{interval})
 				continue
 			}
@@ -181,6 +183,28 @@ ORDER BY COALESCE(run.completed_at, run.started_at, run.created_at), unit.id`,
 		}
 	}
 	return windows, latestSuccessful, rowCount, nil
+}
+
+// onlyDeduplicatedReports reports whether every observation in a tests unit's
+// incomplete list is a report artifact dropped as the aggregate of other
+// artifacts of its run. The producer lists that drop as an observation, so
+// reports_complete reads false, but the parts carry the same rows and nothing
+// is missing. Anything else, an empty list, or a list that does not decode
+// keeps the unit partial.
+func onlyDeduplicatedReports(incomplete json.RawMessage) bool {
+	var observations []struct {
+		Component string `json:"component"`
+		Cause     string `json:"cause"`
+	}
+	if json.Unmarshal(incomplete, &observations) != nil || len(observations) == 0 {
+		return false
+	}
+	for _, observation := range observations {
+		if observation.Component != "run_reports" || observation.Cause != "aggregate_of_parts" {
+			return false
+		}
+	}
+	return true
 }
 
 func loadActivePairs(ctx context.Context, tx pgx.Tx, orgID string, scope effectiveScope) (map[string]struct{}, error) {

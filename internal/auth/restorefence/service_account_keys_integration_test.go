@@ -36,8 +36,8 @@ func TestTheFenceOnServiceAccountKeys(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	restored, end := newFenceDB(t, ctx), newFenceDB(t, ctx)
-	long := liveKeyExpiry(time.Now())
 	short := time.Date(2026, 11, 2, 0, 0, 0, 0, time.UTC)
+	long := liveKeyExpiry(time.Now(), short)
 	for _, d := range []*fenceDB{restored, end} {
 		d.stateT(t, ctx)
 		d.insertKey(t, ctx, "rotated", long, nil)

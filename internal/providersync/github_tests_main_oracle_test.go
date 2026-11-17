@@ -1,10 +1,14 @@
 package providersync
 
-// Frozen differential oracle for CHAOS-13985: the Cobertura and JUnit row
-// decoders exactly as on main (6ccff348), copied verbatim from
-// internal/providersync/github_tests_reports.go and renamed. The only change is
-// the guard parameter: guard=true keeps main's blanket <!DOCTYPE refusal,
-// guard=false is main's decoder without it. The <!ENTITY refusal is kept in both.
+// FROZEN differential oracle for CHAOS-13985, on purpose.
+//
+// The Cobertura and JUnit row decoders below are copied verbatim from
+// internal/providersync/github_tests_reports.go at main sha 6ccff348 and renamed.
+// They pin main's OLD behavior for this one differential and are NEVER a live
+// oracle: do not update them to follow later changes to the real decoders.
+// The only edit is the guard parameter: guard=true keeps main's blanket
+// <!DOCTYPE refusal, guard=false is main's decoder without it. The <!ENTITY
+// refusal is kept in both.
 
 import (
 	"bytes"

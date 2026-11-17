@@ -15,6 +15,7 @@ import (
 // leg from the rows alone: the old sum weighting must put a leg over raceModelledLegLimit (the red), the serial weighting none.
 // The rows are the largest hosted race times, so a modelled leg reads above a warm median: the plan of record (PLAN-13958-6)
 // models 985 here as a 797 s warm wall with the measured overhead, against the 900 s median goal.
+// 1000 = the rows model (the largest hosted times, not a wall); a red here means re-cut the race legs, not a flake.
 const (
 	raceModelledLegLimit = 1000.0
 	raceBatchOverlap     = 3.5 // the default rk of ci/go_race_shard.awk

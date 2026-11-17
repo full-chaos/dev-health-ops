@@ -389,8 +389,9 @@ func TestSourceHealthRoute_ServedToAViewerOverTheSignedEnvelope(t *testing.T) {
 		return &httpResult{code: rec.Code, body: rec.Body.String()}
 	}
 
-	// Every member role is served, the operator-only gate is not applied.
-	for _, role := range []string{"", "viewer", "member", "operator", "admin"} {
+	// Every member role the header carrier may state is served, the operator-only gate is not applied (an operator
+	// role on the header carrier is refused at the carrier, CHAOS-13950).
+	for _, role := range []string{"", "viewer", "member"} {
 		res := post(role, "org-1", "org-1")
 		if res.code != http.StatusOK {
 			t.Fatalf("role %q: code=%d body=%s", role, res.code, res.body)

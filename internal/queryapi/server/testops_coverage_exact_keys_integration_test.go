@@ -105,7 +105,7 @@ func TestTestOpsCoverageRoute_ExactRepoKeysReturnBranchCoverageOutsideIndependen
 	if err != nil {
 		t.Fatalf("build TestOps Coverage handler: %v", err)
 	}
-	token := iaHeaders(orgID, "admin", false, false)
+	token := iaHeaders(orgID, "member", false, false)
 
 	variables := func(branchTopN int, branchKeys []string) map[string]any {
 		branch := map[string]any{

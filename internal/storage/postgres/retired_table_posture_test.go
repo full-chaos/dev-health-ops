@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -15,8 +16,8 @@ func TestRetiredTableFlagsMarkExactlyTheNamedRequiredTable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(args) != 12 {
-		t.Fatalf("rolePostureArgs gave %d parameters, want 12", len(args))
+	if len(args) != 13 {
+		t.Fatalf("rolePostureArgs gave %d parameters, want 13", len(args))
 	}
 	flags, ok := args[11].([]bool)
 	if !ok || len(flags) != 3 || flags[0] || !flags[1] || flags[2] {
@@ -68,8 +69,11 @@ func TestInternalServiceCredentialsIsRetiredForTheAPIAndCoordinatorRoles(t *test
 		if len(found) != 1 || found[0] != want {
 			t.Errorf("%s: RequiredTables rows for the table = %v, want exactly %v", name, found, want)
 		}
-		if len(posture.RetiredTables) != 1 || posture.RetiredTables[0] != "internal_service_credentials" {
-			t.Errorf("%s: RetiredTables = %v, want [internal_service_credentials]", name, posture.RetiredTables)
+		// The api role also retires go-api's SAML replay grant (CHAOS-13949); the coordinator only this table.
+		wantRetired := map[string]string{"api": "[internal_service_credentials saml_assertion_replays]",
+			"api sessions owned": "[internal_service_credentials saml_assertion_replays]", "coordinator": "[internal_service_credentials]"}[name]
+		if got := fmt.Sprint(posture.RetiredTables); got != wantRetired {
+			t.Errorf("%s: RetiredTables = %v, want %s", name, got, wantRetired)
 		}
 		if _, err := rolePostureArgs("role_a", "river", posture); err != nil {
 			t.Errorf("%s: %v", name, err)
@@ -93,5 +97,38 @@ func TestRolePostureQueryCarriesTheRetiredTableClauses(t *testing.T) {
 		if !strings.Contains(rolePostureQuery, clause) {
 			t.Errorf("rolePostureQuery omits %q", clause)
 		}
+	}
+}
+
+// RetiredColumns marks exactly the ColumnScoped entries it names ($13); a name that is not exactly one entry, or is named twice,
+// is a posture error, never a silent pass.
+func TestRetiredColumnFlagsMarkExactlyTheNamedColumnPrivilege(t *testing.T) {
+	scoped := []ColumnPrivilege{{"users", "email", "INSERT"}, {"users", "saml_nameid_format", "INSERT"}, {"users", "saml_nameid_format", "UPDATE"}}
+	args, err := rolePostureArgs("role_a", "river", RolePosture{ColumnScoped: scoped, RetiredColumns: []ColumnPrivilege{{"users", "saml_nameid_format", "UPDATE"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if flags, ok := args[12].([]bool); !ok || fmt.Sprint(flags) != "[false false true]" {
+		t.Fatalf("$13 = %#v, want [false false true] (parallel to $6 %v)", args[12], args[5])
+	}
+	for name, retired := range map[string][]ColumnPrivilege{
+		"not declared":    {{"users", "saml_sp_name_qualifier", "INSERT"}},
+		"other privilege": {{"users", "email", "UPDATE"}},
+		"named twice":     {{"users", "email", "INSERT"}, {"users", "email", "INSERT"}},
+	} {
+		if _, err := rolePostureArgs("role_a", "river", RolePosture{ColumnScoped: scoped, RetiredColumns: retired}); err == nil {
+			t.Errorf("%s: rolePostureArgs accepted RetiredColumns %v", name, retired)
+		}
+	}
+	for name, posture := range map[string]RolePosture{"api owned": APIPostureFor(true, true), "api not owned": APIPostureFor(true, false)} {
+		if _, err := rolePostureArgs("role_a", "river", posture); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	if got := fmt.Sprint(APIPostureFor(true, true).RetiredColumns); got != "[{users saml_nameid_format INSERT} {users saml_nameid_format UPDATE} {users saml_sp_name_qualifier INSERT} {users saml_sp_name_qualifier UPDATE}]" {
+		t.Errorf("api owned RetiredColumns = %s", got)
+	}
+	if got := APIPostureFor(true, false).RetiredColumns; len(got) != 0 {
+		t.Errorf("api not owned RetiredColumns = %v, want none (users grants are table-wide there)", got)
 	}
 }

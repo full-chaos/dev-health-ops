@@ -345,7 +345,7 @@ func startGoMutationServer(t *testing.T, ctx context.Context, venue *venueoracle
 
 // goAdmin is the Go side's caller: an admin of org on the internal identity headers, as the internal listener takes
 // them (the effective-principal envelope is a retired class).
-func goAdmin(org string) func(*http.Request) { return iaHeaders(org, "admin", false, false) }
+func goAdmin(org string) func(*http.Request) { return iaHeaders(org, "member", false, false) }
 
 func withRole(t *testing.T, raw, role, password string) string {
 	t.Helper()

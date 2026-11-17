@@ -339,6 +339,9 @@ type authorizeItem struct {
 	// orgKnown is true when the question's organization is a canonical uuid
 	// the decision transaction found.
 	orgKnown bool
+	// principalKnown is true when the decision transaction found the principal:
+	// a named principal reference can name one that never existed or was erased.
+	principalKnown bool
 	// cache is the item's lookup result; key and read are set on a miss whose
 	// snapshot said what it read.
 	cache string
@@ -614,6 +617,7 @@ func (h authorizeHandlers) evaluate(ctx context.Context, tx DecisionTx, resolved
 			items[i].actor, items[i].session = rs.row.ActorPrincipalID, rs.id
 		}
 		items[i].orgKnown = knownOrganization(q.OrganizationID, snap)
+		items[i].principalKnown = snap.PrincipalStatus() != authorization.StatusUnknown
 	}
 	return nil
 }

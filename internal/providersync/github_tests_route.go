@@ -402,6 +402,14 @@ func (handler GitHubTestsRouteHandler) Collect(
 	cases := make([]testCaseResultRow, 0)
 	coverage := make([]coverageSnapshotRow, 0)
 	incomplete := make([]GitHubTestsIncomplete, 0)
+	// Durable markers for expired report artifacts (CHAOS-13980). This route carries them in the result, like the chunked route,
+	// so the shared watermark policy sees the same evidence for the same loss.
+	var (
+		skippedArtifacts     []GitHubTestsSkippedArtifact
+		skippedOverflow      int
+		skippedCauseOverflow map[string]bool
+		skippedCauseCount    map[string]int
+	)
 	requests, pages := 1+runListPages+artifactListPages, runListPages+artifactListPages
 	policyCache := map[string]githubTestsPolicy{}
 	for _, raw := range runItems {
@@ -510,19 +518,31 @@ func (handler GitHubTestsRouteHandler) Collect(
 		}
 		artifacts, superseded := githubTestsKeepNewestArtifactPerName(artifacts)
 		supersededIDs := githubTestsSupersededIDs(superseded)
+		// CHAOS-13980: same disposition as the chunked route -- expired artifacts are split out after newest-per-name and before the
+		// cap, a report-shaped one is recorded once per (run, artifact) with the same durable marker, any other expired name is an
+		// excluded non-report artifact.
+		artifacts, expiredItems := githubTestsSplitExpiredArtifacts(artifacts)
+		for _, artifact := range expiredItems {
+			if !githubTestsExpiredArtifactLooksLikeReport(artifact.Name) ||
+				githubTestsSkippedMarkerRecorded(skippedArtifacts, pipeline.RunID, string(artifact.ID), githubTestsArtifactExpiredCause) {
+				continue
+			}
+			incomplete = recordGitHubTestsSkippedArtifact(
+				incomplete, client, claim, claim.SourceName, pipeline.RunID,
+				githubTestsArtifactExpiredCause,
+			)
+			skippedArtifacts, skippedOverflow, skippedCauseOverflow, skippedCauseCount = appendGitHubTestsSkippedArtifact(
+				skippedArtifacts, skippedOverflow, skippedCauseOverflow, skippedCauseCount,
+				GitHubTestsSkippedArtifact{
+					RunID: pipeline.RunID, ArtifactID: string(artifact.ID), Name: artifact.Name,
+					Cause: githubTestsArtifactExpiredCause,
+				},
+			)
+		}
 		if artPage.PageBudgetExhausted || len(artifacts) > maxArtifacts {
 			return CompleteRouteBatch{}, ErrPaginationCapExceeded
 		}
 		for _, artifact := range artifacts {
-			if artifact.Expired {
-				// CHAOS-13980: same disposition as the chunked route; this
-				// route builds no SkippedArtifacts, so only the observation.
-				incomplete = recordGitHubTestsSkippedArtifact(
-					incomplete, client, claim, claim.SourceName, pipeline.RunID,
-					githubTestsArtifactExpiredCause,
-				)
-				continue
-			}
 			// notFound is not distinguished here: this route has no totality
 			// accounting, and its own len(archive)==0 branch below already
 			// treats a routine 404/410 and a genuinely empty 2xx body
@@ -615,7 +635,7 @@ func (handler GitHubTestsRouteHandler) Collect(
 	// divergence (CHAOS-4315 already diverges the two routes on the
 	// oversized disposition itself; production dispatch always executes
 	// CollectChunks, never this route, per execution_registry.go).
-	if githubTestsBlocksWatermark(incomplete, nil, 0, nil, nil) {
+	if githubTestsBlocksWatermark(incomplete, skippedArtifacts, skippedOverflow, skippedCauseOverflow, skippedCauseCount) {
 		watermark = nil
 	}
 	// One summary line per unit, same as the chunked production route
@@ -625,13 +645,17 @@ func (handler GitHubTestsRouteHandler) Collect(
 	// counters -- it has no persisted, resumable cursor to hang them off
 	// (same divergence as skippedArtifacts above; see the oversized-artifact
 	// doc comment).
-	githubTestsLogArtifactSkipSummary(claim, repo.FullName, incomplete, nil, nil, 0, 0, nil, 0)
+	githubTestsLogArtifactSkipSummary(claim, repo.FullName, incomplete, skippedArtifacts, skippedCauseOverflow, 0, 0, nil, 0)
 	return CompleteRouteBatch{Effects: effects, Watermark: watermark, Result: map[string]any{
 		"pipeline_runs_synced": len(pipelines), "job_runs_synced": len(jobs), "acceptance_checks_synced": len(acceptance),
 		"test_suites_synced": len(suites), "test_cases_synced": len(cases), "coverage_snapshots_synced": len(coverage), "repo": repo.FullName,
 		GitHubTestsResultKeyReportsComplete: len(incomplete) == 0,
 		"reports_skipped":                   githubTestsIncompleteCount(incomplete),
 		"incomplete":                        incomplete,
+		"skipped_artifacts":                 skippedArtifacts,
+		"skipped_artifacts_overflow":        skippedOverflow,
+		"skipped_artifact_cause_overflow":   skippedCauseOverflow,
+		"skipped_artifact_cause_count":      skippedCauseCount,
 	}, Evidence: FetchEvidence{Provider: claim.Provider, Dataset: claim.Dataset, Requests: requests, Pages: pages, Records: len(pipelines) + len(jobs) + len(acceptance) + len(suites) + len(cases) + len(coverage)}}, nil
 }
 

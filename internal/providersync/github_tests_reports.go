@@ -1806,3 +1806,56 @@ func recordGitHubTestsNonReportMembers(client *providerfoundation.HTTPClient, cl
 		"suites", len(rows.Suites),
 	)
 }
+
+// githubTestsExpiredReportNameMarkers are the lower-cased name fragments that make an EXPIRED artifact report-shaped (CHAOS-13980).
+// An expired artifact's bytes are gone, so nothing in it can say what it held; the selection seam only EXCLUDES known non-report
+// names, so passing it is not evidence of a report (a release binary or a screenshot index passes). Only a name that says it holds
+// test results or coverage counts as a lost report: junit, test-result(s), test_result(s), test-report, coverage, lcov, cobertura,
+// surefire, and the go-test- shards (go-test-timings- is excluded by the seam before this runs). Any other expired name is an
+// excluded non-report artifact, never a loss.
+var githubTestsExpiredReportNameMarkers = []string{
+	"junit", "test-result", "test_result", "test-report", "test_report", "coverage", "lcov", "cobertura", "surefire", "go-test-",
+}
+
+// githubTestsExclusionReasonExpiredUnclassified is the excluded-artifact sample reason for an expired artifact whose name is not
+// report-shaped.
+const githubTestsExclusionReasonExpiredUnclassified = "expired_not_report_named"
+
+func githubTestsExpiredArtifactLooksLikeReport(name string) bool {
+	lower := strings.ToLower(name)
+	for _, marker := range githubTestsExpiredReportNameMarkers {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// githubTestsSplitExpiredArtifacts separates artifacts GitHub lists as expired from the readable ones. Callers pass the selected,
+// newest-per-name set and apply the per-run cap to the readable ones only, so an expired artifact never takes a cap slot, and an
+// older attempt's expired copy (already superseded by a newer one of its name) is never seen here.
+func githubTestsSplitExpiredArtifacts(items []githubTestsArtifactPayload) (live, expired []githubTestsArtifactPayload) {
+	live = make([]githubTestsArtifactPayload, 0, len(items))
+	for _, item := range items {
+		if item.Expired {
+			expired = append(expired, item)
+			continue
+		}
+		live = append(live, item)
+	}
+	return live, expired
+}
+
+// githubTestsSkippedMarkerRecorded reports whether the bounded marker sample already holds this (run, artifact, cause). An expired
+// artifact is recorded once per unit: a run listed again (the inclusive boundary of the next search range, or a re-anchored page)
+// must not count its artifact twice. This is the only dedup evidence the cursor holds; once the sample is full a revisit of an
+// artifact whose marker was dropped cannot be told apart and counts again (the count then errs toward loss, never away from it).
+func githubTestsSkippedMarkerRecorded(records []GitHubTestsSkippedArtifact, runID, artifactID, cause string) bool {
+	runID, artifactID = githubTestsTruncateArtifactID(runID), githubTestsTruncateArtifactID(artifactID)
+	for _, record := range records {
+		if record.RunID == runID && record.ArtifactID == artifactID && githubTestsSkippedArtifactCause(record) == cause {
+			return true
+		}
+	}
+	return false
+}

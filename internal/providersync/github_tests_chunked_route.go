@@ -1761,6 +1761,38 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 							)
 						}
 					}
+					// CHAOS-13980: GitHub says an expired artifact's bytes are deleted, so a report-shaped one is lost for good. It is
+					// decided here, after the newest-per-name rule (an older attempt's expired copy is superseded, not a loss) and BEFORE
+					// the cap (an expired artifact never takes a download slot from a readable shard). Recorded once per (run, artifact):
+					// observation, metric, durable marker. Not counted in ArchivesSeen/ArchivesUnreadable: no download happened, so it says
+					// nothing about the channel (same rule as oversized below). An expired artifact whose name is not report-shaped is an
+					// excluded non-report artifact, never a loss.
+					artifactItems, expiredItems := githubTestsSplitExpiredArtifacts(artifactItems)
+					for _, artifact := range expiredItems {
+						if !githubTestsExpiredArtifactLooksLikeReport(artifact.Name) {
+							if len(cursor.ExcludedArtifactSample) < githubTestsMaxExcludedArtifactSampleRecords {
+								cursor.ExcludedArtifactSample = append(
+									cursor.ExcludedArtifactSample,
+									githubTestsTruncateArtifactName(artifact.Name)+" ("+githubTestsExclusionReasonExpiredUnclassified+")",
+								)
+							}
+							continue
+						}
+						if githubTestsSkippedMarkerRecorded(cursor.SkippedArtifacts, pipeline.RunID, string(artifact.ID), githubTestsArtifactExpiredCause) {
+							continue
+						}
+						cursor.Incomplete = recordGitHubTestsSkippedArtifact(
+							cursor.Incomplete, client, claim, cursor.Repo, pipeline.RunID,
+							githubTestsArtifactExpiredCause,
+						)
+						cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow, cursor.SkippedArtifactCauseOverflow, cursor.SkippedArtifactCauseCount = appendGitHubTestsSkippedArtifact(
+							cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow, cursor.SkippedArtifactCauseOverflow, cursor.SkippedArtifactCauseCount,
+							GitHubTestsSkippedArtifact{
+								RunID: pipeline.RunID, ArtifactID: string(artifact.ID), Name: artifact.Name,
+								Cause: githubTestsArtifactExpiredCause,
+							},
+						)
+					}
 					switch {
 					case len(artifactItems) > maxArtifacts:
 						artifactItems = artifactItems[:maxArtifacts]
@@ -1800,24 +1832,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 					}
 					for _, artifact := range artifactItems {
 						if artifact.Expired {
-							// CHAOS-13980: GitHub says the bytes are deleted, so
-							// the report is lost for good. Record it (observation,
-							// metric, durable marker) instead of a silent skip.
-							// Not counted in ArchivesSeen/ArchivesUnreadable: no
-							// download happened, so it says nothing about the
-							// channel (same rule as oversized below).
-							cursor.Incomplete = recordGitHubTestsSkippedArtifact(
-								cursor.Incomplete, client, claim, cursor.Repo, pipeline.RunID,
-								githubTestsArtifactExpiredCause,
-							)
-							cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow, cursor.SkippedArtifactCauseOverflow, cursor.SkippedArtifactCauseCount = appendGitHubTestsSkippedArtifact(
-								cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow, cursor.SkippedArtifactCauseOverflow, cursor.SkippedArtifactCauseCount,
-								GitHubTestsSkippedArtifact{
-									RunID: pipeline.RunID, ArtifactID: string(artifact.ID), Name: artifact.Name,
-									Cause: githubTestsArtifactExpiredCause,
-								},
-							)
-							continue
+							continue // unreachable: expired artifacts are split out before the cap (CHAOS-13980)
 						}
 						var archive []byte
 						notFound := false

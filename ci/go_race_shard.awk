@@ -54,6 +54,19 @@
 # fewer rows than parts, exits 2: a stale row fails instead of describing a part that no longer exists.
 # restpart=<r> (names mode, CHAOS-13833, the race-leg parts): a name with no row goes to part r (1..n) instead of its hash part.
 # wall2(s, x): twice the modelled wall of shard s with x more rest weight: max(2 * chain, rest + x) + 2 * serial.
+# rserial=1 [rk=<overlap>] (CHAOS-13958, the race legs): a race leg runs its packages in one parallel go test, then each race part and
+# each solo package alone, so its wall is about max(its largest package, its package sum / rk) + the sum of its parts and solo
+# packages (rk: the overlap of the parallel batch, 3.5 by default; the measured warm legs of Go quality 44019931820, 44022785905 and
+# 44025688889 run 1.7-3.9x their package sum in the batch, which ends at the largest package). The parts and solo packages are placed
+# first, heaviest first, each on the shard of the least modelled wall; then each package, heaviest first, on the shard whose modelled
+# wall it raises least (ties: the least package sum, the lowest index). Pinned packages and chain=1 are not used with it. Without
+# rserial nothing above changes the split. Still a partition.
+# rwall(m, l, x): the modelled batch wall of a shard whose largest package is m and package sum l, with one more package of weight x.
+function rwall(m, l, x,   k, v) {
+  k = (rk + 0 > 0) ? rk + 0 : 3.5
+  v = (m > x) ? m : x
+  return ((l + x) / k > v) ? (l + x) / k : v
+}
 function die(msg) {
   print "go_race_shard.awk: " msg > "/dev/stderr"
   bad = 1
@@ -259,7 +272,32 @@ END {
       if (best == shard) keep[k] = 1
     }
   }
-  for (pass = 1; pass <= 2 && !chain; pass++) {
+  # rserial=1 (CHAOS-13958): see the header.
+  if (rserial && !chain) {
+    for (s = 1; s <= count; s++) { mx[s] = 0; ser[s] = 0 }
+    for (pass = 1; pass <= 2; pass++) {
+      for (i = 1; i <= n; i++) {
+        k = order[i]
+        if (pinPkg[k]) continue
+        isSer = (soloPkg[k] || nparts[k] > 1)
+        if (isSer != (pass == 1)) continue
+        best = 1
+        if (isSer) {
+          for (s = 2; s <= count; s++) if (mx[s] + ser[s] < mx[best] + ser[best]) best = s
+          ser[best] += weight[k]
+        } else {
+          for (s = 2; s <= count; s++) {
+            a = rwall(mx[s], load[s], weight[k]) + ser[s]; b = rwall(mx[best], load[best], weight[k]) + ser[best]
+            if (a < b || (a == b && load[s] < load[best])) best = s
+          }
+          if (weight[k] > mx[best]) mx[best] = weight[k]
+          load[best] += weight[k]
+        }
+        if (best == shard) keep[k] = 1
+      }
+    }
+  }
+  for (pass = 1; pass <= 2 && !chain && !rserial; pass++) {
     for (i = 1; i <= n; i++) {
       k = order[i]
       if (pinPkg[k]) continue

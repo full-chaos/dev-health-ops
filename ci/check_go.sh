@@ -1765,6 +1765,10 @@ GO_RACE_SOLO="${GO_RACE_SOLO:-${ROOT}/ci/go_race_solo.tsv}"
 # (ci/go_race_unweighted_slow.awk).
 GO_RACE_SPLITS="${GO_RACE_SPLITS:-${ROOT}/ci/go_race_splits.tsv}"
 GO_RACE_SPLIT_WEIGHTS="${GO_RACE_SPLIT_WEIGHTS:-${ROOT}/ci/go_race_split_weights.tsv}"
+# CHAOS-13958: the race plan weighs a leg's race parts and solo packages as serial time after its parallel batch (ci/go_race_shard.awk
+# rserial=1). 0 = the old sum weighting; only the planner's red/green cell (internal/cigates/testshard) sets it.
+GO_RACE_SERIAL_WEIGHTING="${GO_RACE_SERIAL_WEIGHTING:-1}"
+case "${GO_RACE_SERIAL_WEIGHTING}" in 0|1) ;; *) printf 'ERROR: GO_RACE_SERIAL_WEIGHTING must be 0 or 1, got %s\n' "${GO_RACE_SERIAL_WEIGHTING}" >&2; exit 2 ;; esac
 # check_providersync_race_shard SHARD COUNT (CHAOS-8166): internal/providersync is one test binary of ~1,460 sequential tests that took
 # 509 s under -race on an idle host (565 s in CI, 94% of the 600 s go test timeout), so its race run is split BY TEST NAME across the
 # race legs: every leg runs the SHARD-th of COUNT weight-balanced test slices, weights ci/go_providersync_race_weights.tsv, ci/go_providersync_race_shard.awk.
@@ -1862,7 +1866,7 @@ race_shard_packages() {
     | quality_filter "${module_dir}" "${modpath}" \
     | race_excluded_filter "${module_dir}" "${modpath}" \
     | awk -v mod="${modpath}" -v shard="${shard}" -v count="${count}" -v weights=<(race_weights_rows) -v solo="${GO_RACE_SOLO}" -v part="${part}" \
-        -v splits="${GO_RACE_SPLITS}" -v tests="${GO_RACE_SPLIT_WEIGHTS}" -f "${ROOT}/ci/go_race_shard.awk"
+        -v splits="${GO_RACE_SPLITS}" -v tests="${GO_RACE_SPLIT_WEIGHTS}" -v rserial="${GO_RACE_SERIAL_WEIGHTING}" -f "${ROOT}/ci/go_race_shard.awk"
 }
 
 # check_race_shard_plan SHARD COUNT: one "module<TAB>package<TAB>key" line per package the SHARD-th race leg runs, and one

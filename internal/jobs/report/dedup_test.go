@@ -23,16 +23,16 @@ func TestBuildChartQueryDedupsCicdMetricsDaily(t *testing.T) {
 	t.Parallel()
 	spec := ChartSpec{
 		ChartID: "chart-1", PlanID: "plan-1", ChartType: "line",
-		Metric: "success_rate", GroupBy: "day",
+		Metric: "pipelines_count", GroupBy: "day",
 		TimeRangeStart: "2026-01-01", TimeRangeEnd: "2026-01-07",
 		OrganizationID: "org-1",
 	}
 	definition, ok := supportedMetrics[spec.Metric]
 	if !ok || definition.SourceTable != "cicd_metrics_daily" {
-		t.Fatalf("fixture drift: success_rate no longer maps to cicd_metrics_daily (got %+v)", definition)
+		t.Fatalf("fixture drift: pipelines_count no longer maps to cicd_metrics_daily (got %+v)", definition)
 	}
 	if withPooledChart(withChartRule(definition), time.Now()).pooled != nil {
-		t.Fatal("fixture drift: success_rate is pooled, so this guard no longer reads the stored rows")
+		t.Fatal("fixture drift: pipelines_count is pooled, so this guard no longer reads the stored rows")
 	}
 	query, _, err := buildChartQuery(spec, definition)
 	if err != nil {

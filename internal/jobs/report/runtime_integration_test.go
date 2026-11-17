@@ -179,25 +179,26 @@ VALUES ($1::uuid, $3::uuid, 'pending', 0, 'pending'),
 func seedGoldenMetrics(t *testing.T, ctx context.Context, conn driver.Conn) {
 	t.Helper()
 	if err := conn.Exec(ctx, `
-CREATE TABLE cicd_metrics_daily (
+CREATE TABLE testops_pipeline_metrics_daily (
 	org_id String,
 	repo_id String,
 	day Date,
-	success_rate Nullable(Float64),
+	success_count UInt32,
+	failure_count UInt32,
 	computed_at DateTime('UTC')
 ) ENGINE = MergeTree ORDER BY (org_id, repo_id, day)`); err != nil {
 		t.Fatal(err)
 	}
-	// Only the first row may reach the golden series; the null sample and the
-	// foreign tenant prove the adapter's IS NOT NULL and org_id clauses are
-	// what keep the rendered chart to a single point. computed_at is
+	// Only the first row may reach the golden series; the day with no completed
+	// run and the foreign tenant prove the completed-run rule and the org_id clause
+	// are what keep the rendered chart to a single point. computed_at is
 	// required: CHAOS-4246 wraps this table in a latest-generation-by-
 	// computed_at dedup subquery (dedupFromSource).
 	if err := conn.Exec(ctx, `
-INSERT INTO cicd_metrics_daily VALUES
-('org-1', 'repo-a', '2026-01-01', 0.95, '2026-01-01 01:00:00'),
-('org-1', 'repo-a', '2026-01-02', NULL, '2026-01-02 01:00:00'),
-('other-org', 'repo-a', '2026-01-03', 0.10, '2026-01-03 01:00:00')`); err != nil {
+INSERT INTO testops_pipeline_metrics_daily VALUES
+('org-1', 'repo-a', '2026-01-01', 19, 1, '2026-01-01 01:00:00'),
+('org-1', 'repo-a', '2026-01-02', 0, 0, '2026-01-02 01:00:00'),
+('other-org', 'repo-a', '2026-01-03', 1, 9, '2026-01-03 01:00:00')`); err != nil {
 		t.Fatal(err)
 	}
 }

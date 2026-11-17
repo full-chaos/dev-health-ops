@@ -508,6 +508,7 @@ internal/platform/otlpmetrics	labelfragment_census_test.go
 internal/platform/removedenv	census_test.go
 internal/platform/secrets	envreads_test.go
 internal/platform/secrets	source.go
+internal/platform/shell	startup_flush_test.go
 internal/providerfoundation	classify_call_sites_test.go
 internal/providerfoundation	clients.go
 internal/providerfoundation	wire_sites_census_test.go

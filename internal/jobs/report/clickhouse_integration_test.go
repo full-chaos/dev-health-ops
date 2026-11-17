@@ -29,11 +29,12 @@ func TestClickHouseQueryAdapterExecutesBoundedPythonParityQuery(t *testing.T) {
 	}
 	defer conn.Close()
 	if err := conn.Exec(ctx, `
-CREATE TABLE cicd_metrics_daily (
+CREATE TABLE testops_pipeline_metrics_daily (
 	org_id String,
 	repo_id String,
 	day Date,
-	success_rate Nullable(Float64),
+	success_count UInt32,
+	failure_count UInt32,
 	computed_at DateTime('UTC')
 ) ENGINE = MergeTree ORDER BY (org_id, repo_id, day)`); err != nil {
 		t.Fatal(err)
@@ -41,10 +42,10 @@ CREATE TABLE cicd_metrics_daily (
 	// computed_at is required: CHAOS-4246 wraps this table in a
 	// latest-generation-by-computed_at dedup subquery (dedupFromSource).
 	if err := conn.Exec(ctx, `
-INSERT INTO cicd_metrics_daily VALUES
-('org-1', 'repo-a', '2026-01-01', 0.91, '2026-01-01 01:00:00'),
-('org-1', 'repo-a', '2026-01-07', 0.95, '2026-01-07 01:00:00'),
-('other-org', 'repo-a', '2026-01-07', 0.10, '2026-01-07 01:00:00')`); err != nil {
+INSERT INTO testops_pipeline_metrics_daily VALUES
+('org-1', 'repo-a', '2026-01-01', 91, 9, '2026-01-01 01:00:00'),
+('org-1', 'repo-a', '2026-01-07', 19, 1, '2026-01-07 01:00:00'),
+('other-org', 'repo-a', '2026-01-07', 1, 9, '2026-01-07 01:00:00')`); err != nil {
 		t.Fatal(err)
 	}
 	loader := reportLoaderFunc(func(context.Context, QueryInput) (ReportDefinition, error) {

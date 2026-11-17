@@ -142,7 +142,11 @@ func TestGitHubTestsChunkCursorWorstCaseStaysWithinBudget(t *testing.T) {
 	// 300 -> 200 (CHAOS-13794): the worst case holds every (component, cause) pair of githubTestsIncompleteVocabulary at once, and
 	// run_reports gained aggregate_of_parts and aggregate_mismatch (about 75 bytes together). Headroom is now about 226 bytes
 	// (5.5%) under the hard 4 KiB bound; the next vocabulary entry must make room (a smaller sample) rather than lower this again.
-	const wantMargin = 200
+	//
+	// 200 -> 150 (CHAOS-13980): report_member gained artifact_expired (one more pair in the worst case, about 50 bytes with its
+	// observation entry). Headroom is now 154 bytes (3.8%) under the hard 4 KiB bound. Lead ruling: lower the canary for this one
+	// pair; the hard bound above is unchanged, and the next vocabulary entry must shrink a sample instead of lowering this again.
+	const wantMargin = 150
 	if remaining := maxChunkCursorBytes - len(encoded); remaining < wantMargin {
 		t.Fatalf(
 			"worst-case cursor leaves only %d bytes of headroom under maxChunkCursorBytes, want >= %d -- "+

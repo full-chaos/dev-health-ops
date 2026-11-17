@@ -692,7 +692,7 @@ func githubTestsLogArtifactSkipSummary(
 			continue
 		}
 		switch observation.Cause {
-		case githubTestsArtifactOversizedCause, githubTestsArtifactUnavailableCause, githubTestsUnreadableArchiveCause:
+		case githubTestsArtifactOversizedCause, githubTestsArtifactUnavailableCause, githubTestsUnreadableArchiveCause, githubTestsArtifactExpiredCause:
 			artifactSkipTotal += observation.Count
 		}
 		if observation.Cause == githubTestsArtifactOversizedCause {
@@ -1800,6 +1800,23 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 					}
 					for _, artifact := range artifactItems {
 						if artifact.Expired {
+							// CHAOS-13980: GitHub says the bytes are deleted, so
+							// the report is lost for good. Record it (observation,
+							// metric, durable marker) instead of a silent skip.
+							// Not counted in ArchivesSeen/ArchivesUnreadable: no
+							// download happened, so it says nothing about the
+							// channel (same rule as oversized below).
+							cursor.Incomplete = recordGitHubTestsSkippedArtifact(
+								cursor.Incomplete, client, claim, cursor.Repo, pipeline.RunID,
+								githubTestsArtifactExpiredCause,
+							)
+							cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow, cursor.SkippedArtifactCauseOverflow, cursor.SkippedArtifactCauseCount = appendGitHubTestsSkippedArtifact(
+								cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow, cursor.SkippedArtifactCauseOverflow, cursor.SkippedArtifactCauseCount,
+								GitHubTestsSkippedArtifact{
+									RunID: pipeline.RunID, ArtifactID: string(artifact.ID), Name: artifact.Name,
+									Cause: githubTestsArtifactExpiredCause,
+								},
+							)
 							continue
 						}
 						var archive []byte

@@ -515,6 +515,12 @@ func (handler GitHubTestsRouteHandler) Collect(
 		}
 		for _, artifact := range artifacts {
 			if artifact.Expired {
+				// CHAOS-13980: same disposition as the chunked route; this
+				// route builds no SkippedArtifacts, so only the observation.
+				incomplete = recordGitHubTestsSkippedArtifact(
+					incomplete, client, claim, claim.SourceName, pipeline.RunID,
+					githubTestsArtifactExpiredCause,
+				)
 				continue
 			}
 			// notFound is not distinguished here: this route has no totality

@@ -318,6 +318,15 @@ const (
 	// cause could not tell which failure actually happened (CHAOS-4315,
 	// reversing the prior UNIT-level-failure disposition for this bound).
 	githubTestsArtifactOversizedCause = "artifact_oversized"
+	// githubTestsArtifactExpiredCause records that ONE report artifact was
+	// listed by GitHub as expired: its bytes are gone for good, so the report
+	// it held can never be read. It names a DIFFERENT fact than the causes
+	// above (no download was attempted; the provider already said the bytes
+	// were deleted), and it ADVANCES the watermark -- the loss is permanent
+	// provider data, so withholding would pin since_at forever (CHAOS-4315).
+	// CHAOS-13980: the skip used to be silent and the unit read
+	// reports_complete=true.
+	githubTestsArtifactExpiredCause = "artifact_expired"
 	// githubTestsMalformedCause records that ONE report member inside an
 	// otherwise-opened archive could not be parsed as its detected report kind
 	// (JUnit XML or LCOV) -- readZipReport succeeded, parseJUnitRows or
@@ -446,6 +455,7 @@ var githubTestsWatermarkAdvancingPairs = map[string]map[string]struct{}{
 	githubTestsRunReportsComponent:   {githubTestsPerRunCapCause: {}, githubTestsAggregateOfPartsCause: {}},
 	githubTestsReportMemberComponent: {
 		githubTestsArtifactOversizedCause:   {},
+		githubTestsArtifactExpiredCause:     {},
 		githubTestsArtifactUnavailableCause: {},
 		githubTestsUnreadableArchiveCause:   {},
 		githubTestsMalformedCause:           {},
@@ -790,6 +800,7 @@ var githubTestsIncompleteVocabulary = map[string]map[string]struct{}{
 	githubTestsReportMemberComponent: {
 		"malformed": {}, "unreadable": {}, githubTestsUnreadableArchiveCause: {},
 		githubTestsArtifactUnavailableCause: {}, githubTestsArtifactOversizedCause: {},
+		githubTestsArtifactExpiredCause: {},
 	},
 	githubTestsRunInventoryComponent:      {githubTestsPageBudgetCause: {}},
 	githubTestsArtifactInventoryComponent: {githubTestsPageBudgetCause: {}},

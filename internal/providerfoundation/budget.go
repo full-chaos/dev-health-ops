@@ -527,6 +527,8 @@ var metricArtifactSkipReasonVocabulary = map[string]struct{}{
 	// download exceeded the route's size cap, skipped and counted like the
 	// two reasons above instead of failing the unit closed.
 	"artifact_oversized": {},
+	// artifact_expired (CHAOS-13980): a report artifact GitHub lists as expired.
+	"artifact_expired": {},
 	// report_too_large: a gitlab test_report body over the route's size cap,
 	// skipped and counted instead of failing the unit closed.
 	"report_too_large": {},
@@ -596,7 +598,8 @@ func (m *Metrics) RecordNonReportMembersSkipped(provider, dataset, class string,
 // label.
 var metricSkippedArtifactCauseOverflowVocabulary = map[string]struct{}{
 	"artifact_oversized": {}, "artifact_unavailable": {}, "unreadable_archive": {},
-	"malformed": {}, "unreadable": {},
+	"artifact_expired": {},
+	"malformed":        {}, "unreadable": {},
 	// CHAOS-13794: the markers of a run's report artifacts skipped whole.
 	"per_run_cap": {}, "aggregate_of_parts": {}, "aggregate_mismatch": {},
 }
@@ -642,6 +645,7 @@ func (m *Metrics) RecordSkippedArtifactCauseOverflow(provider, dataset, cause st
 // rather than opening the label.
 var metricCicdPartialSuccessReasonVocabulary = map[string]struct{}{
 	"artifact_oversized":   {},
+	"artifact_expired":     {},
 	"artifact_unavailable": {},
 	"unreadable_archive":   {},
 	// malformed/unreadable (CHAOS-4592): report-parse-time causes that now

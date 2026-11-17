@@ -69,8 +69,10 @@
 # "part<TAB>package<TAB>part" rows name serial race parts. The parts and solo packages are placed first, as above; then the heavy
 # packages, heaviest first, each on a shard that holds no heavy package and no listed part (the same choice as above among those
 # shards); then every other package. A heavy package with no such shard goes where the rule above puts it and its shard prints
-# "WARN race plan: <package> heavy, no leg without a heavy package or a listed part, on leg <n>/<count>" on stderr. A heavy row
-# of a split, solo or pinned package, a part row of no split package or of no part of it, and a repeated row are refused.
+# "WARN race plan: <package> heavy, no leg without a heavy package or a listed part, on leg <n>/<count>" on stderr. A row with an
+# empty or blank package, a heavy row of a split, solo or pinned package or of one with no weights row (checked when the file is
+# read, also for a package this run does not plan), a part row of no split package or of no part of it, and a repeated row
+# (parts keyed by number: 02 = 2) are refused.
 # rwall(m, l, x): the modelled batch wall of a shard whose largest package is m and package sum l, with one more package of weight x.
 function rwall(m, l, x,   k, v) {
   k = (rk + 0 > 0) ? rk + 0 : 3.5
@@ -198,15 +200,19 @@ BEGIN {
     while ((getline line < apart) > 0) {
       if (line ~ /^[[:space:]]*(#|$)/) continue
       nf = split(line, f, "\t")
-      if (nf != 3 || f[3] !~ /^[0-9]+$/ || f[3] + 0 < 1) die("bad apart row: " line)
+      if (nf != 3 || f[2] !~ /^[^[:space:]]+$/ || f[3] !~ /^[0-9]+$/ || f[3] + 0 < 1) die("bad apart row: " line)
+      # A part is keyed by its number (02 = 2); a heavy row is checked here, whether or not this run plans its package.
+      v = f[3] + 0
       if (f[1] == "heavy") {
         if (f[2] in isHeavy) die("apart row repeats heavy " f[2])
         if (f[2] in parts) die("apart row: heavy " f[2] " is a split package")
+        if ((f[2] in isSolo) || (f[2] in isPin)) die("apart row: heavy " f[2] " is solo or pinned")
+        if (weights != "" && !(f[2] in w)) die("apart row: heavy " f[2] " has no race weights row")
         isHeavy[f[2]] = 1
       } else if (f[1] == "part") {
-        if (!(f[2] in parts) || f[3] + 0 > parts[f[2]]) die("apart row: part " f[3] " of " f[2] " is no race split part")
-        if ((f[2] "#" f[3]) in isApartPart) die("apart row repeats part " f[3] " of " f[2])
-        isApartPart[f[2] "#" f[3]] = 1
+        if (!(f[2] in parts) || v > parts[f[2]]) die("apart row: part " v " of " f[2] " is no race split part")
+        if ((f[2] "#" v) in isApartPart) die("apart row repeats part " v " of " f[2])
+        isApartPart[f[2] "#" v] = 1
       } else die("bad apart row: " line)
     }
     close(apart)
@@ -243,7 +249,6 @@ BEGIN {
     heavyPkg[n] = (key in isHeavy) ? 1 : 0
     apartPart[n] = (np > 1 && ((key "#" pp) in isApartPart)) ? 1 : 0
   }
-  if ((key in isHeavy) && ((key in isSolo) || (key in isPin))) die("apart row: heavy " key " is solo or pinned")
 }
 END {
   if (bad) exit 2

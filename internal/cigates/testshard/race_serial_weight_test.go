@@ -18,7 +18,7 @@ import (
 // 1000 = the rows model (the largest hosted times, not a wall); a red here means re-cut the race legs, not a flake.
 const (
 	raceModelledLegLimit = 1000.0
-	raceBatchOverlap     = 3.5 // a many-package batch's measured overlap (the plan places by GO_RACE_BATCH_OVERLAP, 1.5)
+	raceBatchOverlap     = 3.5 // a many-package batch's measured overlap (GO_RACE_BATCH_OVERLAP, the plan's default)
 )
 
 func raceSoloKeys(t *testing.T) map[string]bool {

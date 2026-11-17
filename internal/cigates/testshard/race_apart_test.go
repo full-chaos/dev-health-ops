@@ -11,8 +11,8 @@ import (
 )
 
 // CHAOS-13958: three heavy packages in one race batch ran 1.2-2.0x their time alone (race leg 13: 881, 1037, 1280 s). The race
-// plan now keeps the heavy packages of ci/go_race_apart.tsv one per leg and off the legs of its listed serial parts, at a batch
-// overlap of 1.5 (GO_RACE_BATCH_OVERLAP). The old plan (overlap 3.5, no apart rows, the old checkgo and affected rows) is the red.
+// plan now keeps the heavy packages of ci/go_race_apart.tsv one per leg and off the legs of its listed serial parts. The same
+// plan with no apart rows is the red: it stacks the three on one leg.
 
 type raceApartLeg struct {
 	pkgs  []string // package keys of the leg's batch and solo packages (root module, providersync left out)
@@ -159,30 +159,11 @@ func TestTheOldRacePlanStacksTheHeavyTrioOnOneLeg(t *testing.T) {
 	t.Parallel()
 	_, races, _ := legCounts(t)
 	heavy, parts := raceApartRows(t)
-	dir := t.TempDir()
-	src := filepath.Join(repoRoot(t), "ci", "go_race_weights.d")
-	entries, err := os.ReadDir(src)
-	if err != nil {
-		t.Fatal(err)
-	}
-	old := map[string]string{"internal__cigates__checkgo.tsv": "internal/cigates/checkgo\t985\n", "internal__cigates__affected.tsv": "internal/cigates/affected\t947\n"}
-	for _, e := range entries {
-		b, err := os.ReadFile(filepath.Join(src, e.Name()))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if row, ok := old[e.Name()]; ok {
-			b = []byte(row)
-		}
-		if err := os.WriteFile(filepath.Join(dir, e.Name()), b, 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
 	none := filepath.Join(t.TempDir(), "apart.tsv")
 	if err := os.WriteFile(none, []byte("# no rows\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	legs, _ := raceApartPlan(t, []string{"GO_RACE_BATCH_OVERLAP=3.5", "GO_RACE_APART=" + none, "GO_RACE_WEIGHTS_DIR=" + dir}, races)
+	legs, _ := raceApartPlan(t, []string{"GO_RACE_APART=" + none}, races)
 	// The trio of race leg 13: the heavy rows of 600 s or more.
 	var trio []string
 	for k, v := range raceApartHeavySeconds(t) {
@@ -215,7 +196,7 @@ func TestTheOldRacePlanStacksTheHeavyTrioOnOneLeg(t *testing.T) {
 }
 
 // raceApartAwk runs ci/go_race_shard.awk (rserial, apart) on packages m/<name> with the given rows.
-func raceApartAwk(t *testing.T, shard, count int, pkgs []string, weights, splits, apart string) (string, string, error) {
+func raceApartAwk(t *testing.T, shard, count int, pkgs []string, weights, splits, apart string, extra ...string) (string, string, error) {
 	t.Helper()
 	dir := t.TempDir()
 	write := func(name, text string) string {
@@ -227,7 +208,13 @@ func raceApartAwk(t *testing.T, shard, count int, pkgs []string, weights, splits
 	}
 	cmd := exec.Command("awk", "-v", "mod=m", "-v", "shard="+strconv.Itoa(shard), "-v", "count="+strconv.Itoa(count),
 		"-v", "weights="+write("w.tsv", weights), "-v", "splits="+write("s.tsv", splits), "-v", "rserial=1", "-v", "rk=1.5",
-		"-v", "apart="+write("a.tsv", apart), "-f", filepath.Join(repoRoot(t), "ci", "go_race_shard.awk"))
+		"-v", "apart="+write("a.tsv", apart))
+	// extra: "solo=<rows>" or "pin=<rows>": a table written to a file and passed as that variable.
+	for _, e := range extra {
+		k, rows, _ := strings.Cut(e, "=")
+		cmd.Args = append(cmd.Args, "-v", k+"="+write(k+".tsv", rows))
+	}
+	cmd.Args = append(cmd.Args, "-f", filepath.Join(repoRoot(t), "ci", "go_race_shard.awk"))
 	in := ""
 	for _, p := range pkgs {
 		in += "m/" + p + "\n"
@@ -253,8 +240,17 @@ func TestTheRacePlanRefusesABadApartRowAndWarnsWhenNoLegIsFree(t *testing.T) {
 		{"part of no split", "part\ta\t1\n", "part 1 of a is no race split part"},
 		{"part past the count", "part\ts\t4\n", "part 4 of s is no race split part"},
 		{"repeat part", "part\ts\t2\npart\ts\t2\n", "repeats part 2 of s"},
+		{"repeat part padded", "part\ts\t02\npart\ts\t2\n", "repeats part 2 of s"},
+		{"repeat part padded twice", "part\ts\t2\npart\ts\t002\n", "repeats part 2 of s"},
+		{"blank package", "heavy\t\t500\n", "bad apart row"},
+		{"space package", "heavy\t \t500\n", "bad apart row"},
+		{"package with a space", "heavy\ta b\t500\n", "bad apart row"},
+		{"no weights row", "heavy\tzz\t500\n", "heavy zz has no race weights row"},
+		{"solo heavy not planned", "heavy\tq\t500\n", "heavy q is solo or pinned"},
+		{"pinned heavy not planned", "heavy\tr\t500\n", "heavy r is solo or pinned"},
 	} {
-		_, errs, err := raceApartAwk(t, 1, 2, pkgs, weights, splits, c.apart)
+		// q is solo and r pinned, and neither is in this run's packages: the row is refused when the file is read.
+		_, errs, err := raceApartAwk(t, 1, 2, pkgs, weights+"q\t50\nr\t50\n", splits, c.apart, "solo=q\tx\n", "pin=r\tx\n")
 		if err == nil || !strings.Contains(errs, c.want) {
 			t.Errorf("%s: want a refusal %q, got err %v\n%s", c.name, c.want, err, errs)
 		}
@@ -278,6 +274,29 @@ func TestTheRacePlanRefusesABadApartRowAndWarnsWhenNoLegIsFree(t *testing.T) {
 	}
 	if len(warns) != 1 || !strings.HasPrefix(warns[0], "WARN race plan: m/c heavy, no leg without a heavy package or a listed part, on leg ") {
 		t.Errorf("want one WARN for m/c, got %q", warns)
+	}
+	// A part written 01 is part 1: the heavy package keeps off its leg as it does for 1 (part 1 is on the leg the heavy
+	// package would take first).
+	for _, num := range []string{"1", "01"} {
+		var partLeg, heavyLeg int
+		for k := 1; k <= 3; k++ {
+			out, errs, err := raceApartAwk(t, k, 3, pkgs, weights, splits, "heavy\ta\t500\npart\ts\t"+num+"\n")
+			if err != nil {
+				t.Fatalf("part %s, leg %d: %v\n%s", num, k, err, errs)
+			}
+			for _, l := range strings.Split(strings.TrimSpace(out), "\n") {
+				f := strings.Split(l, "\t")
+				if f[0] == "m/a" {
+					heavyLeg = k
+				}
+				if f[0] == "m/s" && len(f) == 3 && f[1] == "1" {
+					partLeg = k
+				}
+			}
+		}
+		if partLeg == 0 || heavyLeg == 0 || partLeg == heavyLeg {
+			t.Errorf("part row %q: heavy m/a on leg %d, part 1 of m/s on leg %d: want two legs", num, heavyLeg, partLeg)
+		}
 	}
 	var got []string
 	for p, n := range place {

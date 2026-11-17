@@ -8,18 +8,20 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
-	stdclickhouse "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/full-chaos/dev-health-ops/internal/auth/authapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/authconfig"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 	"github.com/full-chaos/dev-health-ops/internal/auth/workloadinput"
@@ -56,13 +58,15 @@ type hpCase struct {
 	// seeded, when set, is what a served body holds only from seeded rows, for a root that answers derived text
 	// rather than the rows themselves.
 	seeded *regexp.Regexp
+	// volatile are the only JSON paths (dotted, through arrays) compared as "present" rather than by value, each
+	// with its reason. Every other byte of a served body is compared as it is.
+	volatile map[string]string
 }
 
 var (
 	hpMCP          = hpCase{}
 	hpNotAllowed   = hpCase{mcpReason: "root_field_not_allowed", mcpStatus: http.StatusForbidden}
 	hpTooComplex   = hpCase{mcpReason: "complexity_limit", mcpStatus: http.StatusBadRequest}
-	hpCases        = map[string]hpCase{}
 	hpCaseBaseline = map[string]hpCase{
 		"Query.analytics":            hpMCP,
 		"Query.capacityForecast":     hpMCP,
@@ -111,7 +115,9 @@ var (
 	}
 )
 
-func init() {
+// hpCaseTable is the RC10 case of every root: hpCaseBaseline with the test-only variables, census patterns and
+// volatile paths. now is the clock every seeded day and window comes from.
+func hpCaseTable(now time.Time) map[string]hpCase {
 	// A root whose body holds values that do not come from rows: its census is a pattern only seeded rows produce.
 	// experiments answers only suggestion text: a "Reduce <metric>" card (metric not empty) comes from seeded deltas
 	// that got worse; with no rows the one card is the metric-less default.
@@ -122,43 +128,90 @@ func init() {
 		// The window lengths and thresholds are non-zero without any row: only a backlog or throughput is seeded.
 		"Query.throughputForecast": `"(backlogSize|meanWeeklyThroughput|sampleCount)":[1-9]`,
 	}
-	for key, pattern := range seeded {
-		c := hpCaseBaseline[key]
-		c.seeded = regexp.MustCompile(pattern)
-		hpCaseBaseline[key] = c
-	}
+	variables := hpCaseVariables(now)
+	volatile := hpVolatilePaths()
+	out := map[string]hpCase{}
 	for key, c := range hpCaseBaseline {
-		if v, ok := hpCaseVariables[key]; ok {
-			c.variables = v
+		if pattern, ok := seeded[key]; ok {
+			c.seeded = regexp.MustCompile(pattern)
 		}
-		hpCases[key] = c
+		c.variables = variables[key]
+		c.volatile = volatile[key]
+		out[key] = c
+	}
+	return out
+}
+
+// hpVolatilePaths are the response values a resolver computes per request (not from rows), by root and JSON path,
+// each with its reason.
+func hpVolatilePaths() map[string]map[string]string {
+	forecast := func(root string) map[string]string {
+		return map[string]string{
+			"data." + root + ".forecastId": "a fresh UUID per request (the forecast is computed per request, never stored)",
+			"data." + root + ".computedAt": "the request's own clock",
+		}
+	}
+	return map[string]map[string]string{
+		"Query.capacityForecast":   forecast("capacityForecast"),
+		"Query.throughputForecast": forecast("throughputForecast"),
+		"Query.compoundingRisk":    {"data.compoundingRisk.generatedAt": "the request's own clock"},
+		"Query.home":               {"data.home.events.ts": "each event card is stamped with the request's own clock"},
 	}
 }
 
-// hpRange is a test-only date range over the seeded days 2026-09-01 and 2026-09-04.
-var hpRange = map[string]any{"startDate": "2026-09-01", "endDate": "2026-09-05"}
+// hpWindow is the test-only date window of every dated variable: two weeks that end today, over the seeded days.
+func hpWindow(now time.Time) (start, end string) {
+	day := now.UTC().Truncate(24 * time.Hour)
+	return day.AddDate(0, 0, -14).Format(time.DateOnly), day.Format(time.DateOnly)
+}
 
-// hpCaseVariables are the test-only variable overrides: each names seeded data (team, ids, window) so the root reads
-// seeded rows.
-var hpCaseVariables = map[string]map[string]any{
-	"Query.savedReport":               {"reportId": hpReportID.String()},
-	"Query.reportRuns":                {"reportId": hpReportID.String()},
-	"Query.pr":                        {"id": hpRepos[0].id.String() + "#3"},
-	"Query.aiAttributedPrs":           {"dateRange": hpRange},
-	"Query.aiAttributionOverview":     {"dateRange": hpRange},
-	"Query.aiComparison":              {"dateRange": hpRange},
-	"Query.aiWorkflowDrilldown":       {"rootType": "ISSUE", "rootId": hpSeedMark + "-issue_id-1"},
-	"Query.coverageBaselines":         {"endDate": "2026-09-05"},
-	"Query.coverageScopeBaseline":     {"endDate": "2026-09-05"},
-	"Query.featureFlags":              {"limit": 50},
-	"Query.productTelemetryDashboard": {"input": hpRange},
-	"Query.testopsJobFailures":        {"input": map[string]any{"sinceDate": "2026-09-01", "untilDate": "2026-09-05"}},
-	"Query.analytics": {"batch": map[string]any{"timeseries": []any{
-		map[string]any{"dimension": "REPO", "measure": "COUNT", "interval": "DAY",
-			"dateRange": map[string]any{"startDate": "2026-09-01", "endDate": "2026-09-08"}},
-		map[string]any{"dimension": "REPO", "measure": "PIPELINE_SUCCESS_RATE", "interval": "DAY",
-			"dateRange": map[string]any{"startDate": "2026-09-01", "endDate": "2026-09-08"}},
-	}}},
+// hpCaseVariables are the test-only variable overrides: each names seeded data (ids, window) so the root reads
+// seeded rows. A generated date of any root is moved into hpWindow by hpDates.
+func hpCaseVariables(now time.Time) map[string]map[string]any {
+	start, end := hpWindow(now)
+	series := func(measure string) map[string]any {
+		return map[string]any{"dimension": "REPO", "measure": measure, "interval": "DAY",
+			"dateRange": map[string]any{"startDate": start, "endDate": end}}
+	}
+	return map[string]map[string]any{
+		"Query.savedReport":         {"reportId": hpReportID().String()},
+		"Query.reportRuns":          {"reportId": hpReportID().String()},
+		"Query.pr":                  {"id": hpRepoList()[0].id.String() + "#3"},
+		"Query.aiWorkflowDrilldown": {"rootType": "ISSUE", "rootId": hpSeedMark + "-issue_id-1"},
+		"Query.featureFlags":        {"limit": 50},
+		"Query.analytics":           {"batch": map[string]any{"timeseries": []any{series("COUNT"), series("PIPELINE_SUCCESS_RATE")}}},
+	}
+}
+
+var hpEndKey = regexp.MustCompile(`(?i)(end|until|to)(date|day|utc|at)?$`)
+
+// hpDates moves every generated date variable (a YYYY-MM-DD or RFC 3339 string) into hpWindow: an end key to the
+// window's end, any other key to its start.
+func hpDates(value any, key string, start, end string) any {
+	switch v := value.(type) {
+	case map[string]any:
+		for k, inner := range v {
+			v[k] = hpDates(inner, k, start, end)
+		}
+		return v
+	case []any:
+		for i, inner := range v {
+			v[i] = hpDates(inner, key, start, end)
+		}
+		return v
+	case string:
+		date := start
+		if hpEndKey.MatchString(key) {
+			date = end
+		}
+		if _, err := time.Parse(time.DateOnly, v); err == nil {
+			return date
+		}
+		if _, err := time.Parse(time.RFC3339, v); err == nil {
+			return date + "T00:00:00Z"
+		}
+	}
+	return value
 }
 
 type hpCaller struct {
@@ -175,11 +228,13 @@ type hpRoot struct {
 }
 
 // hpRoots are the RC10 operations: the registered document of each case root, with the case's variables.
-func hpRoots(t *testing.T, org string) []hpRoot {
+func hpRoots(t *testing.T, org string, now time.Time) []hpRoot {
 	t.Helper()
+	cases := hpCaseTable(now)
+	start, end := hpWindow(now)
 	var roots []hpRoot
 	for _, op := range qpGraphQLOperations(t, org).roots {
-		c, ok := hpCases[op.key]
+		c, ok := cases[op.key]
 		if !ok {
 			continue
 		}
@@ -189,6 +244,7 @@ func hpRoots(t *testing.T, org string) []hpRoot {
 		if op.variables == nil {
 			op.variables = map[string]any{}
 		}
+		hpDates(op.variables, "", start, end)
 		for name, value := range c.variables {
 			op.variables[name] = value
 		}
@@ -197,8 +253,8 @@ func hpRoots(t *testing.T, org string) []hpRoot {
 		t.Logf("ROOT %-34s %s variables=%s", op.key, strings.TrimSpace(head), op.variablesJSON(t))
 		roots = append(roots, hpRoot{op: op, hpCase: c})
 	}
-	if len(roots) != len(hpCases) {
-		t.Fatalf("%d RC10 cases, %d roots found: TestHeaderCarrierRootCases names the gap", len(hpCases), len(roots))
+	if len(roots) != len(cases) {
+		t.Fatalf("%d RC10 cases, %d roots found: TestHeaderCarrierRootCases names the gap", len(cases), len(roots))
 	}
 	return roots
 }
@@ -207,6 +263,7 @@ func hpRoots(t *testing.T, org string) []hpRoot {
 // /query/run-operation serves) has an RC10 case, every case is such a root, and a case's MCP form matches the MCP
 // allowlist.
 func TestHeaderCarrierRootCases(t *testing.T) {
+	cases := hpCaseTable(time.Now())
 	allowed := mcpclass.AllowedRoots()
 	flipped := map[string]bool{}
 	for _, op := range qpGraphQLOperations(t, uuid.NewString()).roots {
@@ -218,7 +275,7 @@ func TestHeaderCarrierRootCases(t *testing.T) {
 		t.Fatal("no registered root in the flipped namespaces: the census would measure nothing")
 	}
 	for key := range flipped {
-		c, ok := hpCases[key]
+		c, ok := cases[key]
 		if !ok {
 			t.Errorf("%s is a registered root in a flipped namespace with no RC10 case", key)
 			continue
@@ -228,51 +285,82 @@ func TestHeaderCarrierRootCases(t *testing.T) {
 			t.Errorf("%s: MCP allowlist %v, but the case says mcpReason %q", key, allowed[field], c.mcpReason)
 		}
 	}
-	for key := range hpCases {
+	for key := range cases {
 		if !flipped[key] {
 			t.Errorf("RC10 case %s is not a registered root in a flipped namespace", key)
 		}
 	}
-	t.Logf("%d registered roots in %s, %d RC10 cases", len(flipped), hpHeaderCells, len(hpCases))
+	t.Logf("%d registered roots in %s, %d RC10 cases", len(flipped), hpHeaderCells, len(cases))
 }
 
 func TestHeaderCarrierPrincipalParity(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
-	v, b, pre := newHPVenue(t, ctx)
-	roots := hpRoots(t, v.orgA.String())
+	now := time.Now()
+	h := newHPVenue(t, ctx, now)
+	v, b := h.v, h.after
+	roots := hpRoots(t, v.orgA.String(), now)
 	callers := v.hpCallers(t, ctx)
-	cells, carrierAsks, servedSame, seeded := 0, 0, 0, 0
+	send := func(build *qpBuild, name string, carry func(*http.Request), listener, target string, op qpOperation) qpAnswer {
+		return v.send(t, build, qpClass{name: name, carry: carry},
+			qpRow{listener: listener, method: http.MethodPost, target: target, body: op.bodyBytes}, uuid.NewString())
+	}
+
+	// The differential (P1-e): every user answer with org A's rows only. Org B's decoys are written after this pass,
+	// and every org A answer must stay byte-equal: a leak that both paths share changes it.
+	alone := map[string]qpAnswer{}
+	for _, c := range callers {
+		for _, root := range roots {
+			alone[c.name+"|"+root.op.key] = send(b, c.name, c.userToken, "public", "/graphql", root.op)
+		}
+	}
+	h.seedDecoys(t, ctx)
+
+	cells, carrierDecisions, servedSame, seeded := 0, 0, 0, 0
 	viewer := map[string]qpAnswer{}
 	for _, c := range callers {
 		carrier := hpCarrier(v.orgA, c.user)
+		principal := session.WirePrincipalID(c.user)
 		for _, root := range roots {
 			op := root.op
-			user := v.send(t, b, qpClass{name: c.name, carry: c.userToken},
-				qpRow{listener: "public", method: http.MethodPost, target: "/graphql", body: op.bodyBytes}, uuid.NewString())
-			before := b.pdp.count()
-			mcp := v.send(t, b, qpClass{name: c.name, carry: carrier},
-				qpRow{listener: "mcp", method: http.MethodPost, target: "/query", body: op.bodyBytes}, uuid.NewString())
-			mcpAsks := b.pdp.count() - before
-			runOp := v.send(t, b, qpClass{name: c.name, carry: carrier},
-				qpRow{listener: "internal", method: http.MethodPost, target: "/query/run-operation", body: op.bodyBytes}, uuid.NewString())
-			carrierAsks += b.pdp.count() - before
 			cells++
+			mark := h.afterAsks.mark()
+			user := send(b, c.name, c.userToken, "public", "/graphql", op)
+			userAsks := h.afterAsks.since(mark)
+			mark = h.afterAsks.mark()
+			mcp := send(b, c.name, carrier, "mcp", "/query", op)
+			mcpAsks := h.afterAsks.since(mark)
+			mark = h.afterAsks.mark()
+			runOp := send(b, c.name, carrier, "internal", "/query/run-operation", op)
+			runAsks := h.afterAsks.since(mark)
 			uv, mv, rv := hpVerdict(user), hpVerdict(mcp), hpVerdict(runOp)
 			t.Logf("%-25s %-34s user=%-28s mcp=%-28s run-operation=%s", c.name, op.key, uv, mv, rv)
+
+			// One decision per decided request (P1-c), for this cell: the carrier asks once, as the principal it
+			// names, for org A and the root's action; a served user request asks once for org A and the action.
+			hpOneDecision(t, c.name, op, "run-operation", runAsks, principal, v.orgA.String())
+			carrierDecisions++
+			if root.mcpReason == "" {
+				hpOneDecision(t, c.name, op, "mcp", mcpAsks, principal, v.orgA.String())
+				carrierDecisions++
+			}
+			if uv == "served" {
+				hpOneDecision(t, c.name, op, "user", userAsks, "", v.orgA.String())
+			}
 			if root.mcpReason != "" {
-				// Outside the MCP allowlist: refused on the MCP listener before any decision, after the flip and before it.
-				preBefore := pre.pdp.count()
-				preMCP := hpSendBefore(t, v, pre, c.name, carrier, op)
-				preAsks := pre.pdp.count() - preBefore
+				// Outside the MCP allowlist (P1-d, P2): an error-only refusal with the exact status and
+				// errors[0].extensions.reason, and no decision, after the flip and before it.
+				preMark := h.beforeAsks.mark()
+				preMCP := send(h.before, c.name, carrier, "mcp", "/query", op)
+				preAsks := h.beforeAsks.since(preMark)
 				for _, leg := range []struct {
 					build  string
 					answer qpAnswer
-					asks   int
+					asks   []hpAsk
 				}{{"after the flip", mcp, mcpAsks}, {"before the flip", preMCP, preAsks}} {
-					if got := hpRefusal(leg.answer); got != fmt.Sprintf("%d %s", root.mcpStatus, root.mcpReason) || leg.asks != 0 {
-						t.Errorf("%s %s MCP %s: %s with %d asks, want %d %s with 0 asks\n %s",
-							c.name, op.key, leg.build, got, leg.asks, root.mcpStatus, root.mcpReason, leg.answer)
+					if problem := hpRefusal(leg.answer, root.mcpStatus, root.mcpReason); problem != "" || len(leg.asks) != 0 {
+						t.Errorf("%s %s MCP %s: %s; %d asks, want an error-only %d %s with 0 asks\n %s",
+							c.name, op.key, leg.build, problem, len(leg.asks), root.mcpStatus, root.mcpReason, leg.answer)
 					}
 				}
 			}
@@ -286,18 +374,25 @@ func TestHeaderCarrierPrincipalParity(t *testing.T) {
 				t.Errorf("%s %s: user=%s mcp=%s run-operation=%s, want the same verdict\n user: %s\n mcp: %s\n run-operation: %s",
 					c.name, op.key, uv, mv, rv, user, mcp, runOp)
 			case uv == "served":
-				// A served cell answers the same rows. The MCP listener ends its body with a newline; that framing byte is
-				// not compared.
-				u, r := hpBody(user), hpBody(runOp)
+				// A served cell answers the same bytes; only the root's named volatile paths are compared as present.
+				u, r := hpBody(t, user, root), hpBody(t, runOp, root)
 				same := u.equal(r)
 				if root.mcpReason == "" {
-					same = same && u.equal(hpBody(mcp))
+					same = same && u.equal(hpBody(t, mcp, root))
 				}
 				if !same {
-					t.Errorf("%s %s: served, bodies differ\n user: %s\n mcp: %s\n run-operation: %s", c.name, op.key, u, hpBody(mcp), r)
+					diff := hpJSONDiff(u.body, r.body)
+					if root.mcpReason == "" {
+						diff = append(diff, hpJSONDiff(u.body, hpBody(t, mcp, root).body)...)
+					}
+					t.Errorf("%s %s: served, bodies differ at %v\n user: %s\n mcp: %s\n run-operation: %s", c.name, op.key, diff, u, hpBody(t, mcp, root), r)
 				} else {
 					servedSame++
 				}
+			}
+			if before := alone[c.name+"|"+op.key]; !hpBody(t, before, root).equal(hpBody(t, user, root)) {
+				t.Errorf("%s %s: org B's rows changed org A's answer at %v\n without org B: %s\n with org B: %s", c.name, op.key,
+					hpJSONDiff(hpBody(t, before, root).body, hpBody(t, user, root).body), hpBody(t, before, root), hpBody(t, user, root))
 			}
 			for leg, answer := range map[string]qpAnswer{"user": user, "mcp": mcp, "run-operation": runOp} {
 				if hpDecoyEvidence(answer.body) {
@@ -313,7 +408,7 @@ func TestHeaderCarrierPrincipalParity(t *testing.T) {
 			}
 			switch c.name {
 			case "member_viewer":
-				viewer[op.key] = hpBody(user)
+				viewer[op.key] = hpBody(t, user, root)
 				marks, numbers := hpSeedEvidence(user.body)
 				if root.seeded != nil {
 					marks, numbers = len(root.seeded.FindAll(user.body, -1)), 0
@@ -327,33 +422,107 @@ func TestHeaderCarrierPrincipalParity(t *testing.T) {
 			case "member_repo_grant":
 				// Repository grants do not narrow these reads (their actions are repository_scope none): the grant
 				// member answers as a viewer.
-				if want, ok := viewer[op.key]; ok && !want.equal(hpBody(user)) {
-					t.Errorf("%s: member_repo_grant answers other rows than member_viewer\n viewer: %s\n grant: %s", op.key, want, hpBody(user))
+				if want, ok := viewer[op.key]; ok && !want.equal(hpBody(t, user, root)) {
+					t.Errorf("%s: member_repo_grant answers other rows than member_viewer\n viewer: %s\n grant: %s", op.key, want, hpBody(t, user, root))
 				}
 			}
 		}
 	}
-	if carrierAsks == 0 {
-		t.Fatal("the header carrier never asked the decision point: the cells are not decided")
-	}
-	t.Logf("%d cells over %d callers and %d roots; the carrier asked the decision point %d times; %d served cells byte-equal; %d roots served with seeded rows",
-		cells, len(callers), len(roots), carrierAsks, servedSame, seeded)
+	t.Logf("%d cells over %d callers and %d roots; %d carrier requests each decided once; %d served cells byte-equal; %d roots served with seeded rows",
+		cells, len(callers), len(roots), carrierDecisions, servedSame, seeded)
 }
 
-// hpSendBefore sends op on the MCP listener of the build before the flip (no header cells).
-func hpSendBefore(t *testing.T, v *qpVenue, pre *qpBuild, name string, carrier func(*http.Request), op qpOperation) qpAnswer {
+// hpAsk is one decision request the decision point received.
+type hpAsk struct{ principal, action, org string }
+
+// hpAsks records every decision request of one build, in order.
+type hpAsks struct {
+	next http.Handler
+	mu   sync.Mutex
+	all  []hpAsk
+}
+
+func (a *hpAsks) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPost && (r.URL.Path == authapi.PatternAuthorize || r.URL.Path == authapi.PatternAuthorizeBatch) {
+		raw, _ := io.ReadAll(r.Body)
+		r.Body = io.NopCloser(bytes.NewReader(raw))
+		type wire struct {
+			PrincipalReference string `json:"principal_reference"`
+			Action             string `json:"action"`
+			Resource           struct {
+				OrganizationID string `json:"organization_id"`
+			} `json:"resource"`
+		}
+		var batch struct {
+			Requests []wire `json:"requests"`
+		}
+		var one wire
+		requests := []wire{}
+		if json.Unmarshal(raw, &batch) == nil && len(batch.Requests) > 0 {
+			requests = batch.Requests
+		} else if json.Unmarshal(raw, &one) == nil {
+			requests = append(requests, one)
+		}
+		a.mu.Lock()
+		for _, q := range requests {
+			a.all = append(a.all, hpAsk{principal: q.PrincipalReference, action: q.Action, org: q.Resource.OrganizationID})
+		}
+		a.mu.Unlock()
+	}
+	a.next.ServeHTTP(w, r)
+}
+
+func (a *hpAsks) mark() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return len(a.all)
+}
+
+func (a *hpAsks) since(mark int) []hpAsk {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([]hpAsk(nil), a.all[mark:]...)
+}
+
+// hpOneDecision fails unless one request leg asked the decision point exactly once, for org and op's action, and (when
+// principal is set) as that principal.
+func hpOneDecision(t *testing.T, caller string, op qpOperation, leg string, asks []hpAsk, principal, org string) {
 	t.Helper()
-	return v.send(t, pre, qpClass{name: name, carry: carrier},
-		qpRow{listener: "mcp", method: http.MethodPost, target: "/query", body: op.bodyBytes}, uuid.NewString())
+	if len(asks) != 1 {
+		t.Errorf("%s %s %s: %d decisions, want exactly 1: %+v", caller, op.key, leg, len(asks), asks)
+		return
+	}
+	ask := asks[0]
+	if ask.action != op.action || ask.org != org || (principal != "" && ask.principal != principal) {
+		t.Errorf("%s %s %s: decided %+v, want action %s, org %s, principal %q", caller, op.key, leg, ask, op.action, org, principal)
+	}
 }
 
-// hpRefusal is "status reason" of an MCP refusal.
-func hpRefusal(a qpAnswer) string {
-	reason := ""
-	if m := hpReason.FindSubmatch(a.body); m != nil {
-		reason = string(m[1])
+// hpRefusal is "" for an error-only MCP refusal (no data member, or data null) with status and
+// errors[0].extensions.reason, else what differs.
+func hpRefusal(a qpAnswer, status int, reason string) string {
+	var envelope struct {
+		Data   *json.RawMessage `json:"data"`
+		Errors []struct {
+			Extensions struct {
+				Reason string `json:"reason"`
+			} `json:"extensions"`
+		} `json:"errors"`
 	}
-	return fmt.Sprintf("%d %s", a.status, reason)
+	if err := json.Unmarshal(a.body, &envelope); err != nil {
+		return "not a JSON envelope: " + err.Error()
+	}
+	switch {
+	case a.status != status:
+		return fmt.Sprintf("status %d", a.status)
+	case envelope.Data != nil && string(*envelope.Data) != "null":
+		return "the refusal carries data"
+	case len(envelope.Errors) == 0:
+		return "no errors member"
+	case envelope.Errors[0].Extensions.Reason != reason:
+		return fmt.Sprintf("errors[0].extensions.reason %q", envelope.Errors[0].Extensions.Reason)
+	}
+	return ""
 }
 
 // hpDecoyEvidence reports whether a body holds org B's rows: a decoy string, or a number only a decoy row reaches.
@@ -427,10 +596,90 @@ func hpCarrier(org, user uuid.UUID) func(*http.Request) {
 	}
 }
 
-func hpBody(a qpAnswer) qpAnswer {
-	a = a.masked()
+// hpBody is a for comparison: the MCP listener's framing newline trimmed, and each of root's named volatile paths
+// set to "<volatile>" where present. Nothing else is masked: a seeded id or time compares as it is.
+func hpBody(t *testing.T, a qpAnswer, root hpRoot) qpAnswer {
+	t.Helper()
 	a.body = bytes.TrimRight(a.body, "\n")
+	if len(root.volatile) == 0 {
+		return a
+	}
+	decoder := json.NewDecoder(bytes.NewReader(a.body))
+	decoder.UseNumber()
+	var document any
+	if decoder.Decode(&document) != nil {
+		return a
+	}
+	for path := range root.volatile {
+		hpMarkPath(document, strings.Split(path, "."))
+	}
+	raw, err := json.Marshal(document)
+	if err != nil {
+		t.Fatalf("re-encode %s: %v", root.op.key, err)
+	}
+	a.body = raw
 	return a
+}
+
+// hpJSONDiff names up to five JSON paths where two bodies differ, with both values.
+func hpJSONDiff(a, b []byte) []string {
+	var x, y any
+	if json.Unmarshal(a, &x) != nil || json.Unmarshal(b, &y) != nil {
+		return []string{"(not JSON)"}
+	}
+	var out []string
+	var walk func(x, y any, path string)
+	walk = func(x, y any, path string) {
+		if len(out) >= 5 {
+			return
+		}
+		xm, xok := x.(map[string]any)
+		ym, yok := y.(map[string]any)
+		if xok && yok {
+			for k := range xm {
+				walk(xm[k], ym[k], path+"."+k)
+			}
+			for k := range ym {
+				if _, ok := xm[k]; !ok {
+					walk(nil, ym[k], path+"."+k)
+				}
+			}
+			return
+		}
+		xa, xok := x.([]any)
+		ya, yok := y.([]any)
+		if xok && yok && len(xa) == len(ya) {
+			for i := range xa {
+				walk(xa[i], ya[i], fmt.Sprintf("%s[%d]", path, i))
+			}
+			return
+		}
+		if fmt.Sprint(x) != fmt.Sprint(y) {
+			out = append(out, fmt.Sprintf("%s: %.60v != %.60v", path, x, y))
+		}
+	}
+	walk(x, y, "")
+	return out
+}
+
+// hpMarkPath sets the value at path (map keys; an array applies the rest of the path to every element) to
+// "<volatile>".
+func hpMarkPath(node any, path []string) {
+	switch v := node.(type) {
+	case []any:
+		for _, e := range v {
+			hpMarkPath(e, path)
+		}
+	case map[string]any:
+		inner, ok := v[path[0]]
+		switch {
+		case !ok:
+		case len(path) == 1:
+			v[path[0]] = "<volatile>"
+		default:
+			hpMarkPath(inner, path[1:])
+		}
+	}
 }
 
 var hpReason = regexp.MustCompile(`"reason":"([a-z_]+)"`)
@@ -527,9 +776,17 @@ VALUES ($1, $2, 'member', 'repository', $3)`, granted, org, key)
 	return callers
 }
 
-// newHPVenue is newQPVenue with the named principal kind on, the test-only seed written, and two builds: the enforce
-// build with the header cells on (after the flip) and the same build with no header cells (before the flip).
-func newHPVenue(t *testing.T, ctx context.Context) (*qpVenue, *qpBuild, *qpBuild) {
+// hpVenue is the RC10 venue: the enforce build with the header cells on (after the flip) and the same build with no
+// header cells (before the flip), each with the decision requests it sent, and the writer of org B's decoys.
+type hpVenue struct {
+	v                     *qpVenue
+	after, before         *qpBuild
+	afterAsks, beforeAsks *hpAsks
+	seedDecoys            func(t *testing.T, ctx context.Context)
+}
+
+// newHPVenue is newQPVenue with the named principal kind on, org A's test-only seed written, and the two builds.
+func newHPVenue(t *testing.T, ctx context.Context, now time.Time) *hpVenue {
 	t.Helper()
 	qpQuietLogs(t)
 	issuerFront := httptest.NewUnstartedServer(nil)
@@ -567,8 +824,13 @@ func newHPVenue(t *testing.T, ctx context.Context) (*qpVenue, *qpBuild, *qpBuild
 		_ = ch.Close(closeCtx)
 	})
 	chschema.Apply(ctx, t, ch)
-	hpSeed(t, ctx, ch.URI, v.orgA, uuid.New())
-	hpSeedPostgres(t, ctx, v)
+	orgB := uuid.New()
+	chHTTP, err := containers.ClickHouseHTTPDSN(ctx, ch)
+	if err != nil {
+		t.Fatalf("ClickHouse HTTP DSN: %v", err)
+	}
+	hpSeed(t, chHTTP, v.orgA, now, false)
+	hpSeedPostgres(t, ctx, v.az, v.orgA.String(), now, false)
 	settings := map[string]string{
 		"CLICKHOUSE_URI":               ch.URI,
 		"GO_API_ENVELOPE_JWKS_PATH":    jwksPath,
@@ -586,8 +848,8 @@ func newHPVenue(t *testing.T, ctx context.Context) (*qpVenue, *qpBuild, *qpBuild
 	// reads the auth sessions table, and its role holds that read.
 	settings["AUTH_PROXY_SESSIONS"] = "true"
 	settings["GO_API_REGISTRY_POSTGRES_URI"] = hpQueryAPIRole(t, ctx, az, settings)
-	build := func(name, headerCells string) *qpBuild {
-		counter := &qpCounter{next: api, revisions: map[int]int{}}
+	build := func(name, headerCells string, asks *hpAsks) *qpBuild {
+		counter := &qpCounter{next: asks, revisions: map[int]int{}}
 		proxy := httptest.NewServer(counter)
 		t.Cleanup(proxy.Close)
 		return v.build(t, ctx, name, qpMerge(settings, map[string]string{
@@ -597,7 +859,14 @@ func newHPVenue(t *testing.T, ctx context.Context) (*qpVenue, *qpBuild, *qpBuild
 			authzenforce.QueryAPIHeaders.Env(): headerCells,
 		}), counter)
 	}
-	return v, build("H", hpHeaderCells), build("H0", "")
+	h := &hpVenue{v: v, afterAsks: &hpAsks{next: api}, beforeAsks: &hpAsks{next: api}}
+	h.after = build("H", hpHeaderCells, h.afterAsks)
+	h.before = build("H0", "", h.beforeAsks)
+	h.seedDecoys = func(t *testing.T, ctx context.Context) {
+		hpSeed(t, chHTTP, orgB, now, true)
+		hpSeedPostgres(t, ctx, v.az, orgB.String(), now, true)
+	}
+	return h
 }
 
 // hpQueryAPIRole is query-api's production role shape on the venue database: a LOGIN NOSUPERUSER role with exactly
@@ -676,15 +945,15 @@ type hpRepo struct {
 	id   uuid.UUID
 }
 
-// hpRepos are the test-only repositories of the RC10 seed. Their ids follow the provider rule (sha of the lowered
+// hpRepoList are the test-only repositories of the RC10 seed. Their ids follow the provider rule (sha of the lowered
 // full name), so org B's decoy rows share an id with org A's, as two orgs that sync one repository do.
-var hpRepos = func() []hpRepo {
+func hpRepoList() []hpRepo {
 	var out []hpRepo
 	for _, name := range []string{"acme/web", "acme/api", "acme/ops"} {
 		out = append(out, hpRepo{name: name, id: uuid.NewSHA1(uuid.NameSpaceURL, []byte(name))})
 	}
 	return out
-}()
+}
 
 const (
 	// hpSeedMark is in every seeded org A string; hpDecoyMark in every org B decoy string. A served body must hold
@@ -765,73 +1034,62 @@ var hpSeedTables = []string{
 // five days of a default window that ends now (a detector wants 5 data days). A later day gets larger values (hpLiteral), so the recent window reads worse than the
 // prior one.
 func hpSeedDays(now time.Time) []time.Time {
-	days := []time.Time{
-		time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC),
-		time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC),
-	}
+	var days []time.Time
 	for _, back := range []int{40, 35, 24, 20, 12, 9, 6, 4, 2} {
 		days = append(days, now.Add(-time.Duration(back)*24*time.Hour).Truncate(24*time.Hour))
 	}
 	return days
 }
 
-// hpSeed writes the test-only RC10 seed: for each table, org A rows over the three repositories and seeded days,
-// and one org B decoy row under acme/web's id. Values come from each column's name and type (system.columns);
-// a column the generator has no value for keeps its default.
-func hpSeed(t *testing.T, ctx context.Context, uri string, orgA, orgB uuid.UUID) {
+// hpSeed writes the test-only RC10 seed of one org: for each table, org A's rows over the three repositories and
+// seeded days, or (decoy) org B's rows: one row on every seeded day under acme/web's id, so a decoy is inside every
+// root's read window. Values come from each column's name and type (system.columns); a column the generator has no
+// value for keeps its default.
+func hpSeed(t *testing.T, httpDSN string, org uuid.UUID, now time.Time, decoy bool) {
 	t.Helper()
-	options, err := stdclickhouse.ParseDSN(uri)
-	if err != nil {
-		t.Fatalf("seed: parse the ClickHouse DSN: %v", err)
-	}
-	conn, err := stdclickhouse.Open(options)
-	if err != nil {
-		t.Fatalf("seed: open ClickHouse: %v", err)
-	}
-	defer conn.Close()
-	days := hpSeedDays(time.Now().UTC())
+	days := hpSeedDays(now.UTC())
+	repos := hpRepoList()
 	for _, table := range hpSeedTables {
-		columns := hpColumns(t, ctx, conn, table)
+		columns := hpColumns(t, httpDSN, table)
 		var names []string
 		for _, c := range columns {
 			names = append(names, c.name)
 		}
 		var rows []string
 		n := 0
-		for _, repo := range hpRepos {
+		if !decoy {
+			for _, repo := range repos {
+				for _, day := range days {
+					n++
+					rows = append(rows, hpRow(table, columns, org, repo, day, n, false))
+				}
+			}
+		} else {
+			n = len(repos) * len(days)
 			for _, day := range days {
 				n++
-				rows = append(rows, hpRow(table, columns, orgA, repo, day, n, false))
+				rows = append(rows, hpRow(table, columns, org, hpRepo{name: hpDecoyMark + "/web", id: repos[0].id}, day, n, true))
 			}
 		}
-		// Org B's decoy: one row on every seeded day, so it is inside every root's read window.
-		for _, day := range days {
-			n++
-			rows = append(rows, hpRow(table, columns, orgB, hpRepo{name: hpDecoyMark + "/web", id: hpRepos[0].id}, day, n, true))
-		}
 		statement := "INSERT INTO " + table + " (" + strings.Join(names, ", ") + ") VALUES " + strings.Join(rows, ", ")
-		if err := conn.Exec(ctx, statement); err != nil {
-			t.Fatalf("seed %s: %v", table, err)
-		}
+		hpClickHouse(t, httpDSN, statement)
 	}
 }
 
 type hpColumn struct{ name, typ string }
 
-func hpColumns(t *testing.T, ctx context.Context, conn stdclickhouse.Conn, table string) []hpColumn {
+func hpColumns(t *testing.T, httpDSN, table string) []hpColumn {
 	t.Helper()
-	rows, err := conn.Query(ctx, `SELECT name, type FROM system.columns WHERE database = currentDatabase() AND table = ? AND default_kind NOT IN ('MATERIALIZED', 'ALIAS', 'EPHEMERAL') ORDER BY position`, table)
-	if err != nil {
-		t.Fatalf("seed: columns of %s: %v", table, err)
-	}
-	defer rows.Close()
-	var out []hpColumn
-	for rows.Next() {
-		var c hpColumn
-		if err := rows.Scan(&c.name, &c.typ); err != nil {
-			t.Fatal(err)
+	out := []hpColumn{}
+	answer := hpClickHouse(t, httpDSN, "SELECT name, type FROM system.columns WHERE database = currentDatabase() AND table = '"+table+
+		"' AND default_kind NOT IN ('MATERIALIZED', 'ALIAS', 'EPHEMERAL') ORDER BY position FORMAT TabSeparated")
+	for _, line := range strings.Split(strings.TrimSpace(answer), "\n") {
+		name, typ, ok := strings.Cut(line, "\t")
+		if !ok {
+			continue
 		}
-		if hpLiteral(table, c, uuid.Nil, hpRepos[0], time.Time{}, 1, false) != "" {
+		c := hpColumn{name: name, typ: strings.ReplaceAll(typ, `\'`, "'")}
+		if hpLiteral(table, c, uuid.Nil, hpRepoList()[0], time.Time{}, 1, false) != "" {
 			out = append(out, c)
 		}
 	}
@@ -839,6 +1097,32 @@ func hpColumns(t *testing.T, ctx context.Context, conn stdclickhouse.Conn, table
 		t.Fatalf("seed: table %s has no column the seed can write (missing table?)", table)
 	}
 	return out
+}
+
+// hpClickHouse runs one statement over ClickHouse's HTTP interface (the seed writes through it, as the chmigrate
+// repair test does, so this tagged file loads no database/sql driver) and returns the answer.
+func hpClickHouse(t *testing.T, httpDSN, statement string) string {
+	t.Helper()
+	parsed, err := url.Parse(httpDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	password, _ := parsed.User.Password()
+	request, err := http.NewRequest(http.MethodPost, "http://"+parsed.Host+"/?database="+strings.TrimPrefix(parsed.Path, "/"), strings.NewReader(statement))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.SetBasicAuth(parsed.User.Username(), password)
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	defer response.Body.Close()
+	body, _ := io.ReadAll(response.Body)
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("seed: ClickHouse %d for %.120s: %s", response.StatusCode, statement, body)
+	}
+	return string(body)
 }
 
 func hpRow(table string, columns []hpColumn, org uuid.UUID, repo hpRepo, day time.Time, n int, decoy bool) string {
@@ -985,24 +1269,24 @@ func hpLiteral(table string, c hpColumn, org uuid.UUID, repo hpRepo, day time.Ti
 }
 
 // hpReportID is the test-only saved report of the seed.
-var hpReportID = uuid.NewSHA1(uuid.NameSpaceURL, []byte(hpSeedMark+"-report"))
+func hpReportID() uuid.UUID { return uuid.NewSHA1(uuid.NameSpaceURL, []byte(hpSeedMark+"-report")) }
 
-// hpSeedPostgres writes the test-only PostgreSQL rows the RC10 roots read (sourceHealth, savedReport(s), reportRuns),
-// with one org B decoy of each.
-func hpSeedPostgres(t *testing.T, ctx context.Context, v *qpVenue) {
+// hpSeedPostgres writes the test-only PostgreSQL rows the RC10 roots read (sourceHealth, savedReport(s), reportRuns)
+// for org A, or (decoy) one org B decoy of each. Ids are fixed per org, times come from now.
+func hpSeedPostgres(t *testing.T, ctx context.Context, az *azRouterEnv, org string, now time.Time, decoy bool) {
 	t.Helper()
-	now := time.Now().UTC().Add(-24 * time.Hour).Truncate(24 * time.Hour).Add(12*time.Hour + 34*time.Minute + 56*time.Second)
-	for _, row := range []struct {
-		org, mark string
-		report    uuid.UUID
-	}{{v.orgA.String(), hpSeedMark, hpReportID}, {uuid.NewString(), hpDecoyMark, uuid.New()}} {
-		v.az.exec(t, ctx, `INSERT INTO public.sync_configurations (id, org_id, name, provider, created_at, updated_at, last_sync_at, last_sync_success)
-VALUES ($1, $2, $3, $3, $4, $4, $4, true)`, uuid.New(), row.org, row.mark+"-sync", now)
-		v.az.exec(t, ctx, `INSERT INTO public.saved_reports (id, org_id, name, description, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $5)`,
-			row.report, row.org, row.mark+"-report", row.mark+"-report-description", now)
-		v.az.exec(t, ctx, `INSERT INTO public.report_runs (id, report_id, status, started_at, completed_at, duration_seconds, rendered_markdown, created_at)
-VALUES ($1, $2, 'completed', $3, $3, 2.5, $4, $3)`, uuid.New(), row.report, now, row.mark+"-run")
+	at := now.UTC().Add(-24 * time.Hour).Truncate(24 * time.Hour).Add(12*time.Hour + 34*time.Minute + 56*time.Second)
+	mark, report := hpSeedMark, hpReportID()
+	if decoy {
+		mark, report = hpDecoyMark, uuid.NewSHA1(uuid.NameSpaceURL, []byte(hpDecoyMark+"-report"))
 	}
+	id := func(kind string) uuid.UUID { return uuid.NewSHA1(uuid.NameSpaceURL, []byte(mark+"-"+kind)) }
+	az.exec(t, ctx, `INSERT INTO public.sync_configurations (id, org_id, name, provider, created_at, updated_at, last_sync_at, last_sync_success)
+VALUES ($1, $2, $3, $3, $4, $4, $4, true)`, id("sync"), org, mark+"-sync", at)
+	az.exec(t, ctx, `INSERT INTO public.saved_reports (id, org_id, name, description, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $5)`,
+		report, org, mark+"-report", mark+"-report-description", at)
+	az.exec(t, ctx, `INSERT INTO public.report_runs (id, report_id, status, started_at, completed_at, duration_seconds, rendered_markdown, created_at)
+VALUES ($1, $2, 'completed', $3, $3, 2.5, $4, $3)`, id("run"), report, at, mark+"-run")
 }
 
 func hpNumeric(typ string) bool {

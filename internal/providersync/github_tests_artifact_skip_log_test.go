@@ -191,7 +191,7 @@ func (doer *githubTestsMixedMemberArtifactDoer) Do(request *http.Request) (*http
 	case strings.HasPrefix(path, "/repos/acme/api/actions/artifacts/") && strings.HasSuffix(path, "/zip"):
 		archive := githubTestsZip(doer.t, map[string]string{
 			"good.xml": githubTestsMultiSuiteJUnit(1),
-			"bad.xml":  `<!DOCTYPE x [<!ENTITY x "boom">]><testsuite>&x;</testsuite>`,
+			"bad.xml":  `<testsuite><testcase></testsuite>`,
 		})
 		return &http.Response{
 			StatusCode: http.StatusOK,

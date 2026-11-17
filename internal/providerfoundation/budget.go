@@ -596,7 +596,7 @@ func (m *Metrics) RecordNonReportMembersSkipped(provider, dataset, class string,
 // label.
 var metricSkippedArtifactCauseOverflowVocabulary = map[string]struct{}{
 	"artifact_oversized": {}, "artifact_unavailable": {}, "unreadable_archive": {},
-	"malformed": {}, "unreadable": {},
+	"malformed": {}, "unreadable": {}, "unsafe_doctype": {},
 	// CHAOS-13794: the markers of a run's report artifacts skipped whole.
 	"per_run_cap": {}, "aggregate_of_parts": {}, "aggregate_mismatch": {},
 }
@@ -649,6 +649,7 @@ var metricCicdPartialSuccessReasonVocabulary = map[string]struct{}{
 	// see githubTestsWatermarkAdvancingPairs.
 	"malformed":          {},
 	"unreadable":         {},
+	"unsafe_doctype":     {},
 	"per_run_cap":        {},
 	"aggregate_of_parts": {},
 	"mixed":              {},

@@ -92,7 +92,11 @@ func (executor *WorkItemExecutor) ComputeFamily(
 		return 0, err
 	}
 	if read.empty() {
-		return 0, nil
+		retracted, err := retractReopenedCycleRows(ctx, executor.conn, run.OrganizationID, scope, nil, computedAt)
+		if err != nil {
+			return wrapWorkItemScopePartialWrite("work_item", retracted, partition, err)
+		}
+		return retracted, nil
 	}
 	slog.Default().DebugContext(ctx, "work_item_user_metrics_rows",
 		"org_id", run.OrganizationID, "day", scope.day.Format("2006-01-02"),
@@ -122,7 +126,7 @@ func (executor *WorkItemExecutor) ComputeFamily(
 	if err != nil {
 		return wrapWorkItemScopePartialWrite("work_item", total, partition, err)
 	}
-	written, err = retractReopenedCycleRows(ctx, executor.conn, run.OrganizationID, read.Items, views.Org.CycleTimes, computedAt)
+	written, err = retractReopenedCycleRows(ctx, executor.conn, run.OrganizationID, scope, views.Org.CycleTimes, computedAt)
 	total += written
 	if err != nil {
 		return wrapWorkItemScopePartialWrite("work_item", total, partition, err)

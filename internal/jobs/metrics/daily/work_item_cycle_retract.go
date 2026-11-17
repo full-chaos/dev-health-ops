@@ -17,60 +17,64 @@ import (
 // day, so the daily writer, which only writes completed items, cannot replace the row of a reopened item. The day
 // stays the old row's day: it is the partition key, and a reader's day filter prunes by it before FINAL.
 func retractReopenedCycleRows(
-	ctx context.Context, conn driver.Conn, organizationID string, items []workItemMetricsRow, completedNow []workitemmetrics.CycleTimeRecord, computedAt time.Time,
+	ctx context.Context, conn driver.Conn, organizationID string, scope workItemPartitionScope,
+	completedNow []workitemmetrics.CycleTimeRecord, computedAt time.Time,
 ) (int, error) {
 	written := make(map[string]struct{}, len(completedNow))
 	for _, record := range completedNow {
 		written[record.Provider+"\x00"+record.WorkItemID] = struct{}{}
 	}
-	open := map[string]string{}
-	ids := make([]string, 0)
-	for _, item := range items {
-		if item.CompletedAt != nil && (item.Status == "done" || item.Status == "canceled") {
-			continue
-		}
-		if _, completed := written[item.Provider+"\x00"+item.WorkItemID]; completed {
-			continue
-		}
-		open[item.Provider+"\x00"+item.WorkItemID] = item.Status
-		ids = append(ids, item.WorkItemID)
-	}
 	type retraction struct {
 		workItemID, provider, workScopeID, itemType, status string
-		day, createdAt                                      time.Time
+		day, createdAt, version                             time.Time
 		teamID, teamName, assignee                          *string
 		startedAt                                           *time.Time
-		version                                             time.Time
 	}
 	var found []retraction
-	for _, chunk := range querybound.ChunkStringsByRenderedBytes(ids, querybound.MaxArrayBytes) {
-		rows, err := conn.Query(ctx, `
-SELECT work_item_id, provider, day, work_scope_id, team_id, team_name, assignee, type, created_at, started_at, computed_at
-FROM work_item_cycle_times FINAL
-WHERE org_id = ? AND work_item_id IN ? AND completed_at IS NOT NULL`, organizationID, chunk)
+	// One query per chunk of repositories: the newest completed cycle row of every item that is open now (its
+	// status is not terminal, or it has no completed_at). The read does not go through the day predicate of the
+	// rollup, which never loads an item whose stored status is still done.
+	const query = `
+SELECT c.work_item_id, c.provider, c.day, c.work_scope_id, c.team_id, c.team_name, c.assignee, c.type,
+       c.created_at, c.started_at, c.computed_at, w.item_status
+FROM (
+  SELECT * FROM work_item_cycle_times FINAL WHERE org_id = ? AND completed_at IS NOT NULL
+) AS c
+INNER JOIN (
+  SELECT provider, work_item_id, any(status) AS item_status
+  FROM work_items FINAL
+  WHERE org_id = ? %s AND (status NOT IN ('done', 'canceled') OR completed_at IS NULL)
+  GROUP BY provider, work_item_id
+) AS w ON c.provider = w.provider AND c.work_item_id = w.work_item_id`
+	run := func(sql string, args ...any) error {
+		rows, err := conn.Query(ctx, sql, args...)
 		if err != nil {
-			return 0, fmt.Errorf("read work_item_cycle_times of open items: %w", err)
+			return fmt.Errorf("read work_item_cycle_times of open items: %w", err)
 		}
+		defer rows.Close()
 		for rows.Next() {
 			var row retraction
 			if err := rows.Scan(&row.workItemID, &row.provider, &row.day, &row.workScopeID, &row.teamID,
-				&row.teamName, &row.assignee, &row.itemType, &row.createdAt, &row.startedAt, &row.version); err != nil {
-				_ = rows.Close()
-				return 0, fmt.Errorf("scan work_item_cycle_times row: %w", err)
+				&row.teamName, &row.assignee, &row.itemType, &row.createdAt, &row.startedAt, &row.version,
+				&row.status); err != nil {
+				return fmt.Errorf("scan work_item_cycle_times row: %w", err)
 			}
-			status, isOpen := open[row.provider+"\x00"+row.workItemID]
-			if !isOpen {
+			if _, completed := written[row.provider+"\x00"+row.workItemID]; completed {
 				continue
 			}
-			row.status = status
 			found = append(found, row)
 		}
-		if err := rows.Err(); err != nil {
-			_ = rows.Close()
-			return 0, fmt.Errorf("iterate work_item_cycle_times rows: %w", err)
+		return rows.Err()
+	}
+	if scope.everyRepository {
+		if err := run(fmt.Sprintf(query, ""), organizationID, organizationID); err != nil {
+			return 0, err
 		}
-		if err := rows.Close(); err != nil {
-			return 0, fmt.Errorf("close work_item_cycle_times rows: %w", err)
+	} else {
+		for _, chunk := range chunkRepositoryIDs(scope.repoIDs, querybound.MaxArrayBytes) {
+			if err := run(fmt.Sprintf(query, "AND repo_id IN ?"), organizationID, organizationID, chunk); err != nil {
+				return 0, err
+			}
 		}
 	}
 	if len(found) == 0 {

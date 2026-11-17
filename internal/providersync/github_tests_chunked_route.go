@@ -604,7 +604,10 @@ func recordGitHubTestsSkippedArtifact(
 		Cause:     cause,
 		Count:     1,
 	})
-	if client != nil {
+	// artifact_expired is NOT counted here (CHAOS-13980): this runs once per attempt, including attempts that later fail (a
+	// readable download exhausting its retries) and are recollected, so a counter fired here would charge the same expired
+	// artifact again on every retry. providerunit counts it once from the committed unit result, after Complete returns nil.
+	if client != nil && cause != githubTestsArtifactExpiredCause {
 		client.Metrics.RecordArtifactSkipped(claim.Provider, claim.Dataset, cause)
 	}
 	// CHAOS-4588: this used to slog.Warn once per artifact here -- for a repo

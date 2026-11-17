@@ -131,15 +131,13 @@ func githubTestsCheckExpiredCell(t *testing.T, cell githubTestsExpiredCell, clai
 	if _, err := (ProductionContractComparator{}).CompareCompleteRoute(context.Background(), claim, batch); err != nil {
 		t.Errorf("production comparator rejected the completion: %v", err)
 	}
-	if cell.wantExpired > 0 {
-		var buffer bytes.Buffer
-		if err := metrics.WritePrometheus(&buffer); err != nil {
-			t.Fatalf("WritePrometheus: %v", err)
-		}
-		want := fmt.Sprintf(`reason="artifact_expired"} %d`, cell.wantExpired)
-		if !strings.Contains(buffer.String(), want) {
-			t.Errorf("metric want %s once per artifact, got:\n%s", want, buffer.String())
-		}
+	// The route never counts the expired skip itself (providerunit counts the committed observation once).
+	var buffer bytes.Buffer
+	if err := metrics.WritePrometheus(&buffer); err != nil {
+		t.Fatalf("WritePrometheus: %v", err)
+	}
+	if strings.Contains(buffer.String(), `reason="artifact_expired"`) {
+		t.Errorf("route-level metric must not carry artifact_expired, got:\n%s", buffer.String())
 	}
 }
 

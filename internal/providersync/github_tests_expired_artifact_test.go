@@ -80,8 +80,10 @@ func TestGitHubTestsExpiredReportArtifactIsALoss(t *testing.T) {
 	if err := client.Metrics.WritePrometheus(&buffer); err != nil {
 		t.Fatalf("WritePrometheus: %v", err)
 	}
-	if want := `dev_health_provider_artifact_skipped_total{provider="github",dataset="cicd",reason="artifact_expired"} 1`; !strings.Contains(buffer.String(), want) {
-		t.Errorf("metrics did not carry the expired skip: want line %s", want)
+	// The route does not count the expired skip: it runs once per attempt, so a failed attempt would charge it again. providerunit
+	// counts it once from the committed result (TestObserveGitHubTestsExpiredArtifactsCountsTheCommittedObservationOnce).
+	if strings.Contains(buffer.String(), `reason="artifact_expired"`) {
+		t.Errorf("the route must not count the expired skip itself, got:\n%s", buffer.String())
 	}
 	if walk.final.Watermark == nil || !sameOptionalTime(walk.final.Watermark, claim.BeforeAt) {
 		t.Errorf("watermark=%v, want the window end %v (an expired report is permanent provider data)", walk.final.Watermark, claim.BeforeAt)

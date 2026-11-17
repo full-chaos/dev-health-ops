@@ -645,17 +645,22 @@ func (handler GitHubTestsRouteHandler) Collect(
 	// (same divergence as skippedArtifacts above; see the oversized-artifact
 	// doc comment).
 	githubTestsLogArtifactSkipSummary(claim, repo.FullName, incomplete, skippedArtifacts, skippedCauseOverflow, 0, 0, nil, 0)
-	return CompleteRouteBatch{Effects: effects, Watermark: watermark, Result: map[string]any{
+	result := map[string]any{
 		"pipeline_runs_synced": len(pipelines), "job_runs_synced": len(jobs), "acceptance_checks_synced": len(acceptance),
 		"test_suites_synced": len(suites), "test_cases_synced": len(cases), "coverage_snapshots_synced": len(coverage), "repo": repo.FullName,
 		GitHubTestsResultKeyReportsComplete: len(incomplete) == 0,
 		"reports_skipped":                   githubTestsIncompleteCount(incomplete),
 		"incomplete":                        incomplete,
-		"skipped_artifacts":                 skippedArtifacts,
-		"skipped_artifacts_overflow":        skippedOverflow,
-		"skipped_artifact_cause_overflow":   skippedCauseOverflow,
-		"skipped_artifact_cause_count":      skippedCauseCount,
-	}, Evidence: FetchEvidence{Provider: claim.Provider, Dataset: claim.Dataset, Requests: requests, Pages: pages, Records: len(pipelines) + len(jobs) + len(acceptance) + len(suites) + len(cases) + len(coverage)}}, nil
+	}
+	// The four skip-marker fields are added only when this route recorded skip evidence, so a clean completion serializes exactly
+	// as it did before CHAOS-13980.
+	if len(skippedArtifacts) > 0 {
+		result["skipped_artifacts"] = skippedArtifacts
+		result["skipped_artifacts_overflow"] = skippedOverflow
+		result["skipped_artifact_cause_overflow"] = skippedCauseOverflow
+		result["skipped_artifact_cause_count"] = skippedCauseCount
+	}
+	return CompleteRouteBatch{Effects: effects, Watermark: watermark, Result: result, Evidence: FetchEvidence{Provider: claim.Provider, Dataset: claim.Dataset, Requests: requests, Pages: pages, Records: len(pipelines) + len(jobs) + len(acceptance) + len(suites) + len(cases) + len(coverage)}}, nil
 }
 
 func mergeGitHubTestsIncomplete(

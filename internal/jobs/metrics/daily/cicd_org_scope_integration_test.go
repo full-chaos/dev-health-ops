@@ -22,11 +22,11 @@ import (
 //  2. Cross-tenant guard: two orgs, each with its own repo, run in the same
 //     process. Org A's org-scoped read must see ONLY org A's row (never org
 //     B's, and never a stray "" row), and vice versa.
-//  3. Window-filter proof: a pipeline run that started inside the target day
-//     but finished the NEXT day must be excluded (the DOUBLE WINDOW FILTER
-//     documented on the cicd package) -- exercised via repo B, which has one
-//     in-window run and one cross-midnight run; its pipelines_count must be
-//     1, not 2.
+//  3. Window-filter proof: a pipeline run counts on the UTC day it finishes,
+//     so a run that started inside the target day but finished the NEXT day is
+//     not counted on the target day -- exercised via repo B, which has one
+//     in-window run and one cross-midnight run; its pipelines_count on the
+//     target day must be 1, not 2.
 func TestCICDComputeFamilyWritesRealOrgIDAndIsolatesTenants(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -118,15 +118,91 @@ INSERT INTO ci_pipeline_runs (repo_id, run_id, status, queued_at, started_at, fi
 	assertOrgScopedCount(ctx, t, conn, "cicd_metrics_daily", "", 0)
 
 	// Point 3: window-filter proof -- repo B's pipelines_count must be 1
-	// (the cross-midnight run's finished_at falls outside [start,end) for
-	// 2026-08-24, so the loader never fetches it for this day).
+	// (the cross-midnight run finishes on 2026-08-25, so it is not counted
+	// on 2026-08-24).
 	row := conn.QueryRow(ctx, "SELECT pipelines_count FROM cicd_metrics_daily WHERE org_id = ? AND repo_id = ?", orgB, repoB)
 	var pipelinesCount uint32
 	if err := row.Scan(&pipelinesCount); err != nil {
 		t.Fatalf("query row: %v", err)
 	}
 	if pipelinesCount != 1 {
-		t.Fatalf("repo B pipelines_count = %d, want 1 (cross-midnight run must be excluded)", pipelinesCount)
+		t.Fatalf("repo B pipelines_count = %d, want 1 (the cross-midnight run counts on the day it finishes)", pipelinesCount)
+	}
+}
+
+// TestCICDComputeFamilyCountsRunOnFinishDay is the midnight-crossing cell: a
+// run that starts on day D and finishes on D+1 counts on D+1, never on no day.
+func TestCICDComputeFamilyCountsRunOnFinishDay(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	clickhouseInstance, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clickhouseInstance.Close(context.Background())
+	conn, err := clickhousestore.Open(ctx, clickhousestore.DefaultConfig(clickhouseInstance.URI))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	for _, statement := range []string{
+		`CREATE TABLE ci_pipeline_runs (
+    repo_id UUID, run_id String, status Nullable(String),
+    queued_at Nullable(DateTime64(3, 'UTC')), started_at DateTime64(3, 'UTC'),
+    finished_at Nullable(DateTime64(3, 'UTC')), last_synced DateTime64(3, 'UTC'),
+    org_id String
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (repo_id, run_id)`,
+		`CREATE TABLE cicd_metrics_daily (
+    repo_id UUID, day Date, pipelines_count UInt32, success_rate Float64,
+    avg_duration_minutes Nullable(Float64), p90_duration_minutes Nullable(Float64),
+    avg_queue_minutes Nullable(Float64), computed_at DateTime, org_id String
+) ENGINE = MergeTree PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, day)`,
+	} {
+		if err := conn.Exec(ctx, statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	const org = "00000000-0000-4000-8000-0000000000d0"
+	const repo = "00000000-0000-4000-8000-0000000000d1"
+	if err := conn.Exec(ctx, `
+INSERT INTO ci_pipeline_runs (repo_id, run_id, status, queued_at, started_at, finished_at, last_synced, org_id) VALUES
+(toUUID('`+repo+`'), 'run-a', 'success', NULL,
+ toDateTime64('2026-01-02 10:00:00', 3, 'UTC'), toDateTime64('2026-01-02 10:30:00', 3, 'UTC'), now64(3), '`+org+`'),
+(toUUID('`+repo+`'), 'run-b', 'success', NULL,
+ toDateTime64('2026-01-02 23:50:00', 3, 'UTC'), toDateTime64('2026-01-03 00:20:00', 3, 'UTC'), now64(3), '`+org+`')`); err != nil {
+		t.Fatal(err)
+	}
+
+	executor, err := NewCICDExecutor(conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index, day := range []time.Time{
+		time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC),
+		time.Date(2026, 1, 3, 0, 0, 0, 0, time.UTC),
+	} {
+		run := Run{OrganizationID: org, TargetDay: day}
+		partition := Partition{
+			ID: "00000000-0000-4000-8000-0000000000e" + string(rune('1'+index)), RunID: "00000000-0000-4000-8000-0000000000e0",
+			RepoIDs: []RepositoryID{RepositoryID(repo)},
+		}
+		if _, err := executor.ComputeFamily(ctx, run, partition); err != nil {
+			t.Fatalf("day %s: %v", day.Format(time.DateOnly), err)
+		}
+	}
+
+	for day, want := range map[string]uint64{"2026-01-02": 1, "2026-01-03": 1} {
+		var count uint64
+		row := conn.QueryRow(ctx, "SELECT sum(pipelines_count) FROM cicd_metrics_daily WHERE org_id = ? AND repo_id = ? AND day = toDate(?)", org, repo, day)
+		if err := row.Scan(&count); err != nil {
+			t.Fatalf("day %s: %v", day, err)
+		}
+		if count != want {
+			t.Fatalf("day %s pipelines_count = %d, want %d", day, count, want)
+		}
 	}
 }
 

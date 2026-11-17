@@ -100,12 +100,11 @@ var successStatuses = map[string]bool{"success": true, "succeeded": true, "passe
 
 // ComputeCICDMetricsDaily mirrors compute_cicd_metrics_daily (compute_cicd.py:42).
 //
-// day is the target UTC calendar day (time-of-day/location ignored, matching
-// Python's date). pipelineRuns is expected to already be filtered by
-// LoadPipelineRuns' finished_at window (see the package doc comment on the
-// DOUBLE WINDOW FILTER) -- this function re-applies the started_at filter
-// in-process, exactly as compute_cicd_metrics_daily does, regardless of
-// whether the caller pre-filtered by started_at too.
+// day is the target UTC calendar day (time-of-day/location ignored). A run
+// counts on the UTC day it finishes: pipelineRuns is expected to already be
+// filtered by LoadPipelineRuns' finished_at window (see the package doc) and
+// this function re-applies that filter in-process. started_at only feeds the
+// duration and queue samples.
 func ComputeCICDMetricsDaily(day time.Time, pipelineRuns []PipelineRunRow, computedAt time.Time) []CICDMetric {
 	start, end := utcDayWindow(day)
 	computedAtUTC := computedAt.UTC()
@@ -113,10 +112,14 @@ func ComputeCICDMetricsDaily(day time.Time, pipelineRuns []PipelineRunRow, compu
 	byRepo := map[string]*pipelineBucket{}
 	order := make([]string, 0)
 	for _, row := range pipelineRuns {
-		startedAt := row.StartedAt.UTC()
-		if startedAt.Before(start) || !startedAt.Before(end) {
+		if row.FinishedAt == nil {
 			continue
 		}
+		finishedAt := row.FinishedAt.UTC()
+		if finishedAt.Before(start) || !finishedAt.Before(end) {
+			continue
+		}
+		startedAt := row.StartedAt.UTC()
 		if testops.ExcludedFromPipelineCounts(row.Status) {
 			continue
 		}
@@ -134,11 +137,9 @@ func ComputeCICDMetricsDaily(day time.Time, pipelineRuns []PipelineRunRow, compu
 			bucket.success++
 		}
 
-		if row.FinishedAt != nil {
-			durationMin := row.FinishedAt.UTC().Sub(startedAt).Minutes()
-			if durationMin >= 0 {
-				bucket.durations = append(bucket.durations, durationMin)
-			}
+		durationMin := finishedAt.Sub(startedAt).Minutes()
+		if durationMin >= 0 {
+			bucket.durations = append(bucket.durations, durationMin)
 		}
 
 		if row.QueuedAt != nil {

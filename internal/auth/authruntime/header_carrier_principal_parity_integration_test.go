@@ -262,11 +262,14 @@ func TestHeaderCarrierPrincipalParity(t *testing.T) {
 			t.Logf("%-25s %-34s user=%-28s mcp=%-28s run-operation=%s", c.name, op.key, uv, mv, rv)
 			if root.mcpReason != "" {
 				// Outside the MCP allowlist: refused on the MCP listener before any decision, after the flip and before it.
+				preBefore := pre.pdp.count()
+				preMCP := hpSendBefore(t, v, pre, c.name, carrier, op)
+				preAsks := pre.pdp.count() - preBefore
 				for _, leg := range []struct {
 					build  string
 					answer qpAnswer
 					asks   int
-				}{{"after the flip", mcp, mcpAsks}, {"before the flip", hpSendBefore(t, v, pre, c.name, carrier, op), 0}} {
+				}{{"after the flip", mcp, mcpAsks}, {"before the flip", preMCP, preAsks}} {
 					if got := hpRefusal(leg.answer); got != fmt.Sprintf("%d %s", root.mcpStatus, root.mcpReason) || leg.asks != 0 {
 						t.Errorf("%s %s MCP %s: %s with %d asks, want %d %s with 0 asks\n %s",
 							c.name, op.key, leg.build, got, leg.asks, root.mcpStatus, root.mcpReason, leg.answer)
@@ -296,8 +299,10 @@ func TestHeaderCarrierPrincipalParity(t *testing.T) {
 					servedSame++
 				}
 			}
-			if bytes.Contains(user.body, []byte(hpDecoyMark)) || bytes.Contains(runOp.body, []byte(hpDecoyMark)) || bytes.Contains(mcp.body, []byte(hpDecoyMark)) {
-				t.Errorf("%s %s: a body holds org B's decoy rows", c.name, op.key)
+			for leg, answer := range map[string]qpAnswer{"user": user, "mcp": mcp, "run-operation": runOp} {
+				if hpDecoyEvidence(answer.body) {
+					t.Errorf("%s %s %s: a body holds org B's decoy rows\n %s", c.name, op.key, leg, answer)
+				}
 			}
 			if uv != "served" {
 				if c.name == "member_viewer" {
@@ -349,6 +354,37 @@ func hpRefusal(a qpAnswer) string {
 		reason = string(m[1])
 	}
 	return fmt.Sprintf("%d %s", a.status, reason)
+}
+
+// hpDecoyEvidence reports whether a body holds org B's rows: a decoy string, or a number only a decoy row reaches.
+func hpDecoyEvidence(raw []byte) bool {
+	if bytes.Contains(raw, []byte(hpDecoyMark)) {
+		return true
+	}
+	var parsed map[string]any
+	if json.Unmarshal(raw, &parsed) != nil {
+		return false
+	}
+	found := false
+	var walk func(any)
+	walk = func(x any) {
+		switch y := x.(type) {
+		case []any:
+			for _, e := range y {
+				walk(e)
+			}
+		case map[string]any:
+			for _, e := range y {
+				walk(e)
+			}
+		case float64:
+			if y >= hpDecoyFloor || y <= -hpDecoyFloor {
+				found = true
+			}
+		}
+	}
+	walk(parsed["data"])
+	return found
 }
 
 // hpSeedEvidence counts what in a body can only come from the seed: seed marks (seeded strings and repository
@@ -656,6 +692,10 @@ const (
 	hpSeedMark  = "hpseed"
 	hpDecoyMark = "hpdecoy"
 	hpTeam      = "parity"
+	// hpDecoyNumber is the base of org B's wide decoy numbers; hpDecoyFloor is the least value in a body that only
+	// a decoy row can produce (org A's rows are 2..50; a mean over every seeded row with one decoy stays above it).
+	hpDecoyNumber = 70000000
+	hpDecoyFloor  = 1000000
 	// hpSeedClock is the time of day of every seeded timestamp: a body that shows it shows a seeded row.
 	hpSeedClock = "12:34:56"
 )
@@ -764,7 +804,11 @@ func hpSeed(t *testing.T, ctx context.Context, uri string, orgA, orgB uuid.UUID)
 				rows = append(rows, hpRow(table, columns, orgA, repo, day, n, false))
 			}
 		}
-		rows = append(rows, hpRow(table, columns, orgB, hpRepo{name: hpDecoyMark + "/web", id: hpRepos[0].id}, days[0], n+1, true))
+		// Org B's decoy: one row on every seeded day, so it is inside every root's read window.
+		for _, day := range days {
+			n++
+			rows = append(rows, hpRow(table, columns, orgB, hpRepo{name: hpDecoyMark + "/web", id: hpRepos[0].id}, day, n, true))
+		}
 		statement := "INSERT INTO " + table + " (" + strings.Join(names, ", ") + ") VALUES " + strings.Join(rows, ", ")
 		if err := conn.Exec(ctx, statement); err != nil {
 			t.Fatalf("seed %s: %v", table, err)
@@ -921,7 +965,11 @@ func hpLiteral(table string, c hpColumn, org uuid.UUID, repo hpRepo, day time.Ti
 			return "1"
 		}
 		if decoy {
-			return fmt.Sprint(9000 + n)
+			// A decoy number is large enough that any sum or mean that takes it in stays at or above hpDecoyFloor.
+			if strings.HasSuffix(typ, "8") || strings.HasSuffix(typ, "16") || strings.HasPrefix(typ, "Decimal") {
+				return fmt.Sprint(90 + n)
+			}
+			return fmt.Sprint(hpDecoyNumber + n)
 		}
 		return fmt.Sprint(2 + n)
 	case strings.HasPrefix(typ, "Enum"):

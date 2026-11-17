@@ -66,9 +66,15 @@ type dispatchGuardUnit struct {
 // matching Python: the hard-deny branch returns before any bucket is
 // visited) -- the only sanctioned channel BudgetGuard's surplus retry uses
 // to admit extra work without stepping around this cap (CHAOS-3465).
+const (
+	guardReasonCodeRunUnitCap         = "run_unit_cap"
+	guardReasonCodeUnitConcurrencyCap = "unit_concurrency_cap"
+)
+
 type guardDecision struct {
 	allowed           bool
 	reason            string
+	reasonCode        string
 	cappedUnitIDs     []string
 	concurrencyCapped bool
 	slotHeadroom      map[dispatchBucket]int
@@ -426,6 +432,7 @@ func decideDispatchGuard(source guardUnitSource, env guardEnv, orgID string, now
 		return guardDecision{
 			allowed:       false,
 			reason:        fmt.Sprintf("sync run unit cap exceeded: %d/%d", total, totalCap),
+			reasonCode:    guardReasonCodeRunUnitCap,
 			cappedUnitIDs: capped,
 		}, nil
 	}
@@ -506,6 +513,7 @@ func decideDispatchGuard(source guardUnitSource, env guardEnv, orgID string, now
 		return guardDecision{
 			allowed:           true,
 			reason:            fmt.Sprintf("sync unit concurrency cap exceeded: %d capped", len(cappedUnitIDs)),
+			reasonCode:        guardReasonCodeUnitConcurrencyCap,
 			cappedUnitIDs:     cappedUnitIDs,
 			concurrencyCapped: true,
 			slotHeadroom:      slotHeadroom,
@@ -668,7 +676,8 @@ func acquireBucketAdvisoryLocks(ctx context.Context, tx pgx.Tx, buckets []dispat
 // there is nothing to catch, but the log call is likewise best-effort).
 func emitBucketDecision(ctx context.Context, logger *synclog.Logger, bucket dispatchBucket, activeCount, reclaimedStale, cappedNew, cappedStale, slotHeadroom, heldBack int) {
 	bucketLabel := bucket.orgID + "/" + bucket.provider + "/" + bucket.costClass
-	logger.Info(ctx, synclog.MsgDispatchGuardBucketDecision, synclog.Text(synclog.KeyBucket, synclog.ParseLabel(bucketLabel)), synclog.Count(synclog.KeyGuardActiveCount, activeCount), synclog.Count(synclog.KeyGuardReclaimedStale, reclaimedStale), synclog.Count(synclog.KeyGuardCappedNew, cappedNew), synclog.Count(synclog.KeyGuardCappedStale, cappedStale), synclog.Count(synclog.KeyGuardSlotHeadroom, slotHeadroom), synclog.Count(synclog.KeyGuardHeldBack, heldBack))
+	logBucket := bucket.provider + ":" + bucket.costClass
+	logger.Info(ctx, synclog.MsgDispatchGuardBucketDecision, synclog.Org(synclog.ParseID(bucket.orgID)), synclog.Text(synclog.KeyBucket, synclog.ParseLabel(logBucket)), synclog.Count(synclog.KeyGuardActiveCount, activeCount), synclog.Count(synclog.KeyGuardReclaimedStale, reclaimedStale), synclog.Count(synclog.KeyGuardCappedNew, cappedNew), synclog.Count(synclog.KeyGuardCappedStale, cappedStale), synclog.Count(synclog.KeyGuardSlotHeadroom, slotHeadroom), synclog.Count(synclog.KeyGuardHeldBack, heldBack))
 	span := oteltrace.SpanFromContext(ctx)
 	if span == nil || !span.IsRecording() {
 		return

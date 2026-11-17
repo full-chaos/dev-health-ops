@@ -96,6 +96,10 @@ func dedupFromSource(table string) string {
 		"(SELECT * FROM %s ORDER BY %s DESC LIMIT 1 BY %s) AS %s",
 		table, read.Version, strings.Join(read.Key, ", "), table,
 	)
+	if table == "work_item_cycle_times" {
+		// A reopened item's newest row is a retraction: no completed_at, no hours. It is not a completion.
+		return fmt.Sprintf("(SELECT * FROM %s WHERE completed_at IS NOT NULL) AS %s", newest, table)
+	}
 	if !liverow.Registered(table) {
 		return newest
 	}

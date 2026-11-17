@@ -344,6 +344,9 @@ func Execute(
 		)
 		return 1
 	}
+	if result.APIRole != "" && !checkAPIRoleExcess(ctx, pool, result.APIRole, apiPosture, logger, stderr) {
+		return 1
+	}
 
 	fmt.Fprintf(
 		stdout,

@@ -38,6 +38,15 @@ func plannerSplitAndAlone(t *testing.T) (split, alone map[string]bool) {
 	for _, k := range strings.Fields(iso[1]) {
 		alone[k] = true
 	}
+	// Zero splits is valid only when the manifest holds no split row at all: a row the plan line no longer matches
+	// (a changed print format) must fail here, not pass as an empty set.
+	if len(split) == 0 {
+		for _, l := range strings.Split(manifestText(t, rootOf(t)), "\n") {
+			if l = strings.TrimSpace(l); !strings.HasPrefix(l, "#") && strings.Contains(strings.ToLower(l), "split-by-test") {
+				t.Fatalf("the manifest holds a split-by-test row (%q) but the planner's plan names no split package: the %q line format changed", l, "integration split package")
+			}
+		}
+	}
 	return split, alone
 }
 

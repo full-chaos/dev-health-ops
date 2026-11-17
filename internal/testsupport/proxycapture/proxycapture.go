@@ -204,7 +204,7 @@ func isProxyDial(requestLine string, truncated bool) bool {
 	if !ok || !isToken(method) {
 		return false
 	}
-	target := rest
+	var target string
 	if truncated {
 		target, _, _ = strings.Cut(rest, " ")
 	} else {

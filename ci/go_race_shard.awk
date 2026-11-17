@@ -59,7 +59,9 @@
 # packages (rk: the overlap of the parallel batch, 3.5 by default; the measured warm legs of Go quality 44019931820, 44022785905 and
 # 44025688889 run 1.7-3.9x their package sum in the batch, which ends at the largest package). The parts and solo packages are placed
 # first, heaviest first, each on the shard of the least modelled wall; then each package, heaviest first, on the shard whose modelled
-# wall it raises least (ties: the least package sum, the lowest index). Pinned packages and chain=1 are not used with it. Without
+# wall it raises least (ties: the least package sum, the lowest index). rcap=<weight> (CHAOS-13958): a shard whose row weight (its
+# packages plus its parts) would pass rcap takes the item only when no shard fits; then the shard that takes it prints "WARN race
+# plan: <package> over the leg weight cap on leg <n>/<count>" on stderr. Pinned packages and chain=1 are not used with it. Without
 # rserial nothing above changes the split. Still a partition.
 # rwall(m, l, x): the modelled batch wall of a shard whose largest package is m and package sum l, with one more package of weight x.
 function rwall(m, l, x,   k, v) {
@@ -281,19 +283,31 @@ END {
         if (pinPkg[k]) continue
         isSer = (soloPkg[k] || nparts[k] > 1)
         if (isSer != (pass == 1)) continue
-        best = 1
+        # rcap: a shard whose row weight (packages + parts) would pass the cap is used only when no shard fits (then WARN).
+        fits = 0
+        for (s = 1; s <= count; s++) {
+          capOk[s] = (rcap + 0 <= 0 || load[s] + ser[s] + weight[k] <= rcap + 0)
+          if (capOk[s]) fits = 1
+        }
+        if (!fits) for (s = 1; s <= count; s++) capOk[s] = 1
+        best = 0
         if (isSer) {
-          for (s = 2; s <= count; s++) if (mx[s] + ser[s] < mx[best] + ser[best]) best = s
+          for (s = 1; s <= count; s++) if (capOk[s] && (best == 0 || mx[s] + ser[s] < mx[best] + ser[best])) best = s
           ser[best] += weight[k]
         } else {
-          for (s = 2; s <= count; s++) {
+          for (s = 1; s <= count; s++) {
+            if (!capOk[s]) continue
+            if (best == 0) { best = s; continue }
             a = rwall(mx[s], load[s], weight[k]) + ser[s]; b = rwall(mx[best], load[best], weight[k]) + ser[best]
             if (a < b || (a == b && load[s] < load[best])) best = s
           }
           if (weight[k] > mx[best]) mx[best] = weight[k]
           load[best] += weight[k]
         }
-        if (best == shard) keep[k] = 1
+        if (best == shard) {
+          keep[k] = 1
+          if (!fits) printf "WARN race plan: %s%s over the leg weight cap on leg %d/%d\n", path[k], (pidx[k] > 0 ? " part " pidx[k] "/" nparts[k] : ""), shard, count > "/dev/stderr"
+        }
       }
     }
   }

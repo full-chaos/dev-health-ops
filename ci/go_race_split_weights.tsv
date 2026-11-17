@@ -10,6 +10,7 @@
 # internal/api/policy and internal/cigates/scripts (CHAOS-13958): the go-test-timings-race-9-of-12 (policy) and race-2-of-12 (scripts)
 # artifacts of main push runs 44022785905 and 44025688889 (the legs that held each package whole).
 # internal/cigates/testshard TestTheRacePlanWeighsPartsAsSerialTimeAndKeepsEveryLegUnderTheLimit (CHAOS-13958): its local -race time, 123.6 s, rounded up.
+# internal/cigates/testshard TestTheRaceLegWeightCapKeepsTheBudgetGuardAndWarnsWhenNoLegFits (CHAOS-13958): its local -race time, 187.4 s, rounded up.
 # Sorted (LC_ALL=C) by package, then test.
 internal/api/policy	TestACellThatIsOffAsksNothingAndKeepsTheLegacyAnswer	1
 internal/api/policy	TestAClassRowCannotNameTheAcceptAheadReasonButAStarRowCovers	1
@@ -656,6 +657,7 @@ internal/cigates/testshard	TestTheRaceAndTestLegPlansDoNotReadTheAuthSplitWeight
 internal/cigates/testshard	TestTheRaceExcludedCensusIsSplitOverTheShardsExactlyOnce	321
 internal/cigates/testshard	TestTheRaceLegKeepsItsOwnTimeoutVariable	1
 internal/cigates/testshard	TestTheRaceLegRunsEachPartAloneByItsAnchoredNames	1
+internal/cigates/testshard	TestTheRaceLegWeightCapKeepsTheBudgetGuardAndWarnsWhenNoLegFits	188
 internal/cigates/testshard	TestTheRaceLegsAtTheLegCountHoldEveryPackageOnceExceptProvidersync	135
 internal/cigates/testshard	TestTheRacePlanWeighsPartsAsSerialTimeAndKeepsEveryLegUnderTheLimit	124
 internal/cigates/testshard	TestTheRaceSplitGuardPlantedDefectsAreCaught	2

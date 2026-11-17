@@ -1768,6 +1768,14 @@ GO_RACE_SPLIT_WEIGHTS="${GO_RACE_SPLIT_WEIGHTS:-${ROOT}/ci/go_race_split_weights
 # CHAOS-13958: the race plan weighs a leg's race parts and solo packages as serial time after its parallel batch (ci/go_race_shard.awk
 # rserial=1). 0 = the old sum weighting; only the planner's red/green cell (internal/cigates/testshard) sets it.
 GO_RACE_SERIAL_WEIGHTING="${GO_RACE_SERIAL_WEIGHTING:-1}"
+# CHAOS-13958: race_leg_weight_cap COUNT: the most row weight (packages plus parts) the race plan puts on one leg, from the constants
+# of the CHAOS-12462 budget guard (internal/cigates/testshard/race_leg_budget_test.go: a leg's predicted wall = 40 s setup + 0.50 s
+# per weight x (its weight + one providersync slice of 250 x 5 / COUNT), at most 1350 s = 75 % of the 1800 s job). The guard keeps
+# its own copy of the constants: if they drift apart, the guard goes red. GO_RACE_LEG_WEIGHT_CAP overrides it; 0 turns it off.
+race_leg_weight_cap() {
+  if [ -n "${GO_RACE_LEG_WEIGHT_CAP:-}" ]; then printf '%s\n' "${GO_RACE_LEG_WEIGHT_CAP}"; return; fi
+  awk -v count="$1" 'BEGIN { printf "%.2f\n", (1350 - 40) / 0.50 - 250 * 5 / count }'
+}
 case "${GO_RACE_SERIAL_WEIGHTING}" in 0|1) ;; *) printf 'ERROR: GO_RACE_SERIAL_WEIGHTING must be 0 or 1, got %s\n' "${GO_RACE_SERIAL_WEIGHTING}" >&2; exit 2 ;; esac
 # check_providersync_race_shard SHARD COUNT (CHAOS-8166): internal/providersync is one test binary of ~1,460 sequential tests that took
 # 509 s under -race on an idle host (565 s in CI, 94% of the 600 s go test timeout), so its race run is split BY TEST NAME across the
@@ -1866,7 +1874,7 @@ race_shard_packages() {
     | quality_filter "${module_dir}" "${modpath}" \
     | race_excluded_filter "${module_dir}" "${modpath}" \
     | awk -v mod="${modpath}" -v shard="${shard}" -v count="${count}" -v weights=<(race_weights_rows) -v solo="${GO_RACE_SOLO}" -v part="${part}" \
-        -v splits="${GO_RACE_SPLITS}" -v tests="${GO_RACE_SPLIT_WEIGHTS}" -v rserial="${GO_RACE_SERIAL_WEIGHTING}" -f "${ROOT}/ci/go_race_shard.awk"
+        -v splits="${GO_RACE_SPLITS}" -v tests="${GO_RACE_SPLIT_WEIGHTS}" -v rserial="${GO_RACE_SERIAL_WEIGHTING}" -v rcap="$(race_leg_weight_cap "${count}")" -f "${ROOT}/ci/go_race_shard.awk"
 }
 
 # check_race_shard_plan SHARD COUNT: one "module<TAB>package<TAB>key" line per package the SHARD-th race leg runs, and one

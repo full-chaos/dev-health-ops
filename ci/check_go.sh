@@ -1840,38 +1840,17 @@ check_providersync_race_shard() {
   local json_dir="${GO_TEST_JSON_DIR:-${ROOT}/go-test-json}" json run_rc=0 guard_rc=0
   mkdir -p "${json_dir}"
   json="${json_dir}/providersync-race-${shard}.json"
-  # CHAOS-13958: the slice RUNS beside the leg's package batch (check_race_shard); the listing and the partition check above stay
-  # before any test. Its stdout and stderr go to two files that check_providersync_race_wait prints whole, each to its own
-  # stream; its status is the larger of go test's and the guard's, as before.
-  PROVIDERSYNC_RACE_LOG="$(mktemp "${TMPDIR:-/tmp}/dev-health-providersync-race.XXXXXX")" || die "no temp file for the providersync race slice log"
-  PROVIDERSYNC_RACE_ERR="$(mktemp "${TMPDIR:-/tmp}/dev-health-providersync-race-err.XXXXXX")" || die "no temp file for the providersync race slice log"
   (
-    (
-      set -o pipefail
-      cd "${ROOT}"
-      "${GO_ENV_OFF[@]}" GOFLAGS="${LEG_TEST_GOFLAGS}" GOWORK=off go test -mod=readonly -trimpath -race ${MERGE_GROUP_FRESH:+-count=1} -json -timeout "${DEV_HEALTH_GO_RACE_TEST_TIMEOUT:-10m}" -run "${regex}" ./internal/providersync \
-        | tee "${json}" \
-        | jq -rj 'select(.Action == "output") | .Output'
-    ) || run_rc=$?
-    awk -v weights="${weights}" -v thresh="${DEV_HEALTH_GO_RACE_UNWEIGHTED_SLOW_SECONDS:-30}" -v label="${weights#"${ROOT}/"}" \
-      -f "${GO_RACE_UNWEIGHTED_SLOW_AWK:-${ROOT}/ci/go_race_unweighted_slow.awk}" "${json}" || guard_rc=$?
-    [ "${run_rc}" -ge "${guard_rc}" ] || run_rc="${guard_rc}"
-    exit "${run_rc}"
-  ) >"${PROVIDERSYNC_RACE_LOG}" 2>"${PROVIDERSYNC_RACE_ERR}" &
-  PROVIDERSYNC_RACE_PID=$!
-}
-
-# check_providersync_race_wait (CHAOS-13958): waits for the slice check_providersync_race_shard started, prints its stdout and
-# stderr and returns its status (0 when no slice runs).
-check_providersync_race_wait() {
-  local rc=0
-  [ -n "${PROVIDERSYNC_RACE_PID:-}" ] || return 0
-  wait "${PROVIDERSYNC_RACE_PID}" || rc=$?
-  cat -- "${PROVIDERSYNC_RACE_LOG}"
-  cat -- "${PROVIDERSYNC_RACE_ERR}" >&2
-  rm -f -- "${PROVIDERSYNC_RACE_LOG}" "${PROVIDERSYNC_RACE_ERR}"
-  PROVIDERSYNC_RACE_PID=""
-  return "${rc}"
+    set -o pipefail
+    cd "${ROOT}"
+    "${GO_ENV_OFF[@]}" GOFLAGS="${LEG_TEST_GOFLAGS}" GOWORK=off go test -mod=readonly -trimpath -race ${MERGE_GROUP_FRESH:+-count=1} -json -timeout "${DEV_HEALTH_GO_RACE_TEST_TIMEOUT:-10m}" -run "${regex}" ./internal/providersync \
+      | tee "${json}" \
+      | jq -rj 'select(.Action == "output") | .Output'
+  ) || run_rc=$?
+  awk -v weights="${weights}" -v thresh="${DEV_HEALTH_GO_RACE_UNWEIGHTED_SLOW_SECONDS:-30}" -v label="${weights#"${ROOT}/"}" \
+    -f "${GO_RACE_UNWEIGHTED_SLOW_AWK:-${ROOT}/ci/go_race_unweighted_slow.awk}" "${json}" || guard_rc=$?
+  [ "${run_rc}" -ge "${guard_rc}" ] || run_rc="${guard_rc}"
+  return "${run_rc}"
 }
 
 check_race_shard_args() {
@@ -1952,7 +1931,7 @@ check_race_shard_plan() {
 }
 
 check_race_shard() {
-  local shard="${1:-}" count="${2:-}" module_dir modpath pkg selected=0 missing racelog legjson ps_json="" spart sparts key names partjson plan_pkgs plan_solo batch_rc slice_rc
+  local shard="${1:-}" count="${2:-}" module_dir modpath pkg selected=0 missing racelog legjson ps_json="" spart sparts key names partjson plan_pkgs plan_solo
   check_race_shard_args "${shard}" "${count}"
   load_quality_selection
   local -a pkgs solo_pkgs pkgs_sec pkgs_all split_items
@@ -2009,20 +1988,13 @@ check_race_shard() {
       check_providersync_race_shard "${shard}" "${count}"
       ps_json="${GO_TEST_JSON_DIR:-${ROOT}/go-test-json}/providersync-race-${shard}.json"
     fi
-    batch_rc=0
     if [ "${#pkgs[@]}" -gt 0 ]; then
       selected=$((selected + ${#pkgs[@]}))
       (
         cd "${ROOT}/${module_dir}"
         go_test_leg "${racelog}" "${legjson}" -race -timeout "${DEV_HEALTH_GO_RACE_TEST_TIMEOUT:-10m}" "${pkgs[@]}"
-      ) || batch_rc=$?
+      ) || { rm -f -- "${racelog}"; return 1; }
     fi
-    # The slice ends before anything else of the leg starts (the security run, the parts, then the solo packages).
-    slice_rc=0
-    check_providersync_race_wait || slice_rc=$?
-    # A failed slice keeps its own status (the larger of go test's and the guard's); a failed batch returns 1, as before.
-    if [ "${slice_rc}" -ne 0 ]; then rm -f -- "${racelog}"; return "${slice_rc}"; fi
-    if [ "${batch_rc}" -ne 0 ]; then rm -f -- "${racelog}"; return 1; fi
     if [ "${#pkgs_sec[@]}" -gt 0 ]; then
       selected=$((selected + ${#pkgs_sec[@]}))
       printf 'go test -race (shard %s/%s): %s: security -count=1: %d package(s)\n' "${shard}" "${count}" "${module_dir}" "${#pkgs_sec[@]}"

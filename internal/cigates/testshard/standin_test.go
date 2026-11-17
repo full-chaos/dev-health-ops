@@ -71,19 +71,6 @@ printf '%%s\n' "$*" >> "${FAKE_GO_LOG}"
 if [ -n "${FAKE_GO_CHILD_CHECK_GO:-}" ] && [[ " $* " == *" ./internal/providersync "* ]]; then
   env -u FAKE_GO_CHILD_CHECK_GO bash "${FAKE_GO_CHILD_CHECK_GO}" ci-leg test 350 350 >/dev/null 2>&1 || true
 fi
-# FAKE_GO_RACE_BARRIER (CHAOS-13958): the race leg's providersync slice call and its first other -race call each mark the directory
-# and wait up to 20 s for the other's mark; a call that never sees it marks "<kind>.alone" (the two ran one after the other).
-if [ -n "${FAKE_GO_RACE_BARRIER:-}" ] && [[ " $* " == *" -race "* ]]; then
-  me=""
-  if [[ " $* " == *" ./internal/providersync "* ]]; then me=providersync other=batch
-  elif mkdir "${FAKE_GO_RACE_BARRIER}/batch.claim" 2>/dev/null; then me=batch other=providersync
-  fi
-  if [ -n "${me}" ]; then
-    : > "${FAKE_GO_RACE_BARRIER}/${me}"
-    for _ in $(seq 1 200); do [ -e "${FAKE_GO_RACE_BARRIER}/${other}" ] && break; sleep 0.1; done
-    [ -e "${FAKE_GO_RACE_BARRIER}/${other}" ] || : > "${FAKE_GO_RACE_BARRIER}/${me}.alone"
-  fi
-fi
 # The multi-replica worker gate (test shard 1) reads the measured-job count its go test writes.
 [ -z "${DEV_HEALTH_MULTI_REPLICA_PROOF:-}" ] || printf '1\n' > "${DEV_HEALTH_MULTI_REPLICA_PROOF}"
 # FAKE_GO_TEST_STDOUT: what a go test call prints (a canned go test log, e.g. the "ok" summary lines of the packages it ran).

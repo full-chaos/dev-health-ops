@@ -252,8 +252,8 @@ func TestProvidersyncRaceLegWhoseShardsDoNotPartitionFailsBeforeAnyTestRuns(t *t
 	if !strings.Contains(r.Stderr, providersyncAwkName+" failed") {
 		t.Errorf("missing awk failure message: %s", r.Stderr)
 	}
-	if len(r.Calls) != 0 {
-		t.Errorf("a go test ran before the partition check failed: %v", r.Calls)
+	if len(providersyncCalls(r.Calls)) != 0 {
+		t.Errorf("a providersync test ran: %v", r.Calls)
 	}
 }
 
@@ -409,39 +409,8 @@ func TestProvidersyncFailingSliceFailsTheLegAndStopsIt(t *testing.T) {
 	if strings.Contains(r.Stdout, "ci-leg race: OK") || strings.Contains(r.Stdout, "<== stage race 1/3 done") {
 		t.Errorf("leg reported success: %s", r.Stdout)
 	}
-	// CHAOS-13958: the package batch runs beside the slice; nothing of the leg runs after it (no race part, no solo package).
-	var others []string
-	for _, c := range r.Calls {
-		if !strings.HasSuffix(c, "./internal/providersync") {
-			others = append(others, c)
-		}
-	}
-	if len(others) > 1 || (len(others) == 1 && strings.Contains(others[0], " -run ")) {
-		t.Errorf("the leg went on after a failed slice: %v", others)
-	}
-}
-
-// CHAOS-13958: the slice runs beside the leg's package batch (each go test call waits for the other's start), and its log
-// prints whole after the batch's.
-func TestProvidersyncSliceRunsBesideTheBatchAndPrintsItsLogAfterIt(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	r := providersyncRunLeg(t, "FAKE_GO_RACE_BARRIER="+dir)
-	if r.Err != nil {
-		t.Fatalf("clean leg failed: %v\n%s%s", r.Err, r.Stderr, r.Stdout)
-	}
-	for _, k := range []string{"providersync", "batch"} {
-		if _, err := os.Stat(filepath.Join(dir, k)); err != nil {
-			t.Errorf("the %s call never ran", k)
-		}
-		if _, err := os.Stat(filepath.Join(dir, k+".alone")); err == nil {
-			t.Errorf("the %s call never saw the other one start: the slice and the batch ran one after the other", k)
-		}
-	}
-	slice := strings.Index(r.Stdout, "ok  \t./internal/providersync\t")
-	batch := strings.Index(r.Stdout, "ok  \tgithub.com/full-chaos/dev-health-ops/")
-	if slice < 0 || batch < 0 || slice < batch {
-		t.Errorf("the slice's log (at %d) does not follow the batch's (at %d):\n%s", slice, batch, r.Stdout)
+	if len(r.Calls) != len(providersyncCalls(r.Calls)) {
+		t.Errorf("the leg went on to the package run after a failed slice: %v", r.Calls)
 	}
 }
 

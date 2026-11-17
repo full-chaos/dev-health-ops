@@ -13,9 +13,8 @@
 # 44091722883, 44105231987 and 44118503347 (the legs that held its 3 race parts).
 # internal/cigates/testshard TestTheRaceLegWeightCapKeepsTheBudgetGuardAndWarnsWhenNoLegFits (CHAOS-13958): its local -race time, 187.4 s, rounded up.
 # internal/cigates/testshard TestTheRacePlanKnobsRefuseEveryOtherValueAndTheCapCountsOnlyTheRootModule (CHAOS-13958): its local -race time, 95.7 s, rounded up.
-# internal/cigates/testshard TestTheRacePlanKeepsTheHeavyPackagesApartAndOffTheListedParts, TestTheOldRacePlanStacksTheHeavyTrioOnOneLeg,
-# TestTheRacePlanRefusesABadApartRowAndWarnsWhenNoLegIsFree, TestProvidersyncSliceRunsBesideTheBatchAndPrintsItsLogAfterIt (CHAOS-13958):
-# their local -race times, 63.95, 63.96, 0.05 and 3.85 s, rounded up.
+# internal/cigates/testshard TestTheRacePlanKeepsTheHeavyPackagesApartAndOffTheListedParts, TestTheOldRacePlanStacksTheHeavyTrioOnOneLeg and
+# TestTheRacePlanRefusesABadApartRowAndWarnsWhenNoLegIsFree (CHAOS-13958): their local -race times, 63.95, 63.96 and 0.05 s, rounded up.
 # Sorted (LC_ALL=C) by package, then test.
 internal/api/policy	TestACellThatIsOffAsksNothingAndKeepsTheLegacyAnswer	1
 internal/api/policy	TestAClassRowCannotNameTheAcceptAheadReasonButAStarRowCovers	1
@@ -620,7 +619,6 @@ internal/cigates/testshard	TestProvidersyncRaceWeightsNameRealTestsAndBalance	1
 internal/cigates/testshard	TestProvidersyncShardAwkBalancesByWeightAndWeighsAnUnlistedTest	1
 internal/cigates/testshard	TestProvidersyncShardAwkThatLosesATestFailsTheLegAtThePartitionCheck	6
 internal/cigates/testshard	TestProvidersyncShardAwkThatSwapsATestFailsAtTheSetCompare	6
-internal/cigates/testshard	TestProvidersyncSliceRunsBesideTheBatchAndPrintsItsLogAfterIt	4
 internal/cigates/testshard	TestRaceShardsPartitionPlantedDefectsAreCaught	3
 internal/cigates/testshard	TestRaceShardsPartitionThePackageListAndBalance	3
 internal/cigates/testshard	TestRaceVerbSlicesPartitionTheRealPackages	16

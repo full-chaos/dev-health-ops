@@ -76,6 +76,7 @@ func TestGitHubTestsXMLPrepassAcceptsAndRefusesByTokens(t *testing.T) {
 			{"CI text before subset with entity", "r.xml", prepassDoc(root, "CI: ok\n"+fmt.Sprintf(`<!DOCTYPE %s [ <!ENTITY a "b"> ]>`, root), "", ""), "unsafe_doctype"},
 			{"top-level entity", "r.xml", prepassDoc(root, decl+sys("")+`<!ENTITY a "b">`, "", ""), "unsafe_doctype"},
 			{"unfinished declaration after root", "r.xml", prepassDoc(root, decl, "", fmt.Sprintf(`<!DOCTYPE %s SYSTEM "x"`, root)), "malformed"},
+			{"self-closed stray element before the real root (main reads it as the root and loses the report)", "r.xml", prepassDoc(root, "Run tests\n<nil/>\n"+decl+"\n", "", ""), "malformed"},
 			{"second root", "r.xml", prepassDoc(root, decl, "", prepassDoc(root, "", "", "")), "malformed"},
 			{"truncated trailing comment", "r.xml", prepassDoc(root, decl, "", "<!-- never closed"), "malformed"},
 		}

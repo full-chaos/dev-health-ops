@@ -62,6 +62,7 @@ func TestGitHubTestsXMLTolerantFormsDecodeLikeMain(t *testing.T) {
 			{"DOCTYPE after root (guard only)", decl, "", sys},
 			{"DOCTYPE inside root (guard only)", decl, sys, ""},
 			{"other directive", decl + `<!ELEMENT a ANY>`, "", ""},
+			{"CI preamble with stray element-like token", "Run tests\n<nil>\n" + decl + "\n", "", ""},
 			{"BOM and declaration", "\xEF\xBB\xBF" + decl, "", ""},
 		}
 		for _, f := range forms {

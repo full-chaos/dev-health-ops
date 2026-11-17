@@ -150,6 +150,7 @@ itself still starts on a partial env and logs one ERROR, product rule 3). */}}
 {{- if not $waCaller }}{{- $waMissing = append $waMissing "authService.webApprover.caller" }}{{- end }}
 {{- if not $waSecret }}{{- $waMissing = append $waMissing "authService.webApprover.jwks.secretName" }}{{- end }}
 {{- $waOn := eq (len $waMissing) 0 }}
+{{- $npCaller := trim (toString (default "" $a.namedPrincipalCaller)) }}
 {{- if and (not $waOn) (lt (len $waMissing) 3) }}{{- fail (printf "authService.webApprover is partly set: missing %s. Set issuer, caller and jwks.secretName together, or none of them" (join ", " $waMissing)) }}{{- end }}
 {{- if and $waOn (not $waKey) }}{{- fail "authService.webApprover.jwks.secretKey must not be empty: it names the JWKS file in the Secret" }}{{- end }}
 {{- range $a.extraEnv }}
@@ -408,6 +409,10 @@ spec:
               value: "/run/auth/web-approver/jwks.json"
             - name: AUTH_AUTHORIZE_WEB_APPROVER_CALLER
               value: {{ $waCaller | quote }}
+          {{- end }}
+          {{- if $npCaller }}
+            - name: AUTH_AUTHORIZE_NAMED_PRINCIPAL_CALLER
+              value: {{ $npCaller | quote }}
           {{- end }}
           {{- with $a.extraEnv }}
             {{- toYaml . | nindent 12 }}

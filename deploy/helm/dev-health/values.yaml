@@ -487,6 +487,10 @@ authService:
     jwks:
       secretName: ""
       secretKey: web-jwks.json
+  # -- CHAOS-13945: the named principal reference kind of POST /v1/authorize. query-api's workload principal (prn_),
+  #    the only caller that may name a principal by its id (the X-DH-Internal-* header carrier); it must also be in
+  #    AUTH_AUTHORIZE_CALLER_SUBJECTS. Renders AUTH_AUTHORIZE_NAMED_PRINCIPAL_CALLER. Empty renders nothing (the kind is off).
+  namedPrincipalCaller: ""
   # -- CHAOS-12662: the rate limits of the policy decision point routes (/v1/authorize, /v1/authorize:batch and /v1/authorize:repositories), per pod.
   #    callerPerSecond/callerBurst: the token bucket of ONE caller workload on ONE route; the effective per-caller limit
   #    is that times authService.replicas. A batch costs its decision count (at most 100), so callerBurst and routeBurst

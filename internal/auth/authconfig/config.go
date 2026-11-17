@@ -320,6 +320,9 @@ type Config struct {
 	// AuthorizeWebApprover is the web approver reference kind's settings
 	// (CHAOS-11207); see workload.go.
 	AuthorizeWebApprover WebApprover
+	// AuthorizeNamedPrincipalCaller is the named principal reference kind's
+	// bound caller (CHAOS-13945); "" is off. See workload.go.
+	AuthorizeNamedPrincipalCaller string
 
 	// EnvOnlySettings names the non-secret settings that were resolved from
 	// the environment although a canonical flag exists for them. A deployment
@@ -641,6 +644,9 @@ func Load(spec Spec) (Config, error) {
 		return Config{}, err
 	}
 	cfg.AuthorizeWebApprover = webApprover(lookup)
+	if value, ok := lookup(EnvAuthorizeNamedPrincipalCaller); ok {
+		cfg.AuthorizeNamedPrincipalCaller = strings.TrimSpace(value)
+	}
 	if cfg.AcrEventsWorkloadSubject, err = workloadSubject(lookup, EnvAcrEventsWorkloadSubject, cfg.TokenIssuerURL); err != nil {
 		return Config{}, err
 	}

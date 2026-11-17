@@ -23,11 +23,6 @@ type TableGrant struct {
 	// uses, and ALTER DELETE is the privilege it needs -- confirmed live
 	// against a real server, not assumed.
 	AllowDelete bool
-	// OptionalDelete lets a RequiredTables entry hold ALTER DELETE or not:
-	// CheckPosture accepts both, and GrantStatements does not render it. It
-	// is the one privilege a revoke takes away while the readiness check must
-	// pass before and after; it has no effect with AllowDelete set.
-	OptionalDelete bool
 }
 
 // Posture is one role's declared privilege manifest: the ClickHouse analog
@@ -49,11 +44,9 @@ type Posture struct {
 // every real deployment; a venue oracle's own per-run database in tests).
 func APIPosture(database string) Posture {
 	return Posture{RequiredTables: []TableGrant{
-		// No delete runs on teams through this login. Prod's login still
-		// holds ALTER DELETE on it until the revoke, so the readiness check
-		// accepts it held or absent (OptionalDelete); GrantStatements and
-		// the users.d renders leave it out.
-		{Database: database, Table: "teams", AllowInsert: true, AllowSelect: true, OptionalDelete: true},
+		// No delete runs on teams through this login, so ALTER DELETE on it
+		// is an over-grant the readiness check refuses.
+		{Database: database, Table: "teams", AllowInsert: true, AllowSelect: true},
 		{Database: database, Table: "identities", AllowInsert: true, AllowSelect: true, AllowDelete: true},
 		// POST /teams/import (CHAOS-6311) runs import_teams' drift-projector
 		// write path: it reads a team's sync policy and its pending drift
@@ -206,8 +199,7 @@ func GrantStatements(role string, posture Posture) []string {
 // privilege -- unlike querying system.grants directly, which 403s without
 // its own SELECT grant, confirmed live) and proves them EXACTLY equal to
 // posture: every declared table carries every declared privilege and no
-// other (an OptionalDelete table may also hold ALTER DELETE), and no table
-// outside the manifest carries any grant at all. A grant line this parser
+// other, and no table outside the manifest carries any grant at all. A grant line this parser
 // cannot recognize (a database-wide or global grant, a role grant) is treated as an unexpected over-grant rather than
 // silently ignored, so a manifest can never be satisfied by a privilege
 // posture broader than what it declares.
@@ -266,7 +258,6 @@ func CheckPosture(ctx context.Context, conn driver.Conn, posture Posture) error 
 	}
 
 	expected := map[string]map[string]bool{}
-	optionalDelete := map[string]bool{}
 	for _, table := range posture.RequiredTables {
 		key := table.Database + "." + table.Table
 		privileges := map[string]bool{}
@@ -280,9 +271,6 @@ func CheckPosture(ctx context.Context, conn driver.Conn, posture Posture) error 
 			privileges["ALTER DELETE"] = true
 		}
 		expected[key] = privileges
-		if table.OptionalDelete {
-			optionalDelete[key] = true
-		}
 	}
 
 	var problems []string
@@ -294,7 +282,7 @@ func CheckPosture(ctx context.Context, conn driver.Conn, posture Posture) error 
 			}
 		}
 		for privilege := range gotPrivileges {
-			if !wantPrivileges[privilege] && (privilege != "ALTER DELETE" || !optionalDelete[key]) {
+			if !wantPrivileges[privilege] {
 				problems = append(problems, fmt.Sprintf("%s has unexpected %s", key, privilege))
 			}
 		}

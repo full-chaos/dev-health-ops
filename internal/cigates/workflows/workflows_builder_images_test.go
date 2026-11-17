@@ -139,6 +139,8 @@ func TestBuilderImagesPlantedDefects(t *testing.T) {
 		{"buildx falls back to the Docker Hub default", []mutation{{victim, line, strings.Replace(line, "image=ghcr.io", "image=docker.io", 1)}}, []string{"docker/setup-buildx-action must set"}},
 		{"qemu points at an unpinned image", []mutation{{qemuFile, qemuLine, "image: tonistiigi/binfmt:latest"}}, []string{"docker/setup-qemu-action must set"}},
 		{"tsv ref loses its digest pin", []mutation{{"ci/builder_images.tsv", "moby/buildkit:buildx-stable-1@sha256:", "moby/buildkit:buildx-stable-1@sha1:"}}, []string{"builder_images.sh failed", "@sha256"}},
+		{"tsv row with an empty field (adjacent tabs)", []mutation{{"ci/builder_images.tsv", "buildkit\tmoby/", "buildkit\t\tmoby/"}}, []string{"builder_images.sh failed", "needs exactly"}},
+		{"tsv row with a leading tab", []mutation{{"ci/builder_images.tsv", "buildkit\tmoby/", "\tbuildkit\tmoby/"}}, []string{"builder_images.sh failed", "needs exactly"}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

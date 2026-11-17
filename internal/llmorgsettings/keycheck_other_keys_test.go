@@ -83,7 +83,7 @@ func TestStoreReadersRefuseABaseURLCarryingAKeyTheProjectionDropped(t *testing.T
 
 // A base_url that carries a stored key never prints: not in %v, not in slog, and
 // the reserved mark entry never shows as a log key. Purpose rows hide their key
-// and their key-bearing url the same way.
+// and their url the same way; every url prints redacted, a clean one included.
 func TestOrgSettingsPrintNoKeyBearingBaseURLAndNoMark(t *testing.T) {
 	const leakedURL = "https://canary-host.example.invalid/" + llmKeySentinel
 	const overrideKey = "override-key-8716-not-a-key"
@@ -112,8 +112,8 @@ func TestOrgSettingsPrintNoKeyBearingBaseURLAndNoMark(t *testing.T) {
 			}
 		}
 	}
-	if out := fmt.Sprint(clean); !strings.Contains(out, "p.example.invalid/v1") || strings.Contains(out, "REDACTED") {
-		t.Fatalf("a clean url must still print: %s", out)
+	if out := fmt.Sprint(clean); strings.Contains(out, "p.example.invalid/v1") || !strings.Contains(out, "REDACTED") || !strings.Contains(out, "openai") {
+		t.Fatalf("a clean url prints redacted by design, the provider in clear: %s", out)
 	}
 	if projected[keyInBaseURLMark] != "1" || stored[keyBaseURL] != leakedURL {
 		t.Fatal("redaction changed the stored values")

@@ -27,10 +27,10 @@ No grounded insights for this section.
 
 ## Provenance
 
-- **chart:chart-1** — sources: cicd_metrics_daily; metrics: success_rate
-- **narrative:summary** — sources: cicd_metrics_daily; metrics: success_rate
+- **chart:chart-1** — sources: testops_pipeline_metrics_daily; metrics: success_rate
+- **narrative:summary** — sources: testops_pipeline_metrics_daily; metrics: success_rate
 - **narrative:quality** — sources: n/a; metrics: n/a
-- **narrative:testops** — sources: cicd_metrics_daily; metrics: success_rate
+- **narrative:testops** — sources: testops_pipeline_metrics_daily; metrics: success_rate
 - **report:plan-1** — sources: n/a; metrics: success_rate
 
 ---

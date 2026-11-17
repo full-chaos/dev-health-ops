@@ -266,6 +266,7 @@ type Metrics struct {
 	inventoryPageCap               map[string]uint64
 	perRunTruncation               map[string]uint64
 	artifactSkipped                map[string]uint64
+	openRunSkipped                 map[string]uint64
 	nonReportMembersSkipped        map[string]uint64
 	skippedArtifactCauseOverflow   map[string]uint64
 	snapshotDiscarded              map[string]uint64
@@ -330,6 +331,7 @@ func NewMetrics() *Metrics {
 		inventoryPageCap:               map[string]uint64{},
 		perRunTruncation:               map[string]uint64{},
 		artifactSkipped:                map[string]uint64{},
+		openRunSkipped:                 map[string]uint64{},
 		nonReportMembersSkipped:        map[string]uint64{},
 		skippedArtifactCauseOverflow:   map[string]uint64{},
 		snapshotDiscarded:              map[string]uint64{},
@@ -569,6 +571,36 @@ func (m *Metrics) RecordArtifactSkipped(provider, dataset, reason string) {
 	defer m.mu.Unlock()
 	m.artifactSkipped[metricProvider(provider)+":"+MetricDatasetLabel(dataset)+
 		":"+MetricArtifactSkipReasonLabel(reason)]++
+}
+
+// metricOpenRunSkipReasonVocabulary is the closed set of reasons one open run's
+// re-read by id failed and the run was skipped for the unit; an unknown reason
+// collapses to "other".
+var metricOpenRunSkipReasonVocabulary = map[string]struct{}{
+	"gone": {}, "unprocessable": {}, "conflict": {}, "client_error": {},
+	"invalid_payload": {}, "transient": {}, "jobs_not_found": {},
+}
+
+// MetricOpenRunSkipReasonLabel bounds the open-run skip reason label.
+func MetricOpenRunSkipReasonLabel(value string) string {
+	lowered := strings.ToLower(strings.TrimSpace(value))
+	if _, known := metricOpenRunSkipReasonVocabulary[lowered]; !known {
+		return "other"
+	}
+	return lowered
+}
+
+// RecordOpenRunSkipped counts ONE stored open run whose re-read by id failed
+// with a per-run error: the run is skipped for the unit and read again on a
+// later unit. The run id is in the WARN line, never a label.
+func (m *Metrics) RecordOpenRunSkipped(provider, dataset, reason string) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.openRunSkipped[metricProvider(provider)+":"+MetricDatasetLabel(dataset)+
+		":"+MetricOpenRunSkipReasonLabel(reason)]++
 }
 
 // RecordNonReportMembersSkipped counts archive members that are not test
@@ -1821,6 +1853,13 @@ func (m *Metrics) WritePrometheus(writer io.Writer) error {
 		writer, "dev_health_provider_artifact_skipped_total",
 		"Provider artifacts skipped as unreadable while the rest of the inventory continued, by bounded provider, dataset, and reason.",
 		"reason", m.artifactSkipped,
+	); err != nil {
+		return err
+	}
+	if err := writeProviderDatasetReasonCounter(
+		writer, "dev_health_provider_open_run_skipped_total",
+		"Stored open runs whose re-read by id failed with a per-run error and were skipped for the unit, by bounded provider, dataset, and reason.",
+		"reason", m.openRunSkipped,
 	); err != nil {
 		return err
 	}

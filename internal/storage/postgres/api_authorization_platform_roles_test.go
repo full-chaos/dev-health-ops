@@ -45,10 +45,9 @@ func usersColumnsOf(posture RolePosture, privilege string) []string {
 
 var (
 	wantUsersInsertWhileOwned = []string{"auth_provider", "auth_provider_id", "avatar_url", "created_at", "email", "full_name", "id",
-		"is_active", "is_verified", "last_login_at", "password_hash", "saml_nameid_format", "saml_sp_name_qualifier", "sso_provider_id",
-		"token_version", "updated_at", "username"}
+		"is_active", "is_verified", "last_login_at", "password_hash", "sso_provider_id", "token_version", "updated_at", "username"}
 	wantUsersUpdateWhileOwned = []string{"avatar_url", "email", "full_name", "is_active", "is_verified", "last_login_at", "password_hash",
-		"saml_nameid_format", "saml_sp_name_qualifier", "token_version", "updated_at", "username"}
+		"token_version", "updated_at", "username"}
 )
 
 // While auth-service owns the platform roles the api role writes no

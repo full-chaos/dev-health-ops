@@ -108,7 +108,7 @@ func Public(next http.Handler) http.Handler {
 		// guarantee independent of that.
 		var names []string
 		for key := range r.Header {
-			for _, name := range Headers {
+			for _, name := range AllHeaders {
 				if strings.EqualFold(key, name) {
 					names = append(names, name)
 					delete(r.Header, key)

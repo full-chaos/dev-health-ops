@@ -44,6 +44,9 @@ type Claims struct {
 	// organization and repository ceiling, or the legacy path's organization.
 	// Only the REST authenticator sets it; the zero value serves nothing.
 	Scope pepgate.Scope
+	// HeaderPrincipal is the principal the X-DH-Internal-* header carrier names (X-DH-Internal-Principal-Id, a prn_
+	// wire id), "" when it names none. Only the header carrier sets it; the PDP judges it as a named principal.
+	HeaderPrincipal string
 }
 
 // Holds reports whether the caller holds the platform action now.

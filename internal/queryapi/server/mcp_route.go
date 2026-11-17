@@ -579,7 +579,7 @@ func mcpIdentityHeadersPresent(h http.Header) bool { return internalidentity.Pre
 
 // mcpAuthenticate takes the identity from the internal identity headers
 // ONLY, and refuses any elevated claim. The returned claims always carry
-// Role "", IsSuperuser false and ImpersonationActive false.
+// Role "", IsSuperuser false, ImpersonationActive false and the named principal.
 func mcpAuthenticate(r *http.Request) (authctx.Claims, int, string) {
 	if len(r.Header.Values("Authorization")) > 0 {
 		return authctx.Claims{}, http.StatusUnauthorized, mcpReasonAuthorization
@@ -606,7 +606,9 @@ func mcpAuthenticate(r *http.Request) (authctx.Claims, int, string) {
 			"caller_class", mcpCallerClass, "claims", strings.Join(elevated, ","), "remote_addr", r.RemoteAddr)
 		return authctx.Claims{}, http.StatusForbidden, mcpReasonElevatedClaim
 	}
-	return legacyClaims(claims.OrgID), 0, ""
+	accepted := legacyClaims(claims.OrgID)
+	accepted.HeaderPrincipal = claims.HeaderPrincipal
+	return accepted, 0, ""
 }
 
 // mcpRootFields lists the operation's root field names in order, following

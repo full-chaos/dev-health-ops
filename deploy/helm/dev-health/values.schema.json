@@ -211,6 +211,10 @@
             }
           }
         },
+        "namedPrincipalCaller": {
+          "description": "CHAOS-13945: query-api's workload principal (prn_), the only caller that may present a named principal reference to POST /v1/authorize; set, renders AUTH_AUTHORIZE_NAMED_PRINCIPAL_CALLER. It must also be in AUTH_AUTHORIZE_CALLER_SUBJECTS. Empty renders nothing.",
+          "type": "string"
+        },
         "ssoJit": {
           "description": "Render AUTH_SSO_JIT=true on auth-service. true needs authService.phase 4 with usersOwnedStage=owned.",
           "type": "boolean"

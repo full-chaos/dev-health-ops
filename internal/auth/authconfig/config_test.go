@@ -410,6 +410,8 @@ func TestEveryDeclaredOptionResolves(t *testing.T) {
 		"SOCIAL_GITLAB_CLIENT_ID":       func(c Config) string { return c.Social["gitlab"].ID },
 		"SOCIAL_GOOGLE_CLIENT_ID":       func(c Config) string { return c.Social["google"].ID },
 	}
+	distinct[EnvAuthorizeNamedPrincipalCaller] = "prn_AAAAAAAAAAAAAAAAAAAAAA"
+	read[EnvAuthorizeNamedPrincipalCaller] = func(c Config) string { return c.AuthorizeNamedPrincipalCaller }
 
 	baseline, err := Load(Spec{LookupEnv: lookupFrom(baseEnv())})
 	if err != nil {

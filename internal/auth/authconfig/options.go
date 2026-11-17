@@ -261,6 +261,11 @@ var optionRegistry = []Option{
 		Usage: "workload principal id (prn_) of acr-api, the only caller that may present a web approver reference; it must also be in " + EnvAuthorizeCallerSubjects,
 	},
 	{
+		Env: EnvAuthorizeNamedPrincipalCaller, Kind: KindString, Group: GroupSession,
+		Usage: "workload principal id (prn_) of query-api, the only caller that may present a named principal reference (a principal's prn_ id, no session, decided without the platform role) to POST /v1/authorize; it must also be in " +
+			EnvAuthorizeCallerSubjects + "; unset refuses the kind",
+	},
+	{
 		Env: EnvSessionIssueWorkloadSubject, Kind: KindString, Group: GroupSession,
 		Usage: "workload principal id (prn_ and 22 base64url characters) of go-api whose workload token POST /internal/v1/sessions accepts; unset refuses every workload token. " +
 			EnvSessionIssueWorkloadSubject + "_FILE reads it from a mounted file instead (the two are mutually exclusive). Needs " +

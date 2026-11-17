@@ -54,23 +54,28 @@ func (h authorizeHandlers) auditDecisions(ctx context.Context, items []authorize
 }
 
 // authorizeAuditEvent is the row of one high-risk decision: ids and closed
-// values only. The actor is the user the decision is about; the calling
-// policy-enforcement point is in the caller attributes.
+// values only. The actor is the user the decision is about, only when the
+// decision transaction found it (the column is a foreign key; an unknown or
+// erased principal's id is written nowhere); the calling policy-enforcement
+// point is in the caller attributes.
 func authorizeAuditEvent(ctx context.Context, caller AuthorizeCaller, item authorizeItem, doc decisionDocument) audit.AuditEvent {
 	q := item.question
-	actor := item.principal.ID.String()
 	revision := int64(item.decision.PolicyRevision)
 	outcome := audit.OutcomeDenied
 	if item.decision.Allowed {
 		outcome = audit.OutcomeAllowed
 	}
 	event := audit.AuditEvent{
-		EventType: audit.EventAuthorizeHighRiskDecided, Outcome: outcome, ActorPrincipalID: &actor,
+		EventType: audit.EventAuthorizeHighRiskDecided, Outcome: outcome,
 		PolicyRevision: &revision, RequestID: requestid.Audit(ctx),
 		Attributes: map[string]any{
 			"decision_id": doc.DecisionID, "decision_reason_code": doc.ReasonCode, "action_key": q.Action,
 			"resource_type": q.ResourceType, "policy_revision": revision,
 		},
+	}
+	if item.principalKnown {
+		actor := item.principal.ID.String()
+		event.ActorPrincipalID = &actor
 	}
 	if item.orgKnown {
 		org := q.OrganizationID

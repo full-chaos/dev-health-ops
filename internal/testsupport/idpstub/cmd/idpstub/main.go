@@ -161,7 +161,11 @@ func serveOn(mode string, args []string, ln net.Listener) error {
 		mux.ServeHTTP(w, r)
 	})
 	if ln == nil {
-		if ln, err = net.Listen("tcp", *listen); err != nil {
+		addr := *listen
+		if addr == "" {
+			addr = ":https"
+		}
+		if ln, err = net.Listen("tcp", addr); err != nil {
 			return err
 		}
 	}

@@ -144,3 +144,26 @@ func TestServeBindsTheConfiguredAddressItself(t *testing.T) {
 		t.Fatal("serve did not try to bind the configured -listen address")
 	}
 }
+
+func TestServeWithAnEmptyListenAddressStillTargetsPortHTTPS(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root could bind port 443 and leave a listener behind")
+	}
+	dir := filepath.Join(t.TempDir(), "certs")
+	if err := certs([]string{"-out", dir, "-host", "localhost"}); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- serve("serve", []string{"-listen", "", "-cert", filepath.Join(dir, "server.pem"), "-key", filepath.Join(dir, "server.key"),
+			"-base-url", "https://localhost", "-redirect-uri", "https://sp.kit.test/cb"})
+	}()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), ":443") {
+			t.Fatalf("serve error = %v, want a bind failure that names :443, the port ListenAndServeTLS gave an empty address", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("serve did not return: it should refuse to bind :443 as a non-root user")
+	}
+}

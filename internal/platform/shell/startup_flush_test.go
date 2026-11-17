@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -239,6 +241,20 @@ func TestTheShellExportsTheSeedsBeforeItsListenersServe(t *testing.T) {
 	exited := make(chan int, 1)
 	go func() { _ = command.Wait(); exited <- 1 }()
 	defer func() { _ = command.Process.Kill() }()
+	pid := command.Process.Pid
+	if _, ok := childListeners(pid); !ok && runtime.GOOS == "linux" {
+		t.Fatal("cannot read the child's listening sockets from /proc: the pre-bind check would watch only the log line")
+	}
+	// boundEarly reports a bind seen at the socket (the child's LISTEN sockets) or in the shell's own listening line.
+	boundEarly := func() string {
+		if ports, ok := childListeners(pid); ok && len(ports) > 0 {
+			return "socket listening on port " + strings.Join(ports, ",")
+		}
+		if address, bound := boundaddr.Find(output.String(), "operator-http"); bound {
+			return "listening line " + address
+		}
+		return ""
+	}
 
 	client := &http.Client{Timeout: 300 * time.Millisecond}
 	healthz := func(address string) bool {
@@ -258,17 +274,25 @@ waitExport:
 		case <-deadline:
 			t.Fatalf("no export reached the collector within 20 s; process output:\n%s", output.String())
 		case <-time.After(20 * time.Millisecond):
-			if _, bound := boundaddr.Find(output.String(), "operator-http"); bound {
-				t.Fatalf("the operator listener bound and the collector holds no export: the seeds wait for the first tick; process output:\n%s", output.String())
+			if early := boundEarly(); early != "" {
+				t.Fatalf("the operator listener bound (%s) and the collector holds no export: the seeds wait for the first tick; process output:\n%s", early, output.String())
 			}
 		}
 	}
-	time.Sleep(300 * time.Millisecond)
-	if address, bound := boundaddr.Find(output.String(), "operator-http"); bound {
-		t.Errorf("the operator listener bound %s while the startup flush is still in flight", address)
+	for settle := time.Now().Add(300 * time.Millisecond); time.Now().Before(settle); time.Sleep(10 * time.Millisecond) {
+		if early := boundEarly(); early != "" {
+			t.Errorf("the operator listener bound (%s) while the startup flush is still in flight", early)
+			break
+		}
 	}
 	release()
 	httpAddress := boundaddr.Await(t, &output, "operator-http", exited)
+	if ports, ok := childListeners(pid); ok {
+		_, port, _ := net.SplitHostPort(httpAddress)
+		if !contains(ports, port) {
+			t.Errorf("the socket probe does not see the listener the shell logged (%s): its pre-bind samples prove nothing; probe saw %v", httpAddress, ports)
+		}
+	}
 	up := time.Now().Add(20 * time.Second)
 	for !healthz(httpAddress) {
 		if time.Now().After(up) {
@@ -279,6 +303,49 @@ waitExport:
 	if got := collector.seededValues(); len(got) != 1 || got[0] != 0 {
 		t.Errorf("when the listener first served the collector held %s = %v, want exactly [0]; process output:\n%s", startupSeedName, got, output.String())
 	}
+}
+
+func contains(list []string, want string) bool {
+	for _, item := range list {
+		if item == want {
+			return true
+		}
+	}
+	return false
+}
+
+// childListeners returns the local ports of the TCP sockets in LISTEN state that process pid holds; ok is false
+// where /proc cannot be read (no such process view), so a caller must not read an empty list as "nothing listens".
+func childListeners(pid int) (ports []string, ok bool) {
+	entries, err := os.ReadDir(filepath.Join("/proc", strconv.Itoa(pid), "fd"))
+	if err != nil {
+		return nil, false
+	}
+	owned := map[string]bool{}
+	for _, entry := range entries {
+		target, err := os.Readlink(filepath.Join("/proc", strconv.Itoa(pid), "fd", entry.Name()))
+		if err == nil && strings.HasPrefix(target, "socket:[") {
+			owned[strings.TrimSuffix(strings.TrimPrefix(target, "socket:["), "]")] = true
+		}
+	}
+	for _, table := range []string{"tcp", "tcp6"} {
+		raw, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "net", table))
+		if err != nil {
+			return nil, false
+		}
+		for _, line := range strings.Split(string(raw), "\n")[1:] {
+			fields := strings.Fields(line)
+			if len(fields) < 10 || fields[3] != "0A" || !owned[fields[9]] {
+				continue
+			}
+			if i := strings.LastIndex(fields[1], ":"); i >= 0 {
+				if port, err := strconv.ParseUint(fields[1][i+1:], 16, 16); err == nil {
+					ports = append(ports, strconv.FormatUint(port, 10))
+				}
+			}
+		}
+	}
+	return ports, true
 }
 
 func runShellStartupFlushHelper() {

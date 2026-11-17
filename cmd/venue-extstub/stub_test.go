@@ -205,15 +205,16 @@ func TestStubSourceHasNoOutboundCall(t *testing.T) {
 	}
 }
 
-// testCA writes a CA certificate and its PKCS #8 key (mode perm) to dir.
-func testCA(t *testing.T, dir string, perm os.FileMode) (string, string, *x509.CertPool) {
+// testCA writes a CA certificate and its PKCS #8 key (mode perm) to dir. Its validity window is built around at, the clock the
+// test verifies with (stubT0 for a test that pins the clock, time.Now() for one that runs the live stub); never a calendar date.
+func testCA(t *testing.T, dir string, perm os.FileMode, at time.Time) (string, string, *x509.CertPool) {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
 	tmpl := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "venue test CA"}, IsCA: true, BasicConstraintsValid: true,
-		KeyUsage: x509.KeyUsageCertSign, NotBefore: stubT0.Add(-time.Hour), NotAfter: stubT0.Add(240 * time.Hour)}
+		KeyUsage: x509.KeyUsageCertSign, NotBefore: at.Add(-time.Hour), NotAfter: at.Add(240 * time.Hour)}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
 	if err != nil {
 		t.Fatal(err)
@@ -239,7 +240,7 @@ func testCA(t *testing.T, dir string, perm os.FileMode) (string, string, *x509.C
 // refused.
 func TestLeafCertCoversTheStubHostsOnly(t *testing.T) {
 	dir := t.TempDir()
-	certPath, keyPath, pool := testCA(t, dir, 0o600)
+	certPath, keyPath, pool := testCA(t, dir, 0o600, stubT0)
 	certPEM, _ := os.ReadFile(certPath)
 	leaf, err := leafCert(certPEM, keyPath, stubT0)
 	if err != nil {
@@ -265,7 +266,7 @@ func TestLeafCertCoversTheStubHostsOnly(t *testing.T) {
 	if _, err := parsed.Verify(x509.VerifyOptions{DNSName: "api.example.com", Roots: pool, CurrentTime: stubT0}); err == nil {
 		t.Error("the leaf verifies for a host the stub does not serve")
 	}
-	_, loose, _ := testCA(t, t.TempDir(), 0o640)
+	_, loose, _ := testCA(t, t.TempDir(), 0o640, stubT0)
 	if _, err := leafCert(certPEM, loose, stubT0); err == nil || !strings.Contains(err.Error(), "owner-only") {
 		t.Fatalf("a 0640 CA key: %v", err)
 	}
@@ -293,7 +294,7 @@ func (l *lockedBuffer) String() string {
 // and the log file must be new.
 func TestRunServesTLSWithTheVenueCA(t *testing.T) {
 	dir := t.TempDir()
-	certPath, keyPath, pool := testCA(t, dir, 0o600)
+	certPath, keyPath, pool := testCA(t, dir, 0o600, time.Now())
 	logPath := filepath.Join(dir, "hits.jsonl")
 	statusPath := filepath.Join(dir, "status.txt")
 	ctx, cancel := context.WithCancel(context.Background())
@@ -396,5 +397,40 @@ func TestUnservedHostsIsTheFrozenCensusAndInTheDigest(t *testing.T) {
 	UnservedHosts = saved
 	if before == after {
 		t.Fatal("the config digest does not change with the unserved host list")
+	}
+}
+
+// The CA window follows the clock the test verifies with: a CA built around at verifies at at, wherever at is (the pinned
+// stubT0, the real now, five and fifty years on) and stops verifying once its window has ended.
+func TestTestCAWindowFollowsTheClockItVerifiesWith(t *testing.T) {
+	now := time.Now()
+	for _, at := range []time.Time{stubT0, now, now.AddDate(5, 0, 0), now.AddDate(50, 0, 0)} {
+		certPath, keyPath, pool := testCA(t, t.TempDir(), 0o600, at)
+		certPEM, err := os.ReadFile(certPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		block, _ := pem.Decode(certPEM)
+		ca, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if d := ca.NotAfter.Sub(at) - 240*time.Hour; d < -2*time.Second || d > 2*time.Second {
+			t.Errorf("at %s: the CA ends %s, want 240h after it", at.Format(time.RFC3339), ca.NotAfter.Format(time.RFC3339))
+		}
+		if d := at.Sub(ca.NotBefore) - time.Hour; d < -2*time.Second || d > 2*time.Second {
+			t.Errorf("at %s: the CA starts %s, want 1h before it", at.Format(time.RFC3339), ca.NotBefore.Format(time.RFC3339))
+		}
+		leaf, err := leafCert(certPEM, keyPath, at)
+		if err != nil {
+			t.Fatal(err)
+		}
+		parsed, err := x509.ParseCertificate(leaf.Certificate[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := parsed.Verify(x509.VerifyOptions{DNSName: "api.stripe.com", Roots: pool, CurrentTime: at}); err != nil {
+			t.Errorf("at %s: %v", at.Format(time.RFC3339), err)
+		}
 	}
 }

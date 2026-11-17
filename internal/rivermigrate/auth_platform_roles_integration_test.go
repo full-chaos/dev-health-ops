@@ -26,13 +26,11 @@ import (
 // posture): one statement over each list is every go-api users write at once.
 const (
 	usersInsertWhileOwned = `INSERT INTO users (id, email, username, password_hash, full_name, avatar_url, auth_provider,
-	auth_provider_id, sso_provider_id, is_active, is_verified, token_version, last_login_at, created_at, updated_at,
-	saml_nameid_format, saml_sp_name_qualifier)
-VALUES ($1, $2, NULL, NULL, 'n', NULL, 'local', NULL, NULL, true, false, 0, NULL, now(), now(), NULL, NULL)`
+	auth_provider_id, sso_provider_id, is_active, is_verified, token_version, last_login_at, created_at, updated_at)
+VALUES ($1, $2, NULL, NULL, 'n', NULL, 'local', NULL, NULL, true, false, 0, NULL, now(), now())`
 	usersUpdateWhileOwned = `UPDATE users SET email = email, username = username, password_hash = password_hash,
 	full_name = full_name, avatar_url = avatar_url, is_active = is_active, is_verified = is_verified,
-	token_version = token_version + 1, last_login_at = now(), updated_at = now(), saml_nameid_format = saml_nameid_format,
-	saml_sp_name_qualifier = saml_sp_name_qualifier WHERE id = $1`
+	token_version = token_version + 1, last_login_at = now(), updated_at = now() WHERE id = $1`
 )
 
 // The api role's users grants follow AUTH_PLATFORM_ROLES_OWNED through the

@@ -317,10 +317,6 @@ func apiPosture() RolePosture {
 			// credentials_deleted's count. The SSO activate and deactivate
 			// routes set a provider's status (UPDATE).
 			{"sso_providers", false, true, true},
-			// Retired (RetiredTables below): go-api's own SAML sign-in, its only
-			// writer, is gone (SAML is served by auth-service). The migration
-			// still grants it until a later change drops it.
-			{"saml_assertion_replays", true, false, false},
 			// The admin IP-allowlist routes create, update and delete
 			// entries.
 			{"org_ip_allowlist", true, true, true},
@@ -346,7 +342,7 @@ func apiPosture() RolePosture {
 		ColumnScoped: []ColumnPrivilege{
 			{"billing_audit_log", "actor_id", "UPDATE"},
 		},
-		RetiredTables: []string{"internal_service_credentials", "saml_assertion_replays"},
+		RetiredTables: []string{"internal_service_credentials"},
 	}
 }
 
@@ -402,29 +398,19 @@ func APIPostureFor(sessionsOwnedByAuth, platformRolesOwned bool) RolePosture {
 	for _, column := range usersUpdateColumnsWhileOwned {
 		posture.ColumnScoped = append(posture.ColumnScoped, ColumnPrivilege{"users", column, "UPDATE"})
 	}
-	for _, column := range usersColumnsRetired {
-		posture.RetiredColumns = append(posture.RetiredColumns,
-			ColumnPrivilege{"users", column, "INSERT"}, ColumnPrivilege{"users", column, "UPDATE"})
-	}
 	return posture
 }
 
-// usersColumnsRetired are the users columns only go-api's own SAML sign-in
-// wrote; it is gone, so their INSERT and UPDATE grants are RetiredColumns
-// until a later change drops them from the two lists below.
-var usersColumnsRetired = []string{"saml_nameid_format", "saml_sp_name_qualifier"}
-
 // usersInsertColumnsWhileOwned and usersUpdateColumnsWhileOwned are the
-// public.users columns go-api's writers name, less is_superuser (least
-// privilege). TestAPIPostureUsersColumnsCoverTheDDL classifies every column of
+// public.users columns go-api's writers name, less is_superuser and the 2
+// SAML columns only go-api's removed SAML sign-in wrote (least privilege). TestAPIPostureUsersColumnsCoverTheDDL classifies every column of
 // the table and TestGoAPIUsersWritesStayWithinTheOwnedGrant every go-api users
 // statement, so a new column or a new write needs a decision here.
 var (
 	usersInsertColumnsWhileOwned = []string{"id", "email", "username", "password_hash", "full_name", "avatar_url", "auth_provider",
-		"auth_provider_id", "sso_provider_id", "is_active", "is_verified", "token_version", "last_login_at", "created_at", "updated_at",
-		"saml_nameid_format", "saml_sp_name_qualifier"}
+		"auth_provider_id", "sso_provider_id", "is_active", "is_verified", "token_version", "last_login_at", "created_at", "updated_at"}
 	usersUpdateColumnsWhileOwned = []string{"email", "username", "password_hash", "full_name", "avatar_url", "is_active", "is_verified",
-		"token_version", "last_login_at", "updated_at", "saml_nameid_format", "saml_sp_name_qualifier"}
+		"token_version", "last_login_at", "updated_at"}
 )
 
 // CheckAPIAuthorization is the dho api Service's readiness check: it binds

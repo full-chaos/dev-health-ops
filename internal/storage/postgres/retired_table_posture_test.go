@@ -69,11 +69,8 @@ func TestInternalServiceCredentialsIsRetiredForTheAPIAndCoordinatorRoles(t *test
 		if len(found) != 1 || found[0] != want {
 			t.Errorf("%s: RequiredTables rows for the table = %v, want exactly %v", name, found, want)
 		}
-		// The api role also retires go-api's SAML replay grant (CHAOS-13949); the coordinator only this table.
-		wantRetired := map[string]string{"api": "[internal_service_credentials saml_assertion_replays]",
-			"api sessions owned": "[internal_service_credentials saml_assertion_replays]", "coordinator": "[internal_service_credentials]"}[name]
-		if got := fmt.Sprint(posture.RetiredTables); got != wantRetired {
-			t.Errorf("%s: RetiredTables = %v, want %s", name, got, wantRetired)
+		if got := fmt.Sprint(posture.RetiredTables); got != "[internal_service_credentials]" {
+			t.Errorf("%s: RetiredTables = %v, want [internal_service_credentials]", name, got)
 		}
 		if _, err := rolePostureArgs("role_a", "river", posture); err != nil {
 			t.Errorf("%s: %v", name, err)
@@ -125,10 +122,10 @@ func TestRetiredColumnFlagsMarkExactlyTheNamedColumnPrivilege(t *testing.T) {
 			t.Errorf("%s: %v", name, err)
 		}
 	}
-	if got := fmt.Sprint(APIPostureFor(true, true).RetiredColumns); got != "[{users saml_nameid_format INSERT} {users saml_nameid_format UPDATE} {users saml_sp_name_qualifier INSERT} {users saml_sp_name_qualifier UPDATE}]" {
-		t.Errorf("api owned RetiredColumns = %s", got)
-	}
-	if got := APIPostureFor(true, false).RetiredColumns; len(got) != 0 {
-		t.Errorf("api not owned RetiredColumns = %v, want none (users grants are table-wide there)", got)
+	// go-api's SAML column grants were dropped (CHAOS-13951): no api posture retires a column now.
+	for name, posture := range map[string]RolePosture{"api owned": APIPostureFor(true, true), "api not owned": APIPostureFor(true, false)} {
+		if len(posture.RetiredColumns) != 0 {
+			t.Errorf("%s RetiredColumns = %v, want none", name, posture.RetiredColumns)
+		}
 	}
 }

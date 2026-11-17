@@ -61,7 +61,7 @@ func TestGitHubTestsJUnitWithPlainDoctypeParses(t *testing.T) {
 	for name, doctype := range map[string]string{
 		"system": `<!DOCTYPE testsuite SYSTEM "http://example.invalid/junit.dtd">`,
 		"public": `<!DOCTYPE testsuite PUBLIC "-//X//DTD//EN" "http://example.invalid/junit.dtd">`,
-		"bare":   `<!doctype testsuite>`,
+		"bare":   `<!DOCTYPE testsuite>`,
 	} {
 		rows := parseDoctypeArchive(t, map[string]string{
 			"junit.xml": `<?xml version="1.0"?>` + "\n" + doctype + `<testsuite name="x"><testcase name="t" classname="c"/></testsuite>`,
@@ -77,8 +77,7 @@ func TestGitHubTestsUnsafeDoctypeIsOwnCause(t *testing.T) {
 		"junit internal subset":     `<!DOCTYPE testsuite [ <!ELEMENT testsuite ANY> ]><testsuite name="x"><testcase name="t"/></testsuite>`,
 		"junit entity":              `<!DOCTYPE testsuite><!ENTITY x "boom"><testsuite name="x"/>`,
 		"cobertura internal subset": `<?xml version="1.0"?><!DOCTYPE coverage [ <!ELEMENT coverage ANY> ]><coverage lines-valid="1" lines-covered="1"></coverage>`,
-		"cobertura entity":          `<?xml version="1.0"?><!doctype coverage SYSTEM "x"><!entity x "boom"><coverage lines-valid="1" lines-covered="1"></coverage>`,
-		"unclosed doctype":          `<testsuite name="x"/><!DOCTYPE testsuite SYSTEM "x`,
+		"cobertura entity":          `<?xml version="1.0"?><!DOCTYPE coverage SYSTEM "x"><!entity x "boom"><coverage lines-valid="1" lines-covered="1"></coverage>`,
 	} {
 		file := "r.xml"
 		rows := parseDoctypeArchive(t, map[string]string{file: member})

@@ -701,3 +701,134 @@ func TestOpenPhaseTrailingDataDoesNotResetTheBreaker(t *testing.T) {
 		t.Fatal("the walk went past the breaker")
 	}
 }
+
+// openSkipFaultStore fails the chunk store once, at the chunk whose cursor holds the first skip: before or after the
+// prepare, or before or after the commit mark.
+type openSkipFaultStore struct {
+	*chunkMemoryStore
+	mode  string
+	fault error
+	seen  bool
+}
+
+func openSkipCursorHasSkip(raw string) bool {
+	cursor, err := decodeGitHubTestsChunkCursor(raw)
+	return err == nil && cursor.OpenSkipped == 1
+}
+
+func (s *openSkipFaultStore) PrepareChunkGroup(ctx context.Context, claim Claim, chunks []PreparedProviderChunk, now time.Time) ([]PreparedProviderChunk, error) {
+	fault := !s.seen && openSkipCursorHasSkip(chunks[len(chunks)-1].CursorAfter)
+	if fault && s.mode == "before-prepare" {
+		s.seen = true
+		return nil, s.fault
+	}
+	group, err := s.chunkMemoryStore.PrepareChunkGroup(ctx, claim, chunks, now)
+	if fault && s.mode == "after-prepare" && err == nil {
+		s.seen = true
+		return nil, s.fault
+	}
+	return group, err
+}
+
+func (s *openSkipFaultStore) MarkChunkCommitted(ctx context.Context, claim Claim, ordinal int, digest string, now time.Time) error {
+	chunk, err := s.LoadPreparedChunk(ctx, claim, ordinal, now)
+	if err != nil {
+		return err
+	}
+	fault := !s.seen && openSkipCursorHasSkip(chunk.CursorAfter)
+	if fault && s.mode == "before-commit" {
+		s.seen = true
+		return s.fault
+	}
+	err = s.chunkMemoryStore.MarkChunkCommitted(ctx, claim, ordinal, digest, now)
+	if fault && s.mode == "after-commit" && err == nil {
+		s.seen = true
+		return s.fault
+	}
+	return err
+}
+
+// 13966 Codex r2 (accepted gap, acp ruling option 1): a store fault at the skip's chunk fails the attempt, and the
+// retry finishes the unit. The unit result open_runs_skipped is EXACT in every case (it rides the durable cursor and is
+// the source of truth). A fault BEFORE the prepare re-runs the route, so the WARN line and the counter step happen once.
+// A fault AFTER the prepare (after it, before the commit mark, after the commit mark) is drained by the executor's
+// recovery without re-running the route: that skip's WARN line and counter step can be lost. That loss is the accepted
+// gap (counters are advisory); the cell pins that it never counts the skip twice.
+func TestOpenPhaseSkipRecoveryKeepsTheResultExact(t *testing.T) {
+	repoID := listingRepoID(t)
+	now := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
+	for _, source := range []string{"run", "jobs"} {
+		for _, mode := range []string{"before-prepare", "after-prepare", "before-commit", "after-commit"} {
+			for _, shape := range openSkipContinuationShapes {
+				if shape.jobsOnly && source != "jobs" {
+					continue
+				}
+				t.Run(source+"/"+mode+"/"+shape.name, func(t *testing.T) {
+					records := captureMembershipLogs(t)
+					fake := newListingFake(t, nil)
+					reader := openSkipStore(repoID, fake, 8400, 3)
+					doer := newOpenSkipDoer(fake)
+					if source == "run" {
+						doer.runs[8401] = []openSkipReply{shape.reply}
+					} else {
+						doer.jobs[8401] = []openSkipReply{shape.reply}
+					}
+					fault := NewChunkStoreError(io.ErrUnexpectedEOF)
+					switch mode {
+					case "after-prepare":
+						fault = ErrInvalidConfiguration
+					case "after-commit":
+						fault = io.ErrUnexpectedEOF
+					}
+					store := &openSkipFaultStore{chunkMemoryStore: newChunkMemoryStore(), mode: mode, fault: fault}
+					claim, session := completeRouteSessionFor(t, now, false, "github", "cicd")
+					executor := completeRouteExecutor(now, GitHubTestsRouteHandler{OpenRuns: reader}, store, &memoryEffectSink{})
+					executor.Credentials.Repository = &trackingCompleteRouteCredentialRepository{provider: "github"}
+					executor.Credentials.Decryptor = chunkedCredentialDecryptor{}
+					executor.Doer = fakehttp.Client(doer)
+					executor.BudgetLimits = map[CostClass]int{claim.CostClass: 10}
+					executor.Metrics = providerfoundation.NewMetrics()
+					descriptor, _ := Descriptor("github", "cicd")
+					ctx := context.Background()
+					if _, err := executor.Execute(ctx, session, descriptor); !store.seen || !errors.Is(err, fault) {
+						t.Fatalf("premise: first attempt err=%v seen=%v, want the injected store fault", err, store.seen)
+					}
+					var result CompleteRouteExecutionResult
+					var err error
+					for attempt := 0; attempt < 8; attempt++ {
+						result, err = executor.Execute(ctx, session, descriptor)
+						if !errors.Is(err, ErrChunkContinuation) {
+							break
+						}
+					}
+					if err != nil {
+						t.Fatalf("retry err=%v, want the unit to finish", err)
+					}
+					if got := fmt.Sprint(result.Result[GitHubTestsResultKeyOpenRunsSkipped]); got != "1" {
+						t.Fatalf("open_runs_skipped = %s, want exactly 1 after recovery", got)
+					}
+					if doer.hitsOf(8402) != 1 {
+						t.Fatalf("the run after the skip was read %d times, want once", doer.hitsOf(8402))
+					}
+					var rendered bytes.Buffer
+					if err := executor.Metrics.WritePrometheus(&rendered); err != nil {
+						t.Fatal(err)
+					}
+					warns := len(openSkipLines(*records))
+					counted := strings.Contains(rendered.String(), fmt.Sprintf(`dev_health_provider_open_run_skipped_total{provider="github",dataset="cicd",reason=%q} 1`, shape.reason))
+					series := strings.Count(rendered.String(), "dev_health_provider_open_run_skipped_total{")
+					if mode == "before-prepare" {
+						if warns != 1 || !counted || series != 1 {
+							t.Fatalf("WARN=%d counted=%v series=%d, want the skip recorded once (the route re-ran)", warns, counted, series)
+						}
+						return
+					}
+					if warns > 1 || series > 1 || series == 1 && !counted {
+						t.Fatalf("WARN=%d counted=%v series=%d, want at most one record of the skip", warns, counted, series)
+					}
+					t.Logf("accepted gap: WARN=%d counted=%v after a %s fault", warns, counted, mode)
+				})
+			}
+		}
+	}
+}

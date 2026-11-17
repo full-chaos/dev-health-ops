@@ -122,6 +122,11 @@ func (executor *WorkItemExecutor) ComputeFamily(
 	if err != nil {
 		return wrapWorkItemScopePartialWrite("work_item", total, partition, err)
 	}
+	written, err = retractReopenedCycleRows(ctx, executor.conn, run.OrganizationID, read.Items, computedAt)
+	total += written
+	if err != nil {
+		return wrapWorkItemScopePartialWrite("work_item", total, partition, err)
+	}
 	return total, nil
 }
 

@@ -206,19 +206,16 @@ type githubTestsArtifactPayload struct {
 	CreatedAt   *string         `json:"created_at"`
 }
 
-// declaredOversize is the artifact_oversized error for an artifact whose listed
-// size is above maxBytes, so it is skipped without a download. A missing, zero,
-// negative or non-integer size is unknown and is downloaded under the cap.
-func (artifact githubTestsArtifactPayload) declaredOversize(maxBytes int64) error {
+// listedSize is the artifact's listed size_in_bytes, or -1 when it is
+// missing, zero, negative or not an integer. A size above the cap no longer
+// skips the artifact before its download: the download reads its report
+// members by range, or refuses it without reading the body.
+func (artifact githubTestsArtifactPayload) listedSize() int64 {
 	size, err := strconv.ParseInt(string(artifact.SizeInBytes), 10, 64)
-	if err != nil || size <= maxBytes {
-		return nil
+	if err != nil || size <= 0 {
+		return -1
 	}
-	failure := providerfoundation.ResponseFailure(nil, providerfoundation.ReasonBodyTooLarge, &githubTestsArtifactOversizedError{
-		SizeBytes: size, CapBytes: maxBytes,
-	})
-	failure.Route = githubArtifactZipRoute
-	return failure
+	return size
 }
 
 // githubTestsNonReportArtifactSuffixes/Prefixes name GitHub/CI-generated
@@ -522,10 +519,7 @@ func (handler GitHubTestsRouteHandler) Collect(
 			// treats a routine 404/410 and a genuinely empty 2xx body
 			// identically (CHAOS-4185 codex round 3 only changed the
 			// CHUNKED route's accounting, not this oracle's disposition).
-			archive, used, downloadErr := []byte(nil), 0, artifact.declaredOversize(maxArtifactBytes)
-			if downloadErr == nil {
-				archive, used, _, downloadErr = downloadGitHubTestsArtifact(ctx, client, root, string(artifact.ID), maxArtifactBytes)
-			}
+			archive, used, _, downloadErr := downloadGitHubTestsListedArtifact(ctx, client, root, string(artifact.ID), maxArtifactBytes, artifact.listedSize())
 			requests += used
 			if downloadErr != nil {
 				// Same disposition as an unreadable container below: an
@@ -957,7 +951,22 @@ func downloadGitHubTestsArtifact(
 	ctx context.Context, client *providerfoundation.HTTPClient, root, artifactID string,
 	maxBytes int64,
 ) (archive []byte, used int, notFound bool, err error) {
-	response, err := client.DoRoute(ctx, http.MethodGet, githubArtifactZipRoute, root+"/actions/artifacts/"+url.PathEscape(artifactID)+"/zip", nil)
+	return downloadGitHubTestsListedArtifact(ctx, client, root, artifactID, maxBytes, -1)
+}
+
+// downloadGitHubTestsListedArtifact is downloadGitHubTestsArtifact with the
+// artifact's listed size (-1 when unknown): a listed size above the cap
+// refuses a response without a Content-Length before any body byte is read.
+func downloadGitHubTestsListedArtifact(
+	ctx context.Context, client *providerfoundation.HTTPClient, root, artifactID string,
+	maxBytes, listedSize int64,
+) (archive []byte, used int, notFound bool, err error) {
+	path := root + "/actions/artifacts/" + url.PathEscape(artifactID) + "/zip"
+	var fetch githubTestsArtifactFetch = func(ctx context.Context) (*http.Response, error) {
+		return client.DoRoute(ctx, http.MethodGet, githubArtifactZipRoute, path, nil)
+	}
+	var refresh func(context.Context) (githubTestsArtifactFetch, error)
+	response, err := fetch(ctx)
 	if err != nil {
 		var providerErr *providerfoundation.ProviderError
 		if errors.As(err, &providerErr) && (providerErr.StatusCode == http.StatusNotFound || providerErr.StatusCode == http.StatusGone) {
@@ -975,7 +984,12 @@ func downloadGitHubTestsArtifact(
 				ErrGitHubTestsArtifactUnavailable, response.StatusCode,
 			))
 		}
-		response, err = client.DoUnauthenticatedRoute(ctx, http.MethodGet, githubArtifactZipRoute, location)
+		api := fetch
+		fetch = githubTestsArtifactBlobFetch(client, location)
+		refresh = func(ctx context.Context) (githubTestsArtifactFetch, error) {
+			return githubTestsArtifactRelocate(ctx, client, api)
+		}
+		response, err = fetch(ctx)
 		requests++
 		if err != nil {
 			return nil, requests, false, err
@@ -986,20 +1000,16 @@ func downloadGitHubTestsArtifact(
 		return nil, requests, true, nil
 	}
 	if response.StatusCode >= 400 {
-		message, readErr := providerfoundation.ReadResponseBodyTransport(response, 1<<20-1)
-		if readErr != nil {
-			return nil, requests, false, readErr
-		}
-		// Classified like the GitLab artifact route: a rate limit of the
-		// artifact store defers the unit with its dimension; every other
-		// failure keeps the class ClassifyHTTPForRequest gives it.
-		if classified := providerfoundation.ClassifyHTTPForRequest("github", responsePath(response), response.StatusCode, response.Header, string(message)); classified != nil {
-			classified.Route = githubArtifactZipRoute
-			return nil, requests, false, classified
-		}
-		return nil, requests, false, &providerfoundation.ProviderError{Class: providerfoundation.ErrorPermanent, StatusCode: response.StatusCode, Route: githubArtifactZipRoute}
+		return nil, requests, false, githubTestsArtifactStatusFailure(response)
 	}
-	body, over, readErr := providerfoundation.ReadResponseBodyWithin(response, maxBytes, logging.TransportFailure)
+	var body []byte
+	var over int64
+	var readErr error
+	if response.ContentLength < 0 && listedSize > maxBytes {
+		over = listedSize
+	} else {
+		body, over, readErr = providerfoundation.ReadResponseBodyWithin(response, maxBytes, logging.TransportFailure)
+	}
 	if readErr != nil {
 		return nil, requests, false, providerfoundation.ResponseFailure(response, providerfoundation.ReasonBodyRead, fmt.Errorf(
 			"%w: artifact download read failed: %w", ErrGitHubTestsIncomplete, errors.Unwrap(readErr),
@@ -1012,9 +1022,23 @@ func downloadGitHubTestsArtifact(
 		// the message) so the chunked route's durable marker
 		// (GitHubTestsSkippedArtifact, CHAOS-4315) gets real ints, not a
 		// re-parse of formatted text.
-		return nil, requests, false, providerfoundation.ResponseFailure(response, providerfoundation.ReasonBodyTooLarge, &githubTestsArtifactOversizedError{
+		oversized := providerfoundation.ResponseFailure(response, providerfoundation.ReasonBodyTooLarge, &githubTestsArtifactOversizedError{
 			SizeBytes: over, CapBytes: maxBytes,
 		})
+		if !strings.EqualFold(strings.TrimSpace(response.Header.Get("Accept-Ranges")), "bytes") {
+			return nil, requests, false, oversized
+		}
+		response.Body.Close()
+		size := int64(-1)
+		if response.ContentLength > maxBytes {
+			size = response.ContentLength
+		}
+		archive, rangeRequests, gone, rangeErr := readGitHubTestsArtifactReports(ctx, fetch, refresh, size, maxBytes)
+		requests += rangeRequests
+		if errors.Is(rangeErr, errGitHubTestsRangeUnusable) {
+			return nil, requests, false, oversized
+		}
+		return archive, requests, gone, rangeErr
 	}
 	return body, requests, false, nil
 }

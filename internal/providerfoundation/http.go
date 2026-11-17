@@ -445,6 +445,7 @@ func (c *HTTPClient) Do(ctx context.Context, method, path string, body io.Reader
 		if err := c.Auth(request); err != nil {
 			return nil, c.authFailure(ctx, err, attempt)
 		}
+		setByteRange(ctx, request)
 		var requestErr error
 		guarded, leftOrigin := originGuardedDoer(c.Doer, target, recorder.record)
 		c.recordWireRequest(ctx, target.Path)
@@ -597,6 +598,7 @@ func (c *HTTPClient) DoUnauthenticated(
 	if requestErr != nil {
 		return nil, ErrCredentialInvalid
 	}
+	setByteRange(ctx, request)
 	c.recordWireRequest(ctx, target.Path)
 	counting := hopCountingDoer(c.Doer, recorder.record)
 	response, err = counting.Do(request)
@@ -1002,6 +1004,24 @@ func CollectPages[T any](ctx context.Context, maxPages int, fetch PageFunc[T]) (
 		cursor = next
 	}
 	return nil, errors.New("provider pagination budget exhausted")
+}
+
+type byteRangeKey struct{}
+
+// WithByteRange makes the requests sent with ctx carry the Range header spec,
+// for example "bytes=0-1023" or "bytes=-1024". The caller checks that the
+// answer is a 206 for the asked range: a server may ignore the header.
+func WithByteRange(ctx context.Context, spec string) context.Context {
+	return context.WithValue(ctx, byteRangeKey{}, spec)
+}
+
+func setByteRange(ctx context.Context, request *http.Request) {
+	if ctx == nil {
+		return
+	}
+	if spec, _ := ctx.Value(byteRangeKey{}).(string); spec != "" {
+		request.Header.Set("Range", spec)
+	}
 }
 
 type budgetDimensionKey struct{}

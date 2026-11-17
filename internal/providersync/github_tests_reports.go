@@ -38,34 +38,18 @@ var ErrGitHubTestsUnsafeDoctype = errors.New("github tests report unsafe doctype
 // githubTestsUTF8BOM is stripped before any XML report is inspected or decoded.
 var githubTestsUTF8BOM = []byte{0xEF, 0xBB, 0xBF}
 
-// githubTestsXMLDirectiveVerdict classifies the text of one XML directive
-// (the bytes between "<!" and ">").
-type githubTestsXMLDirectiveVerdict int
-
-const (
-	githubTestsDirectiveDoctypeOK githubTestsXMLDirectiveVerdict = iota
-	githubTestsDirectiveUnsafe
-	githubTestsDirectiveMalformed
-)
-
-func githubTestsIsXMLSpace(char byte) bool {
-	return char == ' ' || char == '\t' || char == '\r' || char == '\n'
-}
-
-// githubTestsClassifyXMLDirective accepts a DOCTYPE with no internal subset and
-// a valid external id; refuses an ENTITY or an internal subset as unsafe; and
-// treats every other directive as malformed. It matches on the directive text
-// only, never on offsets of a case-folded copy.
-func githubTestsClassifyXMLDirective(text []byte) githubTestsXMLDirectiveVerdict {
-	if len(text) >= 6 && strings.EqualFold(string(text[:6]), "ENTITY") && (len(text) == 6 || githubTestsIsXMLSpace(text[6])) {
-		return githubTestsDirectiveUnsafe
+// githubTestsDirectiveUnsafe reports whether the text of one XML directive (the
+// bytes between "<!" and ">", as encoding/xml returns them) is an ENTITY
+// declaration or carries an internal subset: a "[" outside quotes, which covers
+// an empty subset "[]" too. Every other directive is tolerated, exactly as the
+// decoder ignores it.
+func githubTestsDirectiveUnsafe(text []byte) bool {
+	if len(text) >= 6 && strings.EqualFold(string(text[:6]), "ENTITY") &&
+		(len(text) == 6 || text[6] == ' ' || text[6] == '\t' || text[6] == '\r' || text[6] == '\n') {
+		return true
 	}
-	if len(text) < 8 || string(text[:7]) != "DOCTYPE" || !githubTestsIsXMLSpace(text[7]) {
-		return githubTestsDirectiveMalformed
-	}
-	rest := text[7:]
 	var quote byte
-	for _, char := range rest {
+	for _, char := range text {
 		if quote != 0 {
 			if char == quote {
 				quote = 0
@@ -75,127 +59,65 @@ func githubTestsClassifyXMLDirective(text []byte) githubTestsXMLDirectiveVerdict
 		if char == '"' || char == '\'' {
 			quote = char
 		} else if char == '[' {
-			return githubTestsDirectiveUnsafe
+			return true
 		}
 	}
-	position := 0
-	skipSpace := func() bool {
-		start := position
-		for position < len(rest) && githubTestsIsXMLSpace(rest[position]) {
-			position++
-		}
-		return position > start
-	}
-	word := func() string {
-		start := position
-		for position < len(rest) && !githubTestsIsXMLSpace(rest[position]) && rest[position] != '"' && rest[position] != '\'' {
-			position++
-		}
-		return string(rest[start:position])
-	}
-	literal := func() bool {
-		if position >= len(rest) || (rest[position] != '"' && rest[position] != '\'') {
-			return false
-		}
-		closing := bytes.IndexByte(rest[position+1:], rest[position])
-		if closing < 0 {
-			return false
-		}
-		position += closing + 2
-		return true
-	}
-	skipSpace()
-	if word() == "" {
-		return githubTestsDirectiveMalformed
-	}
-	hadSpace := skipSpace()
-	if position >= len(rest) {
-		return githubTestsDirectiveDoctypeOK
-	}
-	if !hadSpace {
-		return githubTestsDirectiveMalformed
-	}
-	switch word() {
-	case "SYSTEM":
-		if !skipSpace() || !literal() {
-			return githubTestsDirectiveMalformed
-		}
-	case "PUBLIC":
-		if !skipSpace() || !literal() || !skipSpace() || !literal() {
-			return githubTestsDirectiveMalformed
-		}
-	default:
-		return githubTestsDirectiveMalformed
-	}
-	skipSpace()
-	if position != len(rest) {
-		return githubTestsDirectiveMalformed
-	}
-	return githubTestsDirectiveDoctypeOK
+	return false
 }
 
 // githubTestsInspectXMLReport is the ONE pre-pass every XML report member goes
-// through before row decoding (CHAOS-13985). It strips a UTF-8 BOM and walks the
-// member with encoding/xml raw tokens, which never fetch a DTD and never expand
-// an entity. Comments, CDATA, processing instructions and character data are
-// never scanned for markers.
+// through before row decoding (CHAOS-13985). Contract: refuse ONLY what is
+// unsafe (an ENTITY directive or a DOCTYPE internal subset, cause
+// unsafe_doctype) and what would silently lose report data (a second root
+// element, any element after the root, or markup that does not tokenize, cause
+// malformed). Every other form is tolerated exactly as the row decoder reads it:
+// text before the root, duplicate or misplaced XML declarations, odd DOCTYPE
+// names, comments in a DOCTYPE, a lowercase doctype, processing instructions
+// anywhere and any text after the root.
 //
-//   - root is "coverage", "junit" (testsuite or testsuites), "other" (any other
-//     root element) or "" (not XML: first non-space byte is not '<').
-//   - A DOCTYPE with no internal subset, before the root, at most once: allowed.
-//   - An ENTITY directive or a DOCTYPE with an internal subset: error wrapping
-//     ErrGitHubTestsUnsafeDoctype; nothing is decoded further.
-//   - Any other directive, a DOCTYPE after or inside the root or duplicated, a
-//     lowercase or garbled DOCTYPE, text before the root, a second root, text
-//     after the root, or truncated markup: error wrapping only
-//     ErrGitHubTestsReportInvalid (cause malformed).
+// It strips a UTF-8 BOM and walks the member with encoding/xml raw tokens, which
+// never fetch a DTD and never expand an entity. Comments, CDATA, processing
+// instructions and character data are never scanned for markers.
 //
-// beforeRoot reports whether an error happened before the root element was seen.
-func githubTestsInspectXMLReport(body []byte) (clean []byte, root string, beforeRoot bool, err error) {
+// root is "coverage", "junit" (testsuite or testsuites), "other" (any other root
+// element) or "" (no root element: LCOV and plain text). textOnly marks a member
+// known to be LCOV text (an .info file that does not start with '<').
+func githubTestsInspectXMLReport(body []byte, textOnly bool) (clean []byte, root string, err error) {
 	clean = bytes.TrimPrefix(body, githubTestsUTF8BOM)
-	trimmed := bytes.TrimLeft(clean, " \t\r\n")
-	if len(trimmed) == 0 || trimmed[0] != '<' {
-		return clean, "", false, nil
+	lead := bytes.TrimLeft(clean, " \t\r\n")
+	if textOnly || len(lead) == 0 {
+		return clean, "", nil
+	}
+	if len(lead) >= 3 {
+		if prefix := strings.ToLower(string(lead[:3])); prefix == "tn:" || prefix == "sf:" {
+			return clean, "", nil
+		}
 	}
 	invalid := func(detail string) error {
 		return fmt.Errorf("%w: xml: %s", ErrGitHubTestsReportInvalid, detail)
 	}
 	decoder := xml.NewDecoder(bytes.NewReader(clean))
-	depth, doctypes := 0, 0
+	depth := 0
 	rootSeen, rootClosed := false, false
 	for {
 		token, tokenErr := decoder.RawToken()
 		if tokenErr != nil {
-			if tokenErr == io.EOF && rootClosed {
-				return clean, root, false, nil
-			}
 			if tokenErr == io.EOF {
-				if rootSeen {
-					return clean, root, false, invalid("unexpected end of document")
+				if rootSeen && !rootClosed {
+					return clean, root, invalid("unexpected end of document")
 				}
-				return clean, "", true, invalid("no root element")
+				return clean, root, nil
 			}
-			return clean, root, !rootSeen, fmt.Errorf("%w: %w", ErrGitHubTestsReportInvalid, tokenErr)
+			return clean, root, fmt.Errorf("%w: %w", ErrGitHubTestsReportInvalid, tokenErr)
 		}
 		switch value := token.(type) {
 		case xml.Directive:
-			switch githubTestsClassifyXMLDirective(value) {
-			case githubTestsDirectiveUnsafe:
-				return clean, root, !rootSeen, fmt.Errorf("%w: %w", ErrGitHubTestsReportInvalid, ErrGitHubTestsUnsafeDoctype)
-			case githubTestsDirectiveMalformed:
-				return clean, root, !rootSeen, invalid("directive")
-			}
-			doctypes++
-			if rootSeen || doctypes > 1 {
-				return clean, root, !rootSeen, invalid("misplaced or duplicate DOCTYPE")
-			}
-		case xml.CharData:
-			if (!rootSeen || rootClosed) && len(bytes.TrimSpace(value)) > 0 {
-				return clean, root, !rootSeen, invalid("text outside the root element")
+			if githubTestsDirectiveUnsafe(value) {
+				return clean, root, fmt.Errorf("%w: %w", ErrGitHubTestsReportInvalid, ErrGitHubTestsUnsafeDoctype)
 			}
 		case xml.StartElement:
 			if rootClosed {
-				return clean, root, false, invalid("second root element")
+				return clean, root, invalid("element after the root element")
 			}
 			if !rootSeen {
 				rootSeen = true
@@ -212,13 +134,23 @@ func githubTestsInspectXMLReport(body []byte) (clean []byte, root string, before
 		case xml.EndElement:
 			depth--
 			if depth < 0 {
-				return clean, root, false, invalid("unbalanced end element")
+				return clean, root, invalid("unbalanced end element")
 			}
 			if depth == 0 {
 				rootClosed = true
 			}
 		}
 	}
+}
+
+// githubTestsIsLCOVName reports an .info member whose first non-space byte is not
+// '<': plain LCOV text that must never be tokenized as XML.
+func githubTestsIsLCOVName(name string, body []byte) bool {
+	if !strings.HasSuffix(strings.ToLower(name), ".info") {
+		return false
+	}
+	lead := bytes.TrimLeft(bytes.TrimPrefix(body, githubTestsUTF8BOM), " \t\r\n")
+	return len(lead) == 0 || lead[0] != '<'
 }
 
 // githubTestsXMLLooksLikeReport is a cheap guess used ONLY for a member the
@@ -1239,7 +1171,7 @@ func parseGitHubTestsArchive(
 			continue
 		}
 		expanded += uint64(len(body))
-		_, root, _, inspectErr := githubTestsInspectXMLReport(body)
+		_, root, inspectErr := githubTestsInspectXMLReport(body, githubTestsIsLCOVName(lower, body))
 		kind := ""
 		switch {
 		case inspectErr != nil:
@@ -1355,7 +1287,7 @@ type coberturaLine struct {
 func parseGitHubCoverageRow(body []byte, reportPath, artifactID, repoID, runID, orgID string, normalizedAt time.Time) (coverageSnapshotRow, error) {
 	// The XML root element decides Cobertura, not a byte prefix: the report may
 	// open with a BOM, an XML declaration, comments and a DOCTYPE (CHAOS-13985).
-	if _, root, _, err := githubTestsInspectXMLReport(body); err != nil {
+	if _, root, err := githubTestsInspectXMLReport(body, githubTestsIsLCOVName(reportPath, body)); err != nil {
 		return coverageSnapshotRow{}, err
 	} else if root == "coverage" {
 		return parseCoberturaRow(body, reportPath, artifactID, repoID, runID, orgID, normalizedAt)
@@ -1367,7 +1299,7 @@ func parseCoberturaRow(body []byte, reportPath, artifactID, repoID, runID, orgID
 	if len(body) > githubTestsMaxReportBytes {
 		return coverageSnapshotRow{}, ErrGitHubTestsReportInvalid
 	}
-	body, _, _, inspectErr := githubTestsInspectXMLReport(body)
+	body, _, inspectErr := githubTestsInspectXMLReport(body, false)
 	if inspectErr != nil {
 		return coverageSnapshotRow{}, inspectErr
 	}
@@ -1528,7 +1460,7 @@ func parseJUnitRows(
 	if len(body) > githubTestsMaxReportBytes {
 		return nil, nil, 0, ErrGitHubTestsReportInvalid
 	}
-	body, _, _, inspectErr := githubTestsInspectXMLReport(body)
+	body, _, inspectErr := githubTestsInspectXMLReport(body, false)
 	if inspectErr != nil {
 		return nil, nil, 0, inspectErr
 	}

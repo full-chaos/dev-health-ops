@@ -71,19 +71,13 @@ func TestGitHubTestsXMLPrepassAcceptsAndRefusesByTokens(t *testing.T) {
 			{"internal subset bom", "r.xml", prepassDoc(root, "\xEF\xBB\xBF"+fmt.Sprintf(`<!DOCTYPE %s [ <!ELEMENT a ANY> ]>`, root), "", ""), "unsafe_doctype"},
 			{"internal subset long prologue xml", "r.xml", prepassDoc(root, decl+long+fmt.Sprintf(`<!DOCTYPE %s [ <!ELEMENT a ANY> ]>`, root), "", ""), "unsafe_doctype"},
 			{"internal subset long prologue info", "r.info", prepassDoc(root, decl+long+fmt.Sprintf(`<!DOCTYPE %s [ <!ELEMENT a ANY> ]>`, root), "", ""), "unsafe_doctype"},
+			{"empty internal subset", "r.xml", prepassDoc(root, decl+fmt.Sprintf(`<!DOCTYPE %s []>`, root), "", ""), "unsafe_doctype"},
+			{"CI text before empty subset", "r.xml", prepassDoc(root, "CI: ok\n"+decl+fmt.Sprintf(`<!DOCTYPE %s []>`, root), "", ""), "unsafe_doctype"},
+			{"CI text before subset with entity", "r.xml", prepassDoc(root, "CI: ok\n"+fmt.Sprintf(`<!DOCTYPE %s [ <!ENTITY a "b"> ]>`, root), "", ""), "unsafe_doctype"},
 			{"top-level entity", "r.xml", prepassDoc(root, decl+sys("")+`<!ENTITY a "b">`, "", ""), "unsafe_doctype"},
-			{"lowercase doctype", "r.xml", prepassDoc(root, decl+fmt.Sprintf(`<!doctype %s SYSTEM "x">`, root), "", ""), "malformed"},
-			{"SYSTEM without id", "r.xml", prepassDoc(root, decl+fmt.Sprintf(`<!DOCTYPE %s SYSTEM>`, root), "", ""), "malformed"},
-			{"PUBLIC without system id", "r.xml", prepassDoc(root, decl+fmt.Sprintf(`<!DOCTYPE %s PUBLIC "-//X//EN">`, root), "", ""), "malformed"},
-			{"duplicate doctype", "r.xml", prepassDoc(root, decl+sys("")+sys(""), "", ""), "malformed"},
-			{"doctype inside root", "r.xml", prepassDoc(root, decl, sys(""), ""), "malformed"},
-			{"doctype after root", "r.xml", prepassDoc(root, decl, "", sys("")), "malformed"},
 			{"unfinished declaration after root", "r.xml", prepassDoc(root, decl, "", fmt.Sprintf(`<!DOCTYPE %s SYSTEM "x"`, root)), "malformed"},
-			{"other directive", "r.xml", prepassDoc(root, decl+`<!ELEMENT a ANY>`, "", ""), "malformed"},
 			{"second root", "r.xml", prepassDoc(root, decl, "", prepassDoc(root, "", "", "")), "malformed"},
-			{"trailing text", "r.xml", prepassDoc(root, decl, "", "junk"), "malformed"},
 			{"truncated trailing comment", "r.xml", prepassDoc(root, decl, "", "<!-- never closed"), "malformed"},
-			{"text before root", "r.xml", prepassDoc(root, decl+"junk", "", ""), "malformed"},
 		}
 		for _, c := range cells {
 			prepassCheck(t, root+"/"+c.name, c.file, c.body, c.want)

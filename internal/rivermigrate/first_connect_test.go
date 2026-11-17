@@ -3,6 +3,7 @@ package rivermigrate
 import (
 	"bytes"
 	"context"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/refusedaddr"
 	"io"
 	"net"
 	"os"
@@ -119,14 +120,10 @@ func TestProvisionRolesWaitsForTheFirstConnectThenFailsClosed(t *testing.T) {
 	}
 }
 
-// proxyTo listens on address and forwards every connection to target.
-func proxyTo(t *testing.T, address, target string) {
+// proxyTo opens the held socket as a listener and forwards every connection to target.
+func proxyTo(t *testing.T, held *refusedaddr.Held, target string) {
 	t.Helper()
-	listener, err := net.Listen("tcp", address)
-	if err != nil {
-		t.Fatalf("listen again on %s: %v", address, err)
-	}
-	t.Cleanup(func() { _ = listener.Close() })
+	listener := held.Listen(t)
 	go func() {
 		for {
 			client, err := listener.Accept()
@@ -154,10 +151,11 @@ func proxyTo(t *testing.T, address, target string) {
 func TestProvisionRolesConnectsOnceTheEndpointOpens(t *testing.T) {
 	server := fakepg.StartEchoing(t)
 	target := net.JoinHostPort(server.Host, strconv.Itoa(server.Port))
-	address := refusedAddress(t)
+	held := refusedaddr.Hold(t)
+	address := held.Addr()
 	useFirstConnect(t, fakeClockFirstConnect(func(pause int) {
 		if pause == 2 {
-			proxyTo(t, address, target)
+			proxyTo(t, held, target)
 		}
 	}))
 	uri := "postgresql://migrator:sekret-pw@" + address + "/appdb?sslmode=disable"

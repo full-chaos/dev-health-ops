@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/refusedaddr"
 	"net"
 	"strconv"
 	"strings"
@@ -181,22 +182,14 @@ func shortRealWait(budget time.Duration, out *bytes.Buffer) FirstConnect {
 
 // A real socket: refused while nothing listens, connected once a listener opens.
 func TestFirstConnectRealSocketRefusedThenListening(t *testing.T) {
-	address := freePort(t)
+	held := refusedaddr.Hold(t)
+	address := held.Addr()
 	var out bytes.Buffer
-	var listener net.Listener
-	t.Cleanup(func() {
-		if listener != nil {
-			_ = listener.Close()
-		}
-	})
 	calls := 0
 	err := shortRealWait(30*time.Second, &out).Do(context.Background(), func(ctx context.Context) error {
 		calls++
 		if calls == 4 {
-			var err error
-			if listener, err = net.Listen("tcp", address); err != nil {
-				t.Fatalf("listen again on %s: %v", address, err)
-			}
+			held.Listen(t)
 		}
 		conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", address)
 		if err != nil {

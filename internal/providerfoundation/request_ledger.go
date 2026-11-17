@@ -3,6 +3,7 @@ package providerfoundation
 import (
 	"context"
 	"net/http"
+	"net/http/httptrace"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -120,10 +121,18 @@ func (c *HTTPClient) recordWireRequest(ctx context.Context, path string) {
 
 type wireCountKey struct{}
 
-// WireCount counts the wire requests sent with a context from WithWireCount:
-// every attempt, every retry and every followed redirect hop. Safe for
-// concurrent use; a nil WireCount counts nothing.
-type WireCount struct{ requests atomic.Int64 }
+// WireCount counts the wire requests sent with a context from WithWireCount.
+// Over a transport that reports through httptrace (net/http's) it counts each
+// write the transport reports without error, as the request usage ledger
+// does: every attempt, retry, followed hop and the transport's own resend.
+// Over a transport that reports nothing (a test double) it counts the
+// client's attempts and followed hops. Safe for concurrent use; a nil
+// WireCount counts nothing.
+type WireCount struct {
+	attempts atomic.Int64
+	writes   atomic.Int64
+	traced   atomic.Bool
+}
 
 // WithWireCount returns ctx with a new WireCount the client adds to.
 func WithWireCount(ctx context.Context) (context.Context, *WireCount) {
@@ -136,13 +145,33 @@ func (w *WireCount) Requests() int {
 	if w == nil {
 		return 0
 	}
-	return int(w.requests.Load())
+	if w.traced.Load() {
+		return int(w.writes.Load())
+	}
+	return int(w.attempts.Load())
 }
 
 func (w *WireCount) add() {
 	if w != nil {
-		w.requests.Add(1)
+		w.attempts.Add(1)
 	}
+}
+
+// withWireTrace makes the transport report the writes of a request sent with
+// ctx to the WireCount ctx carries.
+func withWireTrace(ctx context.Context) context.Context {
+	count := wireCountFrom(ctx)
+	if count == nil {
+		return ctx
+	}
+	return httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{
+		GetConn: func(string) { count.traced.Store(true) },
+		WroteRequest: func(info httptrace.WroteRequestInfo) {
+			if info.Err == nil {
+				count.writes.Add(1)
+			}
+		},
+	})
 }
 
 func wireCountFrom(ctx context.Context) *WireCount {

@@ -2,6 +2,7 @@ package providersync
 
 import (
 	"archive/zip"
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/binary"
@@ -10,12 +11,14 @@ import (
 	"hash/crc32"
 	"io"
 	"math/rand/v2"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"runtime"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -41,6 +44,7 @@ type githubTestsRangeDoer struct {
 	expireAfter   int
 	expireAlways  bool
 	forbidHeader  http.Header
+	truncate403   bool // the 403's body fails to read
 	refreshStatus int  // the second API request answers this status; 0 = redirect
 	failFirst     bool // the first range request answers 503 once
 	status416     int  // range requests after this many answer 416; 0 = never
@@ -89,14 +93,18 @@ func (doer *githubTestsRangeDoer) Do(request *http.Request) (*http.Response, err
 		case doer.goneAfter > 0 && doer.ranged > doer.goneAfter:
 			return &http.Response{StatusCode: http.StatusNotFound, Body: http.NoBody, Request: request}, nil
 		case doer.expireAfter > 0 && doer.ranged > doer.expireAfter && (doer.expireAlways || request.URL.Query().Get("sig") == "1"):
-			if doer.forbidHeader != nil {
-				return &http.Response{StatusCode: http.StatusForbidden, Header: doer.forbidHeader.Clone(), Body: http.NoBody, Request: request}, nil
-			}
-			return &http.Response{
+			response := &http.Response{
 				StatusCode: http.StatusForbidden,
 				Header:     http.Header{"Content-Type": {"application/xml"}, "X-Ms-Error-Code": {"AuthenticationFailed"}},
 				Body:       io.NopCloser(strings.NewReader(githubTestsExpiredSignatureBody)), Request: request,
-			}, nil
+			}
+			if doer.forbidHeader != nil {
+				response.Header, response.Body = doer.forbidHeader.Clone(), http.NoBody
+			}
+			if doer.truncate403 {
+				response.Body = githubTestsTruncatedBody{}
+			}
+			return response, nil
 		case doer.status416 > 0 && doer.ranged > doer.status416:
 			return &http.Response{
 				StatusCode: http.StatusRequestedRangeNotSatisfiable, Header: http.Header{"Content-Range": {"bytes */" + strconv.Itoa(len(doer.archive))}},
@@ -137,6 +145,11 @@ func (doer *githubTestsRangeDoer) Do(request *http.Request) (*http.Response, err
 }
 
 func (doer *githubTestsRangeDoer) requests() int { return doer.api + doer.blob }
+
+type githubTestsTruncatedBody struct{}
+
+func (githubTestsTruncatedBody) Read([]byte) (int, error) { return 0, io.ErrUnexpectedEOF }
+func (githubTestsTruncatedBody) Close() error             { return nil }
 
 type githubTestsRangeMember struct {
 	name   string
@@ -522,6 +535,112 @@ func TestGitHubTestsOverCapArtifactOtherForbiddenKeepsItsClass(t *testing.T) {
 	}
 }
 
+// The headers decide a 403 before its body is read: a body that fails to read
+// neither stops the relocation an expiry header asks for nor hides a
+// throttle header.
+func TestGitHubTestsOverCapArtifactExpiryHeaderDecidesBeforeTheBody(t *testing.T) {
+	expired := &githubTestsRangeDoer{expireAfter: 1, truncate403: true}
+	expired.archive = githubTestsPlaywrightLikeZip(t)
+	archive, used, notFound, err := githubTestsRangeDownload(t, expired, githubTestsRangeCap)
+	if err != nil || notFound || expired.api != 2 || used != expired.requests() {
+		t.Fatalf("err=%v notFound=%v api=%d used=%d, want one relocation and the reports", err, notFound, expired.api, used)
+	}
+	if rows := githubTestsParseRangeArchive(t, archive); len(rows.Suites) != 3 {
+		t.Fatalf("suites=%d, want 3", len(rows.Suites))
+	}
+}
+
+func TestGitHubTestsOverCapArtifactThrottleHeaderDecidesBeforeTheBody(t *testing.T) {
+	throttled := &githubTestsRangeDoer{expireAfter: 1, truncate403: true, forbidHeader: http.Header{"Retry-After": {"30"}}}
+	throttled.archive = githubTestsPlaywrightLikeZip(t)
+	_, _, _, err := githubTestsRangeDownload(t, throttled, githubTestsRangeCap)
+	githubTestsWantClass(t, err, providerfoundation.ErrorRateLimited)
+	if throttled.api != 1 {
+		t.Fatalf("api=%d, want no relocation", throttled.api)
+	}
+}
+
+// githubTestsOfflineTransport is a real net/http transport over in-memory
+// pipes, marked offline for the egress guard.
+type githubTestsOfflineTransport struct{ *http.Transport }
+
+func (githubTestsOfflineTransport) EgressOffline() {}
+
+// used counts every write the transport makes, its own resend of a range GET
+// on a reused connection the peer closed included: the same total as the
+// request usage ledger and the server.
+func TestGitHubTestsOverCapArtifactRangeCountsTransportResends(t *testing.T) {
+	for _, cell := range []string{"api", "blob"} {
+		t.Run(cell, func(t *testing.T) {
+			archive := githubTestsPlaywrightLikeZip(t)
+			var received, resent atomic.Int32
+			transport := &http.Transport{
+				DialContext: func(context.Context, string, string) (net.Conn, error) {
+					left, right := net.Pipe()
+					go func() {
+						defer right.Close()
+						input := bufio.NewReader(right)
+						for served := 0; ; served++ {
+							request, err := http.ReadRequest(input)
+							if err != nil {
+								return
+							}
+							received.Add(1)
+							if served > 0 && request.Header.Get("Range") != "" && resent.CompareAndSwap(0, 1) {
+								return
+							}
+							response := httptest.NewRecorder()
+							switch {
+							case cell == "blob" && request.Host == "api.example":
+								response.Header().Set("Location", "http://blob.example/artifact.zip")
+								response.Header().Set("Content-Length", "0")
+								response.WriteHeader(http.StatusFound)
+							case request.Header.Get("Range") == "":
+								// An over-cap whole response is closed on its headers; hold the connection.
+								fmt.Fprint(right, "HTTP/1.1 200 OK\r\nContent-Length: ", len(archive), "\r\nAccept-Ranges: bytes\r\n\r\n")
+								continue
+							default:
+								http.ServeContent(response, request, "artifact.zip", time.Time{}, bytes.NewReader(archive))
+							}
+							if err := response.Result().Write(right); err != nil {
+								return
+							}
+						}
+					}()
+					return left, nil
+				},
+			}
+			defer transport.CloseIdleConnections()
+			wire := &http.Client{
+				Transport: githubTestsOfflineTransport{transport},
+				CheckRedirect: func(request *http.Request, via []*http.Request) error {
+					if request.URL.Host != via[0].URL.Host {
+						return http.ErrUseLastResponse
+					}
+					return nil
+				},
+			}
+			client, err := providerfoundation.NewHTTPClient("github", "http://api.example", CountRequests(wire),
+				func(*http.Request) error { return nil }, providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond},
+				providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
+			if err != nil {
+				t.Fatal(err)
+			}
+			ledger := NewRequestLedger()
+			ctx, cancel := context.WithTimeout(WithRequestLedger(t.Context(), ledger), 10*time.Second)
+			defer cancel()
+			result, used, notFound, err := downloadGitHubTestsArtifact(ctx, client, "/repos/acme/api", "1", githubTestsRangeCap)
+			if err != nil || notFound || len(result) == 0 {
+				t.Fatalf("err=%v notFound=%v bytes=%d, want the re-packed reports", err, notFound, len(result))
+			}
+			t.Logf("WIRE transport_received=%d usage_ledger=%d used=%d resent=%d", received.Load(), ledger.Totals().Requests, used, resent.Load())
+			if resent.Load() != 1 || int(received.Load()) != used || used != ledger.Totals().Requests {
+				t.Fatalf("received=%d used=%d ledger=%d resent=%d, want one resend and all three equal", received.Load(), used, ledger.Totals().Requests, resent.Load())
+			}
+		})
+	}
+}
+
 // A relocation that fails keeps the API's own classification; a vanished
 // artifact is notFound.
 func TestGitHubTestsOverCapArtifactRelocationFailureKeepsItsClass(t *testing.T) {
@@ -697,6 +816,82 @@ func TestGitHubTestsOverCapArtifactLyingEndRecordIsRefused(t *testing.T) {
 				t.Fatalf("reason=%q, want %s", reason, row.reason)
 			}
 		})
+	}
+}
+
+// githubTestsDirectoryZip is an over-cap artifact of exactly entries members
+// (a JUnit report, an incompressible trace, then empty members) whose central
+// directory is directoryBytes long, or as short as the names allow when
+// directoryBytes is 0.
+func githubTestsDirectoryZip(t *testing.T, entries, directoryBytes int) []byte {
+	t.Helper()
+	members := []githubTestsRangeMember{
+		{name: "results/junit.xml", body: []byte(githubTestsMultiSuiteJUnit(1))},
+		{name: "data/trace.zip", body: githubTestsRandomBytes(51, githubTestsRangeCap+(githubTestsRangeCap/2)), store: true},
+	}
+	used := 2*46 + len(members[0].name) + len(members[1].name)
+	fillers := entries - len(members)
+	for index := range fillers {
+		name := fmt.Sprintf("f/%06d", index)
+		if directoryBytes > 0 {
+			left := fillers - index
+			length := (directoryBytes - used) / left
+			if index == fillers-1 {
+				length = directoryBytes - used
+			}
+			name += strings.Repeat("x", length-46-len(name))
+		}
+		used += 46 + len(name)
+		members = append(members, githubTestsRangeMember{name: name, store: true})
+	}
+	archive := githubTestsRangeZip(t, members...)
+	end := githubTestsZipEnd(t, archive)
+	if got := int(binary.LittleEndian.Uint16(archive[end+10:])); got != entries {
+		t.Fatalf("fixture has %d entries, want %d", got, entries)
+	}
+	if got := int(binary.LittleEndian.Uint32(archive[end+12:])); directoryBytes > 0 && got != directoryBytes {
+		t.Fatalf("fixture directory is %d bytes, want %d", got, directoryBytes)
+	}
+	return archive
+}
+
+// Pins of the directory bounds, in both end-record forms: 10,000 entries and
+// a 2 MiB central directory are read; one entry or one byte more is refused
+// as artifact_oversized before any index is built.
+func TestGitHubTestsOverCapArtifactDirectoryBoundsArePinned(t *testing.T) {
+	for _, row := range []struct {
+		name                    string
+		entries, directoryBytes int
+		admitted                bool
+	}{
+		{"10000 entries", githubTestsRangeMaxEntries, 0, true},
+		{"10001 entries", githubTestsRangeMaxEntries + 1, 0, false},
+		{"2 MiB directory", 8_002, githubTestsRangeMaxDirectoryBytes, true},
+		{"2 MiB + 1 directory", 8_002, githubTestsRangeMaxDirectoryBytes + 1, false},
+	} {
+		for _, form := range []string{"zip", "zip64"} {
+			t.Run(row.name+"/"+form, func(t *testing.T) {
+				archive := githubTestsDirectoryZip(t, row.entries, row.directoryBytes)
+				if form == "zip64" {
+					archive = githubTestsZip64EndRecord(t, archive)
+				}
+				doer := &githubTestsRangeDoer{archive: archive}
+				packed, _, _, err := githubTestsRangeDownload(t, doer, githubTestsRangeCap)
+				if !row.admitted {
+					githubTestsWantOversized(t, err, int64(len(archive)))
+					if reason := githubTestsRangeReason(t, &githubTestsRangeDoer{archive: archive}, githubTestsRangeCap); reason != "zip_directory_over_bound" {
+						t.Fatalf("reason=%q, want zip_directory_over_bound", reason)
+					}
+					return
+				}
+				if err != nil {
+					t.Fatalf("err=%v, want the directory admitted", err)
+				}
+				if rows := githubTestsParseRangeArchive(t, packed); len(rows.Suites) != 1 {
+					t.Fatalf("suites=%d, want 1", len(rows.Suites))
+				}
+			})
+		}
 	}
 }
 

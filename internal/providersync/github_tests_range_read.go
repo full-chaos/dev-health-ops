@@ -106,14 +106,6 @@ func githubTestsArtifactClassified(response *http.Response, message string) erro
 	return &providerfoundation.ProviderError{Class: providerfoundation.ErrorPermanent, StatusCode: response.StatusCode, Route: githubArtifactZipRoute}
 }
 
-// githubTestsSignatureExpired: the blob store refused a pre-signed URL that
-// is no longer valid. Azure Blob storage answers 403 with the error code
-// AuthenticationFailed, in the x-ms-error-code header and in the XML body.
-func githubTestsSignatureExpired(response *http.Response, message string) bool {
-	return strings.EqualFold(strings.TrimSpace(response.Header.Get("x-ms-error-code")), "AuthenticationFailed") ||
-		strings.Contains(message, "<Code>AuthenticationFailed</Code>")
-}
-
 // readGitHubTestsArtifactReports reads an over-cap artifact zip through HTTP
 // range requests. It returns a new zip that parseGitHubTestsArchive gives the
 // same rows, counters and skip markers for as the whole artifact: the first
@@ -365,18 +357,33 @@ func (r *githubTestsRangeReaderAt) get(first, last int64) ([]byte, int64, error)
 }
 
 // forbidden handles a 403: an expired pre-signed URL gets one fresh URL from
-// the API and the range is asked again; every other 403 keeps its class.
+// the API and the range is asked again; every other 403 keeps its class. The
+// headers decide first, so a body that fails to read cannot hide a rate limit
+// or an expiry they already show.
 func (r *githubTestsRangeReaderAt) forbidden(response *http.Response, first, last int64) ([]byte, int64, error) {
+	if classified := githubTestsArtifactClassified(response, ""); githubTestsRateLimited(classified) {
+		return nil, 0, classified
+	}
+	if r.refresh != nil && strings.EqualFold(strings.TrimSpace(response.Header.Get("x-ms-error-code")), "AuthenticationFailed") {
+		return r.relocate(first, last)
+	}
 	message, readErr := providerfoundation.ReadResponseBodyTransport(response, githubTestsRangeMaxErrorBody)
 	if readErr != nil {
 		return nil, 0, readErr
 	}
 	classified := githubTestsArtifactClassified(response, string(message))
-	var providerErr *providerfoundation.ProviderError
-	if (errors.As(classified, &providerErr) && providerErr.Class == providerfoundation.ErrorRateLimited) ||
-		r.refresh == nil || !githubTestsSignatureExpired(response, string(message)) {
+	if r.refresh == nil || githubTestsRateLimited(classified) || !strings.Contains(string(message), "<Code>AuthenticationFailed</Code>") {
 		return nil, 0, classified
 	}
+	return r.relocate(first, last)
+}
+
+func githubTestsRateLimited(err error) bool {
+	var providerErr *providerfoundation.ProviderError
+	return errors.As(err, &providerErr) && providerErr.Class == providerfoundation.ErrorRateLimited
+}
+
+func (r *githubTestsRangeReaderAt) relocate(first, last int64) ([]byte, int64, error) {
 	if r.refreshed {
 		return nil, 0, githubTestsRangeUnusable("signature_expired_twice")
 	}

@@ -438,7 +438,7 @@ func (c *HTTPClient) Do(ctx context.Context, method, path string, body io.Reader
 		// Each followed redirect hop counts as one more wire request: through the context for a guard behind a route's
 		// decorator, and through the per-call guard for a decorator that drops the context (a hop is counted once).
 		recorder := c.newHopRecorder(ctx, target.Path)
-		request, err := http.NewRequestWithContext(withHopRecorder(context.WithValue(ctx, originKey{}, &originState{target: target, left: callLeft}), recorder), method, target.String(), bytes.NewReader(requestBody))
+		request, err := http.NewRequestWithContext(withWireTrace(withHopRecorder(context.WithValue(ctx, originKey{}, &originState{target: target, left: callLeft}), recorder)), method, target.String(), bytes.NewReader(requestBody))
 		if err != nil {
 			return nil, ErrCredentialInvalid
 		}
@@ -594,7 +594,7 @@ func (c *HTTPClient) DoUnauthenticated(
 		}()
 	}
 	recorder := c.newHopRecorder(ctx, target.Path)
-	request, requestErr := http.NewRequestWithContext(withHopRecorder(ctx, recorder), method, target.String(), nil)
+	request, requestErr := http.NewRequestWithContext(withWireTrace(withHopRecorder(ctx, recorder)), method, target.String(), nil)
 	if requestErr != nil {
 		return nil, ErrCredentialInvalid
 	}

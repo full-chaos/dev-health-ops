@@ -26,6 +26,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/boundaddr"
 )
 
 // flushSource is a push whose flush takes delay on the bubble clock, then waits for hold (when set), then returns err.
@@ -200,7 +201,8 @@ const startupSeedName = "shelltest_startup_seeded"
 // TestTheShellExportsTheSeedsBeforeItsListenersServe runs a real shell process (a re-execution of this test binary)
 // whose dependency step seeds a counter at 0, against a real collector, with a reader interval of ten minutes so no
 // tick falls in the test. The collector holds the first export: while it is held, the operator listener must not
-// accept a connection yet; once released, the listener serves and the collector already holds the seed at 0.
+// bind yet (its address is only known from the shell's own "runtime component listening" line); once released, the
+// listener binds, serves, and the collector already holds the seed at 0.
 func TestTheShellExportsTheSeedsBeforeItsListenersServe(t *testing.T) {
 	if os.Getenv("SHELL_OTLP_HELPER") == "startupflush" {
 		runShellStartupFlushHelper()
@@ -218,33 +220,29 @@ func TestTheShellExportsTheSeedsBeforeItsListenersServe(t *testing.T) {
 	go func() { _ = server.Serve(lis) }()
 	defer server.Stop()
 	defer release()
-	httpListener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	httpAddress := httpListener.Addr().String()
-	_ = httpListener.Close()
 
 	command := exec.Command(os.Args[0], "-test.run=^TestTheShellExportsTheSeedsBeforeItsListenersServe$")
 	command.Env = append(os.Environ(),
 		"SHELL_OTLP_HELPER=startupflush",
-		"SHELL_OTLP_HTTP_ADDR="+httpAddress,
+		"SHELL_OTLP_HTTP_ADDR=127.0.0.1:0",
 		"OTEL_ENABLED=true",
 		"OTEL_METRICS_ENABLED=true",
 		"OTEL_SAMPLE_RATE=0",
 		"OTEL_EXPORTER_OTLP_ENDPOINT="+lis.Addr().String(),
 		"OTEL_METRIC_EXPORT_INTERVAL=600000",
 	)
-	var output syncBuffer
+	var output boundaddr.Logs
 	command.Stdout, command.Stderr = &output, &output
 	if err := command.Start(); err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = command.Process.Kill(); _ = command.Wait() }()
+	exited := make(chan int, 1)
+	go func() { _ = command.Wait(); exited <- 1 }()
+	defer func() { _ = command.Process.Kill() }()
 
 	client := &http.Client{Timeout: 300 * time.Millisecond}
-	healthz := func() bool {
-		response, err := client.Get("http://" + httpAddress + "/healthz")
+	healthz := func(address string) bool {
+		response, err := client.Get("http://" + address + "/healthz")
 		if err != nil {
 			return false
 		}
@@ -260,18 +258,19 @@ waitExport:
 		case <-deadline:
 			t.Fatalf("no export reached the collector within 20 s; process output:\n%s", output.String())
 		case <-time.After(20 * time.Millisecond):
-			if healthz() {
-				t.Fatalf("the operator listener serves and the collector holds no export: the seeds wait for the first tick; process output:\n%s", output.String())
+			if _, bound := boundaddr.Find(output.String(), "operator-http"); bound {
+				t.Fatalf("the operator listener bound and the collector holds no export: the seeds wait for the first tick; process output:\n%s", output.String())
 			}
 		}
 	}
-	if conn, err := net.DialTimeout("tcp", httpAddress, 300*time.Millisecond); err == nil {
-		_ = conn.Close()
-		t.Errorf("the operator listener accepts a connection while the startup flush is still in flight")
+	time.Sleep(300 * time.Millisecond)
+	if address, bound := boundaddr.Find(output.String(), "operator-http"); bound {
+		t.Errorf("the operator listener bound %s while the startup flush is still in flight", address)
 	}
 	release()
+	httpAddress := boundaddr.Await(t, &output, "operator-http", exited)
 	up := time.Now().Add(20 * time.Second)
-	for !healthz() {
+	for !healthz(httpAddress) {
 		if time.Now().After(up) {
 			t.Fatalf("the operator listener never served after the flush; process output:\n%s", output.String())
 		}
@@ -285,7 +284,9 @@ waitExport:
 func runShellStartupFlushHelper() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	var stdout, stderr bytes.Buffer
+	var stdout boundaddr.Logs
+	var stderr bytes.Buffer
+	go forwardListening(&stdout)
 	lookup := testLookup(map[string]string{
 		"DEV_HEALTH_HTTP_ADDR":        os.Getenv("SHELL_OTLP_HTTP_ADDR"),
 		"DEV_HEALTH_SHUTDOWN_TIMEOUT": "1s",

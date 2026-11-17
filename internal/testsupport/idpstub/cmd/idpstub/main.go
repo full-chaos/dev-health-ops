@@ -13,6 +13,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -103,7 +104,11 @@ func parseUsers(specs []string) ([]idpstub.OIDCUser, []idpstub.SAMLUser, error) 
 	return oidcUsers, samlUsers, nil
 }
 
-func serve(mode string, args []string) error {
+func serve(mode string, args []string) error { return serveOn(mode, args, nil) }
+
+// serveOn is serve with an optional already-bound listener: a test passes one it keeps open so the port cannot be
+// taken between a pick and the bind. A nil listener binds the -listen address, as the binary always did.
+func serveOn(mode string, args []string, ln net.Listener) error {
 	fs := flag.NewFlagSet(mode, flag.ContinueOnError)
 	certFile := fs.String("cert", "", "server certificate PEM")
 	keyFile := fs.String("key", "", "server key PEM")
@@ -155,10 +160,15 @@ func serve(mode string, args []string) error {
 		fmt.Println(requestLogLine(r.Method, r.URL.Path)) // path only: no query, no values
 		mux.ServeHTTP(w, r)
 	})
+	if ln == nil {
+		if ln, err = net.Listen("tcp", *listen); err != nil {
+			return err
+		}
+	}
 	server := &http.Server{Addr: *listen, Handler: logged, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second,
 		TLSConfig: &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}}
 	errs := make(chan error, 1)
-	go func() { errs <- server.ListenAndServeTLS("", "") }()
+	go func() { errs <- server.ServeTLS(ln, "", "") }()
 	fmt.Println("idpstub:", mode, "on", *listen)
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)

@@ -51,9 +51,12 @@ func Find(logs string, component string) (string, bool) {
 	return "", false
 }
 
+// Reader is any log sink that returns what the service wrote so far.
+type Reader interface{ String() string }
+
 // Await waits for the listening line of component and returns its address. exited reports the service's exit code: an
 // early exit fails the test at once. No line within the guard fails the test; there is no fallback address.
-func Await(t testing.TB, logs *Logs, component string, exited <-chan int) string {
+func Await(t testing.TB, logs Reader, component string, exited <-chan int) string {
 	t.Helper()
 	address, err := await(logs, component, exited, time.Minute)
 	if err != nil {
@@ -62,7 +65,7 @@ func Await(t testing.TB, logs *Logs, component string, exited <-chan int) string
 	return address
 }
 
-func await(logs *Logs, component string, exited <-chan int, guard time.Duration) (string, error) {
+func await(logs Reader, component string, exited <-chan int, guard time.Duration) (string, error) {
 	deadline := time.Now().Add(guard)
 	for {
 		if address, ok := Find(logs.String(), component); ok {

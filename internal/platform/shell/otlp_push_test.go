@@ -3,6 +3,7 @@ package shell
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/boundaddr"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/refusedaddr"
 	colmetricpb "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
 	metricpb "go.opentelemetry.io/proto/otlp/metrics/v1"
@@ -159,28 +161,23 @@ func TestShellPushesItsRegisteredFragmentsOverOTLP(t *testing.T) {
 	colmetricpb.RegisterMetricsServiceServer(server, collector)
 	go func() { _ = server.Serve(lis) }()
 	defer server.Stop()
-	httpListener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	httpAddress := httpListener.Addr().String()
-	_ = httpListener.Close()
-
 	command := exec.Command(os.Args[0], "-test.run=^TestShellPushesItsRegisteredFragmentsOverOTLP$", "-test.v")
 	command.Env = append(os.Environ(),
 		"SHELL_OTLP_HELPER=1",
-		"SHELL_OTLP_HTTP_ADDR="+httpAddress,
+		"SHELL_OTLP_HTTP_ADDR=127.0.0.1:0",
 		"OTEL_ENABLED=true",
 		"OTEL_EXPORTER_OTLP_ENDPOINT="+lis.Addr().String(),
 		"OTEL_METRIC_EXPORT_INTERVAL=600000",
 		"OTEL_SERVICE_NAME=dev-health-go-shelltest",
 	)
-	var output bytes.Buffer
+	var output boundaddr.Logs
 	command.Stdout, command.Stderr = &output, &output
 	if err := command.Start(); err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = command.Process.Kill(); _ = command.Wait() }()
+	exited := make(chan int, 1)
+	go func() { _ = command.Wait(); exited <- 1 }()
+	defer func() { _ = command.Process.Kill() }()
 
 	client := &http.Client{Timeout: 300 * time.Millisecond}
 	deadline := time.Now().Add(15 * time.Second)
@@ -196,13 +193,15 @@ func TestShellPushesItsRegisteredFragmentsOverOTLP(t *testing.T) {
 		}
 		if time.Now().After(deadline) {
 			pulled := ""
-			if response, err := client.Get("http://" + httpAddress + "/metrics"); err == nil {
-				var body bytes.Buffer
-				_, _ = body.ReadFrom(response.Body)
-				_ = response.Body.Close()
-				for _, line := range strings.Split(body.String(), "\n") {
-					if strings.Contains(line, "otlp_metrics") && !strings.HasPrefix(line, "#") {
-						pulled += line + "\n"
+			if pullAddress, bound := boundaddr.Find(output.String(), "operator-http"); bound {
+				if response, err := client.Get("http://" + pullAddress + "/metrics"); err == nil {
+					var body bytes.Buffer
+					_, _ = body.ReadFrom(response.Body)
+					_ = response.Body.Close()
+					for _, line := range strings.Split(body.String(), "\n") {
+						if strings.Contains(line, "otlp_metrics") && !strings.HasPrefix(line, "#") {
+							pulled += line + "\n"
+						}
 					}
 				}
 			}
@@ -223,6 +222,7 @@ func TestShellPushesItsRegisteredFragmentsOverOTLP(t *testing.T) {
 		t.Fatalf("held export %d (carried the fragment: %t), want the first export, carrying it: the run no longer covers a push that arrives before the pull listener", heldExport, heldHadTarget)
 	}
 	release()
+	httpAddress := boundaddr.Await(t, &output, "operator-http", exited)
 	var response *http.Response
 	for {
 		var err error
@@ -242,10 +242,25 @@ func TestShellPushesItsRegisteredFragmentsOverOTLP(t *testing.T) {
 	}
 }
 
+// forwardListening repeats the operator listener's bound address on the helper's stderr, the stream the parent reads, as
+// soon as the shell logs it: the helper keeps its own log in memory until it exits.
+func forwardListening(logs *boundaddr.Logs) {
+	for {
+		if address, ok := boundaddr.Find(logs.String(), "operator-http"); ok {
+			line, _ := json.Marshal(map[string]string{"msg": "runtime component listening", "component": "operator-http", "address": address})
+			_, _ = os.Stderr.WriteString(string(line) + "\n")
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 func runShellHelper() {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	var stdout, stderr bytes.Buffer
+	var stdout boundaddr.Logs
+	var stderr bytes.Buffer
+	go forwardListening(&stdout)
 	lookup := testLookup(map[string]string{
 		"DEV_HEALTH_HTTP_ADDR":        os.Getenv("SHELL_OTLP_HTTP_ADDR"),
 		"DEV_HEALTH_SHUTDOWN_TIMEOUT": "1s",
@@ -297,17 +312,11 @@ func TestAnUnreachableCollectorCostsTheStopAtMostTheFlushBound(t *testing.T) {
 		runShellShutdownHelper()
 		return
 	}
-	httpListener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	httpAddress := httpListener.Addr().String()
-	_ = httpListener.Close()
 	closedAddress := refusedaddr.Addr(t)
 	command := exec.Command(os.Args[0], "-test.run=^TestAnUnreachableCollectorCostsTheStopAtMostTheFlushBound$")
 	command.Env = append(os.Environ(),
 		"SHELL_OTLP_HELPER=shutdown",
-		"SHELL_OTLP_HTTP_ADDR="+httpAddress,
+		"SHELL_OTLP_HTTP_ADDR=127.0.0.1:0",
 		"OTEL_ENABLED=true",
 		"OTEL_SAMPLE_RATE=0",
 		"OTEL_EXPORTER_OTLP_ENDPOINT="+closedAddress,

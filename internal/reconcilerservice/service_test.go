@@ -19,6 +19,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/platform/shell"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/boundaddr"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/refusedaddr"
 )
 
 func TestReconcilerSpecConfiguresFailClosedDependencies(t *testing.T) {
@@ -175,14 +176,7 @@ func TestRunHealthcheckMirrorsReadyz(t *testing.T) {
 // server is not answering at all -- the shape a genuinely wedged process (or
 // one that has not started yet) would take.
 func TestRunHealthcheckFailsClosedWithNothingListening(t *testing.T) {
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	address := listener.Addr().String()
-	if err := listener.Close(); err != nil {
-		t.Fatal(err)
-	}
+	address := refusedaddr.Addr(t)
 	lookup := func(key string) (string, bool) {
 		if key == "DEV_HEALTH_HTTP_ADDR" {
 			return address, true

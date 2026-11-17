@@ -51,7 +51,7 @@ func TestStubAnswerBodiesAreFrozenConstants(t *testing.T) {
 // A hit log that does not close cleanly may have lost lines: the stub exits 1, so the run that read it is void.
 func TestRunExitsNonZeroWhenTheHitLogDoesNotClose(t *testing.T) {
 	dir := t.TempDir()
-	certPath, keyPath, _ := testCA(t, dir, 0o600)
+	certPath, keyPath, _ := testCA(t, dir, 0o600, time.Now())
 	saved := openLogFile
 	t.Cleanup(func() { openLogFile = saved })
 	openLogFile = func(path string) (*os.File, error) {

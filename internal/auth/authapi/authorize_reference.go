@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/full-chaos/dev-health-go/authverify"
@@ -31,6 +32,8 @@ type PrincipalReferences struct {
 	now      func() time.Time
 	// webApprover is the web approver reference kind; nil is off.
 	webApprover *WebApproverReferences
+	// named is the named principal reference kind (CHAOS-13945); nil is off.
+	named *NamedPrincipalReferences
 }
 
 // PrincipalReferencesConfig builds a PrincipalReferences.
@@ -43,6 +46,8 @@ type PrincipalReferencesConfig struct {
 	// WebApprover turns on the web approver reference kind (CHAOS-11207); nil
 	// refuses it.
 	WebApprover *WebApproverReferences
+	// NamedPrincipal turns on the named principal reference kind (CHAOS-13945); nil refuses it.
+	NamedPrincipal *NamedPrincipalReferences
 }
 
 // ReferenceKind is the kind of principal a verified reference names.
@@ -58,6 +63,9 @@ const (
 	// signed it for one approval and acr-api forwards it. Its session must be
 	// live; it answers only acr.credential.issue on its own organization.
 	ReferenceWebApprover
+	// ReferenceNamedPrincipal is a named principal reference (CHAOS-13945): the bound caller names the principal by
+	// its wire id. It has no session; it is decided without the principal's platform role.
+	ReferenceNamedPrincipal
 )
 
 // ReferencedPrincipal is the principal a verified reference names. It is
@@ -89,14 +97,18 @@ func NewPrincipalReferences(cfg PrincipalReferencesConfig) (*PrincipalReferences
 	if now == nil {
 		now = time.Now
 	}
-	return &PrincipalReferences{verifier: verifier, now: now, webApprover: cfg.WebApprover}, nil
+	return &PrincipalReferences{verifier: verifier, now: now, webApprover: cfg.WebApprover, named: cfg.NamedPrincipal}, nil
 }
 
-// ResolveFor resolves reference for the authenticated caller. A web approver
-// reference (typ web-approver+jwt) resolves only for the configured approver
-// caller, and that caller may present nothing else; every other caller gets
-// Resolve's answer.
+// ResolveFor resolves reference for the authenticated caller. A named principal
+// reference (prn_) resolves only for its bound caller, which may still present
+// every other kind. A web approver reference (typ web-approver+jwt) resolves only
+// for the configured approver caller, and that caller may present nothing else;
+// every other caller gets Resolve's answer.
 func (p *PrincipalReferences) ResolveFor(reference, caller string) (ReferencedPrincipal, string, error) {
+	if p != nil && p.named != nil && caller == p.named.Caller() && strings.HasPrefix(reference, "prn_") {
+		return p.named.resolve(reference)
+	}
 	if p == nil || p.webApprover == nil {
 		return p.Resolve(reference)
 	}

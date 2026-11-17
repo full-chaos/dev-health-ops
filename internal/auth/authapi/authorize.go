@@ -479,6 +479,9 @@ func (h authorizeHandlers) evaluate(ctx context.Context, tx DecisionTx, resolved
 	sessions := map[string]referencedSession{}
 	accountRefs := map[string]bool{}
 	for ref, p := range resolved {
+		if p.Kind == ReferenceNamedPrincipal {
+			continue
+		}
 		if p.Kind == ReferenceServiceAccount {
 			k, err := tx.ServiceAccountKey(ctx, p.CredentialID)
 			if err != nil {
@@ -514,6 +517,7 @@ func (h authorizeHandlers) evaluate(ctx context.Context, tx DecisionTx, resolved
 		org       string
 		session   uuid.UUID
 		account   bool
+		named     bool
 	}
 	snapshots := map[triple]authorization.GrantSnapshot{}
 	unfed := map[triple]UnfedState{}
@@ -523,13 +527,15 @@ func (h authorizeHandlers) evaluate(ctx context.Context, tx DecisionTx, resolved
 		rs := sessions[q.PrincipalReference]
 		delegated := rs.row.delegated()
 		account := accountRefs[q.PrincipalReference]
-		key := triple{principal: items[i].principal.ID, org: q.OrganizationID, account: account}
+		named := items[i].principal.Kind == ReferenceNamedPrincipal
+		key := triple{principal: items[i].principal.ID, org: q.OrganizationID, account: account, named: named}
 		if delegated {
 			key.session = rs.id
 		}
 		items[i].cache = cacheBypass
-		// A web approver reference is decided on the live session every call, never from the cache.
-		if cached && !delegated && !account && items[i].principal.Kind != ReferenceWebApprover {
+		// A web approver reference is decided on the live session every call, never from the cache; a named principal
+		// reference never shares a cache entry with its principal's user token (its snapshot has no platform role).
+		if cached && !delegated && !account && !named && items[i].principal.Kind != ReferenceWebApprover {
 			u, ok := unfed[key]
 			if !ok {
 				var err error
@@ -561,6 +567,9 @@ func (h authorizeHandlers) evaluate(ctx context.Context, tx DecisionTx, resolved
 			var err error
 			if snap, err = tx.Snapshot(ctx, key.principal, key.org); err != nil {
 				return err
+			}
+			if named {
+				snap = namedSnapshot{snap}
 			}
 			if delegated {
 				snap = delegatedSnapshot{snap, delegationinput.Delegation(delegationinput.Facts{

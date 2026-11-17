@@ -208,6 +208,12 @@ const (
 	EnvAuthorizeWebApproverCaller   = "AUTH_AUTHORIZE_WEB_APPROVER_CALLER"
 )
 
+// EnvAuthorizeNamedPrincipalCaller is the one workload principal (query-api)
+// that may present a named principal reference (CHAOS-13945) to the authorize
+// routes. Set and listed in EnvAuthorizeCallerSubjects, it turns the kind on;
+// any other value leaves it off with one ERROR line. It never refuses to start.
+const EnvAuthorizeNamedPrincipalCaller = "AUTH_AUTHORIZE_NAMED_PRINCIPAL_CALLER"
+
 // WebApprover is the raw web approver reference settings; authruntime decides
 // whether they turn the kind on.
 type WebApprover struct {

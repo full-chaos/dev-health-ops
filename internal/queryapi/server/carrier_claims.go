@@ -4,7 +4,9 @@ import (
 	"context"
 	"strings"
 
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
@@ -33,6 +35,27 @@ func carrierElevatedClaims(claims authctx.Claims) []string {
 		elevated = append(elevated, "role_"+role)
 	}
 	return elevated
+}
+
+// internalElevatedClaimCounter counts the internal listener's header-carrier
+// requests refused for an elevated claim, by claim (the MCP listener's
+// devhealth_query_api_mcp_elevated_claims_total has the same label).
+var internalElevatedClaimCounter = mustInternalCounter("devhealth_query_api_internal_elevated_claims_total",
+	"Internal-listener header-carrier requests refused for claiming superuser, impersonation or an operator role, by claim")
+
+func mustInternalCounter(name, description string) metric.Int64Counter {
+	counter, err := otel.Meter("github.com/full-chaos/dev-health-ops/internal/queryapi/server/internal").Int64Counter(name, metric.WithDescription(description))
+	if err != nil {
+		counter, _ = otel.GetMeterProvider().Meter("noop").Int64Counter(name)
+	}
+	return counter
+}
+
+// countInternalElevatedClaims counts one internal-listener refusal per claim.
+func countInternalElevatedClaims(ctx context.Context, elevated []string) {
+	for _, claim := range elevated {
+		internalElevatedClaimCounter.Add(ctx, 1, metric.WithAttributes(attribute.String("claim", claim)))
+	}
 }
 
 // The span attributes of a header-carrier identity, set on both listeners

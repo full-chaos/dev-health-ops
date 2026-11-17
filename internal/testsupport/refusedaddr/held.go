@@ -16,10 +16,11 @@ type Held struct {
 
 func Hold(t testing.TB) *Held {
 	t.Helper()
-	fd, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_STREAM|syscall.SOCK_CLOEXEC, 0)
+	fd, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_STREAM, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
+	syscall.CloseOnExec(fd)
 	f := os.NewFile(uintptr(fd), "refusedaddr-held")
 	t.Cleanup(func() { _ = f.Close() })
 	if err := syscall.Bind(fd, &syscall.SockaddrInet4{Addr: [4]byte{127, 0, 0, 1}}); err != nil {

@@ -64,7 +64,7 @@ func authorizeRoutes(cfg authconfig.Config, logger *slog.Logger, pool *pgxpool.P
 			return nil, fmt.Errorf("authruntime: the authorize routes need a signer that reads the key set")
 		}
 		if deps.References, err = authapi.NewPrincipalReferences(authapi.PrincipalReferencesConfig{IssuerURL: cfg.TokenIssuerURL, Keys: keys,
-			WebApprover: webApproverReferences(cfg, logger)}); err != nil {
+			WebApprover: webApproverReferences(cfg, logger), NamedPrincipal: namedPrincipalReferences(cfg, logger)}); err != nil {
 			return nil, err
 		}
 		if len(cfg.AuthorizeCallerSubjects) > 0 {
@@ -111,6 +111,27 @@ func webApproverReferences(cfg authconfig.Config, logger *slog.Logger) *authapi.
 		return nil
 	}
 	logger.Info("web approver reference on")
+	return references
+}
+
+// namedPrincipalReferences builds the named principal reference kind (CHAOS-13945), or nil when it is off. A caller
+// that is not a principal id, or is not an admitted authorize caller, is one ERROR line and the kind stays off;
+// auth-service starts either way (product rule 3).
+func namedPrincipalReferences(cfg authconfig.Config, logger *slog.Logger) *authapi.NamedPrincipalReferences {
+	caller := cfg.AuthorizeNamedPrincipalCaller
+	if caller == "" {
+		return nil
+	}
+	if !slices.Contains(cfg.AuthorizeCallerSubjects, caller) {
+		logger.Error("named principal reference off: settings missing", "missing", authconfig.EnvAuthorizeNamedPrincipalCaller+" in "+authconfig.EnvAuthorizeCallerSubjects)
+		return nil
+	}
+	references, err := authapi.NewNamedPrincipalReferences(caller)
+	if err != nil {
+		logger.Error("named principal reference off: settings invalid", "error", err.Error())
+		return nil
+	}
+	logger.Info("named principal reference on")
 	return references
 }
 

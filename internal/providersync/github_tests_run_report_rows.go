@@ -106,7 +106,8 @@ type githubTestsRunReportPlan struct {
 	Mismatch  []githubTestsReportMismatch
 }
 
-// githubTestsReportMismatch is an aggregate kept with its parts because their cases match by identity but not by outcome.
+// githubTestsReportMismatch is an aggregate (or copy) kept with its parts because their cases match by identity but not by outcome,
+// or it holds coverage rows or a stored field its parts do not (CHAOS-13991).
 type githubTestsReportMismatch struct {
 	Index int
 	Parts []int
@@ -139,7 +140,9 @@ func githubTestsCaseIdentity(row testCaseResultRow) string {
 // start and duration, and carries durations at all (without them two reports cannot be told from two real executions of the same
 // tests, such as matrix legs, so both stay); (2) an artifact whose cases equal the
 // disjoint union of two or more other artifacts is an aggregate of its parts and is dropped, the parts staying; an aggregate whose
-// cases match its parts but whose outcomes differ is kept with all of them and reported as a mismatch; (3) the survivors are
+// cases match its parts but whose outcomes differ is kept with all of them and reported as a mismatch; in (1) and (2) an artifact
+// is dropped only when it loses nothing (githubTestsReportLossless): a copy or aggregate that holds coverage rows, or a stored field
+// its copy or parts do not hold, is kept with them and reported as a mismatch the same way (CHAOS-13991); (3) the survivors are
 // admitted whole, in the given order (ascending declared size), under the run bound, the rest skipped whole. The decision reads
 // only the parsed rows, so it does not depend on names, the provider, or the order the listing came back in.
 // parsed must already be in admission order.
@@ -183,19 +186,45 @@ func githubTestsPlanRunReports(parsed []githubTestsParsedReport) (githubTestsRun
 	}
 	byID := append([]int(nil), candidates...)
 	sort.SliceStable(byID, func(i, j int) bool { return githubTestsArtifactIDLess(parsed[byID[i]].ID, parsed[byID[j]].ID) })
+	contents := make([]githubTestsCaseCounts, len(parsed))
+	content := func(index int) (githubTestsCaseCounts, error) {
+		if contents[index] == nil {
+			counts, err := githubTestsReportContent(parsed[index])
+			if err != nil {
+				return nil, err
+			}
+			contents[index] = counts
+		}
+		return contents[index], nil
+	}
+	mismatched := make([]bool, len(parsed))
 	var kept []int
 	for _, index := range byID {
-		duplicate := false
+		duplicate, mismatchOf := false, -1
 		for _, other := range kept {
-			if timed[index] && timed[other] && githubTestsCountsEqual(copies[index], copies[other]) {
+			if !timed[index] || !timed[other] || !githubTestsCountsEqual(copies[index], copies[other]) {
+				continue
+			}
+			lossless, err := githubTestsReportLossless(parsed[index], content, index, []int{other})
+			if err != nil {
+				return githubTestsRunReportPlan{}, err
+			}
+			if lossless {
 				duplicate = true
 				break
+			}
+			if mismatchOf < 0 {
+				mismatchOf = other
 			}
 		}
 		if duplicate {
 			dropped[index] = true
 			plan.Dropped = append(plan.Dropped, githubTestsReportDrop{Index: index, Cause: githubTestsAggregateOfPartsCause})
 			continue
+		}
+		if mismatchOf >= 0 {
+			mismatched[index] = true
+			plan.Mismatch = append(plan.Mismatch, githubTestsReportMismatch{Index: index, Parts: []int{mismatchOf}})
 		}
 		kept = append(kept, index)
 	}
@@ -240,10 +269,17 @@ func githubTestsPlanRunReports(parsed []githubTestsParsedReport) (githubTestsRun
 				unionOutcomes[key] += count
 			}
 		}
-		if !disjoint || !githubTestsCountsEqual(union, identities[index]) {
+		if !disjoint || !githubTestsCountsEqual(union, identities[index]) || mismatched[index] {
 			continue
 		}
+		lossless := false
 		if githubTestsCountsEqual(unionOutcomes, outcomes[index]) {
+			var err error
+			if lossless, err = githubTestsReportLossless(parsed[index], content, index, parts); err != nil {
+				return githubTestsRunReportPlan{}, err
+			}
+		}
+		if lossless {
 			dropped[index] = true
 			plan.Dropped = append(plan.Dropped, githubTestsReportDrop{Index: index, Cause: githubTestsAggregateOfPartsCause})
 		} else {
@@ -271,4 +307,62 @@ func githubTestsPlanRunReports(parsed []githubTestsParsedReport) (githubTestsRun
 	sort.Slice(plan.Dropped, func(i, j int) bool { return plan.Dropped[i].Index < plan.Dropped[j].Index })
 	sort.Slice(plan.Mismatch, func(i, j int) bool { return plan.Mismatch[i].Index < plan.Mismatch[j].Index })
 	return plan, nil
+}
+
+// githubTestsReportLossless says whether dropping report (at index) loses nothing that the reports at others keep (CHAOS-13991): it
+// holds no coverage rows, and its suite and case rows equal, as multisets of their full stored content (githubTestsReportContent),
+// the rows of the others together.
+func githubTestsReportLossless(
+	report githubTestsParsedReport, content func(int) (githubTestsCaseCounts, error), index int, others []int,
+) (bool, error) {
+	if len(report.Coverage) > 0 {
+		return false, nil
+	}
+	own, err := content(index)
+	if err != nil {
+		return false, err
+	}
+	union := githubTestsCaseCounts{}
+	for _, other := range others {
+		counts, err := content(other)
+		if err != nil {
+			return false, err
+		}
+		for key, count := range counts {
+			union[key] += count
+		}
+	}
+	return githubTestsCountsEqual(own, union), nil
+}
+
+// githubTestsReportContent is the multiset of a report's suite and case rows, each row its stored content as the writer appends it
+// (github_tests_effects_clickhouse.go) without the fields that are per artifact by construction: a suite's suite_id (it hashes the
+// report slot, the artifact name), report_slot (the artifact name) and legacy_suite_ids (they hash the artifact id); a case's
+// suite_id and case_id (they hash the suite_id), the case keeping the name of its suite in their place. Coverage rows are not
+// listed: a report with any is never dropped.
+func githubTestsReportContent(report githubTestsParsedReport) (githubTestsCaseCounts, error) {
+	counts := githubTestsCaseCounts{}
+	suiteNames := make(map[string]string, len(report.Suites))
+	for _, suite := range report.Suites {
+		suiteNames[suite.SuiteID] = suite.SuiteName
+		suite.SuiteID, suite.ReportSlot, suite.LegacySuiteIDs = "", "", nil
+		encoded, err := json.Marshal(suite)
+		if err != nil {
+			return nil, err
+		}
+		counts["suite\x00"+string(encoded)]++
+	}
+	for _, row := range report.Cases {
+		suiteName, known := suiteNames[row.SuiteID]
+		if !known {
+			suiteName = "\x00unknown suite " + row.SuiteID
+		}
+		row.SuiteID, row.CaseID = "", ""
+		encoded, err := json.Marshal(row)
+		if err != nil {
+			return nil, err
+		}
+		counts["case\x00"+suiteName+"\x00"+string(encoded)]++
+	}
+	return counts, nil
 }

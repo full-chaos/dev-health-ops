@@ -236,7 +236,7 @@ func TestGoQualityLegsPlantedDefects(t *testing.T) {
 	}{
 		{"a leg drops the ratchets stage", []mutation{{cg, "      ci_leg_stage ratchets check_ratchets\n", ""}}, []string{"differ from `check_go.sh ci`", "check_ratchets"}},
 		{"a stage runs in two legs", []mutation{{cg, "      ci_leg_stage \"test ${2:-}/${3:-}\" check_test_shard \"${2:-}\" \"${3:-}\"\n", "      ci_leg_stage \"test ${2:-}/${3:-}\" check_test_shard \"${2:-}\" \"${3:-}\"\n      ci_leg_stage vet2 check_vet\n"}}, []string{"runs in two legs", "check_vet"}},
-		{"a race entry goes missing from the matrix", []mutation{{legs, `"args": "race 2 12"`, `"args": "race 13 12"`}}, []string{"not 1..N of N"}},
+		{"a race entry goes missing from the matrix", []mutation{{legs, `"args": "race 2 13"`, `"args": "race 14 13"`}}, []string{"not 1..N of N"}},
 		{"fail-fast comes back on", []mutation{{wf, "fail-fast: false", "fail-fast: true"}}, []string{"fail-fast must be false"}},
 		{"the fan-in can skip", []mutation{{wf, "\n    if: always()\n", "\n    if: success()\n"}}, []string{"fan-in must be always()"}},
 		{"the timeout grows past 45", []mutation{{wf, "    timeout-minutes: 45\n", "    timeout-minutes: 90\n"}}, []string{"timeout-minutes must be an integer <= 45"}},

@@ -61,7 +61,8 @@
 # first, heaviest first, each on the shard of the least modelled wall; then each package, heaviest first, on the shard whose modelled
 # wall it raises least (ties: the least package sum, the lowest index). rcap=<weight> (CHAOS-13958): a shard whose row weight (its
 # packages plus its parts) would pass rcap takes the item only when no shard fits; then the shard that takes it prints "WARN race
-# plan: <package> over the leg weight cap on leg <n>/<count>" on stderr. Pinned packages and chain=1 are not used with it. Without
+# plan: <package> over the leg weight cap on leg <n>/<count>" on stderr. rcap counts the packages of this one run (one module); check_go.sh passes it for the
+# root module only (the budget guard's scope). Pinned packages and chain=1 are not used with it. Without
 # rserial nothing above changes the split. Still a partition.
 # rwall(m, l, x): the modelled batch wall of a shard whose largest package is m and package sum l, with one more package of weight x.
 function rwall(m, l, x,   k, v) {

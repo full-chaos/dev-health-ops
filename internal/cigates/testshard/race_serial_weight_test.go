@@ -189,3 +189,74 @@ func TestTheRaceLegWeightCapKeepsTheBudgetGuardAndWarnsWhenNoLegFits(t *testing.
 	_, defMax := over(def)
 	t.Logf("race legs %d: guard max %.0f s with the cap, %.0f s without", races, defMax, offMax)
 }
+
+// CHAOS-13958: the two race plan knobs take only their documented values (GO_RACE_SERIAL_WEIGHTING: unset, 0, 1;
+// GO_RACE_LEG_WEIGHT_CAP: unset or a non-negative decimal, 0 = off); any other value, empty included, fails before any plan.
+// The leg weight cap is the budget guard's scope: the root module only; a nested module's packages are never counted or warned.
+func TestTheRacePlanKnobsRefuseEveryOtherValueAndTheCapCountsOnlyTheRootModule(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name, env string
+		accept    bool
+	}{
+		{"serial unset", "", true},
+		{"serial 0", "GO_RACE_SERIAL_WEIGHTING=0", true},
+		{"serial 1", "GO_RACE_SERIAL_WEIGHTING=1", true},
+		{"serial empty", "GO_RACE_SERIAL_WEIGHTING=", false},
+		{"serial 00", "GO_RACE_SERIAL_WEIGHTING=00", false},
+		{"serial 01", "GO_RACE_SERIAL_WEIGHTING=01", false},
+		{"serial 2", "GO_RACE_SERIAL_WEIGHTING=2", false},
+		{"serial word", "GO_RACE_SERIAL_WEIGHTING=true", false},
+		{"serial space", "GO_RACE_SERIAL_WEIGHTING= ", false},
+		{"cap unset", "", true},
+		{"cap 0", "GO_RACE_LEG_WEIGHT_CAP=0", true},
+		{"cap integer", "GO_RACE_LEG_WEIGHT_CAP=1900", true},
+		{"cap decimal", "GO_RACE_LEG_WEIGHT_CAP=2523.5", true},
+		{"cap empty", "GO_RACE_LEG_WEIGHT_CAP=", false},
+		{"cap word", "GO_RACE_LEG_WEIGHT_CAP=abc", false},
+		{"cap negative", "GO_RACE_LEG_WEIGHT_CAP=-5", false},
+		{"cap space", "GO_RACE_LEG_WEIGHT_CAP= ", false},
+		{"cap exponent", "GO_RACE_LEG_WEIGHT_CAP=1e3", false},
+	} {
+		var env []string
+		if c.env != "" {
+			env = []string{c.env}
+		}
+		out, errs, err := checkGo(t, env, "race-shard-plan", "1", "13")
+		planned := strings.Contains(out, "\t")
+		switch {
+		case c.accept && (err != nil || !planned):
+			t.Errorf("%s (%q): want a plan, got err %v\n%s", c.name, c.env, err, errs)
+		case !c.accept && (err == nil || planned || !strings.Contains(errs, "ERROR: ")):
+			t.Errorf("%s (%q): want a refusal before any plan, got err %v, planned %v\n%s", c.name, c.env, err, planned, errs)
+		}
+	}
+	// A cap of 1 fits nothing, so every root package warns; a nested module's packages (plan rows whose module is not ".")
+	// must never.
+	nested := map[string]bool{}
+	var warns []string
+	for k := 1; k <= 13; k++ {
+		out, errs, err := checkGo(t, []string{"GO_RACE_LEG_WEIGHT_CAP=1"}, "race-shard-plan", strconv.Itoa(k), "13")
+		if err != nil {
+			t.Fatalf("race-shard-plan %d 13 (cap 1): %v\n%s", k, err, errs)
+		}
+		for _, row := range strings.Split(out, "\n") {
+			if f := strings.Split(row, "\t"); len(f) >= 3 && f[0] != "." && f[0] != "" {
+				nested[f[1]] = true
+			}
+		}
+		for _, l := range strings.Split(errs, "\n") {
+			if strings.HasPrefix(l, "WARN race plan: ") {
+				warns = append(warns, l)
+			}
+		}
+	}
+	if len(nested) == 0 || len(warns) == 0 {
+		t.Fatalf("the nested-module cell held nothing: %d nested package(s), %d WARN line(s)", len(nested), len(warns))
+	}
+	for _, l := range warns {
+		if pkg := strings.Fields(strings.TrimPrefix(l, "WARN race plan: "))[0]; nested[pkg] {
+			t.Errorf("a nested module package was counted against the cap: %s", l)
+		}
+	}
+}

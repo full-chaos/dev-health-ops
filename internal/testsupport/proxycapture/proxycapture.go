@@ -152,10 +152,9 @@ func (p *captureProxy) serve() {
 func (p *captureProxy) handle(conn net.Conn) {
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(2 * time.Second))
-	buffer := make([]byte, 64<<10)
-	n, _ := conn.Read(buffer)
-	received := buffer[:n]
-	firstLine, _, _ := strings.Cut(string(received), "\r\n")
+	received := readRequest(conn)
+	firstLine, _, _ := strings.Cut(string(received), "\n")
+	firstLine = strings.TrimSuffix(firstLine, "\r")
 	p.mu.Lock()
 	if isProxyDial(firstLine) {
 		p.capture.Connections++
@@ -179,9 +178,30 @@ func (p *captureProxy) close() Capture {
 	return p.capture
 }
 
-var absoluteURLRequest = regexp.MustCompile(`^[A-Z]+ https?://`)
+const maxRequestBytes = 64 << 10
 
-// isProxyDial reports whether a connection's first line is what a client sends a forward proxy.
-func isProxyDial(firstLine string) bool {
-	return strings.HasPrefix(firstLine, "CONNECT ") || absoluteURLRequest.MatchString(firstLine)
+// readRequest reads until the end of the request headers, the size bound or the connection deadline, so a request
+// split over several TCP segments is classified on its whole request line.
+func readRequest(conn net.Conn) []byte {
+	var received []byte
+	buffer := make([]byte, 4<<10)
+	for len(received) < maxRequestBytes {
+		n, err := conn.Read(buffer)
+		received = append(received, buffer[:n]...)
+		if err != nil || bytes.Contains(received, []byte("\r\n\r\n")) || bytes.Contains(received, []byte("\n\n")) {
+			break
+		}
+	}
+	return received
+}
+
+var (
+	connectRequest     = regexp.MustCompile(`^CONNECT [^\s/]+:[0-9]+ HTTP/1\.[01]$`)
+	absoluteURLRequest = regexp.MustCompile("^[!#$%&'*+.^_`|~0-9A-Za-z-]+ (?i:https?)://[^\\s/]+\\S* HTTP/1\\.[01]$")
+)
+
+// isProxyDial reports whether a connection's request line is what a client sends a forward proxy: CONNECT to a
+// host:port authority, or any method on an absolute http(s) URL.
+func isProxyDial(requestLine string) bool {
+	return connectRequest.MatchString(requestLine) || absoluteURLRequest.MatchString(requestLine)
 }

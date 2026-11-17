@@ -139,3 +139,28 @@ func TestOnlyAConnectOrAnAbsoluteURLRequestIsAProxyDial(t *testing.T) {
 		}
 	}
 }
+
+// A real proxy request split over several writes is still one proxy dial.
+func TestASplitProxyRequestIsAProxyDial(t *testing.T) {
+	runner := func(args, env []string) ([]byte, error) {
+		conn, err := net.Dial("tcp", proxyAddress(env))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, part := range []string{"CO", "NNECT upstream.invalid:4", "317 HTTP/1.1\r\nHost: x\r\n", "\r\n"} {
+			_, _ = conn.Write([]byte(part))
+			time.Sleep(20 * time.Millisecond)
+		}
+		buffer := make([]byte, 64)
+		_, _ = conn.Read(buffer)
+		_ = conn.Close()
+		return runCaptureChild(args, env)
+	}
+	capture := Check(t, runner, func(ctx context.Context) {})
+	if os.Getenv(childEnv) != "" {
+		return
+	}
+	if capture.Connections != 1 || capture.Foreign != 0 {
+		t.Fatalf("a split CONNECT is not a single proxy dial: %+v", capture)
+	}
+}

@@ -143,11 +143,11 @@ func checkGo(t *testing.T, args []string, stream []string, rc int, weights strin
 func TestARefusedRaceSplitTableRowFailsTheLegAndThePlanBeforeAnyTest(t *testing.T) {
 	t.Parallel()
 	root := repoRoot(t)
-	for _, c := range []struct{ table, env, msg string }{
-		{"go_race_splits.tsv", "GO_RACE_SPLITS", "bad split row: malformed-row"},
-		{"go_race_split_weights.tsv", "GO_RACE_SPLIT_WEIGHTS", "bad test row: malformed-row"},
+	for _, c := range []struct{ table, path, env, msg string }{
+		{"go_race_splits.tsv", filepath.Join(root, "ci", "go_race_splits.tsv"), "GO_RACE_SPLITS", "bad split row: malformed-row"},
+		{"go_race_split_weights.tsv", filepath.Join(root, "ci", "go_race_split_weights.tsv"), "GO_RACE_SPLIT_WEIGHTS", "bad test row: malformed-row"},
 	} {
-		b, err := os.ReadFile(filepath.Join(root, "ci", c.table))
+		b, err := os.ReadFile(c.path)
 		if err != nil {
 			t.Fatal(err)
 		}

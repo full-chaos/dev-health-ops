@@ -1868,15 +1868,19 @@ race_shard_packages() {
 # check_race_shard_plan SHARD COUNT: one "module<TAB>package<TAB>key" line per package the SHARD-th race leg runs, and one
 # "module<TAB>package<TAB>key<TAB>part<TAB>parts" line per part of a race split package (CHAOS-13833).
 check_race_shard_plan() {
-  local shard="${1:-}" count="${2:-}" module_dir modpath pkg key spart sparts
+  local shard="${1:-}" count="${2:-}" module_dir modpath pkg key spart sparts plan_pkgs plan_solo
   check_race_shard_args "${shard}" "${count}"
   load_quality_selection
   for module_dir in "${MODULE_DIRS[@]}"; do
     modpath="$(cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -m)" || die "go list -m failed in ${module_dir}"
+    # The plan is captured first, so a refused table row (ci/go_race_shard.awk) fails the verb instead of planning nothing.
+    plan_pkgs="$(race_shard_packages "${shard}" "${count}" "${module_dir}" "${modpath}")" \
+      || die "race plan failed for ${module_dir} (race shard ${shard}/${count}): see the go_race_shard.awk or go list error above"
+    plan_solo="$(race_shard_packages "${shard}" "${count}" "${module_dir}" "${modpath}" solo)" \
+      || die "race solo plan failed for ${module_dir} (race shard ${shard}/${count}): see the go_race_shard.awk or go list error above"
     {
       if [ "${module_dir}" = "." ] && quality_selected . internal/providersync; then printf '%s\n' "${modpath}/internal/providersync"; fi
-      race_shard_packages "${shard}" "${count}" "${module_dir}" "${modpath}"
-      race_shard_packages "${shard}" "${count}" "${module_dir}" "${modpath}" solo
+      printf '%s\n' "${plan_pkgs}" "${plan_solo}"
     } | while IFS=$'\t' read -r pkg spart sparts; do
       [ -n "${pkg}" ] || continue
       key="${pkg#"${modpath}/"}"
@@ -1891,7 +1895,7 @@ check_race_shard_plan() {
 }
 
 check_race_shard() {
-  local shard="${1:-}" count="${2:-}" module_dir modpath pkg selected=0 missing racelog legjson ps_json="" spart sparts key names partjson
+  local shard="${1:-}" count="${2:-}" module_dir modpath pkg selected=0 missing racelog legjson ps_json="" spart sparts key names partjson plan_pkgs plan_solo
   check_race_shard_args "${shard}" "${count}"
   load_quality_selection
   local -a pkgs solo_pkgs pkgs_sec pkgs_all split_items
@@ -1914,16 +1918,22 @@ check_race_shard() {
       [ -z "${missing}" ] \
         || die "race package(s) with NO row in ci/go_race_weights.d (add each one: its measured go test -race seconds, 1 if it has no test): $(printf '%s' "${missing}" | tr '\n' ' ')"
     fi
+    # The plan is captured first (not read from a process substitution, which drops its exit status): a refused table row
+    # (ci/go_race_shard.awk) fails the leg before any go test runs instead of planning nothing and passing.
+    plan_pkgs="$(race_shard_packages "${shard}" "${count}" "${module_dir}" "${modpath}")" \
+      || die "race plan failed for ${module_dir} (race shard ${shard}/${count}): see the go_race_shard.awk or go list error above"
+    plan_solo="$(race_shard_packages "${shard}" "${count}" "${module_dir}" "${modpath}" solo)" \
+      || die "race solo plan failed for ${module_dir} (race shard ${shard}/${count}): see the go_race_shard.awk or go list error above"
     pkgs=()
     split_items=()
     while IFS=$'\t' read -r pkg spart sparts; do
       [ -n "${pkg}" ] || continue
       if [ -n "${spart}" ]; then split_items+=("${pkg}"$'\t'"${spart}"$'\t'"${sparts}"); else pkgs+=("${pkg}"); fi
-    done < <(race_shard_packages "${shard}" "${count}" "${module_dir}" "${modpath}")
+    done <<<"${plan_pkgs}"
     solo_pkgs=()
     while IFS= read -r pkg; do
       [ -n "${pkg}" ] && solo_pkgs+=("${pkg}")
-    done < <(race_shard_packages "${shard}" "${count}" "${module_dir}" "${modpath}" solo)
+    done <<<"${plan_solo}"
     pkgs_sec=()
     if security_fresh_active && [ "${module_dir}" = "." ] && [ "${#pkgs[@]}" -gt 0 ]; then
       pkgs_all=("${pkgs[@]}")

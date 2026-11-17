@@ -16,6 +16,7 @@ import (
 	"time"
 
 	gqlgraphql "github.com/99designs/gqlgen/graphql"
+	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/pdp"
@@ -52,7 +53,7 @@ VALUES (gen_random_uuid(), $1, 'cell13950 connector A', 'github', '[]'::json, '{
 
 	dataHealthDoc := readCellDocument(t, "data_health_connectors_captured.graphql")
 	savedReportsDoc := readCellDocument(t, "saved_reports_captured.graphql")
-	internal, roots := newElevatedClaimsPlane(t, fixture, dataHealthDoc, savedReportsDoc)
+	internal, roots, _ := newElevatedClaimsPlane(t, fixture, dataHealthDoc, savedReportsDoc)
 	cellRun := func(t *testing.T, internal http.Handler, document string, variables map[string]any, org, role, superuser, impersonation string) cellAnswer {
 		t.Helper()
 		roots.Store(0)
@@ -153,12 +154,20 @@ func readCellDocument(t *testing.T, name string) string {
 	return string(raw)
 }
 
+// elevatedClaimsEdge is the plane's edge carrier: the access store its user tokens are checked against and one user
+// access token of ecUser in ecOrg (a member with role admin unless the store's roles say otherwise).
+type elevatedClaimsEdge struct {
+	store *accessStore
+	user  string
+}
+
 // newElevatedClaimsPlane is newQMPlane's internal listener with the resolver reading Postgres as the provisioned role,
-// and the count of root fields run.
-func newElevatedClaimsPlane(t *testing.T, fixture *queryAPIRoleFixture, documents ...string) (http.Handler, *atomic.Int64) {
+// the count of root fields run, and its edge carrier.
+func newElevatedClaimsPlane(t *testing.T, fixture *queryAPIRoleFixture, documents ...string) (http.Handler, *atomic.Int64, elevatedClaimsEdge) {
 	t.Helper()
 	quietStdLog(t)
-	store := newQueryAPIUserStoreFrom(newAccessStore())
+	base := newAccessStore()
+	store := newQueryAPIUserStoreFrom(base)
 	m := newAccessMinter(t)
 	auth := ecEdgeAuth(t, store)
 	if err := routeAuthenticator(auth, testAccess(m.keys, nil, accessTestNow).opts); err != nil {
@@ -192,7 +201,52 @@ func newElevatedClaimsPlane(t *testing.T, fixture *queryAPIRoleFixture, document
 	if internalListener == nil {
 		t.Fatal("expected the internal listener")
 	}
-	return internalListener.server.Handler, roots
+	return internalListener.server.Handler, roots, elevatedClaimsEdge{store: base, user: m.mint(ecUser, nil, nil)}
+}
+
+// The operator gate through the edge carrier (the check the header rows lost when the header carrier began to refuse an
+// operator role): a user access token whose membership role is admin reads data health for ITS organization only; the
+// same token with role viewer is refused by the operator gate before any read.
+func TestDataHealthOperatorThroughTheEdgeTokenSeesOnlyItsOwnOrg(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
+	defer cancel()
+	fixture := startQueryAPIRoleFixture(t, ctx)
+	if _, err := fixture.admin.Exec(ctx, `
+INSERT INTO sync_configurations (id, org_id, name, provider, sync_targets, sync_options, is_active, created_at, updated_at)
+VALUES (gen_random_uuid(), $1, 'cell13950 edge org connector', 'github', '[]'::json, '{}'::json, TRUE, now(), now()),
+       (gen_random_uuid(), $2, 'cell13950 foreign connector', 'jira', '[]'::json, '{}'::json, TRUE, now(), now())`, ecOrg.String(), pathsOrg); err != nil {
+		t.Fatalf("seed sync_configurations: %v", err)
+	}
+	dataHealthDoc := readCellDocument(t, "data_health_connectors_captured.graphql")
+	internal, roots, edge := newElevatedClaimsPlane(t, fixture, dataHealthDoc)
+	run := func() cellAnswer {
+		t.Helper()
+		body, err := json.Marshal(map[string]any{"query": dataHealthDoc, "variables": map[string]any{"teamId": "ALL"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		request := httptest.NewRequest(http.MethodPost, runOperationPath, strings.NewReader(string(body)))
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("Authorization", "Bearer "+edge.user)
+		roots.Store(0)
+		recorder := httptest.NewRecorder()
+		internal.ServeHTTP(recorder, request)
+		return cellAnswer{code: recorder.Code, body: recorder.Body.String(), roots: int(roots.Load())}
+	}
+
+	operator := run()
+	t.Logf("edge token, membership role admin: %s", operator)
+	if operator.code != http.StatusOK || strings.Contains(operator.body, `"errors"`) || !strings.Contains(operator.body, "cell13950 edge org connector") ||
+		strings.Contains(operator.body, "cell13950 foreign connector") || strings.Contains(operator.body, "jira") {
+		t.Fatalf("an operator through the edge token: %d %s, want only its own org's connectors", operator.code, operator.body)
+	}
+
+	edge.store.roles = map[[2]uuid.UUID]string{{ecUser, ecOrg}: "viewer"}
+	viewer := run()
+	t.Logf("edge token, membership role viewer: %s", viewer)
+	if !strings.Contains(viewer.body, "Data health requires operator access") || strings.Contains(viewer.body, "connector") {
+		t.Fatalf("a viewer through the edge token: %d %s, want the operator refusal before any read", viewer.code, viewer.body)
+	}
 }
 
 // cellRunOnce posts document to /query/run-operation on the internal listener with the four internal identity headers.

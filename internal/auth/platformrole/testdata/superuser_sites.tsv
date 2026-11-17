@@ -8,6 +8,8 @@
 # read it only to decide whether the request needs the full user read (a claim peek); it may widen a read and grants
 # nothing, and Scope.Impersonation decides the session by admin.impersonate. The *.Holds methods are the derivation of the
 # actions from the flag. Everything else here is a claim, a wire field, a writer or a row scan.
+# carrierElevatedClaims reads the X-DH-Internal-* header carrier's stated superuser flag only to REFUSE it (403 elevated_claim
+# on the MCP and internal listeners; it grants nothing), and annotateCarrierSpan records it as a bounded span attribute.
 # TestEverySuperuserDecisionSiteIsListed holds this list.
 # file	function	reads
 internal/adminops/users.go	runUsersDelete	2
@@ -59,8 +61,9 @@ internal/queryapi/graph/schema.resolvers.go	queryResolver.ProductTelemetryPlatfo
 internal/queryapi/producttelemetry/platform.go	Principal.Holds	1
 internal/queryapi/principal/edge_access.go	EdgeVerifier.VerifyRouted	1
 internal/queryapi/principal/verifier.go	enforceSuperuserDiscipline	2
+internal/queryapi/server/carrier_claims.go	annotateCarrierSpan	1
+internal/queryapi/server/carrier_claims.go	carrierElevatedClaims	1
 internal/queryapi/server/graphql_edge_route.go	authenticateGraphQLEdge	1
 internal/queryapi/server/internal_auth.go	checkEdgeCarrier	2
-internal/queryapi/server/mcp_route.go	mcpAuthenticate	1
 internal/testsupport/venueoracle/gosubstrate.go	Venue.mintGo	1
 internal/testsupport/venueoracle/gosubstrate.go	legacyClaims.recordedIdentity	1

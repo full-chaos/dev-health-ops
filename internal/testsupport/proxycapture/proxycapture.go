@@ -31,11 +31,16 @@ const Canary = "proxycapture-canary-credential"
 
 const childEnv = "PROXYCAPTURE_CHILD"
 
-// Capture is what reached the capture proxy while the child ran.
+// Capture is what reached the capture proxy while the child ran. Connections and FirstLines count proxy dials only (a
+// CONNECT request, or an HTTP request for an absolute URL). Any other connection (for example the HTTP/2 preface of an
+// unrelated gRPC client that redialed a reused 127.0.0.1 port the capture listener now holds) is a foreign dial: it is
+// counted in Foreign and ForeignLines and never fails a test.
 type Capture struct {
-	Connections int
-	SawCanary   bool
-	FirstLines  []string
+	Connections  int
+	Foreign      int
+	SawCanary    bool
+	FirstLines   []string
+	ForeignLines []string
 }
 
 // Runner runs the test binary again with args and env and returns its combined output. The calling package's _test.go
@@ -70,9 +75,12 @@ func Check(t *testing.T, run Runner, send func(ctx context.Context)) Capture {
 	return proxy.close()
 }
 
-// AssertNothingReached fails t when any connection reached the capture proxy.
+// AssertNothingReached fails t when any proxy dial reached the capture proxy.
 func (c Capture) AssertNothingReached(t *testing.T) {
 	t.Helper()
+	if c.Foreign != 0 {
+		t.Logf("%d foreign connection(s) reached the capture port and are not proxy dials; first lines: %q", c.Foreign, c.ForeignLines)
+	}
 	if c.Connections != 0 {
 		t.Fatalf("%d connection(s) reached the environment proxy (credential seen: %v); first lines: %q", c.Connections, c.SawCanary, c.FirstLines)
 	}
@@ -149,10 +157,15 @@ func (p *captureProxy) handle(conn net.Conn) {
 	received := buffer[:n]
 	firstLine, _, _ := strings.Cut(string(received), "\r\n")
 	p.mu.Lock()
-	p.capture.Connections++
-	p.capture.FirstLines = append(p.capture.FirstLines, firstLine)
-	if bytes.Contains(received, []byte(Canary)) {
-		p.capture.SawCanary = true
+	if isProxyDial(firstLine) {
+		p.capture.Connections++
+		p.capture.FirstLines = append(p.capture.FirstLines, firstLine)
+		if bytes.Contains(received, []byte(Canary)) {
+			p.capture.SawCanary = true
+		}
+	} else {
+		p.capture.Foreign++
+		p.capture.ForeignLines = append(p.capture.ForeignLines, firstLine)
 	}
 	p.mu.Unlock()
 	_, _ = fmt.Fprint(conn, "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
@@ -164,4 +177,11 @@ func (p *captureProxy) close() Capture {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.capture
+}
+
+var absoluteURLRequest = regexp.MustCompile(`^[A-Z]+ https?://`)
+
+// isProxyDial reports whether a connection's first line is what a client sends a forward proxy.
+func isProxyDial(firstLine string) bool {
+	return strings.HasPrefix(firstLine, "CONNECT ") || absoluteURLRequest.MatchString(firstLine)
 }

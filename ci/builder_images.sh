@@ -16,9 +16,16 @@ tsv="${2:-ci/builder_images.tsv}"
 [ -r "${tsv}" ] || { echo "::error::${tsv} is missing or unreadable" >&2; exit 1; }
 
 seen=0
-while IFS=$'\t' read -r name ref extra; do
-  case "${name}" in ''|'#'*) continue ;; esac
-  [ -z "${extra:-}" ] && [ -n "${ref:-}" ] || { echo "::error::${tsv}: row '${name}' needs exactly <name><TAB><ref>" >&2; exit 1; }
+tab=$'\t'
+while IFS= read -r line; do
+  case "${line}" in ''|'#'*) continue ;; esac
+  # Split on the first tab by hand: a tab is IFS whitespace, so `IFS=$'\t' read` collapses adjacent tabs
+  # and would accept an empty field.
+  name="${line%%"${tab}"*}"
+  ref="${line#*"${tab}"}"
+  case "${line}" in *"${tab}"*) ;; *) ref="" ;; esac
+  case "${ref}" in *"${tab}"*) ref="" ;; esac
+  [ -n "${name}" ] && [ -n "${ref}" ] || { echo "::error::${tsv}: row '${line}' needs exactly <name><TAB><ref>, both non-empty" >&2; exit 2; }
   grep -qE '^[a-z0-9._-]+/[a-z0-9._/-]+:[A-Za-z0-9._-]+@sha256:[0-9a-f]{64}$' <<<"${ref}" \
     || { echo "::error::${tsv}: '${ref}' must be <namespace>/<repo>:<tag>@sha256:<64 hex>" >&2; exit 1; }
   without_digest="${ref%@*}"

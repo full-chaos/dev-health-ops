@@ -432,6 +432,7 @@ internal/platform/removedenv	census_test.go	cmd	tree	*.go
 internal/platform/removedenv	census_test.go	internal	tree	*.go
 internal/platform/secrets	declared_fields_test.go	internal	tree	*.go
 internal/platform/secrets	envreads_test.go	.	tree	*.go
+internal/platform/shell	startup_flush_test.go	unexpressed	-	-
 internal/platform/timeoutclass	timeoutclass_test.go	internal/platform/timeoutclass	dir	*
 internal/processreadiness	readiness_timeout_test.go	internal/processreadiness	dir	*
 internal/providerfoundation	classify_call_sites_test.go	unexpressed	-	-

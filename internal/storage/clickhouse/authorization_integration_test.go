@@ -115,7 +115,7 @@ func (h *postureHarness) newUser(t *testing.T, grants ...string) driver.Conn {
 const (
 	grantTeamsExact      = "GRANT SELECT, INSERT ON default.teams"
 	grantIdentitiesExact = "GRANT SELECT, INSERT, ALTER DELETE ON default.identities"
-	// The optional ALTER DELETE on teams: prod's login still holds it until the revoke.
+	// ALTER DELETE on teams: revoked in prod, refused by the posture.
 	grantTeamsDelete = "GRANT ALTER DELETE ON default.teams"
 
 	// POST /teams/import's drift-projector tables (CHAOS-6311).
@@ -214,22 +214,61 @@ func (h *postureHarness) grantStatementsLogin(t *testing.T, extra ...string) dri
 	return h.newUser(t, append(grants, extra...)...)
 }
 
-// The login the users.d render declares (teams SELECT, INSERT) passes, and so
-// does the same login still holding ALTER DELETE on teams (prod until the
-// revoke). ALTER DELETE on any other table still fails.
-func TestCheckPostureAcceptsTeamsAlterDeleteHeldOrAbsent(t *testing.T) {
+// The login the users.d render declares (teams SELECT, INSERT) passes; the
+// same login holding ALTER DELETE on teams is refused by name.
+func TestCheckPostureRefusesTeamsAlterDelete(t *testing.T) {
 	h := startPostureHarness(t)
 	if err := CheckAPIClickHouseAuthorization(h.ctx, h.grantStatementsLogin(t)); err != nil {
 		t.Fatalf("the GrantStatements login must pass: %v", err)
 	}
-	if err := CheckAPIClickHouseAuthorization(h.ctx, h.grantStatementsLogin(t, grantTeamsDelete)); err != nil {
-		t.Fatalf("the GrantStatements login plus ALTER DELETE on teams must pass: %v", err)
+	err := CheckAPIClickHouseAuthorization(h.ctx, h.grantStatementsLogin(t, grantTeamsDelete))
+	if !errors.Is(err, ErrPostureMismatch) || !strings.Contains(err.Error(), "default.teams has unexpected ALTER DELETE") {
+		t.Fatalf("ALTER DELETE on teams must be refused by name, got: %v", err)
 	}
-	for _, extra := range []string{"GRANT ALTER DELETE ON default.other_table", "GRANT ALTER DELETE ON default.team_memberships"} {
-		err := CheckAPIClickHouseAuthorization(h.ctx, h.grantStatementsLogin(t, grantTeamsDelete, extra))
-		if !errors.Is(err, ErrPostureMismatch) {
-			t.Fatalf("%q: want ErrPostureMismatch, got: %v", extra, err)
+}
+
+// The prod roll step: a login with the old grant (ALTER DELETE on teams) loses
+// it by REVOKE, and the server then holds exactly the posture: no partial
+// revoke is left behind, and readiness passes on the connection that was open
+// across the revoke (go-api's pool) and on a new one.
+func TestRevokeTeamsAlterDeleteLeavesTheAPIPosture(t *testing.T) {
+	h := startPostureHarness(t)
+	open := h.grantStatementsLogin(t, grantTeamsDelete)
+	user := fmt.Sprintf("posture_test_user_%d", h.userCounter)
+	if err := h.admin.Exec(h.ctx, "REVOKE ALTER DELETE ON default.teams FROM "+user); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := h.admin.Query(h.ctx, "SHOW GRANTS FOR "+user)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var line string
+		if err := rows.Scan(&line); err != nil {
+			t.Fatal(err)
 		}
+		if strings.HasPrefix(strings.ToUpper(line), "REVOKE") {
+			t.Errorf("the revoke left a partial-revoke line: %s", line)
+		}
+		if strings.Contains(line, " ON default.teams ") && line != grantTeamsExact+" TO "+user {
+			t.Errorf("teams line %q, want %q", line, grantTeamsExact+" TO "+user)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckAPIClickHouseAuthorization(h.ctx, open); err != nil {
+		t.Errorf("the connection open across the revoke must pass: %v", err)
+	}
+	fresh := url.URL{Scheme: h.instanceURI.Scheme, User: url.UserPassword(user, "posture-test-password"), Host: h.instanceURI.Host, Path: h.instanceURI.Path}
+	conn, err := Open(h.ctx, DefaultConfig(fresh.String()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if err := CheckAPIClickHouseAuthorization(h.ctx, conn); err != nil {
+		t.Errorf("a new connection after the revoke must pass: %v", err)
 	}
 }
 

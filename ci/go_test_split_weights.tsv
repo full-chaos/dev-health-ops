@@ -18,6 +18,7 @@
 # - 13 test legs (CHAOS-13800): a row more than 10 % under its measured value is raised to it, and a listed test of 2 s or more (warm) or
 #   10 s or more (cold) gets a row. Measured = round(W * e/E), e the largest elapsed of the test and its subtests, the larger of the median
 #   over the full push runs after the shared build cache (43615136198, 43615706484, 43619868597, 43639842320, 43659268009) and cold run 43554424993.
+# - CHAOS-13953 (internal/cigates/splitshards, 5 parts): median over the warm push runs 43676204152, 44105231987, 44062558493, 43963804592 (round(W*e/E), e the largest elapsed of the test and its subtests, W the leg's go test ok seconds; mean of the middle two); only TestTheAuthAllLegsFormPrintsEachLegsOwnList was more than 10 % under it and is raised, no row is lowered; cold: not measured, no go.sum change since 5 parts.
 # Rows: every listed test of 2 s or more warm or 10 s or more cold, and each package's heaviest tests up to its part count (no part can be empty).
 # A row must name a test `go test -list` reports: renaming or removing a measured test needs its row edited in the same change
 # (the leg and internal/cigates/testshard fail otherwise). Refresh: the same reduction over newer runs; values only cost balance.
@@ -279,7 +280,7 @@ internal/cigates/splitshards	TestEveryTestRunsInExactlyOneSplitPackageShard	103
 internal/cigates/splitshards	TestListingCacheKeyHoldsTagsAndRace	58
 internal/cigates/splitshards	TestSplitByTestManifestRefusals	19
 internal/cigates/splitshards	TestSplitByTestPartsAreExactAndPlantedDefectsAreCaught	91
-internal/cigates/splitshards	TestTheAuthAllLegsFormPrintsEachLegsOwnList	101
+internal/cigates/splitshards	TestTheAuthAllLegsFormPrintsEachLegsOwnList	148
 internal/cigates/testshard	TestACachedPackageInTheTestLegsOwnEventsFailsOnlyTheMergeGroupLeg	8
 internal/cigates/testshard	TestACachedProvidersyncRaceSliceFailsOnlyTheMergeGroupRaceLeg	5
 internal/cigates/testshard	TestACachedSecurityPackageFailsTheMergeGroupLeg	2

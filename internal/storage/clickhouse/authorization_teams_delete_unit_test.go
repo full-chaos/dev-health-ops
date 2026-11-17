@@ -35,15 +35,19 @@ func TestTeamsWithoutAlterDeleteIsAccepted(t *testing.T) {
 	}
 }
 
-func TestTeamsWithAlterDeleteIsStillAccepted(t *testing.T) {
+// Prod revoked ALTER DELETE on teams from dho_api_ch: a login that still holds it is refused by name, whether
+// the privilege sits on the teams line or on a line of its own.
+func TestTeamsWithAlterDeleteIsRefused(t *testing.T) {
 	for _, projectScope := range []bool{false, true} {
 		posture := APIPostureFor("default", projectScope)
-		if err := checkWith(t, posture, withTeamsLine(posture, teamsSelectInsertDelete)); err != nil {
-			t.Errorf("projectScope=%v: teams SELECT, INSERT, ALTER DELETE (prod today) must pass: %v", projectScope, err)
-		}
-		split := withTeamsLine(posture, teamsSelectInsert, "GRANT ALTER DELETE ON default.teams TO dho_api_ch")
-		if err := checkWith(t, posture, split); err != nil {
-			t.Errorf("projectScope=%v: ALTER DELETE on teams on its own line must pass: %v", projectScope, err)
+		for name, lines := range map[string][]string{
+			"one line":   withTeamsLine(posture, teamsSelectInsertDelete),
+			"split line": withTeamsLine(posture, teamsSelectInsert, "GRANT ALTER DELETE ON default.teams TO dho_api_ch"),
+		} {
+			err := checkWith(t, posture, lines)
+			if !errors.Is(err, ErrPostureMismatch) || err.Error() != ErrPostureMismatch.Error()+": default.teams has unexpected ALTER DELETE" {
+				t.Errorf("projectScope=%v %s: want ErrPostureMismatch naming only teams' ALTER DELETE, got %v", projectScope, name, err)
+			}
 		}
 	}
 }
@@ -147,16 +151,15 @@ func TestGrantStatementsRenderTeamsWithoutAlterDelete(t *testing.T) {
 	}
 }
 
-// Only teams may hold ALTER DELETE without declaring it: the optional delete is one privilege on one table.
-func TestOnlyTeamsHasTheOptionalDelete(t *testing.T) {
-	var optional []TableGrant
+// identities is the one table this login deletes from (Store.DeleteIdentity's lightweight DELETE).
+func TestOnlyIdentitiesAllowsDelete(t *testing.T) {
+	var deletable []string
 	for _, table := range APIPosture("default").RequiredTables {
-		if table.OptionalDelete {
-			optional = append(optional, table)
+		if table.AllowDelete {
+			deletable = append(deletable, table.Table)
 		}
 	}
-	want := TableGrant{Database: "default", Table: "teams", AllowInsert: true, AllowSelect: true, OptionalDelete: true}
-	if len(optional) != 1 || optional[0] != want {
-		t.Fatalf("optional-delete rows %+v, want exactly %+v", optional, want)
+	if len(deletable) != 1 || deletable[0] != "identities" {
+		t.Fatalf("tables with AllowDelete %q, want only identities", deletable)
 	}
 }

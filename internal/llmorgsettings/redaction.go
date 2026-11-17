@@ -23,22 +23,19 @@ func (c Credentials) LogValue() slog.Value { return secrets.LogRedacted(c.redact
 // print and log forms show the api_key as the redaction marker.
 type orgSettings map[string]string
 
-// redacted hides every api_key row (the default's and each purpose override's)
-// and any base_url row that carries a stored key, and drops the reserved
-// key-in-base_url mark so it never prints as a key.
+// redacted hides every api_key row and every base_url row (the default's and
+// each purpose override's) and drops the reserved key-in-base_url mark. A
+// base_url is hidden whatever it holds: no print can tell a clean url from one
+// that carries a key the map does not hold (skipped or projected away).
 func (s orgSettings) redacted() map[string]string {
-	marked := keyInBaseURLMarked(s)
 	out := make(map[string]string, len(s))
 	for key, value := range s {
 		switch {
 		case key == keyInBaseURLMark:
 			continue
-		case key == keyAPIKey || strings.HasSuffix(key, ":"+keyAPIKey):
+		case key == keyAPIKey || strings.HasSuffix(key, ":"+keyAPIKey),
+			key == keyBaseURL || strings.HasSuffix(key, ":"+keyBaseURL):
 			value = secrets.RedactString(value)
-		case key == keyBaseURL || strings.HasSuffix(key, ":"+keyBaseURL):
-			if marked || storedKeyInBaseURL(s, value) {
-				value = secrets.RedactString(value)
-			}
 		}
 		out[key] = value
 	}

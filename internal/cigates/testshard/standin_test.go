@@ -39,6 +39,13 @@ if [ "$1" != "test" ]; then exec "%[1]s" "$@"; fi
 command -v flock >/dev/null || { printf 'stand-in go: flock is missing, the call logs cannot be written whole\n' >&2; exit 97; }
 case " $* " in *" -list "*)
   { flock 9 || exit 97; printf '%%s\n' "$*" >> "${FAKE_GO_LIST_LOG}"; } 9>>"${FAKE_GO_LIST_LOG}.lock"
+  # FAKE_GO_RACE_SPLIT_LISTS (CHAOS-13833): the -race listing of each race split package (ci/go_race_splits.tsv), derived from its
+  # race build's test files without compiling (raceListedTests): <dir>/<key with / as __>.list, served for a -race listing of it.
+  if [ -n "${FAKE_GO_RACE_SPLIT_LISTS:-}" ] && [[ " $* " == *" -race "* ]]; then
+    split_key="${@: -1}"
+    split_key="${split_key#github.com/full-chaos/dev-health-ops/}"
+    if [ -f "${FAKE_GO_RACE_SPLIT_LISTS}/${split_key//\//__}.list" ]; then cat "${FAKE_GO_RACE_SPLIT_LISTS}/${split_key//\//__}.list"; exit 0; fi
+  fi
   # FAKE_GO_LIST_REPLAY: the real go test -race -list output, replayed only for a call that carries BOTH -race and -list .*
   if [ -n "${FAKE_GO_LIST_REPLAY:-}" ] && [[ " $* " == *" -race "* ]] && [[ " $* " == *" -list .* "* ]]; then
     cat "${FAKE_GO_LIST_REPLAY}"
@@ -233,11 +240,13 @@ func runCheckGoIn(t *testing.T, root string, extraEnv []string, fail bool, args 
 	if err := os.WriteFile(replay, providersyncRaceListing(t), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	splitLists := filepath.Join(dir, "race_split_lists")
+	writeRaceSplitLists(t, splitLists)
 	env := append(pinnedDeadlineEnv(),
 		reportOnlyEnv+"=",
 		"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"FAKE_GO_LOG="+log, "FAKE_GO_LIST_LOG="+listLog, "TMPDIR="+filepath.Join(dir, "tmp"),
-		"GO_TEST_JSON_DIR="+filepath.Join(dir, "json"), "FAKE_GO_LIST_REPLAY="+replay, "FAKE_GO_LIST_CACHE="+goListCache, "FAKE_GO_LIST_CACHE_ROOT="+repoRoot(t))
+		"GO_TEST_JSON_DIR="+filepath.Join(dir, "json"), "FAKE_GO_LIST_REPLAY="+replay, "FAKE_GO_RACE_SPLIT_LISTS="+splitLists, "FAKE_GO_LIST_CACHE="+goListCache, "FAKE_GO_LIST_CACHE_ROOT="+repoRoot(t))
 	env = append(env, extraEnv...)
 	if fail {
 		env = append(env, "FAKE_GO_FAIL=1")

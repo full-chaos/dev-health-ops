@@ -147,6 +147,8 @@ func runLegWithFakeGo(t *testing.T, leg string, shard int, mode string) (cmdResu
 			listing = append(listing, f[1])
 		}
 	}
+	// CHAOS-13833: the race leg cuts its race split packages by ci/go_race_split_weights.tsv the same way.
+	listing = append(listing, raceSplitRowNames(t, repo)...)
 	listPath := filepath.Join(work, "listing.txt")
 	if err := os.WriteFile(listPath, []byte(strings.Join(listing, "\n")+"\n"), 0o644); err != nil {
 		t.Fatal(err)

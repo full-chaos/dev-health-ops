@@ -2,6 +2,7 @@ package testshard_test
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"testing"
@@ -44,13 +45,22 @@ func TestEveryRaceLegIsPredictedAtOrUnderSeventyFivePercentOfTheJobCap(t *testin
 	for k := 1; k <= races; k++ {
 		load := providersyncSliceAtFiveS * 5 / float64(races)
 		for _, row := range planKeys(t, "race-shard-plan", k, races) {
-			key := strings.Split(row, "\t")[2]
+			f := strings.Split(row, "\t")
+			key := f[2]
 			if key == "internal/providersync" {
 				continue
 			}
 			w, ok := weights[key]
 			if !ok {
 				w = 1
+			}
+			// CHAOS-13833: a part of a race split package weighs ceil(package weight / parts), as ci/go_race_shard.awk places it.
+			if len(f) == 5 {
+				parts, err := strconv.Atoi(f[4])
+				if err != nil || parts < 2 {
+					t.Fatalf("race-shard-plan %d %d: part row %q has no part count", k, races, row)
+				}
+				w = math.Ceil(w / float64(parts))
 			}
 			load += w
 		}

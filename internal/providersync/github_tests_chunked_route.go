@@ -1572,8 +1572,11 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		}
 		after.OpenAfterStarted = row.StartedAt.UTC().Format(time.RFC3339Nano)
 		after.OpenAfterRunID = row.RunID
-		if err := emitCursor(before, after, CompleteRouteBatch{Effects: effects}, false); err != nil {
-			return err
+		// The skip is committed when the emission returns nil or the durable continuation that ends the attempt;
+		// only then is it recorded, once, since the resume starts after it.
+		emitErr := emitCursor(before, after, CompleteRouteBatch{Effects: effects}, false)
+		if emitErr != nil && !errors.Is(emitErr, ErrChunkContinuation) {
+			return emitErr
 		}
 		cursor = after
 		client.Metrics.RecordOpenRunSkipped(claim.Provider, claim.Dataset, reason)
@@ -1583,7 +1586,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 			logging.ProviderIDAttr("run", row.RunID), "reason", reason, "status", status, "route", route,
 			"skipped", cursor.OpenSkipped,
 		)
-		return nil
+		return emitErr
 	}
 	collectOpenRuns := func() error {
 		if claim.SinceAt == nil {

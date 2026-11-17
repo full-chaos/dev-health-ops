@@ -499,3 +499,205 @@ func TestGitHubTestsChunkCursorRejectsNegativeSkipCounters(t *testing.T) {
 		}
 	}
 }
+
+// openSkipContinuationShapes are the per-run skip classes of the by-id read and the jobs pages.
+var openSkipContinuationShapes = []struct {
+	name, reason string
+	reply        openSkipReply
+	jobsOnly     bool
+}{
+	{"gone", "gone", openSkipReply{status: 410, body: openSkipPoisonBody}, false},
+	{"unprocessable", "unprocessable", openSkipReply{status: 422, body: openSkipPoisonBody}, false},
+	{"conflict", "conflict", openSkipReply{status: 409, body: openSkipPoisonBody}, false},
+	{"client_error", "client_error", openSkipReply{status: 451, body: openSkipPoisonBody}, false},
+	{"invalid_payload", "invalid_payload", openSkipReply{status: 200, body: "poison-body-text not json"}, false},
+	{"transient_5xx", "transient", openSkipReply{status: 502, body: openSkipPoisonBody}, false},
+	{"transient_timeout", "transient", openSkipReply{err: context.DeadlineExceeded}, false},
+	{"jobs_not_found", "jobs_not_found", openSkipReply{status: 404, body: openSkipPoisonBody}, true},
+}
+
+// 13966 r1 P1-a: a skip committed by the emission that ends the attempt (the chunk-count or wall-time bound returns a
+// durable continuation after the commit) still logs its WARN line and steps the counter, and the resume does not
+// record it again: exactly once over the unit.
+func TestOpenPhaseSkipTelemetrySurvivesAContinuation(t *testing.T) {
+	repoID := listingRepoID(t)
+	for _, source := range []string{"run", "jobs"} {
+		for _, bound := range []string{"count", "wall"} {
+			for _, shape := range openSkipContinuationShapes {
+				if shape.jobsOnly && source != "jobs" {
+					continue
+				}
+				t.Run(source+"/"+bound+"/"+shape.name, func(t *testing.T) {
+					records := captureMembershipLogs(t)
+					now := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
+					claim, session := completeRouteSessionFor(t, now, false, "github", "cicd")
+					fake := newListingFake(t, nil)
+					reader := openSkipStore(repoID, fake, 8100, 66)
+					doer := newOpenSkipDoer(fake)
+					poison := 8163 // the 64th open emission: the default chunk-count bound
+					if bound == "wall" {
+						poison = 8100
+					}
+					if source == "run" {
+						doer.runs[poison] = []openSkipReply{shape.reply}
+					} else {
+						doer.jobs[poison] = []openSkipReply{shape.reply}
+					}
+					store := newChunkMemoryStore()
+					executor := completeRouteExecutor(now, GitHubTestsRouteHandler{OpenRuns: reader}, store, &memoryEffectSink{})
+					executor.Credentials.Repository = &trackingCompleteRouteCredentialRepository{provider: "github"}
+					executor.Credentials.Decryptor = chunkedCredentialDecryptor{}
+					executor.Doer = fakehttp.Client(doer)
+					executor.BudgetLimits = map[CostClass]int{claim.CostClass: 10}
+					executor.Metrics = providerfoundation.NewMetrics()
+					if bound == "wall" {
+						executor.Now = func() time.Time {
+							if doer.hitsOf(poison) > 0 {
+								return now.Add(46 * time.Second)
+							}
+							return now
+						}
+					}
+					descriptor, _ := Descriptor("github", "cicd")
+					_, err := executor.Execute(context.Background(), session, descriptor)
+					var stopped ChunkContinuationError
+					if !errors.As(err, &stopped) {
+						t.Fatalf("first attempt err=%v, want the continuation that ends the attempt", err)
+					}
+					checkpoint, err := store.LoadChunkCheckpoint(context.Background(), claim, now)
+					if err != nil {
+						t.Fatal(err)
+					}
+					cursor, err := decodeGitHubTestsChunkCursor(checkpoint.NextCursor)
+					if err != nil || cursor.OpenSkipped != 1 {
+						t.Fatalf("premise: committed cursor skipped=%d err=%v, want the skip committed by the bounded emission", cursor.OpenSkipped, err)
+					}
+					for attempt := 0; attempt < 4; attempt++ {
+						_, err = executor.Execute(context.Background(), session, descriptor)
+						if !errors.Is(err, ErrChunkContinuation) {
+							break
+						}
+					}
+					if err != nil {
+						t.Fatalf("resume err=%v", err)
+					}
+					var rendered bytes.Buffer
+					if err := executor.Metrics.WritePrometheus(&rendered); err != nil {
+						t.Fatal(err)
+					}
+					lines := openSkipLines(*records)
+					if len(lines) != 1 || lines[0]["run"] != strconv.Itoa(poison) || lines[0]["reason"] != shape.reason {
+						t.Fatalf("stop=%s: skip lines %v, want exactly one for run %d reason %s", stopped.Reason, lines, poison, shape.reason)
+					}
+					want := fmt.Sprintf(`dev_health_provider_open_run_skipped_total{provider="github",dataset="cicd",reason=%q} 1`, shape.reason)
+					if !strings.Contains(rendered.String(), want) {
+						t.Fatalf("stop=%s: missing %q in:\n%s", stopped.Reason, want, rendered.String())
+					}
+					if total := strings.Count(rendered.String(), "dev_health_provider_open_run_skipped_total{"); total != 1 {
+						t.Fatalf("stop=%s: %d skip counter series, want 1:\n%s", stopped.Reason, total, rendered.String())
+					}
+				})
+			}
+		}
+	}
+}
+
+// 13966 r1 P1-a: an emission of a skip that fails with anything but the durable continuation was not committed, so it
+// records nothing: no WARN line, no counter step.
+func TestOpenPhaseUncommittedSkipRecordsNothing(t *testing.T) {
+	repoID := listingRepoID(t)
+	records := captureMembershipLogs(t)
+	fake := newListingFake(t, makeListingRuns(1, 1, listingSince, time.Minute))
+	reader := openSkipStore(repoID, fake, 7600, 3)
+	doer := newOpenSkipDoer(fake)
+	doer.runs[7601] = []openSkipReply{{status: 410, body: openSkipPoisonBody}}
+	metrics := providerfoundation.NewMetrics()
+	client := githubTestsClient(t, fakehttp.Client(doer))
+	client.Metrics = metrics
+	sinkDown := errors.New("sink refused the chunk")
+	err := GitHubTestsRouteHandler{OpenRuns: reader}.CollectChunks(context.Background(), openWindowClaim(), providerfoundation.Credential{}, client,
+		time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC), "", func(emission ChunkRouteEmission) error {
+			after, decodeErr := decodeGitHubTestsChunkCursor(emission.CursorAfter)
+			if decodeErr != nil {
+				t.Fatal(decodeErr)
+			}
+			if after.OpenSkipped > 0 {
+				return sinkDown
+			}
+			return nil
+		})
+	if !errors.Is(err, sinkDown) {
+		t.Fatalf("err=%v, want the sink error returned unchanged", err)
+	}
+	if lines := openSkipLines(*records); len(lines) != 0 {
+		t.Fatalf("an uncommitted skip was logged: %v", lines)
+	}
+	var rendered bytes.Buffer
+	if err := metrics.WritePrometheus(&rendered); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(rendered.String(), "dev_health_provider_open_run_skipped_total{") {
+		t.Fatalf("an uncommitted skip was counted:\n%s", rendered.String())
+	}
+}
+
+// 13966 r1 P1-b: a run payload with data after the run object does not decode as one run: it is skipped as
+// invalid_payload and nothing is written for it. Trailing whitespace is a valid payload.
+func TestOpenPhaseSkipsARunPayloadWithTrailingData(t *testing.T) {
+	repoID := listingRepoID(t)
+	for _, dataset := range []string{"tests", "cicd"} {
+		for _, suffix := range []string{"{}", "[]", `"extra"`, "123", "true", "null", "broken", " \n"} {
+			t.Run(fmt.Sprintf("%s/suffix %q", dataset, suffix), func(t *testing.T) {
+				records := captureMembershipLogs(t)
+				fake := newListingFake(t, makeListingRuns(1, 1, listingSince, time.Minute))
+				reader := openSkipStore(repoID, fake, 8200, 3)
+				doer := newOpenSkipDoer(fake)
+				doer.runs[8201] = []openSkipReply{{status: 200, body: fake.byID[8201].json() + suffix}}
+				claim := openWindowClaim()
+				claim.Dataset = dataset
+				capability, _ := Capability("github", dataset)
+				claim.CostClass = capability.CostClass
+				walk := walkOpenSkip(t, GitHubTestsRouteHandler{OpenRuns: reader}, claim, doer, 0)
+				if walk.err != nil || !walk.finalSeen {
+					t.Fatalf("unit err=%v final=%v, want success", walk.err, walk.finalSeen)
+				}
+				_, written := walk.rows()["8201"]
+				if strings.TrimSpace(suffix) == "" {
+					if !written || walk.result("open_runs_skipped") != "0" {
+						t.Fatalf("whitespace suffix: written=%v skipped=%s, want the run re-read", written, walk.result("open_runs_skipped"))
+					}
+					return
+				}
+				if written {
+					t.Fatalf("a payload with trailing data was written (status %q)", stringPtrValue(walk.rows()["8201"].Status))
+				}
+				lines := openSkipLines(*records)
+				if walk.result("open_runs_skipped") != "1" || len(lines) != 1 || lines[0]["reason"] != "invalid_payload" {
+					t.Fatalf("skipped=%s lines=%v, want one invalid_payload skip", walk.result("open_runs_skipped"), lines)
+				}
+			})
+		}
+	}
+}
+
+// 13966 r1 P1-b: a payload with trailing data between transient skips is a skip, not a re-read, so it does not reset
+// the breaker: the third transient still fails the unit.
+func TestOpenPhaseTrailingDataDoesNotResetTheBreaker(t *testing.T) {
+	repoID := listingRepoID(t)
+	captureMembershipLogs(t)
+	fake := newListingFake(t, makeListingRuns(1, 1, listingSince, time.Minute))
+	reader := openSkipStore(repoID, fake, 8300, 5)
+	doer := newOpenSkipDoer(fake)
+	for _, id := range []int{8300, 8301, 8303} {
+		doer.runs[id] = []openSkipReply{{status: 502, body: openSkipPoisonBody}}
+	}
+	doer.runs[8302] = []openSkipReply{{status: 200, body: fake.byID[8302].json() + "broken"}}
+	walk := walkOpenSkip(t, GitHubTestsRouteHandler{OpenRuns: reader}, openWindowClaim(), doer, 0)
+	var providerErr *providerfoundation.ProviderError
+	if !errors.As(walk.err, &providerErr) || providerErr.Class != providerfoundation.ErrorTransient {
+		t.Fatalf("unit err=%v final=%v, want the third transient to fail the unit", walk.err, walk.finalSeen)
+	}
+	if doer.hitsOf(8304) != 0 {
+		t.Fatal("the walk went past the breaker")
+	}
+}

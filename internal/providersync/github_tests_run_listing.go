@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -408,6 +409,11 @@ func fetchGitHubTestsRun(
 	decoder.UseNumber()
 	if decoder.Decode(&run) != nil {
 		return run, false, providerfoundation.ErrNormalizationInvalid
+	}
+	// One run object and nothing after it but whitespace, as the jobs pages require.
+	var trailing json.RawMessage
+	if decoder.Decode(&trailing) != io.EOF {
+		return gitHubWorkflowRunPayload{}, false, providerfoundation.ErrNormalizationInvalid
 	}
 	return run, true, nil
 }

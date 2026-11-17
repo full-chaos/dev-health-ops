@@ -36,7 +36,7 @@ func TestCatalogRuleServesAnOperationWithNoRowAndLeavesTheClassRowsAlone(t *test
 	// Only hotspots requests reach this handler's resolver (its ClickHouse double answers hotspots).
 	handler, proof, _, _, _ := newQueryHandler(&fakeHotspotsCHClient{}, pool, verifier, itTestSchemaDigest, withIssuer)
 	runOperation := markClassGated(handler) // what buildQueryRoute mounts at /query/run-operation
-	token := iaHeaders("org-1", "admin", false, false)
+	token := iaHeaders("org-1", "member", false, false)
 	securityAlertsVariables := map[string]any{"orgId": "org-1"}
 	classRow := func(schemaDigest, root, mode string) {
 		t.Helper()

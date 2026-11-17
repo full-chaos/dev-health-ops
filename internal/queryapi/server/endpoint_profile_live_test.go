@@ -651,9 +651,19 @@ func driveInternal(t *testing.T, row liveRow) *liveObs {
 		}
 
 		// Impersonation: the edge carrier reads the session; the internal
-		// headers state it themselves and never read one.
+		// headers never read one, and a header claim of impersonation (or of
+		// an operator role) is refused 403 before the handler (CHAOS-13950).
 		sessionDown := func(s *accessStore) { asSuperuser(s); s.errSession = fmt.Errorf("session store timeout") }
 		if listener == "internal" {
+			stack = liveStack(t, sessionDown)
+			a = stack.live(with(func(c *liveReq) {
+				c.headers = map[string]string{
+					internalidentity.HeaderOrgID: ecOrg.String(), internalidentity.HeaderRole: "member",
+					internalidentity.HeaderSuperuser: "false", internalidentity.HeaderImpersonationActive: "false",
+				}
+			}))
+			o.wantStatus("internal headers, the session store down", a, http.StatusOK)
+			o.wantOrg("internal headers, the session store down", stack, authctx.Claims{OrgID: ecOrg.String()})
 			stack = liveStack(t, sessionDown)
 			a = stack.live(with(func(c *liveReq) {
 				c.headers = map[string]string{
@@ -661,8 +671,7 @@ func driveInternal(t *testing.T, row liveRow) *liveObs {
 					internalidentity.HeaderSuperuser: "false", internalidentity.HeaderImpersonationActive: "true",
 				}
 			}))
-			o.wantStatus("internal headers claiming impersonation", a, http.StatusOK)
-			o.wantOrg("internal headers claiming impersonation", stack, authctx.Claims{OrgID: ecOrg.String(), ImpersonationActive: true})
+			o.wantStatus("internal headers claiming impersonation", a, http.StatusForbidden)
 		}
 		edgeSession(t, o, q, false, http.StatusServiceUnavailable)
 		if row.route == "/query/proof-write" {
@@ -673,7 +682,7 @@ func driveInternal(t *testing.T, row liveRow) *liveObs {
 			stack = liveStack(t, noStateRead)
 			o.wantStatus("internal headers, every store read failing", stack.live(with(func(c *liveReq) {
 				c.headers = map[string]string{
-					internalidentity.HeaderOrgID: ecOrg.String(), internalidentity.HeaderRole: "admin",
+					internalidentity.HeaderOrgID: ecOrg.String(), internalidentity.HeaderRole: "member",
 					internalidentity.HeaderSuperuser: "false", internalidentity.HeaderImpersonationActive: "false",
 				}
 			})), http.StatusOK)
@@ -717,7 +726,7 @@ func proofWriteCells(t *testing.T, o *liveObs) {
 			})
 		request := httptest.NewRequest(http.MethodPost, "/query/proof-write", strings.NewReader(documentBody(mutation)))
 		request.Header.Set("Content-Type", "application/json")
-		iaHeaders(ecOrg.String(), "admin", false, false)(request)
+		iaHeaders(ecOrg.String(), "member", false, false)(request)
 		recorder := httptest.NewRecorder()
 		handler(recorder, request)
 		o.see(recorder.Code)
@@ -750,10 +759,8 @@ func driveBuildInfo(t *testing.T, row liveRow) *liveObs {
 		identity := liveBuildIdentity(t)
 		if listener == "internal" {
 			for name, headers := range map[string][4]string{
-				"another organization":  {liveOtherOrg.String(), "viewer", "false", "false"},
-				"no organization":       {"", "viewer", "false", "false"},
-				"impersonation active":  {ecOrg.String(), "admin", "false", "true"},
-				"another org and super": {liveOtherOrg.String(), "viewer", "true", "false"},
+				"another organization": {liveOtherOrg.String(), "viewer", "false", "false"},
+				"no organization":      {"", "viewer", "false", "false"},
 			} {
 				for _, store := range []func(*accessStore){nil, noStateRead} {
 					h := q
@@ -765,6 +772,23 @@ func driveBuildInfo(t *testing.T, row liveRow) *liveObs {
 						o.fail("internal headers, %s (every store read failing: %v): status %d body %q, want the build identity %q: the credential's organization and no state are read",
 							name, store != nil, got.status, trim(got.body), trim(identity))
 					}
+				}
+			}
+		}
+		if listener == "internal" {
+			// CHAOS-13950: an elevated header claim is refused 403 before any read.
+			for name, headers := range map[string][4]string{
+				"impersonation active":  {ecOrg.String(), "admin", "false", "true"},
+				"another org and super": {liveOtherOrg.String(), "viewer", "true", "false"},
+				"an operator role":      {ecOrg.String(), "owner", "false", "false"},
+			} {
+				h := q
+				h.headers = map[string]string{internalidentity.HeaderOrgID: headers[0], internalidentity.HeaderRole: headers[1],
+					internalidentity.HeaderSuperuser: headers[2], internalidentity.HeaderImpersonationActive: headers[3]}
+				got := liveStack(t, noStateRead).live(h)
+				o.see(got.status)
+				if got.status != http.StatusForbidden || got.body == identity {
+					o.fail("internal headers, %s: status %d body %q, want 403 and no build identity", name, got.status, trim(got.body))
 				}
 			}
 		}

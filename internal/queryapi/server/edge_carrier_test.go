@@ -512,14 +512,16 @@ func TestEdgeCarrier_PlatformWideOrgSkipsMembershipCheck(t *testing.T) {
 func TestEdgeCarrier_ClaimsMatchTheHeaderCarrierForTheSameIdentity(t *testing.T) {
 	verifier, _ := iaVerifier(t)
 	headerHandler, headerSeen := iaDispatch(t, verifier)
-	if code := iaPost(t, headerHandler, iaHeaders(ecOrg.String(), "admin", true, false)); code != http.StatusOK {
+	// A member: the header carrier refuses a superuser or an operator role (CHAOS-13950), the edge path does not.
+	if code := iaPost(t, headerHandler, iaHeaders(ecOrg.String(), "member", false, false)); code != http.StatusOK {
 		t.Fatalf("header carrier: %d", code)
 	}
 
 	store := &fakeEdgeStore{
-		states:  map[uuid.UUID]policy.UserState{ecUser: {IsActive: true, IsSuperuser: true, TokenVersion: 5}},
+		states:  map[uuid.UUID]policy.UserState{ecUser: {IsActive: true, TokenVersion: 5}},
 		found:   map[uuid.UUID]bool{ecUser: true},
 		members: map[[2]uuid.UUID]bool{{ecUser, ecOrg}: true},
+		roles:   map[[2]uuid.UUID]string{{ecUser, ecOrg}: "member"},
 	}
 	auth := ecEdgeAuth(t, store)
 	edgeHandler, edgeSeen := iaDispatchWithEdge(t, nil, auth, store)

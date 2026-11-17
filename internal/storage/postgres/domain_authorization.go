@@ -77,8 +77,8 @@ WITH required_table_privileges(table_name, allow_insert, allow_update, allow_del
 -- a fence retention never reaps, so the domain role's posture here is
 -- column-scoped instead of table-scoped, and required_table_privileges has
 -- no way to express "this column only" — hence the separate CTEs below.
-), column_scoped_privileges(table_name, column_name, privilege) AS (
-	SELECT * FROM unnest($6::text[], $7::text[], $8::text[])
+), column_scoped_privileges(table_name, column_name, privilege, retired) AS (
+	SELECT * FROM unnest($6::text[], $7::text[], $8::text[], $13::boolean[])
 ), required_sequence_privileges(sequence_name) AS (
 	SELECT * FROM unnest($10::text[])
 ), column_scoped_relations AS (
@@ -228,12 +228,13 @@ SELECT
 		-- carry the option to re-delegate it: an option-bearing privilege
 		-- would otherwise pass unnoticed on a declared pair, letting the
 		-- domain role hand fence access to another role or PUBLIC itself.
+		-- A retired column privilege (RolePosture.RetiredColumns) may be absent; held, it is judged like any other.
 		SELECT 1
 		FROM column_scoped_privileges AS required
 		JOIN column_scoped_relations AS scoped ON scoped.relname = required.table_name
-		WHERE NOT has_column_privilege(
+		WHERE (NOT required.retired AND NOT has_column_privilege(
 				current_user, scoped.oid, required.column_name, required.privilege
-			)
+			))
 			OR has_column_privilege(
 				current_user, scoped.oid, required.column_name,
 				required.privilege || ' WITH GRANT OPTION'
@@ -619,6 +620,11 @@ type RolePosture struct {
 	// table dropped, no privilege held on it (by any route), or exactly the
 	// declared flags. A partial or wider grant is refused, as for any row.
 	RetiredTables []string
+	// RetiredColumns names ColumnScoped entries no code of the role uses any
+	// more: the column-grant twin of RetiredTables. The migration still grants
+	// them; readiness accepts each held exactly or not held. A grant option on
+	// one, or any undeclared column privilege, is refused as before.
+	RetiredColumns []ColumnPrivilege
 }
 
 // domainPosture is the domain runtime role's declared manifest under the
@@ -1432,7 +1438,7 @@ func CheckRolePosture(ctx context.Context, pool *pgxpool.Pool, expectedRole, riv
 	}
 }
 
-// rolePostureArgs builds rolePostureQuery's parameters ($1..$12) from a role's
+// rolePostureArgs builds rolePostureQuery's parameters ($1..$13) from a role's
 // declared posture, refusing an internally inconsistent one. It is separate
 // from CheckRolePosture so the differential oracle for the query runs the
 // production argument construction, not a copy of it.
@@ -1490,13 +1496,43 @@ func rolePostureArgs(expectedRole, riverSchema string, posture RolePosture) ([]a
 	if err != nil {
 		return nil, err
 	}
+	retiredColumns, err := retiredColumnFlags(posture)
+	if err != nil {
+		return nil, err
+	}
 	return []any{
 		expectedRole, riverSchema,
 		tableNames, allowInserts, allowUpdates,
 		columnTables, columnNames, columnPrivileges,
 		allowDeletes, posture.RequiredSequences,
-		requiredFunctions, retired,
+		requiredFunctions, retired, retiredColumns,
 	}, nil
+}
+
+// retiredColumnFlags is $13: one flag per ColumnScoped entry, true for an
+// entry RetiredColumns names. A retired entry must be exactly one ColumnScoped
+// entry.
+func retiredColumnFlags(posture RolePosture) ([]bool, error) {
+	flags := make([]bool, len(posture.ColumnScoped))
+	seen := make(map[ColumnPrivilege]bool, len(posture.RetiredColumns))
+	for _, retired := range posture.RetiredColumns {
+		if seen[retired] {
+			return nil, fmt.Errorf("postgres: retired column privilege %s.%s %s is named twice", retired.TableName, retired.ColumnName, retired.Privilege)
+		}
+		seen[retired] = true
+		matches := 0
+		for i, column := range posture.ColumnScoped {
+			if column == retired {
+				flags[i] = true
+				matches++
+			}
+		}
+		if matches != 1 {
+			return nil, fmt.Errorf("postgres: retired column privilege %s.%s %s is %d ColumnScoped entries, want exactly 1",
+				retired.TableName, retired.ColumnName, retired.Privilege, matches)
+		}
+	}
+	return flags, nil
 }
 
 // retiredTableFlags is $12: one flag per RequiredTables entry, true for a

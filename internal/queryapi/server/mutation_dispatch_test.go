@@ -56,7 +56,7 @@ func mdPost(t *testing.T, handler http.HandlerFunc, document string, authenticat
 	req := httptest.NewRequest(http.MethodPost, "/query", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	if authenticated {
-		iaHeaders("org-1", "admin", false, false)(req)
+		iaHeaders("org-1", "member", false, false)(req)
 	}
 	rec := httptest.NewRecorder()
 	handler(rec, req)
@@ -137,7 +137,7 @@ func TestNewQueryHandlerPairTreatsARegisteredMutationDifferently(t *testing.T) {
 			}
 			req := httptest.NewRequest(http.MethodPost, "/query", bytes.NewReader(body))
 			req.Header.Set("Content-Type", "application/json")
-			iaHeaders("org-1", "admin", false, false)(req)
+			iaHeaders("org-1", "member", false, false)(req)
 			rec := httptest.NewRecorder()
 			handler(rec, req)
 			want := tc.serveRefuses

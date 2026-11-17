@@ -89,9 +89,9 @@ INNER JOIN (
 	}
 	for _, row := range found {
 		// computed_at has whole-second precision: the retraction must be strictly newer than the row it replaces.
-		version := computedAt.UTC()
-		if !version.After(row.version) {
-			version = row.version.UTC().Add(time.Second)
+		version := computedAt.UTC().Truncate(time.Second)
+		if oldVersion := row.version.UTC().Truncate(time.Second); !version.After(oldVersion) {
+			version = oldVersion.Add(time.Second)
 		}
 		if err := batch.Append(
 			row.workItemID, row.provider, row.day, row.workScopeID, row.teamID, row.teamName, row.assignee,

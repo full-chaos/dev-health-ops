@@ -252,6 +252,9 @@ type MigrationResult struct {
 	// read.
 	SyncRoutes           []SyncRouteOutcome
 	SyncRouteTableAbsent bool
+	// APIRole is the api role this run granted, "" when the leg was skipped
+	// (no role configured, or the role does not exist yet).
+	APIRole string
 }
 
 // ApplyPinnedMigrations is the only production schema-changing River API in
@@ -503,6 +506,7 @@ func ApplyPinnedMigrations(
 
 		SyncRoutes:           syncRoutes,
 		SyncRouteTableAbsent: syncRouteTableAbsent,
+		APIRole:              options.APIRole,
 	}, nil
 }
 

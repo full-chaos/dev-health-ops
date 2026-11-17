@@ -70,7 +70,9 @@ func TestAPIPostureAcceptsTheRetiredSAMLGrantsHeldOrRevoked(t *testing.T) {
 	adminPool := openPool(t, ctx, instance.URI)
 	defer adminPool.Close()
 	pgschema.Apply(ctx, t, adminPool)
-	posture := postgresstore.APIPostureFor(true, true)
+	// The step-1 posture (the 3 declared and retired): what the image that retired them checks, kept as the RetiredTables /
+	// RetiredColumns cells after the drop (CHAOS-13951).
+	posture := stepOnePosture(postgresstore.APIPostureFor(true, true))
 
 	// fresh migrates a new api role with the real posture and returns it with a pool logged in as it.
 	fresh := func(name string) (string, *pgxpool.Pool) {

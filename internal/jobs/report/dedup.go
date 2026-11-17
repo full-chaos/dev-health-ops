@@ -30,8 +30,6 @@ type chartRule struct {
 	expression string
 	// inputs are the columns of table that expression reads.
 	inputs []string
-	// registryTable is a table, besides table, that the registry names for the metric and the rule replaces.
-	registryTable string
 }
 
 // chartRules names, per registry metric, the rule its chart reads instead of
@@ -60,27 +58,23 @@ type chartRule struct {
 // failure_rate column holds 0 on a day with no completed run, so it is never
 // charted. A bucket with no completed run has no point.
 //
-// The pipeline success rate is the same rule over successes. The registry names
-// cicd_metrics_daily for it, whose success_rate divides by every run (cancelled,
-// skipped and running included) and holds 0 on a day with no run counted; the
-// chart reads the counts of testops_pipeline_metrics_daily, as Pipelines, Home
-// and Risk do.
+// The pipeline success rate is the same rule over successes, from the counts of
+// testops_pipeline_metrics_daily, as Pipelines, Home and Risk read them. The
+// CI/CD column cicd_metrics_daily.success_rate divided by every run (cancelled,
+// skipped and running included) and held 0 on a day with no run counted; it is
+// no longer charted.
 var chartRules = map[string]chartRule{
 	"change_failure_rate": {table: changefailure.Table, expression: changefailure.WindowRateSQL, inputs: changefailure.CountColumns},
 	"pr_rework_ratio":     {table: prrework.Table, expression: prrework.WindowRateSQL, inputs: prrework.CountColumns},
 	"failure_rate":        {table: "testops_pipeline_metrics_daily", expression: testops.PipelineFailureRateWindowSQL, inputs: testops.PipelineRateCountColumns},
-	"success_rate": {
-		table: "testops_pipeline_metrics_daily", expression: testops.PipelineSuccessRateWindowSQL, inputs: testops.PipelineRateCountColumns,
-		registryTable: "cicd_metrics_daily",
-	},
+	"success_rate":        {table: "testops_pipeline_metrics_daily", expression: testops.PipelineSuccessRateWindowSQL, inputs: testops.PipelineRateCountColumns},
 }
 
 // withChartRule returns the definition a chart of the metric is built from:
 // the registry definition, on the rule's table when the metric has a rule.
 func withChartRule(definition metricDefinition) metricDefinition {
 	if rule, ok := chartRules[definition.CanonicalName]; ok &&
-		(definition.SourceTable == "repo_metrics_daily" || definition.SourceTable == rule.table ||
-			(rule.registryTable != "" && definition.SourceTable == rule.registryTable)) {
+		(definition.SourceTable == "repo_metrics_daily" || definition.SourceTable == rule.table) {
 		definition.SourceTable = rule.table
 		definition.rule = rule.expression
 	}

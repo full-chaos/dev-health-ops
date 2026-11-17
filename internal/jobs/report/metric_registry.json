@@ -1571,7 +1571,7 @@
         "day"
       ],
       "display_name": "Success Rate",
-      "source_table": "cicd_metrics_daily",
+      "source_table": "testops_pipeline_metrics_daily",
       "unit": "ratio"
     },
     {

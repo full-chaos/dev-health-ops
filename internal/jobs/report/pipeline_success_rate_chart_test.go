@@ -14,8 +14,8 @@ import (
 func TestSuccessRateChartIsTheCompletedRunRuleOverTheCounts(t *testing.T) {
 	t.Parallel()
 	registered, ok := supportedMetrics["success_rate"]
-	if !ok || registered.SourceTable != "cicd_metrics_daily" {
-		t.Fatalf("fixture drift: success_rate is not a cicd_metrics_daily registry metric (got %+v)", registered)
+	if !ok || registered.SourceTable != "testops_pipeline_metrics_daily" {
+		t.Fatalf("fixture drift: success_rate is not a testops_pipeline_metrics_daily registry metric (got %+v)", registered)
 	}
 	definition := withChartRule(registered)
 	if definition.SourceTable != "testops_pipeline_metrics_daily" || definition.rule != testops.PipelineSuccessRateWindowSQL {

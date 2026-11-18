@@ -49,13 +49,15 @@ func TestTestopsPipelineChartsReadRepositoryOwnershipForTeam(t *testing.T) {
 	}
 }
 
-// A mean over no row is no value: a scorecard of a mean key with no row in its buckets has no point, never NaN.
+// A rate over no run is no value: a scorecard of cancel_rate or rerun_rate with no run in its buckets has no point, never
+// NaN. The two keys read the run-weighted rule, which is NULL on no run; the avgOrNull of the ownership read is not on
+// their path.
 func TestTestopsPipelineMeanOfNoRowIsNoPoint(t *testing.T) {
 	t.Parallel()
 	for _, metric := range []string{"cancel_rate", "rerun_rate"} {
 		statement, _ := cicdChartStatement(t, ChartSpec{ChartType: "scorecard", Metric: metric})
-		if !strings.Contains(statement, "avgOrNull("+metric+") AS y") {
-			t.Errorf("%s: the mean of no row is not NULL:\n%s", metric, statement)
+		if !strings.Contains(statement, "if(sum(pipelines_count) = 0, NULL,") || strings.Contains(statement, "avgOrNull(") {
+			t.Errorf("%s: the rate of no run is not NULL:\n%s", metric, statement)
 		}
 	}
 }

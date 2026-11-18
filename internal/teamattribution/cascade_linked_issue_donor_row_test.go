@@ -19,7 +19,7 @@ func TestALinkedItemCopiesItsDonorsRowOnly(t *testing.T) {
 			})
 			subjects := map[string]GithubWorkItemDerivationSubject{
 				"pr":    {WorkItemID: "pr", Provider: provider, OrgID: "org"},
-				"donor": {WorkItemID: "donor", Provider: provider, RepoID: &repoD, OrgID: "org"},
+				"donor": {WorkItemID: "donor", Provider: provider, Type: pullRequestType(provider), RepoID: &repoD, OrgID: "org"},
 			}
 			edges := []GithubWorkItemDerivationDependencyEdge{{SourceWorkItemID: "pr", TargetWorkItemID: "donor", RelationshipType: "relates_to"}}
 			for _, tc := range []struct {
@@ -55,6 +55,9 @@ func TestALinkedItemCopiesItsDonorsRowOnly(t *testing.T) {
 				}
 			}
 			index, _, _ := derived.BuildLinkedIssueIndex(provider, subjects, edges, nil)
+			if pullRequestType(provider) == "" {
+				return // a Jira or Linear donor is an issue: its own repo_id gives no team
+			}
 			if got := fmt.Sprint(index["pr"][0]); got != "team-context" {
 				t.Errorf("the reference shape resolves the donor in this context: %q, want team-context", got)
 			}

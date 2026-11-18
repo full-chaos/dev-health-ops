@@ -642,7 +642,7 @@ func TestGitHubWorkItemDerivationTwoLayerMembershipResolution(t *testing.T) {
 		if teamattribution.GithubWorkItemDerivationStringValue(teamID) != "team-ops" || teamattribution.GithubWorkItemDerivationStringValue(teamName) != "Ops Team" {
 			t.Fatalf("team = (%v, %v), want team-ops/Ops Team", teamattribution.GithubWorkItemDerivationStringValue(teamID), teamattribution.GithubWorkItemDerivationStringValue(teamName))
 		}
-		if len(candidates) != 1 || candidates[0].Source != "author_membership" || candidates[0].Evidence != "reporter=alice" {
+		if len(candidates) != 1 || candidates[0].Source != "author_membership" || candidates[0].Evidence != "reporter=alice;ownership=ownership_unknown" {
 			t.Fatalf("candidates = %+v, want exactly one author_membership row", candidates)
 		}
 	})

@@ -298,6 +298,21 @@ flowchart TD
 > `TestAPullRequestKeepsItsLinkedIssueDonor`, `TestAMemberFallbackRuleIsProvenanceOnly` and
 > `TestAWorkItemTeamIsReachedThroughOwnershipOnlyInEveryDailyTable` (every daily table) pin it.
 
+> **An issue takes no `repo_ownership` from its own `repo_id`.** An issue's repositories are the
+> repositories of its linked pull requests (`work_graph_issue_pr`), never its own `work_items.repo_id`
+> (data-and-storage, entity tree). Only a pull or merge request (`type` `pr` on GitHub,
+> `merge_request` on GitLab) takes the `repo_ownership` (3) candidate from its own `repo_id`
+> (`repoByID` and the GitLab name-keyed `repoByNames`). An issue of any provider, a Jira or Linear item
+> included, with no other source above ends `unassigned`. Its assignee's membership row is kept as
+> provenance when the member's team owns a repository of a linked pull request. With no linked
+> pull request there is no repository to check: the row is kept and its evidence names
+> `ownership=ownership_unknown` (a missing proof is not a healthy one; a pull or merge request whose
+> repository has no ownership row gets the same suffix). A member's team that owns none of the linked
+> repositories is dropped, and an issue with no other signal reads `no_candidate:repo_not_owned`.
+> `TestIssueTakesNoTeamFromItsOwnRepoField`, `TestIssueMembershipGateReadsLinkedPullRequestRepos`,
+> `TestIssueMembershipPassThroughNamesOwnershipUnknown` and
+> `TestPRMembershipWithOwnershipFactEvidenceUnchanged` pin it.
+
 **Invariants:** the **winner is the highest-precedence matching source** (every matching source that
 passes its own gate is still persisted as a candidate — precedence decides `is_primary`, not which
 sources are computed); `assignee_membership` (4) and `author_membership` (6) additionally require
@@ -413,7 +428,7 @@ means the ClickHouse `teams` dimension is empty.
 | 0 | `native_team` | `WorkItem.native_team_key` → `teams` of the item's provider, else admin teams (section 0.4e) | high | all below | — (top) | `native_team_key` |
 | 1 | `issue_project` | native issue project key → `teams` of the item's provider that hold it, else admin teams (section 0.4e) | high | 2–8 | 0 | `project_id, owner_team` |
 | 2 | `project_ownership` | `team_project_ownership` | high | 3–8 | 0–1 | `project_id, provider` |
-| 3 | `repo_ownership` | `team_repo_ownership` | medium; high from a main-owner row (`is_primary = 1`, e.g. the inferred main owner) | 4–8 | 0–2 | `repo_full_name` |
+| 3 | `repo_ownership` (a pull / merge request only: an issue takes none from its own `repo_id`) | `team_repo_ownership` | medium; high from a main-owner row (`is_primary = 1`, e.g. the inferred main owner) | 4–8 | 0–2 | `repo_full_name` |
 | 4 | `assignee_membership` | two-layer: `identities`/`teams` (admin override, single-team) else `team_memberships` (provider fallback, single-team) | high (admin) / medium (provider) | none: provenance only, never `is_primary` | 0–3 | `canonical_id, identity` (evidence text: `assignee_membership=<id>`) |
 | 5 | `linked_issue` | `work_item_dependencies` donor → the team of the donor's own attribution row; the primary team of a pull or merge request only, provenance only (`is_primary = 0`) for an issue | medium | 6–8 (a pull or merge request) | 0–3 | `linked_issue=<donor_work_item_id>;dependency_type=<rel>;donor_provider=<p>;donor_source=<donor row source>` |
 | 6 | `author_membership` | PR/MR-only + two-layer (same as row 4), non-bot | high (admin) / medium (provider) | none: provenance only, never `is_primary` | 0–5 | `canonical_id, identity` (evidence text: `reporter=<id>`) |

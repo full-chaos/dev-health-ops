@@ -139,9 +139,11 @@ func TestAReusedPathAttributesEachProjectsItemsToItsOwnOwner(t *testing.T) {
 	})
 	holders := map[string][]string{"acme/api": {newRepo}}
 	stale := gitlabSubject("org:gitlab:123", "acme/api")
+	stale.Type = "merge_request"
 	stale.RepoID = &oldRepo
 	stale.GitLabPaths = GitLabRowPaths(GitLabRepoRow{Repo: "platform/api-v2", IdentityPath: "acme/api"}, oldRepo, holders)
 	current := gitlabSubject("org:gitlab:456", "acme/api@456")
+	current.Type = "merge_request"
 	current.RepoID = &newRepo
 	current.GitLabPaths = GitLabRowPaths(GitLabRepoRow{Repo: "acme/api", IdentityPath: "acme/api@456"}, newRepo, holders)
 	if got := primaryTeam(derived, stale); got != "old-owner" {
@@ -225,6 +227,7 @@ func TestNameKeyedGitLabRepoOwnershipFollowsTheOneProjectRule(t *testing.T) {
 		return []GithubWorkItemDerivationRepoFact{{Provider: "gitlab", TeamID: "owner-team", TeamName: "Owner", RepoFullName: name, IsPrimary: 1, Specificity: 100}}
 	}
 	item := gitlabSubject("org:gitlab:123", "acme/api")
+	item.Type = "merge_request"
 	repoID := "repo-123"
 	item.RepoID = &repoID
 	item.GitLabPaths = []string{"acme/api"}

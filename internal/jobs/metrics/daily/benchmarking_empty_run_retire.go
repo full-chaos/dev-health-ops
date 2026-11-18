@@ -153,24 +153,23 @@ const benchmarkingEmptyRunRepositoryPresent = "repository_present_at_finalize"
 // no benchmark target on the day, so every live key of the day in the six
 // output tables gets a retraction row.
 //
-// The repositories are read again first (the read of the dispatch). A
+// The organization's repositories are read again first, from repos only. A
 // repository that is back keeps every row: the family returns an
-// emptyRunSkip, counted as skipped_empty_run, and the next run recomputes.
+// emptyRunSkip, counted as skipped_empty_run, and the next run recomputes. A
+// work item with no repository (the nil repository id, which partition
+// discovery gives a partition of its own) is no repository and no benchmark
+// target, so it does not stop the retirement.
 func (executor *BenchmarkingFinalizeExecutor) retireEmptyRun(ctx context.Context, run Run, logger *slog.Logger) (int, error) {
-	discoverer, err := NewClickHouseRepositoryDiscoverer(executor.conn)
+	repositories, err := organizationRepositoryCount(ctx, executor.conn, run.OrganizationID)
 	if err != nil {
-		return 0, fmt.Errorf("%w: %v", errBenchmarkingFinalizeUnavailable, err)
-	}
-	repositories, err := discoverer.RepositoryIDs(ctx, run.OrganizationID)
-	if err != nil {
-		return 0, fmt.Errorf("benchmarking: read the repositories of a run with no partition: %w", err)
+		return 0, err
 	}
 	day := run.TargetDay.UTC()
 	day = time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, time.UTC)
-	if len(repositories) > 0 {
+	if repositories > 0 {
 		logger.Info("benchmarking finalize kept the rows of a run with no partition: a repository is present",
 			"run_id", run.ID, "organization_id", run.OrganizationID, "target_day", day.Format("2006-01-02"),
-			"partitions_discovered", len(repositories))
+			"repositories", repositories)
 		return 0, &emptyRunSkip{reason: benchmarkingEmptyRunRepositoryPresent}
 	}
 	now := executor.nowUTC()
@@ -189,6 +188,40 @@ func (executor *BenchmarkingFinalizeExecutor) retireEmptyRun(ctx context.Context
 		"run_id", run.ID, "organization_id", run.OrganizationID, "target_day", day.Format("2006-01-02"),
 		"rows_retired", written)
 	return written, nil
+}
+
+// organizationRepositoryCount is the number of repository ids the organization
+// holds in repos: the repository set of partition discovery
+// (ClickHouseRepositoryDiscoverer.RepositoryIDs) without the nil id that
+// discovery adds for work items with no repository. A failed read is an error,
+// never 0.
+func organizationRepositoryCount(ctx context.Context, conn repositoryRows, organizationID string) (uint64, error) {
+	rows, err := conn.Query(ctx, `
+SELECT count()
+FROM (
+  SELECT id
+  FROM repos
+  WHERE org_id = ?
+  GROUP BY org_id, id
+)`, organizationID)
+	if err != nil {
+		return 0, fmt.Errorf("benchmarking: read the repositories of a run with no partition: %w", err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return 0, fmt.Errorf("benchmarking: read the repositories of a run with no partition: %w", err)
+		}
+		return 0, fmt.Errorf("benchmarking: the count of the repositories of a run with no partition gave no answer")
+	}
+	var repositories uint64
+	if err := rows.Scan(&repositories); err != nil {
+		return 0, fmt.Errorf("benchmarking: scan the count of the repositories of a run with no partition: %w", err)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("benchmarking: read the repositories of a run with no partition: %w", err)
+	}
+	return repositories, nil
 }
 
 func (executor *BenchmarkingFinalizeExecutor) retireTable(

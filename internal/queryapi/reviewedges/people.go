@@ -44,6 +44,7 @@ import (
 // match it, and a login held under another provider names nobody here. A value
 // two identities hold in that scope names neither. Any other repo provider
 // (unknown, external, no repos row) keeps the order of identityIndex.resolve.
+// Provider labels are lower-cased only, never trimmed: a padded key or repo label is not a known provider.
 // The author side is unchanged.
 //
 // Three reads at most per answer, whatever the number of rows: the org's
@@ -145,7 +146,7 @@ func (index *identityIndex) addLogin(provider, value string, row *identity) {
 	if key == "" {
 		return
 	}
-	provider = strings.ToLower(strings.TrimSpace(provider))
+	provider = strings.ToLower(provider)
 	if _, known := knownIdentityProviders[provider]; !known {
 		index.unscoped[key] = appendHolder(index.unscoped[key], row)
 		return
@@ -303,7 +304,7 @@ func loadRepoProviders(ctx context.Context, client QueryClient, orgID string, re
 		if scanErr := rows.Scan(&repoID, &provider); scanErr != nil {
 			return nil, fmt.Errorf("reviewedges: repo providers scan: %w", scanErr)
 		}
-		providers[repoID] = strings.ToLower(strings.TrimSpace(provider))
+		providers[repoID] = strings.ToLower(provider)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("reviewedges: repo providers rows: %w", err)

@@ -148,3 +148,27 @@ func TestReviewerProvider_AFailedRepoProviderReadFailsTheRequest(t *testing.T) {
 		t.Fatal("a failed repo provider read must fail the request")
 	}
 }
+
+// A provider key is lower-cased, never trimmed: a padded "GitLab " is outside the known providers, so it is
+// unscoped, and it counts as a holder beside a github holder of the same login.
+func TestReviewerProvider_APaddedProviderKeyIsUnscopedNotTrimmed(t *testing.T) {
+	a := identityRow(rpUUIDA, "a", "", "Alice", `{" GitLab": ["sam"]}`)
+	b := identityRow(rpUUIDB, "b", "", "Bea", `{"github": ["sam"]}`)
+	name, raw, _ := reviewerOn(t, "github", "sam", a, b)
+	if name != "sam" || !raw {
+		t.Errorf("padded key beside a github holder: name %q rawKey %v, want fail closed (two holders)", name, raw)
+	}
+	name, raw, _ = reviewerOn(t, "github", "sam", a)
+	if name != "Alice" || raw {
+		t.Errorf("padded key as sole holder: name %q rawKey %v, want Alice (unscoped)", name, raw)
+	}
+}
+
+// A padded repository provider label is not github or gitlab: the CHAOS-14032 order applies.
+func TestReviewerProvider_APaddedRepoProviderKeepsTheLegacyOrder(t *testing.T) {
+	a := identityRow(rpUUIDA, "a", "", "Sam", `{"github": ["samuel-a"]}`)
+	name, raw, _ := reviewerOn(t, " GitHub", "sam", a)
+	if name != "Sam" || raw {
+		t.Errorf("padded repo provider: name %q rawKey %v, want the legacy display-name match Sam", name, raw)
+	}
+}

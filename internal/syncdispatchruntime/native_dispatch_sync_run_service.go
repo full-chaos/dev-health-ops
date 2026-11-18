@@ -750,6 +750,62 @@ func (service *NativeDispatchSyncRunService) terminalizeFeatureDisabled(
 	return nil
 }
 
+// transportReference is currentTransportReference's decision with its first failing clause (empty when current)
+// and the route's generation (-1 when the route row is missing).
+type transportReference struct {
+	current         bool
+	reason          string
+	routeGeneration int64
+}
+
+// readTransportReference is currentTransportReference read in ONE statement that also returns the row images the
+// decision ran on, so the refusal's reason describes the snapshot that refused it, never a later one.
+func readTransportReference(ctx context.Context, tx pgx.Tx, args Args, kind string) (transportReference, error) {
+	var (
+		routeTransport, outboxStatus, outboxTransport *string
+		routeGeneration, outboxGeneration             *int64
+		routePaused, outboxFound                      *bool
+	)
+	err := tx.QueryRow(ctx, `
+SELECT route.transport, route.generation, route.paused,
+       outbox.found, outbox.status, outbox.dispatched_transport, outbox.dispatched_route_generation
+FROM (SELECT 1) AS one
+LEFT JOIN public.sync_dispatch_transport_routes AS route ON route.kind = $4
+LEFT JOIN LATERAL (
+    SELECT true AS found, status, dispatched_transport, dispatched_route_generation
+    FROM public.sync_dispatch_outbox
+    WHERE id = $1::uuid AND sync_run_id = $2::uuid AND org_id = $3 AND kind = $4
+) AS outbox ON true`,
+		args.OutboxID(), args.SyncRunID(), args.OrganizationID(), kind,
+	).Scan(&routeTransport, &routeGeneration, &routePaused, &outboxFound, &outboxStatus, &outboxTransport, &outboxGeneration)
+	if err != nil {
+		return transportReference{}, ErrFinalizeSyncRunUnavailable
+	}
+	reference := transportReference{routeGeneration: -1}
+	if routeGeneration != nil {
+		reference.routeGeneration = *routeGeneration
+	}
+	switch {
+	case outboxFound == nil:
+		reference.reason = "outbox_row_missing"
+	case outboxStatus == nil || *outboxStatus != "dispatched":
+		reference.reason = "outbox_not_dispatched"
+	case outboxTransport == nil || *outboxTransport != "river":
+		reference.reason = "outbox_other_transport"
+	case routeTransport == nil:
+		reference.reason = "route_row_missing"
+	case *routeTransport != "river":
+		reference.reason = "route_other_transport"
+	case routePaused == nil || *routePaused:
+		reference.reason = "route_paused"
+	case outboxGeneration == nil || *outboxGeneration != reference.routeGeneration || args.RouteGeneration() != reference.routeGeneration:
+		reference.reason = "route_generation_mismatch"
+	default:
+		reference.current = true
+	}
+	return reference, nil
+}
+
 // denyRun ports the total-cap hard-deny branch verbatim: two different
 // failure shapes depending on whether the run has active (DISPATCHING/
 // RUNNING) units. Active units present means the run cannot be

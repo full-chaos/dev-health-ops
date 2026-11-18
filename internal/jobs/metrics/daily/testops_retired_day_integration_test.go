@@ -139,8 +139,9 @@ func TestTestopsRetiredDay(t *testing.T) {
 		e.stack.pass(t, org, f3Run, at(f3Day, 10), attempt1)
 		e.compute(org, f3Day)
 		repo := e.stack.repoID(t, org)
-		// R6 + R7: the newest stored row of D names an owner and a service, and is stamped 30 s ahead of the clock.
-		ahead := time.Now().UTC().Add(30 * time.Second).Truncate(time.Second)
+		// R6 + R7: the newest stored row of D names an owner and a service, and is stamped after the first compute and before the next.
+		time.Sleep(1100 * time.Millisecond)
+		ahead := time.Now().UTC().Truncate(time.Second)
 		e.exec(`INSERT INTO testops_test_metrics_daily (org_id, repo_id, day, total_cases, passed_count, failed_count, pass_rate,
   failure_rate, total_suites, team_id, service_id, computed_at) VALUES (?, ?, ?, 2, 1, 1, 0.5, 0.5, 1, 'team-x', 'svc-y', ?)`,
 			org, repo, f3Day, ahead)
@@ -155,11 +156,28 @@ func TestTestopsRetiredDay(t *testing.T) {
 		if got.retracted != 1 || got.team != "team-x" || got.service != "svc-y" {
 			t.Errorf("R6: the marker is %+v, want retracted 1 carrying team-x and svc-y of the row it retires", got)
 		}
-		if want := ahead.Add(time.Second); !got.newest.Equal(want) {
-			t.Errorf("R7: the marker computed_at is %v, want %v (one unit after the stored row stamped ahead of the clock)", got.newest, want)
+		if !got.newest.After(ahead) {
+			t.Errorf("R7: the marker computed_at is %v, want after the stored row %v (the marker carries the run's snapshot)", got.newest, ahead)
 		}
 		if kept := e.stored(org, other, f3Day); kept.rows != 1 || kept.retracted != 0 {
 			t.Errorf("R5: the repository in no partition stores %+v, want its one live row untouched", kept)
+		}
+	})
+
+	t.Run("R7b_a_row_stamped_after_the_runs_snapshot_stays_live", func(t *testing.T) {
+		e := &f3Env{t: t, ctx: e.ctx, stack: e.stack}
+		org := "ret-7b-" + uuid.NewString()[:8]
+		e.stack.pass(t, org, f3Run, at(f3Day, 10), attempt1)
+		e.compute(org, f3Day)
+		repo := e.stack.repoID(t, org)
+		// A newer run (a later snapshot, or a host whose clock is ahead) stored its row: the older snapshot retires nothing it wrote.
+		ahead := time.Now().UTC().Add(30 * time.Second).Truncate(time.Second)
+		e.exec(`INSERT INTO testops_test_metrics_daily (org_id, repo_id, day, total_cases, passed_count, failed_count, pass_rate,
+  failure_rate, total_suites, team_id, computed_at) VALUES (?, ?, ?, 2, 1, 1, 0.5, 0.5, 1, 'team-x', ?)`, org, repo, f3Day, ahead)
+		e.stack.pass(t, org, f3Run, f3Next, attempt2)
+		e.compute(org, f3Day)
+		if got := e.stored(org, repo, f3Day); got.retracted != 0 || !got.newest.Equal(ahead) {
+			t.Errorf("R7b: D stores %+v, want the row stamped %v still the newest and live", got, ahead)
 		}
 	})
 

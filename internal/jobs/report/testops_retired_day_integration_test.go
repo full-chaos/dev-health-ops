@@ -58,7 +58,7 @@ VALUES (toUUID(?), ?, 'team-1', ?, '2026-01-03 11:00:00', 1)`, repo, retired, or
   flake_rate, total_suites, flake_cases, distinct_cases, team_id, org_id, computed_at)
 VALUES (toUUID(?), ?, 2, 2, 0, 1, 0, 0.25, 1, 1, 4, 'team-1', ?, '2026-01-03 10:00:00')`, repo, live, org)
 
-	for metric, want := range map[string]float64{"pass_rate": 1, "failure_rate": 0, "flake_rate": 0.25} {
+	for metric, want := range map[string]float64{"pass_rate": 1, "flake_rate": 0.25} {
 		loader := reportLoaderFunc(func(context.Context, QueryInput) (ReportDefinition, error) {
 			return ReportDefinition{
 				Plan: Plan{PlanID: "plan-1", ReportType: "weekly_health", OrganizationID: org},

@@ -551,12 +551,25 @@ const nullableIntoPlainSites = `
 // mean, NULL for a bucket with no sample) and denominator toFloat64(count(...)), both scanned into **float64:
 //
 //	ExecuteOrgTimeseries 30a7cdd2fa01 -> 1e3ee3af097b
+//
+// CHAOS-13928: five pins re-pinned by hand after reading each moved statement, digests copied from the local TestScanTypeCensus
+// failure output (not computed). A testops_test_metrics_daily row that retires a day carries the new UInt8 column retracted
+// (not Nullable); the readers add its liverow predicate to the WHERE of the statement and select no new column. flakyStatement
+// (loadClusters, loadDocDrift: digest only; loadFlaky: same scan targets, flake_share still Nullable scanned into **float64) and
+// dedupFromMeasureSource (ExecuteOrgTimeseries, ExecuteTimeseries: SELECT * wrapped in a WHERE; scan targets and types
+// unchanged) change only a filter:
+//
+//	loadClusters 8c4f62d6f207 -> f62124ab26af
+//	loadDocDrift ed7df227e4af -> ce3024a41da9
+//	loadFlaky 28265e8c788f -> 37c05084ba13
+//	ExecuteOrgTimeseries 1e3ee3af097b -> 6637e944ff79
+//	ExecuteTimeseries f2eec06b6811 -> 8842c256cd1a
 const unverifiedSites = `
 internal/queryapi/aggflame/clickhouse.go|fetchCycleBreakdown|*string,*float64,*uint64|a003456ad69e|not-describable
-internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*string,*uint64,*[]string|8c4f62d6f207|not-describable
-internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*uint64,*[]string|8c4f62d6f207|not-describable
-internal/queryapi/aianalytics/ai_opportunities.go|loadDocDrift|*string,*uint64,*uint64|ed7df227e4af|not-describable
-internal/queryapi/aianalytics/ai_opportunities.go|loadFlaky|*string,*uint64,**float64|28265e8c788f|not-describable
+internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*string,*uint64,*[]string|f62124ab26af|not-describable
+internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*uint64,*[]string|f62124ab26af|not-describable
+internal/queryapi/aianalytics/ai_opportunities.go|loadDocDrift|*string,*uint64,*uint64|ce3024a41da9|not-describable
+internal/queryapi/aianalytics/ai_opportunities.go|loadFlaky|*string,*uint64,**float64|37c05084ba13|not-describable
 internal/queryapi/aianalytics/flow_opportunities.go|loadRepoFlowRows|*string,*uint64,**float64,**float64,**float64,**float64|877e3ede0140|not-describable
 internal/queryapi/aianalytics/flow_opportunities.go|loadTeamFlowRows|*string,*uint64,**float64,**float64,**float64|cef9073b1eae|not-describable
 internal/queryapi/aianalytics/loaders.go|loadLabels|*string,*string|ffbc61d0410c|spliced-select-list
@@ -569,8 +582,8 @@ internal/queryapi/analytics/investmentquality.go|executeEvidenceQualityByGroup|*
 internal/queryapi/analytics/investmentquality.go|executeInvestmentQualityStats|*uint64,*uint64,*float64,*float64,*uint64,*uint64,*uint64,*uint64,*uint64,*uint64,*uint64|2219e7f838c7|statement-not-static
 internal/queryapi/analytics/sankeycoverage.go|runSankeyCoverageQuery|*float64,*float64,*float64,*float64,**float64,**float64,**float64,**float64,**float64|7474017a0a07|statement-not-static
 internal/queryapi/analytics/sankeygrouped.go|executeSankeyGrouped|[]any|02426fb74c03|variadic-destinations
-internal/queryapi/analytics/timeseries.go|ExecuteOrgTimeseries|*time.Time,**float64,**float64|1e3ee3af097b|statement-not-static
-internal/queryapi/analytics/timeseries.go|ExecuteTimeseries|*time.Time,*string,**float64|f2eec06b6811|statement-not-static
+internal/queryapi/analytics/timeseries.go|ExecuteOrgTimeseries|*time.Time,**float64,**float64|6637e944ff79|statement-not-static
+internal/queryapi/analytics/timeseries.go|ExecuteTimeseries|*time.Time,*string,**float64|8842c256cd1a|statement-not-static
 internal/queryapi/cognitiveload/cognitiveload.go|fetchOwnershipCandidates|*string,*string,*uint8,*uint16|e598129679a3|spliced-select-list
 internal/queryapi/complexitytimeseries/complexitytimeseries.go|fetchFileTimeseries|*time.Time,*string,*string,**uint32,**float64,**uint32,**uint32|69bcb13af3df|spliced-select-list
 internal/queryapi/complexitytimeseries/complexitytimeseries.go|fetchRepoTimeseries|*time.Time,*string,**uint64,**uint64,**float64,**uint64,**uint64|2d500256c88b|spliced-select-list

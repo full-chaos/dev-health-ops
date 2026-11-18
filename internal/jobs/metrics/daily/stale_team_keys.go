@@ -159,6 +159,27 @@ func staleKeyVersionAfter(table StaleKeyTable, at, stored time.Time) (time.Time,
 	return version, nil
 }
 
+// snapshotMarkerTables are the tables whose row of zeros carries the snapshot
+// instant of the run that writes it. Two runs of one repository and day can
+// overlap (distinct generations are distinct runs and nothing serialises their
+// execution), so for such a table the newest snapshot wins: the marker is
+// stamped with the run's snapshot, never raised above a stored row, and a key
+// whose stored row is not older than the snapshot is left alone (an equal
+// snapshot is a no-op).
+var snapshotMarkerTables = map[string]struct{}{
+	teamkeytables.TestopsTestMetricsDaily.Table: {},
+}
+
+// staleKeySnapshot is the version a snapshot-stamped marker carries: the
+// snapshot cut to the unit of the table's computed_at column, the form a stored
+// row of the same instant holds.
+func staleKeySnapshot(table StaleKeyTable, at time.Time) (time.Time, bool) {
+	if _, ok := snapshotMarkerTables[table.Table]; !ok {
+		return time.Time{}, false
+	}
+	return at.UTC().Truncate(staleKeyVersionSteps[table.Table]), true
+}
+
 func staleKeyDay(day time.Time) time.Time {
 	utc := day.UTC()
 	return time.Date(utc.Year(), utc.Month(), utc.Day(), 0, 0, 0, 0, time.UTC)
@@ -225,6 +246,9 @@ func supersedeStaleTeamKeys(
 	if _, err := staleKeyVersionAfter(table, computedAt, time.Time{}); err != nil {
 		return 0, err
 	}
+	if snapshot, ok := staleKeySnapshot(table, computedAt); ok {
+		return supersedeStaleKeysAtSnapshot(ctx, conn, table, organizationID, day, scope, produced, snapshot)
+	}
 	return supersedeStaleKeys(ctx, conn, table, organizationID, day, scope, produced,
 		func(_ staleKey, stored time.Time) time.Time {
 			// The table has a declared unit (checked above).
@@ -290,6 +314,37 @@ func supersedeSynthesizedUserKeys(
 		version, _ := staleKeyVersionAfter(table, computedAt, versions[key.text()])
 		return version
 	})
+}
+
+// supersedeStaleKeysAtSnapshot is supersedeStaleKeys for a snapshot-stamped
+// table: the live keys of the scope that the run did not produce get a marker at
+// the snapshot, except a key whose stored row is not older than the snapshot
+// (a newer run, or this instant, already wrote it).
+func supersedeStaleKeysAtSnapshot(
+	ctx context.Context, conn staleKeyConn, table StaleKeyTable, organizationID string, day time.Time,
+	scope staleKeyScope, produced []staleKey, snapshot time.Time,
+) (int, error) {
+	if err := table.Valid(); err != nil {
+		return 0, fmt.Errorf("%w: %v", ErrInvalidState, err)
+	}
+	if conn == nil || strings.TrimSpace(organizationID) == "" || day.IsZero() {
+		return 0, ErrInvalidState
+	}
+	if len(table.Scope) > 0 && len(scope) == 0 {
+		return 0, nil
+	}
+	live, versions, err := loadLiveStaleKeys(ctx, conn, table, organizationID, day)
+	if err != nil {
+		return 0, err
+	}
+	var older []staleKey
+	for _, key := range staleKeysOf(table, live, scope, false, produced) {
+		if versions[key.text()].Before(snapshot) {
+			older = append(older, key)
+		}
+	}
+	return writeStaleKeyZeroRows(ctx, conn, table, organizationID, day, older,
+		func(staleKey) time.Time { return snapshot })
 }
 
 // supersedeStaleKeys is the rule of a family. versionOf gets a stale key and
@@ -494,10 +549,11 @@ func retractStaleTeamKeysOutsideRun(
 		len(table.Scope) == 0 || readPresent == nil {
 		return result, ErrInvalidState
 	}
-	live, _, err := loadLiveStaleKeys(ctx, conn, table, organizationID, day)
+	live, versions, err := loadLiveStaleKeys(ctx, conn, table, organizationID, day)
 	if err != nil {
 		return result, err
 	}
+	snapshot, snapshotStamped := staleKeySnapshot(table, clock)
 	present, err := readPresent(ctx)
 	if err != nil {
 		return result, fmt.Errorf("%s: %w", table.Table, err)
@@ -524,6 +580,9 @@ func retractStaleTeamKeysOutsideRun(
 			result.kept++
 			continue
 		}
+		if snapshotStamped && !versions[key.text()].Before(snapshot) {
+			continue
+		}
 		outside = append(outside, key)
 		supersededRepositories[repository] = struct{}{}
 	}
@@ -531,13 +590,15 @@ func retractStaleTeamKeysOutsideRun(
 		return result, nil
 	}
 	sort.Slice(outside, func(left, right int) bool { return outside[left].text() < outside[right].text() })
-	newest, err := newestStaleKeyVersion(ctx, conn, table, organizationID, day)
-	if err != nil {
-		return result, err
-	}
-	version, err := staleKeyVersionAfter(table, clock, newest)
-	if err != nil {
-		return result, err
+	version := snapshot
+	if !snapshotStamped {
+		newest, err := newestStaleKeyVersion(ctx, conn, table, organizationID, day)
+		if err != nil {
+			return result, err
+		}
+		if version, err = staleKeyVersionAfter(table, clock, newest); err != nil {
+			return result, err
+		}
 	}
 	result.written, err = writeStaleKeyZeroRows(ctx, conn, table, organizationID, day, outside,
 		func(staleKey) time.Time { return version })

@@ -11,6 +11,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/testops"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/testopspooled"
+	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
 // pooledChart is the definition of a pooled chart metric: the value of a bucket is taken over the raw samples of its rows
@@ -51,15 +52,16 @@ var pooledCharts = map[string]pooledChart{
 // counts on the UTC day it finishes (the writer's rule), the newest synced
 // version of a run (FINAL) is the run, a deleted run is no run. A duration sample is finished_at - started_at in minutes
 // when not negative, a queue sample started_at - queued_at in minutes when not negative; the stored duration_seconds and
-// queue_seconds are not read, as the writer does not read them. Only the repository-days the writer computed are read.
-// cicd_pooled_test.go pins these rules to the writer's text.
+// queue_seconds are not read, as the writer does not read them. Only the repository-days the writer computed are read: the
+// keys whose NEWEST row is live (a retired repository-day, newest row retracted = 1, admits no run, also a run synced after
+// the retraction). cicd_pooled_test.go pins these rules to the writer's text.
 const (
 	cicdRunMinutes          = "cicd_run_minutes"
 	cicdQueueMinutes        = "cicd_queue_minutes"
 	cicdCountedRunPredicate = "lowerUTF8(trimBoth(ifNull(status, ''))) != '" + testops.StatusDeleted + "'"
 )
 
-const cicdRunsSource = `(
+var cicdRunsSource = `(
     SELECT
         org_id,
         repo_id,
@@ -75,7 +77,9 @@ const cicdRunsSource = `(
       AND ` + testops.NotOpenRunSQL + `
       AND (repo_id, toDate(finished_at)) IN (
           SELECT repo_id, day FROM cicd_metrics_daily
-          WHERE org_id = {org_id:String} AND day >= {start_date:Date} AND day < {end_date:Date})
+          WHERE org_id = {org_id:String} AND day >= {start_date:Date} AND day < {end_date:Date}
+          GROUP BY repo_id, day
+          HAVING ` + liverow.NewestPredicate("cicd_metrics_daily", "") + `)
 ) AS cicd_pipeline_runs`
 
 // The writer's mean and p90 (linear between closest ranks), NULL for a group with no sample.
@@ -231,8 +235,8 @@ func repositoryOwnerJoin(orgID string, teams []string, asOf time.Time) (string, 
 
 // repositoryOwnedTables are the charted daily tables of one row per repository-day whose team is the owner of its
 // repository as of the chart run, as for a pooled chart: cicd_metrics_daily has no team column, and the stored team_id
-// of testops_pipeline_metrics_daily is the main owner at the end of the day only, so it is not read.
-var repositoryOwnedTables = map[string]bool{"cicd_metrics_daily": true, "testops_pipeline_metrics_daily": true}
+// of the two TestOps tables (pipeline, test) is the main owner at the end of the day only, so it is not read.
+var repositoryOwnedTables = map[string]bool{"cicd_metrics_daily": true, "testops_pipeline_metrics_daily": true, "testops_test_metrics_daily": true}
 
 // withRepositoryOwners returns the definition of a stored-row chart of a repository-owned table with its owners instant
 // asOf, when the metric has the team dimension.

@@ -337,7 +337,9 @@ explicit owner other than the resolved team drops the candidate entirely (falls 
 exactly like a non-member would, not merely loses precedence); a repo with **no** ownership row at
 all is `ownership_unknown` and the gate does not apply (2026-09-09: an absent ownership row is
 treated as missing data, not as "not owned" — two orgs with old fixture data and no ownership rows
-at all pass membership through unchanged); `linked_issue` (5) requires a real `work_item_dependencies`
+at all pass membership through unchanged); an inactive owner is no owner (an inactive team owns nothing,
+§0.4g rule 1), so a repo owned only by inactive teams is `ownership_unknown` too
+(`TestMembershipGateInactiveOnlyOwnerIsNoOwnershipFact`); `linked_issue` (5) requires a real `work_item_dependencies`
 donor row resolving to a `work_items`
 row whose **own team came from a first-class fact (sources 0–3; membership never wins)** — a donor resolved only by
 `author_membership` or `manual_fallback` is NOT a valid donor, so neither a person-shaped author
@@ -1436,7 +1438,7 @@ controls: a link that is gone and an explicit empty list are closed).
 >   property of the repository; the share scales exposure counts). A sole owner of every repository it owns (share 1)
 >   is unchanged, bit for bit. Resolved through `teamresolve.ResolveOwnerSharesThenPatterns`.
 > - **A table with one row per repository** (the four TestOps families, one row per organization, repository and
->   day) stores the main owner only, as of the end of the day; a full tie stores the first tied team by rank. A second team has no row to live in, so the analytics series, breakdown and sankey do not group or filter by that stored team: they take the owners at the request (see "A TestOps rate and the counts beside it" above). The benchmarking job takes its team series from the owners at the run instant, like the analytics series. The AI report charts of the pipeline table take the owners at the report run too, a co-owned repository whole for each owner: the duration and queue charts over the raw runs, the counts and rates over the stored rows (`repositoryOwnedTables` in `internal/jobs/report/pooled.go`). A named limit: the report charts of the test and coverage tables still read the stored team.
+>   day) stores the main owner only, as of the end of the day; a full tie stores the first tied team by rank. A second team has no row to live in, so the analytics series, breakdown and sankey do not group or filter by that stored team: they take the owners at the request (see "A TestOps rate and the counts beside it" above). The benchmarking job takes its team series from the owners at the run instant, like the analytics series. The AI report charts of the pipeline and test tables take the owners at the report run too, a co-owned repository whole for each owner: the duration and queue charts over the raw runs, the counts and rates over the stored rows (`repositoryOwnedTables` in `internal/jobs/report/pooled.go`). A named limit: the report charts of the coverage table still read the stored team.
 
 A project (a Jira space connected to several Atlassian teams, a Linear or GitLab project with several owning
 teams, any provider) can belong to more than one team. An item of such a project is the work of EACH active

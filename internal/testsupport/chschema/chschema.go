@@ -113,11 +113,6 @@ func migrate(ctx context.Context, t *testing.T, instance *containers.Instance, b
 	}
 }
 
-// Execer is the one connection method CreateChainObjects needs.
-type Execer interface {
-	Exec(ctx context.Context, query string, args ...any) error
-}
-
 // CreateChainObjects runs, in file order, the CREATE statements of one chain file that create one of names, for a test
 // whose base tables are typed by hand: the objects come from the chain file's own text, never a second copy. A name the
 // file does not create fails the test.

@@ -335,6 +335,7 @@ func Descriptor(
 		descriptor.Destinations = []string{
 			"ci_pipeline_runs", "ci_job_runs", "ci_acceptance_checks",
 			"test_suite_results", "test_case_results", "coverage_snapshots",
+			testOpsRunReportCompletenessDestination,
 		}
 		descriptor.RouteReady = true
 		descriptor.Plannable = true
@@ -342,6 +343,7 @@ func Descriptor(
 		descriptor.Destinations = []string{
 			"ci_pipeline_runs", "ci_job_runs", "ci_acceptance_checks",
 			"test_suite_results", "test_case_results", "coverage_snapshots",
+			testOpsRunReportCompletenessDestination,
 		}
 		descriptor.RouteReady = true
 	case provider == "gitlab" && dataset == "incidents":
@@ -466,6 +468,7 @@ func Descriptor(
 		descriptor.Destinations = []string{
 			"ci_pipeline_runs", "ci_job_runs", "ci_acceptance_checks",
 			"test_suite_results", "test_case_results", "coverage_snapshots",
+			testOpsRunReportCompletenessDestination,
 		}
 		descriptor.RouteReady = true
 		descriptor.Plannable = true
@@ -506,6 +509,7 @@ func Descriptor(
 		descriptor.Destinations = []string{
 			"ci_pipeline_runs", "ci_job_runs", "ci_acceptance_checks",
 			"test_suite_results", "test_case_results", "coverage_snapshots",
+			testOpsRunReportCompletenessDestination,
 		}
 		descriptor.RouteReady = true
 	}

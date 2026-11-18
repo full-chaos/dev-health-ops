@@ -266,6 +266,7 @@ type Metrics struct {
 	inventoryPageCap               map[string]uint64
 	perRunTruncation               map[string]uint64
 	artifactSkipped                map[string]uint64
+	openRunSkipped                 map[string]uint64
 	nonReportMembersSkipped        map[string]uint64
 	skippedArtifactCauseOverflow   map[string]uint64
 	snapshotDiscarded              map[string]uint64
@@ -330,6 +331,7 @@ func NewMetrics() *Metrics {
 		inventoryPageCap:               map[string]uint64{},
 		perRunTruncation:               map[string]uint64{},
 		artifactSkipped:                map[string]uint64{},
+		openRunSkipped:                 map[string]uint64{},
 		nonReportMembersSkipped:        map[string]uint64{},
 		skippedArtifactCauseOverflow:   map[string]uint64{},
 		snapshotDiscarded:              map[string]uint64{},
@@ -527,6 +529,8 @@ var metricArtifactSkipReasonVocabulary = map[string]struct{}{
 	// download exceeded the route's size cap, skipped and counted like the
 	// two reasons above instead of failing the unit closed.
 	"artifact_oversized": {},
+	// artifact_expired (CHAOS-13980): a report artifact GitHub lists as expired.
+	"artifact_expired": {},
 	// report_too_large: a gitlab test_report body over the route's size cap,
 	// skipped and counted instead of failing the unit closed.
 	"report_too_large": {},
@@ -571,6 +575,36 @@ func (m *Metrics) RecordArtifactSkipped(provider, dataset, reason string) {
 		":"+MetricArtifactSkipReasonLabel(reason)]++
 }
 
+// metricOpenRunSkipReasonVocabulary is the closed set of reasons one open run's
+// re-read by id failed and the run was skipped for the unit; an unknown reason
+// collapses to "other".
+var metricOpenRunSkipReasonVocabulary = map[string]struct{}{
+	"gone": {}, "unprocessable": {}, "conflict": {}, "client_error": {},
+	"invalid_payload": {}, "transient": {}, "jobs_not_found": {},
+}
+
+// MetricOpenRunSkipReasonLabel bounds the open-run skip reason label.
+func MetricOpenRunSkipReasonLabel(value string) string {
+	lowered := strings.ToLower(strings.TrimSpace(value))
+	if _, known := metricOpenRunSkipReasonVocabulary[lowered]; !known {
+		return "other"
+	}
+	return lowered
+}
+
+// RecordOpenRunSkipped counts ONE stored open run whose re-read by id failed
+// with a per-run error: the run is skipped for the unit and read again on a
+// later unit. The run id is in the WARN line, never a label.
+func (m *Metrics) RecordOpenRunSkipped(provider, dataset, reason string) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.openRunSkipped[metricProvider(provider)+":"+MetricDatasetLabel(dataset)+
+		":"+MetricOpenRunSkipReasonLabel(reason)]++
+}
+
 // RecordNonReportMembersSkipped counts archive members that are not test
 // reports (CHAOS-13193), by bounded provider, dataset and extension class
 // ("json" or "other"). Observability only: it is not an incomplete cause.
@@ -596,7 +630,8 @@ func (m *Metrics) RecordNonReportMembersSkipped(provider, dataset, class string,
 // label.
 var metricSkippedArtifactCauseOverflowVocabulary = map[string]struct{}{
 	"artifact_oversized": {}, "artifact_unavailable": {}, "unreadable_archive": {},
-	"malformed": {}, "unreadable": {},
+	"artifact_expired": {},
+	"malformed":        {}, "unreadable": {}, "unsafe_doctype": {},
 	// CHAOS-13794: the markers of a run's report artifacts skipped whole.
 	"per_run_cap": {}, "aggregate_of_parts": {}, "aggregate_mismatch": {},
 }
@@ -642,6 +677,7 @@ func (m *Metrics) RecordSkippedArtifactCauseOverflow(provider, dataset, cause st
 // rather than opening the label.
 var metricCicdPartialSuccessReasonVocabulary = map[string]struct{}{
 	"artifact_oversized":   {},
+	"artifact_expired":     {},
 	"artifact_unavailable": {},
 	"unreadable_archive":   {},
 	// malformed/unreadable (CHAOS-4592): report-parse-time causes that now
@@ -649,6 +685,7 @@ var metricCicdPartialSuccessReasonVocabulary = map[string]struct{}{
 	// see githubTestsWatermarkAdvancingPairs.
 	"malformed":          {},
 	"unreadable":         {},
+	"unsafe_doctype":     {},
 	"per_run_cap":        {},
 	"aggregate_of_parts": {},
 	"mixed":              {},
@@ -770,6 +807,7 @@ func (m *Metrics) RecordNonFiniteReleaseRefConfidence(provider, dataset string, 
 var metricDuplicateNaturalKeyTableVocabulary = map[string]struct{}{
 	"ci_pipeline_runs": {}, "ci_job_runs": {}, "ci_acceptance_checks": {},
 	"test_suite_results": {}, "test_case_results": {}, "coverage_snapshots": {},
+	"testops_run_report_completeness": {},
 }
 
 // MetricDuplicateNaturalKeyTableLabel bounds a duplicate_natural_key
@@ -1820,6 +1858,13 @@ func (m *Metrics) WritePrometheus(writer io.Writer) error {
 		writer, "dev_health_provider_artifact_skipped_total",
 		"Provider artifacts skipped as unreadable while the rest of the inventory continued, by bounded provider, dataset, and reason.",
 		"reason", m.artifactSkipped,
+	); err != nil {
+		return err
+	}
+	if err := writeProviderDatasetReasonCounter(
+		writer, "dev_health_provider_open_run_skipped_total",
+		"Stored open runs whose re-read by id failed with a per-run error and were skipped for the unit, by bounded provider, dataset, and reason.",
+		"reason", m.openRunSkipped,
 	); err != nil {
 		return err
 	}

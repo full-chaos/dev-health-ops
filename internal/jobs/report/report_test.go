@@ -129,7 +129,7 @@ func TestRendererAndArtifactMatchPythonGoldens(t *testing.T) {
 				OrganizationID: "org-1",
 			},
 			DataPoints: []DataPoint{{X: "2026-01-01", Y: 0.95}},
-			Title:      "Success rate", SourceTable: "cicd_metrics_daily", Unit: "ratio",
+			Title:      "Success rate", SourceTable: "testops_pipeline_metrics_daily", Unit: "ratio",
 		}},
 		Metadata: map[string]string{"renderer_version": "reports.v1"},
 	}

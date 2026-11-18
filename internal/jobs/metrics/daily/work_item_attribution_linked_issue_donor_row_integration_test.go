@@ -334,7 +334,7 @@ func TestALargePartitionLoadsItsDonorsInBoundedStatements(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			orgID := "org-donor-bound-" + uuid.NewString()
 			repoPR, repoD := uuid.New(), uuid.New()
-			workItems, err := conn.PrepareBatch(ctx, `INSERT INTO work_items (repo_id, work_item_id, provider, project_id, created_at, org_id, last_synced)`)
+			workItems, err := conn.PrepareBatch(ctx, `INSERT INTO work_items (repo_id, work_item_id, provider, type, project_id, created_at, org_id, last_synced)`)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -350,10 +350,10 @@ func TestALargePartitionLoadsItsDonorsInBoundedStatements(t *testing.T) {
 			for n := range items {
 				pr := fmt.Sprintf("ghpr:acme/%s#%d", pad, n)
 				donor := fmt.Sprintf("jira:%s-%d", pad, n)
-				if err := workItems.Append(repoPR, pr, "github", "", seededAt, orgID, seededAt); err != nil {
+				if err := workItems.Append(repoPR, pr, "github", "pr", "", seededAt, orgID, seededAt); err != nil {
 					t.Fatal(err)
 				}
-				if err := workItems.Append(repoD, donor, "jira", "proj-d", seededAt, orgID, seededAt); err != nil {
+				if err := workItems.Append(repoD, donor, "jira", "story", "proj-d", seededAt, orgID, seededAt); err != nil {
 					t.Fatal(err)
 				}
 				if err := edges.Append(orgID, pr, donor, "relates_to", seededAt); err != nil {

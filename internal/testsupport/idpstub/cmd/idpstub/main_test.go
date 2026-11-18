@@ -14,16 +14,6 @@ import (
 	"time"
 )
 
-func freePort(t *testing.T) string {
-	t.Helper()
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer l.Close()
-	return l.Addr().String()
-}
-
 func TestCmdIdpstubCertsServeOIDCAndSAML(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "certs")
 	if err := certs([]string{"-out", dir, "-host", "localhost"}); err != nil {
@@ -36,12 +26,17 @@ func TestCmdIdpstubCertsServeOIDCAndSAML(t *testing.T) {
 	if err := certs([]string{"-out", dir}); err == nil {
 		t.Fatal("certs with no -host succeeded")
 	}
-	addr := freePort(t)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	addr := ln.Addr().String()
 	base := "https://localhost:" + addr[strings.LastIndex(addr, ":")+1:]
 	done := make(chan error, 1)
 	go func() {
-		done <- serve("serve", []string{"-listen", addr, "-cert", filepath.Join(dir, "server.pem"), "-key", filepath.Join(dir, "server.key"),
-			"-base-url", base, "-redirect-uri", "https://sp.kit.test/cb", "-user", "carol,carol@kit.test,Carol"})
+		done <- serveOn("serve", []string{"-listen", addr, "-cert", filepath.Join(dir, "server.pem"), "-key", filepath.Join(dir, "server.key"),
+			"-base-url", base, "-redirect-uri", "https://sp.kit.test/cb", "-user", "carol,carol@kit.test,Carol"}, ln)
 	}()
 	caPEM, err := os.ReadFile(filepath.Join(dir, "ca.pem"))
 	if err != nil {
@@ -111,7 +106,7 @@ func TestCmdServeRefusesToStartWithoutARedirectURI(t *testing.T) {
 	for _, mode := range []string{"serve", "oidc"} {
 		done := make(chan error, 1)
 		go func() {
-			done <- serve(mode, []string{"-listen", freePort(t), "-cert", filepath.Join(dir, "server.pem"), "-key", filepath.Join(dir, "server.key"),
+			done <- serve(mode, []string{"-listen", "127.0.0.1:0", "-cert", filepath.Join(dir, "server.pem"), "-key", filepath.Join(dir, "server.key"),
 				"-base-url", "https://localhost"})
 		}()
 		select {
@@ -122,5 +117,53 @@ func TestCmdServeRefusesToStartWithoutARedirectURI(t *testing.T) {
 		case <-time.After(3 * time.Second):
 			t.Fatalf("%s started with no -redirect-uri", mode)
 		}
+	}
+}
+
+func TestServeBindsTheConfiguredAddressItself(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "certs")
+	if err := certs([]string{"-out", dir, "-host", "localhost"}); err != nil {
+		t.Fatal(err)
+	}
+	occupied, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer occupied.Close()
+	done := make(chan error, 1)
+	go func() {
+		done <- serve("serve", []string{"-listen", occupied.Addr().String(), "-cert", filepath.Join(dir, "server.pem"), "-key", filepath.Join(dir, "server.key"),
+			"-base-url", "https://localhost", "-redirect-uri", "https://sp.kit.test/cb"})
+	}()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "address already in use") {
+			t.Fatalf("serve error = %v, want the bind failure of the configured address", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("serve did not try to bind the configured -listen address")
+	}
+}
+
+func TestServeWithAnEmptyListenAddressStillTargetsPortHTTPS(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root could bind port 443 and leave a listener behind")
+	}
+	dir := filepath.Join(t.TempDir(), "certs")
+	if err := certs([]string{"-out", dir, "-host", "localhost"}); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- serve("serve", []string{"-listen", "", "-cert", filepath.Join(dir, "server.pem"), "-key", filepath.Join(dir, "server.key"),
+			"-base-url", "https://localhost", "-redirect-uri", "https://sp.kit.test/cb"})
+	}()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), ":443") {
+			t.Fatalf("serve error = %v, want a bind failure that names :443, the port ListenAndServeTLS gave an empty address", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("serve did not return: it should refuse to bind :443 as a non-root user")
 	}
 }

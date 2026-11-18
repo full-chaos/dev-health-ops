@@ -5,6 +5,7 @@ package syncdispatchruntime
 import (
 	"context"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -198,11 +199,19 @@ WHERE id=$1`, finalizeTestOutbox, staleAt, strconv.FormatInt(deadDelivery.Job.ID
 	// produced. Reading them back is the point: a hand-built FinalizeSyncRunArgs
 	// would pass currentTransportReference by construction and prove nothing.
 	var deliveredGeneration int64
-	var deliveredJobID string
+	var deliveredJobID, deliveredStatus, deliveredTransport, checkDef string
+	var deliveredError *string
 	if err := pool.QueryRow(ctx, `
-SELECT dispatched_route_generation, transport_job_id FROM sync_dispatch_outbox WHERE id=$1`,
-		finalizeTestOutbox).Scan(&deliveredGeneration, &deliveredJobID); err != nil {
+SELECT dispatched_route_generation, transport_job_id, status, last_error, dispatched_transport,
+	(SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = 'ck_sync_dispatch_outbox_dispatched_route_coherence')
+FROM sync_dispatch_outbox WHERE id=$1`,
+		finalizeTestOutbox).Scan(&deliveredGeneration, &deliveredJobID, &deliveredStatus, &deliveredError, &deliveredTransport, &checkDef); err != nil {
 		t.Fatal(err)
+	}
+	// The kernel's dispatched write (no last_error) carries its route under the NULL-safe CHECK of the real chain.
+	if deliveredStatus != "dispatched" || deliveredError != nil || deliveredTransport != "river" ||
+		!strings.Contains(checkDef, "IS DISTINCT FROM") {
+		t.Fatalf("kernel delivery: status=%q last_error=%v transport=%q check=%s", deliveredStatus, deliveredError, deliveredTransport, checkDef)
 	}
 	if deliveredJobID == strconv.FormatInt(deadDelivery.Job.ID, 10) {
 		t.Fatal("re-delivery reused the dead River job id")

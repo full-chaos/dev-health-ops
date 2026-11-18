@@ -36,8 +36,8 @@ func TestOperatingReviewCurrentAndV1_DifferByTheTwoDataSelections(t *testing.T) 
 
 func TestOperatingReview_BothTextsResolveToTheOneOperation(t *testing.T) {
 	legacy := legacyDigestsByOperation["operatingReview"]
-	if len(legacy) != 5 || legacy[0] != digestHex(registeredOperatingReviewV1Document) || legacy[1] != digestHex(registeredOperatingReviewV2Document) || legacy[2] != digestHex(registeredOperatingReviewV3Document) || legacy[3] != digestHex(registeredOperatingReviewV4Document) || legacy[4] != digestHex(registeredOperatingReviewV5Document) {
-		t.Fatalf("legacyDigestsByOperation[operatingReview] = %v, want exactly the V1 to V5 digests", legacy)
+	if len(legacy) != 6 || legacy[0] != digestHex(registeredOperatingReviewV1Document) || legacy[1] != digestHex(registeredOperatingReviewV2Document) || legacy[2] != digestHex(registeredOperatingReviewV3Document) || legacy[3] != digestHex(registeredOperatingReviewV4Document) || legacy[4] != digestHex(registeredOperatingReviewV5Document) || legacy[5] != digestHex(registeredOperatingReviewV6Document) {
+		t.Fatalf("legacyDigestsByOperation[operatingReview] = %v, want exactly the V1 to V6 digests", legacy)
 	}
 	byDigest, err := buildOperationByDigest(
 		map[string]string{
@@ -51,7 +51,7 @@ func TestOperatingReview_BothTextsResolveToTheOneOperation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"operatingreview_captured.graphql", "operatingreview_v1_captured.graphql", "operatingreview_v2_captured.graphql", "operatingreview_v3_captured.graphql", "operatingreview_v4_captured.graphql", "operatingreview_v5_captured.graphql"} {
+	for _, name := range []string{"operatingreview_captured.graphql", "operatingreview_v1_captured.graphql", "operatingreview_v2_captured.graphql", "operatingreview_v3_captured.graphql", "operatingreview_v4_captured.graphql", "operatingreview_v5_captured.graphql", "operatingreview_v6_captured.graphql"} {
 		text, err := os.ReadFile("testdata/wire_capture/" + name)
 		if err != nil {
 			t.Fatalf("read %s: %v", name, err)
@@ -125,10 +125,12 @@ func TestOperatingReviewV5AndV4_DifferByTheChangeFailureEvidence(t *testing.T) {
 	}
 }
 
-// CHAOS-9873: the current text is the V5 text plus exactly the section's sizing, after worsened. No legacy text asks
+// CHAOS-9873: the V6 text is the V5 text plus exactly the section's sizing, after worsened. No older legacy text asks
 // for it, so a web build on any older text reads the investment section in work units, as it did.
-func TestOperatingReviewCurrentAndV5_DifferByTheSectionSizing(t *testing.T) {
-	current := registeredOperatingReviewDocument
+func TestOperatingReviewV6AndV5_DifferByTheSectionSizing(t *testing.T) {
+	// Since CHAOS-13977 the current text also asks for the degradedReason of a metric and of its delta; the text of
+	// CHAOS-9873 is the legacy V6 text, and it is V6 that differs from V5 by the sizing.
+	current := registeredOperatingReviewV6Document
 	added := "      worsened\n      sizing {\n        measure\n        sizingCoverage\n        unsizedUnitCount\n        workUnitCount\n        __typename\n      }\n"
 	if strings.Count(current, added) != 1 || strings.Count(current, "sizingCoverage") != 1 {
 		t.Fatal("the current operatingReview document does not ask for the section sizing right after worsened, once")
@@ -143,5 +145,30 @@ func TestOperatingReviewCurrentAndV5_DifferByTheSectionSizing(t *testing.T) {
 	}
 	if without := strings.Replace(current, added, "      worsened\n", 1); without != registeredOperatingReviewV5Document {
 		t.Fatalf("the current document less the sizing selection is not the V5 text:\n%s", without)
+	}
+}
+
+// CHAOS-13977: the current text is the V6 text plus exactly the degradedReason of a metric (after its
+// changeFailureEvidence) and of its delta (after hasPriorData). No legacy text asks for it, so a web build on any older
+// text keeps the answer it had, less the reason.
+func TestOperatingReviewCurrentAndV6_DifferByTheDegradedReason(t *testing.T) {
+	current := registeredOperatingReviewDocument
+	onMetric := "          unknownReason\n          __typename\n        }\n        degradedReason\n        delta {\n"
+	onDelta := "          hasPriorData\n          degradedReason\n          __typename\n"
+	if strings.Count(current, onMetric) != 1 || strings.Count(current, onDelta) != 1 || strings.Count(current, "degradedReason") != 2 {
+		t.Fatal("the current operatingReview document does not ask for degradedReason once after changeFailureEvidence and once after hasPriorData")
+	}
+	for name, legacy := range map[string]string{
+		"V1": registeredOperatingReviewV1Document, "V2": registeredOperatingReviewV2Document, "V3": registeredOperatingReviewV3Document,
+		"V4": registeredOperatingReviewV4Document, "V5": registeredOperatingReviewV5Document, "V6": registeredOperatingReviewV6Document,
+	} {
+		if strings.Contains(legacy, "degradedReason") {
+			t.Fatalf("the legacy %s operatingReview document asks for degradedReason: it is not an old text", name)
+		}
+	}
+	without := strings.Replace(current, onMetric, "          unknownReason\n          __typename\n        }\n        delta {\n", 1)
+	without = strings.Replace(without, onDelta, "          hasPriorData\n          __typename\n", 1)
+	if without != registeredOperatingReviewV6Document {
+		t.Fatalf("the current document less the degradedReason selections is not the V6 text:\n%s", without)
 	}
 }

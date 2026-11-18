@@ -22,7 +22,7 @@ var serviceAccountKeyKeys = []string{
 }
 
 // serviceAccountLifecycleKeys are the service account lifecycle rows (#5949), mounted WrapPlatform(admin.users) in
-// admin/serviceaccounts.go. Their profile rows name no action yet.
+// admin/serviceaccounts.go. Their profile rows name admin.users (TestServiceAccountLifecycleRowsNameAdminUsers).
 var serviceAccountLifecycleKeys = []string{
 	"POST /api/v1/admin/service-accounts",
 	"POST /api/v1/admin/service-accounts/{service_account_id}/disable",
@@ -31,7 +31,7 @@ var serviceAccountLifecycleKeys = []string{
 }
 
 // The profile names admin.users on exactly the four service account key rows (route segment /keys), and the guard's
-// action map reads each as a platform row. The lifecycle rows under the same path are pinned apart.
+// action map reads each as a platform row. The 4 lifecycle rows under the same path are pinned apart, also admin.users.
 func TestServiceAccountKeyRowsNameAdminUsers(t *testing.T) {
 	var document struct {
 		Rows []struct {
@@ -69,12 +69,12 @@ func TestServiceAccountKeyRowsNameAdminUsers(t *testing.T) {
 	if !slices.Equal(keys, serviceAccountKeyKeys) {
 		t.Fatalf("service account key rows %v, want %v", keys, serviceAccountKeyKeys)
 	}
-	// The lifecycle rows stay the #5949 form until they move to the key rows' form: exactly these 4, action null.
+	// The lifecycle rows are in the key rows' form: exactly these 4, action admin.users.
 	lifecycleKeys := make([]string, 0, len(lifecycle))
 	for key, action := range lifecycle {
 		lifecycleKeys = append(lifecycleKeys, key)
-		if action != nil {
-			t.Errorf("%s: action %q, want null (the lifecycle rows name no action yet)", key, *action)
+		if action == nil || *action != policy.ActionAdminUsers {
+			t.Errorf("%s: action %v, want %s", key, action, policy.ActionAdminUsers)
 		}
 	}
 	sort.Strings(lifecycleKeys)

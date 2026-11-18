@@ -150,18 +150,18 @@ func TestHomeReaders_SeededRealClickHouse(t *testing.T) {
 	// item. A raw scan would still count the old version (day inside
 	// window) and misreport coverage as containing it.
 	seededExec(ctx, t, conn, fmt.Sprintf(
-		`INSERT INTO work_item_cycle_times (work_item_id, provider, day, work_scope_id, type, status, created_at, cycle_time_hours, computed_at, org_id) VALUES
-		 ('wi-cycle-1', 'jira', '%s', 'scope-1', 'bug', 'in_progress', toDateTime('%s'), 5.0, toDateTime('%s'), '%s')`,
+		`INSERT INTO work_item_cycle_times (work_item_id, provider, day, work_scope_id, type, status, created_at, completed_at, cycle_time_hours, computed_at, org_id) VALUES
+		 ('wi-cycle-1', 'jira', '%s', 'scope-1', 'bug', 'in_progress', toDateTime('%s'), toDateTime('2026-01-01 00:00:00'), 5.0, toDateTime('%s'), '%s')`,
 		day1, tOld, tOld, seededOrgID))
 	seededExec(ctx, t, conn, fmt.Sprintf(
-		`INSERT INTO work_item_cycle_times (work_item_id, provider, day, work_scope_id, type, status, created_at, cycle_time_hours, computed_at, org_id) VALUES
-		 ('wi-cycle-1', 'jira', '%s', '', 'bug', 'closed', toDateTime('%s'), NULL, toDateTime('%s'), '%s')`,
+		`INSERT INTO work_item_cycle_times (work_item_id, provider, day, work_scope_id, type, status, created_at, completed_at, cycle_time_hours, computed_at, org_id) VALUES
+		 ('wi-cycle-1', 'jira', '%s', '', 'bug', 'closed', toDateTime('%s'), toDateTime('2026-01-01 00:00:00'), NULL, toDateTime('%s'), '%s')`,
 		dayOutside, tOld, tNew, seededOrgID))
 	// A second, single-version work item genuinely inside the window, so
 	// the deduped coverage denominator/numerator are not both zero.
 	seededExec(ctx, t, conn, fmt.Sprintf(
-		`INSERT INTO work_item_cycle_times (work_item_id, provider, day, work_scope_id, type, status, created_at, cycle_time_hours, computed_at, org_id) VALUES
-		 ('wi-cycle-2', 'jira', '%s', 'scope-1', 'bug', 'closed', toDateTime('%s'), 3.0, toDateTime('%s'), '%s')`,
+		`INSERT INTO work_item_cycle_times (work_item_id, provider, day, work_scope_id, type, status, created_at, completed_at, cycle_time_hours, computed_at, org_id) VALUES
+		 ('wi-cycle-2', 'jira', '%s', 'scope-1', 'bug', 'closed', toDateTime('%s'), toDateTime('2026-01-01 00:00:00'), 3.0, toDateTime('%s'), '%s')`,
 		day1, tNew, tNew, seededOrgID))
 	// The signal-attribution reader joins cycle times to work_items for
 	// repository scope. wi-cycle-2 belongs to team-1's owned repository;
@@ -175,8 +175,8 @@ func TestHomeReaders_SeededRealClickHouse(t *testing.T) {
 		 ('%s', 'wi-cycle-3', 'jira', 'unowned current item', 'closed', 'closed', toDateTime64('%s',3), toDateTime64('%s',3), toDateTime64('%s',3), '%s')`,
 		repoID, tNew, tNew, tNew, seededOrgID, repoID2, tNew, tNew, tNew, seededOrgID))
 	seededExec(ctx, t, conn, fmt.Sprintf(
-		`INSERT INTO work_item_cycle_times (work_item_id, provider, day, work_scope_id, type, status, created_at, cycle_time_hours, computed_at, org_id) VALUES
-		 ('wi-cycle-3', 'jira', '%s', 'scope-2', 'bug', 'closed', toDateTime('%s'), 4.0, toDateTime('%s'), '%s')`,
+		`INSERT INTO work_item_cycle_times (work_item_id, provider, day, work_scope_id, type, status, created_at, completed_at, cycle_time_hours, computed_at, org_id) VALUES
+		 ('wi-cycle-3', 'jira', '%s', 'scope-2', 'bug', 'closed', toDateTime('%s'), toDateTime('2026-01-01 00:00:00'), 4.0, toDateTime('%s'), '%s')`,
 		day1, tNew, tNew, seededOrgID))
 	seededExec(ctx, t, conn, fmt.Sprintf(
 		`INSERT INTO work_item_team_attributions (org_id, repo_id, work_item_id, provider, team_id, team_name, source, is_primary, confidence, evidence, computed_at) VALUES

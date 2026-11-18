@@ -76,23 +76,33 @@ type gitlabIssueMilestonePayload struct {
 }
 
 type gitlabIssueWorkItemPayload struct {
-	IID         int                          `json:"iid"`
-	Title       string                       `json:"title"`
-	Description *string                      `json:"description"`
-	State       string                       `json:"state"`
-	CreatedAt   *string                      `json:"created_at"`
-	UpdatedAt   *string                      `json:"updated_at"`
-	ClosedAt    *string                      `json:"closed_at"`
-	Labels      []string                     `json:"labels"`
-	Assignees   []gitlabWorkItemUserPayload  `json:"assignees"`
-	Author      *gitlabWorkItemUserPayload   `json:"author"`
-	WebURL      *string                      `json:"web_url"`
-	URL         *string                      `json:"url"`
-	Weight      *float64                     `json:"weight"`
-	Milestone   *gitlabIssueMilestonePayload `json:"milestone"`
-	DueDate     *string                      `json:"due_date"`
+	IID               int                          `json:"iid"`
+	Title             string                       `json:"title"`
+	Description       *string                      `json:"description"`
+	DescriptionStated bool                         `json:"-"`
+	State             string                       `json:"state"`
+	CreatedAt         *string                      `json:"created_at"`
+	UpdatedAt         *string                      `json:"updated_at"`
+	ClosedAt          *string                      `json:"closed_at"`
+	Labels            []string                     `json:"labels"`
+	Assignees         []gitlabWorkItemUserPayload  `json:"assignees"`
+	Author            *gitlabWorkItemUserPayload   `json:"author"`
+	WebURL            *string                      `json:"web_url"`
+	URL               *string                      `json:"url"`
+	Weight            *float64                     `json:"weight"`
+	Milestone         *gitlabIssueMilestonePayload `json:"milestone"`
+	DueDate           *string                      `json:"due_date"`
 	// Epic is the issue's epic (GitLab Premium/Ultimate); absent otherwise.
 	Epic *gitlabIssueEpicPayload `json:"epic"`
+}
+
+func (payload *gitlabIssueWorkItemPayload) UnmarshalJSON(raw []byte) error {
+	type plain gitlabIssueWorkItemPayload
+	if err := json.Unmarshal(raw, (*plain)(payload)); err != nil {
+		return err
+	}
+	payload.DescriptionStated = jsonKeyPresent(raw, "description")
+	return nil
 }
 
 // withFetchEpics is the issue payload a route reads under Python's
@@ -116,40 +126,60 @@ type gitlabIssueEpicPayload struct {
 // (Premium/Ultimate). The parent keys stay raw: Python formats whatever scalar
 // the API sent (gitlab_epic_to_work_item).
 type gitlabEpicPayload struct {
-	IID         json.RawMessage            `json:"iid"`
-	Title       string                     `json:"title"`
-	Description *string                    `json:"description"`
-	State       string                     `json:"state"`
-	CreatedAt   *string                    `json:"created_at"`
-	UpdatedAt   *string                    `json:"updated_at"`
-	ClosedAt    *string                    `json:"closed_at"`
-	StartDate   *string                    `json:"start_date"`
-	DueDate     *string                    `json:"due_date"`
-	Labels      []string                   `json:"labels"`
-	Author      *gitlabWorkItemUserPayload `json:"author"`
-	WebURL      *string                    `json:"web_url"`
-	URL         *string                    `json:"url"`
-	ParentID    json.RawMessage            `json:"parent_id"`
-	ParentIID   json.RawMessage            `json:"parent_iid"`
+	IID               json.RawMessage            `json:"iid"`
+	Title             string                     `json:"title"`
+	Description       *string                    `json:"description"`
+	DescriptionStated bool                       `json:"-"`
+	State             string                     `json:"state"`
+	CreatedAt         *string                    `json:"created_at"`
+	UpdatedAt         *string                    `json:"updated_at"`
+	ClosedAt          *string                    `json:"closed_at"`
+	StartDate         *string                    `json:"start_date"`
+	DueDate           *string                    `json:"due_date"`
+	Labels            []string                   `json:"labels"`
+	Author            *gitlabWorkItemUserPayload `json:"author"`
+	WebURL            *string                    `json:"web_url"`
+	URL               *string                    `json:"url"`
+	ParentID          json.RawMessage            `json:"parent_id"`
+	ParentIID         json.RawMessage            `json:"parent_iid"`
+}
+
+func (payload *gitlabEpicPayload) UnmarshalJSON(raw []byte) error {
+	type plain gitlabEpicPayload
+	if err := json.Unmarshal(raw, (*plain)(payload)); err != nil {
+		return err
+	}
+	payload.DescriptionStated = jsonKeyPresent(raw, "description")
+	return nil
 }
 
 type gitlabMergeRequestWorkItemPayload struct {
-	IID          int                          `json:"iid"`
-	Title        string                       `json:"title"`
-	Description  *string                      `json:"description"`
-	State        string                       `json:"state"`
-	CreatedAt    *string                      `json:"created_at"`
-	UpdatedAt    *string                      `json:"updated_at"`
-	ClosedAt     *string                      `json:"closed_at"`
-	MergedAt     *string                      `json:"merged_at"`
-	Labels       []string                     `json:"labels"`
-	Assignees    []gitlabWorkItemUserPayload  `json:"assignees"`
-	Author       *gitlabWorkItemUserPayload   `json:"author"`
-	WebURL       *string                      `json:"web_url"`
-	URL          *string                      `json:"url"`
-	Weight       *float64                     `json:"weight"`
-	Milestone    *gitlabIssueMilestonePayload `json:"milestone"`
-	SourceBranch string                       `json:"source_branch"`
+	IID               int                          `json:"iid"`
+	Title             string                       `json:"title"`
+	Description       *string                      `json:"description"`
+	DescriptionStated bool                         `json:"-"`
+	State             string                       `json:"state"`
+	CreatedAt         *string                      `json:"created_at"`
+	UpdatedAt         *string                      `json:"updated_at"`
+	ClosedAt          *string                      `json:"closed_at"`
+	MergedAt          *string                      `json:"merged_at"`
+	Labels            []string                     `json:"labels"`
+	Assignees         []gitlabWorkItemUserPayload  `json:"assignees"`
+	Author            *gitlabWorkItemUserPayload   `json:"author"`
+	WebURL            *string                      `json:"web_url"`
+	URL               *string                      `json:"url"`
+	Weight            *float64                     `json:"weight"`
+	Milestone         *gitlabIssueMilestonePayload `json:"milestone"`
+	SourceBranch      string                       `json:"source_branch"`
+}
+
+func (payload *gitlabMergeRequestWorkItemPayload) UnmarshalJSON(raw []byte) error {
+	type plain gitlabMergeRequestWorkItemPayload
+	if err := json.Unmarshal(raw, (*plain)(payload)); err != nil {
+		return err
+	}
+	payload.DescriptionStated = jsonKeyPresent(raw, "description")
+	return nil
 }
 
 type gitlabLabelEventPayload struct {
@@ -311,10 +341,7 @@ func normalizeGitLabIssueWorkItem(
 	if urlValue == nil || *urlValue == "" {
 		urlValue = payload.URL
 	}
-	description := payload.Description
-	if description != nil && *description == "" {
-		description = nil
-	}
+	description := statedWorkItemDescription(payload.Description, payload.DescriptionStated)
 	var milestoneID, milestoneName *string
 	if payload.Milestone != nil {
 		if id := payload.Milestone.ID.String(); id != "" && id != "0" {
@@ -396,10 +423,7 @@ func normalizeGitLabEpicWorkItem(
 	if urlValue == nil || *urlValue == "" {
 		urlValue = payload.URL
 	}
-	description := payload.Description
-	if description != nil && *description == "" {
-		description = nil
-	}
+	description := statedWorkItemDescription(payload.Description, payload.DescriptionStated)
 	priority, serviceClass := gitlabPriorityFromLabels(labels)
 	parentKey := ""
 	if text, _, truthy := pythonJSONScalar(payload.ParentID); truthy {
@@ -590,10 +614,7 @@ func normalizeGitLabMergeRequestWorkItem(
 	if urlValue == nil || *urlValue == "" {
 		urlValue = payload.URL
 	}
-	description := payload.Description
-	if description != nil && *description == "" {
-		description = nil
-	}
+	description := statedWorkItemDescription(payload.Description, payload.DescriptionStated)
 	var milestoneID, milestoneName *string
 	if payload.Milestone != nil {
 		if id := payload.Milestone.ID.String(); id != "" && id != "0" {
@@ -650,6 +671,7 @@ func normalizeGitLabMRAIAttributions(
 	pull := githubPullRequestWorkItemPayload{}
 	pull.Number = payload.IID
 	pull.Body = payload.Description
+	pull.BodyStated = payload.DescriptionStated
 	pull.CreatedAt = payload.CreatedAt
 	if parseGitLabWorkItemTime(pull.CreatedAt) == nil {
 		pull.CreatedAt = payload.UpdatedAt

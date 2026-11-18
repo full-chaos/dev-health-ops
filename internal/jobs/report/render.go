@@ -46,11 +46,12 @@ var sectionMetrics = map[string][]string{
 	"quality":   {"failure_rate", "pass_rate", "line_coverage_pct", "coverage_regression_count"},
 	"testops":   {"success_rate", "flake_rate", "rerun_rate", "retry_dependency_rate", "avg_queue_seconds", "median_duration_seconds"},
 	"wellbeing": {"after_hours_commit_ratio", "weekend_commit_ratio"},
+	"cicd":      {"pipelines_count", "avg_duration_minutes", "p90_duration_minutes", "avg_queue_minutes"},
 }
 
 var sectionTitles = map[string]string{
 	"summary": "Summary", "delivery": "Delivery", "quality": "Quality",
-	"testops": "TestOps", "wellbeing": "Wellbeing",
+	"testops": "TestOps", "wellbeing": "Wellbeing", "cicd": "CI/CD",
 }
 
 func buildNarratives(plan Plan, charts []ChartResult) []narrative {
@@ -186,6 +187,9 @@ func provenanceID(planID, artifactType, artifactID string) string {
 	return uuid.NewSHA1(uuid.NameSpaceURL, []byte(planID+":"+artifactType+":"+artifactID)).String()
 }
 
+// otherChartsTitle heads the charts no listed section printed; a plan section whose title shows as this one (closing hashes and case ignored) is renamed so the heading is unique.
+const otherChartsTitle = "Other Charts"
+
 func renderMarkdown(plan Plan, charts []ChartResult, narratives []narrative, provenance []ProvenanceRecord) string {
 	window := "unspecified window"
 	if plan.TimeRangeStart != "" && plan.TimeRangeEnd != "" {
@@ -205,22 +209,40 @@ func renderMarkdown(plan Plan, charts []ChartResult, narratives []narrative, pro
 		summary,
 		"",
 	}
+	printed := make([]bool, len(charts))
 	for _, section := range narratives {
 		if section.sectionType == "summary" {
 			continue
 		}
-		lines = append(lines, "## "+section.title, section.body, "", "### Insights",
+		title := section.title
+		if strings.EqualFold(strings.TrimRight(title, "# "), otherChartsTitle) {
+			title = otherChartsTitle + " (plan section)"
+		}
+		lines = append(lines, "## "+title, section.body, "", "### Insights",
 			"No grounded insights for this section.", "", "### Charts")
 		found := false
-		for _, chart := range charts {
-			if !contains(section.supportingMetrics, chart.Spec.Metric) {
+		for index, chart := range charts {
+			if printed[index] || !contains(section.supportingMetrics, chart.Spec.Metric) {
 				continue
 			}
 			found = true
+			printed[index] = true
 			lines = append(lines, renderChart(chart), "")
 		}
 		if !found {
 			lines = append(lines, "No charts linked to this section.", "")
+		}
+	}
+	var unlisted []ChartResult
+	for index, chart := range charts {
+		if !printed[index] {
+			unlisted = append(unlisted, chart)
+		}
+	}
+	if len(unlisted) > 0 {
+		lines = append(lines, "## "+otherChartsTitle)
+		for _, chart := range unlisted {
+			lines = append(lines, renderChart(chart), "")
 		}
 	}
 	lines = append(lines, "## Provenance", "")

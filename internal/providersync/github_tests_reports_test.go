@@ -354,8 +354,12 @@ func TestGitHubTestsArtifactSkipsPythonOverRatioMember(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rows.Suites) != 0 || rows.Skipped != 0 {
-		t.Fatalf("over-ratio member did not match Python skip semantics: %+v", rows)
+	// DECLARED DIVERGENCE from Python, which drops an over-ratio member silently (Skipped == 0): acp ruling 2026-11-18,
+	// CHAOS-14030: a silent member drop is a defect. Go records it as a non-blocking compression_ratio skip with a marker.
+	incomplete, optional := rows.optionalIncomplete()
+	if len(rows.Suites) != 0 || rows.Skipped != 1 || !optional || len(incomplete) != 1 ||
+		incomplete[0] != (GitHubTestsIncomplete{Component: githubTestsReportMemberComponent, Cause: githubTestsCompressionRatioCause, Count: 1}) {
+		t.Fatalf("over-ratio member not recorded as compression_ratio: %+v", rows)
 	}
 }
 

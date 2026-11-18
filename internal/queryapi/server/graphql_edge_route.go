@@ -485,7 +485,8 @@ func strawberryRequestDataRefusal(data *pyjson.Object) edgeRefusal {
 // parameter (the browser client's org_id, extensions) was dropped. The rest
 // went to Strawberry, whose refusal this returns, in its order.
 func graphQLEdgeGETDocument(r *http.Request) (query string, body []byte, refusal edgeRefusal) {
-	params := httpapi.Query(r)
+	// Uncapped, as the Python edge read it: Query's field cap is not applied here.
+	params := httpapi.ParseQuery(r.URL.RawQuery)
 	query = httpapi.QueryLast(params, "query")
 	rawVariables := httpapi.QueryLast(params, "variables")
 	if query != "" {

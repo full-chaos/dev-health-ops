@@ -268,6 +268,7 @@ func TestGraphQLEdgeGETDocumentIsWhatThePythonEdgeDid(t *testing.T) {
 		{raw: "query=a;b", want: `{"query": "a;b"}`},
 		{raw: "query=%E2%82A", want: `{"query": "\ufffdA"}`},
 		{raw: "query=%ED%A0%80", want: `{"query": "\ufffd\ufffd\ufffd"}`},
+		{raw: strings.Repeat("&", 10000) + "query=q", want: `{"query": "q"}`},
 		{raw: "query=q&variables=%7B%22b%22%3A1%2C%22a%22%3A1.0%7D", want: `{"query": "q", "variables": {"b": 1, "a": 1.0}}`},
 		{raw: "query=q&variables=5", want: `{"query": "q", "variables": 5}`},
 		{raw: "query=q&variables=null", want: `{"query": "q"}`},

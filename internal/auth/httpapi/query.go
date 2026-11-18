@@ -34,9 +34,18 @@ func QueryLastPtr(values url.Values, name string) *string {
 	return &last
 }
 
-// Query is r's query as Starlette's request.query_params reads it; see
-// ParseQuery. Every route reads its query through here, never r.URL.Query().
+// maxQueryFields is net/url's defaultMaxParams, a guard against memory
+// exhaustion that Query keeps on purpose.
+const maxQueryFields = 10000
+
+// Query is r's query as Starlette's request.query_params reads it (see
+// ParseQuery), except that a query of more than maxQueryFields "&"-separated
+// fields reads as empty, as url.ParseQuery leaves it (CPython has no cap).
+// Every route reads its query through here, never r.URL.Query().
 func Query(r *http.Request) url.Values {
+	if strings.Count(r.URL.RawQuery, "&")+1 > maxQueryFields {
+		return url.Values{}
+	}
 	return ParseQuery(r.URL.RawQuery)
 }
 

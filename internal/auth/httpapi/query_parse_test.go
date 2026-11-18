@@ -214,3 +214,28 @@ func TestParseQueryNeverDropsAPair(t *testing.T) {
 		}
 	}
 }
+
+// Query keeps net/url's field cap: past 10000 "&"-separated fields the query
+// reads as empty, as url.ParseQuery leaves it; at the cap it reads in full.
+func TestQueryKeepsTheNetURLFieldCap(t *testing.T) {
+	read := func(raw string) url.Values {
+		return Query(httptest.NewRequest("GET", "/x?"+raw, nil))
+	}
+	atCap := strings.Repeat("&", 9998) + "a=1;b"
+	if got := read(atCap); !reflect.DeepEqual(got, url.Values{"a": {"1;b"}}) {
+		t.Fatalf("9999 fields: %q, want the literal a=1;b", got)
+	}
+	if got := read(strings.Repeat("&", 9999) + "a=1;b"); !reflect.DeepEqual(got, url.Values{"a": {"1;b"}}) {
+		t.Fatalf("10000 fields: %q, want the literal a=1;b", got)
+	}
+	over := strings.Repeat("&", 10000) + "limit=bad"
+	if _, err := url.ParseQuery(over); err == nil {
+		t.Fatal("url.ParseQuery accepted 10001 fields: the cap this mirrors moved")
+	}
+	if got := read(over); len(got) != 0 {
+		t.Fatalf("10001 fields: %q, want empty", got)
+	}
+	if got := ParseQuery(over); !reflect.DeepEqual(got, url.Values{"limit": {"bad"}}) {
+		t.Fatalf("ParseQuery(10001 fields) = %q, want the CPython read", got)
+	}
+}

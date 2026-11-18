@@ -3,6 +3,7 @@ package server
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
@@ -21,6 +22,8 @@ func TestPeopleSearchKeepsPairsGoWouldDrop(t *testing.T) {
 		{"semicolon in limit", "limit=5;x", http.StatusUnprocessableEntity},
 		{"bad escape in limit", "limit=5%zz", http.StatusUnprocessableEntity},
 		{"semicolon in the key", "top;x=1&limit=5;", http.StatusUnprocessableEntity},
+		{"9999 fields keep a semicolon value", strings.Repeat("&", 9998) + "limit=5;x", http.StatusUnprocessableEntity},
+		{"10001 fields read as empty, as on main", strings.Repeat("&", 10000) + "limit=bad", http.StatusOK},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			handler := newPeopleSearchHandler(newFailingPeopleReader(t))

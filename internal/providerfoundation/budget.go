@@ -534,6 +534,8 @@ var metricArtifactSkipReasonVocabulary = map[string]struct{}{
 	// report_too_large: a gitlab test_report body over the route's size cap,
 	// skipped and counted instead of failing the unit closed.
 	"report_too_large": {},
+	// report_member_dropped (CHAOS-14030): a gitlab job-artifact member over the compression-ratio guard or past the entry cap.
+	"report_member_dropped": {},
 }
 
 // MetricArtifactSkipReasonLabel bounds the artifact skip reason label.

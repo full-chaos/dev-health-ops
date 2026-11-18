@@ -1001,6 +1001,26 @@ func normalizeLegacyGitHubTestsSkippedArtifacts(cursor githubTestsChunkCursor) g
 	if len(kept) > githubTestsMaxSkippedArtifactRecords {
 		dropped := kept[githubTestsMaxSkippedArtifactRecords:]
 		cursor.SkippedArtifactsOverflow += len(dropped)
+		// The full literal sample proves a per-cause count the trim is about to lose: a checkpoint written before the count ledger
+		// held every marker, so six literal markers prove six skips. Keep the greater of that and any ledger count, so evidence
+		// that overlaps is counted once (CHAOS-14030).
+		proven := map[string]int{}
+		for _, record := range kept {
+			if cause := githubTestsSkippedArtifactCause(record); cause != "" {
+				proven[cause]++
+			}
+		}
+		for cause, count := range proven {
+			if cursor.SkippedArtifactCauseCount[cause] >= count {
+				continue
+			}
+			ledger := make(map[string]int, len(cursor.SkippedArtifactCauseCount)+1)
+			for key, value := range cursor.SkippedArtifactCauseCount {
+				ledger[key] = value
+			}
+			ledger[cause] = count
+			cursor.SkippedArtifactCauseCount = ledger
+		}
 		// Mark each DROPPED record's own cause precisely (codex review round
 		// 6, P1), rather than leaving this trim to be covered only by the
 		// generic legacy sentinel below. A pre-CHAOS-4394 cursor can legally
@@ -2109,6 +2129,10 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 							}
 							return fmt.Errorf("%w: artifact parse failed: %v", ErrGitHubTestsIncomplete, parseErr)
 						}
+						// A resumed walk can re-anchor and read this artifact again. The size-guard skips are deterministic, so a (run,
+						// artifact, cause) already in the marker sample is a replay: its contribution is dropped, not counted twice
+						// (CHAOS-14030).
+						rows = rows.withoutReplayedMemberGuardSkips(cursor.SkippedArtifacts, pipeline.RunID, string(artifact.ID))
 						reportIncomplete, optional := rows.optionalIncomplete()
 						if !optional {
 							return fmt.Errorf("%w: reports skipped=%d: unsafe archive bounds", ErrGitHubTestsIncomplete, rows.Skipped)

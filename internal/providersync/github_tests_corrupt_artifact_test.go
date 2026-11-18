@@ -33,7 +33,9 @@ type githubTestsCorruptArtifactDoer struct {
 	// it must still fail the batch closed.
 	oversizedReports bool
 	// extraMembers are added to every healthy archive (CHAOS-14030).
-	extraMembers    map[string]string
+	extraMembers map[string]string
+	// archive, when set, is served for every healthy artifact instead of the generated one.
+	archive         []byte
 	archiveRequests int
 }
 
@@ -76,6 +78,9 @@ func (doer *githubTestsCorruptArtifactDoer) Do(request *http.Request) (*http.Res
 			members[name] = body
 		}
 		archive := githubTestsZip(doer.t, members)
+		if doer.archive != nil {
+			archive = doer.archive
+		}
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Header:     http.Header{"Content-Type": {"application/zip"}},

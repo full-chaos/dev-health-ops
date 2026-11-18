@@ -202,7 +202,9 @@ func MergeICUserMetrics(
 		wi, hasWI := wiByIdentity[identity]
 
 		// team_map wins over the base record's team_id, matching
-		// `team_id = team_map.get(identity) or base.team_id`.
+		// `team_id = team_map.get(identity) or base.team_id`. The column is a
+		// membership label, NOT team attribution (the base is always
+		// "unassigned"): ownership-based team answers must not read it.
 		teamID := git.TeamID
 		if resolveTeam != nil {
 			if mapped, ok := resolveTeam(identity); ok && mapped != "" {

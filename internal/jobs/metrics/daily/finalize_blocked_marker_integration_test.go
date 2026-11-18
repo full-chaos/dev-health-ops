@@ -301,3 +301,115 @@ func TestACompletionWriteLostOnEveryAttemptReachesTheBlockedMarker(t *testing.T)
 		t.Fatalf("blocked_reason = %v, want %q", reason, BlockedReasonFinalizeFailed)
 	}
 }
+
+// The operator recovery of a run whose completion write was lost on the last
+// attempt is a rerun of its day (`metrics daily-start --rerun-tag`): no redrive
+// reopens a 'failed' run. The rerun's run reaches succeeded; the failed run
+// keeps its row and its finalize_failed marker.
+func TestARerunOfTheDayRecoversARunWhoseLastCompletionWriteWasLost(t *testing.T) {
+	defer restoreRecognisedFinalizeFamilies(pythonRecognisedFinalizeFamilies)
+	pythonRecognisedFinalizeFamilies = []string{}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	store, publisher, pool := rerunStore(t, ctx)
+	const (
+		day      = "2026-11-02"
+		attempts = 4
+	)
+	repos := []RepositoryID{"00000000-0000-4000-8000-000000000071"}
+
+	runToFinalize := func(tag string) string {
+		t.Helper()
+		started, err := store.StartManualDailyRerun(ctx, testOrgID, day, ManualDailyRerunGeneration(testOrgID, day, repos, tag), repos, publisher, tag)
+		if err != nil || started.AlreadyStarted {
+			t.Fatalf("StartManualDailyRerun(%s) = %+v, %v", tag, started, err)
+		}
+		if run, err := store.ClaimDispatch(ctx, started.RunID); err != nil || run == nil {
+			t.Fatalf("ClaimDispatch(%s) = %v, %v", started.RunID, run, err)
+		}
+		rows, err := pool.Query(ctx, `SELECT id::text FROM daily_metrics_partitions WHERE run_id = $1::uuid`, started.RunID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var partitionIDs []string
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				t.Fatal(err)
+			}
+			partitionIDs = append(partitionIDs, id)
+		}
+		rows.Close()
+		if len(partitionIDs) == 0 {
+			t.Fatalf("run %s has no partition", started.RunID)
+		}
+		for _, id := range partitionIDs {
+			claim, err := store.ClaimPartition(ctx, id)
+			if err != nil || claim == nil {
+				t.Fatalf("ClaimPartition(%s) = %v, %v", id, claim, err)
+			}
+			if err := store.CompletePartition(ctx, *claim, publisher); err != nil {
+				t.Fatalf("CompletePartition(%s): %v", id, err)
+			}
+		}
+		return started.RunID
+	}
+	readRun := func(runID string) (status, finalization string, reason *string) {
+		t.Helper()
+		if err := pool.QueryRow(ctx, `SELECT status, finalization_status, blocked_reason FROM daily_metrics_runs WHERE id = $1::uuid`,
+			runID).Scan(&status, &finalization, &reason); err != nil {
+			t.Fatal(err)
+		}
+		return status, finalization, reason
+	}
+	finalize := func(handler *FinalizeHandler, runID string, attempt int) error {
+		execution := finalizeExecutionFor(runID)
+		execution.Attempt = attempt
+		execution.Definition.MaxAttempts = attempts
+		return handler.Work(ctx, execution)
+	}
+
+	lost := runToFinalize("t0")
+	down, err := NewFinalizeHandler(&completionWriteDownStore{PostgresStore: store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for attempt := 1; attempt <= attempts; attempt++ {
+		if err := finalize(down, lost, attempt); err == nil {
+			t.Fatalf("attempt %d: Work succeeded with the completion write down", attempt)
+		}
+	}
+	if _, err := store.ReconcileBlockedRuns(ctx, testOrgID); err != nil {
+		t.Fatal(err)
+	}
+	status, finalization, reason := readRun(lost)
+	t.Logf("before the rerun: lost run status=%s finalization=%s blocked_reason=%v", status, finalization, deref(reason))
+	if status != "failed" || finalization != "failed" || reason == nil || *reason != BlockedReasonFinalizeFailed {
+		t.Fatalf("the lost run = %s/%s/%v, want failed/failed/%s", status, finalization, deref(reason), BlockedReasonFinalizeFailed)
+	}
+
+	rerun := runToFinalize("fix-1")
+	up, err := NewFinalizeHandler(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := finalize(up, rerun, 1); err != nil {
+		t.Fatalf("the rerun's finalize: %v", err)
+	}
+	outcome, err := store.ReconcileBlockedRuns(ctx, testOrgID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rerunStatus, rerunFinalization, rerunReason := readRun(rerun)
+	status, finalization, reason = readRun(lost)
+	t.Logf("after the rerun: rerun status=%s finalization=%s blocked_reason=%v; lost run status=%s finalization=%s blocked_reason=%v; blocked=%d",
+		rerunStatus, rerunFinalization, deref(rerunReason), status, finalization, deref(reason), outcome.Blocked)
+	if rerunStatus != "succeeded" || rerunFinalization != "succeeded" || rerunReason != nil {
+		t.Fatalf("the rerun = %s/%s/%v, want succeeded/succeeded/unmarked", rerunStatus, rerunFinalization, deref(rerunReason))
+	}
+	if status != "failed" || reason == nil || *reason != BlockedReasonFinalizeFailed || outcome.Blocked != 1 {
+		t.Fatalf("the lost run after the rerun = %s/%v blocked=%d, want failed/%s and 1 blocked",
+			status, deref(reason), outcome.Blocked, BlockedReasonFinalizeFailed)
+	}
+}

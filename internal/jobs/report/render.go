@@ -97,11 +97,23 @@ func buildNarratives(plan Plan, charts []ChartResult) []narrative {
 	return result
 }
 
+// groupAxisNouns name the group axes: their points are groups ordered by value, not times, so they get no comparison
+// with the opening of the window.
+var groupAxisNouns = map[string]string{"team": "team", "repo": "repository", "service": "service"}
+
 func chartSentence(chart ChartResult) string {
 	current := chart.DataPoints[len(chart.DataPoints)-1].Y
 	currentText := formatValue(current, chart.Unit)
 	if len(chart.DataPoints) < 2 {
 		return fmt.Sprintf("%s appears near %s for the selected window.", metricTitle(chart), currentText)
+	}
+	if noun, grouped := groupAxisNouns[chart.Spec.GroupBy]; grouped {
+		low, high := current, current
+		for _, point := range chart.DataPoints {
+			low, high = min(low, point.Y), max(high, point.Y)
+		}
+		return fmt.Sprintf("%s ranges from %s to %s across %d %s groups in the selected window.",
+			metricTitle(chart), formatValue(low, chart.Unit), formatValue(high, chart.Unit), len(chart.DataPoints), noun)
 	}
 	priorText := formatValue(chart.DataPoints[0].Y, chart.Unit)
 	return fmt.Sprintf(

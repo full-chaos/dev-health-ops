@@ -91,6 +91,9 @@ func TestPeople_NamesAndKeysAcrossTheProviders(t *testing.T) {
 			}
 		}
 		for _, key := range []string{edge.ReviewerKey, edge.AuthorKey} {
+			if i == 5 && key == edge.AuthorKey {
+				continue // the placeholder has its own form, checked in TestPeople_UnknownAuthorsAreNotOnePerson
+			}
 			if !personKeyForm.MatchString(key) {
 				t.Errorf("edge %d: key %q is not an opaque key", i, key)
 			}
@@ -242,5 +245,44 @@ func TestPeople_AFailedReadFailsTheRequest(t *testing.T) {
 				t.Fatalf("ResolveScoped error = %v, want it to wrap the read failure", err)
 			}
 		})
+	}
+}
+
+var unreportedKeyForm = regexp.MustCompile(`^u_[0-9a-f]{20}$`)
+
+// CHAOS-8594: the placeholder "unknown" stands for every pull request with no
+// author. Its key must not look like a person's.
+func TestPeople_UnknownAuthorsAreNotOnePerson(t *testing.T) {
+	client := &fakeClient{
+		response: &fakeRowScanner{rows: [][]any{edgeRow("rev-1", "unknown"), edgeRow("rev-1", "ghost")}},
+	}
+	edges := resolvePeople(t, client, "org-1")
+	for _, edge := range edges {
+		if edge.Author == "unknown" {
+			if !unreportedKeyForm.MatchString(edge.AuthorKey) {
+				t.Errorf("the key of an unreported author = %q, want the u_ form", edge.AuthorKey)
+			}
+			if edge.AuthorName != nil {
+				t.Errorf("an unreported author has the name %q", *edge.AuthorName)
+			}
+		} else if !personKeyForm.MatchString(edge.AuthorKey) {
+			t.Errorf("the key of a known author = %q, want the p_ form", edge.AuthorKey)
+		}
+	}
+}
+
+// CHAOS-8594: a login that an identity lists wins over another identity's
+// display name that is equal to it.
+func TestPeople_ALoginWinsOverAnEqualDisplayName(t *testing.T) {
+	client := &fakeClient{
+		response: &fakeRowScanner{rows: [][]any{edgeRow("sam", "auth-1")}},
+		identities: [][]any{
+			identityRow("00000000-0000-0000-0000-00000000000a", "a", "", "Sam", `{"github": ["samuel-a"]}`),
+			identityRow("00000000-0000-0000-0000-00000000000c", "c", "", "Sam Cee", `{"github": ["sam"]}`),
+		},
+	}
+	edge := resolvePeople(t, client, "org-1")[0]
+	if got := nameOf(edge.ReviewerName); got != "Sam Cee" {
+		t.Errorf("reviewer name = %s, want Sam Cee (the identity that lists the login sam)", got)
 	}
 }

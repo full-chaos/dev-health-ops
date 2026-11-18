@@ -78,30 +78,44 @@ GROUP BY email`
 // neither an author e-mail nor an author name.
 const unknownIdentity = "unknown"
 
+// unreportedKeyPrefix starts the key of the placeholder; person keys start "p_".
+const unreportedKeyPrefix = "u_"
+
 // identity is one identity row of the org.
 type identity struct {
 	uuid        string
 	displayName string
 }
 
-// identityIndex finds the identity a stored string belongs to.
+// identityIndex finds the identity a stored string belongs to. A string that
+// an identity lists as its canonical id, e-mail address or provider login
+// (strong) wins over one that only equals another identity's display name
+// (names): a login is stable, a display name is free text (CHAOS-8594).
 type identityIndex struct {
-	byKey     map[string]*identity
-	ambiguous map[string]struct{}
+	strong, names                  map[string]*identity
+	strongAmbiguous, nameAmbiguous map[string]struct{}
 }
 
-func (index *identityIndex) add(value string, row *identity) {
+func addTo(byKey map[string]*identity, ambiguous map[string]struct{}, value string, row *identity) {
 	key := datahealth.IdentityKey(value)
 	if key == "" {
 		return
 	}
-	if existing, ok := index.byKey[key]; ok && existing.uuid != row.uuid {
+	if existing, ok := byKey[key]; ok && existing.uuid != row.uuid {
 		// Two identities share this value (two people with one display name).
 		// The value then names neither: a wrong name is worse than no name.
-		index.ambiguous[key] = struct{}{}
+		ambiguous[key] = struct{}{}
 		return
 	}
-	index.byKey[key] = row
+	byKey[key] = row
+}
+
+func (index *identityIndex) addStrong(value string, row *identity) {
+	addTo(index.strong, index.strongAmbiguous, value, row)
+}
+
+func (index *identityIndex) addName(value string, row *identity) {
+	addTo(index.names, index.nameAmbiguous, value, row)
 }
 
 func (index *identityIndex) resolve(stored string) *identity {
@@ -109,10 +123,16 @@ func (index *identityIndex) resolve(stored string) *identity {
 	if key == "" {
 		return nil
 	}
-	if _, ok := index.ambiguous[key]; ok {
+	if _, ok := index.strongAmbiguous[key]; ok {
 		return nil
 	}
-	return index.byKey[key]
+	if row, ok := index.strong[key]; ok {
+		return row
+	}
+	if _, ok := index.nameAmbiguous[key]; ok {
+		return nil
+	}
+	return index.names[key]
 }
 
 func loadIdentityIndex(ctx context.Context, client QueryClient, orgID string) (*identityIndex, error) {
@@ -122,19 +142,23 @@ func loadIdentityIndex(ctx context.Context, client QueryClient, orgID string) (*
 	}
 	defer rows.Close()
 
-	index := &identityIndex{byKey: map[string]*identity{}, ambiguous: map[string]struct{}{}}
+	index := &identityIndex{
+		strong: map[string]*identity{}, names: map[string]*identity{},
+		strongAmbiguous: map[string]struct{}{}, nameAmbiguous: map[string]struct{}{},
+	}
 	for rows.Next() {
 		var uuid, canonicalID, email, displayName, providerIdentities string
 		if scanErr := rows.Scan(&uuid, &canonicalID, &email, &displayName, &providerIdentities); scanErr != nil {
 			return nil, fmt.Errorf("reviewedges: identities scan: %w", scanErr)
 		}
 		row := &identity{uuid: uuid, displayName: strings.TrimSpace(displayName)}
-		for _, value := range []string{canonicalID, email, displayName} {
-			index.add(value, row)
+		for _, value := range []string{canonicalID, email} {
+			index.addStrong(value, row)
 		}
 		for _, value := range datahealth.ProviderIdentityValues(providerIdentities) {
-			index.add(value, row)
+			index.addStrong(value, row)
 		}
+		index.addName(displayName, row)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("reviewedges: identities rows: %w", err)
@@ -201,7 +225,15 @@ func personName(stored string, resolved *identity, pullRequestAuthorName string)
 // identity when the stored string belongs to one, else of the stored string.
 // So the same person has one key as reviewer and as author when the identity
 // resolves, and an unresolved string still has a key of its own.
+//
+// The writer's placeholder "unknown" stands for every pull request with no
+// author, so it is not a person: it gets one key of its own with the prefix
+// "u_", never "p_". A client must not draw that key as one person.
 func personKey(orgID, stored string, resolved *identity) string {
+	if strings.EqualFold(strings.TrimSpace(stored), unknownIdentity) {
+		sum := sha256.Sum256([]byte(orgID + "\x00unreported"))
+		return unreportedKeyPrefix + hex.EncodeToString(sum[:10])
+	}
 	basis := "raw\x00" + datahealth.IdentityKey(stored)
 	if resolved != nil {
 		basis = "identity\x00" + resolved.uuid

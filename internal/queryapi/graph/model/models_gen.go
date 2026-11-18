@@ -1457,7 +1457,7 @@ type ReviewEdgeRow struct {
 	ReviewerName *string `json:"reviewerName,omitempty"`
 	// The author's display name (CHAOS-8485): the display name of the org's identity the stored author belongs to; else, for an author stored by e-mail address, the author name the provider gave on the pull request; else the stored author itself when it is not an e-mail address. Never an e-mail address. Null = no name is known.
 	AuthorName *string `json:"authorName,omitempty"`
-	// An opaque key of the reviewer inside the org (CHAOS-8485): the same person has the same key in every answer, as reviewer and as author when the identity resolves. It is not an e-mail address and not a name; use it only to tell people apart and to join rows.
+	// An opaque key of the reviewer inside the org (CHAOS-8485): the same person has the same key in every answer, as reviewer and as author when the identity resolves. It is not an e-mail address and not a name; use it only to tell people apart and to join rows. A key that starts with "u_" is not a person: it stands for every pull request with no author in the answer (the stored "unknown"), so draw it as "author not reported", not as one person. A person's key starts with "p_" (CHAOS-8594).
 	ReviewerKey string `json:"reviewerKey"`
 	// An opaque key of the author inside the org (CHAOS-8485); see reviewerKey.
 	AuthorKey string `json:"authorKey"`

@@ -55,6 +55,10 @@ func TestPeople_NamesAndKeysOnARealStore(t *testing.T) {
 	}
 	edge(10, "rev-1", "pat@corp.example", 500)
 	edge(11, "rev-1", "ghost@nowhere.example", 400)
+	edge(12, "rev-1", "unknown", 300)
+	identityOf(teamScopeOrg, "sam-a", text("Sam"), nil, `{"github": ["samuel-a"]}`, 1)
+	identityOf(teamScopeOrg, "sam-c", text("Sam Cee"), nil, `{"github": ["sam"]}`, 1)
+	edge(13, "sam", "auth-3", 200)
 
 	pullRequest := func(number uint32, authorName, authorEmail string, created time.Time) {
 		t.Helper()
@@ -84,7 +88,11 @@ func TestPeople_NamesAndKeysOnARealStore(t *testing.T) {
 				t.Errorf("%s > %s: a new field holds an e-mail address: %q", row.Reviewer, row.Author, served)
 			}
 		}
-		if !strings.HasPrefix(row.ReviewerKey, "p_") || !strings.HasPrefix(row.AuthorKey, "p_") {
+		wantAuthorPrefix := "p_"
+		if row.Author == "unknown" {
+			wantAuthorPrefix = "u_"
+		}
+		if !strings.HasPrefix(row.ReviewerKey, "p_") || !strings.HasPrefix(row.AuthorKey, wantAuthorPrefix) {
 			t.Errorf("%s > %s: keys %q / %q are not opaque keys", row.Reviewer, row.Author, row.ReviewerKey, row.AuthorKey)
 		}
 	}
@@ -115,6 +123,15 @@ func TestPeople_NamesAndKeysOnARealStore(t *testing.T) {
 	}
 	if ghost.AuthorKey == pat.AuthorKey {
 		t.Error("two authors have one key")
+	}
+
+	// CHAOS-8594: the placeholder is not a person (u_ key, no name), and a
+	// login that an identity lists wins over another identity's equal display name.
+	if unknown := got.Edges[row("rev-1>unknown")]; unknown.AuthorName != nil || unknown.AuthorKey == pat.AuthorKey {
+		t.Errorf("unknown author: name %s key %s", name(unknown.AuthorName), unknown.AuthorKey)
+	}
+	if login := got.Edges[row("sam>auth-3")]; name(login.ReviewerName) != "Sam Cee" {
+		t.Errorf("reviewer sam name = %s, want Sam Cee (the identity that lists the login sam)", name(login.ReviewerName))
 	}
 
 	// rev-2 has an INACTIVE identity in this org and an identity in another

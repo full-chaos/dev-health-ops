@@ -393,6 +393,10 @@ func TestARowOfZerosIsStrictlyNewerThanTheRowItSupersedes(t *testing.T) {
 	conn := workItemAttributionLinkedIssueMigratedClickHouse(t, ctx)
 	stored := staleKeyRuleDay.Add(30 * time.Hour)
 	for _, table := range StaleTeamKeyTables() {
+		// The check counts both versions of a key: a background merge of the ReplacingMergeTree folds them into the newest one.
+		if err := conn.Exec(ctx, "SYSTEM STOP MERGES "+table.Table); err != nil {
+			t.Fatalf("stop merges of %s: %v", table.Table, err)
+		}
 		for _, testCase := range []struct {
 			name, team string
 			clock      time.Time

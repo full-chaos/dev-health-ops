@@ -612,7 +612,7 @@ internal/queryapi/people/metricqueries.go|fetchPersonMetricSeries|*time.Time,*fl
 internal/queryapi/people/metricqueries.go|fetchPersonMetricValue|*uint64,*float64|44f613075ca4|spliced-select-list
 internal/queryapi/people/search.go|BuildSearchResponse|*string,*time.Time|168278cbea0a|not-describable
 internal/queryapi/people/summary.go|fetchPersonCollaboration|*string,*string,*float64|ff998e305260|not-describable
-internal/queryapi/pooledmttr/pooledmttr.go|scorecard|*string,**string,**float64|fd8d02c13dcf|spliced-select-list
+internal/queryapi/pooledmttr/pooledmttr.go|scorecard|*string,**string,**float64|c97d7b3c6138|spliced-select-list
 internal/queryapi/producttelemetry/platform.go|LoadOrgNames|*string,*string,*string|64c4ca805d17|not-describable
 internal/queryapi/quadrant/quadrant.go|scanMetricRows|*time.Time,*string,*string,*float64|433c0a3205e2|statement-not-static
 internal/queryapi/reports/reports.go|scanCount|*int64|8d2d39db7d2b|not-describable

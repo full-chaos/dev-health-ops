@@ -63,7 +63,7 @@ var IncidentRepairsSource = `(
             ON incident.org_id = mapping.org_id AND incident.service_id = mapping.service_id
         INNER JOIN repos AS repo FINAL
             ON mapping.org_id = repo.org_id AND mapping.repo_id = repo.id
-        WHERE mapping.repo_id IS NOT NULL
+        WHERE mapping.repo_id IS NOT NULL AND repo.org_id = {org_id:String}
         LIMIT 1 BY repo_id, incident_id
     )
     WHERE (repo_id, day) IN (
@@ -112,7 +112,7 @@ func scorecard(ctx context.Context, client Querier, source, expression string, b
         %s AS y
     FROM %s
     WHERE
-        1
+        org_id = {org_id:String}
     SETTINGS max_rows_to_read = %d, read_overflow_mode = 'throw'`, expression, source, testopspooled.MaxRowsToRead)
 	rows, err := client.Query(ctx, statement, bindings)
 	if err != nil {

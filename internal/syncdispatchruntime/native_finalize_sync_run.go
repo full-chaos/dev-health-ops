@@ -168,13 +168,30 @@ func (service *NativeFinalizeSyncRunService) Finalize(ctx context.Context, args 
 // of currentTransportReference that fails. Read-only; a failed diagnosis is
 // logged as reason "unknown" and never changes the outcome.
 func (service *NativeFinalizeSyncRunService) reportDeliveryNotCurrent(ctx context.Context, tx pgx.Tx, args FinalizeSyncRunArgs) {
+	reason, routeGeneration := deliveryNotCurrentReason(ctx, tx, args, outboxKindFinalizeSyncRun)
+	if counter, counterErr := otel.GetMeterProvider().Meter("github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime").Int64Counter(
+		FinalizeDeliveryNotCurrentCounter,
+		metric.WithUnit("{delivery}"),
+		metric.WithDescription("finalize_sync_run deliveries refused because they were not the current one (the run is left unchanged), by reason")); counterErr == nil {
+		counter.Add(ctx, 1, metric.WithAttributes(attribute.String("reason", reason)))
+	}
+	service.logger.Warn(ctx, synclog.MsgFinalizeSyncRunDeliveryNotCurrent,
+		synclog.Run(synclog.ParseID(args.SyncRunID())),
+		synclog.Text(synclog.KeyReason, synclog.ParseLabel(reason)),
+		synclog.Count(synclog.KeyDeliveryRouteGeneration, args.RouteGeneration()),
+		synclog.Count(synclog.KeyCurrentRouteGeneration, routeGeneration))
+}
+
+// deliveryNotCurrentReason names the first clause of currentTransportReference that fails for a delivery of kind,
+// and the route's current generation (-1 when unknown). Read-only; a failed read reports "unknown".
+func deliveryNotCurrentReason(ctx context.Context, tx pgx.Tx, args Args, kind string) (string, int64) {
 	reason, routeGeneration := "unknown", int64(-1)
 	// The route and the outbox row are read apart: a missing outbox row must still report the route's generation.
 	var routeTransport string
 	var routePaused bool
 	routeErr := tx.QueryRow(ctx, `
 SELECT transport, generation, paused FROM public.sync_dispatch_transport_routes WHERE kind = $1`,
-		outboxKindFinalizeSyncRun).Scan(&routeTransport, &routeGeneration, &routePaused)
+		kind).Scan(&routeTransport, &routeGeneration, &routePaused)
 	routeKnown := routeErr == nil
 	if errors.Is(routeErr, pgx.ErrNoRows) {
 		routeGeneration = -1
@@ -185,7 +202,7 @@ SELECT transport, generation, paused FROM public.sync_dispatch_transport_routes 
 SELECT status, dispatched_transport, dispatched_route_generation
 FROM public.sync_dispatch_outbox
 WHERE id = $1::uuid AND sync_run_id = $2::uuid AND org_id = $3 AND kind = $4`,
-		args.OutboxID(), args.SyncRunID(), args.OrganizationID(), outboxKindFinalizeSyncRun,
+		args.OutboxID(), args.SyncRunID(), args.OrganizationID(), kind,
 	).Scan(&outboxStatus, &outboxTransport, &outboxGeneration)
 	switch {
 	case errors.Is(outboxErr, pgx.ErrNoRows):
@@ -205,17 +222,7 @@ WHERE id = $1::uuid AND sync_run_id = $2::uuid AND org_id = $3 AND kind = $4`,
 	case outboxGeneration == nil || *outboxGeneration != routeGeneration || args.RouteGeneration() != routeGeneration:
 		reason = "route_generation_mismatch"
 	}
-	if counter, counterErr := otel.GetMeterProvider().Meter("github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime").Int64Counter(
-		FinalizeDeliveryNotCurrentCounter,
-		metric.WithUnit("{delivery}"),
-		metric.WithDescription("finalize_sync_run deliveries refused because they were not the current one (the run is left unchanged), by reason")); counterErr == nil {
-		counter.Add(ctx, 1, metric.WithAttributes(attribute.String("reason", reason)))
-	}
-	service.logger.Warn(ctx, synclog.MsgFinalizeSyncRunDeliveryNotCurrent,
-		synclog.Run(synclog.ParseID(args.SyncRunID())),
-		synclog.Text(synclog.KeyReason, synclog.ParseLabel(reason)),
-		synclog.Count(synclog.KeyDeliveryRouteGeneration, args.RouteGeneration()),
-		synclog.Count(synclog.KeyCurrentRouteGeneration, routeGeneration))
+	return reason, routeGeneration
 }
 
 // FinalizeDeliveryNotCurrentCounter counts finalize deliveries refused as not

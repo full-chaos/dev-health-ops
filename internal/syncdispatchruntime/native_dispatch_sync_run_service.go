@@ -236,6 +236,14 @@ func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args 
 		return err
 	}
 	if !current {
+		// A wake (a hold-back, a unit end) that re-arms the run's outbox row while this delivery waits moves the row
+		// to 'pending': the relay's next delivery runs the pass, so this one is a no-op, but never a silent one.
+		reason, routeGeneration := deliveryNotCurrentReason(ctx, tx, args, outboxKindDispatchSyncRun)
+		service.logger.Info(ctx, synclog.MsgDispatchSyncRunDeliveryNotCurrent,
+			synclog.Run(synclog.ParseID(args.SyncRunID())),
+			synclog.Text(synclog.KeyReason, synclog.ParseLabel(reason)),
+			synclog.Count(synclog.KeyDeliveryRouteGeneration, args.RouteGeneration()),
+			synclog.Count(synclog.KeyCurrentRouteGeneration, routeGeneration))
 		return nil
 	}
 

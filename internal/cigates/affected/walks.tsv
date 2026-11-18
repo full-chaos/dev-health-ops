@@ -557,6 +557,7 @@ internal/syncdispatchruntime	claim_id_chunks_test.go	internal/syncdispatchruntim
 internal/syncdispatchruntime	log_error_text_test.go	internal/syncdispatchruntime	dir	*
 internal/syncdispatchruntime	log_error_text_test.go	internal/syncdispatchruntime/synclog	dir	*
 internal/syncdispatchruntime	post_sync_failure_test.go	internal/syncdispatchruntime	dir	*
+internal/syncdispatchruntime	post_sync_fence_census_test.go	internal/syncdispatchruntime	dir	*
 internal/synchandoff	trigger_writer_census_test.go	.	tree	*.go
 internal/syncreconciler	no_celery_test.go	unexpressed	-	-
 internal/syncrunrollup	arm_finalize_test.go	internal/syncreconciler	dir	*

@@ -606,7 +606,9 @@ func planOwnership(
 
 // writeTeams writes the catalog rows. keepProjectKeys keeps every team's
 // stored project keys (the links were not selected); keepKeysOf names the
-// teams that keep their stored keys next to the ones this run read.
+// teams that keep their stored keys next to the ones this run read. Every row
+// keeps the admin roster (teamprovider.RosterKept): it is read from teams
+// FINAL inside the insert statement.
 // teamsColumns is the teams columns writeTeams states; teamprovider.Insert
 // adds the provider identity in the same statement.
 var teamsColumns = []string{"id", "team_uuid", "name", "description", "manual_members", "project_keys", "repo_patterns", "is_active", "updated_at", "org_id", "provider", "native_team_key", "parent_team_id", "created_at"}
@@ -616,11 +618,8 @@ func writeTeams(ctx context.Context, conn driver.Conn, orgID string, teams []Tea
 	for i, team := range teams {
 		ids[i] = team.ID
 	}
-	manual, err := providersync.PreserveExistingTeamManualMembers(ctx, conn, orgID, ids)
-	if err != nil {
-		return err
-	}
 	var existingKeys map[string][]string
+	var err error
 	if keepProjectKeys || len(keepKeysOf) > 0 {
 		if existingKeys, err = readProjectKeys(ctx, conn, orgID, ids); err != nil {
 			return err
@@ -636,10 +635,6 @@ func writeTeams(ctx context.Context, conn driver.Conn, orgID string, teams []Tea
 	}
 	writes := make([]teamprovider.Write, 0, len(teams)+len(deactivate))
 	for _, team := range teams {
-		manualMembers := manual[team.ID]
-		if manualMembers == nil {
-			manualMembers = []string{}
-		}
 		keys := team.ProjectKeys
 		switch {
 		case keepProjectKeys:
@@ -655,11 +650,12 @@ func writeTeams(ctx context.Context, conn driver.Conn, orgID string, teams []Tea
 		nativeKey := team.NativeTeamKey
 		writes = append(writes, teamprovider.Write{
 			Values: []any{
-				team.ID, team.TeamUUID, team.Name, team.Description, manualMembers, keys, []string{},
+				team.ID, team.TeamUUID, team.Name, team.Description, []string{}, keys, []string{},
 				team.IsActive, team.UpdatedAt, team.OrgID, team.Provider, &nativeKey, (*string)(nil),
 				teamcreated.For(createdAt, team.ID, team.UpdatedAt),
 			},
 			ProviderTeamID: providerTeamUUID(team.NativeTeamKey), ProviderName: team.Name, Gone: teamprovider.GoneCleared,
+			Roster: teamprovider.RosterKept,
 		})
 	}
 	for _, team := range deactivate {
@@ -667,7 +663,7 @@ func writeTeams(ctx context.Context, conn driver.Conn, orgID string, teams []Tea
 			team.id, team.teamUUID, team.name, team.description, team.manualMembers, team.projectKeys, team.repoPatterns,
 			uint8(0), now, orgID, Provider, team.nativeTeamKey, team.parentTeamID,
 			teamcreated.For(createdAt, team.id, now),
-		}, Gone: teamprovider.GoneKept})
+		}, Gone: teamprovider.GoneKept, Roster: teamprovider.RosterKept})
 	}
 	return teamprovider.Insert(ctx, conn, orgID, teamsColumns, writes)
 }

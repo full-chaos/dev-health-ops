@@ -123,34 +123,19 @@ func readGitHubTestsArtifactReports(
 			archive, notFound, err = nil, true, nil
 		}
 	}()
-	if err := source.probe(); err != nil {
-		return nil, false, err
-	}
-	directory, err := source.directory()
+	members, err := source.members()
 	if err != nil {
 		return nil, false, err
 	}
-	reader, zipErr := zip.NewReader(directory, directory.size())
-	if source.err != nil {
-		return nil, false, source.err
-	}
-	if zipErr != nil {
-		return nil, false, githubTestsRangeUnusable("zip_unreadable")
-	}
 	packed := &githubTestsCappedBuffer{limit: maxBytes}
 	writer := zip.NewWriter(packed)
-	members := reader.File
-	if len(members) > githubTestsMaxArchiveEntries {
-		members = members[:githubTestsMaxArchiveEntries]
-	}
 	// processed and expanded follow parseGitHubTestsArchive's own counters, so
 	// a member's data is fetched exactly when the parser would read it.
 	processed := 0
 	var expanded, fetched uint64
 	for _, member := range members {
 		lower := strings.ToLower(member.Name)
-		read := isSafeGitHubTestsArchiveMemberName(member.Name) && !member.FileInfo().IsDir() &&
-			(strings.HasSuffix(lower, ".xml") || strings.HasSuffix(lower, ".info")) &&
+		read := githubTestsReportCandidateMember(member) &&
 			processed < githubTestsMaxReportsPerRun &&
 			member.UncompressedSize64 <= githubTestsMaxReportBytes &&
 			expanded+member.UncompressedSize64 <= githubTestsMaxArchiveBytes &&
@@ -187,6 +172,31 @@ func readGitHubTestsArtifactReports(
 		return nil, false, packed.failure()
 	}
 	return packed.Bytes(), false, nil
+}
+
+// members reads the zip directory by range (the end record, then the
+// bounded central directory) and returns the members the parser examines:
+// the first githubTestsMaxArchiveEntries.
+func (r *githubTestsRangeReaderAt) members() ([]*zip.File, error) {
+	if err := r.probe(); err != nil {
+		return nil, err
+	}
+	directory, err := r.directory()
+	if err != nil {
+		return nil, err
+	}
+	reader, zipErr := zip.NewReader(directory, directory.size())
+	if r.err != nil {
+		return nil, r.err
+	}
+	if zipErr != nil {
+		return nil, githubTestsRangeUnusable("zip_unreadable")
+	}
+	members := reader.File
+	if len(members) > githubTestsMaxArchiveEntries {
+		members = members[:githubTestsMaxArchiveEntries]
+	}
+	return members, nil
 }
 
 // githubTestsSingleMember copies one member's raw bytes into a zip of its

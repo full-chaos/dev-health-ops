@@ -1144,14 +1144,10 @@ func parseGitHubTestsArchive(
 		members = members[:githubTestsMaxArchiveEntries]
 	}
 	for _, member := range members {
-		if !isSafeGitHubTestsArchiveMemberName(member.Name) || member.FileInfo().IsDir() {
-			result.NonReportOther++
-			continue
-		}
 		name := member.Name
 		lower := strings.ToLower(name)
-		if !strings.HasSuffix(lower, ".xml") && !strings.HasSuffix(lower, ".info") {
-			if strings.HasSuffix(lower, ".json") {
+		if !githubTestsReportCandidateMember(member) {
+			if isSafeGitHubTestsArchiveMemberName(name) && !member.FileInfo().IsDir() && strings.HasSuffix(lower, ".json") {
 				result.NonReportJSON++
 			} else {
 				result.NonReportOther++
@@ -1259,6 +1255,14 @@ func parseGitHubTestsArchive(
 	// correctly accumulated per member above.
 	result.DuplicateSuites = countDuplicateTestSuites(result.Suites)
 	return result, nil
+}
+
+// githubTestsReportCandidateMember is the parser's member rule: a safe file
+// name ending in .xml or .info, the only members it reads as reports.
+func githubTestsReportCandidateMember(member *zip.File) bool {
+	lower := strings.ToLower(member.Name)
+	return isSafeGitHubTestsArchiveMemberName(member.Name) && !member.FileInfo().IsDir() &&
+		(strings.HasSuffix(lower, ".xml") || strings.HasSuffix(lower, ".info"))
 }
 
 func isSafeGitHubTestsArchiveMemberName(name string) bool {

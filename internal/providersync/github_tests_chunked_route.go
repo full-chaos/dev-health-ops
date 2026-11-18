@@ -1853,9 +1853,20 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 							},
 						)
 					}
+					// CHAOS-14000: the cap counts only artifacts whose zip directory lists a report member; one that lists none is
+					// excluded, never a loss.
+					artifactItems, noReportItems, artifactsCapped, _, admitErr := githubTestsAdmitReportArtifacts(ctx, client, root, artifactItems, maxArtifacts)
+					cursor.Requests = invocationBaseRequests + requests
+					if admitErr != nil {
+						return admitErr
+					}
+					for _, artifact := range noReportItems {
+						if len(cursor.ExcludedArtifactSample) < githubTestsMaxExcludedArtifactSampleRecords {
+							cursor.ExcludedArtifactSample = append(cursor.ExcludedArtifactSample, githubTestsNoReportSampleRecord(artifact))
+						}
+					}
 					switch {
-					case len(artifactItems) > maxArtifacts:
-						artifactItems = artifactItems[:maxArtifacts]
+					case artifactsCapped:
 						cursor = recordGitHubTestsPerRunTruncation(
 							cursor, client, claim, githubTestsRunArtifactsComponent,
 							githubTestsPerRunCapCause, pipeline.RunID, len(artifactItems),

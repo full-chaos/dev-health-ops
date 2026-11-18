@@ -380,10 +380,12 @@ func TestGitHubTestsPerRunArtifactsCapTruncatesAndAdvances(t *testing.T) {
 		t.Fatalf("artifacts observation=%+v, want cause=%s count=1", observation, githubTestsPerRunCapCause)
 	}
 	// Only the first cap-worth of artifacts is downloaded; the rest are dropped
-	// rather than fetched and discarded.
-	if doer.archiveRequests != githubTestsMaxArtifacts {
-		t.Fatalf("downloaded %d archives, want exactly the cap %d",
-			doer.archiveRequests, githubTestsMaxArtifacts)
+	// rather than fetched and discarded. Over the cap, each candidate up to the
+	// first one past it also costs one directory-check request (CHAOS-14000):
+	// this API serves without range support, so every check keeps its slot.
+	if doer.archiveRequests != 2*githubTestsMaxArtifacts+1 {
+		t.Fatalf("archive requests=%d, want the cap %d downloads plus %d directory checks",
+			doer.archiveRequests, githubTestsMaxArtifacts, githubTestsMaxArtifacts+1)
 	}
 	assertFinalizedAndAdvanced(t, walk)
 }

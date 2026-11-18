@@ -535,7 +535,15 @@ func (handler GitHubTestsRouteHandler) Collect(
 				},
 			)
 		}
-		if artPage.PageBudgetExhausted || len(artifacts) > maxArtifacts {
+		if artPage.PageBudgetExhausted {
+			return CompleteRouteBatch{}, ErrPaginationCapExceeded
+		}
+		artifacts, _, artifactsCapped, admitRequests, admitErr := githubTestsAdmitReportArtifacts(ctx, client, root, artifacts, maxArtifacts)
+		requests += admitRequests
+		if admitErr != nil {
+			return CompleteRouteBatch{}, admitErr
+		}
+		if artifactsCapped {
 			return CompleteRouteBatch{}, ErrPaginationCapExceeded
 		}
 		for _, artifact := range artifacts {

@@ -14,6 +14,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
@@ -266,15 +267,6 @@ func TestWorkItemExecutorsRoundTripAgainstRealClickHouse(t *testing.T) {
     wip_congestion_ratio Float64, predictability_score Float64,
     computed_at DateTime('UTC'), org_id String, row_view LowCardinality(String)
 ) ENGINE = ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, provider, day, work_scope_id, team_id, row_view)`,
-		`CREATE TABLE work_item_user_metrics_daily (
-    day Date, provider String, work_scope_id String, user_identity String,
-    team_id String, team_name String,
-    items_started UInt32, items_completed UInt32, wip_count_end_of_day UInt32,
-    cycle_time_p50_hours Nullable(Float64), cycle_time_p90_hours Nullable(Float64),
-    computed_at DateTime('UTC'), org_id String, row_view LowCardinality(String), retracted UInt8 DEFAULT 0,
-    team_split_team_ids Array(String) DEFAULT [], team_split_is_primary Array(UInt8) DEFAULT [],
-    team_split_items_completed Array(UInt32) DEFAULT [], team_split_wip_end_of_day Array(UInt32) DEFAULT []
-) ENGINE = ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, provider, work_scope_id, user_identity, day, row_view)`,
 		`CREATE TABLE work_item_cycle_times (
     work_item_id String, provider String, day Date, work_scope_id String,
     team_id Nullable(String), team_name Nullable(String), assignee Nullable(String),
@@ -298,6 +290,7 @@ ORDER BY (org_id, day, provider, work_scope_id, ifNull(team_id, ''))`,
 			t.Fatal(err)
 		}
 	}
+	chschema.CreateTables(ctx, t, conn, "work_item_user_metrics_daily")
 
 	assertFixtureSchemaMatchesProduction(ctx, t, conn)
 

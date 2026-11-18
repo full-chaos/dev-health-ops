@@ -8,8 +8,12 @@ import (
 	"time"
 
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
+
+// reportRepoID is a repository id of the chain's UUID repo_id column.
+const reportRepoID = "00000000-0000-4000-8000-00000000a001"
 
 func TestClickHouseQueryAdapterExecutesBoundedPythonParityQuery(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -28,24 +32,14 @@ func TestClickHouseQueryAdapterExecutesBoundedPythonParityQuery(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	if err := conn.Exec(ctx, `
-CREATE TABLE testops_pipeline_metrics_daily (
-	org_id String,
-	repo_id String,
-	day Date,
-	success_count UInt32,
-	failure_count UInt32,
-	computed_at DateTime('UTC')
-) ENGINE = MergeTree ORDER BY (org_id, repo_id, day)`); err != nil {
-		t.Fatal(err)
-	}
+	chschema.CreateTables(ctx, t, conn, "testops_pipeline_metrics_daily")
 	// computed_at is required: CHAOS-4246 wraps this table in a
 	// latest-generation-by-computed_at dedup subquery (dedupFromSource).
 	if err := conn.Exec(ctx, `
-INSERT INTO testops_pipeline_metrics_daily VALUES
-('org-1', 'repo-a', '2026-01-01', 91, 9, '2026-01-01 01:00:00'),
-('org-1', 'repo-a', '2026-01-07', 19, 1, '2026-01-07 01:00:00'),
-('other-org', 'repo-a', '2026-01-07', 1, 9, '2026-01-07 01:00:00')`); err != nil {
+INSERT INTO testops_pipeline_metrics_daily (org_id, repo_id, day, success_count, failure_count, computed_at) VALUES
+('org-1', '`+reportRepoID+`', '2026-01-01', 91, 9, '2026-01-01 01:00:00'),
+('org-1', '`+reportRepoID+`', '2026-01-07', 19, 1, '2026-01-07 01:00:00'),
+('other-org', '`+reportRepoID+`', '2026-01-07', 1, 9, '2026-01-07 01:00:00')`); err != nil {
 		t.Fatal(err)
 	}
 	loader := reportLoaderFunc(func(context.Context, QueryInput) (ReportDefinition, error) {
@@ -53,7 +47,7 @@ INSERT INTO testops_pipeline_metrics_daily VALUES
 			Plan: Plan{PlanID: "plan-1", ReportType: "weekly_health", OrganizationID: "org-1"},
 			Charts: []ChartSpec{{
 				ChartID: "chart-1", PlanID: "plan-1", ChartType: "line",
-				Metric: "success_rate", GroupBy: "day", FilterRepos: []string{"repo-a"},
+				Metric: "success_rate", GroupBy: "day", FilterRepos: []string{reportRepoID},
 				TimeRangeStart: "2026-01-01", TimeRangeEnd: "2026-01-07",
 				OrganizationID: "org-1",
 			}},

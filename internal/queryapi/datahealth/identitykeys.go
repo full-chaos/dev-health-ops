@@ -1,5 +1,7 @@
 package datahealth
 
+import "strings"
+
 // The two functions below are the comparison rules this package already
 // applies to the org's identities (identityKeys, decodeProviderIdentities),
 // exported so that another reader of the `identities` table (reviewEdges'
@@ -21,4 +23,32 @@ func ProviderIdentityValues(text string) []string {
 		values = append(values, group...)
 	}
 	return values
+}
+
+// ProviderIdentityGroup is one key of a `provider_identities` object with its values. Provider is the
+// key as stored (not normalised).
+type ProviderIdentityGroup struct {
+	Provider string
+	Values   []string
+}
+
+// ProviderIdentityGroups decodes the `provider_identities` column like ProviderIdentityValues, but keeps
+// the key of each list. Anything that is not an object of lists decodes to no groups.
+func ProviderIdentityGroups(text string) []ProviderIdentityGroup {
+	if strings.TrimSpace(text) == "" {
+		return nil
+	}
+	decoded, ok := decodeOrdered(text)
+	if !ok {
+		return nil
+	}
+	object, ok := decoded.(*orderedMap)
+	if !ok {
+		return nil
+	}
+	groups := make([]ProviderIdentityGroup, 0, len(object.keys))
+	for i, key := range object.keys {
+		groups = append(groups, ProviderIdentityGroup{Provider: key, Values: providerValues(object.vals[i])})
+	}
+	return groups
 }

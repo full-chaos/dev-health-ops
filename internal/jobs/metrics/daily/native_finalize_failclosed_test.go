@@ -125,7 +125,7 @@ func TestACancelledContextStopsRemainingFamilies(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- handler.computeNativeFinalizeFamilies(ctx, Run{})
+		done <- handler.computeNativeFinalizeFamilies(ctx, Run{}, false)
 	}()
 
 	select {

@@ -102,7 +102,7 @@ func TestNewHeatmapWorkHandlerRequiresAuthContext(t *testing.T) {
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
 	}
-	if got, want := rec.Body.String(), `{"detail":{"message":"Not authenticated"}}`+"\n"; got != want {
+	if got, want := rec.Body.String(), `{"detail":{"message":"Not authenticated"}}`; got != want {
 		t.Fatalf("body = %q, want %q", got, want)
 	}
 }
@@ -173,7 +173,7 @@ func TestNewHeatmapWorkHandlerComparativeParamRejected(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
 	}
-	if got, want := rec.Body.String(), `{"detail":"Comparative parameters are not supported."}`+"\n"; got != want {
+	if got, want := rec.Body.String(), `{"detail":"Comparative parameters are not supported."}`; got != want {
 		t.Fatalf("body = %q, want %q", got, want)
 	}
 }
@@ -204,7 +204,7 @@ func TestNewHeatmapWorkHandlerUnknownMetricIs404(t *testing.T) {
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
 	}
-	if got, want := rec.Body.String(), `{"detail":"Unknown heatmap metric"}`+"\n"; got != want {
+	if got, want := rec.Body.String(), `{"detail":"Unknown heatmap metric"}`; got != want {
 		t.Fatalf("body = %q, want %q", got, want)
 	}
 }
@@ -221,7 +221,7 @@ func TestNewHeatmapWorkHandlerInvalidScopeTypeIs400(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
 	}
-	if got, want := rec.Body.String(), `{"detail":"Invalid scope filter"}`+"\n"; got != want {
+	if got, want := rec.Body.String(), `{"detail":"Invalid scope filter"}`; got != want {
 		t.Fatalf("body = %q, want %q", got, want)
 	}
 }
@@ -237,7 +237,7 @@ func TestNewHeatmapWorkHandlerIndividualRequiresDeveloperScope(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
 	}
-	if got, want := rec.Body.String(), `{"detail":"Individual heatmaps require developer scope"}`+"\n"; got != want {
+	if got, want := rec.Body.String(), `{"detail":"Individual heatmaps require developer scope"}`; got != want {
 		t.Fatalf("body = %q, want %q", got, want)
 	}
 }
@@ -253,7 +253,7 @@ func TestNewHeatmapWorkHandlerDeveloperScopeRequiresIndividual(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
 	}
-	if got, want := rec.Body.String(), `{"detail":"Developer scope is only supported for individual heatmaps"}`+"\n"; got != want {
+	if got, want := rec.Body.String(), `{"detail":"Developer scope is only supported for individual heatmaps"}`; got != want {
 		t.Fatalf("body = %q, want %q", got, want)
 	}
 }
@@ -269,7 +269,7 @@ func TestNewHeatmapWorkHandlerIndividualRequiresScopeID(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
 	}
-	if got, want := rec.Body.String(), `{"detail":"Individual heatmaps require a person id"}`+"\n"; got != want {
+	if got, want := rec.Body.String(), `{"detail":"Individual heatmaps require a person id"}`; got != want {
 		t.Fatalf("body = %q, want %q", got, want)
 	}
 }

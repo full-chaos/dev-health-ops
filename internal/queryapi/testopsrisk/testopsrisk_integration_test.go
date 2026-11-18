@@ -18,9 +18,8 @@ import (
 var ddls = []string{
 	`CREATE TABLE testops_release_confidence (repo_id UUID, day Date, confidence_score Float64, factors_json String DEFAULT '{}',
       org_id LowCardinality(String) DEFAULT '', computed_at DateTime('UTC')) ENGINE MergeTree PARTITION BY toYYYYMM(day) ORDER BY (repo_id, day)`,
-	`CREATE TABLE testops_quality_drag (repo_id UUID, day Date, drag_hours Float64, failure_rework_hours Float64, flake_investigation_hours Float64,
-      queue_wait_hours Float64, retry_overhead_hours Float64, org_id LowCardinality(String) DEFAULT '', computed_at DateTime('UTC'))
-      ENGINE MergeTree PARTITION BY toYYYYMM(day) ORDER BY (repo_id, day)`,
+	// Prod shape: internal/chmigrate/baseline/head.json (Nullable parts after migration 091, ReplacingMergeTree).
+	"CREATE TABLE testops_quality_drag (`repo_id` UUID, `day` Date, `drag_hours` Nullable(Float64), `failure_rework_hours` Nullable(Float64), `flake_investigation_hours` Nullable(Float64), `queue_wait_hours` Nullable(Float64), `retry_overhead_hours` Nullable(Float64), `factors_json` String DEFAULT '{}', `team_id` Nullable(String), `service_id` Nullable(String), `org_id` LowCardinality(String) DEFAULT '', `computed_at` DateTime('UTC')) ENGINE = ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, day) SETTINGS index_granularity = 8192",
 	`CREATE TABLE testops_pipeline_stability (repo_id UUID, day Date, stability_index Float64, org_id LowCardinality(String) DEFAULT '',
       computed_at DateTime('UTC')) ENGINE MergeTree PARTITION BY toYYYYMM(day) ORDER BY (repo_id, day)`,
 	`CREATE TABLE testops_pipeline_metrics_daily (repo_id UUID, day Date, success_count UInt32, failure_count UInt32,

@@ -483,6 +483,7 @@ internal/jobs/report	cicd_pooled_test.go
 internal/jobs/report	delivery_pooled_test.go
 internal/jobs/report	report_test.go
 internal/jobs/report	runtime_integration_test.go
+internal/jobs/report	stored_test_pass_rate_readers_census_test.go
 internal/llmorgsettings	baseurl_reader_guard_test.go
 internal/llmorgsettings	keyreaders_census_test.go
 internal/llmorgsettings	relation_test.go

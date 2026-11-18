@@ -289,14 +289,6 @@ null,
 1.0
 ],
 [
-"Flake Investigation",
-0.0
-],
-[
-"Queue Wait",
-0.0
-],
-[
 "Retry Overhead",
 0.5
 ]
@@ -629,24 +621,7 @@ null,
 0.5
 ]
 ],
-"breakdown": [
-[
-"Failure Rework",
-0.0
-],
-[
-"Flake Investigation",
-0.0
-],
-[
-"Queue Wait",
-0.0
-],
-[
-"Retry Overhead",
-0.0
-]
-],
+"breakdown": [],
 "quadrant": [],
 "confidence_spark": [
 [

@@ -225,6 +225,8 @@ func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args 
 	// tally covers the whole pass -- flushed once, after whichever commit
 	// below actually succeeds.
 	ctx = withRollupBumpTally(ctx)
+	ctx = withPostCommitLogs(ctx)
+	fence := &transportFence{args: args, kind: outboxKindDispatchSyncRun, unavailable: ErrDispatchSyncRunUnavailable}
 
 	// The outbox-relay route-generation fence every native service already
 	// starts with (finalizeWorker/referenceDiscoveryWorker's own first
@@ -246,7 +248,8 @@ func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args 
 	if run == nil {
 		// Python: `if run is None: ... return {"status": "missing", ...}`.
 		service.logger.Warn(ctx, synclog.MsgDispatchSyncRunMissing, synclog.Run(synclog.ParseID(args.SyncRunID())))
-		return tx.Commit(ctx)
+		_, err := fence.commit(ctx, tx)
+		return err
 	}
 
 	now := service.nowUTC()
@@ -277,7 +280,7 @@ func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args 
 			return ErrDispatchSyncRunUnavailable
 		}
 		if !allowed {
-			return service.terminalizeFeatureDisabled(ctx, tx, run, reason, now)
+			return service.terminalizeFeatureDisabled(ctx, tx, fence, run, reason, now)
 		}
 	}
 
@@ -294,7 +297,8 @@ func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args 
 			return err
 		}
 		service.logger.Info(ctx, synclog.MsgDispatchSyncRunBlockedOnReferenceDiscovery, synclog.Run(synclog.ParseID(run.id)))
-		return tx.Commit(ctx)
+		_, err := fence.commit(ctx, tx)
+		return err
 	}
 
 	// --- CHAOS-4556: validate provider-family claims for every dispatch-
@@ -317,7 +321,9 @@ func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args 
 		if err != nil {
 			return err
 		}
-		service.logger.Warn(ctx, synclog.MsgDispatchSyncRunInvalidClaimUnitsTerminalized, synclog.Run(synclog.ParseID(run.id)), synclog.Count(synclog.KeyInvalidClaimUnits, terminalizedBeforeCap), synclog.Text(synclog.KeyErrorCategory, synclog.ParseLabel(invalidProviderFamilyClaimErrorCategory)), synclog.Text(synclog.KeyPhase, synclog.LabelPreCapacity))
+		logAfterCommit(ctx, func() {
+			service.logger.Warn(ctx, synclog.MsgDispatchSyncRunInvalidClaimUnitsTerminalized, synclog.Run(synclog.ParseID(run.id)), synclog.Count(synclog.KeyInvalidClaimUnits, terminalizedBeforeCap), synclog.Text(synclog.KeyErrorCategory, synclog.ParseLabel(invalidProviderFamilyClaimErrorCategory)), synclog.Text(synclog.KeyPhase, synclog.LabelPreCapacity))
+		})
 	}
 
 	// --- DispatchGuard: authorize this pass ---
@@ -326,7 +332,7 @@ func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args 
 		return err
 	}
 	if !decision.allowed {
-		return service.denyRun(ctx, tx, run, decision, now)
+		return service.denyRun(ctx, tx, fence, run, decision, now)
 	}
 	// Python has a SECOND `if not decision.allowed:` check immediately
 	// after this point (a "continuing_after_denial_for_active_units" log
@@ -528,7 +534,9 @@ func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args 
 	if persisted, err := persistBudgetEstimates(ctx, tx, routedUnits, budgetResult.estimatesByUnit); err != nil {
 		return err
 	} else if persisted > 0 {
-		service.logger.Debug(ctx, synclog.MsgDispatchSyncRunBudgetEstimatesPersisted, synclog.Run(synclog.ParseID(run.id)), synclog.Count(synclog.KeyCount, persisted))
+		logAfterCommit(ctx, func() {
+			service.logger.Debug(ctx, synclog.MsgDispatchSyncRunBudgetEstimatesPersisted, synclog.Run(synclog.ParseID(run.id)), synclog.Count(synclog.KeyCount, persisted))
+		})
 	}
 
 	if len(invalidClaimUnits) > 0 {
@@ -537,7 +545,9 @@ func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args 
 		if err != nil {
 			return err
 		}
-		service.logger.Warn(ctx, synclog.MsgDispatchSyncRunInvalidClaimUnitsTerminalized, synclog.Run(synclog.ParseID(run.id)), synclog.Count(synclog.KeyInvalidClaimUnits, terminalizedInvalid), synclog.Text(synclog.KeyErrorCategory, synclog.ParseLabel(invalidProviderFamilyClaimErrorCategory)), synclog.Text(synclog.KeyPhase, synclog.LabelPostClaim))
+		logAfterCommit(ctx, func() {
+			service.logger.Warn(ctx, synclog.MsgDispatchSyncRunInvalidClaimUnitsTerminalized, synclog.Run(synclog.ParseID(run.id)), synclog.Count(synclog.KeyInvalidClaimUnits, terminalizedInvalid), synclog.Text(synclog.KeyErrorCategory, synclog.ParseLabel(invalidProviderFamilyClaimErrorCategory)), synclog.Text(synclog.KeyPhase, synclog.LabelPostClaim))
+		})
 	}
 
 	if len(unroutableUnits) > 0 {
@@ -546,7 +556,9 @@ func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args 
 		if err != nil {
 			return err
 		}
-		service.logger.Warn(ctx, synclog.MsgDispatchSyncRunUnroutableUnitsTerminalized, synclog.Run(synclog.ParseID(run.id)), synclog.Count(synclog.KeyUnroutableUnits, terminalized), synclog.Text(synclog.KeyErrorCategory, synclog.ParseLabel(featureDisabledErrorCategory)))
+		logAfterCommit(ctx, func() {
+			service.logger.Warn(ctx, synclog.MsgDispatchSyncRunUnroutableUnitsTerminalized, synclog.Run(synclog.ParseID(run.id)), synclog.Count(synclog.KeyUnroutableUnits, terminalized), synclog.Text(synclog.KeyErrorCategory, synclog.ParseLabel(featureDisabledErrorCategory)))
+		})
 	}
 
 	// Emitted before the commit branches so it is reported whether or not this
@@ -577,9 +589,12 @@ WHERE id = $1::uuid`,
 			return ErrDispatchSyncRunUnavailable
 		}
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return ErrDispatchSyncRunUnavailable
+	if committed, err := fence.commit(ctx, tx); err != nil {
+		return err
+	} else if !committed {
+		return nil
 	}
+	flushPostCommitLogs(ctx)
 	// CHAOS-10013: every unit this pass terminalized (budget exhaustion, an
 	// invalid or unroutable claim) was counted against its bucket when the
 	// capacity decision was made, so a sibling the cap held back is due a pass
@@ -712,7 +727,7 @@ WHERE id = $1::uuid`,
 // when some units are still genuinely in flight (a normal state at
 // dispatch time, unlike reference-discovery's own always-terminal case).
 func (service *NativeDispatchSyncRunService) terminalizeFeatureDisabled(
-	ctx context.Context, tx pgx.Tx, run *finalizeSyncRun, reason scheduledsync.FeatureDecisionReason, now time.Time,
+	ctx context.Context, tx pgx.Tx, fence *transportFence, run *finalizeSyncRun, reason scheduledsync.FeatureDecisionReason, now time.Time,
 ) error {
 	message := canonicalIncidentFeatureDisabledMessage(reason)
 	transition, err := terminalizeFeatureDisabledRun(ctx, tx, run, message, now)
@@ -730,10 +745,13 @@ func (service *NativeDispatchSyncRunService) terminalizeFeatureDisabled(
 			return err
 		}
 	}
-	service.logger.Warn(ctx, synclog.MsgDispatchSyncRunFeatureDisabled, synclog.Run(synclog.ParseID(run.id)), synclog.Org(synclog.ParseID(run.orgID)), synclog.Text(synclog.KeyErrorCategory, synclog.ParseLabel(featureDisabledErrorCategory)), synclog.Count(synclog.KeyRunningUnits, transition.RunningUnits))
-	if err := tx.Commit(ctx); err != nil {
+	logAfterCommit(ctx, func() {
+		service.logger.Warn(ctx, synclog.MsgDispatchSyncRunFeatureDisabled, synclog.Run(synclog.ParseID(run.id)), synclog.Org(synclog.ParseID(run.orgID)), synclog.Text(synclog.KeyErrorCategory, synclog.ParseLabel(featureDisabledErrorCategory)), synclog.Count(synclog.KeyRunningUnits, transition.RunningUnits))
+	})
+	if committed, err := fence.commit(ctx, tx); err != nil || !committed {
 		return err
 	}
+	flushPostCommitLogs(ctx)
 	// CHAOS-4586 (codex round 10): terminalizeFeatureDisabledRun above
 	// already tallied a rollup bump onto Dispatch's own ctx (installed at
 	// this transaction's start); flush it now that the commit it belongs
@@ -755,7 +773,7 @@ func (service *NativeDispatchSyncRunService) terminalizeFeatureDisabled(
 // skips terminal runs) and pollutes coverage as a permanent requested-but-
 // uncovered window.
 func (service *NativeDispatchSyncRunService) denyRun(
-	ctx context.Context, tx pgx.Tx, run *finalizeSyncRun, decision guardDecision, now time.Time,
+	ctx context.Context, tx pgx.Tx, fence *transportFence, run *finalizeSyncRun, decision guardDecision, now time.Time,
 ) error {
 	errorText := decision.reason
 	if errorText == "" {
@@ -792,10 +810,13 @@ func (service *NativeDispatchSyncRunService) denyRun(
 			}
 			recordRollupBump(ctx, rollupPathDenied)
 		}
-		service.logger.Warn(ctx, synclog.MsgDispatchSyncRunDeniedWithActiveUnits, synclog.Run(synclog.ParseID(run.id)), synclog.Text(synclog.KeyReason, synclog.ParseLabel(decision.reasonCode)), synclog.Count(synclog.KeyFailedPlannedUnits, failedPlanned), synclog.Count(synclog.KeyFailedStaleDispatchingUnits, failedStale))
-		if err := tx.Commit(ctx); err != nil {
+		logAfterCommit(ctx, func() {
+			service.logger.Warn(ctx, synclog.MsgDispatchSyncRunDeniedWithActiveUnits, synclog.Run(synclog.ParseID(run.id)), synclog.Text(synclog.KeyReason, synclog.ParseLabel(decision.reasonCode)), synclog.Count(synclog.KeyFailedPlannedUnits, failedPlanned), synclog.Count(synclog.KeyFailedStaleDispatchingUnits, failedStale))
+		})
+		if committed, err := fence.commit(ctx, tx); err != nil || !committed {
 			return err
 		}
+		flushPostCommitLogs(ctx)
 		flushRollupBumpTally(ctx, service.metrics)
 		return nil
 	}
@@ -821,10 +842,13 @@ WHERE id = $1::uuid`,
 		map[string]any{}, &errorText); err != nil {
 		return err
 	}
-	service.logger.Warn(ctx, synclog.MsgDispatchSyncRunDenied, synclog.Run(synclog.ParseID(run.id)), synclog.Text(synclog.KeyReason, synclog.ParseLabel(decision.reasonCode)), synclog.Count(synclog.KeyFailedPlannedUnits, failedPlanned))
-	if err := tx.Commit(ctx); err != nil {
+	logAfterCommit(ctx, func() {
+		service.logger.Warn(ctx, synclog.MsgDispatchSyncRunDenied, synclog.Run(synclog.ParseID(run.id)), synclog.Text(synclog.KeyReason, synclog.ParseLabel(decision.reasonCode)), synclog.Count(synclog.KeyFailedPlannedUnits, failedPlanned))
+	})
+	if committed, err := fence.commit(ctx, tx); err != nil || !committed {
 		return err
 	}
+	flushPostCommitLogs(ctx)
 	flushRollupBumpTally(ctx, service.metrics)
 	return nil
 }

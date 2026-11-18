@@ -152,12 +152,9 @@ func (service *NativeFinalizeSyncRunService) Finalize(ctx context.Context, args 
 	if service == nil || service.pool == nil || ctx == nil || args.valid() != nil {
 		return ErrFinalizeSyncRunUnavailable
 	}
-	return service.finalize(ctx, args.OrganizationID(), args.SyncRunID(), func(ctx context.Context, tx pgx.Tx) (bool, error) {
-		current, err := currentTransportReference(ctx, tx, args, outboxKindFinalizeSyncRun)
-		if err == nil && !current {
-			service.reportDeliveryNotCurrent(ctx, tx, args)
-		}
-		return current, err
+	fence := &transportFence{args: args, kind: outboxKindFinalizeSyncRun, unavailable: ErrFinalizeSyncRunUnavailable}
+	return service.finalize(ctx, args.OrganizationID(), args.SyncRunID(), fence, func(ctx context.Context, tx pgx.Tx) {
+		service.reportDeliveryNotCurrent(ctx, tx, args)
 	})
 }
 
@@ -181,12 +178,13 @@ SELECT transport, generation, paused FROM public.sync_dispatch_transport_routes 
 	}
 	var outboxStatus, outboxTransport *string
 	var outboxGeneration *int64
+	var outboxAttempts int64
 	outboxErr := tx.QueryRow(ctx, `
-SELECT status, dispatched_transport, dispatched_route_generation
+SELECT status, dispatched_transport, dispatched_route_generation, attempts
 FROM public.sync_dispatch_outbox
 WHERE id = $1::uuid AND sync_run_id = $2::uuid AND org_id = $3 AND kind = $4`,
 		args.OutboxID(), args.SyncRunID(), args.OrganizationID(), outboxKindFinalizeSyncRun,
-	).Scan(&outboxStatus, &outboxTransport, &outboxGeneration)
+	).Scan(&outboxStatus, &outboxTransport, &outboxGeneration, &outboxAttempts)
 	switch {
 	case errors.Is(outboxErr, pgx.ErrNoRows):
 		reason = "outbox_row_missing"
@@ -204,6 +202,8 @@ WHERE id = $1::uuid AND sync_run_id = $2::uuid AND org_id = $3 AND kind = $4`,
 		reason = "route_paused"
 	case outboxGeneration == nil || *outboxGeneration != routeGeneration || args.RouteGeneration() != routeGeneration:
 		reason = "route_generation_mismatch"
+	case outboxAttempts != args.Attempt():
+		reason = "delivery_attempt_mismatch"
 	}
 	if counter, counterErr := otel.GetMeterProvider().Meter("github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime").Int64Counter(
 		FinalizeDeliveryNotCurrentCounter,
@@ -232,16 +232,17 @@ func (service *NativeFinalizeSyncRunService) FinalizeRun(ctx context.Context, or
 	if service == nil || service.pool == nil || ctx == nil || !uuidPattern.MatchString(runID) || orgID == "" {
 		return ErrFinalizeSyncRunUnavailable
 	}
-	return service.finalize(ctx, orgID, runID, nil)
+	return service.finalize(ctx, orgID, runID, nil, nil)
 }
 
-// finalize is the shared body. current, when set, decides inside the
-// transaction whether the delivery is still the current one; a false result
-// is a committed no-op.
+// finalize is the shared body. fence, when set, decides at the start and again
+// at every commit whether the delivery is still the current one; a delivery
+// that is not is a no-op that commits nothing, reported through refused.
 func (service *NativeFinalizeSyncRunService) finalize(
 	ctx context.Context,
 	orgID, runID string,
-	current func(context.Context, pgx.Tx) (bool, error),
+	fence *transportFence,
+	refused func(context.Context, pgx.Tx),
 ) error {
 	tx, err := service.pool.Begin(ctx)
 	if err != nil {
@@ -249,14 +250,20 @@ func (service *NativeFinalizeSyncRunService) finalize(
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	if current != nil {
-		isCurrent, err := current(ctx, tx)
-		if err != nil {
-			return err
+	isCurrent, err := fence.current(ctx, tx)
+	if err != nil {
+		return err
+	}
+	if !isCurrent {
+		refused(ctx, tx)
+		return nil
+	}
+	commit := func() (bool, error) {
+		committed, err := fence.commit(ctx, tx)
+		if err == nil && !committed {
+			refused(ctx, tx)
 		}
-		if !isCurrent {
-			return nil
-		}
+		return committed, err
 	}
 
 	run, err := loadFinalizeRun(ctx, tx, orgID, runID)
@@ -267,7 +274,8 @@ func (service *NativeFinalizeSyncRunService) finalize(
 		// Python: `if run is None: ... return {"status": "missing", ...}`.
 		// Nothing was staged; a committed no-op mirrors NativePostSyncService's
 		// own "nothing to do" convention.
-		return tx.Commit(ctx)
+		_, err := commit()
+		return err
 	}
 
 	summary, err := summarizeFinalizeUnits(ctx, tx, run.id)
@@ -276,7 +284,8 @@ func (service *NativeFinalizeSyncRunService) finalize(
 	}
 	if summary.pending {
 		// Python: `return {"status": "pending", ...}`.
-		return tx.Commit(ctx)
+		_, err := commit()
+		return err
 	}
 	aggregate := summary.aggregate
 
@@ -413,7 +422,8 @@ VALUES ($1::uuid, $2, $3::uuid, $4, $5)`,
 			// writes above still commit (matches Python: the `with session`
 			// block commits on this early return too); only the once-only
 			// ledger/coverage-invalidation/wakeup/counter are skipped.
-			return tx.Commit(ctx)
+			_, err := commit()
+			return err
 		}
 		return ErrFinalizeSyncRunUnavailable
 	}
@@ -427,8 +437,10 @@ VALUES ($1::uuid, $2, $3::uuid, $4, $5)`,
 		return ErrFinalizeSyncRunUnavailable
 	}
 
-	if err := tx.Commit(ctx); err != nil {
+	if committed, err := commit(); err != nil {
 		return ErrFinalizeSyncRunUnavailable
+	} else if !committed {
+		return nil
 	}
 
 	// Everything below runs only on the once-only branch (the
@@ -527,18 +539,8 @@ SELECT EXISTS (
     SELECT 1
     FROM public.sync_dispatch_outbox AS outbox
     JOIN public.sync_dispatch_transport_routes AS route
-      ON route.kind = outbox.kind
-    WHERE outbox.id = $1::uuid
-      AND outbox.sync_run_id = $2::uuid
-      AND outbox.org_id = $3
-      AND outbox.kind = $5
-      AND outbox.status = 'dispatched'
-      AND outbox.dispatched_transport = 'river'
-      AND outbox.dispatched_route_generation = $4
-      AND route.transport = 'river'
-      AND route.generation = $4
-      AND route.paused = false
-)`, args.OutboxID(), args.SyncRunID(), args.OrganizationID(), args.RouteGeneration(), kind).Scan(&current)
+      ON route.kind = outbox.kind`+transportReferencePredicate+`
+)`, args.OutboxID(), args.SyncRunID(), args.OrganizationID(), args.RouteGeneration(), kind, args.Attempt()).Scan(&current)
 	if err != nil {
 		return false, ErrFinalizeSyncRunUnavailable
 	}

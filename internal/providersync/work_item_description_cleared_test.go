@@ -209,7 +209,7 @@ func TestWorkItemPayloadCarryClearsOnlyOnAStatedEmptyString(t *testing.T) {
 // description as null. The retry after the upgrade collects the same provider
 // payload, which now states "" and so has another digest. The recovery must
 // commit, not stop on the manifest check.
-func TestLegacyLedgerRetryAcrossTheDescriptionChangeCommits(t *testing.T) {
+func runLegacyLedgerRetry(t *testing.T, writing bool) (*replanMemoryLedger, CompleteRouteExecutionResult, error, int) {
 	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
 	claim, session := preparedWorkItemsSession(t, now, "gitlab", "work-items")
 	repoID := uuid.MustParse("c7198fbc-1945-3717-05d8-eb78866b4e79")
@@ -248,6 +248,11 @@ func TestLegacyLedgerRetryAcrossTheDescriptionChangeCommits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if writing {
+		legacy.Effects[0].Status = GenerationBlockWriting
+		started := now
+		legacy.Effects[0].StartedAt = &started
+	}
 	ledger := &replanMemoryLedger{memoryEffectLedger: &memoryEffectLedger{state: legacy}}
 	handler := &staticCompleteRouteHandler{batch: build(ptr(""))}
 	executor := completeRouteExecutor(now.Add(time.Hour), handler, ledger, &memoryEffectSink{})
@@ -255,14 +260,28 @@ func TestLegacyLedgerRetryAcrossTheDescriptionChangeCommits(t *testing.T) {
 	executor.Credentials.Decryptor = preparedGitHubTokenDecryptor{}
 	executor.BudgetLimits = map[CostClass]int{claim.CostClass: 1}
 	result, err := executor.Execute(context.Background(), session, descriptor)
+	return ledger, result, err, len(descriptor.Destinations)
+}
+
+func TestLegacyLedgerRetryAcrossTheDescriptionChangeCommits(t *testing.T) {
+	ledger, result, err, destinations := runLegacyLedgerRetry(t, false)
 	if ledger.resets != 1 {
 		t.Fatalf("resets=%d, want the untouched legacy ledger discarded once", ledger.resets)
 	}
 	if err != nil {
 		t.Fatalf("retry across the change: %v", err)
 	}
-	if result.Effects.Written != len(descriptor.Destinations) {
+	if result.Effects.Written != destinations {
 		t.Fatalf("result=%+v, want every destination written", result.Effects)
+	}
+}
+
+// A writing effect may already have a row in the sink: the ledger is not
+// discarded, so the readback still settles it.
+func TestLegacyLedgerWithAWritingEffectIsNotDiscarded(t *testing.T) {
+	ledger, _, _, _ := runLegacyLedgerRetry(t, true)
+	if ledger.resets != 0 {
+		t.Fatalf("resets=%d, want a ledger with a writing effect kept", ledger.resets)
 	}
 }
 

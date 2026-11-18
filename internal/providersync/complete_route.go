@@ -328,7 +328,10 @@ func (executor CompleteRouteExecutor) executeRoute(
 			// wedge the unit. With nothing committed the ledger is discarded
 			// and the unit runs as a first attempt, as a superseded snapshot
 			// is.
+			// Only an all-pending ledger qualifies: a writing effect may have a
+			// row already in the sink, and the reset would skip its readback.
 			if isWorkItemFamilyDataset(session.Claim.Dataset) &&
+				allEffectsPending(*recoveredEffects) &&
 				isSafePreparedManifestReplanState(session.Claim, *recoveredEffects) {
 				replanner, ok := committer.Ledger.(EffectLedgerReplanner)
 				if !ok {
@@ -799,4 +802,13 @@ func (line routeCompletedLog) attrs() []slog.Attr {
 		attrs = append(attrs, slog.Int64(count.Name, count.Value))
 	}
 	return attrs
+}
+
+func allEffectsPending(state EffectLedgerState) bool {
+	for _, effect := range state.Effects {
+		if effect.Status != GenerationBlockPending {
+			return false
+		}
+	}
+	return true
 }

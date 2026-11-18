@@ -30,6 +30,11 @@ func TestWritesTestReportRowsFollowsTheDatasetCapabilityForEveryProvider(t *test
 				t.Errorf("%s/%s: writesTestReportRows = %t, want %t (targets %v, destinations %v)",
 					provider, capability.Dataset, got, want, capability.LegacyTargets, descriptor.Destinations)
 			}
+			// The touched record runs only in a plan that triggers the daily run.
+			if want && !dailyRelevantTargets(targets) {
+				t.Errorf("%s/%s writes test_suite_results but does not trigger the daily run (targets %v)",
+					provider, capability.Dataset, capability.LegacyTargets)
+			}
 			if want {
 				writers[provider] = true
 			}
@@ -39,6 +44,9 @@ func TestWritesTestReportRowsFollowsTheDatasetCapabilityForEveryProvider(t *test
 		if !writers[provider] {
 			t.Errorf("provider %s has no dataset that writes test_suite_results: the matrix does not reach it", provider)
 		}
+	}
+	if !dailyRelevantTargets(map[string]struct{}{"tests": {}}) || !writesTestReportRows(map[string]struct{}{"tests": {}}) {
+		t.Error("a tests-only run writes test_suite_results: it must trigger the daily run and the test report record")
 	}
 	if writesTestReportRows(map[string]struct{}{"git": {}, "prs": {}, "work-items": {}}) {
 		t.Error("writesTestReportRows must be false for a mix with neither cicd nor tests")

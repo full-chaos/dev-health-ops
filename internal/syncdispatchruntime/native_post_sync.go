@@ -741,7 +741,7 @@ LIMIT 1`, orgID, integrationID).Scan(&autoImport); err != nil && !errors.Is(err,
 	_, hasOperational := targets["operational"]
 	git := writesGitRows(targets)
 	dora := git || hasDeployments || hasCICD || hasIncidents || hasOperational
-	dailyRelevant := dailyMetricsTrigger(git, hasWorkItems, hasCICD, hasDeployments, hasIncidents)
+	dailyRelevant := dailyRelevantTargets(targets)
 	targetDay := anchor
 	backfillDays := 1
 	if to != nil {
@@ -804,6 +804,16 @@ LIMIT 1`, orgID, integrationID).Scan(&autoImport); err != nil && !errors.Is(err,
 // computed_at instead of double-counting.
 func dailyMetricsTrigger(git, hasWorkItems, hasCICD, hasDeployments, hasIncidents bool) bool {
 	return git || hasWorkItems || hasCICD || hasDeployments || hasIncidents
+}
+
+// dailyRelevantTargets is dailyMetricsTrigger over the targets of the
+// successful units. The tests target writes the same rows as cicd, so either
+// one triggers the daily run, and with it the touched record of the suite days.
+func dailyRelevantTargets(targets map[string]struct{}) bool {
+	_, hasWorkItems := targets["work-items"]
+	_, hasDeployments := targets["deployments"]
+	_, hasIncidents := targets["incidents"]
+	return dailyMetricsTrigger(writesGitRows(targets), hasWorkItems, writesTestReportRows(targets), hasDeployments, hasIncidents)
 }
 
 // writesGitRows says whether a successful unit of the sync run wrote commits

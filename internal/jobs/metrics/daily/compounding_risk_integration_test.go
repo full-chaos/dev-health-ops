@@ -13,6 +13,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily/compoundingrisk"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily/repouser"
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
@@ -22,21 +23,6 @@ import (
 // drifted from production while the others looked fine, and the test that
 // depended on the drifted copy silently stopped testing what it claimed.
 var compoundingRiskSchema = []string{
-	// Production shape: 001_metrics_v2.sql's repo_metrics_daily plus the
-	// columns 004/006 add, with migration 027's sorting key
-	// (org_id, repo_id, day). The column TYPES are the point of this test
-	// -- three plain Float64, one UInt32, one Nullable(Float64) -- so they
-	// are reproduced exactly rather than normalized to nullable floats.
-	`CREATE TABLE repo_metrics_daily (
-    repo_id UUID, day Date,
-    rework_churn_ratio_30d Float64,
-    single_owner_file_ratio_30d Float64,
-    code_ownership_gini Float64 DEFAULT 0.0,
-    bus_factor UInt32 DEFAULT 0,
-    pr_first_review_p90_hours Nullable(Float64),
-    computed_at DateTime, org_id String,
-    pooled_pr_size_loc Array(Float64), pooled_bug_repair_hours Array(Float64), pooled_samples_stored UInt8 DEFAULT 0
-) ENGINE = MergeTree PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, day)`,
 	// 007_complexity_investment_issues.sql + migration 027's sorting key.
 	`CREATE TABLE repo_complexity_daily (
     repo_id UUID, day Date, loc_total UInt64, cyclomatic_total UInt64,
@@ -111,6 +97,7 @@ func TestCompoundingRiskComputeFamilyAgainstRealClickHouse(t *testing.T) {
 	}
 	defer conn.Close()
 
+	chschema.CreateTables(ctx, t, conn, "repo_metrics_daily")
 	for _, statement := range compoundingRiskSchema {
 		if err := conn.Exec(ctx, statement); err != nil {
 			t.Fatal(err)
@@ -404,6 +391,7 @@ func TestCompoundingRiskComplexityWindowOneSidedScoresFromTheOtherInputs(t *test
 	}
 	defer conn.Close()
 
+	chschema.CreateTables(ctx, t, conn, "repo_metrics_daily")
 	for _, statement := range compoundingRiskSchema {
 		if err := conn.Exec(ctx, statement); err != nil {
 			t.Fatal(err)

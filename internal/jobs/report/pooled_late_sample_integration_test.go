@@ -407,3 +407,66 @@ func TestPooledCountedRowsWithNoSampleAreNoPoint(t *testing.T) {
 	}
 	noPoint("delivery", deliveryOrg, deliveryRepo, day, keys)
 }
+
+// A retired CI/CD repository-day (its newest row holds retracted = 1, a row written without the pooled columns, so it
+// holds no samples) is absent in both arms of the pooled source: the stored samples of the older live row are not
+// served, and a run synced after the retraction does not enter through the raw arm. A live row without samples still
+// reads its raw runs.
+func TestPooledCICDRetiredDayIsAbsentInBothArms(t *testing.T) {
+	e := startPooledEnv(t)
+	org := e.newOrg()
+	const repo = "14025000-0000-4000-8000-0000000000f8"
+	const day, live = "2026-01-02", "2026-01-03"
+	e.insertCICDRuns(org, repo,
+		cicdRun{id: "rt-1", status: "success", queued: "2026-01-02 00:29:00.000", started: "2026-01-02 00:30:00.000", finished: "2026-01-02 00:40:00.000"})
+	e.computeCICD(org, []string{repo}, day)
+	e.requireSameSampleSet("stored", org, repo, day, lateSampleCICDKeys)
+
+	newest := func(d string) (retracted, marker uint8) {
+		t.Helper()
+		if err := e.conn.QueryRow(e.ctx, `SELECT argMax(retracted, computed_at), argMax(pooled_samples_stored, computed_at) FROM cicd_metrics_daily
+WHERE org_id = ? AND repo_id = ? AND day = ?`, org, repo, d).Scan(&retracted, &marker); err != nil {
+			t.Fatal(err)
+		}
+		return retracted, marker
+	}
+	absent := func(phase string) {
+		t.Helper()
+		retracted, marker := newest(day)
+		if retracted != 1 || marker != 0 {
+			t.Fatalf("%s: the newest row of %s holds retracted %d, pooled_samples_stored %d; want the retraction row (1, 0)", phase, day, retracted, marker)
+		}
+		for _, metric := range cicdPooledMetrics {
+			for _, chartType := range []string{"scorecard", "bar"} {
+				got := pointsOf(e.cicdChart(org, metric, cicdSpec{chartType: chartType, start: day, end: day}))
+				t.Logf("RETIRED14025 %-6s %-22s %-9s points=%v", phase, metric, chartType, got)
+				if len(got) != 0 {
+					t.Errorf("%s %s %s: the retired day has points %v, want none (absent, never 0)", phase, metric, chartType, got)
+				}
+			}
+		}
+	}
+
+	// Stored arm: the older live row holds samples (marker 1); the newer retraction row retires the day.
+	writerTick()
+	e.retireCICDDay(org, repo, day)
+	absent("stored")
+
+	// Raw arm: a run synced after the retraction does not enter.
+	e.insertCICDRuns(org, repo,
+		cicdRun{id: "rt-late", status: "success", queued: "2026-01-02 05:00:00.000", started: "2026-01-02 05:10:00.000", finished: "2026-01-02 06:10:00.000"})
+	absent("raw")
+
+	// A live row written without samples (marker 0, retracted 0) still reads its raw runs.
+	e.insertCICDRuns(org, repo,
+		cicdRun{id: "lv-1", status: "success", queued: "2026-01-03 00:25:00.000", started: "2026-01-03 00:30:00.000", finished: "2026-01-03 00:50:00.000"})
+	e.computeCICD(org, []string{repo}, live)
+	writerTick()
+	e.liveCICDDay(org, repo, live, 1)
+	if retracted, marker := newest(live); retracted != 0 || marker != 0 {
+		t.Fatalf("the newest row of %s holds retracted %d, pooled_samples_stored %d; want a live row without samples (0, 0)", live, retracted, marker)
+	}
+	got := pointsOf(e.cicdChart(org, "avg_duration_minutes", cicdSpec{chartType: "scorecard", start: live, end: live}))
+	t.Logf("RETIRED14025 live-raw avg_duration_minutes points=%v", got)
+	mustEqual(t, "a live row without samples reads its raw runs", got, "total", 20)
+}

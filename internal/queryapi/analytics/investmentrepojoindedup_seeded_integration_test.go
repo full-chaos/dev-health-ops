@@ -35,6 +35,7 @@ import (
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
@@ -63,6 +64,7 @@ func TestSankeyTeamNode_SeededRealClickHouse_RepoJoinDoesNotFanOutOnUnmergedRepo
 			t.Fatalf("exec DDL %q: %v", stmt, err)
 		}
 	}
+	chschema.CreateTables(ctx, t, conn, "work_unit_investments")
 
 	const orgID = "seeded-repojoin-dedup"
 	const repoID = "33333333-3333-3333-3333-333333333333"

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
@@ -44,6 +45,7 @@ func TestDeployComputeFamilyWritesRealOrgIDAndIsolatesTenants(t *testing.T) {
 	// Real production DDL: internal/chmigrate/history/000_raw_tables.sql:108-122
 	// (deployments) and 004_quality_delivery_metrics.sql:35-45
 	// (deploy_metrics_daily), plus 024_add_org_id.sql's org_id ALTER.
+	chschema.CreateTables(ctx, t, conn, "deploy_metrics_daily")
 	for _, statement := range []string{
 		`CREATE TABLE deployments (
     repo_id UUID, deployment_id String, status Nullable(String), environment Nullable(String),
@@ -53,12 +55,6 @@ func TestDeployComputeFamilyWritesRealOrgIDAndIsolatesTenants(t *testing.T) {
     release_ref_confidence Float64 DEFAULT 0.0, org_id String DEFAULT 'default',
     last_synced DateTime64(3, 'UTC')
 ) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (repo_id, deployment_id)`,
-		`CREATE TABLE deploy_metrics_daily (
-    repo_id UUID, day Date, deployments_count UInt32, failed_deployments_count UInt32,
-    deploy_time_p50_hours Nullable(Float64), lead_time_p50_hours Nullable(Float64),
-    computed_at DateTime('UTC'), org_id String DEFAULT 'default',
-    pooled_deploy_hours Array(Float64), pooled_samples_stored UInt8 DEFAULT 0
-) ENGINE MergeTree PARTITION BY toYYYYMM(day) ORDER BY (repo_id, day)`,
 	} {
 		if err := conn.Exec(ctx, statement); err != nil {
 			t.Fatal(err)

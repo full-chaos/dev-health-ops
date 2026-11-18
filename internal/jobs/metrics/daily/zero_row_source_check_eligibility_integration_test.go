@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
@@ -40,32 +41,23 @@ func TestClickHouseSourceDataCheckerMatchesDailyEligibilityIntersection(t *testi
 	}
 	defer conn.Close()
 
+	chschema.CreateTables(ctx, t, conn, "cicd_metrics_daily", "deploy_metrics_daily", "incident_metrics_daily")
 	for _, statement := range []string{
 		`CREATE TABLE ci_pipeline_runs (
     org_id String, repo_id UUID, run_id String DEFAULT toString(generateUUIDv4()), status Nullable(String),
     started_at Nullable(DateTime64(3, 'UTC')), finished_at Nullable(DateTime64(3, 'UTC'))
 ) ENGINE = ReplacingMergeTree ORDER BY (org_id, repo_id, run_id)`,
-		`CREATE TABLE cicd_metrics_daily (org_id String, repo_id UUID, day Date)
- ENGINE = MergeTree ORDER BY (org_id, repo_id, day)`,
 		`CREATE TABLE deployments (
     org_id String, repo_id UUID,
     deployed_at Nullable(DateTime64(3, 'UTC')), finished_at Nullable(DateTime64(3, 'UTC')),
     started_at Nullable(DateTime64(3, 'UTC')), last_synced Nullable(DateTime64(3, 'UTC')),
     status Nullable(String)
 ) ENGINE = MergeTree ORDER BY (org_id, repo_id)`,
-		`CREATE TABLE deploy_metrics_daily (org_id String, repo_id UUID, day Date)
- ENGINE = MergeTree ORDER BY (org_id, repo_id, day)`,
-		`CREATE TABLE test_suite_results (
-    org_id String, repo_id UUID,
-    started_at Nullable(DateTime64(3, 'UTC')), finished_at Nullable(DateTime64(3, 'UTC'))
-) ENGINE = ReplacingMergeTree ORDER BY (org_id, repo_id)`,
 		`CREATE TABLE testops_release_confidence (org_id String, repo_id UUID, day Date)
  ENGINE = MergeTree ORDER BY (org_id, repo_id, day)`,
 		`CREATE TABLE testops_pipeline_stability (org_id String, repo_id UUID, day Date)
  ENGINE = MergeTree ORDER BY (org_id, repo_id, day)`,
 		`CREATE TABLE testops_quality_drag (org_id String, repo_id UUID, day Date)
- ENGINE = MergeTree ORDER BY (org_id, repo_id, day)`,
-		`CREATE TABLE incident_metrics_daily (org_id String, repo_id UUID, day Date)
  ENGINE = MergeTree ORDER BY (org_id, repo_id, day)`,
 		`CREATE TABLE operational_incidents (
     org_id String, id String, service_id Nullable(String), source_revision DateTime64(6, 'UTC'),
@@ -86,6 +78,7 @@ func TestClickHouseSourceDataCheckerMatchesDailyEligibilityIntersection(t *testi
 			t.Fatal(err)
 		}
 	}
+	chschema.CreateTables(ctx, t, conn, "test_suite_results")
 
 	const (
 		runID       = "00000000-0000-4000-8000-000000000120"
@@ -104,7 +97,7 @@ INSERT INTO ci_pipeline_runs (org_id, repo_id, status, started_at, finished_at) 
 		t.Fatal(err)
 	}
 	if err := conn.Exec(ctx, `
-INSERT INTO cicd_metrics_daily VALUES
+INSERT INTO cicd_metrics_daily (org_id, repo_id, day) VALUES
 ('00000000-0000-4000-8000-000000000009', toUUID('00000000-0000-4000-8000-000000000002'), toDate('2026-08-25'))`); err != nil {
 		t.Fatal(err)
 	}

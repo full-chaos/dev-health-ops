@@ -11,6 +11,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/testops"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/testopspooled"
+	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
 // pooledChart is the definition of a pooled chart metric: the value of a bucket is taken over the raw samples of its rows
@@ -48,11 +49,13 @@ var pooledCharts = map[string]pooledChart{
 }
 
 // The CI/CD pooled source holds the samples the cicd daily writer (internal/jobs/metrics/daily/cicd) stored with the
-// newest cicd_metrics_daily row of each repository-day, one result row per run with a sample. A repository-day whose
-// newest row holds no samples (written before migration 161) reads the raw runs with the writer's rules: a run counts on
-// the UTC day it finishes, the newest synced version of a run (FINAL) is the run, a deleted run is no run. A duration
-// sample is finished_at - started_at in minutes when not negative, a queue sample started_at - queued_at in minutes when
-// not negative; the stored duration_seconds and queue_seconds are not read, as the writer does not read them.
+// newest cicd_metrics_daily row of each repository-day, one result row per counted run. A repository-day whose newest row
+// holds no samples (written before migration 161, or over the cap) reads the raw runs with the writer's rules: a run
+// counts on the UTC day it finishes, the newest synced version of a run (FINAL) is the run, a deleted run is no run. A
+// duration sample is finished_at - started_at in minutes when not negative, a queue sample started_at - queued_at in
+// minutes when not negative; the stored duration_seconds and queue_seconds are not read, as the writer does not read them.
+// Both arms read only the keys whose NEWEST row is live: a retired repository-day (newest row retracted = 1, a row that
+// holds no samples) admits no stored sample and no raw run, also a run synced after the retraction.
 // cicd_pooled_test.go pins these rules to the writer's text.
 const (
 	cicdRunMinutes          = "cicd_run_minutes"
@@ -89,6 +92,11 @@ var cicdRunsSource = `(
           AND ` + testops.NotOpenRunSQL + `
           AND (repo_id, toDate(finished_at)) IN (` + testopspooled.LegacyRepoDays("cicd_metrics_daily") + `)
     )
+    WHERE (repo_id, day) IN (
+        SELECT repo_id, day FROM cicd_metrics_daily
+        WHERE org_id = {org_id:String} AND day >= {start_date:Date} AND day < {end_date:Date}
+        GROUP BY repo_id, day
+        HAVING ` + liverow.NewestPredicate("cicd_metrics_daily", "") + `)
 ) AS cicd_pipeline_runs`
 
 // The writer's mean and p90 (linear between closest ranks), NULL for a group with no sample.

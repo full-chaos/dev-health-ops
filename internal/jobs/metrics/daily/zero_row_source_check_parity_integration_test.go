@@ -15,12 +15,12 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/full-chaos/dev-health-ops/internal/chmigrate"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily/cicd"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/deploymentstatus"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/remaining"
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
@@ -57,18 +57,14 @@ func startParityStack(t *testing.T, ctx context.Context) parityStack {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { conn.Close() })
+	chschema.CreateTables(ctx, t, conn, "cicd_metrics_daily", "deploy_metrics_daily", "incident_metrics_daily")
 	for _, statement := range []string{
 		"CREATE TABLE ci_pipeline_runs (`repo_id` UUID, `run_id` String, `status` Nullable(String), `queued_at` Nullable(DateTime64(3, 'UTC')), `started_at` DateTime64(3, 'UTC'), `finished_at` Nullable(DateTime64(3, 'UTC')), `last_synced` DateTime64(3, 'UTC'), `org_id` String DEFAULT 'default', `pipeline_name` Nullable(String), `provider` LowCardinality(String) DEFAULT '', `duration_seconds` Nullable(Float64), `queue_seconds` Nullable(Float64), `retry_count` UInt32 DEFAULT 0, `cancel_reason` Nullable(String), `trigger_source` Nullable(String), `commit_hash` Nullable(String), `branch` Nullable(String), `pr_number` Nullable(UInt32), `team_id` Nullable(String), `service_id` Nullable(String)) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, run_id)",
-		"CREATE TABLE cicd_metrics_daily (`repo_id` UUID, `day` Date, `pipelines_count` UInt32, `success_rate` Float64, `avg_duration_minutes` Nullable(Float64), `p90_duration_minutes` Nullable(Float64), `avg_queue_minutes` Nullable(Float64), `computed_at` DateTime('UTC'), `org_id` String DEFAULT 'default', pooled_run_minutes Array(Nullable(Float64)), pooled_queue_minutes Array(Nullable(Float64)), pooled_samples_stored UInt8 DEFAULT 0) ENGINE = ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, day)",
 		"CREATE TABLE deployments (`repo_id` UUID, `deployment_id` String, `status` Nullable(String), `environment` Nullable(String), `started_at` Nullable(DateTime64(3, 'UTC')), `finished_at` Nullable(DateTime64(3, 'UTC')), `deployed_at` Nullable(DateTime64(3, 'UTC')), `merged_at` Nullable(DateTime64(3, 'UTC')), `pull_request_number` Nullable(UInt32), `pull_request_tier` LowCardinality(String) DEFAULT '', `release_ref` String DEFAULT '', `release_ref_confidence` Float64 DEFAULT 0., `last_synced` DateTime64(3, 'UTC'), `org_id` String DEFAULT 'default') ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, deployment_id)",
-		"CREATE TABLE deploy_metrics_daily (`repo_id` UUID, `day` Date, `deployments_count` UInt32, `failed_deployments_count` UInt32, `deploy_time_p50_hours` Nullable(Float64), `lead_time_p50_hours` Nullable(Float64), `computed_at` DateTime('UTC'), `org_id` String DEFAULT 'default', pooled_deploy_hours Array(Float64), pooled_samples_stored UInt8 DEFAULT 0) ENGINE = ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, day)",
-		"CREATE TABLE test_suite_results (`repo_id` UUID, `run_id` String, `suite_id` String, `suite_name` String, `framework` Nullable(String), `environment` Nullable(String), `total_count` UInt32, `passed_count` UInt32, `failed_count` UInt32, `skipped_count` UInt32, `error_count` UInt32 DEFAULT 0, `quarantined_count` UInt32 DEFAULT 0, `retried_count` UInt32 DEFAULT 0, `duration_seconds` Nullable(Float64), `started_at` Nullable(DateTime64(3, 'UTC')), `finished_at` Nullable(DateTime64(3, 'UTC')), `team_id` Nullable(String), `service_id` Nullable(String), `org_id` LowCardinality(String) DEFAULT '', `last_synced` DateTime64(3, 'UTC'), `report_slot` LowCardinality(String) DEFAULT '', `run_attempt` UInt32 DEFAULT 0, `legacy_suite_ids` Array(String) DEFAULT []) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, run_id, suite_id)",
 		"CREATE TABLE test_case_results (`repo_id` UUID, `run_id` String, `suite_id` String, `case_id` String, `case_name` String, `class_name` Nullable(String), `status` LowCardinality(String), `duration_seconds` Nullable(Float64), `retry_attempt` UInt32 DEFAULT 0, `failure_message` Nullable(String), `failure_type` Nullable(String), `stack_trace` Nullable(String), `is_quarantined` UInt8 DEFAULT 0, `org_id` LowCardinality(String) DEFAULT '', `last_synced` DateTime64(3, 'UTC')) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, run_id, suite_id, case_id)",
-		"CREATE TABLE coverage_snapshots (`repo_id` UUID, `run_id` String, `snapshot_id` String, `report_format` Nullable(String), `lines_total` Nullable(UInt32), `lines_covered` Nullable(UInt32), `line_coverage_pct` Nullable(Float64), `branches_total` Nullable(UInt32), `branches_covered` Nullable(UInt32), `branch_coverage_pct` Nullable(Float64), `functions_total` Nullable(UInt32), `functions_covered` Nullable(UInt32), `commit_hash` Nullable(String), `branch` Nullable(String), `pr_number` Nullable(UInt32), `team_id` Nullable(String), `service_id` Nullable(String), `org_id` LowCardinality(String) DEFAULT '', `last_synced` DateTime64(3, 'UTC'), `report_slot` LowCardinality(String) DEFAULT '', `run_attempt` UInt32 DEFAULT 0, `legacy_snapshot_ids` Array(String) DEFAULT []) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, run_id, snapshot_id)",
 		"CREATE TABLE testops_pipeline_stability (`repo_id` UUID, `day` Date, `stability_index` Float64, `success_rate_7d` Float64, `success_rate_trend` Float64, `failure_clustering_score` Float64, `median_recovery_time_seconds` Nullable(Float64), `team_id` Nullable(String), `service_id` Nullable(String), `org_id` LowCardinality(String) DEFAULT '', `computed_at` DateTime('UTC')) ENGINE = ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, day)",
 		"CREATE TABLE testops_quality_drag (`repo_id` UUID, `day` Date, `drag_hours` Nullable(Float64), `failure_rework_hours` Nullable(Float64), `flake_investigation_hours` Nullable(Float64), `queue_wait_hours` Nullable(Float64), `retry_overhead_hours` Nullable(Float64), `factors_json` String DEFAULT '{}', `team_id` Nullable(String), `service_id` Nullable(String), `org_id` LowCardinality(String) DEFAULT '', `computed_at` DateTime('UTC')) ENGINE = ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, day)",
 		"CREATE TABLE testops_release_confidence (`repo_id` UUID, `day` Date, `confidence_score` Float64, `pipeline_success_factor` Float64, `test_pass_factor` Float64, `coverage_factor` Float64, `flake_penalty` Float64, `regression_penalty` Float64, `factors_json` String DEFAULT '{}', `team_id` Nullable(String), `service_id` Nullable(String), `org_id` LowCardinality(String) DEFAULT '', `computed_at` DateTime('UTC')) ENGINE = ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, day)",
-		"CREATE TABLE incident_metrics_daily (`repo_id` UUID, `day` Date, `incidents_count` UInt32, `mttr_p50_hours` Nullable(Float64), `mttr_p90_hours` Nullable(Float64), `computed_at` DateTime('UTC'), `org_id` String DEFAULT 'default', pooled_repair_hours Array(Float64), pooled_samples_stored UInt8 DEFAULT 0) ENGINE = ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, day)",
 		`CREATE TABLE operational_incidents (
     org_id String, id String, service_id Nullable(String),
     source_revision DateTime64(6, 'UTC'), source_conflict_key String, ingest_revision UInt128,
@@ -87,6 +83,7 @@ func startParityStack(t *testing.T, ctx context.Context) parityStack {
 			t.Fatal(err)
 		}
 	}
+	chschema.CreateTables(ctx, t, conn, "test_suite_results", "coverage_snapshots")
 	applyTestopsRepositoryOwnershipSchema(ctx, t, conn)
 	return parityStack{pool: pool, conn: conn}
 }
@@ -489,7 +486,7 @@ func TestZeroRowSourceCheckMatchesWhatTheFamilyKeeps(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		stack.createBaselineTable(t, ctx, "testops_pipeline_metrics_daily")
+		chschema.CreateTables(ctx, t, stack.conn, "testops_pipeline_metrics_daily")
 		testopsPipelineExecutor, err := NewTestopsPipelineExecutor(stack.conn)
 		if err != nil {
 			t.Fatal(err)
@@ -714,40 +711,6 @@ func (stack parityStack) assertKeptParity(
 	if sourceSeen != written {
 		t.Fatalf("%s: source check sees=%t, family wrote=%t", family, sourceSeen, written)
 	}
-}
-
-// createBaselineTable creates name as the live migration chain leaves it: the baseline DDL, then every chain statement
-// that alters the table.
-func (stack parityStack) createBaselineTable(t *testing.T, ctx context.Context, name string) {
-	t.Helper()
-	baseline, err := chmigrate.LoadBaseline()
-	if err != nil {
-		t.Fatal(err)
-	}
-	chain, err := chmigrate.LoadChain()
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, object := range baseline.Objects {
-		if object.Name != name {
-			continue
-		}
-		if err := stack.conn.Exec(ctx, object.Create); err != nil {
-			t.Fatal(err)
-		}
-		for _, file := range chain {
-			for _, statement := range chmigrate.SplitStatements(file.SQL) {
-				if !strings.HasPrefix(strings.Join(strings.Fields(statement), " "), "ALTER TABLE "+name+" ") {
-					continue
-				}
-				if err := stack.conn.Exec(ctx, statement); err != nil {
-					t.Fatalf("%s: %v", file.Version, err)
-				}
-			}
-		}
-		return
-	}
-	t.Fatalf("%s is not in the baseline", name)
 }
 
 // The testops pipeline family has no zero-row flag of its own: its source read

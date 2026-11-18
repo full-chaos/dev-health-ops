@@ -9,6 +9,7 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
@@ -43,6 +44,7 @@ func TestCICDComputeFamilyWritesRealOrgIDAndIsolatesTenants(t *testing.T) {
 	}
 	defer conn.Close()
 
+	chschema.CreateTables(ctx, t, conn, "cicd_metrics_daily")
 	for _, statement := range []string{
 		// Exact production shape: 000_raw_tables.sql + org_id added by
 		// migration 027 (027_add_org_id_to_sorting_keys.py's
@@ -57,13 +59,6 @@ func TestCICDComputeFamilyWritesRealOrgIDAndIsolatesTenants(t *testing.T) {
     finished_at Nullable(DateTime64(3, 'UTC')), last_synced DateTime64(3, 'UTC'),
     org_id String
 ) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (repo_id, run_id)`,
-		// Exact production sorting key: migration 027_add_org_id_to_sorting_keys.py.
-		`CREATE TABLE cicd_metrics_daily (
-    repo_id UUID, day Date, pipelines_count UInt32, success_rate Float64,
-    avg_duration_minutes Nullable(Float64), p90_duration_minutes Nullable(Float64),
-    avg_queue_minutes Nullable(Float64), computed_at DateTime, org_id String,
-    pooled_run_minutes Array(Nullable(Float64)), pooled_queue_minutes Array(Nullable(Float64)), pooled_samples_stored UInt8 DEFAULT 0
-) ENGINE = ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, day)`,
 	} {
 		if err := conn.Exec(ctx, statement); err != nil {
 			t.Fatal(err)
@@ -149,6 +144,7 @@ func TestCICDComputeFamilyCountsRunOnFinishDay(t *testing.T) {
 	}
 	defer conn.Close()
 
+	chschema.CreateTables(ctx, t, conn, "cicd_metrics_daily")
 	for _, statement := range []string{
 		`CREATE TABLE ci_pipeline_runs (
     repo_id UUID, run_id String, status Nullable(String),
@@ -156,12 +152,6 @@ func TestCICDComputeFamilyCountsRunOnFinishDay(t *testing.T) {
     finished_at Nullable(DateTime64(3, 'UTC')), last_synced DateTime64(3, 'UTC'),
     org_id String
 ) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (repo_id, run_id)`,
-		`CREATE TABLE cicd_metrics_daily (
-    repo_id UUID, day Date, pipelines_count UInt32, success_rate Float64,
-    avg_duration_minutes Nullable(Float64), p90_duration_minutes Nullable(Float64),
-    avg_queue_minutes Nullable(Float64), computed_at DateTime, org_id String,
-    pooled_run_minutes Array(Nullable(Float64)), pooled_queue_minutes Array(Nullable(Float64)), pooled_samples_stored UInt8 DEFAULT 0
-) ENGINE = ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, day)`,
 	} {
 		if err := conn.Exec(ctx, statement); err != nil {
 			t.Fatal(err)
@@ -223,6 +213,7 @@ func startCICDDayDB(t *testing.T) (context.Context, driver.Conn) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { conn.Close() })
+	chschema.CreateTables(ctx, t, conn, "cicd_metrics_daily")
 	for _, statement := range []string{
 		`CREATE TABLE ci_pipeline_runs (
     repo_id UUID, run_id String, status Nullable(String),
@@ -230,12 +221,6 @@ func startCICDDayDB(t *testing.T) (context.Context, driver.Conn) {
     finished_at Nullable(DateTime64(3, 'UTC')), last_synced DateTime64(3, 'UTC'),
     org_id String
 ) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (repo_id, run_id)`,
-		`CREATE TABLE cicd_metrics_daily (
-    repo_id UUID, day Date, pipelines_count UInt32, success_rate Float64,
-    avg_duration_minutes Nullable(Float64), p90_duration_minutes Nullable(Float64),
-    avg_queue_minutes Nullable(Float64), computed_at DateTime, org_id String,
-    pooled_run_minutes Array(Nullable(Float64)), pooled_queue_minutes Array(Nullable(Float64)), pooled_samples_stored UInt8 DEFAULT 0
-) ENGINE = ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, day)`,
 	} {
 		if err := conn.Exec(ctx, statement); err != nil {
 			t.Fatal(err)

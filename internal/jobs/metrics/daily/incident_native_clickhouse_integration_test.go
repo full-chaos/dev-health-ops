@@ -8,6 +8,7 @@ import (
 	"time"
 
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
@@ -43,6 +44,7 @@ func TestIncidentValidFromNullGuardRecoversRepositoryDerivedMappings(t *testing.
 	}
 	defer conn.Close()
 
+	chschema.CreateTables(ctx, t, conn, "incident_metrics_daily")
 	for _, statement := range []string{
 		// Exact live production schema (verified via `SHOW CREATE TABLE` on
 		// the shared local stack, 2026-09-01) for the three columns this
@@ -70,13 +72,6 @@ func TestIncidentValidFromNullGuardRecoversRepositoryDerivedMappings(t *testing.
 		`CREATE TABLE repos (
     id UUID, repo String, org_id String, last_synced DateTime64(3, 'UTC')
 ) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, id)`,
-		// Exact production shape: migration 004_quality_delivery_metrics.sql
-		// + 024_add_org_id.sql / 027_add_org_id_to_sorting_keys.py.
-		`CREATE TABLE incident_metrics_daily (
-    repo_id UUID, day Date, incidents_count UInt32, mttr_p50_hours Nullable(Float64),
-    mttr_p90_hours Nullable(Float64), computed_at DateTime('UTC'), org_id String,
-    pooled_repair_hours Array(Float64), pooled_samples_stored UInt8 DEFAULT 0
-) ENGINE = MergeTree PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, day)`,
 	} {
 		if err := conn.Exec(ctx, statement); err != nil {
 			t.Fatal(err)

@@ -12,6 +12,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily/compoundingrisk"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily/repouser"
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
@@ -101,6 +102,7 @@ func TestCompoundingRiskTeamComputeFinalizeFamilyAgainstRealClickHouse(t *testin
 	}
 	defer conn.Close()
 
+	chschema.CreateTables(ctx, t, conn, "repo_metrics_daily")
 	for _, statement := range compoundingRiskTeamSchema {
 		if err := conn.Exec(ctx, statement); err != nil {
 			t.Fatal(err)
@@ -255,6 +257,7 @@ func TestCompoundingRiskTeamReviewWindowAddsRepositoryCounts(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.Close()
+	chschema.CreateTables(ctx, t, conn, "repo_metrics_daily")
 	for _, statement := range compoundingRiskTeamSchema {
 		if err := conn.Exec(ctx, statement); err != nil {
 			t.Fatal(err)

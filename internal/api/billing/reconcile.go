@@ -20,6 +20,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
+	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 )
 
 // The reconciliation is ReconciliationService.reconcile_all as the Python
@@ -405,7 +406,7 @@ func reportJSON(result reconcileResult) *pyjson.Object {
 // reconcile is trigger_reconciliation (reconcile_all).
 func (h handlers) reconcile(w http.ResponseWriter, r *http.Request) {
 	var errs pybody.Errors
-	org, _ := errs.QueryUUID("org_id", pybody.LastQueryValue(r.URL.Query(), "org_id"))
+	org, _ := errs.QueryUUID("org_id", pybody.LastQueryValue(httpapi.Query(r), "org_id"))
 	if len(errs) > 0 {
 		h.write(w, validation(errs))
 		return

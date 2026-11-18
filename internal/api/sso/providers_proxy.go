@@ -14,6 +14,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
@@ -253,7 +254,7 @@ func (h handlers) listProviders(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var errs pybody.Errors
-	query := r.URL.Query()
+	query := httpapi.Query(r)
 	limit, _ := errs.QueryInt("limit", pybody.LastQueryValue(query, "limit"), 50, nil, nil)
 	offset, _ := errs.QueryInt("offset", pybody.LastQueryValue(query, "offset"), 0, nil, nil)
 	if limit == nil || offset == nil || !limit.IsInt64() || !offset.IsInt64() || limit.Sign() < 0 || offset.Sign() < 0 {

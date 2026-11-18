@@ -13,6 +13,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
@@ -38,7 +39,7 @@ func (h handlers) nowUTC() time.Time { return h.now().UTC().Truncate(time.Micros
 // listPlans is list_billing_plans.
 func (h handlers) listPlans(w http.ResponseWriter, r *http.Request) {
 	var errs pybody.Errors
-	includeInactive, valid := errs.QueryBool("include_inactive", pybody.LastQueryValue(r.URL.Query(), "include_inactive"), false)
+	includeInactive, valid := errs.QueryBool("include_inactive", pybody.LastQueryValue(httpapi.Query(r), "include_inactive"), false)
 	if !valid {
 		h.write(w, validation(errs))
 		return
@@ -85,7 +86,7 @@ func (h handlers) listPlans(w http.ResponseWriter, r *http.Request) {
 func (h handlers) getPlan(w http.ResponseWriter, r *http.Request) {
 	var errs pybody.Errors
 	includeInactivePrices, valid := errs.QueryBool("include_inactive_prices",
-		pybody.LastQueryValue(r.URL.Query(), "include_inactive_prices"), false)
+		pybody.LastQueryValue(httpapi.Query(r), "include_inactive_prices"), false)
 	if !valid {
 		h.write(w, validation(errs))
 		return

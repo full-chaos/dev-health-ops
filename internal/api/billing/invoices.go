@@ -13,6 +13,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
+	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
@@ -137,7 +138,7 @@ func (h handlers) invoiceJSON(ctx context.Context, q querier, inv invoiceRow, wi
 func (h handlers) listInvoices(w http.ResponseWriter, r *http.Request) {
 	var errs pybody.Errors
 	page := readPage(r, &errs)
-	status := pybody.LastQueryValue(r.URL.Query(), "status")
+	status := pybody.LastQueryValue(httpapi.Query(r), "status")
 	if len(errs) > 0 {
 		h.write(w, validation(errs))
 		return
@@ -227,7 +228,7 @@ func (h handlers) invoiceTarget(ctx context.Context, q querier, r *http.Request,
 // getInvoice is get_invoice.
 func (h handlers) getInvoice(w http.ResponseWriter, r *http.Request) {
 	var errs pybody.Errors
-	orgParam, _ := errs.QueryUUID("org_id", pybody.LastQueryValue(r.URL.Query(), "org_id"))
+	orgParam, _ := errs.QueryUUID("org_id", pybody.LastQueryValue(httpapi.Query(r), "org_id"))
 	if len(errs) > 0 {
 		h.write(w, validation(errs))
 		return
@@ -249,7 +250,7 @@ func (h handlers) getInvoice(w http.ResponseWriter, r *http.Request) {
 // first, then the local row is marked void with nothing remaining.
 func (h handlers) voidInvoice(w http.ResponseWriter, r *http.Request) {
 	var errs pybody.Errors
-	orgParam, _ := errs.QueryUUID("org_id", pybody.LastQueryValue(r.URL.Query(), "org_id"))
+	orgParam, _ := errs.QueryUUID("org_id", pybody.LastQueryValue(httpapi.Query(r), "org_id"))
 	if len(errs) > 0 {
 		h.write(w, validation(errs))
 		return

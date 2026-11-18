@@ -15,6 +15,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
@@ -700,7 +701,7 @@ func lastOrEmpty(query url.Values, name string) string {
 
 // discoverMembers is GET /teams/{team_id}/discover-members.
 func (h handlers) discoverMembers(w http.ResponseWriter, r *http.Request) {
-	query := r.URL.Query()
+	query := httpapi.Query(r)
 	providerValue := pybody.LastQuery(query, "provider")
 	if providerValue == nil {
 		policy.WriteJSON(w, http.StatusUnprocessableEntity, discoverMissingProviderDetail(), nil)

@@ -17,6 +17,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
@@ -559,7 +560,7 @@ var one, hundred = big.NewInt(1), big.NewInt(100)
 // is superuser-only).
 func (h handlers) listRefunds(w http.ResponseWriter, r *http.Request) {
 	var errs pybody.Errors
-	query := r.URL.Query()
+	query := httpapi.Query(r)
 	limit, _ := errs.QueryInt("limit", pybody.LastQueryValue(query, "limit"), 20, nil, nil)
 	offset, _ := errs.QueryInt("offset", pybody.LastQueryValue(query, "offset"), 0, nil, pybody.Int64Max())
 	orgID, _ := errs.QueryUUID("org_id", pybody.LastQueryValue(query, "org_id"))
@@ -624,7 +625,7 @@ func (h handlers) refundListReply(ctx context.Context, tx pgx.Tx, orgID *uuid.UU
 // getRefund is get_refund.
 func (h handlers) getRefund(w http.ResponseWriter, r *http.Request) {
 	var errs pybody.Errors
-	orgID, _ := errs.QueryUUID("org_id", pybody.LastQueryValue(r.URL.Query(), "org_id"))
+	orgID, _ := errs.QueryUUID("org_id", pybody.LastQueryValue(httpapi.Query(r), "org_id"))
 	if len(errs) > 0 {
 		h.write(w, validation(errs))
 		return

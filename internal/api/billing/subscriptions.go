@@ -14,6 +14,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
+	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
@@ -29,7 +30,7 @@ type pageQuery struct {
 }
 
 func readPage(r *http.Request, errs *pybody.Errors) pageQuery {
-	query := r.URL.Query()
+	query := httpapi.Query(r)
 	var out pageQuery
 	if limit, ok := errs.QueryInt("limit", pybody.LastQueryValue(query, "limit"), 20, &limitMin, &limitMax); ok {
 		out.limit = limit.Int64()
@@ -315,7 +316,7 @@ func latestSubscription(ctx context.Context, q querier, org *uuid.UUID) (*subscr
 // getSubscription is get_subscription.
 func (h handlers) getSubscription(w http.ResponseWriter, r *http.Request) {
 	var errs pybody.Errors
-	orgParam, _ := errs.QueryUUID("org_id", pybody.LastQueryValue(r.URL.Query(), "org_id"))
+	orgParam, _ := errs.QueryUUID("org_id", pybody.LastQueryValue(httpapi.Query(r), "org_id"))
 	if len(errs) > 0 {
 		h.write(w, validation(errs))
 		return
@@ -509,7 +510,7 @@ func (h handlers) mutate(w http.ResponseWriter, r *http.Request, step string,
 	parse func(*pybody.Errors, pybody.Body) (any, bool),
 	call func(context.Context, *stripe.Client, *subscriptionRow, any) (*reply, error)) {
 	var errs pybody.Errors
-	orgParam, _ := errs.QueryUUID("org_id", pybody.LastQueryValue(r.URL.Query(), "org_id"))
+	orgParam, _ := errs.QueryUUID("org_id", pybody.LastQueryValue(httpapi.Query(r), "org_id"))
 	var payload any
 	if parse != nil {
 		body, _ := policy.BodyFrom(r.Context())

@@ -57,6 +57,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/full-chaos/dev-health-ops/internal/auth/emaildomain"
+	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"io"
 	"net/http"
@@ -849,7 +850,7 @@ func (h handlers) initiateOAuthByType(w http.ResponseWriter, r *http.Request) {
 	}
 	protocol, _ := oauthProtocolFor(providerType)
 	var errs pybody.Errors
-	orgIDStr, _ := errs.RequiredQueryString("org_id", pybody.LastQueryValue(r.URL.Query(), "org_id"), 0)
+	orgIDStr, _ := errs.RequiredQueryString("org_id", pybody.LastQueryValue(httpapi.Query(r), "org_id"), 0)
 	if len(errs) > 0 {
 		policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(errs), nil)
 		return

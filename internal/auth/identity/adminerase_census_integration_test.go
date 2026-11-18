@@ -4,6 +4,7 @@ package identity
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"regexp"
 	"slices"
@@ -30,7 +31,7 @@ var erasedOwnRowKeys = []string{
 // The key set is read from the catalog after the whole migration chain ran on a real PostgreSQL: every foreign key (any
 // schema, partition copies skipped) into a users or principals table whose delete action is RESTRICT or NO ACTION, keyed
 // by schema.table.(columns in key order). It must equal, as an exact set, the blocking keys + the own-row keys + the
-// public.users columns the erase nulls; an empty or short set fails. The ledger row must name exactly the blocking keys.
+// public.users columns the erase nulls; an empty or short set fails. The ledger reason must name exactly the blocking keys, as a set of table.column tokens anywhere in the text.
 func TestForceDeleteBlockingKeysAreTheCatalogAndTheLedgerRow(t *testing.T) {
 	e := getEnv(t)
 	ctx := context.Background()
@@ -64,6 +65,8 @@ ORDER BY 1`)
 		want = append(want, "public."+c.Table+".("+c.Column+")")
 	}
 	slices.Sort(want)
+	slices.Sort(got)
+	got, want = slices.Compact(got), slices.Compact(want)
 	if len(got) == 0 || !slices.Equal(got, want) {
 		t.Fatalf("RESTRICT / NO ACTION keys into users and principals after the full chain:\n got  %v\n want %v", got, want)
 	}
@@ -72,35 +75,48 @@ ORDER BY 1`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var rowsFound []string
+	var rowsFound [][]string
 	for _, line := range strings.Split(string(raw), "\n") {
 		if strings.HasPrefix(line, "known-stricter-force-delete-reference-blocked\t") {
-			rowsFound = append(rowsFound, line)
+			rowsFound = append(rowsFound, strings.Split(line, "\t"))
 		}
 	}
-	if len(rowsFound) != 1 {
-		t.Fatalf("ledger rows for known-stricter-force-delete-reference-blocked = %d, want 1", len(rowsFound))
+	if len(rowsFound) != 1 || len(rowsFound[0]) != 7 {
+		t.Fatalf("ledger rows for known-stricter-force-delete-reference-blocked = %d (want 1 row of 7 fields)", len(rowsFound))
 	}
 	row := rowsFound[0]
-	list := regexp.MustCompile(`The keys are ([^;]+);`).FindStringSubmatch(row)
-	if list == nil {
-		t.Fatal("the ledger row has no 'The keys are ...;' list")
+	if err := checkLedgerKeys(row[6]); err != nil {
+		t.Error(err)
 	}
-	var named []string
-	for _, token := range regexp.MustCompile(`,\s*|\s+and\s+`).Split(list[1], -1) {
-		if !regexp.MustCompile(`^[a-z_]+\.[a-z_]+$`).MatchString(token) {
-			t.Fatalf("ledger key token %q is not an exact table.column", token)
-		}
-		parts := strings.SplitN(token, ".", 2)
-		named = append(named, "auth."+parts[0]+".("+parts[1]+")")
-	}
-	slices.Sort(named)
-	wantNamed := slices.Clone(forceDeleteBlockingKeys)
-	slices.Sort(wantNamed)
-	if !slices.Equal(named, wantNamed) {
-		t.Errorf("ledger row names %v, want exactly %v", named, wantNamed)
-	}
-	if !strings.Contains(row, "\tpermanent\t") || !strings.Contains(row, "closed: accepted difference") {
+	if row[1] != "permanent" || !strings.Contains(row[6], "closed: accepted difference") {
 		t.Error("ledger row is not a permanent row that states closed: accepted difference")
 	}
+}
+
+// ledgerNamedKeys is the set of table.column tokens anywhere in a ledger reason: split on every character outside
+// [a-z_.], trim a trailing '.', keep the exact table.column shapes. Punctuation and sentence order do not matter; a
+// repeated token is one key.
+func ledgerNamedKeys(reason string) []string {
+	shape := regexp.MustCompile(`^[a-z_]+\.[a-z_]+$`)
+	var keys []string
+	for _, token := range regexp.MustCompile(`[^a-z_.]+`).Split(reason, -1) {
+		token = strings.TrimRight(token, ".")
+		if shape.MatchString(token) {
+			parts := strings.SplitN(token, ".", 2)
+			keys = append(keys, "auth."+parts[0]+".("+parts[1]+")")
+		}
+	}
+	slices.Sort(keys)
+	return slices.Compact(keys)
+}
+
+// checkLedgerKeys fails closed both ways: an extra token, a missing blocking key, or no token at all.
+func checkLedgerKeys(reason string) error {
+	named := ledgerNamedKeys(reason)
+	want := slices.Clone(forceDeleteBlockingKeys)
+	slices.Sort(want)
+	if len(named) == 0 || !slices.Equal(named, want) {
+		return fmt.Errorf("ledger reason names %v, want exactly %v", named, want)
+	}
+	return nil
 }

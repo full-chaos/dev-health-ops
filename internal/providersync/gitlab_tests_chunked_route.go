@@ -83,6 +83,9 @@ const (
 	// never zero); the unit's coverage_complete is false and names the component.
 	gitLabReportTooLargeComponent    = "report_too_large"
 	gitLabArtifactOversizedComponent = "artifact_oversized"
+	// gitLabReportMemberDroppedComponent: report members of a job artifact the archive parse did not read because they
+	// were over the compression-ratio guard or past the entry cap (CHAOS-14030). The bytes are the same on every walk, so it advances.
+	gitLabReportMemberDroppedComponent = "report_member_dropped"
 )
 
 // gitLabTestsTruncationComponents is the CLOSED vocabulary of truncation
@@ -101,7 +104,7 @@ var (
 		gitLabPipelineInventoryComponent: {}, gitLabReportInventoryComponent: {},
 		gitLabRunJobsComponent: {}, gitLabRunArtifactsComponent: {},
 		gitLabRunJobsPageBudgetComponent: {}, gitLabRunArtifactsPageBudgetComponent: {},
-		gitLabReportTooLargeComponent: {}, gitLabArtifactOversizedComponent: {},
+		gitLabReportTooLargeComponent: {}, gitLabArtifactOversizedComponent: {}, gitLabReportMemberDroppedComponent: {},
 	}
 	// The advancing set is an ALLOWLIST, so anything added to the vocabulary
 	// and forgotten here withholds rather than silently advancing over data
@@ -109,7 +112,7 @@ var (
 	// stop withholds the watermark; a positively observed item cap advances it.
 	gitLabTestsWatermarkAdvancing = map[string]struct{}{
 		gitLabRunJobsComponent: {}, gitLabRunArtifactsComponent: {},
-		gitLabReportTooLargeComponent: {}, gitLabArtifactOversizedComponent: {},
+		gitLabReportTooLargeComponent: {}, gitLabArtifactOversizedComponent: {}, gitLabReportMemberDroppedComponent: {},
 	}
 )
 
@@ -702,6 +705,9 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 						rows, parseErr := parseGitLabTestsJobArtifact(archive, job, runJobs, repoID, runID, claim.OrgID, started, finished, normalizedAt)
 						if parseErr != nil || rows.Skipped != 0 {
 							return fmt.Errorf("%w: reports skipped=%d: %v", ErrGitLabTestsIncomplete, rows.Skipped, parseErr)
+						}
+						if rows.GuardDropped > 0 {
+							cursor = recordGitLabTestsSkippedItem(cursor, client, claim, gitLabReportMemberDroppedComponent, runID, 0)
 						}
 						coverage = append(coverage, rows.Coverage...)
 					}

@@ -558,13 +558,23 @@ func (handler *Dispatcher) Work(ctx context.Context, execution *jobruntime.Execu
 	// drain of the organization.
 	defer handler.drainTouchedDaysAfterDispatch(ctx, *run)
 	if run.RepositoryDiscoveryRequired {
+		// A run that no attempt materializes keeps no partition and no
+		// finalize handoff: on the last attempt, and on a permanent refusal,
+		// the run is ended failed (failUnmaterializedRun, dispatch_fail.go).
 		repositoryIDs, err := handler.discoverer.RepositoryIDs(ctx, run.OrganizationID)
 		if err != nil {
+			if lastDispatchAttempt(execution) {
+				handler.failUnmaterializedRun(ctx, execution, *run, "dispatch_discovery")
+			}
 			return jobruntime.Retryable(err)
 		}
 		if _, err := handler.store.MaterializeScheduledFanout(ctx, *run, repositoryIDs, handler.publisher); err != nil {
 			if errors.Is(err, ErrInvalidState) {
+				handler.failUnmaterializedRun(ctx, execution, *run, "dispatch_materialize")
 				return permanentWithCause(err, jobruntime.ReasonInvalidState, "step=dispatch_materialize")
+			}
+			if lastDispatchAttempt(execution) {
+				handler.failUnmaterializedRun(ctx, execution, *run, "dispatch_materialize")
 			}
 			return jobruntime.Retryable(err)
 		}
@@ -2102,6 +2112,21 @@ func (handler *FinalizeHandler) Work(ctx context.Context, execution *jobruntime.
 			"organization_id", claim.Run.OrganizationID,
 			"target_day", claim.Run.TargetDay.Format("2006-01-02"),
 		)
+		// The last attempt has no retry to release for: end the run as the
+		// failed-compute arm above does, or it stays 'running' with no job.
+		if terminalAttempt(execution) {
+			if failErr := failFinalizePermanently(handler.store, ctx, *claim); failErr != nil {
+				logger.Error("daily finalize terminal write failed",
+					"error", failErr,
+					"run_id", runID,
+					"organization_id", claim.Run.OrganizationID,
+					"target_day", claim.Run.TargetDay.Format("2006-01-02"),
+				)
+			} else {
+				handler.drainTouchedDaysAfterEnd(ctx, claim.Run)
+			}
+			return jobruntime.Retryable(err)
+		}
 		if releaseErr := releaseFinalize(handler.store, ctx, *claim); releaseErr != nil {
 			logger.Error("daily finalize release failed",
 				"error", releaseErr,
@@ -2208,10 +2233,10 @@ func releasePartition(store Store, ctx context.Context, claim PartitionClaim) {
 	_ = store.ReleasePartition(releaseCtx, claim)
 }
 
-// terminalAttempt reports whether River will not run this partition job again:
-// the same attempt pair the adapter acts on (finalize's own final-attempt arm).
-// An unset MaxAttempts is never the last attempt.
-func terminalAttempt(execution *jobruntime.Execution[jobruntime.DailyMetricsPartitionArgs]) bool {
+// terminalAttempt reports whether River will not run this job again: the same
+// attempt pair the adapter acts on (finalize's own final-attempt arm). An unset
+// MaxAttempts is never the last attempt.
+func terminalAttempt[Args jobruntime.ContractArgs](execution *jobruntime.Execution[Args]) bool {
 	return execution.Definition.MaxAttempts > 0 && execution.Attempt >= execution.Definition.MaxAttempts
 }
 

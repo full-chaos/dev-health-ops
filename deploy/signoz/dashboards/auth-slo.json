@@ -631,57 +631,57 @@
             {
               "kind": "time_series",
               "spec": {
-                "name": "A",
                 "plugin": {
-                  "kind": "signoz/BuilderQuery",
+                  "kind": "signoz/CompositeQuery",
                   "spec": {
-                    "aggregations": [
+                    "queries": [
                       {
-                        "metricName": "dev_health_api_http_requests_total",
-                        "timeAggregation": "rate",
-                        "spaceAggregation": "sum"
-                      }
-                    ],
-                    "disabled": false,
-                    "filter": {
-                      "expression": "deployment.environment = 'production' AND service.name = 'auth-service' AND listener = 'auth-api-http' AND route IN ('/.well-known/jwks.json')"
-                    },
-                    "groupBy": [],
-                    "legend": "rate",
-                    "limit": 100,
-                    "name": "A",
-                    "order": [],
-                    "signal": "metrics",
-                    "source": ""
-                  }
-                }
-              }
-            },
-            {
-              "kind": "time_series",
-              "spec": {
-                "name": "B",
-                "plugin": {
-                  "kind": "signoz/BuilderQuery",
-                  "spec": {
-                    "aggregations": [
+                        "type": "builder_query",
+                        "spec": {
+                          "aggregations": [
+                            {
+                              "metricName": "dev_health_api_http_requests_total",
+                              "timeAggregation": "rate",
+                              "spaceAggregation": "sum"
+                            }
+                          ],
+                          "disabled": false,
+                          "filter": {
+                            "expression": "deployment.environment = 'production' AND service.name = 'auth-service' AND listener = 'auth-api-http' AND route IN ('/.well-known/jwks.json')"
+                          },
+                          "groupBy": [],
+                          "legend": "rate",
+                          "limit": 100,
+                          "name": "A",
+                          "order": [],
+                          "signal": "metrics",
+                          "source": ""
+                        }
+                      },
                       {
-                        "metricName": "dev_health_api_http_request_duration_seconds",
-                        "timeAggregation": "rate",
-                        "spaceAggregation": "p95"
+                        "type": "builder_query",
+                        "spec": {
+                          "aggregations": [
+                            {
+                              "metricName": "dev_health_api_http_request_duration_seconds",
+                              "timeAggregation": "rate",
+                              "spaceAggregation": "p95"
+                            }
+                          ],
+                          "disabled": false,
+                          "filter": {
+                            "expression": "deployment.environment = 'production' AND service.name = 'auth-service' AND listener = 'auth-api-http' AND route IN ('/.well-known/jwks.json')"
+                          },
+                          "groupBy": [],
+                          "legend": "p95",
+                          "limit": 100,
+                          "name": "B",
+                          "order": [],
+                          "signal": "metrics",
+                          "source": ""
+                        }
                       }
-                    ],
-                    "disabled": false,
-                    "filter": {
-                      "expression": "deployment.environment = 'production' AND service.name = 'auth-service' AND listener = 'auth-api-http' AND route IN ('/.well-known/jwks.json')"
-                    },
-                    "groupBy": [],
-                    "legend": "p95",
-                    "limit": 100,
-                    "name": "B",
-                    "order": [],
-                    "signal": "metrics",
-                    "source": ""
+                    ]
                   }
                 }
               }
@@ -734,57 +734,57 @@
             {
               "kind": "time_series",
               "spec": {
-                "name": "A",
                 "plugin": {
-                  "kind": "signoz/BuilderQuery",
+                  "kind": "signoz/CompositeQuery",
                   "spec": {
-                    "aggregations": [
+                    "queries": [
                       {
-                        "metricName": "dev_health_api_http_requests_total",
-                        "timeAggregation": "rate",
-                        "spaceAggregation": "sum"
-                      }
-                    ],
-                    "disabled": false,
-                    "filter": {
-                      "expression": "deployment.environment = 'production' AND service.name = 'auth-service' AND listener = 'auth-api-http' AND route IN ('/internal/v1/token/exchange')"
-                    },
-                    "groupBy": [],
-                    "legend": "rate",
-                    "limit": 100,
-                    "name": "A",
-                    "order": [],
-                    "signal": "metrics",
-                    "source": ""
-                  }
-                }
-              }
-            },
-            {
-              "kind": "time_series",
-              "spec": {
-                "name": "B",
-                "plugin": {
-                  "kind": "signoz/BuilderQuery",
-                  "spec": {
-                    "aggregations": [
+                        "type": "builder_query",
+                        "spec": {
+                          "aggregations": [
+                            {
+                              "metricName": "dev_health_api_http_requests_total",
+                              "timeAggregation": "rate",
+                              "spaceAggregation": "sum"
+                            }
+                          ],
+                          "disabled": false,
+                          "filter": {
+                            "expression": "deployment.environment = 'production' AND service.name = 'auth-service' AND listener = 'auth-api-http' AND route IN ('/internal/v1/token/exchange')"
+                          },
+                          "groupBy": [],
+                          "legend": "rate",
+                          "limit": 100,
+                          "name": "A",
+                          "order": [],
+                          "signal": "metrics",
+                          "source": ""
+                        }
+                      },
                       {
-                        "metricName": "dev_health_api_http_request_duration_seconds",
-                        "timeAggregation": "rate",
-                        "spaceAggregation": "p95"
+                        "type": "builder_query",
+                        "spec": {
+                          "aggregations": [
+                            {
+                              "metricName": "dev_health_api_http_request_duration_seconds",
+                              "timeAggregation": "rate",
+                              "spaceAggregation": "p95"
+                            }
+                          ],
+                          "disabled": false,
+                          "filter": {
+                            "expression": "deployment.environment = 'production' AND service.name = 'auth-service' AND listener = 'auth-api-http' AND route IN ('/internal/v1/token/exchange')"
+                          },
+                          "groupBy": [],
+                          "legend": "p95",
+                          "limit": 100,
+                          "name": "B",
+                          "order": [],
+                          "signal": "metrics",
+                          "source": ""
+                        }
                       }
-                    ],
-                    "disabled": false,
-                    "filter": {
-                      "expression": "deployment.environment = 'production' AND service.name = 'auth-service' AND listener = 'auth-api-http' AND route IN ('/internal/v1/token/exchange')"
-                    },
-                    "groupBy": [],
-                    "legend": "p95",
-                    "limit": 100,
-                    "name": "B",
-                    "order": [],
-                    "signal": "metrics",
-                    "source": ""
+                    ]
                   }
                 }
               }
@@ -1254,64 +1254,64 @@
             {
               "kind": "time_series",
               "spec": {
-                "name": "A",
                 "plugin": {
-                  "kind": "signoz/BuilderQuery",
+                  "kind": "signoz/CompositeQuery",
                   "spec": {
-                    "aggregations": [
+                    "queries": [
                       {
-                        "metricName": "devhealth_auth_outbox_delivered_total",
-                        "timeAggregation": "rate",
-                        "spaceAggregation": "sum"
-                      }
-                    ],
-                    "disabled": false,
-                    "filter": {
-                      "expression": "deployment.environment = 'production' AND service.name = 'auth-service'"
-                    },
-                    "groupBy": [],
-                    "legend": "delivered",
-                    "limit": 100,
-                    "name": "A",
-                    "order": [],
-                    "signal": "metrics",
-                    "source": ""
-                  }
-                }
-              }
-            },
-            {
-              "kind": "time_series",
-              "spec": {
-                "name": "B",
-                "plugin": {
-                  "kind": "signoz/BuilderQuery",
-                  "spec": {
-                    "aggregations": [
+                        "type": "builder_query",
+                        "spec": {
+                          "aggregations": [
+                            {
+                              "metricName": "devhealth_auth_outbox_delivered_total",
+                              "timeAggregation": "rate",
+                              "spaceAggregation": "sum"
+                            }
+                          ],
+                          "disabled": false,
+                          "filter": {
+                            "expression": "deployment.environment = 'production' AND service.name = 'auth-service'"
+                          },
+                          "groupBy": [],
+                          "legend": "delivered",
+                          "limit": 100,
+                          "name": "A",
+                          "order": [],
+                          "signal": "metrics",
+                          "source": ""
+                        }
+                      },
                       {
-                        "metricName": "devhealth_auth_outbox_delivery_failures_total",
-                        "timeAggregation": "increase",
-                        "spaceAggregation": "sum"
+                        "type": "builder_query",
+                        "spec": {
+                          "aggregations": [
+                            {
+                              "metricName": "devhealth_auth_outbox_delivery_failures_total",
+                              "timeAggregation": "increase",
+                              "spaceAggregation": "sum"
+                            }
+                          ],
+                          "disabled": false,
+                          "filter": {
+                            "expression": "deployment.environment = 'production' AND service.name = 'auth-service'"
+                          },
+                          "groupBy": [
+                            {
+                              "fieldContext": "attribute",
+                              "fieldDataType": "string",
+                              "name": "reason",
+                              "signal": "metrics"
+                            }
+                          ],
+                          "legend": "{{reason}}",
+                          "limit": 100,
+                          "name": "B",
+                          "order": [],
+                          "signal": "metrics",
+                          "source": ""
+                        }
                       }
-                    ],
-                    "disabled": false,
-                    "filter": {
-                      "expression": "deployment.environment = 'production' AND service.name = 'auth-service'"
-                    },
-                    "groupBy": [
-                      {
-                        "fieldContext": "attribute",
-                        "fieldDataType": "string",
-                        "name": "reason",
-                        "signal": "metrics"
-                      }
-                    ],
-                    "legend": "{{reason}}",
-                    "limit": 100,
-                    "name": "B",
-                    "order": [],
-                    "signal": "metrics",
-                    "source": ""
+                    ]
                   }
                 }
               }
@@ -1674,86 +1674,80 @@
             {
               "kind": "time_series",
               "spec": {
-                "name": "A",
                 "plugin": {
-                  "kind": "signoz/BuilderQuery",
+                  "kind": "signoz/CompositeQuery",
                   "spec": {
-                    "aggregations": [
+                    "queries": [
                       {
-                        "metricName": "devhealth_auth_push_projection_lag",
-                        "timeAggregation": "latest",
-                        "spaceAggregation": "max"
-                      }
-                    ],
-                    "disabled": false,
-                    "filter": {
-                      "expression": "deployment.environment = 'production'"
-                    },
-                    "groupBy": [],
-                    "legend": "lag",
-                    "limit": 100,
-                    "name": "A",
-                    "order": [],
-                    "signal": "metrics",
-                    "source": ""
-                  }
-                }
-              }
-            },
-            {
-              "kind": "time_series",
-              "spec": {
-                "name": "B",
-                "plugin": {
-                  "kind": "signoz/BuilderQuery",
-                  "spec": {
-                    "aggregations": [
+                        "type": "builder_query",
+                        "spec": {
+                          "aggregations": [
+                            {
+                              "metricName": "devhealth_auth_push_projection_lag",
+                              "timeAggregation": "latest",
+                              "spaceAggregation": "max"
+                            }
+                          ],
+                          "disabled": false,
+                          "filter": {
+                            "expression": "deployment.environment = 'production'"
+                          },
+                          "groupBy": [],
+                          "legend": "lag",
+                          "limit": 100,
+                          "name": "A",
+                          "order": [],
+                          "signal": "metrics",
+                          "source": ""
+                        }
+                      },
                       {
-                        "metricName": "devhealth_auth_push_projection_parked_rows",
-                        "timeAggregation": "latest",
-                        "spaceAggregation": "max"
-                      }
-                    ],
-                    "disabled": false,
-                    "filter": {
-                      "expression": "deployment.environment = 'production'"
-                    },
-                    "groupBy": [],
-                    "legend": "parked",
-                    "limit": 100,
-                    "name": "B",
-                    "order": [],
-                    "signal": "metrics",
-                    "source": ""
-                  }
-                }
-              }
-            },
-            {
-              "kind": "time_series",
-              "spec": {
-                "name": "C",
-                "plugin": {
-                  "kind": "signoz/BuilderQuery",
-                  "spec": {
-                    "aggregations": [
+                        "type": "builder_query",
+                        "spec": {
+                          "aggregations": [
+                            {
+                              "metricName": "devhealth_auth_push_projection_parked_rows",
+                              "timeAggregation": "latest",
+                              "spaceAggregation": "max"
+                            }
+                          ],
+                          "disabled": false,
+                          "filter": {
+                            "expression": "deployment.environment = 'production'"
+                          },
+                          "groupBy": [],
+                          "legend": "parked",
+                          "limit": 100,
+                          "name": "B",
+                          "order": [],
+                          "signal": "metrics",
+                          "source": ""
+                        }
+                      },
                       {
-                        "metricName": "devhealth_auth_push_projection_final_rows",
-                        "timeAggregation": "latest",
-                        "spaceAggregation": "max"
+                        "type": "builder_query",
+                        "spec": {
+                          "aggregations": [
+                            {
+                              "metricName": "devhealth_auth_push_projection_final_rows",
+                              "timeAggregation": "latest",
+                              "spaceAggregation": "max"
+                            }
+                          ],
+                          "disabled": false,
+                          "filter": {
+                            "expression": "deployment.environment = 'production'"
+                          },
+                          "groupBy": [],
+                          "legend": "final",
+                          "limit": 100,
+                          "name": "C",
+                          "order": [],
+                          "signal": "metrics",
+                          "source": ""
+                        }
                       }
-                    ],
-                    "disabled": false,
-                    "filter": {
-                      "expression": "deployment.environment = 'production'"
-                    },
-                    "groupBy": [],
-                    "legend": "final",
-                    "limit": 100,
-                    "name": "C",
-                    "order": [],
-                    "signal": "metrics",
-                    "source": ""
+                    ]
                   }
                 }
               }

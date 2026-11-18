@@ -1733,13 +1733,15 @@ type TestOpsRiskResult struct {
 	PipelineStability    *float64                   `json:"pipelineStability,omitempty"`
 	Timeseries           []TestOpsRiskTrendPoint    `json:"timeseries"`
 	QualityDragBreakdown []TestOpsRiskBreakdownItem `json:"qualityDragBreakdown"`
-	QuadrantData         []TestOpsRiskQuadrantPoint `json:"quadrantData"`
-	ConfidenceSpark      []TestOpsRiskSparkPoint    `json:"confidenceSpark"`
-	ConfidenceDelta      *float64                   `json:"confidenceDelta,omitempty"`
-	DragSpark            []TestOpsRiskSparkPoint    `json:"dragSpark"`
-	DragDelta            *float64                   `json:"dragDelta,omitempty"`
-	StabilitySpark       []TestOpsRiskSparkPoint    `json:"stabilitySpark"`
-	StabilityDelta       *float64                   `json:"stabilityDelta,omitempty"`
+	// True when any repository row of the latest quality-drag day has a failure-rework, flake-investigation, queue-wait or retry-overhead part that was not measured; qualityDragHours and the breakdown then sum only the known parts.
+	QualityDragPartial bool                       `json:"qualityDragPartial"`
+	QuadrantData       []TestOpsRiskQuadrantPoint `json:"quadrantData"`
+	ConfidenceSpark    []TestOpsRiskSparkPoint    `json:"confidenceSpark"`
+	ConfidenceDelta    *float64                   `json:"confidenceDelta,omitempty"`
+	DragSpark          []TestOpsRiskSparkPoint    `json:"dragSpark"`
+	DragDelta          *float64                   `json:"dragDelta,omitempty"`
+	StabilitySpark     []TestOpsRiskSparkPoint    `json:"stabilitySpark"`
+	StabilityDelta     *float64                   `json:"stabilityDelta,omitempty"`
 }
 
 type TestOpsRiskSparkPoint struct {
@@ -1816,7 +1818,9 @@ type ThroughputForecast struct {
 	// How backlogSize was found: MEASURED, STALE, NO_ROWS or SUPPLIED (see ThroughputBacklogState).
 	BacklogState ThroughputBacklogState `json:"backlogState"`
 	// The oldest of the newest work-item days that backlogSize is read from. Null when backlogState is NO_ROWS or SUPPLIED.
-	BacklogAsOfDay      *graphqldate.Date           `json:"backlogAsOfDay,omitempty"`
+	BacklogAsOfDay *graphqldate.Date `json:"backlogAsOfDay,omitempty"`
+	// Why the backlog read is not a healthy measurement: the backlogState value (STALE or NO_ROWS) when the read is stale or found no work-item row; null when backlogState is MEASURED or SUPPLIED.
+	DegradedReason      *string                     `json:"degradedReason,omitempty"`
 	HistoryWeeks        int                         `json:"historyWeeks"`
 	P50Weeks            *int                        `json:"p50Weeks,omitempty"`
 	P75Weeks            *int                        `json:"p75Weeks,omitempty"`

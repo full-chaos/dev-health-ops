@@ -1482,6 +1482,7 @@ type ComplexityRoot struct {
 		QuadrantData         func(childComplexity int) int
 		QualityDragBreakdown func(childComplexity int) int
 		QualityDragHours     func(childComplexity int) int
+		QualityDragPartial   func(childComplexity int) int
 		ReleaseConfidence    func(childComplexity int) int
 		StabilityDelta       func(childComplexity int) int
 		StabilitySpark       func(childComplexity int) int
@@ -1536,6 +1537,7 @@ type ComplexityRoot struct {
 		BacklogSize         func(childComplexity int) int
 		BacklogState        func(childComplexity int) int
 		ComputedAt          func(childComplexity int) int
+		DegradedReason      func(childComplexity int) int
 		EstimateCoverage    func(childComplexity int) int
 		ForecastID          func(childComplexity int) int
 		HistoryWeeks        func(childComplexity int) int
@@ -8771,6 +8773,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.TestOpsRiskResult.QualityDragHours(childComplexity), true
 
+	case "TestOpsRiskResult.qualityDragPartial":
+		if e.complexity.TestOpsRiskResult.QualityDragPartial == nil {
+			break
+		}
+
+		return e.complexity.TestOpsRiskResult.QualityDragPartial(childComplexity), true
+
 	case "TestOpsRiskResult.releaseConfidence":
 		if e.complexity.TestOpsRiskResult.ReleaseConfidence == nil {
 			break
@@ -9001,6 +9010,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 		}
 
 		return e.complexity.ThroughputForecast.ComputedAt(childComplexity), true
+
+	case "ThroughputForecast.degradedReason":
+		if e.complexity.ThroughputForecast.DegradedReason == nil {
+			break
+		}
+
+		return e.complexity.ThroughputForecast.DegradedReason(childComplexity), true
 
 	case "ThroughputForecast.estimateCoverage":
 		if e.complexity.ThroughputForecast.EstimateCoverage == nil {
@@ -12168,6 +12184,10 @@ type TestOpsRiskResult {
   pipelineStability: Float
   timeseries: [TestOpsRiskTrendPoint!]!
   qualityDragBreakdown: [TestOpsRiskBreakdownItem!]!
+  """
+  True when any repository row of the latest quality-drag day has a failure-rework, flake-investigation, queue-wait or retry-overhead part that was not measured; qualityDragHours and the breakdown then sum only the known parts.
+  """
+  qualityDragPartial: Boolean!
   quadrantData: [TestOpsRiskQuadrantPoint!]!
   confidenceSpark: [TestOpsRiskSparkPoint!]!
   confidenceDelta: Float
@@ -12221,6 +12241,8 @@ type ThroughputForecast {
   backlogState: ThroughputBacklogState!
   "The oldest of the newest work-item days that backlogSize is read from. Null when backlogState is NO_ROWS or SUPPLIED."
   backlogAsOfDay: Date
+  "Why the backlog read is not a healthy measurement: the backlogState value (STALE or NO_ROWS) when the read is stale or found no work-item row; null when backlogState is MEASURED or SUPPLIED."
+  degradedReason: String
   historyWeeks: Int!
   p50Weeks: Int
   p75Weeks: Int
@@ -50532,6 +50554,8 @@ func (ec *executionContext) fieldContext_Query_throughputForecast(ctx context.Co
 				return ec.fieldContext_ThroughputForecast_backlogState(ctx, field)
 			case "backlogAsOfDay":
 				return ec.fieldContext_ThroughputForecast_backlogAsOfDay(ctx, field)
+			case "degradedReason":
+				return ec.fieldContext_ThroughputForecast_degradedReason(ctx, field)
 			case "historyWeeks":
 				return ec.fieldContext_ThroughputForecast_historyWeeks(ctx, field)
 			case "p50Weeks":
@@ -50962,6 +50986,8 @@ func (ec *executionContext) fieldContext_Query_testopsRisk(ctx context.Context, 
 				return ec.fieldContext_TestOpsRiskResult_timeseries(ctx, field)
 			case "qualityDragBreakdown":
 				return ec.fieldContext_TestOpsRiskResult_qualityDragBreakdown(ctx, field)
+			case "qualityDragPartial":
+				return ec.fieldContext_TestOpsRiskResult_qualityDragPartial(ctx, field)
 			case "quadrantData":
 				return ec.fieldContext_TestOpsRiskResult_quadrantData(ctx, field)
 			case "confidenceSpark":
@@ -60829,6 +60855,50 @@ func (ec *executionContext) fieldContext_TestOpsRiskResult_qualityDragBreakdown(
 	return fc, nil
 }
 
+func (ec *executionContext) _TestOpsRiskResult_qualityDragPartial(ctx context.Context, field graphql.CollectedField, obj *model.TestOpsRiskResult) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_TestOpsRiskResult_qualityDragPartial(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.QualityDragPartial, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(bool)
+	fc.Result = res
+	return ec.marshalNBoolean2bool(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_TestOpsRiskResult_qualityDragPartial(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "TestOpsRiskResult",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _TestOpsRiskResult_quadrantData(ctx context.Context, field graphql.CollectedField, obj *model.TestOpsRiskResult) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_TestOpsRiskResult_quadrantData(ctx, field)
 	if err != nil {
@@ -62552,6 +62622,47 @@ func (ec *executionContext) fieldContext_ThroughputForecast_backlogAsOfDay(_ con
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type Date does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ThroughputForecast_degradedReason(ctx context.Context, field graphql.CollectedField, obj *model.ThroughputForecast) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ThroughputForecast_degradedReason(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.DegradedReason, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ThroughputForecast_degradedReason(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ThroughputForecast",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
 		},
 	}
 	return fc, nil
@@ -80866,6 +80977,11 @@ func (ec *executionContext) _TestOpsRiskResult(ctx context.Context, sel ast.Sele
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "qualityDragPartial":
+			out.Values[i] = ec._TestOpsRiskResult_qualityDragPartial(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		case "quadrantData":
 			out.Values[i] = ec._TestOpsRiskResult_quadrantData(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
@@ -81263,6 +81379,8 @@ func (ec *executionContext) _ThroughputForecast(ctx context.Context, sel ast.Sel
 			}
 		case "backlogAsOfDay":
 			out.Values[i] = ec._ThroughputForecast_backlogAsOfDay(ctx, field, obj)
+		case "degradedReason":
+			out.Values[i] = ec._ThroughputForecast_degradedReason(ctx, field, obj)
 		case "historyWeeks":
 			out.Values[i] = ec._ThroughputForecast_historyWeeks(ctx, field, obj)
 			if out.Values[i] == graphql.Null {

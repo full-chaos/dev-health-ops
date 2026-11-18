@@ -4,6 +4,8 @@ import (
 	"net/http"
 
 	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 )
 
 const (
@@ -29,7 +31,7 @@ func servedOrgOf(r *http.Request, row ShadowRow) servedOrg {
 	case row.OrgFromPath:
 		return servedOrg{named: true, raw: r.PathValue(pathOrgSegment)}
 	case row.OrgFromQuery:
-		values := r.URL.Query()[queryOrgParam]
+		values := httpapi.Query(r)[queryOrgParam]
 		if len(values) == 0 {
 			return servedOrg{}
 		}

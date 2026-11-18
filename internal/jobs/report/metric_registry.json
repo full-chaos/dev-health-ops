@@ -1572,6 +1572,7 @@
       "canonical_name": "success_rate",
       "dimensions": [
         "repo",
+        "team",
         "day"
       ],
       "display_name": "Success Rate",

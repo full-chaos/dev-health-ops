@@ -259,6 +259,15 @@ func (m *model) list(name string, hasDefault bool, item func(pyjson.Value) (pyjs
 	m.out.Set(name, out)
 }
 
+// optionalList is a list field that is left out of the output when the input
+// has no such key; a present key validates as list does.
+func (m *model) optionalList(name string, item func(pyjson.Value) (pyjson.Value, error)) {
+	if _, present := m.field(name); !present {
+		return
+	}
+	m.list(name, false, item)
+}
+
 // nested is a field holding another model (required).
 func (m *model) nested(name string, validate func(pyjson.Value) (pyjson.Value, error)) {
 	value, present := m.required(name)
@@ -338,6 +347,21 @@ func coverageDataset(value pyjson.Value) (pyjson.Value, error) {
 	for _, name := range []string{"requested_ranges", "covered_ranges", "gaps", "stale_ranges", "failed_ranges"} {
 		m.list(name, true, coverageRangeModel)
 	}
+	// CHAOS-13988: additive and optional. A projection stored before the
+	// field has no key, and the answer then has none either (not a defaulted
+	// empty list), so a read of an old projection is unchanged.
+	m.optionalList("closed_with_reason_ranges", coverageClosedRangeModel)
+	return m.result()
+}
+
+// coverageClosedRangeModel is one closed_with_reason_ranges item: a covered
+// window and the sorted causes that closed it with a reason.
+func coverageClosedRangeModel(value pyjson.Value) (pyjson.Value, error) {
+	m := newModel(value, "SyncCoverageClosedRange")
+	m.datetime("since", false)
+	m.datetime("before", false)
+	m.list("source_ids", true, strItem)
+	m.list("reasons", true, strItem)
 	return m.result()
 }
 

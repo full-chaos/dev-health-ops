@@ -416,7 +416,7 @@ func (h *handlers) getLLMSettingsModels(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	requested := ""
-	if values, present := r.URL.Query()["provider"]; present {
+	if values, present := requestQuery(r)["provider"]; present {
 		requested = pythonparity.Lower(pythonparity.Strip(values[len(values)-1]))
 	}
 	if requested != "" && !slices.Contains(llmbudget.CatalogProviders(), requested) {

@@ -21,9 +21,9 @@ import (
 // collector's typed rows to the durable tables, mirroring
 // GitLabTeamCatalogClickHouseEffects's shape against the SAME physical
 // tables (`teams`, `team_project_ownership`, `team_memberships`, `projects`,
-// `sprints`). manual_members carry-forward reuses the shared
-// PreserveExistingTeamManualMembers helper every native provider's teams
-// writer shares.
+// `sprints`). manual_members is kept from teams FINAL inside the insert
+// statement (teamprovider.RosterKept), as every native provider's teams
+// writer does.
 type JiraTeamCatalogClickHouseEffects struct {
 	Conn  driver.Conn
 	Lease providerfoundation.LeaseGuard
@@ -219,10 +219,6 @@ func (sink JiraTeamCatalogClickHouseEffects) writeTeams(ctx context.Context, cla
 	for _, row := range rows {
 		teamIDs = append(teamIDs, row.ID)
 	}
-	existingManualMembers, err := PreserveExistingTeamManualMembers(ctx, sink.Conn, claim.OrgID, teamIDs)
-	if err != nil {
-		return err
-	}
 	createdAt, err := teamcreated.Carry(ctx, sink.Conn, claim.OrgID, teamIDs)
 	if err != nil {
 		return err
@@ -233,15 +229,11 @@ func (sink JiraTeamCatalogClickHouseEffects) writeTeams(ctx context.Context, cla
 		if err != nil {
 			return ErrInvalidConfiguration
 		}
-		manualMembers := existingManualMembers[row.ID]
-		if manualMembers == nil {
-			manualMembers = []string{}
-		}
 		writes = append(writes, teamprovider.Write{Values: []any{
-			row.ID, teamUUID, row.Name, row.Description, manualMembers, row.ProjectKeys, row.RepoPatterns,
+			row.ID, teamUUID, row.Name, row.Description, []string{}, row.ProjectKeys, row.RepoPatterns,
 			row.IsActive, row.UpdatedAt, row.OrgID, row.Provider, row.NativeTeamKey, row.ParentTeamID,
 			teamcreated.For(createdAt, row.ID, row.UpdatedAt),
-		}, Gone: teamprovider.GoneKept})
+		}, Gone: teamprovider.GoneKept, Roster: teamprovider.RosterKept})
 	}
 	if err := sink.Lease.Assert(ctx); err != nil {
 		return err

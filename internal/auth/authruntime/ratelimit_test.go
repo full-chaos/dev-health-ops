@@ -175,7 +175,7 @@ func TestTheStoreErrorCounterIsOnTheServiceScrape(t *testing.T) {
 		"auth_svc_login_ip", "auth_svc_login_ip_account", "auth_svc_verify", "auth_svc_resend_verification",
 		"auth_svc_resend_verification_ip", "auth_svc_forgot_password", "auth_svc_forgot_password_ip",
 		"auth_svc_reset_ip", "auth_svc_reset_ip_token", "auth_svc_change_password", "auth_svc_social_link_ip_principal",
-		"auth_svc_refresh",
+		"auth_svc_refresh", "auth_svc_refresh_addr",
 	}
 	for _, id := range ids {
 		sample := regexp.MustCompile(`(?m)^dev_health_api_rate_limit_store_errors_total\{limit="` + id + `"\} \d+$`)

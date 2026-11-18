@@ -49,6 +49,12 @@ type Route struct {
 	// pattern but one literal path (a wildcard mounted for POST /x/check): the
 	// path does not serve its method, so the pattern's 405 Allow omits it.
 	NotServed bool
+	// MethodFallback, set on the first route registered for a pattern, sends
+	// a request whose method no route of the pattern registers to that
+	// route's chain instead of the pattern's 405: the handler dispatches
+	// methods itself (one wildcard serving several Python routes) and
+	// answers them with its own 405 or 404.
+	MethodFallback bool
 	// ResponseModel says the Python route this one ports writes its success
 	// body as a FastAPI response_model (pydantic-core dump_json), not as a
 	// JSONResponse (json.dumps). The handler sees a writer that reports the
@@ -378,7 +384,8 @@ func buildHandler(options ServerOptions, logger *slog.Logger, answers *shutdownA
 	methodsByPattern := make(map[string][]string)
 	servedByPattern := make(map[string][]string)
 	allowByPattern := make(map[string]string)
-	for _, route := range options.Routes {
+	fallbackByPattern := make(map[string]int)
+	for index, route := range options.Routes {
 		if route.Handler == nil {
 			return nil, fmt.Errorf("route %s %s has no handler", route.Method, route.Pattern)
 		}
@@ -400,6 +407,9 @@ func buildHandler(options ServerOptions, logger *slog.Logger, answers *shutdownA
 		if _, exists := methodsByPattern[route.Pattern]; !exists && route.Allow != "" {
 			allowByPattern[route.Pattern] = route.Allow
 		}
+		if _, exists := methodsByPattern[route.Pattern]; !exists && route.MethodFallback {
+			fallbackByPattern[route.Pattern] = index
+		}
 		for _, method := range methodsByPattern[route.Pattern] {
 			if method == route.Method {
 				return nil, fmt.Errorf("route %s is registered twice", key)
@@ -416,9 +426,32 @@ func buildHandler(options ServerOptions, logger *slog.Logger, answers *shutdownA
 	// /a/literal would conflict with GET /a/{id} (neither pattern is more
 	// specific), which net/http refuses to register; among method-free
 	// patterns alone the literal path is simply the more specific one.
+	var inFlight chan struct{}
+	if options.MaxInFlight > 0 {
+		inFlight = make(chan struct{}, options.MaxInFlight)
+	}
+	publicInFlight := inFlight
+	if options.PublicMaxInFlight > 0 {
+		publicInFlight = make(chan struct{}, options.PublicMaxInFlight)
+	}
+	chains := make([]http.Handler, len(options.Routes))
+	fallbacks := make([]http.Handler, len(options.Routes))
+	for index, route := range options.Routes {
+		routeInFlight := inFlight
+		if route.PublicClass {
+			routeInFlight = publicInFlight
+		}
+		chains[index], fallbacks[index] = routeChains(route, options, logger, write, routeInFlight)
+	}
+
 	pathMux := http.NewServeMux()
 	notAllowedByPattern := make(map[string]http.Handler, len(methodsByPattern))
 	for pattern, methods := range methodsByPattern {
+		if index, ok := fallbackByPattern[pattern]; ok {
+			notAllowedByPattern[pattern] = fallbacks[index]
+			pathMux.Handle(pattern, methodFallback{fallbacks[index]})
+			continue
+		}
 		sorted := append([]string(nil), servedByPattern[pattern]...)
 		sort.Strings(sorted)
 		allow := strings.Join(sorted, ", ")
@@ -430,20 +463,8 @@ func buildHandler(options ServerOptions, logger *slog.Logger, answers *shutdownA
 		pathMux.Handle(pattern, notAllowed)
 	}
 
-	var inFlight chan struct{}
-	if options.MaxInFlight > 0 {
-		inFlight = make(chan struct{}, options.MaxInFlight)
-	}
-	publicInFlight := inFlight
-	if options.PublicMaxInFlight > 0 {
-		publicInFlight = make(chan struct{}, options.PublicMaxInFlight)
-	}
-	for _, route := range options.Routes {
-		routeInFlight := inFlight
-		if route.PublicClass {
-			routeInFlight = publicInFlight
-		}
-		handler := routeChain(route, options, logger, write, routeInFlight)
+	for index, route := range options.Routes {
+		handler := chains[index]
 		// A GET pattern also matches HEAD in net/http's mux; a path with
 		// its own HEAD route sends HEAD there instead (the more specific
 		// pattern). With ExplicitHead the GET route itself refuses HEAD as
@@ -484,14 +505,28 @@ func buildHandler(options ServerOptions, logger *slog.Logger, answers *shutdownA
 		sort.Strings(sorted)
 		catchAllNotAllowed = &methodNotAllowed{allow: strings.Join(sorted, ", "), write: write}
 	}
+	// servePath answers r from its method-free pattern, if it has one. A
+	// MethodFallback handler reads the pattern's path values, which only
+	// pathMux's own ServeHTTP sets on r.
+	servePath := func(w http.ResponseWriter, r *http.Request) bool {
+		handler, pattern := pathMux.Handler(r)
+		if pattern == "" {
+			return false
+		}
+		if _, ok := handler.(methodFallback); ok {
+			pathMux.ServeHTTP(w, r)
+			return true
+		}
+		handler.ServeHTTP(w, r)
+		return true
+	}
 	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if catchAllNotAllowed != nil {
 			if catchAll[r.Method] {
 				notFound(w, r)
 				return
 			}
-			if handler, pattern := pathMux.Handler(r); pattern != "" {
-				handler.ServeHTTP(w, r)
+			if servePath(w, r) {
 				return
 			}
 			catchAllNotAllowed.ServeHTTP(w, r)
@@ -500,8 +535,7 @@ func buildHandler(options ServerOptions, logger *slog.Logger, answers *shutdownA
 		// A method-free pattern answers as it did in the route mux: its
 		// 405, or net/http's own trailing-slash redirect to it; no match at
 		// all is the not-found path.
-		if handler, pattern := pathMux.Handler(r); pattern != "" {
-			handler.ServeHTTP(w, r)
+		if servePath(w, r) {
 			return
 		}
 		notFound(w, r)
@@ -556,6 +590,14 @@ func buildHandler(options ServerOptions, logger *slog.Logger, answers *shutdownA
 // route's own panic recovery closest to the handler so the log line names the
 // real pattern.
 func routeChain(route Route, options ServerOptions, logger *slog.Logger, write ErrorWriter, inFlight chan struct{}) http.Handler {
+	chain, _ := routeChains(route, options, logger, write, inFlight)
+	return chain
+}
+
+// routeChains is routeChain and the route's MethodFallback chain: the same
+// stages, rate-limit bucket and in-flight pool, with lazyMaxBody in place of
+// the eager body bound.
+func routeChains(route Route, options ServerOptions, logger *slog.Logger, write ErrorWriter, inFlight chan struct{}) (http.Handler, http.Handler) {
 	if route.ErrorWriter != nil {
 		write = route.ErrorWriter
 	}
@@ -575,23 +617,42 @@ func routeChain(route Route, options ServerOptions, logger *slog.Logger, write E
 		maxBody = 0
 	}
 
-	handler := RecoverWith(logger, route.Method+" "+route.Pattern, write)(markRoute(route))
-	handler = Deadline(options.RequestTimeout)(handler)
-	if !route.Unthrottled {
-		handler = MaxBodyWith(maxBody, write)(handler)
-		if route.Admit != nil {
-			handler = admitBeforeBody(route.Admit)(handler)
-		}
-		handler = inFlightLimit(inFlight, logger, write)(handler)
-		handler = RateLimitWith(NewBucket(perSecond, burst, options.Now), write)(handler)
-	}
-	// Outermost, so a request the route's own rate limit or body bound
-	// refuses is still counted against the route it addressed.
+	inner := RecoverWith(logger, route.Method+" "+route.Pattern, write)(markRoute(route))
+	inner = Deadline(options.RequestTimeout)(inner)
+	limit := RateLimitWith(NewBucket(perSecond, burst, options.Now), write)
 	pattern := route.Pattern
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		recordRoute(r, pattern)
-		handler.ServeHTTP(w, r)
-	})
+	build := func(bodyBound func(http.Handler) http.Handler) http.Handler {
+		handler := inner
+		if !route.Unthrottled {
+			handler = bodyBound(handler)
+			if route.Admit != nil {
+				handler = admitBeforeBody(route.Admit)(handler)
+			}
+			handler = inFlightLimit(inFlight, logger, write)(handler)
+			handler = limit(handler)
+		}
+		// Outermost, so a request the route's own rate limit or body bound
+		// refuses is still counted against the route it addressed.
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			recordRoute(r, pattern)
+			handler.ServeHTTP(w, r)
+		})
+	}
+	return build(MaxBodyWith(maxBody, write)), build(lazyMaxBody(maxBody))
+}
+
+// lazyMaxBody bounds the body the handler reads and reads none of it itself:
+// a MethodFallback handler answers its 405 or 404 first, whatever the framing
+// or declared length, as the router's own 405 did.
+func lazyMaxBody(limit int64) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Body != nil {
+				r.Body = http.MaxBytesReader(w, r.Body, limit)
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
 }
 
 // methodNotAllowed is a route path's 405: the path matched, the method
@@ -611,6 +672,9 @@ func (m *methodNotAllowed) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Allow", m.allow)
 	m.write(w, r, CodeMethodNotAllowed)
 }
+
+// methodFallback is a MethodFallback route's chain in the method-free mux.
+type methodFallback struct{ http.Handler }
 
 // refuseHead answers a HEAD request with notAllowed and passes every other
 // request to next.

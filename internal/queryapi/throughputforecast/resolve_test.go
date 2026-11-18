@@ -103,6 +103,11 @@ func oneRow(values ...any) *fakeRowScanner {
 	return &fakeRowScanner{rows: [][]any{values}}
 }
 
+// backlogRow is the backlog read's one row: the sum, one measured key, no stale key, its newest day inside the window.
+func backlogRow(size uint64) *fakeRowScanner {
+	return oneRow(size, uint64(1), uint64(0), time.Date(2026, 9, 28, 0, 0, 0, 0, time.UTC))
+}
+
 // fullResponseSet returns the seven scanners a complete, history-bearing call
 // consumes, in the exact order Resolve issues them. Ordering IS the contract
 // here: Python loads history, then backlog, then coverage, then the four
@@ -111,8 +116,8 @@ func oneRow(values ...any) *fakeRowScanner {
 func fullResponseSet(t *testing.T, days int, perDay uint64) []*fakeRowScanner {
 	t.Helper()
 	return []*fakeRowScanner{
-		historyRows(t, days, perDay),                           // 1 throughput history
-		oneRow(uint64(500)),                                    // 2 backlog
+		historyRows(t, days, perDay), // 1 throughput history
+		backlogRow(500),              // 2 backlog
 		oneRow(uint64(40), uint64(60), uint64(100), uint64(3)), // 3 estimate coverage
 		oneRow(12.5, uint64(20)),                               // 4 work item overlay
 		oneRow(floatPointer(30.0), floatPointer(90.0)),         // 5 stale wip
@@ -331,7 +336,7 @@ func TestResolveAnExplicitZeroBacklogIsSuppliedNotAbsent(t *testing.T) {
 // never null. The gate no longer decides whether coverage is read.
 func TestResolveCoverageIsBuiltFromItsOwnRowsWhenTheDerivedBacklogIsZero(t *testing.T) {
 	responses := fullResponseSet(t, 120, 7)
-	responses[1] = oneRow(uint64(0))                                  // derived backlog 0
+	responses[1] = backlogRow(0)                                      // derived backlog 0
 	responses[2] = oneRow(uint64(0), uint64(1), uint64(1), uint64(1)) // coverage rows: est 0 / unest 1 / backlog 1
 	client := &fakeClient{responses: responses}
 
@@ -353,6 +358,9 @@ func TestResolveCoverageIsBuiltFromItsOwnRowsWhenTheDerivedBacklogIsZero(t *test
 	if coverage.Ratio == nil || *coverage.Ratio != 0 {
 		t.Errorf("ratio: got %v, want 0 (0 of a backlog of 1)", coverage.Ratio)
 	}
+	if coverage.GrainCount != 1 {
+		t.Errorf("grainCount: got %d, want the 1 grain read (CHAOS-8172)", coverage.GrainCount)
+	}
 	if client.calls != 7 {
 		t.Errorf("issued %d queries, want all 7 (the coverage read must not be gated)", client.calls)
 	}
@@ -363,7 +371,7 @@ func TestResolveCoverageIsBuiltFromItsOwnRowsWhenTheDerivedBacklogIsZero(t *test
 func TestResolveWithNoCoverageRowsAnswersTheZeroObjectNeverNull(t *testing.T) {
 	t.Run("history", func(t *testing.T) {
 		responses := fullResponseSet(t, 120, 7)
-		responses[1] = oneRow(uint64(0)) // derived backlog 0
+		responses[1] = backlogRow(0)     // derived backlog 0
 		responses[2] = &fakeRowScanner{} // coverage: the driver hands back no row
 		client := &fakeClient{responses: responses}
 		got, err := Resolve(context.Background(), client, "org-1",
@@ -375,7 +383,7 @@ func TestResolveWithNoCoverageRowsAnswersTheZeroObjectNeverNull(t *testing.T) {
 	})
 	t.Run("an aggregate over zero grains (the real engine's shape)", func(t *testing.T) {
 		responses := fullResponseSet(t, 120, 7)
-		responses[1] = oneRow(uint64(0))
+		responses[1] = backlogRow(0)
 		responses[2] = oneRow(uint64(0), uint64(0), uint64(0), uint64(0)) // sum() over nothing: one row of zeros, grains 0
 		client := &fakeClient{responses: responses}
 		got, err := Resolve(context.Background(), client, "org-1",
@@ -387,9 +395,9 @@ func TestResolveWithNoCoverageRowsAnswersTheZeroObjectNeverNull(t *testing.T) {
 	})
 	t.Run("no history", func(t *testing.T) {
 		client := &fakeClient{responses: []*fakeRowScanner{
-			{},                // no throughput rows
-			oneRow(uint64(0)), // derived backlog 0
-			{},                // coverage: no row
+			{},            // no throughput rows
+			backlogRow(0), // derived backlog 0
+			{},            // coverage: no row
 		}}
 		got, err := Resolve(context.Background(), client, "org-1",
 			model.ThroughputForecastInput{HistoryWeeks: 12}, mustDay(t, "2026-09-01"))
@@ -409,6 +417,9 @@ func assertZeroCoverage(t *testing.T, coverage *model.ThroughputEstimateCoverage
 		coverage.Ratio == nil || *coverage.Ratio != 0 {
 		t.Errorf("estimateCoverage: got %+v ratio=%v, want ALL zero, ratio 0 included (D4376)", coverage, coverage.Ratio)
 	}
+	if coverage.GrainCount != 0 {
+		t.Errorf("grainCount: got %d, want 0: no coverage row was read (CHAOS-8172)", coverage.GrainCount)
+	}
 }
 
 func TestResolveRejectsANegativeSuppliedBacklog(t *testing.T) {
@@ -423,8 +434,8 @@ func TestResolveRejectsANegativeSuppliedBacklog(t *testing.T) {
 
 func TestResolveEmptyScopeReturnsTheStructuredNoHistoryPayload(t *testing.T) {
 	client := &fakeClient{responses: []*fakeRowScanner{
-		{},                  // 1 no throughput rows
-		oneRow(uint64(500)), // 2 backlog
+		{},              // 1 no throughput rows
+		backlogRow(500), // 2 backlog
 		oneRow(uint64(40), uint64(60), uint64(100), uint64(3)), // 3 estimate coverage
 	}}
 
@@ -643,7 +654,7 @@ func TestToModelRendersComputedAtAsRFC3339(t *testing.T) {
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
-			got := toModel("forecast-1", testCase.moment, forecastResult{}, nil, nil, nil)
+			got := toModel("forecast-1", testCase.moment, forecastResult{}, backlogRead{}, nil, nil, nil)
 			if got.ComputedAt != testCase.want {
 				t.Errorf("computedAt: got %q, want %q", got.ComputedAt, testCase.want)
 			}

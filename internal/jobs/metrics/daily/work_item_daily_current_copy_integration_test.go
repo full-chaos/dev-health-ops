@@ -146,15 +146,15 @@ func TestDailyCountsDoNotCompleteAnItemWhoseCurrentCopyIsOpen(t *testing.T) {
 	}
 }
 
-// P2: the current copy is open and kept its completed_at on the day. items_completed counts a completed_at in the day
-// whatever the status (ticket 14138 decides on a terminal check); the current copy is the day's item, so it counts.
-func TestDailyCountsKeepTheCurrentOpenCopysCompletedAt(t *testing.T) {
+// P2: the current copy is open and kept its completed_at on the day. The current copy is the day's item, and an open
+// item completes on no day whatever completed_at its provider kept (CHAOS-14138), so nothing completes.
+func TestDailyCountsDoNotCompleteTheCurrentOpenCopyWithACompletedAt(t *testing.T) {
 	ctx := context.Background()
 	c := newCurrentCopyCase(t, ctx, "org-14128-p2-")
 	storeWorkItemCopy(t, ctx, c.conn, c.orgID, c.olderRepo, "p2", "done", "proj-a", c.created, &c.doneD, c.olderSync)
 	storeWorkItemCopy(t, ctx, c.conn, c.orgID, c.newRepo, "p2", "in_progress", "proj-a", c.created, &c.doneD, c.newSync)
 	c.compute(t, ctx, c.day)
-	if got := readCurrentCopyDaySums(t, ctx, c.conn, c.orgID, c.day, "proj-a"); got.orgCompleted != 1 || got.scopeCompleted != 1 {
-		t.Fatalf("day %s: %+v, want 1 completed in each view", c.day.Format("2006-01-02"), got)
+	if got := readCurrentCopyDaySums(t, ctx, c.conn, c.orgID, c.day, "proj-a"); got.orgCompleted != 0 || got.scopeCompleted != 0 || got.userCompleted != 0 {
+		t.Fatalf("day %s: %+v, want 0 completed in each view and the person rows", c.day.Format("2006-01-02"), got)
 	}
 }

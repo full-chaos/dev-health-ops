@@ -2749,11 +2749,18 @@ func (derived GithubWorkItemDerivationContext) teamOwnsSubjectRepo(
 	if derived.teamIsNullCarrying(teamID) {
 		return MembershipOwnershipReasonTeamNullCarrying, false
 	}
-	owners := append(
+	// An inactive team owns nothing (§0.4g rule 1): a repository owned only by
+	// inactive teams is a repository with no ownership fact.
+	var owners []GithubWorkItemDerivationCandidate
+	for _, owner := range append(
 		append([]GithubWorkItemDerivationCandidate(nil),
 			derived.repoByID[AttributionMapKey(subject.Provider, GithubWorkItemDerivationStringValue(subject.RepoID))]...),
 		derived.repoByNames(subject)...,
-	)
+	) {
+		if !derived.candidateNamesInactiveTeam(owner) {
+			owners = append(owners, owner)
+		}
+	}
 	if len(owners) == 0 {
 		return MembershipOwnershipReasonUnknown, !ownershipUnknownBlocksMembership
 	}

@@ -435,20 +435,21 @@ func buildHandler(options ServerOptions, logger *slog.Logger, answers *shutdownA
 		publicInFlight = make(chan struct{}, options.PublicMaxInFlight)
 	}
 	chains := make([]http.Handler, len(options.Routes))
+	fallbacks := make([]http.Handler, len(options.Routes))
 	for index, route := range options.Routes {
 		routeInFlight := inFlight
 		if route.PublicClass {
 			routeInFlight = publicInFlight
 		}
-		chains[index] = routeChain(route, options, logger, write, routeInFlight)
+		chains[index], fallbacks[index] = routeChains(route, options, logger, write, routeInFlight)
 	}
 
 	pathMux := http.NewServeMux()
 	notAllowedByPattern := make(map[string]http.Handler, len(methodsByPattern))
 	for pattern, methods := range methodsByPattern {
 		if index, ok := fallbackByPattern[pattern]; ok {
-			notAllowedByPattern[pattern] = chains[index]
-			pathMux.Handle(pattern, methodFallback{chains[index]})
+			notAllowedByPattern[pattern] = fallbacks[index]
+			pathMux.Handle(pattern, methodFallback{fallbacks[index]})
 			continue
 		}
 		sorted := append([]string(nil), servedByPattern[pattern]...)
@@ -589,6 +590,14 @@ func buildHandler(options ServerOptions, logger *slog.Logger, answers *shutdownA
 // route's own panic recovery closest to the handler so the log line names the
 // real pattern.
 func routeChain(route Route, options ServerOptions, logger *slog.Logger, write ErrorWriter, inFlight chan struct{}) http.Handler {
+	chain, _ := routeChains(route, options, logger, write, inFlight)
+	return chain
+}
+
+// routeChains is routeChain and the route's MethodFallback chain: the same
+// stages, rate-limit bucket and in-flight pool, with lazyMaxBody in place of
+// the eager body bound.
+func routeChains(route Route, options ServerOptions, logger *slog.Logger, write ErrorWriter, inFlight chan struct{}) (http.Handler, http.Handler) {
 	if route.ErrorWriter != nil {
 		write = route.ErrorWriter
 	}
@@ -608,23 +617,42 @@ func routeChain(route Route, options ServerOptions, logger *slog.Logger, write E
 		maxBody = 0
 	}
 
-	handler := RecoverWith(logger, route.Method+" "+route.Pattern, write)(markRoute(route))
-	handler = Deadline(options.RequestTimeout)(handler)
-	if !route.Unthrottled {
-		handler = MaxBodyWith(maxBody, write)(handler)
-		if route.Admit != nil {
-			handler = admitBeforeBody(route.Admit)(handler)
-		}
-		handler = inFlightLimit(inFlight, logger, write)(handler)
-		handler = RateLimitWith(NewBucket(perSecond, burst, options.Now), write)(handler)
-	}
-	// Outermost, so a request the route's own rate limit or body bound
-	// refuses is still counted against the route it addressed.
+	inner := RecoverWith(logger, route.Method+" "+route.Pattern, write)(markRoute(route))
+	inner = Deadline(options.RequestTimeout)(inner)
+	limit := RateLimitWith(NewBucket(perSecond, burst, options.Now), write)
 	pattern := route.Pattern
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		recordRoute(r, pattern)
-		handler.ServeHTTP(w, r)
-	})
+	build := func(bodyBound func(http.Handler) http.Handler) http.Handler {
+		handler := inner
+		if !route.Unthrottled {
+			handler = bodyBound(handler)
+			if route.Admit != nil {
+				handler = admitBeforeBody(route.Admit)(handler)
+			}
+			handler = inFlightLimit(inFlight, logger, write)(handler)
+			handler = limit(handler)
+		}
+		// Outermost, so a request the route's own rate limit or body bound
+		// refuses is still counted against the route it addressed.
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			recordRoute(r, pattern)
+			handler.ServeHTTP(w, r)
+		})
+	}
+	return build(MaxBodyWith(maxBody, write)), build(lazyMaxBody(maxBody))
+}
+
+// lazyMaxBody bounds the body the handler reads and reads none of it itself:
+// a MethodFallback handler answers its 405 or 404 first, whatever the framing
+// or declared length, as the router's own 405 did.
+func lazyMaxBody(limit int64) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Body != nil {
+				r.Body = http.MaxBytesReader(w, r.Body, limit)
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
 }
 
 // methodNotAllowed is a route path's 405: the path matched, the method

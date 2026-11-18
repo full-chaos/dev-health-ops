@@ -1,6 +1,7 @@
 package apiservice
 
 import (
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"sort"
@@ -239,5 +240,74 @@ func TestOnlyTheOAuthPairSetsMethodFallback(t *testing.T) {
 	}
 	if len(flagged) != 1 || flagged[pairPattern] != len(registeredMethods) {
 		t.Fatalf("MethodFallback patterns = %v, want only %s on its %d routes", flagged, pairPattern, len(registeredMethods))
+	}
+}
+
+type countingBody struct {
+	io.Reader
+	bytes int
+}
+
+func (b *countingBody) Read(p []byte) (int, error) {
+	n, err := b.Reader.Read(p)
+	b.bytes += n
+	return n, err
+}
+
+func (b *countingBody) Close() error { return nil }
+
+// TestOAuthPairUnregisteredMethodsLeaveAStreamedBodyUnread: a method no route
+// registers is refused with the pair's own 405 or 404 without reading its
+// body, whatever the framing (an undeclared-length stream, a declared length
+// over the listener's bound), as the router's own 405 did; PUT, a registered
+// method, keeps its route chain's eager body bound (a read, a 413).
+func TestOAuthPairUnregisteredMethodsLeaveAStreamedBodyUnread(t *testing.T) {
+	_, handler := methodRoutes(t)
+	const provider = "22000000-0000-4000-8000-000000000003"
+	paths := []string{
+		"/api/v1/auth/oauth/" + provider + "/authorize",
+		"/api/v1/auth/oauth/github/authorize",
+		"/api/v1/auth/oauth/" + provider + "/callback",
+		"/api/v1/auth/oauth/providers/authorize",
+		"/api/v1/auth/oauth/providers/" + provider,
+		"/api/v1/auth/oauth/" + provider + "/unknown",
+	}
+	ask := func(method, path string, length int64, transfer []string) (methodAnswer, int) {
+		body := &countingBody{Reader: strings.NewReader("{}")}
+		request := httptest.NewRequest(method, path, nil)
+		request.Body, request.ContentLength, request.TransferEncoding = body, length, transfer
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, request)
+		return methodAnswer{recorder.Code, recorder.Header().Get("Allow"), strings.TrimSpace(recorder.Body.String())}, body.bytes
+	}
+	framings := []struct {
+		name     string
+		length   int64
+		transfer []string
+	}{
+		{"chunked", -1, []string{"chunked"}},
+		{"undeclared", -1, nil},
+		{"declared", 2, nil},
+		{"declared over the bound", maxBodyBytes + 1, nil},
+	}
+	for _, path := range paths {
+		want, _ := ask(http.MethodPut, path, 2, nil)
+		if want.status != http.StatusNotFound && want.status != http.StatusMethodNotAllowed {
+			t.Fatalf("PUT %s = %+v: not the pair's refusal", path, want)
+		}
+		for _, framing := range framings {
+			for _, method := range fallbackMethods {
+				got, read := ask(method, path, framing.length, framing.transfer)
+				if got != want || read != 0 {
+					t.Errorf("%s %s %s = %+v after reading %d bytes, want %+v and no read", framing.name, method, path, got, read, want)
+				}
+			}
+		}
+		if _, read := ask(http.MethodPut, path, -1, []string{"chunked"}); read == 0 {
+			t.Errorf("chunked PUT %s read no body: the registered route chain's eager bound moved", path)
+		}
+		if got, read := ask(http.MethodPut, path, maxBodyBytes+1, nil); got.status != http.StatusRequestEntityTooLarge || read != 0 {
+			t.Errorf("PUT %s declared over the bound = %+v after reading %d bytes, want the eager 413 unread", path, got, read)
+		}
 	}
 }

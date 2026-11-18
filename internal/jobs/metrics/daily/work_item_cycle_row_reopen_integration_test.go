@@ -189,3 +189,53 @@ func TestReopenedItemTheDayLoaderSkipsIsRetracted(t *testing.T) {
 		t.Fatalf("after the reopen and a compute of the next day: %d completed cycle rows, want 1 (skip-1 retracted, other-1 kept)", got)
 	}
 }
+
+// The current copy of an item across repositories decides its retraction: the newest copy by last_synced.
+func TestRetractionDecidesOnTheNewestRepositoryCopy(t *testing.T) {
+	day := time.Date(2026, 8, 25, 0, 0, 0, 0, time.UTC)
+	created := day.Add(-48 * time.Hour)
+	done := day.Add(10 * time.Hour)
+	now := time.Now().UTC()
+	for _, tc := range []struct {
+		name             string
+		olderStatus      string
+		olderCompleted   *time.Time
+		newestStatus     string
+		newestCompleted  *time.Time
+		wantCompletedRow uint64
+	}{
+		{"older copy open, newest copy done: the completion stays", "in_progress", nil, "done", &done, 1},
+		{"older copy done, newest copy open: the completion is retracted", "done", &done, "in_progress", nil, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			conn := workItemAttributionLinkedIssueMigratedClickHouse(t, ctx)
+			orgID := "org-copies-" + uuid.NewString()
+			olderRepo, newestRepo := uuid.New(), uuid.New()
+			partition := Partition{ID: "p1", RunID: "r1", RepoIDs: []RepositoryID{RepositoryID(olderRepo.String()), RepositoryID(newestRepo.String())}}
+			executor, err := NewWorkItemExecutor(conn)
+			if err != nil {
+				t.Fatal(err)
+			}
+			reopenedWorkItemRow(t, ctx, conn, orgID, olderRepo, "dup-1", tc.olderStatus, created, tc.olderCompleted, now.Add(-4*time.Hour))
+			executor.nowUTC = func() time.Time { return now.Add(-3 * time.Hour) }
+			if _, err := executor.ComputeFamily(ctx, Run{ID: uuid.NewString(), OrganizationID: orgID, TargetDay: day}, partition); err != nil {
+				t.Fatal(err)
+			}
+			reopenedWorkItemRow(t, ctx, conn, orgID, newestRepo, "dup-1", tc.newestStatus, created, tc.newestCompleted, now.Add(-2*time.Hour))
+			if tc.newestStatus == "done" {
+				executor.nowUTC = func() time.Time { return now.Add(-time.Hour) }
+				if _, err := executor.ComputeFamily(ctx, Run{ID: uuid.NewString(), OrganizationID: orgID, TargetDay: day}, partition); err != nil {
+					t.Fatal(err)
+				}
+			}
+			executor.nowUTC = func() time.Time { return now }
+			if _, err := executor.ComputeFamily(ctx, Run{ID: uuid.NewString(), OrganizationID: orgID, TargetDay: day.AddDate(0, 0, 1)}, partition); err != nil {
+				t.Fatal(err)
+			}
+			if got := completedWorkItemCycleRows(t, ctx, conn, orgID, day); got != tc.wantCompletedRow {
+				t.Fatalf("%d completed cycle rows, want %d", got, tc.wantCompletedRow)
+			}
+		})
+	}
+}

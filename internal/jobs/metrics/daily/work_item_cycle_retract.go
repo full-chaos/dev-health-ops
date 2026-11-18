@@ -31,9 +31,10 @@ func retractReopenedCycleRows(
 		startedAt                                           *time.Time
 	}
 	var found []retraction
-	// One query per chunk of repositories: the newest completed cycle row of every item that is open now (its
-	// status is not terminal, or it has no completed_at). The read does not go through the day predicate of the
-	// rollup, which never loads an item whose stored status is still done.
+	// One query per chunk of repositories: the newest completed cycle row of every item that is open now. Whether it
+	// is open is decided on the item's newest copy across repositories (last_synced, then repo_id): its status is not
+	// terminal, or it has no completed_at. The read does not go through the day predicate of the rollup, which never
+	// loads an item whose stored status is still done.
 	const query = `
 SELECT c.work_item_id, c.provider, c.day, c.work_scope_id, c.team_id, c.team_name, c.assignee, c.type,
        c.created_at, c.started_at, c.computed_at, w.item_status
@@ -41,10 +42,13 @@ FROM (
   SELECT * FROM work_item_cycle_times FINAL WHERE org_id = ? AND completed_at IS NOT NULL
 ) AS c
 INNER JOIN (
-  SELECT provider, work_item_id, any(status) AS item_status
+  SELECT provider, work_item_id,
+         argMax(status, (last_synced, repo_id)) AS item_status,
+         argMax(isNull(completed_at), (last_synced, repo_id)) AS item_has_no_completion
   FROM work_items FINAL
-  WHERE org_id = ? %s AND (status NOT IN ('done', 'canceled') OR completed_at IS NULL)
+  WHERE org_id = ? %s
   GROUP BY provider, work_item_id
+  HAVING item_status NOT IN ('done', 'canceled') OR item_has_no_completion
 ) AS w ON c.provider = w.provider AND c.work_item_id = w.work_item_id`
 	run := func(sql string, args ...any) error {
 		rows, err := conn.Query(ctx, sql, args...)
@@ -72,7 +76,7 @@ INNER JOIN (
 		}
 	} else {
 		for _, chunk := range chunkRepositoryIDs(scope.repoIDs, querybound.MaxArrayBytes) {
-			if err := run(fmt.Sprintf(query, "AND repo_id IN ?"), organizationID, organizationID, chunk); err != nil {
+			if err := run(fmt.Sprintf(query, "AND work_item_id IN (SELECT work_item_id FROM work_items FINAL WHERE org_id = ? AND repo_id IN ?)"), organizationID, organizationID, organizationID, chunk); err != nil {
 				return 0, err
 			}
 		}

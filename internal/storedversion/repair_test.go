@@ -143,10 +143,58 @@ func TestRepairStopsAfterTheBoundWarnsAndCountsAndReturnsNil(t *testing.T) {
 	}
 }
 
-func TestRepairWithoutTheKeptTableRepairsNothing(t *testing.T) {
+// A schema without migration 160 repairs nothing, loudly: each write logs one WARN that names the kept table and the
+// org, and adds 1 to the counter.
+func TestRepairWithoutTheKeptTableWarnsCountsAndRepairsNothing(t *testing.T) {
+	reader := sdkmetric.NewManualReader()
+	counter, err := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)).Meter("t").Int64Counter(KeptTableMissingMetric)
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous := keptTableMissing
+	keptTableMissing = counter
+	t.Cleanup(func() { keptTableMissing = previous })
+	var logs bytes.Buffer
+	previousLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(previousLogger) })
+
 	conn := &repairConn{readErr: &clickhouse.Exception{Code: unknownTable, Message: "Unknown table"}}
-	if err := DeploymentKept.Repair(context.Background(), conn, "w", "org-1", [][]any{{uuid.Nil, "d1"}}, nil); err != nil {
-		t.Fatalf("Repair = %v; want nil on a schema without migration 160", err)
+	for write := 0; write < 2; write++ {
+		if err := DeploymentKept.Repair(context.Background(), conn, "provider_sync", "org-1", [][]any{{uuid.Nil, "d1"}}, nil); err != nil {
+			t.Fatalf("Repair = %v; want nil on a schema without migration 160", err)
+		}
+	}
+	if len(conn.queries) != 2 || len(conn.execs) != 0 {
+		t.Fatalf("reads %d, inserts %d; want 2, 0", len(conn.queries), len(conn.execs))
+	}
+	lines := strings.Split(strings.TrimSpace(logs.String()), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("%d log lines, want one per write:\n%s", len(lines), logs.String())
+	}
+	for _, line := range lines {
+		for _, want := range []string{"level=WARN", KeptTableMissingEvent, "kept_table=deployment_kept", "table=deployments",
+			"org_id=org-1", "writer=provider_sync", "keys=1"} {
+			if !strings.Contains(line, want) {
+				t.Fatalf("WARN line lacks %s:\n%s", want, line)
+			}
+		}
+	}
+	var data metricdata.ResourceMetrics
+	if err := reader.Collect(context.Background(), &data); err != nil {
+		t.Fatal(err)
+	}
+	sum := data.ScopeMetrics[0].Metrics[0].Data.(metricdata.Sum[int64])
+	if len(sum.DataPoints) != 1 || sum.DataPoints[0].Value != 2 || sum.DataPoints[0].Attributes.Len() != 2 {
+		t.Fatalf("counter = %+v; want one series (writer, table) of 2", sum.DataPoints)
+	}
+}
+
+// Any other exception on the first read fails the write: only code 60 means the kept table is missing.
+func TestRepairFailsOnAnotherExceptionCode(t *testing.T) {
+	conn := &repairConn{readErr: &clickhouse.Exception{Code: 81, Message: "Database does not exist"}}
+	if err := DeploymentKept.Repair(context.Background(), conn, "w", "org-1", [][]any{{uuid.Nil, "d1"}}, nil); err == nil {
+		t.Fatal("Repair succeeded over exception code 81")
 	}
 }
 

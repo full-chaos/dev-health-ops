@@ -5,6 +5,7 @@ package storedversion
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"log/slog"
 	"strings"
 	"testing"
@@ -297,4 +298,177 @@ func TestKeptGroupRepairAgainstRealClickHouse(t *testing.T) {
 			t.Fatalf("rows = %s; want [1,3]: the token drops 2, and the SyncContext insert lands", rows)
 		}
 	})
+
+	// D1: a schema without the kept table (real ClickHouse code 60) repairs nothing, loudly: one WARN per write that
+	// names the kept table and the org, and the counter +1.
+	t.Run("a schema without the kept table warns, names the table and the org, counts and repairs nothing", func(t *testing.T) {
+		reader := sdkmetric.NewManualReader()
+		counter, err := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)).Meter("cell").Int64Counter(KeptTableMissingMetric)
+		if err != nil {
+			t.Fatal(err)
+		}
+		previous := keptTableMissing
+		keptTableMissing = counter
+		t.Cleanup(func() { keptTableMissing = previous })
+		var logs bytes.Buffer
+		previousLogger := slog.Default()
+		slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+		t.Cleanup(func() { slog.SetDefault(previousLogger) })
+
+		if err := conn.Exec(ctx, `RENAME TABLE deployment_kept TO deployment_kept_cell_aside`); err != nil {
+			t.Fatal(err)
+		}
+		repairErr := DeploymentKept.Repair(ctx, conn, "cell", keptOrg, [][]any{{keptRepo, "d-missing"}}, nil)
+		if err := conn.Exec(ctx, `RENAME TABLE deployment_kept_cell_aside TO deployment_kept`); err != nil {
+			t.Fatal(err)
+		}
+		if repairErr != nil {
+			t.Fatalf("Repair = %v; want nil on a schema without the kept table", repairErr)
+		}
+		line := logs.String()
+		if got := strings.Count(line, KeptTableMissingEvent); got != 1 {
+			t.Fatalf("%d %s lines, want 1:\n%s", got, KeptTableMissingEvent, line)
+		}
+		for _, want := range []string{"level=WARN", "kept_table=deployment_kept", "table=deployments", "org_id=" + keptOrg, "writer=cell"} {
+			if !strings.Contains(line, want) {
+				t.Fatalf("WARN line lacks %s:\n%s", want, line)
+			}
+		}
+		var data metricdata.ResourceMetrics
+		if err := reader.Collect(ctx, &data); err != nil {
+			t.Fatal(err)
+		}
+		if sum := data.ScopeMetrics[0].Metrics[0].Data.(metricdata.Sum[int64]); len(sum.DataPoints) != 1 || sum.DataPoints[0].Value != 1 {
+			t.Fatalf("counter = %+v, want 1", sum.DataPoints)
+		}
+		t.Logf("CELL6014 D1 %s", strings.TrimSpace(line))
+	})
+
+	// D2: org_id = ? holds on the FINAL source and on the kept group. Another org's stated group never fills this org's
+	// NULL lead, and a repair of this org never writes a row of another org.
+	t.Run("the repair reads and writes only its own org", func(t *testing.T) {
+		const otherOrg = "org-kept-other"
+		writeOther := func(version time.Time, firstReview any, reviews uint32) {
+			if err := conn.Exec(ctx, `INSERT INTO git_pull_requests (org_id, repo_id, number, title, state, created_at, first_review_at, reviews_count, last_synced)
+VALUES (?, ?, 8, 'cell', 'open', ?, ?, ?, ?)`, otherOrg, keptRepo, keptAt(-time.Hour), firstReview, reviews, version); err != nil {
+				t.Fatal(err)
+			}
+		}
+		otherState := func() (firstReview string, rows uint64) {
+			if err := conn.QueryRow(ctx, `SELECT ifNull(toString(first_review_at), 'NULL') FROM git_pull_requests FINAL WHERE org_id = ? AND repo_id = ? AND number = 8`,
+				otherOrg, keptRepo).Scan(&firstReview); err != nil {
+				t.Fatal(err)
+			}
+			if err := conn.QueryRow(ctx, `SELECT count() FROM git_pull_requests WHERE org_id = ? AND repo_id = ? AND number = 8`,
+				otherOrg, keptRepo).Scan(&rows); err != nil {
+				t.Fatal(err)
+			}
+			return firstReview, rows
+		}
+		writeOther(keptAt(0), keptAt(-30*time.Minute), 2)
+		writeOther(keptAt(time.Hour), nil, 0)
+		writeReview(ctx, t, conn, 8, keptAt(0), nil, 0)
+
+		repairKey(ctx, t, conn, 8)
+		if final, kept := readReview(ctx, t, conn, 8); final.firstReview != "NULL" || final.rows != 1 || kept.firstReview != "NULL" {
+			t.Fatalf("FINAL %+v, kept %+v; want this org's NULL lead kept: no other org's group may fill it", final, kept)
+		}
+		if firstReview, rows := otherState(); firstReview != "NULL" || rows != 2 {
+			t.Fatalf("other org = (%s, %d rows) after this org's repair; want (NULL, 2): no row of another org", firstReview, rows)
+		}
+		if err := PullRequestKept.Repair(ctx, conn, "cell", otherOrg, [][]any{{keptRepo, uint32(8)}}, nil); err != nil {
+			t.Fatal(err)
+		}
+		if firstReview, rows := otherState(); firstReview != "2026-07-23 11:30:00.000" || rows != 3 {
+			t.Fatalf("other org = (%s, %d rows) after its own repair; want (11:30, 3)", firstReview, rows)
+		}
+		if final, _ := readReview(ctx, t, conn, 8); final.firstReview != "NULL" || final.rows != 1 {
+			t.Fatalf("FINAL %+v after the other org's repair; want this org untouched", final)
+		}
+	})
+
+	// D2: the repair insert is positional (SELECT * EXCEPT .. REPLACE into the base table). A column added in the middle of
+	// the base table must land in its own place: the repair row equals the row it repairs in every column but the group
+	// columns and the version. This cell alters both base tables, so it runs last.
+	for _, cell := range []struct {
+		kept         Kept
+		key, version string
+		insert       string
+		stated, null []any
+		lead         string
+	}{
+		{
+			kept: PullRequestKept, key: "number = 9",
+			insert: `INSERT INTO git_pull_requests (org_id, repo_id, kept_mid_cell, number, title, state, created_at, merged_at, first_review_at, changes_requested_count, reviews_count, last_synced) VALUES (?, ?, ?, 9, ?, 'open', ?, ?, ?, ?, ?, ?)`,
+			stated: []any{"probe-v1", "v1", keptAt(-time.Hour), keptAt(-10 * time.Minute), keptAt(-30 * time.Minute), uint32(1), uint32(2), keptAt(0)},
+			null:   []any{"probe-v2", "v2", keptAt(-time.Hour), nil, nil, uint32(0), uint32(0), keptAt(time.Hour)},
+			lead:   "merged_at",
+		},
+		{
+			kept: DeploymentKept, key: "deployment_id = 'd-mid'",
+			insert: `INSERT INTO deployments (org_id, repo_id, kept_mid_cell, deployment_id, status, merged_at, pull_request_number, pull_request_tier, last_synced) VALUES (?, ?, ?, 'd-mid', ?, ?, ?, ?, ?)`,
+			stated: []any{"probe-v1", "v1", keptAt(-10 * time.Minute), uint32(41), "direct", keptAt(0)},
+			null:   []any{"probe-v2", "v2", nil, nil, "", keptAt(time.Hour)},
+			lead:   "merged_at",
+		},
+	} {
+		t.Run("a column added in the middle of "+cell.kept.Base+" keeps its place in the repair row", func(t *testing.T) {
+			for _, statement := range []string{
+				"SYSTEM STOP MERGES " + cell.kept.Base,
+				"ALTER TABLE " + cell.kept.Base + " ADD COLUMN kept_mid_cell String DEFAULT '' AFTER repo_id",
+			} {
+				if err := conn.Exec(ctx, statement); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, row := range [][]any{cell.stated, cell.null} {
+				if err := conn.Exec(ctx, cell.insert, append([]any{keptOrg, keptRepo}, row...)...); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var key []any
+			if cell.kept.Base == "deployments" {
+				key = []any{keptRepo, "d-mid"}
+			} else {
+				key = []any{keptRepo, uint32(9)}
+			}
+			if err := cell.kept.Repair(ctx, conn, "cell", keptOrg, [][]any{key}, nil); err != nil {
+				t.Fatal(err)
+			}
+			var except []string
+			for _, group := range cell.kept.Groups {
+				except = append(except, group.Columns...)
+			}
+			except = append(except, cell.kept.Version)
+			where := fmt.Sprintf("org_id = '%s' AND repo_id = '%s' AND %s", keptOrg, keptRepo, cell.key)
+			differ := func(left, right string) uint64 {
+				var n uint64
+				query := fmt.Sprintf(`SELECT count() FROM ((SELECT * EXCEPT (%[1]s) FROM %[2]s WHERE %[3]s AND toString(%[4]s) = ?)
+EXCEPT (SELECT * EXCEPT (%[1]s) FROM %[2]s WHERE %[3]s AND toString(%[4]s) = ?))`,
+					strings.Join(except, ", "), cell.kept.Base, where, cell.kept.Version)
+				if err := conn.QueryRow(ctx, query, left, right).Scan(&n); err != nil {
+					t.Fatal(err)
+				}
+				return n
+			}
+			if differ("2026-07-23 12:00:00.000", "2026-07-23 13:00:00.000") != 1 {
+				t.Fatal("the compare finds no difference between v1 and v2 (kept_mid_cell differs): the cell is blind")
+			}
+			if n := differ("2026-07-23 13:00:00.000", "2026-07-23 13:00:00.001"); n != 0 {
+				t.Fatalf("the repair row differs from the row it repairs outside the group columns (%d rows): a column moved", n)
+			}
+			var lead, mid, version string
+			var rows uint64
+			if err := conn.QueryRow(ctx, fmt.Sprintf(`SELECT ifNull(toString(%s), 'NULL'), kept_mid_cell, toString(%s) FROM %s FINAL WHERE %s`,
+				cell.lead, cell.kept.Version, cell.kept.Base, where)).Scan(&lead, &mid, &version); err != nil {
+				t.Fatal(err)
+			}
+			if err := conn.QueryRow(ctx, fmt.Sprintf(`SELECT count() FROM %s WHERE %s`, cell.kept.Base, where)).Scan(&rows); err != nil {
+				t.Fatal(err)
+			}
+			if lead != "2026-07-23 11:50:00.000" || mid != "probe-v2" || version != "2026-07-23 13:00:00.001" || rows != 3 {
+				t.Fatalf("FINAL (%s, %s, %s) in %d rows; want (11:50, probe-v2, 13:00:00.001) in 3", lead, mid, version, rows)
+			}
+		})
+	}
 }

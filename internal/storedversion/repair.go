@@ -63,15 +63,28 @@ const (
 	RepairUnconvergedMetric = "dev_health_storedversion_repair_unconverged_total"
 )
 
-var repairUnconverged = func() metric.Int64Counter {
+// KeptTableMissingEvent and KeptTableMissingMetric name a write whose repair found no kept table (a schema without
+// migration 160): the write succeeds and repairs nothing, once per write, loudly.
+const (
+	KeptTableMissingEvent  = "storedversion.kept_table_missing"
+	KeptTableMissingMetric = "dev_health_storedversion_kept_table_missing_total"
+)
+
+func counter(name, description string) metric.Int64Counter {
 	counter, err := otel.Meter("github.com/full-chaos/dev-health-ops/internal/storedversion").Int64Counter(
-		RepairUnconvergedMetric,
-		metric.WithDescription("Keys whose kept group was still not repaired after the bounded repair rounds of one write."))
+		name, metric.WithDescription(description))
 	if err != nil {
-		counter, _ = otel.GetMeterProvider().Meter("noop").Int64Counter(RepairUnconvergedMetric)
+		counter, _ = otel.GetMeterProvider().Meter("noop").Int64Counter(name)
 	}
 	return counter
-}()
+}
+
+var (
+	repairUnconverged = counter(RepairUnconvergedMetric,
+		"Keys whose kept group was still not repaired after the bounded repair rounds of one write.")
+	keptTableMissing = counter(KeptTableMissingMetric,
+		"Writes whose kept-group repair found no kept table (a schema without migration 160) and repaired nothing.")
+)
 
 // Repairer is the ClickHouse connection the repair needs: the reads and one INSERT..SELECT per round.
 type Repairer interface {
@@ -100,7 +113,8 @@ const unknownTable = 60
 //
 // The key filter is one IN list per key column, so a key outside the batch that shares each column value may be
 // repaired too; a repair is correct for any key. A schema without the kept table (ClickHouse error 60 on the first
-// read) repairs nothing: that is the behaviour before migration 160.
+// read) repairs nothing, the behaviour before migration 160, and each such write logs one WARN that names the kept table
+// and the org and adds 1 to the counter.
 func (k Kept) Repair(
 	ctx context.Context, conn Repairer, writer, orgID string, keys [][]any, guard func(context.Context) error,
 ) error {
@@ -128,6 +142,11 @@ func (k Kept) Repair(
 		if err != nil {
 			var exception *clickhouse.Exception
 			if round == 0 && errors.As(err, &exception) && exception.Code == unknownTable {
+				slog.Default().LogAttrs(ctx, slog.LevelWarn, KeptTableMissingEvent,
+					slog.String("writer", writer), slog.String("table", k.Base), slog.String("kept_table", k.Table),
+					slog.String("org_id", orgID), slog.Int("keys", len(keys)))
+				keptTableMissing.Add(ctx, 1, metric.WithAttributes(
+					attribute.String("writer", writer), attribute.String("table", k.Base)))
 				return nil
 			}
 			return fmt.Errorf("read %s kept groups: %w", k.Base, err)

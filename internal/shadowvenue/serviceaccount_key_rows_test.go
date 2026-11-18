@@ -13,8 +13,9 @@ var serviceAccountKeyVenueRows = []string{
 }
 
 // serviceAccountLifecycleVenueRows are the service account lifecycle shadow rows (admin.users, mounted WrapPlatform):
-// plain rows in org A that write nothing. Each names a missing organization or service account, which auth-service
-// answers 404 with no write (TestProvisioningServiceAccountsThroughConfigure counts the rows).
+// plain rows in org A with no lifecycle write. Each names a missing organization or service account, which auth-service
+// answers 404 with no account, lifecycle audit or outbox row (TestProvisioningServiceAccountsThroughConfigure counts
+// them). The high-risk authorization decision is audited by design, as on the key rows.
 var serviceAccountLifecycleVenueRows = []string{
 	"POST /api/v1/admin/service-accounts",
 	"POST /api/v1/admin/service-accounts/{service_account_id}/disable",

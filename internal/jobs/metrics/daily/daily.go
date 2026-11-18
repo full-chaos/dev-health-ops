@@ -2102,6 +2102,21 @@ func (handler *FinalizeHandler) Work(ctx context.Context, execution *jobruntime.
 			"organization_id", claim.Run.OrganizationID,
 			"target_day", claim.Run.TargetDay.Format("2006-01-02"),
 		)
+		// The last attempt has no retry to release for: end the run as the
+		// failed-compute arm above does, or it stays 'running' with no job.
+		if terminalAttempt(execution) {
+			if failErr := failFinalizePermanently(handler.store, ctx, *claim); failErr != nil {
+				logger.Error("daily finalize terminal write failed",
+					"error", failErr,
+					"run_id", runID,
+					"organization_id", claim.Run.OrganizationID,
+					"target_day", claim.Run.TargetDay.Format("2006-01-02"),
+				)
+			} else {
+				handler.drainTouchedDaysAfterEnd(ctx, claim.Run)
+			}
+			return jobruntime.Retryable(err)
+		}
 		if releaseErr := releaseFinalize(handler.store, ctx, *claim); releaseErr != nil {
 			logger.Error("daily finalize release failed",
 				"error", releaseErr,
@@ -2208,10 +2223,10 @@ func releasePartition(store Store, ctx context.Context, claim PartitionClaim) {
 	_ = store.ReleasePartition(releaseCtx, claim)
 }
 
-// terminalAttempt reports whether River will not run this partition job again:
-// the same attempt pair the adapter acts on (finalize's own final-attempt arm).
-// An unset MaxAttempts is never the last attempt.
-func terminalAttempt(execution *jobruntime.Execution[jobruntime.DailyMetricsPartitionArgs]) bool {
+// terminalAttempt reports whether River will not run this job again: the same
+// attempt pair the adapter acts on (finalize's own final-attempt arm). An unset
+// MaxAttempts is never the last attempt.
+func terminalAttempt[Args jobruntime.ContractArgs](execution *jobruntime.Execution[Args]) bool {
 	return execution.Definition.MaxAttempts > 0 && execution.Attempt >= execution.Definition.MaxAttempts
 }
 

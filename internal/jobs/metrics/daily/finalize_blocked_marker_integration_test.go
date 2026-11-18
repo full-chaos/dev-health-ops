@@ -188,3 +188,116 @@ func TestAFailedFinalizeReachesTheBlockedMarker(t *testing.T) {
 			"changed retry eligibility, which it must never do")
 	}
 }
+
+// completionWriteDownStore is a real store whose completion write always fails.
+type completionWriteDownStore struct {
+	*PostgresStore
+}
+
+func (*completionWriteDownStore) CompleteFinalize(context.Context, FinalizeClaim) error {
+	return ErrUnavailable
+}
+
+// A finalize whose completion write fails on every attempt, the last one too,
+// must end the run where the blocked marker sees it. After a retried attempt the
+// run stays claimable and unmarked.
+func TestACompletionWriteLostOnEveryAttemptReachesTheBlockedMarker(t *testing.T) {
+	defer restoreRecognisedFinalizeFamilies(pythonRecognisedFinalizeFamilies)
+	pythonRecognisedFinalizeFamilies = []string{}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createDailyTables(t, ctx, pool)
+
+	const (
+		runID       = "00000000-0000-4000-8000-000000000061"
+		partitionID = "00000000-0000-4000-8000-000000000062"
+		attempts    = 4
+	)
+	now := time.Now().UTC()
+	if _, err := pool.Exec(ctx, `INSERT INTO daily_metrics_runs
+        (id,org_id,target_day,generation,status,finalization_status,created_at,updated_at)
+        VALUES ($1,$2,'2026-11-01','daily-v1','running','pending',$3,$3)`,
+		runID, testOrgID, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO daily_metrics_partitions
+        (id,run_id,ordinal,repo_ids,status,attempt_count,created_at,updated_at)
+        VALUES ($1,$2,0,'[]'::jsonb,'succeeded',1,$3,$3)`,
+		partitionID, runID, now); err != nil {
+		t.Fatal(err)
+	}
+	base, err := NewPostgresStore(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, err := NewFinalizeHandler(&completionWriteDownStore{PostgresStore: base})
+	if err != nil {
+		t.Fatal(err)
+	}
+	readRun := func() (string, string) {
+		t.Helper()
+		var status, finalization string
+		if err := pool.QueryRow(ctx, `SELECT status, finalization_status FROM daily_metrics_runs WHERE id = $1`,
+			runID).Scan(&status, &finalization); err != nil {
+			t.Fatal(err)
+		}
+		return status, finalization
+	}
+	reconcile := func() BlockedReconcileOutcome {
+		t.Helper()
+		outcome, err := base.ReconcileBlockedRuns(ctx, testOrgID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return outcome
+	}
+
+	for attempt := 1; attempt <= attempts; attempt++ {
+		execution := finalizeExecutionFor(runID)
+		execution.Attempt = attempt
+		execution.Definition.MaxAttempts = attempts
+		if err := handler.Work(ctx, execution); err == nil {
+			t.Fatalf("attempt %d: Work succeeded with the completion write down", attempt)
+		}
+		if attempt != 1 {
+			continue
+		}
+		status, finalization := readRun()
+		outcome := reconcile()
+		t.Logf("after attempt 1 of %d: status=%s finalization=%s blocked=%d", attempts, status, finalization, outcome.Blocked)
+		if status != "running" || finalization != "failed" || outcome.Blocked != 0 {
+			t.Fatalf("after a retried attempt: status=%s finalization=%s blocked=%d, want running/failed/0",
+				status, finalization, outcome.Blocked)
+		}
+	}
+
+	status, finalization := readRun()
+	outcome := reconcile()
+	t.Logf("after attempt %d of %d: status=%s finalization=%s marked=%d blocked=%d",
+		attempts, attempts, status, finalization, outcome.Marked, outcome.Blocked)
+	if status != "failed" || finalization != "failed" {
+		t.Fatalf("after the last attempt: status=%s finalization=%s, want failed/failed -- "+
+			"the run has no job left and must not stay running", status, finalization)
+	}
+	if outcome.Marked != 1 || outcome.Blocked != 1 {
+		t.Fatalf("reconcile after the last attempt: marked=%d blocked=%d, want 1/1", outcome.Marked, outcome.Blocked)
+	}
+	var reason *string
+	if err := pool.QueryRow(ctx, `SELECT blocked_reason FROM daily_metrics_runs WHERE id = $1`, runID).Scan(&reason); err != nil {
+		t.Fatal(err)
+	}
+	if reason == nil || *reason != BlockedReasonFinalizeFailed {
+		t.Fatalf("blocked_reason = %v, want %q", reason, BlockedReasonFinalizeFailed)
+	}
+}

@@ -83,8 +83,9 @@ type pagerDutyServiceRow struct {
 // pagerDutyServiceRepositoryMappingRow is the typed counterpart of
 // ServiceRepositoryMapping. Its SourceEntityType is the mapping source enum
 // value (admin_configuration, pagerduty_service_metadata,
-// compass_service_catalog, or bounded_service_repository_heuristic), not the
-// service source type. This preserves the Python producer's provenance
+// compass_service_catalog), not the
+// service source type. Legacy rows of source bounded_service_repository_heuristic
+// may still be stored and are read by readers; no producer writes them. This preserves the Python producer's provenance
 // ownership and lets the sink reconcile each source independently.
 type pagerDutyServiceRepositoryMappingRow struct {
 	OrgID                  string     `json:"org_id"`
@@ -403,10 +404,9 @@ func pagerDutyCanonicalOperationalID(orgID, provider, instance, family, external
 type pagerDutyServiceMappingSource string
 
 const (
-	pagerDutyMappingAdmin     pagerDutyServiceMappingSource = "admin_configuration"
-	pagerDutyMappingMetadata  pagerDutyServiceMappingSource = "pagerduty_service_metadata"
-	pagerDutyMappingCompass   pagerDutyServiceMappingSource = "compass_service_catalog"
-	pagerDutyMappingHeuristic pagerDutyServiceMappingSource = "bounded_service_repository_heuristic"
+	pagerDutyMappingAdmin    pagerDutyServiceMappingSource = "admin_configuration"
+	pagerDutyMappingMetadata pagerDutyServiceMappingSource = "pagerduty_service_metadata"
+	pagerDutyMappingCompass  pagerDutyServiceMappingSource = "compass_service_catalog"
 )
 
 func (source pagerDutyServiceMappingSource) confidence() float64 {
@@ -423,9 +423,6 @@ func (source pagerDutyServiceMappingSource) confidence() float64 {
 }
 
 func (source pagerDutyServiceMappingSource) mappingKind() string {
-	if source == pagerDutyMappingHeuristic {
-		return string(source)
-	}
 	return string(source) + "_exact"
 }
 

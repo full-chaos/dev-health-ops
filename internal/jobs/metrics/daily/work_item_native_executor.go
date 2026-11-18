@@ -145,7 +145,8 @@ type workItemTripletViews struct {
 }
 
 // computeWorkItemTriplet reads the work scopes of the partition's repositories
-// and computes the work_item rows of the day, once per view. It writes
+// and computes the work_item rows of the day, once per view, from the items
+// whose current copy is the copy the day read (keepCurrentCopiesOfDay). It writes
 // nothing. The family calls it for one partition; the run-level retraction of
 // stale team keys calls it for every repository of the run
 // (RunStaleKeyRetractor), so both derive the keys of the day from one compute.
@@ -154,6 +155,9 @@ func computeWorkItemTriplet(
 ) (workItemScopeRead, workItemTripletViews, error) {
 	read, err := loadWorkItemScopeRead(ctx, conn, "work_item", run, partition, scope, true, true, true)
 	if err != nil {
+		return workItemScopeRead{}, workItemTripletViews{}, err
+	}
+	if read, err = keepCurrentCopiesOfDay(ctx, conn, run.OrganizationID, read); err != nil {
 		return workItemScopeRead{}, workItemTripletViews{}, err
 	}
 	var views workItemTripletViews

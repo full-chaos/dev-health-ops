@@ -30,9 +30,9 @@ type conn interface {
 // The value column, the grouping columns and the supported scopes are all part
 // of the query's meaning, so they are reproduced rather than re-derived.
 var metricDefinitions = map[string]MetricDefinition{
-	"success_rate":              pipelineMetric(completedRunRate("success_count")),
-	"failure_rate":              pipelineMetric(completedRunRate("failure_count")),
-	"rerun_rate":                pooledPipelineRate("rerun_rate * pipelines_count"),
+	"success_rate":              pooledPipelineRate("success_count", completedRuns),
+	"failure_rate":              pooledPipelineRate("failure_count", completedRuns),
+	"rerun_rate":                pooledPipelineRate("rerun_rate * pipelines_count", "pipelines_count"),
 	"median_duration_seconds":   pipelineMetric("median_duration_seconds"),
 	"p95_duration_seconds":      pipelineMetric("p95_duration_seconds"),
 	"avg_queue_seconds":         pipelineMetric("avg_queue_seconds"),
@@ -91,21 +91,20 @@ func pipelineMetric(column string) MetricDefinition {
 	}
 }
 
-// pooledPipelineRate is a ratio of stored runs: the group's numerator over its pipelines_count, so a repo-day weighs by
+// pooledPipelineRate is a ratio of stored runs: the group's numerator over its denominator, so a repo-day weighs by
 // its runs. A stored rate times pipelines_count is its count (rerun_rate is reruns / pipelines_count, unrounded). A
-// repo-day with pipelines_count 0 adds 0 to both sums.
-func pooledPipelineRate(numerator string) MetricDefinition {
+// repo-day whose denominator is 0 adds 0 to both sums.
+func pooledPipelineRate(numerator, denominator string) MetricDefinition {
 	definition := pipelineMetric("")
-	definition.Numerator, definition.Denominator = numerator, "pipelines_count"
+	definition.Numerator, definition.Denominator = numerator, denominator
 	return definition
 }
 
-// completedRunRate is a rate over the completed runs (succeeded or failed) of a stored row, NULL on a row with no
-// completed run: the series drops NULL values, so such a day is never a sample of 0. The stored success_rate and
-// failure_rate columns hold 0 on that day and are not read.
-func completedRunRate(count string) string {
-	return "if(success_count + failure_count = 0, NULL, " + count + " / (success_count + failure_count))"
-}
+// completedRuns are the runs that succeeded or failed: the denominator of the success and failure rates. A repo-day
+// with none (cancelled runs only, or a retraction row of zeros) is in neither sum, so a day with none in the group has
+// no point, never a sample of 0. The stored success_rate and failure_rate columns hold 0 on that day and are not read;
+// the counts are exact UInt32 columns.
+const completedRuns = "success_count + failure_count"
 
 // passedCaseRate is a stored row's passed cases over its passed and failed cases, NULL on a row with neither: the
 // series drops NULL values, so a day where every case was skipped is never a sample of 0. The stored pass_rate column

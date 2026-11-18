@@ -485,7 +485,7 @@ func (handler GitHubTestsRouteHandler) Collect(
 			continue
 		}
 		artPage, pageErr := providerfoundation.CollectGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{
-			Path: root + "/actions/runs/" + url.PathEscape(pipeline.RunID) + "/artifacts", Route: githubRunArtifactsRoute, Query: url.Values{"per_page": {"100"}}, DataKey: "artifacts", MaxPages: 1,
+			Path: root + "/actions/runs/" + url.PathEscape(pipeline.RunID) + "/artifacts", Route: githubRunArtifactsRoute, Query: url.Values{"per_page": {strconv.Itoa(githubTestsArtifactsPerPage)}}, DataKey: "artifacts", MaxPages: 1,
 		})
 		if pageErr != nil {
 			return CompleteRouteBatch{}, pageErr
@@ -535,7 +535,15 @@ func (handler GitHubTestsRouteHandler) Collect(
 				},
 			)
 		}
-		if artPage.PageBudgetExhausted || len(artifacts) > maxArtifacts {
+		if artPage.PageBudgetExhausted {
+			return CompleteRouteBatch{}, ErrPaginationCapExceeded
+		}
+		artifacts, _, artifactsCapped, admitRequests, admitErr := githubTestsAdmitReportArtifacts(ctx, client, root, artifacts, maxArtifacts)
+		requests += admitRequests
+		if admitErr != nil {
+			return CompleteRouteBatch{}, admitErr
+		}
+		if artifactsCapped {
 			return CompleteRouteBatch{}, ErrPaginationCapExceeded
 		}
 		for _, artifact := range artifacts {

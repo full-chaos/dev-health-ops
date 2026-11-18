@@ -37,12 +37,12 @@ func TestTheBackstopGivesALinkedItemItsDonorsRowOfTheLinkedItemsDay(t *testing.T
 	handover := day1.AddDate(0, 0, 2)
 
 	for _, item := range []struct {
-		id       string
+		id, kind string
 		repo     uuid.UUID
 		complete time.Time
-	}{{"D", repoD, day1.Add(12 * time.Hour)}, {"P", uuid.Nil, day2.Add(12 * time.Hour)}} {
-		if err := conn.Exec(ctx, `INSERT INTO work_items (repo_id, work_item_id, provider, project_id, status, created_at, completed_at, org_id, last_synced)
-			VALUES (?, ?, 'github', '', 'done', ?, ?, ?, ?)`, item.repo, item.id, day1.AddDate(0, 0, -1), item.complete, orgID, now); err != nil {
+	}{{"D", "issue", repoD, day1.Add(12 * time.Hour)}, {"P", "pr", uuid.Nil, day2.Add(12 * time.Hour)}} {
+		if err := conn.Exec(ctx, `INSERT INTO work_items (repo_id, work_item_id, provider, type, project_id, status, created_at, completed_at, org_id, last_synced)
+			VALUES (?, ?, 'github', ?, '', 'done', ?, ?, ?, ?)`, item.repo, item.id, item.kind, day1.AddDate(0, 0, -1), item.complete, orgID, now); err != nil {
 			t.Fatalf("seed %s: %v", item.id, err)
 		}
 	}

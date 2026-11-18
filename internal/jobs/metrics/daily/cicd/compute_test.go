@@ -33,8 +33,10 @@ func dtPtr(hour, minute, dayOfMonth int) *time.Time {
 // CHAOS-5312/CHAOS-3092: cicd's Python compute is gone)
 // generate_daily_cicd_python_golden.py generator used to produce
 // tests/fixtures/daily_cicd_python_golden.json verbatim -- keep this in sync
-// with that frozen golden; this file's exhaustive decode against it is the
-// only thing left to catch a drift between them.
+// with that frozen golden for repo A; this file's exhaustive decode against it
+// is the only thing left to catch a drift between them. The golden's repo B
+// row is a still-running run, which the Python rule counted on its start day
+// and the finish-day rule counts on no day: the decode compares repo A only.
 func fixturePipelineRuns() []PipelineRunRow {
 	return []PipelineRunRow{
 		{
@@ -47,7 +49,7 @@ func fixturePipelineRuns() []PipelineRunRow {
 		},
 		{
 			RepoID: repoA, RunID: "a-out-of-window", Status: "success",
-			QueuedAt: dtPtr(23, 0, 23), StartedAt: dt(23, 30, 23), FinishedAt: dtPtr(0, 30, 24),
+			QueuedAt: dtPtr(23, 0, 24), StartedAt: dt(23, 30, 24), FinishedAt: dtPtr(0, 30, 25),
 		},
 		{
 			RepoID: repoA, RunID: "a-no-queue", Status: "succeeded",
@@ -70,8 +72,8 @@ func fixturePipelineRuns() []PipelineRunRow {
 // file.
 func TestComputeMatchesFrozenPythonGolden(t *testing.T) {
 	records := ComputeCICDMetricsDaily(day, fixturePipelineRuns(), computedAt)
-	if len(records) != 2 {
-		t.Fatalf("len(records) = %d, want 2 (repo C never appears -- zero rows means no record)", len(records))
+	if len(records) != 1 {
+		t.Fatalf("len(records) = %d, want 1 (a still-running run counts on no day; zero rows means no record)", len(records))
 	}
 
 	repoARecord := records[0]
@@ -93,16 +95,32 @@ func TestComputeMatchesFrozenPythonGolden(t *testing.T) {
 	if repoARecord.AvgQueueMinutes == nil || *repoARecord.AvgQueueMinutes != (20.0/3.0) {
 		t.Errorf("repo A AvgQueueMinutes = %v, want %v", repoARecord.AvgQueueMinutes, 20.0/3.0)
 	}
+}
 
-	repoBRecord := records[1]
-	if repoBRecord.RepoID != repoB {
-		t.Fatalf("records[1].RepoID = %s, want repo B", repoBRecord.RepoID)
+// A run counts on the UTC day it finishes: a run that crosses midnight counts
+// once, on the day it ends, and its duration still spans start to finish.
+func TestComputeCountsRunOnFinishDay(t *testing.T) {
+	runs := []PipelineRunRow{
+		{RepoID: repoA, RunID: "a", Status: "success", StartedAt: dt(10, 0, 24), FinishedAt: dtPtr(10, 30, 24)},
+		{RepoID: repoA, RunID: "b", Status: "success", QueuedAt: dtPtr(23, 40, 24), StartedAt: dt(23, 50, 24), FinishedAt: dtPtr(0, 20, 25)},
 	}
-	if repoBRecord.PipelinesCount != 1 || repoBRecord.SuccessRate != 0.0 {
-		t.Errorf("repo B PipelinesCount=%d SuccessRate=%v, want 1/0.0", repoBRecord.PipelinesCount, repoBRecord.SuccessRate)
+	onStart := ComputeCICDMetricsDaily(day, runs, computedAt)
+	if len(onStart) != 1 || onStart[0].PipelinesCount != 1 {
+		t.Fatalf("day 24: %+v, want one record counting run a only", onStart)
 	}
-	if repoBRecord.AvgDurationMinutes != nil || repoBRecord.P90DurationMinutes != nil || repoBRecord.AvgQueueMinutes != nil {
-		t.Errorf("repo B duration/queue fields must all be nil (no finished_at/queued_at ever set)")
+	onFinish := ComputeCICDMetricsDaily(day.AddDate(0, 0, 1), runs, computedAt)
+	if len(onFinish) != 1 || onFinish[0].PipelinesCount != 1 {
+		t.Fatalf("day 25: %+v, want one record counting run b", onFinish)
+	}
+	if got := onFinish[0].AvgDurationMinutes; got == nil || *got != 30 {
+		t.Errorf("run b duration = %v, want 30", got)
+	}
+	if got := onFinish[0].AvgQueueMinutes; got == nil || *got != 10 {
+		t.Errorf("run b queue = %v, want 10", got)
+	}
+	running := []PipelineRunRow{{RepoID: repoB, RunID: "r", Status: "running", StartedAt: dt(15, 0, 24)}}
+	if got := ComputeCICDMetricsDaily(day, running, computedAt); len(got) != 0 {
+		t.Errorf("a still-running run counted: %+v", got)
 	}
 }
 
@@ -188,6 +206,13 @@ func TestComputeMatchesFrozenGoldenExhaustively(t *testing.T) {
 		golden.Records[i].ComputedAt = parsed.UTC().Format(time.RFC3339)
 	}
 
+	repoAOnly := golden.Records[:0]
+	for _, record := range golden.Records {
+		if record.RepoID == repoA.String() {
+			repoAOnly = append(repoAOnly, record)
+		}
+	}
+	golden.Records = repoAOnly
 	sortGoldenRecords(golden.Records)
 	sortGoldenRecords(live)
 

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
@@ -22,11 +23,11 @@ import (
 //  2. Cross-tenant guard: two orgs, each with its own repo, run in the same
 //     process. Org A's org-scoped read must see ONLY org A's row (never org
 //     B's, and never a stray "" row), and vice versa.
-//  3. Window-filter proof: a pipeline run that started inside the target day
-//     but finished the NEXT day must be excluded (the DOUBLE WINDOW FILTER
-//     documented on the cicd package) -- exercised via repo B, which has one
-//     in-window run and one cross-midnight run; its pipelines_count must be
-//     1, not 2.
+//  3. Window-filter proof: a pipeline run counts on the UTC day it finishes,
+//     so a run that started inside the target day but finished the NEXT day is
+//     not counted on the target day -- exercised via repo B, which has one
+//     in-window run and one cross-midnight run; its pipelines_count on the
+//     target day must be 1, not 2.
 func TestCICDComputeFamilyWritesRealOrgIDAndIsolatesTenants(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -61,7 +62,7 @@ func TestCICDComputeFamilyWritesRealOrgIDAndIsolatesTenants(t *testing.T) {
     repo_id UUID, day Date, pipelines_count UInt32, success_rate Float64,
     avg_duration_minutes Nullable(Float64), p90_duration_minutes Nullable(Float64),
     avg_queue_minutes Nullable(Float64), computed_at DateTime, org_id String
-) ENGINE = MergeTree PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, day)`,
+) ENGINE = ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, day)`,
 	} {
 		if err := conn.Exec(ctx, statement); err != nil {
 			t.Fatal(err)
@@ -118,15 +119,215 @@ INSERT INTO ci_pipeline_runs (repo_id, run_id, status, queued_at, started_at, fi
 	assertOrgScopedCount(ctx, t, conn, "cicd_metrics_daily", "", 0)
 
 	// Point 3: window-filter proof -- repo B's pipelines_count must be 1
-	// (the cross-midnight run's finished_at falls outside [start,end) for
-	// 2026-08-24, so the loader never fetches it for this day).
+	// (the cross-midnight run finishes on 2026-08-25, so it is not counted
+	// on 2026-08-24).
 	row := conn.QueryRow(ctx, "SELECT pipelines_count FROM cicd_metrics_daily WHERE org_id = ? AND repo_id = ?", orgB, repoB)
 	var pipelinesCount uint32
 	if err := row.Scan(&pipelinesCount); err != nil {
 		t.Fatalf("query row: %v", err)
 	}
 	if pipelinesCount != 1 {
-		t.Fatalf("repo B pipelines_count = %d, want 1 (cross-midnight run must be excluded)", pipelinesCount)
+		t.Fatalf("repo B pipelines_count = %d, want 1 (the cross-midnight run counts on the day it finishes)", pipelinesCount)
+	}
+}
+
+// TestCICDComputeFamilyCountsRunOnFinishDay is the midnight-crossing cell: a
+// run that starts on day D and finishes on D+1 counts on D+1, never on no day.
+func TestCICDComputeFamilyCountsRunOnFinishDay(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	clickhouseInstance, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clickhouseInstance.Close(context.Background())
+	conn, err := clickhousestore.Open(ctx, clickhousestore.DefaultConfig(clickhouseInstance.URI))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	for _, statement := range []string{
+		`CREATE TABLE ci_pipeline_runs (
+    repo_id UUID, run_id String, status Nullable(String),
+    queued_at Nullable(DateTime64(3, 'UTC')), started_at DateTime64(3, 'UTC'),
+    finished_at Nullable(DateTime64(3, 'UTC')), last_synced DateTime64(3, 'UTC'),
+    org_id String
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (repo_id, run_id)`,
+		`CREATE TABLE cicd_metrics_daily (
+    repo_id UUID, day Date, pipelines_count UInt32, success_rate Float64,
+    avg_duration_minutes Nullable(Float64), p90_duration_minutes Nullable(Float64),
+    avg_queue_minutes Nullable(Float64), computed_at DateTime, org_id String
+) ENGINE = ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, day)`,
+	} {
+		if err := conn.Exec(ctx, statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	const org = "00000000-0000-4000-8000-0000000000d0"
+	const repo = "00000000-0000-4000-8000-0000000000d1"
+	if err := conn.Exec(ctx, `
+INSERT INTO ci_pipeline_runs (repo_id, run_id, status, queued_at, started_at, finished_at, last_synced, org_id) VALUES
+(toUUID('`+repo+`'), 'run-a', 'success', NULL,
+ toDateTime64('2026-01-02 10:00:00', 3, 'UTC'), toDateTime64('2026-01-02 10:30:00', 3, 'UTC'), now64(3), '`+org+`'),
+(toUUID('`+repo+`'), 'run-b', 'success', NULL,
+ toDateTime64('2026-01-02 23:50:00', 3, 'UTC'), toDateTime64('2026-01-03 00:20:00', 3, 'UTC'), now64(3), '`+org+`')`); err != nil {
+		t.Fatal(err)
+	}
+
+	executor, err := NewCICDExecutor(conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index, day := range []time.Time{
+		time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC),
+		time.Date(2026, 1, 3, 0, 0, 0, 0, time.UTC),
+	} {
+		run := Run{OrganizationID: org, TargetDay: day}
+		partition := Partition{
+			ID: "00000000-0000-4000-8000-0000000000e" + string(rune('1'+index)), RunID: "00000000-0000-4000-8000-0000000000e0",
+			RepoIDs: []RepositoryID{RepositoryID(repo)},
+		}
+		if _, err := executor.ComputeFamily(ctx, run, partition); err != nil {
+			t.Fatalf("day %s: %v", day.Format(time.DateOnly), err)
+		}
+	}
+
+	for day, want := range map[string]uint64{"2026-01-02": 1, "2026-01-03": 1} {
+		var count uint64
+		row := conn.QueryRow(ctx, "SELECT sum(pipelines_count) FROM cicd_metrics_daily WHERE org_id = ? AND repo_id = ? AND day = toDate(?)", org, repo, day)
+		if err := row.Scan(&count); err != nil {
+			t.Fatalf("day %s: %v", day, err)
+		}
+		if count != want {
+			t.Fatalf("day %s pipelines_count = %d, want %d", day, count, want)
+		}
+	}
+}
+
+func startCICDDayDB(t *testing.T) (context.Context, driver.Conn) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	t.Cleanup(cancel)
+	clickhouseInstance, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { clickhouseInstance.Close(context.Background()) })
+	conn, err := clickhousestore.Open(ctx, clickhousestore.DefaultConfig(clickhouseInstance.URI))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { conn.Close() })
+	for _, statement := range []string{
+		`CREATE TABLE ci_pipeline_runs (
+    repo_id UUID, run_id String, status Nullable(String),
+    queued_at Nullable(DateTime64(3, 'UTC')), started_at DateTime64(3, 'UTC'),
+    finished_at Nullable(DateTime64(3, 'UTC')), last_synced DateTime64(3, 'UTC'),
+    org_id String
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (repo_id, run_id)`,
+		`CREATE TABLE cicd_metrics_daily (
+    repo_id UUID, day Date, pipelines_count UInt32, success_rate Float64,
+    avg_duration_minutes Nullable(Float64), p90_duration_minutes Nullable(Float64),
+    avg_queue_minutes Nullable(Float64), computed_at DateTime, org_id String
+) ENGINE = ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, day)`,
+	} {
+		if err := conn.Exec(ctx, statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return ctx, conn
+}
+
+func computeCICDDay(ctx context.Context, t *testing.T, executor *CICDExecutor, org, repo, day string, at time.Time) {
+	t.Helper()
+	parsed, err := time.Parse(time.DateOnly, day)
+	if err != nil {
+		t.Fatal(err)
+	}
+	executor.nowUTC = func() time.Time { return at }
+	partition := Partition{
+		ID: "00000000-0000-4000-8000-0000000000f1", RunID: "00000000-0000-4000-8000-0000000000f0",
+		RepoIDs: []RepositoryID{RepositoryID(repo)},
+	}
+	if _, err := executor.ComputeFamily(ctx, Run{OrganizationID: org, TargetDay: parsed}, partition); err != nil {
+		t.Fatalf("day %s: %v", day, err)
+	}
+}
+
+func storedCICDCount(ctx context.Context, t *testing.T, conn driver.Conn, org, repo, day string) uint64 {
+	t.Helper()
+	var count uint64
+	row := conn.QueryRow(ctx, "SELECT sum(pipelines_count) FROM cicd_metrics_daily FINAL WHERE org_id = ? AND repo_id = ? AND day = toDate(?)", org, repo, day)
+	if err := row.Scan(&count); err != nil {
+		t.Fatalf("day %s: %v", day, err)
+	}
+	return count
+}
+
+// A run the provider has not finished carries its last update time in
+// finished_at; it counts on no day.
+func TestCICDComputeFamilyLeavesOpenRunsOut(t *testing.T) {
+	ctx, conn := startCICDDayDB(t)
+	const org = "00000000-0000-4000-8000-0000000000d0"
+	const repo = "00000000-0000-4000-8000-0000000000d2"
+	if err := conn.Exec(ctx, `
+INSERT INTO ci_pipeline_runs (repo_id, run_id, status, queued_at, started_at, finished_at, last_synced, org_id) VALUES
+(toUUID('`+repo+`'), 'open-running', 'running', NULL,
+ toDateTime64('2026-01-02 23:50:00', 3, 'UTC'), toDateTime64('2026-01-03 00:20:00', 3, 'UTC'), now64(3), '`+org+`'),
+(toUUID('`+repo+`'), 'open-queued', 'queued', NULL,
+ toDateTime64('2026-01-02 23:55:00', 3, 'UTC'), toDateTime64('2026-01-03 00:25:00', 3, 'UTC'), now64(3), '`+org+`'),
+(toUUID('`+repo+`'), 'open-same-day', 'running', NULL,
+ toDateTime64('2026-01-03 10:00:00', 3, 'UTC'), toDateTime64('2026-01-03 10:30:00', 3, 'UTC'), now64(3), '`+org+`')`); err != nil {
+		t.Fatal(err)
+	}
+	executor, err := NewCICDExecutor(conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	computeCICDDay(ctx, t, executor, org, repo, "2026-01-03", time.Date(2026, 1, 4, 0, 0, 0, 0, time.UTC))
+	if got := storedCICDCount(ctx, t, conn, org, repo, "2026-01-03"); got != 0 {
+		t.Fatalf("2026-01-03 pipelines_count = %d, want 0 (open runs count on no day)", got)
+	}
+}
+
+// A recompute of a day that now has no run writes nothing: no zero-run row (a
+// reader would take it for a measurement) and no overwrite of a count another
+// job published. A stored count for a day whose run moved stays until a
+// retraction design with a write fence exists.
+func TestCICDComputeFamilyEmptyRecomputeWritesNothing(t *testing.T) {
+	ctx, conn := startCICDDayDB(t)
+	const org = "00000000-0000-4000-8000-0000000000d0"
+	const repo = "00000000-0000-4000-8000-0000000000d3"
+	insert := func(synced, started, finished string) {
+		t.Helper()
+		if err := conn.Exec(ctx, `
+INSERT INTO ci_pipeline_runs (repo_id, run_id, status, queued_at, started_at, finished_at, last_synced, org_id) VALUES
+(toUUID('`+repo+`'), 'moved', 'success', NULL, toDateTime64('`+started+`', 3, 'UTC'), toDateTime64('`+finished+`', 3, 'UTC'),
+ toDateTime64('`+synced+`', 3, 'UTC'), '`+org+`')`); err != nil {
+			t.Fatal(err)
+		}
+	}
+	executor, err := NewCICDExecutor(conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	insert("2026-01-02 12:00:00", "2026-01-02 10:00:00", "2026-01-02 10:30:00")
+	computeCICDDay(ctx, t, executor, org, repo, "2026-01-02", time.Date(2026, 1, 3, 1, 0, 0, 0, time.UTC))
+	insert("2026-01-03 12:00:00", "2026-01-03 10:00:00", "2026-01-03 10:30:00")
+	computeCICDDay(ctx, t, executor, org, repo, "2026-01-02", time.Date(2026, 1, 4, 1, 0, 0, 0, time.UTC))
+	var zeroRows uint64
+	row := conn.QueryRow(ctx, "SELECT count() FROM cicd_metrics_daily WHERE org_id = ? AND repo_id = ? AND pipelines_count = 0", org, repo)
+	if err := row.Scan(&zeroRows); err != nil {
+		t.Fatal(err)
+	}
+	if zeroRows != 0 {
+		t.Fatalf("%d zero-run rows stored, want none", zeroRows)
+	}
+	if got := storedCICDCount(ctx, t, conn, org, repo, "2026-01-02"); got != 1 {
+		t.Fatalf("2026-01-02 pipelines_count = %d, want the published 1 left as it was", got)
 	}
 }
 

@@ -241,6 +241,9 @@ func TestSSORoutesVenueOracle(t *testing.T) {
 	providersAuthorizePin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{
 		Path: "testdata/providers-authorize.go-pin.json", SHA256: providersAuthorizePinSHA256, Ruling: providersAuthorizeRuling,
 	})
+	oauthProvidersRetiredPin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{
+		Path: "testdata/oauth-providers-retired.go-pin.json", SHA256: oauthProvidersRetiredPinSHA256, Ruling: oauthProvidersRetiredRuling,
+	})
 	var orglessRefused []string
 	// The owner's tokens with an org claim it holds no membership in (another org, not a UUID): the legacy answer stays
 	// the wanted one (product rule 1). The other org's token claims the owner role, which the handler reads
@@ -250,6 +253,7 @@ func TestSSORoutesVenueOracle(t *testing.T) {
 		Retirements: []venueoracle.Retirement{
 			{Match: func(request venueoracle.Request) bool { return samlForwardOnly[request.Name] }, Pin: samlForwardOnlyPin},
 			{Match: func(request venueoracle.Request) bool { return request.Name == providersAuthorizeStep }, Pin: providersAuthorizePin},
+			{Match: func(request venueoracle.Request) bool { return oauthProvidersRetired[request.Name] }, Pin: oauthProvidersRetiredPin},
 		},
 		KnownDivergences: []venueoracle.KnownDivergence{
 			{Match: func(request venueoracle.Request) bool { return request.Name == "activate: token of the other org" }, Ticket: venueoracle.RoleClaimGap},
@@ -283,7 +287,7 @@ func TestSSORoutesVenueOracle(t *testing.T) {
 		_ = os.WriteFile(path, []byte(receipt), 0o600)
 	}
 	t.Log("\n" + receipt)
-	venueoracle.FinishPins(t, signInPin, samlForwardOnlyPin, providersAuthorizePin)
+	venueoracle.FinishPins(t, signInPin, samlForwardOnlyPin, providersAuthorizePin, oauthProvidersRetiredPin)
 	golden.Finish(t)
 }
 
@@ -321,6 +325,22 @@ const providersAuthorizeRuling = "CHAOS-13328: a malformed provider id answers a
 
 // providersAuthorizePinSHA256 is the digest of testdata/providers-authorize.go-pin.json.
 const providersAuthorizePinSHA256 = "cf7ba866886071e670390d379d7152f61035ff7666e2844192864cfa4258c510"
+
+// oauthProvidersRetiredRuling retires the Python answers of the OAuth provider create and patch steps: go-api mounts
+// neither route (no service writes an oauth_* provider row, no client called them), so each path is the not-found and
+// a two-segment path takes the next route in Starlette order.
+const oauthProvidersRetiredRuling = "CHAOS-13881: the OAuth provider create and patch routes are retired (not mounted; no writer, no consumer)"
+
+// oauthProvidersRetiredPinSHA256 is the digest of testdata/oauth-providers-retired.go-pin.json.
+const oauthProvidersRetiredPinSHA256 = "63de752a97d9b3c7ea9e3e57d2e7b827708038795dd726c5ee6cfb3c57f32561"
+
+var oauthProvidersRetired = map[string]bool{
+	"oauth create: missing config": true, "oauth create: bad type and config": true, "oauth create: config fields": true,
+	"oauth create: valid": true, "oauth create: no credential": true, "oauth create: GET is 405": true,
+	"oauth patch: bad": true, "oauth patch: valid": true, "oauth patch: no credential": true,
+	"overlap: PATCH /oauth/providers/authorize": true, "overlap: GET /oauth/providers/callback": true,
+	"overlap: DELETE /oauth/providers/x": true, "overlap: PUT /oauth/providers/x": true,
+}
 
 // statePattern is the sealed OAuth state of an authorize answer, and perRequestParamPattern the authorization URL's
 // PKCE challenge, nonce and state: new on every request.

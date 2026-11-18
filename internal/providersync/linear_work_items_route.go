@@ -204,34 +204,44 @@ query LinearWorkItemsInverseRelations($first: Int!, $after: String, $issueId: St
   }
 }`
 
+func (payload *linearWorkItemPayload) UnmarshalJSON(raw []byte) error {
+	type plain linearWorkItemPayload
+	if err := json.Unmarshal(raw, (*plain)(payload)); err != nil {
+		return err
+	}
+	payload.DescriptionStated = jsonKeyPresent(raw, "description")
+	return nil
+}
+
 type linearWorkItemPayload struct {
-	ID               string                   `json:"id"`
-	Identifier       string                   `json:"identifier"`
-	Title            string                   `json:"title"`
-	Description      *string                  `json:"description"`
-	Priority         *int                     `json:"priority"`
-	Estimate         *float64                 `json:"estimate"`
-	CreatedAt        string                   `json:"createdAt"`
-	UpdatedAt        string                   `json:"updatedAt"`
-	StartedAt        *string                  `json:"startedAt"`
-	CompletedAt      *string                  `json:"completedAt"`
-	CanceledAt       *string                  `json:"canceledAt"`
-	DueDate          *string                  `json:"dueDate"`
-	URL              *string                  `json:"url"`
-	ArchivedAt       *string                  `json:"archivedAt"`
-	State            *linearStatePayload      `json:"state"`
-	Assignee         *linearIdentityPayload   `json:"assignee"`
-	Creator          *linearIdentityPayload   `json:"creator"`
-	Labels           linearLabelsPayload      `json:"labels"`
-	Parent           *linearParentPayload     `json:"parent"`
-	Project          *linearProjectPayload    `json:"project"`
-	Cycle            *linearCyclePayload      `json:"cycle"`
-	Team             *linearTeamPayload       `json:"team"`
-	History          linearHistoryPayload     `json:"history"`
-	Comments         linearCommentsPayload    `json:"comments"`
-	Attachments      linearAttachmentsPayload `json:"attachments"`
-	Relations        linearRelationsPayload   `json:"relations"`
-	InverseRelations linearRelationsPayload   `json:"inverseRelations"`
+	ID                string                   `json:"id"`
+	Identifier        string                   `json:"identifier"`
+	Title             string                   `json:"title"`
+	Description       *string                  `json:"description"`
+	DescriptionStated bool                     `json:"-"`
+	Priority          *int                     `json:"priority"`
+	Estimate          *float64                 `json:"estimate"`
+	CreatedAt         string                   `json:"createdAt"`
+	UpdatedAt         string                   `json:"updatedAt"`
+	StartedAt         *string                  `json:"startedAt"`
+	CompletedAt       *string                  `json:"completedAt"`
+	CanceledAt        *string                  `json:"canceledAt"`
+	DueDate           *string                  `json:"dueDate"`
+	URL               *string                  `json:"url"`
+	ArchivedAt        *string                  `json:"archivedAt"`
+	State             *linearStatePayload      `json:"state"`
+	Assignee          *linearIdentityPayload   `json:"assignee"`
+	Creator           *linearIdentityPayload   `json:"creator"`
+	Labels            linearLabelsPayload      `json:"labels"`
+	Parent            *linearParentPayload     `json:"parent"`
+	Project           *linearProjectPayload    `json:"project"`
+	Cycle             *linearCyclePayload      `json:"cycle"`
+	Team              *linearTeamPayload       `json:"team"`
+	History           linearHistoryPayload     `json:"history"`
+	Comments          linearCommentsPayload    `json:"comments"`
+	Attachments       linearAttachmentsPayload `json:"attachments"`
+	Relations         linearRelationsPayload   `json:"relations"`
+	InverseRelations  linearRelationsPayload   `json:"inverseRelations"`
 }
 
 type linearStatePayload struct {
@@ -1637,10 +1647,7 @@ func normalizeLinearWorkItem(
 			projectName = &payload.Project.Name
 		}
 	}
-	var description *string
-	if payload.Description != nil && *payload.Description != "" {
-		description = payload.Description
-	}
+	description := statedWorkItemDescription(payload.Description, payload.DescriptionStated)
 	completedAt := parseLinearTimePtr(payload.CompletedAt)
 	var closedAt *time.Time
 	if completedAt != nil {

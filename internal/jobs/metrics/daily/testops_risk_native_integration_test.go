@@ -109,6 +109,7 @@ func TestTestopsRiskExecutorComputeFamilyWritesAllThreeTablesAgainstRealClickHou
 			t.Fatal(err)
 		}
 	}
+	createTestopsRunReportCompletenessTable(ctx, t, conn)
 	applyTestopsRepositoryOwnershipSchema(ctx, t, conn)
 
 	// Freeze background merges on the seeded source tables BEFORE anything is
@@ -373,6 +374,7 @@ func TestTestopsRiskExecutorComputeFamilyReportsPartialWriteAtTheCallSite(t *tes
 			t.Fatal(err)
 		}
 	}
+	createTestopsRunReportCompletenessTable(ctx, t, conn)
 	applyTestopsRepositoryOwnershipSchema(ctx, t, conn)
 
 	const orgID = "00000000-0000-4000-8000-00000000000a"

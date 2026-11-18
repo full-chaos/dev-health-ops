@@ -8,22 +8,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
 
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
-// TestTestopsRiskExecutorComputeFamilyWritesAllThreeTablesAgainstRealClickHouse
-// is a real-ClickHouse proof that TestopsRiskExecutor.ComputeFamily (CHAOS-4294)
-// reads the raw testops tables (ci_pipeline_runs, test_suite_results,
-// test_case_results, coverage_snapshots) and writes all three testops_risk
-// output tables through the real production entry point -- not a direct
-// compute-function call, so it also proves the SQL loaders (JOIN/semi-join
-// shape, org/repo/day scoping) and the ClickHouse batch writers round-trip
-// correctly, which TestTestopsRiskComputeMatchesLivePythonProduction
-// (the live-Python-oracle test) does not exercise -- that test feeds
-// pre-built Go row structs directly, bypassing SQL entirely.
+// A repo-day with CI runs and no test row is unknown (tests exist but were not read) or not applicable (no tests), by a suite in
+// the 29 days before the day or a partial completeness row of a run of the day. Real ClickHouse, through ComputeFamily.
 func TestTestopsRiskTestsUnknownAgainstRealClickHouse(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -126,7 +119,7 @@ func TestTestopsRiskTestsUnknownAgainstRealClickHouse(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	exec(`CREATE TABLE testops_run_report_completeness (org_id LowCardinality(String), repo_id UUID, run_id String, run_attempt UInt32, provider LowCardinality(String), complete UInt8, reasons Array(LowCardinality(String)), reports_expected UInt32, reports_admitted UInt32, last_synced DateTime64(3,'UTC'), verdict_version UInt64) ENGINE = ReplacingMergeTree(verdict_version) ORDER BY (org_id, repo_id, run_id, run_attempt)`)
+	createTestopsRunReportCompletenessTable(ctx, t, conn)
 	for _, repo := range repos {
 		for _, d := range []string{"2026-08-14", "2026-08-15"} {
 			exec(`INSERT INTO ci_pipeline_runs (repo_id, run_id, status, queued_at, started_at, finished_at, last_synced, retry_count, org_id) VALUES (toUUID('` + repo + `'), 'run-` + d + `', 'success', toDateTime64('` + d + ` 09:00:00', 3, 'UTC'), toDateTime64('` + d + ` 09:01:00', 3, 'UTC'), toDateTime64('` + d + ` 09:11:00', 3, 'UTC'), now64(3), 0, '` + orgID + `')`)
@@ -187,5 +180,14 @@ func TestTestopsRiskTestsUnknownAgainstRealClickHouse(t *testing.T) {
 		if cell.unknown == (flakeHours != nil) || (!cell.unknown && *flakeHours != 0) {
 			t.Errorf("%s quality drag: flake hours present=%v, want unknown=%v", cell.name, flakeHours != nil, cell.unknown)
 		}
+	}
+}
+
+// createTestopsRunReportCompletenessTable creates the migration 153 table the risk job reads, for fixtures that build their
+// own tables.
+func createTestopsRunReportCompletenessTable(ctx context.Context, t *testing.T, conn driver.Conn) {
+	t.Helper()
+	if err := conn.Exec(ctx, `CREATE TABLE IF NOT EXISTS testops_run_report_completeness (org_id LowCardinality(String), repo_id UUID, run_id String, run_attempt UInt32, provider LowCardinality(String), complete UInt8, reasons Array(LowCardinality(String)), reports_expected UInt32, reports_admitted UInt32, last_synced DateTime64(3,'UTC'), verdict_version UInt64) ENGINE = ReplacingMergeTree(verdict_version) ORDER BY (org_id, repo_id, run_id, run_attempt)`); err != nil {
+		t.Fatal(err)
 	}
 }

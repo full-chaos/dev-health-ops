@@ -110,6 +110,7 @@ func TestTestopsRiskExecutorStreamsPastTheOldRowCapAgainstRealClickHouse(t *test
 			t.Fatal(err)
 		}
 	}
+	createTestopsRunReportCompletenessTable(ctx, t, conn)
 	applyTestopsRepositoryOwnershipSchema(ctx, t, conn)
 
 	const orgID = "00000000-0000-4000-8000-000000000009"

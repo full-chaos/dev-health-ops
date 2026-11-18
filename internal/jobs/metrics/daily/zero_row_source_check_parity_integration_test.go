@@ -87,6 +87,7 @@ func startParityStack(t *testing.T, ctx context.Context) parityStack {
 			t.Fatal(err)
 		}
 	}
+	createTestopsRunReportCompletenessTable(ctx, t, conn)
 	applyTestopsRepositoryOwnershipSchema(ctx, t, conn)
 	return parityStack{pool: pool, conn: conn}
 }
@@ -680,6 +681,10 @@ func findQuery(queries []recordedQuery, query string) *recordedQuery {
 
 func findQueryContaining(queries []recordedQuery, fragment string) *recordedQuery {
 	for index := range queries {
+		// The risk job's tests-unknown reads (CHAOS-14002) read the same sources over other windows: not the day's read.
+		if strings.HasPrefix(queries[index].query, "SELECT DISTINCT repo_id") {
+			continue
+		}
 		if strings.Contains(queries[index].query, fragment) {
 			return &queries[index]
 		}

@@ -12,6 +12,7 @@ import (
 	"io"
 	"log/slog"
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -252,6 +253,8 @@ type githubTestsReportRows struct {
 	// GuardDropped counts members the shared archive parse dropped at a size guard (compression_ratio, archive_entry_cap) that the
 	// caller took out of Skipped, issues and SkippedArtifacts because its route has no vocabulary for them (GitLab, CHAOS-14030).
 	GuardDropped int
+	// GuardCauses are the distinct causes of the GuardDropped members, sorted.
+	GuardCauses []string
 	// ReportsParsed is the number of members read as reports. NonReportJSON and
 	// NonReportOther count members that are not .xml/.info (CHAOS-13193): they
 	// are observability only -- never an incomplete cause, so reports_complete
@@ -1178,14 +1181,10 @@ func parseGitHubTestsArchive(
 		members = members[:githubTestsMaxArchiveEntries]
 	}
 	for _, member := range members {
-		if !isSafeGitHubTestsArchiveMemberName(member.Name) || member.FileInfo().IsDir() {
-			result.NonReportOther++
-			continue
-		}
 		name := member.Name
 		lower := strings.ToLower(name)
-		if !strings.HasSuffix(lower, ".xml") && !strings.HasSuffix(lower, ".info") {
-			if strings.HasSuffix(lower, ".json") {
+		if !githubTestsReportCandidateMember(member) {
+			if isSafeGitHubTestsArchiveMemberName(name) && !member.FileInfo().IsDir() && strings.HasSuffix(lower, ".json") {
 				result.NonReportJSON++
 			} else {
 				result.NonReportOther++
@@ -1299,6 +1298,14 @@ func parseGitHubTestsArchive(
 	// correctly accumulated per member above.
 	result.DuplicateSuites = countDuplicateTestSuites(result.Suites)
 	return result, nil
+}
+
+// githubTestsReportCandidateMember is the parser's member rule: a safe file
+// name ending in .xml or .info, the only members it reads as reports.
+func githubTestsReportCandidateMember(member *zip.File) bool {
+	lower := strings.ToLower(member.Name)
+	return isSafeGitHubTestsArchiveMemberName(member.Name) && !member.FileInfo().IsDir() &&
+		(strings.HasSuffix(lower, ".xml") || strings.HasSuffix(lower, ".info"))
 }
 
 func isSafeGitHubTestsArchiveMemberName(name string) bool {
@@ -2069,6 +2076,10 @@ func (rows githubTestsReportRows) withoutMemberGuardSkips() githubTestsReportRow
 		if githubTestsIsMemberGuardCause(issue.evidence.Cause) {
 			rows.Skipped -= issue.evidence.Count
 			rows.GuardDropped += issue.evidence.Count
+			if !slices.Contains(rows.GuardCauses, issue.evidence.Cause) {
+				rows.GuardCauses = append(rows.GuardCauses, issue.evidence.Cause)
+				slices.Sort(rows.GuardCauses)
+			}
 			continue
 		}
 		issues = append(issues, issue)

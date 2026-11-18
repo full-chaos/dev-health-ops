@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
+	"slices"
 	"sort"
 	"strconv"
 )
@@ -110,6 +111,10 @@ type githubTestsRunReportPlan struct {
 	Mismatch  []githubTestsReportMismatch
 	// PartitionWork is the work the search for aggregates' parts spent (githubTestsPartitionBound.Work counts it).
 	PartitionWork int
+	// BoundExhausted are the artifacts kept because the partition search ran out of work with no proven partition;
+	// UndoneByAdmission are the aggregates kept because a drop was undone when a part was not admitted by the run budget.
+	BoundExhausted    []int
+	UndoneByAdmission []int
 }
 
 // githubTestsReportMismatch is a copy or aggregate kept with its parts (CHAOS-13991): its overlap group (githubTestsPlanRunReports)
@@ -296,9 +301,9 @@ func githubTestsPlanRunReportsWithin(parsed []githubTestsParsedReport, bound git
 			continue
 		}
 		var parts []int
-		lossless := false
+		lossless, exhausted := false, false
 		if len(contentPool) >= 2 {
-			err := githubTestsFindPartitions(sortedKeys(index), contentPool, sortedKeys, &plan.PartitionWork, bound, func(found []int) (bool, error) {
+			spent, err := githubTestsFindPartitions(sortedKeys(index), contentPool, sortedKeys, &plan.PartitionWork, bound, func(found []int) (bool, error) {
 				ok, err := githubTestsReportLossless(parsed[index], content, index, found)
 				if err != nil || !ok {
 					return err != nil, err
@@ -309,15 +314,20 @@ func githubTestsPlanRunReportsWithin(parsed []githubTestsParsedReport, bound git
 			if err != nil {
 				return githubTestsRunReportPlan{}, err
 			}
+			exhausted = exhausted || spent
 		}
 		if !lossless {
-			err := githubTestsFindPartitions(sortedKeys(index), identityPool, sortedKeys, &plan.PartitionWork, bound, func(found []int) (bool, error) {
+			spent, err := githubTestsFindPartitions(sortedKeys(index), identityPool, sortedKeys, &plan.PartitionWork, bound, func(found []int) (bool, error) {
 				parts = append([]int(nil), found...)
 				return true, nil
 			})
 			if err != nil {
 				return githubTestsRunReportPlan{}, err
 			}
+			exhausted = exhausted || spent
+		}
+		if parts == nil && exhausted {
+			plan.BoundExhausted = append(plan.BoundExhausted, index)
 		}
 		if parts != nil {
 			aggregate[index] = true
@@ -414,6 +424,9 @@ func githubTestsPlanRunReportsWithin(parsed []githubTestsParsedReport, bound git
 		for _, link := range drops {
 			if dropped[link.index] && !held(link.index, 0) {
 				dropped[link.index], undone = false, true
+				if !slices.Contains(plan.UndoneByAdmission, link.index) {
+					plan.UndoneByAdmission = append(plan.UndoneByAdmission, link.index)
+				}
 			}
 		}
 		if !undone {
@@ -426,6 +439,7 @@ func githubTestsPlanRunReportsWithin(parsed []githubTestsParsedReport, bound git
 		}
 	}
 	sort.Slice(plan.Dropped, func(i, j int) bool { return plan.Dropped[i].Index < plan.Dropped[j].Index })
+	sort.Ints(plan.UndoneByAdmission)
 	sort.Slice(plan.Mismatch, func(i, j int) bool { return plan.Mismatch[i].Index < plan.Mismatch[j].Index })
 	return plan, nil
 }
@@ -455,7 +469,8 @@ func githubTestsContentWithin(content func(int) (githubTestsCaseCounts, error), 
 // artifacts that hold it in pool order.
 func githubTestsFindPartitions(
 	target []string, pool []int, keysOf func(int) []string, work *int, bound githubTestsPartitionBound, visit func([]int) (bool, error),
-) error {
+) (bool, error) {
+	exhausted := false
 	holders := make(map[string][]int, len(target))
 	*work += len(target)
 	for _, item := range pool {
@@ -473,6 +488,7 @@ func githubTestsFindPartitions(
 			*work++
 		}
 		if *work > bound.Work {
+			exhausted = true
 			return true, nil
 		}
 		if position == len(target) {
@@ -489,6 +505,7 @@ func githubTestsFindPartitions(
 				}
 			}
 			if *work > bound.Work {
+				exhausted = true
 				return true, nil
 			}
 			if !free {
@@ -512,7 +529,7 @@ func githubTestsFindPartitions(
 		return false, nil
 	}
 	_, err := search(0)
-	return err
+	return exhausted, err
 }
 
 // githubTestsReportLossless says whether dropping report (at index) loses nothing that the reports at others keep (CHAOS-13991): it

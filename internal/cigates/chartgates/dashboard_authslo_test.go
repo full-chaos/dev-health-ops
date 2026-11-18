@@ -325,11 +325,49 @@ func authSLODescriptionStatesTheLine(g *guard, id, desc string, r *sloRule) {
 	}
 }
 
-// authSLOQueriesAreBound matches the queries by name (A, B, C; list order free) and binds each.
-func authSLOQueriesAreBound(g *guard, what, why string, v any, want []authSLOWantQuery) {
+// authSLOBuilderQueries returns the builder queries of a panel, each in the shape of a one-query entry (kind,
+// spec.name, spec.plugin.kind signoz/BuilderQuery, spec.plugin.spec). The SigNoz API takes exactly ONE entry per data
+// panel: several named queries go into one entry whose spec.plugin.kind is signoz/CompositeQuery, each as
+// {"type": "builder_query", "spec": <builder query>}. Another entry count is refused, and its entries are still
+// returned as they are, so the per-query checks name what changed.
+func authSLOBuilderQueries(g *guard, what, why string, v any) []any {
 	qs, ok := v.([]any)
 	if !ok {
 		g.failf("%s queries are %s, want a list%s", what, sloJSON(v), why)
+		return nil
+	}
+	if len(qs) != 1 {
+		g.failf("%s holds %d query entries, want exactly 1 (several named queries go in one signoz/CompositeQuery)%s", what, len(qs), why)
+		return qs
+	}
+	outer := qs[0]
+	plugin := mp(mp(outer)["spec"])["plugin"]
+	if str(mp(plugin)["kind"]) != "signoz/CompositeQuery" {
+		return qs
+	}
+	authSLOBind(g, what+" query entry", why, outer, map[string]string{
+		"kind": sloJSON("time_series"), "spec.plugin.kind": sloJSON("signoz/CompositeQuery"),
+	}, "spec.plugin.spec.queries")
+	inner, ok := mp(mp(plugin)["spec"])["queries"].([]any)
+	if !ok {
+		g.failf("%s composite queries are %s, want a list%s", what, sloJSON(mp(mp(plugin)["spec"])["queries"]), why)
+		return nil
+	}
+	out := make([]any, 0, len(inner))
+	for _, e := range inner {
+		spec := mp(e)["spec"]
+		authSLOBind(g, what+" query "+str(mp(spec)["name"]), why, e, map[string]string{"type": sloJSON("builder_query")}, "spec")
+		out = append(out, map[string]any{"kind": mp(outer)["kind"], "spec": map[string]any{
+			"name": mp(spec)["name"], "plugin": map[string]any{"kind": "signoz/BuilderQuery", "spec": spec},
+		}})
+	}
+	return out
+}
+
+// authSLOQueriesAreBound matches the queries by name (A, B, C; list order free) and binds each.
+func authSLOQueriesAreBound(g *guard, what, why string, v any, want []authSLOWantQuery) {
+	qs := authSLOBuilderQueries(g, what, why, v)
+	if qs == nil {
 		return
 	}
 	byName := map[string]any{}
@@ -395,7 +433,7 @@ func authSLOQueries(g *guard) []authSLOQuery {
 		return nil
 	}
 	for id, p := range mp(mp(root["spec"])["panels"]) {
-		qs := list(mp(mp(p)["spec"])["queries"])
+		qs := authSLOBuilderQueries(g, "panel "+id, "", mp(mp(p)["spec"])["queries"])
 		g.expect(len(qs) > 0, "dashboard panel %s has no query", id)
 		for _, q := range qs {
 			spec := mp(mp(mp(mp(q)["spec"])["plugin"])["spec"])

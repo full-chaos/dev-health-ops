@@ -3,13 +3,13 @@ package chmigrate
 import (
 	"bytes"
 	"context"
-	"net"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	pgstorage "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/refusedaddr"
 )
 
 // `migrate clickhouse upgrade` (the migrate hook's ClickHouse step) waits for
@@ -19,14 +19,7 @@ func TestUpgradeWaitsForTheFirstClickHouseConnectThenFailsClosed(t *testing.T) {
 	saved := firstConnect
 	t.Cleanup(func() { firstConnect = saved })
 
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	address := listener.Addr().String()
-	if err := listener.Close(); err != nil {
-		t.Fatal(err)
-	}
+	address := refusedaddr.Addr(t)
 	for _, dsn := range []string{
 		"clickhouse://migrator:sekret-pw@" + address + "/devhealth",
 		"http://migrator:sekret-pw@" + address + "/devhealth",

@@ -101,7 +101,7 @@ func TestNewWorkUnitsGetHandlerRequiresAuthContext(t *testing.T) {
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
 	}
-	if got, want := rec.Body.String(), `{"detail":{"message":"Not authenticated"}}`+"\n"; got != want {
+	if got, want := rec.Body.String(), `{"detail":{"message":"Not authenticated"}}`; got != want {
 		t.Fatalf("body = %q, want %q", got, want)
 	}
 }

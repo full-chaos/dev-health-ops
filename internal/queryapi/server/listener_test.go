@@ -149,7 +149,7 @@ func TestInternalOnlyRouteExistsOnlyOnTheInternalListener(t *testing.T) {
 	// The shared route set (the Wave-0 catch-all) is unchanged on both: still reachable,
 	// still the SAME custom-404 handler, via InternalHandler's fallthrough on the internal
 	// side -- the exact JSON body distinguishes "this handler ran" from "no route matched".
-	const wantBody = `{"detail":"Not Found"}` + "\n"
+	const wantBody = `{"detail":"Not Found"}`
 	if code, body := get(public.Address(), "/api/v1/not-a-route"); code != http.StatusNotFound || body != wantBody {
 		t.Fatalf("public listener + shared route: %d %q, want 404 %q", code, body, wantBody)
 	}

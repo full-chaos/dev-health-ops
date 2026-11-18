@@ -67,15 +67,20 @@ func TestGitHubTestsIncompleteBatchCommitsOnceAndRemainsTenantScoped(t *testing.
 			Ledger: ledger, Sink: sink, Readback: sink,
 			Now: func() time.Time { return now },
 		}
+		// One write per destination, the empty ones included: seven TestOps destinations (the seventh, the run report
+		// completeness, is empty on the non-chunked route).
 		first, err := committer.Commit(ctx, item.claim, item.batch.Effects, now)
-		if err != nil || first.Written != 6 {
+		if err != nil || first.Written != 7 {
 			t.Fatalf("first commit=%+v error=%v", first, err)
 		}
 		second, err := committer.Commit(ctx, item.claim, item.batch.Effects, now)
-		if err != nil || second.Written != 0 || second.Skipped != 6 {
+		if err != nil || second.Written != 0 || second.Skipped != 7 {
 			t.Fatalf("retry commit=%+v error=%v", second, err)
 		}
 		for _, effect := range item.batch.Effects {
+			if len(effect.Rows) == 0 {
+				continue
+			}
 			inspection, inspectErr := sink.InspectEffect(ctx, item.claim, effect)
 			if inspectErr != nil || inspection != EffectExact {
 				t.Fatalf("%s inspection=%s error=%v", effect.Destination, inspection, inspectErr)

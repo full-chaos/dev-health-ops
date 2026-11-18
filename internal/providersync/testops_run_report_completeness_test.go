@@ -1,8 +1,11 @@
 package providersync
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -21,6 +24,152 @@ func TestRunReportVerdictVersionRanksCompleteOverPartialThenNewerWalk(t *testing
 	}
 	if far := time.Date(2099, 12, 31, 23, 59, 59, 999e6, time.UTC); uint64(far.UnixMilli()) >= 1<<testOpsRunReportVerdictShift {
 		t.Fatalf("a timestamp in 2099 reaches the verdict bit")
+	}
+	last := time.UnixMilli(1<<testOpsRunReportVerdictShift - 1).UTC()
+	if got, want := testOpsRunReportVerdictVersion(true, last), uint64(1<<testOpsRunReportVerdictShift)+uint64(last.UnixMilli()); got != want {
+		t.Fatalf("complete version at the span end = %d, want the formula %d", got, want)
+	}
+	for _, outside := range []time.Time{time.UnixMilli(-1).UTC(), time.UnixMilli(1 << testOpsRunReportVerdictShift).UTC()} {
+		if testOpsRunReportTimeInSpan(outside) {
+			t.Fatalf("%v is accepted as inside the table's span", outside)
+		}
+	}
+}
+
+func TestRunReportCompletenessRowShapeIsTheOneTheSinkAccepts(t *testing.T) {
+	at := time.Date(2026, 7, 22, 10, 0, 0, 0, time.UTC)
+	good := testOpsRunReportCompletenessRow{OrgID: "org", RepoID: "c7198fbc-1945-3717-05d8-eb78866b4e79", RunID: "1", RunAttempt: 1,
+		Provider: "github_actions", Reasons: []string{githubTestsArtifactExpiredCause, githubTestsUnreadableArchiveCause},
+		ReportsExpected: 2, LastSynced: at, VerdictVersion: testOpsRunReportVerdictVersion(false, at)}
+	if !validTestOpsRunReportCompletenessRow(good) {
+		t.Fatal("the canonical partial row is refused")
+	}
+	complete := good
+	complete.Complete, complete.Reasons, complete.VerdictVersion = true, []string{}, testOpsRunReportVerdictVersion(true, at)
+	if !validTestOpsRunReportCompletenessRow(complete) {
+		t.Fatal("the canonical complete row is refused")
+	}
+	cells := map[string]func(*testOpsRunReportCompletenessRow){
+		"attempt 0":                  func(row *testOpsRunReportCompletenessRow) { row.RunAttempt = 0 },
+		"upper-case repository UUID": func(row *testOpsRunReportCompletenessRow) { row.RepoID = "C7198FBC-1945-3717-05D8-EB78866B4E79" },
+		"repository not a UUID":      func(row *testOpsRunReportCompletenessRow) { row.RepoID = "repo" },
+		"null reasons":               func(row *testOpsRunReportCompletenessRow) { row.Reasons = nil },
+		"reasons out of order": func(row *testOpsRunReportCompletenessRow) {
+			row.Reasons = []string{githubTestsUnreadableArchiveCause, githubTestsArtifactExpiredCause}
+		},
+		"a repeated reason": func(row *testOpsRunReportCompletenessRow) {
+			row.Reasons = []string{githubTestsArtifactExpiredCause, githubTestsArtifactExpiredCause}
+		},
+		"complete with reasons": func(row *testOpsRunReportCompletenessRow) {
+			row.Complete, row.VerdictVersion = true, testOpsRunReportVerdictVersion(true, row.LastSynced)
+		},
+		"version of the other verdict": func(row *testOpsRunReportCompletenessRow) {
+			row.VerdictVersion = testOpsRunReportVerdictVersion(true, row.LastSynced)
+		},
+		"sub-millisecond time": func(row *testOpsRunReportCompletenessRow) {
+			row.LastSynced = row.LastSynced.Add(time.Microsecond)
+			row.VerdictVersion = testOpsRunReportVerdictVersion(false, row.LastSynced)
+		},
+		"non-UTC time": func(row *testOpsRunReportCompletenessRow) {
+			row.LastSynced = row.LastSynced.In(time.FixedZone("plus2", 2*3600))
+		},
+		"time past the span": func(row *testOpsRunReportCompletenessRow) {
+			row.LastSynced = time.UnixMilli(1 << testOpsRunReportVerdictShift).UTC()
+			row.VerdictVersion = testOpsRunReportVerdictVersion(false, row.LastSynced)
+		},
+		"negative report count": func(row *testOpsRunReportCompletenessRow) { row.ReportsAdmitted = -1 },
+	}
+	for name, mutate := range cells {
+		row := good
+		row.Reasons = slices.Clone(good.Reasons)
+		mutate(&row)
+		if validTestOpsRunReportCompletenessRow(row) {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}
+
+// A row the write refuses is never settled by the readback, whatever the stored version.
+func TestRunReportCompletenessReadbackRefusesARowTheWriteRefuses(t *testing.T) {
+	at := time.Date(2026, 7, 22, 10, 0, 0, 0, time.UTC)
+	claim := nativeTestClaim("github", "tests")
+	bad := testOpsRunReportCompletenessRow{OrgID: claim.OrgID, RepoID: "c7198fbc-1945-3717-05d8-eb78866b4e79", RunID: "1", RunAttempt: 1,
+		Provider: "github_actions", Reasons: []string{}, LastSynced: at, VerdictVersion: testOpsRunReportVerdictVersion(false, at)}
+	if err := validateTestOpsRunReportCompletenessRow(claim, bad); err == nil {
+		t.Fatal("a partial row with no reason passed the row check")
+	}
+	stored := bad
+	stored.Complete, stored.VerdictVersion = true, testOpsRunReportVerdictVersion(true, at.Add(time.Hour))
+	got, err := inspectTestOpsRunReportCompleteness([]testOpsRunReportCompletenessRow{bad},
+		func(expected testOpsRunReportCompletenessRow) (testOpsRunReportCompletenessRow, bool, error) {
+			if err := validateTestOpsRunReportCompletenessRow(claim, expected); err != nil {
+				return testOpsRunReportCompletenessRow{}, false, err
+			}
+			return stored, true, nil
+		})
+	if err == nil || got == EffectExact {
+		t.Fatalf("an invalid row read back as %v err %v, want refused", got, err)
+	}
+}
+
+// The run's verdict row commits in the last sub-chunk of its emission, after every report row, however the emission splits.
+func TestRunReportCompletenessRowIsSplitIntoTheLastSubChunk(t *testing.T) {
+	rows := func(destination string, count int) []json.RawMessage {
+		out := make([]json.RawMessage, 0, count)
+		for index := 0; index < count; index++ {
+			out = append(out, json.RawMessage(fmt.Sprintf(`{"destination":%q,"id":%d,"pad":"%s"}`, destination, index, strings.Repeat("x", 200))))
+		}
+		return out
+	}
+	for _, cell := range []struct {
+		name   string
+		count  int
+		policy ChunkPolicy
+	}{
+		{"row bound", 101, DefaultChunkPolicy()},
+		{"byte bound", 80, ChunkPolicy{MaxSourceItems: 1000, MaxEffectRows: 1000, MaxPreparedBytes: 24 << 10, MaxChunksPerAttempt: 8, MaxWallTime: time.Minute}},
+	} {
+		t.Run(cell.name, func(t *testing.T) {
+			var effects []EffectBatch
+			for _, destination := range []string{"ci_pipeline_runs", "ci_job_runs", "ci_acceptance_checks", "test_suite_results", "test_case_results", "coverage_snapshots", testOpsRunReportCompletenessDestination} {
+				var destinationRows []json.RawMessage
+				switch destination {
+				case "test_suite_results", "test_case_results", "coverage_snapshots":
+					destinationRows = rows(destination, cell.count)
+				case testOpsRunReportCompletenessDestination:
+					destinationRows = rows(destination, 1)
+				}
+				effect, err := BuildEffectBatch(destination, EffectReadbackRequired, destinationRows)
+				if err != nil {
+					t.Fatal(err)
+				}
+				effects = append(effects, effect)
+			}
+			chunks, err := SplitCompleteRouteBatch(CompleteRouteBatch{Effects: effects}, cell.policy)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(chunks) < 2 {
+				t.Fatalf("%d chunk(s): the cell does not split", len(chunks))
+			}
+			lastReport, verdictChunk, total := -1, -1, 0
+			for ordinal, chunk := range chunks {
+				for _, effect := range chunk.Effects {
+					if len(effect.Rows) == 0 {
+						continue
+					}
+					switch effect.Destination {
+					case testOpsRunReportCompletenessDestination:
+						verdictChunk = ordinal
+					case "test_suite_results", "test_case_results", "coverage_snapshots":
+						lastReport, total = ordinal, total+len(effect.Rows)
+					}
+				}
+			}
+			if total != 3*cell.count || verdictChunk != len(chunks)-1 || verdictChunk < lastReport {
+				t.Fatalf("report rows %d (want %d) last in chunk %d, verdict in chunk %d of %d", total, 3*cell.count, lastReport, verdictChunk, len(chunks))
+			}
+		})
 	}
 }
 
@@ -71,6 +220,11 @@ func TestRunReportLossCausesMatchTheRunVocabularies(t *testing.T) {
 	}
 	if _, loss := githubTestsRunReportLossCauses[githubTestsAggregateOfPartsCause]; !loss {
 		t.Error("aggregate_of_parts must stay a loss until the producer drop is lossless (acp C7)")
+	}
+	for reason := range githubTestsRunReportVerdictOnlyReasons {
+		if _, ok := recordable[reason]; ok {
+			t.Errorf("verdict-only reason %q is also a recorded cause", reason)
+		}
 	}
 }
 

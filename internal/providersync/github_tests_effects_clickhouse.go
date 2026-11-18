@@ -288,15 +288,8 @@ func (sink TestOpsClickHouseEffects) WriteEffect(ctx context.Context, claim Clai
 		defer batch.Abort()
 		seen := make(map[string]struct{}, len(rows))
 		for _, row := range rows {
-			if err := validateGitHubTestsRow(claim, row.OrgID, row.RepoID, row.RunID, row.LastSynced); err != nil {
+			if err := validateTestOpsRunReportCompletenessRow(claim, row); err != nil {
 				return err
-			}
-			if err := validateTestOpsProvider(claim, row.Provider); err != nil {
-				return err
-			}
-			if row.RunAttempt < 1 || row.Complete != (len(row.Reasons) == 0) ||
-				row.VerdictVersion != testOpsRunReportVerdictVersion(row.Complete, row.LastSynced) {
-				return ErrInvalidConfiguration
 			}
 			if !recordGitHubTestsKey(seen, row.OrgID, row.RepoID, row.RunID, fmt.Sprint(row.RunAttempt)) {
 				return duplicateNaturalKeyError(effect.Destination, "org_id", row.OrgID, "repo_id", row.RepoID, "run_id", row.RunID, "run_attempt", fmt.Sprint(row.RunAttempt))
@@ -590,7 +583,7 @@ func (sink TestOpsClickHouseEffects) InspectEffect(ctx context.Context, claim Cl
 		}
 		return inspectTestOpsRunReportCompleteness(rows, func(expected testOpsRunReportCompletenessRow) (testOpsRunReportCompletenessRow, bool, error) {
 			actual := testOpsRunReportCompletenessRow{}
-			if err := validateTestOpsProvider(claim, expected.Provider); err != nil {
+			if err := validateTestOpsRunReportCompletenessRow(claim, expected); err != nil {
 				return actual, false, err
 			}
 			found, err := queryGitHubTestsRow(ctx, sink.Conn, `SELECT org_id,toString(repo_id),run_id,toInt64(run_attempt),toString(provider),complete != 0,CAST(reasons, 'Array(String)'),toInt64(reports_expected),toInt64(reports_admitted),last_synced,verdict_version FROM testops_run_report_completeness FINAL WHERE org_id=? AND repo_id=? AND run_id=? AND run_attempt=?`, []any{expected.OrgID, expected.RepoID, expected.RunID, expected.RunAttempt}, &actual.OrgID, &actual.RepoID, &actual.RunID, &actual.RunAttempt, &actual.Provider, &actual.Complete, &actual.Reasons, &actual.ReportsExpected, &actual.ReportsAdmitted, &actual.LastSynced, &actual.VerdictVersion)
@@ -599,6 +592,21 @@ func (sink TestOpsClickHouseEffects) InspectEffect(ctx context.Context, claim Cl
 	default:
 		return EffectConflict, ErrInvalidConfiguration
 	}
+}
+
+// validateTestOpsRunReportCompletenessRow is the one row check of the write and the readback: a row the write refuses is never
+// settled by a readback.
+func validateTestOpsRunReportCompletenessRow(claim Claim, row testOpsRunReportCompletenessRow) error {
+	if err := validateGitHubTestsRow(claim, row.OrgID, row.RepoID, row.RunID, row.LastSynced); err != nil {
+		return err
+	}
+	if err := validateTestOpsProvider(claim, row.Provider); err != nil {
+		return err
+	}
+	if !validTestOpsRunReportCompletenessRow(row) {
+		return ErrInvalidConfiguration
+	}
+	return nil
 }
 
 // inspectTestOpsRunReportCompleteness is inspectGitHubTestsRows read through the table's version. FINAL returns the row of the

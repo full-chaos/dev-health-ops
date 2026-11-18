@@ -1841,6 +1841,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 					// counts: its contents are unknown, so the route fails closed (the seam already dropped the known non-report names).
 					artifactItems, expiredItems := githubTestsSplitExpiredArtifacts(artifactItems)
 					reportsExpected := len(artifactItems) + len(expiredItems)
+					nonReportArchives := 0
 					for _, artifact := range expiredItems {
 						if githubTestsSkippedMarkerRecorded(cursor.SkippedArtifacts, pipeline.RunID, string(artifact.ID), githubTestsArtifactExpiredCause) {
 							continue
@@ -2157,6 +2158,9 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 						// Hold the parsed rows until the run is decided; an artifact that would take the held rows past
 						// githubTestsMaxHeldReportRowsPerRun is skipped whole before it is held.
 						held := githubTestsParsedReport{ID: artifact.ID, Name: artifact.Name, Suites: rows.Suites, Cases: rows.Cases, Coverage: rows.Coverage}
+						if held.rows() == 0 && len(rows.SkippedArtifacts) == 0 && len(reportIncomplete) == 0 {
+							nonReportArchives++ // read whole and held no report: not a report source of the run (CHAOS-13826)
+						}
 						if heldRows+held.rows() > githubTestsMaxHeldReportRowsPerRun {
 							skipReportOverBound(artifact)
 							continue
@@ -2219,7 +2223,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 					// One verdict row per run, after its last emission's rows are decided (CHAOS-13826).
 					completeness = githubTestsRunReportCompleteness(
 						pipeline, run, lossBefore, githubTestsTakeRunLossCounts(cursor),
-						reportsExpected, len(expiredItems), len(plan.Admitted), normalizedAt,
+						reportsExpected-nonReportArchives, len(expiredItems), githubTestsAdmittedReports(parsedReports, plan.Admitted), normalizedAt,
 					)
 				}
 				cursor.Suites += len(suites)

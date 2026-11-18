@@ -518,8 +518,14 @@ func splitCompleteRouteBatch(
 		for ordinal := 0; ordinal < count; ordinal++ {
 			effects := make([]EffectBatch, 0, len(ordered))
 			for _, effect := range ordered {
-				start := ordinal * maxRows
-				if start > len(effect.Rows) {
+				// A trailing destination's rows fill the LAST sub-chunks of the emission, so they commit after every row
+				// of the other destinations (effectSplitsLast).
+				shift := 0
+				if effectSplitsLast(effect.Destination) {
+					shift = count - (len(effect.Rows)+maxRows-1)/maxRows
+				}
+				start := (ordinal - shift) * maxRows
+				if ordinal < shift || start > len(effect.Rows) {
 					start = len(effect.Rows)
 				}
 				end := start + maxRows

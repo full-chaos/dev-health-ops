@@ -21,6 +21,7 @@ import (
 type completenessArtifact struct {
 	name     string
 	expired  bool
+	missing  bool // listed, but the download answers 404
 	body     []byte
 	listSize int // 0 = len(body)
 }
@@ -56,6 +57,9 @@ func (doer *completenessDoer) Do(request *http.Request) (*http.Response, error) 
 		id, err := strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(path, "/repos/acme/api/actions/artifacts/"), "/zip"))
 		if err != nil || id < 1 || id > len(doer.artifacts) || doer.artifacts[id-1].expired {
 			doer.t.Fatalf("unexpected download %s", path)
+		}
+		if doer.artifacts[id-1].missing {
+			return &http.Response{StatusCode: http.StatusNotFound, Header: header, Body: io.NopCloser(strings.NewReader(`{"message":"Not Found"}`)), Request: request}, nil
 		}
 		return &http.Response{
 			StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/zip"}},
@@ -121,6 +125,7 @@ func TestGitHubTestsRunReportCompletenessRows(t *testing.T) {
 		return githubTestsZip(t, map[string]string{"junit.xml": completenessJUnit(prefix, 2)})
 	}
 	copyOf := readable("same-")
+	logsOnly := githubTestsZip(t, map[string]string{"output.log": "build log", "manifest.json": "{}"})
 	cells := []struct {
 		name      string
 		handler   GitHubTestsRouteHandler
@@ -181,6 +186,21 @@ func TestGitHubTestsRunReportCompletenessRows(t *testing.T) {
 				{RunID: "1", RunAttempt: 1, Provider: "github_actions", Reasons: []string{"artifact_expired"}, ReportsExpected: 2, ReportsAdmitted: 1},
 				{RunID: "1", RunAttempt: 1, Provider: "github_actions", Reasons: []string{"artifact_expired"}, ReportsExpected: 2, ReportsAdmitted: 1},
 			},
+		},
+		{
+			name:      "a report deleted between listing and download is partial",
+			artifacts: []completenessArtifact{{name: "test-results-a", body: readable("a-")}, {name: "test-results-b", missing: true, body: readable("b-")}},
+			want:      []completenessRow{{RunID: "1", RunAttempt: 1, Provider: "github_actions", Reasons: []string{"artifact_not_found"}, ReportsExpected: 2, ReportsAdmitted: 1}},
+		},
+		{
+			name:      "an archive with no report file in it is not a report source",
+			artifacts: []completenessArtifact{{name: "test-results-a", body: readable("a-")}, {name: "test-results-logs", body: logsOnly}},
+			want:      []completenessRow{{RunID: "1", RunAttempt: 1, Provider: "github_actions", Complete: true, Reasons: []string{}, ReportsExpected: 1, ReportsAdmitted: 1}},
+		},
+		{
+			name:      "a run whose only archive holds no report file has no row",
+			artifacts: []completenessArtifact{{name: "test-results-logs", body: logsOnly}},
+			want:      nil,
 		},
 		{
 			name:      "a run with no report artifact has no row",

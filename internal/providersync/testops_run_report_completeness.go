@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"sort"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // testOpsRunReportCompletenessDestination is the per-run report-completeness table (migration 153): one row per walked attempt of
@@ -27,18 +29,45 @@ type testOpsRunReportCompletenessRow struct {
 	VerdictVersion  uint64    `json:"verdict_version"`
 }
 
-// testOpsRunReportVerdictShift puts the verdict above every millisecond timestamp (2^42 ms is after the year 2100).
+// testOpsRunReportVerdictShift puts the verdict above every millisecond timestamp the table holds: last_synced is in
+// [1970, 2^42 ms) (2^42 ms is after the year 2100), and the sink refuses a row outside it.
 const testOpsRunReportVerdictShift = 42
 
-// testOpsRunReportVerdictVersion is the table's ReplacingMergeTree version: within one (run, attempt), a complete row outranks
-// every partial row, and between rows of one verdict the newer walk wins. An attempt's report set is fixed once the run is
-// completed, so a later walk that loses a report it read before is a fetch failure, not news: it must not turn the run partial.
+// testOpsRunReportVerdictVersion is the table's ReplacingMergeTree version, complete * 2^42 + last_synced ms: within one (run,
+// attempt), a complete row outranks every partial row, and between rows of one verdict the newer walk wins. An attempt's report
+// set is fixed once the run is completed, so a later walk that loses a report it read before is a fetch failure, not news: it
+// must not turn the run partial. lastSynced must be in the table's span (testOpsRunReportTimeInSpan).
 func testOpsRunReportVerdictVersion(complete bool, lastSynced time.Time) uint64 {
 	version := uint64(lastSynced.UnixMilli())
 	if complete {
-		version |= 1 << testOpsRunReportVerdictShift
+		version += 1 << testOpsRunReportVerdictShift
 	}
 	return version
+}
+
+func testOpsRunReportTimeInSpan(lastSynced time.Time) bool {
+	ms := lastSynced.UnixMilli()
+	return ms >= 0 && ms < 1<<testOpsRunReportVerdictShift
+}
+
+// validTestOpsRunReportCompletenessRow is the shape the writer emits and the sink accepts: an attempt from 1, a canonical
+// lower-case repository UUID, a UTC last_synced at millisecond precision inside the table's span, reasons sorted and distinct
+// (never null), complete exactly when there is no reason, and the version of that verdict. The readback compares stored rows
+// with the expected one as JSON, so only one form of each value is accepted.
+func validTestOpsRunReportCompletenessRow(row testOpsRunReportCompletenessRow) bool {
+	repo, err := uuid.Parse(row.RepoID)
+	if err != nil || repo.String() != row.RepoID || row.RunAttempt < 1 || row.Reasons == nil ||
+		row.ReportsExpected < 0 || row.ReportsAdmitted < 0 || row.LastSynced.Location() != time.UTC ||
+		!row.LastSynced.Equal(row.LastSynced.Truncate(time.Millisecond)) || !testOpsRunReportTimeInSpan(row.LastSynced) {
+		return false
+	}
+	for index := 1; index < len(row.Reasons); index++ {
+		if row.Reasons[index-1] >= row.Reasons[index] {
+			return false
+		}
+	}
+	return row.Complete == (len(row.Reasons) == 0) &&
+		row.VerdictVersion == testOpsRunReportVerdictVersion(row.Complete, row.LastSynced)
 }
 
 // githubTestsRunReportLossCauses are the causes that name a report of the run as not read. Every cause a run's walk can record
@@ -56,6 +85,7 @@ var githubTestsRunReportLossCauses = map[string]struct{}{
 	githubTestsUnreadableArchiveCause:   {},
 	githubTestsMalformedCause:           {},
 	githubTestsUnreadableCause:          {},
+	githubTestsUnsafeDoctypeCause:       {},
 	githubTestsArtifactExpiredCause:     {},
 	githubTestsAggregateMismatchCause:   {},
 	githubTestsAggregateOfPartsCause:    {},
@@ -63,6 +93,14 @@ var githubTestsRunReportLossCauses = map[string]struct{}{
 
 // githubTestsRunReportNotALossCauses are recorded causes that lose no report row.
 var githubTestsRunReportNotALossCauses = map[string]struct{}{}
+
+// githubTestsArtifactNotFoundReason is a selected artifact that was listed but answered 404 or 410 at download: deleted or expired
+// between the listing and the read, so its report was not read. The unit result keeps it out of the loss vocabulary (routine
+// provider data, CHAOS-4185); for the run's verdict it is a report not read. Counted from cursor.ArtifactsExcludedNotFound.
+const githubTestsArtifactNotFoundReason = "artifact_not_found"
+
+// githubTestsRunReportVerdictOnlyReasons are reasons the verdict names that no unit observation carries.
+var githubTestsRunReportVerdictOnlyReasons = map[string]struct{}{githubTestsArtifactNotFoundReason: {}}
 
 // githubTestsRunReportComponents are the incomplete components whose observations are about one run's reports.
 var githubTestsRunReportComponents = map[string]struct{}{
@@ -78,10 +116,11 @@ var githubTestsRunReportComponents = map[string]struct{}{
 type githubTestsRunLossCounts struct {
 	skipped    map[string]int
 	incomplete map[string]int
+	notFound   int
 }
 
 func githubTestsTakeRunLossCounts(cursor githubTestsChunkCursor) githubTestsRunLossCounts {
-	counts := githubTestsRunLossCounts{skipped: map[string]int{}, incomplete: map[string]int{}}
+	counts := githubTestsRunLossCounts{skipped: map[string]int{}, incomplete: map[string]int{}, notFound: cursor.ArtifactsExcludedNotFound}
 	for cause, count := range cursor.SkippedArtifactCauseCount {
 		counts.skipped[cause] = count
 	}
@@ -99,6 +138,9 @@ func githubTestsRunLossReasons(before, after githubTestsRunLossCounts, expired i
 	seen := map[string]struct{}{}
 	if expired > 0 {
 		seen[githubTestsArtifactExpiredCause] = struct{}{}
+	}
+	if after.notFound > before.notFound {
+		seen[githubTestsArtifactNotFoundReason] = struct{}{}
 	}
 	for cause, count := range after.skipped {
 		if count > before.skipped[cause] {
@@ -119,6 +161,18 @@ func githubTestsRunLossReasons(before, after githubTestsRunLossCounts, expired i
 	}
 	sort.Strings(reasons)
 	return reasons
+}
+
+// githubTestsAdmittedReports counts the admitted artifacts that hold report rows: an archive read whole with no report in it is
+// not a report source of the run.
+func githubTestsAdmittedReports(parsed []githubTestsParsedReport, admitted []int) int {
+	count := 0
+	for _, index := range admitted {
+		if parsed[index].rows() > 0 {
+			count++
+		}
+	}
+	return count
 }
 
 // githubTestsRunAttempt is the 1-based attempt of the run payload (1 when the payload carries none).
@@ -142,10 +196,11 @@ func githubTestsRunReportCompleteness(
 		return nil
 	}
 	complete := len(reasons) == 0
+	lastSynced := normalizedAt.UTC().Truncate(time.Millisecond)
 	return []testOpsRunReportCompletenessRow{{
 		OrgID: pipeline.OrgID, RepoID: pipeline.RepoID, RunID: pipeline.RunID, RunAttempt: githubTestsRunAttempt(run),
 		Provider: pipeline.Provider, Complete: complete, Reasons: reasons,
 		ReportsExpected: int64(expected), ReportsAdmitted: int64(admitted),
-		LastSynced: normalizedAt, VerdictVersion: testOpsRunReportVerdictVersion(complete, normalizedAt),
+		LastSynced: lastSynced, VerdictVersion: testOpsRunReportVerdictVersion(complete, lastSynced),
 	}}
 }

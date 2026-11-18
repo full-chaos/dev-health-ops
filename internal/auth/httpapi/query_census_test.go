@@ -96,7 +96,7 @@ func queryReadKind(call *ast.CallExpr) string {
 			return "URL.Query()"
 		}
 	case "ParseQuery":
-		if len(call.Args) == 1 {
+		if pkg, ok := sel.X.(*ast.Ident); ok && pkg.Name == "url" && len(call.Args) == 1 {
 			if arg, ok := call.Args[0].(*ast.SelectorExpr); ok && arg.Sel.Name == "RawQuery" {
 				return "ParseQuery(RawQuery)"
 			}

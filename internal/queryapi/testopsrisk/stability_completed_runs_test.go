@@ -37,8 +37,8 @@ func TestNilStabilityReadsAbsent(t *testing.T) {
 	day1 := time.Date(2026, 11, 13, 0, 0, 0, 0, time.UTC)
 	day2 := day1.AddDate(0, 0, 1)
 	client := &fakeClient{daily: [][]any{
-		{&day1, nil, nil, nil, nil, nil, nil, 0.8},
-		{&day2, nil, nil, nil, nil, nil, nil, nil},
+		{&day1, nil, nil, nil, nil, nil, nil, nil, 0.8},
+		{&day2, nil, nil, nil, nil, nil, nil, nil, nil},
 	}}
 	got, err := Resolve(context.Background(), client, "org-1", model.TestOpsRiskInput{StartDate: date("2026-11-13"), EndDate: date("2026-11-14")})
 	if err != nil {

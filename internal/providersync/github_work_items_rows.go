@@ -200,18 +200,20 @@ type githubWorkItemLabelPayload struct {
 }
 
 type githubIssueWorkItemPayload struct {
-	Number    int                          `json:"number"`
-	Title     string                       `json:"title"`
-	Body      *string                      `json:"body"`
-	State     *string                      `json:"state"`
-	CreatedAt *string                      `json:"created_at"`
-	UpdatedAt *string                      `json:"updated_at"`
-	ClosedAt  *string                      `json:"closed_at"`
-	Labels    []githubWorkItemLabelPayload `json:"labels"`
-	Assignees []githubWorkItemUserPayload  `json:"assignees"`
-	User      *githubWorkItemUserPayload   `json:"user"`
-	HTMLURL   *string                      `json:"html_url"`
-	URL       *string                      `json:"url"`
+	Number int     `json:"number"`
+	Title  string  `json:"title"`
+	Body   *string `json:"body"`
+	// BodyStated marks a payload that carries the body key, null or not.
+	BodyStated bool                         `json:"-"`
+	State      *string                      `json:"state"`
+	CreatedAt  *string                      `json:"created_at"`
+	UpdatedAt  *string                      `json:"updated_at"`
+	ClosedAt   *string                      `json:"closed_at"`
+	Labels     []githubWorkItemLabelPayload `json:"labels"`
+	Assignees  []githubWorkItemUserPayload  `json:"assignees"`
+	User       *githubWorkItemUserPayload   `json:"user"`
+	HTMLURL    *string                      `json:"html_url"`
+	URL        *string                      `json:"url"`
 }
 
 type githubPullRequestWorkItemPayload struct {
@@ -222,6 +224,34 @@ type githubPullRequestWorkItemPayload struct {
 	Head     struct {
 		Ref string `json:"ref"`
 	} `json:"head"`
+}
+
+func (payload *githubIssueWorkItemPayload) UnmarshalJSON(raw []byte) error {
+	type plain githubIssueWorkItemPayload
+	if err := json.Unmarshal(raw, (*plain)(payload)); err != nil {
+		return err
+	}
+	payload.BodyStated = jsonKeyPresent(raw, "body")
+	return nil
+}
+
+func (payload *githubPullRequestWorkItemPayload) UnmarshalJSON(raw []byte) error {
+	if err := payload.githubIssueWorkItemPayload.UnmarshalJSON(raw); err != nil {
+		return err
+	}
+	var rest struct {
+		Merged   bool    `json:"merged"`
+		Draft    bool    `json:"draft"`
+		MergedAt *string `json:"merged_at"`
+		Head     struct {
+			Ref string `json:"ref"`
+		} `json:"head"`
+	}
+	if err := json.Unmarshal(raw, &rest); err != nil {
+		return err
+	}
+	payload.Merged, payload.Draft, payload.MergedAt, payload.Head = rest.Merged, rest.Draft, rest.MergedAt, rest.Head
+	return nil
 }
 
 type githubWorkItemEventPayload struct {
@@ -341,10 +371,7 @@ func githubIssueWorkItemSource(
 	if url == nil || *url == "" {
 		url = issue.URL
 	}
-	description := issue.Body
-	if description != nil && *description == "" {
-		description = nil
-	}
+	description := statedWorkItemDescription(issue.Body, issue.BodyStated)
 	projectID := names.Current
 	priority, serviceClass := githubPriorityFromLabels(labels)
 	var completedAt *time.Time
@@ -544,10 +571,7 @@ func normalizeGitHubPullRequestBundle(
 			reporter = &identity
 		}
 	}
-	description := pull.Body
-	if description != nil && *description == "" {
-		description = nil
-	}
+	description := statedWorkItemDescription(pull.Body, pull.BodyStated)
 	urlValue := pull.HTMLURL
 	if urlValue == nil || *urlValue == "" {
 		urlValue = pull.URL

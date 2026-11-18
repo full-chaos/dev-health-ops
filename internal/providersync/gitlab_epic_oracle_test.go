@@ -84,6 +84,7 @@ func buildGitLabEpicOracleRow(t *testing.T, input map[string]any) gitlabWorkItem
 	if err != nil {
 		t.Fatal(err)
 	}
+	row.Description = frozenOracleDescription(row.Description)
 	return row
 }
 

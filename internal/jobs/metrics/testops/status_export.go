@@ -14,6 +14,27 @@ func NormalizeStatus(status string) string {
 // leaves it out through ExcludedFromPipelineCounts, the single list.
 const StatusDeleted = "deleted"
 
+// The stored statuses of a run that has not finished. A provider sync copies its
+// last update time into finished_at for such a run, so a finish timestamp alone
+// does not make a run finished.
+const (
+	StatusRunning = "running"
+	StatusQueued  = "queued"
+)
+
+// IsOpenRun reports whether a stored ci_pipeline_runs status is a run that has
+// not finished.
+func IsOpenRun(status string) bool {
+	switch trimLower(status) {
+	case StatusRunning, StatusQueued:
+		return true
+	}
+	return false
+}
+
+// NotOpenRunSQL is IsOpenRun as a ClickHouse predicate on ci_pipeline_runs.
+const NotOpenRunSQL = "lowerUTF8(trimBoth(ifNull(status, ''))) NOT IN ('" + StatusRunning + "', '" + StatusQueued + "')"
+
 // ExcludedFromPipelineCounts reports whether a stored ci_pipeline_runs status
 // is left out of pipeline counts and rates.
 func ExcludedFromPipelineCounts(status string) bool {

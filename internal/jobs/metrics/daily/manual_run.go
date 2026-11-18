@@ -7,8 +7,6 @@ import (
 	"sort"
 	"strings"
 	"time"
-
-	"github.com/google/uuid"
 )
 
 // ManualDailyRunOutcome reports what StartManualDailyRun did for one day.
@@ -16,9 +14,10 @@ type ManualDailyRunOutcome struct {
 	Day        string
 	RunID      string
 	Generation string
-	// AlreadyStarted is true when the run row of this (org, day, generation)
-	// existed before the call, so the call started nothing new (the
-	// idempotent replay of an earlier identical request). It is not part of
+	// AlreadyStarted is true when this call's insert of the run row of this
+	// (org, day, generation) found it present, so the call started nothing new
+	// (the idempotent replay of an earlier identical request). It comes from
+	// the insert, so two concurrent calls cannot both report a start. It is not part of
 	// the command's output: a caller that wants it reads it from here.
 	AlreadyStarted bool `json:"-"`
 	// CoveredDayOverriddenBy is the run id of the scheduled-fanout or post-sync
@@ -212,19 +211,7 @@ func (store *PostgresStore) startManualDailyRun(
 		}
 	}
 
-	var alreadyStarted bool
-	if err := tx.QueryRow(ctx, `
-SELECT EXISTS (SELECT 1 FROM public.daily_metrics_runs WHERE id = $1::uuid)`,
-		newRun(uuid.MustParse(organizationID).String(), targetDay, generation).ID,
-	).Scan(&alreadyStarted); err != nil {
-		return ManualDailyRunOutcome{}, ErrUnavailable
-	}
-
-	if alreadyStarted {
-		// A replay of the same tag starts nothing: it overrides nothing.
-		overriddenBy = ""
-	}
-	run, err := store.StartRunTx(ctx, tx, StartRunRequest{
+	run, inserted, err := store.startRunTx(ctx, tx, StartRunRequest{
 		OrganizationID: organizationID,
 		TargetDay:      targetDay,
 		Generation:     generation,
@@ -232,6 +219,11 @@ SELECT EXISTS (SELECT 1 FROM public.daily_metrics_runs WHERE id = $1::uuid)`,
 	}, publisher)
 	if err != nil {
 		return ManualDailyRunOutcome{}, err
+	}
+	alreadyStarted := !inserted
+	if alreadyStarted {
+		// A replay of the same tag starts nothing: it overrides nothing.
+		overriddenBy = ""
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return ManualDailyRunOutcome{}, ErrUnavailable

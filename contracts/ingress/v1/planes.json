@@ -179,7 +179,6 @@
     {"path": "/api/v1/auth/sso/providers/[^/]+$", "path_type": "ImplementationSpecific", "plane": "go-api"},
     {"path": "/api/v1/auth/sso/providers/[^/]+/activate$", "path_type": "ImplementationSpecific", "plane": "go-api"},
     {"path": "/api/v1/auth/sso/providers/[^/]+/deactivate$", "path_type": "ImplementationSpecific", "plane": "go-api"},
-    {"path": "/api/v1/auth/oauth/providers$", "path_type": "ImplementationSpecific", "plane": "go-api"},
     {"path": "/api/v1/auth/oidc/[^/]+/authorize$", "path_type": "ImplementationSpecific", "plane": "go-api"},
     {"path": "/api/v1/auth/oidc/[^/]+/callback$", "path_type": "ImplementationSpecific", "plane": "go-api"},
     {"path": "/api/v1/auth/saml/[^/]+/metadata$", "path_type": "ImplementationSpecific", "plane": "go-api"},

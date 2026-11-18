@@ -46,7 +46,7 @@ func (handler *pagedChunkHandler) CollectChunks(
 		start = cursor.Page
 	}
 	destinations := []string{"ci_pipeline_runs", "ci_job_runs", "ci_acceptance_checks",
-		"test_suite_results", "test_case_results", "coverage_snapshots"}
+		"test_suite_results", "test_case_results", "coverage_snapshots", "testops_run_report_completeness"}
 	for page := start; page < handler.pages; page++ {
 		effects := make([]EffectBatch, 0, len(destinations))
 		for _, destination := range destinations {
@@ -168,8 +168,8 @@ func TestChunkedCrashBeyondTheOldEightChunksStaysIdempotent(t *testing.T) {
 	if duplicated := sink.duplicates(); duplicated != 0 {
 		t.Fatalf("%d row(s) physically written more than once across the crash boundary", duplicated)
 	}
-	if len(sink.rows) != pages*6 {
-		t.Fatalf("distinct rows written=%d, want %d", len(sink.rows), pages*6)
+	if len(sink.rows) != pages*7 {
+		t.Fatalf("distinct rows written=%d, want %d", len(sink.rows), pages*7)
 	}
 }
 
@@ -193,9 +193,9 @@ func (handler *bigPageChunkHandler) CollectChunks(
 		for index := 0; index < handler.rows; index++ {
 			rows = append(rows, json.RawMessage(`{"org_id":"`+claim.OrgID+`","row":`+strconv.Itoa(index)+`}`))
 		}
-		effects := make([]EffectBatch, 0, 6)
+		effects := make([]EffectBatch, 0, 7)
 		for _, destination := range []string{"ci_pipeline_runs", "ci_job_runs", "ci_acceptance_checks",
-			"test_suite_results", "test_case_results", "coverage_snapshots"} {
+			"test_suite_results", "test_case_results", "coverage_snapshots", "testops_run_report_completeness"} {
 			destinationRows := []json.RawMessage(nil)
 			if destination == "ci_pipeline_runs" {
 				destinationRows = rows
@@ -306,9 +306,9 @@ func (handler *batchOnlyChunkHandler) Collect(
 	for index := 0; index < handler.rows; index++ {
 		rows = append(rows, json.RawMessage(`{"org_id":"`+claim.OrgID+`","row":`+strconv.Itoa(index)+`}`))
 	}
-	effects := make([]EffectBatch, 0, 6)
+	effects := make([]EffectBatch, 0, 7)
 	for _, destination := range []string{"ci_pipeline_runs", "ci_job_runs", "ci_acceptance_checks",
-		"test_suite_results", "test_case_results", "coverage_snapshots"} {
+		"test_suite_results", "test_case_results", "coverage_snapshots", "testops_run_report_completeness"} {
 		destinationRows := []json.RawMessage(nil)
 		if destination == "ci_pipeline_runs" {
 			destinationRows = rows

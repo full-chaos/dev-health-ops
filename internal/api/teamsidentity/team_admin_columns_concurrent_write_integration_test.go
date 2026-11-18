@@ -304,3 +304,71 @@ func TestADeleteRacedByADeleteAnswersDeleted(t *testing.T) {
 		})
 	}
 }
+
+// otherNameConn writes, before every read-back of teamID, a newer version of
+// it named "Other" (a writer that read the team earlier and wins on version),
+// and counts the teams inserts of the writer it wraps.
+type otherNameConn struct {
+	driver.Conn
+	t       *testing.T
+	teamID  string
+	inserts int
+}
+
+func (c *otherNameConn) Exec(ctx context.Context, query string, args ...any) error {
+	if rosterRaceAtInsert.MatchString(query) {
+		c.inserts++
+	}
+	return c.Conn.Exec(ctx, query, args...)
+}
+
+func (c *otherNameConn) QueryRow(ctx context.Context, query string, args ...any) driver.Row {
+	if rosterReadBack.MatchString(query) && namedTeamID(args) == c.teamID {
+		if err := c.Conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider)
+			SELECT id, team_uuid, 'Other', manual_members, project_keys, repo_patterns, 1, updated_at + INTERVAL 1 SECOND, org_id, provider
+			FROM teams FINAL WHERE org_id = ? AND id = ?`, rosterRaceOrg, c.teamID); err != nil {
+			c.t.Fatal(err)
+		}
+	}
+	return c.Conn.QueryRow(ctx, query, args...)
+}
+
+// CHAOS-14094 (acp Q1 a): a rename, PATCH or delete that another writer wins
+// over on every round is written rosterRounds times, then answered 409
+// team_changed_concurrently.
+func TestAnAdminTeamWriteThatNeverHoldsIsRefusedAfterThreeWrites(t *testing.T) {
+	conn, ctx := startMigratedTeamsStore(t)
+	refused := func(t *testing.T, name string, recorder *httptest.ResponseRecorder, inserts int) {
+		t.Helper()
+		if recorder.Code != http.StatusConflict || reasonCode(t, recorder) != teamChangedConcurrentlyReason || inserts != rosterRounds {
+			t.Errorf("CELL refusal/%s: %d %s after %d writes, want 409 team_changed_concurrently after %d", name, recorder.Code, recorder.Body.String(), inserts, rosterRounds)
+		} else {
+			t.Logf("CELL refusal/%s: 409 %s after %d writes", name, recorder.Body.String(), inserts)
+		}
+	}
+	t.Run("post_update", func(t *testing.T) {
+		const teamID = "custom:refused-post"
+		if _, err := (Store{Conn: conn}).CreateOrUpdateTeam(ctx, rosterRaceOrg, TeamWrite{Origin: "custom", TeamID: teamID, Name: "Refused"}); err != nil {
+			t.Fatal(err)
+		}
+		other := &otherNameConn{Conn: conn, t: t, teamID: teamID}
+		h := newTestHandlers(Store{Conn: other})
+		recorder := callWithBody(t, h, h.createOrUpdateTeam, http.MethodPost, "/api/v1/admin/teams", rosterRaceOrg, map[string]any{"team_id": teamID, "name": "Mine"})
+		refused(t, "post_update", recorder, other.inserts)
+	})
+	t.Run("patch", func(t *testing.T) {
+		const teamID = "gh:refused-patch"
+		seedRosterTeam(ctx, t, conn, teamID, "github")
+		other := &otherNameConn{Conn: conn, t: t, teamID: teamID}
+		h := newTestHandlers(Store{Conn: other})
+		refused(t, "patch", callTeamRoute(t, h, h.updateTeam, http.MethodPatch, teamID, map[string]any{"name": "Mine"}), other.inserts)
+	})
+	t.Run("delete", func(t *testing.T) {
+		const teamID = "gh:refused-delete"
+		seedRosterTeam(ctx, t, conn, teamID, "github")
+		// The stale version carries no deleted_at: the team is there again.
+		stale := &staleCarryConn{Conn: conn, t: t, teamID: teamID}
+		h := newTestHandlers(Store{Conn: stale})
+		refused(t, "delete", callTeamRoute(t, h, h.deleteTeam, http.MethodDelete, teamID, nil), stale.inserts)
+	})
+}

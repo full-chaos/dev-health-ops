@@ -623,7 +623,10 @@ func (h handlers) updateTeam(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	write := TeamWrite{Origin: existing.origin.Provider, TeamID: teamID, Name: existing.Name, Description: existing.Description}
+	// Only the fields of the body are written: the others are kept as
+	// stored when the write is made, not as read here.
+	write := TeamWrite{Origin: existing.origin.Provider, TeamID: teamID, Name: existing.Name, Description: existing.Description,
+		KeepName: !hasName, KeepDescription: !hasDescription, Update: true}
 	if hasName {
 		write.Name = name
 	}
@@ -632,13 +635,9 @@ func (h handlers) updateTeam(w http.ResponseWriter, r *http.Request) {
 	}
 	if hasRepoPatterns {
 		write.RepoPatterns = &repoPatterns
-	} else {
-		write.RepoPatterns = ptrSlice(existing.RepoPatterns)
 	}
 	if hasProjectKeys {
 		write.ProjectKeys = &projectKeys
-	} else {
-		write.ProjectKeys = ptrSlice(existing.ProjectKeys)
 	}
 	updated, err := h.store.CreateOrUpdateTeam(r.Context(), orgIDOf(r.Context()), write)
 	if err != nil {

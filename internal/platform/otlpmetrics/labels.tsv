@@ -222,6 +222,7 @@ dev_health_daily_metrics_runs_blocked_marked_total		code: internal/jobruntime/te
 dev_health_daily_metrics_runs_blocked_reconcile_failed_total		code: internal/jobruntime/telemetry.go
 dev_health_daily_metrics_runs_finalized_by_sweep_total		code: internal/jobruntime/telemetry.go
 dev_health_daily_metrics_stranded_finalize_runs_detected_total		code: internal/jobruntime/telemetry.go
+dev_health_daily_metrics_stranded_finalize_sweep_failed_total		code: internal/jobruntime/telemetry.go
 dev_health_execution_liveness_probe_failures_total	probe,reason	code: internal/platform/selfprobe/monitor.go
 dev_health_execution_liveness_seconds_since_success	probe	code: internal/platform/selfprobe/monitor.go
 dev_health_gate_penalize_errors_total	path,provider	code: internal/providerfoundation/budget.go

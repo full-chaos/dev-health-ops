@@ -398,6 +398,94 @@ LIMIT $2`, now, limit)
 	return runIDs, nil
 }
 
+// finalizeStrandHorizon is how long a run with every partition succeeded may
+// wait in finalization 'pending' before the nightly sweep treats its finalize
+// job as gone. A pending finalize normally waits seconds (the org-day gate
+// snoozes at most 30 s a refusal); TestFinalizeStrandHorizonExceedsTheRetryBudget
+// keeps this above River's attempt budget for metrics.daily_finalize.
+const finalizeStrandHorizon = 24 * time.Hour
+
+// SweepStrandedFinalizeForOrg redrives the never-attempted stranded finalizes of
+// one organization: status 'running', every partition succeeded, finalization
+// 'pending' with no write for finalizeStrandHorizon, and no open redrive event.
+// Its finalize job is gone (River deletes a finished job after its retention),
+// so nothing else would ever claim it. Only the never-attempted subset
+// (RedriveStrandedFinalize with allowPriorAttempt false): a 'failed' or
+// expired-'running' finalization may already have written rows and stays with
+// an operator. A finalize job still queued past the horizon gets a second one;
+// ClaimFinalize's lease lets only one of them compute.
+func (store *PostgresStore) SweepStrandedFinalizeForOrg(
+	ctx context.Context, publisher redriveFinalizePublisher, orgID string,
+) (int, error) {
+	if !store.valid() || publisher == nil || !validUUID(orgID) {
+		return 0, ErrUnavailable
+	}
+	redriven, err := store.sweepStrandedFinalizeForOrg(ctx, publisher, orgID)
+	if err != nil {
+		store.observeFinalizeSweep("failed", 1)
+	}
+	return redriven, err
+}
+
+func (store *PostgresStore) sweepStrandedFinalizeForOrg(
+	ctx context.Context, publisher redriveFinalizePublisher, orgID string,
+) (int, error) {
+	now := store.now().UTC()
+	rows, err := store.pool.Query(ctx, `
+SELECT run.id::text
+FROM public.daily_metrics_runs AS run
+WHERE run.org_id = $1::uuid
+  AND run.status = 'running'
+  AND run.finalization_status = 'pending'
+  AND run.updated_at <= $2
+  AND EXISTS (
+      SELECT 1 FROM public.daily_metrics_partitions AS partition
+      WHERE partition.run_id = run.id
+  )
+  AND NOT EXISTS (
+      SELECT 1 FROM public.daily_metrics_partitions AS partition
+      WHERE partition.run_id = run.id AND partition.status <> 'succeeded'
+  )
+  AND NOT EXISTS (
+      SELECT 1 FROM public.daily_metrics_finalize_redrive_events AS redrive_event
+      WHERE redrive_event.run_id = run.id AND redrive_event.status = 'open'
+  )
+ORDER BY run.updated_at, run.id
+LIMIT $3`, orgID, now.Add(-finalizeStrandHorizon), defaultFinalizeSweepLimit)
+	if err != nil {
+		return 0, ErrUnavailable
+	}
+	var runIDs []string
+	for rows.Next() {
+		var runID string
+		if err := rows.Scan(&runID); err != nil {
+			rows.Close()
+			return 0, ErrUnavailable
+		}
+		runIDs = append(runIDs, runID)
+	}
+	rowsErr := rows.Err()
+	rows.Close()
+	if rowsErr != nil {
+		return 0, ErrUnavailable
+	}
+	store.observeFinalizeSweep("detected", len(runIDs))
+	nonce := uuid.NewString()
+	redriven := 0
+	for _, runID := range runIDs {
+		finalized, err := store.redriveOneStrandedFinalize(ctx, publisher, runID, nonce, now, false)
+		if err != nil {
+			store.observeFinalizeSweep("finalized", redriven)
+			return redriven, err
+		}
+		if finalized {
+			redriven++
+		}
+	}
+	store.observeFinalizeSweep("finalized", redriven)
+	return redriven, nil
+}
+
 // FinalizeRedriveOutcome summarizes one CHAOS-4389 stranded-finalize redrive
 // pass.
 type FinalizeRedriveOutcome struct {
@@ -472,7 +560,7 @@ func (store *PostgresStore) RedriveStrandedFinalize(
 // dedupe/policy rejection cannot roll back an otherwise-successful batch.
 func (store *PostgresStore) redriveOneStrandedFinalize(
 	ctx context.Context,
-	publisher *PostgresPublisher,
+	publisher redriveFinalizePublisher,
 	runID, nonce string,
 	now time.Time,
 	allowPriorAttempt bool,

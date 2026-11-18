@@ -642,6 +642,9 @@ func TestObserveDailyMetricsFinalizeSweepRecordsDetectedAndFinalizedSeparately(t
 	if err := collector.ObserveDailyMetricsFinalizeSweep("finalized", 2); err != nil {
 		t.Fatal(err)
 	}
+	if err := collector.ObserveDailyMetricsFinalizeSweep("failed", 1); err != nil {
+		t.Fatal(err)
+	}
 	// A second pass accumulates rather than replacing.
 	if err := collector.ObserveDailyMetricsFinalizeSweep("detected", 1); err != nil {
 		t.Fatal(err)
@@ -652,6 +655,8 @@ func TestObserveDailyMetricsFinalizeSweepRecordsDetectedAndFinalizedSeparately(t
 		"# HELP dev_health_daily_metrics_runs_finalized_by_sweep_total ",
 		"dev_health_daily_metrics_stranded_finalize_runs_detected_total 4",
 		"dev_health_daily_metrics_runs_finalized_by_sweep_total 2",
+		"# HELP dev_health_daily_metrics_stranded_finalize_sweep_failed_total ",
+		"dev_health_daily_metrics_stranded_finalize_sweep_failed_total 1",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("missing exposition content %q:\n%s", want, text)
@@ -673,6 +678,7 @@ func TestObserveDailyMetricsFinalizeSweepIsPreSeededAtZero(t *testing.T) {
 	for _, want := range []string{
 		"dev_health_daily_metrics_stranded_finalize_runs_detected_total 0",
 		"dev_health_daily_metrics_runs_finalized_by_sweep_total 0",
+		"dev_health_daily_metrics_stranded_finalize_sweep_failed_total 0",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("missing pre-seeded zero %q:\n%s", want, text)

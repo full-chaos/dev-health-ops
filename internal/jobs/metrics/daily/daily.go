@@ -511,6 +511,45 @@ func (handler *Dispatcher) reconcileBlockedRuns(ctx context.Context, organizatio
 	_ = handler.blockedObserver.ObserveDailyMetricsBlockedRun("cleared", outcome.Cleared)
 }
 
+// strandedFinalizeSweeper is the optional store capability behind
+// sweepStrandedFinalize.
+type strandedFinalizeSweeper interface {
+	SweepStrandedFinalizeForOrg(ctx context.Context, publisher redriveFinalizePublisher, orgID string) (int, error)
+}
+
+// sweepStrandedFinalize redrives this organization's stranded finalizes. A run
+// whose partitions all succeeded and whose finalize job is gone is reached by
+// nothing else: the strand repair needs the River job row. Fail-open: an error
+// is logged at Warn, counted (the sweep's "failed" outcome), and the dispatch
+// result does not change.
+func (handler *Dispatcher) sweepStrandedFinalize(ctx context.Context, organizationID string) {
+	sweeper, ok := handler.store.(strandedFinalizeSweeper)
+	if !ok {
+		return
+	}
+	publisher, ok := handler.publisher.(redriveFinalizePublisher)
+	if !ok {
+		return
+	}
+	redriven, err := sweeper.SweepStrandedFinalizeForOrg(ctx, publisher, organizationID)
+	if err != nil {
+		slog.WarnContext(ctx, StrandedFinalizeSweepFailedLogMessage,
+			"organization_id", organizationID, "redriven", redriven, "error", err)
+		return
+	}
+	if redriven > 0 {
+		slog.InfoContext(ctx, StrandedFinalizeSweepLogMessage,
+			"organization_id", organizationID, "redriven", redriven)
+	}
+}
+
+// StrandedFinalizeSweepLogMessage and StrandedFinalizeSweepFailedLogMessage are
+// the lines of the nightly stranded-finalize sweep.
+const (
+	StrandedFinalizeSweepLogMessage       = "daily metrics stranded finalize redriven"
+	StrandedFinalizeSweepFailedLogMessage = "daily metrics stranded finalize sweep failed"
+)
+
 func (handler *Dispatcher) Work(ctx context.Context, execution *jobruntime.Execution[jobruntime.DailyMetricsDispatchArgs]) error {
 	if handler == nil || handler.store == nil || handler.publisher == nil || handler.discoverer == nil || execution == nil {
 		return jobruntime.Permanent(ErrUnavailable)
@@ -557,6 +596,9 @@ func (handler *Dispatcher) Work(ctx context.Context, execution *jobruntime.Execu
 	// as the reconcile above: a failed publish of THIS run must not stop the
 	// drain of the organization.
 	defer handler.drainTouchedDaysAfterDispatch(ctx, *run)
+	// The organization's never-attempted stranded finalizes, on the same
+	// nightly tick and fail-open for the same reason.
+	defer handler.sweepStrandedFinalize(ctx, run.OrganizationID)
 	if run.RepositoryDiscoveryRequired {
 		repositoryIDs, err := handler.discoverer.RepositoryIDs(ctx, run.OrganizationID)
 		if err != nil {

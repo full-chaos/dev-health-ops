@@ -442,21 +442,12 @@ func newWorkUnitExplainHandler(
 // {work_unit_id} not found")` (main.py:771-774) with the caller's own id
 // interpolated verbatim.
 //
-// It encodes through workunitexplain.WriteJSON rather than the shared
-// writeRESTError, because this is the ONE error body on this route that
-// carries caller-supplied text and the shared writer escapes `<`, `>` and
-// `&`, which the reference does not. See WriteJSON's own doc comment for
-// what that path does and does not reproduce. Captured fixtures:
+// It goes through the shared writeRESTError, whose body is the JSONResponse
+// bytes (no HTML escaping, no trailing newline). Captured fixtures:
 // testdata/work_unit_explain/not_found*.json.
 func writeWorkUnitExplainNotFound(w http.ResponseWriter, r *http.Request, orgID, workUnitID string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusNotFound)
-	if err := workunitexplain.WriteJSON(w, restErrorBody{
-		Detail: fmt.Sprintf("Work unit %s not found", workUnitID),
-	}); err != nil {
-		log.Printf("query-api: work_unit_explain: write 404 body failed: org_id=%s request_id=%s err=%v",
-			orgID, logSafeRequestID(envelopeRequestID(r)), err)
-	}
+	writeRESTError(w, r, "work_unit_explain", orgID, http.StatusNotFound,
+		fmt.Sprintf("Work unit %s not found", workUnitID))
 }
 
 // providerNameAuto is the provider name _missing_provider_error reports

@@ -23,12 +23,14 @@
 package server
 
 import (
-	"encoding/json"
 	"fmt"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/chclient"
 	"log"
 	"net/http"
+	"strings"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/policy"
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
@@ -63,15 +65,27 @@ type restAuthErrorDetail struct {
 // omits it; that is what makes this a genuinely optional extension, not
 // a second response path.
 func writeRESTError(w http.ResponseWriter, r *http.Request, component, orgID string, status int, detail any, extraHeaders ...[2]string) {
-	for _, h := range extraHeaders {
-		w.Header().Set(h[0], h[1])
+	if text, isText := detail.(string); isText {
+		// A caller-supplied value echoed here may hold invalid UTF-8 (a
+		// percent-encoded path); pyjson refuses it, so write what
+		// encoding/json wrote before: one U+FFFD per bad byte.
+		detail = strings.Map(func(r rune) rune { return r }, text)
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	if encodeErr := json.NewEncoder(w).Encode(restErrorBody{Detail: detail}); encodeErr != nil {
-		log.Printf("query-api: %s: encode error response failed: org_id=%s request_id=%s err=%v",
-			component, orgID, logSafeRequestID(envelopeRequestID(r)), encodeErr)
+	body, err := pyjson.FromGo(detail)
+	if err != nil {
+		log.Printf("query-api: %s: encode error response failed: org_id=%s request_id=%s err_type=%T",
+			component, orgID, logSafeRequestID(envelopeRequestID(r)), err)
+		policy.WriteInternal(w)
+		return
 	}
+	var extra http.Header
+	if len(extraHeaders) > 0 {
+		extra = http.Header{}
+		for _, h := range extraHeaders {
+			extra.Set(h[0], h[1])
+		}
+	}
+	policy.WriteDetail(w, status, body, extra)
 }
 
 // writeRESTUnauthorized answers 401 with error_detail(message)'s exact

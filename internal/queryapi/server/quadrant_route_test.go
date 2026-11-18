@@ -117,7 +117,7 @@ func TestNewQuadrantWorkHandlerRequiresAuthContext(t *testing.T) {
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
 	}
-	if got, want := rec.Body.String(), `{"detail":{"message":"Not authenticated"}}`+"\n"; got != want {
+	if got, want := rec.Body.String(), `{"detail":{"message":"Not authenticated"}}`; got != want {
 		t.Fatalf("body = %q, want %q", got, want)
 	}
 }
@@ -223,7 +223,7 @@ func TestNewQuadrantWorkHandlerUnknownTypeIs404(t *testing.T) {
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
 	}
-	if got, want := rec.Body.String(), `{"detail":"Unknown quadrant type"}`+"\n"; got != want {
+	if got, want := rec.Body.String(), `{"detail":"Unknown quadrant type"}`; got != want {
 		t.Fatalf("body = %q, want %q", got, want)
 	}
 }
@@ -274,7 +274,7 @@ func TestNewQuadrantWorkHandlerPersonScopeRequiresScopeID(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
 	}
-	if got, want := rec.Body.String(), `{"detail":"Individual quadrants require a person id"}`+"\n"; got != want {
+	if got, want := rec.Body.String(), `{"detail":"Individual quadrants require a person id"}`; got != want {
 		t.Fatalf("body = %q, want %q", got, want)
 	}
 }
@@ -294,7 +294,7 @@ func TestNewQuadrantWorkHandlerPersonScopeIndividualNotFound(t *testing.T) {
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
 	}
-	if got, want := rec.Body.String(), `{"detail":"Individual not found"}`+"\n"; got != want {
+	if got, want := rec.Body.String(), `{"detail":"Individual not found"}`; got != want {
 		t.Fatalf("body = %q, want %q", got, want)
 	}
 }
@@ -327,7 +327,7 @@ func TestBuildQuadrantRouteEntryHandlerRejectsNonGET(t *testing.T) {
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
 	}
-	if got, want := rec.Body.String(), `{"detail":"Method Not Allowed"}`+"\n"; got != want {
+	if got, want := rec.Body.String(), `{"detail":"Method Not Allowed"}`; got != want {
 		t.Fatalf("body = %q, want %q", got, want)
 	}
 }
@@ -347,7 +347,7 @@ func TestNewQuadrantWorkHandlerRejectsComparativeParams(t *testing.T) {
 			if rec.Code != http.StatusBadRequest {
 				t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
 			}
-			if got, want := rec.Body.String(), `{"detail":"Comparative parameters are not supported."}`+"\n"; got != want {
+			if got, want := rec.Body.String(), `{"detail":"Comparative parameters are not supported."}`; got != want {
 				t.Fatalf("body = %q, want %q", got, want)
 			}
 		})

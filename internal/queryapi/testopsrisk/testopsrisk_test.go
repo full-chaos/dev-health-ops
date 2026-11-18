@@ -141,6 +141,8 @@ func same(a, b *float64) bool {
 
 // The expected values were produced by running the Python resolver
 // resolve_testops_risk on the same rows (testdata/python_cells.json).
+// CHAOS-14001: the breakdown of the cells drag_null_parts and gaps was recorded
+// again on purpose and carries the Go answer (an absent part is omitted, not 0).
 func TestResolve_MatchesPythonCells(t *testing.T) {
 	var cells map[string]cell
 	if err := json.Unmarshal(pythonCells, &cells); err != nil {

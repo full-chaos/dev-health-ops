@@ -3755,7 +3755,90 @@ const registeredCapacityForecastsDocument = `query CapacityForecasts($orgId: Str
 //
 // Same wire-form provenance as registeredCapacityForecastDocument above.
 // Source const: THROUGHPUT_FORECAST_QUERY, queries.ts:264.
+//
+// The `backlogState` and `backlogAsOfDay` selections (after `backlogSize`) and the `grainCount` selection of
+// estimateCoverage (CHAOS-8167, CHAOS-8172) are NOT from the web file until the web change that selects them lands;
+// they are in the form urql prints. The web's real wire text wins over this one if they differ.
 const registeredThroughputForecastDocument = `query ThroughputForecast($orgId: String!, $input: ThroughputForecastInput!) {
+  throughputForecast(orgId: $orgId, input: $input) {
+    forecastId
+    computedAt
+    teamId
+    workScopeId
+    backlogSize
+    backlogState
+    backlogAsOfDay
+    historyWeeks
+    p50Weeks
+    p75Weeks
+    p90Weeks
+    insufficientHistory
+    rollingWindows {
+      windowWeeks
+      meanWeeklyThroughput
+      sampleCount
+      insufficientHistory
+      __typename
+    }
+    primaryRisk {
+      kind
+      score
+      label
+      value
+      threshold
+      active
+      __typename
+    }
+    wipCongestion {
+      kind
+      score
+      label
+      value
+      threshold
+      active
+      __typename
+    }
+    staleWip {
+      p50AgeHours
+      p90AgeHours
+      __typename
+    }
+    estimateCoverage {
+      ratio
+      estimatedCount
+      unestimatedCount
+      backlogSize
+      grainCount
+      __typename
+    }
+    reviewBottleneck {
+      kind
+      score
+      label
+      value
+      threshold
+      active
+      __typename
+    }
+    incidentLoad {
+      kind
+      score
+      label
+      value
+      threshold
+      active
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredThroughputForecastV1Document is the text throughputForecast accepted BEFORE it asked how the backlog was
+// found and how many coverage grains were read (CHAOS-8167, CHAOS-8172): the text CHAOS-5349 registered. It stays a
+// legacy text (see legacyDigestsByOperation) so a web build still sending it keeps working while the new web rolls
+// out; it reads the same answer less the three fields. The operation's ONE current document is
+// registeredThroughputForecastDocument above. Wire form, same provenance: testdata/wire_form/throughputForecast.v1.graphql.
+const registeredThroughputForecastV1Document = `query ThroughputForecast($orgId: String!, $input: ThroughputForecastInput!) {
   throughputForecast(orgId: $orgId, input: $input) {
     forecastId
     computedAt
@@ -7339,6 +7422,7 @@ var legacyDigestsByOperation = map[string][]string{
 	"investmentBreakdownTeam":       {digestHex(registeredInvestmentBreakdownTeamV1Document)},
 	"investmentBreakdownRepository": {digestHex(registeredInvestmentBreakdownRepositoryV1Document)},
 	"teamWorkItemBreakdown":         {digestHex(registeredTeamWorkItemBreakdownV1Document)},
+	"throughputForecast":            {digestHex(registeredThroughputForecastV1Document)},
 }
 
 // buildOperationByDigest is the reverse index digest -> operation over every accepted text: each operation's

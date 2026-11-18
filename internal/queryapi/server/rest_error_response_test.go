@@ -38,7 +38,7 @@ func TestWriteRESTErrorBodyShapes(t *testing.T) {
 				writeRESTDataUnavailable(w, r, "test", "org-1", errors.New("simulated downstream failure"))
 			},
 			wantStatus: http.StatusServiceUnavailable,
-			wantBody:   `{"detail":"Data unavailable"}` + "\n",
+			wantBody:   `{"detail":"Data unavailable"}`,
 		},
 		{
 			name: "plain string detail (typed request error)",
@@ -46,7 +46,7 @@ func TestWriteRESTErrorBodyShapes(t *testing.T) {
 				writeRESTError(w, r, "test", "org-1", http.StatusBadRequest, "Comparative parameters are not supported.")
 			},
 			wantStatus: http.StatusBadRequest,
-			wantBody:   `{"detail":"Comparative parameters are not supported."}` + "\n",
+			wantBody:   `{"detail":"Comparative parameters are not supported."}`,
 		},
 		{
 			name: "not authenticated (missing header)",
@@ -54,7 +54,7 @@ func TestWriteRESTErrorBodyShapes(t *testing.T) {
 				writeRESTUnauthorized(w, r, "test", "Not authenticated")
 			},
 			wantStatus:  http.StatusUnauthorized,
-			wantBody:    `{"detail":{"message":"Not authenticated"}}` + "\n",
+			wantBody:    `{"detail":{"message":"Not authenticated"}}`,
 			wantWWWAuth: "Bearer",
 		},
 		{
@@ -63,7 +63,7 @@ func TestWriteRESTErrorBodyShapes(t *testing.T) {
 				writeRESTUnauthorized(w, r, "test", "Invalid authorization header")
 			},
 			wantStatus:  http.StatusUnauthorized,
-			wantBody:    `{"detail":{"message":"Invalid authorization header"}}` + "\n",
+			wantBody:    `{"detail":{"message":"Invalid authorization header"}}`,
 			wantWWWAuth: "Bearer",
 		},
 		{
@@ -72,7 +72,7 @@ func TestWriteRESTErrorBodyShapes(t *testing.T) {
 				writeRESTUnauthorized(w, r, "test", "Invalid or expired token")
 			},
 			wantStatus:  http.StatusUnauthorized,
-			wantBody:    `{"detail":{"message":"Invalid or expired token"}}` + "\n",
+			wantBody:    `{"detail":{"message":"Invalid or expired token"}}`,
 			wantWWWAuth: "Bearer",
 		},
 		{
@@ -81,7 +81,7 @@ func TestWriteRESTErrorBodyShapes(t *testing.T) {
 				writeRESTMethodNotAllowed(w, r, "test")
 			},
 			wantStatus: http.StatusMethodNotAllowed,
-			wantBody:   `{"detail":"Method Not Allowed"}` + "\n",
+			wantBody:   `{"detail":"Method Not Allowed"}`,
 		},
 	}
 
@@ -123,7 +123,7 @@ func TestAuthenticateRESTRequestMissingHeader(t *testing.T) {
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
 	}
-	if got, want := rec.Body.String(), `{"detail":{"message":"Not authenticated"}}`+"\n"; got != want {
+	if got, want := rec.Body.String(), `{"detail":{"message":"Not authenticated"}}`; got != want {
 		t.Fatalf("body = %q, want %q", got, want)
 	}
 }
@@ -147,7 +147,7 @@ func TestAuthenticateRESTRequestMalformedHeader(t *testing.T) {
 		if rec.Code != http.StatusUnauthorized {
 			t.Fatalf("authenticateRESTRequest(%q): status = %d, want %d", header, rec.Code, http.StatusUnauthorized)
 		}
-		if got, want := rec.Body.String(), `{"detail":{"message":"Invalid authorization header"}}`+"\n"; got != want {
+		if got, want := rec.Body.String(), `{"detail":{"message":"Invalid authorization header"}}`; got != want {
 			t.Fatalf("authenticateRESTRequest(%q): body = %q, want %q", header, got, want)
 		}
 	}
@@ -179,7 +179,7 @@ func TestAuthenticateRESTRequestVerifyFailure(t *testing.T) {
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
 	}
-	if got, want := rec.Body.String(), `{"detail":{"message":"Invalid or expired token"}}`+"\n"; got != want {
+	if got, want := rec.Body.String(), `{"detail":{"message":"Invalid or expired token"}}`; got != want {
 		t.Fatalf("body = %q, want %q", got, want)
 	}
 	if got := rec.Header().Get("WWW-Authenticate"); got != "Bearer" {
@@ -238,7 +238,7 @@ func TestAuthenticateRESTRequestNilEdgeVerifierUnchanged(t *testing.T) {
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
 	}
-	if got, want := rec.Body.String(), `{"detail":{"message":"Invalid or expired token"}}`+"\n"; got != want {
+	if got, want := rec.Body.String(), `{"detail":{"message":"Invalid or expired token"}}`; got != want {
 		t.Fatalf("body = %q, want %q", got, want)
 	}
 }
@@ -431,5 +431,55 @@ func TestDataUnavailableCallSitesLogTheCause(t *testing.T) {
 	if len(violations) > 0 {
 		t.Fatalf("every REST 503 degradation site must log its cause through one of the logging wrappers (..., err); found %d violation(s):\n%s",
 			len(violations), strings.Join(violations, "\n"))
+	}
+}
+
+// TestWriteRESTErrorBodyIsJSONResponseBytes pins that a detail carrying
+// `<`, `>` and `&` is written unescaped and with no trailing newline, as
+// Starlette's JSONResponse writes it.
+func TestWriteRESTErrorBodyIsJSONResponseBytes(t *testing.T) {
+	tests := []struct {
+		name   string
+		write  func(w http.ResponseWriter, r *http.Request)
+		status int
+		want   string
+	}{
+		{
+			name: "unknown value echoed in a 400",
+			write: func(w http.ResponseWriter, r *http.Request) {
+				writeRESTError(w, r, "test", "org-1", http.StatusBadRequest, "Unknown value <a&b>")
+			},
+			status: http.StatusBadRequest,
+			want:   `{"detail":"Unknown value <a&b>"}`,
+		},
+		{
+			name: "work unit 404 echoes the caller id",
+			write: func(w http.ResponseWriter, r *http.Request) {
+				writeWorkUnitExplainNotFound(w, r, "org-1", "<&>")
+			},
+			status: http.StatusNotFound,
+			want:   `{"detail":"Work unit <&> not found"}`,
+		},
+		{
+			name: "invalid UTF-8 in a caller value keeps the 404",
+			write: func(w http.ResponseWriter, r *http.Request) {
+				writeWorkUnitExplainNotFound(w, r, "org-1", "wu-\xed\xa0\x80")
+			},
+			status: http.StatusNotFound,
+			want:   "{\"detail\":\"Work unit wu-\ufffd\ufffd\ufffd not found\"}",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/test", nil)
+			rec := httptest.NewRecorder()
+			tc.write(rec, req)
+			if rec.Code != tc.status {
+				t.Fatalf("status = %d, want %d", rec.Code, tc.status)
+			}
+			if got := rec.Body.String(); got != tc.want {
+				t.Fatalf("body = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }

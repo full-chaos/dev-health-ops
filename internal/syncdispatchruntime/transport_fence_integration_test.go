@@ -333,9 +333,12 @@ WHERE id = $1`, kind.outbox, kind.generation); err != nil {
 						t.Errorf("wake: %v", err)
 						return
 					}
-					next := kind.generation + 1
-					if got := pgseed.SyncTransportRoute(ctx, t, rig.other, kind.kind, "river", next, false, "celery"); got != next {
-						t.Errorf("route generation = %d, want %d", got, next)
+					// The route table bumps the generation only on a state change: pause, then resume, so the
+					// route is River and unpaused again but at a later generation (only the generation term moves).
+					paused := pgseed.SyncTransportRoute(ctx, t, rig.other, kind.kind, "river", kind.generation+1, true, "celery")
+					resumed := pgseed.SyncTransportRoute(ctx, t, rig.other, kind.kind, "river", paused+1, false, "celery")
+					if paused <= kind.generation || resumed <= paused {
+						t.Errorf("route generations paused=%d resumed=%d, want > %d and increasing", paused, resumed, kind.generation)
 					}
 				})
 				err := kind.pass(t, ctx, rig.pool, 1)

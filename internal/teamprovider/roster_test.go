@@ -79,10 +79,53 @@ func TestARosterRuleNeedsTheRosterColumnAndAKnownRule(t *testing.T) {
 	if err := teamprovider.Insert(context.Background(), conn, "org-1", noRoster, []teamprovider.Write{row}); !errors.Is(err, teamprovider.ErrInvalidWrite) {
 		t.Fatalf("kept roster without the column: err = %v, want ErrInvalidWrite", err)
 	}
-	if err := teamprovider.Insert(context.Background(), conn, "org-1", insertColumns, []teamprovider.Write{rosterRow("gh:a", teamprovider.RosterDelta+1, nil, nil)}); !errors.Is(err, teamprovider.ErrInvalidWrite) {
+	if err := teamprovider.Insert(context.Background(), conn, "org-1", insertColumns, []teamprovider.Write{rosterRow("gh:a", teamprovider.RosterSource+1, nil, nil)}); !errors.Is(err, teamprovider.ErrInvalidWrite) {
 		t.Fatalf("unknown roster rule: err = %v, want ErrInvalidWrite", err)
+	}
+	if err := teamprovider.Insert(context.Background(), conn, "org-1", insertColumns, []teamprovider.Write{rosterRow("gh:a", teamprovider.RosterSource, nil, nil)}); !errors.Is(err, teamprovider.ErrInvalidWrite) {
+		t.Fatalf("source roster with no source team: err = %v, want ErrInvalidWrite", err)
 	}
 	if conn.calls != 0 {
 		t.Fatalf("a refused write sent %d statements", conn.calls)
+	}
+}
+
+// A source roster row (a team moved to a new id) reads its source team's
+// newest version inside the insert and takes that roster only when the
+// version is newer than the one the writer read; a statement with no such row
+// has no read of a source.
+func TestASourceRosterIsReadFromTheSourceTeamInsideTheInsert(t *testing.T) {
+	conn := &recordingExec{}
+	if err := teamprovider.Insert(context.Background(), conn, "org-1", insertColumns, []teamprovider.Write{rosterRow("gh:a", teamprovider.RosterKept, nil, nil)}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(conn.query, "moved_from") || strings.Contains(conn.query, "roster_source") {
+		t.Fatalf("a statement with no source roster reads a source: %s", conn.query)
+	}
+	read := teamprovider.Version{UpdatedAt: time.Date(2026, 9, 1, 0, 0, 0, 123456000, time.UTC), LastSynced: time.Date(2026, 9, 1, 0, 0, 1, 0, time.UTC)}
+	moved := rosterRow("gh:web", teamprovider.RosterSource, nil, nil)
+	moved.RosterSource, moved.RosterSourceRead = "web", read
+	if err := teamprovider.Insert(context.Background(), conn, "org-1", insertColumns, []teamprovider.Write{moved, rosterRow("web", teamprovider.RosterKept, nil, nil)}); err != nil {
+		t.Fatal(err)
+	}
+	for _, part := range []string{
+		"LEFT JOIN (SELECT id AS moved_from_id, argMax(if(deleted_at IS NULL, manual_members, []), (updated_at, last_synced)) AS moved_from_manual, " +
+			"max((toUnixTimestamp64Micro(updated_at), toUnixTimestamp64Micro(last_synced))) AS moved_from_version " +
+			"FROM teams WHERE org_id = {org_id:String} AND id IN {roster_source:Array(String)} GROUP BY id) AS moved_from ON moved_from.moved_from_id = incoming.roster_source",
+		"incoming.roster_rule = 3 AND moved_from.moved_from_version > (toUnixTimestamp64Micro(incoming.roster_read_at), toUnixTimestamp64Micro(incoming.roster_read_synced)), moved_from.moved_from_manual, incoming.v4)",
+	} {
+		if !strings.Contains(conn.query, part) {
+			t.Fatalf("statement misses %q:\n%s", part, conn.query)
+		}
+	}
+	_, decoded, err := teamprovidertest.Decode(conn.query, conn.args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded[0].Roster != teamprovider.RosterSource || decoded[0].RosterSource != "web" || decoded[0].RosterSourceRead != read {
+		t.Fatalf("source row = rule %d from %q read %+v, want rule %d from web read %+v", decoded[0].Roster, decoded[0].RosterSource, decoded[0].RosterSourceRead, teamprovider.RosterSource, read)
+	}
+	if decoded[1].Roster != teamprovider.RosterKept || decoded[1].RosterSource != "" {
+		t.Fatalf("kept row = rule %d from %q, want a kept roster from no source", decoded[1].Roster, decoded[1].RosterSource)
 	}
 }

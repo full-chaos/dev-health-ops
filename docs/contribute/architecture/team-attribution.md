@@ -121,7 +121,9 @@ A GitHub PR closing Linear `ENG-2400` borrows that issue's `ENG` team.
 >    provider auto-import carries it forward unchanged on every sync write
 >    and never sets or clears it: every writer that does not edit the roster
 >    reads it from `teams FINAL` inside its own insert statement, and an admin
->    add or remove applies its change there too. An admin delete ends the
+>    add or remove applies its change there too; a team the id carry moves to
+>    a new id takes the roster of its old id, read there when the old id
+>    changed after the carry read it. An admin delete ends the
 >    roster: a team re-created by sync after an admin delete starts with an
 >    empty manual roster. The roster column
 >    `teams.members` is gone (no Go reader or writer; the frozen Python code still names it; migration 118 drops the

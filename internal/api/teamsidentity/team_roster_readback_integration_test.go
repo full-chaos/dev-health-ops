@@ -13,7 +13,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 )
 
-var rosterReadBack = regexp.MustCompile(regexp.QuoteMeta(rosterReadBackQuery))
+var rosterReadBack = regexp.MustCompile(`^SELECT manual_members FROM teams FINAL WHERE org_id = \{org_id:String\} AND id = \{team_id:String\}$`)
 
 // staleCarryConn writes, before every roster read-back of writer a, a newer
 // version of the team that carries the roster [x] (a writer that read the

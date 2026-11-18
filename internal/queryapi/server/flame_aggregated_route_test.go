@@ -111,7 +111,7 @@ func TestNewFlameAggregatedWorkHandlerRequiresAuthContext(t *testing.T) {
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
 	}
-	if got, want := rec.Body.String(), `{"detail":{"message":"Not authenticated"}}`+"\n"; got != want {
+	if got, want := rec.Body.String(), `{"detail":{"message":"Not authenticated"}}`; got != want {
 		t.Fatalf("body = %q, want %q", got, want)
 	}
 }
@@ -188,7 +188,7 @@ func TestNewFlameAggregatedWorkHandlerComparativeParamIs400(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
 	}
-	if got, want := rec.Body.String(), `{"detail":"Comparative parameters are not supported."}`+"\n"; got != want {
+	if got, want := rec.Body.String(), `{"detail":"Comparative parameters are not supported."}`; got != want {
 		t.Fatalf("body = %q, want %q", got, want)
 	}
 }
@@ -204,7 +204,7 @@ func TestNewFlameAggregatedWorkHandlerUnknownModeIs400(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
 	}
-	if got, want := rec.Body.String(), `{"detail":"mode must be 'cycle_breakdown', 'code_hotspots', or 'throughput'"}`+"\n"; got != want {
+	if got, want := rec.Body.String(), `{"detail":"mode must be 'cycle_breakdown', 'code_hotspots', or 'throughput'"}`; got != want {
 		t.Fatalf("body = %q, want %q", got, want)
 	}
 }

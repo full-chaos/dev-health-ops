@@ -165,7 +165,7 @@ func baselineTestopsInputs() (*testops.PipelineMetric, *testops.TestMetric, *tes
 		AvgQueueSeconds: &avgQueue, P95QueueSeconds: &p95Queue, OrgID: "org-reflect-sweep",
 	}
 	test := &testops.TestMetric{
-		RepoID: repoID, TotalCases: 500, PassedCount: 470, FailedCount: 20, SkippedCount: 10, QuarantinedCount: 2,
+		RepoID: repoID, DistinctCases: 500, TotalCases: 500, PassedCount: 470, FailedCount: 20, SkippedCount: 10, QuarantinedCount: 2,
 		PassRate: 0.94, FailureRate: 0.04, FlakeRate: 0.02, RetryDependencyRate: 0.01, TotalSuites: 25,
 		SuiteDurationP50Seconds: &suiteP50, SuiteDurationP95Seconds: &suiteP95,
 		FailureRecurrence: 0.05, OrgID: "org-reflect-sweep",

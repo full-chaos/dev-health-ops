@@ -27,6 +27,8 @@ import (
 //     (an owner wins over a fallback rule);
 //   - PO: its project owned by team-own and a native link to R1: team-own, the
 //     repository owner kept as a provenance row;
+//   - PE: one explicit_text link to R1: team-a, confidence medium (native: high);
+//   - PH: one heuristic link to R2: team-b, confidence low;
 //   - PU: no link: unassigned.
 func TestAnIssueWithNoTeamTakesItsLinkedPullRequestRepoOwner(t *testing.T) {
 	ctx := context.Background()
@@ -40,7 +42,7 @@ func TestAnIssueWithNoTeamTakesItsLinkedPullRequestRepoOwner(t *testing.T) {
 	const provider = "jira"
 	r1, r2, r3 := uuid.New(), uuid.New(), uuid.New()
 
-	projects := []string{"PI", "PM", "PT", "PB", "PF", "PO", "PU"}
+	projects := []string{"PI", "PM", "PT", "PB", "PF", "PO", "PE", "PH", "PU"}
 	for _, project := range projects {
 		id := "jira:" + project + "-1"
 		if err := conn.Exec(ctx, `INSERT INTO work_items (
@@ -84,6 +86,8 @@ func TestAnIssueWithNoTeamTakesItsLinkedPullRequestRepoOwner(t *testing.T) {
 		{r3, "jira:PB-1", "native", 7}, {r1, "jira:PB-1", "heuristic", 8},
 		{r2, "jira:PF-1", "native", 9},
 		{r1, "jira:PO-1", "native", 10},
+		{r1, "jira:PE-1", "explicit_text", 11},
+		{r2, "jira:PH-1", "heuristic", 12},
 	} {
 		if err := conn.Exec(ctx, `INSERT INTO work_graph_issue_pr (
 			repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id)
@@ -142,7 +146,7 @@ func TestAnIssueWithNoTeamTakesItsLinkedPullRequestRepoOwner(t *testing.T) {
 SELECT concat(work_item_id, '|', source, '|', ifNull(team_id, ''), '|', toString(is_primary))
 FROM work_item_team_attributions FINAL WHERE org_id = ?`, orgID)
 	evidence := discovererMatrixLines(t, ctx, conn, `
-SELECT concat(work_item_id, '|', ifNull(team_id, ''), '|', evidence)
+SELECT concat(work_item_id, '|', ifNull(team_id, ''), '|', evidence, '|', toString(confidence))
 FROM work_item_team_attributions FINAL WHERE org_id = ? AND source = 'repo_ownership'`, orgID)
 	cycle := discovererMatrixLines(t, ctx, conn, `SELECT concat(work_item_id, '|', ifNull(team_id, ''))
 FROM work_item_cycle_times FINAL WHERE org_id = ? AND day = ?`, orgID, day)
@@ -169,6 +173,7 @@ FROM work_item_metrics_daily WHERE org_id = ? AND day = ? AND row_view IN ('', '
 		"jira:PB-1|unassigned||1",
 		"jira:PF-1|repo_ownership|team-b|1", "jira:PF-1|manual_fallback|team-rule|0",
 		"jira:PO-1|project_ownership|team-own|1", "jira:PO-1|repo_ownership|team-a|0",
+		"jira:PE-1|repo_ownership|team-a|1", "jira:PH-1|repo_ownership|team-b|1",
 		"jira:PU-1|unassigned||1",
 	} {
 		if !holds(attributionRows, want) {
@@ -181,9 +186,11 @@ FROM work_item_metrics_daily WHERE org_id = ? AND day = ? AND row_view IN ('', '
 		}
 	}
 	for _, want := range []string{
-		"jira:PI-1|team-a|repo_ownership=" + r1.String() + ";work_graph_issue_pr=1;tier=native",
-		"jira:PM-1|team-a|repo_ownership=" + r1.String() + ";work_graph_issue_pr=2;tier=native",
-		"jira:PM-1|team-b|repo_ownership=" + r2.String() + ";work_graph_issue_pr=4;tier=native",
+		"jira:PI-1|team-a|repo_ownership=" + r1.String() + ";work_graph_issue_pr=1;tier=native|high",
+		"jira:PM-1|team-a|repo_ownership=" + r1.String() + ";work_graph_issue_pr=2;tier=native|high",
+		"jira:PM-1|team-b|repo_ownership=" + r2.String() + ";work_graph_issue_pr=4;tier=native|high",
+		"jira:PE-1|team-a|repo_ownership=" + r1.String() + ";work_graph_issue_pr=11;tier=explicit_text|medium",
+		"jira:PH-1|team-b|repo_ownership=" + r2.String() + ";work_graph_issue_pr=12;tier=heuristic|low",
 	} {
 		if !holds(evidence, want) {
 			t.Errorf("repo_ownership evidence: no row %s%s", want, dump)
@@ -191,7 +198,7 @@ FROM work_item_metrics_daily WHERE org_id = ? AND day = ? AND row_view IN ('', '
 	}
 	for item, team := range map[string]string{
 		"jira:PI-1": "team-a", "jira:PM-1": "team-a", "jira:PT-1": "team-a", "jira:PB-1": "unassigned",
-		"jira:PF-1": "team-b", "jira:PO-1": "team-own", "jira:PU-1": "unassigned",
+		"jira:PF-1": "team-b", "jira:PO-1": "team-own", "jira:PE-1": "team-a", "jira:PH-1": "team-b", "jira:PU-1": "unassigned",
 	} {
 		if want := item + "|" + team; !holds(cycle, want) {
 			t.Errorf("work_item_cycle_times: no row %s%s", want, dump)

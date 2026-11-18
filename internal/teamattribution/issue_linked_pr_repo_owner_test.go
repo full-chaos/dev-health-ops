@@ -196,3 +196,35 @@ func TestBestTierLinkedPullRequests(t *testing.T) {
 		t.Errorf("unknown tier kept %v", got)
 	}
 }
+
+// The confidence of an issue's repository owner names the link tier: a native link keeps the owner fact's
+// confidence, explicit_text is one step lower, heuristic is low. A lower tier is never as confident as native.
+func TestAnIssuesRepositoryOwnerConfidenceFollowsTheLinkTier(t *testing.T) {
+	for _, c := range []struct {
+		isPrimary int
+		tier      string
+		want      string
+	}{
+		{1, "native", "high"}, {1, "explicit_text", "medium"}, {1, "heuristic", "low"},
+		{0, "native", "medium"}, {0, "explicit_text", "low"}, {0, "heuristic", "low"},
+	} {
+		t.Run(fmt.Sprintf("is_primary=%d/%s", c.isPrimary, c.tier), func(t *testing.T) {
+			derived := NewGitHubWorkItemDerivationContext(GithubWorkItemDerivationFacts{Repos: []GithubWorkItemDerivationRepoFact{
+				linkedRepoFact("github", linkedRepoA, "team-a", c.isPrimary, 100),
+			}})
+			subject := GithubWorkItemDerivationSubject{WorkItemID: "jira:ISS-1", Provider: "jira", Type: "story", OrgID: "org"}
+			derived.LinkedPullRequests = map[string][]GithubWorkItemDerivationLinkedPullRequest{subject.WorkItemID: {linkedPR(linkedRepoA, 5, c.tier)}}
+			_, _, candidates := derived.Resolve(subject)
+			row, ok := primaryCandidate14010(candidates)
+			if !ok || row.Source != "repo_ownership" {
+				t.Fatalf("primary %+v, want repo_ownership", row)
+			}
+			if row.Confidence != c.want {
+				t.Errorf("confidence %q, want %q", row.Confidence, c.want)
+			}
+			if want := "repo_ownership=" + linkedRepoA + ";work_graph_issue_pr=5;tier=" + c.tier; row.Evidence != want {
+				t.Errorf("evidence %q, want %q", row.Evidence, want)
+			}
+		})
+	}
+}

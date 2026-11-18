@@ -321,8 +321,11 @@ flowchart TD
 > is a co-owner (`is_primary = 2`, section 0.4d). A repository with no owner gives nothing, and an issue whose
 > best-tier repositories have no owner gets no row from them. The rank is 3: `native_team`, `issue_project` and
 > `project_ownership` still win (the repository owner is then a provenance row, `is_primary = 0`), and the
-> repository owner wins over `manual_fallback` and `unassigned`. The source token stays `repo_ownership`; the
-> evidence names the link: `repo_ownership=<repo id>;work_graph_issue_pr=<pr number>;tier=<tier>`. Both
+> repository owner wins over `manual_fallback` and `unassigned`. Every tier may assign the team (a lower tier is a
+> link too, section 1.1, and the writers keep it only where no native link exists, section 2); the confidence
+> names the tier on the existing scale: a `native` link keeps the owner fact's confidence, `explicit_text` is one
+> step lower (high to medium, medium to low), `heuristic` is `low`. The source token stays `repo_ownership`; the
+> evidence names the link and its real tier: `repo_ownership=<repo id>;work_graph_issue_pr=<pr number>;tier=<tier>`. Both
 > writers (the daily `work_item_attribution` family and the backstop) read the links
 > (`LoadIssueLinkedPullRequests`), and a backstop run of a repository whose ownership changed re-derives the
 > issues linked to it. **Limit:** a new or removed link is not a backstop trigger; the daily family re-derives
@@ -330,6 +333,7 @@ flowchart TD
 > An issue of any provider, a Jira or Linear item included, with no other source above and no owned
 > best-tier repository ends `unassigned`. `TestAnIssueTakesTheOwnerOfItsLinkedPullRequestsRepository`,
 > `TestAPullRequestIgnoresLinkedPullRequestRepositories`, `TestBestTierLinkedPullRequests`,
+> `TestAnIssuesRepositoryOwnerConfidenceFollowsTheLinkTier`,
 > `TestAnIssueWithNoTeamTakesItsLinkedPullRequestRepoOwner` (every daily table) and
 > `TestABackstopRunOfAChangedRepoRederivesTheIssuesLinkedToIt` pin it.
 >
@@ -459,7 +463,7 @@ means the ClickHouse `teams` dimension is empty.
 | 0 | `native_team` | `WorkItem.native_team_key` → `teams` of the item's provider, else admin teams (section 0.4e) | high | all below | — (top) | `native_team_key` |
 | 1 | `issue_project` | native issue project key → `teams` of the item's provider that hold it, else admin teams (section 0.4e) | high | 2–8 | 0 | `project_id, owner_team` |
 | 2 | `project_ownership` | `team_project_ownership` | high | 3–8 | 0–1 | `project_id, provider` |
-| 3 | `repo_ownership` (a pull / merge request: its own `repo_id`; an issue: the repositories of its linked pull requests in `work_graph_issue_pr`, its best tier only, never its own `repo_id`) | `team_repo_ownership` (an issue: through `work_graph_issue_pr`) | medium; high from a main-owner row (`is_primary = 1`, e.g. the inferred main owner) | 4–8 | 0–2 | `repo_full_name`; an issue: `repo_ownership=<repo id>;work_graph_issue_pr=<pr number>;tier=<tier>` |
+| 3 | `repo_ownership` (a pull / merge request: its own `repo_id`; an issue: the repositories of its linked pull requests in `work_graph_issue_pr`, its best tier only, never its own `repo_id`) | `team_repo_ownership` (an issue: through `work_graph_issue_pr`) | medium; high from a main-owner row (`is_primary = 1`, e.g. the inferred main owner); an issue: one step lower for an `explicit_text` link, `low` for a `heuristic` link | 4–8 | 0–2 | `repo_full_name`; an issue: `repo_ownership=<repo id>;work_graph_issue_pr=<pr number>;tier=<tier>` |
 | 4 | `assignee_membership` | two-layer: `identities`/`teams` (admin override, single-team) else `team_memberships` (provider fallback, single-team) | high (admin) / medium (provider) | none: provenance only, never `is_primary` | 0–3 | `canonical_id, identity` (evidence text: `assignee_membership=<id>`) |
 | 5 | `linked_issue` | `work_item_dependencies` donor → the team of the donor's own attribution row; the primary team of a pull or merge request only, provenance only (`is_primary = 0`) for an issue | medium | 6–8 (a pull or merge request) | 0–3 | `linked_issue=<donor_work_item_id>;dependency_type=<rel>;donor_provider=<p>;donor_source=<donor row source>` |
 | 6 | `author_membership` | PR/MR-only + two-layer (same as row 4), non-bot | high (admin) / medium (provider) | none: provenance only, never `is_primary` | 0–5 | `canonical_id, identity` (evidence text: `reporter=<id>`) |

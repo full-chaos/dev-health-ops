@@ -1252,6 +1252,24 @@ func BestTierLinkedPullRequests(
 	return kept
 }
 
+// linkTierConfidence is the confidence of a repository owner reached through a
+// link of tier: the owner fact's own for a native link, one step lower on the
+// scale high > medium > low for explicit_text, and low for heuristic. A lower
+// tier is never as confident as a native link.
+func linkTierConfidence(confidence, tier string) string {
+	switch tier {
+	case linktier.Native:
+		return confidence
+	case linktier.ExplicitText:
+		if confidence == "high" {
+			return "medium"
+		}
+		return "low"
+	default:
+		return "low"
+	}
+}
+
 // linkedPullRequestRepoCandidates gives an issue the repo_ownership candidates
 // of the repositories of its linked pull requests, at the issue's best link
 // tier only (team-attribution.md section 0.1). Each link counts once for the
@@ -1261,7 +1279,8 @@ func BestTierLinkedPullRequests(
 // the lowest team id; every other team of those repositories' facts is a
 // co-owner (section 0.4d). A team's candidate is its best ranked fact, and its
 // evidence names the repository, the pull request and the tier of that fact's
-// link. With no main owner no candidate can be the primary.
+// link; its confidence is lowered for a link below the native tier
+// (linkTierConfidence). With no main owner no candidate can be the primary.
 func (derived GithubWorkItemDerivationContext) linkedPullRequestRepoCandidates(
 	subject GithubWorkItemDerivationSubject,
 ) []GithubWorkItemDerivationCandidate {
@@ -1275,6 +1294,7 @@ func (derived GithubWorkItemDerivationContext) linkedPullRequestRepoCandidates(
 					continue
 				}
 				candidate.Evidence = fmt.Sprintf("repo_ownership=%s;work_graph_issue_pr=%d;tier=%s", link.RepoID, link.PRNumber, link.Tier)
+				candidate.Confidence = linkTierConfidence(candidate.Confidence, link.Tier)
 				facts = append(facts, candidate)
 			}
 		}

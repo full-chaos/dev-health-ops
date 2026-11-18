@@ -10,10 +10,10 @@ import (
 	"testing"
 )
 
-// The go-quality legs on ubuntu-26.04 (CAL-2604): 13 test shards and 14 race legs (CHAOS-13833; 13 since CHAOS-13958, 14 since CHAOS-13833 PLAN-13833-3). The pins hold the COUNTS and the row
+// The go-quality legs on ubuntu-26.04 (CAL-2604): 13 test shards and 16 race legs (CHAOS-13833; 13 since CHAOS-13958, 16 since CHAOS-13833 SIM-13833-5). The pins hold the COUNTS and the row
 // partition of those counts; they assert no seconds (D6418).
 
-const wantTestShards, wantRaceLegs = 13, 14
+const wantTestShards, wantRaceLegs = 13, 16
 
 func legCounts(t *testing.T) (tests, races int, names []string) {
 	t.Helper()

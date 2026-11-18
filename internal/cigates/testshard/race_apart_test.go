@@ -155,44 +155,23 @@ func TestTheRacePlanKeepsTheHeavyPackagesApartAndOffTheListedParts(t *testing.T)
 	}
 }
 
-func TestTheOldRacePlanStacksTheHeavyTrioOnOneLeg(t *testing.T) {
+// The red of the apart rule: the same plan without apart rows puts two heavy packages on one leg. It runs at 13 race legs
+// (oldPlanLegs: the leg count of the plans that stacked them on main, not the shipped count); with more legs the plan spreads
+// them by itself.
+func TestTheRacePlanWithoutApartRowsStacksHeavyPackages(t *testing.T) {
 	t.Parallel()
-	_, races, _ := legCounts(t)
+	const oldPlanLegs = 13
 	heavy, parts := raceApartRows(t)
 	none := filepath.Join(t.TempDir(), "apart.tsv")
 	if err := os.WriteFile(none, []byte("# no rows\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	legs, _ := raceApartPlan(t, []string{"GO_RACE_APART=" + none}, races)
-	// The trio of race leg 13: the heavy rows of 600 s or more.
-	var trio []string
-	for k, v := range raceApartHeavySeconds(t) {
-		if v >= 600 {
-			trio = append(trio, k)
-		}
+	legs, _ := raceApartPlan(t, []string{"GO_RACE_APART=" + none}, oldPlanLegs)
+	d := raceApartDefects(legs, heavy, parts)
+	if len(d) == 0 {
+		t.Errorf("the %d-leg race plan without apart rows keeps every heavy package apart by itself: the red is gone", oldPlanLegs)
 	}
-	sort.Strings(trio)
-	if len(trio) != 3 {
-		t.Fatalf("ci/go_race_apart.tsv holds %d heavy rows of 600 s or more, want the 3 of race leg 13: %v", len(trio), trio)
-	}
-	stacked := false
-	for _, leg := range legs {
-		n := 0
-		for _, k := range leg.pkgs {
-			for _, x := range trio {
-				if k == x {
-					n++
-				}
-			}
-		}
-		stacked = stacked || n == len(trio)
-	}
-	if !stacked {
-		t.Errorf("the old race plan does not put %v on one leg: the red is gone", trio)
-	}
-	if len(raceApartDefects(legs, heavy, parts)) == 0 {
-		t.Error("the heavy rule finds no break in the old race plan")
-	}
+	t.Logf("%d legs, no apart rows: %v", oldPlanLegs, d)
 }
 
 // raceApartAwk runs ci/go_race_shard.awk (rserial, apart) on packages m/<name> with the given rows.

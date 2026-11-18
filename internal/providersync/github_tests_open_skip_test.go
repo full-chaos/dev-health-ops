@@ -759,6 +759,16 @@ type openSkipFaultStore struct {
 	fault        error
 	seen         bool
 	skipOrdinal  int
+	failLoad     bool
+}
+
+// LoadChunkCheckpoint fails once after an "after-commit-unread" fault: the read back of the lost acknowledgement fails.
+func (s *openSkipFaultStore) LoadChunkCheckpoint(ctx context.Context, claim Claim, now time.Time) (ChunkCheckpoint, error) {
+	if s.failLoad {
+		s.failLoad = false
+		return ChunkCheckpoint{}, s.fault
+	}
+	return s.chunkMemoryStore.LoadChunkCheckpoint(ctx, claim, now)
 }
 
 func newOpenSkipFaultStore(mode, target string, fault error) *openSkipFaultStore {
@@ -813,11 +823,85 @@ func (s *openSkipFaultStore) MarkChunkCommitted(ctx context.Context, claim Claim
 		return s.fault
 	}
 	err = s.chunkMemoryStore.MarkChunkCommitted(ctx, claim, ordinal, digest, now)
-	if fault && s.mode == "after-commit" && err == nil {
+	if fault && (s.mode == "after-commit" || s.mode == "after-commit-unread") && err == nil {
 		s.seen = true
+		s.failLoad = s.mode == "after-commit-unread"
 		return s.fault
 	}
 	return err
+}
+
+func openSkipUnconfirmedLines(records []slog.Record) []map[string]any {
+	var out []map[string]any
+	for _, record := range records {
+		attrs := membershipLogAttrs(record)
+		if record.Level == slog.LevelWarn && fmt.Sprint(attrs["outcome"]) == "unknown" {
+			out = append(out, attrs)
+		}
+	}
+	return out
+}
+
+// A skip chunk whose commit mark landed but failed, and whose checkpoint read back failed too, is not silent: a distinct
+// WARN names the run and the chunk with outcome unknown. The skip itself is not recovered (no skip WARN, no counter step);
+// the unit result stays exact.
+func TestOpenPhaseSkipUnconfirmedCommitIsNotSilent(t *testing.T) {
+	repoID := listingRepoID(t)
+	now := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
+	for _, source := range []string{"run", "jobs"} {
+		for _, shape := range openSkipContinuationShapes {
+			if shape.jobsOnly && source != "jobs" {
+				continue
+			}
+			t.Run(source+"/"+shape.name, func(t *testing.T) {
+				records := captureMembershipLogs(t)
+				fake := newListingFake(t, nil)
+				reader := openSkipStore(repoID, fake, 8400, 3)
+				doer := newOpenSkipDoer(fake)
+				if source == "run" {
+					doer.runs[8401] = []openSkipReply{shape.reply}
+				} else {
+					doer.jobs[8401] = []openSkipReply{shape.reply}
+				}
+				store := newOpenSkipFaultStore("after-commit-unread", "skip", io.ErrUnexpectedEOF)
+				claim, session := completeRouteSessionFor(t, now, false, "github", "cicd")
+				executor := completeRouteExecutor(now, GitHubTestsRouteHandler{OpenRuns: reader}, store, &memoryEffectSink{})
+				executor.Credentials.Repository = &trackingCompleteRouteCredentialRepository{provider: "github"}
+				executor.Credentials.Decryptor = chunkedCredentialDecryptor{}
+				executor.Doer = fakehttp.Client(doer)
+				executor.BudgetLimits = map[CostClass]int{claim.CostClass: 10}
+				executor.Metrics = providerfoundation.NewMetrics()
+				descriptor, _ := Descriptor("github", "cicd")
+				ctx := context.Background()
+				if _, err := executor.Execute(ctx, session, descriptor); !store.seen || !errors.Is(err, io.ErrUnexpectedEOF) {
+					t.Fatalf("premise: first attempt err=%v seen=%v, want the lost acknowledgement", err, store.seen)
+				}
+				var result CompleteRouteExecutionResult
+				var err error
+				for attempt := 0; attempt < 8; attempt++ {
+					result, err = executor.Execute(ctx, session, descriptor)
+					if !errors.Is(err, ErrChunkContinuation) {
+						break
+					}
+				}
+				if err != nil {
+					t.Fatalf("retry err=%v, want the unit to finish", err)
+				}
+				if got := fmt.Sprint(result.Result[GitHubTestsResultKeyOpenRunsSkipped]); got != "1" {
+					t.Fatalf("open_runs_skipped = %s, want 1", got)
+				}
+				unconfirmed := openSkipUnconfirmedLines(*records)
+				t.Logf("unconfirmed=%v skip_lines=%d skip_chunk=%d", unconfirmed, len(openSkipLines(*records)), store.skipOrdinal)
+				if len(unconfirmed) != 1 || unconfirmed[0]["run"] != "8401" || fmt.Sprint(unconfirmed[0]["chunk"]) != strconv.Itoa(store.skipOrdinal) ||
+					fmt.Sprint(unconfirmed[0]["skip_reason"]) != shape.reason || fmt.Sprint(unconfirmed[0]["repository"]) != claim.SourceExternalID {
+					t.Fatalf("unconfirmed lines %v, want one naming run 8401, chunk %d, reason %s", unconfirmed, store.skipOrdinal, shape.reason)
+				}
+				if lines := openSkipLines(*records); len(lines) != 0 {
+					t.Fatalf("skip lines %v, want none: the unconfirmed skip is not recovered", lines)
+				}
+			})
+		}
+	}
 }
 
 // A store fault at the skip's chunk, or at the chunk after it, fails the attempt; the retry finishes the unit with

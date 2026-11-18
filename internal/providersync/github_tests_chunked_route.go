@@ -2298,14 +2298,10 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 // run skip a committed chunk carries. The repository attribute is the claim's
 // own, never the provider's full_name.
 func (handler GitHubTestsRouteHandler) ObserveCommittedChunk(claim Claim, chunk PreparedProviderChunk, metrics *providerfoundation.Metrics) {
-	if !strings.Contains(chunk.CursorAfter, `"ose"`) {
+	cursor, event := githubTestsChunkOpenSkip(chunk)
+	if event == nil {
 		return
 	}
-	cursor, err := decodeGitHubTestsChunkCursor(chunk.CursorAfter)
-	if err != nil || cursor.OpenSkipEvent == nil {
-		return
-	}
-	event := cursor.OpenSkipEvent
 	metrics.RecordOpenRunSkipped(claim.Provider, claim.Dataset, event.Reason)
 	slog.Warn(
 		"open run re-read failed with an error of that run; it is skipped this unit and read again on a later unit",
@@ -2313,6 +2309,33 @@ func (handler GitHubTestsRouteHandler) ObserveCommittedChunk(claim Claim, chunk 
 		logging.ProviderIDAttr("run", event.RunID), "reason", event.Reason, "status", event.Status, "route", event.Route,
 		"skipped", cursor.OpenSkipped,
 	)
+}
+
+// ObserveUnconfirmedChunk names the open run skip of a chunk whose commit is
+// unknown: the mark failed and the checkpoint read back failed too. If the
+// commit landed, no recovery drains the chunk and the skip has no WARN line or
+// counter step, so this distinct line keeps it from being silent.
+func (handler GitHubTestsRouteHandler) ObserveUnconfirmedChunk(claim Claim, chunk PreparedProviderChunk) {
+	_, event := githubTestsChunkOpenSkip(chunk)
+	if event == nil {
+		return
+	}
+	slog.Warn(
+		"open run skip unconfirmed: the commit of its chunk failed and the checkpoint read back failed; if the commit landed, the skip is not recorded",
+		"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID, "repository", claim.SourceExternalID,
+		logging.ProviderIDAttr("run", event.RunID), "chunk", chunk.Ordinal, "skip_reason", event.Reason, "outcome", "unknown",
+	)
+}
+
+func githubTestsChunkOpenSkip(chunk PreparedProviderChunk) (githubTestsChunkCursor, *githubTestsOpenSkipEvent) {
+	if !strings.Contains(chunk.CursorAfter, `"ose"`) {
+		return githubTestsChunkCursor{}, nil
+	}
+	cursor, err := decodeGitHubTestsChunkCursor(chunk.CursorAfter)
+	if err != nil {
+		return githubTestsChunkCursor{}, nil
+	}
+	return cursor, cursor.OpenSkipEvent
 }
 
 var (

@@ -260,7 +260,7 @@ flowchart TD
     IP -->|"yes"| Win
     IP -->|"no"| PO{"2 · project_ownership candidate?"}
     PO -->|"yes"| Win
-    PO -->|"no"| RO{"3 · repo_ownership candidate?"}
+    PO -->|"no"| RO{"3 · repo_ownership candidate?<br/>(a pull or merge request: its own repo;<br/>an issue: the owners of the repos of its linked pull requests,<br/>work_graph_issue_pr, the issue's best tier only)"}
     RO -->|"yes"| Win
     RO -->|"no"| AM["4 · assignee_membership: PROVENANCE ONLY<br/>recorded as is_primary = 0, never the primary team"]
     AM --> LK{"5 · linked_issue candidate?<br/>(real donor row resolving to a team)"}
@@ -309,8 +309,29 @@ flowchart TD
 > (data-and-storage, entity tree). Only a pull or merge request (`type` `pr` on GitHub,
 > `merge_request` on GitLab) takes the `repo_ownership` (3) candidate from its own `repo_id`
 > (`repoByID` and the GitLab name-keyed `repoByNames`), and only a pull or merge request matches a
-> `repo` manual rule through its own repository. An issue of any provider, a Jira or Linear item
-> included, with no other source above ends `unassigned`.
+> `repo` manual rule through its own repository.
+>
+> **An issue takes `repo_ownership` from the repositories of its linked pull requests.** The links are the
+> issue's rows in `work_graph_issue_pr` of its **best tier only** (native > explicit_text > heuristic,
+> `linktier.Rank`): a lower tier never counts when a higher one is present, even when the higher tier names no
+> owner, and a link of an unknown tier never counts. Each link counts once for the team the `repo_ownership`
+> tier gives a pull request of its repository (the first ranked active fact that is not a co-owner fact, on the
+> item's day). The team with the most links is the main owner (`is_primary = 1`); a tie goes to the candidate
+> ranking (`RankDerivationCandidates`), then the lowest team id. Every other team of those repositories' facts
+> is a co-owner (`is_primary = 2`, section 0.4d). A repository with no owner gives nothing, and an issue whose
+> best-tier repositories have no owner gets no row from them. The rank is 3: `native_team`, `issue_project` and
+> `project_ownership` still win (the repository owner is then a provenance row, `is_primary = 0`), and the
+> repository owner wins over `manual_fallback` and `unassigned`. The source token stays `repo_ownership`; the
+> evidence names the link: `repo_ownership=<repo id>;work_graph_issue_pr=<pr number>;tier=<tier>`. Both
+> writers (the daily `work_item_attribution` family and the backstop) read the links
+> (`LoadIssueLinkedPullRequests`), and a backstop run of a repository whose ownership changed re-derives the
+> issues linked to it. **Limit:** a new or removed link is not a backstop trigger; the daily family re-derives
+> the issue on its own days only, so a removed link can leave a stale team on an older issue (CHAOS-14149).
+> An issue of any provider, a Jira or Linear item included, with no other source above and no owned
+> best-tier repository ends `unassigned`. `TestAnIssueTakesTheOwnerOfItsLinkedPullRequestsRepository`,
+> `TestAPullRequestIgnoresLinkedPullRequestRepositories`, `TestBestTierLinkedPullRequests`,
+> `TestAnIssueWithNoTeamTakesItsLinkedPullRequestRepoOwner` (every daily table) and
+> `TestABackstopRunOfAChangedRepoRederivesTheIssuesLinkedToIt` pin it.
 >
 > **The membership ownership gate applies to a pull or merge request and to other repo-bearing items, and
 > does not apply to an issue**: an issue has no repository field of its own and the gate reads
@@ -438,7 +459,7 @@ means the ClickHouse `teams` dimension is empty.
 | 0 | `native_team` | `WorkItem.native_team_key` → `teams` of the item's provider, else admin teams (section 0.4e) | high | all below | — (top) | `native_team_key` |
 | 1 | `issue_project` | native issue project key → `teams` of the item's provider that hold it, else admin teams (section 0.4e) | high | 2–8 | 0 | `project_id, owner_team` |
 | 2 | `project_ownership` | `team_project_ownership` | high | 3–8 | 0–1 | `project_id, provider` |
-| 3 | `repo_ownership` (a pull / merge request only: an issue takes none from its own `repo_id`) | `team_repo_ownership` | medium; high from a main-owner row (`is_primary = 1`, e.g. the inferred main owner) | 4–8 | 0–2 | `repo_full_name` |
+| 3 | `repo_ownership` (a pull / merge request: its own `repo_id`; an issue: the repositories of its linked pull requests in `work_graph_issue_pr`, its best tier only, never its own `repo_id`) | `team_repo_ownership` (an issue: through `work_graph_issue_pr`) | medium; high from a main-owner row (`is_primary = 1`, e.g. the inferred main owner) | 4–8 | 0–2 | `repo_full_name`; an issue: `repo_ownership=<repo id>;work_graph_issue_pr=<pr number>;tier=<tier>` |
 | 4 | `assignee_membership` | two-layer: `identities`/`teams` (admin override, single-team) else `team_memberships` (provider fallback, single-team) | high (admin) / medium (provider) | none: provenance only, never `is_primary` | 0–3 | `canonical_id, identity` (evidence text: `assignee_membership=<id>`) |
 | 5 | `linked_issue` | `work_item_dependencies` donor → the team of the donor's own attribution row; the primary team of a pull or merge request only, provenance only (`is_primary = 0`) for an issue | medium | 6–8 (a pull or merge request) | 0–3 | `linked_issue=<donor_work_item_id>;dependency_type=<rel>;donor_provider=<p>;donor_source=<donor row source>` |
 | 6 | `author_membership` | PR/MR-only + two-layer (same as row 4), non-bot | high (admin) / medium (provider) | none: provenance only, never `is_primary` | 0–5 | `canonical_id, identity` (evidence text: `reporter=<id>`) |
@@ -3730,7 +3751,8 @@ durations, and co-occurrence bridges, but they are not the owning team source.
   `work_items`⇄`work_items` self-edge, captured per §2. (2) `work_graph_issue_pr` is a **separate**
   real table the work-graph build writes (`work_graph_edges`' fast-path sibling, migration
   `014_work_graph.sql`) feeding `work_unit_investments.structural_evidence_json`'s `prs` array
-  (§0.4) — it is not read by the team-attribution resolver at all. Both answer
+  (§0.4); the team-attribution resolver reads it for an issue's `repo_ownership` (§0.1, the issue's best
+  tier only), and the ownership derivation reads it (§1.1). Both answer
   "which table carries the cross-provider link," for different readers.
   For the entity tree, `work_graph_issue_pr` is the issue <> pull request link of record; its
   `provenance` tier ranks native > explicit_text > heuristic, and a consumer names the tier. The two

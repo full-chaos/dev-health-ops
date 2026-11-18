@@ -20,6 +20,7 @@ var allowedExports = map[string]bool{
 	"IterateAlreadyCoveredTodayRows":                    true,
 	"IterateWorkItemCompletionDays":                     true,
 	"LoadLinkedIssueDonorRows":                          true,
+	"LoadIssueLinkedPullRequests":                       true,
 	"QueryWorkItemDependenciesDonorChange":              true,
 	"ScanWorkItemDependenciesRowDonorChange":            true,
 	"IterateWorkItemDependenciesDonorChange":            true,

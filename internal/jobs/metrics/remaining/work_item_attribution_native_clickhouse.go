@@ -357,6 +357,10 @@ func (executor *WorkItemAttributionExecutor) buildRowsAtEachItemsDay(
 	if err != nil {
 		return nil, err
 	}
+	linkedPullRequests, err := LoadIssueLinkedPullRequests(ctx, executor.conn, orgID, subjects)
+	if err != nil {
+		return nil, err
+	}
 
 	var rows []WorkItemAttributionRow
 	for _, day := range days {
@@ -365,6 +369,7 @@ func (executor *WorkItemAttributionExecutor) buildRowsAtEachItemsDay(
 			return nil, err
 		}
 		derived := teamattribution.NewGitHubWorkItemDerivationContext(facts)
+		derived.LinkedPullRequests = linkedPullRequests
 		donorRows := make(map[string]teamattribution.GithubWorkItemDerivationDonorRow, len(stored))
 		for id, row := range stored {
 			donorRows[id] = row
@@ -378,6 +383,31 @@ func (executor *WorkItemAttributionExecutor) buildRowsAtEachItemsDay(
 		rows = append(rows, BuildWorkItemAttributionRows(orgID, now, idsByDay[day], subjects, derived)...)
 	}
 	return rows, nil
+}
+
+// LoadIssueLinkedPullRequests reads the work_graph_issue_pr rows of every
+// subject that is not a pull or merge request: an issue takes the owners of
+// the repositories of its linked pull requests (teamattribution
+// linkedPullRequestRepoCandidates).
+func LoadIssueLinkedPullRequests(
+	ctx context.Context, conn driver.Conn, orgID string,
+	subjects map[string]teamattribution.GithubWorkItemDerivationSubject,
+) (map[string][]teamattribution.GithubWorkItemDerivationLinkedPullRequest, error) {
+	var ids []string
+	for id, subject := range subjects {
+		if !teamattribution.GithubWorkItemDerivationIsPullOrMergeRequestType(subject.Provider, subject.Type) {
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		return map[string][]teamattribution.GithubWorkItemDerivationLinkedPullRequest{}, nil
+	}
+	sort.Strings(ids)
+	links, err := teamattribution.ClickHouseFactSource{Conn: conn}.LoadIssueLinkedPullRequests(ctx, orgID, ids)
+	if err != nil {
+		return nil, stepcause.Failure(stepcause.LoadIssueLinkedPullRequests, err)
+	}
+	return links, nil
 }
 
 // LinkedIssueDonorRows is the donor row of every subject (CHAOS-9460): the
@@ -911,8 +941,11 @@ WHERE org_id = ?`
 		// EITHER its project_key or its project_id names a scope that
 		// changed, regardless of which identifier space detectScope used
 		// to notice the change.
-		query += " AND (has(?, toString(repo_id)) OR has(?, project_key) OR has(?, project_id))"
-		args = append(args, scope.repoIDs, scope.projectKeys, scope.projectKeys)
+		// An issue of a changed repository is one linked to it in
+		// work_graph_issue_pr: it takes the repository's owners.
+		query += ` AND (has(?, toString(repo_id)) OR has(?, project_key) OR has(?, project_id)
+    OR work_item_id IN (SELECT work_item_id FROM work_graph_issue_pr FINAL WHERE org_id = ? AND has(?, toString(repo_id))))`
+		args = append(args, scope.repoIDs, scope.projectKeys, scope.projectKeys, orgID, scope.repoIDs)
 	}
 	return executor.querySubjects(ctx, query, args...)
 }

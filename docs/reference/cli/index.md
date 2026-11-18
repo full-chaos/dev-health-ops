@@ -1234,7 +1234,11 @@ gone was deleted by River's cleaner, so the strand repair cannot reach it).
 A `failed` or expired-`running` finalization stays for an operator. The sweep
 re-checks each run under its lock, pages through the whole backlog (at most
 2000 runs a pass), and restarts a redriven run's 24 hours, so a run is
-redriven again only if that job, too, is gone a day later. The worker
+redriven again only if that job, too, is gone a day later. A finalize job
+that is still queued can get a redriven twin: the redrive twin adds at most ONE
+compute over the first job's own computes (worst case 4 + 1 = 5); readers
+dedupe by computed_at (cognitiveload.go:301, queries_signals.go:143), so there
+is no answer change. The worker
 reports the first two series above, and
 `dev_health_daily_metrics_stranded_finalize_sweep_failed_total` counts sweep
 passes that failed; the pass is fail-open, so the dispatch does not fail with

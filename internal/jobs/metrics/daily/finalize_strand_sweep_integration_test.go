@@ -5,19 +5,24 @@ package daily
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/url"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
+	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
@@ -809,15 +814,88 @@ func (store *completionFailingNTimes) CompleteFinalize(ctx context.Context, clai
 	return store.PostgresStore.CompleteFinalize(ctx, claim)
 }
 
+// userMetricsWritingFamily is a finalize family that writes the same
+// user_metrics_daily row on every compute, each with a later computed_at, as a
+// re-entrant finalize does.
+type userMetricsWritingFamily struct {
+	conn     driver.Conn
+	orgID    string
+	repoID   string
+	computes atomic.Int32
+}
+
+func (family *userMetricsWritingFamily) ComputeFinalizeFamily(ctx context.Context, _ Run) (int, error) {
+	n := family.computes.Add(1)
+	computedAt := time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC).Add(time.Duration(n) * time.Second)
+	if err := insertUserMetricsRow(ctx, family.conn, family.orgID, family.repoID, computedAt); err != nil {
+		return 0, err
+	}
+	return 1, nil
+}
+
+func insertUserMetricsRow(ctx context.Context, conn driver.Conn, orgID, repoID string, computedAt time.Time) error {
+	return conn.Exec(ctx, `INSERT INTO user_metrics_daily
+        (repo_id, day, author_email, pr_interruption_load, context_spread_count, review_request_load, computed_at, org_id)
+        VALUES (toUUID(?), '2026-11-01', 'dev@example.com', 3, 2, 1, ?, ?)`, repoID, computedAt, orgID)
+}
+
+// cognitiveLoadUserRead is the user_metrics_daily read of the cognitive-load
+// reader (internal/queryapi/cognitiveload/cognitiveload.go fetchUserMetrics,
+// the argMax(..., computed_at) dedupe at :301-303), with its org filter only.
+const cognitiveLoadUserRead = `
+        SELECT
+            day,
+            SUM(pr_interruption_load) AS pr_interruption_load,
+            SUM(context_spread_count) AS context_spread_count,
+            SUM(review_request_load)  AS review_request_load
+        FROM (
+            SELECT
+                day,
+                repo_id,
+                author_email,
+                argMax(pr_interruption_load, computed_at) AS pr_interruption_load,
+                argMax(context_spread_count, computed_at) AS context_spread_count,
+                argMax(review_request_load,  computed_at) AS review_request_load
+            FROM user_metrics_daily
+            WHERE org_id = ?
+            GROUP BY day, repo_id, author_email
+        )
+        GROUP BY day
+        ORDER BY day`
+
+func readCognitiveLoad(t *testing.T, ctx context.Context, conn driver.Conn, orgID string) string {
+	t.Helper()
+	rows, err := conn.Query(ctx, cognitiveLoadUserRead, orgID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var answer []string
+	for rows.Next() {
+		var day time.Time
+		var interruption, spread, requests uint64
+		if err := rows.Scan(&day, &interruption, &spread, &requests); err != nil {
+			t.Fatal(err)
+		}
+		answer = append(answer, fmt.Sprintf("%s %d %d %d", day.Format("2006-01-02"), interruption, spread, requests))
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return strings.Join(answer, ";")
+}
+
 // The bound when the first job loses every completion write (codex round 2,
 // "missed in round 1"): the job alone computes once per attempt (4) and leaves
 // the run running with finalization failed; with its redriven twin the run
-// gets one more compute (5), and that one ends the run succeeded.
+// gets one more compute (5), and that one ends the run succeeded. The extra
+// computes change no answer: the cognitive-load reader's computed_at dedupe
+// gives the same answer as one compute.
 func TestARedriveTwinAfterAnExhaustedJobComputesOnceMore(t *testing.T) {
 	defer restoreRecognisedFinalizeFamilies(pythonRecognisedFinalizeFamilies)
 	pythonRecognisedFinalizeFamilies = []string{"ic_finalize"}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
 	instance, err := containers.StartPostgres(ctx)
 	if err != nil {
@@ -830,10 +908,32 @@ func TestARedriveTwinAfterAnExhaustedJobComputesOnceMore(t *testing.T) {
 	}
 	defer pool.Close()
 	createDailyTables(t, ctx, pool)
+	chInstance, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer chInstance.Close(context.Background())
+	conn, err := clickhousestore.Open(ctx, clickhousestore.DefaultConfig(chInstance.URI))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	chschema.Apply(ctx, t, chInstance)
 	base, err := NewPostgresStore(pool)
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	// The one-compute answer: a control organization whose finalize computed once.
+	controlOrg, repoID := uuid.NewString(), uuid.NewString()
+	if err := insertUserMetricsRow(ctx, conn, controlOrg, repoID, time.Date(2026, 11, 18, 12, 0, 1, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	oneCompute := readCognitiveLoad(t, ctx, conn, controlOrg)
+	if oneCompute == "" {
+		t.Fatal("the one-compute control read nothing")
+	}
+
 	const attempts = 4
 	for _, testCase := range []struct {
 		name         string
@@ -849,7 +949,7 @@ func TestARedriveTwinAfterAnExhaustedJobComputesOnceMore(t *testing.T) {
 			seedSweepRun(t, ctx, pool, sweepRunSeed{orgID, runID, "2026-11-01", "pending", time.Now().UTC().Add(-48 * time.Hour), []string{"succeeded"}})
 			store := &completionFailingNTimes{PostgresStore: base}
 			store.left.Store(attempts)
-			family := &countingFinalizeFamily{}
+			family := &userMetricsWritingFamily{conn: conn, orgID: orgID, repoID: repoID}
 			finalizer, err := NewFinalizeHandler(store)
 			if err != nil {
 				t.Fatal(err)
@@ -871,9 +971,18 @@ func TestARedriveTwinAfterAnExhaustedJobComputesOnceMore(t *testing.T) {
 			if err := pool.QueryRow(ctx, `SELECT status, finalization_status FROM daily_metrics_runs WHERE id = $1`, runID).Scan(&status, &finalization); err != nil {
 				t.Fatal(err)
 			}
-			t.Logf("%s: computes=%d status=%s finalization=%s", testCase.name, family.computes.Load(), status, finalization)
+			var rawRows uint64
+			if err := conn.QueryRow(ctx, `SELECT count() FROM user_metrics_daily WHERE org_id = ?`, orgID).Scan(&rawRows); err != nil {
+				t.Fatal(err)
+			}
+			answer := readCognitiveLoad(t, ctx, conn, orgID)
+			t.Logf("%s: computes=%d rows=%d status=%s finalization=%s answer=%q one-compute answer=%q",
+				testCase.name, family.computes.Load(), rawRows, status, finalization, answer, oneCompute)
 			if family.computes.Load() != testCase.wantComputes || status != testCase.wantStatus {
 				t.Fatalf("computes=%d status=%s, want %d and %s", family.computes.Load(), status, testCase.wantComputes, testCase.wantStatus)
+			}
+			if answer != oneCompute {
+				t.Fatalf("reader answer after %d computes = %q, want the one-compute answer %q", family.computes.Load(), answer, oneCompute)
 			}
 		})
 	}

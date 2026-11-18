@@ -38,7 +38,7 @@ VALUES ($1, $2, 'viewer', 'repository', 'acme/repo', now(), $3)`, other, org, us
 		{"service account owned by the user", func(t *testing.T, ctx context.Context, e *env, tx seedTx, user, other, org uuid.UUID) {
 			sa := uuid.New()
 			tx.exec(t, ctx, `INSERT INTO auth.principals (id, kind) VALUES ($1, 'service_account')`, sa)
-			tx.exec(t, ctx, `INSERT INTO auth.service_accounts (principal_id, organization_id, name, owner_principal_id) VALUES ($1, $2, 'sa-'||$1::text, $3)`, sa, org, user)
+			tx.exec(t, ctx, `INSERT INTO auth.service_accounts (principal_id, organization_id, name, owner_principal_id) VALUES ($1, $2, $3, $4)`, sa, org, "sa-"+sa.String(), user)
 		}},
 	} {
 		t.Run(c.name, func(t *testing.T) {

@@ -115,3 +115,27 @@ func TestQualityDragUnmeasuredDayFlakeHoursNull(t *testing.T) {
 		t.Errorf("factors: %s", unmeasured.FactorsJSON)
 	}
 }
+
+// A measured day keeps main's addition order, so its rounded drag_hours is the same bits as before:
+// for these inputs the order flake-last rounds one unit apart in the 4th decimal.
+func TestQualityDragMeasuredDayKeepsMainAdditionOrder(t *testing.T) {
+	day := time.Date(2026, 11, 10, 0, 0, 0, 0, time.UTC)
+	repo := uuid.New()
+	median, queue := 3852.7, 5780.6
+	pipe := &testops.PipelineMetric{
+		RepoID: repo, PipelinesCount: 6, FailureCount: 6, RerunRate: 0.9, MedianDurationSeconds: &median, AvgQueueSeconds: &queue, OrgID: "org",
+	}
+	test := &testops.TestMetric{RepoID: repo, TotalCases: 244, DistinctCases: 244, FlakeRate: 0.82, OrgID: "org"}
+	row := computeQualityDrag(repo, day, pipe, test, day)
+	if row == nil || row.DragHours == nil {
+		t.Fatal("nil row")
+	}
+	failure := 6 * median / 3600.0
+	flake := 0.82 * float64(244) * 0.25
+	wait := 6 * queue / 3600.0
+	retry := 0.9 * 6 * median / 3600.0
+	mainOrder := failure + flake + wait + retry
+	if want := pyRound(mainOrder, 4); *row.DragHours != want {
+		t.Errorf("drag_hours = %v, want main's order %v", *row.DragHours, want)
+	}
+}

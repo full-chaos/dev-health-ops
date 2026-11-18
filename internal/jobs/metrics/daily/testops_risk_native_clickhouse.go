@@ -683,9 +683,9 @@ func computeQualityDrag(
 	queueWaitHours := float64(pipelinesCount) * avgQueue / 3600.0
 	retryOverheadHours := rerunRate * float64(pipelinesCount) * medianDur / 3600.0
 	// An unmeasured flake part is NULL and left out of the sum: drag_hours is the sum of the known parts.
-	dragHours := failureReworkHours + queueWaitHours + retryOverheadHours
-	if !flakeUnknown {
-		dragHours += flakeInvestigationHours
+	dragHours := failureReworkHours + flakeInvestigationHours + queueWaitHours + retryOverheadHours
+	if flakeUnknown {
+		dragHours = failureReworkHours + queueWaitHours + retryOverheadHours
 	}
 
 	factors := factorsJSON("testops_quality_drag", []factorsJSONField{

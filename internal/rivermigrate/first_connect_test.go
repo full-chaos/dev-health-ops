@@ -23,19 +23,6 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-func refusedAddress(t *testing.T) string {
-	t.Helper()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	address := listener.Addr().String()
-	if err := listener.Close(); err != nil {
-		t.Fatal(err)
-	}
-	return address
-}
-
 // fakeClockFirstConnect is a 10 s budget on a clock only the pauses move:
 // pauses of 2, 4 and 4 s, so 4 attempts and 3 retry lines. onPause runs at
 // each pause with its number.
@@ -77,7 +64,7 @@ func rolesLookup(uri string) func(string) (string, bool) {
 // line per retry, and fails closed at the bound with its unavailable message.
 func TestRiverWaitsForTheFirstConnectThenFailsClosed(t *testing.T) {
 	useFirstConnect(t, fakeClockFirstConnect(nil))
-	uri := "postgresql://migrator:sekret-pw@" + refusedAddress(t) + "/devhealth?sslmode=disable"
+	uri := "postgresql://migrator:sekret-pw@" + refusedaddr.Addr(t) + "/devhealth?sslmode=disable"
 	var stdout, stderr bytes.Buffer
 	code := execute(context.Background(), []string{"--apply-and-check"}, env(map[string]string{
 		"MIGRATION_DATABASE_URI":     uri,
@@ -102,7 +89,7 @@ func TestRiverWaitsForTheFirstConnectThenFailsClosed(t *testing.T) {
 // line per retry, and fails closed at the bound with the unavailable message.
 func TestProvisionRolesWaitsForTheFirstConnectThenFailsClosed(t *testing.T) {
 	useFirstConnect(t, fakeClockFirstConnect(nil))
-	uri := "postgresql://migrator:sekret-pw@" + refusedAddress(t) + "/devhealth?sslmode=disable"
+	uri := "postgresql://migrator:sekret-pw@" + refusedaddr.Addr(t) + "/devhealth?sslmode=disable"
 	var stdout, stderr bytes.Buffer
 	code := ExecuteRoles(context.Background(), "dho", nil, rolesLookup(uri), &stdout, &stderr)
 	out := stderr.String()

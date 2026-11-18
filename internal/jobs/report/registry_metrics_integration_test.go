@@ -312,10 +312,16 @@ func TestClickHouseQueryAdapterChartsEveryRegistryMetric(t *testing.T) {
 			computedAt string
 			rowValues  []string
 		}{{"2026-01-06 10:00:00", older}, {"2026-01-06 11:00:00", values[table]}} {
+			insertColumns, insertValues := strings.Join(columns[table], ", "), strings.Join(run.rowValues, ", ")
+			if table == "work_item_cycle_times" {
+				// The reader charts completed items only: a row without completed_at is a retraction.
+				insertColumns += ", completed_at"
+				insertValues += ", '2026-01-05 09:00:00'"
+			}
 			statement := fmt.Sprintf(
 				"INSERT INTO %s (org_id, %s, %s, %s) VALUES ('%s', '2026-01-05', %s, '%s')",
-				table, dayColumn, strings.Join(columns[table], ", "), version, org,
-				strings.Join(run.rowValues, ", "), run.computedAt)
+				table, dayColumn, insertColumns, version, org,
+				insertValues, run.computedAt)
 			if err := conn.Exec(ctx, statement); err != nil {
 				t.Fatalf("seed %s: %v", table, err)
 			}

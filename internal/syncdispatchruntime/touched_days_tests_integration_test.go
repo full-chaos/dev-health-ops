@@ -60,11 +60,6 @@ func touchedEventsAt(t *testing.T, ctx context.Context, conn driver.Conn, org st
 	return out
 }
 
-func at(day time.Time, hours int) *time.Time {
-	value := day.Add(time.Duration(hours) * time.Hour)
-	return &value
-}
-
 // CHAOS-14006: attempt 1 of run-1 (slot test-results) carried D = 06-01 and was written before the sync run; attempt 2,
 // written in the run, moved the counted suite OFF D to 06-05. The record names D (carried by the attempt-1 row
 // suite-attempt-1, run_attempt 1) and 06-05. Also: a legacy row (slot ”) of the same run on 06-02 names 06-02; a run

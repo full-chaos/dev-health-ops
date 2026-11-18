@@ -565,8 +565,10 @@ func mapGitLabTestsPipelineStatus(value string) string {
 	switch value {
 	case "failed":
 		return "failure"
-	case "canceled", "cancelled", "skipped":
+	case "canceled", "cancelled":
 		return "cancelled"
+	case "skipped":
+		return "skipped"
 	case "manual", "scheduled", "pending", "created", "waiting_for_resource", "preparing":
 		return "queued"
 	default:

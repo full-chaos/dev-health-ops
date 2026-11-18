@@ -5,6 +5,7 @@ package authapi
 import (
 	"context"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -15,8 +16,9 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
-// Two CompatRoutes handlers, each over its own client of one real Valkey (two auth-service replicas), share one
-// refresh budget: ten refreshes split across them are admitted, the 11th is go-api's 429 through either replica.
+// Two CompatRoutes handlers, each over its own client of one real Valkey (two auth-service replicas), share both
+// refresh budgets: ten refreshes of one credential, or 100 from one address, split across them are admitted, and
+// the next is go-api's 429 with Retry-After through either replica.
 func TestCompatRefreshBudgetIsSharedByTwoReplicasInTheLiveStore(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
@@ -47,12 +49,26 @@ func TestCompatRefreshBudgetIsSharedByTwoReplicasInTheLiveStore(t *testing.T) {
 	first.buildCompat()
 	second.buildCompat()
 	replicas := []http.Handler{trustedProxy(t, first.server), trustedProxy(t, second.server)}
+	// One credential: its budget of 10 is shared by both replicas.
+	token := nextCredential()
+	sameCredential := func(h http.Handler) *httptest.ResponseRecorder {
+		return send(h, proxyPeer, "198.51.100.30", http.MethodPost, PatternCompatRefresh, `{"refresh_token":"`+token+`"}`, nil)
+	}
 	for i := 0; i < 10; i++ {
-		if r := refreshAttempt(replicas[i%2], proxyPeer, "198.51.100.30"); r.Code != http.StatusUnauthorized {
+		if r := sameCredential(replicas[i%2]); r.Code != http.StatusUnauthorized {
 			t.Fatalf("refresh %d = %d, want 401", i+1, r.Code)
 		}
 	}
 	for i, replica := range replicas {
-		assertRateLimited(t, "replica "+string(rune('1'+i)), refreshAttempt(replica, proxyPeer, "198.51.100.30"))
+		assertRefreshRateLimited(t, "replica "+string(rune('1'+i)), sameCredential(replica))
+	}
+	// One address: its ceiling of 100 is shared by both replicas, whatever the credential.
+	for i := 0; i < addrCeiling; i++ {
+		if r := refreshAttempt(replicas[i%2], proxyPeer, "198.51.100.31"); r.Code != http.StatusUnauthorized {
+			t.Fatalf("address refresh %d = %d, want 401", i+1, r.Code)
+		}
+	}
+	for i, replica := range replicas {
+		assertRefreshRateLimited(t, "address ceiling, replica "+string(rune('1'+i)), refreshAttempt(replica, proxyPeer, "198.51.100.31"))
 	}
 }

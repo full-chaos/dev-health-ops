@@ -32,7 +32,7 @@ import (
 // could never merge (CHAOS-5102). None of this family's three tables has that
 // shape: their keys are (org_id, pr_id, review_outcome_id, source),
 // (org_id, pr_id, deployment_id, source) and
-// (org_id, deployment_id, incident_id, source) -- all deterministic, and
+// (org_id, repo_id, deployment_id, incident_id) -- all deterministic, and
 // notably none contains edge_id. A Python fallback rewrite after an ack-loss
 // lands on the SAME key and the ReplacingMergeTree collapses it.
 //

@@ -121,7 +121,7 @@ func loadTestopsPipelineRuns(
 ) ([]testops.PipelineRunRow, error) {
 	rows, err := conn.Query(ctx, `
 SELECT status, queued_at, started_at, finished_at, duration_seconds, queue_seconds,
-       retry_count, team_id, service_id, org_id
+       retry_count, team_id, service_id, org_id, last_synced
 FROM ci_pipeline_runs FINAL
 WHERE started_at >= ? AND started_at < ? AND repo_id = ? AND org_id = ?`,
 		start.UTC(), end.UTC(), repoID, orgID)
@@ -136,7 +136,7 @@ WHERE started_at >= ? AND started_at < ? AND repo_id = ? AND org_id = ?`,
 		if err := rows.Scan(
 			&row.Status, &row.QueuedAt, &row.StartedAt, &row.FinishedAt,
 			&row.DurationSeconds, &row.QueueSeconds, &row.RetryCount,
-			&row.TeamID, &row.ServiceID, &row.OrgID,
+			&row.TeamID, &row.ServiceID, &row.OrgID, &row.LastSynced,
 		); err != nil {
 			return nil, fmt.Errorf("scan testops pipeline run: %w", err)
 		}

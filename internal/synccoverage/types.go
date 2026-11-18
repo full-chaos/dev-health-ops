@@ -88,6 +88,21 @@ type unitWindow struct {
 	DatasetKey string
 	Status     string
 	RunTime    time.Time
+	// Reasons is set only on a window of status statusClosedWithReason: the
+	// sorted causes that closed it (CHAOS-13988).
+	Reasons []string
+}
+
+// statusClosedWithReason marks a compact window a tests unit covered although
+// it lost reports, because every lost report was closed with a reason
+// (closedWithReasonCauses). It is covered too: load.go also emits it as a
+// "success" window.
+const statusClosedWithReason = "closed_with_reason"
+
+// closedRange is a covered window and the sorted causes that closed it.
+type closedRange struct {
+	Interval coverageInterval
+	Reasons  []string
 }
 
 type coverageInterval struct {
@@ -102,6 +117,11 @@ type pairState struct {
 	Requested []coverageInterval
 	Covered   []coverageInterval
 	Failed    []coverageInterval
+	// Closed are the windows covered with a reason; Complete are the windows a
+	// unit with no lost report covered. Complete wins: it is subtracted from
+	// Closed whatever the order of the units.
+	Closed   []closedRange
+	Complete []coverageInterval
 }
 
 type pairCoverage struct {
@@ -112,6 +132,7 @@ type pairCoverage struct {
 	Gaps           []coverageInterval
 	StaleRanges    []coverageInterval
 	FailedRanges   []coverageInterval
+	ClosedRanges   []closedRange
 	CoveredThrough *time.Time
 	Status         string
 }
@@ -123,6 +144,7 @@ type datasetCoverage struct {
 	Gaps           []coverageInterval
 	StaleRanges    []coverageInterval
 	FailedRanges   []coverageInterval
+	ClosedRanges   []closedRange
 	CoveredThrough *time.Time
 	Status         string
 }

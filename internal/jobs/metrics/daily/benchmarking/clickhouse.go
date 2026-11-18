@@ -30,9 +30,9 @@ type conn interface {
 // The value column, the grouping columns and the supported scopes are all part
 // of the query's meaning, so they are reproduced rather than re-derived.
 var metricDefinitions = map[string]MetricDefinition{
-	"success_rate":              pipelineMetric(completedRunRate("success_count")),
-	"failure_rate":              pipelineMetric(completedRunRate("failure_count")),
-	"rerun_rate":                pipelineMetric("rerun_rate"),
+	"success_rate":              pooledPipelineRate("success_count", completedRuns),
+	"failure_rate":              pooledPipelineRate("failure_count", completedRuns),
+	"rerun_rate":                pooledPipelineRate("rerun_rate * pipelines_count", "pipelines_count"),
 	"median_duration_seconds":   pipelineMetric("median_duration_seconds"),
 	"p95_duration_seconds":      pipelineMetric("p95_duration_seconds"),
 	"avg_queue_seconds":         pipelineMetric("avg_queue_seconds"),
@@ -91,12 +91,20 @@ func pipelineMetric(column string) MetricDefinition {
 	}
 }
 
-// completedRunRate is a rate over the completed runs (succeeded or failed) of a stored row, NULL on a row with no
-// completed run: the series drops NULL values, so such a day is never a sample of 0. The stored success_rate and
-// failure_rate columns hold 0 on that day and are not read.
-func completedRunRate(count string) string {
-	return "if(success_count + failure_count = 0, NULL, " + count + " / (success_count + failure_count))"
+// pooledPipelineRate is a ratio of stored runs: the group's numerator over its denominator, so a repo-day weighs by
+// its runs. A stored rate times pipelines_count is its count (rerun_rate is reruns / pipelines_count, unrounded). A
+// repo-day whose denominator is 0 adds 0 to both sums.
+func pooledPipelineRate(numerator, denominator string) MetricDefinition {
+	definition := pipelineMetric("")
+	definition.Numerator, definition.Denominator = numerator, denominator
+	return definition
 }
+
+// completedRuns are the runs that succeeded or failed: the denominator of the success and failure rates. A repo-day
+// with none (cancelled runs only, or a retraction row of zeros) is in neither sum, so a day with none in the group has
+// no point, never a sample of 0. The stored success_rate and failure_rate columns hold 0 on that day and are not read;
+// the counts are exact UInt32 columns.
+const completedRuns = "success_count + failure_count"
 
 // passedCaseRate is a stored row's passed cases over its passed and failed cases, NULL on a row with neither: the
 // series drops NULL values, so a day where every case was skipped is never a sample of 0. The stored pass_rate column
@@ -230,28 +238,36 @@ func (loader *ClickHouseLoader) FetchMetricSeriesByScope(
 	if ownersRead {
 		keyAlias = "repo_key"
 	}
+	pooled := definition.Numerator != ""
+	valueSelect := "(argMax(tuple(" + definition.ValueColumn + "), computed_at)).1 AS metric_value"
+	outerValue, outerWhere := "avg(metric_value)", "metric_value IS NOT NULL"
+	if pooled {
+		valueSelect = "(argMax(tuple(" + definition.Numerator + ", " + definition.Denominator + "), computed_at)).1 AS metric_num,\n" +
+			"        (argMax(tuple(" + definition.Numerator + ", " + definition.Denominator + "), computed_at)).2 AS metric_den"
+		outerValue, outerWhere = pooledValue(""), "1"
+	}
 	inner := fmt.Sprintf(`
     SELECT
         %s AS %s,
         day,
-        (argMax(tuple(%s), computed_at)).1 AS metric_value
+        %s
     FROM %s
     WHERE %s
     GROUP BY %s%s`,
-		scopeExpression, keyAlias, definition.ValueColumn, definition.Table,
+		scopeExpression, keyAlias, valueSelect, definition.Table,
 		strings.Join(filters, " AND "), strings.Join(innerGroup, ", "), liveRowHaving(definition.Table),
 	)
 	query := fmt.Sprintf(`
-SELECT scope_key, day, avg(metric_value) AS value
+SELECT scope_key, day, %s AS value
 FROM (%s
 )
-WHERE metric_value IS NOT NULL
+WHERE %s
 GROUP BY scope_key, day
-ORDER BY scope_key, day`, inner)
+ORDER BY scope_key, day`, outerValue, inner, outerWhere)
 	var ownerArguments []any
 	if ownersRead {
 		var err error
-		query, ownerArguments, err = ownersJoin(inner, loader.orgID, loader.ownersAsOf)
+		query, ownerArguments, err = ownersJoin(inner, loader.orgID, loader.ownersAsOf, pooled)
 		if err != nil {
 			return nil, err
 		}
@@ -330,24 +346,34 @@ ORDER BY scope_key, day`, inner)
 // the owners of the repository at asOf by the ownership rule of every team scope (teamscope.OwnershipFromWhere:
 // validity window, active teams, catalog guard). A co-owned repository goes in full to each owner, never at its share,
 // and a repository no team owns gives no team a series. Every day of the window takes the owners at asOf.
-func ownersJoin(inner, orgID string, asOf time.Time) (string, []any, error) {
+func ownersJoin(inner, orgID string, asOf time.Time, pooled bool) (string, []any, error) {
 	fromWhere, bindings := teamscope.OwnershipFromWhere(orgID, asOf)
+	outerValue, outerWhere := "avg(k.metric_value)", "k.metric_value IS NOT NULL"
+	if pooled {
+		outerValue, outerWhere = pooledValue("k."), "1"
+	}
 	query := fmt.Sprintf(`
-SELECT own.owner_team_id AS scope_key, k.day AS day, avg(k.metric_value) AS value
+SELECT own.owner_team_id AS scope_key, k.day AS day, %s AS value
 FROM (%s
 ) AS k
 INNER JOIN (
     SELECT DISTINCT o.team_id AS owner_team_id, %s AS owned_repo_id
 %s
 ) AS own ON k.repo_key = own.owned_repo_id
-WHERE k.metric_value IS NOT NULL
+WHERE %s
 GROUP BY scope_key, day
-ORDER BY scope_key, day`, inner, ownershipwindow.RepoKey, fromWhere)
+ORDER BY scope_key, day`, outerValue, inner, ownershipwindow.RepoKey, fromWhere, outerWhere)
 	arguments, err := namedArguments(bindings)
 	if err != nil {
 		return "", nil, err
 	}
 	return query, arguments, nil
+}
+
+// pooledValue is the ratio of sums of a pooled metric over the repo-days of one (scope, day), NULL when no run: the
+// caller drops a NULL value, so such a day is never a sample of 0.
+func pooledValue(prefix string) string {
+	return "if(sum(" + prefix + "metric_den) = 0, NULL, sum(" + prefix + "metric_num) / sum(" + prefix + "metric_den))"
 }
 
 // namedArguments binds each teamscope binding with a typed clickhouse.Named call, so every bound type is one the

@@ -67,6 +67,23 @@ func Decode(query string, args []any) ([]string, []teamprovider.Write, error) {
 		writes[r].ProviderName, _ = named["identity_name"][r].(string)
 		rule, _ := named["gone_rule"][r].(uint32)
 		writes[r].Gone = teamprovider.Gone(rule)
+		if rules := named["roster_rule"]; len(rules) > r {
+			roster, _ := rules[r].(uint32)
+			writes[r].Roster = teamprovider.Roster(roster)
+			writes[r].RosterAdd, _ = named["roster_add"][r].([]string)
+			writes[r].RosterRemove, _ = named["roster_remove"][r].([]string)
+		}
+		if sources := named["roster_source"]; len(sources) > r {
+			writes[r].RosterSource, _ = sources[r].(string)
+			for target, name := range map[*time.Time]string{&writes[r].RosterSourceRead.UpdatedAt: "roster_read_at", &writes[r].RosterSourceRead.LastSynced: "roster_read_synced"} {
+				text, _ := named[name][r].(string)
+				parsed, err := time.Parse("2006-01-02 15:04:05.000000", text)
+				if err != nil {
+					return nil, nil, err
+				}
+				*target = parsed.UTC()
+			}
+		}
 		if text, ok := named["gone_in"][r].(string); ok {
 			parsed, err := time.Parse("2006-01-02 15:04:05.000000", text)
 			if err != nil {

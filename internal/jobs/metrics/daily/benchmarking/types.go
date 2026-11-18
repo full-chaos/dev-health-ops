@@ -55,6 +55,11 @@ type MetricDefinition struct {
 	ValueColumn       string
 	ScopeSupport      map[string]bool
 	InnerGroupColumns []string
+	// Numerator and Denominator, both set, make the metric a ratio of sums: each (scope, day) point is
+	// sum(Numerator) / sum(Denominator) over its repo-days, and a point whose Denominator sums to 0 is no point.
+	// ValueColumn is then not read.
+	Numerator   string
+	Denominator string
 	// ExtraFilters are appended verbatim to the WHERE clause. Only
 	// deployment_frequency uses one (it shares dora_metrics_daily with other
 	// metrics and must select its own by name).

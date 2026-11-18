@@ -292,19 +292,12 @@ func (sink LinearReferenceCatalogClickHouseEffects) writeTeams(ctx context.Conte
 	if len(rows) == 0 {
 		return nil
 	}
-	// CHAOS-4446: read every touched team's CURRENT manual_members before
-	// preparing the insert, so this write carries it forward instead of
-	// clobbering an admin's roster override with the schema default ([]).
-	// A team with no existing row (genuinely new) defaults to [] below,
-	// which is correct -- PreserveExistingTeamManualMembers's own doc
-	// comment covers why a missing map entry is not an error.
+	// CHAOS-4446: this write never edits the admin roster; every row keeps
+	// it (teamprovider.RosterKept), read from teams FINAL inside the insert
+	// statement. A team with no row gets the column default [].
 	teamIDs := make([]string, 0, len(rows))
 	for _, row := range rows {
 		teamIDs = append(teamIDs, row.ID)
-	}
-	existingManualMembers, err := PreserveExistingTeamManualMembers(ctx, sink.Conn, rows[0].OrgID, teamIDs)
-	if err != nil {
-		return err
 	}
 	createdAt, err := teamcreated.Carry(ctx, sink.Conn, rows[0].OrgID, teamIDs)
 	if err != nil {
@@ -322,11 +315,11 @@ func (sink LinearReferenceCatalogClickHouseEffects) writeTeams(ctx context.Conte
 		if err != nil {
 			return ErrInvalidConfiguration
 		}
-		manualMembers := existingManualMembers[row.ID]
 		tally.Add(stored, row.ID, row.ProviderTeamID)
 		writes = append(writes, teamprovider.Write{
-			Values:         []any{row.ID, teamUUID, row.Name, row.Description, manualMembers, row.ProjectKeys, row.RepoPatterns, row.IsActive, row.UpdatedAt, row.OrgID, row.Provider, row.NativeTeamKey, row.ParentTeamID, teamcreated.For(createdAt, row.ID, row.UpdatedAt)},
+			Values:         []any{row.ID, teamUUID, row.Name, row.Description, []string{}, row.ProjectKeys, row.RepoPatterns, row.IsActive, row.UpdatedAt, row.OrgID, row.Provider, row.NativeTeamKey, row.ParentTeamID, teamcreated.For(createdAt, row.ID, row.UpdatedAt)},
 			ProviderTeamID: row.ProviderTeamID, ProviderName: row.ProviderName, Gone: teamprovider.GoneCleared,
+			Roster: teamprovider.RosterKept,
 		})
 	}
 	if err := sink.Lease.Assert(ctx); err != nil {

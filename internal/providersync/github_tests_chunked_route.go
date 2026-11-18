@@ -1797,7 +1797,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 					artPage, pageErr := providerfoundation.CollectGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{
 						Path:  root + "/actions/runs/" + url.PathEscape(pipeline.RunID) + "/artifacts",
 						Route: githubRunArtifactsRoute,
-						Query: url.Values{"per_page": {"100"}}, DataKey: "artifacts", MaxPages: 1,
+						Query: url.Values{"per_page": {strconv.Itoa(githubTestsArtifactsPerPage)}}, DataKey: "artifacts", MaxPages: 1,
 					})
 					if pageErr != nil {
 						return pageErr
@@ -1878,9 +1878,25 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 							},
 						)
 					}
+					// CHAOS-14000: the cap counts only artifacts whose zip directory lists a report member; one that lists none is
+					// excluded, never a loss.
+					// The checks' own wire count replaces the Do calls they made, so a transport resend is counted too.
+					requestsBeforeAdmission := requests
+					artifactItems, noReportItems, artifactsCapped, admitRequests, admitErr := githubTestsAdmitReportArtifacts(ctx, client, root, artifactItems, maxArtifacts)
+					requests = requestsBeforeAdmission + admitRequests
+					cursor.Requests = invocationBaseRequests + requests
+					if admitErr != nil {
+						return admitErr
+					}
+					// An artifact whose directory lists no report member is not a report source of the run (CHAOS-13826).
+					reportsExpected -= len(noReportItems)
+					for _, artifact := range noReportItems {
+						if len(cursor.ExcludedArtifactSample) < githubTestsMaxExcludedArtifactSampleRecords {
+							cursor.ExcludedArtifactSample = append(cursor.ExcludedArtifactSample, githubTestsNoReportSampleRecord(artifact))
+						}
+					}
 					switch {
-					case len(artifactItems) > maxArtifacts:
-						artifactItems = artifactItems[:maxArtifacts]
+					case artifactsCapped:
 						cursor = recordGitHubTestsPerRunTruncation(
 							cursor, client, claim, githubTestsRunArtifactsComponent,
 							githubTestsPerRunCapCause, pipeline.RunID, len(artifactItems),
@@ -2195,6 +2211,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 					if planErr != nil {
 						return fmt.Errorf("%w: sizing report rows: %v", ErrGitHubTestsIncomplete, planErr)
 					}
+					reportGitHubTestsPlannerKeeps(ctx, claim.Provider, claim.Dataset, claim.ID, cursor.Repo, pipeline.RunID, parsedReports, plan)
 					recordedCauses := map[string]bool{}
 					markReport := func(index int, cause string) {
 						report := parsedReports[index]

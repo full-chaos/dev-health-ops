@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/chtime"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/querybound"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workitemmetrics"
 )
@@ -109,6 +110,8 @@ type workItemScopeRead struct {
 	Stats             workItemScopeReadStats
 	// OrgWinnerRepos is the repository of the row each item of Items was read from.
 	OrgWinnerRepos map[workItemIdentity]uuid.UUID
+	// ScopeWinnerRepos is the repository of the row each item of ScopeItems was read from, in its scope.
+	ScopeWinnerRepos map[workItemScopedIdentity]uuid.UUID
 }
 
 // empty says that neither set has an item: the read computes nothing.
@@ -567,13 +570,13 @@ FROM (
 		from_status, to_status, from_status_raw, to_status_raw, actor,
 		max(last_synced) AS last_synced
 	FROM work_item_transitions
-	WHERE org_id = ? AND occurred_at < ?
+	WHERE org_id = ? AND occurred_at < fromUnixTimestamp64Micro(?, 'UTC')
 	  AND work_item_id IN (
 		SELECT work_item_id FROM work_items WHERE org_id = ?`+workItemScopeFilterSQL(emptyScope, filtered)+`)
 	GROUP BY org_id, work_item_id, occurred_at,
 		from_status, to_status, from_status_raw, to_status_raw, actor
 )`,
-		workItemScopeFilterArgument(values), organizationID, end.UTC(), organizationID,
+		workItemScopeFilterArgument(values), organizationID, chtime.Micros(end), organizationID,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("load work item scope transitions: %w", err)
@@ -734,7 +737,7 @@ func loadWorkItemScopeRead(
 	}
 	read := workItemScopeRead{
 		Scopes: scopes, Attributions: map[string]workItemPrimaryAttribution{}, ScopeAttributions: map[string]workItemPrimaryAttribution{},
-		OrgWinnerRepos: map[workItemIdentity]uuid.UUID{},
+		OrgWinnerRepos: map[workItemIdentity]uuid.UUID{}, ScopeWinnerRepos: map[workItemScopedIdentity]uuid.UUID{},
 	}
 	read.Stats.Scopes = len(scopes)
 	if len(scopes) == 0 {
@@ -830,6 +833,7 @@ func loadWorkItemScopeRead(
 	read.ScopeItems = make([]workItemMetricsRow, 0, len(scopeKept))
 	for _, row := range scopeKept {
 		read.ScopeItems = append(read.ScopeItems, row.workItemMetricsRow)
+		read.ScopeWinnerRepos[workItemScopedIdentity{row.Provider, row.attributionScope, row.WorkItemID}] = row.RepoID
 		if attribution, found := attributionOf(row); found {
 			read.ScopeAttributions[workitemmetrics.AttributionKey(row.attributionScope, row.WorkItemID)] = attribution
 		}

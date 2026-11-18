@@ -238,7 +238,9 @@ func TestICFinalizeMatchesTheFrozenPythonGolden(t *testing.T) {
 	// keep on top -- exactly the failure mode this test hit on a real CI run.
 	assertComputedAtIsExecutorGeneration(t, gotUserMetrics, fixedNow)
 
-	assertUserMetricsMatchGolden(t, golden.UserMetrics, gotUserMetrics, orgID)
+	wantUserMetrics := departWorkItemsToTheNoRepositoryRow(golden.UserMetrics, orgID)
+	assertPersonTotalsMatchGolden(t, golden.UserMetrics, gotUserMetrics)
+	assertUserMetricsMatchGolden(t, wantUserMetrics, gotUserMetrics, orgID)
 	assertLandscapeMatchesGolden(t, golden.LandscapeRolling, gotLandscape)
 }
 
@@ -351,6 +353,9 @@ type gotUserMetricRow struct {
 	ComputedAt         time.Time
 }
 
+// userMetricKey is the key of a person's row: user_metrics_daily holds one row per (repository, person) of the day.
+func userMetricKey(email, repoID string) string { return email + "\x1f" + repoID }
+
 func readBackUserMetrics(
 	ctx context.Context, t *testing.T, conn Conn, orgID string, day time.Time,
 ) map[string]gotUserMetricRow {
@@ -386,7 +391,7 @@ WHERE day = ? AND org_id = ?`, day.Format("2006-01-02"), orgID)
 			t.Fatal(err)
 		}
 		row.TeamID, row.TeamName = teamID, teamName
-		out[row.AuthorEmail] = row
+		out[userMetricKey(row.AuthorEmail, row.RepoID.String())] = row
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatal(err)
@@ -475,28 +480,18 @@ func assertUserMetricsMatchGolden(
 		t.Fatalf("row count: golden=%d got=%d (got=%+v)", len(golden), len(got), got)
 	}
 	for _, want := range golden {
-		row, ok := got[want.AuthorEmail]
+		// The expected repo of a synthesized row is SynthesizedRepoID (the divergence documented above), set by
+		// departWorkItemsToTheNoRepositoryRow, so the key carries the repository check.
+		row, ok := got[userMetricKey(want.AuthorEmail, want.RepoID)]
 		if !ok {
-			t.Fatalf("%s: missing from Go's output entirely", want.AuthorEmail)
-		}
-		if want.AuthorEmail != "carol@example.com" {
-			if row.RepoID.String() != want.RepoID {
-				t.Errorf("%s: RepoID = %s, want %s", want.AuthorEmail, row.RepoID, want.RepoID)
-			}
-		} else {
-			// Carol: SynthesizedRepoID divergence documented above.
-			wantSynthesized := SynthesizedRepoID(orgID, "carol@example.com")
-			if row.RepoID != wantSynthesized {
-				t.Errorf("carol@example.com: RepoID = %s, want SynthesizedRepoID(...)=%s",
-					row.RepoID, wantSynthesized)
-			}
+			t.Fatalf("%s: no row for repository %s in Go's output", want.AuthorEmail, want.RepoID)
 		}
 		assertOptionalStringEqual(t, want.AuthorEmail, "TeamID", row.TeamID, want.TeamID)
-		if want.AuthorEmail != "carol@example.com" {
+		if want.TeamName != nil {
 			assertOptionalStringEqual(t, want.AuthorEmail, "TeamName", row.TeamName, want.TeamName)
 		} else if row.TeamName != nil && *row.TeamName != "" {
 			// team_name null-vs-empty-string divergence documented above.
-			t.Errorf("carol@example.com: TeamName = %v, want nil or empty (Python's None)", *row.TeamName)
+			t.Errorf("%s: TeamName = %v, want nil or empty (Python's None)", want.AuthorEmail, *row.TeamName)
 		}
 		if int64(row.CommitsCount) != want.CommitsCount {
 			t.Errorf("%s: CommitsCount = %d, want %d", want.AuthorEmail, row.CommitsCount, want.CommitsCount)
@@ -626,4 +621,68 @@ func optionalString(value *string) string {
 		return "<nil>"
 	}
 	return *value
+}
+
+// departWorkItemsToTheNoRepositoryRow is a DECLARED DEPARTURE from the frozen golden (CHAOS-14105, acp form B'). The
+// reference put a person's work items on the person's git row (delivery_units = merged pull requests + completed
+// items). The port writes every git row of the person with its own git values and no work item, and the person's work
+// items on the synthesized no-repository row, for every person (one rule, single-repository persons too). The golden's
+// bytes are not changed: the expected rows are derived from them here.
+//
+//   - a person with no git row (carol): one synthesized row, as recorded (only its repo_id is SynthesizedRepoID);
+//   - a person with a git row and work items (alice): the git row = the golden row less the items, and a synthesized
+//     row = the items (delivery_units = completed items, no git value);
+//   - a person with a git row and no work item (bob): the golden row.
+//
+// assertPersonTotalsMatchGolden pins that the person's totals are the golden's.
+func departWorkItemsToTheNoRepositoryRow(golden []goldenUserMetric, orgID string) []goldenUserMetric {
+	var want []goldenUserMetric
+	for _, row := range golden {
+		hasGit := row.CommitsCount != 0 || row.LOCAdded != 0 || row.LOCDeleted != 0 || row.PRsAuthored != 0 || row.PRsMerged != 0
+		if !hasGit {
+			row.RepoID = SynthesizedRepoID(orgID, row.AuthorEmail).String()
+			want = append(want, row)
+			continue
+		}
+		if row.WorkItemsCompleted == 0 && row.WorkItemsActive == 0 {
+			want = append(want, row)
+			continue
+		}
+		git := row
+		git.WorkItemsCompleted, git.WorkItemsActive = 0, 0
+		git.DeliveryUnits = row.DeliveryUnits - row.WorkItemsCompleted
+		want = append(want, git, goldenUserMetric{
+			RepoID:             SynthesizedRepoID(orgID, row.AuthorEmail).String(),
+			AuthorEmail:        row.AuthorEmail,
+			IdentityID:         row.IdentityID,
+			TeamID:             row.TeamID,
+			WorkItemsCompleted: row.WorkItemsCompleted,
+			WorkItemsActive:    row.WorkItemsActive,
+			DeliveryUnits:      row.WorkItemsCompleted,
+		})
+	}
+	return want
+}
+
+// assertPersonTotalsMatchGolden: over a person's rows, the work items, the delivery and the git values sum to the
+// golden's one row of the person (the departure moves values between rows, never changes a total).
+func assertPersonTotalsMatchGolden(t *testing.T, golden []goldenUserMetric, got map[string]gotUserMetricRow) {
+	t.Helper()
+	type totals struct{ items, active, delivery, locTouched, prsMerged int64 }
+	sum := map[string]totals{}
+	for _, row := range got {
+		s := sum[row.AuthorEmail]
+		s.items += int64(row.WorkItemsCompleted)
+		s.active += int64(row.WorkItemsActive)
+		s.delivery += int64(row.DeliveryUnits)
+		s.locTouched += int64(row.LOCTouched)
+		s.prsMerged += int64(row.PRsMerged)
+		sum[row.AuthorEmail] = s
+	}
+	for _, want := range golden {
+		w := totals{want.WorkItemsCompleted, want.WorkItemsActive, want.DeliveryUnits, want.LOCTouched, want.PRsMerged}
+		if got := sum[want.AuthorEmail]; got != w {
+			t.Errorf("%s: totals over the person's rows = %+v, want the golden's %+v", want.AuthorEmail, got, w)
+		}
+	}
 }

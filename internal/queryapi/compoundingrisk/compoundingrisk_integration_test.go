@@ -550,8 +550,9 @@ func TestRealClickHouse_RepoBreakoutTrendFollowsRepoIDs(t *testing.T) {
 		put(t, ctx, conn, risk{org: "org-1", scope: "repo", id: rA, day: day(now, back), score: scores[0], sev: "low"})
 		put(t, ctx, conn, risk{org: "org-1", scope: "repo", id: rB, day: day(now, back), score: scores[1], sev: "high"})
 	}
+	pinned := gqlDate(day(now, 1))
 	trendOf := func(repoIDs []string) map[string]float64 {
-		got, err := Resolve(ctx, client, "org-1", &model.CompoundingRiskFilterInput{Breakout: model.CompoundingRiskScopeRepo, RepoIds: repoIDs, TrendDays: 30}, now)
+		got, err := Resolve(ctx, client, "org-1", &model.CompoundingRiskFilterInput{Breakout: model.CompoundingRiskScopeRepo, RepoIds: repoIDs, TrendDays: 30, Day: &pinned}, now)
 		if err != nil {
 			t.Fatal(err)
 		}

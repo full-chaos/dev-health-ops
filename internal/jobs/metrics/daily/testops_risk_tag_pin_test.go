@@ -24,7 +24,7 @@ func TestComputeReleaseConfidenceFactorsJSONFamilyIsExactlyPinned(t *testing.T) 
 	nan := math.NaN()
 
 	pipe := &testops.PipelineMetric{RepoID: repoID, OrgID: "org"}
-	test := &testops.TestMetric{RepoID: repoID, OrgID: "org", FlakeRate: nan}
+	test := &testops.TestMetric{RepoID: repoID, OrgID: "org", DistinctCases: 1, FlakeRate: nan}
 
 	const family = "testops_release_confidence"
 	const field = "flake_rate"
@@ -50,7 +50,7 @@ func TestComputeQualityDragFactorsJSONFamilyIsExactlyPinned(t *testing.T) {
 	nan := math.NaN()
 
 	pipe := &testops.PipelineMetric{RepoID: repoID, OrgID: "org", MedianDurationSeconds: &nan}
-	test := &testops.TestMetric{RepoID: repoID, OrgID: "org"}
+	test := &testops.TestMetric{RepoID: repoID, DistinctCases: 1, OrgID: "org"}
 
 	const family = "testops_quality_drag"
 	const field = "median_duration_seconds"
@@ -89,7 +89,7 @@ func TestComputeQualityDragNumericFieldTagsAreExactlyPinned(t *testing.T) {
 		FailureCount:          1,
 		PipelinesCount:        1,
 	}
-	test := &testops.TestMetric{RepoID: repoID, OrgID: "org", FlakeRate: nan, TotalCases: 1}
+	test := &testops.TestMetric{RepoID: repoID, OrgID: "org", DistinctCases: 1, FlakeRate: nan, TotalCases: 1}
 
 	const family = "testops_quality_drag"
 	tags := []string{
@@ -139,7 +139,7 @@ func TestComputeQualityDragNonFiniteFlakeRateNullsOnlyFlakeInvestigationHours(t 
 	nan := math.NaN()
 
 	pipe := &testops.PipelineMetric{RepoID: repoID, OrgID: "org"}
-	test := &testops.TestMetric{RepoID: repoID, OrgID: "org", FlakeRate: nan, TotalCases: 100}
+	test := &testops.TestMetric{RepoID: repoID, OrgID: "org", DistinctCases: 1, FlakeRate: nan, TotalCases: 100}
 
 	row := computeQualityDrag(repoID, day, pipe, test, day)
 	if row == nil {

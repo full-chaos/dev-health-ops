@@ -604,6 +604,31 @@ func TestAuthProxyKeepsGoAPIRateLimitsInFront(t *testing.T) {
 	}
 }
 
+// auth-service's refresh refusal reaches the client with its Retry-After, and go-api's own refresh refusal (the
+// per-credential budget in front of the forward) carries one too (CHAOS-8441).
+func TestAuthProxyRefreshRefusalsCarryRetryAfter(t *testing.T) {
+	stub := newStubUpstream(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Retry-After", "900")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = io.WriteString(w, `{"detail":{"message":"Rate limit exceeded. Please try again later."}}`)
+	})
+	handler := proxyFixture(t, mustProxyConfig(t, allOn(stub.URL)))
+	for i := 1; i <= 11; i++ {
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, proxyCalls[0].request(t))
+		if recorder.Code != http.StatusTooManyRequests || recorder.Header().Get("Retry-After") != "900" {
+			t.Fatalf("refresh %d = %d Retry-After %q, want 429 with 900", i, recorder.Code, recorder.Header().Get("Retry-After"))
+		}
+		if got := recorder.Header().Values("Retry-After"); len(got) != 1 {
+			t.Fatalf("refresh %d carries %d Retry-After values, want 1", i, len(got))
+		}
+	}
+	if got := len(stub.requests()); got != 10 {
+		t.Fatalf("upstream saw %d refreshes, want 10 (the 11th is go-api's own refusal)", got)
+	}
+}
+
 // go-api's own front checks still answer before any forward: a body that is
 // not JSON, and a guarded route without a bearer.
 func TestAuthProxyKeepsGoAPIFrontChecks(t *testing.T) {

@@ -59,7 +59,7 @@ func TestNewFlameWorkHandlerRequiresAuthContext(t *testing.T) {
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
 	}
-	if got, want := rec.Body.String(), `{"detail":{"message":"Not authenticated"}}`+"\n"; got != want {
+	if got, want := rec.Body.String(), `{"detail":{"message":"Not authenticated"}}`; got != want {
 		t.Fatalf("body = %q, want %q", got, want)
 	}
 }
@@ -145,7 +145,7 @@ func TestNewFlameWorkHandlerComparativeParamRejected(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
 	}
-	if got, want := rec.Body.String(), `{"detail":"Comparative parameters are not supported."}`+"\n"; got != want {
+	if got, want := rec.Body.String(), `{"detail":"Comparative parameters are not supported."}`; got != want {
 		t.Fatalf("body = %q, want %q", got, want)
 	}
 }
@@ -161,7 +161,7 @@ func TestNewFlameWorkHandlerUnknownEntityTypeIs404(t *testing.T) {
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
 	}
-	if got, want := rec.Body.String(), `{"detail":"Unknown entity type"}`+"\n"; got != want {
+	if got, want := rec.Body.String(), `{"detail":"Unknown entity type"}`; got != want {
 		t.Fatalf("body = %q, want %q", got, want)
 	}
 }
@@ -177,7 +177,7 @@ func TestNewFlameWorkHandlerInvalidRepoPrefixIs400(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
 	}
-	if got, want := rec.Body.String(), `{"detail":"Entity id must include repo_id prefix"}`+"\n"; got != want {
+	if got, want := rec.Body.String(), `{"detail":"Entity id must include repo_id prefix"}`; got != want {
 		t.Fatalf("body = %q, want %q", got, want)
 	}
 }
@@ -193,7 +193,7 @@ func TestNewFlameWorkHandlerIssueNotFoundIs404(t *testing.T) {
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
 	}
-	if got, want := rec.Body.String(), `{"detail":"Issue not found"}`+"\n"; got != want {
+	if got, want := rec.Body.String(), `{"detail":"Issue not found"}`; got != want {
 		t.Fatalf("body = %q, want %q", got, want)
 	}
 	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
@@ -229,7 +229,7 @@ func TestBuildFlameRouteEntryHandlerRejectsNonGET(t *testing.T) {
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
 	}
-	if got, want := rec.Body.String(), `{"detail":"Method Not Allowed"}`+"\n"; got != want {
+	if got, want := rec.Body.String(), `{"detail":"Method Not Allowed"}`; got != want {
 		t.Fatalf("body = %q, want %q", got, want)
 	}
 }

@@ -256,10 +256,7 @@ func assertExplainJSONBody(t *testing.T, rec *httptest.ResponseRecorder, wantSta
 		t.Fatalf("Content-Type = %q, want application/json", ct)
 	}
 	got := rec.Body.String()
-	// json.Encoder appends a trailing newline; insignificant JSON
-	// whitespace (RFC 8259 SS2), same tolerance writeKeepAliveJSON's own
-	// doc comment (investment_explain_route.go) already establishes.
-	if got != wantBody+"\n" {
+	if got != wantBody {
 		t.Fatalf("body = %s, want %s", got, wantBody)
 	}
 }

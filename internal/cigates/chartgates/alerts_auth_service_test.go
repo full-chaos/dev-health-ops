@@ -31,7 +31,7 @@ const (
 // goAPIIDs are go-api's rate-limit ids (internal/api/session/limits.go and the
 // admin routes): none may fall inside the alert's selector.
 var goAPIIDs = []string{
-	"auth_login_ip", "auth_refresh", "auth_validate", "auth_register", "auth_verify", "auth_resend_verification",
+	"auth_login_ip", "auth_refresh", "auth_refresh_addr", "auth_validate", "auth_register", "auth_verify", "auth_resend_verification",
 	"auth_forgot_password", "auth_change_password", "admin_password",
 }
 

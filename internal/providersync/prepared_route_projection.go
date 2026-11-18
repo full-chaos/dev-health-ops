@@ -93,9 +93,10 @@ var workItemTransitionProviders = map[string]bool{
 var teamAttributionOwnershipReasons = map[string]bool{
 	"":      true,
 	"owned": true,
-	teamattribution.MembershipOwnershipReasonNotOwned:         true,
-	teamattribution.MembershipOwnershipReasonUnknown:          true,
-	teamattribution.MembershipOwnershipReasonTeamNullCarrying: true,
+	teamattribution.MembershipOwnershipReasonNotOwned:            true,
+	teamattribution.MembershipOwnershipReasonUnknown:             true,
+	teamattribution.MembershipOwnershipReasonIssueGateNotApplied: true,
+	teamattribution.MembershipOwnershipReasonTeamNullCarrying:    true,
 }
 
 type sinkReadKind int

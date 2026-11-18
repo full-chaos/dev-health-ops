@@ -156,7 +156,7 @@ type TestMetric struct {
 	FailedCount             int
 	SkippedCount            int
 	QuarantinedCount        int
-	PassRate                float64
+	PassRate                float64 // stored pass_rate/failure_rate: over TotalCases, 0 on an all-skipped day; never read (report census)
 	FailureRate             float64
 	FlakeRate               float64
 	FlakeCases              int

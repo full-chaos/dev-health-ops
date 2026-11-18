@@ -23,8 +23,9 @@ type rowsArtifact struct {
 	id    string
 	size  int64
 	rows  int
-	names string // name prefix; default "a<id>-" so artifacts do not repeat each other's cases
-	body  string // the JUnit file itself, when the test builds the cases (it replaces rows and names)
+	names string            // name prefix; default "a<id>-" so artifacts do not repeat each other's cases
+	body  string            // the JUnit file itself, when the test builds the cases (it replaces rows and names)
+	extra map[string]string // more archive members (such as a coverage report) beside junit.xml, by member name
 }
 
 type githubTestsRowsDoer struct {
@@ -69,7 +70,11 @@ func (doer *githubTestsRowsDoer) Do(request *http.Request) (*http.Response, erro
 				if artifact.body != "" {
 					junit = artifact.body
 				}
-				archive := githubTestsZip(doer.t, map[string]string{"junit.xml": junit})
+				members := map[string]string{"junit.xml": junit}
+				for name, member := range artifact.extra {
+					members[name] = member
+				}
+				archive := githubTestsZip(doer.t, members)
 				return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/zip"}},
 					Body: io.NopCloser(bytes.NewReader(archive)), Request: request}, nil
 			}

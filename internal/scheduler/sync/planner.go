@@ -161,6 +161,26 @@ type PlannerInput struct {
 	// threshold slows the source down to one try a day. Nil or a missing key
 	// plans exactly as before.
 	FailureStreaks map[string]providersync.FailureStreak
+	// TestOpsBudgetBlocked is, per PlanSource.ID, how many of the source's
+	// newest GitHub tests/cicd units stopped at the run inventory page budget and
+	// held the watermark (CHAOS-13827). Each one halves the next window of the
+	// folded cicd unit. Nil or a missing key plans exactly as before.
+	TestOpsBudgetBlocked map[string]int
+	// TestOpsReplayEnds is, per PlanSource.ID, the window end of the folded cicd
+	// unit that an earlier attempt of THIS occurrence already committed. It is
+	// set only when the occurrence's domain graph exists (a replay after the
+	// domain commit). The planner keeps that end when it is one the narrowing
+	// could have produced from the same window, so a budget history that moved
+	// or a read that failed on one attempt cannot change a committed plan.
+	TestOpsReplayEnds map[string]time.Time
+	// WorkItemsReplay is nil on a first attempt. On a replay of an occurrence whose
+	// domain graph already committed (its sync run row exists) it holds, per
+	// PlanSource.ID, the window end of the work-items unit that graph holds (a nil
+	// end is an open end). A source with no entry has no committed work-items unit.
+	// The failure streak moves between attempts, and its read can fail on one
+	// attempt only (CHAOS-14036); a replay keeps what the graph holds, so that
+	// the verifier does not quarantine the occurrence.
+	WorkItemsReplay *WorkItemsReplay
 	// ExecutedProof is the CHAOS-4060 durable, tri-state evidence snapshot:
 	// which provider/dataset pairs have at least one live sync_run_units row
 	// that completed with persisted-row evidence (proven), have been
@@ -570,7 +590,15 @@ func buildWorkItemFamilyUnit(
 	// mismatched window count and took down a merely partially-caught-up
 	// plan.
 	streak := input.FailureStreaks[source.ID]
-	if streak.SlowedDownAt(now) {
+	committedEnd, hasCommitted := input.WorkItemsReplay.committed(source.ID)
+	if input.WorkItemsReplay != nil && !hasCommitted {
+		slog.Default().Info("sync.plan.work_items_replay_no_unit",
+			slog.String("provider", provider),
+			slog.String("org_id", input.OrgID),
+			slog.String("source_id", source.ID))
+		return PlannedUnit{}, false
+	}
+	if !hasCommitted && streak.SlowedDownAt(now) {
 		globalPlanGateTelemetry.observe(provider, canonicalWorkItemsDataset, planGateOutcomeSlowedDown)
 		slog.Default().Info("sync.plan.work_items_slowed_down",
 			slog.String("provider", provider),
@@ -640,7 +668,16 @@ func buildWorkItemFamilyUnit(
 			slog.Duration("window_before", uncapped.Sub(*earliest)),
 			slog.Duration("window_after", latest.Sub(*earliest)))
 	}
-	if halved, ok := halveWindowAfterFailures(earliest, latest, streak); ok {
+	if replayed, ok := replayedWorkItemsEnd(earliest, latest, committedEnd); ok {
+		if !replayed.Equal(latest) {
+			slog.Default().Info("sync.plan.work_items_window_replayed",
+				slog.String("provider", provider),
+				slog.String("org_id", input.OrgID),
+				slog.String("source_id", source.ID),
+				slog.Duration("window", replayed.Sub(*earliest)))
+		}
+		latest = replayed
+	} else if halved, ok := halveWindowAfterFailures(earliest, latest, streak); ok {
 		slog.Default().Info("sync.plan.work_items_window_halved",
 			slog.String("provider", provider),
 			slog.String("org_id", input.OrgID),
@@ -787,10 +824,67 @@ func foldContributingFamilyUnit(
 			flags[flagName] = flagValue
 		}
 	}
+	if canonicalDataset == canonicalTestOpsDataset {
+		latest = narrowTestOpsWindow(input, source, provider, contributing, earliest, latest)
+	}
 	unit := newPlannedUnit(input, source, canonicalDataset, canonicalSpec, earliest, latest)
 	unit.ProcessorFlags = flags
 	globalPlanGateTelemetry.observe(provider, canonicalDataset, planGateOutcomePlanned)
 	return unit, true
+}
+
+// narrowTestOpsWindow bounds the merged window of the folded tests/cicd unit
+// (CHAOS-13827). The members are capped one by one in resolveWindow, but cicd
+// is MEDIUM and uncapped, so the merged span (earliest start, latest end) of a
+// source behind on both members was the whole gap. The HEAVY cap then applies
+// to the merged span when a HEAVY member contributes, as the work-item family
+// does. Then each budget-blocked unit among the source's newest units halves
+// the span. Only the end moves in (clause C4): the watermarks stamp at the new
+// end and the next unit continues from there. A replay of an occurrence whose
+// domain graph already committed keeps the committed end when the narrowing
+// could have produced it from the same window (TestOpsReplayEnds).
+func narrowTestOpsWindow(
+	input PlannerInput, source PlanSource, provider string, contributing []PlanDataset,
+	earliest *time.Time, latest time.Time,
+) time.Time {
+	if input.Mode != SyncModeIncremental || earliest == nil {
+		return latest
+	}
+	for _, dataset := range contributing {
+		spec, ok := datasetSpecification(provider, dataset.Key)
+		if ok && PlannedWindowClass(provider, dataset.Key, spec.CostClass, dataset.FullQuery) == heavyCostClass {
+			latest = applyHeavyWindowRatchet(input.Mode, heavyCostClass, earliest, latest, input.WatermarkOverlap)
+			break
+		}
+	}
+	if committed, replay := input.TestOpsReplayEnds[source.ID]; replay {
+		if committed.Equal(latest) {
+			return latest
+		}
+		for _, candidate := range providersync.TestOpsNarrowingCandidates(earliest, latest) {
+			if candidate.Equal(committed) {
+				slog.Default().Info("sync.plan.testops_window_replayed",
+					slog.String("provider", provider),
+					slog.String("org_id", input.OrgID),
+					slog.String("source_id", source.ID),
+					slog.Duration("window", committed.Sub(*earliest)))
+				return committed
+			}
+		}
+	}
+	blocked := input.TestOpsBudgetBlocked[source.ID]
+	narrowed, ok := providersync.NarrowTestOpsWindow(earliest, latest, blocked)
+	if !ok {
+		return latest
+	}
+	slog.Default().Info("sync.plan.testops_window_narrowed",
+		slog.String("provider", provider),
+		slog.String("org_id", input.OrgID),
+		slog.String("source_id", source.ID),
+		slog.Int("budget_blocked_units", blocked),
+		slog.Duration("window_before", latest.Sub(*earliest)),
+		slog.Duration("window_after", narrowed.Sub(*earliest)))
+	return narrowed
 }
 
 // resolveWindow is the single window pipeline every planned unit goes through:
@@ -1148,4 +1242,43 @@ func halveWindowAfterFailures(start *time.Time, end time.Time, streak providersy
 		return end, false
 	}
 	return start.Add(halved), true
+}
+
+// WorkItemsReplay is what the committed domain graph of an occurrence holds for the work-items family.
+type WorkItemsReplay struct {
+	// Units maps PlanSource.ID to the window end of the committed work-items unit; nil is an open end.
+	Units map[string]*time.Time
+}
+
+func (replay *WorkItemsReplay) committed(sourceID string) (*time.Time, bool) {
+	if replay == nil {
+		return nil, false
+	}
+	end, ok := replay.Units[sourceID]
+	return end, ok
+}
+
+// replayedWorkItemsEnd reports the committed end when a replay may keep it: it is the planned end, or an end the
+// failure-streak halving of the same window can produce (1 to RecentTerminalUnitsLimit shrinking failures). Any
+// other committed end is not kept, so the verifier still refuses it.
+func replayedWorkItemsEnd(start *time.Time, end time.Time, committed *time.Time) (time.Time, bool) {
+	if start == nil || committed == nil {
+		return end, false
+	}
+	same := func(candidate time.Time) bool {
+		return candidate.Equal(*committed) || candidate.Truncate(time.Microsecond).Equal(*committed)
+	}
+	if same(end) {
+		return *committed, true
+	}
+	for count := 1; count <= providersync.RecentTerminalUnitsLimit; count++ {
+		halved, ok := halveWindowAfterFailures(start, end, providersync.FailureStreak{Count: count, ShrinkCount: count})
+		if !ok {
+			break
+		}
+		if same(halved) {
+			return *committed, true
+		}
+	}
+	return end, false
 }

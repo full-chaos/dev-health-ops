@@ -37,7 +37,7 @@ var metricDefinitions = map[string]MetricDefinition{
 	"p95_duration_seconds":      pipelineMetric("p95_duration_seconds"),
 	"avg_queue_seconds":         pipelineMetric("avg_queue_seconds"),
 	"p95_queue_seconds":         pipelineMetric("p95_queue_seconds"),
-	"pass_rate":                 testMetric("pass_rate"),
+	"pass_rate":                 testMetric(passedCaseRate),
 	"flake_rate":                testMetric("flake_rate"),
 	"retry_dependency_rate":     testMetric("retry_dependency_rate"),
 	"failure_recurrence_score":  testMetric("failure_recurrence_score"),
@@ -97,6 +97,11 @@ func pipelineMetric(column string) MetricDefinition {
 func completedRunRate(count string) string {
 	return "if(success_count + failure_count = 0, NULL, " + count + " / (success_count + failure_count))"
 }
+
+// passedCaseRate is a stored row's passed cases over its passed and failed cases, NULL on a row with neither: the
+// series drops NULL values, so a day where every case was skipped is never a sample of 0. The stored pass_rate column
+// divides by every case, skipped ones too, holds 0 on that day and is not read.
+const passedCaseRate = "if(passed_count + failed_count = 0, NULL, passed_count / (passed_count + failed_count))"
 
 func testMetric(column string) MetricDefinition {
 	return MetricDefinition{

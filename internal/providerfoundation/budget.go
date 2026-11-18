@@ -534,6 +534,8 @@ var metricArtifactSkipReasonVocabulary = map[string]struct{}{
 	// report_too_large: a gitlab test_report body over the route's size cap,
 	// skipped and counted instead of failing the unit closed.
 	"report_too_large": {},
+	// report_member_dropped (CHAOS-14030): a gitlab job-artifact member over the compression-ratio guard or past the entry cap.
+	"report_member_dropped": {},
 }
 
 // MetricArtifactSkipReasonLabel bounds the artifact skip reason label.
@@ -632,6 +634,8 @@ var metricSkippedArtifactCauseOverflowVocabulary = map[string]struct{}{
 	"artifact_oversized": {}, "artifact_unavailable": {}, "unreadable_archive": {},
 	"artifact_expired": {},
 	"malformed":        {}, "unreadable": {}, "unsafe_doctype": {},
+	// CHAOS-14030: report members the archive parse skips at the ratio guard and the entry cap.
+	"compression_ratio": {}, "archive_entry_cap": {},
 	// CHAOS-13794: the markers of a run's report artifacts skipped whole.
 	"per_run_cap": {}, "aggregate_of_parts": {}, "aggregate_mismatch": {},
 }
@@ -686,6 +690,8 @@ var metricCicdPartialSuccessReasonVocabulary = map[string]struct{}{
 	"malformed":          {},
 	"unreadable":         {},
 	"unsafe_doctype":     {},
+	"compression_ratio":  {},
+	"archive_entry_cap":  {},
 	"per_run_cap":        {},
 	"aggregate_of_parts": {},
 	"mixed":              {},
@@ -1623,9 +1629,10 @@ func (m *Metrics) RecordTeamAttributionMembershipLayer(layer string) {
 // the repo having an ownership row that excludes the resolved team;
 // "ownership_unknown" is the repo having no ownership row at all (R74:
 // gate skipped, membership passes through, still counted so the pass-
-// through stays visible).
+// through stays visible); "ownership_gate_not_applied_issue" is an issue,
+// which has no repository field of its own: the gate is not applied.
 var metricTeamAttributionOwnershipCheckedVocabulary = map[string]struct{}{
-	"owned": {}, "repo_not_owned": {}, "ownership_unknown": {},
+	"owned": {}, "repo_not_owned": {}, "ownership_unknown": {}, "ownership_gate_not_applied_issue": {},
 }
 
 // MetricTeamAttributionOwnershipCheckedLabel bounds the ownership-checked

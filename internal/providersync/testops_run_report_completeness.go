@@ -87,6 +87,8 @@ var githubTestsRunReportLossCauses = map[string]struct{}{
 	githubTestsUnreadableCause:          {},
 	githubTestsUnsafeDoctypeCause:       {},
 	githubTestsArtifactExpiredCause:     {},
+	githubTestsCompressionRatioCause:    {},
+	githubTestsArchiveEntryCapCause:     {},
 	githubTestsAggregateMismatchCause:   {},
 }
 

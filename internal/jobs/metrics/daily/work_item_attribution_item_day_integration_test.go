@@ -229,9 +229,9 @@ func TestOneBackstopRunGivesEachItemTheOwnerOfItsOwnDay(t *testing.T) {
 	orgID := "org-item-day-two-items-" + uuid.NewString()
 	repoID := uuid.New()
 	for id, item := range map[string]itemDayItem{
-		"item-long-ago":      {provider: "github", repoID: repoID, status: "done", createdAt: today.AddDate(0, 0, -120), completedAt: &completedLongAgo},
-		"item-lately":        {provider: "github", repoID: repoID, status: "done", createdAt: today.AddDate(0, 0, -120), completedAt: &completedLately},
-		"item-not-completed": {provider: "github", repoID: repoID, status: "in_progress", createdAt: today.AddDate(0, 0, -120)},
+		"item-long-ago":      {provider: "github", itemType: "pr", repoID: repoID, status: "done", createdAt: today.AddDate(0, 0, -120), completedAt: &completedLongAgo},
+		"item-lately":        {provider: "github", itemType: "pr", repoID: repoID, status: "done", createdAt: today.AddDate(0, 0, -120), completedAt: &completedLately},
+		"item-not-completed": {provider: "github", itemType: "pr", repoID: repoID, status: "in_progress", createdAt: today.AddDate(0, 0, -120)},
 	} {
 		seedItemDayItemWithID(t, ctx, conn, orgID, id, item)
 	}
@@ -336,11 +336,12 @@ func seedItemDayWorkItem(
 ) {
 	t.Helper()
 	batch, err := conn.PrepareBatch(ctx,
-		`INSERT INTO work_items (repo_id, work_item_id, provider, project_id, org_id, status, created_at, completed_at, last_synced)`)
+		`INSERT INTO work_items (repo_id, work_item_id, provider, type, project_id, org_id, status, created_at, completed_at, last_synced)`)
 	if err != nil {
 		t.Fatalf("prepare work_items batch: %v", err)
 	}
-	if err := batch.Append(repoID, "the-item", "github", "", orgID, status, createdAt, completedAt, time.Now().UTC()); err != nil {
+	// A pull request: only a pull / merge request takes the ownership of its repository.
+	if err := batch.Append(repoID, "the-item", "github", "pr", "", orgID, status, createdAt, completedAt, time.Now().UTC()); err != nil {
 		t.Fatalf("append work_items row: %v", err)
 	}
 	if err := batch.Send(); err != nil {
@@ -437,6 +438,7 @@ func TestTheOwnerOfAnItemsDayHoldsForEachProviderAndKindOfFact(t *testing.T) {
 					item := itemDayItem{provider: provider, repoID: repoID, status: "done", createdAt: today.AddDate(0, 0, -120), completedAt: &completed}
 					switch kind {
 					case "repository ownership":
+						item.itemType = itemDayPullRequestType(provider)
 						seedItemDayOwnershipOf(t, ctx, conn, "repository", orgID, provider, repoID.String(), "team-old", began, &anHourAgo, now)
 						seedItemDayOwnershipOf(t, ctx, conn, "repository", orgID, provider, repoID.String(), "team-new", anHourAgo, nil, now)
 					case "project ownership":
@@ -517,6 +519,13 @@ type itemDayItem struct {
 	completedAt           *time.Time
 	projectID, projectKey string
 	assignees             []string
+	// itemType is the work_items type: "pr" / "merge_request" for an item that takes the ownership of its repository.
+	itemType string
+}
+
+// itemDayPullRequestType is the type of a pull / merge request of a code host.
+func itemDayPullRequestType(provider string) string {
+	return map[string]string{"github": "pr", "gitlab": "merge_request"}[provider]
 }
 
 func seedItemDayItem(t *testing.T, ctx context.Context, conn driver.Conn, orgID string, item itemDayItem) {
@@ -527,7 +536,7 @@ func seedItemDayItem(t *testing.T, ctx context.Context, conn driver.Conn, orgID 
 func seedItemDayItemWithID(t *testing.T, ctx context.Context, conn driver.Conn, orgID, workItemID string, item itemDayItem) {
 	t.Helper()
 	batch, err := conn.PrepareBatch(ctx,
-		`INSERT INTO work_items (repo_id, work_item_id, provider, project_id, project_key, assignees, org_id, status, created_at, completed_at, last_synced)`)
+		`INSERT INTO work_items (repo_id, work_item_id, provider, type, project_id, project_key, assignees, org_id, status, created_at, completed_at, last_synced)`)
 	if err != nil {
 		t.Fatalf("prepare work_items batch: %v", err)
 	}
@@ -535,7 +544,7 @@ func seedItemDayItemWithID(t *testing.T, ctx context.Context, conn driver.Conn, 
 	if assignees == nil {
 		assignees = []string{}
 	}
-	if err := batch.Append(item.repoID, workItemID, item.provider, item.projectID, item.projectKey, assignees, orgID,
+	if err := batch.Append(item.repoID, workItemID, item.provider, item.itemType, item.projectID, item.projectKey, assignees, orgID,
 		item.status, item.createdAt, item.completedAt, time.Now().UTC()); err != nil {
 		t.Fatalf("append work_items row: %v", err)
 	}

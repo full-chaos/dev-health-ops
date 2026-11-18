@@ -2,6 +2,7 @@ package aianalytics
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -184,8 +185,9 @@ func TestDailyStatement_AppliesEveryScopePredicate(t *testing.T) {
 	}
 }
 
-// The reviewer read narrows by repository and by the stored team id, and the
-// label reads never look up a blank team id.
+// The reviewer read narrows by repository and by the repositories the team
+// owns, never by user_metrics_daily.team_id (a membership label, CHAOS-14101),
+// and the label reads never look up a blank team id.
 func TestReviewerAndLabelReads_AreNarrowed(t *testing.T) {
 	datasets, cases := loadOracle(t)
 	dr := model.AIDateRangeInput{StartDate: day("2026-08-01"), EndDate: day("2026-08-03")}
@@ -198,13 +200,16 @@ func TestReviewerAndLabelReads_AreNarrowed(t *testing.T) {
 	for i, st := range client.statements {
 		if strings.Contains(st, "user_metrics_daily") {
 			found = true
-			for _, p := range []string{"umd.repo_id = {repo_id:UUID}", "umd.team_id = {team_id:String}"} {
+			for _, p := range []string{"umd.repo_id = {repo_id:UUID}", "toString(umd.repo_id) IN {team_repo_ids:Array(String)}"} {
 				if !strings.Contains(st, p) {
 					t.Errorf("reviewer read lacks %q", p)
 				}
 			}
-			if v, _ := binding(client.bindings[i], "team_id"); v != team {
-				t.Errorf("team binding %v", v)
+			if strings.Contains(st, "team_id") {
+				t.Errorf("reviewer read filters team_id:\n%s", st)
+			}
+			if v, ok := binding(client.bindings[i], "team_repo_ids"); !ok || !reflect.DeepEqual(v, []string{repo}) {
+				t.Errorf("team_repo_ids binding %v, want [%s]", v, repo)
 			}
 		}
 	}

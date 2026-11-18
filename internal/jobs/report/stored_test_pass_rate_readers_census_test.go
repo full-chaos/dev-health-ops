@@ -1,54 +1,67 @@
 package report
 
 import (
-	"go/ast"
-	"go/parser"
-	"go/token"
+	"crypto/sha256"
+	"encoding/hex"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"testing"
 )
 
-// The census of the readers of the stored TestOps test pass rate.
+// The census of the Go files that name the stored TestOps test table.
 //
 // testops_test_metrics_daily.pass_rate divides by every case of the day, skipped ones too, and holds 0 on a day where
-// every case was skipped. No Go source of this repository reads it. A pass rate is read from the counts, passed over
-// passed plus failed (report chart rule, benchmarking definition, query-api TEST_PASS_RATE). There is no reader
-// allow-list: a reader is never listed.
+// every case was skipped. No Go source of this repository reads it: a pass rate is read from the counts, passed over
+// passed plus failed (report chart rule, benchmarking definition, query-api TEST_PASS_RATE).
 //
-// The census reads every non-test Go source under internal/ and cmd/. A mention is a compile-time string (a literal,
-// a concatenation of literals and string constants, a decoded struct tag value) that spells pass_rate. Each mention
-// must be one of:
-//   - a reviewed metric-name site below (the bare string "pass_rate", counted per file);
-//   - the daily writer's column list: a PrepareBatch INSERT INTO testops_test_metrics_daily with a column list only.
-//
-// Any other mention fails, whatever its syntax: SQL that names the column, a column name passed to a helper or a
-// field, a struct tag, a new use of the metric name. A new metric-name use is added to the list after review.
-// A compile-time string that selects every column of testops_test_metrics_daily (SELECT *, t.*, COLUMNS(...)) reads
-// the stored rate without naming it: it must be a reviewed wildcard site whose outer query names its columns.
-var reviewedPassRateNameSites = map[string]int{
-	"internal/jobs/metrics/daily/benchmarking/clickhouse.go": 1, // metricDefinitions key
-	"internal/jobs/metrics/daily/benchmarking/run.go":        1, // DefaultBenchmarkMetrics name
-	"internal/jobs/report/dedup.go":                          1, // chartRules key
-	"internal/jobs/report/render.go":                         1, // sectionMetrics "quality" name
+// The census is every non-test Go file of the repository whose text contains the table name, found by a plain string
+// search. It does not parse SQL or fold constants. Each such file is pinned below with its sha256 and a note. A file
+// that is not pinned, a pinned file whose digest changed, or a pinned file that no longer names the table fails the
+// test: review the reader rule for the file (a pass rate is read from the counts), then re-pin. A guard that is
+// best effort: a table name built at run time is not seen. Re-pin churn on every edit of a pinned file is accepted.
+const censusTable = "testops_test_metrics_daily"
+
+type censusPin struct {
+	digest string
+	note   string
 }
 
-var reviewedTestMetricsWildcardSites = map[string]int{
-	"internal/queryapi/aianalytics/ai_opportunities.go": 1, // newest-row subquery; the outer query names flake and case counts
-	"internal/queryapi/testopswindow/testopswindow.go":  1, // newest-row subquery; the outer query names the case counts
+var pinnedTableFiles = map[string]censusPin{
+	"internal/cigates/metricsproof/proof.go": {"bd1b94c430164bb9854ebf62b5ac652edb2fe757d4583dc360ffb41c250109ac",
+		"not a reader: names the table in the proof table map"},
+	"internal/jobs/metrics/daily/benchmarking/clickhouse.go": {"de5d9a5a46ca07909ea0714fd472475ffe88a4e54d99162f973eeb5ce13ca578",
+		"reader rule applied: pass_rate is passedCaseRate, over passed_count and failed_count"},
+	"internal/jobs/metrics/daily/testops_native_clickhouse.go": {"e6617019ada4a46e51bb54525a1b5d53e2daa820a7c681f5a2c2f3c8dc31a451",
+		"writer: the daily writer of the stored rows"},
+	"internal/jobs/metrics/daily/testops_native_executor.go": {"c69063ba6de8a51247967a70c58d46726d4b73ec718cf385ce5636fca04a7b16",
+		"not a reader: comment only"},
+	"internal/jobs/metrics/testops/rules_sql.go": {"3d69f586d97b2d6a459a0c32f191b3041657671feabcd51e1cbe590bc7e10aea",
+		"reader rule applied: TestPassRateWindowSQL, over passed_count and failed_count"},
+	"internal/jobs/report/dedup.go": {"4a823a41f2dd2610a40cf0c5e80c7993a486a13a846722d65c089ef74d9a3009",
+		"reader rule applied: the pass_rate chart rule reads the counts"},
+	"internal/jobs/report/pooled.go": {"d96e8cc8e67cdfbdb033e8f33152d006684f16d7f8ec367e118f158cdab36cc7",
+		"not a reader of pass_rate: suite duration percentiles"},
+	"internal/jobs/report/tablereads.go": {"90914bad43fc7f67f51fe068101b4808e68a525bd171c42e2c3f11c3c8db128f",
+		"not a reader: the newest-row key of the table"},
+	"internal/queryapi/aianalytics/ai_opportunities.go": {"fa85eb56b878ccdbe390e12ea307af10fdc25f710e19784bf42d8bdfbadcb9c0",
+		"reader rule applied: newest-row subquery, the outer query names flake and case counts"},
+	"internal/queryapi/analytics/testopsownership.go": {"488386f9a7d8ebfc6e109f4e8ffa94971c36298f8650a2bfd5e12626983f3f37",
+		"not a reader: table name switch"},
+	"internal/queryapi/analytics/timeseries.go": {"061ef7505fbee2383360b491f5ec66f252ef26c99066e1acc42e90a564574fc3",
+		"not a reader: natural key map"},
+	"internal/queryapi/analytics/validate.go": {"1c38d31d7ae4454bac6269c14d73b27ab7126aca8ff56888d032957b6fd475dd",
+		"not a reader: routes a measure to the table, the column rule lives elsewhere"},
+	"internal/queryapi/testopspooled/testopspooled.go": {"949504effe39ad07b0f542a91a51b1f405cfa277ffbb3651b65548664294a19e",
+		"not a reader of pass_rate: newest-row key list for suite durations"},
+	"internal/queryapi/testopswindow/testopswindow.go": {"ee55280ce756212684ab863deb78296c48c4a0de261d74941c20be4e1edfc3a1",
+		"reader rule applied: newest-row subquery, the outer query names the case counts"},
 }
 
-var (
-	passRateWord        = regexp.MustCompile(`\bpass_rate\b`)
-	testopsTestWriter   = regexp.MustCompile(`^\s*INSERT\s+INTO\s+testops_test_metrics_daily\s*\(\s*\w+(\s*,\s*\w+)*\s*\)\s*$`)
-	wildcardProjection  = regexp.MustCompile(`(?is)\bselect\s+(distinct\s+)?([\w.]+\s*\.\s*)?\*|\.\s*\*|\bcolumns\s*\(`)
-	structTagValuePairs = regexp.MustCompile(`(\w+):("(?:[^"\\]|\\.)*")`)
-)
+var passRateWord = regexp.MustCompile(`\bpass_rate\b`)
 
 func repositoryRoot(t *testing.T) string {
 	t.Helper()
@@ -68,214 +81,49 @@ func repositoryRoot(t *testing.T) string {
 	}
 }
 
-type censusFile struct {
-	relative string
-	fileSet  *token.FileSet
-	parsed   *ast.File
-}
-
-// packageStringConstants maps each constant name of a package to the expressions it is declared with (a name can be
-// declared in more than one scope; each declaration is tried).
-func packageStringConstants(files []censusFile) map[string][]ast.Expr {
-	constants := map[string][]ast.Expr{}
-	for _, file := range files {
-		ast.Inspect(file.parsed, func(node ast.Node) bool {
-			declaration, ok := node.(*ast.GenDecl)
-			if !ok || declaration.Tok != token.CONST {
-				return true
-			}
-			for _, spec := range declaration.Specs {
-				value, ok := spec.(*ast.ValueSpec)
-				if !ok {
-					continue
-				}
-				for index, name := range value.Names {
-					if index < len(value.Values) {
-						constants[name.Name] = append(constants[name.Name], value.Values[index])
-					}
-				}
-			}
-			return true
-		})
-	}
-	return constants
-}
-
-// foldString returns every value a compile-time string expression can take: a string literal, a parenthesized
-// expression, a string constant of the package, or a concatenation of those. ok is false for anything else.
-func foldString(expression ast.Expr, constants map[string][]ast.Expr, depth int) (values []string, ok bool) {
-	if depth > 16 {
-		return nil, false
-	}
-	switch node := expression.(type) {
-	case *ast.BasicLit:
-		if node.Kind != token.STRING {
-			return nil, false
+// tableFiles returns the digest of every non-test Go file under root whose text names the table, and the number of
+// Go files read.
+func tableFiles(root string) (named map[string]string, read int, err error) {
+	named = map[string]string{}
+	err = filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
 		}
-		value, err := strconv.Unquote(node.Value)
-		if err != nil {
-			return nil, false
-		}
-		return []string{value}, true
-	case *ast.ParenExpr:
-		return foldString(node.X, constants, depth+1)
-	case *ast.Ident:
-		for _, declared := range constants[node.Name] {
-			if folded, ok := foldString(declared, constants, depth+1); ok {
-				values = append(values, folded...)
+		if entry.IsDir() {
+			if path != root && (strings.HasPrefix(entry.Name(), ".") || entry.Name() == "node_modules" || entry.Name() == "vendor") {
+				return filepath.SkipDir
 			}
-		}
-		return values, len(values) > 0
-	case *ast.BinaryExpr:
-		if node.Op != token.ADD {
-			return nil, false
-		}
-		left, leftOK := foldString(node.X, constants, depth+1)
-		right, rightOK := foldString(node.Y, constants, depth+1)
-		if !leftOK || !rightOK {
-			return nil, false
-		}
-		for _, l := range left {
-			for _, r := range right {
-				values = append(values, l+r)
-			}
-		}
-		return values, true
-	}
-	return nil, false
-}
-
-// spellings returns a compile-time string and, when it holds struct tag pairs, each decoded tag value.
-func spellings(value string) []string {
-	out := []string{value}
-	for _, pair := range structTagValuePairs.FindAllStringSubmatch(value, -1) {
-		if decoded, err := strconv.Unquote(pair[2]); err == nil {
-			out = append(out, decoded)
-		}
-	}
-	return out
-}
-
-func spellsPassRate(value string) bool {
-	for _, spelling := range spellings(value) {
-		if passRateWord.MatchString(spelling) {
-			return true
-		}
-	}
-	return false
-}
-
-func readsEveryTestMetricsColumn(value string) bool {
-	return strings.Contains(value, "testops_test_metrics_daily") && wildcardProjection.MatchString(value)
-}
-
-func TestNoGoSourceReadsTheStoredTestPassRateCensus(t *testing.T) {
-	root := repositoryRoot(t)
-	packages := map[string][]censusFile{}
-	files := 0
-	for _, top := range []string{"internal", "cmd"} {
-		err := filepath.WalkDir(filepath.Join(root, top), func(path string, entry fs.DirEntry, walkErr error) error {
-			if walkErr != nil {
-				return walkErr
-			}
-			if entry.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-				return nil
-			}
-			relative, err := filepath.Rel(root, path)
-			if err != nil {
-				return err
-			}
-			fileSet := token.NewFileSet()
-			parsed, err := parser.ParseFile(fileSet, path, nil, parser.SkipObjectResolution)
-			if err != nil {
-				return err
-			}
-			files++
-			directory := filepath.Dir(path)
-			packages[directory] = append(packages[directory], censusFile{filepath.ToSlash(relative), fileSet, parsed})
 			return nil
-		})
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		content, err := os.ReadFile(path)
 		if err != nil {
-			t.Fatalf("walk %s: %v", top, err)
+			return err
 		}
-	}
-
-	nameSites, wildcardSites := map[string]int{}, map[string]int{}
-	writers := 0
-	for _, packageFiles := range packages {
-		constants := packageStringConstants(packageFiles)
-		for _, file := range packageFiles {
-			// The operands of a concatenation are read as the concatenation, once, at its outermost node.
-			operands := map[ast.Expr]bool{}
-			writerArguments := map[ast.Expr]bool{}
-			ast.Inspect(file.parsed, func(node ast.Node) bool {
-				switch typed := node.(type) {
-				case *ast.BinaryExpr:
-					if typed.Op == token.ADD {
-						if _, ok := foldString(typed, constants, 0); ok {
-							operands[typed.X], operands[typed.Y] = true, true
-						}
-					}
-				case *ast.CallExpr:
-					if selector, ok := typed.Fun.(*ast.SelectorExpr); ok && selector.Sel.Name == "PrepareBatch" && len(typed.Args) >= 2 {
-						writerArguments[typed.Args[1]] = true
-					}
-				}
-				return true
-			})
-			ast.Inspect(file.parsed, func(node ast.Node) bool {
-				expression, ok := node.(ast.Expr)
-				if !ok || operands[expression] {
-					return true
-				}
-				switch expression.(type) {
-				case *ast.BasicLit, *ast.BinaryExpr:
-				default:
-					return true
-				}
-				values, ok := foldString(expression, constants, 0)
-				if !ok {
-					return true
-				}
-				line := file.fileSet.Position(expression.Pos()).Line
-				for _, value := range values {
-					if readsEveryTestMetricsColumn(value) {
-						wildcardSites[file.relative]++
-					}
-					if !spellsPassRate(value) {
-						continue
-					}
-					switch {
-					case value == "pass_rate":
-						nameSites[file.relative]++
-					case writerArguments[expression] && testopsTestWriter.MatchString(value):
-						writers++
-					default:
-						t.Errorf("%s:%d spells pass_rate (%q): the stored testops_test_metrics_daily.pass_rate is not read; read passed_count and failed_count, passed / (passed + failed), NULL when both are 0",
-							file.relative, line, strings.Join(strings.Fields(value), " "))
-					}
-				}
-				return true
-			})
+		read++
+		if !strings.Contains(string(content), censusTable) {
+			return nil
 		}
-	}
-	compareSites(t, "metric-name use of \"pass_rate\"", nameSites, reviewedPassRateNameSites)
-	compareSites(t, "select of every testops_test_metrics_daily column", wildcardSites, reviewedTestMetricsWildcardSites)
-	// A census that read nothing measured nothing: it must see the tree and the daily writer.
-	if files < 1000 || writers != 1 {
-		t.Fatalf("the census read %d Go file(s) and %d daily writer column list(s), want >= 1000 and 1: it did not measure", files, writers)
-	}
+		relative, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		sum := sha256.Sum256(content)
+		named[filepath.ToSlash(relative)] = hex.EncodeToString(sum[:])
+		return nil
+	})
+	return named, read, err
 }
 
-// compareSites fails on a site count that differs from the reviewed list, in either direction: a new site is
-// reviewed before it is listed, and a site that went away leaves the list.
-func compareSites(t *testing.T, what string, found, reviewed map[string]int) {
-	t.Helper()
+// censusFailures compares the files that name the table with the pinned list, in both directions.
+func censusFailures(named map[string]string, pinned map[string]censusPin) []string {
 	keys := map[string]bool{}
-	for key := range found {
+	for key := range named {
 		keys[key] = true
 	}
-	for key := range reviewed {
+	for key := range pinned {
 		keys[key] = true
 	}
 	sorted := make([]string, 0, len(keys))
@@ -283,11 +131,91 @@ func compareSites(t *testing.T, what string, found, reviewed map[string]int) {
 		sorted = append(sorted, key)
 	}
 	sort.Strings(sorted)
+	var failures []string
 	for _, key := range sorted {
-		if found[key] != reviewed[key] {
-			t.Errorf("%s: %s holds %d, the reviewed list %d. A read of the stored pass_rate is never listed: read the counts. A reviewed non-read is listed with its role",
-				what, key, found[key], reviewed[key])
+		digest, found := named[key]
+		pin, listed := pinned[key]
+		switch {
+		case found && !listed:
+			failures = append(failures, "review the reader rule for "+key+", then re-pin: it names "+censusTable+" and is not pinned")
+		case found && digest != pin.digest:
+			failures = append(failures, "review the reader rule for "+key+", then re-pin: its digest is "+digest+", pinned "+pin.digest+" ("+pin.note+")")
+		case !found:
+			failures = append(failures, "review the reader rule for "+key+", then re-pin: it no longer names "+censusTable+" (or is gone); remove its pin")
 		}
+	}
+	return failures
+}
+
+func TestNoGoSourceReadsTheStoredTestPassRateCensus(t *testing.T) {
+	named, read, err := tableFiles(repositoryRoot(t))
+	if err != nil {
+		t.Fatalf("walk: %v", err)
+	}
+	// A census that read nothing measured nothing.
+	if read < 1000 {
+		t.Fatalf("the census read %d Go file(s), want >= 1000: it did not measure", read)
+	}
+	for _, failure := range censusFailures(named, pinnedTableFiles) {
+		t.Error(failure + ". A pass rate is read from passed_count and failed_count, never from the stored pass_rate")
+	}
+}
+
+func TestTheTableCensusFailsOnANewOrEditedFile(t *testing.T) {
+	root := t.TempDir()
+	write := func(name, text string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(root, name), []byte(text), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pinnedOf := func(named map[string]string) map[string]censusPin {
+		pinned := map[string]censusPin{}
+		for name, digest := range named {
+			pinned[name] = censusPin{digest: digest, note: "test"}
+		}
+		return pinned
+	}
+	write("reader.go", "package p\nconst q = \"SELECT passed_count FROM "+censusTable+"\"\n")
+	write("other.go", "package p\nconst q = \"SELECT 1\"\n")
+	write("ignored_test.go", "package p\nconst q = \""+censusTable+"\"\n")
+	named, read, err := tableFiles(root)
+	if err != nil || read != 2 || len(named) != 1 {
+		t.Fatalf("the census of the temporary tree: read %d, named %v, err %v; want 2 files read and reader.go only", read, named, err)
+	}
+	pinned := pinnedOf(named)
+	if failures := censusFailures(named, pinned); len(failures) != 0 {
+		t.Fatalf("the pinned set must pass, got %v", failures)
+	}
+
+	write("added.go", "package p\nconst q = \"SELECT pass_rate FROM "+censusTable+"\"\n")
+	grown, _, err := tableFiles(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if failures := censusFailures(grown, pinned); len(failures) != 1 || !strings.Contains(failures[0], "review the reader rule for added.go, then re-pin") {
+		t.Fatalf("a new file naming the table must fail, got %v", failures)
+	}
+	if err := os.Remove(filepath.Join(root, "added.go")); err != nil {
+		t.Fatal(err)
+	}
+
+	write("reader.go", "package p\nconst q = \"SELECT pass_rate FROM "+censusTable+"\"\n")
+	edited, _, err := tableFiles(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if failures := censusFailures(edited, pinned); len(failures) != 1 || !strings.Contains(failures[0], "review the reader rule for reader.go, then re-pin") {
+		t.Fatalf("an edited pinned file must fail, got %v", failures)
+	}
+
+	write("reader.go", "package p\nconst q = \"SELECT 1\"\n")
+	shrunk, _, err := tableFiles(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if failures := censusFailures(shrunk, pinned); len(failures) != 1 {
+		t.Fatalf("a pinned file that no longer names the table must fail, got %v", failures)
 	}
 }
 

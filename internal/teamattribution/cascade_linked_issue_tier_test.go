@@ -1,6 +1,9 @@
 package teamattribution
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 const tierPR = "ghpr:acme/api#7"
 
@@ -149,5 +152,58 @@ func TestAGitLabIssueKeepsIdOrder(t *testing.T) {
 	}
 	if want := "linked_issue=jira:AAA-1;dependency_type=relates_to;donor_provider=jira;donor_source=project_ownership"; evidence[issue] != want {
 		t.Fatalf("evidence %q, want %q", evidence[issue], want)
+	}
+}
+
+// T2: the pull and merge request rule across every provider's source kind in
+// one table. A pull or merge request takes the donor of the best recorded tier
+// and names it; an issue of any provider has no link of record and keeps the
+// donor id order.
+func TestLinkOfRecordRuleAcrossProviderSourceKinds(t *testing.T) {
+	for _, tc := range []struct {
+		name, source, provider string
+		tiered                 bool
+	}{
+		{"github pull request", "ghpr:acme/api#7", "github", true},
+		{"gitlab merge request", "gitlab:acme/app!7", "gitlab", true},
+		{"gitlab issue", "gitlab:acme/app#7", "gitlab", false},
+		{"github issue", "gh:acme/api#7", "github", false},
+		{"jira issue", "jira:ENG-5", "jira", false},
+		{"linear issue", "linear:ENG-5", "linear", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			derived := NewGitHubWorkItemDerivationContext(GithubWorkItemDerivationFacts{})
+			derived.LinkTiers = map[LinkPair]string{
+				{PullRequest: tc.source, Issue: "jira:AAA-1"}: "explicit_text",
+				{PullRequest: tc.source, Issue: "jira:ZZZ-9"}: "native",
+			}
+			subjects := map[string]GithubWorkItemDerivationSubject{
+				tc.source:    {WorkItemID: tc.source, Provider: tc.provider, OrgID: "org"},
+				"jira:AAA-1": {WorkItemID: "jira:AAA-1", Provider: "jira", OrgID: "org"},
+				"jira:ZZZ-9": {WorkItemID: "jira:ZZZ-9", Provider: "jira", OrgID: "org"},
+			}
+			rows := map[string]GithubWorkItemDerivationDonorRow{"jira:AAA-1": ownRow("team-a"), "jira:ZZZ-9": ownRow("team-b")}
+			edges := []GithubWorkItemDerivationDependencyEdge{
+				{SourceWorkItemID: tc.source, TargetWorkItemID: "jira:AAA-1", RelationshipType: "relates_to"},
+				{SourceWorkItemID: tc.source, TargetWorkItemID: "extkey:ZZZ-9", RelationshipType: "external_issue_key"},
+			}
+			index, evidence, _, _ := derived.BuildLinkedIssueIndexFromRows(tc.provider, subjects, rows, edges, nil)
+			wantTeam, wantTier := "team-a", ""
+			if tc.tiered {
+				wantTeam, wantTier = "team-b", ";link_tier=native"
+			}
+			if got := index[tc.source][0]; got != wantTeam {
+				t.Fatalf("team %q, want %q", got, wantTeam)
+			}
+			if got := evidence[tc.source]; strings.HasSuffix(got, wantTier) != true || (wantTier == "" && strings.Contains(got, "link_tier")) {
+				t.Fatalf("evidence %q, want tier suffix %q", got, wantTier)
+			}
+			// No link row at all: a pull or merge request has no donor; an issue keeps its donors.
+			derived.LinkTiers = map[LinkPair]string{}
+			index, _, _, _ = derived.BuildLinkedIssueIndexFromRows(tc.provider, subjects, rows, edges, nil)
+			if _, ok := index[tc.source]; ok == tc.tiered {
+				t.Fatalf("with no link row: present=%v, want %v", ok, !tc.tiered)
+			}
+		})
 	}
 }

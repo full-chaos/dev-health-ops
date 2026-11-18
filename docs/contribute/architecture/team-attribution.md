@@ -1147,8 +1147,8 @@ The Atlassian Teams of a Jira site ARE the Jira teams. A team owns a Jira projec
   A member read finishes only on a stated page end: an answer with a missing or null `pageInfo` or
   `hasNextPage` is an error of the member read, which fails the collection, so nothing is written and
   nothing is closed on it (vendored patch 0008; `TestAMemberReadWithoutAProvenEndClosesNoMembership`).
-  Limit, not decided: a missing or null `edges` list on a STATED last page is still read as "no member";
-  no recorded real answer of an empty roster says whether the provider sends an empty list or null for it.
+  A missing or null `edges` list is an error of the member read too (vendored patch 0010): the recorded
+  answer for a team with no member (`team_users_not_found`) carries `"edges": []`, which is an empty roster.
 - **A row is closed only when every Jira project link the provider returned for its team was written.**
   One rule, per team, in one place (`teamLinkLedger` in `internal/atlassianteams/collect.go`): the
   `JiraProject` links the provider returned for the team are counted, and so are the ones behind an

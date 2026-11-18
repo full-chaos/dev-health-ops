@@ -160,6 +160,29 @@ func TestProviderUnitAllArtifactsUnreadableTerminalizesOnFirstAttempt(t *testing
 			t.Fatal(err)
 		}
 	}
+	// The route writes a completeness verdict for a run whose reports it walked, an unreadable one included.
+	chain, err := chmigrate.LoadChain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	completenessTable := false
+	for _, file := range chain {
+		if file.Version != "153_testops_run_report_completeness.sql" {
+			continue
+		}
+		for _, statement := range chmigrate.SplitStatements(file.SQL) {
+			if !strings.HasPrefix(strings.TrimSpace(statement), "CREATE TABLE") {
+				continue
+			}
+			if err := clickhouseConn.Exec(ctx, statement); err != nil {
+				t.Fatal(err)
+			}
+			completenessTable = true
+		}
+	}
+	if !completenessTable {
+		t.Fatal("the live chain holds no CREATE TABLE in 153_testops_run_report_completeness.sql")
+	}
 
 	valkey, err := containers.StartValkey(ctx)
 	if err != nil {

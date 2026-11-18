@@ -316,8 +316,8 @@ func TestRegistryCicdRerunCountsTheNewestAttempt(t *testing.T) {
 	unmerged()
 }
 
-// A run counts on day D only when it starts and finishes on D (the writer's double window): a run across midnight counts
-// on no day, a run still running counts nowhere, and the chart range includes its first and its last day.
+// A run counts on the UTC day it finishes (the writer's rule): a run across midnight counts on the day it ends, a run
+// still running counts nowhere, and the chart range includes its first and its last day.
 func TestRegistryCicdWindowEdges(t *testing.T) {
 	e := startPooledEnv(t)
 	org := e.newOrg()
@@ -333,7 +333,7 @@ func TestRegistryCicdWindowEdges(t *testing.T) {
 	)
 	e.computeCICD(org, []string{repo}, "2026-01-01", "2026-01-02", "2026-01-03", "2026-01-04")
 	last := 3599999.0 / 60000
-	want := cicdWant(minutes(10, last), minutes(1, 2))
+	want := cicdWant(minutes(10, 20, last), minutes(1, 1, 2))
 	stored := e.stored(org, repo)
 	for _, metric := range cicdPooledMetrics {
 		mustEqual(t, metric+" window", pointsOf(e.cicdChart(org, metric, cicdSpec{start: "2026-01-02", end: "2026-01-03"})), "total", want[metric])
@@ -346,8 +346,51 @@ func TestRegistryCicdWindowEdges(t *testing.T) {
 			mustEqual(t, metric+" day", days, day, *row.of(metric))
 		}
 	}
-	if day := stored["2026-01-02"]; day.avg == nil || !near(*day.avg, 10) {
-		t.Errorf("the writer stored %v for 2026-01-02, want only e-first (10 min)", stored)
+	if day := stored["2026-01-02"]; day.avg == nil || !near(*day.avg, 15) {
+		t.Errorf("the writer stored %v for 2026-01-02, want e-first and e-cross-in (15 min)", stored)
+	}
+}
+
+// A run the provider has not finished carries its last update time in finished_at; it counts on no day, in the writer
+// and in the chart.
+func TestRegistryCicdOpenRunsCountOnNoDay(t *testing.T) {
+	e := startPooledEnv(t)
+	org := e.newOrg()
+	const repo = "13900000-0000-4000-8000-0000000000b1"
+	e.insertCICDRuns(org, repo,
+		cicdRun{id: "o-done", status: "success", started: "2026-01-02 10:00:00.000", finished: "2026-01-02 10:30:00.000"},
+		cicdRun{id: "o-running", status: "running", started: "2026-01-02 23:50:00.000", finished: "2026-01-03 00:20:00.000"},
+		cicdRun{id: "o-queued", status: "queued", started: "2026-01-02 23:55:00.000", finished: "2026-01-03 00:25:00.000"},
+	)
+	e.computeCICD(org, []string{repo}, "2026-01-02", "2026-01-03")
+	stored := e.stored(org, repo)
+	if _, ok := stored["2026-01-03"]; ok {
+		t.Fatalf("the writer stored %v, want no 2026-01-03 row (open runs count on no day)", stored)
+	}
+	days := pointsOf(e.cicdChart(org, "avg_duration_minutes", cicdSpec{groupBy: "day", start: "2026-01-02", end: "2026-01-03"}))
+	if _, ok := days["2026-01-03"]; ok {
+		t.Fatalf("chart %v has a 2026-01-03 point, want none", days)
+	}
+}
+
+// A run across UTC midnight counts once, on the day it finishes, in the writer and in the chart.
+func TestRegistryCicdRunAcrossMidnightCountsOnFinishDay(t *testing.T) {
+	e := startPooledEnv(t)
+	org := e.newOrg()
+	const repo = "13900000-0000-4000-8000-0000000000a1"
+	e.insertCICDRuns(org, repo,
+		cicdRun{id: "m-a", status: "success", started: "2026-01-02 10:00:00.000", finished: "2026-01-02 10:30:00.000"},
+		cicdRun{id: "m-b", status: "success", started: "2026-01-02 23:50:00.000", finished: "2026-01-03 00:20:00.000"},
+	)
+	e.computeCICD(org, []string{repo}, "2026-01-02", "2026-01-03")
+	stored := e.stored(org, repo)
+	days := pointsOf(e.cicdChart(org, "avg_duration_minutes", cicdSpec{groupBy: "day", start: "2026-01-02", end: "2026-01-03"}))
+	for _, day := range []string{"2026-01-02", "2026-01-03"} {
+		row, ok := stored[day]
+		if !ok || row.avg == nil || !near(*row.avg, 30) {
+			t.Fatalf("the writer stored %v for %s, want one run of 30 min", stored, day)
+		}
+		mustEqual(t, "avg_duration_minutes day", days, day, 30)
 	}
 }
 

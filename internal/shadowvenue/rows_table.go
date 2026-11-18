@@ -177,4 +177,8 @@ C2	GET	/api/v1/admin/integrations	A	no	-	drift-S	mismatch	/api/v1/admin/integrat
 165	DELETE	/api/v1/auth/sso/providers/{provider_id}	A	no	-	-	match	/api/v1/auth/sso/providers/{missing}	-
 166	POST	/api/v1/auth/sso/providers/{provider_id}/activate	A	no	-	-	match	/api/v1/auth/sso/providers/{missing}/activate	-
 167	POST	/api/v1/auth/sso/providers/{provider_id}/deactivate	A	no	-	-	match	/api/v1/auth/sso/providers/{missing}/deactivate	-
+168	POST	/api/v1/admin/service-accounts	A	no	-	-	match	/api/v1/admin/service-accounts	{"organization_id":"{missing}","owner_principal_id":"{missing}","name":"venue-bot"}
+169	POST	/api/v1/admin/service-accounts/{service_account_id}/disable	A	no	-	-	match	/api/v1/admin/service-accounts/{missing}/disable	-
+170	POST	/api/v1/admin/service-accounts/{service_account_id}/enable	A	no	-	-	match	/api/v1/admin/service-accounts/{missing}/enable	-
+171	POST	/api/v1/admin/service-accounts/{service_account_id}/owner	A	no	-	-	match	/api/v1/admin/service-accounts/{missing}/owner	{"owner_principal_id":"{missing}"}
 `)

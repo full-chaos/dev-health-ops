@@ -25,8 +25,8 @@ import (
 // ONLY attribution path is a linked donor issue resolved to unassigned
 // instead of inheriting the donor's team.
 //
-// Fixture: item "A" has no native/project/repo/member attribution of its own
-// (its own repo is unowned). It has a `relates_to` dependency edge to item
+// Fixture: item "A", a pull request, has no native/project/repo/member
+// attribution of its own (its own repo is unowned). It has a `relates_to` dependency edge to item
 // "D", which lives in a DIFFERENT repo owned by "team-linked" -- D is
 // deliberately OUTSIDE the partition's own repo scope, so the only way A can
 // see D at all is through the donor-loading path this fix adds (proving the
@@ -51,7 +51,7 @@ func TestWorkItemAttributionExecutorPreservesLinkedIssueFallback(t *testing.T) {
 	seededAt := targetDay.Add(time.Hour)
 
 	seedWorkItemAttributionLinkedItem(t, ctx, conn, orgID, "A", repoA, seededAt)
-	seedWorkItemAttributionLinkedItem(t, ctx, conn, orgID, "D", repoD, seededAt)
+	seedWorkItemAttributionDonorItem(t, ctx, conn, orgID, "D", "github", repoD, seededAt)
 	// valid_from MUST be <= targetDay (the executor's asOf), not seededAt
 	// (targetDay+1h) -- LoadRepos' bitemporal predicate is
 	// `valid_from <= asOf AND (valid_to IS NULL OR valid_to > asOf)`, so an
@@ -137,11 +137,11 @@ func seedWorkItemAttributionLinkedItem(
 ) {
 	t.Helper()
 	batch, err := conn.PrepareBatch(ctx,
-		`INSERT INTO work_items (repo_id, work_item_id, provider, created_at, org_id, last_synced)`)
+		`INSERT INTO work_items (repo_id, work_item_id, provider, type, created_at, org_id, last_synced)`)
 	if err != nil {
 		t.Fatalf("prepare work_items batch: %v", err)
 	}
-	if err := batch.Append(repoID, workItemID, "github", createdAt, orgID, createdAt); err != nil {
+	if err := batch.Append(repoID, workItemID, "github", "pr", createdAt, orgID, createdAt); err != nil {
 		t.Fatalf("append work_items row: %v", err)
 	}
 	if err := batch.Send(); err != nil {

@@ -25,6 +25,7 @@ var workItemRowCensusAllowed = map[string]string{
 // set after a row exists, each with its reason.
 var workItemRowCensusFieldWrites = map[string]string{
 	"DueAtAbsent": "a marker set when an effect is decoded, not a provider field",
+	"Description": "the Projects v2 merge keeps the repository row's description, because the board query asks for no body",
 }
 
 type workItemRowCensusFinding struct {

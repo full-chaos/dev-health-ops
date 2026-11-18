@@ -160,6 +160,7 @@ func buildGitHubIssueWorkItemOracleRow(t *testing.T, input map[string]any) githu
 	if err != nil {
 		t.Fatal(err)
 	}
+	row.Description = frozenOracleDescription(row.Description)
 	return row
 }
 

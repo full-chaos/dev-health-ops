@@ -12,8 +12,8 @@ import (
 )
 
 // workItemAttributionNewestPrimary is an item's newest primary row
-// (work_item_team_attributions, by computed_at), and the newest linked_issue
-// row that is not the primary (an issue's linked_issue row is provenance only).
+// (work_item_team_attributions, by computed_at), and its newest linked_issue
+// row, primary or not (an issue's linked_issue row is provenance only).
 type workItemAttributionNewestPrimary struct {
 	TeamID, Source, Evidence     string
 	ComputedAt                   time.Time
@@ -218,7 +218,7 @@ WHERE org_id = ?`, orgID)
 }
 
 // loadNewestPrimaryRows reads the newest primary row of each item of ids, and
-// its newest non-primary linked_issue row, one statement per bounded chunk
+// its newest linked_issue row, primary or not, one statement per bounded chunk
 // (workItemAttributionMaxArrayBytes).
 func (executor *WorkItemAttributionExecutor) loadNewestPrimaryRows(
 	ctx context.Context, orgID string, ids []string,
@@ -231,11 +231,11 @@ SELECT work_item_id,
        argMaxIf(toString(source), computed_at, is_primary = 1),
        argMaxIf(evidence, computed_at, is_primary = 1),
        maxIf(computed_at, is_primary = 1),
-       argMaxIf(ifNull(team_id, ''), computed_at, is_primary = 0),
-       argMaxIf(evidence, computed_at, is_primary = 0),
-       maxIf(computed_at, is_primary = 0)
+       argMaxIf(ifNull(team_id, ''), computed_at, source = 'linked_issue'),
+       argMaxIf(evidence, computed_at, source = 'linked_issue'),
+       maxIf(computed_at, source = 'linked_issue')
 FROM work_item_team_attributions FINAL
-WHERE org_id = ? AND has(?, work_item_id) AND (is_primary = 1 OR (is_primary = 0 AND source = 'linked_issue'))
+WHERE org_id = ? AND has(?, work_item_id) AND (is_primary = 1 OR source = 'linked_issue')
 GROUP BY work_item_id
 HAVING countIf(is_primary = 1) > 0`, orgID, chunk)
 		if err != nil {

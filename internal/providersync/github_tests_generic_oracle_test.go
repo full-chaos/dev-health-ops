@@ -171,7 +171,7 @@ func githubTestsOracleReportRows(t *testing.T, input map[string]any) githubTests
 	members[path] = body
 	malformed, _ := input["malformed_report"].(bool)
 	if malformed {
-		members["reports/malformed.xml"] = `<!DOCTYPE x [<!ENTITY x "boom">]><testsuite>&x;</testsuite>`
+		members["reports/malformed.xml"] = `<testsuite><testcase></testsuite>`
 	}
 	started, finished, normalizedAt := githubTestsOracleTimes(t, input)
 	rows, err := parseGitHubTestsArtifact(

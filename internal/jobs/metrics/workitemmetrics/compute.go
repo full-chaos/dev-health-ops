@@ -464,15 +464,18 @@ func ComputeDailyTriplet(
 					efficiency = &ratio
 				}
 			}
-			result.CycleTimes = append(result.CycleTimes, CycleTimeRecord{
-				WorkItemID: item.WorkItemID, Provider: item.Provider,
-				Day: UTCDay(*completedAt), WorkScopeID: attribution.WorkScopeID,
-				TeamID: attribution.TeamID, TeamName: attribution.TeamName, Assignee: assignee,
-				Type: item.Type, Status: item.Status, CreatedAt: createdAt,
-				StartedAt: startedAt, CompletedAt: completedAt, CycleTimeHours: cycleHours,
-				LeadTimeHours: floatPointer(leadHours), ActiveTimeHours: activeHours,
-				WaitTimeHours: waitHours, FlowEfficiency: efficiency,
-			})
+			// An item that is open now has no completion row, whatever completed_at its provider kept.
+			if IsTerminalStatus(item.Status) {
+				result.CycleTimes = append(result.CycleTimes, CycleTimeRecord{
+					WorkItemID: item.WorkItemID, Provider: item.Provider,
+					Day: UTCDay(*completedAt), WorkScopeID: attribution.WorkScopeID,
+					TeamID: attribution.TeamID, TeamName: attribution.TeamName, Assignee: assignee,
+					Type: item.Type, Status: item.Status, CreatedAt: createdAt,
+					StartedAt: startedAt, CompletedAt: completedAt, CycleTimeHours: cycleHours,
+					LeadTimeHours: floatPointer(leadHours), ActiveTimeHours: activeHours,
+					WaitTimeHours: waitHours, FlowEfficiency: efficiency,
+				})
+			}
 		}
 		if wipEndOfDay {
 			bucket.wipCount++

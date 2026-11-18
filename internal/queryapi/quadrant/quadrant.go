@@ -724,6 +724,7 @@ func workItemTeamQuadrantQuery(metric, bucket, orgID string, asOf time.Time, ext
         GROUP BY bucket, entity_id
         ORDER BY bucket
     `
+		metricFilter = "\n              AND wct.completed_at IS NOT NULL"
 	case "cycle_time":
 		outer = `
         SELECT

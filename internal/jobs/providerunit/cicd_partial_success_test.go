@@ -255,3 +255,40 @@ func TestObserveCicdPartialSuccessRecordsPerCauseOverflow(t *testing.T) {
 		t.Fatalf("a false (not-overflowed) cause got its own series:\n%s", rendered)
 	}
 }
+
+// CHAOS-13980: the expired-artifact counter is fired from the committed unit result, once per committed observation, and only for
+// a github cicd/tests unit's report_member/artifact_expired cause.
+func TestObserveGitHubTestsExpiredArtifactsCountsTheCommittedObservationOnce(t *testing.T) {
+	t.Parallel()
+	claim := providersync.Claim{}
+	claim.Provider, claim.Dataset = "github", "cicd"
+	expired := []providersync.GitHubTestsIncomplete{
+		{Component: "report_member", Cause: "artifact_expired", Count: 2},
+		{Component: "report_member", Cause: "artifact_unavailable", Count: 5},
+	}
+	count := func(provider, dataset string, payload map[string]any) bool {
+		metrics := providerfoundation.NewMetrics()
+		handler := &Handler{ProviderMetrics: metrics}
+		c := claim
+		c.Provider, c.Dataset = provider, dataset
+		handler.observeGitHubTestsExpiredArtifacts(c, payload)
+		var buffer bytes.Buffer
+		if err := metrics.WritePrometheus(&buffer); err != nil {
+			t.Fatalf("WritePrometheus: %v", err)
+		}
+		want := `dev_health_provider_artifact_skipped_total{provider="github",dataset="` + dataset + `",reason="artifact_expired"} 2`
+		return strings.Contains(buffer.String(), want)
+	}
+	if !count("github", "cicd", map[string]any{"incomplete": expired}) {
+		t.Error("cicd: want the committed expired count (2) charged once")
+	}
+	if !count("github", "tests", map[string]any{"incomplete": expired}) {
+		t.Error("tests: want the committed expired count (2) charged once")
+	}
+	if count("gitlab", "cicd", map[string]any{"incomplete": expired}) {
+		t.Error("a different provider must not count")
+	}
+	if count("github", "cicd", map[string]any{"incomplete": []providersync.GitHubTestsIncomplete{{Component: "report_member", Cause: "artifact_unavailable", Count: 2}}}) {
+		t.Error("another cause must not count as expired")
+	}
+}

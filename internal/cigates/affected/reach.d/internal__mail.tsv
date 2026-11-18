@@ -8,6 +8,7 @@ internal/mail	sender.go	internal/api/integrationsadmin/discoveryvenue
 internal/mail	sender.go	internal/api/integrationsadmin/integrationsvenue
 internal/mail	sender.go	internal/api/integrationsadmin/syncvenue
 internal/mail	sender.go	internal/api/session
+internal/mail	sender.go	internal/api/sso
 internal/mail	sender.go	internal/api/syncadmin
 internal/mail	sender.go	internal/api/teamsidentity/adminstampvenue
 internal/mail	sender.go	internal/apiservice

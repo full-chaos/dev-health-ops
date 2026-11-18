@@ -824,12 +824,22 @@ type gitHubProjectV2ItemPayload struct {
 	Changes     gitHubProjectV2Connection[gitHubProjectV2ChangePayload]     `json:"changes"`
 }
 
+func (payload *gitHubProjectV2ContentPayload) UnmarshalJSON(raw []byte) error {
+	type plain gitHubProjectV2ContentPayload
+	if err := json.Unmarshal(raw, (*plain)(payload)); err != nil {
+		return err
+	}
+	payload.BodyStated = jsonKeyPresent(raw, "body")
+	return nil
+}
+
 type gitHubProjectV2ContentPayload struct {
 	Typename   string  `json:"__typename"`
 	ID         string  `json:"id"`
 	Number     int     `json:"number"`
 	Title      string  `json:"title"`
 	Body       *string `json:"body"`
+	BodyStated bool    `json:"-"`
 	URL        *string `json:"url"`
 	State      *string `json:"state"`
 	CreatedAt  *string `json:"createdAt"`
@@ -1098,8 +1108,9 @@ func normalizeGitHubProjectV2Item(
 			return validateGitHubProjectV2Row(claim, row)
 		},
 		workItemID: workItemID, title: content.Title, typeName: "issue", status: status,
-		statusRaw: nullableString(statusRaw), description: content.Body,
-		projectID: stringPointer(projectScopeID), assignees: assignees, reporter: reporter,
+		statusRaw:   nullableString(statusRaw),
+		description: statedWorkItemDescription(content.Body, content.BodyStated),
+		projectID:   stringPointer(projectScopeID), assignees: assignees, reporter: reporter,
 		createdAt: createdAt.UTC(), updatedAt: updatedAt.UTC(), closedAt: closedAt,
 		labels: labels, storyPoints: storyPoints, url: content.URL,
 	}
@@ -1118,9 +1129,6 @@ func normalizeGitHubProjectV2Item(
 	}
 	if content.Typename == "Issue" {
 		source.typeName = githubIssueType(labels)
-	}
-	if source.description != nil && *source.description == "" {
-		source.description = nil
 	}
 	row, err := buildWorkItemRow(claim, source, normalizedAt)
 	if err != nil {
@@ -1170,6 +1178,11 @@ func mergeGitHubProjectV2Rows(repository, projects githubWorkItemRows) githubWor
 	}
 	for _, row := range projects.WorkItems {
 		if position, exists := index[row.WorkItemID]; exists {
+			// The board query asks for no body: its row states no description
+			// and must not drop the one the repository row states.
+			if row.Description == nil {
+				row.Description = merged.WorkItems[position].Description
+			}
 			merged.WorkItems[position] = row
 		} else {
 			index[row.WorkItemID] = len(merged.WorkItems)

@@ -617,8 +617,9 @@ func TestGoAPIAccessRowsAreTheFullInventory(t *testing.T) {
 			user++
 		}
 	}
-	if user != 206 {
-		t.Errorf("%d user rows, want 206", user)
+	// CHAOS-13881 retired the OAuth provider create route and the token half of the /oauth/{first}/{second} PATCH (206 before).
+	if user != 204 {
+		t.Errorf("%d user rows, want 204", user)
 	}
 }
 

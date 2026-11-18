@@ -296,7 +296,7 @@ func TestChunkedExecutorReportsCommittedRowsOnTheFailurePath(t *testing.T) {
 		MaxChunksPerAttempt: 8, MaxWallTime: time.Minute,
 	}
 	store := newChunkMemoryStore()
-	sink := &recoveryRowSink{failFrom: 7}
+	sink := &recoveryRowSink{failFrom: 8}
 	first := completeRouteExecutor(
 		now, &singleItemChunkHandler{batch: threeRowChunkBatch(t, claim)}, store, sink)
 	first.Credentials.Repository = &trackingCompleteRouteCredentialRepository{provider: "github"}

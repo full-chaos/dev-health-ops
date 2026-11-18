@@ -13,15 +13,18 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/testopspooled"
 )
 
-// pooledChart is the definition of a TestOps or CI/CD duration or queue chart metric: the value of a bucket is taken over
-// the raw samples of its runs (for TestOps the shared package testopspooled, the very text the TestOps tiles read; for
-// CI/CD the cicd daily writer's rules below), never as the mean of the stored per-repository-day values: a percentile or
-// a mean of a pool cannot be made from the values of its parts.
+// pooledChart is the definition of a pooled chart metric: the value of a bucket is taken over the raw samples of its rows
+// (for TestOps the shared package testopspooled, the very text the TestOps tiles read; for CI/CD the cicd daily writer's
+// rules below; for the deploy time, pull request size and MTTR metrics the writers' rules of delivery_pooled.go), never as
+// the mean of the stored per-repository-day values: a percentile or a mean of a pool cannot be made from the values of
+// its parts.
 type pooledChart struct {
 	table      string
 	source     string
 	expression string
-	asOf       time.Time
+	// bind returns the parameters the source binds beyond the organization and the dates.
+	bind func(asOf time.Time) []any
+	asOf time.Time
 }
 
 // pooledCharts maps a registry metric to its pooled definition. The registry keeps naming the daily table the metric is
@@ -36,6 +39,12 @@ var pooledCharts = map[string]pooledChart{
 	"avg_duration_minutes":       {table: "cicd_metrics_daily", source: cicdRunsSource, expression: cicdDurationMean},
 	"p90_duration_minutes":       {table: "cicd_metrics_daily", source: cicdRunsSource, expression: cicdDurationP90},
 	"avg_queue_minutes":          {table: "cicd_metrics_daily", source: cicdRunsSource, expression: cicdQueueMean},
+	"deploy_time_p50_hours":      {table: "deploy_metrics_daily", source: deploymentsSource, expression: deliveryHoursMedian, bind: bindCanceledStatuses},
+	"pr_size_p50_loc":            {table: "repo_metrics_daily", source: pullRequestSizesSource, expression: deliveryLOCMedian},
+	"pr_size_p90_loc":            {table: "repo_metrics_daily", source: pullRequestSizesSource, expression: deliveryLOCP90},
+	"mttr_hours":                 {table: "repo_metrics_daily", source: bugRepairsSource, expression: deliveryHoursMean},
+	"mttr_p50_hours":             {table: "incident_metrics_daily", source: incidentRepairsSource, expression: deliveryHoursMedian, bind: bindMappingAsOf},
+	"mttr_p90_hours":             {table: "incident_metrics_daily", source: incidentRepairsSource, expression: deliveryHoursP90, bind: bindMappingAsOf},
 }
 
 // The CI/CD pooled source holds the runs and samples of the cicd daily writer (internal/jobs/metrics/daily/cicd): a run
@@ -118,6 +127,9 @@ func buildPooledChartQuery(spec ChartSpec, definition metricDefinition) (string,
 		clickhouse.Named("org_id", spec.OrganizationID),
 		clickhouse.Named("start_date", start),
 		clickhouse.Named("end_date", endExclusive),
+	}
+	if pooled.bind != nil {
+		parameters = append(parameters, pooled.bind(pooled.asOf)...)
 	}
 
 	xExpression, xType, temporal := "'total'", "String", false

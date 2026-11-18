@@ -207,4 +207,7 @@ var clickHouseOrgTablesAfterThePythonFreeze = map[string]string{
 	// organization's group rows must go when the organization is deleted.
 	"project_team_ownership_groups_log":     "147_project_team_ownership_groups.sql",
 	"project_team_ownership_groups_current": "147_project_team_ownership_groups.sql",
+	// The per-run report completeness of each run attempt (CHAOS-13826). Keyed by org_id and written by the tests sync, so an
+	// organization's rows must go when the organization is deleted.
+	"testops_run_report_completeness": "153_testops_run_report_completeness.sql",
 }

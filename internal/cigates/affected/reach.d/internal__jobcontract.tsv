@@ -10,6 +10,7 @@ internal/jobcontract	registry.go	internal/api/integrationsadmin/discoveryvenue
 internal/jobcontract	registry.go	internal/api/integrationsadmin/integrationsvenue
 internal/jobcontract	registry.go	internal/api/integrationsadmin/syncvenue
 internal/jobcontract	registry.go	internal/api/session
+internal/jobcontract	registry.go	internal/api/sso
 internal/jobcontract	registry.go	internal/api/syncadmin
 internal/jobcontract	registry.go	internal/api/teamsidentity/adminstampvenue
 internal/jobcontract	registry.go	internal/api/webhookintake

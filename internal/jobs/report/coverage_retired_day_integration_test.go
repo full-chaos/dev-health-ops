@@ -8,8 +8,7 @@ import (
 	"testing"
 	"time"
 
-	stdclickhouse "github.com/ClickHouse/clickhouse-go/v2"
-
+	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
@@ -24,15 +23,11 @@ func TestCoverageChartSourceLeavesOutARetiredDay(t *testing.T) {
 	}
 	defer func() { _ = ch.Close(context.Background()) }()
 	chschema.Apply(ctx, t, ch)
-	options, err := stdclickhouse.ParseDSN(ch.URI)
+	admin, err := clickhousestore.Open(ctx, clickhousestore.DefaultConfig(ch.URI))
 	if err != nil {
 		t.Fatal(err)
 	}
-	admin, err := stdclickhouse.Open(options)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = admin.Close() }()
+	defer admin.Close()
 
 	const org, repo = "org-14008", "14008000-0000-4000-8000-0000000000a1"
 	day1 := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)

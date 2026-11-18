@@ -49,8 +49,10 @@ var (
 	resetTokenLimit     = httpapi.Limit{ID: "auth_svc_reset_ip_token", Count: 5, Window: time.Hour}
 	changePasswordLimit = httpapi.Limit{ID: "auth_svc_change_password", Count: 5, Window: time.Hour}
 	socialLinkLimit     = httpapi.Limit{ID: "auth_svc_social_link_ip_principal", Count: 10, Window: time.Hour}
-	// refreshLimit is go-api's auth_refresh budget (10 per 15 minutes per client address) for the compatibility refresh route.
-	refreshLimit = httpapi.Limit{ID: "auth_svc_refresh", Count: 10, Window: 15 * time.Minute}
+	// refreshLimit and refreshAddrLimit are go-api's auth_refresh and auth_refresh_addr budgets for the compatibility
+	// refresh route: 10 per 15 minutes per refresh credential, 100 per 15 minutes per client address (CHAOS-8441).
+	refreshLimit     = httpapi.Limit{ID: "auth_svc_refresh", Count: 10, Window: 15 * time.Minute}
+	refreshAddrLimit = httpapi.Limit{ID: "auth_svc_refresh_addr", Count: 100, Window: 15 * time.Minute}
 	// The OAuth authorize budgets (D0 section 4). go-api's aggregate charges the per
 	// address budgets outside body processing; these need the parsed request.
 	oauthClientLimit    = httpapi.Limit{ID: "auth_svc_oauth_authorize_client", Count: 60, Window: time.Minute}
@@ -109,7 +111,7 @@ func NewSessionLimits(store httpapi.CounterStore, rateKey, successorKey string) 
 func LimitIDs() []string {
 	limits := []httpapi.Limit{
 		loginIPLimit, loginAccountLimit, verifyLimit, resendLimit, resendIPLimit, forgotLimit, forgotIPLimit,
-		resetIPLimit, resetTokenLimit, changePasswordLimit, socialLinkLimit, refreshLimit, registerIPLimit, validateLimit,
+		resetIPLimit, resetTokenLimit, changePasswordLimit, socialLinkLimit, refreshLimit, refreshAddrLimit, registerIPLimit, validateLimit,
 		switchOrgLimit,
 	}
 	ids := make([]string, len(limits))
@@ -273,6 +275,19 @@ func goAPIRefusal(w http.ResponseWriter, _ *http.Request, code httpapi.Code) {
 	// writeFixedBody does the same).
 	_, _ = io.Copy(w, strings.NewReader(body))
 }
+
+// refreshLimitRefusal is goAPIRefusal with Retry-After on a 429: the longer window of the two refresh limits, in
+// seconds, an upper bound (a counter expires at most one window after its first hit). The body is unchanged.
+func refreshLimitRefusal(w http.ResponseWriter, r *http.Request, code httpapi.Code) {
+	if code == httpapi.CodeRateLimited {
+		window := max(refreshLimit.Window, refreshAddrLimit.Window)
+		w.Header().Set("Retry-After", strconv.Itoa(int(window/time.Second)))
+	}
+	goAPIRefusal(w, r, code)
+}
+
+// refreshKey is the refresh credential's digest: only the exact credential selects its bucket.
+func (l *Limits) refreshKey(token string) string { return l.digest("refresh-credential", token) }
 
 // clientKey is the caller address the limits key on (clientaddr resolves it:
 // the socket peer, or the right-most untrusted X-Forwarded-For hop a trusted proxy sent).

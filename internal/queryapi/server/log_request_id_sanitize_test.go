@@ -43,7 +43,7 @@ func TestRequestIDWithLineBreakLogsOneLineAndLeavesTheResponse(t *testing.T) {
 			if got := rec.Header().Values("X-Request-Id"); len(got) != 0 {
 				t.Fatalf("X-Request-Id echoed %q, want none (echoRequestID refuses the id, as before)", got)
 			}
-			if rec.Code != http.StatusInternalServerError || rec.Body.String() != `{"detail":"Internal Server Error"}`+"\n" {
+			if rec.Code != http.StatusInternalServerError || rec.Body.String() != `{"detail":"Internal Server Error"}` {
 				t.Fatalf("response %d %q, want 500 Internal Server Error", rec.Code, rec.Body.String())
 			}
 		})

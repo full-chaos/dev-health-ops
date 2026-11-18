@@ -651,10 +651,11 @@ FOR UPDATE OF run`, runID).Scan(
 	if err := publisher.PublishRedriveFinalizeTx(ctx, tx, run, nonce); err != nil {
 		return false, err
 	}
-	// The sweep restarts the run's horizon with the publish: a later pass
-	// redrives it again only if this job, too, is gone a horizon later.
+	// The sweep restarts the run's horizon at the publish, read after the
+	// outbox insert (not the pass start): a later pass redrives it again only
+	// if this job, too, is gone a full horizon later.
 	if sweepCutoff != nil {
-		if _, err := tx.Exec(ctx, `UPDATE public.daily_metrics_runs SET updated_at = $2 WHERE id = $1::uuid`, run.ID, now); err != nil {
+		if _, err := tx.Exec(ctx, `UPDATE public.daily_metrics_runs SET updated_at = $2 WHERE id = $1::uuid`, run.ID, store.now().UTC()); err != nil {
 			return false, ErrUnavailable
 		}
 	}

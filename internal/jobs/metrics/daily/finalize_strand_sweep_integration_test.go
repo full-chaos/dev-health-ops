@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/url"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -589,7 +590,7 @@ func TestSweepRechecksItsPredicateUnderTheRunLock(t *testing.T) {
 			if err := pool.QueryRow(ctx, `SELECT updated_at FROM daily_metrics_runs WHERE id = $1`, runID).Scan(&updatedAt); err != nil {
 				t.Fatal(err)
 			}
-			restarted := updatedAt.Equal(now)
+			restarted := !updatedAt.Equal(testCase.updatedAt) && !updatedAt.Before(now)
 			if restarted != (testCase.want && testCase.cutoff != nil) {
 				t.Fatalf("updated_at=%s, want the horizon restarted only by a sweep publish", updatedAt)
 			}
@@ -710,5 +711,170 @@ func TestNightlySweepRunsUnderTheWorkerDomainRole(t *testing.T) {
 	}
 	if got := finalizeRedriveRows(t, ctx, admin, stranded); got != 1 {
 		t.Fatalf("redrive rows = %d, want 1", got)
+	}
+}
+
+// steppingClock moves forward by one millisecond on every read, as the wall
+// clock does between a pass's start and its later writes.
+type steppingClock struct {
+	mu  sync.Mutex
+	now time.Time
+}
+
+func (clock *steppingClock) read() time.Time {
+	clock.mu.Lock()
+	defer clock.mu.Unlock()
+	clock.now = clock.now.Add(time.Millisecond)
+	return clock.now
+}
+
+func (clock *steppingClock) set(at time.Time) {
+	clock.mu.Lock()
+	defer clock.mu.Unlock()
+	clock.now = at
+}
+
+// A redriven run's horizon starts at its publish, not at the start of the pass
+// that published it: a pass that starts exactly one horizon after the previous
+// pass started must not publish the run again.
+func TestSweepRestartsTheHorizonFromThePublish(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createDailyTables(t, ctx, pool)
+	registry, err := jobruntime.Load(filepath.Join("..", "..", "..", "..", "contracts", "jobs", "v1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	publisher, err := NewPostgresPublisher(pool, dailyTestRegistry{production: registry})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewPostgresStore(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Date(2026, 11, 18, 1, 0, 0, 0, time.UTC)
+	clock := &steppingClock{now: start}
+	store.now = clock.read
+	orgID, runID := uuid.NewString(), uuid.NewString()
+	seedSweepRun(t, ctx, pool, sweepRunSeed{orgID, runID, "2026-11-01", "pending", start.Add(-48 * time.Hour), []string{"succeeded"}})
+
+	clock.set(start)
+	if redriven, err := store.SweepStrandedFinalizeForOrg(ctx, publisher, orgID); err != nil || redriven != 1 {
+		t.Fatalf("first pass: redriven=%d err=%v, want 1", redriven, err)
+	}
+	var publishedAt time.Time
+	if err := pool.QueryRow(ctx, `SELECT updated_at FROM daily_metrics_runs WHERE id = $1`, runID).Scan(&publishedAt); err != nil {
+		t.Fatal(err)
+	}
+	firstStart := start.Add(time.Millisecond)
+	t.Logf("first pass started %s, publish stamped %s", firstStart.Format(time.RFC3339Nano), publishedAt.Format(time.RFC3339Nano))
+
+	// The next pass starts exactly one horizon after the first pass started,
+	// before one horizon after the publish.
+	clock.set(firstStart.Add(finalizeStrandHorizon).Add(-time.Millisecond))
+	if redriven, err := store.SweepStrandedFinalizeForOrg(ctx, publisher, orgID); err != nil || redriven != 0 {
+		t.Fatalf("second pass one horizon after the first pass started: redriven=%d err=%v, want 0", redriven, err)
+	}
+	// One horizon after the publish, the run is redriven again.
+	clock.set(publishedAt.Add(finalizeStrandHorizon))
+	if redriven, err := store.SweepStrandedFinalizeForOrg(ctx, publisher, orgID); err != nil || redriven != 1 {
+		t.Fatalf("pass one horizon after the publish: redriven=%d err=%v, want 1", redriven, err)
+	}
+	if got := finalizeRedriveRows(t, ctx, pool, runID); got != 2 {
+		t.Fatalf("redrive rows = %d, want 2", got)
+	}
+}
+
+// completionFailingNTimes fails the first n CompleteFinalize calls.
+type completionFailingNTimes struct {
+	*PostgresStore
+	left atomic.Int32
+}
+
+func (store *completionFailingNTimes) CompleteFinalize(ctx context.Context, claim FinalizeClaim) error {
+	if store.left.Add(-1) >= 0 {
+		return ErrUnavailable
+	}
+	return store.PostgresStore.CompleteFinalize(ctx, claim)
+}
+
+// The bound when the first job loses every completion write (codex round 2,
+// "missed in round 1"): the job alone computes once per attempt (4) and leaves
+// the run running with finalization failed; with its redriven twin the run
+// gets one more compute (5), and that one ends the run succeeded.
+func TestARedriveTwinAfterAnExhaustedJobComputesOnceMore(t *testing.T) {
+	defer restoreRecognisedFinalizeFamilies(pythonRecognisedFinalizeFamilies)
+	pythonRecognisedFinalizeFamilies = []string{"ic_finalize"}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createDailyTables(t, ctx, pool)
+	base, err := NewPostgresStore(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const attempts = 4
+	for _, testCase := range []struct {
+		name         string
+		jobs         int
+		wantComputes int32
+		wantStatus   string
+	}{
+		{name: "one job exhausts its attempts", jobs: 1, wantComputes: attempts, wantStatus: "running"},
+		{name: "the job exhausts its attempts, then its twin", jobs: 2, wantComputes: attempts + 1, wantStatus: "succeeded"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			orgID, runID := uuid.NewString(), uuid.NewString()
+			seedSweepRun(t, ctx, pool, sweepRunSeed{orgID, runID, "2026-11-01", "pending", time.Now().UTC().Add(-48 * time.Hour), []string{"succeeded"}})
+			store := &completionFailingNTimes{PostgresStore: base}
+			store.left.Store(attempts)
+			family := &countingFinalizeFamily{}
+			finalizer, err := NewFinalizeHandler(store)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := finalizer.SetNativeFinalizeFamilies(map[string]NativeFinalizeFamilyExecutor{"ic_finalize": family}); err != nil {
+				t.Fatal(err)
+			}
+			for job := 0; job < testCase.jobs; job++ {
+				for attempt := 1; attempt <= attempts; attempt++ {
+					execution := sweepFinalizeExecution(orgID, runID)
+					execution.Attempt = attempt
+					execution.Definition.MaxAttempts = attempts
+					if err := finalizer.Work(ctx, execution); err == nil {
+						break
+					}
+				}
+			}
+			var status, finalization string
+			if err := pool.QueryRow(ctx, `SELECT status, finalization_status FROM daily_metrics_runs WHERE id = $1`, runID).Scan(&status, &finalization); err != nil {
+				t.Fatal(err)
+			}
+			t.Logf("%s: computes=%d status=%s finalization=%s", testCase.name, family.computes.Load(), status, finalization)
+			if family.computes.Load() != testCase.wantComputes || status != testCase.wantStatus {
+				t.Fatalf("computes=%d status=%s, want %d and %s", family.computes.Load(), status, testCase.wantComputes, testCase.wantStatus)
+			}
+		})
 	}
 }

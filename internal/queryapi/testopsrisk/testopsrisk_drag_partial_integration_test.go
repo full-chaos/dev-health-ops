@@ -52,17 +52,17 @@ func TestRealClickHouse_TestopsRiskQualityDragPartial(t *testing.T) {
 	d(rB, "2026-01-02", "4", "1", "1", "1", "1")
 	d(rA, "2026-01-03", "3", "1", n, "1", "1") // P3 every flake NULL
 	d(rB, "2026-01-03", "3", "1", n, "1", "1")
-	d(rA, "2026-01-04", "3", n, "1", "1", "1") // P4 failure part NULL
-	d(rA, "2026-01-05", "3", "1", "1", n, "1") // P4 queue part NULL
-	d(rA, "2026-01-06", "3", "1", "1", "1", n) // P4 retry part NULL
+	d(rA, "2026-01-04", "3", n, "1", "1", "1")   // P4 failure part NULL
+	d(rA, "2026-01-05", "3", "1", "1", n, "1")   // P4 queue part NULL
+	d(rA, "2026-01-06", "3", "1", "1", "1", n)   // P4 retry part NULL
 	d(rA, "2026-01-07", "3", "1", "0", "1", "1") // P5 known 0
-	d(rA, "2026-01-09", n, n, n, n, n) // P7 every part NULL, drag NULL
-	d(rA, "2026-01-10", "3", n, "1", "1", "1") // P8 earlier day has a NULL part
+	d(rA, "2026-01-09", n, n, n, n, n)           // P7 every part NULL, drag NULL
+	d(rA, "2026-01-10", "3", n, "1", "1", "1")   // P8 earlier day has a NULL part
 	d(rA, "2026-01-11", "4", "1", "1", "1", "1") // P8 latest day known
-	d(rA, "2026-01-12", "3", "1", n, "1", "1") // P9a older row NULL ...
+	d(rA, "2026-01-12", "3", "1", n, "1", "1")   // P9a older row NULL ...
 	d(rA, "2026-01-12", "4", "1", "1", "1", "1") // ... last-inserted row known
 	d(rA, "2026-01-13", "4", "1", "1", "1", "1") // P9b older row known ...
-	d(rA, "2026-01-13", "3", "1", n, "1", "1") // ... last-inserted row NULL
+	d(rA, "2026-01-13", "3", "1", n, "1", "1")   // ... last-inserted row NULL
 
 	cells := []struct {
 		name, start, end string

@@ -1885,6 +1885,9 @@ func (handler *FinalizeHandler) computeNativeFinalizeFamilies(ctx context.Contex
 				"run_id", run.ID, "organization_id", run.OrganizationID,
 				"target_day", run.TargetDay.Format("2006-01-02"), "family", name,
 			)
+			handler.observeFinalizeFamily(
+				run, name, jobruntime.DailyMetricsNativeFamilyOutcomeSkippedEmptyRun, 0, handler.finalizeNow(),
+			)
 			continue
 		}
 		// Between-family cancellation check. Once the lease is lost another

@@ -126,3 +126,36 @@ func TestFinalizeOfARunOfSomeRepositoriesWithNoPartitionIsRefusedPermanently(t *
 			store.finalizeCompletions, store.finalizeReleases, store.failedFinalizePermanently)
 	}
 }
+
+// The skip of a family on a run with no partition leaves that family's rows of
+// the day live, so it must be countable: the production collector steps the
+// family's skipped_empty_run outcome once per empty run.
+func TestFinalizeOfAnEmptyRunCountsTheSkippedFamily(t *testing.T) {
+	store := finalizeStoreWithClaim()
+	store.noPartitions = true
+	store.run.FullOrg = true
+	handler, err := NewFinalizeHandler(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registerZeroPartitionFamilies(t, handler, zeroPartitionFamilies())
+	collector, err := jobruntime.NewMetricsCollector(jobruntime.MetricDimensions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler.SetNativeFinalizeFamilyObserver(collector)
+	if err := handler.Work(context.Background(), finalizeExecution()); err != nil {
+		t.Fatalf("finalize = %v, want nil", err)
+	}
+	exposition := collector.PrometheusText()
+	want := `worker_daily_metrics_native_family_outcome_total{family="` + BenchmarkingFamilyName + `",outcome="skipped_empty_run"} 1`
+	if !strings.Contains(exposition, want) {
+		t.Errorf("exposition is missing %q after an empty run", want)
+	}
+	for _, line := range strings.Split(exposition, "\n") {
+		if strings.HasPrefix(line, `worker_daily_metrics_native_family_outcome_total{family="`+BenchmarkingFamilyName+`",outcome="refused"}`) &&
+			!strings.HasSuffix(line, " 0") {
+			t.Errorf("the skip is counted as a refusal: %s", line)
+		}
+	}
+}

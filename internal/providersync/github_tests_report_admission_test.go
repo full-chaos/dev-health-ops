@@ -610,6 +610,61 @@ func TestGitHubTestsAdmissionCompletenessCountsReportSources(t *testing.T) {
 	}
 }
 
+// githubTestsWideArtifactAt is a report artifact whose junit.xml is member number position (1-based), after position-1
+// attachments.
+func githubTestsWideArtifactAt(t *testing.T, id int64, name string, position int) githubTestsAdmissionArtifact {
+	t.Helper()
+	order := make([]string, 0, position)
+	bodies := map[string]string{}
+	for index := range position - 1 {
+		member := fmt.Sprintf("attachments/%04d.bin", index)
+		order = append(order, member)
+		bodies[member] = "x"
+	}
+	order = append(order, "junit.xml")
+	bodies["junit.xml"] = "<testsuites>" + githubTestsACRShardSuite(name) + "</testsuites>"
+	return githubTestsAdmissionArtifact{id: id, name: name, created: "2026-07-22T09:59:00Z", archive: githubTestsOrderedZip(t, order, bodies)}
+}
+
+// A report the directory check keeps past the parser's entry window is a recorded loss, not a complete run: at entry
+// 2,001 the run's completeness row is partial with archive_entry_cap and the unit is not reports_complete; at entry
+// 2,000 (control) it is read and complete.
+func TestGitHubTestsAdmissionReportPastTheEntryWindowIsALoss(t *testing.T) {
+	for _, row := range []struct {
+		position int
+		complete bool
+	}{{githubTestsMaxArchiveEntries, true}, {githubTestsMaxArchiveEntries + 1, false}} {
+		t.Run(fmt.Sprintf("entry %d", row.position), func(t *testing.T) {
+			artifacts := append([]githubTestsAdmissionArtifact{githubTestsWideArtifactAt(t, 99, "wide-bundle", row.position)},
+				githubTestsAdmissionFixture(t, "shard-b", "race-json-x")...)
+			doer := newGitHubTestsAdmissionDoer(t, "77", artifacts)
+			final, effects := walkGitHubTestsChunksCapturingEffects(t, GitHubTestsRouteHandler{MaxArtifactsPerRun: 2}, nativeTestClaim("github", "cicd"), githubTestsClient(t, fakehttp.Client(doer)), 4)
+			var rows []completenessRow
+			for _, effect := range effects {
+				if effect.Destination != "testops_run_report_completeness" {
+					continue
+				}
+				for _, raw := range effect.Rows {
+					var got completenessRow
+					if err := json.Unmarshal(raw, &got); err != nil {
+						t.Fatal(err)
+					}
+					rows = append(rows, got)
+				}
+			}
+			if len(rows) != 1 || rows[0].Complete != row.complete || rows[0].ReportsExpected != 2 {
+				t.Fatalf("rows=%+v, want one row complete=%v expected=2", rows, row.complete)
+			}
+			if !row.complete && !slices.Contains(rows[0].Reasons, githubTestsArchiveEntryCapCause) {
+				t.Fatalf("reasons=%v, want %s", rows[0].Reasons, githubTestsArchiveEntryCapCause)
+			}
+			if got, _ := final.Result[GitHubTestsResultKeyReportsComplete].(bool); got != row.complete {
+				t.Fatalf("unit reports_complete=%v, want %v", final.Result[GitHubTestsResultKeyReportsComplete], row.complete)
+			}
+		})
+	}
+}
+
 // githubTestsWriteResponse writes a doer's response on a server connection.
 func githubTestsWriteResponse(w io.Writer, response *http.Response) error {
 	body, err := io.ReadAll(response.Body)

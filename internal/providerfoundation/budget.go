@@ -631,7 +631,7 @@ func (m *Metrics) RecordNonReportMembersSkipped(provider, dataset, class string,
 var metricSkippedArtifactCauseOverflowVocabulary = map[string]struct{}{
 	"artifact_oversized": {}, "artifact_unavailable": {}, "unreadable_archive": {},
 	"artifact_expired": {},
-	"malformed":        {}, "unreadable": {},
+	"malformed":        {}, "unreadable": {}, "unsafe_doctype": {},
 	// CHAOS-13794: the markers of a run's report artifacts skipped whole.
 	"per_run_cap": {}, "aggregate_of_parts": {}, "aggregate_mismatch": {},
 }
@@ -685,6 +685,7 @@ var metricCicdPartialSuccessReasonVocabulary = map[string]struct{}{
 	// see githubTestsWatermarkAdvancingPairs.
 	"malformed":          {},
 	"unreadable":         {},
+	"unsafe_doctype":     {},
 	"per_run_cap":        {},
 	"aggregate_of_parts": {},
 	"mixed":              {},
@@ -806,6 +807,7 @@ func (m *Metrics) RecordNonFiniteReleaseRefConfidence(provider, dataset string, 
 var metricDuplicateNaturalKeyTableVocabulary = map[string]struct{}{
 	"ci_pipeline_runs": {}, "ci_job_runs": {}, "ci_acceptance_checks": {},
 	"test_suite_results": {}, "test_case_results": {}, "coverage_snapshots": {},
+	"testops_run_report_completeness": {},
 }
 
 // MetricDuplicateNaturalKeyTableLabel bounds a duplicate_natural_key

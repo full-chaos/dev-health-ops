@@ -63,6 +63,13 @@ const (
 // relationship the requests do not actually have (CHAOS-4142, codex round 2).
 const githubTestsPerRunPerPage = 100
 
+type githubTestsOpenSkipEvent struct {
+	RunID  string `json:"r"`
+	Reason string `json:"why"`
+	Status int    `json:"st,omitempty"`
+	Route  string `json:"rt,omitempty"`
+}
+
 // githubTestsChunkCursor is deliberately route-owned. A provider Link URL is
 // opaque, while the run index makes a crash between two runs on one page
 // resumable without replaying the already committed prefix.
@@ -113,6 +120,10 @@ type githubTestsChunkCursor struct {
 	OpenSkipped      int  `json:"osk,omitempty"`
 	OpenTransientRun int  `json:"otr,omitempty"`
 	OpenSkipLimitHit bool `json:"osl,omitempty"`
+	// OpenSkipEvent is the skip of this cursor's own emission, carried so the
+	// skip is recorded (ObserveCommittedChunk) when the executor confirms that
+	// chunk committed, also by recovery. Later cursors never carry it.
+	OpenSkipEvent *githubTestsOpenSkipEvent `json:"ose,omitempty"`
 	// OpenFloorHit and OpenFloorRemaining record that the rate-limit governor
 	// stopped the open phase: remaining requests of the installation at that
 	// time (-1 when the response carried no header).
@@ -927,6 +938,7 @@ func decodeGitHubTestsChunkCursor(raw string) (githubTestsChunkCursor, error) {
 		(cursor.Phase != "runs" && cursor.Phase != "artifacts" && cursor.Phase != githubTestsOpenPhase && cursor.Phase != "done") ||
 		cursor.RangeItems < 0 || cursor.OpenDone < 0 || cursor.OpenCap < 0 ||
 		cursor.OpenSkipped < 0 || cursor.OpenTransientRun < 0 ||
+		cursor.OpenSkipEvent != nil && (cursor.OpenSkipEvent.RunID == "" || cursor.OpenSkipEvent.Reason == "") ||
 		cursor.Index < 0 || cursor.NextURL == "" && cursor.Index != 0 ||
 		cursor.RunPages < 0 || cursor.ArtifactPages < 0 ||
 		// The counter pair is either both known or both unknown, never split:
@@ -1217,6 +1229,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 	if err != nil {
 		return err
 	}
+	cursor.OpenSkipEvent = nil
 	// invocationBaseRequests is the running total every PRIOR chunk
 	// invocation already persisted onto the cursor. requests below counts
 	// only THIS invocation's physical wire attempts (via the counting Doer
@@ -1575,21 +1588,14 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		}
 		after.OpenAfterStarted = row.StartedAt.UTC().Format(time.RFC3339Nano)
 		after.OpenAfterRunID = row.RunID
-		// The skip is committed when the emission returns nil or the durable continuation that ends the attempt;
-		// only then is it recorded, once, since the resume starts after it.
-		emitErr := emitCursor(before, after, CompleteRouteBatch{Effects: effects}, false)
-		if emitErr != nil && !errors.Is(emitErr, ErrChunkContinuation) {
-			return emitErr
+		after.OpenSkipEvent = &githubTestsOpenSkipEvent{RunID: row.RunID, Reason: reason, Status: status, Route: route}
+		// The executor records the skip when it confirms this emission's chunk committed (ObserveCommittedChunk).
+		if err := emitCursor(before, after, CompleteRouteBatch{Effects: effects}, false); err != nil {
+			return err
 		}
 		cursor = after
-		client.Metrics.RecordOpenRunSkipped(claim.Provider, claim.Dataset, reason)
-		slog.Warn(
-			"open run re-read failed with an error of that run; it is skipped this unit and read again on a later unit",
-			"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID, "repository", cursor.Repo,
-			logging.ProviderIDAttr("run", row.RunID), "reason", reason, "status", status, "route", route,
-			"skipped", cursor.OpenSkipped,
-		)
-		return emitErr
+		cursor.OpenSkipEvent = nil
+		return nil
 	}
 	collectOpenRuns := func() error {
 		if claim.SinceAt == nil {
@@ -1764,7 +1770,10 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 				suites := []testSuiteResultRow(nil)
 				cases := []testCaseResultRow(nil)
 				coverage := []coverageSnapshotRow(nil)
+				var completeness []testOpsRunReportCompletenessRow
 				if include && githubTestsRunReadable(run) && !githubTestsReportRunOutsideWindow(pipeline, claim) {
+					// The run's losses are the deltas of the cursor's exact loss counters across the run (CHAOS-13826).
+					lossBefore := githubTestsTakeRunLossCounts(cursor)
 					artPage, pageErr := providerfoundation.CollectGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{
 						Path:  root + "/actions/runs/" + url.PathEscape(pipeline.RunID) + "/artifacts",
 						Route: githubRunArtifactsRoute,
@@ -1831,6 +1840,8 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 					// nothing about the channel (same rule as oversized below). Every expired artifact that passed the selection seam above
 					// counts: its contents are unknown, so the route fails closed (the seam already dropped the known non-report names).
 					artifactItems, expiredItems := githubTestsSplitExpiredArtifacts(artifactItems)
+					reportsExpected := len(artifactItems) + len(expiredItems)
+					nonReportArchives := 0
 					for _, artifact := range expiredItems {
 						if githubTestsSkippedMarkerRecorded(cursor.SkippedArtifacts, pipeline.RunID, string(artifact.ID), githubTestsArtifactExpiredCause) {
 							continue
@@ -2146,7 +2157,10 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 						}
 						// Hold the parsed rows until the run is decided; an artifact that would take the held rows past
 						// githubTestsMaxHeldReportRowsPerRun is skipped whole before it is held.
-						held := githubTestsParsedReport{ID: artifact.ID, Name: artifact.Name, Suites: rows.Suites, Cases: rows.Cases, Coverage: rows.Coverage}
+						held := githubTestsParsedReport{ID: artifact.ID, Name: artifact.Name, Suites: rows.Suites, Cases: rows.Cases, Coverage: rows.Coverage, Reports: rows.ReportsRead}
+						if held.Reports == 0 && len(rows.SkippedArtifacts) == 0 && len(reportIncomplete) == 0 {
+							nonReportArchives++ // read whole and held no report: not a report source of the run (CHAOS-13826)
+						}
 						if heldRows+held.rows() > githubTestsMaxHeldReportRowsPerRun {
 							skipReportOverBound(artifact)
 							continue
@@ -2206,11 +2220,16 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 						cases = append(cases, parsedReports[index].Cases...)
 						coverage = append(coverage, parsedReports[index].Coverage...)
 					}
+					// One verdict row per run, after its last emission's rows are decided (CHAOS-13826).
+					completeness = githubTestsRunReportCompleteness(
+						pipeline, run, lossBefore, githubTestsTakeRunLossCounts(cursor),
+						reportsExpected-nonReportArchives, len(expiredItems), githubTestsAdmittedReports(parsedReports, plan.Admitted), normalizedAt,
+					)
 				}
 				cursor.Suites += len(suites)
 				cursor.Cases += len(cases)
 				cursor.Coverage += len(coverage)
-				effects, effectErr := testOpsEffects(nil, nil, nil, suites, cases, coverage)
+				effects, effectErr := testOpsEffects(nil, nil, nil, suites, cases, coverage, completeness...)
 				if effectErr != nil {
 					return effectErr
 				}
@@ -2288,4 +2307,51 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 	return emitFinalMetadata(cursor)
 }
 
-var _ ChunkedCompleteRouteHandler = GitHubTestsRouteHandler{}
+// ObserveCommittedChunk logs the WARN line and steps the counter of the open
+// run skip a committed chunk carries. The repository attribute is the claim's
+// own, never the provider's full_name.
+func (handler GitHubTestsRouteHandler) ObserveCommittedChunk(claim Claim, chunk PreparedProviderChunk, metrics *providerfoundation.Metrics) {
+	cursor, event := githubTestsChunkOpenSkip(chunk)
+	if event == nil {
+		return
+	}
+	metrics.RecordOpenRunSkipped(claim.Provider, claim.Dataset, event.Reason)
+	slog.Warn(
+		"open run re-read failed with an error of that run; it is skipped this unit and read again on a later unit",
+		"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID, "repository", claim.SourceExternalID,
+		logging.ProviderIDAttr("run", event.RunID), "reason", event.Reason, "status", event.Status, "route", event.Route,
+		"skipped", cursor.OpenSkipped,
+	)
+}
+
+// ObserveUnconfirmedChunk names the open run skip of a chunk whose commit is
+// unknown: the mark failed and the checkpoint read back failed too. If the
+// commit landed, no recovery drains the chunk and the skip has no WARN line or
+// counter step, so this distinct line keeps it from being silent.
+func (handler GitHubTestsRouteHandler) ObserveUnconfirmedChunk(claim Claim, chunk PreparedProviderChunk) {
+	_, event := githubTestsChunkOpenSkip(chunk)
+	if event == nil {
+		return
+	}
+	slog.Warn(
+		"open run skip unconfirmed: the commit of its chunk failed and the checkpoint read back failed; if the commit landed, the skip is not recorded",
+		"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID, "repository", claim.SourceExternalID,
+		logging.ProviderIDAttr("run", event.RunID), "chunk", chunk.Ordinal, "skip_reason", event.Reason, "outcome", "unknown",
+	)
+}
+
+func githubTestsChunkOpenSkip(chunk PreparedProviderChunk) (githubTestsChunkCursor, *githubTestsOpenSkipEvent) {
+	if !strings.Contains(chunk.CursorAfter, `"ose"`) {
+		return githubTestsChunkCursor{}, nil
+	}
+	cursor, err := decodeGitHubTestsChunkCursor(chunk.CursorAfter)
+	if err != nil {
+		return githubTestsChunkCursor{}, nil
+	}
+	return cursor, cursor.OpenSkipEvent
+}
+
+var (
+	_ ChunkedCompleteRouteHandler = GitHubTestsRouteHandler{}
+	_ ChunkCommitObserver         = GitHubTestsRouteHandler{}
+)

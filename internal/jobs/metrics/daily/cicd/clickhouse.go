@@ -34,12 +34,13 @@ func NewClickHouseLoader(connection conn) (*ClickHouseLoader, error) {
 }
 
 // PipelineRunsSource is the cicd family's source: exactly the runs
-// ComputeCICDMetricsDaily keeps. It is the finished_at window of
-// load_cicd_data's pipe_query (loaders/clickhouse.py:1212) AND the started_at
-// window the kernel re-applies (the DOUBLE WINDOW FILTER in the package doc).
-// The zero-row source check reads this same text, so a run counts as source
-// only when this family would count it. finished_at IS NULL (a still-running
-// pipeline) never matches the range filter, matching Python exactly. A run whose
+// ComputeCICDMetricsDaily keeps. A finished run counts on the UTC day it
+// finishes (finished_at in the day window); started_at is not a day filter (see
+// the package doc). The zero-row source check reads this same text, so a run
+// counts as source only when this family would count it. finished_at IS NULL (a
+// still-running pipeline) never matches the range filter. A run
+// still open (testops.IsOpenRun) is left out too: a provider sync stamps its
+// last update time into finished_at. A run whose
 // stored status is testops.StatusDeleted (GitHub no longer has it) is left out,
 // as ComputeCICDMetricsDaily leaves it out; the SQL trim is ASCII only while the
 // compute trims Unicode space, so a mismatch can only miss a flag.
@@ -50,10 +51,10 @@ func NewClickHouseLoader(connection conn) (*ClickHouseLoader, error) {
 const PipelineRunsSource = `
 FROM ci_pipeline_runs FINAL
 WHERE finished_at >= {start:DateTime64(3, 'UTC')} AND finished_at < {end:DateTime64(3, 'UTC')}
-  AND started_at >= {start:DateTime64(3, 'UTC')} AND started_at < {end:DateTime64(3, 'UTC')}
   AND repo_id IN {repo_ids:Array(UUID)}
   AND org_id = {org_id:String}
-  AND lowerUTF8(trimBoth(ifNull(status, ''))) != '` + testops.StatusDeleted + `'`
+  AND lowerUTF8(trimBoth(ifNull(status, ''))) != '` + testops.StatusDeleted + `'
+  AND ` + testops.NotOpenRunSQL
 
 const pipelineRunsQuery = `
 SELECT repo_id, run_id, status, queued_at, started_at, finished_at` + PipelineRunsSource
@@ -69,7 +70,7 @@ func SourceArgs(orgID string, repoIDs []uuid.UUID, start, end time.Time) []any {
 }
 
 // LoadPipelineRuns loads the PipelineRunsSource rows for [start, end), repoIDs
-// and orgID. ComputeCICDMetricsDaily still re-applies the started_at filter,
+// and orgID. ComputeCICDMetricsDaily still re-applies the finished_at filter,
 // so the result is the same whether or not the SQL already applied it.
 func (loader *ClickHouseLoader) LoadPipelineRuns(
 	ctx context.Context, orgID string, repoIDs []uuid.UUID, start, end time.Time,

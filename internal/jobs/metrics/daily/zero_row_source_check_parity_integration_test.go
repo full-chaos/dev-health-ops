@@ -464,7 +464,8 @@ func TestZeroRowSourceCheckMatchesWhatTheFamilyKeeps(t *testing.T) {
 			run  pipelineRun
 			kept bool
 		}{
-			{"started_day_before_finished_in_day", pipelineRun{startedAt: at("2026-08-24 23:59:59.999"), finishedAt: ptrTime(at("2026-08-25 00:00:01.000"))}, false},
+			{"started_day_before_finished_in_day_counts_on_finish_day", pipelineRun{startedAt: at("2026-08-24 23:59:59.999"), finishedAt: ptrTime(at("2026-08-25 00:00:01.000"))}, true},
+			{"started_in_day_finished_next_day", pipelineRun{startedAt: at("2026-08-25 23:59:59.999"), finishedAt: ptrTime(at("2026-08-26 00:00:01.000"))}, false},
 			{"started_and_finished_at_day_edges", pipelineRun{startedAt: at("2026-08-25 00:00:00.000"), finishedAt: ptrTime(at("2026-08-25 23:59:59.999"))}, true},
 			{"finished_at_next_day_start", pipelineRun{startedAt: at("2026-08-25 12:00:00.000"), finishedAt: ptrTime(at("2026-08-26 00:00:00.000"))}, false},
 			{"still_running", pipelineRun{startedAt: at("2026-08-25 12:00:00.000")}, false},

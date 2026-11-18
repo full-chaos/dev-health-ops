@@ -537,3 +537,46 @@ func TestRealClickHouse_RepoBreakoutIgnoresSupersededRepoName(t *testing.T) {
 		t.Fatalf("a superseded name selected the repository: %#v", stale.Rows)
 	}
 }
+
+// Under breakout REPO the trend follows filter.repoIds: a granted repository A
+// and an ungranted repository B hold different scores on the same days, and
+// the trend of a filter naming only A carries nothing of B.
+func TestRealClickHouse_RepoBreakoutTrendFollowsRepoIDs(t *testing.T) {
+	ctx, conn, client := startStore(t)
+	now := time.Now().UTC()
+	repo(t, ctx, conn, "org-1", rA, "acme/web")
+	repo(t, ctx, conn, "org-1", rB, "acme/api")
+	for back, scores := range map[int][2]string{1: {"0.2", "0.8"}, 2: {"0.4", "0.6"}} {
+		put(t, ctx, conn, risk{org: "org-1", scope: "repo", id: rA, day: day(now, back), score: scores[0], sev: "low"})
+		put(t, ctx, conn, risk{org: "org-1", scope: "repo", id: rB, day: day(now, back), score: scores[1], sev: "high"})
+	}
+	pinned := gqlDate(day(now, 1))
+	trendOf := func(repoIDs []string) map[string]float64 {
+		got, err := Resolve(ctx, client, "org-1", &model.CompoundingRiskFilterInput{Breakout: model.CompoundingRiskScopeRepo, RepoIds: repoIDs, TrendDays: 30, Day: &pinned}, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := map[string]float64{}
+		for _, p := range got.Trend {
+			out[p.Day.String()] = *p.Score
+		}
+		return out
+	}
+	within := func(a, b float64) bool { return a-b < 1e-9 && b-a < 1e-9 }
+	d1, d2 := day(now, 1).Format("2006-01-02"), day(now, 2).Format("2006-01-02")
+	granted := trendOf([]string{rA})
+	if len(granted) != 2 || !within(granted[d1], 0.2) || !within(granted[d2], 0.4) {
+		t.Errorf("trend for repoIds=[A] must carry only A: %v", granted)
+	}
+	byName := trendOf([]string{"acme/web"})
+	if len(byName) != 2 || !within(byName[d1], 0.2) || !within(byName[d2], 0.4) {
+		t.Errorf("trend for repoIds=[acme/web] must carry only A: %v", byName)
+	}
+	if none := trendOf([]string{}); len(none) != 0 {
+		t.Errorf("an empty repoIds filter excludes everything from the trend: %v", none)
+	}
+	all := trendOf(nil)
+	if len(all) != 2 || !within(all[d1], 0.5) || !within(all[d2], 0.5) {
+		t.Errorf("trend without a repo filter is over every repository: %v", all)
+	}
+}

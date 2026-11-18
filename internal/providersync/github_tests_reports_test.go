@@ -71,7 +71,7 @@ func TestGitHubTestsArtifactParsesJUnitCasesAndCoverage(t *testing.T) {
 func TestGitHubTestsArtifactSkipsMalformedMemberWithoutDroppingValidReports(t *testing.T) {
 	rows, err := parseGitHubTestsArtifact(
 		githubTestsZip(t, map[string]string{
-			"bad.xml":   `<!DOCTYPE x [<!ENTITY x "boom">]><testsuite>&x;</testsuite>`,
+			"bad.xml":   `<testsuite><testcase></testsuite>`,
 			"good.info": githubTestsLCOVFixture,
 		}),
 		"artifact-1", "c7198fbc-1945-3717-05d8-eb78866b4e79", "9001", "org-a",
@@ -215,7 +215,7 @@ func TestGitHubTestsArtifactEnforcesReportCountCap(t *testing.T) {
 
 func TestGitHubTestsJUnitParserRejectsDTDAndTruncatesStack(t *testing.T) {
 	_, _, _, err := parseJUnitRows(
-		[]byte(`<!DOCTYPE testsuite><testsuite name="x"><testcase name="x"/></testsuite>`),
+		[]byte(`<!DOCTYPE testsuite [<!ENTITY x "boom">]><testsuite name="x"><testcase name="x"/></testsuite>`),
 		"artifact-1", "repo", "run", "org", nil, nil, time.Now(), map[string]int{},
 	)
 	if err == nil {

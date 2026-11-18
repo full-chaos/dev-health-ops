@@ -143,9 +143,9 @@ func (handler *bigFinalChunkHandler) CollectChunks(
 	for index := 0; index < handler.rows; index++ {
 		rows = append(rows, json.RawMessage(`{"org_id":"`+claim.OrgID+`","row":`+strconv.Itoa(index)+`}`))
 	}
-	effects := make([]EffectBatch, 0, 6)
+	effects := make([]EffectBatch, 0, 7)
 	for _, destination := range []string{"ci_pipeline_runs", "ci_job_runs", "ci_acceptance_checks",
-		"test_suite_results", "test_case_results", "coverage_snapshots"} {
+		"test_suite_results", "test_case_results", "coverage_snapshots", "testops_run_report_completeness"} {
 		destinationRows := []json.RawMessage(nil)
 		if destination == "ci_pipeline_runs" {
 			destinationRows = rows
@@ -239,9 +239,9 @@ func (handler *multiPageChunkHandler) CollectChunks(
 		for index := 0; index < handler.perPage; index++ {
 			rows = append(rows, json.RawMessage(`{"org_id":"`+claim.OrgID+`","page":`+strconv.Itoa(page)+`,"row":`+strconv.Itoa(index)+`}`))
 		}
-		effects := make([]EffectBatch, 0, 6)
+		effects := make([]EffectBatch, 0, 7)
 		for _, destination := range []string{"ci_pipeline_runs", "ci_job_runs", "ci_acceptance_checks",
-			"test_suite_results", "test_case_results", "coverage_snapshots"} {
+			"test_suite_results", "test_case_results", "coverage_snapshots", "testops_run_report_completeness"} {
 			destinationRows := []json.RawMessage(nil)
 			if destination == "ci_pipeline_runs" {
 				destinationRows = rows
@@ -348,8 +348,8 @@ func TestEveryAttemptProgressesEvenWhenTheWallBoundIsAlreadyPast(t *testing.T) {
 		}
 		last = checkpoint.NextOrdinal
 	}
-	if sink.duplicates() != 0 || len(sink.rows) != 3*6 {
-		t.Fatalf("rows: distinct=%d duplicated=%d, want 18 and 0", len(sink.rows), sink.duplicates())
+	if sink.duplicates() != 0 || len(sink.rows) != 3*7 {
+		t.Fatalf("rows: distinct=%d duplicated=%d, want 21 and 0", len(sink.rows), sink.duplicates())
 	}
 }
 

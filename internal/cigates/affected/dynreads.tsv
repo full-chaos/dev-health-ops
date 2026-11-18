@@ -541,6 +541,7 @@ internal/pythonparity	goldenpayload_registry_test.go
 internal/pythonparity/pyunicodedata	golden_test.go
 internal/pythonparity/pyunicodedata	import_guard_test.go
 internal/pythonparity/scopeparity	scopeparity.go
+internal/queryapi/aianalytics	umd_team_scope_census_14101_test.go
 internal/queryapi/analytics	analytics_settings_gate_test.go
 internal/queryapi/analytics	canonical_only_census_test.go
 internal/queryapi/analytics	nan_class_live_test.go

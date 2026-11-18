@@ -77,6 +77,9 @@ var (
 	QueryNewestPrimaryRowsDonorChange                 = Step{label: "query newest primary attribution rows (donor change)"}
 	ScanNewestPrimaryRowDonorChange                   = Step{label: "scan newest primary attribution row (donor change)"}
 	IterateNewestPrimaryRowsDonorChange               = Step{label: "iterate newest primary attribution rows (donor change)"}
+	QueryDonorKindsDonorChange                        = Step{label: "query donor work item kinds (donor change)"}
+	ScanDonorKindDonorChange                          = Step{label: "scan donor work item kind (donor change)"}
+	IterateDonorKindsDonorChange                      = Step{label: "iterate donor work item kinds (donor change)"}
 	LoadInactiveTeamsDonorChange                      = Step{label: "load inactive teams (donor change)"}
 	ClaimPartition                                    = Step{label: "claim_partition"}
 	LoadRun                                           = Step{label: "load_run"}

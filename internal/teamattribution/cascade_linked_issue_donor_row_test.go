@@ -1,7 +1,6 @@
 package teamattribution
 
 import (
-	"fmt"
 	"testing"
 )
 
@@ -19,7 +18,7 @@ func TestALinkedItemCopiesItsDonorsRowOnly(t *testing.T) {
 			})
 			subjects := map[string]GithubWorkItemDerivationSubject{
 				"pr":    {WorkItemID: "pr", Provider: provider, OrgID: "org"},
-				"donor": {WorkItemID: "donor", Provider: provider, Type: pullRequestType(provider), RepoID: &repoD, OrgID: "org"},
+				"donor": {WorkItemID: "donor", Provider: provider, RepoID: &repoD, Type: "issue", OrgID: "org"},
 			}
 			edges := []GithubWorkItemDerivationDependencyEdge{{SourceWorkItemID: "pr", TargetWorkItemID: "donor", RelationshipType: "relates_to"}}
 			for _, tc := range []struct {
@@ -54,12 +53,21 @@ func TestALinkedItemCopiesItsDonorsRowOnly(t *testing.T) {
 					derived.LinkedIssue, derived.LinkedIssueEvidence = nil, nil
 				}
 			}
+			// The reference shape resolves the donors itself. An issue gets no team from its own repository, so an
+			// issue donor gives nothing here; a pull or merge request donor would resolve through the repository
+			// owner but is refused as a donor (the donor of a linked_issue row must be an issue).
 			index, _, _ := derived.BuildLinkedIssueIndex(provider, subjects, edges, nil)
-			if pullRequestType(provider) == "" {
-				return // a Jira or Linear donor is an issue: its own repo_id gives no team
+			if inherited, ok := index["pr"]; ok {
+				t.Errorf("the reference shape gives the pull request %v from an issue donor with only a repository", inherited)
 			}
-			if got := fmt.Sprint(index["pr"][0]); got != "team-context" {
-				t.Errorf("the reference shape resolves the donor in this context: %q, want team-context", got)
+			if prType := pullRequestType(provider); prType != "" {
+				prDonor := subjects["donor"]
+				prDonor.Type = prType
+				subjects["donor"] = prDonor
+				index, _, _ := derived.BuildLinkedIssueIndex(provider, subjects, edges, nil)
+				if inherited, ok := index["pr"]; ok {
+					t.Errorf("the reference shape gives the pull request %v from a pull request donor, want none", inherited)
+				}
 			}
 		})
 	}
@@ -73,7 +81,7 @@ func TestTwoEdgesToOneDonorNameOneRelationship(t *testing.T) {
 	derived := NewGitHubWorkItemDerivationContext(GithubWorkItemDerivationFacts{})
 	subjects := map[string]GithubWorkItemDerivationSubject{
 		"pr":         {WorkItemID: "pr", Provider: "github", OrgID: "org"},
-		"jira:ENG-1": {WorkItemID: "jira:ENG-1", Provider: "jira", OrgID: "org"},
+		"jira:ENG-1": {WorkItemID: "jira:ENG-1", Provider: "jira", Type: "issue", OrgID: "org"},
 	}
 	rows := map[string]GithubWorkItemDerivationDonorRow{"jira:ENG-1": {TeamID: "team-row", Source: "project_ownership"}}
 	edges := []GithubWorkItemDerivationDependencyEdge{
@@ -107,7 +115,7 @@ func TestAStoredDonorRowBindsTheTeamOfTheDonorsProvider(t *testing.T) {
 			})
 			subjects := map[string]GithubWorkItemDerivationSubject{
 				"ghpr:acme/api#7": {WorkItemID: "ghpr:acme/api#7", Provider: "github", Type: "pr", OrgID: "org"},
-				"jira:ENG-1":      {WorkItemID: "jira:ENG-1", Provider: "jira", OrgID: "org"},
+				"jira:ENG-1":      {WorkItemID: "jira:ENG-1", Provider: "jira", Type: "issue", OrgID: "org"},
 			}
 			edges := []GithubWorkItemDerivationDependencyEdge{{SourceWorkItemID: "ghpr:acme/api#7", TargetWorkItemID: "jira:ENG-1", RelationshipType: "relates_to"}}
 			rows := map[string]GithubWorkItemDerivationDonorRow{"jira:ENG-1": {TeamID: "shared-id", Source: "project_ownership"}}
@@ -143,8 +151,8 @@ func TestAnInactiveDonorNeverHidesAnotherLinkedDonor(t *testing.T) {
 				})
 				subjects := map[string]GithubWorkItemDerivationSubject{
 					"pr":      {WorkItemID: "pr", Provider: itemProvider, Type: pullRequestType(itemProvider), OrgID: "org"},
-					"a-donor": {WorkItemID: "a-donor", Provider: donorProvider, OrgID: "org"},
-					"b-donor": {WorkItemID: "b-donor", Provider: donorProvider, OrgID: "org"},
+					"a-donor": {WorkItemID: "a-donor", Provider: donorProvider, Type: "issue", OrgID: "org"},
+					"b-donor": {WorkItemID: "b-donor", Provider: donorProvider, Type: "issue", OrgID: "org"},
 				}
 				edges := []GithubWorkItemDerivationDependencyEdge{
 					{SourceWorkItemID: "pr", TargetWorkItemID: "a-donor", RelationshipType: "relates_to"},
@@ -184,7 +192,7 @@ func TestADonorsAdminTeamKeepsItsIdentity(t *testing.T) {
 			})
 			subjects := map[string]GithubWorkItemDerivationSubject{
 				"ghpr:acme/api#7": {WorkItemID: "ghpr:acme/api#7", Provider: "github", Type: "pr", OrgID: "org"},
-				"donor":           {WorkItemID: "donor", Provider: provider, ProjectKey: &key, OrgID: "org"},
+				"donor":           {WorkItemID: "donor", Provider: provider, ProjectKey: &key, Type: "issue", OrgID: "org"},
 			}
 			own := derived.OwnDonorRows(subjects, map[string]struct{}{"donor": {}})
 			if own["donor"].TeamName != "Admin donor team" || own["donor"].TeamProvider != "" {
@@ -238,7 +246,7 @@ func TestAStoredAdminDonorRowKeepsItsIdentity(t *testing.T) {
 				})
 				subjects := map[string]GithubWorkItemDerivationSubject{
 					"ghpr:acme/api#7": {WorkItemID: "ghpr:acme/api#7", Provider: "github", Type: "pr", OrgID: "org"},
-					"donor":           {WorkItemID: "donor", Provider: provider, OrgID: "org"},
+					"donor":           {WorkItemID: "donor", Provider: provider, Type: "issue", OrgID: "org"},
 				}
 				edges := []GithubWorkItemDerivationDependencyEdge{{SourceWorkItemID: "ghpr:acme/api#7", TargetWorkItemID: "donor", RelationshipType: "relates_to"}}
 				rows := map[string]GithubWorkItemDerivationDonorRow{"donor": {TeamID: "shared", TeamName: tc.storedName, Source: "issue_project"}}
@@ -289,7 +297,7 @@ func TestAStoredDonorRowPrefersAnActiveTeamOfTheDonorsProvider(t *testing.T) {
 			derived := NewGitHubWorkItemDerivationContext(GithubWorkItemDerivationFacts{Teams: tc.teams})
 			subjects := map[string]GithubWorkItemDerivationSubject{
 				"ghpr:acme/api#7": {WorkItemID: "ghpr:acme/api#7", Provider: "github", Type: "pr", OrgID: "org"},
-				"donor":           {WorkItemID: "donor", Provider: "jira", OrgID: "org"},
+				"donor":           {WorkItemID: "donor", Provider: "jira", Type: "issue", OrgID: "org"},
 			}
 			edges := []GithubWorkItemDerivationDependencyEdge{{SourceWorkItemID: "ghpr:acme/api#7", TargetWorkItemID: "donor", RelationshipType: "relates_to"}}
 			rows := map[string]GithubWorkItemDerivationDonorRow{"donor": {TeamID: "shared", TeamName: "Platform", Source: "project_ownership"}}

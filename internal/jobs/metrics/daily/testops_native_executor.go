@@ -142,9 +142,12 @@ func (executor *TestopsPipelineExecutor) ComputeFamily(
 	if err != nil {
 		return 0, err
 	}
+	// computed_at is a whole-second DateTime: the stale cutoff is taken from the value the row stores.
+	computedAt := scope.computedAt.Truncate(time.Second)
 	var metrics []testops.PipelineMetric
 	for _, repoID := range scope.repoIDs {
 		accumulator := testops.NewPipelineAccumulator(repoID, repoID.String(), scope.resolver)
+		accumulator.MeasureStaleAsOf(computedAt)
 		if err := loadNativeTestopsPipelineRuns(
 			ctx, executor.conn, accumulator, run.OrganizationID, repoID, scope.start, scope.end,
 		); err != nil {
@@ -158,7 +161,7 @@ func (executor *TestopsPipelineExecutor) ComputeFamily(
 		}
 	}
 	return writeTestopsPipelineMetrics(
-		ctx, executor.conn, run.OrganizationID, scope.day, scope.computedAt, metrics)
+		ctx, executor.conn, run.OrganizationID, scope.day, computedAt, metrics)
 }
 
 // -----------------------------------------------------------------------

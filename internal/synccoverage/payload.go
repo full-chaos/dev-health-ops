@@ -85,6 +85,7 @@ func buildPayload(input payloadInput) (projectionPayload, error) {
 			pairWindows := byPair[key]
 			successes := filterWindows(pairWindows, "success")
 			failures := filterWindows(pairWindows, "failed")
+			closedRanges := closedRangesFromWindows(filterWindows(pairWindows, statusClosedWithReason))
 			requested := append(intervalsFromWindows(pairWindows), backfillByPair[key]...)
 			requested = mergeIntervals(requested)
 			covered := mergeIntervals(intervalsFromWindows(successes))
@@ -99,7 +100,7 @@ func buildPayload(input payloadInput) (projectionPayload, error) {
 			_, running := input.ActivePairs[key]
 			pairs = append(pairs, pairCoverage{
 				SourceID: sourceID, DatasetKey: dataset, Requested: requested, Covered: covered,
-				Gaps: gaps, StaleRanges: staleRanges, FailedRanges: failedRanges,
+				Gaps: gaps, StaleRanges: staleRanges, FailedRanges: failedRanges, ClosedRanges: closedRanges,
 				CoveredThrough: coveredThrough,
 				Status: statusFromParts(statusParts{FailedCount: len(failedRanges), GapCount: len(gaps),
 					StaleStatus: staleStatus, HasData: len(requested) > 0 || len(covered) > 0, Running: running}),
@@ -143,13 +144,17 @@ func buildPayload(input payloadInput) (projectionPayload, error) {
 			"gaps":             intervalPayloads(dataset.Gaps),
 			"stale_ranges":     intervalPayloads(dataset.StaleRanges),
 			"failed_ranges":    intervalPayloads(dataset.FailedRanges),
+			// CHAOS-13988: covered windows whose only lost reports were
+			// closed with a reason. Additive: payloads stored before it lack
+			// the key, so projectionVersion is unchanged.
+			"closed_with_reason_ranges": closedRangePayloads(dataset.ClosedRanges),
 		})
 	}
 	for _, key := range notEnabledDatasets(input.Config, input.Scope) {
 		datasetPayload = append(datasetPayload, map[string]any{
 			"dataset_key": key, "status": "not_enabled", "covered_through": nil,
 			"requested_ranges": []any{}, "covered_ranges": []any{}, "gaps": []any{},
-			"stale_ranges": []any{}, "failed_ranges": []any{},
+			"stale_ranges": []any{}, "failed_ranges": []any{}, "closed_with_reason_ranges": []any{},
 		})
 	}
 
@@ -270,6 +275,7 @@ func buildDatasetCoverage(keys []string, pairs []pairCoverage) []datasetCoverage
 			item.Gaps = append(item.Gaps, pair.Gaps...)
 			item.StaleRanges = append(item.StaleRanges, pair.StaleRanges...)
 			item.FailedRanges = append(item.FailedRanges, pair.FailedRanges...)
+			item.ClosedRanges = append(item.ClosedRanges, pair.ClosedRanges...)
 			if pair.CoveredThrough != nil && (item.CoveredThrough == nil || pair.CoveredThrough.After(*item.CoveredThrough)) {
 				value := *pair.CoveredThrough
 				item.CoveredThrough = &value
@@ -288,6 +294,8 @@ func buildDatasetCoverage(keys []string, pairs []pairCoverage) []datasetCoverage
 		item.Gaps = mergeIntervalsBySourceScope(item.Gaps)
 		item.StaleRanges = mergeIntervals(item.StaleRanges)
 		item.FailedRanges = mergeIntervals(item.FailedRanges)
+		// Like gaps, closed ranges keep their source scope (and their reasons).
+		item.ClosedRanges = mergeClosedRanges(item.ClosedRanges)
 		item.Status = statusFromParts(statusParts{FailedCount: len(item.FailedRanges), GapCount: len(item.Gaps),
 			StaleStatus: rollupStaleStatus(statuses), HasData: len(item.Requested) > 0 || len(item.Covered) > 0,
 			Running: running && !stale})
@@ -345,6 +353,30 @@ func intervalPayloads(intervals []coverageInterval) []any {
 			item["run_ids"] = interval.RunIDs
 		}
 		result = append(result, item)
+	}
+	return result
+}
+
+func closedRangesFromWindows(windows []unitWindow) []closedRange {
+	result := make([]closedRange, 0, len(windows))
+	for _, window := range windows {
+		result = append(result, closedRange{
+			Interval: coverageInterval{Since: window.Since, Before: window.Before, SourceIDs: []string{window.SourceID}},
+			Reasons:  window.Reasons,
+		})
+	}
+	return mergeClosedRanges(result)
+}
+
+// closedRangePayloads is the closed_with_reason_ranges list: since, before,
+// source_ids and the sorted reasons of each range.
+func closedRangePayloads(ranges []closedRange) []any {
+	result := make([]any, 0, len(ranges))
+	for _, item := range ranges {
+		result = append(result, map[string]any{
+			"since": isoTime(item.Interval.Since), "before": isoTime(item.Interval.Before),
+			"source_ids": append([]string{}, uniqueSorted(item.Interval.SourceIDs)...), "reasons": append([]string{}, item.Reasons...),
+		})
 	}
 	return result
 }

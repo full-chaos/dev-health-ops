@@ -163,12 +163,12 @@ func githubTestsRunLossReasons(before, after githubTestsRunLossCounts, expired i
 	return reasons
 }
 
-// githubTestsAdmittedReports counts the admitted artifacts that hold report rows: an archive read whole with no report in it is
-// not a report source of the run.
+// githubTestsAdmittedReports counts the admitted artifacts that hold a report parsed whole (a zero-test report included): an
+// archive read whole with no report in it is not a report source of the run.
 func githubTestsAdmittedReports(parsed []githubTestsParsedReport, admitted []int) int {
 	count := 0
 	for _, index := range admitted {
-		if parsed[index].rows() > 0 {
+		if parsed[index].Reports > 0 {
 			count++
 		}
 	}

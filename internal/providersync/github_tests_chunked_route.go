@@ -2157,8 +2157,8 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 						}
 						// Hold the parsed rows until the run is decided; an artifact that would take the held rows past
 						// githubTestsMaxHeldReportRowsPerRun is skipped whole before it is held.
-						held := githubTestsParsedReport{ID: artifact.ID, Name: artifact.Name, Suites: rows.Suites, Cases: rows.Cases, Coverage: rows.Coverage}
-						if held.rows() == 0 && len(rows.SkippedArtifacts) == 0 && len(reportIncomplete) == 0 {
+						held := githubTestsParsedReport{ID: artifact.ID, Name: artifact.Name, Suites: rows.Suites, Cases: rows.Cases, Coverage: rows.Coverage, Reports: rows.ReportsRead}
+						if held.Reports == 0 && len(rows.SkippedArtifacts) == 0 && len(reportIncomplete) == 0 {
 							nonReportArchives++ // read whole and held no report: not a report source of the run (CHAOS-13826)
 						}
 						if heldRows+held.rows() > githubTestsMaxHeldReportRowsPerRun {

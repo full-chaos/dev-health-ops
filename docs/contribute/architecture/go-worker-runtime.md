@@ -451,6 +451,12 @@ and retry it with a bounded backfill (`POST
 `sync_watermarks`, see [ingestion-and-backfills](../../operate/run/ingestion-and-backfills.md))
 scoped to the affected repo and the marker's run window.
 
+Two in-archive member skips are recorded the same way: `compression_ratio`
+(a report member over the compression-ratio guard) and `archive_entry_cap`
+(report members past the per-archive entry cap). Both are non-blocking
+`report_member` causes that advance the watermark, so the run reads
+`reports_complete=false` instead of complete.
+
 `dev_health_cicd_partial_success_total{reason}` counts, at
 unit-completion time, every cicd/tests unit that advanced its watermark while
 still carrying incomplete evidence — the UNIT-level view of "success, but with

@@ -156,6 +156,14 @@ type Observation struct {
 	// the expected signal of provider failures being retried, not a fault by
 	// itself; watch it alongside sync_run_reference_discoveries.status.
 	DiscoveryRearmed int64
+	// PostSyncRedriveRearmed and PostSyncRedriveSkippedWindow are the
+	// CHAOS-14115 re-drive outcome EVENTS of this pass: exhausted post_sync
+	// deliveries on terminal runs that the terminal delivery repair re-armed
+	// (also counted in ExhaustedDeliveriesRecovered), and those it marked
+	// instead because they were older than the re-drive window. Each row is
+	// counted once. The read-only Observer leaves both zero.
+	PostSyncRedriveRearmed       int64
+	PostSyncRedriveSkippedWindow int64
 	// RunawayMeasured and UnreclaimableMeasured say whether this pass actually
 	// TOOK each measurement, as opposed to reporting a zero it never made.
 	//

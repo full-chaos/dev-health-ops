@@ -188,10 +188,14 @@ type Loop struct {
 	// already happened, and the next step's zero would erase the only
 	// evidence a stuck discovery retry was ever recovered.
 	discoveryRearmed uint64
-	lastOK           time.Time
-	up               bool
-	errors           chan error
-	recorderBusy     chan struct{}
+	// postSyncRearmed and postSyncSkippedWindow accumulate the CHAOS-14115
+	// re-drive outcome events for the same reason.
+	postSyncRearmed       uint64
+	postSyncSkippedWindow uint64
+	lastOK                time.Time
+	up                    bool
+	errors                chan error
+	recorderBusy          chan struct{}
 
 	// stepObserved is a test-only synchronization hook (CHAOS-4553, porting
 	// the CHAOS-4429 pattern from the sibling internal/joboutbox.ReconcilerLoop):
@@ -526,6 +530,12 @@ func (loop *Loop) accumulateRecoveriesLocked(observation Observation) {
 	loop.discoveryRearmed = accumulateCount(
 		loop.discoveryRearmed, observation.DiscoveryRearmed,
 	)
+	loop.postSyncRearmed = accumulateCount(
+		loop.postSyncRearmed, observation.PostSyncRedriveRearmed,
+	)
+	loop.postSyncSkippedWindow = accumulateCount(
+		loop.postSyncSkippedWindow, observation.PostSyncRedriveSkippedWindow,
+	)
 }
 
 // accumulateCount adds one step's events to a process total, refusing both a
@@ -697,6 +707,8 @@ func (loop *Loop) WritePrometheus(output io.Writer) error {
 	unreclaimableTerminalized := loop.unreclaimableTerminalized
 	unreclaimableSweepFailures := loop.unreclaimableSweepFailures
 	discoveryRearmed := loop.discoveryRearmed
+	postSyncRearmed := loop.postSyncRearmed
+	postSyncSkippedWindow := loop.postSyncSkippedWindow
 	lastOK := loop.lastOK
 	up := loop.up
 	now := loop.clock.Now()
@@ -723,6 +735,9 @@ func (loop *Loop) WritePrometheus(output io.Writer) error {
 	}
 	fmt.Fprintf(&text, "# HELP sync_dispatch_exhausted_delivery_recoveries_total Coordinator deliveries reclaimed after River spent their whole attempt budget.\n# TYPE sync_dispatch_exhausted_delivery_recoveries_total counter\nsync_dispatch_exhausted_delivery_recoveries_total %d\n", exhaustedRecoveries)
 	fmt.Fprintf(&text, "# HELP sync_dispatch_discovery_rearmed_total reference_discovery sync_dispatch_outbox rows the materializer reset from a stranded 'dispatched' state back to 'pending' (CHAOS-4357). A sustained nonzero rate is the expected signal of provider failures being retried -- watch it alongside sync_run_reference_discoveries.status, not as a fault by itself.\n# TYPE sync_dispatch_discovery_rearmed_total counter\nsync_dispatch_discovery_rearmed_total %d\n", discoveryRearmed)
+	text.WriteString("# HELP sync_dispatch_post_sync_redrive_total Exhausted post_sync deliveries on terminal sync runs: rearmed = re-armed for a new delivery inside the re-drive window, skipped_window = older than the window, marked and left as they are (CHAOS-14115).\n# TYPE sync_dispatch_post_sync_redrive_total counter\n")
+	fmt.Fprintf(&text, "sync_dispatch_post_sync_redrive_total{outcome=%q} %d\n", "rearmed", postSyncRearmed)
+	fmt.Fprintf(&text, "sync_dispatch_post_sync_redrive_total{outcome=%q} %d\n", "skipped_window", postSyncSkippedWindow)
 	// CHAOS-4097. The two gauges are the alertable pair: a runaway count above
 	// zero says a run is looping, and a failure counter that climbs says the
 	// thing which would have told you is broken. Reading either one alone can

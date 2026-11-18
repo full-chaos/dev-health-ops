@@ -780,6 +780,8 @@ func (pipeline *MutationPipeline) Step(
 			terminal.RescueOnlyCancelsRecovered < 0 ||
 			terminal.RescueOnlyCancelsRecovered > terminal.Recovered ||
 			terminal.ExhaustedRecovered+terminal.RescueOnlyCancelsRecovered > terminal.Recovered ||
+			terminal.PostSyncRearmed < 0 || terminal.PostSyncRearmed > terminal.ExhaustedRecovered ||
+			terminal.PostSyncSkippedWindow < 0 || terminal.PostSyncSkippedWindow > limit ||
 			terminal.Recovered > limit {
 			slog.Error(
 				"syncreconciler.stage_failed",
@@ -790,6 +792,8 @@ func (pipeline *MutationPipeline) Step(
 			pipeline.stages.recordFailure(StageTerminalDeliveryRepair)
 		} else {
 			recovered.ExhaustedDeliveriesRecovered = int64(terminal.ExhaustedRecovered)
+			recovered.PostSyncRedriveRearmed = int64(terminal.PostSyncRearmed)
+			recovered.PostSyncRedriveSkippedWindow = int64(terminal.PostSyncSkippedWindow)
 			// A rescue-only cancel is a registry or queue-routing fault: the job
 			// was inserted onto a queue whose client does not execute that kind.
 			// Unlike the other two recoveries it will repeat deterministically
@@ -1044,6 +1048,8 @@ func (pipeline *MutationPipeline) Step(
 	observation.UnreclaimableTerminalized = recovered.UnreclaimableTerminalized
 	observation.UnreclaimableSweepFailures = recovered.UnreclaimableSweepFailures
 	observation.DiscoveryRearmed = recovered.DiscoveryRearmed
+	observation.PostSyncRedriveRearmed = recovered.PostSyncRedriveRearmed
+	observation.PostSyncRedriveSkippedWindow = recovered.PostSyncRedriveSkippedWindow
 	observation.RunawayMeasured = recovered.RunawayMeasured
 	observation.UnreclaimableMeasured = recovered.UnreclaimableMeasured
 	if observerErr != nil {

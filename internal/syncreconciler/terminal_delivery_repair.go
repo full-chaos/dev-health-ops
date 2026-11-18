@@ -41,7 +41,18 @@ const (
 	// indistinguishable from a rescue or an exhausted budget in the record an
 	// operator reads.
 	riverRescueOnlyCancelEvidence = "river_rescue_only_cancel"
+	// riverDeliveryExhaustedOutsideWindowEvidence marks an exhausted post_sync
+	// delivery on a terminal run that is older than postSyncRedriveWindow. The
+	// row stays 'dispatched' with its delivery linkage; the mark exists so each
+	// such row is counted once, across replicas and restarts.
+	riverDeliveryExhaustedOutsideWindowEvidence = "river_delivery_exhausted_outside_window"
 )
+
+// postSyncRedriveWindow bounds the post_sync re-drive by the outbox row's
+// created_at, which the finalize arm sets once to the run's completion time.
+// It matches the materializer's postSyncRebuildWindow, and it caps both the
+// first-deploy re-arm of historical rows and a deterministic re-drive loop.
+const postSyncRedriveWindow = 7 * 24 * time.Hour
 
 var riverSchemaPattern = regexp.MustCompile(`^[a-z_][a-z0-9_]{0,62}$`)
 
@@ -69,6 +80,14 @@ type TerminalDeliveryRepairResult struct {
 	// the numbers an operator reads. It is ALSO included in Recovered, which
 	// stays the total across every branch.
 	ReadyFinalizersRecovered int
+	// PostSyncRearmed is the subset of ExhaustedRecovered that is a post_sync
+	// delivery on a terminal run, re-armed inside postSyncRedriveWindow
+	// (CHAOS-14115).
+	PostSyncRearmed int
+	// PostSyncSkippedWindow counts exhausted post_sync deliveries on terminal
+	// runs that are older than postSyncRedriveWindow and were marked, not
+	// re-armed, on this pass. It is not part of Recovered.
+	PostSyncSkippedWindow int
 }
 
 // TerminalDeliveryRepair restores a durable dispatch intent when River itself
@@ -145,6 +164,8 @@ type TerminalDeliveryRepairResult struct {
 type TerminalDeliveryRepair struct {
 	begin                     beginFunc
 	query                     string
+	postSyncRearmQuery        string
+	postSyncMarkQuery         string
 	coordinator               *pgxpool.Pool
 	readyFinalizeQuery        string
 	otherGenerationQuery      string
@@ -167,6 +188,8 @@ func NewTerminalDeliveryRepair(
 	return &TerminalDeliveryRepair{
 		begin:                     queueControlPool.Begin,
 		query:                     fmt.Sprintf(repairTerminalRiverDeliverySQL, jobTable),
+		postSyncRearmQuery:        fmt.Sprintf(rearmExhaustedPostSyncSQL, jobTable),
+		postSyncMarkQuery:         fmt.Sprintf(markExhaustedPostSyncOutsideWindowSQL, jobTable),
 		coordinator:               coordinatorPool,
 		readyFinalizeQuery:        fmt.Sprintf(selectReadyFinalizeSQL, jobTable),
 		otherGenerationQuery:      fmt.Sprintf(selectOtherGenerationFinalizeSQL, jobTable),
@@ -277,6 +300,21 @@ func (repair *TerminalDeliveryRepair) stepRiverTerminalBranches(
 		return TerminalDeliveryRepairResult{}, ErrUnavailable
 	}
 	rows.Close()
+	cutoff := now.UTC().Add(-postSyncRedriveWindow)
+	rearmed, err := tx.Exec(ctx, repair.postSyncRearmQuery,
+		now.UTC(), limit-result.Recovered, cutoff, riverDeliveryExhaustedEvidence)
+	if err != nil || rearmed.RowsAffected() > int64(limit-result.Recovered) {
+		return TerminalDeliveryRepairResult{}, ErrUnavailable
+	}
+	result.PostSyncRearmed = int(rearmed.RowsAffected())
+	result.ExhaustedRecovered += result.PostSyncRearmed
+	result.Recovered += result.PostSyncRearmed
+	marked, err := tx.Exec(ctx, repair.postSyncMarkQuery,
+		now.UTC(), limit, cutoff, riverDeliveryExhaustedOutsideWindowEvidence)
+	if err != nil || marked.RowsAffected() > int64(limit) {
+		return TerminalDeliveryRepairResult{}, ErrUnavailable
+	}
+	result.PostSyncSkippedWindow = int(marked.RowsAffected())
 	if err := tx.Commit(ctx); err != nil {
 		return TerminalDeliveryRepairResult{}, ErrUnavailable
 	}
@@ -400,6 +438,7 @@ WITH candidates AS (
 			END
 		AND job.kind = outbox.kind
 	WHERE outbox.status = 'dispatched'
+		AND outbox.kind <> 'post_sync'
 		AND outbox.dispatched_transport = 'river'
 		AND outbox.dispatched_route_generation = route.generation
 		AND route.transport = 'river'
@@ -440,4 +479,114 @@ SET status = 'pending',
 FROM candidates
 WHERE outbox.id = candidates.id
 RETURNING outbox.id::text, candidates.recovery_code
+`
+
+// The two post_sync statements below (CHAOS-14115). post_sync is armed only
+// AFTER its run went terminal (native_finalize_sync_run.go), so the live-run
+// rule above would never reach it, and nothing closes a post_sync row, so a
+// scan from the outbox side would read every post_sync delivery ever made.
+// Both statements are driven from River's side instead: the exhausted
+// post_sync jobs (discarded, attempt budget spent), which River keeps only for
+// its discarded-job retention. The outbox row is found through the job's own
+// args by the (sync_run_id, kind) unique key, and must still be linked to that
+// exact job at the current route generation -- the same linkage proof the
+// statement above uses. The sync_run_id cast is guarded by a CASE for the
+// reason the transport_job_id cast above is.
+//
+// Only the exhausted proof re-arms a post_sync row: a discard with attempts
+// left is a worker's permanent verdict, and a rescue or rescue-only cancel of a
+// post_sync job is not a shape this change was ruled for. The window ($3) is on
+// outbox.created_at, set once when the finalize armed the row. The re-armed
+// delivery is fenced by the attempt the next claim assigns (transport_fence.go).
+const rearmExhaustedPostSyncSQL = `
+WITH candidates AS (
+	SELECT outbox.id
+	FROM %s AS job
+	JOIN public.sync_dispatch_outbox AS outbox
+		ON outbox.sync_run_id = CASE
+				WHEN job.args ->> 'sync_run_id' ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+				THEN (job.args ->> 'sync_run_id')::uuid
+			END
+		AND outbox.kind = job.kind
+		AND outbox.transport_job_id = job.id::text
+	JOIN public.sync_runs AS run
+		ON run.id = outbox.sync_run_id
+	JOIN public.sync_dispatch_transport_routes AS route
+		ON route.kind = outbox.kind
+	WHERE job.kind = 'post_sync'
+		AND job.state = 'discarded'
+		AND job.finalized_at IS NOT NULL
+		AND job.attempt >= job.max_attempts
+		AND cardinality(job.errors) > 0
+		AND outbox.status = 'dispatched'
+		AND outbox.dispatched_transport = 'river'
+		AND outbox.dispatched_route_generation = route.generation
+		AND outbox.created_at >= $3
+		AND route.transport = 'river'
+		AND route.paused = FALSE
+		AND run.status IN ('success', 'partial_failed', 'failed')
+	ORDER BY outbox.dispatched_at, outbox.id
+	FOR UPDATE OF outbox, job SKIP LOCKED
+	LIMIT $2::int
+)
+UPDATE public.sync_dispatch_outbox AS outbox
+SET status = 'pending',
+	available_at = $1,
+	last_error = $4,
+	dispatched_at = NULL,
+	dispatched_transport = NULL,
+	dispatched_route_generation = NULL,
+	transport_job_id = NULL,
+	claim_token = NULL,
+	claim_expires_at = NULL,
+	claim_transport = NULL,
+	claim_route_generation = NULL,
+	updated_at = $1
+FROM candidates
+WHERE outbox.id = candidates.id
+`
+
+// markExhaustedPostSyncOutsideWindowSQL stamps, and so counts once, each
+// exhausted post_sync delivery on a terminal run whose row is older than the
+// window. Only last_error and updated_at change: the row stays 'dispatched'
+// with its delivery linkage (the route-fence trigger keeps the dispatched
+// columns because last_error is not 'feature_disabled'), and a stamped row is
+// never stamped again.
+const markExhaustedPostSyncOutsideWindowSQL = `
+WITH candidates AS (
+	SELECT outbox.id
+	FROM %s AS job
+	JOIN public.sync_dispatch_outbox AS outbox
+		ON outbox.sync_run_id = CASE
+				WHEN job.args ->> 'sync_run_id' ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+				THEN (job.args ->> 'sync_run_id')::uuid
+			END
+		AND outbox.kind = job.kind
+		AND outbox.transport_job_id = job.id::text
+	JOIN public.sync_runs AS run
+		ON run.id = outbox.sync_run_id
+	JOIN public.sync_dispatch_transport_routes AS route
+		ON route.kind = outbox.kind
+	WHERE job.kind = 'post_sync'
+		AND job.state = 'discarded'
+		AND job.finalized_at IS NOT NULL
+		AND job.attempt >= job.max_attempts
+		AND cardinality(job.errors) > 0
+		AND outbox.status = 'dispatched'
+		AND outbox.dispatched_transport = 'river'
+		AND outbox.dispatched_route_generation = route.generation
+		AND outbox.created_at < $3
+		AND outbox.last_error IS DISTINCT FROM $4
+		AND route.transport = 'river'
+		AND route.paused = FALSE
+		AND run.status IN ('success', 'partial_failed', 'failed')
+	ORDER BY outbox.created_at, outbox.id
+	FOR UPDATE OF outbox SKIP LOCKED
+	LIMIT $2::int
+)
+UPDATE public.sync_dispatch_outbox AS outbox
+SET last_error = $4,
+	updated_at = $1
+FROM candidates
+WHERE outbox.id = candidates.id
 `

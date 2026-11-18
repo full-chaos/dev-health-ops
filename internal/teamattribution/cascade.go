@@ -301,7 +301,11 @@ type GithubWorkItemDerivationContext struct {
 	// copies. An item with no entry keeps the reference evidence
 	// "linked_issue=<item id>".
 	LinkedIssueEvidence map[string]string
-	StoredEdgeMerge     GithubWorkItemStoredEdgeMergeObservation
+	// LinkTiers: the provenance tier of the work_graph_issue_pr link of record
+	// of each (pull request, issue) pair. BuildLinkedIssueIndexFromRows reads
+	// it for an item whose source is a pull or merge request.
+	LinkTiers       map[LinkPair]string
+	StoredEdgeMerge GithubWorkItemStoredEdgeMergeObservation
 	// GitLabPathsByWorkItem: item id -> the paths its GitLab repos row answers to
 	// (AnchorGitLabSubjectProjects), for a subject built from a freshly written
 	// row, which carries none. resolve fills them in when the subject has none.
@@ -364,6 +368,10 @@ type GithubWorkItemDerivationEdgeKey struct {
 // (mergeStoredInheritableWorkItemEdges, githubWorkItemDerivationDonorTargets,
 // loadWorkItemDerivationContextForProvider) convert to this shape at the call
 // boundary.
+// LinkPair names one pull request (or merge request) work item and one issue
+// work item: the grain of a work_graph_issue_pr link of record.
+type LinkPair struct{ PullRequest, Issue string }
+
 type GithubWorkItemDerivationDependencyEdge struct {
 	SourceWorkItemID string
 	TargetWorkItemID string

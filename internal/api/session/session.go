@@ -76,9 +76,9 @@ type Deps struct {
 
 type handlers struct {
 	Deps
-	loginLimiter, refreshLimiter, validateLimiter                *httpapi.KeyedLimiter
-	registerLimiter, verifyLimiter, resendLimiter, forgotLimiter *httpapi.KeyedLimiter
-	changePasswordLimiter                                        *httpapi.KeyedLimiter
+	loginLimiter, refreshLimiter, refreshAddrLimiter, validateLimiter *httpapi.KeyedLimiter
+	registerLimiter, verifyLimiter, resendLimiter, forgotLimiter      *httpapi.KeyedLimiter
+	changePasswordLimiter                                             *httpapi.KeyedLimiter
 }
 
 func (d Deps) withDefaults() Deps {
@@ -123,6 +123,7 @@ func Routes(deps Deps) []httpapi.Route {
 	h := handlers{Deps: defaults,
 		loginLimiter:          httpapi.NewKeyedLimiter(defaults.Limits, loginLimit),
 		refreshLimiter:        httpapi.NewKeyedLimiter(defaults.Limits, refreshLimit),
+		refreshAddrLimiter:    httpapi.NewKeyedLimiter(defaults.Limits, refreshAddrLimit),
 		validateLimiter:       httpapi.NewKeyedLimiter(defaults.Limits, validateLimit),
 		registerLimiter:       httpapi.NewKeyedLimiter(defaults.Limits, defaults.RegisterLimit),
 		verifyLimiter:         httpapi.NewKeyedLimiter(defaults.Limits, verifyLimit),
@@ -142,7 +143,8 @@ func Routes(deps Deps) []httpapi.Route {
 			httpapi.ValidateThenLimitDependency(validateLogin, h.loginLimiter, forwardedIPKey, h.Write)(inner("/api/v1/auth/login", h.login)))},
 		{Method: http.MethodPost, Pattern: "/api/v1/auth/social-login", Handler: guard.BodyFirst(policy.Public, inner("/api/v1/auth/social-login", h.socialLogin))},
 		{Method: http.MethodPost, Pattern: "/api/v1/auth/refresh", Handler: guard.BodyFirst(policy.Public,
-			httpapi.ValidateThenLimitDependency(validateRefresh, h.refreshLimiter, forwardedIPKey, h.Write)(inner("/api/v1/auth/refresh", h.refreshNotLocal)))},
+			httpapi.ValidateThenLimitDependency(validateRefresh, h.refreshLimiter, refreshTokenKey, retryAfterOnLimit(refreshLimit, h.Write))(
+				httpapi.LimitWithDependency(h.refreshAddrLimiter, addrBucketKey, retryAfterOnLimit(refreshAddrLimit, h.Write))(inner("/api/v1/auth/refresh", h.refreshNotLocal))))},
 		{Method: http.MethodGet, Pattern: "/api/v1/auth/me", Handler: guard.Wrap(policy.Authenticated, inner("/api/v1/auth/me", h.me))},
 		{Method: http.MethodGet, Pattern: "/api/v1/auth/me/organizations", Handler: guard.Wrap(policy.Authenticated, inner("/api/v1/auth/me/organizations", h.myOrganizations))},
 		{Method: http.MethodPost, Pattern: "/api/v1/auth/switch-org", Handler: guard.BodyFirst(policy.Authenticated, guard.RefuseImpersonation(inner("/api/v1/auth/switch-org", h.switchOrg)))},

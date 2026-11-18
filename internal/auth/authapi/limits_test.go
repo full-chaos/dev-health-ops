@@ -3,6 +3,7 @@ package authapi
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"log/slog"
@@ -13,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -147,13 +149,14 @@ func TestTheLimitTableIsPinned(t *testing.T) {
 		"change":        {ID: "auth_svc_change_password", Count: 5, Window: time.Hour},
 		"social link":   {ID: "auth_svc_social_link_ip_principal", Count: 10, Window: time.Hour},
 		"refresh":       {ID: "auth_svc_refresh", Count: 10, Window: 15 * time.Minute},
+		"refresh addr":  {ID: "auth_svc_refresh_addr", Count: 100, Window: 15 * time.Minute},
 		"validate":      {ID: "auth_svc_validate", Count: httpapi.ValidateLimitCount, Window: httpapi.ValidateLimitWindow},
 		"switch org":    {ID: "auth_svc_switch_org", Count: 30, Window: 15 * time.Minute},
 	}
 	got := map[string]httpapi.Limit{
 		"login ip": loginIPLimit, "login account": loginAccountLimit, "verify": verifyLimit, "resend": resendLimit,
 		"forgot": forgotLimit, "resend ip": resendIPLimit, "forgot ip": forgotIPLimit, "reset ip": resetIPLimit, "reset token": resetTokenLimit,
-		"change": changePasswordLimit, "social link": socialLinkLimit, "refresh": refreshLimit, "validate": validateLimit,
+		"change": changePasswordLimit, "social link": socialLinkLimit, "refresh": refreshLimit, "refresh addr": refreshAddrLimit, "validate": validateLimit,
 		"switch org": switchOrgLimit,
 	}
 	for name, limit := range want {
@@ -168,8 +171,8 @@ func TestTheLimitTableIsPinned(t *testing.T) {
 
 func TestLimitIDsListEveryLimiter(t *testing.T) {
 	got := LimitIDs()
-	if len(got) != 15 {
-		t.Fatalf("%d ids, want the table's 15", len(got))
+	if len(got) != 16 {
+		t.Fatalf("%d ids, want the table's 16", len(got))
 	}
 	if !slices.Contains(got, registerIPLimit.ID) {
 		t.Fatalf("LimitIDs lacks the register limiter %q", registerIPLimit.ID)
@@ -657,28 +660,159 @@ func TestGoAPIRefusalBodiesAndContentType(t *testing.T) {
 	}
 }
 
+var refreshCredentials atomic.Uint64
+
+// nextCredential is a credential no earlier call returned, so the per-credential budget never refuses it.
+func nextCredential() string {
+	return "dhr1_fresh_" + strconv.FormatUint(refreshCredentials.Add(1), 10)
+}
+
+// refreshAttempt sends a fresh credential each time: it exercises the per-address ceiling, never the per-credential
+// budget.
 func refreshAttempt(h http.Handler, peer, forwarded string) *httptest.ResponseRecorder {
-	return send(h, peer, forwarded, http.MethodPost, PatternCompatRefresh, `{"refresh_token":"`+credential()+`"}`, nil)
+	return send(h, peer, forwarded, http.MethodPost, PatternCompatRefresh, `{"refresh_token":"`+nextCredential()+`"}`, nil)
+}
+
+func refreshWith(h http.Handler, peer, token string) *httptest.ResponseRecorder {
+	return send(h, peer, "", http.MethodPost, PatternCompatRefresh, `{"refresh_token":"`+token+`"}`, nil)
+}
+
+// assertRefreshRateLimited is assertRateLimited for the refresh route: go-api's bytes, and Retry-After the
+// refresh window in seconds (CHAOS-8441).
+func assertRefreshRateLimited(t *testing.T, name string, response *httptest.ResponseRecorder) {
+	t.Helper()
+	if response.Code != http.StatusTooManyRequests {
+		t.Fatalf("%s = %d, want 429: %s", name, response.Code, response.Body)
+	}
+	if got := response.Body.String(); got != `{"detail":{"message":"Rate limit exceeded. Please try again later."}}` {
+		t.Fatalf("%s 429 body is not go-api's: %s", name, got)
+	}
+	if got := response.Header().Get("Retry-After"); got != "900" {
+		t.Fatalf("%s 429 Retry-After = %q, want 900", name, got)
+	}
+	noLeak(t, name, response.Body.String())
+}
+
+func sha256Hex(text string) string {
+	sum := sha256.Sum256([]byte(text))
+	return hex.EncodeToString(sum[:])
+}
+
+// addrCeiling is the per-address refresh ceiling.
+const addrCeiling = 100
+
+func TestCompatRefreshLimitsPerCredential(t *testing.T) {
+	f := newCompatFixture(t)
+	h := trustedProxy(t, f.server)
+	a, b := nextCredential(), nextCredential()
+	for i := 0; i < 10; i++ {
+		if r := refreshWith(h, clientPeer, a); r.Code != http.StatusUnauthorized {
+			t.Fatalf("credential A attempt %d = %d, want 401", i+1, r.Code)
+		}
+	}
+	if r := refreshWith(h, clientPeer, b); r.Code != http.StatusUnauthorized {
+		t.Fatalf("credential B from the same address after A's 10 = %d, want 401 (its own budget)", r.Code)
+	}
+	assertRefreshRateLimited(t, "credential A 11th", refreshWith(h, clientPeer, a))
+	assertRefreshRateLimited(t, "credential A from another address", refreshWith(h, "198.51.100.7:5000", a))
+}
+
+// Nothing another caller sends selects a victim's bucket: forged forwarding values from an untrusted peer, and
+// forwarded values naming the victim's address through the trusted proxy, spend only the attacker's credentials.
+func TestCompatRefreshAnotherCallerCannotDrainAVictimsCredential(t *testing.T) {
+	f := newCompatFixture(t)
+	h := trustedProxy(t, f.server)
+	victim := nextCredential()
+	for i := 0; i < 10; i++ {
+		refreshAttempt(h, "198.51.100.66:5000", "192.0.2.10")
+		refreshAttempt(h, proxyPeer, "192.0.2.10")
+	}
+	if r := send(h, proxyPeer, "192.0.2.10", http.MethodPost, PatternCompatRefresh, `{"refresh_token":"`+victim+`"}`, nil); r.Code != http.StatusUnauthorized {
+		t.Fatalf("the victim's credential after 20 attacker refreshes = %d, want 401 (not limited)", r.Code)
+	}
+}
+
+func TestCompatRefreshRetryAfterOnlyOnTheRefreshRoute(t *testing.T) {
+	f := newCompatFixture(t)
+	h := trustedProxy(t, f.server)
+	for i := 0; i < addrCeiling; i++ {
+		if r := refreshAttempt(h, clientPeer, ""); r.Code != http.StatusUnauthorized {
+			t.Fatalf("attempt %d = %d, want 401", i+1, r.Code)
+		}
+	}
+	assertRefreshRateLimited(t, "the ceiling's refusal", refreshAttempt(h, clientPeer, ""))
+	login := func(i int) *httptest.ResponseRecorder {
+		return send(h, clientPeer, "", http.MethodPost, PatternCompatLogin, loginBody("user"+strconv.Itoa(i)+"@example.com", "wrong password", ""), nil)
+	}
+	for i := 0; i < 20; i++ {
+		login(i)
+	}
+	assertRateLimited(t, "login 21st", login(99))
+}
+
+// The counter keys and every log line at debug level carry neither the credential nor any hash of it.
+func TestCompatRefreshKeysAndLogsCarryNoCredential(t *testing.T) {
+	f := newCompatFixture(t)
+	store := newRecording()
+	f.counters = store
+	f.buildCompat()
+	var global bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&global, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	h := trustedProxy(t, f.server)
+	token, other := nextCredential(), nextCredential()
+	for i := 0; i < 11; i++ {
+		refreshWith(h, clientPeer, token)
+	}
+	refreshWith(h, clientPeer, other)
+	keys := map[string]bool{}
+	for _, hit := range store.hits {
+		if hit.Limit.ID == refreshLimit.ID {
+			keys[hit.Key] = true
+		}
+	}
+	if len(keys) != 2 {
+		t.Fatalf("%d per-credential keys for two credentials, want 2", len(keys))
+	}
+	sum := sha256Hex(token)
+	forbidden := []string{token, other, sum, sum[:32]}
+	for key := range keys {
+		forbidden = append(forbidden, key)
+	}
+	for key := range keys {
+		for _, text := range []string{token, other, sum} {
+			if strings.Contains(key, text) {
+				t.Fatalf("counter key %q carries %q", key, text)
+			}
+		}
+	}
+	logs := f.logs.String() + global.String()
+	for _, text := range forbidden {
+		if strings.Contains(logs, text) {
+			t.Fatalf("a log line carries %q:\n%s", text, logs)
+		}
+	}
 }
 
 func TestCompatRefreshLimitsPerClientAddress(t *testing.T) {
 	f := newCompatFixture(t)
 	h := trustedProxy(t, f.server)
-	for i := 0; i < 10; i++ {
+	for i := 0; i < addrCeiling; i++ {
 		if r := refreshAttempt(h, clientPeer, ""); r.Code != http.StatusUnauthorized {
 			t.Fatalf("attempt %d = %d, want 401", i+1, r.Code)
 		}
 	}
-	assertRateLimited(t, "11th refresh from one address", refreshAttempt(h, clientPeer, ""))
+	assertRefreshRateLimited(t, "101st refresh from one address", refreshAttempt(h, clientPeer, ""))
 	if r := refreshAttempt(h, "198.51.100.7:5000", ""); r.Code != http.StatusUnauthorized {
 		t.Fatalf("another address = %d, want 401", r.Code)
 	}
 	// An untrusted peer cannot pick its bucket; behind the trusted proxy the forwarded client is the key.
-	assertRateLimited(t, "spoofed forwarded address from an untrusted peer", refreshAttempt(h, clientPeer, "192.0.2.200"))
-	for i := 0; i < 10; i++ {
+	assertRefreshRateLimited(t, "spoofed forwarded address from an untrusted peer", refreshAttempt(h, clientPeer, "192.0.2.200"))
+	for i := 0; i < addrCeiling; i++ {
 		refreshAttempt(h, proxyPeer, "198.51.100.50")
 	}
-	assertRateLimited(t, "11th refresh of one forwarded client", refreshAttempt(h, proxyPeer, "198.51.100.50"))
+	assertRefreshRateLimited(t, "101st refresh of one forwarded client", refreshAttempt(h, proxyPeer, "198.51.100.50"))
 	if r := refreshAttempt(h, proxyPeer, "198.51.100.51"); r.Code != http.StatusUnauthorized {
 		t.Fatalf("another client behind the proxy = %d, want 401", r.Code)
 	}
@@ -687,10 +821,10 @@ func TestCompatRefreshLimitsPerClientAddress(t *testing.T) {
 func TestCompatRefreshKeysAnIPv6ClientByItsSlash64(t *testing.T) {
 	f := newCompatFixture(t)
 	h := trustedProxy(t, f.server)
-	for i := 0; i < 10; i++ {
-		refreshAttempt(h, "[2001:db8:1:2::"+string("123456789a"[i])+"]:5000", "")
+	for i := 0; i < addrCeiling; i++ {
+		refreshAttempt(h, "[2001:db8:1:2::"+strconv.FormatInt(int64(i+1), 16)+"]:5000", "")
 	}
-	assertRateLimited(t, "another address inside the same /64", refreshAttempt(h, "[2001:db8:1:2:ffff::9]:5000", ""))
+	assertRefreshRateLimited(t, "another address inside the same /64", refreshAttempt(h, "[2001:db8:1:2:ffff::9]:5000", ""))
 	if r := refreshAttempt(h, "[2001:db8:1:3::1]:5000", ""); r.Code != http.StatusUnauthorized {
 		t.Fatalf("a different /64 = %d, want 401", r.Code)
 	}
@@ -720,7 +854,7 @@ func TestTwoReplicasShareOneRefreshBudget(t *testing.T) {
 		}
 	}
 	for i, replica := range replicas {
-		assertRateLimited(t, "replica "+string(rune('1'+i)), replica.do(http.MethodPost, PatternCompatRefresh, `{"refresh_token":"`+credential()+`"}`, nil))
+		assertRefreshRateLimited(t, "replica "+string(rune('1'+i)), replica.do(http.MethodPost, PatternCompatRefresh, `{"refresh_token":"`+credential()+`"}`, nil))
 	}
 }
 
@@ -730,15 +864,23 @@ func TestCompatRefreshCountsUnderItsOwnAuthSvcIDWithoutTheAddressInTheID(t *test
 	f.counters = store
 	f.buildCompat()
 	refreshAttempt(trustedProxy(t, f.server), clientPeer, "")
-	if len(store.hits) != 1 {
-		t.Fatalf("%d hits, want 1", len(store.hits))
+	if len(store.hits) != 2 {
+		t.Fatalf("%d hits, want 2", len(store.hits))
 	}
-	hit := store.hits[0]
-	if hit.Limit.ID != "auth_svc_refresh" || hit.Limit.Count != 10 || hit.Limit.Window != 15*time.Minute {
-		t.Fatalf("limit = %+v, want auth_svc_refresh 10 per 15 min", hit.Limit)
-	}
-	if hit.Path != "s04" {
-		t.Fatalf("scope = %q, want the neutral code s04", hit.Path)
+	for i, want := range []httpapi.Limit{
+		{ID: "auth_svc_refresh", Count: 10, Window: 15 * time.Minute},
+		{ID: "auth_svc_refresh_addr", Count: 100, Window: 15 * time.Minute},
+	} {
+		hit := store.hits[i]
+		if hit.Limit != want {
+			t.Fatalf("hit %d limit = %+v, want %+v", i, hit.Limit, want)
+		}
+		if hit.Path != "s04" {
+			t.Fatalf("hit %d scope = %q, want the neutral code s04", i, hit.Path)
+		}
+		if strings.Contains(hit.Key, "203.0.113") != (i == 1) {
+			t.Fatalf("hit %d key %q: the address belongs to the ceiling's key only", i, hit.Key)
+		}
 	}
 }
 
@@ -768,31 +910,31 @@ func TestCompatRoutesRefuseToBuildWithoutLimitsEvenWithoutLogin(t *testing.T) {
 
 func TestCompatRefreshTwoClientsThroughTheTrustedProxyKeepSeparateBuckets(t *testing.T) {
 	h := trustedProxy(t, newCompatFixture(t).server)
-	for i := 0; i < 10; i++ {
+	for i := 0; i < addrCeiling; i++ {
 		if r := refreshAttempt(h, proxyPeer, "198.51.100.10"); r.Code != http.StatusUnauthorized {
 			t.Fatalf("client A attempt %d = %d, want 401", i+1, r.Code)
 		}
 	}
-	assertRateLimited(t, "client A 11th", refreshAttempt(h, proxyPeer, "198.51.100.10"))
-	for i := 0; i < 10; i++ {
+	assertRefreshRateLimited(t, "client A 101st", refreshAttempt(h, proxyPeer, "198.51.100.10"))
+	for i := 0; i < addrCeiling; i++ {
 		if r := refreshAttempt(h, proxyPeer, "198.51.100.11"); r.Code != http.StatusUnauthorized {
 			t.Fatalf("client B attempt %d = %d, want 401 (the proxy peer is not the key)", i+1, r.Code)
 		}
 	}
-	assertRateLimited(t, "client B 11th", refreshAttempt(h, proxyPeer, "198.51.100.11"))
+	assertRefreshRateLimited(t, "client B 101st", refreshAttempt(h, proxyPeer, "198.51.100.11"))
 }
 
 func TestCompatRefreshSpoofedForwardedValuesFromADirectClientShareOneBucket(t *testing.T) {
 	h := trustedProxy(t, newCompatFixture(t).server)
-	for i := 0; i < 10; i++ {
+	for i := 0; i < addrCeiling; i++ {
 		if r := refreshAttempt(h, clientPeer, "192.0.2."+strconv.Itoa(i+1)); r.Code != http.StatusUnauthorized {
 			t.Fatalf("attempt %d = %d, want 401", i+1, r.Code)
 		}
 	}
-	for i := 10; i < 40; i++ {
-		assertRateLimited(t, "spoofed value "+strconv.Itoa(i), refreshAttempt(h, clientPeer, "192.0.2."+strconv.Itoa(i+1)))
+	for i := addrCeiling; i < addrCeiling+30; i++ {
+		assertRefreshRateLimited(t, "spoofed value "+strconv.Itoa(i), refreshAttempt(h, clientPeer, "192.0.2."+strconv.Itoa(i+1)))
 	}
-	assertRateLimited(t, "a spoofed chain", refreshAttempt(h, clientPeer, "192.0.2.99, 192.0.2.98"))
+	assertRefreshRateLimited(t, "a spoofed chain", refreshAttempt(h, clientPeer, "192.0.2.99, 192.0.2.98"))
 }
 
 func TestLoginTwoClientsThroughTheTrustedProxyKeepSeparateBuckets(t *testing.T) {
@@ -835,9 +977,8 @@ func TestLoginSpoofedForwardedValuesFromADirectClientShareOneBucket(t *testing.T
 // whatever a client wrote left of it cannot split the bucket, and a second header line extends the same chain.
 func TestAForwardedChainIsKeyedByItsRightMostUntrustedHop(t *testing.T) {
 	h := trustedProxy(t, newCompatFixture(t).server)
-	body := `{"refresh_token":"` + credential() + `"}`
 	post := func(lines ...string) *httptest.ResponseRecorder {
-		request := httptest.NewRequest(http.MethodPost, PatternCompatRefresh, strings.NewReader(body))
+		request := httptest.NewRequest(http.MethodPost, PatternCompatRefresh, strings.NewReader(`{"refresh_token":"`+nextCredential()+`"}`))
 		request.RemoteAddr = proxyPeer
 		for _, line := range lines {
 			request.Header.Add("X-Forwarded-For", line)
@@ -846,18 +987,19 @@ func TestAForwardedChainIsKeyedByItsRightMostUntrustedHop(t *testing.T) {
 		h.ServeHTTP(response, request)
 		return response
 	}
-	for i := 0; i < 5; i++ {
+	half := addrCeiling / 2
+	for i := 0; i < half; i++ {
 		if r := post("203.0.113." + strconv.Itoa(i+1) + ", 198.51.100.1"); r.Code != http.StatusUnauthorized {
 			t.Fatalf("chain %d = %d, want 401", i+1, r.Code)
 		}
 	}
-	for i := 0; i < 5; i++ {
-		if r := post("203.0.113."+strconv.Itoa(i+50), "198.51.100.1"); r.Code != http.StatusUnauthorized {
+	for i := 0; i < addrCeiling-half; i++ {
+		if r := post("203.0.113."+strconv.Itoa(i+half+1), "198.51.100.1"); r.Code != http.StatusUnauthorized {
 			t.Fatalf("two lines %d = %d, want 401", i+1, r.Code)
 		}
 	}
-	assertRateLimited(t, "the 11th request of the right-most hop", post("203.0.113.200, 198.51.100.1"))
-	assertRateLimited(t, "a rotated left entry", post("203.0.113.201, 198.51.100.1"))
+	assertRefreshRateLimited(t, "the 101st request of the right-most hop", post("203.0.113.200, 198.51.100.1"))
+	assertRefreshRateLimited(t, "a rotated left entry", post("203.0.113.201, 198.51.100.1"))
 	if r := post("203.0.113.77, 198.51.100.4"); r.Code != http.StatusUnauthorized {
 		t.Fatalf("another right-most hop = %d, want its own bucket (401)", r.Code)
 	}

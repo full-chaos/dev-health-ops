@@ -74,7 +74,7 @@ func TestNewDrilldownIssuesGetHandlerRequiresAuthContext(t *testing.T) {
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
 	}
-	if got, want := rec.Body.String(), `{"detail":{"message":"Not authenticated"}}`+"\n"; got != want {
+	if got, want := rec.Body.String(), `{"detail":{"message":"Not authenticated"}}`; got != want {
 		t.Fatalf("body = %q, want %q", got, want)
 	}
 }
@@ -144,7 +144,7 @@ func TestNewDrilldownIssuesPostHandlerRequiresAuthContext(t *testing.T) {
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
 	}
-	if got, want := rec.Body.String(), `{"detail":{"message":"Not authenticated"}}`+"\n"; got != want {
+	if got, want := rec.Body.String(), `{"detail":{"message":"Not authenticated"}}`; got != want {
 		t.Fatalf("body = %q, want %q", got, want)
 	}
 }
@@ -286,7 +286,7 @@ func TestNewDrilldownIssuesGetHandlerClickHouseFailureIs503(t *testing.T) {
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
 	}
-	if got, want := rec.Body.String(), `{"detail":"Data unavailable"}`+"\n"; got != want {
+	if got, want := rec.Body.String(), `{"detail":"Data unavailable"}`; got != want {
 		t.Fatalf("body = %q, want %q", got, want)
 	}
 }
@@ -302,7 +302,7 @@ func TestNewDrilldownIssuesPostHandlerClickHouseFailureIs503(t *testing.T) {
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
 	}
-	if got, want := rec.Body.String(), `{"detail":"Data unavailable"}`+"\n"; got != want {
+	if got, want := rec.Body.String(), `{"detail":"Data unavailable"}`; got != want {
 		t.Fatalf("body = %q, want %q", got, want)
 	}
 }
@@ -335,7 +335,7 @@ func TestBuildDrilldownIssuesRouteEntryHandlerRejectsUnknownMethod(t *testing.T)
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
 	}
-	if got, want := rec.Body.String(), `{"detail":"Method Not Allowed"}`+"\n"; got != want {
+	if got, want := rec.Body.String(), `{"detail":"Method Not Allowed"}`; got != want {
 		t.Fatalf("body = %q, want %q", got, want)
 	}
 }

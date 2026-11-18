@@ -11,7 +11,7 @@ import (
 func TestGitLabCICDAndTestsAliasesShareOneCompleteRouteContract(t *testing.T) {
 	wantDestinations := []string{
 		"ci_pipeline_runs", "ci_job_runs", "ci_acceptance_checks",
-		"test_suite_results", "test_case_results", "coverage_snapshots",
+		"test_suite_results", "test_case_results", "coverage_snapshots", "testops_run_report_completeness",
 	}
 	cicd, ok := Descriptor("gitlab", "cicd")
 	if !ok || !cicd.RouteReady || !cicd.Plannable || cicd.Executor != ExecutorNativeGo {

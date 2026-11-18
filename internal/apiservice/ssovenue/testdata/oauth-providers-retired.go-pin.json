@@ -1,0 +1,15 @@
+{
+  "oauth create: GET is 405": "404 {\"detail\":\"Not Found\"}",
+  "oauth create: bad type and config": "404 {\"detail\":\"Not Found\"}",
+  "oauth create: config fields": "404 {\"detail\":\"Not Found\"}",
+  "oauth create: missing config": "404 {\"detail\":\"Not Found\"}",
+  "oauth create: no credential": "404 {\"detail\":\"Not Found\"}",
+  "oauth create: valid": "404 {\"detail\":\"Not Found\"}",
+  "oauth patch: bad": "404 {\"detail\":\"Not Found\"}",
+  "oauth patch: no credential": "404 {\"detail\":\"Not Found\"}",
+  "oauth patch: valid": "404 {\"detail\":\"Not Found\"}",
+  "overlap: DELETE /oauth/providers/x": "404 {\"detail\":\"Not Found\"}",
+  "overlap: GET /oauth/providers/callback": "405 {\"detail\":\"Method Not Allowed\"}",
+  "overlap: PATCH /oauth/providers/authorize": "405 {\"detail\":\"Method Not Allowed\"}",
+  "overlap: PUT /oauth/providers/x": "404 {\"detail\":\"Not Found\"}"
+}

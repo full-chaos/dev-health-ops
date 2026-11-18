@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"io"
 	"net"
+	"net/url"
+	"os"
 	"syscall"
 )
 
@@ -65,13 +67,36 @@ func TransportClass(err error) string {
 	return "protocol"
 }
 
+// safeTimeout answers the Timeout method under recover. The stdlib wrappers *url.Error, *net.OpError, *os.SyscallError and
+// *os.PathError answer by calling their Err's Timeout, so a self-referencing one recurses into a fatal stack overflow that recover
+// cannot catch: those hops are followed here, bounded, and a loop answers false (CHAOS-8271).
 func safeTimeout(timeout interface{ Timeout() bool }) (result bool) {
 	defer func() {
 		if recover() != nil {
 			result = false
 		}
 	}()
-	return timeout.Timeout()
+	for hop := 0; hop <= maxChainNodes; hop++ {
+		var inner error
+		switch typed := timeout.(type) {
+		case *url.Error:
+			inner = typed.Err
+		case *net.OpError:
+			inner = typed.Err
+		case *os.SyscallError:
+			inner = typed.Err
+		case *os.PathError:
+			inner = typed.Err
+		default:
+			return timeout.Timeout()
+		}
+		next, ok := inner.(interface{ Timeout() bool })
+		if !ok {
+			return false
+		}
+		timeout = next
+	}
+	return false
 }
 
 // DecodeFailure returns an error for a response that could not be decoded,

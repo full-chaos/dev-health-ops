@@ -493,7 +493,7 @@ func compareCHRows(t *testing.T, ctx context.Context, golden *venueoracle.Golden
 // a 409), and team_uuid derives from the id. The rule tests in
 // internal/api/teamsidentity and internal/providersync own that contract;
 // the pin shows any change in Go's answers.
-const teamsRuling = "chris D5685/D5711/D5712/D5714/D5717 (team id carry, CHAOS-8939/CHAOS-8940); pm 11-18 (pending-changes honours team_id, CHAOS-6426)"
+const teamsRuling = "chris D5685/D5711/D5712/D5714/D5717 (team id carry, CHAOS-8939/CHAOS-8940); pm 11-18 (pending-changes honours team_id, CHAOS-6426; a bare id with two holders answers 409, so the filtered-to-qa row is pinned at 409)"
 
 // productTelemetryRuling retired the Python reference of ten product-telemetry
 // intake requests: the intake now bounds payload keys and string values, drops

@@ -139,24 +139,12 @@ func buildPooledChartQuery(spec ChartSpec, definition metricDefinition) (string,
 		case spec.GroupBy == "service":
 			xExpression = "ifNull(service_id, '')"
 		default:
-			// A team is the owner of the repository as of the request, a co-owned repository whole for each owner; the stored
-			// team of a repository-day is not read.
-			fromWhere, bindings := teamscope.OwnershipFromWhere(spec.OrganizationID, pooled.asOf)
-			scope := ""
-			if len(spec.FilterTeams) > 0 {
-				scope = fmt.Sprintf("\n      AND o.team_id IN {%s:Array(String)}", teamscope.BindingTeamIDs)
-				bindings = append(bindings, dhclickhouse.Binding{Name: teamscope.BindingTeamIDs, Value: spec.FilterTeams})
-			}
-			named, err := pooledNamedArguments(bindings)
+			ownerJoin, named, err := repositoryOwnerJoin(spec.OrganizationID, spec.FilterTeams, pooled.asOf)
 			if err != nil {
 				return "", nil, err
 			}
 			parameters = append(parameters, named...)
-			join = fmt.Sprintf(`
-    INNER JOIN (
-        SELECT DISTINCT o.team_id AS owner_team_id, coalesce(toString(o.repo_id), toString(r.id)) AS owned_repo_id
-%s%s
-    ) AS own ON toString(repo_id) = own.owned_repo_id`, fromWhere, scope)
+			join = ownerJoin
 			xExpression = "own.owner_team_id"
 		}
 	}
@@ -202,6 +190,41 @@ func buildPooledChartQuery(spec ChartSpec, definition metricDefinition) (string,
     HAVING y IS NOT NULL
     ORDER BY %s
     %s`, xExpression, pooled.expression, pooled.source, join, strings.Join(where, " AND\n        "), order, settings), parameters, nil
+}
+
+// repositoryOwnerJoin is the join of a team group: one row per (owner team, owned repository) as of asOf, so a co-owned
+// repository is whole in each owner's bucket and the stored team of a row is not read. A team filter keeps the filtered
+// owners only.
+func repositoryOwnerJoin(orgID string, teams []string, asOf time.Time) (string, []any, error) {
+	fromWhere, bindings := teamscope.OwnershipFromWhere(orgID, asOf)
+	scope := ""
+	if len(teams) > 0 {
+		scope = fmt.Sprintf("\n      AND o.team_id IN {%s:Array(String)}", teamscope.BindingTeamIDs)
+		bindings = append(bindings, dhclickhouse.Binding{Name: teamscope.BindingTeamIDs, Value: teams})
+	}
+	named, err := pooledNamedArguments(bindings)
+	if err != nil {
+		return "", nil, err
+	}
+	return fmt.Sprintf(`
+    INNER JOIN (
+        SELECT DISTINCT o.team_id AS owner_team_id, coalesce(toString(o.repo_id), toString(r.id)) AS owned_repo_id
+%s%s
+    ) AS own ON toString(repo_id) = own.owned_repo_id`, fromWhere, scope), named, nil
+}
+
+// repositoryOwnedTables are the charted daily tables with no team column: the team of a row is the owner of its
+// repository as of the chart run, as for a pooled chart.
+var repositoryOwnedTables = map[string]bool{"cicd_metrics_daily": true}
+
+// withRepositoryOwners returns the definition of a stored-row chart of a repository-owned table with its owners instant
+// asOf, when the metric has the team dimension.
+func withRepositoryOwners(definition metricDefinition, asOf time.Time) metricDefinition {
+	if definition.pooled == nil && repositoryOwnedTables[definition.SourceTable] && definition.hasDimension("team") {
+		at := asOf.UTC()
+		definition.ownersAsOf = &at
+	}
+	return definition
 }
 
 // pooledNamedArguments binds each teamscope binding with a typed clickhouse.Named call, so every bound type is one the

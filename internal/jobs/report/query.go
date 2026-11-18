@@ -14,6 +14,7 @@ import (
 	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -295,6 +296,9 @@ type metricDefinition struct {
 	rule string
 	// pooled is set by withPooledChart, never by the registry: the metric is taken over the raw samples of its runs.
 	pooled *pooledChart
+	// ownersAsOf is set by withRepositoryOwners, never by the registry: the instant the team of a stored row of a table
+	// with no team column is read at (the owner of its repository).
+	ownersAsOf *time.Time
 }
 
 type metricRegistryArtifact struct {
@@ -436,7 +440,8 @@ func (adapter *ClickHouseQueryAdapter) executeChart(ctx context.Context, spec Ch
 	if !ok || !identifier.MatchString(spec.Metric) || !identifier.MatchString(definition.SourceTable) {
 		return ChartResult{}, fmt.Errorf("unsupported chart metric %q", spec.Metric)
 	}
-	definition = withPooledChart(withChartRule(definition), adapter.asOf())
+	asOf := adapter.asOf()
+	definition = withRepositoryOwners(withPooledChart(withChartRule(definition), asOf), asOf)
 	statement, parameters, err := buildChartQuery(spec, definition)
 	if err != nil {
 		return ChartResult{}, err
@@ -534,9 +539,23 @@ func buildChartWhere(spec ChartSpec, definition metricDefinition) (string, []any
 		clauses = append(clauses, definition.dayColumn()+" <= {time_range_end:Date}")
 		parameters = append(parameters, clickhouse.Named("time_range_end", spec.TimeRangeEnd))
 	}
-	if len(spec.FilterTeams) > 0 && definition.hasDimension("team") {
+	switch {
+	case len(spec.FilterTeams) == 0 || !definition.hasDimension("team"):
+	case definition.ownersAsOf == nil:
 		clauses = append(clauses, "team_id IN {filter_teams:Array(String)}")
 		parameters = append(parameters, clickhouse.Named("filter_teams", spec.FilterTeams))
+	case spec.GroupBy != "team":
+		// A team group filters its owner join instead (buildChartQuery): the same bindings twice would collide.
+		condition, bindings := teamscope.RepoCondition(spec.OrganizationID, "toString(repo_id)", spec.FilterTeams, *definition.ownersAsOf)
+		if condition == "" {
+			condition = "0"
+		}
+		named, err := pooledNamedArguments(bindings)
+		if err != nil {
+			return "", nil, err
+		}
+		clauses = append(clauses, condition)
+		parameters = append(parameters, named...)
 	}
 	if len(spec.FilterRepos) > 0 && definition.hasDimension("repo") {
 		clauses = append(clauses, "repo_id IN {filter_repos:Array(String)}")
@@ -670,10 +689,13 @@ func buildChartQuery(spec ChartSpec, definition metricDefinition) (string, []any
 	case "month":
 		xExpression, xType, temporal = "toStartOfMonth("+day+")", "Date", true
 	case "team", "repo", "service":
-		if definition.hasDimension(spec.GroupBy) {
-			xExpression = spec.GroupBy + "_id"
-		} else {
+		switch {
+		case !definition.hasDimension(spec.GroupBy):
 			xExpression = "'unscoped'"
+		case spec.GroupBy == "team" && definition.ownersAsOf != nil:
+			xExpression = "own.owner_team_id"
+		default:
+			xExpression = spec.GroupBy + "_id"
 		}
 	}
 	if spec.GroupBy == "" && (spec.ChartType == "line" || spec.ChartType == "heatmap") &&
@@ -725,6 +747,14 @@ func buildChartQuery(spec ChartSpec, definition metricDefinition) (string, []any
 		}
 		source = wholePersonLandscapeSource(spec.Metric, source, pointWhere, repoFilter)
 		where, parameters = "1", pointParameters
+	}
+	if spec.GroupBy == "team" && definition.ownersAsOf != nil {
+		ownerJoin, named, err := repositoryOwnerJoin(spec.OrganizationID, spec.FilterTeams, *definition.ownersAsOf)
+		if err != nil {
+			return "", nil, err
+		}
+		source += ownerJoin
+		parameters = append(parameters, named...)
 	}
 	if spec.GroupBy == "" && (spec.ChartType == "scorecard" || spec.ChartType == "trend_delta" || spec.ChartType == "table") {
 		return fmt.Sprintf(`SELECT

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net"
 	"net/url"
+	"os"
 	"testing"
 )
 
@@ -57,5 +58,39 @@ func TestRetryableTransportCyclicURLErrorDoesNotCrash(t *testing.T) {
 	}
 	if RetryableTransport(errors.Join(other, cyclic)) {
 		t.Error("cyclic link without dial or timeout: RetryableTransport = true, want false")
+	}
+}
+
+func TestRetryableTransportDelegatingTimeouts(t *testing.T) {
+	leaf := stubTimeout{true}
+	cyclic := &url.Error{Op: "Get", URL: "x"}
+	cyclic.Err = cyclic
+	dial := &net.OpError{Op: "dial", Err: errors.New("refused")}
+	var deep error = leaf
+	for range 33 {
+		deep = &url.Error{Op: "Get", URL: "x", Err: deep}
+	}
+	for name, err := range map[string]error{
+		"as url.Error timeout":   asAdapter{timeout: &url.Error{Op: "Get", Err: leaf}},
+		"as net.OpError timeout": asAdapter{timeout: &net.OpError{Op: "read", Err: leaf}},
+		"depth 33 wrappers":      deep,
+		"cycle then dial":        errors.Join(&os.SyscallError{Syscall: "x", Err: cyclic}, dial),
+	} {
+		if !RetryableTransport(err) {
+			t.Errorf("%s: RetryableTransport = false, want true", name)
+		}
+	}
+	for name, err := range map[string]error{
+		"syscall-wrapped cycle": &os.SyscallError{Syscall: "x", Err: cyclic},
+		"path-wrapped cycle":    &os.PathError{Op: "x", Err: cyclic},
+		"bare cycle":            cyclic,
+	} {
+		if RetryableTransport(err) {
+			t.Errorf("%s: RetryableTransport = true, want false", name)
+		}
+		if got := TransportClass(err); got == "timeout" {
+			t.Errorf("%s: TransportClass = timeout", name)
+		}
+		_ = TransportFailure(err).Error()
 	}
 }

@@ -41,7 +41,7 @@ func RetryableTransport(err error) bool {
 				return true
 			}
 			var timeout interface{ Timeout() bool }
-			if callAs(as, &timeout) && timeoutLink(timeout) {
+			if callAs(as, &timeout) && safeTimeout(timeout) {
 				return true
 			}
 		}
@@ -54,20 +54,10 @@ func retryableLink(link error) bool {
 		return true
 	}
 	timeout, ok := link.(interface{ Timeout() bool })
-	return ok && timeoutLink(timeout)
+	return ok && safeTimeout(timeout)
 }
 
 func dialOp(operation *net.OpError) bool { return operation != nil && operation.Op == "dial" }
-
-// timeoutLink skips *url.Error and *net.OpError: their Timeout methods recurse into Err, which a self-referencing one turns
-// into a fatal stack overflow that recover cannot catch; their inner links are read by the bounded walk instead.
-func timeoutLink(timeout interface{ Timeout() bool }) bool {
-	switch timeout.(type) {
-	case *url.Error, *net.OpError:
-		return false
-	}
-	return safeTimeout(timeout)
-}
 
 // IsLocationParseRefusal reports whether the error is net/http's refusal of a redirect whose Location does not parse: a
 // *url.Error whose cause is a leaf (it unwraps to nothing) with the refusal's own words. It answers a yes or a no and never hands

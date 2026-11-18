@@ -1,14 +1,19 @@
-# CHAOS-13958: race-leg placement apart rules (ci/go_race_shard.awk apart=, the race legs, root module only). Format: kind<TAB>package<TAB>value.
+# CHAOS-13958 / CHAOS-13833: race-leg placement apart rules (ci/go_race_shard.awk apart=, the race legs, root module only). Format: kind<TAB>package<TAB>value.
 # heavy<TAB>package<TAB>seconds: a race package the plan keeps apart. The plan puts at most one heavy package on a leg, and none
-# on a leg that holds a listed part: these three in one parallel batch ran 1.2-2.0x their time alone (Go quality 44091722883,
-# 44105231987, 44118503347: race leg 13 walls 881, 1037, 1280 s). Seconds = the median of the package's go test "ok" seconds in
-# those three main push runs, rounded up.
-# part<TAB>package<TAB>part: a serial race part (ci/go_race_splits.tsv) whose leg takes no heavy package (its 192-365 s run alone
-# after the batch adds to the heavy package's wall).
+# on a leg that holds a listed part: two of them in one parallel batch ran 1.2-2.0x their time alone (Go quality 44091722883,
+# 44105231987, 44118503347: docs, authapi, helm on one leg; 44219536680, 44222203804, 44223422838: affected with authapi
+# and checkgo with helm). Seconds = the median of the package's go test "ok" seconds in its three main push runs
+# (docs, authapi, helm: the first three; affected, checkgo: 44091722883, 44105231987, 44118503347, each alone on a leg), rounded up.
+# part<TAB>package<TAB>part: a serial race part (ci/go_race_splits.tsv) whose leg takes no heavy package (its run alone after the
+# batch adds to the heavy package's wall).
 # Sorted (LC_ALL=C), no duplicates. A heavy row names a race package with a ci/go_race_weights.d row that is not split, solo or pinned.
 heavy	deploy/helm/dev-health	633
 heavy	internal/auth/authapi	629
+heavy	internal/cigates/affected	475
+heavy	internal/cigates/checkgo	380
 heavy	internal/cigates/docs	770
 part	internal/api/policy	1
+part	internal/cigates/testshard	1
 part	internal/cigates/testshard	2
 part	internal/cigates/testshard	3
+part	internal/cigates/testshard	4

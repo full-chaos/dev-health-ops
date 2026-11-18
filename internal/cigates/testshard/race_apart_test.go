@@ -307,3 +307,97 @@ func TestTheRacePlanRefusesABadApartRowAndWarnsWhenNoLegIsFree(t *testing.T) {
 		t.Errorf("the plan of two legs is no partition: %v", got)
 	}
 }
+
+// CHAOS-13833: the shipped race legs (ci/go_quality_legs.json count) together run every root-module race package exactly once (a
+// split package: each of its parts once), none of ci/race_excluded_packages.tsv, and the providersync slice on every leg.
+func TestTheShippedRaceLegsCoverEveryRacePackageOnce(t *testing.T) {
+	t.Parallel()
+	_, races, _ := legCounts(t)
+	mod, pkgs := raceshardGoList(t)
+	b, err := os.ReadFile(filepath.Join(repoRoot(t), "ci", "race_excluded_packages.tsv"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	excluded := map[string]bool{}
+	for _, l := range strings.Split(string(b), "\n") {
+		if f := strings.Split(l, "\t"); l != "" && !strings.HasPrefix(l, "#") && f[0] != "" {
+			excluded[f[0]] = true
+		}
+	}
+	b, err = os.ReadFile(filepath.Join(repoRoot(t), "ci", "go_race_splits.tsv"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	parts := map[string]int{}
+	for _, l := range strings.Split(string(b), "\n") {
+		if f := strings.Split(l, "\t"); len(f) == 2 && !strings.HasPrefix(l, "#") {
+			n, err := strconv.Atoi(f[1])
+			if err != nil {
+				t.Fatalf("ci/go_race_splits.tsv: bad row %q", l)
+			}
+			parts[f[0]] = n
+		}
+	}
+	want := map[string]int{}
+	for _, p := range pkgs {
+		k := keyOf(mod, p)
+		if excluded[k] || k == "internal/providersync" {
+			continue
+		}
+		if n := parts[k]; n > 1 {
+			for i := 1; i <= n; i++ {
+				want[k+"#"+strconv.Itoa(i)] = 1
+			}
+			continue
+		}
+		want[k] = 1
+	}
+	got := map[string]int{}
+	slices := 0
+	for k := 1; k <= races; k++ {
+		out, errs, err := checkGo(t, nil, "race-shard-plan", strconv.Itoa(k), strconv.Itoa(races))
+		if err != nil {
+			t.Fatalf("race-shard-plan %d %d: %v\n%s", k, races, err, errs)
+		}
+		if strings.Contains(errs, "WARN race plan:") {
+			t.Errorf("race leg %d/%d warns:\n%s", k, races, errs)
+		}
+		slice := 0
+		for _, row := range strings.Split(out, "\n") {
+			f := strings.Split(row, "\t")
+			if len(f) < 3 {
+				continue
+			}
+			if f[0] != "." {
+				got[f[0]+" "+f[2]]++ // a nested module's package: counted for duplicates only
+				continue
+			}
+			switch {
+			case f[2] == "internal/providersync":
+				slice++
+			case len(f) == 5:
+				got[f[2]+"#"+f[3]]++
+			default:
+				got[f[2]]++
+			}
+		}
+		if slice != 1 {
+			t.Errorf("race leg %d/%d lists the providersync slice %d time(s), want once", k, races, slice)
+		}
+		slices += slice
+	}
+	for k, n := range got {
+		if n != 1 {
+			t.Errorf("%s: in %d race legs, want exactly 1", k, n)
+		}
+		if !strings.Contains(k, " ") && want[k] == 0 {
+			t.Errorf("%s: planned, but it is no race package (race-excluded, or not in go list)", k)
+		}
+	}
+	for k := range want {
+		if got[k] == 0 {
+			t.Errorf("%s: in no race leg", k)
+		}
+	}
+	t.Logf("%d race legs: %d root items (packages and parts) each once, providersync on %d legs", races, len(want), slices)
+}

@@ -127,6 +127,7 @@ FROM work_item_cycle_times AS wct FINAL
 LEFT JOIN %s AS t
   ON t.work_item_id = wct.work_item_id
 WHERE wct.day >= {start_day:Date} AND wct.day < {end_day:Date}
+  AND wct.completed_at IS NOT NULL
   AND wct.assignee IN {identities:Array(String)}
   AND wct.org_id = {org_id:String}
   %s

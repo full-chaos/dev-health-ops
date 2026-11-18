@@ -102,23 +102,33 @@ func githubTestsArtifactListsReportMember(
 	case !strings.EqualFold(strings.TrimSpace(response.Header.Get("Accept-Ranges")), "bytes"):
 		return false, false, 0, nil
 	}
-	source := &githubTestsRangeReaderAt{ctx: ctx, fetch: fetch, refresh: refresh, size: listedSize}
+	listed, hasReport, err = githubTestsDirectoryListsReportMember(ctx, fetch, refresh, listedSize)
+	return listed, hasReport, 0, err
+}
+
+// githubTestsDirectoryListsReportMember reads the artifact's zip directory by
+// range through fetch, the way readGitHubTestsArtifactReports does.
+func githubTestsDirectoryListsReportMember(
+	ctx context.Context, fetch githubTestsArtifactFetch,
+	refresh func(context.Context) (githubTestsArtifactFetch, error), size int64,
+) (listed, hasReport bool, err error) {
+	source := &githubTestsRangeReaderAt{ctx: ctx, fetch: fetch, refresh: refresh, size: size}
 	// The whole bounded directory, not the parser's entry window: a report member past it still marks the artifact as one
 	// that holds reports.
 	members, err := source.directoryMembers()
 	var unusable *githubTestsRangeUnusableError
 	switch {
 	case errors.As(err, &unusable), errors.Is(err, errGitHubTestsRangeGone), errors.Is(err, ErrGitHubTestsArtifactUnavailable):
-		return false, false, 0, nil
+		return false, false, nil
 	case err != nil:
-		return false, false, 0, err
+		return false, false, err
 	}
 	for _, member := range members {
 		if githubTestsReportCandidateMember(member) {
-			return true, true, 0, nil
+			return true, true, nil
 		}
 	}
-	return true, false, 0, nil
+	return true, false, nil
 }
 
 // githubTestsNoReportSampleRecord is the excluded-artifact sample entry of an

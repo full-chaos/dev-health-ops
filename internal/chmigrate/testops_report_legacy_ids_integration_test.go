@@ -170,7 +170,7 @@ func TestMigration152AddsTheColumnsWithoutRewritingAPartAndKeepsTheOldStatements
 		t.Fatalf("before 152: %+v suites %v", stored, suitesBefore)
 	}
 
-	result, err := chmigrate.Upgrade(ctx, db, baseline, chain)
+	result, err := chmigrate.Upgrade(ctx, db, baseline, chain[:len(before)+1])
 	if err != nil || len(result.Applied) != 1 || result.Applied[0] != testopsLegacyIDsVersion {
 		t.Fatalf("the upgrade = %+v, %v; want %s applied", result, err, testopsLegacyIDsVersion)
 	}

@@ -13,15 +13,18 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/testopspooled"
 )
 
-// pooledChart is the definition of a TestOps or CI/CD duration or queue chart metric: the value of a bucket is taken over
-// the raw samples of its runs (for TestOps the shared package testopspooled, the very text the TestOps tiles read; for
-// CI/CD the cicd daily writer's rules below), never as the mean of the stored per-repository-day values: a percentile or
-// a mean of a pool cannot be made from the values of its parts.
+// pooledChart is the definition of a pooled chart metric: the value of a bucket is taken over the raw samples of its rows
+// (for TestOps the shared package testopspooled, the very text the TestOps tiles read; for CI/CD the cicd daily writer's
+// rules below; for the deploy time, pull request size and MTTR metrics the writers' rules of delivery_pooled.go), never as
+// the mean of the stored per-repository-day values: a percentile or a mean of a pool cannot be made from the values of
+// its parts.
 type pooledChart struct {
 	table      string
 	source     string
 	expression string
-	asOf       time.Time
+	// bind returns the parameters the source binds beyond the organization and the dates.
+	bind func(asOf time.Time) []any
+	asOf time.Time
 }
 
 // pooledCharts maps a registry metric to its pooled definition. The registry keeps naming the daily table the metric is
@@ -36,10 +39,16 @@ var pooledCharts = map[string]pooledChart{
 	"avg_duration_minutes":       {table: "cicd_metrics_daily", source: cicdRunsSource, expression: cicdDurationMean},
 	"p90_duration_minutes":       {table: "cicd_metrics_daily", source: cicdRunsSource, expression: cicdDurationP90},
 	"avg_queue_minutes":          {table: "cicd_metrics_daily", source: cicdRunsSource, expression: cicdQueueMean},
+	"deploy_time_p50_hours":      {table: "deploy_metrics_daily", source: deploymentsSource, expression: deliveryHoursMedian, bind: bindCanceledStatuses},
+	"pr_size_p50_loc":            {table: "repo_metrics_daily", source: pullRequestSizesSource, expression: deliveryLOCMedian},
+	"pr_size_p90_loc":            {table: "repo_metrics_daily", source: pullRequestSizesSource, expression: deliveryLOCP90},
+	"mttr_hours":                 {table: "repo_metrics_daily", source: bugRepairsSource, expression: deliveryHoursMean},
+	"mttr_p50_hours":             {table: "incident_metrics_daily", source: incidentRepairsSource, expression: deliveryHoursMedian, bind: bindMappingAsOf},
+	"mttr_p90_hours":             {table: "incident_metrics_daily", source: incidentRepairsSource, expression: deliveryHoursP90, bind: bindMappingAsOf},
 }
 
 // The CI/CD pooled source holds the runs and samples of the cicd daily writer (internal/jobs/metrics/daily/cicd): a run
-// counts on the UTC day it starts only when it also finishes that day (the writer's double window), the newest synced
+// counts on the UTC day it finishes (the writer's rule), the newest synced
 // version of a run (FINAL) is the run, a deleted run is no run. A duration sample is finished_at - started_at in minutes
 // when not negative, a queue sample started_at - queued_at in minutes when not negative; the stored duration_seconds and
 // queue_seconds are not read, as the writer does not read them. Only the repository-days the writer computed are read.
@@ -55,15 +64,16 @@ const cicdRunsSource = `(
         org_id,
         repo_id,
         service_id,
-        toDate(started_at) AS day,
+        toDate(finished_at) AS day,
         if(finished_at >= started_at, dateDiff('millisecond', started_at, finished_at) / 60000, NULL) AS ` + cicdRunMinutes + `,
         if(queued_at IS NOT NULL AND started_at >= queued_at, dateDiff('millisecond', queued_at, started_at) / 60000, NULL) AS ` + cicdQueueMinutes + `
     FROM ci_pipeline_runs FINAL
     WHERE org_id = {org_id:String}
-      AND toDate(started_at) >= {start_date:Date} AND toDate(started_at) < {end_date:Date}
-      AND finished_at IS NOT NULL AND toDate(finished_at) = toDate(started_at)
+      AND finished_at IS NOT NULL
+      AND toDate(finished_at) >= {start_date:Date} AND toDate(finished_at) < {end_date:Date}
       AND ` + cicdCountedRunPredicate + `
-      AND (repo_id, toDate(started_at)) IN (
+      AND ` + testops.NotOpenRunSQL + `
+      AND (repo_id, toDate(finished_at)) IN (
           SELECT repo_id, day FROM cicd_metrics_daily
           WHERE org_id = {org_id:String} AND day >= {start_date:Date} AND day < {end_date:Date})
 ) AS cicd_pipeline_runs`
@@ -117,6 +127,9 @@ func buildPooledChartQuery(spec ChartSpec, definition metricDefinition) (string,
 		clickhouse.Named("org_id", spec.OrganizationID),
 		clickhouse.Named("start_date", start),
 		clickhouse.Named("end_date", endExclusive),
+	}
+	if pooled.bind != nil {
+		parameters = append(parameters, pooled.bind(pooled.asOf)...)
 	}
 
 	xExpression, xType, temporal := "'total'", "String", false

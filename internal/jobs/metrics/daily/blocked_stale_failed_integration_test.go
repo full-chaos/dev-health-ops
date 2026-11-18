@@ -264,3 +264,147 @@ func TestRedrivenFailedPartitionsAndTheRetryHorizon(t *testing.T) {
 		t.Fatal("the marker stayed after the redriven job claimed the partition")
 	}
 }
+
+func readMarkerState(t *testing.T, ctx context.Context, pool *pgxpool.Pool, runID string) (*time.Time, string, time.Time) {
+	t.Helper()
+	var blockedAt *time.Time
+	var reason *string
+	var updatedAt time.Time
+	if err := pool.QueryRow(ctx, `SELECT blocked_at, blocked_reason, updated_at FROM daily_metrics_runs WHERE id = $1`, runID).
+		Scan(&blockedAt, &reason, &updatedAt); err != nil {
+		t.Fatal(err)
+	}
+	if reason == nil {
+		return blockedAt, "", updatedAt
+	}
+	return blockedAt, *reason, updatedAt
+}
+
+// A run that stays blocked while its partitions change must carry the reason
+// of its current partitions. A redriven stale 'failed' partition can be claimed
+// and end failed_permanent, or succeed beside a failed_permanent one, before the
+// next pass; the marker's blocked_at and the marked counter stay as they were.
+func TestBlockedReasonFollowsThePartitionsWhileTheRunStaysBlocked(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createDailyTables(t, ctx, pool)
+	registry, err := jobruntime.Load(filepath.Join("..", "..", "..", "..", "contracts", "jobs", "v1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	publisher, err := NewPostgresPublisher(pool, dailyTestRegistry{production: registry})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewPostgresStore(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstPass := time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)
+	stale := firstPass.Add(-failedPartitionRetryHorizon - time.Hour)
+
+	for _, testCase := range []struct {
+		name       string
+		partitions []stalePartition
+		firstWant  string
+		settle     func(t *testing.T, claim PartitionClaim)
+		secondWant string
+	}{
+		{
+			name:       "a stale failed partition that ends failed_permanent",
+			partitions: []stalePartition{{"failed", stale}},
+			firstWant:  BlockedReasonPartitionsFailedNoRetry,
+			settle: func(t *testing.T, claim PartitionClaim) {
+				if err := store.FailPartitionPermanently(ctx, claim, "attempts_exhausted"); err != nil {
+					t.Fatal(err)
+				}
+			},
+			secondWant: BlockedReasonAllPartitionsPermanent,
+		},
+		{
+			name:       "a stale failed partition that ends failed_permanent beside a success",
+			partitions: []stalePartition{{"succeeded", stale}, {"failed", stale}},
+			firstWant:  BlockedReasonPartitionsFailedNoRetry,
+			settle: func(t *testing.T, claim PartitionClaim) {
+				if err := store.FailPartitionPermanently(ctx, claim, "attempts_exhausted"); err != nil {
+					t.Fatal(err)
+				}
+			},
+			secondWant: BlockedReasonPartialPartitionsPermanent,
+		},
+		{
+			name:       "a stale failed partition that succeeds beside a failed_permanent one",
+			partitions: []stalePartition{{"failed_permanent", stale}, {"failed", stale}},
+			firstWant:  BlockedReasonAllPartitionsPermanent,
+			settle: func(t *testing.T, claim PartitionClaim) {
+				if err := store.CompletePartition(ctx, claim, publisher); err != nil {
+					t.Fatal(err)
+				}
+			},
+			secondWant: BlockedReasonPartialPartitionsPermanent,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			orgID, runID := uuid.NewString(), uuid.NewString()
+			seedStaleRun(t, ctx, pool, orgID, runID, stale, testCase.partitions)
+			store.now = func() time.Time { return firstPass }
+			if _, err := store.ReconcileBlockedRuns(ctx, orgID); err != nil {
+				t.Fatal(err)
+			}
+			markedAt, reason, _ := readMarkerState(t, ctx, pool, runID)
+			if markedAt == nil || reason != testCase.firstWant {
+				t.Fatalf("first pass: blocked_at=%v reason=%q, want marked %q", markedAt, reason, testCase.firstWant)
+			}
+
+			// Between two nightly passes: the redriven job claims the stale row
+			// and settles it.
+			between := firstPass.Add(time.Hour)
+			store.now = func() time.Time { return between }
+			var partitionID string
+			if err := pool.QueryRow(ctx, `SELECT id::text FROM daily_metrics_partitions WHERE run_id = $1 AND status = 'failed'`, runID).Scan(&partitionID); err != nil {
+				t.Fatal(err)
+			}
+			claim, err := store.ClaimPartition(ctx, partitionID)
+			if err != nil || claim == nil {
+				t.Fatalf("ClaimPartition: %v %v", claim, err)
+			}
+			testCase.settle(t, *claim)
+
+			secondPass := firstPass.Add(24 * time.Hour)
+			store.now = func() time.Time { return secondPass }
+			outcome, err := store.ReconcileBlockedRuns(ctx, orgID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			blockedAt, reason, updatedAt := readMarkerState(t, ctx, pool, runID)
+			if blockedAt == nil || reason != testCase.secondWant {
+				t.Fatalf("second pass: blocked_at=%v reason=%q, want marked %q", blockedAt, reason, testCase.secondWant)
+			}
+			if !blockedAt.Equal(*markedAt) {
+				t.Fatalf("blocked_at moved from %s to %s on a reason change", markedAt, blockedAt)
+			}
+			if outcome.Marked != 0 || outcome.Cleared != 0 || outcome.Blocked != 1 {
+				t.Fatalf("second pass outcome = %+v, want 0 marked, 0 cleared, 1 blocked", outcome)
+			}
+
+			// A steady pass writes nothing.
+			store.now = func() time.Time { return secondPass.Add(time.Hour) }
+			if _, err := store.ReconcileBlockedRuns(ctx, orgID); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, steady := readMarkerState(t, ctx, pool, runID); !steady.Equal(updatedAt) {
+				t.Fatalf("a steady pass wrote the run: updated_at %s -> %s", updatedAt, steady)
+			}
+		})
+	}
+}

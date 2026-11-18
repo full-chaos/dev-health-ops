@@ -114,7 +114,7 @@ type BlockedReconcileOutcome struct {
 // the same `blocked` column computed once in `decided`.
 //
 // The WHERE clause at the end restricts the UPDATE to rows whose stored state
-// DISAGREES with the predicate, which makes the pass idempotent: a steady
+// (marker or reason) DISAGREES with the predicate, which makes the pass idempotent: a steady
 // state writes zero rows, so this can run on every tick without churning
 // updated_at or generating write load proportional to the number of runs.
 const reconcileBlockedRunsSQL = `
@@ -192,7 +192,8 @@ WITH decided AS (
                SELECT 1 FROM public.daily_metrics_partitions AS partition
                WHERE partition.run_id = run.id
                  AND partition.status = 'succeeded'
-           ) AS none_succeeded
+           ) AS none_succeeded,
+           run.blocked_at IS NOT NULL AS was_blocked
     FROM public.daily_metrics_runs AS run
     -- Widened from status='running' (CHAOS-4290 confirmation pass): a
     -- terminally failed finalize has status='failed', so the old scope excluded
@@ -213,27 +214,41 @@ WITH decided AS (
     --
     -- The guards are what make this correct, not the absence of overlap.
     WHERE run.org_id = $1::uuid AND run.status IN ('running', 'failed')
+),
+wanted AS (
+    SELECT decided.id, decided.was_blocked,
+           decided.blocked OR decided.finalize_blocked AS want_blocked,
+           CASE
+               -- No failed_permanent row: the run ended only through stale
+               -- 'failed' rows, which a redrive re-publishes as they are.
+               WHEN decided.blocked AND NOT decided.has_permanent THEN $7
+               WHEN decided.blocked AND decided.none_succeeded THEN $3
+               WHEN decided.blocked THEN $4
+               -- Checked AFTER the partition reasons: a run with a
+               -- failed_permanent partition AND a failed finalize is a
+               -- partition problem first, and reporting the finalize would send
+               -- an operator to recompute the wrong thing.
+               WHEN decided.finalize_blocked THEN $5
+               ELSE NULL
+           END AS want_reason
+    FROM decided
 )
 UPDATE public.daily_metrics_runs AS run
-SET blocked_at = CASE WHEN decided.blocked OR decided.finalize_blocked THEN $2::timestamptz ELSE NULL END,
-    blocked_reason = CASE
-        -- No failed_permanent row: the run ended only through stale 'failed'
-        -- rows, which a redrive re-publishes as they are.
-        WHEN decided.blocked AND NOT decided.has_permanent THEN $7
-        WHEN decided.blocked AND decided.none_succeeded THEN $3
-        WHEN decided.blocked THEN $4
-        -- Checked AFTER the partition reasons: a run with a failed_permanent
-        -- partition AND a failed finalize is a partition problem first, and
-        -- reporting the finalize would send an operator to recompute the wrong
-        -- thing.
-        WHEN decided.finalize_blocked THEN $5
-        ELSE NULL
-    END,
+-- A run that stays blocked keeps its blocked_at; only its reason follows the
+-- partitions (a redriven stale 'failed' row can end failed_permanent, or
+-- succeed beside one, between two passes).
+SET blocked_at = CASE WHEN wanted.want_blocked THEN COALESCE(run.blocked_at, $2::timestamptz) ELSE NULL END,
+    blocked_reason = wanted.want_reason,
     updated_at = $2
-FROM decided
-WHERE run.id = decided.id
-  AND (decided.blocked OR decided.finalize_blocked) <> (run.blocked_at IS NOT NULL)
-RETURNING (decided.blocked OR decided.finalize_blocked)`
+FROM wanted
+WHERE run.id = wanted.id
+  AND (
+      wanted.want_blocked <> (run.blocked_at IS NOT NULL)
+      OR wanted.want_reason IS DISTINCT FROM run.blocked_reason
+  )
+-- was_blocked is the state the pass read: a reason-only change is neither a
+-- mark nor a clear.
+RETURNING wanted.want_blocked, wanted.was_blocked`
 
 // ReconcileBlockedRuns marks and unmarks this organization's wedged runs from
 // live partition state. It is the ONLY writer of the marker, in either
@@ -258,13 +273,14 @@ func (store *PostgresStore) ReconcileBlockedRuns(
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var blocked bool
-		if err := rows.Scan(&blocked); err != nil {
+		var blocked, wasBlocked bool
+		if err := rows.Scan(&blocked, &wasBlocked); err != nil {
 			return BlockedReconcileOutcome{}, ErrUnavailable
 		}
-		if blocked {
+		switch {
+		case blocked && !wasBlocked:
 			outcome.Marked++
-		} else {
+		case !blocked && wasBlocked:
 			outcome.Cleared++
 		}
 	}

@@ -671,6 +671,7 @@ internal/syncrunrollup	arm_finalize_test.go
 internal/syncrunrollup	cross_package_registry_test.go
 internal/teamactive	roster_census_test.go
 internal/teamattribution	is_primary_census_test.go
+internal/teamattribution	linked_issue_donor_census_test.go
 internal/teamcreated	census_test.go
 internal/teamprovider	census_test.go
 internal/testsupport/authrows	golden_test.go

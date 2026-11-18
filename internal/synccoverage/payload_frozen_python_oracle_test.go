@@ -109,6 +109,7 @@ func TestPayloadMatchesFrozenPythonProduction(t *testing.T) {
 			}
 		}
 		goPayload := buildGoOraclePayload(t, fixtures[index])
+		dropClosedWithReasonRanges(t, name, goPayload)
 		if os.Getenv(perturbOracleEnvironment) == "1" {
 			// Test-only RED proof. The normal gate never sets this variable. Setting
 			// it changes one semantic leaf after the production Go builder runs and
@@ -131,6 +132,22 @@ func TestPayloadMatchesFrozenPythonProduction(t *testing.T) {
 		if !staleness[status] {
 			t.Errorf("no frozen Python payload holds the staleness %q", status)
 		}
+	}
+}
+
+// dropClosedWithReasonRanges removes the dataset key closed_with_reason_ranges
+// (CHAOS-13988) before the comparison: the frozen Python producer predates it.
+// No fixture window is closed with a reason, so every dataset must carry it
+// as an empty list; anything else fails rather than being dropped unseen.
+func dropClosedWithReasonRanges(t *testing.T, name string, payload projectionPayload) {
+	t.Helper()
+	for _, raw := range payload["datasets"].([]any) {
+		dataset := raw.(map[string]any)
+		closed, ok := dataset["closed_with_reason_ranges"].([]any)
+		if !ok || len(closed) != 0 {
+			t.Fatalf("%s: dataset %v closed_with_reason_ranges = %#v, want an empty list", name, dataset["dataset_key"], dataset["closed_with_reason_ranges"])
+		}
+		delete(dataset, "closed_with_reason_ranges")
 	}
 }
 

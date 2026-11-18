@@ -326,8 +326,8 @@ exactly like a non-member would, not merely loses precedence); a repo with **no*
 all is `ownership_unknown` and the gate does not apply (2026-09-09: an absent ownership row is
 treated as missing data, not as "not owned" — two orgs with old fixture data and no ownership rows
 at all pass membership through unchanged); an inactive owner is no owner (an inactive team owns nothing,
-§0.4g rule 1), so a repo owned only by inactive teams is `ownership_unknown` too (CHAOS-14068,
-`TestMembershipGateInactiveOnlyOwnerIsNoOwnershipFact`); `linked_issue` (5) requires a real `work_item_dependencies`
+§0.4g rule 1), so a repo owned only by inactive teams is `ownership_unknown` too
+(`TestMembershipGateInactiveOnlyOwnerIsNoOwnershipFact`); `linked_issue` (5) requires a real `work_item_dependencies`
 donor row resolving to a `work_items`
 row whose **own team came from a first-class fact (sources 0–3; membership never wins)** — a donor resolved only by
 `author_membership` or `manual_fallback` is NOT a valid donor, so neither a person-shaped author

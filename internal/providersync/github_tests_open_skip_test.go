@@ -3,6 +3,7 @@ package providersync
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -39,6 +40,15 @@ type openSkipDoer struct {
 	runHits map[int]int
 	jobHits map[int]int
 	cancel  context.CancelFunc
+	// repoStatus, when set, answers the repository read with that status; repoName replaces its full_name.
+	repoStatus int
+	repoName   string
+}
+
+func (doer *openSkipDoer) setRepoStatus(status int) {
+	doer.mu.Lock()
+	defer doer.mu.Unlock()
+	doer.repoStatus = status
 }
 
 func newOpenSkipDoer(inner *listingFake) *openSkipDoer {
@@ -48,6 +58,34 @@ func newOpenSkipDoer(inner *listingFake) *openSkipDoer {
 
 func (doer *openSkipDoer) Do(request *http.Request) (*http.Response, error) {
 	const prefix = "/repos/acme/api/actions/runs/"
+	if request.URL.Path == "/repos/acme/api" {
+		doer.mu.Lock()
+		status, name := doer.repoStatus, doer.repoName
+		doer.mu.Unlock()
+		if status != 0 {
+			header := http.Header{"Content-Type": {"application/json"}, "X-Ratelimit-Remaining": {"4000"}, "X-Ratelimit-Limit": {"5000"}}
+			return &http.Response{StatusCode: status, Header: header, Body: io.NopCloser(strings.NewReader(openSkipPoisonBody)), Request: request}, nil
+		}
+		if name != "" {
+			response, err := doer.inner.Do(request)
+			if err != nil {
+				return nil, err
+			}
+			var repo map[string]any
+			if err := json.NewDecoder(response.Body).Decode(&repo); err != nil {
+				return nil, err
+			}
+			repo["full_name"] = name
+			encoded, err := json.Marshal(repo)
+			if err != nil {
+				return nil, err
+			}
+			response.Body = io.NopCloser(bytes.NewReader(encoded))
+			response.ContentLength = int64(len(encoded))
+			response.Header.Del("Content-Length")
+			return response, nil
+		}
+	}
 	if rest, ok := strings.CutPrefix(request.URL.Path, prefix); ok {
 		script, hits := doer.runs, doer.runHits
 		if trimmed, isJobs := strings.CutSuffix(rest, "/jobs"); isJobs {
@@ -130,6 +168,8 @@ func walkOpenSkip(t *testing.T, handler GitHubTestsRouteHandler, claim Claim, do
 		err := handler.CollectChunks(ctx, claim, providerfoundation.Credential{}, client, normalizedAt, resume,
 			func(emission ChunkRouteEmission) error {
 				last = emission.CursorAfter
+				// The executor tells the route of each chunk it committed; every emission this walk accepts counts as one.
+				defer handler.ObserveCommittedChunk(claim, PreparedProviderChunk{CursorAfter: emission.CursorAfter}, metrics)
 				for _, effect := range emission.Batch.Effects {
 					if effect.Destination != "ci_pipeline_runs" {
 						continue
@@ -518,85 +558,94 @@ var openSkipContinuationShapes = []struct {
 
 // 13966 r1 P1-a: a skip committed by the emission that ends the attempt (the chunk-count or wall-time bound returns a
 // durable continuation after the commit) still logs its WARN line and steps the counter, and the resume does not
-// record it again: exactly once over the unit.
+// record it again: exactly once over the unit, also when the resume fails at the repository read.
 func TestOpenPhaseSkipTelemetrySurvivesAContinuation(t *testing.T) {
 	repoID := listingRepoID(t)
-	for _, source := range []string{"run", "jobs"} {
-		for _, bound := range []string{"count", "wall"} {
-			for _, shape := range openSkipContinuationShapes {
-				if shape.jobsOnly && source != "jobs" {
-					continue
-				}
-				t.Run(source+"/"+bound+"/"+shape.name, func(t *testing.T) {
-					records := captureMembershipLogs(t)
-					now := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
-					claim, session := completeRouteSessionFor(t, now, false, "github", "cicd")
-					fake := newListingFake(t, nil)
-					reader := openSkipStore(repoID, fake, 8100, 66)
-					doer := newOpenSkipDoer(fake)
-					poison := 8163 // the 64th open emission: the default chunk-count bound
-					if bound == "wall" {
-						poison = 8100
+	for _, resume := range []string{"healthy", "repo-404"} {
+		for _, source := range []string{"run", "jobs"} {
+			for _, bound := range []string{"count", "wall"} {
+				for _, shape := range openSkipContinuationShapes {
+					if shape.jobsOnly && source != "jobs" {
+						continue
 					}
-					if source == "run" {
-						doer.runs[poison] = []openSkipReply{shape.reply}
-					} else {
-						doer.jobs[poison] = []openSkipReply{shape.reply}
-					}
-					store := newChunkMemoryStore()
-					executor := completeRouteExecutor(now, GitHubTestsRouteHandler{OpenRuns: reader}, store, &memoryEffectSink{})
-					executor.Credentials.Repository = &trackingCompleteRouteCredentialRepository{provider: "github"}
-					executor.Credentials.Decryptor = chunkedCredentialDecryptor{}
-					executor.Doer = fakehttp.Client(doer)
-					executor.BudgetLimits = map[CostClass]int{claim.CostClass: 10}
-					executor.Metrics = providerfoundation.NewMetrics()
-					if bound == "wall" {
-						executor.Now = func() time.Time {
-							if doer.hitsOf(poison) > 0 {
-								return now.Add(46 * time.Second)
+					t.Run(resume+"/"+source+"/"+bound+"/"+shape.name, func(t *testing.T) {
+						records := captureMembershipLogs(t)
+						now := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
+						claim, session := completeRouteSessionFor(t, now, false, "github", "cicd")
+						fake := newListingFake(t, nil)
+						reader := openSkipStore(repoID, fake, 8100, 66)
+						doer := newOpenSkipDoer(fake)
+						poison := 8163 // the 64th open emission: the default chunk-count bound
+						if bound == "wall" {
+							poison = 8100
+						}
+						if source == "run" {
+							doer.runs[poison] = []openSkipReply{shape.reply}
+						} else {
+							doer.jobs[poison] = []openSkipReply{shape.reply}
+						}
+						store := newChunkMemoryStore()
+						executor := completeRouteExecutor(now, GitHubTestsRouteHandler{OpenRuns: reader}, store, &memoryEffectSink{})
+						executor.Credentials.Repository = &trackingCompleteRouteCredentialRepository{provider: "github"}
+						executor.Credentials.Decryptor = chunkedCredentialDecryptor{}
+						executor.Doer = fakehttp.Client(doer)
+						executor.BudgetLimits = map[CostClass]int{claim.CostClass: 10}
+						executor.Metrics = providerfoundation.NewMetrics()
+						if bound == "wall" {
+							executor.Now = func() time.Time {
+								if doer.hitsOf(poison) > 0 {
+									return now.Add(46 * time.Second)
+								}
+								return now
 							}
-							return now
 						}
-					}
-					descriptor, _ := Descriptor("github", "cicd")
-					_, err := executor.Execute(context.Background(), session, descriptor)
-					var stopped ChunkContinuationError
-					if !errors.As(err, &stopped) {
-						t.Fatalf("first attempt err=%v, want the continuation that ends the attempt", err)
-					}
-					checkpoint, err := store.LoadChunkCheckpoint(context.Background(), claim, now)
-					if err != nil {
-						t.Fatal(err)
-					}
-					cursor, err := decodeGitHubTestsChunkCursor(checkpoint.NextCursor)
-					if err != nil || cursor.OpenSkipped != 1 {
-						t.Fatalf("premise: committed cursor skipped=%d err=%v, want the skip committed by the bounded emission", cursor.OpenSkipped, err)
-					}
-					for attempt := 0; attempt < 4; attempt++ {
-						_, err = executor.Execute(context.Background(), session, descriptor)
-						if !errors.Is(err, ErrChunkContinuation) {
-							break
+						descriptor, _ := Descriptor("github", "cicd")
+						_, err := executor.Execute(context.Background(), session, descriptor)
+						var stopped ChunkContinuationError
+						if !errors.As(err, &stopped) {
+							t.Fatalf("first attempt err=%v, want the continuation that ends the attempt", err)
 						}
-					}
-					if err != nil {
-						t.Fatalf("resume err=%v", err)
-					}
-					var rendered bytes.Buffer
-					if err := executor.Metrics.WritePrometheus(&rendered); err != nil {
-						t.Fatal(err)
-					}
-					lines := openSkipLines(*records)
-					if len(lines) != 1 || lines[0]["run"] != strconv.Itoa(poison) || lines[0]["reason"] != shape.reason {
-						t.Fatalf("stop=%s: skip lines %v, want exactly one for run %d reason %s", stopped.Reason, lines, poison, shape.reason)
-					}
-					want := fmt.Sprintf(`dev_health_provider_open_run_skipped_total{provider="github",dataset="cicd",reason=%q} 1`, shape.reason)
-					if !strings.Contains(rendered.String(), want) {
-						t.Fatalf("stop=%s: missing %q in:\n%s", stopped.Reason, want, rendered.String())
-					}
-					if total := strings.Count(rendered.String(), "dev_health_provider_open_run_skipped_total{"); total != 1 {
-						t.Fatalf("stop=%s: %d skip counter series, want 1:\n%s", stopped.Reason, total, rendered.String())
-					}
-				})
+						checkpoint, err := store.LoadChunkCheckpoint(context.Background(), claim, now)
+						if err != nil {
+							t.Fatal(err)
+						}
+						cursor, err := decodeGitHubTestsChunkCursor(checkpoint.NextCursor)
+						if err != nil || cursor.OpenSkipped != 1 {
+							t.Fatalf("premise: committed cursor skipped=%d err=%v, want the skip committed by the bounded emission", cursor.OpenSkipped, err)
+						}
+						if resume == "repo-404" {
+							doer.setRepoStatus(http.StatusNotFound)
+							if _, err = executor.Execute(context.Background(), session, descriptor); err == nil {
+								t.Fatal("premise: the resume should fail at the repository read")
+							}
+						} else {
+							for attempt := 0; attempt < 4; attempt++ {
+								_, err = executor.Execute(context.Background(), session, descriptor)
+								if !errors.Is(err, ErrChunkContinuation) {
+									break
+								}
+							}
+							if err != nil {
+								t.Fatalf("resume err=%v", err)
+							}
+						}
+						var rendered bytes.Buffer
+						if err := executor.Metrics.WritePrometheus(&rendered); err != nil {
+							t.Fatal(err)
+						}
+						lines := openSkipLines(*records)
+						if len(lines) != 1 || lines[0]["run"] != strconv.Itoa(poison) || lines[0]["reason"] != shape.reason {
+							t.Fatalf("stop=%s: skip lines %v, want exactly one for run %d reason %s", stopped.Reason, lines, poison, shape.reason)
+						}
+						want := fmt.Sprintf(`dev_health_provider_open_run_skipped_total{provider="github",dataset="cicd",reason=%q} 1`, shape.reason)
+						if !strings.Contains(rendered.String(), want) {
+							t.Fatalf("stop=%s: missing %q in:\n%s", stopped.Reason, want, rendered.String())
+						}
+						if total := strings.Count(rendered.String(), "dev_health_provider_open_run_skipped_total{"); total != 1 {
+							t.Fatalf("stop=%s: %d skip counter series, want 1:\n%s", stopped.Reason, total, rendered.String())
+						}
+					})
+				}
 			}
 		}
 	}
@@ -703,7 +752,7 @@ func TestOpenPhaseTrailingDataDoesNotResetTheBreaker(t *testing.T) {
 }
 
 // openSkipFaultStore fails the chunk store once, before or after the prepare, or before or after the commit mark. The
-// "skip" target is the chunk whose cursor holds the first skip; the "clear" target is the chunk prepared right after it.
+// "skip" target is the chunk whose cursor holds the first skip; the "next" target is the chunk prepared right after it.
 type openSkipFaultStore struct {
 	*chunkMemoryStore
 	mode, target string
@@ -725,7 +774,7 @@ func (s *openSkipFaultStore) targets(chunk PreparedProviderChunk) bool {
 	if s.seen {
 		return false
 	}
-	if s.target == "clear" {
+	if s.target == "next" {
 		return s.skipOrdinal >= 0 && chunk.Ordinal == s.skipOrdinal+1
 	}
 	return openSkipCursorHasSkip(chunk.CursorAfter)
@@ -771,92 +820,106 @@ func (s *openSkipFaultStore) MarkChunkCommitted(ctx context.Context, claim Claim
 	return err
 }
 
-// A store fault at the skip's chunk fails the attempt, and the retry finishes the unit with open_runs_skipped exact.
-// The skip's WARN line (naming the run) and its counter step happen exactly once at every fault point: a fault before
-// the prepare re-runs the route; a fault after it leaves the skip event in the committed cursor and the resume records
-// it. A fault at the chunk that clears the event, after the skip was recorded, records it once too, except a fault
-// before that chunk's prepare: the event is still in the committed cursor and the resume records it again (at most
-// twice, never lost).
+// A store fault at the skip's chunk, or at the chunk after it, fails the attempt; the retry finishes the unit with
+// open_runs_skipped exact. The skip's WARN line (naming the run and the claim's repository, never the provider's text)
+// and its counter step happen exactly once at every fault point: a fault before the prepare re-runs the route; a fault
+// after it is drained by recovery, which tells the route of the commit; a lost commit acknowledgement is settled by the
+// checkpoint read back. A resume that then fails at the repository read loses nothing: the record does not wait for
+// the route to run again.
 func TestOpenPhaseSkipRecoveryKeepsTheResultExact(t *testing.T) {
-	repoID := listingRepoID(t)
+	// The provider's full_name is arbitrary text: the WARN line must name the claim's repository instead.
+	const providerName = "acme/body-fixture: arbitrary text\nsecond line"
+	repoID, err := repositoryIdentity(providerName)
+	if err != nil {
+		t.Fatal(err)
+	}
 	now := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
-	for _, target := range []string{"skip", "clear"} {
-		for _, source := range []string{"run", "jobs"} {
-			for _, mode := range []string{"before-prepare", "after-prepare", "before-commit", "after-commit"} {
-				for _, shape := range openSkipContinuationShapes {
-					if shape.jobsOnly && source != "jobs" {
-						continue
+	for _, resume := range []string{"healthy", "repo-404"} {
+		for _, target := range []string{"skip", "next"} {
+			for _, source := range []string{"run", "jobs"} {
+				for _, mode := range []string{"before-prepare", "after-prepare", "before-commit", "after-commit"} {
+					for _, shape := range openSkipContinuationShapes {
+						if shape.jobsOnly && source != "jobs" {
+							continue
+						}
+						t.Run(resume+"/"+target+"/"+source+"/"+mode+"/"+shape.name, func(t *testing.T) {
+							records := captureMembershipLogs(t)
+							fake := newListingFake(t, nil)
+							reader := openSkipStore(repoID, fake, 8400, 3)
+							doer := newOpenSkipDoer(fake)
+							doer.repoName = providerName
+							if source == "run" {
+								doer.runs[8401] = []openSkipReply{shape.reply}
+							} else {
+								doer.jobs[8401] = []openSkipReply{shape.reply}
+							}
+							fault := NewChunkStoreError(io.ErrUnexpectedEOF)
+							switch mode {
+							case "after-prepare":
+								fault = ErrInvalidConfiguration
+							case "after-commit":
+								fault = io.ErrUnexpectedEOF
+							}
+							store := newOpenSkipFaultStore(mode, target, fault)
+							claim, session := completeRouteSessionFor(t, now, false, "github", "cicd")
+							executor := completeRouteExecutor(now, GitHubTestsRouteHandler{OpenRuns: reader}, store, &memoryEffectSink{})
+							executor.Credentials.Repository = &trackingCompleteRouteCredentialRepository{provider: "github"}
+							executor.Credentials.Decryptor = chunkedCredentialDecryptor{}
+							executor.Doer = fakehttp.Client(doer)
+							executor.BudgetLimits = map[CostClass]int{claim.CostClass: 10}
+							executor.Metrics = providerfoundation.NewMetrics()
+							descriptor, _ := Descriptor("github", "cicd")
+							ctx := context.Background()
+							if _, err := executor.Execute(ctx, session, descriptor); !store.seen || !errors.Is(err, fault) {
+								t.Fatalf("premise: first attempt err=%v seen=%v, want the injected store fault", err, store.seen)
+							}
+							wantLines := 1
+							var result CompleteRouteExecutionResult
+							var err error
+							if resume == "repo-404" {
+								doer.setRepoStatus(http.StatusNotFound)
+								_, err = executor.Execute(ctx, session, descriptor)
+								if err == nil {
+									t.Fatal("premise: the resume should fail at the repository read")
+								}
+								if target == "skip" && mode == "before-prepare" {
+									wantLines = 0
+								}
+							} else {
+								for attempt := 0; attempt < 8; attempt++ {
+									result, err = executor.Execute(ctx, session, descriptor)
+									if !errors.Is(err, ErrChunkContinuation) {
+										break
+									}
+								}
+								if err != nil {
+									t.Fatalf("retry err=%v, want the unit to finish", err)
+								}
+								if got := fmt.Sprint(result.Result[GitHubTestsResultKeyOpenRunsSkipped]); got != "1" {
+									t.Fatalf("open_runs_skipped = %s, want exactly 1 after recovery", got)
+								}
+								if doer.hitsOf(8402) != 1 && !(target == "next" && mode == "before-prepare") {
+									t.Fatalf("the run after the skip was read %d times, want once", doer.hitsOf(8402))
+								}
+							}
+							var rendered bytes.Buffer
+							if err := executor.Metrics.WritePrometheus(&rendered); err != nil {
+								t.Fatal(err)
+							}
+							lines := openSkipLines(*records)
+							series := strings.Count(rendered.String(), "dev_health_provider_open_run_skipped_total{")
+							t.Logf("WARN=%d series=%d hits(8401)=%d hits(8402)=%d resume_err=%v", len(lines), series, doer.hitsOf(8401), doer.hitsOf(8402), err)
+							for _, line := range lines {
+								if line["run"] != "8401" || line["reason"] != shape.reason || fmt.Sprint(line["repository"]) != claim.SourceExternalID {
+									t.Fatalf("skip line %v, want run 8401 reason %s repository %s", line, shape.reason, claim.SourceExternalID)
+								}
+							}
+							counter := fmt.Sprintf(`dev_health_provider_open_run_skipped_total{provider="github",dataset="cicd",reason=%q} 1`, shape.reason)
+							if len(lines) != wantLines || series != wantLines || wantLines == 1 && !strings.Contains(rendered.String(), counter) {
+								t.Fatalf("WARN=%d series=%d, want %d WARN line and counter step for the skip:\n%s", len(lines), series, wantLines, rendered.String())
+							}
+						})
 					}
-					t.Run(target+"/"+source+"/"+mode+"/"+shape.name, func(t *testing.T) {
-						records := captureMembershipLogs(t)
-						fake := newListingFake(t, nil)
-						reader := openSkipStore(repoID, fake, 8400, 3)
-						doer := newOpenSkipDoer(fake)
-						if source == "run" {
-							doer.runs[8401] = []openSkipReply{shape.reply}
-						} else {
-							doer.jobs[8401] = []openSkipReply{shape.reply}
-						}
-						fault := NewChunkStoreError(io.ErrUnexpectedEOF)
-						switch mode {
-						case "after-prepare":
-							fault = ErrInvalidConfiguration
-						case "after-commit":
-							fault = io.ErrUnexpectedEOF
-						}
-						store := newOpenSkipFaultStore(mode, target, fault)
-						claim, session := completeRouteSessionFor(t, now, false, "github", "cicd")
-						executor := completeRouteExecutor(now, GitHubTestsRouteHandler{OpenRuns: reader}, store, &memoryEffectSink{})
-						executor.Credentials.Repository = &trackingCompleteRouteCredentialRepository{provider: "github"}
-						executor.Credentials.Decryptor = chunkedCredentialDecryptor{}
-						executor.Doer = fakehttp.Client(doer)
-						executor.BudgetLimits = map[CostClass]int{claim.CostClass: 10}
-						executor.Metrics = providerfoundation.NewMetrics()
-						descriptor, _ := Descriptor("github", "cicd")
-						ctx := context.Background()
-						if _, err := executor.Execute(ctx, session, descriptor); !store.seen || !errors.Is(err, fault) {
-							t.Fatalf("premise: first attempt err=%v seen=%v, want the injected store fault", err, store.seen)
-						}
-						var result CompleteRouteExecutionResult
-						var err error
-						for attempt := 0; attempt < 8; attempt++ {
-							result, err = executor.Execute(ctx, session, descriptor)
-							if !errors.Is(err, ErrChunkContinuation) {
-								break
-							}
-						}
-						if err != nil {
-							t.Fatalf("retry err=%v, want the unit to finish", err)
-						}
-						if got := fmt.Sprint(result.Result[GitHubTestsResultKeyOpenRunsSkipped]); got != "1" {
-							t.Fatalf("open_runs_skipped = %s, want exactly 1 after recovery", got)
-						}
-						var rendered bytes.Buffer
-						if err := executor.Metrics.WritePrometheus(&rendered); err != nil {
-							t.Fatal(err)
-						}
-						lines := openSkipLines(*records)
-						for _, line := range lines {
-							if line["run"] != "8401" || line["reason"] != shape.reason {
-								t.Fatalf("skip line %v, want run 8401 reason %s", line, shape.reason)
-							}
-						}
-						counter := fmt.Sprintf(`dev_health_provider_open_run_skipped_total{provider="github",dataset="cicd",reason=%q} `, shape.reason)
-						series := strings.Count(rendered.String(), "dev_health_provider_open_run_skipped_total{")
-						t.Logf("WARN=%d series=%d hits(8401)=%d hits(8402)=%d", len(lines), series, doer.hitsOf(8401), doer.hitsOf(8402))
-						if target == "clear" && mode == "before-prepare" {
-							if len(lines) < 1 || len(lines) > 2 || series != 1 || !strings.Contains(rendered.String(), counter+strconv.Itoa(len(lines))) {
-								t.Fatalf("WARN=%d series=%d, want the skip recorded once or twice, never lost:\n%s", len(lines), series, rendered.String())
-							}
-							return
-						}
-						if len(lines) != 1 || series != 1 || !strings.Contains(rendered.String(), counter+"1") {
-							t.Fatalf("WARN=%d series=%d, want one WARN line and one counter step for the skip:\n%s", len(lines), series, rendered.String())
-						}
-						if doer.hitsOf(8402) != 1 {
-							t.Fatalf("the run after the skip was read %d times, want once", doer.hitsOf(8402))
-						}
-					})
 				}
 			}
 		}

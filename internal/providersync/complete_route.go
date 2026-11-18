@@ -83,6 +83,15 @@ type ChunkedCompleteRouteHandler interface {
 	) error
 }
 
+// ChunkCommitObserver is told of each chunk the streaming executor confirmed
+// committed, once: by the attempt that committed it, by the recovery that
+// drained it, or by the checkpoint read back after a commit mark whose
+// acknowledgement was lost. Telemetry that must follow a durable commit
+// belongs here, not after the route's emission returns.
+type ChunkCommitObserver interface {
+	ObserveCommittedChunk(Claim, PreparedProviderChunk, *providerfoundation.Metrics)
+}
+
 // RecoveringCompleteRouteHandler lets a route rebuild an in-flight provider
 // batch from durable effect identity before ordinary source reselection. Most
 // routes only need the stable normalization instant above. Bounded routes

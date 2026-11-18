@@ -66,7 +66,7 @@ func (executor CompleteRouteExecutor) executeChunkedStreaming(
 			if commitErr != nil {
 				return commitErr
 			}
-			if err := store.MarkChunkCommitted(workContext, session.Claim, ordinal, chunk.ManifestDigest, executor.now()); err != nil {
+			if err := executor.markChunkCommitted(workContext, session.Claim, store, handler, ordinal, chunk); err != nil {
 				return err
 			}
 			committedThisAttempt++
@@ -235,7 +235,7 @@ func (executor CompleteRouteExecutor) executeChunkedStreaming(
 					if commitErr != nil {
 						return commitErr
 					}
-					if err := store.MarkChunkCommitted(workContext, session.Claim, prepared.Ordinal, prepared.ManifestDigest, executor.now()); err != nil {
+					if err := executor.markChunkCommitted(workContext, session.Claim, store, handler, prepared.Ordinal, prepared); err != nil {
 						return err
 					}
 					nextOrdinal++
@@ -272,6 +272,29 @@ func (executor CompleteRouteExecutor) executeChunkedStreaming(
 		return loadChunkedFinalResult(workContext, session.Claim, store, checkpoint.TotalChunks, &result, executor.now())
 	})
 	return result, err
+}
+
+// markChunkCommitted marks one prepared chunk committed and tells the route's
+// ChunkCommitObserver of a commit it confirmed. A failed mark may still be
+// durable (a lost acknowledgement), and no later recovery drains a chunk the
+// checkpoint already moved past, so the checkpoint read back decides.
+func (executor CompleteRouteExecutor) markChunkCommitted(
+	ctx context.Context, claim Claim, store ChunkedEffectStore, handler ChunkedCompleteRouteHandler,
+	ordinal int, chunk PreparedProviderChunk,
+) error {
+	err := store.MarkChunkCommitted(ctx, claim, ordinal, chunk.ManifestDigest, executor.now())
+	observer, ok := handler.(ChunkCommitObserver)
+	if !ok {
+		return err
+	}
+	if err != nil {
+		checkpoint, loadErr := store.LoadChunkCheckpoint(ctx, claim, executor.now())
+		if loadErr != nil || checkpoint.NextOrdinal <= ordinal {
+			return err
+		}
+	}
+	observer.ObserveCommittedChunk(claim, chunk, executor.Metrics)
+	return err
 }
 
 func checkpointTime(checkpoint ChunkCheckpoint, fallback time.Time) time.Time {

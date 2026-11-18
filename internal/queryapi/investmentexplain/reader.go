@@ -307,8 +307,10 @@ ORDER BY value DESC
 }
 
 // FetchSizingCoverage counts the distinct units FetchInvestmentBreakdown reads for the same filters (same source,
-// window, scope and category clauses) and the ones among them that carry an issue size.
-func (reader *Reader) FetchSizingCoverage(ctx context.Context, filters BreakdownFilters) (readers.SizingCoverage, error) {
+// window, scope and category clauses) and the ones among them that carry an issue size. The read is one aggregate
+// row and is complete only when its stream ends after that row with no error and its rows close with none
+// (CHAOS-13977): a connection lost after the row is a failed read, never a measured coverage.
+func (reader *Reader) FetchSizingCoverage(ctx context.Context, filters BreakdownFilters) (_ readers.SizingCoverage, err error) {
 	if reader == nil || reader.client == nil {
 		return readers.SizingCoverage{}, ErrUnavailable
 	}
@@ -336,7 +338,7 @@ WHERE %s
 	if err != nil {
 		return readers.SizingCoverage{}, fmt.Errorf("query investment sizing coverage: %w", err)
 	}
-	defer rows.Close()
+	defer closeRows("investment sizing coverage", rows, &err)
 	if !rows.Next() {
 		if err := rows.Err(); err != nil {
 			return readers.SizingCoverage{}, fmt.Errorf("iterate investment sizing coverage: %w", err)
@@ -346,6 +348,9 @@ WHERE %s
 	coverage, err := readers.ScanSizingCoverage(rows)
 	if err != nil {
 		return readers.SizingCoverage{}, err
+	}
+	if rows.Next() {
+		return readers.SizingCoverage{}, fmt.Errorf("query investment sizing coverage: more than one row")
 	}
 	if err := rows.Err(); err != nil {
 		return readers.SizingCoverage{}, fmt.Errorf("iterate investment sizing coverage: %w", err)
@@ -505,7 +510,7 @@ type ThemeEffortRow struct {
 // rule for every categorization status (a unit with insufficient evidence counts, as on the
 // Investment page); only the dating of a unit may differ (BreakdownFilters.DatedByEnd). The value
 // is MeasureValueSQL of the filters' measure, the one definition FetchInvestmentBreakdown reads.
-func (reader *Reader) FetchInvestmentThemeEffort(ctx context.Context, filters BreakdownFilters) ([]ThemeEffortRow, error) {
+func (reader *Reader) FetchInvestmentThemeEffort(ctx context.Context, filters BreakdownFilters) (_ []ThemeEffortRow, err error) {
 	if reader == nil || reader.client == nil {
 		return nil, ErrUnavailable
 	}
@@ -549,7 +554,7 @@ ORDER BY value DESC, theme ASC
 	if err != nil {
 		return nil, fmt.Errorf("query investment theme effort: %w", err)
 	}
-	defer rows.Close()
+	defer closeRows("investment theme effort", rows, &err)
 	out := make([]ThemeEffortRow, 0, 5)
 	for rows.Next() {
 		var row ThemeEffortRow
@@ -622,4 +627,13 @@ func (f BreakdownFilters) teamShare(scopeSQL string) (expr string, bindings []dh
 
 func (f BreakdownFilters) scoped(scopeSQL string) bool {
 	return strings.TrimSpace(scopeSQL) != "" && strings.TrimSpace(strings.TrimPrefix(scopeSQL, " AND ")) != "1 = 0"
+}
+
+// closeRows closes a read's rows and returns their Close error through err when the read has no error yet
+// (CHAOS-13977): a read whose rows do not close cleanly is a failed read, and the first error wins. The caller names
+// err as a result and discards the value on an error.
+func closeRows(read string, rows interface{ Close() error }, err *error) {
+	if closeErr := rows.Close(); closeErr != nil && *err == nil {
+		*err = fmt.Errorf("close %s rows: %w", read, closeErr)
+	}
 }

@@ -60,6 +60,8 @@ func TestPendingChangesHonoursTeamID(t *testing.T) {
 	}
 	seedPendingChange(t, s, ctx, "org-2", "c-other-org", "jira:ENG", "jira")
 	seedPendingChange(t, s, ctx, "org-2", "c-other-org-lin", "linear:LIN", "linear")
+	// a competing bare-id holder in the other org must not make org-1's bare id ambiguous
+	writeSeamSeedNativeOrg(t, s, ctx, "org-2", "gitlab", "gl:ENG", "ENG")
 	h := newTestHandlers(s)
 
 	all := "c-gh:GH,c-gl:GL,c-jira:ENG,c-linear:LIN"
@@ -73,6 +75,10 @@ func TestPendingChangesHonoursTeamID(t *testing.T) {
 		{"bare id resolves to the keyed team", "team_id=ENG", "c-jira:ENG"},
 		{"bare linear", "team_id=LIN", "c-linear:LIN"},
 		{"unknown team", "team_id=nope", ""},
+		{"unescaped semicolon stays in the value", "team_id=jira:ENG;x", ""},
+		{"unescaped semicolon after another team_id", "team_id=jira:ENG&team_id=linear:LIN;x", ""},
+		{"percent-encoded value", "team_id=jira%3AENG", "c-jira:ENG"},
+		{"plus is a space", "team_id=jira:ENG+", ""},
 		{"repeated values: the last wins", "team_id=" + url.QueryEscape("jira:ENG") + "&team_id=" + url.QueryEscape("linear:LIN"), "c-linear:LIN"},
 		{"repeated values: an empty last is no filter", "team_id=" + url.QueryEscape("jira:ENG") + "&team_id=", all},
 		{"repeated values: a named last narrows after an empty first", "team_id=&team_id=" + url.QueryEscape("gh:GH"), "c-gh:GH"},
@@ -107,4 +113,11 @@ func TestPendingChangesHonoursTeamID(t *testing.T) {
 			t.Fatalf("ambiguous bare id = %d, want 409", code)
 		}
 	})
+}
+
+func writeSeamSeedNativeOrg(t *testing.T, s Store, ctx context.Context, orgID, provider, id, native string) {
+	t.Helper()
+	if err := s.Conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key) VALUES (?, generateUUIDv4(), 'Eng', [], [], [], 1, '2026-09-01 00:00:00', ?, ?, ?)`, id, orgID, provider, native); err != nil {
+		t.Fatal(err)
+	}
 }

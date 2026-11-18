@@ -3,6 +3,8 @@ package teamsidentity
 import (
 	"context"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
@@ -10,7 +12,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
-	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 )
 
@@ -132,6 +133,24 @@ func flaggedChangeJSON(row reviewChangeRow) *pyjson.Object {
 	return out
 }
 
+// lastQueryValue is the last value of name in a raw query split on '&' only,
+// as FastAPI reads it: net/url's Query() drops a pair holding an unescaped
+// ';', which would turn a team filter into the full list. A pair whose
+// escapes are invalid is skipped, as Query() skips it.
+func lastQueryValue(rawQuery, name string) string {
+	last := ""
+	for _, pair := range strings.Split(rawQuery, "&") {
+		key, value, _ := strings.Cut(pair, "=")
+		key, kerr := url.QueryUnescape(key)
+		value, verr := url.QueryUnescape(value)
+		if kerr != nil || verr != nil || key != name {
+			continue
+		}
+		last = value
+	}
+	return last
+}
+
 // pendingChanges is GET /teams/pending-changes, dispatched from getTeam (the
 // literal collides with the {team_id} wildcard exactly as discover does).
 //
@@ -141,7 +160,7 @@ func flaggedChangeJSON(row reviewChangeRow) *pyjson.Object {
 // pending change in the org. The org scope is always in the query.
 func (h handlers) pendingChanges(w http.ResponseWriter, r *http.Request) {
 	var teamID *string
-	if raw := httpapi.QueryLast(r.URL.Query(), "team_id"); raw != "" {
+	if raw := lastQueryValue(r.URL.RawQuery, "team_id"); raw != "" {
 		resolved, ok := h.readTeamID(w, r, raw)
 		if !ok {
 			return

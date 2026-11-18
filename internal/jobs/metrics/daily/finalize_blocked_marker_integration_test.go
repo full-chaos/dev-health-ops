@@ -304,29 +304,33 @@ func TestACompletionWriteLostOnEveryAttemptReachesTheBlockedMarker(t *testing.T)
 
 // The operator recovery of a run whose completion write was lost on the last
 // attempt is a rerun of its day (`metrics daily-start --rerun-tag`): no redrive
-// reopens a 'failed' run. The rerun's run reaches succeeded; the failed run
-// keeps its row and its finalize_failed marker.
+// reopens a 'failed' run. The rerun's run reaches succeeded and the reader marker
+// certifies the day; the failed run keeps its row and its finalize_failed marker.
 func TestARerunOfTheDayRecoversARunWhoseLastCompletionWriteWasLost(t *testing.T) {
 	defer restoreRecognisedFinalizeFamilies(pythonRecognisedFinalizeFamilies)
 	pythonRecognisedFinalizeFamilies = []string{}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
-	store, publisher, pool := rerunStore(t, ctx)
-	const (
-		day      = "2026-11-02"
-		attempts = 4
-	)
+	stack := newMarkerStack(t)
+	store, pool := stack.store, stack.pool
+	const attempts = 4
+	day := markerDay(2)
+	dayKey := day.Format(dailyTargetDayLayout)
 	repos := []RepositoryID{"00000000-0000-4000-8000-000000000071"}
 
 	runToFinalize := func(tag string) string {
 		t.Helper()
-		started, err := store.StartManualDailyRerun(ctx, testOrgID, day, ManualDailyRerunGeneration(testOrgID, day, repos, tag), repos, publisher, tag)
+		started, err := store.StartManualDailyRerun(ctx, testOrgID, dayKey, ManualDailyRerunGeneration(testOrgID, dayKey, nil, tag), nil, stack.publisher, tag)
 		if err != nil || started.AlreadyStarted {
 			t.Fatalf("StartManualDailyRerun(%s) = %+v, %v", tag, started, err)
 		}
-		if run, err := store.ClaimDispatch(ctx, started.RunID); err != nil || run == nil {
-			t.Fatalf("ClaimDispatch(%s) = %v, %v", started.RunID, run, err)
+		run, err := store.ClaimDispatch(ctx, started.RunID)
+		if err != nil || run == nil || !run.FullOrg {
+			t.Fatalf("ClaimDispatch(%s) = %+v, %v; want a full-org run", started.RunID, run, err)
+		}
+		if _, err := store.MaterializeScheduledFanout(ctx, *run, repos, stack.publisher); err != nil {
+			t.Fatal(err)
 		}
 		rows, err := pool.Query(ctx, `SELECT id::text FROM daily_metrics_partitions WHERE run_id = $1::uuid`, started.RunID)
 		if err != nil {
@@ -349,7 +353,7 @@ func TestARerunOfTheDayRecoversARunWhoseLastCompletionWriteWasLost(t *testing.T)
 			if err != nil || claim == nil {
 				t.Fatalf("ClaimPartition(%s) = %v, %v", id, claim, err)
 			}
-			if err := store.CompletePartition(ctx, *claim, publisher); err != nil {
+			if err := store.CompletePartition(ctx, *claim, stack.publisher); err != nil {
 				t.Fatalf("CompletePartition(%s): %v", id, err)
 			}
 		}
@@ -384,9 +388,14 @@ func TestARerunOfTheDayRecoversARunWhoseLastCompletionWriteWasLost(t *testing.T)
 		t.Fatal(err)
 	}
 	status, finalization, reason := readRun(lost)
-	t.Logf("before the rerun: lost run status=%s finalization=%s blocked_reason=%v", status, finalization, deref(reason))
+	marker := stack.states(t, testOrgID, day, day)[dayKey]
+	t.Logf("before the rerun: lost run status=%s finalization=%s blocked_reason=%v; day marker=%q",
+		status, finalization, deref(reason), marker)
 	if status != "failed" || finalization != "failed" || reason == nil || *reason != BlockedReasonFinalizeFailed {
 		t.Fatalf("the lost run = %s/%s/%v, want failed/failed/%s", status, finalization, deref(reason), BlockedReasonFinalizeFailed)
+	}
+	if marker == RunMarkerSucceeded {
+		t.Fatalf("day marker = %q before the rerun, want not certified", marker)
 	}
 
 	rerun := runToFinalize("fix-1")
@@ -403,11 +412,17 @@ func TestARerunOfTheDayRecoversARunWhoseLastCompletionWriteWasLost(t *testing.T)
 	}
 	rerunStatus, rerunFinalization, rerunReason := readRun(rerun)
 	status, finalization, reason = readRun(lost)
-	t.Logf("after the rerun: rerun status=%s finalization=%s blocked_reason=%v; lost run status=%s finalization=%s blocked_reason=%v; blocked=%d",
-		rerunStatus, rerunFinalization, deref(rerunReason), status, finalization, deref(reason), outcome.Blocked)
+	marker = stack.states(t, testOrgID, day, day)[dayKey]
+	t.Logf("after the rerun: rerun status=%s finalization=%s blocked_reason=%v; day marker=%q; lost run status=%s finalization=%s blocked_reason=%v; blocked=%d",
+		rerunStatus, rerunFinalization, deref(rerunReason), marker, status, finalization, deref(reason), outcome.Blocked)
 	if rerunStatus != "succeeded" || rerunFinalization != "succeeded" || rerunReason != nil {
 		t.Fatalf("the rerun = %s/%s/%v, want succeeded/succeeded/unmarked", rerunStatus, rerunFinalization, deref(rerunReason))
 	}
+	if marker != RunMarkerSucceeded {
+		t.Fatalf("day marker after the rerun = %q, want %q", marker, RunMarkerSucceeded)
+	}
+	// The marker of the failed run does not clear: its predicate reads only that
+	// row, so the day stays reported blocked after it recovered.
 	if status != "failed" || reason == nil || *reason != BlockedReasonFinalizeFailed || outcome.Blocked != 1 {
 		t.Fatalf("the lost run after the rerun = %s/%v blocked=%d, want failed/%s and 1 blocked",
 			status, deref(reason), outcome.Blocked, BlockedReasonFinalizeFailed)

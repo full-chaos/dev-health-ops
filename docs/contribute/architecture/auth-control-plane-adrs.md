@@ -934,12 +934,16 @@ auth reaches it through go-api's `/api/v1/auth/*` proxy.
    and auth-service) refuse both (ACP-ADR-08 amendment, condition 1).
 3. **A separate mint for the ACR audiences,** beside the session token class.
    The web login token class does not change: there is no `eddsa` switch of web
-   tokens for this.
+   tokens for this. This decision does not touch the separate, dark `eddsa`
+   switch that the PDP shadow step needs; it is not a general ban on that class.
 4. **One key set.** The ACR-audience tokens are signed with the auth-service
    key set and issuer that the workload path uses (ACP-ADR-02 custody; the prod issuer is
    set in configuration). No second key set and no second issuer. The issuer is
    configured independently of the web token class: the web login token stays
-   `hs256_compat` while the shared issuer is set.
+   `hs256_compat` while the shared issuer is set. The prod issuer path needs more
+   than the issuer setting: the chart must render the issuer while the web class
+   is `hs256_compat`, and the token-exchange wiring must be in place. The issuer
+   setting alone does not set it.
 5. **Each MCP client gets its own ACP session at authorize.** It never shares
    the web session's `sid`. Its lifecycle:
    - A web logout or an organization switch ends the browser client's
@@ -948,6 +952,12 @@ auth reaches it through go-api's `/api/v1/auth/*` proxy.
    - Revoking an OAuth client ends that client's refresh family and session.
    - The user's revoke-all, a password change and an account-security event
      end every session of the user, MCP clients included.
+   - Organization events end client sessions too: removing the member from the
+     session's organization, and suspending or deprovisioning that
+     organization, end the client sessions in that organization, as they end
+     the member's other session rows (`EndOrgInTx` and `EndOrganizationInTx`,
+     `internal/auth/session/end_org.go`). User-wide events are not the only
+     end of an MCP client session.
    - An MCP client session has its own explicit idle and absolute lifetime (a
      new `sid` alone is still under the session store's idle rule); the values
      are set with the token endpoint, not here.
@@ -955,6 +965,12 @@ auth reaches it through go-api's `/api/v1/auth/*` proxy.
      not left to the browser sending a revoke.
    - Every client session keeps the organization and token-version pin that
      the live access read checks.
+   - A delegated (impersonation) session cannot start one. Authorize and
+     consent are refused under a delegated session, because a client grant is
+     credential issuance, which G-51 denies during impersonation. Delegated
+     bearers are denied on auth-service routes by default; the OAuth routes are
+     not added to the allow list of that default, and the public-surface design
+     (decision 11) carries the same refusal.
 6. **OAuth refresh credentials are their own credential purpose.** They are
    bound to the client, the resource and the session. The platform refresh
    routes refuse them, and the OAuth token endpoint refuses platform refresh

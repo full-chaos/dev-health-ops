@@ -19,7 +19,6 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
-	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"github.com/full-chaos/dev-health-ops/internal/llmbudget"
 	"github.com/full-chaos/dev-health-ops/internal/llmorgsettings"
@@ -417,7 +416,7 @@ func (h *handlers) getLLMSettingsModels(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	requested := ""
-	if values, present := httpapi.Query(r)["provider"]; present {
+	if values, present := requestQuery(r)["provider"]; present {
 		requested = pythonparity.Lower(pythonparity.Strip(values[len(values)-1]))
 	}
 	if requested != "" && !slices.Contains(llmbudget.CatalogProviders(), requested) {

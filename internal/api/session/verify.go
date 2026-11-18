@@ -12,7 +12,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/usersowned"
-	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 )
 
 type (
@@ -23,7 +22,7 @@ type (
 // validateVerify is verify_email's `token: Query(min_length=1)`.
 func validateVerify(w http.ResponseWriter, r *http.Request) (*http.Request, bool) {
 	var errs pybody.Errors
-	token, _ := errs.RequiredQueryString("token", pybody.LastQueryValue(httpapi.Query(r), "token"), 1)
+	token, _ := errs.RequiredQueryString("token", pybody.LastQueryValue(pybody.Query(r), "token"), 1)
 	if len(errs) > 0 {
 		writeValidation(w, errs)
 		return nil, false

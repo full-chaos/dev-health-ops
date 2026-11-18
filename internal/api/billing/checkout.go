@@ -14,7 +14,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
-	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
@@ -254,7 +253,7 @@ func savepoint(ctx context.Context, tx pgx.Tx, fn func(pgx.Tx) error) error {
 func (h handlers) portal(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	user := policy.UserFrom(ctx)
-	returnURL := pybody.LastQueryValue(httpapi.Query(r), "return_url")
+	returnURL := pybody.LastQueryValue(pybody.Query(r), "return_url")
 	customer, err := h.customerID(ctx, user.OrgID)
 	if err != nil {
 		h.logger.ErrorContext(ctx, "billing: customer lookup failed", "error", err.Error())

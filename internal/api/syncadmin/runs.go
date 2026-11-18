@@ -12,7 +12,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
-	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
@@ -40,7 +39,7 @@ var (
 // pageQuery validates `limit: int = Query(default=50, ge=1, le=200)` and
 // `offset: int = Query(default=0, ge=0)`, both errors in one 422.
 func pageQuery(w http.ResponseWriter, r *http.Request) (limit, offset *big.Int, ok bool) {
-	query := httpapi.Query(r)
+	query := pybody.Query(r)
 	var errs pybody.Errors
 	limit, _ = errs.QueryInt("limit", pybody.LastQuery(query, "limit"), 50, &pageLimitMin, &pageLimitMax)
 	offset, _ = errs.QueryInt("offset", pybody.LastQuery(query, "offset"), 0, &pageOffsetGe, pybody.Int64Max())

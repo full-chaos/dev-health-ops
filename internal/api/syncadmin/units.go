@@ -14,7 +14,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
-	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 	schedsync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
@@ -43,7 +42,7 @@ type decodedUnit struct {
 // slice) as SyncRunUnitResponse.
 func (h *handlers) getRunUnits(w http.ResponseWriter, r *http.Request) {
 	var errs pybody.Errors
-	query := parseUnitsQuery(httpapi.Query(r), &errs)
+	query := parseUnitsQuery(pybody.Query(r), &errs)
 	if len(errs) > 0 {
 		writeQueryErrors(w, errs)
 		return

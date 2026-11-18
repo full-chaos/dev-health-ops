@@ -14,7 +14,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
-	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/llmorgsettings"
 )
 
@@ -66,7 +65,7 @@ func (h *handlers) getLLMSpend(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	values := httpapi.Query(r)
+	values := pybody.Query(r)
 	var errs pybody.Errors
 	one := int64(1)
 	limitValue, _ := errs.QueryInt("limit", queryPtr(values, "limit"), spendDefaultLimit, &one, nil)

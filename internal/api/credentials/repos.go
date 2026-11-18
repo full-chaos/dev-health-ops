@@ -17,7 +17,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/api/restcore"
-	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 )
 
@@ -81,7 +80,7 @@ var errNotADict = errors.New("stored credential value is not a dict")
 // GitLab is listed by this plane; a GitHub credential is refused with 501.
 func (h handlers) repos(w http.ResponseWriter, r *http.Request) {
 	var problems pybody.Errors
-	query := httpapi.Query(r)
+	query := pybody.Query(r)
 	owner := pybody.LastQueryValue(query, "owner")
 	search := pybody.LastQueryValue(query, "search")
 	maxRepos, _ := problems.QueryInt("max_repos", pybody.LastQueryValue(query, "max_repos"), 100, nil, nil)

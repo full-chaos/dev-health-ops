@@ -15,7 +15,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
-	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
@@ -369,7 +368,7 @@ func inferResponseJSON(teamID, projectKey string, windowDays int64, members []in
 
 // inferMembers is GET /teams/{team_id}/infer-members.
 func (h handlers) inferMembers(w http.ResponseWriter, r *http.Request) {
-	query := httpapi.Query(r)
+	query := pybody.Query(r)
 	var problems pybody.Errors
 	ge, le := int64(1), int64(365)
 	windowDays, _ := problems.QueryInt("window_days", pybody.LastQuery(query, "window_days"), 90, &ge, &le)

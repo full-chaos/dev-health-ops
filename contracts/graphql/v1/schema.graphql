@@ -2329,6 +2329,10 @@ type TestOpsRiskResult {
   pipelineStability: Float
   timeseries: [TestOpsRiskTrendPoint!]!
   qualityDragBreakdown: [TestOpsRiskBreakdownItem!]!
+  """
+  True when any repository row of the latest quality-drag day has a failure-rework, flake-investigation, queue-wait or retry-overhead part that was not measured; qualityDragHours and the breakdown then sum only the known parts.
+  """
+  qualityDragPartial: Boolean!
   quadrantData: [TestOpsRiskQuadrantPoint!]!
   confidenceSpark: [TestOpsRiskSparkPoint!]!
   confidenceDelta: Float

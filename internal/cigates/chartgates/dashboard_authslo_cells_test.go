@@ -95,7 +95,16 @@ func authSLOCells(base map[string]any) []authSLOCell {
 	for _, id := range ids {
 		id := id
 		ps := mp(mp(mp(panels[id])["spec"])["plugin"])["spec"]
+		// A panel of one query holds it as its one entry; a panel of several holds one signoz/CompositeQuery entry whose
+		// plugin spec lists them, each as {"type": "builder_query", "spec": <builder query>}.
 		qs := list(mp(mp(panels[id])["spec"])["queries"])
+		listPath, specRel := pp(id, "spec", "queries"), []any{"spec", "plugin", "spec"}
+		composite := len(qs) == 1 && str(mp(mp(mp(qs[0])["spec"])["plugin"])["kind"]) == "signoz/CompositeQuery"
+		if composite {
+			listPath, specRel = pp(id, "spec", "queries", 0, "spec", "plugin", "spec", "queries"), []any{"spec"}
+			qs = list(mp(mp(mp(mp(qs[0])["spec"])["plugin"])["spec"])["queries"])
+		}
+		under := func(base []any, rest ...any) []any { return append(append([]any{}, base...), rest...) }
 		hasLine := len(list(mp(ps)["thresholds"])) > 0
 		pw := "panel " + id + " "
 
@@ -122,16 +131,23 @@ func authSLOCells(base map[string]any) []authSLOCell {
 		})
 		next := string(rune('A' + len(qs)))
 		add("c2-inventory", id+"/query-added", fmt.Sprintf("%squeries hold %q", pw, next), func(t *testing.T, doc map[string]any) {
-			sp := authSLOCellMap(t, doc, pp(id, "spec")...)
+			sp := authSLOCellMap(t, doc, listPath[:len(listPath)-1]...)
 			l := list(sp["queries"])
 			q := authSLOCellClone(l[len(l)-1])
 			mp(mp(q)["spec"])["name"] = next
-			mp(mp(mp(q)["spec"])["plugin"])["spec"].(map[string]any)["name"] = next
+			if !composite {
+				mp(mp(mp(q)["spec"])["plugin"])["spec"].(map[string]any)["name"] = next
+			}
 			sp["queries"] = append(l, q)
+		})
+		add("c2-inventory", id+"/second-entry", fmt.Sprintf("%sholds 2 query entries, want exactly 1", pw), func(t *testing.T, doc map[string]any) {
+			sp := authSLOCellMap(t, doc, pp(id, "spec")...)
+			l := list(sp["queries"])
+			sp["queries"] = append(l, authSLOCellClone(l[0]))
 		})
 		if len(qs) > 1 {
 			add("c2-inventory", id+"/queries-reordered", "", func(t *testing.T, doc map[string]any) {
-				sp := authSLOCellMap(t, doc, pp(id, "spec")...)
+				sp := authSLOCellMap(t, doc, listPath[:len(listPath)-1]...)
 				sp["queries"] = authSLOReversed(list(sp["queries"]))
 			})
 		}
@@ -179,14 +195,18 @@ func authSLOCells(base map[string]any) []authSLOCell {
 			qi := qi
 			n := str(mp(mp(q)["spec"])["name"])
 			qs0 := mp(mp(mp(mp(q)["spec"])["plugin"])["spec"])
+			if composite {
+				qs0 = mp(mp(q)["spec"])
+			}
 			qw := fmt.Sprintf("panel %s query %s ", id, n)
 			cn := id + "/" + n + "/"
-			qp := func(rest ...any) []any { return pp(id, append([]any{"spec", "queries", qi}, rest...)...) }
+			qp := func(rest ...any) []any { return under(listPath, append([]any{qi}, rest...)...) }
+			specPath := func(rest ...any) []any { return qp(append(append([]any{}, specRel...), rest...)...) }
 			spec := func(t *testing.T, doc map[string]any) map[string]any {
-				return authSLOCellMap(t, doc, qp("spec", "plugin", "spec")...)
+				return authSLOCellMap(t, doc, specPath()...)
 			}
 			agg := func(t *testing.T, doc map[string]any) map[string]any {
-				return authSLOCellMap(t, doc, qp("spec", "plugin", "spec", "aggregations", 0)...)
+				return authSLOCellMap(t, doc, specPath("aggregations", 0)...)
 			}
 
 			// class 1: the query is a metrics builder query
@@ -195,23 +215,33 @@ func authSLOCells(base map[string]any) []authSLOCell {
 			add("c1-signal", cn+"source-set", qw+`key spec.plugin.spec.source = "meter"`, func(t *testing.T, doc map[string]any) { spec(t, doc)["source"] = "meter" })
 			add("c1-signal", cn+"datasource-added", qw+`key spec.plugin.spec.dataSource is not a known field`, func(t *testing.T, doc map[string]any) { spec(t, doc)["dataSource"] = "logs" })
 			add("c1-signal", cn+"query-kind", qw+`key kind = "clickhouse_sql"`, func(t *testing.T, doc map[string]any) {
+				if composite {
+					authSLOCellMap(t, doc, pp(id, "spec", "queries", 0)...)["kind"] = "clickhouse_sql"
+					return
+				}
 				authSLOCellMap(t, doc, qp()...)["kind"] = "clickhouse_sql"
 			})
-			add("c1-signal", cn+"plugin-kind", qw+`key spec.plugin.kind = "signoz/ClickHouseQuery"`, func(t *testing.T, doc map[string]any) {
-				authSLOCellMap(t, doc, qp("spec", "plugin")...)["kind"] = "signoz/ClickHouseQuery"
-			})
+			if composite {
+				add("c1-signal", cn+"envelope-type", qw+`key type = "clickhouse_sql"`, func(t *testing.T, doc map[string]any) {
+					authSLOCellMap(t, doc, qp()...)["type"] = "clickhouse_sql"
+				})
+			} else {
+				add("c1-signal", cn+"plugin-kind", qw+`key spec.plugin.kind = "signoz/ClickHouseQuery"`, func(t *testing.T, doc map[string]any) {
+					authSLOCellMap(t, doc, qp("spec", "plugin")...)["kind"] = "signoz/ClickHouseQuery"
+				})
+			}
 			for gi := range list(qs0["groupBy"]) {
 				gi := gi
 				add("c1-signal", fmt.Sprintf("%sgroupby%d-signal-logs", cn, gi), fmt.Sprintf(`%sgroupBy[%d] key signal = "logs"`, qw, gi), func(t *testing.T, doc map[string]any) {
-					authSLOCellMap(t, doc, qp("spec", "plugin", "spec", "groupBy", gi)...)["signal"] = "logs"
+					authSLOCellMap(t, doc, specPath("groupBy", gi)...)["signal"] = "logs"
 				})
 			}
 
 			// class 2: every query field and group-by label is pinned
 			add("c2-inventory", cn+"query-removed", fmt.Sprintf("%squeries lack %q", pw, n), func(t *testing.T, doc map[string]any) {
-				sp := authSLOCellMap(t, doc, pp(id, "spec")...)
-				l := list(sp["queries"])
-				sp["queries"] = append(append([]any{}, l[:qi]...), l[qi+1:]...)
+				m := authSLOCellMap(t, doc, listPath[:len(listPath)-1]...)
+				l := list(m["queries"])
+				m["queries"] = append(append([]any{}, l[:qi]...), l[qi+1:]...)
 			})
 			add("c2-inventory", cn+"legend-changed", qw+`key spec.plugin.spec.legend = "zz"`, func(t *testing.T, doc map[string]any) { spec(t, doc)["legend"] = "zz" })
 			add("c2-inventory", cn+"limit-changed", qw+`key spec.plugin.spec.limit = 10`, func(t *testing.T, doc map[string]any) { spec(t, doc)["limit"] = 10.0 })
@@ -254,7 +284,7 @@ func authSLOCells(base map[string]any) []authSLOCell {
 
 			// class 4: filter clauses and route sets compared as sets
 			filt := func(t *testing.T, doc map[string]any) map[string]any {
-				return authSLOCellMap(t, doc, qp("spec", "plugin", "spec", "filter")...)
+				return authSLOCellMap(t, doc, specPath("filter")...)
 			}
 			fe := str(mp(qs0["filter"])["expression"])
 			clauses := strings.Split(fe, " AND ")

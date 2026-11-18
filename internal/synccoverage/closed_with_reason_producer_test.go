@@ -22,8 +22,8 @@ import (
 // downloaded), or served as body; a body over the route cap is served
 // without range support.
 type producerArtifact struct {
-	expired   bool
-	body      []byte
+	expired bool
+	body    []byte
 }
 
 type producerDoer struct {

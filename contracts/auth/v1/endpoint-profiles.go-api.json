@@ -5239,7 +5239,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/session/session.go",
-        "line": 146
+        "line": 148
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -5307,7 +5307,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/session/session.go",
-        "line": 147
+        "line": 149
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -5418,7 +5418,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/session/session.go",
-        "line": 165
+        "line": 167
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -5642,7 +5642,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/session/session.go",
-        "line": 154
+        "line": 156
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -12763,7 +12763,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/session/session.go",
-        "line": 163
+        "line": 165
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -12831,7 +12831,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/session/session.go",
-        "line": 161
+        "line": 163
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -12878,7 +12878,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/session/session.go",
-        "line": 158
+        "line": 160
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -12919,7 +12919,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/session/session.go",
-        "line": 141
+        "line": 142
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -12938,7 +12938,7 @@
         "name": "EdDSA"
       },
       "classification": "protected",
-      "current_state_cache_behavior": "none: no authorization read (internal/api/session/session.go:151)",
+      "current_state_cache_behavior": "none: no authorization read (internal/api/session/session.go:153)",
       "delegated_bearer": "denied",
       "disclosure_behavior": null,
       "gaps": [
@@ -12951,7 +12951,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 148,
+          "line": 150,
           "note": "Pattern:",
           "path": "internal/api/session/session.go"
         },
@@ -12982,12 +12982,12 @@
           "is_intended_validator": false
         }
       ],
-      "resource_resolver": "none: the route reads no caller organization (internal/api/session/session.go:151)",
+      "resource_resolver": "none: the route reads no caller organization (internal/api/session/session.go:153)",
       "route": "/api/v1/auth/logout",
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/session/session.go",
-        "line": 151
+        "line": 153
       },
       "surface_kind": "rest",
       "tenant_requirement": "none",
@@ -13252,7 +13252,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/session/session.go",
-        "line": 164
+        "line": 166
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -13320,7 +13320,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/session/session.go",
-        "line": 166
+        "line": 168
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -13369,7 +13369,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/session/session.go",
-        "line": 144
+        "line": 145
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -13410,7 +13410,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/session/session.go",
-        "line": 152
+        "line": 154
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -13451,7 +13451,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/session/session.go",
-        "line": 156
+        "line": 158
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -13492,7 +13492,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/session/session.go",
-        "line": 160
+        "line": 162
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -13621,7 +13621,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/session/session.go",
-        "line": 143
+        "line": 144
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -13885,7 +13885,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/session/session.go",
-        "line": 148
+        "line": 150
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -13905,7 +13905,7 @@
       },
       "action": null,
       "classification": "protected",
-      "current_state_cache_behavior": "none: no authorization read (internal/api/session/session.go:149)",
+      "current_state_cache_behavior": "none: no authorization read (internal/api/session/session.go:151)",
       "disclosure_behavior": null,
       "gaps": [
         "action: no catalog action covers the session and onboarding routes (this leaf does not extend the vocabulary)",
@@ -13917,7 +13917,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 146,
+          "line": 148,
           "note": "Pattern:",
           "path": "internal/api/session/session.go"
         },
@@ -13948,12 +13948,12 @@
           "is_intended_validator": false
         }
       ],
-      "resource_resolver": "none: the route reads no caller organization (internal/api/session/session.go:149)",
+      "resource_resolver": "none: the route reads no caller organization (internal/api/session/session.go:151)",
       "route": "/api/v1/auth/validate",
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/session/session.go",
-        "line": 149
+        "line": 151
       },
       "surface_kind": "rest",
       "tenant_requirement": "none",

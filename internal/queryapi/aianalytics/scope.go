@@ -124,6 +124,16 @@ func teamRepoIDs(ctx context.Context, client QueryClient, orgID, teamID, operati
 	return held, true
 }
 
+// teamRepos is a team scope resolved by teamRepoIDs: the repositories the team owns, and ok=false when the
+// ownership could not be read. held is false for both an unreadable ownership and a team that owns nothing: the
+// team-scoped reads then answer no data, never an empty team shown as data.
+type teamRepos struct {
+	ids []string
+	ok  bool
+}
+
+func (t teamRepos) held() bool { return t.ok && len(t.ids) > 0 }
+
 func loadTeams(ctx context.Context, client QueryClient, orgID string) ([]aiimpact.Team, error) {
 	rs, err := client.Query(ctx, fmt.Sprintf(`SELECT toString(id) AS id, coalesce(%s, '') AS name
 FROM teams

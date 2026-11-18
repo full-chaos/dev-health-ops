@@ -478,10 +478,10 @@ func TestMergeUserAndTeamRows_EmptyBothSidesIsNonNilEmptySlice(t *testing.T) {
 
 func TestFetchUserMetrics_TeamAndRepoFiltersOmittedWhenUnset(t *testing.T) {
 	client := &fakeClient{responses: []*fakeRowScanner{{rows: nil}}, errs: []error{nil}}
-	if _, err := fetchUserMetrics(context.Background(), client, "org-1", "2026-08-01", "2026-08-31", nil, nil); err != nil {
+	if _, err := fetchUserMetrics(context.Background(), client, "org-1", "2026-08-01", "2026-08-31", nil); err != nil {
 		t.Fatalf("fetchUserMetrics: %v", err)
 	}
-	if strings.Contains(client.statements[0], "team_id = {team_id:String}") {
+	if strings.Contains(client.statements[0], "team_id") {
 		t.Error("unexpected team_id filter clause")
 	}
 	if strings.Contains(client.statements[0], "repo_id IN (") {
@@ -489,13 +489,14 @@ func TestFetchUserMetrics_TeamAndRepoFiltersOmittedWhenUnset(t *testing.T) {
 	}
 }
 
-func TestFetchUserMetrics_TeamAndRepoFiltersBoundWhenSet(t *testing.T) {
+// user_metrics_daily.team_id is a membership label, never a team scope (CHAOS-14101): the read has no team filter.
+func TestFetchUserMetrics_RepoFilterBoundWhenSetAndNoTeamFilter(t *testing.T) {
 	client := &fakeClient{responses: []*fakeRowScanner{{rows: nil}}, errs: []error{nil}}
-	if _, err := fetchUserMetrics(context.Background(), client, "org-1", "2026-08-01", "2026-08-31", strPtr("team-a"), strPtr("repo-a")); err != nil {
+	if _, err := fetchUserMetrics(context.Background(), client, "org-1", "2026-08-01", "2026-08-31", strPtr("repo-a")); err != nil {
 		t.Fatalf("fetchUserMetrics: %v", err)
 	}
-	if !strings.Contains(client.statements[0], "team_id = {team_id:String}") {
-		t.Error("expected team_id filter clause")
+	if strings.Contains(client.statements[0], "team_id") {
+		t.Error("unexpected team_id filter clause")
 	}
 	if !strings.Contains(client.statements[0], "repo_id IN (") {
 		t.Error("expected repo_id filter clause")
@@ -504,8 +505,8 @@ func TestFetchUserMetrics_TeamAndRepoFiltersBoundWhenSet(t *testing.T) {
 	for _, b := range client.bindings[0] {
 		names[b.Name] = true
 	}
-	if !names["team_id"] || !names["repo_id"] {
-		t.Errorf("expected team_id and repo_id bindings, got %v", client.bindings[0])
+	if names["team_id"] || !names["repo_id"] {
+		t.Errorf("expected the repo_id binding and no team_id binding, got %v", client.bindings[0])
 	}
 }
 
@@ -514,7 +515,7 @@ func TestFetchUserMetrics_ScanErrorPropagates(t *testing.T) {
 		responses: []*fakeRowScanner{{rows: [][]any{{"not-a-time"}}}},
 		errs:      []error{nil},
 	}
-	_, err := fetchUserMetrics(context.Background(), client, "org-1", "2026-08-01", "2026-08-31", nil, nil)
+	_, err := fetchUserMetrics(context.Background(), client, "org-1", "2026-08-01", "2026-08-31", nil)
 	if err == nil {
 		t.Fatal("expected scan error to propagate")
 	}

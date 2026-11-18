@@ -1186,7 +1186,11 @@ func (run *teamIDCarryRun) writeRestatements(ctx context.Context) error {
 // when a version of the old id newer than that read is stored
 // (teamprovider.RosterSource: an edit of the old id after the read); every
 // other row (an old row going inactive) keeps the stored identity and roster,
-// read inside the same statement.
+// read inside the same statement. deleted_at is never the carry's own: an
+// admin delete of the old id committed after the read is copied onto the
+// moved row, which is then written inactive (teamprovider.DeletedSource), and
+// an old row going inactive keeps its id's stored admin delete
+// (teamprovider.DeletedKept), so a delete that races a move holds on both ids.
 func (run *teamIDCarryRun) writeTeams(ctx context.Context, write teamIDCarryWrite) error {
 	all := strings.Split(write.columns, ", ")
 	identity := map[string]bool{teamprovider.ColumnProviderTeamID: true, teamprovider.ColumnProviderName: true, teamprovider.ColumnGoneAt: true}
@@ -1196,18 +1200,21 @@ func (run *teamIDCarryRun) writeTeams(ctx context.Context, write teamIDCarryWrit
 			columns = append(columns, column)
 		}
 	}
+	columns = append(columns, "deleted_at")
 	writes := make([]teamprovider.Write, 0, len(write.rows))
 	for _, row := range write.rows {
 		values := make([]any, 0, len(columns))
-		for _, column := range columns {
+		for _, column := range columns[:len(columns)-1] {
 			values = append(values, row.value(column))
 		}
-		version := teamprovider.Write{Values: values, Gone: teamprovider.GoneKept, Roster: teamprovider.RosterKept}
+		values = append(values, nil)
+		version := teamprovider.Write{Values: values, Gone: teamprovider.GoneKept, Roster: teamprovider.RosterKept, Deleted: teamprovider.DeletedKept}
 		if from, moved := run.moved[row.str("id")]; moved {
 			version = teamprovider.Write{
 				Values: values, ProviderTeamID: row.str(teamprovider.ColumnProviderTeamID), ProviderName: row.str(teamprovider.ColumnProviderName),
 				Gone: teamprovider.GoneStated, GoneAt: row.timePtr(teamprovider.ColumnGoneAt),
 				Roster: teamprovider.RosterSource, RosterSource: from.id, RosterSourceRead: from.read,
+				Deleted: teamprovider.DeletedSource,
 			}
 		}
 		writes = append(writes, version)

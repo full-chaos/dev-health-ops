@@ -84,6 +84,10 @@ func Decode(query string, args []any) ([]string, []teamprovider.Write, error) {
 				*target = parsed.UTC()
 			}
 		}
+		if rules := named["deleted_rule"]; len(rules) > r {
+			deleted, _ := rules[r].(uint32)
+			writes[r].Deleted = teamprovider.Deleted(deleted)
+		}
 		if text, ok := named["gone_in"][r].(string); ok {
 			parsed, err := time.Parse("2006-01-02 15:04:05.000000", text)
 			if err != nil {

@@ -98,7 +98,7 @@ func nonBlankString(s *string) any {
 // listOrganizations is orgs.py's list_organizations.
 func (h *handlers) listOrganizations(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	query := r.URL.Query()
+	query := httpapi.Query(r)
 	limit, qerr := queryInt(query, "limit", 100)
 	if qerr != nil {
 		writeQueryError(w, qerr)
@@ -421,7 +421,7 @@ func (h *handlers) listMembers(w http.ResponseWriter, r *http.Request) {
 	// repeated key) -- a live round found `?role=owner&role=member`
 	// resolving to the owner row on Go, the member row on Python.
 	var role *string
-	if raw, present := queryLastValue(r.URL.Query(), "role"); present && raw != "" {
+	if raw, present := queryLastValue(httpapi.Query(r), "role"); present && raw != "" {
 		role = &raw
 	}
 	members, err := h.store.listMembersWithUsers(ctx, orgID, role)

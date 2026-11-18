@@ -558,13 +558,23 @@ func (handler *Dispatcher) Work(ctx context.Context, execution *jobruntime.Execu
 	// drain of the organization.
 	defer handler.drainTouchedDaysAfterDispatch(ctx, *run)
 	if run.RepositoryDiscoveryRequired {
+		// A run that no attempt materializes keeps no partition and no
+		// finalize handoff: on the last attempt, and on a permanent refusal,
+		// the run is ended failed (failUnmaterializedRun, dispatch_fail.go).
 		repositoryIDs, err := handler.discoverer.RepositoryIDs(ctx, run.OrganizationID)
 		if err != nil {
+			if lastDispatchAttempt(execution) {
+				handler.failUnmaterializedRun(ctx, execution, *run, "dispatch_discovery")
+			}
 			return jobruntime.Retryable(err)
 		}
 		if _, err := handler.store.MaterializeScheduledFanout(ctx, *run, repositoryIDs, handler.publisher); err != nil {
 			if errors.Is(err, ErrInvalidState) {
+				handler.failUnmaterializedRun(ctx, execution, *run, "dispatch_materialize")
 				return permanentWithCause(err, jobruntime.ReasonInvalidState, "step=dispatch_materialize")
+			}
+			if lastDispatchAttempt(execution) {
+				handler.failUnmaterializedRun(ctx, execution, *run, "dispatch_materialize")
 			}
 			return jobruntime.Retryable(err)
 		}

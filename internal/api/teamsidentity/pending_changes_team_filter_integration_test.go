@@ -78,6 +78,7 @@ func TestPendingChangesHonoursTeamID(t *testing.T) {
 		{"unescaped semicolon stays in the value", "team_id=jira:ENG;x", ""},
 		{"unescaped semicolon after another team_id", "team_id=jira:ENG&team_id=linear:LIN;x", ""},
 		{"percent-encoded value", "team_id=jira%3AENG", "c-jira:ENG"},
+		{"invalid escape stays literal and narrows", "team_id=%zz", ""},
 		{"plus is a space", "team_id=jira:ENG+", ""},
 		{"repeated values: the last wins", "team_id=" + url.QueryEscape("jira:ENG") + "&team_id=" + url.QueryEscape("linear:LIN"), "c-linear:LIN"},
 		{"repeated values: an empty last is no filter", "team_id=" + url.QueryEscape("jira:ENG") + "&team_id=", all},

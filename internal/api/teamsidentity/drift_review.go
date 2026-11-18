@@ -135,18 +135,21 @@ func flaggedChangeJSON(row reviewChangeRow) *pyjson.Object {
 
 // lastQueryValue is the last value of name in a raw query split on '&' only,
 // as FastAPI reads it: net/url's Query() drops a pair holding an unescaped
-// ';', which would turn a team filter into the full list. A pair whose
-// escapes are invalid is skipped, as Query() skips it.
+// ';', which would turn a team filter into the full list. An invalid escape
+// stays literal, as in Python, so the filter still narrows.
 func lastQueryValue(rawQuery, name string) string {
+	unescape := func(text string) string {
+		if out, err := url.QueryUnescape(text); err == nil {
+			return out
+		}
+		return text
+	}
 	last := ""
 	for _, pair := range strings.Split(rawQuery, "&") {
 		key, value, _ := strings.Cut(pair, "=")
-		key, kerr := url.QueryUnescape(key)
-		value, verr := url.QueryUnescape(value)
-		if kerr != nil || verr != nil || key != name {
-			continue
+		if unescape(key) == name {
+			last = unescape(value)
 		}
-		last = value
 	}
 	return last
 }

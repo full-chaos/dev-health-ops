@@ -599,8 +599,10 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 			suites := []testSuiteResultRow(nil)
 			cases := []testCaseResultRow(nil)
 			coverage := []coverageSnapshotRow(nil)
+			var completeness []testOpsRunReportCompletenessRow
 			if len(selected) == 1 {
 				payload := selected[0]
+				runReport := newGitLabTestsRunReport()
 				runID := stringValue(payload.ID)
 				started := gitLabTestsPipelineStartedAt(payload)
 				finished := parseGitLabTestsTime(payload.FinishedAt)
@@ -615,6 +617,8 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 					if fatal := gitLabTestsOptionalError(ctx, jobErr); fatal != nil {
 						return fatal
 					}
+					// The job list answered 404: the pipeline's artifacts are unknown, a known loss (CHAOS-13981).
+					runReport.lose(githubTestsArtifactUnavailableCause)
 				} else {
 					cursor.Pages += jobPage.Pages
 					jobItems = jobPage.Items
@@ -623,9 +627,11 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 						jobItems = jobItems[:githubTestsMaxJobsPerRun]
 						cursor = recordGitLabTestsPerRunTruncation(
 							cursor, client, claim, gitLabRunArtifactsComponent, runID, len(jobItems))
+						runReport.lose(gitLabTestsRunReportComponentReasons[gitLabRunArtifactsComponent])
 					case jobPage.PageBudgetExhausted:
 						cursor = recordGitLabTestsPerRunTruncation(
 							cursor, client, claim, gitLabRunArtifactsPageBudgetComponent, runID, len(jobItems))
+						runReport.lose(gitLabTestsRunReportComponentReasons[gitLabRunArtifactsPageBudgetComponent])
 					}
 					var rankErr error
 					if runJobs, rankErr = newGitLabTestsRunJobs(jobItems); rankErr != nil {
@@ -648,6 +654,8 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 					cursor = recordGitLabTestsSkippedItem(
 						cursor, client, claim, gitLabReportTooLargeComponent, runID, nativeMaxObjectBytes)
 					report, present, reportErr = gitLabTestsReportPayload{}, false, nil
+					runReport.expected++
+					runReport.lose(gitLabTestsRunReportComponentReasons[gitLabReportTooLargeComponent])
 				}
 				if reportErr != nil {
 					return reportErr
@@ -683,21 +691,39 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 						)
 					}
 					suites, cases = reportSuites, reportCases
+					runReport.expected++
+					runReport.admitted++
 				}
 				if jobErr == nil {
 					artifactJobs, selectJobErr := selectGitLabTestsArtifactJobs(jobItems, gitLabTestsMaxArtifacts)
 					if selectJobErr != nil {
 						return selectJobErr
 					}
+					overCap, overCapErr := gitLabTestsArtifactJobsOverCap(jobItems, gitLabTestsMaxArtifacts)
+					if overCapErr != nil {
+						return overCapErr
+					}
+					if overCap {
+						// The selection reads the first gitLabTestsMaxArtifacts and none of the others; the unit result does not
+						// record this cut (ticket 14144), the pipeline's verdict does.
+						runReport.lose(githubTestsPerRunCapCause)
+					}
 					for _, job := range artifactJobs {
-						archive, downloadErr := downloadGitLabTestsArtifact(ctx, &counted, root, stringValue(job.ID))
+						archive, found, downloadErr := downloadGitLabTestsArtifactFound(ctx, &counted, root, stringValue(job.ID))
 						if errors.Is(downloadErr, errGitLabTestsArtifactTooLarge) {
 							cursor = recordGitLabTestsSkippedItem(
 								cursor, client, claim, gitLabArtifactOversizedComponent, runID, gitLabTestsMaxDownload)
+							runReport.expected++
+							runReport.lose(gitLabTestsRunReportComponentReasons[gitLabArtifactOversizedComponent])
 							continue
 						}
 						if downloadErr != nil {
 							return downloadErr
+						}
+						if !found {
+							runReport.expected++
+							runReport.lose(githubTestsArtifactNotFoundReason)
+							continue
 						}
 						if len(archive) == 0 {
 							continue
@@ -708,15 +734,26 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 						}
 						if rows.GuardDropped > 0 {
 							cursor = recordGitLabTestsSkippedItem(cursor, client, claim, gitLabReportMemberDroppedComponent, runID, 0)
+							for _, cause := range rows.GuardCauses {
+								runReport.lose(cause)
+							}
+						}
+						if rows.ReportsParsed > 0 || rows.GuardDropped > 0 {
+							runReport.expected++
+						}
+						if rows.ReportsRead > 0 {
+							runReport.admitted++
 						}
 						coverage = append(coverage, rows.Coverage...)
 					}
 				}
+				// One verdict row per pipeline, in the emission that carries its report rows (CHAOS-13981).
+				completeness = gitLabTestsRunReportCompleteness(claim, repoID, payload, runJobs.runAttempt(), runReport, normalizedAt)
 			}
 			cursor.Suites += len(suites)
 			cursor.Cases += len(cases)
 			cursor.Coverage += len(coverage)
-			effects, effectErr := testOpsEffects(nil, nil, nil, suites, cases, coverage)
+			effects, effectErr := testOpsEffects(nil, nil, nil, suites, cases, coverage, completeness...)
 			if effectErr != nil {
 				return effectErr
 			}

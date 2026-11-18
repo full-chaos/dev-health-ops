@@ -12,6 +12,7 @@ import (
 	"io"
 	"log/slog"
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -252,6 +253,8 @@ type githubTestsReportRows struct {
 	// GuardDropped counts members the shared archive parse dropped at a size guard (compression_ratio, archive_entry_cap) that the
 	// caller took out of Skipped, issues and SkippedArtifacts because its route has no vocabulary for them (GitLab, CHAOS-14030).
 	GuardDropped int
+	// GuardCauses are the distinct causes of the GuardDropped members, sorted.
+	GuardCauses []string
 	// ReportsParsed is the number of members read as reports. NonReportJSON and
 	// NonReportOther count members that are not .xml/.info (CHAOS-13193): they
 	// are observability only -- never an incomplete cause, so reports_complete
@@ -2069,6 +2072,10 @@ func (rows githubTestsReportRows) withoutMemberGuardSkips() githubTestsReportRow
 		if githubTestsIsMemberGuardCause(issue.evidence.Cause) {
 			rows.Skipped -= issue.evidence.Count
 			rows.GuardDropped += issue.evidence.Count
+			if !slices.Contains(rows.GuardCauses, issue.evidence.Cause) {
+				rows.GuardCauses = append(rows.GuardCauses, issue.evidence.Cause)
+				slices.Sort(rows.GuardCauses)
+			}
 			continue
 		}
 		issues = append(issues, issue)

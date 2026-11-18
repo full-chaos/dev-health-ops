@@ -120,8 +120,9 @@ type TerminalOutboxCloseResult struct {
 // selects on the OWNING domain state (unit/run/discovery status), never on
 // the outbox row's own status, and this step only ever closes a row whose
 // owner has already gone terminal -- which this codebase treats as
-// irreversible (see e.g. terminal_delivery_repair.go's route JOIN, which
-// excludes a terminal run from repair for the same reason).
+// irreversible (see e.g. terminal_delivery_repair.go's run-status clause,
+// which excludes a terminal run from repair for the same reason for every kind
+// but post_sync, which this step never closes).
 const terminalOutboxCloseStatus = "closed"
 
 const (

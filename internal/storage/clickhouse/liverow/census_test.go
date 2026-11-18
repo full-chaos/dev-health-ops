@@ -56,8 +56,6 @@ var unruledReads = map[string]string{
 	"internal/queryapi/sankey/queries.go:fetchExpenseCounts": "three sums over the whole scope, one row, no list: a retraction row adds 0",
 	"internal/queryapi/capacityforecast/clickhouse.go:loadBacklog": "sum of the WIP on the newest day of each key: a retraction row must stay the newest row of its key " +
 		"(so a retracted key gives 0 and not its older backlog) and adds 0; the sum of no row is 0 as well",
-	"internal/queryapi/throughputforecast/clickhouse.go:loadBacklog": "sum of the WIP on the newest day of each key: a retraction row must stay the newest row of its key and adds 0; " +
-		"the sum of no row is 0 as well",
 	"internal/queryapi/throughputforecast/clickhouse.go:loadStaleWIP": "Nullable means over the newest-day row of each key, NULL rows left out: " +
 		"a retraction row must stay the newest row of its key, and it holds NULL",
 	"internal/jobs/metrics/remaining/recommendations_loader.go:loadCompoundingRiskPersisted": "the newest row of ONE team over the window, whole: a retraction row is that row, " +

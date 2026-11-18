@@ -114,6 +114,40 @@ func TestAnAdminWriteRacedByAnotherAdminWriteLosesItsOtherColumns(t *testing.T) 
 	}
 }
 
+// CHAOS-14094: a delete states only that the team is deleted. A rename
+// committed in its window is the name its deleted row keeps (a reader of a
+// stored id finds that name).
+func TestADeleteKeepsARenameCommittedInItsWindow(t *testing.T) {
+	conn, ctx := startMigratedTeamsStore(t)
+	plainRoutes := newTestHandlers(Store{Conn: conn})
+	for _, point := range adminRacePoints {
+		t.Run(point.name, func(t *testing.T) {
+			teamID := "gh:delete-rename-" + point.name
+			seedRosterTeam(ctx, t, conn, teamID, "github")
+			race := &rosterRaceConn{Conn: conn, at: point.at, other: func() {
+				if recorder := callTeamRoute(t, plainRoutes, plainRoutes.updateTeam, http.MethodPatch, teamID, map[string]any{"name": "Platform (renamed)"}); recorder.Code != http.StatusOK {
+					t.Errorf("the other PATCH: %d %s", recorder.Code, recorder.Body.String())
+				}
+			}}
+			deleted, err := (Store{Conn: race}).DeleteTeam(ctx, rosterRaceOrg, teamID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			checkFired(t, race)
+			name, _ := storedTeamColumns(ctx, t, conn, teamID)
+			team, err := (Store{Conn: conn}).GetTeam(ctx, rosterRaceOrg, teamID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !deleted || team != nil || name != "Platform (renamed)" {
+				t.Errorf("CELL delete_vs_rename/%s: LOST deleted=%v team=%v name=%q", point.name, deleted, team, name)
+			} else {
+				t.Logf("CELL delete_vs_rename/%s: KEPT (deleted, name=%q)", point.name, name)
+			}
+		})
+	}
+}
+
 // CHAOS-14094: a roster edit states only the roster. A rename committed in
 // its window keeps its name, and a delete committed in its window keeps the
 // team deleted: the edit is refused (delete wins), never written over it.

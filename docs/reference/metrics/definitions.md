@@ -626,6 +626,10 @@ A Linear or Jira work-items unit names every project it saw by an ensure row in 
 
 The counter `dev_health_work_item_user_rows_spanning_teams_total{provider}` counts, for each computed partition, the persons whose row is labelled this way. A rise says that people work across teams in that provider; it is not a fault. The Debug line `work_item_user_metrics_rows` carries the same count with the number of user rows of the partition.
 
+## Person rows: the team column of `user_metrics_daily`
+
+`user_metrics_daily.team_id` is a membership label, NOT team attribution; ownership-based team answers must not read it. The column holds the person's first team membership on the day, else `unassigned`: the git row is always written with `unassigned`, and the IC finalize step puts the membership team over it. Limit: a person who is a member of several teams gets only the FIRST of them, in the rank order of the attribution (primary first, then the more specific, then the lower priority number, the newer row, the team id); the other teams are not in the column. A team answer takes its team from repository or project ownership (for a per-person table, through `repo_id` and the owner shares), never from this column.
+
 ## Refused manual sync triggers
 
 `dev_health_sync_manual_trigger_refused_total{reason}` counts the manual sync

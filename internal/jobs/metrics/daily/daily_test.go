@@ -1258,7 +1258,7 @@ func TestCancelBeforeTheNativeFamilyStartsSkipsTheFamily(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	err = handler.computeNativeFinalizeFamilies(ctx, Run{ID: testRunID, OrganizationID: testOrgID})
+	err = handler.computeNativeFinalizeFamilies(ctx, Run{ID: testRunID, OrganizationID: testOrgID}, false)
 	if !errors.Is(err, ErrNativeFinalizeFamilyFailed) || !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancel before the family = %v, want ErrNativeFinalizeFamilyFailed wrapping context.Canceled", err)
 	}
@@ -1565,6 +1565,10 @@ type fakeStore struct {
 	partitionTotal              int
 	partitionSucceeded          int
 	partitionCompletionCountErr error
+	// noPartitions makes PartitionCompletionCounts report a run with no
+	// partition. Without it, counts left at zero report one succeeded
+	// partition: the shape of a finalize claim of a run that has partitions.
+	noPartitions bool
 }
 
 func (store *fakeStore) LoadRun(context.Context, string) (Run, error) {
@@ -1668,6 +1672,12 @@ func (store *fakeStore) ReleaseFinalize(context.Context, FinalizeClaim) error {
 func (store *fakeStore) PartitionCompletionCounts(context.Context, string) (int, int, error) {
 	if store.partitionCompletionCountErr != nil {
 		return 0, 0, store.partitionCompletionCountErr
+	}
+	if store.noPartitions {
+		return 0, 0, nil
+	}
+	if store.partitionTotal == 0 && store.partitionSucceeded == 0 {
+		return 1, 1, nil
 	}
 	return store.partitionTotal, store.partitionSucceeded, nil
 }

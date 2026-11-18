@@ -125,6 +125,11 @@ func TestGitHubTestsRunReportCompletenessRows(t *testing.T) {
 		return githubTestsZip(t, map[string]string{"junit.xml": completenessJUnit(prefix, 2)})
 	}
 	copyOf := readable("same-")
+	failedCopy := func(message string) []byte {
+		return githubTestsZip(t, map[string]string{"junit.xml": `<testsuites><testsuite name="same-suite" time="1.5">` +
+			`<testcase name="same-case-1" classname="pkg" time="0.1"><failure message="` + message + `">boom</failure></testcase>` +
+			`<testcase name="same-case-2" classname="pkg" time="0.2"/></testsuite></testsuites>`})
+	}
 	logsOnly := githubTestsZip(t, map[string]string{"output.log": "build log", "manifest.json": "{}"})
 	cells := []struct {
 		name      string
@@ -164,10 +169,17 @@ func TestGitHubTestsRunReportCompletenessRows(t *testing.T) {
 			want: []completenessRow{{RunID: "1", RunAttempt: 1, Provider: "github_actions", Reasons: []string{"per_run_cap"}, ReportsExpected: 3, ReportsAdmitted: 2}},
 		},
 		{
-			// acp ruling C7: the producer's copy drop is not yet shown lossless, so a dropped copy fails closed.
-			name:      "a dropped copy is partial until the producer drop is lossless",
+			// acp ruling C7: the producer drops a copy only when it is lossless, so the run stays complete.
+			name:      "a lossless dropped copy is complete",
 			artifacts: []completenessArtifact{{name: "test-results-a", body: copyOf}, {name: "test-results-b", body: copyOf}},
-			want:      []completenessRow{{RunID: "1", RunAttempt: 1, Provider: "github_actions", Reasons: []string{"aggregate_of_parts"}, ReportsExpected: 2, ReportsAdmitted: 1}},
+			want:      []completenessRow{{RunID: "1", RunAttempt: 1, Provider: "github_actions", Complete: true, Reasons: []string{}, ReportsExpected: 2, ReportsAdmitted: 1}},
+		},
+		{
+			// A copy whose failure message differs (same cases, same outcomes) is not lossless: every artifact is kept and the run
+			// names the mismatch.
+			name:      "a lossy copy is an aggregate mismatch",
+			artifacts: []completenessArtifact{{name: "test-results-a", body: failedCopy("a")}, {name: "test-results-b", body: failedCopy("b")}},
+			want:      []completenessRow{{RunID: "1", RunAttempt: 1, Provider: "github_actions", Reasons: []string{"aggregate_mismatch"}, ReportsExpected: 2, ReportsAdmitted: 2}},
 		},
 		{
 			name:    "a re-run attempt is its own key",

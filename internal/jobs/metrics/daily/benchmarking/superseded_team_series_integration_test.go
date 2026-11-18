@@ -98,8 +98,14 @@ VALUES (?, 'github', ?, toUUID(?), ?, 'exact', 'native', 1, 10, 0, ?, ?)`,
 			if err := admin.Exec(ctx, "SYSTEM STOP MERGES "+source.table); err != nil {
 				t.Fatalf("stop merges: %v", err)
 			}
+			// rerun_rate is read as reruns over runs: every repo-day has the same 10 runs, so the
+			// weights are equal and the expected values are those of the stored rates.
 			insert := "INSERT INTO " + source.table + " (repo_id, day, " + source.column +
-				", team_id, org_id, computed_at) VALUES (?, ?, ?, ?, ?, ?)"
+				", team_id, org_id, computed_at, pipelines_count) VALUES (?, ?, ?, ?, ?, ?, 10)"
+			if source.table != "testops_pipeline_metrics_daily" {
+				insert = "INSERT INTO " + source.table + " (repo_id, day, " + source.column +
+					", team_id, org_id, computed_at) VALUES (?, ?, ?, ?, ?, ?)"
+			}
 			for _, row := range []struct {
 				repo string
 				team *string

@@ -62,15 +62,26 @@ func TestMergeDerivesTheReferenceFields(t *testing.T) {
 		[]WorkItemUserMetric{{UserIdentity: "dev@example.com", ItemsCompleted: 7, WIPCountEndOfDay: 2}},
 		nil,
 	)
+	// DECLARED DEPARTURE (CHAOS-14105, acp form B'): the reference put the work items on the git row
+	// (delivery_units = prs_merged + completed items); the port puts them on the person's no-repository row.
 	got := metricFor(merged, "dev@example.com")
+	if len(merged) != 2 || merged[1].IdentityID != "dev@example.com" || !merged[1].SynthesizedRepoID {
+		t.Fatalf("rows = %+v, want the git row and the no-repository row of dev@example.com", merged)
+	}
+	if items := merged[1]; items.WorkItemsComplete != 7 || items.WorkItemsActive != 2 || items.DeliveryUnits != 7 {
+		t.Fatalf("no-repository row = %+v, want 7 completed, 2 open, delivery_units 7", items)
+	}
+	if got.WorkItemsComplete != 0 || got.WorkItemsActive != 0 {
+		t.Fatalf("git row work items = %d/%d, want 0/0", got.WorkItemsComplete, got.WorkItemsActive)
+	}
 	if got.LOCTouched != 42 {
 		t.Fatalf("LOCTouched = %d, want 42 (added + deleted)", got.LOCTouched)
 	}
 	if got.PRsOpened != 4 {
 		t.Fatalf("PRsOpened = %d, want prs_authored 4", got.PRsOpened)
 	}
-	if got.DeliveryUnits != 10 {
-		t.Fatalf("DeliveryUnits = %d, want prs_merged 3 + work_items_completed 7", got.DeliveryUnits)
+	if got.DeliveryUnits != 3 {
+		t.Fatalf("DeliveryUnits = %d, want prs_merged 3 (the items are on the no-repository row)", got.DeliveryUnits)
 	}
 	if got.CycleP50Hours != 5.5 || got.CycleP90Hours != 20.25 {
 		t.Fatalf("cycle = %v/%v, want median_pr_cycle_hours 5.5 and pr_cycle_p90_hours 20.25",

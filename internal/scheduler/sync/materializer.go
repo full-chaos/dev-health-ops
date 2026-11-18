@@ -500,6 +500,10 @@ func (materializer *NativeMaterializer) Materialize(
 	if err != nil {
 		return PlanResult{}, err
 	}
+	loaded.input.CommittedUnits, err = loadCommittedUnits(ctx, materializer.domainPool, ids.SyncRunID)
+	if err != nil {
+		return PlanResult{}, err
+	}
 	loaded.input.ExecutedProof = materializer.executedProof.Load()
 	var units []PlannedUnit
 	if loaded.terminalReason == "" {
@@ -2240,6 +2244,48 @@ func loadWorkItemsReplay(
 		return nil, fmt.Errorf("read the committed work-items units of the occurrence: %w", err)
 	}
 	return replay, nil
+}
+
+const committedUnitsRunSQL = `SELECT 1 FROM public.sync_runs WHERE id = $1::uuid`
+
+const committedUnitsSQL = `
+SELECT COALESCE(source_id::text, ''), dataset_key
+FROM public.sync_run_units
+WHERE sync_run_id = $1::uuid`
+
+// loadCommittedUnits reads the units an earlier attempt of this occurrence committed (CHAOS-14113). nil means a first
+// attempt: no sync run row exists for the occurrence. A failed read fails this attempt (it is retried); it never
+// plans without knowing what was committed.
+func loadCommittedUnits(ctx context.Context, reader testOpsReplayReader, syncRunID string) (*CommittedUnits, error) {
+	runRows, err := reader.Query(ctx, committedUnitsRunSQL, syncRunID)
+	if err != nil {
+		return nil, fmt.Errorf("read the sync run of the occurrence: %w", err)
+	}
+	exists := runRows.Next()
+	runRows.Close()
+	if err := runRows.Err(); err != nil {
+		return nil, fmt.Errorf("read the sync run of the occurrence: %w", err)
+	}
+	if !exists {
+		return nil, nil
+	}
+	rows, err := reader.Query(ctx, committedUnitsSQL, syncRunID)
+	if err != nil {
+		return nil, fmt.Errorf("read the committed units of the occurrence: %w", err)
+	}
+	defer rows.Close()
+	committed := &CommittedUnits{}
+	for rows.Next() {
+		var sourceID, dataset string
+		if err := rows.Scan(&sourceID, &dataset); err != nil {
+			return nil, fmt.Errorf("scan a committed unit of the occurrence: %w", err)
+		}
+		committed.add(sourceID, dataset)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read the committed units of the occurrence: %w", err)
+	}
+	return committed, nil
 }
 
 // DatasetFullQuery reports whether an integration_datasets row makes its work-items family one unbounded

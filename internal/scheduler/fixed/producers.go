@@ -534,20 +534,15 @@ type freshnessRule struct {
 	// Cutoff is the instant the occurrence's own run would read its data up to. A same-scope succeeded run
 	// created at or after it covers the occurrence; one created earlier read an older window.
 	Cutoff func(occurrence Occurrence) time.Time
-	// DeferBound is the family's stage budget (the kind's timeout_seconds in contracts/jobs/v1/registry.json).
-	// A same-scope run in flight younger than it defers the occurrence; the occurrence runs anyway once it is
-	// older than it.
-	DeferBound time.Duration
+	// StageBudget is the family's stage budget (the kind's timeout_seconds in contracts/jobs/v1/registry.json).
+	// A same-scope run in flight covers the occurrence only while it is younger than this.
+	StageBudget time.Duration
 }
-
-// ErrOccurrenceDeferred is returned by a producer whose occurrence must wait for a run in flight. The
-// engine rolls the occurrence back and re-checks it in a later window; it is not a failure.
-var ErrOccurrenceDeferred = errors.New("fixed schedule occurrence deferred: a same-scope run is in flight")
 
 // RemainingMetricsFreshCoverageStore is the optional capability startOrganization uses for a binding with
 // a Freshness rule. A store without it skips the check, as RemainingMetricsCoverageStore does.
 type RemainingMetricsFreshCoverageStore interface {
-	FreshCoverage(ctx context.Context, tx pgx.Tx, organizationID, family string, scope json.RawMessage, cutoff, inFlightSince time.Time) (remaining.FreshCoverageState, error)
+	FreshCoverage(ctx context.Context, tx pgx.Tx, organizationID, family string, scope json.RawMessage, cutoff, now time.Time, stageBudget time.Duration) (remaining.FreshCoverageResult, error)
 }
 
 // RemainingMetricsCoverageStore is the narrow, optional capability
@@ -802,8 +797,8 @@ func NewRemainingMetricsFanoutProducer(
 				// day-label check above never sees them. Coverage is by creation time: the run reads its window
 				// up to 00:00 UTC of the occurrence day (recommendations_native.go EvaluationInstant, ComputeOrg).
 				Freshness: &freshnessRule{
-					Cutoff:     func(occurrence Occurrence) time.Time { return utcMidnight(occurrence.ScheduledFor) },
-					DeferBound: remainingStageBudget,
+					Cutoff:      func(occurrence Occurrence) time.Time { return utcMidnight(occurrence.ScheduledFor) },
+					StageBudget: remainingStageBudget,
 				},
 			},
 			"membership_backfill_daily_fanout": {
@@ -863,8 +858,8 @@ func NewRemainingMetricsFanoutProducer(
 				// CHAOS-9587: capacity reads its history up to the wall clock and its backlog live (capacity_native.go),
 				// so a run created at or after the occurrence's due time is at least as fresh as the scheduled run.
 				Freshness: &freshnessRule{
-					Cutoff:     func(occurrence Occurrence) time.Time { return occurrence.ScheduledFor.UTC() },
-					DeferBound: remainingStageBudget,
+					Cutoff:      func(occurrence Occurrence) time.Time { return occurrence.ScheduledFor.UTC() },
+					StageBudget: remainingStageBudget,
 				},
 			},
 		},
@@ -1007,25 +1002,21 @@ func (producer *RemainingMetricsFanoutProducer) startOrganization(
 	if binding.Freshness != nil {
 		if fresh, ok := producer.store.(RemainingMetricsFreshCoverageStore); ok {
 			freshnessDecided = true
-			bound := binding.Freshness.DeferBound
-			state, err := fresh.FreshCoverage(ctx, tx, organizationID, binding.Family, scope,
-				binding.Freshness.Cutoff(occurrence), occurrence.ObservedAt.Add(-bound))
+			cutoff := binding.Freshness.Cutoff(occurrence)
+			cover, err := fresh.FreshCoverage(ctx, tx, organizationID, binding.Family, scope,
+				cutoff, occurrence.ObservedAt, binding.Freshness.StageBudget)
 			if err != nil {
 				return 0, fmt.Errorf("check fresh %s coverage for organization: %w", binding.Family, err)
 			}
-			switch state {
-			case remaining.FreshCoverageCovered:
+			if cover.Covered {
+				// Loud on purpose: if an in-flight cover later fails, this line is the trail that
+				// explains why the occurrence has no compute of its own (missing is not healthy).
+				slog.WarnContext(ctx, "fixed scheduler: occurrence skipped as covered by a same-scope run",
+					"family", binding.Family, "schedule_id", occurrence.ScheduleID, "organization_id", organizationID,
+					"covering_run_id", cover.RunID, "covering_run_status", cover.Status,
+					"covering_run_created_at", cover.CreatedAt.UTC().Format(time.RFC3339),
+					"rule_branch", string(cover.Branch), "cutoff", cutoff.UTC().Format(time.RFC3339))
 				return 0, nil
-			case remaining.FreshCoverageInFlight:
-				if age := occurrence.ObservedAt.Sub(occurrence.ScheduledFor); age <= bound {
-					slog.WarnContext(ctx, "fixed scheduler: occurrence deferred",
-						"reason", "same_scope_run_in_flight", "family", binding.Family, "schedule_id", occurrence.ScheduleID,
-						"organization_id", organizationID, "occurrence_age", age.Round(time.Second).String(), "bound", bound.String())
-					return 0, ErrOccurrenceDeferred
-				}
-				slog.ErrorContext(ctx, "fixed scheduler: deferral bound passed, running anyway",
-					"reason", "same_scope_run_still_in_flight", "family", binding.Family, "schedule_id", occurrence.ScheduleID,
-					"organization_id", organizationID, "occurrence_age", occurrence.ObservedAt.Sub(occurrence.ScheduledFor).Round(time.Second).String(), "bound", bound.String())
 			}
 		}
 	}

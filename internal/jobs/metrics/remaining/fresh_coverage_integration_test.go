@@ -10,7 +10,7 @@ import (
 )
 
 // CHAOS-9587: FreshCoverage decides coverage of a fixed-schedule occurrence by WHEN a same-scope run was
-// created, whatever day it is labelled with, and treats an in-flight run apart from a succeeded one.
+// created, whatever day it is labelled with. Every cell of the ruling, against real Postgres.
 func TestFreshCoverageCells(t *testing.T) {
 	ctx := context.Background()
 	pool, store, publisher := newRemainingRedriveTestStack(t)
@@ -18,11 +18,12 @@ func TestFreshCoverageCells(t *testing.T) {
 	scope := json.RawMessage(`{"version":1,"window":14}`)
 	otherScope := json.RawMessage(`{"version":1,"window":14,"team_id":"00000000-0000-4000-8000-0000000095aa"}`)
 	cutoff := time.Date(2026, 11, 18, 0, 0, 0, 0, time.UTC)
-	inFlightSince := cutoff.Add(-2 * time.Hour)
+	now := cutoff.Add(2 * time.Hour) // the occurrence's observation instant
+	const budget = 2 * time.Hour
 
-	// start creates a run labelled with an arbitrary day, created at `created`; the handoff is real
-	// (deliverable) when real is true, and absent (a dead handoff) otherwise.
 	seq := 0
+	// start creates a run labelled yesterday, created at `created`; its handoff is real (deliverable)
+	// when real is true and absent (a dead handoff) otherwise.
 	start := func(created time.Time, scope json.RawMessage, real bool) (runID, partitionID string) {
 		t.Helper()
 		seq++
@@ -37,7 +38,7 @@ func TestFreshCoverageCells(t *testing.T) {
 		}
 		run, err := store.StartRunTx(ctx, tx, StartRunRequest{
 			OrganizationID: orgID, Family: "recommendations",
-			Generation: "cell-" + string(rune('a'+seq)), ScopeKey: "2026-11-17", // yesterday's label
+			Generation: "cell-" + string(rune('a'+seq)), ScopeKey: "2026-11-17",
 			Scopes: []json.RawMessage{scope},
 		}, pub)
 		if err != nil {
@@ -58,20 +59,21 @@ func TestFreshCoverageCells(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	check := func(want FreshCoverageState, scope json.RawMessage, what string) {
+	check := func(want FreshCoverageBranch, scope json.RawMessage, what string) FreshCoverageResult {
 		t.Helper()
 		tx, err := pool.Begin(ctx)
 		if err != nil {
 			t.Fatal(err)
 		}
 		defer tx.Rollback(ctx)
-		got, err := store.FreshCoverage(ctx, tx, orgID, "recommendations", scope, cutoff, inFlightSince)
+		got, err := store.FreshCoverage(ctx, tx, orgID, "recommendations", scope, cutoff, now, budget)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got != want {
-			t.Fatalf("%s: FreshCoverage = %d, want %d", what, got, want)
+		if got.Branch != want || got.Covered != (want != "") {
+			t.Fatalf("%s: FreshCoverage = %+v, want branch %q", what, got, want)
 		}
+		return got
 	}
 	clean := func() {
 		t.Helper()
@@ -82,45 +84,73 @@ func TestFreshCoverageCells(t *testing.T) {
 		}
 	}
 
-	// the real collision: the run is labelled yesterday and created after D's cutoff -> covered
-	_, p := start(cutoff.Add(30*time.Minute), scope, true)
+	// the real collision: a run labelled yesterday, created after D's cutoff, succeeded -> covered
+	runID, p := start(cutoff.Add(30*time.Minute), scope, true)
 	succeed(p, "compatibility_execution:x:rows_written=5")
-	check(FreshCoverageCovered, scope, "succeeded after the cutoff")
-	check(FreshCoverageNone, otherScope, "another scope never covers")
+	got := check(FreshCoverageSucceeded, scope, "succeeded after the cutoff")
+	if got.RunID != runID || got.Status != "succeeded" || !got.CreatedAt.Equal(cutoff.Add(30*time.Minute)) {
+		t.Fatalf("covering run = %+v, want %s created %s", got, runID, cutoff.Add(30*time.Minute))
+	}
+	check("", otherScope, "another scope never covers")
 	clean()
 
-	// the same run created before the cutoff read an older window -> recompute
+	// succeeded before the cutoff read an older window -> run
 	_, p = start(cutoff.Add(-30*time.Minute), scope, true)
 	succeed(p, "compatibility_execution:x:rows_written=5")
-	check(FreshCoverageNone, scope, "succeeded before the cutoff")
+	check("", scope, "succeeded before the cutoff")
 	clean()
 
 	// a withheld run (0 rows) never covers
 	_, p = start(cutoff.Add(30*time.Minute), scope, true)
 	succeed(p, "compatibility_execution:x:rows_written=0")
-	check(FreshCoverageNone, scope, "succeeded with 0 rows")
+	check("", scope, "succeeded with 0 rows")
 	clean()
 
-	// in flight (deliverable handoff) within the bound -> in flight
-	start(cutoff.Add(-30*time.Minute), scope, true)
-	check(FreshCoverageInFlight, scope, "pending with a deliverable handoff")
+	// in flight, young (created inside the budget), after the cutoff -> covered, pending and running
+	runID, p = start(cutoff.Add(30*time.Minute), scope, true)
+	got = check(FreshCoverageInFlight, scope, "pending, young, after the cutoff")
+	if got.RunID != runID || got.Status != "pending" {
+		t.Fatalf("covering run = %+v", got)
+	}
+	if claim, err := store.ClaimPartition(ctx, p); err != nil || claim == nil {
+		t.Fatalf("claim = %v, %v", claim, err)
+	}
+	got = check(FreshCoverageInFlight, scope, "running, young, after the cutoff")
+	if got.Status != "running" {
+		t.Fatalf("covering run = %+v", got)
+	}
 	clean()
 
-	// in flight but older than the bound -> not in flight
-	start(inFlightSince.Add(-time.Minute), scope, true)
-	check(FreshCoverageNone, scope, "pending older than the bound")
+	// in flight but created before the cutoff -> run
+	start(cutoff.Add(-time.Minute), scope, true)
+	check("", scope, "in flight, before the cutoff")
 	clean()
 
-	// a dead handoff (no outbox row) is not in flight
-	start(cutoff.Add(-30*time.Minute), scope, false)
-	check(FreshCoverageNone, scope, "pending with a dead handoff")
+	// in flight and older than the budget -> run (cutoff moved back so only the budget decides)
+	start(now.Add(-budget-time.Minute), scope, true)
+	check("", scope, "in flight, older than the budget")
 	clean()
 
-	// covered wins over in flight
+	// in flight at exactly the budget -> run
+	start(now.Add(-budget), scope, true)
+	check("", scope, "in flight at exactly the budget")
+	clean()
+
+	// just inside the budget -> covered
+	start(now.Add(-budget+time.Second), scope, true)
+	check(FreshCoverageInFlight, scope, "in flight one second inside the budget")
+	clean()
+
+	// a dead handoff (no outbox row) never covers
+	start(cutoff.Add(30*time.Minute), scope, false)
+	check("", scope, "pending with a dead handoff")
+	clean()
+
+	// a succeeded cover wins over an in-flight run
 	_, p = start(cutoff.Add(10*time.Minute), scope, true)
 	succeed(p, "compatibility_execution:x:rows_written=5")
 	start(cutoff.Add(20*time.Minute), scope, true)
-	check(FreshCoverageCovered, scope, "covered and in flight")
+	check(FreshCoverageSucceeded, scope, "succeeded and in flight")
 }
 
 // A manual or fixtures launch of the same scope waits for the fixed schedule's coverage read to end its
@@ -137,7 +167,7 @@ func TestManualRecommendationsLaunchWaitsForTheScheduleScopeLock(t *testing.T) {
 	}
 	defer scheduleTx.Rollback(ctx)
 	cutoff := time.Now().UTC()
-	if _, err := store.FreshCoverage(ctx, scheduleTx, orgID, "recommendations", scope, cutoff, cutoff.Add(-2*time.Hour)); err != nil {
+	if _, err := store.FreshCoverage(ctx, scheduleTx, orgID, "recommendations", scope, cutoff, cutoff, 2*time.Hour); err != nil {
 		t.Fatal(err)
 	}
 

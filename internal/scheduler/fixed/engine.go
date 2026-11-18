@@ -330,12 +330,6 @@ func (engine *Engine) stepSchedule(
 				outcome.Degraded = degraded
 			}
 		}
-		if errors.Is(err, ErrOccurrenceDeferred) {
-			// The occurrence rolled back and stays due: a later window re-checks it. Waiting for a run in
-			// flight is not a failure of the window, and nothing was evaluated (Evaluated stays false, so a
-			// degraded reason already reported is neither set nor cleared). The producer logs each deferral.
-			err = nil
-		}
 		if err != nil {
 			outcome.Err = err
 			return outcome

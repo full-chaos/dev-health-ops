@@ -1027,17 +1027,25 @@ SELECT EXISTS (
 	return exists, nil
 }
 
-// FreshCoverageState is what FreshCoverage found for one organization and one exact scope.
-type FreshCoverageState int
+// FreshCoverageBranch names why FreshCoverage found a run that covers an occurrence.
+type FreshCoverageBranch string
 
 const (
-	// FreshCoverageNone: no run covers the occurrence and none is in flight.
-	FreshCoverageNone FreshCoverageState = iota
-	// FreshCoverageCovered: a same-scope run succeeded with rows, created at or after the cutoff.
-	FreshCoverageCovered
-	// FreshCoverageInFlight: a same-scope run is pending or running (not a dead handoff), created at or after inFlightSince.
-	FreshCoverageInFlight
+	// FreshCoverageSucceeded: a same-scope run succeeded with rows, created at or after the cutoff.
+	FreshCoverageSucceeded FreshCoverageBranch = "succeeded"
+	// FreshCoverageInFlight: a same-scope run is pending or running (not a dead handoff), created at or
+	// after the cutoff and younger than the stage budget.
+	FreshCoverageInFlight FreshCoverageBranch = "in_flight"
 )
+
+// FreshCoverageResult is the covering run FreshCoverage found. Branch is empty (Covered false) when none covers.
+type FreshCoverageResult struct {
+	Covered   bool
+	Branch    FreshCoverageBranch
+	RunID     string
+	Status    string
+	CreatedAt time.Time
+}
 
 // lockFreshScope takes the transaction-scoped advisory lock of one (organization, family, exact scope).
 // It is day-independent on purpose: a manual run labelled yesterday and the scheduled occurrence of today
@@ -1051,51 +1059,63 @@ func lockFreshScope(ctx context.Context, tx pgx.Tx, organizationID, family strin
 }
 
 // FreshCoverage decides whether a fixed-schedule occurrence of an exact-scope family (capacity,
-// recommendations) is already covered by a run of the SAME scope, whatever its day label.
+// recommendations) is already covered by a run of the SAME scope, whatever its day label (CHAOS-9587).
 //
-// A succeeded run covers the occurrence only when it was created at or after cutoff, the instant the
-// occurrence's own run would read up to: a run created earlier read an older window and its answer would
-// read as fresh (CHAOS-9587). A succeeded partition that wrote 0 rows never covers (a withheld run).
-// A pending or running run created at or after inFlightSince is in flight; a pending run whose handoff is
-// dead under deadHandoffReasonSQL will never be claimed and is not in flight. Covered wins over in flight.
+//   - A succeeded run (partition succeeded, rows written) covers the occurrence only when it was created
+//     at or after cutoff, the instant the occurrence's own run would read its data up to: a run created
+//     earlier read an older window and its answer would read as fresh. A 0-row partition (a withheld run)
+//     never covers.
+//   - A pending or running run covers it only when it was created at or after cutoff AND is younger than
+//     the stage budget: created_at is strictly after now minus the budget (at exactly the budget the
+//     schedule runs). A pending run whose handoff is dead under deadHandoffReasonSQL will never be claimed
+//     and never covers.
+//
+// A succeeded cover wins over an in-flight one; among equals the newest run is returned. The caller logs the
+// returned run so a covered occurrence leaves a trail.
 func (store *PostgresStore) FreshCoverage(
-	ctx context.Context, tx pgx.Tx, organizationID, family string, scope json.RawMessage, cutoff, inFlightSince time.Time,
-) (FreshCoverageState, error) {
-	if !store.valid() || tx == nil || !validUUID(organizationID) || family == "" {
-		return FreshCoverageNone, ErrUnavailable
+	ctx context.Context, tx pgx.Tx, organizationID, family string, scope json.RawMessage, cutoff, now time.Time, stageBudget time.Duration,
+) (FreshCoverageResult, error) {
+	if !store.valid() || tx == nil || !validUUID(organizationID) || family == "" || stageBudget <= 0 {
+		return FreshCoverageResult{}, ErrUnavailable
 	}
 	if exact, _ := remainingCoverageScopeFilter(family, scope); !exact {
-		return FreshCoverageNone, ErrInvalidState
+		return FreshCoverageResult{}, ErrInvalidState
 	}
 	// Serialize against a manual or fixtures launch of the same scope (startManualTriggerRun takes the same
-	// lock first), so a run cannot become visible between this read and the caller's insert. Held to the
-	// end of the caller's transaction.
+	// lock first), so a run cannot become visible between this read and the caller's insert. The lock is
+	// transaction-scoped: it is held from this read to the end of the caller's transaction, which also
+	// carries the insert, and no longer.
 	if err := lockFreshScope(ctx, tx, organizationID, family, scope); err != nil {
-		return FreshCoverageNone, store.wrapUnavailable(ctx, "acquire fresh scope lock", err, "family", family)
+		return FreshCoverageResult{}, store.wrapUnavailable(ctx, "acquire fresh scope lock", err, "family", family)
 	}
-	var covered, inFlight bool
+	var result FreshCoverageResult
+	var branch string
 	err := tx.QueryRow(ctx, `
-SELECT
-    coalesce(bool_or(run.status = 'succeeded' AND partition.status = 'succeeded'
-        AND run.created_at >= $4
-        AND NOT coalesce(partition.output_evidence LIKE '%:rows_written=0', false)), false),
-    coalesce(bool_or(run.status IN ('pending', 'running')
-        AND run.created_at >= $5
-        AND NOT (run.status = 'pending' AND `+deadHandoffReasonSQL+` <> 'deliverable')), false)
+SELECT run.id::text, run.status, run.created_at,
+       CASE WHEN run.status = 'succeeded' THEN 'succeeded' ELSE 'in_flight' END AS branch
 FROM public.remaining_metric_partitions AS partition
 JOIN public.remaining_metric_runs AS run ON run.id = partition.run_id
-WHERE run.org_id = $1::uuid AND run.family = $2 AND partition.scope = $3::jsonb`,
-		organizationID, family, scope, cutoff.UTC(), inFlightSince.UTC()).Scan(&covered, &inFlight)
+WHERE run.org_id = $1::uuid AND run.family = $2 AND partition.scope = $3::jsonb
+  AND run.created_at >= $4
+  AND (
+    (run.status = 'succeeded' AND partition.status = 'succeeded'
+        AND NOT coalesce(partition.output_evidence LIKE '%:rows_written=0', false))
+    OR
+    (run.status IN ('pending', 'running')
+        AND run.created_at > $5
+        AND NOT (run.status = 'pending' AND `+deadHandoffReasonSQL+` <> 'deliverable'))
+  )
+ORDER BY (run.status = 'succeeded') DESC, run.created_at DESC
+LIMIT 1`,
+		organizationID, family, scope, cutoff.UTC(), now.UTC().Add(-stageBudget)).Scan(&result.RunID, &result.Status, &result.CreatedAt, &branch)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return FreshCoverageResult{}, nil
+	}
 	if err != nil {
-		return FreshCoverageNone, store.wrapUnavailable(ctx, "query fresh coverage", err, "family", family)
+		return FreshCoverageResult{}, store.wrapUnavailable(ctx, "query fresh coverage", err, "family", family)
 	}
-	switch {
-	case covered:
-		return FreshCoverageCovered, nil
-	case inFlight:
-		return FreshCoverageInFlight, nil
-	}
-	return FreshCoverageNone, nil
+	result.Covered, result.Branch = true, FreshCoverageBranch(branch)
+	return result, nil
 }
 
 // loadRunCoveringDay finds the run (any generation) that already carries a

@@ -29,7 +29,7 @@ func (store *PostgresStore) FailDispatchPermanently(ctx context.Context, run Run
 	if !store.valid() || !validUUID(run.ID) {
 		return false, ErrUnavailable
 	}
-	tx, err := store.pool.Begin(ctx)
+	tx, err := store.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return false, ErrUnavailable
 	}

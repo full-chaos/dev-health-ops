@@ -159,7 +159,7 @@ type auditFilter struct {
 // auditListQuery validates the list routes' shared query parameters in
 // declaration order and returns the filter and page.
 func auditListQuery(r *http.Request) (auditFilter, int64, int64, pybody.Errors) {
-	values := r.URL.Query()
+	values := httpapi.Query(r)
 	var errs pybody.Errors
 	filter := auditFilter{
 		userID: truthyQuery(values, "user_id"), action: truthyQuery(values, "action"),
@@ -359,7 +359,7 @@ func (h *handlers) getResourceAuditHistory(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	var errs pybody.Errors
-	limit := limitOnly(&errs, r.URL.Query(), 50, 500)
+	limit := limitOnly(&errs, httpapi.Query(r), 50, 500)
 	if len(errs) > 0 {
 		writeValidation(w, errs)
 		return
@@ -390,7 +390,7 @@ func (h *handlers) getUserAuditActivity(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var errs pybody.Errors
-	limit := limitOnly(&errs, r.URL.Query(), 50, 500)
+	limit := limitOnly(&errs, httpapi.Query(r), 50, 500)
 	if len(errs) > 0 {
 		writeValidation(w, errs)
 		return

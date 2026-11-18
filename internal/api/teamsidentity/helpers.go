@@ -22,7 +22,7 @@ import (
 // whitespace trim) and anything outside it is a "bool_parsing" 422, never a
 // silent default. present is false only on that error path.
 func queryBoolDefaultTrue(r *http.Request, name string) (bool, *pybody.Error) {
-	query := r.URL.Query()
+	query := httpapi.Query(r)
 	if !query.Has(name) {
 		return true, nil
 	}

@@ -331,8 +331,8 @@ func incidentEdge(
 
 	repoID := row.RepoID
 	return DeploymentIncidentEdge{
-		EdgeID: pythonHash(
-			"deployment_incident", params.OrgID.String(), deploymentID, row.IncidentID,
+		EdgeID: lengthPrefixedHash(
+			"deployment_incident", params.OrgID.String(), row.RepoID.String(), deploymentID, row.IncidentID,
 		),
 		OrgID:        params.OrgID,
 		DeploymentID: deploymentID,
@@ -374,6 +374,19 @@ func pullRequestID(repoID uuid.UUID, number string) string {
 func pythonHash(parts ...string) string {
 	sum := sha256.Sum256([]byte(strings.Join(parts, "|")))
 	return hex.EncodeToString(sum[:])
+}
+
+// lengthPrefixedHash is injective over its parts: each part is written as its
+// byte length, ":", then the part, so no choice of "|" or ":" inside a part can
+// move a boundary. The incident edge id uses it (CHAOS-7262): the Python
+// producer that fixed the old "|" join is deleted (families.json work_graph_edges),
+// so there is no value to match. pr_review and pr_deployment keep pythonHash.
+func lengthPrefixedHash(parts ...string) string {
+	h := sha256.New()
+	for _, part := range parts {
+		fmt.Fprintf(h, "%d:%s", len(part), part)
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 // firstTimestamp ports _dt (:76): the first candidate that is actually a

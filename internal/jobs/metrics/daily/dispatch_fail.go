@@ -42,21 +42,28 @@ func (store *PostgresStore) FailDispatchPermanently(ctx context.Context, run Run
 		return false, err
 	}
 	var status string
-	var hasPartitions, handedOff bool
 	err = tx.QueryRow(ctx, `
-SELECT run.status,
-  EXISTS (SELECT 1 FROM public.daily_metrics_partitions AS partition WHERE partition.run_id = run.id),
-  EXISTS (SELECT 1 FROM public.worker_job_outbox WHERE dedupe_key = $2)
-FROM public.daily_metrics_runs AS run
-WHERE run.id = $1::uuid
-FOR UPDATE OF run`, run.ID, FinalizeHandoffKey(run.ID)).Scan(&status, &hasPartitions, &handedOff)
+SELECT status FROM public.daily_metrics_runs WHERE id = $1::uuid FOR UPDATE`, run.ID).Scan(&status)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
 	}
 	if err != nil {
 		return false, ErrUnavailable
 	}
-	if status != "running" || hasPartitions || handedOff {
+	if status != "running" {
+		return false, nil
+	}
+	// A second statement, after the lock: under Read Committed it takes a new
+	// snapshot, so it sees the partitions or the handoff a materialize that held
+	// the run lock committed while this transaction waited for it.
+	var hasPartitions, handedOff bool
+	if err := tx.QueryRow(ctx, `
+SELECT EXISTS (SELECT 1 FROM public.daily_metrics_partitions WHERE run_id = $1::uuid),
+  EXISTS (SELECT 1 FROM public.worker_job_outbox WHERE dedupe_key = $2)`,
+		run.ID, FinalizeHandoffKey(run.ID)).Scan(&hasPartitions, &handedOff); err != nil {
+		return false, ErrUnavailable
+	}
+	if hasPartitions || handedOff {
 		return false, nil
 	}
 	now := store.now().UTC()

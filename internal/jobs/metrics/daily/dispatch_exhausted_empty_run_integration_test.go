@@ -372,3 +372,64 @@ func TestARerunOfADayWhoseDispatchFailedRunsTheDayAgain(t *testing.T) {
 			statusOf(failedRun.ID), statusOf(outcome.RunID), state)
 	}
 }
+
+// The terminal write must read the run's partitions and handoff after it holds
+// the run lock. A materialize that holds the lock and commits a partition (or
+// the handoff) while the terminal write waits must leave the run running.
+func TestFailDispatchPermanentlyWaitsOutAConcurrentMaterialize(t *testing.T) {
+	for _, child := range []string{"partition", "handoff"} {
+		t.Run(child, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+			defer cancel()
+			pool, store, publisher := newFinalizeRedriveTestStackWithRiverSchema(t)
+			orgID, runID := uuid.NewString(), uuid.NewString()
+			if _, err := pool.Exec(ctx, `INSERT INTO daily_metrics_runs (id,org_id,target_day,generation,status,finalization_status,created_at,updated_at,full_org) VALUES ($1::uuid,$2,'2026-11-01','post-sync:' || $1::uuid::text,'running','pending',now(),now(),true)`, runID, orgID); err != nil {
+				t.Fatal(err)
+			}
+			run := Run{ID: runID, OrganizationID: orgID, Generation: "post-sync:" + runID, Status: "running", TargetDay: time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)}
+
+			// The materializer: run row lock, then the child row, not yet committed.
+			materialize, err := pool.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = materialize.Rollback(context.Background()) }()
+			if _, err := materialize.Exec(ctx, `SELECT 1 FROM daily_metrics_runs WHERE id = $1::uuid FOR UPDATE`, runID); err != nil {
+				t.Fatal(err)
+			}
+			switch child {
+			case "partition":
+				if _, err := materialize.Exec(ctx, `INSERT INTO daily_metrics_partitions (id,run_id,ordinal,repo_ids,status,attempt_count,created_at,updated_at) VALUES ($1,$2,0,'[]'::jsonb,'pending',0,now(),now())`, uuid.NewString(), runID); err != nil {
+					t.Fatal(err)
+				}
+			case "handoff":
+				if err := publisher.PublishFinalizeTx(ctx, materialize, run); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			type result struct {
+				failed bool
+				err    error
+			}
+			done := make(chan result, 1)
+			go func() {
+				failed, err := store.FailDispatchPermanently(ctx, run)
+				done <- result{failed, err}
+			}()
+			waitForALockedStatement(t, ctx, pool)
+			if err := materialize.Commit(ctx); err != nil {
+				t.Fatal(err)
+			}
+			got := <-done
+			var status string
+			if err := pool.QueryRow(ctx, `SELECT status FROM daily_metrics_runs WHERE id = $1`, runID).Scan(&status); err != nil {
+				t.Fatal(err)
+			}
+			t.Logf("%s committed while the terminal write waited: failed=%t err=%v status=%s", child, got.failed, got.err, status)
+			if got.err != nil || got.failed || status != "running" {
+				t.Fatalf("failed=%t err=%v status=%s, want the run left running", got.failed, got.err, status)
+			}
+		})
+	}
+}

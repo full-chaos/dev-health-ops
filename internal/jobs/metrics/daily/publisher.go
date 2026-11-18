@@ -213,8 +213,8 @@ func (publisher *PostgresPublisher) PublishRedrivePartitionTx(
 }
 
 // FinalizeHandoffKey is the outbox dedupe key of a run's ordinary finalize
-// handoff. A run with no partition whose key exists in the outbox, or in its
-// abandonment record, has already been handed to its finalize as empty.
+// handoff. A run with no partition whose key exists in the outbox has already
+// been handed to its finalize as empty.
 func FinalizeHandoffKey(runID string) string {
 	return "metrics.daily_finalize:" + runID
 }

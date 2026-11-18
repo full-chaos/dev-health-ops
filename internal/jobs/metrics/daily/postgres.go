@@ -931,14 +931,14 @@ SELECT count(*) FROM public.daily_metrics_partitions WHERE run_id = $1::uuid`, r
 	if existing == 0 {
 		// A run with no partition whose finalize handoff exists already decided
 		// that it is empty: a retried dispatch must not cut partitions under the
-		// finalize it handed off. The handoff is found in the outbox at any
-		// status, or in the abandonment record a dead outbox row leaves. Outbox
-		// retention keeps a delivered row for at least one day
-		// (scheduler/fixed producers.go, MinDays 1); a dispatch retry comes
+		// finalize it handed off. The handoff is read from the outbox at any
+		// status (a dead row too); the worker's domain role holds SELECT on the
+		// outbox and no grant on the abandonment record. Outbox retention keeps
+		// every row for at least one day (scheduler/fixed producers.go, MinDays
+		// 1), and metrics.daily_dispatch has 3 attempts, so its retries come
 		// within minutes.
 		if err := tx.QueryRow(ctx, `
-SELECT EXISTS (SELECT 1 FROM public.worker_job_outbox WHERE dedupe_key = $1)
-    OR EXISTS (SELECT 1 FROM public.worker_job_delivery_abandonments WHERE dedupe_key = $1)`,
+SELECT EXISTS (SELECT 1 FROM public.worker_job_outbox WHERE dedupe_key = $1)`,
 			FinalizeHandoffKey(run.ID)).Scan(&handedOff); err != nil {
 			return false, ErrUnavailable
 		}

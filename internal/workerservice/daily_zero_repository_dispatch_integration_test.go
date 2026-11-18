@@ -19,8 +19,8 @@ import (
 // A daily run of the whole organization whose discovery finds no repository
 // reaches the finalize of PR-A through a finalize handoff that the dispatch
 // publishes, on each trigger path. A retried dispatch of such a run cuts no
-// partition: the handoff, or its abandonment record, says the run already
-// decided that it is empty.
+// partition: its finalize handoff in the outbox, at any status, says the run
+// already decided that it is empty.
 
 type zeroRepositoryDispatchRig struct {
 	*zeroPartitionRig
@@ -71,7 +71,7 @@ func (rig *zeroRepositoryDispatchRig) dispatch(t *testing.T, ctx context.Context
 func (rig *zeroRepositoryDispatchRig) handoffs(t *testing.T, ctx context.Context, runID string) (finalize, partitions int) {
 	t.Helper()
 	if err := rig.pool.QueryRow(ctx, `SELECT count(*) FROM worker_job_outbox WHERE dedupe_key = $1`,
-		"metrics.daily_finalize:"+runID).Scan(&finalize); err != nil {
+		daily.FinalizeHandoffKey(runID)).Scan(&finalize); err != nil {
 		t.Fatal(err)
 	}
 	if err := rig.pool.QueryRow(ctx, `SELECT count(*) FROM daily_metrics_partitions WHERE run_id = $1::uuid`, runID).Scan(&partitions); err != nil {
@@ -183,10 +183,10 @@ func TestARetriedDispatchOfARunThatDecidedEmptyCutsNoPartition(t *testing.T) {
 	day := time.Date(2026, 9, 14, 0, 0, 0, 0, time.UTC)
 	cases := []struct {
 		name string
-		// abandon moves the finalize handoff of the run from the outbox to its
-		// abandonment record, the path of a dead outbox row.
-		abandon bool
-	}{{"outbox row", false}, {"abandonment record", true}}
+		// dead marks the finalize handoff of the run as a dead outbox row: its
+		// delivery was abandoned, and the row stays until outbox retention.
+		dead bool
+	}{{"outbox row", false}, {"dead outbox row", true}}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			org := uuid.NewSHA1(uuid.NameSpaceURL, []byte("chaos-14037-pr-b-retry:"+tc.name)).String()
@@ -197,15 +197,14 @@ func TestARetriedDispatchOfARunThatDecidedEmptyCutsNoPartition(t *testing.T) {
 			}).ID
 			rig.dispatch(t, ctx, org, runID)
 			first, _ := rig.handoffs(t, ctx, runID)
-			key := "metrics.daily_finalize:" + runID
-			if tc.abandon {
-				if _, err := rig.pool.Exec(ctx, `
-INSERT INTO worker_job_delivery_abandonments (dedupe_key, job_kind, abandoned_at, attempt_count, last_error_code)
-SELECT dedupe_key, job_kind, now(), attempt_count, 'test_dead' FROM worker_job_outbox WHERE dedupe_key = $1`, key); err != nil {
+			key := daily.FinalizeHandoffKey(runID)
+			if tc.dead {
+				command, err := rig.pool.Exec(ctx, `UPDATE worker_job_outbox SET status = 'dead', updated_at = now() WHERE dedupe_key = $1`, key)
+				if err != nil {
 					t.Fatal(err)
 				}
-				if _, err := rig.pool.Exec(ctx, `DELETE FROM worker_job_outbox WHERE dedupe_key = $1`, key); err != nil {
-					t.Fatal(err)
+				if command.RowsAffected() != 1 {
+					t.Fatalf("marked %d outbox row(s) dead, want 1", command.RowsAffected())
 				}
 			}
 			// A repository of the organization comes back before the retry.
@@ -217,28 +216,27 @@ SELECT dedupe_key, job_kind, now(), attempt_count, 'test_dead' FROM worker_job_o
 			rig.dispatch(t, ctx, org, runID)
 
 			finalizeHandoffs, partitions := rig.handoffs(t, ctx, runID)
-			var abandoned int
-			if err := rig.pool.QueryRow(ctx, `SELECT count(*) FROM worker_job_delivery_abandonments WHERE dedupe_key = $1`, key).Scan(&abandoned); err != nil {
+			var dead int
+			if err := rig.pool.QueryRow(ctx, `SELECT count(*) FROM worker_job_outbox WHERE dedupe_key = $1 AND status = 'dead'`, key).Scan(&dead); err != nil {
 				t.Fatal(err)
 			}
 			status, finalization, fences := rig.runState(t, ctx, runID)
-			t.Logf("first dispatch: %d handoff(s); after the retry: status=%s finalization=%s fences=%d finalize_handoffs=%d abandoned=%d partitions=%d",
-				first, status, finalization, fences, finalizeHandoffs, abandoned, partitions)
+			t.Logf("first dispatch: %d handoff(s); after the retry: status=%s finalization=%s fences=%d finalize_handoffs=%d dead=%d partitions=%d",
+				first, status, finalization, fences, finalizeHandoffs, dead, partitions)
 			if first != 1 {
 				t.Errorf("the first dispatch published %d finalize handoff(s), want 1", first)
 			}
 			if partitions != 0 {
 				t.Errorf("the retried dispatch cut %d partition(s) for a run that already decided it is empty, want 0", partitions)
 			}
-			wantHandoffs, wantAbandoned := 1, 0
-			if tc.abandon {
-				wantHandoffs, wantAbandoned = 0, 1
+			wantDead := 0
+			if tc.dead {
+				wantDead = 1
 			}
-			if finalizeHandoffs != wantHandoffs || abandoned != wantAbandoned {
-				t.Errorf("after the retry: %d handoff(s) and %d abandonment record(s), want %d and %d",
-					finalizeHandoffs, abandoned, wantHandoffs, wantAbandoned)
+			if finalizeHandoffs != 1 || dead != wantDead {
+				t.Errorf("after the retry: %d handoff(s), %d dead, want 1 and %d", finalizeHandoffs, dead, wantDead)
 			}
-			if tc.abandon {
+			if tc.dead {
 				return
 			}
 			if err := rig.runFinalize(ctx, org, runID); err != nil {

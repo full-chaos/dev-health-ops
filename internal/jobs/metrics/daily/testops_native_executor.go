@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/testops"
+	"github.com/full-chaos/dev-health-ops/internal/teamkeytables"
 )
 
 // -----------------------------------------------------------------------
@@ -213,8 +214,29 @@ func (executor *TestopsTestExecutor) ComputeFamily(
 		}
 		metrics = append(metrics, repoMetrics...)
 	}
-	return writeTestopsTestMetrics(
+	written, err := writeTestopsTestMetrics(
 		ctx, executor.conn, run.OrganizationID, scope.day, scope.computedAt, metrics)
+	if err != nil {
+		return written, err
+	}
+	// A repository of this partition whose stored row of the day is live and that
+	// has no record now (its counted suites moved to another day) gets a row that
+	// retires the key (stale_team_keys.go): the day then reads as absent, never 0.
+	// A repository with no stored row gets nothing: missing stays missing.
+	produced := make([]staleKey, 0, len(metrics))
+	for _, metric := range metrics {
+		produced = append(produced, staleKey{metric.RepoID.String()})
+	}
+	repositories := make([][]string, 0, len(scope.repoIDs))
+	for _, repoID := range scope.repoIDs {
+		repositories = append(repositories, []string{repoID.String()})
+	}
+	retired, err := supersedeStaleTeamKeys(ctx, executor.conn, teamkeytables.TestopsTestMetricsDaily, run.OrganizationID,
+		scope.day, newStaleKeyScope(repositories...), produced, scope.computedAt)
+	if err != nil {
+		return written + retired, fmt.Errorf("retire stale testops_test_metrics_daily days: %w", err)
+	}
+	return written + retired, nil
 }
 
 // -----------------------------------------------------------------------

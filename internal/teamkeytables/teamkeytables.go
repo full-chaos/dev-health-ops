@@ -276,6 +276,20 @@ var (
 		TeamColumn: "team_id", Scope: []string{"repo_id"}, Labels: []string{"team_name"},
 		Retracted: "retracted", Carried: []KeyColumn{{"team_id", KeyNullableString}, {"team_name", KeyNullableString}},
 	}
+	// testops_test_metrics_daily holds one row for each (repository, day); the
+	// team and the service of the repository are VALUE columns. A recompute of a
+	// day that counts no kept suite any more (the newest attempt of its run moved
+	// to a later day) produces no record, so the key that goes stale is the
+	// (repository, day) itself. A stored row can hold 0 in every count (a day
+	// stored by an older build whose cases were all of a moved run), so no
+	// measure tells the row that retires the key from it: that row carries the
+	// Retracted marker.
+	TestopsTestMetricsDaily = Table{
+		Table: "testops_test_metrics_daily", Family: "testops_test", DayColumn: "day",
+		Keys:       []KeyColumn{{"repo_id", KeyUUID}},
+		TeamColumn: "team_id", Scope: []string{"repo_id"},
+		Retracted: "retracted", Carried: []KeyColumn{{"team_id", KeyNullableString}, {"service_id", KeyNullableString}},
+	}
 	TeamComplexityDaily = Table{
 		Table: "team_complexity_daily", Family: "team_complexity", DayColumn: "day",
 		Keys:       []KeyColumn{{"team_id", KeyString}},
@@ -304,6 +318,7 @@ func All() []Table {
 		TeamComplexityDaily,
 		WorkItemUserMetricsDaily,
 		UserMetricsDaily,
+		TestopsTestMetricsDaily,
 	}
 }
 

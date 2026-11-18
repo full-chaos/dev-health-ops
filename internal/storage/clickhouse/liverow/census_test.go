@@ -113,6 +113,9 @@ var namesOnly = map[string]struct{ reader, why string }{
 	"internal/jobs/metrics/daily/benchmarking/clickhouse.go": {"FetchMetricSeriesByScope", "metric definitions"},
 	"internal/queryapi/people/metricconfig.go":               {"liveWhere", "the person metric configs: every read of their tables takes its clause from liveWhere"},
 	"internal/queryapi/analytics/filtertranslation.go":       {"", "an error message that names the tables, no query"},
+	"internal/queryapi/analytics/validate.go":                {"dedupFromMeasureSource", "the source table of each measure; every read of it takes its FROM from dedupFromMeasureSource"},
+	"internal/queryapi/analytics/testopsownership.go":        {"dedupFromMeasureSource", "the TestOps measure tables of the ownership join; the read of the table is dedupFromMeasureSource"},
+	"internal/jobs/report/pooled.go":                         {"", "the pooled suite measures name their table; the read is testopspooled.SuiteRunsSource, which applies the rule"},
 }
 
 type declaration struct {

@@ -20,6 +20,8 @@
 
 package testopspooled
 
+import "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
+
 const (
 	PipelineRunsAlias = "testops_pipeline_runs"
 	SuiteRunsAlias    = "testops_suite_runs"
@@ -54,7 +56,8 @@ const PipelineRunsSource = `(
 ) AS testops_pipeline_runs`
 
 // SuiteRunsSource reads the suite rows the readers count: the newest attempt of each report slot, a legacy row only when no
-// kept slotted row lists its id (SuiteRowsNewestAttempt). A var: the fragment is built, not written.
+// kept slotted row lists its id (SuiteRowsNewestAttempt). A var: the fragment is built, not written. A repository-day whose
+// newest stored row retires it (package liverow) is not a day the writer computed.
 var SuiteRunsSource = `(
     SELECT
         org_id,
@@ -68,7 +71,9 @@ var SuiteRunsSource = `(
       AND ` + SuiteRowsNewestAttempt("", Scope{}) + `
       AND (repo_id, toDate(coalesce(started_at, finished_at))) IN (
           SELECT repo_id, day FROM testops_test_metrics_daily
-          WHERE org_id = {org_id:String} AND day >= {start_date:Date} AND day < {end_date:Date})
+          WHERE org_id = {org_id:String} AND day >= {start_date:Date} AND day < {end_date:Date}
+          GROUP BY repo_id, day
+          HAVING ` + liverow.NewestPredicate("testops_test_metrics_daily", "") + `)
 ) AS testops_suite_runs`
 
 // P95 is the 95th percentile of a group's duration samples, NULL for a group with none.

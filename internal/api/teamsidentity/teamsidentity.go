@@ -407,7 +407,7 @@ func discoverInvalidProviderDetail(provider string) *pyjson.Object {
 // and Fernet decryptor internal/apiservice already builds for
 // webhookintake), then calls the live provider API.
 func (h handlers) discoverTeams(w http.ResponseWriter, r *http.Request) {
-	query := r.URL.Query()
+	query := httpapi.Query(r)
 	if !query.Has("provider") {
 		policy.WriteJSON(w, http.StatusUnprocessableEntity, discoverMissingProviderDetail(), nil)
 		return

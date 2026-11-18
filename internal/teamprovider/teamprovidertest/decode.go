@@ -84,6 +84,13 @@ func Decode(query string, args []any) ([]string, []teamprovider.Write, error) {
 				*target = parsed.UTC()
 			}
 		}
+		if masks := named["kept_mask"]; len(masks) > r {
+			mask, _ := masks[r].(uint32)
+			writes[r].Kept = teamprovider.Kept(mask)
+			after, _ := named["version_after"][r].(uint32)
+			skip, _ := named["skip_deleted"][r].(uint32)
+			writes[r].VersionAfterStored, writes[r].SkipDeleted = after == 1, skip == 1
+		}
 		if text, ok := named["gone_in"][r].(string); ok {
 			parsed, err := time.Parse("2006-01-02 15:04:05.000000", text)
 			if err != nil {

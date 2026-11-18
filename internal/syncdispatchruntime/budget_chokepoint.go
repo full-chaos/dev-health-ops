@@ -171,7 +171,9 @@ WHERE id = $1::uuid
 		return terminalDecision{}, err
 	}
 	recordRollupBump(ctx, rollupPathBudgetExhausted)
-	logger.Warn(ctx, synclog.MsgDispatchSyncRunUnitTerminalized, synclog.Unit(synclog.ParseID(unit.id)), synclog.Text(synclog.KeyErrorCategory, synclog.ParseLabel(verdict.errorCategory)))
+	logAfterCommit(ctx, func() {
+		logger.Warn(ctx, synclog.MsgDispatchSyncRunUnitTerminalized, synclog.Unit(synclog.ParseID(unit.id)), synclog.Text(synclog.KeyErrorCategory, synclog.ParseLabel(verdict.errorCategory)))
+	})
 	return terminalDecision{outcome: terminalOutcomeTerminalized, at: now}, nil
 }
 

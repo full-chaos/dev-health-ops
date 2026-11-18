@@ -51,8 +51,6 @@ func TestSourceDataCheckerAsksPipelineStabilityOnlyForADayWithACompletedRun(t *t
     org_id String, repo_id UUID, run_id String DEFAULT toString(generateUUIDv4()), status Nullable(String),
     started_at Nullable(DateTime64(3, 'UTC')), finished_at Nullable(DateTime64(3, 'UTC'))
 ) ENGINE = ReplacingMergeTree ORDER BY (org_id, repo_id, run_id)`,
-		`CREATE TABLE cicd_metrics_daily (org_id String, repo_id UUID, day Date, computed_at DateTime DEFAULT now(), retracted UInt8 DEFAULT 0)
- ENGINE = MergeTree ORDER BY (org_id, repo_id, day)`,
 		`CREATE TABLE deployments (
     org_id String, repo_id UUID,
     deployed_at Nullable(DateTime64(3, 'UTC')), finished_at Nullable(DateTime64(3, 'UTC')),
@@ -82,7 +80,7 @@ func TestSourceDataCheckerAsksPipelineStabilityOnlyForADayWithACompletedRun(t *t
 			t.Fatal(err)
 		}
 	}
-	chschema.CreateTables(ctx, t, conn, "test_suite_results", "testops_release_confidence", "testops_pipeline_stability", "testops_quality_drag")
+	chschema.CreateTables(ctx, t, conn, "test_suite_results", "testops_release_confidence", "testops_pipeline_stability", "testops_quality_drag", "cicd_metrics_daily")
 
 	const (
 		orgID         = "00000000-0000-4000-8000-000000000009"

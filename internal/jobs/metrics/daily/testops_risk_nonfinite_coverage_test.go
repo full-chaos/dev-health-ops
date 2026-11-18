@@ -69,7 +69,7 @@ func TestNonFiniteCoverageClassSweep(t *testing.T) {
 	computedAt := day
 
 	pipe := &testops.PipelineMetric{RepoID: repoID, SuccessRate: 1.0, SuccessCount: 1, OrgID: "org"}
-	test := &testops.TestMetric{RepoID: repoID, PassRate: 1.0, PassedCount: 1, OrgID: "org"}
+	test := &testops.TestMetric{RepoID: repoID, PassRate: 1.0, PassedCount: 1, DistinctCases: 1, OrgID: "org"}
 
 	coveragePctCases := []struct {
 		name string
@@ -180,7 +180,7 @@ func TestComputeQualityDragNegativeZeroDurationMatchesPython(t *testing.T) {
 		AvgQueueSeconds:       &negZero,
 		FailureCount:          1,
 	}
-	test := &testops.TestMetric{RepoID: repoID, OrgID: "org"}
+	test := &testops.TestMetric{RepoID: repoID, DistinctCases: 1, OrgID: "org"}
 
 	row := computeQualityDrag(repoID, day, pipe, test, day)
 	if row == nil {
@@ -223,7 +223,7 @@ func TestComputeQualityDragNonFiniteDurationNullsNumericFieldsNotRawNaN(t *testi
 		FailureCount:          1,
 		PipelinesCount:        1,
 	}
-	test := &testops.TestMetric{RepoID: repoID, OrgID: "org"}
+	test := &testops.TestMetric{RepoID: repoID, DistinctCases: 1, OrgID: "org"}
 
 	row := computeQualityDrag(repoID, day, pipe, test, day)
 	if row == nil {

@@ -970,7 +970,10 @@ var matrixChecks = map[string]matrixCheck{
 			case "issue_project", "project_ownership":
 				rows = f.projectOwnerRows(item.ProjectID)
 			case "repo_ownership":
-				rows = f.repoOwnerRows(item.RepoID)
+				// An issue takes no repo_ownership from its own repository.
+				r.Subjects++
+				r.Violations = append(r.Violations, fmt.Sprintf("%s -> %s by repo_ownership; an issue takes no team from its own repository", id, row.TeamID))
+				continue
 			default:
 				continue
 			}
@@ -987,7 +990,8 @@ var matrixChecks = map[string]matrixCheck{
 			if item.Provider != p || isPullRequestItem(item) || item.Status != "done" {
 				continue
 			}
-			owners := f.ownersAt(append(f.projectOwnerRows(item.ProjectID), f.repoOwnerRows(item.RepoID)...), f.itemDay(item))
+			// An issue takes its team through the ownership of its project, never through its own repository.
+			owners := f.ownersAt(f.projectOwnerRows(item.ProjectID), f.itemDay(item))
 			if len(owners) == 0 {
 				continue
 			}
@@ -1003,11 +1007,7 @@ var matrixChecks = map[string]matrixCheck{
 			if item.Provider != p || isPullRequestItem(item) {
 				continue
 			}
-			rows := f.projectOwnerRows(item.ProjectID)
-			if len(rows) == 0 {
-				rows = f.repoOwnerRows(item.RepoID)
-			}
-			owners := f.ownersAt(rows, f.itemDay(item))
+			owners := f.ownersAt(f.projectOwnerRows(item.ProjectID), f.itemDay(item))
 			// The item's own native team wins (team-attribution.md 0.4d, D5206): no co-owner then.
 			if primary, ok := f.primary(id); len(owners) < 2 || (ok && primary.Source == "native_team") {
 				continue
@@ -1290,6 +1290,9 @@ func producedMatrixState(ctx context.Context, t *testing.T) (driver.Conn, map[st
 	facts := map[string]matrixFacts{}
 	readers := map[string]ownerReaders{}
 	for provider, org := range orgs {
+		if provider == "github" {
+			seedGithubIssueProjects(ctx, t, conn, org, now)
+		}
 		tie := seedFullTie(ctx, t, conn, provider, org, now)
 		var first time.Time
 		matrixQuery(ctx, t, conn, `SELECT min(created_at) FROM work_items WHERE org_id = ?`, []any{org}, func(rows driver.Rows) error {
@@ -1662,4 +1665,37 @@ func rediscoverKnownDefects(ctx context.Context, t *testing.T, conn driver.Conn,
 			t.Fatal("a reader that still names a gone team as an owner is not found")
 		}
 	})
+}
+
+// pull_request_inherits_only_from_a_linked_issue on github is a MECHANISM cell with seeded issue-project ownership; no GitHub producer
+// writes team_project_ownership today, so on real GitHub data a github issue has no team under the issue rule and a github PR inherits
+// no team from it.
+// seedGithubIssueProjects gives the github world's issues a project owned by a team. A GitHub issue's project is its
+// repository's full name; the world holds no project ownership row (no GitHub producer writes one), and an issue takes
+// no team from its own repository, so without a project owner no github issue has a team and no pull request has an
+// issue to inherit one from. Source rows only, like seedFullTie: the production verbs derive the attribution.
+func seedGithubIssueProjects(ctx context.Context, t *testing.T, conn driver.Conn, org string, now time.Time) {
+	t.Helper()
+	ownedFrom := now.UTC().Truncate(24*time.Hour).AddDate(0, 0, -400)
+	// payments-api is held by two teams (a main owner and a co-owner): every owner of the project takes its issues.
+	for _, project := range []struct {
+		id, team string
+		primary  int
+	}{
+		{"chaos-fixtures/payments-api", "gh:payments", 1},
+		{"chaos-fixtures/payments-api", "gh:platform", 2},
+		{"chaos-fixtures/platform-core", "gh:platform", 1},
+	} {
+		var items uint64
+		matrixQuery(ctx, t, conn, `SELECT count() FROM work_items FINAL WHERE org_id = ? AND provider = 'github' AND project_id = ?`, []any{org, project.id}, func(rows driver.Rows) error {
+			return rows.Scan(&items)
+		})
+		if items == 0 {
+			t.Fatalf("the github world holds no work item of project %s: a world that changed under the project owner", project.id)
+		}
+		if err := conn.Exec(ctx, `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, is_primary, specificity, priority, valid_from, updated_at)
+VALUES (?, 'github', ?, ?, ?, 'native', ?, 110, 10, ?, ?)`, org, project.team, project.id, project.id, project.primary, ownedFrom, ownedFrom); err != nil {
+			t.Fatalf("github issue project ownership %s: %v", project.id, err)
+		}
+	}
 }

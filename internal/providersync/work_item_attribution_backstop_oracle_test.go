@@ -2,6 +2,7 @@ package providersync
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -169,6 +170,9 @@ func buildWorkItemAttributionBackstopOracleRows(
 	affectedIDs := make(map[string]struct{}, len(items))
 	for _, raw := range items {
 		row := githubDerivedOracleGoItem(t, raw.(map[string]any))
+		if _, typed := raw.(map[string]any)["type"]; !typed && row.RepoID != nil {
+			row.Type = "pr" // declared divergence (CHAOS-14010): only a pull request takes its repo owner's team; Python gave every item with a repo_id that team
+		}
 		subject := githubWorkItemDerivationSubjectFromRow(row)
 		subjects[subject.WorkItemID] = subject
 		affectedIDs[subject.WorkItemID] = struct{}{}
@@ -179,7 +183,15 @@ func buildWorkItemAttributionBackstopOracleRows(
 	// (githubDerivedOracleCases()), not repeated here.
 	linkLikeProduction(&derived, "", subjects, nil)
 
-	return remaining.BuildWorkItemAttributionRows(orgID, computedAt, affectedIDs, subjects, derived)
+	rows := remaining.BuildWorkItemAttributionRows(orgID, computedAt, affectedIDs, subjects, derived)
+	// Declared divergence (CHAOS-14010): Go names an issue's membership row, kept with the ownership gate
+	// not applied (";ownership=ownership_gate_not_applied_issue"); the frozen Python evidence never did.
+	for index := range rows {
+		if cut := strings.Index(rows[index].Evidence, ";ownership="); cut >= 0 {
+			rows[index].Evidence = rows[index].Evidence[:cut]
+		}
+	}
+	return rows
 }
 
 // newWorkItemAttributionBackstopColumns reuses githubTeamAttributionColumns

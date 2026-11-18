@@ -75,8 +75,8 @@ func validTestOpsRunReportCompletenessRow(row testOpsRunReportCompletenessRow) b
 // exactly one of this set and githubTestsRunReportNotALossCauses; a cell holds the two sets to the vocabularies. A cause in
 // neither still counts as a loss: missing is not complete.
 //
-// aggregate_of_parts is a loss until the producer drops only lossless aggregates (acp ruling on CHAOS-13826 C7): today's drop
-// compares case identity and outcome only, so a dropped artifact may hold fields its parts do not.
+// aggregate_of_parts is not a loss: the producer drops an artifact only when every stored suite and case field equals its copy or
+// its parts and it carries no coverage (acp ruling on CHAOS-13826 C7); any other overlap keeps every artifact as aggregate_mismatch.
 var githubTestsRunReportLossCauses = map[string]struct{}{
 	githubTestsPerRunCapCause:           {},
 	githubTestsPerRunPageBudgetCause:    {},
@@ -90,11 +90,12 @@ var githubTestsRunReportLossCauses = map[string]struct{}{
 	githubTestsCompressionRatioCause:    {},
 	githubTestsArchiveEntryCapCause:     {},
 	githubTestsAggregateMismatchCause:   {},
-	githubTestsAggregateOfPartsCause:    {},
 }
 
 // githubTestsRunReportNotALossCauses are recorded causes that lose no report row.
-var githubTestsRunReportNotALossCauses = map[string]struct{}{}
+var githubTestsRunReportNotALossCauses = map[string]struct{}{
+	githubTestsAggregateOfPartsCause: {},
+}
 
 // githubTestsArtifactNotFoundReason is a selected artifact that was listed but answered 404 or 410 at download: deleted or expired
 // between the listing and the read, so its report was not read. The unit result keeps it out of the loss vocabulary (routine

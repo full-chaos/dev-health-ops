@@ -726,6 +726,9 @@ func TestALinkedIssueKeepsTheDonorsTeamIdentity(t *testing.T) {
 func TestAMembershipRejectionNamesTheBoundTeam(t *testing.T) {
 	repo := "11111111-1111-1111-1111-111111111111"
 	for _, provider := range coOwnerProviders {
+		if pullRequestType(provider) == "" {
+			continue // only a pull / merge request is gated on its own repository; an issue is gated on its linked pull requests' repositories
+		}
 		t.Run(provider, func(t *testing.T) {
 			derived := NewGitHubWorkItemDerivationContext(GithubWorkItemDerivationFacts{
 				Teams: catalogOrder([]GithubWorkItemDerivationTeamFact{
@@ -736,7 +739,7 @@ func TestAMembershipRejectionNamesTheBoundTeam(t *testing.T) {
 				ProviderMembers: []GithubWorkItemDerivationMemberFact{{Provider: provider, TeamID: "ENG", TeamName: "Roster ENG", MemberID: "alice", IsPrimary: 1, Specificity: 60}},
 			})
 			_, _, _, rejections := derived.ResolveWithMembershipRejections(GithubWorkItemDerivationSubject{
-				WorkItemID: provider + ":item-1", Provider: provider, OrgID: "org", RepoID: &repo, Assignees: []string{"alice"},
+				WorkItemID: provider + ":item-1", Provider: provider, Type: pullRequestType(provider), OrgID: "org", RepoID: &repo, Assignees: []string{"alice"},
 			})
 			if len(rejections) != 1 {
 				t.Fatalf("rejections = %d, want 1", len(rejections))

@@ -1919,12 +1919,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 						if artifact.Expired {
 							continue // unreachable: expired artifacts are split out before the cap (CHAOS-13980)
 						}
-						var archive []byte
-						notFound := false
-						downloadErr := artifact.declaredOversize(maxArtifactBytes)
-						if downloadErr == nil {
-							archive, _, notFound, downloadErr = downloadGitHubTestsArtifact(ctx, client, root, string(artifact.ID), maxArtifactBytes)
-						}
+						archive, _, notFound, downloadErr := downloadGitHubTestsListedArtifact(ctx, client, root, string(artifact.ID), maxArtifactBytes, artifact.listedSize())
 						cursor.Requests = invocationBaseRequests + requests
 						if downloadErr != nil {
 							// An artifact whose bytes could never be

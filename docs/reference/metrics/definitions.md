@@ -284,6 +284,20 @@ day) is not read:
 - A bucket of `cancel_rate` or `rerun_rate` with no row has no point, never NaN. This holds for the organization too.
 - `success_rate` has no service dimension: a service group is one `unscoped` bucket.
 
+The report charts of `passed_count`, `failed_count`, `skipped_count`, `quarantined_count`, `total_cases`, `total_suites`,
+`pass_rate`, `flake_rate`, `retry_dependency_rate` and `failure_recurrence_score` read the stored test rows of each
+repository-day. For these ten metrics, a team is the owner of the repository when the report runs, for every day of the
+range. The stored `team_id` (the main owner at the end of the day) is not read:
+
+- A team filter keeps the repositories the filtered teams own. Two filtered teams that share a repository read it once.
+- A team group gives one bucket per owner team. A co-owned repository counts whole in each owner's bucket, so the buckets
+  can add up to more than the organization. A repository with no owner is in no team bucket.
+- A team that owns no repository has a count of 0 and no rate point.
+- A chart with no team filter and no team group is the organization, each repository once, as before.
+- A rate with no row in its bucket has no point, never NaN. This holds for the organization too: the three mean columns
+  are nullable.
+- A service group reads the stored service.
+
 ### AI report charts of CI/CD durations and queue time
 
 The AI report charts of three CI/CD metrics are taken over the window's pipeline runs (`ci_pipeline_runs`), with the
@@ -347,6 +361,24 @@ stores them. They are never a mean of the stored per-repository-day values.
   is one `unscoped` bucket.
 - The chart range includes its last day. A bucket with no sample has no point, never 0. The read has the same row bound
   as the TestOps pooled read.
+
+## TestOps release confidence and quality drag: flake and recurrence
+
+The daily risk job (`testops_release_confidence`, `testops_quality_drag`) uses the day's test flake rate and failure
+recurrence. A repository-day can have no test row. That has two causes, and the job tells them apart:
+
+- **Not applicable.** The repository has no tests. Flake is a true 0: the score keeps its flake credit and quality drag
+  keeps flake hours of 0.
+- **Unknown.** The repository has CI runs that day and tests exist, but no test report was read for the day. Tests exist
+  when the repository kept a test suite on a day of the 29 days before the day, or when a run that started on the day has a
+  newest attempt that its report completeness row names partial (`complete = 0`).
+
+An unknown day leaves the flake and recurrence factors out, as a day that measured no case does. `flake_rate` and
+`failure_recurrence` are null in `factors_json`, the score gets no flake credit and no flake or recurrence penalty, and
+`flake_investigation_hours` is NULL, so `drag_hours` is the sum of the known parts. Release confidence of such a day is 0.1
+lower than the not-applicable reading.
+
+Residual: a repository whose last test report is older than 29 days reads as not applicable.
 
 ## Pull request rework ratio
 

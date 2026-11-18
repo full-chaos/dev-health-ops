@@ -3,6 +3,7 @@ package devhealth_test
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -131,5 +132,42 @@ func TestLiveE2EPlatformRolesOwnedRowsEqualProdRender(t *testing.T) {
 		if _, ok := want[scope]; !ok {
 			t.Errorf("FAIL: %s %s is in the flag table and on no Deployment of the prod-like chart render", scope, platformRolesEnv)
 		}
+	}
+}
+
+// CHAOS-13636: prod runs the SSO providers owned (deploy values.prod.yaml authService.ssoProvidersOwned true and go-api
+// goApi.extraEnv AUTH_SSO_PROVIDERS_OWNED true). The flag table's AUTH_SSO_PROVIDERS_OWNED rows must be exactly the
+// Deployments that carry it in that render, same value. The auth-migrate and auth-grants Jobs are no flag table scope: the
+// venue runs their steps itself (live_e2e_auth_stack.sh migrate_run).
+func TestLiveE2ESSOProvidersOwnedRowsEqualProdRender(t *testing.T) {
+	t.Parallel()
+
+	docs := renderPhase(t, 4, append(ssoProvidersExtraEnv(ssoProvidersEnvEntry(ssoProvidersEnv, `"true"`)), "--set", "authService.ssoProvidersOwned=true")...)
+	want := map[string]string{}
+	for _, doc := range docs {
+		if kind, _ := doc["kind"].(string); kind != "Deployment" {
+			continue
+		}
+		name, _ := at(doc, "metadata", "name").(string)
+		for _, container := range podContainers(doc) {
+			env, _ := at(container, "env").([]any)
+			for _, entry := range env {
+				if ename, _ := at(entry, "name").(string); ename == ssoProvidersEnv {
+					want[strings.TrimPrefix(name, "a-dev-health-")] = strings.TrimPrefix(envEntryValue(entry), "value:")
+				}
+			}
+		}
+	}
+	if len(want) != 2 {
+		t.Fatalf("FAIL: want %s on go-api and auth-service in the prod-like render, got %v", ssoProvidersEnv, want)
+	}
+	got := map[string]string{}
+	for _, row := range liveE2EFlagRows(t) {
+		if row[1] == ssoProvidersEnv {
+			got[row[0]] = row[2]
+		}
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("FAIL: flag table %s rows %v, prod-like chart render %v", ssoProvidersEnv, got, want)
 	}
 }

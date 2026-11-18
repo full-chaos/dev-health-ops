@@ -449,6 +449,15 @@ const (
 	// cause could not tell which failure actually happened (CHAOS-4315,
 	// reversing the prior UNIT-level-failure disposition for this bound).
 	githubTestsArtifactOversizedCause = "artifact_oversized"
+	// githubTestsArtifactExpiredCause records that ONE report artifact was
+	// listed by GitHub as expired: its bytes are gone for good, so the report
+	// it held can never be read. It names a DIFFERENT fact than the causes
+	// above (no download was attempted; the provider already said the bytes
+	// were deleted), and it ADVANCES the watermark -- the loss is permanent
+	// provider data, so withholding would pin since_at forever (CHAOS-4315).
+	// CHAOS-13980: the skip used to be silent and the unit read
+	// reports_complete=true.
+	githubTestsArtifactExpiredCause = "artifact_expired"
 	// githubTestsMalformedCause records that ONE report member inside an
 	// otherwise-opened archive could not be parsed as its detected report kind
 	// (JUnit XML or LCOV) -- readZipReport succeeded, parseJUnitRows or
@@ -590,6 +599,7 @@ var githubTestsWatermarkAdvancingPairs = map[string]map[string]struct{}{
 	githubTestsRunReportsComponent:   {githubTestsPerRunCapCause: {}, githubTestsAggregateOfPartsCause: {}},
 	githubTestsReportMemberComponent: {
 		githubTestsArtifactOversizedCause:   {},
+		githubTestsArtifactExpiredCause:     {},
 		githubTestsArtifactUnavailableCause: {},
 		githubTestsUnreadableArchiveCause:   {},
 		githubTestsMalformedCause:           {},
@@ -935,6 +945,7 @@ var githubTestsIncompleteVocabulary = map[string]map[string]struct{}{
 	githubTestsReportMemberComponent: {
 		"malformed": {}, "unreadable": {}, githubTestsUnsafeDoctypeCause: {}, githubTestsUnreadableArchiveCause: {},
 		githubTestsArtifactUnavailableCause: {}, githubTestsArtifactOversizedCause: {},
+		githubTestsArtifactExpiredCause: {},
 	},
 	githubTestsRunInventoryComponent:      {githubTestsPageBudgetCause: {}},
 	githubTestsArtifactInventoryComponent: {githubTestsPageBudgetCause: {}},
@@ -1973,4 +1984,33 @@ func recordGitHubTestsNonReportMembers(client *providerfoundation.HTTPClient, cl
 		"reports_parsed", rows.ReportsParsed, "skipped_json", rows.NonReportJSON, "skipped_other", rows.NonReportOther,
 		"suites", len(rows.Suites),
 	)
+}
+
+// githubTestsSplitExpiredArtifacts separates artifacts GitHub lists as expired from the readable ones. Callers pass the selected,
+// newest-per-name set and apply the per-run cap to the readable ones only, so an expired artifact never takes a cap slot, and an
+// older attempt's expired copy (already superseded by a newer one of its name) is never seen here.
+func githubTestsSplitExpiredArtifacts(items []githubTestsArtifactPayload) (live, expired []githubTestsArtifactPayload) {
+	live = make([]githubTestsArtifactPayload, 0, len(items))
+	for _, item := range items {
+		if item.Expired {
+			expired = append(expired, item)
+			continue
+		}
+		live = append(live, item)
+	}
+	return live, expired
+}
+
+// githubTestsSkippedMarkerRecorded reports whether the bounded marker sample already holds this (run, artifact, cause). An expired
+// artifact is recorded once per unit: a run listed again (the inclusive boundary of the next search range, or a re-anchored page)
+// must not count its artifact twice. This is the only dedup evidence the cursor holds; once the sample is full a revisit of an
+// artifact whose marker was dropped cannot be told apart and counts again (the count then errs toward loss, never away from it).
+func githubTestsSkippedMarkerRecorded(records []GitHubTestsSkippedArtifact, runID, artifactID, cause string) bool {
+	runID, artifactID = githubTestsTruncateArtifactID(runID), githubTestsTruncateArtifactID(artifactID)
+	for _, record := range records {
+		if record.RunID == runID && record.ArtifactID == artifactID && githubTestsSkippedArtifactCause(record) == cause {
+			return true
+		}
+	}
+	return false
 }

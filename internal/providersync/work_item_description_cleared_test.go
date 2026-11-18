@@ -1,6 +1,7 @@
 package providersync
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 	"time"
@@ -119,13 +120,15 @@ func TestJiraWorkItemStatesAClearedDescription(t *testing.T) {
 		}
 		return row.Description
 	}
-	for name, want := range map[string]*string{"null": ptr(""), "empty": ptr(""), "empty document": ptr(""), "text": ptr("body")} {
+	for name, want := range map[string]*string{"null": ptr(""), "empty": ptr(""), "empty document": ptr(""), "empty paragraph": ptr(""), "text": ptr("body")} {
 		got := build(t, func(f map[string]any) {
 			switch name {
 			case "null":
 				f["description"] = nil
 			case "empty":
 				f["description"] = ""
+			case "empty paragraph":
+				f["description"] = map[string]any{"type": "doc", "version": 1, "content": []any{map[string]any{"type": "paragraph"}}}
 			case "empty document":
 				f["description"] = map[string]any{"type": "doc", "version": 1, "content": []any{}}
 			default:
@@ -143,7 +146,8 @@ func TestJiraWorkItemStatesAClearedDescription(t *testing.T) {
 
 // frozenOracleDescription maps a description stated empty to nil: the frozen
 // Python producers fold empty to None, and the Go row's stated empty is the
-// addition that lets the sink clear a stored description.
+// addition that lets the sink clear a stored description. Whether a payload
+// states or omits the key is proven by the *StatesAClearedDescription tests.
 func frozenOracleDescription(description *string) *string {
 	if description != nil && *description == "" {
 		return nil
@@ -198,5 +202,106 @@ func TestWorkItemPayloadCarryClearsOnlyOnAStatedEmptyString(t *testing.T) {
 		if got := carry(tc.payload)["description"]; got != tc.carried {
 			t.Errorf("%s: carried=%v want %v", tc.name, got, tc.carried)
 		}
+	}
+}
+
+// A unit whose v1 ledger was written before this change hashed a cleared
+// description as null. The retry after the upgrade collects the same provider
+// payload, which now states "" and so has another digest. The recovery must
+// commit, not stop on the manifest check.
+func TestLegacyLedgerRetryAcrossTheDescriptionChangeCommits(t *testing.T) {
+	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	claim, session := preparedWorkItemsSession(t, now, "gitlab", "work-items")
+	repoID := uuid.MustParse("c7198fbc-1945-3717-05d8-eb78866b4e79")
+	descriptor, ok := Descriptor("gitlab", "work-items")
+	if !ok || !descriptor.PreparedManifestRecovery {
+		t.Fatalf("descriptor=%+v ok=%v", descriptor, ok)
+	}
+	build := func(description *string) CompleteRouteBatch {
+		row := gitlabWorkItemRow{
+			WorkItemID: "gitlab:acme/api#9", Provider: "gitlab", Title: "T", Type: "issue", Status: "todo",
+			Description: description, RepoID: &repoID, CreatedAt: now, UpdatedAt: now, LastSynced: now, OrgID: claim.OrgID,
+		}
+		var effects []EffectBatch
+		for _, destination := range descriptor.Destinations {
+			values := []map[string]string{}
+			if destination == "work_items" {
+				effect, err := effectBatchFromValues(destination, EffectReadbackRequired, []gitlabWorkItemRow{row})
+				if err != nil {
+					t.Fatal(err)
+				}
+				effects = append(effects, effect)
+				continue
+			}
+			effect, err := effectBatchFromValues(destination, EffectReadbackRequired, values)
+			if err != nil {
+				t.Fatal(err)
+			}
+			effects = append(effects, effect)
+		}
+		return CompleteRouteBatch{
+			Effects: effects, Result: map[string]any{"work_items_synced": 1}, Watermark: claim.BeforeAt,
+			Evidence: FetchEvidence{Provider: claim.Provider, Dataset: claim.Dataset, Records: 1},
+		}
+	}
+	legacy, err := NewEffectLedgerState(claim, build(nil).Effects, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ledger := &replanMemoryLedger{memoryEffectLedger: &memoryEffectLedger{state: legacy}}
+	handler := &staticCompleteRouteHandler{batch: build(ptr(""))}
+	executor := completeRouteExecutor(now.Add(time.Hour), handler, ledger, &memoryEffectSink{})
+	executor.Credentials.Repository = &trackingCompleteRouteCredentialRepository{provider: "gitlab"}
+	executor.Credentials.Decryptor = preparedGitHubTokenDecryptor{}
+	executor.BudgetLimits = map[CostClass]int{claim.CostClass: 1}
+	result, err := executor.Execute(context.Background(), session, descriptor)
+	if ledger.resets != 1 {
+		t.Fatalf("resets=%d, want the untouched legacy ledger discarded once", ledger.resets)
+	}
+	if err != nil {
+		t.Fatalf("retry across the change: %v", err)
+	}
+	if result.Effects.Written != len(descriptor.Destinations) {
+		t.Fatalf("result=%+v, want every destination written", result.Effects)
+	}
+}
+
+// The Projects v2 query does not ask for a body, so its row states no
+// description; the repository row for the same item does, and must survive the
+// merge, a stated empty included.
+func TestProjectsV2MergeKeepsTheRepositoryRowDescription(t *testing.T) {
+	for name, stated := range map[string]*string{"cleared": ptr(""), "text": ptr("repo body")} {
+		repository := githubWorkItemRows{WorkItems: []githubWorkItemRow{{WorkItemID: "gh:acme/api#1", Description: stated}}}
+		projects := githubWorkItemRows{WorkItems: []githubWorkItemRow{{WorkItemID: "gh:acme/api#1"}}}
+		merged := mergeGitHubProjectV2Rows(repository, projects)
+		if got := merged.WorkItems[0].Description; got == nil || *got != *stated {
+			t.Fatalf("%s: merged description=%v, want %q", name, valueOrNil(got), *stated)
+		}
+	}
+	repository := githubWorkItemRows{WorkItems: []githubWorkItemRow{{WorkItemID: "gh:acme/api#1", Description: ptr("old")}}}
+	projects := githubWorkItemRows{WorkItems: []githubWorkItemRow{{WorkItemID: "gh:acme/api#1", Description: ptr("board body")}}}
+	if got := mergeGitHubProjectV2Rows(repository, projects).WorkItems[0].Description; got == nil || *got != "board body" {
+		t.Fatalf("a board row that states a description must win, got %v", valueOrNil(got))
+	}
+}
+
+func TestGitLabEpicWorkItemStatesAClearedDescription(t *testing.T) {
+	for _, c := range descriptionCases("description") {
+		t.Run(c.name, func(t *testing.T) {
+			var payload gitlabEpicPayload
+			raw := `{` + c.payload + `"iid": 4, "title": "E", "state": "opened",
+				"created_at": "2026-10-01T00:00:00Z", "updated_at": "2026-10-02T00:00:00Z", "labels": []}`
+			if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+				t.Fatal(err)
+			}
+			row, _, _, err := normalizeGitLabEpicWorkItem(
+				nativeTestClaim("gitlab", "work-items"), "acme", payload, nil, loadRealStatusMapping(t), nil,
+				time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			checkStatedDescription(t, row.Description, c)
+		})
 	}
 }

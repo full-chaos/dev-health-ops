@@ -1085,12 +1085,43 @@ func jiraStatedDescription(fields map[string]any, objectShape bool) *string {
 			return statedWorkItemDescription(nil, true)
 		}
 	case map[string]any:
-		content, hasContent := typed["content"]
-		if list, isList := content.([]any); typed["type"] == "doc" && (!hasContent || (isList && len(list) == 0)) {
+		if typed["type"] == "doc" && jiraNodeIsBlank(typed, 0) {
 			return statedWorkItemDescription(nil, true)
 		}
 	}
 	return nil
+}
+
+// jiraNodeIsBlank reports whether a document tree holds no content at all:
+// only container blocks and text nodes of empty text. Media, cards, mentions
+// and any node of another kind are content; so is a tree nested past the
+// depth bound, which this check cannot judge.
+func jiraNodeIsBlank(node map[string]any, depth int) bool {
+	if depth > jiraDocumentMaxDepth {
+		return false
+	}
+	switch node["type"] {
+	case "text":
+		return stringFrom(node["text"]) == ""
+	case "doc", "paragraph", "heading", "blockquote", "bulletList", "orderedList", "listItem", "codeBlock":
+	default:
+		return false
+	}
+	content, present := node["content"]
+	if !present || content == nil {
+		return true
+	}
+	children, ok := content.([]any)
+	if !ok {
+		return false
+	}
+	for _, child := range children {
+		mapped, ok := child.(map[string]any)
+		if !ok || !jiraNodeIsBlank(mapped, depth+1) {
+			return false
+		}
+	}
+	return true
 }
 
 const jiraDocumentMaxDepth = 32

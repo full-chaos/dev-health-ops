@@ -1178,6 +1178,11 @@ func mergeGitHubProjectV2Rows(repository, projects githubWorkItemRows) githubWor
 	}
 	for _, row := range projects.WorkItems {
 		if position, exists := index[row.WorkItemID]; exists {
+			// The board query asks for no body: its row states no description
+			// and must not drop the one the repository row states.
+			if row.Description == nil {
+				row.Description = merged.WorkItems[position].Description
+			}
 			merged.WorkItems[position] = row
 		} else {
 			index[row.WorkItemID] = len(merged.WorkItems)

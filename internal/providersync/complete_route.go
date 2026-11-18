@@ -322,6 +322,29 @@ func (executor CompleteRouteExecutor) executeRoute(
 				"unit", session.Claim.ID, "generation", session.Claim.GenerationKey(),
 				"schema_version", recoveredEffects.SchemaVersion,
 			)
+			// A work-items row can hash differently on the retry than it did
+			// when the v1 ledger was written (a description stated empty
+			// hashed as null before), and the v1 manifest check would then
+			// wedge the unit. With nothing committed the ledger is discarded
+			// and the unit runs as a first attempt, as a superseded snapshot
+			// is.
+			if isWorkItemFamilyDataset(session.Claim.Dataset) &&
+				isSafePreparedManifestReplanState(session.Claim, *recoveredEffects) {
+				replanner, ok := committer.Ledger.(EffectLedgerReplanner)
+				if !ok {
+					return ErrInvalidConfiguration
+				}
+				replannedAt := executor.now()
+				if err := replanner.ResetPreparedEffectsForReplan(
+					workContext, session.Claim, *recoveredEffects, replannedAt,
+				); err != nil {
+					return err
+				}
+				recoveredEffects = nil
+				normalizedAt = replannedAt
+				legacyLedger = false
+				recovery = "legacy_ledger_replanned"
+			}
 		}
 		if recoveredEffects != nil && descriptor.PreparedManifestRecovery && !legacyLedger {
 			if executor.EffectsFactory != nil {

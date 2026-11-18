@@ -413,6 +413,15 @@ func TestARowOfZerosIsStrictlyNewerThanTheRowItSupersedes(t *testing.T) {
 					scope = staleKeyScope{table.ScopeTuple(key): {}}
 				}
 				written, err := supersedeStaleTeamKeys(ctx, conn, table, staleKeyRuleOrg, staleKeyRuleDay, scope, nil, clock)
+				if _, snapshotStamped := staleKeySnapshot(table, clock); snapshotStamped {
+					// A snapshot-stamped table (testops_test_metrics_daily) writes its marker at the run's snapshot, never above a
+					// stored row: a snapshot that is equal to or behind the stored row retires nothing (the newest snapshot wins;
+					// testops_snapshot_marker_integration_test.go holds the cells of the later snapshot).
+					if err != nil || written != 0 {
+						t.Fatalf("a snapshot not after the stored row wrote %d row(s) (err %v), want none", written, err)
+					}
+					return
+				}
 				if err != nil || written < 1 {
 					t.Fatalf("the rule wrote %d row(s) (err %v), want the row of zeros of the key", written, err)
 				}

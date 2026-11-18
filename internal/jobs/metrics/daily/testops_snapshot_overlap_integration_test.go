@@ -76,7 +76,7 @@ FROM testops_test_metrics_daily WHERE org_id = ? AND repo_id = ? AND day = ? AND
 	return out
 }
 
-// NAMED LIMIT (ticket 14016, filed separately): two runs read the same live row (neither sees the other's marker), then both
+// KNOWN LIMIT (ticket 14016, filed separately): two runs read the same live row (neither sees the other's marker), then both
 // write: the key holds two markers, of two snapshots. Every reader answers as it does with one marker
 // (TestTwoMarkersOnAKeyAnswerEveryReaderAsOneMarkerDoes), so the duplicate costs a row and nothing else.
 func TestNamedLimitTwoRunsThatSawTheSameLiveRowWriteTwoMarkers(t *testing.T) {
@@ -90,12 +90,18 @@ func TestNamedLimitTwoRunsThatSawTheSameLiveRowWriteTwoMarkers(t *testing.T) {
 	if _, err := supersedeStaleTeamKeys(ctx, hooked, teamkeytables.TestopsTestMetricsDaily, snapshotOrg, snapshotDay, scope, nil, snapshotAt(20)); err != nil {
 		t.Fatal(err)
 	}
-	if got := markerRows(t, ctx, conn, repo); len(got) != 2 {
+	if !hooked.fired {
+		t.Fatal("the interleave hook never fired: the second run did not run between the scan and the write, nothing was tested")
+	}
+	retiredForEveryReader(t, ctx, conn, repo)
+	got := markerRows(t, ctx, conn, repo)
+	t.Logf("KNOWN LIMIT (ticket 14016): %d markers for one retired key: %v", len(got), got)
+	if len(got) != 2 {
 		t.Fatalf("%d markers, the limit is 2 (one per snapshot): %v", len(got), got)
 	}
 }
 
-// NAMED LIMIT (ticket 14016): the partition writer and the whole-organization finalizer read the same live row: two markers.
+// KNOWN LIMIT (ticket 14016): the partition writer and the whole-organization finalizer read the same live row: two markers.
 func TestNamedLimitThePartitionWriterAndTheFinalizerThatSawTheSameLiveRowWriteTwoMarkers(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
@@ -107,12 +113,18 @@ func TestNamedLimitThePartitionWriterAndTheFinalizerThatSawTheSameLiveRowWriteTw
 	if _, err := supersedeStaleTeamKeys(ctx, hooked, teamkeytables.TestopsTestMetricsDaily, snapshotOrg, snapshotDay, scope, nil, snapshotAt(20)); err != nil {
 		t.Fatal(err)
 	}
-	if got := markerRows(t, ctx, conn, repo); len(got) != 2 {
+	if !hooked.fired {
+		t.Fatal("the interleave hook never fired: the second run did not run between the scan and the write, nothing was tested")
+	}
+	retiredForEveryReader(t, ctx, conn, repo)
+	got := markerRows(t, ctx, conn, repo)
+	t.Logf("KNOWN LIMIT (ticket 14016): %d markers for one retired key: %v", len(got), got)
+	if len(got) != 2 {
 		t.Fatalf("%d markers, the limit is 2 (one per snapshot): %v", len(got), got)
 	}
 }
 
-// NAMED LIMIT (ticket 14016): a live row of the same second arrives after the scan; the marker and the row then hold one version
+// KNOWN LIMIT (ticket 14016): a live row of the same second arrives after the scan; the marker and the row then hold one version
 // and which of the two a reader takes is a ClickHouse tie that these cells do not prove. The cell logs the winner it saw.
 func TestNamedLimitAMarkerCanTieALiveRowThatArrivedAfterTheScan(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
@@ -135,12 +147,17 @@ func TestNamedLimitAMarkerCanTieALiveRowThatArrivedAfterTheScan(t *testing.T) {
 			conn := snapshotConn(t, ctx)
 			repo := uuid.New()
 			overlapSeed(t, ctx, conn, repo, snapshotAt(5), "team-1", "svc-1")
-			hooked := &hookConn{Conn: conn, marker: "argMax(", hook: func() { overlapSeed(t, ctx, conn, repo, snapshotAt(10), "team-1", "svc-1") }}
+			arrived := false
+			hooked := &hookConn{Conn: conn, marker: "argMax(", hook: func() {
+				arrived = true
+				overlapSeed(t, ctx, conn, repo, snapshotAt(10), "team-1", "svc-1")
+			}}
 			if name == "finalizer" {
 				// the finalizer has no carried read before its write path; the row arrives inside the membership read.
 				hooked = &hookConn{Conn: conn, marker: "never matches", hook: func() {}}
 				if _, err := retractStaleTeamKeysOutsideRun(ctx, hooked, teamkeytables.TestopsTestMetricsDaily, snapshotOrg, snapshotDay,
 					newStaleKeyScope(), func(context.Context) (staleKeyScope, error) {
+						arrived = true
 						overlapSeed(t, ctx, conn, repo, snapshotAt(10), "team-1", "svc-1")
 						return newStaleKeyScope(), nil
 					}, snapshotAt(10)); err != nil {
@@ -148,6 +165,10 @@ func TestNamedLimitAMarkerCanTieALiveRowThatArrivedAfterTheScan(t *testing.T) {
 				}
 			} else {
 				retire(hooked, repo)
+				arrived = arrived && hooked.fired
+			}
+			if !arrived {
+				t.Fatal("the late row never arrived between the scan and the write: nothing was tested")
 			}
 			var atNewest uint64
 			if err := conn.QueryRow(ctx, `SELECT count() FROM testops_test_metrics_daily WHERE org_id = ? AND repo_id = ? AND day = ?
@@ -161,7 +182,31 @@ AND computed_at = (SELECT max(computed_at) FROM testops_test_metrics_daily WHERE
 				snapshotOrg, repo, snapshotDay).Scan(&winner); err != nil {
 				t.Fatal(err)
 			}
-			t.Logf("OVERLAP tie winner by argMax: retracted=%d (not proven for every reader)", winner)
+			// The two production reader shapes, pinned as they answer today: the live-key read (GROUP BY key HAVING argMax(retracted,
+			// computed_at) = 0, teamkeytables LiveHaving) and the registry newest-row read (ORDER BY computed_at DESC LIMIT 1 BY).
+			var liveByHaving, newestRetracted uint64
+			if err := conn.QueryRow(ctx, `SELECT toUInt64(count()) FROM (SELECT repo_id FROM testops_test_metrics_daily
+WHERE org_id = ? AND repo_id = ? AND day = ? GROUP BY repo_id HAVING `+teamkeytables.TestopsTestMetricsDaily.LiveHaving("")+`)`,
+				snapshotOrg, repo, snapshotDay).Scan(&liveByHaving); err != nil {
+				t.Fatal(err)
+			}
+			if err := conn.QueryRow(ctx, `SELECT toUInt64(retracted) FROM testops_test_metrics_daily
+WHERE org_id = ? AND repo_id = ? AND day = ? ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day`,
+				snapshotOrg, repo, snapshotDay).Scan(&newestRetracted); err != nil {
+				t.Fatal(err)
+			}
+			// FINAL is an extra line: no production reader of this table uses it.
+			var finalWinner, finalRows uint64
+			if err := conn.QueryRow(ctx, `SELECT toUInt64(max(retracted)), toUInt64(count()) FROM testops_test_metrics_daily FINAL
+WHERE org_id = ? AND repo_id = ? AND day = ?`, snapshotOrg, repo, snapshotDay).Scan(&finalWinner, &finalRows); err != nil {
+				t.Fatal(err)
+			}
+			t.Logf("KNOWN LIMIT (ticket 14016): tie behaviour today: argMax winner retracted=%d; HAVING live-key read live=%d; LIMIT 1 BY newest row retracted=%d; FINAL (extra, not a production shape) retracted=%d of %d row(s); winner not proven for every reader",
+				winner, liveByHaving, newestRetracted, finalWinner, finalRows)
+			if winner != 1 || liveByHaving != 0 || newestRetracted != 1 {
+				t.Fatalf("the tie reads argMax retracted=%d, HAVING live=%d, LIMIT 1 BY retracted=%d; today's pinned answers are %d, %d, %d",
+					winner, liveByHaving, newestRetracted, 1, 0, 1)
+			}
 			if atNewest != 2 {
 				t.Fatalf("%d rows share the newest version of the key, the limit is the live row and the marker (2)", atNewest)
 			}
@@ -286,6 +331,32 @@ func TestTheSnapshotOfARunIsTheInstantItsCachedSuiteReadHappened(t *testing.T) {
 		write(older, org, 30)
 		want(t, "newer run's marker at :20 kept against the older live read of :10", e.stored(org, repo, f3Day), 1, newestAt(20))
 	})
+}
+
+// retiredForEveryReader says whether the key reads as retired by the three reader shapes: the newest row of the key (ORDER BY
+// computed_at DESC LIMIT 1 BY, as the registry readers take it), argMax by computed_at, and FINAL (an extra line: no production
+// reader of this table uses FINAL).
+func retiredForEveryReader(t *testing.T, ctx context.Context, conn driver.Conn, repo uuid.UUID) {
+	t.Helper()
+	var newestRetracted, viaArgMax, viaFinal uint64
+	if err := conn.QueryRow(ctx, `SELECT toUInt64(max(retracted)) FROM (SELECT * FROM testops_test_metrics_daily
+WHERE org_id = ? AND repo_id = ? AND day = ? ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day)`,
+		snapshotOrg, repo, snapshotDay).Scan(&newestRetracted); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.QueryRow(ctx, `SELECT toUInt64(argMax(retracted, computed_at)) FROM testops_test_metrics_daily
+WHERE org_id = ? AND repo_id = ? AND day = ?`, snapshotOrg, repo, snapshotDay).Scan(&viaArgMax); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.QueryRow(ctx, `SELECT toUInt64(max(retracted)) FROM testops_test_metrics_daily FINAL
+WHERE org_id = ? AND repo_id = ? AND day = ?`, snapshotOrg, repo, snapshotDay).Scan(&viaFinal); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("OVERLAP READERS newest-row retracted=%d argMax retracted=%d FINAL retracted=%d", newestRetracted, viaArgMax, viaFinal)
+	if newestRetracted != 1 || viaArgMax != 1 || viaFinal != 1 {
+		t.Fatalf("the retired row does not stay retired for every reader: newest-row retracted=%d argMax retracted=%d FINAL retracted=%d",
+			newestRetracted, viaArgMax, viaFinal)
+	}
 }
 
 // Do the readers answer the same with two markers on a key as with one? The readers take the newest row of each key

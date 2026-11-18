@@ -119,7 +119,11 @@ A GitHub PR closing Linear `ENG-2400` borrows that issue's `ENG` team.
 >    provider's work item sharing the same identity string. `manual_members`
 >    is the admin-EXCLUSIVE subset (confirmed by tracing every write site);
 >    provider auto-import carries it forward unchanged on every sync write
->    and never sets or clears it. The roster column
+>    and never sets or clears it: every writer that does not edit the roster
+>    reads it from `teams FINAL` inside its own insert statement, and an admin
+>    add or remove applies its change there too. An admin delete ends the
+>    roster: a team re-created by sync after an admin delete starts with an
+>    empty manual roster. The roster column
 >    `teams.members` is gone (no Go reader or writer; the frozen Python code still names it; migration 118 drops the
 >    column): the provider layer below is `team_memberships` alone.
 > 2. **Provider layer (the fallback).** `team_memberships`, populated

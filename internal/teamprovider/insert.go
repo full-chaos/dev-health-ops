@@ -284,9 +284,11 @@ func insertStatement(columns []string, keepRoster bool) (query string, idIndex, 
 }
 
 // keptRosterQuery is the stored roster a RosterKept row writes and a
-// RosterDelta row edits: manual_members of the team's teams FINAL row; a team
-// with no row gets the column default [].
-const keptRosterQuery = "SELECT id AS kept_id, manual_members AS kept_manual FROM teams FINAL " +
+// RosterDelta row edits: manual_members of the team's teams FINAL row. A team
+// with no row gets the column default [], and so does a team whose newest
+// version is an admin delete: the delete ends the manual roster, so a team
+// written again after it (by an admin or a sync) starts with none.
+const keptRosterQuery = "SELECT id AS kept_id, if(deleted_at IS NULL, manual_members, []) AS kept_manual FROM teams FINAL " +
 	"WHERE org_id = {org_id:String} AND id IN {team_ids:Array(String)}"
 
 // storedIdentitySelect is Query's rule with the names a writer joins on:

@@ -242,8 +242,9 @@ func (s Store) CreateOrUpdateTeam(ctx context.Context, orgID string, write TeamW
 	}
 }
 
-// writeTeam writes one version of the team. A team that is new (or was
-// deleted) has no stored roster to keep: it takes ManualMembers, or [].
+// writeTeam writes one version of the team. The roster rule is the
+// operation's own and is applied inside the insert: a team that has no row,
+// or whose newest version is deleted, has an empty stored roster there.
 func (s Store) writeTeam(ctx context.Context, orgID string, write TeamWrite, roster rosterWrite) (Team, error) {
 	// GetTeam does not return a deleted team, so a write under the id of a
 	// deleted team is a NEW team: it takes the writer's origin and nothing of
@@ -262,8 +263,6 @@ func (s Store) writeTeam(ctx context.Context, orgID string, write TeamWrite, ros
 	var existingManual []string
 	if existing != nil {
 		existingManual = existing.ManualMembers
-	} else {
-		roster = rosterWrite{rule: teamprovider.RosterStated}
 	}
 	resolvedManual := resolveListField(write.ManualMembers, existingManual)
 	resolvedProjects := resolveListField(write.ProjectKeys, teamListOrNil(existing, func(t Team) []string { return t.ProjectKeys }))

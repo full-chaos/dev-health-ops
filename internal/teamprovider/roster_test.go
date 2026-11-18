@@ -47,7 +47,7 @@ func TestAKeptOrDeltaRosterIsReadInsideTheInsert(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, part := range []string{
-		"LEFT JOIN (SELECT id AS kept_id, manual_members AS kept_manual FROM teams FINAL WHERE org_id = {org_id:String} AND id IN {team_ids:Array(String)}) AS kept ON kept.kept_id = incoming.v0",
+		"LEFT JOIN (SELECT id AS kept_id, if(deleted_at IS NULL, manual_members, []) AS kept_manual FROM teams FINAL WHERE org_id = {org_id:String} AND id IN {team_ids:Array(String)}) AS kept ON kept.kept_id = incoming.v0",
 		"multiIf(incoming.roster_rule = 1, kept.kept_manual, incoming.roster_rule = 2, ",
 		"NOT has(incoming.roster_remove, m), arrayConcat(kept.kept_manual, incoming.roster_add)",
 	} {

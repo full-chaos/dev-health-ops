@@ -78,6 +78,12 @@ func TestADeletedTeamTakesNoWorkItem(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
+			// The owners team also owns one project: an issue of any provider takes its team through its project.
+			if err := conn.Exec(ctx, `INSERT INTO team_project_ownership
+    (org_id, provider, team_id, project_id, project_key, source, is_primary, specificity, priority, valid_from, updated_at)
+    VALUES (?, ?, ?, ?, NULL, 'native', 1, 100, 10, ?, ?)`, org, provider, byRepo, "project:"+provider, since, since); err != nil {
+				t.Fatal(err)
+			}
 			if err := conn.Exec(ctx, `INSERT INTO team_memberships
     (org_id, provider, team_id, member_id, identity_facets, source, is_primary, specificity, priority, valid_from, updated_at)
     VALUES (?, ?, ?, 'dev', ['dev'], 'native', 1, 100, 10, ?, ?)`, org, provider, byMember, since, since); err != nil {
@@ -90,14 +96,24 @@ func TestADeletedTeamTakesNoWorkItem(t *testing.T) {
 				memberSubject.Type = map[string]string{"github": "pr", "gitlab": "merge_request"}[provider]
 				memberSubject.Reporter = &dev
 			}
+			// Only a pull / merge request takes the ownership of its own repository (github, gitlab); an issue of any
+			// provider takes its team through the ownership of its project.
+			projectID := "project:" + provider
 			paths := []struct {
 				name    string
 				team    string
 				subject teamattribution.GithubWorkItemDerivationSubject
 			}{
 				{"by the project key", byKey, teamattribution.GithubWorkItemDerivationSubject{WorkItemID: provider + ":1", Provider: provider, Type: "issue", ProjectKey: &projectKey}},
-				{"by the ownership of a repository", byRepo, teamattribution.GithubWorkItemDerivationSubject{WorkItemID: provider + ":2", Provider: provider, Type: "issue", RepoID: &repoID}},
+				{"by the ownership of a project", byRepo, teamattribution.GithubWorkItemDerivationSubject{WorkItemID: provider + ":4", Provider: provider, Type: "issue", ProjectID: &projectID}},
 				{"by a membership", byMember, memberSubject},
+			}
+			if repoPathType := map[string]string{"github": "pr", "gitlab": "merge_request"}[provider]; repoPathType != "" {
+				paths = append(paths, struct {
+					name    string
+					team    string
+					subject teamattribution.GithubWorkItemDerivationSubject
+				}{"by the ownership of a repository", byRepo, teamattribution.GithubWorkItemDerivationSubject{WorkItemID: provider + ":2", Provider: provider, Type: repoPathType, RepoID: &repoID}})
 			}
 			resolve := func() map[string]string {
 				t.Helper()
@@ -115,7 +131,11 @@ func TestADeletedTeamTakesNoWorkItem(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				derived := teamattribution.NewGitHubWorkItemDerivationContext(teamattribution.GithubWorkItemDerivationFacts{Teams: teams, ProviderMembers: members, Repos: repos})
+				projects, err := source.LoadProjects(ctx, org, asOf)
+				if err != nil {
+					t.Fatal(err)
+				}
+				derived := teamattribution.NewGitHubWorkItemDerivationContext(teamattribution.GithubWorkItemDerivationFacts{Teams: teams, ProviderMembers: members, Repos: repos, Projects: projects})
 				got := map[string]string{}
 				for _, path := range paths {
 					team, _, candidates := derived.Resolve(path.subject)

@@ -56,7 +56,7 @@ func TestMembershipTiersAreProvenanceOnly(t *testing.T) {
 			}},
 		})
 		team, _, candidates := derived.Resolve(GithubWorkItemDerivationSubject{
-			WorkItemID: "gh:a#3", Provider: "github", RepoID: &repoID, Assignees: []string{"alice"}, OrgID: "o",
+			WorkItemID: "gh:a#3", Provider: "github", Type: "pr", RepoID: &repoID, Assignees: []string{"alice"}, OrgID: "o",
 		})
 		if got := GithubWorkItemDerivationStringValue(team); got != "team-m" {
 			t.Fatalf("primary team = %q, want team-m from repo_ownership", got)

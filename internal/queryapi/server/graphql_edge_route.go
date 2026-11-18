@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -344,75 +343,6 @@ func writePlain(w http.ResponseWriter, status int, text string) {
 	writeBody(w, status, plainBody, text)
 }
 
-// queryParam is one name=value pair of a query string, decoded.
-type queryParam struct{ name, value string }
-
-// parseQueryString is Starlette's QueryParams over a raw query string:
-// parse_qsl(raw.decode("latin-1"), keep_blank_values=True) -- pairs split on
-// "&" only, a pair without "=" kept with an empty value, "+" read as a space,
-// a well-formed %XX decoded and a malformed one kept as written, and the
-// decoded bytes read as UTF-8 with each invalid byte replaced.
-func parseQueryString(raw string) []queryParam {
-	var params []queryParam
-	for _, pair := range strings.Split(raw, "&") {
-		if pair == "" {
-			continue
-		}
-		name, value, _ := strings.Cut(pair, "=")
-		params = append(params, queryParam{name: unquotePlus(name), value: unquotePlus(value)})
-	}
-	return params
-}
-
-// lastParam is QueryParams.get: the LAST value of a repeated name (Go's
-// url.Values.Get returns the first). "" when the name is absent.
-func lastParam(params []queryParam, name string) string {
-	value := ""
-	for _, param := range params {
-		if param.name == name {
-			value = param.value
-		}
-	}
-	return value
-}
-
-// unquotePlus is urllib.parse.unquote_plus(s, encoding="utf-8",
-// errors="replace") over a latin-1 decoded string.
-func unquotePlus(s string) string {
-	s = strings.ReplaceAll(s, "+", " ")
-	var decoded []byte
-	for i := 0; i < len(s); i++ {
-		if s[i] == '%' && i+2 < len(s) && isHex(s[i+1]) && isHex(s[i+2]) {
-			decoded = append(decoded, unhex(s[i+1])<<4|unhex(s[i+2]))
-			i += 2
-			continue
-		}
-		decoded = append(decoded, s[i])
-	}
-	var out strings.Builder
-	for len(decoded) > 0 {
-		r, size := utf8.DecodeRune(decoded)
-		out.WriteRune(r)
-		decoded = decoded[size:]
-	}
-	return out.String()
-}
-
-func isHex(c byte) bool {
-	return ('0' <= c && c <= '9') || ('a' <= c && c <= 'f') || ('A' <= c && c <= 'F')
-}
-
-func unhex(c byte) byte {
-	switch {
-	case '0' <= c && c <= '9':
-		return c - '0'
-	case 'a' <= c && c <= 'f':
-		return c - 'a' + 10
-	default:
-		return c - 'A' + 10
-	}
-}
-
 // graphQLErrorBody is a GraphQL response carrying one error, in gqlgen's own
 // key order, so every /graphql answer query-api decides itself reads like the
 // answers its executor gives.
@@ -555,9 +485,10 @@ func strawberryRequestDataRefusal(data *pyjson.Object) edgeRefusal {
 // parameter (the browser client's org_id, extensions) was dropped. The rest
 // went to Strawberry, whose refusal this returns, in its order.
 func graphQLEdgeGETDocument(r *http.Request) (query string, body []byte, refusal edgeRefusal) {
-	params := parseQueryString(r.URL.RawQuery)
-	query = lastParam(params, "query")
-	rawVariables := lastParam(params, "variables")
+	// Uncapped, as the Python edge read it: Query's field cap is not applied here.
+	params := httpapi.ParseQuery(r.URL.RawQuery)
+	query = httpapi.QueryLast(params, "query")
+	rawVariables := httpapi.QueryLast(params, "variables")
 	if query != "" {
 		payload := pyjson.NewObject()
 		payload.Set("query", query)
@@ -571,7 +502,7 @@ func graphQLEdgeGETDocument(r *http.Request) (query string, body []byte, refusal
 			}
 		}
 		if forward {
-			if name := lastParam(params, "operationName"); name != "" {
+			if name := httpapi.QueryLast(params, "operationName"); name != "" {
 				payload.Set("operationName", name)
 			}
 			encoded, err := pyjson.Dumps(payload)
@@ -581,7 +512,7 @@ func graphQLEdgeGETDocument(r *http.Request) (query string, body []byte, refusal
 			return query, []byte(encoded), nil
 		}
 	}
-	if !hasParam(params, "query") {
+	if !params.Has("query") {
 		accept := firstHeader(r, "Accept")
 		if strings.Contains(accept, "text/html") || strings.Contains(accept, "*/*") {
 			httpapi.RecordNotFoundCause(r.Context(), httpapi.NotFoundIDEOff)
@@ -590,7 +521,7 @@ func graphQLEdgeGETDocument(r *http.Request) (query string, body []byte, refusal
 	}
 	data := pyjson.NewObject()
 	for _, name := range []string{"variables", "extensions"} {
-		raw := lastParam(params, name)
+		raw := httpapi.QueryLast(params, name)
 		if raw == "" {
 			continue
 		}
@@ -605,13 +536,4 @@ func graphQLEdgeGETDocument(r *http.Request) (query string, body []byte, refusal
 		data.Set(name, decoded)
 	}
 	return "", nil, strawberryRequestDataRefusal(data)
-}
-
-func hasParam(params []queryParam, name string) bool {
-	for _, param := range params {
-		if param.name == name {
-			return true
-		}
-	}
-	return false
 }

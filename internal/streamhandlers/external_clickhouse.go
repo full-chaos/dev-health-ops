@@ -30,12 +30,6 @@ import (
 
 const externalUpdatedAtClampSkew = 5 * time.Minute
 
-// teamManualMembersPreserveQuery is the external-ingest analogue of
-// ClickHouseStore._preserve_existing_manual_members's SELECT (CHAOS-4321,
-// team-lead ruling 2026-08-26): one batched read per team.v1 kind per Write
-// call, keyed by (org_id, id), never N+1.
-const teamManualMembersPreserveQuery = "SELECT id, manual_members FROM teams FINAL WHERE org_id = {org_id:String} AND id IN {team_ids:Array(String)}"
-
 type ClickHouseExternalBatchSink struct {
 	conn productClickHouse
 	now  func() time.Time
@@ -83,34 +77,14 @@ func (s *ClickHouseExternalBatchSink) Write(ctx context.Context, source external
 		if err != nil {
 			return err
 		}
-		// CHAOS-4321 (team-lead ruling, 2026-08-26): "an admin-override
-		// column that one write path can erase is not shippable." Read the
-		// current manual_members for every team this batch is about to
-		// write BEFORE preparing the insert, so the write below can carry
-		// each team's existing value forward instead of clobbering it with
-		// the ClickHouse schema DEFAULT ([]). A read failure here is NOT
-		// papered over with an empty preserved set (that would silently
-		// wipe overrides the same way the original gap did) -- it aborts
-		// this Write() call before any team.v1 row is prepared, same as
-		// every other failure in this function; the message redelivers and
-		// the row is retried, never silently written wrong. (Every other
-		// kind in this batch that is written before "team.v1" has already been
-		// durably written by this point -- that is pre-existing behavior
-		// for ANY failure partway through this loop, not new here: this
-		// function has never wrapped its per-kind writes in one transaction.)
-		var existingManualMembers map[string][]string
 		var createdAt map[string]time.Time
 		if kind == "team.v1" {
 			teamIDs := make([]string, 0, len(grouped[kind]))
 			for _, record := range grouped[kind] {
 				teamIDs = append(teamIDs, externalTeamID(source.Pointer.SourceSystem, record.Payload, "id"))
 			}
-			existingManualMembers, err = s.preserveExistingManualMembers(ctx, source.Pointer.OrgID, teamIDs)
-			if err != nil {
-				return fmt.Errorf("preserve existing team.v1 manual_members: %w", err)
-			}
 			// created_at is carried from the version this write replaces; a
-			// read failure aborts the write like the manual_members read.
+			// read failure aborts the write.
 			createdAt, err = teamcreated.Carry(ctx, s.conn, source.Pointer.OrgID, teamIDs)
 			if err != nil {
 				return fmt.Errorf("carry existing team.v1 created_at: %w", err)
@@ -118,7 +92,7 @@ func (s *ClickHouseExternalBatchSink) Write(ctx context.Context, source external
 		}
 		rows := make([]storedversion.Row, 0, len(grouped[kind]))
 		for _, record := range grouped[kind] {
-			values, err := externalRecordValues(source, record, now, &scope, existingManualMembers)
+			values, err := externalRecordValues(source, record, now, &scope)
 			if err != nil {
 				return fmt.Errorf("translate external %s record %d: %w", kind, record.Index, err)
 			}
@@ -130,11 +104,12 @@ func (s *ClickHouseExternalBatchSink) Write(ctx context.Context, source external
 			rows = append(rows, storedversion.Row{Values: values})
 		}
 		if kind == "team.v1" {
-			// A push never knows provider_team_id, provider_name or gone_at:
-			// Insert keeps what a sync wrote, read inside the same statement.
+			// A push never knows provider_team_id, provider_name or gone_at,
+			// and never edits the admin roster (manual_members, CHAOS-4321):
+			// Insert keeps what is stored, read inside the same statement.
 			writes := make([]teamprovider.Write, len(rows))
 			for i, row := range rows {
-				writes[i] = teamprovider.Write{Values: row.Values, Gone: teamprovider.GoneKept}
+				writes[i] = teamprovider.Write{Values: row.Values, Gone: teamprovider.GoneKept, Roster: teamprovider.RosterKept}
 			}
 			columns, err := teamprovider.StatedColumns(query)
 			if err != nil {
@@ -332,36 +307,6 @@ func mapKeys(set map[string]struct{}) []string {
 	return keys
 }
 
-// preserveExistingManualMembers batch-reads the current manual_members for
-// every team this Write() call is about to touch, mirroring
-// ClickHouseStore._preserve_existing_manual_members's query and intent
-// exactly (CHAOS-4321, team-lead ruling 2026-08-26). A team with no existing
-// row simply has no entry in the returned map -- externalRecordValues
-// defaults that case to [], the correct value for a genuinely new team.
-func (s *ClickHouseExternalBatchSink) preserveExistingManualMembers(
-	ctx context.Context, orgID string, teamIDs []string,
-) (map[string][]string, error) {
-	if len(teamIDs) == 0 {
-		return nil, nil
-	}
-	rows, err := s.conn.Query(ctx, teamManualMembersPreserveQuery,
-		clickhouse.Named("org_id", orgID), clickhouse.Named("team_ids", teamIDs))
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	existing := make(map[string][]string, len(teamIDs))
-	for rows.Next() {
-		var id string
-		var manualMembers []string
-		if err := rows.Scan(&id, &manualMembers); err != nil {
-			return nil, err
-		}
-		existing[id] = manualMembers
-	}
-	return existing, rows.Err()
-}
-
 func externalInsertQuery(kind string) (string, error) {
 	queries := map[string]string{
 		"repository.v1":           "INSERT INTO repos (id,repo,ref,created_at,settings,tags,provider,last_synced,source_id,org_id)",
@@ -412,7 +357,6 @@ func externalRecordValues(
 	record externalSinkRecord,
 	now time.Time,
 	scope *ExternalRecomputeScope,
-	existingManualMembers map[string][]string,
 ) ([]any, error) {
 	payload := record.Payload
 	orgID, system, instance := source.Pointer.OrgID, source.Pointer.SourceSystem, source.Pointer.SourceInstance
@@ -551,21 +495,13 @@ func externalRecordValues(
 		}
 		updatedAt = externalClampUpdatedAt(updatedAt, now)
 		scope.TeamIDs = append(scope.TeamIDs, teamID)
-		// manual_members (CHAOS-4321, team-lead ruling 2026-08-26): this
-		// writer carries the team's CURRENT manual_members forward instead
-		// of overwriting it, same guard ClickHouseStore.insert_teams
-		// applies in Python -- Write() reads it via
-		// preserveExistingManualMembers before preparing this batch. A
-		// team with no existing row (or a genuinely new team.v1 record)
-		// correctly defaults to [].
-		manualMembers := []string{}
-		if existing, ok := existingManualMembers[teamID]; ok {
-			manualMembers = existing
-		}
+		// manual_members (CHAOS-4321): a push never edits the admin roster.
+		// The value here is not written: Write keeps the stored roster
+		// (teamprovider.RosterKept) inside the insert statement.
 		return []any{
 			teamID, uuid.NewSHA1(uuid.NameSpaceURL, []byte("team:"+teamID)), stringField(payload, "name"),
 			externalNullableString(payload, "description"),
-			manualMembers,
+			[]string{},
 			stringArrayField(payload, "projectKeys"), stringArrayField(payload, "repoPatterns"),
 			externalBoolUint(payload, "isActive", true), updatedAt, now, orgID, teamid.StoredProvider(system),
 			nativeTeamKey, parentTeamID, source.SourceID,

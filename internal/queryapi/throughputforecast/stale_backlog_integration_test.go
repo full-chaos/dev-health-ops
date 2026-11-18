@@ -82,6 +82,7 @@ func TestThroughputForecastMarksAStaleBacklogDay(t *testing.T) {
 		coverage     []coverageRow
 		wantState    string
 		wantAsOf     string
+		wantReason   string
 		wantBacklog  int
 		wantGrains   string
 	}{
@@ -92,7 +93,7 @@ func TestThroughputForecastMarksAStaleBacklogDay(t *testing.T) {
 			coverage: []coverageRow{
 				{"t7", "2026-10-01", 0, 1, 1},
 			},
-			wantState: "STALE", wantAsOf: "2025-05-03", wantBacklog: 0, wantGrains: "1",
+			wantState: "STALE", wantReason: "STALE", wantAsOf: "2025-05-03", wantBacklog: 0, wantGrains: "1",
 		},
 		{
 			name:  "two teams, one stale: the sum is kept, the answer names the stale day",
@@ -101,32 +102,32 @@ func TestThroughputForecastMarksAStaleBacklogDay(t *testing.T) {
 				{"ta", "2026-09-29", 3, 2}, {"ta", "2026-09-30", 2, 3}, {"ta", "2026-10-01", 2, 4},
 				{"tb", "2026-05-01", 1, 3},
 			},
-			wantState: "STALE", wantAsOf: "2026-05-01", wantBacklog: 7, wantGrains: "0",
+			wantState: "STALE", wantReason: "STALE", wantAsOf: "2026-05-01", wantBacklog: 7, wantGrains: "0",
 		},
 		{
 			name:      "a measured zero inside the window is a healthy zero",
 			teams:     []string{"tc"},
 			work:      []workRow{{"tc", "2026-09-30", 1, 1}, {"tc", "2026-10-01", 2, 0}},
 			coverage:  []coverageRow{{"tc", "2026-10-01", 0, 0, 0}},
-			wantState: "MEASURED", wantAsOf: "2026-10-01", wantBacklog: 0, wantGrains: "1",
+			wantState: "MEASURED", wantReason: "<nil>", wantAsOf: "2026-10-01", wantBacklog: 0, wantGrains: "1",
 		},
 		{
 			name:      "no work-item row and no coverage row",
 			teams:     []string{"td"},
-			wantState: "NO_ROWS", wantAsOf: "<nil>", wantBacklog: 0, wantGrains: "0",
+			wantState: "NO_ROWS", wantReason: "NO_ROWS", wantAsOf: "<nil>", wantBacklog: 0, wantGrains: "0",
 		},
 		{
 			name:      "a newest row with every measure 0 is a retraction shape, not a measurement: NO_ROWS, not STALE",
 			teams:     []string{"tf"},
 			work:      []workRow{{"tf", "2025-05-03", 0, 0}},
-			wantState: "NO_ROWS", wantAsOf: "<nil>", wantBacklog: 0, wantGrains: "0",
+			wantState: "NO_ROWS", wantReason: "NO_ROWS", wantAsOf: "<nil>", wantBacklog: 0, wantGrains: "0",
 		},
 		{
 			name:         "a supplied backlog of 0 is not read",
 			teams:        []string{"te"},
 			backlogInput: &supplied,
 			work:         []workRow{{"te", "2025-05-03", 1, 9}},
-			wantState:    "SUPPLIED", wantAsOf: "<nil>", wantBacklog: 0, wantGrains: "0",
+			wantState:    "SUPPLIED", wantReason: "<nil>", wantAsOf: "<nil>", wantBacklog: 0, wantGrains: "0",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -158,6 +159,7 @@ func TestThroughputForecastMarksAStaleBacklogDay(t *testing.T) {
 			}{
 				{forecast, "backlogState", tc.wantState},
 				{forecast, "backlogAsOfDay", tc.wantAsOf},
+				{forecast, "degradedReason", tc.wantReason},
 				{forecast.EstimateCoverage, "grainCount", tc.wantGrains},
 			} {
 				got, ok := wireField(check.of, check.name)

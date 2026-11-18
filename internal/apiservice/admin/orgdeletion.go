@@ -13,7 +13,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -23,6 +22,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 
@@ -78,12 +78,7 @@ func (h *handlers) deleteOrganization(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	values, queryErr := url.ParseQuery(r.URL.RawQuery)
-	if queryErr != nil {
-		policy.WriteInternal(w)
-		return
-	}
-	dryRun, boolErr := queryBool(values, "dry_run", false)
+	dryRun, boolErr := queryBool(httpapi.Query(r), "dry_run", false)
 	if boolErr != nil {
 		writeQueryError(w, boolErr)
 		return

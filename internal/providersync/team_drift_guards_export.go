@@ -11,8 +11,7 @@ import (
 // (CHAOS-2622) and manual-membership-conflict drift-review engines
 // (team_drift_review.go / identity_drift_review.go /
 // team_membership_conflict_guard.go) for internal/atlassianteams, the one
-// native team-catalog writer that lives outside this package (it already
-// imports providersync for PreserveExistingTeamManualMembers). Every
+// native team-catalog writer that lives outside this package. Every
 // in-package collector (Linear/GitHub/GitLab/Jira project-as-team) reaches
 // the same engine through its own thin, provider-typed wrapper (see
 // jira_team_catalog_guards.go); this file is that wrapper for a caller

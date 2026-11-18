@@ -4,6 +4,8 @@ import (
 	"net/http"
 
 	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 )
 
 // OAuthAuthorizeHandler serves POST /api/v1/auth/oauth/{provider_id}/authorize.
@@ -44,7 +46,7 @@ func (s *Service) OAuthAuthorizeByTypeHandler() http.Handler {
 			s.reject(w, r, routeOAuthAuthorizeByType, uuid.Nil, deny(http.StatusBadRequest, ReasonMalformed, "Invalid OAuth provider type"))
 			return
 		}
-		values := r.URL.Query()["org_id"]
+		values := httpapi.Query(r)["org_id"]
 		if len(values) == 0 {
 			s.reject(w, r, routeOAuthAuthorizeByType, uuid.Nil, deny(http.StatusUnprocessableEntity, ReasonMalformed,
 				[]fieldError{{Type: "missing", Loc: []string{"query", "org_id"}, Msg: "Field required"}}))

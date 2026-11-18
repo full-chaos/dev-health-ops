@@ -2329,6 +2329,10 @@ type TestOpsRiskResult {
   pipelineStability: Float
   timeseries: [TestOpsRiskTrendPoint!]!
   qualityDragBreakdown: [TestOpsRiskBreakdownItem!]!
+  """
+  True when any repository row of the latest quality-drag day has a failure-rework, flake-investigation, queue-wait or retry-overhead part that was not measured; qualityDragHours and the breakdown then sum only the known parts.
+  """
+  qualityDragPartial: Boolean!
   quadrantData: [TestOpsRiskQuadrantPoint!]!
   confidenceSpark: [TestOpsRiskSparkPoint!]!
   confidenceDelta: Float
@@ -2382,6 +2386,8 @@ type ThroughputForecast {
   backlogState: ThroughputBacklogState!
   "The oldest of the newest work-item days that backlogSize is read from. Null when backlogState is NO_ROWS or SUPPLIED."
   backlogAsOfDay: Date
+  "Why the backlog read is not a healthy measurement: the backlogState value (STALE or NO_ROWS) when the read is stale or found no work-item row; null when backlogState is MEASURED or SUPPLIED."
+  degradedReason: String
   historyWeeks: Int!
   p50Weeks: Int
   p75Weeks: Int

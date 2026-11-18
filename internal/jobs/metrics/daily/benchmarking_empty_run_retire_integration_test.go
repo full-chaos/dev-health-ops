@@ -159,3 +159,58 @@ WHERE org_id = ? AND period_end = ? AND metric_name = 'line_coverage_pct' AND re
 		t.Errorf("second finalize: written=%d err=%v, want 0 nil", again, err)
 	}
 }
+
+// A run for day D writes an anomaly at the last point of a series at or before
+// D (anomalies.go:95-107), and the insight of that anomaly at the same day
+// (insights.go:149-161). With no point on D the row is keyed to an earlier
+// day. No reader reads these tables; the cell asserts the reader contract
+// (the newest row of a key, left out when it holds retracted = 1). The empty
+// run of D retires the keys of D and leaves the keys of the earlier day: they
+// are the results of that day, and the run of that day decides them.
+func TestBenchmarkingEmptyRunKeepsAnAnomalyOfAnEarlierDay(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
+	defer cancel()
+	conn := capabilityRetireClickHouse(t, ctx)
+	day := time.Date(2026, 9, 14, 0, 0, 0, 0, time.UTC)
+	earlier := day.AddDate(0, 0, -3)
+	org := "00000000-0000-4000-8000-000000140526"
+	repo := "00000000-0000-4000-8000-00000014052e"
+	writtenByTheRunOfD := day.Add(30 * time.Hour)
+	seedBenchmarkingOutputs(t, ctx, conn, org, repo, day, writtenByTheRunOfD)
+	if err := conn.Exec(ctx, `INSERT INTO testops_metric_anomalies
+    (metric_name, scope_type, scope_key, day, value, baseline_value, z_score, anomaly_type, direction, severity, volatility_score, org_id, computed_at)
+    VALUES ('failure_rate', 'repo', ?, ?, 0.6, 0.1, 4.2, 'regression', 'up', 'critical', 0.3, ?, ?)`,
+		repo, earlier, org, writtenByTheRunOfD); err != nil {
+		t.Fatalf("seed the anomaly of an earlier day: %v", err)
+	}
+	if err := conn.Exec(ctx, `INSERT INTO testops_benchmark_insights
+    (insight_id, insight_type, scope_type, scope_key, metric_name, paired_metric_name, period_start, period_end,
+     severity, summary, evidence_json, org_id, computed_at)
+    VALUES (?, 'anomaly', 'repo', ?, 'failure_rate', NULL, ?, ?, 'critical', 'failure rate rose', '{}', ?, ?)`,
+		"insight-earlier-"+org, repo, earlier, earlier, org, writtenByTheRunOfD); err != nil {
+		t.Fatalf("seed the insight of an earlier day: %v", err)
+	}
+
+	store := &fakeStore{noPartitions: true, run: Run{ID: "run-14052-anomaly", OrganizationID: org, TargetDay: day, FullOrg: true}}
+	executor, err := NewBenchmarkingFinalizeExecutor(store, conn, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	executor.nowUTC = func() time.Time { return day.Add(40 * time.Hour) }
+	written, err := executor.ComputeFinalizeFamily(ctx, Run{ID: "run-14052-anomaly", OrganizationID: org, TargetDay: day})
+	t.Logf("empty run of %s: written=%d err=%v", day.Format("2006-01-02"), written, err)
+	if err != nil {
+		t.Fatalf("empty run: %v", err)
+	}
+	for _, table := range []string{"testops_metric_anomalies", "testops_benchmark_insights"} {
+		ofD := benchmarkingLiveKeys(t, ctx, conn, table, org, day)
+		ofEarlier := benchmarkingLiveKeys(t, ctx, conn, table, org, earlier)
+		t.Logf("%s: live keys of D=%d, of D-3=%d after the empty run of D", table, ofD, ofEarlier)
+		if ofD != 0 {
+			t.Errorf("%s: %d key(s) of D stay live after the empty run of D", table, ofD)
+		}
+		if ofEarlier != 1 {
+			t.Errorf("%s: %d live key(s) of D-3, want the 1 stored (a result of that day, not of D)", table, ofEarlier)
+		}
+	}
+}

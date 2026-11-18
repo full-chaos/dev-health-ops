@@ -335,6 +335,21 @@ stores them. They are never a mean of the stored per-repository-day values.
 - The chart range includes its last day. A bucket with no sample has no point, never 0. The read has the same row bound
   as the TestOps pooled read.
 
+## TestOps cancel rate and rerun rate in report charts
+
+A report chart of `cancel_rate` or `rerun_rate` is the sum of the numerator over the sum of the denominator of the
+`testops_pipeline_metrics_daily` rows in its bucket. It is never a mean of the stored per-repository-day rates: a day of
+1 run would weigh the same as a day of 500.
+
+| Metric | Numerator | Denominator |
+| --- | --- | --- |
+| `cancel_rate` | `SUM(cancelled_count)` | `SUM(pipelines_count)` |
+| `rerun_rate` | `SUM(rerun_rate * pipelines_count)` | `SUM(pipelines_count)` |
+
+- The denominator is every run counted, the same as the stored rate. Cancelled, skipped and unfinished runs are in it.
+- No column stores the rerun count. The stored `rerun_rate` is reruns over `pipelines_count`, so the product is the count.
+- A bucket with no run has no point, never 0.
+
 ## Pull request rework ratio
 
 The pull request rework ratio is, of the merged pull requests that have

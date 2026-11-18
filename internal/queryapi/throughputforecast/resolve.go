@@ -265,6 +265,13 @@ func toModel(
 		forecast.BacklogAsOfDay = &day
 	}
 
+	// CHAOS-14142: the reason is the state itself when the read is not a healthy measurement, so a client that
+	// discloses a partial answer reads one nullable field. MEASURED and SUPPLIED carry none.
+	if backlog.state == model.ThroughputBacklogStateStale || backlog.state == model.ThroughputBacklogStateNoRows {
+		reason := string(backlog.state)
+		forecast.DegradedReason = &reason
+	}
+
 	// Absent when BOTH ages are null, exactly as _load_stale_wip returns None
 	// there. An object carrying two nulls is a different answer from no object.
 	if staleP50 != nil || staleP90 != nil {

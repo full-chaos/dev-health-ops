@@ -92,11 +92,15 @@ func (executor *WorkItemExecutor) ComputeFamily(
 		return 0, err
 	}
 	if read.empty() {
-		retracted, err := retractReopenedCycleRows(ctx, executor.conn, run.OrganizationID, scope, nil, computedAt)
+		retracted, err := retractReopenedCycleRows(ctx, executor.conn, run.OrganizationID, scope, read.Scopes, computedAt)
 		if err != nil {
 			return wrapWorkItemScopePartialWrite("work_item", retracted, partition, err)
 		}
 		return retracted, nil
+	}
+	cycleTimes, err := keepCycleTimesOfCurrentCopies(ctx, executor.conn, run.OrganizationID, read.OrgWinnerRepos, views.Org.CycleTimes)
+	if err != nil {
+		return 0, err
 	}
 	slog.Default().DebugContext(ctx, "work_item_user_metrics_rows",
 		"org_id", run.OrganizationID, "day", scope.day.Format("2006-01-02"),
@@ -120,13 +124,13 @@ func (executor *WorkItemExecutor) ComputeFamily(
 		return wrapWorkItemScopePartialWrite("work_item", total, partition, err)
 	}
 	written, err = WriteWorkItemCycleTimes(
-		ctx, executor.conn, run.OrganizationID, views.Org.CycleTimes, computedAt,
+		ctx, executor.conn, run.OrganizationID, cycleTimes, computedAt,
 	)
 	total += written
 	if err != nil {
 		return wrapWorkItemScopePartialWrite("work_item", total, partition, err)
 	}
-	written, err = retractReopenedCycleRows(ctx, executor.conn, run.OrganizationID, scope, views.Org.CycleTimes, computedAt)
+	written, err = retractReopenedCycleRows(ctx, executor.conn, run.OrganizationID, scope, read.Scopes, computedAt)
 	total += written
 	if err != nil {
 		return wrapWorkItemScopePartialWrite("work_item", total, partition, err)
@@ -141,7 +145,8 @@ type workItemTripletViews struct {
 }
 
 // computeWorkItemTriplet reads the work scopes of the partition's repositories
-// and computes the work_item rows of the day, once per view. It writes
+// and computes the work_item rows of the day, once per view, from the items
+// whose current copy is the copy the day read (keepCurrentCopiesOfDay). It writes
 // nothing. The family calls it for one partition; the run-level retraction of
 // stale team keys calls it for every repository of the run
 // (RunStaleKeyRetractor), so both derive the keys of the day from one compute.
@@ -150,6 +155,9 @@ func computeWorkItemTriplet(
 ) (workItemScopeRead, workItemTripletViews, error) {
 	read, err := loadWorkItemScopeRead(ctx, conn, "work_item", run, partition, scope, true, true, true)
 	if err != nil {
+		return workItemScopeRead{}, workItemTripletViews{}, err
+	}
+	if read, err = keepCurrentCopiesOfDay(ctx, conn, run.OrganizationID, read); err != nil {
 		return workItemScopeRead{}, workItemTripletViews{}, err
 	}
 	var views workItemTripletViews

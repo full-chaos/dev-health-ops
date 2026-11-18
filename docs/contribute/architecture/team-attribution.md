@@ -119,7 +119,13 @@ A GitHub PR closing Linear `ENG-2400` borrows that issue's `ENG` team.
 >    provider's work item sharing the same identity string. `manual_members`
 >    is the admin-EXCLUSIVE subset (confirmed by tracing every write site);
 >    provider auto-import carries it forward unchanged on every sync write
->    and never sets or clears it. The roster column
+>    and never sets or clears it: every writer that does not edit the roster
+>    reads it from `teams FINAL` inside its own insert statement, and an admin
+>    add or remove applies its change there too; a team the id carry moves to
+>    a new id takes the roster of its old id, read there when the old id
+>    changed after the carry read it. An admin delete ends the
+>    roster: a team re-created by sync after an admin delete starts with an
+>    empty manual roster. The roster column
 >    `teams.members` is gone (no Go reader or writer; the frozen Python code still names it; migration 118 drops the
 >    column): the provider layer below is `team_memberships` alone.
 > 2. **Provider layer (the fallback).** `team_memberships`, populated
@@ -1430,7 +1436,7 @@ controls: a link that is gone and an explicit empty list are closed).
 >   property of the repository; the share scales exposure counts). A sole owner of every repository it owns (share 1)
 >   is unchanged, bit for bit. Resolved through `teamresolve.ResolveOwnerSharesThenPatterns`.
 > - **A table with one row per repository** (the four TestOps families, one row per organization, repository and
->   day) stores the main owner only, as of the end of the day; a full tie stores the first tied team by rank. A second team has no row to live in, so the analytics series, breakdown and sankey do not group or filter by that stored team: they take the owners at the request (see "A TestOps rate and the counts beside it" above). The benchmarking job takes its team series from the owners at the run instant, like the analytics series.
+>   day) stores the main owner only, as of the end of the day; a full tie stores the first tied team by rank. A second team has no row to live in, so the analytics series, breakdown and sankey do not group or filter by that stored team: they take the owners at the request (see "A TestOps rate and the counts beside it" above). The benchmarking job takes its team series from the owners at the run instant, like the analytics series. The AI report charts of the pipeline table take the owners at the report run too, a co-owned repository whole for each owner: the duration and queue charts over the raw runs, the counts and rates over the stored rows (`repositoryOwnedTables` in `internal/jobs/report/pooled.go`). A named limit: the report charts of the test and coverage tables still read the stored team.
 
 A project (a Jira space connected to several Atlassian teams, a Linear or GitLab project with several owning
 teams, any provider) can belong to more than one team. An item of such a project is the work of EACH active
@@ -1554,6 +1560,7 @@ project (section 0.1): a native team key gives one team.
     `TestTheTeamChurnQuadrantSumsEachRepositoryTimesOwnerShareAndConservesTheOrgChurn`.
   - Known limit: owners whose team is inactive hold a share that no point shows, so the organization's units in a
     repository with an inactive owner are partly in no point.
+- **`user_metrics_daily.team_id` is a membership label, NOT team attribution; ownership-based team answers must not read it.** The row the finalize step writes for a person holds the person's first team membership on the day, else `unassigned`: the git row is always written with `unassigned`, and the IC finalize step puts the membership team over it. Limit: a person who is a member of several teams gets only the FIRST of them, in the rank order of the attribution (primary first, then the more specific, then the lower priority number, the newer row, the team id); the other teams are not in the column. The rank applies after the teams whose newest row is inactive are left out: the next active membership is taken, else `unassigned`. This is the rule of a live row the finalize step writes; a retraction row (the row of zeros of the stale-key rule) carries the `team_id` stored on the row it retracts. The column is a label, never team attribution. A team answer takes its team from repository or project ownership (for a per-person table, through `repo_id` and the owner shares), never from this column. The AI analytics reviewer concentration (`aiReviewLoad`) and the cognitive load reader follow this rule: a team scope is the repositories the team owns (`teamscope.HeldRepoIDs`), and the census `TestNoAIAnalyticsOrCognitiveLoadReaderScopesUserMetricsDailyByTeamID` (`internal/queryapi/aianalytics`) fails on a read of `user_metrics_daily` in those packages that filters `team_id`.
 - **The person quadrant reads only that person's own rows.** At the person grain the quadrant resolves the
   person id to the person's identity strings and binds each read (`user_metrics_daily.identity_id`,
   `work_item_user_metrics_daily.user_identity`) to them. There is no membership-team lookup (`identities.team_ids`) and

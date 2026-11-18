@@ -42,6 +42,7 @@ type dailyRow struct {
 	flakeInvestigationHours *float64
 	queueWaitHours          *float64
 	retryOverheadHours      *float64
+	partialRows             *uint64
 	pipelineStability       *float64
 }
 
@@ -60,6 +61,7 @@ const dailyQuery = `SELECT
     flake_investigation_hours,
     queue_wait_hours,
     retry_overhead_hours,
+    partial_rows,
     pipeline_stability
 FROM (
     SELECT
@@ -85,7 +87,12 @@ FULL OUTER JOIN (
         sum(failure_rework_hours) AS failure_rework_hours,
         sum(flake_investigation_hours) AS flake_investigation_hours,
         sum(queue_wait_hours) AS queue_wait_hours,
-        sum(retry_overhead_hours) AS retry_overhead_hours
+        sum(retry_overhead_hours) AS retry_overhead_hours,
+        toUInt64(countIf(testops_quality_drag.failure_rework_hours IS NULL
+            OR testops_quality_drag.flake_investigation_hours IS NULL
+            OR testops_quality_drag.queue_wait_hours IS NULL
+            OR testops_quality_drag.retry_overhead_hours IS NULL)) AS partial_rows
+    -- the columns of countIf are table-qualified: an output alias of a sum above would otherwise be read inside it (code 184)
     FROM testops_quality_drag FINAL
     WHERE org_id = {org_id:String}
       AND day >= {start:Date}
@@ -154,7 +161,7 @@ func readDaily(ctx context.Context, client QueryClient, bindings []clickhouse.Bi
 		var r dailyRow
 		var day *time.Time
 		if err := rs.Scan(&day, &r.releaseConfidence, &r.qualityDragHours, &r.failureReworkHours,
-			&r.flakeInvestigationHours, &r.queueWaitHours, &r.retryOverheadHours, &r.pipelineStability); err != nil {
+			&r.flakeInvestigationHours, &r.queueWaitHours, &r.retryOverheadHours, &r.partialRows, &r.pipelineStability); err != nil {
 			return nil, fmt.Errorf("testopsrisk: daily scan: %w", err)
 		}
 		if day == nil {
@@ -318,6 +325,7 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, input model.
 	}
 	if r := latestWith(rows, drag); r != nil {
 		out.QualityDragHours = r.qualityDragHours
+		out.QualityDragPartial = r.partialRows != nil && *r.partialRows > 0
 		out.QualityDragBreakdown = breakdownItems(
 			breakdownPart{"Failure Rework", r.failureReworkHours},
 			breakdownPart{"Flake Investigation", r.flakeInvestigationHours},

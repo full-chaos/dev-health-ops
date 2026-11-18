@@ -153,7 +153,7 @@ func (service *NativeFinalizeSyncRunService) Finalize(ctx context.Context, args 
 		return ErrFinalizeSyncRunUnavailable
 	}
 	fence := &transportFence{args: args, kind: outboxKindFinalizeSyncRun, unavailable: ErrFinalizeSyncRunUnavailable}
-	return service.finalize(ctx, args.OrganizationID(), args.SyncRunID(), fence, func(ctx context.Context, tx pgx.Tx, atCommit bool) {
+	return service.finalize(ctx, args.OrganizationID(), args.SyncRunID(), fence, func(ctx context.Context, tx pgx.Tx, atCommit *commitOutcome) {
 		service.reportDeliveryNotCurrent(ctx, tx, args, atCommit)
 	})
 }
@@ -162,10 +162,15 @@ func (service *NativeFinalizeSyncRunService) Finalize(ctx context.Context, args 
 // the current one loud: a delivery that is refused here leaves the run
 // untouched, and with no signal a run whose only delivery is refused every time
 // stays 'dispatching' for weeks (CHAOS-9964). The reason names the first clause
-// of currentTransportReference that fails; at a commit-time refusal, the clause
-// that superseded the delivery (finalizeCommitRefusalReason). Read-only; a failed diagnosis is
+// of currentTransportReference that fails; a commit-time refusal (atCommit) is
+// reported with the reason and route generation of the commit snapshot that
+// refused it, without a second read. Read-only; a failed diagnosis is
 // logged as reason "unknown" and never changes the outcome.
-func (service *NativeFinalizeSyncRunService) reportDeliveryNotCurrent(ctx context.Context, tx pgx.Tx, args FinalizeSyncRunArgs, atCommit bool) {
+func (service *NativeFinalizeSyncRunService) reportDeliveryNotCurrent(ctx context.Context, tx pgx.Tx, args FinalizeSyncRunArgs, atCommit *commitOutcome) {
+	if atCommit != nil {
+		service.emitDeliveryNotCurrent(ctx, args, atCommit.reason, atCommit.routeGeneration)
+		return
+	}
 	reason, routeGeneration := "unknown", int64(-1)
 	// The route and the outbox row are read apart: a missing outbox row must still report the route's generation.
 	var routeTransport string
@@ -187,9 +192,6 @@ WHERE id = $1::uuid AND sync_run_id = $2::uuid AND org_id = $3 AND kind = $4`,
 		args.OutboxID(), args.SyncRunID(), args.OrganizationID(), outboxKindFinalizeSyncRun,
 	).Scan(&outboxStatus, &outboxTransport, &outboxGeneration, &outboxAttempts)
 	switch {
-	case atCommit:
-		reason = finalizeCommitRefusalReason(args, outboxErr, outboxStatus, outboxTransport, outboxGeneration, outboxAttempts,
-			routeErr, routeTransport, routePaused, routeGeneration)
 	case errors.Is(outboxErr, pgx.ErrNoRows):
 		reason = "outbox_row_missing"
 	case outboxErr != nil:
@@ -209,6 +211,11 @@ WHERE id = $1::uuid AND sync_run_id = $2::uuid AND org_id = $3 AND kind = $4`,
 	case outboxAttempts != args.Attempt():
 		reason = "delivery_attempt_mismatch"
 	}
+	service.emitDeliveryNotCurrent(ctx, args, reason, routeGeneration)
+}
+
+// emitDeliveryNotCurrent counts and logs one refused finalize delivery.
+func (service *NativeFinalizeSyncRunService) emitDeliveryNotCurrent(ctx context.Context, args FinalizeSyncRunArgs, reason string, routeGeneration int64) {
 	if counter, counterErr := otel.GetMeterProvider().Meter("github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime").Int64Counter(
 		FinalizeDeliveryNotCurrentCounter,
 		metric.WithUnit("{delivery}"),
@@ -220,42 +227,6 @@ WHERE id = $1::uuid AND sync_run_id = $2::uuid AND org_id = $3 AND kind = $4`,
 		synclog.Text(synclog.KeyReason, synclog.ParseLabel(reason)),
 		synclog.Count(synclog.KeyDeliveryRouteGeneration, args.RouteGeneration()),
 		synclog.Count(synclog.KeyCurrentRouteGeneration, routeGeneration))
-}
-
-// finalizeCommitRefusalReason names why the commit-time check refused: the attempt, then the route, then the
-// status. The check allows a 'pending' row (a same-attempt wake), so 'pending' is not itself a reason.
-func finalizeCommitRefusalReason(
-	args FinalizeSyncRunArgs,
-	outboxErr error, outboxStatus, outboxTransport *string, outboxGeneration *int64, outboxAttempts int64,
-	routeErr error, routeTransport string, routePaused bool, routeGeneration int64,
-) string {
-	switch {
-	case errors.Is(outboxErr, pgx.ErrNoRows):
-		return "outbox_row_missing"
-	case outboxErr != nil:
-		return "unknown"
-	case outboxAttempts != args.Attempt():
-		return "delivery_attempt_mismatch"
-	case errors.Is(routeErr, pgx.ErrNoRows):
-		return "route_row_missing"
-	case routeErr != nil:
-		return "unknown"
-	case routeTransport != "river":
-		return "route_other_transport"
-	case routePaused:
-		return "route_paused"
-	case args.RouteGeneration() != routeGeneration:
-		return "route_generation_mismatch"
-	case outboxStatus != nil && *outboxStatus == "pending":
-		return "unknown"
-	case outboxStatus == nil || *outboxStatus != "dispatched":
-		return "outbox_not_dispatched"
-	case outboxTransport == nil || *outboxTransport != "river":
-		return "outbox_other_transport"
-	case outboxGeneration == nil || *outboxGeneration != routeGeneration:
-		return "route_generation_mismatch"
-	}
-	return "unknown"
 }
 
 // FinalizeDeliveryNotCurrentCounter counts finalize deliveries refused as not
@@ -282,7 +253,7 @@ func (service *NativeFinalizeSyncRunService) finalize(
 	ctx context.Context,
 	orgID, runID string,
 	fence *transportFence,
-	refused func(ctx context.Context, tx pgx.Tx, atCommit bool),
+	refused func(ctx context.Context, tx pgx.Tx, atCommit *commitOutcome),
 ) error {
 	tx, err := service.pool.Begin(ctx)
 	if err != nil {
@@ -295,15 +266,15 @@ func (service *NativeFinalizeSyncRunService) finalize(
 		return err
 	}
 	if !isCurrent {
-		refused(ctx, tx, false)
+		refused(ctx, tx, nil)
 		return nil
 	}
 	commit := func() (bool, error) {
-		committed, err := fence.commit(ctx, tx)
-		if err == nil && !committed {
-			refused(ctx, tx, true)
+		outcome, err := fence.commit(ctx, tx)
+		if err == nil && !outcome.committed {
+			refused(ctx, tx, &outcome)
 		}
-		return committed, err
+		return outcome.committed, err
 	}
 
 	run, err := loadFinalizeRun(ctx, tx, orgID, runID)

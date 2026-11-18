@@ -770,21 +770,17 @@ func (service *NativeDispatchSyncRunService) terminalizeFeatureDisabled(
 
 // commitFenced commits the pass through fence. A commit-time refusal (the
 // delivery was superseded during the pass) is reported like a start refusal,
-// with the clause that superseded it read in the still-open transaction.
+// with the reason decideCommit took from the locked commit snapshot.
 func (service *NativeDispatchSyncRunService) commitFenced(ctx context.Context, tx pgx.Tx, fence *transportFence) (bool, error) {
-	committed, err := fence.commit(ctx, tx)
-	if err != nil || committed {
-		return committed, err
-	}
-	reason, routeGeneration := "unknown", int64(-1)
-	if row, readErr := readTransportRow(ctx, tx, fence.args, fence.kind); readErr == nil {
-		reason, routeGeneration = row.commitRefusalReason(fence.args), row.currentRouteGeneration()
+	outcome, err := fence.commit(ctx, tx)
+	if err != nil || outcome.committed {
+		return outcome.committed, err
 	}
 	service.logger.Info(ctx, synclog.MsgDispatchSyncRunDeliveryNotCurrent,
 		synclog.Run(synclog.ParseID(fence.args.SyncRunID())),
-		synclog.Text(synclog.KeyReason, synclog.ParseLabel(reason)),
+		synclog.Text(synclog.KeyReason, synclog.ParseLabel(outcome.reason)),
 		synclog.Count(synclog.KeyDeliveryRouteGeneration, fence.args.RouteGeneration()),
-		synclog.Count(synclog.KeyCurrentRouteGeneration, routeGeneration))
+		synclog.Count(synclog.KeyCurrentRouteGeneration, outcome.routeGeneration))
 	return false, nil
 }
 
@@ -862,36 +858,6 @@ func readTransportReference(ctx context.Context, tx pgx.Tx, args Args, kind stri
 		reference.current = true
 	}
 	return reference, nil
-}
-
-// commitRefusalReason names why the commit-time check refused: the attempt, then the route, then the status. The
-// check allows a 'pending' row (a same-attempt wake), so 'pending' is not itself a reason; a claim or a route move
-// after the wake is.
-func (row transportRow) commitRefusalReason(args Args) string {
-	routeGeneration := row.currentRouteGeneration()
-	switch {
-	case row.outboxFound == nil:
-		return "outbox_row_missing"
-	case row.outboxAttempts == nil || *row.outboxAttempts != args.Attempt():
-		return "delivery_attempt_mismatch"
-	case row.routeTransport == nil:
-		return "route_row_missing"
-	case *row.routeTransport != "river":
-		return "route_other_transport"
-	case row.routePaused == nil || *row.routePaused:
-		return "route_paused"
-	case args.RouteGeneration() != routeGeneration:
-		return "route_generation_mismatch"
-	case row.outboxStatus != nil && *row.outboxStatus == "pending":
-		return "unknown"
-	case row.outboxStatus == nil || *row.outboxStatus != "dispatched":
-		return "outbox_not_dispatched"
-	case row.outboxTransport == nil || *row.outboxTransport != "river":
-		return "outbox_other_transport"
-	case row.outboxGeneration == nil || *row.outboxGeneration != routeGeneration:
-		return "route_generation_mismatch"
-	}
-	return "unknown"
 }
 
 // denyRun ports the total-cap hard-deny branch verbatim: two different

@@ -285,7 +285,7 @@ func (service *NativeReferenceDiscoveryService) claim(
 			if _, err := terminalizeFeatureDisabledPlan(ctx, tx, run, reason, gateNow); err != nil {
 				return false, "", time.Time{}, err
 			}
-			if committed, err := fence.commit(ctx, tx); err != nil || !committed {
+			if outcome, err := fence.commit(ctx, tx); err != nil || !outcome.committed {
 				return false, "", time.Time{}, err
 			}
 			// CHAOS-4586 (codex round 10): flush the rollup-bump tally
@@ -327,7 +327,7 @@ WHERE id = $1::uuid
 		// Python: `return {"status": "skipped", "reason": "not_claimed"}`.
 		return false, "", time.Time{}, nil
 	}
-	if committed, err := fence.commit(ctx, tx); err != nil || !committed {
+	if outcome, err := fence.commit(ctx, tx); err != nil || !outcome.committed {
 		return false, "", time.Time{}, err
 	}
 	return true, leaseOwner, deadline, nil

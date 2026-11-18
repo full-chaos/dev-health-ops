@@ -840,3 +840,121 @@ WHERE id = $1`, rig.kind.outbox, rig.kind.generation); err != nil {
 		})
 	}
 }
+
+// TestTransportFenceCommitRefusalReasonIsTheCheckSnapshot: a wake and a route
+// move after the start guard make the commit-time check refuse; a relay claim
+// tried right after the check statement must neither take the row (the check
+// holds it until rollback) nor change the reason the refusal reports.
+func TestTransportFenceCommitRefusalReasonIsTheCheckSnapshot(t *testing.T) {
+	// claimRiverRoutesSQL's shape: the relay claims with FOR UPDATE SKIP LOCKED.
+	const relayClaimSQL = `
+UPDATE sync_dispatch_outbox AS outbox
+SET claim_token = gen_random_uuid()::text, claim_expires_at = now() + interval '1 minute',
+    claim_transport = 'river', claim_route_generation = $2, attempts = outbox.attempts + 1, updated_at = now()
+WHERE outbox.id IN (SELECT id FROM sync_dispatch_outbox WHERE id = $1 FOR UPDATE SKIP LOCKED)`
+	run := func(t *testing.T, kind fenceKind) int64 {
+		var claimed int64 = -1
+		withFenceRig(t, kind, 1, func(ctx context.Context, rig *fenceRig) {
+			guard := rig.on(isStartGuard, func(ctx context.Context) {
+				if err := rig.rearm(ctx, rig.other); err != nil {
+					t.Errorf("wake: %v", err)
+					return
+				}
+				paused := pgseed.SyncTransportRoute(ctx, t, rig.other, kind.kind, "river", kind.generation+1, true, "celery")
+				pgseed.SyncTransportRoute(ctx, t, rig.other, kind.kind, "river", paused+1, false, "celery")
+			})
+			check := rig.on(isCommitCheck, func(ctx context.Context) {
+				tag, err := rig.other.Exec(ctx, relayClaimSQL, kind.outbox, kind.generation+2)
+				if err != nil {
+					t.Errorf("relay claim: %v", err)
+					return
+				}
+				claimed = tag.RowsAffected()
+			})
+			err := kind.pass(t, ctx, rig.pool, 1)
+			if !guard.fired || !check.fired {
+				t.Fatalf("hooks fired: guard=%t check=%t, want both", guard.fired, check.fired)
+			}
+			if err != nil || kind.wrote(t, ctx, rig.other) {
+				t.Fatalf("refused pass: err=%v wrote=%t, want nil/false", err, kind.wrote(t, ctx, rig.other))
+			}
+		})
+		if claimed != 0 {
+			t.Errorf("relay claim right after the commit-time check took %d row(s), want 0 (the check holds the row until rollback)", claimed)
+		}
+		return claimed
+	}
+	t.Run("finalize", func(t *testing.T) {
+		reader := sdkmetric.NewManualReader()
+		provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+		previous := otel.GetMeterProvider()
+		otel.SetMeterProvider(provider)
+		t.Cleanup(func() {
+			otel.SetMeterProvider(previous)
+			_ = provider.Shutdown(context.Background())
+		})
+		logs := &lockedLogBuffer{}
+		kind := fenceKinds()[0]
+		kind.pass = func(t *testing.T, ctx context.Context, pool *pgxpool.Pool, attempt int64) error {
+			service, err := NewNativeFinalizeSyncRunService(pool, synclog.New(slog.New(slog.NewTextHandler(logs, nil))))
+			if err != nil {
+				t.Fatal(err)
+			}
+			args := newFinalizeArgs()
+			args.DeliveryAttempt = attempt
+			return service.Finalize(ctx, args)
+		}
+		run(t, kind)
+		var resource metricdata.ResourceMetrics
+		if err := reader.Collect(context.Background(), &resource); err != nil {
+			t.Fatal(err)
+		}
+		counted := map[string]int64{}
+		for _, scope := range resource.ScopeMetrics {
+			for _, m := range scope.Metrics {
+				if m.Name != FinalizeDeliveryNotCurrentCounter {
+					continue
+				}
+				for _, point := range m.Data.(metricdata.Sum[int64]).DataPoints {
+					reason, _ := point.Attributes.Value("reason")
+					counted[reason.AsString()] += point.Value
+				}
+			}
+		}
+		if counted["route_generation_mismatch"] != 1 || len(counted) != 1 {
+			t.Fatalf("%s by reason = %v, want exactly {route_generation_mismatch: 1}", FinalizeDeliveryNotCurrentCounter, counted)
+		}
+	})
+	t.Run("dispatch", func(t *testing.T) {
+		logs := &lockedLogBuffer{}
+		kind := fenceKinds()[1]
+		kind.pass = func(t *testing.T, ctx context.Context, pool *pgxpool.Pool, attempt int64) error {
+			registry := &fakeJobRegistry{descriptors: map[string]jobruntime.Descriptor{
+				jobcontract.KindSyncProviderUnit: providerUnitDescriptor("river"),
+			}}
+			producer, err := joboutbox.NewProducer(pool, registry)
+			if err != nil {
+				t.Fatal(err)
+			}
+			logger := synclog.New(slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+			service, err := NewNativeDispatchSyncRunService(pool, logger, &fakeBudgetEstimator{}, producer, registry)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return service.Dispatch(ctx, DispatchSyncRunArgs{TransportArgs: TransportArgs{
+				Version: ContractVersionV1, OrgID: discoveryTestOrg, RunID: discoveryTestRun,
+				DispatchOutbox: discoveryTestOutbox, RouteGeneration: discoveryRouteGeneration, DeliveryAttempt: attempt,
+			}})
+		}
+		run(t, kind)
+		found := false
+		for _, line := range logs.lines() {
+			if strings.Contains(line, "msg=dispatch_sync_run.delivery_not_current") && strings.Contains(line, "reason=route_generation_mismatch ") {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("no dispatch_sync_run.delivery_not_current reason=route_generation_mismatch line:\n%s", strings.Join(logs.lines(), "\n"))
+		}
+	})
+}

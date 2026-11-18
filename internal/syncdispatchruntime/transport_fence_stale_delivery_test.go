@@ -36,10 +36,11 @@ type fenceRow struct {
 	status, transport, routeTransport string
 	generation, routeGeneration       int64
 	attempts                          int64
+	claimed                           bool
 }
 
 func fenceDispatched(attempts int64) fenceRow {
-	return fenceRow{"dispatched", "river", "river", fenceGeneration, fenceGeneration, attempts}
+	return fenceRow{"dispatched", "river", "river", fenceGeneration, fenceGeneration, attempts, false}
 }
 
 type fenceState struct {
@@ -61,6 +62,7 @@ type fenceServer struct {
 	redeliverAfterGuard bool
 	claimAfterWake      bool
 	routeMoveAfterWake  bool
+	claimAfterCheck     bool
 	guardDone           bool
 
 	committed fenceState
@@ -175,6 +177,7 @@ func (s *fenceServer) afterGuard() error {
 	if s.claimAfterWake {
 		// The relay claimed the re-armed row: the next attempt, still 'pending'.
 		s.committed.outbox.attempts++
+		s.committed.outbox.claimed = true
 		s.trace = append(s.trace, "claim")
 	}
 	if s.routeMoveAfterWake {
@@ -209,9 +212,46 @@ func (s *fenceServer) referenceRow(backend *pgproto3.Backend, sql string) error 
 	return nil
 }
 
+// afterCheck is a relay claim that commits right after the commit-time check
+// statement. Against Postgres a claim cannot take a row the check locked; the
+// fixture applies it anyway, so a reason read after the check would see it.
+func (s *fenceServer) afterCheck() {
+	if s.claimAfterCheck {
+		s.committed.outbox.attempts++
+		s.committed.outbox.claimed = true
+		s.trace = append(s.trace, "claim-after-check")
+	}
+}
+
+// commitSnapshot answers the locking commit-time snapshot read: the row images
+// the commit decision and its reason are taken from.
+func (s *fenceServer) commitSnapshot(backend *pgproto3.Backend, sql string) error {
+	if !strings.Contains(sql, fenceOutbox) || !strings.Contains(sql, fenceRun) || !strings.Contains(sql, fenceOrg) ||
+		!strings.Contains(sql, "FOR NO KEY UPDATE OF outbox NOWAIT") {
+		return fmt.Errorf("commit snapshot lost its identity clauses or its lock: %s", sql)
+	}
+	row := s.outboxRow()
+	status, transport, generation := row.status, row.transport, strconv.FormatInt(row.generation, 10)
+	if status == "dispatched(feature_disabled)" {
+		status = "dispatched"
+	}
+	if transport == "" {
+		transport, generation = "<NULL>", "<NULL>"
+	}
+	s.trace = append(s.trace, "commit-snapshot")
+	fenceRows(backend, []uint32{25, 25, 20, 20, 16, 25, 20, 16}, []string{status, transport, generation,
+		strconv.FormatInt(row.attempts, 10), strconv.FormatBool(!row.claimed), row.routeTransport,
+		strconv.FormatInt(row.routeGeneration, 10), "f"})
+	s.afterCheck()
+	return nil
+}
+
 func (s *fenceServer) fenceQuery(backend *pgproto3.Backend, sql string) (bool, error) {
 	if strings.HasPrefix(sql, "SELECT route.transport, route.generation, route.paused, outbox.found,") {
 		return true, s.referenceRow(backend, sql)
+	}
+	if strings.HasPrefix(sql, "SELECT outbox.status, outbox.dispatched_transport,") {
+		return true, s.commitSnapshot(backend, sql)
 	}
 	if !strings.Contains(sql, "public.sync_dispatch_outbox AS outbox") {
 		return false, nil
@@ -230,18 +270,6 @@ func (s *fenceServer) fenceQuery(backend *pgproto3.Backend, sql string) (bool, e
 		fenceRows(backend, []uint32{16}, []string{strconv.FormatBool(ok)})
 		if err := s.afterGuard(); err != nil {
 			return false, err
-		}
-	case strings.HasPrefix(sql, "SELECT 1 FROM public.sync_dispatch_outbox AS outbox") && strings.Contains(sql, "FOR NO KEY UPDATE OF outbox NOWAIT"):
-		// A wake that only re-armed the row (pending, unclaimed, same attempt) does not supersede the delivery.
-		if row := s.outboxRow(); !ok && row.status == "pending" && row.routeTransport == "river" && row.routeGeneration == fenceGeneration &&
-			row.attempts == s.delivered && strings.Contains(sql, "outbox.claim_token IS NULL") {
-			ok = true
-		}
-		s.trace = append(s.trace, fmt.Sprintf("commit-check=%t", ok))
-		if ok {
-			fenceRows(backend, []uint32{23}, []string{"1"})
-		} else {
-			fenceRows(backend, []uint32{23})
 		}
 	default:
 		return false, nil
@@ -439,31 +467,35 @@ func TestTransportFenceRefusesStaleOrRearmedDelivery(t *testing.T) {
 		redeliverAfterGuard bool
 		claimAfterWake      bool
 		routeMoveAfterWake  bool
+		claimAfterCheck     bool
 		wantWrites          bool
 		wantOutbox          string
 		wantAttempts        int64
 		wantReason          string // "" = no delivery_not_current line
 	}{
-		{"current_first_attempt", fenceDispatched(1), 1, "", false, false, false, true, "dispatched", 1, ""},
-		{"current_redelivery", fenceDispatched(2), 2, "", false, false, false, true, "dispatched", 2, ""},
-		{"pending_before_guard", pending, 1, "", false, false, false, false, "pending", 1, "outbox_not_dispatched"},
-		{"older_route_generation", nextGeneration, 1, "", false, false, false, false, "dispatched", 2, "route_generation_mismatch"},
-		{"holdback_redelivery_committed_before_guard", fenceDispatched(2), 1, "", false, false, false, false, "dispatched", 2, "delivery_attempt_mismatch"},
-		{"unit_end_redelivery_committed_before_guard", fenceDispatched(2), 1, "", false, false, false, false, "dispatched", 2, "delivery_attempt_mismatch"},
-		{"holdback_redelivery_committed_after_guard", fenceDispatched(1), 1, "", true, false, false, false, "dispatched", 2, "delivery_attempt_mismatch"},
-		{"unit_end_redelivery_committed_after_guard", fenceDispatched(1), 1, "", true, false, false, false, "dispatched", 2, "delivery_attempt_mismatch"},
-		{"holdback_rearmed_after_guard", fenceDispatched(1), 1, syncrunrollup.DispatchWakePathHoldBack, false, false, false, false, "pending", 1, "outbox_other_transport"},
-		{"unit_end_rearmed_after_guard", fenceDispatched(1), 1, syncrunrollup.DispatchWakePathProviderUnit, false, false, false, false, "pending", 1, "outbox_other_transport"},
-		{"holdback_rearmed_redelivery_after_guard", fenceDispatched(2), 2, syncrunrollup.DispatchWakePathHoldBack, false, false, false, false, "pending", 2, "outbox_other_transport"},
-		{"unit_end_rearmed_redelivery_after_guard", fenceDispatched(2), 2, syncrunrollup.DispatchWakePathProviderUnit, false, false, false, false, "pending", 2, "outbox_other_transport"},
-		{"pending_and_claimed_before_guard", pendingClaimed, 1, "", false, false, false, false, "pending", 2, "outbox_not_dispatched"},
-		{"holdback_rearmed_then_claimed_after_guard", fenceDispatched(1), 1, syncrunrollup.DispatchWakePathHoldBack, false, true, false, false, "pending", 2, "delivery_attempt_mismatch"},
-		{"holdback_rearmed_then_route_moved_after_guard", fenceDispatched(1), 1, syncrunrollup.DispatchWakePathHoldBack, false, false, true, false, "pending", 1, "route_generation_mismatch"},
+		{"current_first_attempt", fenceDispatched(1), 1, "", false, false, false, false, true, "dispatched", 1, ""},
+		{"current_redelivery", fenceDispatched(2), 2, "", false, false, false, false, true, "dispatched", 2, ""},
+		{"pending_before_guard", pending, 1, "", false, false, false, false, false, "pending", 1, "outbox_not_dispatched"},
+		{"older_route_generation", nextGeneration, 1, "", false, false, false, false, false, "dispatched", 2, "route_generation_mismatch"},
+		{"holdback_redelivery_committed_before_guard", fenceDispatched(2), 1, "", false, false, false, false, false, "dispatched", 2, "delivery_attempt_mismatch"},
+		{"unit_end_redelivery_committed_before_guard", fenceDispatched(2), 1, "", false, false, false, false, false, "dispatched", 2, "delivery_attempt_mismatch"},
+		{"holdback_redelivery_committed_after_guard", fenceDispatched(1), 1, "", true, false, false, false, false, "dispatched", 2, "delivery_attempt_mismatch"},
+		{"unit_end_redelivery_committed_after_guard", fenceDispatched(1), 1, "", true, false, false, false, false, "dispatched", 2, "delivery_attempt_mismatch"},
+		{"holdback_rearmed_after_guard", fenceDispatched(1), 1, syncrunrollup.DispatchWakePathHoldBack, false, false, false, false, false, "pending", 1, "outbox_other_transport"},
+		{"unit_end_rearmed_after_guard", fenceDispatched(1), 1, syncrunrollup.DispatchWakePathProviderUnit, false, false, false, false, false, "pending", 1, "outbox_other_transport"},
+		{"holdback_rearmed_redelivery_after_guard", fenceDispatched(2), 2, syncrunrollup.DispatchWakePathHoldBack, false, false, false, false, false, "pending", 2, "outbox_other_transport"},
+		{"unit_end_rearmed_redelivery_after_guard", fenceDispatched(2), 2, syncrunrollup.DispatchWakePathProviderUnit, false, false, false, false, false, "pending", 2, "outbox_other_transport"},
+		{"pending_and_claimed_before_guard", pendingClaimed, 1, "", false, false, false, false, false, "pending", 2, "outbox_not_dispatched"},
+		{"holdback_rearmed_then_claimed_after_guard", fenceDispatched(1), 1, syncrunrollup.DispatchWakePathHoldBack, false, true, false, false, false, "pending", 2, "delivery_attempt_mismatch"},
+		{"holdback_rearmed_then_route_moved_after_guard", fenceDispatched(1), 1, syncrunrollup.DispatchWakePathHoldBack, false, false, true, false, false, "pending", 1, "route_generation_mismatch"},
+		// The route moved after the guard, so the check refuses; then the relay re-arms, claims and redelivers the
+		// row (attempts + 1) before a second read could see it. The reason must stay the check's own.
+		{"route_moved_after_guard_then_redelivered_after_check", fenceDispatched(1), 1, "", false, false, true, true, false, "dispatched", 2, "route_generation_mismatch"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			s := &fenceServer{delivered: c.delivered, wakeAfterGuard: c.wakeAfterGuard, redeliverAfterGuard: c.redeliverAfterGuard,
-				claimAfterWake: c.claimAfterWake, routeMoveAfterWake: c.routeMoveAfterWake,
+				claimAfterWake: c.claimAfterWake, routeMoveAfterWake: c.routeMoveAfterWake, claimAfterCheck: c.claimAfterCheck,
 				finishedUnit: strings.HasPrefix(c.name, "unit_end"),
 				committed:    fenceState{outbox: c.row, runStatus: "running", unitStatus: "planned"}}
 			output, err := runFenceDispatch(t, s)

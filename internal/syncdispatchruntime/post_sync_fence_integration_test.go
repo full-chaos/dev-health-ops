@@ -77,6 +77,9 @@ func postSyncFenceKind(options postSyncPassOptions) fenceKind {
 	}
 }
 
+// busyPassBound bounds a pass that meets a held row. It never orders anything: a NOWAIT check returns long before it.
+const busyPassBound = 30 * time.Second
+
 // countingTouchedDaysStore counts every call into the touched-day record (ClickHouse in production).
 type countingTouchedDaysStore struct{ calls int }
 
@@ -341,7 +344,11 @@ func TestPostSyncFenceBusyIsOneFailedAttempt(t *testing.T) {
 	kind := postSyncFenceKind(postSyncPassOptions{logs: logs, observer: observer})
 	withFenceRig(t, kind, 1, func(ctx context.Context, rig *fenceRig) {
 		rig.on(isStartGuard, func(ctx context.Context) { holdOutboxRow(t, ctx, rig) })
-		if err := kind.pass(t, ctx, rig.pool, 1); !errors.Is(err, ErrPostSyncUnavailable) {
+		// The bound only detects a wait: with NOWAIT the check fails at once with 55P03; a waiting check would end in
+		// a cancel (57014) when the bound expires, so the line below would not name 55P03.
+		passCtx, cancel := context.WithTimeout(ctx, busyPassBound)
+		defer cancel()
+		if err := kind.pass(t, passCtx, rig.pool, 1); !errors.Is(err, ErrPostSyncUnavailable) {
 			t.Fatalf("pass with the outbox row held elsewhere: err=%v, want %v", err, ErrPostSyncUnavailable)
 		}
 		if len(observer.outcomes) != 1 || observer.outcomes[0] != jobruntime.PostSyncFanoutOutcomeError {
@@ -471,11 +478,70 @@ func TestPostSyncFenceRunsAsTheDomainRole(t *testing.T) {
 		if err := holder.QueryRow(ctx, `SELECT id::text FROM sync_dispatch_outbox WHERE id = $1 FOR UPDATE`, outbox).Scan(&id); err != nil {
 			t.Fatal(err)
 		}
-		err = service.Fanout(ctx, args)
+		passCtx, cancel := context.WithTimeout(ctx, busyPassBound)
+		defer cancel()
+		err = service.Fanout(passCtx, args)
 		denials.assertNone(t, "NativePostSyncService fenced fan-out, row held")
 		var pgErr *pgconn.PgError
 		if !errors.Is(err, ErrPostSyncUnavailable) || !errors.As(err, &pgErr) || pgErr.Code != "55P03" {
 			t.Fatalf("Fanout as the domain role with the row held: err=%v, want ErrPostSyncUnavailable over SQLSTATE 55P03", err)
 		}
+	})
+}
+
+// TestPostSyncFenceRunMissing: the commit with no plan (the run is not the delivery's, so loadPostSyncPlan finds no
+// row) is fenced too. A delivery superseded during that pass is refused with its line and no outcome; the current
+// delivery commits and counts no_repositories.
+func TestPostSyncFenceRunMissing(t *testing.T) {
+	moveRun := func(t *testing.T, ctx context.Context, rig *fenceRig) {
+		t.Helper()
+		if _, err := rig.other.Exec(ctx, `UPDATE sync_runs SET org_id = $2 WHERE id = $1`, postSyncFenceRun, "20000000-0000-4000-8000-0000000000ff"); err != nil {
+			t.Fatalf("move the run to another organization: %v", err)
+		}
+	}
+	refusals := func(logs *lockedLogBuffer) int {
+		count := 0
+		for _, line := range logs.lines() {
+			if strings.Contains(line, "msg=post_sync_fanout.delivery_not_current") && strings.Contains(line, "reason=delivery_attempt_mismatch ") {
+				count++
+			}
+		}
+		return count
+	}
+	t.Run("current_commits_no_repositories", func(t *testing.T) {
+		logs := &lockedLogBuffer{}
+		observer := &recordingFanoutObserver{}
+		kind := postSyncFenceKind(postSyncPassOptions{logs: logs, observer: observer})
+		withFenceRig(t, kind, 1, func(ctx context.Context, rig *fenceRig) {
+			moveRun(t, ctx, rig)
+			hook := rig.on(isCommitCheck, func(context.Context) {})
+			err := kind.pass(t, ctx, rig.pool, 1)
+			if err != nil || len(observer.outcomes) != 1 || observer.outcomes[0] != jobruntime.PostSyncFanoutOutcomeNoRepositories || refusals(logs) != 0 {
+				t.Fatalf("current delivery, run missing: err=%v outcomes=%v refusals=%d, want nil/[no_repositories]/0", err, observer.outcomes, refusals(logs))
+			}
+			if !hook.fired {
+				t.Fatal("the commit-time check never ran on the run-missing commit")
+			}
+		})
+	})
+	t.Run("superseded_after_guard_is_refused", func(t *testing.T) {
+		logs := &lockedLogBuffer{}
+		observer := &recordingFanoutObserver{}
+		kind := postSyncFenceKind(postSyncPassOptions{logs: logs, observer: observer})
+		withFenceRig(t, kind, 1, func(ctx context.Context, rig *fenceRig) {
+			moveRun(t, ctx, rig)
+			hook := rig.on(isStartGuard, func(ctx context.Context) {
+				if _, err := rig.other.Exec(ctx, `UPDATE sync_dispatch_outbox SET attempts = attempts + 1 WHERE id = $1`, kind.outbox); err != nil {
+					t.Errorf("redelivery: %v", err)
+				}
+			})
+			err := kind.pass(t, ctx, rig.pool, 1)
+			if !hook.fired {
+				t.Fatal("the start guard never ran")
+			}
+			if err != nil || len(observer.outcomes) != 0 || refusals(logs) != 1 {
+				t.Fatalf("superseded delivery, run missing: err=%v outcomes=%v refusals=%d, want nil/[]/1", err, observer.outcomes, refusals(logs))
+			}
+		})
 	})
 }

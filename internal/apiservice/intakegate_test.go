@@ -266,7 +266,7 @@ func TestEveryRequestThatReachesAnIntakeHandlerIsCountedOnce(t *testing.T) {
 // fixedLogClock pins the slog time to a stamp whose nanoseconds hold 6379, so a
 // check that reads the time field fails every run, not one run in many.
 func fixedLogClock(groups []string, a slog.Attr) slog.Attr {
-	if len(groups) == 0 && a.Key == slog.TimeKey {
+	if len(groups) == 0 && a.Key == slog.TimeKey && a.Value.Kind() == slog.KindTime {
 		return slog.Time(slog.TimeKey, time.Date(2026, 11, 18, 8, 33, 0, 637912345, time.UTC))
 	}
 	return a
@@ -285,7 +285,7 @@ func logLeaks(t *testing.T, line string) []string {
 		t.Fatal(err)
 	}
 	var found []string
-	for _, leaked := range []string{"10.9.8.7", "6379", "hunter2", "11111111-2222", "connection refused", "dial tcp"} {
+	for _, leaked := range []string{"10.9.8.7", "10.9.8.7:6379", "hunter2", "11111111-2222", "connection refused", "dial tcp"} {
 		if strings.Contains(string(text), leaked) {
 			found = append(found, leaked)
 		}
@@ -305,6 +305,16 @@ func TestIntakeLogLeakCheckReadsNoTimeButCatchesALeak(t *testing.T) {
 	got := logLeaks(t, strings.TrimSpace(logs.String()))
 	if len(got) != 4 {
 		t.Fatalf("a planted leak must be found, got %v", got)
+	}
+	logs.Reset()
+	logger.Error("redis at 10.9.8.7:6379 refused")
+	if got := logLeaks(t, strings.TrimSpace(logs.String())); len(got) == 0 {
+		t.Fatal("the store address in host:port form must fail the check")
+	}
+	logs.Reset()
+	logger.Error("delivery done", slog.String("id", "ev-6379"), slog.Duration("took", 6379*time.Millisecond))
+	if got := logLeaks(t, strings.TrimSpace(logs.String())); len(got) != 0 {
+		t.Fatalf("an unrelated value holding 6379 must pass, got %v", got)
 	}
 }
 

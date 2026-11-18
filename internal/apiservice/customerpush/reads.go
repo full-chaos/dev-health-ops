@@ -260,7 +260,7 @@ func batchListItem(row externalingest.BatchRow) *pyjson.Object {
 }
 
 func (h *handlers) listSourceBatches(w http.ResponseWriter, r *http.Request) {
-	values := r.URL.Query()
+	values := pybody.Query(r)
 	var errs pybody.Errors
 	status := pybody.LastQuery(values, "status")
 	producer := pybody.LastQuery(values, "producer")
@@ -301,7 +301,7 @@ func (h *handlers) listSourceBatches(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handlers) getBatch(w http.ResponseWriter, r *http.Request) {
-	values := r.URL.Query()
+	values := pybody.Query(r)
 	var errs pybody.Errors
 	limit, _ := errs.QueryInt("rejected_records_limit", pybody.LastQuery(values, "rejected_records_limit"), 50, int64Pointer(1), int64Pointer(200))
 	offset, _ := errs.QueryInt("rejected_records_offset", pybody.LastQuery(values, "rejected_records_offset"), 0, int64Pointer(0), pybody.Int64Max())

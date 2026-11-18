@@ -208,7 +208,7 @@ func authKey(r *http.Request, body pyjson.Value) string {
 		}
 	}
 	if raw == nil {
-		if value := pybody.LastQueryValue(r.URL.Query(), "email"); value != nil && *value != "" {
+		if value := pybody.LastQueryValue(httpapi.Query(r), "email"); value != nil && *value != "" {
 			raw = value
 		}
 	}

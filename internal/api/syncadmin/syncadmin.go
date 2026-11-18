@@ -276,7 +276,7 @@ func (h *handlers) hideMigratedChildConfigs() bool {
 // listSyncConfigs is list_sync_configs.
 func (h *handlers) listSyncConfigs(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	query := r.URL.Query()
+	query := httpapi.Query(r)
 	var errs pybody.Errors
 	activeOnly, _ := errs.QueryBool("active_only", pybody.LastQuery(query, "active_only"), false)
 	parentOnly, _ := errs.QueryBool("parent_only", pybody.LastQuery(query, "parent_only"), false)

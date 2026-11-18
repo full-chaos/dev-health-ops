@@ -211,6 +211,8 @@ var queueRowReadTable = map[string]queueRowRead{
 		"args#>>domain,id", roleInternal, "", "", "join against the request row"},
 	"internal/jobs/metrics/daily/postgres.go#MaterializeScheduledFanout": {
 		"dedupe_key", roleInternal, "", "", "EXISTS on a key built from the run id; only the boolean is read, never logged"},
+	"internal/jobs/metrics/daily/dispatch_fail.go#FailDispatchPermanently": {
+		"dedupe_key", roleInternal, "", "", "EXISTS on a key built from the run id; only the boolean is read, never logged"},
 	"internal/jobs/metrics/daily/redrive.go#ReconcileOrphanedFinalizeRedriveRuns": {
 		"dedupe_key", roleInternal, "", "", "join key for the abandonment check; never logged"},
 	"internal/jobs/metrics/remaining/redrive.go#deadHandoffReasonSQL": {

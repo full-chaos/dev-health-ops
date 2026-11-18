@@ -210,6 +210,7 @@ internal/cigates/bigboyrender	projectscope_test.go
 internal/cigates/bigboyrender	values.go
 internal/cigates/cachepoison	cachepoison_test.go
 internal/cigates/chartgates	alerts_auth_slo_test.go
+internal/cigates/chartgates	dashboard_onequery_test.go
 internal/cigates/chartgates	dashboard_pooler_test.go
 internal/cigates/chartgates	dashboard_spangaps_test.go
 internal/cigates/chartgates	helpers_test.go
@@ -610,6 +611,7 @@ internal/queryapi/server	query_route_name_fields_legacy_test.go
 internal/queryapi/server	query_route_operating_review_no_data_test.go
 internal/queryapi/server	query_route_review_edges_names_test.go
 internal/queryapi/server	query_route_testops_filteremptyreason_documents_test.go
+internal/queryapi/server	query_route_testops_risk_partial_documents_test.go
 internal/queryapi/server	query_route_testops_scope_documents_test.go
 internal/queryapi/server	query_route_wire_capture_test.go
 internal/queryapi/server	rate_coverage_documents_integration_test.go

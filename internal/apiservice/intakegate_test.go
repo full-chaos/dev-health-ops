@@ -319,6 +319,11 @@ func TestIntakeLogLeakCheckReadsNoTimeButCatchesALeak(t *testing.T) {
 		t.Fatalf("a leak in a duplicate error group must be found, got %v", got)
 	}
 	logs.Reset()
+	logger.Error("x", slog.Group("error", slog.String("class", "ok")), slog.Group("error", slog.String("message", "password=hunter2")))
+	if got := logLeaks(t, strings.TrimSpace(logs.String())); len(got) != 1 {
+		t.Fatalf("a leak in a later duplicate error group must be found, got %v", got)
+	}
+	logs.Reset()
 	logger.Error("x", slog.String("time", "hunter2"))
 	if got := logLeaks(t, strings.TrimSpace(logs.String())); len(got) != 1 {
 		t.Fatalf("a leak in a caller attribute named time must be found, got %v", got)

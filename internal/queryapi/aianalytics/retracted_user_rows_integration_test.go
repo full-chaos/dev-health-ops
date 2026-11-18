@@ -25,7 +25,7 @@ func TestTheReviewerConcentrationCountsNoRetractedReviewer(t *testing.T) {
             confidence, evidence, observed_at, ingested_at)
         VALUES (generateUUIDv4(), ?, 'github', 'pull_request', '1', ?, 'ai_assisted', 'label', 0.9, '{}', ?, now64(3))`,
 		f.OrgA, f.RepoID, day.Add(2*time.Hour))
-	_, reviewers, err := loadReviewerConcentration(ctx, client, f.OrgA, day, day.AddDate(0, 0, 1), scope{})
+	_, reviewers, err := loadReviewerConcentration(ctx, client, f.OrgA, day, day.AddDate(0, 0, 1), scope{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

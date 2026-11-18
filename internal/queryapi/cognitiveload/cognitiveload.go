@@ -168,7 +168,7 @@ func resolve(ctx context.Context, client QueryClient, orgID string, sinceDate, u
 				TotalDays: 0,
 			}, nil
 		}
-		userRows, err := fetchUserMetrics(ctx, client, orgID, since, until, nil, &ownedRepoID)
+		userRows, err := fetchUserMetrics(ctx, client, orgID, since, until, &ownedRepoID)
 		if err != nil {
 			return nil, fmt.Errorf("cognitiveload: fetch user metrics: %w", err)
 		}
@@ -188,7 +188,7 @@ func resolve(ctx context.Context, client QueryClient, orgID string, sinceDate, u
 	// Path 3: org-wide -- teamID unset (repoID, when set without teamID,
 	// narrows user_metrics_daily only; team_metrics_daily is filtered by
 	// teamID alone, which is always nil/empty here).
-	userRows, err := fetchUserMetrics(ctx, client, orgID, since, until, teamID, repoID)
+	userRows, err := fetchUserMetrics(ctx, client, orgID, since, until, repoID)
 	if err != nil {
 		return nil, fmt.Errorf("cognitiveload: fetch user metrics: %w", err)
 	}
@@ -258,12 +258,13 @@ func mergeUserAndTeamRows(userRows []userLoadRow, teamRows []teamRatioRow) []mod
 // fetchUserMetrics ports _fetch_user_metrics: SUM of latest-per-developer
 // cognitive load columns, grouped by day, deduped via
 // argMax(<col>, computed_at) per (day, repo_id, author_email) before the
-// outer SUM. team_id/repo_id filters are added only when non-empty,
-// exactly mirroring the Python function's conditional WHERE-clause
-// construction. repoId accepts either a repos.id UUID or a repos.repo
-// slug, resolved through an org-scoped subquery -- same shape
-// reviewedges.Resolve's own repo filter uses.
-func fetchUserMetrics(ctx context.Context, client QueryClient, orgID, sinceDate, untilDate string, teamID, repoID *string) ([]userLoadRow, error) {
+// outer SUM. The repo_id filter is added only when non-empty. repoId
+// accepts either a repos.id UUID or a repos.repo slug, resolved through an
+// org-scoped subquery -- same shape reviewedges.Resolve's own repo filter
+// uses. It takes no team: user_metrics_daily.team_id is a membership label,
+// never a team scope (CHAOS-14101); both team paths of resolve read by owned
+// repository instead.
+func fetchUserMetrics(ctx context.Context, client QueryClient, orgID, sinceDate, untilDate string, repoID *string) ([]userLoadRow, error) {
 	innerWhere := `
             WHERE org_id = {org_id:String}
               AND day >= {since_date:Date}
@@ -272,10 +273,6 @@ func fetchUserMetrics(ctx context.Context, client QueryClient, orgID, sinceDate,
 		{Name: "org_id", Value: orgID},
 		{Name: "since_date", Value: sinceDate},
 		{Name: "until_date", Value: untilDate},
-	}
-	if nonEmpty(teamID) {
-		innerWhere += "\n              AND team_id = {team_id:String}"
-		bindings = append(bindings, clickhouse.Binding{Name: "team_id", Value: *teamID})
 	}
 	if nonEmpty(repoID) {
 		innerWhere += `

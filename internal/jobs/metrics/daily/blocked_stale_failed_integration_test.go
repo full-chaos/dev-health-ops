@@ -408,3 +408,138 @@ func TestBlockedReasonFollowsThePartitionsWhileTheRunStaysBlocked(t *testing.T) 
 		})
 	}
 }
+
+func waitForLockWaiters(t *testing.T, ctx context.Context, pool *pgxpool.Pool, want int) {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		var waiting int
+		if err := pool.QueryRow(ctx, `
+			SELECT count(*) FROM pg_stat_activity
+			WHERE datname = current_database() AND state = 'active' AND wait_event_type = 'Lock'`).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting >= want {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("fewer than %d backends blocked on a lock", want)
+}
+
+// A reason-only correction must not restore a marker that a concurrent redrive
+// cleared. The pass reads the run as blocked with an out-of-date reason; the
+// redrive resets the failed_permanent partition to a fresh 'failed' row and
+// clears the marker in its own transaction; the pass's UPDATE waits on that run
+// row and, under Read Committed, re-checks only its WHERE against the committed
+// row. The interleaving is forced: an uncommitted outbox row under the
+// redrive's own dedupe key holds the redrive open after it cleared the marker.
+func TestReasonCorrectionDoesNotRestoreAMarkerARedriveCleared(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createDailyTables(t, ctx, pool)
+	registry, err := jobruntime.Load(filepath.Join("..", "..", "..", "..", "contracts", "jobs", "v1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	publisher, err := NewPostgresPublisher(pool, dailyTestRegistry{production: registry})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewPostgresStore(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstPass := time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)
+	stale := firstPass.Add(-failedPartitionRetryHorizon - time.Hour)
+	orgID, runID := uuid.NewString(), uuid.NewString()
+	seedStaleRun(t, ctx, pool, orgID, runID, stale, []stalePartition{{"failed_permanent", stale}, {"failed", stale}})
+	store.now = func() time.Time { return firstPass }
+	if _, err := store.ReconcileBlockedRuns(ctx, orgID); err != nil {
+		t.Fatal(err)
+	}
+	if _, reason, _ := readMarkerState(t, ctx, pool, runID); reason != BlockedReasonAllPartitionsPermanent {
+		t.Fatalf("first pass reason = %q, want %q", reason, BlockedReasonAllPartitionsPermanent)
+	}
+
+	// The stale row is claimed and succeeds: the next pass wants the partial reason.
+	store.now = func() time.Time { return firstPass.Add(time.Hour) }
+	var staleID, permanentID string
+	if err := pool.QueryRow(ctx, `SELECT id::text FROM daily_metrics_partitions WHERE run_id = $1 AND status = 'failed'`, runID).Scan(&staleID); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT id::text FROM daily_metrics_partitions WHERE run_id = $1 AND status = 'failed_permanent'`, runID).Scan(&permanentID); err != nil {
+		t.Fatal(err)
+	}
+	claim, err := store.ClaimPartition(ctx, staleID)
+	if err != nil || claim == nil {
+		t.Fatalf("ClaimPartition: %v %v", claim, err)
+	}
+	if err := store.CompletePartition(ctx, *claim, publisher); err != nil {
+		t.Fatal(err)
+	}
+
+	secondPass := firstPass.Add(24 * time.Hour)
+	store.now = func() time.Time { return secondPass }
+	nonce := uuid.NewString()
+	day := time.Date(2026, 9, 17, 0, 0, 0, 0, time.UTC)
+
+	blocker, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = blocker.Rollback(context.Background()) }()
+	if err := publisher.PublishRedrivePartitionTx(ctx, blocker,
+		Run{ID: runID, OrganizationID: orgID, Status: "running"},
+		Partition{ID: permanentID, RunID: runID}, nonce); err != nil {
+		t.Fatal(err)
+	}
+
+	redriveDone := make(chan error, 1)
+	go func() {
+		_, err := store.RedriveStrandedPartitions(ctx, publisher, orgID, day, day, nonce)
+		redriveDone <- err
+	}()
+	waitForLockWaiters(t, ctx, pool, 1)
+	reconcileDone := make(chan error, 1)
+	go func() {
+		_, err := store.ReconcileBlockedRuns(ctx, orgID)
+		reconcileDone <- err
+	}()
+	waitForLockWaiters(t, ctx, pool, 2)
+	if err := blocker.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-redriveDone; err != nil {
+		t.Fatalf("redrive: %v", err)
+	}
+	if err := <-reconcileDone; err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	var partitionStatus string
+	if err := pool.QueryRow(ctx, `SELECT status FROM daily_metrics_partitions WHERE id = $1`, permanentID).Scan(&partitionStatus); err != nil {
+		t.Fatal(err)
+	}
+	if partitionStatus != "failed" {
+		t.Fatalf("precondition: the redrive left the partition %q, want failed", partitionStatus)
+	}
+	if blockedAt, reason, _ := readMarkerState(t, ctx, pool, runID); blockedAt != nil {
+		t.Fatalf("the pass restored the marker the redrive cleared: blocked_at=%s reason=%q", blockedAt, reason)
+	}
+	if _, err := store.ReconcileBlockedRuns(ctx, orgID); err != nil {
+		t.Fatal(err)
+	}
+	if blockedAt, reason, _ := readMarkerState(t, ctx, pool, runID); blockedAt != nil {
+		t.Fatalf("the next pass marked a run with a fresh failed partition: reason=%q", reason)
+	}
+}

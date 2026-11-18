@@ -193,7 +193,9 @@ WITH decided AS (
                WHERE partition.run_id = run.id
                  AND partition.status = 'succeeded'
            ) AS none_succeeded,
-           run.blocked_at IS NOT NULL AS was_blocked
+           run.blocked_at IS NOT NULL AS was_blocked,
+           run.blocked_at AS read_blocked_at,
+           run.blocked_reason AS read_reason
     FROM public.daily_metrics_runs AS run
     -- Widened from status='running' (CHAOS-4290 confirmation pass): a
     -- terminally failed finalize has status='failed', so the old scope excluded
@@ -216,7 +218,7 @@ WITH decided AS (
     WHERE run.org_id = $1::uuid AND run.status IN ('running', 'failed')
 ),
 wanted AS (
-    SELECT decided.id, decided.was_blocked,
+    SELECT decided.id, decided.was_blocked, decided.read_blocked_at, decided.read_reason,
            decided.blocked OR decided.finalize_blocked AS want_blocked,
            CASE
                -- No failed_permanent row: the run ended only through stale
@@ -246,6 +248,12 @@ WHERE run.id = wanted.id
       wanted.want_blocked <> (run.blocked_at IS NOT NULL)
       OR wanted.want_reason IS DISTINCT FROM run.blocked_reason
   )
+  -- Only over the marker this pass read. A concurrent writer (a redrive clears
+  -- the marker of every run it resets) leaves the row for the next pass: under
+  -- Read Committed this UPDATE re-checks its WHERE on the committed row but
+  -- keeps the partition state it read before.
+  AND run.blocked_at IS NOT DISTINCT FROM wanted.read_blocked_at
+  AND run.blocked_reason IS NOT DISTINCT FROM wanted.read_reason
 -- was_blocked is the state the pass read: a reason-only change is neither a
 -- mark nor a clear.
 RETURNING wanted.want_blocked, wanted.was_blocked`

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"runtime"
 	"strconv"
 	"strings"
@@ -25,6 +26,8 @@ type githubTestsSizedArtifact struct {
 	bodyBytes     int
 	// redirectContentLength is the Content-Length of the API's 302 itself.
 	redirectContentLength int64
+	// acceptRanges serves body with http.ServeContent, which answers ranges.
+	acceptRanges bool
 }
 
 type githubTestsSizedDoer struct {
@@ -59,6 +62,13 @@ func (doer *githubTestsSizedDoer) Do(request *http.Request) (*http.Response, err
 		id := githubTestsArtifactIDFromBlobPath(doer.t, path)
 		doer.blob[id]++
 		artifact := doer.artifacts[id]
+		if artifact.acceptRanges {
+			recorder := httptest.NewRecorder()
+			http.ServeContent(recorder, request, "artifact.zip", time.Time{}, bytes.NewReader(artifact.body))
+			response := recorder.Result()
+			response.Request = request
+			return response, nil
+		}
 		var source io.Reader = bytes.NewReader(artifact.body)
 		if artifact.body == nil {
 			source = &githubTestsRepeatingReader{remaining: artifact.bodyBytes}
@@ -132,17 +142,39 @@ func githubTestsOversizedMarker(t *testing.T, walk githubTestsWalk, artifactID s
 
 const githubTestsSizeCap = 4096
 
-// A listed size above the cap is the same artifact_oversized skip as today,
-// reached without a download: no API request, no blob request, no byte read.
-func TestGitHubTestsListedSizeAboveCapSkipsWithoutDownload(t *testing.T) {
+// A listed size above the cap no longer skips before the download (CHAOS-13982):
+// an artifact store that answers ranges yields the report members of the
+// over-cap artifact.
+func TestGitHubTestsListedSizeAboveCapIsReadByRange(t *testing.T) {
+	overCap := githubTestsZip(t, map[string]string{
+		"junit.xml": githubTestsMultiSuiteJUnit(1),
+		"trace.bin": string(githubTestsRandomBytes(21, githubTestsSizeCap*4)),
+	})
+	doer := newGitHubTestsSizedDoer(t, map[int]githubTestsSizedArtifact{
+		1: {listedSize: strconv.Itoa(len(overCap)), body: overCap, acceptRanges: true},
+	})
+	walk := githubTestsSizedWalk(t, doer, githubTestsSizeCap)
+	if doer.archive[1] != 1 || walk.cursor.Suites != 1 {
+		t.Fatalf("api=%d suites=%d, want 1/1: the over-cap artifact's report is read by range", doer.archive[1], walk.cursor.Suites)
+	}
+	if markers, _ := walk.final.Result["skipped_artifacts"].([]GitHubTestsSkippedArtifact); len(markers) != 0 {
+		t.Fatalf("skipped_artifacts=%+v, want none", markers)
+	}
+}
+
+// Without range support a listed size above the cap is the same
+// artifact_oversized skip as today: the download stops at the response
+// headers and reads no body byte (CHAOS-13982 moved the refusal from the
+// listing to the response).
+func TestGitHubTestsListedSizeAboveCapWithoutRangeSupportReadsNoBody(t *testing.T) {
 	healthy := githubTestsHealthyArchive(t)
 	doer := newGitHubTestsSizedDoer(t, map[int]githubTestsSizedArtifact{
 		1: {listedSize: strconv.Itoa(githubTestsSizeCap + 500), contentLength: githubTestsSizeCap + 500, bodyBytes: githubTestsSizeCap + 500},
 		2: {listedSize: strconv.Itoa(len(healthy)), contentLength: int64(len(healthy)), body: healthy},
 	})
 	walk := githubTestsSizedWalk(t, doer, githubTestsSizeCap)
-	if doer.archive[1] != 0 || doer.blob[1] != 0 || doer.read[1] != 0 {
-		t.Fatalf("oversized artifact: api=%d blob=%d bytes_read=%d, want 0/0/0", doer.archive[1], doer.blob[1], doer.read[1])
+	if doer.archive[1] != 1 || doer.blob[1] != 1 || doer.read[1] != 0 {
+		t.Fatalf("oversized artifact: api=%d blob=%d bytes_read=%d, want 1/1/0", doer.archive[1], doer.blob[1], doer.read[1])
 	}
 	if doer.archive[2] != 1 || walk.cursor.Suites != 1 {
 		t.Fatalf("healthy artifact: api=%d suites=%d, want 1/1", doer.archive[2], walk.cursor.Suites)
@@ -180,6 +212,21 @@ func TestGitHubTestsUnknownListedSizeUsesTheFinalContentLength(t *testing.T) {
 	}
 }
 
+// A listed size above the cap with no Content-Length on the response refuses
+// before the body is read: the listed size is the marker's size.
+func TestGitHubTestsListedSizeAboveCapWithoutContentLengthReadsNoBody(t *testing.T) {
+	doer := newGitHubTestsSizedDoer(t, map[int]githubTestsSizedArtifact{
+		1: {listedSize: strconv.Itoa(githubTestsSizeCap + 500), contentLength: -1, bodyBytes: githubTestsSizeCap + 500},
+	})
+	walk := githubTestsSizedWalk(t, doer, githubTestsSizeCap)
+	if doer.read[1] != 0 {
+		t.Fatalf("bytes_read=%d, want 0", doer.read[1])
+	}
+	if marker := githubTestsOversizedMarker(t, walk, "1"); marker.SizeBytes != githubTestsSizeCap+500 {
+		t.Fatalf("marker size=%d, want the listed %d", marker.SizeBytes, githubTestsSizeCap+500)
+	}
+}
+
 // Declared sizes that UNDER-report never widen the read: the body still stops
 // at cap+1 and is the same oversized skip as today.
 func TestGitHubTestsUnderReportedSizeStillStopsAtTheCap(t *testing.T) {
@@ -201,8 +248,9 @@ func TestGitHubTestsUnderReportedSizeStillStopsAtTheCap(t *testing.T) {
 	}
 }
 
-// The cap boundary: a declared size equal to the cap is downloaded and parsed;
-// one byte above is skipped without a download.
+// The cap boundary is the response, not the listing (CHAOS-13982): a listed
+// size one byte above the cap is still downloaded, and a body within the cap
+// is parsed.
 func TestGitHubTestsListedSizeCapBoundary(t *testing.T) {
 	healthy := githubTestsHealthyArchive(t)
 	capBytes := int64(len(healthy))
@@ -215,7 +263,7 @@ func TestGitHubTestsListedSizeCapBoundary(t *testing.T) {
 	}{
 		{"cap-1", capBytes - 1, 1, 1, false},
 		{"cap", capBytes, 1, 1, false},
-		{"cap+1", capBytes + 1, 0, 0, true},
+		{"listed cap+1, body at the cap", capBytes + 1, 1, 1, false},
 	} {
 		t.Run(row.name, func(t *testing.T) {
 			doer := newGitHubTestsSizedDoer(t, map[int]githubTestsSizedArtifact{
@@ -247,9 +295,10 @@ func TestGitHubTestsRedirectContentLengthIsNotTheArtifactSize(t *testing.T) {
 	}
 }
 
-// The oracle Collect keeps its terminal disposition for an oversized artifact,
-// and also reaches it without a download.
-func TestGitHubTestsCollectListedSizeAboveCapFailsWithoutDownload(t *testing.T) {
+// The oracle Collect keeps its terminal disposition for an oversized artifact
+// without range support, and reads no body byte (CHAOS-13982: one API and one
+// blob request, no longer zero).
+func TestGitHubTestsCollectListedSizeAboveCapWithoutRangeSupportReadsNoBody(t *testing.T) {
 	doer := newGitHubTestsSizedDoer(t, map[int]githubTestsSizedArtifact{
 		1: {listedSize: strconv.Itoa(githubTestsSizeCap + 500), contentLength: githubTestsSizeCap + 500, bodyBytes: githubTestsSizeCap + 500},
 	})
@@ -260,8 +309,8 @@ func TestGitHubTestsCollectListedSizeAboveCapFailsWithoutDownload(t *testing.T) 
 	if !errors.Is(err, ErrGitHubTestsArtifactOversized) {
 		t.Fatalf("err=%v, want ErrGitHubTestsArtifactOversized", err)
 	}
-	if doer.archive[1] != 0 || doer.read[1] != 0 {
-		t.Fatalf("api=%d bytes_read=%d, want 0/0", doer.archive[1], doer.read[1])
+	if doer.archive[1] != 1 || doer.read[1] != 0 {
+		t.Fatalf("api=%d bytes_read=%d, want 1/0", doer.archive[1], doer.read[1])
 	}
 }
 
@@ -326,7 +375,7 @@ const githubTestsOverCapAllocationBound = 1 << 20
 
 func TestGitHubTestsOverCapArtifactAllocationIsFarBelowTheCap(t *testing.T) {
 	overCap := githubTestsMaxDownloadSize + 500
-	t.Run("declared size skip, whole unit", func(t *testing.T) {
+	t.Run("listed size over cap without range support, whole unit", func(t *testing.T) {
 		doer := newGitHubTestsSizedDoer(t, map[int]githubTestsSizedArtifact{
 			1: {listedSize: strconv.Itoa(overCap), contentLength: int64(overCap), bodyBytes: overCap},
 		})

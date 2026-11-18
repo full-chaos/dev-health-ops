@@ -1010,12 +1010,17 @@ func (derived GithubWorkItemDerivationContext) resolve(
 		// `all` as is_primary = 0 provenance rows; an item whose only
 		// signal is a member's team falls through to unassigned.
 		membershipTier := source == "assignee_membership" || source == "author_membership"
-		if primary == nil && !membershipTier {
+		// A team is reached through ownership only: another issue's team
+		// reaches an item only when the item is a pull or merge request (the
+		// tree edge pull request -> issue -> project), and a member-scope
+		// fallback rule names a person. Both stay is_primary = 0 rows.
+		linkedToAnIssueOnly := source == "linked_issue" && !GithubWorkItemDerivationIsPullOrMergeRequestType(subject.Provider, subject.Type)
+		if primary == nil && !membershipTier && !linkedToAnIssueOnly {
 			// CHAOS-9409: a co-owner fact (is_primary = 2: an owner beside the
 			// main owner) is never the primary; it is a co-owner row of the
 			// item when another owner of the same source is the primary.
 			for index, candidate := range candidates {
-				if candidate.IsPrimary == AttributionCoOwner {
+				if candidate.IsPrimary == AttributionCoOwner || isMemberFallbackCandidate(candidate) {
 					continue
 				}
 				value := candidate
@@ -1297,6 +1302,14 @@ func WorkItemDerivationScope(subject GithubWorkItemDerivationSubject) string {
 		}
 	}
 	return ""
+}
+
+// memberFallbackEvidencePrefix starts the evidence of a manual_fallback
+// candidate made by a rule of scope_type "member" (ManualCandidates).
+const memberFallbackEvidencePrefix = "manual_fallback:member="
+
+func isMemberFallbackCandidate(candidate GithubWorkItemDerivationCandidate) bool {
+	return candidate.Source == "manual_fallback" && strings.HasPrefix(candidate.Evidence, memberFallbackEvidencePrefix)
 }
 
 func (derived GithubWorkItemDerivationContext) ManualCandidates(

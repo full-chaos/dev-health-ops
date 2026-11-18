@@ -375,8 +375,8 @@ func workItemsCarry(contract storedversion.Contract, descriptionUnstated bool) m
 
 func workItemsPayloadCarry(contract storedversion.Contract) func(map[string]any) map[string]bool {
 	return func(payload map[string]any) map[string]bool {
-		description, _ := payload[workItemDescriptionField].(string)
-		return workItemsCarry(contract, description == "")
+		_, stated := payload[workItemDescriptionField].(string)
+		return workItemsCarry(contract, !stated)
 	}
 }
 

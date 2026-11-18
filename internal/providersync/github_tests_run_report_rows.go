@@ -87,6 +87,8 @@ type githubTestsParsedReport struct {
 	Suites   []testSuiteResultRow
 	Cases    []testCaseResultRow
 	Coverage []coverageSnapshotRow
+	// Reports is the number of members parsed whole as a report, zero-row reports included.
+	Reports int
 }
 
 func (report githubTestsParsedReport) rows() int {

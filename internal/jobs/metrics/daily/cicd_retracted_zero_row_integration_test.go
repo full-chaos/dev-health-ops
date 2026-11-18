@@ -38,7 +38,6 @@ func TestZeroRowCheckReadsARetiredCICDDayAsNoOutput(t *testing.T) {
 			t.Fatalf("%v\n%s", err, statement)
 		}
 	}
-	exec(`ALTER TABLE cicd_metrics_daily ADD COLUMN IF NOT EXISTS retracted UInt8 DEFAULT 0`)
 
 	const (
 		org  = "14016000-0000-4000-8000-0000000000f0"

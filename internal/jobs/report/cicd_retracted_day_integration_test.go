@@ -18,11 +18,6 @@ const (
 	retiredNext = "2026-01-11"
 )
 
-func (e *pooledEnv) ensureRetractedColumn() {
-	e.t.Helper()
-	e.exec(`ALTER TABLE cicd_metrics_daily ADD COLUMN IF NOT EXISTS retracted UInt8 DEFAULT 0`)
-}
-
 // retireCICDDay writes the row that retires a repository-day: the key, a computed_at one second after the newest stored
 // row of the key, retracted = 1 and the column default in every measure.
 func (e *pooledEnv) retireCICDDay(org, repo, day string) {
@@ -51,7 +46,6 @@ func mustPoints(t *testing.T, label string, got, want map[string]float64) {
 // retired. D reads absent; the window counts the run once.
 func TestRegistryCicdRetiredDayReadsAbsent(t *testing.T) {
 	e := startPooledEnv(t)
-	e.ensureRetractedColumn()
 	org := e.newOrg()
 	e.insertCICDRuns(org, retiredRepo, cicdRun{id: "r1", status: "failure", queued: "2026-01-10 23:00:00.000",
 		started: "2026-01-10 23:05:00.000", finished: "2026-01-10 23:35:00.000", synced: "2026-01-10 23:40:00.000"})
@@ -81,7 +75,6 @@ func TestRegistryCicdRetiredDayReadsAbsent(t *testing.T) {
 // synced late, after the day's newest row retired it) until the day is computed again.
 func TestRegistryCicdRetiredDayAdmitsNoLateRun(t *testing.T) {
 	e := startPooledEnv(t)
-	e.ensureRetractedColumn()
 	org := e.newOrg()
 	e.insertCICDRuns(org, retiredRepo, cicdRun{id: "r1", status: "success", queued: "2026-01-10 10:00:00.000",
 		started: "2026-01-10 10:05:00.000", finished: "2026-01-10 10:35:00.000", synced: "2026-01-10 10:40:00.000"})
@@ -105,7 +98,6 @@ func TestRegistryCicdRetiredDayAdmitsNoLateRun(t *testing.T) {
 // source admits the day's runs again.
 func TestRegistryCicdLiveRowAfterARetractionIsServed(t *testing.T) {
 	e := startPooledEnv(t)
-	e.ensureRetractedColumn()
 	org := e.newOrg()
 	e.insertCICDRuns(org, retiredRepo, cicdRun{id: "r1", status: "success", queued: "2026-01-10 10:00:00.000",
 		started: "2026-01-10 10:05:00.000", finished: "2026-01-10 10:35:00.000", synced: "2026-01-10 10:40:00.000"})
@@ -122,7 +114,6 @@ func TestRegistryCicdLiveRowAfterARetractionIsServed(t *testing.T) {
 // column read. The values are the ones that build gives on this seed.
 func TestRegistryCicdLiveRowsReadAsBefore(t *testing.T) {
 	e := startPooledEnv(t)
-	e.ensureRetractedColumn()
 	org := e.newOrg()
 	const other = "14016000-0000-4000-8000-0000000000b1"
 	seedReportCell(e, org, retiredRepo)

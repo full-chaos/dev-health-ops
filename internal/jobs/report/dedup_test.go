@@ -101,7 +101,6 @@ func TestDedupFromSourceEveryAppendOnlyTableAndEveryReplacingTable(t *testing.T)
 		// is read first (LIMIT 1 BY) and the retraction rows are dropped
 		// after, by the row test of the table registry.
 		{"work_item_metrics_daily", "(SELECT * FROM (SELECT * FROM work_item_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, provider, day, work_scope_id, team_id, row_view) AS work_item_metrics_daily WHERE " + teamkeytables.WorkItemMetricsDaily.LiveRow("work_item_metrics_daily.") + " AND " + rowview.OrgPredicate("work_item_metrics_daily", "") + ") AS work_item_metrics_daily"},
-		{"cicd_metrics_daily", "(SELECT * FROM cicd_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day) AS cicd_metrics_daily"},
 		{"deploy_metrics_daily", "(SELECT * FROM deploy_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day) AS deploy_metrics_daily"},
 		{"incident_metrics_daily", "(SELECT * FROM incident_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day) AS incident_metrics_daily"},
 		{"repo_metrics_daily", "(SELECT * FROM repo_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day) AS repo_metrics_daily"},
@@ -111,6 +110,8 @@ func TestDedupFromSourceEveryAppendOnlyTableAndEveryReplacingTable(t *testing.T)
 		// The two plain MergeTree tables with the rule in their own writers.
 		{"work_item_completion_daily", "(SELECT * FROM (SELECT * FROM work_item_completion_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day, team_id) AS work_item_completion_daily WHERE (work_item_completion_daily.delivery_units != 0 OR work_item_completion_daily.work_items_completed != 0 OR work_item_completion_daily.prs_merged != 0 OR work_item_completion_daily.churn_loc != 0)) AS work_item_completion_daily"},
 		{"issue_type_metrics_daily", "(SELECT * FROM (SELECT * FROM issue_type_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day, provider, team_id, issue_type_norm) AS issue_type_metrics_daily WHERE (issue_type_metrics_daily.created_count != 0 OR issue_type_metrics_daily.completed_count != 0 OR issue_type_metrics_daily.active_count != 0)) AS issue_type_metrics_daily"},
+		// A table whose own writer marks the retraction row in a Retracted column (migration 159).
+		{"cicd_metrics_daily", "(SELECT * FROM (SELECT * FROM cicd_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day) AS cicd_metrics_daily WHERE (cicd_metrics_daily.retracted = 0)) AS cicd_metrics_daily"},
 		{"user_metrics_daily", "(SELECT * FROM (SELECT * FROM user_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, author_email, day) AS user_metrics_daily WHERE " + teamkeytables.UserMetricsDaily.LiveRow("user_metrics_daily.") + ") AS user_metrics_daily"},
 		{"testops_pipeline_metrics_daily", "(SELECT * FROM testops_pipeline_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day) AS testops_pipeline_metrics_daily"},
 		{"testops_test_metrics_daily", "(SELECT * FROM testops_test_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day) AS testops_test_metrics_daily"},

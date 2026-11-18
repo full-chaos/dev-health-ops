@@ -218,7 +218,7 @@ func validatePagerDutyServiceMappingRows(
 
 func pagerDutyMappingSourceValid(value string) bool {
 	switch pagerDutyServiceMappingSource(value) {
-	case pagerDutyMappingAdmin, pagerDutyMappingMetadata, pagerDutyMappingCompass, pagerDutyMappingHeuristic:
+	case pagerDutyMappingAdmin, pagerDutyMappingMetadata, pagerDutyMappingCompass:
 		return true
 	default:
 		return false

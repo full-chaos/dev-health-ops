@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"strings"
 	"time"
+
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 )
 
 // RetractedColumn is the UInt8 column (DEFAULT 0) of the six benchmarking
@@ -77,18 +79,13 @@ func (table benchmarkingOutputTable) liveKeysQuery() string {
 		" ORDER BY " + keys
 }
 
-func (table benchmarkingOutputTable) retractionInsert() string {
-	return "INSERT INTO " + table.table + " (org_id, " + table.day + ", " + table.keyList() + ", " +
-		RetractedColumn + ", computed_at)"
-}
-
 type benchmarkingLiveKey struct {
 	values []any
 	stored time.Time
 }
 
 func (table benchmarkingOutputTable) loadLiveKeys(
-	ctx context.Context, conn staleKeyConn, organizationID string, day time.Time,
+	ctx context.Context, conn driver.Conn, organizationID string, day time.Time,
 ) ([]benchmarkingLiveKey, error) {
 	rows, err := conn.Query(ctx, table.liveKeysQuery(), organizationID, day)
 	if err != nil {
@@ -231,7 +228,10 @@ func (executor *BenchmarkingFinalizeExecutor) retireTable(
 	if err != nil || len(live) == 0 {
 		return 0, err
 	}
-	batch, err := executor.conn.PrepareBatch(ctx, table.retractionInsert())
+	// The row copies the key of the stored row it retracts (loadLiveKeys):
+	// org_id, the day and the key columns; no team is computed.
+	batch, err := executor.conn.PrepareBatch(ctx, "INSERT INTO "+table.table+" (org_id, "+table.day+", "+
+		table.keyList()+", "+RetractedColumn+", computed_at)")
 	if err != nil {
 		return 0, fmt.Errorf("prepare %s retraction batch: %w", table.table, err)
 	}

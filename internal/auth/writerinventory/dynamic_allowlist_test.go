@@ -76,6 +76,10 @@ var DynamicAllowlist = []Entry{
 // DynamicClickHouseSites are dynamic INSERT sites that write ClickHouse tables only (a clickhouse-go PrepareBatch in the
 // same function, TestDynamicClickHouseSitesArePrepareBatch): no Postgres table, so no row.
 var DynamicClickHouseSites = []DynamicSite{
+	// The empty-run retraction of benchmarking: exactly the six benchmarking output tables (testops_metric_baselines,
+	// testops_maturity_bands, testops_metric_anomalies, testops_period_comparisons, testops_metric_correlations,
+	// testops_benchmark_insights; benchmarkingOutputTables).
+	{File: "internal/jobs/metrics/daily/benchmarking_empty_run_retire.go", Func: "BenchmarkingFinalizeExecutor.retireTable", Verb: "INSERT"},
 	{File: "internal/jobs/metrics/daily/stale_team_keys.go", Func: "writeStaleKeyZeroRows", Verb: "INSERT"},
 	{File: "internal/providerfoundation/sinks.go", Func: "DefaultClickHouseBatch", Verb: "INSERT"},
 	{File: "internal/providersync/catalog_evidence_start.go", Func: "writeCatalogEvidenceCarry", Verb: "INSERT"},

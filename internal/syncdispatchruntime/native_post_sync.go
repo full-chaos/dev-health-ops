@@ -623,12 +623,12 @@ func loadPostSyncPlan(
 	now time.Time,
 ) (*PostSyncPlan, error) {
 	var orgID, integrationID string
-	var runStartedAt *time.Time
+	var runStartedAt, runCompletedAt *time.Time
 	err := tx.QueryRow(ctx, `
-SELECT org_id, integration_id::text, COALESCE(started_at, created_at)
+SELECT org_id, integration_id::text, COALESCE(started_at, created_at), completed_at
 FROM public.sync_runs
 WHERE id = $1::uuid AND org_id = $2
-FOR SHARE`, args.SyncRunID(), args.OrganizationID()).Scan(&orgID, &integrationID, &runStartedAt)
+FOR SHARE`, args.SyncRunID(), args.OrganizationID()).Scan(&orgID, &integrationID, &runStartedAt, &runCompletedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -649,7 +649,15 @@ ORDER BY id`, args.SyncRunID())
 	if runStartedAt != nil {
 		startedAt = runStartedAt.UTC()
 	}
-	workItemWindows := newWorkItemDayAccumulator(startedAt, now)
+	// The plan window closes at the run's own completion time, which the
+	// finalize writes in the transaction that arms this delivery, so a late or
+	// re-driven delivery plans the run's days, not the days of its own clock
+	// (CHAOS-14115).
+	anchor := now
+	if runCompletedAt != nil {
+		anchor = runCompletedAt.UTC()
+	}
+	workItemWindows := newWorkItemDayAccumulator(startedAt, anchor)
 	var (
 		targets        = map[string]struct{}{}
 		from           *time.Time
@@ -729,7 +737,7 @@ LIMIT 1`, orgID, integrationID).Scan(&autoImport); err != nil && !errors.Is(err,
 	git := writesGitRows(targets)
 	dora := git || hasDeployments || hasCICD || hasIncidents || hasOperational
 	dailyRelevant := dailyMetricsTrigger(git, hasWorkItems, hasCICD, hasDeployments, hasIncidents)
-	targetDay := now
+	targetDay := anchor
 	backfillDays := 1
 	if to != nil {
 		targetDay = *to
@@ -742,8 +750,12 @@ LIMIT 1`, orgID, integrationID).Scan(&autoImport); err != nil && !errors.Is(err,
 			backfillDays = 1
 		}
 	}
-	currentSingleDay := (from == nil && to == nil) ||
-		(from != nil && to != nil && sameUTCDate(*from, *to) && sameUTCDate(*to, now))
+	// Complexity scans current file contents and writes one row for its target
+	// day (complexity.BuildSnapshots), so it is planned only when that day is
+	// still today on this delivery's clock; a late delivery leaves it to the
+	// fixed schedule.
+	currentSingleDay := sameUTCDate(targetDay, now) && ((from == nil && to == nil) ||
+		(from != nil && to != nil && sameUTCDate(*from, *to) && sameUTCDate(*to, now)))
 	var workItemWindowDays []time.Time
 	if hasWorkItems && dailyRelevant {
 		workItemWindowDays, err = workItemWindows.days()

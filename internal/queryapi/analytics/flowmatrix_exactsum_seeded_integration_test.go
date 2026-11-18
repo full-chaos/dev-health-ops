@@ -15,6 +15,7 @@ import (
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
@@ -77,6 +78,7 @@ func TestFlowMatrixInvestmentAnswerIsTheSameOnEveryRun(t *testing.T) {
 			t.Fatalf("exec DDL %q: %v", stmt, err)
 		}
 	}
+	chschema.CreateTables(ctx, t, conn, "work_unit_investments")
 
 	const orgID = "seeded-flow-matrix-exact-sum"
 	for part := 0; part < exactSumParts; part++ {

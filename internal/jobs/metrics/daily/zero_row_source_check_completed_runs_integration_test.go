@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
@@ -60,10 +61,6 @@ func TestSourceDataCheckerAsksPipelineStabilityOnlyForADayWithACompletedRun(t *t
 ) ENGINE = MergeTree ORDER BY (org_id, repo_id)`,
 		`CREATE TABLE deploy_metrics_daily (org_id String, repo_id UUID, day Date)
  ENGINE = MergeTree ORDER BY (org_id, repo_id, day)`,
-		`CREATE TABLE test_suite_results (
-    org_id String, repo_id UUID,
-    started_at Nullable(DateTime64(3, 'UTC')), finished_at Nullable(DateTime64(3, 'UTC'))
-) ENGINE = ReplacingMergeTree ORDER BY (org_id, repo_id)`,
 		`CREATE TABLE testops_release_confidence (org_id String, repo_id UUID, day Date)
  ENGINE = MergeTree ORDER BY (org_id, repo_id, day)`,
 		`CREATE TABLE testops_pipeline_stability (org_id String, repo_id UUID, day Date)
@@ -91,6 +88,7 @@ func TestSourceDataCheckerAsksPipelineStabilityOnlyForADayWithACompletedRun(t *t
 			t.Fatal(err)
 		}
 	}
+	chschema.CreateTables(ctx, t, conn, "test_suite_results")
 
 	const (
 		orgID         = "00000000-0000-4000-8000-000000000009"

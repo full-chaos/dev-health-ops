@@ -1537,6 +1537,7 @@ type ComplexityRoot struct {
 		BacklogSize         func(childComplexity int) int
 		BacklogState        func(childComplexity int) int
 		ComputedAt          func(childComplexity int) int
+		DegradedReason      func(childComplexity int) int
 		EstimateCoverage    func(childComplexity int) int
 		ForecastID          func(childComplexity int) int
 		HistoryWeeks        func(childComplexity int) int
@@ -9010,6 +9011,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.ThroughputForecast.ComputedAt(childComplexity), true
 
+	case "ThroughputForecast.degradedReason":
+		if e.complexity.ThroughputForecast.DegradedReason == nil {
+			break
+		}
+
+		return e.complexity.ThroughputForecast.DegradedReason(childComplexity), true
+
 	case "ThroughputForecast.estimateCoverage":
 		if e.complexity.ThroughputForecast.EstimateCoverage == nil {
 			break
@@ -12233,6 +12241,8 @@ type ThroughputForecast {
   backlogState: ThroughputBacklogState!
   "The oldest of the newest work-item days that backlogSize is read from. Null when backlogState is NO_ROWS or SUPPLIED."
   backlogAsOfDay: Date
+  "Why the backlog read is not a healthy measurement: the backlogState value (STALE or NO_ROWS) when the read is stale or found no work-item row; null when backlogState is MEASURED or SUPPLIED."
+  degradedReason: String
   historyWeeks: Int!
   p50Weeks: Int
   p75Weeks: Int
@@ -50544,6 +50554,8 @@ func (ec *executionContext) fieldContext_Query_throughputForecast(ctx context.Co
 				return ec.fieldContext_ThroughputForecast_backlogState(ctx, field)
 			case "backlogAsOfDay":
 				return ec.fieldContext_ThroughputForecast_backlogAsOfDay(ctx, field)
+			case "degradedReason":
+				return ec.fieldContext_ThroughputForecast_degradedReason(ctx, field)
 			case "historyWeeks":
 				return ec.fieldContext_ThroughputForecast_historyWeeks(ctx, field)
 			case "p50Weeks":
@@ -62610,6 +62622,47 @@ func (ec *executionContext) fieldContext_ThroughputForecast_backlogAsOfDay(_ con
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type Date does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ThroughputForecast_degradedReason(ctx context.Context, field graphql.CollectedField, obj *model.ThroughputForecast) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ThroughputForecast_degradedReason(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.DegradedReason, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ThroughputForecast_degradedReason(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ThroughputForecast",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
 		},
 	}
 	return fc, nil
@@ -81326,6 +81379,8 @@ func (ec *executionContext) _ThroughputForecast(ctx context.Context, sel ast.Sel
 			}
 		case "backlogAsOfDay":
 			out.Values[i] = ec._ThroughputForecast_backlogAsOfDay(ctx, field, obj)
+		case "degradedReason":
+			out.Values[i] = ec._ThroughputForecast_degradedReason(ctx, field, obj)
 		case "historyWeeks":
 			out.Values[i] = ec._ThroughputForecast_historyWeeks(ctx, field, obj)
 			if out.Values[i] == graphql.Null {

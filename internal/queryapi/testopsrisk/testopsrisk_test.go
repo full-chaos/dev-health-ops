@@ -139,6 +139,34 @@ func same(a, b *float64) bool {
 	return *a == *b || (math.IsNaN(*a) && math.IsNaN(*b))
 }
 
+// omitAbsentParts is the one deliberate departure from the recorded Python
+// answer: Python reads a NULL part of the latest drag day as 0 hours, the Go
+// reader omits the item. The recorded file stays as Python produced it.
+func omitAbsentParts(c cell, recorded [][2]any) [][2]any {
+	var latest map[string]any
+	for _, r := range c.Daily {
+		if fp(r["quality_drag_hours"]) != nil {
+			latest = r
+		}
+	}
+	if latest == nil {
+		return recorded
+	}
+	column := map[string]string{
+		"Failure Rework":      "failure_rework_hours",
+		"Flake Investigation": "flake_investigation_hours",
+		"Queue Wait":          "queue_wait_hours",
+		"Retry Overhead":      "retry_overhead_hours",
+	}
+	out := [][2]any{}
+	for _, b := range recorded {
+		if fp(latest[column[b[0].(string)]]) != nil {
+			out = append(out, b)
+		}
+	}
+	return out
+}
+
 // The expected values were produced by running the Python resolver
 // resolve_testops_risk on the same rows (testdata/python_cells.json).
 func TestResolve_MatchesPythonCells(t *testing.T) {
@@ -188,12 +216,13 @@ func TestResolve_MatchesPythonCells(t *testing.T) {
 					t.Errorf("timeseries[%d] = %v %v want %v", i, p.Date.String(), p.RiskScore, w.Timeseries[i])
 				}
 			}
-			if len(got.QualityDragBreakdown) != len(w.Breakdown) {
-				t.Fatalf("breakdown %d want %d", len(got.QualityDragBreakdown), len(w.Breakdown))
+			wantBreakdown := omitAbsentParts(c, w.Breakdown)
+			if len(got.QualityDragBreakdown) != len(wantBreakdown) {
+				t.Fatalf("breakdown %d want %d", len(got.QualityDragBreakdown), len(wantBreakdown))
 			}
 			for i, b := range got.QualityDragBreakdown {
-				if b.Category != w.Breakdown[i][0].(string) || !same(&b.Hours, fp(w.Breakdown[i][1])) {
-					t.Errorf("breakdown[%d] = %v want %v", i, b, w.Breakdown[i])
+				if b.Category != wantBreakdown[i][0].(string) || !same(&b.Hours, fp(wantBreakdown[i][1])) {
+					t.Errorf("breakdown[%d] = %v want %v", i, b, wantBreakdown[i])
 				}
 			}
 			if len(got.QuadrantData) != len(w.Quadrant) {

@@ -335,7 +335,7 @@ flowchart TD
 > writers (the daily `work_item_attribution` family and the backstop) read the links
 > (`LoadIssueLinkedPullRequests`), and a backstop run of a repository whose ownership changed re-derives the
 > issues linked to it. **Limit:** a new or removed link is not a backstop trigger; the daily family re-derives
-> the issue on its own days only, so a removed link can leave a stale team on an older issue (CHAOS-14149).
+> the issue on its own days only, so a removed link can leave a stale team on an older issue (follow-up ticket filed).
 > An issue of any provider, a Jira or Linear item included, with no other source above and no owned
 > best-tier repository ends `unassigned`. `TestAnIssueTakesTheOwnerOfItsLinkedPullRequestsRepository`,
 > `TestAPullRequestIgnoresLinkedPullRequestRepositories`, `TestBestTierLinkedPullRequests`,

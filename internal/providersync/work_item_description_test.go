@@ -20,7 +20,7 @@ func TestBoundedWorkItemDescriptionCutsOnARuneBoundary(t *testing.T) {
 		runes int
 	}{
 		{"nil", nil, nil, 0},
-		{"empty is no description", &empty, nil, 0},
+		{"empty stays a stated empty", &empty, &empty, 0},
 		{"exactly the bound is kept whole", &exact, &exact, workItemDescriptionMaxRunes},
 		{"multibyte is cut at the bound in runes", &multibyte, nil, workItemDescriptionMaxRunes},
 	}
@@ -30,6 +30,12 @@ func TestBoundedWorkItemDescriptionCutsOnARuneBoundary(t *testing.T) {
 			if tc.want == nil && tc.runes == 0 {
 				if got != nil {
 					t.Fatalf("got %q, want nil", *got)
+				}
+				return
+			}
+			if tc.want != nil && *tc.want == "" {
+				if got == nil || *got != "" {
+					t.Fatalf("got %v, want a stated empty", got)
 				}
 				return
 			}

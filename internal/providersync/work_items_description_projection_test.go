@@ -224,7 +224,7 @@ func TestPreparedWorkItemsRouteCommitsTheDescriptionToTheSinkAndSnapshot(t *test
 // A prepared snapshot written before the projection kept description has
 // rows with no description key. Replaying one must keep the held description
 // (a push-written one) and a row that states one replaces it; a stated empty
-// text or null states none, so the held one stays.
+// text clears it and a null states none, so the held one stays.
 func TestReplayOfAPreparedSnapshotWithoutDescriptionKeepsTheHeldDescription(t *testing.T) {
 	now := time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC)
 	claim := nativeTestClaim("github", "work-items")
@@ -237,7 +237,7 @@ func TestReplayOfAPreparedSnapshotWithoutDescriptionKeepsTheHeldDescription(t *t
 	}{
 		"no key (old snapshot)": {nil, true, pushedWorkItemDescription},
 		"null":                  {nil, false, pushedWorkItemDescription},
-		"empty text":            {&empty, false, pushedWorkItemDescription},
+		"empty text":            {&empty, false, ""},
 		"stated":                {&stated, false, stated},
 	} {
 		github, linear := descriptionTestRows(now, claim.OrgID, tc.description)

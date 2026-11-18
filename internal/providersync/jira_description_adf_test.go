@@ -86,9 +86,6 @@ func TestJiraDescriptionKeepsAStringAndStatesNothingForOtherShapes(t *testing.T)
 		t.Errorf("a v2 string description=%q", valueOrNil(got))
 	}
 	for name, value := range map[string]any{
-		"null":              nil,
-		"empty string":      "",
-		"empty document":    map[string]any{"type": "doc", "version": 1, "content": []any{}},
 		"media only":        map[string]any{"type": "doc", "content": []any{map[string]any{"type": "mediaSingle", "content": []any{map[string]any{"type": "media"}}}}},
 		"a list":            []any{"x"},
 		"an integer":        42,

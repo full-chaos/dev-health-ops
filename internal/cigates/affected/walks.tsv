@@ -198,6 +198,7 @@ internal/cigates/bigboyrender	parity_test.go	internal/cigates/bigboyrender/testd
 internal/cigates/bigboyrender	parity_test.go	unexpressed	-	-
 internal/cigates/cachepoison	cachepoison_test.go	.github/workflows	dir	*
 internal/cigates/chartgates	dashboard_authslo_test.go	unexpressed	-	-
+internal/cigates/chartgates	dashboard_onequery_test.go	unexpressed	-	-
 internal/cigates/chartgates	dashboard_spangaps_test.go	unexpressed	-	-
 internal/cigates/chartgates	helpers_test.go	unexpressed	-	-
 internal/cigates/chartgates	jwt_secret_key_absent_test.go	unexpressed	-	-

@@ -92,11 +92,15 @@ func (executor *WorkItemExecutor) ComputeFamily(
 		return 0, err
 	}
 	if read.empty() {
-		retracted, err := retractReopenedCycleRows(ctx, executor.conn, run.OrganizationID, scope, nil, computedAt)
+		retracted, err := retractReopenedCycleRows(ctx, executor.conn, run.OrganizationID, scope, read.Scopes, computedAt)
 		if err != nil {
 			return wrapWorkItemScopePartialWrite("work_item", retracted, partition, err)
 		}
 		return retracted, nil
+	}
+	cycleTimes, err := keepCycleTimesOfCurrentCopies(ctx, executor.conn, run.OrganizationID, read.OrgWinnerRepos, views.Org.CycleTimes)
+	if err != nil {
+		return 0, err
 	}
 	slog.Default().DebugContext(ctx, "work_item_user_metrics_rows",
 		"org_id", run.OrganizationID, "day", scope.day.Format("2006-01-02"),
@@ -120,13 +124,13 @@ func (executor *WorkItemExecutor) ComputeFamily(
 		return wrapWorkItemScopePartialWrite("work_item", total, partition, err)
 	}
 	written, err = WriteWorkItemCycleTimes(
-		ctx, executor.conn, run.OrganizationID, views.Org.CycleTimes, computedAt,
+		ctx, executor.conn, run.OrganizationID, cycleTimes, computedAt,
 	)
 	total += written
 	if err != nil {
 		return wrapWorkItemScopePartialWrite("work_item", total, partition, err)
 	}
-	written, err = retractReopenedCycleRows(ctx, executor.conn, run.OrganizationID, scope, views.Org.CycleTimes, computedAt)
+	written, err = retractReopenedCycleRows(ctx, executor.conn, run.OrganizationID, scope, read.Scopes, computedAt)
 	total += written
 	if err != nil {
 		return wrapWorkItemScopePartialWrite("work_item", total, partition, err)

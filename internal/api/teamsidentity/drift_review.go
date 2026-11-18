@@ -10,6 +10,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 )
 
@@ -134,10 +135,20 @@ func flaggedChangeJSON(row reviewChangeRow) *pyjson.Object {
 // pendingChanges is GET /teams/pending-changes, dispatched from getTeam (the
 // literal collides with the {team_id} wildcard exactly as discover does).
 //
-// The endpoint lists every pending change in the org: like the Python route,
-// it takes no filter, so a team_id query parameter is ignored.
+// A non-empty team_id query parameter narrows the list to that team's
+// changes, resolved like any team read (a bare id names the one provider-keyed
+// team holding it, two holders answer 409); an absent or empty one lists every
+// pending change in the org. The org scope is always in the query.
 func (h handlers) pendingChanges(w http.ResponseWriter, r *http.Request) {
-	rows, err := h.store.pendingReviewRows(r.Context(), orgIDOf(r.Context()), nil)
+	var teamID *string
+	if raw := httpapi.QueryLast(r.URL.Query(), "team_id"); raw != "" {
+		resolved, ok := h.readTeamID(w, r, raw)
+		if !ok {
+			return
+		}
+		teamID = &resolved
+	}
+	rows, err := h.store.pendingReviewRows(r.Context(), orgIDOf(r.Context()), teamID)
 	if err != nil {
 		h.internal(w, r, "list pending team changes", err)
 		return

@@ -91,6 +91,15 @@ func (jobs gitLabTestsRunJobs) runAttempt() int64 {
 	return 1 + int64(jobs.retried)
 }
 
+// gitLabTestsRunAttemptOf is runAttempt over a whole job listing, before a per-run cap cuts it.
+func gitLabTestsRunAttemptOf(items []json.RawMessage) (int64, error) {
+	jobs, err := newGitLabTestsRunJobs(items)
+	if err != nil {
+		return 0, err
+	}
+	return jobs.runAttempt(), nil
+}
+
 // earlierJobIDs are the listed ids of the job's name that rank below it: the jobs it retried, oldest first.
 func (jobs gitLabTestsRunJobs) earlierJobIDs(jobID string) []string {
 	name, ok := jobs.nameOf[jobID]

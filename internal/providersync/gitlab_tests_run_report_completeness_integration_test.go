@@ -5,10 +5,8 @@ package providersync
 import (
 	"context"
 	"fmt"
-	"io"
 	"net/http"
 	"slices"
-	"strings"
 	"testing"
 	"time"
 
@@ -124,33 +122,6 @@ FROM testops_run_report_completeness FINAL WHERE org_id = ? AND run_id = ? ORDER
 	return out
 }
 
-// gitLabJobsOverrideDoer serves the include_retried job listing of the report phase (the second listing of a pipeline) from
-// reportJobs, and an empty test_report_summary; everything else goes to the wrapped doer.
-type gitLabJobsOverrideDoer struct {
-	*gitLabAllRefDoer
-	reportJobsStatus int
-	reportJobs       string
-	jobListings      int
-}
-
-func (doer *gitLabJobsOverrideDoer) Do(request *http.Request) (*http.Response, error) {
-	path := request.URL.Path
-	respond := func(status int, body string) (*http.Response, error) {
-		return &http.Response{StatusCode: status, Header: http.Header{"Content-Type": {"application/json"}}, ContentLength: -1,
-			Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
-	}
-	if strings.HasSuffix(path, "/test_report_summary") {
-		return respond(http.StatusOK, `{"test_suites":[]}`)
-	}
-	if strings.HasSuffix(path, "/jobs") && request.URL.Query().Get("include_retried") == "true" {
-		doer.jobListings++
-		if doer.jobListings == 2 && doer.reportJobsStatus != 0 {
-			return respond(doer.reportJobsStatus, doer.reportJobs)
-		}
-	}
-	return doer.gitLabAllRefDoer.Do(request)
-}
-
 func TestGitLabTestsPipelineWithASkippedReportIsNamedPartial(t *testing.T) {
 	stack := newGitLabCompletenessStack(t)
 	coverage := githubTestsZip(t, map[string]string{"coverage.info": githubTestsLCOVFixture})
@@ -168,7 +139,7 @@ func TestGitLabTestsPipelineWithASkippedReportIsNamedPartial(t *testing.T) {
 			want: gitLabCompletenessVerdict{1, 0, []string{"artifact_oversized"}, 3, 2}, wantRuns: [3]uint64{1, 1, 0}},
 		// One report member over the compression-ratio guard inside a read artifact.
 		{name: "R2_report_member_dropped", archive: silentSkipArchives(t)[githubTestsCompressionRatioCause], jobs: []gitLabAllRefArtifactJob{{ID: "21"}},
-			want: gitLabCompletenessVerdict{1, 0, []string{"compression_ratio"}, 2, 2}, wantRuns: [3]uint64{1, 1, 0}},
+			want: gitLabCompletenessVerdict{1, 0, []string{"compression_ratio"}, 2, 1}, wantRuns: [3]uint64{1, 1, 0}},
 		// The native test_report over the object cap: no suite is kept, the read artifact's coverage is. The run has no kept
 		// suite, so the suite readers do not count it; its row still names it partial.
 		{name: "R3_report_too_large", archive: coverage, jobs: []gitLabAllRefArtifactJob{{ID: "21"}}, pad: nativeMaxObjectBytes + 1,

@@ -613,6 +613,7 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 					MaxPages: gitLabTestsPerRunJobPages,
 				})
 				runJobs, jobItems := gitLabTestsRunJobs{}, []json.RawMessage(nil)
+				attempt := int64(1)
 				if jobErr != nil {
 					if fatal := gitLabTestsOptionalError(ctx, jobErr); fatal != nil {
 						return fatal
@@ -622,6 +623,11 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 				} else {
 					cursor.Pages += jobPage.Pages
 					jobItems = jobPage.Items
+					// The attempt counts the retries of the whole listing: a retry past the per-run cap is still a new key.
+					var attemptErr error
+					if attempt, attemptErr = gitLabTestsRunAttemptOf(jobItems); attemptErr != nil {
+						return attemptErr
+					}
 					switch {
 					case len(jobItems) > githubTestsMaxJobsPerRun:
 						jobItems = jobItems[:githubTestsMaxJobsPerRun]
@@ -741,14 +747,15 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 						if rows.ReportsParsed > 0 || rows.GuardDropped > 0 {
 							runReport.expected++
 						}
-						if rows.ReportsRead > 0 {
+						// A source is admitted only when it was read whole: a guard-dropped member leaves it out.
+						if rows.ReportsRead > 0 && rows.GuardDropped == 0 {
 							runReport.admitted++
 						}
 						coverage = append(coverage, rows.Coverage...)
 					}
 				}
 				// One verdict row per pipeline, in the emission that carries its report rows (CHAOS-13981).
-				completeness = gitLabTestsRunReportCompleteness(claim, repoID, payload, runJobs.runAttempt(), runReport, normalizedAt)
+				completeness = gitLabTestsRunReportCompleteness(claim, repoID, payload, attempt, runReport, normalizedAt)
 			}
 			cursor.Suites += len(suites)
 			cursor.Cases += len(cases)

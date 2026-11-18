@@ -2,13 +2,45 @@ package providersync
 
 import (
 	"encoding/json"
+	"io"
+	"net/http"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
 // CHAOS-13981: the GitLab tests route writes one report-completeness row per finished pipeline with report sources.
+
+// gitLabJobsOverrideDoer serves the include_retried job listing of the report phase (the second listing of a pipeline) from
+// reportJobs, and an empty test_report_summary; everything else goes to the wrapped doer.
+type gitLabJobsOverrideDoer struct {
+	*gitLabAllRefDoer
+	reportJobsStatus int
+	reportJobs       string
+	jobListings      int
+}
+
+func (doer *gitLabJobsOverrideDoer) Do(request *http.Request) (*http.Response, error) {
+	path := request.URL.Path
+	respond := func(status int, body string) (*http.Response, error) {
+		return &http.Response{StatusCode: status, Header: http.Header{"Content-Type": {"application/json"}}, ContentLength: -1,
+			Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
+	}
+	if strings.HasSuffix(path, "/test_report_summary") {
+		return respond(http.StatusOK, `{"test_suites":[]}`)
+	}
+	if strings.HasSuffix(path, "/jobs") && request.URL.Query().Get("include_retried") == "true" {
+		doer.jobListings++
+		if doer.jobListings == 2 && doer.reportJobsStatus != 0 {
+			return respond(doer.reportJobsStatus, doer.reportJobs)
+		}
+	}
+	return doer.gitLabAllRefDoer.Do(request)
+}
 
 func gitLabCompletenessRows(t *testing.T, batch CompleteRouteBatch) []testOpsRunReportCompletenessRow {
 	t.Helper()
@@ -158,5 +190,50 @@ func TestGitLabTestsRouteNamesSilentArtifactLossesOnTheRow(t *testing.T) {
 				t.Fatalf("rows %+v, want reasons %v expected %d admitted %d", rows, cell.wantReasons, cell.wantExpected, cell.wantAdmitted)
 			}
 		})
+	}
+}
+
+// An artifact with a report read and a member dropped at a size guard was not read whole: it is a source, not an admitted one.
+func TestGitLabTestsGuardDroppedMemberKeepsTheArtifactOutOfAdmitted(t *testing.T) {
+	for cause, archive := range silentSkipArchives(t) {
+		t.Run(cause, func(t *testing.T) {
+			pipelines := gitLabAllRefPipelines()[:1]
+			pipelines[0].ArtifactJobs = []gitLabAllRefArtifactJob{{ID: "21"}}
+			walk, _ := gitLabAllRefCollectChunks(t, &gitLabAllRefDoer{t: t, archive: archive, pipelines: pipelines}, nativeTestClaim("gitlab", "tests"))
+			if walk.err != nil {
+				t.Fatal(walk.err)
+			}
+			rows := gitLabCompletenessRows(t, walk.batch)
+			if len(rows) != 1 || rows[0].Complete || !slices.Equal(rows[0].Reasons, []string{cause}) ||
+				rows[0].ReportsExpected != 2 || rows[0].ReportsAdmitted != 1 {
+				t.Fatalf("rows %+v, want partial [%s] expected 2 admitted 1 (the native report only)", rows, cause)
+			}
+		})
+	}
+}
+
+// A retry whose retried marker is past the per-run job cap is still a new key: the attempt counts the whole listing.
+func TestGitLabTestsRetryPastTheJobCapIsANewAttempt(t *testing.T) {
+	jobs := make([]string, 0, githubTestsMaxJobsPerRun+2)
+	for id := 1; id <= githubTestsMaxJobsPerRun; id++ {
+		jobs = append(jobs, `{"id":`+strconv.Itoa(id)+`,"name":"job-`+strconv.Itoa(id)+`","status":"success"}`)
+	}
+	jobs = append(jobs, `{"id":1001,"name":"job-1","status":"success","retried":true}`, `{"id":1002,"name":"job-1","status":"success"}`)
+	doer := &gitLabJobsOverrideDoer{gitLabAllRefDoer: &gitLabAllRefDoer{t: t, pipelines: gitLabAllRefPipelines()[:1]},
+		reportJobsStatus: http.StatusOK, reportJobs: "[" + strings.Join(jobs, ",") + "]"}
+	client := gitLabRepositoryClient(t, doer, "https://gitlab.example")
+	var batch CompleteRouteBatch
+	err := (GitLabTestsRouteHandler{}).CollectChunks(t.Context(), nativeTestClaim("gitlab", "tests"), providerfoundation.Credential{}, client,
+		time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC), "",
+		func(emission ChunkRouteEmission) error {
+			batch.Effects = append(batch.Effects, emission.Batch.Effects...)
+			return nil
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := gitLabCompletenessRows(t, batch)
+	if len(rows) != 1 || rows[0].RunAttempt != 2 || !slices.Equal(rows[0].Reasons, []string{"per_run_cap"}) {
+		t.Fatalf("rows %+v, want attempt 2 partial [per_run_cap]", rows)
 	}
 }

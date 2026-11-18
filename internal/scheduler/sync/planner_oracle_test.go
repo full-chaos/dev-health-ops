@@ -319,6 +319,7 @@ func TestBuildScheduledPlanMatchesFrozenPythonPlanner(t *testing.T) {
 
 	want := frozenPlannerOracle(t, "planner-scheduled.golden.json", cases)
 	applyWorkItemFamilyWindowRule(t, cases, want)
+	applyTestOpsFoldWindowRule(t, cases, want)
 	for _, test := range cases {
 		now, err := time.Parse(time.RFC3339, test.Now)
 		if err != nil {
@@ -458,6 +459,67 @@ func applyWorkItemFamilyWindowRule(t *testing.T, cases []plannerOracleCase, want
 	slices.Sort(changed)
 	if !slices.Equal(changed, workItemFamilyWindowDivergence) {
 		t.Fatalf("cases whose frozen work-items window is wider than the cap:\n got  %v\n want %v", changed, workItemFamilyWindowDivergence)
+	}
+}
+
+// testOpsFoldWindowDivergence names every scheduled oracle case whose Go plan
+// differs from the frozen Python answer by the CHAOS-13827 rule, and it is the
+// whole difference: the window END of a folded cicd unit that tests
+// contributed to. The frozen planner capped each member alone, so the MEDIUM
+// cicd member left the merged window uncapped. Go caps the merged window when
+// the HEAVY tests member contributes. The rule is applied to the frozen answer
+// by applyTestOpsFoldWindowRule from the case inputs, never by calling the
+// planner's own ratchet. The list is closed: a case that starts or stops
+// diverging fails the test.
+var testOpsFoldWindowDivergence = []string{
+	"provider_matrix_github",
+	"provider_matrix_gitlab",
+}
+
+// applyTestOpsFoldWindowRule rewrites the frozen answer in place: an
+// incremental cicd unit stamped family_dataset_tests with a resolved start ends
+// no later than its start plus the HEAVY cap (seven days, or one day more than
+// the watermark overlap in whole days when that is larger).
+func applyTestOpsFoldWindowRule(t *testing.T, cases []plannerOracleCase, want map[string][]map[string]any) {
+	t.Helper()
+	changed := []string{}
+	for _, test := range cases {
+		capDays := int64(7)
+		if overlapDays := int64(test.WatermarkOverlapSeconds)/86400 + 1; test.WatermarkOverlapSeconds > 0 && overlapDays > capDays {
+			capDays = overlapDays
+		}
+		caseChanged := false
+		for _, unit := range want[test.ID] {
+			flags, _ := unit["processor_flags"].(map[string]any)
+			if unit["dataset_key"] != "cicd" || unit["mode"] != SyncModeIncremental || flags["family_dataset_tests"] != true {
+				continue
+			}
+			startText, hasStart := unit["window_start"].(string)
+			endText, hasEnd := unit["window_end"].(string)
+			if !hasStart || !hasEnd {
+				continue
+			}
+			start, err := time.Parse(time.RFC3339Nano, startText)
+			if err != nil {
+				t.Fatalf("%s: frozen window_start %q: %v", test.ID, startText, err)
+			}
+			end, err := time.Parse(time.RFC3339Nano, endText)
+			if err != nil {
+				t.Fatalf("%s: frozen window_end %q: %v", test.ID, endText, err)
+			}
+			capped := start.Add(time.Duration(capDays) * 24 * time.Hour)
+			if capped.Before(end) {
+				unit["window_end"] = capped.UTC().Format(time.RFC3339Nano)
+				caseChanged = true
+			}
+		}
+		if caseChanged {
+			changed = append(changed, test.ID)
+		}
+	}
+	slices.Sort(changed)
+	if !slices.Equal(changed, testOpsFoldWindowDivergence) {
+		t.Fatalf("cases whose frozen folded cicd window is wider than the cap:\n got  %v\n want %v", changed, testOpsFoldWindowDivergence)
 	}
 }
 

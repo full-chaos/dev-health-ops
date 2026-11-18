@@ -630,12 +630,10 @@ internal/queryapi/server/testdata/wire_capture/saved_report_captured.graphql
 internal/queryapi/server/testdata/wire_capture/saved_reports_captured.graphql
 internal/queryapi/server/testdata/wire_capture/securityalerts_captured.graphql
 internal/queryapi/server/testdata/wire_capture/securityoverview_captured.graphql
-internal/queryapi/server/testdata/wire_capture/testopsrisk_captured.graphql
 internal/queryapi/server/testdata/wire_capture/trigger_report_captured.graphql
 internal/queryapi/server/testdata/wire_capture/update_saved_report_captured.graphql
 internal/queryapi/server/testdata/wire_capture/workunitteamattributions_captured.graphql
 internal/queryapi/server/testdata/wire_form/capacityForecasts.graphql
-internal/queryapi/server/testdata/wire_form/throughputForecast.graphql
 internal/queryapi/server/testdata/work_unit_explain/malformed_end_date.json
 internal/queryapi/server/testdata/work_unit_explain/malformed_start_date.json
 internal/queryapi/server/testdata/work_unit_explain/non_numeric_range_days.json

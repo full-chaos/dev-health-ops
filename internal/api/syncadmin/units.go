@@ -42,7 +42,7 @@ type decodedUnit struct {
 // slice) as SyncRunUnitResponse.
 func (h *handlers) getRunUnits(w http.ResponseWriter, r *http.Request) {
 	var errs pybody.Errors
-	query := parseUnitsQuery(r.URL.Query(), &errs)
+	query := parseUnitsQuery(pybody.Query(r), &errs)
 	if len(errs) > 0 {
 		writeQueryErrors(w, errs)
 		return

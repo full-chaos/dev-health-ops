@@ -119,7 +119,13 @@ A GitHub PR closing Linear `ENG-2400` borrows that issue's `ENG` team.
 >    provider's work item sharing the same identity string. `manual_members`
 >    is the admin-EXCLUSIVE subset (confirmed by tracing every write site);
 >    provider auto-import carries it forward unchanged on every sync write
->    and never sets or clears it. The roster column
+>    and never sets or clears it: every writer that does not edit the roster
+>    reads it from `teams FINAL` inside its own insert statement, and an admin
+>    add or remove applies its change there too; a team the id carry moves to
+>    a new id takes the roster of its old id, read there when the old id
+>    changed after the carry read it. An admin delete ends the
+>    roster: a team re-created by sync after an admin delete starts with an
+>    empty manual roster. The roster column
 >    `teams.members` is gone (no Go reader or writer; the frozen Python code still names it; migration 118 drops the
 >    column): the provider layer below is `team_memberships` alone.
 > 2. **Provider layer (the fallback).** `team_memberships`, populated
@@ -298,6 +304,25 @@ flowchart TD
 > `TestAPullRequestKeepsItsLinkedIssueDonor`, `TestAMemberFallbackRuleIsProvenanceOnly` and
 > `TestAWorkItemTeamIsReachedThroughOwnershipOnlyInEveryDailyTable` (every daily table) pin it.
 
+> **An issue takes no `repo_ownership` from its own `repo_id`.** An issue's repositories are the
+> repositories of its linked pull requests (`work_graph_issue_pr`), never its own `work_items.repo_id`
+> (data-and-storage, entity tree). Only a pull or merge request (`type` `pr` on GitHub,
+> `merge_request` on GitLab) takes the `repo_ownership` (3) candidate from its own `repo_id`
+> (`repoByID` and the GitLab name-keyed `repoByNames`), and only a pull or merge request matches a
+> `repo` manual rule through its own repository. An issue of any provider, a Jira or Linear item
+> included, with no other source above ends `unassigned`.
+>
+> **The membership ownership gate applies to a pull or merge request and to other repo-bearing items, and
+> does not apply to an issue**: an issue has no repository field of its own and the gate reads
+> no linked-pull-request repository. The assignee's membership row of an issue is kept as provenance
+> (`is_primary = 0`, never the primary) and its evidence names `ownership=ownership_gate_not_applied_issue`.
+> A pull or merge request keeps every row and evidence it had. An issue's repo ownership is no longer
+> a donor row either: a pull or merge request linked to an issue copies only the issue's other donor
+> rows (`native_team`, `issue_project`, `project_ownership`). `TestIssueTakesNoTeamFromItsOwnRepoField`,
+> `TestRepoScopedManualRuleNeverMatchesAnIssueThroughItsOwnRepo`,
+> `TestIssueMembershipRowNamesTheGateNotApplied`, `TestPRMembershipPassThroughWithoutOwnershipFactIsUnchanged`,
+> `TestPRMembershipWithOwnershipFactEvidenceUnchanged` and `TestPRLinkedToAnIssueWhoseOnlyDonorRowWasRepoOwnership` pin it.
+
 **Invariants:** the **winner is the highest-precedence matching source** (every matching source that
 passes its own gate is still persisted as a candidate — precedence decides `is_primary`, not which
 sources are computed); `assignee_membership` (4) and `author_membership` (6) additionally require
@@ -413,7 +438,7 @@ means the ClickHouse `teams` dimension is empty.
 | 0 | `native_team` | `WorkItem.native_team_key` → `teams` of the item's provider, else admin teams (section 0.4e) | high | all below | — (top) | `native_team_key` |
 | 1 | `issue_project` | native issue project key → `teams` of the item's provider that hold it, else admin teams (section 0.4e) | high | 2–8 | 0 | `project_id, owner_team` |
 | 2 | `project_ownership` | `team_project_ownership` | high | 3–8 | 0–1 | `project_id, provider` |
-| 3 | `repo_ownership` | `team_repo_ownership` | medium; high from a main-owner row (`is_primary = 1`, e.g. the inferred main owner) | 4–8 | 0–2 | `repo_full_name` |
+| 3 | `repo_ownership` (a pull / merge request only: an issue takes none from its own `repo_id`) | `team_repo_ownership` | medium; high from a main-owner row (`is_primary = 1`, e.g. the inferred main owner) | 4–8 | 0–2 | `repo_full_name` |
 | 4 | `assignee_membership` | two-layer: `identities`/`teams` (admin override, single-team) else `team_memberships` (provider fallback, single-team) | high (admin) / medium (provider) | none: provenance only, never `is_primary` | 0–3 | `canonical_id, identity` (evidence text: `assignee_membership=<id>`) |
 | 5 | `linked_issue` | `work_item_dependencies` donor → the team of the donor's own attribution row; the primary team of a pull or merge request only, provenance only (`is_primary = 0`) for an issue | medium | 6–8 (a pull or merge request) | 0–3 | `linked_issue=<donor_work_item_id>;dependency_type=<rel>;donor_provider=<p>;donor_source=<donor row source>` |
 | 6 | `author_membership` | PR/MR-only + two-layer (same as row 4), non-bot | high (admin) / medium (provider) | none: provenance only, never `is_primary` | 0–5 | `canonical_id, identity` (evidence text: `reporter=<id>`) |
@@ -1529,6 +1554,7 @@ project (section 0.1): a native team key gives one team.
     `TestTheTeamChurnQuadrantSumsEachRepositoryTimesOwnerShareAndConservesTheOrgChurn`.
   - Known limit: owners whose team is inactive hold a share that no point shows, so the organization's units in a
     repository with an inactive owner are partly in no point.
+- **`user_metrics_daily.team_id` is a membership label, NOT team attribution; ownership-based team answers must not read it.** The row the finalize step writes for a person holds the person's first team membership on the day, else `unassigned`: the git row is always written with `unassigned`, and the IC finalize step puts the membership team over it. Limit: a person who is a member of several teams gets only the FIRST of them, in the rank order of the attribution (primary first, then the more specific, then the lower priority number, the newer row, the team id); the other teams are not in the column. The rank applies after the teams whose newest row is inactive are left out: the next active membership is taken, else `unassigned`. This is the rule of a live row the finalize step writes; a retraction row (the row of zeros of the stale-key rule) carries the `team_id` stored on the row it retracts. The column is a label, never team attribution. A team answer takes its team from repository or project ownership (for a per-person table, through `repo_id` and the owner shares), never from this column. The AI analytics reviewer concentration (`aiReviewLoad`) and the cognitive load reader follow this rule: a team scope is the repositories the team owns (`teamscope.HeldRepoIDs`), and the census `TestNoAIAnalyticsOrCognitiveLoadReaderScopesUserMetricsDailyByTeamID` (`internal/queryapi/aianalytics`) fails on a read of `user_metrics_daily` in those packages that filters `team_id`.
 - **The person quadrant reads only that person's own rows.** At the person grain the quadrant resolves the
   person id to the person's identity strings and binds each read (`user_metrics_daily.identity_id`,
   `work_item_user_metrics_daily.user_identity`) to them. There is no membership-team lookup (`identities.team_ids`) and

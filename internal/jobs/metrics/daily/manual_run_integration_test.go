@@ -90,7 +90,7 @@ func TestStartManualDailyRunWithDeferredDiscoveryMaterializesThroughTheSharedPat
 		"00000000-0000-4000-8000-000000000002",
 		"00000000-0000-4000-8000-000000000001",
 	}
-	created, err := store.MaterializeScheduledFanout(ctx, *claimed, discovered)
+	created, err := store.MaterializeScheduledFanout(ctx, *claimed, discovered, publisher)
 	if err != nil || !created {
 		t.Fatalf("manual-daily deferred-discovery materialize=%t err=%v -- before the CHAOS-5055 fix this returned ErrInvalidState, permanently stranding the run", created, err)
 	}

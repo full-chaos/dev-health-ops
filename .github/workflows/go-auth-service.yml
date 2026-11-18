@@ -374,7 +374,7 @@ jobs:
           - package: internal/auth/signedtoken
             targets: FuzzValidSignedToken
           - package: internal/auth/httpapi
-            targets: FuzzParseLimit FuzzParseForwardedTrust
+            targets: FuzzParseLimit FuzzParseForwardedTrust FuzzParseQueryMatchesNetURLOnWellFormedInput
           - package: internal/auth/clientaddr
             targets: FuzzParseTrust
           - package: internal/auth/keystore

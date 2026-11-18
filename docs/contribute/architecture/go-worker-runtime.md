@@ -451,6 +451,17 @@ and retry it with a bounded backfill (`POST
 `sync_watermarks`, see [ingestion-and-backfills](../../operate/run/ingestion-and-backfills.md))
 scoped to the affected repo and the marker's run window.
 
+Two in-archive member skips are recorded the same way: `compression_ratio`
+(a report member over the compression-ratio guard) and `archive_entry_cap`
+(report members past the per-archive entry cap). Both are non-blocking
+`report_member` causes that advance the watermark, so the run reads
+`reports_complete=false` instead of complete.
+
+The GitLab route shares that archive parse but fails on any other member skip, so it takes these two out and records them
+as its own chunked truncation component `report_member_dropped` (coverage_complete is false; the component advances the
+watermark). The same string is a `dev_health_provider_artifact_skipped_total{reason}` label value. The GitLab direct route
+does not record them.
+
 `dev_health_cicd_partial_success_total{reason}` counts, at
 unit-completion time, every cicd/tests unit that advanced its watermark while
 still carrying incomplete evidence — the UNIT-level view of "success, but with

@@ -15,6 +15,8 @@
 # internal/cigates/testshard TestTheRacePlanKnobsRefuseEveryOtherValueAndTheCapCountsOnlyTheRootModule (CHAOS-13958): its local -race time, 95.7 s, rounded up.
 # internal/cigates/testshard TestTheRacePlanKeepsTheHeavyPackagesApartAndOffTheListedParts, TestTheOldRacePlanStacksTheHeavyTrioOnOneLeg and
 # TestTheRacePlanRefusesABadApartRowAndWarnsWhenNoLegIsFree (CHAOS-13958): their local -race times, 63.95, 63.96 and 0.05 s, rounded up.
+# internal/cigates/testshard TestTheRacePlanKeepsTheHeavyPackagesApartAndOffTheListedParts, TestTheRacePlanWithoutApartRowsStacksHeavyPackages
+# and TestTheShippedRaceLegsCoverEveryRacePackageOnce (CHAOS-13833, 16 legs): their local -race times, 81.80, 66.40 and 84.60 s, rounded up.
 # Sorted (LC_ALL=C) by package, then test.
 internal/api/policy	TestACellThatIsOffAsksNothingAndKeepsTheLegacyAnswer	1
 internal/api/policy	TestAClassRowCannotNameTheAcceptAheadReasonButAStarRowCovers	1
@@ -251,6 +253,7 @@ internal/api/policy	TestServedOrgLogValueHasNoLineBreak	1
 internal/api/policy	TestServedOrgNilUUIDWithNoTokenOrgIsAskedThePlatformAction	1
 internal/api/policy	TestServedOrgOtherOrganizationIsJudgedOnTheTokenOrganization	9
 internal/api/policy	TestServedOrgPlatformAdminWithNoMembershipRowAnswersAsLegacy	13
+internal/api/policy	TestServedOrgQueryReadIsTheHandlerRead	1
 internal/api/policy	TestServedOrgQueryRowComesFromItsProfileResolver	1
 internal/api/policy	TestServedOrgQueryRowsAreTheProfileQueryResolverRows	1
 internal/api/policy	TestServedOrgSeamRowsAreTheCensus	1
@@ -654,7 +657,6 @@ internal/cigates/testshard	TestTheLogConverterKeepsEveryLineOfEveryPackageWholeA
 internal/cigates/testshard	TestTheLogConverterKeepsTwoInterleavedLongLinesWhole	1
 internal/cigates/testshard	TestTheMissingRowAwkAcceptsTheRealTable	2
 internal/cigates/testshard	TestTheMissingRowAwkPlantedRemovedRowAndEmptyInputs	2
-internal/cigates/testshard	TestTheOldRacePlanStacksTheHeavyTrioOnOneLeg	64
 internal/cigates/testshard	TestThePackagesMeasuredHeavyOnMainHaveRows	1
 internal/cigates/testshard	TestThePinnedHeavyPackagesLandOnDistinctShards	4
 internal/cigates/testshard	TestTheRaceAndAuthLegPlansDoNotReadTheSplitWeights	26
@@ -664,10 +666,11 @@ internal/cigates/testshard	TestTheRaceLegKeepsItsOwnTimeoutVariable	1
 internal/cigates/testshard	TestTheRaceLegRunsEachPartAloneByItsAnchoredNames	1
 internal/cigates/testshard	TestTheRaceLegWeightCapKeepsTheBudgetGuardAndWarnsWhenNoLegFits	341
 internal/cigates/testshard	TestTheRaceLegsAtTheLegCountHoldEveryPackageOnceExceptProvidersync	107
-internal/cigates/testshard	TestTheRacePlanKeepsTheHeavyPackagesApartAndOffTheListedParts	64
+internal/cigates/testshard	TestTheRacePlanKeepsTheHeavyPackagesApartAndOffTheListedParts	82
 internal/cigates/testshard	TestTheRacePlanKnobsRefuseEveryOtherValueAndTheCapCountsOnlyTheRootModule	203
 internal/cigates/testshard	TestTheRacePlanRefusesABadApartRowAndWarnsWhenNoLegIsFree	1
 internal/cigates/testshard	TestTheRacePlanWeighsPartsAsSerialTimeAndKeepsEveryLegUnderTheLimit	201
+internal/cigates/testshard	TestTheRacePlanWithoutApartRowsStacksHeavyPackages	67
 internal/cigates/testshard	TestTheRaceSplitGuardPlantedDefectsAreCaught	13
 internal/cigates/testshard	TestTheRaceSplitTablesAreSortedWholeAndNeverSolo	1
 internal/cigates/testshard	TestTheRaceWeightsTableIsClean	4
@@ -679,6 +682,7 @@ internal/cigates/testshard	TestTheSecurityListKeepsEveryAcpTree	1
 internal/cigates/testshard	TestTheShardPartitionHoldsWhateverTheWeightsSay	1
 internal/cigates/testshard	TestTheShardPartitionPlantedAwkMutantsAreCaught	1
 internal/cigates/testshard	TestTheShardedTestLegNamesEveryGoTestTimeout	1
+internal/cigates/testshard	TestTheShippedRaceLegsCoverEveryRacePackageOnce	85
 internal/cigates/testshard	TestTheSplitCutMatchesItsGoMirror	1
 internal/cigates/testshard	TestTheSplitCutPlantedMutantsAreCaught	1
 internal/cigates/testshard	TestTheSplitSendsSecurityPackagesToTheFreshCallOnly	5

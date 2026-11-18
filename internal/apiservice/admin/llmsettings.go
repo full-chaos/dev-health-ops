@@ -277,7 +277,7 @@ func (h *handlers) getLLMSettings(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	rawPurpose, hasPurpose := r.URL.Query()["purpose"]
+	rawPurpose, hasPurpose := httpapi.Query(r)["purpose"]
 	if hasPurpose {
 		purpose, valid := h.purposeParamFor(ctx, w, orgID, rawPurpose[len(rawPurpose)-1], nil)
 		if !valid {
@@ -635,7 +635,7 @@ func (h *handlers) deleteLLMSettings(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if rawPurpose, hasPurpose := r.URL.Query()["purpose"]; hasPurpose {
+	if rawPurpose, hasPurpose := httpapi.Query(r)["purpose"]; hasPurpose {
 		purpose, valid := h.purposeParamFor(ctx, w, orgID, rawPurpose[len(rawPurpose)-1], nil)
 		if !valid {
 			return

@@ -14,6 +14,7 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
@@ -57,6 +58,11 @@ var zeroPartitionMeasures = []zeroPartitionMeasure{
 // run with no partition. It is skipped on such a run, so its row stays.
 var benchmarkingMeasure = zeroPartitionMeasure{table: "testops_maturity_bands", dayColumn: "period_end", held: "value"}
 
+// capabilityMeasure is the output of work_item_measure_capability. The family
+// runs on a run with no partition, but it has no rule that retires a row whose
+// items are gone, so its row stays (ticket 14052).
+var capabilityMeasure = zeroPartitionMeasure{table: "work_item_measure_capability", dayColumn: "window_end", held: "tracked + item_count", final: true}
+
 func seedZeroPartitionDay(t *testing.T, ctx context.Context, conn driver.Conn, org string, day time.Time, repo uuid.UUID) {
 	t.Helper()
 	stored := day.Add(30 * time.Hour)
@@ -90,6 +96,9 @@ func seedZeroPartitionDay(t *testing.T, ctx context.Context, conn driver.Conn, o
 	exec("testops_maturity_bands", `INSERT INTO testops_maturity_bands
     (metric_name, scope_type, scope_key, period_start, period_end, value, percentile_rank, maturity_band, confidence, org_id, computed_at)
     VALUES ('pass_rate', 'org', ?, ?, ?, 0.9, 0.5, 'developing', 0.8, ?, ?)`, org, day, day, org, stored)
+	exec("work_item_measure_capability", `INSERT INTO work_item_measure_capability
+    (org_id, provider, measure, tracked, evidence_count, item_count, window_start, window_end, computed_at)
+    VALUES (?, 'github', 'story_points_completed', 1, 3, 4, ?, ?, ?)`, org, day.AddDate(0, 0, -29), day, stored)
 }
 
 func zeroPartitionHeld(t *testing.T, ctx context.Context, conn driver.Conn, measure zeroPartitionMeasure, org string, day time.Time) float64 {
@@ -104,6 +113,17 @@ func zeroPartitionHeld(t *testing.T, ctx context.Context, conn driver.Conn, meas
 		t.Fatalf("read %s: %v", measure.table, err)
 	}
 	return held
+}
+
+// captureDefaultLog sends the default logger to a buffer for the rest of the
+// test: the families log through slog.Default.
+func captureDefaultLog(t *testing.T) *lockedBuffer {
+	t.Helper()
+	buffer := &lockedBuffer{}
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(buffer, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	return buffer
 }
 
 type zeroPartitionRig struct {
@@ -191,7 +211,7 @@ func TestFinalizeOfAWholeOrganizationRunWithNoPartitionRetiresTheRowsOfItsDay(t 
 		day time.Time
 	}{{other, day}, {org, before}}
 	heldBefore := map[string]float64{}
-	for _, measure := range append(zeroPartitionMeasures, benchmarkingMeasure) {
+	for _, measure := range append(zeroPartitionMeasures, benchmarkingMeasure, capabilityMeasure) {
 		for _, control := range controls {
 			heldBefore[measure.table+control.org+control.day.String()] = zeroPartitionHeld(t, ctx, rig.conn, measure, control.org, control.day)
 		}
@@ -200,6 +220,12 @@ func TestFinalizeOfAWholeOrganizationRunWithNoPartitionRetiresTheRowsOfItsDay(t 
 		}
 	}
 	runID := rig.insertRun(t, ctx, org, day, true)
+	collector, err := jobruntime.NewMetricsCollector(jobruntime.MetricDimensions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rig.finalize.SetNativeFinalizeFamilyObserver(collector)
+	logs := captureDefaultLog(t)
 
 	workErr := rig.runFinalize(ctx, org, runID)
 
@@ -228,7 +254,33 @@ func TestFinalizeOfAWholeOrganizationRunWithNoPartitionRetiresTheRowsOfItsDay(t 
 	if held == 0 {
 		t.Errorf("%s: the benchmarking row was changed, but the family must be skipped", benchmarkingMeasure.table)
 	}
-	for _, measure := range append(zeroPartitionMeasures, benchmarkingMeasure) {
+	capabilityHeld := zeroPartitionHeld(t, ctx, rig.conn, capabilityMeasure, org, day)
+	t.Logf("%s: the row of the day holds %v after the finalize (the family ran with no item and has no retirement rule; ticket 14052)",
+		capabilityMeasure.table, capabilityHeld)
+	if capabilityHeld != 5 {
+		t.Errorf("%s: the row of the day holds %v, want the stored 5 (the family writes no row and retires none)", capabilityMeasure.table, capabilityHeld)
+	}
+	capabilityLine := ""
+	for _, line := range strings.Split(logs.String(), "\n") {
+		if strings.Contains(line, `"msg":"`+daily.WorkItemMeasureCapabilityLogMessage+`"`) && strings.Contains(line, org) {
+			capabilityLine = line
+		}
+	}
+	t.Logf("capability log line: %s", capabilityLine)
+	if !strings.Contains(capabilityLine, `"level":"INFO"`) || !strings.Contains(capabilityLine, `"rows":0`) {
+		t.Errorf("no Info line %q with rows=0 for the organization", daily.WorkItemMeasureCapabilityLogMessage)
+	}
+	exposition := collector.PrometheusText()
+	for _, want := range []string{
+		`worker_daily_metrics_native_family_outcome_total{family="` + daily.WorkItemMeasureCapabilityFamilyName + `",outcome="computed"} 1`,
+		`worker_daily_metrics_native_family_outcome_total{family="` + daily.BenchmarkingFamilyName + `",outcome="skipped_empty_run"} 1`,
+	} {
+		t.Logf("counter %s present=%t", want, strings.Contains(exposition, want))
+		if !strings.Contains(exposition, want) {
+			t.Errorf("exposition is missing %q", want)
+		}
+	}
+	for _, measure := range append(zeroPartitionMeasures, benchmarkingMeasure, capabilityMeasure) {
 		for _, control := range controls {
 			want := heldBefore[measure.table+control.org+control.day.String()]
 			if got := zeroPartitionHeld(t, ctx, rig.conn, measure, control.org, control.day); got != want {
@@ -268,3 +320,138 @@ func TestFinalizeOfARunOfSomeRepositoriesWithNoPartitionFailsLoudly(t *testing.T
 		}
 	}
 }
+
+// zeroPartitionParityTables are the tables whose keys the end-of-run cleanup
+// computes again from the stored work items of the whole organization.
+var zeroPartitionParityTables = []string{
+	"work_item_metrics_daily", "work_item_user_metrics_daily", "work_item_state_durations_daily", "estimate_coverage_metrics_daily",
+}
+
+// zeroPartitionDayRows reads the newest row of every key of the organization's
+// day, with every column but the organization and the version, in one order.
+func zeroPartitionDayRows(t *testing.T, ctx context.Context, conn driver.Conn, table, org string, day time.Time) []string {
+	t.Helper()
+	columnRows, err := conn.Query(ctx, `SELECT name FROM system.columns
+WHERE database = currentDatabase() AND table = ? AND name NOT IN ('org_id', 'computed_at') ORDER BY position`, table)
+	if err != nil {
+		t.Fatalf("read the columns of %s: %v", table, err)
+	}
+	var columns []string
+	for columnRows.Next() {
+		var name string
+		if err := columnRows.Scan(&name); err != nil {
+			t.Fatal(err)
+		}
+		columns = append(columns, "`"+name+"`")
+	}
+	_ = columnRows.Close()
+	rows, err := conn.Query(ctx, "SELECT toString(tuple("+strings.Join(columns, ", ")+")) AS row FROM "+table+
+		" FINAL WHERE org_id = ? AND day = ? ORDER BY row", org, day)
+	if err != nil {
+		t.Fatalf("read %s: %v", table, err)
+	}
+	defer rows.Close()
+	var result []string
+	for rows.Next() {
+		var row string
+		if err := rows.Scan(&row); err != nil {
+			t.Fatal(err)
+		}
+		result = append(result, row)
+	}
+	return result
+}
+
+// A key whose source is still stored is computed again by the run, not
+// retired: the run of an organization with no repository gives the day the
+// same keys and values as a run of the whole organization that has a
+// repository, on the same stored work items.
+func TestFinalizeOfARunWithNoPartitionRecomputesTheDayAsAWholeOrganizationRunDoes(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	rig := newZeroPartitionRig(t, ctx)
+	day := time.Date(2026, 9, 14, 0, 0, 0, 0, time.UTC)
+	removed := uuid.MustParse("00000000-0000-4000-8000-00000014037c")
+	held := uuid.MustParse("00000000-0000-4000-8000-00000014037d")
+	empty := "00000000-0000-4000-8000-000000140374"
+	whole := "00000000-0000-4000-8000-000000140375"
+	stored := day.Add(30 * time.Hour)
+	for _, org := range []string{empty, whole} {
+		// The earlier compute of the day, with values the stored items do not give.
+		if err := rig.conn.Exec(ctx, `INSERT INTO work_item_metrics_daily
+    (day, provider, work_scope_id, team_id, team_name, items_started, items_completed, wip_count_end_of_day, computed_at, org_id)
+    VALUES (?, 'linear', 'board-1', 'unassigned', 'unassigned', 40, 39, 12, ?, ?)`, day, stored, org); err != nil {
+			t.Fatal(err)
+		}
+		// The items stay stored under the removed repository, which no repos row holds.
+		batch, err := rig.conn.PrepareBatch(ctx, `INSERT INTO work_items (
+    repo_id, work_item_id, provider, type, status, project_id, created_at, started_at, completed_at, org_id, last_synced)`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		completed := day.Add(10 * time.Hour)
+		if err := batch.Append(removed, "ITEM-1", "linear", "story", "in_progress", "board-1",
+			day.Add(-48*time.Hour), ptrTime(day.Add(-24*time.Hour)), (*time.Time)(nil), org, stored); err != nil {
+			t.Fatal(err)
+		}
+		if err := batch.Append(removed, "ITEM-2", "linear", "bug", "done", "board-1",
+			day.Add(-72*time.Hour), ptrTime(day.Add(-30*time.Hour)), &completed, org, stored); err != nil {
+			t.Fatal(err)
+		}
+		if err := batch.Send(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := rig.conn.Exec(ctx, `INSERT INTO repos (id, org_id, repo, provider, created_at, last_synced) VALUES (?, ?, 'acme/held', 'github', ?, ?)`,
+		held, whole, day, day); err != nil {
+		t.Fatal(err)
+	}
+
+	emptyRun := rig.insertRun(t, ctx, empty, day, true)
+	if err := rig.runFinalize(ctx, empty, emptyRun); err != nil {
+		t.Fatalf("finalize of the run with no partition: %v", err)
+	}
+	wholeRun := rig.startRun(t, ctx, func(tx pgx.Tx) (daily.Run, error) {
+		return rig.store.StartScheduledFanoutRunTx(ctx, tx, daily.ScheduledFanoutRequest{
+			OrganizationID: whole, TargetDay: day, Generation: daily.ScheduledFanoutGenerationPrefix + "2026-09-15T01:00:00Z",
+		}, nilPartitionPublisher{})
+	})
+	partitions := rig.dispatchAndRun(t, ctx, wholeRun)
+	if len(partitions) != 1 {
+		t.Fatalf("the whole-organization run has %d partition(s), want 1", len(partitions))
+	}
+	if err := rig.runFinalize(ctx, whole, wholeRun.ID); err != nil {
+		t.Fatalf("finalize of the whole-organization run: %v", err)
+	}
+	emptyStatus, _, emptyFences := rig.runState(t, ctx, emptyRun)
+	wholeStatus, _, wholeFences := rig.runState(t, ctx, wholeRun.ID)
+	t.Logf("run with no partition: status=%s fences=%d; whole-organization run: status=%s fences=%d",
+		emptyStatus, emptyFences, wholeStatus, wholeFences)
+	if emptyStatus != "no_repositories" || wholeStatus != "succeeded" || emptyFences != 1 || wholeFences != 1 {
+		t.Fatalf("the runs ended as %s/%d and %s/%d, want no_repositories/1 and succeeded/1", emptyStatus, emptyFences, wholeStatus, wholeFences)
+	}
+	for _, table := range zeroPartitionParityTables {
+		got := zeroPartitionDayRows(t, ctx, rig.conn, table, empty, day)
+		want := zeroPartitionDayRows(t, ctx, rig.conn, table, whole, day)
+		t.Logf("%s: %d key(s) after the run with no partition, %d after the whole-organization run", table, len(got), len(want))
+		for _, row := range got {
+			t.Logf("%s: %s", table, row)
+		}
+		if strings.Join(got, "\n") != strings.Join(want, "\n") {
+			t.Errorf("%s differs:\nrun with no partition:\n%s\nwhole-organization run:\n%s", table, strings.Join(got, "\n"), strings.Join(want, "\n"))
+		}
+	}
+	if rows := zeroPartitionDayRows(t, ctx, rig.conn, "work_item_metrics_daily", empty, day); len(rows) == 0 {
+		t.Error("work_item_metrics_daily holds no key of the day: the case is not set")
+	}
+	var earlier float64
+	if err := rig.conn.QueryRow(ctx, `SELECT toFloat64(ifNull(sum(items_started), 0)) FROM work_item_metrics_daily FINAL
+WHERE org_id = ? AND day = ? AND items_started = 40`, empty, day).Scan(&earlier); err != nil {
+		t.Fatal(err)
+	}
+	if earlier != 0 {
+		t.Errorf("the values of the earlier compute are still live (%v)", earlier)
+	}
+}
+
+func ptrTime(value time.Time) *time.Time { return &value }

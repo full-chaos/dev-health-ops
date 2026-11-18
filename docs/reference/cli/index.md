@@ -1237,8 +1237,7 @@ re-checks each run under its lock, pages through the whole backlog (at most
 redriven again only if that job, too, is gone a day later. A finalize job
 that is still queued can get a redriven twin: the redrive twin adds at most ONE
 compute over the first job's own computes (worst case 4 + 1 = 5); readers
-dedupe by computed_at (cognitiveload.go:301, queries_signals.go:143), so there
-is no answer change. The worker
+keep the latest computed_at, so there is no answer change. The worker
 reports the first two series above, and
 `dev_health_daily_metrics_stranded_finalize_sweep_failed_total` counts sweep
 passes that failed; the pass is fail-open, so the dispatch does not fail with

@@ -205,6 +205,7 @@ var exportedAPI = []string{
 	"var synclog.MsgDispatchSyncRunCooldownObservationReadFailed synclog.Msg",
 	"var synclog.MsgDispatchSyncRunCooldownObservationRowMalformed synclog.Msg",
 	"var synclog.MsgDispatchSyncRunDeferred synclog.Msg",
+	"var synclog.MsgDispatchSyncRunDeliveryNotCurrent synclog.Msg",
 	"var synclog.MsgDispatchSyncRunDenied synclog.Msg",
 	"var synclog.MsgDispatchSyncRunDeniedWithActiveUnits synclog.Msg",
 	"var synclog.MsgDispatchSyncRunDispatched synclog.Msg",

@@ -108,6 +108,22 @@ func gNullable(row map[string]any, key string) *float64 {
 	return &v
 }
 
+func gMean(rows []map[string]any, key string) *float64 {
+	var sum float64
+	var n int
+	for _, r := range rows {
+		if v := gNullable(r, key); v != nil {
+			sum += *v
+			n++
+		}
+	}
+	if n == 0 {
+		return nil
+	}
+	mean := sum / float64(n)
+	return &mean
+}
+
 func (g goldenRows) toPeriodRows() periodRows {
 	var p periodRows
 	for _, r := range g["work_items"] {
@@ -162,6 +178,9 @@ func (g goldenRows) toPeriodRows() periodRows {
 			storedRows: uint64(len(g["incidents"])),
 		})
 	}
+	// The snapshot's stored values are one sample per day, so the pooled MTTR is their mean.
+	p.mttrPooledP50 = gMean(g["incidents"], "mttr_p50_hours")
+	p.mttrPooledMean = gMean(g["repo_metrics"], "mttr_hours")
 	for _, r := range g["investment"] {
 		theme, _ := r["theme"].(string)
 		p.investment = append(p.investment, investmentRow{theme: theme, value: gNum(r, "value")})

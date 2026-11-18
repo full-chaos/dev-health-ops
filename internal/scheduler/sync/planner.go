@@ -161,6 +161,18 @@ type PlannerInput struct {
 	// threshold slows the source down to one try a day. Nil or a missing key
 	// plans exactly as before.
 	FailureStreaks map[string]providersync.FailureStreak
+	// TestOpsBudgetBlocked is, per PlanSource.ID, how many of the source's
+	// newest GitHub tests/cicd units stopped at the run inventory page budget and
+	// held the watermark (CHAOS-13827). Each one halves the next window of the
+	// folded cicd unit. Nil or a missing key plans exactly as before.
+	TestOpsBudgetBlocked map[string]int
+	// TestOpsReplayEnds is, per PlanSource.ID, the window end of the folded cicd
+	// unit that an earlier attempt of THIS occurrence already committed. It is
+	// set only when the occurrence's domain graph exists (a replay after the
+	// domain commit). The planner keeps that end when it is one the narrowing
+	// could have produced from the same window, so a budget history that moved
+	// or a read that failed on one attempt cannot change a committed plan.
+	TestOpsReplayEnds map[string]time.Time
 	// ExecutedProof is the CHAOS-4060 durable, tri-state evidence snapshot:
 	// which provider/dataset pairs have at least one live sync_run_units row
 	// that completed with persisted-row evidence (proven), have been
@@ -787,10 +799,67 @@ func foldContributingFamilyUnit(
 			flags[flagName] = flagValue
 		}
 	}
+	if canonicalDataset == canonicalTestOpsDataset {
+		latest = narrowTestOpsWindow(input, source, provider, contributing, earliest, latest)
+	}
 	unit := newPlannedUnit(input, source, canonicalDataset, canonicalSpec, earliest, latest)
 	unit.ProcessorFlags = flags
 	globalPlanGateTelemetry.observe(provider, canonicalDataset, planGateOutcomePlanned)
 	return unit, true
+}
+
+// narrowTestOpsWindow bounds the merged window of the folded tests/cicd unit
+// (CHAOS-13827). The members are capped one by one in resolveWindow, but cicd
+// is MEDIUM and uncapped, so the merged span (earliest start, latest end) of a
+// source behind on both members was the whole gap. The HEAVY cap then applies
+// to the merged span when a HEAVY member contributes, as the work-item family
+// does. Then each budget-blocked unit among the source's newest units halves
+// the span. Only the end moves in (clause C4): the watermarks stamp at the new
+// end and the next unit continues from there. A replay of an occurrence whose
+// domain graph already committed keeps the committed end when the narrowing
+// could have produced it from the same window (TestOpsReplayEnds).
+func narrowTestOpsWindow(
+	input PlannerInput, source PlanSource, provider string, contributing []PlanDataset,
+	earliest *time.Time, latest time.Time,
+) time.Time {
+	if input.Mode != SyncModeIncremental || earliest == nil {
+		return latest
+	}
+	for _, dataset := range contributing {
+		spec, ok := datasetSpecification(provider, dataset.Key)
+		if ok && PlannedWindowClass(provider, dataset.Key, spec.CostClass, dataset.FullQuery) == heavyCostClass {
+			latest = applyHeavyWindowRatchet(input.Mode, heavyCostClass, earliest, latest, input.WatermarkOverlap)
+			break
+		}
+	}
+	if committed, replay := input.TestOpsReplayEnds[source.ID]; replay {
+		if committed.Equal(latest) {
+			return latest
+		}
+		for _, candidate := range providersync.TestOpsNarrowingCandidates(earliest, latest) {
+			if candidate.Equal(committed) {
+				slog.Default().Info("sync.plan.testops_window_replayed",
+					slog.String("provider", provider),
+					slog.String("org_id", input.OrgID),
+					slog.String("source_id", source.ID),
+					slog.Duration("window", committed.Sub(*earliest)))
+				return committed
+			}
+		}
+	}
+	blocked := input.TestOpsBudgetBlocked[source.ID]
+	narrowed, ok := providersync.NarrowTestOpsWindow(earliest, latest, blocked)
+	if !ok {
+		return latest
+	}
+	slog.Default().Info("sync.plan.testops_window_narrowed",
+		slog.String("provider", provider),
+		slog.String("org_id", input.OrgID),
+		slog.String("source_id", source.ID),
+		slog.Int("budget_blocked_units", blocked),
+		slog.Duration("window_before", latest.Sub(*earliest)),
+		slog.Duration("window_after", narrowed.Sub(*earliest)))
+	return narrowed
 }
 
 // resolveWindow is the single window pipeline every planned unit goes through:

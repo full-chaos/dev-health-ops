@@ -88,10 +88,23 @@ func (s Store) applyChange(ctx context.Context, orgID string, row reviewChangeRo
 	default:
 		return nil
 	}
-	_, err = s.CreateOrUpdateTeam(ctx, orgID, TeamWrite{
+	write := TeamWrite{
 		Origin: row.Provider, TeamID: row.TeamID, Name: name, Description: description,
 		ProjectKeys: &projectKeys, RepoPatterns: &repoPatterns,
-	})
+	}
+	if existing != nil {
+		// An existing team takes the changed field only: the others are kept
+		// as stored when the write is made, not as read here.
+		write.Update = true
+		write.KeepName, write.KeepDescription = field != "name", field != "description"
+		if field != "project_keys" {
+			write.ProjectKeys = nil
+		}
+		if field != "repo_patterns" {
+			write.RepoPatterns = nil
+		}
+	}
+	_, err = s.CreateOrUpdateTeam(ctx, orgID, write)
 	return err
 }
 

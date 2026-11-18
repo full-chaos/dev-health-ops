@@ -113,8 +113,10 @@ func TestLegacyArmMatchesByPersistedIdentity(t *testing.T) {
 	if sql := SuiteRowsNewestAttempt("", Scope{}); !strings.Contains(sql, "(repo_id, run_id, suite_id) NOT IN (SELECT repo_id, run_id, arrayJoin(legacy_suite_ids)") {
 		t.Errorf("the suite legacy arm is not the identity match:\n%s", sql)
 	}
-	if sql := CoverageRowsNewestAttempt("", Scope{}); !strings.Contains(sql, "(repo_id, run_id, snapshot_id) NOT IN (SELECT repo_id, run_id, arrayJoin(legacy_snapshot_ids)") {
-		t.Errorf("the coverage legacy arm is not the identity match:\n%s", sql)
+	// Coverage keeps a legacy row only in a run with no slotted coverage row (CHAOS-14146), not by its listed id.
+	if sql := CoverageRowsNewestAttempt("", Scope{}); !strings.Contains(sql, "(report_slot = '' AND (repo_id, run_id) NOT IN (SELECT repo_id, run_id FROM coverage_snapshots FINAL WHERE org_id = {org_id:String} AND report_slot != ''))") ||
+		strings.Contains(sql, "legacy_snapshot_ids") {
+		t.Errorf("the coverage legacy arm is not the run rule:\n%s", sql)
 	}
 	// The ids come from KEPT slotted rows only: the legacy-id select is itself bounded to the newest attempt of each slot.
 	sql := SuiteRowsNewestAttempt("", Scope{})

@@ -1,32 +1,24 @@
 package teamsidentity
 
 import (
-	"context"
-	"database/sql"
 	"errors"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"slices"
 	"sort"
 
-	"github.com/ClickHouse/clickhouse-go/v2"
-
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/teamprovider"
 )
 
-// ErrTeamChangedConcurrently is a roster edit whose read-back did not find it
-// stored after rosterRounds writes: another writer of the team kept winning.
-// The routes answer it with 409 and a retryable reason code.
+// ErrTeamChangedConcurrently is an admin team write whose read-back did not
+// find it stored after rosterRounds writes (another writer of the team kept
+// winning), or whose team was deleted meanwhile (the delete wins). The routes
+// answer it with 409 and a retryable reason code.
 var ErrTeamChangedConcurrently = errors.New("team changed concurrently, retry")
 
-// rosterRounds bounds the writes of one roster edit.
+// rosterRounds bounds the writes of one admin team write.
 const rosterRounds = 3
-
-// rosterReadBackQuery reads the stored roster of one team after a roster
-// edit: teams FINAL, the version a reader sees.
-const rosterReadBackQuery = "SELECT manual_members FROM teams FINAL WHERE org_id = {org_id:String} AND id = {team_id:String}"
 
 // rosterEdit is one admin roster edit: a full set, members added or members
 // removed. apply makes the roster to write from the stored one; held says
@@ -71,20 +63,6 @@ func (e rosterEdit) held(stored []string) bool {
 	return true
 }
 
-// rosterHeld reads the stored roster back after a roster edit and says
-// whether it holds the edit.
-func (s Store) rosterHeld(ctx context.Context, orgID, teamID string, edit rosterEdit) ([]string, bool, error) {
-	var stored []string
-	err := s.Conn.QueryRow(ctx, rosterReadBackQuery, clickhouse.Named("org_id", orgID), clickhouse.Named("team_id", teamID)).Scan(&stored)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, false, nil
-	}
-	if err != nil {
-		return nil, false, fmt.Errorf("read back the team roster: %w", err)
-	}
-	return stored, edit.held(stored), nil
-}
-
 // rosterWrite says how a team write writes manual_members.
 type rosterWrite struct {
 	rule        teamprovider.Roster
@@ -109,11 +87,11 @@ func (e rosterEdit) row() rosterWrite {
 	return rosterWrite{rule: teamprovider.RosterDelta, add: sortedUnique(e.add)}
 }
 
-// teamChangedConcurrentlyReason is the retryable reason code of a roster edit
-// refused after rosterRounds writes.
+// teamChangedConcurrentlyReason is the retryable reason code of an admin team
+// write refused (ErrTeamChangedConcurrently).
 const teamChangedConcurrentlyReason = "team_changed_concurrently"
 
-// routeFailureLevel logs a refused roster edit at Warn: it is a conflict the
+// routeFailureLevel logs a refused admin team write at Warn: it is a conflict the
 // caller retries, not a fault.
 func routeFailureLevel(err error) slog.Level {
 	if errors.Is(err, ErrTeamChangedConcurrently) {
@@ -122,7 +100,7 @@ func routeFailureLevel(err error) slog.Level {
 	return slog.LevelError
 }
 
-// writeInternalUnlessRefused answers a refused roster edit with 409
+// writeInternalUnlessRefused answers a refused admin team write with 409
 // {"detail":{"message":"team changed concurrently, retry","reason_code":"team_changed_concurrently"}}
 // and every other route failure with the generic 500.
 func writeInternalUnlessRefused(w http.ResponseWriter, err error) {

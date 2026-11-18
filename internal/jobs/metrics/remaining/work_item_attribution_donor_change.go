@@ -12,10 +12,13 @@ import (
 )
 
 // workItemAttributionNewestPrimary is an item's newest primary row
-// (work_item_team_attributions, by computed_at).
+// (work_item_team_attributions, by computed_at), and the newest linked_issue
+// row that is not the primary (an issue's linked_issue row is provenance only).
 type workItemAttributionNewestPrimary struct {
-	TeamID, Source, Evidence string
-	ComputedAt               time.Time
+	TeamID, Source, Evidence     string
+	ComputedAt                   time.Time
+	LinkedTeamID, LinkedEvidence string
+	LinkedComputedAt             time.Time
 }
 
 // loadDonorChangedDependents returns the items whose linked_issue row is owed a
@@ -71,7 +74,8 @@ func (executor *WorkItemAttributionExecutor) loadDonorChangedDependents(
 // donorChangedDependents returns, sorted, each item that inherits through an
 // inheritable dependency edge and is owed a rederive: one of its donors has a
 // newest primary row newer than the item's own, and the donor the item would
-// copy now differs from the one its newest primary row records. The donor it
+// copy now differs from the one its newest snapshot records (its primary
+// linked_issue row, or the provenance linked_issue row of the same snapshot). The donor it
 // would copy is the cascade's winner (BuildLinkedIssueIndexFromRows): of its
 // donors whose newest primary row has a team of its own (an own source) that
 // is active, the lowest target id, then relationship, with that row's team. An
@@ -128,8 +132,11 @@ func donorChangedDependents(
 			continue
 		}
 		recordedDonor, recordedTeam := "", ""
-		if own.Source == "linked_issue" {
+		switch {
+		case own.Source == "linked_issue":
 			recordedDonor, recordedTeam = linkedIssueEvidenceDonor(own.Evidence), own.TeamID
+		case own.LinkedEvidence != "" && own.LinkedComputedAt.Equal(own.ComputedAt):
+			recordedDonor, recordedTeam = linkedIssueEvidenceDonor(own.LinkedEvidence), own.LinkedTeamID
 		}
 		if wantDonor != recordedDonor || wantTeam != recordedTeam {
 			owed = append(owed, item)
@@ -210,8 +217,9 @@ WHERE org_id = ?`, orgID)
 	return edges, stepcause.Failure(stepcause.IterateWorkItemDependenciesDonorChange, rows.Err())
 }
 
-// loadNewestPrimaryRows reads the newest primary row of each item of ids, one
-// statement per bounded chunk (workItemAttributionMaxArrayBytes).
+// loadNewestPrimaryRows reads the newest primary row of each item of ids, and
+// its newest non-primary linked_issue row, one statement per bounded chunk
+// (workItemAttributionMaxArrayBytes).
 func (executor *WorkItemAttributionExecutor) loadNewestPrimaryRows(
 	ctx context.Context, orgID string, ids []string,
 ) (map[string]workItemAttributionNewestPrimary, error) {
@@ -219,20 +227,25 @@ func (executor *WorkItemAttributionExecutor) loadNewestPrimaryRows(
 	for _, chunk := range chunkStringsByRenderedBytes(ids, workItemAttributionMaxArrayBytes) {
 		rows, err := executor.conn.Query(ctx, `
 SELECT work_item_id,
-       argMax(ifNull(team_id, ''), computed_at),
-       argMax(toString(source), computed_at),
-       argMax(evidence, computed_at),
-       max(computed_at)
+       argMaxIf(ifNull(team_id, ''), computed_at, is_primary = 1),
+       argMaxIf(toString(source), computed_at, is_primary = 1),
+       argMaxIf(evidence, computed_at, is_primary = 1),
+       maxIf(computed_at, is_primary = 1),
+       argMaxIf(ifNull(team_id, ''), computed_at, is_primary = 0),
+       argMaxIf(evidence, computed_at, is_primary = 0),
+       maxIf(computed_at, is_primary = 0)
 FROM work_item_team_attributions FINAL
-WHERE org_id = ? AND has(?, work_item_id) AND is_primary = 1
-GROUP BY work_item_id`, orgID, chunk)
+WHERE org_id = ? AND has(?, work_item_id) AND (is_primary = 1 OR (is_primary = 0 AND source = 'linked_issue'))
+GROUP BY work_item_id
+HAVING countIf(is_primary = 1) > 0`, orgID, chunk)
 		if err != nil {
 			return nil, stepcause.Failure(stepcause.QueryNewestPrimaryRowsDonorChange, err)
 		}
 		for rows.Next() {
 			var id string
 			var row workItemAttributionNewestPrimary
-			if err := rows.Scan(&id, &row.TeamID, &row.Source, &row.Evidence, &row.ComputedAt); err != nil {
+			if err := rows.Scan(&id, &row.TeamID, &row.Source, &row.Evidence, &row.ComputedAt,
+				&row.LinkedTeamID, &row.LinkedEvidence, &row.LinkedComputedAt); err != nil {
 				_ = rows.Close()
 				return nil, stepcause.Failure(stepcause.ScanNewestPrimaryRowDonorChange, err)
 			}

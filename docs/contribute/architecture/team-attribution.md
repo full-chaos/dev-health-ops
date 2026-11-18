@@ -322,14 +322,14 @@ re-derives the items that copy it:** each backstop run reads the stored rows and
 item that inherits through an inheritable edge when one of its donors has a primary row newer than the
 item's, and the donor the item would copy now (the cascade's winner over the stored rows: the lowest target id
 whose newest primary row is own-sourced and names an active team, with that row's team) differs from the one
-its newest primary row records (`donorChangedDependents`). An item whose own primary row has a team of its own
+its newest snapshot records: its primary `linked_issue` row, or for an issue the `linked_issue` provenance row (`is_primary = 0`) of the same snapshot (`donorChangedDependents`). An item whose own primary row has a team of its own
 (sources 0–3) outranks `linked_issue`, so its donors' changes trigger nothing. The
 re-derive is the backstop's own (the facts of the item's day, `computed_at` = the run); with no ownership scope
 it is an item-only run that publishes no scope marker, and an item another writer already wrote today waits
 for a later run (the backstop's `alreadyCoveredToday` rule). It needs no watermark: after the re-derive the
 item is newer than every donor row, so the next run finds nothing, and a donor recomputed with the same team
 triggers nothing (Info `work_item_attribution.donor_changed_dependents`, `WorkItemAttributionOutcome.DonorChangedDependents`;
-pinned by `TestADonorRowChangeRederivesOnlyTheItemsItChanges` and `TestADonorsChangedRowRederivesTheItemsThatCopyIt`,
+pinned by `TestADonorRowChangeRederivesOnlyTheItemsItChanges`, `TestADonorChangeReadsTheLinkedIssueRowOfTheItemsNewestSnapshot`, `TestAnIssuesLinkedRowFollowsItsDonorsChangedRow` and `TestADonorsChangedRowRederivesTheItemsThatCopyIt`,
 a donor of each of github, gitlab, jira and linear). The row's source must be one of sources 0–3 above. The row's evidence names the donor:
 `linked_issue=<donor_work_item_id>;dependency_type=<rel>;donor_provider=<p>;donor_source=<donor row source>` (the frozen
 Python oracles wrote `linked_issue=<item id>`, the item's own id; the oracle comparison declares that divergence,

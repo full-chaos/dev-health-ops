@@ -74,6 +74,7 @@ var unlabeledWriters = map[string]string{
 	"sync_dispatch_observer_truncated":                          noLabelSample,
 	"sync_dispatch_observer_unknown_kinds":                      noLabelSample,
 	"sync_dispatch_observer_up":                                 noLabelSample,
+	"sync_dispatch_post_sync_redrive_skipped_window":            noLabelSample,
 	"sync_dispatch_runaway_dispatch_wakeups":                    noLabelSample,
 	"sync_dispatch_unreclaimable_candidates":                    noLabelSample,
 	"sync_dispatch_unreclaimable_sweep_failures_total":          noLabelSample,

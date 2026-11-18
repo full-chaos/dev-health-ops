@@ -232,7 +232,7 @@ jobs:
     strategy:
       # One red leg must not cancel the others: every leg reports its own signal.
       fail-fast: false
-      # CHAOS-11418: the legs live in ci/go_quality_legs.json (static, plan-reads, test-N-of-13, race-N-of-13; the tooling tests pin the
+      # CHAOS-11418: the legs live in ci/go_quality_legs.json (static, plan-reads, test-N-of-13, race-N-of-16; the tooling tests pin the
       # race and test counts there). go-quality-plan filters them with ci/go_quality_legs.sh: a pull request without the ci:full
       # label starts no race leg (a job cannot read its own matrix in an `if`, so the leg is left out, not started to report a
       # skip). The legs are not required status contexts (the ruleset requires the `go-quality` aggregate), so the count can
@@ -767,7 +767,7 @@ jobs:
           QUEUE_RUN: ${{ needs.go-quality-plan.outputs.queue_run }}
         run: |
           if [ -n "${QUEUE_RUN}" ]; then
-            summary="go-quality on this push: static ran, plan-reads ran; test-1-of-13, test-2-of-13, test-3-of-13, test-4-of-13, test-5-of-13, test-6-of-13, test-7-of-13, test-8-of-13, test-9-of-13, test-10-of-13, test-11-of-13, test-12-of-13, test-13-of-13, race-1-of-13, race-2-of-13, race-3-of-13, race-4-of-13, race-5-of-13, race-6-of-13, race-7-of-13, race-8-of-13, race-9-of-13, race-10-of-13, race-11-of-13, race-12-of-13, race-13-of-13 skipped: queue-tested sha, merge_group run ${QUEUE_RUN}"
+            summary="go-quality on this push: static ran, plan-reads ran; test-1-of-13, test-2-of-13, test-3-of-13, test-4-of-13, test-5-of-13, test-6-of-13, test-7-of-13, test-8-of-13, test-9-of-13, test-10-of-13, test-11-of-13, test-12-of-13, test-13-of-13, race-1-of-16, race-2-of-16, race-3-of-16, race-4-of-16, race-5-of-16, race-6-of-16, race-7-of-16, race-8-of-16, race-9-of-16, race-10-of-16, race-11-of-16, race-12-of-16, race-13-of-16, race-14-of-16, race-15-of-16, race-16-of-16 skipped: queue-tested sha, merge_group run ${QUEUE_RUN}"
           else
             summary="go-quality on this push: every leg ran (no queue-tested sha)"
           fi

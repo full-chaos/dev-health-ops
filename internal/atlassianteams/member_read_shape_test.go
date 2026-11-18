@@ -2,6 +2,7 @@ package atlassianteams
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -10,13 +11,10 @@ import (
 
 // A team-users answer that does not say where its list ends is refused by
 // the decoder (vendored patch 0008): a missing or null pageInfo or
-// hasNextPage is not "the last page". A stated page end is an answer.
-//
-// NOT decided here: a missing or null edges list on a STATED last page still
-// reads as zero members. No recorded real answer of an empty roster says
-// whether the provider sends an empty list or null for it, and refusing a
-// shape the provider really sends would fail the collection of every
-// organization that has a team with no member.
+// hasNextPage is not "the last page". A stated page end is an answer. So is
+// the roster: a missing or null edges list is refused too (vendored patch
+// 0010), because the recorded real answer of an empty roster (team_users_not_found)
+// carries "edges": [], so an answer without a list is not an empty roster.
 func TestTheTeamUsersDecoderRefusesAnAnswerWithoutAStatedPageEnd(t *testing.T) {
 	last := map[string]any{"hasNextPage": false}
 	edge := userEdge(teamA, "alice-1")
@@ -35,9 +33,9 @@ func TestTheTeamUsersDecoderRefusesAnAnswerWithoutAStatedPageEnd(t *testing.T) {
 		"one member":                   {map[string]any{"pageInfo": last, "edges": []any{edge}}, 1},
 		"one member, a next page": {map[string]any{"pageInfo": map[string]any{"hasNextPage": true, "endCursor": "c"},
 			"edges": []any{edge}}, 1},
-		// Not decided (see above): read as zero members.
-		"null edges on a stated last page": {map[string]any{"pageInfo": last, "edges": nil}, 0},
-		"no edges on a stated last page":   {map[string]any{"pageInfo": last}, 0},
+		"null edges on a stated last page": {map[string]any{"pageInfo": last, "edges": nil}, -1},
+		"no edges on a stated last page":   {map[string]any{"pageInfo": last}, -1},
+		"null edges, a next page":          {map[string]any{"pageInfo": map[string]any{"hasNextPage": true, "endCursor": "c"}, "edges": nil}, -1},
 	} {
 		t.Run(name, func(t *testing.T) {
 			data := map[string]any{}
@@ -72,7 +70,8 @@ func TestAMemberReadWithoutAStatedPageEndIsAFailedCollection(t *testing.T) {
 		{"no hasNextPage", map[string]any{"pageInfo": map[string]any{}, "edges": []any{userEdge(teamA, "alice-1")}}, true},
 		{"no pageInfo and no edges", map[string]any{"version": "1"}, true},
 		{"pageInfo null and edges null", map[string]any{"pageInfo": nil, "edges": nil}, true},
-		{"control (not decided, read as no member): edges is null on a stated last page", map[string]any{"pageInfo": last, "edges": nil}, false},
+		{"edges is null on a stated last page", map[string]any{"pageInfo": last, "edges": nil}, true},
+		{"no edges on a stated last page", map[string]any{"pageInfo": last}, true},
 		{"control: an empty roster on a stated last page", map[string]any{"pageInfo": last, "edges": []any{}}, false},
 		{"control: one member on a stated last page", map[string]any{"pageInfo": last, "edges": []any{userEdge(teamA, "alice-1")}}, false},
 	} {
@@ -98,5 +97,41 @@ func TestAMemberReadWithoutAStatedPageEndIsAFailedCollection(t *testing.T) {
 				t.Fatalf("err = %v, MembershipsComplete = %v: a roster with a stated end is a finished read", err, rows.MembershipsComplete)
 			}
 		})
+	}
+}
+
+// The recorded real answer of an empty roster (the gateway's answer for a team
+// with no member, recorded 2026-10-10) is a finished read of zero members, and
+// the same body with its edges list removed or nulled is refused.
+func TestTheRecordedEmptyRosterIsAnEmptyRosterAndTheSameBodyWithoutEdgesIsRefused(t *testing.T) {
+	recorded := loadGatewayAnswer(t, "team_users_not_found")
+	var body map[string]any
+	if err := json.Unmarshal([]byte(recorded.BodyVerbatim), &body); err != nil {
+		t.Fatal(err)
+	}
+	users := func() map[string]any {
+		return body["data"].(map[string]any)["teamworkGraph_teamUsers"].(map[string]any)
+	}
+	decode := func(mutate func(map[string]any)) (*gen.GraphStoreCypherQueryV2Connection, error) {
+		var copied map[string]any
+		raw, _ := json.Marshal(body)
+		if err := json.Unmarshal(raw, &copied); err != nil {
+			t.Fatal(err)
+		}
+		mutate(copied["data"].(map[string]any)["teamworkGraph_teamUsers"].(map[string]any))
+		return gen.DecodeTeamUsers(copied["data"].(map[string]any))
+	}
+	if _, has := users()["edges"]; !has {
+		t.Fatal("the recorded empty roster carries no edges key: the recording changed")
+	}
+	conn, err := decode(func(map[string]any) {})
+	if err != nil || len(conn.Edges) != 0 {
+		t.Fatalf("recorded empty roster: connection = %+v, err = %v, want zero edges and no error", conn, err)
+	}
+	if _, err := decode(func(u map[string]any) { delete(u, "edges") }); err == nil {
+		t.Fatal("the recorded body without its edges list was read as an empty roster")
+	}
+	if _, err := decode(func(u map[string]any) { u["edges"] = nil }); err == nil {
+		t.Fatal("the recorded body with null edges was read as an empty roster")
 	}
 }

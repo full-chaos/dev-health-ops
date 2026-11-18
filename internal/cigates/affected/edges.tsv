@@ -147,6 +147,7 @@ internal/cigates/testshard	checkgofresh_test.go	unexpressed
 internal/cigates/testshard	listcall_test.go	unexpressed
 internal/cigates/testshard	loglineatomic_test.go	unexpressed
 internal/cigates/testshard	providersync_test.go	unexpressed
+internal/cigates/testshard	race_apart_test.go	unexpressed
 internal/cigates/testshard	raceshard_test.go	unexpressed
 internal/cigates/testshard	racesplits_test.go	unexpressed
 internal/cigates/testshard	splitweights_test.go	unexpressed

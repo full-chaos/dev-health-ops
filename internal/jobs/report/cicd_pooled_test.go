@@ -25,14 +25,15 @@ func TestCicdPooledRulesAreTheWritersOwn(t *testing.T) {
 	}
 	pins := []struct{ rule, writer, writerText, pooled string }{
 		{"newest version of a run", "PipelineRunsSource", "FROM ci_pipeline_runs FINAL", "FROM ci_pipeline_runs FINAL"},
+		{"an open run is no finished run", "PipelineRunsSource", "AND " + testops.NotOpenRunSQL, "AND " + testops.NotOpenRunSQL},
 		{"a deleted run is no run", "PipelineRunsSource", "AND " + deleted, "AND " + cicdCountedRunPredicate},
 		{"the run finishes on the day", "PipelineRunsSource",
 			"WHERE finished_at >= {start:DateTime64(3, 'UTC')} AND finished_at < {end:DateTime64(3, 'UTC')}",
-			"AND finished_at IS NOT NULL AND toDate(finished_at) = toDate(started_at)"},
-		{"the run starts on the day", "PipelineRunsSource",
-			"AND started_at >= {start:DateTime64(3, 'UTC')} AND started_at < {end:DateTime64(3, 'UTC')}",
-			"toDate(started_at) AS day"},
-		{"duration sample", "compute.go", "durationMin := row.FinishedAt.UTC().Sub(startedAt).Minutes()\n\t\t\tif durationMin >= 0 {",
+			"AND finished_at IS NOT NULL\n      AND toDate(finished_at) >= {start_date:Date} AND toDate(finished_at) < {end_date:Date}"},
+		{"the run is counted on its finish day", "PipelineRunsSource",
+			"WHERE finished_at >= {start:DateTime64(3, 'UTC')} AND finished_at < {end:DateTime64(3, 'UTC')}",
+			"toDate(finished_at) AS day"},
+		{"duration sample", "compute.go", "durationMin := finishedAt.Sub(startedAt).Minutes()\n\t\tif durationMin >= 0 {",
 			"if(finished_at >= started_at, dateDiff('millisecond', started_at, finished_at) / 60000, NULL) AS " + cicdRunMinutes},
 		{"queue sample", "compute.go", "if row.QueuedAt != nil {\n\t\t\tqueueMin := startedAt.Sub(row.QueuedAt.UTC()).Minutes()\n\t\t\tif queueMin >= 0 {",
 			"if(queued_at IS NOT NULL AND started_at >= queued_at, dateDiff('millisecond', queued_at, started_at) / 60000, NULL) AS " + cicdQueueMinutes},
@@ -98,13 +99,16 @@ func TestCicdPooledStatementReadsComputedDaysUnderTheBound(t *testing.T) {
 }
 
 // A metric without the team (or service, or repo) dimension is charted as buildChartQuery charts it: a group by it is one
-// 'unscoped' bucket and a filter on it does not narrow. A metric with the dimension keeps the owner join.
+// 'unscoped' bucket and a filter on it does not narrow. A metric with the dimension keeps the owner join. No registry
+// pooled metric lacks the team dimension, so the cell takes one without it.
 func TestPooledChartKeepsTheRegistryDimensions(t *testing.T) {
 	t.Parallel()
+	noTeam := pooledDefinition(t, "avg_duration_minutes")
+	noTeam.Dimensions = []string{"repo", "day"}
 	for _, groupBy := range []string{"team", "service"} {
 		for _, teams := range [][]string{nil, {"team-1"}} {
 			statement, parameters, err := buildChartQuery(ChartSpec{ChartType: "bar", Metric: "avg_duration_minutes", GroupBy: groupBy,
-				OrganizationID: "org-1", FilterTeams: teams}, pooledDefinition(t, "avg_duration_minutes"))
+				OrganizationID: "org-1", FilterTeams: teams}, noTeam)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -117,7 +121,7 @@ func TestPooledChartKeepsTheRegistryDimensions(t *testing.T) {
 		}
 	}
 	statement, _, err := buildChartQuery(ChartSpec{ChartType: "bar", Metric: "avg_duration_minutes", OrganizationID: "org-1",
-		FilterTeams: []string{"team-1"}}, pooledDefinition(t, "avg_duration_minutes"))
+		FilterTeams: []string{"team-1"}}, noTeam)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -238,7 +238,8 @@ func TestWorkItemAttributionBelowThresholdReverseClosureUsesDonorEdge(t *testing
 	now := time.Now().UTC()
 
 	seedWorkItemAttributionItem(t, ctx, conn, orgID, "A", repoX, now)
-	seedWorkItemAttributionItem(t, ctx, conn, orgID, "B", uuid.Nil, now)
+	// B is a pull request: a linked item gives its team only to a pull request.
+	seedWorkItemAttributionPullRequest(t, ctx, conn, orgID, "B", uuid.Nil, now)
 	for i := 0; i < 18; i++ {
 		seedWorkItemAttributionItem(t, ctx, conn, orgID, fmt.Sprintf("filler-%d", i), uuid.Nil, now)
 	}
@@ -787,6 +788,17 @@ func seedWorkItemAttributionItem(
 	}
 	if err := batch.Send(); err != nil {
 		t.Fatalf("send work_items batch: %v", err)
+	}
+}
+
+func seedWorkItemAttributionPullRequest(
+	t *testing.T, ctx context.Context, conn driver.Conn,
+	orgID, workItemID string, repoID uuid.UUID, now time.Time,
+) {
+	t.Helper()
+	if err := conn.Exec(ctx, `INSERT INTO work_items (repo_id, work_item_id, provider, type, project_id, org_id, last_synced)
+		VALUES (?, ?, 'github', 'pr', '', ?, ?)`, repoID, workItemID, orgID, now); err != nil {
+		t.Fatalf("seed pull request %s: %v", workItemID, err)
 	}
 }
 

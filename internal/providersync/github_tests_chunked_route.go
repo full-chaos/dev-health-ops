@@ -604,7 +604,10 @@ func recordGitHubTestsSkippedArtifact(
 		Cause:     cause,
 		Count:     1,
 	})
-	if client != nil {
+	// artifact_expired is NOT counted here (CHAOS-13980): this runs once per attempt, including attempts that later fail (a
+	// readable download exhausting its retries) and are recollected, so a counter fired here would charge the same expired
+	// artifact again on every retry. providerunit counts it once from the committed unit result, after Complete returns nil.
+	if client != nil && cause != githubTestsArtifactExpiredCause {
 		client.Metrics.RecordArtifactSkipped(claim.Provider, claim.Dataset, cause)
 	}
 	// CHAOS-4588: this used to slog.Warn once per artifact here -- for a repo
@@ -699,7 +702,7 @@ func githubTestsLogArtifactSkipSummary(
 			continue
 		}
 		switch observation.Cause {
-		case githubTestsArtifactOversizedCause, githubTestsArtifactUnavailableCause, githubTestsUnreadableArchiveCause:
+		case githubTestsArtifactOversizedCause, githubTestsArtifactUnavailableCause, githubTestsUnreadableArchiveCause, githubTestsArtifactExpiredCause:
 			artifactSkipTotal += observation.Count
 		}
 		if observation.Cause == githubTestsArtifactOversizedCause {
@@ -1821,6 +1824,29 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 							)
 						}
 					}
+					// CHAOS-13980: GitHub says an expired artifact's bytes are deleted, so a report-shaped one is lost for good. It is
+					// decided here, after the newest-per-name rule (an older attempt's expired copy is superseded, not a loss) and BEFORE
+					// the cap (an expired artifact never takes a download slot from a readable shard). Recorded once per (run, artifact):
+					// observation, metric, durable marker. Not counted in ArchivesSeen/ArchivesUnreadable: no download happened, so it says
+					// nothing about the channel (same rule as oversized below). Every expired artifact that passed the selection seam above
+					// counts: its contents are unknown, so the route fails closed (the seam already dropped the known non-report names).
+					artifactItems, expiredItems := githubTestsSplitExpiredArtifacts(artifactItems)
+					for _, artifact := range expiredItems {
+						if githubTestsSkippedMarkerRecorded(cursor.SkippedArtifacts, pipeline.RunID, string(artifact.ID), githubTestsArtifactExpiredCause) {
+							continue
+						}
+						cursor.Incomplete = recordGitHubTestsSkippedArtifact(
+							cursor.Incomplete, client, claim, cursor.Repo, pipeline.RunID,
+							githubTestsArtifactExpiredCause,
+						)
+						cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow, cursor.SkippedArtifactCauseOverflow, cursor.SkippedArtifactCauseCount = appendGitHubTestsSkippedArtifact(
+							cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow, cursor.SkippedArtifactCauseOverflow, cursor.SkippedArtifactCauseCount,
+							GitHubTestsSkippedArtifact{
+								RunID: pipeline.RunID, ArtifactID: string(artifact.ID), Name: artifact.Name,
+								Cause: githubTestsArtifactExpiredCause,
+							},
+						)
+					}
 					switch {
 					case len(artifactItems) > maxArtifacts:
 						artifactItems = artifactItems[:maxArtifacts]
@@ -1860,7 +1886,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 					}
 					for _, artifact := range artifactItems {
 						if artifact.Expired {
-							continue
+							continue // unreachable: expired artifacts are split out before the cap (CHAOS-13980)
 						}
 						var archive []byte
 						notFound := false

@@ -707,7 +707,7 @@ groups:
             available for that total condition even though this alert's own
             metric still cannot say which repository is affected. The
             metric's `reason` label
-            (unreadable_archive / artifact_unavailable / artifact_oversized /
+            (unreadable_archive / artifact_unavailable / artifact_oversized / artifact_expired /
             other, the last added CHAOS-4315) narrows the
             failure shape.
 

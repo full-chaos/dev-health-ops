@@ -43,6 +43,11 @@ type PostSyncPlan struct {
 	// days those rows touched (CHAOS-9169): a commit written for a day outside
 	// every window of the run marks its own day.
 	Git bool
+	// TestReports is true when a successful unit of the sync run wrote test
+	// suite rows (the cicd or tests target). Only then does the fan-out record
+	// the days of the suites of the runs it wrote, the older attempts' days
+	// included (CHAOS-14006).
+	TestReports bool
 	// RunStartedAt is sync_runs.started_at (created_at for a run that has
 	// none): no unit of the run wrote a raw row before it, apart from clock
 	// skew between processes.
@@ -752,7 +757,7 @@ LIMIT 1`, orgID, integrationID).Scan(&autoImport); err != nil && !errors.Is(err,
 		}
 	}
 	return &PostSyncPlan{
-		WorkItems: hasWorkItems, Git: git, RunStartedAt: startedAt,
+		WorkItems: hasWorkItems, Git: git, TestReports: writesTestReportRows(targets), RunStartedAt: startedAt,
 		WorkItemWindowDays: workItemWindowDays,
 		OrganizationID:     orgID, SyncRunID: args.SyncRunID(), TargetDay: targetDay,
 		BackfillDays: backfillDays, From: from, To: to,
@@ -796,6 +801,15 @@ func writesGitRows(targets map[string]struct{}) bool {
 	_, hasGit := targets["git"]
 	_, hasPRs := targets["prs"]
 	return hasGit || hasPRs
+}
+
+// writesTestReportRows says whether a successful unit of the sync run wrote
+// test suite rows (the cicd or the tests target), read from the dataset
+// capability like writesGitRows.
+func writesTestReportRows(targets map[string]struct{}) bool {
+	_, hasCICD := targets["cicd"]
+	_, hasTests := targets["tests"]
+	return hasCICD || hasTests
 }
 
 func utcDay(value time.Time) time.Time {

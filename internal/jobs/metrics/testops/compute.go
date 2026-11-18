@@ -69,6 +69,7 @@ type PipelineRunRow struct {
 	TeamID          *string
 	ServiceID       *string
 	OrgID           string
+	LastSynced      time.Time
 }
 
 // SuiteRow ports TestSuiteResultRow (testops_schemas.py:145).
@@ -130,6 +131,10 @@ type PipelineMetric struct {
 	SuccessCount          int
 	FailureCount          int
 	CancelledCount        int
+	SkippedCount          int
+	UnfinishedCount       int
+	OtherCount            int
+	UnfinishedStaleCount  int
 	SuccessRate           float64
 	FailureRate           float64
 	CancelRate            float64
@@ -322,6 +327,44 @@ func normalizePipelineStatus(status *string) string {
 	}
 }
 
+// pipelineUnfinishedStatuses are the stored statuses of a run that has not finished yet.
+var pipelineUnfinishedStatuses = []string{"running", "queued"}
+
+// OpenRunRefreshLookback is how long a sync takes to read an open run again: the GitHub runs phase lists runs created
+// up to this long before its window, and re-reads older open runs by id. An unfinished run whose row is older than this
+// may already be finished.
+const OpenRunRefreshLookback = 6 * time.Hour
+
+// pipelineRunBucket is the one count of a day's row that a counted run adds to.
+type pipelineRunBucket int
+
+const (
+	bucketOther pipelineRunBucket = iota
+	bucketSuccess
+	bucketFailure
+	bucketCancelled
+	bucketSkipped
+	bucketUnfinished
+)
+
+// pipelineStatusBucket puts every stored status in exactly one bucket; a status no other bucket names is other.
+func pipelineStatusBucket(status *string) pipelineRunBucket {
+	switch normalized := normalizePipelineStatus(status); {
+	case normalized == "success":
+		return bucketSuccess
+	case normalized == "failure":
+		return bucketFailure
+	case normalized == "cancelled":
+		return bucketCancelled
+	case normalized == "skipped":
+		return bucketSkipped
+	case slices.Contains(pipelineUnfinishedStatuses, normalized):
+		return bucketUnfinished
+	default:
+		return bucketOther
+	}
+}
+
 var failureStatuses = func() map[string]struct{} {
 	set := make(map[string]struct{}, len(pipelineFailureStatuses))
 	for _, status := range pipelineFailureStatuses {
@@ -463,6 +506,7 @@ func ComputePipelineMetrics(repoID uuid.UUID, rows []PipelineRunRow, repoName st
 // formerly locals inside ComputePipelineMetrics, hoisted unchanged.
 type pipelineBucket struct {
 	pipelines, success, failure, cancelled, reruns int
+	skipped, unfinished, unfinishedStale, other    int
 	durations, queues                              []float64
 	orgID                                          string
 }
@@ -496,6 +540,8 @@ type PipelineAccumulator struct {
 	resolver RepoTeamResolver
 	byGroup  map[pipelineKey]*pipelineBucket
 	order    []pipelineKey
+	// staleBefore is set by MeasureStaleAsOf; while it is zero, no run is stale.
+	staleBefore time.Time
 }
 
 // NewPipelineAccumulator takes the same repoName/resolver contract as
@@ -507,6 +553,12 @@ func NewPipelineAccumulator(repoID uuid.UUID, repoName string, resolver RepoTeam
 		resolver: resolver,
 		byGroup:  make(map[pipelineKey]*pipelineBucket),
 	}
+}
+
+// MeasureStaleAsOf makes Add count an unfinished run as stale when its row was last synced more than
+// OpenRunRefreshLookback before computedAt.
+func (accumulator *PipelineAccumulator) MeasureStaleAsOf(computedAt time.Time) {
+	accumulator.staleBefore = computedAt.Add(-OpenRunRefreshLookback)
 }
 
 // Add folds one ci_pipeline_runs row into its (resolved team_id, raw
@@ -529,13 +581,22 @@ func (accumulator *PipelineAccumulator) Add(row PipelineRunRow) {
 		accumulator.order = append(accumulator.order, k)
 	}
 	b.pipelines++
-	switch normalizePipelineStatus(row.Status) {
-	case "success":
+	switch pipelineStatusBucket(row.Status) {
+	case bucketSuccess:
 		b.success++
-	case "failure":
+	case bucketFailure:
 		b.failure++
-	case "cancelled":
+	case bucketCancelled:
 		b.cancelled++
+	case bucketSkipped:
+		b.skipped++
+	case bucketUnfinished:
+		b.unfinished++
+		if row.LastSynced.Before(accumulator.staleBefore) {
+			b.unfinishedStale++
+		}
+	default:
+		b.other++
 	}
 	if row.RetryCount > 0 {
 		b.reruns++
@@ -574,6 +635,8 @@ func finishPipelineBucket(repoID uuid.UUID, k pipelineKey, b *pipelineBucket) Pi
 		RepoID: repoID, OrgID: b.orgID,
 		PipelinesCount: b.pipelines, SuccessCount: b.success,
 		FailureCount: b.failure, CancelledCount: b.cancelled,
+		SkippedCount: b.skipped, UnfinishedCount: b.unfinished,
+		OtherCount: b.other, UnfinishedStaleCount: b.unfinishedStale,
 	}
 	// Success and failure rates are over the completed runs (succeeded or failed); cancelled, skipped and unfinished
 	// runs are in neither. A day with no completed run keeps 0 here (the columns are not nullable): every reader
@@ -649,6 +712,10 @@ func (accumulator *PipelineAccumulator) FinishRepoDay() *PipelineMetric {
 		merged.success += b.success
 		merged.failure += b.failure
 		merged.cancelled += b.cancelled
+		merged.skipped += b.skipped
+		merged.unfinished += b.unfinished
+		merged.unfinishedStale += b.unfinishedStale
+		merged.other += b.other
 		merged.reruns += b.reruns
 		merged.durations = append(merged.durations, b.durations...)
 		merged.queues = append(merged.queues, b.queues...)

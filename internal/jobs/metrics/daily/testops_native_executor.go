@@ -145,6 +145,7 @@ func (executor *TestopsPipelineExecutor) ComputeFamily(
 	var metrics []testops.PipelineMetric
 	for _, repoID := range scope.repoIDs {
 		accumulator := testops.NewPipelineAccumulator(repoID, repoID.String(), scope.resolver)
+		accumulator.MeasureStaleAsOf(scope.computedAt)
 		if err := loadNativeTestopsPipelineRuns(
 			ctx, executor.conn, accumulator, run.OrganizationID, repoID, scope.start, scope.end,
 		); err != nil {

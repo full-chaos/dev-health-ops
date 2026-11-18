@@ -262,8 +262,9 @@ rows: one `GitLabTestsRouteHandler` fetches and normalizes the complete TestOps
 unit for either claim, and one `TestOpsClickHouseEffects` implementation writes
 the same seven destinations: `ci_pipeline_runs`, `ci_job_runs`,
 `ci_acceptance_checks`, `test_suite_results`, `test_case_results`,
-`coverage_snapshots`, and `testops_run_report_completeness` (GitLab writes the
-last one empty for now). This single complete owner is required because
+`coverage_snapshots`, and `testops_run_report_completeness` (one row per
+finished pipeline with report sources: complete, or partial with the loss
+reasons; the attempt is 1 + the pipeline's retried jobs). This single complete owner is required because
 `ci_pipeline_runs` is a `ReplacingMergeTree`; a newer partial row would replace
 the older whole row rather than merge columns.
 

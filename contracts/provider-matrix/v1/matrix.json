@@ -58,7 +58,8 @@
         "ci_pipeline_runs",
         "coverage_snapshots",
         "test_case_results",
-        "test_suite_results"
+        "test_suite_results",
+        "testops_run_report_completeness"
       ],
       "route_ready": true,
       "plannable": true,
@@ -330,7 +331,8 @@
         "ci_pipeline_runs",
         "coverage_snapshots",
         "test_case_results",
-        "test_suite_results"
+        "test_suite_results",
+        "testops_run_report_completeness"
       ],
       "route_ready": true,
       "plannable": false,
@@ -547,7 +549,8 @@
         "ci_pipeline_runs",
         "coverage_snapshots",
         "test_case_results",
-        "test_suite_results"
+        "test_suite_results",
+        "testops_run_report_completeness"
       ],
       "route_ready": true,
       "plannable": true,
@@ -864,7 +867,8 @@
         "ci_pipeline_runs",
         "coverage_snapshots",
         "test_case_results",
-        "test_suite_results"
+        "test_suite_results",
+        "testops_run_report_completeness"
       ],
       "route_ready": true,
       "plannable": false,

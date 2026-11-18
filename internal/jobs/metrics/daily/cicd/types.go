@@ -7,22 +7,18 @@
 // would NOT tell you, verified against the actual Python call path in
 // job_daily.py and loaders/clickhouse.py):
 //
-//   - DOUBLE WINDOW FILTER: load_cicd_data's ClickHouse query filters
-//     ci_pipeline_runs by finished_at IN [day start, day end). compute_cicd_
-//     metrics_daily THEN re-filters the same rows by started_at IN the SAME
-//     window, in-process. A pipeline that started on day D but finished on
-//     day D+1 is therefore NEVER counted for cicd, on either day: the loader
-//     never fetches it for day D (finished_at is out of window), and it is
-//     fetched for day D+1 but then dropped by the started_at re-filter. This
-//     package reproduces BOTH filters (PipelineRunsSource applies both
-//     windows in SQL; ComputeCICDMetricsDaily re-applies the started_at
-//     filter in-process), matching Python exactly rather than "fixing" what
-//     looks like an odd double filter.
+//   - DAY OF A RUN: a finished run counts on the UTC day it FINISHES
+//     (finished_at in [day start, day end)). started_at is not a day filter:
+//     it only feeds the duration (finished_at - started_at) and queue
+//     (started_at - queued_at) samples. A run that crosses UTC midnight
+//     therefore counts once, on the day it ends. The Python original counted
+//     such a run on no day (it also re-filtered by started_at); Python is gone
+//     and that rule is not kept.
 //   - FINAL: the loader reads ci_pipeline_runs (a ReplacingMergeTree) with
 //     FINAL -- see PipelineRunsSource's doc comment.
 //   - A repo with zero pipeline runs in the window produces NO row at all,
 //     not a pipelines_count=0 row -- by can never observe: nothing appends
-//     to by_repo unless at least one row survives both filters, so the
+//     to by_repo unless at least one row survives the filter, so the
 //     `if pipelines else 0.0` success_rate guard is dead code in the real
 //     pipeline. ComputeCICDMetricsDaily preserves this: a repo with no
 //     surviving rows gets no CICDMetric.

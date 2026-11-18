@@ -205,7 +205,7 @@ func (handler paddedEmissionHandler) CollectChunks(
 ) error {
 	destinations := []string{
 		"ci_pipeline_runs", "ci_job_runs", "ci_acceptance_checks",
-		"test_suite_results", "test_case_results", "coverage_snapshots",
+		"test_suite_results", "test_case_results", "coverage_snapshots", "testops_run_report_completeness",
 	}
 	effects := make([]EffectBatch, 0, len(destinations))
 	for index, destination := range destinations {

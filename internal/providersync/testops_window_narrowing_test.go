@@ -51,3 +51,28 @@ func TestNarrowTestOpsWindowHalvesPerBlockedUnitDownToTheFloor(t *testing.T) {
 		})
 	}
 }
+
+// The halved end is a whole microsecond (PostgreSQL's timestamptz precision), and the candidates are each distinct
+// end the halving gives for 1 to TestOpsNarrowingLookback blocks, ending at the floor.
+func TestNarrowTestOpsWindowEndsOnAMicrosecond(t *testing.T) {
+	start := time.Date(2026, 11, 14, 0, 0, 0, 1000, time.UTC)
+	end := start.Add(72*time.Hour + time.Microsecond)
+	for blocked := 1; blocked <= TestOpsNarrowingLookback; blocked++ {
+		got, _ := NarrowTestOpsWindow(&start, end, blocked)
+		if got.Nanosecond()%1000 != 0 {
+			t.Fatalf("blocked %d: end %s is not a whole microsecond", blocked, got.Format(time.RFC3339Nano))
+		}
+	}
+	candidates := TestOpsNarrowingCandidates(&start, end)
+	if len(candidates) == 0 || candidates[len(candidates)-1].Sub(start) != TestOpsWindowHalvingFloor {
+		t.Fatalf("candidates = %v, want them to end at the floor", candidates)
+	}
+	for index := 1; index < len(candidates); index++ {
+		if !candidates[index].Before(candidates[index-1]) {
+			t.Fatalf("candidates are not strictly shrinking: %v", candidates)
+		}
+	}
+	if got := TestOpsNarrowingCandidates(&start, start.Add(30*time.Minute)); len(got) != 0 {
+		t.Fatalf("a span under the floor has candidates %v, want none", got)
+	}
+}

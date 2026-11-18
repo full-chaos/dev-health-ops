@@ -114,3 +114,81 @@ func TestLoadTestOpsBudgetBlockedLogsAReadFailure(t *testing.T) {
 		t.Fatalf("log carries the error text: %q", out)
 	}
 }
+
+type replayEndRow struct {
+	source string
+	end    time.Time
+}
+
+type replayEndRows struct {
+	pgx.Rows
+	rows []replayEndRow
+	next int
+}
+
+func (rows *replayEndRows) Next() bool {
+	rows.next++
+	return rows.next <= len(rows.rows)
+}
+func (rows *replayEndRows) Scan(dest ...any) error {
+	row := rows.rows[rows.next-1]
+	*dest[0].(*string) = row.source
+	*dest[1].(*time.Time) = row.end
+	return nil
+}
+func (rows *replayEndRows) Err() error { return nil }
+func (rows *replayEndRows) Close()     {}
+
+type replayEndReader struct {
+	rows    *replayEndRows
+	err     error
+	queries int
+	args    []any
+}
+
+func (reader *replayEndReader) Query(_ context.Context, sql string, args ...any) (pgx.Rows, error) {
+	reader.queries++
+	reader.args = args
+	if sql != testOpsReplayEndsSQL {
+		return nil, errors.New("unexpected statement")
+	}
+	if reader.err != nil {
+		return nil, reader.err
+	}
+	return reader.rows, nil
+}
+
+// The committed-window read runs for a GitHub tests/cicd plan only, keys the ends by source, finds nothing on a first
+// attempt, and fails the attempt (never ErrInvalidPlan, so the occurrence is retried, not quarantined) when it breaks.
+func TestLoadTestOpsReplayEndsReadsTheCommittedCicdUnits(t *testing.T) {
+	end := time.Date(2026, 11, 17, 12, 0, 0, 0, time.FixedZone("x", 3600))
+	reader := &replayEndReader{rows: &replayEndRows{rows: []replayEndRow{{"a", end}}}}
+	got, err := loadTestOpsReplayEnds(context.Background(), reader, "run", "github", []PlanDataset{{Key: "tests"}})
+	if err != nil || len(got) != 1 || !got["a"].Equal(end) || got["a"].Location() != time.UTC {
+		t.Fatalf("ends = %v err %v, want a=%s in UTC", got, err, end.UTC())
+	}
+	if len(reader.args) != 2 || reader.args[0] != "run" || reader.args[1] != canonicalTestOpsDataset {
+		t.Fatalf("args = %v, want the sync run and the canonical cicd dataset", reader.args)
+	}
+	first := &replayEndReader{rows: &replayEndRows{}}
+	if got, err := loadTestOpsReplayEnds(context.Background(), first, "run", "github", []PlanDataset{{Key: "cicd"}}); err != nil || got != nil {
+		t.Fatalf("first attempt ends = %v err %v, want none", got, err)
+	}
+	for name, test := range map[string]struct {
+		provider string
+		datasets []PlanDataset
+	}{
+		"gitlab":           {"gitlab", []PlanDataset{{Key: "cicd"}}},
+		"no tests or cicd": {"github", []PlanDataset{{Key: "commits"}}},
+	} {
+		skipped := &replayEndReader{rows: &replayEndRows{}}
+		if got, err := loadTestOpsReplayEnds(context.Background(), skipped, "run", test.provider, test.datasets); err != nil || got != nil || skipped.queries != 0 {
+			t.Fatalf("%s: ends = %v err %v queries %d, want no read", name, got, err, skipped.queries)
+		}
+	}
+	broken := &replayEndReader{err: errors.New("boom")}
+	_, err = loadTestOpsReplayEnds(context.Background(), broken, "run", "github", []PlanDataset{{Key: "cicd"}})
+	if err == nil || errors.Is(err, ErrInvalidPlan) {
+		t.Fatalf("broken read err = %v, want a retryable error (not ErrInvalidPlan)", err)
+	}
+}

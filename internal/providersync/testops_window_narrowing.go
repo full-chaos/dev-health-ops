@@ -70,9 +70,12 @@ func TestOpsBudgetBlockedCount(blockedNewestFirst []bool) int {
 }
 
 // NarrowTestOpsWindow halves the span from start to end once per budget-blocked
-// unit, never below TestOpsWindowHalvingFloor and never past end. ok is false
-// when nothing changes: an open start, no blocked unit, or a span already at or
-// below the floor.
+// unit, never below TestOpsWindowHalvingFloor and never past end. The new end is
+// truncated to the microsecond: PostgreSQL stores timestamptz in microseconds,
+// and the materializer compares the stored end with the planned one exactly, so
+// a halving that leaves a nanosecond remainder would make the persisted unit
+// differ from its plan. ok is false when nothing changes: an open start, no
+// blocked unit, or a span already at or below the floor.
 func NarrowTestOpsWindow(start *time.Time, end time.Time, blocked int) (time.Time, bool) {
 	if start == nil || blocked <= 0 {
 		return end, false
@@ -85,8 +88,27 @@ func NarrowTestOpsWindow(start *time.Time, end time.Time, blocked int) (time.Tim
 	if narrowed < TestOpsWindowHalvingFloor {
 		narrowed = TestOpsWindowHalvingFloor
 	}
-	if narrowed >= span {
+	narrowedEnd := start.Add(narrowed).Truncate(time.Microsecond)
+	if !narrowedEnd.Before(end) {
 		return end, false
 	}
-	return start.Add(narrowed), true
+	return narrowedEnd, true
+}
+
+// TestOpsNarrowingCandidates is every end NarrowTestOpsWindow can return for the
+// span from start to end with 1 to TestOpsNarrowingLookback budget-blocked
+// units. A replay of an occurrence keeps the end its committed plan stored only
+// when that end is one of these.
+func TestOpsNarrowingCandidates(start *time.Time, end time.Time) []time.Time {
+	candidates := make([]time.Time, 0, TestOpsNarrowingLookback)
+	for blocked := 1; blocked <= TestOpsNarrowingLookback; blocked++ {
+		candidate, ok := NarrowTestOpsWindow(start, end, blocked)
+		if !ok {
+			break
+		}
+		if len(candidates) == 0 || !candidates[len(candidates)-1].Equal(candidate) {
+			candidates = append(candidates, candidate)
+		}
+	}
+	return candidates
 }

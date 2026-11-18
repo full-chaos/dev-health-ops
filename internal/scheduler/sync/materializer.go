@@ -491,6 +491,11 @@ func (materializer *NativeMaterializer) Materialize(
 	if err != nil {
 		return PlanResult{}, err
 	}
+	// After the coordinator lock above, so a replay sees what an earlier attempt committed (CHAOS-13827).
+	loaded.input.TestOpsReplayEnds, err = loadTestOpsReplayEnds(ctx, materializer.domainPool, ids.SyncRunID, loaded.provider, loaded.input.Datasets)
+	if err != nil {
+		return PlanResult{}, err
+	}
 	loaded.input.ExecutedProof = materializer.executedProof.Load()
 	var units []PlannedUnit
 	if loaded.terminalReason == "" {
@@ -2117,6 +2122,60 @@ func loadTestOpsBudgetBlocked(
 		}
 	}
 	return counts
+}
+
+// testOpsReplayReader reads the domain rows an earlier attempt of an occurrence committed.
+type testOpsReplayReader interface {
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+}
+
+// testOpsReplayEndsSQL lists the window ends of the folded tests/cicd units the
+// occurrence's deterministic sync run already holds. A unit of a graph that was
+// committed but not yet made ready is still 'planned', so the open-units index
+// (ix_sync_run_units_open_run) serves the lookup.
+const testOpsReplayEndsSQL = `
+SELECT source_id::text, before_at
+FROM public.sync_run_units
+WHERE sync_run_id = $1::uuid AND dataset_key = $2 AND before_at IS NOT NULL
+  AND status NOT IN ('success', 'failed')`
+
+// loadTestOpsReplayEnds reads, per source, the window end of the folded
+// tests/cicd unit an earlier attempt of this occurrence committed (CHAOS-13827).
+// The narrowing reads unit history that moves between attempts, and its read
+// can fail on one attempt and succeed on the next; without the committed end a
+// replay could plan another end and the deterministic verifier would quarantine
+// the occurrence. It runs only for a GitHub plan with a tests or cicd dataset,
+// and finds nothing on a first attempt. A failed read fails this attempt (it is
+// retried); it never plans without knowing what was committed.
+func loadTestOpsReplayEnds(
+	ctx context.Context, reader testOpsReplayReader, syncRunID, provider string, datasets []PlanDataset,
+) (map[string]time.Time, error) {
+	if provider != "github" || !slices.ContainsFunc(datasets, func(dataset PlanDataset) bool {
+		return slices.Contains(testOpsFamilyDatasets, dataset.Key)
+	}) {
+		return nil, nil
+	}
+	rows, err := reader.Query(ctx, testOpsReplayEndsSQL, syncRunID, canonicalTestOpsDataset)
+	if err != nil {
+		return nil, fmt.Errorf("read the committed tests/cicd windows of the occurrence: %w", err)
+	}
+	defer rows.Close()
+	var ends map[string]time.Time
+	for rows.Next() {
+		var sourceID string
+		var end time.Time
+		if err := rows.Scan(&sourceID, &end); err != nil {
+			return nil, fmt.Errorf("scan a committed tests/cicd window of the occurrence: %w", err)
+		}
+		if ends == nil {
+			ends = make(map[string]time.Time)
+		}
+		ends[sourceID] = end.UTC()
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read the committed tests/cicd windows of the occurrence: %w", err)
+	}
+	return ends, nil
 }
 
 // DatasetFullQuery reports whether an integration_datasets row makes its work-items family one unbounded

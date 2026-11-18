@@ -247,7 +247,7 @@ func WorkflowDrilldown(ctx context.Context, client QueryClient, orgID string, ro
 		}
 		next := map[nodeKey]bool{}
 		for _, e := range rows {
-			// A deployment-incident edge id names (deployment, incident); two
+			// Rows written before CHAOS-7262 have an id without the repository: two
 			// repositories that run one deployment id each hold their own row.
 			seenKey := e.EdgeID
 			if e.RepoID != nil {

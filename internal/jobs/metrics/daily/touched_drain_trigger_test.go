@@ -75,7 +75,9 @@ func TestTheEndOfADailyRunTriggersADrainPass(t *testing.T) {
 		{name: "the last attempt failed", familyErr: errors.New("boom"), attempt: 4, maxAttempts: 4, want: endPass},
 		{name: "an attempt failed and will be retried", familyErr: errors.New("boom"), attempt: 2, maxAttempts: 4},
 		{name: "the completion write failed", attempt: 1, maxAttempts: 4, completionErr: ErrUnavailable},
+		{name: "the completion write of the last attempt failed", attempt: 4, maxAttempts: 4, completionErr: ErrUnavailable, want: endPass},
 		{name: "the terminal write of the last attempt failed", familyErr: errors.New("boom"), attempt: 4, maxAttempts: 4, terminalWriteErr: ErrLeaseLost},
+		{name: "the terminal write after the last completion write failed", attempt: 4, maxAttempts: 4, completionErr: ErrUnavailable, terminalWriteErr: ErrLeaseLost},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {

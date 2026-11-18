@@ -156,6 +156,7 @@ jobs:
               - 'cmd/cigate/**'
               - 'internal/cigates/metricsproof/**'
               - 'internal/jobs/metrics/**'
+              - 'internal/chtime/**'
               - 'internal/jobruntime/**'
               - 'internal/jobcontract/**'
               - 'contracts/jobs/**'

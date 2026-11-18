@@ -24,12 +24,8 @@ type productSink struct {
 	batches         []*productBatch
 	err             error
 
-	// queryRows/queryErr configure Query -- used by
-	// ClickHouseExternalBatchSink's team.v1 manual_members preserve-lookup
-	// (CHAOS-4321, team-lead ruling 2026-08-26). Unset (the default for
-	// every test that doesn't care) means "no existing row for any team",
-	// which is exactly the pre-fix behavior every existing test already
-	// expects.
+	// queryRows/queryErr configure every Query the fake does not answer
+	// itself (the current-version reads of the stored-version contracts).
 	queryRows     [][]any
 	queryErr      error
 	queryCalls    int
@@ -44,6 +40,8 @@ type productSink struct {
 	createdRows  [][]any
 	createdErr   error
 	createdCalls int
+	// writes are the teamprovider.Insert rows Exec decoded.
+	writes []teamprovider.Write
 }
 
 func (s *productSink) PrepareBatch(_ context.Context, query string, _ ...driver.PrepareBatchOption) (driver.Batch, error) {
@@ -74,6 +72,7 @@ func (s *productSink) Exec(ctx context.Context, query string, args ...any) error
 	if err != nil {
 		return err
 	}
+	s.writes = append(s.writes, writes...)
 	for _, write := range writes {
 		if err := batch.Append(write.Values...); err != nil {
 			return err
@@ -120,7 +119,7 @@ func (s *productSink) Query(_ context.Context, query string, args ...any) (drive
 }
 
 // productRows is a minimal driver.Rows double: only Next/Scan/Close/Err are
-// ever exercised by preserveExistingManualMembers's read loop.
+// exercised.
 type productRows struct {
 	rows []([]any)
 	idx  int

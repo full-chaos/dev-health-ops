@@ -119,8 +119,8 @@ func TestLinearReferenceCatalogEffectsAgainstMigratedSchema(t *testing.T) {
 // second Linear sync wiped an admin's CHAOS-4321 manual roster override).
 // The Linear teams INSERT omitted manual_members entirely, so every write
 // reset it to the schema default ([]) -- this pins that a value set between
-// two native writes survives the second one, via the shared
-// PreserveExistingTeamManualMembers helper (team_manual_members.go).
+// two native writes survives the second one: the write keeps the stored
+// roster (teamprovider.RosterKept) inside its insert statement.
 func TestLinearReferenceCatalogEffectsPreservesManualMembersAcrossWrites(t *testing.T) {
 	ctx, conn := newWorkItemEffectsConn(t)
 	lease := providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil })

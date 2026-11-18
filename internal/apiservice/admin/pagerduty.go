@@ -250,7 +250,7 @@ func (h *handlers) getPagerDutyStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	credentialName := "default"
-	if value, present := queryLastValue(r.URL.Query(), "credential_name"); present {
+	if value, present := queryLastValue(httpapi.Query(r), "credential_name"); present {
 		credentialName = value
 	}
 	descriptor, err := loadPagerDutyIntegrationCredential(ctx, h.store.Pool, orgID, credentialName)

@@ -30,16 +30,43 @@ func URLError(err error) *url.Error {
 // transport error answers false instead of panicking (CHAOS-8127).
 func RetryableTransport(err error) bool {
 	// Every link of every branch is read: a typed-nil or non-matching link must not hide a real dial or timeout in another
-	// branch, whatever the order of a multi-error (CHAOS-8271).
+	// branch, whatever the order of a multi-error (CHAOS-8271). An As method's match counts as the parent's errors.As did.
 	for _, link := range boundedChain(err) {
-		if operation, ok := link.(*net.OpError); ok && operation != nil && operation.Op == "dial" {
+		if retryableLink(link) {
 			return true
 		}
-		if timeout, ok := link.(interface{ Timeout() bool }); ok && safeTimeout(timeout) {
-			return true
+		if as, ok := link.(interface{ As(any) bool }); ok {
+			var operation *net.OpError
+			if callAs(as, &operation) && dialOp(operation) {
+				return true
+			}
+			var timeout interface{ Timeout() bool }
+			if callAs(as, &timeout) && timeoutLink(timeout) {
+				return true
+			}
 		}
 	}
 	return false
+}
+
+func retryableLink(link error) bool {
+	if operation, ok := link.(*net.OpError); ok && dialOp(operation) {
+		return true
+	}
+	timeout, ok := link.(interface{ Timeout() bool })
+	return ok && timeoutLink(timeout)
+}
+
+func dialOp(operation *net.OpError) bool { return operation != nil && operation.Op == "dial" }
+
+// timeoutLink skips *url.Error and *net.OpError: their Timeout methods recurse into Err, which a self-referencing one turns
+// into a fatal stack overflow that recover cannot catch; their inner links are read by the bounded walk instead.
+func timeoutLink(timeout interface{ Timeout() bool }) bool {
+	switch timeout.(type) {
+	case *url.Error, *net.OpError:
+		return false
+	}
+	return safeTimeout(timeout)
 }
 
 // IsLocationParseRefusal reports whether the error is net/http's refusal of a redirect whose Location does not parse: a

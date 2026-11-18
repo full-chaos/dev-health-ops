@@ -16,6 +16,16 @@ import (
 // artifact cap.
 const githubTestsExclusionReasonNoReportMember = "no_report_member"
 
+// githubTestsArtifactsPerPage is the per_page of a run's artifact listing,
+// which reads one page. githubTestsMaxDirectoryChecksPerRun bounds the
+// directory checks of one run by it, even if a page carried more items: a
+// candidate past the bound is not classified and is handled as before the
+// check existed (it takes a slot, or is cut as per_run_cap).
+const (
+	githubTestsArtifactsPerPage         = 100
+	githubTestsMaxDirectoryChecksPerRun = githubTestsArtifactsPerPage
+)
+
 // githubTestsAdmitReportArtifacts applies the per-run artifact cap after a
 // report-member check (CHAOS-14000). Only when the candidates exceed the cap,
 // every one's zip directory is read by range, in order: an artifact that lists
@@ -31,11 +41,16 @@ func githubTestsAdmitReportArtifacts(
 		return artifacts, nil, false, 0, nil
 	}
 	admitted = make([]githubTestsArtifactPayload, 0, maxArtifacts)
-	for _, artifact := range artifacts {
-		listed, hasReport, requests, checkErr := githubTestsArtifactListsReportMember(ctx, client, root, string(artifact.ID), artifact.listedSize())
-		used += requests
-		if checkErr != nil {
-			return nil, nil, false, used, checkErr
+	for index, artifact := range artifacts {
+		listed, hasReport := false, false
+		if index < githubTestsMaxDirectoryChecksPerRun {
+			var requests int
+			var checkErr error
+			listed, hasReport, requests, checkErr = githubTestsArtifactListsReportMember(ctx, client, root, string(artifact.ID), artifact.listedSize())
+			used += requests
+			if checkErr != nil {
+				return nil, nil, false, used, checkErr
+			}
 		}
 		switch {
 		case listed && !hasReport:

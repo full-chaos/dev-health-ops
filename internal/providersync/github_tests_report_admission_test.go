@@ -494,6 +494,58 @@ func TestGitHubTestsAdmissionDirect416KeepsTheSlot(t *testing.T) {
 	}
 }
 
+// The directory checks of one run are bounded by the artifact listing's page
+// size even when the page carries more items: here one page lists 100
+// artifacts without a report member, then 3 report artifacts, under a cap of
+// 2. The first 100 are checked and excluded; the 3 past the bound are not
+// checked, take the 2 slots in order, and the third is cut as per_run_cap.
+func TestGitHubTestsAdmissionChecksAreBoundedPerRun(t *testing.T) {
+	artifacts := func() []githubTestsAdmissionArtifact {
+		out := make([]githubTestsAdmissionArtifact, 0, githubTestsMaxDirectoryChecksPerRun+3)
+		for index := range githubTestsMaxDirectoryChecksPerRun + 3 {
+			name, order, body := fmt.Sprintf("race-json-%03d", index), "race.json", "{}"
+			if index >= githubTestsMaxDirectoryChecksPerRun {
+				name, order, body = fmt.Sprintf("shard-%03d", index), "junit.xml", "<testsuites>"+githubTestsACRShardSuite(fmt.Sprintf("shard-%03d", index))+"</testsuites>"
+			}
+			out = append(out, githubTestsAdmissionArtifact{
+				id: int64(1000 + index), name: name, created: time.Date(2026, 7, 22, 9, 0, index, 0, time.UTC).Format(time.RFC3339),
+				archive: githubTestsOrderedZip(t, []string{order}, map[string]string{order: body}),
+			})
+		}
+		return out
+	}
+	assertBounded := func(t *testing.T, doer *githubTestsAdmissionDoer) {
+		t.Helper()
+		checked := 0
+		for index := range githubTestsMaxDirectoryChecksPerRun + 3 {
+			id := int64(1000 + index)
+			if doer.ranged[id] > 0 {
+				checked++
+				if index >= githubTestsMaxDirectoryChecksPerRun {
+					t.Fatalf("artifact %d past the bound was checked", index)
+				}
+			}
+		}
+		if checked != githubTestsMaxDirectoryChecksPerRun {
+			t.Fatalf("directory checks=%d, want the bound %d", checked, githubTestsMaxDirectoryChecksPerRun)
+		}
+	}
+	chunked := newGitHubTestsAdmissionDoer(t, "77", artifacts())
+	walk := githubTestsAdmissionWalk(t, chunked, 2)
+	assertBounded(t, chunked)
+	if !githubTestsHasObservation(walk, githubTestsRunArtifactsComponent, githubTestsPerRunCapCause) {
+		t.Fatalf("chunked: no per_run_cap for the report artifact past the slots: %+v", walk.cursor.Incomplete)
+	}
+	if chunked.whole[1100] != 1 || chunked.whole[1101] != 1 || chunked.whole[1102] != 0 {
+		t.Fatalf("downloads past the bound=%d/%d/%d, want 1/1/0", chunked.whole[1100], chunked.whole[1101], chunked.whole[1102])
+	}
+	collect := newGitHubTestsAdmissionDoer(t, "77", artifacts())
+	if err := githubTestsCollectAdmission(t, collect, 2); !errors.Is(err, ErrPaginationCapExceeded) {
+		t.Fatalf("Collect err=%v, want ErrPaginationCapExceeded", err)
+	}
+	assertBounded(t, collect)
+}
+
 // githubTestsWriteResponse writes a doer's response on a server connection.
 func githubTestsWriteResponse(w io.Writer, response *http.Response) error {
 	body, err := io.ReadAll(response.Body)

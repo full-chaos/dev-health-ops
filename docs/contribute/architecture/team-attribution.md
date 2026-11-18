@@ -258,10 +258,12 @@ flowchart TD
     RO -->|"yes"| Win
     RO -->|"no"| AM["4 · assignee_membership: PROVENANCE ONLY<br/>recorded as is_primary = 0, never the primary team"]
     AM --> LK{"5 · linked_issue candidate?<br/>(real donor row resolving to a team)"}
-    LK -->|"yes"| Win
+    LK -->|"yes, the item is a pull or merge request"| Win
+    LK -->|"yes, the item is an issue: PROVENANCE ONLY,<br/>recorded as is_primary = 0"| AU
     LK -->|"no"| AU["6 · author_membership: PROVENANCE ONLY<br/>recorded as is_primary = 0, never the primary team"]
     AU --> MF{"7 · manual_fallback candidate?<br/>repo / project / member / issue_key_prefix"}
-    MF -->|"yes"| Win
+    MF -->|"yes, a repo / project / issue_key_prefix rule"| Win
+    MF -->|"yes, a member rule only: PROVENANCE ONLY,<br/>recorded as is_primary = 0"| UN
     MF -->|"no"| UN["is_primary = unassigned (8)"]
     Win --> P["Persist work_item_team_attributions:<br/>candidate rows that passed every gate; is_primary on the winner"]
     UN --> P
@@ -278,6 +280,23 @@ flowchart TD
 > (`internal/teamattribution/cascade.go`, the `order` loop in `Resolve`) skips these two sources when
 > it picks the primary; `TestMembershipTiersAreProvenanceOnly` and the frozen oracle snapshots
 > pin it. The Python mirror is retired for this table and is not changed.
+
+> **Team = ownership, for the two computed sources too.** A team is reached through ownership only
+> (data-and-storage, entity tree rule 2), so two more candidates are provenance only, recorded
+> with `is_primary = 0` and never the primary team:
+>
+> - a `linked_issue` (5) candidate of an **issue**. Another issue's team is not ownership. A
+>   pull or merge request (`type` `pr` on GitHub, `merge_request` on GitLab) keeps its linked issue's
+>   team: the tree edge pull request → issue → project reaches the owner of the issue's project.
+> - a `manual_fallback` (7) candidate of a **`member`** rule (`manual_fallback:member=<id>`). The
+>   rule names a person (the item's assignee). A `repo`, `project` or `issue_key_prefix` rule still
+>   wins when no higher source matched.
+>
+> An item whose only signal is one of these stays `unassigned` (`is_primary = 1`, evidence unchanged),
+> with the candidate row beside it. The daily work-item tables copy the primary row, so they follow.
+> The same `order` loop in `Resolve` skips them; `TestALinkedIssueOverAnIssueEdgeIsProvenanceOnly`,
+> `TestAPullRequestKeepsItsLinkedIssueDonor`, `TestAMemberFallbackRuleIsProvenanceOnly` and
+> `TestAWorkItemTeamIsReachedThroughOwnershipOnlyInEveryDailyTable` (every daily table) pin it.
 
 **Invariants:** the **winner is the highest-precedence matching source** (every matching source that
 passes its own gate is still persisted as a candidate — precedence decides `is_primary`, not which
@@ -318,7 +337,7 @@ Python oracles wrote `linked_issue=<item id>`, the item's own id; the oracle com
 `TestAPullRequestCopiesItsDonorsStoredRow`, `TestALinkedItemCopiesTheTeamOfItsDonorsOwnRow` (real
 ClickHouse, a donor of each of github, gitlab, jira and linear) and
 `TestTheBackstopGivesALinkedItemItsDonorsRowOfTheLinkedItemsDay`;
-`author_membership` (6) is a PERSON signal, "at best a low-precedence fallback" and never wins at all — it is provenance only; `manual_fallback` (7) can only beat `unassigned`; a whole org at `unassigned` usually
+`author_membership` (6) is a PERSON signal, "at best a low-precedence fallback" and never wins at all — it is provenance only; `manual_fallback` (7) can only beat `unassigned`, and a `member` rule never wins at all (provenance only); a whole org at `unassigned` usually
 means the ClickHouse `teams` dimension is empty.
 
 > **Two more `author_membership`/membership rules (2026-09-12), on top of the repo-level ownership gate above.** Prod measurement 2026-09-12 (gh:ops-team, one member): 232 primary `author_membership` rows and 834 non-primary ones, all belonging to a team never attached to any repo or project.
@@ -396,9 +415,9 @@ means the ClickHouse `teams` dimension is empty.
 | 2 | `project_ownership` | `team_project_ownership` | high | 3–8 | 0–1 | `project_id, provider` |
 | 3 | `repo_ownership` | `team_repo_ownership` | medium; high from a main-owner row (`is_primary = 1`, e.g. the inferred main owner) | 4–8 | 0–2 | `repo_full_name` |
 | 4 | `assignee_membership` | two-layer: `identities`/`teams` (admin override, single-team) else `team_memberships` (provider fallback, single-team) | high (admin) / medium (provider) | none: provenance only, never `is_primary` | 0–3 | `canonical_id, identity` (evidence text: `assignee_membership=<id>`) |
-| 5 | `linked_issue` | `work_item_dependencies` donor → the team of the donor's own attribution row | medium | 6–8 | 0–3 | `linked_issue=<donor_work_item_id>;dependency_type=<rel>;donor_provider=<p>;donor_source=<donor row source>` |
+| 5 | `linked_issue` | `work_item_dependencies` donor → the team of the donor's own attribution row; the primary team of a pull or merge request only, provenance only (`is_primary = 0`) for an issue | medium | 6–8 (a pull or merge request) | 0–3 | `linked_issue=<donor_work_item_id>;dependency_type=<rel>;donor_provider=<p>;donor_source=<donor row source>` |
 | 6 | `author_membership` | PR/MR-only + two-layer (same as row 4), non-bot | high (admin) / medium (provider) | none: provenance only, never `is_primary` | 0–5 | `canonical_id, identity` (evidence text: `reporter=<id>`) |
-| 7 | `manual_fallback` | `manual_attribution_fallbacks` (repo/project/member/issue_key_prefix) | manual\|low | 8 only | 0–6 | `scope_type, scope_id, reason` |
+| 7 | `manual_fallback` | `manual_attribution_fallbacks` (repo/project/member/issue_key_prefix); a `member` rule is provenance only (`is_primary = 0`) | manual\|low | 8 only (not a `member` rule) | 0–6 | `scope_type, scope_id, reason` |
 | 8 | `unassigned` | — (nothing matched) | none | — (floor) | — | `reason` |
 
 > **Ranks 2 and 3 are provider-disjoint, not overlapping tiers.**

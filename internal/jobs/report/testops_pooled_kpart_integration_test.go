@@ -239,8 +239,9 @@ func TestRegistryTestopsRID2SuiteOnlyTheFirstAttemptHadStaysCounted(t *testing.T
 	wantQuantiles(t, e, org, floats(100, 55))
 }
 
-// KP-5 coverage: the coverage fragment keeps the same four shapes on snapshot_id / legacy_snapshot_ids. Legacy coverage rows go
-// through the real sink; the slotted coverage row comes from the real route (an LCOV report in the artifact).
+// KP-5 coverage: the coverage fragment keeps a legacy coverage row only in a run with no slotted coverage row (CHAOS-14146).
+// Legacy coverage rows go through the real sink; the slotted coverage row comes from the real route (an LCOV report in the
+// artifact).
 func TestRegistryTestopsKP5CoverageFragment(t *testing.T) {
 	e := startPooledEnv(t)
 	org := e.newOrg()
@@ -266,7 +267,7 @@ func TestRegistryTestopsKP5CoverageFragment(t *testing.T) {
 		}
 	}
 	legacy("9505", listed[0])         // the re-read legacy snapshot: replaced
-	legacy("9505", "legacy-unlisted") // nothing replaces it: stays
+	legacy("9505", "legacy-unlisted") // the run has a slotted coverage row: dropped
 	legacy("9506", "legacy-only-run") // a legacy-only run: stays
 	got := map[string]bool{}
 	rows, err := e.conn.Query(e.ctx, `SELECT snapshot_id FROM coverage_snapshots AS c FINAL WHERE c.org_id = {org_id:String} AND `+testopspooled.CoverageRowsNewestAttempt("c", testopspooled.Scope{}), driver.NamedValue{Name: "org_id", Value: org})
@@ -284,11 +285,14 @@ func TestRegistryTestopsKP5CoverageFragment(t *testing.T) {
 	if got[listed[0]] {
 		t.Errorf("the legacy snapshot the slotted row lists was kept: %v", got)
 	}
-	if !got["legacy-unlisted"] || !got["legacy-only-run"] {
-		t.Errorf("an unlisted or legacy-only snapshot was dropped: %v", got)
+	if got["legacy-unlisted"] {
+		t.Errorf("an unlisted legacy snapshot of a run with a slotted coverage row was kept: %v", got)
 	}
-	if len(got) != 3 { // slotted + 2 legacy
-		t.Errorf("kept %d snapshots %v, want 3 (the slotted one and the two unreplaced legacy rows)", len(got), got)
+	if !got["legacy-only-run"] {
+		t.Errorf("the legacy-only run's snapshot was dropped: %v", got)
+	}
+	if len(got) != 2 { // slotted + the legacy-only run
+		t.Errorf("kept %d snapshots %v, want 2 (the slotted one and the legacy-only run's)", len(got), got)
 	}
 }
 

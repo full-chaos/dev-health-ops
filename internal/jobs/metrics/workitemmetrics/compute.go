@@ -375,7 +375,7 @@ func ComputeDailyTriplet(
 		completedAt := utcTimePointer(item.CompletedAt)
 		terminalAt := earliestTimePointer(completedAt, utcTimePointer(item.ClosedAt))
 		startedToday := inHalfOpenDay(startedAt, dayUTC, end)
-		completedToday := inHalfOpenDay(completedAt, dayUTC, end)
+		completedToday := IsTerminalStatus(item.Status) && inHalfOpenDay(completedAt, dayUTC, end)
 		wipEndOfDay := startedAt != nil && startedAt.Before(end) &&
 			(terminalAt == nil || !terminalAt.Before(end))
 		createdToday := !createdAt.Before(dayUTC) && createdAt.Before(end)

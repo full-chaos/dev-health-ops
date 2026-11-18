@@ -2,10 +2,14 @@ package teamprovider_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
 	"github.com/full-chaos/dev-health-ops/internal/teamprovider"
 	"github.com/full-chaos/dev-health-ops/internal/teamprovider/teamprovidertest"
@@ -106,5 +110,78 @@ func TestAKeptCopyWithNoSourceReadsNoSourceTeam(t *testing.T) {
 	}
 	if strings.Contains(conn.query, "moved_from") || !strings.Contains(conn.query, "kept.kept_deleted") {
 		t.Fatalf("a kept-only copy reads a source team or misses the kept delete:\n%s", conn.query)
+	}
+}
+
+// acp (CHAOS-14135 x 14094): one statement never holds admin rules (Kept,
+// VersionAfterStored, SkipDeleted) and deleted_at copy rules: Insert refuses
+// it before a statement is built, in one row or across rows.
+func TestAStatementWithAdminAndCopyRulesIsRefused(t *testing.T) {
+	admin := func(row teamprovider.Write) teamprovider.Write {
+		row.Kept = teamprovider.KeptName
+		return row
+	}
+	for name, rows := range map[string][]teamprovider.Write{
+		"one row, kept copy and admin kept": {admin(copiedRow("old", teamprovider.RosterKept, teamprovider.DeletedKept))},
+		"one row, source copy and skip deleted": {func() teamprovider.Write {
+			r := copiedRow("gh:new", teamprovider.RosterSource, teamprovider.DeletedSource)
+			r.SkipDeleted = true
+			return r
+		}()},
+		"one row, kept copy and version after": {func() teamprovider.Write {
+			r := copiedRow("old", teamprovider.RosterKept, teamprovider.DeletedKept)
+			r.VersionAfterStored = true
+			return r
+		}()},
+		"two rows, an admin row and a copy row": {admin(rosterRow("a", teamprovider.RosterKept, nil, nil)), copiedRow("old", teamprovider.RosterKept, teamprovider.DeletedKept)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			conn := &recordingExec{}
+			err := teamprovider.Insert(context.Background(), conn, "org-1", insertColumns, rows)
+			if !errors.Is(err, teamprovider.ErrInvalidWrite) || conn.query != "" {
+				t.Fatalf("err = %v, query sent %q; want ErrInvalidWrite and no statement", err, conn.query)
+			}
+		})
+	}
+}
+
+// carryTeamsColumns is the column list the team id carry gives Insert
+// (internal/providersync/team_id_carry.go writeTeams: its teams columns
+// without the provider identity, then deleted_at).
+var carryTeamsColumns = []string{"id", "team_uuid", "name", "description", "manual_members", "updated_at", "last_synced", "org_id", "provider", "native_team_key", "parent_team_id", "project_keys", "repo_patterns", "is_active", "source_id", "created_at", "deleted_at"}
+
+// The carry's statement with its copy rules through the merged builder (the
+// admin rules of CHAOS-14094 beside them): it reads the copy columns and none
+// of the admin ones, and its text and parameter names are pinned like the
+// sync writers' (TestASyncWritersTeamsStatementIsPinned has no copy rule).
+func TestTheCarryStatementWithCopyRulesIsPinned(t *testing.T) {
+	retired := pinRow(carryTeamsColumns, "web", teamprovider.RosterKept)
+	retired.Deleted = teamprovider.DeletedKept
+	retired.Values[len(carryTeamsColumns)-1] = (*time.Time)(nil)
+	moved := pinRow(carryTeamsColumns, "gh:web", teamprovider.RosterSource)
+	moved.RosterSource, moved.Deleted, moved.Gone = "web", teamprovider.DeletedSource, teamprovider.GoneStated
+	moved.Values[len(carryTeamsColumns)-1] = (*time.Time)(nil)
+	conn := &recordingExec{}
+	if err := teamprovider.Insert(context.Background(), conn, "org-1", carryTeamsColumns, []teamprovider.Write{moved, retired}); err != nil {
+		t.Fatal(err)
+	}
+	for _, part := range []string{"kept.kept_deleted", "moved_from.moved_from_deleted", "toUInt8(0)", "deleted_rule"} {
+		if !strings.Contains(conn.query, part) {
+			t.Fatalf("the carry statement misses %q:\n%s", part, conn.query)
+		}
+	}
+	for _, part := range []string{"kept_mask", "newest_found", "skip_deleted", "kept_found"} {
+		if strings.Contains(conn.query, part) {
+			t.Fatalf("the carry statement reads the admin rule %q:\n%s", part, conn.query)
+		}
+	}
+	names := make([]string, 0, len(conn.args))
+	for _, arg := range conn.args {
+		names = append(names, arg.(driver.NamedValue).Name)
+	}
+	sum := sha256.Sum256([]byte(conn.query + "\n" + strings.Join(names, ",")))
+	const want = "7dff901a15dcbf1f8b6453b6194d0042ec42472c55fe5fa87a383ac56b121e1d"
+	if got := hex.EncodeToString(sum[:]); got != want {
+		t.Errorf("PIN carry_copy_rules %s: the carry statement changed (want %s)", got, want)
 	}
 }

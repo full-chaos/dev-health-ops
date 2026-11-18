@@ -36,6 +36,7 @@ var (
 	MsgDispatchSyncRunBudgetEstimateUnitFailed           = Msg{"dispatch_sync_run.budget_estimate_unit_failed"}
 	MsgDispatchSyncRunLockBusyRequeued                   = Msg{"dispatch_sync_run.lock_busy_requeued"}
 	MsgDispatchSyncRunMissing                            = Msg{"dispatch_sync_run.missing"}
+	MsgDispatchSyncRunDeliveryNotCurrent                 = Msg{"dispatch_sync_run.delivery_not_current"}
 	MsgDispatchSyncRunBlockedOnReferenceDiscovery        = Msg{"dispatch_sync_run.blocked_on_reference_discovery"}
 	MsgDispatchSyncRunInvalidClaimUnitsTerminalized      = Msg{"dispatch_sync_run.invalid_claim_units_terminalized"}
 	MsgDispatchSyncRunConcurrencyCapped                  = Msg{"dispatch_sync_run.concurrency_capped"}

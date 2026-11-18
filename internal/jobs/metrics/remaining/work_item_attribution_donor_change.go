@@ -158,19 +158,31 @@ func donorChangedDependents(
 		recordedDonor, recordedTeam := recordedDonorOf(own)
 		// A stored link whose recorded donor is no longer an issue is repaired, whatever the timestamps and
 		// whatever the item's own primary source: the row the item holds names a donor the cascade refuses.
+		// The recorded donor is history, not a current edge: it is not counted below.
+		repair := false
 		if recordedDonor != "" {
 			kind, known := kinds[recordedDonor]
-			if reason := teamattribution.LinkedIssueDonorRefusal(kind, known); reason != "" {
-				refuse(recordedDonor, reason)
-				owed = append(owed, item)
-				continue
+			repair = teamattribution.LinkedIssueDonorRefusal(kind, known) != ""
+		}
+		// The counts are of the current edges: each distinct donor target once (by its resolved id), the key
+		// no item resolves to by its own text. An item with a native team of its own evaluates none.
+		if own.Source != "native_team" {
+			for _, raw := range unresolved[item] {
+				refuse(raw, teamattribution.LinkedIssueDonorRefusedUnknown)
 			}
+			for _, candidate := range linked {
+				kind, known := kinds[candidate.target]
+				if reason := teamattribution.LinkedIssueDonorRefusal(kind, known); reason != "" {
+					refuse(candidate.target, reason)
+				}
+			}
+		}
+		if repair {
+			owed = append(owed, item)
+			continue
 		}
 		if teamattribution.IsLinkedIssueDonorSource(own.Source) {
 			continue
-		}
-		for _, raw := range unresolved[item] {
-			refuse(raw, teamattribution.LinkedIssueDonorRefusedUnknown)
 		}
 		sort.Slice(linked, func(left, right int) bool {
 			if linked[left].target != linked[right].target {
@@ -182,8 +194,7 @@ func donorChangedDependents(
 		for _, candidate := range linked {
 			// A refused donor is no donor: it neither gives a team nor advances the staleness signal.
 			kind, known := kinds[candidate.target]
-			if reason := teamattribution.LinkedIssueDonorRefusal(kind, known); reason != "" {
-				refuse(candidate.target, reason)
+			if teamattribution.LinkedIssueDonorRefusal(kind, known) != "" {
 				continue
 			}
 			row, ok := rows[candidate.target]

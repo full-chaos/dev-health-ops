@@ -169,3 +169,52 @@ func TestDonorChangeRefusalCountsAreOfDistinctEvaluatedDonors(t *testing.T) {
 		t.Errorf("refused = %v, want map[empty_type:1 unknown:1]", refused)
 	}
 }
+
+// The counts are of the current edges: a recorded donor that the item no longer links is repaired but not
+// counted, and the current candidates are still counted after a repair is scheduled; a direct id and a key
+// that name the same donor count once.
+func TestDonorChangeRefusalCountsAreOfCurrentEdgesOnly(t *testing.T) {
+	base := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	edge := func(source, target string) teamattribution.GithubWorkItemDerivationDependencyEdge {
+		return teamattribution.GithubWorkItemDerivationDependencyEdge{SourceWorkItemID: source, TargetWorkItemID: target, RelationshipType: "relates_to", LastSynced: base}
+	}
+	recorded := "linked_issue=OLD;dependency_type=relates_to;donor_provider=github;donor_source=repo_ownership"
+	itemLinkedToOld := workItemAttributionNewestPrimary{TeamID: "team-b", Source: "linked_issue", ComputedAt: base, Evidence: recorded}
+	kind := func(id, provider, itemType string) teamattribution.GithubWorkItemDerivationSubject {
+		return teamattribution.GithubWorkItemDerivationSubject{WorkItemID: id, Provider: provider, Type: itemType}
+	}
+	for _, tc := range []struct {
+		name  string
+		edges []teamattribution.GithubWorkItemDerivationDependencyEdge
+		keys  map[string]string
+		kinds map[string]teamattribution.GithubWorkItemDerivationSubject
+		want  string
+		owed  string
+	}{
+		{"the old donor is replaced by a valid issue: repaired, not counted",
+			[]teamattribution.GithubWorkItemDerivationDependencyEdge{edge("P", "jira:OK-1")}, nil,
+			map[string]teamattribution.GithubWorkItemDerivationSubject{"OLD": kind("OLD", "github", "pr"), "jira:OK-1": kind("jira:OK-1", "jira", "task")},
+			"map[]", "[P]"},
+		{"repair scheduled and a current empty-type and a missing donor: both counted",
+			[]teamattribution.GithubWorkItemDerivationDependencyEdge{edge("P", "jira:EMPTY-1"), edge("P", "gone")}, nil,
+			map[string]teamattribution.GithubWorkItemDerivationSubject{"OLD": kind("OLD", "github", "pr"), "jira:EMPTY-1": kind("jira:EMPTY-1", "jira", "")},
+			"map[empty_type:1 unknown:1]", "[P]"},
+		{"a direct id and a key naming the same empty-type donor count once",
+			[]teamattribution.GithubWorkItemDerivationDependencyEdge{edge("P", "jira:EMPTY-1"), edge("P", "extkey:EMPTY-1")},
+			map[string]string{"EMPTY-1": "jira:EMPTY-1"},
+			map[string]teamattribution.GithubWorkItemDerivationSubject{"OLD": kind("OLD", "github", "issue"), "jira:EMPTY-1": kind("jira:EMPTY-1", "jira", "")},
+			"map[empty_type:1]", "[]"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rows := map[string]workItemAttributionNewestPrimary{"P": itemLinkedToOld}
+			refused := map[string]int{}
+			got := donorChangedDependents(tc.edges, tc.keys, rows, tc.kinds, nil, refused)
+			if fmt.Sprint(refused) != tc.want {
+				t.Errorf("refused = %v, want %s", refused, tc.want)
+			}
+			if fmt.Sprint(got) != tc.owed {
+				t.Errorf("owed = %v, want %s", got, tc.owed)
+			}
+		})
+	}
+}

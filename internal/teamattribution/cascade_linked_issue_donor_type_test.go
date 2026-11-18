@@ -115,13 +115,14 @@ func TestLinkedIssueRefusedDonorDoesNotShadowAnIssueDonor(t *testing.T) {
 func TestLinkedIssueDonorRefusalCountsFollowTheEvaluatedEdges(t *testing.T) {
 	derived := NewGitHubWorkItemDerivationContext(GithubWorkItemDerivationFacts{})
 	subjects := map[string]GithubWorkItemDerivationSubject{
-		"owned-pr":   {WorkItemID: "owned-pr", Provider: "github", Type: "pr", OrgID: "org"},
-		"item-1":     {WorkItemID: "item-1", Provider: "github", Type: "pr", OrgID: "org"},
-		"item-2":     {WorkItemID: "item-2", Provider: "github", Type: "pr", OrgID: "org"},
-		"empty":      {WorkItemID: "empty", Provider: "jira", Type: "", OrgID: "org"},
-		"jira:OK-1":  {WorkItemID: "jira:OK-1", Provider: "jira", Type: "task", OrgID: "org"},
-		"native-pr":  {WorkItemID: "native-pr", Provider: "github", Type: "pr", OrgID: "org"},
-		"native-pr2": {WorkItemID: "native-pr2", Provider: "github", Type: "pr", OrgID: "org"},
+		"owned-pr":     {WorkItemID: "owned-pr", Provider: "github", Type: "pr", OrgID: "org"},
+		"item-1":       {WorkItemID: "item-1", Provider: "github", Type: "pr", OrgID: "org"},
+		"item-2":       {WorkItemID: "item-2", Provider: "github", Type: "pr", OrgID: "org"},
+		"empty":        {WorkItemID: "empty", Provider: "jira", Type: "", OrgID: "org"},
+		"jira:OK-1":    {WorkItemID: "jira:OK-1", Provider: "jira", Type: "task", OrgID: "org"},
+		"jira:EMPTY-1": {WorkItemID: "jira:EMPTY-1", Provider: "jira", Type: "", OrgID: "org"},
+		"native-pr":    {WorkItemID: "native-pr", Provider: "github", Type: "pr", OrgID: "org"},
+		"native-pr2":   {WorkItemID: "native-pr2", Provider: "github", Type: "pr", OrgID: "org"},
 	}
 	edge := func(source, target string) GithubWorkItemDerivationDependencyEdge {
 		return GithubWorkItemDerivationDependencyEdge{SourceWorkItemID: source, TargetWorkItemID: target, RelationshipType: "relates_to"}
@@ -138,6 +139,9 @@ func TestLinkedIssueDonorRefusalCountsFollowTheEvaluatedEdges(t *testing.T) {
 		{"a key no item resolves to", []GithubWorkItemDerivationDependencyEdge{edge("item-1", "extkey:NOPE-1")}, map[string]int{"unknown": 1}},
 		{"a key that resolves to a valid issue", []GithubWorkItemDerivationDependencyEdge{edge("item-1", "extkey:OK-1")}, nil},
 		{"a valid issue donor", []GithubWorkItemDerivationDependencyEdge{edge("item-1", "jira:OK-1")}, nil},
+		{"a direct id and a key that name the same empty-type donor count once", []GithubWorkItemDerivationDependencyEdge{edge("item-1", "jira:EMPTY-1"), edge("item-1", "extkey:EMPTY-1")}, map[string]int{"empty_type": 1}},
+		{"the same, split across two items", []GithubWorkItemDerivationDependencyEdge{edge("item-1", "jira:EMPTY-1"), edge("item-2", "extkey:empty-1")}, map[string]int{"empty_type": 1}},
+		{"two keys no item resolves to count apart", []GithubWorkItemDerivationDependencyEdge{edge("item-1", "extkey:NOPE-1"), edge("item-2", "extkey:NOPE-2")}, map[string]int{"unknown": 2}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := derived.LinkedIssueDonorRefusalCounts(subjects, tc.edges)

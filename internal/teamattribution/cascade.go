@@ -1676,7 +1676,13 @@ func (derived GithubWorkItemDerivationContext) LinkedIssueDonorRefusalCounts(
 			reason = LinkedIssueDonorRefusal(subject, known)
 		}
 		if reason != "" {
-			seen[dependency.TargetWorkItemID] = reason
+			// One donor is one count: by the resolved work item, so a direct id and an issue key that name the
+			// same item count once; a key no item resolves to is told apart by its own text.
+			key := target
+			if target == "" {
+				key = dependency.TargetWorkItemID
+			}
+			seen[key] = reason
 		}
 	}
 	var counts map[string]int

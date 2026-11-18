@@ -367,7 +367,7 @@ func supersedeSynthesizedUserKeys(
 		stale = append(stale, key)
 	}
 	sort.Slice(stale, func(left, right int) bool { return stale[left].text() < stale[right].text() })
-	return writeStaleKeyZeroRows(ctx, conn, table, organizationID, day, stale, func(key staleKey) time.Time {
+	return writeStaleKeyZeroRowsLoadingCarried(ctx, conn, table, organizationID, day, stale, func(key staleKey) time.Time {
 		version, _ := staleKeyVersionAfter(table, computedAt, versions[key.text()])
 		return version
 	})
@@ -400,7 +400,7 @@ func supersedeStaleKeysAtSnapshot(
 			older = append(older, key)
 		}
 	}
-	return writeStaleKeyZeroRowsCarrying(ctx, conn, table, organizationID, day, older,
+	return writeStaleKeyZeroRows(ctx, conn, table, organizationID, day, older,
 		func(staleKey) time.Time { return snapshot }, carried)
 }
 
@@ -425,7 +425,7 @@ func supersedeStaleKeys(
 	if err != nil {
 		return 0, err
 	}
-	return writeStaleKeyZeroRows(ctx, conn, table, organizationID, day, staleKeysOf(table, live, scope, false, produced),
+	return writeStaleKeyZeroRowsLoadingCarried(ctx, conn, table, organizationID, day, staleKeysOf(table, live, scope, false, produced),
 		func(key staleKey) time.Time { return versionOf(key, versions[key.text()]) })
 }
 
@@ -541,7 +541,7 @@ func retractStaleTeamKeysOfRun(
 			return written, 0, err
 		}
 	}
-	zeros, err = writeStaleKeyZeroRows(ctx, conn, table, organizationID, day,
+	zeros, err = writeStaleKeyZeroRowsLoadingCarried(ctx, conn, table, organizationID, day,
 		staleKeysOf(table, live, computed.scope, computed.everyScope, computed.keys),
 		func(staleKey) time.Time { return version })
 	return written + zeros, zeros, err
@@ -666,10 +666,10 @@ func retractStaleTeamKeysOutsideRun(
 		}
 	}
 	if snapshotStamped {
-		result.written, err = writeStaleKeyZeroRowsCarrying(ctx, conn, table, organizationID, day, outside,
+		result.written, err = writeStaleKeyZeroRows(ctx, conn, table, organizationID, day, outside,
 			func(staleKey) time.Time { return version }, carriedByKey)
 	} else {
-		result.written, err = writeStaleKeyZeroRows(ctx, conn, table, organizationID, day, outside,
+		result.written, err = writeStaleKeyZeroRowsLoadingCarried(ctx, conn, table, organizationID, day, outside,
 			func(staleKey) time.Time { return version })
 	}
 	if result.written > 0 {
@@ -757,9 +757,9 @@ func loadCarriedValues(
 	return carried, nil
 }
 
-// writeStaleKeyZeroRows writes one row of zeros over each key. It reports its
-// row count on a Send error, because the rows may be stored.
-func writeStaleKeyZeroRows(
+// writeStaleKeyZeroRowsLoadingCarried is writeStaleKeyZeroRows for a caller that has not read the carried values: it reads
+// them (a separate read after the caller's scan) and writes one row of zeros over each key.
+func writeStaleKeyZeroRowsLoadingCarried(
 	ctx context.Context, conn staleKeyConn, table StaleKeyTable, organizationID string, day time.Time,
 	stale []staleKey, computedAtOf func(staleKey) time.Time,
 ) (int, error) {
@@ -770,12 +770,13 @@ func writeStaleKeyZeroRows(
 	if err != nil {
 		return 0, err
 	}
-	return writeStaleKeyZeroRowsCarrying(ctx, conn, table, organizationID, day, stale, computedAtOf, carried)
+	return writeStaleKeyZeroRows(ctx, conn, table, organizationID, day, stale, computedAtOf, carried)
 }
 
-// writeStaleKeyZeroRowsCarrying is writeStaleKeyZeroRows with the carried values given: the caller read them from the
-// same row as the version it compares.
-func writeStaleKeyZeroRowsCarrying(
+// writeStaleKeyZeroRows writes one row of zeros over each key, with the carried values given: a caller of a snapshot-stamped
+// table read them from the same row as the version it compares. It reports its row count on a Send error, because the rows
+// may be stored.
+func writeStaleKeyZeroRows(
 	ctx context.Context, conn staleKeyConn, table StaleKeyTable, organizationID string, day time.Time,
 	stale []staleKey, computedAtOf func(staleKey) time.Time, carried map[string][]string,
 ) (int, error) {

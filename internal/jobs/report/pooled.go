@@ -47,11 +47,12 @@ var pooledCharts = map[string]pooledChart{
 	"mttr_p90_hours":             {table: "incident_metrics_daily", source: incidentRepairsSource, expression: deliveryHoursP90, bind: bindMappingAsOf},
 }
 
-// The CI/CD pooled source holds the runs and samples of the cicd daily writer (internal/jobs/metrics/daily/cicd): a run
-// counts on the UTC day it finishes (the writer's rule), the newest synced
-// version of a run (FINAL) is the run, a deleted run is no run. A duration sample is finished_at - started_at in minutes
-// when not negative, a queue sample started_at - queued_at in minutes when not negative; the stored duration_seconds and
-// queue_seconds are not read, as the writer does not read them. Only the repository-days the writer computed are read.
+// The CI/CD pooled source holds the samples the cicd daily writer (internal/jobs/metrics/daily/cicd) stored with the
+// newest cicd_metrics_daily row of each repository-day, one result row per run with a sample. A repository-day whose
+// newest row holds no samples (written before migration 161) reads the raw runs with the writer's rules: a run counts on
+// the UTC day it finishes, the newest synced version of a run (FINAL) is the run, a deleted run is no run. A duration
+// sample is finished_at - started_at in minutes when not negative, a queue sample started_at - queued_at in minutes when
+// not negative; the stored duration_seconds and queue_seconds are not read, as the writer does not read them.
 // cicd_pooled_test.go pins these rules to the writer's text.
 const (
 	cicdRunMinutes          = "cicd_run_minutes"
@@ -59,23 +60,35 @@ const (
 	cicdCountedRunPredicate = "lowerUTF8(trimBoth(ifNull(status, ''))) != '" + testops.StatusDeleted + "'"
 )
 
-const cicdRunsSource = `(
-    SELECT
-        org_id,
-        repo_id,
-        service_id,
-        toDate(finished_at) AS day,
-        if(finished_at >= started_at, dateDiff('millisecond', started_at, finished_at) / 60000, NULL) AS ` + cicdRunMinutes + `,
-        if(queued_at IS NOT NULL AND started_at >= queued_at, dateDiff('millisecond', queued_at, started_at) / 60000, NULL) AS ` + cicdQueueMinutes + `
-    FROM ci_pipeline_runs FINAL
-    WHERE org_id = {org_id:String}
-      AND finished_at IS NOT NULL
-      AND toDate(finished_at) >= {start_date:Date} AND toDate(finished_at) < {end_date:Date}
-      AND ` + cicdCountedRunPredicate + `
-      AND ` + testops.NotOpenRunSQL + `
-      AND (repo_id, toDate(finished_at)) IN (
-          SELECT repo_id, day FROM cicd_metrics_daily
-          WHERE org_id = {org_id:String} AND day >= {start_date:Date} AND day < {end_date:Date})
+var cicdRunsSource = `(
+    SELECT org_id, repo_id, service_id, day, ` + cicdRunMinutes + `, ` + cicdQueueMinutes + `
+    FROM (
+        SELECT
+            org_id,
+            repo_id,
+            CAST(NULL, 'Nullable(String)') AS service_id,
+            day,
+            stored_run_minutes AS ` + cicdRunMinutes + `,
+            stored_queue_minutes AS ` + cicdQueueMinutes + `
+        FROM ` + testopspooled.NewestStoredRows("cicd_metrics_daily", "pooled_run_minutes", "pooled_queue_minutes") + `
+        ARRAY JOIN pooled_run_minutes AS stored_run_minutes, pooled_queue_minutes AS stored_queue_minutes
+        WHERE pooled_samples_stored = 1
+        UNION ALL
+        SELECT
+            org_id,
+            repo_id,
+            service_id,
+            toDate(finished_at) AS day,
+            if(finished_at >= started_at, dateDiff('millisecond', started_at, finished_at) / 60000, NULL) AS ` + cicdRunMinutes + `,
+            if(queued_at IS NOT NULL AND started_at >= queued_at, dateDiff('millisecond', queued_at, started_at) / 60000, NULL) AS ` + cicdQueueMinutes + `
+        FROM ci_pipeline_runs FINAL
+        WHERE org_id = {org_id:String}
+          AND finished_at IS NOT NULL
+          AND toDate(finished_at) >= {start_date:Date} AND toDate(finished_at) < {end_date:Date}
+          AND ` + cicdCountedRunPredicate + `
+          AND ` + testops.NotOpenRunSQL + `
+          AND (repo_id, toDate(finished_at)) IN (` + testopspooled.LegacyRepoDays("cicd_metrics_daily") + `)
+    )
 ) AS cicd_pipeline_runs`
 
 // The writer's mean and p90 (linear between closest ranks), NULL for a group with no sample.

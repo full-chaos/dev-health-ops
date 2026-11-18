@@ -56,7 +56,8 @@ func TestDeployComputeFamilyWritesRealOrgIDAndIsolatesTenants(t *testing.T) {
 		`CREATE TABLE deploy_metrics_daily (
     repo_id UUID, day Date, deployments_count UInt32, failed_deployments_count UInt32,
     deploy_time_p50_hours Nullable(Float64), lead_time_p50_hours Nullable(Float64),
-    computed_at DateTime('UTC'), org_id String DEFAULT 'default'
+    computed_at DateTime('UTC'), org_id String DEFAULT 'default',
+    pooled_deploy_hours Array(Float64), pooled_samples_stored UInt8 DEFAULT 0
 ) ENGINE MergeTree PARTITION BY toYYYYMM(day) ORDER BY (repo_id, day)`,
 	} {
 		if err := conn.Exec(ctx, statement); err != nil {

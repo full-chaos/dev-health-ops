@@ -74,7 +74,8 @@ func TestIncidentValidFromNullGuardRecoversRepositoryDerivedMappings(t *testing.
 		// + 024_add_org_id.sql / 027_add_org_id_to_sorting_keys.py.
 		`CREATE TABLE incident_metrics_daily (
     repo_id UUID, day Date, incidents_count UInt32, mttr_p50_hours Nullable(Float64),
-    mttr_p90_hours Nullable(Float64), computed_at DateTime('UTC'), org_id String
+    mttr_p90_hours Nullable(Float64), computed_at DateTime('UTC'), org_id String,
+    pooled_repair_hours Array(Float64), pooled_samples_stored UInt8 DEFAULT 0
 ) ENGINE = MergeTree PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, day)`,
 	} {
 		if err := conn.Exec(ctx, statement); err != nil {

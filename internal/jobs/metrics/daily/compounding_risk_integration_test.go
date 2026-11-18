@@ -34,7 +34,8 @@ var compoundingRiskSchema = []string{
     code_ownership_gini Float64 DEFAULT 0.0,
     bus_factor UInt32 DEFAULT 0,
     pr_first_review_p90_hours Nullable(Float64),
-    computed_at DateTime, org_id String
+    computed_at DateTime, org_id String,
+    pooled_pr_size_loc Array(Float64), pooled_bug_repair_hours Array(Float64), pooled_samples_stored UInt8 DEFAULT 0
 ) ENGINE = MergeTree PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, day)`,
 	// 007_complexity_investment_issues.sql + migration 027's sorting key.
 	`CREATE TABLE repo_complexity_daily (

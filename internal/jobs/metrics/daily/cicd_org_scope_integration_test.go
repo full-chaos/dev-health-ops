@@ -61,7 +61,8 @@ func TestCICDComputeFamilyWritesRealOrgIDAndIsolatesTenants(t *testing.T) {
 		`CREATE TABLE cicd_metrics_daily (
     repo_id UUID, day Date, pipelines_count UInt32, success_rate Float64,
     avg_duration_minutes Nullable(Float64), p90_duration_minutes Nullable(Float64),
-    avg_queue_minutes Nullable(Float64), computed_at DateTime, org_id String
+    avg_queue_minutes Nullable(Float64), computed_at DateTime, org_id String,
+    pooled_run_minutes Array(Nullable(Float64)), pooled_queue_minutes Array(Nullable(Float64)), pooled_samples_stored UInt8 DEFAULT 0
 ) ENGINE = ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, day)`,
 	} {
 		if err := conn.Exec(ctx, statement); err != nil {
@@ -158,7 +159,8 @@ func TestCICDComputeFamilyCountsRunOnFinishDay(t *testing.T) {
 		`CREATE TABLE cicd_metrics_daily (
     repo_id UUID, day Date, pipelines_count UInt32, success_rate Float64,
     avg_duration_minutes Nullable(Float64), p90_duration_minutes Nullable(Float64),
-    avg_queue_minutes Nullable(Float64), computed_at DateTime, org_id String
+    avg_queue_minutes Nullable(Float64), computed_at DateTime, org_id String,
+    pooled_run_minutes Array(Nullable(Float64)), pooled_queue_minutes Array(Nullable(Float64)), pooled_samples_stored UInt8 DEFAULT 0
 ) ENGINE = ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, day)`,
 	} {
 		if err := conn.Exec(ctx, statement); err != nil {
@@ -231,7 +233,8 @@ func startCICDDayDB(t *testing.T) (context.Context, driver.Conn) {
 		`CREATE TABLE cicd_metrics_daily (
     repo_id UUID, day Date, pipelines_count UInt32, success_rate Float64,
     avg_duration_minutes Nullable(Float64), p90_duration_minutes Nullable(Float64),
-    avg_queue_minutes Nullable(Float64), computed_at DateTime, org_id String
+    avg_queue_minutes Nullable(Float64), computed_at DateTime, org_id String,
+    pooled_run_minutes Array(Nullable(Float64)), pooled_queue_minutes Array(Nullable(Float64)), pooled_samples_stored UInt8 DEFAULT 0
 ) ENGINE = ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, day)`,
 	} {
 		if err := conn.Exec(ctx, statement); err != nil {

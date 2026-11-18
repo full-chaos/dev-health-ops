@@ -284,6 +284,20 @@ day) is not read:
 - A bucket of `cancel_rate` or `rerun_rate` with no row has no point, never NaN. This holds for the organization too.
 - `success_rate` has no service dimension: a service group is one `unscoped` bucket.
 
+The report charts of `passed_count`, `failed_count`, `skipped_count`, `quarantined_count`, `total_cases`, `total_suites`,
+`pass_rate`, `flake_rate`, `retry_dependency_rate` and `failure_recurrence_score` read the stored test rows of each
+repository-day. For these ten metrics, a team is the owner of the repository when the report runs, for every day of the
+range. The stored `team_id` (the main owner at the end of the day) is not read:
+
+- A team filter keeps the repositories the filtered teams own. Two filtered teams that share a repository read it once.
+- A team group gives one bucket per owner team. A co-owned repository counts whole in each owner's bucket, so the buckets
+  can add up to more than the organization. A repository with no owner is in no team bucket.
+- A team that owns no repository has a count of 0 and no rate point.
+- A chart with no team filter and no team group is the organization, each repository once, as before.
+- A rate with no row in its bucket has no point, never NaN. This holds for the organization too: the three mean columns
+  are nullable.
+- A service group reads the stored service.
+
 ### AI report charts of CI/CD durations and queue time
 
 The AI report charts of three CI/CD metrics are taken over the window's pipeline runs (`ci_pipeline_runs`), with the

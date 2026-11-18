@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net"
 	"net/url"
+	"strconv"
 	"testing"
 )
 
@@ -45,5 +46,50 @@ func TestRetryableTransportWideJoin(t *testing.T) {
 	}
 	if RetryableTransport(errors.Join(errors.New("a"), errors.New("b"))) {
 		t.Error("join of ordinary errors: RetryableTransport = true, want false")
+	}
+}
+
+func nestedTimeoutChain(depth int, leaf error) error {
+	err := leaf
+	for range depth {
+		err = &url.Error{Op: "Get", URL: "x", Err: err}
+	}
+	return err
+}
+
+func TestSafeTimeoutAllocatesNothing(t *testing.T) {
+	for _, depth := range []int{8, 1000} {
+		err := nestedTimeoutChain(depth, stubTimeout{true}).(*url.Error)
+		if allocs := testing.AllocsPerRun(20, func() { _ = safeTimeout(err) }); allocs != 0 {
+			t.Errorf("depth %d: safeTimeout %v allocs, want 0", depth, allocs)
+		}
+	}
+}
+
+func BenchmarkRetryableTransportNegativeDeep(b *testing.B) {
+	for _, depth := range []int{8, 1000, 65536} {
+		err := nestedTimeoutChain(depth, errors.New("ordinary"))
+		b.Run("depth="+strconv.Itoa(depth), func(b *testing.B) {
+			b.ReportAllocs()
+			for range b.N {
+				if RetryableTransport(err) {
+					b.Fatal("ordinary leaf must not retry")
+				}
+			}
+		})
+	}
+}
+
+func TestSafeTimeoutCycleWithTail(t *testing.T) {
+	a := &url.Error{Op: "a"}
+	b := &url.Error{Op: "b", Err: a}
+	c := &url.Error{Op: "c", Err: b}
+	a.Err = c
+	var tail error = c
+	for range 5 {
+		tail = &url.Error{Op: "tail", Err: tail}
+	}
+	if safeTimeout(tail.(*url.Error)) {
+		t.Error("cycle behind a tail: safeTimeout = true, want false")
 	}
 }

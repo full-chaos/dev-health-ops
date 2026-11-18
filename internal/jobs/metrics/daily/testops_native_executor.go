@@ -203,19 +203,26 @@ func (executor *TestopsTestExecutor) ComputeFamily(
 	// -- see testopsTestMetricShare.
 	historyStart := scope.day.AddDate(0, 0, -29)
 
+	// The snapshot of the run is the instant its inputs were read: the oldest read of the partition's repositories. A
+	// suite read that testops_risk made earlier in the pass and shared keeps its own instant, never this family's later
+	// clock (a later stamp would outrank a newer run's row that the older read cannot see).
+	snapshot := scope.computedAt
 	var metrics []testops.TestMetric
-	for _, repoID := range scope.repoIDs {
-		repoMetrics, err := loadTestopsTestMetrics(
-			ctx, executor.conn, run.OrganizationID, repoID, repoID.String(), scope.resolver,
+	for index, repoID := range scope.repoIDs {
+		repoMetrics, readAt, err := loadTestopsTestMetrics(
+			ctx, executor.nowUTC, executor.conn, run.OrganizationID, repoID, repoID.String(), scope.resolver,
 			historyStart, scope.start, scope.end,
 		)
 		if err != nil {
 			return 0, err
 		}
+		if index == 0 || readAt.Before(snapshot) {
+			snapshot = readAt
+		}
 		metrics = append(metrics, repoMetrics...)
 	}
 	written, err := writeTestopsTestMetrics(
-		ctx, executor.conn, run.OrganizationID, scope.day, scope.computedAt, metrics)
+		ctx, executor.conn, run.OrganizationID, scope.day, snapshot, metrics)
 	if err != nil {
 		return written, err
 	}
@@ -232,7 +239,7 @@ func (executor *TestopsTestExecutor) ComputeFamily(
 		repositories = append(repositories, []string{repoID.String()})
 	}
 	retired, err := supersedeStaleTeamKeys(ctx, executor.conn, teamkeytables.TestopsTestMetricsDaily, run.OrganizationID,
-		scope.day, newStaleKeyScope(repositories...), produced, scope.computedAt)
+		scope.day, newStaleKeyScope(repositories...), produced, snapshot)
 	if err != nil {
 		return written + retired, fmt.Errorf("retire stale testops_test_metrics_daily days: %w", err)
 	}

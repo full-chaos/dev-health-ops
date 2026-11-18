@@ -117,8 +117,8 @@ func (executor *TestopsRiskExecutor) ComputeFamily(
 		// scanned once rather than once per family -- see
 		// testopsTestMetricShare for why that leaves each family's failure
 		// and ledger semantics its own.
-		testMetrics, err := loadTestopsTestMetrics(
-			ctx, executor.conn, run.OrganizationID, repoID, repoName, repoResolver, historyStart, start, end,
+		testMetrics, _, err := loadTestopsTestMetrics(
+			ctx, executor.nowUTC, executor.conn, run.OrganizationID, repoID, repoName, repoResolver, historyStart, start, end,
 		)
 		if err != nil {
 			return 0, err

@@ -118,6 +118,63 @@ func loadLiveStaleKeys(
 	return keys, versions, nil
 }
 
+// loadLiveStaleKeysWithCarried is loadLiveStaleKeys that also returns, from the SAME newest row of each key, the values the
+// marker of the table copies (StaleKeyTable.Carried): version, live status and carried values come from one read, so a row
+// that arrives after it cannot give a marker the values of a row the marker does not retire.
+func loadLiveStaleKeysWithCarried(
+	ctx context.Context, conn staleKeyConn, table StaleKeyTable, organizationID string, day time.Time,
+) ([]staleKey, map[string]time.Time, map[string][]string, error) {
+	keyExpressions := make([]string, 0, len(table.Keys))
+	for _, column := range table.Keys {
+		keyExpressions = append(keyExpressions, column.ReadExpression())
+	}
+	selected := append([]string(nil), keyExpressions...)
+	selected = append(selected, "max(computed_at)")
+	for _, column := range table.Carried {
+		selected = append(selected, "argMax("+column.ReadExpression()+", computed_at)")
+	}
+	where := ""
+	if table.Where != "" {
+		where = " AND (" + table.Where + ")"
+	}
+	keys := strings.Join(keyExpressions, ", ")
+	rows, err := conn.Query(ctx, "SELECT "+strings.Join(selected, ", ")+" FROM "+table.Table+
+		" WHERE org_id = ? AND "+table.DayColumn+" = ?"+where+
+		" GROUP BY "+keys+" HAVING "+table.LiveHaving("")+" ORDER BY "+keys,
+		organizationID, staleKeyDay(day))
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("load %s live keys: %w", table.Table, err)
+	}
+	defer rows.Close()
+	var live []staleKey
+	versions := map[string]time.Time{}
+	carried := map[string][]string{}
+	for rows.Next() {
+		values := make([]string, len(table.Keys))
+		values2 := make([]string, len(table.Carried))
+		var version time.Time
+		targets := make([]any, 0, len(values)+1+len(values2))
+		for index := range values {
+			targets = append(targets, &values[index])
+		}
+		targets = append(targets, &version)
+		for index := range values2 {
+			targets = append(targets, &values2[index])
+		}
+		if err := rows.Scan(targets...); err != nil {
+			return nil, nil, nil, fmt.Errorf("scan %s live key: %w", table.Table, err)
+		}
+		key := staleKey(values)
+		live = append(live, key)
+		versions[key.text()] = version
+		carried[key.text()] = values2
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, nil, fmt.Errorf("iterate %s live keys: %w", table.Table, err)
+	}
+	return live, versions, carried, nil
+}
+
 // staleKeyVersionSteps holds, for each table of the rule, one unit of its
 // computed_at column: the smallest step that gives a strictly newer version.
 // A larger step would put a row of zeros further ahead of the clock than it
@@ -333,7 +390,7 @@ func supersedeStaleKeysAtSnapshot(
 	if len(table.Scope) > 0 && len(scope) == 0 {
 		return 0, nil
 	}
-	live, versions, err := loadLiveStaleKeys(ctx, conn, table, organizationID, day)
+	live, versions, carried, err := loadLiveStaleKeysWithCarried(ctx, conn, table, organizationID, day)
 	if err != nil {
 		return 0, err
 	}
@@ -343,8 +400,8 @@ func supersedeStaleKeysAtSnapshot(
 			older = append(older, key)
 		}
 	}
-	return writeStaleKeyZeroRows(ctx, conn, table, organizationID, day, older,
-		func(staleKey) time.Time { return snapshot })
+	return writeStaleKeyZeroRowsCarrying(ctx, conn, table, organizationID, day, older,
+		func(staleKey) time.Time { return snapshot }, carried)
 }
 
 // supersedeStaleKeys is the rule of a family. versionOf gets a stale key and
@@ -549,11 +606,19 @@ func retractStaleTeamKeysOutsideRun(
 		len(table.Scope) == 0 || readPresent == nil {
 		return result, ErrInvalidState
 	}
-	live, versions, err := loadLiveStaleKeys(ctx, conn, table, organizationID, day)
+	snapshot, snapshotStamped := staleKeySnapshot(table, clock)
+	var live []staleKey
+	var versions map[string]time.Time
+	var carriedByKey map[string][]string
+	var err error
+	if snapshotStamped {
+		live, versions, carriedByKey, err = loadLiveStaleKeysWithCarried(ctx, conn, table, organizationID, day)
+	} else {
+		live, versions, err = loadLiveStaleKeys(ctx, conn, table, organizationID, day)
+	}
 	if err != nil {
 		return result, err
 	}
-	snapshot, snapshotStamped := staleKeySnapshot(table, clock)
 	present, err := readPresent(ctx)
 	if err != nil {
 		return result, fmt.Errorf("%s: %w", table.Table, err)
@@ -600,8 +665,13 @@ func retractStaleTeamKeysOutsideRun(
 			return result, err
 		}
 	}
-	result.written, err = writeStaleKeyZeroRows(ctx, conn, table, organizationID, day, outside,
-		func(staleKey) time.Time { return version })
+	if snapshotStamped {
+		result.written, err = writeStaleKeyZeroRowsCarrying(ctx, conn, table, organizationID, day, outside,
+			func(staleKey) time.Time { return version }, carriedByKey)
+	} else {
+		result.written, err = writeStaleKeyZeroRows(ctx, conn, table, organizationID, day, outside,
+			func(staleKey) time.Time { return version })
+	}
 	if result.written > 0 {
 		for repository := range supersededRepositories {
 			result.superseded = append(result.superseded, repository)
@@ -699,6 +769,18 @@ func writeStaleKeyZeroRows(
 	carried, err := loadCarriedValues(ctx, conn, table, organizationID, day)
 	if err != nil {
 		return 0, err
+	}
+	return writeStaleKeyZeroRowsCarrying(ctx, conn, table, organizationID, day, stale, computedAtOf, carried)
+}
+
+// writeStaleKeyZeroRowsCarrying is writeStaleKeyZeroRows with the carried values given: the caller read them from the
+// same row as the version it compares.
+func writeStaleKeyZeroRowsCarrying(
+	ctx context.Context, conn staleKeyConn, table StaleKeyTable, organizationID string, day time.Time,
+	stale []staleKey, computedAtOf func(staleKey) time.Time, carried map[string][]string,
+) (int, error) {
+	if len(stale) == 0 {
+		return 0, nil
 	}
 	names := make([]string, 0, len(table.Keys))
 	for _, column := range table.Keys {

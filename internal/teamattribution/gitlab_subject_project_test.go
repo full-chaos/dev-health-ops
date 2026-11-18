@@ -82,6 +82,7 @@ func manualRepoRuleTeam(provider, scope string, subject GithubWorkItemDerivation
 // neither.
 func TestAManualRepoRuleMatchesARenamedGitLabProjectByEitherPath(t *testing.T) {
 	renamed := gitlabSubject("org:gitlab:123", "acme/api")
+	renamed.Type = "merge_request"
 	renamed.GitLabPaths = []string{"platform/api-v2", "acme/api"}
 	for _, scope := range []string{"platform/api-v2", "acme/api"} {
 		if got := manualRepoRuleTeam("gitlab", scope, renamed); got != "rule-team" {

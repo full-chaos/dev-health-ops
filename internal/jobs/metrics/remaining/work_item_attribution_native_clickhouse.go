@@ -1038,9 +1038,6 @@ func querySubjectsInto(
 	if err := rows.Err(); err != nil {
 		return result, stepcause.Failure(stepcause.IterateWorkItems, err)
 	}
-	if err := teamattribution.AttachLinkedPRRepos(ctx, conn, result); err != nil {
-		return nil, stepcause.Failure(stepcause.QueryWorkItems, err)
-	}
 	anchor, err := teamattribution.AnchorGitLabSubjectProjects(ctx, conn, result)
 	if err != nil {
 		return nil, stepcause.Failure(stepcause.QueryWorkItems, err)

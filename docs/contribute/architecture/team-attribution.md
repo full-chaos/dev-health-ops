@@ -302,16 +302,20 @@ flowchart TD
 > repositories of its linked pull requests (`work_graph_issue_pr`), never its own `work_items.repo_id`
 > (data-and-storage, entity tree). Only a pull or merge request (`type` `pr` on GitHub,
 > `merge_request` on GitLab) takes the `repo_ownership` (3) candidate from its own `repo_id`
-> (`repoByID` and the GitLab name-keyed `repoByNames`). An issue of any provider, a Jira or Linear item
-> included, with no other source above ends `unassigned`. Its assignee's membership row is kept as
-> provenance when the member's team owns a repository of a linked pull request. With no linked
-> pull request there is no repository to check: the row is kept and its evidence names
-> `ownership=ownership_unknown` (a missing proof is not a healthy one; a pull or merge request whose
-> repository has no ownership row gets the same suffix). A member's team that owns none of the linked
-> repositories is dropped, and an issue with no other signal reads `no_candidate:repo_not_owned`.
-> `TestIssueTakesNoTeamFromItsOwnRepoField`, `TestIssueMembershipGateReadsLinkedPullRequestRepos`,
-> `TestIssueMembershipPassThroughNamesOwnershipUnknown` and
-> `TestPRMembershipWithOwnershipFactEvidenceUnchanged` pin it.
+> (`repoByID` and the GitLab name-keyed `repoByNames`), and only a pull or merge request matches a
+> `repo` manual rule through its own repository. An issue of any provider, a Jira or Linear item
+> included, with no other source above ends `unassigned`.
+>
+> **The membership ownership gate applies to a pull or merge request and to other repo-bearing items, and
+> does not apply to an issue**: an issue has no repository field of its own and the gate reads
+> no linked-pull-request repository. The assignee's membership row of an issue is kept as provenance
+> (`is_primary = 0`, never the primary) and its evidence names `ownership=ownership_gate_not_applied_issue`.
+> The same row of a pull or merge request whose repository has no ownership row is kept too and names
+> `ownership=ownership_unknown`; every other pull or merge request row is as before. A missing proof is
+> not a healthy one, so both are named. `TestIssueTakesNoTeamFromItsOwnRepoField`,
+> `TestRepoScopedManualRuleNeverMatchesAnIssueThroughItsOwnRepo`,
+> `TestIssueMembershipRowNamesTheGateNotApplied`, `TestPRMembershipPassThroughWithoutOwnershipFactNamesOwnershipUnknown`
+> and `TestPRMembershipWithOwnershipFactEvidenceUnchanged` pin it.
 
 **Invariants:** the **winner is the highest-precedence matching source** (every matching source that
 passes its own gate is still persisted as a candidate — precedence decides `is_primary`, not which

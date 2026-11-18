@@ -114,7 +114,7 @@ func TestGitHubTestsSkipSummaryLogsOverflowedCauses(t *testing.T) {
 // since it never exercises the wiring at all.
 //
 // This drives 10 genuinely unreadable artifacts (exceeding
-// githubTestsMaxSkippedArtifactRecords=8) alongside one healthy one (so the
+// githubTestsMaxSkippedArtifactRecords=6) alongside one healthy one (so the
 // totality-unreadable gate does not trip and short-circuit before the
 // summary log is ever reached) through the real chunked route via
 // walkGitHubTestsChunksResult, so the unit's own overflow tracking actually
@@ -191,7 +191,7 @@ func (doer *githubTestsMixedMemberArtifactDoer) Do(request *http.Request) (*http
 	case strings.HasPrefix(path, "/repos/acme/api/actions/artifacts/") && strings.HasSuffix(path, "/zip"):
 		archive := githubTestsZip(doer.t, map[string]string{
 			"good.xml": githubTestsMultiSuiteJUnit(1),
-			"bad.xml":  `<!DOCTYPE x [<!ENTITY x "boom">]><testsuite>&x;</testsuite>`,
+			"bad.xml":  `<testsuite><testcase></testsuite>`,
 		})
 		return &http.Response{
 			StatusCode: http.StatusOK,

@@ -655,6 +655,34 @@ func TestProvisioningServiceAccountsThroughConfigure(t *testing.T) {
 		object(t, got)["reason_code"] != "admin_required" {
 		t.Fatalf("disable of an unknown account by an owner: %d %s, want 403 admin_required (the answer for an account of another organization)", got.status, got.body)
 	}
+	// The shadow venue's lifecycle rows: a superuser naming a missing organization or service account gets the 404 and
+	// nothing is written (accounts, audit and outbox rows counted before and after).
+	written := func() (n int) {
+		if err := e.admin.QueryRow(ctx, `SELECT (SELECT count(*) FROM auth.service_accounts) + (SELECT count(*) FROM auth.security_audit_events) +
+(SELECT count(*) FROM auth.auth_outbox_events)`).Scan(&n); err != nil {
+			t.Fatalf("count the written rows: %v", err)
+		}
+		return n
+	}
+	venueBefore := written()
+	missing := uuid.NewString()
+	for _, venue := range []struct {
+		path   string
+		body   map[string]any
+		reason string
+	}{
+		{authapi.PatternServiceAccountCreate, map[string]any{"organization_id": missing, "actor_principal_id": super.String(), "owner_principal_id": missing, "name": "venue-bot"}, "organization_not_found"},
+		{authapi.PatternServiceAccountDisable, map[string]any{"service_account_id": missing, "actor_principal_id": super.String()}, "service_account_not_found"},
+		{authapi.PatternServiceAccountEnable, map[string]any{"service_account_id": missing, "actor_principal_id": super.String()}, "service_account_not_found"},
+		{authapi.PatternServiceAccountOwner, map[string]any{"service_account_id": missing, "actor_principal_id": super.String(), "owner_principal_id": missing}, "service_account_not_found"},
+	} {
+		if got := post(venue.path, venue.body); got.status != http.StatusNotFound || object(t, got)["reason_code"] != venue.reason {
+			t.Fatalf("%s naming a missing target by a superuser: %d %s, want 404 %s", venue.path, got.status, got.body, venue.reason)
+		}
+	}
+	if after := written(); after != venueBefore {
+		t.Fatalf("the venue lifecycle requests wrote %d rows, want 0", after-venueBefore)
+	}
 	for event, want := range map[string]int{"created": 1, "disabled": 1, "owner_changed": 1, "enabled": 1} {
 		var n int
 		if err := e.admin.QueryRow(ctx, `SELECT count(*) FROM auth.security_audit_events WHERE event_type = $1 AND subject_principal_id = $2

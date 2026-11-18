@@ -220,6 +220,7 @@ func TestOrganisationMetricsAreTheOnesWhoseReadsHaveNoTeam(t *testing.T) {
 		complexity:    []complexityAggRow{{cyclomaticPerKloc: fp(3)}},
 		deployments:   []deploymentsAggRow{{deploymentsCount: 2, storedRows: 1}},
 		incidents:     []incidentsAggRow{{incidentsCount: 1, mttrP50Hours: fp(1), storedRows: 1}},
+		mttrPooledP50: fp(1),
 	}
 	teamRows := periodRows{
 		workItems:      []workItemsRow{{itemsCompleted: 1, cycleTimeP50Hours: fp(1), wipAgeP90Hours: fp(1)}},

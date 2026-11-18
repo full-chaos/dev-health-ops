@@ -1380,7 +1380,7 @@ func periodBindings(orgID string, start, end time.Time, teamBinding *clickhouse.
 // this port has ten call sites instead of one loop body, since each query
 // has a distinct Go return type -- same swallow-and-log behavior at every
 // one).
-func fetchPeriodRows(ctx context.Context, client QueryClient, orgID string, teams teamSelection, start time.Time) periodRows {
+func fetchPeriodRows(ctx context.Context, client QueryClient, orgID string, teams teamSelection, start time.Time, mappingAsOf time.Time) periodRows {
 	_, end := weekBounds(start)
 	var failed readFailures
 	swallow := func(table string, err error) {
@@ -1442,7 +1442,7 @@ func fetchPeriodRows(ctx context.Context, client QueryClient, orgID string, team
 	swallow("change_failure", err)
 	changeFailure = discardOnError(changeFailure, err)
 
-	mttrPooledP50, mttrPooledMean, err := pooledmttr.MTTR(ctx, client, orgID, start, end, ownershipAsOf(end))
+	mttrPooledP50, mttrPooledMean, err := pooledmttr.MTTR(ctx, client, orgID, start, end, mappingAsOf)
 	swallow("mttr_pooled", err)
 	if err != nil {
 		mttrPooledP50, mttrPooledMean = nil, nil
@@ -1679,9 +1679,8 @@ func (m reviewMetric) dataIn(current, prior periodRows, has func(periodRows) boo
 }
 
 // readFrom marks the metric unavailable in each week where a read its value
-// depends on failed (CHAOS-13977), by the metric's own failure rule (failedRead
-// or failedMTTRRead). That week has no value: hasData (hasPriorData) is false,
-// the value (priorValue) is the 0 placeholder, and degradedReason says
+// depends on failed (CHAOS-13977), by the metric's own failure rule (failedRead).
+// That week has no value: hasData (hasPriorData) is false, the value (priorValue) is the 0 placeholder, and degradedReason says
 // READ_FAILED. A metric computed from two reads never keeps the value of the one
 // read that worked: that is a smaller number, not the metric.
 func (m reviewMetric) readFrom(current, prior periodRows, failed func(periodRows) bool) reviewMetric {
@@ -1803,10 +1802,10 @@ func hasIncidentRows(p periodRows) bool {
 	return false
 }
 
-// hasMTTR follows the two sources the MTTR metric reads (firstNonZero).
-func hasMTTR(p periodRows) bool {
-	return anyPresent(pluck(p.incidents, func(r incidentsAggRow) *float64 { return r.mttrP50Hours })) ||
-		anyPresent(pluck(p.repoMetrics, func(r repoMetricsRow) *float64 { return r.mttrHours }))
+// hasPooledMTTR: the week's pooled MTTR holds a sample, of an incident or of a bug repair. A pooled zero is a
+// measured zero; an empty pool is no data.
+func hasPooledMTTR(p periodRows) bool {
+	return p.mttrPooledP50 != nil || p.mttrPooledMean != nil
 }
 
 // hasInvestmentRows: the week's investment distribution is stored. An area
@@ -1866,29 +1865,10 @@ func failedRead(tables ...string) func(periodRows) bool {
 	}
 }
 
-// failedMTTRRead is the failure rule of mttr_hours. Its value is the incident
-// MTTR, or the repository MTTR when the incident MTTR is 0 (firstNonZero). So a
-// failed incident read always makes it unavailable: the repository value would
-// stand in for a value nobody read. A failed repository read makes it
-// unavailable only when the incident MTTR is 0, the one case in which the value
-// reads the repository row; with an incident MTTR the value does not depend on
-// that read. A read that succeeds and holds no MTTR is no failure, and the
-// fallback to the repository MTTR stays as it is.
-func failedMTTRRead(p periodRows) bool {
-	if p.failed["mttr_pooled"] || p.failed["incidents"] {
-		return true
-	}
-	return p.failed["repo_metrics"] && incidentMTTR(p) == 0
-}
-
 // pooledMTTR is the tile value: the pooled incident median, or the pooled bug repair mean when no incident sample
 // exists (NULL) or the median is 0, the precedence the stored values had (firstNonZero).
 func pooledMTTR(p periodRows) float64 {
 	return firstNonZero(floatOrZero(p.mttrPooledP50), floatOrZero(p.mttrPooledMean))
-}
-
-func incidentMTTR(p periodRows) float64 {
-	return avgF(pluck(p.incidents, func(r incidentsAggRow) *float64 { return r.mttrP50Hours }))
 }
 
 type reviewSection struct {
@@ -2370,7 +2350,7 @@ func reliabilitySection(current, prior periodRows) reviewSection {
 			"incidents", lowerIsBetter).dataIn(current, prior, hasIncidentRows).readFrom(current, prior, failedRead("incidents")).organisation(),
 		buildMetric("mttr_hours", "MTTR",
 			pooledMTTR(current), pooledMTTR(prior),
-			"hours", lowerIsBetter).dataIn(current, prior, hasMTTR).readFrom(current, prior, failedMTTRRead).organisation(),
+			"hours", lowerIsBetter).dataIn(current, prior, hasPooledMTTR).readFrom(current, prior, failedRead("mttr_pooled")).organisation(),
 	})
 }
 
@@ -2504,8 +2484,11 @@ func resolveSelection(ctx context.Context, client QueryClient, orgID string, tea
 	}
 
 	weekStartT := weekStart.Time()
-	current := fetchPeriodRows(ctx, client, orgID, teams, weekStartT)
-	prior := fetchPeriodRows(ctx, client, orgID, teams, priorWeekStart(weekStartT))
+	// One request instant for the incident mappings of both weeks, as the report reads them (jobs/report/query.go): a
+	// historical week uses the mappings at request time.
+	requestedAt := time.Now().UTC()
+	current := fetchPeriodRows(ctx, client, orgID, teams, weekStartT, requestedAt)
+	prior := fetchPeriodRows(ctx, client, orgID, teams, priorWeekStart(weekStartT), requestedAt)
 
 	return computeReview(orgID, teamID, weekStartT, current, prior), nil
 }

@@ -130,6 +130,7 @@ type fakeClient struct {
 	pooledP50, pooledMean any
 	pooledErr             error
 	pooled                int
+	pooledAsOf            []any
 }
 
 // storedWeekValue is the stored MTTR of the week the pooled read follows: scanner is the position in its 11-read block
@@ -142,7 +143,7 @@ func (f *fakeClient) storedWeekValue(scanner, column int) any {
 	return f.responses[i].rows[0][column]
 }
 
-func (f *fakeClient) Query(_ context.Context, statement string, _ []clickhouse.Binding) (clickhouse.RowScanner, error) {
+func (f *fakeClient) Query(_ context.Context, statement string, bindings []clickhouse.Binding) (clickhouse.RowScanner, error) {
 	var value any
 	switch {
 	case strings.Contains(statement, "pooled_incident_repairs"):
@@ -159,6 +160,11 @@ func (f *fakeClient) Query(_ context.Context, statement string, _ []clickhouse.B
 		return f.positional(statement)
 	}
 	f.pooled++
+	for _, b := range bindings {
+		if b.Name == "as_of" {
+			f.pooledAsOf = append(f.pooledAsOf, b.Value)
+		}
+	}
 	if f.pooledErr != nil {
 		return nil, f.pooledErr
 	}
@@ -1004,7 +1010,7 @@ func TestFetchPeriodRows_MidStreamFailureDiscardsPartialRows(t *testing.T) {
 
 	client := &fakeClient{responses: responses, errs: make([]error, 11)}
 
-	result := fetchPeriodRows(context.Background(), client, "org1", nil, day("2026-08-24"))
+	result := fetchPeriodRows(context.Background(), client, "org1", nil, day("2026-08-24"), time.Now().UTC())
 
 	if len(result.workItems) != 0 {
 		t.Fatalf("workItems = %d rows, want 0 -- the one successfully-scanned row before the mid-stream failure must be discarded, not kept", len(result.workItems))

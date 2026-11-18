@@ -373,6 +373,12 @@ func (executor *WorkItemAttributionExecutor) buildRowsAtEachItemsDay(
 			donorRows[id] = row
 		}
 		linkedIssue, linkedEvidence, _, _ := derived.BuildLinkedIssueIndexFromRows("", subjects, donorRows, dependencies, nil)
+		if refused := teamattribution.LinkedIssueDonorRefusals(subjects, donorRows); len(refused) > 0 {
+			slog.Default().InfoContext(ctx, "work_item_attribution.linked_issue_donor_refused",
+				"org_id", orgID, "pr_kind", refused[teamattribution.LinkedIssueDonorRefusedPullKind],
+				"empty_type", refused[teamattribution.LinkedIssueDonorRefusedEmptyType],
+				"unknown", refused[teamattribution.LinkedIssueDonorRefusedUnknown])
+		}
 		derived.LinkedIssue = linkedIssue
 		derived.LinkedIssueEvidence = linkedEvidence
 		rows = append(rows, BuildWorkItemAttributionRows(orgID, now, idsByDay[day], subjects, derived)...)

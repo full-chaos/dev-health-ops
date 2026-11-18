@@ -1488,6 +1488,55 @@ func IsLinkedIssueDonorSource(source string) bool {
 	return linkedIssueDonorSources[source]
 }
 
+// Reasons a donor row is refused as a linked_issue donor (LinkedIssueDonorRefusal).
+const (
+	LinkedIssueDonorRefusedPullKind  = "pr_kind"
+	LinkedIssueDonorRefusedEmptyType = "empty_type"
+	LinkedIssueDonorRefusedUnknown   = "unknown"
+)
+
+// LinkedIssueDonorRefusal is the one test of "the donor of a linked_issue row must be an issue" (CHAOS-14013),
+// used by the cascade (BuildLinkedIssueIndexFromRows) and by the donor-change backstop. It returns "" when
+// the donor is an issue, else the reason: the donor is a pull or merge request of its provider
+// (pr_kind), its Type is empty (empty_type: a writer gap is never read as an issue), or it is not among the
+// known subjects (unknown). One predicate for every provider: the edge pull request -> pull request is not
+// an edge of the Repository <> Pull request <> Issue <> Project tree.
+func LinkedIssueDonorRefusal(subject GithubWorkItemDerivationSubject, known bool) string {
+	if !known {
+		return LinkedIssueDonorRefusedUnknown
+	}
+	itemType := strings.TrimSpace(subject.Type)
+	if itemType == "" {
+		return LinkedIssueDonorRefusedEmptyType
+	}
+	if GithubWorkItemDerivationIsPullOrMergeRequestType(strings.TrimSpace(subject.Provider), itemType) {
+		return LinkedIssueDonorRefusedPullKind
+	}
+	return ""
+}
+
+// LinkedIssueDonorRefusals counts, by reason, the donor rows that would give a team to a linked item by
+// their source and team but are refused by LinkedIssueDonorRefusal. A caller logs it at Info so a writer
+// that leaves Type empty shows up. Nil when nothing is refused.
+func LinkedIssueDonorRefusals(
+	subjects map[string]GithubWorkItemDerivationSubject, donorRows map[string]GithubWorkItemDerivationDonorRow,
+) map[string]int {
+	var counts map[string]int
+	for id, row := range donorRows {
+		if row.TeamID == "" || !linkedIssueDonorSources[row.Source] {
+			continue
+		}
+		subject, known := subjects[id]
+		if reason := LinkedIssueDonorRefusal(subject, known); reason != "" {
+			if counts == nil {
+				counts = map[string]int{}
+			}
+			counts[reason]++
+		}
+	}
+	return counts
+}
+
 // OwnDonorRows is the primary row this context gives each item of ids on its
 // own (without a linked issue): the row a run that writes those items in this
 // context writes for them.
@@ -1579,7 +1628,7 @@ func (derived GithubWorkItemDerivationContext) linkedIssueEvidence(workItemID st
 }
 
 // BuildLinkedIssueIndexFromRows resolves each team-less item to the team of a
-// linked donor's own primary row in donorRows, copied as it is and never
+// linked donor (an issue: LinkedIssueDonorRefusal) own primary row in donorRows, copied as it is and never
 // resolved again on the item's day (CHAOS-9460): a donor whose row is not in
 // donorRows, or whose row's source is not one of linkedIssueDonorSources,
 // gives nothing. It returns, beside each item's team, the evidence of its
@@ -1601,6 +1650,12 @@ func (derived GithubWorkItemDerivationContext) BuildLinkedIssueIndexFromRows(
 	donors := map[string][3]string{}
 	for id, row := range donorRows {
 		if row.TeamID == "" || !linkedIssueDonorSources[row.Source] {
+			continue
+		}
+		// The donor must be an issue (CHAOS-14013), decided before the team test and the winner pick, so
+		// another issue donor of the same item still gives its team.
+		donorSubject, donorKnown := subjects[id]
+		if LinkedIssueDonorRefusal(donorSubject, donorKnown) != "" {
 			continue
 		}
 		teamName := GithubWorkItemDerivationFirstNonEmpty(row.TeamName, row.TeamID)

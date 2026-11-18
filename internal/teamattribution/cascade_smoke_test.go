@@ -86,7 +86,7 @@ func TestBuildLinkedIssueIndexInheritsFromAttributedDonor(t *testing.T) {
 
 	donorProject := "linear-project-1"
 	donor := GithubWorkItemDerivationSubject{
-		WorkItemID: "linear:CHAOS-42", Provider: "linear", ProjectID: &donorProject,
+		WorkItemID: "linear:CHAOS-42", Provider: "linear", Type: "issue", ProjectID: &donorProject,
 		OrgID: "org-acme",
 	}
 	dependent := GithubWorkItemDerivationSubject{

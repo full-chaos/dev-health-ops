@@ -43,9 +43,52 @@ func TestGitHubWorkItemDerivationMatchesFrozenPythonProduction(t *testing.T) {
 	)
 }
 
+// buildGitHubWorkItemDerivationOracleCandidates is the Go side of the frozen pair. DECLARED DIVERGENCE: the
+// frozen Python has no rule on the donor's Type, and the pair's inputs carry none; Go refuses a donor whose
+// Type is empty (an empty Type is a writer gap, never read as an issue). So the pair reads a work item with
+// no Type as an issue, as Python does, and the divergence itself is asserted by
+// TestOracleDeclaredDivergenceGoRefusesAnEmptyTypeDonorWherePythonAccepts below.
 func buildGitHubWorkItemDerivationOracleCandidates(
 	t *testing.T,
 	input map[string]any,
+) githubWorkItemDerivationOracleCandidates {
+	t.Helper()
+	return buildGitHubWorkItemDerivationOracleCandidatesWith(t, input, true)
+}
+
+// oracleEmptyTypeDonorCases are the pair's cases whose Python answer rests on a donor with no Type.
+var oracleEmptyTypeDonorCases = []string{"actual_extkey_link_inherits_linear_donor"}
+
+// Go refuses where the frozen Python accepts: the same input, read with the real rule, gives no linked_issue
+// candidate (the item is unassigned), while the frozen answer (golden row of the case: source linked_issue,
+// team team-linear) inherits. A case that stops depending on an empty Type must leave the list.
+func TestOracleDeclaredDivergenceGoRefusesAnEmptyTypeDonorWherePythonAccepts(t *testing.T) {
+	byID := map[string]map[string]any{}
+	for _, c := range githubWorkItemDerivationOracleCases() {
+		byID[c.ID] = c.Input
+	}
+	for _, id := range oracleEmptyTypeDonorCases {
+		input, ok := byID[id]
+		if !ok {
+			t.Fatalf("case %q is not in the pair", id)
+		}
+		python := buildGitHubWorkItemDerivationOracleCandidatesWith(t, input, true)
+		if len(python.Source) == 0 || python.Source[0] != "linked_issue" {
+			t.Fatalf("%s: the Python-shaped read gives %v, want the frozen linked_issue answer", id, python.Source)
+		}
+		strict := buildGitHubWorkItemDerivationOracleCandidatesWith(t, input, false)
+		for _, source := range strict.Source {
+			if source == "linked_issue" {
+				t.Fatalf("%s: Go with the donor-type rule still gives linked_issue (%v)", id, strict.Source)
+			}
+		}
+	}
+}
+
+func buildGitHubWorkItemDerivationOracleCandidatesWith(
+	t *testing.T,
+	input map[string]any,
+	readEmptyTypeAsIssue bool,
 ) githubWorkItemDerivationOracleCandidates {
 	t.Helper()
 	encoded, err := json.Marshal(input)
@@ -59,6 +102,9 @@ func buildGitHubWorkItemDerivationOracleCandidates(
 	derived := teamattribution.NewGitHubWorkItemDerivationContext(decoded.Facts)
 	subjects := make(map[string]teamattribution.GithubWorkItemDerivationSubject, len(decoded.WorkItems))
 	for _, subject := range decoded.WorkItems {
+		if readEmptyTypeAsIssue && subject.Type == "" {
+			subject.Type = "issue"
+		}
 		subjects[subject.WorkItemID] = subject
 	}
 	linkLikeProduction(&derived, "github", subjects, toDerivationDependencyEdges(decoded.Dependencies))

@@ -2,6 +2,7 @@ package remaining
 
 import (
 	"context"
+	"log/slog"
 	"sort"
 	"strings"
 	"time"
@@ -64,11 +65,23 @@ func (executor *WorkItemAttributionExecutor) loadDonorChangedDependents(
 	if err != nil {
 		return nil, err
 	}
+	kinds, err := executor.loadDonorKinds(ctx, orgID, sortedWorkItemAttributionKeys(idSet))
+	if err != nil {
+		return nil, err
+	}
 	inactive, err := teamactive.LoadInactive(ctx, executor.conn, orgID)
 	if err != nil {
 		return nil, stepcause.Failure(stepcause.LoadInactiveTeamsDonorChange, err)
 	}
-	return donorChangedDependents(edges, keyIndex, rows, inactive), nil
+	refused := map[string]int{}
+	owed := donorChangedDependents(edges, keyIndex, rows, kinds, inactive, refused)
+	if len(refused) > 0 {
+		slog.Default().InfoContext(ctx, "work_item_attribution.linked_issue_donor_refused",
+			"org_id", orgID, "pr_kind", refused[teamattribution.LinkedIssueDonorRefusedPullKind],
+			"empty_type", refused[teamattribution.LinkedIssueDonorRefusedEmptyType],
+			"unknown", refused[teamattribution.LinkedIssueDonorRefusedUnknown])
+	}
+	return owed, nil
 }
 
 // donorChangedDependents returns, sorted, each item that inherits through an
@@ -88,7 +101,9 @@ func donorChangedDependents(
 	edges []teamattribution.GithubWorkItemDerivationDependencyEdge,
 	keyIndex map[string]string,
 	rows map[string]workItemAttributionNewestPrimary,
+	kinds map[string]teamattribution.GithubWorkItemDerivationSubject,
 	inactive teamactive.Inactive,
+	refused map[string]int,
 ) []string {
 	type donor struct{ target, relationship string }
 	donors := map[string][]donor{}
@@ -124,7 +139,17 @@ func donorChangedDependents(
 				continue
 			}
 			changed = changed || row.ComputedAt.After(own.ComputedAt)
-			if wantDonor == "" && row.TeamID != "" && teamattribution.IsLinkedIssueDonorSource(row.Source) && !inactive.Has(row.TeamID) {
+			if row.TeamID == "" || !teamattribution.IsLinkedIssueDonorSource(row.Source) {
+				continue
+			}
+			kind, known := kinds[candidate.target]
+			if reason := teamattribution.LinkedIssueDonorRefusal(kind, known); reason != "" {
+				if refused != nil {
+					refused[reason]++
+				}
+				continue
+			}
+			if wantDonor == "" && !inactive.Has(row.TeamID) {
 				wantDonor, wantTeam = candidate.target, row.TeamID
 			}
 		}
@@ -215,6 +240,38 @@ WHERE org_id = ?`, orgID)
 		edges = append(edges, edge)
 	}
 	return edges, stepcause.Failure(stepcause.IterateWorkItemDependenciesDonorChange, rows.Err())
+}
+
+// loadDonorKinds reads the provider and Type of each item of ids (work_items), one statement per bounded
+// chunk: the donor of a linked_issue row must be an issue (teamattribution.LinkedIssueDonorRefusal). An id
+// with no work_items row is absent from the result.
+func (executor *WorkItemAttributionExecutor) loadDonorKinds(
+	ctx context.Context, orgID string, ids []string,
+) (map[string]teamattribution.GithubWorkItemDerivationSubject, error) {
+	result := map[string]teamattribution.GithubWorkItemDerivationSubject{}
+	for _, chunk := range chunkStringsByRenderedBytes(ids, workItemAttributionMaxArrayBytes) {
+		rows, err := executor.conn.Query(ctx, `
+SELECT work_item_id, toString(provider), toString(ifNull(type, ''))
+FROM work_items FINAL
+WHERE org_id = ? AND has(?, work_item_id)`, orgID, chunk)
+		if err != nil {
+			return nil, stepcause.Failure(stepcause.QueryDonorKindsDonorChange, err)
+		}
+		for rows.Next() {
+			var subject teamattribution.GithubWorkItemDerivationSubject
+			if err := rows.Scan(&subject.WorkItemID, &subject.Provider, &subject.Type); err != nil {
+				_ = rows.Close()
+				return nil, stepcause.Failure(stepcause.ScanDonorKindDonorChange, err)
+			}
+			result[subject.WorkItemID] = subject
+		}
+		err = rows.Err()
+		_ = rows.Close()
+		if err != nil {
+			return nil, stepcause.Failure(stepcause.IterateDonorKindsDonorChange, err)
+		}
+	}
+	return result, nil
 }
 
 // loadNewestPrimaryRows reads the newest primary row of each item of ids, and

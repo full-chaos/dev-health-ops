@@ -188,15 +188,19 @@ func TestEveryOwnerOfTheRepositoryIsACoOwner(t *testing.T) {
 				subject GithubWorkItemDerivationSubject
 				want    map[string]map[string]int
 			}{
-				{"two main owners of the repository", GithubWorkItemDerivationSubject{WorkItemID: provider + ":r-1", Provider: provider, RepoID: &mainRepo, OrgID: "org"},
+				{"two main owners of the repository", GithubWorkItemDerivationSubject{WorkItemID: provider + ":r-1", Provider: provider, Type: pullRequestType(provider), RepoID: &mainRepo, OrgID: "org"},
 					map[string]map[string]int{"main-a": {"repo_ownership=1": 1}, "main-b": {"repo_ownership=2": 1}}},
-				{"two grants of the repository", GithubWorkItemDerivationSubject{WorkItemID: provider + ":g-1", Provider: provider, RepoID: &grantRepo, OrgID: "org"},
+				{"two grants of the repository", GithubWorkItemDerivationSubject{WorkItemID: provider + ":g-1", Provider: provider, Type: pullRequestType(provider), RepoID: &grantRepo, OrgID: "org"},
 					map[string]map[string]int{"grant-a": {"repo_ownership=1": 1}, "grant-b": {"repo_ownership=2": 1}}},
-				{"a co-owner beside a grant", GithubWorkItemDerivationSubject{WorkItemID: provider + ":m-1", Provider: provider, RepoID: &mixedRepo, OrgID: "org"},
+				{"a co-owner beside a grant", GithubWorkItemDerivationSubject{WorkItemID: provider + ":m-1", Provider: provider, Type: pullRequestType(provider), RepoID: &mixedRepo, OrgID: "org"},
 					map[string]map[string]int{"grant-c": {"repo_ownership=1": 1}, "co-owner": {"repo_ownership=2": 1}}},
 				{"a native team key", GithubWorkItemDerivationSubject{WorkItemID: provider + ":n-1", Provider: provider, NativeTeamKey: &native, OrgID: "org"},
 					map[string]map[string]int{"native-a": {"native_team=1": 1}, "native-b": {}}},
 			} {
+				// Only a pull / merge request takes repo_ownership from its own repo_id: a Jira or Linear item has none.
+				if tc.subject.RepoID != nil && tc.subject.Type == "" {
+					continue
+				}
 				_, _, candidates := derived.Resolve(tc.subject)
 				byTeam := rowsByTeam(candidates)
 				for team, want := range tc.want {

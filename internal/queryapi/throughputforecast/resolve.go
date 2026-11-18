@@ -69,15 +69,16 @@ func Resolve(
 	// hypothetical backlog can be forecast against real throughput. Note the
 	// nil check is on the POINTER: an explicit 0 is a supplied backlog, not an
 	// absent one, and must not fall through to the derived value.
-	backlogSize := 0
+	backlog := backlogRead{state: model.ThroughputBacklogStateSupplied}
 	if input.BacklogSize != nil {
-		backlogSize = *input.BacklogSize
+		backlog.size = *input.BacklogSize
 	} else {
-		backlogSize, err = loadBacklog(ctx, client, orgID, input.TeamIds, input.WorkScopeID)
+		backlog, err = loadBacklog(ctx, client, orgID, input.TeamIds, input.WorkScopeID, input.HistoryWeeks, now)
 		if err != nil {
 			return nil, err
 		}
 	}
+	backlogSize := backlog.size
 	if backlogSize < 0 {
 		return nil, fmt.Errorf("throughputForecast: backlog_size must be non-negative")
 	}
@@ -131,7 +132,7 @@ func Resolve(
 		// staleWip is deliberately NOT loaded on this path: Python passes only
 		// estimate_coverage into _result_to_output here, so the field is absent
 		// rather than merely empty.
-		return toModel(noHistoryForecastID, now, empty, nil, nil, coverage), nil
+		return toModel(noHistoryForecastID, now, empty, backlog, nil, nil, coverage), nil
 	}
 
 	currentWIP, averageWIP, err := loadWorkItemOverlay(
@@ -193,7 +194,7 @@ func Resolve(
 		"duration_ms", time.Since(started).Milliseconds(),
 	)
 
-	return toModel(uuid.NewString(), now, result, staleP50, staleP90, coverage), nil
+	return toModel(uuid.NewString(), now, result, backlog, staleP50, staleP90, coverage), nil
 }
 
 // scopeLabel renders the request's scope for a log line.
@@ -224,6 +225,7 @@ func toModel(
 	forecastID string,
 	computedAt time.Time,
 	result forecastResult,
+	backlog backlogRead,
 	staleP50, staleP90 *float64,
 	coverage *estimateCoverage,
 ) *model.ThroughputForecast {
@@ -245,6 +247,7 @@ func toModel(
 		TeamID:              result.teamID,
 		WorkScopeID:         result.workScopeID,
 		BacklogSize:         result.backlogSize,
+		BacklogState:        backlog.state,
 		HistoryWeeks:        result.historyWeeks,
 		P50Weeks:            result.p50Weeks,
 		P75Weeks:            result.p75Weeks,
@@ -255,6 +258,11 @@ func toModel(
 		ReviewBottleneck:    overlayToModel(result.reviewBottleneck),
 		IncidentLoad:        overlayToModel(result.incidentLoad),
 		InsufficientHistory: result.insufficientHistory,
+	}
+
+	if backlog.asOfDay != nil {
+		day := graphqldate.New(*backlog.asOfDay)
+		forecast.BacklogAsOfDay = &day
 	}
 
 	// Absent when BOTH ages are null, exactly as _load_stale_wip returns None
@@ -271,6 +279,7 @@ func toModel(
 			EstimatedCount:   coverage.estimatedCount,
 			UnestimatedCount: coverage.unestimatedCount,
 			BacklogSize:      coverage.backlogSize,
+			GrainCount:       coverage.grainCount,
 		}
 	}
 	return forecast

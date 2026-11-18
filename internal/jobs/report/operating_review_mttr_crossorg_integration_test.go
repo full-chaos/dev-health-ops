@@ -10,7 +10,8 @@ import (
 )
 
 // Two organizations hold rows under the SAME repository id, service-mapped alike and on the same days: the pooled MTTR
-// scorecard of one organization is made of its own rows only.
+// scorecard of one organization is made of its own rows only. Each sample starts and finishes on the one day, as the
+// daily writers count an incident resolved on its start day and a bug on its completion day.
 func TestPooledMTTRScorecardIsScopedToTheRequestOrganization(t *testing.T) {
 	e := startPooledEnv(t)
 	client := mttrTileClient(e)
@@ -26,13 +27,13 @@ func TestPooledMTTRScorecardIsScopedToTheRequestOrganization(t *testing.T) {
 	}
 	orgA, orgB := e.newOrg(), e.newOrg()
 	seed(orgA, "svc-x", 2, 4)
-	seed(orgB, "svc-x", 100, 50)
+	seed(orgB, "svc-x", 12, 9)
 	start, end := deliveryDay1, deliveryDay1.AddDate(0, 0, 7)
 	for _, tc := range []struct {
 		org       string
 		p50, mean float64
 		name      string
-	}{{orgA, 4, 2, "A"}, {orgB, 50, 100, "B"}} {
+	}{{orgA, 4, 2, "A"}, {orgB, 9, 12, "B"}} {
 		p50, mean, err := pooledmttr.MTTR(e.ctx, client, tc.org, start, end, time.Now().UTC())
 		if err != nil {
 			t.Fatal(err)

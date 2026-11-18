@@ -308,3 +308,82 @@ func TestStatusPrecedenceMatchesPythonProjection(t *testing.T) {
 		})
 	}
 }
+
+// TestClosedWithReasonDecodesOnlyClosedPairs pins the CHAOS-13988 decoder: only
+// a non-empty incomplete list whose every observation is report_member
+// artifact_expired, malformed or unsafe_doctype closes a window; everything
+// else keeps the gap.
+func TestClosedWithReasonDecodesOnlyClosedPairs(t *testing.T) {
+	t.Parallel()
+	text := func(value string) *string { return &value }
+	cases := []struct {
+		name       string
+		incomplete *string
+		want       []string
+	}{
+		{"missing key", nil, nil},
+		{"json null", text(`null`), nil},
+		{"empty list", text(`[]`), nil},
+		{"not a list", text(`{"component":"report_member","cause":"malformed"}`), nil},
+		{"undecodable element", text(`[{"component":1,"cause":"malformed"}]`), nil},
+		{"null element", text(`[null]`), nil},
+		{"expired only", text(`[{"component":"report_member","cause":"artifact_expired","count":4}]`), []string{"artifact_expired"}},
+		{"malformed twice", text(`[{"component":"report_member","cause":"malformed","count":1},{"component":"report_member","cause":"malformed","count":2}]`), []string{"malformed"}},
+		{"both sorted", text(`[{"component":"report_member","cause":"malformed"},{"component":"report_member","cause":"artifact_expired"}]`), []string{"artifact_expired", "malformed"}},
+		{"closed cause on another component", text(`[{"component":"run_reports","cause":"malformed"}]`), nil},
+		{"expired beside per_run_cap", text(`[{"component":"report_member","cause":"artifact_expired"},{"component":"run_reports","cause":"per_run_cap"}]`), nil},
+		{"unknown cause", text(`[{"component":"report_member","cause":"something_new"}]`), nil},
+		{"unreadable", text(`[{"component":"report_member","cause":"unreadable"}]`), nil},
+		{"unsafe_doctype only", text(`[{"component":"report_member","cause":"unsafe_doctype"}]`), []string{"unsafe_doctype"}},
+		{"all three sorted", text(`[{"component":"report_member","cause":"unsafe_doctype"},{"component":"report_member","cause":"malformed"},{"component":"report_member","cause":"artifact_expired"}]`), []string{"artifact_expired", "malformed", "unsafe_doctype"}},
+		{"unsafe_doctype beside per_run_cap", text(`[{"component":"report_member","cause":"unsafe_doctype"},{"component":"run_reports","cause":"per_run_cap"}]`), nil},
+	}
+	for _, tc := range cases {
+		got := closedWithReason(tc.incomplete)
+		if len(got) != len(tc.want) {
+			t.Fatalf("%s: closedWithReason = %#v, want %#v", tc.name, got, tc.want)
+		}
+		for index := range got {
+			if got[index] != tc.want[index] {
+				t.Fatalf("%s: closedWithReason = %#v, want %#v", tc.name, got, tc.want)
+			}
+		}
+	}
+}
+
+// TestClosedRangesCompleteWinsAndKeepScope pins the closed range algebra: a
+// complete window is subtracted, and ranges merge only within one source scope
+// and one reason set.
+func TestClosedRangesCompleteWinsAndKeepScope(t *testing.T) {
+	t.Parallel()
+	base := time.Date(2026, time.August, 1, 0, 0, 0, 0, time.UTC)
+	expired := []string{"artifact_expired"}
+	remaining := subtractClosedRanges([]closedRange{
+		{Interval: coverageInterval{Since: base, Before: base.Add(2 * time.Hour)}, Reasons: expired},
+		{Interval: coverageInterval{Since: base.Add(2 * time.Hour), Before: base.Add(4 * time.Hour)}, Reasons: expired},
+	}, []coverageInterval{{Since: base.Add(3 * time.Hour), Before: base.Add(5 * time.Hour)}})
+	if len(remaining) != 1 || !remaining[0].Interval.Since.Equal(base) || !remaining[0].Interval.Before.Equal(base.Add(3*time.Hour)) ||
+		len(remaining[0].Reasons) != 1 || remaining[0].Reasons[0] != "artifact_expired" {
+		t.Fatalf("remaining = %#v", remaining)
+	}
+	merged := mergeClosedRanges([]closedRange{
+		{Interval: coverageInterval{Since: base, Before: base.Add(time.Hour), SourceIDs: []string{"a"}}, Reasons: expired},
+		{Interval: coverageInterval{Since: base.Add(time.Hour), Before: base.Add(2 * time.Hour), SourceIDs: []string{"a"}}, Reasons: expired},
+		{Interval: coverageInterval{Since: base.Add(time.Hour), Before: base.Add(2 * time.Hour), SourceIDs: []string{"b"}}, Reasons: expired},
+		{Interval: coverageInterval{Since: base.Add(2 * time.Hour), Before: base.Add(3 * time.Hour), SourceIDs: []string{"a"}}, Reasons: []string{"malformed"}},
+	})
+	if len(merged) != 3 {
+		t.Fatalf("merged = %#v, want 3 ranges (a expired, b expired, a malformed)", merged)
+	}
+	if got := merged[0]; !got.Interval.Before.Equal(base.Add(2*time.Hour)) || got.Interval.SourceIDs[0] != "a" || got.Reasons[0] != "artifact_expired" {
+		t.Fatalf("first = %#v", got)
+	}
+	payload := closedRangePayloads(merged[:1])
+	item := payload[0].(map[string]any)
+	if item["since"] != "2026-08-01T00:00:00+00:00" || item["before"] != "2026-08-01T02:00:00+00:00" {
+		t.Fatalf("payload = %#v", item)
+	}
+	if _, has := item["run_ids"]; has {
+		t.Fatalf("payload = %#v, want no run_ids", item)
+	}
+}

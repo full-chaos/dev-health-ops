@@ -130,8 +130,8 @@ func seedCycleTimeRowsEachInItsOwnPart(t *testing.T, ctx context.Context, conn s
 	t.Helper()
 	for _, r := range rows {
 		insert := fmt.Sprintf(
-			"INSERT INTO work_item_cycle_times (work_item_id, provider, day, work_scope_id, team_id, type, status, created_at, computed_at, org_id) VALUES "+
-				`('%s','github',toDate('%s'),'scope-a','team-a','%s','done',toDateTime('2026-09-01 00:00:00'),toDateTime('%s'),'%s')`,
+			"INSERT INTO work_item_cycle_times (work_item_id, provider, day, work_scope_id, team_id, type, status, created_at, completed_at, computed_at, org_id) VALUES "+
+				`('%s','github',toDate('%s'),'scope-a','team-a','%s','done',toDateTime('2026-09-01 00:00:00'),toDateTime('2026-09-02 00:00:00'),toDateTime('%s'),'%s')`,
 			r.workItemID, r.day, r.workType, r.computedAt, orgID,
 		)
 		if err := conn.Exec(ctx, insert); err != nil {

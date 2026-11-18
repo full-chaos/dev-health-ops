@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"io"
-	"net"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +11,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	pgstorage "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/refusedaddr"
 )
 
 // `migrate postgres upgrade` (the migrate hook's first step) and `migrate
@@ -22,14 +22,7 @@ func TestUpgradeAndBuildIndexWaitForTheFirstConnectThenFailClosed(t *testing.T) 
 	saved := firstConnect
 	t.Cleanup(func() { firstConnect = saved })
 
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	address := listener.Addr().String()
-	if err := listener.Close(); err != nil {
-		t.Fatal(err)
-	}
+	address := refusedaddr.Addr(t)
 	dsn := "postgresql://migrator:sekret-pw@" + address + "/devhealth?sslmode=disable"
 	resolve := ResolveDSN(func(secrets.LookupEnv, io.Writer) (secrets.Value, string, bool) {
 		return secrets.NewValue(dsn), "test", true

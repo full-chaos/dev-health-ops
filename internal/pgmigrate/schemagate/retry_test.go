@@ -22,6 +22,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/pgmigrate"
 	"github.com/full-chaos/dev-health-ops/internal/pgmigrate/schemagate/schemagatetest"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/refusedaddr"
 )
 
 // fakeClock replaces now and wait: a wait advances the clock, and each read advances it by readCost.
@@ -200,14 +201,7 @@ func TestReadClassNamesTheFailureWithoutDriverText(t *testing.T) {
 // A refused loopback dial through pgx keeps the driver's dial address, so it is classed local and is not retried:
 // service tests that start against 127.0.0.1:1 on purpose do not wait for the retries.
 func TestPoolRecordedClassesARefusedLoopbackDialThroughTheDriver(t *testing.T) {
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	address := listener.Addr().String()
-	if err := listener.Close(); err != nil {
-		t.Fatal(err)
-	}
+	address := refusedaddr.Addr(t)
 	cfg := postgres.DefaultConfig("postgres://gate:secret-word@" + address + "/db?sslmode=disable")
 	cfg.ConnectTimeout = 2 * time.Second
 	pool, err := postgres.New(context.Background(), cfg)

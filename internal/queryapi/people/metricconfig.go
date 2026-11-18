@@ -180,7 +180,7 @@ var personMetrics = []personMetric{
 			Aggregator:     "sum",
 			IdentityColumn: "assignee",
 			GroupExpr:      "if(type = '' OR type IS NULL, 'unknown', type)",
-			ExtraWhere:     "",
+			ExtraWhere:     "AND completed_at IS NOT NULL",
 			Transform:      identityTransform,
 		},
 	},

@@ -982,9 +982,33 @@ func qpRootKeys(doc *gqlast.QueryDocument) []string {
 		if op.Operation == gqlast.Mutation {
 			prefix = "Mutation."
 		}
-		for _, selection := range op.SelectionSet {
-			if field, ok := selection.(*gqlast.Field); ok && field.Name != "__typename" {
-				keys = append(keys, prefix+field.Name)
+		keys = qpSelectionRoots(doc, op.SelectionSet, prefix, keys, map[string]bool{})
+	}
+	return keys
+}
+
+// qpSelectionRoots appends the root fields of one operation's selection set: direct fields, and the fields inside its
+// inline fragments and named fragment spreads at any depth (a fragment at the root selects root fields too).
+func qpSelectionRoots(doc *gqlast.QueryDocument, set gqlast.SelectionSet, prefix string, keys []string, spread map[string]bool) []string {
+	for _, selection := range set {
+		switch s := selection.(type) {
+		case *gqlast.Field:
+			if s.Name != "__typename" {
+				keys = append(keys, prefix+s.Name)
+			}
+		case *gqlast.InlineFragment:
+			keys = qpSelectionRoots(doc, s.SelectionSet, prefix, keys, spread)
+		case *gqlast.FragmentSpread:
+			if spread[s.Name] {
+				continue
+			}
+			spread[s.Name] = true
+			definition := s.Definition
+			if definition == nil {
+				definition = doc.Fragments.ForName(s.Name)
+			}
+			if definition != nil {
+				keys = qpSelectionRoots(doc, definition.SelectionSet, prefix, keys, spread)
 			}
 		}
 	}

@@ -287,3 +287,88 @@ func TestFailDispatchPermanentlyRunsUnderTheWorkerDomainRole(t *testing.T) {
 		t.Fatalf("status=%s finalization=%s, want failed/failed", status, finalization)
 	}
 }
+
+// The recovery path of a run the dispatch failed: no command moves a failed run
+// back; `metrics daily-start --rerun-tag` starts a NEW run of the day
+// (StartManualDailyRerun). That run computes and succeeds, the failed run stays
+// failed, and the day marker certifies the new run.
+func TestARerunOfADayWhoseDispatchFailedRunsTheDayAgain(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	stack := newMarkerStack(t)
+	orgID := uuid.NewString()
+	day := markerDay(4)
+	dayText := day.Format("2006-01-02")
+
+	tx, err := stack.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failedRun, err := stack.store.StartRunTx(ctx, tx, StartRunRequest{
+		OrganizationID: orgID, TargetDay: day, Generation: "post-sync:" + uuid.NewString(),
+	}, stack.publisher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	failing, err := NewDispatcher(stack.store, stack.publisher, &fakeRepositoryDiscoverer{err: errors.New("clickhouse unavailable")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	execution := dispatchAttemptExecution(orgID, failedRun.ID)
+	execution.Attempt, execution.Definition.MaxAttempts = 3, 3
+	_ = failing.Work(ctx, execution)
+
+	const tag = "fix-1"
+	outcome, err := stack.store.StartManualDailyRerun(ctx, orgID, dayText,
+		ManualDailyRerunGeneration(orgID, dayText, nil, tag), nil, stack.publisher, tag)
+	if err != nil {
+		t.Fatalf("rerun: %v", err)
+	}
+	if outcome.RunID == failedRun.ID || outcome.AlreadyStarted {
+		t.Fatalf("rerun outcome %+v, want a new run", outcome)
+	}
+	repo := RepositoryID(uuid.NewString())
+	dispatcher, err := NewDispatcher(stack.store, stack.publisher, &fakeRepositoryDiscoverer{identifiers: []RepositoryID{repo}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := dispatcher.Work(ctx, dispatchAttemptExecution(orgID, outcome.RunID)); err != nil {
+		t.Fatalf("rerun dispatch: %v", err)
+	}
+	partitions, err := stack.store.DispatchablePartitions(ctx, outcome.RunID)
+	if err != nil || len(partitions) != 1 {
+		t.Fatalf("rerun partitions: %d %v", len(partitions), err)
+	}
+	claim, err := stack.store.ClaimPartition(ctx, partitions[0].ID)
+	if err != nil || claim == nil {
+		t.Fatalf("ClaimPartition: %v %v", claim, err)
+	}
+	if err := stack.store.CompletePartition(ctx, *claim, stack.publisher); err != nil {
+		t.Fatal(err)
+	}
+	finalize, err := stack.store.ClaimFinalize(ctx, outcome.RunID)
+	if err != nil || finalize == nil {
+		t.Fatalf("ClaimFinalize: %v %v", finalize, err)
+	}
+	if err := stack.store.CompleteFinalize(ctx, *finalize); err != nil {
+		t.Fatal(err)
+	}
+
+	statusOf := func(runID string) string {
+		t.Helper()
+		var status string
+		if err := stack.pool.QueryRow(ctx, `SELECT status FROM daily_metrics_runs WHERE id = $1`, runID).Scan(&status); err != nil {
+			t.Fatal(err)
+		}
+		return status
+	}
+	state := stack.states(t, orgID, day, day)[dayText]
+	t.Logf("failed run=%s rerun=%s day marker=%q", statusOf(failedRun.ID), statusOf(outcome.RunID), state)
+	if statusOf(failedRun.ID) != "failed" || statusOf(outcome.RunID) != "succeeded" || state != RunMarkerSucceeded {
+		t.Fatalf("failed run=%s rerun=%s marker=%q, want failed, succeeded and the day certified",
+			statusOf(failedRun.ID), statusOf(outcome.RunID), state)
+	}
+}

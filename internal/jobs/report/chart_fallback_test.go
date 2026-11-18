@@ -222,3 +222,32 @@ func TestPlanSectionTitledOtherChartsKeepsOneFallbackHeading(t *testing.T) {
 		}
 	}
 }
+
+// A Markdown reader drops the closing hashes of a heading: a plan section whose title shows as "Other Charts" must not
+// make a second heading of that name.
+func TestPlanSectionTitleShowingAsOtherChartsKeepsOneFallbackHeading(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"Other Charts ##", "other charts  #  ", "OTHER CHARTS", "Other Charts", "Other Charts ###"} {
+		unlisted := cicdCharts("team")
+		markdown := renderPlan(t, []string{"summary", name}, unlisted)
+		requireTables(t, markdown, unlisted)
+		shown := 0
+		for _, line := range strings.Split(markdown, "\n") {
+			if strings.HasPrefix(line, "## ") && strings.EqualFold(strings.TrimRight(strings.TrimPrefix(line, "## "), "# "), "Other Charts") {
+				shown++
+			}
+		}
+		if shown != 1 {
+			t.Errorf("section %q with unlisted charts: %d lines show as the Other Charts heading, want 1:\n%s", name, shown, markdown)
+		}
+		if !strings.Contains(markdown, "\n## Other Charts (plan section)\n") {
+			t.Errorf("section %q lost its own heading:\n%s", name, markdown)
+		}
+		covered := cicdCharts("team")
+		markdown = renderPlan(t, []string{"summary", name, "cicd"}, covered)
+		requireTables(t, markdown, covered)
+		if got := strings.Count(markdown, "\n## Other Charts\n") + strings.Count(markdown, "\n## Other Charts ##\n"); got != 0 {
+			t.Errorf("section %q with every chart printed: %d lines show as the fallback heading, want 0:\n%s", name, got, markdown)
+		}
+	}
+}

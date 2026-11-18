@@ -52,7 +52,8 @@ func TestWorkItemAttributionClosurePromotesToOrgWide(t *testing.T) {
 	repoX := uuid.New()
 	now := time.Now().UTC()
 
-	seedWorkItemAttributionItem(t, ctx, conn, orgID, "A", repoX, now)
+	// A is a pull request: only a pull / merge request takes the ownership of its own repository.
+	seedWorkItemAttributionPullRequest(t, ctx, conn, orgID, "A", repoX, now)
 	seedWorkItemAttributionItem(t, ctx, conn, orgID, "B", uuid.Nil, now)
 	seedWorkItemAttributionItem(t, ctx, conn, orgID, "C", uuid.Nil, now)
 	seedWorkItemAttributionItem(t, ctx, conn, orgID, "D", uuid.Nil, now)
@@ -237,7 +238,9 @@ func TestWorkItemAttributionBelowThresholdReverseClosureUsesDonorEdge(t *testing
 	repoX := uuid.New()
 	now := time.Now().UTC()
 
-	seedWorkItemAttributionItem(t, ctx, conn, orgID, "A", repoX, now)
+	// A is a pull request too: only a pull / merge request takes the ownership of its own repository, and
+	// an issue's repository ownership is no donor row.
+	seedWorkItemAttributionPullRequest(t, ctx, conn, orgID, "A", repoX, now)
 	// B is a pull request: a linked item gives its team only to a pull request.
 	seedWorkItemAttributionPullRequest(t, ctx, conn, orgID, "B", uuid.Nil, now)
 	for i := 0; i < 18; i++ {

@@ -108,7 +108,7 @@ func buildGitHubWorkItemDerivationOracleCandidatesWith(
 		subjects[subject.WorkItemID] = subject
 	}
 	linkLikeProduction(&derived, "github", subjects, toDerivationDependencyEdges(decoded.Dependencies))
-	_, _, candidates := derived.Resolve(pullRequestShapeOfALinkSource(decoded.Subject, decoded.Dependencies))
+	_, _, candidates := derived.Resolve(pullRequestShapeOfARepoItem(pullRequestShapeOfALinkSource(decoded.Subject, decoded.Dependencies)))
 	result := githubWorkItemDerivationOracleCandidates{
 		Source: make([]string, 0, len(candidates)), TeamID: make([]*string, 0, len(candidates)),
 		TeamName: make([]*string, 0, len(candidates)), Confidence: make([]string, 0, len(candidates)),
@@ -150,6 +150,21 @@ func pullRequestShapeOfALinkSource(
 			subject.Type = "pr"
 			return subject
 		}
+	}
+	return subject
+}
+
+// pullRequestShapeOfARepoItem is the second declared divergence of the frozen
+// Python cases (CHAOS-14010): Python gave every item with a repo_id the repo
+// owner's team; Go gives it to a pull / merge request only, and an issue takes
+// none from its own repository field. A type-less github case subject that
+// carries a repo_id is resolved as the pull request whose repo_ownership the
+// frozen answer records.
+func pullRequestShapeOfARepoItem(
+	subject teamattribution.GithubWorkItemDerivationSubject,
+) teamattribution.GithubWorkItemDerivationSubject {
+	if subject.Type == "" && subject.Provider == "github" && subject.RepoID != nil {
+		subject.Type = "pr"
 	}
 	return subject
 }

@@ -55,6 +55,9 @@ func TestALinkedItemCopiesItsDonorsRowOnly(t *testing.T) {
 				}
 			}
 			index, _, _ := derived.BuildLinkedIssueIndex(provider, subjects, edges, nil)
+			if pullRequestType(provider) == "" {
+				return // a Jira or Linear donor is an issue: its own repo_id gives no team
+			}
 			if got := fmt.Sprint(index["pr"][0]); got != "team-context" {
 				t.Errorf("the reference shape resolves the donor in this context: %q, want team-context", got)
 			}

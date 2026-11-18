@@ -447,7 +447,7 @@ func TestTeamAttributionOwnershipReasonsAreTheCascadeLabels(t *testing.T) {
 	want := map[string]bool{"": true, teamattribution.GithubWorkItemDerivationOwnershipCheckedLabel(""): true}
 	for _, reason := range []string{
 		teamattribution.MembershipOwnershipReasonNotOwned, teamattribution.MembershipOwnershipReasonUnknown,
-		teamattribution.MembershipOwnershipReasonTeamNullCarrying,
+		teamattribution.MembershipOwnershipReasonTeamNullCarrying, teamattribution.MembershipOwnershipReasonIssueGateNotApplied,
 	} {
 		want[teamattribution.GithubWorkItemDerivationOwnershipCheckedLabel(reason)] = true
 	}

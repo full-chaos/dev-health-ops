@@ -41,7 +41,7 @@ func TestResolvePrefersRepoOwnershipOverLowerSources(t *testing.T) {
 	derived := NewGitHubWorkItemDerivationContext(facts)
 
 	subject := GithubWorkItemDerivationSubject{
-		WorkItemID: "gh:acme/api#7", Provider: "github", RepoID: &repoID,
+		WorkItemID: "gh:acme/api#7", Provider: "github", Type: "pr", RepoID: &repoID,
 		Assignees: []string{"dev@example.com"}, OrgID: "org-acme",
 	}
 	teamID, teamName, candidates := derived.Resolve(subject)
@@ -164,7 +164,7 @@ func TestCascadeGateDropsAssigneeWhoseTeamDoesNotOwnTheRepo(t *testing.T) {
 		}},
 	})
 	subject := GithubWorkItemDerivationSubject{
-		WorkItemID: "gh:acme/api#8", Provider: "github", RepoID: &repoID,
+		WorkItemID: "gh:acme/api#8", Provider: "github", Type: "pr", RepoID: &repoID,
 		Assignees: []string{"dev@example.com"}, OrgID: "org-acme",
 	}
 	teamID, _, candidates := derived.Resolve(subject)
@@ -295,7 +295,7 @@ func TestCascadeGateOwnershipUnknownMatchesConfiguredDefault(t *testing.T) {
 		}},
 	})
 	subject := GithubWorkItemDerivationSubject{
-		WorkItemID: "gh:acme/api#11", Provider: "github", RepoID: &repoID,
+		WorkItemID: "gh:acme/api#11", Provider: "github", Type: "pr", RepoID: &repoID,
 		Assignees: []string{"dev@example.com"}, OrgID: "org-acme",
 	}
 	teamID, _, candidates := derived.Resolve(subject)
@@ -355,7 +355,7 @@ func TestCascadeGateDropsBlankTeamIDMembershipWhenRepoHasAnOwner(t *testing.T) {
 		}},
 	})
 	subject := GithubWorkItemDerivationSubject{
-		WorkItemID: "gh:acme/api#12", Provider: "github", RepoID: &repoID,
+		WorkItemID: "gh:acme/api#12", Provider: "github", Type: "pr", RepoID: &repoID,
 		Assignees: []string{"dev@example.com"}, OrgID: "org-acme",
 	}
 	teamID, _, candidates := derived.Resolve(subject)
@@ -396,7 +396,7 @@ func TestCandidateOwnershipReasonDistinguishesOwnedFromUnknownPassthrough(t *tes
 		}},
 	})
 	ownedSubject := GithubWorkItemDerivationSubject{
-		WorkItemID: "gh:acme/api#13", Provider: "github", RepoID: &repoID,
+		WorkItemID: "gh:acme/api#13", Provider: "github", Type: "pr", RepoID: &repoID,
 		Assignees: []string{"dev@example.com"}, OrgID: "org-acme",
 	}
 	_, _, ownedCandidates := owned.Resolve(ownedSubject)
@@ -418,7 +418,7 @@ func TestCandidateOwnershipReasonDistinguishesOwnedFromUnknownPassthrough(t *tes
 		}},
 	})
 	unknownSubject := GithubWorkItemDerivationSubject{
-		WorkItemID: "gh:acme/api#14", Provider: "github", RepoID: &repoID,
+		WorkItemID: "gh:acme/api#14", Provider: "github", Type: "pr", RepoID: &repoID,
 		Assignees: []string{"dev@example.com"}, OrgID: "org-acme",
 	}
 	_, _, unknownCandidates := unknown.Resolve(unknownSubject)
@@ -469,7 +469,7 @@ func TestCascadeGateChecksOwnershipByRepositoryNameWhenNoRepoIDMatches(t *testin
 
 	// Case 1: the assignee's team MATCHES the name-resolved owner -- granted.
 	granted := GithubWorkItemDerivationSubject{
-		WorkItemID: "gh:acme/api#20", Provider: "github", ProjectID: GithubWorkItemDerivationStringPointer("acme/api"),
+		WorkItemID: "gh:acme/api#20", Provider: "github", Type: "pr", ProjectID: GithubWorkItemDerivationStringPointer("acme/api"),
 		Assignees: []string{"owner-dev@example.com"}, OrgID: "org-acme",
 	}
 	_, _, grantedCandidates := derived.Resolve(granted)
@@ -486,7 +486,7 @@ func TestCascadeGateChecksOwnershipByRepositoryNameWhenNoRepoIDMatches(t *testin
 	// Case 2: the assignee's team does NOT match the name-resolved owner --
 	// rejected, exactly like the RepoID-keyed gate tests above.
 	rejected := GithubWorkItemDerivationSubject{
-		WorkItemID: "gh:acme/api#21", Provider: "github", ProjectID: GithubWorkItemDerivationStringPointer("acme/api"),
+		WorkItemID: "gh:acme/api#21", Provider: "github", Type: "pr", ProjectID: GithubWorkItemDerivationStringPointer("acme/api"),
 		Assignees: []string{"other-dev@example.com"}, OrgID: "org-acme",
 	}
 	_, _, rejectedCandidates := derived.Resolve(rejected)
@@ -560,7 +560,7 @@ func TestAssigneeMembershipStillStacksOntoAHigherRankedPrimary(t *testing.T) {
 		}},
 	})
 	subject := GithubWorkItemDerivationSubject{
-		WorkItemID: "gh:acme/api#31", Provider: "github",
+		WorkItemID: "gh:acme/api#31", Provider: "github", Type: "pr",
 		RepoID: &repoID, Assignees: []string{"alice"}, OrgID: "org-acme",
 	}
 	teamID, _, candidates := derived.Resolve(subject)
@@ -656,7 +656,7 @@ func TestNullCarryingProviderTeamExcludedFromAssigneeCascade(t *testing.T) {
 		}},
 	})
 	subject := GithubWorkItemDerivationSubject{
-		WorkItemID: "gh:acme/tools#6", Provider: "github",
+		WorkItemID: "gh:acme/tools#6", Provider: "github", Type: "pr",
 		RepoID: &repoID, Assignees: []string{"chrisgeo"}, OrgID: "org-acme",
 	}
 	teamID, _, candidates := derived.Resolve(subject)

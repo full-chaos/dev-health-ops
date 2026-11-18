@@ -63,6 +63,13 @@ const (
 // relationship the requests do not actually have (CHAOS-4142, codex round 2).
 const githubTestsPerRunPerPage = 100
 
+type githubTestsOpenSkipEvent struct {
+	RunID  string `json:"r"`
+	Reason string `json:"why"`
+	Status int    `json:"st,omitempty"`
+	Route  string `json:"rt,omitempty"`
+}
+
 // githubTestsChunkCursor is deliberately route-owned. A provider Link URL is
 // opaque, while the run index makes a crash between two runs on one page
 // resumable without replaying the already committed prefix.
@@ -113,6 +120,12 @@ type githubTestsChunkCursor struct {
 	OpenSkipped      int  `json:"osk,omitempty"`
 	OpenTransientRun int  `json:"otr,omitempty"`
 	OpenSkipLimitHit bool `json:"osl,omitempty"`
+	// OpenSkipEvent is the skip this cursor's emission committed, until the
+	// emission after its WARN line and counter step clears it. An attempt that
+	// resumes from a cursor still carrying it records the skip: the commit of
+	// that emission may have been durable with no acknowledgement, or drained
+	// by the executor's recovery without this route.
+	OpenSkipEvent *githubTestsOpenSkipEvent `json:"ose,omitempty"`
 	// OpenFloorHit and OpenFloorRemaining record that the rate-limit governor
 	// stopped the open phase: remaining requests of the installation at that
 	// time (-1 when the response carried no header).
@@ -927,6 +940,7 @@ func decodeGitHubTestsChunkCursor(raw string) (githubTestsChunkCursor, error) {
 		(cursor.Phase != "runs" && cursor.Phase != "artifacts" && cursor.Phase != githubTestsOpenPhase && cursor.Phase != "done") ||
 		cursor.RangeItems < 0 || cursor.OpenDone < 0 || cursor.OpenCap < 0 ||
 		cursor.OpenSkipped < 0 || cursor.OpenTransientRun < 0 ||
+		cursor.OpenSkipEvent != nil && (cursor.OpenSkipEvent.RunID == "" || cursor.OpenSkipEvent.Reason == "") ||
 		cursor.Index < 0 || cursor.NextURL == "" && cursor.Index != 0 ||
 		cursor.RunPages < 0 || cursor.ArtifactPages < 0 ||
 		// The counter pair is either both known or both unknown, never split:
@@ -1550,6 +1564,31 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		cursor.NextURL, cursor.Index = "", 0
 	}
 	handlerOpenRan := false
+	// recordOpenSkip logs the WARN line and steps the counter of the committed
+	// cursor's skip event, then commits a cursor without it. A fault before
+	// that emission is durable leaves the event in the committed cursor, and
+	// the resume records the skip a second time.
+	recordOpenSkip := func() error {
+		event := cursor.OpenSkipEvent
+		client.Metrics.RecordOpenRunSkipped(claim.Provider, claim.Dataset, event.Reason)
+		slog.Warn(
+			"open run re-read failed with an error of that run; it is skipped this unit and read again on a later unit",
+			"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID, "repository", cursor.Repo,
+			logging.ProviderIDAttr("run", event.RunID), "reason", event.Reason, "status", event.Status, "route", event.Route,
+			"skipped", cursor.OpenSkipped,
+		)
+		effects, effectErr := testOpsEffects(nil, nil, nil, nil, nil, nil)
+		if effectErr != nil {
+			return effectErr
+		}
+		after := cursor
+		after.OpenSkipEvent = nil
+		if err := emitCursor(cursor, after, CompleteRouteBatch{Effects: effects}, false); err != nil {
+			return err
+		}
+		cursor = after
+		return nil
+	}
 	// collectOpenRuns is the open phase: stored pipeline rows still open and
 	// older than the runs listing reaches are re-read by id, oldest first, up to
 	// the cap fixed at the phase start. A run GitHub still has is written like a
@@ -1575,23 +1614,21 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		}
 		after.OpenAfterStarted = row.StartedAt.UTC().Format(time.RFC3339Nano)
 		after.OpenAfterRunID = row.RunID
-		// The skip is committed when the emission returns nil or the durable continuation that ends the attempt;
-		// only then is it recorded, once, since the resume starts after it.
-		emitErr := emitCursor(before, after, CompleteRouteBatch{Effects: effects}, false)
-		if emitErr != nil && !errors.Is(emitErr, ErrChunkContinuation) {
-			return emitErr
+		after.OpenSkipEvent = &githubTestsOpenSkipEvent{RunID: row.RunID, Reason: reason, Status: status, Route: route}
+		// Any error, the durable continuation included, leaves the record to the attempt that resumes from the cursor
+		// that carries the event, if that cursor was committed.
+		if err := emitCursor(before, after, CompleteRouteBatch{Effects: effects}, false); err != nil {
+			return err
 		}
 		cursor = after
-		client.Metrics.RecordOpenRunSkipped(claim.Provider, claim.Dataset, reason)
-		slog.Warn(
-			"open run re-read failed with an error of that run; it is skipped this unit and read again on a later unit",
-			"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID, "repository", cursor.Repo,
-			logging.ProviderIDAttr("run", row.RunID), "reason", reason, "status", status, "route", route,
-			"skipped", cursor.OpenSkipped,
-		)
-		return emitErr
+		return recordOpenSkip()
 	}
 	collectOpenRuns := func() error {
+		if cursor.OpenSkipEvent != nil {
+			if err := recordOpenSkip(); err != nil {
+				return err
+			}
+		}
 		if claim.SinceAt == nil {
 			cursor.Phase = "done"
 			return nil

@@ -184,9 +184,8 @@ func buildWorkItemAttributionBackstopOracleRows(
 	linkLikeProduction(&derived, "", subjects, nil)
 
 	rows := remaining.BuildWorkItemAttributionRows(orgID, computedAt, affectedIDs, subjects, derived)
-	// Declared divergence (CHAOS-14010 (g)): Go names a membership row kept with no ownership proof
-	// (";ownership=ownership_unknown", or ";ownership=ownership_gate_not_applied_issue" for an issue);
-	// the frozen Python evidence never did.
+	// Declared divergence (CHAOS-14010): Go names an issue's membership row, kept with the ownership gate
+	// not applied (";ownership=ownership_gate_not_applied_issue"); the frozen Python evidence never did.
 	for index := range rows {
 		if cut := strings.Index(rows[index].Evidence, ";ownership="); cut >= 0 {
 			rows[index].Evidence = rows[index].Evidence[:cut]

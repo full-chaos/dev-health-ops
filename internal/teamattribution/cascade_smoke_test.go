@@ -656,7 +656,7 @@ func TestNullCarryingProviderTeamExcludedFromAssigneeCascade(t *testing.T) {
 		}},
 	})
 	subject := GithubWorkItemDerivationSubject{
-		WorkItemID: "gh:acme/tools#6", Provider: "github",
+		WorkItemID: "gh:acme/tools#6", Provider: "github", Type: "pr",
 		RepoID: &repoID, Assignees: []string{"chrisgeo"}, OrgID: "org-acme",
 	}
 	teamID, _, candidates := derived.Resolve(subject)

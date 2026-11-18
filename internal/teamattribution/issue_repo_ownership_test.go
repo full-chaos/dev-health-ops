@@ -2,7 +2,6 @@ package teamattribution
 
 import (
 	"fmt"
-	"strings"
 	"testing"
 )
 
@@ -93,8 +92,8 @@ func TestIssueLinkedToADonorKeepsLinkedIssueProvenanceNotItsOwnRepoOwner(t *test
 	}
 }
 
-// A PR whose repo has no ownership fact reaches the pass-through; its membership rows must name ownership_unknown (missing is not healthy).
-func TestPRMembershipPassThroughWithoutOwnershipFactNamesOwnershipUnknown(t *testing.T) {
+// A PR whose repo has no ownership fact reaches the R74 pass-through; its rows are byte-equal to main (no ownership suffix).
+func TestPRMembershipPassThroughWithoutOwnershipFactIsUnchanged(t *testing.T) {
 	repo := "22222222-2222-4222-8222-222222222222"
 	derived := NewGitHubWorkItemDerivationContext(GithubWorkItemDerivationFacts{
 		Members: []GithubWorkItemDerivationMemberFact{{Provider: "github", TeamID: "team-m", TeamName: "Member Team", MemberID: "alice", IsPrimary: 1, Specificity: 60}},
@@ -104,14 +103,9 @@ func TestPRMembershipPassThroughWithoutOwnershipFactNamesOwnershipUnknown(t *tes
 	for _, candidate := range candidates {
 		got[candidate.Source] = candidate.Evidence + "|" + fmt.Sprint(candidate.IsPrimary)
 	}
-	t.Logf("PR rows: %v", got)
-	for _, source := range []string{"assignee_membership", "author_membership"} {
-		if !strings.Contains(got[source], "ownership_unknown") || !strings.HasSuffix(got[source], "|0") {
-			t.Errorf("%s row %q, want evidence naming ownership_unknown and is_primary 0", source, got[source])
-		}
-	}
-	if got["unassigned"] != "no_candidate|1" {
-		t.Errorf("unassigned row %q, want no_candidate|1 (the item stays unassigned)", got["unassigned"])
+	want := map[string]string{"assignee_membership": "assignee_membership=alice|0", "author_membership": "reporter=alice|0", "unassigned": "no_candidate|1"}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("PR rows %v, want %v (as on main)", got, want)
 	}
 }
 

@@ -310,12 +310,12 @@ flowchart TD
 > does not apply to an issue**: an issue has no repository field of its own and the gate reads
 > no linked-pull-request repository. The assignee's membership row of an issue is kept as provenance
 > (`is_primary = 0`, never the primary) and its evidence names `ownership=ownership_gate_not_applied_issue`.
-> The same row of a pull or merge request whose repository has no ownership row is kept too and names
-> `ownership=ownership_unknown`; every other pull or merge request row is as before. A missing proof is
-> not a healthy one, so both are named. `TestIssueTakesNoTeamFromItsOwnRepoField`,
+> A pull or merge request keeps every row and evidence it had. An issue's repo ownership is no longer
+> a donor row either: a pull or merge request linked to an issue copies only the issue's other donor
+> rows (`native_team`, `issue_project`, `project_ownership`). `TestIssueTakesNoTeamFromItsOwnRepoField`,
 > `TestRepoScopedManualRuleNeverMatchesAnIssueThroughItsOwnRepo`,
-> `TestIssueMembershipRowNamesTheGateNotApplied`, `TestPRMembershipPassThroughWithoutOwnershipFactNamesOwnershipUnknown`
-> and `TestPRMembershipWithOwnershipFactEvidenceUnchanged` pin it.
+> `TestIssueMembershipRowNamesTheGateNotApplied`, `TestPRMembershipPassThroughWithoutOwnershipFactIsUnchanged`,
+> `TestPRMembershipWithOwnershipFactEvidenceUnchanged` and `TestPRLinkedToAnIssueWhoseOnlyDonorRowWasRepoOwnership` pin it.
 
 **Invariants:** the **winner is the highest-precedence matching source** (every matching source that
 passes its own gate is still persisted as a candidate — precedence decides `is_primary`, not which

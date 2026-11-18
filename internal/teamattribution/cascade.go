@@ -70,6 +70,10 @@ type GithubWorkItemDerivationCandidate struct {
 	// can derive the telemetry label without threading a
 	// *providerfoundation.Metrics through the pure build*/resolve chain.
 	OwnershipReason string `json:"-"`
+	// OwnershipEvidence is the ";ownership=<reason>" suffix of a membership row kept with no
+	// ownership proof. It is appended to Evidence after ranking and dedup, so it never changes
+	// which of two tied rows a last-wins writer keeps.
+	OwnershipEvidence string `json:"-"`
 	// TeamProvider and TeamResolved are the identity of the team the
 	// candidate names. Teams are (provider, id), and one id can name teams of
 	// several providers, so the team is bound where the candidate is made
@@ -878,7 +882,7 @@ func (derived GithubWorkItemDerivationContext) resolve(
 			if owns {
 				for index := range assigneeCandidates {
 					assigneeCandidates[index].OwnershipReason = GithubWorkItemDerivationOwnershipCheckedLabel(ownershipReason)
-					assigneeCandidates[index].Evidence = withOwnershipUnknownEvidence(assigneeCandidates[index].Evidence, ownershipReason)
+					assigneeCandidates[index].OwnershipEvidence = ownershipEvidenceSuffix(ownershipReason)
 				}
 				bySource["assignee_membership"] = append(bySource["assignee_membership"], assigneeCandidates...)
 			} else {
@@ -935,7 +939,8 @@ func (derived GithubWorkItemDerivationContext) resolve(
 					relabeled := make([]GithubWorkItemDerivationCandidate, len(reporterCandidates))
 					for index, candidate := range reporterCandidates {
 						candidate.Source = "author_membership"
-						candidate.Evidence = withOwnershipUnknownEvidence("reporter="+*subject.Reporter, ownershipReason)
+						candidate.Evidence = "reporter=" + *subject.Reporter
+						candidate.OwnershipEvidence = ownershipEvidenceSuffix(ownershipReason)
 						candidate.OwnershipReason = GithubWorkItemDerivationOwnershipCheckedLabel(ownershipReason)
 						relabeled[index] = candidate
 					}
@@ -1140,6 +1145,8 @@ func (derived GithubWorkItemDerivationContext) resolve(
 				}
 			}
 		}
+		candidate.Evidence += candidate.OwnershipEvidence
+		candidate.OwnershipEvidence = ""
 		marked[index] = candidate
 	}
 	return primary.TeamID, primary.TeamName, marked, rejections
@@ -2633,14 +2640,15 @@ func (derived GithubWorkItemDerivationContext) teamIsNullCarrying(teamID string)
 func (derived GithubWorkItemDerivationContext) teamOwnsSubjectRepo(
 	subject GithubWorkItemDerivationSubject, teamID string,
 ) (string, bool) {
-	if derived.teamIsNullCarrying(teamID) {
-		return MembershipOwnershipReasonTeamNullCarrying, false
-	}
 	// The gate is not applied to an issue: it has no repository field of its own
 	// (its repositories are those of its linked pull requests) and the gate reads
-	// none of them. The membership row is kept as provenance (is_primary 0).
+	// none of them. The membership row is kept as provenance (is_primary 0), before
+	// the team-level checks, which are a gate on a pull / merge request.
 	if !GithubWorkItemDerivationIsPullOrMergeRequestType(subject.Provider, subject.Type) {
 		return MembershipOwnershipReasonIssueGateNotApplied, true
+	}
+	if derived.teamIsNullCarrying(teamID) {
+		return MembershipOwnershipReasonTeamNullCarrying, false
 	}
 	owners := append(
 		append([]GithubWorkItemDerivationCandidate(nil),
@@ -2658,15 +2666,15 @@ func (derived GithubWorkItemDerivationContext) teamOwnsSubjectRepo(
 	return MembershipOwnershipReasonNotOwned, false
 }
 
-// withOwnershipUnknownEvidence names a membership row kept with no ownership
-// proof in its evidence: ownership_unknown (the repository has no ownership row)
-// or ownership_gate_not_applied_issue (an issue: the gate is not applied). A
-// missing proof is not a healthy one.
-func withOwnershipUnknownEvidence(evidence, ownershipReason string) string {
-	if ownershipReason != MembershipOwnershipReasonUnknown && ownershipReason != MembershipOwnershipReasonIssueGateNotApplied {
-		return evidence
+// ownershipEvidenceSuffix names an issue's membership row in its evidence: the
+// ownership gate is not applied to an issue, so the row is kept with no ownership
+// proof, and a missing proof is not a healthy one. A pull / merge request row
+// keeps the evidence it has always had.
+func ownershipEvidenceSuffix(ownershipReason string) string {
+	if ownershipReason != MembershipOwnershipReasonIssueGateNotApplied {
+		return ""
 	}
-	return evidence + ";ownership=" + ownershipReason
+	return ";ownership=" + ownershipReason
 }
 
 // GithubWorkItemDerivationOwnershipCheckedLabel maps a teamOwnsSubjectRepo

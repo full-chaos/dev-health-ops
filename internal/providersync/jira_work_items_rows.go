@@ -84,7 +84,7 @@ func normalizeJiraWorkItem(
 	if title == "" {
 		return jiraWorkItemRow{}, nil, providerfoundation.ErrNormalizationInvalid
 	}
-	description := jiraDescriptionText(jiraField(fields, "description", issue.ObjectShape))
+	description := jiraStatedDescription(fields, issue.ObjectShape)
 	statusRaw, statusCategory := jiraStatus(fields["status"], issue.ObjectShape)
 	labels := jiraLabels(jiraField(fields, "labels", issue.ObjectShape))
 	typeRaw := jiraNamedValue(jiraField(fields, "issuetype", issue.ObjectShape), "name", issue.ObjectShape)
@@ -1061,6 +1061,67 @@ func jiraDescriptionText(value any) *string {
 	default:
 		return nil
 	}
+}
+
+// jiraStatedDescription is the row description of a Jira issue. The search
+// asks for every field, so a description key that is null, an empty string or
+// a document with no content is a description cleared at Jira and states
+// empty. A payload with no description key, a document whose text flattens to
+// nothing (media only, or past the depth bound) or a value of another shape
+// states none, so a held description is kept.
+func jiraStatedDescription(fields map[string]any, objectShape bool) *string {
+	value, present := fields["description"]
+	if !present {
+		return nil
+	}
+	if text := jiraDescriptionText(value); text != nil {
+		return text
+	}
+	switch typed := value.(type) {
+	case nil:
+		return statedWorkItemDescription(nil, true)
+	case string:
+		if typed == "" {
+			return statedWorkItemDescription(nil, true)
+		}
+	case map[string]any:
+		if typed["type"] == "doc" && jiraNodeIsBlank(typed, 0) {
+			return statedWorkItemDescription(nil, true)
+		}
+	}
+	return nil
+}
+
+// jiraNodeIsBlank reports whether a document tree holds no content at all:
+// only container blocks and text nodes of empty text. Media, cards, mentions
+// and any node of another kind are content; so is a tree nested past the
+// depth bound, which this check cannot judge.
+func jiraNodeIsBlank(node map[string]any, depth int) bool {
+	if depth > jiraDocumentMaxDepth {
+		return false
+	}
+	switch node["type"] {
+	case "text":
+		return stringFrom(node["text"]) == ""
+	case "doc", "paragraph", "heading", "blockquote", "bulletList", "orderedList", "listItem", "codeBlock":
+	default:
+		return false
+	}
+	content, present := node["content"]
+	if !present || content == nil {
+		return true
+	}
+	children, ok := content.([]any)
+	if !ok {
+		return false
+	}
+	for _, child := range children {
+		mapped, ok := child.(map[string]any)
+		if !ok || !jiraNodeIsBlank(mapped, depth+1) {
+			return false
+		}
+	}
+	return true
 }
 
 const jiraDocumentMaxDepth = 32

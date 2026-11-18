@@ -807,6 +807,7 @@ func (m *Metrics) RecordNonFiniteReleaseRefConfidence(provider, dataset string, 
 var metricDuplicateNaturalKeyTableVocabulary = map[string]struct{}{
 	"ci_pipeline_runs": {}, "ci_job_runs": {}, "ci_acceptance_checks": {},
 	"test_suite_results": {}, "test_case_results": {}, "coverage_snapshots": {},
+	"testops_run_report_completeness": {},
 }
 
 // MetricDuplicateNaturalKeyTableLabel bounds a duplicate_natural_key

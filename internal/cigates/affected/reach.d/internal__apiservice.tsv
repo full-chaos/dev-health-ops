@@ -7,6 +7,7 @@ internal/apiservice	githubapp_config.go	internal/api/integrationsadmin/discovery
 internal/apiservice	githubapp_config.go	internal/api/integrationsadmin/integrationsvenue
 internal/apiservice	githubapp_config.go	internal/api/integrationsadmin/syncvenue
 internal/apiservice	githubapp_config.go	internal/api/session
+internal/apiservice	githubapp_config.go	internal/api/sso
 internal/apiservice	githubapp_config.go	internal/api/syncadmin
 internal/apiservice	githubapp_config.go	internal/api/teamsidentity/adminstampvenue
 internal/apiservice	githubapp_config.go	internal/apiservice

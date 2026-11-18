@@ -239,6 +239,12 @@ func effectBatchLess(left, right EffectBatch) bool {
 	return left.Destination < right.Destination
 }
 
+// effectSplitsLast names the destinations whose rows splitCompleteRouteBatch puts in the last sub-chunks of an emission: a run's
+// report-completeness verdict must not commit before the last of the run's report rows.
+func effectSplitsLast(destination string) bool {
+	return destination == testOpsRunReportCompletenessDestination
+}
+
 func effectCommitPriority(destination string) int {
 	// GitHub blame path identity must be durable before any blame row can be
 	// accepted. A later retry can then reconstruct the exact in-flight batch

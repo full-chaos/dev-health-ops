@@ -52,6 +52,20 @@ planner widens the cap to exceed the overlap and records a warning naming both
 values. Treat that warning as a configuration defect to correct, not as a healthy
 steady state — the widened window is more expensive than the one requested.
 
+Test results and CI/CD runs are planned as one unit when both are enabled. The
+CI/CD dataset alone is not capped, so the cap applies to that unit's whole window
+whenever test results take part.
+
+GitHub lists workflow runs newest first, and one unit's run listing stops at its
+page budget (10,000 runs). A unit that reaches the budget before the old end of
+its window does not stamp its watermark, because runs at the old end were not
+read. The planner then halves the next window of that repository once for each
+such unit among its newest 24 units, down to one hour, so the following units
+fit the budget and the watermark moves again. It logs
+`sync.plan.testops_window_narrowed` with the window before and after. Only the
+run listing counts: the artifact listing always starts at least a day before the
+window, so a smaller window does not bring it under its budget.
+
 The work-item family of every provider (GitHub, GitLab, Jira, Linear) is capped
 the same way, and a work-items unit holds exactly the half-open window
 `[since, before)`. The GitLab `updated_before` bound is inclusive and the Jira

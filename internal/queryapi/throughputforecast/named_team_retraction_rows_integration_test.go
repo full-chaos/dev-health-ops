@@ -85,9 +85,11 @@ func TestForecastInputsOfANamedRetiredTeamGiveRetractionRowsNoWeight(t *testing.
 		if out.StaleP50, out.StaleP90, err = loadStaleWIP(ctx, client, org, teams, nil); err != nil {
 			t.Fatalf("%s %s stale WIP: %v", org, teamID, err)
 		}
-		if out.Backlog, err = loadBacklog(ctx, client, org, teams, nil); err != nil {
+		backlog, err := loadBacklog(ctx, client, org, teams, nil, historyWeeks, today)
+		if err != nil {
 			t.Fatalf("%s %s backlog: %v", org, teamID, err)
 		}
+		out.Backlog = backlog.size
 		return out
 	}
 

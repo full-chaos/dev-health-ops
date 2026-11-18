@@ -38,6 +38,9 @@ a gitlab.com user with the same numeric id are two accounts, and a gitlab.com
 social sign-in never reaches a self-hosted account. The host is read from the
 provider configuration, never from the account.
 
+No route creates an organization's OAuth provider or changes its configuration.
+An OAuth provider that exists already signs in as this page describes.
+
 ## Sign-in outcomes
 
 | Situation | Outcome |

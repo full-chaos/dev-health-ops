@@ -1778,7 +1778,22 @@ race_leg_weight_cap() {
   if [ -n "${GO_RACE_LEG_WEIGHT_CAP+set}" ]; then printf '%s\n' "${GO_RACE_LEG_WEIGHT_CAP}"; return; fi
   awk -v count="$1" 'BEGIN { printf "%.2f\n", (1350 - 40) / 0.50 - 250 * 5 / count }'
 }
+# CHAOS-13958: the batch overlap the race plan places by (ci/go_race_shard.awk rk): 3.5, the measured overlap of a many-package
+# batch (3.2-3.8x in Go quality 44091722883, 44105231987, 44118503347). GO_RACE_BATCH_OVERLAP overrides it (a positive decimal).
+GO_RACE_BATCH_OVERLAP="${GO_RACE_BATCH_OVERLAP-3.5}"
+# CHAOS-13958: the heavy packages and the serial parts the race plan keeps apart (ci/go_race_shard.awk apart=), root module
+# only (its rows name root-module packages, as the leg weight cap counts the root module only). GO_RACE_APART names another
+# file (the planner's red/green cell passes one with no rows).
+GO_RACE_APART="${GO_RACE_APART-${ROOT}/ci/go_race_apart.tsv}"
 case "${GO_RACE_SERIAL_WEIGHTING}" in 0|1) ;; *) printf 'ERROR: GO_RACE_SERIAL_WEIGHTING must be 0 or 1, got %s\n' "${GO_RACE_SERIAL_WEIGHTING}" >&2; exit 2 ;; esac
+if ! [[ "${GO_RACE_BATCH_OVERLAP}" =~ ^[0-9]+(\.[0-9]+)?$ ]] || ! awk -v v="${GO_RACE_BATCH_OVERLAP}" 'BEGIN { exit !(v + 0 > 0) }'; then
+  printf 'ERROR: GO_RACE_BATCH_OVERLAP must be a positive decimal, got %s\n' "${GO_RACE_BATCH_OVERLAP}" >&2
+  exit 2
+fi
+if [ -z "${GO_RACE_APART}" ]; then
+  printf 'ERROR: GO_RACE_APART must name a readable file, got an empty value\n' >&2
+  exit 2
+fi
 if [ -n "${GO_RACE_LEG_WEIGHT_CAP+set}" ] && ! [[ "${GO_RACE_LEG_WEIGHT_CAP}" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
   printf 'ERROR: GO_RACE_LEG_WEIGHT_CAP must be a non-negative decimal (0 = off), got %s\n' "${GO_RACE_LEG_WEIGHT_CAP}" >&2
   exit 2
@@ -1875,12 +1890,14 @@ race_split_part_names() {
 # packages) of one module, after the go-quality selection. internal/providersync is never listed: it runs as test-name slices.
 race_shard_packages() {
   local shard="$1" count="$2" module_dir="$3" modpath="$4" part="${5:-}"
+  # A missing or unreadable apart file would read as no rows (awk getline): the plan refuses it instead.
+  { [ -f "${GO_RACE_APART}" ] && [ -r "${GO_RACE_APART}" ]; } || die "race plan: GO_RACE_APART must name a readable file, got ${GO_RACE_APART}"
   (cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -mod=readonly ./...) \
     | { if [ "${module_dir}" = "." ]; then grep -vx "${modpath}/internal/providersync"; else cat; fi; } \
     | quality_filter "${module_dir}" "${modpath}" \
     | race_excluded_filter "${module_dir}" "${modpath}" \
     | awk -v mod="${modpath}" -v shard="${shard}" -v count="${count}" -v weights=<(race_weights_rows) -v solo="${GO_RACE_SOLO}" -v part="${part}" \
-        -v splits="${GO_RACE_SPLITS}" -v tests="${GO_RACE_SPLIT_WEIGHTS}" -v rserial="${GO_RACE_SERIAL_WEIGHTING}" -v rcap="$(if [ "${module_dir}" = "." ]; then race_leg_weight_cap "${count}"; else printf '0\n'; fi)" -f "${ROOT}/ci/go_race_shard.awk"
+        -v splits="${GO_RACE_SPLITS}" -v tests="${GO_RACE_SPLIT_WEIGHTS}" -v rserial="${GO_RACE_SERIAL_WEIGHTING}" -v rk="${GO_RACE_BATCH_OVERLAP}" -v apart="$(if [ "${module_dir}" = "." ]; then printf '%s' "${GO_RACE_APART}"; fi)" -v rcap="$(if [ "${module_dir}" = "." ]; then race_leg_weight_cap "${count}"; else printf '0\n'; fi)" -f "${ROOT}/ci/go_race_shard.awk"
 }
 
 # check_race_shard_plan SHARD COUNT: one "module<TAB>package<TAB>key" line per package the SHARD-th race leg runs, and one
@@ -5675,6 +5692,7 @@ AUTH_FUZZ_TARGETS=(
   "./internal/auth/signedtoken FuzzValidSignedToken"
   "./internal/auth/httpapi FuzzParseLimit"
   "./internal/auth/httpapi FuzzParseForwardedTrust"
+  "./internal/auth/httpapi FuzzParseQueryMatchesNetURLOnWellFormedInput"
   "./internal/auth/clientaddr FuzzParseTrust"
   "./internal/auth/keystore FuzzParseEd25519Key"
   "./internal/auth/keystore FuzzParseKeySetManifest"

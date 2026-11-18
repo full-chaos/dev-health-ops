@@ -211,7 +211,7 @@ candidate_build)` and never carries it forward across any of the four changing. 
 says nothing about whether a new binary is the one that was measured: re-run `dho goapi prove` against the deployed build.
 
 <!-- BEGIN GENERATED GO API OPERATIONS -->
-_Rendered against main merge-base `28adf8cd326b3f7bf99adc3e6568ac7ada46c006`; SDL digest pin `sha256:76218f99d03ba1ca80c91c8d45c1ecf38570f2c139d27593415734c096fb6ec7`; fleet read 2026-10-15T21:07:21Z via docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1._
+_Rendered against main merge-base `28adf8cd326b3f7bf99adc3e6568ac7ada46c006`; SDL digest pin `sha256:a40389d46ba8a93df4f9fc5567a99f4fea88417043e349592d663b40be6e4b6f`; fleet read 2026-10-15T21:07:21Z via docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1._
 
 _query-api serves all **67** catalog operations: the catalog switch (`routeswitch.NewCatalogSwitch`) reads no routing row, so there is no per-operation mode, liveness or proof column to render. The only routing state is the MCP class decision per root (`go_api_class_decision`); `dho goapi routing status` reports it._
 <!-- END GENERATED GO API OPERATIONS -->
@@ -290,7 +290,7 @@ aggregation layer built on top of these tables (see METRICS below).
 | Provider | Dataset | Executor | Route destinations (tables written) | Route ready | Plannable |
 | --- | --- | --- | --- | --- | --- |
 | github | `blame` | NATIVE | `git_blame`, `github_blame_path_progress` | True | True |
-| github | `cicd` | NATIVE | `ci_acceptance_checks`, `ci_job_runs`, `ci_pipeline_runs`, `coverage_snapshots`, `test_case_results`, `test_suite_results` | True | True |
+| github | `cicd` | NATIVE | `ci_acceptance_checks`, `ci_job_runs`, `ci_pipeline_runs`, `coverage_snapshots`, `test_case_results`, `test_suite_results`, `testops_run_report_completeness` | True | True |
 | github | `commit-stats` | NATIVE | `git_commit_stats` | True | True |
 | github | `commits` | NATIVE | `git_commits` | True | True |
 | github | `deployments` | NATIVE | `deployments` | True | True |
@@ -300,14 +300,14 @@ aggregation layer built on top of these tables (see METRICS below).
 | github | `prs` | NATIVE | `ai_attribution`, `git_pull_request_reviews`, `git_pull_requests` | True | True |
 | github | `repo-metadata` | NATIVE | `repos` | True | True |
 | github | `security` | NATIVE | `security_alerts` | True | True |
-| github | `tests` | NATIVE | `ci_acceptance_checks`, `ci_job_runs`, `ci_pipeline_runs`, `coverage_snapshots`, `test_case_results`, `test_suite_results` | True | False |
+| github | `tests` | NATIVE | `ci_acceptance_checks`, `ci_job_runs`, `ci_pipeline_runs`, `coverage_snapshots`, `test_case_results`, `test_suite_results`, `testops_run_report_completeness` | True | False |
 | github | `work-item-comments` | NATIVE | `ai_attribution`, `project_membership_transitions`, `projects`, `sprints`, `work_item_dependencies`, `work_item_interactions`, `work_item_reopen_events`, `work_item_transitions`, `work_items` | True | False |
 | github | `work-item-history` | NATIVE | `ai_attribution`, `project_membership_transitions`, `projects`, `sprints`, `work_item_dependencies`, `work_item_interactions`, `work_item_reopen_events`, `work_item_transitions`, `work_items` | True | False |
 | github | `work-item-labels` | NATIVE | `ai_attribution`, `project_membership_transitions`, `projects`, `sprints`, `work_item_dependencies`, `work_item_interactions`, `work_item_reopen_events`, `work_item_transitions`, `work_items` | True | False |
 | github | `work-item-projects` | NATIVE | `ai_attribution`, `project_membership_transitions`, `projects`, `sprints`, `work_item_dependencies`, `work_item_interactions`, `work_item_reopen_events`, `work_item_transitions`, `work_items` | True | False |
 | github | `work-items` | NATIVE | `ai_attribution`, `project_membership_transitions`, `projects`, `sprints`, `work_item_dependencies`, `work_item_interactions`, `work_item_reopen_events`, `work_item_transitions`, `work_items` | True | True |
 | gitlab | `blame` | NATIVE | `git_blame` | True | True |
-| gitlab | `cicd` | NATIVE | `ci_acceptance_checks`, `ci_job_runs`, `ci_pipeline_runs`, `coverage_snapshots`, `test_case_results`, `test_suite_results` | True | True |
+| gitlab | `cicd` | NATIVE | `ci_acceptance_checks`, `ci_job_runs`, `ci_pipeline_runs`, `coverage_snapshots`, `test_case_results`, `test_suite_results`, `testops_run_report_completeness` | True | True |
 | gitlab | `commit-stats` | NATIVE | `git_commit_stats` | True | True |
 | gitlab | `commits` | NATIVE | `git_commits` | True | True |
 | gitlab | `deployments` | NATIVE | `deployments` | True | True |
@@ -319,7 +319,7 @@ aggregation layer built on top of these tables (see METRICS below).
 | gitlab | `prs` | NATIVE | `ai_attribution`, `git_pull_request_reviews`, `git_pull_requests`, `work_graph_pr_commit` | True | True |
 | gitlab | `repo-metadata` | NATIVE | `repos` | True | True |
 | gitlab | `security` | NATIVE | `security_alerts` | True | True |
-| gitlab | `tests` | NATIVE | `ci_acceptance_checks`, `ci_job_runs`, `ci_pipeline_runs`, `coverage_snapshots`, `test_case_results`, `test_suite_results` | True | False |
+| gitlab | `tests` | NATIVE | `ci_acceptance_checks`, `ci_job_runs`, `ci_pipeline_runs`, `coverage_snapshots`, `test_case_results`, `test_suite_results`, `testops_run_report_completeness` | True | False |
 | gitlab | `work-item-comments` | NATIVE | `ai_attribution`, `sprints`, `work_item_dependencies`, `work_item_interactions`, `work_item_reopen_events`, `work_item_transitions`, `work_items` | True | False |
 | gitlab | `work-item-history` | NATIVE | `ai_attribution`, `sprints`, `work_item_dependencies`, `work_item_interactions`, `work_item_reopen_events`, `work_item_transitions`, `work_items` | True | False |
 | gitlab | `work-item-labels` | NATIVE | `ai_attribution`, `sprints`, `work_item_dependencies`, `work_item_interactions`, `work_item_reopen_events`, `work_item_transitions`, `work_items` | True | False |

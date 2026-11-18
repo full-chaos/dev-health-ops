@@ -1153,6 +1153,8 @@ type OperatingReviewDelta struct {
 	Status     string   `json:"status"`
 	// False = the prior week holds no stored value for the metric (CHAOS-8115); see ``OperatingReviewMetric.hasData``. ``priorValue`` is then a 0 placeholder, ``absolute`` is 0, ``percent`` is null and ``status`` is empty: a client draws "No data" for the prior week and no change (CHAOS-8115, CHAOS-9111).
 	HasPriorData bool `json:"hasPriorData"`
+	// Why the prior week has no value although it may hold one (CHAOS-13977): READ_FAILED = a read of the prior week that the value depends on failed, so ``hasPriorData`` is false and ``priorValue`` is a 0 placeholder, not a missing week. Null = no read the prior value depends on failed. A cancelled request is not a failed read.
+	DegradedReason *string `json:"degradedReason,omitempty"`
 }
 
 type OperatingReviewInput struct {
@@ -1168,7 +1170,7 @@ type OperatingReviewMetric struct {
 	Value float64               `json:"value"`
 	Unit  string                `json:"unit"`
 	Delta *OperatingReviewDelta `json:"delta"`
-	// True = the week holds a stored value for the metric (CHAOS-8115). False = no row of the metric's daily table in the week, only NULL values, or a read that failed: ``value`` is then a 0 placeholder, not a measured zero, and a client draws "No data". True with ``value`` 0 is a stored zero.
+	// True = the week holds a stored value for the metric (CHAOS-8115). False = no row of the metric's daily table in the week, only NULL values, or a read that failed (then ``degradedReason`` is READ_FAILED): ``value`` is then a 0 placeholder, not a measured zero, and a client draws "No data". True with ``value`` 0 is a stored zero.
 	HasData bool `json:"hasData"`
 	// Whether the request's team selection narrows this metric (CHAOS-8516).
 	Scope OperatingReviewMetricScope `json:"scope"`
@@ -1176,6 +1178,8 @@ type OperatingReviewMetric struct {
 	RateState *string `json:"rateState,omitempty"`
 	// What the change failure rate of the week stands on (CHAOS-9630): the evidence basis, the deployments (D), the deployments with a final status (K), their coverage K / D and, when there is no rate, why. Null for every other metric. Served for change failure rate whatever its state.
 	ChangeFailureEvidence *ChangeFailureEvidence `json:"changeFailureEvidence,omitempty"`
+	// Why the week has no value although it may hold one (CHAOS-13977): READ_FAILED = a read of the week that the value depends on failed, so ``hasData`` is false and ``value`` is a 0 placeholder: the metric is unavailable, not a missing week and not a zero. A metric with two reads (mttr_hours, ai_opportunity_signals) is READ_FAILED when a read its value depends on failed, and never serves the value of the other read alone. Null = no read the value depends on failed. A cancelled request is not a failed read.
+	DegradedReason *string `json:"degradedReason,omitempty"`
 }
 
 type OperatingReviewSection struct {
@@ -1799,14 +1803,20 @@ type ThroughputEstimateCoverage struct {
 	EstimatedCount   int      `json:"estimatedCount"`
 	UnestimatedCount int      `json:"unestimatedCount"`
 	BacklogSize      int      `json:"backlogSize"`
+	// The number of coverage grains (provider, work scope, team) the counts are read from. 0: the scope has no coverage row, and the zero counts and ratio 0 are not a measurement.
+	GrainCount int `json:"grainCount"`
 }
 
 type ThroughputForecast struct {
-	ForecastID          string                      `json:"forecastId"`
-	ComputedAt          string                      `json:"computedAt"`
-	TeamID              *string                     `json:"teamId,omitempty"`
-	WorkScopeID         *string                     `json:"workScopeId,omitempty"`
-	BacklogSize         int                         `json:"backlogSize"`
+	ForecastID  string  `json:"forecastId"`
+	ComputedAt  string  `json:"computedAt"`
+	TeamID      *string `json:"teamId,omitempty"`
+	WorkScopeID *string `json:"workScopeId,omitempty"`
+	BacklogSize int     `json:"backlogSize"`
+	// How backlogSize was found: MEASURED, STALE, NO_ROWS or SUPPLIED (see ThroughputBacklogState).
+	BacklogState ThroughputBacklogState `json:"backlogState"`
+	// The oldest of the newest work-item days that backlogSize is read from. Null when backlogState is NO_ROWS or SUPPLIED.
+	BacklogAsOfDay      *graphqldate.Date           `json:"backlogAsOfDay,omitempty"`
 	HistoryWeeks        int                         `json:"historyWeeks"`
 	P50Weeks            *int                        `json:"p50Weeks,omitempty"`
 	P75Weeks            *int                        `json:"p75Weeks,omitempty"`
@@ -3048,6 +3058,52 @@ func (e *ThresholdDirection) UnmarshalGQL(v any) error {
 }
 
 func (e ThresholdDirection) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+// How a throughputForecast backlogSize was found. MEASURED: the newest work-item day of every key (provider, work scope, team) of the scope is on or after the window start (the forecast day minus historyWeeks weeks). STALE: the newest day of at least one key is before the window start; backlogSize still holds the sum of the newest days, and backlogAsOfDay names the oldest of them. NO_ROWS: the scope has no work-item measurement, so backlogSize 0 is not a measured zero. SUPPLIED: the request gave backlogSize, and no backlog was read.
+type ThroughputBacklogState string
+
+const (
+	ThroughputBacklogStateMeasured ThroughputBacklogState = "MEASURED"
+	ThroughputBacklogStateStale    ThroughputBacklogState = "STALE"
+	ThroughputBacklogStateNoRows   ThroughputBacklogState = "NO_ROWS"
+	ThroughputBacklogStateSupplied ThroughputBacklogState = "SUPPLIED"
+)
+
+var AllThroughputBacklogState = []ThroughputBacklogState{
+	ThroughputBacklogStateMeasured,
+	ThroughputBacklogStateStale,
+	ThroughputBacklogStateNoRows,
+	ThroughputBacklogStateSupplied,
+}
+
+func (e ThroughputBacklogState) IsValid() bool {
+	switch e {
+	case ThroughputBacklogStateMeasured, ThroughputBacklogStateStale, ThroughputBacklogStateNoRows, ThroughputBacklogStateSupplied:
+		return true
+	}
+	return false
+}
+
+func (e ThroughputBacklogState) String() string {
+	return string(e)
+}
+
+func (e *ThroughputBacklogState) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = ThroughputBacklogState(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid ThroughputBacklogState", str)
+	}
+	return nil
+}
+
+func (e ThroughputBacklogState) MarshalGQL(w io.Writer) {
 	fmt.Fprint(w, strconv.Quote(e.String()))
 }
 

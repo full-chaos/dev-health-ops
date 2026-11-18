@@ -3,12 +3,12 @@ package workersctl
 import (
 	"bytes"
 	"context"
-	"net"
 	"strings"
 	"testing"
 	"time"
 
 	postgresstore "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/refusedaddr"
 )
 
 // `workers routes apply` (the route-activate hook's init containers) waits for
@@ -24,14 +24,7 @@ func TestRoutesApplyWaitsForTheFirstConnectThenFailsClosed(t *testing.T) {
 	}
 	t.Cleanup(func() { firstConnect = saved })
 
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	address := listener.Addr().String()
-	if err := listener.Close(); err != nil {
-		t.Fatal(err)
-	}
+	address := refusedaddr.Addr(t)
 	uri := func(role string) string {
 		return "postgresql://" + role + ":sekret-pw@" + address + "/devhealth?sslmode=disable"
 	}

@@ -1,9 +1,14 @@
 package investmentexplain
 
 import (
-	"github.com/full-chaos/dev-health-go/readers"
+	"context"
+	"errors"
 	"strings"
 	"testing"
+	"time"
+
+	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
+	"github.com/full-chaos/dev-health-go/readers"
 )
 
 // TestIssueSizeIsAnInvestmentMeasureAndLinesOfCodeAreNot pins the names a request may give the mix read
@@ -50,5 +55,89 @@ func TestSizingCoverageNoteIsOnlyBelowHalf(t *testing.T) {
 		if got := (readers.SizingCoverage{SizedUnits: tc.sized, Units: tc.units}).Note(); got != tc.want {
 			t.Errorf("Note(%d of %d) = %q, want %q", tc.sized, tc.units, got, tc.want)
 		}
+	}
+}
+
+// streamRows is a driver-shaped row stream: it serves its rows, and an error at the end of the stream reaches Err only
+// once Next has returned false past the last row, as the native driver reports a packet lost after the data. Close
+// returns closeErr, or the stream-end error once it was seen (the driver keeps it).
+type streamRows struct {
+	rows     [][2]uint64
+	cursor   int
+	endErr   error
+	closeErr error
+	ended    bool
+}
+
+func (r *streamRows) Next() bool {
+	if r.cursor < len(r.rows) {
+		r.cursor++
+		return true
+	}
+	r.ended = true
+	return false
+}
+
+func (r *streamRows) Scan(dest ...any) error {
+	row := r.rows[r.cursor-1]
+	*dest[0].(*uint64), *dest[1].(*uint64) = row[0], row[1]
+	return nil
+}
+
+func (r *streamRows) Err() error {
+	if r.ended {
+		return r.endErr
+	}
+	return nil
+}
+
+func (r *streamRows) Close() error {
+	if r.closeErr != nil {
+		return r.closeErr
+	}
+	return r.endErr
+}
+
+type streamClient struct{ rows *streamRows }
+
+func (c streamClient) Query(context.Context, string, []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+	return c.rows, nil
+}
+
+// CHAOS-13977 (Codex r1 P1): the sizing coverage is one aggregate row, and a read is complete only when its stream
+// ended without an error and its rows closed without one. A connection lost after the row is a failed read, never a
+// measured coverage.
+func TestFetchSizingCoverageNeedsACompleteStream(t *testing.T) {
+	lost := errors.New("read: unexpected EOF")
+	filters := BreakdownFilters{OrgID: "org-1", StartTS: time.Date(2026, 8, 24, 0, 0, 0, 0, time.UTC), EndTS: time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC), Measure: MeasureIssueSize}
+	for _, tc := range []struct {
+		name    string
+		rows    *streamRows
+		wantErr bool
+	}{
+		{"one row, a clean end", &streamRows{rows: [][2]uint64{{1, 2}}}, false},
+		{"one row, then the stream ends with an error", &streamRows{rows: [][2]uint64{{1, 2}}, endErr: lost}, true},
+		{"one row, a clean end, then Close fails", &streamRows{rows: [][2]uint64{{1, 2}}, closeErr: lost}, true},
+		{"two rows for one aggregate", &streamRows{rows: [][2]uint64{{1, 2}, {3, 4}}}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reader, err := NewReader(streamClient{rows: tc.rows})
+			if err != nil {
+				t.Fatal(err)
+			}
+			coverage, err := reader.FetchSizingCoverage(context.Background(), filters)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("coverage %+v, nil error; want the read to fail", coverage)
+				}
+				if tc.rows.endErr != nil && !errors.Is(err, lost) {
+					t.Errorf("error %v does not carry the stream error", err)
+				}
+				return
+			}
+			if err != nil || coverage.SizedUnits != 1 || coverage.Units != 2 {
+				t.Fatalf("coverage %+v, err %v; want 1 sized of 2", coverage, err)
+			}
+		})
 	}
 }

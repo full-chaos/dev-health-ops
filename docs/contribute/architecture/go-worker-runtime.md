@@ -451,6 +451,17 @@ and retry it with a bounded backfill (`POST
 `sync_watermarks`, see [ingestion-and-backfills](../../operate/run/ingestion-and-backfills.md))
 scoped to the affected repo and the marker's run window.
 
+Two in-archive member skips are recorded the same way: `compression_ratio`
+(a report member over the compression-ratio guard) and `archive_entry_cap`
+(report members past the per-archive entry cap). Both are non-blocking
+`report_member` causes that advance the watermark, so the run reads
+`reports_complete=false` instead of complete.
+
+The GitLab route shares that archive parse but fails on any other member skip, so it takes these two out and records them
+as its own chunked truncation component `report_member_dropped` (coverage_complete is false; the component advances the
+watermark). The same string is a `dev_health_provider_artifact_skipped_total{reason}` label value. The GitLab direct route
+does not record them.
+
 `dev_health_cicd_partial_success_total{reason}` counts, at
 unit-completion time, every cicd/tests unit that advanced its watermark while
 still carrying incomplete evidence — the UNIT-level view of "success, but with
@@ -534,6 +545,16 @@ properties of that listing shape the walk:
   rate-limit headers of the unit's own responses and stops, with the marker
   `open_phase_rate_floor`, when fewer than the larger of 500 and a fifth of the
   limit remain, or when no header was seen.
+  A re-read that fails with an error of that run alone (410, 422, 409, another
+  4xx, a payload that does not decode, a 404 on its jobs pages, or a transient
+  error) skips the run: nothing is written for it, the walk moves past it, and
+  the next unit reads it again. A skip uses no cap slot; the skips of a unit
+  stop at the cap (marker `open_runs_skip_limit`). Each skip is one WARN line
+  with the run id and the reason, and one step of
+  `dev_health_provider_open_run_skipped_total{provider,dataset,reason}`; the
+  unit result carries `open_runs_skipped`. Three transient skips in a row with
+  no run re-read between them, a rate limit, an auth error or a cancel still
+  fail the unit.
   The 6-hour lookback and the 100 / 300 re-read caps are fixed defaults, not
   configurable.
 

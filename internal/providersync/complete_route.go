@@ -83,6 +83,17 @@ type ChunkedCompleteRouteHandler interface {
 	) error
 }
 
+// ChunkCommitObserver is told of each chunk the streaming executor confirmed
+// committed, once: by the attempt that committed it, by the recovery that
+// drained it, or by the checkpoint read back after a commit mark whose
+// acknowledgement was lost. Telemetry that must follow a durable commit
+// belongs here, not after the route's emission returns. A failed mark whose
+// read back fails too leaves the commit unknown: ObserveUnconfirmedChunk.
+type ChunkCommitObserver interface {
+	ObserveCommittedChunk(Claim, PreparedProviderChunk, *providerfoundation.Metrics)
+	ObserveUnconfirmedChunk(Claim, PreparedProviderChunk)
+}
+
 // RecoveringCompleteRouteHandler lets a route rebuild an in-flight provider
 // batch from durable effect identity before ordinary source reselection. Most
 // routes only need the stable normalization instant above. Bounded routes
@@ -322,6 +333,32 @@ func (executor CompleteRouteExecutor) executeRoute(
 				"unit", session.Claim.ID, "generation", session.Claim.GenerationKey(),
 				"schema_version", recoveredEffects.SchemaVersion,
 			)
+			// A work-items row can hash differently on the retry than it did
+			// when the v1 ledger was written (a description stated empty
+			// hashed as null before), and the v1 manifest check would then
+			// wedge the unit. With nothing committed the ledger is discarded
+			// and the unit runs as a first attempt, as a superseded snapshot
+			// is.
+			// Only an all-pending ledger qualifies: a writing effect may have a
+			// row already in the sink, and the reset would skip its readback.
+			if isWorkItemFamilyDataset(session.Claim.Dataset) &&
+				allEffectsPending(*recoveredEffects) &&
+				isSafePreparedManifestReplanState(session.Claim, *recoveredEffects) {
+				replanner, ok := committer.Ledger.(EffectLedgerReplanner)
+				if !ok {
+					return ErrInvalidConfiguration
+				}
+				replannedAt := executor.now()
+				if err := replanner.ResetPreparedEffectsForReplan(
+					workContext, session.Claim, *recoveredEffects, replannedAt,
+				); err != nil {
+					return err
+				}
+				recoveredEffects = nil
+				normalizedAt = replannedAt
+				legacyLedger = false
+				recovery = "legacy_ledger_replanned"
+			}
 		}
 		if recoveredEffects != nil && descriptor.PreparedManifestRecovery && !legacyLedger {
 			if executor.EffectsFactory != nil {
@@ -776,4 +813,13 @@ func (line routeCompletedLog) attrs() []slog.Attr {
 		attrs = append(attrs, slog.Int64(count.Name, count.Value))
 	}
 	return attrs
+}
+
+func allEffectsPending(state EffectLedgerState) bool {
+	for _, effect := range state.Effects {
+		if effect.Status != GenerationBlockPending {
+			return false
+		}
+	}
+	return true
 }

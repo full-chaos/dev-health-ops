@@ -18,7 +18,7 @@ import (
 // 1000 = the rows model (the largest hosted times, not a wall); a red here means re-cut the race legs, not a flake.
 const (
 	raceModelledLegLimit = 1000.0
-	raceBatchOverlap     = 3.5 // the default rk of ci/go_race_shard.awk
+	raceBatchOverlap     = 3.5 // a many-package batch's measured overlap (GO_RACE_BATCH_OVERLAP, the plan's default)
 )
 
 func raceSoloKeys(t *testing.T) map[string]bool {
@@ -143,8 +143,10 @@ func guardPredictions(t *testing.T, env []string, count int, weights map[string]
 }
 
 // CHAOS-13958: the serial weighting alone piles package sums on the legs whose wall is one large package, past the budget guard;
-// the race plan caps a leg's row weight (race_leg_weight_cap of ci/check_go.sh, from the guard's constants). Off: a leg over the
-// guard's limit (the red). Default: none. A package no leg can take under the cap still lands, and the plan says so.
+// the race plan caps a leg's row weight (race_leg_weight_cap of ci/check_go.sh, from the guard's constants). The pile-up is the
+// plan at a batch overlap of 3.5 with no apart rows at 13 race legs (capRedLegs: the leg count the cap was built for, not the
+// shipped count): there, off = a leg over the guard's limit (the red), default = none. The shipped plan (ci/go_race_apart.tsv,
+// the shipped leg count) stays under it and must not warn. A package no leg can take under the cap still lands, and the plan says so.
 func TestTheRaceLegWeightCapKeepsTheBudgetGuardAndWarnsWhenNoLegFits(t *testing.T) {
 	t.Parallel()
 	_, races, _ := legCounts(t)
@@ -159,9 +161,19 @@ func TestTheRaceLegWeightCapKeepsTheBudgetGuardAndWarnsWhenNoLegFits(t *testing.
 		}
 		return n, worst
 	}
-	off, _ := guardPredictions(t, []string{"GO_RACE_LEG_WEIGHT_CAP=0"}, races, weights)
+	none := filepath.Join(t.TempDir(), "apart.tsv")
+	if err := os.WriteFile(none, []byte("# no rows\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	const capRedLegs = 13
+	pileUp := []string{"GO_RACE_BATCH_OVERLAP=3.5", "GO_RACE_APART=" + none}
+	off, _ := guardPredictions(t, append([]string{"GO_RACE_LEG_WEIGHT_CAP=0"}, pileUp...), capRedLegs, weights)
 	if n, worst := over(off); n == 0 {
-		t.Errorf("with the cap off no race leg is over %.0f s (max %.0f): the cell's red is gone, it would pass without the cap", limit, worst)
+		t.Errorf("with the cap off (overlap 3.5, no apart rows, %d legs) no race leg is over %.0f s (max %.0f): the cell's red is gone, it would pass without the cap", capRedLegs, limit, worst)
+	}
+	capped, _ := guardPredictions(t, pileUp, capRedLegs, weights)
+	if n, worst := over(capped); n > 0 {
+		t.Errorf("with the default cap (overlap 3.5, no apart rows, %d legs) %d race leg(s) are over %.0f s (max %.0f)", capRedLegs, n, limit, worst)
 	}
 	def, warns := guardPredictions(t, nil, races, weights)
 	if n, worst := over(def); n > 0 {
@@ -190,8 +202,9 @@ func TestTheRaceLegWeightCapKeepsTheBudgetGuardAndWarnsWhenNoLegFits(t *testing.
 	t.Logf("race legs %d: guard max %.0f s with the cap, %.0f s without", races, defMax, offMax)
 }
 
-// CHAOS-13958: the two race plan knobs take only their documented values (GO_RACE_SERIAL_WEIGHTING: unset, 0, 1;
-// GO_RACE_LEG_WEIGHT_CAP: unset or a non-negative decimal, 0 = off); any other value, empty included, fails before any plan.
+// CHAOS-13958: the race plan knobs take only their documented values (GO_RACE_SERIAL_WEIGHTING: unset, 0, 1;
+// GO_RACE_LEG_WEIGHT_CAP: unset or a non-negative decimal, 0 = off; GO_RACE_BATCH_OVERLAP: unset or a positive decimal;
+// GO_RACE_APART: unset or a file); any other value, empty included, fails before any plan.
 // The leg weight cap is the budget guard's scope: the root module only; a nested module's packages are never counted or warned.
 func TestTheRacePlanKnobsRefuseEveryOtherValueAndTheCapCountsOnlyTheRootModule(t *testing.T) {
 	t.Parallel()
@@ -217,6 +230,16 @@ func TestTheRacePlanKnobsRefuseEveryOtherValueAndTheCapCountsOnlyTheRootModule(t
 		{"cap negative", "GO_RACE_LEG_WEIGHT_CAP=-5", false},
 		{"cap space", "GO_RACE_LEG_WEIGHT_CAP= ", false},
 		{"cap exponent", "GO_RACE_LEG_WEIGHT_CAP=1e3", false},
+		{"overlap 1.5", "GO_RACE_BATCH_OVERLAP=1.5", true},
+		{"overlap 3.5", "GO_RACE_BATCH_OVERLAP=3.5", true},
+		{"overlap 0", "GO_RACE_BATCH_OVERLAP=0", false},
+		{"overlap 0.0", "GO_RACE_BATCH_OVERLAP=0.0", false},
+		{"overlap empty", "GO_RACE_BATCH_OVERLAP=", false},
+		{"overlap word", "GO_RACE_BATCH_OVERLAP=abc", false},
+		{"overlap negative", "GO_RACE_BATCH_OVERLAP=-1", false},
+		{"apart missing", "GO_RACE_APART=/nonexistent/go_race_apart.tsv", false},
+		{"apart empty", "GO_RACE_APART=", false},
+		{"apart directory", "GO_RACE_APART=/", false},
 	} {
 		var env []string
 		if c.env != "" {
@@ -229,6 +252,17 @@ func TestTheRacePlanKnobsRefuseEveryOtherValueAndTheCapCountsOnlyTheRootModule(t
 			t.Errorf("%s (%q): want a plan, got err %v\n%s", c.name, c.env, err, errs)
 		case !c.accept && (err == nil || planned || !strings.Contains(errs, "ERROR: ")):
 			t.Errorf("%s (%q): want a refusal before any plan, got err %v, planned %v\n%s", c.name, c.env, err, planned, errs)
+		}
+	}
+	// An apart file that exists but cannot be read would read as no rows: refused too (a root user reads it anyway).
+	if os.Geteuid() != 0 {
+		locked := filepath.Join(t.TempDir(), "apart.tsv")
+		if err := os.WriteFile(locked, []byte("heavy\tinternal/cigates/docs\t770\n"), 0o000); err != nil {
+			t.Fatal(err)
+		}
+		out, errs, err := checkGo(t, []string{"GO_RACE_APART=" + locked}, "race-shard-plan", "1", "13")
+		if err == nil || strings.Contains(out, "\t") || !strings.Contains(errs, "ERROR: ") {
+			t.Errorf("apart unreadable: want a refusal before any plan, got err %v\n%s", err, errs)
 		}
 	}
 	// A cap of 1 fits nothing, so every root package warns; a nested module's packages (plan rows whose module is not ".")

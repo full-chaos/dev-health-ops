@@ -771,6 +771,28 @@ func (handler *Handler) observeCicdPartialSuccess(
 	)
 }
 
+// observeGitHubTestsExpiredArtifacts counts the expired report artifacts a github cicd/tests unit committed
+// (dev_health_provider_artifact_skipped_total{reason="artifact_expired"}, CHAOS-13980). Call it only after Repository.Complete
+// returned nil: the route does not count them itself, because it runs once per attempt and a failed attempt that is recollected
+// would charge the same artifact again. The count is the committed report_member/artifact_expired observation.
+func (handler *Handler) observeGitHubTestsExpiredArtifacts(claim providersync.Claim, payload map[string]any) {
+	if handler == nil || claim.Provider != "github" || (claim.Dataset != "cicd" && claim.Dataset != "tests") {
+		return
+	}
+	incomplete, ok := providersync.DecodeGitHubTestsIncomplete(payload["incomplete"])
+	if !ok {
+		return
+	}
+	for _, observation := range incomplete {
+		if observation.Component != "report_member" || observation.Cause != "artifact_expired" {
+			continue
+		}
+		for count := 0; count < observation.Count; count++ {
+			handler.ProviderMetrics.RecordArtifactSkipped(claim.Provider, claim.Dataset, observation.Cause)
+		}
+	}
+}
+
 // logLifecycle records the safe, authoritative identity of one provider-unit
 // attempt. River arguments deliberately carry only the unit ID, so provider,
 // dataset, mode, and run identity become available only after Claim. Keep this
@@ -1084,6 +1106,7 @@ func (handler *Handler) Work(
 			} else {
 				handler.observeBudgetComparison(ctx, session.Claim, budgetRows, result.RequestLedger.Dropped, earlierWork)
 				handler.observeCicdPartialSuccess(session.Claim, result.Watermark, payload)
+				handler.observeGitHubTestsExpiredArtifacts(session.Claim, payload)
 				handler.logLifecycle(ctx, execution, session.Claim, "sync_provider_unit_finished", "succeeded", nil)
 				return nil
 			}

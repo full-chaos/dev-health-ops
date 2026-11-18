@@ -31,7 +31,7 @@ func TestRunInProcessRunsTheChunkedTestsRouteWithoutAWorker(t *testing.T) {
 	counts := func() map[string]uint64 {
 		t.Helper()
 		out := map[string]uint64{}
-		for _, table := range []string{"ci_pipeline_runs", "ci_job_runs", "ci_acceptance_checks", "test_suite_results", "test_case_results", "coverage_snapshots"} {
+		for _, table := range []string{"ci_pipeline_runs", "ci_job_runs", "ci_acceptance_checks", "test_suite_results", "test_case_results", "coverage_snapshots", "testops_run_report_completeness"} {
 			var count uint64
 			if err := sink.Conn.QueryRow(ctx, "SELECT count() FROM "+table+" FINAL WHERE org_id = ?", run.OrgID).Scan(&count); err != nil {
 				t.Fatal(err)

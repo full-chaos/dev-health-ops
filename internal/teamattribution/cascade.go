@@ -70,6 +70,10 @@ type GithubWorkItemDerivationCandidate struct {
 	// can derive the telemetry label without threading a
 	// *providerfoundation.Metrics through the pure build*/resolve chain.
 	OwnershipReason string `json:"-"`
+	// OwnershipEvidence is the ";ownership=<reason>" suffix of a membership row kept with no
+	// ownership proof. It is appended to Evidence after ranking and dedup, so it never changes
+	// which of two tied rows a last-wins writer keeps.
+	OwnershipEvidence string `json:"-"`
 	// TeamProvider and TeamResolved are the identity of the team the
 	// candidate names. Teams are (provider, id), and one id can name teams of
 	// several providers, so the team is bound where the candidate is made
@@ -835,14 +839,20 @@ func (derived GithubWorkItemDerivationContext) resolve(
 		}
 		bySource["project_ownership"] = append(bySource["project_ownership"], candidate)
 	}
-	bySource["repo_ownership"] = append(
-		bySource["repo_ownership"],
-		derived.repoByID[AttributionMapKey(subject.Provider, GithubWorkItemDerivationStringValue(subject.RepoID))]...,
-	)
-	bySource["repo_ownership"] = append(
-		bySource["repo_ownership"],
-		derived.repoByNames(subject)...,
-	)
+	// An issue takes no team from its own repository field (entity tree: its
+	// repositories are those of its linked pull requests; it reaches a team's
+	// ownership through the linked_issue tier). Only a pull / merge request takes
+	// repo_ownership from its own repo_id.
+	if GithubWorkItemDerivationIsPullOrMergeRequestType(subject.Provider, subject.Type) {
+		bySource["repo_ownership"] = append(
+			bySource["repo_ownership"],
+			derived.repoByID[AttributionMapKey(subject.Provider, GithubWorkItemDerivationStringValue(subject.RepoID))]...,
+		)
+		bySource["repo_ownership"] = append(
+			bySource["repo_ownership"],
+			derived.repoByNames(subject)...,
+		)
+	}
 	// CHAOS-4321 (chris's ruling, 2026-08-26, refined 08:30 PT): membership-
 	// based attribution -- assignee AND author alike -- is a TWO-LAYER
 	// resolution via ResolveMembership: layer 1 (admin: memberByID ∪
@@ -872,6 +882,7 @@ func (derived GithubWorkItemDerivationContext) resolve(
 			if owns {
 				for index := range assigneeCandidates {
 					assigneeCandidates[index].OwnershipReason = GithubWorkItemDerivationOwnershipCheckedLabel(ownershipReason)
+					assigneeCandidates[index].OwnershipEvidence = ownershipEvidenceSuffix(ownershipReason)
 				}
 				bySource["assignee_membership"] = append(bySource["assignee_membership"], assigneeCandidates...)
 			} else {
@@ -929,6 +940,7 @@ func (derived GithubWorkItemDerivationContext) resolve(
 					for index, candidate := range reporterCandidates {
 						candidate.Source = "author_membership"
 						candidate.Evidence = "reporter=" + *subject.Reporter
+						candidate.OwnershipEvidence = ownershipEvidenceSuffix(ownershipReason)
 						candidate.OwnershipReason = GithubWorkItemDerivationOwnershipCheckedLabel(ownershipReason)
 						relabeled[index] = candidate
 					}
@@ -1010,12 +1022,17 @@ func (derived GithubWorkItemDerivationContext) resolve(
 		// `all` as is_primary = 0 provenance rows; an item whose only
 		// signal is a member's team falls through to unassigned.
 		membershipTier := source == "assignee_membership" || source == "author_membership"
-		if primary == nil && !membershipTier {
+		// A team is reached through ownership only: another issue's team
+		// reaches an item only when the item is a pull or merge request (the
+		// tree edge pull request -> issue -> project), and a member-scope
+		// fallback rule names a person. Both stay is_primary = 0 rows.
+		linkedToAnIssueOnly := source == "linked_issue" && !GithubWorkItemDerivationIsPullOrMergeRequestType(subject.Provider, subject.Type)
+		if primary == nil && !membershipTier && !linkedToAnIssueOnly {
 			// CHAOS-9409: a co-owner fact (is_primary = 2: an owner beside the
 			// main owner) is never the primary; it is a co-owner row of the
 			// item when another owner of the same source is the primary.
 			for index, candidate := range candidates {
-				if candidate.IsPrimary == AttributionCoOwner {
+				if candidate.IsPrimary == AttributionCoOwner || isMemberFallbackCandidate(candidate) {
 					continue
 				}
 				value := candidate
@@ -1128,6 +1145,8 @@ func (derived GithubWorkItemDerivationContext) resolve(
 				}
 			}
 		}
+		candidate.Evidence += candidate.OwnershipEvidence
+		candidate.OwnershipEvidence = ""
 		marked[index] = candidate
 	}
 	return primary.TeamID, primary.TeamName, marked, rejections
@@ -1299,6 +1318,14 @@ func WorkItemDerivationScope(subject GithubWorkItemDerivationSubject) string {
 	return ""
 }
 
+// memberFallbackEvidencePrefix starts the evidence of a manual_fallback
+// candidate made by a rule of scope_type "member" (ManualCandidates).
+const memberFallbackEvidencePrefix = "manual_fallback:member="
+
+func isMemberFallbackCandidate(candidate GithubWorkItemDerivationCandidate) bool {
+	return candidate.Source == "manual_fallback" && strings.HasPrefix(candidate.Evidence, memberFallbackEvidencePrefix)
+}
+
 func (derived GithubWorkItemDerivationContext) ManualCandidates(
 	subject GithubWorkItemDerivationSubject,
 ) []GithubWorkItemDerivationCandidate {
@@ -1319,8 +1346,12 @@ func (derived GithubWorkItemDerivationContext) ManualCandidates(
 			// one team. GithubWorkItemDerivationScopeMatch reproduces the set
 			// semantics: empty candidates are dropped and an empty scope_id
 			// can never match.
-			matched = GithubWorkItemDerivationScopeMatch(scopeID,
-				append([]string{GithubWorkItemDerivationStringValue(subject.RepoID)}, GitLabProjectNames(subject)...)...)
+			// Only a pull / merge request matches a repo rule through its own repo: an
+			// issue has no repository field of its own (its repositories are its linked
+			// pull requests').
+			matched = GithubWorkItemDerivationIsPullOrMergeRequestType(subject.Provider, subject.Type) &&
+				GithubWorkItemDerivationScopeMatch(scopeID,
+					append([]string{GithubWorkItemDerivationStringValue(subject.RepoID)}, GitLabProjectNames(subject)...)...)
 		case "project":
 			candidates := []string{
 				GithubWorkItemDerivationStringValue(subject.ProjectID),
@@ -2510,6 +2541,10 @@ const (
 	// row at all. R74 (chris via team-lead, 2026-09-09, DECIDED): this
 	// passes through, does not gate -- see ownershipUnknownBlocksMembership.
 	MembershipOwnershipReasonUnknown = "ownership_unknown"
+	// MembershipOwnershipReasonIssueGateNotApplied: the item is an issue, which has
+	// no repository field of its own; the gate is not applied and the membership
+	// row is kept as provenance.
+	MembershipOwnershipReasonIssueGateNotApplied = "ownership_gate_not_applied_issue"
 	// MembershipOwnershipReasonTeamNullCarrying: the resolved team itself
 	// (not the repo) carries NO ownership signal anywhere in the org -- no
 	// repo_ownership, no repo_patterns-derived repo, no project_ownership,
@@ -2605,6 +2640,13 @@ func (derived GithubWorkItemDerivationContext) teamIsNullCarrying(teamID string)
 func (derived GithubWorkItemDerivationContext) teamOwnsSubjectRepo(
 	subject GithubWorkItemDerivationSubject, teamID string,
 ) (string, bool) {
+	// The gate is not applied to an issue: it has no repository field of its own
+	// (its repositories are those of its linked pull requests) and the gate reads
+	// none of them. The membership row is kept as provenance (is_primary 0), before
+	// the team-level checks, which are a gate on a pull / merge request.
+	if !GithubWorkItemDerivationIsPullOrMergeRequestType(subject.Provider, subject.Type) {
+		return MembershipOwnershipReasonIssueGateNotApplied, true
+	}
 	if derived.teamIsNullCarrying(teamID) {
 		return MembershipOwnershipReasonTeamNullCarrying, false
 	}
@@ -2622,6 +2664,17 @@ func (derived GithubWorkItemDerivationContext) teamOwnsSubjectRepo(
 		}
 	}
 	return MembershipOwnershipReasonNotOwned, false
+}
+
+// ownershipEvidenceSuffix names an issue's membership row in its evidence: the
+// ownership gate is not applied to an issue, so the row is kept with no ownership
+// proof, and a missing proof is not a healthy one. A pull / merge request row
+// keeps the evidence it has always had.
+func ownershipEvidenceSuffix(ownershipReason string) string {
+	if ownershipReason != MembershipOwnershipReasonIssueGateNotApplied {
+		return ""
+	}
+	return ";ownership=" + ownershipReason
 }
 
 // GithubWorkItemDerivationOwnershipCheckedLabel maps a teamOwnsSubjectRepo

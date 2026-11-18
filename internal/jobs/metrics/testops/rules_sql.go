@@ -6,8 +6,23 @@ package testops
 const PipelineFailureRateWindowSQL = `if(sum(success_count) + sum(failure_count) = 0, NULL, ` +
 	`toFloat64(sum(failure_count)) / toFloat64(sum(success_count) + sum(failure_count)))`
 
-// PipelineRateCountColumns are the testops_pipeline_metrics_daily columns PipelineFailureRateWindowSQL reads.
+// PipelineSuccessRateWindowSQL is the pipeline success rate of the same rows: their successes over their completed
+// runs (succeeded or failed), NULL when none completed. The stored success_rate column holds 0 on a day with no
+// completed run and is not read.
+const PipelineSuccessRateWindowSQL = `if(sum(success_count) + sum(failure_count) = 0, NULL, ` +
+	`toFloat64(sum(success_count)) / toFloat64(sum(success_count) + sum(failure_count)))`
+
+// PipelineRateCountColumns are the testops_pipeline_metrics_daily columns the two window rules read.
 var PipelineRateCountColumns = []string{"success_count", "failure_count"}
+
+// TestPassRateWindowSQL is the test pass rate of a set of testops_test_metrics_daily rows (already the newest row of
+// each key): their passed cases over their passed and failed cases, NULL when they have neither. The stored pass_rate
+// column divides by every case, skipped ones too, holds 0 on a day where every case was skipped, and is not read.
+const TestPassRateWindowSQL = `if(sum(passed_count) + sum(failed_count) = 0, NULL, ` +
+	`toFloat64(sum(passed_count)) / toFloat64(sum(passed_count) + sum(failed_count)))`
+
+// TestRateCountColumns are the testops_test_metrics_daily columns TestPassRateWindowSQL reads.
+var TestRateCountColumns = []string{"passed_count", "failed_count"}
 
 // StabilityLiveRowsSQL is the one read of testops_pipeline_stability values: the newest stability_index of each
 // (day, repo_id) of {org_id:String} between {start:Date} and {end:Date}, without the repo-days whose newest

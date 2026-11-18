@@ -940,16 +940,18 @@ type ComplexityRoot struct {
 	}
 
 	OperatingReviewDelta struct {
-		Absolute     func(childComplexity int) int
-		HasPriorData func(childComplexity int) int
-		Percent      func(childComplexity int) int
-		PriorValue   func(childComplexity int) int
-		Status       func(childComplexity int) int
-		Value        func(childComplexity int) int
+		Absolute       func(childComplexity int) int
+		DegradedReason func(childComplexity int) int
+		HasPriorData   func(childComplexity int) int
+		Percent        func(childComplexity int) int
+		PriorValue     func(childComplexity int) int
+		Status         func(childComplexity int) int
+		Value          func(childComplexity int) int
 	}
 
 	OperatingReviewMetric struct {
 		ChangeFailureEvidence func(childComplexity int) int
+		DegradedReason        func(childComplexity int) int
 		Delta                 func(childComplexity int) int
 		HasData               func(childComplexity int) int
 		Key                   func(childComplexity int) int
@@ -1524,12 +1526,15 @@ type ComplexityRoot struct {
 	ThroughputEstimateCoverage struct {
 		BacklogSize      func(childComplexity int) int
 		EstimatedCount   func(childComplexity int) int
+		GrainCount       func(childComplexity int) int
 		Ratio            func(childComplexity int) int
 		UnestimatedCount func(childComplexity int) int
 	}
 
 	ThroughputForecast struct {
+		BacklogAsOfDay      func(childComplexity int) int
 		BacklogSize         func(childComplexity int) int
+		BacklogState        func(childComplexity int) int
 		ComputedAt          func(childComplexity int) int
 		EstimateCoverage    func(childComplexity int) int
 		ForecastID          func(childComplexity int) int
@@ -5962,6 +5967,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.OperatingReviewDelta.Absolute(childComplexity), true
 
+	case "OperatingReviewDelta.degradedReason":
+		if e.complexity.OperatingReviewDelta.DegradedReason == nil {
+			break
+		}
+
+		return e.complexity.OperatingReviewDelta.DegradedReason(childComplexity), true
+
 	case "OperatingReviewDelta.hasPriorData":
 		if e.complexity.OperatingReviewDelta.HasPriorData == nil {
 			break
@@ -6003,6 +6015,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 		}
 
 		return e.complexity.OperatingReviewMetric.ChangeFailureEvidence(childComplexity), true
+
+	case "OperatingReviewMetric.degradedReason":
+		if e.complexity.OperatingReviewMetric.DegradedReason == nil {
+			break
+		}
+
+		return e.complexity.OperatingReviewMetric.DegradedReason(childComplexity), true
 
 	case "OperatingReviewMetric.delta":
 		if e.complexity.OperatingReviewMetric.Delta == nil {
@@ -8934,6 +8953,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.ThroughputEstimateCoverage.EstimatedCount(childComplexity), true
 
+	case "ThroughputEstimateCoverage.grainCount":
+		if e.complexity.ThroughputEstimateCoverage.GrainCount == nil {
+			break
+		}
+
+		return e.complexity.ThroughputEstimateCoverage.GrainCount(childComplexity), true
+
 	case "ThroughputEstimateCoverage.ratio":
 		if e.complexity.ThroughputEstimateCoverage.Ratio == nil {
 			break
@@ -8948,12 +8974,26 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.ThroughputEstimateCoverage.UnestimatedCount(childComplexity), true
 
+	case "ThroughputForecast.backlogAsOfDay":
+		if e.complexity.ThroughputForecast.BacklogAsOfDay == nil {
+			break
+		}
+
+		return e.complexity.ThroughputForecast.BacklogAsOfDay(childComplexity), true
+
 	case "ThroughputForecast.backlogSize":
 		if e.complexity.ThroughputForecast.BacklogSize == nil {
 			break
 		}
 
 		return e.complexity.ThroughputForecast.BacklogSize(childComplexity), true
+
+	case "ThroughputForecast.backlogState":
+		if e.complexity.ThroughputForecast.BacklogState == nil {
+			break
+		}
+
+		return e.complexity.ThroughputForecast.BacklogState(childComplexity), true
 
 	case "ThroughputForecast.computedAt":
 		if e.complexity.ThroughputForecast.ComputedAt == nil {
@@ -11228,6 +11268,10 @@ type OperatingReviewDelta {
   False = the prior week holds no stored value for the metric (CHAOS-8115); see ` + "`" + `` + "`" + `OperatingReviewMetric.hasData` + "`" + `` + "`" + `. ` + "`" + `` + "`" + `priorValue` + "`" + `` + "`" + ` is then a 0 placeholder, ` + "`" + `` + "`" + `absolute` + "`" + `` + "`" + ` is 0, ` + "`" + `` + "`" + `percent` + "`" + `` + "`" + ` is null and ` + "`" + `` + "`" + `status` + "`" + `` + "`" + ` is empty: a client draws "No data" for the prior week and no change (CHAOS-8115, CHAOS-9111).
   """
   hasPriorData: Boolean!
+  """
+  Why the prior week has no value although it may hold one (CHAOS-13977): READ_FAILED = a read of the prior week that the value depends on failed, so ` + "`" + `` + "`" + `hasPriorData` + "`" + `` + "`" + ` is false and ` + "`" + `` + "`" + `priorValue` + "`" + `` + "`" + ` is a 0 placeholder, not a missing week. Null = no read the prior value depends on failed. A cancelled request is not a failed read.
+  """
+  degradedReason: String
 }
 
 input OperatingReviewInput {
@@ -11246,7 +11290,7 @@ type OperatingReviewMetric {
   unit: String!
   delta: OperatingReviewDelta!
   """
-  True = the week holds a stored value for the metric (CHAOS-8115). False = no row of the metric's daily table in the week, only NULL values, or a read that failed: ` + "`" + `` + "`" + `value` + "`" + `` + "`" + ` is then a 0 placeholder, not a measured zero, and a client draws "No data". True with ` + "`" + `` + "`" + `value` + "`" + `` + "`" + ` 0 is a stored zero.
+  True = the week holds a stored value for the metric (CHAOS-8115). False = no row of the metric's daily table in the week, only NULL values, or a read that failed (then ` + "`" + `` + "`" + `degradedReason` + "`" + `` + "`" + ` is READ_FAILED): ` + "`" + `` + "`" + `value` + "`" + `` + "`" + ` is then a 0 placeholder, not a measured zero, and a client draws "No data". True with ` + "`" + `` + "`" + `value` + "`" + `` + "`" + ` 0 is a stored zero.
   """
   hasData: Boolean!
   """
@@ -11261,6 +11305,10 @@ type OperatingReviewMetric {
   What the change failure rate of the week stands on (CHAOS-9630): the evidence basis, the deployments (D), the deployments with a final status (K), their coverage K / D and, when there is no rate, why. Null for every other metric. Served for change failure rate whatever its state.
   """
   changeFailureEvidence: ChangeFailureEvidence
+  """
+  Why the week has no value although it may hold one (CHAOS-13977): READ_FAILED = a read of the week that the value depends on failed, so ` + "`" + `` + "`" + `hasData` + "`" + `` + "`" + ` is false and ` + "`" + `` + "`" + `value` + "`" + `` + "`" + ` is a 0 placeholder: the metric is unavailable, not a missing week and not a zero. A metric with two reads (mttr_hours, ai_opportunity_signals) is READ_FAILED when a read its value depends on failed, and never serves the value of the other read alone. Null = no read the value depends on failed. A cancelled request is not a failed read.
+  """
+  degradedReason: String
 }
 
 enum OperatingReviewMetricScope {
@@ -12144,11 +12192,23 @@ enum ThresholdDirection {
   BELOW
 }
 
+"""
+How a throughputForecast backlogSize was found. MEASURED: the newest work-item day of every key (provider, work scope, team) of the scope is on or after the window start (the forecast day minus historyWeeks weeks). STALE: the newest day of at least one key is before the window start; backlogSize still holds the sum of the newest days, and backlogAsOfDay names the oldest of them. NO_ROWS: the scope has no work-item measurement, so backlogSize 0 is not a measured zero. SUPPLIED: the request gave backlogSize, and no backlog was read.
+"""
+enum ThroughputBacklogState {
+  MEASURED
+  STALE
+  NO_ROWS
+  SUPPLIED
+}
+
 type ThroughputEstimateCoverage {
   ratio: Float
   estimatedCount: Int!
   unestimatedCount: Int!
   backlogSize: Int!
+  "The number of coverage grains (provider, work scope, team) the counts are read from. 0: the scope has no coverage row, and the zero counts and ratio 0 are not a measurement."
+  grainCount: Int!
 }
 
 type ThroughputForecast {
@@ -12157,6 +12217,10 @@ type ThroughputForecast {
   teamId: String
   workScopeId: String
   backlogSize: Int!
+  "How backlogSize was found: MEASURED, STALE, NO_ROWS or SUPPLIED (see ThroughputBacklogState)."
+  backlogState: ThroughputBacklogState!
+  "The oldest of the newest work-item days that backlogSize is read from. Null when backlogState is NO_ROWS or SUPPLIED."
+  backlogAsOfDay: Date
   historyWeeks: Int!
   p50Weeks: Int
   p75Weeks: Int
@@ -43327,6 +43391,47 @@ func (ec *executionContext) fieldContext_OperatingReviewDelta_hasPriorData(_ con
 	return fc, nil
 }
 
+func (ec *executionContext) _OperatingReviewDelta_degradedReason(ctx context.Context, field graphql.CollectedField, obj *model.OperatingReviewDelta) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_OperatingReviewDelta_degradedReason(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.DegradedReason, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_OperatingReviewDelta_degradedReason(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "OperatingReviewDelta",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _OperatingReviewMetric_key(ctx context.Context, field graphql.CollectedField, obj *model.OperatingReviewMetric) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_OperatingReviewMetric_key(ctx, field)
 	if err != nil {
@@ -43554,6 +43659,8 @@ func (ec *executionContext) fieldContext_OperatingReviewMetric_delta(_ context.C
 				return ec.fieldContext_OperatingReviewDelta_status(ctx, field)
 			case "hasPriorData":
 				return ec.fieldContext_OperatingReviewDelta_hasPriorData(ctx, field)
+			case "degradedReason":
+				return ec.fieldContext_OperatingReviewDelta_degradedReason(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type OperatingReviewDelta", field.Name)
 		},
@@ -43743,6 +43850,47 @@ func (ec *executionContext) fieldContext_OperatingReviewMetric_changeFailureEvid
 	return fc, nil
 }
 
+func (ec *executionContext) _OperatingReviewMetric_degradedReason(ctx context.Context, field graphql.CollectedField, obj *model.OperatingReviewMetric) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_OperatingReviewMetric_degradedReason(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.DegradedReason, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_OperatingReviewMetric_degradedReason(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "OperatingReviewMetric",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _OperatingReviewSection_key(ctx context.Context, field graphql.CollectedField, obj *model.OperatingReviewSection) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_OperatingReviewSection_key(ctx, field)
 	if err != nil {
@@ -43888,6 +44036,8 @@ func (ec *executionContext) fieldContext_OperatingReviewSection_metrics(_ contex
 				return ec.fieldContext_OperatingReviewMetric_rateState(ctx, field)
 			case "changeFailureEvidence":
 				return ec.fieldContext_OperatingReviewMetric_changeFailureEvidence(ctx, field)
+			case "degradedReason":
+				return ec.fieldContext_OperatingReviewMetric_degradedReason(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type OperatingReviewMetric", field.Name)
 		},
@@ -50378,6 +50528,10 @@ func (ec *executionContext) fieldContext_Query_throughputForecast(ctx context.Co
 				return ec.fieldContext_ThroughputForecast_workScopeId(ctx, field)
 			case "backlogSize":
 				return ec.fieldContext_ThroughputForecast_backlogSize(ctx, field)
+			case "backlogState":
+				return ec.fieldContext_ThroughputForecast_backlogState(ctx, field)
+			case "backlogAsOfDay":
+				return ec.fieldContext_ThroughputForecast_backlogAsOfDay(ctx, field)
 			case "historyWeeks":
 				return ec.fieldContext_ThroughputForecast_historyWeeks(ctx, field)
 			case "p50Weeks":
@@ -62060,6 +62214,50 @@ func (ec *executionContext) fieldContext_ThroughputEstimateCoverage_backlogSize(
 	return fc, nil
 }
 
+func (ec *executionContext) _ThroughputEstimateCoverage_grainCount(ctx context.Context, field graphql.CollectedField, obj *model.ThroughputEstimateCoverage) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ThroughputEstimateCoverage_grainCount(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.GrainCount, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(int)
+	fc.Result = res
+	return ec.marshalNInt2int(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ThroughputEstimateCoverage_grainCount(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ThroughputEstimateCoverage",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _ThroughputForecast_forecastId(ctx context.Context, field graphql.CollectedField, obj *model.ThroughputForecast) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_ThroughputForecast_forecastId(ctx, field)
 	if err != nil {
@@ -62269,6 +62467,91 @@ func (ec *executionContext) fieldContext_ThroughputForecast_backlogSize(_ contex
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ThroughputForecast_backlogState(ctx context.Context, field graphql.CollectedField, obj *model.ThroughputForecast) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ThroughputForecast_backlogState(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.BacklogState, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(model.ThroughputBacklogState)
+	fc.Result = res
+	return ec.marshalNThroughputBacklogState2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐThroughputBacklogState(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ThroughputForecast_backlogState(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ThroughputForecast",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type ThroughputBacklogState does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ThroughputForecast_backlogAsOfDay(ctx context.Context, field graphql.CollectedField, obj *model.ThroughputForecast) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ThroughputForecast_backlogAsOfDay(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.BacklogAsOfDay, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*graphqldate.Date)
+	fc.Result = res
+	return ec.marshalODate2ᚖgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphqldateᚐDate(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ThroughputForecast_backlogAsOfDay(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ThroughputForecast",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Date does not have child fields")
 		},
 	}
 	return fc, nil
@@ -62702,6 +62985,8 @@ func (ec *executionContext) fieldContext_ThroughputForecast_estimateCoverage(_ c
 				return ec.fieldContext_ThroughputEstimateCoverage_unestimatedCount(ctx, field)
 			case "backlogSize":
 				return ec.fieldContext_ThroughputEstimateCoverage_backlogSize(ctx, field)
+			case "grainCount":
+				return ec.fieldContext_ThroughputEstimateCoverage_grainCount(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type ThroughputEstimateCoverage", field.Name)
 		},
@@ -76305,6 +76590,8 @@ func (ec *executionContext) _OperatingReviewDelta(ctx context.Context, sel ast.S
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "degradedReason":
+			out.Values[i] = ec._OperatingReviewDelta_degradedReason(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -76378,6 +76665,8 @@ func (ec *executionContext) _OperatingReviewMetric(ctx context.Context, sel ast.
 			out.Values[i] = ec._OperatingReviewMetric_rateState(ctx, field, obj)
 		case "changeFailureEvidence":
 			out.Values[i] = ec._OperatingReviewMetric_changeFailureEvidence(ctx, field, obj)
+		case "degradedReason":
+			out.Values[i] = ec._OperatingReviewMetric_degradedReason(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -80909,6 +81198,11 @@ func (ec *executionContext) _ThroughputEstimateCoverage(ctx context.Context, sel
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "grainCount":
+			out.Values[i] = ec._ThroughputEstimateCoverage_grainCount(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -80962,6 +81256,13 @@ func (ec *executionContext) _ThroughputForecast(ctx context.Context, sel ast.Sel
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "backlogState":
+			out.Values[i] = ec._ThroughputForecast_backlogState(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "backlogAsOfDay":
+			out.Values[i] = ec._ThroughputForecast_backlogAsOfDay(ctx, field, obj)
 		case "historyWeeks":
 			out.Values[i] = ec._ThroughputForecast_historyWeeks(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
@@ -87260,6 +87561,16 @@ func (ec *executionContext) unmarshalNThresholdDirection2githubᚗcomᚋfullᚑc
 }
 
 func (ec *executionContext) marshalNThresholdDirection2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐThresholdDirection(ctx context.Context, sel ast.SelectionSet, v model.ThresholdDirection) graphql.Marshaler {
+	return v
+}
+
+func (ec *executionContext) unmarshalNThroughputBacklogState2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐThroughputBacklogState(ctx context.Context, v any) (model.ThroughputBacklogState, error) {
+	var res model.ThroughputBacklogState
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNThroughputBacklogState2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐThroughputBacklogState(ctx context.Context, sel ast.SelectionSet, v model.ThroughputBacklogState) graphql.Marshaler {
 	return v
 }
 

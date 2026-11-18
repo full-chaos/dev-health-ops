@@ -670,6 +670,7 @@ const flowMatrixTeamActivitySelect = `
     INNER JOIN ` + teamScopedWorkItemTeamAttributionSource + ` AS t
       ON t.work_item_id = wct.work_item_id
     WHERE wct.day >= {start_date:Date} AND wct.day < {end_date:Date}
+      AND wct.completed_at IS NOT NULL
       AND wct.org_id = {org_id:String}
       AND t.team_id IS NOT NULL
       AND t.team_id != ''
@@ -755,6 +756,7 @@ const flowMatrixRepoEnrichedSelect = `
     INNER JOIN work_items AS wi FINAL ON wct.work_item_id = wi.work_item_id
     WHERE wct.org_id = {org_id:String}
       AND wct.day >= {start_date:Date} AND wct.day < {end_date:Date}
+      AND wct.completed_at IS NOT NULL
       AND wi.org_id = {org_id:String}
       AND t.team_id IS NOT NULL
       AND t.team_id != ''
@@ -821,6 +823,7 @@ const flowMatrixWorkTypeEnrichedSelect = `
     INNER JOIN work_items AS wi FINAL ON wct.work_item_id = wi.work_item_id
     WHERE wct.org_id = {org_id:String}
       AND wct.day >= {start_date:Date} AND wct.day < {end_date:Date}
+      AND wct.completed_at IS NOT NULL
       AND wi.org_id = {org_id:String}
 `
 
@@ -855,6 +858,7 @@ SELECT
 FROM work_item_cycle_times AS wct FINAL
 INNER JOIN work_items AS wi FINAL ON wct.work_item_id = wi.work_item_id
 WHERE wct.day >= {start_date:Date} AND wct.day < {end_date:Date}
+  AND wct.completed_at IS NOT NULL
   AND wct.org_id = {org_id:String}
   AND wi.org_id = {org_id:String}
   AND wi.repo_id IS NOT NULL
@@ -913,6 +917,7 @@ SELECT
 FROM work_item_cycle_times AS wct FINAL
 INNER JOIN work_items AS wi FINAL ON wct.work_item_id = wi.work_item_id
 WHERE wct.day >= {start_date:Date} AND wct.day < {end_date:Date}
+  AND wct.completed_at IS NOT NULL
   AND wct.org_id = {org_id:String}
   AND wi.org_id = {org_id:String}
   AND wi.type IS NOT NULL AND wi.type != ''

@@ -210,6 +210,8 @@ internal/cigates/bigboyrender	projectscope_test.go
 internal/cigates/bigboyrender	values.go
 internal/cigates/cachepoison	cachepoison_test.go
 internal/cigates/chartgates	alerts_auth_slo_test.go
+internal/cigates/chartgates	dashboard_pooler_test.go
+internal/cigates/chartgates	dashboard_spangaps_test.go
 internal/cigates/chartgates	helpers_test.go
 internal/cigates/chartgates	jwt_secret_key_absent_test.go
 internal/cigates/chartgates	overlay_parallel_test.go
@@ -477,9 +479,12 @@ internal/jobs/metrics/remaining	capacity_native_test.go
 internal/jobs/metrics/remaining	capacity_schema_contract_pin_test.go
 internal/jobs/metrics/remaining	membership_golden_test.go
 internal/jobs/metrics/remaining	recorded_paths_test.go
+internal/jobs/report	chart_fallback_test.go
 internal/jobs/report	cicd_pooled_test.go
+internal/jobs/report	delivery_pooled_test.go
 internal/jobs/report	report_test.go
 internal/jobs/report	runtime_integration_test.go
+internal/jobs/report	stored_test_pass_rate_readers_census_test.go
 internal/llmorgsettings	baseurl_reader_guard_test.go
 internal/llmorgsettings	keyreaders_census_test.go
 internal/llmorgsettings	relation_test.go
@@ -508,6 +513,7 @@ internal/platform/otlpmetrics	labelfragment_census_test.go
 internal/platform/removedenv	census_test.go
 internal/platform/secrets	envreads_test.go
 internal/platform/secrets	source.go
+internal/platform/shell	startup_flush_test.go
 internal/providerfoundation	classify_call_sites_test.go
 internal/providerfoundation	clients.go
 internal/providerfoundation	wire_sites_census_test.go

@@ -5,6 +5,7 @@ package syncdispatchruntime
 import (
 	"context"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -197,19 +198,28 @@ WHERE id=$1`, finalizeTestOutbox, staleAt, strconv.FormatInt(deadDelivery.Job.ID
 	// Step 3 -- the real finalizer, on the arguments re-delivery actually
 	// produced. Reading them back is the point: a hand-built FinalizeSyncRunArgs
 	// would pass currentTransportReference by construction and prove nothing.
-	var deliveredGeneration int64
-	var deliveredJobID string
+	var deliveredGeneration, deliveredAttempt int64
+	var deliveredJobID, deliveredStatus, deliveredTransport, checkDef string
+	var deliveredError *string
 	if err := pool.QueryRow(ctx, `
-SELECT dispatched_route_generation, transport_job_id FROM sync_dispatch_outbox WHERE id=$1`,
-		finalizeTestOutbox).Scan(&deliveredGeneration, &deliveredJobID); err != nil {
+SELECT dispatched_route_generation, transport_job_id, status, last_error, dispatched_transport,
+	(SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = 'ck_sync_dispatch_outbox_dispatched_route_coherence'),
+	attempts
+FROM sync_dispatch_outbox WHERE id=$1`,
+		finalizeTestOutbox).Scan(&deliveredGeneration, &deliveredJobID, &deliveredStatus, &deliveredError, &deliveredTransport, &checkDef, &deliveredAttempt); err != nil {
 		t.Fatal(err)
+	}
+	// The kernel's dispatched write (no last_error) carries its route under the NULL-safe CHECK of the real chain.
+	if deliveredStatus != "dispatched" || deliveredError != nil || deliveredTransport != "river" ||
+		!strings.Contains(checkDef, "IS DISTINCT FROM") {
+		t.Fatalf("kernel delivery: status=%q last_error=%v transport=%q check=%s", deliveredStatus, deliveredError, deliveredTransport, checkDef)
 	}
 	if deliveredJobID == strconv.FormatInt(deadDelivery.Job.ID, 10) {
 		t.Fatal("re-delivery reused the dead River job id")
 	}
 	if err := service.Finalize(ctx, FinalizeSyncRunArgs{TransportArgs: TransportArgs{
 		Version: ContractVersionV1, OrgID: finalizeTestOrg, RunID: finalizeTestRun,
-		DispatchOutbox: finalizeTestOutbox, DeliveryAttempt: 1,
+		DispatchOutbox: finalizeTestOutbox, DeliveryAttempt: deliveredAttempt,
 		RouteGeneration: deliveredGeneration,
 	}}); err != nil {
 		t.Fatalf("Finalize on the recovered delivery: %v", err)
@@ -272,15 +282,15 @@ WHERE id=$1`, finalizeTestOutbox, now); err != nil {
 	if err != nil || replay.Dispatched != 1 {
 		t.Fatalf("stale-verdict replay was not re-delivered: %+v err=%v", replay, err)
 	}
-	var replayGeneration int64
+	var replayGeneration, replayAttempt int64
 	if err := pool.QueryRow(ctx,
-		`SELECT dispatched_route_generation FROM sync_dispatch_outbox WHERE id=$1`,
-		finalizeTestOutbox).Scan(&replayGeneration); err != nil {
+		`SELECT dispatched_route_generation, attempts FROM sync_dispatch_outbox WHERE id=$1`,
+		finalizeTestOutbox).Scan(&replayGeneration, &replayAttempt); err != nil {
 		t.Fatal(err)
 	}
 	if err := service.Finalize(ctx, FinalizeSyncRunArgs{TransportArgs: TransportArgs{
 		Version: ContractVersionV1, OrgID: finalizeTestOrg, RunID: finalizeTestRun,
-		DispatchOutbox: finalizeTestOutbox, DeliveryAttempt: 1,
+		DispatchOutbox: finalizeTestOutbox, DeliveryAttempt: replayAttempt,
 		RouteGeneration: replayGeneration,
 	}}); err != nil {
 		t.Fatalf("finalize over an already-terminal run must be a no-op, not an error: %v", err)

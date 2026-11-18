@@ -12,6 +12,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/dialclass"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakepg"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/refusedaddr"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -56,14 +57,7 @@ func TestQueueTelemetryReadFailureKeepsOnlyTheDialClass(t *testing.T) {
 func TestQueueTelemetrySnapshotKeepsARealRefusedDialTransient(t *testing.T) {
 	t.Parallel()
 	pooler := fakepg.NewPoolerRefusing(t)
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	closed := listener.Addr().String()
-	if err := listener.Close(); err != nil {
-		t.Fatal(err)
-	}
+	closed := refusedaddr.Addr(t)
 	for name, addr := range map[string]string{
 		"pooler_08P01": fmt.Sprintf("%s:%d", pooler.Host, pooler.Port),
 		"econnrefused": closed,

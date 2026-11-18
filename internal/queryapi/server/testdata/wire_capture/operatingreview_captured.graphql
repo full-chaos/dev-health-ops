@@ -33,6 +33,7 @@ query OperatingReview($orgId: String!, $input: OperatingReviewInput!) {
           unknownReason
           __typename
         }
+        degradedReason
         delta {
           value
           priorValue
@@ -40,6 +41,7 @@ query OperatingReview($orgId: String!, $input: OperatingReviewInput!) {
           percent
           status
           hasPriorData
+          degradedReason
           __typename
         }
         __typename

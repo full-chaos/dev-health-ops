@@ -78,7 +78,7 @@ func referenceGuardDecision(units []dispatchGuardUnit, env guardEnv, orgID strin
 		for _, unit := range units[totalCap:] {
 			capped = append(capped, unit.id)
 		}
-		return guardDecision{allowed: false, reason: fmt.Sprintf("sync run unit cap exceeded: %d/%d", len(units), totalCap), cappedUnitIDs: capped}, nil
+		return guardDecision{allowed: false, reason: fmt.Sprintf("sync run unit cap exceeded: %d/%d", len(units), totalCap), reasonCode: guardReasonCodeRunUnitCap, cappedUnitIDs: capped}, nil
 	}
 	authorizedUnitIDs := make(map[string]bool)
 	for _, bucketUnits := range candidatesByBucket {
@@ -135,7 +135,7 @@ func referenceGuardDecision(units []dispatchGuardUnit, env guardEnv, orgID strin
 		env.emit(bucket, activeCount, reclaimedStale, cappedNew, cappedStale, headroom, 0)
 	}
 	if len(cappedUnitIDs) > 0 {
-		return guardDecision{allowed: true, reason: fmt.Sprintf("sync unit concurrency cap exceeded: %d capped", len(cappedUnitIDs)), cappedUnitIDs: cappedUnitIDs, concurrencyCapped: true, slotHeadroom: slotHeadroom, authorizedUnitIDs: authorizedUnitIDs}, nil
+		return guardDecision{allowed: true, reason: fmt.Sprintf("sync unit concurrency cap exceeded: %d capped", len(cappedUnitIDs)), reasonCode: guardReasonCodeUnitConcurrencyCap, cappedUnitIDs: cappedUnitIDs, concurrencyCapped: true, slotHeadroom: slotHeadroom, authorizedUnitIDs: authorizedUnitIDs}, nil
 	}
 	return guardDecision{allowed: true, slotHeadroom: slotHeadroom, authorizedUnitIDs: authorizedUnitIDs}, nil
 }

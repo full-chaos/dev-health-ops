@@ -669,7 +669,9 @@ func TestAManualFallbackIsBoundToAnActiveTeamOfTheItemsProvider(t *testing.T) {
 // provider inherits the team of an issue of another provider, and that team is
 // the donor provider's team. An inactive team of the PR's provider, or an
 // inactive admin team, with the same id does not drop it. Every pair of
-// providers.
+// providers: an item of jira or linear is an issue, so its linked_issue row
+// carries the same team but is never the primary (an issue's link to another
+// issue is not ownership).
 func TestALinkedIssueKeepsTheDonorsTeamIdentity(t *testing.T) {
 	for _, donorProvider := range []string{"jira", "linear"} {
 		for _, itemProvider := range coOwnerProviders {
@@ -689,13 +691,22 @@ func TestALinkedIssueKeepsTheDonorsTeamIdentity(t *testing.T) {
 						},
 					})
 					donor := GithubWorkItemDerivationSubject{WorkItemID: donorProvider + ":ENG-42", Provider: donorProvider, ProjectID: &donorProject, OrgID: "org"}
-					dependent := GithubWorkItemDerivationSubject{WorkItemID: itemProvider + ":item-7", Provider: itemProvider, OrgID: "org"}
+					dependent := GithubWorkItemDerivationSubject{WorkItemID: itemProvider + ":item-7", Provider: itemProvider, Type: pullRequestType(itemProvider), OrgID: "org"}
 					linked, _, _ := derived.BuildLinkedIssueIndex(itemProvider,
 						map[string]GithubWorkItemDerivationSubject{donor.WorkItemID: donor, dependent.WorkItemID: dependent},
 						[]GithubWorkItemDerivationDependencyEdge{{SourceWorkItemID: dependent.WorkItemID, TargetWorkItemID: donor.WorkItemID, RelationshipType: "relates_to"}},
 						nil)
 					derived.LinkedIssue = linked
 					teamID, teamName, candidates := derived.Resolve(dependent)
+					if pullRequestType(itemProvider) == "" {
+						row := ownershipOnlyRow(t, candidates, "linked_issue")
+						if GithubWorkItemDerivationStringValue(teamID) != "" || row.IsPrimary != AttributionNotPrimary ||
+							GithubWorkItemDerivationStringValue(row.TeamID) != "ENG" || GithubWorkItemDerivationStringValue(row.TeamName) != "Eng "+donorProvider {
+							t.Errorf("primary %q, linked_issue row %+v: want no primary and a row of ENG of %s, is_primary 0",
+								GithubWorkItemDerivationStringValue(teamID), row, donorProvider)
+						}
+						return
+					}
 					_, source, _ := primaryRow(candidates)
 					if GithubWorkItemDerivationStringValue(teamID) != "ENG" || GithubWorkItemDerivationStringValue(teamName) != "Eng "+donorProvider || source != "linked_issue" {
 						t.Errorf("primary = %q %q/%s, want ENG of %s via linked_issue (candidates %+v)",
@@ -715,6 +726,9 @@ func TestALinkedIssueKeepsTheDonorsTeamIdentity(t *testing.T) {
 func TestAMembershipRejectionNamesTheBoundTeam(t *testing.T) {
 	repo := "11111111-1111-1111-1111-111111111111"
 	for _, provider := range coOwnerProviders {
+		if pullRequestType(provider) == "" {
+			continue // only a pull / merge request is gated on its own repository; an issue is gated on its linked pull requests' repositories
+		}
 		t.Run(provider, func(t *testing.T) {
 			derived := NewGitHubWorkItemDerivationContext(GithubWorkItemDerivationFacts{
 				Teams: catalogOrder([]GithubWorkItemDerivationTeamFact{
@@ -725,7 +739,7 @@ func TestAMembershipRejectionNamesTheBoundTeam(t *testing.T) {
 				ProviderMembers: []GithubWorkItemDerivationMemberFact{{Provider: provider, TeamID: "ENG", TeamName: "Roster ENG", MemberID: "alice", IsPrimary: 1, Specificity: 60}},
 			})
 			_, _, _, rejections := derived.ResolveWithMembershipRejections(GithubWorkItemDerivationSubject{
-				WorkItemID: provider + ":item-1", Provider: provider, OrgID: "org", RepoID: &repo, Assignees: []string{"alice"},
+				WorkItemID: provider + ":item-1", Provider: provider, Type: pullRequestType(provider), OrgID: "org", RepoID: &repo, Assignees: []string{"alice"},
 			})
 			if len(rejections) != 1 {
 				t.Fatalf("rejections = %d, want 1", len(rejections))

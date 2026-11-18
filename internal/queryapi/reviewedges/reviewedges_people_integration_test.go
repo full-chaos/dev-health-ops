@@ -124,3 +124,112 @@ func TestPeople_NamesAndKeysOnARealStore(t *testing.T) {
 		t.Errorf("names = %s / %s, want the stored logins rev-2 / auth-2", name(other.ReviewerName), name(other.AuthorName))
 	}
 }
+
+// CHAOS-14032 on a real store: a stored login that is also another identity's display name resolves to the
+// identity that holds it as a provider login, not to nobody (both gitlab and github logins).
+func TestPeople_AStrongValueBeatsAnotherDisplayNameOnARealStore(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+	defer cancel()
+	f := newTeamScopeFixture(ctx, t)
+
+	updated := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	identityOf := func(canonicalID, displayName, providerIdentities string) {
+		t.Helper()
+		if err := f.admin.Exec(ctx, `INSERT INTO identities (org_id, canonical_id, identity_uuid, display_name, email, provider_identities, team_ids, is_active, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			teamScopeOrg, canonicalID, uuid.New(), displayName, nil, providerIdentities, []string{}, uint8(1), updated); err != nil {
+			t.Fatalf("seed identity %s: %v", canonicalID, err)
+		}
+	}
+	// A's display name equals the two stored logins; B and C hold them as a github and a gitlab login.
+	identityOf("a", "csam", `{"github": ["a-login"]}`)
+	identityOf("b", "Bea B", `{"github": ["csam"]}`)
+	identityOf("c", "Cy C", `{"gitlab": ["gl.csam"]}`)
+	identityOf("a2", "gl.csam", `{"github": ["a2-login"]}`)
+
+	// The github login is read on a github repository, the gitlab login on a gitlab one (CHAOS-14040).
+	gitlabRepo := uuid.New()
+	if err := f.admin.Exec(ctx, `INSERT INTO repos (id, repo, provider, org_id, created_at, last_synced) VALUES (?, ?, ?, ?, ?, ?)`,
+		gitlabRepo, "acme/gl", "gitlab", teamScopeOrg, updated, updated); err != nil {
+		t.Fatalf("seed gitlab repo: %v", err)
+	}
+	computed := time.Date(2026, 9, 1, 6, 0, 0, 0, time.UTC)
+	for day, edge := range map[int]struct {
+		reviewer string
+		repo     uuid.UUID
+	}{12: {"csam", f.repoA}, 13: {"gl.csam", gitlabRepo}} {
+		if err := f.admin.Exec(ctx, `INSERT INTO review_edges_daily (repo_id, day, reviewer, author, reviews_count, computed_at, org_id) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			edge.repo, time.Date(2026, 8, day, 0, 0, 0, 0, time.UTC), edge.reviewer, "auth-9", uint32(7), computed, teamScopeOrg); err != nil {
+			t.Fatalf("seed edge: %v", err)
+		}
+	}
+	got, err := ResolveScoped(ctx, f.client, teamScopeOrg, mustDate(t, "2026-08-01"), mustDate(t, "2026-08-31"), Scope{AsOf: teamScopeAsOf}, 100)
+	if err != nil {
+		t.Fatalf("ResolveScoped: %v", err)
+	}
+	want := map[string]string{"csam": "Bea B", "gl.csam": "Cy C"}
+	seen := 0
+	for _, row := range got.Edges {
+		expected, ok := want[row.Reviewer]
+		if !ok {
+			continue
+		}
+		seen++
+		if row.ReviewerName == nil || *row.ReviewerName != expected {
+			got := "<nil>"
+			if row.ReviewerName != nil {
+				got = *row.ReviewerName
+			}
+			t.Errorf("reviewer %s is named %s, want %s (the holder of the login)", row.Reviewer, got, expected)
+		}
+	}
+	if seen != 2 {
+		t.Fatalf("saw %d of the 2 seeded edges", seen)
+	}
+}
+
+// CHAOS-14040 on a real store: repos FINAL gives the provider of the repository of each row (all fixture
+// repositories are github), so a stored reviewer that equals another identity's display name is not matched
+// to it, while the identity's own github login still is.
+func TestPeople_AReviewerLoginIsMatchedByProviderOnARealStore(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+	defer cancel()
+	f := newTeamScopeFixture(ctx, t)
+
+	updated := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	if err := f.admin.Exec(ctx, `INSERT INTO identities (org_id, canonical_id, identity_uuid, display_name, email, provider_identities, team_ids, is_active, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		teamScopeOrg, "ann", uuid.New(), "Sam", nil, `{"GitHub": ["ann-a"]}`, []string{}, uint8(1), updated); err != nil {
+		t.Fatalf("seed identity: %v", err)
+	}
+	// Changed pin (CHAOS-14032 seeded this on a github repository and expected a match): a gitlab login on a
+	// github repository no longer matches, by design (CHAOS-14040); it fails closed to the stored login.
+	if err := f.admin.Exec(ctx, `INSERT INTO identities (org_id, canonical_id, identity_uuid, display_name, email, provider_identities, team_ids, is_active, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		teamScopeOrg, "cy", uuid.New(), "Cy C", nil, `{"gitlab": ["gl.csam"]}`, []string{}, uint8(1), updated); err != nil {
+		t.Fatalf("seed identity: %v", err)
+	}
+	computed := time.Date(2026, 9, 1, 6, 0, 0, 0, time.UTC)
+	for day, reviewer := range map[int]string{12: "sam", 13: "ann-a", 14: "gl.csam"} {
+		if err := f.admin.Exec(ctx, `INSERT INTO review_edges_daily (repo_id, day, reviewer, author, reviews_count, computed_at, org_id) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			f.repoA, time.Date(2026, 8, day, 0, 0, 0, 0, time.UTC), reviewer, "drive-by", uint32(900), computed, teamScopeOrg); err != nil {
+			t.Fatalf("seed edge: %v", err)
+		}
+	}
+	got, err := ResolveScoped(ctx, f.client, teamScopeOrg, mustDate(t, "2026-08-01"), mustDate(t, "2026-08-31"), Scope{AsOf: teamScopeAsOf}, 100)
+	if err != nil {
+		t.Fatalf("ResolveScoped: %v", err)
+	}
+	names := map[string]string{}
+	for _, row := range got.Edges {
+		if row.ReviewerName != nil {
+			names[row.Reviewer] = *row.ReviewerName
+		}
+	}
+	if names["sam"] != "sam" {
+		t.Errorf("reviewer sam on a github repo is named %q, want the stored login sam (not the display name of another identity)", names["sam"])
+	}
+	if names["gl.csam"] != "gl.csam" {
+		t.Errorf("a gitlab login on a github repo is named %q, want the stored login gl.csam (no match)", names["gl.csam"])
+	}
+	if names["ann-a"] != "Sam" {
+		t.Errorf("reviewer ann-a is named %q, want its identity's display name Sam", names["ann-a"])
+	}
+}

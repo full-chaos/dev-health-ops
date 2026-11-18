@@ -35,7 +35,7 @@ func TestSafeSurfaceRedactsDSN(t *testing.T) {
 	}
 }
 
-func TestOpenReturnsSanitizedUnavailableError(t *testing.T) {
+func TestClickHouseOpenReturnsSanitizedUnavailableError(t *testing.T) {
 	t.Parallel()
 
 	const secret = "never-log-this-password"

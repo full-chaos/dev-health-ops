@@ -148,6 +148,9 @@ func (conn *workItemSendFailingConn) Query(_ context.Context, query string, _ ..
 	switch {
 	case strings.Contains(query, "SELECT DISTINCT provider"):
 		return &oneWorkItemScopeRow{}, nil
+	case strings.Contains(query, "FROM work_item_cycle_times FINAL"):
+		// The retraction read: no reopened item.
+		return &emptyWorkItemRelatedRows{}, nil
 	case query == workItemOrgWinnerReadSQL:
 		// The org winner read: the one item has no row in another scope.
 		return &emptyWorkItemRelatedRows{}, nil

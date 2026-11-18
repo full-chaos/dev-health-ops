@@ -87,7 +87,8 @@ func TestGitHubTestsChunkCursorWorstCaseStaysWithinBudget(t *testing.T) {
 	}
 	for _, cause := range []string{
 		githubTestsArtifactOversizedCause, githubTestsArtifactUnavailableCause,
-		githubTestsUnreadableArchiveCause, githubTestsMalformedCause, githubTestsUnreadableCause,
+		githubTestsUnreadableArchiveCause, githubTestsMalformedCause, githubTestsUnreadableCause, githubTestsUnsafeDoctypeCause, githubTestsArtifactExpiredCause,
+		githubTestsCompressionRatioCause, githubTestsArchiveEntryCapCause,
 	} {
 		causeOverflow[cause] = true
 	}
@@ -96,7 +97,8 @@ func TestGitHubTestsChunkCursorWorstCaseStaysWithinBudget(t *testing.T) {
 	causeCount := map[string]int{}
 	for _, cause := range []string{
 		githubTestsArtifactOversizedCause, githubTestsArtifactUnavailableCause,
-		githubTestsUnreadableArchiveCause, githubTestsMalformedCause, githubTestsUnreadableCause,
+		githubTestsUnreadableArchiveCause, githubTestsMalformedCause, githubTestsUnreadableCause, githubTestsUnsafeDoctypeCause, githubTestsArtifactExpiredCause,
+		githubTestsCompressionRatioCause, githubTestsArchiveEntryCapCause,
 	} {
 		causeCount[cause] = 999999999
 	}
@@ -142,7 +144,17 @@ func TestGitHubTestsChunkCursorWorstCaseStaysWithinBudget(t *testing.T) {
 	// 300 -> 200 (CHAOS-13794): the worst case holds every (component, cause) pair of githubTestsIncompleteVocabulary at once, and
 	// run_reports gained aggregate_of_parts and aggregate_mismatch (about 75 bytes together). Headroom is now about 226 bytes
 	// (5.5%) under the hard 4 KiB bound; the next vocabulary entry must make room (a smaller sample) rather than lower this again.
-	const wantMargin = 200
+	//
+	// 200 -> 150 (CHAOS-13980, CHAOS-13985): report_member gained artifact_expired (CHAOS-13980, about 50 bytes with its
+	// observation entry) and unsafe_doctype (CHAOS-13985, its pair plus one entry in each of the two per-cause maps, about 119
+	// bytes). githubTestsMaxSkippedArtifactRecords went 8 -> 6 to pay for them, so the worst case keeps well over 150 bytes under the
+	// hard 4 KiB bound. Lead ruling: the canary is lowered once, for both causes; the next vocabulary entry must shrink a sample
+	// instead of lowering this again.
+	//
+	// CHAOS-14030: report_member gained compression_ratio and archive_entry_cap (two pairs plus two entries in each per-cause map).
+	// githubTestsMaxSkippedArtifactRecords went 6 -> 5 to pay for them: one fewer per-artifact skip record is kept, while the
+	// per-cause counts stay exact. The canary stays 150.
+	const wantMargin = 150
 	if remaining := maxChunkCursorBytes - len(encoded); remaining < wantMargin {
 		t.Fatalf(
 			"worst-case cursor leaves only %d bytes of headroom under maxChunkCursorBytes, want >= %d -- "+

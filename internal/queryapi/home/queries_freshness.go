@@ -97,6 +97,7 @@ func fetchCoverage(ctx context.Context, client QueryClient, startDay, endDay tim
             toFloat64(count(*)) AS total
         FROM work_item_cycle_times FINAL
         WHERE day >= {start_day:Date} AND day < {end_day:Date}
+          AND completed_at IS NOT NULL
           AND org_id = {org_id:String}
     `, windowBindings)
 	if err != nil {
@@ -110,6 +111,7 @@ func fetchCoverage(ctx context.Context, client QueryClient, startDay, endDay tim
             toFloat64(count(*)) AS total
         FROM work_item_cycle_times FINAL
         WHERE day >= {start_day:Date} AND day < {end_day:Date}
+          AND completed_at IS NOT NULL
           AND org_id = {org_id:String}
     `, windowBindings)
 	if err != nil {

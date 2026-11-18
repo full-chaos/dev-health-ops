@@ -241,6 +241,10 @@ func TestClickHouseQueryAdapterChartsEveryRegistryMetric(t *testing.T) {
 		"pr_rework_ratio": {10, 4, 1, 0},
 		// 3 succeeded and 1 failed pipeline runs.
 		"failure_rate": {3, 1},
+		"success_rate": {3, 1},
+		// 3 passed and 1 failed test cases (both counts are registry metrics of
+		// their own and keep their seeded values).
+		"pass_rate": {3, 1},
 	}
 	for _, name := range ruleMetrics {
 		rule, inputValues := chartRules[name], ruleInputValues[name]
@@ -308,10 +312,16 @@ func TestClickHouseQueryAdapterChartsEveryRegistryMetric(t *testing.T) {
 			computedAt string
 			rowValues  []string
 		}{{"2026-01-06 10:00:00", older}, {"2026-01-06 11:00:00", values[table]}} {
+			insertColumns, insertValues := strings.Join(columns[table], ", "), strings.Join(run.rowValues, ", ")
+			if table == "work_item_cycle_times" {
+				// The reader charts completed items only: a row without completed_at is a retraction.
+				insertColumns += ", completed_at"
+				insertValues += ", '2026-01-05 09:00:00'"
+			}
 			statement := fmt.Sprintf(
 				"INSERT INTO %s (org_id, %s, %s, %s) VALUES ('%s', '2026-01-05', %s, '%s')",
-				table, dayColumn, strings.Join(columns[table], ", "), version, org,
-				strings.Join(run.rowValues, ", "), run.computedAt)
+				table, dayColumn, insertColumns, version, org,
+				insertValues, run.computedAt)
 			if err := conn.Exec(ctx, statement); err != nil {
 				t.Fatalf("seed %s: %v", table, err)
 			}
@@ -369,7 +379,8 @@ func TestClickHouseQueryAdapterChartsEveryRegistryMetric(t *testing.T) {
 	}
 
 	// The pooled metrics chart the raw runs, not the stored daily value this test seeds: the cells of
-	// testops_pooled_registry_integration_test.go and cicd_pooled_registry_integration_test.go seed their raw rows.
+	// testops_pooled_registry_integration_test.go, cicd_pooled_registry_integration_test.go and
+	// delivery_pooled_registry_integration_test.go seed their raw rows.
 	pooledSkipped := 0
 	for _, shape := range []struct{ chartType, groupBy string }{{"scorecard", ""}, {"line", "day"}, {"line", "week"}, {"line", "month"}, {"line", ""}} {
 		for _, name := range names {

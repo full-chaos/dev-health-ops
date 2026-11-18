@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"log/slog"
 	"math"
 	"strings"
 	"testing"
@@ -34,9 +35,20 @@ type fakeRowScanner struct {
 	// original "fail before any row" behavior every other fake usage in
 	// this file relies on.
 	failAfterRows int
+	// endErr is a driver-shaped stream-end failure (CHAOS-13977): every row is
+	// served, then Next returns false and only from then on Err reports it (the
+	// native driver reports a packet lost after the data this way). closeErr is
+	// what Close returns.
+	endErr   error
+	closeErr error
+	ended    bool
 }
 
 func (f *fakeRowScanner) Next() bool {
+	if f.err == nil && f.endErr != nil && f.cursor >= len(f.rows) {
+		f.ended = true
+		return false
+	}
 	if f.err != nil {
 		limit := f.failAfterRows
 		if limit > len(f.rows) {
@@ -86,8 +98,19 @@ func (f *fakeRowScanner) Scan(dest ...any) error {
 	return nil
 }
 
-func (f *fakeRowScanner) Err() error   { return f.err }
-func (f *fakeRowScanner) Close() error { return nil }
+func (f *fakeRowScanner) Err() error {
+	if f.err == nil && f.ended {
+		return f.endErr
+	}
+	return f.err
+}
+
+func (f *fakeRowScanner) Close() error {
+	if f.closeErr != nil {
+		return f.closeErr
+	}
+	return f.endErr
+}
 
 // fakeClient answers each Query call in order from responses/errs -- call
 // index i uses errs[i] if set (non-nil), else responses[i]. This matches
@@ -100,9 +123,55 @@ type fakeClient struct {
 	errs       []error
 	calls      int
 	statements []string
+	// The pooled MTTR reads sit outside the positional schedule. pooledSet answers them with pooledP50 and pooledMean
+	// (nil = no sample); otherwise each stored daily value of the week's positional scanners is one sample, so the
+	// pooled value is the stored one. pooledErr fails them; pooled counts them.
+	pooledSet             bool
+	pooledP50, pooledMean any
+	pooledErr             error
+	pooled                int
+	pooledAsOf            []any
 }
 
-func (f *fakeClient) Query(_ context.Context, statement string, _ []clickhouse.Binding) (clickhouse.RowScanner, error) {
+// storedWeekValue is the stored MTTR of the week the pooled read follows: scanner is the position in its 11-read block
+// and column the field (the incident median, the repository mean).
+func (f *fakeClient) storedWeekValue(scanner, column int) any {
+	i := f.calls - 11 + scanner
+	if f.calls < 11 || i >= len(f.responses) || len(f.responses[i].rows) == 0 || len(f.responses[i].rows[0]) <= column {
+		return nil
+	}
+	return f.responses[i].rows[0][column]
+}
+
+func (f *fakeClient) Query(_ context.Context, statement string, bindings []clickhouse.Binding) (clickhouse.RowScanner, error) {
+	var value any
+	switch {
+	case strings.Contains(statement, "pooled_incident_repairs"):
+		value = f.pooledP50
+		if !f.pooledSet {
+			value = f.storedWeekValue(6, 1)
+		}
+	case strings.Contains(statement, "pooled_bug_repairs"):
+		value = f.pooledMean
+		if !f.pooledSet {
+			value = f.storedWeekValue(2, 6)
+		}
+	default:
+		return f.positional(statement)
+	}
+	f.pooled++
+	for _, b := range bindings {
+		if b.Name == "as_of" {
+			f.pooledAsOf = append(f.pooledAsOf, b.Value)
+		}
+	}
+	if f.pooledErr != nil {
+		return nil, f.pooledErr
+	}
+	return &fakeRowScanner{rows: [][]any{{"total", nil, value}}}, nil
+}
+
+func (f *fakeClient) positional(statement string) (clickhouse.RowScanner, error) {
 	i := f.calls
 	f.calls++
 	f.statements = append(f.statements, statement)
@@ -941,7 +1010,7 @@ func TestFetchPeriodRows_MidStreamFailureDiscardsPartialRows(t *testing.T) {
 
 	client := &fakeClient{responses: responses, errs: make([]error, 11)}
 
-	result := fetchPeriodRows(context.Background(), client, "org1", nil, day("2026-08-24"))
+	result := fetchPeriodRows(context.Background(), client, "org1", nil, day("2026-08-24"), time.Now().UTC())
 
 	if len(result.workItems) != 0 {
 		t.Fatalf("workItems = %d rows, want 0 -- the one successfully-scanned row before the mid-stream failure must be discarded, not kept", len(result.workItems))
@@ -1003,8 +1072,8 @@ func TestRootCause_NoWrapping_ReturnsErrorItself(t *testing.T) {
 
 func TestErrSwallow_LogsRootCauseNotJustFixedString(t *testing.T) {
 	// End-to-end proof at the level errSwallow ACTUALLY runs at (not just
-	// rootCause in isolation): capture errSwallow's real log.Printf
-	// output for the exact chain shape production code produces, and
+	// rootCause in isolation): capture errSwallow's real log
+	// output (slog's default handler writes through the log package) for the exact chain shape production code produces, and
 	// assert the captured text carries the real driver detail -- not
 	// just the fixed "ClickHouse query failed" string every table would
 	// otherwise share regardless of cause.
@@ -1027,6 +1096,51 @@ func TestErrSwallow_LogsRootCauseNotJustFixedString(t *testing.T) {
 	logged := buf.String()
 	if !strings.Contains(logged, driverErr.Error()) {
 		t.Fatalf("errSwallow's logged output = %q, want it to contain the real driver message %q -- every table's failure would otherwise log as indistinguishable fixed-string text", logged, driverErr.Error())
+	}
+}
+
+// slogCapture keeps every record the default slog logger receives.
+type slogCapture struct{ records *[]slog.Record }
+
+func (h slogCapture) Enabled(context.Context, slog.Level) bool { return true }
+func (h slogCapture) Handle(_ context.Context, r slog.Record) error {
+	*h.records = append(*h.records, r.Clone())
+	return nil
+}
+func (h slogCapture) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h slogCapture) WithGroup(string) slog.Handler      { return h }
+
+// CHAOS-13977: a swallowed read failure is logged at WARN or above with the
+// table key and the root cause, so a level filter at WARN keeps it. The query-api
+// process installs a slog default (logging.InstallDefault); a plain log.Printf
+// reaches that handler at INFO.
+func TestErrSwallow_LogsAtWarnWithTheTableKey(t *testing.T) {
+	var records []slog.Record
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slogCapture{records: &records}))
+	defer slog.SetDefault(previous)
+
+	driverErr := errors.New("Code: 60. DB::Exception: Table default.ai_impact_metrics_daily does not exist")
+	errSwallow(context.Background(), "ai_impact", fmt.Errorf("operatingreview: ai_impact query: %w", &fakeOperationError{operation: "query", cause: driverErr}))
+
+	if len(records) != 1 {
+		t.Fatalf("errSwallow logged %d records, want 1", len(records))
+	}
+	r := records[0]
+	if r.Level < slog.LevelWarn {
+		t.Errorf("errSwallow logged at %s, want WARN or above", r.Level)
+	}
+	attrs := map[string]string{}
+	r.Attrs(func(a slog.Attr) bool {
+		attrs[a.Key] = a.Value.String()
+		return true
+	})
+	text := r.Message + " " + fmt.Sprint(attrs)
+	if attrs["table"] != "ai_impact" {
+		t.Errorf("record %q carries table %q, want the attribute table=ai_impact", text, attrs["table"])
+	}
+	if !strings.Contains(text, driverErr.Error()) {
+		t.Errorf("record %q does not carry the root cause %q", text, driverErr.Error())
 	}
 }
 

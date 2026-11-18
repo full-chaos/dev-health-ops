@@ -150,7 +150,7 @@ func TestGitHubTestsAllArtifactsUnreadableLogsAStructuredLine(t *testing.T) {
 // never touched, silently hiding sample truncation from the ONE log line an
 // operator sees on a totality failure. Now both share
 // githubTestsSkippedArtifactMarkerAttrs, so this drives enough unreadable
-// artifacts (10, past githubTestsMaxSkippedArtifactRecords=8) through the
+// artifacts (10, past githubTestsMaxSkippedArtifactRecords=5) through the
 // real totality-gate path to trigger genuine overflow and asserts the ERROR
 // line carries it.
 func TestGitHubTestsAllArtifactsUnreadableLogsCauseOverflow(t *testing.T) {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -22,6 +23,8 @@ const (
 	GitHubTestsResultKeyOpenRunsReread     = "open_runs_reread"
 	GitHubTestsResultKeyOpenCapReached     = "open_runs_cap_reached"
 	GitHubTestsResultKeyOpenPhaseRateFloor = "open_phase_rate_floor"
+	GitHubTestsResultKeyOpenRunsSkipped    = "open_runs_skipped"
+	GitHubTestsResultKeyOpenSkipLimit      = "open_runs_skip_limit"
 	GitHubTestsRunInventorySaturated       = githubTestsRunInventorySaturatedComponent
 	GitHubTestsArtifactInventorySaturated  = githubTestsArtifactInventorySaturatedComponent
 	GitHubTestsListingSaturated            = githubTestsListingSaturatedCause
@@ -44,7 +47,81 @@ const (
 	githubTestsOpenRunCapBacklog       = 300
 	githubTestsOpenRunBacklogThreshold = 1000
 	githubTestsOpenPhase               = "open"
+	// githubTestsOpenTransientBreaker transient skips in a row, with no run
+	// re-read between them, mean the provider is failing, not one run: the
+	// last of them fails the unit.
+	githubTestsOpenTransientBreaker = 3
 )
+
+// githubTestsOpenRunSkip classifies a failed re-read of one open run (its by-id
+// read, or its jobs pages when jobs). skip is true only for an error of that run
+// alone; transient marks a skip that counts toward the breaker. Every other
+// error (a cancel, a rate limit, auth, egress, lease, gate or budget, or an
+// error joined with another) fails the unit.
+func githubTestsOpenRunSkip(ctx context.Context, err error, jobs bool) (reason string, status int, route string, transient, skip bool) {
+	if ctx.Err() != nil || gitLabErrorIsNil(err) {
+		return "", 0, "", false, false
+	}
+	if err == providerfoundation.ErrNormalizationInvalid {
+		return "invalid_payload", 0, "", false, true
+	}
+	providerErr, ok := githubTestsSingleProviderError(err)
+	if !ok {
+		return "", 0, "", false, false
+	}
+	status, route = providerErr.StatusCode, providerErr.Route
+	if providerErr.AfterResponse() {
+		switch providerErr.Reason {
+		case providerfoundation.ReasonBodyDecode, providerfoundation.ReasonBodyTooLarge, providerfoundation.ReasonBodyShape:
+			return "invalid_payload", status, route, false, true
+		case providerfoundation.ReasonBodyRead:
+			return "transient", status, route, true, true
+		}
+		return "", status, route, false, false
+	}
+	switch providerErr.Class {
+	case providerfoundation.ErrorPermanent:
+		switch {
+		case status == http.StatusGone:
+			return "gone", status, route, false, true
+		case status == http.StatusUnprocessableEntity:
+			return "unprocessable", status, route, false, true
+		case status >= 400 && status <= 499:
+			return "client_error", status, route, false, true
+		}
+	case providerfoundation.ErrorConflict:
+		return "conflict", status, route, false, true
+	case providerfoundation.ErrorNotFound:
+		if jobs {
+			return "jobs_not_found", status, route, false, true
+		}
+	case providerfoundation.ErrorTransient:
+		if providerErr.Reason != providerfoundation.TransportReasonCanceled {
+			return "transient", status, route, true, true
+		}
+	}
+	return "", status, route, false, false
+}
+
+// githubTestsSingleProviderError is the ProviderError err is or wraps through
+// single wrappers only: a join (a request failure beside a budget release or
+// lease error) is not one run's error.
+func githubTestsSingleProviderError(err error) (*providerfoundation.ProviderError, bool) {
+	for !gitLabErrorIsNil(err) {
+		if providerErr, ok := err.(*providerfoundation.ProviderError); ok {
+			return providerErr, true
+		}
+		if _, joined := err.(multiErrorUnwrapper); joined {
+			return nil, false
+		}
+		wrapped, ok := err.(singleErrorUnwrapper)
+		if !ok {
+			return nil, false
+		}
+		err = wrapped.Unwrap()
+	}
+	return nil, false
+}
 
 // githubTestsRunsRangeLo is the start of the runs phase listing: the window
 // start minus the refresh lookback, to the second ("*" for an open start).
@@ -332,6 +409,11 @@ func fetchGitHubTestsRun(
 	decoder.UseNumber()
 	if decoder.Decode(&run) != nil {
 		return run, false, providerfoundation.ErrNormalizationInvalid
+	}
+	// One run object and nothing after it but whitespace, as the jobs pages require.
+	var trailing json.RawMessage
+	if decoder.Decode(&trailing) != io.EOF {
+		return gitHubWorkflowRunPayload{}, false, providerfoundation.ErrNormalizationInvalid
 	}
 	return run, true, nil
 }

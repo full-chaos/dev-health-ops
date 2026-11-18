@@ -1,4 +1,4 @@
 # Every file under internal/queryapi/testopsrisk/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
-# python-recorded set: baba7cf76fda821fd6451acf84cb7a67a1de05385184ee8650c27564a5bc2d00 (1 files)
+# python-recorded set: f2aafbbe2d8501ca9f6d86ccb6a5342cc85d9654023dba29e0d44dfae0daa630 (1 files)
 # header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
-ce7198d46319cabd5e59438ac9b77038a07cc4f0da37dc97f5fc0ac64635e8ff	python-recorded	python_cells.json
+0f7d32327404d26a58570a1e9beef9cda5ef79e9d2350fd1dfa8386c6652a80e	python-recorded	python_cells.json

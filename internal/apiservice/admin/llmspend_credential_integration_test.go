@@ -10,6 +10,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/chmigrate"
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
@@ -44,9 +45,7 @@ func TestSpendServesOnlyOrganizationCredentialRows(t *testing.T) {
     org_id String, run_id String DEFAULT '', provider LowCardinality(String), model String, source LowCardinality(String),
     use_case LowCardinality(String) DEFAULT 'legacy', input_tokens UInt64, output_tokens UInt64, calls UInt64, computed_at DateTime
 ) ENGINE = MergeTree PARTITION BY toYYYYMM(computed_at) ORDER BY (org_id, provider, model, source, computed_at)`)
-	exec(`CREATE TABLE work_unit_investments (
-    org_id String, categorization_run_id String, categorization_status String, categorization_errors_json String, computed_at DateTime
-) ENGINE = MergeTree ORDER BY (org_id, computed_at)`)
+	chschema.CreateTables(ctx, t, conn, "work_unit_investments")
 	const legacyRow = `INSERT INTO llm_token_usage (org_id, run_id, provider, model, source, input_tokens, output_tokens, calls, computed_at)
 VALUES ('org-1', 'run-before-column', 'openai', 'jev-1.13.0', 'investment_materialize', 5, 5, 5, now())`
 	exec(legacyRow)
@@ -68,7 +67,8 @@ VALUES ('org-1', 'run-before-column', 'openai', 'jev-1.13.0', 'investment_materi
 		exec(`INSERT INTO llm_token_usage (org_id, run_id, provider, model, source, input_tokens, output_tokens, calls, computed_at, credential_source)
 VALUES ('` + row.org + `', '` + row.run + `', 'x', '` + row.model + `', '` + row.source + `', 1, 1, 1, now(), '` + row.credential + `')`)
 	}
-	exec(`INSERT INTO work_unit_investments VALUES ('org-1', 'run-platform', 'invalid_llm_output', '[]', now()), ('org-1', 'run-org', 'repaired', '[]', now())`)
+	exec(`INSERT INTO work_unit_investments (org_id, work_unit_id, categorization_run_id, categorization_status, categorization_errors_json, computed_at)
+VALUES ('org-1', 'wu-platform', 'run-platform', 'invalid_llm_output', '[]', now()), ('org-1', 'wu-org', 'run-org', 'repaired', '[]', now())`)
 
 	summary, err := clickhouseSpend{conn: conn}.readSpend(ctx, "org-1", 20, time.Now().Add(-24*time.Hour).UTC())
 	if err != nil {

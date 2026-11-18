@@ -347,7 +347,7 @@ type GitHubTestsSkippedArtifact struct {
 // so 20 records alone encoded to ~4.1KB, already exceeding the ENTIRE
 // cursor's 4KiB budget before Repo/NextURL/Incomplete/ExcludedArtifactSample/
 // everything else is added: a heavy-skip-volume unit's checkpoint write
-// could fail outright. 6 here (8 until CHAOS-13985 added the sixth report_member cause, unsafe_doctype, and needed its bytes back), alongside githubTestsMaxArtifactNameBytes's
+// could fail outright. 5 here (8 until CHAOS-13985 added unsafe_doctype, then 6 until CHAOS-14030 added compression_ratio and archive_entry_cap; each time one fewer per-artifact sample record is kept and the bytes go to the new cause, per-cause counts stay exact), alongside githubTestsMaxArtifactNameBytes's
 // 24, keeps a full worst-case cursor (every field at a realistic maximum) at
 // ~3.3KB -- verified, not assumed, by
 // TestGitHubTestsChunkCursorWorstCaseStaysWithinBudget, which encodes
@@ -357,7 +357,7 @@ type GitHubTestsSkippedArtifact struct {
 // Occurrences beyond this cap are still fully reflected in the closed
 // GitHubTestsIncomplete Count and the RecordArtifactSkipped metric; only the
 // per-artifact SAMPLE used to locate a specific artifact is bounded.
-const githubTestsMaxSkippedArtifactRecords = 6
+const githubTestsMaxSkippedArtifactRecords = 5
 
 // githubTestsMaxExcludedArtifactSampleRecords bounds
 // githubTestsChunkCursor.ExcludedArtifactSample, kept well under
@@ -473,6 +473,20 @@ const (
 	// entity declaration or a DOCTYPE internal subset (CHAOS-13985). Like
 	// malformed it is deterministic, so it ADVANCES the watermark.
 	githubTestsUnsafeDoctypeCause = "unsafe_doctype"
+	// githubTestsCompressionRatioCause records a report member the archive
+	// parse refused to inflate because its uncompressed size exceeds
+	// githubTestsMaxCompressionRatio times its compressed size (CHAOS-14030).
+	// The member was dropped with no marker, so the run read complete. Unlike
+	// archive_bounds it is non-blocking and carries a durable marker: the
+	// archive's bytes are the same on every walk, so it ADVANCES the watermark
+	// like malformed.
+	githubTestsCompressionRatioCause = "compression_ratio"
+	// githubTestsArchiveEntryCapCause records report-candidate members (.xml or
+	// .info) past githubTestsMaxArchiveEntries that the archive parse never
+	// looked at (CHAOS-14030). One marker and one count per cut report member;
+	// cut members that are not report candidates record nothing. Deterministic,
+	// so it ADVANCES the watermark.
+	githubTestsArchiveEntryCapCause = "archive_entry_cap"
 )
 
 // githubTestsParseRefusalCause names the report_member cause of a report parse
@@ -605,6 +619,8 @@ var githubTestsWatermarkAdvancingPairs = map[string]map[string]struct{}{
 		githubTestsMalformedCause:           {},
 		githubTestsUnreadableCause:          {},
 		githubTestsUnsafeDoctypeCause:       {},
+		githubTestsCompressionRatioCause:    {},
+		githubTestsArchiveEntryCapCause:     {},
 	},
 }
 
@@ -945,7 +961,7 @@ var githubTestsIncompleteVocabulary = map[string]map[string]struct{}{
 	githubTestsReportMemberComponent: {
 		"malformed": {}, "unreadable": {}, githubTestsUnsafeDoctypeCause: {}, githubTestsUnreadableArchiveCause: {},
 		githubTestsArtifactUnavailableCause: {}, githubTestsArtifactOversizedCause: {},
-		githubTestsArtifactExpiredCause: {},
+		githubTestsArtifactExpiredCause: {}, githubTestsCompressionRatioCause: {}, githubTestsArchiveEntryCapCause: {},
 	},
 	githubTestsRunInventoryComponent:      {githubTestsPageBudgetCause: {}},
 	githubTestsArtifactInventoryComponent: {githubTestsPageBudgetCause: {}},
@@ -1141,6 +1157,19 @@ func parseGitHubTestsArchive(
 	suiteOccurrence := map[string]int{}
 	members := reader.File
 	if len(members) > githubTestsMaxArchiveEntries {
+		for _, cut := range members[githubTestsMaxArchiveEntries:] {
+			if !isSafeGitHubTestsArchiveMemberName(cut.Name) || cut.FileInfo().IsDir() {
+				continue
+			}
+			lowerCut := strings.ToLower(cut.Name)
+			if !strings.HasSuffix(lowerCut, ".xml") && !strings.HasSuffix(lowerCut, ".info") {
+				continue
+			}
+			result.recordSkipped(githubTestsArchiveEntryCapCause, false)
+			result.SkippedArtifacts = append(result.SkippedArtifacts, GitHubTestsSkippedArtifact{
+				RunID: runID, ArtifactID: markerID, Cause: githubTestsArchiveEntryCapCause,
+			})
+		}
 		members = members[:githubTestsMaxArchiveEntries]
 	}
 	for _, member := range members {
@@ -1171,6 +1200,10 @@ func parseGitHubTestsArchive(
 			compressed = 1
 		}
 		if member.UncompressedSize64 > compressed*githubTestsMaxCompressionRatio {
+			result.recordSkipped(githubTestsCompressionRatioCause, false)
+			result.SkippedArtifacts = append(result.SkippedArtifacts, GitHubTestsSkippedArtifact{
+				RunID: runID, ArtifactID: markerID, Cause: githubTestsCompressionRatioCause,
+			})
 			continue
 		}
 		body, err := readZipReport(member)

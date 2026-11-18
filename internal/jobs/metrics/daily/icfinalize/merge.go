@@ -156,32 +156,42 @@ func maxFloat(a, b float64) float64 {
 	return b
 }
 
-// MergeICUserMetrics ports compute_ic_metrics_daily (compute_ic.py:74).
+// MergeICUserMetrics ports compute_ic_metrics_daily (compute_ic.py:74), with
+// one declared divergence (CHAOS-14105, acp form B').
+//
+// ONE ROW PER GIT ROW. user_metrics_daily is keyed by (org_id, repo_id,
+// author_email, day), and a person has one git row per repository of the day.
+// The reference kept one git row per person (a dict by identity), so the
+// person's other repository rows were never written again: they kept the
+// label and the IC columns of their last write. Here every git row of the
+// person is a row of the result, with its own git values and its own IC git
+// columns (loc_touched, prs_opened, delivery_units = its merged pull requests,
+// the cycle), and every row holds the person's team label.
+//
+// WORK ITEMS ON THE NO-REPOSITORY ROW. A person's work items belong to no
+// repository, so they are never put on a git row: a git row carries 0 work
+// items. They go on the person's synthesized row (SynthesizedRepoID), the
+// shape a person with work items and no git row already gets: a person with
+// no git row, or one whose work items completed or open are not zero, gets
+// it, with delivery_units = the completed items.
 //
 // ORDER. The reference iterates `set(git) | set(wi)`, so its output row order
-// is not stable across runs — Python set iteration depends on hash seed and
-// insertion history. A port cannot reproduce an order the reference does not
-// have, so this returns identities in SORTED order. That is a canonical choice
-// and the values are order-invariant; it is recorded because "the port sorts
-// and the reference does not" reads as a divergence until explained.
+// is not stable across runs. This returns identities in SORTED order, the
+// git rows of an identity by repository id, then its synthesized row. That is
+// a canonical choice and the values are order-invariant.
 //
-// SYNTHESIZED ROWS. An identity present only in work items has no git record,
-// and the reference builds a base row with `repo_id=uuid.uuid4()` — a fresh
-// random UUID on every run, written into a column that is part of
-// user_metrics_daily's dedup key (org_id, repo_id, author_email, day). Those
-// rows therefore never collapse across re-runs; each re-drive appends another.
-// This function does not mint the UUID: it FLAGS the row via SynthesizedRepoID
-// and leaves the decision to the caller, so the quirk is visible at the write
-// site rather than buried in a merge. Replicating it is team-lead's Q1 ruling;
-// the suspected accumulation defect is filed separately, Python untouched.
+// SYNTHESIZED ROWS. The reference builds the synthesized base row with
+// `repo_id=uuid.uuid4()`, a fresh random UUID on every run. This function
+// does not mint the UUID: it FLAGS the row via SynthesizedRepoID and leaves
+// the decision to the caller, so the quirk is visible at the write site.
 func MergeICUserMetrics(
 	gitMetrics []GitUserMetric,
 	workItems []WorkItemUserMetric,
 	resolveTeam TeamResolver,
 ) []ICUserMetric {
-	gitByIdentity := map[string]GitUserMetric{}
+	gitByIdentity := map[string][]GitUserMetric{}
 	for _, metric := range gitMetrics {
-		gitByIdentity[metric.AuthorEmail] = metric
+		gitByIdentity[metric.AuthorEmail] = append(gitByIdentity[metric.AuthorEmail], metric)
 	}
 	wiByIdentity := AggregateWorkItems(workItems)
 
@@ -196,43 +206,54 @@ func MergeICUserMetrics(
 	}
 	sort.Strings(identities)
 
-	results := make([]ICUserMetric, 0, len(identities))
+	results := make([]ICUserMetric, 0, len(gitMetrics)+len(wiByIdentity))
 	for _, identity := range identities {
-		git, hasGit := gitByIdentity[identity]
+		gitRows := gitByIdentity[identity]
+		sort.Slice(gitRows, func(a, b int) bool { return gitRows[a].RepoID.String() < gitRows[b].RepoID.String() })
 		wi, hasWI := wiByIdentity[identity]
 
 		// team_map wins over the base record's team_id, matching
 		// `team_id = team_map.get(identity) or base.team_id`. The column is a
 		// membership label, NOT team attribution (the base is always
 		// "unassigned"): ownership-based team answers must not read it.
-		teamID := git.TeamID
+		mapped, hasMapped := "", false
 		if resolveTeam != nil {
-			if mapped, ok := resolveTeam(identity); ok && mapped != "" {
-				teamID = mapped
+			if team, ok := resolveTeam(identity); ok && team != "" {
+				mapped, hasMapped = team, true
 			}
 		}
-
-		var completed, active int64
-		if hasWI {
-			completed, active = wi.ItemsCompleted, wi.WIPCountEndOfDay
+		teamOf := func(stored string) string {
+			if hasMapped {
+				return mapped
+			}
+			return stored
 		}
 
-		results = append(results, ICUserMetric{
-			IdentityID:        identity,
-			TeamID:            teamID,
-			LOCTouched:        git.LOCAdded + git.LOCDeleted,
-			PRsOpened:         git.PRsAuthored, // prs_authored maps to prs_opened
-			WorkItemsComplete: completed,
-			WorkItemsActive:   active,
-			DeliveryUnits:     git.PRsMerged + completed,
-			CycleP50Hours:     git.MedianPRCycleHours,
-			CycleP90Hours:     git.PRCycleP90Hours,
-			RepoID:            git.RepoID,
-			SynthesizedRepoID: !hasGit,
-			// Zero-valued when !hasGit, matching the reference's zero-filled
+		for _, git := range gitRows {
+			results = append(results, ICUserMetric{
+				IdentityID:    identity,
+				TeamID:        teamOf(git.TeamID),
+				LOCTouched:    git.LOCAdded + git.LOCDeleted,
+				PRsOpened:     git.PRsAuthored, // prs_authored maps to prs_opened
+				DeliveryUnits: git.PRsMerged,
+				CycleP50Hours: git.MedianPRCycleHours,
+				CycleP90Hours: git.PRCycleP90Hours,
+				RepoID:        git.RepoID,
+				PassThrough:   git,
+			})
+		}
+		if hasWI && (len(gitRows) == 0 || wi.ItemsCompleted != 0 || wi.WIPCountEndOfDay != 0) {
+			// Zero-valued git columns, matching the reference's zero-filled
 			// synthesized base -- see PassThrough's doc comment.
-			PassThrough: git,
-		})
+			results = append(results, ICUserMetric{
+				IdentityID:        identity,
+				TeamID:            teamOf(""),
+				WorkItemsComplete: wi.ItemsCompleted,
+				WorkItemsActive:   wi.WIPCountEndOfDay,
+				DeliveryUnits:     wi.ItemsCompleted,
+				SynthesizedRepoID: true,
+			})
+		}
 	}
 	return results
 }

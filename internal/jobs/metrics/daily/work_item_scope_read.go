@@ -108,6 +108,8 @@ type workItemScopeRead struct {
 	ScopeAttributions map[string]workItemPrimaryAttribution
 	Transitions       []workItemStateTransition
 	Stats             workItemScopeReadStats
+	// OrgWinnerRepos is the repository of the row each item of Items was read from.
+	OrgWinnerRepos map[workItemIdentity]uuid.UUID
 }
 
 // empty says that neither set has an item: the read computes nothing.
@@ -733,6 +735,7 @@ func loadWorkItemScopeRead(
 	}
 	read := workItemScopeRead{
 		Scopes: scopes, Attributions: map[string]workItemPrimaryAttribution{}, ScopeAttributions: map[string]workItemPrimaryAttribution{},
+		OrgWinnerRepos: map[workItemIdentity]uuid.UUID{},
 	}
 	read.Stats.Scopes = len(scopes)
 	if len(scopes) == 0 {
@@ -820,6 +823,7 @@ func loadWorkItemScopeRead(
 			read.Stats.ItemsOutsidePartition++
 		}
 		read.Items = append(read.Items, row.workItemMetricsRow)
+		read.OrgWinnerRepos[workItemIdentity{row.Provider, row.WorkItemID}] = row.RepoID
 		if attribution, found := attributionOf(row); found {
 			read.Attributions[row.WorkItemID] = attribution
 		}

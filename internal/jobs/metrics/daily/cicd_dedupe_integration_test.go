@@ -40,7 +40,7 @@ func TestCICDComputeFamilyDedupesUnmergedRunVersions(t *testing.T) {
     repo_id UUID, day Date, pipelines_count UInt32, success_rate Float64,
     avg_duration_minutes Nullable(Float64), p90_duration_minutes Nullable(Float64),
     avg_queue_minutes Nullable(Float64), computed_at DateTime, org_id String
-) ENGINE = MergeTree PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, day)`,
+) ENGINE = ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, day)`,
 		`SYSTEM STOP MERGES ci_pipeline_runs`,
 	} {
 		if err := conn.Exec(ctx, statement); err != nil {

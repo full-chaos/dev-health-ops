@@ -36,6 +36,7 @@ import (
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/analytics"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/investmentexplain"
@@ -392,7 +393,7 @@ func newWorkUnitsGetHandler(reader *investmentexplain.Reader) http.HandlerFunc {
 			return
 		}
 
-		query := r.URL.Query()
+		query := httpapi.Query(r)
 		// scope_type/scope_id: matching drilldown_prs_route.go's own GET
 		// handler convention, an explicit empty value collapses to "absent"
 		// for scope_type -- str fields have no FastAPI-side empty-string

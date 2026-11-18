@@ -211,6 +211,7 @@ internal/cigates/bigboyrender	values.go
 internal/cigates/cachepoison	cachepoison_test.go
 internal/cigates/chartgates	alerts_auth_slo_test.go
 internal/cigates/chartgates	dashboard_pooler_test.go
+internal/cigates/chartgates	dashboard_spangaps_test.go
 internal/cigates/chartgates	helpers_test.go
 internal/cigates/chartgates	jwt_secret_key_absent_test.go
 internal/cigates/chartgates	overlay_parallel_test.go

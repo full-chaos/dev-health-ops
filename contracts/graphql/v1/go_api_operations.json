@@ -452,11 +452,16 @@
   },
   {
     "operation": "testopsRisk",
-    "digest": "72c3e61ea17ba9550d5ab96ae298879f4559e08de8c0d6742c394b9a7b93d13e"
+    "digest": "a4821707fd5bb38f6a4250b093963768a1f72ec8b41983f1bfec66493415a1a9"
   },
   {
     "operation": "testopsRisk",
     "digest": "de0e6a96f2f917aa3a785993b5b35c4f003f974d638097f5702b3b8a56fa0bf7",
+    "legacy": true
+  },
+  {
+    "operation": "testopsRisk",
+    "digest": "72c3e61ea17ba9550d5ab96ae298879f4559e08de8c0d6742c394b9a7b93d13e",
     "legacy": true
   },
   {

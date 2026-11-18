@@ -170,11 +170,11 @@ func TestPostgresStoreScheduledFanoutMaterializesOnceAndRecordsNoRepositories(t 
 		"00000000-0000-4000-8000-000000000002",
 		"00000000-0000-4000-8000-000000000001",
 		"00000000-0000-4000-8000-000000000002",
-	})
+	}, publisher)
 	if err != nil || !created {
 		t.Fatalf("materialize=%t err=%v", created, err)
 	}
-	if duplicate, err := store.MaterializeScheduledFanout(ctx, *run, []RepositoryID{"00000000-0000-4000-8000-000000000003"}); err != nil || duplicate {
+	if duplicate, err := store.MaterializeScheduledFanout(ctx, *run, []RepositoryID{"00000000-0000-4000-8000-000000000003"}, publisher); err != nil || duplicate {
 		t.Fatalf("replay materialize=%t err=%v", duplicate, err)
 	}
 	var partitions, handoffs int
@@ -209,7 +209,7 @@ func TestPostgresStoreScheduledFanoutMaterializesOnceAndRecordsNoRepositories(t 
 	if err != nil || emptyRunClaim == nil || !emptyRunClaim.RepositoryDiscoveryRequired {
 		t.Fatalf("empty dispatch claim=%#v err=%v", emptyRunClaim, err)
 	}
-	if created, err := store.MaterializeScheduledFanout(ctx, *emptyRunClaim, nil); err != nil || !created {
+	if created, err := store.MaterializeScheduledFanout(ctx, *emptyRunClaim, nil, publisher); err != nil || !created {
 		t.Fatalf("empty materialize=%t err=%v", created, err)
 	}
 	var status, finalization string
@@ -223,8 +223,16 @@ func TestPostgresStoreScheduledFanoutMaterializesOnceAndRecordsNoRepositories(t 
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM worker_job_completion_fences WHERE completion_key=$1`, "daily_metrics_run:"+emptyRun.ID).Scan(&fences); err != nil {
 		t.Fatal(err)
 	}
-	if status != "no_repositories" || finalization != "succeeded" || emptyPartitions != 0 || fences != 1 {
-		t.Fatalf("empty status=%s finalization=%s partitions=%d fences=%d", status, finalization, emptyPartitions, fences)
+	var finalizeHandoffs int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM worker_job_outbox WHERE dedupe_key=$1`, FinalizeHandoffKey(emptyRun.ID)).Scan(&finalizeHandoffs); err != nil {
+		t.Fatal(err)
+	}
+	// The empty run waits for its finalize, which ends it as no_repositories
+	// with its fence (TestADispatchOfAWholeOrganizationRunWithNoRepositoryHandsTheRunToFinalize
+	// in internal/workerservice drives that end).
+	if status != "running" || finalization != "pending" || emptyPartitions != 0 || fences != 0 || finalizeHandoffs != 1 {
+		t.Fatalf("empty status=%s finalization=%s partitions=%d fences=%d finalize handoffs=%d, want running, pending, 0, 0, 1",
+			status, finalization, emptyPartitions, fences, finalizeHandoffs)
 	}
 }
 
@@ -288,7 +296,7 @@ func TestMaterializeScheduledFanoutFailsLoudlyWhenRepositoryCapIsExceeded(t *tes
 	for index := range tooMany {
 		tooMany[index] = RepositoryID(uuid.NewSHA1(uuid.NameSpaceOID, []byte(fmt.Sprintf("repository-cap-test-%d", index))).String())
 	}
-	created, err := store.MaterializeScheduledFanout(ctx, *claimed, tooMany)
+	created, err := store.MaterializeScheduledFanout(ctx, *claimed, tooMany, publisher)
 	if created || !errors.Is(err, ErrRepositoryCapExceeded) || !errors.Is(err, ErrInvalidState) {
 		t.Fatalf("materialize=%t err=%v, want created=false err=ErrRepositoryCapExceeded (wrapping ErrInvalidState)", created, err)
 	}
@@ -394,7 +402,7 @@ func TestPostgresStorePostSyncRunDefersToLiveDiscoveryAndSurvivesRetryAfterMater
 		"00000000-0000-4000-8000-000000000002",
 		"00000000-0000-4000-8000-000000000001",
 	}
-	created, err := store.MaterializeScheduledFanout(ctx, *claimed, discovered)
+	created, err := store.MaterializeScheduledFanout(ctx, *claimed, discovered, publisher)
 	if err != nil || !created {
 		t.Fatalf("post-sync materialize=%t err=%v", created, err)
 	}
@@ -445,10 +453,10 @@ func TestPostgresStorePostSyncRunDefersToLiveDiscoveryAndSurvivesRetryAfterMater
 
 // TestPostgresStorePostSyncRunWithZeroDiscoveredRepositoriesRecordsNoRepositories
 // pins the second CHAOS-4263 gap for the post-sync trigger specifically: a
-// post-sync run whose live discovery genuinely finds zero repositories must
-// terminalize as no_repositories with its completion fence, exactly like the
-// scheduled fan-out's existing empty-snapshot handling, never as a silent
-// zero-row "succeeded" partition.
+// post-sync run whose live discovery genuinely finds zero repositories gets no
+// partition (never a silent zero-row "succeeded" partition) and hands the run
+// to its finalize, exactly like the scheduled fan-out's empty snapshot; the
+// finalize ends it as no_repositories with its completion fence.
 func TestPostgresStorePostSyncRunWithZeroDiscoveredRepositoriesRecordsNoRepositories(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -497,7 +505,7 @@ func TestPostgresStorePostSyncRunWithZeroDiscoveredRepositoriesRecordsNoReposito
 	if err != nil || claimed == nil || !claimed.RepositoryDiscoveryRequired {
 		t.Fatalf("post-sync dispatch claim=%#v err=%v", claimed, err)
 	}
-	if created, err := store.MaterializeScheduledFanout(ctx, *claimed, nil); err != nil || !created {
+	if created, err := store.MaterializeScheduledFanout(ctx, *claimed, nil, publisher); err != nil || !created {
 		t.Fatalf("post-sync empty materialize=%t err=%v", created, err)
 	}
 
@@ -512,8 +520,15 @@ func TestPostgresStorePostSyncRunWithZeroDiscoveredRepositoriesRecordsNoReposito
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM worker_job_completion_fences WHERE completion_key=$1`, "daily_metrics_run:"+run.ID).Scan(&fences); err != nil {
 		t.Fatal(err)
 	}
-	if status != "no_repositories" || finalization != "succeeded" || partitionCount != 0 || fences != 1 {
-		t.Fatalf("post-sync empty status=%s finalization=%s partitions=%d fences=%d", status, finalization, partitionCount, fences)
+	var handoffs int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM worker_job_outbox WHERE dedupe_key=$1`, FinalizeHandoffKey(run.ID)).Scan(&handoffs); err != nil {
+		t.Fatal(err)
+	}
+	// The empty run waits for its finalize, which ends it as no_repositories
+	// with its fence.
+	if status != "running" || finalization != "pending" || partitionCount != 0 || fences != 0 || handoffs != 1 {
+		t.Fatalf("post-sync empty status=%s finalization=%s partitions=%d fences=%d finalize handoffs=%d, want running, pending, 0, 0, 1",
+			status, finalization, partitionCount, fences, handoffs)
 	}
 }
 

@@ -109,7 +109,7 @@ func nonEmpty(value *string) *string {
 
 // queryPlainInt is a bare `name: int = fallback` query parameter.
 func queryPlainInt(errs *pybody.Errors, r *http.Request, name string, fallback int64) *big.Int {
-	value, _ := errs.QueryInt(name, pybody.LastQueryValue(r.URL.Query(), name), fallback, nil, pybody.Int64Max())
+	value, _ := errs.QueryInt(name, pybody.LastQueryValue(pybody.Query(r), name), fallback, nil, pybody.Int64Max())
 	return value
 }
 
@@ -117,7 +117,7 @@ func queryPlainInt(errs *pybody.Errors, r *http.Request, name string, fallback i
 // the query uses max(1, limit) and max(0, offset), with no upper bound.
 func (h handlers) listAudit(w http.ResponseWriter, r *http.Request) {
 	var errs pybody.Errors
-	query := r.URL.Query()
+	query := pybody.Query(r)
 	var orgID uuid.UUID
 	if raw := pybody.LastQueryValue(query, "org_id"); raw == nil {
 		errs = append(errs, pybody.Error{Type: "missing", Loc: []pyjson.Value{"query", "org_id"}, Msg: "Field required"})

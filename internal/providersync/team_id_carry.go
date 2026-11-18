@@ -301,16 +301,24 @@ type teamIDCarryRun struct {
 	target  map[string]map[string]string
 	groups  map[string]map[string]bool
 	primary map[string]string
-	// moved: the new ids whose team row this run writes from a moved row; that
-	// row states the moved team's provider identity. Every other teams row the
-	// run writes keeps the stored identity.
-	moved map[string]bool
+	// moved: the new ids whose team row this run writes from a moved row, and
+	// the old id it moves from; that row states the moved team's provider
+	// identity. Every other teams row the run writes keeps the stored identity.
+	moved map[string]teamIDCarrySource
 
 	// writes run in this order; teams and observations are last.
 	writes []teamIDCarryWrite
 	// restate: the kept rows written again from their stored version, right
 	// after the teams write.
 	restate []teamprovider.Restatement
+}
+
+// teamIDCarrySource is the old id of a moved team and the newest version of
+// that id the carry read: the moved row's roster is the one it read unless a
+// newer version of the old id is stored when the row is inserted.
+type teamIDCarrySource struct {
+	id   string
+	read teamprovider.Version
 }
 
 func (run *teamIDCarryRun) plan() error {
@@ -400,6 +408,7 @@ func (run *teamIDCarryRun) planTeams(teams, observations []chRow, activeAdmins m
 	type newTeam struct {
 		content chRow
 		id      string
+		from    teamIDCarrySource
 	}
 	var created []newTeam
 	var retired []chRow
@@ -407,6 +416,12 @@ func (run *teamIDCarryRun) planTeams(teams, observations []chRow, activeAdmins m
 		var carried []chRow
 		var admin *chRow
 		blocked := false
+		from := teamIDCarrySource{id: id}
+		for _, row := range byID[id] {
+			if read := (teamprovider.Version{UpdatedAt: row.time("updated_at"), LastSynced: row.time("last_synced")}); teamIDCarryNewer(read, from.read) {
+				from.read = read
+			}
+		}
 		for _, row := range byID[id] {
 			if row.u8("is_active") != 1 {
 				continue
@@ -461,7 +476,7 @@ func (run *teamIDCarryRun) planTeams(teams, observations []chRow, activeAdmins m
 				return nil, err
 			}
 			targets[""] = newID
-			created = append(created, newTeam{content: *admin, id: newID})
+			created = append(created, newTeam{content: *admin, id: newID, from: from})
 			retired = append(retired, *admin)
 		default:
 			for _, row := range carried {
@@ -484,7 +499,7 @@ func (run *teamIDCarryRun) planTeams(teams, observations []chRow, activeAdmins m
 					}
 					retired = append(retired, *admin)
 				}
-				created = append(created, newTeam{content: content, id: newID})
+				created = append(created, newTeam{content: content, id: newID, from: from})
 				retired = append(retired, row)
 			}
 			if len(carried) > 1 && admin != nil {
@@ -495,7 +510,7 @@ func (run *teamIDCarryRun) planTeams(teams, observations []chRow, activeAdmins m
 					return nil, err
 				}
 				targets[""] = newID
-				created = append(created, newTeam{content: *admin, id: newID})
+				created = append(created, newTeam{content: *admin, id: newID, from: from})
 				retired = append(retired, *admin)
 			}
 		}
@@ -515,9 +530,9 @@ func (run *teamIDCarryRun) planTeams(teams, observations []chRow, activeAdmins m
 	}
 
 	rows := make([]chRow, 0, len(created)+len(retired))
-	run.moved = make(map[string]bool, len(created))
+	run.moved = make(map[string]teamIDCarrySource, len(created))
 	for _, team := range created {
-		run.moved[team.id] = true
+		run.moved[team.id] = team.from
 		// A custom team, pushed or the admin's, is stored with no provider
 		// (teamid.StoredProvider).
 		row := run.newTeamRow(team.content, team.content.str("id"), team.id)
@@ -1166,9 +1181,12 @@ func (run *teamIDCarryRun) writeRestatements(ctx context.Context) error {
 }
 
 // writeTeams writes the team rows through teamprovider.Insert: a moved team's
-// new row states the moved row's provider identity (gone_at included), and
-// every other row (an old row going inactive, a kept row taking members)
-// keeps the stored identity, read inside the same statement.
+// new row states the moved row's provider identity (gone_at included) and
+// the roster the carry read, or the old id's roster read inside the statement
+// when a version of the old id newer than that read is stored
+// (teamprovider.RosterSource: an edit of the old id after the read); every
+// other row (an old row going inactive) keeps the stored identity and roster,
+// read inside the same statement.
 func (run *teamIDCarryRun) writeTeams(ctx context.Context, write teamIDCarryWrite) error {
 	all := strings.Split(write.columns, ", ")
 	identity := map[string]bool{teamprovider.ColumnProviderTeamID: true, teamprovider.ColumnProviderName: true, teamprovider.ColumnGoneAt: true}
@@ -1184,16 +1202,26 @@ func (run *teamIDCarryRun) writeTeams(ctx context.Context, write teamIDCarryWrit
 		for _, column := range columns {
 			values = append(values, row.value(column))
 		}
-		version := teamprovider.Write{Values: values, Gone: teamprovider.GoneKept}
-		if run.moved[row.str("id")] {
+		version := teamprovider.Write{Values: values, Gone: teamprovider.GoneKept, Roster: teamprovider.RosterKept}
+		if from, moved := run.moved[row.str("id")]; moved {
 			version = teamprovider.Write{
 				Values: values, ProviderTeamID: row.str(teamprovider.ColumnProviderTeamID), ProviderName: row.str(teamprovider.ColumnProviderName),
 				Gone: teamprovider.GoneStated, GoneAt: row.timePtr(teamprovider.ColumnGoneAt),
+				Roster: teamprovider.RosterSource, RosterSource: from.id, RosterSourceRead: from.read,
 			}
 		}
 		writes = append(writes, version)
 	}
 	return teamprovider.Insert(ctx, run.conn, run.orgID, columns, writes)
+}
+
+// teamIDCarryNewer reports whether version a is newer than b by
+// (updated_at, last_synced).
+func teamIDCarryNewer(a, b teamprovider.Version) bool {
+	if !a.UpdatedAt.Equal(b.UpdatedAt) {
+		return a.UpdatedAt.After(b.UpdatedAt)
+	}
+	return a.LastSynced.After(b.LastSynced)
 }
 
 // teamIDCarryBump is a version stamp past the stored one: `at`, or the

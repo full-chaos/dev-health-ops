@@ -134,7 +134,7 @@ func (h *handlers) listRetentionResourceTypes(w http.ResponseWriter, r *http.Req
 // listRetentionPolicies is retention.py's list_retention_policies.
 func (h *handlers) listRetentionPolicies(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	values := r.URL.Query()
+	values := httpapi.Query(r)
 	var errs pybody.Errors
 	activeOnly := false
 	if value, failure := queryBool(values, "active_only", false); failure != nil {

@@ -1,6 +1,7 @@
 package pybody
 
 import (
+	"net/http"
 	"net/url"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
@@ -16,6 +17,11 @@ import (
 // exact logic existed before the consolidation).
 func LastQueryValue(values url.Values, name string) *string {
 	return httpapi.QueryLastPtr(values, name)
+}
+
+// Query is httpapi.Query (Starlette's query parse) for a route file that reads its params through pybody.
+func Query(r *http.Request) url.Values {
+	return httpapi.Query(r)
 }
 
 // RequiredQueryString validates one required `str` query parameter with

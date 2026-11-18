@@ -272,21 +272,23 @@ func fixedLogClock(groups []string, a slog.Attr) slog.Attr {
 	return a
 }
 
-// logLeaks returns the secrets one JSON log line carries outside its time field.
+// logLeaks returns the secrets one raw JSON log line carries once its builtin
+// leading time field is cut. The raw line is scanned, so duplicate keys and a
+// caller attribute named time are still read.
 func logLeaks(t *testing.T, line string) []string {
 	t.Helper()
-	var entry map[string]any
-	if err := json.Unmarshal([]byte(line), &entry); err != nil {
-		t.Fatal(err)
+	const prefix = `{"time":"`
+	if !strings.HasPrefix(line, prefix) {
+		t.Fatalf("the log line does not start with the builtin time field: %q", line)
 	}
-	delete(entry, slog.TimeKey)
-	text, err := json.Marshal(entry)
-	if err != nil {
-		t.Fatal(err)
+	end := strings.Index(line[len(prefix):], `",`)
+	if end < 0 {
+		t.Fatalf("the builtin time field is not closed: %q", line)
 	}
+	text := "{" + line[len(prefix)+end+2:]
 	var found []string
 	for _, leaked := range []string{"10.9.8.7", "10.9.8.7:6379", "hunter2", "11111111-2222", "connection refused", "dial tcp"} {
-		if strings.Contains(string(text), leaked) {
+		if strings.Contains(text, leaked) {
 			found = append(found, leaked)
 		}
 	}
@@ -310,6 +312,16 @@ func TestIntakeLogLeakCheckReadsNoTimeButCatchesALeak(t *testing.T) {
 	logger.Error("redis at 10.9.8.7:6379 refused")
 	if got := logLeaks(t, strings.TrimSpace(logs.String())); len(got) == 0 {
 		t.Fatal("the store address in host:port form must fail the check")
+	}
+	logs.Reset()
+	logger.Error("x", slog.Group("error", slog.String("class", "ok")), slog.Group("error", slog.String("message", "password=hunter2")))
+	if got := logLeaks(t, strings.TrimSpace(logs.String())); len(got) != 1 {
+		t.Fatalf("a leak in a duplicate error group must be found, got %v", got)
+	}
+	logs.Reset()
+	logger.Error("x", slog.String("time", "hunter2"))
+	if got := logLeaks(t, strings.TrimSpace(logs.String())); len(got) != 1 {
+		t.Fatalf("a leak in a caller attribute named time must be found, got %v", got)
 	}
 	logs.Reset()
 	logger.Error("delivery done", slog.String("id", "ev-6379"), slog.Duration("took", 6379*time.Millisecond))

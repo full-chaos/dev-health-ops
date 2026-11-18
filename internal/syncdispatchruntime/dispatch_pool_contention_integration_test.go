@@ -132,6 +132,7 @@ func passOutcome(lines []string, runID string) (string, []string) {
 		{"dispatch_sync_run.publish_hit_terminal_delivery", "terminal_delivery"},
 		{"dispatch_sync_run.unroutable_units_terminalized", "unroutable"},
 		{"dispatch_sync_run.invalid_claim_units_terminalized", "invalid_claim"},
+		{"dispatch_sync_run.delivery_not_current", "delivery_not_current"},
 	}
 	for _, reason := range reasons {
 		for _, line := range own {
@@ -168,6 +169,31 @@ func newLoggedContentionDispatchService(t *testing.T, pool *pgxpool.Pool) (*Nati
 	return service, logs
 }
 
+// dispatchOutboxStatus reads the status of the run's dispatch_sync_run outbox row.
+func dispatchOutboxStatus(t *testing.T, ctx context.Context, pool *pgxpool.Pool, outboxID string) string {
+	t.Helper()
+	var status string
+	if err := pool.QueryRow(ctx, `SELECT status FROM sync_dispatch_outbox WHERE id = $1::uuid`, outboxID).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	return status
+}
+
+// redeliver is the relay delivering a re-armed ('pending') dispatch_sync_run row again: the same row (one per run and
+// kind) takes its next attempt and goes back to 'dispatched' on the current route, and that delivery's pass runs.
+func redeliver(t *testing.T, ctx context.Context, pool *pgxpool.Pool, service *NativeDispatchSyncRunService, arg DispatchSyncRunArgs) error {
+	t.Helper()
+	if err := pool.QueryRow(ctx, `
+UPDATE sync_dispatch_outbox
+SET status = 'dispatched', dispatched_transport = 'river', dispatched_route_generation = $2, dispatched_at = now(),
+    attempts = attempts + 1
+WHERE id = $1::uuid AND status = 'pending'
+RETURNING attempts`, arg.OutboxID(), arg.RouteGeneration()).Scan(&arg.DeliveryAttempt); err != nil {
+		t.Fatal(err)
+	}
+	return service.Dispatch(ctx, arg)
+}
+
 // runConcurrentDispatches runs one Dispatch per args on its own goroutine, each
 // bounded by budget, and returns every error (nil for a successful pass).
 func runConcurrentDispatches(ctx context.Context, service *NativeDispatchSyncRunService, args []DispatchSyncRunArgs, budget time.Duration) []error {
@@ -198,6 +224,13 @@ func runConcurrentDispatches(ctx context.Context, service *NativeDispatchSyncRun
 //
 // RED CONTROL: on the code this replaces, at least one pass returns a deadline
 // error and the pool sits at 4/4 acquired for the whole budget.
+//
+// A pass may legitimately end without dispatching: a newer run's pass that holds
+// slots back for the oldest run wakes it (CHAOS-8880), which re-arms that run's
+// outbox row to 'pending' while its own delivery may not have read the row yet.
+// That delivery is then not the current one and its pass is a no-op that names
+// delivery_not_current; the relay's next delivery of the re-armed row dispatches
+// the run. Any other way of not dispatching fails the test.
 func TestConcurrentDispatchOnOneBucketDoesNotStarveASmallPool(t *testing.T) {
 	withSmallDispatchPool(t, 4, func(ctx context.Context, pool *pgxpool.Pool) {
 		args := seedContentionRuns(t, ctx, pool, 4)
@@ -212,34 +245,92 @@ func TestConcurrentDispatchOnOneBucketDoesNotStarveASmallPool(t *testing.T) {
 				}
 			}
 		}
+		lines := logs.lines()
+		for index, arg := range args {
+			runID := arg.RunID
+			var runStatus, unitStatus string
+			var availableAt *time.Time
+			if err := pool.QueryRow(ctx, `
+SELECT r.status, u.status, u.available_at
+FROM sync_runs r JOIN sync_run_units u ON u.sync_run_id = r.id
+WHERE r.id = $1::uuid`, runID).Scan(&runStatus, &unitStatus, &availableAt); err != nil {
+				t.Errorf("run %d (%s): read state: %v", index, runID, err)
+				continue
+			}
+			if runStatus == syncRunStatusDispatching {
+				continue
+			}
+			reason, own := passOutcome(lines, runID)
+			outboxStatus := dispatchOutboxStatus(t, ctx, pool, arg.DispatchOutbox)
+			if reason == "delivery_not_current" && outboxStatus == "pending" {
+				if err := redeliver(t, ctx, pool, service, arg); err != nil {
+					t.Errorf("run %d (%s): the pass of the re-armed delivery: %v", index, runID, err)
+				}
+				continue
+			}
+			t.Errorf("run %d (%s) did not reach dispatching: reason=%s pass error=%v run status=%s unit status=%s unit available_at=%v outbox status=%s pool acquired=%d\ncaptured lines of this run:\n%s",
+				index, runID, reason, errs[index], runStatus, unitStatus, availableAt, outboxStatus, pool.Stat().AcquiredConns(), strings.Join(own, "\n"))
+			if reason == "unknown" {
+				t.Errorf("run %d (%s): no named reason in its log lines; all captured lines:\n%s", index, runID, strings.Join(lines, "\n"))
+			}
+		}
 		var dispatching int
 		if err := pool.QueryRow(ctx, `SELECT count(*) FROM sync_runs WHERE status = $1`, syncRunStatusDispatching).Scan(&dispatching); err != nil {
 			t.Fatal(err)
 		}
 		if dispatching != len(args) {
 			t.Errorf("%d of %d runs reached dispatching", dispatching, len(args))
-			lines := logs.lines()
-			for index, arg := range args {
-				runID := arg.RunID
-				var runStatus, unitStatus string
-				var availableAt *time.Time
-				if err := pool.QueryRow(ctx, `
-SELECT r.status, u.status, u.available_at
-FROM sync_runs r JOIN sync_run_units u ON u.sync_run_id = r.id
-WHERE r.id = $1::uuid`, runID).Scan(&runStatus, &unitStatus, &availableAt); err != nil {
-					t.Errorf("run %d (%s): read state: %v", index, runID, err)
-					continue
-				}
-				if runStatus == syncRunStatusDispatching {
-					continue
-				}
-				reason, own := passOutcome(lines, runID)
-				t.Errorf("run %d (%s) did not reach dispatching: reason=%s pass error=%v run status=%s unit status=%s unit available_at=%v pool acquired=%d\ncaptured lines of this run:\n%s",
-					index, runID, reason, errs[index], runStatus, unitStatus, availableAt, pool.Stat().AcquiredConns(), strings.Join(own, "\n"))
-				if reason == "unknown" {
-					t.Errorf("run %d (%s): no named reason in its log lines; all captured lines:\n%s", index, runID, strings.Join(lines, "\n"))
-				}
-			}
+		}
+	})
+}
+
+// TestDispatchOfADeliveryAHoldBackWakeReArmedNamesDeliveryNotCurrent is the race
+// of CHAOS-14027 in a fixed order: the newer run's pass holds a slot back for the
+// older run and wakes it, re-arming the older run's outbox row to 'pending'
+// before the older run's own delivery reads it. That delivery's pass leaves the
+// run untouched; it must say why, and the re-armed delivery must dispatch the run.
+//
+// RED CONTROL: on the code this replaces the stale pass returns nil and logs
+// nothing for the run.
+func TestDispatchOfADeliveryAHoldBackWakeReArmedNamesDeliveryNotCurrent(t *testing.T) {
+	withSmallDispatchPool(t, 4, func(ctx context.Context, pool *pgxpool.Pool) {
+		args := seedContentionRuns(t, ctx, pool, 2)
+		older, newer := args[0], args[1]
+		service, logs := newLoggedContentionDispatchService(t, pool)
+
+		if err := service.Dispatch(ctx, newer); err != nil {
+			t.Fatalf("newer run's pass: %v", err)
+		}
+		if got := dispatchOutboxStatus(t, ctx, pool, older.DispatchOutbox); got != "pending" {
+			t.Fatalf("older run's outbox row = %s after the newer pass held back for it, want pending (re-armed by the wake)", got)
+		}
+
+		if err := service.Dispatch(ctx, older); err != nil {
+			t.Fatalf("older run's superseded delivery: %v, want nil", err)
+		}
+		reason, own := passOutcome(logs.lines(), older.RunID)
+		if reason != "delivery_not_current" {
+			t.Fatalf("older run's superseded pass: reason=%s, want delivery_not_current; its lines:\n%s", reason, strings.Join(own, "\n"))
+		}
+		if line := strings.Join(own, "\n"); !strings.Contains(line, "reason=outbox_not_dispatched") {
+			t.Errorf("delivery_not_current line does not name the failing clause outbox_not_dispatched:\n%s", line)
+		}
+		var runStatus string
+		if err := pool.QueryRow(ctx, `SELECT status FROM sync_runs WHERE id = $1::uuid`, older.RunID).Scan(&runStatus); err != nil {
+			t.Fatal(err)
+		}
+		if runStatus == syncRunStatusDispatching {
+			t.Fatalf("the superseded delivery dispatched the run")
+		}
+
+		if err := redeliver(t, ctx, pool, service, older); err != nil {
+			t.Fatalf("older run's re-armed delivery: %v", err)
+		}
+		if err := pool.QueryRow(ctx, `SELECT status FROM sync_runs WHERE id = $1::uuid`, older.RunID).Scan(&runStatus); err != nil {
+			t.Fatal(err)
+		}
+		if runStatus != syncRunStatusDispatching {
+			t.Errorf("older run status = %s after its re-armed delivery, want %s", runStatus, syncRunStatusDispatching)
 		}
 	})
 }

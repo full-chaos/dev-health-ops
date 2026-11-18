@@ -97,7 +97,7 @@ func TestBenchmarkingFinalizeProceedsOnceAllPartitionsSucceed(t *testing.T) {
 // is a caller bug (ClaimFinalize's own NOT EXISTS check is vacuously true
 // with no partition rows at all), and must not be read as "nothing to do."
 func TestBenchmarkingFinalizeRefusesOnZeroPartitions(t *testing.T) {
-	store := &fakeStore{partitionTotal: 0, partitionSucceeded: 0}
+	store := &fakeStore{noPartitions: true}
 	executor, err := NewBenchmarkingFinalizeExecutor(store, poisonedConn{}, nil)
 	if err != nil {
 		t.Fatal(err)

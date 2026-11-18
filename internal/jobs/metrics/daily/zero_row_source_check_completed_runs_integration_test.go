@@ -46,7 +46,7 @@ func TestSourceDataCheckerAsksPipelineStabilityOnlyForADayWithACompletedRun(t *t
 	}
 	defer conn.Close()
 
-	chschema.CreateTables(ctx, t, conn, "cicd_metrics_daily", "deploy_metrics_daily", "incident_metrics_daily")
+	chschema.CreateTables(ctx, t, conn, "deploy_metrics_daily", "incident_metrics_daily")
 	for _, statement := range []string{
 		`CREATE TABLE ci_pipeline_runs (
     org_id String, repo_id UUID, run_id String DEFAULT toString(generateUUIDv4()), status Nullable(String),
@@ -83,7 +83,7 @@ func TestSourceDataCheckerAsksPipelineStabilityOnlyForADayWithACompletedRun(t *t
 			t.Fatal(err)
 		}
 	}
-	chschema.CreateTables(ctx, t, conn, "test_suite_results")
+	chschema.CreateTables(ctx, t, conn, "test_suite_results", "cicd_metrics_daily")
 
 	const (
 		orgID         = "00000000-0000-4000-8000-000000000009"

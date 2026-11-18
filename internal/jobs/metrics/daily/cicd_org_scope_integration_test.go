@@ -44,7 +44,6 @@ func TestCICDComputeFamilyWritesRealOrgIDAndIsolatesTenants(t *testing.T) {
 	}
 	defer conn.Close()
 
-	chschema.CreateTables(ctx, t, conn, "cicd_metrics_daily")
 	for _, statement := range []string{
 		// Exact production shape: 000_raw_tables.sql + org_id added by
 		// migration 027 (027_add_org_id_to_sorting_keys.py's
@@ -64,6 +63,7 @@ func TestCICDComputeFamilyWritesRealOrgIDAndIsolatesTenants(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	chschema.CreateTables(ctx, t, conn, "cicd_metrics_daily")
 
 	const (
 		orgA = "00000000-0000-4000-8000-0000000000a0"
@@ -144,7 +144,6 @@ func TestCICDComputeFamilyCountsRunOnFinishDay(t *testing.T) {
 	}
 	defer conn.Close()
 
-	chschema.CreateTables(ctx, t, conn, "cicd_metrics_daily")
 	for _, statement := range []string{
 		`CREATE TABLE ci_pipeline_runs (
     repo_id UUID, run_id String, status Nullable(String),
@@ -157,6 +156,7 @@ func TestCICDComputeFamilyCountsRunOnFinishDay(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	chschema.CreateTables(ctx, t, conn, "cicd_metrics_daily")
 
 	const org = "00000000-0000-4000-8000-0000000000d0"
 	const repo = "00000000-0000-4000-8000-0000000000d1"
@@ -213,7 +213,6 @@ func startCICDDayDB(t *testing.T) (context.Context, driver.Conn) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { conn.Close() })
-	chschema.CreateTables(ctx, t, conn, "cicd_metrics_daily")
 	for _, statement := range []string{
 		`CREATE TABLE ci_pipeline_runs (
     repo_id UUID, run_id String, status Nullable(String),
@@ -226,6 +225,7 @@ func startCICDDayDB(t *testing.T) (context.Context, driver.Conn) {
 			t.Fatal(err)
 		}
 	}
+	chschema.CreateTables(ctx, t, conn, "cicd_metrics_daily")
 	return ctx, conn
 }
 

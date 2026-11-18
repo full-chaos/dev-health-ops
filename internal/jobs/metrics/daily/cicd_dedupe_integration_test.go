@@ -30,7 +30,6 @@ func TestCICDComputeFamilyDedupesUnmergedRunVersions(t *testing.T) {
 	}
 	defer conn.Close()
 
-	chschema.CreateTables(ctx, t, conn, "cicd_metrics_daily")
 	for _, statement := range []string{
 		`CREATE TABLE ci_pipeline_runs (
     repo_id UUID, run_id String, status Nullable(String),
@@ -44,6 +43,7 @@ func TestCICDComputeFamilyDedupesUnmergedRunVersions(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	chschema.CreateTables(ctx, t, conn, "cicd_metrics_daily")
 
 	const org = "00000000-0000-4000-8000-0000000000a0"
 	const repo = "00000000-0000-4000-8000-0000000000a1"

@@ -43,7 +43,7 @@ var pinnedTableFiles = map[string]censusPin{
 		"reader rule applied: TestPassRateWindowSQL, over passed_count and failed_count"},
 	"internal/jobs/report/dedup.go": {"f59e94dc609cf9b8f5ecce79e089c5939d173eb6b7a3c56be5d8341510c8bbf8",
 		"reader rule applied: the pass_rate chart rule reads the counts"},
-	"internal/jobs/report/pooled.go": {"0807d8e5dc935507d2af0d0de943b4a25e609272abf7a5be40b0ae08fbb371ca",
+	"internal/jobs/report/pooled.go": {"900025df9be766455ac0801944e01e8e3a36c4bf57b8814b8bf77802480296dd",
 		"not a reader of pass_rate: suite duration percentiles"},
 	"internal/jobs/report/tablereads.go": {"90914bad43fc7f67f51fe068101b4808e68a525bd171c42e2c3f11c3c8db128f",
 		"not a reader: the newest-row key of the table"},

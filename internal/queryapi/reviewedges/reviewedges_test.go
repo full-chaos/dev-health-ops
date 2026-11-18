@@ -81,6 +81,11 @@ type fakeClient struct {
 	authorNamesErr      error
 	authorNamesCalls    int
 	authorNamesBindings []clickhouse.Binding
+
+	// The repository providers read (CHAOS-14040): scripted rows of repo_id, provider.
+	repoProviders      [][]any
+	repoProvidersErr   error
+	repoProvidersCalls int
 }
 
 func (f *fakeClient) Query(_ context.Context, statement string, bindings []clickhouse.Binding) (clickhouse.RowScanner, error) {
@@ -96,6 +101,13 @@ func (f *fakeClient) Query(_ context.Context, statement string, bindings []click
 			total = *f.total
 		}
 		return &fakeRowScanner{rows: [][]any{{total}}}, nil
+	}
+	if strings.Contains(statement, "AS repo_id, provider") {
+		f.repoProvidersCalls++
+		if f.repoProvidersErr != nil {
+			return nil, f.repoProvidersErr
+		}
+		return &fakeRowScanner{rows: f.repoProviders}, nil
 	}
 	if strings.Contains(statement, "FROM identities FINAL") {
 		f.identitiesCalls++

@@ -99,13 +99,14 @@ func seedOpenPullRequest(t *testing.T, ctx context.Context, harness *pullRequest
 	}
 }
 
-// TestStoredVersionInterleaveLosesValue is the CHAOS-6014 red cell: two
+// TestStoredVersionInterleaveKeepsValue is the CHAOS-6014 cell: two
 // production writers of one git_pull_requests key, b (older version) inserting
 // inside a's read-then-insert window. The serial order is the control: the
-// same two writes, b first, keep b's value. The interleaved order loses it.
-// The after order (b lands after a's insert) shows the loss does not need the
-// window: b's version is older than a's.
-func TestStoredVersionInterleaveLosesValue(t *testing.T) {
+// same two writes, b first, keep b's value. Before the kept-group repair the
+// interleaved order lost it, and so did the after order (b lands after a's
+// insert): the loss does not need the window, only b's older version. The
+// repair of whichever write lands last keeps b's value in every order.
+func TestStoredVersionInterleaveKeepsValue(t *testing.T) {
 	for _, tc := range interleaveCases() {
 		for _, variant := range []struct {
 			order  string

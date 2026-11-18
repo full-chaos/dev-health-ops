@@ -210,4 +210,8 @@ var clickHouseOrgTablesAfterThePythonFreeze = map[string]string{
 	// The per-run report completeness of each run attempt (CHAOS-13826). Keyed by org_id and written by the tests sync, so an
 	// organization's rows must go when the organization is deleted.
 	"testops_run_report_completeness": "153_testops_run_report_completeness.sql",
+	// The kept groups of git_pull_requests and deployments (CHAOS-6014). Keyed by org_id and fed by a view from each base
+	// table, so an organization's rows must go when the organization is deleted.
+	"git_pull_request_kept": "160_stored_version_kept_groups.sql",
+	"deployment_kept":       "160_stored_version_kept_groups.sql",
 }

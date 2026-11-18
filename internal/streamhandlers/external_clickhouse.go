@@ -135,7 +135,12 @@ func (s *ClickHouseExternalBatchSink) Write(ctx context.Context, source external
 				return fmt.Errorf("carry external %s: %w", kind, err)
 			}
 		}
-		batch, err := s.conn.PrepareBatch(ctx, query)
+		kept, repairs := externalKept[kind]
+		insertCtx := ctx
+		if repairs {
+			insertCtx = storedversion.SyncContext(ctx)
+		}
+		batch, err := s.conn.PrepareBatch(insertCtx, query)
 		if err != nil {
 			return fmt.Errorf("prepare external %s sink: %w", kind, err)
 		}
@@ -148,6 +153,19 @@ func (s *ClickHouseExternalBatchSink) Write(ctx context.Context, source external
 		if err := batch.Send(); err != nil {
 			_ = batch.Abort()
 			return fmt.Errorf("persist external %s: %w", kind, err)
+		}
+		if repairs {
+			values := make([][]any, len(rows))
+			for i, row := range rows {
+				values[i] = row.Values
+			}
+			keys, err := kept.BatchKeys(query, values)
+			if err != nil {
+				return err
+			}
+			if err := kept.Repair(ctx, s.conn, externalPullRequestContract.Writer, source.Pointer.OrgID, keys, nil); err != nil {
+				return fmt.Errorf("persist external %s: %w", kind, err)
+			}
 		}
 		scope.RecordKinds = append(scope.RecordKinds, kind)
 		return nil
@@ -306,6 +324,9 @@ func mapKeys(set map[string]struct{}) []string {
 	}
 	return keys
 }
+
+// externalKept names the kinds whose table has kept groups: their write repairs its keys after the insert.
+var externalKept = map[string]storedversion.Kept{"pull_request.v1": storedversion.PullRequestKept}
 
 func externalInsertQuery(kind string) (string, error) {
 	queries := map[string]string{

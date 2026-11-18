@@ -29,6 +29,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/chmigrate"
@@ -109,5 +110,53 @@ func migrate(ctx context.Context, t *testing.T, instance *containers.Instance, b
 	}
 	if _, err := chmigrate.Upgrade(ctx, db, baseline, chain); err != nil {
 		t.Fatalf("chschema: migrate %s: %v", database, err)
+	}
+}
+
+// Execer is the one connection method CreateChainObjects needs.
+type Execer interface {
+	Exec(ctx context.Context, query string, args ...any) error
+}
+
+// CreateChainObjects runs, in file order, the CREATE statements of one chain file that create one of names, for a test
+// whose base tables are typed by hand: the objects come from the chain file's own text, never a second copy. A name the
+// file does not create fails the test.
+func CreateChainObjects(ctx context.Context, t *testing.T, conn Execer, version string, names ...string) {
+	t.Helper()
+	chain, err := chmigrate.LoadChain()
+	if err != nil {
+		t.Fatalf("chschema: %v", err)
+	}
+	wanted := make(map[string]bool, len(names))
+	for _, name := range names {
+		wanted[name] = true
+	}
+	for _, file := range chain {
+		if file.Version != version {
+			continue
+		}
+		for _, statement := range chmigrate.SplitStatements(file.SQL) {
+			fields := strings.Fields(statement)
+			if len(fields) < 6 || fields[0] != "CREATE" {
+				continue
+			}
+			name := ""
+			for i := 0; i+3 < len(fields); i++ {
+				if fields[i] == "IF" && fields[i+1] == "NOT" && fields[i+2] == "EXISTS" {
+					name = fields[i+3]
+					break
+				}
+			}
+			if !wanted[name] {
+				continue
+			}
+			if err := conn.Exec(ctx, statement); err != nil {
+				t.Fatalf("chschema: %s %s: %v", version, name, err)
+			}
+			delete(wanted, name)
+		}
+	}
+	if len(wanted) > 0 {
+		t.Fatalf("chschema: %s creates none of %v", version, wanted)
 	}
 }

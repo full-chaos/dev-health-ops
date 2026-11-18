@@ -555,6 +555,7 @@ internal/storage/postgres/aclguard	public_audit_grant_census_test.go	internal/st
 internal/storage/postgres/aclguard	sso_provider_write_grant_census_test.go	internal/storage/postgres/authschema	dir	*
 internal/storage/postgres/authschema	sprintf_sql_guard_test.go	internal/storage/postgres/authschema	dir	*
 internal/storedversion	writers_test.go	.	tree	*.go
+internal/storedversion	writers_test.go	internal/providersync	dir	*
 internal/streamhandlers	stored_version_invariant_test.go	internal/streamhandlers	dir	*
 internal/streamrunnerservice	readiness_timeout_test.go	internal/streamrunnerservice	dir	*
 internal/synccli	print_sites_test.go	internal/synccli	dir	*

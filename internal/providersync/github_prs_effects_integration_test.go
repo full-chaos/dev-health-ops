@@ -12,10 +12,14 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// keptGroupsMigration creates the kept groups of git_pull_requests and deployments (CHAOS-6014).
+const keptGroupsMigration = "160_stored_version_kept_groups.sql"
 
 // gitPullRequestsDDL mirrors the production table after migration 027
 // (org_id column + org_id-first sort key). The engine and version column are
@@ -116,6 +120,7 @@ WHERE id = $1`, firstUnitID); err != nil {
 	if err := conn.Exec(ctx, gitPullRequestsDDL); err != nil {
 		t.Fatal(err)
 	}
+	chschema.CreateChainObjects(ctx, t, conn, keptGroupsMigration, "git_pull_request_kept", "git_pull_request_kept_mv")
 	now := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
 	repository, err := NewPostgresRepository(pool)
 	if err != nil {

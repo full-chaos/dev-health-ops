@@ -42,6 +42,8 @@ var contractedWriters = map[string]string{
 	"internal/localgit/stored_version.go|repos":                                       "local sync repositories (dho sync git|prs|blame --provider local)",
 	"internal/localgit/stored_version.go|git_commits":                                 "local sync commits",
 	"internal/localgit/stored_version.go|git_pull_requests":                           "local sync pull requests (inferred from merge commits and refs)",
+	"internal/storedversion/repair.go|git_pull_requests":                              "kept-group repair (migration 160): one INSERT..SELECT of the FINAL row with a NULL lead filled from git_pull_request_kept, at the version + 1 ms; every other column is the FINAL row's (TestEveryKeptTableWriteRepairsItsKeys)",
+	"internal/storedversion/repair.go|deployments":                                    "kept-group repair (migration 160): one INSERT..SELECT of the FINAL row with a NULL merged_at filled, with its pull request pair, from deployment_kept, at the version + 1 ms; every other column is the FINAL row's",
 }
 
 // outOfScopeWriters write operational_* tables: revisioned snapshots under
@@ -272,4 +274,90 @@ func TestEveryWriterOfAnInScopeKeyIsContractedOrListed(t *testing.T) {
 	}
 	t.Logf("module scan: %d INSERT sites; contracted %d, out of scope %d, unresolved %d",
 		len(found), len(contractedWriters), len(outOfScopeWriters), len(unresolvedWriters))
+}
+
+// keptRepairSites are the writes of a table with kept groups (migration 160). Each inserts under SyncContext, so its
+// repair read sees the insert, and repairs its keys after the insert.
+var keptRepairSites = map[string][]string{
+	"internal/providersync/github_prs_effects_clickhouse.go": {
+		"sink.Conn.PrepareBatch(storedversion.SyncContext(ctx), pullRequestInsert)", "storedversion.PullRequestKept.Repair(",
+	},
+	"internal/providersync/github_deployments_effects_clickhouse.go": {
+		"sink.Conn.PrepareBatch(storedversion.SyncContext(ctx), deploymentsInsert)", "storedversion.DeploymentKept.Repair(",
+	},
+	"internal/streamhandlers/external_clickhouse.go": {
+		`"pull_request.v1": storedversion.PullRequestKept`, "insertCtx = storedversion.SyncContext(ctx)",
+		"s.conn.PrepareBatch(insertCtx, query)", "kept.Repair(",
+	},
+	"internal/localgit/stored_version.go": {
+		`"git_pull_requests": storedversion.PullRequestKept`, "insertCtx = storedversion.SyncContext(ctx)",
+		"w.Conn.PrepareBatch(insertCtx, insert)", "kept.Repair(",
+	},
+}
+
+// CHAOS-6014 C4: every writer of git_pull_requests or deployments is one of the kept-repair sites, and each site inserts
+// under SyncContext and repairs after the insert. The contracted writers of the two tables are the module scan's.
+func TestEveryKeptTableWriteRepairsItsKeys(t *testing.T) {
+	found := scanInserts(t)
+	writers := map[string]bool{}
+	for key := range found {
+		if table := key[strings.IndexByte(key, '|')+1:]; strings.Contains(key, "|") && (table == PullRequestKept.Base || table == DeploymentKept.Base) {
+			writers[key] = true
+		}
+	}
+	want := map[string]bool{
+		"internal/providersync/stored_version.go|git_pull_requests":        true,
+		"internal/providersync/stored_version.go|deployments":              true,
+		"internal/streamhandlers/external_clickhouse.go|git_pull_requests": true,
+		"internal/localgit/stored_version.go|git_pull_requests":            true,
+		"internal/storedversion/repair.go|git_pull_requests":               true,
+		"internal/storedversion/repair.go|deployments":                     true,
+	}
+	for key := range writers {
+		if !want[key] {
+			t.Errorf("%s writes a table with kept groups and is no kept-repair site", key)
+		}
+	}
+	for key := range want {
+		if !writers[key] {
+			t.Errorf("%s is a kept-repair writer the module scan does not find", key)
+		}
+	}
+	_, filename, _, ok := moduleroot.Caller(0)
+	if !ok {
+		t.Fatal("locate test")
+	}
+	root := filepath.Join(filepath.Dir(filename), "..", "..")
+	for file, needles := range keptRepairSites {
+		source, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(file)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, needle := range needles {
+			if !strings.Contains(string(source), needle) {
+				t.Errorf("%s lacks %q", file, needle)
+			}
+		}
+	}
+	// The two provider-sync statements are prepared only at their kept-repair site.
+	for _, name := range []string{"pullRequestInsert", "deploymentsInsert"} {
+		matches, err := filepath.Glob(filepath.Join(root, "internal", "providersync", "*.go"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		sites := 0
+		for _, path := range matches {
+			if strings.HasSuffix(path, "_test.go") {
+				continue
+			}
+			source, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			sites += strings.Count(string(source), ", "+name+")")
+		}
+		if sites != 1 {
+			t.Errorf("%s is prepared at %d sites, want 1 (its kept-repair site)", name, sites)
+		}
+	}
 }

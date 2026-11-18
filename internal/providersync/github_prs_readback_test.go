@@ -3,6 +3,8 @@ package providersync
 import (
 	"testing"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/storedversion"
 )
 
 func pullRequestReadbackFixture(now time.Time) pullRequestRow {
@@ -198,5 +200,43 @@ func TestPullRequestReadbackClassifiesEveryVersionRelationship(t *testing.T) {
 				t.Fatalf("%s = %s want %s", name, got, test.want)
 			}
 		})
+	}
+}
+
+// CHAOS-6014 C8: a winner up to storedversion.RepairVersionWindow newer than the effect is the effect's own kept-group
+// repair when it differs only by a NULL lead it filled (with the lead's group); anything else stays a conflict.
+func TestPullRequestReadbackReadsItsOwnKeptGroupRepair(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
+	stated := pullRequestReadbackFixture(now)
+	unmerged := stated
+	unmerged.MergedAt, unmerged.FirstReviewAt, unmerged.ReviewsCount, unmerged.ChangesRequestedCount = nil, nil, 0, 0
+	at := func(row pullRequestRow, offset time.Duration) pullRequestVersion {
+		version := pullRequestReadbackVersion(row)
+		version.LastSynced = now.Add(offset)
+		return version
+	}
+	otherTitle := at(stated, time.Millisecond)
+	title := "Renamed"
+	otherTitle.Row.Title = &title
+	otherMerge := at(stated, time.Millisecond)
+	merged := now.Add(time.Hour)
+	otherMerge.Row.MergedAt = &merged
+	for name, test := range map[string]struct {
+		expected pullRequestRow
+		actual   pullRequestVersion
+		want     EffectInspection
+	}{
+		"the same row 1 ms newer":                           {stated, at(stated, time.Millisecond), EffectExact},
+		"the same row at the window edge":                   {stated, at(stated, storedversion.RepairVersionWindow), EffectExact},
+		"the same row past the window":                      {stated, at(stated, storedversion.RepairVersionWindow+time.Millisecond), EffectConflict},
+		"a null merge and review group filled":              {unmerged, at(stated, time.Millisecond), EffectExact},
+		"a filled group at the same version is no repair":   {unmerged, at(stated, 0), EffectConflict},
+		"another title inside the window":                   {stated, otherTitle, EffectConflict},
+		"another merged_at over a stated one in the window": {stated, otherMerge, EffectConflict},
+	} {
+		if got := comparePullRequestVersion(test.expected, test.actual); got != test.want {
+			t.Errorf("%s: inspection=%s want=%s", name, got, test.want)
+		}
 	}
 }

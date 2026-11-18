@@ -136,8 +136,7 @@ func treePath(scanned string) string {
 // dispatcher that applies the guard level itself, so the registration names no
 // policy level; each is pinned here with the level its dispatch applies.
 var dispatchedLevels = map[string]string{
-	"PATCH /api/v1/auth/oauth/{first}/{second}@api": "Authenticated",
-	"POST /api/v1/admin/teams/{team_id}@api":        "AdminOrg",
+	"POST /api/v1/admin/teams/{team_id}@api": "AdminOrg",
 }
 
 // TestEndpointProfileRowsSitAtTheirRegistrationAndNameTheirGuard: each row's
@@ -312,7 +311,6 @@ func anchorNoteProblems(t *testing.T, root string, rows []map[string]any) (probl
 var dispatchProbeValues = map[string]map[string]string{
 	"POST /api/v1/admin/ip-allowlist/{entry_id}": {"entry_id": "check"},
 	"POST /api/v1/admin/teams/{team_id}":         {"team_id": "import"},
-	"PATCH /api/v1/auth/oauth/{first}/{second}":  {"first": "providers", "second": "x"},
 }
 
 // TestEveryGuardedRowRefusesAnAnonymousCaller is the behavioural half of the

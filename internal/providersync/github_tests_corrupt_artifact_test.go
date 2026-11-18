@@ -32,7 +32,11 @@ type githubTestsCorruptArtifactDoer struct {
 	// recordSkipped, a different disposition from an unreadable container, and
 	// it must still fail the batch closed.
 	oversizedReports bool
-	archiveRequests  int
+	// extraMembers are added to every healthy archive (CHAOS-14030).
+	extraMembers map[string]string
+	// archive, when set, is served for every healthy artifact instead of the generated one.
+	archive         []byte
+	archiveRequests int
 }
 
 const githubTestsBlobErrorDocument = `{"message":"Not Found","documentation_url":"https://docs.github.com/rest"}`
@@ -70,7 +74,13 @@ func (doer *githubTestsCorruptArtifactDoer) Do(request *http.Request) (*http.Res
 				members["report-"+strconv.Itoa(i)+".xml"] = githubTestsMultiSuiteJUnit(1)
 			}
 		}
+		for name, body := range doer.extraMembers {
+			members[name] = body
+		}
 		archive := githubTestsZip(doer.t, members)
+		if doer.archive != nil {
+			archive = doer.archive
+		}
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Header:     http.Header{"Content-Type": {"application/zip"}},

@@ -287,9 +287,9 @@ func TestChunkedExecutorReportsCumulativeRecordCount(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Six destinations x three rows, emitted once.
-	if result.Comparison.NativeRecords != 18 || result.Comparison.PythonRecords != 18 {
-		t.Fatalf("records native=%d python=%d, want 18 — a zero here means the comparison "+
+	// Seven destinations x three rows, emitted once.
+	if result.Comparison.NativeRecords != 21 || result.Comparison.PythonRecords != 21 {
+		t.Fatalf("records native=%d python=%d, want 21 — a zero here means the comparison "+
 			"is reading the empty final chunk", result.Comparison.NativeRecords, result.Comparison.PythonRecords)
 	}
 }
@@ -338,7 +338,7 @@ func (handler *singleItemChunkHandler) CollectChunks(
 func threeRowChunkBatch(t *testing.T, claim Claim) CompleteRouteBatch {
 	t.Helper()
 	destinations := []string{"ci_pipeline_runs", "ci_job_runs", "ci_acceptance_checks",
-		"test_suite_results", "test_case_results", "coverage_snapshots"}
+		"test_suite_results", "test_case_results", "coverage_snapshots", "testops_run_report_completeness"}
 	effects := make([]EffectBatch, 0, len(destinations))
 	for _, destination := range destinations {
 		rows := make([]json.RawMessage, 0, 3)
@@ -355,6 +355,6 @@ func threeRowChunkBatch(t *testing.T, claim Claim) CompleteRouteBatch {
 	watermark := time.Date(2026, 8, 14, 11, 59, 59, 0, time.UTC)
 	return CompleteRouteBatch{
 		Effects: effects, Result: map[string]any{"complete": true}, Watermark: &watermark,
-		Evidence: FetchEvidence{Provider: claim.Provider, Dataset: claim.Dataset, Records: 18},
+		Evidence: FetchEvidence{Provider: claim.Provider, Dataset: claim.Dataset, Records: 21},
 	}
 }

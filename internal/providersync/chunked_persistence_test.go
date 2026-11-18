@@ -226,8 +226,8 @@ func TestChunkedExecutorResumesPreparedChunksWithoutRecollection(t *testing.T) {
 	if !checkpoint.InventoryComplete || checkpoint.NextOrdinal != checkpoint.TotalChunks {
 		t.Fatalf("checkpoint after resume=%+v", checkpoint)
 	}
-	if len(sink.destinations) != 12 {
-		t.Fatalf("sink writes=%d want 12", len(sink.destinations))
+	if len(sink.destinations) != 14 {
+		t.Fatalf("sink writes=%d want 14", len(sink.destinations))
 	}
 }
 
@@ -353,7 +353,7 @@ func chunkedTestBatch(t *testing.T, claim Claim) CompleteRouteBatch {
 	t.Helper()
 	destinations := []string{
 		"ci_pipeline_runs", "ci_job_runs", "ci_acceptance_checks",
-		"test_suite_results", "test_case_results", "coverage_snapshots",
+		"test_suite_results", "test_case_results", "coverage_snapshots", "testops_run_report_completeness",
 	}
 	effects := make([]EffectBatch, 0, len(destinations))
 	for _, destination := range destinations {

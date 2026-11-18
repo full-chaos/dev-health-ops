@@ -59,6 +59,13 @@ func NewestValue(column, prefix string) string {
 	return "argMax(" + prefix + column + ", " + prefix + "computed_at)"
 }
 
+// ownWriterRetracted are the tables that hold the rule in their own writers through a Retracted column (DEFAULT 0, 1 on
+// the row that retires a key) and are not in the registry: cicd_metrics_daily (migration 159), whose (repository, day) the
+// cicd family retires when a recompute counts no run on it any more. A computed row stores 0.
+var ownWriterRetracted = map[string]string{
+	"cicd_metrics_daily": "retracted",
+}
+
 // noRuleForReaders are the registry tables in which a MEASURED row can hold 0
 // or NULL in every measure, so a measured row and a retraction row are equal
 // and no reader can drop one and keep the other. A reader of such a table
@@ -79,6 +86,9 @@ func Tables() []string {
 	for table := range ownWriterMarkers {
 		tables = append(tables, table)
 	}
+	for table := range ownWriterRetracted {
+		tables = append(tables, table)
+	}
 	sort.Strings(tables)
 	return tables
 }
@@ -89,6 +99,9 @@ func Registered(table string) bool {
 		return false
 	}
 	if _, own := ownWriterMarkers[table]; own {
+		return true
+	}
+	if _, own := ownWriterRetracted[table]; own {
 		return true
 	}
 	_, ok := teamkeytables.ByTable(table)
@@ -116,6 +129,9 @@ func Predicate(table, qualifier string) string {
 		}
 		return "(" + strings.Join(parts, " OR ") + ")"
 	}
+	if column, own := ownWriterRetracted[table]; own {
+		return "(" + prefix + column + " = 0)"
+	}
 	return mustTable(table).LiveRow(prefix)
 }
 
@@ -133,6 +149,9 @@ func NewestPredicate(table, qualifier string) string {
 		}
 		return "(" + strings.Join(parts, " OR ") + ")"
 	}
+	if column, own := ownWriterRetracted[table]; own {
+		return "(argMax(" + prefix + column + ", " + prefix + "computed_at) = 0)"
+	}
 	return "(" + mustTable(table).LiveHaving(prefix) + ")"
 }
 
@@ -146,6 +165,9 @@ func NewestPredicate(table, qualifier string) string {
 func Columns(table string) []string {
 	if columns, own := ownWriterMarkers[table]; own {
 		return append([]string(nil), columns...)
+	}
+	if column, own := ownWriterRetracted[table]; own {
+		return []string{column}
 	}
 	declared := mustTable(table)
 	if declared.Retracted != "" {

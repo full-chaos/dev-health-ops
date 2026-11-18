@@ -628,7 +628,7 @@ One work item (provider and id) can be stored under two repository ids. Example:
 
 The scope view (`row_view = 'scope'`) applies the same rule inside each work scope: the current copy of the item in that scope. An item with copies in two scopes still counts in each scope (the sum over scopes can be more than the organization total). So the older copy's scope can count a completion that the organization view and `work_item_cycle_times` do not count.
 
-Not yet on this rule: `work_item_state_durations_daily` and `estimate_coverage_metrics_daily` (ticket 14137), and the request-time read of a repository's linked work items (ticket 14139). For an item with two copies, these can differ from the tables above.
+Not yet on this rule: `work_item_state_durations_daily`, `estimate_coverage_metrics_daily`, and the request-time read of the work items linked to a repository. These still choose, for each day, the newest copy among the copies that belong to that day. For an item with two copies, they can differ from the tables above.
 
 ## Work-item person rows: persons in more than one team
 

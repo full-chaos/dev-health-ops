@@ -24,6 +24,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/querybound"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/linktier"
 	"github.com/full-chaos/dev-health-ops/internal/ownershipwindow"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/teamactive"
@@ -1648,13 +1649,7 @@ func (derived GithubWorkItemDerivationContext) BuildLinkedIssueIndexFromRows(
 			}
 		}
 	}
-	type linkedDonor struct {
-		target       string
-		relationship string
-		team         [3]string
-		storedOnly   bool
-	}
-	candidates := map[string][]linkedDonor{}
+	edgesBySource := map[string][]LinkedIssueEdge{}
 	for _, dependency := range LatestGitHubWorkItemDerivationDependencies(dependencies) {
 		if !GithubWorkItemDerivationInheritableRelationships[dependency.RelationshipType] || baseNative[dependency.SourceWorkItemID] {
 			continue
@@ -1666,33 +1661,41 @@ func (derived GithubWorkItemDerivationContext) BuildLinkedIssueIndexFromRows(
 		if target == "" {
 			continue
 		}
-		if donor, exists := donors[target]; exists {
-			candidates[dependency.SourceWorkItemID] = append(candidates[dependency.SourceWorkItemID], linkedDonor{
-				target: target, relationship: dependency.RelationshipType, team: donor,
-				storedOnly: storedOnly[GithubWorkItemDerivationEdgeKey{
-					Source:           dependency.SourceWorkItemID,
-					Target:           dependency.TargetWorkItemID,
-					RelationshipType: dependency.RelationshipType,
-				}],
-			})
-		}
+		edgesBySource[dependency.SourceWorkItemID] = append(edgesBySource[dependency.SourceWorkItemID], LinkedIssueEdge{
+			Target: target, Relationship: dependency.RelationshipType,
+			StoredOnly: storedOnly[GithubWorkItemDerivationEdgeKey{
+				Source:           dependency.SourceWorkItemID,
+				Target:           dependency.TargetWorkItemID,
+				RelationshipType: dependency.RelationshipType,
+			}],
+		})
 	}
 	result := map[string][3]string{}
 	evidence := map[string]string{}
 	rescues := 0
 	crossProviderRescues := 0
-	for source, possible := range candidates {
-		sort.Slice(possible, func(left, right int) bool {
-			if possible[left].target != possible[right].target {
-				return possible[left].target < possible[right].target
+	for source, edges := range edgesBySource {
+		// The tier set is chosen BEFORE the usable-donor filter: a native
+		// edge whose donor gives no team leaves the item without a row; a
+		// lower-tier donor never stands in for it.
+		var winner LinkedIssueEdge
+		found := false
+		for _, edge := range SelectLinkedIssueEdges(source, edges, derived.LinkTiers) {
+			if _, usable := donors[edge.Target]; usable {
+				winner, found = edge, true
+				break
 			}
-			return possible[left].relationship < possible[right].relationship
-		})
-		winner := possible[0]
-		result[source] = winner.team
+		}
+		if !found {
+			continue
+		}
+		result[source] = donors[winner.Target]
 		evidence[source] = fmt.Sprintf("linked_issue=%s;dependency_type=%s;donor_provider=%s;donor_source=%s",
-			winner.target, winner.relationship, strings.TrimSpace(subjects[winner.target].Provider), donorRows[winner.target].Source)
-		if !winner.storedOnly {
+			winner.Target, winner.Relationship, strings.TrimSpace(subjects[winner.Target].Provider), donorRows[winner.Target].Source)
+		if winner.Tier != "" {
+			evidence[source] += ";link_tier=" + winner.Tier
+		}
+		if !winner.StoredOnly {
 			continue
 		}
 		rescues++
@@ -1701,12 +1704,66 @@ func (derived GithubWorkItemDerivationContext) BuildLinkedIssueIndexFromRows(
 		// but the defect is structural (one provider's sync mints the edge,
 		// another provider's writer needs it), so the observation must count
 		// the structure rather than one extractor's name.
-		if donor, exists := subjects[winner.target]; exists &&
+		if donor, exists := subjects[winner.Target]; exists &&
 			strings.TrimSpace(donor.Provider) != strings.TrimSpace(provider) {
 			crossProviderRescues++
 		}
 	}
 	return result, evidence, rescues, crossProviderRescues
+}
+
+// LinkedIssueEdge is one inheritable edge of an item, its target already
+// resolved to a work item id.
+type LinkedIssueEdge struct {
+	Target       string
+	Relationship string
+	// Tier is set by SelectLinkedIssueEdges: the provenance tier of the link of
+	// record of the (source, target) pair; empty for a source that is not a
+	// pull or merge request.
+	Tier       string
+	StoredOnly bool
+}
+
+func isPullRequestSource(workItemID string) bool {
+	return strings.HasPrefix(workItemID, "ghpr:") || strings.HasPrefix(workItemID, "gitlab:")
+}
+
+// SelectLinkedIssueEdges orders the donors an item may copy: the one rule of
+// the cascade (BuildLinkedIssueIndexFromRows) and of the donor-change trigger.
+// For a pull or merge request the link of record is work_graph_issue_pr: an
+// edge whose (source, target) pair has no row is no donor, and only the edges
+// of the best tier present stay (native over explicit_text over heuristic; a
+// pull request with a native link takes nothing lower, chris 2026-10-15). The
+// rest are in target id then relationship order. Any other source has no link
+// of record and keeps that id order.
+func SelectLinkedIssueEdges(source string, edges []LinkedIssueEdge, tiers map[LinkPair]string) []LinkedIssueEdge {
+	selected := make([]LinkedIssueEdge, 0, len(edges))
+	if isPullRequestSource(source) {
+		best := 0
+		for _, edge := range edges {
+			edge.Tier = tiers[LinkPair{PullRequest: source, Issue: edge.Target}]
+			rank := linktier.Rank(edge.Tier)
+			if rank == 0 {
+				continue
+			}
+			if rank > best {
+				best = rank
+				selected = selected[:0]
+			}
+			if rank == best {
+				selected = append(selected, edge)
+			}
+		}
+	} else {
+		selected = append(selected, edges...)
+	}
+	sort.Slice(selected, func(left, right int) bool {
+		if selected[left].Target != selected[right].Target {
+			return selected[left].Target < selected[right].Target
+		}
+		return selected[left].Relationship < selected[right].Relationship
+	})
+	return selected
 }
 
 func (derived GithubWorkItemDerivationContext) ResolveWithoutLinked(

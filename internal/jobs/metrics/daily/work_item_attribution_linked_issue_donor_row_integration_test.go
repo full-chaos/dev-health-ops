@@ -347,6 +347,10 @@ func TestALargePartitionLoadsItsDonorsInBoundedStatements(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			links, err := conn.PrepareBatch(ctx, `INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id)`)
+			if err != nil {
+				t.Fatal(err)
+			}
 			for n := range items {
 				pr := fmt.Sprintf("ghpr:acme/%s#%d", pad, n)
 				donor := fmt.Sprintf("jira:%s-%d", pad, n)
@@ -359,11 +363,14 @@ func TestALargePartitionLoadsItsDonorsInBoundedStatements(t *testing.T) {
 				if err := edges.Append(orgID, pr, donor, "relates_to", seededAt); err != nil {
 					t.Fatal(err)
 				}
+				if err := links.Append(repoPR, donor, uint32(n), float32(1), "native", "linear_attachment", seededAt, orgID); err != nil {
+					t.Fatal(err)
+				}
 				if err := stored.Append(orgID, repoD, donor, "jira", "team-donor", "team-donor", "project_ownership", uint8(1), "medium", "project_ownership=proj-d", day.AddDate(0, 0, -1), "test", "earlier-run"); err != nil {
 					t.Fatal(err)
 				}
 			}
-			for _, batch := range []driver.Batch{workItems, edges, stored} {
+			for _, batch := range []driver.Batch{workItems, edges, stored, links} {
 				if err := batch.Send(); err != nil {
 					t.Fatal(err)
 				}

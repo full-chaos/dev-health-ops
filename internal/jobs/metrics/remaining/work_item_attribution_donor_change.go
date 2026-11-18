@@ -68,7 +68,11 @@ func (executor *WorkItemAttributionExecutor) loadDonorChangedDependents(
 	if err != nil {
 		return nil, stepcause.Failure(stepcause.LoadInactiveTeamsDonorChange, err)
 	}
-	return donorChangedDependents(edges, keyIndex, rows, inactive), nil
+	linkTiers, err := LoadWorkItemLinkTiers(ctx, executor.conn, orgID, edges)
+	if err != nil {
+		return nil, err
+	}
+	return donorChangedDependents(edges, keyIndex, rows, inactive, linkTiers), nil
 }
 
 // donorChangedDependents returns, sorted, each item that inherits through an
@@ -78,7 +82,8 @@ func (executor *WorkItemAttributionExecutor) loadDonorChangedDependents(
 // linked_issue row, or the provenance linked_issue row of the same snapshot). The donor it
 // would copy is the cascade's winner (BuildLinkedIssueIndexFromRows): of its
 // donors whose newest primary row has a team of its own (an own source) that
-// is active, the lowest target id, then relationship, with that row's team. An
+// is active, those of the best link tier (SelectLinkedIssueEdges), the lowest
+// target id, then relationship, with that row's team. An
 // item whose own primary row has a team of its own (an own source: native
 // team, project or repository ownership) outranks linked_issue, so a donor
 // never gives it its primary row. A donor recomputed
@@ -89,9 +94,9 @@ func donorChangedDependents(
 	keyIndex map[string]string,
 	rows map[string]workItemAttributionNewestPrimary,
 	inactive teamactive.Inactive,
+	linkTiers map[teamattribution.LinkPair]string,
 ) []string {
-	type donor struct{ target, relationship string }
-	donors := map[string][]donor{}
+	donors := map[string][]teamattribution.LinkedIssueEdge{}
 	for _, edge := range teamattribution.LatestGitHubWorkItemDerivationDependencies(edges) {
 		if !teamattribution.GithubWorkItemDerivationInheritableRelationships[edge.RelationshipType] {
 			continue
@@ -103,7 +108,7 @@ func donorChangedDependents(
 		if target == "" || target == edge.SourceWorkItemID {
 			continue
 		}
-		donors[edge.SourceWorkItemID] = append(donors[edge.SourceWorkItemID], donor{target, edge.RelationshipType})
+		donors[edge.SourceWorkItemID] = append(donors[edge.SourceWorkItemID], teamattribution.LinkedIssueEdge{Target: target, Relationship: edge.RelationshipType})
 	}
 	var owed []string
 	for item, linked := range donors {
@@ -111,21 +116,19 @@ func donorChangedDependents(
 		if !ok || teamattribution.IsLinkedIssueDonorSource(own.Source) {
 			continue
 		}
-		sort.Slice(linked, func(left, right int) bool {
-			if linked[left].target != linked[right].target {
-				return linked[left].target < linked[right].target
-			}
-			return linked[left].relationship < linked[right].relationship
-		})
 		changed, wantDonor, wantTeam := false, "", ""
 		for _, candidate := range linked {
-			row, ok := rows[candidate.target]
+			if row, ok := rows[candidate.Target]; ok {
+				changed = changed || row.ComputedAt.After(own.ComputedAt)
+			}
+		}
+		for _, candidate := range teamattribution.SelectLinkedIssueEdges(item, linked, linkTiers) {
+			row, ok := rows[candidate.Target]
 			if !ok {
 				continue
 			}
-			changed = changed || row.ComputedAt.After(own.ComputedAt)
 			if wantDonor == "" && row.TeamID != "" && teamattribution.IsLinkedIssueDonorSource(row.Source) && !inactive.Has(row.TeamID) {
-				wantDonor, wantTeam = candidate.target, row.TeamID
+				wantDonor, wantTeam = candidate.Target, row.TeamID
 			}
 		}
 		if !changed {

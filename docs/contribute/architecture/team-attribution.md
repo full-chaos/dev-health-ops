@@ -311,6 +311,21 @@ donor row resolving to a `work_items`
 row whose **own team came from a first-class fact (sources 0–3; membership never wins)** — a donor resolved only by
 `author_membership` or `manual_fallback` is NOT a valid donor, so neither a person-shaped author
 signal nor a bare prefix can ever be laundered into rank-5 inheritance (both fall through to 6/7).
+**Which donor a pull or merge request copies (the link tier).** The link of record of a pull or merge request and an
+issue is the `work_graph_issue_pr` row of the pair, with its provenance tier: native over explicit_text over
+heuristic. For a pull or merge request the cascade (`SelectLinkedIssueEdges`, read by `BuildLinkedIssueIndexFromRows`
+and by `donorChangedDependents`) takes its donor in this order: (1) an edge whose (pull request, issue) pair has no
+`work_graph_issue_pr` row is no donor, even when it is the only edge; an `extkey:` edge is resolved to its issue first
+and takes the tier of that pair. (2) Only the edges of the best tier present stay: a pull request with a native link
+takes no donor of a lower tier, and a native donor that gives no usable team (no own row, an inactive team) leaves the
+pull request without a `linked_issue` row, so it goes on to `manual_fallback` (6) and then `unassigned` (7), never to
+a text donor. (3) Among the edges that stay, the lowest donor id, then the relationship, wins. The row's evidence ends
+with `;link_tier=<tier>`. A source that is not a pull or merge request has no link of record: its edges keep the
+donor id order and the evidence names no tier. Pinned by `TestLinkedIssueDonorNativeBeforeExplicitText`,
+`TestUnusableNativeDonorGivesNoTextDonorRow`, `TestRecordedTextEdgeBeatsUnrecordedEdge`,
+`TestUnrecordedEdgeIsNeverADonor`, `TestExtkeyEdgeTakesThePairTier`, `TestLinkedIssueEvidenceNamesTheTier` and
+`TestDonorChangedDependentsFollowTheLinkTier`.
+
 **The donor's team is its own attribution ROW as of the linked item's day, copied, never resolved again
 (daily partition semantics):** a donor that the same run writes gives the row
 that run computes for it with the facts of the linked item's day (a daily partition's day; the backstop's
@@ -320,7 +335,7 @@ and source, never a resolution of it. A donor with no row of its own gives nothi
 through) until it is attributed; a later run then copies its row. **A later change of the donor's row
 re-derives the items that copy it:** each backstop run reads the stored rows and re-derives an
 item that inherits through an inheritable edge when one of its donors has a primary row newer than the
-item's, and the donor the item would copy now (the cascade's winner over the stored rows: the lowest target id
+item's, and the donor the item would copy now (the cascade's winner over the stored rows: the donors of the best link tier, then the lowest target id
 whose newest primary row is own-sourced and names an active team, with that row's team) differs from the one
 its newest snapshot records: its primary `linked_issue` row, or for an issue the `linked_issue` provenance row (`is_primary = 0`) of the same snapshot (`donorChangedDependents`). An item whose own primary row has a team of its own
 (sources 0–3) outranks `linked_issue`, so its donors' changes trigger nothing. The
@@ -331,7 +346,7 @@ item is newer than every donor row, so the next run finds nothing, and a donor r
 triggers nothing (Info `work_item_attribution.donor_changed_dependents`, `WorkItemAttributionOutcome.DonorChangedDependents`;
 pinned by `TestADonorRowChangeRederivesOnlyTheItemsItChanges`, `TestADonorChangeReadsTheLinkedIssueRowOfTheItemsNewestSnapshot`, `TestAnIssuesLinkedRowFollowsItsDonorsChangedRow` and `TestADonorsChangedRowRederivesTheItemsThatCopyIt`,
 a donor of each of github, gitlab, jira and linear). The row's source must be one of sources 0–3 above. The row's evidence names the donor:
-`linked_issue=<donor_work_item_id>;dependency_type=<rel>;donor_provider=<p>;donor_source=<donor row source>` (the frozen
+`linked_issue=<donor_work_item_id>;dependency_type=<rel>;donor_provider=<p>;donor_source=<donor row source>[;link_tier=<tier>]` (the frozen
 Python oracles wrote `linked_issue=<item id>`, the item's own id; the oracle comparison declares that divergence,
 `pythonLinkedIssueEvidence`). Pinned by `TestALinkedItemCopiesItsDonorsRowOnly`, `TestALinkedItemIsRevisitedOnceItsDonorHasARow`,
 `TestAPullRequestCopiesItsDonorsStoredRow`, `TestALinkedItemCopiesTheTeamOfItsDonorsOwnRow` (real

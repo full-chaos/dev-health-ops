@@ -66,7 +66,7 @@ func TestADonorRowChangeRederivesOnlyTheItemsItChanges(t *testing.T) {
 			map[string]workItemAttributionNewestPrimary{"P": unassigned(before), "D": own("team-b", after)}, nil, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := donorChangedDependents(tc.edges, tc.keys, tc.rows, tc.inactive)
+			got := donorChangedDependents(tc.edges, tc.keys, tc.rows, tc.inactive, nil)
 			if fmt.Sprint(got) != fmt.Sprint(tc.want) {
 				t.Errorf("owed %v, want %v", got, tc.want)
 			}

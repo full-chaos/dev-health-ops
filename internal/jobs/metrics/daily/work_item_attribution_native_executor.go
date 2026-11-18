@@ -188,6 +188,11 @@ func (executor *WorkItemAttributionExecutor) ComputeFamily(
 		if err != nil {
 			return total, err
 		}
+		linkTiers, err := remaining.LoadWorkItemLinkTiers(ctx, executor.conn, run.OrganizationID, dependencies)
+		if err != nil {
+			return total, err
+		}
+		repoDerived.LinkTiers = linkTiers
 		linkedIssue, linkedEvidence, _, _ := repoDerived.BuildLinkedIssueIndexFromRows("", subjects, donorRows, dependencies, nil)
 		repoDerived.LinkedIssue = linkedIssue
 		repoDerived.LinkedIssueEvidence = linkedEvidence

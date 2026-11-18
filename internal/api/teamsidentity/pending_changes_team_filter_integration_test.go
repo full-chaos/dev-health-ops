@@ -59,6 +59,7 @@ func TestPendingChangesHonoursTeamID(t *testing.T) {
 		seedPendingChange(t, s, ctx, "org-1", "c-"+c.keyed, c.keyed, c.provider)
 	}
 	seedPendingChange(t, s, ctx, "org-2", "c-other-org", "jira:ENG", "jira")
+	seedPendingChange(t, s, ctx, "org-2", "c-other-org-lin", "linear:LIN", "linear")
 	h := newTestHandlers(s)
 
 	all := "c-gh:GH,c-gl:GL,c-jira:ENG,c-linear:LIN"
@@ -72,6 +73,9 @@ func TestPendingChangesHonoursTeamID(t *testing.T) {
 		{"bare id resolves to the keyed team", "team_id=ENG", "c-jira:ENG"},
 		{"bare linear", "team_id=LIN", "c-linear:LIN"},
 		{"unknown team", "team_id=nope", ""},
+		{"repeated values: the last wins", "team_id=" + url.QueryEscape("jira:ENG") + "&team_id=" + url.QueryEscape("linear:LIN"), "c-linear:LIN"},
+		{"repeated values: an empty last is no filter", "team_id=" + url.QueryEscape("jira:ENG") + "&team_id=", all},
+		{"repeated values: a named last narrows after an empty first", "team_id=&team_id=" + url.QueryEscape("gh:GH"), "c-gh:GH"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			code, ids := pendingCall(t, h, "org-1", c.query)
@@ -85,6 +89,10 @@ func TestPendingChangesHonoursTeamID(t *testing.T) {
 		_, ids := pendingCall(t, h, "org-2", "team_id="+url.QueryEscape("jira:ENG"))
 		if strings.Join(ids, ",") != "c-other-org" {
 			t.Fatalf("org-2 got %v", ids)
+		}
+		_, ids = pendingCall(t, h, "org-2", "")
+		if strings.Join(ids, ",") != "c-other-org,c-other-org-lin" {
+			t.Fatalf("org-2 unfiltered got %v", ids)
 		}
 		_, ids = pendingCall(t, h, "org-1", "team_id="+url.QueryEscape("jira:ENG"))
 		if strings.Join(ids, ",") != "c-jira:ENG" {

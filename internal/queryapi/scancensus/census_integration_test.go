@@ -564,14 +564,35 @@ const nullableIntoPlainSites = `
 //	loadFlaky 28265e8c788f -> 37c05084ba13
 //	ExecuteOrgTimeseries 1e3ee3af097b -> 6637e944ff79
 //	ExecuteTimeseries f2eec06b6811 -> 8842c256cd1a
+//
+// liverow gained a third rule form for a table with a Retracted column in its own writer (cicd_metrics_daily,
+// migration 159): Predicate and NewestPredicate have one more return statement, and the census evaluates every return
+// of a helper a site calls, so six sites that call liverow got more evaluated statements. Re-pinned by hand,
+// digests copied from the local TestScanTypeCensus failure output (not computed). Read (statements dumped at base and
+// head): every base statement is still there; an added statement is the same query with the new rule text in its WHERE
+// or HAVING, or a repeat of a statement already listed (no select item, column or scan target changes); the sites stay
+// not-describable for their old reason:
+//
+//	clickhouse.go fetchCycleBreakdown a003456ad69e -> a0d30b3aefa3
+//	flow_opportunities.go loadTeamFlowRows cef9073b1eae -> 9719c8e633d4
+//	coverage.go MetricLineage 61037e7ece4e -> a3f56be4ccc9
+//	operatingreview.go fetchStateDurations 2999640fe32f -> 11d3ca602c18
+//	operatingreview.go fetchWorkItems a3d0e349ea87 -> 64839a153860
+//	search.go BuildSearchResponse 168278cbea0a -> afd45e38cfbd
+//
+// Both together (the retired-day predicate of testops_test_metrics_daily and the third liverow rule form) move one more
+// evaluated statement of flakyStatement, copied from the local TestScanTypeCensus failure output (not computed); scan
+// targets unchanged:
+//
+//	loadFlaky 37c05084ba13 -> 32950ea2e0be
 const unverifiedSites = `
-internal/queryapi/aggflame/clickhouse.go|fetchCycleBreakdown|*string,*float64,*uint64|a003456ad69e|not-describable
+internal/queryapi/aggflame/clickhouse.go|fetchCycleBreakdown|*string,*float64,*uint64|a0d30b3aefa3|not-describable
 internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*string,*uint64,*[]string|f62124ab26af|not-describable
 internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*uint64,*[]string|f62124ab26af|not-describable
 internal/queryapi/aianalytics/ai_opportunities.go|loadDocDrift|*string,*uint64,*uint64|ce3024a41da9|not-describable
-internal/queryapi/aianalytics/ai_opportunities.go|loadFlaky|*string,*uint64,**float64|37c05084ba13|not-describable
+internal/queryapi/aianalytics/ai_opportunities.go|loadFlaky|*string,*uint64,**float64|32950ea2e0be|not-describable
 internal/queryapi/aianalytics/flow_opportunities.go|loadRepoFlowRows|*string,*uint64,**float64,**float64,**float64,**float64|877e3ede0140|not-describable
-internal/queryapi/aianalytics/flow_opportunities.go|loadTeamFlowRows|*string,*uint64,**float64,**float64,**float64|cef9073b1eae|not-describable
+internal/queryapi/aianalytics/flow_opportunities.go|loadTeamFlowRows|*string,*uint64,**float64,**float64,**float64|9719c8e633d4|not-describable
 internal/queryapi/aianalytics/loaders.go|loadLabels|*string,*string|ffbc61d0410c|spliced-select-list
 internal/queryapi/aianalytics/scope.go|ownerTeams|*string,*string|c0b3734eb92d|not-describable
 internal/queryapi/analytics/breakdown.go|executeBreakdownRaw|*string,**float64|c64156aa3194|statement-not-static
@@ -591,7 +612,7 @@ internal/queryapi/compoundingrisk/read.go|latestDay|**time.Time|818fa20627a4|not
 internal/queryapi/compoundingrisk/read.go|latestRows|*string,**float64,*string,**float64,**float64,**float64,**float64,**float64,**float64,**float64,**float64,**float64,**float64,*float64,*float64,*float64,*float64,*float64,*float64,*time.Time|9af7066815e3|not-describable
 internal/queryapi/compoundingrisk/read.go|repoTrend|*time.Time,**float64|e90c541be45a|not-describable
 internal/queryapi/datahealth/connectors.go|Connectors|*string,*string,*[]byte,**time.Time,**bool,**string,*[]byte,**time.Time,**int32,**time.Time,**time.Time,*[]byte,**string|d9838116a756|not-describable
-internal/queryapi/datahealth/coverage.go|MetricLineage|**time.Time,*uint64|61037e7ece4e|not-describable
+internal/queryapi/datahealth/coverage.go|MetricLineage|**time.Time,*uint64|a3f56be4ccc9|not-describable
 internal/queryapi/datahealth/sourcehealth.go|SourceHealth|*string,**string,*bool,**time.Time,*bool,*string,*[]byte,**time.Time,**bool,*bool,**time.Time,**string,*bool,**time.Time,**time.Time,**string,**string|dabf0d087730|not-describable
 internal/queryapi/drilldown/issues.go|BuildIssuesResponse|*string,*string,*string,**string,**string,**float64,**float64,**time.Time,**time.Time|efc62e04415b|not-describable
 internal/queryapi/drilldown/issues.go|buildBlockedIssuesResponse|*string,*string,**string,**string,*uint64|0df7b140bb0b|not-describable
@@ -618,12 +639,12 @@ internal/queryapi/investmentexplain/reader.go|FetchInvestmentBreakdown|*string,*
 internal/queryapi/investmentexplain/reader.go|FetchInvestmentThemeEffort|*string,*float64,*float64,*float64|fd01dffa31fe|spliced-select-list
 internal/queryapi/investmentexplain/workunitreader.go|FetchWorkUnitInvestments|*string,**string,**string,*time.Time,*time.Time,**string,**string,**string,**float64,*float64,*[]string,*[]float64,*[]string,*[]float64,**string,**float64,**string,**string,**string,**string,*time.Time|63286cc9b046|spliced-select-list
 internal/queryapi/operatingreview/operatingreview.go|fetchChangeFailureAgg|[]any|4107f6c9bf2b|variadic-destinations
-internal/queryapi/operatingreview/operatingreview.go|fetchStateDurations|*string,*uint64,*float64,*float64|2999640fe32f|not-describable
-internal/queryapi/operatingreview/operatingreview.go|fetchWorkItems|*time.Time,*uint64,*uint64,*uint32,**float64,**float64,**float64,**float64|a3d0e349ea87|not-describable
+internal/queryapi/operatingreview/operatingreview.go|fetchStateDurations|*string,*uint64,*float64,*float64|11d3ca602c18|not-describable
+internal/queryapi/operatingreview/operatingreview.go|fetchWorkItems|*time.Time,*uint64,*uint64,*uint32,**float64,**float64,**float64,**float64|64839a153860|not-describable
 internal/queryapi/people/metricqueries.go|fetchPersonBreakdown|*string,*float64|f158cf132a83|spliced-select-list
 internal/queryapi/people/metricqueries.go|fetchPersonMetricSeries|*time.Time,*float64|aaa0e43ef5ee|spliced-select-list
 internal/queryapi/people/metricqueries.go|fetchPersonMetricValue|*uint64,*float64|44f613075ca4|spliced-select-list
-internal/queryapi/people/search.go|BuildSearchResponse|*string,*time.Time|168278cbea0a|not-describable
+internal/queryapi/people/search.go|BuildSearchResponse|*string,*time.Time|afd45e38cfbd|not-describable
 internal/queryapi/people/summary.go|fetchPersonCollaboration|*string,*string,*float64|ff998e305260|not-describable
 internal/queryapi/pooledmttr/pooledmttr.go|scorecard|*string,**string,**float64|c97d7b3c6138|spliced-select-list
 internal/queryapi/producttelemetry/platform.go|LoadOrgNames|*string,*string,*string|64c4ca805d17|not-describable

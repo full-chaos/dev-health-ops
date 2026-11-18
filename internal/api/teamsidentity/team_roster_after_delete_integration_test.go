@@ -14,8 +14,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/atlassianteams"
 )
 
-var rosterRaceAtTeamRead = regexp.MustCompile(`FROM teams FINAL WHERE org_id = \{org_id:String\} AND deleted_at IS NULL AND id = \{team_id:String\}`)
-
 // rosterStep runs other once, at the nth statement writer a sends that
 // matches at.
 type rosterStep struct {
@@ -103,18 +101,17 @@ func TestTheRosterAfterAMissingOrDeletedTeamIsReadInTheInsert(t *testing.T) {
 		check(t, "create_after_missing_read", teamID, []string{"r"})
 	})
 
-	// a adds bob to a team it read; the team is deleted before a's second read
-	// and created again with its own roster before a's insert.
+	// a adds bob to a team it read; after that read the team is deleted and
+	// created again with its own roster, before a's insert (CHAOS-14094: an
+	// edit reads the team once, so both happen at its newest-version read).
 	t.Run("add_across_delete_and_recreate", func(t *testing.T) {
 		const teamID = "gh:recreate-race"
 		seedRosterTeam(ctx, t, conn, teamID, "github")
 		steps := &rosterStepsConn{Conn: conn, steps: []*rosterStep{
-			{at: rosterRaceAtTeamRead, nth: 2, other: func() {
+			{at: rosterRaceAtNewest, nth: 1, other: func() {
 				if _, err := plain.DeleteTeam(ctx, rosterRaceOrg, teamID); err != nil {
 					t.Error(err)
 				}
-			}},
-			{at: rosterRaceAtNewest, nth: 1, other: func() {
 				if _, err := plain.CreateOrUpdateTeam(ctx, rosterRaceOrg, TeamWrite{Origin: "github", TeamID: teamID, Name: "New"}); err != nil {
 					t.Error(err)
 				}

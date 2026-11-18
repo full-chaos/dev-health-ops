@@ -45,6 +45,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/analytics"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/investmentexplain"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
@@ -73,31 +74,6 @@ func splitWorkUnitsSeededDDL(sql string) []string {
 // investmentexplain's own sibling seeded test already takes, and
 // orthogonal to the three mechanisms this file exists to prove.
 const workUnitsSeededSchemaDDL = `
-CREATE TABLE work_unit_investments (
-    work_unit_id String,
-    work_unit_type Nullable(String),
-    work_unit_name Nullable(String),
-    from_ts DateTime64(3, 'UTC'),
-    to_ts DateTime64(3, 'UTC'),
-    repo_id Nullable(UUID),
-    provider Nullable(String),
-    effort_metric String,
-    effort_value Float64,
-    theme_distribution_json Map(String, Float64),
-    subcategory_distribution_json Map(String, Float64),
-    structural_evidence_json String,
-    evidence_quality Float64,
-    evidence_quality_band String,
-    categorization_status String,
-    categorization_errors_json String,
-    categorization_model_version String,
-    categorization_input_hash String,
-    categorization_run_id String,
-    computed_at DateTime64(3, 'UTC'),
-    org_id String
-) ENGINE = ReplacingMergeTree(computed_at)
-ORDER BY (org_id, work_unit_id);
-
 CREATE TABLE work_unit_investment_quotes (
     work_unit_id String,
     quote String,
@@ -272,6 +248,7 @@ func startSeededWorkUnitsClickHouse(t *testing.T) (chdriver.Conn, *investmentexp
 			t.Fatalf("exec DDL %q: %v", stmt, err)
 		}
 	}
+	chschema.CreateTables(ctx, t, conn, "work_unit_investments")
 
 	client, err := dhclickhouse.NewClickHouseQueryClientWithOptions(dhclickhouse.Options{DSN: inst.URI})
 	if err != nil {

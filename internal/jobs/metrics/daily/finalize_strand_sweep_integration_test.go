@@ -886,11 +886,12 @@ func readCognitiveLoad(t *testing.T, ctx context.Context, conn driver.Conn, orgI
 }
 
 // The bound when the first job loses every completion write (codex round 2,
-// "missed in round 1"): the job alone computes once per attempt (4) and leaves
-// the run running with finalization failed; with its redriven twin the run
-// gets one more compute (5), and that one ends the run succeeded. The extra
-// computes change no answer: the cognitive-load reader's computed_at dedupe
-// gives the same answer as one compute.
+// "missed in round 1"): the job computes once per attempt (4), and its last
+// attempt ends the run failed (a lost completion write on the last attempt is
+// terminal). Its redriven twin then finds the run ended and computes nothing,
+// so the pair stays at 4. The extra computes change no answer: the
+// cognitive-load reader's computed_at dedupe gives the same answer as one
+// compute.
 func TestARedriveTwinAfterAnExhaustedJobComputesOnceMore(t *testing.T) {
 	defer restoreRecognisedFinalizeFamilies(pythonRecognisedFinalizeFamilies)
 	pythonRecognisedFinalizeFamilies = []string{"ic_finalize"}
@@ -941,8 +942,8 @@ func TestARedriveTwinAfterAnExhaustedJobComputesOnceMore(t *testing.T) {
 		wantComputes int32
 		wantStatus   string
 	}{
-		{name: "one job exhausts its attempts", jobs: 1, wantComputes: attempts, wantStatus: "running"},
-		{name: "the job exhausts its attempts, then its twin", jobs: 2, wantComputes: attempts + 1, wantStatus: "succeeded"},
+		{name: "one job exhausts its attempts", jobs: 1, wantComputes: attempts, wantStatus: "failed"},
+		{name: "the job exhausts its attempts, then its twin", jobs: 2, wantComputes: attempts, wantStatus: "failed"},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			orgID, runID := uuid.NewString(), uuid.NewString()

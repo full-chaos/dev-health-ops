@@ -2708,7 +2708,10 @@ One path: `run_team_autoimport` → `team_autoimport_<provider>.populate()` → 
   `(source, target, relationship_type)` key, and
   `build_linked_issue_team_resolver`'s `latest_edge` collapse settles any
   conflict by `last_synced`, so a relationship retyped `relates_to` →
-  `blocked_by` still supersedes the stored inheritable row. Before this,
+  `blocked_by` still supersedes the stored inheritable row. On an equal
+  `last_synced` the inheritable row wins: one sync can write a native
+  `relates_to` and a text `Blocks` link for the same pair, and the native donor
+  stays. Before this,
   only the fresh edges were considered: because attribution rows are
   re-stamped on every run, a PR whose edge had aged out of the sync window
   was rebuilt as `unassigned`, superseding its own earlier correct
@@ -3342,7 +3345,12 @@ exact rules rather than a looser first-donor walk:
 - multiple donors → the lexicographically smallest canonical target wins
   (stable, since ClickHouse rows are unordered);
 - per `(source,target)` the **latest** edge by `last_synced` wins, so a flip
-  from `relates_to` to `blocked_by` stops inheriting.
+  from `relates_to` to `blocked_by` stops inheriting. On an equal `last_synced`
+  an inheritance-safe type wins over any other type, then the lower type: a pull
+  request with a native `relates_to` to an issue and a text `Blocks` link to it, written by
+  one sync, keeps that issue as its donor. The cascade, the donor-change trigger, the
+  donor load and the reverse closure read the same collapse. The frozen Python
+  kept the lower type alone, so the blocking link won that tie.
 
 ---
 

@@ -50,7 +50,7 @@ func TestSourceDataCheckerAsksPipelineStabilityOnlyForADayWithACompletedRun(t *t
     org_id String, repo_id UUID, run_id String DEFAULT toString(generateUUIDv4()), status Nullable(String),
     started_at Nullable(DateTime64(3, 'UTC')), finished_at Nullable(DateTime64(3, 'UTC'))
 ) ENGINE = ReplacingMergeTree ORDER BY (org_id, repo_id, run_id)`,
-		`CREATE TABLE cicd_metrics_daily (org_id String, repo_id UUID, day Date)
+		`CREATE TABLE cicd_metrics_daily (org_id String, repo_id UUID, day Date, computed_at DateTime DEFAULT now(), retracted UInt8 DEFAULT 0)
  ENGINE = MergeTree ORDER BY (org_id, repo_id, day)`,
 		`CREATE TABLE deployments (
     org_id String, repo_id UUID,

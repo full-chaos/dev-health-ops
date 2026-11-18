@@ -178,3 +178,27 @@ func TestLinkedIssueDonorRefusalReasons(t *testing.T) {
 		})
 	}
 }
+
+// An item with a native team of its own evaluates no linked donor: the cascade counts nothing for it, as the
+// donor-change backstop does for an item whose own primary is native_team (see
+// TestDonorChangeANativeTeamItemCountsNoRefusal in the remaining package).
+func TestLinkedIssueDonorRefusalCountsAnItemWithANativeTeamCountsNone(t *testing.T) {
+	native := "ENG"
+	derived := NewGitHubWorkItemDerivationContext(GithubWorkItemDerivationFacts{
+		Teams: []GithubWorkItemDerivationTeamFact{{Provider: "github", TeamID: "team-eng", NativeTeamKey: native}},
+	})
+	subjects := map[string]GithubWorkItemDerivationSubject{
+		"native-item": {WorkItemID: "native-item", Provider: "github", Type: "pr", NativeTeamKey: &native, OrgID: "org"},
+		"pr-donor":    {WorkItemID: "pr-donor", Provider: "github", Type: "pr", OrgID: "org"},
+		"plain-item":  {WorkItemID: "plain-item", Provider: "github", Type: "pr", OrgID: "org"},
+	}
+	edge := func(source, target string) GithubWorkItemDerivationDependencyEdge {
+		return GithubWorkItemDerivationDependencyEdge{SourceWorkItemID: source, TargetWorkItemID: target, RelationshipType: "relates_to"}
+	}
+	if got := derived.LinkedIssueDonorRefusalCounts(subjects, []GithubWorkItemDerivationDependencyEdge{edge("native-item", "pr-donor")}); len(got) != 0 {
+		t.Errorf("a native-team item counts %v, want none", got)
+	}
+	if got := derived.LinkedIssueDonorRefusalCounts(subjects, []GithubWorkItemDerivationDependencyEdge{edge("plain-item", "pr-donor")}); got["pr_kind"] != 1 {
+		t.Errorf("control: an item with no native team counts %v, want pr_kind 1", got)
+	}
+}

@@ -218,3 +218,32 @@ func TestDonorChangeRefusalCountsAreOfCurrentEdgesOnly(t *testing.T) {
 		})
 	}
 }
+
+// An item whose own primary is native_team evaluates no linked donor: the backstop counts nothing for it and
+// owes it nothing (LinkedIssueDonorRefusalCounts agrees for an item with a native team, see
+// TestLinkedIssueDonorRefusalCountsAnItemWithANativeTeamCountsNone in teamattribution). The control, the same
+// edge from an item with no native primary, is counted.
+func TestDonorChangeANativeTeamItemCountsNoRefusal(t *testing.T) {
+	base := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	edges := []teamattribution.GithubWorkItemDerivationDependencyEdge{
+		{SourceWorkItemID: "P", TargetWorkItemID: "D", RelationshipType: "relates_to", LastSynced: base},
+	}
+	kinds := map[string]teamattribution.GithubWorkItemDerivationSubject{"D": {WorkItemID: "D", Provider: "github", Type: "pr"}}
+	donor := workItemAttributionNewestPrimary{TeamID: "team-b", Source: "repo_ownership", ComputedAt: base.Add(time.Hour)}
+	for _, tc := range []struct {
+		name string
+		item workItemAttributionNewestPrimary
+		want string
+	}{
+		{"native team primary", workItemAttributionNewestPrimary{TeamID: "team-n", Source: "native_team", ComputedAt: base}, "map[]"},
+		{"control: unassigned item", workItemAttributionNewestPrimary{Source: "unassigned", ComputedAt: base}, "map[pr_kind:1]"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			refused := map[string]int{}
+			got := donorChangedDependents(edges, nil, map[string]workItemAttributionNewestPrimary{"P": tc.item, "D": donor}, kinds, nil, refused)
+			if fmt.Sprint(refused) != tc.want || len(got) != 0 {
+				t.Errorf("refused %v owed %v, want %s and none owed", refused, got, tc.want)
+			}
+		})
+	}
+}

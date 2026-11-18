@@ -11,28 +11,35 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 )
 
-// The families a finalize of a run with no partition skips. A family joins the
-// list only when it reads the partitions of the run and refuses a run with
-// none; every other recognised family runs on such a run (the production
-// family set is driven end to end by
+// No finalize family refuses a run of the whole organization whose discovery
+// found no repository: every recognised family runs on it. benchmarking, the
+// one family that reads the partitions of the run, retires the rows of the day
+// on such a run (benchmarking_empty_run_retire_test.go) and still refuses a run
+// with no partition that is not of the whole organization
+// (TestBenchmarkingFinalizeRefusesOnZeroPartitions). The production family set
+// is driven end to end by
 // TestFinalizeOfAWholeOrganizationRunWithNoPartitionRetiresTheRowsOfItsDay in
-// internal/workerservice).
-func TestFinalizeFamiliesRefusingZeroPartitionsIsBenchmarkingOnly(t *testing.T) {
-	if !slices.Equal(finalizeFamiliesRefusingZeroPartitions, []string{BenchmarkingFamilyName}) {
-		t.Fatalf("finalizeFamiliesRefusingZeroPartitions = %v, want [%s]", finalizeFamiliesRefusingZeroPartitions, BenchmarkingFamilyName)
+// internal/workerservice.
+func TestNoFinalizeFamilyRefusesAWholeOrganizationRunWithNoPartition(t *testing.T) {
+	store := benchmarkingEmptyRunStore()
+	conn := benchmarkingEmptyRunConn(nil, nil)
+	handler, collector := benchmarkingEmptyRunHandler(t, store, conn, time.Now().UTC())
+	if err := handler.Work(context.Background(), finalizeExecution()); err != nil {
+		t.Fatalf("finalize = %v, want nil", err)
 	}
-	for _, name := range finalizeFamiliesRefusingZeroPartitions {
-		if !slices.Contains(pythonRecognisedFinalizeFamilies, name) {
-			t.Errorf("%s is not a recognised finalize family", name)
+	exposition := collector.PrometheusText()
+	for _, name := range pythonRecognisedFinalizeFamilies {
+		want := `worker_daily_metrics_native_family_outcome_total{family="` + name + `",outcome="computed"} 1`
+		if !strings.Contains(exposition, want) {
+			t.Errorf("%s did not run on a whole-organization run with no partition: %q is missing", name, want)
+		}
+		skipped := `worker_daily_metrics_native_family_outcome_total{family="` + name + `",outcome="skipped_empty_run"} 1`
+		if strings.Contains(exposition, skipped) {
+			t.Errorf("%s was skipped on a whole-organization run with no partition", name)
 		}
 	}
-	executor, err := NewBenchmarkingFinalizeExecutor(&fakeStore{noPartitions: true}, poisonedConn{}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	run := Run{ID: testRunID, OrganizationID: testOrgID, TargetDay: time.Date(2026, 9, 14, 0, 0, 0, 0, time.UTC)}
-	if _, err := executor.ComputeFinalizeFamily(context.Background(), run); !errors.Is(err, ErrInvalidState) {
-		t.Errorf("benchmarking on a run with no partition gave %v, want its refusal (ErrInvalidState)", err)
+	if store.finalizeCompletions != 1 {
+		t.Errorf("completions = %d, want 1", store.finalizeCompletions)
 	}
 }
 

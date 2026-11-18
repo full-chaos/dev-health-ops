@@ -1667,6 +1667,9 @@ func rediscoverKnownDefects(ctx context.Context, t *testing.T, conn driver.Conn,
 	})
 }
 
+// pull_request_inherits_only_from_a_linked_issue on github is a MECHANISM cell with seeded issue-project ownership; no GitHub producer
+// writes team_project_ownership today, so on real GitHub data a github issue has no team under the issue rule and a github PR inherits
+// no team from it.
 // seedGithubIssueProjects gives the github world's issues a project owned by a team. A GitHub issue's project is its
 // repository's full name; the world holds no project ownership row (no GitHub producer writes one), and an issue takes
 // no team from its own repository, so without a project owner no github issue has a team and no pull request has an

@@ -8,34 +8,44 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// transportReferencePredicate is the one definition of "this delivery is the
-// current River delivery of its outbox row": the start guard and the
-// commit-time check both use it, so they cannot drift apart. $6 ties the
-// delivery to the outbox attempt the relay claimed for it.
-const transportReferencePredicate = `
+// transportDeliveryClauses tie a delivery to its outbox row and its live route:
+// $6 is the outbox attempt the relay claimed for this delivery (any later claim
+// bumps it), and the route must still be River at the delivery's generation.
+const transportDeliveryClauses = `
     WHERE outbox.id = $1::uuid
       AND outbox.sync_run_id = $2::uuid
       AND outbox.org_id = $3
       AND outbox.kind = $5
-      AND outbox.status = 'dispatched'
-      AND outbox.dispatched_transport = 'river'
-      AND outbox.dispatched_route_generation = $4
       AND outbox.attempts = $6
       AND route.transport = 'river'
       AND route.generation = $4
       AND route.paused = false`
 
-// commitCheckSQL re-proves the predicate as the pass's last statement and holds
-// the outbox row until COMMIT, so a wake or a redelivery that commits after the
-// start guard refuses the pass, and one that arrives after this check waits for
-// the commit. NOWAIT: the pass, which already holds its unit, run and sibling
-// outbox locks, never waits for this row, so the check adds no wait-for edge.
-// Only the outbox row is locked: the domain role cannot lock routes.
+const outboxDispatchedToThisRoute = `outbox.status = 'dispatched'
+          AND outbox.dispatched_transport = 'river'
+          AND outbox.dispatched_route_generation = $4`
+
+// transportReferencePredicate is the start guard: the row must be dispatched to
+// this delivery's route.
+const transportReferencePredicate = transportDeliveryClauses + `
+      AND ` + outboxDispatchedToThisRoute
+
+// commitCheckSQL re-proves the delivery as the pass's last statement and holds
+// the outbox row until COMMIT. It refuses a SUPERSEDED delivery: a new claim or
+// redelivery (attempt bumped) or a route change. A wake that only re-armed the
+// row ('pending', unclaimed, same attempt) does not refuse the pass: the wake
+// stays armed for the next pass, and the row lock keeps the relay (SKIP LOCKED)
+// off it until this pass committed. NOWAIT: the pass, which already holds its
+// unit, run and sibling outbox locks, never waits for this row, so the check
+// adds no wait-for edge. Only the outbox row is locked: the domain role cannot
+// lock routes.
 const commitCheckSQL = `
 SELECT 1
     FROM public.sync_dispatch_outbox AS outbox
     JOIN public.sync_dispatch_transport_routes AS route
-      ON route.kind = outbox.kind` + transportReferencePredicate + `
+      ON route.kind = outbox.kind` + transportDeliveryClauses + `
+      AND ((` + outboxDispatchedToThisRoute + `)
+        OR (outbox.status = 'pending' AND outbox.claim_token IS NULL))
 FOR NO KEY UPDATE OF outbox NOWAIT`
 
 // transportFence binds one River delivery to its pass transaction. A nil fence
@@ -53,7 +63,7 @@ func (fence *transportFence) current(ctx context.Context, tx pgx.Tx) (bool, erro
 	return currentTransportReference(ctx, tx, fence.args, fence.kind)
 }
 
-// commit commits tx only while the delivery is still current. committed=false
+// commit commits tx only while the delivery is not superseded. committed=false
 // with a nil error is a refusal: nothing is committed and the caller's deferred
 // Rollback discards the pass. A row held by another transaction returns the
 // service's unavailable error, so River retries the same delivery.

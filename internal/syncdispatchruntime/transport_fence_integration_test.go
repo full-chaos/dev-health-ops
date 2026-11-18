@@ -70,6 +70,7 @@ VALUES ($1::uuid, $2, $3::uuid, $4, 'pending', now(), 0, now(), now())
 
 type fenceKind struct {
 	name, kind, org, run, outbox string
+	generation                   int64
 	seed                         func(t *testing.T, ctx context.Context, pool *pgxpool.Pool)
 	// pass runs one delivery of the given attempt through the service built on pool.
 	pass  func(t *testing.T, ctx context.Context, pool *pgxpool.Pool, attempt int64) error
@@ -81,6 +82,7 @@ func fenceKinds() []fenceKind {
 	return []fenceKind{
 		{
 			name: "finalize", kind: outboxKindFinalizeSyncRun, org: finalizeTestOrg, run: finalizeTestRun, outbox: finalizeTestOutbox,
+			generation: finalizeRouteGeneration,
 			seed: func(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 				seedFinalizeRoute(t, ctx, pool)
 				insertZeroUnitRun(t, ctx, pool, "", "")
@@ -104,6 +106,7 @@ func fenceKinds() []fenceKind {
 		},
 		{
 			name: "dispatch", kind: outboxKindDispatchSyncRun, org: discoveryTestOrg, run: discoveryTestRun, outbox: discoveryTestOutbox,
+			generation: discoveryRouteGeneration,
 			seed: func(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 				if got := pgseed.SyncTransportRoute(ctx, t, pool, outboxKindDispatchSyncRun, "river", discoveryRouteGeneration, false, "celery"); got != discoveryRouteGeneration {
 					t.Fatalf("dispatch_sync_run route generation = %d, want %d", got, discoveryRouteGeneration)
@@ -140,7 +143,8 @@ func fenceKinds() []fenceKind {
 		},
 		{
 			name: "discovery", kind: outboxKindReferenceDiscovery, org: discoveryTestOrg, run: discoveryTestRun, outbox: discoveryTestOutbox,
-			seed: seedDiscoveryRoute,
+			generation: discoveryRouteGeneration,
+			seed:       seedDiscoveryRoute,
 			pass: func(t *testing.T, ctx context.Context, pool *pgxpool.Pool, attempt int64) error {
 				executor := &fakeDiscoveryExecutor{summary: map[string]any{"reference_team_keys": []string{"ENG"}}}
 				service, err := NewNativeReferenceDiscoveryService(pool, nil, executor)
@@ -231,10 +235,11 @@ func (rig *fenceRig) outboxState(t *testing.T, ctx context.Context) (string, int
 	return status, attempts
 }
 
-// TestTransportFenceIntegration: P1-2 (a superseded delivery attempt) and P1-3
-// (a wake that re-arms the row after the start guard) commit nothing, for
-// every native service that checks the transport reference; the current
-// delivery still commits.
+// TestTransportFenceIntegration: a superseded delivery (P1-2: the attempt
+// moved on; or a re-armed row that was claimed again or whose route moved)
+// commits nothing, for every native service that checks the transport
+// reference. The current delivery commits, also when a same-attempt wake
+// re-armed its row after the guard.
 func TestTransportFenceIntegration(t *testing.T) {
 	for _, kind := range fenceKinds() {
 		t.Run(kind.name+"/current_first_attempt", func(t *testing.T) {
@@ -275,6 +280,8 @@ func TestTransportFenceIntegration(t *testing.T) {
 				}
 			})
 		})
+		// A same-attempt wake does not supersede the delivery: the pass commits
+		// and the wake stays armed for the next pass.
 		t.Run(kind.name+"/rearmed_after_guard", func(t *testing.T) {
 			withFenceRig(t, kind, 1, func(ctx context.Context, rig *fenceRig) {
 				hook := rig.on(isStartGuard, func(ctx context.Context) {
@@ -286,11 +293,57 @@ func TestTransportFenceIntegration(t *testing.T) {
 				if !hook.fired {
 					t.Fatal("the start guard never ran")
 				}
-				if err != nil || kind.wrote(t, ctx, rig.other) {
-					t.Fatalf("re-armed after the guard: err=%v wrote=%t, want nil/false", err, kind.wrote(t, ctx, rig.other))
+				if err != nil || !kind.wrote(t, ctx, rig.other) {
+					t.Fatalf("re-armed after the guard: err=%v wrote=%t, want nil/true", err, kind.wrote(t, ctx, rig.other))
 				}
-				if status, _ := rig.outboxState(t, ctx); status != "pending" {
-					t.Fatalf("outbox status=%q after the wake, want pending (the wake must survive)", status)
+				if status, attempts := rig.outboxState(t, ctx); status != "pending" || attempts != 1 {
+					t.Fatalf("outbox status=%q attempts=%d after the wake, want pending/1 (the wake must survive)", status, attempts)
+				}
+			})
+		})
+		t.Run(kind.name+"/rearmed_then_claimed_after_guard", func(t *testing.T) {
+			withFenceRig(t, kind, 1, func(ctx context.Context, rig *fenceRig) {
+				hook := rig.on(isStartGuard, func(ctx context.Context) {
+					if err := rig.rearm(ctx, rig.other); err != nil {
+						t.Errorf("wake: %v", err)
+						return
+					}
+					// The relay's claim (syncreconciler claimRiverRoutesSQL): a claim token and attempts + 1.
+					if _, err := rig.other.Exec(ctx, `
+UPDATE sync_dispatch_outbox
+SET claim_token = gen_random_uuid()::text, claim_expires_at = now() + interval '1 minute',
+    claim_transport = 'river', claim_route_generation = $2, attempts = attempts + 1, updated_at = now()
+WHERE id = $1`, kind.outbox, kind.generation); err != nil {
+						t.Errorf("claim: %v", err)
+					}
+				})
+				err := kind.pass(t, ctx, rig.pool, 1)
+				if !hook.fired {
+					t.Fatal("the start guard never ran")
+				}
+				if err != nil || kind.wrote(t, ctx, rig.other) {
+					t.Fatalf("re-armed and claimed after the guard: err=%v wrote=%t, want nil/false", err, kind.wrote(t, ctx, rig.other))
+				}
+			})
+		})
+		t.Run(kind.name+"/rearmed_and_route_moved_after_guard", func(t *testing.T) {
+			withFenceRig(t, kind, 1, func(ctx context.Context, rig *fenceRig) {
+				hook := rig.on(isStartGuard, func(ctx context.Context) {
+					if err := rig.rearm(ctx, rig.other); err != nil {
+						t.Errorf("wake: %v", err)
+						return
+					}
+					next := kind.generation + 1
+					if got := pgseed.SyncTransportRoute(ctx, t, rig.other, kind.kind, "river", next, false, "celery"); got != next {
+						t.Errorf("route generation = %d, want %d", got, next)
+					}
+				})
+				err := kind.pass(t, ctx, rig.pool, 1)
+				if !hook.fired {
+					t.Fatal("the start guard never ran")
+				}
+				if err != nil || kind.wrote(t, ctx, rig.other) {
+					t.Fatalf("re-armed and route moved after the guard: err=%v wrote=%t, want nil/false", err, kind.wrote(t, ctx, rig.other))
 				}
 			})
 		})
@@ -468,4 +521,121 @@ func TestTransportFenceOwnRowDiscoveryFeatureDisabledCommits(t *testing.T) {
 		t.Fatalf("run status=%q, want failed (the legitimate feature-disabled claim committed)", runStatus)
 	}
 	assertOwnRowKeptAndSiblingParked(t, ctx, pool, discoveryTestOutbox, outboxKindDispatchSyncRun)
+}
+
+// relayRedeliver stands in for the relay's claim and River delivery of a
+// re-armed row: attempts + 1 and dispatched to the route
+// (syncreconciler claimRiverRoutesSQL, markRiverDispatchedSQL).
+func relayRedeliver(t *testing.T, ctx context.Context, pool *pgxpool.Pool, outboxID string, generation int64) int64 {
+	t.Helper()
+	var attempts int64
+	if err := pool.QueryRow(ctx, `
+UPDATE sync_dispatch_outbox
+SET status = 'dispatched', dispatched_at = now(), dispatched_transport = 'river', dispatched_route_generation = $2,
+    transport_job_id = NULL, last_error = NULL, claim_token = NULL, claim_expires_at = NULL, claim_transport = NULL,
+    claim_route_generation = NULL, attempts = attempts + 1, updated_at = now()
+WHERE id = $1 AND status = 'pending'
+RETURNING attempts`, outboxID, generation).Scan(&attempts); err != nil {
+		t.Fatalf("relay redelivery: %v", err)
+	}
+	return attempts
+}
+
+func runFailed(t *testing.T, ctx context.Context, pool *pgxpool.Pool) bool {
+	t.Helper()
+	var status string
+	if err := pool.QueryRow(ctx, `SELECT status FROM sync_runs WHERE id = $1`, discoveryTestRun).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	return status == syncRunStatusFailed
+}
+
+// rearmedMidPassConverges: on the feature-disabled terminal branch a wake after
+// the start guard makes the pass park its own re-armed row, so the commit-time
+// check refuses it. The wake's own delivery (attempt + 1) then runs the branch
+// to the end: run failed, own row dispatched to the route, sibling parked.
+func rearmedMidPassConverges(t *testing.T, kind fenceKind, siblingKind string) {
+	withFenceRig(t, kind, 1, func(ctx context.Context, rig *fenceRig) {
+		hook := rig.on(isStartGuard, func(ctx context.Context) {
+			if err := rig.rearm(ctx, rig.other); err != nil {
+				t.Errorf("wake: %v", err)
+			}
+		})
+		if err := kind.pass(t, ctx, rig.pool, 1); err != nil {
+			t.Fatalf("first pass: %v", err)
+		}
+		if !hook.fired {
+			t.Fatal("the start guard never ran")
+		}
+		if kind.wrote(t, ctx, rig.other) {
+			t.Fatal("first pass committed although its own park changed its re-armed row")
+		}
+		if status, attempts := rig.outboxState(t, ctx); status != "pending" || attempts != 1 {
+			t.Fatalf("after the refused pass: outbox status=%q attempts=%d, want pending/1 (the wake survives)", status, attempts)
+		}
+		attempt := relayRedeliver(t, ctx, rig.other, kind.outbox, kind.generation)
+		if err := kind.pass(t, ctx, rig.pool, attempt); err != nil {
+			t.Fatalf("second pass (attempt %d): %v", attempt, err)
+		}
+		if !kind.wrote(t, ctx, rig.other) {
+			t.Fatalf("second pass (attempt %d) did not run the feature-disabled branch to the end", attempt)
+		}
+		assertOwnRowKeptAndSiblingParked(t, ctx, rig.other, kind.outbox, siblingKind)
+	})
+}
+
+func TestTransportFenceOwnRowDispatchFeatureDisabledRearmedMidPass(t *testing.T) {
+	rearmedMidPassConverges(t, fenceKind{
+		name: "dispatch-feature-disabled", kind: outboxKindDispatchSyncRun, org: discoveryTestOrg, run: discoveryTestRun,
+		outbox: dispatchServiceTestOutbox, generation: dispatchRouteGeneration,
+		seed: func(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+			pgseed.Org(ctx, t, pool, discoveryTestOrg, "community")
+			seedDispatchRoute(t, ctx, pool)
+			if _, err := pool.Exec(ctx, `
+INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status,updated_at,integration_id,cost_class,mode,attempts,created_at)
+VALUES ('00000000-0000-4000-8000-0000000000e8',$1,$2::uuid,'pagerduty','incidents','00000000-0000-4000-8000-0000000000ec','planned',now(),
+        (SELECT integration_id FROM sync_runs WHERE id = $2::uuid),'rest_core','incremental',0,now())`,
+				discoveryTestOrg, discoveryTestRun); err != nil {
+				t.Fatal(err)
+			}
+			featureID := "00000000-0000-4000-8000-0000000000e7"
+			pgseed.SetFeatureFlag(ctx, t, pool, featureID, "canonical_incident_ingestion", "enterprise", true)
+			pgseed.OrgOverride(ctx, t, pool, discoveryTestOrg, featureID, false)
+			pgseed.SyncDispatchOutbox(ctx, t, pool, uuid.NewString(), discoveryTestRun, discoveryTestOrg, outboxKindReferenceDiscovery, "pending", "", 0)
+		},
+		pass: func(t *testing.T, ctx context.Context, pool *pgxpool.Pool, attempt int64) error {
+			args := dispatchTestArgs()
+			args.DeliveryAttempt = attempt
+			return newTestDispatchService(t, pool).Dispatch(ctx, args)
+		},
+		wrote: runFailed,
+	}, outboxKindReferenceDiscovery)
+}
+
+func TestTransportFenceOwnRowDiscoveryFeatureDisabledRearmedMidPass(t *testing.T) {
+	rearmedMidPassConverges(t, fenceKind{
+		name: "discovery-feature-disabled", kind: outboxKindReferenceDiscovery, org: discoveryTestOrg, run: discoveryTestRun,
+		outbox: discoveryTestOutbox, generation: discoveryRouteGeneration,
+		seed: func(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+			seedDiscoveryRoute(t, ctx, pool)
+			pgseed.InsertSyncRunUnit(ctx, t, pool, pgseed.SyncRunUnit{
+				ID: "00000000-0000-4000-8000-0000000000d9", RunID: discoveryTestRun, OrgID: discoveryTestOrg, IntegrationID: discoveryTestIntegration,
+				SourceID: "00000000-0000-4000-8000-0000000000da", Provider: "pagerduty", DatasetKey: "incidents", Status: "planned",
+			})
+			if _, err := pool.Exec(ctx, `DELETE FROM feature_flags WHERE key = 'canonical_incident_ingestion'`); err != nil {
+				t.Fatal(err)
+			}
+			pgseed.SyncDispatchOutbox(ctx, t, pool, uuid.NewString(), discoveryTestRun, discoveryTestOrg, outboxKindDispatchSyncRun, "pending", "", 0)
+		},
+		pass: func(t *testing.T, ctx context.Context, pool *pgxpool.Pool, attempt int64) error {
+			service, err := NewNativeReferenceDiscoveryService(pool, nil, &fakeDiscoveryExecutor{summary: map[string]any{"ok": true}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			args := newDiscoveryArgs()
+			args.DeliveryAttempt = attempt
+			return service.Discover(ctx, args)
+		},
+		wrote: runFailed,
+	}, outboxKindDispatchSyncRun)
 }

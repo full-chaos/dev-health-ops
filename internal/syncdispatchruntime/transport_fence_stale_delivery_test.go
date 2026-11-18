@@ -148,6 +148,7 @@ func (s *fenceServer) Exec(_ context.Context, sql string, args ...any) (pgconn.C
 	if sql != syncrunrollup.WakeDispatchSQL || args[1] != fenceRun {
 		return pgconn.CommandTag{}, fmt.Errorf("unexpected wake")
 	}
+	// OutboxWakeupOnConflictSQL: status 'pending', dispatched transport and generation cleared, attempts kept.
 	s.committed.outbox.status, s.committed.outbox.transport, s.committed.outbox.generation = "pending", "", 0
 	s.trace = append(s.trace, "wake:"+s.wakeAfterGuard)
 	return pgconn.NewCommandTag("INSERT 0 1"), nil
@@ -173,6 +174,11 @@ func (s *fenceServer) fenceQuery(backend *pgproto3.Backend, sql string) (bool, e
 			return false, fmt.Errorf("fixture wake did not report an armed outbox")
 		}
 	case strings.HasPrefix(sql, "SELECT 1 FROM public.sync_dispatch_outbox AS outbox") && strings.Contains(sql, "FOR NO KEY UPDATE OF outbox NOWAIT"):
+		// A wake that only re-armed the row (pending, unclaimed, same attempt) does not supersede the delivery.
+		if row := s.outboxRow(); !ok && row.status == "pending" && row.routeTransport == "river" && row.routeGeneration == fenceGeneration &&
+			row.attempts == s.delivered && strings.Contains(sql, "outbox.claim_token IS NULL") {
+			ok = true
+		}
 		s.trace = append(s.trace, fmt.Sprintf("commit-check=%t", ok))
 		if ok {
 			fenceRows(backend, []uint32{23}, []string{"1"})
@@ -227,7 +233,7 @@ func (s *fenceServer) domainQuery(backend *pgproto3.Backend, sql string) bool {
 		fenceCommand(backend, "UPDATE 0")
 	case strings.HasPrefix(sql, "UPDATE public.sync_dispatch_outbox SET status = 'dispatched'") && strings.Contains(sql, "AND status = 'pending'"):
 		if row := s.outboxRow(); row.status == "pending" {
-			parked := fenceRow{status: "dispatched(feature_disabled)", attempts: row.attempts}
+			parked := fenceRow{status: "dispatched(feature_disabled)", routeTransport: row.routeTransport, routeGeneration: row.routeGeneration, attempts: row.attempts}
 			s.write(func(tx *fenceTx) { tx.outbox = &parked })
 			s.trace = append(s.trace, "dispatch-outbox-write")
 			fenceCommand(backend, "UPDATE 1")
@@ -351,8 +357,11 @@ func runFenceDispatch(t *testing.T, s *fenceServer) error {
 }
 
 // TestTransportFenceRefusesStaleOrRearmedDelivery: a delivery whose attempt
-// was superseded before the guard (P1-2), or whose outbox row a wake re-armed
-// after the guard (P1-3), must commit no write; the current delivery must.
+// was superseded before the guard (P1-2) commits no write. A same-attempt wake
+// after the guard (P1-3) does not supersede the delivery, but on this
+// feature-disabled terminal path the pass parks every pending row of the run,
+// its re-armed own row included; the commit-time check sees that own write and
+// refuses. The wake survives and its delivery runs the branch to the end.
 func TestTransportFenceRefusesStaleOrRearmedDelivery(t *testing.T) {
 	pending := fenceRow{status: "pending", routeTransport: "river", routeGeneration: fenceGeneration, attempts: 1}
 	nextGeneration := fenceDispatched(2)
@@ -363,17 +372,18 @@ func TestTransportFenceRefusesStaleOrRearmedDelivery(t *testing.T) {
 		delivered      int64
 		wakeAfterGuard string
 		wantWrites     bool
+		wantOutbox     string
 	}{
-		{"current_first_attempt", fenceDispatched(1), 1, "", true},
-		{"current_redelivery", fenceDispatched(2), 2, "", true},
-		{"pending_before_guard", pending, 1, "", false},
-		{"older_route_generation", nextGeneration, 1, "", false},
-		{"holdback_redelivery_committed_before_guard", fenceDispatched(2), 1, "", false},
-		{"unit_end_redelivery_committed_before_guard", fenceDispatched(2), 1, "", false},
-		{"holdback_rearmed_after_guard", fenceDispatched(1), 1, syncrunrollup.DispatchWakePathHoldBack, false},
-		{"unit_end_rearmed_after_guard", fenceDispatched(1), 1, syncrunrollup.DispatchWakePathProviderUnit, false},
-		{"holdback_rearmed_redelivery_after_guard", fenceDispatched(2), 2, syncrunrollup.DispatchWakePathHoldBack, false},
-		{"unit_end_rearmed_redelivery_after_guard", fenceDispatched(2), 2, syncrunrollup.DispatchWakePathProviderUnit, false},
+		{"current_first_attempt", fenceDispatched(1), 1, "", true, "dispatched"},
+		{"current_redelivery", fenceDispatched(2), 2, "", true, "dispatched"},
+		{"pending_before_guard", pending, 1, "", false, "pending"},
+		{"older_route_generation", nextGeneration, 1, "", false, "dispatched"},
+		{"holdback_redelivery_committed_before_guard", fenceDispatched(2), 1, "", false, "dispatched"},
+		{"unit_end_redelivery_committed_before_guard", fenceDispatched(2), 1, "", false, "dispatched"},
+		{"holdback_rearmed_after_guard", fenceDispatched(1), 1, syncrunrollup.DispatchWakePathHoldBack, false, "pending"},
+		{"unit_end_rearmed_after_guard", fenceDispatched(1), 1, syncrunrollup.DispatchWakePathProviderUnit, false, "pending"},
+		{"holdback_rearmed_redelivery_after_guard", fenceDispatched(2), 2, syncrunrollup.DispatchWakePathHoldBack, false, "pending"},
+		{"unit_end_rearmed_redelivery_after_guard", fenceDispatched(2), 2, syncrunrollup.DispatchWakePathProviderUnit, false, "pending"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -381,16 +391,15 @@ func TestTransportFenceRefusesStaleOrRearmedDelivery(t *testing.T) {
 				finishedUnit: strings.HasPrefix(c.name, "unit_end"),
 				committed:    fenceState{outbox: c.row, runStatus: "running", unitStatus: "planned"}}
 			err := runFenceDispatch(t, s)
-			wrote := s.committed.runStatus != "running" || s.committed.unitStatus != "planned" ||
-				s.committed.outbox.status == "dispatched(feature_disabled)"
+			wrote := s.committed.runStatus != "running" || s.committed.unitStatus != "planned"
 			t.Logf("worker=%v delivered_attempt=%d row_attempt=%d statements=%s committed: run=%s unit=%s outbox=%s",
 				err, c.delivered, c.row.attempts, strings.Join(s.trace, ","), s.committed.runStatus,
 				s.committed.unitStatus, s.committed.outbox.status)
 			if err != nil || wrote != c.wantWrites {
 				t.Errorf("want committed writes=%t, got %t (worker=%v)", c.wantWrites, wrote, err)
 			}
-			if c.wakeAfterGuard != "" && s.committed.outbox.status != "pending" {
-				t.Errorf("the wake's re-arm was lost: outbox=%s", s.committed.outbox.status)
+			if s.committed.outbox.status != c.wantOutbox || s.committed.outbox.attempts != c.row.attempts {
+				t.Errorf("outbox status=%s attempts=%d, want %s/%d", s.committed.outbox.status, s.committed.outbox.attempts, c.wantOutbox, c.row.attempts)
 			}
 		})
 	}

@@ -1166,9 +1166,9 @@ func (run *teamIDCarryRun) writeRestatements(ctx context.Context) error {
 }
 
 // writeTeams writes the team rows through teamprovider.Insert: a moved team's
-// new row states the moved row's provider identity (gone_at included), and
-// every other row (an old row going inactive, a kept row taking members)
-// keeps the stored identity, read inside the same statement.
+// new row states the moved row's provider identity (gone_at included) and
+// roster, and every other row (an old row going inactive) keeps the stored
+// identity and roster, read inside the same statement.
 func (run *teamIDCarryRun) writeTeams(ctx context.Context, write teamIDCarryWrite) error {
 	all := strings.Split(write.columns, ", ")
 	identity := map[string]bool{teamprovider.ColumnProviderTeamID: true, teamprovider.ColumnProviderName: true, teamprovider.ColumnGoneAt: true}
@@ -1184,7 +1184,7 @@ func (run *teamIDCarryRun) writeTeams(ctx context.Context, write teamIDCarryWrit
 		for _, column := range columns {
 			values = append(values, row.value(column))
 		}
-		version := teamprovider.Write{Values: values, Gone: teamprovider.GoneKept}
+		version := teamprovider.Write{Values: values, Gone: teamprovider.GoneKept, Roster: teamprovider.RosterKept}
 		if run.moved[row.str("id")] {
 			version = teamprovider.Write{
 				Values: values, ProviderTeamID: row.str(teamprovider.ColumnProviderTeamID), ProviderName: row.str(teamprovider.ColumnProviderName),

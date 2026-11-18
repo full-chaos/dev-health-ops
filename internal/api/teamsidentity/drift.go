@@ -14,6 +14,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 	"github.com/full-chaos/dev-health-ops/internal/teamid"
+	"github.com/full-chaos/dev-health-ops/internal/teamprovider"
 )
 
 // Team-drift policy constants, transcribed from
@@ -236,6 +237,15 @@ func pythonRepr(value pyjson.Value) string {
 // (teamid.Of). The legacy Python import (clickhouse_team_admin.py:397-407)
 // left jira and linear ids bare; CHAOS-8939 makes every provider id
 // prefixed, so an imported team merges into the catalog team of the same id.
+// importedRoster keeps the stored roster of a team an import writes again;
+// a new team states its own (empty) roster.
+func importedRoster(existing *Team) teamprovider.Roster {
+	if existing == nil {
+		return teamprovider.RosterStated
+	}
+	return teamprovider.RosterKept
+}
+
 func importedTeamID(providerType, providerTeamID string) string {
 	return teamid.Of(providerType, providerTeamID)
 }
@@ -497,7 +507,7 @@ func (s Store) projectTeam(ctx context.Context, orgID string, team discoveredTea
 		}
 		if _, _, err := s.insertTeamRow(ctx, teamInsertRow{
 			ID: observed.TeamID, TeamUUID: teamUUIDValue, Name: stringPtrOr(observed.Name, observed.TeamID),
-			Description: observed.Description, ManualMembers: manualMembers,
+			Description: observed.Description, ManualMembers: manualMembers, Roster: importedRoster(existing),
 			ProjectKeys: catalogProjectKeys, RepoPatterns: catalogRepoPatterns, IsActive: true,
 			OrgID: orgID, Origin: origin, UpdatedAt: now,
 		}); err != nil {

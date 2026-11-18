@@ -155,9 +155,27 @@ func loggedProvider(provider string) string {
 }
 
 func (h handlers) internal(w http.ResponseWriter, r *http.Request, what string, err error) {
+	if errors.Is(err, ErrTeamChangedConcurrently) {
+		h.logger.WarnContext(r.Context(), "team roster edit refused", slog.String("path", r.Pattern),
+			slog.String("step", what), slog.Int("rounds", rosterRounds))
+		writeTeamChangedConcurrently(w)
+		return
+	}
 	h.logger.ErrorContext(r.Context(), "api route failed", slog.String("path", r.Pattern),
 		slog.String("step", what), slog.String("error", err.Error()))
 	policy.WriteInternal(w)
+}
+
+// teamChangedConcurrentlyReason is the retryable reason code of a roster edit
+// refused after rosterRounds writes.
+const teamChangedConcurrentlyReason = "team_changed_concurrently"
+
+// writeTeamChangedConcurrently answers 409
+// {"detail":{"message":"team changed concurrently, retry","reason_code":"team_changed_concurrently"}}.
+func writeTeamChangedConcurrently(w http.ResponseWriter) {
+	detail := policy.ErrorDetail(ErrTeamChangedConcurrently.Error())
+	detail.Set("reason_code", teamChangedConcurrentlyReason)
+	policy.WriteDetail(w, http.StatusConflict, detail, nil)
 }
 
 // orgIDOf is get_admin_org_id's own resolution: the CURRENT authenticated

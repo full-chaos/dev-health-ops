@@ -20,8 +20,7 @@ import (
 )
 
 // fakeGitLabWriteTeamsConn is a driver.Conn double covering exactly what
-// writeTeams touches: PreserveExistingTeamManualMembers's read (always
-// succeeds, empty), the created_at carry, and PrepareBatch (returns a fake
+// writeTeams touches: the created_at carry, the provider identity read, and PrepareBatch (returns a fake
 // batch that just records the statement and what was appended -- no real
 // ClickHouse encoding/columns, proving WHICH rows reach the batch, not wire
 // format). Any other query, a read of the roster column included, is an error.
@@ -42,8 +41,6 @@ func (f *fakeGitLabWriteTeamsConn) Query(_ context.Context, query string, _ ...a
 		}
 		return &fakeGitLabCreatedRows{rows: f.created, index: -1}, nil
 	case query == teamprovider.Query:
-		return &fakeGitLabGuardMembershipRows{rows: nil, index: -1}, nil
-	case strings.Contains(query, "manual_members"):
 		return &fakeGitLabGuardMembershipRows{rows: nil, index: -1}, nil
 	default:
 		return nil, fmt.Errorf("fakeGitLabWriteTeamsConn: unexpected query: %s", query)

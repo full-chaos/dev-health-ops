@@ -460,6 +460,14 @@ func TestWriteRESTErrorBodyIsJSONResponseBytes(t *testing.T) {
 			status: http.StatusNotFound,
 			want:   `{"detail":"Work unit <&> not found"}`,
 		},
+		{
+			name: "invalid UTF-8 in a caller value keeps the 404",
+			write: func(w http.ResponseWriter, r *http.Request) {
+				writeWorkUnitExplainNotFound(w, r, "org-1", "wu-\xed\xa0\x80")
+			},
+			status: http.StatusNotFound,
+			want:   "{\"detail\":\"Work unit wu-\ufffd\ufffd\ufffd not found\"}",
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

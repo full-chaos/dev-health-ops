@@ -27,6 +27,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/chclient"
 	"log"
 	"net/http"
+	"strings"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
@@ -64,6 +65,12 @@ type restAuthErrorDetail struct {
 // omits it; that is what makes this a genuinely optional extension, not
 // a second response path.
 func writeRESTError(w http.ResponseWriter, r *http.Request, component, orgID string, status int, detail any, extraHeaders ...[2]string) {
+	if text, isText := detail.(string); isText {
+		// A caller-supplied value echoed here may hold invalid UTF-8 (a
+		// percent-encoded path); pyjson refuses it, so write what
+		// encoding/json wrote before: one U+FFFD per bad byte.
+		detail = strings.Map(func(r rune) rune { return r }, text)
+	}
 	body, err := pyjson.FromGo(detail)
 	if err != nil {
 		log.Printf("query-api: %s: encode error response failed: org_id=%s request_id=%s err=%v",

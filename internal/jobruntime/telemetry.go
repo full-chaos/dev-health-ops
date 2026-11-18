@@ -793,6 +793,11 @@ const (
 	// that reports zero understates what landed, which is precisely the number
 	// an operator needs to reason about duplication.
 	DailyMetricsNativeFamilyOutcomePartialWrite DailyMetricsNativeFamilyOutcome = "partial_write"
+	// DailyMetricsNativeFamilyOutcomeSkippedEmptyRun is a finalize family that
+	// refuses a run with no partition and was not run on one (a run of the whole
+	// organization whose discovery found no repository). Its rows of the day are
+	// left as they are, so the skip is counted rather than only logged.
+	DailyMetricsNativeFamilyOutcomeSkippedEmptyRun DailyMetricsNativeFamilyOutcome = "skipped_empty_run"
 )
 
 // WorkGraphIssueEdgeOutcome is the bounded per-ROW disposition of one
@@ -852,7 +857,7 @@ func workGraphIssueEdgeOutcomes() []WorkGraphIssueEdgeOutcome {
 func dailyMetricsNativeFamilyOutcomes() []DailyMetricsNativeFamilyOutcome {
 	return []DailyMetricsNativeFamilyOutcome{
 		DailyMetricsNativeFamilyOutcomeComputed, DailyMetricsNativeFamilyOutcomeRefused,
-		DailyMetricsNativeFamilyOutcomePartialWrite,
+		DailyMetricsNativeFamilyOutcomePartialWrite, DailyMetricsNativeFamilyOutcomeSkippedEmptyRun,
 	}
 }
 

@@ -173,6 +173,14 @@ type PlannerInput struct {
 	// could have produced from the same window, so a budget history that moved
 	// or a read that failed on one attempt cannot change a committed plan.
 	TestOpsReplayEnds map[string]time.Time
+	// WorkItemsReplay is nil on a first attempt. On a replay of an occurrence whose
+	// domain graph already committed (its sync run row exists) it holds, per
+	// PlanSource.ID, the window end of the work-items unit that graph holds (a nil
+	// end is an open end). A source with no entry has no committed work-items unit.
+	// The failure streak moves between attempts, and its read can fail on one
+	// attempt only (CHAOS-14036); a replay keeps what the graph holds, so that
+	// the verifier does not quarantine the occurrence.
+	WorkItemsReplay *WorkItemsReplay
 	// ExecutedProof is the CHAOS-4060 durable, tri-state evidence snapshot:
 	// which provider/dataset pairs have at least one live sync_run_units row
 	// that completed with persisted-row evidence (proven), have been
@@ -591,7 +599,15 @@ func buildWorkItemFamilyUnit(
 	// mismatched window count and took down a merely partially-caught-up
 	// plan.
 	streak := input.FailureStreaks[source.ID]
-	if streak.SlowedDownAt(now) {
+	committedEnd, hasCommitted := input.WorkItemsReplay.committed(source.ID)
+	if input.WorkItemsReplay != nil && !hasCommitted {
+		slog.Default().Info("sync.plan.work_items_replay_no_unit",
+			slog.String("provider", provider),
+			slog.String("org_id", input.OrgID),
+			slog.String("source_id", source.ID))
+		return PlannedUnit{}, false
+	}
+	if !hasCommitted && streak.SlowedDownAt(now) {
 		globalPlanGateTelemetry.observe(provider, canonicalWorkItemsDataset, planGateOutcomeSlowedDown)
 		slog.Default().Info("sync.plan.work_items_slowed_down",
 			slog.String("provider", provider),
@@ -661,7 +677,16 @@ func buildWorkItemFamilyUnit(
 			slog.Duration("window_before", uncapped.Sub(*earliest)),
 			slog.Duration("window_after", latest.Sub(*earliest)))
 	}
-	if halved, ok := halveWindowAfterFailures(earliest, latest, streak); ok {
+	if replayed, ok := replayedWorkItemsEnd(earliest, latest, committedEnd); ok {
+		if !replayed.Equal(latest) {
+			slog.Default().Info("sync.plan.work_items_window_replayed",
+				slog.String("provider", provider),
+				slog.String("org_id", input.OrgID),
+				slog.String("source_id", source.ID),
+				slog.Duration("window", replayed.Sub(*earliest)))
+		}
+		latest = replayed
+	} else if halved, ok := halveWindowAfterFailures(earliest, latest, streak); ok {
 		slog.Default().Info("sync.plan.work_items_window_halved",
 			slog.String("provider", provider),
 			slog.String("org_id", input.OrgID),
@@ -1226,6 +1251,45 @@ func halveWindowAfterFailures(start *time.Time, end time.Time, streak providersy
 		return end, false
 	}
 	return start.Add(halved), true
+}
+
+// WorkItemsReplay is what the committed domain graph of an occurrence holds for the work-items family.
+type WorkItemsReplay struct {
+	// Units maps PlanSource.ID to the window end of the committed work-items unit; nil is an open end.
+	Units map[string]*time.Time
+}
+
+func (replay *WorkItemsReplay) committed(sourceID string) (*time.Time, bool) {
+	if replay == nil {
+		return nil, false
+	}
+	end, ok := replay.Units[sourceID]
+	return end, ok
+}
+
+// replayedWorkItemsEnd reports the committed end when a replay may keep it: it is the planned end, or an end the
+// failure-streak halving of the same window can produce (1 to RecentTerminalUnitsLimit shrinking failures). Any
+// other committed end is not kept, so the verifier still refuses it.
+func replayedWorkItemsEnd(start *time.Time, end time.Time, committed *time.Time) (time.Time, bool) {
+	if start == nil || committed == nil {
+		return end, false
+	}
+	same := func(candidate time.Time) bool {
+		return candidate.Equal(*committed) || candidate.Truncate(time.Microsecond).Equal(*committed)
+	}
+	if same(end) {
+		return *committed, true
+	}
+	for count := 1; count <= providersync.RecentTerminalUnitsLimit; count++ {
+		halved, ok := halveWindowAfterFailures(start, end, providersync.FailureStreak{Count: count, ShrinkCount: count})
+		if !ok {
+			break
+		}
+		if same(halved) {
+			return *committed, true
+		}
+	}
+	return end, false
 }
 
 // CommittedUnits is the set of (PlanSource.ID, dataset key) pairs the committed domain graph of an occurrence holds a

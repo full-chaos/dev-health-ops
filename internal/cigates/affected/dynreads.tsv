@@ -609,6 +609,7 @@ internal/queryapi/server	query_route_name_fields_legacy_test.go
 internal/queryapi/server	query_route_operating_review_no_data_test.go
 internal/queryapi/server	query_route_review_edges_names_test.go
 internal/queryapi/server	query_route_testops_filteremptyreason_documents_test.go
+internal/queryapi/server	query_route_testops_risk_partial_documents_test.go
 internal/queryapi/server	query_route_testops_scope_documents_test.go
 internal/queryapi/server	query_route_wire_capture_test.go
 internal/queryapi/server	rate_coverage_documents_integration_test.go

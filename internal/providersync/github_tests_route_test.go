@@ -169,14 +169,14 @@ func TestGitHubTestsRouteEmitsSixCompleteEffectsAndStripsRedirectAuth(t *testing
 	if err := batch.validate(descriptor); err != nil {
 		t.Fatal(err)
 	}
-	if len(batch.Effects) != 6 {
+	if len(batch.Effects) != 7 {
 		t.Fatalf("effects=%d", len(batch.Effects))
 	}
 	counts := map[string]int{}
 	for _, effect := range batch.Effects {
 		counts[effect.Destination] = len(effect.Rows)
 	}
-	for destination, want := range map[string]int{"ci_pipeline_runs": 1, "ci_job_runs": 1, "ci_acceptance_checks": 1, "test_suite_results": 1, "test_case_results": 2, "coverage_snapshots": 1} {
+	for destination, want := range map[string]int{"ci_pipeline_runs": 1, "ci_job_runs": 1, "ci_acceptance_checks": 1, "test_suite_results": 1, "test_case_results": 2, "coverage_snapshots": 1, "testops_run_report_completeness": 0} {
 		if counts[destination] != want {
 			t.Fatalf("%s rows=%d want=%d", destination, counts[destination], want)
 		}

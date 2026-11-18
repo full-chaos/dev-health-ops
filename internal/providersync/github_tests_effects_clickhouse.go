@@ -13,7 +13,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
-// TestOpsClickHouseEffects owns the six destinations emitted by complete
+// TestOpsClickHouseEffects owns the seven destinations emitted by complete
 // provider TestOps routes. Every readback is a FINAL point lookup over the
 // complete tenant-prefixed natural key and compares the full persisted row.
 type TestOpsClickHouseEffects struct {
@@ -36,7 +36,8 @@ func (sink TestOpsClickHouseEffects) valid(ctx context.Context, claim Claim, des
 
 func githubTestsDestination(destination string) bool {
 	switch destination {
-	case "ci_pipeline_runs", "ci_job_runs", "ci_acceptance_checks", "test_suite_results", "test_case_results", "coverage_snapshots":
+	case "ci_pipeline_runs", "ci_job_runs", "ci_acceptance_checks", "test_suite_results", "test_case_results", "coverage_snapshots",
+		testOpsRunReportCompletenessDestination:
 		return true
 	default:
 		return false
@@ -268,6 +269,55 @@ func (sink TestOpsClickHouseEffects) WriteEffect(ctx context.Context, claim Clai
 				return err
 			}
 			if err := batch.Append(row.OrgID, row.RepoID, row.RunID, row.SnapshotID, row.ReportFormat, linesTotal, linesCovered, row.LineCoveragePct, branchesTotal, branchesCovered, row.BranchCoveragePct, functionsTotal, functionsCovered, row.CommitHash, row.Branch, prNumber, row.TeamID, row.ServiceID, row.LastSynced, row.ReportSlot, attempt, gitHubTestsArray(row.LegacySnapshotIDs)); err != nil {
+				return err
+			}
+		}
+		return sendGitHubTestsBatch(ctx, sink.Lease, batch)
+	case testOpsRunReportCompletenessDestination:
+		rows, err := decodeEffectRows[testOpsRunReportCompletenessRow](effect)
+		if err != nil {
+			return err
+		}
+		if len(rows) == 0 {
+			return sink.Lease.Assert(ctx)
+		}
+		batch, err := sink.Conn.PrepareBatch(ctx, `INSERT INTO testops_run_report_completeness (org_id,repo_id,run_id,run_attempt,provider,complete,reasons,reports_expected,reports_admitted,last_synced,verdict_version)`)
+		if err != nil {
+			return err
+		}
+		defer batch.Abort()
+		seen := make(map[string]struct{}, len(rows))
+		for _, row := range rows {
+			if err := validateGitHubTestsRow(claim, row.OrgID, row.RepoID, row.RunID, row.LastSynced); err != nil {
+				return err
+			}
+			if err := validateTestOpsProvider(claim, row.Provider); err != nil {
+				return err
+			}
+			if row.RunAttempt < 1 || row.Complete != (len(row.Reasons) == 0) ||
+				row.VerdictVersion != testOpsRunReportVerdictVersion(row.Complete, row.LastSynced) {
+				return ErrInvalidConfiguration
+			}
+			if !recordGitHubTestsKey(seen, row.OrgID, row.RepoID, row.RunID, fmt.Sprint(row.RunAttempt)) {
+				return duplicateNaturalKeyError(effect.Destination, "org_id", row.OrgID, "repo_id", row.RepoID, "run_id", row.RunID, "run_attempt", fmt.Sprint(row.RunAttempt))
+			}
+			attempt, err := gitHubTestsUint32(row.RunAttempt)
+			if err != nil {
+				return err
+			}
+			expectedReports, err := gitHubTestsUint32(row.ReportsExpected)
+			if err != nil {
+				return err
+			}
+			admittedReports, err := gitHubTestsUint32(row.ReportsAdmitted)
+			if err != nil {
+				return err
+			}
+			complete := uint8(0)
+			if row.Complete {
+				complete = 1
+			}
+			if err := batch.Append(row.OrgID, row.RepoID, row.RunID, attempt, row.Provider, complete, gitHubTestsArray(row.Reasons), expectedReports, admittedReports, row.LastSynced, row.VerdictVersion); err != nil {
 				return err
 			}
 		}
@@ -533,9 +583,44 @@ func (sink TestOpsClickHouseEffects) InspectEffect(ctx context.Context, claim Cl
 			found, err := queryGitHubTestsRow(ctx, sink.Conn, `SELECT org_id,repo_id,run_id,snapshot_id,report_format,CAST(lines_total,'Nullable(Int64)'),CAST(lines_covered,'Nullable(Int64)'),line_coverage_pct,CAST(branches_total,'Nullable(Int64)'),CAST(branches_covered,'Nullable(Int64)'),branch_coverage_pct,CAST(functions_total,'Nullable(Int64)'),CAST(functions_covered,'Nullable(Int64)'),commit_hash,branch,CAST(pr_number,'Nullable(Int64)'),team_id,service_id,last_synced,toString(report_slot),toInt64(run_attempt),legacy_snapshot_ids FROM coverage_snapshots FINAL WHERE org_id=? AND repo_id=? AND run_id=? AND snapshot_id=?`, []any{expected.OrgID, expected.RepoID, expected.RunID, expected.SnapshotID}, &actual.OrgID, &actual.RepoID, &actual.RunID, &actual.SnapshotID, &actual.ReportFormat, &actual.LinesTotal, &actual.LinesCovered, &actual.LineCoveragePct, &actual.BranchesTotal, &actual.BranchesCovered, &actual.BranchCoveragePct, &actual.FunctionsTotal, &actual.FunctionsCovered, &actual.CommitHash, &actual.Branch, &actual.PRNumber, &actual.TeamID, &actual.ServiceID, &actual.LastSynced, &actual.ReportSlot, &actual.RunAttempt, &actual.LegacySnapshotIDs)
 			return actual, found, err
 		})
+	case testOpsRunReportCompletenessDestination:
+		rows, err := decodeEffectRows[testOpsRunReportCompletenessRow](effect)
+		if err != nil {
+			return EffectConflict, err
+		}
+		return inspectTestOpsRunReportCompleteness(rows, func(expected testOpsRunReportCompletenessRow) (testOpsRunReportCompletenessRow, bool, error) {
+			actual := testOpsRunReportCompletenessRow{}
+			if err := validateTestOpsProvider(claim, expected.Provider); err != nil {
+				return actual, false, err
+			}
+			found, err := queryGitHubTestsRow(ctx, sink.Conn, `SELECT org_id,toString(repo_id),run_id,toInt64(run_attempt),toString(provider),complete != 0,CAST(reasons, 'Array(String)'),toInt64(reports_expected),toInt64(reports_admitted),last_synced,verdict_version FROM testops_run_report_completeness FINAL WHERE org_id=? AND repo_id=? AND run_id=? AND run_attempt=?`, []any{expected.OrgID, expected.RepoID, expected.RunID, expected.RunAttempt}, &actual.OrgID, &actual.RepoID, &actual.RunID, &actual.RunAttempt, &actual.Provider, &actual.Complete, &actual.Reasons, &actual.ReportsExpected, &actual.ReportsAdmitted, &actual.LastSynced, &actual.VerdictVersion)
+			return actual, found, err
+		})
 	default:
 		return EffectConflict, ErrInvalidConfiguration
 	}
+}
+
+// inspectTestOpsRunReportCompleteness is inspectGitHubTestsRows read through the table's version. FINAL returns the row of the
+// highest verdict_version of a key. A higher stored version outranks the expected row by design (a complete verdict, or a newer
+// walk): the expected row would never be the one FINAL returns, so its write is settled (exact). A lower stored version means the
+// expected row is not stored (absent). Only the same version with other content is a conflict.
+func inspectTestOpsRunReportCompleteness(
+	expected []testOpsRunReportCompletenessRow,
+	load func(testOpsRunReportCompletenessRow) (testOpsRunReportCompletenessRow, bool, error),
+) (EffectInspection, error) {
+	return inspectGitHubTestsRows(expected, func(want testOpsRunReportCompletenessRow) (testOpsRunReportCompletenessRow, bool, error) {
+		actual, found, err := load(want)
+		switch {
+		case err != nil || !found:
+			return actual, found, err
+		case actual.VerdictVersion > want.VerdictVersion:
+			return want, true, nil
+		case actual.VerdictVersion < want.VerdictVersion:
+			return actual, false, nil
+		}
+		return actual, true, nil
+	})
 }
 
 // gitHubTestsArray is ids as an Array(String) value: a row without ids writes [].

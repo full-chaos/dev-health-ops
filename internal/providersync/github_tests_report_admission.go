@@ -18,7 +18,7 @@ const githubTestsExclusionReasonNoReportMember = "no_report_member"
 
 // githubTestsAdmitReportArtifacts applies the per-run artifact cap after a
 // report-member check (CHAOS-14000). Only when the candidates exceed the cap,
-// each one's zip directory is read by range, in order: an artifact that lists
+// every one's zip directory is read by range, in order: an artifact that lists
 // no report-candidate member takes no slot and is returned in noReport; one
 // whose directory cannot be listed keeps its slot, as before. capped says a
 // candidate that may hold reports was left past the cap. used counts every
@@ -37,16 +37,16 @@ func githubTestsAdmitReportArtifacts(
 		if checkErr != nil {
 			return nil, nil, false, used, checkErr
 		}
-		if listed && !hasReport {
+		switch {
+		case listed && !hasReport:
 			noReport = append(noReport, artifact)
-			continue
+		case len(admitted) == maxArtifacts:
+			capped = true
+		default:
+			admitted = append(admitted, artifact)
 		}
-		if len(admitted) == maxArtifacts {
-			return admitted, noReport, true, used, nil
-		}
-		admitted = append(admitted, artifact)
 	}
-	return admitted, noReport, false, used, nil
+	return admitted, noReport, capped, used, nil
 }
 
 // githubTestsArtifactListsReportMember reads only an artifact's zip directory
@@ -88,7 +88,9 @@ func githubTestsArtifactListsReportMember(
 		return false, false, 0, nil
 	}
 	source := &githubTestsRangeReaderAt{ctx: ctx, fetch: fetch, refresh: refresh, size: listedSize}
-	members, err := source.members()
+	// The whole bounded directory, not the parser's entry window: a report member past it still marks the artifact as one
+	// that holds reports.
+	members, err := source.directoryMembers()
 	var unusable *githubTestsRangeUnusableError
 	switch {
 	case errors.As(err, &unusable), errors.Is(err, errGitHubTestsRangeGone), errors.Is(err, ErrGitHubTestsArtifactUnavailable):

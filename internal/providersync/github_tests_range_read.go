@@ -174,10 +174,19 @@ func readGitHubTestsArtifactReports(
 	return packed.Bytes(), false, nil
 }
 
-// members reads the zip directory by range (the end record, then the
-// bounded central directory) and returns the members the parser examines:
-// the first githubTestsMaxArchiveEntries.
+// members returns the members the parser examines: the first
+// githubTestsMaxArchiveEntries of the directory.
 func (r *githubTestsRangeReaderAt) members() ([]*zip.File, error) {
+	members, err := r.directoryMembers()
+	if len(members) > githubTestsMaxArchiveEntries {
+		members = members[:githubTestsMaxArchiveEntries]
+	}
+	return members, err
+}
+
+// directoryMembers reads the zip directory by range (the end record, then
+// the bounded central directory) and returns every member it lists.
+func (r *githubTestsRangeReaderAt) directoryMembers() ([]*zip.File, error) {
 	if err := r.probe(); err != nil {
 		return nil, err
 	}
@@ -192,11 +201,7 @@ func (r *githubTestsRangeReaderAt) members() ([]*zip.File, error) {
 	if zipErr != nil {
 		return nil, githubTestsRangeUnusable("zip_unreadable")
 	}
-	members := reader.File
-	if len(members) > githubTestsMaxArchiveEntries {
-		members = members[:githubTestsMaxArchiveEntries]
-	}
-	return members, nil
+	return reader.File, nil
 }
 
 // githubTestsSingleMember copies one member's raw bytes into a zip of its
@@ -326,8 +331,12 @@ func (r *githubTestsRangeReaderAt) get(first, last int64) ([]byte, int64, error)
 	}
 	response, err := r.fetch(providerfoundation.WithByteRange(r.ctx, "bytes="+strconv.FormatInt(first, 10)+"-"+strconv.FormatInt(last, 10)))
 	if err != nil {
-		if githubTestsGoneError(err) {
+		var providerErr *providerfoundation.ProviderError
+		switch {
+		case githubTestsGoneError(err):
 			return nil, 0, errGitHubTestsRangeGone
+		case errors.As(err, &providerErr) && providerErr.StatusCode == http.StatusRequestedRangeNotSatisfiable:
+			return nil, 0, githubTestsRangeUnusable("range_unsatisfiable")
 		}
 		return nil, 0, err
 	}

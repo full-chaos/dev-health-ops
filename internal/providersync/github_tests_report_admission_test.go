@@ -2,16 +2,19 @@ package providersync
 
 import (
 	"archive/zip"
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -45,6 +48,9 @@ type githubTestsAdmissionDoer struct {
 	t         *testing.T
 	runID     string
 	artifacts []githubTestsAdmissionArtifact
+	direct    bool   // the API serves each zip itself, with range support
+	sizeDelta int    // the listing states each size this much larger than the zip
+	scheme    string // of the blob Location; "" = https
 	api       map[int64]int
 	whole     map[int64]int // blob GETs without Range
 	ranged    map[int64]int
@@ -70,30 +76,17 @@ func (doer *githubTestsAdmissionDoer) Do(request *http.Request) (*http.Response,
 	doer.requests++
 	header := http.Header{"Content-Type": {"application/json"}}
 	path := request.URL.Path
+	host := request.URL.Host
+	if host == "" {
+		host = request.Host
+	}
 	switch {
-	case request.URL.Host == "blob.example":
+	case host == "blob.example":
 		id, err := strconv.ParseInt(strings.TrimSuffix(strings.TrimPrefix(path, "/"), ".zip"), 10, 64)
 		if err != nil {
 			doer.t.Fatalf("blob path %q", path)
 		}
-		artifact := doer.artifact(id)
-		request = request.Clone(request.Context())
-		if request.Header.Get("Range") != "" {
-			doer.ranged[id]++
-			if artifact.noRange {
-				request.Header.Del("Range")
-			}
-		} else {
-			doer.whole[id]++
-		}
-		recorder := httptest.NewRecorder()
-		http.ServeContent(recorder, request, "artifact.zip", time.Time{}, bytes.NewReader(artifact.archive))
-		response := recorder.Result()
-		response.Request = request
-		if artifact.noRange {
-			response.Header.Del("Accept-Ranges")
-		}
-		return response, nil
+		return doer.serve(request, doer.artifact(id)), nil
 	case path == "/repos/acme/api":
 		return githubTestsHTTPResponse(request, header, gitHubRepositoryFixture), nil
 	case path == "/repos/acme/api/actions/runs":
@@ -107,7 +100,7 @@ func (doer *githubTestsAdmissionDoer) Do(request *http.Request) (*http.Response,
 			if index > 0 {
 				list.WriteByte(',')
 			}
-			fmt.Fprintf(&list, `{"id":%d,"name":%q,"size_in_bytes":%d,"expired":false,"created_at":%q}`, artifact.id, artifact.name, len(artifact.archive), artifact.created)
+			fmt.Fprintf(&list, `{"id":%d,"name":%q,"size_in_bytes":%d,"expired":false,"created_at":%q}`, artifact.id, artifact.name, len(artifact.archive)+doer.sizeDelta, artifact.created)
 		}
 		list.WriteString(`]}`)
 		return githubTestsHTTPResponse(request, header, list.String()), nil
@@ -117,13 +110,41 @@ func (doer *githubTestsAdmissionDoer) Do(request *http.Request) (*http.Response,
 			doer.t.Fatalf("artifact path %q", path)
 		}
 		doer.api[id]++
+		if doer.direct {
+			return doer.serve(request, doer.artifact(id)), nil
+		}
+		scheme := doer.scheme
+		if scheme == "" {
+			scheme = "https"
+		}
 		return &http.Response{
-			StatusCode: http.StatusFound, Header: http.Header{"Location": {"https://blob.example/" + strconv.FormatInt(id, 10) + ".zip"}},
+			StatusCode: http.StatusFound, Header: http.Header{"Location": {scheme + "://blob.example/" + strconv.FormatInt(id, 10) + ".zip"}},
 			Body: http.NoBody, Request: request,
 		}, nil
 	}
 	doer.t.Fatalf("unexpected request %s", request.URL.String())
 	return nil, nil
+}
+
+// serve answers one zip request with http.ServeContent, Range included.
+func (doer *githubTestsAdmissionDoer) serve(request *http.Request, artifact githubTestsAdmissionArtifact) *http.Response {
+	request = request.Clone(request.Context())
+	if request.Header.Get("Range") != "" {
+		doer.ranged[artifact.id]++
+		if artifact.noRange {
+			request.Header.Del("Range")
+		}
+	} else {
+		doer.whole[artifact.id]++
+	}
+	recorder := httptest.NewRecorder()
+	http.ServeContent(recorder, request, "artifact.zip", time.Time{}, bytes.NewReader(artifact.archive))
+	response := recorder.Result()
+	response.Request = request
+	if artifact.noRange {
+		response.Header.Del("Accept-Ranges")
+	}
+	return response
 }
 
 func (doer *githubTestsAdmissionDoer) rangeRequests() int {
@@ -360,16 +381,195 @@ func TestGitHubTestsUnlistableDirectoryKeepsItsCapSlot(t *testing.T) {
 	}
 }
 
-// Report artifacts past the cap are still cut and recorded; the check stops
-// at the first report artifact past the cap.
+// Report artifacts past the cap are still cut and recorded: every candidate's
+// directory is checked, and only the first cap-worth of report artifacts is
+// downloaded.
 func TestGitHubTestsReportArtifactsPastTheCapAreCut(t *testing.T) {
 	doer := newGitHubTestsAdmissionDoer(t, "77", githubTestsAdmissionFixture(t, "shard-a", "shard-b", "shard-c", "shard-d"))
 	walk := githubTestsAdmissionWalk(t, doer, 2)
 	if !githubTestsHasObservation(walk, githubTestsRunArtifactsComponent, githubTestsPerRunCapCause) {
 		t.Fatalf("no per_run_cap: %+v", walk.cursor.Incomplete)
 	}
-	if doer.api[103] != 0 {
-		t.Fatalf("api requests for the fourth artifact=%d, want 0: the check stops at the first report artifact past the cap", doer.api[103])
+	if doer.api[103] != 1 || doer.whole[102] != 0 || doer.whole[103] != 0 {
+		t.Fatalf("fourth artifact checks=%d, downloads past the cap=%d/%d, want 1 check and no download", doer.api[103], doer.whole[102], doer.whole[103])
+	}
+}
+
+// githubTestsWideArtifact is a report artifact whose only report member comes
+// after githubTestsMaxArchiveEntries other members.
+func githubTestsWideArtifact(t *testing.T, id int64, name string) githubTestsAdmissionArtifact {
+	t.Helper()
+	order := make([]string, 0, githubTestsMaxArchiveEntries+1)
+	bodies := map[string]string{}
+	for index := range githubTestsMaxArchiveEntries {
+		member := fmt.Sprintf("attachments/%04d.bin", index)
+		order = append(order, member)
+		bodies[member] = "x"
+	}
+	order = append(order, "junit.xml")
+	bodies["junit.xml"] = "<testsuites>" + githubTestsACRShardSuite(name) + "</testsuites>"
+	return githubTestsAdmissionArtifact{id: id, name: name, created: "2026-07-22T09:59:00Z", archive: githubTestsOrderedZip(t, order, bodies)}
+}
+
+func githubTestsCollectAdmission(t *testing.T, doer *githubTestsAdmissionDoer, maxArtifacts int) error {
+	t.Helper()
+	_, err := (GitHubTestsRouteHandler{MaxArtifactsPerRun: maxArtifacts}).Collect(context.Background(), nativeTestClaim("github", "cicd"), providerfoundation.Credential{},
+		githubTestsClient(t, fakehttp.Client(doer)), time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC))
+	return err
+}
+
+// A report member past the parser's entry window still marks the artifact
+// as one that holds reports: it is never a no_report_member exclusion, so it
+// keeps its slot and the report artifact it pushes past the cap is cut.
+func TestGitHubTestsReportPastTheEntryWindowKeepsItsSlot(t *testing.T) {
+	artifacts := func() []githubTestsAdmissionArtifact {
+		return append([]githubTestsAdmissionArtifact{githubTestsWideArtifact(t, 99, "wide-bundle")}, githubTestsAdmissionFixture(t, "shard-b", "shard-c")...)
+	}
+	chunked := newGitHubTestsAdmissionDoer(t, "77", artifacts())
+	walk := githubTestsAdmissionWalk(t, chunked, 2)
+	for _, record := range walk.cursor.ExcludedArtifactSample {
+		if strings.HasPrefix(record, "wide-bundle ") {
+			t.Fatalf("excluded sample %v, want the wide bundle kept as a report artifact", walk.cursor.ExcludedArtifactSample)
+		}
+	}
+	if !githubTestsHasObservation(walk, githubTestsRunArtifactsComponent, githubTestsPerRunCapCause) {
+		t.Fatalf("chunked: no per_run_cap, want the third report artifact cut: %+v", walk.cursor.Incomplete)
+	}
+	if err := githubTestsCollectAdmission(t, newGitHubTestsAdmissionDoer(t, "77", artifacts()), 2); !errors.Is(err, ErrPaginationCapExceeded) {
+		t.Fatalf("Collect err=%v, want ErrPaginationCapExceeded", err)
+	}
+}
+
+// Classification goes on after the cap is full: an artifact without a report
+// member that comes after the overflow is still excluded, whether the
+// overflow is a report artifact or one whose directory cannot be listed.
+func TestGitHubTestsAdmissionClassifiesPastTheOverflow(t *testing.T) {
+	for _, unlistable := range []bool{false, true} {
+		t.Run(fmt.Sprintf("unlistable_overflow=%t", unlistable), func(t *testing.T) {
+			artifacts := func() []githubTestsAdmissionArtifact {
+				items := githubTestsAdmissionFixture(t, "shard-a", "shard-b", "shard-c", "race-json-late")
+				items[2].noRange = unlistable
+				return items
+			}
+			chunked := newGitHubTestsAdmissionDoer(t, "77", artifacts())
+			walk := githubTestsAdmissionWalk(t, chunked, 2)
+			if chunked.ranged[103] == 0 || chunked.whole[103] != 0 {
+				t.Fatalf("chunked: race directory checks=%d downloads=%d, want checked and not downloaded", chunked.ranged[103], chunked.whole[103])
+			}
+			if len(walk.cursor.ExcludedArtifactSample) != 1 || walk.cursor.ExcludedArtifactSample[0] != "race-json-late (no_report_member)" {
+				t.Fatalf("chunked: excluded sample %v, want the late race artifact", walk.cursor.ExcludedArtifactSample)
+			}
+			if !githubTestsHasObservation(walk, githubTestsRunArtifactsComponent, githubTestsPerRunCapCause) {
+				t.Fatalf("chunked: no per_run_cap: %+v", walk.cursor.Incomplete)
+			}
+			collect := newGitHubTestsAdmissionDoer(t, "77", artifacts())
+			if err := githubTestsCollectAdmission(t, collect, 2); !errors.Is(err, ErrPaginationCapExceeded) {
+				t.Fatalf("Collect err=%v, want ErrPaginationCapExceeded", err)
+			}
+			if collect.ranged[103] == 0 {
+				t.Fatal("Collect: the late race artifact was not checked")
+			}
+		})
+	}
+}
+
+// A 416 from the API serving the zip itself is an unusable range like the
+// blob store's: the candidate keeps its slot and the walk goes on.
+func TestGitHubTestsAdmissionDirect416KeepsTheSlot(t *testing.T) {
+	newDoer := func() *githubTestsAdmissionDoer {
+		doer := newGitHubTestsAdmissionDoer(t, "77", githubTestsAdmissionFixture(t, "shard-a", "shard-b", "shard-c"))
+		doer.direct, doer.sizeDelta = true, 2<<20
+		return doer
+	}
+	chunked := newDoer()
+	walk := githubTestsAdmissionWalk(t, chunked, 2)
+	if chunked.rangeRequests() == 0 {
+		t.Fatal("no range request: the cell must reach the 416")
+	}
+	if !githubTestsHasObservation(walk, githubTestsRunArtifactsComponent, githubTestsPerRunCapCause) {
+		t.Fatalf("chunked: no per_run_cap: %+v", walk.cursor.Incomplete)
+	}
+	if err := githubTestsCollectAdmission(t, newDoer(), 2); !errors.Is(err, ErrPaginationCapExceeded) {
+		t.Fatalf("Collect err=%v, want ErrPaginationCapExceeded", err)
+	}
+}
+
+// githubTestsWriteResponse writes a doer's response on a server connection.
+func githubTestsWriteResponse(w io.Writer, response *http.Response) error {
+	body, err := io.ReadAll(response.Body)
+	response.Body.Close()
+	if err != nil {
+		return err
+	}
+	if response.Header == nil {
+		response.Header = http.Header{}
+	}
+	response.ProtoMajor, response.ProtoMinor, response.TransferEncoding = 1, 1, nil
+	response.ContentLength = int64(len(body))
+	response.Header.Set("Content-Length", strconv.Itoa(len(body)))
+	response.Body = io.NopCloser(bytes.NewReader(body))
+	return response.Write(w)
+}
+
+// The chunked route's fetch evidence counts the admission check's transport
+// resend: a range GET the peer drops on a reused connection is sent again by
+// net/http, and the server, the request usage ledger and the cursor all count
+// both writes.
+func TestGitHubTestsAdmissionCountsTransportResends(t *testing.T) {
+	doer := newGitHubTestsAdmissionDoer(t, "77", githubTestsAdmissionFixture(t, "shard-a", "shard-b", "race-json-x"))
+	doer.scheme = "http"
+	var received, resent atomic.Int32
+	transport := &http.Transport{
+		DialContext: func(context.Context, string, string) (net.Conn, error) {
+			left, right := net.Pipe()
+			go func() {
+				defer right.Close()
+				input := bufio.NewReader(right)
+				for served := 0; ; served++ {
+					request, err := http.ReadRequest(input)
+					if err != nil {
+						return
+					}
+					received.Add(1)
+					if served > 0 && request.Header.Get("Range") != "" && resent.CompareAndSwap(0, 1) {
+						return
+					}
+					response, err := doer.Do(request)
+					if err != nil || githubTestsWriteResponse(right, response) != nil {
+						return
+					}
+				}
+			}()
+			return left, nil
+		},
+	}
+	defer transport.CloseIdleConnections()
+	wire := &http.Client{Transport: githubTestsOfflineTransport{transport}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	client, err := providerfoundation.NewHTTPClient("github", "http://api.example", CountRequests(wire),
+		func(*http.Request) error { return nil }, providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond},
+		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ledger := NewRequestLedger()
+	ctx, cancel := context.WithTimeout(WithRequestLedger(t.Context(), ledger), 20*time.Second)
+	defer cancel()
+	last, final := "", false
+	err = (GitHubTestsRouteHandler{MaxArtifactsPerRun: 2}).CollectChunks(ctx, nativeTestClaim("github", "cicd"), providerfoundation.Credential{}, client,
+		time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC), "", func(emission ChunkRouteEmission) error {
+			last, final = emission.CursorAfter, final || emission.Final
+			return nil
+		})
+	if err != nil || !final {
+		t.Fatalf("err=%v final=%v, want a completed walk", err, final)
+	}
+	cursor, err := decodeGitHubTestsChunkCursor(last)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("WIRE transport_received=%d usage_ledger=%d fetch_evidence=%d resent=%d range_requests=%d", received.Load(), ledger.Totals().Requests, cursor.Requests, resent.Load(), doer.rangeRequests())
+	if resent.Load() != 1 || int(received.Load()) != cursor.Requests || cursor.Requests != ledger.Totals().Requests {
+		t.Fatalf("received=%d ledger=%d fetch_evidence=%d resent=%d, want one resend and all three equal", received.Load(), ledger.Totals().Requests, cursor.Requests, resent.Load())
 	}
 }
 

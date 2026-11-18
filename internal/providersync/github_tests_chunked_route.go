@@ -1855,7 +1855,10 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 					}
 					// CHAOS-14000: the cap counts only artifacts whose zip directory lists a report member; one that lists none is
 					// excluded, never a loss.
-					artifactItems, noReportItems, artifactsCapped, _, admitErr := githubTestsAdmitReportArtifacts(ctx, client, root, artifactItems, maxArtifacts)
+					// The checks' own wire count replaces the Do calls they made, so a transport resend is counted too.
+					requestsBeforeAdmission := requests
+					artifactItems, noReportItems, artifactsCapped, admitRequests, admitErr := githubTestsAdmitReportArtifacts(ctx, client, root, artifactItems, maxArtifacts)
+					requests = requestsBeforeAdmission + admitRequests
 					cursor.Requests = invocationBaseRequests + requests
 					if admitErr != nil {
 						return admitErr

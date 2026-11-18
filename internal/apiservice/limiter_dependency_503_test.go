@@ -46,6 +46,7 @@ func limiterRoutes() []limiterRoute {
 	return []limiterRoute{
 		{"login", http.MethodPost, "/api/v1/auth/login", `{"email":"a@example.com","password":"pw"}`, "auth_login_ip", false},
 		{"refresh", http.MethodPost, "/api/v1/auth/refresh", `{"refresh_token":"t"}`, "auth_refresh", false},
+		{"refresh address", http.MethodPost, "/api/v1/auth/refresh", `{"refresh_token":"t"}`, "auth_refresh_addr", false},
 		{"validate", http.MethodPost, "/api/v1/auth/validate", `{"token":"t"}`, "auth_validate", false},
 		{"register", http.MethodPost, "/api/v1/auth/register", `{"email":"new@example.com","password":"password-1234"}`, "auth_register", false},
 		{"verify", http.MethodGet, "/api/v1/auth/verify?token=t", "", "auth_verify", false},

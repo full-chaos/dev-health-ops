@@ -286,7 +286,7 @@ type Store interface {
 	LoadRun(context.Context, string) (Run, error)
 	ClaimDispatch(context.Context, string) (*Run, error)
 	DispatchablePartitions(context.Context, string) ([]Partition, error)
-	MaterializeScheduledFanout(context.Context, Run, []RepositoryID) (bool, error)
+	MaterializeScheduledFanout(context.Context, Run, []RepositoryID, Publisher) (bool, error)
 	ClaimPartition(context.Context, string) (*PartitionClaim, error)
 	RenewPartition(context.Context, PartitionClaim) error
 	CompletePartition(context.Context, PartitionClaim, Publisher) error
@@ -562,7 +562,7 @@ func (handler *Dispatcher) Work(ctx context.Context, execution *jobruntime.Execu
 		if err != nil {
 			return jobruntime.Retryable(err)
 		}
-		if _, err := handler.store.MaterializeScheduledFanout(ctx, *run, repositoryIDs); err != nil {
+		if _, err := handler.store.MaterializeScheduledFanout(ctx, *run, repositoryIDs, handler.publisher); err != nil {
 			if errors.Is(err, ErrInvalidState) {
 				return permanentWithCause(err, jobruntime.ReasonInvalidState, "step=dispatch_materialize")
 			}

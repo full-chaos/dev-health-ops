@@ -262,6 +262,15 @@ func (service *NativePostSyncService) fanout(ctx context.Context, args PostSyncA
 	if plan == nil {
 		observe = true
 		outcome = jobruntime.PostSyncFanoutOutcomeNoRepositories
+		state.step = stageCommitCheck
+		var allowed bool
+		if allowed, err = service.postSyncCommitAllowed(ctx, tx, args); err != nil {
+			return err
+		}
+		if !allowed {
+			observe = false
+			return nil
+		}
 		state.step = stageCommit
 		if err = tx.Commit(ctx); err != nil {
 			return err
@@ -336,6 +345,15 @@ func (service *NativePostSyncService) fanout(ctx context.Context, args PostSyncA
 	state.step = stageOwnershipDerivation
 	if err = service.publishTeamRepoOwnershipDerivation(ctx, tx, *plan); err != nil {
 		return err
+	}
+	state.step = stageCommitCheck
+	allowed, err := service.postSyncCommitAllowed(ctx, tx, args)
+	if err != nil {
+		return err
+	}
+	if !allowed {
+		observe = false
+		return nil
 	}
 	state.step = stageCommit
 	if commitErr := tx.Commit(ctx); commitErr != nil {
@@ -570,22 +588,32 @@ SELECT EXISTS (
     SELECT 1
     FROM public.sync_dispatch_outbox AS outbox
     JOIN public.sync_dispatch_transport_routes AS route
-      ON route.kind = outbox.kind
-    WHERE outbox.id = $1::uuid
-      AND outbox.sync_run_id = $2::uuid
-      AND outbox.org_id = $3
-      AND outbox.kind = 'post_sync'
-      AND outbox.status = 'dispatched'
-      AND outbox.dispatched_transport = 'river'
-      AND outbox.dispatched_route_generation = $4
-      AND route.transport = 'river'
-      AND route.generation = $4
-      AND route.paused = false
-)`, args.OutboxID(), args.SyncRunID(), args.OrganizationID(), args.RouteGeneration()).Scan(&current)
+      ON route.kind = outbox.kind`+transportReferencePredicate+`
+)`, args.OutboxID(), args.SyncRunID(), args.OrganizationID(), args.RouteGeneration(), outboxKindPostSync, args.Attempt()).Scan(&current)
 	if err != nil {
 		return false, unavailable(stageReference, err)
 	}
 	return current, nil
+}
+
+// postSyncCommitAllowed is the pass's last statement before COMMIT: the shared commit snapshot of the post_sync row
+// (locked to the commit, NOWAIT) judged by decideCommit. A superseded delivery is refused with one line; a held row
+// (55P03) or a read error is ErrPostSyncUnavailable, so River retries the same delivery.
+func (service *NativePostSyncService) postSyncCommitAllowed(ctx context.Context, tx pgx.Tx, args PostSyncArgs) (bool, error) {
+	snapshot, err := readCommitSnapshot(ctx, tx, args, outboxKindPostSync)
+	if err != nil {
+		return false, unavailable(stageCommitCheck, err)
+	}
+	allowed, reason := decideCommit(snapshot, args.RouteGeneration(), args.Attempt())
+	if !allowed {
+		service.logger.Info(ctx, synclog.MsgPostSyncDeliveryNotCurrent,
+			synclog.Org(synclog.ParseID(args.OrganizationID())),
+			synclog.Run(synclog.ParseID(args.SyncRunID())),
+			synclog.Text(synclog.KeyReason, synclog.ParseLabel(reason)),
+			synclog.Count(synclog.KeyDeliveryRouteGeneration, args.RouteGeneration()),
+			synclog.Count(synclog.KeyCurrentRouteGeneration, snapshot.currentRouteGeneration()))
+	}
+	return allowed, nil
 }
 
 func loadPostSyncPlan(

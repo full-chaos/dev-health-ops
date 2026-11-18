@@ -7,6 +7,7 @@ query ThroughputForecast($orgId: String!, $input: ThroughputForecastInput!) {
     backlogSize
     backlogState
     backlogAsOfDay
+    degradedReason
     historyWeeks
     p50Weeks
     p75Weeks

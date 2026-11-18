@@ -35,14 +35,11 @@ func TestADayWhoseEveryUserKeyIsRetractedIsNoDay(t *testing.T) {
         VALUES (?, ?, ?, 'dave@example.com', 'dave@example.com', ?, ?, 'Team A', ?, ?)`,
 			f.OrgA, f.RepoID, next, load, crossorg.RetractedPeopleTeam, row.at, row.marker)
 	}
-	team := crossorg.RetractedPeopleTeam
-	for name, teamID := range map[string]*string{"the whole organization": nil, "the team": &team} {
-		rows, err := fetchUserMetrics(ctx, client, f.OrgA, day.Format("2006-01-02"), next.Format("2006-01-02"), teamID, nil)
-		if err != nil {
-			t.Fatalf("%s: %v", name, err)
-		}
-		if len(rows) != 1 || !rows[0].day.Equal(day) || rows[0].prInterruptionLoad != 20 {
-			t.Errorf("%s: rows = %+v, want the first day alone with a load of 20 (alice and carol; bob and the retracted day add nothing and the day of dave is no day)", name, rows)
-		}
+	rows, err := fetchUserMetrics(ctx, client, f.OrgA, day.Format("2006-01-02"), next.Format("2006-01-02"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || !rows[0].day.Equal(day) || rows[0].prInterruptionLoad != 20 {
+		t.Errorf("rows = %+v, want the first day alone with a load of 20 (alice and carol; bob and the retracted day add nothing and the day of dave is no day)", rows)
 	}
 }

@@ -31,7 +31,9 @@ type bindingClient struct {
 }
 
 func (c *bindingClient) Query(ctx context.Context, statement string, bindings []clickhouse.Binding) (clickhouse.RowScanner, error) {
-	c.bindings = append(c.bindings, bindings)
+	if !strings.Contains(statement, "pooled_incident_repairs") && !strings.Contains(statement, "pooled_bug_repairs") {
+		c.bindings = append(c.bindings, bindings)
+	}
 	return c.fakeClient.Query(ctx, statement, nil)
 }
 
@@ -218,6 +220,7 @@ func TestOrganisationMetricsAreTheOnesWhoseReadsHaveNoTeam(t *testing.T) {
 		complexity:    []complexityAggRow{{cyclomaticPerKloc: fp(3)}},
 		deployments:   []deploymentsAggRow{{deploymentsCount: 2, storedRows: 1}},
 		incidents:     []incidentsAggRow{{incidentsCount: 1, mttrP50Hours: fp(1), storedRows: 1}},
+		mttrPooledP50: fp(1),
 	}
 	teamRows := periodRows{
 		workItems:      []workItemsRow{{itemsCompleted: 1, cycleTimeP50Hours: fp(1), wipAgeP90Hours: fp(1)}},

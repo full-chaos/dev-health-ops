@@ -29,6 +29,7 @@ import (
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
+	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/flame"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
@@ -155,7 +156,7 @@ func newFlameWorkHandler(client flame.QueryClient) http.HandlerFunc {
 			return
 		}
 
-		query := r.URL.Query()
+		query := httpapi.Query(r)
 
 		// Order matters here, confirmed by this binary's own established
 		// people_route.go precedent: FastAPI/Pydantic resolves entity_type/

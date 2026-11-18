@@ -203,7 +203,7 @@ func Routes(deps Deps) []httpapi.Route {
 		http.MethodDelete, http.MethodOptions} {
 		// Every route it dispatches declares a response_model.
 		routes = append(routes, httpapi.Route{Method: method, Pattern: prefix + "/oauth/{first}/{second}", Handler: pair,
-			ResponseModelFor: func(*http.Request) bool { return true }})
+			ResponseModelFor: func(*http.Request) bool { return true }, MethodFallback: true})
 	}
 	return routes
 }

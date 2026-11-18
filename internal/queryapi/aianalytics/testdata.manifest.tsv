@@ -1,8 +1,8 @@
 # Every file under internal/queryapi/aianalytics/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
-# python-recorded set: 2bed6e3d4b6b878c22028c3c71e3f8507920727f9177ee61d98d806dbf8bbddb (4 files)
+# python-recorded set: 6624789059dcc92bd15a3353bbba746e4daacd41b541762a795b0989525d4813 (4 files)
 # header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
-eeaa2edefcef323c3922da47529ad98180600063e6c806db60e39d73a50477fe	hand-written	README.md
+2303a892393812cfa4806cd66ab0950150d3c6146e2114404abb359e2a91842b	hand-written	README.md
 dbee37c5d1bc1dacb6c504b9d57c4564a10fd6934480cae04d98cb72681dc1a9	python-recorded	oracle_b_cases.json
 b6b91a2f881a3d115666a149f38eea97ce0a74a16ead2e8ae45c511bd0b93869	python-recorded	oracle_c_cases.json
-93233abb774a109dc3678a9dd5e20779b257e0eb312e695e0ffaad8a2be0704a	python-recorded	oracle_cases.json
+d6d57042a0eea47e94129f52eebba812e1c22209c07f50399bf34f44c8e26b05	python-recorded	oracle_cases.json
 cb2de5ccd1fe865a543761d0c6093ef7da7e6ee8c3138a042811cb3c84ca3307	python-recorded	oracle_d_cases.json

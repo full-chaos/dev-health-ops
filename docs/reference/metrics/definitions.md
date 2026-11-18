@@ -295,6 +295,35 @@ them.
 - The chart range includes its last day. A bucket with no sample has no point, never 0. The read has the same row bound
   as the TestOps pooled read.
 
+### AI report charts of deploy time, pull request size and MTTR
+
+The AI report charts of six delivery metrics are taken over the window's raw rows, with the rules of the daily job that
+stores them. They are never a mean of the stored per-repository-day values.
+
+| Report metric | Value of a bucket | Sample |
+| --- | --- | --- |
+| `deploy_time_p50_hours` | median | a deployment: finished at minus started at, in hours |
+| `pr_size_p50_loc` | median | a merged pull request: additions plus deletions |
+| `pr_size_p90_loc` | 90th percentile | a merged pull request, as above |
+| `mttr_hours` | mean | a bug work item: completed at minus started at, in hours |
+| `mttr_p50_hours` | median | an incident: resolved at minus started at, in hours |
+| `mttr_p90_hours` | 90th percentile | an incident, as above |
+
+- A percentile is linear between the closest ranks, as the daily job computes it.
+- A deployment counts on the UTC day it deployed. A cancelled deployment is not a deployment. A deployment without a
+  start or a finish time, or with a negative duration, is no sample. A deployment counts once, with its latest sync.
+- A pull request counts on the UTC day it merged, once, with its latest sync. A size of 0 is no sample.
+- A bug work item counts on the UTC day it completed, when it has a start time and a completion time. A negative
+  repair time is a sample, as the daily job's mean includes it.
+- An incident counts on the UTC day it started, only when it is also resolved on that day, once for each repository
+  that its service maps to. A deleted incident is no incident. A negative repair time is no sample. The service
+  mappings are the ones that are active and valid when the chart runs.
+- Only the repository-days that the daily job computed are read.
+- These metrics have no team or service dimension. A team filter does not narrow the chart, and a team or service group
+  is one `unscoped` bucket.
+- The chart range includes its last day. A bucket with no sample has no point, never 0. The read has the same row bound
+  as the TestOps pooled read.
+
 ## Pull request rework ratio
 
 The pull request rework ratio is, of the merged pull requests that have

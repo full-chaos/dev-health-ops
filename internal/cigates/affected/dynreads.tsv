@@ -478,6 +478,7 @@ internal/jobs/metrics/remaining	capacity_schema_contract_pin_test.go
 internal/jobs/metrics/remaining	membership_golden_test.go
 internal/jobs/metrics/remaining	recorded_paths_test.go
 internal/jobs/report	cicd_pooled_test.go
+internal/jobs/report	delivery_pooled_test.go
 internal/jobs/report	report_test.go
 internal/jobs/report	runtime_integration_test.go
 internal/llmorgsettings	baseurl_reader_guard_test.go

@@ -162,8 +162,8 @@ type TeamCatalogResult struct {
 	// keeps that verification for native providers too, not just bridge ones.
 	TeamKeys []string
 	// RosterPreservationFailed (team-lead ruling, 2026-08-28) is true when
-	// the existing-manual_members pre-read (CHAOS-4446's
-	// PreserveExistingTeamManualMembers) failed and the collector chose to
+	// the existing-manual_members pre-read (CHAOS-4446; no writer makes one
+	// since CHAOS-14081 keeps the roster inside the insert) failed and the collector chose to
 	// CONTINUE the write rather than hard-fail it. No collector sets this
 	// today -- hard-failing is the safe default (it is exactly what CHAOS-4446
 	// fixed: a quiet empty override is a silent data-loss bug) -- but the

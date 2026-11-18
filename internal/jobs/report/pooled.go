@@ -233,9 +233,10 @@ func repositoryOwnerJoin(orgID string, teams []string, asOf time.Time) (string, 
     ) AS own ON toString(repo_id) = own.owned_repo_id`, fromWhere, scope), named, nil
 }
 
-// repositoryOwnedTables are the charted daily tables with no team column: the team of a row is the owner of its
-// repository as of the chart run, as for a pooled chart.
-var repositoryOwnedTables = map[string]bool{"cicd_metrics_daily": true}
+// repositoryOwnedTables are the charted daily tables of one row per repository-day whose team is the owner of its
+// repository as of the chart run, as for a pooled chart: cicd_metrics_daily has no team column, and the stored team_id
+// of testops_pipeline_metrics_daily is the main owner at the end of the day only, so it is not read.
+var repositoryOwnedTables = map[string]bool{"cicd_metrics_daily": true, "testops_pipeline_metrics_daily": true}
 
 // withRepositoryOwners returns the definition of a stored-row chart of a repository-owned table with its owners instant
 // asOf, when the metric has the team dimension.

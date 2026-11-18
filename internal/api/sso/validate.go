@@ -127,7 +127,7 @@ func oauthCallbackRequest(m pybody.Model) {
 // listQuery is list_sso_providers' query: protocol and status (str | None),
 // limit (int = 50) and offset (int = 0), in signature order.
 func listQuery(r *http.Request, errs *pybody.Errors) {
-	query := r.URL.Query()
+	query := pybody.Query(r)
 	errs.QueryInt("limit", pybody.LastQueryValue(query, "limit"), 50, nil, nil)
 	errs.QueryInt("offset", pybody.LastQueryValue(query, "offset"), 0, nil, nil)
 }
@@ -135,5 +135,5 @@ func listQuery(r *http.Request, errs *pybody.Errors) {
 // byTypeQuery is initiate_oauth_by_type's query: org_id (str, required) and
 // redirect_uri (str | None).
 func byTypeQuery(r *http.Request, errs *pybody.Errors) {
-	errs.RequiredQueryString("org_id", pybody.LastQueryValue(r.URL.Query(), "org_id"), 0)
+	errs.RequiredQueryString("org_id", pybody.LastQueryValue(pybody.Query(r), "org_id"), 0)
 }

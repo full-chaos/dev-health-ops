@@ -74,7 +74,7 @@ func (h *handlers) listPagerDutyServices(w http.ResponseWriter, r *http.Request)
 	if !ok {
 		return
 	}
-	name, present := queryLastValue(r.URL.Query(), "credential_name")
+	name, present := queryLastValue(httpapi.Query(r), "credential_name")
 	if !present {
 		name = "default"
 	} else if name == "" {

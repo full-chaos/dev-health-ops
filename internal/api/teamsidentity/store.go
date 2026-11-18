@@ -322,12 +322,17 @@ func (s Store) SetMembers(ctx context.Context, orgID, teamID string, manualMembe
 // another writer's version won over it (the edit is not in the stored
 // roster), the edit is applied again to a fresh read of the team, at most
 // rosterRounds writes; then ErrTeamChangedConcurrently. A team that is not
-// there (or was deleted meanwhile) is nil.
+// there is nil; a team that is gone after a read-back found the edit lost
+// (deleted by the writer that won) is ErrTeamChangedConcurrently: the edit
+// was not applied.
 func (s Store) editRoster(ctx context.Context, orgID, teamID string, edit rosterEdit) (*Team, error) {
 	for round := 1; ; round++ {
 		existing, err := s.GetTeam(ctx, orgID, teamID)
 		if err != nil {
 			return nil, err
+		}
+		if existing == nil && round > 1 {
+			return nil, fmt.Errorf("edit team %q roster: the team is gone: %w", teamID, ErrTeamChangedConcurrently)
 		}
 		if existing == nil {
 			return nil, nil
@@ -643,6 +648,24 @@ func (s Store) CreateOrUpdateIdentity(ctx context.Context, orgID string, write I
 	if err != nil {
 		return Identity{}, err
 	}
+	identity := resolveIdentity(orgID, existing, write, time.Now().UTC())
+	providersJSON, err := pythonProviderIdentitiesJSON(identity.ProviderIdentities)
+	if err != nil {
+		return Identity{}, fmt.Errorf("encode provider_identities: %w", err)
+	}
+	if err := s.insertIdentityRow(ctx, identityInsertRow{
+		OrgID: orgID, CanonicalID: identity.CanonicalID, IdentityUUID: identity.IdentityUUID,
+		DisplayName: identity.DisplayName, Email: identity.Email, ProviderIdentitiesJSON: providersJSON,
+		TeamIDs: identity.TeamIDs, IsActive: true, UpdatedAt: identity.UpdatedAt,
+	}); err != nil {
+		return Identity{}, err
+	}
+	return identity, nil
+}
+
+// resolveIdentity is the identity a write stores over existing (nil for a
+// new one): a field the write leaves out keeps the existing value.
+func resolveIdentity(orgID string, existing *Identity, write IdentityWrite, now time.Time) Identity {
 	uuidValue := identityUUID(orgID, write.CanonicalID)
 	if existing != nil {
 		uuidValue = existing.IdentityUUID
@@ -670,24 +693,11 @@ func (s Store) CreateOrUpdateIdentity(ctx context.Context, orgID string, write I
 	if resolvedTeamIDs == nil {
 		resolvedTeamIDs = []string{}
 	}
-
-	now := time.Now().UTC()
-	providersJSON, err := pythonProviderIdentitiesJSON(resolvedProviders)
-	if err != nil {
-		return Identity{}, fmt.Errorf("encode provider_identities: %w", err)
-	}
-	if err := s.insertIdentityRow(ctx, identityInsertRow{
-		OrgID: orgID, CanonicalID: write.CanonicalID, IdentityUUID: uuidValue,
-		DisplayName: resolvedDisplay, Email: resolvedEmail, ProviderIdentitiesJSON: providersJSON,
-		TeamIDs: resolvedTeamIDs, IsActive: true, UpdatedAt: now,
-	}); err != nil {
-		return Identity{}, err
-	}
 	return Identity{
 		ID: uuidValue.String(), IdentityUUID: uuidValue, CanonicalID: write.CanonicalID,
 		DisplayName: resolvedDisplay, Email: resolvedEmail, ProviderIdentities: resolvedProviders,
 		TeamIDs: resolvedTeamIDs, IsActive: true, UpdatedAt: now, OrgID: orgID,
-	}, nil
+	}
 }
 
 // DeleteIdentity is ClickHouseIdentityStore.delete: a ClickHouse lightweight

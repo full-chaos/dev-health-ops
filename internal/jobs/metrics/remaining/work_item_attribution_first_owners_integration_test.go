@@ -113,17 +113,18 @@ func TestWorkItemAttributionAppliesTheFirstRecordedOwnersBackward(t *testing.T) 
 	add("revoked-first", "after-next-start", completedOn(day(time.June, 1)))
 	add("only-future", "not-completed", nil)
 	add("only-future", "completed-before-first", completedOn(day(time.February, 15)))
+	// Pull requests: only a pull / merge request takes the ownership of its own repository.
 	for _, it := range items {
 		status := "done"
 		if it.completed == nil {
 			status = "in_progress"
 		}
 		batch, err := conn.PrepareBatch(ctx,
-			`INSERT INTO work_items (repo_id, work_item_id, provider, project_id, org_id, status, created_at, completed_at, last_synced)`)
+			`INSERT INTO work_items (repo_id, work_item_id, provider, type, project_id, org_id, status, created_at, completed_at, last_synced)`)
 		if err != nil {
 			t.Fatalf("prepare work_items batch: %v", err)
 		}
-		if err := batch.Append(repoOf(it.repo), it.id, "github", "", org, status, day(time.January, 1), it.completed, now); err != nil {
+		if err := batch.Append(repoOf(it.repo), it.id, "github", "pr", "", org, status, day(time.January, 1), it.completed, now); err != nil {
 			t.Fatalf("append work_items row: %v", err)
 		}
 		if err := batch.Send(); err != nil {

@@ -63,11 +63,18 @@ type chartRule struct {
 // CI/CD column cicd_metrics_daily.success_rate divided by every run (cancelled,
 // skipped and running included) and held 0 on a day with no run counted; it is
 // no longer charted.
+//
+// The test pass rate is the bucket's passed cases over its passed and failed
+// cases, from the counts of testops_test_metrics_daily, as the TestOps Tests
+// page reads them. The stored pass_rate column divides by every case (skipped
+// ones too) and holds 0 on a day where every case was skipped, so it is never
+// charted. A bucket with no passed or failed case has no point.
 var chartRules = map[string]chartRule{
 	"change_failure_rate": {table: changefailure.Table, expression: changefailure.WindowRateSQL, inputs: changefailure.CountColumns},
 	"pr_rework_ratio":     {table: prrework.Table, expression: prrework.WindowRateSQL, inputs: prrework.CountColumns},
 	"failure_rate":        {table: "testops_pipeline_metrics_daily", expression: testops.PipelineFailureRateWindowSQL, inputs: testops.PipelineRateCountColumns},
 	"success_rate":        {table: "testops_pipeline_metrics_daily", expression: testops.PipelineSuccessRateWindowSQL, inputs: testops.PipelineRateCountColumns},
+	"pass_rate":           {table: "testops_test_metrics_daily", expression: testops.TestPassRateWindowSQL, inputs: testops.TestRateCountColumns},
 }
 
 // withChartRule returns the definition a chart of the metric is built from:

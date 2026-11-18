@@ -89,7 +89,7 @@ VALUES (?, 'github', ?, toUUID(?), ?, 'exact', 'native', 1, 10, 0, ?, ?)`,
 	// one metric of each.
 	for _, source := range []struct{ table, column, metric string }{
 		{"testops_pipeline_metrics_daily", "rerun_rate", "rerun_rate"},
-		{"testops_test_metrics_daily", "pass_rate", "pass_rate"},
+		{"testops_test_metrics_daily", "flake_rate", "flake_rate"},
 		{"testops_coverage_metrics_daily", "line_coverage_pct", "line_coverage_pct"},
 	} {
 		t.Run(source.table, func(t *testing.T) {

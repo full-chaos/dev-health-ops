@@ -23,6 +23,7 @@ import (
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
+	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/people"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
@@ -148,7 +149,7 @@ func newPeopleDrilldownPRsHandler(reader *people.Reader) http.HandlerFunc {
 		}
 
 		personID := r.PathValue("person_id")
-		query := r.URL.Query()
+		query := httpapi.Query(r)
 		var validationErrors []pydanticErrorDetail
 
 		rangeDays := 14

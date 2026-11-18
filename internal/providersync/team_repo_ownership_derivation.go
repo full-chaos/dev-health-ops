@@ -893,12 +893,8 @@ func buildDonorTeamIDResolver(
 		target := canonicalDependencyTarget(edge.TargetWorkItemID, keyIndex)
 		if target == "" {
 			// A key no single item holds (missing or ambiguous) names no donor:
-			// counted as unknown once per source and normalized key.
-			key := edge.TargetWorkItemID
-			if isTextKeyTarget(key) {
-				key = "extkey:" + strings.ToUpper(strings.TrimSpace(strings.TrimPrefix(key, "extkey:")))
-			}
-			refusedEdges[pair{edge.SourceWorkItemID, key}] = teamattribution.LinkedIssueDonorRefusedUnknown
+			// counted as unknown once per (source, raw target).
+			refusedEdges[pair{edge.SourceWorkItemID, edge.TargetWorkItemID}] = teamattribution.LinkedIssueDonorRefusedUnknown
 			continue
 		}
 		// The donor must be an issue (the linked_issue donor rule of the

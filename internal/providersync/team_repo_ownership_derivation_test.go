@@ -1417,7 +1417,7 @@ func TestDerivationCountsRefusedDonorsByReason(t *testing.T) {
 }
 
 // An extkey that no single item holds (missing, or held by two items) names no donor and counts as unknown, once
-// per source and normalized key.
+// per (source, raw target).
 func TestDerivationCountsAnUnresolvedExtkeyAsUnknown(t *testing.T) {
 	projectLinks := []TeamRepoOwnershipProjectLink{{Provider: "linear", ProjectID: "proj-1", TeamID: "team-donor", IsPrimary: true}}
 	pr := TeamRepoOwnershipWorkItem{WorkItemID: "ghpr:acme/a#1", Provider: "github", Type: "pr", RepoID: "repo-a"}
@@ -1434,7 +1434,7 @@ func TestDerivationCountsAnUnresolvedExtkeyAsUnknown(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			edges := []TeamRepoOwnershipDependencyEdge{
 				{SourceWorkItemID: "ghpr:acme/a#1", TargetWorkItemID: "extkey:E-1", RelationshipType: "external_issue_key"},
-				{SourceWorkItemID: "ghpr:acme/a#1", TargetWorkItemID: "extkey: e-1 ", RelationshipType: "relates_to"},
+				{SourceWorkItemID: "ghpr:acme/a#1", TargetWorkItemID: "extkey:E-1", RelationshipType: "relates_to"},
 			}
 			got := deriveTeamRepoOwnership("org-1", projectLinks, tc.items, edges, nil, nil)
 			if len(got.Rows) != 0 {

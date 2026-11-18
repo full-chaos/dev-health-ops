@@ -1,7 +1,5 @@
 package datahealth
 
-import "strings"
-
 // The two functions below are the comparison rules this package already
 // applies to the org's identities (identityKeys, decodeProviderIdentities),
 // exported so that another reader of the `identities` table (reviewEdges'
@@ -21,29 +19,6 @@ func ProviderIdentityValues(text string) []string {
 	var values []string
 	for _, group := range decodeProviderIdentities(text) {
 		values = append(values, group...)
-	}
-	return values
-}
-
-// ProviderIdentityValuesOf is ProviderIdentityValues for the providers whose
-// key (lower case) is in the set: the values of the other providers are left out.
-func ProviderIdentityValuesOf(text string, include func(provider string) bool) []string {
-	if strings.TrimSpace(text) == "" {
-		return nil
-	}
-	decoded, ok := decodeOrdered(text)
-	if !ok {
-		return nil
-	}
-	object, ok := decoded.(*orderedMap)
-	if !ok {
-		return nil
-	}
-	var values []string
-	for i, key := range object.keys {
-		if include(strings.ToLower(strings.TrimSpace(key))) {
-			values = append(values, providerValues(object.vals[i])...)
-		}
 	}
 	return values
 }

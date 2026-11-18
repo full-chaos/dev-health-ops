@@ -9,8 +9,8 @@ import (
 )
 
 // serviceAccountLifecycleRoutes are the four service account lifecycle rows: mounted WrapPlatform(admin.users) (with
-// AUTH_PROXY_SERVICE_ACCOUNT_KEYS on), action null in the profile, so the admin cell asks no route question; the
-// platform gate asks the decision point its own admin.users.
+// AUTH_PROXY_SERVICE_ACCOUNT_KEYS on), action admin.users in the profile, so with the admin cell on the decision point
+// decides the route question admin.users.
 var serviceAccountLifecycleRoutes = []string{
 	"POST /api/v1/admin/service-accounts",
 	"POST /api/v1/admin/service-accounts/{service_account_id}/disable",
@@ -19,7 +19,7 @@ var serviceAccountLifecycleRoutes = []string{
 }
 
 // Admin cell on, rule 1: a superuser with no membership anywhere whose decision point state is platform_admin is
-// allowed admin.users by the production evaluator's platform branch: 200 after one platform question.
+// allowed admin.users by the production evaluator's platform branch: 200 after the one route question.
 func TestServiceAccountLifecycleRowsAdminCellOnSuperuserWithoutMembershipIs200(t *testing.T) {
 	for _, pattern := range serviceAccountLifecycleRoutes {
 		t.Run(pattern, func(t *testing.T) {

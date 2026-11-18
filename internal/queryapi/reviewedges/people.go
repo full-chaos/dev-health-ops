@@ -87,13 +87,20 @@ type identity struct {
 	displayName string
 }
 
-// identityIndex finds the identity a stored string belongs to. A string that
-// an identity lists as its canonical id, e-mail address or provider login
-// (strong) wins over one that only equals another identity's display name
-// (names): a login is stable, a display name is free text (CHAOS-8594).
+// identityIndex finds the identity a stored string belongs to, in two tiers (CHAOS-14032): the strong
+// values an identity is known by (its canonical id, e-mail and provider identity values, each a login or
+// an address that one person holds) and the weak value (its display name, which two people can share and
+// which a login can equal by accident). A stored string is looked up in the strong tier first; the display
+// name is the last fallback, and only when no identity lists the string as a strong value.
+//
+// A value that two identities carry in the same tier names neither: a wrong name is worse than no name.
+// That includes a strong value two identities share (no fallback to the display name then: it fails
+// closed) and a display name two identities share.
 type identityIndex struct {
-	strong, names                  map[string]*identity
-	strongAmbiguous, nameAmbiguous map[string]struct{}
+	strong          map[string]*identity
+	strongAmbiguous map[string]struct{}
+	weak            map[string]*identity
+	weakAmbiguous   map[string]struct{}
 }
 
 func addTo(byKey map[string]*identity, ambiguous map[string]struct{}, value string, row *identity) {
@@ -102,8 +109,6 @@ func addTo(byKey map[string]*identity, ambiguous map[string]struct{}, value stri
 		return
 	}
 	if existing, ok := byKey[key]; ok && existing.uuid != row.uuid {
-		// Two identities share this value (two people with one display name).
-		// The value then names neither: a wrong name is worse than no name.
 		ambiguous[key] = struct{}{}
 		return
 	}
@@ -114,19 +119,13 @@ func (index *identityIndex) addStrong(value string, row *identity) {
 	addTo(index.strong, index.strongAmbiguous, value, row)
 }
 
-func (index *identityIndex) addName(value string, row *identity) {
-	addTo(index.names, index.nameAmbiguous, value, row)
+func (index *identityIndex) addWeak(value string, row *identity) {
+	addTo(index.weak, index.weakAmbiguous, value, row)
 }
-
-// isLoginProvider is false for the providers whose stored value is an account
-// or member id, not the login a review carries.
-func isLoginProvider(provider string) bool { return provider != "jira" && provider != "linear" }
 
 func (index *identityIndex) resolve(stored string) *identity {
 	key := datahealth.IdentityKey(stored)
-	// The placeholder is no identity, whatever an identity lists: the writer
-	// stores it for a missing author and a missing reviewer alike.
-	if key == "" || key == unknownIdentity {
+	if key == "" {
 		return nil
 	}
 	if _, ok := index.strongAmbiguous[key]; ok {
@@ -135,10 +134,10 @@ func (index *identityIndex) resolve(stored string) *identity {
 	if row, ok := index.strong[key]; ok {
 		return row
 	}
-	if _, ok := index.nameAmbiguous[key]; ok {
+	if _, ok := index.weakAmbiguous[key]; ok {
 		return nil
 	}
-	return index.names[key]
+	return index.weak[key]
 }
 
 func loadIdentityIndex(ctx context.Context, client QueryClient, orgID string) (*identityIndex, error) {
@@ -149,8 +148,8 @@ func loadIdentityIndex(ctx context.Context, client QueryClient, orgID string) (*
 	defer rows.Close()
 
 	index := &identityIndex{
-		strong: map[string]*identity{}, names: map[string]*identity{},
-		strongAmbiguous: map[string]struct{}{}, nameAmbiguous: map[string]struct{}{},
+		strong: map[string]*identity{}, strongAmbiguous: map[string]struct{}{},
+		weak: map[string]*identity{}, weakAmbiguous: map[string]struct{}{},
 	}
 	for rows.Next() {
 		var uuid, canonicalID, email, displayName, providerIdentities string
@@ -161,15 +160,10 @@ func loadIdentityIndex(ctx context.Context, client QueryClient, orgID string) (*
 		for _, value := range []string{canonicalID, email} {
 			index.addStrong(value, row)
 		}
-		for _, value := range datahealth.ProviderIdentityValuesOf(providerIdentities, isLoginProvider) {
+		for _, value := range datahealth.ProviderIdentityValues(providerIdentities) {
 			index.addStrong(value, row)
 		}
-		// Jira account ids and Linear member ids are not what a review names;
-		// they stay findable, but below a login.
-		for _, value := range datahealth.ProviderIdentityValuesOf(providerIdentities, func(p string) bool { return !isLoginProvider(p) }) {
-			index.addName(value, row)
-		}
-		index.addName(displayName, row)
+		index.addWeak(displayName, row)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("reviewedges: identities rows: %w", err)
@@ -238,10 +232,10 @@ func personName(stored string, resolved *identity, pullRequestAuthorName string)
 // resolves, and an unresolved string still has a key of its own.
 //
 // The writer's placeholder "unknown" stands for every pull request with no
-// author, so it is not a person: it gets one key of its own with the prefix
-// "u_", never "p_". A client must not draw that key as one person.
+// author. When it resolves to no identity it is not a person: it gets one key
+// of its own with the prefix "u_", never "p_" (CHAOS-8594).
 func personKey(orgID, stored string, resolved *identity) string {
-	if datahealth.IdentityKey(stored) == unknownIdentity {
+	if resolved == nil && datahealth.IdentityKey(stored) == unknownIdentity {
 		sum := sha256.Sum256([]byte(orgID + "\x00unreported"))
 		return unreportedKeyPrefix + hex.EncodeToString(sum[:10])
 	}

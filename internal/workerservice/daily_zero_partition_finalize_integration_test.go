@@ -532,3 +532,45 @@ func TestFinalizeOfAnEmptyRunKeepsBenchmarkingRowsWhenARepositoryIsBack(t *testi
 		t.Errorf("exposition is missing %q", want)
 	}
 }
+
+// A Jira item with no repository (stored under the nil repository id) is
+// synced after the dispatch found no partition: the organization still holds
+// no repository, so benchmarking retires the rows of the day.
+func TestFinalizeOfAnEmptyRunRetiresBenchmarkingWhenOnlyARepositorylessItemArrives(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
+	defer cancel()
+	rig := newZeroPartitionRig(t, ctx)
+	day := time.Date(2026, 9, 14, 0, 0, 0, 0, time.UTC)
+	org := "00000000-0000-4000-8000-000000140527"
+	seedZeroPartitionDay(t, ctx, rig.conn, org, day, uuid.MustParse("00000000-0000-4000-8000-000000140530"))
+	runID := rig.insertRun(t, ctx, org, day, true)
+	created := day.Add(-48 * time.Hour)
+	if err := rig.conn.Exec(ctx, `INSERT INTO work_items
+    (repo_id, work_item_id, provider, title, type, status, status_raw, project_key, project_id, native_team_key, project_name,
+     assignees, reporter, created_at, updated_at, labels, story_points, sprint_id, sprint_name, parent_id, epic_id, url, last_synced, org_id)
+    VALUES (?, 'jira:PROJ-1', 'jira', 'item', 'bug', 'in_progress', 'In Progress', 'PROJ', 'p-1', '', 'Project', [], '', ?, ?, [], 2, '', '', '', '', '', ?, ?)`,
+		uuid.Nil, created, created, created, org); err != nil {
+		t.Fatal(err)
+	}
+	collector, err := jobruntime.NewMetricsCollector(jobruntime.MetricDimensions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rig.finalize.SetNativeFinalizeFamilyObserver(collector)
+
+	workErr := rig.runFinalize(ctx, org, runID)
+
+	status, finalization, fences := rig.runState(t, ctx, runID)
+	held := zeroPartitionHeld(t, ctx, rig.conn, benchmarkingMeasure, org, day)
+	t.Logf("run=%s finalize_err=%v status=%s finalization=%s fences=%d benchmarking held=%v", runID, workErr, status, finalization, fences, held)
+	if workErr != nil {
+		t.Errorf("the finalize failed: %v", workErr)
+	}
+	if held != 0 {
+		t.Errorf("%s: the row of the day holds %v after the empty run, want 0", benchmarkingMeasure.table, held)
+	}
+	exposition := collector.PrometheusText()
+	if want := `worker_daily_metrics_native_family_outcome_total{family="` + daily.BenchmarkingFamilyName + `",outcome="computed"} 1`; !strings.Contains(exposition, want) {
+		t.Errorf("exposition is missing %q", want)
+	}
+}

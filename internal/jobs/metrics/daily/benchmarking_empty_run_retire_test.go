@@ -2,6 +2,7 @@ package daily
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -32,18 +33,31 @@ func benchmarkingEmptyRunStore() *fakeStore {
 	return store
 }
 
-// benchmarkingEmptyRunConn answers the repository discovery with repos (nil:
+// benchmarkingEmptyRunConn answers the repository reads with repos (nil:
 // none) and each live-key read of a benchmarking table with live[table].
 func benchmarkingEmptyRunConn(repos []uuid.UUID, live map[string][][]any) *retireTestConn {
+	return benchmarkingEmptyRunConnWith(repos, live, false, nil)
+}
+
+// benchmarkingEmptyRunConnWith also says whether the organization holds a
+// work item with no repository (stored under the nil repository id), and fails
+// every read of repos with reposErr when it is set.
+func benchmarkingEmptyRunConnWith(repos []uuid.UUID, live map[string][][]any, itemWithoutRepository bool, reposErr error) *retireTestConn {
 	routes := []retireTestRoute{
-		{needles: []string{"FROM repos"}, rows: func() [][]any {
+		{needles: []string{"count()", "FROM repos"}, err: reposErr, rows: func() [][]any { return [][]any{{uint64(len(repos))}} }},
+		{needles: []string{"FROM repos"}, err: reposErr, rows: func() [][]any {
 			values := make([][]any, 0, len(repos))
 			for _, id := range repos {
 				values = append(values, []any{id})
 			}
 			return values
 		}},
-		{needles: []string{"FROM work_items WHERE org_id = ? AND repo_id = ?"}},
+		{needles: []string{"FROM work_items WHERE org_id = ? AND repo_id = ?"}, rows: func() [][]any {
+			if itemWithoutRepository {
+				return [][]any{{uint8(1)}}
+			}
+			return nil
+		}},
 	}
 	for _, table := range benchmarkingEmptyRunTables {
 		rows := live[table]
@@ -178,5 +192,58 @@ func TestBenchmarkingKeepsItsRowsWhenARepositoryIsBackAtTheFinalizeOfAnEmptyRun(
 	}
 	if store.finalizeCompletions != 1 {
 		t.Errorf("completions = %d, want 1", store.finalizeCompletions)
+	}
+}
+
+// A work item with no repository (a Jira, Linear or GitHub Projects v2 item,
+// stored under the nil repository id) gives the organization a partition of
+// its own, but no repository: benchmarking has no target from it. An empty run
+// still retires the rows of the day when such an item arrived after the
+// dispatch. The guard reads the repos of the organization only.
+func TestBenchmarkingEmptyRunRetiresWhenOnlyAWorkItemWithNoRepositoryIsPresent(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	store := benchmarkingEmptyRunStore()
+	conn := benchmarkingEmptyRunConnWith(nil, map[string][][]any{
+		"testops_maturity_bands": {{"pass_rate", "repo", benchmarkingEmptyRunRepo, now.Add(-time.Hour)}},
+	}, true, nil)
+	handler, collector := benchmarkingEmptyRunHandler(t, store, conn, now)
+	workErr := handler.Work(context.Background(), finalizeExecution())
+	bands := conn.appended("testops_maturity_bands")
+	t.Logf("finalize_err=%v maturity_bands=%v", workErr, bands)
+	if workErr != nil {
+		t.Fatalf("finalize = %v, want nil", workErr)
+	}
+	if len(bands) != 1 || !rowHolds(bands[0], "pass_rate", "repo", benchmarkingEmptyRunRepo, uint8(1)) {
+		t.Errorf("maturity_bands: want one retraction of the live key, got %v", bands)
+	}
+	exposition := collector.PrometheusText()
+	if want := `worker_daily_metrics_native_family_outcome_total{family="` + BenchmarkingFamilyName + `",outcome="computed"} 1`; !strings.Contains(exposition, want) {
+		t.Errorf("exposition is missing %q", want)
+	}
+}
+
+// A failed read of the organization's repositories fails the finalize: it is
+// never read as "no repository" and never as a skip, and nothing is written.
+func TestBenchmarkingEmptyRunFailsWhenTheRepositoriesCannotBeRead(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	store := benchmarkingEmptyRunStore()
+	conn := benchmarkingEmptyRunConnWith(nil, map[string][][]any{
+		"testops_maturity_bands": {{"pass_rate", "repo", benchmarkingEmptyRunRepo, now.Add(-time.Hour)}},
+	}, false, errors.New("clickhouse: connection reset"))
+	handler, collector := benchmarkingEmptyRunHandler(t, store, conn, now)
+	workErr := handler.Work(context.Background(), finalizeExecution())
+	t.Logf("finalize_err=%v batches=%d", workErr, len(conn.batches))
+	if workErr == nil {
+		t.Fatal("finalize = nil, want the read failure")
+	}
+	if len(conn.batches) != 0 {
+		t.Errorf("%d write(s) after a failed read of the repositories, want none", len(conn.batches))
+	}
+	exposition := collector.PrometheusText()
+	if skipped := `worker_daily_metrics_native_family_outcome_total{family="` + BenchmarkingFamilyName + `",outcome="skipped_empty_run"} 1`; strings.Contains(exposition, skipped) {
+		t.Errorf("a failed read is counted as a skip: %q", skipped)
+	}
+	if store.finalizeCompletions != 0 {
+		t.Errorf("completions = %d, want 0", store.finalizeCompletions)
 	}
 }

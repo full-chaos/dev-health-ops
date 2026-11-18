@@ -4,6 +4,7 @@ package daily
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -212,5 +213,45 @@ func TestBenchmarkingEmptyRunKeepsAnAnomalyOfAnEarlierDay(t *testing.T) {
 		if ofEarlier != 1 {
 			t.Errorf("%s: %d live key(s) of D-3, want the 1 stored (a result of that day, not of D)", table, ofEarlier)
 		}
+	}
+}
+
+// An empty run of D retires the benchmarking rows of the day when the
+// organization holds no repository but a work item with no repository (stored
+// under the nil repository id): a Jira, a Linear or a GitHub Projects v2 item.
+// Such an item gives the organization a partition of its own, never a
+// repository, and benchmarking has no target from it.
+func TestBenchmarkingEmptyRunRetiresWithAWorkItemThatHasNoRepository(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
+	defer cancel()
+	conn := capabilityRetireClickHouse(t, ctx)
+	day := time.Date(2026, 9, 14, 0, 0, 0, 0, time.UTC)
+	repo := "00000000-0000-4000-8000-00000014052f"
+	for index, shape := range []struct{ name, provider, workItemID string }{
+		{"jira", "jira", "jira:PROJ-1"},
+		{"linear", "linear", "linear:ENG-1"},
+		{"github_projects_v2", "github", "ghprojectv2:PVTI_draft1"},
+	} {
+		t.Run(shape.name, func(t *testing.T) {
+			org := fmt.Sprintf("00000000-0000-4000-8000-0000001405%02d", 30+index)
+			seedBenchmarkingOutputs(t, ctx, conn, org, repo, day, day.Add(30*time.Hour))
+			seedCapabilityWorkItem(t, ctx, conn, org, shape.provider, shape.workItemID, day.Add(-48*time.Hour))
+			store := &fakeStore{noPartitions: true, run: Run{ID: "run-14052-" + shape.name, OrganizationID: org, TargetDay: day, FullOrg: true}}
+			executor, err := NewBenchmarkingFinalizeExecutor(store, conn, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			executor.nowUTC = func() time.Time { return day.Add(40 * time.Hour) }
+			written, err := executor.ComputeFinalizeFamily(ctx, Run{ID: "run-14052-" + shape.name, OrganizationID: org, TargetDay: day})
+			t.Logf("%s item with no repository: written=%d err=%v", shape.provider, written, err)
+			if err != nil {
+				t.Errorf("empty run with a %s item and no repository: %v, want the retirement", shape.provider, err)
+			}
+			for table := range benchmarkingOutputKeys {
+				if live := benchmarkingLiveKeys(t, ctx, conn, table, org, day); live != 0 {
+					t.Errorf("%s: %d key(s) of the day stay live", table, live)
+				}
+			}
+		})
 	}
 }

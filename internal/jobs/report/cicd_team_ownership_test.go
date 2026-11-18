@@ -71,3 +71,76 @@ func TestCicdChartsReadRepositoryOwnershipForTeam(t *testing.T) {
 		}
 	}
 }
+
+// emptyRows is a chart answer with no row.
+type emptyRows struct{ driver.Rows }
+
+func (emptyRows) Next() bool   { return false }
+func (emptyRows) Err() error   { return nil }
+func (emptyRows) Close() error { return nil }
+
+// asOfConn answers every chart with no row and keeps the owners instant each statement binds.
+type asOfConn struct {
+	driver.Conn
+	instants []any
+}
+
+func (conn *asOfConn) Query(_ context.Context, _ string, parameters ...any) (driver.Rows, error) {
+	for _, parameter := range parameters {
+		if value, ok := parameter.(driver.NamedValue); ok && value.Name == "team_scope_as_of" {
+			conn.instants = append(conn.instants, value.Value)
+		}
+	}
+	return emptyRows{}, nil
+}
+
+// fixedReport loads one report definition.
+type fixedReport ReportDefinition
+
+func (report fixedReport) Load(context.Context, QueryInput) (ReportDefinition, error) {
+	return ReportDefinition(report), nil
+}
+
+// Every chart of one report reads the owners at one instant, even when the clock moves between two charts: two charts
+// of one report never put one repository under two different owners.
+func TestOneReportReadsTheOwnersAtOneInstant(t *testing.T) {
+	t.Parallel()
+	clock := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
+	tick := func() time.Time {
+		now := clock
+		clock = clock.Add(time.Second)
+		return now
+	}
+	charts := []ChartSpec{
+		{ChartID: "c-1", PlanID: "plan-1", ChartType: "bar", Metric: "pipelines_count", GroupBy: "team", OrganizationID: "org-1"},
+		{ChartID: "c-2", PlanID: "plan-1", ChartType: "bar", Metric: "avg_duration_minutes", GroupBy: "team", OrganizationID: "org-1"},
+		{ChartID: "c-3", PlanID: "plan-1", ChartType: "scorecard", Metric: "pipelines_count", FilterTeams: []string{"team-1"}, OrganizationID: "org-1"},
+	}
+	conn := &asOfConn{}
+	loader := fixedReport{Plan: Plan{PlanID: "plan-1", ReportType: "weekly_health", OrganizationID: "org-1"}, Charts: charts}
+	adapter := &ClickHouseQueryAdapter{loader: loader, conn: conn, now: tick}
+	if _, err := adapter.Query(context.Background(), QueryInput{ReportID: "report-1", RunID: "run-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(conn.instants) != len(charts) {
+		t.Fatalf("instants %v, want one per chart", conn.instants)
+	}
+	for _, instant := range conn.instants {
+		if instant != conn.instants[0] {
+			t.Fatalf("one report read the owners at %v", conn.instants)
+		}
+	}
+}
+
+// A team filter of blank ids only has no team to keep: the chart reads no repository, and its statement stays valid.
+func TestBlankTeamFilterKeepsNoRepository(t *testing.T) {
+	t.Parallel()
+	for _, metric := range []string{"pipelines_count", "avg_duration_minutes", "p90_duration_minutes", "avg_queue_minutes", "p95_duration_seconds"} {
+		for _, teams := range [][]string{{""}, {"", ""}} {
+			statement, _ := cicdChartStatement(t, ChartSpec{ChartType: "scorecard", Metric: metric, FilterTeams: teams})
+			if !strings.Contains(statement, " AND\n        0") {
+				t.Errorf("%s, teams %q: no false team predicate:\n%s", metric, teams, statement)
+			}
+		}
+	}
+}

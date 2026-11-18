@@ -153,6 +153,9 @@ func buildPooledChartQuery(spec ChartSpec, definition metricDefinition) (string,
 	}
 	if len(spec.FilterTeams) > 0 && definition.hasDimension("team") && spec.GroupBy != "team" {
 		condition, bindings := teamscope.RepoCondition(spec.OrganizationID, "toString(repo_id)", spec.FilterTeams, pooled.asOf)
+		if condition == "" {
+			condition = "0"
+		}
 		named, err := pooledNamedArguments(bindings)
 		if err != nil {
 			return "", nil, err

@@ -262,8 +262,12 @@ func (adapter *ClickHouseQueryAdapter) Query(ctx context.Context, input QueryInp
 		return QueryResult{}, err
 	}
 	result := QueryResult{Plan: definition.Plan, Metadata: map[string]string{"renderer_version": "reports.v1"}}
+	// One owners instant for the whole report: two charts never put one repository under two owners.
+	at := adapter.asOf()
+	pinned := *adapter
+	pinned.now = func() time.Time { return at }
 	for _, spec := range definition.Charts {
-		chart, err := adapter.executeChart(ctx, spec)
+		chart, err := pinned.executeChart(ctx, spec)
 		if err != nil {
 			return QueryResult{}, err
 		}

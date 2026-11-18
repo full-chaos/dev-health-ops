@@ -84,7 +84,7 @@ The file is the text of record: no Prometheus loads it in production. The produc
 
 ## Daily metrics blocked-run rules
 
-`alerts/rules.yml` carries a `daily_metrics_blocked_runs` group over the metrics worker's counters. A daily metrics partition that ends for good (the zero-row check, an invalid state, or a retryable error on its last attempt) is written `failed_permanent` with a bounded reason; the nightly blocked-run pass marks a run that can no longer finish. Two rules, neither with a `for`:
+`alerts/rules.yml` carries a `daily_metrics_blocked_runs` group over the metrics worker's counters. A daily metrics partition that ends for good (the zero-row check, an invalid state, or a retryable error on its last attempt) is written `failed_permanent` with a bounded reason; the nightly blocked-run pass marks a run that can no longer finish. A `failed` partition with no write for 24 hours counts as ended too: its retry is gone, and the run is marked with the reason `partitions_failed_no_retry`. A retry that waits in the queue longer than 24 hours is marked as well; the pass after its claim clears the marker. Two rules, neither with a `for`:
 
 - `DailyMetricsRunBlocked`: any increase of `dev_health_daily_metrics_runs_blocked_marked_total` in 24 hours. List the runs with `dho workers metrics daily-blocked --org <org>`; its failure reasons name the cause. A `daily-redrive` of the org-day resets the partitions.
 - `DailyMetricsBlockedReconcileFailing`: any increase of `dev_health_daily_metrics_runs_blocked_reconcile_failed_total` in 24 hours. The pass is fail-open, so the marked counter at zero cannot tell a healthy organization from a pass that never ran.

@@ -115,43 +115,6 @@ func (loader *ClickHouseLoader) LoadPipelineRuns(
 	return result, nil
 }
 
-const storedCountedReposQuery = `
-SELECT DISTINCT repo_id
-FROM cicd_metrics_daily FINAL
-WHERE org_id = {org_id:String} AND day = toDate({day:String})
-  AND repo_id IN {repo_ids:Array(UUID)} AND pipelines_count > 0`
-
-// LoadStoredCountedRepos returns the repos among repoIDs whose stored row for
-// day counts at least one run. A recompute that finds no run for such a repo-day
-// retracts that row (see RetractionMetrics).
-func (loader *ClickHouseLoader) LoadStoredCountedRepos(
-	ctx context.Context, orgID string, repoIDs []uuid.UUID, day time.Time,
-) ([]uuid.UUID, error) {
-	if loader == nil || loader.conn == nil {
-		return nil, fmt.Errorf("cicd: loader unavailable")
-	}
-	if len(repoIDs) == 0 {
-		return nil, nil
-	}
-	rows, err := loader.conn.Query(ctx, storedCountedReposQuery,
-		clickhouse.Named("org_id", orgID),
-		clickhouse.Named("day", day.UTC().Format(time.DateOnly)),
-		clickhouse.Named("repo_ids", repoIDs))
-	if err != nil {
-		return nil, fmt.Errorf("load stored cicd repos: %w", err)
-	}
-	defer rows.Close()
-	var result []uuid.UUID
-	for rows.Next() {
-		var repoID uuid.UUID
-		if err := rows.Scan(&repoID); err != nil {
-			return nil, fmt.Errorf("scan stored cicd repo: %w", err)
-		}
-		result = append(result, repoID)
-	}
-	return result, rows.Err()
-}
-
 // Writer persists ComputeCICDMetricsDaily's output to cicd_metrics_daily.
 type Writer struct {
 	conn conn

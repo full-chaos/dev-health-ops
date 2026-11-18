@@ -91,12 +91,6 @@ func (executor *CICDExecutor) ComputeFamily(
 	computedAt := executor.nowUTC()
 	result := cicd.ComputeCICDMetricsDaily(dayStart, pipelineRuns, computedAt)
 
-	storedRepos, err := executor.loader.LoadStoredCountedRepos(ctx, run.OrganizationID, repoIDs, dayStart)
-	if err != nil {
-		return 0, err
-	}
-	result = append(result, cicd.RetractionMetrics(dayStart, storedRepos, result, computedAt)...)
-
 	rowsWritten, err := executor.writer.WriteResult(ctx, result, run.OrganizationID)
 	if err != nil {
 		return 0, err

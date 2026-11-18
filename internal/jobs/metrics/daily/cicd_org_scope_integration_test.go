@@ -293,9 +293,11 @@ INSERT INTO ci_pipeline_runs (repo_id, run_id, status, queued_at, started_at, fi
 	}
 }
 
-// A rerun that finishes on another day leaves the earlier day with no run: the
-// recompute retracts that day's stored count.
-func TestCICDComputeFamilyRetractsDayWhoseRunMoved(t *testing.T) {
+// A recompute of a day that now has no run writes nothing: no zero-run row (a
+// reader would take it for a measurement) and no overwrite of a count another
+// job published. A stored count for a day whose run moved stays until a
+// retraction design with a write fence exists.
+func TestCICDComputeFamilyEmptyRecomputeWritesNothing(t *testing.T) {
 	ctx, conn := startCICDDayDB(t)
 	const org = "00000000-0000-4000-8000-0000000000d0"
 	const repo = "00000000-0000-4000-8000-0000000000d3"
@@ -314,16 +316,18 @@ INSERT INTO ci_pipeline_runs (repo_id, run_id, status, queued_at, started_at, fi
 	}
 	insert("2026-01-02 12:00:00", "2026-01-02 10:00:00", "2026-01-02 10:30:00")
 	computeCICDDay(ctx, t, executor, org, repo, "2026-01-02", time.Date(2026, 1, 3, 1, 0, 0, 0, time.UTC))
-	if got := storedCICDCount(ctx, t, conn, org, repo, "2026-01-02"); got != 1 {
-		t.Fatalf("2026-01-02 before the rerun = %d, want 1", got)
-	}
 	insert("2026-01-03 12:00:00", "2026-01-03 10:00:00", "2026-01-03 10:30:00")
 	computeCICDDay(ctx, t, executor, org, repo, "2026-01-02", time.Date(2026, 1, 4, 1, 0, 0, 0, time.UTC))
-	computeCICDDay(ctx, t, executor, org, repo, "2026-01-03", time.Date(2026, 1, 4, 2, 0, 0, 0, time.UTC))
-	for day, want := range map[string]uint64{"2026-01-02": 0, "2026-01-03": 1} {
-		if got := storedCICDCount(ctx, t, conn, org, repo, day); got != want {
-			t.Fatalf("day %s pipelines_count = %d, want %d", day, got, want)
-		}
+	var zeroRows uint64
+	row := conn.QueryRow(ctx, "SELECT count() FROM cicd_metrics_daily WHERE org_id = ? AND repo_id = ? AND pipelines_count = 0", org, repo)
+	if err := row.Scan(&zeroRows); err != nil {
+		t.Fatal(err)
+	}
+	if zeroRows != 0 {
+		t.Fatalf("%d zero-run rows stored, want none", zeroRows)
+	}
+	if got := storedCICDCount(ctx, t, conn, org, repo, "2026-01-02"); got != 1 {
+		t.Fatalf("2026-01-02 pipelines_count = %d, want the published 1 left as it was", got)
 	}
 }
 

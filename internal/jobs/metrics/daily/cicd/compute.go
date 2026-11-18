@@ -98,28 +98,6 @@ func ptr(value float64) *float64 { return &value }
 // {"success", "succeeded", "passed"}.
 var successStatuses = map[string]bool{"success": true, "succeeded": true, "passed": true}
 
-// RetractionMetrics returns the zero-run row that replaces a stored row for a
-// repo-day whose recompute found no run. cicd_metrics_daily is a
-// ReplacingMergeTree on computed_at, so the newer zero row supersedes the stale
-// count without a DELETE. storedRepos are the repos whose stored row for day
-// counts a run; computed are the rows the recompute produced.
-func RetractionMetrics(day time.Time, storedRepos []uuid.UUID, computed []CICDMetric, computedAt time.Time) []CICDMetric {
-	seen := make(map[uuid.UUID]bool, len(computed))
-	for _, metric := range computed {
-		seen[metric.RepoID] = true
-	}
-	var retracted []CICDMetric
-	for _, repoID := range storedRepos {
-		if seen[repoID] {
-			continue
-		}
-		seen[repoID] = true
-		retracted = append(retracted, CICDMetric{RepoID: repoID, Day: day, ComputedAt: computedAt.UTC()})
-	}
-	sort.Slice(retracted, func(i, j int) bool { return retracted[i].RepoID.String() < retracted[j].RepoID.String() })
-	return retracted
-}
-
 // ComputeCICDMetricsDaily mirrors compute_cicd_metrics_daily (compute_cicd.py:42).
 //
 // day is the target UTC calendar day (time-of-day/location ignored). A run

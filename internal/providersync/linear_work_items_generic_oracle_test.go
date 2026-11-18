@@ -149,6 +149,7 @@ func buildLinearWorkItemOracleRow(t *testing.T, input map[string]any) linearWork
 	if err != nil {
 		t.Fatal(err)
 	}
+	item.Description = frozenOracleDescription(item.Description)
 	return item
 }
 

@@ -4484,6 +4484,53 @@ const registeredTestopsRiskDocument = `query TestOpsRisk($orgId: String!, $input
       hours
       __typename
     }
+    qualityDragPartial
+    quadrantData {
+      id
+      name
+      pipelineSuccessRate
+      testPassRate
+      __typename
+    }
+    confidenceSpark {
+      ts
+      value
+      __typename
+    }
+    confidenceDelta
+    dragSpark {
+      ts
+      value
+      __typename
+    }
+    dragDelta
+    stabilitySpark {
+      ts
+      value
+      __typename
+    }
+    stabilityDelta
+    __typename
+  }
+}`
+
+// registeredTestopsRiskV2Document is the text testopsRisk accepted BEFORE it selected qualityDragPartial. It stays a legacy text
+// (see legacyDigestsByOperation), so a web build still sending it keeps working while the new web rolls out.
+const registeredTestopsRiskV2Document = `query TestOpsRisk($orgId: String!, $input: TestOpsRiskInput!) {
+  testopsRisk(orgId: $orgId, input: $input) {
+    releaseConfidence
+    qualityDragHours
+    pipelineStability
+    timeseries {
+      date
+      riskScore
+      __typename
+    }
+    qualityDragBreakdown {
+      category
+      hours
+      __typename
+    }
     quadrantData {
       id
       name
@@ -7401,7 +7448,7 @@ var legacyDigestsByOperation = map[string][]string{
 	"testOpsCoverage":               {digestHex(registeredTestOpsCoverageV1Document), digestHex(registeredTestOpsCoverageV2Document)},
 	"testopsJobFailures":            {digestHex(registeredTestopsJobFailuresV1Document)},
 	"testopsTestWindow":             {digestHex(registeredTestopsTestWindowV1Document)},
-	"testopsRisk":                   {digestHex(registeredTestopsRiskV1Document)},
+	"testopsRisk":                   {digestHex(registeredTestopsRiskV1Document), digestHex(registeredTestopsRiskV2Document)},
 	"dataHealthIdentity":            {digestHex(registeredDataHealthIdentityV1Document)},
 	"aiGovernanceSummary":           {digestHex(registeredAiGovernanceSummaryV1Document)},
 	"aiAttributionOverview":         {digestHex(registeredAiAttributionOverviewV1Document)},

@@ -286,3 +286,46 @@ func TestPeople_ALoginWinsOverAnEqualDisplayName(t *testing.T) {
 		t.Errorf("reviewer name = %s, want Sam Cee (the identity that lists the login sam)", got)
 	}
 }
+
+// Round 1 (CHAOS-8594): an identity that lists "unknown" does not make the
+// placeholder a person, on either end, and gives it no name.
+func TestPeople_AnIdentityListingTheWordUnknownDoesNotTakeThePlaceholder(t *testing.T) {
+	client := &fakeClient{
+		response: &fakeRowScanner{rows: [][]any{edgeRow("Unknown", "unknown")}},
+		identities: [][]any{
+			identityRow("00000000-0000-0000-0000-00000000000a", "a", "", "Alex", `{"github": ["unknown"]}`),
+		},
+	}
+	edge := resolvePeople(t, client, "org-1")[0]
+	if !unreportedKeyForm.MatchString(edge.AuthorKey) || !unreportedKeyForm.MatchString(edge.ReviewerKey) {
+		t.Errorf("keys = %s / %s, want u_ keys", edge.ReviewerKey, edge.AuthorKey)
+	}
+	if edge.AuthorName != nil || edge.ReviewerName != nil {
+		t.Errorf("names = %s / %s, want none", nameOf(edge.ReviewerName), nameOf(edge.AuthorName))
+	}
+}
+
+// Round 1 (CHAOS-8594): a Jira account id or a Linear member id is not a
+// login: it does not win over a display name or a canonical id.
+func TestPeople_AnAccountIDDoesNotWinOverAnEqualCanonicalIDOrDisplayName(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		casey    []any
+		wantName string
+	}{
+		{"display name", identityRow("00000000-0000-0000-0000-00000000000c", "c", "", "acc-123", `{}`), "acc-123"},
+		{"canonical id", identityRow("00000000-0000-0000-0000-00000000000c", "acc-123", "", "Casey", `{}`), "Casey"},
+	} {
+		client := &fakeClient{
+			response: &fakeRowScanner{rows: [][]any{edgeRow("acc-123", "auth-1")}},
+			identities: [][]any{
+				identityRow("00000000-0000-0000-0000-00000000000b", "pat", "", "Pat", `{"jira": ["acc-123"]}`),
+				tc.casey,
+			},
+		}
+		edge := resolvePeople(t, client, "org-1")[0]
+		if got := nameOf(edge.ReviewerName); got != tc.wantName {
+			t.Errorf("%s: reviewer name = %s, want %s", tc.name, got, tc.wantName)
+		}
+	}
+}

@@ -118,9 +118,15 @@ func (index *identityIndex) addName(value string, row *identity) {
 	addTo(index.names, index.nameAmbiguous, value, row)
 }
 
+// isLoginProvider is false for the providers whose stored value is an account
+// or member id, not the login a review carries.
+func isLoginProvider(provider string) bool { return provider != "jira" && provider != "linear" }
+
 func (index *identityIndex) resolve(stored string) *identity {
 	key := datahealth.IdentityKey(stored)
-	if key == "" {
+	// The placeholder is no identity, whatever an identity lists: the writer
+	// stores it for a missing author and a missing reviewer alike.
+	if key == "" || key == unknownIdentity {
 		return nil
 	}
 	if _, ok := index.strongAmbiguous[key]; ok {
@@ -155,8 +161,13 @@ func loadIdentityIndex(ctx context.Context, client QueryClient, orgID string) (*
 		for _, value := range []string{canonicalID, email} {
 			index.addStrong(value, row)
 		}
-		for _, value := range datahealth.ProviderIdentityValues(providerIdentities) {
+		for _, value := range datahealth.ProviderIdentityValuesOf(providerIdentities, isLoginProvider) {
 			index.addStrong(value, row)
+		}
+		// Jira account ids and Linear member ids are not what a review names;
+		// they stay findable, but below a login.
+		for _, value := range datahealth.ProviderIdentityValuesOf(providerIdentities, func(p string) bool { return !isLoginProvider(p) }) {
+			index.addName(value, row)
 		}
 		index.addName(displayName, row)
 	}
@@ -230,7 +241,7 @@ func personName(stored string, resolved *identity, pullRequestAuthorName string)
 // author, so it is not a person: it gets one key of its own with the prefix
 // "u_", never "p_". A client must not draw that key as one person.
 func personKey(orgID, stored string, resolved *identity) string {
-	if strings.EqualFold(strings.TrimSpace(stored), unknownIdentity) {
+	if datahealth.IdentityKey(stored) == unknownIdentity {
 		sum := sha256.Sum256([]byte(orgID + "\x00unreported"))
 		return unreportedKeyPrefix + hex.EncodeToString(sum[:10])
 	}

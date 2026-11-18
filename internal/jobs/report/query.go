@@ -447,6 +447,19 @@ func (adapter *ClickHouseQueryAdapter) executeChart(ctx context.Context, spec Ch
 	}
 	asOf := adapter.asOf()
 	definition = withRepositoryOwners(withPooledChart(withChartRule(definition), asOf), asOf)
+	result := ChartResult{
+		Spec: spec, Title: spec.Title, SourceTable: definition.SourceTable, Unit: definition.Unit,
+	}
+	if result.Title == "" {
+		result.Title = definition.DisplayName
+	}
+	if rule, ok := teamWorkItemRuleOf(spec, definition); ok {
+		if rule.whole {
+			result.NotApplicable = rule.reason
+			return result, nil
+		}
+		result.Note = rule.reason
+	}
 	statement, parameters, err := buildChartQuery(spec, definition)
 	if err != nil {
 		return ChartResult{}, err
@@ -457,12 +470,6 @@ func (adapter *ClickHouseQueryAdapter) executeChart(ctx context.Context, spec Ch
 		return ChartResult{}, fmt.Errorf("query report chart: %w", ErrDependencyUnavailable)
 	}
 	defer rows.Close()
-	result := ChartResult{
-		Spec: spec, Title: spec.Title, SourceTable: definition.SourceTable, Unit: definition.Unit,
-	}
-	if result.Title == "" {
-		result.Title = definition.DisplayName
-	}
 	for rows.Next() {
 		var group *string
 		var y *float64

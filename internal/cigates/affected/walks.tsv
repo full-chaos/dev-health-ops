@@ -386,6 +386,7 @@ internal/jobs/metrics/complexity/lizardcc	ruby_parity_test.go	internal/jobs/metr
 internal/jobs/metrics/complexity/lizardcc	typescript_parity_test.go	internal/jobs/metrics/complexity/lizardcc/testdata/corpus_js_ts	dir	*
 internal/jobs/metrics/complexity/lizardcc	vue_parity_test.go	internal/jobs/metrics/complexity/lizardcc/testdata/corpus_vue	dir	*
 internal/jobs/metrics/complexity/pycc	cc_parity_test.go	internal/jobs/metrics/complexity/pycc/testdata/corpus	dir	*
+internal/jobs/metrics/daily	pooled_samples_cap_census_test.go	internal/jobs/metrics/daily	dir	*
 internal/jobs/metrics/daily	stale_team_keys_census_test.go	cmd	tree	*.go
 internal/jobs/metrics/daily	stale_team_keys_census_test.go	internal	tree	*.go
 internal/jobs/metrics/daily	stale_team_keys_census_test.go	internal/jobs/metrics/daily	dir	*

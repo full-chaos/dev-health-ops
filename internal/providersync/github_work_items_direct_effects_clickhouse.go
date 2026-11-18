@@ -29,8 +29,9 @@ import (
 // already holds; due_at is written as the row states it for gitlab, jira and
 // linear rows (a row with no date clears it) and carries the held value for a
 // github row, which has no due date; description is written, cut to
-// workItemDescriptionMaxRunes, when the provider row has one and carries the
-// held value when it has none, so a sync never clears one another writer set.
+// workItemDescriptionMaxRunes, when the provider row has one, written empty
+// when the provider row states it empty (cleared at the provider), and carries
+// the held value when the row states nothing.
 
 // workItemReadbackVerdict folds a readback row count into a comparator answer.
 //

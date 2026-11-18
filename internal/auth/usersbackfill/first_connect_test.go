@@ -3,13 +3,13 @@ package usersbackfill
 import (
 	"bytes"
 	"context"
-	"net"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	pgstorage "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/refusedaddr"
 )
 
 // The auth backfill Job's verbs share connect: it waits for the first connect,
@@ -24,14 +24,7 @@ func TestConnectWaitsForTheFirstConnectThenFailsClosed(t *testing.T) {
 	}
 	t.Cleanup(func() { firstConnect = saved })
 
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	address := listener.Addr().String()
-	if err := listener.Close(); err != nil {
-		t.Fatal(err)
-	}
+	address := refusedaddr.Addr(t)
 	var stderr bytes.Buffer
 	pool, _, code := connect(context.Background(), cli.Env{Stderr: &stderr, Lookup: func(key string) (string, bool) {
 		if key == dsnEnv {

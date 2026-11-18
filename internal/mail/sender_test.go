@@ -28,6 +28,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/refusedaddr"
 )
 
 // isAmbiguous reports whether err is (or wraps) an *AmbiguousSendError.
@@ -150,14 +152,7 @@ func TestResendSenderTreatsAConnectionRefusalAsDefinitelyNotSent(t *testing.T) {
 	// Bind to get a genuinely free port, then close it immediately so the
 	// connection is refused deterministically -- no reliance on a
 	// well-known unused port.
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	addr := listener.Addr().String()
-	if err := listener.Close(); err != nil {
-		t.Fatal(err)
-	}
+	addr := refusedaddr.Addr(t)
 	t.Setenv("RESEND_API_BASE_URL", "http://"+addr)
 
 	sender := &resendSender{
@@ -379,14 +374,7 @@ func TestSMTPSenderTreatsAnOrdinaryAcknowledgementAsSent(t *testing.T) {
 }
 
 func TestSMTPSenderTreatsAConnectionRefusalAsDefinitelyNotSent(t *testing.T) {
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	host, port := splitHostPort(t, listener.Addr().String())
-	if err := listener.Close(); err != nil {
-		t.Fatal(err)
-	}
+	host, port := splitHostPort(t, refusedaddr.Addr(t))
 
 	sender := &smtpSender{from: "billing@example.test", host: host, port: port}
 	sendErr := sender.Send(context.Background(), Message{

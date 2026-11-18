@@ -29,6 +29,137 @@ const (
 
 var ErrGitHubTestsReportInvalid = errors.New("github tests report invalid")
 
+// ErrGitHubTestsUnsafeDoctype narrows ErrGitHubTestsReportInvalid to a report
+// member that declares an entity or a DOCTYPE internal subset (CHAOS-13985).
+// A plain external DOCTYPE (SYSTEM or PUBLIC id, no "[") is accepted:
+// encoding/xml returns it as a Directive token and never fetches the DTD.
+var ErrGitHubTestsUnsafeDoctype = errors.New("github tests report unsafe doctype")
+
+// githubTestsUTF8BOM is stripped before any XML report is inspected or decoded.
+var githubTestsUTF8BOM = []byte{0xEF, 0xBB, 0xBF}
+
+// githubTestsDirectiveUnsafe reports whether the text of one XML directive (the
+// bytes between "<!" and ">", as encoding/xml returns them) is an ENTITY
+// declaration or carries an internal subset: a "[" outside quotes, which covers
+// an empty subset "[]" too. Every other directive is tolerated, exactly as the
+// decoder ignores it.
+func githubTestsDirectiveUnsafe(text []byte) bool {
+	if len(text) >= 6 && strings.EqualFold(string(text[:6]), "ENTITY") &&
+		(len(text) == 6 || text[6] == ' ' || text[6] == '\t' || text[6] == '\r' || text[6] == '\n') {
+		return true
+	}
+	var quote byte
+	for _, char := range text {
+		if quote != 0 {
+			if char == quote {
+				quote = 0
+			}
+			continue
+		}
+		if char == '"' || char == '\'' {
+			quote = char
+		} else if char == '[' {
+			return true
+		}
+	}
+	return false
+}
+
+// githubTestsInspectXMLReport is the ONE pre-pass every XML report member goes
+// through before row decoding (CHAOS-13985). Contract: refuse ONLY what is
+// unsafe (an ENTITY directive or a DOCTYPE internal subset, cause
+// unsafe_doctype) and what would silently lose report data (a second root
+// element, any element after the root, or markup that does not tokenize, cause
+// malformed). Every other form is tolerated exactly as the row decoder reads it:
+// text before the root, duplicate or misplaced XML declarations, odd DOCTYPE
+// names, comments in a DOCTYPE, a lowercase doctype, processing instructions
+// anywhere and any text after the root.
+//
+// It strips a UTF-8 BOM and walks the member with encoding/xml raw tokens, which
+// never fetch a DTD and never expand an entity. Comments, CDATA, processing
+// instructions and character data are never scanned for markers.
+//
+// root is "coverage", "junit" (testsuite or testsuites), "other" (any other root
+// element) or "" (no root element: LCOV and plain text). textOnly marks a member
+// known to be LCOV text (an .info file that does not start with '<').
+func githubTestsInspectXMLReport(body []byte, textOnly bool) (clean []byte, root string, err error) {
+	clean = bytes.TrimPrefix(body, githubTestsUTF8BOM)
+	lead := bytes.TrimLeft(clean, " \t\r\n")
+	if textOnly || len(lead) == 0 {
+		return clean, "", nil
+	}
+	if len(lead) >= 3 {
+		if prefix := strings.ToLower(string(lead[:3])); prefix == "tn:" || prefix == "sf:" {
+			return clean, "", nil
+		}
+	}
+	invalid := func(detail string) error {
+		return fmt.Errorf("%w: xml: %s", ErrGitHubTestsReportInvalid, detail)
+	}
+	decoder := xml.NewDecoder(bytes.NewReader(clean))
+	depth := 0
+	rootSeen, rootClosed := false, false
+	for {
+		token, tokenErr := decoder.RawToken()
+		if tokenErr != nil {
+			if tokenErr == io.EOF {
+				if rootSeen && !rootClosed {
+					return clean, root, invalid("unexpected end of document")
+				}
+				return clean, root, nil
+			}
+			return clean, root, fmt.Errorf("%w: %w", ErrGitHubTestsReportInvalid, tokenErr)
+		}
+		switch value := token.(type) {
+		case xml.Directive:
+			if githubTestsDirectiveUnsafe(value) {
+				return clean, root, fmt.Errorf("%w: %w", ErrGitHubTestsReportInvalid, ErrGitHubTestsUnsafeDoctype)
+			}
+		case xml.StartElement:
+			if rootClosed {
+				return clean, root, invalid("element after the root element")
+			}
+			if !rootSeen {
+				rootSeen = true
+				switch value.Name.Local {
+				case "coverage":
+					root = "coverage"
+				case "testsuite", "testsuites":
+					root = "junit"
+				default:
+					root = "other"
+				}
+			}
+			depth++
+		case xml.EndElement:
+			depth--
+			if depth < 0 {
+				return clean, root, invalid("unbalanced end element")
+			}
+			if depth == 0 {
+				rootClosed = true
+			}
+		}
+	}
+}
+
+// githubTestsIsLCOVName reports an .info member whose first non-space byte is not
+// '<': plain LCOV text that must never be tokenized as XML.
+func githubTestsIsLCOVName(name string, body []byte) bool {
+	if !strings.HasSuffix(strings.ToLower(name), ".info") {
+		return false
+	}
+	lead := bytes.TrimLeft(bytes.TrimPrefix(body, githubTestsUTF8BOM), " \t\r\n")
+	return len(lead) == 0 || lead[0] != '<'
+}
+
+// githubTestsXMLLooksLikeReport is a cheap guess used ONLY for a member the
+// pre-pass already refused before its root element: does it mention a report
+// root at all. It never decides a document is valid.
+func githubTestsXMLLooksLikeReport(body []byte) bool {
+	return bytes.Contains(body, []byte("<testsuite")) || bytes.Contains(body, []byte("<coverage"))
+}
+
 // ErrGitHubTestsArchiveUnreadable narrows ErrGitHubTestsReportInvalid to the
 // one case that is a property of the DOWNLOADED BYTES rather than of the
 // caller: the archive container itself could not be opened.
@@ -216,7 +347,7 @@ type GitHubTestsSkippedArtifact struct {
 // so 20 records alone encoded to ~4.1KB, already exceeding the ENTIRE
 // cursor's 4KiB budget before Repo/NextURL/Incomplete/ExcludedArtifactSample/
 // everything else is added: a heavy-skip-volume unit's checkpoint write
-// could fail outright. 8 here, alongside githubTestsMaxArtifactNameBytes's
+// could fail outright. 6 here (8 until CHAOS-13985 added the sixth report_member cause, unsafe_doctype, and needed its bytes back), alongside githubTestsMaxArtifactNameBytes's
 // 24, keeps a full worst-case cursor (every field at a realistic maximum) at
 // ~3.3KB -- verified, not assumed, by
 // TestGitHubTestsChunkCursorWorstCaseStaysWithinBudget, which encodes
@@ -226,7 +357,7 @@ type GitHubTestsSkippedArtifact struct {
 // Occurrences beyond this cap are still fully reflected in the closed
 // GitHubTestsIncomplete Count and the RecordArtifactSkipped metric; only the
 // per-artifact SAMPLE used to locate a specific artifact is bounded.
-const githubTestsMaxSkippedArtifactRecords = 8
+const githubTestsMaxSkippedArtifactRecords = 6
 
 // githubTestsMaxExcludedArtifactSampleRecords bounds
 // githubTestsChunkCursor.ExcludedArtifactSample, kept well under
@@ -338,7 +469,20 @@ const (
 	// itself failed). It ADVANCES the watermark as of CHAOS-4592 -- see
 	// githubTestsWatermarkAdvancingPairs for why.
 	githubTestsUnreadableCause = "unreadable"
+	// githubTestsUnsafeDoctypeCause records a report member refused for an
+	// entity declaration or a DOCTYPE internal subset (CHAOS-13985). Like
+	// malformed it is deterministic, so it ADVANCES the watermark.
+	githubTestsUnsafeDoctypeCause = "unsafe_doctype"
 )
+
+// githubTestsParseRefusalCause names the report_member cause of a report parse
+// error: unsafe_doctype for the XML directive guard, malformed otherwise.
+func githubTestsParseRefusalCause(err error) string {
+	if errors.Is(err, ErrGitHubTestsUnsafeDoctype) {
+		return githubTestsUnsafeDoctypeCause
+	}
+	return githubTestsMalformedCause
+}
 
 // githubTestsLegacyReportOverflowSentinel is a reserved
 // SkippedArtifactCauseOverflow key -- never a real report_member cause, so it
@@ -460,6 +604,7 @@ var githubTestsWatermarkAdvancingPairs = map[string]map[string]struct{}{
 		githubTestsUnreadableArchiveCause:   {},
 		githubTestsMalformedCause:           {},
 		githubTestsUnreadableCause:          {},
+		githubTestsUnsafeDoctypeCause:       {},
 	},
 }
 
@@ -798,7 +943,7 @@ func validatePerRunPageBudget(setting string, budget, perPage, itemCap int) erro
 // coverage readers have no meaning for.
 var githubTestsIncompleteVocabulary = map[string]map[string]struct{}{
 	githubTestsReportMemberComponent: {
-		"malformed": {}, "unreadable": {}, githubTestsUnreadableArchiveCause: {},
+		"malformed": {}, "unreadable": {}, githubTestsUnsafeDoctypeCause: {}, githubTestsUnreadableArchiveCause: {},
 		githubTestsArtifactUnavailableCause: {}, githubTestsArtifactOversizedCause: {},
 		githubTestsArtifactExpiredCause: {},
 	},
@@ -1037,19 +1182,42 @@ func parseGitHubTestsArchive(
 			continue
 		}
 		expanded += uint64(len(body))
-		kind := classifyGitHubTestReport(lower, body)
+		_, root, inspectErr := githubTestsInspectXMLReport(body, githubTestsIsLCOVName(lower, body))
+		kind := ""
+		switch {
+		case inspectErr != nil:
+			// A refusal or a broken document is a lost report when it is one:
+			// the root is a report root, or the member mentions a report root
+			// or is an lcov-named file.
+			if root == "coverage" || root == "junit" || githubTestsXMLLooksLikeReport(body) || strings.HasSuffix(lower, ".info") {
+				kind = "refused"
+			}
+		case root == "coverage":
+			kind = "coverage"
+		case root == "junit":
+			kind = "junit"
+		default:
+			kind = classifyGitHubTestReport(lower, body)
+		}
 		if kind == "" {
 			continue
 		}
 		processed++
 		result.ReportsParsed++
 		switch kind {
+		case "refused":
+			cause := githubTestsParseRefusalCause(inspectErr)
+			result.recordSkipped(cause, false)
+			result.SkippedArtifacts = append(result.SkippedArtifacts, GitHubTestsSkippedArtifact{
+				RunID: runID, ArtifactID: markerID, Cause: cause,
+			})
 		case "junit":
 			suites, cases, nonFinite, err := parseJUnitRows(body, scopeID, repoID, runID, orgID, startedAt, finishedAt, normalizedAt, suiteOccurrence)
 			if err != nil {
-				result.recordSkipped(githubTestsMalformedCause, false)
+				cause := githubTestsParseRefusalCause(err)
+				result.recordSkipped(cause, false)
 				result.SkippedArtifacts = append(result.SkippedArtifacts, GitHubTestsSkippedArtifact{
-					RunID: runID, ArtifactID: markerID, Cause: githubTestsMalformedCause,
+					RunID: runID, ArtifactID: markerID, Cause: cause,
 				})
 				continue
 			}
@@ -1060,9 +1228,10 @@ func parseGitHubTestsArchive(
 		case "coverage":
 			coverage, err := parseGitHubCoverageRow(body, name, scopeID, repoID, runID, orgID, normalizedAt)
 			if err != nil {
-				result.recordSkipped(githubTestsMalformedCause, false)
+				cause := githubTestsParseRefusalCause(err)
+				result.recordSkipped(cause, false)
 				result.SkippedArtifacts = append(result.SkippedArtifacts, GitHubTestsSkippedArtifact{
-					RunID: runID, ArtifactID: markerID, Cause: githubTestsMalformedCause,
+					RunID: runID, ArtifactID: markerID, Cause: cause,
 				})
 				continue
 			}
@@ -1127,17 +1296,23 @@ type coberturaLine struct {
 }
 
 func parseGitHubCoverageRow(body []byte, reportPath, artifactID, repoID, runID, orgID string, normalizedAt time.Time) (coverageSnapshotRow, error) {
-	trimmed := strings.TrimSpace(string(body))
-	if strings.HasPrefix(strings.ToLower(trimmed), "<coverage") {
+	// The XML root element decides Cobertura, not a byte prefix: the report may
+	// open with a BOM, an XML declaration, comments and a DOCTYPE (CHAOS-13985).
+	if _, root, err := githubTestsInspectXMLReport(body, githubTestsIsLCOVName(reportPath, body)); err != nil {
+		return coverageSnapshotRow{}, err
+	} else if root == "coverage" {
 		return parseCoberturaRow(body, reportPath, artifactID, repoID, runID, orgID, normalizedAt)
 	}
 	return parseLCOVRow(body, reportPath, artifactID, repoID, runID, orgID, normalizedAt)
 }
 
 func parseCoberturaRow(body []byte, reportPath, artifactID, repoID, runID, orgID string, normalizedAt time.Time) (coverageSnapshotRow, error) {
-	upper := bytes.ToUpper(body)
-	if len(body) > githubTestsMaxReportBytes || bytes.Contains(upper, []byte("<!DOCTYPE")) || bytes.Contains(upper, []byte("<!ENTITY")) {
+	if len(body) > githubTestsMaxReportBytes {
 		return coverageSnapshotRow{}, ErrGitHubTestsReportInvalid
+	}
+	body, _, inspectErr := githubTestsInspectXMLReport(body, false)
+	if inspectErr != nil {
+		return coverageSnapshotRow{}, inspectErr
 	}
 	var document coberturaDocument
 	if err := xml.Unmarshal(body, &document); err != nil {
@@ -1293,8 +1468,12 @@ func parseJUnitRows(
 	suiteOccurrence map[string]int,
 ) ([]testSuiteResultRow, []testCaseResultRow, int, error) {
 	nonFinite := 0
-	if len(body) > githubTestsMaxReportBytes || bytes.Contains(bytes.ToUpper(body), []byte("<!DOCTYPE")) || bytes.Contains(bytes.ToUpper(body), []byte("<!ENTITY")) {
+	if len(body) > githubTestsMaxReportBytes {
 		return nil, nil, 0, ErrGitHubTestsReportInvalid
+	}
+	body, _, inspectErr := githubTestsInspectXMLReport(body, false)
+	if inspectErr != nil {
+		return nil, nil, 0, inspectErr
 	}
 	var document junitDocument
 	if err := xml.Unmarshal(body, &document); err != nil {

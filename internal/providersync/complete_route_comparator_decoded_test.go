@@ -681,7 +681,7 @@ func TestGitHubTestsMalformedAndUnreadableReportsAdvanceWatermarkEndToEnd(t *tes
 
 	malformedRows, err := parseGitHubTestsArtifact(
 		githubTestsZip(t, map[string]string{
-			"bad.xml": `<!DOCTYPE x [<!ENTITY x "boom">]><testsuite>&x;</testsuite>`,
+			"bad.xml": `<testsuite><testcase></testsuite>`,
 		}),
 		"artifact-1", "c7198fbc-1945-3717-05d8-eb78866b4e79", "9001", claim.OrgID,
 		nil, nil, time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC),

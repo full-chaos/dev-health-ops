@@ -302,7 +302,7 @@ func TestGitHubTestsRoutePreservesValidReportsAndRecordsSkippedMember(t *testing
 	doer := &githubTestsRouteDoer{t: t, archive: githubTestsZip(t, map[string]string{
 		"reports/good.xml":  githubTestsJUnitFixture,
 		"reports/good.info": githubTestsLCOVFixture,
-		"reports/bad.xml":   `<!DOCTYPE x [<!ENTITY x "boom">]><testsuite>&x;</testsuite>`,
+		"reports/bad.xml":   `<testsuite><testcase></testsuite>`,
 	})}
 	claim := nativeTestClaim("github", "tests")
 	batch, err := (GitHubTestsRouteHandler{}).Collect(

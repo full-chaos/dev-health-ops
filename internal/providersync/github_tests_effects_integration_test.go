@@ -29,7 +29,7 @@ func TestGitHubTestsIncompleteBatchCommitsOnceAndRemainsTenantScoped(t *testing.
 	archive := githubTestsZip(t, map[string]string{
 		"reports/good.xml":  githubTestsJUnitFixture,
 		"reports/good.info": githubTestsLCOVFixture,
-		"reports/bad.xml":   `<!DOCTYPE x [<!ENTITY x "boom">]><testsuite>&x;</testsuite>`,
+		"reports/bad.xml":   `<testsuite><testcase></testsuite>`,
 	})
 	collect := func(claim Claim) CompleteRouteBatch {
 		t.Helper()

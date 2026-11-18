@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"strconv"
 	"strings"
@@ -523,6 +524,25 @@ type remainingFamilyBinding struct {
 	// rather than failing the build, the same degrade-gracefully pattern
 	// DORAObserver/doraRefusalObserver use elsewhere.
 	SkipIfCovered bool
+	// Freshness, when set, replaces SkipIfCovered's day-label check for an exact-scope family (CHAOS-9587):
+	// a same-scope run covers the occurrence by WHEN IT WAS CREATED, not by the day it is labelled with.
+	Freshness *freshnessRule
+}
+
+// freshnessRule is how a fixed-schedule occurrence of an exact-scope family decides it is already covered.
+type freshnessRule struct {
+	// Cutoff is the instant the occurrence's own run would read its data up to. A same-scope succeeded run
+	// created at or after it covers the occurrence; one created earlier read an older window.
+	Cutoff func(occurrence Occurrence) time.Time
+	// StageBudget is the family's stage budget (the kind's timeout_seconds in contracts/jobs/v1/registry.json).
+	// A same-scope run in flight covers the occurrence only while it is younger than this.
+	StageBudget time.Duration
+}
+
+// RemainingMetricsFreshCoverageStore is the optional capability startOrganization uses for a binding with
+// a Freshness rule. A store without it skips the check, as RemainingMetricsCoverageStore does.
+type RemainingMetricsFreshCoverageStore interface {
+	FreshCoverage(ctx context.Context, tx pgx.Tx, organizationID, family string, scope json.RawMessage, cutoff, now time.Time, stageBudget time.Duration) (remaining.FreshCoverageResult, error)
 }
 
 // RemainingMetricsCoverageStore is the narrow, optional capability
@@ -773,6 +793,13 @@ func NewRemainingMetricsFanoutProducer(
 				// manual trigger with a DIFFERENT window (e.g. --window 7) never
 				// falsely covers this binding's own window=14 occurrence.
 				SkipIfCovered: true,
+				// CHAOS-9587: the manual trigger and the fixtures load label their run with yesterday UTC, so the
+				// day-label check above never sees them. Coverage is by creation time: the run reads its window
+				// up to 00:00 UTC of the occurrence day (recommendations_native.go EvaluationInstant, ComputeOrg).
+				Freshness: &freshnessRule{
+					Cutoff:      func(occurrence Occurrence) time.Time { return utcMidnight(occurrence.ScheduledFor) },
+					StageBudget: remainingStageBudget,
+				},
 			},
 			"membership_backfill_daily_fanout": {
 				Family: "membership_backfill",
@@ -828,6 +855,12 @@ func NewRemainingMetricsFanoutProducer(
 				// trigger never falsely covers this binding's own all-teams
 				// occurrence.
 				SkipIfCovered: true,
+				// CHAOS-9587: capacity reads its history up to the wall clock and its backlog live (capacity_native.go),
+				// so a run created at or after the occurrence's due time is at least as fresh as the scheduled run.
+				Freshness: &freshnessRule{
+					Cutoff:      func(occurrence Occurrence) time.Time { return occurrence.ScheduledFor.UTC() },
+					StageBudget: remainingStageBudget,
+				},
 			},
 		},
 	}, nil
@@ -911,6 +944,15 @@ func (producer *RemainingMetricsFanoutProducer) Produce(
 	return outcome, nil
 }
 
+// remainingStageBudget is the kind timeout of metrics.remaining.recommendations and
+// metrics.remaining.capacity in contracts/jobs/v1/registry.json (7200 s; pinned by a test).
+const remainingStageBudget = 2 * time.Hour
+
+func utcMidnight(t time.Time) time.Time {
+	t = t.UTC()
+	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
+}
+
 // permanentForOrganization reports whether an error will fail identically on
 // every retry for the SAME organization, so retrying it costs a window and
 // changes nothing.
@@ -956,7 +998,29 @@ func (producer *RemainingMetricsFanoutProducer) startOrganization(
 	// uniqueness check can never see. Checked on the outer tx, before a
 	// savepoint is even opened, so a fully-covered occurrence costs one
 	// read per organization rather than a wasted nested transaction.
-	if binding.SkipIfCovered {
+	freshnessDecided := false
+	if binding.Freshness != nil {
+		if fresh, ok := producer.store.(RemainingMetricsFreshCoverageStore); ok {
+			freshnessDecided = true
+			cutoff := binding.Freshness.Cutoff(occurrence)
+			cover, err := fresh.FreshCoverage(ctx, tx, organizationID, binding.Family, scope,
+				cutoff, occurrence.ObservedAt, binding.Freshness.StageBudget)
+			if err != nil {
+				return 0, fmt.Errorf("check fresh %s coverage for organization: %w", binding.Family, err)
+			}
+			if cover.Covered {
+				// Loud on purpose: if an in-flight cover later fails, this line is the trail that
+				// explains why the occurrence has no compute of its own (missing is not healthy).
+				slog.WarnContext(ctx, "fixed scheduler: occurrence skipped as covered by a same-scope run",
+					"family", binding.Family, "schedule_id", occurrence.ScheduleID, "organization_id", organizationID,
+					"covering_run_id", cover.RunID, "covering_run_status", cover.Status,
+					"covering_run_created_at", cover.CreatedAt.UTC().Format(time.RFC3339),
+					"rule_branch", string(cover.Branch), "cutoff", cutoff.UTC().Format(time.RFC3339))
+				return 0, nil
+			}
+		}
+	}
+	if binding.SkipIfCovered && !freshnessDecided {
 		if coverage, ok := producer.store.(RemainingMetricsCoverageStore); ok {
 			covered, err := coverage.HasSucceededPartition(ctx, tx, organizationID, binding.Family, day, scope)
 			if err != nil {

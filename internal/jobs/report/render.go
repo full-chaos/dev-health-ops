@@ -187,6 +187,9 @@ func provenanceID(planID, artifactType, artifactID string) string {
 	return uuid.NewSHA1(uuid.NameSpaceURL, []byte(planID+":"+artifactType+":"+artifactID)).String()
 }
 
+// otherChartsTitle heads the charts no listed section printed; a plan section with this title is renamed so the heading is unique.
+const otherChartsTitle = "Other Charts"
+
 func renderMarkdown(plan Plan, charts []ChartResult, narratives []narrative, provenance []ProvenanceRecord) string {
 	window := "unspecified window"
 	if plan.TimeRangeStart != "" && plan.TimeRangeEnd != "" {
@@ -211,11 +214,15 @@ func renderMarkdown(plan Plan, charts []ChartResult, narratives []narrative, pro
 		if section.sectionType == "summary" {
 			continue
 		}
-		lines = append(lines, "## "+section.title, section.body, "", "### Insights",
+		title := section.title
+		if title == otherChartsTitle {
+			title += " (plan section)"
+		}
+		lines = append(lines, "## "+title, section.body, "", "### Insights",
 			"No grounded insights for this section.", "", "### Charts")
 		found := false
 		for index, chart := range charts {
-			if !contains(section.supportingMetrics, chart.Spec.Metric) {
+			if printed[index] || !contains(section.supportingMetrics, chart.Spec.Metric) {
 				continue
 			}
 			found = true
@@ -233,7 +240,7 @@ func renderMarkdown(plan Plan, charts []ChartResult, narratives []narrative, pro
 		}
 	}
 	if len(unlisted) > 0 {
-		lines = append(lines, "## Other Charts")
+		lines = append(lines, "## "+otherChartsTitle)
 		for _, chart := range unlisted {
 			lines = append(lines, renderChart(chart), "")
 		}

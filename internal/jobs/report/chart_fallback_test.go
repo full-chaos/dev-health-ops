@@ -175,3 +175,50 @@ func TestOtherChartsMatchesGolden(t *testing.T) {
 		t.Fatalf("markdown drifted from the golden:\n%s", artifact.Markdown)
 	}
 }
+
+// A chart prints under the first listed section that names it; a repeated section copy prints no second table.
+func TestRepeatedListedSectionPrintsAChartOnce(t *testing.T) {
+	t.Parallel()
+	one := cicdCharts("team")[:1]
+	for _, sections := range [][]string{
+		{"summary", "cicd", "cicd"},
+		{"summary", "cicd", "delivery", "cicd", "cicd"},
+	} {
+		markdown := renderPlan(t, sections, one)
+		requireTables(t, markdown, one)
+		if strings.Contains(markdown, "## Other Charts") {
+			t.Errorf("sections %v: a printed chart reached the fallback:\n%s", sections, markdown)
+		}
+	}
+	four := cicdCharts("team")
+	markdown := renderPlan(t, []string{"summary", "cicd", "cicd"}, four)
+	requireTables(t, markdown, four)
+	if got := strings.Count(markdown, "No charts linked to this section."); got != 1 {
+		t.Errorf("the second cicd copy should say no charts linked: %d notices:\n%s", got, markdown)
+	}
+}
+
+// The fallback heading is the only "## Other Charts" heading: a plan section whose title is the same keeps a distinct title.
+func TestPlanSectionTitledOtherChartsKeepsOneFallbackHeading(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"other charts", "Other Charts", "other_charts", "OTHER_CHARTS"} {
+		unlisted := cicdCharts("team")
+		markdown := renderPlan(t, []string{"summary", name}, unlisted)
+		requireTables(t, markdown, unlisted)
+		if got := strings.Count(markdown, "\n## Other Charts\n"); got != 1 {
+			t.Errorf("section %q with unlisted charts: %d Other Charts headings, want 1:\n%s", name, got, markdown)
+		}
+		if !strings.Contains(markdown, "\n## Other Charts (plan section)\n") {
+			t.Errorf("section %q lost its own heading:\n%s", name, markdown)
+		}
+		covered := cicdCharts("team")
+		markdown = renderPlan(t, []string{"summary", name, "cicd"}, covered)
+		requireTables(t, markdown, covered)
+		if got := strings.Count(markdown, "\n## Other Charts\n"); got != 0 {
+			t.Errorf("section %q with every chart printed: %d fallback headings, want 0:\n%s", name, got, markdown)
+		}
+		if got := strings.Count(markdown, "\n## Other Charts (plan section)\n"); got != 1 {
+			t.Errorf("section %q with every chart printed: its heading count = %d, want 1:\n%s", name, got, markdown)
+		}
+	}
+}

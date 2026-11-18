@@ -253,7 +253,9 @@ type githubTestsReportRows struct {
 	// NonReportOther count members that are not .xml/.info (CHAOS-13193): they
 	// are observability only -- never an incomplete cause, so reports_complete
 	// and the watermark do not see them.
-	ReportsParsed  int
+	ReportsParsed int
+	// ReportsRead is the number of members parsed whole as a report; a report with no test or no line counts.
+	ReportsRead    int
 	NonReportJSON  int
 	NonReportOther int
 	// SkippedArtifacts carries a durable GitHubTestsSkippedArtifact marker for
@@ -1221,6 +1223,7 @@ func parseGitHubTestsArchive(
 				})
 				continue
 			}
+			result.ReportsRead++
 			result.Suites = append(result.Suites, suites...)
 			result.Cases = append(result.Cases, cases...)
 			result.DuplicateCases += countDuplicateTestCases(cases)
@@ -1235,6 +1238,7 @@ func parseGitHubTestsArchive(
 				})
 				continue
 			}
+			result.ReportsRead++
 			for _, legacyScope := range legacyScopes {
 				coverage.LegacySnapshotIDs = append(coverage.LegacySnapshotIDs, githubTestsSnapshotID(runID, legacyScope, *coverage.ReportFormat, name))
 			}

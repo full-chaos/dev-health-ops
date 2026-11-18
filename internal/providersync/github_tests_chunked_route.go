@@ -1770,7 +1770,10 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 				suites := []testSuiteResultRow(nil)
 				cases := []testCaseResultRow(nil)
 				coverage := []coverageSnapshotRow(nil)
+				var completeness []testOpsRunReportCompletenessRow
 				if include && githubTestsRunReadable(run) && !githubTestsReportRunOutsideWindow(pipeline, claim) {
+					// The run's losses are the deltas of the cursor's exact loss counters across the run (CHAOS-13826).
+					lossBefore := githubTestsTakeRunLossCounts(cursor)
 					artPage, pageErr := providerfoundation.CollectGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{
 						Path:  root + "/actions/runs/" + url.PathEscape(pipeline.RunID) + "/artifacts",
 						Route: githubRunArtifactsRoute,
@@ -1837,6 +1840,8 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 					// nothing about the channel (same rule as oversized below). Every expired artifact that passed the selection seam above
 					// counts: its contents are unknown, so the route fails closed (the seam already dropped the known non-report names).
 					artifactItems, expiredItems := githubTestsSplitExpiredArtifacts(artifactItems)
+					reportsExpected := len(artifactItems) + len(expiredItems)
+					nonReportArchives := 0
 					for _, artifact := range expiredItems {
 						if githubTestsSkippedMarkerRecorded(cursor.SkippedArtifacts, pipeline.RunID, string(artifact.ID), githubTestsArtifactExpiredCause) {
 							continue
@@ -1894,12 +1899,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 						if artifact.Expired {
 							continue // unreachable: expired artifacts are split out before the cap (CHAOS-13980)
 						}
-						var archive []byte
-						notFound := false
-						downloadErr := artifact.declaredOversize(maxArtifactBytes)
-						if downloadErr == nil {
-							archive, _, notFound, downloadErr = downloadGitHubTestsArtifact(ctx, client, root, string(artifact.ID), maxArtifactBytes)
-						}
+						archive, _, notFound, downloadErr := downloadGitHubTestsListedArtifact(ctx, client, root, string(artifact.ID), maxArtifactBytes, artifact.listedSize())
 						cursor.Requests = invocationBaseRequests + requests
 						if downloadErr != nil {
 							// An artifact whose bytes could never be
@@ -2152,7 +2152,10 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 						}
 						// Hold the parsed rows until the run is decided; an artifact that would take the held rows past
 						// githubTestsMaxHeldReportRowsPerRun is skipped whole before it is held.
-						held := githubTestsParsedReport{ID: artifact.ID, Name: artifact.Name, Suites: rows.Suites, Cases: rows.Cases, Coverage: rows.Coverage}
+						held := githubTestsParsedReport{ID: artifact.ID, Name: artifact.Name, Suites: rows.Suites, Cases: rows.Cases, Coverage: rows.Coverage, Reports: rows.ReportsRead}
+						if held.Reports == 0 && len(rows.SkippedArtifacts) == 0 && len(reportIncomplete) == 0 {
+							nonReportArchives++ // read whole and held no report: not a report source of the run (CHAOS-13826)
+						}
 						if heldRows+held.rows() > githubTestsMaxHeldReportRowsPerRun {
 							skipReportOverBound(artifact)
 							continue
@@ -2212,11 +2215,16 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 						cases = append(cases, parsedReports[index].Cases...)
 						coverage = append(coverage, parsedReports[index].Coverage...)
 					}
+					// One verdict row per run, after its last emission's rows are decided (CHAOS-13826).
+					completeness = githubTestsRunReportCompleteness(
+						pipeline, run, lossBefore, githubTestsTakeRunLossCounts(cursor),
+						reportsExpected-nonReportArchives, len(expiredItems), githubTestsAdmittedReports(parsedReports, plan.Admitted), normalizedAt,
+					)
 				}
 				cursor.Suites += len(suites)
 				cursor.Cases += len(cases)
 				cursor.Coverage += len(coverage)
-				effects, effectErr := testOpsEffects(nil, nil, nil, suites, cases, coverage)
+				effects, effectErr := testOpsEffects(nil, nil, nil, suites, cases, coverage, completeness...)
 				if effectErr != nil {
 					return effectErr
 				}

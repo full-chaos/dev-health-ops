@@ -290,7 +290,7 @@ aggregation layer built on top of these tables (see METRICS below).
 | Provider | Dataset | Executor | Route destinations (tables written) | Route ready | Plannable |
 | --- | --- | --- | --- | --- | --- |
 | github | `blame` | NATIVE | `git_blame`, `github_blame_path_progress` | True | True |
-| github | `cicd` | NATIVE | `ci_acceptance_checks`, `ci_job_runs`, `ci_pipeline_runs`, `coverage_snapshots`, `test_case_results`, `test_suite_results` | True | True |
+| github | `cicd` | NATIVE | `ci_acceptance_checks`, `ci_job_runs`, `ci_pipeline_runs`, `coverage_snapshots`, `test_case_results`, `test_suite_results`, `testops_run_report_completeness` | True | True |
 | github | `commit-stats` | NATIVE | `git_commit_stats` | True | True |
 | github | `commits` | NATIVE | `git_commits` | True | True |
 | github | `deployments` | NATIVE | `deployments` | True | True |
@@ -300,14 +300,14 @@ aggregation layer built on top of these tables (see METRICS below).
 | github | `prs` | NATIVE | `ai_attribution`, `git_pull_request_reviews`, `git_pull_requests` | True | True |
 | github | `repo-metadata` | NATIVE | `repos` | True | True |
 | github | `security` | NATIVE | `security_alerts` | True | True |
-| github | `tests` | NATIVE | `ci_acceptance_checks`, `ci_job_runs`, `ci_pipeline_runs`, `coverage_snapshots`, `test_case_results`, `test_suite_results` | True | False |
+| github | `tests` | NATIVE | `ci_acceptance_checks`, `ci_job_runs`, `ci_pipeline_runs`, `coverage_snapshots`, `test_case_results`, `test_suite_results`, `testops_run_report_completeness` | True | False |
 | github | `work-item-comments` | NATIVE | `ai_attribution`, `project_membership_transitions`, `projects`, `sprints`, `work_item_dependencies`, `work_item_interactions`, `work_item_reopen_events`, `work_item_transitions`, `work_items` | True | False |
 | github | `work-item-history` | NATIVE | `ai_attribution`, `project_membership_transitions`, `projects`, `sprints`, `work_item_dependencies`, `work_item_interactions`, `work_item_reopen_events`, `work_item_transitions`, `work_items` | True | False |
 | github | `work-item-labels` | NATIVE | `ai_attribution`, `project_membership_transitions`, `projects`, `sprints`, `work_item_dependencies`, `work_item_interactions`, `work_item_reopen_events`, `work_item_transitions`, `work_items` | True | False |
 | github | `work-item-projects` | NATIVE | `ai_attribution`, `project_membership_transitions`, `projects`, `sprints`, `work_item_dependencies`, `work_item_interactions`, `work_item_reopen_events`, `work_item_transitions`, `work_items` | True | False |
 | github | `work-items` | NATIVE | `ai_attribution`, `project_membership_transitions`, `projects`, `sprints`, `work_item_dependencies`, `work_item_interactions`, `work_item_reopen_events`, `work_item_transitions`, `work_items` | True | True |
 | gitlab | `blame` | NATIVE | `git_blame` | True | True |
-| gitlab | `cicd` | NATIVE | `ci_acceptance_checks`, `ci_job_runs`, `ci_pipeline_runs`, `coverage_snapshots`, `test_case_results`, `test_suite_results` | True | True |
+| gitlab | `cicd` | NATIVE | `ci_acceptance_checks`, `ci_job_runs`, `ci_pipeline_runs`, `coverage_snapshots`, `test_case_results`, `test_suite_results`, `testops_run_report_completeness` | True | True |
 | gitlab | `commit-stats` | NATIVE | `git_commit_stats` | True | True |
 | gitlab | `commits` | NATIVE | `git_commits` | True | True |
 | gitlab | `deployments` | NATIVE | `deployments` | True | True |
@@ -319,7 +319,7 @@ aggregation layer built on top of these tables (see METRICS below).
 | gitlab | `prs` | NATIVE | `ai_attribution`, `git_pull_request_reviews`, `git_pull_requests`, `work_graph_pr_commit` | True | True |
 | gitlab | `repo-metadata` | NATIVE | `repos` | True | True |
 | gitlab | `security` | NATIVE | `security_alerts` | True | True |
-| gitlab | `tests` | NATIVE | `ci_acceptance_checks`, `ci_job_runs`, `ci_pipeline_runs`, `coverage_snapshots`, `test_case_results`, `test_suite_results` | True | False |
+| gitlab | `tests` | NATIVE | `ci_acceptance_checks`, `ci_job_runs`, `ci_pipeline_runs`, `coverage_snapshots`, `test_case_results`, `test_suite_results`, `testops_run_report_completeness` | True | False |
 | gitlab | `work-item-comments` | NATIVE | `ai_attribution`, `sprints`, `work_item_dependencies`, `work_item_interactions`, `work_item_reopen_events`, `work_item_transitions`, `work_items` | True | False |
 | gitlab | `work-item-history` | NATIVE | `ai_attribution`, `sprints`, `work_item_dependencies`, `work_item_interactions`, `work_item_reopen_events`, `work_item_transitions`, `work_items` | True | False |
 | gitlab | `work-item-labels` | NATIVE | `ai_attribution`, `sprints`, `work_item_dependencies`, `work_item_interactions`, `work_item_reopen_events`, `work_item_transitions`, `work_items` | True | False |

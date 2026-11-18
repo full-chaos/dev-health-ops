@@ -1542,6 +1542,14 @@ WHERE id = $3::uuid AND finalization_status = 'running'
 	return nil
 }
 
+// completedRunStatusSQL is the status a finalize gives a run when it succeeds:
+// a run with no partition is a run of the whole organization whose discovery
+// found no repository, and it ends as no_repositories.
+const completedRunStatusSQL = `CASE WHEN EXISTS (
+        SELECT 1 FROM public.daily_metrics_partitions AS partition
+        WHERE partition.run_id = daily_metrics_runs.id
+    ) THEN 'succeeded' ELSE 'no_repositories' END`
+
 func (store *PostgresStore) CompleteFinalize(ctx context.Context, claim FinalizeClaim) error {
 	if !store.valid() || !validUUID(claim.Run.ID) || !validUUID(claim.Token) {
 		return ErrUnavailable
@@ -1564,7 +1572,7 @@ func (store *PostgresStore) CompleteFinalize(ctx context.Context, claim Finalize
 UPDATE public.daily_metrics_runs
 SET finalization_status = 'succeeded', finalization_claim_token = NULL,
     finalization_lease_expires_at = NULL, finalized_at = $1,
-    status = 'succeeded', updated_at = $1
+    status = `+completedRunStatusSQL+`, updated_at = $1
 WHERE id = $2::uuid AND finalization_status = 'running'
   AND finalization_claim_token = $3::uuid AND status = 'running'
   AND finalization_lease_expires_at > $1`, now, claim.Run.ID, claim.Token)
@@ -1680,7 +1688,7 @@ UPDATE public.daily_metrics_runs
 SET finalization_status = $1::varchar, finalization_claim_token = NULL,
     finalization_lease_expires_at = NULL,
     finalized_at = CASE WHEN $1 = 'succeeded' THEN $2 ELSE finalized_at END,
-    status = CASE WHEN $1 = 'succeeded' THEN 'succeeded' ELSE status END,
+    status = CASE WHEN $1 = 'succeeded' THEN `+completedRunStatusSQL+` ELSE status END,
     updated_at = $2
 WHERE id = $3::uuid AND finalization_status = 'running'
   AND finalization_claim_token = $4::uuid AND status = 'running'

@@ -1996,10 +1996,7 @@ func loadFailureStreaks(
 	}
 	unavailable := func(failure string, cause error) map[string]providersync.FailureStreak {
 		fields := append(attrs(failure), slog.Int64("duration_ms", time.Since(started).Milliseconds()))
-		var pgErr *pgconn.PgError
-		if errors.As(cause, &pgErr) && len(pgErr.Code) == 5 {
-			fields = append(fields, slog.String("sqlstate", pgErr.Code))
-		}
+		fields = append(fields, sqlstateAttrs(cause)...)
 		slog.Default().Warn("sync.materializer.failure_streaks_unavailable", fields...)
 		return nil
 	}
@@ -2047,6 +2044,15 @@ func loadFailureStreaks(
 	return streaks
 }
 
+// sqlstateAttrs names the SQLSTATE of a Postgres error for a log line, never its text.
+func sqlstateAttrs(cause error) []any {
+	var pgErr *pgconn.PgError
+	if errors.As(cause, &pgErr) && len(pgErr.Code) == 5 {
+		return []any{slog.String("sqlstate", pgErr.Code)}
+	}
+	return nil
+}
+
 // loadTestOpsBudgetBlocked reads, per source, how many of the newest GitHub
 // tests/cicd units stopped at the run inventory page budget (CHAOS-13827). It runs
 // only for a GitHub plan that has a tests or cicd dataset. Like
@@ -2069,10 +2075,7 @@ func loadTestOpsBudgetBlocked(
 			slog.String("integration_id", integrationID), slog.String("failure", failure),
 			slog.Int64("duration_ms", time.Since(started).Milliseconds()),
 		}
-		var pgErr *pgconn.PgError
-		if errors.As(cause, &pgErr) && len(pgErr.Code) == 5 {
-			fields = append(fields, slog.String("sqlstate", pgErr.Code))
-		}
+		fields = append(fields, sqlstateAttrs(cause)...)
 		slog.Default().Warn("sync.materializer.testops_budget_blocked_unavailable", fields...)
 		return nil
 	}

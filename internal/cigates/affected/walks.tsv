@@ -198,6 +198,8 @@ internal/cigates/bigboyrender	parity_test.go	internal/cigates/bigboyrender/testd
 internal/cigates/bigboyrender	parity_test.go	unexpressed	-	-
 internal/cigates/cachepoison	cachepoison_test.go	.github/workflows	dir	*
 internal/cigates/chartgates	dashboard_authslo_test.go	unexpressed	-	-
+internal/cigates/chartgates	dashboard_onequery_test.go	unexpressed	-	-
+internal/cigates/chartgates	dashboard_spangaps_test.go	unexpressed	-	-
 internal/cigates/chartgates	helpers_test.go	unexpressed	-	-
 internal/cigates/chartgates	jwt_secret_key_absent_test.go	unexpressed	-	-
 internal/cigates/chconstructor	chconstructor_test.go	.	tree	*.go
@@ -394,6 +396,7 @@ internal/jobs/metrics/remaining	capacity_schema_contract_pin_test.go	unexpressed
 internal/jobs/metrics/remaining	executor_clock_ast_test.go	internal/jobs/metrics/remaining	dir	*
 internal/jobs/operational	billingemail_test.go	internal/jobs/operational/testdata/billing_email	dir	*
 internal/jobs/operational	venue_golden_address_test.go	internal/jobs/operational/testdata/golden	dir	*
+internal/jobs/report	stored_test_pass_rate_readers_census_test.go	.	tree	*.go
 internal/jobs/workgraph	error_attr_census_test.go	internal/jobs/workgraph	tree	*.go
 internal/jobs/workgraph/units	pr_link_protection_test.go	internal	tree	*.go
 internal/jobs/workgraph/writercontract	writercontract_test.go	internal	tree	*
@@ -470,6 +473,7 @@ internal/pythonparity	jsonsorted_golden_test.go	internal/pythonparity/testdata	d
 internal/pythonparity/pyunicodedata	import_guard_test.go	.	tree	*.go
 internal/queryapi/activeteams	census_test.go	internal/queryapi	tree	*.go
 internal/queryapi/aianalytics	pr_root_id_census_test.go	internal/queryapi/aianalytics	dir	*
+internal/queryapi/aianalytics	umd_team_scope_census_14101_test.go	unexpressed	-	-
 internal/queryapi/analytics	analytics_settings_gate_test.go	internal/queryapi/analytics	dir	*
 internal/queryapi/analytics	canonical_only_census_test.go	internal/queryapi/analytics	dir	*
 internal/queryapi/datahealth	sourcehealth_stages_census_test.go	internal/jobruntime	dir	*
@@ -555,6 +559,7 @@ internal/syncdispatchruntime	claim_id_chunks_test.go	internal/syncdispatchruntim
 internal/syncdispatchruntime	log_error_text_test.go	internal/syncdispatchruntime	dir	*
 internal/syncdispatchruntime	log_error_text_test.go	internal/syncdispatchruntime/synclog	dir	*
 internal/syncdispatchruntime	post_sync_failure_test.go	internal/syncdispatchruntime	dir	*
+internal/syncdispatchruntime	post_sync_fence_census_test.go	internal/syncdispatchruntime	dir	*
 internal/synchandoff	trigger_writer_census_test.go	.	tree	*.go
 internal/syncreconciler	no_celery_test.go	unexpressed	-	-
 internal/syncrunrollup	arm_finalize_test.go	internal/syncreconciler	dir	*

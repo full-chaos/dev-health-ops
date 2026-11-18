@@ -1733,13 +1733,15 @@ type TestOpsRiskResult struct {
 	PipelineStability    *float64                   `json:"pipelineStability,omitempty"`
 	Timeseries           []TestOpsRiskTrendPoint    `json:"timeseries"`
 	QualityDragBreakdown []TestOpsRiskBreakdownItem `json:"qualityDragBreakdown"`
-	QuadrantData         []TestOpsRiskQuadrantPoint `json:"quadrantData"`
-	ConfidenceSpark      []TestOpsRiskSparkPoint    `json:"confidenceSpark"`
-	ConfidenceDelta      *float64                   `json:"confidenceDelta,omitempty"`
-	DragSpark            []TestOpsRiskSparkPoint    `json:"dragSpark"`
-	DragDelta            *float64                   `json:"dragDelta,omitempty"`
-	StabilitySpark       []TestOpsRiskSparkPoint    `json:"stabilitySpark"`
-	StabilityDelta       *float64                   `json:"stabilityDelta,omitempty"`
+	// True when any repository row of the latest quality-drag day has a failure-rework, flake-investigation, queue-wait or retry-overhead part that was not measured; qualityDragHours and the breakdown then sum only the known parts.
+	QualityDragPartial bool                       `json:"qualityDragPartial"`
+	QuadrantData       []TestOpsRiskQuadrantPoint `json:"quadrantData"`
+	ConfidenceSpark    []TestOpsRiskSparkPoint    `json:"confidenceSpark"`
+	ConfidenceDelta    *float64                   `json:"confidenceDelta,omitempty"`
+	DragSpark          []TestOpsRiskSparkPoint    `json:"dragSpark"`
+	DragDelta          *float64                   `json:"dragDelta,omitempty"`
+	StabilitySpark     []TestOpsRiskSparkPoint    `json:"stabilitySpark"`
+	StabilityDelta     *float64                   `json:"stabilityDelta,omitempty"`
 }
 
 type TestOpsRiskSparkPoint struct {

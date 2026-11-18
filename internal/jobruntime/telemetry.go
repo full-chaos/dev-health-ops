@@ -608,7 +608,8 @@ const (
 	// TeamCatalogOutcomeRosterPreservationFailed (team-lead ruling,
 	// 2026-08-28) names a successful collection call that nonetheless
 	// reported TeamCatalogResult.RosterPreservationFailed: the existing-
-	// manual_members pre-read (CHAOS-4446's PreserveExistingTeamManualMembers)
+	// manual_members pre-read (CHAOS-4446; no writer makes one since
+	// CHAOS-14081 keeps the roster inside the insert)
 	// failed and the collector chose to continue rather than hard-fail the
 	// whole write. No collector does this today -- Linear's always
 	// hard-fails instead, surfacing as native_failed_nonfatal/a propagated

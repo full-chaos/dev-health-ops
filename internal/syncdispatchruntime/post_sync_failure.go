@@ -22,6 +22,7 @@ const (
 	stageArgs                postSyncStage = "args"
 	stageBegin               postSyncStage = "begin"
 	stageCommit              postSyncStage = "commit"
+	stageCommitCheck         postSyncStage = "commit_check"
 	stageReference           postSyncStage = "reference_read"
 	stagePlanRun             postSyncStage = "plan_run_read"
 	stagePlanUnits           postSyncStage = "plan_units_query"
@@ -54,7 +55,7 @@ const (
 
 // postSyncStages is every stage constant; stepLabel reads only from it, so a free string never reaches a log line.
 var postSyncStages = map[postSyncStage]struct{}{
-	stageConstruct: {}, stageArgs: {}, stageBegin: {}, stageCommit: {}, stageReference: {}, stagePlanRun: {}, stagePlanUnits: {},
+	stageConstruct: {}, stageArgs: {}, stageBegin: {}, stageCommit: {}, stageCommitCheck: {}, stageReference: {}, stagePlanRun: {}, stagePlanUnits: {},
 	stagePlanUnitScan: {}, stagePlanUnitsRows: {}, stagePlanAutoImport: {}, stagePanic: {}, stageTouchedTake: {}, stageComplexity: {},
 	stageDaily: {}, stageTouchedStart: {}, stageWorkGraph: {}, stageInvestment: {}, stageMembership: {}, stageDora: {},
 	stageTeamAutoimport: {}, stageOwnershipDerivation: {}, stageTouchedSetup: {}, stageTouchedWindow: {}, stageTouchedPlan: {},

@@ -7032,13 +7032,18 @@
       "guidance": "Pickup latency and review comments per changed line could not be computed for this scope \u2014 the raw pull-request review timestamps or size fields are missing, or the scope (work type, unresolved team) cannot be applied to raw PR rows. Treat as no-data, not as zero.",
       "key": "review_engagement",
       "title": "Pickup latency and comment density unavailable"
+     },
+     {
+      "guidance": "Reviewer concentration is only shown as an aggregate distribution signal. No reviewer names, rankings, or person-level review counts are exposed.",
+      "key": "reviewer_concentration",
+      "title": "Reviewer concentration needs aggregate coverage"
      }
     ],
     "orgId": "org-1",
     "reviewerConcentration": {
-     "dataAvailable": true,
-     "reviewerCount": 2,
-     "reviewerGini": 0.0
+     "dataAvailable": false,
+     "reviewerCount": 0,
+     "reviewerGini": null
     },
     "startDate": "2026-08-01"
    },

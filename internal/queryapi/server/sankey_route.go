@@ -38,6 +38,7 @@ import (
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/analytics"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
@@ -228,7 +229,7 @@ func newSankeyGetHandler(client sankey.QueryClient) http.HandlerFunc {
 			return
 		}
 
-		query := r.URL.Query()
+		query := httpapi.Query(r)
 		mode := lastQueryValue(query, "mode")
 		if !query.Has("mode") {
 			mode = "investment"

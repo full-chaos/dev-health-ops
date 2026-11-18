@@ -955,6 +955,10 @@ unchanged.
   endpoint, so the signal is a log line per day (`rerun started`, `rerun already started,
   nothing new`, `rerun refused` with a `reason`), the stored run (its generation is
   derived from the tag).
+- A daily run whose dispatch could not materialize it (repository discovery failed on
+  every attempt, or the materialize refused) ends `failed`, and no command moves a
+  `failed` run back. Compute that day again with a rerun tag: it starts a new run, the
+  failed run stays `failed`, and the day marker certifies the new run when it succeeds.
 - The audit row holds the principal, the action, the organization, `--reason` and
   `--correlation-id`, and no tag. Pass the tag in `--correlation-id` as well
   (for example `--correlation-id chaos-NNNN-fix-1`), so the audit row names the rerun.

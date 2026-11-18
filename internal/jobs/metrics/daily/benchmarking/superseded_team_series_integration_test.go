@@ -89,7 +89,7 @@ VALUES (?, 'github', ?, toUUID(?), ?, 'exact', 'native', 1, 10, 0, ?, ?)`,
 	// one metric of each.
 	for _, source := range []struct{ table, column, metric string }{
 		{"testops_pipeline_metrics_daily", "rerun_rate", "rerun_rate"},
-		{"testops_test_metrics_daily", "pass_rate", "pass_rate"},
+		{"testops_test_metrics_daily", "flake_rate", "flake_rate"},
 		{"testops_coverage_metrics_daily", "line_coverage_pct", "line_coverage_pct"},
 	} {
 		t.Run(source.table, func(t *testing.T) {
@@ -98,8 +98,14 @@ VALUES (?, 'github', ?, toUUID(?), ?, 'exact', 'native', 1, 10, 0, ?, ?)`,
 			if err := admin.Exec(ctx, "SYSTEM STOP MERGES "+source.table); err != nil {
 				t.Fatalf("stop merges: %v", err)
 			}
+			// rerun_rate is read as reruns over runs: every repo-day has the same 10 runs, so the
+			// weights are equal and the expected values are those of the stored rates.
 			insert := "INSERT INTO " + source.table + " (repo_id, day, " + source.column +
-				", team_id, org_id, computed_at) VALUES (?, ?, ?, ?, ?, ?)"
+				", team_id, org_id, computed_at, pipelines_count) VALUES (?, ?, ?, ?, ?, ?, 10)"
+			if source.table != "testops_pipeline_metrics_daily" {
+				insert = "INSERT INTO " + source.table + " (repo_id, day, " + source.column +
+					", team_id, org_id, computed_at) VALUES (?, ?, ?, ?, ?, ?)"
+			}
 			for _, row := range []struct {
 				repo string
 				team *string

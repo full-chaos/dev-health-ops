@@ -80,7 +80,7 @@ var errNotADict = errors.New("stored credential value is not a dict")
 // GitLab is listed by this plane; a GitHub credential is refused with 501.
 func (h handlers) repos(w http.ResponseWriter, r *http.Request) {
 	var problems pybody.Errors
-	query := r.URL.Query()
+	query := pybody.Query(r)
 	owner := pybody.LastQueryValue(query, "owner")
 	search := pybody.LastQueryValue(query, "search")
 	maxRepos, _ := problems.QueryInt("max_repos", pybody.LastQueryValue(query, "max_repos"), 100, nil, nil)

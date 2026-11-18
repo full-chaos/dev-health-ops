@@ -29,6 +29,7 @@ import (
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
+	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/people"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
@@ -173,7 +174,7 @@ func newPeopleSearchHandler(reader *people.Reader) http.HandlerFunc {
 			return
 		}
 
-		query := r.URL.Query()
+		query := httpapi.Query(r)
 
 		// Order matters here, confirmed live: FastAPI/Pydantic resolves
 		// query-PARAMETER dependencies (limit's `int = 20`) at the

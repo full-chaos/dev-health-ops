@@ -484,7 +484,7 @@ func (d Deps) handleListBatches() http.HandlerFunc {
 			writeIngestError(w, authErr)
 			return
 		}
-		values := r.URL.Query()
+		values := httpapi.Query(r)
 		var problems pybody.Errors
 		sourceSystem, sourceInstance, statusFilter := pybody.LastQuery(values, "sourceSystem"), pybody.LastQuery(values, "sourceInstance"), pybody.LastQuery(values, "status")
 		createdAfter, _ := problems.QueryDatetime("createdAfter", pybody.LastQuery(values, "createdAfter"))
@@ -540,7 +540,7 @@ func (d Deps) handleGetBatch() http.HandlerFunc {
 		var problems pybody.Errors
 		rawID := r.PathValue("ingestion_id")
 		ingestionID, _ := problems.PathUUID("ingestion_id", rawID)
-		values := r.URL.Query()
+		values := httpapi.Query(r)
 		errorLimit, _ := problems.QueryInt("errorLimit", httpapi.QueryLastPtr(values, "errorLimit"), 50, int64Pointer(1), int64Pointer(200))
 		errorOffset, _ := problems.QueryInt("errorOffset", httpapi.QueryLastPtr(values, "errorOffset"), 0, int64Pointer(0), pybody.Int64Max())
 		if len(problems) > 0 {

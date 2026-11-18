@@ -200,8 +200,14 @@ func TestPeople_AReviewerLoginIsMatchedByProviderOnARealStore(t *testing.T) {
 		teamScopeOrg, "ann", uuid.New(), "Sam", nil, `{"GitHub": ["ann-a"]}`, []string{}, uint8(1), updated); err != nil {
 		t.Fatalf("seed identity: %v", err)
 	}
+	// Changed pin (CHAOS-14032 seeded this on a github repository and expected a match): a gitlab login on a
+	// github repository no longer matches, by design (CHAOS-14040); it fails closed to the stored login.
+	if err := f.admin.Exec(ctx, `INSERT INTO identities (org_id, canonical_id, identity_uuid, display_name, email, provider_identities, team_ids, is_active, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		teamScopeOrg, "cy", uuid.New(), "Cy C", nil, `{"gitlab": ["gl.csam"]}`, []string{}, uint8(1), updated); err != nil {
+		t.Fatalf("seed identity: %v", err)
+	}
 	computed := time.Date(2026, 9, 1, 6, 0, 0, 0, time.UTC)
-	for day, reviewer := range map[int]string{12: "sam", 13: "ann-a"} {
+	for day, reviewer := range map[int]string{12: "sam", 13: "ann-a", 14: "gl.csam"} {
 		if err := f.admin.Exec(ctx, `INSERT INTO review_edges_daily (repo_id, day, reviewer, author, reviews_count, computed_at, org_id) VALUES (?, ?, ?, ?, ?, ?, ?)`,
 			f.repoA, time.Date(2026, 8, day, 0, 0, 0, 0, time.UTC), reviewer, "drive-by", uint32(900), computed, teamScopeOrg); err != nil {
 			t.Fatalf("seed edge: %v", err)
@@ -219,6 +225,9 @@ func TestPeople_AReviewerLoginIsMatchedByProviderOnARealStore(t *testing.T) {
 	}
 	if names["sam"] != "sam" {
 		t.Errorf("reviewer sam on a github repo is named %q, want the stored login sam (not the display name of another identity)", names["sam"])
+	}
+	if names["gl.csam"] != "gl.csam" {
+		t.Errorf("a gitlab login on a github repo is named %q, want the stored login gl.csam (no match)", names["gl.csam"])
 	}
 	if names["ann-a"] != "Sam" {
 		t.Errorf("reviewer ann-a is named %q, want its identity's display name Sam", names["ann-a"])

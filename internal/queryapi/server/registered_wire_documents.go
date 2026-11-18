@@ -24,7 +24,7 @@ func WebPathSmokeDocument(operation string) (string, bool) {
 // order of legacyDigestsByOperation (a test pins the two together). A legacy text is a document an
 // older web still sends and this build still accepts.
 var webPathSmokeLegacyOperations = map[string][]string{
-	"testopsRisk": {registeredTestopsRiskV1Document},
+	"testopsRisk": {registeredTestopsRiskV1Document, registeredTestopsRiskV2Document},
 	"home": {
 		registeredHomeV1Document, registeredHomeV2Document, registeredHomeV3Document, registeredHomeV4Document,
 		registeredHomeV5Document, registeredHomeV6Document, registeredHomeV7Document, registeredHomeV8Document,

@@ -120,7 +120,11 @@ func daily(c cell) [][]any {
 	for _, r := range c.Daily {
 		day, _ := time.Parse("2006-01-02", r["day"].(string))
 		row := []any{day}
-		for _, k := range []string{"release_confidence", "quality_drag_hours", "failure_rework_hours", "flake_investigation_hours", "queue_wait_hours", "retry_overhead_hours", "pipeline_stability"} {
+		for _, k := range []string{"release_confidence", "quality_drag_hours", "failure_rework_hours", "flake_investigation_hours", "queue_wait_hours", "retry_overhead_hours", "", "pipeline_stability"} {
+			if k == "" { // partial_rows: the recorded Python cells carry none
+				row = append(row, nil)
+				continue
+			}
 			if f := fp(r[k]); f != nil {
 				row = append(row, *f)
 			} else {
@@ -276,8 +280,8 @@ func TestDelta_Table(t *testing.T) {
 func TestResolve_SkipsRowsWithoutADay(t *testing.T) {
 	day, _ := time.Parse("2006-01-02", "2026-01-05")
 	cl := &fakeClient{daily: [][]any{
-		{nil, 0.5, 1.0, 0.0, 0.0, 0.0, 0.0, 0.5},
-		{day, 0.8, nil, nil, nil, nil, nil, nil},
+		{nil, 0.5, 1.0, 0.0, 0.0, 0.0, 0.0, nil, 0.5},
+		{day, 0.8, nil, nil, nil, nil, nil, nil, nil},
 	}}
 	got, err := Resolve(context.Background(), cl, "o", model.TestOpsRiskInput{StartDate: date("2026-01-01"), EndDate: date("2026-01-31")})
 	if err != nil {
@@ -325,5 +329,31 @@ func TestResolve_WhitespaceQuadrantNameIsNil(t *testing.T) {
 	}
 	if len(got.QuadrantData) != 1 || got.QuadrantData[0].Name != nil {
 		t.Fatalf("quadrant %#v, want a nil name", got.QuadrantData)
+	}
+}
+
+// qualityDragPartial is read from the partial_rows count of the latest day that has a drag value.
+func TestResolve_QualityDragPartialFollowsTheLatestDragDay(t *testing.T) {
+	day1 := time.Date(2026, 1, 5, 0, 0, 0, 0, time.UTC)
+	day2 := day1.AddDate(0, 0, 1)
+	two, zero := uint64(2), uint64(0)
+	for name, c := range map[string]struct {
+		rows [][]any
+		want bool
+	}{
+		"latest drag day has a NULL part":           {[][]any{{&day1, nil, 3.0, 1.0, 1.0, 1.0, 1.0, &zero, nil}, {&day2, nil, 3.0, 1.0, nil, 1.0, 1.0, &two, nil}}, true},
+		"an earlier day has NULL parts, latest not": {[][]any{{&day1, nil, 3.0, 1.0, nil, 1.0, 1.0, &two, nil}, {&day2, nil, 3.0, 1.0, 1.0, 1.0, 1.0, &zero, nil}}, false},
+		"no NULL part":             {[][]any{{&day1, nil, 3.0, 1.0, 1.0, 1.0, 1.0, &zero, nil}}, false},
+		"no drag value on the day": {[][]any{{&day1, 0.5, nil, nil, nil, nil, nil, nil, nil}}, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, err := Resolve(context.Background(), &fakeClient{daily: c.rows}, "o", model.TestOpsRiskInput{StartDate: date("2026-01-01"), EndDate: date("2026-01-31")})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.QualityDragPartial != c.want {
+				t.Errorf("QualityDragPartial = %v, want %v", got.QualityDragPartial, c.want)
+			}
+		})
 	}
 }

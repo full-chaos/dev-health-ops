@@ -348,8 +348,10 @@ GROUP BY author_email`
 
 // loadReviewerConcentration returns the Gini coefficient of per-reviewer
 // review counts over repositories with AI-attributed PRs, and the reviewer
-// count; a nil coefficient means no reviewer rows.
-func loadReviewerConcentration(ctx context.Context, client QueryClient, orgID string, startDay, endDay time.Time, sc scope) (*float64, int, error) {
+// count; a nil coefficient means no reviewer rows. A team scope arrives as the
+// repositories the team owns (teamRepoIDs), never as user_metrics_daily.team_id,
+// which is a membership label.
+func loadReviewerConcentration(ctx context.Context, client QueryClient, orgID string, startDay, endDay time.Time, sc scope, repoIDs []string, useRepoIDs bool) (*float64, int, error) {
 	bindings := []clickhouse.Binding{
 		{Name: "start_day", Value: dateValue(startDay)},
 		{Name: "end_day", Value: dateValue(endDay)},
@@ -360,9 +362,9 @@ func loadReviewerConcentration(ctx context.Context, client QueryClient, orgID st
 		bindings = append(bindings, clickhouse.Binding{Name: "repo_id", Value: sc.repoID})
 		filters = append(filters, "umd.repo_id = {repo_id:UUID}")
 	}
-	if sc.teamID != "" {
-		bindings = append(bindings, clickhouse.Binding{Name: "team_id", Value: sc.teamID})
-		filters = append(filters, "umd.team_id = {team_id:String}")
+	if useRepoIDs {
+		bindings = append(bindings, clickhouse.Binding{Name: "repo_ids", Value: repoIDs})
+		filters = append(filters, "toString(umd.repo_id) IN {repo_ids:Array(String)}")
 	}
 	filters = append(filters, "umd.org_id = {org_id:String}")
 	rs, err := client.Query(ctx, fmt.Sprintf(concentrationStatement, strings.Join(filters, " AND ")), bindings)

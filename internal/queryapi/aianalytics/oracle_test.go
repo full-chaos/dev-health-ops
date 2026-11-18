@@ -327,7 +327,27 @@ func loadOracle(t *testing.T) (map[string]dataset, []oracleCase) {
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		t.Fatal(err)
 	}
+	for i := range doc.Cases {
+		if doc.Cases[i].Name == "review_load/teamNoRepos" {
+			declareOwnedRepoConcentration(doc.Cases[i].Expected)
+		}
+	}
 	return doc.Datasets, doc.Cases
+}
+
+// declareOwnedRepoConcentration is the one declared departure from the recorded
+// Python answers (CHAOS-14101): Python read the reviewer concentration of a team by
+// user_metrics_daily.team_id, a membership label. Go scopes it by the repositories the
+// team owns, so a team that owns no repository has no concentration data and carries
+// the reviewer_concentration missing state.
+func declareOwnedRepoConcentration(expected map[string]any) {
+	expected["reviewerConcentration"] = map[string]any{"dataAvailable": false, "reviewerCount": float64(0)}
+	missing, _ := expected["missingStates"].([]any)
+	expected["missingStates"] = append(missing, map[string]any{
+		"key":      "reviewer_concentration",
+		"title":    "Reviewer concentration needs aggregate coverage",
+		"guidance": "Reviewer concentration is only shown as an aggregate distribution signal. No reviewer names, rankings, or person-level review counts are exposed.",
+	})
 }
 
 func day(s string) graphqldate.Date { return graphqldate.New(mustDay(s)) }

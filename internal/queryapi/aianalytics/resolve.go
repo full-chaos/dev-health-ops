@@ -557,11 +557,19 @@ func ReviewLoad(ctx context.Context, client QueryClient, orgID string, dr model.
 
 	concentration := &model.AIReviewerConcentrationSummary{DataAvailable: false, ReviewerCount: 0}
 	if !sc.unresolved {
-		g, n, err := loadReviewerConcentration(ctx, client, orgID, dr.StartDate.Time(), dr.EndDate.Time(), sc)
-		if err != nil {
-			return nil, err
+		var teamRepos []string
+		useTeamRepos, teamKnown := false, true
+		if sc.teamID != "" {
+			ids, ok := teamRepoIDs(ctx, client, orgID, sc.teamID, "aiReviewLoad")
+			teamRepos, useTeamRepos, teamKnown = ids, true, ok && len(ids) > 0
 		}
-		concentration = &model.AIReviewerConcentrationSummary{DataAvailable: g != nil, ReviewerCount: n, ReviewerGini: g}
+		if teamKnown {
+			g, n, err := loadReviewerConcentration(ctx, client, orgID, dr.StartDate.Time(), dr.EndDate.Time(), sc, teamRepos, useTeamRepos)
+			if err != nil {
+				return nil, err
+			}
+			concentration = &model.AIReviewerConcentrationSummary{DataAvailable: g != nil, ReviewerCount: n, ReviewerGini: g}
+		}
 	}
 
 	missing := []model.AIMissingState{}

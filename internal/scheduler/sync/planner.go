@@ -182,6 +182,15 @@ type PlannerInput struct {
 	// exactly as it did before CHAOS-4060. The production caller
 	// (NativeMaterializer) always supplies a real, non-nil snapshot.
 	ExecutedProof *providersync.ExecutedProofEvidence
+	// CommittedUnits is nil on a first attempt. On a replay of an occurrence whose
+	// domain graph already committed (its sync run row exists) it holds the
+	// (source, dataset) pairs of the units that graph holds, and the executed-proof
+	// gate reads it instead of ExecutedProof: the snapshot moves between attempts
+	// (a first plan of a pair makes it attempted; another replica may hold a
+	// degraded snapshot), and a replay that planned another unit set would be
+	// quarantined by the verifier (CHAOS-14113). Every other gate still applies,
+	// so a committed unit no other gate admits is still refused.
+	CommittedUnits *CommittedUnits
 	// PlannerManagedParent is true only for a planner-managed parent config
 	// planned by a scheduled occurrence with no explicit dataset selector
 	// (CHAOS-8773). Only then does "no enabled work-item family row" mean the
@@ -355,7 +364,7 @@ func BuildScheduledPlan(input PlannerInput) ([]PlannedUnit, error) {
 				globalPlanGateTelemetry.observe(provider, dataset.Key, planGateOutcomeUnknownPair)
 			case !descriptor.RouteReady || !descriptor.Plannable:
 				globalPlanGateTelemetry.observe(provider, dataset.Key, planGateOutcomeRouteNotReady)
-			case !descriptor.ExecutedProofSatisfied(input.ExecutedProof):
+			case !input.executedProofSatisfied(descriptor, source.ID, dataset.Key):
 				globalPlanGateTelemetry.observe(provider, dataset.Key, planGateOutcomeExecutedProofUnsatisfied)
 				slog.Default().Warn("sync.plan.executed_proof_unsatisfied",
 					slog.String("provider", provider),
@@ -368,7 +377,7 @@ func BuildScheduledPlan(input PlannerInput) ([]PlannedUnit, error) {
 				// on its own -- a route must also have a live executed run
 				// (or an explicit, dated operator waiver) before it plans
 				// again. See providersync.ExecutedProofSatisfied.
-				!descriptor.ExecutedProofSatisfied(input.ExecutedProof) {
+				!input.executedProofSatisfied(descriptor, source.ID, dataset.Key) {
 				continue
 			}
 			start, end, ok := resolveWindow(input, source, dataset, spec, now, before)
@@ -553,7 +562,7 @@ func buildWorkItemFamilyUnit(
 		globalPlanGateTelemetry.observe(provider, canonicalWorkItemsDataset, planGateOutcomeUnknownPair)
 	case !canonicalDescriptor.RouteReady || !canonicalDescriptor.Plannable:
 		globalPlanGateTelemetry.observe(provider, canonicalWorkItemsDataset, planGateOutcomeRouteNotReady)
-	case !canonicalDescriptor.ExecutedProofSatisfied(input.ExecutedProof):
+	case !input.executedProofSatisfied(canonicalDescriptor, source.ID, canonicalWorkItemsDataset):
 		globalPlanGateTelemetry.observe(provider, canonicalWorkItemsDataset, planGateOutcomeExecutedProofUnsatisfied)
 		slog.Default().Warn("sync.plan.executed_proof_unsatisfied",
 			slog.String("provider", provider),
@@ -565,7 +574,7 @@ func buildWorkItemFamilyUnit(
 		// CHAOS-4060: same executed-proof requirement as the non-family gate
 		// in BuildScheduledPlan, applied to the canonical claim the family
 		// collapse emits.
-		!canonicalDescriptor.ExecutedProofSatisfied(input.ExecutedProof) {
+		!input.executedProofSatisfied(canonicalDescriptor, source.ID, canonicalWorkItemsDataset) {
 		return PlannedUnit{}, false
 	}
 	canonical, ok := datasetSpecification(provider, canonicalWorkItemsDataset)
@@ -712,7 +721,7 @@ func foldContributingFamilyUnit(
 		globalPlanGateTelemetry.observe(provider, canonicalDataset, planGateOutcomeUnknownPair)
 	case !canonicalDescriptor.RouteReady || !canonicalDescriptor.Plannable:
 		globalPlanGateTelemetry.observe(provider, canonicalDataset, planGateOutcomeRouteNotReady)
-	case !canonicalDescriptor.ExecutedProofSatisfied(input.ExecutedProof):
+	case !input.executedProofSatisfied(canonicalDescriptor, source.ID, canonicalDataset):
 		globalPlanGateTelemetry.observe(provider, canonicalDataset, planGateOutcomeExecutedProofUnsatisfied)
 		slog.Default().Warn("sync.plan.executed_proof_unsatisfied",
 			slog.String("provider", provider),
@@ -721,7 +730,7 @@ func foldContributingFamilyUnit(
 			slog.String("source_id", source.ID))
 	}
 	if !known || !canonicalDescriptor.RouteReady || !canonicalDescriptor.Plannable ||
-		!canonicalDescriptor.ExecutedProofSatisfied(input.ExecutedProof) {
+		!input.executedProofSatisfied(canonicalDescriptor, source.ID, canonicalDataset) {
 		return PlannedUnit{}, false
 	}
 	canonicalSpec, ok := datasetSpecification(provider, canonicalDataset)
@@ -1217,4 +1226,35 @@ func halveWindowAfterFailures(start *time.Time, end time.Time, streak providersy
 		return end, false
 	}
 	return start.Add(halved), true
+}
+
+// CommittedUnits is the set of (PlanSource.ID, dataset key) pairs the committed domain graph of an occurrence holds a
+// unit for.
+type CommittedUnits struct {
+	pairs map[[2]string]bool
+}
+
+func (committed *CommittedUnits) add(sourceID, dataset string) {
+	if committed.pairs == nil {
+		committed.pairs = make(map[[2]string]bool)
+	}
+	committed.pairs[[2]string{sourceID, dataset}] = true
+}
+
+func (committed *CommittedUnits) holds(sourceID, dataset string) bool {
+	return committed.pairs[[2]string{sourceID, dataset}]
+}
+
+// executedProofSatisfied is the executed-proof gate for one unit. A waiver passes it. Otherwise, on a replay, it
+// passes when the committed graph holds that unit, and on a first attempt it reads the evidence snapshot.
+func (input PlannerInput) executedProofSatisfied(
+	descriptor providersync.CompleteRouteDescriptor, sourceID, unitDataset string,
+) bool {
+	if descriptor.ExecutedProofWaiver != nil {
+		return true
+	}
+	if input.CommittedUnits != nil {
+		return input.CommittedUnits.holds(sourceID, unitDataset)
+	}
+	return descriptor.ExecutedProofSatisfied(input.ExecutedProof)
 }

@@ -112,7 +112,7 @@ func BuildBackfillPlan(input PlannerInput) ([]PlannedUnit, error) {
 				globalPlanGateTelemetry.observe(provider, dataset.Key, planGateOutcomeUnknownPair)
 			case !descriptor.RouteReady || !descriptor.Plannable:
 				globalPlanGateTelemetry.observe(provider, dataset.Key, planGateOutcomeRouteNotReady)
-			case !descriptor.ExecutedProofSatisfied(input.ExecutedProof):
+			case !input.executedProofSatisfied(descriptor, source.ID, dataset.Key):
 				globalPlanGateTelemetry.observe(provider, dataset.Key, planGateOutcomeExecutedProofUnsatisfied)
 				slog.Default().Warn("sync.plan.executed_proof_unsatisfied",
 					slog.String("provider", provider),
@@ -121,7 +121,7 @@ func BuildBackfillPlan(input PlannerInput) ([]PlannedUnit, error) {
 					slog.String("source_id", source.ID))
 			}
 			if !known || !descriptor.RouteReady || !descriptor.Plannable ||
-				!descriptor.ExecutedProofSatisfied(input.ExecutedProof) {
+				!input.executedProofSatisfied(descriptor, source.ID, dataset.Key) {
 				continue
 			}
 			windows, err := resolveBackfillWindows(since, before, provider, dataset.Key)
@@ -363,7 +363,7 @@ func buildBackfillWorkItemFamilyUnits(
 		globalPlanGateTelemetry.observe(provider, canonicalWorkItemsDataset, planGateOutcomeUnknownPair)
 	case !canonicalDescriptor.RouteReady || !canonicalDescriptor.Plannable:
 		globalPlanGateTelemetry.observe(provider, canonicalWorkItemsDataset, planGateOutcomeRouteNotReady)
-	case !canonicalDescriptor.ExecutedProofSatisfied(input.ExecutedProof):
+	case !input.executedProofSatisfied(canonicalDescriptor, source.ID, canonicalWorkItemsDataset):
 		globalPlanGateTelemetry.observe(provider, canonicalWorkItemsDataset, planGateOutcomeExecutedProofUnsatisfied)
 		slog.Default().Warn("sync.plan.executed_proof_unsatisfied",
 			slog.String("provider", provider),
@@ -372,7 +372,7 @@ func buildBackfillWorkItemFamilyUnits(
 			slog.String("source_id", source.ID))
 	}
 	if !known || !canonicalDescriptor.RouteReady || !canonicalDescriptor.Plannable ||
-		!canonicalDescriptor.ExecutedProofSatisfied(input.ExecutedProof) {
+		!input.executedProofSatisfied(canonicalDescriptor, source.ID, canonicalWorkItemsDataset) {
 		return nil, nil
 	}
 	canonical, ok := datasetSpecification(provider, canonicalWorkItemsDataset)
@@ -429,7 +429,7 @@ func buildBackfillFoldFamilyUnits(
 		globalPlanGateTelemetry.observe(provider, canonicalDataset, planGateOutcomeUnknownPair)
 	case !canonicalDescriptor.RouteReady || !canonicalDescriptor.Plannable:
 		globalPlanGateTelemetry.observe(provider, canonicalDataset, planGateOutcomeRouteNotReady)
-	case !canonicalDescriptor.ExecutedProofSatisfied(input.ExecutedProof):
+	case !input.executedProofSatisfied(canonicalDescriptor, source.ID, canonicalDataset):
 		globalPlanGateTelemetry.observe(provider, canonicalDataset, planGateOutcomeExecutedProofUnsatisfied)
 		slog.Default().Warn("sync.plan.executed_proof_unsatisfied",
 			slog.String("provider", provider),
@@ -438,7 +438,7 @@ func buildBackfillFoldFamilyUnits(
 			slog.String("source_id", source.ID))
 	}
 	if !known || !canonicalDescriptor.RouteReady || !canonicalDescriptor.Plannable ||
-		!canonicalDescriptor.ExecutedProofSatisfied(input.ExecutedProof) {
+		!input.executedProofSatisfied(canonicalDescriptor, source.ID, canonicalDataset) {
 		return nil, nil
 	}
 	canonicalSpec, ok := datasetSpecification(provider, canonicalDataset)

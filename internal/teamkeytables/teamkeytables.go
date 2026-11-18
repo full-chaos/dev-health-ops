@@ -276,6 +276,19 @@ var (
 		TeamColumn: "team_id", Scope: []string{"repo_id"}, Labels: []string{"team_name"},
 		Retracted: "retracted", Carried: []KeyColumn{{"team_id", KeyNullableString}, {"team_name", KeyNullableString}},
 	}
+	// testops_coverage_metrics_daily holds one row for each (repository, day); the
+	// team and the service of the repository are VALUE columns. A recompute of a
+	// day whose coverage record is gone (the run of the newest snapshot moved to
+	// another day) produces no record, so the key that goes stale is the
+	// (repository, day) itself. A stored row can hold NULL in every percentage,
+	// so no measure tells the row that retires the key from it: that row carries
+	// the Retracted marker.
+	TestopsCoverageMetricsDaily = Table{
+		Table: "testops_coverage_metrics_daily", Family: "testops_coverage", DayColumn: "day",
+		Keys:       []KeyColumn{{"repo_id", KeyUUID}},
+		TeamColumn: "team_id", Scope: []string{"repo_id"},
+		Retracted: "retracted", Carried: []KeyColumn{{"team_id", KeyNullableString}, {"service_id", KeyNullableString}},
+	}
 	TeamComplexityDaily = Table{
 		Table: "team_complexity_daily", Family: "team_complexity", DayColumn: "day",
 		Keys:       []KeyColumn{{"team_id", KeyString}},
@@ -304,6 +317,7 @@ func All() []Table {
 		TeamComplexityDaily,
 		WorkItemUserMetricsDaily,
 		UserMetricsDaily,
+		TestopsCoverageMetricsDaily,
 	}
 }
 

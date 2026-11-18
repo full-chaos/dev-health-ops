@@ -34,6 +34,10 @@ TestOps data is persisted in ClickHouse for high-performance analytics. The sche
     - `testops_pipeline_metrics_daily`: Daily rollups of pipeline performance.
     - `testops_test_metrics_daily`: Daily rollups of test reliability and flakiness.
     - `testops_coverage_metrics_daily`: Daily rollups of code coverage trends.
+      A coverage day whose record is gone (the run of its newest coverage snapshot moved to another day) is retired on the next
+      recompute of that day: the family writes a row with `retracted = 1` over the key, and readers take the newest row of a key
+      first and leave the key out when that row is a retraction, so the day shows no point, never 0 (migration 160). Days that are
+      not recomputed keep the old row until a redrive.
 
 ### Metrics Layer
 Metrics are computed daily from raw event tables and persisted in the daily metrics tables.

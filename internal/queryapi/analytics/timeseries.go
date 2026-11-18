@@ -94,12 +94,21 @@ func dedupFromMeasureSource(table string) (source string, alias string) {
 	if !ok {
 		return table, table
 	}
-	return fmt.Sprintf(`(
+	newest := fmt.Sprintf(`(
             SELECT *
             FROM %s
             ORDER BY computed_at DESC
             LIMIT 1 BY %s
-        ) AS %s`, table, joinColumns(key), table), table
+        ) AS %s`, table, joinColumns(key), table)
+	if !liverow.Registered(table) {
+		return newest, table
+	}
+	// A key whose newest row retires it (package liverow) holds no measurement: the day reads as absent, never as a
+	// sample of 0. The rule runs on the row LIMIT 1 BY kept; a filter before it would serve the older row.
+	return fmt.Sprintf(`(
+        SELECT * FROM %s
+        WHERE %s
+    ) AS %s`, newest, liverow.Predicate(table, ""), table), table
 }
 
 func joinColumns(cols []string) string {

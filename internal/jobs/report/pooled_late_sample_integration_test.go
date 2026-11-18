@@ -345,3 +345,65 @@ VALUES (?, ?, 3, 0, 2, NULL, now(), ?, [], 2)`, repo, day, org)
 		t.Errorf("C8: chart %v (ok %v), stored %v; want both 2, the median of the raw rows", chart, ok, stored)
 	}
 }
+
+// A computed repository-day with counted rows and no sample: the stored row exists, its value is NULL, and the chart has
+// no point (never 0), for every pooled key.
+func TestPooledCountedRowsWithNoSampleAreNoPoint(t *testing.T) {
+	e := startPooledEnv(t)
+	rowExists := func(org, table string) {
+		t.Helper()
+		var rows uint64
+		if err := e.conn.QueryRow(e.ctx, fmt.Sprintf(`SELECT count() FROM %s WHERE org_id = ? AND pooled_samples_stored = 1`, table), org).Scan(&rows); err != nil {
+			t.Fatal(err)
+		}
+		if rows == 0 {
+			t.Fatalf("%s: the writer wrote no row for the counted day", table)
+		}
+	}
+	noPoint := func(phase, org, repo, day string, keys []lateSampleKey) {
+		t.Helper()
+		values := e.requireSameSampleSet(phase, org, repo, day, keys)
+		for _, key := range keys {
+			rowExists(org, key.table)
+			if values[key.metric] != "none|none" {
+				t.Errorf("%s %s: stored|chart %s, want none|none (no point, never 0)", phase, key.metric, values[key.metric])
+			}
+		}
+	}
+
+	// TestOps: two runs and a suite with no duration and no queue.
+	testopsOrg := e.newOrg()
+	const testopsDay = "2026-01-02"
+	testopsRepo := e.seedViaRoute(testopsOrg, "acme/nosample", 4700, []seedRun{
+		{id: 9201, day: testopsDay, startMin: 0, durationS: -1, queueS: -1, suiteTimes: []string{""}},
+		{id: 9202, day: testopsDay, startMin: 1, durationS: -1, queueS: -1},
+	})
+	e.computeDaily(testopsOrg, []string{testopsRepo}, testopsDay)
+	noPoint("testops", testopsOrg, testopsRepo, testopsDay, lateSampleTestopsKeys)
+
+	// CI/CD: a run finished before it started (a negative duration) with no queued time.
+	cicdOrg := e.newOrg()
+	const cicdRepo = "14025000-0000-4000-8000-0000000000f6"
+	e.insertCICDRuns(cicdOrg, cicdRepo,
+		cicdRun{id: "ns-1", status: "success", started: "2026-01-02 10:10:00.000", finished: "2026-01-02 10:00:00.000"})
+	e.computeCICD(cicdOrg, []string{cicdRepo}, testopsDay)
+	noPoint("cicd", cicdOrg, cicdRepo, testopsDay, lateSampleCICDKeys)
+
+	// Delivery: a deployment of negative duration, a merged pull request of 0 lines, an incident resolved before it
+	// started, and no bug.
+	deliveryOrg := e.newOrg()
+	const deliveryRepo = "14025000-0000-4000-8000-0000000000f7"
+	day := deliveryDay1.Format(time.DateOnly)
+	e.insertRepo(deliveryOrg, deliveryRepo)
+	e.mapIncidentService(deliveryOrg, "svc-nosample", deliveryRepo)
+	at := func(hour int) time.Time { return deliveryDay1.Add(time.Duration(hour) * time.Hour) }
+	e.insertDeployment(deliveryOrg, deliveryRepo, "d-negative", "success", at(5), -1)
+	e.insertPullRequest(deliveryOrg, deliveryRepo, 1, at(5), 0, 0)
+	e.insertIncident(deliveryOrg, "svc-nosample", "i-negative", at(5), at(4), 0)
+	e.computeDelivery(deliveryOrg, []string{deliveryRepo}, day)
+	keys := make([]lateSampleKey, 0, len(deliveryPooledMetrics))
+	for _, metric := range deliveryPooledMetrics {
+		keys = append(keys, lateSampleKey{metric.name, metric.table})
+	}
+	noPoint("delivery", deliveryOrg, deliveryRepo, day, keys)
+}

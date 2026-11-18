@@ -96,3 +96,15 @@ func TestTheCopyRulesAreReadInsideTheInsert(t *testing.T) {
 		t.Fatalf("decoded rules %d, %d", decoded[0].Deleted, decoded[1].Deleted)
 	}
 }
+
+// A write of kept rows only (no moved row) copies the kept delete and reads
+// no source team: a team id carry that only retires rows.
+func TestAKeptCopyWithNoSourceReadsNoSourceTeam(t *testing.T) {
+	conn := &recordingExec{}
+	if err := teamprovider.Insert(context.Background(), conn, "org-1", insertColumns, []teamprovider.Write{copiedRow("old", teamprovider.RosterKept, teamprovider.DeletedKept)}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(conn.query, "moved_from") || !strings.Contains(conn.query, "kept.kept_deleted") {
+		t.Fatalf("a kept-only copy reads a source team or misses the kept delete:\n%s", conn.query)
+	}
+}

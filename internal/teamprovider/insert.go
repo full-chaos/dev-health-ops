@@ -373,14 +373,15 @@ func insertStatement(columns []string, keepRoster, sourceRoster, copyDeleted boo
 			kept, moved = keptRosterDeletedQuery, sourceRosterDeletedQuery
 			arrays = append(arrays, "{deleted_rule:Array(UInt32)}")
 			fields = append(fields, fmt.Sprintf("incoming_row.%d AS deleted_rule", len(fields)+1))
-			newer := "(moved_from.moved_from_version > (toUnixTimestamp64Micro(incoming.roster_read_at), toUnixTimestamp64Micro(incoming.roster_read_synced)) " +
-				"AND moved_from.moved_from_deleted IS NOT NULL)"
-			if !sourceRoster {
-				newer = "0"
+			selected[deletedIndex] = fmt.Sprintf("if(incoming.deleted_rule = %d, kept.kept_deleted, incoming.v%d)", DeletedKept, deletedIndex)
+			if sourceRoster {
+				deletedNewer := fmt.Sprintf("incoming.deleted_rule = %d AND moved_from.moved_from_version > "+
+					"(toUnixTimestamp64Micro(incoming.roster_read_at), toUnixTimestamp64Micro(incoming.roster_read_synced)) "+
+					"AND moved_from.moved_from_deleted IS NOT NULL", DeletedSource)
+				selected[deletedIndex] = fmt.Sprintf("multiIf(incoming.deleted_rule = %d, kept.kept_deleted, %s, moved_from.moved_from_deleted, incoming.v%d)",
+					DeletedKept, deletedNewer, deletedIndex)
+				selected[activeIndex] = fmt.Sprintf("if(%s, toUInt8(0), incoming.v%d)", deletedNewer, activeIndex)
 			}
-			selected[deletedIndex] = fmt.Sprintf("multiIf(incoming.deleted_rule = %d, kept.kept_deleted, incoming.deleted_rule = %d AND %s, "+
-				"moved_from.moved_from_deleted, incoming.v%d)", DeletedKept, DeletedSource, newer, deletedIndex)
-			selected[activeIndex] = fmt.Sprintf("if(incoming.deleted_rule = %d AND %s, toUInt8(0), incoming.v%d)", DeletedSource, newer, activeIndex)
 		}
 		keptJoin = "LEFT JOIN (" + kept + ") AS kept ON kept.kept_id = incoming.v" + fmt.Sprint(idIndex) + " "
 		if sourceRoster {

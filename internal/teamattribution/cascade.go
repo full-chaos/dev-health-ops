@@ -1653,10 +1653,11 @@ type GithubWorkItemDerivationDonorRow struct {
 
 // linkedIssueDonorSources are the sources of a row that gives its team to a
 // linked item: a team the item holds on its own, never an inherited,
-// membership, fallback or unassigned row.
+// membership, fallback or unassigned row. An issue's repo_ownership row is
+// not one: it is the owner of a linked pull request's repository, and a pull
+// request linked to the issue would take it over a second hop.
 var linkedIssueDonorSources = map[string]bool{
 	"native_team": true, "issue_project": true, "project_ownership": true,
-	"repo_ownership": true,
 }
 
 // IsLinkedIssueDonorSource reports whether a row of this source gives its team

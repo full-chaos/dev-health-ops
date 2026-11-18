@@ -352,7 +352,8 @@ flowchart TD
 > rows (`native_team`, `issue_project`, `project_ownership`). `TestIssueTakesNoTeamFromItsOwnRepoField`,
 > `TestRepoScopedManualRuleNeverMatchesAnIssueThroughItsOwnRepo`,
 > `TestIssueMembershipRowNamesTheGateNotApplied`, `TestPRMembershipPassThroughWithoutOwnershipFactIsUnchanged`,
-> `TestPRMembershipWithOwnershipFactEvidenceUnchanged` and `TestPRLinkedToAnIssueWhoseOnlyDonorRowWasRepoOwnership` pin it.
+> `TestPRMembershipWithOwnershipFactEvidenceUnchanged`, `TestPRLinkedToAnIssueWhoseOnlyDonorRowWasRepoOwnership` and
+> `TestAnIssuesLinkedPullRequestRepoOwnerIsNotADonor` (the repository owner an issue takes from its linked pull requests) pin it.
 
 **Invariants:** the **winner is the highest-precedence matching source** (every matching source that
 passes its own gate is still persisted as a candidate — precedence decides `is_primary`, not which

@@ -1445,4 +1445,14 @@ func TestDerivationCountsAnUnresolvedExtkeyAsUnknown(t *testing.T) {
 			}
 		})
 	}
+	t.Run("two raw spellings of one missing key", func(t *testing.T) {
+		edges := []TeamRepoOwnershipDependencyEdge{
+			{SourceWorkItemID: "ghpr:acme/a#1", TargetWorkItemID: "extkey:E-1", RelationshipType: "external_issue_key"},
+			{SourceWorkItemID: "ghpr:acme/a#1", TargetWorkItemID: "extkey: e-1 ", RelationshipType: "external_issue_key"},
+		}
+		got := deriveTeamRepoOwnership("org-1", projectLinks, []TeamRepoOwnershipWorkItem{pr}, edges, nil, nil)
+		if want := map[string]int{"unknown": 2}; !reflect.DeepEqual(got.DonorsRefused, want) {
+			t.Fatalf("DonorsRefused %v, want %v", got.DonorsRefused, want)
+		}
+	})
 }

@@ -141,32 +141,31 @@ func githubTestsCaseIdentity(row testCaseResultRow) string {
 }
 
 // githubTestsPartitionBound bounds the search for an aggregate's parts in one run (CHAOS-13991). Work counts key checks: one per
-// identity key sorted, indexed, tested against the covered set, or marked and unmarked, and one per key read when the pool of
-// possible parts is built. Partitions caps the partitions of one aggregate compared by content. A search that runs out of work before
-// it proves a partition leaves the artifact kept, neither dropped nor marked; one that proved partitions, none lossless, marks
-// aggregate_mismatch.
+// identity key sorted, indexed, tested against the covered set, or marked and unmarked, one per key read when the pool of possible
+// parts is built, and one per suite instance read when a possible part is tested against the aggregate's content. A search that
+// runs out of work before it proves a partition leaves the artifact kept, neither dropped nor marked.
 type githubTestsPartitionBound struct {
-	Work       int
-	Partitions int
+	Work int
 }
 
-// githubTestsDefaultPartitionBound: 8,388,608 key checks per run (a map lookup each, well under a second; acr's run of about
-// 73,000 held rows spends about 400,000) and 16 partitions per aggregate.
-var githubTestsDefaultPartitionBound = githubTestsPartitionBound{Work: 1 << 23, Partitions: 16}
+// githubTestsDefaultPartitionBound: 8,388,608 key checks per run, a map lookup each, well under a second; acr's run of about
+// 73,000 held rows spends about 290,000.
+var githubTestsDefaultPartitionBound = githubTestsPartitionBound{Work: 1 << 23}
 
 // githubTestsPlanRunReports decides a run's report artifacts. (1) Copies: an artifact equal to one with a lower id on every case's
 // class, name, outcome and duration and on every suite's name, start and duration, both carrying durations at all (without them two
 // reports cannot be told from two real executions of the same tests, such as matrix legs), is a copy of the lowest such id, its
 // representative. (2) Aggregates: among representatives, smallest first, an artifact whose case identities are a disjoint union of
-// two or more smaller artifacts' that are not themselves aggregates is an aggregate of those parts; the partitions are searched
-// in a fixed order under githubTestsPartitionBound, and the first that holds every stored row of the aggregate (or else the first
-// found) is its parts. (3) Overlap groups: copies with their representative and aggregates with their parts join into groups. A copy
-// or aggregate is lossless when it holds no coverage rows and its suites (each with its cases) equal its representative's or its
-// parts' together (githubTestsReportLossless). In a group where every copy and aggregate is lossless they are dropped as
-// aggregate_of_parts; in any other group every artifact is kept and each copy and aggregate is reported as a mismatch. (4) The
-// survivors are admitted whole, in the given order (ascending declared size), under the run bound, the rest skipped whole. The
-// decision reads only the parsed rows, so it does not depend on names, the provider, or the order the listing came back in.
-// parsed must already be in admission order.
+// two or more smaller artifacts' that are not themselves aggregates is an aggregate of those parts. Its parts are searched first
+// among the artifacts whose suites (each with its cases) are all in the aggregate, so a partition that holds every stored row is
+// found whatever the upload order; only when none exists is a partition by case identity alone its parts. (3) Overlap groups:
+// artifacts that share a case identity are one group. A copy or aggregate is lossless when it holds no coverage rows and its
+// suites equal its representative's or its parts' together (githubTestsReportLossless). In a group where every copy and aggregate
+// is lossless they are dropped as aggregate_of_parts; in any other group every artifact is kept and each copy and aggregate is
+// reported as a mismatch. (4) The survivors are admitted whole, in the given order (ascending declared size), under the run bound,
+// the rest skipped whole; a drop whose representative or parts are not all admitted (or dropped with theirs admitted) is undone and
+// the admission rerun, so a drop never loses a row the bound cut. The decision reads only the parsed rows, so it does not depend on
+// names, the provider, or the order the listing came back in. parsed must already be in admission order.
 func githubTestsPlanRunReports(parsed []githubTestsParsedReport) (githubTestsRunReportPlan, error) {
 	return githubTestsPlanRunReportsWithin(parsed, githubTestsDefaultPartitionBound)
 }
@@ -263,7 +262,7 @@ func githubTestsPlanRunReportsWithin(parsed []githubTestsParsedReport, bound git
 		if plan.PartitionWork > bound.Work {
 			break
 		}
-		var pool []int
+		var identityPool, contentPool []int
 		for _, other := range representatives {
 			if other == index || aggregate[other] || len(parsed[other].Cases) >= len(parsed[index].Cases) {
 				continue
@@ -276,35 +275,51 @@ func githubTestsPlanRunReportsWithin(parsed []githubTestsParsedReport, bound git
 					break
 				}
 			}
-			if part {
-				pool = append(pool, other)
+			if !part {
+				continue
+			}
+			identityPool = append(identityPool, other)
+			if len(parsed[index].Coverage) > 0 {
+				continue
+			}
+			within, err := githubTestsContentWithin(content, other, index, &plan.PartitionWork)
+			if err != nil {
+				return githubTestsRunReportPlan{}, err
+			}
+			if within {
+				contentPool = append(contentPool, other)
 			}
 		}
-		if len(pool) < 2 {
+		if len(identityPool) < 2 {
 			continue
 		}
-		var first, lossless []int
-		err := githubTestsFindPartitions(sortedKeys(index), pool, sortedKeys, &plan.PartitionWork, bound, func(parts []int) (bool, error) {
-			if first == nil {
-				first = append([]int(nil), parts...)
+		var parts []int
+		lossless := false
+		if len(contentPool) >= 2 {
+			err := githubTestsFindPartitions(sortedKeys(index), contentPool, sortedKeys, &plan.PartitionWork, bound, func(found []int) (bool, error) {
+				ok, err := githubTestsReportLossless(parsed[index], content, index, found)
+				if err != nil || !ok {
+					return err != nil, err
+				}
+				parts, lossless = append([]int(nil), found...), true
+				return true, nil
+			})
+			if err != nil {
+				return githubTestsRunReportPlan{}, err
 			}
-			ok, err := githubTestsReportLossless(parsed[index], content, index, parts)
-			if err != nil || !ok {
-				return err != nil, err
-			}
-			lossless = append([]int(nil), parts...)
-			return true, nil
-		})
-		if err != nil {
-			return githubTestsRunReportPlan{}, err
 		}
-		switch {
-		case lossless != nil:
+		if !lossless {
+			err := githubTestsFindPartitions(sortedKeys(index), identityPool, sortedKeys, &plan.PartitionWork, bound, func(found []int) (bool, error) {
+				parts = append([]int(nil), found...)
+				return true, nil
+			})
+			if err != nil {
+				return githubTestsRunReportPlan{}, err
+			}
+		}
+		if parts != nil {
 			aggregate[index] = true
-			relations = append(relations, relation{index: index, parts: lossless, lossless: true})
-		case first != nil:
-			aggregate[index] = true
-			relations = append(relations, relation{index: index, parts: first, lossless: false})
+			relations = append(relations, relation{index: index, parts: parts, lossless: lossless})
 		}
 	}
 	group := make([]int, len(parsed))
@@ -319,9 +334,14 @@ func githubTestsPlanRunReportsWithin(parsed []githubTestsParsedReport, bound git
 		}
 		return index
 	}
-	for _, link := range relations {
-		for _, part := range link.parts {
-			group[root(part)] = root(link.index)
+	owner := map[string]int{}
+	for _, index := range candidates {
+		for key := range identities[index] {
+			if first, seen := owner[key]; seen {
+				group[root(index)] = root(first)
+				continue
+			}
+			owner[key] = index
 		}
 	}
 	conflict := make([]bool, len(parsed))
@@ -331,40 +351,105 @@ func githubTestsPlanRunReportsWithin(parsed []githubTestsParsedReport, bound git
 		}
 	}
 	dropped := make([]bool, len(parsed))
+	var drops []relation
 	for _, link := range relations {
 		if conflict[root(link.index)] {
 			plan.Mismatch = append(plan.Mismatch, githubTestsReportMismatch{Index: link.index, Parts: link.parts})
 			continue
 		}
 		dropped[link.index] = true
-		plan.Dropped = append(plan.Dropped, githubTestsReportDrop{Index: link.index, Cause: githubTestsAggregateOfPartsCause})
+		drops = append(drops, link)
 	}
-	var budget githubTestsReportBudget
+	type sized struct{ suiteBytes, caseBytes, coverageBytes int }
+	sizes := make([]sized, len(parsed))
 	for index, report := range parsed {
-		if dropped[index] {
-			continue
-		}
 		suiteBytes, suiteErr := githubTestsRowsJSONBytes(report.Suites)
 		caseBytes, caseErr := githubTestsRowsJSONBytes(report.Cases)
 		coverageBytes, coverageErr := githubTestsRowsJSONBytes(report.Coverage)
 		if err := errors.Join(suiteErr, caseErr, coverageErr); err != nil {
 			return githubTestsRunReportPlan{}, err
 		}
-		if !budget.fits(report.rows(), suiteBytes, caseBytes, coverageBytes) {
-			plan.OverBound = append(plan.OverBound, index)
-			continue
+		sizes[index] = sized{suiteBytes, caseBytes, coverageBytes}
+	}
+	partsOf := make(map[int][]int, len(drops))
+	for _, link := range drops {
+		partsOf[link.index] = link.parts
+	}
+	for {
+		plan.Admitted, plan.OverBound = nil, nil
+		admitted := make([]bool, len(parsed))
+		var budget githubTestsReportBudget
+		for index, report := range parsed {
+			if dropped[index] {
+				continue
+			}
+			size := sizes[index]
+			if !budget.fits(report.rows(), size.suiteBytes, size.caseBytes, size.coverageBytes) {
+				plan.OverBound = append(plan.OverBound, index)
+				continue
+			}
+			budget.admit(report.rows(), size.suiteBytes, size.caseBytes, size.coverageBytes)
+			plan.Admitted = append(plan.Admitted, index)
+			admitted[index] = true
 		}
-		budget.admit(report.rows(), suiteBytes, caseBytes, coverageBytes)
-		plan.Admitted = append(plan.Admitted, index)
+		// A dropped artifact's rows are held when each of its parts is admitted, or dropped with its own parts held.
+		var held func(int, int) bool
+		held = func(index, depth int) bool {
+			if admitted[index] {
+				return true
+			}
+			if !dropped[index] || depth > len(parsed) {
+				return false
+			}
+			for _, part := range partsOf[index] {
+				if !held(part, depth+1) {
+					return false
+				}
+			}
+			return true
+		}
+		undone := false
+		for _, link := range drops {
+			if dropped[link.index] && !held(link.index, 0) {
+				dropped[link.index], undone = false, true
+			}
+		}
+		if !undone {
+			break
+		}
+	}
+	for _, link := range drops {
+		if dropped[link.index] {
+			plan.Dropped = append(plan.Dropped, githubTestsReportDrop{Index: link.index, Cause: githubTestsAggregateOfPartsCause})
+		}
 	}
 	sort.Slice(plan.Dropped, func(i, j int) bool { return plan.Dropped[i].Index < plan.Dropped[j].Index })
 	sort.Slice(plan.Mismatch, func(i, j int) bool { return plan.Mismatch[i].Index < plan.Mismatch[j].Index })
 	return plan, nil
 }
 
+// githubTestsContentWithin says whether every suite instance of the report at part (githubTestsReportContent) is also in the report
+// at whole, as many times, counting one work unit per instance read.
+func githubTestsContentWithin(content func(int) (githubTestsCaseCounts, error), part, whole int, work *int) (bool, error) {
+	partContent, err := content(part)
+	if err != nil {
+		return false, err
+	}
+	wholeContent, err := content(whole)
+	if err != nil {
+		return false, err
+	}
+	for key, count := range partContent {
+		*work++
+		if wholeContent[key] < count {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
 // githubTestsFindPartitions calls visit with each set of pool artifacts whose case identities are disjoint and together are exactly
-// target (each pool artifact's identities already match target's counts), until visit returns true, bound.Partitions sets were
-// visited, or *work passes bound.Work. The order is fixed: target's keys ascending, and for the first key not yet covered the pool
+// target (each pool artifact's identities already match target's counts), until visit returns true or *work passes bound.Work. The order is fixed: target's keys ascending, and for the first key not yet covered the pool
 // artifacts that hold it in pool order.
 func githubTestsFindPartitions(
 	target []string, pool []int, keysOf func(int) []string, work *int, bound githubTestsPartitionBound, visit func([]int) (bool, error),
@@ -379,7 +464,6 @@ func githubTestsFindPartitions(
 	}
 	covered := make(map[string]bool, len(target))
 	var chosen []int
-	visited := 0
 	var search func(position int) (bool, error)
 	search = func(position int) (bool, error) {
 		for position < len(target) && covered[target[position]] {
@@ -390,9 +474,8 @@ func githubTestsFindPartitions(
 			return true, nil
 		}
 		if position == len(target) {
-			visited++
 			stop, err := visit(chosen)
-			return stop || err != nil || visited >= bound.Partitions, err
+			return stop || err != nil, err
 		}
 		for _, item := range holders[target[position]] {
 			free := true

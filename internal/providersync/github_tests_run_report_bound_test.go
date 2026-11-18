@@ -8,8 +8,8 @@ import (
 	"time"
 )
 
-// CHAOS-13991 round 2: the search for an aggregate's parts is bounded (githubTestsPartitionBound). Running out of work before a
-// partition is proven keeps the artifact, with no marker; a proven partition that differs is a mismatch.
+// CHAOS-13991: the search for an aggregate's parts is bounded (githubTestsPartitionBound). Running out of work before a partition is
+// proven keeps the artifact, with no marker; a proven partition that differs is a mismatch.
 
 type boundSuite struct {
 	name     string
@@ -52,31 +52,33 @@ func TestGitHubTestsPlanRunReportsPartitionWorkBound(t *testing.T) {
 	if len(free.Dropped) != 1 || free.Dropped[0].Index != 2 || free.PartitionWork == 0 {
 		t.Fatalf("unbounded: dropped %+v work %d, want the aggregate (index 2) dropped", free.Dropped, free.PartitionWork)
 	}
-	at := mustPlanWithin(t, githubTestsPartitionBound{Work: free.PartitionWork, Partitions: 16}, reports...)
+	at := mustPlanWithin(t, githubTestsPartitionBound{Work: free.PartitionWork}, reports...)
 	if !slices.Equal(at.Dropped, free.Dropped) || len(at.Mismatch) != 0 {
 		t.Fatalf("at the bound (%d): dropped %+v mismatch %+v, want the aggregate dropped", free.PartitionWork, at.Dropped, at.Mismatch)
 	}
-	below := mustPlanWithin(t, githubTestsPartitionBound{Work: free.PartitionWork - 1, Partitions: 16}, reports...)
+	below := mustPlanWithin(t, githubTestsPartitionBound{Work: free.PartitionWork - 1}, reports...)
 	if len(below.Dropped) != 0 || len(below.Mismatch) != 0 || !slices.Equal(below.Admitted, []int{0, 1, 2}) {
 		t.Fatalf("one below the bound: dropped %+v mismatch %+v admitted %v, want all kept and nothing marked", below.Dropped, below.Mismatch, below.Admitted)
 	}
 }
 
-// The partition bound: the total's first partition (1+2) differs in durations, its second (3+4) holds every row. With two partitions
-// examined it is dropped; with one, the proven partition differs, so the group is kept and reported.
-func TestGitHubTestsPlanRunReportsPartitionCountBound(t *testing.T) {
+// Parts are searched first among artifacts whose suites are all in the total: the identity partition 1+2 comes first in id order
+// but differs in durations, 3+4 holds every row, so the total is dropped against 3+4. When no partition holds every row (the total's
+// own durations differ from all), the first identity partition proves a mismatch.
+func TestGitHubTestsPlanRunReportsSearchesExactPartsFirst(t *testing.T) {
 	reports := []githubTestsParsedReport{
 		boundReport("1", boundSuite{"a", 1, 0.5}, boundSuite{"b", 1, 0.5}), boundReport("2", boundSuite{"c", 1, 0.5}, boundSuite{"d", 1, 0.5}),
 		boundReport("3", boundSuite{"a", 1, 0.1}, boundSuite{"c", 1, 0.1}), boundReport("4", boundSuite{"b", 1, 0.1}, boundSuite{"d", 1, 0.1}),
 		boundReport("5", boundSuite{"a", 1, 0.1}, boundSuite{"b", 1, 0.1}, boundSuite{"c", 1, 0.1}, boundSuite{"d", 1, 0.1}),
 	}
-	two := mustPlanWithin(t, githubTestsPartitionBound{Work: githubTestsDefaultPartitionBound.Work, Partitions: 2}, reports...)
-	if len(two.Dropped) != 1 || two.Dropped[0].Index != 4 || len(two.Mismatch) != 0 {
-		t.Fatalf("two partitions: dropped %+v mismatch %+v, want index 4 dropped", two.Dropped, two.Mismatch)
+	exact := mustPlanWithin(t, githubTestsDefaultPartitionBound, reports...)
+	if len(exact.Dropped) != 1 || exact.Dropped[0].Index != 4 || len(exact.Mismatch) != 0 {
+		t.Fatalf("exact parts present: dropped %+v mismatch %+v, want index 4 dropped", exact.Dropped, exact.Mismatch)
 	}
-	one := mustPlanWithin(t, githubTestsPartitionBound{Work: githubTestsDefaultPartitionBound.Work, Partitions: 1}, reports...)
-	if len(one.Dropped) != 0 || len(one.Mismatch) != 1 || one.Mismatch[0].Index != 4 || !slices.Equal(one.Mismatch[0].Parts, []int{0, 1}) {
-		t.Fatalf("one partition: dropped %+v mismatch %+v, want index 4 a mismatch against 0 and 1", one.Dropped, one.Mismatch)
+	reports[4] = boundReport("5", boundSuite{"a", 1, 0.9}, boundSuite{"b", 1, 0.9}, boundSuite{"c", 1, 0.9}, boundSuite{"d", 1, 0.9})
+	none := mustPlanWithin(t, githubTestsDefaultPartitionBound, reports...)
+	if len(none.Dropped) != 0 || len(none.Mismatch) != 1 || none.Mismatch[0].Index != 4 || !slices.Equal(none.Mismatch[0].Parts, []int{0, 1}) {
+		t.Fatalf("no exact parts: dropped %+v mismatch %+v, want index 4 a mismatch against 0 and 1", none.Dropped, none.Mismatch)
 	}
 }
 

@@ -3,6 +3,7 @@ package providersync
 import (
 	"fmt"
 	"maps"
+	"math/rand/v2"
 	"slices"
 	"strings"
 	"testing"
@@ -261,5 +262,110 @@ func TestGitHubTestsRunReportsFindTheMismatchBehindOtherAggregates(t *testing.T)
 				assertGroupDecision(t, artifacts, layout.want)
 			})
 		}
+	}
+}
+
+// Round 3, admission: a drop is valid only when its parts are admitted. Three shards, a subtotal and a total; an unrelated report
+// fills the run bound and the third shard (its archive also holds a test log) sorts after it, so the bound cuts it. The total holds
+// case c, so it is kept: no row is lost to a drop made before the cut.
+func TestGitHubTestsRunReportsKeepAnAggregateWhosePartTheBoundCuts(t *testing.T) {
+	artifacts := groupMembers([][]int{{0}, {1}, {2}, {0, 1}, {0, 1, 2}}, false)
+	log := make([]byte, 600_000)
+	random := rand.NewPCG(63, 79)
+	for index := range log {
+		log[index] = byte(' ' + random.Uint64()%95)
+	}
+	artifacts[2].extra = map[string]string{"test.log": string(log)}
+	artifacts = append(artifacts, rowsArtifact{id: "6", body: githubTestsNamedMultiSuiteJUnit("unrelated-job-", (githubTestsMaxReportRowsPerRun-4)/2)})
+	for index := range artifacts {
+		members := map[string]string{"junit.xml": artifacts[index].body}
+		for name, body := range artifacts[index].extra {
+			members[name] = body
+		}
+		artifacts[index].size = int64(len(githubTestsZip(t, members)))
+	}
+	if artifacts[4].size >= artifacts[5].size || artifacts[5].size >= artifacts[2].size {
+		t.Fatalf("fixture order: total %d, unrelated %d, shard c %d must ascend", artifacts[4].size, artifacts[5].size, artifacts[2].size)
+	}
+	walk, _, _ := rowsWalk(t, 1, artifacts...)
+	rows := rowsWalkCommitted(t, artifacts...)
+	if !slices.ContainsFunc(rows.cases, func(row testCaseResultRow) bool { return row.CaseName == "c" }) {
+		t.Fatalf("markers %v: case c is not committed", markerCauses(walk))
+	}
+	markers := markerCauses(walk)
+	if markers["5"] == githubTestsAggregateOfPartsCause {
+		t.Fatalf("markers %v: the total was dropped although the bound cut its part 3", markers)
+	}
+	if markers["4"] != githubTestsAggregateOfPartsCause {
+		t.Fatalf("markers %v: the subtotal's parts 1 and 2 are admitted, so it is still dropped", markers)
+	}
+}
+
+// Round 3, overlap groups: 7 is the exact union of 1+2 and of 6+5; 6 is an aggregate of 3+4 that differs from them. 7 shares case
+// identities with 6, so it is in 6's group and is kept with it, whichever partition proved it.
+func TestGitHubTestsRunReportsKeepACrossingPartitionInItsConflictGroup(t *testing.T) {
+	for _, variant := range []string{"case", "suite", "lcov", "cobertura", "no-conflict"} {
+		t.Run(variant, func(t *testing.T) {
+			artifacts := groupMembers([][]int{{0, 2}, {1, 3}, {0}, {1}, {2, 3}, {0, 1}, {0, 1, 2, 3}}, false)
+			switch variant {
+			case "case":
+				for _, index := range []int{0, 5, 6} {
+					artifacts[index].body = replaceOnce(t, artifacts[index].body, "boom", "different failure")
+				}
+			case "suite":
+				for _, index := range []int{0, 5, 6} {
+					artifacts[index].body = replaceOnce(t, artifacts[index].body, `name="alpha" time=`, `name="alpha" framework="jest" time=`)
+				}
+			case "lcov":
+				artifacts[5].extra = map[string]string{"coverage.info": groupLCOV}
+			case "cobertura":
+				artifacts[5].extra = map[string]string{"coverage.xml": groupCobertura}
+			}
+			want := map[string]string{"6": githubTestsAggregateMismatchCause, "7": githubTestsAggregateMismatchCause}
+			if variant == "no-conflict" {
+				want = map[string]string{"6": githubTestsAggregateOfPartsCause, "7": githubTestsAggregateOfPartsCause}
+			}
+			assertGroupDecision(t, artifacts, want)
+		})
+	}
+}
+
+// Round 3, search order: two matrix legs upload the same shards with other timings and the total equals one leg. Whichever leg has
+// the lower artifact ids, the parts are searched among artifacts whose suites are in the total, so the total is dropped.
+func TestGitHubTestsRunReportsDropAnExactMatrixTotalInEitherUploadOrder(t *testing.T) {
+	for _, cell := range []struct {
+		name          string
+		shards        int
+		otherLegFirst bool
+	}{
+		{"four-shards-other-leg-first", 4, true},
+		{"five-shards-exact-leg-first", 5, false},
+		{"five-shards-other-leg-first", 5, true},
+		{"eight-shards-other-leg-first", 8, true},
+	} {
+		t.Run(cell.name, func(t *testing.T) {
+			var exact, other []fxSuite
+			for index := range cell.shards {
+				name := fmt.Sprintf("shard-%d", index)
+				exact = append(exact, fxSuite{name: name, cases: []fxCase{{name: name, dur: "0.125"}}})
+				other = append(other, fxSuite{name: name, cases: []fxCase{{name: name, dur: "0.25"}}})
+			}
+			var artifacts []rowsArtifact
+			add := func(suites []fxSuite) {
+				body := fxJUnit(suites)
+				artifacts = append(artifacts, rowsArtifact{id: fmt.Sprint(len(artifacts) + 1), size: int64(len(artifacts)+1) * 10, body: body})
+			}
+			for index := range exact {
+				if cell.otherLegFirst {
+					add(other[index : index+1])
+					add(exact[index : index+1])
+				} else {
+					add(exact[index : index+1])
+					add(other[index : index+1])
+				}
+			}
+			add(exact)
+			assertGroupDecision(t, artifacts, map[string]string{artifacts[len(artifacts)-1].id: githubTestsAggregateOfPartsCause})
+		})
 	}
 }

@@ -2211,6 +2211,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 					if planErr != nil {
 						return fmt.Errorf("%w: sizing report rows: %v", ErrGitHubTestsIncomplete, planErr)
 					}
+					reportGitHubTestsPlannerKeeps(ctx, claim.Provider, claim.Dataset, claim.ID, cursor.Repo, pipeline.RunID, parsedReports, plan)
 					recordedCauses := map[string]bool{}
 					markReport := func(index int, cause string) {
 						report := parsedReports[index]

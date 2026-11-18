@@ -60,6 +60,7 @@ var (
 	MsgPostSyncFanout                                    = Msg{"post_sync_fanout"}
 	MsgPostSyncFanoutFailed                              = Msg{"post_sync_fanout.failed"}
 	MsgPostSyncFanoutChainDefect                         = Msg{"post_sync_fanout.chain_defect"}
+	MsgPostSyncDeliveryNotCurrent                        = Msg{"post_sync_fanout.delivery_not_current"}
 	MsgPostSyncTouchedDays                               = Msg{"post_sync_fanout.touched_days"}
 	MsgPostSyncTouchedDaysFailed                         = Msg{"post_sync_fanout.touched_days_failed"}
 	MsgPostSyncTouchedWindowOverBound                    = Msg{"post_sync_fanout.touched_window_keys_over_bound"}

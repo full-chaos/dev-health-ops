@@ -154,6 +154,9 @@ func (conn *workItemSendFailingConn) Query(_ context.Context, query string, _ ..
 	case query == workItemOrgWinnerReadSQL:
 		// The org winner read: the one item has no row in another scope.
 		return &emptyWorkItemRelatedRows{}, nil
+	case query == workItemCopiesReadSQL:
+		// The current-copy read: the item's one copy is the row the day read.
+		return &oneWorkItemCopyRow{}, nil
 	case strings.Contains(query, "work_items FINAL"):
 		return &oneWorkItemScopedRow{}, nil
 	case strings.Contains(query, "FROM work_item_transitions"):
@@ -202,6 +205,29 @@ func (rows *oneWorkItemScopedRow) Scan(dest ...any) error {
 	*(dest[0].(*uuid.UUID)) = workItemFamilyTestRepoID
 	*(dest[1].(*time.Time)) = time.Date(2026, 9, 3, 15, 0, 0, 0, time.UTC)
 	return rows.oneWorkItemRow.Scan(dest[2:]...)
+}
+
+// oneWorkItemCopyRow is oneWorkItemRow's item as the current-copy read returns it.
+type oneWorkItemCopyRow struct {
+	oneWorkItemRow
+}
+
+func (rows *oneWorkItemCopyRow) Scan(dest ...any) error {
+	if len(dest) != 10 {
+		return errors.New("unexpected work item copy column count")
+	}
+	completedAt := time.Date(2026, 9, 3, 14, 0, 0, 0, time.UTC)
+	*(dest[0].(*uuid.UUID)) = workItemFamilyTestRepoID
+	*(dest[1].(*time.Time)) = time.Date(2026, 9, 3, 15, 0, 0, 0, time.UTC)
+	*(dest[2].(*string)) = "github"
+	*(dest[3].(*string)) = "wi-1"
+	*(dest[4].(*string)) = "done"
+	*(dest[5].(**time.Time)) = &completedAt
+	*(dest[6].(*string)) = ""
+	*(dest[7].(*string)) = "proj-1"
+	*(dest[8].(*string)) = ""
+	*(dest[9].(*string)) = "Project One"
+	return nil
 }
 
 func (conn *workItemSendFailingConn) PrepareBatch(_ context.Context, query string, _ ...chdriver.PrepareBatchOption) (chdriver.Batch, error) {

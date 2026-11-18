@@ -180,7 +180,7 @@ func loadNativeTestopsPipelineRuns(
 ) error {
 	rows, err := conn.Query(ctx, `
 SELECT status, queued_at, started_at, finished_at, duration_seconds, queue_seconds,
-       retry_count, team_id, service_id, org_id, run_id`+testopsPipelineRunsSource+`
+       retry_count, team_id, service_id, org_id, run_id, last_synced`+testopsPipelineRunsSource+`
 ORDER BY run_id`,
 		testopsSourceArgs(orgID, []uuid.UUID{repoID}, start, end)...)
 	if err != nil {
@@ -194,7 +194,7 @@ ORDER BY run_id`,
 		if err := rows.Scan(
 			&row.Status, &row.QueuedAt, &row.StartedAt, &row.FinishedAt,
 			&row.DurationSeconds, &row.QueueSeconds, &row.RetryCount,
-			&row.TeamID, &row.ServiceID, &row.OrgID, &runID,
+			&row.TeamID, &row.ServiceID, &row.OrgID, &runID, &row.LastSynced,
 		); err != nil {
 			return fmt.Errorf("scan native testops pipeline run: %w", err)
 		}
@@ -567,7 +567,8 @@ func writeTestopsPipelineMetrics(
 		repo_id, day, pipelines_count, success_count, failure_count, cancelled_count,
 		success_rate, failure_rate, cancel_rate, rerun_rate,
 		median_duration_seconds, p95_duration_seconds, avg_queue_seconds, p95_queue_seconds,
-		team_id, service_id, org_id, computed_at)`)
+		team_id, service_id, org_id, computed_at,
+		skipped_count, unfinished_count, other_count, unfinished_stale_count)`)
 	if err != nil {
 		return 0, fmt.Errorf("prepare testops_pipeline_metrics_daily batch: %w", err)
 	}
@@ -584,6 +585,8 @@ func writeTestopsPipelineMetrics(
 			metric.MedianDurationSeconds, metric.P95DurationSeconds,
 			metric.AvgQueueSeconds, metric.P95QueueSeconds,
 			metric.TeamID, metric.ServiceID, organizationID, computedAt.UTC(),
+			uint32PtrOf(metric.SkippedCount), uint32PtrOf(metric.UnfinishedCount),
+			uint32PtrOf(metric.OtherCount), uint32PtrOf(metric.UnfinishedStaleCount),
 		); err != nil {
 			return 0, fmt.Errorf("append testops_pipeline_metrics_daily row: %w", err)
 		}

@@ -133,6 +133,7 @@ internal/auth/contracts	workload_token_goldens_test.go
 internal/auth/contracts/provisioning	vocabulary_test.go
 internal/auth/contracts/tokencorpus	corpus.go
 internal/auth/contracts/tokencorpus	service_account_test.go
+internal/auth/httpapi	query_census_test.go
 internal/auth/httpapi	transport_error_contract_test.go
 internal/auth/identity	externalkey_test.go
 internal/auth/identity	placeholder_copies_test.go
@@ -210,6 +211,7 @@ internal/cigates/bigboyrender	projectscope_test.go
 internal/cigates/bigboyrender	values.go
 internal/cigates/cachepoison	cachepoison_test.go
 internal/cigates/chartgates	alerts_auth_slo_test.go
+internal/cigates/chartgates	dashboard_onequery_test.go
 internal/cigates/chartgates	dashboard_pooler_test.go
 internal/cigates/chartgates	dashboard_spangaps_test.go
 internal/cigates/chartgates	helpers_test.go
@@ -218,6 +220,7 @@ internal/cigates/chartgates	overlay_parallel_test.go
 internal/cigates/chartgates	overlay_test.go
 internal/cigates/chartgates	worker_secret_env_scan_test.go
 internal/cigates/chconstructor	chconstructor_test.go
+internal/cigates/chdatetime	scan_test.go
 internal/cigates/checkgo	auth_race_budget_test.go
 internal/cigates/checkgo	check_go_script_test.go
 internal/cigates/checkgo	ci_leg_warm_all_test.go
@@ -479,6 +482,7 @@ internal/jobs/metrics/remaining	capacity_native_test.go
 internal/jobs/metrics/remaining	capacity_schema_contract_pin_test.go
 internal/jobs/metrics/remaining	membership_golden_test.go
 internal/jobs/metrics/remaining	recorded_paths_test.go
+internal/jobs/report	chart_fallback_test.go
 internal/jobs/report	cicd_pooled_test.go
 internal/jobs/report	delivery_pooled_test.go
 internal/jobs/report	report_test.go
@@ -541,6 +545,7 @@ internal/pythonparity	goldenpayload_registry_test.go
 internal/pythonparity/pyunicodedata	golden_test.go
 internal/pythonparity/pyunicodedata	import_guard_test.go
 internal/pythonparity/scopeparity	scopeparity.go
+internal/queryapi/aianalytics	umd_team_scope_census_14101_test.go
 internal/queryapi/analytics	analytics_settings_gate_test.go
 internal/queryapi/analytics	canonical_only_census_test.go
 internal/queryapi/analytics	nan_class_live_test.go
@@ -608,6 +613,7 @@ internal/queryapi/server	query_route_name_fields_legacy_test.go
 internal/queryapi/server	query_route_operating_review_no_data_test.go
 internal/queryapi/server	query_route_review_edges_names_test.go
 internal/queryapi/server	query_route_testops_filteremptyreason_documents_test.go
+internal/queryapi/server	query_route_testops_risk_partial_documents_test.go
 internal/queryapi/server	query_route_testops_scope_documents_test.go
 internal/queryapi/server	query_route_wire_capture_test.go
 internal/queryapi/server	rate_coverage_documents_integration_test.go

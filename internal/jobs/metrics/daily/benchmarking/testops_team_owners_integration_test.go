@@ -103,8 +103,14 @@ VALUES (?, 'github', ?, toUUID(?), ?, 'exact', 'inferred', 1, 10, 0, ?, ?, ?, ?)
 		{"testops_coverage_metrics_daily", "line_coverage_pct", "line_coverage_pct"},
 	} {
 		t.Run(source.table, func(t *testing.T) {
+			// rerun_rate is read as reruns over runs: every repo-day has the same 10 runs, so the
+			// weights are equal and the expected values are those of the stored rates.
 			insert := "INSERT INTO " + source.table + " (repo_id, day, " + source.column +
-				", team_id, org_id, computed_at) VALUES (toUUID(?), ?, ?, ?, ?, ?)"
+				", team_id, org_id, computed_at, pipelines_count) VALUES (toUUID(?), ?, ?, ?, ?, ?, 10)"
+			if source.table != "testops_pipeline_metrics_daily" {
+				insert = "INSERT INTO " + source.table + " (repo_id, day, " + source.column +
+					", team_id, org_id, computed_at) VALUES (toUUID(?), ?, ?, ?, ?, ?)"
+			}
 			for _, day := range days {
 				for _, row := range stored {
 					if err := admin.Exec(ctx, insert, row.repo, day, row.value, row.team, org, day.Add(time.Hour)); err != nil {

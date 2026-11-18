@@ -118,7 +118,7 @@ func (h *handlers) gatedOrg(ctx context.Context, w http.ResponseWriter, feature 
 // listIPAllowlist is ip_allowlist.py's list_ip_allowlist_entries.
 func (h *handlers) listIPAllowlist(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	values := r.URL.Query()
+	values := httpapi.Query(r)
 	var errs pybody.Errors
 	activeOnly := false
 	if value, failure := queryBool(values, "active_only", false); failure != nil {

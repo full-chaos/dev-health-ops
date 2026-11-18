@@ -1124,8 +1124,10 @@ func Compare(baseline, candidate Snapshot, opts Options) Result {
 		baseline.Data, copiedLists, copyRefusals = collapseDeclaredBaselineCopies(baseline.Data, opts)
 	}
 
-	// CHAOS-5661: judged BEFORE anything below, and over the RAW decoded
-	// bodies -- never the view VolatileFields/exclusions would leave.
+	// CHAOS-9921: the list-level id/overlap walk and the size gate judge
+	// SHAPE on the bodies with declared volatile leaves left out; the
+	// emptiness checks below stay on the raw bodies.
+	// CHAOS-5661 (emptiness, scope): over the RAW decoded bodies -- never the view VolatileFields/exclusions would leave.
 	// Skipping a whole collection because it is declared volatile is
 	// exactly how a comparator can visit zero overlapping paths and
 	// report zero differences (see compareDict's `excluded` check);
@@ -1144,7 +1146,7 @@ func Compare(baseline, candidate Snapshot, opts Options) Result {
 				StructuralDetail:  "both legs resolved to zero non-null leaves under data: an empty result on both sides is not evidence the two planes agree, because nothing was actually compared",
 			}
 		}
-		if reason, detail := structuralAgreementFailure(baseline.Data, candidate.Data, "$.data", opts); reason != "" {
+		if reason, detail := structuralAgreementFailure(withoutVolatile(baseline.Data, opts), withoutVolatile(candidate.Data, opts), "$.data", opts); reason != "" {
 			return Result{StructuralRefusal: reason, StructuralDetail: detail}
 		}
 		// A declared structural shape's own valid plan against these two
@@ -2619,13 +2621,13 @@ func volatileAwareBodySizeDisagreement(baseline, candidate Snapshot, opts Option
 	return "", ""
 }
 
-// stableObservableBytes is the compact encoding of what Compare observes of a leg (its data and its errors) minus the compact encoding of
-// every value at a declared volatile path, floored at the ratio check's minimum when the raw body was past it (a small stable part is
-// not a licence to skip the check).
+// stableObservableBytes is the compact encoding of what Compare observes of a leg (its data and its errors) with every declared volatile
+// key left out entirely, so a volatile leaf inside list elements leaves no per-element framing behind; floored at the ratio check's
+// minimum when the raw body was past it (a small stable part is not a licence to skip the check).
 func stableObservableBytes(snapshot Snapshot, opts Options) (int, bool) {
 	observable := map[string]any{}
 	if snapshot.DataPresent {
-		observable["data"] = snapshot.Data
+		observable["data"] = withoutVolatile(snapshot.Data, opts)
 	}
 	if len(snapshot.Errors) > 0 {
 		observable["errors"] = snapshot.Errors
@@ -2634,58 +2636,9 @@ func stableObservableBytes(snapshot Snapshot, opts Options) (int, bool) {
 	if err != nil {
 		return 0, false
 	}
-	size := len(encoded) - volatileBytes(snapshot.Data, opts.VolatileFields)
+	size := len(encoded)
 	if snapshot.BodyBytes >= minBodySizeForRatioCheck && size < minBodySizeForRatioCheck {
 		size = minBodySizeForRatioCheck
 	}
 	return size, true
-}
-
-// volatileBytes is the compact encoded size of every value a declared volatile path reaches in data (data-relative, index-free
-// paths as VolatileFields declares them).
-func volatileBytes(data any, volatile map[string]string) int {
-	total := 0
-	for path := range volatile {
-		segments := citedSegments(path)
-		if len(segments) == 0 || hasVolatileAncestor(path, volatile) {
-			continue
-		}
-		total += encodedSizeAt(data, segments)
-	}
-	return total
-}
-
-// hasVolatileAncestor reports whether another declared volatile path contains path, whose bytes the ancestor already takes out.
-func hasVolatileAncestor(path string, volatile map[string]string) bool {
-	for other := range volatile {
-		if other != path && strings.HasPrefix(path, other+".") {
-			return true
-		}
-	}
-	return false
-}
-
-func encodedSizeAt(value any, segments []string) int {
-	switch typed := value.(type) {
-	case map[string]any:
-		child, present := typed[segments[0]]
-		if !present {
-			return 0
-		}
-		if len(segments) == 1 {
-			encoded, err := json.Marshal(child)
-			if err != nil {
-				return 0
-			}
-			return len(encoded)
-		}
-		return encodedSizeAt(child, segments[1:])
-	case []any:
-		total := 0
-		for _, element := range typed {
-			total += encodedSizeAt(element, segments)
-		}
-		return total
-	}
-	return 0
 }

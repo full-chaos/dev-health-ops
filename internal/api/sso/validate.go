@@ -38,10 +38,7 @@ var (
 	name1to255 = pybody.StrLen(1, 255)
 )
 
-const (
-	protocolPattern     = "^(saml|oidc)$"
-	providerTypePattern = "^(github|gitlab|google)$"
-)
+const protocolPattern = "^(saml|oidc)$"
 
 // samlConfigInput is api/auth/schemas.py SAMLConfigInput.
 func samlConfigInput(m pybody.Model) (struct{}, bool) {
@@ -67,16 +64,6 @@ func oidcConfigInput(m pybody.Model) (struct{}, bool) {
 	pybody.Get(m, "jwks_uri", pybody.Nullable, str)
 	pybody.Get(m, "scopes", pybody.Defaulted, strList)
 	pybody.Get(m, "claim_mapping", pybody.Defaulted, strDict)
-	return struct{}{}, len(*m.Errors) == before
-}
-
-// oauthConfigInput is OAuthConfigInput.
-func oauthConfigInput(m pybody.Model) (struct{}, bool) {
-	before := len(*m.Errors)
-	pybody.Get(m, "client_id", pybody.Required, str)
-	pybody.Get(m, "client_secret", pybody.Required, str)
-	pybody.Get(m, "scopes", pybody.Defaulted, strList)
-	pybody.Get(m, "base_url", pybody.Nullable, str)
 	return struct{}{}, len(*m.Errors) == before
 }
 
@@ -126,27 +113,6 @@ func oidcCallbackRequest(m pybody.Model) {
 	pybody.Get(m, "code", pybody.Required, str)
 	pybody.Get(m, "state", pybody.Required, str)
 	pybody.Get(m, "code_verifier", pybody.Nullable, str)
-}
-
-// oauthProviderCreate is OAuthProviderCreate.
-func oauthProviderCreate(m pybody.Model) {
-	pybody.Get(m, "name", pybody.Required, name1to255)
-	pybody.Get(m, "provider_type", pybody.Required, pybody.AnchoredPattern(providerTypePattern, "github", "gitlab", "google"))
-	pybody.Get(m, "oauth_config", pybody.Required, pybody.Nested(oauthConfigInput))
-	pybody.Get(m, "is_default", pybody.Defaulted, boolean)
-	pybody.Get(m, "auto_provision_users", pybody.Defaulted, boolean)
-	pybody.Get(m, "default_role", pybody.Defaulted, str)
-	pybody.Get(m, "allowed_domains", pybody.Defaulted, strList)
-}
-
-// oauthProviderUpdate is OAuthProviderUpdate.
-func oauthProviderUpdate(m pybody.Model) {
-	pybody.Get(m, "name", pybody.Nullable, name255)
-	pybody.Get(m, "oauth_config", pybody.Nullable, pybody.Nested(oauthConfigInput))
-	pybody.Get(m, "is_default", pybody.Nullable, boolean)
-	pybody.Get(m, "auto_provision_users", pybody.Nullable, boolean)
-	pybody.Get(m, "default_role", pybody.Nullable, str)
-	pybody.Get(m, "allowed_domains", pybody.Nullable, strList)
 }
 
 // oauthAuthRequest is OAuthAuthRequest.

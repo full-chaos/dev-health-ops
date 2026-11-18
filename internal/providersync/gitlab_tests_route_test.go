@@ -116,7 +116,7 @@ func TestGitLabCICDAndTestsAliasesEmitByteIdenticalSixEffects(t *testing.T) {
 	}
 	assertGitLabTestsUsageObservation(t, cicd, "pipelines")
 	assertGitLabTestsUsageObservation(t, tests, "tests")
-	wantCounts := map[string]int{"ci_pipeline_runs": 1, "ci_job_runs": 1, "ci_acceptance_checks": 2, "test_suite_results": 1, "test_case_results": 1, "coverage_snapshots": 1}
+	wantCounts := map[string]int{"ci_pipeline_runs": 1, "ci_job_runs": 1, "ci_acceptance_checks": 2, "test_suite_results": 1, "test_case_results": 1, "coverage_snapshots": 1, "testops_run_report_completeness": 0}
 	if len(cicd.Effects) != len(wantCounts) {
 		t.Fatalf("effects=%d want=%d", len(cicd.Effects), len(wantCounts))
 	}

@@ -74,7 +74,9 @@
                 "lineInterpolation": "spline",
                 "lineStyle": "solid",
                 "showPoints": false,
-                "spanGaps": false
+                "spanGaps": {
+                  "fillOnlyBelow": false
+                }
               },
               "formatting": {
                 "decimalPrecision": "2",
@@ -153,7 +155,9 @@
                 "lineInterpolation": "spline",
                 "lineStyle": "solid",
                 "showPoints": false,
-                "spanGaps": false
+                "spanGaps": {
+                  "fillOnlyBelow": false
+                }
               },
               "formatting": {
                 "decimalPrecision": "2",
@@ -232,7 +236,9 @@
                 "lineInterpolation": "spline",
                 "lineStyle": "solid",
                 "showPoints": false,
-                "spanGaps": false
+                "spanGaps": {
+                  "fillOnlyBelow": false
+                }
               },
               "formatting": {
                 "decimalPrecision": "2",
@@ -311,7 +317,9 @@
                 "lineInterpolation": "spline",
                 "lineStyle": "solid",
                 "showPoints": false,
-                "spanGaps": false
+                "spanGaps": {
+                  "fillOnlyBelow": false
+                }
               },
               "formatting": {
                 "decimalPrecision": "2",

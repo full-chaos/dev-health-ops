@@ -88,9 +88,10 @@ func TestEveryAccessTokenRowAcceptsOnlyTheUserAccessToken(t *testing.T) {
 			}
 		}
 	}
-	// CHAOS-12128 added the principal access read (42 before); CHAOS-11813 retired the 6 legacy ingest rows (48 before).
-	if user != 206 || plain != 43 {
-		t.Errorf("rows with access_token_validation %d, without %d; want 206 and 43", user, plain)
+	// CHAOS-12128 added the principal access read (42 before); CHAOS-11813 retired the 6 legacy ingest rows (48 before);
+	// CHAOS-13881 retired the OAuth provider create row and made the /oauth/{first}/{second} PATCH row public (206 and 43 before).
+	if user != 204 || plain != 44 {
+		t.Errorf("rows with access_token_validation %d, without %d; want 204 and 44", user, plain)
 	}
 }
 
@@ -169,7 +170,7 @@ func TestRealRowTableAcceptsAValidUserAccessToken(t *testing.T) {
 	}
 }
 
-// Every row outside the widened 206 (the 48 api rows without the opt-in and
+// Every row outside the widened 204 (the 48 api rows without the opt-in and
 // the 3 billing-edge rows) accepts no access-token class and keeps refusing a
 // user access token: an api row by its row, a billing-edge row because the
 // access-token table holds api rows only.
@@ -190,8 +191,8 @@ func TestRowsWithoutTheAccessTokenOptInStillRefuseAUserAccessToken(t *testing.T)
 		}
 		unchanged++
 	}
-	if unchanged != 46 {
-		t.Errorf("checked %d rows, want 46 (43 api + 3 billing-edge; CHAOS-12128 added the principal access read, CHAOS-11813 retired 6 legacy ingest rows)", unchanged)
+	if unchanged != 47 {
+		t.Errorf("checked %d rows, want 47 (44 api + 3 billing-edge; CHAOS-12128 added the principal access read, CHAOS-11813 retired 6 legacy ingest rows, CHAOS-13881 made the oauth PATCH row public)", unchanged)
 	}
 }
 
@@ -234,8 +235,8 @@ func TestWidenedRowsCarryTheirExactClassList(t *testing.T) {
 		}
 		widened++
 	}
-	if widened != 206 || withExtra != len(extra) {
-		t.Errorf("checked %d widened rows (%d with an extra class), want 206 and %d", widened, withExtra, len(extra))
+	if widened != 204 || withExtra != len(extra) {
+		t.Errorf("checked %d widened rows (%d with an extra class), want 204 and %d", widened, withExtra, len(extra))
 	}
 }
 

@@ -1,6 +1,11 @@
 package httpapi
 
-import "net/url"
+import (
+	"net/http"
+	"net/url"
+	"strings"
+	"unicode/utf8"
+)
 
 // QueryLast is how FastAPI/Starlette resolve a repeated SCALAR query
 // parameter: the LAST occurrence, "" when the name is absent (a present,
@@ -27,4 +32,118 @@ func QueryLastPtr(values url.Values, name string) *string {
 	}
 	last := raw[len(raw)-1]
 	return &last
+}
+
+// Query is r's query as Starlette's request.query_params reads it; see
+// ParseQuery. Every route reads its query through here, never r.URL.Query().
+func Query(r *http.Request) url.Values {
+	return ParseQuery(r.URL.RawQuery)
+}
+
+// ParseQuery is CPython's parse_qsl(raw, keep_blank_values=True), the parse
+// behind Starlette's QueryParams. Unlike url.ParseQuery it never drops a pair:
+// pairs split on "&" only (a ";" is a literal byte), a pair without "=" has an
+// empty value, "+" is a space, each well-formed %XX is one byte and any other
+// "%" stays literal, and the bytes read as UTF-8 with errors="replace"
+// (CPython's rule: one U+FFFD per maximal ill-formed subpart). One residual:
+// Starlette reads RAW (unescaped) bytes >= 0x80 as latin-1; here raw valid
+// UTF-8 stays as written.
+func ParseQuery(raw string) url.Values {
+	values := url.Values{}
+	for _, pair := range strings.Split(raw, "&") {
+		if pair == "" {
+			continue
+		}
+		name, value, _ := strings.Cut(pair, "=")
+		key := unquotePlus(name)
+		values[key] = append(values[key], unquotePlus(value))
+	}
+	return values
+}
+
+func unquotePlus(s string) string {
+	if !strings.ContainsAny(s, "%+") && utf8.ValidString(s) {
+		return s
+	}
+	decoded := make([]byte, 0, len(s))
+	for i := 0; i < len(s); i++ {
+		switch {
+		case s[i] == '+':
+			decoded = append(decoded, ' ')
+		case s[i] == '%' && i+2 < len(s) && isHexDigit(s[i+1]) && isHexDigit(s[i+2]):
+			decoded = append(decoded, unhexDigit(s[i+1])<<4|unhexDigit(s[i+2]))
+			i += 2
+		default:
+			decoded = append(decoded, s[i])
+		}
+	}
+	return replaceInvalidUTF8(decoded)
+}
+
+func replaceInvalidUTF8(b []byte) string {
+	if utf8.Valid(b) {
+		return string(b)
+	}
+	var out strings.Builder
+	out.Grow(len(b) + 8)
+	for len(b) > 0 {
+		r, size := utf8.DecodeRune(b)
+		if r != utf8.RuneError || size > 1 {
+			out.Write(b[:size])
+			b = b[size:]
+			continue
+		}
+		out.WriteRune(utf8.RuneError)
+		b = b[maximalSubpart(b):]
+	}
+	return out.String()
+}
+
+// maximalSubpart is the length of the ill-formed sequence that starts b: the
+// lead byte plus the continuation bytes that still fit a well-formed sequence
+// (Unicode Table 3-7), at least 1.
+func maximalSubpart(b []byte) int {
+	lo, hi := byte(0x80), byte(0xBF)
+	var need int
+	switch lead := b[0]; {
+	case lead >= 0xC2 && lead <= 0xDF:
+		need = 1
+	case lead == 0xE0:
+		need, lo = 2, 0xA0
+	case lead == 0xED:
+		need, hi = 2, 0x9F
+	case lead >= 0xE1 && lead <= 0xEF:
+		need = 2
+	case lead == 0xF0:
+		need, lo = 3, 0x90
+	case lead == 0xF4:
+		need, hi = 3, 0x8F
+	case lead >= 0xF1 && lead <= 0xF3:
+		need = 3
+	default:
+		return 1
+	}
+	n := 1
+	for ; n <= need && n < len(b); n++ {
+		if b[n] < lo || b[n] > hi {
+			break
+		}
+		lo, hi = 0x80, 0xBF
+	}
+	return n
+}
+
+func isHexDigit(c byte) bool {
+	return ('0' <= c && c <= '9') || ('a' <= c && c <= 'f') || ('A' <= c && c <= 'F')
+}
+
+func unhexDigit(c byte) byte {
+	switch {
+	case '0' <= c && c <= '9':
+		return c - '0'
+	case 'a' <= c && c <= 'f':
+		return c - 'a' + 10
+	default:
+		return c - 'A' + 10
+	}
 }

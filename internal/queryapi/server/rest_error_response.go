@@ -166,7 +166,7 @@ func logRESTBoundHit(r *http.Request, component, orgID string, err error) (detai
 		source = "deadline of the client"
 	}
 	log.Printf("query-api: WARN %s: read hit the %s bound (%s, limit=%s): scope_ids=%d org_id=%s request_id=%s err=%v",
-		component, bound, source, limit, len(r.URL.Query()["scope_id"]), orgID, logSafeRequestID(envelopeRequestID(r)), err)
+		component, bound, source, limit, len(httpapi.Query(r)["scope_id"]), orgID, logSafeRequestID(envelopeRequestID(r)), err)
 	return restBoundDetail(bound), true
 }
 

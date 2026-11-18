@@ -931,7 +931,8 @@ its own tag. Without the option the generation, the command and its output are
 unchanged.
 
 - The tag is 1 to 32 characters of `A-Z a-z 0-9 . _ -`. Anything else, and an empty
-  `--rerun-tag ""`, is `invalid_request` (exit 2) before the backend is opened.
+  `--rerun-tag ""`, is `invalid_request` (exit 2). The check runs before the audited write
+  starts, so no audit row is written and no run is stored.
 - Every other guard stays: the 31-day window, `--org-stdin` and the audited write. The
   coverage check of a call without `--repo-id`: a call WITHOUT `--rerun-tag` on a day that
   the nightly schedule or a post-sync run covered still answers `already_covered`; a call

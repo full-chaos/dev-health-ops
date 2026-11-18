@@ -850,6 +850,8 @@ func TestChunkCursorWorstCaseOfEachPhaseKeepsTheMargin(t *testing.T) {
 			c.OpenAfterStarted, c.OpenAfterRunID = "2026-07-20T23:59:59.999999999Z", maxID
 			c.OpenCap, c.OpenDone, c.OpenCapReached = githubTestsOpenRunCapBacklog, githubTestsOpenRunCapBacklog, true
 			c.OpenFloorHit, c.OpenFloorRemaining = true, 99999999
+			c.OpenSkipped, c.OpenTransientRun, c.OpenSkipLimitHit = githubTestsOpenRunCapBacklog, githubTestsOpenTransientBreaker, true
+			c.OpenSkipEvent = &githubTestsOpenSkipEvent{RunID: maxID, Reason: "jobs_not_found", Status: 599, Route: githubRunJobsRoute}
 			c.SaturatedRuns, c.SaturatedArtifacts = true, true
 		}},
 	} {

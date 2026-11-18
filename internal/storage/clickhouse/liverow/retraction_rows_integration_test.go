@@ -75,6 +75,11 @@ func TestTheRuleKeepsEachMeasurementAndDropsARetraction(t *testing.T) {
 			// row of zeros.
 			continue
 		}
+		if _, own := ownWriterRetracted[table]; own {
+			// A table whose own writer marks the row in a Retracted column is tested
+			// by its own test (cicd_retracted_integration_test.go).
+			continue
+		}
 		// The team column and the measure columns come from the registry, or
 		// from this package for the two tables with the rule in their own
 		// writers.

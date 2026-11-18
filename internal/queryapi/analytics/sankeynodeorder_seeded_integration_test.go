@@ -30,6 +30,7 @@ import (
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
@@ -81,6 +82,7 @@ func TestCompileSankey_SeededRealClickHouse_NodeOrderIsPathOrderEveryRun(t *test
 			t.Fatalf("exec DDL %q: %v", stmt, err)
 		}
 	}
+	chschema.CreateTables(ctx, t, conn, "work_unit_investments")
 
 	const orgID = "seeded-sankey-order"
 	// Three units, one per dimension value set, chosen so within-group

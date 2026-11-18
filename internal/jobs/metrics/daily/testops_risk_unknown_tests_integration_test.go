@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
 
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
@@ -45,16 +45,6 @@ func TestTestopsRiskTestsUnknownAgainstRealClickHouse(t *testing.T) {
     commit_hash Nullable(String), branch Nullable(String), pr_number Nullable(UInt32),
     team_id Nullable(String), service_id Nullable(String), org_id LowCardinality(String) DEFAULT ''
 ) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (repo_id, run_id)`,
-		`CREATE TABLE test_suite_results (
-    repo_id UUID, run_id String, suite_id String, suite_name String,
-    framework Nullable(String), environment Nullable(String),
-    total_count UInt32, passed_count UInt32, failed_count UInt32, skipped_count UInt32,
-    error_count UInt32 DEFAULT 0, quarantined_count UInt32 DEFAULT 0, retried_count UInt32 DEFAULT 0,
-    duration_seconds Nullable(Float64), started_at Nullable(DateTime64(3, 'UTC')),
-    finished_at Nullable(DateTime64(3, 'UTC')), team_id Nullable(String), service_id Nullable(String),
-    org_id LowCardinality(String) DEFAULT '', last_synced DateTime64(3, 'UTC'),
-    report_slot LowCardinality(String) DEFAULT '', run_attempt UInt32 DEFAULT 0, legacy_suite_ids Array(String) DEFAULT []
-) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (repo_id, run_id, suite_id)`,
 		`CREATE TABLE test_case_results (
     repo_id UUID, run_id String, suite_id String, case_id String, case_name String,
     class_name Nullable(String), status LowCardinality(String), duration_seconds Nullable(Float64),
@@ -62,16 +52,6 @@ func TestTestopsRiskTestsUnknownAgainstRealClickHouse(t *testing.T) {
     stack_trace Nullable(String), is_quarantined UInt8 DEFAULT 0,
     org_id LowCardinality(String) DEFAULT '', last_synced DateTime64(3, 'UTC')
 ) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (repo_id, run_id, suite_id, case_id)`,
-		`CREATE TABLE coverage_snapshots (
-    repo_id UUID, run_id String, snapshot_id String, report_format Nullable(String),
-    lines_total Nullable(UInt32), lines_covered Nullable(UInt32), line_coverage_pct Nullable(Float64),
-    branches_total Nullable(UInt32), branches_covered Nullable(UInt32), branch_coverage_pct Nullable(Float64),
-    functions_total Nullable(UInt32), functions_covered Nullable(UInt32),
-    commit_hash Nullable(String), branch Nullable(String), pr_number Nullable(UInt32),
-    team_id Nullable(String), service_id Nullable(String), org_id LowCardinality(String) DEFAULT '',
-    last_synced DateTime64(3, 'UTC'),
-    report_slot LowCardinality(String) DEFAULT '', run_attempt UInt32 DEFAULT 0, legacy_snapshot_ids Array(String) DEFAULT []
-) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (repo_id, run_id, snapshot_id)`,
 		`CREATE TABLE testops_release_confidence (
     repo_id UUID, day Date, confidence_score Float64, pipeline_success_factor Float64,
     test_pass_factor Float64, coverage_factor Float64, flake_penalty Float64, regression_penalty Float64,
@@ -101,6 +81,7 @@ func TestTestopsRiskTestsUnknownAgainstRealClickHouse(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	chschema.CreateTables(ctx, t, conn, "test_suite_results", "coverage_snapshots", "testops_run_report_completeness")
 	applyTestopsRepositoryOwnershipSchema(ctx, t, conn)
 
 	const orgID = "00000000-0000-4000-8000-000000000009"
@@ -119,7 +100,6 @@ func TestTestopsRiskTestsUnknownAgainstRealClickHouse(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	createTestopsRunReportCompletenessTable(ctx, t, conn)
 	for _, repo := range repos {
 		for _, d := range []string{"2026-08-14", "2026-08-15"} {
 			exec(`INSERT INTO ci_pipeline_runs (repo_id, run_id, status, queued_at, started_at, finished_at, last_synced, retry_count, org_id) VALUES (toUUID('` + repo + `'), 'run-` + d + `', 'success', toDateTime64('` + d + ` 09:00:00', 3, 'UTC'), toDateTime64('` + d + ` 09:01:00', 3, 'UTC'), toDateTime64('` + d + ` 09:11:00', 3, 'UTC'), now64(3), 0, '` + orgID + `')`)
@@ -180,14 +160,5 @@ func TestTestopsRiskTestsUnknownAgainstRealClickHouse(t *testing.T) {
 		if cell.unknown == (flakeHours != nil) || (!cell.unknown && *flakeHours != 0) {
 			t.Errorf("%s quality drag: flake hours present=%v, want unknown=%v", cell.name, flakeHours != nil, cell.unknown)
 		}
-	}
-}
-
-// createTestopsRunReportCompletenessTable creates the migration 153 table the risk job reads, for fixtures that build their
-// own tables.
-func createTestopsRunReportCompletenessTable(ctx context.Context, t *testing.T, conn driver.Conn) {
-	t.Helper()
-	if err := conn.Exec(ctx, `CREATE TABLE IF NOT EXISTS testops_run_report_completeness (org_id LowCardinality(String), repo_id UUID, run_id String, run_attempt UInt32, provider LowCardinality(String), complete UInt8, reasons Array(LowCardinality(String)), reports_expected UInt32, reports_admitted UInt32, last_synced DateTime64(3,'UTC'), verdict_version UInt64) ENGINE = ReplacingMergeTree(verdict_version) ORDER BY (org_id, repo_id, run_id, run_attempt)`); err != nil {
-		t.Fatal(err)
 	}
 }

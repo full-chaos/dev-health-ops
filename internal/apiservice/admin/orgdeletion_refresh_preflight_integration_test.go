@@ -18,6 +18,7 @@ import (
 	"github.com/google/uuid"
 
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
@@ -70,7 +71,7 @@ func TestOrgDeletionRefusesALoginThatCannotReadTheRefreshState(t *testing.T) {
 		t.Fatalf("no refresh-fed table: the preflight read the refresh state %d time(s), want 0", reads)
 	}
 
-	exec("CREATE TABLE project_team_ownership_groups_log (org_id String, n UInt8) ENGINE = MergeTree ORDER BY tuple()")
+	chschema.CreateTables(ctx, t, conn, "project_team_ownership_groups_log")
 	ch, err = (&handlers{clickHouseDSN: instance.URI}).orgDeletionClickHousePreflight(ctx)
 	if err != nil {
 		t.Fatalf("a refresh-fed table, the real refresh-state read: preflight %v, want it to pass", err)

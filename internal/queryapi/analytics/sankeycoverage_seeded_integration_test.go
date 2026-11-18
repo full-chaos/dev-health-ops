@@ -47,6 +47,7 @@ import (
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
@@ -223,6 +224,7 @@ func TestResolveSankeyCoverage_SeededRealClickHouse_ExactShares(t *testing.T) {
 			t.Fatalf("exec DDL %q: %v", stmt, err)
 		}
 	}
+	chschema.CreateTables(ctx, t, conn, "work_unit_investments")
 
 	const orgID = "seeded-sankey-coverage"
 
@@ -426,6 +428,7 @@ func TestResolveSankeyCoverage_SeededRealClickHouse_SplitPartitionsExactly(t *te
 			t.Fatalf("exec DDL %q: %v", stmt, err)
 		}
 	}
+	chschema.CreateTables(ctx, t, conn, "work_unit_investments")
 
 	// wu-regen-null needs TWO physical generations of the same
 	// (org, work_unit_id, repo_id) to survive to the argMax. The table is
@@ -688,6 +691,7 @@ func TestResolveSankeyCoverage_SeededRealClickHouse_FanoutIsArrayJoinInvariant(t
 			t.Fatalf("exec DDL %q: %v", stmt, err)
 		}
 	}
+	chschema.CreateTables(ctx, t, conn, "work_unit_investments")
 
 	const orgID = "seeded-coverage-fanout-invariance"
 	repos := []string{seededCoverageRepo1, seededCoverageRepo2, seededCoverageRepo3}
@@ -870,6 +874,7 @@ func TestResolveSankeyCoverage_SeededRealClickHouse_WorkCategoryFilterSelectsWit
 			t.Fatalf("exec DDL %q: %v", stmt, err)
 		}
 	}
+	chschema.CreateTables(ctx, t, conn, "work_unit_investments")
 
 	const (
 		orgAssigned   = "seeded-coverage-reweight-assigned"
@@ -1083,6 +1088,7 @@ func TestResolveSankeyCoverage_SeededRealClickHouse_WorkCategorySelectsPositiveW
 			t.Fatalf("exec DDL %q: %v", stmt, err)
 		}
 	}
+	chschema.CreateTables(ctx, t, conn, "work_unit_investments")
 
 	const orgID = "seeded-coverage-selection"
 	shapes := []struct {
@@ -1249,6 +1255,7 @@ func TestResolveSankeyCoverage_SeededRealClickHouse_EmptyWindowIsNilNotZero(t *t
 			t.Fatalf("exec DDL %q: %v", stmt, err)
 		}
 	}
+	chschema.CreateTables(ctx, t, conn, "work_unit_investments")
 
 	client, err := dhclickhouse.NewClickHouseQueryClientWithOptions(dhclickhouse.Options{DSN: inst.URI})
 	if err != nil {

@@ -55,6 +55,7 @@ import (
 	stdclickhouse "github.com/ClickHouse/clickhouse-go/v2"
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
@@ -69,31 +70,6 @@ func splitWorkUnitReaderDDL(sql string) []string {
 }
 
 const workUnitReaderSeededSchemaDDL = `
-CREATE TABLE work_unit_investments (
-    work_unit_id String,
-    from_ts DateTime64(3, 'UTC'),
-    to_ts DateTime64(3, 'UTC'),
-    repo_id Nullable(UUID),
-    provider Nullable(String),
-    effort_metric String,
-    effort_value Float64,
-    theme_distribution_json Map(String, Float64),
-    subcategory_distribution_json Map(String, Float64),
-    structural_evidence_json String,
-    evidence_quality Float64,
-    evidence_quality_band String,
-    categorization_status String,
-    categorization_errors_json String,
-    categorization_model_version String,
-    categorization_input_hash String,
-    categorization_run_id String,
-    computed_at DateTime64(3, 'UTC'),
-    work_unit_type Nullable(String),
-    work_unit_name Nullable(String),
-    org_id String DEFAULT 'default'
-) ENGINE = ReplacingMergeTree(computed_at)
-ORDER BY (work_unit_id);
-
 CREATE TABLE work_unit_membership_runs (
     org_id       String,
     run_id       String,
@@ -179,6 +155,7 @@ func TestFetchWorkUnitInvestments_SeededRealClickHouse_ScansMapColumns(t *testin
 			t.Fatalf("exec DDL %q: %v", stmt, err)
 		}
 	}
+	chschema.CreateTables(ctx, t, conn, "work_unit_investments")
 
 	const orgID = "chaos-4977-step7-recurrence-guard"
 	const fromTS = "2026-01-01 00:00:00"
@@ -322,6 +299,7 @@ func TestExplainInvestmentMix_SeededRealClickHouse_QuotesBindingSucceeds(t *test
 			t.Fatalf("exec DDL %q: %v", stmt, err)
 		}
 	}
+	chschema.CreateTables(ctx, t, conn, "work_unit_investments")
 
 	const orgID = "chaos-4977-step7-quotes-recurrence-guard"
 	const fromTS = "2026-01-01 00:00:00"

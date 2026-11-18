@@ -65,7 +65,8 @@ func seedExhaustedPostSyncCandidate(
 	t *testing.T, ctx context.Context, h *finalizeBackstopHarness, now time.Time, runID, outboxID string, generation int64,
 ) {
 	t.Helper()
-	seedRun(t, ctx, h.admin, runID, "dispatching", now.Add(-2*time.Hour))
+	// post_sync is armed only once its run is terminal, and the repair re-arms it only then (CHAOS-14115).
+	seedRun(t, ctx, h.admin, runID, "success", now.Add(-2*time.Hour))
 	args := syncdispatchruntime.PostSyncArgs{TransportArgs: syncdispatchruntime.TransportArgs{
 		Version: 1, OrgID: "00000000-0000-4000-8000-000000000001", RunID: runID,
 		DispatchOutbox: outboxID, DeliveryAttempt: 1, RouteGeneration: generation,

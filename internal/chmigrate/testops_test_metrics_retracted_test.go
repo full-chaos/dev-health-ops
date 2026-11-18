@@ -8,10 +8,10 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/chmigrate"
 )
 
-const testopsRetractedVersion = "154_testops_test_metrics_retracted.sql"
+const testopsRetractedVersion = "156_testops_test_metrics_retracted.sql"
 
-// 154 adds exactly the retraction marker of testops_test_metrics_daily, defaulted to 0, and nothing else.
-func TestMigration154IsTheOneDefaultedMarkerColumn(t *testing.T) {
+// 156 adds exactly the retraction marker of testops_test_metrics_daily, defaulted to 0, and nothing else.
+func TestMigration156IsTheOneDefaultedMarkerColumn(t *testing.T) {
 	chain, err := chmigrate.LoadChain()
 	if err != nil {
 		t.Fatal(err)

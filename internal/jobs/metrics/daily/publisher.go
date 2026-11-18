@@ -212,6 +212,13 @@ func (publisher *PostgresPublisher) PublishRedrivePartitionTx(
 	return nil
 }
 
+// FinalizeHandoffKey is the outbox dedupe key of a run's ordinary finalize
+// handoff. A run with no partition whose key exists in the outbox, or in its
+// abandonment record, has already been handed to its finalize as empty.
+func FinalizeHandoffKey(runID string) string {
+	return "metrics.daily_finalize:" + runID
+}
+
 func (publisher *PostgresPublisher) PublishFinalizeTx(
 	ctx context.Context,
 	tx pgx.Tx,
@@ -220,7 +227,7 @@ func (publisher *PostgresPublisher) PublishFinalizeTx(
 	if publisher == nil || publisher.producer == nil {
 		return ErrUnavailable
 	}
-	key := "metrics.daily_finalize:" + run.ID
+	key := FinalizeHandoffKey(run.ID)
 	envelope := jobcontract.Envelope{
 		ContractVersion: jobcontract.ContractVersionV1,
 		OrganizationID:  &run.OrganizationID,

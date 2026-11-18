@@ -271,6 +271,7 @@ func fetchCoverage(ctx context.Context, client QueryClient, startDay, endDay tim
             toFloat64(count(*)) AS total
         FROM work_item_cycle_times FINAL
         WHERE day >= {start_day:Date} AND day < {end_day:Date}
+          AND completed_at IS NOT NULL
           AND org_id = {org_id:String}
         %s
     `, settingsMaxExecutionTime()), []dhclickhouse.Binding{
@@ -288,6 +289,7 @@ func fetchCoverage(ctx context.Context, client QueryClient, startDay, endDay tim
             toFloat64(count(*)) AS total
         FROM work_item_cycle_times FINAL
         WHERE day >= {start_day:Date} AND day < {end_day:Date}
+          AND completed_at IS NOT NULL
           AND org_id = {org_id:String}
         %s
     `, settingsMaxExecutionTime()), []dhclickhouse.Binding{
@@ -427,6 +429,7 @@ func fetchPersonWorkMix(ctx context.Context, client QueryClient, identities []st
             toFloat64(count()) AS value
         FROM work_item_cycle_times FINAL
         WHERE day >= {start_day:Date} AND day < {end_day:Date}
+          AND completed_at IS NOT NULL
           AND assignee IN {identities:Array(String)}
           AND org_id = {org_id:String}
         GROUP BY key, name

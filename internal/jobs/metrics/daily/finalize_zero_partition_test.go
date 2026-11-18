@@ -3,7 +3,6 @@ package daily
 import (
 	"context"
 	"errors"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -48,7 +47,6 @@ func zeroPartitionFamilies() map[string]*stubFinalizeFamily {
 	for _, name := range pythonRecognisedFinalizeFamilies {
 		families[name] = &stubFinalizeFamily{}
 	}
-	families[BenchmarkingFamilyName].err = errors.New("benchmarking must not run on a run with no partition")
 	return families
 }
 
@@ -63,7 +61,7 @@ func registerZeroPartitionFamilies(t *testing.T, handler *FinalizeHandler, famil
 	}
 }
 
-func TestFinalizeOfAWholeOrganizationRunWithNoPartitionSkipsOnlyTheRefusingFamilies(t *testing.T) {
+func TestFinalizeOfAWholeOrganizationRunWithNoPartitionRunsEveryFamily(t *testing.T) {
 	store := finalizeStoreWithClaim()
 	store.noPartitions = true
 	store.run.FullOrg = true
@@ -77,12 +75,8 @@ func TestFinalizeOfAWholeOrganizationRunWithNoPartitionSkipsOnlyTheRefusingFamil
 		t.Fatalf("finalize = %v, want nil", err)
 	}
 	for name, family := range families {
-		want := 1
-		if slices.Contains(finalizeFamiliesRefusingZeroPartitions, name) {
-			want = 0
-		}
-		if family.calls != want {
-			t.Errorf("%s ran %d time(s), want %d", name, family.calls, want)
+		if family.calls != 1 {
+			t.Errorf("%s ran %d time(s), want 1", name, family.calls)
 		}
 	}
 	if store.finalizeCompletions != 1 {
@@ -98,7 +92,6 @@ func TestFinalizeOfARunWithPartitionsRunsEveryFamily(t *testing.T) {
 		t.Fatal(err)
 	}
 	families := zeroPartitionFamilies()
-	families[BenchmarkingFamilyName].err = nil
 	registerZeroPartitionFamilies(t, handler, families)
 	if err := handler.Work(context.Background(), finalizeExecution()); err != nil {
 		t.Fatalf("finalize = %v, want nil", err)
@@ -134,9 +127,10 @@ func TestFinalizeOfARunOfSomeRepositoriesWithNoPartitionIsRefusedPermanently(t *
 	}
 }
 
-// The skip of a family on a run with no partition leaves that family's rows of
-// the day live, so it must be countable: the production collector steps the
-// family's skipped_empty_run outcome once per empty run.
+// A family that keeps its rows on a run with no partition (it returns an
+// emptyRunSkip) leaves its rows of the day live, so it must be countable: the
+// production collector steps the family's skipped_empty_run outcome once per
+// empty run, and the next family still runs.
 func TestFinalizeOfAnEmptyRunCountsTheSkippedFamily(t *testing.T) {
 	store := finalizeStoreWithClaim()
 	store.noPartitions = true
@@ -145,7 +139,9 @@ func TestFinalizeOfAnEmptyRunCountsTheSkippedFamily(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	registerZeroPartitionFamilies(t, handler, zeroPartitionFamilies())
+	families := zeroPartitionFamilies()
+	families[BenchmarkingFamilyName].err = &emptyRunSkip{reason: benchmarkingEmptyRunRepositoryPresent}
+	registerZeroPartitionFamilies(t, handler, families)
 	collector, err := jobruntime.NewMetricsCollector(jobruntime.MetricDimensions{})
 	if err != nil {
 		t.Fatal(err)
@@ -163,6 +159,11 @@ func TestFinalizeOfAnEmptyRunCountsTheSkippedFamily(t *testing.T) {
 		if strings.HasPrefix(line, `worker_daily_metrics_native_family_outcome_total{family="`+BenchmarkingFamilyName+`",outcome="refused"}`) &&
 			!strings.HasSuffix(line, " 0") {
 			t.Errorf("the skip is counted as a refusal: %s", line)
+		}
+	}
+	for name, family := range families {
+		if family.calls != 1 {
+			t.Errorf("%s ran %d time(s), want 1 (a skip does not stop the next family)", name, family.calls)
 		}
 	}
 }

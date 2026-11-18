@@ -794,9 +794,11 @@ const (
 	// an operator needs to reason about duplication.
 	DailyMetricsNativeFamilyOutcomePartialWrite DailyMetricsNativeFamilyOutcome = "partial_write"
 	// DailyMetricsNativeFamilyOutcomeSkippedEmptyRun is a finalize family that
-	// refuses a run with no partition and was not run on one (a run of the whole
-	// organization whose discovery found no repository). Its rows of the day are
-	// left as they are, so the skip is counted rather than only logged.
+	// kept its rows of the day on a run with no partition (a run of the whole
+	// organization whose discovery found no repository), for the reason in its
+	// log line: benchmarking finds a repository back at the finalize. Its rows
+	// of the day are left as they are, so the skip is counted rather than only
+	// logged.
 	DailyMetricsNativeFamilyOutcomeSkippedEmptyRun DailyMetricsNativeFamilyOutcome = "skipped_empty_run"
 )
 

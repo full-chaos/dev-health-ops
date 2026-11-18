@@ -118,3 +118,36 @@ func TestANativeDonorSurvivesASameSyncBlocksEdge(t *testing.T) {
 		})
 	}
 }
+
+// TestTheReverseClosureKeepsTheInheritableEdgeOnATie: when #11 is affected,
+// the reverse closure adds the pull request whose native relates_to edge to
+// #11 ties a "Blocks #11" edge. A pull request whose blocks edge is newer
+// than its relates_to edge is left out.
+func TestTheReverseClosureKeepsTheInheritableEdgeOnATie(t *testing.T) {
+	ctx := context.Background()
+	conn := workItemAttributionMigratedClickHouse(t, ctx)
+	orgID := "org-dependency-tie-closure-" + uuid.NewString()
+	at := time.Now().UTC().Add(-72 * time.Hour)
+	for _, row := range []struct {
+		source, relationship, raw string
+		syncedAt                  time.Time
+	}{
+		{"github-pr:acme/web#7", "relates_to", "github_closing_reference", at},
+		{"github-pr:acme/web#7", "blocks", "blocks #11", at},
+		{"github-pr:acme/web#8", "relates_to", "github_closing_reference", at},
+		{"github-pr:acme/web#8", "blocks", "blocks #11", at.Add(time.Hour)},
+	} {
+		if err := conn.Exec(ctx, `INSERT INTO work_item_dependencies (source_work_item_id, target_work_item_id, relationship_type, relationship_type_raw, last_synced, org_id, relationship_semantics_version)
+		VALUES (?, 'gh:acme/api#11', ?, ?, ?, ?, 'canonical-blocks.v2')`, row.source, row.relationship, row.raw, row.syncedAt, orgID); err != nil {
+			t.Fatalf("seed edge %s %s: %v", row.source, row.relationship, err)
+		}
+	}
+	executor := &WorkItemAttributionExecutor{conn: conn}
+	sources, err := executor.loadInheritableDependencySourcesTargeting(ctx, orgID, map[string]struct{}{"gh:acme/api#11": {}})
+	if err != nil {
+		t.Fatalf("reverse closure: %v", err)
+	}
+	if fmt.Sprint(sources) != "[github-pr:acme/web#7]" {
+		t.Errorf("reverse closure sources %v, want [github-pr:acme/web#7]", sources)
+	}
+}

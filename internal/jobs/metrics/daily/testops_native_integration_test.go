@@ -796,6 +796,8 @@ func samePipelineMetric(a, b testops.PipelineMetric) bool {
 	return a.RepoID == b.RepoID && a.OrgID == b.OrgID &&
 		a.PipelinesCount == b.PipelinesCount && a.SuccessCount == b.SuccessCount &&
 		a.FailureCount == b.FailureCount && a.CancelledCount == b.CancelledCount &&
+		a.SkippedCount == b.SkippedCount && a.UnfinishedCount == b.UnfinishedCount &&
+		a.OtherCount == b.OtherCount && a.UnfinishedStaleCount == b.UnfinishedStaleCount &&
 		sameFloat(a.SuccessRate, b.SuccessRate) && sameFloat(a.FailureRate, b.FailureRate) &&
 		sameFloat(a.CancelRate, b.CancelRate) && sameFloat(a.RerunRate, b.RerunRate) &&
 		sameFloatPtr(a.MedianDurationSeconds, b.MedianDurationSeconds) &&

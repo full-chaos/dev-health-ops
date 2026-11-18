@@ -80,6 +80,19 @@ func (conn *scopeViewConn) Query(_ context.Context, query string, args ...any) (
 			}
 		}
 		return &orgWinnerRows{rows: out}, nil
+	case query == workItemCopiesReadSQL:
+		// The current-copy read: every stored row passes the day, so each item's current copy is a row the day read.
+		wanted := map[string]bool{}
+		for _, id := range args[1].([]string) {
+			wanted[id] = true
+		}
+		var out [][]any
+		for _, row := range conn.rows {
+			if wanted[row.id] {
+				out = append(out, []any{row.repo, row.lastSynced, "github", row.id, "todo", (*time.Time)(nil), "", row.projectID, "", ""})
+			}
+		}
+		return &orgWinnerRows{rows: out}, nil
 	case strings.Contains(query, "FROM work_items FINAL") && strings.Contains(query, "WITH ? AS scopes"):
 		filtered := strings.Contains(query, "has(scopes")
 		values := map[string]bool{}

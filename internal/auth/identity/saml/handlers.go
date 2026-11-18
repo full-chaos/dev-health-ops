@@ -173,11 +173,14 @@ func decodeACS(w http.ResponseWriter, r *http.Request) (acsInput, bool) {
 	switch {
 	case mediaType == "application/x-www-form-urlencoded":
 		r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
-		if err := r.ParseForm(); err != nil {
+		// ParseForm also parses the URL query and returns its error; the binding is the body alone.
+		form := r.Clone(r.Context())
+		form.URL.RawQuery = ""
+		if err := form.ParseForm(); err != nil {
 			writeDetail(w, http.StatusUnprocessableEntity, "Request body must be a form")
 			return acsInput{}, false
 		}
-		responses, relay := r.PostForm["SAMLResponse"], r.PostForm["RelayState"]
+		responses, relay := form.PostForm["SAMLResponse"], form.PostForm["RelayState"]
 		if len(responses) != 1 || len(relay) > 1 {
 			writeDetail(w, http.StatusUnprocessableEntity, "SAMLResponse is required")
 			return acsInput{}, false

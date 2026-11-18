@@ -231,19 +231,18 @@ func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args 
 	// step) -- Go-runtime plumbing with no Python equivalent to port, since
 	// Python never had competing route generations to fence against in the
 	// same process.
-	current, err := currentTransportReference(ctx, tx, args, outboxKindDispatchSyncRun)
+	reference, err := readTransportReference(ctx, tx, args, outboxKindDispatchSyncRun)
 	if err != nil {
 		return err
 	}
-	if !current {
+	if !reference.current {
 		// A wake (a hold-back, a unit end) that re-arms the run's outbox row while this delivery waits moves the row
 		// to 'pending': the relay's next delivery runs the pass, so this one is a no-op, but never a silent one.
-		reason, routeGeneration := deliveryNotCurrentReason(ctx, tx, args, outboxKindDispatchSyncRun)
 		service.logger.Info(ctx, synclog.MsgDispatchSyncRunDeliveryNotCurrent,
 			synclog.Run(synclog.ParseID(args.SyncRunID())),
-			synclog.Text(synclog.KeyReason, synclog.ParseLabel(reason)),
+			synclog.Text(synclog.KeyReason, synclog.ParseLabel(reference.reason)),
 			synclog.Count(synclog.KeyDeliveryRouteGeneration, args.RouteGeneration()),
-			synclog.Count(synclog.KeyCurrentRouteGeneration, routeGeneration))
+			synclog.Count(synclog.KeyCurrentRouteGeneration, reference.routeGeneration))
 		return nil
 	}
 

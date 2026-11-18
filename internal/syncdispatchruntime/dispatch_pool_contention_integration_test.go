@@ -180,13 +180,15 @@ func dispatchOutboxStatus(t *testing.T, ctx context.Context, pool *pgxpool.Pool,
 }
 
 // redeliver is the relay delivering a re-armed ('pending') dispatch_sync_run row again: the same row (one per run and
-// kind) goes back to 'dispatched' on the current route, and that delivery's pass runs.
+// kind) takes its next attempt and goes back to 'dispatched' on the current route, and that delivery's pass runs.
 func redeliver(t *testing.T, ctx context.Context, pool *pgxpool.Pool, service *NativeDispatchSyncRunService, arg DispatchSyncRunArgs) error {
 	t.Helper()
-	if _, err := pool.Exec(ctx, `
+	if err := pool.QueryRow(ctx, `
 UPDATE sync_dispatch_outbox
-SET status = 'dispatched', dispatched_transport = 'river', dispatched_route_generation = $2, dispatched_at = now()
-WHERE id = $1::uuid AND status = 'pending'`, arg.OutboxID(), arg.RouteGeneration()); err != nil {
+SET status = 'dispatched', dispatched_transport = 'river', dispatched_route_generation = $2, dispatched_at = now(),
+    attempts = attempts + 1
+WHERE id = $1::uuid AND status = 'pending'
+RETURNING attempts`, arg.OutboxID(), arg.RouteGeneration()).Scan(&arg.DeliveryAttempt); err != nil {
 		t.Fatal(err)
 	}
 	return service.Dispatch(ctx, arg)

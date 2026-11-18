@@ -155,9 +155,9 @@ func loggedProvider(provider string) string {
 }
 
 func (h handlers) internal(w http.ResponseWriter, r *http.Request, what string, err error) {
-	h.logger.ErrorContext(r.Context(), "api route failed", slog.String("path", r.Pattern),
+	h.logger.Log(r.Context(), routeFailureLevel(err), "api route failed", slog.String("path", r.Pattern),
 		slog.String("step", what), slog.String("error", err.Error()))
-	policy.WriteInternal(w)
+	writeInternalUnlessRefused(w, err)
 }
 
 // orgIDOf is get_admin_org_id's own resolution: the CURRENT authenticated
@@ -796,12 +796,10 @@ func (h handlers) createOrUpdateIdentity(w http.ResponseWriter, r *http.Request)
 	if hasEmail {
 		write.Email = &email
 	}
-	stored, err := h.store.CreateOrUpdateIdentity(ctx, orgID, write)
-	if err != nil {
-		h.internal(w, r, "create or update identity", err)
-		return
-	}
-	newFacets := storedFacets(stored)
+	// The rosters are reconciled BEFORE the identity is written: a roster
+	// edit refused with 409 leaves the identity as it was, so the same
+	// request sent again finds the same old facets and teams to remove.
+	newFacets := storedFacets(resolveIdentity(orgID, old, write, time.Now().UTC()))
 	staleFacets := map[string]bool{}
 	for facet := range oldFacets {
 		if !newFacets[facet] {
@@ -839,5 +837,10 @@ func (h handlers) createOrUpdateIdentity(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
+	stored, err := h.store.CreateOrUpdateIdentity(ctx, orgID, write)
+	if err != nil {
+		h.internal(w, r, "create or update identity", err)
+		return
+	}
 	policy.WriteModel(w, http.StatusOK, identityWrittenJSON(stored), nil)
 }

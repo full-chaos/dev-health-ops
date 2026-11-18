@@ -123,6 +123,49 @@ func TestCoverageAnswers(t *testing.T) {
 	}
 }
 
+// TestCoverageDatasetClosedWithReasonRanges pins closed_with_reason_ranges
+// (CHAOS-13988) through the dataset model: a stored list passes with its
+// since, before, source_ids and reasons; a dataset stored before the field
+// (no key) still validates and answers without the key; a refused shape is
+// the logged 500.
+func TestCoverageDatasetClosedWithReasonRanges(t *testing.T) {
+	datasets := `"datasets": [
+{"dataset_key": "tests", "status": "healthy", "covered_through": "2026-01-02T00:00:00+00:00",
+ "requested_ranges": [], "covered_ranges": [], "gaps": [], "stale_ranges": [], "failed_ranges": [],
+ "closed_with_reason_ranges": [{"since": "2026-01-01T00:00:00+00:00", "before": "2026-01-02T00:00:00+00:00",
+  "source_ids": ["s1"], "reasons": ["artifact_expired", "malformed"], "extra": 1}]},
+{"dataset_key": "git", "status": "healthy", "covered_through": null,
+ "requested_ranges": [], "covered_ranges": [], "gaps": [], "stale_ranges": [], "failed_ranges": []}]`
+	payload := strings.Replace(coverageMinimal, `"datasets": []`, datasets, 1)
+	reader := &coverageReader{faultReader: &faultReader{}, row: &coverageProjection{Payload: payload}}
+	_, status, body, _ := serveCoverage(t, reader)
+	want := `"datasets":[{"dataset_key":"tests","status":"healthy","covered_through":"2026-01-02T00:00:00Z",` +
+		`"requested_ranges":[],"covered_ranges":[],"gaps":[],"stale_ranges":[],"failed_ranges":[],` +
+		`"closed_with_reason_ranges":[{"since":"2026-01-01T00:00:00Z","before":"2026-01-02T00:00:00Z",` +
+		`"source_ids":["s1"],"reasons":["artifact_expired","malformed"]}]},` +
+		`{"dataset_key":"git","status":"healthy","covered_through":null,` +
+		`"requested_ranges":[],"covered_ranges":[],"gaps":[],"stale_ranges":[],"failed_ranges":[]}]`
+	if status != http.StatusOK || !strings.Contains(body, want) {
+		t.Errorf("closed ranges: %d\n got  %s\n want %s", status, body, want)
+	}
+	for _, tc := range []struct{ name, from, to string }{
+		{"null list", `"closed_with_reason_ranges": [{`, `"closed_with_reason_ranges": null, "x": [{`},
+		{"reason not a string", `"reasons": ["artifact_expired", "malformed"]`, `"reasons": [1]`},
+		{"missing since", `"since": "2026-01-01T00:00:00+00:00", "before": "2026-01-02T00:00:00+00:00",
+  "source_ids"`, `"before": "2026-01-02T00:00:00+00:00", "source_ids"`},
+	} {
+		bad := strings.Replace(payload, tc.from, tc.to, 1)
+		if bad == payload {
+			t.Fatalf("%s: replacement did not apply", tc.name)
+		}
+		reader := &coverageReader{faultReader: &faultReader{}, row: &coverageProjection{Payload: bad}}
+		logs, status, _, _ := serveCoverage(t, reader)
+		if status != http.StatusInternalServerError || !strings.Contains(logs.String(), "step=coverage_model") {
+			t.Errorf("%s: %d %s", tc.name, status, logs)
+		}
+	}
+}
+
 // TestABackfillBoundaryReadsISOFormsBeforeTimestamps pins the before-
 // validator's order: datetime.fromisoformat first, pydantic's lax parse
 // only for what it refuses. A basic ISO date is 2026-01-01, never Unix

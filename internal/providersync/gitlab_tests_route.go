@@ -481,6 +481,22 @@ func selectGitLabTestsArtifactJobs(rawItems []json.RawMessage, maxArtifacts int)
 	return selected, nil
 }
 
+// gitLabTestsArtifactJobsOverCap reports whether more jobs qualify for selectGitLabTestsArtifactJobs than maxArtifacts: the
+// selection keeps the first maxArtifacts and reads none of the others.
+func gitLabTestsArtifactJobsOverCap(rawItems []json.RawMessage, maxArtifacts int) (bool, error) {
+	qualifying := 0
+	for _, raw := range rawItems {
+		job, err := decodeGitLabTestsJob(raw)
+		if err != nil {
+			return false, err
+		}
+		if gitLabTestsJobHasArtifacts(job) && !gitLabTestsJobRetried(job) {
+			qualifying++
+		}
+	}
+	return qualifying > maxArtifacts, nil
+}
+
 func decodeGitLabTestsPipeline(raw json.RawMessage) (gitLabTestsPipelinePayload, error) {
 	var result gitLabTestsPipelinePayload
 	decoder := json.NewDecoder(bytes.NewReader(raw))
@@ -892,49 +908,56 @@ func gitLabTestsJSONTruthy(value any) bool {
 }
 
 func downloadGitLabTestsArtifact(ctx context.Context, client *providerfoundation.HTTPClient, root, jobID string) ([]byte, error) {
+	body, _, err := downloadGitLabTestsArtifactFound(ctx, client, root, jobID)
+	return body, err
+}
+
+// downloadGitLabTestsArtifactFound is downloadGitLabTestsArtifact that also says whether the artifact was there: found is false
+// when the provider answered 404 or 410 (deleted or expired since the listing).
+func downloadGitLabTestsArtifactFound(ctx context.Context, client *providerfoundation.HTTPClient, root, jobID string) ([]byte, bool, error) {
 	response, err := client.DoRoute(ctx, http.MethodGet, gitlabJobArtifactsRoute, root+"/jobs/"+url.PathEscape(jobID)+"/artifacts", nil)
 	if err != nil {
 		var providerErr *providerfoundation.ProviderError
 		if errors.As(err, &providerErr) && (providerErr.StatusCode == http.StatusNotFound || providerErr.StatusCode == http.StatusGone) {
-			return nil, nil
+			return nil, false, nil
 		}
-		return nil, err
+		return nil, false, err
 	}
 	if response.StatusCode >= 300 && response.StatusCode < 400 {
 		location := response.Header.Get("Location")
 		_ = response.Body.Close()
 		if location == "" {
-			return nil, providerfoundation.ResponseFailure(response, "redirect", ErrGitLabTestsIncomplete)
+			return nil, false, providerfoundation.ResponseFailure(response, "redirect", ErrGitLabTestsIncomplete)
 		}
 		response, err = client.DoUnauthenticatedRoute(ctx, http.MethodGet, gitlabJobArtifactsRoute, location)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 	}
 	defer response.Body.Close()
 	if response.StatusCode == http.StatusNotFound || response.StatusCode == http.StatusGone {
-		return nil, nil
+		return nil, false, nil
 	}
 	if response.StatusCode >= 400 {
 		message, readErr := providerfoundation.ReadResponseBodyTransport(response, 1<<20-1)
 		if readErr != nil {
-			return nil, readErr
+			return nil, false, readErr
 		}
 		if classified := providerfoundation.ClassifyHTTPForRequest("gitlab", responsePath(response), response.StatusCode, response.Header, string(message)); classified != nil {
 			classified.Route = gitlabJobArtifactsRoute
-			return nil, classified
+			return nil, false, classified
 		}
-		return nil, &providerfoundation.ProviderError{Class: providerfoundation.ErrorPermanent, StatusCode: response.StatusCode, Route: gitlabJobArtifactsRoute}
+		return nil, false, &providerfoundation.ProviderError{Class: providerfoundation.ErrorPermanent, StatusCode: response.StatusCode, Route: gitlabJobArtifactsRoute}
 	}
 	body, over, err := providerfoundation.ReadResponseBodyWithin(response, gitLabTestsMaxDownload, logging.TransportFailure)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if over > 0 {
-		return nil, fmt.Errorf("%w: %w", errGitLabTestsArtifactTooLarge,
+		return nil, false, fmt.Errorf("%w: %w", errGitLabTestsArtifactTooLarge,
 			providerfoundation.ResponseFailure(response, providerfoundation.ReasonBodyTooLarge, ErrGitLabTestsIncomplete))
 	}
-	return body, nil
+	return body, true, nil
 }
 
 func gitLabTestsOptionalError(ctx context.Context, err error) error {

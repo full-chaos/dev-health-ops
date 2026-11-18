@@ -21,7 +21,7 @@ func teamV1Values(t *testing.T, system string, payload map[string]any, scope *Ex
 		},
 		SourceID: uuid.MustParse("22222222-2222-4333-8444-555555555555"),
 	}, externalSinkRecord{Kind: "team.v1", ExternalID: "t", Payload: payload},
-		time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC), scope, nil)
+		time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC), scope)
 }
 
 func TestTeamV1WritesTheSystemPrefixedTeamID(t *testing.T) {
@@ -108,7 +108,7 @@ func TestIdentityV1PrefixesItsTeamIDs(t *testing.T) {
 	}, externalSinkRecord{Kind: "identity.v1", ExternalID: "u", Payload: map[string]any{
 		"canonicalId": "ada@example.test", "updatedAt": "2026-10-08T11:00:00Z",
 		"teamIds": []any{"ENG", "linear:OPS"},
-	}}, time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC), &ExternalRecomputeScope{}, nil)
+	}}, time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC), &ExternalRecomputeScope{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +123,7 @@ func TestIdentityV1KeepsAKnownKeyAndLeavesBlanksAlone(t *testing.T) {
 	}, externalSinkRecord{Kind: "identity.v1", ExternalID: "u", Payload: map[string]any{
 		"canonicalId": "ada@example.test", "updatedAt": "2026-10-08T11:00:00Z",
 		"teamIds": []any{"gh:x", "squad", "  ", ""},
-	}}, time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC), &ExternalRecomputeScope{}, nil)
+	}}, time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC), &ExternalRecomputeScope{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,7 +181,7 @@ func TestIdentityV1RefusesAPrefixOnlyTeamID(t *testing.T) {
 		}, externalSinkRecord{Kind: "identity.v1", ExternalID: "u", Payload: map[string]any{
 			"canonicalId": "ada@example.test", "updatedAt": "2026-10-08T11:00:00Z",
 			"teamIds": []any{"squad", id},
-		}}, time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC), &ExternalRecomputeScope{}, nil)
+		}}, time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC), &ExternalRecomputeScope{})
 		if !errors.Is(err, teamid.ErrBareTeamID) {
 			t.Errorf("teamIds %q: err = %v, want the id refused", id, err)
 		}

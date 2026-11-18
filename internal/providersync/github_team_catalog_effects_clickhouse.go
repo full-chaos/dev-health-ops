@@ -48,13 +48,10 @@ func (sink GitHubTeamCatalogClickHouseEffects) validMembership(orgID string, row
 // WriteTeams upserts every team row (ReplacingMergeTree on id dedupes by
 // updated_at, matching every other teams writer in this codebase).
 //
-// CHAOS-4321/CHAOS-4446: this producer never populates ManualMembers
-// itself, so every row here is first stamped with its CURRENTLY persisted
-// manual_members value (PreserveExistingTeamManualMembers, the shared
-// helper every native team-catalog collector uses) before the INSERT --
-// omitting the column instead would send ClickHouse's [] DEFAULT and, once
-// this row's updated_at wins under FINAL, permanently erase an admin's
-// override.
+// CHAOS-4321/CHAOS-4446: this producer never edits ManualMembers, so every
+// row keeps the stored admin roster (teamprovider.RosterKept): Insert reads
+// it from teams FINAL inside the insert statement, never from an earlier read
+// that an admin edit could land after.
 func (sink GitHubTeamCatalogClickHouseEffects) WriteTeams(ctx context.Context, orgID string, rows []githubTeamRow) error {
 	if sink.Conn == nil || strings.TrimSpace(orgID) == "" {
 		return ErrInvalidConfiguration
@@ -65,10 +62,6 @@ func (sink GitHubTeamCatalogClickHouseEffects) WriteTeams(ctx context.Context, o
 	teamIDs := make([]string, 0, len(rows))
 	for _, row := range rows {
 		teamIDs = append(teamIDs, row.ID)
-	}
-	existingManual, err := PreserveExistingTeamManualMembers(ctx, sink.Conn, orgID, teamIDs)
-	if err != nil {
-		return ErrEffectRecoveryUnsafe
 	}
 	createdAt, err := teamcreated.Carry(ctx, sink.Conn, orgID, teamIDs)
 	if err != nil {
@@ -89,18 +82,15 @@ func (sink GitHubTeamCatalogClickHouseEffects) WriteTeams(ctx context.Context, o
 		if err != nil {
 			return ErrInvalidConfiguration
 		}
-		manualMembers := existingManual[row.ID]
-		if manualMembers == nil {
-			manualMembers = []string{}
-		}
 		tally.Add(stored, row.ID, row.ProviderTeamID)
 		writes = append(writes, teamprovider.Write{
 			Values: []any{
-				row.ID, teamUUID, row.Name, row.Description, manualMembers, row.ProjectKeys,
+				row.ID, teamUUID, row.Name, row.Description, []string{}, row.ProjectKeys,
 				row.RepoPatterns, row.IsActive, row.UpdatedAt, row.OrgID, row.Provider,
 				row.NativeTeamKey, row.ParentTeamID, teamcreated.For(createdAt, row.ID, row.UpdatedAt),
 			},
 			ProviderTeamID: row.ProviderTeamID, ProviderName: row.ProviderName, Gone: teamprovider.GoneCleared,
+			Roster: teamprovider.RosterKept,
 		})
 	}
 	if err := teamprovider.Insert(ctx, sink.Conn, orgID, githubTeamCatalogTeamsColumns, writes); err != nil {

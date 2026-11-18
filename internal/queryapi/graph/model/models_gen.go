@@ -1818,7 +1818,9 @@ type ThroughputForecast struct {
 	// How backlogSize was found: MEASURED, STALE, NO_ROWS or SUPPLIED (see ThroughputBacklogState).
 	BacklogState ThroughputBacklogState `json:"backlogState"`
 	// The oldest of the newest work-item days that backlogSize is read from. Null when backlogState is NO_ROWS or SUPPLIED.
-	BacklogAsOfDay      *graphqldate.Date           `json:"backlogAsOfDay,omitempty"`
+	BacklogAsOfDay *graphqldate.Date `json:"backlogAsOfDay,omitempty"`
+	// Why the backlog read is not a healthy measurement: the backlogState value (STALE or NO_ROWS) when the read is stale or found no work-item row; null when backlogState is MEASURED or SUPPLIED.
+	DegradedReason      *string                     `json:"degradedReason,omitempty"`
 	HistoryWeeks        int                         `json:"historyWeeks"`
 	P50Weeks            *int                        `json:"p50Weeks,omitempty"`
 	P75Weeks            *int                        `json:"p75Weeks,omitempty"`

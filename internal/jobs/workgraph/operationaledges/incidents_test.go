@@ -290,3 +290,12 @@ func TestReadServiceRepositoryMappingsLogsRepoIDOnFailure(t *testing.T) {
 		t.Fatalf("expected the log record to carry the requested repo_id=%s, got: %s", repoID, logged)
 	}
 }
+
+func TestMappingProvenanceLegacyHeuristicStillReads(t *testing.T) {
+	if got := mappingProvenance("bounded_service_repository_heuristic"); got != edges.ProvenanceHeuristic {
+		t.Fatalf("legacy heuristic row provenance=%q", got)
+	}
+	if got := mappingProvenance("admin_configuration"); got != edges.ProvenanceNative {
+		t.Fatalf("admin provenance=%q", got)
+	}
+}

@@ -30,7 +30,7 @@ func (h *holdUntilRivalBlocked) PublishDispatchTx(ctx context.Context, tx pgx.Tx
 			var waiting int
 			if err := h.pool.QueryRow(ctx, `
 SELECT count(*) FROM pg_stat_activity
-WHERE wait_event_type = 'Lock' AND query LIKE '%INSERT INTO public.daily_metrics_runs%'`).Scan(&waiting); err != nil {
+WHERE datname = current_database() AND wait_event_type = 'Lock' AND query LIKE '%INSERT INTO public.daily_metrics_runs%'`).Scan(&waiting); err != nil {
 				h.err = err
 				return
 			}

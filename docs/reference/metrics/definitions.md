@@ -327,7 +327,7 @@ stores them. They are never a mean of the stored per-repository-day values.
 | `deploy_time_p50_hours` | median | a deployment: finished at minus started at, in hours |
 | `pr_size_p50_loc` | median | a merged pull request: additions plus deletions |
 | `pr_size_p90_loc` | 90th percentile | a merged pull request, as above |
-| `mttr_hours` | mean | a bug work item: completed at minus started at, in hours |
+| `mttr_hours` | mean | a bug work item: completed at minus started at, in hours; the operating review tile serves this pooled mean, or the pooled incident median when one exists, with the incident mappings read at request time even for a past week |
 | `mttr_p50_hours` | median | an incident: resolved at minus started at, in hours |
 | `mttr_p90_hours` | 90th percentile | an incident, as above |
 

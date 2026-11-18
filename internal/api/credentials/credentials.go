@@ -178,7 +178,7 @@ func timeOrNil(at *time.Time) pyjson.Value {
 // list is GET /credentials: a truthy `provider` lists that provider's rows
 // (active or not), otherwise every row, only active ones when active_only.
 func (h handlers) list(w http.ResponseWriter, r *http.Request) {
-	query := r.URL.Query()
+	query := httpapi.Query(r)
 	var problems pybody.Errors
 	activeOnly, _ := problems.QueryBool("active_only", pybody.LastQuery(query, "active_only"), false)
 	if len(problems) > 0 {

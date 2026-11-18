@@ -700,7 +700,7 @@ func lastOrEmpty(query url.Values, name string) string {
 
 // discoverMembers is GET /teams/{team_id}/discover-members.
 func (h handlers) discoverMembers(w http.ResponseWriter, r *http.Request) {
-	query := r.URL.Query()
+	query := pybody.Query(r)
 	providerValue := pybody.LastQuery(query, "provider")
 	if providerValue == nil {
 		policy.WriteJSON(w, http.StatusUnprocessableEntity, discoverMissingProviderDetail(), nil)

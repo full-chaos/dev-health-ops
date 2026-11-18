@@ -164,6 +164,9 @@ func connection(field, next string, edges ...map[string]any) map[string]any {
 	if next != "" {
 		pageInfo["endCursor"] = next
 	}
+	if edges == nil {
+		edges = []map[string]any{} // the gateway answers an empty list as [], never null (recorded team_users_not_found)
+	}
 	return map[string]any{"data": map[string]any{field: map[string]any{"version": "1", "pageInfo": pageInfo, "edges": edges}}}
 }
 

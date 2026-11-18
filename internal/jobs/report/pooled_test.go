@@ -19,6 +19,12 @@ var pooledMetricExpressions = map[string]struct{ source, expression string }{
 	"avg_duration_minutes":       {cicdRunsSource, cicdDurationMean},
 	"p90_duration_minutes":       {cicdRunsSource, cicdDurationP90},
 	"avg_queue_minutes":          {cicdRunsSource, cicdQueueMean},
+	"deploy_time_p50_hours":      {deploymentsSource, deliveryHoursMedian},
+	"pr_size_p50_loc":            {pullRequestSizesSource, deliveryLOCMedian},
+	"pr_size_p90_loc":            {pullRequestSizesSource, deliveryLOCP90},
+	"mttr_hours":                 {bugRepairsSource, deliveryHoursMean},
+	"mttr_p50_hours":             {incidentRepairsSource, deliveryHoursMedian},
+	"mttr_p90_hours":             {incidentRepairsSource, deliveryHoursP90},
 }
 
 func pooledDefinition(t *testing.T, metric string) metricDefinition {
@@ -34,7 +40,7 @@ func pooledDefinition(t *testing.T, metric string) metricDefinition {
 	return definition
 }
 
-// The TestOps and CI/CD duration and queue metrics are charted over the raw samples: the statement reads the shared source and
+// The pooled metrics are charted over the raw samples: the statement reads the shared source and
 // expression, never avg() of the stored column, and the registry keeps its daily table.
 func TestPooledMetricsReadTheSharedSourceAndExpression(t *testing.T) {
 	t.Parallel()

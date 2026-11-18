@@ -20,15 +20,15 @@ const (
 
 // deploymentsSource holds the samples of the deploy writer (internal/jobs/metrics/daily/deploy_native_clickhouse.go and
 // numerical.ComputeDeployMetrics): a deployment counts on the UTC day of deployed_at, a cancelled one is no deployment,
-// and its sample is finished_at - started_at in hours when both are set and it is not negative. The newest synced version
-// of a deployment (FINAL) is the deployment, counted once.
+// and its sample is finished_at - started_at in hours when both are set and it is not negative. The stored rows are read
+// without FINAL, as the writer reads them, so a version not yet merged away is a sample of both.
 var deploymentsSource = `(
     SELECT
         org_id,
         repo_id,
         toDate(deployed_at) AS day,
         if(finished_at >= started_at, dateDiff('millisecond', started_at, finished_at) / 3600000, NULL) AS ` + deliveryHoursSample + `
-    FROM deployments FINAL
+    FROM deployments
     WHERE org_id = {org_id:String}
       AND toDate(deployed_at) >= {start_date:Date} AND toDate(deployed_at) < {end_date:Date}
       AND ` + deploymentstatus.CanceledExclusionSQL("status") + `
@@ -38,15 +38,15 @@ var deploymentsSource = `(
 ) AS pooled_deployments`
 
 // pullRequestSizesSource holds the size samples of the repo_user_commit writer (repouser.Compute): a pull request counts
-// on the UTC day it merged, its size is its additions plus its deletions, and a size of 0 is no sample. The newest synced
-// version of a pull request (FINAL) is the pull request, counted once.
+// on the UTC day it merged, its size is its additions plus its deletions, and a size of 0 is no sample. The stored rows
+// are read without FINAL, as the writer reads them.
 const pullRequestSizesSource = `(
     SELECT
         org_id,
         repo_id,
         toDate(merged_at) AS day,
         toFloat64(ifNull(additions, 0) + ifNull(deletions, 0)) AS ` + deliveryLOCSample + `
-    FROM git_pull_requests FINAL
+    FROM git_pull_requests
     WHERE org_id = {org_id:String}
       AND toDate(merged_at) >= {start_date:Date} AND toDate(merged_at) < {end_date:Date}
       AND ifNull(additions, 0) + ifNull(deletions, 0) > 0
@@ -76,7 +76,8 @@ const bugRepairsSource = `(
 // incidentRepairsSource holds the samples of the incident writer (daily.LoadIncidentsStarted and
 // computeIncidentMetricsDaily): the current row of each incident, not deleted, joined to the repositories its service maps
 // to (the current active mappings valid at the request), counts on the UTC day it started when it was resolved on that
-// same day, once per repository; its sample is resolved_at - started_at in hours when not negative.
+// same day, once per repository; its sample is resolved_at - started_at in hours, to the microsecond the timestamps hold,
+// when not negative.
 var incidentRepairsSource = `(
     SELECT org_id, repo_id, day, ` + deliveryHoursSample + `
     FROM (
@@ -86,7 +87,7 @@ var incidentRepairsSource = `(
             incident.id AS incident_id,
             toDate(incident.started_at) AS day,
             if(incident.resolved_at >= incident.started_at,
-                dateDiff('millisecond', incident.started_at, incident.resolved_at) / 3600000, NULL) AS ` + deliveryHoursSample + `
+                dateDiff('microsecond', incident.started_at, incident.resolved_at) / 3600000000, NULL) AS ` + deliveryHoursSample + `
         FROM ` + operationalordering.RevisionCurrentRows("operational_incidents", "org_id = {org_id:String}", []string{
 	"is_deleted = 0",
 	"toDate(started_at) >= {start_date:Date}",

@@ -271,3 +271,49 @@ func TestRegistryDeliveryRowsWithNoSample(t *testing.T) {
 		}
 	}
 }
+
+// A one-repository-day bucket is the stored value even when a deployment or a pull request has two stored versions in
+// unmerged parts (a resync): the chart reads the rows the writer reads. An incident repair time keeps the microseconds the
+// writer subtracts.
+func TestRegistryDeliveryDayBucketIsTheStoredValue(t *testing.T) {
+	e := startPooledEnv(t)
+	org := e.newOrg()
+	const repo = "13887000-0000-4000-8000-0000000000c1"
+	for _, table := range []string{"deployments", "git_pull_requests"} {
+		e.exec("SYSTEM STOP MERGES " + table)
+	}
+	t.Cleanup(func() {
+		for _, table := range []string{"deployments", "git_pull_requests"} {
+			_ = e.conn.Exec(e.ctx, "SYSTEM START MERGES "+table)
+		}
+	})
+	e.insertRepo(org, repo)
+	e.mapIncidentService(org, "svc-c", repo)
+	at := func(hour int) time.Time { return deliveryDay1.Add(time.Duration(hour) * time.Hour) }
+	// One INSERT per version: the two versions of d-1 and of pull request 1 stay two parts.
+	e.insertDeployment(org, repo, "d-1", "success", at(1), 2)
+	e.insertDeployment(org, repo, "d-1", "success", at(1), 12)
+	e.insertDeployment(org, repo, "d-2", "success", at(2), 4)
+	e.insertPullRequest(org, repo, 1, at(1), 10, 10)
+	e.insertPullRequest(org, repo, 1, at(1), 100, 20)
+	e.insertPullRequest(org, repo, 2, at(2), 30, 10)
+	e.exec(`INSERT INTO operational_incidents
+    (org_id, provider, provider_instance_id, source_entity_type, external_id,
+     source_version_at, source_revision, source_conflict_key, ingest_revision, ordering_contract,
+     id, observed_at, last_synced, normalized_status, service_id, title, started_at, resolved_at, is_deleted)
+VALUES (?, 'pagerduty', 'pd', 'incident', 'i-us', now64(6), 1, '', 1, 2, 'i-us', now64(6), now64(6), 'resolved', 'svc-c', 'incident',
+        toDateTime64('2026-02-02 01:00:00.000000', 6, 'UTC'), toDateTime64('2026-02-02 02:00:00.000500', 6, 'UTC'), 0)`, org)
+	e.computeDelivery(org, []string{repo}, deliveryDay1.Format(time.DateOnly))
+	for _, metric := range deliveryPooledMetrics {
+		if metric.name == "mttr_hours" {
+			continue
+		}
+		stored := e.storedDelivery(org, repo, metric.table, metric.name)
+		if len(stored) != 1 {
+			t.Fatalf("%s: the writer stored %v, want one day", metric.name, stored)
+		}
+		got := e.deliveryChart(org, metric.name, "", "scorecard", "2026-02-01", "2026-02-05")
+		t.Logf("CELL %s day bucket: chart=%.17g stored=%.17g", metric.name, got["total"], stored["2026-02-02"])
+		mustEqual(t, metric.name+" day bucket", got, "total", stored["2026-02-02"])
+	}
+}

@@ -311,8 +311,10 @@ stores them. They are never a mean of the stored per-repository-day values.
 
 - A percentile is linear between the closest ranks, as the daily job computes it.
 - A deployment counts on the UTC day it deployed. A cancelled deployment is not a deployment. A deployment without a
-  start or a finish time, or with a negative duration, is no sample. A deployment counts once, with its latest sync.
-- A pull request counts on the UTC day it merged, once, with its latest sync. A size of 0 is no sample.
+  start or a finish time, or with a negative duration, is no sample.
+- A pull request counts on the UTC day it merged. A size of 0 is no sample.
+- Deployments and pull requests are read as the daily job reads them: a stored version that is not merged away yet is
+  a sample too.
 - A bug work item counts on the UTC day it completed, when it has a start time and a completion time. A negative
   repair time is a sample, as the daily job's mean includes it.
 - An incident counts on the UTC day it started, only when it is also resolved on that day, once for each repository

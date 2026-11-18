@@ -278,12 +278,24 @@ func (store *PostgresStore) StartRunTx(
 	request StartRunRequest,
 	publisher RunPublisher,
 ) (Run, error) {
+	run, _, err := store.startRunTx(ctx, tx, request, publisher)
+	return run, err
+}
+
+// startRunTx is StartRunTx that also reports whether this call inserted the
+// run row (false: the run existed already, a replay).
+func (store *PostgresStore) startRunTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	request StartRunRequest,
+	publisher RunPublisher,
+) (Run, bool, error) {
 	if !store.valid() || tx == nil || publisher == nil {
-		return Run{}, ErrUnavailable
+		return Run{}, false, ErrUnavailable
 	}
 	request, partitions, err := normalizeStartRunRequest(request)
 	if err != nil {
-		return Run{}, err
+		return Run{}, false, err
 	}
 	run := newRun(request.OrganizationID, request.TargetDay, request.Generation)
 	now := store.now().UTC()
@@ -299,7 +311,7 @@ VALUES ($1::uuid, $2::uuid, $3::date, $4, 'pending', 'pending', clock_timestamp(
 ON CONFLICT DO NOTHING`,
 		run.ID, run.OrganizationID, request.TargetDay.Format("2006-01-02"), run.Generation, now, len(partitions) == 0)
 	if err != nil {
-		return Run{}, ErrUnavailable
+		return Run{}, false, ErrUnavailable
 	}
 	if command.RowsAffected() == 0 {
 		if len(partitions) == 0 {
@@ -310,23 +322,23 @@ ON CONFLICT DO NOTHING`,
 			// and that snapshot is authoritative -- never this retry's own
 			// (always empty) recomputation of it.
 			if err := verifyDeferredDiscoveryRun(ctx, tx, run, request.TargetDay); err != nil {
-				return Run{}, err
+				return Run{}, false, err
 			}
 		} else if err := verifyStartedRun(ctx, tx, run, request.TargetDay, partitions); err != nil {
-			return Run{}, err
+			return Run{}, false, err
 		}
 		var status string
 		if err := tx.QueryRow(ctx, `
 SELECT status FROM public.daily_metrics_runs WHERE id = $1::uuid`, run.ID).Scan(&status); err != nil {
-			return Run{}, ErrUnavailable
+			return Run{}, false, ErrUnavailable
 		}
 		if status == "succeeded" {
 			completionKey, keyErr := joboutbox.CompletionKey("daily_metrics_run", run.ID)
 			if keyErr != nil {
-				return Run{}, ErrInvalidState
+				return Run{}, false, ErrInvalidState
 			}
 			if err := joboutbox.MarkCompletionTx(ctx, tx, completionKey); err != nil {
-				return Run{}, ErrUnavailable
+				return Run{}, false, ErrUnavailable
 			}
 		}
 	} else {
@@ -334,21 +346,21 @@ SELECT status FROM public.daily_metrics_runs WHERE id = $1::uuid`, run.ID).Scan(
 			partitionID := dailyPartitionID(run.ID, ordinal)
 			raw, marshalErr := json.Marshal(repositoryIDs)
 			if marshalErr != nil {
-				return Run{}, ErrInvalidState
+				return Run{}, false, ErrInvalidState
 			}
 			if _, err := tx.Exec(ctx, `
 INSERT INTO public.daily_metrics_partitions
     (id, run_id, ordinal, repo_ids, status, attempt_count, created_at, updated_at)
 VALUES ($1::uuid, $2::uuid, $3, $4::jsonb, 'pending', 0, $5, $5)`,
 				partitionID, run.ID, ordinal, raw, now); err != nil {
-				return Run{}, ErrUnavailable
+				return Run{}, false, ErrUnavailable
 			}
 		}
 	}
 	if err := publisher.PublishDispatchTx(ctx, tx, run, request.PrerequisiteCompletionKey); err != nil {
-		return Run{}, err
+		return Run{}, false, err
 	}
-	return run, nil
+	return run, command.RowsAffected() == 1, nil
 }
 
 // MaxRepositoriesPerRun is the largest explicit repository list StartRunTx

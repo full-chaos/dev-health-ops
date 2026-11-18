@@ -114,6 +114,64 @@ func TestAnAdminWriteRacedByAnotherAdminWriteLosesItsOtherColumns(t *testing.T) 
 	}
 }
 
+// insertCountConn counts the teams inserts of the writer it wraps.
+type insertCountConn struct {
+	driver.Conn
+	inserts int
+}
+
+func (c *insertCountConn) Exec(ctx context.Context, query string, args ...any) error {
+	if rosterRaceAtInsert.MatchString(query) {
+		c.inserts++
+	}
+	return c.Conn.Exec(ctx, query, args...)
+}
+
+// CHAOS-14094: an admin write raced by a write that commits before its insert
+// statement starts moves its version past that write inside the statement, so
+// it holds with its first write (no second round).
+func TestAnAdminWriteRacedBeforeItsInsertHoldsWithOneWrite(t *testing.T) {
+	conn, ctx := startMigratedTeamsStore(t)
+	plain := Store{Conn: conn}
+	addB := func(t *testing.T, teamID string) func() {
+		return func() {
+			if _, err := plain.AddMembers(ctx, rosterRaceOrg, teamID, []string{"b"}); err != nil {
+				t.Error(err)
+			}
+		}
+	}
+	t.Run("rename", func(t *testing.T) {
+		const teamID = "gh:one-write-rename"
+		seedRosterTeam(ctx, t, conn, teamID, "github")
+		race := &rosterRaceConn{Conn: conn, at: rosterRaceAtInsert, other: addB(t, teamID)}
+		count := &insertCountConn{Conn: race}
+		if _, err := (Store{Conn: count}).CreateOrUpdateTeam(ctx, rosterRaceOrg, TeamWrite{TeamID: teamID, Name: "Platform (renamed)"}); err != nil {
+			t.Fatal(err)
+		}
+		checkFired(t, race)
+		if count.inserts != 1 {
+			t.Errorf("CELL one_write/rename: %d writes, want 1", count.inserts)
+		} else {
+			t.Logf("CELL one_write/rename: 1 write")
+		}
+	})
+	t.Run("delete", func(t *testing.T) {
+		const teamID = "gh:one-write-delete"
+		seedRosterTeam(ctx, t, conn, teamID, "github")
+		race := &rosterRaceConn{Conn: conn, at: rosterRaceAtInsert, other: addB(t, teamID)}
+		count := &insertCountConn{Conn: race}
+		if deleted, err := (Store{Conn: count}).DeleteTeam(ctx, rosterRaceOrg, teamID); err != nil || !deleted {
+			t.Fatalf("delete: %v %v", deleted, err)
+		}
+		checkFired(t, race)
+		if count.inserts != 1 {
+			t.Errorf("CELL one_write/delete: %d writes, want 1", count.inserts)
+		} else {
+			t.Logf("CELL one_write/delete: 1 write")
+		}
+	})
+}
+
 // CHAOS-14094: a delete states only that the team is deleted. A rename
 // committed in its window is the name its deleted row keeps (a reader of a
 // stored id finds that name).

@@ -484,7 +484,9 @@ RETURNING outbox.id::text, candidates.recovery_code
 // args by the (sync_run_id, kind) unique key, and must still be linked to that
 // exact job at the current route generation -- the same linkage proof the
 // statement above uses. The sync_run_id cast is guarded by a CASE for the
-// reason the transport_job_id cast above is.
+// reason the transport_job_id cast above is. The run's status is read per
+// candidate by its primary key (a correlated subquery), so sync_runs, which
+// keeps every run ever made, is never hashed or scanned.
 //
 // Only the exhausted proof re-arms a post_sync row: a discard with attempts
 // left is a worker's permanent verdict, and a rescue or rescue-only cancel of a
@@ -502,8 +504,6 @@ WITH candidates AS (
 			END
 		AND outbox.kind = job.kind
 		AND outbox.transport_job_id = job.id::text
-	JOIN public.sync_runs AS run
-		ON run.id = outbox.sync_run_id
 	JOIN public.sync_dispatch_transport_routes AS route
 		ON route.kind = outbox.kind
 	WHERE job.kind = 'post_sync'
@@ -517,7 +517,9 @@ WITH candidates AS (
 		AND outbox.created_at >= $3
 		AND route.transport = 'river'
 		AND route.paused = FALSE
-		AND run.status IN ('success', 'partial_failed', 'failed')
+		AND (
+			SELECT run.status FROM public.sync_runs AS run WHERE run.id = outbox.sync_run_id
+		) IN ('success', 'partial_failed', 'failed')
 	ORDER BY outbox.dispatched_at, outbox.id
 	FOR UPDATE OF outbox, job SKIP LOCKED
 	LIMIT $2::int
@@ -555,8 +557,6 @@ JOIN public.sync_dispatch_outbox AS outbox
 		END
 	AND outbox.kind = job.kind
 	AND outbox.transport_job_id = job.id::text
-JOIN public.sync_runs AS run
-	ON run.id = outbox.sync_run_id
 JOIN public.sync_dispatch_transport_routes AS route
 	ON route.kind = outbox.kind
 WHERE job.kind = 'post_sync'
@@ -570,5 +570,7 @@ WHERE job.kind = 'post_sync'
 	AND outbox.created_at < $1
 	AND route.transport = 'river'
 	AND route.paused = FALSE
-	AND run.status IN ('success', 'partial_failed', 'failed')
+	AND (
+		SELECT run.status FROM public.sync_runs AS run WHERE run.id = outbox.sync_run_id
+	) IN ('success', 'partial_failed', 'failed')
 `

@@ -463,8 +463,9 @@ func TestPostSyncRedriveUnderTheRealRouteFence(t *testing.T) {
 }
 
 // TestPostSyncRedriveIsDrivenFromRiverAgainstRetainedHistory: nothing closes a post_sync row, so the outbox holds one
-// 'dispatched' post_sync row per terminal run ever made. Both post_sync statements must start from River's exhausted
-// post_sync jobs and reach the outbox row by its (sync_run_id, kind) unique key, never by scanning that history.
+// 'dispatched' post_sync row per terminal run ever made, and River keeps its finished jobs for its retention. Both
+// post_sync statements must read River's exhausted post_sync jobs by index and reach the outbox row by its
+// (sync_run_id, kind) unique key, never by scanning either history.
 func TestPostSyncRedriveIsDrivenFromRiverAgainstRetainedHistory(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
@@ -485,6 +486,28 @@ func TestPostSyncRedriveIsDrivenFromRiverAgainstRetainedHistory(t *testing.T) {
 		SELECT gen_random_uuid(), 'org-history', run.id, 'post_sync', 'dispatched', $1, 1, $1, 'river', 7, '1', $1, $1
 		FROM public.sync_runs AS run WHERE run.id <> $2`, now.Add(-2*time.Hour), exhaustionRunID); err != nil {
 		t.Fatal(err)
+	}
+	// River's retained history: completed jobs of every coordinator kind (post_sync included), discarded jobs of the
+	// other kinds, and discarded post_sync jobs no outbox row is linked to any more -- the volume River keeps for its
+	// completed and discarded retention.
+	for _, statement := range []string{
+		`INSERT INTO river.river_job (args, kind, max_attempts, attempt, state, finalized_at, queue)
+		 SELECT jsonb_build_object('sync_run_id', (lpad(to_hex(g % 50000 + 1), 8, '0') || '-0000-4000-8000-' || lpad(to_hex(g % 50000 + 1), 12, '0'))),
+			(ARRAY['post_sync', 'dispatch_sync_run', 'finalize_sync_run', 'reference_discovery'])[g % 4 + 1],
+			5, 1, 'completed'::river.river_job_state, $1, 'sync'
+		 FROM generate_series(1, 100000) AS g`,
+		`INSERT INTO river.river_job (args, kind, max_attempts, attempt, state, finalized_at, errors, queue)
+		 SELECT '{}'::jsonb, (ARRAY['dispatch_sync_run', 'finalize_sync_run', 'reference_discovery'])[g % 3 + 1],
+			5, 5, 'discarded'::river.river_job_state, $1, ARRAY[jsonb_build_object('error', 'decoy', 'attempt', 5)], 'sync'
+		 FROM generate_series(1, 20000) AS g`,
+		`INSERT INTO river.river_job (args, kind, max_attempts, attempt, state, finalized_at, errors, queue)
+		 SELECT jsonb_build_object('sync_run_id', (lpad(to_hex(g), 8, '0') || '-0000-4000-8000-' || lpad(to_hex(g), 12, '0'))),
+			'post_sync', 5, 5, 'discarded'::river.river_job_state, $1, ARRAY[jsonb_build_object('error', 'decoy', 'attempt', 5)], 'sync'
+		 FROM generate_series(1, 500) AS g`,
+	} {
+		if _, err := rig.admin.Exec(ctx, statement, now.Add(-3*time.Hour)); err != nil {
+			t.Fatal(err)
+		}
 	}
 	for _, statement := range []string{"ANALYZE public.sync_runs", "ANALYZE public.sync_dispatch_outbox", "ANALYZE river.river_job"} {
 		if _, err := rig.admin.Exec(ctx, statement); err != nil {
@@ -521,6 +544,13 @@ func TestPostSyncRedriveIsDrivenFromRiverAgainstRetainedHistory(t *testing.T) {
 		if !strings.Contains(plan, "uq_sync_dispatch_outbox_run_kind") || strings.Contains(plan, "Seq Scan on sync_dispatch_outbox") {
 			t.Fatalf("%s plan does not reach the outbox by its unique key:\n%s", name, plan)
 		}
+		if strings.Contains(plan, "Seq Scan on sync_runs") || !strings.Contains(plan, "sync_runs_pkey") {
+			t.Fatalf("%s plan does not read the run by its primary key:\n%s", name, plan)
+		}
+		if strings.Contains(plan, "Seq Scan on river_job") {
+			t.Fatalf("%s plan scans river_job instead of reading its exhausted post_sync jobs by index:\n%s", name, plan)
+		}
+		t.Logf("%s plan:\n%s", name, plan)
 	}
 	if result := rig.step(t, ctx, now); result.PostSyncRearmed != 1 || result.PostSyncSkippedWindow != 0 {
 		t.Fatalf("repair over retained history = %#v, want the one exhausted delivery re-armed", result)

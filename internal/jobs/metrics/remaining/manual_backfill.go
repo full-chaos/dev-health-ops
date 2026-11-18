@@ -369,6 +369,15 @@ func (store *PostgresStore) startManualTriggerRun(
 		_ = tx.Rollback(rollbackCtx)
 	}()
 
+	// An exact-scope family (capacity, recommendations) first takes the day-independent scope lock the
+	// fixed schedule's FreshCoverage takes: the scheduled occurrence reads coverage and then inserts, and
+	// a run labelled with another day must not slip in between (CHAOS-9587).
+	if exact, _ := remainingCoverageScopeFilter(request.Family, request.Scopes[0]); exact {
+		if err := lockFreshScope(ctx, tx, request.OrganizationID, request.Family, request.Scopes[0]); err != nil {
+			return ManualBackfillOutcome{}, ErrUnavailable
+		}
+	}
+
 	// Serialize against a concurrent dispatch for the SAME (org, family,
 	// day). For "dora" this MUST be the exact same advisory-lock keyspace
 	// StartRunTx's own family=="dora" block uses (postgres.go) --

@@ -294,8 +294,11 @@ func (executor *TestopsCoverageExecutor) ComputeFamily(
 	for _, repoID := range scope.repoIDs {
 		repositories = append(repositories, []string{repoID.String()})
 	}
-	retired, err := supersedeStaleTeamKeys(ctx, executor.conn, teamkeytables.TestopsCoverageMetricsDaily, run.OrganizationID,
-		scope.day, newStaleKeyScope(repositories...), produced, scope.computedAt)
+	// The marker carries the instant of this run (scope.computedAt, taken before the reads), never a version raised above a stored
+	// row: a newer run that stored a measured row since is newer than this marker and stays the live row of its key.
+	snapshot := scope.computedAt.UTC().Truncate(time.Second)
+	retired, err := supersedeStaleTeamKeysAt(ctx, executor.conn, teamkeytables.TestopsCoverageMetricsDaily, run.OrganizationID,
+		scope.day, newStaleKeyScope(repositories...), produced, func(staleKey) time.Time { return snapshot })
 	if err != nil {
 		return written + retired, fmt.Errorf("retire stale testops_coverage_metrics_daily days: %w", err)
 	}

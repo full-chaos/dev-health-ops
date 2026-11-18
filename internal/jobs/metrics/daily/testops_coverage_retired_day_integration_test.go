@@ -132,4 +132,17 @@ FROM testops_coverage_metrics_daily WHERE org_id = ? AND repo_id = ? AND day = ?
 	if got := liveRows(); got != 1 {
 		t.Fatalf("after the record came back: %d live keys, want 1", got)
 	}
+
+	// An older run must not retire a newer run's row: a measured row stored with a computed_at after this run's instant stays live
+	// when a recompute that read no record writes its marker (the marker carries the run's own instant).
+	moveRuns(later, day.Add(95*time.Hour))
+	if err := conn.Exec(ctx, `INSERT INTO testops_coverage_metrics_daily (repo_id, day, line_coverage_pct, branch_coverage_pct,
+ uncovered_files_count, coverage_regression_count, org_id, computed_at) VALUES (?, ?, 55, 45, 0, 0, ?, ?)`,
+		repoID, day, orgID, time.Now().UTC().Add(time.Hour).Truncate(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	compute("fifth", repoID, other)
+	if got := liveRows(); got != 1 {
+		t.Fatalf("an older empty compute retired a newer run's row: %d live keys, want 1", got)
+	}
 }

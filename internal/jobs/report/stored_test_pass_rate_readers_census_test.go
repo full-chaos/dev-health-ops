@@ -37,7 +37,7 @@ var pinnedTableFiles = map[string]censusPin{
 		"reader rule applied: pass_rate is passedCaseRate, over passed_count and failed_count; only the pipeline rate pooling changed (rerun, success, failure)"},
 	"internal/jobs/metrics/daily/testops_native_clickhouse.go": {"969b20d1787f9a9f69c4df97b9255223d41bea383f457bdd4930ee81167fed79",
 		"writer: the daily writer of the stored rows"},
-	"internal/jobs/metrics/daily/testops_native_executor.go": {"eaa4520b1ccf37902bd836d765af6b9119d6c96add7bdb1a23dcfb41023b95cc",
+	"internal/jobs/metrics/daily/testops_native_executor.go": {"526904e15b1ca3cd865e85aa71f5614c098a26ef629cc11fe57697f3e6cc7b0e",
 		"not a reader: the coverage writer retires a day (a marker row); the file names the test table in comments only"},
 	"internal/jobs/metrics/testops/rules_sql.go": {"3d69f586d97b2d6a459a0c32f191b3041657671feabcd51e1cbe590bc7e10aea",
 		"reader rule applied: TestPassRateWindowSQL, over passed_count and failed_count"},

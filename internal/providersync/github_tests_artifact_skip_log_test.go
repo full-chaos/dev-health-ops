@@ -114,7 +114,7 @@ func TestGitHubTestsSkipSummaryLogsOverflowedCauses(t *testing.T) {
 // since it never exercises the wiring at all.
 //
 // This drives 10 genuinely unreadable artifacts (exceeding
-// githubTestsMaxSkippedArtifactRecords=6) alongside one healthy one (so the
+// githubTestsMaxSkippedArtifactRecords=5) alongside one healthy one (so the
 // totality-unreadable gate does not trip and short-circuit before the
 // summary log is ever reached) through the real chunked route via
 // walkGitHubTestsChunksResult, so the unit's own overflow tracking actually

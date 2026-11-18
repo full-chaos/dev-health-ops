@@ -49,7 +49,10 @@ type dailyRow struct {
 // release confidence and pipeline stability and the sums of the latest
 // quality-drag hours, outer-joined on the day. Stability is read only through
 // testops.StabilityLiveRowsSQL: a repo-day with no completed run has none.
-var dailyQuery = `SELECT
+// The quality-drag table is read FINAL: one whole row per repo-day, the one a
+// merge keeps (the last inserted of equal computed_at), so a NULL part of that
+// row stays NULL and a merge never changes the answer.
+const dailyQuery = `SELECT
     day AS day,
     release_confidence,
     quality_drag_hours,
@@ -83,21 +86,10 @@ FULL OUTER JOIN (
         sum(flake_investigation_hours) AS flake_investigation_hours,
         sum(queue_wait_hours) AS queue_wait_hours,
         sum(retry_overhead_hours) AS retry_overhead_hours
-    FROM (
-        SELECT
-            day,
-            repo_id,
-            ` + latestrow.ArgMaxKeepNullBy("drag_hours", "computed_at") + ` AS drag_hours,
-            ` + latestrow.ArgMaxKeepNullBy("failure_rework_hours", "computed_at") + ` AS failure_rework_hours,
-            ` + latestrow.ArgMaxKeepNullBy("flake_investigation_hours", "computed_at") + ` AS flake_investigation_hours,
-            ` + latestrow.ArgMaxKeepNullBy("queue_wait_hours", "computed_at") + ` AS queue_wait_hours,
-            ` + latestrow.ArgMaxKeepNullBy("retry_overhead_hours", "computed_at") + ` AS retry_overhead_hours
-        FROM testops_quality_drag
-        WHERE org_id = {org_id:String}
-          AND day >= {start:Date}
-          AND day <= {end:Date}
-        GROUP BY day, repo_id
-    )
+    FROM testops_quality_drag FINAL
+    WHERE org_id = {org_id:String}
+      AND day >= {start:Date}
+      AND day <= {end:Date}
     GROUP BY day
 ) AS drag_daily USING (day)
 FULL OUTER JOIN (

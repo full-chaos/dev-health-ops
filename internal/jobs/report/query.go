@@ -112,6 +112,7 @@ func decodeReportDefinition(
 			}
 		}
 		plan = defaultWirePlan(reportID, organizationID, parameters, now)
+		plan.ChartSpecs = defaultChartSpecs(plan)
 	}
 	if plan.PlanID == "" || plan.ReportType == "" {
 		return ReportDefinition{}, ErrContractMismatch

@@ -804,7 +804,7 @@ func (stack *markerStack) finishFullOrgRun(t *testing.T, orgID string, day time.
 	if !run.FullOrg {
 		t.Fatalf("a run created without a repository list must be full-org, got FullOrg=%v", run.FullOrg)
 	}
-	if _, err := stack.store.MaterializeScheduledFanout(ctx, *run, []RepositoryID{"00000000-0000-4000-8000-0000000a7601"}); err != nil {
+	if _, err := stack.store.MaterializeScheduledFanout(ctx, *run, []RepositoryID{"00000000-0000-4000-8000-0000000a7601"}, stack.publisher); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := stack.pool.Exec(ctx, `UPDATE daily_metrics_partitions SET status = 'succeeded' WHERE run_id = $1::uuid`, runID); err != nil {

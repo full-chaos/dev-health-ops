@@ -2,6 +2,7 @@ package providersync
 
 import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/linktier"
+	"github.com/full-chaos/dev-health-ops/internal/teamattribution"
 	"github.com/full-chaos/dev-health-ops/internal/teamid"
 	"sort"
 	"strconv"
@@ -448,6 +449,9 @@ type teamRepoOwnershipDerivation struct {
 	// requests whose text key was not used because they have a native link.
 	TextKeyCandidates        int
 	TextKeysSkippedForNative int
+	// DonorsRefused counts, by teamattribution.LinkedIssueDonorRefusal reason,
+	// the distinct (source, donor) edges whose donor is not an issue.
+	DonorsRefused map[string]int
 }
 
 // isTextKeyTarget reports whether a dependency target is a key parsed from
@@ -533,7 +537,8 @@ func deriveTeamRepoOwnership(
 		byID[item.WorkItemID] = item
 	}
 
-	donorTeamID := buildDonorTeamIDResolver(byID, dependencyEdges, projectToTeam, knownLinearTeamKeys)
+	donorsRefused := map[string]int{}
+	donorTeamID := buildDonorTeamIDResolver(byID, dependencyEdges, projectToTeam, knownLinearTeamKeys, donorsRefused)
 	// A key parsed from pull request text is a fallback only (chris,
 	// 2026-10-15): the native resolver walks every donor edge except text
 	// keys, and the full resolver is asked only when the native one finds no
@@ -545,7 +550,7 @@ func deriveTeamRepoOwnership(
 			nativeEdges = append(nativeEdges, edge)
 		}
 	}
-	nativeDonorTeamID := buildDonorTeamIDResolver(byID, nativeEdges, projectToTeam, knownLinearTeamKeys)
+	nativeDonorTeamID := buildDonorTeamIDResolver(byID, nativeEdges, projectToTeam, knownLinearTeamKeys, nil)
 	nativeLinkedPRs := map[[2]string]bool{}
 	for _, link := range issuePRLinks {
 		if link.Provenance == linktier.Native {
@@ -693,6 +698,9 @@ func deriveTeamRepoOwnership(
 		}
 		return a.TeamID < b.TeamID
 	})
+	if len(donorsRefused) > 0 {
+		result.DonorsRefused = donorsRefused
+	}
 	return result
 }
 
@@ -843,6 +851,7 @@ func buildDonorTeamIDResolver(
 	edges []TeamRepoOwnershipDependencyEdge,
 	projectToTeam map[teamRepoOwnershipProjectRef]string,
 	knownLinearTeamKeys map[string]string,
+	refused map[string]int,
 ) func(workItemID string) (string, string) {
 	keyIndex := buildIssueKeyIndex(byID)
 
@@ -876,6 +885,7 @@ func buildDonorTeamIDResolver(
 	// issue donating through its native_team_key) is still a valid candidate.
 	candidateTargets := map[string][]string{}
 	targetTeam := map[string]resolvedTeam{}
+	refusedEdges := map[pair]string{}
 	for _, edge := range latestEdge {
 		if !teamRepoOwnershipInheritableRelationshipTypes[edge.RelationshipType] {
 			continue
@@ -884,8 +894,14 @@ func buildDonorTeamIDResolver(
 		if target == "" {
 			continue
 		}
-		donor, ok := byID[target]
-		if !ok {
+		// The donor must be an issue (the linked_issue donor rule of the
+		// cascade), decided before the tie-break so a refused donor never
+		// shadows an issue donor.
+		donor, known := byID[target]
+		if reason := teamattribution.LinkedIssueDonorRefusal(teamattribution.GithubWorkItemDerivationSubject{
+			WorkItemID: target, Provider: donor.Provider, Type: donor.Type,
+		}, known); reason != "" {
+			refusedEdges[pair{edge.SourceWorkItemID, target}] = reason
 			continue
 		}
 		teamID, arm, resolves := resolveWorkItemTeamID(donor, projectToTeam, knownLinearTeamKeys)
@@ -894,6 +910,12 @@ func buildDonorTeamIDResolver(
 		}
 		targetTeam[target] = resolvedTeam{teamID: teamID, arm: arm}
 		candidateTargets[edge.SourceWorkItemID] = append(candidateTargets[edge.SourceWorkItemID], target)
+	}
+
+	if refused != nil {
+		for _, reason := range refusedEdges {
+			refused[reason]++
+		}
 	}
 
 	// Deterministic tie-break: the lexicographically smallest canonical

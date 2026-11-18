@@ -81,7 +81,7 @@ func TestDependencyDonorWalkPath(t *testing.T) {
 		// native project membership).
 		{WorkItemID: "ghpr:acme/repo-a#7", Type: "pr", RepoID: "repo-a", ProjectID: ""},
 		// The donor: a Linear issue with the project_id, no repo_id.
-		{WorkItemID: "linear:PLAT-9", RepoID: "", ProjectID: "proj-1"},
+		{WorkItemID: "linear:PLAT-9", Type: "issue", RepoID: "", ProjectID: "proj-1"},
 	}
 	edges := []TeamRepoOwnershipDependencyEdge{
 		{SourceWorkItemID: "ghpr:acme/repo-a#7", TargetWorkItemID: "linear:PLAT-9", RelationshipType: "relates_to"},
@@ -114,7 +114,7 @@ func TestNonResolvingOwnProjectIDFallsBackToDonorWalk(t *testing.T) {
 		// shape -- present, non-empty, but never resolves to any team.
 		{WorkItemID: "ghpr:acme/repo-a#7", Type: "pr", RepoID: "repo-a", ProjectID: "acme/repo-a"},
 		// The donor: a Linear issue with the REAL project_id.
-		{WorkItemID: "linear:PLAT-9", RepoID: "", ProjectID: "proj-1"},
+		{WorkItemID: "linear:PLAT-9", Type: "issue", RepoID: "", ProjectID: "proj-1"},
 	}
 	edges := []TeamRepoOwnershipDependencyEdge{
 		{SourceWorkItemID: "ghpr:acme/repo-a#7", TargetWorkItemID: "linear:PLAT-9", RelationshipType: "relates_to"},
@@ -186,7 +186,7 @@ func TestExtkeyDependencyTargetResolvesCrossProvider(t *testing.T) {
 	}
 	workItems := []TeamRepoOwnershipWorkItem{
 		{WorkItemID: "ghpr:acme/repo-a#7", Type: "pr", RepoID: "repo-a", ProjectID: ""},
-		{WorkItemID: "linear:PLAT-9", Provider: "linear", RepoID: "", ProjectID: "proj-1"},
+		{WorkItemID: "linear:PLAT-9", Provider: "linear", Type: "issue", RepoID: "", ProjectID: "proj-1"},
 	}
 	edges := []TeamRepoOwnershipDependencyEdge{
 		{SourceWorkItemID: "ghpr:acme/repo-a#7", TargetWorkItemID: "extkey:PLAT-9", RelationshipType: "relates_to"},
@@ -233,8 +233,8 @@ func TestMultipleDonorCandidatesPickLexicographicallySmallestTarget(t *testing.T
 	}
 	workItems := []TeamRepoOwnershipWorkItem{
 		{WorkItemID: "ghpr:acme/repo-a#7", Type: "pr", RepoID: "repo-a", ProjectID: ""},
-		{WorkItemID: "linear:PLAT-9", RepoID: "", ProjectID: "proj-1"},
-		{WorkItemID: "linear:ZETA-1", RepoID: "", ProjectID: "proj-2"},
+		{WorkItemID: "linear:PLAT-9", Type: "issue", RepoID: "", ProjectID: "proj-1"},
+		{WorkItemID: "linear:ZETA-1", Type: "issue", RepoID: "", ProjectID: "proj-2"},
 	}
 	edges := []TeamRepoOwnershipDependencyEdge{
 		{SourceWorkItemID: "ghpr:acme/repo-a#7", TargetWorkItemID: "linear:ZETA-1", RelationshipType: "relates_to"},
@@ -267,8 +267,8 @@ func TestUnownedDonorNeverSuppressesAnOwnedDonor(t *testing.T) {
 	}
 	workItems := []TeamRepoOwnershipWorkItem{
 		{WorkItemID: "ghpr:acme/repo-a#7", Type: "pr", RepoID: "repo-a", ProjectID: ""},
-		{WorkItemID: "linear:AAA-1", RepoID: "", ProjectID: "proj-unowned"},
-		{WorkItemID: "linear:ZETA-1", RepoID: "", ProjectID: "proj-owned"},
+		{WorkItemID: "linear:AAA-1", Type: "issue", RepoID: "", ProjectID: "proj-unowned"},
+		{WorkItemID: "linear:ZETA-1", Type: "issue", RepoID: "", ProjectID: "proj-owned"},
 	}
 	edges := []TeamRepoOwnershipDependencyEdge{
 		{SourceWorkItemID: "ghpr:acme/repo-a#7", TargetWorkItemID: "linear:AAA-1", RelationshipType: "relates_to"},
@@ -597,6 +597,7 @@ func TestLinearTeamKeyDonorWalkMatchesTeamKeyShapedOwnership(t *testing.T) {
 		{
 			WorkItemID:    "linear:CHAOS-1",
 			Provider:      "linear",
+			Type:          "issue",
 			ProjectID:     "11111111-1111-4111-8111-111111111111",
 			NativeTeamKey: "CHAOS",
 		},
@@ -1255,7 +1256,7 @@ func TestRankedOwnerOwnRepoAndDonorCandidatesCountAsNative(t *testing.T) {
 	workItems := []TeamRepoOwnershipWorkItem{
 		{WorkItemID: "ghpr:acme/repo-own#1", Type: "pr", Provider: "github", RepoID: "repo-own", ProjectID: "gh-proj"},
 		{WorkItemID: "ghpr:acme/repo-donor#2", Type: "pr", Provider: "github", RepoID: "repo-donor"},
-		{WorkItemID: "jira:DON-1", Provider: "jira", ProjectID: "jira-proj"},
+		{WorkItemID: "jira:DON-1", Provider: "jira", Type: "issue", ProjectID: "jira-proj"},
 		{WorkItemID: "linear:TXT-1", Provider: "linear", ProjectID: "linear-proj"},
 	}
 	edges := []TeamRepoOwnershipDependencyEdge{
@@ -1385,5 +1386,32 @@ func TestTeamRepoOwnershipDerivationRunsOnItsClock(t *testing.T) {
 	before := time.Now()
 	if got := (TeamRepoOwnershipDerivationService{}).now(); got.Before(before) || got.After(time.Now()) || got.Location() != time.UTC {
 		t.Fatalf("now() without a clock = %v, want the wall clock in UTC", got)
+	}
+}
+
+// The run counts each refused (source, donor) edge once by reason: an extkey and a direct id naming the same
+// donor are one edge, and the native resolver does not count again.
+func TestDerivationCountsRefusedDonorsByReason(t *testing.T) {
+	projectLinks := []TeamRepoOwnershipProjectLink{{Provider: "linear", ProjectID: "proj-1", TeamID: "team-donor", IsPrimary: true}}
+	workItems := []TeamRepoOwnershipWorkItem{
+		{WorkItemID: "ghpr:acme/a#1", Provider: "github", Type: "pr", RepoID: "repo-a"},
+		{WorkItemID: "ghpr:acme/a#2", Provider: "github", Type: "pr", RepoID: "repo-a"},
+		{WorkItemID: "ghpr:acme/b#9", Provider: "github", Type: "pr", ProjectID: "proj-1"},
+		{WorkItemID: "linear:E-1", Provider: "linear", ProjectID: "proj-1"},
+	}
+	edges := []TeamRepoOwnershipDependencyEdge{
+		{SourceWorkItemID: "ghpr:acme/a#1", TargetWorkItemID: "ghpr:acme/b#9", RelationshipType: "relates_to"},
+		{SourceWorkItemID: "ghpr:acme/a#2", TargetWorkItemID: "ghpr:acme/b#9", RelationshipType: "relates_to"},
+		{SourceWorkItemID: "ghpr:acme/a#1", TargetWorkItemID: "linear:E-1", RelationshipType: "relates_to"},
+		{SourceWorkItemID: "ghpr:acme/a#1", TargetWorkItemID: "extkey:E-1", RelationshipType: "external_issue_key"},
+		{SourceWorkItemID: "ghpr:acme/a#1", TargetWorkItemID: "linear:GONE-1", RelationshipType: "relates_to"},
+	}
+	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, edges, nil, nil)
+	if len(got.Rows) != 0 {
+		t.Fatalf("rows %+v, want none: no donor is an issue", got.Rows)
+	}
+	want := map[string]int{"pr_kind": 2, "empty_type": 1, "unknown": 1}
+	if !reflect.DeepEqual(got.DonorsRefused, want) {
+		t.Fatalf("DonorsRefused %v, want %v", got.DonorsRefused, want)
 	}
 }

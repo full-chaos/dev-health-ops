@@ -39,7 +39,7 @@ var pooledCharts = map[string]pooledChart{
 }
 
 // The CI/CD pooled source holds the runs and samples of the cicd daily writer (internal/jobs/metrics/daily/cicd): a run
-// counts on the UTC day it starts only when it also finishes that day (the writer's double window), the newest synced
+// counts on the UTC day it finishes (the writer's rule), the newest synced
 // version of a run (FINAL) is the run, a deleted run is no run. A duration sample is finished_at - started_at in minutes
 // when not negative, a queue sample started_at - queued_at in minutes when not negative; the stored duration_seconds and
 // queue_seconds are not read, as the writer does not read them. Only the repository-days the writer computed are read.
@@ -55,15 +55,16 @@ const cicdRunsSource = `(
         org_id,
         repo_id,
         service_id,
-        toDate(started_at) AS day,
+        toDate(finished_at) AS day,
         if(finished_at >= started_at, dateDiff('millisecond', started_at, finished_at) / 60000, NULL) AS ` + cicdRunMinutes + `,
         if(queued_at IS NOT NULL AND started_at >= queued_at, dateDiff('millisecond', queued_at, started_at) / 60000, NULL) AS ` + cicdQueueMinutes + `
     FROM ci_pipeline_runs FINAL
     WHERE org_id = {org_id:String}
-      AND toDate(started_at) >= {start_date:Date} AND toDate(started_at) < {end_date:Date}
-      AND finished_at IS NOT NULL AND toDate(finished_at) = toDate(started_at)
+      AND finished_at IS NOT NULL
+      AND toDate(finished_at) >= {start_date:Date} AND toDate(finished_at) < {end_date:Date}
       AND ` + cicdCountedRunPredicate + `
-      AND (repo_id, toDate(started_at)) IN (
+      AND ` + testops.NotOpenRunSQL + `
+      AND (repo_id, toDate(finished_at)) IN (
           SELECT repo_id, day FROM cicd_metrics_daily
           WHERE org_id = {org_id:String} AND day >= {start_date:Date} AND day < {end_date:Date})
 ) AS cicd_pipeline_runs`

@@ -1,0 +1,390 @@
+{
+  "name": "pooler-transaction",
+  "schemaVersion": "v6",
+  "spec": {
+    "display": {
+      "description": "Per-user cl_active, cl_waiting, sv_active and maxwait of the transaction pgbouncer (CHAOS-11548). Series from the pgbouncer_exporter sidecar, collector job pgbouncer-transaction. The cl_waiting alert is PgbouncerTransactionClientsWaiting. Peak concurrent clients = max over the window of (cl_active + cl_waiting) per user.",
+      "name": "Dev Health - Transaction pooler clients (production)"
+    },
+    "duration": "7d",
+    "layouts": [
+      {
+        "kind": "Grid",
+        "spec": {
+          "items": [
+            {
+              "content": {
+                "$ref": "#/spec/panels/client-active"
+              },
+              "height": 7,
+              "width": 6,
+              "x": 0,
+              "y": 0
+            },
+            {
+              "content": {
+                "$ref": "#/spec/panels/client-waiting"
+              },
+              "height": 7,
+              "width": 6,
+              "x": 6,
+              "y": 0
+            },
+            {
+              "content": {
+                "$ref": "#/spec/panels/server-active"
+              },
+              "height": 7,
+              "width": 6,
+              "x": 0,
+              "y": 7
+            },
+            {
+              "content": {
+                "$ref": "#/spec/panels/client-maxwait"
+              },
+              "height": 7,
+              "width": 6,
+              "x": 6,
+              "y": 7
+            }
+          ]
+        }
+      }
+    ],
+    "panels": {
+      "client-active": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "description": "Client connections linked to a server connection, per pool user. Peak of this plus waiting is the concurrent client figure CHAOS-11548 asks for.",
+            "name": "Client active (cl_active) per user"
+          },
+          "links": null,
+          "plugin": {
+            "kind": "signoz/TimeSeriesPanel",
+            "spec": {
+              "axes": {
+                "isLogScale": false,
+                "softMax": null,
+                "softMin": null
+              },
+              "chartAppearance": {
+                "fillMode": "none",
+                "lineInterpolation": "spline",
+                "lineStyle": "solid",
+                "showPoints": false,
+                "spanGaps": false
+              },
+              "formatting": {
+                "decimalPrecision": "2",
+                "unit": ""
+              },
+              "legend": {
+                "customColors": null,
+                "mode": "list",
+                "position": "bottom"
+              },
+              "thresholds": null,
+              "visualization": {
+                "fillSpans": false,
+                "timePreference": "global_time"
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "time_series",
+              "spec": {
+                "name": "A",
+                "plugin": {
+                  "kind": "signoz/BuilderQuery",
+                  "spec": {
+                    "aggregations": [
+                      {
+                        "metricName": "pgbouncer_pools_client_active_connections",
+                        "spaceAggregation": "max",
+                        "timeAggregation": "max"
+                      }
+                    ],
+                    "disabled": false,
+                    "filter": {
+                      "expression": "deployment.environment = 'production'"
+                    },
+                    "groupBy": [
+                      {
+                        "fieldContext": "attribute",
+                        "fieldDataType": "string",
+                        "name": "user",
+                        "signal": "metrics"
+                      }
+                    ],
+                    "legend": "{{user}}",
+                    "limit": 100,
+                    "name": "A",
+                    "order": [],
+                    "signal": "metrics",
+                    "source": ""
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "client-maxwait": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "description": "Age in seconds of the oldest unserved client connection.",
+            "name": "Oldest waiting client (maxwait) per user"
+          },
+          "links": null,
+          "plugin": {
+            "kind": "signoz/TimeSeriesPanel",
+            "spec": {
+              "axes": {
+                "isLogScale": false,
+                "softMax": null,
+                "softMin": null
+              },
+              "chartAppearance": {
+                "fillMode": "none",
+                "lineInterpolation": "spline",
+                "lineStyle": "solid",
+                "showPoints": false,
+                "spanGaps": false
+              },
+              "formatting": {
+                "decimalPrecision": "2",
+                "unit": "s"
+              },
+              "legend": {
+                "customColors": null,
+                "mode": "list",
+                "position": "bottom"
+              },
+              "thresholds": null,
+              "visualization": {
+                "fillSpans": false,
+                "timePreference": "global_time"
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "time_series",
+              "spec": {
+                "name": "A",
+                "plugin": {
+                  "kind": "signoz/BuilderQuery",
+                  "spec": {
+                    "aggregations": [
+                      {
+                        "metricName": "pgbouncer_pools_client_maxwait_seconds",
+                        "spaceAggregation": "max",
+                        "timeAggregation": "max"
+                      }
+                    ],
+                    "disabled": false,
+                    "filter": {
+                      "expression": "deployment.environment = 'production'"
+                    },
+                    "groupBy": [
+                      {
+                        "fieldContext": "attribute",
+                        "fieldDataType": "string",
+                        "name": "user",
+                        "signal": "metrics"
+                      }
+                    ],
+                    "legend": "{{user}}",
+                    "limit": 100,
+                    "name": "A",
+                    "order": [],
+                    "signal": "metrics",
+                    "source": ""
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "client-waiting": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "description": "Clients waiting on a server connection. Above 0 means the pool size is too small; the alert PgbouncerTransactionClientsWaiting watches this series.",
+            "name": "Client waiting (cl_waiting) per user"
+          },
+          "links": null,
+          "plugin": {
+            "kind": "signoz/TimeSeriesPanel",
+            "spec": {
+              "axes": {
+                "isLogScale": false,
+                "softMax": null,
+                "softMin": null
+              },
+              "chartAppearance": {
+                "fillMode": "none",
+                "lineInterpolation": "spline",
+                "lineStyle": "solid",
+                "showPoints": false,
+                "spanGaps": false
+              },
+              "formatting": {
+                "decimalPrecision": "2",
+                "unit": ""
+              },
+              "legend": {
+                "customColors": null,
+                "mode": "list",
+                "position": "bottom"
+              },
+              "thresholds": null,
+              "visualization": {
+                "fillSpans": false,
+                "timePreference": "global_time"
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "time_series",
+              "spec": {
+                "name": "A",
+                "plugin": {
+                  "kind": "signoz/BuilderQuery",
+                  "spec": {
+                    "aggregations": [
+                      {
+                        "metricName": "pgbouncer_pools_client_waiting_connections",
+                        "spaceAggregation": "max",
+                        "timeAggregation": "max"
+                      }
+                    ],
+                    "disabled": false,
+                    "filter": {
+                      "expression": "deployment.environment = 'production'"
+                    },
+                    "groupBy": [
+                      {
+                        "fieldContext": "attribute",
+                        "fieldDataType": "string",
+                        "name": "user",
+                        "signal": "metrics"
+                      }
+                    ],
+                    "legend": "{{user}}",
+                    "limit": 100,
+                    "name": "A",
+                    "order": [],
+                    "signal": "metrics",
+                    "source": ""
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "server-active": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "description": "Server connections linked to a client, per pool user. Compare with the transaction pool size.",
+            "name": "Server active (sv_active) per user"
+          },
+          "links": null,
+          "plugin": {
+            "kind": "signoz/TimeSeriesPanel",
+            "spec": {
+              "axes": {
+                "isLogScale": false,
+                "softMax": null,
+                "softMin": null
+              },
+              "chartAppearance": {
+                "fillMode": "none",
+                "lineInterpolation": "spline",
+                "lineStyle": "solid",
+                "showPoints": false,
+                "spanGaps": false
+              },
+              "formatting": {
+                "decimalPrecision": "2",
+                "unit": ""
+              },
+              "legend": {
+                "customColors": null,
+                "mode": "list",
+                "position": "bottom"
+              },
+              "thresholds": null,
+              "visualization": {
+                "fillSpans": false,
+                "timePreference": "global_time"
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "time_series",
+              "spec": {
+                "name": "A",
+                "plugin": {
+                  "kind": "signoz/BuilderQuery",
+                  "spec": {
+                    "aggregations": [
+                      {
+                        "metricName": "pgbouncer_pools_server_active_connections",
+                        "spaceAggregation": "max",
+                        "timeAggregation": "max"
+                      }
+                    ],
+                    "disabled": false,
+                    "filter": {
+                      "expression": "deployment.environment = 'production'"
+                    },
+                    "groupBy": [
+                      {
+                        "fieldContext": "attribute",
+                        "fieldDataType": "string",
+                        "name": "user",
+                        "signal": "metrics"
+                      }
+                    ],
+                    "legend": "{{user}}",
+                    "limit": 100,
+                    "name": "A",
+                    "order": [],
+                    "signal": "metrics",
+                    "source": ""
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "refreshInterval": "",
+    "variables": []
+  },
+  "tags": [
+    {
+      "key": "environment",
+      "value": "production"
+    },
+    {
+      "key": "component",
+      "value": "pooler-transaction"
+    },
+    {
+      "key": "ticket",
+      "value": "CHAOS-11548"
+    }
+  ]
+}

@@ -294,6 +294,12 @@ flowchart TD
 > - a `linked_issue` (5) candidate of an **issue**. Another issue's team is not ownership. A
 >   pull or merge request (`type` `pr` on GitHub, `merge_request` on GitLab) keeps its linked issue's
 >   team: the tree edge pull request → issue → project reaches the owner of the issue's project.
+>   The donor of a `linked_issue` row must itself be an **issue**, for every provider, in the cascade and in
+>   the donor-change backstop: a donor whose `type` is `pr` (GitHub) or `merge_request` (GitLab), whose `type`
+>   is empty (a writer gap is never read as an issue), or that has no `work_items` row is refused. A pull
+>   request linked only to another pull request is not an edge of the tree and falls through to the next
+>   source. Each refusal is counted by reason (`pr_kind`, `empty_type`, `unknown`) in the
+>   `work_item_attribution.linked_issue_donor_refused` Info log, so a writer that leaves `type` empty shows up.
 > - a `manual_fallback` (7) candidate of a **`member`** rule (`manual_fallback:member=<id>`). The
 >   rule names a person (the item's assignee). A `repo`, `project` or `issue_key_prefix` rule still
 >   wins when no higher source matched.

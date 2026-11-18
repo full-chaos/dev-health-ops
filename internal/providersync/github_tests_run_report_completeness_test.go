@@ -155,9 +155,10 @@ func TestGitHubTestsRunReportCompletenessRows(t *testing.T) {
 			want:      []completenessRow{{RunID: "1", RunAttempt: 1, Provider: "github_actions", Reasons: []string{"artifact_expired"}, ReportsExpected: 2, ReportsAdmitted: 1}},
 		},
 		{
-			name:      "a report over the size cap is partial",
-			handler:   GitHubTestsRouteHandler{MaxArtifactBytes: 4096},
-			artifacts: []completenessArtifact{{name: "test-results-a", body: readable("a-")}, {name: "test-results-b", body: readable("b-"), listSize: 5000}},
+			name:    "a report over the size cap is partial",
+			handler: GitHubTestsRouteHandler{MaxArtifactBytes: 4096},
+			// The body itself is over the cap and the doer serves no byte ranges, so the over-cap range read cannot run.
+			artifacts: []completenessArtifact{{name: "test-results-a", body: readable("a-")}, {name: "test-results-b", body: append(readable("b-"), make([]byte, 5000)...)}},
 			want:      []completenessRow{{RunID: "1", RunAttempt: 1, Provider: "github_actions", Reasons: []string{"artifact_oversized"}, ReportsExpected: 2, ReportsAdmitted: 1}},
 		},
 		{

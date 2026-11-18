@@ -286,6 +286,8 @@ func (store *PostgresStore) ReconcileBlockedRuns(
 		return outcome, ErrUnavailable
 	}
 	defer rows.Close()
+	type reasonChange struct{ runID, oldReason, newReason string }
+	var changes []reasonChange
 	for rows.Next() {
 		var blocked, wasBlocked bool
 		var runID string
@@ -299,15 +301,20 @@ func (store *PostgresStore) ReconcileBlockedRuns(
 		case !blocked && wasBlocked:
 			outcome.Cleared++
 		case blocked && wasBlocked:
-			slog.InfoContext(ctx, BlockedReasonChangedLogMessage,
-				"run", runIDPrefix(runID),
-				"old_reason", reasonText(oldReason),
-				"new_reason", reasonText(newReason),
-			)
+			changes = append(changes, reasonChange{runIDPrefix(runID), reasonText(oldReason), reasonText(newReason)})
 		}
 	}
 	if rows.Err() != nil {
 		return BlockedReconcileOutcome{}, ErrUnavailable
+	}
+	// Only rows the UPDATE returned, and only once the statement has completed:
+	// a run whose compare-and-set lost returns no row and logs nothing.
+	for _, change := range changes {
+		slog.InfoContext(ctx, BlockedReasonChangedLogMessage,
+			"run", change.runID,
+			"old_reason", change.oldReason,
+			"new_reason", change.newReason,
+		)
 	}
 	// Counted separately rather than derived as (previous + Marked - Cleared):
 	// the pass only touches DISAGREEING rows, so a run already correctly

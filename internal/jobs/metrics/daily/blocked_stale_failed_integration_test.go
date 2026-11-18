@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -267,6 +268,48 @@ func TestRedrivenFailedPartitionsAndTheRetryHorizon(t *testing.T) {
 	if blocked, _ := readMarker(t, ctx, pool, staleFailedRun); blocked {
 		t.Fatal("the marker stayed after the redriven job claimed the partition")
 	}
+}
+
+// captureReasonLog runs body with slog.Default() captured and returns the
+// records that carry BlockedReasonChangedLogMessage.
+func captureReasonLog(t *testing.T, body func()) []map[string]any {
+	t.Helper()
+	var captured lockedBuffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&captured, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	body()
+	slog.SetDefault(previous)
+	var records []map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(captured.String()), "\n") {
+		if line == "" {
+			continue
+		}
+		var record map[string]any
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			t.Fatalf("decode log line %q: %v", line, err)
+		}
+		if record["msg"] == BlockedReasonChangedLogMessage {
+			records = append(records, record)
+		}
+	}
+	return records
+}
+
+type lockedBuffer struct {
+	mu     sync.Mutex
+	buffer bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buffer.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buffer.String()
 }
 
 // reconcileWithReasonLog runs one pass with slog.Default() captured and returns
@@ -547,20 +590,28 @@ func TestReasonCorrectionDoesNotRestoreAMarkerARedriveCleared(t *testing.T) {
 		redriveDone <- err
 	}()
 	waitForLockWaiters(t, ctx, pool, 1)
-	reconcileDone := make(chan error, 1)
-	go func() {
-		_, err := store.ReconcileBlockedRuns(ctx, orgID)
-		reconcileDone <- err
-	}()
-	waitForLockWaiters(t, ctx, pool, 2)
-	if err := blocker.Rollback(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if err := <-redriveDone; err != nil {
-		t.Fatalf("redrive: %v", err)
-	}
-	if err := <-reconcileDone; err != nil {
-		t.Fatalf("reconcile: %v", err)
+	var lost BlockedReconcileOutcome
+	lostLines := captureReasonLog(t, func() {
+		reconcileDone := make(chan error, 1)
+		go func() {
+			var err error
+			lost, err = store.ReconcileBlockedRuns(ctx, orgID)
+			reconcileDone <- err
+		}()
+		waitForLockWaiters(t, ctx, pool, 2)
+		if err := blocker.Rollback(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if err := <-redriveDone; err != nil {
+			t.Fatalf("redrive: %v", err)
+		}
+		if err := <-reconcileDone; err != nil {
+			t.Fatalf("reconcile: %v", err)
+		}
+	})
+	// The pass that lost its compare-and-set counts and logs nothing.
+	if lost.Marked != 0 || lost.Cleared != 0 || len(lostLines) != 0 {
+		t.Fatalf("the pass that lost the compare-and-set reported %+v and %d reason lines, want nothing", lost, len(lostLines))
 	}
 	var partitionStatus string
 	if err := pool.QueryRow(ctx, `SELECT status FROM daily_metrics_partitions WHERE id = $1`, permanentID).Scan(&partitionStatus); err != nil {
@@ -577,5 +628,97 @@ func TestReasonCorrectionDoesNotRestoreAMarkerARedriveCleared(t *testing.T) {
 	}
 	if blockedAt, reason, _ := readMarkerState(t, ctx, pool, runID); blockedAt != nil {
 		t.Fatalf("the next pass marked a run with a fresh failed partition: reason=%q", reason)
+	}
+}
+
+// Two passes of one organization that read the same marker race for every arm:
+// a mark, a clear and a reason change. The first to commit wins; the other's
+// compare-and-set loses and counts and logs nothing, so the change is counted
+// (and alerted on) once.
+func TestConcurrentPassesCountAndLogEachMarkerChangeOnce(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createDailyTables(t, ctx, pool)
+	now := time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)
+	stale := now.Add(-failedPartitionRetryHorizon - time.Hour)
+
+	for _, testCase := range []struct {
+		name       string
+		partitions []stalePartition
+		// stored is the marker the run carries before the two passes.
+		stored                  string
+		wantMarked, wantCleared int
+		wantLines               int
+		wantReason              string
+	}{
+		{name: "mark", partitions: []stalePartition{{"failed", stale}}, wantMarked: 1, wantReason: BlockedReasonPartitionsFailedNoRetry},
+		{name: "clear", partitions: []stalePartition{{"failed", now}}, stored: BlockedReasonPartitionsFailedNoRetry, wantCleared: 1},
+		{name: "reason", partitions: []stalePartition{{"failed_permanent", stale}}, stored: BlockedReasonPartitionsFailedNoRetry, wantLines: 1, wantReason: BlockedReasonAllPartitionsPermanent},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			orgID, runID := uuid.NewString(), uuid.NewString()
+			seedStaleRun(t, ctx, pool, orgID, runID, stale, testCase.partitions)
+			if testCase.stored != "" {
+				if _, err := pool.Exec(ctx, `UPDATE daily_metrics_runs SET blocked_at = $2, blocked_reason = $3 WHERE id = $1`, runID, stale, testCase.stored); err != nil {
+					t.Fatal(err)
+				}
+			}
+			store, err := NewPostgresStore(pool)
+			if err != nil {
+				t.Fatal(err)
+			}
+			store.now = func() time.Time { return now }
+
+			// A third session holds the run row, so both passes read the same
+			// marker before either can write.
+			blocker, err := pool.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = blocker.Rollback(context.Background()) }()
+			if _, err := blocker.Exec(ctx, `SELECT 1 FROM daily_metrics_runs WHERE id = $1 FOR UPDATE`, runID); err != nil {
+				t.Fatal(err)
+			}
+			var outcomes [2]BlockedReconcileOutcome
+			lines := captureReasonLog(t, func() {
+				done := make(chan error, 2)
+				for index := range outcomes {
+					go func(index int) {
+						var err error
+						outcomes[index], err = store.ReconcileBlockedRuns(ctx, orgID)
+						done <- err
+					}(index)
+				}
+				waitForLockWaiters(t, ctx, pool, 2)
+				if err := blocker.Rollback(ctx); err != nil {
+					t.Fatal(err)
+				}
+				for range outcomes {
+					if err := <-done; err != nil {
+						t.Fatalf("reconcile: %v", err)
+					}
+				}
+			})
+			marked := outcomes[0].Marked + outcomes[1].Marked
+			cleared := outcomes[0].Cleared + outcomes[1].Cleared
+			if marked != testCase.wantMarked || cleared != testCase.wantCleared || len(lines) != testCase.wantLines {
+				t.Fatalf("two passes: marked=%d cleared=%d reason lines=%d, want %d/%d/%d (%+v)",
+					marked, cleared, len(lines), testCase.wantMarked, testCase.wantCleared, testCase.wantLines, outcomes)
+			}
+			blockedAt, reason, _ := readMarkerState(t, ctx, pool, runID)
+			if (blockedAt != nil) != (testCase.wantReason != "") || reason != testCase.wantReason {
+				t.Fatalf("marker after both passes: blocked_at=%v reason=%q, want reason %q", blockedAt, reason, testCase.wantReason)
+			}
+		})
 	}
 }

@@ -101,6 +101,12 @@ func TestAnInactiveTeamTakesNoWorkItemForEveryProvider(t *testing.T) {
 				org, provider, "o-"+id, uuid.NewSHA1(uuid.NameSpaceURL, []byte(id)), "acme/"+id, first, first); err != nil {
 				t.Fatalf("insert ownership %s: %v", id, err)
 			}
+			// The project arm: the same team owns one project (team_project_ownership). An issue of any
+			// provider takes its team through its project, never through its own repository.
+			if err := conn.Exec(ctx, `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, is_primary, specificity, priority, valid_from, updated_at) VALUES (?, ?, ?, ?, NULL, 'inferred', 1, 100, 10, ?, ?)`,
+				org, provider, "o-"+id, "project-"+id, first, first); err != nil {
+				t.Fatalf("insert project ownership %s: %v", id, err)
+			}
 		}
 	}
 	var stored uint64
@@ -128,7 +134,11 @@ func TestAnInactiveTeamTakesNoWorkItemForEveryProvider(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadRepos: %v", err)
 	}
-	derived := NewGitHubWorkItemDerivationContext(GithubWorkItemDerivationFacts{Teams: facts, ProviderMembers: members, Repos: repos})
+	projects, err := ClickHouseFactSource{Conn: conn}.LoadProjects(ctx, org, asOf)
+	if err != nil {
+		t.Fatalf("LoadProjects: %v", err)
+	}
+	derived := NewGitHubWorkItemDerivationContext(GithubWorkItemDerivationFacts{Teams: facts, ProviderMembers: members, Repos: repos, Projects: projects})
 
 	for _, provider := range retractionProviders {
 		for _, team := range teams {
@@ -145,15 +155,26 @@ func TestAnInactiveTeamTakesNoWorkItemForEveryProvider(t *testing.T) {
 				memberSubject.Type = map[string]string{"github": "pr", "gitlab": "merge_request"}[provider]
 				memberSubject.Reporter = &reporter
 			}
-			for name, arm := range map[string]struct {
+			// Only a pull / merge request takes the ownership of its own repository; a Jira or Linear item is an
+			// issue and never does (an issue's repository is not its own repo_id). Every provider's issue takes
+			// its team through the ownership of its project.
+			projectID := "project-" + id
+			arms := map[string]struct {
 				subject GithubWorkItemDerivationSubject
 				want    string
 			}{
 				"by membership": {memberSubject, "m-" + id},
-				"by repo ownership": {GithubWorkItemDerivationSubject{
-					WorkItemID: provider + ":5", Provider: provider, Type: "issue", RepoID: &repoID,
+				"by project ownership": {GithubWorkItemDerivationSubject{
+					WorkItemID: provider + ":6", Provider: provider, Type: "issue", ProjectID: &projectID,
 				}, "o-" + id},
-			} {
+			}
+			if repoItemType := map[string]string{"github": "pr", "gitlab": "merge_request"}[provider]; repoItemType != "" {
+				arms["by repo ownership"] = struct {
+					subject GithubWorkItemDerivationSubject
+					want    string
+				}{GithubWorkItemDerivationSubject{WorkItemID: provider + ":5", Provider: provider, Type: repoItemType, RepoID: &repoID}, "o-" + id}
+			}
+			for name, arm := range arms {
 				gotTeam, _, candidates := derived.Resolve(arm.subject)
 				if name == "by membership" {
 					// CHAOS-9414: membership is provenance only. The primary

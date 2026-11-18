@@ -271,6 +271,19 @@ reads them. For these six metrics, a report team group or team filter reads the 
 repository whole for each owner. The chart range includes its last day. A bucket with no sample has no point, never 0.
 A pooled chart read past the row bound above fails the report chart as unavailable.
 
+The report charts of `success_count`, `failure_count`, `cancelled_count`, `success_rate`, `failure_rate`, `cancel_rate`
+and `rerun_rate` read the stored pipeline rows of each repository-day. For these seven metrics, a team is the owner of
+the repository when the report runs, for every day of the range. The stored `team_id` (the main owner at the end of the
+day) is not read:
+
+- A team filter keeps the repositories the filtered teams own. Two filtered teams that share a repository read it once.
+- A team group gives one bucket per owner team. A co-owned repository counts whole in each owner's bucket, so the buckets
+  can add up to more than the organization. A repository with no owner is in no team bucket.
+- A team that owns no repository has a count of 0 and no rate point.
+- A chart with no team filter and no team group is the organization, each repository once.
+- A bucket of `cancel_rate` or `rerun_rate` with no row has no point, never NaN. This holds for the organization too.
+- `success_rate` has no service dimension: a service group is one `unscoped` bucket.
+
 ### AI report charts of CI/CD durations and queue time
 
 The AI report charts of three CI/CD metrics are taken over the window's pipeline runs (`ci_pipeline_runs`), with the
@@ -619,6 +632,16 @@ A Linear or Jira work-items unit names every project it saw by an ensure row in 
 - `written`: the row was written.
 - `skipped`: the stored row already decides the newest value.
 - `read_error`: the stored rows could not be read. The whole batch was written and a Warn line `project_catalog_ensure_read_failed` was logged. The unit does not fail.
+
+## Work items stored under more than one repository
+
+One work item (provider and id) can be stored under two repository ids. Example: a GitHub issue that the repository sync stores under its repository and that the Projects v2 board sync stores under no repository. Each stored row is a copy. The current copy is the copy with the newest `last_synced`; on a tie, the copy of the lower repository id.
+
+`work_item_cycle_times`, `work_item_metrics_daily` and `work_item_user_metrics_daily` decide on the current copy. An item counts on a day only when its current copy belongs to that day: created before the day ends, and not done before the day starts. An older copy never makes the item count. So an item whose current copy is done with no completion time counts on no day, and an item completes once, on its current copy's completion day.
+
+The scope view (`row_view = 'scope'`) applies the same rule inside each work scope: the current copy of the item in that scope. An item with copies in two scopes still counts in each scope (the sum over scopes can be more than the organization total). So the older copy's scope can count a completion that the organization view and `work_item_cycle_times` do not count.
+
+Not yet on this rule: `work_item_state_durations_daily`, `estimate_coverage_metrics_daily`, and the request-time read of the work items linked to a repository. These still choose, for each day, the newest copy among the copies that belong to that day. For an item with two copies, they can differ from the tables above.
 
 ## Work-item person rows: persons in more than one team
 

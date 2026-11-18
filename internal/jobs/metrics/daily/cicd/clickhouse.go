@@ -38,7 +38,9 @@ func NewClickHouseLoader(connection conn) (*ClickHouseLoader, error) {
 // finishes (finished_at in the day window); started_at is not a day filter (see
 // the package doc). The zero-row source check reads this same text, so a run
 // counts as source only when this family would count it. finished_at IS NULL (a
-// still-running pipeline) never matches the range filter. A run whose
+// still-running pipeline) never matches the range filter. A run
+// still open (testops.IsOpenRun) is left out too: a provider sync stamps its
+// last update time into finished_at. A run whose
 // stored status is testops.StatusDeleted (GitHub no longer has it) is left out,
 // as ComputeCICDMetricsDaily leaves it out; the SQL trim is ASCII only while the
 // compute trims Unicode space, so a mismatch can only miss a flag.
@@ -51,7 +53,8 @@ FROM ci_pipeline_runs FINAL
 WHERE finished_at >= {start:DateTime64(3, 'UTC')} AND finished_at < {end:DateTime64(3, 'UTC')}
   AND repo_id IN {repo_ids:Array(UUID)}
   AND org_id = {org_id:String}
-  AND lowerUTF8(trimBoth(ifNull(status, ''))) != '` + testops.StatusDeleted + `'`
+  AND lowerUTF8(trimBoth(ifNull(status, ''))) != '` + testops.StatusDeleted + `'
+  AND ` + testops.NotOpenRunSQL
 
 const pipelineRunsQuery = `
 SELECT repo_id, run_id, status, queued_at, started_at, finished_at` + PipelineRunsSource
@@ -110,6 +113,43 @@ func (loader *ClickHouseLoader) LoadPipelineRuns(
 		return nil, err
 	}
 	return result, nil
+}
+
+const storedCountedReposQuery = `
+SELECT DISTINCT repo_id
+FROM cicd_metrics_daily FINAL
+WHERE org_id = {org_id:String} AND day = toDate({day:String})
+  AND repo_id IN {repo_ids:Array(UUID)} AND pipelines_count > 0`
+
+// LoadStoredCountedRepos returns the repos among repoIDs whose stored row for
+// day counts at least one run. A recompute that finds no run for such a repo-day
+// retracts that row (see RetractionMetrics).
+func (loader *ClickHouseLoader) LoadStoredCountedRepos(
+	ctx context.Context, orgID string, repoIDs []uuid.UUID, day time.Time,
+) ([]uuid.UUID, error) {
+	if loader == nil || loader.conn == nil {
+		return nil, fmt.Errorf("cicd: loader unavailable")
+	}
+	if len(repoIDs) == 0 {
+		return nil, nil
+	}
+	rows, err := loader.conn.Query(ctx, storedCountedReposQuery,
+		clickhouse.Named("org_id", orgID),
+		clickhouse.Named("day", day.UTC().Format(time.DateOnly)),
+		clickhouse.Named("repo_ids", repoIDs))
+	if err != nil {
+		return nil, fmt.Errorf("load stored cicd repos: %w", err)
+	}
+	defer rows.Close()
+	var result []uuid.UUID
+	for rows.Next() {
+		var repoID uuid.UUID
+		if err := rows.Scan(&repoID); err != nil {
+			return nil, fmt.Errorf("scan stored cicd repo: %w", err)
+		}
+		result = append(result, repoID)
+	}
+	return result, rows.Err()
 }
 
 // Writer persists ComputeCICDMetricsDaily's output to cicd_metrics_daily.

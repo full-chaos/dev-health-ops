@@ -63,6 +63,7 @@ const cicdRunsSource = `(
       AND finished_at IS NOT NULL
       AND toDate(finished_at) >= {start_date:Date} AND toDate(finished_at) < {end_date:Date}
       AND ` + cicdCountedRunPredicate + `
+      AND ` + testops.NotOpenRunSQL + `
       AND (repo_id, toDate(finished_at)) IN (
           SELECT repo_id, day FROM cicd_metrics_daily
           WHERE org_id = {org_id:String} AND day >= {start_date:Date} AND day < {end_date:Date})

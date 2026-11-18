@@ -25,6 +25,7 @@ func TestCicdPooledRulesAreTheWritersOwn(t *testing.T) {
 	}
 	pins := []struct{ rule, writer, writerText, pooled string }{
 		{"newest version of a run", "PipelineRunsSource", "FROM ci_pipeline_runs FINAL", "FROM ci_pipeline_runs FINAL"},
+		{"an open run is no finished run", "PipelineRunsSource", "AND " + testops.NotOpenRunSQL, "AND " + testops.NotOpenRunSQL},
 		{"a deleted run is no run", "PipelineRunsSource", "AND " + deleted, "AND " + cicdCountedRunPredicate},
 		{"the run finishes on the day", "PipelineRunsSource",
 			"WHERE finished_at >= {start:DateTime64(3, 'UTC')} AND finished_at < {end:DateTime64(3, 'UTC')}",

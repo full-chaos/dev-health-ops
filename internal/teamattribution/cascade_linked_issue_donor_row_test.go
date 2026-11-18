@@ -1,7 +1,6 @@
 package teamattribution
 
 import (
-	"fmt"
 	"testing"
 )
 
@@ -54,12 +53,21 @@ func TestALinkedItemCopiesItsDonorsRowOnly(t *testing.T) {
 					derived.LinkedIssue, derived.LinkedIssueEvidence = nil, nil
 				}
 			}
+			// The reference shape resolves the donors itself. An issue gets no team from its own repository, so an
+			// issue donor gives nothing here; a pull or merge request donor would resolve through the repository
+			// owner but is refused as a donor (the donor of a linked_issue row must be an issue).
 			index, _, _ := derived.BuildLinkedIssueIndex(provider, subjects, edges, nil)
-			if pullRequestType(provider) == "" {
-				return // a Jira or Linear donor is an issue: its own repo_id gives no team
+			if inherited, ok := index["pr"]; ok {
+				t.Errorf("the reference shape gives the pull request %v from an issue donor with only a repository", inherited)
 			}
-			if got := fmt.Sprint(index["pr"][0]); got != "team-context" {
-				t.Errorf("the reference shape resolves the donor in this context: %q, want team-context", got)
+			if prType := pullRequestType(provider); prType != "" {
+				prDonor := subjects["donor"]
+				prDonor.Type = prType
+				subjects["donor"] = prDonor
+				index, _, _ := derived.BuildLinkedIssueIndex(provider, subjects, edges, nil)
+				if inherited, ok := index["pr"]; ok {
+					t.Errorf("the reference shape gives the pull request %v from a pull request donor, want none", inherited)
+				}
 			}
 		})
 	}

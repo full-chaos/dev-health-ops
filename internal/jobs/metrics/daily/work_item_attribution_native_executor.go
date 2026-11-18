@@ -189,7 +189,7 @@ func (executor *WorkItemAttributionExecutor) ComputeFamily(
 			return total, err
 		}
 		linkedIssue, linkedEvidence, _, _ := repoDerived.BuildLinkedIssueIndexFromRows("", subjects, donorRows, dependencies, nil)
-		if refused := teamattribution.LinkedIssueDonorRefusals(subjects, donorRows); len(refused) > 0 {
+		if refused := repoDerived.LinkedIssueDonorRefusalCounts(subjects, dependencies); len(refused) > 0 {
 			slog.Default().InfoContext(ctx, "work_item_attribution.linked_issue_donor_refused",
 				"org_id", run.OrganizationID, "pr_kind", refused[teamattribution.LinkedIssueDonorRefusedPullKind],
 				"empty_type", refused[teamattribution.LinkedIssueDonorRefusedEmptyType],

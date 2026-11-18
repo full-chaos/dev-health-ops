@@ -1533,28 +1533,6 @@ func LinkedIssueDonorRefusal(subject GithubWorkItemDerivationSubject, known bool
 	return ""
 }
 
-// LinkedIssueDonorRefusals counts, by reason, the donor rows that would give a team to a linked item by
-// their source and team but are refused by LinkedIssueDonorRefusal. A caller logs it at Info so a writer
-// that leaves Type empty shows up. Nil when nothing is refused.
-func LinkedIssueDonorRefusals(
-	subjects map[string]GithubWorkItemDerivationSubject, donorRows map[string]GithubWorkItemDerivationDonorRow,
-) map[string]int {
-	var counts map[string]int
-	for id, row := range donorRows {
-		if row.TeamID == "" || !linkedIssueDonorSources[row.Source] {
-			continue
-		}
-		subject, known := subjects[id]
-		if reason := LinkedIssueDonorRefusal(subject, known); reason != "" {
-			if counts == nil {
-				counts = map[string]int{}
-			}
-			counts[reason]++
-		}
-	}
-	return counts
-}
-
 // OwnDonorRows is the primary row this context gives each item of ids on its
 // own (without a linked issue): the row a run that writes those items in this
 // context writes for them.
@@ -1645,6 +1623,72 @@ func (derived GithubWorkItemDerivationContext) linkedIssueEvidence(workItemID st
 	return "linked_issue=" + workItemID
 }
 
+// linkedIssueSubjectIndexes is what the linked_issue index reads of the subjects: which items have a native team
+// of their own (they never inherit) and which Jira or Linear issue each issue key names (a key two items hold
+// names none).
+func (derived GithubWorkItemDerivationContext) linkedIssueSubjectIndexes(
+	subjects map[string]GithubWorkItemDerivationSubject,
+) (map[string]bool, map[string]string) {
+	baseNative := map[string]bool{}
+	keyIndex := map[string]string{}
+	ambiguous := map[string]bool{}
+	for _, subject := range subjects {
+		baseNative[subject.WorkItemID] = derived.NativeTeamCandidate(subject) != nil
+		if (subject.Provider == "linear" || subject.Provider == "jira") && strings.Contains(subject.WorkItemID, ":") {
+			_, suffix, _ := strings.Cut(subject.WorkItemID, ":")
+			key := strings.ToUpper(strings.TrimSpace(suffix))
+			if ambiguous[key] {
+				continue
+			}
+			if existing, exists := keyIndex[key]; exists && existing != subject.WorkItemID {
+				delete(keyIndex, key)
+				ambiguous[key] = true
+			} else {
+				keyIndex[key] = subject.WorkItemID
+			}
+		}
+	}
+	return baseNative, keyIndex
+}
+
+// LinkedIssueDonorRefusalCounts counts, by reason, the distinct donor targets that the inheritable edges
+// of items without a native team of their own point at and that LinkedIssueDonorRefusal refuses: the same
+// edges BuildLinkedIssueIndexFromRows evaluates, so an item with no edge counts nothing. A key target no
+// item resolves to counts as unknown. A caller logs it at Info so a writer that leaves Type empty shows up.
+// Nil when nothing is refused.
+func (derived GithubWorkItemDerivationContext) LinkedIssueDonorRefusalCounts(
+	subjects map[string]GithubWorkItemDerivationSubject,
+	dependencies []GithubWorkItemDerivationDependencyEdge,
+) map[string]int {
+	baseNative, keyIndex := derived.linkedIssueSubjectIndexes(subjects)
+	seen := map[string]string{}
+	for _, dependency := range LatestGitHubWorkItemDerivationDependencies(dependencies) {
+		if !GithubWorkItemDerivationInheritableRelationships[dependency.RelationshipType] || baseNative[dependency.SourceWorkItemID] {
+			continue
+		}
+		target := dependency.TargetWorkItemID
+		if strings.HasPrefix(target, "extkey:") {
+			target = keyIndex[strings.ToUpper(strings.TrimSpace(strings.TrimPrefix(target, "extkey:")))]
+		}
+		reason := LinkedIssueDonorRefusedUnknown
+		if target != "" {
+			subject, known := subjects[target]
+			reason = LinkedIssueDonorRefusal(subject, known)
+		}
+		if reason != "" {
+			seen[dependency.TargetWorkItemID] = reason
+		}
+	}
+	var counts map[string]int
+	for _, reason := range seen {
+		if counts == nil {
+			counts = map[string]int{}
+		}
+		counts[reason]++
+	}
+	return counts
+}
+
 // BuildLinkedIssueIndexFromRows resolves each team-less item to the team of a
 // linked donor (an issue: LinkedIssueDonorRefusal) own primary row in donorRows, copied as it is and never
 // resolved again on the item's day (CHAOS-9460): a donor whose row is not in
@@ -1694,25 +1738,7 @@ func (derived GithubWorkItemDerivationContext) BuildLinkedIssueIndexFromRows(
 		}
 		donors[id] = [3]string{row.TeamID, GithubWorkItemDerivationFirstNonEmpty(GithubWorkItemDerivationStringValue(bound.TeamName), teamName), bound.TeamProvider}
 	}
-	baseNative := map[string]bool{}
-	keyIndex := map[string]string{}
-	ambiguous := map[string]bool{}
-	for _, subject := range subjects {
-		baseNative[subject.WorkItemID] = derived.NativeTeamCandidate(subject) != nil
-		if (subject.Provider == "linear" || subject.Provider == "jira") && strings.Contains(subject.WorkItemID, ":") {
-			_, suffix, _ := strings.Cut(subject.WorkItemID, ":")
-			key := strings.ToUpper(strings.TrimSpace(suffix))
-			if ambiguous[key] {
-				continue
-			}
-			if existing, exists := keyIndex[key]; exists && existing != subject.WorkItemID {
-				delete(keyIndex, key)
-				ambiguous[key] = true
-			} else {
-				keyIndex[key] = subject.WorkItemID
-			}
-		}
-	}
+	baseNative, keyIndex := derived.linkedIssueSubjectIndexes(subjects)
 	type linkedDonor struct {
 		target       string
 		relationship string

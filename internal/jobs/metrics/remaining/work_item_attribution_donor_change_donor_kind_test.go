@@ -85,3 +85,87 @@ func TestDonorChangeAPullRequestDonorDoesNotShadowAnIssueDonor(t *testing.T) {
 		t.Errorf("owed %v: the newer pull request donor A changed nothing the item copies (B stays the winner)", got)
 	}
 }
+
+// Round-1 classes of the review: a stored link to a donor that is no longer an issue is repaired whatever the
+// timestamps, the item's own primary source and the current edges; a refused donor never advances the
+// staleness signal; the counts are of distinct evaluated donors.
+func TestDonorChangeRepairsAStoredLinkToARefusedDonor(t *testing.T) {
+	base := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	edges := []teamattribution.GithubWorkItemDerivationDependencyEdge{
+		{SourceWorkItemID: "P", TargetWorkItemID: "D", RelationshipType: "relates_to", LastSynced: base},
+	}
+	recorded := "linked_issue=D;dependency_type=relates_to;donor_provider=github;donor_source=repo_ownership"
+	primaryLinked := workItemAttributionNewestPrimary{TeamID: "team-b", Source: "linked_issue", ComputedAt: base, Evidence: recorded}
+	ownedWithProvenance := workItemAttributionNewestPrimary{TeamID: "team-o", Source: "project_ownership", ComputedAt: base,
+		LinkedTeamID: "team-b", LinkedEvidence: recorded, LinkedComputedAt: base}
+	issueKinds := map[string]teamattribution.GithubWorkItemDerivationSubject{"D": {WorkItemID: "D", Provider: "github", Type: "issue"}}
+	prKinds := map[string]teamattribution.GithubWorkItemDerivationSubject{"D": {WorkItemID: "D", Provider: "github", Type: "pr"}}
+	for _, tc := range []struct {
+		name  string
+		item  workItemAttributionNewestPrimary
+		donor workItemAttributionNewestPrimary
+		kinds map[string]teamattribution.GithubWorkItemDerivationSubject
+		want  []string
+	}{
+		{"donor older than the item", primaryLinked, workItemAttributionNewestPrimary{TeamID: "team-b", Source: "repo_ownership", ComputedAt: base.Add(-time.Hour)}, prKinds, []string{"P"}},
+		{"donor as old as the item", primaryLinked, workItemAttributionNewestPrimary{TeamID: "team-b", Source: "repo_ownership", ComputedAt: base}, prKinds, []string{"P"}},
+		{"donor newer than the item", primaryLinked, workItemAttributionNewestPrimary{TeamID: "team-b", Source: "repo_ownership", ComputedAt: base.Add(time.Hour)}, prKinds, []string{"P"}},
+		{"provenance under an own primary", ownedWithProvenance, workItemAttributionNewestPrimary{TeamID: "team-b", Source: "repo_ownership", ComputedAt: base.Add(-time.Hour)}, prKinds, []string{"P"}},
+		{"recorded donor has no work item", primaryLinked, workItemAttributionNewestPrimary{TeamID: "team-b", Source: "repo_ownership", ComputedAt: base.Add(-time.Hour)}, map[string]teamattribution.GithubWorkItemDerivationSubject{}, []string{"P"}},
+		{"control: an issue donor older than the item", primaryLinked, workItemAttributionNewestPrimary{TeamID: "team-b", Source: "repo_ownership", ComputedAt: base.Add(-time.Hour)}, issueKinds, nil},
+		{"control: provenance of an issue donor under an own primary", ownedWithProvenance, workItemAttributionNewestPrimary{TeamID: "team-b", Source: "repo_ownership", ComputedAt: base.Add(-time.Hour)}, issueKinds, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rows := map[string]workItemAttributionNewestPrimary{"P": tc.item, "D": tc.donor}
+			if got := donorChangedDependents(edges, nil, rows, tc.kinds, nil, nil); fmt.Sprint(got) != fmt.Sprint(tc.want) {
+				t.Errorf("owed %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// A refused donor alone newer than the item is no trigger, even when another, valid donor is linked whose row
+// is older than the item's snapshot.
+func TestDonorChangeARefusedDonorDoesNotAdvanceTheStalenessSignal(t *testing.T) {
+	base := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	edges := []teamattribution.GithubWorkItemDerivationDependencyEdge{
+		{SourceWorkItemID: "P", TargetWorkItemID: "A-pr", RelationshipType: "relates_to", LastSynced: base},
+		{SourceWorkItemID: "P", TargetWorkItemID: "B-issue", RelationshipType: "relates_to", LastSynced: base},
+	}
+	rows := map[string]workItemAttributionNewestPrimary{
+		"P":       {Source: "unassigned", ComputedAt: base},
+		"A-pr":    {TeamID: "team-a", Source: "repo_ownership", ComputedAt: base.Add(time.Hour)},
+		"B-issue": {TeamID: "team-b", Source: "project_ownership", ComputedAt: base.Add(-time.Hour)},
+	}
+	kinds := map[string]teamattribution.GithubWorkItemDerivationSubject{
+		"A-pr":    {WorkItemID: "A-pr", Provider: "github", Type: "pr"},
+		"B-issue": {WorkItemID: "B-issue", Provider: "github", Type: "issue"},
+	}
+	if got := donorChangedDependents(edges, nil, rows, kinds, nil, nil); len(got) != 0 {
+		t.Errorf("owed %v: only the refused donor is newer", got)
+	}
+}
+
+// The counts are of distinct evaluated donors: a donor shared by two items counts once, a key no item resolves
+// to counts as unknown, and an item with no edge counts nothing.
+func TestDonorChangeRefusalCountsAreOfDistinctEvaluatedDonors(t *testing.T) {
+	base := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	edge := func(source, target string) teamattribution.GithubWorkItemDerivationDependencyEdge {
+		return teamattribution.GithubWorkItemDerivationDependencyEdge{SourceWorkItemID: source, TargetWorkItemID: target, RelationshipType: "relates_to", LastSynced: base}
+	}
+	edges := []teamattribution.GithubWorkItemDerivationDependencyEdge{edge("P1", "empty"), edge("P2", "empty"), edge("P3", "extkey:NOPE-1")}
+	unassigned := workItemAttributionNewestPrimary{Source: "unassigned", ComputedAt: base}
+	rows := map[string]workItemAttributionNewestPrimary{
+		"P1": unassigned, "P2": unassigned, "P3": unassigned, "owned-pr": {TeamID: "team-o", Source: "repo_ownership", ComputedAt: base},
+		"empty": {TeamID: "team-e", Source: "project_ownership", ComputedAt: base},
+	}
+	kinds := map[string]teamattribution.GithubWorkItemDerivationSubject{
+		"empty":    {WorkItemID: "empty", Provider: "jira", Type: ""},
+		"owned-pr": {WorkItemID: "owned-pr", Provider: "github", Type: "pr"},
+	}
+	refused := map[string]int{}
+	donorChangedDependents(edges, map[string]string{}, rows, kinds, nil, refused)
+	if fmt.Sprint(refused) != "map[empty_type:1 unknown:1]" {
+		t.Errorf("refused = %v, want map[empty_type:1 unknown:1]", refused)
+	}
+}

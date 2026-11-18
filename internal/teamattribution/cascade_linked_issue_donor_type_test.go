@@ -103,12 +103,53 @@ func TestLinkedIssueRefusedDonorDoesNotShadowAnIssueDonor(t *testing.T) {
 	if got := index["item"][0]; got != "team-issue" {
 		t.Fatalf("item team = %q (evidence %q), want team-issue", got, evidence["item"])
 	}
-	refused := LinkedIssueDonorRefusals(subjects, rows)
+	refused := derived.LinkedIssueDonorRefusalCounts(subjects, edges)
 	if refused[LinkedIssueDonorRefusedPullKind] != 1 || refused[LinkedIssueDonorRefusedUnknown] != 1 || len(refused) != 2 {
-		t.Errorf("refusals = %v, want one pr_kind (a-pr) and one unknown (c-ghost)", refused)
+		t.Errorf("refusals = %v, want one pr_kind (a-pr) and one unknown (c-ghost, an edge target that is not a known work item)", refused)
 	}
-	if LinkedIssueDonorRefusals(subjects, map[string]GithubWorkItemDerivationDonorRow{"b-issue": rows["b-issue"]}) != nil {
-		t.Error("an issue donor is counted as refused")
+}
+
+// The refusal counts come from the edges the index evaluates: an item with no edge counts nothing (a repo-owned
+// pull request is not a refusal), a donor shared by two items counts once, a key no item resolves to counts as
+// unknown, an item with a native team of its own is not evaluated, and a valid issue donor counts nothing.
+func TestLinkedIssueDonorRefusalCountsFollowTheEvaluatedEdges(t *testing.T) {
+	derived := NewGitHubWorkItemDerivationContext(GithubWorkItemDerivationFacts{})
+	subjects := map[string]GithubWorkItemDerivationSubject{
+		"owned-pr":   {WorkItemID: "owned-pr", Provider: "github", Type: "pr", OrgID: "org"},
+		"item-1":     {WorkItemID: "item-1", Provider: "github", Type: "pr", OrgID: "org"},
+		"item-2":     {WorkItemID: "item-2", Provider: "github", Type: "pr", OrgID: "org"},
+		"empty":      {WorkItemID: "empty", Provider: "jira", Type: "", OrgID: "org"},
+		"jira:OK-1":  {WorkItemID: "jira:OK-1", Provider: "jira", Type: "task", OrgID: "org"},
+		"native-pr":  {WorkItemID: "native-pr", Provider: "github", Type: "pr", OrgID: "org"},
+		"native-pr2": {WorkItemID: "native-pr2", Provider: "github", Type: "pr", OrgID: "org"},
+	}
+	edge := func(source, target string) GithubWorkItemDerivationDependencyEdge {
+		return GithubWorkItemDerivationDependencyEdge{SourceWorkItemID: source, TargetWorkItemID: target, RelationshipType: "relates_to"}
+	}
+	for _, tc := range []struct {
+		name  string
+		edges []GithubWorkItemDerivationDependencyEdge
+		want  map[string]int
+	}{
+		{"no edge", nil, nil},
+		{"a shared empty-type donor counts once", []GithubWorkItemDerivationDependencyEdge{edge("item-1", "empty"), edge("item-2", "empty")}, map[string]int{"empty_type": 1}},
+		{"a pull request donor", []GithubWorkItemDerivationDependencyEdge{edge("item-1", "item-2")}, map[string]int{"pr_kind": 1}},
+		{"a target that is not a known work item", []GithubWorkItemDerivationDependencyEdge{edge("item-1", "gone")}, map[string]int{"unknown": 1}},
+		{"a key no item resolves to", []GithubWorkItemDerivationDependencyEdge{edge("item-1", "extkey:NOPE-1")}, map[string]int{"unknown": 1}},
+		{"a key that resolves to a valid issue", []GithubWorkItemDerivationDependencyEdge{edge("item-1", "extkey:OK-1")}, nil},
+		{"a valid issue donor", []GithubWorkItemDerivationDependencyEdge{edge("item-1", "jira:OK-1")}, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := derived.LinkedIssueDonorRefusalCounts(subjects, tc.edges)
+			if len(got) != len(tc.want) {
+				t.Fatalf("counts = %v, want %v", got, tc.want)
+			}
+			for reason, n := range tc.want {
+				if got[reason] != n {
+					t.Fatalf("counts = %v, want %v", got, tc.want)
+				}
+			}
+		})
 	}
 }
 

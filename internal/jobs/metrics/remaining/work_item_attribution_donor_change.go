@@ -65,7 +65,16 @@ func (executor *WorkItemAttributionExecutor) loadDonorChangedDependents(
 	if err != nil {
 		return nil, err
 	}
-	kinds, err := executor.loadDonorKinds(ctx, orgID, sortedWorkItemAttributionKeys(idSet))
+	kindIDs := make(map[string]struct{}, len(idSet))
+	for id := range idSet {
+		kindIDs[id] = struct{}{}
+	}
+	for _, row := range rows {
+		if recorded, _ := recordedDonorOf(row); recorded != "" {
+			kindIDs[recorded] = struct{}{}
+		}
+	}
+	kinds, err := executor.loadDonorKinds(ctx, orgID, sortedWorkItemAttributionKeys(kindIDs))
 	if err != nil {
 		return nil, err
 	}
@@ -97,6 +106,11 @@ func (executor *WorkItemAttributionExecutor) loadDonorChangedDependents(
 // never gives it its primary row. A donor recomputed
 // with the same team triggers nothing, and a rederive makes the item newer than
 // its donors, so a trigger never repeats for the same donor row.
+//
+// The donor must be an issue (teamattribution.LinkedIssueDonorRefusal): a refused donor gives no team and does
+// not advance the staleness signal, and an item whose stored snapshot records a refused donor is owed a
+// rederive whatever the timestamps and its own primary source. refused, when not nil, receives the count by
+// reason of the distinct refused donors the items evaluated. An item that no edge links any more is not seen.
 func donorChangedDependents(
 	edges []teamattribution.GithubWorkItemDerivationDependencyEdge,
 	keyIndex map[string]string,
@@ -107,6 +121,7 @@ func donorChangedDependents(
 ) []string {
 	type donor struct{ target, relationship string }
 	donors := map[string][]donor{}
+	unresolved := map[string][]string{}
 	for _, edge := range teamattribution.LatestGitHubWorkItemDerivationDependencies(edges) {
 		if !teamattribution.GithubWorkItemDerivationInheritableRelationships[edge.RelationshipType] {
 			continue
@@ -115,16 +130,47 @@ func donorChangedDependents(
 		if key, ok := strings.CutPrefix(target, "extkey:"); ok {
 			target = keyIndex[strings.ToUpper(strings.TrimSpace(key))]
 		}
-		if target == "" || target == edge.SourceWorkItemID {
+		if target == "" {
+			// A key no item resolves to (or two items hold) is a donor that is not known.
+			unresolved[edge.SourceWorkItemID] = append(unresolved[edge.SourceWorkItemID], edge.TargetWorkItemID)
+			if _, ok := donors[edge.SourceWorkItemID]; !ok {
+				donors[edge.SourceWorkItemID] = nil
+			}
+			continue
+		}
+		if target == edge.SourceWorkItemID {
 			continue
 		}
 		donors[edge.SourceWorkItemID] = append(donors[edge.SourceWorkItemID], donor{target, edge.RelationshipType})
 	}
 	var owed []string
+	refusedBy := map[string]string{}
+	refuse := func(target, reason string) {
+		if refused != nil {
+			refusedBy[target] = reason
+		}
+	}
 	for item, linked := range donors {
 		own, ok := rows[item]
-		if !ok || teamattribution.IsLinkedIssueDonorSource(own.Source) {
+		if !ok {
 			continue
+		}
+		recordedDonor, recordedTeam := recordedDonorOf(own)
+		// A stored link whose recorded donor is no longer an issue is repaired, whatever the timestamps and
+		// whatever the item's own primary source: the row the item holds names a donor the cascade refuses.
+		if recordedDonor != "" {
+			kind, known := kinds[recordedDonor]
+			if reason := teamattribution.LinkedIssueDonorRefusal(kind, known); reason != "" {
+				refuse(recordedDonor, reason)
+				owed = append(owed, item)
+				continue
+			}
+		}
+		if teamattribution.IsLinkedIssueDonorSource(own.Source) {
+			continue
+		}
+		for _, raw := range unresolved[item] {
+			refuse(raw, teamattribution.LinkedIssueDonorRefusedUnknown)
 		}
 		sort.Slice(linked, func(left, right int) bool {
 			if linked[left].target != linked[right].target {
@@ -134,19 +180,18 @@ func donorChangedDependents(
 		})
 		changed, wantDonor, wantTeam := false, "", ""
 		for _, candidate := range linked {
+			// A refused donor is no donor: it neither gives a team nor advances the staleness signal.
+			kind, known := kinds[candidate.target]
+			if reason := teamattribution.LinkedIssueDonorRefusal(kind, known); reason != "" {
+				refuse(candidate.target, reason)
+				continue
+			}
 			row, ok := rows[candidate.target]
 			if !ok {
 				continue
 			}
 			changed = changed || row.ComputedAt.After(own.ComputedAt)
 			if row.TeamID == "" || !teamattribution.IsLinkedIssueDonorSource(row.Source) {
-				continue
-			}
-			kind, known := kinds[candidate.target]
-			if reason := teamattribution.LinkedIssueDonorRefusal(kind, known); reason != "" {
-				if refused != nil {
-					refused[reason]++
-				}
 				continue
 			}
 			if wantDonor == "" && !inactive.Has(row.TeamID) {
@@ -156,19 +201,27 @@ func donorChangedDependents(
 		if !changed {
 			continue
 		}
-		recordedDonor, recordedTeam := "", ""
-		switch {
-		case own.Source == "linked_issue":
-			recordedDonor, recordedTeam = linkedIssueEvidenceDonor(own.Evidence), own.TeamID
-		case own.LinkedEvidence != "" && own.LinkedComputedAt.Equal(own.ComputedAt):
-			recordedDonor, recordedTeam = linkedIssueEvidenceDonor(own.LinkedEvidence), own.LinkedTeamID
-		}
 		if wantDonor != recordedDonor || wantTeam != recordedTeam {
 			owed = append(owed, item)
 		}
 	}
+	for _, reason := range refusedBy {
+		refused[reason]++
+	}
 	sort.Strings(owed)
 	return owed
+}
+
+// recordedDonorOf is the donor, and its team, that the item's newest snapshot records: its primary linked_issue
+// row, or the provenance linked_issue row of the same snapshot.
+func recordedDonorOf(own workItemAttributionNewestPrimary) (string, string) {
+	switch {
+	case own.Source == "linked_issue":
+		return linkedIssueEvidenceDonor(own.Evidence), own.TeamID
+	case own.LinkedEvidence != "" && own.LinkedComputedAt.Equal(own.ComputedAt):
+		return linkedIssueEvidenceDonor(own.LinkedEvidence), own.LinkedTeamID
+	}
+	return "", ""
 }
 
 // linkedIssueEvidenceDonor is the donor id a linked_issue row's evidence names:

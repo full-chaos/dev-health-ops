@@ -4,6 +4,10 @@
 // driver as a positional `?` time.Time is a DateTime (toDateTime('<seconds>')), so such a bound on a keyed column is the
 // failure; bind Int64 microseconds with chtime.Micros and rebuild the instant with fromUnixTimestamp64Micro(?, 'UTC').
 //
+// This is a best-effort text scan of literal SQL, NOT a proof that no unsafe bound exists. KNOWN MISSES, pinned by
+// TestKnownMissesPassTheGuard: a WITH alias or joined projection that reuses a catalog column name, and SQL assembled from
+// a run-time value or a fragment the guard cannot fold.
+//
 // The guard reads static text: the string constants of the tracked non-test Go files (a concatenation of literals and of
 // constants of this module is folded) and the tracked .sql files, apart from the migration history, archive, rollback and
 // baseline trees and testdata. The column types and keys come from internal/chmigrate/baseline/head.json. A column is
@@ -304,5 +308,34 @@ func TestPlantedStrictComparisonsFailTheGuardAndTheSafeFormsDoNot(t *testing.T) 
 		if got := plant(body); len(got) != 0 {
 			t.Errorf("%s: a safe form was flagged: %v", name, got)
 		}
+	}
+}
+
+// TestKnownMissesPassTheGuard pins the two named misses of the static text scan: each text below is an unsafe strict
+// comparison of a keyed DateTime64 column and the guard lets it pass. A change that makes the guard catch one is good news;
+// move that case to the planted cases and delete it here.
+func TestKnownMissesPassTheGuard(t *testing.T) {
+	cat := realCatalog(t, plantExtra)
+	aliasReuse := text{File: "miss_alias.go", Line: 1, Body: "WITH toDateTime(1) AS part_ts SELECT 1 FROM plant_sort WHERE sort_ts < part_ts"}
+	if got := check(cat, []text{aliasReuse}).Violations; len(got) != 0 {
+		t.Errorf("WITH alias reuse is a pinned miss but the guard now flags it: %v", got)
+	}
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "p"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.test/m\n\ngo 1.22\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	body := "package p\n\nvar bound = \"toDateTime(?)\"\n\nfunc q() string { return \"SELECT 1 FROM plant_sort WHERE sort_ts < \" + bound }\n"
+	if err := os.WriteFile(filepath.Join(root, "p", "p.go"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	src, err := sourcesOf(root, []string{"p/p.go"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := check(cat, src.texts()).Violations; len(got) != 0 {
+		t.Errorf("fragment assembly from a run-time value is a pinned miss but the guard now flags it: %v", got)
 	}
 }

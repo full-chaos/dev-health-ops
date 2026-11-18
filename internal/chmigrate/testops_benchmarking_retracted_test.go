@@ -8,10 +8,10 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/chmigrate"
 )
 
-const benchmarkingRetractedVersion = "157_testops_benchmarking_retracted.sql"
+const benchmarkingRetractedVersion = "160_testops_benchmarking_retracted.sql"
 
-// 157 adds exactly the retraction marker of the six benchmarking output tables, defaulted to 0, and nothing else.
-func TestMigration157IsTheOneDefaultedMarkerColumnOfTheBenchmarkingOutputs(t *testing.T) {
+// 160 adds exactly the retraction marker of the six benchmarking output tables, defaulted to 0, and nothing else.
+func TestMigration160IsTheOneDefaultedMarkerColumnOfTheBenchmarkingOutputs(t *testing.T) {
 	chain, err := chmigrate.LoadChain()
 	if err != nil {
 		t.Fatal(err)

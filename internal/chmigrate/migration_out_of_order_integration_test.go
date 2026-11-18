@@ -27,10 +27,11 @@ ALTER TABLE testops_pipeline_metrics_daily ADD COLUMN IF NOT EXISTS unfinished_s
 
 // A migration with a higher number can reach main before two with lower
 // numbers. On a scratch ClickHouse: the chain without 155 and 156 is applied
-// (the head through main's 154, then 157), then 155 and 156 join the chain and
-// the upgrade runs again. Want: the second upgrade applies exactly 155 and 156
-// with no error, and schema_migrations then holds 155, 156 and 157.
-func TestChainAppliesLowerNumbersThatArriveAfter157(t *testing.T) {
+// (the head through main's 154, then main's 159 and 160), then 155 and 156 join
+// the chain and the upgrade runs again. Want: the second upgrade applies
+// exactly 155 and 156 with no error, and schema_migrations then holds 155, 156
+// and 160.
+func TestChainAppliesLowerNumbersThatArriveAfter160(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	scratch := scratchDatabase(t)
@@ -67,7 +68,7 @@ func TestChainAppliesLowerNumbersThatArriveAfter157(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the chain without 155 and 156: %v", err)
 	}
-	for _, version := range []string{"154_drop_grafana_panel_views.sql", benchmarkingRetractedVersion} {
+	for _, version := range []string{"154_drop_grafana_panel_views.sql", "159_cicd_metrics_daily_retracted.sql", benchmarkingRetractedVersion} {
 		if !slices.Contains(firstResult.Applied, version) {
 			t.Fatalf("the first upgrade did not apply %s", version)
 		}

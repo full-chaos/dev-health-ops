@@ -18,11 +18,11 @@ var benchmarkingRetractedTables = []string{
 	"testops_period_comparisons", "testops_metric_correlations", "testops_benchmark_insights",
 }
 
-// benchmarkingImageInsert is the maturity-band write of the build before 157 (benchmarking/clickhouse.go writeMaturityBands):
+// benchmarkingImageInsert is the maturity-band write of the build before 160 (benchmarking/clickhouse.go writeMaturityBands):
 // it names its columns and never names retracted.
 const benchmarkingImageInsert = `INSERT INTO testops_maturity_bands (metric_name, scope_type, scope_key, period_start, period_end,
   value, percentile_rank, maturity_band, confidence, org_id, computed_at)
-VALUES ('pass_rate', 'repo', 'repo-157', '2026-08-12', '2026-09-10', 0.9, 0.5, 'developing', 0.8, 'org-157', '2026-09-11 10:00:00')`
+VALUES ('pass_rate', 'repo', 'repo-160', '2026-08-12', '2026-09-10', 0.9, 0.5, 'developing', 0.8, 'org-160', '2026-09-11 10:00:00')`
 
 func benchmarkingRetractedColumn(ctx context.Context, t *testing.T, conn driver.Conn, table string) string {
 	t.Helper()
@@ -41,10 +41,10 @@ WHERE database = currentDatabase() AND table = ? AND name = 'retracted'`, table)
 	return column
 }
 
-// The rollback of 157 is "the worker image back on a build without 157, then 157's down file". Up, down, up on a real
+// The rollback of 160 is "the worker image back on a build without 160, then 160's down file". Up, down, up on a real
 // ClickHouse: the column of each of the six tables is gone after the down file and its version row too; the write of the
-// build before 157 works on the table in that shape; the upgrade applies 157 again and a stored row reads 0.
-func TestRollback157UpDownUp(t *testing.T) {
+// build before 160 works on the table in that shape; the upgrade applies 160 again and a stored row reads 0.
+func TestRollback160UpDownUp(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	scratch := scratchDatabase(t)
@@ -77,7 +77,7 @@ func TestRollback157UpDownUp(t *testing.T) {
 	}
 	exec(benchmarkingImageInsert)
 	exec(`INSERT INTO testops_maturity_bands (metric_name, scope_type, scope_key, period_end, org_id, retracted, computed_at)
-VALUES ('pass_rate', 'repo', 'repo-157', '2026-09-10', 'org-157', 1, '2026-09-11 11:00:00')`)
+VALUES ('pass_rate', 'repo', 'repo-160', '2026-09-10', 'org-160', 1, '2026-09-11 11:00:00')`)
 	versionRows := func() uint64 {
 		t.Helper()
 		var n uint64
@@ -87,10 +87,10 @@ VALUES ('pass_rate', 'repo', 'repo-157', '2026-09-10', 'org-157', 1, '2026-09-11
 		return n
 	}
 	if versionRows() == 0 {
-		t.Fatal("at the head schema_migrations holds no 157")
+		t.Fatal("at the head schema_migrations holds no 160")
 	}
 
-	body, err := os.ReadFile("rollback/157_testops_benchmarking_retracted.down.sql")
+	body, err := os.ReadFile("rollback/160_testops_benchmarking_retracted.down.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,16 +103,16 @@ VALUES ('pass_rate', 'repo', 'repo-157', '2026-09-10', 'org-157', 1, '2026-09-11
 		}
 	}
 	if versionRows() != 0 {
-		t.Fatal("after the down file schema_migrations still holds 157")
+		t.Fatal("after the down file schema_migrations still holds 160")
 	}
 	exec(benchmarkingImageInsert)
 
 	result, err := chmigrate.Upgrade(ctx, db, baseline, chain)
 	if err != nil || len(result.Applied) != 1 || result.Applied[0] != benchmarkingRetractedVersion {
-		t.Fatalf("the upgrade after the rollback = %+v, %v; want 157 applied", result, err)
+		t.Fatalf("the upgrade after the rollback = %+v, %v; want 160 applied", result, err)
 	}
 	var stored, live uint64
-	if err := conn.QueryRow(ctx, "SELECT count(), countIf(retracted = 0) FROM testops_maturity_bands WHERE org_id = 'org-157'").
+	if err := conn.QueryRow(ctx, "SELECT count(), countIf(retracted = 0) FROM testops_maturity_bands WHERE org_id = 'org-160'").
 		Scan(&stored, &live); err != nil || stored != 3 || live != 3 {
 		t.Fatalf("after the upgrade again %d of %d rows read retracted = 0 (err %v), want all 3", live, stored, err)
 	}

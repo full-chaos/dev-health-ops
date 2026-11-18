@@ -69,14 +69,16 @@ func TransportClass(err error) string {
 
 // safeTimeout answers the Timeout method under recover. The stdlib wrappers *url.Error, *net.OpError, *os.SyscallError and
 // *os.PathError answer by calling their Err's Timeout, so a self-referencing one recurses into a fatal stack overflow that recover
-// cannot catch: those hops are followed here, bounded, and a loop answers false (CHAOS-8271).
+// cannot catch: those hops are followed here, and a wrapper met twice (a cycle) answers false (CHAOS-8271). Any acyclic depth up to
+// maxTimeoutHops answers as the stdlib does.
 func safeTimeout(timeout interface{ Timeout() bool }) (result bool) {
 	defer func() {
 		if recover() != nil {
 			result = false
 		}
 	}()
-	for hop := 0; hop <= maxChainNodes; hop++ {
+	visited := map[interface{ Timeout() bool }]struct{}{}
+	for hop := 0; hop <= maxTimeoutHops; hop++ {
 		var inner error
 		switch typed := timeout.(type) {
 		case *url.Error:
@@ -90,6 +92,10 @@ func safeTimeout(timeout interface{ Timeout() bool }) (result bool) {
 		default:
 			return timeout.Timeout()
 		}
+		if _, again := visited[timeout]; again {
+			return false
+		}
+		visited[timeout] = struct{}{}
 		next, ok := inner.(interface{ Timeout() bool })
 		if !ok {
 			return false

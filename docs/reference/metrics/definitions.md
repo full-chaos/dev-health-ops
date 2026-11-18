@@ -290,10 +290,19 @@ them.
 - A negative duration or queue time is no sample. The stored `duration_seconds` and `queue_seconds` are not read.
 - Every status counts, except a deleted run.
 - Only the repository-days that the daily job computed are read.
-- These metrics have no team or service dimension. A team filter does not narrow the chart, and a team or service group
-  is one `unscoped` bucket.
 - The chart range includes its last day. A bucket with no sample has no point, never 0. The read has the same row bound
   as the TestOps pooled read.
+
+The report chart of `pipelines_count` sums the stored count of each repository-day the daily job wrote.
+
+For these four CI/CD metrics, a team is the owner of the repository when the report runs, for every day of the range:
+
+- A team filter keeps the repositories the filtered teams own. Two filtered teams that share a repository read it once.
+- A team group gives one bucket per owner team. A co-owned repository counts whole in each owner's bucket, so the buckets
+  can add up to more than the organization. A repository with no owner is in no team bucket.
+- A team that owns no repository has a pipelines count of 0 and no duration or queue point.
+- A chart with no team filter and no team group is the organization, each repository once.
+- These metrics have no service dimension: a service group is one `unscoped` bucket.
 
 ## Pull request rework ratio
 

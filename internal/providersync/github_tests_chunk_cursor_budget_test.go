@@ -87,7 +87,7 @@ func TestGitHubTestsChunkCursorWorstCaseStaysWithinBudget(t *testing.T) {
 	}
 	for _, cause := range []string{
 		githubTestsArtifactOversizedCause, githubTestsArtifactUnavailableCause,
-		githubTestsUnreadableArchiveCause, githubTestsMalformedCause, githubTestsUnreadableCause,
+		githubTestsUnreadableArchiveCause, githubTestsMalformedCause, githubTestsUnreadableCause, githubTestsUnsafeDoctypeCause, githubTestsArtifactExpiredCause,
 	} {
 		causeOverflow[cause] = true
 	}
@@ -96,7 +96,7 @@ func TestGitHubTestsChunkCursorWorstCaseStaysWithinBudget(t *testing.T) {
 	causeCount := map[string]int{}
 	for _, cause := range []string{
 		githubTestsArtifactOversizedCause, githubTestsArtifactUnavailableCause,
-		githubTestsUnreadableArchiveCause, githubTestsMalformedCause, githubTestsUnreadableCause,
+		githubTestsUnreadableArchiveCause, githubTestsMalformedCause, githubTestsUnreadableCause, githubTestsUnsafeDoctypeCause, githubTestsArtifactExpiredCause,
 	} {
 		causeCount[cause] = 999999999
 	}
@@ -143,9 +143,11 @@ func TestGitHubTestsChunkCursorWorstCaseStaysWithinBudget(t *testing.T) {
 	// run_reports gained aggregate_of_parts and aggregate_mismatch (about 75 bytes together). Headroom is now about 226 bytes
 	// (5.5%) under the hard 4 KiB bound; the next vocabulary entry must make room (a smaller sample) rather than lower this again.
 	//
-	// 200 -> 150 (CHAOS-13980): report_member gained artifact_expired (one more pair in the worst case, about 50 bytes with its
-	// observation entry). Headroom is now 154 bytes (3.8%) under the hard 4 KiB bound. Lead ruling: lower the canary for this one
-	// pair; the hard bound above is unchanged, and the next vocabulary entry must shrink a sample instead of lowering this again.
+	// 200 -> 150 (CHAOS-13980, CHAOS-13985): report_member gained artifact_expired (CHAOS-13980, about 50 bytes with its
+	// observation entry) and unsafe_doctype (CHAOS-13985, its pair plus one entry in each of the two per-cause maps, about 119
+	// bytes). githubTestsMaxSkippedArtifactRecords went 8 -> 6 to pay for them, so the worst case keeps well over 150 bytes under the
+	// hard 4 KiB bound. Lead ruling: the canary is lowered once, for both causes; the next vocabulary entry must shrink a sample
+	// instead of lowering this again.
 	const wantMargin = 150
 	if remaining := maxChunkCursorBytes - len(encoded); remaining < wantMargin {
 		t.Fatalf(

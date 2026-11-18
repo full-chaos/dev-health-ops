@@ -124,3 +124,56 @@ func TestPeople_NamesAndKeysOnARealStore(t *testing.T) {
 		t.Errorf("names = %s / %s, want the stored logins rev-2 / auth-2", name(other.ReviewerName), name(other.AuthorName))
 	}
 }
+
+// CHAOS-14032 on a real store: a stored login that is also another identity's display name resolves to the
+// identity that holds it as a provider login, not to nobody (both gitlab and github logins).
+func TestPeople_AStrongValueBeatsAnotherDisplayNameOnARealStore(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+	defer cancel()
+	f := newTeamScopeFixture(ctx, t)
+
+	updated := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	identityOf := func(canonicalID, displayName, providerIdentities string) {
+		t.Helper()
+		if err := f.admin.Exec(ctx, `INSERT INTO identities (org_id, canonical_id, identity_uuid, display_name, email, provider_identities, team_ids, is_active, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			teamScopeOrg, canonicalID, uuid.New(), displayName, nil, providerIdentities, []string{}, uint8(1), updated); err != nil {
+			t.Fatalf("seed identity %s: %v", canonicalID, err)
+		}
+	}
+	// A's display name equals the two stored logins; B and C hold them as a github and a gitlab login.
+	identityOf("a", "csam", `{"github": ["a-login"]}`)
+	identityOf("b", "Bea B", `{"github": ["csam"]}`)
+	identityOf("c", "Cy C", `{"gitlab": ["gl.csam"]}`)
+	identityOf("a2", "gl.csam", `{"github": ["a2-login"]}`)
+
+	computed := time.Date(2026, 9, 1, 6, 0, 0, 0, time.UTC)
+	for day, reviewer := range map[int]string{12: "csam", 13: "gl.csam"} {
+		if err := f.admin.Exec(ctx, `INSERT INTO review_edges_daily (repo_id, day, reviewer, author, reviews_count, computed_at, org_id) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			f.repoA, time.Date(2026, 8, day, 0, 0, 0, 0, time.UTC), reviewer, "auth-9", uint32(7), computed, teamScopeOrg); err != nil {
+			t.Fatalf("seed edge: %v", err)
+		}
+	}
+	got, err := ResolveScoped(ctx, f.client, teamScopeOrg, mustDate(t, "2026-08-01"), mustDate(t, "2026-08-31"), Scope{AsOf: teamScopeAsOf}, 100)
+	if err != nil {
+		t.Fatalf("ResolveScoped: %v", err)
+	}
+	want := map[string]string{"csam": "Bea B", "gl.csam": "Cy C"}
+	seen := 0
+	for _, row := range got.Edges {
+		expected, ok := want[row.Reviewer]
+		if !ok {
+			continue
+		}
+		seen++
+		if row.ReviewerName == nil || *row.ReviewerName != expected {
+			got := "<nil>"
+			if row.ReviewerName != nil {
+				got = *row.ReviewerName
+			}
+			t.Errorf("reviewer %s is named %s, want %s (the holder of the login)", row.Reviewer, got, expected)
+		}
+	}
+	if seen != 2 {
+		t.Fatalf("saw %d of the 2 seeded edges", seen)
+	}
+}

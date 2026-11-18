@@ -98,13 +98,16 @@ func TestCicdPooledStatementReadsComputedDaysUnderTheBound(t *testing.T) {
 }
 
 // A metric without the team (or service, or repo) dimension is charted as buildChartQuery charts it: a group by it is one
-// 'unscoped' bucket and a filter on it does not narrow. A metric with the dimension keeps the owner join.
+// 'unscoped' bucket and a filter on it does not narrow. A metric with the dimension keeps the owner join. No registry
+// pooled metric lacks the team dimension, so the cell takes one without it.
 func TestPooledChartKeepsTheRegistryDimensions(t *testing.T) {
 	t.Parallel()
+	noTeam := pooledDefinition(t, "avg_duration_minutes")
+	noTeam.Dimensions = []string{"repo", "day"}
 	for _, groupBy := range []string{"team", "service"} {
 		for _, teams := range [][]string{nil, {"team-1"}} {
 			statement, parameters, err := buildChartQuery(ChartSpec{ChartType: "bar", Metric: "avg_duration_minutes", GroupBy: groupBy,
-				OrganizationID: "org-1", FilterTeams: teams}, pooledDefinition(t, "avg_duration_minutes"))
+				OrganizationID: "org-1", FilterTeams: teams}, noTeam)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -117,7 +120,7 @@ func TestPooledChartKeepsTheRegistryDimensions(t *testing.T) {
 		}
 	}
 	statement, _, err := buildChartQuery(ChartSpec{ChartType: "bar", Metric: "avg_duration_minutes", OrganizationID: "org-1",
-		FilterTeams: []string{"team-1"}}, pooledDefinition(t, "avg_duration_minutes"))
+		FilterTeams: []string{"team-1"}}, noTeam)
 	if err != nil {
 		t.Fatal(err)
 	}

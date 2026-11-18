@@ -35,9 +35,21 @@ import (
 //     in every answer of the org, as reviewer and as author. It is a digest,
 //     so it is not an e-mail address and not a name.
 //
-// Two reads at most per answer, whatever the number of rows: the org's
-// identities, and (only when an author stored by e-mail has no name yet) the
-// pull request author names of those e-mail addresses. A failed read fails
+// Reviewer of a github or gitlab repository (CHAOS-14040): the stored string
+// is that provider's login (the review sync writes the login, never a display
+// name), so it is matched ONLY against the identity values listed under that
+// provider (a key compared lower-cased) or under a key outside github, gitlab,
+// jira and linear (unscoped: it matches under any repo provider). A login is
+// not an e-mail address, a canonical id or a display name, so none of those
+// match it, and a login held under another provider names nobody here. A value
+// two identities hold in that scope names neither. Any other repo provider
+// (unknown, external, no repos row) keeps the order of identityIndex.resolve.
+// The author side is unchanged.
+//
+// Three reads at most per answer, whatever the number of rows: the org's
+// identities, the provider of each repository of the rows, and (only when an
+// author stored by e-mail has no name yet) the pull request author names of
+// those e-mail addresses. A failed read fails
 // the request: a name that could not be read is not the same as "no name
 // known" (CHAOS-8186).
 
@@ -74,6 +86,19 @@ FROM (
 WHERE pr_author_name != ''
 GROUP BY email`
 
+// repoProvidersSQL reads the provider of the repositories of the rows. id is a UUID column; the ids are
+// compared as strings, as the repo filter of the row read does.
+const repoProvidersSQL = `
+SELECT toString(id) AS repo_id, provider
+FROM repos FINAL
+WHERE org_id = {org_id:String} AND toString(id) IN {repo_ids:Array(String)}`
+
+// loginScopedProviders are the repo providers whose stored reviewer is a login.
+var loginScopedProviders = map[string]struct{}{"github": {}, "gitlab": {}}
+
+// knownIdentityProviders are the provider_identities keys that scope a value to one provider; any other key is unscoped.
+var knownIdentityProviders = map[string]struct{}{"github": {}, "gitlab": {}, "jira": {}, "linear": {}}
+
 // unknownIdentity is the string the writer stores when a pull request has
 // neither an author e-mail nor an author name.
 const unknownIdentity = "unknown"
@@ -98,6 +123,65 @@ type identityIndex struct {
 	strongAmbiguous map[string]struct{}
 	weak            map[string]*identity
 	weakAmbiguous   map[string]struct{}
+
+	// logins holds the provider identity values by provider key (lower-cased) then value key; unscoped
+	// holds the values under a key outside knownIdentityProviders. A value maps to every identity that
+	// holds it, in that scope.
+	logins   map[string]map[string][]*identity
+	unscoped map[string][]*identity
+}
+
+func appendHolder(holders []*identity, row *identity) []*identity {
+	for _, held := range holders {
+		if held.uuid == row.uuid {
+			return holders
+		}
+	}
+	return append(holders, row)
+}
+
+func (index *identityIndex) addLogin(provider, value string, row *identity) {
+	key := datahealth.IdentityKey(value)
+	if key == "" {
+		return
+	}
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	if _, known := knownIdentityProviders[provider]; !known {
+		index.unscoped[key] = appendHolder(index.unscoped[key], row)
+		return
+	}
+	if index.logins[provider] == nil {
+		index.logins[provider] = map[string][]*identity{}
+	}
+	index.logins[provider][key] = appendHolder(index.logins[provider][key], row)
+}
+
+// resolveLogin is the identity that holds stored as a login of the provider (or unscoped); nil when none
+// does or when two do.
+func (index *identityIndex) resolveLogin(stored, provider string) *identity {
+	key := datahealth.IdentityKey(stored)
+	if key == "" {
+		return nil
+	}
+	var holders []*identity
+	for _, row := range index.logins[provider][key] {
+		holders = appendHolder(holders, row)
+	}
+	for _, row := range index.unscoped[key] {
+		holders = appendHolder(holders, row)
+	}
+	if len(holders) != 1 {
+		return nil
+	}
+	return holders[0]
+}
+
+// resolveReviewer applies the reviewer rule of this file's header for a repository of the given provider.
+func (index *identityIndex) resolveReviewer(stored, repoProvider string) *identity {
+	if _, scoped := loginScopedProviders[repoProvider]; scoped {
+		return index.resolveLogin(stored, repoProvider)
+	}
+	return index.resolve(stored)
 }
 
 func addTo(byKey map[string]*identity, ambiguous map[string]struct{}, value string, row *identity) {
@@ -147,6 +231,7 @@ func loadIdentityIndex(ctx context.Context, client QueryClient, orgID string) (*
 	index := &identityIndex{
 		strong: map[string]*identity{}, strongAmbiguous: map[string]struct{}{},
 		weak: map[string]*identity{}, weakAmbiguous: map[string]struct{}{},
+		logins: map[string]map[string][]*identity{}, unscoped: map[string][]*identity{},
 	}
 	for rows.Next() {
 		var uuid, canonicalID, email, displayName, providerIdentities string
@@ -159,6 +244,11 @@ func loadIdentityIndex(ctx context.Context, client QueryClient, orgID string) (*
 		}
 		for _, value := range datahealth.ProviderIdentityValues(providerIdentities) {
 			index.addStrong(value, row)
+		}
+		for _, group := range datahealth.ProviderIdentityGroups(providerIdentities) {
+			for _, value := range group.Values {
+				index.addLogin(group.Provider, value, row)
+			}
 		}
 		index.addWeak(displayName, row)
 	}
@@ -192,6 +282,33 @@ func loadPullRequestAuthorNames(ctx context.Context, client QueryClient, orgID s
 		return nil, fmt.Errorf("reviewedges: pull request author names rows: %w", err)
 	}
 	return names, nil
+}
+
+// loadRepoProviders gives the lower-cased provider of each repository id; a repository with no row is absent.
+func loadRepoProviders(ctx context.Context, client QueryClient, orgID string, repoIDs []string) (map[string]string, error) {
+	providers := map[string]string{}
+	if len(repoIDs) == 0 {
+		return providers, nil
+	}
+	rows, err := client.Query(ctx, repoProvidersSQL, []clickhouse.Binding{
+		{Name: "org_id", Value: orgID},
+		{Name: "repo_ids", Value: repoIDs},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("reviewedges: repo providers query: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var repoID, provider string
+		if scanErr := rows.Scan(&repoID, &provider); scanErr != nil {
+			return nil, fmt.Errorf("reviewedges: repo providers scan: %w", scanErr)
+		}
+		providers[repoID] = strings.ToLower(strings.TrimSpace(provider))
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("reviewedges: repo providers rows: %w", err)
+	}
+	return providers, nil
 }
 
 // isEmailAddress is true for every string that holds an "@". It is wider than
@@ -246,6 +363,22 @@ func attachPeople(ctx context.Context, client QueryClient, orgID string, edges [
 		return err
 	}
 
+	repoIDSet := map[string]struct{}{}
+	for _, edge := range edges {
+		if edge.RepoID != nil {
+			repoIDSet[*edge.RepoID] = struct{}{}
+		}
+	}
+	repoIDs := make([]string, 0, len(repoIDSet))
+	for id := range repoIDSet {
+		repoIDs = append(repoIDs, id)
+	}
+	sort.Strings(repoIDs)
+	repoProviders, err := loadRepoProviders(ctx, client, orgID, repoIDs)
+	if err != nil {
+		return err
+	}
+
 	// Authors stored by e-mail whose identity gives no name: ask the pull
 	// requests, once, for all of them.
 	wanted := map[string]struct{}{}
@@ -269,7 +402,11 @@ func attachPeople(ctx context.Context, client QueryClient, orgID string, edges [
 	}
 
 	for i, edge := range edges {
-		reviewer := index.resolve(edge.Reviewer)
+		repoProvider := ""
+		if edge.RepoID != nil {
+			repoProvider = repoProviders[*edge.RepoID]
+		}
+		reviewer := index.resolveReviewer(edge.Reviewer, repoProvider)
 		author := index.resolve(edge.Author)
 		// The reviewer string is a login or a display name, never the e-mail
 		// of a pull request author: no pull request name is asked for it.

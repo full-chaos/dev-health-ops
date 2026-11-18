@@ -2329,6 +2329,10 @@ type TestOpsRiskResult {
   pipelineStability: Float
   timeseries: [TestOpsRiskTrendPoint!]!
   qualityDragBreakdown: [TestOpsRiskBreakdownItem!]!
+  """
+  True when any repository row of the latest quality-drag day has a failure-rework, flake-investigation, queue-wait or retry-overhead part that was not measured; qualityDragHours and the breakdown then sum only the known parts.
+  """
+  qualityDragPartial: Boolean!
   quadrantData: [TestOpsRiskQuadrantPoint!]!
   confidenceSpark: [TestOpsRiskSparkPoint!]!
   confidenceDelta: Float
@@ -2353,11 +2357,23 @@ enum ThresholdDirection {
   BELOW
 }
 
+"""
+How a throughputForecast backlogSize was found. MEASURED: the newest work-item day of every key (provider, work scope, team) of the scope is on or after the window start (the forecast day minus historyWeeks weeks). STALE: the newest day of at least one key is before the window start; backlogSize still holds the sum of the newest days, and backlogAsOfDay names the oldest of them. NO_ROWS: the scope has no work-item measurement, so backlogSize 0 is not a measured zero. SUPPLIED: the request gave backlogSize, and no backlog was read.
+"""
+enum ThroughputBacklogState {
+  MEASURED
+  STALE
+  NO_ROWS
+  SUPPLIED
+}
+
 type ThroughputEstimateCoverage {
   ratio: Float
   estimatedCount: Int!
   unestimatedCount: Int!
   backlogSize: Int!
+  "The number of coverage grains (provider, work scope, team) the counts are read from. 0: the scope has no coverage row, and the zero counts and ratio 0 are not a measurement."
+  grainCount: Int!
 }
 
 type ThroughputForecast {
@@ -2366,6 +2382,12 @@ type ThroughputForecast {
   teamId: String
   workScopeId: String
   backlogSize: Int!
+  "How backlogSize was found: MEASURED, STALE, NO_ROWS or SUPPLIED (see ThroughputBacklogState)."
+  backlogState: ThroughputBacklogState!
+  "The oldest of the newest work-item days that backlogSize is read from. Null when backlogState is NO_ROWS or SUPPLIED."
+  backlogAsOfDay: Date
+  "Why the backlog read is not a healthy measurement: the backlogState value (STALE or NO_ROWS) when the read is stale or found no work-item row; null when backlogState is MEASURED or SUPPLIED."
+  degradedReason: String
   historyWeeks: Int!
   p50Weeks: Int
   p75Weeks: Int

@@ -14,6 +14,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 	"github.com/full-chaos/dev-health-ops/internal/teamid"
+	"github.com/full-chaos/dev-health-ops/internal/teamprovider"
 )
 
 // Team-drift policy constants, transcribed from
@@ -497,7 +498,7 @@ func (s Store) projectTeam(ctx context.Context, orgID string, team discoveredTea
 		}
 		if _, _, err := s.insertTeamRow(ctx, teamInsertRow{
 			ID: observed.TeamID, TeamUUID: teamUUIDValue, Name: stringPtrOr(observed.Name, observed.TeamID),
-			Description: observed.Description, ManualMembers: manualMembers,
+			Description: observed.Description, ManualMembers: manualMembers, Roster: teamprovider.RosterKept,
 			ProjectKeys: catalogProjectKeys, RepoPatterns: catalogRepoPatterns, IsActive: true,
 			OrgID: orgID, Origin: origin, UpdatedAt: now,
 		}); err != nil {

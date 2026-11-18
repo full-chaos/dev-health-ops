@@ -39,7 +39,7 @@ const (
 	// created earlier is still listed by the runs phase, so a run that finishes
 	// or is rerun soon after its creation is refreshed. Older open runs are
 	// re-read by id (the open phase).
-	githubTestsRefreshLookbackDefault = 6 * time.Hour
+	githubTestsRefreshLookbackDefault = testops.OpenRunRefreshLookback
 	// The open phase re-reads at most githubTestsOpenRunCapSteady runs a unit,
 	// and githubTestsOpenRunCapBacklog while more than
 	// githubTestsOpenRunBacklogThreshold open rows older than the lookback wait.

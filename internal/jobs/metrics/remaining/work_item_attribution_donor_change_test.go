@@ -66,7 +66,7 @@ func TestADonorRowChangeRederivesOnlyTheItemsItChanges(t *testing.T) {
 			map[string]workItemAttributionNewestPrimary{"P": unassigned(before), "D": own("team-b", after)}, nil, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := donorChangedDependents(tc.edges, tc.keys, tc.rows, tc.inactive, nil)
+			got := donorChangedDependents(tc.edges, tc.keys, tc.rows, issueKindsOf(tc.rows), tc.inactive, nil, nil)
 			if fmt.Sprint(got) != fmt.Sprint(tc.want) {
 				t.Errorf("owed %v, want %v", got, tc.want)
 			}
@@ -83,5 +83,44 @@ func TestTheKeyIndexDropsAKeyTwoItemsHold(t *testing.T) {
 	})
 	if fmt.Sprint(index) != "map[OPS-2:jira:OPS-2]" {
 		t.Errorf("index %v, want only OPS-2", index)
+	}
+}
+
+// issueKindsOf gives every item of rows the kind of an issue (jira task), the shape these cells ran with
+// before the donor of a linked_issue row had to be an issue (CHAOS-14013).
+func issueKindsOf(rows map[string]workItemAttributionNewestPrimary) map[string]teamattribution.GithubWorkItemDerivationSubject {
+	kinds := make(map[string]teamattribution.GithubWorkItemDerivationSubject, len(rows))
+	for id := range rows {
+		kinds[id] = teamattribution.GithubWorkItemDerivationSubject{WorkItemID: id, Provider: "jira", Type: "task"}
+	}
+	return kinds
+}
+
+// A PR linked to an issue whose stored primary row was repo_ownership: once the issue is recomputed (its row is now unassigned and
+// newer), the PR is owed a rederive with no other trigger and no write of its own beside the backstop's normal one.
+func TestAPullRequestOfAnIssueThatLostItsRepoOwnershipRowIsOwedARederive(t *testing.T) {
+	base := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	edges := []teamattribution.GithubWorkItemDerivationDependencyEdge{
+		{SourceWorkItemID: "ghpr:a/b#7", TargetWorkItemID: "gh:a/b#9", RelationshipType: "relates_to", LastSynced: base},
+	}
+	prRow := workItemAttributionNewestPrimary{
+		TeamID: "team-repo-owner", Source: "linked_issue", ComputedAt: base,
+		Evidence: "linked_issue=gh:a/b#9;dependency_type=relates_to;donor_provider=github;donor_source=repo_ownership",
+	}
+	for _, tc := range []struct {
+		name  string
+		issue workItemAttributionNewestPrimary
+		want  []string
+	}{
+		{"the issue row is not recomputed yet", workItemAttributionNewestPrimary{TeamID: "team-repo-owner", Source: "repo_ownership", ComputedAt: base.Add(-time.Hour)}, nil},
+		{"the issue row is recomputed: unassigned, newer", workItemAttributionNewestPrimary{Source: "unassigned", ComputedAt: base.Add(time.Hour)}, []string{"ghpr:a/b#7"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rows := map[string]workItemAttributionNewestPrimary{"ghpr:a/b#7": prRow, "gh:a/b#9": tc.issue}
+			got := donorChangedDependents(edges, map[string]string{}, rows, issueKindsOf(rows), teamactive.Inactive{}, nil, nil)
+			if fmt.Sprint(got) != fmt.Sprint(tc.want) {
+				t.Fatalf("owed %v, want %v", got, tc.want)
+			}
+		})
 	}
 }

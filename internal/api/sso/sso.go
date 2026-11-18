@@ -12,10 +12,10 @@
 // (Deps.Providers), the five provider CRUD routes also take the caller
 // org's enterprise entitlement (providerGate, gate.go): product rule C1,
 // "Enterprise SSO != Enterprise self hosted" (R459). Otherwise they keep
-// the process-only gate and the fail-loud stub (gated), as do the two
-// /oauth/providers routes and the sign-in shims: each answers its
-// authentication, then its validation, then the 402, as the Python api
-// answered there.
+// the process-only gate and the fail-loud stub (gated), as do the sign-in
+// shims (authentication, validation, then the 402, as Python answered). The
+// OAuth provider create and patch routes are retired: no service writes an
+// oauth_* row, so go-api mounts neither (not-found); existing rows sign in.
 //
 // Activate and deactivate are not gated: they are ported in full.
 //
@@ -109,7 +109,7 @@ type Deps struct {
 
 type handlers struct{ Deps }
 
-// Routes mounts the seventeen SSO routes. It returns nothing unless the
+// Routes mounts the fifteen SSO routes. It returns nothing unless the
 // protected-route runtime is configured.
 func Routes(deps Deps) []httpapi.Route {
 	if deps.Pool == nil || deps.Guard == nil {
@@ -193,19 +193,17 @@ func Routes(deps Deps) []httpapi.Route {
 		route(http.MethodPost, "/saml/{provider_id}/acs", g.BodyFirst(policy.Public, inner("/saml/{provider_id}/acs", samlACS))),
 		route(http.MethodPost, "/oidc/{provider_id}/authorize", g.BodyFirst(policy.Public, inner("/oidc/{provider_id}/authorize", oidcAuthorize))),
 		route(http.MethodPost, "/oidc/{provider_id}/callback", g.BodyFirst(policy.Public, inner("/oidc/{provider_id}/callback", oidcCallbackHandler))),
-		route(http.MethodPost, "/oauth/providers", g.BodyFirst(policy.Authenticated, h.gated(body(oauthProviderCreate)))),
-		// PATCH /oauth/providers/{provider_id}, POST /oauth/{provider_id}/authorize,
-		// POST /oauth/{provider_id}/callback and GET /oauth/{provider_type}/authorize
-		// overlap (/oauth/providers/authorize matches three of them), which
-		// net/http refuses to register; one pattern dispatches them as
-		// Starlette does (oauthPair).
+		// POST /oauth/{provider_id}/authorize, POST /oauth/{provider_id}/callback
+		// and GET /oauth/{provider_type}/authorize overlap, which net/http
+		// refuses to register; one pattern dispatches them as Starlette does
+		// (oauthPair).
 	}
 	pair := h.oauthPair()
 	for _, method := range []string{http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut, http.MethodPatch,
 		http.MethodDelete, http.MethodOptions} {
 		// Every route it dispatches declares a response_model.
 		routes = append(routes, httpapi.Route{Method: method, Pattern: prefix + "/oauth/{first}/{second}", Handler: pair,
-			ResponseModelFor: func(*http.Request) bool { return true }})
+			ResponseModelFor: func(*http.Request) bool { return true }, MethodFallback: true})
 	}
 	return routes
 }
@@ -288,8 +286,7 @@ func (h handlers) oauthPair() http.Handler {
 	// OAuth handlers need StateSecret (the AEAD opaque state token,
 	// oauthstate.go) and Signer (the login token pair, login.go's
 	// finishSSOLogin) to run for real; without either, these three stay the
-	// same process-tier-only shim the other two /oauth routes (providers
-	// PATCH) still answer.
+	// process-tier-only shim.
 	oauthAuthorize := h.orStateMissing(h.gated(body(oauthAuthRequest)))
 	oauthCallbackHandler := h.orStateMissing(h.gated(body(oauthCallbackRequest)))
 	oauthByType := h.orStateMissing(h.gated(byTypeQuery))
@@ -302,8 +299,6 @@ func (h handlers) oauthPair() http.Handler {
 		oauthAuthorize, oauthCallbackHandler, oauthByType = http.HandlerFunc(h.refuseSessionsOff), http.HandlerFunc(h.refuseSessionsOff), http.HandlerFunc(h.refuseSessionsOff)
 	}
 	routes := []pairRoute{
-		{http.MethodPatch, func(first, _ string) bool { return first == "providers" },
-			g.BodyFirst(policy.Authenticated, h.gated(body(oauthProviderUpdate)))},
 		{http.MethodPost, func(_, second string) bool { return second == "authorize" },
 			g.BodyFirst(policy.Public, oauthAuthorize)},
 		{http.MethodPost, func(_, second string) bool { return second == "callback" },

@@ -121,7 +121,7 @@ func loadTestopsPipelineRuns(
 ) ([]testops.PipelineRunRow, error) {
 	rows, err := conn.Query(ctx, `
 SELECT status, queued_at, started_at, finished_at, duration_seconds, queue_seconds,
-       retry_count, team_id, service_id, org_id
+       retry_count, team_id, service_id, org_id, last_synced
 FROM ci_pipeline_runs FINAL
 WHERE started_at >= ? AND started_at < ? AND repo_id = ? AND org_id = ?`,
 		start.UTC(), end.UTC(), repoID, orgID)
@@ -136,7 +136,7 @@ WHERE started_at >= ? AND started_at < ? AND repo_id = ? AND org_id = ?`,
 		if err := rows.Scan(
 			&row.Status, &row.QueuedAt, &row.StartedAt, &row.FinishedAt,
 			&row.DurationSeconds, &row.QueueSeconds, &row.RetryCount,
-			&row.TeamID, &row.ServiceID, &row.OrgID,
+			&row.TeamID, &row.ServiceID, &row.OrgID, &row.LastSynced,
 		); err != nil {
 			return nil, fmt.Errorf("scan testops pipeline run: %w", err)
 		}
@@ -397,6 +397,21 @@ func roundedRate(value *float64) *float64 {
 	return &rounded
 }
 
+func knownRate(value float64, unknown bool) *float64 {
+	if unknown {
+		return nil
+	}
+	rounded := pyRound(value, 4)
+	return &rounded
+}
+
+func flakeHoursOrUnknown(hours float64, unknown bool) *float64 {
+	if unknown {
+		return nil
+	}
+	return nullablePyRound("testops_quality_drag", "flake_investigation_hours", hours, 4)
+}
+
 // clampUnit ports Python's `_clamp(value, lo=0.0, hi=1.0) -> max(lo, min(hi,
 // value))` (compute_testops_risk.py:20-21) bit-for-bit, including its NaN
 // behavior, via pythonparity.Min2/Max2, which replicate CPython's
@@ -553,6 +568,9 @@ func computeReleaseConfidence(
 		return nil
 	}
 	var flakeRate, failureRecurrence float64
+	// A test row that measured no case (DistinctCases == 0) leaves the flake and recurrence factors unknown:
+	// they add nothing to the score and are null in factors_json, never read as a healthy 0.
+	flakeUnknown := test != nil && test.DistinctCases == 0
 	var coveragePct, coverageDelta float64
 	// The pipeline success rate and the test pass rate are the repository's summed counts over their
 	// denominators (completed runs, success plus failure, for the pipeline: cancelled, skipped and running runs are
@@ -564,8 +582,10 @@ func computeReleaseConfidence(
 	}
 	if test != nil {
 		passRate = ratioOrAbsent(test.PassedCount, test.PassedCount+test.FailedCount)
-		flakeRate = test.FlakeRate
-		failureRecurrence = test.FailureRecurrence
+		if !flakeUnknown {
+			flakeRate = test.FlakeRate
+			failureRecurrence = test.FailureRecurrence
+		}
 	}
 	if cov != nil && cov.LineCoveragePct != nil {
 		coveragePct = pythonparity.OrZero(*cov.LineCoveragePct)
@@ -578,6 +598,9 @@ func computeReleaseConfidence(
 	testFactor := 0.3 * valueOrZero(passRate)
 	covFactor := 0.2 * clampUnit(coveragePct/100.0)
 	flakeFactor := 0.1 * (1.0 - flakeRate)
+	if flakeUnknown {
+		flakeFactor = 0
+	}
 	baseScore := pipelineFactor + testFactor + covFactor + flakeFactor
 
 	flakePenalty := 0.0
@@ -597,8 +620,8 @@ func computeReleaseConfidence(
 		ffRate("pipeline_success_rate", roundedRate(successRate)),
 		ffRate("test_pass_rate", roundedRate(passRate)),
 		ff("coverage_pct", pyRound(coveragePct, 2)),
-		ff("flake_rate", pyRound(flakeRate, 4)),
-		ff("failure_recurrence", pyRound(failureRecurrence, 4)),
+		ffRate("flake_rate", knownRate(flakeRate, flakeUnknown)),
+		ffRate("failure_recurrence", knownRate(failureRecurrence, flakeUnknown)),
 		ff("coverage_delta_pct", pyRound(coverageDelta, 2)),
 		ff("base_score", pyRound(baseScore, 4)),
 		ff("flake_penalty", pyRound(flakePenalty, 4)),
@@ -649,6 +672,7 @@ func computeQualityDrag(
 	}
 	var flakeRate float64
 	var totalCases int
+	flakeUnknown := test != nil && test.DistinctCases == 0
 	if test != nil {
 		flakeRate = test.FlakeRate
 		totalCases = test.TotalCases
@@ -658,7 +682,11 @@ func computeQualityDrag(
 	flakeInvestigationHours := flakeRate * float64(totalCases) * 0.25
 	queueWaitHours := float64(pipelinesCount) * avgQueue / 3600.0
 	retryOverheadHours := rerunRate * float64(pipelinesCount) * medianDur / 3600.0
+	// An unmeasured flake part is NULL and left out of the sum: drag_hours is the sum of the known parts.
 	dragHours := failureReworkHours + flakeInvestigationHours + queueWaitHours + retryOverheadHours
+	if flakeUnknown {
+		dragHours = failureReworkHours + queueWaitHours + retryOverheadHours
+	}
 
 	factors := factorsJSON("testops_quality_drag", []factorsJSONField{
 		fi("failure_count", failureCount),
@@ -666,7 +694,7 @@ func computeQualityDrag(
 		fi("pipelines_count", pipelinesCount),
 		ff("avg_queue_seconds", pyRound(avgQueue, 2)),
 		ff("rerun_rate", pyRound(rerunRate, 4)),
-		ff("flake_rate", pyRound(flakeRate, 4)),
+		ffRate("flake_rate", knownRate(flakeRate, flakeUnknown)),
 		fi("total_cases", totalCases),
 	})
 
@@ -674,7 +702,7 @@ func computeQualityDrag(
 		RepoID: repoID, Day: day,
 		DragHours:               nullablePyRound("testops_quality_drag", "drag_hours", dragHours, 4),
 		FailureReworkHours:      nullablePyRound("testops_quality_drag", "failure_rework_hours", failureReworkHours, 4),
-		FlakeInvestigationHours: nullablePyRound("testops_quality_drag", "flake_investigation_hours", flakeInvestigationHours, 4),
+		FlakeInvestigationHours: flakeHoursOrUnknown(flakeInvestigationHours, flakeUnknown),
 		QueueWaitHours:          nullablePyRound("testops_quality_drag", "queue_wait_hours", queueWaitHours, 4),
 		RetryOverheadHours:      nullablePyRound("testops_quality_drag", "retry_overhead_hours", retryOverheadHours, 4),
 		FactorsJSON:             factors,

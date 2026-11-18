@@ -12,6 +12,7 @@ import (
 	"io"
 	"log/slog"
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -249,11 +250,18 @@ type githubTestsReportRows struct {
 	Cases    []testCaseResultRow
 	Coverage []coverageSnapshotRow
 	Skipped  int
+	// GuardDropped counts members the shared archive parse dropped at a size guard (compression_ratio, archive_entry_cap) that the
+	// caller took out of Skipped, issues and SkippedArtifacts because its route has no vocabulary for them (GitLab, CHAOS-14030).
+	GuardDropped int
+	// GuardCauses are the distinct causes of the GuardDropped members, sorted.
+	GuardCauses []string
 	// ReportsParsed is the number of members read as reports. NonReportJSON and
 	// NonReportOther count members that are not .xml/.info (CHAOS-13193): they
 	// are observability only -- never an incomplete cause, so reports_complete
 	// and the watermark do not see them.
-	ReportsParsed  int
+	ReportsParsed int
+	// ReportsRead is the number of members parsed whole as a report; a report with no test or no line counts.
+	ReportsRead    int
 	NonReportJSON  int
 	NonReportOther int
 	// SkippedArtifacts carries a durable GitHubTestsSkippedArtifact marker for
@@ -347,7 +355,7 @@ type GitHubTestsSkippedArtifact struct {
 // so 20 records alone encoded to ~4.1KB, already exceeding the ENTIRE
 // cursor's 4KiB budget before Repo/NextURL/Incomplete/ExcludedArtifactSample/
 // everything else is added: a heavy-skip-volume unit's checkpoint write
-// could fail outright. 6 here (8 until CHAOS-13985 added the sixth report_member cause, unsafe_doctype, and needed its bytes back), alongside githubTestsMaxArtifactNameBytes's
+// could fail outright. 5 here (8 until CHAOS-13985 added unsafe_doctype, then 6 until CHAOS-14030 added compression_ratio and archive_entry_cap; each time one fewer per-artifact sample record is kept and the bytes go to the new cause, per-cause counts stay exact), alongside githubTestsMaxArtifactNameBytes's
 // 24, keeps a full worst-case cursor (every field at a realistic maximum) at
 // ~3.3KB -- verified, not assumed, by
 // TestGitHubTestsChunkCursorWorstCaseStaysWithinBudget, which encodes
@@ -357,7 +365,7 @@ type GitHubTestsSkippedArtifact struct {
 // Occurrences beyond this cap are still fully reflected in the closed
 // GitHubTestsIncomplete Count and the RecordArtifactSkipped metric; only the
 // per-artifact SAMPLE used to locate a specific artifact is bounded.
-const githubTestsMaxSkippedArtifactRecords = 6
+const githubTestsMaxSkippedArtifactRecords = 5
 
 // githubTestsMaxExcludedArtifactSampleRecords bounds
 // githubTestsChunkCursor.ExcludedArtifactSample, kept well under
@@ -473,6 +481,20 @@ const (
 	// entity declaration or a DOCTYPE internal subset (CHAOS-13985). Like
 	// malformed it is deterministic, so it ADVANCES the watermark.
 	githubTestsUnsafeDoctypeCause = "unsafe_doctype"
+	// githubTestsCompressionRatioCause records a report member the archive
+	// parse refused to inflate because its uncompressed size exceeds
+	// githubTestsMaxCompressionRatio times its compressed size (CHAOS-14030).
+	// The member was dropped with no marker, so the run read complete. Unlike
+	// archive_bounds it is non-blocking and carries a durable marker: the
+	// archive's bytes are the same on every walk, so it ADVANCES the watermark
+	// like malformed.
+	githubTestsCompressionRatioCause = "compression_ratio"
+	// githubTestsArchiveEntryCapCause records report-candidate members (.xml or
+	// .info) past githubTestsMaxArchiveEntries that the archive parse never
+	// looked at (CHAOS-14030). One marker and one count per cut report member;
+	// cut members that are not report candidates record nothing. Deterministic,
+	// so it ADVANCES the watermark.
+	githubTestsArchiveEntryCapCause = "archive_entry_cap"
 )
 
 // githubTestsParseRefusalCause names the report_member cause of a report parse
@@ -605,6 +627,8 @@ var githubTestsWatermarkAdvancingPairs = map[string]map[string]struct{}{
 		githubTestsMalformedCause:           {},
 		githubTestsUnreadableCause:          {},
 		githubTestsUnsafeDoctypeCause:       {},
+		githubTestsCompressionRatioCause:    {},
+		githubTestsArchiveEntryCapCause:     {},
 	},
 }
 
@@ -945,7 +969,7 @@ var githubTestsIncompleteVocabulary = map[string]map[string]struct{}{
 	githubTestsReportMemberComponent: {
 		"malformed": {}, "unreadable": {}, githubTestsUnsafeDoctypeCause: {}, githubTestsUnreadableArchiveCause: {},
 		githubTestsArtifactUnavailableCause: {}, githubTestsArtifactOversizedCause: {},
-		githubTestsArtifactExpiredCause: {},
+		githubTestsArtifactExpiredCause: {}, githubTestsCompressionRatioCause: {}, githubTestsArchiveEntryCapCause: {},
 	},
 	githubTestsRunInventoryComponent:      {githubTestsPageBudgetCause: {}},
 	githubTestsArtifactInventoryComponent: {githubTestsPageBudgetCause: {}},
@@ -1141,17 +1165,26 @@ func parseGitHubTestsArchive(
 	suiteOccurrence := map[string]int{}
 	members := reader.File
 	if len(members) > githubTestsMaxArchiveEntries {
+		for _, cut := range members[githubTestsMaxArchiveEntries:] {
+			if !isSafeGitHubTestsArchiveMemberName(cut.Name) || cut.FileInfo().IsDir() {
+				continue
+			}
+			lowerCut := strings.ToLower(cut.Name)
+			if !strings.HasSuffix(lowerCut, ".xml") && !strings.HasSuffix(lowerCut, ".info") {
+				continue
+			}
+			result.recordSkipped(githubTestsArchiveEntryCapCause, false)
+			result.SkippedArtifacts = append(result.SkippedArtifacts, GitHubTestsSkippedArtifact{
+				RunID: runID, ArtifactID: markerID, Cause: githubTestsArchiveEntryCapCause,
+			})
+		}
 		members = members[:githubTestsMaxArchiveEntries]
 	}
 	for _, member := range members {
-		if !isSafeGitHubTestsArchiveMemberName(member.Name) || member.FileInfo().IsDir() {
-			result.NonReportOther++
-			continue
-		}
 		name := member.Name
 		lower := strings.ToLower(name)
-		if !strings.HasSuffix(lower, ".xml") && !strings.HasSuffix(lower, ".info") {
-			if strings.HasSuffix(lower, ".json") {
+		if !githubTestsReportCandidateMember(member) {
+			if isSafeGitHubTestsArchiveMemberName(name) && !member.FileInfo().IsDir() && strings.HasSuffix(lower, ".json") {
 				result.NonReportJSON++
 			} else {
 				result.NonReportOther++
@@ -1171,6 +1204,10 @@ func parseGitHubTestsArchive(
 			compressed = 1
 		}
 		if member.UncompressedSize64 > compressed*githubTestsMaxCompressionRatio {
+			result.recordSkipped(githubTestsCompressionRatioCause, false)
+			result.SkippedArtifacts = append(result.SkippedArtifacts, GitHubTestsSkippedArtifact{
+				RunID: runID, ArtifactID: markerID, Cause: githubTestsCompressionRatioCause,
+			})
 			continue
 		}
 		body, err := readZipReport(member)
@@ -1221,6 +1258,7 @@ func parseGitHubTestsArchive(
 				})
 				continue
 			}
+			result.ReportsRead++
 			result.Suites = append(result.Suites, suites...)
 			result.Cases = append(result.Cases, cases...)
 			result.DuplicateCases += countDuplicateTestCases(cases)
@@ -1235,6 +1273,7 @@ func parseGitHubTestsArchive(
 				})
 				continue
 			}
+			result.ReportsRead++
 			for _, legacyScope := range legacyScopes {
 				coverage.LegacySnapshotIDs = append(coverage.LegacySnapshotIDs, githubTestsSnapshotID(runID, legacyScope, *coverage.ReportFormat, name))
 			}
@@ -1259,6 +1298,14 @@ func parseGitHubTestsArchive(
 	// correctly accumulated per member above.
 	result.DuplicateSuites = countDuplicateTestSuites(result.Suites)
 	return result, nil
+}
+
+// githubTestsReportCandidateMember is the parser's member rule: a safe file
+// name ending in .xml or .info, the only members it reads as reports.
+func githubTestsReportCandidateMember(member *zip.File) bool {
+	lower := strings.ToLower(member.Name)
+	return isSafeGitHubTestsArchiveMemberName(member.Name) && !member.FileInfo().IsDir() &&
+		(strings.HasSuffix(lower, ".xml") || strings.HasSuffix(lower, ".info"))
 }
 
 func isSafeGitHubTestsArchiveMemberName(name string) bool {
@@ -2013,4 +2060,70 @@ func githubTestsSkippedMarkerRecorded(records []GitHubTestsSkippedArtifact, runI
 		}
 	}
 	return false
+}
+
+// githubTestsIsMemberGuardCause reports whether cause is one of the two size-guard skips of the shared archive parse
+// (CHAOS-14030). The GitHub routes record them as report_member observations; GitLab's has no such vocabulary.
+func githubTestsIsMemberGuardCause(cause string) bool {
+	return cause == githubTestsCompressionRatioCause || cause == githubTestsArchiveEntryCapCause
+}
+
+// withoutMemberGuardSkips returns rows with the guard skips removed from Skipped, the issues and the markers, and counted in
+// GuardDropped. Every other skip is left as the parse recorded it.
+func (rows githubTestsReportRows) withoutMemberGuardSkips() githubTestsReportRows {
+	issues := make([]githubTestsReportIssue, 0, len(rows.issues))
+	for _, issue := range rows.issues {
+		if githubTestsIsMemberGuardCause(issue.evidence.Cause) {
+			rows.Skipped -= issue.evidence.Count
+			rows.GuardDropped += issue.evidence.Count
+			if !slices.Contains(rows.GuardCauses, issue.evidence.Cause) {
+				rows.GuardCauses = append(rows.GuardCauses, issue.evidence.Cause)
+				slices.Sort(rows.GuardCauses)
+			}
+			continue
+		}
+		issues = append(issues, issue)
+	}
+	rows.issues = issues
+	markers := make([]GitHubTestsSkippedArtifact, 0, len(rows.SkippedArtifacts))
+	for _, marker := range rows.SkippedArtifacts {
+		if !githubTestsIsMemberGuardCause(marker.Cause) {
+			markers = append(markers, marker)
+		}
+	}
+	rows.SkippedArtifacts = markers
+	return rows
+}
+
+// withoutReplayedMemberGuardSkips takes out the size-guard skips of causes whose marker for (runID, artifactID) is already in
+// recorded: a re-anchored walk read the same artifact again (CHAOS-14030). The other skips are left as they are.
+func (rows githubTestsReportRows) withoutReplayedMemberGuardSkips(recorded []GitHubTestsSkippedArtifact, runID, artifactID string) (githubTestsReportRows, []string) {
+	replayed := map[string]bool{}
+	for _, cause := range []string{githubTestsCompressionRatioCause, githubTestsArchiveEntryCapCause} {
+		if githubTestsSkippedMarkerRecorded(recorded, runID, artifactID, cause) {
+			replayed[cause] = true
+		}
+	}
+	if len(replayed) == 0 {
+		return rows, nil
+	}
+	var dropped []string
+	issues := make([]githubTestsReportIssue, 0, len(rows.issues))
+	for _, issue := range rows.issues {
+		if replayed[issue.evidence.Cause] {
+			rows.Skipped -= issue.evidence.Count
+			dropped = append(dropped, issue.evidence.Cause)
+			continue
+		}
+		issues = append(issues, issue)
+	}
+	rows.issues = issues
+	markers := make([]GitHubTestsSkippedArtifact, 0, len(rows.SkippedArtifacts))
+	for _, marker := range rows.SkippedArtifacts {
+		if !replayed[marker.Cause] {
+			markers = append(markers, marker)
+		}
+	}
+	rows.SkippedArtifacts = markers
+	return rows, dropped
 }

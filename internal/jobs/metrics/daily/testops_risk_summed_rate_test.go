@@ -108,13 +108,13 @@ func TestReleaseConfidencePipelineSuccessDividesByCompletedRuns(t *testing.T) {
 }
 
 func TestReleaseConfidenceZeroDenominatorIsAbsentAndMissingInTheScore(t *testing.T) {
-	// Only skipped cases and no pipeline run: both rates absent (null), the score is the flake term alone.
+	// Only skipped cases and no pipeline run: both rates absent (null); the skipped-only day measured no case, so the flake term is unknown and left out too.
 	row := riskSummedRow(t, nil, []testops.SuiteRow{riskSuite(0, 0, 100)})
 	if !strings.Contains(row.FactorsJSON, `"pipeline_success_rate": null`) || !strings.Contains(row.FactorsJSON, `"test_pass_rate": null`) {
 		t.Fatalf("zero denominators must be null: %s", row.FactorsJSON)
 	}
-	if row.PipelineSuccessFactor != 0 || row.TestPassFactor != 0 || row.ConfidenceScore != 0.1 {
-		t.Fatalf("factors %v/%v score %v, want 0/0 and 0.1 (an absent factor is missing, never healthy)", row.PipelineSuccessFactor, row.TestPassFactor, row.ConfidenceScore)
+	if row.PipelineSuccessFactor != 0 || row.TestPassFactor != 0 || row.ConfidenceScore != 0 {
+		t.Fatalf("factors %v/%v score %v, want 0/0 and 0 (an absent factor is missing, never healthy)", row.PipelineSuccessFactor, row.TestPassFactor, row.ConfidenceScore)
 	}
 	// Runs that exist but none passed or failed a case: still absent for the test rate.
 	row = riskSummedRow(t, riskRuns("team-a", "success", 2), []testops.SuiteRow{riskSuite(0, 0, 5)})

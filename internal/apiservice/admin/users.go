@@ -125,7 +125,7 @@ func requestedOrgHeader(r *http.Request) string {
 func (h *handlers) listUsers(w http.ResponseWriter, r *http.Request) {
 	user := policy.UserFrom(r.Context())
 	ctx := r.Context()
-	query := r.URL.Query()
+	query := httpapi.Query(r)
 
 	limit, qerr := queryInt(query, "limit", 100)
 	if qerr != nil {
@@ -676,7 +676,7 @@ func (h *handlers) deleteUser(w http.ResponseWriter, r *http.Request) {
 	}
 	mode := DeleteSoft
 	// every force value must be a boolean: a repeated parameter with one malformed value is refused, never read as its first value
-	for _, raw := range r.URL.Query()["force"] {
+	for _, raw := range httpapi.Query(r)["force"] {
 		force, err := strconv.ParseBool(raw)
 		if err != nil {
 			policy.WriteDetail(w, http.StatusUnprocessableEntity, "force must be true or false", nil)

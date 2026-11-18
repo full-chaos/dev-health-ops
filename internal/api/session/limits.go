@@ -2,8 +2,11 @@ package session
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"net/http"
 	"net/netip"
+	"strconv"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
@@ -22,9 +25,12 @@ import (
 // compatibility route (httpapi.ValidateLimitCount), sized for web's session
 // checks (python_divergence_test.go).
 var (
-	loginLimit    = httpapi.Limit{ID: "auth_login_ip", Count: 20, Window: 15 * time.Minute}
-	refreshLimit  = httpapi.Limit{ID: "auth_refresh", Count: 10, Window: 15 * time.Minute}
-	validateLimit = httpapi.Limit{ID: "auth_validate", Count: httpapi.ValidateLimitCount, Window: httpapi.ValidateLimitWindow}
+	loginLimit = httpapi.Limit{ID: "auth_login_ip", Count: 20, Window: 15 * time.Minute}
+	// refreshLimit counts per refresh credential (refreshTokenKey), refreshAddrLimit per client address
+	// (addrBucketKey): one address may hold many users (CHAOS-8441), each refresh rotates the credential.
+	refreshLimit     = httpapi.Limit{ID: "auth_refresh", Count: 10, Window: 15 * time.Minute}
+	refreshAddrLimit = httpapi.Limit{ID: "auth_refresh_addr", Count: 100, Window: 15 * time.Minute}
+	validateLimit    = httpapi.Limit{ID: "auth_validate", Count: httpapi.ValidateLimitCount, Window: httpapi.ValidateLimitWindow}
 	// verify.py and password_reset.py's literal limits, keyed by
 	// get_auth_key; reset-password has none.
 	verifyLimit = httpapi.Limit{ID: "auth_verify", Count: 10, Window: time.Hour}
@@ -87,8 +93,32 @@ func addrBucketKey(r *http.Request) string {
 	return addr.String()
 }
 
-// forwardedIPKey is get_forwarded_ip, the key of the login and refresh limits.
+// forwardedIPKey is get_forwarded_ip, the key of the login and register limits.
 func forwardedIPKey(r *http.Request) string { return ratelimit.ForwardedIP(r) }
+
+// refreshKeyLabel separates the refresh limit key from every other hash of a credential: the key is never the
+// at-rest token_hash (sha256 of the credential alone).
+const refreshKeyLabel = "dh/refresh-limit/v1"
+
+// refreshTokenKey is the refresh limit key: a labelled SHA-256 of the body's refresh_token, which validateRefresh
+// put in the context. Only the exact credential selects a bucket; no header is read.
+func refreshTokenKey(r *http.Request) string {
+	token, _ := r.Context().Value(refreshInputKey{}).(string)
+	sum := sha256.Sum256([]byte(refreshKeyLabel + "\x00" + token))
+	return "refresh-token:" + hex.EncodeToString(sum[:16])
+}
+
+// retryAfterOnLimit is write with Retry-After set on a 429: the limit's whole window in seconds, an upper bound
+// (a counter expires at most one window after its first hit).
+func retryAfterOnLimit(limit httpapi.Limit, write httpapi.ErrorWriter) httpapi.ErrorWriter {
+	seconds := strconv.Itoa(int(limit.Window / time.Second))
+	return func(w http.ResponseWriter, r *http.Request, code httpapi.Code) {
+		if code == httpapi.CodeRateLimited {
+			w.Header().Set("Retry-After", seconds)
+		}
+		write(w, r, code)
+	}
+}
 
 func writeValidation(w http.ResponseWriter, errs pybody.Errors) {
 	policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(errs), nil)
@@ -178,7 +208,7 @@ func authKey(r *http.Request, body pyjson.Value) string {
 		}
 	}
 	if raw == nil {
-		if value := pybody.LastQueryValue(r.URL.Query(), "email"); value != nil && *value != "" {
+		if value := pybody.LastQueryValue(httpapi.Query(r), "email"); value != nil && *value != "" {
 			raw = value
 		}
 	}

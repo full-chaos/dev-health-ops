@@ -214,8 +214,38 @@ func resolveListField(provided *[]string, existing []string) []string {
 	return []string{}
 }
 
-// CreateOrUpdateTeam is ClickHouseTeamAdminService.create_or_update.
+// CreateOrUpdateTeam is ClickHouseTeamAdminService.create_or_update. A write
+// that states the roster (ManualMembers) is read back: when another writer's
+// version won over it, the write is made again, at most rosterRounds times,
+// then ErrTeamChangedConcurrently. A write that does not state it keeps the
+// stored roster inside the insert statement.
 func (s Store) CreateOrUpdateTeam(ctx context.Context, orgID string, write TeamWrite) (Team, error) {
+	if write.ManualMembers == nil {
+		return s.writeTeam(ctx, orgID, write, rosterWrite{rule: teamprovider.RosterKept})
+	}
+	edit := rosterEdit{set: write.ManualMembers}
+	for round := 1; ; round++ {
+		team, err := s.writeTeam(ctx, orgID, write, edit.row())
+		if err != nil {
+			return Team{}, err
+		}
+		_, held, err := s.rosterHeld(ctx, orgID, write.TeamID, edit)
+		if err != nil {
+			return Team{}, err
+		}
+		if held {
+			return team, nil
+		}
+		if round == rosterRounds {
+			return Team{}, fmt.Errorf("write team %q roster: %w", write.TeamID, ErrTeamChangedConcurrently)
+		}
+	}
+}
+
+// writeTeam writes one version of the team. The roster rule is the
+// operation's own and is applied inside the insert: a team that has no row,
+// or whose newest version is deleted, has an empty stored roster there.
+func (s Store) writeTeam(ctx context.Context, orgID string, write TeamWrite, roster rosterWrite) (Team, error) {
 	// GetTeam does not return a deleted team, so a write under the id of a
 	// deleted team is a NEW team: it takes the writer's origin and nothing of
 	// the deleted row (no member, no project key, no repository pattern).
@@ -241,7 +271,8 @@ func (s Store) CreateOrUpdateTeam(ctx context.Context, orgID string, write TeamW
 	now := time.Now().UTC()
 	createdAt, writtenAt, err := s.insertTeamRow(ctx, teamInsertRow{
 		ID: write.TeamID, TeamUUID: uuidValue, Name: write.Name, Description: write.Description,
-		ManualMembers: resolvedManual, ProjectKeys: resolvedProjects, RepoPatterns: resolvedRepos,
+		ManualMembers: resolvedManual, Roster: roster.rule, RosterAdd: roster.add, RosterRemove: roster.remove,
+		ProjectKeys: resolvedProjects, RepoPatterns: resolvedRepos,
 		IsActive: true, OrgID: orgID, Origin: origin, UpdatedAt: now,
 	})
 	if err != nil {
@@ -282,23 +313,50 @@ func sortedUnique(values ...[]string) []string {
 // roster that is left: manual_members. The stored roster column `members` is
 // no longer written (CHAOS-9087): a person's team comes from team_memberships.
 func (s Store) SetMembers(ctx context.Context, orgID, teamID string, manualMembers []string) (*Team, error) {
-	existing, err := s.GetTeam(ctx, orgID, teamID)
-	if err != nil {
-		return nil, err
+	members := append([]string(nil), manualMembers...)
+	return s.editRoster(ctx, orgID, teamID, rosterEdit{set: &members})
+}
+
+// editRoster writes a roster edit on the stored team and reads it back. When
+// another writer's version won over it (the edit is not in the stored
+// roster), the edit is applied again to a fresh read of the team, at most
+// rosterRounds writes; then ErrTeamChangedConcurrently. A team that is not
+// there is nil; a team that is gone after a read-back found the edit lost
+// (deleted by the writer that won) is ErrTeamChangedConcurrently: the edit
+// was not applied.
+func (s Store) editRoster(ctx context.Context, orgID, teamID string, edit rosterEdit) (*Team, error) {
+	for round := 1; ; round++ {
+		existing, err := s.GetTeam(ctx, orgID, teamID)
+		if err != nil {
+			return nil, err
+		}
+		if existing == nil && round > 1 {
+			return nil, fmt.Errorf("edit team %q roster: the team is gone: %w", teamID, ErrTeamChangedConcurrently)
+		}
+		if existing == nil {
+			return nil, nil
+		}
+		roster := edit.apply(existing.ManualMembers)
+		team, err := s.writeTeam(ctx, orgID, TeamWrite{
+			Origin: existing.origin.Provider, TeamID: teamID, Name: existing.Name, Description: existing.Description,
+			RepoPatterns: ptrSlice(existing.RepoPatterns), ProjectKeys: ptrSlice(existing.ProjectKeys),
+			ManualMembers: &roster,
+		}, edit.row())
+		if err != nil {
+			return nil, err
+		}
+		stored, held, err := s.rosterHeld(ctx, orgID, teamID, edit)
+		if err != nil {
+			return nil, err
+		}
+		if held {
+			team.ManualMembers = stored
+			return &team, nil
+		}
+		if round == rosterRounds {
+			return nil, fmt.Errorf("edit team %q roster: %w", teamID, ErrTeamChangedConcurrently)
+		}
 	}
-	if existing == nil {
-		return nil, nil
-	}
-	sortedManual := sortedUnique(manualMembers)
-	team, err := s.CreateOrUpdateTeam(ctx, orgID, TeamWrite{
-		Origin: existing.origin.Provider, TeamID: teamID, Name: existing.Name, Description: existing.Description,
-		RepoPatterns: ptrSlice(existing.RepoPatterns), ProjectKeys: ptrSlice(existing.ProjectKeys),
-		ManualMembers: &sortedManual,
-	})
-	if err != nil {
-		return nil, err
-	}
-	return &team, nil
 }
 
 func ptrSlice(values []string) *[]string {
@@ -310,28 +368,20 @@ func ptrSlice(values []string) *[]string {
 // into ManualMembers (CHAOS-4321 -- this method is only ever called from a
 // genuine admin action).
 func (s Store) AddMembers(ctx context.Context, orgID, teamID string, members []string) (*Team, error) {
-	existing, err := s.GetTeam(ctx, orgID, teamID)
-	if err != nil {
-		return nil, err
-	}
-	if existing == nil {
-		return nil, nil
-	}
-	return s.SetMembers(ctx, orgID, teamID, sortedUnique(existing.ManualMembers, members))
+	return s.editRoster(ctx, orgID, teamID, rosterEdit{add: append([]string(nil), members...)})
 }
 
 // RemoveMembers is ClickHouseTeamAdminService.remove_members: surgically
 // drops facets from ManualMembers, preserving every other member (never
 // recomputed from scratch).
 func (s Store) RemoveMembers(ctx context.Context, orgID, teamID string, facets map[string]bool) (*Team, error) {
-	existing, err := s.GetTeam(ctx, orgID, teamID)
-	if err != nil {
-		return nil, err
+	drop := make(map[string]bool, len(facets))
+	for facet, ok := range facets {
+		if ok {
+			drop[facet] = true
+		}
 	}
-	if existing == nil {
-		return nil, nil
-	}
-	return s.SetMembers(ctx, orgID, teamID, filterOut(existing.ManualMembers, facets))
+	return s.editRoster(ctx, orgID, teamID, rosterEdit{remove: drop})
 }
 
 func filterOut(values []string, drop map[string]bool) []string {
@@ -370,8 +420,8 @@ func (s Store) DeleteTeam(ctx context.Context, orgID, teamID string) (bool, erro
 	now := time.Now().UTC()
 	if _, _, err := s.insertTeamRow(ctx, teamInsertRow{
 		ID: existing.TeamID, TeamUUID: existing.TeamUUID, Name: existing.Name, Description: existing.Description,
-		ManualMembers: existing.ManualMembers,
-		ProjectKeys:   existing.ProjectKeys, RepoPatterns: existing.RepoPatterns,
+		ManualMembers: existing.ManualMembers, Roster: teamprovider.RosterKept,
+		ProjectKeys: existing.ProjectKeys, RepoPatterns: existing.RepoPatterns,
 		IsActive: false, OrgID: orgID, Origin: existing.origin, UpdatedAt: now, DeletedAt: &now,
 	}); err != nil {
 		return false, fmt.Errorf("delete team: %w", err)
@@ -391,10 +441,16 @@ func (s Store) newestTeamVersion(ctx context.Context, orgID, teamID string) (*ti
 }
 
 type teamInsertRow struct {
-	ID, Name                  string
-	TeamUUID                  uuid.UUID
-	Description               *string
-	ManualMembers             []string
+	ID, Name      string
+	TeamUUID      uuid.UUID
+	Description   *string
+	ManualMembers []string
+	// Roster says how manual_members is written: ManualMembers as given
+	// (RosterStated), the stored roster (RosterKept), or the stored roster
+	// with RosterAdd added and RosterRemove taken out (RosterDelta), both
+	// read inside the insert statement.
+	Roster                    teamprovider.Roster
+	RosterAdd, RosterRemove   []string
 	ProjectKeys, RepoPatterns []string
 	IsActive                  bool
 	OrgID                     string
@@ -444,12 +500,13 @@ func (s Store) insertTeamRow(ctx context.Context, row teamInsertRow) (time.Time,
 	}
 	now := time.Now().UTC()
 	// An admin write does not know the provider identity: Insert keeps the
-	// stored one, read inside the same statement.
+	// stored one, read inside the same statement, and so the roster of a
+	// write that does not edit it.
 	if err := teamprovider.Insert(ctx, s.Conn, row.OrgID, teamInsertColumns, []teamprovider.Write{{Values: []any{
 		row.ID, row.TeamUUID, row.Name, row.Description, row.ManualMembers,
 		row.ProjectKeys, row.RepoPatterns, isActive, row.UpdatedAt, now, row.OrgID,
 		row.Origin.Provider, row.Origin.NativeTeamKey, row.Origin.ParentTeamID, row.Origin.SourceID, createdAt, row.DeletedAt,
-	}, Gone: teamprovider.GoneKept}}); err != nil {
+	}, Gone: teamprovider.GoneKept, Roster: row.Roster, RosterAdd: row.RosterAdd, RosterRemove: row.RosterRemove}}); err != nil {
 		return time.Time{}, time.Time{}, fmt.Errorf("send team insert: %w", err)
 	}
 	return createdAt, row.UpdatedAt, nil
@@ -590,6 +647,24 @@ func (s Store) CreateOrUpdateIdentity(ctx context.Context, orgID string, write I
 	if err != nil {
 		return Identity{}, err
 	}
+	identity := resolveIdentity(orgID, existing, write, time.Now().UTC())
+	providersJSON, err := pythonProviderIdentitiesJSON(identity.ProviderIdentities)
+	if err != nil {
+		return Identity{}, fmt.Errorf("encode provider_identities: %w", err)
+	}
+	if err := s.insertIdentityRow(ctx, identityInsertRow{
+		OrgID: orgID, CanonicalID: identity.CanonicalID, IdentityUUID: identity.IdentityUUID,
+		DisplayName: identity.DisplayName, Email: identity.Email, ProviderIdentitiesJSON: providersJSON,
+		TeamIDs: identity.TeamIDs, IsActive: true, UpdatedAt: identity.UpdatedAt,
+	}); err != nil {
+		return Identity{}, err
+	}
+	return identity, nil
+}
+
+// resolveIdentity is the identity a write stores over existing (nil for a
+// new one): a field the write leaves out keeps the existing value.
+func resolveIdentity(orgID string, existing *Identity, write IdentityWrite, now time.Time) Identity {
 	uuidValue := identityUUID(orgID, write.CanonicalID)
 	if existing != nil {
 		uuidValue = existing.IdentityUUID
@@ -617,24 +692,11 @@ func (s Store) CreateOrUpdateIdentity(ctx context.Context, orgID string, write I
 	if resolvedTeamIDs == nil {
 		resolvedTeamIDs = []string{}
 	}
-
-	now := time.Now().UTC()
-	providersJSON, err := pythonProviderIdentitiesJSON(resolvedProviders)
-	if err != nil {
-		return Identity{}, fmt.Errorf("encode provider_identities: %w", err)
-	}
-	if err := s.insertIdentityRow(ctx, identityInsertRow{
-		OrgID: orgID, CanonicalID: write.CanonicalID, IdentityUUID: uuidValue,
-		DisplayName: resolvedDisplay, Email: resolvedEmail, ProviderIdentitiesJSON: providersJSON,
-		TeamIDs: resolvedTeamIDs, IsActive: true, UpdatedAt: now,
-	}); err != nil {
-		return Identity{}, err
-	}
 	return Identity{
 		ID: uuidValue.String(), IdentityUUID: uuidValue, CanonicalID: write.CanonicalID,
 		DisplayName: resolvedDisplay, Email: resolvedEmail, ProviderIdentities: resolvedProviders,
 		TeamIDs: resolvedTeamIDs, IsActive: true, UpdatedAt: now, OrgID: orgID,
-	}, nil
+	}
 }
 
 // DeleteIdentity is ClickHouseIdentityStore.delete: a ClickHouse lightweight

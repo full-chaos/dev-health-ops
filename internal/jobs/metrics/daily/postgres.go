@@ -851,14 +851,20 @@ RETURNING id::text, org_id::text, generation, status, target_day::text,
 // already materialized partition set rather than replacing it with a newer
 // ClickHouse snapshot.
 //
-// An empty snapshot terminalizes the run as no_repositories with its completion
-// fence and does not create a synthetic empty partition. Such a partition would
-// report a successful compute while doing no work.
+// An empty snapshot creates no partition (a synthetic empty partition would
+// report a successful compute while doing no work). The run stays running and
+// its finalize handoff is published in the same transaction: the finalize of a
+// run with no partition retires the rows of the day whose source is gone and
+// ends the run as no_repositories with its completion fence.
 func (store *PostgresStore) MaterializeScheduledFanout(
 	ctx context.Context,
 	run Run,
 	repositoryIDs []RepositoryID,
+	publisher Publisher,
 ) (bool, error) {
+	if publisher == nil {
+		return false, ErrUnavailable
+	}
 	if !store.valid() || !validUUID(run.ID) || !validUUID(run.OrganizationID) ||
 		(!isScheduledFanoutGeneration(run.Generation) && !isPostSyncGeneration(run.Generation) &&
 			!isManualDailyGeneration(run.Generation) && !isExternalRecomputeGeneration(run.Generation)) {
@@ -921,7 +927,23 @@ FOR UPDATE`, run.ID).Scan(&organizationID, &generation, &status); err != nil {
 SELECT count(*) FROM public.daily_metrics_partitions WHERE run_id = $1::uuid`, run.ID).Scan(&existing); err != nil {
 		return false, ErrUnavailable
 	}
-	if existing != 0 {
+	handedOff := false
+	if existing == 0 {
+		// A run with no partition whose finalize handoff exists already decided
+		// that it is empty: a retried dispatch must not cut partitions under the
+		// finalize it handed off. The handoff is read from the outbox at any
+		// status (a dead row too); the worker's domain role holds SELECT on the
+		// outbox and no grant on the abandonment record. Outbox retention keeps
+		// every row for at least one day (scheduler/fixed producers.go, MinDays
+		// 1), and metrics.daily_dispatch has 3 attempts, so its retries come
+		// within minutes.
+		if err := tx.QueryRow(ctx, `
+SELECT EXISTS (SELECT 1 FROM public.worker_job_outbox WHERE dedupe_key = $1)`,
+			FinalizeHandoffKey(run.ID)).Scan(&handedOff); err != nil {
+			return false, ErrUnavailable
+		}
+	}
+	if existing != 0 || handedOff {
 		if err := tx.Commit(ctx); err != nil {
 			return false, ErrUnavailable
 		}
@@ -960,21 +982,7 @@ WHERE id = $2::uuid AND status = 'running'`, now, run.ID)
 		return false, ErrRepositoryCapExceeded
 	}
 	if len(partitions) == 0 {
-		command, err := tx.Exec(ctx, `
-UPDATE public.daily_metrics_runs
-SET status = 'no_repositories', finalization_status = 'succeeded', finalized_at = $1, updated_at = $1
-WHERE id = $2::uuid AND status = 'running'`, now, run.ID)
-		if err != nil {
-			return false, ErrUnavailable
-		}
-		if command.RowsAffected() != 1 {
-			return false, ErrInvalidState
-		}
-		completionKey, err := joboutbox.CompletionKey("daily_metrics_run", run.ID)
-		if err != nil {
-			return false, ErrInvalidState
-		}
-		if err := joboutbox.MarkCompletionTx(ctx, tx, completionKey); err != nil {
+		if err := publisher.PublishFinalizeTx(ctx, tx, run); err != nil {
 			return false, ErrUnavailable
 		}
 	} else {
@@ -1542,6 +1550,14 @@ WHERE id = $3::uuid AND finalization_status = 'running'
 	return nil
 }
 
+// completedRunStatusSQL is the status a finalize gives a run when it succeeds:
+// a run with no partition is a run of the whole organization whose discovery
+// found no repository, and it ends as no_repositories.
+const completedRunStatusSQL = `CASE WHEN EXISTS (
+        SELECT 1 FROM public.daily_metrics_partitions AS partition
+        WHERE partition.run_id = daily_metrics_runs.id
+    ) THEN 'succeeded' ELSE 'no_repositories' END`
+
 func (store *PostgresStore) CompleteFinalize(ctx context.Context, claim FinalizeClaim) error {
 	if !store.valid() || !validUUID(claim.Run.ID) || !validUUID(claim.Token) {
 		return ErrUnavailable
@@ -1564,7 +1580,7 @@ func (store *PostgresStore) CompleteFinalize(ctx context.Context, claim Finalize
 UPDATE public.daily_metrics_runs
 SET finalization_status = 'succeeded', finalization_claim_token = NULL,
     finalization_lease_expires_at = NULL, finalized_at = $1,
-    status = 'succeeded', updated_at = $1
+    status = `+completedRunStatusSQL+`, updated_at = $1
 WHERE id = $2::uuid AND finalization_status = 'running'
   AND finalization_claim_token = $3::uuid AND status = 'running'
   AND finalization_lease_expires_at > $1`, now, claim.Run.ID, claim.Token)
@@ -1680,7 +1696,7 @@ UPDATE public.daily_metrics_runs
 SET finalization_status = $1::varchar, finalization_claim_token = NULL,
     finalization_lease_expires_at = NULL,
     finalized_at = CASE WHEN $1 = 'succeeded' THEN $2 ELSE finalized_at END,
-    status = CASE WHEN $1 = 'succeeded' THEN 'succeeded' ELSE status END,
+    status = CASE WHEN $1 = 'succeeded' THEN `+completedRunStatusSQL+` ELSE status END,
     updated_at = $2
 WHERE id = $3::uuid AND finalization_status = 'running'
   AND finalization_claim_token = $4::uuid AND status = 'running'

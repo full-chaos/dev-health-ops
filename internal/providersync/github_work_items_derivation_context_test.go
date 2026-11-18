@@ -34,7 +34,7 @@ func TestGitHubWorkItemDerivationTrimsManualScopeAndPreservesZeroPriority(t *tes
 		}},
 	})
 	teamID, _, candidates := derived.Resolve(teamattribution.GithubWorkItemDerivationSubject{
-		WorkItemID: "gh:acme/api#manual", Provider: "github", RepoID: &repoID, OrgID: "org-acme",
+		WorkItemID: "gh:acme/api#manual", Provider: "github", Type: "pr", RepoID: &repoID, OrgID: "org-acme",
 	})
 	if teamattribution.GithubWorkItemDerivationStringValue(teamID) != "team-manual" || len(candidates) != 1 {
 		t.Fatalf("manual attribution = team %v candidates %+v", teamID, candidates)
@@ -50,7 +50,7 @@ func TestGitHubWorkItemDerivationManualFallbackTieBreakIsStable(t *testing.T) {
 	repoID := "c7198fbc-1945-3717-05d8-eb78866b4e79"
 	projectID := "acme/api"
 	subject := teamattribution.GithubWorkItemDerivationSubject{
-		WorkItemID: "gh:acme/api#manual-tie", Provider: "github",
+		WorkItemID: "gh:acme/api#manual-tie", Provider: "github", Type: "pr",
 		RepoID: &repoID, ProjectID: &projectID, OrgID: "org-acme",
 	}
 	rules := []teamattribution.GithubWorkItemDerivationManualFallback{
@@ -898,7 +898,7 @@ func TestGitHubWorkItemDerivationCausalAuthorNeverOutranksARealLinkedIssueDonor(
 	now := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
 	donorProjectID := "linear-project-chaos"
 	donor := teamattribution.GithubWorkItemDerivationSubject{
-		WorkItemID: "linear:CHAOS-2400", Provider: "linear",
+		WorkItemID: "linear:CHAOS-2400", Provider: "linear", Type: "issue",
 		ProjectID: &donorProjectID, OrgID: "org-acme",
 	}
 	pr := teamattribution.GithubWorkItemDerivationSubject{

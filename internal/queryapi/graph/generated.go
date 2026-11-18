@@ -1482,6 +1482,7 @@ type ComplexityRoot struct {
 		QuadrantData         func(childComplexity int) int
 		QualityDragBreakdown func(childComplexity int) int
 		QualityDragHours     func(childComplexity int) int
+		QualityDragPartial   func(childComplexity int) int
 		ReleaseConfidence    func(childComplexity int) int
 		StabilityDelta       func(childComplexity int) int
 		StabilitySpark       func(childComplexity int) int
@@ -1526,13 +1527,17 @@ type ComplexityRoot struct {
 	ThroughputEstimateCoverage struct {
 		BacklogSize      func(childComplexity int) int
 		EstimatedCount   func(childComplexity int) int
+		GrainCount       func(childComplexity int) int
 		Ratio            func(childComplexity int) int
 		UnestimatedCount func(childComplexity int) int
 	}
 
 	ThroughputForecast struct {
+		BacklogAsOfDay      func(childComplexity int) int
 		BacklogSize         func(childComplexity int) int
+		BacklogState        func(childComplexity int) int
 		ComputedAt          func(childComplexity int) int
+		DegradedReason      func(childComplexity int) int
 		EstimateCoverage    func(childComplexity int) int
 		ForecastID          func(childComplexity int) int
 		HistoryWeeks        func(childComplexity int) int
@@ -8768,6 +8773,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.TestOpsRiskResult.QualityDragHours(childComplexity), true
 
+	case "TestOpsRiskResult.qualityDragPartial":
+		if e.complexity.TestOpsRiskResult.QualityDragPartial == nil {
+			break
+		}
+
+		return e.complexity.TestOpsRiskResult.QualityDragPartial(childComplexity), true
+
 	case "TestOpsRiskResult.releaseConfidence":
 		if e.complexity.TestOpsRiskResult.ReleaseConfidence == nil {
 			break
@@ -8950,6 +8962,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.ThroughputEstimateCoverage.EstimatedCount(childComplexity), true
 
+	case "ThroughputEstimateCoverage.grainCount":
+		if e.complexity.ThroughputEstimateCoverage.GrainCount == nil {
+			break
+		}
+
+		return e.complexity.ThroughputEstimateCoverage.GrainCount(childComplexity), true
+
 	case "ThroughputEstimateCoverage.ratio":
 		if e.complexity.ThroughputEstimateCoverage.Ratio == nil {
 			break
@@ -8964,6 +8983,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.ThroughputEstimateCoverage.UnestimatedCount(childComplexity), true
 
+	case "ThroughputForecast.backlogAsOfDay":
+		if e.complexity.ThroughputForecast.BacklogAsOfDay == nil {
+			break
+		}
+
+		return e.complexity.ThroughputForecast.BacklogAsOfDay(childComplexity), true
+
 	case "ThroughputForecast.backlogSize":
 		if e.complexity.ThroughputForecast.BacklogSize == nil {
 			break
@@ -8971,12 +8997,26 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.ThroughputForecast.BacklogSize(childComplexity), true
 
+	case "ThroughputForecast.backlogState":
+		if e.complexity.ThroughputForecast.BacklogState == nil {
+			break
+		}
+
+		return e.complexity.ThroughputForecast.BacklogState(childComplexity), true
+
 	case "ThroughputForecast.computedAt":
 		if e.complexity.ThroughputForecast.ComputedAt == nil {
 			break
 		}
 
 		return e.complexity.ThroughputForecast.ComputedAt(childComplexity), true
+
+	case "ThroughputForecast.degradedReason":
+		if e.complexity.ThroughputForecast.DegradedReason == nil {
+			break
+		}
+
+		return e.complexity.ThroughputForecast.DegradedReason(childComplexity), true
 
 	case "ThroughputForecast.estimateCoverage":
 		if e.complexity.ThroughputForecast.EstimateCoverage == nil {
@@ -12144,6 +12184,10 @@ type TestOpsRiskResult {
   pipelineStability: Float
   timeseries: [TestOpsRiskTrendPoint!]!
   qualityDragBreakdown: [TestOpsRiskBreakdownItem!]!
+  """
+  True when any repository row of the latest quality-drag day has a failure-rework, flake-investigation, queue-wait or retry-overhead part that was not measured; qualityDragHours and the breakdown then sum only the known parts.
+  """
+  qualityDragPartial: Boolean!
   quadrantData: [TestOpsRiskQuadrantPoint!]!
   confidenceSpark: [TestOpsRiskSparkPoint!]!
   confidenceDelta: Float
@@ -12168,11 +12212,23 @@ enum ThresholdDirection {
   BELOW
 }
 
+"""
+How a throughputForecast backlogSize was found. MEASURED: the newest work-item day of every key (provider, work scope, team) of the scope is on or after the window start (the forecast day minus historyWeeks weeks). STALE: the newest day of at least one key is before the window start; backlogSize still holds the sum of the newest days, and backlogAsOfDay names the oldest of them. NO_ROWS: the scope has no work-item measurement, so backlogSize 0 is not a measured zero. SUPPLIED: the request gave backlogSize, and no backlog was read.
+"""
+enum ThroughputBacklogState {
+  MEASURED
+  STALE
+  NO_ROWS
+  SUPPLIED
+}
+
 type ThroughputEstimateCoverage {
   ratio: Float
   estimatedCount: Int!
   unestimatedCount: Int!
   backlogSize: Int!
+  "The number of coverage grains (provider, work scope, team) the counts are read from. 0: the scope has no coverage row, and the zero counts and ratio 0 are not a measurement."
+  grainCount: Int!
 }
 
 type ThroughputForecast {
@@ -12181,6 +12237,12 @@ type ThroughputForecast {
   teamId: String
   workScopeId: String
   backlogSize: Int!
+  "How backlogSize was found: MEASURED, STALE, NO_ROWS or SUPPLIED (see ThroughputBacklogState)."
+  backlogState: ThroughputBacklogState!
+  "The oldest of the newest work-item days that backlogSize is read from. Null when backlogState is NO_ROWS or SUPPLIED."
+  backlogAsOfDay: Date
+  "Why the backlog read is not a healthy measurement: the backlogState value (STALE or NO_ROWS) when the read is stale or found no work-item row; null when backlogState is MEASURED or SUPPLIED."
+  degradedReason: String
   historyWeeks: Int!
   p50Weeks: Int
   p75Weeks: Int
@@ -50488,6 +50550,12 @@ func (ec *executionContext) fieldContext_Query_throughputForecast(ctx context.Co
 				return ec.fieldContext_ThroughputForecast_workScopeId(ctx, field)
 			case "backlogSize":
 				return ec.fieldContext_ThroughputForecast_backlogSize(ctx, field)
+			case "backlogState":
+				return ec.fieldContext_ThroughputForecast_backlogState(ctx, field)
+			case "backlogAsOfDay":
+				return ec.fieldContext_ThroughputForecast_backlogAsOfDay(ctx, field)
+			case "degradedReason":
+				return ec.fieldContext_ThroughputForecast_degradedReason(ctx, field)
 			case "historyWeeks":
 				return ec.fieldContext_ThroughputForecast_historyWeeks(ctx, field)
 			case "p50Weeks":
@@ -50918,6 +50986,8 @@ func (ec *executionContext) fieldContext_Query_testopsRisk(ctx context.Context, 
 				return ec.fieldContext_TestOpsRiskResult_timeseries(ctx, field)
 			case "qualityDragBreakdown":
 				return ec.fieldContext_TestOpsRiskResult_qualityDragBreakdown(ctx, field)
+			case "qualityDragPartial":
+				return ec.fieldContext_TestOpsRiskResult_qualityDragPartial(ctx, field)
 			case "quadrantData":
 				return ec.fieldContext_TestOpsRiskResult_quadrantData(ctx, field)
 			case "confidenceSpark":
@@ -60785,6 +60855,50 @@ func (ec *executionContext) fieldContext_TestOpsRiskResult_qualityDragBreakdown(
 	return fc, nil
 }
 
+func (ec *executionContext) _TestOpsRiskResult_qualityDragPartial(ctx context.Context, field graphql.CollectedField, obj *model.TestOpsRiskResult) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_TestOpsRiskResult_qualityDragPartial(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.QualityDragPartial, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(bool)
+	fc.Result = res
+	return ec.marshalNBoolean2bool(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_TestOpsRiskResult_qualityDragPartial(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "TestOpsRiskResult",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _TestOpsRiskResult_quadrantData(ctx context.Context, field graphql.CollectedField, obj *model.TestOpsRiskResult) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_TestOpsRiskResult_quadrantData(ctx, field)
 	if err != nil {
@@ -62170,6 +62284,50 @@ func (ec *executionContext) fieldContext_ThroughputEstimateCoverage_backlogSize(
 	return fc, nil
 }
 
+func (ec *executionContext) _ThroughputEstimateCoverage_grainCount(ctx context.Context, field graphql.CollectedField, obj *model.ThroughputEstimateCoverage) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ThroughputEstimateCoverage_grainCount(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.GrainCount, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(int)
+	fc.Result = res
+	return ec.marshalNInt2int(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ThroughputEstimateCoverage_grainCount(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ThroughputEstimateCoverage",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _ThroughputForecast_forecastId(ctx context.Context, field graphql.CollectedField, obj *model.ThroughputForecast) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_ThroughputForecast_forecastId(ctx, field)
 	if err != nil {
@@ -62379,6 +62537,132 @@ func (ec *executionContext) fieldContext_ThroughputForecast_backlogSize(_ contex
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ThroughputForecast_backlogState(ctx context.Context, field graphql.CollectedField, obj *model.ThroughputForecast) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ThroughputForecast_backlogState(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.BacklogState, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(model.ThroughputBacklogState)
+	fc.Result = res
+	return ec.marshalNThroughputBacklogState2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐThroughputBacklogState(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ThroughputForecast_backlogState(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ThroughputForecast",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type ThroughputBacklogState does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ThroughputForecast_backlogAsOfDay(ctx context.Context, field graphql.CollectedField, obj *model.ThroughputForecast) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ThroughputForecast_backlogAsOfDay(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.BacklogAsOfDay, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*graphqldate.Date)
+	fc.Result = res
+	return ec.marshalODate2ᚖgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphqldateᚐDate(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ThroughputForecast_backlogAsOfDay(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ThroughputForecast",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Date does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ThroughputForecast_degradedReason(ctx context.Context, field graphql.CollectedField, obj *model.ThroughputForecast) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ThroughputForecast_degradedReason(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.DegradedReason, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ThroughputForecast_degradedReason(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ThroughputForecast",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
 		},
 	}
 	return fc, nil
@@ -62812,6 +63096,8 @@ func (ec *executionContext) fieldContext_ThroughputForecast_estimateCoverage(_ c
 				return ec.fieldContext_ThroughputEstimateCoverage_unestimatedCount(ctx, field)
 			case "backlogSize":
 				return ec.fieldContext_ThroughputEstimateCoverage_backlogSize(ctx, field)
+			case "grainCount":
+				return ec.fieldContext_ThroughputEstimateCoverage_grainCount(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type ThroughputEstimateCoverage", field.Name)
 		},
@@ -80691,6 +80977,11 @@ func (ec *executionContext) _TestOpsRiskResult(ctx context.Context, sel ast.Sele
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "qualityDragPartial":
+			out.Values[i] = ec._TestOpsRiskResult_qualityDragPartial(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		case "quadrantData":
 			out.Values[i] = ec._TestOpsRiskResult_quadrantData(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
@@ -81023,6 +81314,11 @@ func (ec *executionContext) _ThroughputEstimateCoverage(ctx context.Context, sel
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "grainCount":
+			out.Values[i] = ec._ThroughputEstimateCoverage_grainCount(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -81076,6 +81372,15 @@ func (ec *executionContext) _ThroughputForecast(ctx context.Context, sel ast.Sel
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "backlogState":
+			out.Values[i] = ec._ThroughputForecast_backlogState(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "backlogAsOfDay":
+			out.Values[i] = ec._ThroughputForecast_backlogAsOfDay(ctx, field, obj)
+		case "degradedReason":
+			out.Values[i] = ec._ThroughputForecast_degradedReason(ctx, field, obj)
 		case "historyWeeks":
 			out.Values[i] = ec._ThroughputForecast_historyWeeks(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
@@ -87374,6 +87679,16 @@ func (ec *executionContext) unmarshalNThresholdDirection2githubᚗcomᚋfullᚑc
 }
 
 func (ec *executionContext) marshalNThresholdDirection2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐThresholdDirection(ctx context.Context, sel ast.SelectionSet, v model.ThresholdDirection) graphql.Marshaler {
+	return v
+}
+
+func (ec *executionContext) unmarshalNThroughputBacklogState2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐThroughputBacklogState(ctx context.Context, v any) (model.ThroughputBacklogState, error) {
+	var res model.ThroughputBacklogState
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNThroughputBacklogState2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐThroughputBacklogState(ctx context.Context, sel ast.SelectionSet, v model.ThroughputBacklogState) graphql.Marshaler {
 	return v
 }
 

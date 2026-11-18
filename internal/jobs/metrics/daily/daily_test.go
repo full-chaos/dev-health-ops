@@ -1168,6 +1168,44 @@ func TestFinalizeCompletionFailureReleasesTheClaim(t *testing.T) {
 	}
 }
 
+// A completion write that fails on the last attempt has no retry behind it: the
+// run must end failed, as a failed compute on the last attempt does, or it stays
+// 'running' with no job and no blocked marker.
+func TestFinalizeCompletionFailureOnTheLastAttemptEndsTheRun(t *testing.T) {
+	defer restoreRecognisedFinalizeFamilies(pythonRecognisedFinalizeFamilies)
+	pythonRecognisedFinalizeFamilies = []string{}
+
+	for _, test := range []struct {
+		name                 string
+		attempt, maxAttempts int
+		wantReleases         int
+		wantTerminalWrites   int
+	}{
+		{name: "a retried attempt releases", attempt: 2, maxAttempts: 4, wantReleases: 1},
+		{name: "the last attempt writes the terminal state", attempt: 4, maxAttempts: 4, wantTerminalWrites: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store := finalizeStoreWithClaim()
+			store.completionErr = ErrUnavailable
+			handler, err := NewFinalizeHandler(store)
+			if err != nil {
+				t.Fatal(err)
+			}
+			execution := finalizeExecutionFor(testRunID)
+			execution.Attempt = test.attempt
+			execution.Definition.MaxAttempts = test.maxAttempts
+			err = handler.Work(context.Background(), execution)
+			if err == nil || !strings.Contains(err.Error(), string(jobruntime.CategoryRetryable)) {
+				t.Fatalf("completion failure = %v, want retryable", err)
+			}
+			if store.finalizeReleases != test.wantReleases || store.failedFinalizePermanently != test.wantTerminalWrites {
+				t.Fatalf("releases=%d terminal writes=%d, want %d/%d",
+					store.finalizeReleases, store.failedFinalizePermanently, test.wantReleases, test.wantTerminalWrites)
+			}
+		})
+	}
+}
+
 // CHAOS-3092 (PR-A'): this test used to drive lease renewal by blocking the
 // compatibility bridge's Finalize call for a controlled duration
 // (blockingCompatibility{finalizeDelay: ...}) -- there is no bridge call
@@ -1258,7 +1296,7 @@ func TestCancelBeforeTheNativeFamilyStartsSkipsTheFamily(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	err = handler.computeNativeFinalizeFamilies(ctx, Run{ID: testRunID, OrganizationID: testOrgID})
+	err = handler.computeNativeFinalizeFamilies(ctx, Run{ID: testRunID, OrganizationID: testOrgID}, false)
 	if !errors.Is(err, ErrNativeFinalizeFamilyFailed) || !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancel before the family = %v, want ErrNativeFinalizeFamilyFailed wrapping context.Canceled", err)
 	}
@@ -1565,6 +1603,10 @@ type fakeStore struct {
 	partitionTotal              int
 	partitionSucceeded          int
 	partitionCompletionCountErr error
+	// noPartitions makes PartitionCompletionCounts report a run with no
+	// partition. Without it, counts left at zero report one succeeded
+	// partition: the shape of a finalize claim of a run that has partitions.
+	noPartitions bool
 }
 
 func (store *fakeStore) LoadRun(context.Context, string) (Run, error) {
@@ -1580,7 +1622,7 @@ func (store *fakeStore) DispatchablePartitions(context.Context, string) ([]Parti
 	store.dispatchListCalls++
 	return nil, nil
 }
-func (store *fakeStore) MaterializeScheduledFanout(_ context.Context, _ Run, _ []RepositoryID) (bool, error) {
+func (store *fakeStore) MaterializeScheduledFanout(_ context.Context, _ Run, _ []RepositoryID, _ Publisher) (bool, error) {
 	if store.dispatchListCalls > 0 {
 		store.materializedAfterDispatchList = true
 	}
@@ -1668,6 +1710,12 @@ func (store *fakeStore) ReleaseFinalize(context.Context, FinalizeClaim) error {
 func (store *fakeStore) PartitionCompletionCounts(context.Context, string) (int, int, error) {
 	if store.partitionCompletionCountErr != nil {
 		return 0, 0, store.partitionCompletionCountErr
+	}
+	if store.noPartitions {
+		return 0, 0, nil
+	}
+	if store.partitionTotal == 0 && store.partitionSucceeded == 0 {
+		return 1, 1, nil
 	}
 	return store.partitionTotal, store.partitionSucceeded, nil
 }

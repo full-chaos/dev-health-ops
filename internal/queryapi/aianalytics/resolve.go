@@ -451,7 +451,7 @@ func (s *engagementSlice) commentsPerLoc() *float64 {
 	return &v
 }
 
-func loadEngagementSlices(ctx context.Context, client QueryClient, orgID string, dr model.AIDateRangeInput, sc scope) (map[string]*engagementSlice, map[string]*engagementSlice) {
+func loadEngagementSlices(ctx context.Context, client QueryClient, orgID string, dr model.AIDateRangeInput, sc scope, team teamRepos) (map[string]*engagementSlice, map[string]*engagementSlice) {
 	byDay, byBucket := map[string]*engagementSlice{}, map[string]*engagementSlice{}
 	if sc.workType != "" {
 		return byDay, byBucket
@@ -459,11 +459,10 @@ func loadEngagementSlices(ctx context.Context, client QueryClient, orgID string,
 	var teamIDs []string
 	useIDs := false
 	if sc.teamID != "" {
-		ids, ok := teamRepoIDs(ctx, client, orgID, sc.teamID, "aiReviewLoad")
-		if !ok || len(ids) == 0 {
+		if !team.held() {
 			return byDay, byBucket
 		}
-		teamIDs, useIDs = ids, true
+		teamIDs, useIDs = team.ids, true
 	}
 	raw, err := loadEngagement(ctx, client, orgID, dr.StartDate.Time(), dr.EndDate.Time(), sc.repoID, teamIDs, useIDs)
 	if err != nil {
@@ -502,11 +501,17 @@ func ReviewLoad(ctx context.Context, client QueryClient, orgID string, dr model.
 	if err != nil {
 		return nil, err
 	}
+	// One ownership read per request: the engagement and the concentration of one answer scope the team by the
+	// same owned repositories (team-attribution.md, "The AI analytics team scope uses repository ownership").
+	var team teamRepos
+	if sc.teamID != "" && !sc.unresolved {
+		team.ids, team.ok = teamRepoIDs(ctx, client, orgID, sc.teamID, "aiReviewLoad")
+	}
 	var byDay, byBucketEng map[string]*engagementSlice
 	if sc.unresolved {
 		byDay, byBucketEng = map[string]*engagementSlice{}, map[string]*engagementSlice{}
 	} else {
-		byDay, byBucketEng = loadEngagementSlices(ctx, client, orgID, dr, sc)
+		byDay, byBucketEng = loadEngagementSlices(ctx, client, orgID, dr, sc, team)
 	}
 
 	daily := make([]model.AIReviewLoadRow, 0, len(rows))
@@ -556,8 +561,8 @@ func ReviewLoad(ctx context.Context, client QueryClient, orgID string, dr model.
 	}
 
 	concentration := &model.AIReviewerConcentrationSummary{DataAvailable: false, ReviewerCount: 0}
-	if !sc.unresolved {
-		g, n, err := loadReviewerConcentration(ctx, client, orgID, dr.StartDate.Time(), dr.EndDate.Time(), sc)
+	if !sc.unresolved && (sc.teamID == "" || team.held()) {
+		g, n, err := loadReviewerConcentration(ctx, client, orgID, dr.StartDate.Time(), dr.EndDate.Time(), sc, team.ids)
 		if err != nil {
 			return nil, err
 		}

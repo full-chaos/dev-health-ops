@@ -159,7 +159,7 @@ func TestBuildMetaRouteEntryHandlerRejectsNonGET(t *testing.T) {
 	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
 		t.Fatalf("content-type = %q, want application/json", ct)
 	}
-	if got, want := rec.Body.String(), `{"detail":"Method Not Allowed"}`+"\n"; got != want {
+	if got, want := rec.Body.String(), `{"detail":"Method Not Allowed"}`; got != want {
 		t.Fatalf("body = %q, want %q", got, want)
 	}
 }

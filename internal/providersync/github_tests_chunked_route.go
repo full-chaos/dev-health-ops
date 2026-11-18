@@ -1001,6 +1001,26 @@ func normalizeLegacyGitHubTestsSkippedArtifacts(cursor githubTestsChunkCursor) g
 	if len(kept) > githubTestsMaxSkippedArtifactRecords {
 		dropped := kept[githubTestsMaxSkippedArtifactRecords:]
 		cursor.SkippedArtifactsOverflow += len(dropped)
+		// The full literal sample proves a per-cause count the trim is about to lose: a checkpoint written before the count ledger
+		// held every marker, so six literal markers prove six skips. Keep the greater of that and any ledger count, so evidence
+		// that overlaps is counted once (CHAOS-14030).
+		proven := map[string]int{}
+		for _, record := range kept {
+			if cause := githubTestsSkippedArtifactCause(record); cause != "" {
+				proven[cause]++
+			}
+		}
+		for cause, count := range proven {
+			if cursor.SkippedArtifactCauseCount[cause] >= count {
+				continue
+			}
+			ledger := make(map[string]int, len(cursor.SkippedArtifactCauseCount)+1)
+			for key, value := range cursor.SkippedArtifactCauseCount {
+				ledger[key] = value
+			}
+			ledger[cause] = count
+			cursor.SkippedArtifactCauseCount = ledger
+		}
 		// Mark each DROPPED record's own cause precisely (codex review round
 		// 6, P1), rather than leaving this trim to be covered only by the
 		// generic legacy sentinel below. A pre-CHAOS-4394 cursor can legally
@@ -1770,11 +1790,14 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 				suites := []testSuiteResultRow(nil)
 				cases := []testCaseResultRow(nil)
 				coverage := []coverageSnapshotRow(nil)
+				var completeness []testOpsRunReportCompletenessRow
 				if include && githubTestsRunReadable(run) && !githubTestsReportRunOutsideWindow(pipeline, claim) {
+					// The run's losses are the deltas of the cursor's exact loss counters across the run (CHAOS-13826).
+					lossBefore := githubTestsTakeRunLossCounts(cursor)
 					artPage, pageErr := providerfoundation.CollectGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{
 						Path:  root + "/actions/runs/" + url.PathEscape(pipeline.RunID) + "/artifacts",
 						Route: githubRunArtifactsRoute,
-						Query: url.Values{"per_page": {"100"}}, DataKey: "artifacts", MaxPages: 1,
+						Query: url.Values{"per_page": {strconv.Itoa(githubTestsArtifactsPerPage)}}, DataKey: "artifacts", MaxPages: 1,
 					})
 					if pageErr != nil {
 						return pageErr
@@ -1837,6 +1860,8 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 					// nothing about the channel (same rule as oversized below). Every expired artifact that passed the selection seam above
 					// counts: its contents are unknown, so the route fails closed (the seam already dropped the known non-report names).
 					artifactItems, expiredItems := githubTestsSplitExpiredArtifacts(artifactItems)
+					reportsExpected := len(artifactItems) + len(expiredItems)
+					nonReportArchives := 0
 					for _, artifact := range expiredItems {
 						if githubTestsSkippedMarkerRecorded(cursor.SkippedArtifacts, pipeline.RunID, string(artifact.ID), githubTestsArtifactExpiredCause) {
 							continue
@@ -1853,9 +1878,25 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 							},
 						)
 					}
+					// CHAOS-14000: the cap counts only artifacts whose zip directory lists a report member; one that lists none is
+					// excluded, never a loss.
+					// The checks' own wire count replaces the Do calls they made, so a transport resend is counted too.
+					requestsBeforeAdmission := requests
+					artifactItems, noReportItems, artifactsCapped, admitRequests, admitErr := githubTestsAdmitReportArtifacts(ctx, client, root, artifactItems, maxArtifacts)
+					requests = requestsBeforeAdmission + admitRequests
+					cursor.Requests = invocationBaseRequests + requests
+					if admitErr != nil {
+						return admitErr
+					}
+					// An artifact whose directory lists no report member is not a report source of the run (CHAOS-13826).
+					reportsExpected -= len(noReportItems)
+					for _, artifact := range noReportItems {
+						if len(cursor.ExcludedArtifactSample) < githubTestsMaxExcludedArtifactSampleRecords {
+							cursor.ExcludedArtifactSample = append(cursor.ExcludedArtifactSample, githubTestsNoReportSampleRecord(artifact))
+						}
+					}
 					switch {
-					case len(artifactItems) > maxArtifacts:
-						artifactItems = artifactItems[:maxArtifacts]
+					case artifactsCapped:
 						cursor = recordGitHubTestsPerRunTruncation(
 							cursor, client, claim, githubTestsRunArtifactsComponent,
 							githubTestsPerRunCapCause, pipeline.RunID, len(artifactItems),
@@ -1872,6 +1913,8 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 					// not fit is skipped whole with a marker and the walk goes on, so the order GitHub lists the artifacts in never
 					// decides which one survives. Each cause is recorded once per run, a marker once per skipped artifact.
 					var parsedReports []githubTestsParsedReport
+					// Guard skips of a replayed artifact are not counted again in the unit, but they are still this run's losses.
+					var replayedRunLosses []string
 					heldRows := 0
 					reportRowsTruncated := false
 					skipReportOverBound := func(artifact githubTestsArtifactPayload) {
@@ -1894,12 +1937,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 						if artifact.Expired {
 							continue // unreachable: expired artifacts are split out before the cap (CHAOS-13980)
 						}
-						var archive []byte
-						notFound := false
-						downloadErr := artifact.declaredOversize(maxArtifactBytes)
-						if downloadErr == nil {
-							archive, _, notFound, downloadErr = downloadGitHubTestsArtifact(ctx, client, root, string(artifact.ID), maxArtifactBytes)
-						}
+						archive, _, notFound, downloadErr := downloadGitHubTestsListedArtifact(ctx, client, root, string(artifact.ID), maxArtifactBytes, artifact.listedSize())
 						cursor.Requests = invocationBaseRequests + requests
 						if downloadErr != nil {
 							// An artifact whose bytes could never be
@@ -2109,6 +2147,12 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 							}
 							return fmt.Errorf("%w: artifact parse failed: %v", ErrGitHubTestsIncomplete, parseErr)
 						}
+						// A resumed walk can re-anchor and read this artifact again. The size-guard skips are deterministic, so a (run,
+						// artifact, cause) already in the marker sample is a replay: its contribution is dropped, not counted twice
+						// (CHAOS-14030).
+						var replayedGuard []string
+						rows, replayedGuard = rows.withoutReplayedMemberGuardSkips(cursor.SkippedArtifacts, pipeline.RunID, string(artifact.ID))
+						replayedRunLosses = append(replayedRunLosses, replayedGuard...)
 						reportIncomplete, optional := rows.optionalIncomplete()
 						if !optional {
 							return fmt.Errorf("%w: reports skipped=%d: unsafe archive bounds", ErrGitHubTestsIncomplete, rows.Skipped)
@@ -2152,7 +2196,10 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 						}
 						// Hold the parsed rows until the run is decided; an artifact that would take the held rows past
 						// githubTestsMaxHeldReportRowsPerRun is skipped whole before it is held.
-						held := githubTestsParsedReport{ID: artifact.ID, Name: artifact.Name, Suites: rows.Suites, Cases: rows.Cases, Coverage: rows.Coverage}
+						held := githubTestsParsedReport{ID: artifact.ID, Name: artifact.Name, Suites: rows.Suites, Cases: rows.Cases, Coverage: rows.Coverage, Reports: rows.ReportsRead}
+						if held.Reports == 0 && len(rows.SkippedArtifacts) == 0 && len(reportIncomplete) == 0 && len(replayedGuard) == 0 {
+							nonReportArchives++ // read whole and held no report: not a report source of the run (CHAOS-13826)
+						}
 						if heldRows+held.rows() > githubTestsMaxHeldReportRowsPerRun {
 							skipReportOverBound(artifact)
 							continue
@@ -2164,6 +2211,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 					if planErr != nil {
 						return fmt.Errorf("%w: sizing report rows: %v", ErrGitHubTestsIncomplete, planErr)
 					}
+					reportGitHubTestsPlannerKeeps(ctx, claim.Provider, claim.Dataset, claim.ID, cursor.Repo, pipeline.RunID, parsedReports, plan)
 					recordedCauses := map[string]bool{}
 					markReport := func(index int, cause string) {
 						report := parsedReports[index]
@@ -2212,11 +2260,22 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 						cases = append(cases, parsedReports[index].Cases...)
 						coverage = append(coverage, parsedReports[index].Coverage...)
 					}
+					// One verdict row per run, after its last emission's rows are decided (CHAOS-13826).
+					lossAfter := githubTestsTakeRunLossCounts(cursor)
+					for _, cause := range replayedRunLosses {
+						if lossAfter.skipped[cause] <= lossBefore.skipped[cause] {
+							lossAfter.skipped[cause] = lossBefore.skipped[cause] + 1
+						}
+					}
+					completeness = githubTestsRunReportCompleteness(
+						pipeline, run, lossBefore, lossAfter,
+						reportsExpected-nonReportArchives, len(expiredItems), githubTestsAdmittedReports(parsedReports, plan.Admitted), normalizedAt,
+					)
 				}
 				cursor.Suites += len(suites)
 				cursor.Cases += len(cases)
 				cursor.Coverage += len(coverage)
-				effects, effectErr := testOpsEffects(nil, nil, nil, suites, cases, coverage)
+				effects, effectErr := testOpsEffects(nil, nil, nil, suites, cases, coverage, completeness...)
 				if effectErr != nil {
 					return effectErr
 				}

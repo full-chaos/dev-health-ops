@@ -491,6 +491,19 @@ func (materializer *NativeMaterializer) Materialize(
 	if err != nil {
 		return PlanResult{}, err
 	}
+	// After the coordinator lock above, so a replay sees what an earlier attempt committed (CHAOS-13827).
+	loaded.input.TestOpsReplayEnds, err = loadTestOpsReplayEnds(ctx, materializer.domainPool, ids.SyncRunID, loaded.provider, loaded.input.Datasets)
+	if err != nil {
+		return PlanResult{}, err
+	}
+	loaded.input.WorkItemsReplay, err = loadWorkItemsReplay(ctx, materializer.domainPool, ids.SyncRunID, loaded.input.Datasets)
+	if err != nil {
+		return PlanResult{}, err
+	}
+	loaded.input.CommittedUnits, err = loadCommittedUnits(ctx, materializer.domainPool, ids.SyncRunID)
+	if err != nil {
+		return PlanResult{}, err
+	}
 	loaded.input.ExecutedProof = materializer.executedProof.Load()
 	var units []PlannedUnit
 	if loaded.terminalReason == "" {
@@ -828,6 +841,7 @@ WHERE config.id = $1::uuid AND config.org_id = $2 AND integration.is_active`, oc
 		return loadedMaterializationPlan{}, err
 	}
 	failureStreaks := loadFailureStreaks(ctx, domainPool, orgID, integrationID, provider, datasets)
+	testOpsBudgetBlocked := loadTestOpsBudgetBlocked(ctx, domainPool, orgID, integrationID, provider, datasets)
 	tierCap, totalUnitCap, err := loadPlanLimits(ctx, tx, orgID, defaultUnitCap)
 	if err != nil {
 		return loadedMaterializationPlan{}, err
@@ -853,6 +867,7 @@ WHERE config.id = $1::uuid AND config.org_id = $2 AND integration.is_active`, oc
 			IntegrationDepthDays: depth, TierBackfillDaysCap: tierCap,
 			WatermarkOverlap: watermarkOverlap, Sources: sources, Datasets: datasets, Watermarks: watermarks,
 			FailureStreaks:        failureStreaks,
+			TestOpsBudgetBlocked:  testOpsBudgetBlocked,
 			PlannerManagedParent:  scheduledParent,
 			LastWorkItemSuccessAt: lastWorkItemSuccessAt,
 			WorkItemClockAt:       workItemClockAt,
@@ -1989,10 +2004,7 @@ func loadFailureStreaks(
 	}
 	unavailable := func(failure string, cause error) map[string]providersync.FailureStreak {
 		fields := append(attrs(failure), slog.Int64("duration_ms", time.Since(started).Milliseconds()))
-		var pgErr *pgconn.PgError
-		if errors.As(cause, &pgErr) && len(pgErr.Code) == 5 {
-			fields = append(fields, slog.String("sqlstate", pgErr.Code))
-		}
+		fields = append(fields, sqlstateAttrs(cause)...)
 		slog.Default().Warn("sync.materializer.failure_streaks_unavailable", fields...)
 		return nil
 	}
@@ -2038,6 +2050,242 @@ func loadFailureStreaks(
 		}
 	}
 	return streaks
+}
+
+// sqlstateAttrs names the SQLSTATE of a Postgres error for a log line, never its text.
+func sqlstateAttrs(cause error) []any {
+	var pgErr *pgconn.PgError
+	if errors.As(cause, &pgErr) && len(pgErr.Code) == 5 {
+		return []any{slog.String("sqlstate", pgErr.Code)}
+	}
+	return nil
+}
+
+// loadTestOpsBudgetBlocked reads, per source, how many of the newest GitHub
+// tests/cicd units stopped at the run inventory page budget (CHAOS-13827). It runs
+// only for a GitHub plan that has a tests or cicd dataset. Like
+// loadFailureStreaks it is never fatal: when the read fails, times out or is
+// skipped, the plan proceeds with no narrowing and one bounded WARN is logged.
+// It runs in its own read transaction from reader, bounded the same way, and
+// that transaction is always rolled back.
+func loadTestOpsBudgetBlocked(
+	ctx context.Context, reader failureStreakReader, orgID, integrationID, provider string, datasets []PlanDataset,
+) map[string]int {
+	if provider != "github" || !slices.ContainsFunc(datasets, func(dataset PlanDataset) bool {
+		return slices.Contains(testOpsFamilyDatasets, dataset.Key)
+	}) {
+		return nil
+	}
+	started := time.Now()
+	unavailable := func(failure string, cause error) map[string]int {
+		fields := []any{
+			slog.String("provider", provider), slog.String("org_id", orgID),
+			slog.String("integration_id", integrationID), slog.String("failure", failure),
+			slog.Int64("duration_ms", time.Since(started).Milliseconds()),
+		}
+		fields = append(fields, sqlstateAttrs(cause)...)
+		slog.Default().Warn("sync.materializer.testops_budget_blocked_unavailable", fields...)
+		return nil
+	}
+	bound, _, ok := failureStreakReadBound(ctx)
+	if !ok {
+		return unavailable("skipped_low_budget", nil)
+	}
+	readCtx, cancel := context.WithTimeout(ctx, bound+failureStreakClientMargin)
+	defer cancel()
+	tx, err := reader.Begin(readCtx)
+	if err != nil {
+		return unavailable("read_begin_failed", err)
+	}
+	defer func() {
+		rollbackCtx, cancelRollback := context.WithTimeout(context.WithoutCancel(ctx), failureStreakRollbackTimeout)
+		defer cancelRollback()
+		_ = tx.Rollback(rollbackCtx)
+	}()
+	if _, err := tx.Exec(readCtx, "SELECT set_config('statement_timeout', $1, true)",
+		strconv.FormatInt(bound.Milliseconds(), 10)); err != nil {
+		return unavailable("timeout_set_failed", err)
+	}
+	rows, err := tx.Query(readCtx, providersync.TestOpsBudgetBlockedUnitsSQL,
+		orgID, integrationID, canonicalTestOpsDataset, providersync.TestOpsNarrowingLookback)
+	if err != nil {
+		return unavailable("query_failed", err)
+	}
+	bySource := make(map[string][]bool)
+	for rows.Next() {
+		var sourceID string
+		var blocked bool
+		var at time.Time
+		if scanErr := rows.Scan(&sourceID, &blocked, &at); scanErr != nil {
+			rows.Close()
+			return unavailable("row_scan_failed", scanErr)
+		}
+		bySource[sourceID] = append(bySource[sourceID], blocked)
+	}
+	rows.Close()
+	if iterErr := rows.Err(); iterErr != nil {
+		return unavailable("row_iteration_failed", iterErr)
+	}
+	counts := make(map[string]int)
+	for sourceID, blocked := range bySource {
+		if count := providersync.TestOpsBudgetBlockedCount(blocked); count > 0 {
+			counts[sourceID] = count
+		}
+	}
+	return counts
+}
+
+// testOpsReplayReader reads the domain rows an earlier attempt of an occurrence committed.
+type testOpsReplayReader interface {
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+}
+
+// testOpsReplayEndsSQL lists the window ends of the folded tests/cicd units the
+// occurrence's deterministic sync run already holds. A unit of a graph that was
+// committed but not yet made ready is still 'planned', so the open-units index
+// (ix_sync_run_units_open_run) serves the lookup.
+const testOpsReplayEndsSQL = `
+SELECT source_id::text, before_at
+FROM public.sync_run_units
+WHERE sync_run_id = $1::uuid AND dataset_key = $2 AND before_at IS NOT NULL
+  AND status NOT IN ('success', 'failed')`
+
+// loadTestOpsReplayEnds reads, per source, the window end of the folded
+// tests/cicd unit an earlier attempt of this occurrence committed (CHAOS-13827).
+// The narrowing reads unit history that moves between attempts, and its read
+// can fail on one attempt and succeed on the next; without the committed end a
+// replay could plan another end and the deterministic verifier would quarantine
+// the occurrence. It runs only for a GitHub plan with a tests or cicd dataset,
+// and finds nothing on a first attempt. A failed read fails this attempt (it is
+// retried); it never plans without knowing what was committed.
+func loadTestOpsReplayEnds(
+	ctx context.Context, reader testOpsReplayReader, syncRunID, provider string, datasets []PlanDataset,
+) (map[string]time.Time, error) {
+	if provider != "github" || !slices.ContainsFunc(datasets, func(dataset PlanDataset) bool {
+		return slices.Contains(testOpsFamilyDatasets, dataset.Key)
+	}) {
+		return nil, nil
+	}
+	rows, err := reader.Query(ctx, testOpsReplayEndsSQL, syncRunID, canonicalTestOpsDataset)
+	if err != nil {
+		return nil, fmt.Errorf("read the committed tests/cicd windows of the occurrence: %w", err)
+	}
+	defer rows.Close()
+	var ends map[string]time.Time
+	for rows.Next() {
+		var sourceID string
+		var end time.Time
+		if err := rows.Scan(&sourceID, &end); err != nil {
+			return nil, fmt.Errorf("scan a committed tests/cicd window of the occurrence: %w", err)
+		}
+		if ends == nil {
+			ends = make(map[string]time.Time)
+		}
+		ends[sourceID] = end.UTC()
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read the committed tests/cicd windows of the occurrence: %w", err)
+	}
+	return ends, nil
+}
+
+const workItemsReplayRunSQL = `SELECT 1 FROM public.sync_runs WHERE id = $1::uuid`
+
+const workItemsReplayUnitsSQL = `
+SELECT source_id::text, before_at
+FROM public.sync_run_units
+WHERE sync_run_id = $1::uuid AND dataset_key = $2`
+
+// loadWorkItemsReplay reads what an earlier attempt of this occurrence committed for the work-items family
+// (CHAOS-14036). It runs only for a plan with a work-item family dataset. nil means a first attempt: no sync run row
+// exists for the occurrence. When the row exists, the result holds the window end of each committed work-items unit
+// by source; a source without an entry has none (it was slowed down). The failure streak moves between attempts and
+// its read can fail on one attempt only, so a replay keeps this decision. A failed read fails this attempt (it is
+// retried); it never plans without knowing what was committed.
+func loadWorkItemsReplay(
+	ctx context.Context, reader testOpsReplayReader, syncRunID string, datasets []PlanDataset,
+) (*WorkItemsReplay, error) {
+	if !slices.ContainsFunc(datasets, func(dataset PlanDataset) bool {
+		return workitemcontract.IsFamilyDataset(dataset.Key)
+	}) {
+		return nil, nil
+	}
+	runRows, err := reader.Query(ctx, workItemsReplayRunSQL, syncRunID)
+	if err != nil {
+		return nil, fmt.Errorf("read the sync run of the occurrence: %w", err)
+	}
+	exists := runRows.Next()
+	runRows.Close()
+	if err := runRows.Err(); err != nil {
+		return nil, fmt.Errorf("read the sync run of the occurrence: %w", err)
+	}
+	if !exists {
+		return nil, nil
+	}
+	rows, err := reader.Query(ctx, workItemsReplayUnitsSQL, syncRunID, canonicalWorkItemsDataset)
+	if err != nil {
+		return nil, fmt.Errorf("read the committed work-items units of the occurrence: %w", err)
+	}
+	defer rows.Close()
+	replay := &WorkItemsReplay{Units: make(map[string]*time.Time)}
+	for rows.Next() {
+		var sourceID string
+		var end *time.Time
+		if err := rows.Scan(&sourceID, &end); err != nil {
+			return nil, fmt.Errorf("scan a committed work-items unit of the occurrence: %w", err)
+		}
+		if end != nil {
+			utc := end.UTC()
+			end = &utc
+		}
+		replay.Units[sourceID] = end
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read the committed work-items units of the occurrence: %w", err)
+	}
+	return replay, nil
+}
+
+const committedUnitsRunSQL = `SELECT 1 FROM public.sync_runs WHERE id = $1::uuid`
+
+const committedUnitsSQL = `
+SELECT COALESCE(source_id::text, ''), dataset_key
+FROM public.sync_run_units
+WHERE sync_run_id = $1::uuid`
+
+// loadCommittedUnits reads the units an earlier attempt of this occurrence committed (CHAOS-14113). nil means a first
+// attempt: no sync run row exists for the occurrence. A failed read fails this attempt (it is retried); it never
+// plans without knowing what was committed.
+func loadCommittedUnits(ctx context.Context, reader testOpsReplayReader, syncRunID string) (*CommittedUnits, error) {
+	runRows, err := reader.Query(ctx, committedUnitsRunSQL, syncRunID)
+	if err != nil {
+		return nil, fmt.Errorf("read the sync run of the occurrence: %w", err)
+	}
+	exists := runRows.Next()
+	runRows.Close()
+	if err := runRows.Err(); err != nil {
+		return nil, fmt.Errorf("read the sync run of the occurrence: %w", err)
+	}
+	if !exists {
+		return nil, nil
+	}
+	rows, err := reader.Query(ctx, committedUnitsSQL, syncRunID)
+	if err != nil {
+		return nil, fmt.Errorf("read the committed units of the occurrence: %w", err)
+	}
+	defer rows.Close()
+	committed := &CommittedUnits{}
+	for rows.Next() {
+		var sourceID, dataset string
+		if err := rows.Scan(&sourceID, &dataset); err != nil {
+			return nil, fmt.Errorf("scan a committed unit of the occurrence: %w", err)
+		}
+		committed.add(sourceID, dataset)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read the committed units of the occurrence: %w", err)
+	}
+	return committed, nil
 }
 
 // DatasetFullQuery reports whether an integration_datasets row makes its work-items family one unbounded
@@ -2165,6 +2413,7 @@ SET source_type='account',name=EXCLUDED.name,full_name=EXCLUDED.full_name,is_ena
 	wanted := make([]string, 0, len(repair.datasets))
 	for _, dataset := range repair.datasets {
 		wanted = append(wanted, dataset.Key)
+		// The derived id cannot race on the pkey only because the coordinator tx holds preparePagerDutyRepair's sync_configurations FOR UPDATE (CHAOS-4204).
 		datasetID := uuid.NewSHA1(materializerNamespace, []byte(loaded.input.IntegrationID+":dataset:"+dataset.Key)).String()
 		if _, err := tx.Exec(ctx, `
 INSERT INTO public.integration_datasets (id,org_id,integration_id,dataset_key,is_enabled,options,state_changed_at,state_changed_by)

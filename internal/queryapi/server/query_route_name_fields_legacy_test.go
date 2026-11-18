@@ -22,7 +22,6 @@ var nameFieldOperations = []struct {
 	{"aiGovernanceSummary", registeredAiGovernanceSummaryDocument, registeredAiGovernanceSummaryV1Document, "aigovernancesummary_v1_captured.graphql", []string{"repoName", "teamName", "subjectTitle", "ruleName"}, 1},
 	{"dataHealthIdentity", registeredDataHealthIdentityDocument, registeredDataHealthIdentityV1Document, "data_health_identity_v1_captured.graphql", []string{"suggestedCanonicalName"}, 1},
 	{"improveOpportunities", registeredImproveOpportunitiesDocument, registeredImproveOpportunitiesV2Document, "improveopportunities_v2_captured.graphql", []string{"entityDisplayName"}, 2},
-	{"testopsRisk", registeredTestopsRiskDocument, registeredTestopsRiskV1Document, "testopsrisk_v1_captured.graphql", []string{"name"}, 1},
 }
 
 // The current text is the previous text plus exactly the name selections: take them out and the previous text is
@@ -81,5 +80,23 @@ func TestNameFieldDocuments_BothTextsResolveToTheOneOperation(t *testing.T) {
 				t.Errorf("%s %s resolves to %q, %v; want %s, true", c.operation, name, operation, ok, c.operation)
 			}
 		}
+	}
+}
+
+// testopsRisk took its name selections in V2 (CHAOS-8991) and qualityDragPartial in the current text (CHAOS-14001): V2 is V1
+// plus the name selection, and both stay accepted next to the current text.
+func TestTestopsRiskV2IsV1PlusTheNameSelection(t *testing.T) {
+	var kept []string
+	for _, line := range strings.Split(registeredTestopsRiskV2Document, "\n") {
+		if strings.TrimSpace(line) != "name" {
+			kept = append(kept, line)
+		}
+	}
+	if got := strings.Join(kept, "\n"); got != registeredTestopsRiskV1Document {
+		t.Errorf("V2 less the name selection is not V1:\n%s", got)
+	}
+	legacy := legacyDigestsByOperation["testopsRisk"]
+	if len(legacy) != 2 || legacy[0] != digestHex(registeredTestopsRiskV1Document) || legacy[1] != digestHex(registeredTestopsRiskV2Document) {
+		t.Errorf("legacyDigestsByOperation[testopsRisk] = %v, want V1 then V2", legacy)
 	}
 }

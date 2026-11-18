@@ -72,6 +72,10 @@ type GithubWorkItemDerivationCandidate struct {
 	// can derive the telemetry label without threading a
 	// *providerfoundation.Metrics through the pure build*/resolve chain.
 	OwnershipReason string `json:"-"`
+	// OwnershipEvidence is the ";ownership=<reason>" suffix of a membership row kept with no
+	// ownership proof. It is appended to Evidence after ranking and dedup, so it never changes
+	// which of two tied rows a last-wins writer keeps.
+	OwnershipEvidence string `json:"-"`
 	// TeamProvider and TeamResolved are the identity of the team the
 	// candidate names. Teams are (provider, id), and one id can name teams of
 	// several providers, so the team is bound where the candidate is made
@@ -845,14 +849,20 @@ func (derived GithubWorkItemDerivationContext) resolve(
 		}
 		bySource["project_ownership"] = append(bySource["project_ownership"], candidate)
 	}
-	bySource["repo_ownership"] = append(
-		bySource["repo_ownership"],
-		derived.repoByID[AttributionMapKey(subject.Provider, GithubWorkItemDerivationStringValue(subject.RepoID))]...,
-	)
-	bySource["repo_ownership"] = append(
-		bySource["repo_ownership"],
-		derived.repoByNames(subject)...,
-	)
+	// An issue takes no team from its own repository field (entity tree: its
+	// repositories are those of its linked pull requests; it reaches a team's
+	// ownership through the linked_issue tier). Only a pull / merge request takes
+	// repo_ownership from its own repo_id.
+	if GithubWorkItemDerivationIsPullOrMergeRequestType(subject.Provider, subject.Type) {
+		bySource["repo_ownership"] = append(
+			bySource["repo_ownership"],
+			derived.repoByID[AttributionMapKey(subject.Provider, GithubWorkItemDerivationStringValue(subject.RepoID))]...,
+		)
+		bySource["repo_ownership"] = append(
+			bySource["repo_ownership"],
+			derived.repoByNames(subject)...,
+		)
+	}
 	// CHAOS-4321 (chris's ruling, 2026-08-26, refined 08:30 PT): membership-
 	// based attribution -- assignee AND author alike -- is a TWO-LAYER
 	// resolution via ResolveMembership: layer 1 (admin: memberByID ∪
@@ -882,6 +892,7 @@ func (derived GithubWorkItemDerivationContext) resolve(
 			if owns {
 				for index := range assigneeCandidates {
 					assigneeCandidates[index].OwnershipReason = GithubWorkItemDerivationOwnershipCheckedLabel(ownershipReason)
+					assigneeCandidates[index].OwnershipEvidence = ownershipEvidenceSuffix(ownershipReason)
 				}
 				bySource["assignee_membership"] = append(bySource["assignee_membership"], assigneeCandidates...)
 			} else {
@@ -939,6 +950,7 @@ func (derived GithubWorkItemDerivationContext) resolve(
 					for index, candidate := range reporterCandidates {
 						candidate.Source = "author_membership"
 						candidate.Evidence = "reporter=" + *subject.Reporter
+						candidate.OwnershipEvidence = ownershipEvidenceSuffix(ownershipReason)
 						candidate.OwnershipReason = GithubWorkItemDerivationOwnershipCheckedLabel(ownershipReason)
 						relabeled[index] = candidate
 					}
@@ -1143,6 +1155,8 @@ func (derived GithubWorkItemDerivationContext) resolve(
 				}
 			}
 		}
+		candidate.Evidence += candidate.OwnershipEvidence
+		candidate.OwnershipEvidence = ""
 		marked[index] = candidate
 	}
 	return primary.TeamID, primary.TeamName, marked, rejections
@@ -1342,8 +1356,12 @@ func (derived GithubWorkItemDerivationContext) ManualCandidates(
 			// one team. GithubWorkItemDerivationScopeMatch reproduces the set
 			// semantics: empty candidates are dropped and an empty scope_id
 			// can never match.
-			matched = GithubWorkItemDerivationScopeMatch(scopeID,
-				append([]string{GithubWorkItemDerivationStringValue(subject.RepoID)}, GitLabProjectNames(subject)...)...)
+			// Only a pull / merge request matches a repo rule through its own repo: an
+			// issue has no repository field of its own (its repositories are its linked
+			// pull requests').
+			matched = GithubWorkItemDerivationIsPullOrMergeRequestType(subject.Provider, subject.Type) &&
+				GithubWorkItemDerivationScopeMatch(scopeID,
+					append([]string{GithubWorkItemDerivationStringValue(subject.RepoID)}, GitLabProjectNames(subject)...)...)
 		case "project":
 			candidates := []string{
 				GithubWorkItemDerivationStringValue(subject.ProjectID),
@@ -1498,6 +1516,33 @@ func IsLinkedIssueDonorSource(source string) bool {
 	return linkedIssueDonorSources[source]
 }
 
+// Reasons a donor row is refused as a linked_issue donor (LinkedIssueDonorRefusal).
+const (
+	LinkedIssueDonorRefusedPullKind  = "pr_kind"
+	LinkedIssueDonorRefusedEmptyType = "empty_type"
+	LinkedIssueDonorRefusedUnknown   = "unknown"
+)
+
+// LinkedIssueDonorRefusal is the one test of "the donor of a linked_issue row must be an issue" (CHAOS-14013),
+// used by the cascade (BuildLinkedIssueIndexFromRows) and by the donor-change backstop. It returns "" when
+// the donor is an issue, else the reason: the donor is a pull or merge request of its provider
+// (pr_kind), its Type is empty (empty_type: a writer gap is never read as an issue), or it is not among the
+// known subjects (unknown). One predicate for every provider: the edge pull request -> pull request is not
+// an edge of the Repository <> Pull request <> Issue <> Project tree.
+func LinkedIssueDonorRefusal(subject GithubWorkItemDerivationSubject, known bool) string {
+	if !known {
+		return LinkedIssueDonorRefusedUnknown
+	}
+	itemType := strings.TrimSpace(subject.Type)
+	if itemType == "" {
+		return LinkedIssueDonorRefusedEmptyType
+	}
+	if GithubWorkItemDerivationIsPullOrMergeRequestType(strings.TrimSpace(subject.Provider), itemType) {
+		return LinkedIssueDonorRefusedPullKind
+	}
+	return ""
+}
+
 // OwnDonorRows is the primary row this context gives each item of ids on its
 // own (without a linked issue): the row a run that writes those items in this
 // context writes for them.
@@ -1588,8 +1633,80 @@ func (derived GithubWorkItemDerivationContext) linkedIssueEvidence(workItemID st
 	return "linked_issue=" + workItemID
 }
 
+// linkedIssueSubjectIndexes is what the linked_issue index reads of the subjects: which items have a native team
+// of their own (they never inherit) and which Jira or Linear issue each issue key names (a key two items hold
+// names none).
+func (derived GithubWorkItemDerivationContext) linkedIssueSubjectIndexes(
+	subjects map[string]GithubWorkItemDerivationSubject,
+) (map[string]bool, map[string]string) {
+	baseNative := map[string]bool{}
+	keyIndex := map[string]string{}
+	ambiguous := map[string]bool{}
+	for _, subject := range subjects {
+		baseNative[subject.WorkItemID] = derived.NativeTeamCandidate(subject) != nil
+		if (subject.Provider == "linear" || subject.Provider == "jira") && strings.Contains(subject.WorkItemID, ":") {
+			_, suffix, _ := strings.Cut(subject.WorkItemID, ":")
+			key := strings.ToUpper(strings.TrimSpace(suffix))
+			if ambiguous[key] {
+				continue
+			}
+			if existing, exists := keyIndex[key]; exists && existing != subject.WorkItemID {
+				delete(keyIndex, key)
+				ambiguous[key] = true
+			} else {
+				keyIndex[key] = subject.WorkItemID
+			}
+		}
+	}
+	return baseNative, keyIndex
+}
+
+// LinkedIssueDonorRefusalCounts counts, by reason, the distinct donor targets that the inheritable edges
+// of items without a native team of their own point at and that LinkedIssueDonorRefusal refuses: the same
+// edges BuildLinkedIssueIndexFromRows evaluates, so an item with no edge counts nothing. A key target no
+// item resolves to counts as unknown. A caller logs it at Info so a writer that leaves Type empty shows up.
+// Nil when nothing is refused.
+func (derived GithubWorkItemDerivationContext) LinkedIssueDonorRefusalCounts(
+	subjects map[string]GithubWorkItemDerivationSubject,
+	dependencies []GithubWorkItemDerivationDependencyEdge,
+) map[string]int {
+	baseNative, keyIndex := derived.linkedIssueSubjectIndexes(subjects)
+	seen := map[string]string{}
+	for _, dependency := range LatestGitHubWorkItemDerivationDependencies(dependencies) {
+		if !GithubWorkItemDerivationInheritableRelationships[dependency.RelationshipType] || baseNative[dependency.SourceWorkItemID] {
+			continue
+		}
+		target := dependency.TargetWorkItemID
+		if strings.HasPrefix(target, "extkey:") {
+			target = keyIndex[strings.ToUpper(strings.TrimSpace(strings.TrimPrefix(target, "extkey:")))]
+		}
+		reason := LinkedIssueDonorRefusedUnknown
+		if target != "" {
+			subject, known := subjects[target]
+			reason = LinkedIssueDonorRefusal(subject, known)
+		}
+		if reason != "" {
+			// One donor is one count: by the resolved work item, so a direct id and an issue key that name the
+			// same item count once; a key no item resolves to is told apart by its own text.
+			key := target
+			if target == "" {
+				key = dependency.TargetWorkItemID
+			}
+			seen[key] = reason
+		}
+	}
+	var counts map[string]int
+	for _, reason := range seen {
+		if counts == nil {
+			counts = map[string]int{}
+		}
+		counts[reason]++
+	}
+	return counts
+}
+
 // BuildLinkedIssueIndexFromRows resolves each team-less item to the team of a
-// linked donor's own primary row in donorRows, copied as it is and never
+// linked donor (an issue: LinkedIssueDonorRefusal) own primary row in donorRows, copied as it is and never
 // resolved again on the item's day (CHAOS-9460): a donor whose row is not in
 // donorRows, or whose row's source is not one of linkedIssueDonorSources,
 // gives nothing. It returns, beside each item's team, the evidence of its
@@ -1613,6 +1730,12 @@ func (derived GithubWorkItemDerivationContext) BuildLinkedIssueIndexFromRows(
 		if row.TeamID == "" || !linkedIssueDonorSources[row.Source] {
 			continue
 		}
+		// The donor must be an issue (CHAOS-14013), decided before the team test and the winner pick, so
+		// another issue donor of the same item still gives its team.
+		donorSubject, donorKnown := subjects[id]
+		if LinkedIssueDonorRefusal(donorSubject, donorKnown) != "" {
+			continue
+		}
 		teamName := GithubWorkItemDerivationFirstNonEmpty(row.TeamName, row.TeamID)
 		bound := GithubWorkItemDerivationCandidate{
 			TeamID: GithubWorkItemDerivationStringPointer(row.TeamID), TeamName: GithubWorkItemDerivationStringPointer(teamName),
@@ -1631,25 +1754,7 @@ func (derived GithubWorkItemDerivationContext) BuildLinkedIssueIndexFromRows(
 		}
 		donors[id] = [3]string{row.TeamID, GithubWorkItemDerivationFirstNonEmpty(GithubWorkItemDerivationStringValue(bound.TeamName), teamName), bound.TeamProvider}
 	}
-	baseNative := map[string]bool{}
-	keyIndex := map[string]string{}
-	ambiguous := map[string]bool{}
-	for _, subject := range subjects {
-		baseNative[subject.WorkItemID] = derived.NativeTeamCandidate(subject) != nil
-		if (subject.Provider == "linear" || subject.Provider == "jira") && strings.Contains(subject.WorkItemID, ":") {
-			_, suffix, _ := strings.Cut(subject.WorkItemID, ":")
-			key := strings.ToUpper(strings.TrimSpace(suffix))
-			if ambiguous[key] {
-				continue
-			}
-			if existing, exists := keyIndex[key]; exists && existing != subject.WorkItemID {
-				delete(keyIndex, key)
-				ambiguous[key] = true
-			} else {
-				keyIndex[key] = subject.WorkItemID
-			}
-		}
-	}
+	baseNative, keyIndex := derived.linkedIssueSubjectIndexes(subjects)
 	edgesBySource := map[string][]LinkedIssueEdge{}
 	for _, dependency := range LatestGitHubWorkItemDerivationDependencies(dependencies) {
 		if !GithubWorkItemDerivationInheritableRelationships[dependency.RelationshipType] || baseNative[dependency.SourceWorkItemID] {
@@ -2606,6 +2711,10 @@ const (
 	// row at all. R74 (chris via team-lead, 2026-09-09, DECIDED): this
 	// passes through, does not gate -- see ownershipUnknownBlocksMembership.
 	MembershipOwnershipReasonUnknown = "ownership_unknown"
+	// MembershipOwnershipReasonIssueGateNotApplied: the item is an issue, which has
+	// no repository field of its own; the gate is not applied and the membership
+	// row is kept as provenance.
+	MembershipOwnershipReasonIssueGateNotApplied = "ownership_gate_not_applied_issue"
 	// MembershipOwnershipReasonTeamNullCarrying: the resolved team itself
 	// (not the repo) carries NO ownership signal anywhere in the org -- no
 	// repo_ownership, no repo_patterns-derived repo, no project_ownership,
@@ -2701,6 +2810,13 @@ func (derived GithubWorkItemDerivationContext) teamIsNullCarrying(teamID string)
 func (derived GithubWorkItemDerivationContext) teamOwnsSubjectRepo(
 	subject GithubWorkItemDerivationSubject, teamID string,
 ) (string, bool) {
+	// The gate is not applied to an issue: it has no repository field of its own
+	// (its repositories are those of its linked pull requests) and the gate reads
+	// none of them. The membership row is kept as provenance (is_primary 0), before
+	// the team-level checks, which are a gate on a pull / merge request.
+	if !GithubWorkItemDerivationIsPullOrMergeRequestType(subject.Provider, subject.Type) {
+		return MembershipOwnershipReasonIssueGateNotApplied, true
+	}
 	if derived.teamIsNullCarrying(teamID) {
 		return MembershipOwnershipReasonTeamNullCarrying, false
 	}
@@ -2718,6 +2834,17 @@ func (derived GithubWorkItemDerivationContext) teamOwnsSubjectRepo(
 		}
 	}
 	return MembershipOwnershipReasonNotOwned, false
+}
+
+// ownershipEvidenceSuffix names an issue's membership row in its evidence: the
+// ownership gate is not applied to an issue, so the row is kept with no ownership
+// proof, and a missing proof is not a healthy one. A pull / merge request row
+// keeps the evidence it has always had.
+func ownershipEvidenceSuffix(ownershipReason string) string {
+	if ownershipReason != MembershipOwnershipReasonIssueGateNotApplied {
+		return ""
+	}
+	return ";ownership=" + ownershipReason
 }
 
 // GithubWorkItemDerivationOwnershipCheckedLabel maps a teamOwnsSubjectRepo

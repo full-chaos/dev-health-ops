@@ -28,6 +28,11 @@ func queryLastValue(values url.Values, name string) (value string, present bool)
 	return *ptr, true
 }
 
+// requestQuery is httpapi.Query (Starlette's query parse) for an admin file that does not import httpapi.
+func requestQuery(r *http.Request) url.Values {
+	return httpapi.Query(r)
+}
+
 // queryInt is a `limit`/`offset`-shaped query param: ABSENT means
 // defaultValue; PRESENT (including present-and-empty, "limit=") and
 // unparsable is a 422 "int_parsing" pydantic error (FastAPI's own shape for

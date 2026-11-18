@@ -5,6 +5,9 @@ query ThroughputForecast($orgId: String!, $input: ThroughputForecastInput!) {
     teamId
     workScopeId
     backlogSize
+    backlogState
+    backlogAsOfDay
+    degradedReason
     historyWeeks
     p50Weeks
     p75Weeks
@@ -45,6 +48,7 @@ query ThroughputForecast($orgId: String!, $input: ThroughputForecastInput!) {
       estimatedCount
       unestimatedCount
       backlogSize
+      grainCount
       __typename
     }
     reviewBottleneck {

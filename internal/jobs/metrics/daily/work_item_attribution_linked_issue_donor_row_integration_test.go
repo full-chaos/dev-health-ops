@@ -87,7 +87,7 @@ func seedWorkItemAttributionDonorItem(
 	orgID, workItemID, provider string, repoID uuid.UUID, createdAt time.Time,
 ) {
 	t.Helper()
-	if err := conn.Exec(ctx, `INSERT INTO work_items (repo_id, work_item_id, provider, created_at, org_id, last_synced) VALUES (?, ?, ?, ?, ?, ?)`,
+	if err := conn.Exec(ctx, `INSERT INTO work_items (repo_id, work_item_id, provider, type, created_at, org_id, last_synced) VALUES (?, ?, ?, 'issue', ?, ?, ?)`,
 		repoID, workItemID, provider, createdAt, orgID, createdAt); err != nil {
 		t.Fatalf("seed donor work item: %v", err)
 	}
@@ -126,7 +126,7 @@ func TestALinkedItemIsRevisitedOnceItsDonorHasARow(t *testing.T) {
 			repoPR, repoD := uuid.New(), uuid.New()
 			donor := provider + ":D-1"
 			seedWorkItemAttributionLinkedItem(t, ctx, conn, orgID, "PR", repoPR, seededAt)
-			if err := conn.Exec(ctx, `INSERT INTO work_items (repo_id, work_item_id, provider, project_id, created_at, org_id, last_synced) VALUES (?, ?, ?, 'proj-d', ?, ?, ?)`,
+			if err := conn.Exec(ctx, `INSERT INTO work_items (repo_id, work_item_id, provider, type, project_id, created_at, org_id, last_synced) VALUES (?, ?, ?, 'issue', 'proj-d', ?, ?, ?)`,
 				repoD, donor, provider, seededAt, orgID, seededAt); err != nil {
 				t.Fatalf("seed donor: %v", err)
 			}
@@ -217,7 +217,7 @@ func TestALinkedItemCopiesADonorThatAnotherPartitionOfTheRunWrites(t *testing.T)
 			repoPR, repoD := uuid.New(), uuid.New()
 			donor := provider + ":D-1"
 			seedWorkItemAttributionLinkedItem(t, ctx, conn, orgID, "PR", repoPR, seededAt)
-			if err := conn.Exec(ctx, `INSERT INTO work_items (repo_id, work_item_id, provider, project_id, created_at, org_id, last_synced) VALUES (?, ?, ?, 'proj-d', ?, ?, ?)`,
+			if err := conn.Exec(ctx, `INSERT INTO work_items (repo_id, work_item_id, provider, type, project_id, created_at, org_id, last_synced) VALUES (?, ?, ?, 'issue', 'proj-d', ?, ?, ?)`,
 				repoD, donor, provider, seededAt, orgID, seededAt); err != nil {
 				t.Fatalf("seed donor: %v", err)
 			}
@@ -279,7 +279,7 @@ func TestADonorOutsideTheDaysWindowGivesItsStoredRow(t *testing.T) {
 			if !tc.completed.IsZero() {
 				completed = tc.completed
 			}
-			if err := conn.Exec(ctx, `INSERT INTO work_items (repo_id, work_item_id, provider, project_id, status, created_at, completed_at, org_id, last_synced) VALUES (?, 'jira:D-1', 'jira', 'proj-d', ?, ?, ?, ?, ?)`,
+			if err := conn.Exec(ctx, `INSERT INTO work_items (repo_id, work_item_id, provider, type, project_id, status, created_at, completed_at, org_id, last_synced) VALUES (?, 'jira:D-1', 'jira', 'task', 'proj-d', ?, ?, ?, ?, ?)`,
 				repoD, tc.status, tc.created, completed, orgID, seededAt); err != nil {
 				t.Fatalf("seed donor: %v", err)
 			}

@@ -260,9 +260,11 @@ CHAOS-3356 closes CHAOS-3352's deliberate shared-table blocker and makes both
 aliases `native_go` / `route_ready: true`. They do not own independent partial
 rows: one `GitLabTestsRouteHandler` fetches and normalizes the complete TestOps
 unit for either claim, and one `TestOpsClickHouseEffects` implementation writes
-the same six destinations: `ci_pipeline_runs`, `ci_job_runs`,
-`ci_acceptance_checks`, `test_suite_results`, `test_case_results`, and
-`coverage_snapshots`. This single complete owner is required because
+the same seven destinations: `ci_pipeline_runs`, `ci_job_runs`,
+`ci_acceptance_checks`, `test_suite_results`, `test_case_results`,
+`coverage_snapshots`, and `testops_run_report_completeness` (one row per
+finished pipeline with report sources: complete, or partial with the loss
+reasons; the attempt is 1 + the pipeline's retried jobs). This single complete owner is required because
 `ci_pipeline_runs` is a `ReplacingMergeTree`; a newer partial row would replace
 the older whole row rather than merge columns.
 
@@ -546,13 +548,15 @@ of report files (with Python's first-seen tie behavior).
 
 The complete route also owns Actions run pagination, per-run job pagination,
 branch-protection acceptance checks, the authenticated-to-unauthenticated
-two-hop artifact download, Cobertura parsing, and six independently persisted
+two-hop artifact download, Cobertura parsing, and seven independently persisted
 destinations: `ci_pipeline_runs`, `ci_job_runs`, `ci_acceptance_checks`,
-`test_suite_results`, `test_case_results`, and `coverage_snapshots`. Bounded
+`test_suite_results`, `test_case_results`, `coverage_snapshots`, and
+`testops_run_report_completeness` (one row per walked run attempt with report
+artifacts: complete, or partial with the loss reasons). Bounded
 fetches fail closed when a next page or skipped classified report would make
 the unit incomplete, so no effect manifest or watermark is committed. The
 authenticated artifact request follows its pre-signed redirect with an
-explicitly unauthenticated, lease- and budget-governed request. Six
+explicitly unauthenticated, lease- and budget-governed request. Seven
 tenant-prefixed FINAL readbacks fence retries. The independently named
 `WORKER_GITHUB_TESTS_ENABLED` switch defaults off in both runtimes; deployment,
 scheduler activation, and migration 0066 remain unchanged.

@@ -608,7 +608,8 @@ const (
 	// TeamCatalogOutcomeRosterPreservationFailed (team-lead ruling,
 	// 2026-08-28) names a successful collection call that nonetheless
 	// reported TeamCatalogResult.RosterPreservationFailed: the existing-
-	// manual_members pre-read (CHAOS-4446's PreserveExistingTeamManualMembers)
+	// manual_members pre-read (CHAOS-4446; no writer makes one since
+	// CHAOS-14081 keeps the roster inside the insert)
 	// failed and the collector chose to continue rather than hard-fail the
 	// whole write. No collector does this today -- Linear's always
 	// hard-fails instead, surfacing as native_failed_nonfatal/a propagated
@@ -793,6 +794,11 @@ const (
 	// that reports zero understates what landed, which is precisely the number
 	// an operator needs to reason about duplication.
 	DailyMetricsNativeFamilyOutcomePartialWrite DailyMetricsNativeFamilyOutcome = "partial_write"
+	// DailyMetricsNativeFamilyOutcomeSkippedEmptyRun is a finalize family that
+	// refuses a run with no partition and was not run on one (a run of the whole
+	// organization whose discovery found no repository). Its rows of the day are
+	// left as they are, so the skip is counted rather than only logged.
+	DailyMetricsNativeFamilyOutcomeSkippedEmptyRun DailyMetricsNativeFamilyOutcome = "skipped_empty_run"
 )
 
 // WorkGraphIssueEdgeOutcome is the bounded per-ROW disposition of one
@@ -852,7 +858,7 @@ func workGraphIssueEdgeOutcomes() []WorkGraphIssueEdgeOutcome {
 func dailyMetricsNativeFamilyOutcomes() []DailyMetricsNativeFamilyOutcome {
 	return []DailyMetricsNativeFamilyOutcome{
 		DailyMetricsNativeFamilyOutcomeComputed, DailyMetricsNativeFamilyOutcomeRefused,
-		DailyMetricsNativeFamilyOutcomePartialWrite,
+		DailyMetricsNativeFamilyOutcomePartialWrite, DailyMetricsNativeFamilyOutcomeSkippedEmptyRun,
 	}
 }
 

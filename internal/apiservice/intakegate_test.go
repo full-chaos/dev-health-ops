@@ -263,9 +263,54 @@ func TestEveryRequestThatReachesAnIntakeHandlerIsCountedOnce(t *testing.T) {
 	}
 }
 
+// fixedLogClock pins the slog time to a stamp whose nanoseconds hold 6379, so a
+// check that reads the time field fails every run, not one run in many.
+func fixedLogClock(groups []string, a slog.Attr) slog.Attr {
+	if len(groups) == 0 && a.Key == slog.TimeKey {
+		return slog.Time(slog.TimeKey, time.Date(2026, 11, 18, 8, 33, 0, 637912345, time.UTC))
+	}
+	return a
+}
+
+// logLeaks returns the secrets one JSON log line carries outside its time field.
+func logLeaks(t *testing.T, line string) []string {
+	t.Helper()
+	var entry map[string]any
+	if err := json.Unmarshal([]byte(line), &entry); err != nil {
+		t.Fatal(err)
+	}
+	delete(entry, slog.TimeKey)
+	text, err := json.Marshal(entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found []string
+	for _, leaked := range []string{"10.9.8.7", "6379", "hunter2", "11111111-2222", "connection refused", "dial tcp"} {
+		if strings.Contains(string(text), leaked) {
+			found = append(found, leaked)
+		}
+	}
+	return found
+}
+
+func TestIntakeLogLeakCheckReadsNoTimeButCatchesALeak(t *testing.T) {
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{ReplaceAttr: fixedLogClock}))
+	logger.Error("clean")
+	if got := logLeaks(t, strings.TrimSpace(logs.String())); len(got) != 0 {
+		t.Fatalf("the time field alone must not count as a leak, got %v", got)
+	}
+	logs.Reset()
+	logger.Error("dial tcp 10.9.8.7:6379", slog.Group("error", slog.String("message", "password=hunter2")))
+	got := logLeaks(t, strings.TrimSpace(logs.String()))
+	if len(got) != 4 {
+		t.Fatalf("a planted leak must be found, got %v", got)
+	}
+}
+
 func TestIntakeGateLogsALimiterStoreFailureOnce(t *testing.T) {
 	var logs bytes.Buffer
-	logger := slog.New(slog.NewJSONHandler(&logs, nil))
+	logger := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{ReplaceAttr: fixedLogClock}))
 	failure := errors.New("dial tcp 10.9.8.7:6379: connection refused: password=hunter2 org=11111111-2222-3333-4444-555555555555")
 	deps := Deps{}
 	gate := newIntakeGate(&deps, logger, func(Deps) (httpapi.CounterStore, error) { return nil, failure })
@@ -283,10 +328,8 @@ func TestIntakeGateLogsALimiterStoreFailureOnce(t *testing.T) {
 	if entry["level"] != "ERROR" || entry["msg"] != "api: the shared rate limiter is unavailable; intake deliveries count in the in-process limiter" {
 		t.Fatalf("log entry %v", entry)
 	}
-	for _, leaked := range []string{"10.9.8.7", "6379", "hunter2", "11111111-2222", "connection refused", "dial tcp"} {
-		if strings.Contains(logs.String(), leaked) {
-			t.Errorf("the log carries %q", leaked)
-		}
+	for _, leaked := range logLeaks(t, lines[0]) {
+		t.Errorf("the log carries %q", leaked)
 	}
 	if _, ok := entry["error"].(map[string]any); !ok {
 		t.Fatalf("the failure is not logged as the error class group: %v", entry)

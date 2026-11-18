@@ -17,7 +17,11 @@ func TestTheUserRowSplitAddsUpToTheRow(t *testing.T) {
 	done := day.Add(10 * time.Hour)
 	startedToday := day.Add(2 * time.Hour)
 	item := func(index int, id string, completed *time.Time, start time.Time) Item {
-		return Item{WorkItemID: id, Provider: "jira", Type: "task", Status: "in_progress", Assignee: &person,
+		status := "in_progress"
+		if completed != nil {
+			status = "done"
+		}
+		return Item{WorkItemID: id, Provider: "jira", Type: "task", Status: status, Assignee: &person,
 			SourceIndex: index, CreatedAt: start.Add(-time.Hour), StartedAt: &start, CompletedAt: completed}
 	}
 	items := []Item{

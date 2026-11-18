@@ -5,10 +5,11 @@ import (
 	"regexp"
 )
 
-// SuiteScopeUses and CoverageScopeUses are the number of inner selects that carry the caller's Scope.
+// SuiteScopeUses and CoverageScopeUses are the number of inner selects that carry the caller's Scope. Coverage has 2: its
+// legacy arm is one run-set select, not the listed-id select and its newest-attempt select (CHAOS-14146).
 const (
 	SuiteScopeUses    = 3
-	CoverageScopeUses = 3
+	CoverageScopeUses = 2
 )
 
 var (
@@ -68,6 +69,8 @@ func pipelineWindowRuns(repoIDsParam, startParam, endParam string) string {
 type attemptTable struct {
 	table, id, legacyIDs string
 	windowRuns           func(repo, start, end string) string
+	// legacyByRun keeps a legacy row only when its run has no slotted row, instead of when no kept slotted row lists its id.
+	legacyByRun bool
 }
 
 func suiteWindowRuns(repo, start, end string) string {
@@ -79,13 +82,15 @@ func suiteWindowRuns(repo, start, end string) string {
 // table in the caller's statement ("" = unqualified columns); the inner selects read the table unqualified. It binds
 // {org_id:String} and the parameters named by scope.
 func SuiteRowsNewestAttempt(alias string, scope Scope) string {
-	return rowsNewestAttempt(attemptTable{"test_suite_results", "suite_id", "legacy_suite_ids", suiteWindowRuns}, alias, scope)
+	return rowsNewestAttempt(attemptTable{"test_suite_results", "suite_id", "legacy_suite_ids", suiteWindowRuns, false}, alias, scope)
 }
 
-// CoverageRowsNewestAttempt is the same rule over coverage_snapshots (snapshot_id, legacy_snapshot_ids); its window bound is the
-// runs of ci_pipeline_runs started in the window.
+// CoverageRowsNewestAttempt keeps the newest attempt of each coverage slot, and a legacy row only when its run has no slotted
+// coverage row (CHAOS-14146): every current writer slots coverage, so such a run was read again, and a legacy row the re-read
+// did not list is an older copy (the daily read serves one snapshot per repo-day, so it must never win). Its window bound is
+// the runs of ci_pipeline_runs started in the window.
 func CoverageRowsNewestAttempt(alias string, scope Scope) string {
-	return rowsNewestAttempt(attemptTable{"coverage_snapshots", "snapshot_id", "legacy_snapshot_ids", pipelineWindowRuns}, alias, scope)
+	return rowsNewestAttempt(attemptTable{"coverage_snapshots", "snapshot_id", "legacy_snapshot_ids", pipelineWindowRuns, true}, alias, scope)
 }
 
 func rowsNewestAttempt(t attemptTable, alias string, scope Scope) string {
@@ -108,5 +113,9 @@ func rowsNewestAttempt(t attemptTable, alias string, scope Scope) string {
 		column("report_slot"), column("repo_id"), column("run_id"), column("report_slot"), column("run_attempt"), newest)
 	legacy := fmt.Sprintf("(%s = '' AND (%s, %s, %s) NOT IN (SELECT repo_id, run_id, arrayJoin(%s) FROM %s FINAL WHERE org_id = {org_id:String}%s AND report_slot != '' AND (repo_id, run_id, report_slot, run_attempt) IN (%s)))",
 		column("report_slot"), column("repo_id"), column("run_id"), column(t.id), t.legacyIDs, t.table, bound, newest)
+	if t.legacyByRun {
+		legacy = fmt.Sprintf("(%s = '' AND (%s, %s) NOT IN (SELECT repo_id, run_id FROM %s FINAL WHERE org_id = {org_id:String}%s AND report_slot != ''))",
+			column("report_slot"), column("repo_id"), column("run_id"), t.table, bound)
+	}
 	return "(" + slotted + " OR " + legacy + ")"
 }

@@ -12,6 +12,7 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
@@ -44,14 +45,6 @@ var benchmarkingSchema = []string{
     id UUID, org_id String, repo String, settings String, provider String,
     last_synced DateTime64(3, 'UTC')
 ) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, id)`,
-	`CREATE TABLE testops_pipeline_metrics_daily (
-    repo_id UUID, day Date, team_id Nullable(String), service_id Nullable(String),
-    success_count UInt32, failure_count UInt32,
-    success_rate Float64, failure_rate Float64, rerun_rate Float64,
-    median_duration_seconds Float64, p95_duration_seconds Float64,
-    avg_queue_seconds Float64, p95_queue_seconds Float64,
-    computed_at DateTime('UTC'), org_id String
-) ENGINE = MergeTree PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, day)`,
 	// current_value/baseline_value/percentile_rank/p25-90_value and
 	// maturity_bands.value are Nullable(Float64) since migrations
 	// 090_testops_baselines_nullable_fields.sql and
@@ -159,6 +152,7 @@ func TestBenchmarkingFinalizeRunsOnlyAfterEveryPartitionSucceeded(t *testing.T) 
 			t.Fatal(err)
 		}
 	}
+	chschema.CreateTables(ctx, t, conn, "testops_pipeline_metrics_daily")
 
 	repos := seedBenchmarkingOrg(t, ctx, conn)
 	run := benchmarkingRun("run-race", repos)
@@ -417,6 +411,7 @@ func TestBenchmarkingPartialWriteIsReportedWithItsTrueRowCount(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	chschema.CreateTables(ctx, t, conn, "testops_pipeline_metrics_daily")
 
 	repos := seedBenchmarkingOrg(t, ctx, conn)
 	// All-succeeded fake Store: this test's job is the partial-write/

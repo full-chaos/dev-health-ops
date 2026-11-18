@@ -26,6 +26,7 @@ import (
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
@@ -189,6 +190,7 @@ func TestSankeyGrouped_SeededRealClickHouse_EqualsPerDimensionQueries(t *testing
 			t.Fatalf("exec DDL %q: %v", stmt, err)
 		}
 	}
+	chschema.CreateTables(ctx, t, conn, "work_unit_investments")
 	seedGroupedSankey(t, ctx, conn)
 
 	client, err := dhclickhouse.NewClickHouseQueryClientWithOptions(dhclickhouse.Options{DSN: inst.URI})

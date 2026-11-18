@@ -292,8 +292,9 @@ func liveE2EUpFakes(t *testing.T, state string) string {
 		}
 	}
 	// Every built binary records its name, the AUTH_SSO_PROVIDERS_OWNED it ran under and its arguments.
+	// The fake auth-service writes the subject before "started": up returns when curl sees "started", then tests read it.
 	write("bin-template", "#!/bin/sh\nprintf '%s %s %s\\n' \"$(basename \"$0\")\" \"${AUTH_SSO_PROVIDERS_OWNED:-unset}\" \"$*\" >> '"+state+"/bin.calls'\n"+
-		"echo started\nprintf %s \"$AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT\" > '"+state+"/subject'\n")
+		"printf %s \"$AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT\" > '"+state+"/subject'\necho started\n")
 	write("go", "#!/bin/sh\nwhile [ \"$1\" != -o ]; do shift; done\ncp '"+fake+"/bin-template' \"$2\"\nchmod 755 \"$2\"\n")
 	write("psql", "#!/bin/sh\ncase \"$*\" in *-At*) echo 3b1e2c4d-5f60-4a71-8b92-0c1d2e3f4a5b ;; esac\n")
 	write("sleep", "#!/bin/sh\nexit 0\n")

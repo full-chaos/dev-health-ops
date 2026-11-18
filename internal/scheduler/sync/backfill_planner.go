@@ -107,12 +107,19 @@ func BuildBackfillPlan(input PlannerInput) ([]PlannedUnit, error) {
 			}
 			descriptor, known := providersync.Descriptor(provider, dataset.Key)
 			// CHAOS-4731: same visibility as the scheduled planner's gate.
+			replayNoUnit := input.replayHoldsNoUnit(source.ID, dataset.Key)
 			switch {
 			case !known:
 				globalPlanGateTelemetry.observe(provider, dataset.Key, planGateOutcomeUnknownPair)
 			case !descriptor.RouteReady || !descriptor.Plannable:
 				globalPlanGateTelemetry.observe(provider, dataset.Key, planGateOutcomeRouteNotReady)
-			case !input.executedProofSatisfied(descriptor, source.ID, dataset.Key):
+			case replayNoUnit:
+				slog.Default().Info("sync.plan.replay_no_unit",
+					slog.String("provider", provider),
+					slog.String("dataset", dataset.Key),
+					slog.String("org_id", input.OrgID),
+					slog.String("source_id", source.ID))
+			case !input.executedProofSatisfied(descriptor):
 				globalPlanGateTelemetry.observe(provider, dataset.Key, planGateOutcomeExecutedProofUnsatisfied)
 				slog.Default().Warn("sync.plan.executed_proof_unsatisfied",
 					slog.String("provider", provider),
@@ -121,7 +128,7 @@ func BuildBackfillPlan(input PlannerInput) ([]PlannedUnit, error) {
 					slog.String("source_id", source.ID))
 			}
 			if !known || !descriptor.RouteReady || !descriptor.Plannable ||
-				!input.executedProofSatisfied(descriptor, source.ID, dataset.Key) {
+				replayNoUnit || !input.executedProofSatisfied(descriptor) {
 				continue
 			}
 			windows, err := resolveBackfillWindows(since, before, provider, dataset.Key)
@@ -358,12 +365,19 @@ func buildBackfillWorkItemFamilyUnits(
 	}
 	canonicalDescriptor, known := providersync.Descriptor(provider, canonicalWorkItemsDataset)
 	// CHAOS-4731: same visibility as the scheduled planner's family gate.
+	replayNoUnit := input.replayHoldsNoUnit(source.ID, canonicalWorkItemsDataset)
 	switch {
 	case !known:
 		globalPlanGateTelemetry.observe(provider, canonicalWorkItemsDataset, planGateOutcomeUnknownPair)
 	case !canonicalDescriptor.RouteReady || !canonicalDescriptor.Plannable:
 		globalPlanGateTelemetry.observe(provider, canonicalWorkItemsDataset, planGateOutcomeRouteNotReady)
-	case !input.executedProofSatisfied(canonicalDescriptor, source.ID, canonicalWorkItemsDataset):
+	case replayNoUnit:
+		slog.Default().Info("sync.plan.replay_no_unit",
+			slog.String("provider", provider),
+			slog.String("dataset", canonicalWorkItemsDataset),
+			slog.String("org_id", input.OrgID),
+			slog.String("source_id", source.ID))
+	case !input.executedProofSatisfied(canonicalDescriptor):
 		globalPlanGateTelemetry.observe(provider, canonicalWorkItemsDataset, planGateOutcomeExecutedProofUnsatisfied)
 		slog.Default().Warn("sync.plan.executed_proof_unsatisfied",
 			slog.String("provider", provider),
@@ -372,7 +386,7 @@ func buildBackfillWorkItemFamilyUnits(
 			slog.String("source_id", source.ID))
 	}
 	if !known || !canonicalDescriptor.RouteReady || !canonicalDescriptor.Plannable ||
-		!input.executedProofSatisfied(canonicalDescriptor, source.ID, canonicalWorkItemsDataset) {
+		replayNoUnit || !input.executedProofSatisfied(canonicalDescriptor) {
 		return nil, nil
 	}
 	canonical, ok := datasetSpecification(provider, canonicalWorkItemsDataset)
@@ -424,12 +438,19 @@ func buildBackfillFoldFamilyUnits(
 	}
 	canonicalDescriptor, known := providersync.Descriptor(provider, canonicalDataset)
 	// CHAOS-4731: same visibility as the scheduled planner's fold gate.
+	replayNoUnit := input.replayHoldsNoUnit(source.ID, canonicalDataset)
 	switch {
 	case !known:
 		globalPlanGateTelemetry.observe(provider, canonicalDataset, planGateOutcomeUnknownPair)
 	case !canonicalDescriptor.RouteReady || !canonicalDescriptor.Plannable:
 		globalPlanGateTelemetry.observe(provider, canonicalDataset, planGateOutcomeRouteNotReady)
-	case !input.executedProofSatisfied(canonicalDescriptor, source.ID, canonicalDataset):
+	case replayNoUnit:
+		slog.Default().Info("sync.plan.replay_no_unit",
+			slog.String("provider", provider),
+			slog.String("dataset", canonicalDataset),
+			slog.String("org_id", input.OrgID),
+			slog.String("source_id", source.ID))
+	case !input.executedProofSatisfied(canonicalDescriptor):
 		globalPlanGateTelemetry.observe(provider, canonicalDataset, planGateOutcomeExecutedProofUnsatisfied)
 		slog.Default().Warn("sync.plan.executed_proof_unsatisfied",
 			slog.String("provider", provider),
@@ -438,7 +459,7 @@ func buildBackfillFoldFamilyUnits(
 			slog.String("source_id", source.ID))
 	}
 	if !known || !canonicalDescriptor.RouteReady || !canonicalDescriptor.Plannable ||
-		!input.executedProofSatisfied(canonicalDescriptor, source.ID, canonicalDataset) {
+		replayNoUnit || !input.executedProofSatisfied(canonicalDescriptor) {
 		return nil, nil
 	}
 	canonicalSpec, ok := datasetSpecification(provider, canonicalDataset)

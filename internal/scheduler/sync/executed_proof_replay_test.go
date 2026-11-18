@@ -89,7 +89,7 @@ func replayCommitted(pairs ...[2]string) *CommittedUnits {
 }
 
 // On a replay the executed-proof gate reads the committed graph, at the plain, fold and work-items sites of both
-// planners; a waiver still passes and a first attempt still reads the snapshot.
+// planners, waiver or not; a first attempt still reads the waiver and the snapshot.
 func TestPlannerExecutedProofReplayKeepsTheCommittedUnitSet(t *testing.T) {
 	now := time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)
 	since, before := now.Add(-48*time.Hour), now
@@ -114,8 +114,11 @@ func TestPlannerExecutedProofReplayKeepsTheCommittedUnitSet(t *testing.T) {
 			{"replay holds the unit of another source", "security", "security", proven("security"), replayCommitted([2]string{"other", "security"}), false},
 			{"fold: replay holds the unit, attempted and unproven", "pr-reviews", "prs", unproven("prs"), replayCommitted([2]string{"source", "prs"}), true},
 			{"fold: replay holds no unit, proven", "pr-reviews", "prs", proven("prs"), replayCommitted(), false},
-			{"waiver: replay holds no unit", "repo-metadata", "repo-metadata", unproven("repo-metadata"), replayCommitted(), true},
-			{"work-items waiver: replay holds no unit", "work-items", "work-items", unproven("work-items"), replayCommitted(), true},
+			{"waiver: first attempt", "repo-metadata", "repo-metadata", unproven("repo-metadata"), nil, true},
+			{"waiver: replay holds the unit", "repo-metadata", "repo-metadata", unproven("repo-metadata"), replayCommitted([2]string{"source", "repo-metadata"}), true},
+			{"waiver: replay holds no unit", "repo-metadata", "repo-metadata", unproven("repo-metadata"), replayCommitted(), false},
+			{"work-items waiver: replay holds the unit", "work-items", "work-items", unproven("work-items"), replayCommitted([2]string{"source", "work-items"}), true},
+			{"work-items waiver: replay holds no unit", "work-items", "work-items", unproven("work-items"), replayCommitted(), false},
 		} {
 			name := test.name
 			if backfill {

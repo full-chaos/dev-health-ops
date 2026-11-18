@@ -178,6 +178,20 @@ func TestNativeMaterializerExecutedProofReplayKeepsTheCommittedUnitSet(t *testin
 			},
 			want: []string{"work-items", "security"},
 		},
+		{
+			name: "a waived dataset (repo-metadata) is enabled after the commit",
+			before: func(t *testing.T, h *proofReplayHarness) {
+				h.ledger(t, "work-items", true)
+				h.ledger(t, "cicd", true)
+				h.refresh(t)
+			},
+			flip: func(t *testing.T, h *proofReplayHarness) {
+				mustExec(t, h.pool, `INSERT INTO integration_datasets (id, org_id, integration_id, dataset_key, is_enabled, options)
+VALUES ('00000000-0000-4000-8000-000000005008'::uuid, $1, $2::uuid, 'repo-metadata', TRUE, '{}'::json)`, proofReplayOrgID, proofReplayIntegrationID)
+				mustExec(t, h.pool, `UPDATE sync_configurations SET sync_targets = '["work-items","cicd","repo-metadata"]'::json WHERE id = $1::uuid`, proofReplayConfigID)
+			},
+			want: []string{"work-items", "security", "cicd"},
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			h := newProofReplayHarness(t)

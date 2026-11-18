@@ -252,14 +252,12 @@ var failedReadLoses = map[string]struct {
 }{
 	"work_items":      {0, []string{"cycle_time_p50_hours", "throughput", "wip_count", "wip_age_p90_hours"}},
 	"state_durations": {1, []string{"state_duration_hours"}},
-	// mttr_hours reads the repository row when the incident MTTR is 0: here the
-	// incidents hold a stored MTTR of 0, so the failed repository read is the
-	// value's source and mttr_hours is lost too.
-	"repo_metrics":  {2, []string{"review_latency_hours", "ownership_concentration", "bus_factor", "revert_rate", "mttr_hours"}},
+	// mttr_hours is read from the pooled MTTR reads, outside this schedule: a failed stored read loses none of it.
+	"repo_metrics":  {2, []string{"review_latency_hours", "ownership_concentration", "bus_factor", "revert_rate"}},
 	"hotspots":      {3, []string{"hotspot_risk_score"}},
 	"complexity":    {4, []string{"complexity_per_kloc"}},
 	"deployments":   {5, []string{"deployments_count", "deployment_failure_rate"}},
-	"incidents":     {6, []string{"incidents_count", "mttr_hours"}},
+	"incidents":     {6, []string{"incidents_count"}},
 	"investment":    {7, []string{"feature_delivery_work", "operational_work", "maintenance_work", "quality_work", "risk_work"}},
 	"ai_impact":     {8, []string{"ai_adoption_ratio", "ai_cycle_time_delta_hours", "ai_review_amplification", "ai_risk_drag", "ai_opportunity_signals"}},
 	"ai_governance": {9, []string{"ai_governance_coverage", "ai_opportunity_signals"}},
@@ -402,50 +400,6 @@ func mttrWeekScanners(incidentMTTR any) []*fakeRowScanner {
 	return out
 }
 
-// CHAOS-13977: mttr_hours is the incident MTTR, or the repository MTTR when the
-// incident MTTR is 0 (firstNonZero). A failed read marks it only when the value
-// depends on that read: always for the incident read; for the repository read
-// only when the incident MTTR is 0. A read that holds no MTTR is no failure, and
-// its fallback stays the value.
-func TestMTTR_AFailedReadMarksTheMetricOnlyWhenTheValueDependsOnIt(t *testing.T) {
-	for _, tc := range []struct {
-		name         string
-		incidentMTTR any
-		call         int
-		value        float64
-		hasData      bool
-		reason       string
-	}{
-		{"no failure, incident MTTR", 5.0, -1, 5, true, "null"},
-		{"no failure, incident MTTR NULL: the repository MTTR is the value", nil, -1, 7, true, "null"},
-		{"no failure, incident MTTR 0: the repository MTTR is the value", 0.0, -1, 7, true, "null"},
-		{"repository read fails, incident MTTR 5: the value does not read it", 5.0, 2, 5, true, "null"},
-		{"repository read fails, incident MTTR 0", 0.0, 2, 0, false, "READ_FAILED"},
-		{"repository read fails, incident MTTR NULL", nil, 2, 0, false, "READ_FAILED"},
-		{"incident read fails, repository MTTR 7", 5.0, 6, 0, false, "READ_FAILED"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			errs := make([]error, 22)
-			if tc.call >= 0 {
-				errs[tc.call] = errors.New("boom")
-			}
-			m := resolveWeeks(t, mttrWeekScanners(tc.incidentMTTR), mttrWeekScanners(tc.incidentMTTR), errs)["mttr_hours"]
-			if m.Value != tc.value || m.HasData != tc.hasData || reasonOf(m.DegradedReason) != tc.reason {
-				t.Errorf("value %v hasData %v degradedReason %s, want %v %v %s", m.Value, m.HasData, reasonOf(m.DegradedReason), tc.value, tc.hasData, tc.reason)
-			}
-			if tc.call < 0 {
-				return
-			}
-			errs = make([]error, 22)
-			errs[tc.call+11] = errors.New("boom")
-			p := resolveWeeks(t, mttrWeekScanners(tc.incidentMTTR), mttrWeekScanners(tc.incidentMTTR), errs)["mttr_hours"]
-			if p.Delta.PriorValue != tc.value || p.Delta.HasPriorData != tc.hasData || reasonOf(p.Delta.DegradedReason) != tc.reason {
-				t.Errorf("prior week: priorValue %v hasPriorData %v degradedReason %s, want %v %v %s", p.Delta.PriorValue, p.Delta.HasPriorData, reasonOf(p.Delta.DegradedReason), tc.value, tc.hasData, tc.reason)
-			}
-		})
-	}
-}
-
 // CHAOS-13977: a read stopped by a cancelled request is not a failed read. Its
 // metrics have no data, as before, and carry no reason: the cancel is the
 // caller's, not the store's.
@@ -509,7 +463,8 @@ func TestHasData_PresenceRuleOfEachMetric(t *testing.T) {
 		{"a review latency", periodRows{repoMetrics: []repoMetricsRow{{prFirstReviewP50Hours: fp(0)}}}, []string{"review_latency_hours"}},
 		{"an ownership ratio", periodRows{repoMetrics: []repoMetricsRow{{singleOwnerFileRatio30d: fp(0)}}}, []string{"ownership_concentration"}},
 		{"a revert rate", periodRows{repoMetrics: []repoMetricsRow{{revertRate: fp(0)}}}, []string{"revert_rate"}},
-		{"a repository MTTR", periodRows{repoMetrics: []repoMetricsRow{{mttrHours: fp(0)}}}, []string{"mttr_hours"}},
+		{"a stored repository MTTR, no pooled sample", periodRows{repoMetrics: []repoMetricsRow{{mttrHours: fp(0)}}}, nil},
+		{"a pooled bug repair mean", periodRows{mttrPooledMean: fp(0)}, []string{"mttr_hours"}},
 		{"the hotspot aggregate over no row", periodRows{hotspots: []hotspotsAggRow{{}}}, nil},
 		{"a hotspot risk", periodRows{hotspots: []hotspotsAggRow{{riskScore: fp(0.4), hotspotsCount: 1}}}, []string{"hotspot_risk_score"}},
 		{"the complexity aggregate over no row", periodRows{complexity: []complexityAggRow{{}}}, nil},
@@ -531,8 +486,9 @@ func TestHasData_PresenceRuleOfEachMetric(t *testing.T) {
 			[]string{"change_failure_rate"}},
 		{"the incident aggregate over no row", periodRows{incidents: []incidentsAggRow{{}}}, nil},
 		{"incident rows stored, MTTR NULL", periodRows{incidents: []incidentsAggRow{{storedRows: 1}}}, []string{"incidents_count"}},
-		{"an incident MTTR", periodRows{incidents: []incidentsAggRow{{mttrP50Hours: fp(0), storedRows: 1}}},
-			[]string{"incidents_count", "mttr_hours"}},
+		{"a stored incident MTTR, no pooled sample", periodRows{incidents: []incidentsAggRow{{mttrP50Hours: fp(0), storedRows: 1}}},
+			[]string{"incidents_count"}},
+		{"a pooled incident median", periodRows{mttrPooledP50: fp(0)}, []string{"mttr_hours"}},
 		{"an investment row of a theme the review does not show", periodRows{investment: []investmentRow{{theme: "other"}}},
 			[]string{"feature_delivery_work", "operational_work", "maintenance_work", "quality_work", "risk_work"}},
 		{"AI rows that count no pull request", periodRows{aiImpact: []aiImpactRow{{}}}, nil},

@@ -9,6 +9,10 @@ import "reflect"
 const (
 	maxChainDepth = 32
 	maxChainNodes = 64
+	// retryChainNodes widens the walk of RetryableTransport only: a join of many ordinary errors must not push a real dial out of it.
+	retryChainNodes = 1024
+	// maxTimeoutHops bounds the stdlib Timeout delegation followed by safeTimeout, whose cycle check is by identity.
+	maxTimeoutHops = 1 << 16
 )
 
 // boundedChain lists the errors reachable from err by Unwrap (single or multiple), outermost first, at most maxChainNodes of them,
@@ -17,24 +21,35 @@ func boundedChain(err error) []error { return boundedChainTo(err, maxChainDepth)
 
 // boundedChainTo is boundedChain with its own depth bound: ErrorAs reaches as deep as the node bound, every classifier keeps maxChainDepth.
 func boundedChainTo(err error, depthBound int) []error {
+	return boundedChainBounds(err, depthBound, maxChainNodes)
+}
+
+// boundedChainBounds is boundedChain with its own depth and node bounds.
+func boundedChainBounds(err error, depthBound, nodeBound int) []error {
 	if err == nil {
 		return nil
 	}
 	chain := make([]error, 0, 8)
-	type entry struct {
-		err   error
+	// The queue holds the child lists as the errors returned them, not a copy of every child: a join of a million errors costs
+	// one list, and the walk stops at nodeBound whatever the width.
+	type group struct {
+		errs  []error
 		depth int
 	}
-	queue := []entry{{err, 0}}
-	for len(queue) > 0 && len(chain) < maxChainNodes {
-		current := queue[0]
-		queue = queue[1:]
-		if current.err == nil || current.depth > depthBound || seen(chain, current.err) {
-			continue
-		}
-		chain = append(chain, current.err)
-		for _, next := range unwrapped(current.err) {
-			queue = append(queue, entry{next, current.depth + 1})
+	groups := []group{{[]error{err}, 0}}
+	for next := 0; next < len(groups) && len(chain) < nodeBound; next++ {
+		current := groups[next]
+		for _, candidate := range current.errs {
+			if len(chain) >= nodeBound {
+				break
+			}
+			if candidate == nil || current.depth > depthBound || seen(chain, candidate) {
+				continue
+			}
+			chain = append(chain, candidate)
+			if children := unwrapped(candidate); len(children) > 0 {
+				groups = append(groups, group{children, current.depth + 1})
+			}
 		}
 	}
 	return chain

@@ -34,6 +34,7 @@ import (
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	chclickhouse "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/categorize"
@@ -186,7 +187,7 @@ type workUnitExplainQuery struct {
 // int/date validators are the shared ones every sibling REST route uses,
 // so an invalid range_days answers the identical envelope here and there.
 func parseWorkUnitExplainQuery(r *http.Request) (workUnitExplainQuery, []pydanticErrorDetail) {
-	query := r.URL.Query()
+	query := httpapi.Query(r)
 	parsed := workUnitExplainQuery{
 		scopeType:   lastQueryValue(query, "scope_type"),
 		scopeID:     lastQueryValue(query, "scope_id"),

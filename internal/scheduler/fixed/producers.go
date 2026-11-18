@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"strconv"
 	"strings"
@@ -1018,12 +1018,14 @@ func (producer *RemainingMetricsFanoutProducer) startOrganization(
 				return 0, nil
 			case remaining.FreshCoverageInFlight:
 				if age := occurrence.ObservedAt.Sub(occurrence.ScheduledFor); age < bound {
-					log.Printf("fixed scheduler: occurrence deferred: family=%s schedule=%s organization_id=%s occurrence_age=%s bound=%s reason=same_scope_run_in_flight",
-						binding.Family, occurrence.ScheduleID, organizationID, age.Round(time.Second), bound)
+					slog.WarnContext(ctx, "fixed scheduler: occurrence deferred",
+						"reason", "same_scope_run_in_flight", "family", binding.Family, "schedule_id", occurrence.ScheduleID,
+						"organization_id", organizationID, "occurrence_age", age.Round(time.Second).String(), "bound", bound.String())
 					return 0, ErrOccurrenceDeferred
 				}
-				log.Printf("fixed scheduler: ERROR deferral bound passed, running anyway: family=%s schedule=%s organization_id=%s occurrence_age=%s bound=%s reason=same_scope_run_still_in_flight",
-					binding.Family, occurrence.ScheduleID, organizationID, occurrence.ObservedAt.Sub(occurrence.ScheduledFor).Round(time.Second), bound)
+				slog.ErrorContext(ctx, "fixed scheduler: deferral bound passed, running anyway",
+					"reason", "same_scope_run_still_in_flight", "family", binding.Family, "schedule_id", occurrence.ScheduleID,
+					"organization_id", organizationID, "occurrence_age", occurrence.ObservedAt.Sub(occurrence.ScheduledFor).Round(time.Second).String(), "bound", bound.String())
 			}
 		}
 	}

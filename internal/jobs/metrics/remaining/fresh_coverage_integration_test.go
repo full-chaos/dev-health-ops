@@ -122,3 +122,44 @@ func TestFreshCoverageCells(t *testing.T) {
 	start(cutoff.Add(20*time.Minute), scope, true)
 	check(FreshCoverageCovered, scope, "covered and in flight")
 }
+
+// A manual or fixtures launch of the same scope waits for the fixed schedule's coverage read to end its
+// transaction, so no run can become visible between that read and the schedule's insert.
+func TestManualRecommendationsLaunchWaitsForTheScheduleScopeLock(t *testing.T) {
+	ctx := context.Background()
+	pool, store, _ := newRemainingRedriveTestStack(t)
+	const orgID = "00000000-0000-4000-8000-000000009588"
+	scope := json.RawMessage(`{"version":1,"window":14}`)
+
+	scheduleTx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer scheduleTx.Rollback(ctx)
+	cutoff := time.Now().UTC()
+	if _, err := store.FreshCoverage(ctx, scheduleTx, orgID, "recommendations", scope, cutoff, cutoff.Add(-2*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := store.StartManualRecommendationsTriggerRun(ctx, orgID, "2026-11-17", "manual-lock-cell", nil, 14, nopPartitionPublisher{})
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		t.Fatalf("manual launch finished while the scheduler held the scope lock: %v", err)
+	case <-time.After(750 * time.Millisecond):
+	}
+	if err := scheduleTx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("manual launch after the lock was released: %v", err)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("manual launch did not proceed after the scheduler committed")
+	}
+}

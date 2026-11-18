@@ -1039,6 +1039,17 @@ const (
 	FreshCoverageInFlight
 )
 
+// lockFreshScope takes the transaction-scoped advisory lock of one (organization, family, exact scope).
+// It is day-independent on purpose: a manual run labelled yesterday and the scheduled occurrence of today
+// must serialize. The scope is normalized through jsonb so equal scopes give one key. Both
+// startManualTriggerRun and FreshCoverage call it, always before any other lock, so no cycle forms.
+func lockFreshScope(ctx context.Context, tx pgx.Tx, organizationID, family string, scope json.RawMessage) error {
+	_, err := tx.Exec(ctx,
+		"SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2::text || ':' || $3::text || ':' || $4::jsonb::text))",
+		"remaining_metrics_fresh_scope", organizationID, family, string(scope))
+	return err
+}
+
 // FreshCoverage decides whether a fixed-schedule occurrence of an exact-scope family (capacity,
 // recommendations) is already covered by a run of the SAME scope, whatever its day label.
 //
@@ -1055,6 +1066,12 @@ func (store *PostgresStore) FreshCoverage(
 	}
 	if exact, _ := remainingCoverageScopeFilter(family, scope); !exact {
 		return FreshCoverageNone, ErrInvalidState
+	}
+	// Serialize against a manual or fixtures launch of the same scope (startManualTriggerRun takes the same
+	// lock first), so a run cannot become visible between this read and the caller's insert. Held to the
+	// end of the caller's transaction.
+	if err := lockFreshScope(ctx, tx, organizationID, family, scope); err != nil {
+		return FreshCoverageNone, store.wrapUnavailable(ctx, "acquire fresh scope lock", err, "family", family)
 	}
 	var covered, inFlight bool
 	err := tx.QueryRow(ctx, `

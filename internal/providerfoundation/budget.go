@@ -1623,9 +1623,10 @@ func (m *Metrics) RecordTeamAttributionMembershipLayer(layer string) {
 // the repo having an ownership row that excludes the resolved team;
 // "ownership_unknown" is the repo having no ownership row at all (R74:
 // gate skipped, membership passes through, still counted so the pass-
-// through stays visible).
+// through stays visible); "ownership_gate_not_applied_issue" is an issue,
+// which has no repository field of its own: the gate is not applied.
 var metricTeamAttributionOwnershipCheckedVocabulary = map[string]struct{}{
-	"owned": {}, "repo_not_owned": {}, "ownership_unknown": {},
+	"owned": {}, "repo_not_owned": {}, "ownership_unknown": {}, "ownership_gate_not_applied_issue": {},
 }
 
 // MetricTeamAttributionOwnershipCheckedLabel bounds the ownership-checked

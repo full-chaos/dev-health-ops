@@ -470,7 +470,12 @@
   },
   {
     "operation": "throughputForecast",
-    "digest": "fc08dea094ec832290b4f528141eacb5bbc463beea45794cf205fe43952379f9"
+    "digest": "933efa3840bb7afb600135bc4470d6523842a908f0ffb949a35439e15a76e09d"
+  },
+  {
+    "operation": "throughputForecast",
+    "digest": "fc08dea094ec832290b4f528141eacb5bbc463beea45794cf205fe43952379f9",
+    "legacy": true
   },
   {
     "operation": "triggerReport",

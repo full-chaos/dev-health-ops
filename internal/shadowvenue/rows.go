@@ -146,7 +146,7 @@ var embeddedRows = append([]byte(nil), DefaultRows...)
 // ClassTableSHA256 pins the class table, the one canonical source of each route's class (ADDENDUM-13267-1; acp): the
 // sha256 of the sorted lines "METHOD /route<TAB>ext<TAB>destructive" of the embedded table's rows. A change of any
 // row's class changes it, and classes refuses to serve a table that does not hash to it.
-const ClassTableSHA256 = "99f0875b27fec8072f52489de730f58ef6855b2c1c8c3b7268478193d0b8e8ec"
+const ClassTableSHA256 = "f14763d83e126f3a91fc8310ece4725ae6fcb949e369d2411bdbdbc51cc33c3e"
 
 // classDigest is the sha256 of a class table in the ClassTableSHA256 form.
 func classDigest(table map[string]rowClass) string {

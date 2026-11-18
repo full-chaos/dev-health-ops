@@ -3,6 +3,8 @@ package teamsidentity
 import (
 	"context"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
@@ -131,13 +133,44 @@ func flaggedChangeJSON(row reviewChangeRow) *pyjson.Object {
 	return out
 }
 
+// lastQueryValue is the last value of name in a raw query split on '&' only,
+// as FastAPI reads it: net/url's Query() drops a pair holding an unescaped
+// ';', which would turn a team filter into the full list. An invalid escape
+// stays literal, as in Python, so the filter still narrows.
+func lastQueryValue(rawQuery, name string) string {
+	unescape := func(text string) string {
+		if out, err := url.QueryUnescape(text); err == nil {
+			return out
+		}
+		return text
+	}
+	last := ""
+	for _, pair := range strings.Split(rawQuery, "&") {
+		key, value, _ := strings.Cut(pair, "=")
+		if unescape(key) == name {
+			last = unescape(value)
+		}
+	}
+	return last
+}
+
 // pendingChanges is GET /teams/pending-changes, dispatched from getTeam (the
 // literal collides with the {team_id} wildcard exactly as discover does).
 //
-// The endpoint lists every pending change in the org: like the Python route,
-// it takes no filter, so a team_id query parameter is ignored.
+// A non-empty team_id query parameter narrows the list to that team's
+// changes, resolved like any team read (a bare id names the one provider-keyed
+// team holding it, two holders answer 409); an absent or empty one lists every
+// pending change in the org. The org scope is always in the query.
 func (h handlers) pendingChanges(w http.ResponseWriter, r *http.Request) {
-	rows, err := h.store.pendingReviewRows(r.Context(), orgIDOf(r.Context()), nil)
+	var teamID *string
+	if raw := lastQueryValue(r.URL.RawQuery, "team_id"); raw != "" {
+		resolved, ok := h.readTeamID(w, r, raw)
+		if !ok {
+			return
+		}
+		teamID = &resolved
+	}
+	rows, err := h.store.pendingReviewRows(r.Context(), orgIDOf(r.Context()), teamID)
 	if err != nil {
 		h.internal(w, r, "list pending team changes", err)
 		return

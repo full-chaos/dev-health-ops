@@ -19,6 +19,11 @@ import (
 // of another team gives a new provenance row, a donor with no team leaves the
 // issue with no linked_issue row, a donor recomputed with the same team
 // triggers nothing. Jira and Linear issues.
+//
+// The backstop never writes an item that already has a row of the run's UTC
+// date (alreadyCoveredToday), so each step runs on its own date, and one
+// subtest pins that rule: a second donor change on the same date waits, and the
+// issue follows it on the next date.
 func TestAnIssuesLinkedRowFollowsItsDonorsChangedRow(t *testing.T) {
 	ctx := context.Background()
 	conn := workItemAttributionMigratedClickHouse(t, ctx)
@@ -27,7 +32,11 @@ func TestAnIssuesLinkedRowFollowsItsDonorsChangedRow(t *testing.T) {
 		t.Fatalf("new writer: %v", err)
 	}
 	now := time.Now().UTC()
-	setup := now.Add(-72 * time.Hour)
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	day := func(daysAgo int, hour int) time.Time {
+		return today.AddDate(0, 0, -daysAgo).Add(time.Duration(hour) * time.Hour)
+	}
+	setup := today.AddDate(0, 0, -10)
 
 	for _, provider := range []string{"jira", "linear"} {
 		t.Run(provider, func(t *testing.T) {
@@ -52,18 +61,15 @@ func TestAnIssuesLinkedRowFollowsItsDonorsChangedRow(t *testing.T) {
 			seedItem(issueID, "proj-none", setup)
 			seedWorkItemAttributionDependency(t, ctx, conn, orgID, issueID, donorID, "relates_to", setup)
 
-			// Each backstop run is dated after the donor row it follows, so the
-			// donor row is newer than the issue's row of the run before.
-			runBackstopAt := func(offset time.Duration) WorkItemAttributionOutcome {
+			runBackstopAt := func(at time.Time) WorkItemAttributionOutcome {
 				t.Helper()
-				executor := &WorkItemAttributionExecutor{conn: conn, writer: writer, nowUTC: func() time.Time { return now.Add(offset) }}
+				executor := &WorkItemAttributionExecutor{conn: conn, writer: writer, nowUTC: func() time.Time { return at }}
 				outcome, err := executor.ComputeOrg(ctx, orgID)
 				if err != nil {
-					t.Fatalf("backstop at %s: %v", offset, err)
+					t.Fatalf("backstop at %s: %v", at, err)
 				}
 				return outcome
 			}
-			runBackstopAt(-24 * time.Hour)
 			wantIssueRows := func(want string) {
 				t.Helper()
 				var got []string
@@ -74,10 +80,11 @@ func TestAnIssuesLinkedRowFollowsItsDonorsChangedRow(t *testing.T) {
 					t.Fatalf("issue rows %v, want %s", got, want)
 				}
 			}
-			wantIssueRows(fmt.Sprintf("[/unassigned/1/ team-a/linked_issue/0/%s]", donorID))
-
-			writeDonor := func(at time.Time) {
+			// moveDonor puts the donor in a project and writes its own row, as
+			// the daily family does.
+			moveDonor := func(project string, at time.Time) {
 				t.Helper()
+				seedItem(donorID, project, at)
 				subjects, err := LoadWorkItemDonorSubjects(ctx, conn, orgID, []string{donorID}, nil)
 				if err != nil || len(subjects) != 1 {
 					t.Fatalf("load donor subject: %v %v", subjects, err)
@@ -91,26 +98,43 @@ func TestAnIssuesLinkedRowFollowsItsDonorsChangedRow(t *testing.T) {
 					t.Fatalf("write donor: %v", err)
 				}
 			}
-			writeDonor(now.Add(-12 * time.Hour))
-			if outcome := runBackstopAt(-11 * time.Hour); !outcome.SkippedNoop || outcome.DonorChangedDependents != 0 {
+			wantRederived := func(step string, outcome WorkItemAttributionOutcome) {
+				t.Helper()
+				if outcome.DonorChangedDependents != 1 || outcome.RowsWritten == 0 {
+					t.Fatalf("%s: outcome %+v, want the issue rederived", step, outcome)
+				}
+			}
+			linkedTo := func(team string) string {
+				return fmt.Sprintf("[/unassigned/1/ %s/linked_issue/0/%s]", team, donorID)
+			}
+
+			runBackstopAt(day(6, 12))
+			wantIssueRows(linkedTo("team-a"))
+
+			moveDonor("proj-a", day(5, 6))
+			if outcome := runBackstopAt(day(5, 12)); !outcome.SkippedNoop || outcome.DonorChangedDependents != 0 {
 				t.Fatalf("same-team donor row: outcome %+v, want a no-op", outcome)
 			}
 
-			seedItem(donorID, "proj-b", time.Now().UTC())
-			writeDonor(now.Add(-6 * time.Hour))
-			if outcome := runBackstopAt(-5 * time.Hour); outcome.DonorChangedDependents != 1 || outcome.RowsWritten == 0 {
-				t.Fatalf("donor of another team: outcome %+v, want the issue rederived", outcome)
-			}
-			wantIssueRows(fmt.Sprintf("[/unassigned/1/ team-b/linked_issue/0/%s]", donorID))
+			moveDonor("proj-b", day(4, 6))
+			wantRederived("donor of another team", runBackstopAt(day(4, 12)))
+			wantIssueRows(linkedTo("team-b"))
 
-			seedItem(donorID, "proj-unowned", time.Now().UTC())
-			writeDonor(now.Add(-3 * time.Hour))
-			if outcome := runBackstopAt(-2 * time.Hour); outcome.DonorChangedDependents != 1 || outcome.RowsWritten == 0 {
-				t.Fatalf("donor with no team: outcome %+v, want the issue rederived", outcome)
-			}
+			t.Run("a second donor change on the same UTC date waits for the next date", func(t *testing.T) {
+				moveDonor("proj-a", day(4, 14))
+				if outcome := runBackstopAt(day(4, 18)); outcome.DonorChangedDependents != 1 || outcome.RowsWritten != 0 {
+					t.Fatalf("same date: outcome %+v, want the issue found and its write deferred (0 rows)", outcome)
+				}
+				wantIssueRows(linkedTo("team-b"))
+				wantRederived("next date", runBackstopAt(day(3, 12)))
+				wantIssueRows(linkedTo("team-a"))
+			})
+
+			moveDonor("proj-unowned", day(2, 6))
+			wantRederived("donor with no team", runBackstopAt(day(2, 12)))
 			wantIssueRows("[/unassigned/1/]")
 
-			if outcome := runBackstopAt(-1 * time.Hour); !outcome.SkippedNoop || outcome.DonorChangedDependents != 0 {
+			if outcome := runBackstopAt(day(2, 18)); !outcome.SkippedNoop || outcome.DonorChangedDependents != 0 {
 				t.Fatalf("rerun: outcome %+v, want a no-op", outcome)
 			}
 		})

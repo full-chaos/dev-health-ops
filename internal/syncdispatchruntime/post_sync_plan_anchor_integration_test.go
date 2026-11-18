@@ -124,6 +124,16 @@ func TestPostSyncPlanAnchorsOnRunCompletion(t *testing.T) {
 		}
 	})
 
+	t.Run("N3 midnight: run done 23:59 D, pass 00:01 D+1 plans D and no complexity", func(t *testing.T) {
+		done := anchorDay.Add(23*time.Hour + 59*time.Minute)
+		pass := nextDay.Add(time.Minute)
+		plan := planAt(t, anchorCase{startedAt: at(anchorDay, 8), completedAt: &done, unbounded: true}, pass)
+		if !plan.TargetDay.Equal(done) || plan.Complexity {
+			t.Fatalf("TargetDay=%s Complexity=%t, want %s / false (the 00:45 UTC fixed complexity schedule covers D and D+1)",
+				plan.TargetDay, plan.Complexity, done)
+		}
+	})
+
 	t.Run("N4 on-time bounded run is unchanged", func(t *testing.T) {
 		plan := planAt(t, anchorCase{startedAt: at(anchorDay, 8), completedAt: at(anchorDay, 10)}, *at(anchorDay, 12))
 		if !plan.Complexity || !plan.TargetDay.Equal(anchorDay) || plan.BackfillDays != 1 {

@@ -743,6 +743,7 @@ func (pipeline *MutationPipeline) Step(
 
 	var terminal TerminalDeliveryRepairResult
 	terminalRan := false
+	terminalClean := false
 	if !aborted {
 		terminalErr := pipeline.runStage(ctx, StageTerminalDeliveryRepair, func(stageCtx context.Context) error {
 			var stepErr error
@@ -761,6 +762,7 @@ func (pipeline *MutationPipeline) Step(
 		// runStage above already records the stage failure and its own "stage_failed" log
 		// independently of this value, so a genuine failure is never hidden by trusting the count.
 		terminalRan = true
+		terminalClean = terminalErr == nil
 	}
 
 	// The repair commits its own transaction before anything below runs, so its
@@ -781,7 +783,7 @@ func (pipeline *MutationPipeline) Step(
 			terminal.RescueOnlyCancelsRecovered > terminal.Recovered ||
 			terminal.ExhaustedRecovered+terminal.RescueOnlyCancelsRecovered > terminal.Recovered ||
 			terminal.PostSyncRearmed < 0 || terminal.PostSyncRearmed > terminal.ExhaustedRecovered ||
-			terminal.PostSyncSkippedWindow < 0 || terminal.PostSyncSkippedWindow > limit ||
+			terminal.PostSyncSkippedWindow < 0 ||
 			terminal.Recovered > limit {
 			slog.Error(
 				"syncreconciler.stage_failed",
@@ -793,7 +795,10 @@ func (pipeline *MutationPipeline) Step(
 		} else {
 			recovered.ExhaustedDeliveriesRecovered = int64(terminal.ExhaustedRecovered)
 			recovered.PostSyncRedriveRearmed = int64(terminal.PostSyncRearmed)
-			recovered.PostSyncRedriveSkippedWindow = int64(terminal.PostSyncSkippedWindow)
+			recovered.PostSyncRedriveSkippedWindow = terminal.PostSyncSkippedWindow
+			// A failed step may have read the count or not; the gauge keeps its
+			// last measured value rather than reading as zero.
+			recovered.PostSyncSkippedWindowMeasured = terminalClean
 			// A rescue-only cancel is a registry or queue-routing fault: the job
 			// was inserted onto a queue whose client does not execute that kind.
 			// Unlike the other two recoveries it will repeat deterministically
@@ -1050,6 +1055,7 @@ func (pipeline *MutationPipeline) Step(
 	observation.DiscoveryRearmed = recovered.DiscoveryRearmed
 	observation.PostSyncRedriveRearmed = recovered.PostSyncRedriveRearmed
 	observation.PostSyncRedriveSkippedWindow = recovered.PostSyncRedriveSkippedWindow
+	observation.PostSyncSkippedWindowMeasured = recovered.PostSyncSkippedWindowMeasured
 	observation.RunawayMeasured = recovered.RunawayMeasured
 	observation.UnreclaimableMeasured = recovered.UnreclaimableMeasured
 	if observerErr != nil {

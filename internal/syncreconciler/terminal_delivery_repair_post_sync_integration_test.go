@@ -172,6 +172,9 @@ func TestTerminalDeliveryRepairReclaimsExhaustedPostSyncDeliveryOnTerminalRun(t 
 				t.Fatalf("result = %#v, want one exhausted post_sync re-arm", result)
 			}
 			assertOutboxDelivery(t, ctx, rig.admin, "pending", riverDeliveryExhaustedEvidence, false)
+			if again := rig.step(t, ctx, now.Add(time.Minute)); again != (TerminalDeliveryRepairResult{}) {
+				t.Fatalf("second pass = %#v, want nothing: a re-armed row is counted once", again)
+			}
 		})
 	}
 
@@ -194,26 +197,39 @@ func TestTerminalDeliveryRepairReclaimsExhaustedPostSyncDeliveryOnTerminalRun(t 
 		assertOutboxDelivery(t, ctx, rig.admin, "dispatched", "", true)
 	})
 
-	t.Run("A4 outside the window: marked once, counted once, never re-armed", func(t *testing.T) {
+	t.Run("A4 outside the window: counted by the gauge, never re-armed, never written", func(t *testing.T) {
 		jobID := rig.seedPostSyncDelivery(t, ctx, now, "success", now.Add(-8*24*time.Hour))
 		discardRiverJob(t, ctx, rig.admin, jobID, now, 5, 5, "post_sync fanout unavailable")
-		result := rig.step(t, ctx, now)
-		if result.Recovered != 0 || result.PostSyncRearmed != 0 || result.PostSyncSkippedWindow != 1 {
-			t.Fatalf("first pass result = %#v, want one skipped_window and no recovery", result)
+		before := outboxRowImage(t, ctx, rig.admin, exhaustionRunID)
+		want := TerminalDeliveryRepairResult{PostSyncSkippedWindow: 1}
+		if result := rig.step(t, ctx, now); result != want {
+			t.Fatalf("first pass = %#v, want %#v", result, want)
 		}
-		assertOutboxDelivery(t, ctx, rig.admin, "dispatched", riverDeliveryExhaustedOutsideWindowEvidence, true)
-		var generation int64
-		var transportJob string
-		if err := rig.admin.QueryRow(ctx,
-			`SELECT dispatched_route_generation, transport_job_id FROM public.sync_dispatch_outbox WHERE id = $1`, exhaustionRunID,
-		).Scan(&generation, &transportJob); err != nil {
+		if after := outboxRowImage(t, ctx, rig.admin, exhaustionRunID); after != before {
+			t.Fatalf("a pass wrote the outside-window row:\nbefore %s\nafter  %s", before, after)
+		}
+		if again := rig.step(t, ctx, now.Add(time.Minute)); again != want {
+			t.Fatalf("second pass = %#v, want the same gauge %#v", again, want)
+		}
+		if after := outboxRowImage(t, ctx, rig.admin, exhaustionRunID); after != before {
+			t.Fatalf("the second pass wrote the outside-window row:\nbefore %s\nafter  %s", before, after)
+		}
+		// A second replica reads the same count, also while another transaction holds the row.
+		replica, err := NewTerminalDeliveryRepair(rig.queue, rig.admin, "river")
+		if err != nil {
 			t.Fatal(err)
 		}
-		if generation != 7 || transportJob != strconv.FormatInt(jobID, 10) {
-			t.Fatalf("marked row linkage gen=%d job=%s, want 7/%d", generation, transportJob, jobID)
+		holder, err := rig.admin.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
 		}
-		if again := rig.step(t, ctx, now.Add(time.Minute)); again != (TerminalDeliveryRepairResult{}) {
-			t.Fatalf("second pass result = %#v, want nothing: a marked row is counted once", again)
+		defer func() { _ = holder.Rollback(ctx) }()
+		if _, err := holder.Exec(ctx, `SELECT 1 FROM public.sync_dispatch_outbox WHERE id = $1 FOR UPDATE`, exhaustionRunID); err != nil {
+			t.Fatal(err)
+		}
+		other, err := replica.Step(ctx, now.Add(2*time.Minute), 10)
+		if err != nil || other != want {
+			t.Fatalf("second replica = %#v, %v; want the same gauge %#v", other, err, want)
 		}
 	})
 
@@ -253,7 +269,7 @@ func TestTerminalDeliveryRepairReclaimsExhaustedPostSyncDeliveryOnTerminalRun(t 
 		assertOutboxDelivery(t, ctx, rig.admin, "dispatched", "", true)
 	})
 
-	t.Run("A5 row linked to a newer job is not re-armed or marked", func(t *testing.T) {
+	t.Run("A5 row linked to a newer job is not re-armed or counted", func(t *testing.T) {
 		for _, createdAt := range []time.Time{inWindow, now.Add(-8 * 24 * time.Hour)} {
 			jobID := rig.seedPostSyncDelivery(t, ctx, now, "success", createdAt)
 			discardRiverJob(t, ctx, rig.admin, jobID, now, 5, 5, "post_sync fanout unavailable")
@@ -272,7 +288,7 @@ func TestTerminalDeliveryRepairReclaimsExhaustedPostSyncDeliveryOnTerminalRun(t 
 		}
 	})
 
-	t.Run("A6 completed post_sync delivery is not re-armed or marked", func(t *testing.T) {
+	t.Run("A6 completed post_sync delivery is not re-armed or counted", func(t *testing.T) {
 		for _, createdAt := range []time.Time{inWindow, now.Add(-8 * 24 * time.Hour)} {
 			jobID := rig.seedPostSyncDelivery(t, ctx, now, "success", createdAt)
 			if _, err := rig.admin.Exec(ctx,
@@ -433,20 +449,15 @@ func TestPostSyncRedriveUnderTheRealRouteFence(t *testing.T) {
 		}
 	})
 
-	t.Run("outside the window the row is marked and keeps its delivery", func(t *testing.T) {
-		jobID, wantGeneration := seed(t, now.Add(-8*24*time.Hour))
+	t.Run("outside the window the row is counted and left unchanged", func(t *testing.T) {
+		seed(t, now.Add(-8*24*time.Hour))
+		before := outboxRowImage(t, ctx, h.admin, backstopOutboxID)
 		result, err := h.repair.Step(ctx, now, 10)
 		if err != nil || result.PostSyncSkippedWindow != 1 || result.Recovered != 0 {
-			t.Fatalf("repair = %#v, %v; want one skipped_window", result, err)
+			t.Fatalf("repair = %#v, %v; want gauge 1, no recovery", result, err)
 		}
-		status, lastError, job, generation := read(t)
-		if status != "dispatched" || lastError == nil || *lastError != riverDeliveryExhaustedOutsideWindowEvidence ||
-			job == nil || *job != strconv.FormatInt(jobID, 10) || generation == nil || *generation != wantGeneration {
-			t.Fatalf("row status=%s last_error=%v job=%v gen=%v, want dispatched/%s/%d/%d",
-				status, lastError, job, generation, riverDeliveryExhaustedOutsideWindowEvidence, jobID, wantGeneration)
-		}
-		if again, err := h.repair.Step(ctx, now.Add(time.Minute), 10); err != nil || again.PostSyncSkippedWindow != 0 {
-			t.Fatalf("second pass = %#v, %v; want the marked row counted once", again, err)
+		if after := outboxRowImage(t, ctx, h.admin, backstopOutboxID); after != before {
+			t.Fatalf("a pass wrote the outside-window row:\nbefore %s\nafter  %s", before, after)
 		}
 	})
 }
@@ -482,17 +493,17 @@ func TestPostSyncRedriveIsDrivenFromRiverAgainstRetainedHistory(t *testing.T) {
 	}
 	cutoff := now.Add(-postSyncRedriveWindow)
 	for name, statement := range map[string]struct {
-		query    string
-		evidence string
+		query string
+		args  []any
 	}{
-		"rearm": {rig.repair.postSyncRearmQuery, riverDeliveryExhaustedEvidence},
-		"mark":  {rig.repair.postSyncMarkQuery, riverDeliveryExhaustedOutsideWindowEvidence},
+		"rearm": {rig.repair.postSyncRearmQuery, []any{now, 10, cutoff, riverDeliveryExhaustedEvidence}},
+		"count": {rig.repair.postSyncSkippedQuery, []any{cutoff}},
 	} {
 		tx, err := rig.queue.Begin(ctx)
 		if err != nil {
 			t.Fatal(err)
 		}
-		rows, err := tx.Query(ctx, "EXPLAIN (ANALYZE, BUFFERS, FORMAT TEXT) "+statement.query, now, 10, cutoff, statement.evidence)
+		rows, err := tx.Query(ctx, "EXPLAIN (ANALYZE, BUFFERS, FORMAT TEXT) "+statement.query, statement.args...)
 		if err != nil {
 			_ = tx.Rollback(ctx)
 			t.Fatalf("%s: EXPLAIN: %v", name, err)
@@ -514,4 +525,16 @@ func TestPostSyncRedriveIsDrivenFromRiverAgainstRetainedHistory(t *testing.T) {
 	if result := rig.step(t, ctx, now); result.PostSyncRearmed != 1 || result.PostSyncSkippedWindow != 0 {
 		t.Fatalf("repair over retained history = %#v, want the one exhausted delivery re-armed", result)
 	}
+}
+
+// outboxRowImage is the whole outbox row as text, to prove a pass left it unchanged.
+func outboxRowImage(t *testing.T, ctx context.Context, pool *pgxpool.Pool, id string) string {
+	t.Helper()
+	var image string
+	if err := pool.QueryRow(ctx,
+		`SELECT row_to_json(outbox)::text FROM public.sync_dispatch_outbox AS outbox WHERE id = $1`, id,
+	).Scan(&image); err != nil {
+		t.Fatal(err)
+	}
+	return image
 }

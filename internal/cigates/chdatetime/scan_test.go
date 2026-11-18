@@ -5,332 +5,260 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"io/fs"
 	"os"
+	"os/exec"
+	"path"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 )
 
-type class string
-
-const (
-	classSafe       class = "safe"
-	classSkip       class = "skip"
-	classFlag       class = "flag"
-	classUnmeasured class = "unmeasured"
-)
-
-// text is one SQL text: a Go string constant or a .sql file.
-type text struct {
-	File string
-	Line int
-	Body string
+type goFile struct {
+	Rel     string
+	Fset    *token.FileSet
+	AST     *ast.File
+	Imports map[string]string
 }
 
-type hit struct {
-	File   string
-	Line   int
-	Column string
-	Op     string
-	Bound  string
-	Class  class
+type constDef struct {
+	Expr ast.Expr
+	File *goFile
 }
 
-var (
-	funcRe    = regexp.MustCompile(`^([A-Za-z_][A-Za-z0-9_]*)\s*\(`)
-	paramRe   = regexp.MustCompile(`^\{\w+:([A-Za-z0-9]+)`)
-	identPath = regexp.MustCompile(`^(?:[A-Za-z_][A-Za-z0-9_]*\.)?([A-Za-z_][A-Za-z0-9_]*)`)
-	numberRe  = regexp.MustCompile(`^-?[0-9]`)
-)
-
-// A DateTime bound against a DateTime64 column is the unsafe pair: ClickHouse analyses a strict comparison of the two
-// types wrongly in a key, partition or skip index. A Date bound and every DateTime64 bound are measured safe (the
-// executed cells of CHAOS-7290).
-var (
-	safeFuncs = map[string]bool{
-		"todatetime64": true, "now64": true, "fromunixtimestamp64milli": true, "fromunixtimestamp64micro": true,
-		"fromunixtimestamp64nano": true, "parsedatetime64besteffort": true, "todate": true, "todate32": true,
-		"today": true, "yesterday": true,
-	}
-	flagFuncs = map[string]bool{"todatetime": true, "now": true, "parsedatetimebesteffort": true}
-)
-
-func classifyBound(bound string, names map[string]bool) class {
-	bound = strings.TrimSpace(bound)
-	switch {
-	case bound == "":
-		return classUnmeasured
-	case bound[0] == '?':
-		return classFlag
-	case bound[0] == '$' && len(bound) > 1 && bound[1] >= '0' && bound[1] <= '9':
-		return classSkip
-	case bound[0] == '{':
-		m := paramRe.FindStringSubmatch(bound)
-		switch {
-		case m == nil:
-			return classUnmeasured
-		case m[1] == "DateTime64" || m[1] == "Date" || m[1] == "Date32":
-			return classSafe
-		case m[1] == "DateTime":
-			return classFlag
-		}
-		return classUnmeasured
-	case numberRe.MatchString(bound):
-		return classSkip
-	case bound[0] == '\'':
-		return classSafe
-	}
-	if m := funcRe.FindStringSubmatch(bound); m != nil {
-		switch name := strings.ToLower(m[1]); {
-		case safeFuncs[name]:
-			return classSafe
-		case flagFuncs[name]:
-			return classFlag
-		}
-		return classUnmeasured
-	}
-	if m := identPath.FindStringSubmatch(bound); m != nil && names[m[1]] {
-		return classSafe
-	}
-	return classUnmeasured
+type goPackage struct {
+	Files  []*goFile
+	Consts map[string][]constDef
 }
 
-func isIdentByte(c byte) bool {
-	return c == '_' || c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
+// sources holds the parsed non-test Go packages and the SQL files of the tracked tree.
+type sources struct {
+	module string
+	pkgs   map[string]*goPackage // by slash-separated directory relative to the root
+	sql    []text
 }
 
-// identBefore is the identifier that ends just before index end (spaces skipped), without its alias.
-func identBefore(body string, end int) (string, bool) {
-	for end > 0 && (body[end-1] == ' ' || body[end-1] == '\t' || body[end-1] == '\n') {
-		end--
+// outOfContract are the trees the guard does not read: migration history and baseline are DDL, testdata is fixtures.
+func outOfContract(rel string) bool {
+	for _, prefix := range []string{
+		"internal/chmigrate/history/", "internal/chmigrate/archive/", "internal/chmigrate/rollback/", "internal/chmigrate/baseline/",
+	} {
+		if strings.HasPrefix(rel, prefix) {
+			return true
+		}
 	}
-	start := end
-	for start > 0 && isIdentByte(body[start-1]) {
-		start--
+	for _, part := range strings.Split(rel, "/") {
+		if part == "testdata" {
+			return true
+		}
 	}
-	if start == end || body[start] >= '0' && body[start] <= '9' {
-		return "", false
-	}
-	if start > 0 && body[start-1] == '`' {
-		return "", false
-	}
-	return body[start:end], true
+	return false
 }
 
-// boundBefore classifies the expression that ends just before the operator, for `bound < column`.
-func boundBefore(body string, end int, names map[string]bool) class {
-	for end > 0 && (body[end-1] == ' ' || body[end-1] == '\t' || body[end-1] == '\n') {
-		end--
-	}
-	if end == 0 {
-		return classUnmeasured
-	}
-	switch last := body[end-1]; {
-	case last == '?':
-		return classFlag
-	case last == '}':
-		if open := strings.LastIndex(body[:end], "{"); open >= 0 {
-			return classifyBound(body[open:end], names)
-		}
-	case last == ')':
-		depth := 0
-		for i := end - 1; i >= 0; i-- {
-			if body[i] == ')' {
-				depth++
-			} else if body[i] == '(' {
-				if depth--; depth == 0 {
-					start := i
-					for start > 0 && isIdentByte(body[start-1]) {
-						start--
-					}
-					return classifyBound(body[start:i+1], names)
-				}
-			}
-		}
-	}
-	if id, ok := identBefore(body, end); ok {
-		if names[id] {
-			return classSafe
-		}
-		if numberRe.MatchString(id) {
-			return classSkip
-		}
-	}
-	return classUnmeasured
-}
-
-// strictHits finds every strict `<` or `>` comparison of a DateTime64 column (a name in names) in one SQL text.
-func strictHits(t text, names map[string]bool) []hit {
-	var out []hit
-	body := t.Body
-	for i := 0; i < len(body); i++ {
-		op := body[i]
-		if op != '<' && op != '>' {
-			continue
-		}
-		next := byte(0)
-		if i+1 < len(body) {
-			next = body[i+1]
-		}
-		prev := byte(0)
-		if i > 0 {
-			prev = body[i-1]
-		}
-		if next == '=' || next == '>' || op == '<' && next == '<' || prev == '-' || prev == '=' || prev == '<' || prev == '>' {
-			continue
-		}
-		line := t.Line + strings.Count(body[:i], "\n")
-		rest := strings.TrimSpace(body[i+1:])
-		if id, ok := identBefore(body, i); ok && names[id] {
-			out = append(out, hit{t.File, line, id, string(op), snippet(rest), classifyBound(rest, names)})
-			continue
-		}
-		if m := identPath.FindStringSubmatch(rest); m != nil && names[m[1]] && !strings.HasPrefix(strings.TrimSpace(rest[len(m[0]):]), "(") {
-			out = append(out, hit{t.File, line, m[1], string(op), "(bound before the operator)", boundBefore(body, i, names)})
-		}
-	}
-	return out
-}
-
-func snippet(s string) string {
-	if len(s) > 40 {
-		s = s[:40]
-	}
-	return strings.Join(strings.Fields(s), " ")
-}
-
-var skipDirs = map[string]bool{".git": true, "node_modules": true, "third_party": true, "testdata": true, "vendor": true, ".codegraph": true}
-
-// sqlTexts reads every Go string constant of the non-test Go files and every .sql file under root, apart from the
-// migration history and the test data.
-func sqlTexts(root string) (texts []text, goFiles int, err error) {
-	skipPrefix := []string{
-		filepath.Join("internal", "chmigrate", "history"), filepath.Join("internal", "chmigrate", "archive"),
-		filepath.Join("internal", "chmigrate", "rollback"), filepath.Join("internal", "chmigrate", "baseline"),
-	}
-	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		rel, _ := filepath.Rel(root, path)
-		if d.IsDir() {
-			if skipDirs[d.Name()] {
-				return filepath.SkipDir
-			}
-			for _, prefix := range skipPrefix {
-				if rel == prefix {
-					return filepath.SkipDir
-				}
-			}
-			return nil
-		}
-		switch {
-		case strings.HasSuffix(path, ".sql"):
-			body, readErr := os.ReadFile(path)
-			if readErr != nil {
-				return readErr
-			}
-			texts = append(texts, text{File: filepath.ToSlash(rel), Line: 1, Body: string(body)})
-		case strings.HasSuffix(path, ".go") && !strings.HasSuffix(path, "_test.go"):
-			goFiles++
-			fileTexts, parseErr := goTexts(path, filepath.ToSlash(rel))
-			if parseErr != nil {
-				return parseErr
-			}
-			texts = append(texts, fileTexts...)
-		}
-		return nil
-	})
-	return texts, goFiles, err
-}
-
-func goTexts(path, rel string) ([]text, error) {
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, path, nil, 0)
+func trackedFiles(root string) ([]string, error) {
+	out, err := exec.Command("git", "-C", root, "ls-files", "-z", "--", "*.go", "*.sql").Output()
 	if err != nil {
-		return nil, fmt.Errorf("parse %s: %w", rel, err)
+		return nil, fmt.Errorf("git ls-files in %s: %w", root, err)
 	}
-	var out []text
-	ast.Inspect(file, func(n ast.Node) bool {
-		switch node := n.(type) {
-		case *ast.BinaryExpr:
-			if body, ok := foldLiterals(node); ok {
-				out = append(out, text{rel, fset.Position(node.Pos()).Line, body})
-				return false
+	var files []string
+	for _, rel := range strings.Split(string(out), "\x00") {
+		if rel != "" {
+			files = append(files, rel)
+		}
+	}
+	return files, nil
+}
+
+func loadSources(root string) (*sources, error) {
+	files, err := trackedFiles(root)
+	if err != nil {
+		return nil, err
+	}
+	return sourcesOf(root, files)
+}
+
+func sourcesOf(root string, files []string) (*sources, error) {
+	mod, err := os.ReadFile(filepath.Join(root, "go.mod"))
+	if err != nil {
+		return nil, err
+	}
+	src := &sources{pkgs: map[string]*goPackage{}}
+	for _, line := range strings.Split(string(mod), "\n") {
+		if rest, ok := strings.CutPrefix(line, "module "); ok {
+			src.module = strings.TrimSpace(rest)
+			break
+		}
+	}
+	if src.module == "" {
+		return nil, fmt.Errorf("go.mod names no module")
+	}
+	for _, rel := range files {
+		if outOfContract(rel) {
+			continue
+		}
+		switch {
+		case strings.HasSuffix(rel, ".sql"):
+			body, err := os.ReadFile(filepath.Join(root, rel))
+			if err != nil {
+				return nil, err
 			}
-		case *ast.BasicLit:
-			if node.Kind == token.STRING {
-				if body, unquoteErr := strconv.Unquote(node.Value); unquoteErr == nil {
-					out = append(out, text{rel, fset.Position(node.Pos()).Line, body})
+			src.sql = append(src.sql, text{File: rel, Line: 1, Body: string(body)})
+		case strings.HasSuffix(rel, "_test.go"):
+		default:
+			if err := src.addGo(root, rel); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return src, nil
+}
+
+func (s *sources) addGo(root, rel string) error {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, filepath.Join(root, rel), nil, 0)
+	if err != nil {
+		return fmt.Errorf("parse %s: %w", rel, err)
+	}
+	gf := &goFile{Rel: rel, Fset: fset, AST: file, Imports: map[string]string{}}
+	for _, imp := range file.Imports {
+		ipath, _ := strconv.Unquote(imp.Path.Value)
+		name := path.Base(ipath)
+		if imp.Name != nil {
+			name = imp.Name.Name
+		}
+		gf.Imports[name] = ipath
+	}
+	dir := path.Dir(rel)
+	pkg := s.pkgs[dir]
+	if pkg == nil {
+		pkg = &goPackage{Consts: map[string][]constDef{}}
+		s.pkgs[dir] = pkg
+	}
+	pkg.Files = append(pkg.Files, gf)
+	ast.Inspect(file, func(n ast.Node) bool {
+		decl, ok := n.(*ast.GenDecl)
+		if !ok || decl.Tok != token.CONST {
+			return true
+		}
+		for _, spec := range decl.Specs {
+			vs := spec.(*ast.ValueSpec)
+			for i, name := range vs.Names {
+				if i < len(vs.Values) {
+					pkg.Consts[name.Name] = append(pkg.Consts[name.Name], constDef{vs.Values[i], gf})
 				}
 			}
 		}
 		return true
 	})
-	return out, nil
+	return nil
 }
 
-// foldLiterals joins `"a" + "b"` chains of string literals into one text.
-func foldLiterals(expr ast.Expr) (string, bool) {
+// eval folds a compile-time string expression: literals, +, string(...), and constants of the same package or of an
+// imported package of this module. A constant that is declared more than once with different values is unresolved.
+func (s *sources) eval(expr ast.Expr, file *goFile, depth int) (string, bool) {
+	if depth > 24 {
+		return "", false
+	}
 	switch node := expr.(type) {
 	case *ast.BasicLit:
 		if node.Kind != token.STRING {
 			return "", false
 		}
-		body, err := strconv.Unquote(node.Value)
-		return body, err == nil
+		v, err := strconv.Unquote(node.Value)
+		return v, err == nil
 	case *ast.ParenExpr:
-		return foldLiterals(node.X)
+		return s.eval(node.X, file, depth+1)
 	case *ast.BinaryExpr:
 		if node.Op != token.ADD {
 			return "", false
 		}
-		left, okLeft := foldLiterals(node.X)
-		right, okRight := foldLiterals(node.Y)
+		left, okLeft := s.eval(node.X, file, depth+1)
+		right, okRight := s.eval(node.Y, file, depth+1)
 		return left + right, okLeft && okRight
+	case *ast.CallExpr:
+		if id, ok := node.Fun.(*ast.Ident); ok && id.Name == "string" && len(node.Args) == 1 {
+			return s.eval(node.Args[0], file, depth+1)
+		}
+	case *ast.Ident:
+		return s.constValue(s.pkgs[path.Dir(file.Rel)], node.Name, depth)
+	case *ast.SelectorExpr:
+		id, ok := node.X.(*ast.Ident)
+		if !ok {
+			return "", false
+		}
+		ipath, ok := file.Imports[id.Name]
+		if !ok || !strings.HasPrefix(ipath, s.module+"/") {
+			return "", false
+		}
+		return s.constValue(s.pkgs[strings.TrimPrefix(ipath, s.module+"/")], node.Sel.Name, depth)
 	}
 	return "", false
 }
 
-type allowRow struct{ File, Column, Bound, Reason string }
+func (s *sources) constValue(pkg *goPackage, name string, depth int) (string, bool) {
+	if pkg == nil {
+		return "", false
+	}
+	defs := pkg.Consts[name]
+	if len(defs) == 0 {
+		return "", false
+	}
+	var value string
+	for i, def := range defs {
+		v, ok := s.eval(def.Expr, def.File, depth+1)
+		if !ok || i > 0 && v != value {
+			return "", false
+		}
+		value = v
+	}
+	return value, true
+}
 
-func loadAllowlist(path string) ([]allowRow, error) {
-	body, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
+// texts lists every SQL text of the sources: each .sql file and every Go string constant, a concatenation folded whole
+// when every part resolves.
+func (s *sources) texts() []text {
+	out := append([]text(nil), s.sql...)
+	dirs := make([]string, 0, len(s.pkgs))
+	for dir := range s.pkgs {
+		dirs = append(dirs, dir)
 	}
-	var rows []allowRow
-	for n, line := range strings.Split(string(body), "\n") {
-		if strings.TrimSpace(line) == "" || strings.HasPrefix(line, "#") {
-			continue
+	sort.Strings(dirs)
+	for _, dir := range dirs {
+		for _, gf := range s.pkgs[dir].Files {
+			ast.Inspect(gf.AST, func(n ast.Node) bool {
+				switch node := n.(type) {
+				case *ast.BinaryExpr:
+					if body, ok := s.eval(node, gf, 0); ok {
+						out = append(out, text{gf.Rel, gf.Fset.Position(node.Pos()).Line, body})
+						return false
+					}
+				case *ast.BasicLit:
+					if node.Kind == token.STRING {
+						if body, err := strconv.Unquote(node.Value); err == nil {
+							out = append(out, text{gf.Rel, gf.Fset.Position(node.Pos()).Line, body})
+						}
+					}
+				}
+				return true
+			})
 		}
-		cells := strings.Split(line, "\t")
-		if len(cells) != 4 || cells[3] == "" {
-			return nil, fmt.Errorf("%s:%d: want file<TAB>column<TAB>bound<TAB>reason", path, n+1)
-		}
-		rows = append(rows, allowRow{cells[0], cells[1], cells[2], cells[3]})
 	}
-	return rows, nil
+	return out
 }
 
 type result struct {
 	Violations []hit
-	StaleRows  []allowRow
 	Strict     int
 	OnKeyed    int
 	Flagged    map[string]int
 }
 
-// check applies the policy: a strict comparison of a keyed DateTime64 column against a DateTime bound (or a bound the
-// scan cannot classify) is a violation unless an allowlist row names it. A column no table keeps is only counted.
-func check(cat catalog, texts []text, allow []allowRow) result {
+// check applies the policy: a strict comparison of a keyed DateTime64 column against a DateTime bound, or against a
+// bound the scan cannot classify, is a violation. A column no table keeps is only counted.
+func check(cat catalog, texts []text) result {
 	names := cat.names()
 	keyed := cat.keyNames()
 	res := result{Flagged: map[string]int{}}
-	used := make([]bool, len(allow))
 	for _, t := range texts {
 		for _, h := range strictHits(t, names) {
 			res.Strict++
@@ -341,23 +269,9 @@ func check(cat catalog, texts []text, allow []allowRow) result {
 				continue
 			}
 			res.OnKeyed++
-			if h.Class != classFlag && h.Class != classUnmeasured {
-				continue
-			}
-			allowed := false
-			for i, row := range allow {
-				if row.File == h.File && row.Column == h.Column && row.Bound == h.Bound {
-					used[i], allowed = true, true
-				}
-			}
-			if !allowed {
+			if h.Class == classFlag || h.Class == classUnmeasured {
 				res.Violations = append(res.Violations, h)
 			}
-		}
-	}
-	for i, row := range allow {
-		if !used[i] {
-			res.StaleRows = append(res.StaleRows, row)
 		}
 	}
 	sort.Slice(res.Violations, func(i, j int) bool {

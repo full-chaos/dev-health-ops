@@ -4,7 +4,12 @@
 // driver as a positional `?` time.Time is a DateTime (toDateTime('<seconds>')), so such a bound on a keyed column is the
 // failure; bind Int64 microseconds with chtime.Micros and rebuild the instant with fromUnixTimestamp64Micro(?, 'UTC').
 //
-// The column types and keys come from internal/chmigrate/baseline/head.json. The guard fails when it cannot measure.
+// The guard reads static text: the string constants of the tracked non-test Go files (a concatenation of literals and of
+// constants of this module is folded) and the tracked .sql files, apart from the migration history, archive, rollback and
+// baseline trees and testdata. The column types and keys come from internal/chmigrate/baseline/head.json. A column is
+// matched by NAME, not by table or query scope, so a WITH alias or a projection that reuses a catalog name is read as
+// that column; a SQL text assembled at run time from a value the guard cannot fold is not seen. The guard fails when it
+// cannot measure: an unreadable head.json object or table, no Go source, no strict comparison at all.
 package chdatetime_test
 
 import (
@@ -45,13 +50,14 @@ func realCatalog(t *testing.T, extra map[string]string) catalog {
 	return cat
 }
 
-const plantTables = "ENGINE = ReplacingMergeTree() "
+const engine = "ENGINE = ReplacingMergeTree() "
 
 var plantExtra = map[string]string{
-	"plant_sort": "CREATE TABLE plant_sort (`org_id` String, `sort_ts` DateTime64(6, 'UTC')) " + plantTables + "ORDER BY (org_id, sort_ts)",
-	"plant_part": "CREATE TABLE plant_part (`org_id` String, `part_ts` DateTime64(3, 'UTC')) " + plantTables + "PARTITION BY toYYYYMM(part_ts) ORDER BY (org_id)",
-	"plant_skip": "CREATE TABLE plant_skip (`org_id` String, `skip_ts` DateTime64(3, 'UTC'), INDEX idx_skip skip_ts TYPE minmax GRANULARITY 1) " + plantTables + "ORDER BY (org_id)",
-	"plant_none": "CREATE TABLE plant_none (`org_id` String, `plain_ts` DateTime64(3, 'UTC')) " + plantTables + "ORDER BY (org_id)",
+	"plant_sort": "CREATE TABLE plant_sort (`org_id` String, `sort_ts` DateTime64(6, 'UTC')) " + engine + "ORDER BY (org_id, sort_ts)",
+	"plant_part": "CREATE TABLE plant_part (`org_id` String, `part_ts` DateTime64(3, 'UTC')) " + engine + "PARTITION BY toYYYYMM(part_ts) ORDER BY (org_id)",
+	"plant_skip": "CREATE TABLE plant_skip (`org_id` String, `skip_ts` DateTime64(3, 'UTC'), INDEX idx_skip skip_ts TYPE minmax GRANULARITY 1) " + engine + "ORDER BY (org_id)",
+	"plant_none": "CREATE TABLE plant_none (`org_id` String, `plain_ts` DateTime64(3, 'UTC')) " + engine + "ORDER BY (org_id)",
+	"plant_quot": "CREATE TABLE plant_quot (`org_id` String, `quoted_ts` DateTime64(3, 'UTC'), INDEX `idx ORDER BY` `quoted_ts` TYPE minmax GRANULARITY 1) " + engine + "ORDER BY (org_id) COMMENT 'ORDER BY (plain_ts) PARTITION BY plain_ts'",
 }
 
 func TestCatalogIsMeasuredFromTheBaseline(t *testing.T) {
@@ -79,168 +85,206 @@ func TestCatalogIsMeasuredFromTheBaseline(t *testing.T) {
 
 func TestCatalogFixturesAndRefusals(t *testing.T) {
 	cat := realCatalog(t, plantExtra)
-	for table, wantKey := range map[string]string{"plant_sort": "ORDER BY", "plant_part": "PARTITION BY", "plant_skip": "INDEX", "plant_none": ""} {
-		var found bool
-		for _, col := range cat.Columns {
-			if col.Table != table || col.Name == "org_id" {
+	wantKeys := map[string]map[string]string{
+		"plant_sort": {"sort_ts": "ORDER BY"},
+		"plant_part": {"part_ts": "PARTITION BY"},
+		"plant_skip": {"skip_ts": "INDEX"},
+		"plant_none": {"plain_ts": ""},
+		"plant_quot": {"quoted_ts": "INDEX"},
+	}
+	for table, cols := range wantKeys {
+		for name, want := range cols {
+			col, ok := cat.has(table, name)
+			if !ok {
+				t.Errorf("fixture %s.%s is not in the catalog", table, name)
 				continue
 			}
-			found = true
-			if got := strings.Join(col.Keys, "+"); got != wantKey {
-				t.Errorf("%s keys = %q, want %q", table, got, wantKey)
+			if got := strings.Join(col.Keys, "+"); got != want {
+				t.Errorf("%s.%s keys = %q, want %q", table, name, got, want)
 			}
-		}
-		if !found {
-			t.Errorf("fixture table %s has no DateTime64 column in the catalog", table)
 		}
 	}
 	for name, create := range map[string]string{
-		"no ENGINE":    "CREATE TABLE broken (`a` DateTime64(3, 'UTC'))",
-		"not a table":  "CREATE VIEW broken AS SELECT 1",
-		"bad column":   "CREATE TABLE broken (a DateTime64(3, 'UTC')) ENGINE = MergeTree ORDER BY a",
-		"unbalanced":   "CREATE TABLE broken (`a` DateTime64(3, 'UTC') ENGINE = MergeTree",
-		"empty create": "",
+		"no ENGINE":     "CREATE TABLE broken (`a` DateTime64(3, 'UTC'))",
+		"not a table":   "CREATE VIEW broken AS SELECT 1",
+		"bad column":    "CREATE TABLE broken (1a DateTime64(3, 'UTC')) ENGINE = MergeTree ORDER BY a",
+		"unbalanced":    "CREATE TABLE broken (`a` DateTime64(3, 'UTC') ENGINE = MergeTree",
+		"empty create":  "",
+		"bad index":     "CREATE TABLE broken (`a` DateTime64(3, 'UTC'), INDEX i a) ENGINE = MergeTree ORDER BY b",
+		"empty element": "CREATE TABLE broken (`a` DateTime64(3, 'UTC'), ) ENGINE = MergeTree ORDER BY b",
 	} {
 		if _, err := parseTable("broken", create); err == nil {
 			t.Errorf("%s: parseTable accepted a statement it cannot measure", name)
 		}
 	}
-	if _, err := buildCatalog([]byte("{"), nil); err == nil {
-		t.Error("buildCatalog accepted a head.json that is not JSON")
-	}
-}
-
-func TestClassifyBound(t *testing.T) {
-	names := map[string]bool{"valid_from": true}
-	for bound, want := range map[string]class{
-		"?":                                       classFlag,
-		"? AND x":                                 classFlag,
-		"{end:DateTime}":                          classFlag,
-		"{end:DateTime64(3, 'UTC')}":              classSafe,
-		"{end:Date}":                              classSafe,
-		"toDateTime('2026-01-01 00:00:00')":       classFlag,
-		"toDateTime({end_day:Date})":              classFlag,
-		"now()":                                   classFlag,
-		"now() - INTERVAL 30 DAY":                 classFlag,
-		"now64(3, 'UTC') - toIntervalSecond(5)":   classSafe,
-		"toDateTime64({win_end:Date}, 3, 'UTC')":  classSafe,
-		"fromUnixTimestamp64Micro(?, 'UTC')":      classSafe,
-		"fromUnixTimestamp64Milli(toInt64(?), 1)": classSafe,
-		"toDate('2026-01-01')":                    classSafe,
-		"'2026-01-01'":                            classSafe,
-		"valid_from":                              classSafe,
-		"o.valid_from AND":                        classSafe,
-		"$3":                                      classSkip,
-		"0":                                       classSkip,
-		"%s":                                      classUnmeasured,
-		"%[1]s":                                   classUnmeasured,
-		"EXCLUDED.updated_at":                     classUnmeasured,
-		"(SELECT 1)":                              classUnmeasured,
-		"toStartOfDay(x)":                         classUnmeasured,
-		"":                                        classUnmeasured,
+	for name, head := range map[string]string{
+		"not JSON":         "{",
+		"null create":      `{"objects":[{"name":"t","create":null}]}`,
+		"empty create":     `{"objects":[{"name":"t","create":""}]}`,
+		"unknown object":   `{"objects":[{"name":"t","create":"DROP TABLE t"}]}`,
+		"nameless object":  `{"objects":[{"create":"CREATE TABLE t (a UInt8) ENGINE = Memory"}]}`,
+		"unreadable table": `{"objects":[{"name":"t","create":"CREATE TABLE t (a UInt8)"}]}`,
 	} {
-		if got := classifyBound(bound, names); got != want {
-			t.Errorf("classifyBound(%q) = %s, want %s", bound, got, want)
+		if _, err := buildCatalog([]byte(head), nil); err == nil {
+			t.Errorf("%s: buildCatalog accepted a head.json it cannot measure", name)
 		}
 	}
 }
 
-func TestStrictHitsReadsBothSidesAndSkipsTheRest(t *testing.T) {
-	names := map[string]bool{"ts": true}
-	for sql, want := range map[string][]class{
-		"WHERE ts < toDateTime(1)":    {classFlag},
-		"WHERE a.ts > ?":              {classFlag},
-		"WHERE ?\n < ts":              {classFlag},
-		"WHERE {x:DateTime} < ts":     {classFlag},
-		"WHERE now() < ts":            {classFlag},
-		"WHERE now64(3) < ts":         {classSafe},
-		"WHERE ts <= toDateTime(1)":   nil,
-		"WHERE ts >= toDateTime(1)":   nil,
-		"WHERE ts <> toDateTime(1)":   nil,
-		"WHERE m -> ts":               nil,
-		"WHERE ts << 2":               nil,
-		"WHERE ts BETWEEN 1 AND 2":    nil,
-		"WHERE other < toDateTime(1)": nil,
-		"WHERE ts > ts":               {classSafe},
-		"WHERE ts < 5":                {classSkip},
-		"WHERE ts < $1":               {classSkip},
-		"WHERE tsx < ?":               nil,
-		"WHERE `ts` < ?":              nil,
-		"WHERE ts < ? AND ts > ?":     {classFlag, classFlag},
+func TestClassifyAndStrictHits(t *testing.T) {
+	names := map[string]bool{"ts": true, "other_ts": true}
+	type want struct {
+		col string
+		cls class
+	}
+	for sql, hits := range map[string][]want{
+		"WHERE ts < toDateTime(1)":                         {{"ts", classFlag}},
+		"WHERE a.ts > ?":                                   {{"ts", classFlag}},
+		"WHERE ?\n < ts":                                   {{"ts", classFlag}},
+		"WHERE {x:DateTime} < ts":                          {{"ts", classFlag}},
+		"WHERE {x:DateTime64(3, 'UTC')} < ts":              {{"ts", classSafe}},
+		"WHERE ts < {x:Date}":                              {{"ts", classSafe}},
+		"WHERE now() < ts":                                 {{"ts", classFlag}},
+		"WHERE now64(3) < ts":                              {{"ts", classSafe}},
+		"WHERE now() - INTERVAL 30 DAY > ts":               {{"ts", classFlag}},
+		"WHERE ts < now64(3, 'UTC') - toIntervalSecond(5)": {{"ts", classSafe}},
+		"WHERE `ts` < ?":                                   {{"ts", classFlag}},
+		"WHERE \"ts\" < ?":                                 {{"ts", classFlag}},
+		"WHERE db.tbl.ts < ?":                              {{"ts", classFlag}},
+		"WHERE (ts) < (?)":                                 {{"ts", classFlag}},
+		"WHERE (a.ts < toDateTime(1))":                     {{"ts", classFlag}},
+		"WHERE ts<?":                                       {{"ts", classFlag}},
+		"WHERE ts <\r\n ?":                                 {{"ts", classFlag}},
+		"WHERE ts < toDateTime(1) -- ts > ?\n":             {{"ts", classFlag}},
+		"WHERE ts < CAST(? AS DateTime)":                   {{"ts", classFlag}},
+		"WHERE ts < CAST(? AS DateTime64(3, 'UTC'))":       {{"ts", classSafe}},
+		"WHERE ts < CAST(x, 'DateTime')":                   {{"ts", classFlag}},
+		"WHERE ts < (toDateTime64(1, 3))":                  {{"ts", classSafe}},
+		"WHERE ts < toDateTime64(1, 3)::DateTime":          {{"ts", classFlag}},
+		"WHERE ts < $1::timestamptz":                       {{"ts", classSkip}},
+		"WHERE $1 < ts":                                    {{"ts", classSkip}},
+		"WHERE less(ts, toDateTime(1))":                    {{"ts", classFlag}},
+		"WHERE greater(toDateTime(1), ts)":                 {{"ts", classFlag}},
+		"WHERE ts < %s":                                    {{"ts", classUnmeasured}},
+		"WHERE ts < %[1]s":                                 {{"ts", classUnmeasured}},
+		"WHERE ts < (SELECT 1)":                            {{"ts", classUnmeasured}},
+		"WHERE ts < other_ts":                              {{"ts", classSafe}},
+		"WHERE ts > 5":                                     {{"ts", classSkip}},
+		"WHERE ts < '2026-01-01'":                          {{"ts", classSafe}},
+		"WHERE ts < ? AND other_ts > ?":                    {{"ts", classFlag}, {"other_ts", classFlag}},
+		"WHERE ts <= toDateTime(1)":                        nil,
+		"WHERE ts >= toDateTime(1)":                        nil,
+		"WHERE ts <> toDateTime(1)":                        nil,
+		"WHERE lessOrEquals(ts, toDateTime(1))":            nil,
+		"WHERE m -> ts":                                    nil,
+		"WHERE ts << 2":                                    nil,
+		"WHERE ts BETWEEN 1 AND 2":                         nil,
+		"WHERE other < toDateTime(1)":                      nil,
+		"WHERE tsx < ?":                                    nil,
+		"WHERE ts < ":                                      nil,
+		"SELECT 'ts < ?' AS x":                             nil,
+		"SELECT 1 -- ts < ?\n":                             nil,
+		"SELECT 1 /* ts < ? */":                            nil,
+		"WHERE s = 'a ts < ?' AND y = 1":                   nil,
+		"SELECT \"x ts < ?\"":                              nil,
 	} {
-		var got []class
-		for _, h := range strictHits(text{File: "x.go", Line: 1, Body: sql}, names) {
-			got = append(got, h.Class)
-		}
-		if len(got) != len(want) {
-			t.Errorf("%q: classes %v, want %v", sql, got, want)
+		got := strictHits(text{File: "x.go", Line: 1, Body: sql}, names)
+		if len(got) != len(hits) {
+			t.Errorf("%q: hits %v, want %v", sql, got, hits)
 			continue
 		}
-		for i := range got {
-			if got[i] != want[i] {
-				t.Errorf("%q: classes %v, want %v", sql, got, want)
+		for i, h := range got {
+			if h.Column != hits[i].col || h.Class != hits[i].cls {
+				t.Errorf("%q: hit %d = %s %s, want %s %s", sql, i, h.Column, h.Class, hits[i].col, hits[i].cls)
 			}
 		}
 	}
 }
 
-func TestEveryStrictUnsafeBoundOnAKeyedColumnIsFixedOrAllowlisted(t *testing.T) {
+func TestGoConstantsAreFoldedAcrossFilesAndPackages(t *testing.T) {
+	root := t.TempDir()
+	write := func(rel, body string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(root, rel)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, rel), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("go.mod", "module example.test/m\n\ngo 1.22\n")
+	write("a/a.go", "package a\n\nconst Column = \"sort_ts\"\nconst Micro = \"fromUnixTimestamp64Micro(?, 'UTC')\"\n")
+	write("a/b.go", "package a\n\nconst Where = \"WHERE \" + Column + \" < \"\n")
+	write("b/b.go", "package b\n\nimport \"example.test/m/a\"\n\nconst unsafe = a.Where + \"toDateTime(?)\"\nconst safe = a.Where + a.Micro\nconst cast = a.Where + string(\"?\")\nconst fragment = \"sort_ts < \"\n")
+	src, err := sourcesOf(root, []string{"a/a.go", "a/b.go", "b/b.go"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cat := realCatalog(t, plantExtra)
+	res := check(cat, src.texts())
+	if len(res.Violations) != 2 {
+		t.Fatalf("violations = %v, want the unsafe and the converted bound", res.Violations)
+	}
+	for _, v := range res.Violations {
+		if v.File != "b/b.go" || v.Column != "sort_ts" {
+			t.Errorf("unexpected violation %v", v)
+		}
+	}
+	if _, err := sourcesOf(root, []string{"b/missing.go"}); err == nil {
+		t.Error("a tracked file that cannot be read did not fail the scan")
+	}
+}
+
+func TestEveryStrictUnsafeBoundOnAKeyedColumnIsFixed(t *testing.T) {
 	cat := realCatalog(t, nil)
-	root := repoRoot(t)
-	texts, goFiles, err := sqlTexts(root)
+	src, err := loadSources(repoRoot(t))
 	if err != nil {
 		t.Fatal(err)
 	}
-	allow, err := loadAllowlist(filepath.Join("allowlist.tsv"))
-	if err != nil {
-		t.Fatal(err)
+	texts := src.texts()
+	if len(src.pkgs) < 100 || len(texts) < 500 {
+		t.Fatalf("scanned %d Go packages and %d SQL texts: the guard would scan too little", len(src.pkgs), len(texts))
 	}
-	res := check(cat, texts, allow)
-	if goFiles < 500 || len(texts) < 500 {
-		t.Fatalf("scanned %d Go files and %d SQL texts: the guard would scan too little", goFiles, len(texts))
-	}
-	if res.Strict == 0 || res.OnKeyed == 0 {
-		t.Fatalf("found %d strict comparisons of DateTime64 columns, %d on a keyed column: the scan measured nothing", res.Strict, res.OnKeyed)
+	res := check(cat, texts)
+	if res.Strict == 0 {
+		t.Fatal("found no strict comparison of a DateTime64 column: the scan measured nothing")
 	}
 	for _, v := range res.Violations {
 		t.Errorf("%s:%d: `%s %s %s` compares a keyed DateTime64 column (%s) with a %s bound; bind chtime.Micros(t) as fromUnixTimestamp64Micro(?, 'UTC') (or a DateTime64 parameter) or use <= / >=",
 			v.File, v.Line, v.Column, v.Op, v.Bound, strings.Join(cat.keyNames()[v.Column], ", "), v.Class)
-	}
-	for _, row := range res.StaleRows {
-		t.Errorf("allowlist.tsv row %s %s %q matches no comparison: delete it", row.File, row.Column, row.Bound)
 	}
 	t.Logf("strict comparisons of DateTime64 columns: %d, on keyed columns: %d, unsafe on columns no table keys (not a failure): %v", res.Strict, res.OnKeyed, res.Flagged)
 }
 
 func TestPlantedStrictComparisonsFailTheGuardAndTheSafeFormsDoNot(t *testing.T) {
 	cat := realCatalog(t, plantExtra)
-	texts, _, err := sqlTexts(repoRoot(t))
+	src, err := loadSources(repoRoot(t))
 	if err != nil {
 		t.Fatal(err)
 	}
-	allow, err := loadAllowlist("allowlist.tsv")
-	if err != nil {
-		t.Fatal(err)
+	texts := src.texts()
+	if base := check(cat, texts); len(base.Violations) != 0 {
+		t.Fatalf("the tree without a plant is not clean: %v", base.Violations)
 	}
-	if base := check(cat, texts, allow); len(base.Violations) != 0 || len(base.StaleRows) != 0 {
-		t.Fatalf("the tree without a plant is not clean: %v %v", base.Violations, base.StaleRows)
-	}
-	plant := func(body string) result {
-		return check(cat, append(append([]text(nil), texts...), text{File: "planted.go", Line: 1, Body: body}), allow)
+	plant := func(body string) []hit {
+		return check(cat, append(append([]text(nil), texts...), text{File: "planted.go", Line: 1, Body: body})).Violations
 	}
 	for name, body := range map[string]string{
 		"sort-key column":       "SELECT 1 FROM plant_sort WHERE sort_ts < toDateTime('2026-01-01 00:00:00')",
 		"partition column":      "SELECT 1 FROM plant_part WHERE part_ts > toDateTime('2026-01-01 00:00:00')",
 		"minmax-index column":   "SELECT 1 FROM plant_skip WHERE skip_ts < toDateTime('2026-01-01 00:00:00')",
+		"quoted-name index":     "SELECT 1 FROM plant_quot WHERE quoted_ts < toDateTime('2026-01-01 00:00:00')",
 		"real sort-key column":  "SELECT 1 FROM work_item_transitions WHERE org_id = ? AND occurred_at < ?",
 		"real partition column": "SELECT 1 FROM product_telemetry_events WHERE occurred_at > now()",
 		"DateTime parameter":    "SELECT 1 FROM plant_sort WHERE sort_ts < {end:DateTime}",
 		"unmeasurable bound":    "SELECT 1 FROM plant_sort WHERE sort_ts < %s",
 		"bound before operator": "SELECT 1 FROM plant_sort WHERE toDateTime(1) > sort_ts",
 		"positional on keyed":   "SELECT 1 FROM plant_skip WHERE ? > skip_ts",
+		"backtick column":       "SELECT 1 FROM plant_sort WHERE `sort_ts` < ?",
+		"cast down":             "SELECT 1 FROM plant_sort WHERE sort_ts < CAST(? AS DateTime)",
+		"function spelling":     "SELECT 1 FROM plant_sort WHERE less(sort_ts, toDateTime(1))",
 	} {
-		got := plant(body).Violations
-		if len(got) != 1 || got[0].File != "planted.go" {
+		if got := plant(body); len(got) != 1 || got[0].File != "planted.go" {
 			t.Errorf("%s: want exactly the planted violation, got %v", name, got)
 		}
 	}
@@ -251,9 +295,13 @@ func TestPlantedStrictComparisonsFailTheGuardAndTheSafeFormsDoNot(t *testing.T) 
 		"microsecond bound":    "SELECT 1 FROM plant_sort WHERE sort_ts < fromUnixTimestamp64Micro(?, 'UTC')",
 		"DateTime64 parameter": "SELECT 1 FROM plant_part WHERE part_ts < {end:DateTime64(3, 'UTC')}",
 		"toDateTime64":         "SELECT 1 FROM plant_skip WHERE skip_ts > toDateTime64('2026-01-01', 3, 'UTC')",
-		"Postgres bound":       "SELECT 1 FROM t WHERE sort_ts < $1",
+		"cast to DateTime64":   "SELECT 1 FROM plant_sort WHERE sort_ts < CAST(? AS DateTime64(6, 'UTC'))",
+		"numbered bound":       "SELECT 1 FROM t WHERE sort_ts < $1",
+		"comment text":         "SELECT 1 FROM plant_sort -- WHERE sort_ts < ?\n",
+		"string text":          "SELECT 'sort_ts < ?' FROM plant_sort",
+		"quoted comment key":   "SELECT 1 FROM plant_quot WHERE plain_ts < ?",
 	} {
-		if got := plant(body).Violations; len(got) != 0 {
+		if got := plant(body); len(got) != 0 {
 			t.Errorf("%s: a safe form was flagged: %v", name, got)
 		}
 	}

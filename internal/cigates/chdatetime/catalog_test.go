@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 )
@@ -23,136 +22,136 @@ type catalog struct {
 	Columns []column
 }
 
-var (
-	clauseRe     = regexp.MustCompile(`\b(PARTITION BY|ORDER BY|PRIMARY KEY|SAMPLE BY|TTL|SETTINGS|COMMENT)\b`)
-	identRe      = regexp.MustCompile(`[A-Za-z_][A-Za-z0-9_]*`)
-	columnDefRe  = regexp.MustCompile("^`(\\w+)` (.+)$")
-	indexDefRe   = regexp.MustCompile(`^INDEX (\w+) (.+) TYPE (\w+)`)
-	nonColumnRe  = regexp.MustCompile(`^(INDEX|CONSTRAINT|PROJECTION)\b`)
-	dateTime64Re = regexp.MustCompile(`^(Nullable\()?DateTime64\(`)
-)
-
-// splitTop splits text on commas that sit outside parentheses and quotes.
-func splitTop(text string) []string {
-	var parts []string
-	depth, start, quote := 0, 0, false
-	for i := 0; i < len(text); i++ {
-		switch c := text[i]; {
-		case quote && c == '\\':
-			i++
-		case c == '\'':
-			quote = !quote
-		case quote:
-		case c == '(':
-			depth++
-		case c == ')':
-			depth--
-		case c == ',' && depth == 0:
-			parts = append(parts, strings.TrimSpace(text[start:i]))
-			start = i + 1
-		}
-	}
-	return append(parts, strings.TrimSpace(text[start:]))
+var keyClauses = [][]string{
+	{"PARTITION", "BY"}, {"ORDER", "BY"}, {"PRIMARY", "KEY"}, {"SAMPLE", "BY"}, {"TTL"}, {"SETTINGS"}, {"COMMENT"},
 }
 
-// matchParen returns the index of the parenthesis that closes the one at open.
-func matchParen(text string, open int) int {
-	depth, quote := 0, false
-	for i := open; i < len(text); i++ {
-		switch c := text[i]; {
-		case quote && c == '\\':
-			i++
-		case c == '\'':
-			quote = !quote
-		case quote:
-		case c == '(':
-			depth++
-		case c == ')':
-			depth--
-			if depth == 0 {
-				return i
+// clauseAt reports the name of the engine clause that starts at toks[i], and its length in tokens.
+func clauseAt(toks []tok, i int) (string, int) {
+	for _, words := range keyClauses {
+		if i+len(words) > len(toks) {
+			continue
+		}
+		match := true
+		for k, w := range words {
+			if !toks[i+k].isKeyword(w) {
+				match = false
+				break
 			}
 		}
+		if match {
+			return strings.Join(words, " "), len(words)
+		}
 	}
-	return -1
+	return "", 0
 }
 
-// parseTable reads one CREATE TABLE statement. It fails loudly on a shape it cannot measure.
+func references(toks []tok, column string) bool {
+	for _, t := range toks {
+		if (t.Kind == tIdent || t.Kind == tQuoted) && t.Text == column {
+			return true
+		}
+	}
+	return false
+}
+
+func isDateTime64Type(toks []tok) bool {
+	if len(toks) > 0 && toks[0].isKeyword("DateTime64") {
+		return true
+	}
+	return len(toks) > 2 && toks[0].isKeyword("Nullable") && toks[1].isPunct("(") && toks[2].isKeyword("DateTime64")
+}
+
+// parseTable reads one CREATE TABLE statement with the SQL lexer, so a quoted keyword or a name inside a string or
+// comment is never a clause or a reference. It fails loudly on a shape it cannot measure.
 func parseTable(name, create string) ([]column, error) {
-	open := strings.Index(create, "(")
-	if !strings.HasPrefix(create, "CREATE TABLE ") || open < 0 {
+	toks := lex(create)
+	if len(toks) < 4 || !toks[0].isKeyword("CREATE") || !toks[1].isKeyword("TABLE") {
 		return nil, fmt.Errorf("%s: not a CREATE TABLE statement", name)
 	}
-	closeAt := matchParen(create, open)
+	open := -1
+	for i, t := range toks {
+		if t.isPunct("(") {
+			open = i
+			break
+		}
+	}
+	if open < 0 {
+		return nil, fmt.Errorf("%s: no column list", name)
+	}
+	closeAt := matchClose(toks, open)
 	if closeAt < 0 {
 		return nil, fmt.Errorf("%s: unbalanced column list", name)
 	}
-	rest := create[closeAt+1:]
-	engineAt := strings.Index(rest, "ENGINE = ")
-	if engineAt < 0 {
+	engine := -1
+	for i := closeAt + 1; i < len(toks); i++ {
+		if toks[i].isKeyword("ENGINE") {
+			engine = i
+			break
+		}
+	}
+	if engine < 0 {
 		return nil, fmt.Errorf("%s: no ENGINE clause", name)
 	}
-	engine := rest[engineAt:]
-	clauses := map[string]string{}
-	locs := clauseRe.FindAllStringIndex(engine, -1)
-	for i, loc := range locs {
-		end := len(engine)
-		if i+1 < len(locs) {
-			end = locs[i+1][0]
-		}
-		clauses[engine[loc[0]:loc[1]]] += " " + engine[loc[1]:end]
-	}
-	keyText := map[string]string{
-		"PARTITION BY": clauses["PARTITION BY"],
-		"ORDER BY":     clauses["ORDER BY"],
-		"PRIMARY KEY":  clauses["PRIMARY KEY"],
-	}
-	var defs, indexes []string
-	for _, def := range splitTop(create[open+1 : closeAt]) {
+	clauses := map[string][]tok{}
+	current, depth := "", 0
+	for i := engine; i < len(toks); i++ {
 		switch {
-		case indexDefRe.MatchString(def):
-			indexes = append(indexes, indexDefRe.FindStringSubmatch(def)[2])
-		case nonColumnRe.MatchString(def):
+		case toks[i].isPunct("("):
+			depth++
+		case toks[i].isPunct(")"):
+			depth--
+		}
+		if depth == 0 {
+			if clause, n := clauseAt(toks, i); n > 0 {
+				current, i = clause, i+n-1
+				continue
+			}
+		}
+		if current != "" {
+			clauses[current] = append(clauses[current], toks[i])
+		}
+	}
+	var indexes [][]tok
+	var defs [][]tok
+	for _, def := range splitDepth0(toks[open+1:closeAt], func(t tok) bool { return t.isPunct(",") }) {
+		switch {
+		case len(def) == 0:
+			return nil, fmt.Errorf("%s: empty column definition", name)
+		case def[0].isKeyword("INDEX"):
+			parts := splitDepth0(def[2:], func(t tok) bool { return t.isKeyword("TYPE") })
+			if len(def) < 3 || len(parts) < 2 {
+				return nil, fmt.Errorf("%s: cannot read index definition", name)
+			}
+			indexes = append(indexes, parts[0])
+		case def[0].isKeyword("CONSTRAINT", "PROJECTION"):
 		default:
 			defs = append(defs, def)
 		}
 	}
 	var out []column
 	for _, def := range defs {
-		m := columnDefRe.FindStringSubmatch(def)
-		if m == nil {
-			return nil, fmt.Errorf("%s: cannot read column definition %q", name, def)
+		if def[0].Kind != tIdent && def[0].Kind != tQuoted || len(def) < 2 {
+			return nil, fmt.Errorf("%s: cannot read column definition at offset %d", name, def[0].Pos)
 		}
-		if !dateTime64Re.MatchString(m[2]) {
+		if !isDateTime64Type(def[1:]) {
 			continue
 		}
-		col := column{Table: name, Name: m[1]}
+		col := column{Table: name, Name: def[0].Text}
 		for _, kind := range []string{"PARTITION BY", "ORDER BY", "PRIMARY KEY"} {
-			if mentions(keyText[kind], m[1]) {
+			if references(clauses[kind], col.Name) {
 				col.Keys = append(col.Keys, kind)
 			}
 		}
 		for _, expr := range indexes {
-			if mentions(expr, m[1]) {
+			if references(expr, col.Name) {
 				col.Keys = append(col.Keys, "INDEX")
 				break
 			}
 		}
 		out = append(out, col)
 	}
-	if got, want := len(out), strings.Count(create[open:closeAt], "DateTime64("); got > want {
-		return nil, fmt.Errorf("%s: parsed %d DateTime64 columns from %d DateTime64 types", name, got, want)
-	}
 	return out, nil
-}
-
-func mentions(expr, column string) bool {
-	for _, id := range identRe.FindAllString(expr, -1) {
-		if id == column {
-			return true
-		}
-	}
-	return false
 }
 
 // buildCatalog reads head.json; extra holds additional CREATE TABLE statements by table name (fixtures).
@@ -168,8 +167,17 @@ func buildCatalog(headJSON []byte, extra map[string]string) (catalog, error) {
 	}
 	creates := map[string]string{}
 	for _, object := range head.Objects {
-		if strings.HasPrefix(object.Create, "CREATE TABLE ") {
+		if object.Name == "" {
+			return catalog{}, fmt.Errorf("head.json: an object has no name")
+		}
+		kind := strings.Join(strings.Fields(object.Create), " ")
+		switch {
+		case strings.HasPrefix(kind, "CREATE TABLE "):
 			creates[object.Name] = object.Create
+		case strings.HasPrefix(kind, "CREATE MATERIALIZED VIEW "), strings.HasPrefix(kind, "CREATE VIEW "),
+			strings.HasPrefix(kind, "CREATE DICTIONARY "):
+		default:
+			return catalog{}, fmt.Errorf("head.json: object %s has no readable CREATE statement", object.Name)
 		}
 	}
 	for name, create := range extra {

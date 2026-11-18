@@ -1,1 +1,0 @@
-# file<TAB>column<TAB>bound (first 40 chars, as the guard prints it)<TAB>reason. A row that matches no comparison fails the guard.

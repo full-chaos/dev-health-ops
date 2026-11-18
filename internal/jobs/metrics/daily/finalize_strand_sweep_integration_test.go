@@ -182,15 +182,15 @@ func TestNightlyDispatchRedrivesItsOrganizationsStrandedFinalize(t *testing.T) {
 	}
 }
 
-// blockingFinalizeFamily counts computes; the first one waits on release, so a
+// queuedTwinFinalizeFamily counts computes; the first one waits on release, so a
 // second worker can try the same run while the first holds the lease.
-type blockingFinalizeFamily struct {
+type queuedTwinFinalizeFamily struct {
 	computes atomic.Int32
 	started  chan struct{}
 	release  chan struct{}
 }
 
-func (family *blockingFinalizeFamily) ComputeFinalizeFamily(ctx context.Context, _ Run) (int, error) {
+func (family *queuedTwinFinalizeFamily) ComputeFinalizeFamily(ctx context.Context, _ Run) (int, error) {
 	if family.computes.Add(1) == 1 {
 		close(family.started)
 		select {
@@ -220,7 +220,7 @@ func dispatchExecution(orgID, runID string) *jobruntime.Execution[jobruntime.Dai
 	}
 }
 
-func finalizeExecution(orgID, runID string) *jobruntime.Execution[jobruntime.DailyMetricsFinalizeArgs] {
+func sweepFinalizeExecution(orgID, runID string) *jobruntime.Execution[jobruntime.DailyMetricsFinalizeArgs] {
 	return &jobruntime.Execution[jobruntime.DailyMetricsFinalizeArgs]{
 		OrganizationID: pointer(orgID),
 		Attempt:        1,
@@ -316,7 +316,7 @@ func TestAStillQueuedFinalizeAndItsRedriveComputeTheRunOnce(t *testing.T) {
 		t.Fatalf("finalize outbox rows of the run = %d, want 2 (the queued original and the redrive)", finalizeRows)
 	}
 
-	family := &blockingFinalizeFamily{started: make(chan struct{}), release: make(chan struct{})}
+	family := &queuedTwinFinalizeFamily{started: make(chan struct{}), release: make(chan struct{})}
 	finalizer, err := NewFinalizeHandler(store)
 	if err != nil {
 		t.Fatal(err)
@@ -325,10 +325,10 @@ func TestAStillQueuedFinalizeAndItsRedriveComputeTheRunOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	first := make(chan error, 1)
-	go func() { first <- finalizer.Work(ctx, finalizeExecution(orgID, stranded)) }()
+	go func() { first <- finalizer.Work(ctx, sweepFinalizeExecution(orgID, stranded)) }()
 	<-family.started
 	// The second job, while the first holds the lease: retry, no compute.
-	if err := finalizer.Work(ctx, finalizeExecution(orgID, stranded)); !errors.Is(err, ErrLeaseActive) {
+	if err := finalizer.Work(ctx, sweepFinalizeExecution(orgID, stranded)); !errors.Is(err, ErrLeaseActive) {
 		t.Fatalf("second job while the first computes: %v, want a lease-active retry", err)
 	}
 	close(family.release)
@@ -336,7 +336,7 @@ func TestAStillQueuedFinalizeAndItsRedriveComputeTheRunOnce(t *testing.T) {
 		t.Fatalf("first job: %v", err)
 	}
 	// The second job's retry finds the run ended.
-	if err := finalizer.Work(ctx, finalizeExecution(orgID, stranded)); err != nil {
+	if err := finalizer.Work(ctx, sweepFinalizeExecution(orgID, stranded)); err != nil {
 		t.Fatalf("second job's retry: %v", err)
 	}
 	if got := family.computes.Load(); got != 1 {

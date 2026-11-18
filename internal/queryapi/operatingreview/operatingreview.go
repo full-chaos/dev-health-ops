@@ -152,6 +152,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/investmentexplain"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pooledmttr"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/rowview"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
@@ -1276,7 +1277,10 @@ type periodRows struct {
 	deployments    []deploymentsAggRow
 	changeFailure  []changeFailureAggRow
 	incidents      []incidentsAggRow
-	investment     []investmentRow
+	// mttrPooledP50 and mttrPooledMean are the week's MTTR pooled over the raw samples, the value the report charts
+	// (pooledmttr.MTTR); nil = no sample.
+	mttrPooledP50, mttrPooledMean *float64
+	investment                    []investmentRow
 	// investmentSizing is the sizing coverage of the week's units, read only when the investment section is read in
 	// ISSUE_SIZE (CHAOS-9873); nil otherwise.
 	investmentSizing *readers.SizingCoverage
@@ -1438,7 +1442,15 @@ func fetchPeriodRows(ctx context.Context, client QueryClient, orgID string, team
 	swallow("change_failure", err)
 	changeFailure = discardOnError(changeFailure, err)
 
+	mttrPooledP50, mttrPooledMean, err := pooledmttr.MTTR(ctx, client, orgID, start, end, ownershipAsOf(end))
+	swallow("mttr_pooled", err)
+	if err != nil {
+		mttrPooledP50, mttrPooledMean = nil, nil
+	}
+
 	return periodRows{
+		mttrPooledP50:    mttrPooledP50,
+		mttrPooledMean:   mttrPooledMean,
 		workItems:        workItems,
 		stateDurations:   stateDurations,
 		repoMetrics:      repoMetrics,
@@ -1863,10 +1875,16 @@ func failedRead(tables ...string) func(periodRows) bool {
 // that read. A read that succeeds and holds no MTTR is no failure, and the
 // fallback to the repository MTTR stays as it is.
 func failedMTTRRead(p periodRows) bool {
-	if p.failed["incidents"] {
+	if p.failed["mttr_pooled"] || p.failed["incidents"] {
 		return true
 	}
 	return p.failed["repo_metrics"] && incidentMTTR(p) == 0
+}
+
+// pooledMTTR is the tile value: the pooled incident median, or the pooled bug repair mean when no incident sample
+// exists (NULL) or the median is 0, the precedence the stored values had (firstNonZero).
+func pooledMTTR(p periodRows) float64 {
+	return firstNonZero(floatOrZero(p.mttrPooledP50), floatOrZero(p.mttrPooledMean))
 }
 
 func incidentMTTR(p periodRows) float64 {
@@ -2351,14 +2369,7 @@ func reliabilitySection(current, prior periodRows) reviewSection {
 			sumF(pluck(prior.incidents, func(r incidentsAggRow) *float64 { return f(r.incidentsCount) })),
 			"incidents", lowerIsBetter).dataIn(current, prior, hasIncidentRows).readFrom(current, prior, failedRead("incidents")).organisation(),
 		buildMetric("mttr_hours", "MTTR",
-			firstNonZero(
-				avgF(pluck(current.incidents, func(r incidentsAggRow) *float64 { return r.mttrP50Hours })),
-				avgF(pluck(current.repoMetrics, func(r repoMetricsRow) *float64 { return r.mttrHours })),
-			),
-			firstNonZero(
-				avgF(pluck(prior.incidents, func(r incidentsAggRow) *float64 { return r.mttrP50Hours })),
-				avgF(pluck(prior.repoMetrics, func(r repoMetricsRow) *float64 { return r.mttrHours })),
-			),
+			pooledMTTR(current), pooledMTTR(prior),
 			"hours", lowerIsBetter).dataIn(current, prior, hasMTTR).readFrom(current, prior, failedMTTRRead).organisation(),
 	})
 }

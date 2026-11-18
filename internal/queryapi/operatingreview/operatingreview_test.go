@@ -123,9 +123,49 @@ type fakeClient struct {
 	errs       []error
 	calls      int
 	statements []string
+	// The pooled MTTR reads sit outside the positional schedule. pooledSet answers them with pooledP50 and pooledMean
+	// (nil = no sample); otherwise each stored daily value of the week's positional scanners is one sample, so the
+	// pooled value is the stored one. pooledErr fails them; pooled counts them.
+	pooledSet             bool
+	pooledP50, pooledMean any
+	pooledErr             error
+	pooled                int
+}
+
+// storedWeekValue is the stored MTTR of the week the pooled read follows: scanner is the position in its 11-read block
+// and column the field (the incident median, the repository mean).
+func (f *fakeClient) storedWeekValue(scanner, column int) any {
+	i := f.calls - 11 + scanner
+	if f.calls < 11 || i >= len(f.responses) || len(f.responses[i].rows) == 0 || len(f.responses[i].rows[0]) <= column {
+		return nil
+	}
+	return f.responses[i].rows[0][column]
 }
 
 func (f *fakeClient) Query(_ context.Context, statement string, _ []clickhouse.Binding) (clickhouse.RowScanner, error) {
+	var value any
+	switch {
+	case strings.Contains(statement, "pooled_incident_repairs"):
+		value = f.pooledP50
+		if !f.pooledSet {
+			value = f.storedWeekValue(6, 1)
+		}
+	case strings.Contains(statement, "pooled_bug_repairs"):
+		value = f.pooledMean
+		if !f.pooledSet {
+			value = f.storedWeekValue(2, 6)
+		}
+	default:
+		return f.positional(statement)
+	}
+	f.pooled++
+	if f.pooledErr != nil {
+		return nil, f.pooledErr
+	}
+	return &fakeRowScanner{rows: [][]any{{"total", nil, value}}}, nil
+}
+
+func (f *fakeClient) positional(statement string) (clickhouse.RowScanner, error) {
 	i := f.calls
 	f.calls++
 	f.statements = append(f.statements, statement)

@@ -31,7 +31,9 @@ type bindingClient struct {
 }
 
 func (c *bindingClient) Query(ctx context.Context, statement string, bindings []clickhouse.Binding) (clickhouse.RowScanner, error) {
-	c.bindings = append(c.bindings, bindings)
+	if !strings.Contains(statement, "pooled_incident_repairs") && !strings.Contains(statement, "pooled_bug_repairs") {
+		c.bindings = append(c.bindings, bindings)
+	}
 	return c.fakeClient.Query(ctx, statement, nil)
 }
 

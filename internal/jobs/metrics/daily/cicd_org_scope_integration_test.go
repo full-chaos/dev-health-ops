@@ -9,6 +9,7 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
@@ -57,17 +58,12 @@ func TestCICDComputeFamilyWritesRealOrgIDAndIsolatesTenants(t *testing.T) {
     finished_at Nullable(DateTime64(3, 'UTC')), last_synced DateTime64(3, 'UTC'),
     org_id String
 ) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (repo_id, run_id)`,
-		// Exact production sorting key: migration 027_add_org_id_to_sorting_keys.py.
-		`CREATE TABLE cicd_metrics_daily (
-    repo_id UUID, day Date, pipelines_count UInt32, success_rate Float64,
-    avg_duration_minutes Nullable(Float64), p90_duration_minutes Nullable(Float64),
-    avg_queue_minutes Nullable(Float64), computed_at DateTime, org_id String
-) ENGINE = ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, day)`,
 	} {
 		if err := conn.Exec(ctx, statement); err != nil {
 			t.Fatal(err)
 		}
 	}
+	chschema.CreateTables(ctx, t, conn, "cicd_metrics_daily")
 
 	const (
 		orgA = "00000000-0000-4000-8000-0000000000a0"
@@ -155,16 +151,12 @@ func TestCICDComputeFamilyCountsRunOnFinishDay(t *testing.T) {
     finished_at Nullable(DateTime64(3, 'UTC')), last_synced DateTime64(3, 'UTC'),
     org_id String
 ) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (repo_id, run_id)`,
-		`CREATE TABLE cicd_metrics_daily (
-    repo_id UUID, day Date, pipelines_count UInt32, success_rate Float64,
-    avg_duration_minutes Nullable(Float64), p90_duration_minutes Nullable(Float64),
-    avg_queue_minutes Nullable(Float64), computed_at DateTime, org_id String
-) ENGINE = ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, day)`,
 	} {
 		if err := conn.Exec(ctx, statement); err != nil {
 			t.Fatal(err)
 		}
 	}
+	chschema.CreateTables(ctx, t, conn, "cicd_metrics_daily")
 
 	const org = "00000000-0000-4000-8000-0000000000d0"
 	const repo = "00000000-0000-4000-8000-0000000000d1"
@@ -228,16 +220,12 @@ func startCICDDayDB(t *testing.T) (context.Context, driver.Conn) {
     finished_at Nullable(DateTime64(3, 'UTC')), last_synced DateTime64(3, 'UTC'),
     org_id String
 ) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (repo_id, run_id)`,
-		`CREATE TABLE cicd_metrics_daily (
-    repo_id UUID, day Date, pipelines_count UInt32, success_rate Float64,
-    avg_duration_minutes Nullable(Float64), p90_duration_minutes Nullable(Float64),
-    avg_queue_minutes Nullable(Float64), computed_at DateTime, org_id String
-) ENGINE = ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, day)`,
 	} {
 		if err := conn.Exec(ctx, statement); err != nil {
 			t.Fatal(err)
 		}
 	}
+	chschema.CreateTables(ctx, t, conn, "cicd_metrics_daily")
 	return ctx, conn
 }
 

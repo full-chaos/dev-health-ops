@@ -1600,6 +1600,27 @@ func (handler *FinalizeHandler) retractStaleKeys(ctx context.Context, run Run) e
 	return nil
 }
 
+// zeroPartitionRun reports whether the run has no partition. Only a run of the
+// whole organization whose discovery found no repository may reach its finalize
+// with none; for any other run it is ErrInvalidState.
+func (handler *FinalizeHandler) zeroPartitionRun(ctx context.Context, run Run) (bool, error) {
+	total, _, err := handler.store.PartitionCompletionCounts(ctx, run.ID)
+	if err != nil {
+		return false, fmt.Errorf("%w: count the partitions of the run: %w", ErrNativeFinalizeFamilyFailed, err)
+	}
+	if total > 0 {
+		return false, nil
+	}
+	stored, err := handler.store.LoadRun(ctx, run.ID)
+	if err != nil {
+		return false, fmt.Errorf("%w: load the scope of the run: %w", ErrNativeFinalizeFamilyFailed, err)
+	}
+	if !stored.FullOrg {
+		return false, fmt.Errorf("%w: %w", ErrInvalidState, errZeroPartitionRunNotFullOrg)
+	}
+	return true, nil
+}
+
 func NewFinalizeHandler(store Store) (*FinalizeHandler, error) {
 	if store == nil {
 		return nil, ErrUnavailable
@@ -1631,6 +1652,21 @@ func NewFinalizeHandler(store Store) (*FinalizeHandler, error) {
 // bridge left to fall open to, that is now ErrFinalizeFamilyIncomplete, not a
 // silent no-op.
 var pythonRecognisedFinalizeFamilies = []string{"ic_finalize", TeamCognitiveLoadFamilyName, TeamComplexityFamilyName, BenchmarkingFamilyName, CompoundingRiskTeamFamilyName, WorkItemMeasureCapabilityFamilyName}
+
+// finalizeFamiliesRefusingZeroPartitions are the finalize families that read
+// the partitions of the run and refuse a run with none. A run of the whole
+// organization whose discovery found no repository has no partition: its
+// finalize skips these families and runs every other one.
+var finalizeFamiliesRefusingZeroPartitions = []string{BenchmarkingFamilyName}
+
+// ZeroPartitionFamilySkippedLogMessage is the line of a finalize family that is
+// skipped on a run with no partition.
+const ZeroPartitionFamilySkippedLogMessage = "daily finalize: family skipped on a run with no repositories"
+
+// errZeroPartitionRunNotFullOrg: a run of some repositories gets its partitions
+// in the transaction that creates it, so a finalize of such a run with no
+// partition is a defect of the caller.
+var errZeroPartitionRunNotFullOrg = errors.New("daily finalize: a run of some repositories has no partition")
 
 // ErrUnknownFinalizeFamily is returned when SetNativeFinalizeFamilies is
 // asked to register a name outside pythonRecognisedFinalizeFamilies.
@@ -1832,7 +1868,7 @@ func (handler *FinalizeHandler) observeFinalizeFamily(
 // partial_write (rows already landed, a redrive may duplicate if the writer is
 // not idempotent) versus refused (nothing landed, including a missing
 // executor -- there was never anything to write with).
-func (handler *FinalizeHandler) computeNativeFinalizeFamilies(ctx context.Context, run Run) error {
+func (handler *FinalizeHandler) computeNativeFinalizeFamilies(ctx context.Context, run Run, noPartitions bool) error {
 	if handler == nil {
 		return nil
 	}
@@ -1843,6 +1879,13 @@ func (handler *FinalizeHandler) computeNativeFinalizeFamilies(ctx context.Contex
 				run, name, jobruntime.DailyMetricsNativeFamilyOutcomeRefused, 0, handler.finalizeNow(),
 			)
 			return fmt.Errorf("%w: %s", ErrFinalizeFamilyIncomplete, name)
+		}
+		if noPartitions && slices.Contains(finalizeFamiliesRefusingZeroPartitions, name) {
+			slog.Default().InfoContext(ctx, ZeroPartitionFamilySkippedLogMessage,
+				"run_id", run.ID, "organization_id", run.OrganizationID,
+				"target_day", run.TargetDay.Format("2006-01-02"), "family", name,
+			)
+			continue
 		}
 		// Between-family cancellation check. Once the lease is lost another
 		// worker may already own this run, so continuing to write is the
@@ -1930,10 +1973,14 @@ func (handler *FinalizeHandler) Work(ctx context.Context, execution *jobruntime.
 			// share are superseded first, once for the run: every partition
 			// is done (ClaimFinalize), and the finalize families read those
 			// tables.
+			noPartitions, err := handler.zeroPartitionRun(workCtx, claim.Run)
+			if err != nil {
+				return err
+			}
 			if err := handler.retractStaleKeys(workCtx, claim.Run); err != nil {
 				return err
 			}
-			return handler.computeNativeFinalizeFamilies(workCtx, claim.Run)
+			return handler.computeNativeFinalizeFamilies(workCtx, claim.Run, noPartitions)
 		},
 	); err != nil {
 		// LOG THE UNDERLYING ERROR BEFORE RETURNING (CHAOS-4290, #2243's
@@ -1956,6 +2003,24 @@ func (handler *FinalizeHandler) Work(ctx context.Context, execution *jobruntime.
 		finalizeLogger := execution.Logger
 		if finalizeLogger == nil {
 			finalizeLogger = slog.Default()
+		}
+		if errors.Is(err, errZeroPartitionRunNotFullOrg) {
+			finalizeLogger.Error("daily finalize refused: a run of some repositories has no partition",
+				"error", err,
+				"run_id", runID,
+				"organization_id", claim.Run.OrganizationID,
+				"target_day", claim.Run.TargetDay.Format("2006-01-02"),
+				"step", "finalize_zero_partitions_not_full_org",
+			)
+			if releaseErr := releaseFinalize(handler.store, ctx, *claim); releaseErr != nil {
+				finalizeLogger.Error("daily finalize release failed",
+					"error", releaseErr,
+					"run_id", runID,
+					"organization_id", claim.Run.OrganizationID,
+					"target_day", claim.Run.TargetDay.Format("2006-01-02"),
+				)
+			}
+			return permanentWithCause(err, jobruntime.ReasonInvalidState, "step=finalize_zero_partitions_not_full_org")
 		}
 		{
 			finalizeLogger.Error("daily finalize failed",

@@ -6,9 +6,11 @@
 # A split package is never solo (ci/go_race_solo.tsv) or race-excluded, and needs at least `parts` test rows.
 # internal/cigates/testshard: 420-1,070 s under -race as one solo package (race-1-of-12 1,564 s in the READY run of the 12-leg change);
 # its two heaviest tests are 562 and 556 s, so 3 parts put each in its own part.
+# CHAOS-13833 (PLAN-13833-3): internal/cigates/testshard 3 -> 4 parts: its 3 parts summed 879-986 s in the warm main runs 44219536680,
+# 44222203804, 44223422838 and each part leg ran 914-997 s (warm median); 4 parts of ~230 s on 16 legs.
 # CHAOS-13958: internal/api/policy 631-723 s and internal/cigates/scripts 571-768 s under -race (Go quality 44019931820, 44022785905,
 # 44025688889): one package plus a race leg's setup and providersync slice is over 900 s, so 3 parts each (policy: its largest test
 # is 288 s; scripts: 154 s).
 internal/api/policy	3
 internal/cigates/scripts	3
-internal/cigates/testshard	3
+internal/cigates/testshard	4

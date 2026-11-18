@@ -60,8 +60,8 @@ func TestLegScriptSelectsRaceLegsByEvent(t *testing.T) {
 		all = append(all, fmt.Sprintf("test-%d-of-13", k))
 	}
 	noRace := append([]string{}, all...)
-	for k := 1; k <= 13; k++ {
-		all = append(all, fmt.Sprintf("race-%d-of-13", k))
+	for k := 1; k <= 16; k++ {
+		all = append(all, fmt.Sprintf("race-%d-of-16", k))
 	}
 	for _, c := range []struct {
 		event, full string
@@ -427,7 +427,7 @@ func TestLegScriptPlantedDefects(t *testing.T) {
 			wrong := 0
 			for _, e := range [][2]string{{"pull_request", "false"}, {"merge_group", "false"}} {
 				out, _, code := runLegsScript(t, tree, e[0], e[1])
-				hasRace := strings.Contains(out, "race-1-of-13")
+				hasRace := strings.Contains(out, "race-1-of-16")
 				if code != 0 || hasRace != (e[0] == "merge_group") {
 					wrong++
 				}

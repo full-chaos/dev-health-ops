@@ -144,9 +144,9 @@ func guardPredictions(t *testing.T, env []string, count int, weights map[string]
 
 // CHAOS-13958: the serial weighting alone piles package sums on the legs whose wall is one large package, past the budget guard;
 // the race plan caps a leg's row weight (race_leg_weight_cap of ci/check_go.sh, from the guard's constants). The pile-up is the
-// plan at a batch overlap of 3.5 with no apart rows: there, off = a leg over the guard's limit (the red), default = none. The
-// shipped plan (overlap 1.5, ci/go_race_apart.tsv) stays under it either way and must not warn. A package no leg can take under
-// the cap still lands, and the plan says so.
+// plan at a batch overlap of 3.5 with no apart rows at 13 race legs (capRedLegs: the leg count the cap was built for, not the
+// shipped count): there, off = a leg over the guard's limit (the red), default = none. The shipped plan (ci/go_race_apart.tsv,
+// the shipped leg count) stays under it and must not warn. A package no leg can take under the cap still lands, and the plan says so.
 func TestTheRaceLegWeightCapKeepsTheBudgetGuardAndWarnsWhenNoLegFits(t *testing.T) {
 	t.Parallel()
 	_, races, _ := legCounts(t)
@@ -165,14 +165,15 @@ func TestTheRaceLegWeightCapKeepsTheBudgetGuardAndWarnsWhenNoLegFits(t *testing.
 	if err := os.WriteFile(none, []byte("# no rows\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	const capRedLegs = 13
 	pileUp := []string{"GO_RACE_BATCH_OVERLAP=3.5", "GO_RACE_APART=" + none}
-	off, _ := guardPredictions(t, append([]string{"GO_RACE_LEG_WEIGHT_CAP=0"}, pileUp...), races, weights)
+	off, _ := guardPredictions(t, append([]string{"GO_RACE_LEG_WEIGHT_CAP=0"}, pileUp...), capRedLegs, weights)
 	if n, worst := over(off); n == 0 {
-		t.Errorf("with the cap off (overlap 3.5, no apart rows) no race leg is over %.0f s (max %.0f): the cell's red is gone, it would pass without the cap", limit, worst)
+		t.Errorf("with the cap off (overlap 3.5, no apart rows, %d legs) no race leg is over %.0f s (max %.0f): the cell's red is gone, it would pass without the cap", capRedLegs, limit, worst)
 	}
-	capped, _ := guardPredictions(t, pileUp, races, weights)
+	capped, _ := guardPredictions(t, pileUp, capRedLegs, weights)
 	if n, worst := over(capped); n > 0 {
-		t.Errorf("with the default cap (overlap 3.5, no apart rows) %d race leg(s) are over %.0f s (max %.0f)", n, limit, worst)
+		t.Errorf("with the default cap (overlap 3.5, no apart rows, %d legs) %d race leg(s) are over %.0f s (max %.0f)", capRedLegs, n, limit, worst)
 	}
 	def, warns := guardPredictions(t, nil, races, weights)
 	if n, worst := over(def); n > 0 {

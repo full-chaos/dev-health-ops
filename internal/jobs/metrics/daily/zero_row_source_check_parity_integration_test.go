@@ -715,19 +715,36 @@ func (stack parityStack) assertKeptParity(
 	}
 }
 
+// createBaselineTable creates name as the live migration chain leaves it: the baseline DDL, then every chain statement
+// that alters the table.
 func (stack parityStack) createBaselineTable(t *testing.T, ctx context.Context, name string) {
 	t.Helper()
 	baseline, err := chmigrate.LoadBaseline()
 	if err != nil {
 		t.Fatal(err)
 	}
+	chain, err := chmigrate.LoadChain()
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, object := range baseline.Objects {
-		if object.Name == name {
-			if err := stack.conn.Exec(ctx, object.Create); err != nil {
-				t.Fatal(err)
-			}
-			return
+		if object.Name != name {
+			continue
 		}
+		if err := stack.conn.Exec(ctx, object.Create); err != nil {
+			t.Fatal(err)
+		}
+		for _, file := range chain {
+			for _, statement := range chmigrate.SplitStatements(file.SQL) {
+				if !strings.HasPrefix(strings.Join(strings.Fields(statement), " "), "ALTER TABLE "+name+" ") {
+					continue
+				}
+				if err := stack.conn.Exec(ctx, statement); err != nil {
+					t.Fatalf("%s: %v", file.Version, err)
+				}
+			}
+		}
+		return
 	}
 	t.Fatalf("%s is not in the baseline", name)
 }

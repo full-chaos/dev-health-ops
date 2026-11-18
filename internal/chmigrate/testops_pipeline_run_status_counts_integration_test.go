@@ -167,7 +167,7 @@ func TestMigration155AddsNullableCountsWithoutRewritingAPartAndOldRowsReadNull(t
 		t.Fatalf("before 155: %+v rows %v", stored, rowsBefore)
 	}
 
-	result, err := chmigrate.Upgrade(ctx, db, baseline, chain)
+	result, err := chmigrate.Upgrade(ctx, db, baseline, chain[:len(before)+1])
 	if err != nil || len(result.Applied) != 1 || result.Applied[0] != pipelineRunStatusCountsVersion {
 		t.Fatalf("the upgrade = %+v, %v; want %s applied", result, err, pipelineRunStatusCountsVersion)
 	}

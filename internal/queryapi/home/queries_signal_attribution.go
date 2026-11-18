@@ -52,7 +52,8 @@ const signalAttributionSQL = `
     WHERE wct.org_id = {org_id:String}
       AND wi.org_id = {org_id:String}
       AND wct.day >= {start_day:Date}
-      AND wct.day < {end_day:Date}%s
+      AND wct.day < {end_day:Date}
+      AND wct.completed_at IS NOT NULL%s
     GROUP BY a.source, a.confidence
     ORDER BY a.source ASC, a.confidence ASC
     SETTINGS max_execution_time = 30

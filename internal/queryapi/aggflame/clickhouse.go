@@ -302,6 +302,7 @@ func fetchThroughput(ctx context.Context, client QueryClient, orgID string, star
           ON t.work_item_id = wct.work_item_id
         WHERE wct.day >= {start_day:Date}
           AND wct.day < {end_day:Date}
+          AND wct.completed_at IS NOT NULL
           AND wct.org_id = {org_id:String}` + teamFilter + `
         GROUP BY coalesce(nullIf(t.team_id, ''), 'unassigned')
         HAVING items_completed > 0

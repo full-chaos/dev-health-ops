@@ -82,6 +82,19 @@ The section is a weekly operating cadence for AI adoption: adoption mix,
 delivery impact, review pressure, risk drag, governance, and opportunities.
 It does not recompute attribution or inspect raw prompt/session data.
 
+## A read that failed (CHAOS-13977)
+
+Each of the eleven reads of a week fails on its own: the answer still comes back. A metric whose
+value depends on a read that failed has `hasData` false, the value 0 as a placeholder, and
+`degradedReason` `READ_FAILED`; for the prior week the delta carries `hasPriorData` false,
+`priorValue` 0 and `degradedReason` `READ_FAILED`. The other metrics are not touched.
+`ai_opportunity_signals` reads `ai_impact` and `ai_governance`: a failure of either marks it, and
+the count of the other read alone is never served. `mttr_hours` is the incident MTTR, or the
+repository MTTR when the incident MTTR is 0: a failed incident read marks it; a failed repository
+read marks it only when the incident MTTR is 0. A read stopped by a cancelled request is not a
+failed read: no reason is set. Every failure is still logged at WARN with its table key and
+counted in `devhealth_query_api_operating_review_fetch_swallowed_total`.
+
 ## Improved / Worsened / Changed callouts
 
 Computed exactly as in single-team mode: per-metric, comparing the

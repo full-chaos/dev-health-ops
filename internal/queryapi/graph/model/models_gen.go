@@ -1153,6 +1153,8 @@ type OperatingReviewDelta struct {
 	Status     string   `json:"status"`
 	// False = the prior week holds no stored value for the metric (CHAOS-8115); see ``OperatingReviewMetric.hasData``. ``priorValue`` is then a 0 placeholder, ``absolute`` is 0, ``percent`` is null and ``status`` is empty: a client draws "No data" for the prior week and no change (CHAOS-8115, CHAOS-9111).
 	HasPriorData bool `json:"hasPriorData"`
+	// Why the prior week has no value although it may hold one (CHAOS-13977): READ_FAILED = a read of the prior week that the value depends on failed, so ``hasPriorData`` is false and ``priorValue`` is a 0 placeholder, not a missing week. Null = no read the prior value depends on failed. A cancelled request is not a failed read.
+	DegradedReason *string `json:"degradedReason,omitempty"`
 }
 
 type OperatingReviewInput struct {
@@ -1168,7 +1170,7 @@ type OperatingReviewMetric struct {
 	Value float64               `json:"value"`
 	Unit  string                `json:"unit"`
 	Delta *OperatingReviewDelta `json:"delta"`
-	// True = the week holds a stored value for the metric (CHAOS-8115). False = no row of the metric's daily table in the week, only NULL values, or a read that failed: ``value`` is then a 0 placeholder, not a measured zero, and a client draws "No data". True with ``value`` 0 is a stored zero.
+	// True = the week holds a stored value for the metric (CHAOS-8115). False = no row of the metric's daily table in the week, only NULL values, or a read that failed (then ``degradedReason`` is READ_FAILED): ``value`` is then a 0 placeholder, not a measured zero, and a client draws "No data". True with ``value`` 0 is a stored zero.
 	HasData bool `json:"hasData"`
 	// Whether the request's team selection narrows this metric (CHAOS-8516).
 	Scope OperatingReviewMetricScope `json:"scope"`
@@ -1176,6 +1178,8 @@ type OperatingReviewMetric struct {
 	RateState *string `json:"rateState,omitempty"`
 	// What the change failure rate of the week stands on (CHAOS-9630): the evidence basis, the deployments (D), the deployments with a final status (K), their coverage K / D and, when there is no rate, why. Null for every other metric. Served for change failure rate whatever its state.
 	ChangeFailureEvidence *ChangeFailureEvidence `json:"changeFailureEvidence,omitempty"`
+	// Why the week has no value although it may hold one (CHAOS-13977): READ_FAILED = a read of the week that the value depends on failed, so ``hasData`` is false and ``value`` is a 0 placeholder: the metric is unavailable, not a missing week and not a zero. A metric with two reads (mttr_hours, ai_opportunity_signals) is READ_FAILED when a read its value depends on failed, and never serves the value of the other read alone. Null = no read the value depends on failed. A cancelled request is not a failed read.
+	DegradedReason *string `json:"degradedReason,omitempty"`
 }
 
 type OperatingReviewSection struct {

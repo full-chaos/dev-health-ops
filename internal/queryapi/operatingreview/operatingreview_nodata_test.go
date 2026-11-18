@@ -3,8 +3,10 @@ package operatingreview
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/changefailure"
@@ -242,46 +244,242 @@ func TestMissingWeekSuppressesComparativeClaims(t *testing.T) {
 	}
 }
 
+// failedReadLoses is, per read of a week, its call index in the read schedule
+// and the metrics a failure of that read leaves without a value.
+var failedReadLoses = map[string]struct {
+	call int
+	lost []string
+}{
+	"work_items":      {0, []string{"cycle_time_p50_hours", "throughput", "wip_count", "wip_age_p90_hours"}},
+	"state_durations": {1, []string{"state_duration_hours"}},
+	// mttr_hours reads the repository row when the incident MTTR is 0: here the
+	// incidents hold a stored MTTR of 0, so the failed repository read is the
+	// value's source and mttr_hours is lost too.
+	"repo_metrics":  {2, []string{"review_latency_hours", "ownership_concentration", "bus_factor", "revert_rate", "mttr_hours"}},
+	"hotspots":      {3, []string{"hotspot_risk_score"}},
+	"complexity":    {4, []string{"complexity_per_kloc"}},
+	"deployments":   {5, []string{"deployments_count", "deployment_failure_rate"}},
+	"incidents":     {6, []string{"incidents_count", "mttr_hours"}},
+	"investment":    {7, []string{"feature_delivery_work", "operational_work", "maintenance_work", "quality_work", "risk_work"}},
+	"ai_impact":     {8, []string{"ai_adoption_ratio", "ai_cycle_time_delta_hours", "ai_review_amplification", "ai_risk_drag", "ai_opportunity_signals"}},
+	"ai_governance": {9, []string{"ai_governance_coverage", "ai_opportunity_signals"}},
+	// change failure rate has one source: its own counts.
+	"change_failure": {10, []string{"change_failure_rate"}},
+}
+
 // A read that fails is no data for the metrics of that table only, and the
-// answer still comes back.
+// answer still comes back. CHAOS-13977: the metrics of the failed table, and
+// only those, say why (degradedReason READ_FAILED); a failed read of the prior
+// week marks the delta of the same metrics.
 func TestHasData_AFailedReadIsNoDataForItsMetricsOnly(t *testing.T) {
-	for name, tc := range map[string]struct {
-		call int
-		lost []string
-	}{
-		"work_items":      {0, []string{"cycle_time_p50_hours", "throughput", "wip_count", "wip_age_p90_hours"}},
-		"state_durations": {1, []string{"state_duration_hours"}},
-		// mttr_hours falls back to the repository row, so losing it loses mttr_hours only when the
-		// incident read has no value: here incidents hold an MTTR.
-		"repo_metrics":  {2, []string{"review_latency_hours", "ownership_concentration", "bus_factor", "revert_rate"}},
-		"hotspots":      {3, []string{"hotspot_risk_score"}},
-		"complexity":    {4, []string{"complexity_per_kloc"}},
-		"deployments":   {5, []string{"deployments_count", "deployment_failure_rate"}},
-		"incidents":     {6, []string{"incidents_count"}},
-		"investment":    {7, []string{"feature_delivery_work", "operational_work", "maintenance_work", "quality_work", "risk_work"}},
-		"ai_impact":     {8, []string{"ai_adoption_ratio", "ai_cycle_time_delta_hours", "ai_review_amplification", "ai_risk_drag"}},
-		"ai_governance": {9, []string{"ai_governance_coverage"}},
-		// change failure rate has one source: its own counts.
-		"change_failure": {10, []string{"change_failure_rate"}},
-	} {
+	for name, tc := range failedReadLoses {
+		lost := map[string]bool{}
+		for _, key := range tc.lost {
+			lost[key] = true
+		}
 		t.Run(name, func(t *testing.T) {
 			errs := make([]error, 22)
 			errs[tc.call] = errors.New("boom")
 			metrics := resolveWeeks(t, storedZeroWeekScanners(), storedZeroWeekScanners(), errs)
-			lost := map[string]bool{}
-			for _, key := range tc.lost {
-				lost[key] = true
-			}
 			for _, key := range allMetricKeys {
-				if metrics[key].HasData == lost[key] {
-					t.Errorf("%s: hasData = %v after the %s read failed", key, metrics[key].HasData, name)
+				m := metrics[key]
+				if m.HasData == lost[key] {
+					t.Errorf("%s: hasData = %v after the %s read failed", key, m.HasData, name)
 				}
-				if !metrics[key].Delta.HasPriorData {
+				if !m.Delta.HasPriorData {
 					t.Errorf("%s: hasPriorData = false, but the prior week's reads did not fail", key)
+				}
+				if got, want := reasonOf(m.DegradedReason), wantReason(lost[key]); got != want {
+					t.Errorf("%s: degradedReason = %s after the %s read failed, want %s", key, got, name, want)
+				}
+				if got := reasonOf(m.Delta.DegradedReason); got != "null" {
+					t.Errorf("%s: delta.degradedReason = %s, but the prior week's reads did not fail", key, got)
+				}
+				if lost[key] && (m.Value != 0 || m.Delta.Status != "" || m.Delta.Percent != nil || m.Delta.Absolute != 0) {
+					t.Errorf("%s: a failed read serves value %v status %q percent %v absolute %v, want the 0 placeholder and no comparison", key, m.Value, m.Delta.Status, m.Delta.Percent, m.Delta.Absolute)
+				}
+			}
+		})
+		t.Run(name+"/prior week", func(t *testing.T) {
+			errs := make([]error, 22)
+			errs[tc.call+11] = errors.New("boom")
+			metrics := resolveWeeks(t, storedZeroWeekScanners(), storedZeroWeekScanners(), errs)
+			for _, key := range allMetricKeys {
+				m := metrics[key]
+				if m.Delta.HasPriorData == lost[key] {
+					t.Errorf("%s: hasPriorData = %v after the prior %s read failed", key, m.Delta.HasPriorData, name)
+				}
+				if !m.HasData {
+					t.Errorf("%s: hasData = false, but the current week's reads did not fail", key)
+				}
+				if got, want := reasonOf(m.Delta.DegradedReason), wantReason(lost[key]); got != want {
+					t.Errorf("%s: delta.degradedReason = %s after the prior %s read failed, want %s", key, got, name, want)
+				}
+				if got := reasonOf(m.DegradedReason); got != "null" {
+					t.Errorf("%s: degradedReason = %s, but the current week's reads did not fail", key, got)
+				}
+				if lost[key] && (m.Delta.PriorValue != 0 || m.Delta.Status != "" || m.Delta.Percent != nil || m.Delta.Absolute != 0) {
+					t.Errorf("%s: a failed prior read serves priorValue %v status %q percent %v absolute %v, want the 0 placeholder and no comparison", key, m.Delta.PriorValue, m.Delta.Status, m.Delta.Percent, m.Delta.Absolute)
 				}
 			}
 		})
 	}
+}
+
+func reasonOf(v *string) string {
+	if v == nil {
+		return "null"
+	}
+	return *v
+}
+
+func wantReason(failed bool) string {
+	if failed {
+		return "READ_FAILED"
+	}
+	return "null"
+}
+
+// aiSignalWeekScanners is a stored week in which each source of
+// ai_opportunity_signals gives one signal: the AI review amplification is 2.0
+// (at or above 1.5) and the governance coverage is 0.5 (above 0, below 0.8). The
+// value with both reads is 2.
+func aiSignalWeekScanners() []*fakeRowScanner {
+	out := storedZeroWeekScanners()
+	out[8] = &fakeRowScanner{rows: [][]any{{"ai_assisted", float64(5), float64(0), float64(0), float64(5), float64(0), 0.0, 2.0, 0.0, 0.0, 0.0}}}
+	out[9] = &fakeRowScanner{rows: [][]any{{day("2026-08-24"), nil, nil, uint64(10), uint64(5), uint64(5), uint64(5), uint64(5)}}}
+	return out
+}
+
+// CHAOS-13977: ai_opportunity_signals counts signals from two reads. When one
+// read fails, the count of the other read alone is not the metric: it is served
+// with no value and the reason, never as a smaller count.
+func TestAIOpportunitySignals_AFailedSourceGivesNoPartialValue(t *testing.T) {
+	both := resolveWeeks(t, aiSignalWeekScanners(), aiSignalWeekScanners(), nil)["ai_opportunity_signals"]
+	if !both.HasData || both.Value != 2 || both.DegradedReason != nil {
+		t.Fatalf("both reads: value %v hasData %v degradedReason %s, want 2 true null", both.Value, both.HasData, reasonOf(both.DegradedReason))
+	}
+	for _, tc := range []struct {
+		name string
+		call int
+	}{
+		{"ai_impact fails, ai_governance read", 8},
+		{"ai_governance fails, ai_impact read", 9},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			errs := make([]error, 22)
+			errs[tc.call] = errors.New("boom")
+			m := resolveWeeks(t, aiSignalWeekScanners(), aiSignalWeekScanners(), errs)["ai_opportunity_signals"]
+			if m.HasData || m.Value != 0 || reasonOf(m.DegradedReason) != "READ_FAILED" {
+				t.Errorf("value %v hasData %v degradedReason %s, want 0 false READ_FAILED", m.Value, m.HasData, reasonOf(m.DegradedReason))
+			}
+			if m.Delta.Status != "" || m.Delta.Percent != nil || m.Delta.Absolute != 0 || m.Delta.Value != 0 {
+				t.Errorf("delta = value %v status %q percent %v absolute %v, want no comparison", m.Delta.Value, m.Delta.Status, m.Delta.Percent, m.Delta.Absolute)
+			}
+			if !m.Delta.HasPriorData || m.Delta.PriorValue != 2 || m.Delta.DegradedReason != nil {
+				t.Errorf("prior week: priorValue %v hasPriorData %v degradedReason %s, want 2 true null", m.Delta.PriorValue, m.Delta.HasPriorData, reasonOf(m.Delta.DegradedReason))
+			}
+
+			errs = make([]error, 22)
+			errs[tc.call+11] = errors.New("boom")
+			p := resolveWeeks(t, aiSignalWeekScanners(), aiSignalWeekScanners(), errs)["ai_opportunity_signals"]
+			if p.Delta.HasPriorData || p.Delta.PriorValue != 0 || reasonOf(p.Delta.DegradedReason) != "READ_FAILED" {
+				t.Errorf("prior read failed: priorValue %v hasPriorData %v degradedReason %s, want 0 false READ_FAILED", p.Delta.PriorValue, p.Delta.HasPriorData, reasonOf(p.Delta.DegradedReason))
+			}
+			if !p.HasData || p.Value != 2 || p.DegradedReason != nil {
+				t.Errorf("prior read failed: value %v hasData %v degradedReason %s, want 2 true null", p.Value, p.HasData, reasonOf(p.DegradedReason))
+			}
+		})
+	}
+}
+
+// mttrWeekScanners is a stored week whose incident MTTR is incidentMTTR (nil =
+// NULL) and whose repository MTTR is 7.
+func mttrWeekScanners(incidentMTTR any) []*fakeRowScanner {
+	out := storedZeroWeekScanners()
+	out[2] = &fakeRowScanner{rows: [][]any{{uint64(0), 0.0, 0.0, 0.0, uint32(0), 0.0, 7.0, uint64(1)}}}
+	out[6] = &fakeRowScanner{rows: [][]any{{uint64(1), incidentMTTR, uint64(1)}}}
+	return out
+}
+
+// CHAOS-13977: mttr_hours is the incident MTTR, or the repository MTTR when the
+// incident MTTR is 0 (firstNonZero). A failed read marks it only when the value
+// depends on that read: always for the incident read; for the repository read
+// only when the incident MTTR is 0. A read that holds no MTTR is no failure, and
+// its fallback stays the value.
+func TestMTTR_AFailedReadMarksTheMetricOnlyWhenTheValueDependsOnIt(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		incidentMTTR any
+		call         int
+		value        float64
+		hasData      bool
+		reason       string
+	}{
+		{"no failure, incident MTTR", 5.0, -1, 5, true, "null"},
+		{"no failure, incident MTTR NULL: the repository MTTR is the value", nil, -1, 7, true, "null"},
+		{"no failure, incident MTTR 0: the repository MTTR is the value", 0.0, -1, 7, true, "null"},
+		{"repository read fails, incident MTTR 5: the value does not read it", 5.0, 2, 5, true, "null"},
+		{"repository read fails, incident MTTR 0", 0.0, 2, 0, false, "READ_FAILED"},
+		{"repository read fails, incident MTTR NULL", nil, 2, 0, false, "READ_FAILED"},
+		{"incident read fails, repository MTTR 7", 5.0, 6, 0, false, "READ_FAILED"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			errs := make([]error, 22)
+			if tc.call >= 0 {
+				errs[tc.call] = errors.New("boom")
+			}
+			m := resolveWeeks(t, mttrWeekScanners(tc.incidentMTTR), mttrWeekScanners(tc.incidentMTTR), errs)["mttr_hours"]
+			if m.Value != tc.value || m.HasData != tc.hasData || reasonOf(m.DegradedReason) != tc.reason {
+				t.Errorf("value %v hasData %v degradedReason %s, want %v %v %s", m.Value, m.HasData, reasonOf(m.DegradedReason), tc.value, tc.hasData, tc.reason)
+			}
+			if tc.call < 0 {
+				return
+			}
+			errs = make([]error, 22)
+			errs[tc.call+11] = errors.New("boom")
+			p := resolveWeeks(t, mttrWeekScanners(tc.incidentMTTR), mttrWeekScanners(tc.incidentMTTR), errs)["mttr_hours"]
+			if p.Delta.PriorValue != tc.value || p.Delta.HasPriorData != tc.hasData || reasonOf(p.Delta.DegradedReason) != tc.reason {
+				t.Errorf("prior week: priorValue %v hasPriorData %v degradedReason %s, want %v %v %s", p.Delta.PriorValue, p.Delta.HasPriorData, reasonOf(p.Delta.DegradedReason), tc.value, tc.hasData, tc.reason)
+			}
+		})
+	}
+}
+
+// CHAOS-13977: a read stopped by a cancelled request is not a failed read. Its
+// metrics have no data, as before, and carry no reason: the cancel is the
+// caller's, not the store's.
+func TestACancelledReadIsNotAFailedRead(t *testing.T) {
+	week := graphqldate.New(day("2026-08-24"))
+	t.Run("the read returns context.Canceled", func(t *testing.T) {
+		errs := make([]error, 22)
+		errs[8] = fmt.Errorf("operatingreview: ai_impact query: %w", context.Canceled)
+		metrics := resolveWeeks(t, storedZeroWeekScanners(), storedZeroWeekScanners(), errs)
+		for _, key := range allMetricKeys {
+			if metrics[key].DegradedReason != nil || metrics[key].Delta.DegradedReason != nil {
+				t.Errorf("%s: degradedReason %s / delta %s after a cancelled read, want null", key, reasonOf(metrics[key].DegradedReason), reasonOf(metrics[key].Delta.DegradedReason))
+			}
+		}
+		if metrics["ai_adoption_ratio"].HasData {
+			t.Error("ai_adoption_ratio has data after its read was cancelled")
+		}
+	})
+	t.Run("the request context is cancelled", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		errs := make([]error, 22)
+		errs[8] = errors.New("read aborted")
+		client := &fakeClient{responses: append(storedZeroWeekScanners(), storedZeroWeekScanners()...), errs: errs}
+		review, err := Resolve(ctx, client, "org-1", nil, week)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for key, m := range metricsByKey(t, review) {
+			if m.DegradedReason != nil || m.Delta.DegradedReason != nil {
+				t.Errorf("%s: degradedReason %s / delta %s under a cancelled request, want null", key, reasonOf(m.DegradedReason), reasonOf(m.Delta.DegradedReason))
+			}
+		}
+	})
 }
 
 func fp(v float64) *float64 { return &v }
@@ -481,5 +679,115 @@ func TestChangeFailureRateCarriesTheEvidenceOfTheCurrentWeek(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// CHAOS-13977 (Codex r1 P1, the class): a read is complete only when its stream
+// ended without an error and its rows closed without one. Every read of the week
+// that serves its rows and then fails at the stream end or at Close is a failed
+// read: its metrics carry READ_FAILED, the others do not.
+func TestAnIncompleteReadStreamIsAFailedRead(t *testing.T) {
+	lost := errors.New("read: unexpected EOF")
+	for name, tc := range failedReadLoses {
+		lostKeys := map[string]bool{}
+		for _, key := range tc.lost {
+			lostKeys[key] = true
+		}
+		for _, end := range []string{"stream end", "close"} {
+			t.Run(name+"/"+end, func(t *testing.T) {
+				current := storedZeroWeekScanners()
+				if end == "close" {
+					current[tc.call].closeErr = lost
+				} else {
+					current[tc.call].endErr = lost
+				}
+				metrics := resolveWeeks(t, current, storedZeroWeekScanners(), nil)
+				for _, key := range allMetricKeys {
+					m := metrics[key]
+					if m.HasData == lostKeys[key] || reasonOf(m.DegradedReason) != wantReason(lostKeys[key]) {
+						t.Errorf("%s: hasData %v degradedReason %s after a %s failure of the %s read", key, m.HasData, reasonOf(m.DegradedReason), end, name)
+					}
+				}
+			})
+		}
+	}
+}
+
+// sizedWeekScanners is storedZeroWeekScanners with the sizing coverage read of an
+// ISSUE_SIZE investment section (one aggregate row: 1 sized unit of 2) after the
+// investment theme read.
+func sizedWeekScanners() []*fakeRowScanner {
+	week := storedZeroWeekScanners()
+	out := append([]*fakeRowScanner{}, week[:8]...)
+	out = append(out, &fakeRowScanner{rows: [][]any{{uint64(1), uint64(2)}}})
+	return append(out, week[8:]...)
+}
+
+var investmentWorkKeys = []string{"feature_delivery_work", "operational_work", "maintenance_work", "quality_work", "risk_work"}
+
+// CHAOS-13977 (Codex r1 P1): the sizing coverage read of an ISSUE_SIZE section
+// that serves its row and then fails at the stream end or at Close fails the
+// investment read of its week: the five investment metrics carry READ_FAILED for
+// that week, never the values of the theme read.
+func TestSizedInvestment_AnIncompleteCoverageStreamIsAFailedRead(t *testing.T) {
+	lost := errors.New("read: unexpected EOF")
+	resolveSized := func(t *testing.T, current, prior []*fakeRowScanner) map[string]model.OperatingReviewMetric {
+		t.Helper()
+		client := &fakeClient{responses: append(append([]*fakeRowScanner{}, current...), prior...)}
+		review, err := Resolve(WithSizedInvestment(context.Background()), client, "org-1", nil, graphqldate.New(day("2026-08-24")))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if client.calls != 24 {
+			t.Fatalf("Resolve made %d reads, want 24", client.calls)
+		}
+		return metricsByKey(t, review)
+	}
+	clean := resolveSized(t, sizedWeekScanners(), sizedWeekScanners())
+	for _, key := range investmentWorkKeys {
+		if m := clean[key]; !m.HasData || !m.Delta.HasPriorData || m.DegradedReason != nil || m.Delta.DegradedReason != nil {
+			t.Fatalf("%s with a complete coverage stream: hasData %v hasPriorData %v reasons %s/%s, want true true null null", key, m.HasData, m.Delta.HasPriorData, reasonOf(m.DegradedReason), reasonOf(m.Delta.DegradedReason))
+		}
+	}
+	for _, end := range []string{"stream end", "close"} {
+		for _, weeks := range []struct {
+			name           string
+			current, prior bool
+		}{{"current week", true, false}, {"prior week", false, true}, {"both weeks", true, true}} {
+			t.Run(end+"/"+weeks.name, func(t *testing.T) {
+				current, prior := sizedWeekScanners(), sizedWeekScanners()
+				for _, w := range []struct {
+					on   bool
+					week []*fakeRowScanner
+				}{{weeks.current, current}, {weeks.prior, prior}} {
+					if !w.on {
+						continue
+					}
+					if end == "close" {
+						w.week[8].closeErr = lost
+					} else {
+						w.week[8].endErr = lost
+					}
+				}
+				metrics := resolveSized(t, current, prior)
+				for _, key := range investmentWorkKeys {
+					m := metrics[key]
+					if m.HasData == weeks.current || reasonOf(m.DegradedReason) != wantReason(weeks.current) {
+						t.Errorf("%s: hasData %v degradedReason %s, want %v %s", key, m.HasData, reasonOf(m.DegradedReason), !weeks.current, wantReason(weeks.current))
+					}
+					if m.Delta.HasPriorData == weeks.prior || reasonOf(m.Delta.DegradedReason) != wantReason(weeks.prior) {
+						t.Errorf("%s: hasPriorData %v delta.degradedReason %s, want %v %s", key, m.Delta.HasPriorData, reasonOf(m.Delta.DegradedReason), !weeks.prior, wantReason(weeks.prior))
+					}
+				}
+				for _, key := range allMetricKeys {
+					if strings.HasSuffix(key, "_work") {
+						continue
+					}
+					if m := metrics[key]; m.DegradedReason != nil || m.Delta.DegradedReason != nil {
+						t.Errorf("%s carries a reason after the investment sizing read failed", key)
+					}
+				}
+			})
+		}
 	}
 }

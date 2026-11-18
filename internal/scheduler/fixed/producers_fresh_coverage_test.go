@@ -89,6 +89,14 @@ func TestFreshCoverageRuleCells(t *testing.T) {
 				_ = store
 			})
 
+			t.Run("in flight at exactly the bound: still defers (the override needs an older occurrence)", func(t *testing.T) {
+				producer, _ := freshProducer(t, map[string]remaining.FreshCoverageState{testOrgB: remaining.FreshCoverageInFlight})
+				_, err := producer.Produce(context.Background(), &stubTx{}, schedule, at(remainingStageBudget))
+				if !errors.Is(err, ErrOccurrenceDeferred) {
+					t.Fatalf("err = %v, want ErrOccurrenceDeferred", err)
+				}
+			})
+
 			t.Run("in flight past the bound: runs anyway", func(t *testing.T) {
 				producer, store := freshProducer(t, map[string]remaining.FreshCoverageState{testOrgB: remaining.FreshCoverageInFlight})
 				outcome, err := producer.Produce(context.Background(), &stubTx{}, schedule, at(remainingStageBudget+time.Second))

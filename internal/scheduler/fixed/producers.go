@@ -1017,7 +1017,7 @@ func (producer *RemainingMetricsFanoutProducer) startOrganization(
 			case remaining.FreshCoverageCovered:
 				return 0, nil
 			case remaining.FreshCoverageInFlight:
-				if age := occurrence.ObservedAt.Sub(occurrence.ScheduledFor); age < bound {
+				if age := occurrence.ObservedAt.Sub(occurrence.ScheduledFor); age <= bound {
 					slog.WarnContext(ctx, "fixed scheduler: occurrence deferred",
 						"reason", "same_scope_run_in_flight", "family", binding.Family, "schedule_id", occurrence.ScheduleID,
 						"organization_id", organizationID, "occurrence_age", age.Round(time.Second).String(), "bound", bound.String())

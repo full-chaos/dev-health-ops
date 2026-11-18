@@ -31,7 +31,7 @@ func URLError(err error) *url.Error {
 func RetryableTransport(err error) bool {
 	// Every link of every branch is read: a typed-nil or non-matching link must not hide a real dial or timeout in another
 	// branch, whatever the order of a multi-error (CHAOS-8271). An As method's match counts as the parent's errors.As did.
-	for _, link := range boundedChain(err) {
+	for _, link := range boundedChainBounds(err, maxChainDepth, retryChainNodes) {
 		if retryableLink(link) {
 			return true
 		}

@@ -9,6 +9,10 @@ import "reflect"
 const (
 	maxChainDepth = 32
 	maxChainNodes = 64
+	// retryChainNodes widens the walk of RetryableTransport only: a join of many ordinary errors must not push a real dial out of it.
+	retryChainNodes = 1024
+	// maxTimeoutHops bounds the stdlib Timeout delegation followed by safeTimeout, whose cycle check is by identity.
+	maxTimeoutHops = 1 << 16
 )
 
 // boundedChain lists the errors reachable from err by Unwrap (single or multiple), outermost first, at most maxChainNodes of them,
@@ -17,6 +21,11 @@ func boundedChain(err error) []error { return boundedChainTo(err, maxChainDepth)
 
 // boundedChainTo is boundedChain with its own depth bound: ErrorAs reaches as deep as the node bound, every classifier keeps maxChainDepth.
 func boundedChainTo(err error, depthBound int) []error {
+	return boundedChainBounds(err, depthBound, maxChainNodes)
+}
+
+// boundedChainBounds is boundedChain with its own depth and node bounds.
+func boundedChainBounds(err error, depthBound, nodeBound int) []error {
 	if err == nil {
 		return nil
 	}
@@ -26,7 +35,7 @@ func boundedChainTo(err error, depthBound int) []error {
 		depth int
 	}
 	queue := []entry{{err, 0}}
-	for len(queue) > 0 && len(chain) < maxChainNodes {
+	for len(queue) > 0 && len(chain) < nodeBound {
 		current := queue[0]
 		queue = queue[1:]
 		if current.err == nil || current.depth > depthBound || seen(chain, current.err) {

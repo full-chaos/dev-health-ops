@@ -29,6 +29,7 @@ import (
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/drilldown"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
@@ -201,7 +202,7 @@ func newDrilldownPRsGetHandler(reader *drilldown.Reader) http.HandlerFunc {
 			return
 		}
 
-		query := r.URL.Query()
+		query := httpapi.Query(r)
 		scopeType := lastQueryValue(query, "scope_type")
 		if scopeType == "" {
 			scopeType = "org"

@@ -301,8 +301,8 @@ type metricDefinition struct {
 	rule string
 	// pooled is set by withPooledChart, never by the registry: the metric is taken over the raw samples of its runs.
 	pooled *pooledChart
-	// ownersAsOf is set by withRepositoryOwners, never by the registry: the instant the team of a stored row of a table
-	// with no team column is read at (the owner of its repository).
+	// ownersAsOf is set by withRepositoryOwners, never by the registry: the instant the team of a stored row of a
+	// repository-owned table is read at (the owner of its repository).
 	ownersAsOf *time.Time
 }
 
@@ -708,6 +708,11 @@ func buildChartQuery(spec ChartSpec, definition metricDefinition) (string, []any
 		xExpression, xType, temporal = "toDate("+day+")", "Date", true
 	}
 	yExpression := fmt.Sprintf("avg(%s)", spec.Metric)
+	if definition.ownersAsOf != nil {
+		// avg() of no row is NaN, which a total (no GROUP BY) would draw as a point; a team that owns no repository and
+		// a window with no row have no value.
+		yExpression = fmt.Sprintf("avgOrNull(%s)", spec.Metric)
+	}
 	if strings.HasSuffix(spec.Metric, "_count") || definition.Unit == "count" {
 		// sum() of an unsigned integer column is UInt64 in ClickHouse and the
 		// chart read scans y into a float64, which the driver refuses. Cast

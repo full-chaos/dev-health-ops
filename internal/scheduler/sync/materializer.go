@@ -2413,6 +2413,7 @@ SET source_type='account',name=EXCLUDED.name,full_name=EXCLUDED.full_name,is_ena
 	wanted := make([]string, 0, len(repair.datasets))
 	for _, dataset := range repair.datasets {
 		wanted = append(wanted, dataset.Key)
+		// The derived id cannot race on the pkey only because the coordinator tx holds preparePagerDutyRepair's sync_configurations FOR UPDATE (CHAOS-4204).
 		datasetID := uuid.NewSHA1(materializerNamespace, []byte(loaded.input.IntegrationID+":dataset:"+dataset.Key)).String()
 		if _, err := tx.Exec(ctx, `
 INSERT INTO public.integration_datasets (id,org_id,integration_id,dataset_key,is_enabled,options,state_changed_at,state_changed_by)

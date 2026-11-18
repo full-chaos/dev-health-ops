@@ -405,8 +405,9 @@ func TestDailyCoverageReaderKP5(t *testing.T) {
 	for _, row := range rows {
 		got[row.SnapshotID] = true
 	}
-	if got[listed[0]] || !got["legacy-unlisted"] || !got["legacy-only-run"] || len(got) != 3 {
-		t.Errorf("kept snapshots %v, want the slotted one, legacy-unlisted and legacy-only-run (not %s)", got, listed[0])
+	// CHAOS-14146: a legacy coverage row of a run with a slotted coverage row is dropped, listed or not.
+	if got[listed[0]] || got["legacy-unlisted"] || !got["legacy-only-run"] || len(got) != 2 {
+		t.Errorf("kept snapshots %v, want the slotted one and legacy-only-run (not %s, not legacy-unlisted)", got, listed[0])
 	}
 }
 

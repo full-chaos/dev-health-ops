@@ -57,6 +57,22 @@ const (
 	gitlabResult      = `{"coverage_complete":false,"inventory_truncated":true}`
 )
 
+// Results whose only lost reports are closed with a reason (CHAOS-13988): the report_member causes
+// artifact_expired (GitHub deleted the artifact after its retention period), malformed (the member is broken) and
+// unsafe_doctype (a member refused by design).
+// The strings are seeded literally: synccoverage hardcodes the same pairs and does not import providersync.
+const (
+	closedExpiredResult   = `{"reports_complete":false,"incomplete":[{"component":"report_member","cause":"artifact_expired","count":2}]}`
+	closedMalformedResult = `{"reports_complete":false,"incomplete":[{"component":"report_member","cause":"malformed","count":1}]}`
+	closedBothResult      = `{"reports_complete":false,"incomplete":[{"component":"report_member","cause":"malformed","count":1},{"component":"report_member","cause":"artifact_expired","count":3}]}`
+	expiredAndCapResult   = `{"reports_complete":false,"incomplete":[{"component":"report_member","cause":"artifact_expired","count":1},{"component":"run_reports","cause":"per_run_cap","count":1}]}`
+	malformedAndOversized = `{"reports_complete":false,"incomplete":[{"component":"report_member","cause":"malformed","count":1},{"component":"report_member","cause":"artifact_oversized","count":1}]}`
+	unsafeDoctypeResult   = `{"reports_complete":false,"incomplete":[{"component":"report_member","cause":"unsafe_doctype","count":1}]}`
+	unsafeDoctypeAndCap   = `{"reports_complete":false,"incomplete":[{"component":"report_member","cause":"unsafe_doctype","count":1},{"component":"run_reports","cause":"per_run_cap","count":1}]}`
+	aggregateOfPartsOnly  = `{"reports_complete":false,"incomplete":[{"component":"run_reports","cause":"aggregate_of_parts","count":1}]}`
+	emptyIncompleteResult = `{"reports_complete":false,"incomplete":[]}`
+)
+
 type partialUnit struct {
 	dataset, provider, flags, status, result string
 	since, before                            time.Duration
@@ -212,6 +228,111 @@ func TestPartialTestsUnitCoverage(t *testing.T) {
 					t.Fatalf("status = %v failed_ranges = %#v, want healthy", tests["status"], tests["failed_ranges"])
 				}
 			}},
+		{"expired-only unit is covered with reason", `["tests"]`,
+			[]partialUnit{unit("tests", "success", closedExpiredResult, -24*time.Hour, -time.Hour)},
+			func(t *testing.T, tests, overall map[string]any) {
+				wantGaps(t, tests, 0)
+				wantCovered(t, tests, 1)
+				wantClosed(t, tests, "artifact_expired")
+				if tests["status"] == "gaps" || overall["health"] == "gaps" || overall["latest_successful_run_at"] == nil {
+					t.Fatalf("status = %v overall = %#v, want covered and latest advanced", tests["status"], overall)
+				}
+			}},
+		{"malformed-only unit is covered with reason", `["tests"]`,
+			[]partialUnit{unit("tests", "success", closedMalformedResult, -24*time.Hour, -time.Hour)},
+			func(t *testing.T, tests, overall map[string]any) {
+				wantGaps(t, tests, 0)
+				wantCovered(t, tests, 1)
+				wantClosed(t, tests, "malformed")
+			}},
+		{"expired and malformed unit is covered with both reasons", `["tests"]`,
+			[]partialUnit{unit("tests", "success", closedBothResult, -24*time.Hour, -time.Hour)},
+			func(t *testing.T, tests, overall map[string]any) {
+				wantGaps(t, tests, 0)
+				wantCovered(t, tests, 1)
+				wantClosed(t, tests, "artifact_expired", "malformed")
+			}},
+		{"folded cicd+tests expired-only: tests covered with reason", `["cicd","tests"]`,
+			[]partialUnit{{dataset: "cicd", provider: "github", flags: `{"family_dataset_cicd":true,"family_dataset_tests":true}`, status: "success", result: closedExpiredResult, since: -24 * time.Hour, before: -time.Hour}},
+			func(t *testing.T, tests, overall map[string]any) {
+				wantGaps(t, tests, 0)
+				wantCovered(t, tests, 1)
+				wantClosed(t, tests, "artifact_expired")
+			}},
+		{"expired beside per_run_cap stays a gap", `["tests"]`,
+			[]partialUnit{unit("tests", "success", expiredAndCapResult, -24*time.Hour, -time.Hour)},
+			func(t *testing.T, tests, overall map[string]any) {
+				wantGaps(t, tests, 1)
+				wantCovered(t, tests, 0)
+				wantClosed(t, tests)
+				wantNoLatest(t, overall)
+			}},
+		{"malformed beside artifact_oversized stays a gap", `["tests"]`,
+			[]partialUnit{unit("tests", "success", malformedAndOversized, -24*time.Hour, -time.Hour)},
+			func(t *testing.T, tests, overall map[string]any) {
+				wantGaps(t, tests, 1)
+				wantCovered(t, tests, 0)
+				wantClosed(t, tests)
+			}},
+		{"unsafe_doctype only is covered with reason", `["tests"]`,
+			[]partialUnit{unit("tests", "success", unsafeDoctypeResult, -24*time.Hour, -time.Hour)},
+			func(t *testing.T, tests, overall map[string]any) {
+				wantGaps(t, tests, 0)
+				wantCovered(t, tests, 1)
+				wantClosed(t, tests, "unsafe_doctype")
+			}},
+		{"unsafe_doctype beside per_run_cap stays a gap", `["tests"]`,
+			[]partialUnit{unit("tests", "success", unsafeDoctypeAndCap, -24*time.Hour, -time.Hour)},
+			func(t *testing.T, tests, overall map[string]any) {
+				wantGaps(t, tests, 1)
+				wantCovered(t, tests, 0)
+				wantClosed(t, tests)
+				wantNoLatest(t, overall)
+			}},
+		{"aggregate_of_parts only stays a gap", `["tests"]`,
+			[]partialUnit{unit("tests", "success", aggregateOfPartsOnly, -24*time.Hour, -time.Hour)},
+			func(t *testing.T, tests, overall map[string]any) {
+				wantGaps(t, tests, 1)
+				wantCovered(t, tests, 0)
+				wantClosed(t, tests)
+			}},
+		{"failed then expired-only success is covered, failed cleared", `["tests"]`,
+			[]partialUnit{
+				unit("tests", "failed", `{}`, -24*time.Hour, -2*time.Hour),
+				unit("tests", "success", closedExpiredResult, -24*time.Hour, -time.Hour)},
+			func(t *testing.T, tests, overall map[string]any) {
+				wantGaps(t, tests, 0)
+				wantCovered(t, tests, 1)
+				wantClosed(t, tests, "artifact_expired")
+				if got, _ := tests["failed_ranges"].([]any); len(got) != 0 || overall["failed_range_count"] != float64(0) {
+					t.Fatalf("failed_ranges = %#v overall = %#v, want none", tests["failed_ranges"], overall)
+				}
+			}},
+		{"empty incomplete with reports_complete=false stays a gap", `["tests"]`,
+			[]partialUnit{unit("tests", "success", emptyIncompleteResult, -24*time.Hour, -time.Hour)},
+			func(t *testing.T, tests, overall map[string]any) {
+				wantGaps(t, tests, 1)
+				wantCovered(t, tests, 0)
+				wantClosed(t, tests)
+			}},
+		{"expired-only then complete over the window: complete wins", `["tests"]`,
+			[]partialUnit{
+				unit("tests", "success", closedExpiredResult, -24*time.Hour, -time.Hour),
+				unit("tests", "success", completeResult, -24*time.Hour, -time.Hour)},
+			func(t *testing.T, tests, overall map[string]any) {
+				wantGaps(t, tests, 0)
+				wantCovered(t, tests, 1)
+				wantClosed(t, tests)
+			}},
+		{"expired-only then a gap-class partial: once closed, the window stays closed", `["tests"]`,
+			[]partialUnit{
+				unit("tests", "success", closedExpiredResult, -24*time.Hour, -time.Hour),
+				unit("tests", "success", partialCapResult, -24*time.Hour, -time.Hour)},
+			func(t *testing.T, tests, overall map[string]any) {
+				wantGaps(t, tests, 0)
+				wantCovered(t, tests, 1)
+				wantClosed(t, tests, "artifact_expired")
+			}},
 		{"partial then complete re-covers the window", `["tests"]`,
 			[]partialUnit{
 				unit("tests", "success", partialCapResult, -24*time.Hour, -time.Hour),
@@ -291,5 +412,38 @@ func wantNoLatest(t *testing.T, overall map[string]any) {
 	t.Helper()
 	if overall["latest_successful_run_at"] != nil {
 		t.Fatalf("a partial unit must not advance latest_successful_run_at: %#v", overall)
+	}
+}
+
+// wantClosed checks closed_with_reason_ranges: none when no reasons are given, else exactly one range carrying
+// those sorted reasons.
+func wantClosed(t *testing.T, dataset map[string]any, reasons ...string) {
+	t.Helper()
+	raw, present := dataset["closed_with_reason_ranges"]
+	got, ok := raw.([]any)
+	if !present || !ok {
+		t.Fatalf("closed_with_reason_ranges = %#v (present %v), want a list", raw, present)
+	}
+	if len(reasons) == 0 {
+		if len(got) != 0 {
+			t.Fatalf("closed_with_reason_ranges = %#v, want none", got)
+		}
+		return
+	}
+	if len(got) != 1 {
+		t.Fatalf("closed_with_reason_ranges = %#v, want 1", got)
+	}
+	item := got[0].(map[string]any)
+	gotReasons, _ := item["reasons"].([]any)
+	if len(gotReasons) != len(reasons) {
+		t.Fatalf("reasons = %#v, want %v", item["reasons"], reasons)
+	}
+	for index, reason := range reasons {
+		if gotReasons[index] != reason {
+			t.Fatalf("reasons = %#v, want %v", item["reasons"], reasons)
+		}
+	}
+	if sources, _ := item["source_ids"].([]any); len(sources) != 1 || item["since"] == nil || item["before"] == nil {
+		t.Fatalf("closed range = %#v, want since, before and one source", item)
 	}
 }

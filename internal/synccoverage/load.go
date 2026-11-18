@@ -82,7 +82,8 @@ func streamCompactWindows(
 SELECT unit.source_id, unit.dataset_key, unit.processor_flags,
        unit.since_at, unit.before_at, unit.status,
        COALESCE(run.completed_at, run.started_at, run.created_at), unit.id,
-       COALESCE(unit.result->>'reports_complete' = 'false', false)
+       COALESCE(unit.result->>'reports_complete' = 'false', false),
+       (unit.result->'incomplete')::text
 FROM public.sync_run_units AS unit
 JOIN public.sync_runs AS run ON run.id = unit.sync_run_id
 WHERE unit.org_id = $1
@@ -114,7 +115,8 @@ ORDER BY COALESCE(run.completed_at, run.started_at, run.created_at), unit.id`,
 		var since, before, runTime time.Time
 		var unitID uuid.UUID
 		var reportsIncomplete bool
-		if err := rows.Scan(&sourceID, &dataset, &flags, &since, &before, &status, &runTime, &unitID, &reportsIncomplete); err != nil {
+		var incomplete *string
+		if err := rows.Scan(&sourceID, &dataset, &flags, &since, &before, &status, &runTime, &unitID, &reportsIncomplete, &incomplete); err != nil {
 			return nil, nil, rowCount, fmt.Errorf("scan sync coverage unit window: %w", err)
 		}
 		since = maxTime(since.UTC(), truncatedBefore)
@@ -125,6 +127,10 @@ ORDER BY COALESCE(run.completed_at, run.started_at, run.created_at), unit.id`,
 		effectiveKeys, err := effectiveDatasetKeys(dataset, flags)
 		if err != nil {
 			return nil, nil, rowCount, fmt.Errorf("expand sync coverage unit window: %w", err)
+		}
+		var closedReasons []string
+		if status == "success" && reportsIncomplete {
+			closedReasons = closedWithReason(incomplete)
 		}
 		for _, effectiveKey := range effectiveKeys {
 			if !containsString(scope.DatasetKeys, effectiveKey) {
@@ -144,9 +150,21 @@ ORDER BY COALESCE(run.completed_at, run.started_at, run.created_at), unit.id`,
 			// gap and is not the last complete sync. It did run, so it
 			// supersedes an earlier failure of the window: the window reads as
 			// a gap, not as failed.
+			//
+			// CHAOS-13988 "close with reason": when every lost report is
+			// closed with a reason (closedWithReasonCauses) the window is
+			// covered like a complete unit's, and is also recorded with its
+			// reasons. A window once closed stays covered: a later gap-class
+			// unit over it does not reopen it, and only a complete unit
+			// (whatever its order) removes the reason.
 			if status == "success" && reportsIncomplete && effectiveKey == "tests" {
-				state.Failed = subtractIntervals(state.Failed, []coverageInterval{interval})
-				continue
+				if len(closedReasons) == 0 {
+					state.Failed = subtractIntervals(state.Failed, []coverageInterval{interval})
+					continue
+				}
+				state.Closed = append(state.Closed, closedRange{Interval: interval, Reasons: closedReasons})
+			} else if status == "success" {
+				state.Complete = append(state.Complete, interval)
 			}
 			switch status {
 			case "success":
@@ -176,11 +194,50 @@ ORDER BY COALESCE(run.completed_at, run.started_at, run.created_at), unit.id`,
 		for _, item := range state.Failed {
 			windows = append(windows, unitWindow{Since: item.Since, Before: item.Before, SourceID: parts[0], DatasetKey: parts[1], Status: "failed", RunTime: now.Add(time.Microsecond)})
 		}
+		for _, item := range subtractClosedRanges(state.Closed, state.Complete) {
+			windows = append(windows, unitWindow{Since: item.Interval.Since, Before: item.Interval.Before, SourceID: parts[0], DatasetKey: parts[1], Status: statusClosedWithReason, Reasons: item.Reasons})
+		}
 		if len(windows) > maxCompactWindows {
 			return nil, nil, rowCount, fmt.Errorf("sync coverage compact window limit exceeded: %d", maxCompactWindows)
 		}
 	}
 	return windows, latestSuccessful, rowCount, nil
+}
+
+// closedWithReasonCauses are the report_member causes that close a tests
+// window with a reason (chris 2026-11-17, CHAOS-13988): a report GitHub
+// deleted after its retention period (artifact_expired), a broken report
+// member (malformed) or a member refused by design (unsafe_doctype) can never
+// be read by a retry or a backfill, so the window is covered and the reason
+// is shown. The strings mirror the providersync GitHub tests vocabulary; this
+// package does not import providersync.
+var closedWithReasonCauses = map[string]map[string]struct{}{
+	"report_member": {"artifact_expired": {}, "malformed": {}, "unsafe_doctype": {}},
+}
+
+// closedWithReason returns the distinct sorted causes of a unit result's
+// `incomplete` list when EVERY observation in it is a closedWithReasonCauses
+// pair. It returns nil -- the window stays a gap -- for a missing key, JSON
+// null, an undecodable list, an empty list, or any other observation.
+func closedWithReason(incomplete *string) []string {
+	if incomplete == nil {
+		return nil
+	}
+	var observations []struct {
+		Component string `json:"component"`
+		Cause     string `json:"cause"`
+	}
+	if err := json.Unmarshal([]byte(*incomplete), &observations); err != nil || len(observations) == 0 {
+		return nil
+	}
+	reasons := make([]string, 0, len(observations))
+	for _, observation := range observations {
+		if _, ok := closedWithReasonCauses[observation.Component][observation.Cause]; !ok {
+			return nil
+		}
+		reasons = append(reasons, observation.Cause)
+	}
+	return uniqueSorted(reasons)
 }
 
 func loadActivePairs(ctx context.Context, tx pgx.Tx, orgID string, scope effectiveScope) (map[string]struct{}, error) {

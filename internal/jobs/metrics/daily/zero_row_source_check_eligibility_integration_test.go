@@ -45,7 +45,7 @@ func TestClickHouseSourceDataCheckerMatchesDailyEligibilityIntersection(t *testi
     org_id String, repo_id UUID, run_id String DEFAULT toString(generateUUIDv4()), status Nullable(String),
     started_at Nullable(DateTime64(3, 'UTC')), finished_at Nullable(DateTime64(3, 'UTC'))
 ) ENGINE = ReplacingMergeTree ORDER BY (org_id, repo_id, run_id)`,
-		`CREATE TABLE cicd_metrics_daily (org_id String, repo_id UUID, day Date)
+		`CREATE TABLE cicd_metrics_daily (org_id String, repo_id UUID, day Date, computed_at DateTime DEFAULT now(), retracted UInt8 DEFAULT 0)
  ENGINE = MergeTree ORDER BY (org_id, repo_id, day)`,
 		`CREATE TABLE deployments (
     org_id String, repo_id UUID,
@@ -104,7 +104,7 @@ INSERT INTO ci_pipeline_runs (org_id, repo_id, status, started_at, finished_at) 
 		t.Fatal(err)
 	}
 	if err := conn.Exec(ctx, `
-INSERT INTO cicd_metrics_daily VALUES
+INSERT INTO cicd_metrics_daily (org_id, repo_id, day) VALUES
 ('00000000-0000-4000-8000-000000000009', toUUID('00000000-0000-4000-8000-000000000002'), toDate('2026-08-25'))`); err != nil {
 		t.Fatal(err)
 	}

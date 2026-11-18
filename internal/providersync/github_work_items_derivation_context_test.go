@@ -898,7 +898,7 @@ func TestGitHubWorkItemDerivationCausalAuthorNeverOutranksARealLinkedIssueDonor(
 	now := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
 	donorProjectID := "linear-project-chaos"
 	donor := teamattribution.GithubWorkItemDerivationSubject{
-		WorkItemID: "linear:CHAOS-2400", Provider: "linear",
+		WorkItemID: "linear:CHAOS-2400", Provider: "linear", Type: "issue",
 		ProjectID: &donorProjectID, OrgID: "org-acme",
 	}
 	pr := teamattribution.GithubWorkItemDerivationSubject{

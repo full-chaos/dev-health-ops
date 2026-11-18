@@ -19,7 +19,7 @@ import (
 // tie-break problem exists here.
 //
 // Fidelity is documented on internal/jobs/metrics/daily/cicd's package doc
-// comment (the double window filter, the no-FINAL parity, the "zero rows ==
+// comment (the finished-day rule, the no-FINAL parity, the "zero rows ==
 // no record" behaviour) -- this type is a thin ClickHouse-connection adapter
 // over that package's pure Compute kernel and loader/writer.
 type CICDExecutor struct {

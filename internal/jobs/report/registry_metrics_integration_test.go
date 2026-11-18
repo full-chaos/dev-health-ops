@@ -376,7 +376,8 @@ func TestClickHouseQueryAdapterChartsEveryRegistryMetric(t *testing.T) {
 	}
 
 	// The pooled metrics chart the raw runs, not the stored daily value this test seeds: the cells of
-	// testops_pooled_registry_integration_test.go and cicd_pooled_registry_integration_test.go seed their raw rows.
+	// testops_pooled_registry_integration_test.go, cicd_pooled_registry_integration_test.go and
+	// delivery_pooled_registry_integration_test.go seed their raw rows.
 	pooledSkipped := 0
 	for _, shape := range []struct{ chartType, groupBy string }{{"scorecard", ""}, {"line", "day"}, {"line", "week"}, {"line", "month"}, {"line", ""}} {
 		for _, name := range names {

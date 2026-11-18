@@ -13,15 +13,18 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/testopspooled"
 )
 
-// pooledChart is the definition of a TestOps or CI/CD duration or queue chart metric: the value of a bucket is taken over
-// the raw samples of its runs (for TestOps the shared package testopspooled, the very text the TestOps tiles read; for
-// CI/CD the cicd daily writer's rules below), never as the mean of the stored per-repository-day values: a percentile or
-// a mean of a pool cannot be made from the values of its parts.
+// pooledChart is the definition of a pooled chart metric: the value of a bucket is taken over the raw samples of its rows
+// (for TestOps the shared package testopspooled, the very text the TestOps tiles read; for CI/CD the cicd daily writer's
+// rules below; for the deploy time, pull request size and MTTR metrics the writers' rules of delivery_pooled.go), never as
+// the mean of the stored per-repository-day values: a percentile or a mean of a pool cannot be made from the values of
+// its parts.
 type pooledChart struct {
 	table      string
 	source     string
 	expression string
-	asOf       time.Time
+	// bind returns the parameters the source binds beyond the organization and the dates.
+	bind func(asOf time.Time) []any
+	asOf time.Time
 }
 
 // pooledCharts maps a registry metric to its pooled definition. The registry keeps naming the daily table the metric is
@@ -36,10 +39,16 @@ var pooledCharts = map[string]pooledChart{
 	"avg_duration_minutes":       {table: "cicd_metrics_daily", source: cicdRunsSource, expression: cicdDurationMean},
 	"p90_duration_minutes":       {table: "cicd_metrics_daily", source: cicdRunsSource, expression: cicdDurationP90},
 	"avg_queue_minutes":          {table: "cicd_metrics_daily", source: cicdRunsSource, expression: cicdQueueMean},
+	"deploy_time_p50_hours":      {table: "deploy_metrics_daily", source: deploymentsSource, expression: deliveryHoursMedian, bind: bindCanceledStatuses},
+	"pr_size_p50_loc":            {table: "repo_metrics_daily", source: pullRequestSizesSource, expression: deliveryLOCMedian},
+	"pr_size_p90_loc":            {table: "repo_metrics_daily", source: pullRequestSizesSource, expression: deliveryLOCP90},
+	"mttr_hours":                 {table: "repo_metrics_daily", source: bugRepairsSource, expression: deliveryHoursMean},
+	"mttr_p50_hours":             {table: "incident_metrics_daily", source: incidentRepairsSource, expression: deliveryHoursMedian, bind: bindMappingAsOf},
+	"mttr_p90_hours":             {table: "incident_metrics_daily", source: incidentRepairsSource, expression: deliveryHoursP90, bind: bindMappingAsOf},
 }
 
 // The CI/CD pooled source holds the runs and samples of the cicd daily writer (internal/jobs/metrics/daily/cicd): a run
-// counts on the UTC day it starts only when it also finishes that day (the writer's double window), the newest synced
+// counts on the UTC day it finishes (the writer's rule), the newest synced
 // version of a run (FINAL) is the run, a deleted run is no run. A duration sample is finished_at - started_at in minutes
 // when not negative, a queue sample started_at - queued_at in minutes when not negative; the stored duration_seconds and
 // queue_seconds are not read, as the writer does not read them. Only the repository-days the writer computed are read.
@@ -55,15 +64,16 @@ const cicdRunsSource = `(
         org_id,
         repo_id,
         service_id,
-        toDate(started_at) AS day,
+        toDate(finished_at) AS day,
         if(finished_at >= started_at, dateDiff('millisecond', started_at, finished_at) / 60000, NULL) AS ` + cicdRunMinutes + `,
         if(queued_at IS NOT NULL AND started_at >= queued_at, dateDiff('millisecond', queued_at, started_at) / 60000, NULL) AS ` + cicdQueueMinutes + `
     FROM ci_pipeline_runs FINAL
     WHERE org_id = {org_id:String}
-      AND toDate(started_at) >= {start_date:Date} AND toDate(started_at) < {end_date:Date}
-      AND finished_at IS NOT NULL AND toDate(finished_at) = toDate(started_at)
+      AND finished_at IS NOT NULL
+      AND toDate(finished_at) >= {start_date:Date} AND toDate(finished_at) < {end_date:Date}
       AND ` + cicdCountedRunPredicate + `
-      AND (repo_id, toDate(started_at)) IN (
+      AND ` + testops.NotOpenRunSQL + `
+      AND (repo_id, toDate(finished_at)) IN (
           SELECT repo_id, day FROM cicd_metrics_daily
           WHERE org_id = {org_id:String} AND day >= {start_date:Date} AND day < {end_date:Date})
 ) AS cicd_pipeline_runs`
@@ -118,6 +128,9 @@ func buildPooledChartQuery(spec ChartSpec, definition metricDefinition) (string,
 		clickhouse.Named("start_date", start),
 		clickhouse.Named("end_date", endExclusive),
 	}
+	if pooled.bind != nil {
+		parameters = append(parameters, pooled.bind(pooled.asOf)...)
+	}
 
 	xExpression, xType, temporal := "'total'", "String", false
 	join := ""
@@ -139,24 +152,12 @@ func buildPooledChartQuery(spec ChartSpec, definition metricDefinition) (string,
 		case spec.GroupBy == "service":
 			xExpression = "ifNull(service_id, '')"
 		default:
-			// A team is the owner of the repository as of the request, a co-owned repository whole for each owner; the stored
-			// team of a repository-day is not read.
-			fromWhere, bindings := teamscope.OwnershipFromWhere(spec.OrganizationID, pooled.asOf)
-			scope := ""
-			if len(spec.FilterTeams) > 0 {
-				scope = fmt.Sprintf("\n      AND o.team_id IN {%s:Array(String)}", teamscope.BindingTeamIDs)
-				bindings = append(bindings, dhclickhouse.Binding{Name: teamscope.BindingTeamIDs, Value: spec.FilterTeams})
-			}
-			named, err := pooledNamedArguments(bindings)
+			ownerJoin, named, err := repositoryOwnerJoin(spec.OrganizationID, spec.FilterTeams, pooled.asOf)
 			if err != nil {
 				return "", nil, err
 			}
 			parameters = append(parameters, named...)
-			join = fmt.Sprintf(`
-    INNER JOIN (
-        SELECT DISTINCT o.team_id AS owner_team_id, coalesce(toString(o.repo_id), toString(r.id)) AS owned_repo_id
-%s%s
-    ) AS own ON toString(repo_id) = own.owned_repo_id`, fromWhere, scope)
+			join = ownerJoin
 			xExpression = "own.owner_team_id"
 		}
 	}
@@ -165,6 +166,9 @@ func buildPooledChartQuery(spec ChartSpec, definition metricDefinition) (string,
 	}
 	if len(spec.FilterTeams) > 0 && definition.hasDimension("team") && spec.GroupBy != "team" {
 		condition, bindings := teamscope.RepoCondition(spec.OrganizationID, "toString(repo_id)", spec.FilterTeams, pooled.asOf)
+		if condition == "" {
+			condition = "0"
+		}
 		named, err := pooledNamedArguments(bindings)
 		if err != nil {
 			return "", nil, err
@@ -202,6 +206,41 @@ func buildPooledChartQuery(spec ChartSpec, definition metricDefinition) (string,
     HAVING y IS NOT NULL
     ORDER BY %s
     %s`, xExpression, pooled.expression, pooled.source, join, strings.Join(where, " AND\n        "), order, settings), parameters, nil
+}
+
+// repositoryOwnerJoin is the join of a team group: one row per (owner team, owned repository) as of asOf, so a co-owned
+// repository is whole in each owner's bucket and the stored team of a row is not read. A team filter keeps the filtered
+// owners only.
+func repositoryOwnerJoin(orgID string, teams []string, asOf time.Time) (string, []any, error) {
+	fromWhere, bindings := teamscope.OwnershipFromWhere(orgID, asOf)
+	scope := ""
+	if len(teams) > 0 {
+		scope = fmt.Sprintf("\n      AND o.team_id IN {%s:Array(String)}", teamscope.BindingTeamIDs)
+		bindings = append(bindings, dhclickhouse.Binding{Name: teamscope.BindingTeamIDs, Value: teams})
+	}
+	named, err := pooledNamedArguments(bindings)
+	if err != nil {
+		return "", nil, err
+	}
+	return fmt.Sprintf(`
+    INNER JOIN (
+        SELECT DISTINCT o.team_id AS owner_team_id, coalesce(toString(o.repo_id), toString(r.id)) AS owned_repo_id
+%s%s
+    ) AS own ON toString(repo_id) = own.owned_repo_id`, fromWhere, scope), named, nil
+}
+
+// repositoryOwnedTables are the charted daily tables with no team column: the team of a row is the owner of its
+// repository as of the chart run, as for a pooled chart.
+var repositoryOwnedTables = map[string]bool{"cicd_metrics_daily": true}
+
+// withRepositoryOwners returns the definition of a stored-row chart of a repository-owned table with its owners instant
+// asOf, when the metric has the team dimension.
+func withRepositoryOwners(definition metricDefinition, asOf time.Time) metricDefinition {
+	if definition.pooled == nil && repositoryOwnedTables[definition.SourceTable] && definition.hasDimension("team") {
+		at := asOf.UTC()
+		definition.ownersAsOf = &at
+	}
+	return definition
 }
 
 // pooledNamedArguments binds each teamscope binding with a typed clickhouse.Named call, so every bound type is one the

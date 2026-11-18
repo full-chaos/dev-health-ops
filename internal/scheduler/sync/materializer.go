@@ -496,6 +496,10 @@ func (materializer *NativeMaterializer) Materialize(
 	if err != nil {
 		return PlanResult{}, err
 	}
+	loaded.input.WorkItemsReplay, err = loadWorkItemsReplay(ctx, materializer.domainPool, ids.SyncRunID, loaded.input.Datasets)
+	if err != nil {
+		return PlanResult{}, err
+	}
 	loaded.input.ExecutedProof = materializer.executedProof.Load()
 	var units []PlannedUnit
 	if loaded.terminalReason == "" {
@@ -2179,6 +2183,63 @@ func loadTestOpsReplayEnds(
 		return nil, fmt.Errorf("read the committed tests/cicd windows of the occurrence: %w", err)
 	}
 	return ends, nil
+}
+
+const workItemsReplayRunSQL = `SELECT 1 FROM public.sync_runs WHERE id = $1::uuid`
+
+const workItemsReplayUnitsSQL = `
+SELECT source_id::text, before_at
+FROM public.sync_run_units
+WHERE sync_run_id = $1::uuid AND dataset_key = $2`
+
+// loadWorkItemsReplay reads what an earlier attempt of this occurrence committed for the work-items family
+// (CHAOS-14036). It runs only for a plan with a work-item family dataset. nil means a first attempt: no sync run row
+// exists for the occurrence. When the row exists, the result holds the window end of each committed work-items unit
+// by source; a source without an entry has none (it was slowed down). The failure streak moves between attempts and
+// its read can fail on one attempt only, so a replay keeps this decision. A failed read fails this attempt (it is
+// retried); it never plans without knowing what was committed.
+func loadWorkItemsReplay(
+	ctx context.Context, reader testOpsReplayReader, syncRunID string, datasets []PlanDataset,
+) (*WorkItemsReplay, error) {
+	if !slices.ContainsFunc(datasets, func(dataset PlanDataset) bool {
+		return workitemcontract.IsFamilyDataset(dataset.Key)
+	}) {
+		return nil, nil
+	}
+	runRows, err := reader.Query(ctx, workItemsReplayRunSQL, syncRunID)
+	if err != nil {
+		return nil, fmt.Errorf("read the sync run of the occurrence: %w", err)
+	}
+	exists := runRows.Next()
+	runRows.Close()
+	if err := runRows.Err(); err != nil {
+		return nil, fmt.Errorf("read the sync run of the occurrence: %w", err)
+	}
+	if !exists {
+		return nil, nil
+	}
+	rows, err := reader.Query(ctx, workItemsReplayUnitsSQL, syncRunID, canonicalWorkItemsDataset)
+	if err != nil {
+		return nil, fmt.Errorf("read the committed work-items units of the occurrence: %w", err)
+	}
+	defer rows.Close()
+	replay := &WorkItemsReplay{Units: make(map[string]*time.Time)}
+	for rows.Next() {
+		var sourceID string
+		var end *time.Time
+		if err := rows.Scan(&sourceID, &end); err != nil {
+			return nil, fmt.Errorf("scan a committed work-items unit of the occurrence: %w", err)
+		}
+		if end != nil {
+			utc := end.UTC()
+			end = &utc
+		}
+		replay.Units[sourceID] = end
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read the committed work-items units of the occurrence: %w", err)
+	}
+	return replay, nil
 }
 
 // DatasetFullQuery reports whether an integration_datasets row makes its work-items family one unbounded

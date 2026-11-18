@@ -157,20 +157,6 @@ func TestFirstConnectEachAttemptRunsUnderAttemptTimeout(t *testing.T) {
 	}
 }
 
-// freePort returns a loopback port nothing listens on.
-func freePort(t *testing.T) string {
-	t.Helper()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	address := listener.Addr().String()
-	if err := listener.Close(); err != nil {
-		t.Fatal(err)
-	}
-	return address
-}
-
 func shortRealWait(budget time.Duration, out *bytes.Buffer) FirstConnect {
 	return FirstConnect{
 		Budget:         budget,
@@ -208,7 +194,7 @@ func TestFirstConnectRealSocketRefusedThenListening(t *testing.T) {
 // pgx against a closed port: the wait ends at the bound with pgx's refused
 // error, and the lines name neither the password nor the host.
 func TestConnectWaitingRefusedPortFailsAtTheBound(t *testing.T) {
-	address := freePort(t)
+	address := refusedaddr.Addr(t)
 	dsn := "postgres://login:sekret-pw@" + address + "/db?sslmode=disable"
 	var out bytes.Buffer
 	wait, _ := fakeClockWait(10*time.Second, &out)
@@ -227,7 +213,7 @@ func TestConnectWaitingRefusedPortFailsAtTheBound(t *testing.T) {
 }
 
 func TestOpenWaitingRefusedPortReturnsOpensError(t *testing.T) {
-	address := freePort(t)
+	address := refusedaddr.Addr(t)
 	config := DefaultConfig("postgres://login:sekret-pw@" + address + "/db?sslmode=disable")
 	var out bytes.Buffer
 	pool, err := OpenWaiting(context.Background(), config, shortRealWait(300*time.Millisecond, &out))
@@ -240,7 +226,7 @@ func TestOpenWaitingRefusedPortReturnsOpensError(t *testing.T) {
 }
 
 func TestOpenRuntimePoolsWaitingRefusedPortReturnsErrUnavailable(t *testing.T) {
-	address := freePort(t)
+	address := refusedaddr.Addr(t)
 	uri := func(role string) string {
 		return "postgres://" + role + ":sekret-pw@" + address + "/db?sslmode=disable"
 	}

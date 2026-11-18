@@ -84,24 +84,40 @@ type identity struct {
 	displayName string
 }
 
-// identityIndex finds the identity a stored string belongs to.
+// identityIndex finds the identity a stored string belongs to, in two tiers (CHAOS-14032): the strong
+// values an identity is known by (its canonical id, e-mail and provider identity values, each a login or
+// an address that one person holds) and the weak value (its display name, which two people can share and
+// which a login can equal by accident). A stored string is looked up in the strong tier first; the display
+// name is the last fallback, and only when no identity lists the string as a strong value.
+//
+// A value that two identities carry in the same tier names neither: a wrong name is worse than no name.
+// That includes a strong value two identities share (no fallback to the display name then: it fails
+// closed) and a display name two identities share.
 type identityIndex struct {
-	byKey     map[string]*identity
-	ambiguous map[string]struct{}
+	strong          map[string]*identity
+	strongAmbiguous map[string]struct{}
+	weak            map[string]*identity
+	weakAmbiguous   map[string]struct{}
 }
 
-func (index *identityIndex) add(value string, row *identity) {
+func addTo(byKey map[string]*identity, ambiguous map[string]struct{}, value string, row *identity) {
 	key := datahealth.IdentityKey(value)
 	if key == "" {
 		return
 	}
-	if existing, ok := index.byKey[key]; ok && existing.uuid != row.uuid {
-		// Two identities share this value (two people with one display name).
-		// The value then names neither: a wrong name is worse than no name.
-		index.ambiguous[key] = struct{}{}
+	if existing, ok := byKey[key]; ok && existing.uuid != row.uuid {
+		ambiguous[key] = struct{}{}
 		return
 	}
-	index.byKey[key] = row
+	byKey[key] = row
+}
+
+func (index *identityIndex) addStrong(value string, row *identity) {
+	addTo(index.strong, index.strongAmbiguous, value, row)
+}
+
+func (index *identityIndex) addWeak(value string, row *identity) {
+	addTo(index.weak, index.weakAmbiguous, value, row)
 }
 
 func (index *identityIndex) resolve(stored string) *identity {
@@ -109,10 +125,16 @@ func (index *identityIndex) resolve(stored string) *identity {
 	if key == "" {
 		return nil
 	}
-	if _, ok := index.ambiguous[key]; ok {
+	if _, ok := index.strongAmbiguous[key]; ok {
 		return nil
 	}
-	return index.byKey[key]
+	if row, ok := index.strong[key]; ok {
+		return row
+	}
+	if _, ok := index.weakAmbiguous[key]; ok {
+		return nil
+	}
+	return index.weak[key]
 }
 
 func loadIdentityIndex(ctx context.Context, client QueryClient, orgID string) (*identityIndex, error) {
@@ -122,19 +144,23 @@ func loadIdentityIndex(ctx context.Context, client QueryClient, orgID string) (*
 	}
 	defer rows.Close()
 
-	index := &identityIndex{byKey: map[string]*identity{}, ambiguous: map[string]struct{}{}}
+	index := &identityIndex{
+		strong: map[string]*identity{}, strongAmbiguous: map[string]struct{}{},
+		weak: map[string]*identity{}, weakAmbiguous: map[string]struct{}{},
+	}
 	for rows.Next() {
 		var uuid, canonicalID, email, displayName, providerIdentities string
 		if scanErr := rows.Scan(&uuid, &canonicalID, &email, &displayName, &providerIdentities); scanErr != nil {
 			return nil, fmt.Errorf("reviewedges: identities scan: %w", scanErr)
 		}
 		row := &identity{uuid: uuid, displayName: strings.TrimSpace(displayName)}
-		for _, value := range []string{canonicalID, email, displayName} {
-			index.add(value, row)
+		for _, value := range []string{canonicalID, email} {
+			index.addStrong(value, row)
 		}
 		for _, value := range datahealth.ProviderIdentityValues(providerIdentities) {
-			index.add(value, row)
+			index.addStrong(value, row)
 		}
+		index.addWeak(displayName, row)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("reviewedges: identities rows: %w", err)

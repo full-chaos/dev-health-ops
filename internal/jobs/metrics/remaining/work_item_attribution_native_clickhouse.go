@@ -1131,7 +1131,7 @@ func LoadWorkItemLinkTiers(
 	seen := map[string]struct{}{}
 	var sources []string
 	for _, edge := range edges {
-		if !strings.HasPrefix(edge.SourceWorkItemID, "ghpr:") && !strings.HasPrefix(edge.SourceWorkItemID, "gitlab:") {
+		if !teamattribution.IsPullRequestSource(edge.SourceWorkItemID) {
 			continue
 		}
 		if _, dup := seen[edge.SourceWorkItemID]; !dup {

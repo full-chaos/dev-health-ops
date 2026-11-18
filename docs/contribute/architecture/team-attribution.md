@@ -320,7 +320,7 @@ and takes the tier of that pair. (2) Only the edges of the best tier present sta
 takes no donor of a lower tier, and a native donor that gives no usable team (no own row, an inactive team) leaves the
 pull request without a `linked_issue` row, so it goes on to `manual_fallback` (6) and then `unassigned` (7), never to
 a text donor. (3) Among the edges that stay, the lowest donor id, then the relationship, wins. The row's evidence ends
-with `;link_tier=<tier>`. A source that is not a pull or merge request has no link of record: its edges keep the
+with `;link_tier=<tier>`. A source that is not a pull or merge request (`ghpr:<repo>#<n>`, `gitlab:<path>!<n>`; a GitLab issue is `gitlab:<path>#<n>`) has no link of record: its edges keep the
 donor id order and the evidence names no tier. Pinned by `TestLinkedIssueDonorNativeBeforeExplicitText`,
 `TestUnusableNativeDonorGivesNoTextDonorRow`, `TestRecordedTextEdgeBeatsUnrecordedEdge`,
 `TestUnrecordedEdgeIsNeverADonor`, `TestExtkeyEdgeTakesThePairTier`, `TestLinkedIssueEvidenceNamesTheTier` and

@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -1724,8 +1725,25 @@ type LinkedIssueEdge struct {
 	StoredOnly bool
 }
 
-func isPullRequestSource(workItemID string) bool {
-	return strings.HasPrefix(workItemID, "ghpr:") || strings.HasPrefix(workItemID, "gitlab:")
+// IsPullRequestSource reports whether a work item id names a pull request
+// (`ghpr:<repo>#<n>`) or a merge request (`gitlab:<path>!<n>`), the sources
+// that have a link of record; the rule is the work-graph parser's
+// (issueprlinks.ParsePRSource). A GitLab issue is `gitlab:<path>#<n>`: not one.
+func IsPullRequestSource(workItemID string) bool {
+	rest, separator, ok := "", "", false
+	if rest, ok = strings.CutPrefix(workItemID, "ghpr:"); ok {
+		separator = "#"
+	} else if rest, ok = strings.CutPrefix(workItemID, "gitlab:"); ok {
+		separator = "!"
+	} else {
+		return false
+	}
+	index := strings.LastIndex(rest, separator)
+	if index <= 0 {
+		return false
+	}
+	number, err := strconv.ParseUint(rest[index+1:], 10, 32)
+	return err == nil && number > 0
 }
 
 // SelectLinkedIssueEdges orders the donors an item may copy: the one rule of
@@ -1738,7 +1756,7 @@ func isPullRequestSource(workItemID string) bool {
 // of record and keeps that id order.
 func SelectLinkedIssueEdges(source string, edges []LinkedIssueEdge, tiers map[LinkPair]string) []LinkedIssueEdge {
 	selected := make([]LinkedIssueEdge, 0, len(edges))
-	if isPullRequestSource(source) {
+	if IsPullRequestSource(source) {
 		best := 0
 		for _, edge := range edges {
 			edge.Tier = tiers[LinkPair{PullRequest: source, Issue: edge.Target}]

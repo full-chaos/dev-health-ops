@@ -114,3 +114,40 @@ func TestNonPullRequestSourceKeepsIdOrder(t *testing.T) {
 		t.Fatalf("evidence %q, want %q", evidence["jira:ENG-5"], want)
 	}
 }
+
+func TestOnlyPullAndMergeRequestsHaveALinkOfRecord(t *testing.T) {
+	for id, want := range map[string]bool{
+		"ghpr:acme/api#7": true, "gitlab:acme/app!7": true, "gitlab:group/sub/app!12": true,
+		"gitlab:acme/app#7": false, "gh:acme/api#7": false, "ghpr:acme/api!7": false, "gitlab:acme/app!0": false,
+		"ghpr:acme/api#": false, "ghpr:#7": false, "jira:ENG-1": false,
+	} {
+		if got := IsPullRequestSource(id); got != want {
+			t.Errorf("IsPullRequestSource(%q) = %v, want %v", id, got, want)
+		}
+	}
+}
+
+// A GitLab issue (gitlab:path#n) has no link of record: its donors keep id
+// order and never wait on a merge request of the same number.
+func TestAGitLabIssueKeepsIdOrder(t *testing.T) {
+	const issue = "gitlab:acme/app#7"
+	derived := NewGitHubWorkItemDerivationContext(GithubWorkItemDerivationFacts{})
+	derived.LinkTiers = map[LinkPair]string{{PullRequest: issue, Issue: "jira:ZZZ-9"}: "native"}
+	subjects := map[string]GithubWorkItemDerivationSubject{
+		issue:        {WorkItemID: issue, Provider: "gitlab", Type: "issue", OrgID: "org"},
+		"jira:AAA-1": {WorkItemID: "jira:AAA-1", Provider: "jira", OrgID: "org"},
+		"jira:ZZZ-9": {WorkItemID: "jira:ZZZ-9", Provider: "jira", OrgID: "org"},
+	}
+	rows := map[string]GithubWorkItemDerivationDonorRow{"jira:AAA-1": ownRow("team-a"), "jira:ZZZ-9": ownRow("team-b")}
+	edges := []GithubWorkItemDerivationDependencyEdge{
+		{SourceWorkItemID: issue, TargetWorkItemID: "jira:AAA-1", RelationshipType: "relates_to"},
+		{SourceWorkItemID: issue, TargetWorkItemID: "jira:ZZZ-9", RelationshipType: "relates_to"},
+	}
+	index, evidence, _, _ := derived.BuildLinkedIssueIndexFromRows("gitlab", subjects, rows, edges, nil)
+	if got := index[issue][0]; got != "team-a" {
+		t.Fatalf("team %q, want team-a (id order, no link tier)", got)
+	}
+	if want := "linked_issue=jira:AAA-1;dependency_type=relates_to;donor_provider=jira;donor_source=project_ownership"; evidence[issue] != want {
+		t.Fatalf("evidence %q, want %q", evidence[issue], want)
+	}
+}

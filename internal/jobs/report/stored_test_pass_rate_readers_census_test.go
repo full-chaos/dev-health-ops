@@ -33,8 +33,8 @@ type censusPin struct {
 var pinnedTableFiles = map[string]censusPin{
 	"internal/cigates/metricsproof/proof.go": {"bd1b94c430164bb9854ebf62b5ac652edb2fe757d4583dc360ffb41c250109ac",
 		"not a reader: names the table in the proof table map"},
-	"internal/jobs/metrics/daily/benchmarking/clickhouse.go": {"4d5d6c64958847e75810278a4055b5d61911bd3887b495183a9c483940bbdb1a",
-		"reader rule applied: pass_rate is passedCaseRate, over passed_count and failed_count; only rerun_rate pooling changed"},
+	"internal/jobs/metrics/daily/benchmarking/clickhouse.go": {"f78173443e846ae153bd567be64158e07be4abfe5ae30f0798459c8998c52197",
+		"reader rule applied: pass_rate is passedCaseRate, over passed_count and failed_count; only the pipeline rate pooling changed (rerun, success, failure)"},
 	"internal/jobs/metrics/daily/testops_native_clickhouse.go": {"e6617019ada4a46e51bb54525a1b5d53e2daa820a7c681f5a2c2f3c8dc31a451",
 		"writer: the daily writer of the stored rows"},
 	"internal/jobs/metrics/daily/testops_native_executor.go": {"c69063ba6de8a51247967a70c58d46726d4b73ec718cf385ce5636fca04a7b16",

@@ -244,7 +244,10 @@ target), the newest by `last_synced`, and on an equal `last_synced` the lower
 `relationship_type`: a `blocks` row beside a `relates_to` or
 `external_issue_key` row of the same pair, written by one sync, dropped the
 donor. Go keeps the inheritable row on that tie
-(`teamattribution.LatestGitHubWorkItemDerivationDependencies`). No frozen case
+(`teamattribution.LatestGitHubWorkItemDerivationDependencies`). The reason is
+the settled rule of CHAOS-9821: a native link outranks explicit text, and a
+lower tier never displaces a native link. That rule came after the Python
+choice to prefer the blocking type on a tie. No frozen case
 holds such a tie, so the golden file is unchanged. Python is deleted, so its
 answer for a tied input is not recorded;
 `TestOracleDeclaredDivergenceGoKeepsTheInheritableEdgeOnATie` adds a

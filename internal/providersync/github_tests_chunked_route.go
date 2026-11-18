@@ -1868,6 +1868,8 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 					if admitErr != nil {
 						return admitErr
 					}
+					// An artifact whose directory lists no report member is not a report source of the run (CHAOS-13826).
+					reportsExpected -= len(noReportItems)
 					for _, artifact := range noReportItems {
 						if len(cursor.ExcludedArtifactSample) < githubTestsMaxExcludedArtifactSampleRecords {
 							cursor.ExcludedArtifactSample = append(cursor.ExcludedArtifactSample, githubTestsNoReportSampleRecord(artifact))

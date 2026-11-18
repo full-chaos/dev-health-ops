@@ -5,12 +5,14 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -544,6 +546,68 @@ func TestGitHubTestsAdmissionChecksAreBoundedPerRun(t *testing.T) {
 		t.Fatalf("Collect err=%v, want ErrPaginationCapExceeded", err)
 	}
 	assertBounded(t, collect)
+}
+
+// The run's completeness row counts only report sources: an artifact whose
+// directory lists no report member is not expected, a run with only such
+// artifacts emits no row, and a report artifact cut past the cap stays
+// expected (CHAOS-13826 with CHAOS-14000).
+func TestGitHubTestsAdmissionCompletenessCountsReportSources(t *testing.T) {
+	names := func(reports, nonReports int) []string {
+		out := make([]string, 0, reports+nonReports)
+		for index := range reports {
+			out = append(out, fmt.Sprintf("shard-%02d", index))
+		}
+		for index := range nonReports {
+			out = append(out, fmt.Sprintf("race-json-%02d", index))
+		}
+		return out
+	}
+	for _, row := range []struct {
+		name                string
+		reports, nonReports int
+		want                *completenessRow
+	}{
+		{"at cap control", 24, 0, &completenessRow{Complete: true, ReportsExpected: 24, ReportsAdmitted: 24}},
+		{"mixed over cap", 24, 2, &completenessRow{Complete: true, ReportsExpected: 24, ReportsAdmitted: 24}},
+		{"only non-reports over cap", 0, 26, nil},
+		{"report overflow and a non-report", 26, 1, &completenessRow{Complete: false, Reasons: []string{githubTestsPerRunCapCause}, ReportsExpected: 26, ReportsAdmitted: 25}},
+	} {
+		t.Run(row.name, func(t *testing.T) {
+			doer := newGitHubTestsAdmissionDoer(t, "77", githubTestsAdmissionFixture(t, names(row.reports, row.nonReports)...))
+			_, effects := walkGitHubTestsChunksCapturingEffects(t, GitHubTestsRouteHandler{}, nativeTestClaim("github", "cicd"), githubTestsClient(t, fakehttp.Client(doer)), 4)
+			var rows []completenessRow
+			for _, effect := range effects {
+				if effect.Destination != "testops_run_report_completeness" {
+					continue
+				}
+				for _, raw := range effect.Rows {
+					var got completenessRow
+					if err := json.Unmarshal(raw, &got); err != nil {
+						t.Fatal(err)
+					}
+					rows = append(rows, got)
+				}
+			}
+			t.Logf("ROWS %+v", rows)
+			if row.want == nil {
+				if len(rows) != 0 {
+					t.Fatalf("rows=%+v, want none for a run with no report source", rows)
+				}
+				return
+			}
+			if len(rows) != 1 {
+				t.Fatalf("rows=%+v, want one", rows)
+			}
+			got := rows[0]
+			if got.Complete != row.want.Complete || got.ReportsExpected != row.want.ReportsExpected || got.ReportsAdmitted != row.want.ReportsAdmitted ||
+				!slices.Equal(got.Reasons, row.want.Reasons) {
+				t.Fatalf("row complete=%v expected=%d admitted=%d reasons=%v, want complete=%v expected=%d admitted=%d reasons=%v",
+					got.Complete, got.ReportsExpected, got.ReportsAdmitted, got.Reasons,
+					row.want.Complete, row.want.ReportsExpected, row.want.ReportsAdmitted, row.want.Reasons)
+			}
+		})
+	}
 }
 
 // githubTestsWriteResponse writes a doer's response on a server connection.

@@ -1584,7 +1584,7 @@ func (store *fakeStore) DispatchablePartitions(context.Context, string) ([]Parti
 	store.dispatchListCalls++
 	return nil, nil
 }
-func (store *fakeStore) MaterializeScheduledFanout(_ context.Context, _ Run, _ []RepositoryID) (bool, error) {
+func (store *fakeStore) MaterializeScheduledFanout(_ context.Context, _ Run, _ []RepositoryID, _ Publisher) (bool, error) {
 	if store.dispatchListCalls > 0 {
 		store.materializedAfterDispatchList = true
 	}

@@ -287,9 +287,9 @@ func TestRunReportCompletenessReadbackFollowsTheVersion(t *testing.T) {
 		want     EffectInspection
 	}{
 		{"nothing stored", row(false, at), nil, EffectAbsent},
-		{"the same row", row(false, at), ptr(row(false, at)), EffectExact},
-		{"a complete row outranks a later partial write", row(false, at.Add(time.Hour)), ptr(row(true, at)), EffectExact},
-		{"an older partial row is not the written complete row", row(true, at.Add(time.Hour)), ptr(row(false, at)), EffectAbsent},
+		{"the same row", row(false, at), ptrOf(row(false, at)), EffectExact},
+		{"a complete row outranks a later partial write", row(false, at.Add(time.Hour)), ptrOf(row(true, at)), EffectExact},
+		{"an older partial row is not the written complete row", row(true, at.Add(time.Hour)), ptrOf(row(false, at)), EffectAbsent},
 	}
 	for _, cell := range cells {
 		t.Run(cell.name, func(t *testing.T) {
@@ -322,4 +322,4 @@ func TestRunReportCompletenessReadbackFollowsTheVersion(t *testing.T) {
 	}
 }
 
-func ptr[T any](value T) *T { return &value }
+func ptrOf[T any](value T) *T { return &value }

@@ -29,6 +29,7 @@ import (
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
+	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/quadrant"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
@@ -152,7 +153,7 @@ func newQuadrantWorkHandler(client quadrant.QueryClient) http.HandlerFunc {
 			return
 		}
 
-		query := r.URL.Query()
+		query := httpapi.Query(r)
 		var validationErrors []pydanticErrorDetail
 
 		quadrantType := lastQueryValue(query, "type")

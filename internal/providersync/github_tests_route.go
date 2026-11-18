@@ -582,6 +582,15 @@ func (handler GitHubTestsRouteHandler) Collect(
 			for _, observation := range reportIncomplete {
 				incomplete = mergeGitHubTestsIncomplete(incomplete, observation)
 			}
+			// The two size-guard skips carry their durable markers here as on the chunked route, so the watermark advances for
+			// them (CHAOS-14030). malformed/unreadable markers stay dropped: the divergence noted below predates this.
+			for _, marker := range rows.SkippedArtifacts {
+				if githubTestsIsMemberGuardCause(marker.Cause) {
+					skippedArtifacts, skippedOverflow, skippedCauseOverflow, skippedCauseCount = appendGitHubTestsSkippedArtifact(
+						skippedArtifacts, skippedOverflow, skippedCauseOverflow, skippedCauseCount, marker,
+					)
+				}
+			}
 			recordGitHubTestsNonReportMembers(client, claim, rows)
 			client.Metrics.RecordDuplicateTestCase(claim.Provider, claim.Dataset, rows.DuplicateCases)
 			if rows.DuplicateCases > 0 {

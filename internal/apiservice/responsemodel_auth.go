@@ -34,8 +34,6 @@ func init() {
 		"POST /api/v1/auth/saml/{provider_id}/acs":                 true,
 		"POST /api/v1/auth/oidc/{provider_id}/authorize":           true,
 		"POST /api/v1/auth/oidc/{provider_id}/callback":            true,
-		"POST /api/v1/auth/oauth/providers":                        true,
-		"PATCH /api/v1/auth/oauth/providers/{provider_id}":         true,
 		"POST /api/v1/auth/oauth/{provider_id}/authorize":          true,
 		"POST /api/v1/auth/oauth/{provider_id}/callback":           true,
 		"GET /api/v1/auth/oauth/{provider_type}/authorize":         true,

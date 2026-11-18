@@ -63,7 +63,7 @@ func TestVenueOracleProtectedRoutes(t *testing.T) {
 	// are placeholders in the golden on both planes.
 	spec.Scrub = scrubCustomerPushTokens
 	golden := venueoracle.OpenGolden(t, spec)
-	pin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/venue/protected-routes.go-pin.json", SHA256: "644a9366373f9eb530e8a819a63075b7693949248ce98e71c7a9e7f11ad2bfd2", Ruling: protectedRoutesPinRuling})
+	pin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/venue/protected-routes.go-pin.json", SHA256: "be019df7230d32ab1ffe4d699672ff66fd3a09e6839b52a75ac7ed858647b2a8", Ruling: protectedRoutesPinRuling})
 	publicPin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/venue/protected-routes-public.go-pin.json", SHA256: protectedPublicPinSHA256, Ruling: publicRowRuling})
 	sent := &sentReports{}
 	endpoint := httptest.NewServer(sent)
@@ -493,7 +493,7 @@ func compareCHRows(t *testing.T, ctx context.Context, golden *venueoracle.Golden
 // a 409), and team_uuid derives from the id. The rule tests in
 // internal/api/teamsidentity and internal/providersync own that contract;
 // the pin shows any change in Go's answers.
-const teamsRuling = "chris D5685/D5711/D5712/D5714/D5717 (team id carry, CHAOS-8939/CHAOS-8940)"
+const teamsRuling = "chris D5685/D5711/D5712/D5714/D5717 (team id carry, CHAOS-8939/CHAOS-8940); pm 11-18 (pending-changes honours team_id, CHAOS-6426; a bare id with two holders answers 409, so the filtered-to-qa row is pinned at 409)"
 
 // productTelemetryRuling retired the Python reference of ten product-telemetry
 // intake requests: the intake now bounds payload keys and string values, drops

@@ -18,10 +18,12 @@ func sortTestOpsAcceptanceNames(names []string) {
 	})
 }
 
-// testOpsEffects is the single six-destination effect projection shared by
+// testOpsEffects is the single seven-destination effect projection shared by
 // GitHub and GitLab TestOps handlers. Keeping it provider-neutral prevents an
 // alias or provider from silently omitting one destination while still
-// claiming complete shared-row ownership.
+// claiming complete shared-row ownership. Only the emission that carries a
+// run's report rows passes completeness rows; every other emission carries
+// the destination empty.
 func testOpsEffects(
 	pipelines []githubTestsPipelineRow,
 	jobs []githubTestsJobRow,
@@ -29,6 +31,7 @@ func testOpsEffects(
 	suites []testSuiteResultRow,
 	cases []testCaseResultRow,
 	coverage []coverageSnapshotRow,
+	completeness ...testOpsRunReportCompletenessRow,
 ) ([]EffectBatch, error) {
 	values := []struct {
 		destination string
@@ -37,6 +40,7 @@ func testOpsEffects(
 		{"ci_pipeline_runs", pipelines}, {"ci_job_runs", jobs},
 		{"ci_acceptance_checks", acceptance}, {"test_suite_results", suites},
 		{"test_case_results", cases}, {"coverage_snapshots", coverage},
+		{testOpsRunReportCompletenessDestination, completeness},
 	}
 	effects := make([]EffectBatch, 0, len(values))
 	for _, value := range values {
@@ -54,6 +58,8 @@ func testOpsEffects(
 		case []testCaseResultRow:
 			effect, err = effectBatchFromValues(value.destination, EffectReadbackRequired, rows)
 		case []coverageSnapshotRow:
+			effect, err = effectBatchFromValues(value.destination, EffectReadbackRequired, rows)
+		case []testOpsRunReportCompletenessRow:
 			effect, err = effectBatchFromValues(value.destination, EffectReadbackRequired, rows)
 		}
 		if err != nil {

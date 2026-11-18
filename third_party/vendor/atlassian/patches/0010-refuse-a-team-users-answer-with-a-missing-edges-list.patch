@@ -1,0 +1,35 @@
+diff --git a/third_party/vendor/atlassian/atlassian/graph/gen/teamwork_graph_api.go b/third_party/vendor/atlassian/atlassian/graph/gen/teamwork_graph_api.go
+index a7a2afb16..04f578b2f 100644
+--- a/third_party/vendor/atlassian/atlassian/graph/gen/teamwork_graph_api.go
++++ b/third_party/vendor/atlassian/atlassian/graph/gen/teamwork_graph_api.go
+@@ -2,6 +2,7 @@
+ package gen
+ 
+ import (
++	"bytes"
+ 	"encoding/json"
+ 	"errors"
+ )
+@@ -495,9 +496,12 @@ func DecodeTeamUsers(data map[string]any) (*GraphStoreCypherQueryV2Connection, e
+ // modification, patch 0008). The typed decode above reads a missing or null pageInfo, and a missing or null
+ // hasNextPage, as "no next page"; a caller that takes the result for the whole roster would then drop every
+ // member the answer did not carry. A page end counts only when the answer states it.
++// A missing or null edges list is refused too (local modification, patch 0010): the recorded answer of an
++// empty roster carries "edges": [], so an answer with no list is not an empty roster.
+ func checkTeamUsersShape(body []byte) error {
+ 	var shape struct {
+ 		Result *struct {
++			Edges    json.RawMessage `json:"edges"`
+ 			PageInfo *struct {
+ 				HasNextPage *bool `json:"hasNextPage"`
+ 			} `json:"pageInfo"`
+@@ -512,6 +516,9 @@ func checkTeamUsersShape(body []byte) error {
+ 	if shape.Result.PageInfo == nil || shape.Result.PageInfo.HasNextPage == nil {
+ 		return errors.New("missing teamworkGraph_teamUsers.pageInfo.hasNextPage")
+ 	}
++	if trimmed := bytes.TrimSpace(shape.Result.Edges); len(trimmed) == 0 || trimmed[0] != '[' {
++		return errors.New("missing teamworkGraph_teamUsers.edges")
++	}
+ 	return nil
+ }
+ 

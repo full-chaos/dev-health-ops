@@ -139,7 +139,7 @@ func TestAnInactiveDonorNeverHidesAnotherLinkedDonor(t *testing.T) {
 					},
 				})
 				subjects := map[string]GithubWorkItemDerivationSubject{
-					"pr":      {WorkItemID: "pr", Provider: itemProvider, Type: "pr", OrgID: "org"},
+					"pr":      {WorkItemID: "pr", Provider: itemProvider, Type: pullRequestType(itemProvider), OrgID: "org"},
 					"a-donor": {WorkItemID: "a-donor", Provider: donorProvider, OrgID: "org"},
 					"b-donor": {WorkItemID: "b-donor", Provider: donorProvider, OrgID: "org"},
 				}

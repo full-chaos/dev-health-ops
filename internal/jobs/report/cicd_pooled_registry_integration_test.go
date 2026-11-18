@@ -180,64 +180,91 @@ func TestRegistryCicdChartsPoolTheWindowRuns(t *testing.T) {
 	}
 }
 
-// The CI/CD metrics have no team dimension (the registry lists repo and day): as before, a team filter does not narrow
-// the chart and a team group is one 'unscoped' bucket. The rendered report never labels that bucket as a team.
-func TestRegistryCicdTeamIsNotADimension(t *testing.T) {
+// ownAlso adds one more owner row of a repository the catalog already holds (a co-owner, or an owner whose row ended).
+func (e *pooledEnv) ownAlso(org, team, repo, validTo string) {
+	e.t.Helper()
+	var ended any
+	if validTo != "" {
+		ended = validTo
+	}
+	e.exec(`INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES (?, 'github', ?, ?, ?, 'exact', 'inferred', 1, 0, 0, '2025-01-01 00:00:00', ?, '2025-01-01 00:00:00')`,
+		org, team, repo, "acme/"+repo[len(repo)-6:], ended)
+}
+
+// A team of a CI/CD chart is the owner of the repository as of the report run (2026-03-01). Team-1 owns A, team-1 and
+// team-2 co-own B, nobody owns C, and team-3's ownership of A ended before the run. A team filter keeps the filtered teams'
+// repositories (a shared repository once); a team group is one bucket per owner team with a co-owned repository whole in
+// each; an unowned repository is in no team bucket; the organization chart is unchanged. A team that owns no repository
+// has a count of 0 and no duration or queue point, never 0.
+func TestRegistryCicdTeamIsRepositoryOwnership(t *testing.T) {
 	e := startPooledEnv(t)
 	org := e.newOrg()
-	const repoA, repoB = "13885000-0000-4000-8000-0000000000b1", "13885000-0000-4000-8000-0000000000b2"
+	const repoA, repoB, repoC = "13901000-0000-4000-8000-0000000000a1", "13901000-0000-4000-8000-0000000000b1", "13901000-0000-4000-8000-0000000000c1"
 	e.own(org, "team-1", repoA)
-	e.own(org, "team-2", repoB)
+	e.ownAlso(org, "team-3", repoA, "2026-02-01 00:00:00")
+	e.own(org, "team-1", repoB)
+	e.ownAlso(org, "team-2", repoB, "")
 	seedReportCell(e, org, repoA)
 	e.insertCICDRuns(org, repoB,
 		cicdRun{id: "b-1", status: "success", queued: "2026-01-02 02:40:00.000", started: "2026-01-02 03:00:00.000", finished: "2026-01-02 04:40:00.000"},
 		cicdRun{id: "b-2", status: "failure", queued: "2026-01-02 04:40:00.000", started: "2026-01-02 05:00:00.000", finished: "2026-01-02 06:40:00.000"},
 	)
-	e.computeCICD(org, []string{repoA, repoB}, "2026-01-02", "2026-01-03")
-	runsA := minutes(10, 20, 60, 60, 60, 60, 60, 60, 60, 60)
-	queuesA := minutes(1, 3, 10, 10, 10, 10, 10, 10, 10, 10)
-	org12 := cicdWant(append(append([]float64(nil), runsA...), 100, 100), append(append([]float64(nil), queuesA...), 20, 20))
-	perRepo := map[string]map[string]float64{repoA: cicdWant(runsA, queuesA), repoB: cicdWant(minutes(100, 100), minutes(20, 20))}
-	window := cicdSpec{start: "2026-01-01", end: "2026-01-06"}
-	for _, metric := range cicdPooledMetrics {
-		mustEqual(t, metric+" org", pointsOf(e.cicdChart(org, metric, window)), "total", org12[metric])
-		filtered := window
-		filtered.teams = []string{"team-1"}
-		mustEqual(t, metric+" team filter (not a dimension)", pointsOf(e.cicdChart(org, metric, filtered)), "total", org12[metric])
-		grouped := window
-		grouped.groupBy = "team"
-		teams := pointsOf(e.cicdChart(org, metric, grouped))
-		if len(teams) != 1 {
-			t.Errorf("%s by team: %v, want one 'unscoped' bucket", metric, teams)
+	e.insertCICDRuns(org, repoC,
+		cicdRun{id: "c-1", status: "success", queued: "2026-01-03 06:55:00.000", started: "2026-01-03 07:00:00.000", finished: "2026-01-03 07:30:00.000"},
+	)
+	e.computeCICD(org, []string{repoA, repoB, repoC}, "2026-01-02", "2026-01-03")
+	runsA, queuesA := minutes(10, 20, 60, 60, 60, 60, 60, 60, 60, 60), minutes(1, 3, 10, 10, 10, 10, 10, 10, 10, 10)
+	runsB, queuesB := minutes(100, 100), minutes(20, 20)
+	pool := func(runs ...[]float64) []float64 {
+		var all []float64
+		for _, part := range runs {
+			all = append(all, part...)
 		}
-		mustEqual(t, metric+" team group (not a dimension)", teams, "unscoped", org12[metric])
-		grouped.teams = []string{"team-2"}
-		mustEqual(t, metric+" team group and filter", pointsOf(e.cicdChart(org, metric, grouped)), "unscoped", org12[metric])
-		service := window
-		service.groupBy = "service"
-		mustEqual(t, metric+" service group (not a dimension)", pointsOf(e.cicdChart(org, metric, service)), "unscoped", org12[metric])
-		byRepo := window
-		byRepo.groupBy = "repo"
-		repos := pointsOf(e.cicdChart(org, metric, byRepo))
-		for repo, values := range perRepo {
-			mustEqual(t, metric+" by repo", repos, repo, values[metric])
+		return all
+	}
+	want := func(durations, queues []float64) map[string]float64 {
+		values := cicdWant(durations, queues)
+		values["pipelines_count"] = float64(len(durations))
+		return values
+	}
+	all := want(pool(runsA, runsB, minutes(30)), pool(queuesA, queuesB, minutes(5)))
+	teamOne := want(pool(runsA, runsB), pool(queuesA, queuesB))
+	teamTwo := want(runsB, queuesB)
+	window := func(groupBy, chartType string, teams ...string) cicdSpec {
+		return cicdSpec{groupBy: groupBy, chartType: chartType, start: "2026-01-01", end: "2026-01-06", teams: teams}
+	}
+	for _, metric := range append([]string{"pipelines_count"}, cicdPooledMetrics...) {
+		for _, chartType := range []string{"bar", "scorecard"} {
+			mustEqual(t, metric+" "+chartType+" org", pointsOf(e.cicdChart(org, metric, window("", chartType))), "total", all[metric])
+			mustEqual(t, metric+" "+chartType+" team-1", pointsOf(e.cicdChart(org, metric, window("", chartType, "team-1"))), "total", teamOne[metric])
+			mustEqual(t, metric+" "+chartType+" team-2", pointsOf(e.cicdChart(org, metric, window("", chartType, "team-2"))), "total", teamTwo[metric])
+			mustEqual(t, metric+" "+chartType+" team-1 and team-2, B once", pointsOf(e.cicdChart(org, metric, window("", chartType, "team-1", "team-2"))), "total", teamOne[metric])
 		}
-		onlyB := window
-		onlyB.repos = []string{repoB}
-		mustEqual(t, metric+" repo filter", pointsOf(e.cicdChart(org, metric, onlyB)), "total", perRepo[repoB][metric])
+		byTeam := pointsOf(e.cicdChart(org, metric, window("team", "bar")))
+		mustEqual(t, metric+" group team-1", byTeam, "team-1", teamOne[metric])
+		mustEqual(t, metric+" group team-2", byTeam, "team-2", teamTwo[metric])
+		if len(byTeam) != 2 {
+			t.Errorf("%s by team: %v, want the two owner teams only (no ended owner, no unowned repository, no 'unscoped')", metric, byTeam)
+		}
+		filteredGroup := pointsOf(e.cicdChart(org, metric, window("team", "bar", "team-2")))
+		mustEqual(t, metric+" group with filter team-2", filteredGroup, "team-2", teamTwo[metric])
+		if len(filteredGroup) != 1 {
+			t.Errorf("%s by team, filter team-2: %v, want team-2 only", metric, filteredGroup)
+		}
+		mustEqual(t, metric+" service group", pointsOf(e.cicdChart(org, metric, window("service", "bar"))), "unscoped", all[metric])
+		for _, team := range []string{"team-3", "team-none"} {
+			scorecard := pointsOf(e.cicdChart(org, metric, window("", "scorecard", team)))
+			if metric == "pipelines_count" {
+				mustEqual(t, metric+" scorecard of "+team+" (owns no repository): a true 0", scorecard, "total", 0)
+				continue
+			}
+			mustHaveNoPoint(t, metric+" scorecard of "+team+" (owns no repository)", scorecard)
+			mustHaveNoPoint(t, metric+" bar of "+team+" (owns no repository)", pointsOf(e.cicdChart(org, metric, window("", "bar", team))))
+		}
 	}
-	// The render path: the table prints the bucket under the generic x column, the default title is the registry name and
-	// the narrative names no bucket.
-	chart := e.cicdChart(org, "avg_duration_minutes", cicdSpec{groupBy: "team", start: "2026-01-01", end: "2026-01-06"})
-	rendered := renderChart(chart)
-	if !strings.Contains(rendered, "#### Avg Duration Minutes\n") || !strings.Contains(rendered, "| x | y | group |") || !strings.Contains(rendered, "| unscoped |") {
-		t.Errorf("rendered chart:\n%s", rendered)
-	}
-	if strings.Contains(strings.ToLower(rendered), "team") {
-		t.Errorf("the rendered chart presents the unscoped bucket as a team:\n%s", rendered)
-	}
-	if sentence := chartSentence(chart); strings.Contains(sentence, "unscoped") || strings.Contains(strings.ToLower(sentence), "team") {
-		t.Errorf("the narrative names the bucket: %s", sentence)
+	rendered := renderChart(e.cicdChart(org, "avg_duration_minutes", window("team", "bar")))
+	if !strings.Contains(rendered, "| team-1 |") || !strings.Contains(rendered, "| team-2 |") || strings.Contains(rendered, "unscoped") {
+		t.Errorf("rendered team chart:\n%s", rendered)
 	}
 }
 
@@ -289,8 +316,8 @@ func TestRegistryCicdRerunCountsTheNewestAttempt(t *testing.T) {
 	unmerged()
 }
 
-// A run counts on day D only when it starts and finishes on D (the writer's double window): a run across midnight counts
-// on no day, a run still running counts nowhere, and the chart range includes its first and its last day.
+// A run counts on the UTC day it finishes (the writer's rule): a run across midnight counts on the day it ends, a run
+// still running counts nowhere, and the chart range includes its first and its last day.
 func TestRegistryCicdWindowEdges(t *testing.T) {
 	e := startPooledEnv(t)
 	org := e.newOrg()
@@ -306,7 +333,7 @@ func TestRegistryCicdWindowEdges(t *testing.T) {
 	)
 	e.computeCICD(org, []string{repo}, "2026-01-01", "2026-01-02", "2026-01-03", "2026-01-04")
 	last := 3599999.0 / 60000
-	want := cicdWant(minutes(10, last), minutes(1, 2))
+	want := cicdWant(minutes(10, 20, last), minutes(1, 1, 2))
 	stored := e.stored(org, repo)
 	for _, metric := range cicdPooledMetrics {
 		mustEqual(t, metric+" window", pointsOf(e.cicdChart(org, metric, cicdSpec{start: "2026-01-02", end: "2026-01-03"})), "total", want[metric])
@@ -319,8 +346,51 @@ func TestRegistryCicdWindowEdges(t *testing.T) {
 			mustEqual(t, metric+" day", days, day, *row.of(metric))
 		}
 	}
-	if day := stored["2026-01-02"]; day.avg == nil || !near(*day.avg, 10) {
-		t.Errorf("the writer stored %v for 2026-01-02, want only e-first (10 min)", stored)
+	if day := stored["2026-01-02"]; day.avg == nil || !near(*day.avg, 15) {
+		t.Errorf("the writer stored %v for 2026-01-02, want e-first and e-cross-in (15 min)", stored)
+	}
+}
+
+// A run the provider has not finished carries its last update time in finished_at; it counts on no day, in the writer
+// and in the chart.
+func TestRegistryCicdOpenRunsCountOnNoDay(t *testing.T) {
+	e := startPooledEnv(t)
+	org := e.newOrg()
+	const repo = "13900000-0000-4000-8000-0000000000b1"
+	e.insertCICDRuns(org, repo,
+		cicdRun{id: "o-done", status: "success", started: "2026-01-02 10:00:00.000", finished: "2026-01-02 10:30:00.000"},
+		cicdRun{id: "o-running", status: "running", started: "2026-01-02 23:50:00.000", finished: "2026-01-03 00:20:00.000"},
+		cicdRun{id: "o-queued", status: "queued", started: "2026-01-02 23:55:00.000", finished: "2026-01-03 00:25:00.000"},
+	)
+	e.computeCICD(org, []string{repo}, "2026-01-02", "2026-01-03")
+	stored := e.stored(org, repo)
+	if _, ok := stored["2026-01-03"]; ok {
+		t.Fatalf("the writer stored %v, want no 2026-01-03 row (open runs count on no day)", stored)
+	}
+	days := pointsOf(e.cicdChart(org, "avg_duration_minutes", cicdSpec{groupBy: "day", start: "2026-01-02", end: "2026-01-03"}))
+	if _, ok := days["2026-01-03"]; ok {
+		t.Fatalf("chart %v has a 2026-01-03 point, want none", days)
+	}
+}
+
+// A run across UTC midnight counts once, on the day it finishes, in the writer and in the chart.
+func TestRegistryCicdRunAcrossMidnightCountsOnFinishDay(t *testing.T) {
+	e := startPooledEnv(t)
+	org := e.newOrg()
+	const repo = "13900000-0000-4000-8000-0000000000a1"
+	e.insertCICDRuns(org, repo,
+		cicdRun{id: "m-a", status: "success", started: "2026-01-02 10:00:00.000", finished: "2026-01-02 10:30:00.000"},
+		cicdRun{id: "m-b", status: "success", started: "2026-01-02 23:50:00.000", finished: "2026-01-03 00:20:00.000"},
+	)
+	e.computeCICD(org, []string{repo}, "2026-01-02", "2026-01-03")
+	stored := e.stored(org, repo)
+	days := pointsOf(e.cicdChart(org, "avg_duration_minutes", cicdSpec{groupBy: "day", start: "2026-01-02", end: "2026-01-03"}))
+	for _, day := range []string{"2026-01-02", "2026-01-03"} {
+		row, ok := stored[day]
+		if !ok || row.avg == nil || !near(*row.avg, 30) {
+			t.Fatalf("the writer stored %v for %s, want one run of 30 min", stored, day)
+		}
+		mustEqual(t, "avg_duration_minutes day", days, day, 30)
 	}
 }
 

@@ -73,7 +73,7 @@ func writeRESTError(w http.ResponseWriter, r *http.Request, component, orgID str
 	}
 	body, err := pyjson.FromGo(detail)
 	if err != nil {
-		log.Printf("query-api: %s: encode error response failed: org_id=%s request_id=%s err=%v",
+		log.Printf("query-api: %s: encode error response failed: org_id=%s request_id=%s err_type=%T",
 			component, orgID, logSafeRequestID(envelopeRequestID(r)), err)
 		policy.WriteInternal(w)
 		return

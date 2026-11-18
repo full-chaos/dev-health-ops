@@ -314,7 +314,7 @@ stores them. They are never a mean of the stored per-repository-day values.
 | `deploy_time_p50_hours` | median | a deployment: finished at minus started at, in hours |
 | `pr_size_p50_loc` | median | a merged pull request: additions plus deletions |
 | `pr_size_p90_loc` | 90th percentile | a merged pull request, as above |
-| `mttr_hours` | mean | a bug work item: completed at minus started at, in hours |
+| `mttr_hours` | mean | a bug work item: completed at minus started at, in hours; the operating review tile serves this pooled mean, or the pooled incident median when one exists, with the incident mappings read at request time even for a past week |
 | `mttr_p50_hours` | median | an incident: resolved at minus started at, in hours |
 | `mttr_p90_hours` | 90th percentile | an incident, as above |
 
@@ -625,6 +625,10 @@ A Linear or Jira work-items unit names every project it saw by an ensure row in 
 `work_item_user_metrics_daily` keeps one row for each person, work scope and day: its key has no team. A person whose work items of one day belong to more than one team gets one row that sums all the person's items and takes its cycle percentiles over all of them. The team columns of that row name the team with the most of the person's items that day (the lowest team id on a tie).
 
 The counter `dev_health_work_item_user_rows_spanning_teams_total{provider}` counts, for each computed partition, the persons whose row is labelled this way. A rise says that people work across teams in that provider; it is not a fault. The Debug line `work_item_user_metrics_rows` carries the same count with the number of user rows of the partition.
+
+## Person rows: the team column of `user_metrics_daily`
+
+`user_metrics_daily.team_id` is a membership label, NOT team attribution; ownership-based team answers must not read it. The row the finalize step writes for a person holds the person's first team membership on the day, else `unassigned`: the git row is always written with `unassigned`, and the IC finalize step puts the membership team over it. Limit: a person who is a member of several teams gets only the FIRST of them, in the rank order of the attribution (primary first, then the more specific, then the lower priority number, the newer row, the team id); the other teams are not in the column. The rank applies after the teams whose newest row is inactive are left out: the next active membership is taken, else `unassigned`. This is the rule of a live row the finalize step writes; a retraction row (the row of zeros of the stale-key rule) carries the `team_id` stored on the row it retracts. Limit: a person's other repository rows of the same day keep the label of their last write until that repository's partition recomputes; the column is a label, never team attribution. A team answer takes its team from repository or project ownership (for a per-person table, through `repo_id` and the owner shares), never from this column.
 
 ## Refused manual sync triggers
 

@@ -88,6 +88,7 @@ func TestGitHubTestsChunkCursorWorstCaseStaysWithinBudget(t *testing.T) {
 	for _, cause := range []string{
 		githubTestsArtifactOversizedCause, githubTestsArtifactUnavailableCause,
 		githubTestsUnreadableArchiveCause, githubTestsMalformedCause, githubTestsUnreadableCause, githubTestsUnsafeDoctypeCause, githubTestsArtifactExpiredCause,
+		githubTestsCompressionRatioCause, githubTestsArchiveEntryCapCause,
 	} {
 		causeOverflow[cause] = true
 	}
@@ -97,6 +98,7 @@ func TestGitHubTestsChunkCursorWorstCaseStaysWithinBudget(t *testing.T) {
 	for _, cause := range []string{
 		githubTestsArtifactOversizedCause, githubTestsArtifactUnavailableCause,
 		githubTestsUnreadableArchiveCause, githubTestsMalformedCause, githubTestsUnreadableCause, githubTestsUnsafeDoctypeCause, githubTestsArtifactExpiredCause,
+		githubTestsCompressionRatioCause, githubTestsArchiveEntryCapCause,
 	} {
 		causeCount[cause] = 999999999
 	}
@@ -148,6 +150,10 @@ func TestGitHubTestsChunkCursorWorstCaseStaysWithinBudget(t *testing.T) {
 	// bytes). githubTestsMaxSkippedArtifactRecords went 8 -> 6 to pay for them, so the worst case keeps well over 150 bytes under the
 	// hard 4 KiB bound. Lead ruling: the canary is lowered once, for both causes; the next vocabulary entry must shrink a sample
 	// instead of lowering this again.
+	//
+	// CHAOS-14030: report_member gained compression_ratio and archive_entry_cap (two pairs plus two entries in each per-cause map).
+	// githubTestsMaxSkippedArtifactRecords went 6 -> 5 to pay for them: one fewer per-artifact skip record is kept, while the
+	// per-cause counts stay exact. The canary stays 150.
 	const wantMargin = 150
 	if remaining := maxChunkCursorBytes - len(encoded); remaining < wantMargin {
 		t.Fatalf(

@@ -52,6 +52,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
+	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/categorize"
 	"github.com/full-chaos/dev-health-ops/internal/llmbudget"
 	"github.com/full-chaos/dev-health-ops/internal/llmorgsettings"
@@ -453,11 +454,11 @@ func newInvestmentExplainWorkHandler(
 			return
 		}
 
-		llmProvider := lastQueryValue(r.URL.Query(), "llm_provider")
+		llmProvider := lastQueryValue(httpapi.Query(r), "llm_provider")
 		if llmProvider == "" {
 			llmProvider = "auto"
 		}
-		forceRefresh, _ := strconv.ParseBool(lastQueryValue(r.URL.Query(), "force_refresh"))
+		forceRefresh, _ := strconv.ParseBool(lastQueryValue(httpapi.Query(r), "force_refresh"))
 
 		opts, buildErr := buildExplainOptions(r.Context(), reader, org, reqBody, llmProvider, forceRefresh)
 		if buildErr != nil {

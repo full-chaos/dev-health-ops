@@ -129,13 +129,8 @@ func (fence *transportFence) commit(ctx context.Context, tx pgx.Tx) (commitOutco
 	if fence == nil {
 		return commitOutcome{committed: true}, tx.Commit(ctx)
 	}
-	snapshot := commitSnapshot{found: true}
-	err := tx.QueryRow(ctx, commitSnapshotSQL, fence.args.OutboxID(), fence.args.SyncRunID(), fence.args.OrganizationID(), fence.kind).
-		Scan(&snapshot.status, &snapshot.dispatchedTransport, &snapshot.dispatchedGeneration, &snapshot.attempts,
-			&snapshot.unclaimed, &snapshot.routeTransport, &snapshot.routeGeneration, &snapshot.routePaused)
-	if errors.Is(err, pgx.ErrNoRows) {
-		snapshot = commitSnapshot{}
-	} else if err != nil {
+	snapshot, err := readCommitSnapshot(ctx, tx, fence.args, fence.kind)
+	if err != nil {
 		return commitOutcome{}, fence.unavailable
 	}
 	commit, reason := decideCommit(snapshot, fence.args.RouteGeneration(), fence.args.Attempt())
@@ -146,6 +141,23 @@ func (fence *transportFence) commit(ctx context.Context, tx pgx.Tx) (commitOutco
 		return commitOutcome{}, fence.unavailable
 	}
 	return commitOutcome{committed: true}, nil
+}
+
+// readCommitSnapshot runs commitSnapshotSQL for one delivery: it locks the outbox row and returns the images
+// decideCommit judges. A missing row is the zero snapshot (found false, nothing locked); any other error, 55P03
+// included, is returned as it is.
+func readCommitSnapshot(ctx context.Context, tx pgx.Tx, args Args, kind string) (commitSnapshot, error) {
+	snapshot := commitSnapshot{found: true}
+	err := tx.QueryRow(ctx, commitSnapshotSQL, args.OutboxID(), args.SyncRunID(), args.OrganizationID(), kind).
+		Scan(&snapshot.status, &snapshot.dispatchedTransport, &snapshot.dispatchedGeneration, &snapshot.attempts,
+			&snapshot.unclaimed, &snapshot.routeTransport, &snapshot.routeGeneration, &snapshot.routePaused)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return commitSnapshot{}, nil
+	}
+	if err != nil {
+		return commitSnapshot{}, err
+	}
+	return snapshot, nil
 }
 
 // postCommitLogs holds log lines that state a write of the pass: they are

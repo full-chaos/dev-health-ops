@@ -2086,7 +2086,7 @@ func (rows githubTestsReportRows) withoutMemberGuardSkips() githubTestsReportRow
 
 // withoutReplayedMemberGuardSkips takes out the size-guard skips of causes whose marker for (runID, artifactID) is already in
 // recorded: a re-anchored walk read the same artifact again (CHAOS-14030). The other skips are left as they are.
-func (rows githubTestsReportRows) withoutReplayedMemberGuardSkips(recorded []GitHubTestsSkippedArtifact, runID, artifactID string) githubTestsReportRows {
+func (rows githubTestsReportRows) withoutReplayedMemberGuardSkips(recorded []GitHubTestsSkippedArtifact, runID, artifactID string) (githubTestsReportRows, []string) {
 	replayed := map[string]bool{}
 	for _, cause := range []string{githubTestsCompressionRatioCause, githubTestsArchiveEntryCapCause} {
 		if githubTestsSkippedMarkerRecorded(recorded, runID, artifactID, cause) {
@@ -2094,12 +2094,14 @@ func (rows githubTestsReportRows) withoutReplayedMemberGuardSkips(recorded []Git
 		}
 	}
 	if len(replayed) == 0 {
-		return rows
+		return rows, nil
 	}
+	var dropped []string
 	issues := make([]githubTestsReportIssue, 0, len(rows.issues))
 	for _, issue := range rows.issues {
 		if replayed[issue.evidence.Cause] {
 			rows.Skipped -= issue.evidence.Count
+			dropped = append(dropped, issue.evidence.Cause)
 			continue
 		}
 		issues = append(issues, issue)
@@ -2112,5 +2114,5 @@ func (rows githubTestsReportRows) withoutReplayedMemberGuardSkips(recorded []Git
 		}
 	}
 	rows.SkippedArtifacts = markers
-	return rows
+	return rows, dropped
 }

@@ -1897,6 +1897,8 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 					// not fit is skipped whole with a marker and the walk goes on, so the order GitHub lists the artifacts in never
 					// decides which one survives. Each cause is recorded once per run, a marker once per skipped artifact.
 					var parsedReports []githubTestsParsedReport
+					// Guard skips of a replayed artifact are not counted again in the unit, but they are still this run's losses.
+					var replayedRunLosses []string
 					heldRows := 0
 					reportRowsTruncated := false
 					skipReportOverBound := func(artifact githubTestsArtifactPayload) {
@@ -2132,7 +2134,9 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 						// A resumed walk can re-anchor and read this artifact again. The size-guard skips are deterministic, so a (run,
 						// artifact, cause) already in the marker sample is a replay: its contribution is dropped, not counted twice
 						// (CHAOS-14030).
-						rows = rows.withoutReplayedMemberGuardSkips(cursor.SkippedArtifacts, pipeline.RunID, string(artifact.ID))
+						var replayedGuard []string
+						rows, replayedGuard = rows.withoutReplayedMemberGuardSkips(cursor.SkippedArtifacts, pipeline.RunID, string(artifact.ID))
+						replayedRunLosses = append(replayedRunLosses, replayedGuard...)
 						reportIncomplete, optional := rows.optionalIncomplete()
 						if !optional {
 							return fmt.Errorf("%w: reports skipped=%d: unsafe archive bounds", ErrGitHubTestsIncomplete, rows.Skipped)
@@ -2177,7 +2181,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 						// Hold the parsed rows until the run is decided; an artifact that would take the held rows past
 						// githubTestsMaxHeldReportRowsPerRun is skipped whole before it is held.
 						held := githubTestsParsedReport{ID: artifact.ID, Name: artifact.Name, Suites: rows.Suites, Cases: rows.Cases, Coverage: rows.Coverage, Reports: rows.ReportsRead}
-						if held.Reports == 0 && len(rows.SkippedArtifacts) == 0 && len(reportIncomplete) == 0 {
+						if held.Reports == 0 && len(rows.SkippedArtifacts) == 0 && len(reportIncomplete) == 0 && len(replayedGuard) == 0 {
 							nonReportArchives++ // read whole and held no report: not a report source of the run (CHAOS-13826)
 						}
 						if heldRows+held.rows() > githubTestsMaxHeldReportRowsPerRun {
@@ -2240,8 +2244,14 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 						coverage = append(coverage, parsedReports[index].Coverage...)
 					}
 					// One verdict row per run, after its last emission's rows are decided (CHAOS-13826).
+					lossAfter := githubTestsTakeRunLossCounts(cursor)
+					for _, cause := range replayedRunLosses {
+						if lossAfter.skipped[cause] <= lossBefore.skipped[cause] {
+							lossAfter.skipped[cause] = lossBefore.skipped[cause] + 1
+						}
+					}
 					completeness = githubTestsRunReportCompleteness(
-						pipeline, run, lossBefore, githubTestsTakeRunLossCounts(cursor),
+						pipeline, run, lossBefore, lossAfter,
 						reportsExpected-nonReportArchives, len(expiredItems), githubTestsAdmittedReports(parsedReports, plan.Admitted), normalizedAt,
 					)
 				}

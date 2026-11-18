@@ -4,8 +4,10 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -304,5 +306,113 @@ func TestGitHubTestsTrimmedPreLedgerSampleKeepsItsProvenCount(t *testing.T) {
 	cursor.SkippedArtifactCauseCount = map[string]int{githubTestsArtifactOversizedCause: 40}
 	if got := normalizeLegacyGitHubTestsSkippedArtifacts(cursor).SkippedArtifactCauseCount[githubTestsArtifactOversizedCause]; got != 40 {
 		t.Fatalf("ledger=%d, want the greater existing 40", got)
+	}
+}
+
+// CHAOS-14030 round 2, P1: a re-anchored walk reads the artifact again. The unit counts do not take the guard skip twice, but the
+// run's verdict row must still carry its loss: the replay row must equal the first (a complete replay row with a higher version
+// would outrank the partial one in TestOps).
+func TestGitHubTestsReanchorKeepsRunVerdictLoss(t *testing.T) {
+	type verdict struct {
+		Complete        bool     `json:"complete"`
+		Reasons         []string `json:"reasons"`
+		ReportsExpected int64    `json:"reports_expected"`
+		ReportsAdmitted int64    `json:"reports_admitted"`
+	}
+	verdicts := func(t *testing.T, batch CompleteRouteBatch) []verdict {
+		t.Helper()
+		var rows []verdict
+		for _, effect := range batch.Effects {
+			if effect.Destination != testOpsRunReportCompletenessDestination {
+				continue
+			}
+			for _, raw := range effect.Rows {
+				var row verdict
+				if err := json.Unmarshal(raw, &row); err != nil {
+					t.Fatal(err)
+				}
+				rows = append(rows, row)
+			}
+		}
+		return rows
+	}
+	cells := []struct {
+		name   string
+		doer   func(t *testing.T) *githubTestsCorruptArtifactDoer
+		reason string
+	}{
+		{"compression_ratio/healthy_sibling", func(t *testing.T) *githubTestsCorruptArtifactDoer {
+			return &githubTestsCorruptArtifactDoer{t: t, artifacts: 1, corrupt: map[int]bool{},
+				extraMembers: map[string]string{"bomb.xml": silentSkipJUnit + strings.Repeat(" ", 256<<10)}}
+		}, githubTestsCompressionRatioCause},
+		{"archive_entry_cap/healthy_sibling", func(t *testing.T) *githubTestsCorruptArtifactDoer {
+			return &githubTestsCorruptArtifactDoer{t: t, artifacts: 1, corrupt: map[int]bool{}, archive: silentSkipArchives(t)[githubTestsArchiveEntryCapCause]}
+		}, githubTestsArchiveEntryCapCause},
+		{"compression_ratio/only_source", func(t *testing.T) *githubTestsCorruptArtifactDoer {
+			return &githubTestsCorruptArtifactDoer{t: t, artifacts: 1, corrupt: map[int]bool{},
+				archive: silentSkipZip(t, []silentSkipMember{{"bomb.xml", silentSkipJUnit + strings.Repeat(" ", 256<<10)}})}
+		}, githubTestsCompressionRatioCause},
+		{"archive_entry_cap/only_source", func(t *testing.T) *githubTestsCorruptArtifactDoer {
+			members := make([]silentSkipMember, 0, githubTestsMaxArchiveEntries+1)
+			for i := 0; i < githubTestsMaxArchiveEntries; i++ {
+				members = append(members, silentSkipMember{fmt.Sprintf("n%04d.txt", i), "x"})
+			}
+			members = append(members, silentSkipMember{"tail.xml", silentSkipJUnit})
+			return &githubTestsCorruptArtifactDoer{t: t, artifacts: 1, corrupt: map[int]bool{}, archive: silentSkipZip(t, members)}
+		}, githubTestsArchiveEntryCapCause},
+		{"control_no_guard_skip", func(t *testing.T) *githubTestsCorruptArtifactDoer {
+			return &githubTestsCorruptArtifactDoer{t: t, artifacts: 1, corrupt: map[int]bool{}}
+		}, ""},
+	}
+	for _, cell := range cells {
+		t.Run(cell.name, func(t *testing.T) {
+			doer := cell.doer(t)
+			client := githubTestsClient(t, fakehttp.Client(doer))
+			claim := nativeTestClaim("github", "cicd")
+			now := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
+			stop := errors.New("stop after the run's verdict")
+			var first []verdict
+			var checkpoint githubTestsChunkCursor
+			err := GitHubTestsRouteHandler{}.CollectChunks(context.Background(), claim, providerfoundation.Credential{}, client, now, "",
+				func(emission ChunkRouteEmission) error {
+					if rows := verdicts(t, emission.Batch); len(rows) > 0 {
+						first = rows
+						cursor, decodeErr := decodeGitHubTestsChunkCursor(emission.CursorAfter)
+						if decodeErr != nil {
+							t.Fatal(decodeErr)
+						}
+						checkpoint = cursor
+						return stop
+					}
+					return nil
+				})
+			if !errors.Is(err, stop) || len(first) != 1 {
+				t.Fatalf("err=%v first=%+v, want one verdict row from the first read", err, first)
+			}
+			if cell.reason != "" && (first[0].Complete || !slices.Equal(first[0].Reasons, []string{cell.reason})) {
+				t.Fatalf("first verdict=%+v, want partial with %s", first[0], cell.reason)
+			}
+			checkpoint.Phase, checkpoint.Index = "artifacts", 0
+			checkpoint.NextURL = ""
+			encoded, encodeErr := encodeGitHubTestsChunkCursor(checkpoint)
+			if encodeErr != nil {
+				t.Fatal(encodeErr)
+			}
+			var replay []verdict
+			resumeErr := GitHubTestsRouteHandler{}.CollectChunks(context.Background(), claim, providerfoundation.Credential{}, client, now, encoded,
+				func(emission ChunkRouteEmission) error {
+					replay = append(replay, verdicts(t, emission.Batch)...)
+					return nil
+				})
+			if resumeErr != nil {
+				t.Fatal(resumeErr)
+			}
+			if doer.archiveRequests < 2 {
+				t.Fatalf("archive downloads=%d: the artifact was not read again", doer.archiveRequests)
+			}
+			if len(replay) != 1 || !reflect.DeepEqual(replay[0], first[0]) {
+				t.Fatalf("replay verdict=%+v, want it equal to the first %+v", replay, first[0])
+			}
+		})
 	}
 }

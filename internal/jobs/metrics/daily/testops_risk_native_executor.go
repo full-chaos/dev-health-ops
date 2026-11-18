@@ -7,8 +7,10 @@ import (
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/testops"
+	"github.com/full-chaos/dev-health-ops/internal/teamkeytables"
 )
 
 // TestopsRiskExecutor is the NATIVE implementation of the testops_risk
@@ -178,7 +180,60 @@ func (executor *TestopsRiskExecutor) ComputeFamily(
 		// earlier one already landed rows must not read as a full refusal.
 		return wrapTestopsRiskPartialWrite(written, err)
 	}
-	return written, nil
+	retired, err := retireTestopsRiskDays(ctx, executor.conn, run.OrganizationID, day, repoIDs, computedAt,
+		releaseConfidence, qualityDrag, pipelineStability)
+	if err != nil {
+		return wrapTestopsRiskPartialWrite(written+retired, err)
+	}
+	return written + retired, nil
+}
+
+// retireTestopsRiskDays applies the stale-key rule (stale_team_keys.go) to the three tables after the family wrote
+// its rows: a repository of the partition whose stored row of the day is live and that the compute gave no row for
+// that table now gets a row that retires the key, so the day reads as absent, never 0. A repository with no stored
+// row gets nothing: missing stays missing. Each table is decided alone, since one compute can produce a row for one
+// table and none for another. The marker carries computedAt, the snapshot of the compute (taken before its reads):
+// a key whose stored row is not older than it was written by a newer or equal compute and is left alone.
+func retireTestopsRiskDays(
+	ctx context.Context, conn staleKeyConn, organizationID string, day time.Time, repoIDs []uuid.UUID, computedAt time.Time,
+	releaseConfidence []testopsReleaseConfidenceRow, qualityDrag []testopsQualityDragRow,
+	pipelineStability []testopsPipelineStabilityRow,
+) (int, error) {
+	repositories := make([][]string, 0, len(repoIDs))
+	for _, repoID := range repoIDs {
+		repositories = append(repositories, []string{repoID.String()})
+	}
+	scope := newStaleKeyScope(repositories...)
+	var confidenceKeys, dragKeys, stabilityKeys []staleKey
+	for _, row := range releaseConfidence {
+		confidenceKeys = append(confidenceKeys, staleKey{row.RepoID.String()})
+	}
+	for _, row := range qualityDrag {
+		dragKeys = append(dragKeys, staleKey{row.RepoID.String()})
+	}
+	for _, row := range pipelineStability {
+		stabilityKeys = append(stabilityKeys, staleKey{row.RepoID.String()})
+	}
+	retired := 0
+	count, err := supersedeStaleTeamKeys(ctx, conn, teamkeytables.TestopsReleaseConfidence, organizationID, day, scope,
+		confidenceKeys, computedAt)
+	retired += count
+	if err != nil {
+		return retired, fmt.Errorf("retire stale testops_release_confidence days: %w", err)
+	}
+	count, err = supersedeStaleTeamKeys(ctx, conn, teamkeytables.TestopsQualityDrag, organizationID, day, scope,
+		dragKeys, computedAt)
+	retired += count
+	if err != nil {
+		return retired, fmt.Errorf("retire stale testops_quality_drag days: %w", err)
+	}
+	count, err = supersedeStaleTeamKeys(ctx, conn, teamkeytables.TestopsPipelineStability, organizationID, day, scope,
+		stabilityKeys, computedAt)
+	retired += count
+	if err != nil {
+		return retired, fmt.Errorf("retire stale testops_pipeline_stability days: %w", err)
+	}
+	return retired, nil
 }
 
 // wrapTestopsRiskPartialWrite mirrors the sibling wrap helpers' exact

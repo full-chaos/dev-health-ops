@@ -61,12 +61,6 @@ func TestSourceDataCheckerAsksPipelineStabilityOnlyForADayWithACompletedRun(t *t
 ) ENGINE = MergeTree ORDER BY (org_id, repo_id)`,
 		`CREATE TABLE deploy_metrics_daily (org_id String, repo_id UUID, day Date)
  ENGINE = MergeTree ORDER BY (org_id, repo_id, day)`,
-		`CREATE TABLE testops_release_confidence (org_id String, repo_id UUID, day Date)
- ENGINE = MergeTree ORDER BY (org_id, repo_id, day)`,
-		`CREATE TABLE testops_pipeline_stability (org_id String, repo_id UUID, day Date)
- ENGINE = MergeTree ORDER BY (org_id, repo_id, day)`,
-		`CREATE TABLE testops_quality_drag (org_id String, repo_id UUID, day Date)
- ENGINE = MergeTree ORDER BY (org_id, repo_id, day)`,
 		`CREATE TABLE incident_metrics_daily (org_id String, repo_id UUID, day Date)
  ENGINE = MergeTree ORDER BY (org_id, repo_id, day)`,
 		`CREATE TABLE operational_incidents (
@@ -88,7 +82,7 @@ func TestSourceDataCheckerAsksPipelineStabilityOnlyForADayWithACompletedRun(t *t
 			t.Fatal(err)
 		}
 	}
-	chschema.CreateTables(ctx, t, conn, "test_suite_results")
+	chschema.CreateTables(ctx, t, conn, "test_suite_results", "testops_release_confidence", "testops_pipeline_stability", "testops_quality_drag")
 
 	const (
 		orgID         = "00000000-0000-4000-8000-000000000009"
@@ -104,7 +98,7 @@ func TestSourceDataCheckerAsksPipelineStabilityOnlyForADayWithACompletedRun(t *t
 	}
 	output := func(table, repo string) {
 		t.Helper()
-		if err := conn.Exec(ctx, `INSERT INTO `+table+` VALUES (?, toUUID(?), toDate('2026-11-14'))`, orgID, repo); err != nil {
+		if err := conn.Exec(ctx, `INSERT INTO `+table+` (org_id, repo_id, day) VALUES (?, toUUID(?), toDate('2026-11-14'))`, orgID, repo); err != nil {
 			t.Fatal(err)
 		}
 	}

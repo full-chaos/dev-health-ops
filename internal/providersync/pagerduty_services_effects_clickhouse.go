@@ -19,6 +19,8 @@ const (
 	pagerDutyServicesLegacyBaseColumns    = "org_id,provider,provider_instance_id,source_entity_type,external_id,source_version_at,id,source_id,source_url,source_event_at,source_event_id,observed_at,last_synced,raw_status,raw_severity,raw_priority,normalized_status,normalized_severity,normalized_priority,relationship_provenance,relationship_confidence"
 	pagerDutyServicesLegacyServiceColumns = pagerDutyServicesLegacyBaseColumns + ",name,description,service_type,owning_team_id,escalation_policy_id,is_deleted,deleted_at"
 	pagerDutyServicesLegacyMappingColumns = pagerDutyServicesLegacyBaseColumns + ",service_id,repo_id,repo_full_name,repo_provider,mapping_kind,rule_id,valid_from,valid_to,is_active"
+
+	pagerDutyLegacyHeuristicMappingSource = "bounded_service_repository_heuristic"
 )
 
 // PagerDutyServicesClickHouseEffects owns only the two destinations produced
@@ -218,7 +220,7 @@ func validatePagerDutyServiceMappingRows(
 
 func pagerDutyMappingSourceValid(value string) bool {
 	switch pagerDutyServiceMappingSource(value) {
-	case pagerDutyMappingAdmin, pagerDutyMappingMetadata, pagerDutyMappingCompass, pagerDutyMappingHeuristic:
+	case pagerDutyMappingAdmin, pagerDutyMappingMetadata, pagerDutyMappingCompass:
 		return true
 	default:
 		return false
@@ -580,9 +582,13 @@ func (sink PagerDutyServicesClickHouseEffects) loadActiveMappings(
 	if err != nil {
 		return nil, err
 	}
+	// Stored legacy heuristic rows are read-only: no snapshot of this writer
+	// carries them, so they are kept out of tombstoning and inspection.
 	rows, err := sink.Conn.Query(ctx, contract.activeQuery(pagerDutyServicesLegacyMappingColumns, "operational_service_repository_mappings",
-		"org_id = ? AND provider = ? AND provider_instance_id = ?", "is_active = 1"),
-		claim.OrgID, claim.Provider, providerInstance)
+		"org_id = ? AND provider = ? AND provider_instance_id = ?",
+		"is_active = 1 AND source_entity_type != ? AND ifNull(relationship_provenance, '') != ?"),
+		claim.OrgID, claim.Provider, providerInstance,
+		pagerDutyLegacyHeuristicMappingSource, pagerDutyLegacyHeuristicMappingSource)
 	if err != nil {
 		return nil, err
 	}

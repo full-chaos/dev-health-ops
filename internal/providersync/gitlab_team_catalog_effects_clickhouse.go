@@ -215,18 +215,6 @@ func (sink GitLabTeamCatalogClickHouseEffects) writeTeams(ctx context.Context, c
 	for _, row := range rows {
 		teamIDs = append(teamIDs, row.ID)
 	}
-	// CHAOS-4321/CHAOS-4446: batched, one round trip for every touched team,
-	// shared with every native provider's teams writer (Linear included) so
-	// the carry-forward logic lives in exactly one place. Every row needs
-	// its manual_members merged in so
-	// a read failure here fails closed for the WHOLE batch -- there is no
-	// subset of rows this read is unnecessary for.
-	existingManualMembers, err := PreserveExistingTeamManualMembers(ctx, sink.Conn, claim.OrgID, teamIDs)
-	if err != nil {
-		// Fail closed: a read failure must never fall through to writing an
-		// unconfirmed manual_members reset.
-		return err
-	}
 	createdAt, err := teamcreated.Carry(ctx, sink.Conn, claim.OrgID, teamIDs)
 	if err != nil {
 		return err
@@ -243,18 +231,17 @@ func (sink GitLabTeamCatalogClickHouseEffects) writeTeams(ctx context.Context, c
 		if err != nil {
 			return ErrInvalidConfiguration
 		}
-		manualMembers := existingManualMembers[row.ID]
-		if manualMembers == nil {
-			manualMembers = []string{}
-		}
 		tally.Add(stored, row.ID, row.ProviderTeamID)
 		writes = append(writes, teamprovider.Write{
 			Values: []any{
-				row.ID, teamUUID, row.Name, row.Description, manualMembers, row.ProjectKeys, row.RepoPatterns,
+				row.ID, teamUUID, row.Name, row.Description, []string{}, row.ProjectKeys, row.RepoPatterns,
 				row.IsActive, row.UpdatedAt, row.OrgID, row.Provider, row.NativeTeamKey, row.ParentTeamID,
 				teamcreated.For(createdAt, row.ID, row.UpdatedAt),
 			},
 			ProviderTeamID: row.ProviderTeamID, ProviderName: row.ProviderName, Gone: teamprovider.GoneCleared,
+			// CHAOS-4321/CHAOS-4446: a catalog never edits the admin roster;
+			// Insert keeps it from teams FINAL inside the insert statement.
+			Roster: teamprovider.RosterKept,
 		})
 	}
 	if err := sink.Lease.Assert(ctx); err != nil {

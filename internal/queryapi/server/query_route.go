@@ -3758,8 +3758,90 @@ const registeredCapacityForecastsDocument = `query CapacityForecasts($orgId: Str
 //
 // The `backlogState` and `backlogAsOfDay` selections (after `backlogSize`) and the `grainCount` selection of
 // estimateCoverage (CHAOS-8167, CHAOS-8172) are NOT from the web file until the web change that selects them lands;
-// they are in the form urql prints. The web's real wire text wins over this one if they differ.
+// they are in the form urql prints. The web's real wire text wins over this one if they differ. The `degradedReason`
+// selection (after `backlogAsOfDay`, CHAOS-14142) is in the same state: the previous text is
+// registeredThroughputForecastV2Document.
 const registeredThroughputForecastDocument = `query ThroughputForecast($orgId: String!, $input: ThroughputForecastInput!) {
+  throughputForecast(orgId: $orgId, input: $input) {
+    forecastId
+    computedAt
+    teamId
+    workScopeId
+    backlogSize
+    backlogState
+    backlogAsOfDay
+    degradedReason
+    historyWeeks
+    p50Weeks
+    p75Weeks
+    p90Weeks
+    insufficientHistory
+    rollingWindows {
+      windowWeeks
+      meanWeeklyThroughput
+      sampleCount
+      insufficientHistory
+      __typename
+    }
+    primaryRisk {
+      kind
+      score
+      label
+      value
+      threshold
+      active
+      __typename
+    }
+    wipCongestion {
+      kind
+      score
+      label
+      value
+      threshold
+      active
+      __typename
+    }
+    staleWip {
+      p50AgeHours
+      p90AgeHours
+      __typename
+    }
+    estimateCoverage {
+      ratio
+      estimatedCount
+      unestimatedCount
+      backlogSize
+      grainCount
+      __typename
+    }
+    reviewBottleneck {
+      kind
+      score
+      label
+      value
+      threshold
+      active
+      __typename
+    }
+    incidentLoad {
+      kind
+      score
+      label
+      value
+      threshold
+      active
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredThroughputForecastV2Document is the text throughputForecast accepted BEFORE it asked for the nullable
+// degradedReason (CHAOS-14142): the text CHAOS-8167 and CHAOS-8172 registered. It stays a legacy text (see
+// legacyDigestsByOperation) so a web build still sending it keeps working while the new web rolls out; it reads the
+// same answer less the one field. The operation's ONE current document is registeredThroughputForecastDocument.
+// Wire form, same provenance: testdata/wire_form/throughputForecast.v2.graphql.
+const registeredThroughputForecastV2Document = `query ThroughputForecast($orgId: String!, $input: ThroughputForecastInput!) {
   throughputForecast(orgId: $orgId, input: $input) {
     forecastId
     computedAt
@@ -4470,6 +4552,53 @@ const registeredTestopsTestWindowV1Document = `query TestOpsTestWindow($orgId: S
 // `testopsRisk` operation, the exact wire-form text a real web client
 // sends (testdata/wire_capture/testopsrisk_captured.graphql).
 const registeredTestopsRiskDocument = `query TestOpsRisk($orgId: String!, $input: TestOpsRiskInput!) {
+  testopsRisk(orgId: $orgId, input: $input) {
+    releaseConfidence
+    qualityDragHours
+    pipelineStability
+    timeseries {
+      date
+      riskScore
+      __typename
+    }
+    qualityDragBreakdown {
+      category
+      hours
+      __typename
+    }
+    qualityDragPartial
+    quadrantData {
+      id
+      name
+      pipelineSuccessRate
+      testPassRate
+      __typename
+    }
+    confidenceSpark {
+      ts
+      value
+      __typename
+    }
+    confidenceDelta
+    dragSpark {
+      ts
+      value
+      __typename
+    }
+    dragDelta
+    stabilitySpark {
+      ts
+      value
+      __typename
+    }
+    stabilityDelta
+    __typename
+  }
+}`
+
+// registeredTestopsRiskV2Document is the text testopsRisk accepted BEFORE it selected qualityDragPartial. It stays a legacy text
+// (see legacyDigestsByOperation), so a web build still sending it keeps working while the new web rolls out.
+const registeredTestopsRiskV2Document = `query TestOpsRisk($orgId: String!, $input: TestOpsRiskInput!) {
   testopsRisk(orgId: $orgId, input: $input) {
     releaseConfidence
     qualityDragHours
@@ -7401,7 +7530,7 @@ var legacyDigestsByOperation = map[string][]string{
 	"testOpsCoverage":               {digestHex(registeredTestOpsCoverageV1Document), digestHex(registeredTestOpsCoverageV2Document)},
 	"testopsJobFailures":            {digestHex(registeredTestopsJobFailuresV1Document)},
 	"testopsTestWindow":             {digestHex(registeredTestopsTestWindowV1Document)},
-	"testopsRisk":                   {digestHex(registeredTestopsRiskV1Document)},
+	"testopsRisk":                   {digestHex(registeredTestopsRiskV1Document), digestHex(registeredTestopsRiskV2Document)},
 	"dataHealthIdentity":            {digestHex(registeredDataHealthIdentityV1Document)},
 	"aiGovernanceSummary":           {digestHex(registeredAiGovernanceSummaryV1Document)},
 	"aiAttributionOverview":         {digestHex(registeredAiAttributionOverviewV1Document)},
@@ -7422,7 +7551,7 @@ var legacyDigestsByOperation = map[string][]string{
 	"investmentBreakdownTeam":       {digestHex(registeredInvestmentBreakdownTeamV1Document)},
 	"investmentBreakdownRepository": {digestHex(registeredInvestmentBreakdownRepositoryV1Document)},
 	"teamWorkItemBreakdown":         {digestHex(registeredTeamWorkItemBreakdownV1Document)},
-	"throughputForecast":            {digestHex(registeredThroughputForecastV1Document)},
+	"throughputForecast":            {digestHex(registeredThroughputForecastV1Document), digestHex(registeredThroughputForecastV2Document)},
 }
 
 // buildOperationByDigest is the reverse index digest -> operation over every accepted text: each operation's

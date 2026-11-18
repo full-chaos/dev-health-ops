@@ -55,9 +55,11 @@ type fenceTx struct {
 }
 
 type fenceServer struct {
-	delivered      int64
-	finishedUnit   bool
-	wakeAfterGuard string
+	delivered           int64
+	finishedUnit        bool
+	wakeAfterGuard      string
+	redeliverAfterGuard bool
+	guardDone           bool
 
 	committed fenceState
 	tx        *fenceTx
@@ -154,7 +156,52 @@ func (s *fenceServer) Exec(_ context.Context, sql string, args ...any) (pgconn.C
 	return pgconn.NewCommandTag("INSERT 0 1"), nil
 }
 
+// afterGuard runs the competing writer once, right after the pass's start guard.
+func (s *fenceServer) afterGuard() error {
+	if s.guardDone {
+		return nil
+	}
+	s.guardDone = true
+	if s.wakeAfterGuard != "" && !syncrunrollup.WakeDispatch(context.Background(), s, fenceRun, time.Now(), s.wakeAfterGuard) {
+		return fmt.Errorf("fixture wake did not report an armed outbox")
+	}
+	if s.redeliverAfterGuard {
+		// The relay claimed and redelivered the row: the next attempt, dispatched to the same route.
+		s.committed.outbox.attempts++
+		s.trace = append(s.trace, "redelivery")
+	}
+	return nil
+}
+
+// referenceRow answers readTransportReference (the Dispatch start guard and its
+// commit-time diagnosis) from the row the statement sees.
+func (s *fenceServer) referenceRow(backend *pgproto3.Backend, sql string) error {
+	if !strings.Contains(sql, fenceOutbox) || !strings.Contains(sql, fenceRun) || !strings.Contains(sql, fenceOrg) ||
+		!strings.Contains(sql, "outbox.attempts") {
+		return fmt.Errorf("reference statement lost its identity or attempt columns: %s", sql)
+	}
+	row := s.outboxRow()
+	status, transport, generation := row.status, row.transport, strconv.FormatInt(row.generation, 10)
+	if status == "dispatched(feature_disabled)" {
+		status = "dispatched"
+	}
+	if transport == "" {
+		transport, generation = "<NULL>", "<NULL>"
+	}
+	fenceRows(backend, []uint32{25, 20, 16, 16, 25, 25, 20, 20}, []string{row.routeTransport, strconv.FormatInt(row.routeGeneration, 10), "f",
+		"t", status, transport, generation, strconv.FormatInt(row.attempts, 10)})
+	if !s.guardDone {
+		s.trace = append(s.trace, "guard-read")
+		return s.afterGuard()
+	}
+	s.trace = append(s.trace, "diagnosis-read")
+	return nil
+}
+
 func (s *fenceServer) fenceQuery(backend *pgproto3.Backend, sql string) (bool, error) {
+	if strings.HasPrefix(sql, "SELECT route.transport, route.generation, route.paused, outbox.found,") {
+		return true, s.referenceRow(backend, sql)
+	}
 	if !strings.Contains(sql, "public.sync_dispatch_outbox AS outbox") {
 		return false, nil
 	}
@@ -170,8 +217,8 @@ func (s *fenceServer) fenceQuery(backend *pgproto3.Backend, sql string) (bool, e
 	case strings.HasPrefix(sql, "SELECT EXISTS ( SELECT 1 FROM public.sync_dispatch_outbox AS outbox"):
 		s.trace = append(s.trace, fmt.Sprintf("guard=%t", ok))
 		fenceRows(backend, []uint32{16}, []string{strconv.FormatBool(ok)})
-		if s.wakeAfterGuard != "" && !syncrunrollup.WakeDispatch(context.Background(), s, fenceRun, time.Now(), s.wakeAfterGuard) {
-			return false, fmt.Errorf("fixture wake did not report an armed outbox")
+		if err := s.afterGuard(); err != nil {
+			return false, err
 		}
 	case strings.HasPrefix(sql, "SELECT 1 FROM public.sync_dispatch_outbox AS outbox") && strings.Contains(sql, "FOR NO KEY UPDATE OF outbox NOWAIT"):
 		// A wake that only re-armed the row (pending, unclaimed, same attempt) does not supersede the delivery.
@@ -311,7 +358,7 @@ func (s *fenceServer) serve(connection net.Conn) error {
 	}
 }
 
-func runFenceDispatch(t *testing.T, s *fenceServer) error {
+func runFenceDispatch(t *testing.T, s *fenceServer) (string, error) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -353,53 +400,72 @@ func runFenceDispatch(t *testing.T, s *fenceServer) error {
 	if serverErr := <-done; serverErr != nil {
 		t.Fatal(serverErr)
 	}
-	return workErr
+	return output.String(), workErr
 }
 
-// TestTransportFenceRefusesStaleOrRearmedDelivery: a delivery whose attempt
-// was superseded before the guard (P1-2) commits no write. A same-attempt wake
-// after the guard (P1-3) does not supersede the delivery, but on this
-// feature-disabled terminal path the pass parks every pending row of the run,
-// its re-armed own row included; the commit-time check sees that own write and
-// refuses. The wake survives and its delivery runs the branch to the end.
+// TestTransportFenceRefusesStaleOrRearmedDelivery: a superseded delivery
+// commits no write and names the failing clause in
+// dispatch_sync_run.delivery_not_current: an attempt superseded before the
+// guard (P1-2, start refusal) or during the pass (commit-time refusal). A
+// same-attempt wake after the guard (P1-3) does not supersede the delivery, but
+// on this feature-disabled terminal path the pass parks every pending row of
+// the run, its re-armed own row included; the commit-time check sees that own
+// write and refuses. The wake survives and its delivery runs the branch to the end.
 func TestTransportFenceRefusesStaleOrRearmedDelivery(t *testing.T) {
 	pending := fenceRow{status: "pending", routeTransport: "river", routeGeneration: fenceGeneration, attempts: 1}
 	nextGeneration := fenceDispatched(2)
 	nextGeneration.generation, nextGeneration.routeGeneration = fenceGeneration+1, fenceGeneration+1
 	cases := []struct {
-		name           string
-		row            fenceRow
-		delivered      int64
-		wakeAfterGuard string
-		wantWrites     bool
-		wantOutbox     string
+		name                string
+		row                 fenceRow
+		delivered           int64
+		wakeAfterGuard      string
+		redeliverAfterGuard bool
+		wantWrites          bool
+		wantOutbox          string
+		wantAttempts        int64
+		wantReason          string // "" = no delivery_not_current line
 	}{
-		{"current_first_attempt", fenceDispatched(1), 1, "", true, "dispatched"},
-		{"current_redelivery", fenceDispatched(2), 2, "", true, "dispatched"},
-		{"pending_before_guard", pending, 1, "", false, "pending"},
-		{"older_route_generation", nextGeneration, 1, "", false, "dispatched"},
-		{"holdback_redelivery_committed_before_guard", fenceDispatched(2), 1, "", false, "dispatched"},
-		{"unit_end_redelivery_committed_before_guard", fenceDispatched(2), 1, "", false, "dispatched"},
-		{"holdback_rearmed_after_guard", fenceDispatched(1), 1, syncrunrollup.DispatchWakePathHoldBack, false, "pending"},
-		{"unit_end_rearmed_after_guard", fenceDispatched(1), 1, syncrunrollup.DispatchWakePathProviderUnit, false, "pending"},
-		{"holdback_rearmed_redelivery_after_guard", fenceDispatched(2), 2, syncrunrollup.DispatchWakePathHoldBack, false, "pending"},
-		{"unit_end_rearmed_redelivery_after_guard", fenceDispatched(2), 2, syncrunrollup.DispatchWakePathProviderUnit, false, "pending"},
+		{"current_first_attempt", fenceDispatched(1), 1, "", false, true, "dispatched", 1, ""},
+		{"current_redelivery", fenceDispatched(2), 2, "", false, true, "dispatched", 2, ""},
+		{"pending_before_guard", pending, 1, "", false, false, "pending", 1, "outbox_not_dispatched"},
+		{"older_route_generation", nextGeneration, 1, "", false, false, "dispatched", 2, "route_generation_mismatch"},
+		{"holdback_redelivery_committed_before_guard", fenceDispatched(2), 1, "", false, false, "dispatched", 2, "delivery_attempt_mismatch"},
+		{"unit_end_redelivery_committed_before_guard", fenceDispatched(2), 1, "", false, false, "dispatched", 2, "delivery_attempt_mismatch"},
+		{"holdback_redelivery_committed_after_guard", fenceDispatched(1), 1, "", true, false, "dispatched", 2, "delivery_attempt_mismatch"},
+		{"unit_end_redelivery_committed_after_guard", fenceDispatched(1), 1, "", true, false, "dispatched", 2, "delivery_attempt_mismatch"},
+		{"holdback_rearmed_after_guard", fenceDispatched(1), 1, syncrunrollup.DispatchWakePathHoldBack, false, false, "pending", 1, "outbox_other_transport"},
+		{"unit_end_rearmed_after_guard", fenceDispatched(1), 1, syncrunrollup.DispatchWakePathProviderUnit, false, false, "pending", 1, "outbox_other_transport"},
+		{"holdback_rearmed_redelivery_after_guard", fenceDispatched(2), 2, syncrunrollup.DispatchWakePathHoldBack, false, false, "pending", 2, "outbox_other_transport"},
+		{"unit_end_rearmed_redelivery_after_guard", fenceDispatched(2), 2, syncrunrollup.DispatchWakePathProviderUnit, false, false, "pending", 2, "outbox_other_transport"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			s := &fenceServer{delivered: c.delivered, wakeAfterGuard: c.wakeAfterGuard,
+			s := &fenceServer{delivered: c.delivered, wakeAfterGuard: c.wakeAfterGuard, redeliverAfterGuard: c.redeliverAfterGuard,
 				finishedUnit: strings.HasPrefix(c.name, "unit_end"),
 				committed:    fenceState{outbox: c.row, runStatus: "running", unitStatus: "planned"}}
-			err := runFenceDispatch(t, s)
+			output, err := runFenceDispatch(t, s)
 			wrote := s.committed.runStatus != "running" || s.committed.unitStatus != "planned"
-			t.Logf("worker=%v delivered_attempt=%d row_attempt=%d statements=%s committed: run=%s unit=%s outbox=%s",
+			t.Logf("worker=%v delivered_attempt=%d row_attempt=%d statements=%s committed: run=%s unit=%s outbox=%s/%d",
 				err, c.delivered, c.row.attempts, strings.Join(s.trace, ","), s.committed.runStatus,
-				s.committed.unitStatus, s.committed.outbox.status)
+				s.committed.unitStatus, s.committed.outbox.status, s.committed.outbox.attempts)
 			if err != nil || wrote != c.wantWrites {
 				t.Errorf("want committed writes=%t, got %t (worker=%v)", c.wantWrites, wrote, err)
 			}
-			if s.committed.outbox.status != c.wantOutbox || s.committed.outbox.attempts != c.row.attempts {
-				t.Errorf("outbox status=%s attempts=%d, want %s/%d", s.committed.outbox.status, s.committed.outbox.attempts, c.wantOutbox, c.row.attempts)
+			if s.committed.outbox.status != c.wantOutbox || s.committed.outbox.attempts != c.wantAttempts {
+				t.Errorf("outbox status=%s attempts=%d, want %s/%d", s.committed.outbox.status, s.committed.outbox.attempts, c.wantOutbox, c.wantAttempts)
+			}
+			refusal := ""
+			for _, line := range strings.Split(output, "\n") {
+				if strings.Contains(line, "msg=dispatch_sync_run.delivery_not_current") {
+					refusal = line
+				}
+			}
+			switch {
+			case c.wantReason == "" && refusal != "":
+				t.Errorf("current delivery logged a refusal: %s", refusal)
+			case c.wantReason != "" && !strings.Contains(refusal, "reason="+c.wantReason+" "):
+				t.Errorf("want dispatch_sync_run.delivery_not_current reason=%s, got %q", c.wantReason, refusal)
 			}
 		})
 	}

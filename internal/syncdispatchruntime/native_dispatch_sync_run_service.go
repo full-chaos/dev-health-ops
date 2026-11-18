@@ -255,7 +255,7 @@ func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args 
 	if run == nil {
 		// Python: `if run is None: ... return {"status": "missing", ...}`.
 		service.logger.Warn(ctx, synclog.MsgDispatchSyncRunMissing, synclog.Run(synclog.ParseID(args.SyncRunID())))
-		_, err := fence.commit(ctx, tx)
+		_, err := service.commitFenced(ctx, tx, fence)
 		return err
 	}
 
@@ -304,7 +304,7 @@ func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args 
 			return err
 		}
 		service.logger.Info(ctx, synclog.MsgDispatchSyncRunBlockedOnReferenceDiscovery, synclog.Run(synclog.ParseID(run.id)))
-		_, err := fence.commit(ctx, tx)
+		_, err := service.commitFenced(ctx, tx, fence)
 		return err
 	}
 
@@ -596,7 +596,7 @@ WHERE id = $1::uuid`,
 			return ErrDispatchSyncRunUnavailable
 		}
 	}
-	if committed, err := fence.commit(ctx, tx); err != nil {
+	if committed, err := service.commitFenced(ctx, tx, fence); err != nil {
 		return err
 	} else if !committed {
 		return nil
@@ -755,7 +755,7 @@ func (service *NativeDispatchSyncRunService) terminalizeFeatureDisabled(
 	logAfterCommit(ctx, func() {
 		service.logger.Warn(ctx, synclog.MsgDispatchSyncRunFeatureDisabled, synclog.Run(synclog.ParseID(run.id)), synclog.Org(synclog.ParseID(run.orgID)), synclog.Text(synclog.KeyErrorCategory, synclog.ParseLabel(featureDisabledErrorCategory)), synclog.Count(synclog.KeyRunningUnits, transition.RunningUnits))
 	})
-	if committed, err := fence.commit(ctx, tx); err != nil || !committed {
+	if committed, err := service.commitFenced(ctx, tx, fence); err != nil || !committed {
 		return err
 	}
 	flushPostCommitLogs(ctx)
@@ -766,6 +766,26 @@ func (service *NativeDispatchSyncRunService) terminalizeFeatureDisabled(
 	// this file.
 	flushRollupBumpTally(ctx, service.metrics)
 	return nil
+}
+
+// commitFenced commits the pass through fence. A commit-time refusal (the
+// delivery was superseded during the pass) is reported like a start refusal,
+// with the first failing clause read in the still-open transaction.
+func (service *NativeDispatchSyncRunService) commitFenced(ctx context.Context, tx pgx.Tx, fence *transportFence) (bool, error) {
+	committed, err := fence.commit(ctx, tx)
+	if err != nil || committed {
+		return committed, err
+	}
+	reason, routeGeneration := "unknown", int64(-1)
+	if reference, readErr := readTransportReference(ctx, tx, fence.args, fence.kind); readErr == nil {
+		reason, routeGeneration = reference.reason, reference.routeGeneration
+	}
+	service.logger.Info(ctx, synclog.MsgDispatchSyncRunDeliveryNotCurrent,
+		synclog.Run(synclog.ParseID(fence.args.SyncRunID())),
+		synclog.Text(synclog.KeyReason, synclog.ParseLabel(reason)),
+		synclog.Count(synclog.KeyDeliveryRouteGeneration, fence.args.RouteGeneration()),
+		synclog.Count(synclog.KeyCurrentRouteGeneration, routeGeneration))
+	return false, nil
 }
 
 // transportReference is currentTransportReference's decision with its first failing clause (empty when current)
@@ -780,22 +800,22 @@ type transportReference struct {
 // decision ran on, so the refusal's reason describes the snapshot that refused it, never a later one.
 func readTransportReference(ctx context.Context, tx pgx.Tx, args Args, kind string) (transportReference, error) {
 	var (
-		routeTransport, outboxStatus, outboxTransport *string
-		routeGeneration, outboxGeneration             *int64
-		routePaused, outboxFound                      *bool
+		routeTransport, outboxStatus, outboxTransport     *string
+		routeGeneration, outboxGeneration, outboxAttempts *int64
+		routePaused, outboxFound                          *bool
 	)
 	err := tx.QueryRow(ctx, `
 SELECT route.transport, route.generation, route.paused,
-       outbox.found, outbox.status, outbox.dispatched_transport, outbox.dispatched_route_generation
+       outbox.found, outbox.status, outbox.dispatched_transport, outbox.dispatched_route_generation, outbox.attempts
 FROM (SELECT 1) AS one
 LEFT JOIN public.sync_dispatch_transport_routes AS route ON route.kind = $4
 LEFT JOIN LATERAL (
-    SELECT true AS found, status, dispatched_transport, dispatched_route_generation
+    SELECT true AS found, status, dispatched_transport, dispatched_route_generation, attempts
     FROM public.sync_dispatch_outbox
     WHERE id = $1::uuid AND sync_run_id = $2::uuid AND org_id = $3 AND kind = $4
 ) AS outbox ON true`,
 		args.OutboxID(), args.SyncRunID(), args.OrganizationID(), kind,
-	).Scan(&routeTransport, &routeGeneration, &routePaused, &outboxFound, &outboxStatus, &outboxTransport, &outboxGeneration)
+	).Scan(&routeTransport, &routeGeneration, &routePaused, &outboxFound, &outboxStatus, &outboxTransport, &outboxGeneration, &outboxAttempts)
 	if err != nil {
 		return transportReference{}, ErrFinalizeSyncRunUnavailable
 	}
@@ -818,6 +838,8 @@ LEFT JOIN LATERAL (
 		reference.reason = "route_paused"
 	case outboxGeneration == nil || *outboxGeneration != reference.routeGeneration || args.RouteGeneration() != reference.routeGeneration:
 		reference.reason = "route_generation_mismatch"
+	case outboxAttempts == nil || *outboxAttempts != args.Attempt():
+		reference.reason = "delivery_attempt_mismatch"
 	default:
 		reference.current = true
 	}
@@ -876,7 +898,7 @@ func (service *NativeDispatchSyncRunService) denyRun(
 		logAfterCommit(ctx, func() {
 			service.logger.Warn(ctx, synclog.MsgDispatchSyncRunDeniedWithActiveUnits, synclog.Run(synclog.ParseID(run.id)), synclog.Text(synclog.KeyReason, synclog.ParseLabel(decision.reasonCode)), synclog.Count(synclog.KeyFailedPlannedUnits, failedPlanned), synclog.Count(synclog.KeyFailedStaleDispatchingUnits, failedStale))
 		})
-		if committed, err := fence.commit(ctx, tx); err != nil || !committed {
+		if committed, err := service.commitFenced(ctx, tx, fence); err != nil || !committed {
 			return err
 		}
 		flushPostCommitLogs(ctx)
@@ -908,7 +930,7 @@ WHERE id = $1::uuid`,
 	logAfterCommit(ctx, func() {
 		service.logger.Warn(ctx, synclog.MsgDispatchSyncRunDenied, synclog.Run(synclog.ParseID(run.id)), synclog.Text(synclog.KeyReason, synclog.ParseLabel(decision.reasonCode)), synclog.Count(synclog.KeyFailedPlannedUnits, failedPlanned))
 	})
-	if committed, err := fence.commit(ctx, tx); err != nil || !committed {
+	if committed, err := service.commitFenced(ctx, tx, fence); err != nil || !committed {
 		return err
 	}
 	flushPostCommitLogs(ctx)

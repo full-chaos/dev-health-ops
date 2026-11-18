@@ -5,6 +5,7 @@ package syncdispatchruntime
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
+	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime/synclog"
 	"github.com/full-chaos/dev-health-ops/internal/syncrunrollup"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
@@ -53,8 +55,12 @@ func (tracer *fenceTracer) TraceQueryEnd(ctx context.Context, _ *pgx.Conn, data 
 	}
 }
 
+// isStartGuard matches the first fence read of a pass: currentTransportReference
+// (finalize, discovery) or readTransportReference (Dispatch). A hook fires once,
+// so Dispatch's commit-time diagnosis (readTransportReference again) never re-fires it.
 func isStartGuard(sql string) bool {
-	return strings.Contains(sql, "SELECT EXISTS") && strings.Contains(sql, "public.sync_dispatch_outbox AS outbox")
+	return strings.Contains(sql, "SELECT EXISTS") && strings.Contains(sql, "public.sync_dispatch_outbox AS outbox") ||
+		strings.Contains(sql, "outbox.found, outbox.status")
 }
 
 func isCommitCheck(sql string) bool {
@@ -641,4 +647,70 @@ func TestTransportFenceOwnRowDiscoveryFeatureDisabledRearmedMidPass(t *testing.T
 		},
 		wrote: runFailed,
 	}, outboxKindDispatchSyncRun)
+}
+
+// TestTransportFenceDispatchNamesDeliveryAttemptMismatch: a Dispatch delivery
+// whose attempt is superseded is a no-op that says so, at the start guard and
+// at the commit-time check.
+func TestTransportFenceDispatchNamesDeliveryAttemptMismatch(t *testing.T) {
+	logged := func(logs *lockedLogBuffer) fenceKind {
+		kind := fenceKinds()[1]
+		kind.pass = func(t *testing.T, ctx context.Context, pool *pgxpool.Pool, attempt int64) error {
+			registry := &fakeJobRegistry{descriptors: map[string]jobruntime.Descriptor{
+				jobcontract.KindSyncProviderUnit: providerUnitDescriptor("river"),
+			}}
+			producer, err := joboutbox.NewProducer(pool, registry)
+			if err != nil {
+				t.Fatal(err)
+			}
+			logger := synclog.New(slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+			service, err := NewNativeDispatchSyncRunService(pool, logger, &fakeBudgetEstimator{}, producer, registry)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return service.Dispatch(ctx, DispatchSyncRunArgs{TransportArgs: TransportArgs{
+				Version: ContractVersionV1, OrgID: discoveryTestOrg, RunID: discoveryTestRun,
+				DispatchOutbox: discoveryTestOutbox, RouteGeneration: discoveryRouteGeneration, DeliveryAttempt: attempt,
+			}})
+		}
+		return kind
+	}
+	assertLine := func(t *testing.T, logs *lockedLogBuffer) {
+		t.Helper()
+		for _, line := range logs.lines() {
+			if strings.Contains(line, "msg=dispatch_sync_run.delivery_not_current") && strings.Contains(line, "reason=delivery_attempt_mismatch ") {
+				return
+			}
+		}
+		t.Fatalf("no dispatch_sync_run.delivery_not_current reason=delivery_attempt_mismatch line:\n%s", strings.Join(logs.lines(), "\n"))
+	}
+	t.Run("before_guard", func(t *testing.T) {
+		logs := &lockedLogBuffer{}
+		kind := logged(logs)
+		withFenceRig(t, kind, 2, func(ctx context.Context, rig *fenceRig) {
+			if err := kind.pass(t, ctx, rig.pool, 1); err != nil || kind.wrote(t, ctx, rig.other) {
+				t.Fatalf("superseded delivery: err=%v wrote=%t, want nil/false", err, kind.wrote(t, ctx, rig.other))
+			}
+			assertLine(t, logs)
+		})
+	})
+	t.Run("after_guard", func(t *testing.T) {
+		logs := &lockedLogBuffer{}
+		kind := logged(logs)
+		withFenceRig(t, kind, 1, func(ctx context.Context, rig *fenceRig) {
+			hook := rig.on(isStartGuard, func(ctx context.Context) {
+				if _, err := rig.other.Exec(ctx, `UPDATE sync_dispatch_outbox SET attempts = attempts + 1 WHERE id = $1`, kind.outbox); err != nil {
+					t.Errorf("redelivery: %v", err)
+				}
+			})
+			err := kind.pass(t, ctx, rig.pool, 1)
+			if !hook.fired {
+				t.Fatal("the start guard never ran")
+			}
+			if err != nil || kind.wrote(t, ctx, rig.other) {
+				t.Fatalf("superseded during the pass: err=%v wrote=%t, want nil/false", err, kind.wrote(t, ctx, rig.other))
+			}
+			assertLine(t, logs)
+		})
+	})
 }

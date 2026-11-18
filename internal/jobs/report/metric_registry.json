@@ -97,6 +97,7 @@
       "canonical_name": "avg_duration_minutes",
       "dimensions": [
         "repo",
+        "team",
         "day"
       ],
       "display_name": "Avg Duration Minutes",
@@ -119,6 +120,7 @@
       "canonical_name": "avg_queue_minutes",
       "dimensions": [
         "repo",
+        "team",
         "day"
       ],
       "display_name": "Avg Queue Minutes",
@@ -1080,6 +1082,7 @@
       "canonical_name": "p90_duration_minutes",
       "dimensions": [
         "repo",
+        "team",
         "day"
       ],
       "display_name": "P90 Duration Minutes",
@@ -1138,6 +1141,7 @@
       "canonical_name": "pipelines_count",
       "dimensions": [
         "repo",
+        "team",
         "day"
       ],
       "display_name": "Pipelines Count",

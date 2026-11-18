@@ -29,13 +29,17 @@ func URLError(err error) *url.Error {
 // unreachable host, a name that does not resolve), by the bounded walk with the Timeout method under recover: a typed-nil
 // transport error answers false instead of panicking (CHAOS-8127).
 func RetryableTransport(err error) bool {
-	chain := boundedChain(err)
-	var timeout interface{ Timeout() bool }
-	if chainAs(chain, &timeout) && safeTimeout(timeout) {
-		return true
+	// Every link of every branch is read: a typed-nil or non-matching link must not hide a real dial or timeout in another
+	// branch, whatever the order of a multi-error (CHAOS-8271).
+	for _, link := range boundedChain(err) {
+		if operation, ok := link.(*net.OpError); ok && operation != nil && operation.Op == "dial" {
+			return true
+		}
+		if timeout, ok := link.(interface{ Timeout() bool }); ok && safeTimeout(timeout) {
+			return true
+		}
 	}
-	var operation *net.OpError
-	return chainAs(chain, &operation) && operation != nil && operation.Op == "dial"
+	return false
 }
 
 // IsLocationParseRefusal reports whether the error is net/http's refusal of a redirect whose Location does not parse: a

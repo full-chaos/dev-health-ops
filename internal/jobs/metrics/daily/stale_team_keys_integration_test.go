@@ -401,6 +401,9 @@ func TestARowOfZerosIsStrictlyNewerThanTheRowItSupersedes(t *testing.T) {
 			// with no scope column too.
 			{"the clock is the computed_at of the old row", "platform-equal", stored},
 			{"the clock is one hour behind the old row", "platform-behind", stored.Add(-time.Hour)},
+			// A snapshot-stamped table keeps the guarantee here: a snapshot AFTER the stored row writes exactly one row of
+			// zeros, strictly newer than the row it supersedes. It loses only the two cases above, which its rule skips on purpose.
+			{"the clock is one hour ahead of the old row", "platform-ahead", stored.Add(time.Hour)},
 		} {
 			name, clock := testCase.name, testCase.clock
 			t.Run(table.Table+"/"+name, func(t *testing.T) {
@@ -415,12 +418,17 @@ func TestARowOfZerosIsStrictlyNewerThanTheRowItSupersedes(t *testing.T) {
 				written, err := supersedeStaleTeamKeys(ctx, conn, table, staleKeyRuleOrg, staleKeyRuleDay, scope, nil, clock)
 				if _, snapshotStamped := staleKeySnapshot(table, clock); snapshotStamped {
 					// A snapshot-stamped table (testops_test_metrics_daily) writes its marker at the run's snapshot, never above a
-					// stored row: a snapshot that is equal to or behind the stored row retires nothing (the newest snapshot wins;
-					// testops_snapshot_marker_integration_test.go holds the cells of the later snapshot).
-					if err != nil || written != 0 {
-						t.Fatalf("a snapshot not after the stored row wrote %d row(s) (err %v), want none", written, err)
+					// stored row: a snapshot that is equal to or behind the stored row retires nothing (the newest snapshot wins),
+					// and a snapshot after it writes exactly one row of zeros, checked below to be strictly newer.
+					if !clock.After(stored) {
+						if err != nil || written != 0 {
+							t.Fatalf("a snapshot not after the stored row wrote %d row(s) (err %v), want none", written, err)
+						}
+						return
 					}
-					return
+					if err != nil || written != 1 {
+						t.Fatalf("a snapshot after the stored row wrote %d row(s) (err %v), want exactly one row of zeros", written, err)
+					}
 				}
 				if err != nil || written < 1 {
 					t.Fatalf("the rule wrote %d row(s) (err %v), want the row of zeros of the key", written, err)

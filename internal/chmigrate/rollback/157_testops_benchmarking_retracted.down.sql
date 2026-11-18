@@ -1,5 +1,5 @@
--- Rollback of 156_testops_benchmarking_retracted.sql. It is NOT part of the chain (the migrator reads sql/ only); an operator runs
--- it by hand, and only after the worker image is back on a build without 156 (that build neither writes nor reads the column).
+-- Rollback of 157_testops_benchmarking_retracted.sql. It is NOT part of the chain (the migrator reads sql/ only); an operator runs
+-- it by hand, and only after the worker image is back on a build without 157 (that build neither writes nor reads the column).
 --
 -- The column is dropped from the six tables. A row that retired a result stays and then reads as a stored result with the column
 -- defaults; no reader reads these tables.
@@ -11,4 +11,4 @@ ALTER TABLE testops_metric_anomalies DROP COLUMN IF EXISTS retracted SETTINGS mu
 ALTER TABLE testops_period_comparisons DROP COLUMN IF EXISTS retracted SETTINGS mutations_sync = 2;
 ALTER TABLE testops_metric_correlations DROP COLUMN IF EXISTS retracted SETTINGS mutations_sync = 2;
 ALTER TABLE testops_benchmark_insights DROP COLUMN IF EXISTS retracted SETTINGS mutations_sync = 2;
-ALTER TABLE schema_migrations DELETE WHERE version = '156_testops_benchmarking_retracted.sql' SETTINGS mutations_sync = 2;
+ALTER TABLE schema_migrations DELETE WHERE version = '157_testops_benchmarking_retracted.sql' SETTINGS mutations_sync = 2;

@@ -21,7 +21,9 @@
 //     to by_repo unless at least one row survives the filter, so the
 //     `if pipelines else 0.0` success_rate guard is dead code in the real
 //     pipeline. ComputeCICDMetricsDaily preserves this: a repo with no
-//     surviving rows gets no CICDMetric.
+//     surviving rows gets no CICDMetric. A repo whose stored row of the day
+//     is a measurement and that a recompute no longer counts gets a
+//     retraction row instead (FenceDay, CHAOS-14016).
 package cicd
 
 import (
@@ -52,4 +54,6 @@ type CICDMetric struct {
 	P90DurationMinutes *float64
 	AvgQueueMinutes    *float64
 	ComputedAt         time.Time
+	// Retracted marks the row that retires a key the compute no longer produces (FenceDay): no measure.
+	Retracted bool
 }

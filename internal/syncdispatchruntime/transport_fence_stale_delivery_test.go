@@ -59,6 +59,8 @@ type fenceServer struct {
 	finishedUnit        bool
 	wakeAfterGuard      string
 	redeliverAfterGuard bool
+	claimAfterWake      bool
+	routeMoveAfterWake  bool
 	guardDone           bool
 
 	committed fenceState
@@ -169,6 +171,15 @@ func (s *fenceServer) afterGuard() error {
 		// The relay claimed and redelivered the row: the next attempt, dispatched to the same route.
 		s.committed.outbox.attempts++
 		s.trace = append(s.trace, "redelivery")
+	}
+	if s.claimAfterWake {
+		// The relay claimed the re-armed row: the next attempt, still 'pending'.
+		s.committed.outbox.attempts++
+		s.trace = append(s.trace, "claim")
+	}
+	if s.routeMoveAfterWake {
+		s.committed.outbox.routeGeneration++
+		s.trace = append(s.trace, "route-move")
 	}
 	return nil
 }
@@ -411,37 +422,48 @@ func runFenceDispatch(t *testing.T, s *fenceServer) (string, error) {
 // on this feature-disabled terminal path the pass parks every pending row of
 // the run, its re-armed own row included; the commit-time check sees that own
 // write and refuses. The wake survives and its delivery runs the branch to the end.
+// A commit-time refusal names what superseded the delivery (a claim or a route
+// move after the wake); a start refusal keeps the start guard's clause order.
 func TestTransportFenceRefusesStaleOrRearmedDelivery(t *testing.T) {
 	pending := fenceRow{status: "pending", routeTransport: "river", routeGeneration: fenceGeneration, attempts: 1}
 	nextGeneration := fenceDispatched(2)
 	nextGeneration.generation, nextGeneration.routeGeneration = fenceGeneration+1, fenceGeneration+1
+	// Status and attempt both fail: the start guard names the status, as on main.
+	pendingClaimed := pending
+	pendingClaimed.attempts = 2
 	cases := []struct {
 		name                string
 		row                 fenceRow
 		delivered           int64
 		wakeAfterGuard      string
 		redeliverAfterGuard bool
+		claimAfterWake      bool
+		routeMoveAfterWake  bool
 		wantWrites          bool
 		wantOutbox          string
 		wantAttempts        int64
 		wantReason          string // "" = no delivery_not_current line
 	}{
-		{"current_first_attempt", fenceDispatched(1), 1, "", false, true, "dispatched", 1, ""},
-		{"current_redelivery", fenceDispatched(2), 2, "", false, true, "dispatched", 2, ""},
-		{"pending_before_guard", pending, 1, "", false, false, "pending", 1, "outbox_not_dispatched"},
-		{"older_route_generation", nextGeneration, 1, "", false, false, "dispatched", 2, "route_generation_mismatch"},
-		{"holdback_redelivery_committed_before_guard", fenceDispatched(2), 1, "", false, false, "dispatched", 2, "delivery_attempt_mismatch"},
-		{"unit_end_redelivery_committed_before_guard", fenceDispatched(2), 1, "", false, false, "dispatched", 2, "delivery_attempt_mismatch"},
-		{"holdback_redelivery_committed_after_guard", fenceDispatched(1), 1, "", true, false, "dispatched", 2, "delivery_attempt_mismatch"},
-		{"unit_end_redelivery_committed_after_guard", fenceDispatched(1), 1, "", true, false, "dispatched", 2, "delivery_attempt_mismatch"},
-		{"holdback_rearmed_after_guard", fenceDispatched(1), 1, syncrunrollup.DispatchWakePathHoldBack, false, false, "pending", 1, "outbox_other_transport"},
-		{"unit_end_rearmed_after_guard", fenceDispatched(1), 1, syncrunrollup.DispatchWakePathProviderUnit, false, false, "pending", 1, "outbox_other_transport"},
-		{"holdback_rearmed_redelivery_after_guard", fenceDispatched(2), 2, syncrunrollup.DispatchWakePathHoldBack, false, false, "pending", 2, "outbox_other_transport"},
-		{"unit_end_rearmed_redelivery_after_guard", fenceDispatched(2), 2, syncrunrollup.DispatchWakePathProviderUnit, false, false, "pending", 2, "outbox_other_transport"},
+		{"current_first_attempt", fenceDispatched(1), 1, "", false, false, false, true, "dispatched", 1, ""},
+		{"current_redelivery", fenceDispatched(2), 2, "", false, false, false, true, "dispatched", 2, ""},
+		{"pending_before_guard", pending, 1, "", false, false, false, false, "pending", 1, "outbox_not_dispatched"},
+		{"older_route_generation", nextGeneration, 1, "", false, false, false, false, "dispatched", 2, "route_generation_mismatch"},
+		{"holdback_redelivery_committed_before_guard", fenceDispatched(2), 1, "", false, false, false, false, "dispatched", 2, "delivery_attempt_mismatch"},
+		{"unit_end_redelivery_committed_before_guard", fenceDispatched(2), 1, "", false, false, false, false, "dispatched", 2, "delivery_attempt_mismatch"},
+		{"holdback_redelivery_committed_after_guard", fenceDispatched(1), 1, "", true, false, false, false, "dispatched", 2, "delivery_attempt_mismatch"},
+		{"unit_end_redelivery_committed_after_guard", fenceDispatched(1), 1, "", true, false, false, false, "dispatched", 2, "delivery_attempt_mismatch"},
+		{"holdback_rearmed_after_guard", fenceDispatched(1), 1, syncrunrollup.DispatchWakePathHoldBack, false, false, false, false, "pending", 1, "outbox_other_transport"},
+		{"unit_end_rearmed_after_guard", fenceDispatched(1), 1, syncrunrollup.DispatchWakePathProviderUnit, false, false, false, false, "pending", 1, "outbox_other_transport"},
+		{"holdback_rearmed_redelivery_after_guard", fenceDispatched(2), 2, syncrunrollup.DispatchWakePathHoldBack, false, false, false, false, "pending", 2, "outbox_other_transport"},
+		{"unit_end_rearmed_redelivery_after_guard", fenceDispatched(2), 2, syncrunrollup.DispatchWakePathProviderUnit, false, false, false, false, "pending", 2, "outbox_other_transport"},
+		{"pending_and_claimed_before_guard", pendingClaimed, 1, "", false, false, false, false, "pending", 2, "outbox_not_dispatched"},
+		{"holdback_rearmed_then_claimed_after_guard", fenceDispatched(1), 1, syncrunrollup.DispatchWakePathHoldBack, false, true, false, false, "pending", 2, "delivery_attempt_mismatch"},
+		{"holdback_rearmed_then_route_moved_after_guard", fenceDispatched(1), 1, syncrunrollup.DispatchWakePathHoldBack, false, false, true, false, "pending", 1, "route_generation_mismatch"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			s := &fenceServer{delivered: c.delivered, wakeAfterGuard: c.wakeAfterGuard, redeliverAfterGuard: c.redeliverAfterGuard,
+				claimAfterWake: c.claimAfterWake, routeMoveAfterWake: c.routeMoveAfterWake,
 				finishedUnit: strings.HasPrefix(c.name, "unit_end"),
 				committed:    fenceState{outbox: c.row, runStatus: "running", unitStatus: "planned"}}
 			output, err := runFenceDispatch(t, s)

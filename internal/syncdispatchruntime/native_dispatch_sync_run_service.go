@@ -770,15 +770,15 @@ func (service *NativeDispatchSyncRunService) terminalizeFeatureDisabled(
 
 // commitFenced commits the pass through fence. A commit-time refusal (the
 // delivery was superseded during the pass) is reported like a start refusal,
-// with the first failing clause read in the still-open transaction.
+// with the clause that superseded it read in the still-open transaction.
 func (service *NativeDispatchSyncRunService) commitFenced(ctx context.Context, tx pgx.Tx, fence *transportFence) (bool, error) {
 	committed, err := fence.commit(ctx, tx)
 	if err != nil || committed {
 		return committed, err
 	}
 	reason, routeGeneration := "unknown", int64(-1)
-	if reference, readErr := readTransportReference(ctx, tx, fence.args, fence.kind); readErr == nil {
-		reason, routeGeneration = reference.reason, reference.routeGeneration
+	if row, readErr := readTransportRow(ctx, tx, fence.args, fence.kind); readErr == nil {
+		reason, routeGeneration = row.commitRefusalReason(fence.args), row.currentRouteGeneration()
 	}
 	service.logger.Info(ctx, synclog.MsgDispatchSyncRunDeliveryNotCurrent,
 		synclog.Run(synclog.ParseID(fence.args.SyncRunID())),
@@ -796,14 +796,17 @@ type transportReference struct {
 	routeGeneration int64
 }
 
-// readTransportReference is currentTransportReference read in ONE statement that also returns the row images the
-// decision ran on, so the refusal's reason describes the snapshot that refused it, never a later one.
-func readTransportReference(ctx context.Context, tx pgx.Tx, args Args, kind string) (transportReference, error) {
-	var (
-		routeTransport, outboxStatus, outboxTransport     *string
-		routeGeneration, outboxGeneration, outboxAttempts *int64
-		routePaused, outboxFound                          *bool
-	)
+// transportRow is the route and outbox row images one delivery is judged on; nil fields are missing rows.
+type transportRow struct {
+	routeTransport, outboxStatus, outboxTransport     *string
+	routeGeneration, outboxGeneration, outboxAttempts *int64
+	routePaused, outboxFound                          *bool
+}
+
+// readTransportRow reads the route and the outbox row in ONE statement, so a refusal's reason describes the
+// snapshot that refused it, never a later one.
+func readTransportRow(ctx context.Context, tx pgx.Tx, args Args, kind string) (transportRow, error) {
+	var row transportRow
 	err := tx.QueryRow(ctx, `
 SELECT route.transport, route.generation, route.paused,
        outbox.found, outbox.status, outbox.dispatched_transport, outbox.dispatched_route_generation, outbox.attempts
@@ -815,35 +818,80 @@ LEFT JOIN LATERAL (
     WHERE id = $1::uuid AND sync_run_id = $2::uuid AND org_id = $3 AND kind = $4
 ) AS outbox ON true`,
 		args.OutboxID(), args.SyncRunID(), args.OrganizationID(), kind,
-	).Scan(&routeTransport, &routeGeneration, &routePaused, &outboxFound, &outboxStatus, &outboxTransport, &outboxGeneration, &outboxAttempts)
+	).Scan(&row.routeTransport, &row.routeGeneration, &row.routePaused, &row.outboxFound, &row.outboxStatus,
+		&row.outboxTransport, &row.outboxGeneration, &row.outboxAttempts)
 	if err != nil {
-		return transportReference{}, ErrFinalizeSyncRunUnavailable
+		return transportRow{}, ErrFinalizeSyncRunUnavailable
 	}
-	reference := transportReference{routeGeneration: -1}
-	if routeGeneration != nil {
-		reference.routeGeneration = *routeGeneration
+	return row, nil
+}
+
+func (row transportRow) currentRouteGeneration() int64 {
+	if row.routeGeneration == nil {
+		return -1
 	}
+	return *row.routeGeneration
+}
+
+// readTransportReference is the start guard: currentTransportReference read with the row images, its reason the
+// first failing clause in the guard's own order.
+func readTransportReference(ctx context.Context, tx pgx.Tx, args Args, kind string) (transportReference, error) {
+	row, err := readTransportRow(ctx, tx, args, kind)
+	if err != nil {
+		return transportReference{}, err
+	}
+	reference := transportReference{routeGeneration: row.currentRouteGeneration()}
 	switch {
-	case outboxFound == nil:
+	case row.outboxFound == nil:
 		reference.reason = "outbox_row_missing"
-	case outboxStatus == nil || *outboxStatus != "dispatched":
+	case row.outboxStatus == nil || *row.outboxStatus != "dispatched":
 		reference.reason = "outbox_not_dispatched"
-	case outboxTransport == nil || *outboxTransport != "river":
+	case row.outboxTransport == nil || *row.outboxTransport != "river":
 		reference.reason = "outbox_other_transport"
-	case routeTransport == nil:
+	case row.routeTransport == nil:
 		reference.reason = "route_row_missing"
-	case *routeTransport != "river":
+	case *row.routeTransport != "river":
 		reference.reason = "route_other_transport"
-	case routePaused == nil || *routePaused:
+	case row.routePaused == nil || *row.routePaused:
 		reference.reason = "route_paused"
-	case outboxGeneration == nil || *outboxGeneration != reference.routeGeneration || args.RouteGeneration() != reference.routeGeneration:
+	case row.outboxGeneration == nil || *row.outboxGeneration != reference.routeGeneration || args.RouteGeneration() != reference.routeGeneration:
 		reference.reason = "route_generation_mismatch"
-	case outboxAttempts == nil || *outboxAttempts != args.Attempt():
+	case row.outboxAttempts == nil || *row.outboxAttempts != args.Attempt():
 		reference.reason = "delivery_attempt_mismatch"
 	default:
 		reference.current = true
 	}
 	return reference, nil
+}
+
+// commitRefusalReason names why the commit-time check refused: the attempt, then the route, then the status. The
+// check allows a 'pending' row (a same-attempt wake), so 'pending' is not itself a reason; a claim or a route move
+// after the wake is.
+func (row transportRow) commitRefusalReason(args Args) string {
+	routeGeneration := row.currentRouteGeneration()
+	switch {
+	case row.outboxFound == nil:
+		return "outbox_row_missing"
+	case row.outboxAttempts == nil || *row.outboxAttempts != args.Attempt():
+		return "delivery_attempt_mismatch"
+	case row.routeTransport == nil:
+		return "route_row_missing"
+	case *row.routeTransport != "river":
+		return "route_other_transport"
+	case row.routePaused == nil || *row.routePaused:
+		return "route_paused"
+	case args.RouteGeneration() != routeGeneration:
+		return "route_generation_mismatch"
+	case row.outboxStatus != nil && *row.outboxStatus == "pending":
+		return "unknown"
+	case row.outboxStatus == nil || *row.outboxStatus != "dispatched":
+		return "outbox_not_dispatched"
+	case row.outboxTransport == nil || *row.outboxTransport != "river":
+		return "outbox_other_transport"
+	case row.outboxGeneration == nil || *row.outboxGeneration != routeGeneration:
+		return "route_generation_mismatch"
+	}
+	return "unknown"
 }
 
 // denyRun ports the total-cap hard-deny branch verbatim: two different

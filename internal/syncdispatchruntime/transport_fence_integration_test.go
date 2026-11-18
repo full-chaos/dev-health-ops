@@ -21,6 +21,9 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.opentelemetry.io/otel"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 )
 
 // A pgx tracer on the service's own pool runs a competing writer on a second
@@ -713,4 +716,127 @@ func TestTransportFenceDispatchNamesDeliveryAttemptMismatch(t *testing.T) {
 			assertLine(t, logs)
 		})
 	})
+}
+
+// TestTransportFenceCommitRefusalNamesTheSupersedingClause: when a wake
+// re-armed the row after the start guard and a claim or a route move then
+// superseded the delivery, the commit-time refusal names that clause, not the
+// row's 'pending' status (which the commit check allows).
+func TestTransportFenceCommitRefusalNamesTheSupersedingClause(t *testing.T) {
+	claim := func(t *testing.T, ctx context.Context, rig *fenceRig) {
+		if _, err := rig.other.Exec(ctx, `
+UPDATE sync_dispatch_outbox
+SET claim_token = gen_random_uuid()::text, claim_expires_at = now() + interval '1 minute',
+    claim_transport = 'river', claim_route_generation = $2, attempts = attempts + 1, updated_at = now()
+WHERE id = $1`, rig.kind.outbox, rig.kind.generation); err != nil {
+			t.Errorf("claim: %v", err)
+		}
+	}
+	moveRoute := func(t *testing.T, ctx context.Context, rig *fenceRig) {
+		paused := pgseed.SyncTransportRoute(ctx, t, rig.other, rig.kind.kind, "river", rig.kind.generation+1, true, "celery")
+		pgseed.SyncTransportRoute(ctx, t, rig.other, rig.kind.kind, "river", paused+1, false, "celery")
+	}
+	supersede := []struct {
+		name, reason string
+		after        func(t *testing.T, ctx context.Context, rig *fenceRig)
+	}{
+		{"rearmed_then_claimed", "delivery_attempt_mismatch", claim},
+		{"rearmed_and_route_moved", "route_generation_mismatch", moveRoute},
+	}
+	run := func(t *testing.T, kind fenceKind, logs *lockedLogBuffer, after func(*testing.T, context.Context, *fenceRig)) {
+		withFenceRig(t, kind, 1, func(ctx context.Context, rig *fenceRig) {
+			hook := rig.on(isStartGuard, func(ctx context.Context) {
+				if err := rig.rearm(ctx, rig.other); err != nil {
+					t.Errorf("wake: %v", err)
+					return
+				}
+				after(t, ctx, rig)
+			})
+			err := kind.pass(t, ctx, rig.pool, 1)
+			if !hook.fired {
+				t.Fatal("the start guard never ran")
+			}
+			if err != nil || kind.wrote(t, ctx, rig.other) {
+				t.Fatalf("superseded after a wake: err=%v wrote=%t, want nil/false", err, kind.wrote(t, ctx, rig.other))
+			}
+		})
+	}
+	for _, c := range supersede {
+		t.Run("finalize/"+c.name, func(t *testing.T) {
+			reader := sdkmetric.NewManualReader()
+			provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+			previous := otel.GetMeterProvider()
+			otel.SetMeterProvider(provider)
+			t.Cleanup(func() {
+				otel.SetMeterProvider(previous)
+				_ = provider.Shutdown(context.Background())
+			})
+			logs := &lockedLogBuffer{}
+			kind := fenceKinds()[0]
+			kind.pass = func(t *testing.T, ctx context.Context, pool *pgxpool.Pool, attempt int64) error {
+				service, err := NewNativeFinalizeSyncRunService(pool, synclog.New(slog.New(slog.NewTextHandler(logs, nil))))
+				if err != nil {
+					t.Fatal(err)
+				}
+				args := newFinalizeArgs()
+				args.DeliveryAttempt = attempt
+				return service.Finalize(ctx, args)
+			}
+			run(t, kind, logs, c.after)
+			var resource metricdata.ResourceMetrics
+			if err := reader.Collect(context.Background(), &resource); err != nil {
+				t.Fatal(err)
+			}
+			counted := map[string]int64{}
+			for _, scope := range resource.ScopeMetrics {
+				for _, m := range scope.Metrics {
+					if m.Name != FinalizeDeliveryNotCurrentCounter {
+						continue
+					}
+					for _, point := range m.Data.(metricdata.Sum[int64]).DataPoints {
+						reason, _ := point.Attributes.Value("reason")
+						counted[reason.AsString()] += point.Value
+					}
+				}
+			}
+			if counted[c.reason] != 1 || len(counted) != 1 {
+				t.Fatalf("%s by reason = %v, want exactly {%s: 1}", FinalizeDeliveryNotCurrentCounter, counted, c.reason)
+			}
+			if !strings.Contains(strings.Join(logs.lines(), "\n"), "reason="+c.reason+" ") {
+				t.Fatalf("finalize refusal line lacks reason=%s:\n%s", c.reason, strings.Join(logs.lines(), "\n"))
+			}
+		})
+		t.Run("dispatch/"+c.name, func(t *testing.T) {
+			logs := &lockedLogBuffer{}
+			kind := fenceKinds()[1]
+			kind.pass = func(t *testing.T, ctx context.Context, pool *pgxpool.Pool, attempt int64) error {
+				registry := &fakeJobRegistry{descriptors: map[string]jobruntime.Descriptor{
+					jobcontract.KindSyncProviderUnit: providerUnitDescriptor("river"),
+				}}
+				producer, err := joboutbox.NewProducer(pool, registry)
+				if err != nil {
+					t.Fatal(err)
+				}
+				logger := synclog.New(slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+				service, err := NewNativeDispatchSyncRunService(pool, logger, &fakeBudgetEstimator{}, producer, registry)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return service.Dispatch(ctx, DispatchSyncRunArgs{TransportArgs: TransportArgs{
+					Version: ContractVersionV1, OrgID: discoveryTestOrg, RunID: discoveryTestRun,
+					DispatchOutbox: discoveryTestOutbox, RouteGeneration: discoveryRouteGeneration, DeliveryAttempt: attempt,
+				}})
+			}
+			run(t, kind, logs, c.after)
+			found := false
+			for _, line := range logs.lines() {
+				if strings.Contains(line, "msg=dispatch_sync_run.delivery_not_current") && strings.Contains(line, "reason="+c.reason+" ") {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("no dispatch_sync_run.delivery_not_current reason=%s line:\n%s", c.reason, strings.Join(logs.lines(), "\n"))
+			}
+		})
+	}
 }

@@ -52,7 +52,7 @@ func TestSigNozDashboardsSpanGapsIsObject(t *testing.T) {
 			t.Errorf("%s: %v", filepath.Base(f), p)
 		}
 	}
-	if len(spanGapsProblems([]byte(`{"spec":{"panels":{"a":{"spec":{"plugin":{"spec":{"chartAppearance":{"spanGaps":false}}}}}}}`))) != 1 {
+	if len(spanGapsProblems([]byte(`{"spec":{"panels":{"a":{"spec":{"plugin":{"spec":{"chartAppearance":{"spanGaps":false}}}}}}}}`))) != 1 {
 		t.Error("guard accepted a bool spanGaps")
 	}
 }

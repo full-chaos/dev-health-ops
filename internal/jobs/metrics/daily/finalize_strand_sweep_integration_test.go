@@ -5,6 +5,7 @@ package daily
 import (
 	"context"
 	"errors"
+	"net/url"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
+	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
@@ -592,5 +594,121 @@ func TestSweepRechecksItsPredicateUnderTheRunLock(t *testing.T) {
 				t.Fatalf("updated_at=%s, want the horizon restarted only by a sweep publish", updatedAt)
 			}
 		})
+	}
+}
+
+// The sweep runs inside the worker's nightly dispatch, on the domain pool. Every
+// table it reads or writes must be granted to that role by the pinned
+// migrations (no grant is added by hand here): the whole dispatch, sweep
+// included, runs as the domain role and redrives the stranded run.
+func TestNightlySweepRunsUnderTheWorkerDomainRole(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	config, err := pgxpool.ParseConfig(instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.MaxConns = 8
+	admin, err := pgxpool.NewWithConfig(ctx, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+	createDailyTables(t, ctx, admin)
+	domainRole, err := containers.RoleName("sweep_domain", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	queueRole, err := containers.RoleName("sweep_queue", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer containers.DropRole(admin, domainRole, t.Logf)
+	defer containers.DropRole(admin, queueRole, t.Logf)
+	const password = "sweep_role_password"
+	for _, role := range []string{domainRole, queueRole} {
+		if _, err := admin.Exec(ctx, "CREATE ROLE "+role+" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '"+password+"'"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := riverstore.ApplyPinnedMigrations(ctx, admin, riverstore.MigrationOptions{
+		Schema: "river", DomainRole: domainRole, QueueRole: queueRole,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	domainURI, err := url.Parse(instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	domainURI.User = url.UserPassword(domainRole, password)
+	domain, err := pgxpool.New(ctx, domainURI.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer domain.Close()
+
+	registry, err := jobruntime.Load(filepath.Join("..", "..", "..", "..", "contracts", "jobs", "v1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	adminPublisher, err := NewPostgresPublisher(admin, dailyTestRegistry{production: registry})
+	if err != nil {
+		t.Fatal(err)
+	}
+	adminStore, err := NewPostgresStore(admin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	orgID, stranded := uuid.NewString(), uuid.NewString()
+	seedSweepRun(t, ctx, admin, sweepRunSeed{orgID, stranded, "2026-11-01", "pending", time.Now().UTC().Add(-48 * time.Hour), []string{"succeeded"}})
+	tx, err := admin.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nightly, err := adminStore.StartRunTx(ctx, tx, StartRunRequest{
+		OrganizationID: orgID, TargetDay: time.Date(2026, 11, 18, 0, 0, 0, 0, time.UTC),
+		Generation: "post-sync:" + uuid.NewString(), RepositoryIDs: []RepositoryID{RepositoryID(uuid.NewString())},
+	}, adminPublisher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := NewPostgresStore(domain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publisher, err := NewPostgresPublisher(domain, dailyTestRegistry{production: registry})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if redriven, err := store.SweepStrandedFinalizeForOrg(ctx, publisher, orgID); err != nil || redriven != 1 {
+		t.Fatalf("sweep as the domain role: redriven=%d err=%v, want 1 and no error", redriven, err)
+	}
+	// A second pass, through the whole dispatch as the domain role: nothing
+	// fails and nothing is published again.
+	dispatcher, err := NewDispatcher(store, publisher, &fakeRepositoryDiscoverer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	records := captureDefaultLog(t, func() {
+		if err := dispatcher.Work(ctx, dispatchExecution(orgID, nightly.ID)); err != nil {
+			t.Fatalf("dispatch Work as the domain role: %v", err)
+		}
+	})
+	for _, record := range records {
+		if record["msg"] == StrandedFinalizeSweepFailedLogMessage {
+			t.Fatalf("the sweep failed under the domain role: %v", record)
+		}
+	}
+	if got := finalizeRedriveRows(t, ctx, admin, stranded); got != 1 {
+		t.Fatalf("redrive rows = %d, want 1", got)
 	}
 }

@@ -14,11 +14,11 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 )
 
-// TestNoGoFileHandBuildsAChainTable: no Go file creates, by literal DDL, a table that a chain migration changes. A
-// hand-typed copy keeps the shape of the day it was written, so the next migration of that table leaves it behind.
-// Build it with CreateTables (or Apply). internal/chmigrate is out of scope: its rehearsals build the shape before a
-// migration on purpose. DDL built from a table name held in a variable is not seen.
-func TestNoGoFileHandBuildsAChainTable(t *testing.T) {
+// TestNoTestHandBuildsAChainTable: no test file (and no internal/testsupport helper) creates, by literal DDL, a table
+// that a chain migration changes. A hand-typed copy keeps the shape of the day it was written, so the next migration
+// of that table leaves it behind. Build it with CreateTables (or Apply). internal/chmigrate is out of scope: its
+// rehearsals build the shape before a migration on purpose. DDL built from a table name held in a variable is not seen.
+func TestNoTestHandBuildsAChainTable(t *testing.T) {
 	chain, err := chmigrate.LoadChain()
 	if err != nil {
 		t.Fatal(err)
@@ -27,12 +27,11 @@ func TestNoGoFileHandBuildsAChainTable(t *testing.T) {
 	if len(tables) == 0 {
 		return
 	}
-	quoted := make([]string, len(tables))
-	for index, table := range tables {
-		quoted[index] = regexp.QuoteMeta(table)
+	chainTable := make(map[string]bool, len(tables))
+	for _, table := range tables {
+		chainTable[table] = true
 	}
-	handBuilt := regexp.MustCompile("(?i)CREATE\\s+(?:OR\\s+REPLACE\\s+)?TABLE\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?`?(" +
-		strings.Join(quoted, "|") + ")`?(?:[^A-Za-z0-9_`]|$)")
+	handBuilt := regexp.MustCompile("(?i)CREATE\\s+(?:OR\\s+REPLACE\\s+)?TABLE\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?`?([A-Za-z0-9_]+)")
 	root, err := moduleroot.Root()
 	if err != nil {
 		t.Fatal(err)
@@ -54,7 +53,8 @@ func TestNoGoFileHandBuildsAChainTable(t *testing.T) {
 			}
 			return nil
 		}
-		if filepath.Ext(path) != ".go" {
+		if filepath.Ext(path) != ".go" ||
+			!strings.HasSuffix(path, "_test.go") && !strings.HasPrefix(path, filepath.Join(root, "internal", "testsupport")+string(filepath.Separator)) {
 			return nil
 		}
 		body, err := os.ReadFile(path)
@@ -65,9 +65,13 @@ func TestNoGoFileHandBuildsAChainTable(t *testing.T) {
 			return nil
 		}
 		for _, match := range handBuilt.FindAllSubmatchIndex(body, -1) {
-			line := 1 + strings.Count(string(body[:match[0]]), "\n")
+			table := string(body[match[2]:match[3]])
+			if !chainTable[table] {
+				continue
+			}
+			line := 1 + bytes.Count(body[:match[0]], []byte("\n"))
 			relative, _ := filepath.Rel(root, path)
-			found = append(found, relative+":"+strconv.Itoa(line)+" "+string(body[match[2]:match[3]]))
+			found = append(found, relative+":"+strconv.Itoa(line)+" "+table)
 		}
 		return nil
 	})

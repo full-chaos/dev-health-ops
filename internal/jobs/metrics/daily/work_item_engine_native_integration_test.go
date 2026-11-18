@@ -40,6 +40,16 @@ func seedWorkItemEngineItem(
 	workItemID, label string, createdAt time.Time, startedAt, completedAt *time.Time, storyPoints *float64,
 ) {
 	t.Helper()
+	seedWorkItemEngineItemOfType(t, ctx, conn, orgID, repoID, workItemID, "issue", label, createdAt, startedAt, completedAt, storyPoints)
+}
+
+// seedWorkItemEngineItemOfType seeds one item of the given work_items type: only a pull / merge request ("pr",
+// "merge_request") takes the ownership of its repository as its team.
+func seedWorkItemEngineItemOfType(
+	t *testing.T, ctx context.Context, conn driver.Conn, orgID string, repoID uuid.UUID,
+	workItemID, itemType, label string, createdAt time.Time, startedAt, completedAt *time.Time, storyPoints *float64,
+) {
+	t.Helper()
 	status := "in_progress"
 	if completedAt != nil {
 		status = "done"
@@ -51,7 +61,7 @@ func seedWorkItemEngineItem(
 		t.Fatalf("prepare work_items batch: %v", err)
 	}
 	if err := batch.Append(
-		repoID, workItemID, "github", "Item "+workItemID, "issue", status, createdAt, startedAt, completedAt,
+		repoID, workItemID, "github", "Item "+workItemID, itemType, status, createdAt, startedAt, completedAt,
 		[]string{label}, storyPoints, orgID, createdAt,
 	); err != nil {
 		t.Fatalf("append work_items row: %v", err)
@@ -108,9 +118,9 @@ func TestWorkItemEngineFamiliesWriteZeroForAKeyTheRecomputeNoLongerHolds(t *test
 	timePtr := func(value time.Time) *time.Time { return &value }
 	points := 3.0
 	// One item completed on the day (3 points), one open item.
-	seedWorkItemEngineItem(t, ctx, conn, orgID, repoID, "gh:acme/api#1", "quality",
+	seedWorkItemEngineItemOfType(t, ctx, conn, orgID, repoID, "gh:acme/api#1", "pr", "quality",
 		day.AddDate(0, 0, -2), timePtr(day.AddDate(0, 0, -1)), timePtr(day.Add(10*time.Hour)), &points)
-	seedWorkItemEngineItem(t, ctx, conn, orgID, repoID, "gh:acme/api#2", "security",
+	seedWorkItemEngineItemOfType(t, ctx, conn, orgID, repoID, "gh:acme/api#2", "pr", "security",
 		day.Add(8*time.Hour), nil, nil, nil)
 
 	attribution, err := NewWorkItemAttributionExecutor(conn)

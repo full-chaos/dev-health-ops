@@ -7,6 +7,9 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 )
 
 // CHAOS-13794: the content test on a run's report artifacts. An artifact is dropped only when its cases (class, name, outcome) equal
@@ -362,5 +365,214 @@ func TestGitHubTestsRunReportsKeepLegsWithDifferentSuiteTimestamps(t *testing.T)
 	walk, _, _ := rowsWalk(t, 1, rowsArtifact{id: "97", size: 10, body: fxJUnit(legA)}, rowsArtifact{id: "98", size: 20, body: fxJUnit(legB)})
 	if got, want := committedReportRows(walk), rowsOfSuites(legA)*2; got != want {
 		t.Fatalf("committed %d rows, want both legs (%d)", got, want)
+	}
+}
+
+// CHAOS-13991: an artifact is dropped as aggregate_of_parts only when it loses nothing. A copy or an aggregate whose cases match
+// by identity and outcome but that holds a stored field its copy or parts do not, or a coverage snapshot, is kept with them and
+// reported as aggregate_mismatch, as an outcome mismatch is.
+
+// lossCell is one kind of data only the would-be-dropped artifact holds: edit changes its JUnit body, extra adds archive members,
+// and holds says whether the committed rows carry that data.
+type lossCell struct {
+	name  string
+	edit  func(t *testing.T, body string) string
+	extra map[string]string
+	holds func(rows committedRows) bool
+}
+
+type committedRows struct {
+	suites   []testSuiteResultRow
+	cases    []testCaseResultRow
+	coverage []coverageSnapshotRow
+}
+
+func replaceOnce(t *testing.T, body, old, replacement string) string {
+	t.Helper()
+	if !strings.Contains(body, old) {
+		t.Fatalf("fixture has no %q", old)
+	}
+	return strings.Replace(body, old, replacement, 1)
+}
+
+// lossCells: (a) a distinct failure message on one case, (b) a distinct suite framework, (c) an LCOV and (d) a Cobertura snapshot.
+// failing names the one failed case the fixture holds, suite the suite to edit.
+func lossCells(failing, suite string) []lossCell {
+	return []lossCell{
+		{
+			name: "failure message",
+			edit: func(t *testing.T, body string) string {
+				return replaceOnce(t, body, `<testcase name="`+failing+`" classname="pkg" time="0.1"><failure message="boom"/>`,
+					`<testcase name="`+failing+`" classname="pkg" time="0.1"><failure message="bang"/>`)
+			},
+			holds: func(rows committedRows) bool {
+				messages := map[string]int{}
+				for _, row := range rows.cases {
+					if row.FailureMessage != nil {
+						messages[*row.FailureMessage]++
+					}
+				}
+				return messages["boom"] == 1 && messages["bang"] == 1
+			},
+		},
+		{
+			name: "suite framework",
+			edit: func(t *testing.T, body string) string {
+				return replaceOnce(t, body, `<testsuite name="`+suite+`" `, `<testsuite name="`+suite+`" framework="jest" `)
+			},
+			holds: func(rows committedRows) bool {
+				for _, row := range rows.suites {
+					if row.SuiteName == suite && row.Framework != nil && *row.Framework == "jest" {
+						return true
+					}
+				}
+				return false
+			},
+		},
+		{
+			name:  "lcov snapshot",
+			extra: map[string]string{"coverage.info": "TN:\nSF:pkg/b/x.go\nDA:1,1\nDA:2,0\nLF:2\nLH:1\nend_of_record\n"},
+			holds: func(rows committedRows) bool {
+				return len(rows.coverage) == 1 && rows.coverage[0].ReportFormat != nil && *rows.coverage[0].ReportFormat == "lcov"
+			},
+		},
+		{
+			name: "cobertura snapshot",
+			extra: map[string]string{"coverage.xml": `<coverage lines-valid="2" lines-covered="1"><packages><package name="pkg/b"><classes>` +
+				`<class filename="pkg/b/y.go"><lines><line number="1" hits="1"/><line number="2" hits="0"/></lines></class></classes></package></packages></coverage>`},
+			holds: func(rows committedRows) bool {
+				return len(rows.coverage) == 1 && rows.coverage[0].ReportFormat != nil && *rows.coverage[0].ReportFormat == "cobertura"
+			},
+		},
+	}
+}
+
+// rowsWalkCommitted drives the same unit as rowsWalk and returns the rows the route committed.
+func rowsWalkCommitted(t *testing.T, artifacts ...rowsArtifact) committedRows {
+	t.Helper()
+	client := githubTestsClient(t, fakehttp.Client(&githubTestsRowsDoer{t: t, runs: 1, artifacts: artifacts}))
+	client.Metrics = providerfoundation.NewMetrics()
+	final, effects := walkGitHubTestsChunksCapturingEffects(t, GitHubTestsRouteHandler{}, nativeTestClaim("github", "cicd"), client, 8)
+	var rows committedRows
+	for _, effect := range append(effects, final.Effects...) {
+		var err error
+		switch effect.Destination {
+		case "test_suite_results":
+			var decoded []testSuiteResultRow
+			decoded, err = decodeEffectRows[testSuiteResultRow](effect)
+			rows.suites = append(rows.suites, decoded...)
+		case "test_case_results":
+			var decoded []testCaseResultRow
+			decoded, err = decodeEffectRows[testCaseResultRow](effect)
+			rows.cases = append(rows.cases, decoded...)
+		case "coverage_snapshots":
+			var decoded []coverageSnapshotRow
+			decoded, err = decodeEffectRows[coverageSnapshotRow](effect)
+			rows.coverage = append(rows.coverage, decoded...)
+		}
+		if err != nil {
+			t.Fatalf("decode %s: %v", effect.Destination, err)
+		}
+	}
+	return rows
+}
+
+// assertLossKeptAsMismatch: every artifact is committed, the one holding the distinct data is marked aggregate_mismatch, nothing is
+// marked aggregate_of_parts, and the unit does not advance.
+func assertLossKeptAsMismatch(t *testing.T, cell lossCell, artifacts []rowsArtifact, wantRows int, lossy string) {
+	t.Helper()
+	walk, _, rendered := rowsWalk(t, 1, artifacts...)
+	if got := committedReportRows(walk); got != wantRows {
+		t.Fatalf("%s: committed %d rows, want every artifact (%d)", cell.name, got, wantRows)
+	}
+	if causes := markerCauses(walk); len(causes) != 1 || causes[lossy] != githubTestsAggregateMismatchCause {
+		t.Fatalf("%s: markers %v, want only %s as %s", cell.name, causes, lossy, githubTestsAggregateMismatchCause)
+	}
+	if observed(walk, githubTestsAggregateMismatchCause) != 1 || observed(walk, githubTestsAggregateOfPartsCause) != 0 {
+		t.Fatalf("%s: observations %+v, want aggregate_mismatch x1 and no aggregate_of_parts", cell.name, walk.cursor.Incomplete)
+	}
+	if !strings.Contains(rendered, `component="run_reports",cause="aggregate_mismatch"} 1`) ||
+		strings.Contains(rendered, `cause="aggregate_of_parts"`) {
+		t.Fatalf("%s: metrics want aggregate_mismatch 1 and no aggregate_of_parts in:\n%s", cell.name, rendered)
+	}
+	if walk.final.Watermark != nil {
+		t.Fatalf("%s: watermark %v, want none: a mismatch must not advance", cell.name, walk.final.Watermark)
+	}
+	if rows := rowsWalkCommitted(t, artifacts...); !cell.holds(rows) {
+		t.Fatalf("%s: the committed rows (%d suites, %d cases, %d coverage) lack the distinct data", cell.name, len(rows.suites), len(rows.cases), len(rows.coverage))
+	}
+}
+
+// Exact-copy branch: the higher id equals the lower on identity, outcome and timing but holds data the lower does not.
+func TestGitHubTestsRunReportsKeepACopyThatHoldsMoreData(t *testing.T) {
+	base := withDurations(part("c", 3, 90), "0.1")
+	for index := range base {
+		base[index].ts = "2026-11-14T15:04:10Z"
+	}
+	base[0].cases[0].status = "failed"
+	body := fxJUnit(base)
+	for _, cell := range lossCells("c-case-0", "c-suite-1") {
+		t.Run(cell.name, func(t *testing.T) {
+			copied := body
+			if cell.edit != nil {
+				copied = cell.edit(t, body)
+			}
+			low := rowsArtifact{id: "93", size: 10, body: body}
+			high := rowsArtifact{id: "94", size: 20, body: copied, extra: cell.extra}
+			wantRows := 2 * rowsOfSuites(base)
+			if cell.extra != nil {
+				wantRows++
+			}
+			assertLossKeptAsMismatch(t, cell, []rowsArtifact{low, high}, wantRows, high.id)
+		})
+	}
+}
+
+// Union branch: the aggregate equals its disjoint parts on identity and outcome but holds data the parts do not.
+func TestGitHubTestsRunReportsKeepAnAggregateThatHoldsMoreData(t *testing.T) {
+	first, second := part("x", 2, 100), part("y", 2, 100)
+	first[0].cases[0].status = "failed"
+	all := append(append([]fxSuite(nil), first...), second...)
+	body := fxJUnit(all)
+	for _, cell := range lossCells("x-case-0", "y-suite-1") {
+		t.Run(cell.name, func(t *testing.T) {
+			aggregate := body
+			if cell.edit != nil {
+				aggregate = cell.edit(t, body)
+			}
+			artifacts := []rowsArtifact{
+				{id: "51", size: 10, body: fxJUnit(first)}, {id: "52", size: 20, body: fxJUnit(second)},
+				{id: "53", size: 30, body: aggregate, extra: cell.extra},
+			}
+			wantRows := rowsOfSuites(first) + rowsOfSuites(second) + rowsOfSuites(all)
+			if cell.extra != nil {
+				wantRows++
+			}
+			assertLossKeptAsMismatch(t, cell, artifacts, wantRows, "53")
+		})
+	}
+}
+
+// The same fixtures without the distinct data are still dropped: the copy and the aggregate lose nothing.
+func TestGitHubTestsRunReportsStillDropLosslessCopyAndAggregate(t *testing.T) {
+	base := withDurations(part("c", 3, 90), "0.1")
+	for index := range base {
+		base[index].ts = "2026-11-14T15:04:10Z"
+	}
+	base[0].cases[0].status = "failed"
+	walk, _, _ := rowsWalk(t, 1, rowsArtifact{id: "93", size: 10, body: fxJUnit(base)}, rowsArtifact{id: "94", size: 20, body: fxJUnit(base)})
+	if causes := markerCauses(walk); len(causes) != 1 || causes["94"] != githubTestsAggregateOfPartsCause {
+		t.Fatalf("copy: markers %v, want only 94 as aggregate_of_parts", causes)
+	}
+	first, second := part("x", 2, 100), part("y", 2, 100)
+	first[0].cases[0].status = "failed"
+	all := append(append([]fxSuite(nil), first...), second...)
+	walk, _, _ = rowsWalk(t, 1, rowsArtifact{id: "51", size: 10, body: fxJUnit(first)}, rowsArtifact{id: "52", size: 20, body: fxJUnit(second)},
+		rowsArtifact{id: "53", size: 30, body: fxJUnit(all)})
+	if causes := markerCauses(walk); len(causes) != 1 || causes["53"] != githubTestsAggregateOfPartsCause {
+		t.Fatalf("aggregate: markers %v, want only 53 as aggregate_of_parts", causes)
+	}
+	if got, want := committedReportRows(walk), rowsOfSuites(first)+rowsOfSuites(second); got != want {
+		t.Fatalf("aggregate: committed %d rows, want the parts (%d)", got, want)
 	}
 }

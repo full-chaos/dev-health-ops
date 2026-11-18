@@ -53,7 +53,7 @@ func TestLoadReposCarriesCoOwnerRows(t *testing.T) {
 		repoTied:   {"team-tied-a": "map[]", "team-tied-b": "map[]"},
 	} {
 		repo := repo
-		_, _, candidates := derived.Resolve(GithubWorkItemDerivationSubject{WorkItemID: "ghpr:" + repo + "#1", Provider: "github", RepoID: &repo, OrgID: org})
+		_, _, candidates := derived.Resolve(GithubWorkItemDerivationSubject{WorkItemID: "ghpr:" + repo + "#1", Provider: "github", Type: "pr", RepoID: &repo, OrgID: org})
 		byTeam := rowsByTeam(candidates)
 		for team, wantMarks := range want {
 			if got := fmt.Sprint(marks(byTeam[team])); got != wantMarks {

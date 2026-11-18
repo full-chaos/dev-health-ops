@@ -244,7 +244,8 @@ func (service *NativeReferenceDiscoveryService) claim(
 	// ctx carries a tally, which this function never installed before now.
 	ctx = withRollupBumpTally(ctx)
 
-	current, err := currentTransportReference(ctx, tx, args, outboxKindReferenceDiscovery)
+	fence := &transportFence{args: args, kind: outboxKindReferenceDiscovery, unavailable: ErrReferenceDiscoveryUnavailable}
+	current, err := fence.current(ctx, tx)
 	if err != nil {
 		return false, "", time.Time{}, err
 	}
@@ -284,8 +285,8 @@ func (service *NativeReferenceDiscoveryService) claim(
 			if _, err := terminalizeFeatureDisabledPlan(ctx, tx, run, reason, gateNow); err != nil {
 				return false, "", time.Time{}, err
 			}
-			if err := tx.Commit(ctx); err != nil {
-				return false, "", time.Time{}, ErrReferenceDiscoveryUnavailable
+			if outcome, err := fence.commit(ctx, tx); err != nil || !outcome.committed {
+				return false, "", time.Time{}, err
 			}
 			// CHAOS-4586 (codex round 10): flush the rollup-bump tally
 			// terminalizeFeatureDisabledPlan just recorded, now that its
@@ -326,8 +327,8 @@ WHERE id = $1::uuid
 		// Python: `return {"status": "skipped", "reason": "not_claimed"}`.
 		return false, "", time.Time{}, nil
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return false, "", time.Time{}, ErrReferenceDiscoveryUnavailable
+	if outcome, err := fence.commit(ctx, tx); err != nil || !outcome.committed {
+		return false, "", time.Time{}, err
 	}
 	return true, leaseOwner, deadline, nil
 }

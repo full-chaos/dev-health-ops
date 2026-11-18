@@ -8,11 +8,11 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/chmigrate"
 )
 
-const testopsRiskRetractedVersion = "158_testops_risk_retracted.sql"
+const testopsRiskRetractedVersion = "160_testops_risk_retracted.sql"
 
 var testopsRiskRetractedTables = []string{"testops_release_confidence", "testops_quality_drag", "testops_pipeline_stability"}
 
-// 158 adds exactly the retraction marker of the three testops_risk tables, defaulted to 0, and nothing else.
+// 160 adds exactly the retraction marker of the three testops_risk tables, defaulted to 0, and nothing else.
 func TestMigration158IsTheThreeDefaultedMarkerColumns(t *testing.T) {
 	chain, err := chmigrate.LoadChain()
 	if err != nil {

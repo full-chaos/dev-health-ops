@@ -127,24 +127,12 @@ func TestWorkUnitExplainValidationErrorsMatchPython(t *testing.T) {
 	}
 }
 
-// TestWorkUnitExplainNotFoundBodyMatchesPython pins the 404 against the
-// captured reference bodies, and it does so in TWO ways because this route
-// reproduces the reference's encoding on one axis and not the other.
-//
-// BYTES, for the cases the encoding path reproduces exactly. The reference
-// interpolates the caller's own work_unit_id into the message, and the
-// escaping case carries `"`, `<`, `>`, `&` and a non-ASCII character --
-// Go's default encoder escapes three of those where the reference escapes
-// none, which is what this route's disabled HTML escaping closes and only a
-// byte comparison catches.
-//
-// DECODED VALUE, for the line-separator case. U+2028/U+2029 are governed by
-// an option this encoder type exposes no setter for, so they leave escaped
-// where the reference writes their raw bytes. The fixture stays as the
-// record of what the reference emits; the assertions below state exactly
-// what this route sends instead -- the escaped spelling on the wire, the
-// SAME string once decoded -- so the accepted difference is measured rather
-// than described.
+// TestWorkUnitExplainNotFoundBodyMatchesPython pins the 404 byte for byte
+// against the captured reference bodies. The reference interpolates the
+// caller's own work_unit_id into the message; the escaping case carries `"`,
+// `<`, `>`, `&` and a non-ASCII character and the line-separator case
+// U+2028/U+2029, all of which the reference writes unescaped (or, for `"`,
+// as `\"`), with no trailing newline.
 func TestWorkUnitExplainNotFoundBodyMatchesPython(t *testing.T) {
 	// The capture ran with LLM_PROVIDER=mock and no llm_provider parameter,
 	// so "auto" resolves to mock and get_provider succeeds before the
@@ -157,13 +145,10 @@ func TestWorkUnitExplainNotFoundBodyMatchesPython(t *testing.T) {
 		name       string
 		workUnitID string
 		fixture    string
-		// byteExact is false for the one case whose encoding this path
-		// cannot reproduce; its decoded value is compared instead.
-		byteExact bool
 	}{
-		{"plain id", "wu-ABC-123", "testdata/work_unit_explain/not_found.json", true},
-		{"id needing json escaping", "wu-\"q\"-<tag>&\u00e9", "testdata/work_unit_explain/not_found_id_needing_json_escaping.json", true},
-		{"id with line separators", "wu-\u2028-\u2029-end", "testdata/work_unit_explain/not_found_id_with_line_separators.json", false},
+		{"plain id", "wu-ABC-123", "testdata/work_unit_explain/not_found.json"},
+		{"id needing json escaping", "wu-\"q\"-<tag>&\u00e9", "testdata/work_unit_explain/not_found_id_needing_json_escaping.json"},
+		{"id with line separators", "wu-\u2028-\u2029-end", "testdata/work_unit_explain/not_found_id_with_line_separators.json"},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -178,45 +163,8 @@ func TestWorkUnitExplainNotFoundBodyMatchesPython(t *testing.T) {
 			}
 
 			want := readWorkUnitExplainFixture(t, testCase.fixture)
-			// The reference body carries no trailing newline; the encoder
-			// appends exactly one, which is insignificant JSON whitespace.
-			if !bytes.HasSuffix(rec.Body.Bytes(), []byte("\n")) {
-				t.Errorf("body carries no trailing newline: %q", rec.Body.Bytes())
-			}
-			got := bytes.TrimSuffix(rec.Body.Bytes(), []byte("\n"))
-			if bytes.HasSuffix(got, []byte("\n")) {
-				t.Errorf("body carries more than one trailing newline: %q", rec.Body.Bytes())
-			}
-
-			if testCase.byteExact {
-				if !bytes.Equal(got, bytes.TrimRight(want, "\n")) {
-					t.Errorf("body mismatch\n got=%s\nwant=%s", got, want)
-				}
-				return
-			}
-
-			// The escaped spelling is on the wire, the raw bytes are not.
-			for _, separator := range []string{"\u2028", "\u2029"} {
-				if bytes.Contains(got, []byte(separator)) {
-					t.Errorf("body carries the raw bytes of %q; this encoding path cannot emit them: %q", separator, got)
-				}
-			}
-			if !bytes.Contains(got, []byte(`\u2028`)) || !bytes.Contains(got, []byte(`\u2029`)) {
-				t.Errorf("body does not carry the escaped separators: %q", got)
-			}
-			// And the DECODED value equals the reference's, which is the
-			// contract a client of this route actually depends on.
-			var candidate, reference struct {
-				Detail string `json:"detail"`
-			}
-			if err := json.Unmarshal(got, &candidate); err != nil {
-				t.Fatalf("decode candidate: %v\nbody=%s", err, got)
-			}
-			if err := json.Unmarshal(want, &reference); err != nil {
-				t.Fatalf("decode fixture: %v\nbody=%s", err, want)
-			}
-			if candidate.Detail != reference.Detail {
-				t.Errorf("decoded detail = %q, want %q", candidate.Detail, reference.Detail)
+			if !bytes.Equal(rec.Body.Bytes(), want) {
+				t.Errorf("body mismatch\n got=%q\nwant=%q", rec.Body.Bytes(), want)
 			}
 		})
 	}

@@ -2,6 +2,7 @@ package daily
 
 import (
 	"context"
+	"log/slog"
 	"time"
 )
 
@@ -81,6 +82,11 @@ const (
 // keeps this above it. A retry queued longer than this is marked, and the next
 // pass after its claim clears the marker.
 const failedPartitionRetryHorizon = 24 * time.Hour
+
+// BlockedReasonChangedLogMessage is the Info line of a run that stays blocked
+// while its reason changes. That change is neither a mark nor a clear, so it
+// moves no counter; this line is its only trace.
+const BlockedReasonChangedLogMessage = "daily metrics blocked run reason changed"
 
 // dailyMetricsRunBlockedReasons is the closed vocabulary the marker accepts,
 // mirroring dailyMetricsPartitionFailureReasons' shape. Every value fits the
@@ -256,7 +262,7 @@ WHERE run.id = wanted.id
   AND run.blocked_reason IS NOT DISTINCT FROM wanted.read_reason
 -- was_blocked is the state the pass read: a reason-only change is neither a
 -- mark nor a clear.
-RETURNING wanted.want_blocked, wanted.was_blocked`
+RETURNING wanted.want_blocked, wanted.was_blocked, run.id::text, wanted.read_reason, wanted.want_reason`
 
 // ReconcileBlockedRuns marks and unmarks this organization's wedged runs from
 // live partition state. It is the ONLY writer of the marker, in either
@@ -282,7 +288,9 @@ func (store *PostgresStore) ReconcileBlockedRuns(
 	defer rows.Close()
 	for rows.Next() {
 		var blocked, wasBlocked bool
-		if err := rows.Scan(&blocked, &wasBlocked); err != nil {
+		var runID string
+		var oldReason, newReason *string
+		if err := rows.Scan(&blocked, &wasBlocked, &runID, &oldReason, &newReason); err != nil {
 			return BlockedReconcileOutcome{}, ErrUnavailable
 		}
 		switch {
@@ -290,6 +298,12 @@ func (store *PostgresStore) ReconcileBlockedRuns(
 			outcome.Marked++
 		case !blocked && wasBlocked:
 			outcome.Cleared++
+		case blocked && wasBlocked:
+			slog.InfoContext(ctx, BlockedReasonChangedLogMessage,
+				"run", runIDPrefix(runID),
+				"old_reason", reasonText(oldReason),
+				"new_reason", reasonText(newReason),
+			)
 		}
 	}
 	if rows.Err() != nil {
@@ -315,6 +329,20 @@ WHERE org_id = $1::uuid AND status IN ('running', 'failed') AND blocked_at IS NO
 		return BlockedReconcileOutcome{}, ErrUnavailable
 	}
 	return outcome, nil
+}
+
+func runIDPrefix(runID string) string {
+	if len(runID) > 8 {
+		return runID[:8]
+	}
+	return runID
+}
+
+func reasonText(reason *string) string {
+	if reason == nil {
+		return ""
+	}
+	return *reason
 }
 
 // BlockedRun is one row of the operator readback.

@@ -3,8 +3,12 @@
 package daily
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"log/slog"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -265,6 +269,36 @@ func TestRedrivenFailedPartitionsAndTheRetryHorizon(t *testing.T) {
 	}
 }
 
+// reconcileWithReasonLog runs one pass with slog.Default() captured and returns
+// the records that carry BlockedReasonChangedLogMessage.
+func reconcileWithReasonLog(
+	t *testing.T, ctx context.Context, store *PostgresStore, orgID string,
+) (BlockedReconcileOutcome, []map[string]any) {
+	t.Helper()
+	var captured bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&captured, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	outcome, err := store.ReconcileBlockedRuns(ctx, orgID)
+	slog.SetDefault(previous)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var records []map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(captured.String()), "\n") {
+		if line == "" {
+			continue
+		}
+		var record map[string]any
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			t.Fatalf("decode log line %q: %v", line, err)
+		}
+		if record["msg"] == BlockedReasonChangedLogMessage {
+			records = append(records, record)
+		}
+	}
+	return outcome, records
+}
+
 func readMarkerState(t *testing.T, ctx context.Context, pool *pgxpool.Pool, runID string) (*time.Time, string, time.Time) {
 	t.Helper()
 	var blockedAt *time.Time
@@ -382,9 +416,11 @@ func TestBlockedReasonFollowsThePartitionsWhileTheRunStaysBlocked(t *testing.T) 
 
 			secondPass := firstPass.Add(24 * time.Hour)
 			store.now = func() time.Time { return secondPass }
-			outcome, err := store.ReconcileBlockedRuns(ctx, orgID)
-			if err != nil {
-				t.Fatal(err)
+			outcome, lines := reconcileWithReasonLog(t, ctx, store, orgID)
+			if len(lines) != 1 || lines[0]["level"] != "INFO" || lines[0]["run"] != runID[:8] ||
+				lines[0]["old_reason"] != testCase.firstWant || lines[0]["new_reason"] != testCase.secondWant {
+				t.Fatalf("reason-change log lines = %v, want one INFO line run=%s old=%s new=%s",
+					lines, runID[:8], testCase.firstWant, testCase.secondWant)
 			}
 			blockedAt, reason, updatedAt := readMarkerState(t, ctx, pool, runID)
 			if blockedAt == nil || reason != testCase.secondWant {
@@ -399,8 +435,8 @@ func TestBlockedReasonFollowsThePartitionsWhileTheRunStaysBlocked(t *testing.T) 
 
 			// A steady pass writes nothing.
 			store.now = func() time.Time { return secondPass.Add(time.Hour) }
-			if _, err := store.ReconcileBlockedRuns(ctx, orgID); err != nil {
-				t.Fatal(err)
+			if _, steadyLines := reconcileWithReasonLog(t, ctx, store, orgID); len(steadyLines) != 0 {
+				t.Fatalf("a steady pass logged a reason change: %v", steadyLines)
 			}
 			if _, _, steady := readMarkerState(t, ctx, pool, runID); !steady.Equal(updatedAt) {
 				t.Fatalf("a steady pass wrote the run: updated_at %s -> %s", updatedAt, steady)

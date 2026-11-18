@@ -49,6 +49,9 @@ type dailyRow struct {
 // release confidence and pipeline stability and the sums of the latest
 // quality-drag hours, outer-joined on the day. Stability is read only through
 // testops.StabilityLiveRowsSQL: a repo-day with no completed run has none.
+// The quality-drag table is read FINAL: one whole row per repo-day, the one a
+// merge keeps (the last inserted of equal computed_at), so a NULL part of that
+// row stays NULL and a merge never changes the answer.
 const dailyQuery = `SELECT
     day AS day,
     release_confidence,
@@ -83,21 +86,10 @@ FULL OUTER JOIN (
         sum(flake_investigation_hours) AS flake_investigation_hours,
         sum(queue_wait_hours) AS queue_wait_hours,
         sum(retry_overhead_hours) AS retry_overhead_hours
-    FROM (
-        SELECT
-            day,
-            repo_id,
-            argMax(drag_hours, computed_at) AS drag_hours,
-            argMax(failure_rework_hours, computed_at) AS failure_rework_hours,
-            argMax(flake_investigation_hours, computed_at) AS flake_investigation_hours,
-            argMax(queue_wait_hours, computed_at) AS queue_wait_hours,
-            argMax(retry_overhead_hours, computed_at) AS retry_overhead_hours
-        FROM testops_quality_drag
-        WHERE org_id = {org_id:String}
-          AND day >= {start:Date}
-          AND day <= {end:Date}
-        GROUP BY day, repo_id
-    )
+    FROM testops_quality_drag FINAL
+    WHERE org_id = {org_id:String}
+      AND day >= {start:Date}
+      AND day <= {end:Date}
     GROUP BY day
 ) AS drag_daily USING (day)
 FULL OUTER JOIN (
@@ -248,11 +240,21 @@ func latestWith(rows []dailyRow, pick func(dailyRow) *float64) *dailyRow {
 	return nil
 }
 
-func orZero(v *float64) float64 {
-	if v == nil {
-		return 0
+type breakdownPart struct {
+	category string
+	hours    *float64
+}
+
+// breakdownItems lists the parts that have a sum; a part whose sum is absent
+// (every summed row NULL) is omitted, never shown as 0.
+func breakdownItems(parts ...breakdownPart) []model.TestOpsRiskBreakdownItem {
+	items := []model.TestOpsRiskBreakdownItem{}
+	for _, p := range parts {
+		if p.hours != nil {
+			items = append(items, model.TestOpsRiskBreakdownItem{Category: p.category, Hours: *p.hours})
+		}
 	}
-	return *v
+	return items
 }
 
 // Resolve answers testopsRisk for the org over the inclusive date range.
@@ -316,12 +318,12 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, input model.
 	}
 	if r := latestWith(rows, drag); r != nil {
 		out.QualityDragHours = r.qualityDragHours
-		out.QualityDragBreakdown = []model.TestOpsRiskBreakdownItem{
-			{Category: "Failure Rework", Hours: orZero(r.failureReworkHours)},
-			{Category: "Flake Investigation", Hours: orZero(r.flakeInvestigationHours)},
-			{Category: "Queue Wait", Hours: orZero(r.queueWaitHours)},
-			{Category: "Retry Overhead", Hours: orZero(r.retryOverheadHours)},
-		}
+		out.QualityDragBreakdown = breakdownItems(
+			breakdownPart{"Failure Rework", r.failureReworkHours},
+			breakdownPart{"Flake Investigation", r.flakeInvestigationHours},
+			breakdownPart{"Queue Wait", r.queueWaitHours},
+			breakdownPart{"Retry Overhead", r.retryOverheadHours},
+		)
 	}
 	return out, nil
 }

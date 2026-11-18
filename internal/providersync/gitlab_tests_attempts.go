@@ -186,6 +186,9 @@ func parseGitLabTestsJobArtifact(
 		legacyScopes = append([]string{jobID}, runJobs.earlierJobIDs(jobID)...)
 	}
 	rows, err := parseGitHubTestsArchive(archive, scope, scope, legacyScopes, repoID, runID, orgID, started, finished, at)
+	// The two size-guard skips are GitHub report_member causes (CHAOS-14030): GitLab treats any other skip as fatal, so it takes
+	// them out here and records them in its own terms (gitLabReportMemberComponent) from GuardDropped.
+	rows = rows.withoutMemberGuardSkips()
 	for index := range rows.Coverage {
 		rows.Coverage[index].ReportSlot, rows.Coverage[index].RunAttempt = name, attempt
 	}

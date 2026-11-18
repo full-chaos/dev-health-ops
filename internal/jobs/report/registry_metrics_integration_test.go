@@ -242,6 +242,9 @@ func TestClickHouseQueryAdapterChartsEveryRegistryMetric(t *testing.T) {
 		// 3 succeeded and 1 failed pipeline runs.
 		"failure_rate": {3, 1},
 		"success_rate": {3, 1},
+		// 3 passed and 1 failed test cases (both counts are registry metrics of
+		// their own and keep their seeded values).
+		"pass_rate": {3, 1},
 	}
 	for _, name := range ruleMetrics {
 		rule, inputValues := chartRules[name], ruleInputValues[name]

@@ -394,6 +394,8 @@ internal/jobs/metrics/remaining	capacity_schema_contract_pin_test.go	unexpressed
 internal/jobs/metrics/remaining	executor_clock_ast_test.go	internal/jobs/metrics/remaining	dir	*
 internal/jobs/operational	billingemail_test.go	internal/jobs/operational/testdata/billing_email	dir	*
 internal/jobs/operational	venue_golden_address_test.go	internal/jobs/operational/testdata/golden	dir	*
+internal/jobs/report	stored_test_pass_rate_readers_census_test.go	cmd	tree	*.go
+internal/jobs/report	stored_test_pass_rate_readers_census_test.go	internal	tree	*.go
 internal/jobs/workgraph	error_attr_census_test.go	internal/jobs/workgraph	tree	*.go
 internal/jobs/workgraph/units	pr_link_protection_test.go	internal	tree	*.go
 internal/jobs/workgraph/writercontract	writercontract_test.go	internal	tree	*

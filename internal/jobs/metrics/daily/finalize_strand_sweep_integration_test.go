@@ -350,3 +350,247 @@ func TestAStillQueuedFinalizeAndItsRedriveComputeTheRunOnce(t *testing.T) {
 		t.Fatalf("run status = %q, want succeeded", status)
 	}
 }
+
+// One nightly pass reaches every stranded run of the organization, beyond one
+// page of candidates, and a later pass does not publish a run again while its
+// redriven finalize job is still waiting.
+func TestNightlySweepReachesEveryStrandedRunOnce(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createDailyTables(t, ctx, pool)
+	registry, err := jobruntime.Load(filepath.Join("..", "..", "..", "..", "contracts", "jobs", "v1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	publisher, err := NewPostgresPublisher(pool, dailyTestRegistry{production: registry})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewPostgresStore(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	orgID := uuid.NewString()
+	const stranded = defaultFinalizeSweepLimit + 1
+	old := time.Now().UTC().Add(-48 * time.Hour)
+	if _, err := pool.Exec(ctx, `
+INSERT INTO daily_metrics_runs (id,org_id,target_day,generation,status,finalization_status,created_at,updated_at)
+SELECT gen_random_uuid(), $1::uuid, DATE '2026-01-01' + n, 'post-sync:sweep-' || n, 'running', 'pending', $2, $2
+FROM generate_series(1, $3::int) AS n`, orgID, old, stranded); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+INSERT INTO daily_metrics_partitions (id,run_id,ordinal,repo_ids,status,attempt_count,completed_at,created_at,updated_at)
+SELECT gen_random_uuid(), run.id, 0, '[]'::jsonb, 'succeeded', 1, $2, $2, $2
+FROM daily_metrics_runs AS run WHERE run.org_id = $1::uuid`, orgID, old); err != nil {
+		t.Fatal(err)
+	}
+
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nightly, err := store.StartRunTx(ctx, tx, StartRunRequest{
+		OrganizationID: orgID, TargetDay: time.Date(2026, 11, 18, 0, 0, 0, 0, time.UTC),
+		Generation: "post-sync:" + uuid.NewString(), RepositoryIDs: []RepositoryID{RepositoryID(uuid.NewString())},
+	}, publisher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	dispatcher, err := NewDispatcher(store, publisher, &fakeRepositoryDiscoverer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	counts := func() (runs, rows int) {
+		t.Helper()
+		if err := pool.QueryRow(ctx, `
+SELECT count(DISTINCT args #>> '{domain,id}'), count(*) FROM worker_job_outbox
+WHERE job_kind = 'metrics.daily_finalize' AND dedupe_key LIKE 'metrics.daily_finalize:redrive:%'`).Scan(&runs, &rows); err != nil {
+			t.Fatal(err)
+		}
+		return runs, rows
+	}
+	for pass := 1; pass <= 2; pass++ {
+		if err := dispatcher.Work(ctx, dispatchExecution(orgID, nightly.ID)); err != nil {
+			t.Fatalf("pass %d Work: %v", pass, err)
+		}
+		runs, rows := counts()
+		t.Logf("pass %d: %d runs redriven, %d redrive rows", pass, runs, rows)
+		if runs != stranded || rows != stranded {
+			t.Fatalf("pass %d: %d runs with %d redrive rows, want %d runs with one row each", pass, runs, rows, stranded)
+		}
+	}
+}
+
+// completionFailingStore fails the first CompleteFinalize, as a lost database
+// write would, and passes every other call to the real store.
+type completionFailingStore struct {
+	*PostgresStore
+	failed atomic.Bool
+}
+
+func (store *completionFailingStore) CompleteFinalize(ctx context.Context, claim FinalizeClaim) error {
+	if store.failed.CompareAndSwap(false, true) {
+		return ErrUnavailable
+	}
+	return store.PostgresStore.CompleteFinalize(ctx, claim)
+}
+
+type countingFinalizeFamily struct{ computes atomic.Int32 }
+
+func (family *countingFinalizeFamily) ComputeFinalizeFamily(context.Context, Run) (int, error) {
+	family.computes.Add(1)
+	return 0, nil
+}
+
+// A redriven twin adds no compute over what one finalize job already does: when
+// a completion write is lost after a compute, one job's own retry computes
+// again, and a pair of jobs computes exactly as often.
+func TestARedriveTwinComputesNoMoreThanOneJobsRetry(t *testing.T) {
+	defer restoreRecognisedFinalizeFamilies(pythonRecognisedFinalizeFamilies)
+	pythonRecognisedFinalizeFamilies = []string{"ic_finalize"}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createDailyTables(t, ctx, pool)
+	base, err := NewPostgresStore(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().UTC().Add(-48 * time.Hour)
+	for _, testCase := range []struct {
+		name string
+		// jobs is how many finalize deliveries of the run are worked, one after
+		// another, each until it returns nil.
+		jobs int
+	}{
+		{name: "one job and its retry", jobs: 1},
+		{name: "the job and its redriven twin", jobs: 2},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			orgID, runID := uuid.NewString(), uuid.NewString()
+			seedSweepRun(t, ctx, pool, sweepRunSeed{orgID, runID, "2026-11-01", "pending", old, []string{"succeeded"}})
+			store := &completionFailingStore{PostgresStore: base}
+			family := &countingFinalizeFamily{}
+			finalizer, err := NewFinalizeHandler(store)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := finalizer.SetNativeFinalizeFamilies(map[string]NativeFinalizeFamilyExecutor{"ic_finalize": family}); err != nil {
+				t.Fatal(err)
+			}
+			for job := 0; job < testCase.jobs; job++ {
+				for attempt := 1; attempt <= 4; attempt++ {
+					if err := finalizer.Work(ctx, sweepFinalizeExecution(orgID, runID)); err == nil {
+						break
+					}
+				}
+			}
+			var status string
+			if err := pool.QueryRow(ctx, `SELECT status FROM daily_metrics_runs WHERE id = $1`, runID).Scan(&status); err != nil {
+				t.Fatal(err)
+			}
+			t.Logf("%s: computes=%d status=%s", testCase.name, family.computes.Load(), status)
+			if status != "succeeded" || family.computes.Load() != 2 {
+				t.Fatalf("computes=%d status=%s, want 2 computes (one lost completion) and succeeded", family.computes.Load(), status)
+			}
+		})
+	}
+}
+
+// The sweep re-reads its whole predicate under the run's lock. A run selected
+// as stranded can be reopened before the lock (a partition recompute leaves it
+// fresh, a range redrive leaves an open event); the sweep must then publish
+// nothing. The operator path keeps its own rule.
+func TestSweepRechecksItsPredicateUnderTheRunLock(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createDailyTables(t, ctx, pool)
+	registry, err := jobruntime.Load(filepath.Join("..", "..", "..", "..", "contracts", "jobs", "v1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	publisher, err := NewPostgresPublisher(pool, dailyTestRegistry{production: registry})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewPostgresStore(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	cutoff := now.Add(-finalizeStrandHorizon)
+	orgID := uuid.NewString()
+
+	for _, testCase := range []struct {
+		name      string
+		updatedAt time.Time
+		openEvent bool
+		cutoff    *time.Time
+		want      bool
+	}{
+		{name: "still stranded", updatedAt: now.Add(-48 * time.Hour), cutoff: &cutoff, want: true},
+		{name: "fresh again after a recompute", updatedAt: now.Add(-time.Minute), cutoff: &cutoff, want: false},
+		{name: "reopened by a range redrive (open event)", updatedAt: now.Add(-48 * time.Hour), openEvent: true, cutoff: &cutoff, want: false},
+		{name: "operator path keeps its rule", updatedAt: now.Add(-time.Minute), cutoff: nil, want: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			runID := uuid.NewString()
+			seedSweepRun(t, ctx, pool, sweepRunSeed{orgID, runID, "2026-11-01", "pending", testCase.updatedAt, []string{"succeeded"}})
+			if testCase.openEvent {
+				if _, err := pool.Exec(ctx, `INSERT INTO daily_metrics_finalize_redrive_events (id,run_id,org_id,target_day,prior_status,prior_finalization_status,actor,reason,nonce) VALUES ($1,$2,$3,'2026-11-01','succeeded','succeeded','finalize-redrive','review',$4)`,
+					uuid.NewString(), runID, orgID, uuid.NewString()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			published, err := store.redriveOneStrandedFinalize(ctx, publisher, runID, uuid.NewString(), now, false, testCase.cutoff)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if published != testCase.want || (finalizeRedriveRows(t, ctx, pool, runID) == 1) != testCase.want {
+				t.Fatalf("published=%t rows=%d, want %t", published, finalizeRedriveRows(t, ctx, pool, runID), testCase.want)
+			}
+			var updatedAt time.Time
+			if err := pool.QueryRow(ctx, `SELECT updated_at FROM daily_metrics_runs WHERE id = $1`, runID).Scan(&updatedAt); err != nil {
+				t.Fatal(err)
+			}
+			restarted := updatedAt.Equal(now)
+			if restarted != (testCase.want && testCase.cutoff != nil) {
+				t.Fatalf("updated_at=%s, want the horizon restarted only by a sweep publish", updatedAt)
+			}
+		})
+	}
+}

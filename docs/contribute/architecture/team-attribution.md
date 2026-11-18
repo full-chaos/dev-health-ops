@@ -294,6 +294,12 @@ flowchart TD
 > - a `linked_issue` (5) candidate of an **issue**. Another issue's team is not ownership. A
 >   pull or merge request (`type` `pr` on GitHub, `merge_request` on GitLab) keeps its linked issue's
 >   team: the tree edge pull request → issue → project reaches the owner of the issue's project.
+>   The donor of a `linked_issue` row must itself be an **issue**, for every provider, in the cascade and in
+>   the donor-change backstop: a donor whose `type` is `pr` (GitHub) or `merge_request` (GitLab), whose `type`
+>   is empty (a writer gap is never read as an issue), or that has no `work_items` row is refused. A pull
+>   request linked only to another pull request is not an edge of the tree and falls through to the next
+>   source. Each refusal is counted by reason (`pr_kind`, `empty_type`, `unknown`) in the
+>   `work_item_attribution.linked_issue_donor_refused` Info log, so a writer that leaves `type` empty shows up.
 > - a `manual_fallback` (7) candidate of a **`member`** rule (`manual_fallback:member=<id>`). The
 >   rule names a person (the item's assignee). A `repo`, `project` or `issue_key_prefix` rule still
 >   wins when no higher source matched.
@@ -1430,7 +1436,7 @@ controls: a link that is gone and an explicit empty list are closed).
 >   property of the repository; the share scales exposure counts). A sole owner of every repository it owns (share 1)
 >   is unchanged, bit for bit. Resolved through `teamresolve.ResolveOwnerSharesThenPatterns`.
 > - **A table with one row per repository** (the four TestOps families, one row per organization, repository and
->   day) stores the main owner only, as of the end of the day; a full tie stores the first tied team by rank. A second team has no row to live in, so the analytics series, breakdown and sankey do not group or filter by that stored team: they take the owners at the request (see "A TestOps rate and the counts beside it" above). The benchmarking job takes its team series from the owners at the run instant, like the analytics series.
+>   day) stores the main owner only, as of the end of the day; a full tie stores the first tied team by rank. A second team has no row to live in, so the analytics series, breakdown and sankey do not group or filter by that stored team: they take the owners at the request (see "A TestOps rate and the counts beside it" above). The benchmarking job takes its team series from the owners at the run instant, like the analytics series. The AI report charts of the pipeline table take the owners at the report run too, a co-owned repository whole for each owner: the duration and queue charts over the raw runs, the counts and rates over the stored rows (`repositoryOwnedTables` in `internal/jobs/report/pooled.go`). A named limit: the report charts of the test and coverage tables still read the stored team.
 
 A project (a Jira space connected to several Atlassian teams, a Linear or GitLab project with several owning
 teams, any provider) can belong to more than one team. An item of such a project is the work of EACH active

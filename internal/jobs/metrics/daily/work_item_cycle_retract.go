@@ -58,6 +58,79 @@ func currentWorkItemCopies(copies []workItemCopy) map[workItemIdentity]workItemC
 	return current
 }
 
+// workItemScopedIdentity is an item in one work scope: the key of the scope view (workitemmetrics.OncePerProviderScopeAndID).
+type workItemScopedIdentity struct{ provider, scope, workItemID string }
+
+// currentWorkItemCopiesPerScope is the current copy of each item in each work scope it has a copy in:
+// workitemmetrics.OncePerProviderScopeAndID over every copy, with no day predicate.
+func currentWorkItemCopiesPerScope(copies []workItemCopy) map[workItemScopedIdentity]workItemCopy {
+	versions := make([]workitemmetrics.ItemVersion, len(copies))
+	for index, stored := range copies {
+		versions[index] = workitemmetrics.ItemVersion{
+			Provider: stored.provider, WorkItemID: stored.workItemID, RepoID: stored.repoID.String(), LastSynced: stored.lastSynced,
+			Scope: stored.scopeKey().scope,
+		}
+	}
+	indexes, _ := workitemmetrics.OncePerProviderScopeAndID(versions)
+	current := make(map[workItemScopedIdentity]workItemCopy, len(indexes))
+	for _, index := range indexes {
+		stored := copies[index]
+		current[workItemScopedIdentity{stored.provider, stored.scopeKey().scope, stored.workItemID}] = stored
+	}
+	return current
+}
+
+// keepCurrentCopiesOfDay keeps an item of the day only when the copy the day read is its current copy, the copy the
+// cycle rows decide on: in the org view the current copy over every copy, in the scope view the current copy of the
+// item's scope (CHAOS-10797). The day's read only competes the copies that pass the day's predicate, so an older copy
+// wins a day its current copy does not pass (done with no completed_at, completed before the day, created after it);
+// such an item is not an item of that day.
+func keepCurrentCopiesOfDay(
+	ctx context.Context, conn repositoryRows, organizationID string, read workItemScopeRead,
+) (workItemScopeRead, error) {
+	if read.empty() {
+		return read, nil
+	}
+	seen := make(map[string]struct{}, len(read.Items)+len(read.ScopeItems))
+	ids := make([]string, 0, len(read.Items)+len(read.ScopeItems))
+	for _, rows := range [][]workItemMetricsRow{read.Items, read.ScopeItems} {
+		for _, row := range rows {
+			if _, duplicate := seen[row.WorkItemID]; !duplicate {
+				seen[row.WorkItemID] = struct{}{}
+				ids = append(ids, row.WorkItemID)
+			}
+		}
+	}
+	sort.Strings(ids)
+	copies, err := loadWorkItemCopies(ctx, conn, organizationID, ids)
+	if err != nil {
+		return workItemScopeRead{}, err
+	}
+	current := currentWorkItemCopies(copies)
+	items := make([]workItemMetricsRow, 0, len(read.Items))
+	for _, row := range read.Items {
+		identity := workItemIdentity{row.Provider, row.WorkItemID}
+		if stored, found := current[identity]; found && stored.repoID == read.OrgWinnerRepos[identity] {
+			items = append(items, row)
+			continue
+		}
+		delete(read.OrgWinnerRepos, identity)
+	}
+	read.Items = items
+	currentInScope := currentWorkItemCopiesPerScope(copies)
+	scopeItems := make([]workItemMetricsRow, 0, len(read.ScopeItems))
+	for _, row := range read.ScopeItems {
+		identity := workItemScopedIdentity{row.Provider, row.attributionScope, row.WorkItemID}
+		if stored, found := currentInScope[identity]; found && stored.repoID == read.ScopeWinnerRepos[identity] {
+			scopeItems = append(scopeItems, row)
+			continue
+		}
+		delete(read.ScopeWinnerRepos, identity)
+	}
+	read.ScopeItems = scopeItems
+	return read, nil
+}
+
 // workItemCopiesReadSQL reads every copy of the listed items. Its arguments are the organization and the ids.
 const workItemCopiesReadSQL = `
 SELECT repo_id, last_synced, provider, work_item_id, status, completed_at,

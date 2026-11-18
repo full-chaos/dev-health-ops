@@ -374,8 +374,8 @@ func coveredRows(t *testing.T) []map[string]any {
 
 func TestEveryCoveredAdminRowCarriesTheFields(t *testing.T) {
 	rows := coveredRows(t)
-	// CHAOS-11813 retired the 6 legacy ingest rows (214 and 71 before).
-	if len(rows) < 208 {
+	// CHAOS-11813 retired the 6 legacy ingest rows (214 and 71 before); CHAOS-13881 the OAuth provider create row.
+	if len(rows) < 207 {
 		t.Fatalf("only %d covered rows: a covered family lost its rows", len(rows))
 	}
 	nonAdmin := 0
@@ -384,7 +384,7 @@ func TestEveryCoveredAdminRowCarriesTheFields(t *testing.T) {
 			nonAdmin++
 		}
 	}
-	if nonAdmin < 65 {
+	if nonAdmin < 64 {
 		t.Fatalf("only %d covered rows outside the admin family", nonAdmin)
 	}
 	scopes := catalogScopes(t)

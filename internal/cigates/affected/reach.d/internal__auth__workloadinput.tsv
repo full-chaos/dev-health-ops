@@ -8,6 +8,7 @@ internal/auth/workloadinput	workloadinput.go	internal/api/integrationsadmin/disc
 internal/auth/workloadinput	workloadinput.go	internal/api/integrationsadmin/integrationsvenue
 internal/auth/workloadinput	workloadinput.go	internal/api/integrationsadmin/syncvenue
 internal/auth/workloadinput	workloadinput.go	internal/api/session
+internal/auth/workloadinput	workloadinput.go	internal/api/sso
 internal/auth/workloadinput	workloadinput.go	internal/api/syncadmin
 internal/auth/workloadinput	workloadinput.go	internal/api/teamsidentity/adminstampvenue
 internal/auth/workloadinput	workloadinput.go	internal/apiservice

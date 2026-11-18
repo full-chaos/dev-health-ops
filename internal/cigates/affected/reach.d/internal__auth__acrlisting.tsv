@@ -9,6 +9,7 @@ internal/auth/acrlisting	client.go	internal/api/integrationsadmin/discoveryvenue
 internal/auth/acrlisting	client.go	internal/api/integrationsadmin/integrationsvenue
 internal/auth/acrlisting	client.go	internal/api/integrationsadmin/syncvenue
 internal/auth/acrlisting	client.go	internal/api/session
+internal/auth/acrlisting	client.go	internal/api/sso
 internal/auth/acrlisting	client.go	internal/api/syncadmin
 internal/auth/acrlisting	client.go	internal/api/teamsidentity/adminstampvenue
 internal/auth/acrlisting	client.go	internal/apiservice

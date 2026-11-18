@@ -5,8 +5,8 @@
 // failure; bind Int64 microseconds with chtime.Micros and rebuild the instant with fromUnixTimestamp64Micro(?, 'UTC').
 //
 // This is a best-effort text scan of literal SQL, NOT a proof that no unsafe bound exists. KNOWN MISSES, pinned by
-// TestKnownMissesPassTheGuard: a WITH alias or joined projection that reuses a catalog column name, and SQL assembled from
-// a run-time value or a fragment the guard cannot fold.
+// TestKnownMissesPassTheGuard: a WITH alias or joined projection that reuses a catalog column name, and SQL assembled at run time
+// (fmt.Sprintf with the column or the bound as an argument, a fragment joined with a variable).
 //
 // The guard reads static text: the string constants of the tracked non-test Go files (a concatenation of literals and of
 // constants of this module is folded) and the tracked .sql files, apart from the migration history, archive, rollback and
@@ -337,5 +337,15 @@ func TestKnownMissesPassTheGuard(t *testing.T) {
 	}
 	if got := check(cat, src.texts()).Violations; len(got) != 0 {
 		t.Errorf("fragment assembly from a run-time value is a pinned miss but the guard now flags it: %v", got)
+	}
+	sprintf := "package p\n\nimport \"fmt\"\n\nfunc r() string {\n\treturn fmt.Sprintf(\"SELECT 1 FROM plant_sort WHERE %s < toDateTime(1)\", \"sort_ts\")\n}\n"
+	if err := os.WriteFile(filepath.Join(root, "p", "p.go"), []byte(sprintf), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if src, err = sourcesOf(root, []string{"p/p.go"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := check(cat, src.texts()).Violations; len(got) != 0 {
+		t.Errorf("fmt.Sprintf assembly is a pinned miss but the guard now flags it: %v", got)
 	}
 }

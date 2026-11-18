@@ -314,7 +314,7 @@ func TestIntakeLogLeakCheckReadsNoTimeButCatchesALeak(t *testing.T) {
 		t.Fatal("the store address in host:port form must fail the check")
 	}
 	logs.Reset()
-	logger.Error("x", slog.Group("error", slog.String("class", "ok")), slog.Group("error", slog.String("message", "password=hunter2")))
+	logger.Error("x", slog.Group("error", slog.String("message", "password=hunter2")), slog.Group("error", slog.String("class", "ok")))
 	if got := logLeaks(t, strings.TrimSpace(logs.String())); len(got) != 1 {
 		t.Fatalf("a leak in a duplicate error group must be found, got %v", got)
 	}
@@ -322,6 +322,17 @@ func TestIntakeLogLeakCheckReadsNoTimeButCatchesALeak(t *testing.T) {
 	logger.Error("x", slog.String("time", "hunter2"))
 	if got := logLeaks(t, strings.TrimSpace(logs.String())); len(got) != 1 {
 		t.Fatalf("a leak in a caller attribute named time must be found, got %v", got)
+	}
+	logs.Reset()
+	stamped := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
+		if len(groups) == 0 && a.Key == slog.TimeKey {
+			return slog.String(slog.TimeKey, "10.9.8.7:6379")
+		}
+		return a
+	}}))
+	stamped.Error("clean")
+	if got := logLeaks(t, strings.TrimSpace(logs.String())); len(got) != 0 {
+		t.Fatalf("the builtin time field must be cut before the scan, got %v", got)
 	}
 	logs.Reset()
 	logger.Error("delivery done", slog.String("id", "ev-6379"), slog.Duration("took", 6379*time.Millisecond))

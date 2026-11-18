@@ -15,6 +15,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/chmigrate"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/datahealth"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 )
@@ -66,7 +67,6 @@ CREATE TABLE identities (
 ) ENGINE = ReplacingMergeTree(updated_at) ORDER BY (org_id, canonical_id);
 
 CREATE TABLE repo_metrics_daily (org_id String, day Date, computed_at DateTime('UTC')) ENGINE = MergeTree ORDER BY (org_id, day);
-CREATE TABLE work_unit_investments (org_id String, work_unit_id String, computed_at DateTime64(3, 'UTC')) ENGINE = MergeTree ORDER BY (org_id, work_unit_id);
 `
 
 func TestDataHealthReadersSeededRealStores(t *testing.T) {
@@ -120,6 +120,7 @@ func TestDataHealthReadersSeededRealStores(t *testing.T) {
 			t.Fatalf("clickhouse ddl %q: %v", stmt, err)
 		}
 	}
+	chschema.CreateTables(ctx, t, conn, "work_unit_investments")
 	pool, err := pgxpool.New(ctx, pgInst.URI)
 	if err != nil {
 		t.Fatal(err)

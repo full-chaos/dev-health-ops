@@ -230,7 +230,8 @@ func liveE2EUpFakes(t *testing.T, state string) string {
 			t.Fatal(err)
 		}
 	}
-	write("go", "#!/bin/sh\nwhile [ \"$1\" != -o ]; do shift; done\nprintf '#!/bin/sh\\necho started\\nprintf %%s \"$AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT\" > \"'"+state+"'/subject\"\\n' > \"$2\"\nchmod 755 \"$2\"\n")
+	// The fake auth-service writes the subject before "started": up returns when curl sees "started", then tests read it.
+	write("go", "#!/bin/sh\nwhile [ \"$1\" != -o ]; do shift; done\nprintf '#!/bin/sh\\nprintf %%s \"$AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT\" > \"'"+state+"'/subject\"\\necho started\\n' > \"$2\"\nchmod 755 \"$2\"\n")
 	write("psql", "#!/bin/sh\ncase \"$*\" in *-At*) echo 3b1e2c4d-5f60-4a71-8b92-0c1d2e3f4a5b ;; esac\n")
 	write("sleep", "#!/bin/sh\nexit 0\n")
 	write("curl", "#!/bin/sh\ngrep -q '^started$' '"+state+"/logs/auth-service.log'\n")

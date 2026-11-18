@@ -63,6 +63,7 @@ import (
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
@@ -82,31 +83,6 @@ func splitSQLStatements(sql string) []string {
 }
 
 const seededQualitySchemaDDL = `
-CREATE TABLE work_unit_investments (
-    work_unit_id String,
-    from_ts DateTime64(3, 'UTC'),
-    to_ts DateTime64(3, 'UTC'),
-    repo_id Nullable(UUID),
-    provider Nullable(String),
-    effort_metric String,
-    effort_value Float64,
-    theme_distribution_json Map(String, Float64),
-    subcategory_distribution_json Map(String, Float64),
-    structural_evidence_json String,
-    evidence_quality Float64,
-    evidence_quality_band String,
-    categorization_status String,
-    categorization_errors_json String,
-    categorization_model_version String,
-    categorization_input_hash String,
-    categorization_run_id String,
-    computed_at DateTime64(3, 'UTC'),
-    work_unit_type Nullable(String),
-    work_unit_name Nullable(String),
-    org_id String DEFAULT 'default'
-) ENGINE = ReplacingMergeTree(computed_at)
-ORDER BY (work_unit_id);
-
 CREATE TABLE work_unit_membership_runs (
     org_id       String,
     run_id       String,
@@ -234,6 +210,7 @@ func TestResolveEvidenceQualityStats_SeededRealClickHouse_ExactAggregate(t *test
 			t.Fatalf("exec DDL %q: %v", stmt, err)
 		}
 	}
+	chschema.CreateTables(ctx, t, conn, "work_unit_investments")
 
 	const orgID = "chaos-4723-seeded-quality"
 	seedQualityRows(t, ctx, conn, orgID, []seededQualityRow{
@@ -364,6 +341,7 @@ func TestEvidenceQualityByGroup_SeededRealClickHouse_DominantPersistedGroups(t *
 			t.Fatalf("exec DDL %q: %v", stmt, err)
 		}
 	}
+	chschema.CreateTables(ctx, t, conn, "work_unit_investments")
 
 	const orgID = "chaos-8104-seeded-quality-group"
 	seedQualityRows(t, ctx, conn, orgID, []seededQualityRow{

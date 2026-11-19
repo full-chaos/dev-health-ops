@@ -8,10 +8,10 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/chmigrate"
 )
 
-const testopsCoverageBranchCountsVersion = "169_testops_coverage_branch_counts.sql"
+const testopsCoverageBranchCountsVersion = "168_testops_coverage_branch_counts.sql"
 
-// 169 adds exactly the two Nullable branch count columns of testops_coverage_metrics_daily, with no default, and nothing else.
-func TestMigration169IsTheTwoNullableBranchCountColumns(t *testing.T) {
+// 168 adds exactly the two Nullable branch count columns of testops_coverage_metrics_daily, with no default, and nothing else.
+func TestMigration168IsTheTwoNullableBranchCountColumns(t *testing.T) {
 	chain, err := chmigrate.LoadChain()
 	if err != nil {
 		t.Fatal(err)

@@ -481,20 +481,20 @@ func selectGitLabTestsArtifactJobs(rawItems []json.RawMessage, maxArtifacts int)
 	return selected, nil
 }
 
-// gitLabTestsArtifactJobsOverCap reports whether more jobs qualify for selectGitLabTestsArtifactJobs than maxArtifacts: the
-// selection keeps the first maxArtifacts and reads none of the others.
-func gitLabTestsArtifactJobsOverCap(rawItems []json.RawMessage, maxArtifacts int) (bool, error) {
+// gitLabTestsQualifyingArtifactJobs counts the jobs that qualify for selectGitLabTestsArtifactJobs: the selection keeps the first
+// maxArtifacts of them and reads none of the others.
+func gitLabTestsQualifyingArtifactJobs(rawItems []json.RawMessage) (int, error) {
 	qualifying := 0
 	for _, raw := range rawItems {
 		job, err := decodeGitLabTestsJob(raw)
 		if err != nil {
-			return false, err
+			return 0, err
 		}
 		if gitLabTestsJobHasArtifacts(job) && !gitLabTestsJobRetried(job) {
 			qualifying++
 		}
 	}
-	return qualifying > maxArtifacts, nil
+	return qualifying, nil
 }
 
 func decodeGitLabTestsPipeline(raw json.RawMessage) (gitLabTestsPipelinePayload, error) {

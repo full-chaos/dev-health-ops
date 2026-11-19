@@ -52,14 +52,16 @@ var (
 		"POST /api/v1/auth/social-login":        AuthSocial,
 	}
 	wantRouteProxyRoutes = map[string]AuthAggregate{
-		"POST /api/v1/auth/oidc/{provider_id}/authorize":  AuthOIDC,
-		"POST /api/v1/auth/oidc/{provider_id}/callback":   AuthOIDC,
+		"POST /api/v1/auth/oidc/{provider_id}/authorize": AuthOIDC,
+		"POST /api/v1/auth/oidc/{provider_id}/callback":  AuthOIDC,
+		"GET /api/v1/auth/saml/{provider_id}/metadata":   AuthSAML,
+		"POST /api/v1/auth/saml/{provider_id}/initiate":  AuthSAML,
+		"POST /api/v1/auth/saml/{provider_id}/acs":       AuthSAML,
+	}
+	wantOAuthPairProxyRoutes = map[string]AuthAggregate{
 		"POST /api/v1/auth/oauth/{provider_id}/authorize": AuthOIDC,
 		"GET /api/v1/auth/oauth/{provider_id}/authorize":  AuthOIDC,
 		"POST /api/v1/auth/oauth/{provider_id}/callback":  AuthOIDC,
-		"GET /api/v1/auth/saml/{provider_id}/metadata":    AuthSAML,
-		"POST /api/v1/auth/saml/{provider_id}/initiate":   AuthSAML,
-		"POST /api/v1/auth/saml/{provider_id}/acs":        AuthSAML,
 	}
 )
 
@@ -180,6 +182,18 @@ func TestAuthProxyRouteMapIsTheD1Map(t *testing.T) {
 			t.Errorf("route %s -> %q, want %q", key, routeProxyRoutes[key], aggregate)
 		}
 	}
+	if len(oauthPairProxyRoutes) != len(wantOAuthPairProxyRoutes) {
+		t.Fatalf("OAuth pair map size %d, want %d", len(oauthPairProxyRoutes), len(wantOAuthPairProxyRoutes))
+	}
+	for key, aggregate := range wantOAuthPairProxyRoutes {
+		if oauthPairProxyRoutes[key] != aggregate {
+			t.Errorf("OAuth pair route %s -> %q, want %q", key, oauthPairProxyRoutes[key], aggregate)
+		}
+		method, _, _ := strings.Cut(key, " ")
+		if wrapped, ok := oauthPairAggregate(method, oauthPairPattern); !ok || wrapped != aggregate {
+			t.Errorf("%s: the mounted pair %s %s carries no %s wrapper", key, method, oauthPairPattern, aggregate)
+		}
+	}
 	mounted := map[string]bool{}
 	for _, route := range proxyFixtureRoutes(t, AuthProxyConfig{}) {
 		mounted[route.Method+" "+route.Pattern] = true
@@ -189,11 +203,14 @@ func TestAuthProxyRouteMapIsTheD1Map(t *testing.T) {
 			t.Errorf("%s is mapped but not mounted", key)
 		}
 	}
-	for key := range wantRouteProxyRoutes {
-		if method, pattern, _ := strings.Cut(key, " "); strings.HasPrefix(pattern, "/api/v1/auth/oauth/") {
-			// The OAuth pair mounts one dispatcher pattern for its three routes.
-			key = method + " /api/v1/auth/oauth/{first}/{second}"
+	for key := range wantOAuthPairProxyRoutes {
+		// The OAuth pair mounts one dispatcher pattern for its three routes.
+		method, _, _ := strings.Cut(key, " ")
+		if !mounted[method+" "+oauthPairPattern] {
+			t.Errorf("%s is mapped but the pair %s %s is not mounted", key, method, oauthPairPattern)
 		}
+	}
+	for key := range wantRouteProxyRoutes {
 		if !mounted[key] {
 			t.Errorf("%s is mapped but not mounted", key)
 		}
@@ -1037,7 +1054,7 @@ func TestAuthCorpusAcpRoutesAreTheProxyMap(t *testing.T) {
 		listed[key] = AuthAggregate(fields[0])
 	}
 	want := map[string]AuthAggregate{}
-	for _, routes := range []map[string]AuthAggregate{sessionProxyRoutes, routeProxyRoutes} {
+	for _, routes := range []map[string]AuthAggregate{sessionProxyRoutes, routeProxyRoutes, oauthPairProxyRoutes} {
 		for key, aggregate := range routes {
 			want[key] = aggregate
 		}

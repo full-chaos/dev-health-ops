@@ -188,6 +188,14 @@ type TestMetric struct {
 	TeamID       *string
 	ServiceID    *string
 	OrgID        string
+	// ReportRuns is the report completeness of the day's runs; nil = not measured (written as NULL, never 0).
+	ReportRuns *ReportRunCounts
+}
+
+// ReportRunCounts counts the runs with a kept suite on a repo-day (Runs), the runs read as partial and the runs that carry
+// no completeness mark for a counted attempt (unmarked). Partial and Unmarked are disjoint; the rest are complete.
+type ReportRunCounts struct {
+	Runs, Partial, Unmarked int
 }
 
 // CoverageMetric ports CoverageMetricsDailyRecord (testops_schemas.py:394).

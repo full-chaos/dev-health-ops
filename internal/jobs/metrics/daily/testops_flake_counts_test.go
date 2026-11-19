@@ -23,7 +23,7 @@ func (conn *queryRecordingBatchConn) PrepareBatch(_ context.Context, query strin
 }
 
 // CHAOS-9737: the test metrics writer names flake_cases and distinct_cases in its INSERT and appends both counts
-// last, in the same order, so the org series can sum them.
+// in the same order, before the pooled and the report completeness columns, so the org series can sum them.
 func TestWriteTestopsTestMetricsWritesFlakeAndDistinctCaseCounts(t *testing.T) {
 	conn := &queryRecordingBatchConn{batch: &recordingBatch{}}
 	metric := testops.TestMetric{
@@ -34,18 +34,18 @@ func TestWriteTestopsTestMetricsWritesFlakeAndDistinctCaseCounts(t *testing.T) {
 	if _, err := writeTestopsTestMetrics(context.Background(), conn, "org-1", day, day, []testops.TestMetric{metric}); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(strings.Join(strings.Fields(conn.query), " "), "computed_at, flake_cases, distinct_cases, pooled_service_ids, pooled_durations, pooled_samples_stored)") {
+	if !strings.Contains(strings.Join(strings.Fields(conn.query), " "), "computed_at, flake_cases, distinct_cases, pooled_service_ids, pooled_durations, pooled_samples_stored, report_runs, partial_report_runs, unmarked_report_runs)") {
 		t.Fatalf("INSERT does not name the two count columns, then the pooled columns: %s", conn.query)
 	}
 	if len(conn.batch.appended) != 1 {
 		t.Fatalf("appended %d rows, want 1", len(conn.batch.appended))
 	}
 	row := conn.batch.appended[0]
-	flake, distinct := row[len(row)-5].(*uint32), row[len(row)-4].(*uint32)
+	flake, distinct := row[len(row)-8].(*uint32), row[len(row)-7].(*uint32)
 	if flake == nil || *flake != 2 || distinct == nil || *distinct != 8 {
 		t.Fatalf("counts = %v/%v, want 2/8", flake, distinct)
 	}
-	if want := 19 + 2 + 3; len(row) != want {
+	if want := 19 + 2 + 3 + 3; len(row) != want {
 		t.Fatalf("row has %d values, want %d", len(row), want)
 	}
 }

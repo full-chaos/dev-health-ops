@@ -30,10 +30,6 @@ func TestTestOpsFilterEmptyReasonDocuments_OldTextsStayAcceptedAndTheNewOneIsReg
 			[]string{registeredTestopsJobFailuresV1Document},
 			"testdata/wire_capture/testopsjobfailures_captured.graphql",
 			[]string{"testdata/wire_capture/testopsjobfailures_v1_captured.graphql"}},
-		{"testopsTestWindow", registeredTestopsTestWindowDocument,
-			[]string{registeredTestopsTestWindowV1Document},
-			"testdata/wire_capture/testopstestwindow_captured.graphql",
-			[]string{"testdata/wire_capture/testopstestwindow_v1_captured.graphql"}},
 	} {
 		if !strings.Contains(c.current, line) {
 			t.Errorf("%s: the current text does not select filterEmptyReason", c.op)

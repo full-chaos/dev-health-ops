@@ -1708,6 +1708,18 @@ type TestOpsJobFailuresResult struct {
 	FilterEmptyReason *string `json:"filterEmptyReason,omitempty"`
 }
 
+// Report completeness of the runs behind the window's case counts, summed over its measured repository days (a run with counted suites on two days counts on each). A run is partial when a counted attempt, or its newest attempt, has a completeness row that names a lost report; unmarked when such an attempt has no completeness row (for example a provider that writes none); else complete. A repository day stored before these counts is not measured: it adds nothing to the sums and is counted in unmeasuredDays, never read as complete.
+type TestOpsReportCompleteness struct {
+	// Runs with a counted test suite, summed over the measured repository days.
+	ReportRuns int `json:"reportRuns"`
+	// Of reportRuns, the runs read as partial: some of their cases are not counted.
+	PartialRuns int `json:"partialRuns"`
+	// Of reportRuns, the runs with no completeness mark: not known to be complete.
+	UnmarkedRuns int `json:"unmarkedRuns"`
+	// Repository days of the window whose stored row carries no completeness counts (not measured, not 0).
+	UnmeasuredDays int `json:"unmeasuredDays"`
+}
+
 type TestOpsRiskBreakdownItem struct {
 	Category string  `json:"category"`
 	Hours    float64 `json:"hours"`
@@ -1798,6 +1810,8 @@ type TestOpsTestWindowResult struct {
 	FlakeRatePct *float64 `json:"flakeRatePct,omitempty"`
 	// Why the answer is empty, one value for the whole answer, set by the server and never derived by a client (CHAOS-9098). team_owns_no_repository: ``teamIds`` selects teams that together own no repository (team_repo_ownership, as of now). Null when ``teamIds`` is not set, and when the selected teams own one or more repositories, also when the window has no rows.
 	FilterEmptyReason *string `json:"filterEmptyReason,omitempty"`
+	// Report completeness of the runs behind ``cases``: partial and unmarked runs, and the repository days not measured.
+	ReportCompleteness *TestOpsReportCompleteness `json:"reportCompleteness"`
 }
 
 type ThroughputEstimateCoverage struct {

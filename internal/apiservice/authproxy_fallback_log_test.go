@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 )
 
 // A request of an aggregate whose flag is on that go-api answers itself (its own front checks, or no forward) is loud:
@@ -70,5 +72,57 @@ func TestAuthProxyLogsAFlagOnLocalAnswerOncePerWindow(t *testing.T) {
 		httptest.NewRequest(http.MethodPost, "/api/v1/auth/oauth/p/callback", strings.NewReader(`{}`)))
 	if got := lines(); len(got) != 0 {
 		t.Fatalf("flag off: %d fallback lines, want none", len(got))
+	}
+}
+
+// The production mount: go-api's routes (Routes) behind its server (NewServer), AUTH_PROXY_OIDC and every other flag on,
+// an upstream that would answer 418. A body go-api's own front checks refuse is answered locally on one OAuth route and
+// one OIDC route; each Warn line names the route pattern the server registered (method and path), never "".
+func TestAuthProxyLocalAnswerLineNamesTheMountedPattern(t *testing.T) {
+	stub := newStubUpstream(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusTeapot) })
+	var logs bytes.Buffer
+	routes := proxyFixtureRoutesLogging(t, mustProxyConfig(t, allOn(stub.URL)), slog.New(slog.NewTextHandler(&logs, nil)))
+	server, err := NewServer(config.Config{APIAddress: "127.0.0.1:0", CORSAllowedOrigins: []string{proxyOrigin}}, quietLogger(), routes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := server.Handler()
+	for _, tc := range []struct{ target, pattern string }{
+		{"/api/v1/auth/oauth/p-1/callback", "POST /api/v1/auth/oauth/{first}/{second}"},
+		{"/api/v1/auth/oidc/p-1/callback", "POST /api/v1/auth/oidc/{provider_id}/callback"},
+	} {
+		logs.Reset()
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, proxyCall{method: http.MethodPost, target: tc.target, body: "not-json"}.request(t))
+		if recorder.Code == http.StatusTeapot || recorder.Code < 400 {
+			t.Fatalf("%s: %d, want go-api's own refusal", tc.target, recorder.Code)
+		}
+		var line string
+		for _, candidate := range strings.Split(logs.String(), "\n") {
+			if strings.Contains(candidate, "auth proxy: answered by go-api with the aggregate on") {
+				line = candidate
+			}
+		}
+		if line == "" {
+			t.Fatalf("%s: no fallback line:\n%s", tc.target, logs.String())
+		}
+		if !strings.Contains(line, `route="`+tc.pattern+`"`) || strings.Contains(line, `route=""`) || strings.Contains(line, "route= ") {
+			t.Errorf("%s: fallback line %q, want route=%q", tc.target, line, tc.pattern)
+		}
+	}
+	if seen := stub.requests(); len(seen) != 0 {
+		t.Fatalf("upstream saw %d requests go-api refuses", len(seen))
+	}
+}
+
+// A request with no mux pattern (no production path reaches sessionRoute without one) logs route="unmatched", never "".
+func TestAuthProxyLocalAnswerLineWithoutAPatternIsUnmatched(t *testing.T) {
+	var logs bytes.Buffer
+	proxy := newAuthProxy(mustProxyConfig(t, allOn("http://127.0.0.1:1")), slog.New(slog.NewTextHandler(&logs, nil)))
+	local := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusUnprocessableEntity) })
+	proxy.sessionRoute(AuthOIDC, local).ServeHTTP(httptest.NewRecorder(),
+		httptest.NewRequest(http.MethodPost, "/api/v1/auth/oidc/p/callback", strings.NewReader(`{}`)))
+	if !strings.Contains(logs.String(), "route=unmatched") || strings.Contains(logs.String(), `route=""`) {
+		t.Fatalf("want route=unmatched in the fallback line:\n%s", logs.String())
 	}
 }

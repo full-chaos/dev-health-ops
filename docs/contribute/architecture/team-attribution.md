@@ -260,7 +260,7 @@ flowchart TD
     IP -->|"yes"| Win
     IP -->|"no"| PO{"2 · project_ownership candidate?"}
     PO -->|"yes"| Win
-    PO -->|"no"| RO{"3 · repo_ownership candidate?"}
+    PO -->|"no"| RO{"3 · repo_ownership candidate?<br/>(a pull or merge request: its own repo;<br/>an issue: the owners of the repos of its linked pull requests,<br/>work_graph_issue_pr, the issue's best tier only)"}
     RO -->|"yes"| Win
     RO -->|"no"| AM["4 · assignee_membership: PROVENANCE ONLY<br/>recorded as is_primary = 0, never the primary team"]
     AM --> LK{"5 · linked_issue candidate?<br/>(real donor row resolving to a team)"}
@@ -315,8 +315,33 @@ flowchart TD
 > (data-and-storage, entity tree). Only a pull or merge request (`type` `pr` on GitHub,
 > `merge_request` on GitLab) takes the `repo_ownership` (3) candidate from its own `repo_id`
 > (`repoByID` and the GitLab name-keyed `repoByNames`), and only a pull or merge request matches a
-> `repo` manual rule through its own repository. An issue of any provider, a Jira or Linear item
-> included, with no other source above ends `unassigned`.
+> `repo` manual rule through its own repository.
+>
+> **An issue takes `repo_ownership` from the repositories of its linked pull requests.** The links are the
+> issue's rows in `work_graph_issue_pr` of its **best tier only** (native > explicit_text > heuristic,
+> `linktier.Rank`): a lower tier never counts when a higher one is present, even when the higher tier names no
+> owner, and a link of an unknown tier never counts. Each link counts once for the team the `repo_ownership`
+> tier gives a pull request of its repository (the first ranked active fact that is not a co-owner fact, on the
+> item's day). The team with the most links is the main owner (`is_primary = 1`); a tie goes to the candidate
+> ranking (`RankDerivationCandidates`), then the lowest team id. Every other team of those repositories' facts
+> is a co-owner (`is_primary = 2`, section 0.4d). A repository with no owner gives nothing, and an issue whose
+> best-tier repositories have no owner gets no row from them. The rank is 3: `native_team`, `issue_project` and
+> `project_ownership` still win (the repository owner is then a provenance row, `is_primary = 0`), and the
+> repository owner wins over `manual_fallback` and `unassigned`. Every tier may assign the team (a lower tier is a
+> link too, section 1.1, and the writers keep it only where no native link exists, section 2); the confidence
+> names the tier on the existing scale: a `native` link keeps the owner fact's confidence, `explicit_text` is one
+> step lower (high to medium, medium to low), `heuristic` is `low`. The source token stays `repo_ownership`; the
+> evidence names the link and its real tier: `repo_ownership=<repo id>;work_graph_issue_pr=<pr number>;tier=<tier>`. Both
+> writers (the daily `work_item_attribution` family and the backstop) read the links
+> (`LoadIssueLinkedPullRequests`), and a backstop run of a repository whose ownership changed re-derives the
+> issues linked to it. **Limit:** a new or removed link is not a backstop trigger; the daily family re-derives
+> the issue on its own days only, so a removed link can leave a stale team on an older issue (follow-up ticket filed).
+> An issue of any provider, a Jira or Linear item included, with no other source above and no owned
+> best-tier repository ends `unassigned`. `TestAnIssueTakesTheOwnerOfItsLinkedPullRequestsRepository`,
+> `TestAPullRequestIgnoresLinkedPullRequestRepositories`, `TestBestTierLinkedPullRequests`,
+> `TestAnIssuesRepositoryOwnerConfidenceFollowsTheLinkTier`,
+> `TestAnIssueWithNoTeamTakesItsLinkedPullRequestRepoOwner` (every daily table) and
+> `TestABackstopRunOfAChangedRepoRederivesTheIssuesLinkedToIt` pin it.
 >
 > **The membership ownership gate applies to a pull or merge request and to other repo-bearing items, and
 > does not apply to an issue**: an issue has no repository field of its own and the gate reads
@@ -327,7 +352,8 @@ flowchart TD
 > rows (`native_team`, `issue_project`, `project_ownership`). `TestIssueTakesNoTeamFromItsOwnRepoField`,
 > `TestRepoScopedManualRuleNeverMatchesAnIssueThroughItsOwnRepo`,
 > `TestIssueMembershipRowNamesTheGateNotApplied`, `TestPRMembershipPassThroughWithoutOwnershipFactIsUnchanged`,
-> `TestPRMembershipWithOwnershipFactEvidenceUnchanged` and `TestPRLinkedToAnIssueWhoseOnlyDonorRowWasRepoOwnership` pin it.
+> `TestPRMembershipWithOwnershipFactEvidenceUnchanged`, `TestPRLinkedToAnIssueWhoseOnlyDonorRowWasRepoOwnership` and
+> `TestAnIssuesLinkedPullRequestRepoOwnerIsNotADonor` (the repository owner an issue takes from its linked pull requests) pin it.
 
 **Invariants:** the **winner is the highest-precedence matching source** (every matching source that
 passes its own gate is still persisted as a candidate — precedence decides `is_primary`, not which
@@ -446,7 +472,7 @@ means the ClickHouse `teams` dimension is empty.
 | 0 | `native_team` | `WorkItem.native_team_key` → `teams` of the item's provider, else admin teams (section 0.4e) | high | all below | — (top) | `native_team_key` |
 | 1 | `issue_project` | native issue project key → `teams` of the item's provider that hold it, else admin teams (section 0.4e) | high | 2–8 | 0 | `project_id, owner_team` |
 | 2 | `project_ownership` | `team_project_ownership` | high | 3–8 | 0–1 | `project_id, provider` |
-| 3 | `repo_ownership` (a pull / merge request only: an issue takes none from its own `repo_id`) | `team_repo_ownership` | medium; high from a main-owner row (`is_primary = 1`, e.g. the inferred main owner) | 4–8 | 0–2 | `repo_full_name` |
+| 3 | `repo_ownership` (a pull / merge request: its own `repo_id`; an issue: the repositories of its linked pull requests in `work_graph_issue_pr`, its best tier only, never its own `repo_id`) | `team_repo_ownership` (an issue: through `work_graph_issue_pr`) | medium; high from a main-owner row (`is_primary = 1`, e.g. the inferred main owner); an issue: one step lower for an `explicit_text` link, `low` for a `heuristic` link | 4–8 | 0–2 | `repo_full_name`; an issue: `repo_ownership=<repo id>;work_graph_issue_pr=<pr number>;tier=<tier>` |
 | 4 | `assignee_membership` | two-layer: `identities`/`teams` (admin override, single-team) else `team_memberships` (provider fallback, single-team) | high (admin) / medium (provider) | none: provenance only, never `is_primary` | 0–3 | `canonical_id, identity` (evidence text: `assignee_membership=<id>`) |
 | 5 | `linked_issue` | `work_item_dependencies` donor → the team of the donor's own attribution row; the primary team of a pull or merge request only, provenance only (`is_primary = 0`) for an issue | medium | 6–8 (a pull or merge request) | 0–3 | `linked_issue=<donor_work_item_id>;dependency_type=<rel>;donor_provider=<p>;donor_source=<donor row source>` |
 | 6 | `author_membership` | PR/MR-only + two-layer (same as row 4), non-bot | high (admin) / medium (provider) | none: provenance only, never `is_primary` | 0–5 | `canonical_id, identity` (evidence text: `reporter=<id>`) |
@@ -1438,7 +1464,7 @@ controls: a link that is gone and an explicit empty list are closed).
 >   property of the repository; the share scales exposure counts). A sole owner of every repository it owns (share 1)
 >   is unchanged, bit for bit. Resolved through `teamresolve.ResolveOwnerSharesThenPatterns`.
 > - **A table with one row per repository** (the four TestOps families, one row per organization, repository and
->   day) stores the main owner only, as of the end of the day; a full tie stores the first tied team by rank. A second team has no row to live in, so the analytics series, breakdown and sankey do not group or filter by that stored team: they take the owners at the request (see "A TestOps rate and the counts beside it" above). The benchmarking job takes its team series from the owners at the run instant, like the analytics series. The AI report charts of the pipeline table take the owners at the report run too, a co-owned repository whole for each owner: the duration and queue charts over the raw runs, the counts and rates over the stored rows (`repositoryOwnedTables` in `internal/jobs/report/pooled.go`). A named limit: the report charts of the test and coverage tables still read the stored team.
+>   day) stores the main owner only, as of the end of the day; a full tie stores the first tied team by rank. A second team has no row to live in, so the analytics series, breakdown and sankey do not group or filter by that stored team: they take the owners at the request (see "A TestOps rate and the counts beside it" above). The benchmarking job takes its team series from the owners at the run instant, like the analytics series. The AI report charts of the pipeline and test tables take the owners at the report run too, a co-owned repository whole for each owner: the duration and queue charts over the raw runs, the counts and rates over the stored rows (`repositoryOwnedTables` in `internal/jobs/report/pooled.go`). A named limit: the report charts of the coverage table still read the stored team.
 
 A project (a Jira space connected to several Atlassian teams, a Linear or GitLab project with several owning
 teams, any provider) can belong to more than one team. An item of such a project is the work of EACH active
@@ -2259,7 +2285,7 @@ them is in their readers:
 | Table | Team id | Why no row of zeros | Reader rule |
 | --- | --- | --- | --- |
 | the six testops daily tables (`testops_pipeline_metrics_daily`, `testops_test_metrics_daily`, `testops_coverage_metrics_daily`, `testops_release_confidence`, `testops_quality_drag`, `testops_pipeline_stability`) | a VALUE of the (org, repository, day) key: the repository's authoritative active owner | a recompute writes the key again and replaces the team; there is no stale team key | the analytics readers take the newest row of the KEY (org, repository, day) and read the owners of the repository at the request; no analytics reader reads the stored team. The benchmarking job takes the newest row of the KEY first (`benchmarking.FetchMetricSeriesByScope`; `TestEveryMetricGroupsByTheKeyOfItsTable`) and then reads the owners of the repository at the run instant, with the same join as the analytics team series: a co-owned repository counts in full for each owner team and a rate is not scaled. A stored output row keeps the owners of the moment it was computed, so a later ownership change moves it only when the job runs again |
-| the six benchmarking outputs (`testops_metric_baselines`, `testops_metric_anomalies`, `testops_maturity_bands`, `testops_metric_correlations`, `testops_period_comparisons`, `testops_benchmark_insights`) | `scope_key` of a row of `scope_type = 'team'` | append-only results, read by no reader; a row of zeros would be a result that was not computed | the job writes no team series of an inactive team (`teamactive`): an inactive team is not a target. Rows written before the fix stay; no reader shows them. A team row of `testops_metric_correlations` pairs the TestOps owner team at the run with the stored work-item team (a named limit): a correlation pair exists only where the TestOps owner team and the work-item team are the same team id; a co-owner team or a team that only has work items gets no pair row (`TestCorrelationPairNeedsTheSameTeamOnBothSides`). A reader of these rows names this limit in its own plan before it ships |
+| the six benchmarking outputs (`testops_metric_baselines`, `testops_metric_anomalies`, `testops_maturity_bands`, `testops_metric_correlations`, `testops_period_comparisons`, `testops_benchmark_insights`) | `scope_key` of a row of `scope_type = 'team'` | append-only results, read by no reader; a row of zeros would be a result that was not computed. The one retraction the family writes is on a daily run of the whole organization with no repository: every key of the day gets a row with `retracted = 1` (migration `160_testops_benchmarking_retracted.sql`); a reader takes the newest row of a key and leaves the key out when it holds 1 | the job writes no team series of an inactive team (`teamactive`): an inactive team is not a target. Rows written before the fix stay; no reader shows them. A team row of `testops_metric_correlations` pairs the TestOps owner team at the run with the stored work-item team (a named limit): a correlation pair exists only where the TestOps owner team and the work-item team are the same team id; a co-owner team or a team that only has work items gets no pair row (`TestCorrelationPairNeedsTheSameTeamOnBothSides`). A reader of these rows names this limit in its own plan before it ships |
 | `capacity_forecasts` | a value of the forecast | one forecast per row, replaced by the next forecast of the same id | the forecast list with no team named lists the active teams and the forecasts with no team (`activeteams.ListablePredicate`); a named team is read as named |
 | `recommendations_daily` | in the key | a rule result (fired or not), not a count | the readers read only the team ids a request names (no rule) |
 
@@ -2722,7 +2748,10 @@ One path: `run_team_autoimport` → `team_autoimport_<provider>.populate()` → 
   `(source, target, relationship_type)` key, and
   `build_linked_issue_team_resolver`'s `latest_edge` collapse settles any
   conflict by `last_synced`, so a relationship retyped `relates_to` →
-  `blocked_by` still supersedes the stored inheritable row. Before this,
+  `blocked_by` still supersedes the stored inheritable row. On an equal
+  `last_synced` the inheritable row wins: one sync can write a native
+  `relates_to` and a text `Blocks` link for the same pair, and the native donor
+  stays. Before this,
   only the fresh edges were considered: because attribution rows are
   re-stamped on every run, a PR whose edge had aged out of the sync window
   was rebuilt as `unassigned`, superseding its own earlier correct
@@ -3356,7 +3385,12 @@ exact rules rather than a looser first-donor walk:
 - multiple donors → the lexicographically smallest canonical target wins
   (stable, since ClickHouse rows are unordered);
 - per `(source,target)` the **latest** edge by `last_synced` wins, so a flip
-  from `relates_to` to `blocked_by` stops inheriting.
+  from `relates_to` to `blocked_by` stops inheriting. On an equal `last_synced`
+  an inheritance-safe type wins over any other type, then the lower type: a pull
+  request with a native `relates_to` to an issue and a text `Blocks` link to it, written by
+  one sync, keeps that issue as its donor. The cascade, the donor-change trigger, the
+  donor load and the reverse closure read the same collapse. The frozen Python
+  kept the lower type alone, so the blocking link won that tie.
 
 ---
 
@@ -3738,7 +3772,8 @@ durations, and co-occurrence bridges, but they are not the owning team source.
   `work_items`⇄`work_items` self-edge, captured per §2. (2) `work_graph_issue_pr` is a **separate**
   real table the work-graph build writes (`work_graph_edges`' fast-path sibling, migration
   `014_work_graph.sql`) feeding `work_unit_investments.structural_evidence_json`'s `prs` array
-  (§0.4) — it is not read by the team-attribution resolver at all. Both answer
+  (§0.4); the team-attribution resolver reads it for an issue's `repo_ownership` (§0.1, the issue's best
+  tier only), and the ownership derivation reads it (§1.1). Both answer
   "which table carries the cross-provider link," for different readers.
   For the entity tree, `work_graph_issue_pr` is the issue <> pull request link of record; its
   `provenance` tier ranks native > explicit_text > heuristic, and a consumer names the tier. The two

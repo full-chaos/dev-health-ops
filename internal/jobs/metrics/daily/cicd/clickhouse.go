@@ -143,15 +143,18 @@ func (writer *Writer) WriteResult(ctx context.Context, rows []CICDMetric, orgID 
 	}
 	batch, err := writer.conn.PrepareBatch(ctx, `INSERT INTO cicd_metrics_daily (
 		repo_id, day, pipelines_count, success_rate, avg_duration_minutes,
-		p90_duration_minutes, avg_queue_minutes, computed_at, org_id, retracted
+		p90_duration_minutes, avg_queue_minutes, computed_at, org_id, retracted,
+		pooled_run_minutes, pooled_queue_minutes, pooled_samples_stored
 	)`)
 	if err != nil {
 		return 0, fmt.Errorf("prepare cicd_metrics_daily batch: %w", err)
 	}
 	for _, row := range rows {
 		var retracted uint8
+		runSamples, queueSamples, marker := row.PooledRunMinutes, row.PooledQueueMinutes, pooledMarker(row.PooledSamplesOverCap)
 		if row.Retracted {
-			retracted = 1
+			// A retraction row holds no measure and no sample: the pooled readers read it as absent, never as a sample.
+			retracted, runSamples, queueSamples, marker = 1, []*float64{}, []*float64{}, 0
 		}
 		if err := batch.Append(
 			// pipelines_count is a per-(repo, day) tally with no LIMIT --
@@ -160,6 +163,7 @@ func (writer *Writer) WriteResult(ctx context.Context, rows []CICDMetric, orgID 
 			row.RepoID, row.Day, uint32(row.PipelinesCount), row.SuccessRate,
 			row.AvgDurationMinutes, row.P90DurationMinutes, row.AvgQueueMinutes,
 			row.ComputedAt, orgID, retracted,
+			runSamples, queueSamples, marker,
 		); err != nil {
 			return 0, fmt.Errorf("append cicd_metrics_daily row: %w", err)
 		}
@@ -184,4 +188,12 @@ func derefStr(value *string) string {
 		return ""
 	}
 	return *value
+}
+
+// pooledMarker is the pooled_samples_stored value of a row: 1 with its samples, 2 over the daily cap.
+func pooledMarker(overCap bool) uint8 {
+	if overCap {
+		return 2
+	}
+	return 1
 }

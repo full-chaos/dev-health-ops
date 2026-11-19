@@ -34,18 +34,18 @@ func TestWriteTestopsTestMetricsWritesFlakeAndDistinctCaseCounts(t *testing.T) {
 	if _, err := writeTestopsTestMetrics(context.Background(), conn, "org-1", day, day, []testops.TestMetric{metric}); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(conn.query, "computed_at, flake_cases, distinct_cases)") {
-		t.Fatalf("INSERT does not end with the two count columns: %s", conn.query)
+	if !strings.Contains(strings.Join(strings.Fields(conn.query), " "), "computed_at, flake_cases, distinct_cases, pooled_service_ids, pooled_durations, pooled_samples_stored)") {
+		t.Fatalf("INSERT does not name the two count columns, then the pooled columns: %s", conn.query)
 	}
 	if len(conn.batch.appended) != 1 {
 		t.Fatalf("appended %d rows, want 1", len(conn.batch.appended))
 	}
 	row := conn.batch.appended[0]
-	flake, distinct := row[len(row)-2].(*uint32), row[len(row)-1].(*uint32)
+	flake, distinct := row[len(row)-5].(*uint32), row[len(row)-4].(*uint32)
 	if flake == nil || *flake != 2 || distinct == nil || *distinct != 8 {
 		t.Fatalf("counts = %v/%v, want 2/8", flake, distinct)
 	}
-	if want := 19 + 2; len(row) != want {
+	if want := 19 + 2 + 3; len(row) != want {
 		t.Fatalf("row has %d values, want %d", len(row), want)
 	}
 }

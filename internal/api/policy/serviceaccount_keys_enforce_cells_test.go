@@ -40,7 +40,7 @@ func TestServiceAccountKeyRowsAdminCellOnUnavailableIs503(t *testing.T) {
 		t.Run(pattern, func(t *testing.T) {
 			dead := newTestPDP(t, allowAll)
 			deadEnforcer := productionEnforcer(t, dead, "admin")
-			dead.srv.Close()
+			dead.kill()
 			got := serveCell(cellHandler(t, legacyStore(true, ""), orglessAccessClaims(), deadEnforcer), pattern, cellBearer())
 			if got.status != http.StatusServiceUnavailable || got.body != enforceUnavailableBody || got.header.Get("Retry-After") != enforceRetryAfter {
 				t.Fatalf("dead PDP: %d %q Retry-After %q, want 503 %q Retry-After %s", got.status, got.body, got.header.Get("Retry-After"), enforceUnavailableBody, enforceRetryAfter)

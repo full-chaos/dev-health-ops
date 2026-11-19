@@ -165,7 +165,7 @@ func orglessPDP(t *testing.T, allowAdminOrgs bool) *testPDP {
 func deadPDP(t *testing.T) *testPDP {
 	t.Helper()
 	pdp := newTestPDP(t, allowAll)
-	pdp.srv.Close()
+	pdp.kill()
 	return pdp
 }
 

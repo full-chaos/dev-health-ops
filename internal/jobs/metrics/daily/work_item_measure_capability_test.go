@@ -114,8 +114,8 @@ func TestWorkItemMeasureCapabilityFinalizeWritesAndCountsOnSendAmbiguity(t *test
 		if written != 2 || (err != nil) != (sendErr != nil) {
 			t.Fatalf("send error %v: written=%d err=%v, want 2 rows and the send error", sendErr, written, err)
 		}
-		if conn.queries != 1 {
-			t.Fatalf("queries = %d, want one read of the organization's items", conn.queries)
+		if conn.queries != 2 {
+			t.Fatalf("queries = %d, want the read of the live keys of the day and one read of the organization's items", conn.queries)
 		}
 	}
 }

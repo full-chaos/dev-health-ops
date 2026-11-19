@@ -27,6 +27,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/chmigrate"
 	chclickhouse "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/edtokens"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
@@ -34,7 +35,6 @@ import (
 )
 
 var metricsDDL = []string{
-	"CREATE TABLE repo_metrics_daily (org_id String, computed_at DateTime('UTC')) ENGINE = MergeTree ORDER BY org_id",
 	// user_metrics_daily holds the retraction marker (migration 116, CHAOS-9135): the activity read
 	// takes the newest row of each key (FINAL, which only a replacing engine allows) and tests the
 	// marker, so the table has the engine and the column of the real one.
@@ -245,6 +245,7 @@ func startStackRouted(t *testing.T, ctx context.Context, mail authmail.Config, i
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = chConn.Close() })
+	chschema.CreateTables(ctx, t, chConn, "repo_metrics_daily")
 	for _, statement := range append(append(append([]string{}, metricsDDL...), teamKeyedMetricsDDL(t)...), sessionscenario.MetricsStatements...) {
 		if err := chConn.Exec(ctx, statement); err != nil {
 			t.Fatalf("metrics: %v", err)

@@ -91,6 +91,12 @@ func (executor *CICDExecutor) ComputeFamily(
 		return 0, err
 	}
 	result := cicd.ComputeCICDMetricsDaily(dayStart, pipelineRuns, snapshot)
+	for i := range result {
+		if !pooledSamplesFit(ctx, "cicd", run.OrganizationID, result[i].RepoID.String(), dayStart, len(result[i].PooledRunMinutes)) {
+			result[i].PooledRunMinutes, result[i].PooledQueueMinutes = []*float64{}, []*float64{}
+			result[i].PooledSamplesOverCap = true
+		}
+	}
 	stored, err := executor.loader.LoadStoredKeys(ctx, run.OrganizationID, repoIDs, dayStart)
 	if err != nil {
 		return 0, err

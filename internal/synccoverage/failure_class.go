@@ -2,19 +2,29 @@ package synccoverage
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"strings"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // FailureClass names why a configuration's rebuild failed using only static
 // words and a PostgreSQL SQLSTATE code. It never returns err's message, which
-// can embed stored processor_flags values.
+// can embed stored processor_flags values. "other" is left only for an error
+// none of the coarse classes below names.
 func FailureClass(err error) string {
 	var pgErr *pgconn.PgError
 	var limit *LimitError
+	var connectErr *pgconn.ConnectError
+	var netErr net.Error
+	var scanErr pgx.ScanArgError
+	var syntaxErr *json.SyntaxError
+	var typeErr *json.UnmarshalTypeError
 	switch {
 	case err == nil:
 		return "none"
@@ -32,6 +42,15 @@ func FailureClass(err error) string {
 		return "context_canceled"
 	case errors.As(err, &pgErr) && pgErr != nil:
 		return "postgres_" + pgErr.Code
+	case errors.As(err, &connectErr), errors.As(err, &netErr), errors.Is(err, net.ErrClosed),
+		errors.Is(err, pgconn.ErrConnClosed), errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF):
+		return "connection"
+	case errors.Is(err, errBeginRebuild):
+		return "pool_acquire"
+	case errors.As(err, &scanErr), errors.As(err, &syntaxErr), errors.As(err, &typeErr):
+		return "decode"
+	case errors.Is(err, errEncodeProjection):
+		return "encode"
 	default:
 		return "other"
 	}

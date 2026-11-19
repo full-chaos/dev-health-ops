@@ -92,9 +92,10 @@ func date(t *testing.T, s string) graphqldate.Date {
 	return graphqldate.New(parsed)
 }
 
-// cases row: passed, failed, skipped, quarantined, total, flake_cases, distinct_cases, rows_without_counts.
+// cases row: passed, failed, skipped, quarantined, total, flake_cases, distinct_cases, rows_without_counts, then the report
+// completeness sums (report runs, partial, unmarked) and the unmeasured days, all 0.
 func casesRow(passed, failed, skipped, quarantined, total uint64, flake, distinct any, without uint64) []any {
-	return []any{passed, failed, skipped, quarantined, total, flake, distinct, without}
+	return []any{passed, failed, skipped, quarantined, total, flake, distinct, without, uint64(0), uint64(0), uint64(0), uint64(0)}
 }
 
 func resolve(t *testing.T, client *fakeClient, scope Scope) (*float64, *float64, *float64, *float64, int, int) {

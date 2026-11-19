@@ -592,7 +592,11 @@ func ComputeEstimateCoverage(day time.Time, items []Item, resolve Resolver) []Es
 
 	for index, item := range items {
 		createdAt := item.CreatedAt.UTC()
-		terminalAt := earliestTimePointer(utcTimePointer(item.CompletedAt), utcTimePointer(item.ClosedAt))
+		// An item that is open now is still in the backlog, whatever completed_at or closed_at its provider kept.
+		var terminalAt *time.Time
+		if IsTerminalStatus(item.Status) {
+			terminalAt = earliestTimePointer(utcTimePointer(item.CompletedAt), utcTimePointer(item.ClosedAt))
+		}
 		if !createdAt.Before(end) {
 			continue
 		}

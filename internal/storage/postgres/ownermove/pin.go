@@ -59,7 +59,7 @@ func VerifyPinFromEnv(ctx context.Context, q Querier, lookup func(string) (strin
 // routines, types, the other named kinds and the schemas themselves. Schema public owned by pg_database_owner counts
 // as owned: it follows the database owner, which VerifyPin checks on its own.
 var notOwnedSQL = `
-SELECT kind, count(*) FROM (
+SELECT kind, pg_catalog.count(*) FROM (
   SELECT 'relation' AS kind, c.relowner AS o FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
     WHERE n.nspname = ANY($1) AND c.relkind <> 't' AND ` + notExtensionMember("pg_class", "c.oid") + `
   UNION ALL SELECT 'routine', p.proowner FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
@@ -105,7 +105,7 @@ func VerifyPin(ctx context.Context, q Querier, role, riverSchema string) error {
 		coalesce((SELECT rolcreatedb FROM pg_roles WHERE rolname = $1), false),
 		coalesce((SELECT rolreplication FROM pg_roles WHERE rolname = $1), false),
 		coalesce((SELECT rolbypassrls FROM pg_roles WHERE rolname = $1), false),
-		EXISTS (SELECT 1 FROM pg_database d JOIN pg_roles r ON r.oid = d.datdba WHERE d.datname = current_database() AND r.rolname = $1)`,
+		EXISTS (SELECT 1 FROM pg_database d JOIN pg_roles r ON r.oid = d.datdba WHERE d.datname = pg_catalog.current_database() AND r.rolname = $1)`,
 		role).Scan(&login, &exists, &super, &createRole, &createDB, &replication, &bypass, &ownsDatabase); err != nil {
 		return fmt.Errorf("%w: reading the pinned role", ErrOwnerPin)
 	}

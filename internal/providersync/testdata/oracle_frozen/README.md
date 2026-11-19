@@ -254,3 +254,18 @@ answer for a tied input is not recorded;
 same-timestamp `blocks` row to the case
 `actual_extkey_link_inherits_linear_donor` and shows Go gives the frozen
 case's answer (the Python rule gave the item no linked donor).
+
+## Declared divergence: equal last_synced in the repository-ownership donor walk
+
+Pair `sync/team-repo-ownership/donor-walk`
+(`TestTeamRepoOwnershipDonorWalkMatchesFrozenPythonProduction`). The donor walk
+of the `team_repo_ownership` derivation (`buildDonorTeamIDResolver`) collapses
+dependency edges per (source, target) with the cascade's one rule,
+`teamattribution.LatestDependencyEdgeWins`: on an equal `last_synced` an
+inheritable row wins, then the lower `relationship_type`. The frozen Python
+`latest_edge` kept the lower type alone, so a `blocks` row beside a
+`relates_to` row of the same pair dropped the donor. No frozen case of this
+pair holds such a tie, so the golden file is unchanged.
+`TestTeamRepoOwnershipDonorWalkDeclaredDivergenceGoKeepsTheInheritableEdgeOnATie`
+adds a same-timestamp `blocks` row to the case
+`inheritable_relates_to_transfers` and shows Go gives the frozen case's team.

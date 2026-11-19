@@ -739,7 +739,7 @@ A Linear or Jira work-items unit names every project it saw by an ensure row in 
 
 ## Completed work items
 
-`items_completed` (and the other completion columns of `work_item_metrics_daily` and `work_item_user_metrics_daily`: unassigned completions, story points, bug ratio, cycle and lead time) counts an item on a day only when its status is terminal (`done` or `canceled`) and its `completed_at` is on that day. This is the rule of `work_item_cycle_times`. A provider can reopen an item and keep its `completed_at`: that open item completes on no day.
+`items_completed` (and the other completion columns of `work_item_metrics_daily` and `work_item_user_metrics_daily`: unassigned completions, story points, bug ratio, cycle and lead time) counts an item on a day only when its status is terminal (`done` or `canceled`) and its `completed_at` is on that day. `work_items_completed` of `work_item_completion_daily` (and its `delivery_units`, `churn_loc` and `cycle_p50_hours`, which come from the same items) follows the same rule. This is the rule of `work_item_cycle_times`. A provider can reopen an item and keep its `completed_at`: that open item completes on no day.
 
 ## Work items in progress at the end of a day
 
@@ -756,6 +756,10 @@ The scope view (`row_view = 'scope'`) applies the same rule inside each work sco
 When an item leaves a day this way, its blocked hours of that day stored by an earlier compute are set to 0. Blocked Work under a repository filter reads those per-item hours, so it follows the same rule. Days that are not computed again keep their stored rows.
 
 `work_item_measure_capability` decides on the current copy in the same way over its 90-day window: an item counts in the window only when its current copy belongs to the window.
+
+## Estimate coverage backlog
+
+`estimate_coverage_metrics_daily` (`backlog_size`, `estimated_count`, `unestimated_count`, `ratio`) counts an item in the backlog of a day when it was created before the day ends and has not ended by then. Its end is the earlier of `completed_at` and `closed_at`, and it counts only when the status is terminal (`done` or `canceled`). A provider can reopen an item and keep its `completed_at` or `closed_at`: that open item stays in the backlog of every later day.
 
 ## Work-item person rows: persons in more than one team
 

@@ -1397,9 +1397,9 @@ type RepoCoverageBaseline struct {
 	LineBaselinePct *float64 `json:"lineBaselinePct,omitempty"`
 	// Days of the 30 that hold a line coverage value.
 	LineDays int `json:"lineDays"`
-	// Mean branch coverage, in percent; the same rules as ``lineBaselinePct``.
+	// Pooled branch coverage, in percent (0 to 100): the branches covered over the branches total of the repository's stored branch counts, over the 30 days. A day with no stored branch counts, or with no branches, is in neither sum and is not a day with a value. Null = fewer than 7 days with a value (``branchDays``), or none: then there is no baseline. Never 0 for "none", never the current value.
 	BranchBaselinePct *float64 `json:"branchBaselinePct,omitempty"`
-	// Days of the 30 that hold a branch coverage value.
+	// Days of the 30 that hold stored branch counts.
 	BranchDays int `json:"branchDays"`
 }
 
@@ -1539,9 +1539,9 @@ type ScopeCoverageBaseline struct {
 	LineBaselinePct *float64 `json:"lineBaselinePct,omitempty"`
 	// Days of the 30 on which at least one repository of the scope holds a line coverage value.
 	LineDays int `json:"lineDays"`
-	// Mean branch coverage, in percent; the same rules as ``lineBaselinePct``.
+	// Pooled branch coverage, in percent (0 to 100): the branches covered over the branches total of the stored branch counts of every repository and day of the scope in the 30 days, not the mean of the day values. A repository-day with no stored branch counts, or with no branches, is in neither sum. Null = fewer than 7 days with a value (``branchDays``), or none: then there is no baseline. Never 0 for "none", never the current value.
 	BranchBaselinePct *float64 `json:"branchBaselinePct,omitempty"`
-	// Days of the 30 on which at least one repository of the scope holds a branch coverage value.
+	// Days of the 30 on which at least one repository of the scope holds stored branch counts.
 	BranchDays int `json:"branchDays"`
 }
 

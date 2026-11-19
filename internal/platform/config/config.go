@@ -733,10 +733,10 @@ func Load(spec Spec) (Config, error) {
 	if err := validateURI("API_DATABASE_URI", cfg.APIDatabaseURI, postgresSchemes...); err != nil {
 		return Config{}, err
 	}
-	if err := validateURI("CLICKHOUSE_URI", cfg.ClickHouseURI, "clickhouse", "http", "https"); err != nil {
+	if err := validateClickHouseServiceURI("CLICKHOUSE_URI", cfg.ClickHouseURI); err != nil {
 		return Config{}, err
 	}
-	if err := validateURI("API_CLICKHOUSE_URI", cfg.APIClickHouseURI, "clickhouse", "http", "https"); err != nil {
+	if err := validateClickHouseServiceURI("API_CLICKHOUSE_URI", cfg.APIClickHouseURI); err != nil {
 		return Config{}, err
 	}
 	if err := validateURI("VALKEY_URI", cfg.ValkeyURI, "redis", "rediss", "unix"); err != nil {
@@ -1549,6 +1549,21 @@ func validateName(kind, value string) error {
 		return fmt.Errorf("%s must contain only lowercase letters, digits, and hyphens", kind)
 	}
 	return nil
+}
+
+// validateClickHouseServiceURI accepts only the native-protocol scheme for a
+// service DSN: clickhouse-go selects its HTTP protocol for http/https, whose
+// batch path ignores rows.Err(). CLIs resolve their sink through ResolveDSN and
+// are not bound by this.
+func validateClickHouseServiceURI(key string, value secrets.Value) error {
+	if value.Configured() {
+		if parsed, err := url.Parse(value.Reveal()); err == nil && parsed != nil {
+			if scheme := strings.ToLower(parsed.Scheme); scheme == "http" || scheme == "https" {
+				return fmt.Errorf("%s must use the native clickhouse:// scheme; the %s scheme is not supported for a service connection", key, scheme)
+			}
+		}
+	}
+	return validateURI(key, value, "clickhouse")
 }
 
 func validateURI(key string, value secrets.Value, schemes ...string) error {

@@ -419,7 +419,7 @@ func TestWorkItemAttributionScopedProjectRunGivesAReverseHopPullRequestItsIssueD
 
 // TestWorkItemAttributionSameDayScopedRunDefersAnItemAlreadyWrittenToday: the same two runs on one UTC day. Run 1
 // wrote A and B today, so run 2 defers both (the CHAOS-5078 alreadyCoveredToday rule) and writes nothing; B keeps
-// its run-1 row. The run marker run 2 publishes is not asserted here (ticket 14200 (filed separately)).
+// its run-1 row. The retry on the next day is held by TestWorkItemAttributionScopedRunRetriesTheItemsItDeferredOnTheNextDay.
 func TestWorkItemAttributionSameDayScopedRunDefersAnItemAlreadyWrittenToday(t *testing.T) {
 	ctx := context.Background()
 	conn := workItemAttributionMigratedClickHouse(t, ctx)

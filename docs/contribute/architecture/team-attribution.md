@@ -2524,6 +2524,18 @@ Only another ACTIVE team's tenure delays a start: an inactive team owns nothing 
   after the start of today) reaches it with the next day's partition, not with the backstop run of today. The
   two writers agree on the current day too; before this rule the backstop wrote the new owner at once and a
   later daily run of the same day wrote the old one again.
+- **An item another writer already wrote today:** the backstop writes no second row for it on the same UTC day
+  (`alreadyCoveredToday`). The run then publishes its markers just before the earliest of those rows
+  (`workItemAttributionMarkerAt`), not at its own time: when the change came after such a row, the next run sees
+  the change again and rederives the scope, so a deferred row older than the change is replaced the next day (one
+  more run of the scope; its markers then pass the change). A deferred row newer than the change already holds it,
+  and the markers pass the change at once. The daily family would not replace such a row: it rewrites only the
+  open items, and the items completed on its day, of a repository in `repos`; a done item, an item with no
+  repository and an item of a repository outside `repos` keep their row. Held by
+  `TestWorkItemAttributionScopedRunRetriesTheItemsItDeferredOnTheNextDay`,
+  `TestWorkItemAttributionOrgWideRunRetriesTheItemsItDeferredOnTheNextDay`,
+  `TestWorkItemAttributionScopedRunHoldsItsMarkerAtTheEarliestDeferredRow` and
+  `TestWorkItemAttributionScopedRunDefersAnItemWrittenAfterTheChangeOnce`.
 - **What a back-dated row does:** an ownership row written now with a `valid_from` in the past changes the
   items whose day is on or after that `valid_from`. This is the case the backstop exists for; the daily family
   does not compute old days again.

@@ -104,7 +104,7 @@ func (conn *engineConn) Query(_ context.Context, query string, args ...any) (chd
 		var out [][]any
 		for _, id := range conn.covered {
 			if in(arrays[0], id) {
-				out = append(out, []any{id})
+				out = append(out, []any{id, time.Unix(1, 0).UTC()})
 			}
 		}
 		return &valueRows{rows: out}, nil
@@ -192,7 +192,7 @@ func TestChunkedUnionEqualsTheUnchunkedUnion(t *testing.T) {
 	type result struct {
 		edges   []teamattribution.GithubWorkItemDerivationDependencyEdge
 		sources []string
-		covered map[string]struct{}
+		covered map[string]time.Time
 		donors  map[string]teamattribution.GithubWorkItemDerivationSubject
 		engine  *engineConn
 	}

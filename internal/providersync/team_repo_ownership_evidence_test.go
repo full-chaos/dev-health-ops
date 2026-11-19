@@ -178,8 +178,8 @@ func TestEvidenceUpkeep(t *testing.T) {
 	}
 }
 
-// The witness rule restated in providersync agrees with the native-first rule
-// of issueprlinks (Outranks and IsPullRequestWorkItem).
+// The evidence witness of providersync is the native-first rule issueprlinks
+// retracts by (one source, package witness): a wiring check over its cells.
 func TestEvidenceWitnessAgreesWithIssuePRLinks(t *testing.T) {
 	repo, other := uuid.New(), uuid.New()
 	stored := []TeamRepoOwnershipIssuePRLink{

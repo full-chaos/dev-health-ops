@@ -11,6 +11,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/issueprlinks/witness"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/linktier"
 )
 
@@ -136,15 +137,13 @@ func teamRepoOwnershipTeamEvidence(
 }
 
 // teamRepoOwnershipEvidenceHeld is the set of input rows one run holds, and
-// the pull requests (repo_id, pr_number) and issues that hold a native link:
-// the witnesses of issueprlinks.PlanOutrankedFallbacks. providersync must not
-// import issueprlinks (its logging would join this package's dependency set),
-// so the rule is restated here; TestEvidenceWitnessAgreesWithIssuePRLinks
-// pins the agreement.
+// the native links of the run: the witnesses of
+// issueprlinks.PlanOutrankedFallbacks, by the one rule of the leaf package
+// witness (providersync must not import issueprlinks: its logging would join
+// this package's dependency set).
 type teamRepoOwnershipEvidenceHeld struct {
-	keys         map[teamRepoOwnershipEvidenceKey]struct{}
-	nativePRs    map[[2]string]struct{}
-	nativeIssues map[string]struct{}
+	keys   map[teamRepoOwnershipEvidenceKey]struct{}
+	native witness.NativeLinks
 }
 
 // newTeamRepoOwnershipEvidenceHeld indexes the run's rows. linkKeys is every
@@ -158,9 +157,7 @@ func newTeamRepoOwnershipEvidenceHeld(
 	linkKeys []teamRepoOwnershipEvidenceKey,
 	linearTeams []string,
 ) teamRepoOwnershipEvidenceHeld {
-	held := teamRepoOwnershipEvidenceHeld{
-		keys: map[teamRepoOwnershipEvidenceKey]struct{}{}, nativePRs: map[[2]string]struct{}{}, nativeIssues: map[string]struct{}{},
-	}
+	held := teamRepoOwnershipEvidenceHeld{keys: map[teamRepoOwnershipEvidenceKey]struct{}{}, native: witness.NewNativeLinks()}
 	for _, item := range workItems {
 		held.keys[teamRepoOwnershipWorkItemEvidence(item)] = struct{}{}
 	}
@@ -173,9 +170,8 @@ func newTeamRepoOwnershipEvidenceHeld(
 			continue
 		}
 		if repoID, err := uuid.Parse(link.RepoID); err == nil {
-			held.nativePRs[[2]string{repoID.String(), strconv.FormatUint(uint64(link.PRNumber), 10)}] = struct{}{}
+			held.native.Add(repoID, link.PRNumber, link.WorkItemID)
 		}
-		held.nativeIssues[link.WorkItemID] = struct{}{}
 	}
 	for _, key := range linkKeys {
 		held.keys[key] = struct{}{}
@@ -204,34 +200,7 @@ func (held teamRepoOwnershipEvidenceHeld) holds(key teamRepoOwnershipEvidenceKey
 	if err != nil || numberErr != nil {
 		return false
 	}
-	if _, linked := held.nativePRs[[2]string{repoID.String(), strconv.FormatUint(number, 10)}]; linked {
-		return true
-	}
-	if _, linked := held.nativeIssues[columns[1]]; linked {
-		return true
-	}
-	return isPullRequestWorkItemID(columns[1])
-}
-
-// isPullRequestWorkItemID is issueprlinks.IsPullRequestWorkItem: a GitHub pull
-// request (ghpr:<repo>#<n>) or a GitLab merge request (gitlab:<path>!<n>) id
-// with a repo and a positive number that fits uint32.
-func isPullRequestWorkItemID(id string) bool {
-	var body, separator string
-	switch {
-	case strings.HasPrefix(id, "ghpr:"):
-		body, separator = strings.TrimPrefix(id, "ghpr:"), "#"
-	case strings.HasPrefix(id, "gitlab:"):
-		body, separator = strings.TrimPrefix(id, "gitlab:"), "!"
-	default:
-		return false
-	}
-	index := strings.LastIndex(body, separator)
-	if index <= 0 || index+len(separator) >= len(body) {
-		return false
-	}
-	parsed, err := strconv.ParseUint(body[index+len(separator):], 10, 32)
-	return err == nil && parsed > 0
+	return held.native.Outranks(repoID, uint32(number), columns[1]) || witness.IsPullRequestWorkItem(columns[1])
 }
 
 // teamRepoOwnershipEvidence is the recorded keys of the org's claims and the

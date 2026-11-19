@@ -40,13 +40,15 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/issueprlinks/witness"
 )
 
-// Provider names carried through to the parse result. These are the values
-// Python's _parse_pr_dependency_source returns as the third tuple element.
+// Provider names carried through to the parse result (witness, the leaf
+// package of the native-first witness rule).
 const (
-	ProviderGitHub = "github"
-	ProviderGitLab = "gitlab"
+	ProviderGitHub = witness.ProviderGitHub
+	ProviderGitLab = witness.ProviderGitLab
 )
 
 // ProvenanceNative is the only provenance this package writes. The other two
@@ -62,86 +64,11 @@ const ProvenanceNative = "native"
 // the value Python wrote, and this package's parity claim is byte-level.
 const NativeConfidence float32 = 1.0
 
-// PRSource is a `work_item_dependencies.source_work_item_id` that names a pull
-// request: the repo slug it lives in, its number, and which SCM minted the id.
-type PRSource struct {
-	RepoSlug string
-	PRNumber uint32
-	Provider string
-}
+// PRSource is witness.PRSource: a pull request named by a work item id.
+type PRSource = witness.PRSource
 
-// ParsePRSource ports work_graph/builder.py::_parse_pr_dependency_source
-// (:256-278). It recognises the two SCM work-item id shapes Go providersync
-// mints -- `ghpr:<owner>/<repo>#<n>` (github_work_items_rows.go:517,
-// linear_work_items_route.go:892) and `gitlab:<group>/<project>!<n>`
-// (linear_work_items_route.go:896) -- and returns ok=false for anything else,
-// including tracker ids (`linear:`, `jira:`, `gh:`).
-//
-// The split is deliberately LAST-separator (Python's rsplit(sep, 1)), so a repo
-// slug that itself contains the separator keeps it: `ghpr:a/b#c#12` parses as
-// slug `a/b#c`, number 12.
-//
-// # Documented divergence from Python: non-ASCII digits
-//
-// Python gates the number with str.isdigit(), which is true for non-ASCII
-// decimal digits (e.g. Arabic-Indic "٣") and for superscripts (e.g. "²"). It
-// then calls int(), which accepts the former and RAISES ValueError on the
-// latter -- so `ghpr:o/r#²` is an uncaught crash in the Python producer today,
-// and `ghpr:o/r#٣` silently parses as 3. Go's strconv.ParseUint accepts ASCII
-// only, so this function rejects both.
-//
-// This divergence is intentional and cannot fire on real data: every
-// `ghpr:`/`gitlab:` id in `work_item_dependencies` is minted by Go providersync
-// from a strconv.Itoa / URL path segment, so the number is always ASCII. It is
-// recorded here (and covered by a test) rather than bug-compatibly reproduced,
-// because reproducing it would mean either crashing on "²" or accepting a
-// digit shape no producer emits.
-//
-// # Second, output-equivalent divergence: numbers above uint32
-//
-// Python's int() is unbounded, so `ghpr:o/r#4294967296` parses; the resulting
-// lookup key can then never match a row, because `git_pull_requests.number` is
-// `UInt32` -- so the dependency is dropped at the PR-existence gate. Go rejects
-// it here instead. Both planes write NO link for such an id; only the rejection
-// reason differs (`pr_not_found_or_out_of_window` vs `unparseable_source`).
-// Recorded because the counters are load-bearing, and because "same output,
-// different attribution" is the kind of difference an accounting assertion
-// cannot see.
-func ParsePRSource(value string) (PRSource, bool) {
-	var (
-		body      string
-		separator string
-		provider  string
-	)
-	switch {
-	case strings.HasPrefix(value, "ghpr:"):
-		body = strings.TrimPrefix(value, "ghpr:")
-		separator = "#"
-		provider = ProviderGitHub
-	case strings.HasPrefix(value, "gitlab:"):
-		body = strings.TrimPrefix(value, "gitlab:")
-		separator = "!"
-		provider = ProviderGitLab
-	default:
-		return PRSource{}, false
-	}
-
-	index := strings.LastIndex(body, separator)
-	if index < 0 {
-		return PRSource{}, false
-	}
-	repoSlug, number := body[:index], body[index+len(separator):]
-	if repoSlug == "" || number == "" {
-		return PRSource{}, false
-	}
-	// ParseUint rejects a sign, so "+1"/"-1" cannot reach the <= 0 gate the way
-	// Python's isdigit()+int() pair does; both planes reject them.
-	parsed, err := strconv.ParseUint(number, 10, 32)
-	if err != nil || parsed == 0 {
-		return PRSource{}, false
-	}
-	return PRSource{RepoSlug: repoSlug, PRNumber: uint32(parsed), Provider: provider}, true
-}
+// ParsePRSource is witness.ParsePRSource.
+func ParsePRSource(value string) (PRSource, bool) { return witness.ParsePRSource(value) }
 
 // Admission is one accepted (relationship_type_raw -> target prefix) pair: the
 // provider's own statement that a PR implements a tracker issue.

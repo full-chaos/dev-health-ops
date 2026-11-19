@@ -86,8 +86,8 @@ VALUES (?, ?, ?, 'suite', 1, 1, 0, 0, ?, ?, ?, ?, '2026-03-03 00:00:00.000')`, r
 VALUES (?, ?, 'success', ?, ?, ?, ?, '2026-03-03 00:00:00.000')`, repo, fmt.Sprintf("d-%d", i), at(start), at(start+60*i), at(start+60*i), org)
 			exec(`INSERT INTO git_pull_requests (repo_id, number, author_name, author_email, created_at, merged_at, additions, deletions, last_synced, org_id)
 VALUES (?, ?, 'dev', 'dev@example.invalid', '2026-02-20 00:00:00.000', ?, ?, 0, '2026-03-03 00:00:00.000', ?)`, repo, uint32(i), at(start), uint32(10*i), org)
-			exec(`INSERT INTO work_items (repo_id, work_item_id, provider, type, created_at, updated_at, started_at, completed_at, last_synced, org_id)
-VALUES (?, ?, 'jira', 'bug', ?, ?, ?, ?, '2026-03-03 00:00:00.000', ?)`, repo, fmt.Sprintf("b-%d", i), at(start), at(start+60*i), at(start), at(start+60*i), org)
+			exec(`INSERT INTO work_items (repo_id, work_item_id, provider, type, status, created_at, updated_at, started_at, completed_at, last_synced, org_id)
+VALUES (?, ?, 'jira', 'bug', 'done', ?, ?, ?, ?, '2026-03-03 00:00:00.000', ?)`, repo, fmt.Sprintf("b-%d", i), at(start), at(start+60*i), at(start), at(start+60*i), org)
 			exec(`INSERT INTO operational_incidents
     (org_id, provider, provider_instance_id, source_entity_type, external_id,
      source_version_at, source_revision, source_conflict_key, ingest_revision, ordering_contract,

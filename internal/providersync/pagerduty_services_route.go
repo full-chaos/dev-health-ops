@@ -409,34 +409,19 @@ const (
 	pagerDutyMappingCompass  pagerDutyServiceMappingSource = "compass_service_catalog"
 )
 
-func (source pagerDutyServiceMappingSource) confidence() float64 {
-	switch source {
-	case pagerDutyMappingAdmin:
-		return 1
-	case pagerDutyMappingMetadata:
-		return 0.95
-	case pagerDutyMappingCompass:
-		return 0.9
-	default:
-		return 0.4
-	}
+type pagerDutyMappingSourceRule struct {
+	confidence float64
+	ruleID     string
+}
+
+var pagerDutyMappingSourceRules = map[pagerDutyServiceMappingSource]pagerDutyMappingSourceRule{
+	pagerDutyMappingAdmin:    {confidence: 1, ruleID: "service_repository_mapping.admin.v1"},
+	pagerDutyMappingMetadata: {confidence: 0.95, ruleID: "pagerduty.service_metadata.repository_url_or_key.v1"},
+	pagerDutyMappingCompass:  {confidence: 0.9, ruleID: "compass.service_repository_relationship.v1"},
 }
 
 func (source pagerDutyServiceMappingSource) mappingKind() string {
 	return string(source) + "_exact"
-}
-
-func (source pagerDutyServiceMappingSource) ruleID() string {
-	switch source {
-	case pagerDutyMappingAdmin:
-		return "service_repository_mapping.admin.v1"
-	case pagerDutyMappingMetadata:
-		return "pagerduty.service_metadata.repository_url_or_key.v1"
-	case pagerDutyMappingCompass:
-		return "compass.service_repository_relationship.v1"
-	default:
-		return "pagerduty.service_repository.bounded_name_match.v1"
-	}
 }
 
 type pagerDutyServiceRepositoryReference struct {
@@ -503,21 +488,21 @@ func pagerDutyServiceMappings(
 	references := pagerDutyMetadataRepositoryReferences(metadata)
 	values := make([]pagerDutyServiceRepositoryMappingRow, 0, len(references))
 	for _, reference := range references {
-		row, err := pagerDutyServiceMappingFromReference(service, reference, pagerDutyMappingMetadata, observedAt, "")
+		row, err := pagerDutyServiceMappingFromReference(service, reference, pagerDutyMappingMetadata, observedAt)
 		if err != nil {
 			return nil, err
 		}
 		values = append(values, row)
 	}
 	for _, reference := range inputs.Admin[service.ExternalID] {
-		row, err := pagerDutyServiceMappingFromReference(service, reference, pagerDutyMappingAdmin, observedAt, "")
+		row, err := pagerDutyServiceMappingFromReference(service, reference, pagerDutyMappingAdmin, observedAt)
 		if err != nil {
 			return nil, err
 		}
 		values = append(values, row)
 	}
 	for _, reference := range inputs.Compass[service.ExternalID] {
-		row, err := pagerDutyServiceMappingFromReference(service, reference, pagerDutyMappingCompass, observedAt, "")
+		row, err := pagerDutyServiceMappingFromReference(service, reference, pagerDutyMappingCompass, observedAt)
 		if err != nil {
 			return nil, err
 		}
@@ -578,14 +563,14 @@ func pagerDutyServiceMappingFromReference(
 	reference pagerDutyServiceRepositoryReference,
 	source pagerDutyServiceMappingSource,
 	observedAt time.Time,
-	ruleIDOverride string,
 ) (pagerDutyServiceRepositoryMappingRow, error) {
-	ruleID := source.ruleID()
-	if ruleIDOverride != "" {
-		ruleID = ruleIDOverride
+	rule, known := pagerDutyMappingSourceRules[source]
+	if !known {
+		return pagerDutyServiceRepositoryMappingRow{}, providerfoundation.ErrNormalizationInvalid
 	}
+	ruleID, confidence := rule.ruleID, rule.confidence
 	fullName, provider := reference.FullName, reference.Provider
-	mappingKind, provenance, confidence := source.mappingKind(), string(source), source.confidence()
+	mappingKind, provenance := source.mappingKind(), string(source)
 	sourceEventID := "pagerduty_sync"
 	row := pagerDutyServiceRepositoryMappingRow{
 		OrgID: service.OrgID, Provider: service.Provider, ProviderInstanceID: service.ProviderInstanceID,

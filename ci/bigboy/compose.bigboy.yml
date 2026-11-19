@@ -190,12 +190,12 @@ services:
       interval: 10s
       retries: 3
       start_period: 30s
+      # CHAOS-11584: the native port (9000) that migrate and the planes dial, at the container's own non-loopback address
+      # (the first-boot temporary server listens on 127.0.0.1 only). clickhouse-client reads CLICKHOUSE_USER and
+      # CLICKHOUSE_PASSWORD from the environment above, so no credential is on the command line.
       test:
-      - CMD
-      - wget
-      - --spider
-      - -q
-      - http://localhost:8123/ping
+      - CMD-SHELL
+      - h=$$(hostname -i | cut -d' ' -f1) && [ -n "$$h" ] && clickhouse-client --host "$$h" --query 'SELECT 1'
       timeout: 5s
     image: clickhouse/clickhouse-server:26.9.14.10
     networks:

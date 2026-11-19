@@ -67,6 +67,13 @@ type Plan struct {
 	ConfidenceThreshold string
 	CreatedAt           time.Time
 	OrganizationID      string
+	// UnchartedMetrics are the requested labels no chart of the report covers, each with the reason the reader sees.
+	UnchartedMetrics []UnchartedMetric
+}
+
+type UnchartedMetric struct {
+	Label  string
+	Reason string
 }
 
 type ChartSpec struct {

@@ -2048,10 +2048,11 @@ func githubTestsSplitExpiredArtifacts(items []githubTestsArtifactPayload) (live,
 	return live, expired
 }
 
-// githubTestsSkippedMarkerRecorded reports whether the bounded marker sample already holds this (run, artifact, cause). An expired
-// artifact is recorded once per unit: a run listed again (the inclusive boundary of the next search range, or a re-anchored page)
-// must not count its artifact twice. This is the only dedup evidence the cursor holds; once the sample is full a revisit of an
-// artifact whose marker was dropped cannot be told apart and counts again (the count then errs toward loss, never away from it).
+// githubTestsSkippedMarkerRecorded reports whether the bounded marker sample already holds this (run, artifact, cause). A
+// deterministic skip (expired, oversized, unreadable_archive, a member skip) is recorded once per unit: a run listed again (the
+// inclusive boundary of the next search range, or a re-anchored page) must not count its artifact twice. This is the only dedup
+// evidence the cursor holds; once the sample is full a revisit of an artifact whose marker was dropped cannot be told apart and
+// counts again (the count then errs toward loss, never away from it). artifact_unavailable is counted per failed look.
 func githubTestsSkippedMarkerRecorded(records []GitHubTestsSkippedArtifact, runID, artifactID, cause string) bool {
 	runID, artifactID = githubTestsTruncateArtifactID(runID), githubTestsTruncateArtifactID(artifactID)
 	for _, record := range records {
@@ -2095,11 +2096,19 @@ func (rows githubTestsReportRows) withoutMemberGuardSkips() githubTestsReportRow
 	return rows
 }
 
-// withoutReplayedMemberGuardSkips takes out the size-guard skips of causes whose marker for (runID, artifactID) is already in
-// recorded: a re-anchored walk read the same artifact again (CHAOS-14030). The other skips are left as they are.
-func (rows githubTestsReportRows) withoutReplayedMemberGuardSkips(recorded []GitHubTestsSkippedArtifact, runID, artifactID string) (githubTestsReportRows, []string) {
+// githubTestsReplayDedupMemberCauses are the member skips of the shared archive parse. The parse is deterministic for the same
+// bytes, so a (run, artifact, cause) marker already in the sample means the walk read this artifact before.
+var githubTestsReplayDedupMemberCauses = []string{
+	githubTestsCompressionRatioCause, githubTestsArchiveEntryCapCause,
+	githubTestsMalformedCause, githubTestsUnreadableCause, githubTestsUnsafeDoctypeCause,
+}
+
+// withoutReplayedMemberSkips takes out the member skips of causes whose marker for (runID, artifactID) is already in
+// recorded: a re-anchored or peeled walk read the same artifact again (CHAOS-14030, CHAOS-14223). Blocking skips are left as
+// they are.
+func (rows githubTestsReportRows) withoutReplayedMemberSkips(recorded []GitHubTestsSkippedArtifact, runID, artifactID string) (githubTestsReportRows, []string) {
 	replayed := map[string]bool{}
-	for _, cause := range []string{githubTestsCompressionRatioCause, githubTestsArchiveEntryCapCause} {
+	for _, cause := range githubTestsReplayDedupMemberCauses {
 		if githubTestsSkippedMarkerRecorded(recorded, runID, artifactID, cause) {
 			replayed[cause] = true
 		}
@@ -2110,7 +2119,7 @@ func (rows githubTestsReportRows) withoutReplayedMemberGuardSkips(recorded []Git
 	var dropped []string
 	issues := make([]githubTestsReportIssue, 0, len(rows.issues))
 	for _, issue := range rows.issues {
-		if replayed[issue.evidence.Cause] {
+		if !issue.blocking && replayed[issue.evidence.Cause] {
 			rows.Skipped -= issue.evidence.Count
 			dropped = append(dropped, issue.evidence.Cause)
 			continue

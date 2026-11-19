@@ -85,7 +85,7 @@ func adaptGitHubWorkItemPRSocialPayload(
 	for _, raw := range payload.Comments {
 		comment, err := adaptGitHubWorkItemPRSocialComment(raw)
 		if err != nil {
-			return githubWorkItemPRSocialSemanticPayload{}, err
+			return githubWorkItemPRSocialSemanticPayload{}, providerfoundation.RouteFailure(graphQLRoute, providerfoundation.ReasonBodyDecode, err)
 		}
 		encoded, err := json.Marshal(comment)
 		if err != nil {
@@ -96,7 +96,7 @@ func adaptGitHubWorkItemPRSocialPayload(
 	for _, raw := range payload.Events {
 		event, err := adaptGitHubWorkItemPRSocialEvent(raw)
 		if err != nil {
-			return githubWorkItemPRSocialSemanticPayload{}, err
+			return githubWorkItemPRSocialSemanticPayload{}, providerfoundation.RouteFailure(graphQLRoute, providerfoundation.ReasonBodyDecode, err)
 		}
 		encoded, err := json.Marshal(event)
 		if err != nil {

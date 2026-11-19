@@ -232,6 +232,9 @@ type Config struct {
 	// never accommodate even one retry.
 	PreclaimReadinessTimeout time.Duration
 	LogLevel                 slog.Level
+	// NonNativeClickHouseKeys names each ClickHouse service DSN key that holds an http or https DSN. Load accepts
+	// it; ObserveNonNativeClickHouse reports it.
+	NonNativeClickHouseKeys []string
 
 	DomainDatabaseURI      secrets.Value
 	QueueDatabaseURI       secrets.Value
@@ -738,6 +741,11 @@ func Load(spec Spec) (Config, error) {
 	}
 	if err := validateClickHouseServiceURI("API_CLICKHOUSE_URI", cfg.APIClickHouseURI); err != nil {
 		return Config{}, err
+	}
+	for _, key := range clickHouseServiceKeys {
+		if clickHouseHTTPScheme(cfg.clickHouseDSN(key)) != "" {
+			cfg.NonNativeClickHouseKeys = append(cfg.NonNativeClickHouseKeys, key)
+		}
 	}
 	if err := validateURI("VALKEY_URI", cfg.ValkeyURI, "redis", "rediss", "unix"); err != nil {
 		return Config{}, err
@@ -1551,17 +1559,24 @@ func validateName(kind, value string) error {
 	return nil
 }
 
-// validateClickHouseServiceURI accepts only the native-protocol scheme for a
-// service DSN: clickhouse-go selects its HTTP protocol for http/https, whose
-// batch path ignores rows.Err(). CLIs resolve their sink through ResolveDSN and
-// are not bound by this.
-func validateClickHouseServiceURI(key string, value secrets.Value) error {
-	if value.Configured() {
-		if parsed, err := url.Parse(value.Reveal()); err == nil && parsed != nil {
-			if scheme := strings.ToLower(parsed.Scheme); scheme == "http" || scheme == "https" {
-				return fmt.Errorf("%s must use the native clickhouse:// scheme; the %s scheme is not supported for a service connection", key, scheme)
-			}
+// clickHouseHTTPScheme returns "http" or "https" for a DSN that clickhouse-go would open over its HTTP protocol, else
+// "". That path ignores rows.Err() on batches, so a service should use clickhouse://; this is hygiene, not a start
+// refusal (D6465). CLIs resolve their sink through ResolveDSN and are not bound by this.
+func clickHouseHTTPScheme(value secrets.Value) string {
+	if !value.Configured() {
+		return ""
+	}
+	if parsed, err := url.Parse(value.Reveal()); err == nil && parsed != nil {
+		if scheme := strings.ToLower(parsed.Scheme); scheme == "http" || scheme == "https" {
+			return scheme
 		}
+	}
+	return ""
+}
+
+func validateClickHouseServiceURI(key string, value secrets.Value) error {
+	if clickHouseHTTPScheme(value) != "" {
+		return nil
 	}
 	return validateURI(key, value, "clickhouse")
 }

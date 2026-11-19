@@ -508,8 +508,10 @@ groups:
             advance; the run stays running): decide on a `daily-redrive` of the org-day.
             finalize_failed (every partition succeeded, the finalize failed on its last attempt;
             the run is failed): no redrive selects a failed run, so start a new run for the day
-            with `dho workers metrics daily-start --rerun-tag <tag>`. The old row stays listed
-            by daily-blocked after the rerun succeeds.
+            with `dho workers metrics daily-start --rerun-tag <tag>`. The old row clears from
+            daily-blocked at the next nightly reconcile once a later run of the day covers it
+            (full-org, or every repository of the failed run; a reopened later run still covers
+            while it recomputes).
 
       - alert: DailyMetricsBlockedReconcileFailing
         expr: |

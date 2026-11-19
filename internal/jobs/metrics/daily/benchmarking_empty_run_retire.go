@@ -140,7 +140,10 @@ func benchmarkingRetractionVersion(now, stored time.Time) time.Time {
 	return version
 }
 
-const benchmarkingEmptyRunRepositoryPresent = "repository_present_at_finalize"
+const (
+	benchmarkingEmptyRunRepositoryPresent = "repository_present_at_finalize"
+	benchmarkingNoLiveInputInWindow       = "no_live_input_in_window"
+)
 
 // retireEmptyRun is benchmarking on a run of the whole organization whose
 // discovery found no repository. It computes nothing: the compute reads the
@@ -169,10 +172,23 @@ func (executor *BenchmarkingFinalizeExecutor) retireEmptyRun(ctx context.Context
 			"repositories", repositories)
 		return 0, &emptyRunSkip{reason: benchmarkingEmptyRunRepositoryPresent}
 	}
+	written, err := executor.retireDay(ctx, run.OrganizationID, day)
+	if err != nil {
+		return written, err
+	}
+	logger.Info("benchmarking finalize retired the rows of a run with no repository",
+		"run_id", run.ID, "organization_id", run.OrganizationID, "target_day", day.Format("2006-01-02"),
+		"rows_retired", written)
+	return written, nil
+}
+
+// retireDay writes one retraction row over each live key of the organization
+// and day in the six output tables.
+func (executor *BenchmarkingFinalizeExecutor) retireDay(ctx context.Context, organizationID string, day time.Time) (int, error) {
 	now := executor.nowUTC()
 	written := 0
 	for _, table := range benchmarkingOutputTables {
-		count, err := executor.retireTable(ctx, table, run.OrganizationID, day, now)
+		count, err := executor.retireTable(ctx, table, organizationID, day, now)
 		written += count
 		if err != nil {
 			if written == 0 {
@@ -181,9 +197,6 @@ func (executor *BenchmarkingFinalizeExecutor) retireEmptyRun(ctx context.Context
 			return written, fmt.Errorf("%w: benchmarking retraction failed after %d row(s) may have landed: %w", ErrPartialWrite, written, err)
 		}
 	}
-	logger.Info("benchmarking finalize retired the rows of a run with no repository",
-		"run_id", run.ID, "organization_id", run.OrganizationID, "target_day", day.Format("2006-01-02"),
-		"rows_retired", written)
 	return written, nil
 }
 

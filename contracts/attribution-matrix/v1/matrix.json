@@ -83,9 +83,7 @@
       "provider": "github",
       "entity": "pull_requests",
       "check": "pull_request_admin_key_never_outranks_its_repository_owner",
-      "state": "known_red",
-      "ticket": "CHAOS-14209",
-      "why": "An admin team key equal to a repository's name gives that repository's pull requests the admin team by issue_project above their repository owner; a manual mapping must never outrank a native fact."
+      "state": "pass"
     },
     {
       "provider": "github",

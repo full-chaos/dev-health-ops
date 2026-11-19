@@ -1460,6 +1460,13 @@ type ComplexityRoot struct {
 		Truncated         func(childComplexity int) int
 	}
 
+	TestOpsReportCompleteness struct {
+		PartialRuns    func(childComplexity int) int
+		ReportRuns     func(childComplexity int) int
+		UnmarkedRuns   func(childComplexity int) int
+		UnmeasuredDays func(childComplexity int) int
+	}
+
 	TestOpsRiskBreakdownItem struct {
 		Category func(childComplexity int) int
 		Hours    func(childComplexity int) int
@@ -1514,14 +1521,15 @@ type ComplexityRoot struct {
 	}
 
 	TestOpsTestWindowResult struct {
-		Cases             func(childComplexity int) int
-		Coverage          func(childComplexity int) int
-		FailureRatePct    func(childComplexity int) int
-		FilterEmptyReason func(childComplexity int) int
-		FlakeRatePct      func(childComplexity int) int
-		PassRatePct       func(childComplexity int) int
-		SinceDate         func(childComplexity int) int
-		UntilDate         func(childComplexity int) int
+		Cases              func(childComplexity int) int
+		Coverage           func(childComplexity int) int
+		FailureRatePct     func(childComplexity int) int
+		FilterEmptyReason  func(childComplexity int) int
+		FlakeRatePct       func(childComplexity int) int
+		PassRatePct        func(childComplexity int) int
+		ReportCompleteness func(childComplexity int) int
+		SinceDate          func(childComplexity int) int
+		UntilDate          func(childComplexity int) int
 	}
 
 	ThroughputEstimateCoverage struct {
@@ -8668,6 +8676,34 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.TestOpsJobFailuresResult.Truncated(childComplexity), true
 
+	case "TestOpsReportCompleteness.partialRuns":
+		if e.complexity.TestOpsReportCompleteness.PartialRuns == nil {
+			break
+		}
+
+		return e.complexity.TestOpsReportCompleteness.PartialRuns(childComplexity), true
+
+	case "TestOpsReportCompleteness.reportRuns":
+		if e.complexity.TestOpsReportCompleteness.ReportRuns == nil {
+			break
+		}
+
+		return e.complexity.TestOpsReportCompleteness.ReportRuns(childComplexity), true
+
+	case "TestOpsReportCompleteness.unmarkedRuns":
+		if e.complexity.TestOpsReportCompleteness.UnmarkedRuns == nil {
+			break
+		}
+
+		return e.complexity.TestOpsReportCompleteness.UnmarkedRuns(childComplexity), true
+
+	case "TestOpsReportCompleteness.unmeasuredDays":
+		if e.complexity.TestOpsReportCompleteness.UnmeasuredDays == nil {
+			break
+		}
+
+		return e.complexity.TestOpsReportCompleteness.UnmeasuredDays(childComplexity), true
+
 	case "TestOpsRiskBreakdownItem.category":
 		if e.complexity.TestOpsRiskBreakdownItem.Category == nil {
 			break
@@ -8933,6 +8969,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 		}
 
 		return e.complexity.TestOpsTestWindowResult.PassRatePct(childComplexity), true
+
+	case "TestOpsTestWindowResult.reportCompleteness":
+		if e.complexity.TestOpsTestWindowResult.ReportCompleteness == nil {
+			break
+		}
+
+		return e.complexity.TestOpsTestWindowResult.ReportCompleteness(childComplexity), true
 
 	case "TestOpsTestWindowResult.sinceDate":
 		if e.complexity.TestOpsTestWindowResult.SinceDate == nil {
@@ -11736,12 +11779,12 @@ type RepoCoverageBaseline {
   """The repository's full name in the org's catalogue. Null = the catalogue holds no name; never the id."""
   repoName: String
   """
-  Mean line coverage, in percent (0 to 100), over the days of the 30 that hold a value. Null = fewer than 7 such days (` + "`" + `` + "`" + `lineDays` + "`" + `` + "`" + `): then there is no baseline. Never 0 for "none", never the current value.
+  Line coverage, in percent (0 to 100), pooled over the counted days of the 30: covered lines over total lines. A counted day stores both line counts and more than 0 lines; a day with a percent but no line counts is in neither sum. Null = fewer than 7 counted days (` + "`" + `` + "`" + `lineDays` + "`" + `` + "`" + `): then there is no baseline. Never 0 for "none", never the current value.
   """
   lineBaselinePct: Float
-  """Days of the 30 that hold a line coverage value."""
+  """Counted days of the 30: days that store both line counts and more than 0 lines."""
   lineDays: Int!
-  """Mean branch coverage, in percent; the same rules as ` + "`" + `` + "`" + `lineBaselinePct` + "`" + `` + "`" + `."""
+  """Mean branch coverage, in percent, over the days of the 30 that hold a value. Null = fewer than 7 such days (` + "`" + `` + "`" + `branchDays` + "`" + `` + "`" + `). Never 0 for "none", never the current value."""
   branchBaselinePct: Float
   """Days of the 30 that hold a branch coverage value."""
   branchDays: Int!
@@ -11904,12 +11947,12 @@ type SavedReportType {
 
 type ScopeCoverageBaseline {
   """
-  Mean, in percent (0 to 100), of the scope's line coverage of each day that holds a value, over the 30 days. Null = fewer than 7 such days (` + "`" + `` + "`" + `lineDays` + "`" + `` + "`" + `): then there is no baseline. Never 0 for "none", never the current value.
+  Line coverage of the scope, in percent (0 to 100): one ratio, covered lines over total lines of every counted repository day of the scope in the 30 days. A counted repository day stores both line counts and more than 0 lines; one with a percent but no line counts is in neither sum. Null = fewer than 7 days with a counted repository day (` + "`" + `` + "`" + `lineDays` + "`" + `` + "`" + `): then there is no baseline. Never 0 for "none", never the current value.
   """
   lineBaselinePct: Float
-  """Days of the 30 on which at least one repository of the scope holds a line coverage value."""
+  """Days of the 30 on which at least one repository of the scope has a counted day."""
   lineDays: Int!
-  """Mean branch coverage, in percent; the same rules as ` + "`" + `` + "`" + `lineBaselinePct` + "`" + `` + "`" + `."""
+  """Mean, in percent, of the scope's branch coverage of each day that holds a value (the mean over its repositories), over the 30 days. Null = fewer than 7 such days (` + "`" + `` + "`" + `branchDays` + "`" + `` + "`" + `). Never 0 for "none", never the current value."""
   branchBaselinePct: Float
   """Days of the 30 on which at least one repository of the scope holds a branch coverage value."""
   branchDays: Int!
@@ -12138,6 +12181,22 @@ type TestOpsTestCaseCounts {
   total: Int!
 }
 
+"""
+Report completeness of the runs behind the window's case counts, summed over its measured repository days (a run with counted suites on two days counts on each). A run is partial when a counted attempt, or its newest attempt, has a completeness row that names a lost report; unmarked when such an attempt has no completeness row (for example a provider that writes none); else complete. A repository day stored before these counts is not measured: it adds nothing to the sums and is counted in unmeasuredDays, never read as complete.
+"""
+type TestOpsReportCompleteness {
+  """Count of runs with a counted test suite, summed over the measured repository days."""
+  reportRuns: Int!
+  """Count of runs, of reportRuns, read as partial: a report was lost, so some of their cases are not counted."""
+  partialRuns: Int!
+  """Count of runs, of reportRuns, with no completeness mark: not known to be complete."""
+  unmarkedRuns: Int!
+  """
+  Count of repository days of the window with no completeness record: missing, not zero and not healthy. Such a day adds nothing to the three run counts.
+  """
+  unmeasuredDays: Int!
+}
+
 type TestOpsTestWindowResult {
   sinceDate: Date!
   untilDate: Date!
@@ -12155,6 +12214,10 @@ type TestOpsTestWindowResult {
   flakeRatePct: Float
   "Why the answer is empty, one value for the whole answer, set by the server and never derived by a client (CHAOS-9098). team_owns_no_repository: ` + "`" + `` + "`" + `teamIds` + "`" + `` + "`" + ` selects teams that together own no repository (team_repo_ownership, as of now). Null when ` + "`" + `` + "`" + `teamIds` + "`" + `` + "`" + ` is not set, and when the selected teams own one or more repositories, also when the window has no rows."
   filterEmptyReason: String
+  """
+  Report completeness of the runs behind ` + "`" + `` + "`" + `cases` + "`" + `` + "`" + `: partial and unmarked runs, and the repository days not measured.
+  """
+  reportCompleteness: TestOpsReportCompleteness!
 }
 
 type TestOpsRiskBreakdownItem {
@@ -51140,6 +51203,8 @@ func (ec *executionContext) fieldContext_Query_testopsTestWindow(ctx context.Con
 				return ec.fieldContext_TestOpsTestWindowResult_flakeRatePct(ctx, field)
 			case "filterEmptyReason":
 				return ec.fieldContext_TestOpsTestWindowResult_filterEmptyReason(ctx, field)
+			case "reportCompleteness":
+				return ec.fieldContext_TestOpsTestWindowResult_reportCompleteness(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type TestOpsTestWindowResult", field.Name)
 		},
@@ -60333,6 +60398,182 @@ func (ec *executionContext) fieldContext_TestOpsJobFailuresResult_filterEmptyRea
 	return fc, nil
 }
 
+func (ec *executionContext) _TestOpsReportCompleteness_reportRuns(ctx context.Context, field graphql.CollectedField, obj *model.TestOpsReportCompleteness) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_TestOpsReportCompleteness_reportRuns(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.ReportRuns, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(int)
+	fc.Result = res
+	return ec.marshalNInt2int(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_TestOpsReportCompleteness_reportRuns(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "TestOpsReportCompleteness",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _TestOpsReportCompleteness_partialRuns(ctx context.Context, field graphql.CollectedField, obj *model.TestOpsReportCompleteness) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_TestOpsReportCompleteness_partialRuns(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.PartialRuns, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(int)
+	fc.Result = res
+	return ec.marshalNInt2int(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_TestOpsReportCompleteness_partialRuns(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "TestOpsReportCompleteness",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _TestOpsReportCompleteness_unmarkedRuns(ctx context.Context, field graphql.CollectedField, obj *model.TestOpsReportCompleteness) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_TestOpsReportCompleteness_unmarkedRuns(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.UnmarkedRuns, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(int)
+	fc.Result = res
+	return ec.marshalNInt2int(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_TestOpsReportCompleteness_unmarkedRuns(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "TestOpsReportCompleteness",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _TestOpsReportCompleteness_unmeasuredDays(ctx context.Context, field graphql.CollectedField, obj *model.TestOpsReportCompleteness) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_TestOpsReportCompleteness_unmeasuredDays(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.UnmeasuredDays, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(int)
+	fc.Result = res
+	return ec.marshalNInt2int(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_TestOpsReportCompleteness_unmeasuredDays(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "TestOpsReportCompleteness",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _TestOpsRiskBreakdownItem_category(ctx context.Context, field graphql.CollectedField, obj *model.TestOpsRiskBreakdownItem) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_TestOpsRiskBreakdownItem_category(ctx, field)
 	if err != nil {
@@ -62106,6 +62347,60 @@ func (ec *executionContext) fieldContext_TestOpsTestWindowResult_filterEmptyReas
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _TestOpsTestWindowResult_reportCompleteness(ctx context.Context, field graphql.CollectedField, obj *model.TestOpsTestWindowResult) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_TestOpsTestWindowResult_reportCompleteness(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.ReportCompleteness, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(*model.TestOpsReportCompleteness)
+	fc.Result = res
+	return ec.marshalNTestOpsReportCompleteness2ᚖgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐTestOpsReportCompleteness(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_TestOpsTestWindowResult_reportCompleteness(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "TestOpsTestWindowResult",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "reportRuns":
+				return ec.fieldContext_TestOpsReportCompleteness_reportRuns(ctx, field)
+			case "partialRuns":
+				return ec.fieldContext_TestOpsReportCompleteness_partialRuns(ctx, field)
+			case "unmarkedRuns":
+				return ec.fieldContext_TestOpsReportCompleteness_unmarkedRuns(ctx, field)
+			case "unmeasuredDays":
+				return ec.fieldContext_TestOpsReportCompleteness_unmeasuredDays(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type TestOpsReportCompleteness", field.Name)
 		},
 	}
 	return fc, nil
@@ -80856,6 +81151,60 @@ func (ec *executionContext) _TestOpsJobFailuresResult(ctx context.Context, sel a
 	return out
 }
 
+var testOpsReportCompletenessImplementors = []string{"TestOpsReportCompleteness"}
+
+func (ec *executionContext) _TestOpsReportCompleteness(ctx context.Context, sel ast.SelectionSet, obj *model.TestOpsReportCompleteness) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, testOpsReportCompletenessImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("TestOpsReportCompleteness")
+		case "reportRuns":
+			out.Values[i] = ec._TestOpsReportCompleteness_reportRuns(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "partialRuns":
+			out.Values[i] = ec._TestOpsReportCompleteness_partialRuns(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "unmarkedRuns":
+			out.Values[i] = ec._TestOpsReportCompleteness_unmarkedRuns(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "unmeasuredDays":
+			out.Values[i] = ec._TestOpsReportCompleteness_unmeasuredDays(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.processDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
 var testOpsRiskBreakdownItemImplementors = []string{"TestOpsRiskBreakdownItem"}
 
 func (ec *executionContext) _TestOpsRiskBreakdownItem(ctx context.Context, sel ast.SelectionSet, obj *model.TestOpsRiskBreakdownItem) graphql.Marshaler {
@@ -81263,6 +81612,11 @@ func (ec *executionContext) _TestOpsTestWindowResult(ctx context.Context, sel as
 			out.Values[i] = ec._TestOpsTestWindowResult_flakeRatePct(ctx, field, obj)
 		case "filterEmptyReason":
 			out.Values[i] = ec._TestOpsTestWindowResult_filterEmptyReason(ctx, field, obj)
+		case "reportCompleteness":
+			out.Values[i] = ec._TestOpsTestWindowResult_reportCompleteness(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -87420,6 +87774,16 @@ func (ec *executionContext) marshalNTestOpsJobFailuresResult2ᚖgithubᚗcomᚋf
 		return graphql.Null
 	}
 	return ec._TestOpsJobFailuresResult(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNTestOpsReportCompleteness2ᚖgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐTestOpsReportCompleteness(ctx context.Context, sel ast.SelectionSet, v *model.TestOpsReportCompleteness) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			ec.Errorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._TestOpsReportCompleteness(ctx, sel, v)
 }
 
 func (ec *executionContext) marshalNTestOpsRiskBreakdownItem2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐTestOpsRiskBreakdownItem(ctx context.Context, sel ast.SelectionSet, v model.TestOpsRiskBreakdownItem) graphql.Marshaler {

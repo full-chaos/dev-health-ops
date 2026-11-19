@@ -452,7 +452,7 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 				before := cursor
 				payload, decodeErr := decodeGitLabTestsPipeline(page.Items[index])
 				if decodeErr != nil {
-					return decodeErr
+					return providerfoundation.RouteFailure(gitlabPipelinesRoute, providerfoundation.ReasonBodyDecode, decodeErr)
 				}
 				jobs := []githubTestsJobRow(nil)
 				acceptance := []githubTestsAcceptanceRow(nil)
@@ -505,7 +505,7 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 					for _, rawJob := range jobItems {
 						job, jobErr := decodeGitLabTestsJob(rawJob)
 						if jobErr != nil {
-							return jobErr
+							return providerfoundation.RouteFailure(gitlabPipelineJobsRoute, providerfoundation.ReasonBodyDecode, jobErr)
 						}
 						row, include := normalizeGitLabTestsJob(claim, repoID, pipeline.RunID, job, normalizedAt)
 						if include {

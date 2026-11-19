@@ -271,6 +271,11 @@ func appendGitHubTestsSkippedArtifact(
 	// whether or not it fits the bounded sample below (codex review gate
 	// round 2, P1 -- see githubTestsChunkCursor.SkippedArtifactCauseCount).
 	causeCount = markGitHubTestsSkippedArtifactCauseCount(causeCount, record.Cause)
+	// One marker per (run, artifact, cause): a second skip of the same artifact and cause (another member of it, or a
+	// replayed read) is already located by the first marker, and a duplicate would push other artifacts out of the sample.
+	if githubTestsSkippedMarkerRecorded(records, record.RunID, record.ArtifactID, record.Cause) {
+		return records, overflow, causeOverflow, causeCount
+	}
 	if len(records) >= githubTestsMaxSkippedArtifactRecords {
 		return records, overflow + 1, markGitHubTestsSkippedArtifactCauseOverflow(causeOverflow, record.Cause), causeCount
 	}
@@ -476,6 +481,59 @@ func remainingPageBudget(budget, spent int) (int, error) {
 	return budget - spent, nil
 }
 
+// githubTestsMaxWalkRecords bounds the rows one chunked walk writes, summed over every phase and every attempt
+// (githubTestsWalkRecords). The page budgets bound the runs a walk lists, not the rows: one run's reports go up to
+// maxEffectRows, which the executor splits into 100-row chunks, so a walk of a busy repository could prepare chunks for many
+// hours while it held its cost-class slot. The value is 2x the largest successful backfill walk on prod, Nov 2026 (2,002,076
+// records; the largest incremental walk was 593,667), rounded up to the next 100,000. Two prod backfill walks that ran for 13+
+// hours without an end held about 8,000,000.
+const githubTestsMaxWalkRecords = 4_100_000
+
+// errGitHubTestsWalkBound stops a listing visit at the run where the walk reached githubTestsMaxWalkRecords.
+var errGitHubTestsWalkBound = errors.New("github tests walk record bound reached")
+
+// githubTestsWalkRecords is the rows the walk has written so far. Every addend is a cumulative cursor counter, so a stored
+// cursor of an earlier attempt or an earlier release already carries the total.
+func githubTestsWalkRecords(cursor githubTestsChunkCursor) int {
+	return cursor.Pipelines + cursor.Jobs + cursor.Acceptance + cursor.Suites + cursor.Cases + cursor.Coverage
+}
+
+// markGitHubTestsInventoryTruncated records that an inventory phase ended before the end of its listing: the unit finalizes
+// with reports_complete=false and no watermark (githubTestsWindowBlockingComponents).
+func markGitHubTestsInventoryTruncated(
+	cursor githubTestsChunkCursor, client *providerfoundation.HTTPClient, claim Claim, component string,
+) githubTestsChunkCursor {
+	cursor.Incomplete = mergeGitHubTestsIncomplete(cursor.Incomplete, GitHubTestsIncomplete{
+		Component: component, Cause: githubTestsPageBudgetCause, Count: 1,
+	})
+	if client != nil {
+		client.Metrics.RecordInventoryPageCap(claim.Provider, claim.Dataset)
+	}
+	return cursor
+}
+
+// recordGitHubTestsWalkBound ends an inventory phase at the walk record bound through the page-budget truncation: the same
+// observation, so the closed vocabulary and the coverage readers are unchanged; the WARN line names the bound.
+func recordGitHubTestsWalkBound(
+	cursor githubTestsChunkCursor, client *providerfoundation.HTTPClient, claim Claim, component string, bound int,
+) githubTestsChunkCursor {
+	cursor = markGitHubTestsInventoryTruncated(cursor, client, claim, component)
+	logGitHubTestsWalkBound(cursor, claim, component, bound)
+	return cursor
+}
+
+// githubTestsOpenRunsWalkBoundComponent names the open phase in the walk-bound WARN line only; it is not an inventory component.
+const githubTestsOpenRunsWalkBoundComponent = "open_runs"
+
+func logGitHubTestsWalkBound(cursor githubTestsChunkCursor, claim Claim, component string, bound int) {
+	slog.Warn(
+		"provider walk record bound reached",
+		"provider", claim.Provider, "dataset", claim.Dataset, "mode", claim.Mode, "unit", claim.ID,
+		"repository", logging.ProviderText(cursor.Repo), "component", component,
+		"records", githubTestsWalkRecords(cursor), "bound", bound,
+	)
+}
+
 // recordGitHubTestsInventoryTruncation finalizes an inventory phase that hit
 // its cumulative page budget WITHOUT failing the unit.
 //
@@ -501,12 +559,7 @@ func recordGitHubTestsInventoryTruncation(
 	component string,
 	pagesSpent int,
 ) githubTestsChunkCursor {
-	cursor.Incomplete = mergeGitHubTestsIncomplete(cursor.Incomplete, GitHubTestsIncomplete{
-		Component: component, Cause: githubTestsPageBudgetCause, Count: 1,
-	})
-	if client != nil {
-		client.Metrics.RecordInventoryPageCap(claim.Provider, claim.Dataset)
-	}
+	cursor = markGitHubTestsInventoryTruncated(cursor, client, claim, component)
 	slog.Warn(
 		"provider inventory page budget exhausted",
 		"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
@@ -1322,6 +1375,13 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 	if maxRuns < 1 || maxRuns > githubTestsMaxRuns || maxArtifacts < 1 || maxArtifacts > githubTestsMaxArtifacts || jobPages < 1 || jobPages > nativeMaxPages {
 		return ErrInvalidConfiguration
 	}
+	maxWalkRecords := handler.MaxWalkRecords
+	if maxWalkRecords == 0 {
+		maxWalkRecords = githubTestsMaxWalkRecords
+	}
+	if maxWalkRecords < 1 || maxWalkRecords > githubTestsMaxWalkRecords {
+		return ErrInvalidConfiguration
+	}
 	if err := validatePerRunPageBudget(
 		"MaxJobPages", jobPages, githubTestsPerRunPerPage, githubTestsMaxJobsPerRun,
 	); err != nil {
@@ -1495,6 +1555,9 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		}
 		start, _ := githubTestsResumeStart(cursor, page, client, claim, githubTestsRunsPhase)
 		for index := start; index < len(page.Items); index++ {
+			if githubTestsWalkRecords(cursor) >= maxWalkRecords {
+				return errGitHubTestsWalkBound
+			}
 			before := cursor
 			var run gitHubWorkflowRunPayload
 			decoder := json.NewDecoder(strings.NewReader(string(page.Items[index])))
@@ -1551,10 +1614,19 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 				cursor = endRunsRange(cursor)
 			}
 		}
+		// The visitor follows the next link as soon as this returns: a page that ends at the bound stops here. A listing that
+		// ended at the bound has left the phase, so its inventory is complete.
+		if cursor.Phase == githubTestsRunsPhase && githubTestsWalkRecords(cursor) >= maxWalkRecords {
+			return errGitHubTestsWalkBound
+		}
 		return nil
 	}
 
 	for cursor.Phase == githubTestsRunsPhase {
+		if githubTestsWalkRecords(cursor) >= maxWalkRecords {
+			cursor = recordGitHubTestsWalkBound(cursor, client, claim, githubTestsRunInventoryComponent, maxWalkRecords)
+			break
+		}
 		query := githubTestsRunsQuery(claim, lookback, cursor.RangeHi)
 		allowance, budgetErr := remainingPageBudget(
 			(maxRuns+nativePerPage-1)/nativePerPage, cursor.RunPages)
@@ -1568,6 +1640,10 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		}
 		pageOptions := providerfoundation.GitHubPageOptions{Path: root + "/actions/runs", Route: githubRunsRoute, Query: query, DataKey: "workflow_runs", MaxPages: allowance, InitialURL: cursor.NextURL}
 		collection, visitErr := providerfoundation.VisitGitHubLinkPages(ctx, client, pageOptions, emitRunPage)
+		if errors.Is(visitErr, errGitHubTestsWalkBound) {
+			cursor = recordGitHubTestsWalkBound(cursor, client, claim, githubTestsRunInventoryComponent, maxWalkRecords)
+			break
+		}
 		if visitErr != nil {
 			return visitErr
 		}
@@ -1622,6 +1698,19 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 			cursor.Phase = "done"
 			return nil
 		}
+		// The open phase re-reads runs older than the window; the next unit re-reads what a bound stop leaves, so the stop adds
+		// no inventory observation. It is published as a cap stop (open_runs_cap_reached): the open rows were not all re-read.
+		stopAtWalkBound := func() bool {
+			if githubTestsWalkRecords(cursor) < maxWalkRecords {
+				return false
+			}
+			cursor.OpenCapReached = true
+			logGitHubTestsWalkBound(cursor, claim, githubTestsOpenRunsWalkBoundComponent, maxWalkRecords)
+			return true
+		}
+		if stopAtWalkBound() {
+			return nil
+		}
 		startedBefore := claim.SinceAt.UTC().Add(-lookback)
 		if cursor.OpenCap == 0 {
 			backlog, err := handler.OpenRuns.OpenRunBacklog(ctx, claim, repoID, startedBefore, githubTestsOpenRunBacklogThreshold+1)
@@ -1652,6 +1741,9 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 			for _, row := range rows {
 				if cursor.OpenSkipped >= cursor.OpenCap {
 					break
+				}
+				if stopAtWalkBound() {
+					return nil
 				}
 				if hit, remaining := rateObserved.belowFloor(); hit {
 					cursor.OpenFloorHit, cursor.OpenFloorRemaining = true, remaining
@@ -1730,6 +1822,10 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		)
 	}
 	for cursor.Phase == githubTestsArtifactsPhase {
+		if githubTestsWalkRecords(cursor) >= maxWalkRecords {
+			cursor = recordGitHubTestsWalkBound(cursor, client, claim, githubTestsArtifactInventoryComponent, maxWalkRecords)
+			break
+		}
 		artifactQuery := githubTestsArtifactRunQueryAt(claim, cursor.RangeHi)
 		artifactPage := func(page providerfoundation.PageVisit) error {
 			cursor.Pages++
@@ -1777,6 +1873,9 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 				// safer failure mode than erasing real history.
 			}
 			for index := start; index < len(page.Items); index++ {
+				if githubTestsWalkRecords(cursor) >= maxWalkRecords {
+					return errGitHubTestsWalkBound
+				}
 				before := cursor
 				var run gitHubWorkflowRunPayload
 				decoder := json.NewDecoder(strings.NewReader(string(page.Items[index])))
@@ -1913,8 +2012,17 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 					// not fit is skipped whole with a marker and the walk goes on, so the order GitHub lists the artifacts in never
 					// decides which one survives. Each cause is recorded once per run, a marker once per skipped artifact.
 					var parsedReports []githubTestsParsedReport
-					// Guard skips of a replayed artifact are not counted again in the unit, but they are still this run's losses.
+					// Skips of a replayed artifact are not counted again in the unit, but they are still this run's losses.
 					var replayedRunLosses []string
+					// A deterministic whole-artifact skip whose marker is in the sample is a replay: not counted again, but still a
+					// loss of this run (CHAOS-14223). artifact_unavailable is not deduplicated: a later look can read the artifact.
+					replayedSkip := func(artifact githubTestsArtifactPayload, cause string) bool {
+						if !githubTestsSkippedMarkerRecorded(cursor.SkippedArtifacts, pipeline.RunID, string(artifact.ID), cause) {
+							return false
+						}
+						replayedRunLosses = append(replayedRunLosses, cause)
+						return true
+					}
 					heldRows := 0
 					reportRowsTruncated := false
 					skipReportOverBound := func(artifact githubTestsArtifactPayload) {
@@ -2019,6 +2127,9 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 							// skips still visible to the gate (3 corrupt + 2
 							// oversized -> 3/3, not 3/5).
 							if errors.Is(downloadErr, ErrGitHubTestsArtifactOversized) {
+								if replayedSkip(artifact, githubTestsArtifactOversizedCause) {
+									continue
+								}
 								cursor.Incomplete = recordGitHubTestsSkippedArtifact(
 									cursor.Incomplete, client, claim, cursor.Repo, pipeline.RunID,
 									githubTestsArtifactOversizedCause,
@@ -2103,6 +2214,10 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 							// bodies for every artifact would otherwise
 							// finalize the unit as healthy with zero report
 							// rows (CHAOS-4185 codex round 2).
+							if replayedSkip(artifact, githubTestsUnreadableArchiveCause) {
+								cursor.ArchivesUnreadable = bumpGitHubTestsArchiveCounter(cursor.ArchivesUnreadable)
+								continue
+							}
 							cursor.Incomplete = recordGitHubTestsSkippedArtifact(
 								cursor.Incomplete, client, claim, cursor.Repo, pipeline.RunID,
 								githubTestsUnreadableArchiveCause,
@@ -2128,6 +2243,10 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 							// keep walking: one bad artifact must not cost the
 							// healthy ones or the whole unit (CHAOS-4177).
 							if errors.Is(parseErr, ErrGitHubTestsArchiveUnreadable) {
+								if replayedSkip(artifact, githubTestsUnreadableArchiveCause) {
+									cursor.ArchivesUnreadable = bumpGitHubTestsArchiveCounter(cursor.ArchivesUnreadable)
+									continue
+								}
 								cursor.Incomplete = recordGitHubTestsSkippedArtifact(
 									cursor.Incomplete, client, claim, cursor.Repo, pipeline.RunID,
 									githubTestsUnreadableArchiveCause,
@@ -2147,12 +2266,12 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 							}
 							return fmt.Errorf("%w: artifact parse failed: %v", ErrGitHubTestsIncomplete, parseErr)
 						}
-						// A resumed walk can re-anchor and read this artifact again. The size-guard skips are deterministic, so a (run,
+						// A resumed walk can re-anchor and read this artifact again. The member skips are deterministic, so a (run,
 						// artifact, cause) already in the marker sample is a replay: its contribution is dropped, not counted twice
-						// (CHAOS-14030).
-						var replayedGuard []string
-						rows, replayedGuard = rows.withoutReplayedMemberGuardSkips(cursor.SkippedArtifacts, pipeline.RunID, string(artifact.ID))
-						replayedRunLosses = append(replayedRunLosses, replayedGuard...)
+						// (CHAOS-14030, CHAOS-14223).
+						var replayedMember []string
+						rows, replayedMember = rows.withoutReplayedMemberSkips(cursor.SkippedArtifacts, pipeline.RunID, string(artifact.ID))
+						replayedRunLosses = append(replayedRunLosses, replayedMember...)
 						reportIncomplete, optional := rows.optionalIncomplete()
 						if !optional {
 							return fmt.Errorf("%w: reports skipped=%d: unsafe archive bounds", ErrGitHubTestsIncomplete, rows.Skipped)
@@ -2197,7 +2316,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 						// Hold the parsed rows until the run is decided; an artifact that would take the held rows past
 						// githubTestsMaxHeldReportRowsPerRun is skipped whole before it is held.
 						held := githubTestsParsedReport{ID: artifact.ID, Name: artifact.Name, Suites: rows.Suites, Cases: rows.Cases, Coverage: rows.Coverage, Reports: rows.ReportsRead}
-						if held.Reports == 0 && len(rows.SkippedArtifacts) == 0 && len(reportIncomplete) == 0 && len(replayedGuard) == 0 {
+						if held.Reports == 0 && len(rows.SkippedArtifacts) == 0 && len(reportIncomplete) == 0 && len(replayedMember) == 0 {
 							nonReportArchives++ // read whole and held no report: not a report source of the run (CHAOS-13826)
 						}
 						if heldRows+held.rows() > githubTestsMaxHeldReportRowsPerRun {
@@ -2310,6 +2429,9 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 					cursor = endArtifactsRange(cursor)
 				}
 			}
+			if cursor.Phase == githubTestsArtifactsPhase && githubTestsWalkRecords(cursor) >= maxWalkRecords {
+				return errGitHubTestsWalkBound
+			}
 			return nil
 		}
 		allowance, budgetErr := remainingPageBudget(
@@ -2323,6 +2445,10 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 			return budgetErr
 		}
 		collection, visitErr := providerfoundation.VisitGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{Path: root + "/actions/runs", Route: githubRunsRoute, Query: artifactQuery, DataKey: "workflow_runs", MaxPages: allowance, InitialURL: cursor.NextURL}, artifactPage)
+		if errors.Is(visitErr, errGitHubTestsWalkBound) {
+			cursor = recordGitHubTestsWalkBound(cursor, client, claim, githubTestsArtifactInventoryComponent, maxWalkRecords)
+			break
+		}
 		if visitErr != nil {
 			return visitErr
 		}

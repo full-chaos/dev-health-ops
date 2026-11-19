@@ -112,6 +112,8 @@ type CoverageSnapshotRow struct {
 	LinesTotal        *uint32
 	LinesCovered      *uint32
 	LineCoveragePct   *float64
+	BranchesTotal     *uint32
+	BranchesCovered   *uint32
 	BranchCoveragePct *float64
 	TeamID            *string
 	ServiceID         *string
@@ -176,6 +178,10 @@ type TestMetric struct {
 	SuiteDurationP50Seconds *float64
 	SuiteDurationP95Seconds *float64
 	FailureRecurrence       float64
+	// RecurrentFailedNames and DistinctFailedNames are the two counts of FailureRecurrence: the failed names of the day
+	// that also failed in the history window, and the distinct failed names of the day (0 and 0 with no failed name).
+	RecurrentFailedNames int
+	DistinctFailedNames  int
 	// PooledSamples are the suite duration samples the suite percentiles above were taken over.
 	PooledSamples []PooledSample
 	// FlakeUnknown is set when the day holds case rows only of runs left out of
@@ -188,6 +194,14 @@ type TestMetric struct {
 	TeamID       *string
 	ServiceID    *string
 	OrgID        string
+	// ReportRuns is the report completeness of the day's runs; nil = not measured (written as NULL, never 0).
+	ReportRuns *ReportRunCounts
+}
+
+// ReportRunCounts counts the runs with a kept suite on a repo-day (Runs), the runs read as partial and the runs that carry
+// no completeness mark for a counted attempt (unmarked). Partial and Unmarked are disjoint; the rest are complete.
+type ReportRunCounts struct {
+	Runs, Partial, Unmarked int
 }
 
 // CoverageMetric ports CoverageMetricsDailyRecord (testops_schemas.py:394).
@@ -202,6 +216,8 @@ type CoverageMetric struct {
 	BranchCoveragePct       *float64
 	LinesTotal              *uint32
 	LinesCovered            *uint32
+	BranchesTotal           *uint32
+	BranchesCovered         *uint32
 	CoverageDeltaPct        *float64
 	UncoveredFilesCount     int
 	CoverageRegressionCount int
@@ -971,6 +987,7 @@ func (accumulator *TestAccumulator) Finish(historicalFailedNames map[string]stru
 		RepoID: repoID, TotalCases: totalCases, PassedCount: passedCount,
 		FailedCount: failedCount, SkippedCount: skippedCount, QuarantinedCount: quarantinedCount,
 		TotalSuites: len(suites), FlakeCases: flakeCases, DistinctCases: distinctCases,
+		RecurrentFailedNames: recurrentFailures, DistinctFailedNames: len(currentFailedNames),
 		PooledSamples: accumulator.suiteSamples,
 	}
 	if totalCases > 0 {
@@ -1030,6 +1047,7 @@ func ComputeCoverageMetric(repoID uuid.UUID, current, prior []CoverageSnapshotRo
 	metric := &CoverageMetric{
 		RepoID: repoID, LineCoveragePct: latest.LineCoveragePct, BranchCoveragePct: latest.BranchCoveragePct,
 		LinesTotal: latest.LinesTotal, LinesCovered: latest.LinesCovered,
+		BranchesTotal: latest.BranchesTotal, BranchesCovered: latest.BranchesCovered,
 		TeamID: resolveRepoTeam(latest.TeamID, repoName, resolver), ServiceID: latest.ServiceID, OrgID: latest.OrgID,
 	}
 	if latest.LineCoveragePct != nil && priorLatest != nil && priorLatest.LineCoveragePct != nil {

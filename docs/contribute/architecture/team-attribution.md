@@ -256,7 +256,7 @@ flowchart TD
     COLLECT --> SEL{{"Select winner: is_primary = the highest-precedence candidate present"}}
     SEL --> NT{"0 · native_team candidate?"}
     NT -->|"yes"| Win["is_primary = matched source"]
-    NT -->|"no"| IP{"1 · issue_project candidate?"}
+    NT -->|"no"| IP{"1 · issue_project candidate?<br/>(a pull or merge request: an admin team's key<br/>ranks after linked_issue, a fallback only)"}
     IP -->|"yes"| Win
     IP -->|"no"| PO{"2 · project_ownership candidate?"}
     PO -->|"yes"| Win
@@ -335,8 +335,26 @@ flowchart TD
 > evidence names the link and its real tier: `repo_ownership=<repo id>;work_graph_issue_pr=<pr number>;tier=<tier>`. Both
 > writers (the daily `work_item_attribution` family and the backstop) read the links
 > (`LoadIssueLinkedPullRequests`), and a backstop run of a repository whose ownership changed re-derives the
-> issues linked to it. **Limit:** a new or removed link is not a backstop trigger; the daily family re-derives
-> the issue on its own days only, so a removed link can leave a stale team on an older issue (follow-up ticket filed).
+> issues linked to it. **A link change re-derives the issue:** each backstop run reads the stored rows (no
+> watermark, like a changed donor row) and re-derives an issue (not a pull / merge request) when a link its
+> newest rows name (`repo_ownership` evidence, any `is_primary`) is gone, has another tier or is below its best
+> tier now; when a best-tier link was written after its newest rows; or when its primary is `unassigned` or
+> `manual_fallback`, it has a best-tier link, and the cascade on the facts of its day (the re-derive's own) gives
+> another primary. The re-derive writes the cascade's full new row set (another owner, a project or fallback
+> source, or `unassigned`); nothing is deleted or zero-filled, and the newer set hides the old one from every
+> reader. With no ownership scope it is an item-only run; an item another writer already wrote today waits for
+> a later run (`alreadyCoveredToday`). After the re-derive the next run finds nothing (Info
+> `work_item_attribution.link_changed_issues`, `WorkItemAttributionOutcome.LinkChangedIssues`). Limits: a link the
+> evidence does not name can change the main owner only when two or more owner teams share the best tier, and
+> its removal alone is not seen; a native link carries its dependency row's time, so one written just before a
+> row is seen by the owner check, not by time; an issue whose link repository has an owner today but none on
+> its own day is re-checked each run and never written (Info `work_item_attribution.link_change_past_day_rechecks`);
+> a link removed at the provider stays in `work_graph_issue_pr` (`work_item_dependencies` keeps its rows), and a
+> dependency edge change is not a trigger. Pinned by `TestALinkChangeRederivesTheLinkedIssue` (github, gitlab,
+> jira and linear issues), `TestALinkChangeRunWithNoChangeWritesNothing`,
+> `TestALinkChangeOfAnIssueWithARowOfTodayWaitsForTheNextDay`, `TestARemovedCoOwnerLinkDropsTheCoOwnerRow`,
+> `TestALinkChangedIssueJoinsAScopedRun`, `TestAHigherTierLinkMovesTheIssue` and
+> `TestAnUnassignedIssueWithAnOwnedLinkTakesTheOwnerOnce`.
 > An issue of any provider, a Jira or Linear item included, with no other source above and no owned
 > best-tier repository ends `unassigned`. `TestAnIssueTakesTheOwnerOfItsLinkedPullRequestsRepository`,
 > `TestAPullRequestIgnoresLinkedPullRequestRepositories`, `TestBestTierLinkedPullRequests`,
@@ -357,10 +375,16 @@ flowchart TD
 > (its repository's full name, or a Projects v2 board id `ghprojv2:{login}#{n}`): that is an `issue_project`
 > candidate, and a donor of a linked pull request's `linked_issue` row. Without such a key, a GitHub issue takes the
 > repository owner of its linked pull requests (above) or ends `unassigned`, and that repository owner is not a donor.
-> **Known defect** (ticket 14209 (filed separately)): a key equal to a repository's name also matches that repository's
-> pull requests (a GitHub pull request's project id is its repository's name too), so the admin team takes them by
-> `issue_project` above their repository owner. A manual mapping must never outrank a native fact; the matrix cell
-> `pull_request_admin_key_never_outranks_its_repository_owner` (github) is `known_red` for it.
+>
+> **On a pull or merge request an admin key is a fallback.** A key equal to a repository's name also
+> matches that repository's pull requests (a GitHub pull request's project id is its repository's name too). On a pull
+> or merge request (`type` `pr` on GitHub, `merge_request` on GitLab) the `issue_project` candidate of an admin team (a
+> team with no provider, section 0.4e) is a manual mapping, so it ranks with the manual mappings: after `linked_issue`,
+> before `author_membership` and `manual_fallback`. A native owner (`project_ownership`, `repo_ownership`) and a linked
+> issue's donor team win over it, and its row stays `is_primary = 0`; with neither, the admin team is still the primary
+> by `issue_project`. The source token is unchanged. An `issue_project` candidate of a team of the item's provider, and
+> every issue, keep rank 1. `TestAnAdminKeyIsAFallbackOnAPullRequest` (github and gitlab) and the matrix cell
+> `pull_request_admin_key_never_outranks_its_repository_owner` (github, pass) pin it.
 >
 > **The membership ownership gate applies to a pull or merge request and to other repo-bearing items, and
 > does not apply to an issue**: an issue has no repository field of its own and the gate reads
@@ -504,7 +528,7 @@ means the ClickHouse `teams` dimension is empty.
 | # | `source` | Resolves from (ClickHouse) | Confidence | Beats | Never overrides | Evidence keys |
 |--:|---|---|---|---|---|---|
 | 0 | `native_team` | `WorkItem.native_team_key` → `teams` of the item's provider, else admin teams (section 0.4e) | high | all below | — (top) | `native_team_key` |
-| 1 | `issue_project` | native issue project key → `teams` of the item's provider that hold it, else admin teams (section 0.4e) | high | 2–8 | 0 | `project_id, owner_team` |
+| 1 | `issue_project` | native issue project key → `teams` of the item's provider that hold it, else admin teams (section 0.4e) | high | 2–8; on a pull or merge request an admin team's key beats only 6–8 (it ranks after `linked_issue`) | 0; on a pull or merge request an admin team's key also 2, 3, 5 | `project_id, owner_team` |
 | 2 | `project_ownership` | `team_project_ownership` | high | 3–8 | 0–1 | `project_id, provider` |
 | 3 | `repo_ownership` (a pull / merge request: its own `repo_id`; an issue: the repositories of its linked pull requests in `work_graph_issue_pr`, its best tier only, never its own `repo_id`) | `team_repo_ownership` (an issue: through `work_graph_issue_pr`) | medium; high from a main-owner row (`is_primary = 1`, e.g. the inferred main owner); an issue: one step lower for an `explicit_text` link, `low` for a `heuristic` link | 4–8 | 0–2 | `repo_full_name`; an issue: `repo_ownership=<repo id>;work_graph_issue_pr=<pr number>;tier=<tier>` |
 | 4 | `assignee_membership` | two-layer: `identities`/`teams` (admin override, single-team) else `team_memberships` (provider fallback, single-team) | high (admin) / medium (provider) | none: provenance only, never `is_primary` | 0–3 | `canonical_id, identity` (evidence text: `assignee_membership=<id>`) |
@@ -792,8 +816,9 @@ ticket and fails when it turns green, until it is moved to `pass`; every provide
 `not_applicable` entry with its rule, and every check of an entity is a cell or an `omitted` entry with its
 rule. The rule the cells apply is written once in the test (`ownersAt`): the rows valid on the item's day
 (§0.4j), of active teams, with the first recorded owners applied backward before the first record; the shared ownership readers are judged against that rule at now and on every item day, and apply the
-first owners backward. One cell is known red: `pull_request_admin_key_never_outranks_its_repository_owner` (github,
-ticket 14209 (filed separately)), the admin team key that outranks a pull request's repository owner. The catalog writers start a link at its evidence
+first owners backward. No cell is known red: `pull_request_admin_key_never_outranks_its_repository_owner` (github) is
+pass (an admin key is a fallback on a pull request, section 0.1), and the acceptance gate plants the
+admin key above a pull request's repository owner to keep it red on that defect. The catalog writers start a link at its evidence
 (section 0.4b), and each provider world runs its team catalog again after its sync, the
 next catalog run that moves each link to its evidence; GitLab ownership names the catalog project.
 The inferred repository owner starts at its earliest linked evidence: its cell is pass. The GitHub cell of a pull request's `linked_issue` row
@@ -2357,7 +2382,7 @@ The recommendations job evaluates two sets of teams: the teams with a live `work
 the same instant as the owned repositories the loader reads). A team in both sets is evaluated once. So a team that owns
 repositories but has no work items gets its repository rules evaluated.
 
-The benchmarking line coverage of a point is the covered lines over the total lines of the point's repositories, times 100 (a repository-day weighs by its lines), not the mean of the stored percentages. A repository-day with a NULL line count, or with no lines, is in neither sum, and a point with no such repository-day has no value. The branch coverage has no stored counts and stays the mean of the stored percentages of the repository-days.
+The benchmarking line coverage of a point is the covered lines over the total lines of the point's repositories, times 100 (a repository-day weighs by its lines), not the mean of the stored percentages. A repository-day with a NULL line count, or with no lines, is in neither sum, and a point with no such repository-day has no value. The branch coverage is pooled the same way over `branches_covered` and `branches_total`; a repository-day written before the counts existed is in neither sum and reads as not measured until its day is recomputed.
 
 Limits:
 
@@ -2530,6 +2555,18 @@ Only another ACTIVE team's tenure delays a start: an inactive team owns nothing 
   after the start of today) reaches it with the next day's partition, not with the backstop run of today. The
   two writers agree on the current day too; before this rule the backstop wrote the new owner at once and a
   later daily run of the same day wrote the old one again.
+- **An item another writer already wrote today:** the backstop writes no second row for it on the same UTC day
+  (`alreadyCoveredToday`). The run then publishes its markers just before the earliest of those rows
+  (`workItemAttributionMarkerAt`), not at its own time: when the change came after such a row, the next run sees
+  the change again and rederives the scope, so a deferred row older than the change is replaced the next day (one
+  more run of the scope; its markers then pass the change). A deferred row newer than the change already holds it,
+  and the markers pass the change at once. The daily family would not replace such a row: it rewrites only the
+  open items, and the items completed on its day, of a repository in `repos`; a done item, an item with no
+  repository and an item of a repository outside `repos` keep their row. Held by
+  `TestWorkItemAttributionScopedRunRetriesTheItemsItDeferredOnTheNextDay`,
+  `TestWorkItemAttributionOrgWideRunRetriesTheItemsItDeferredOnTheNextDay`,
+  `TestWorkItemAttributionScopedRunHoldsItsMarkerAtTheEarliestDeferredRow` and
+  `TestWorkItemAttributionScopedRunDefersAnItemWrittenAfterTheChangeOnce`.
 - **What a back-dated row does:** an ownership row written now with a `valid_from` in the past changes the
   items whose day is on or after that `valid_from`. This is the case the backstop exists for; the daily family
   does not compute old days again.

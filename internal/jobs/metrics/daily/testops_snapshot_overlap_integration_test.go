@@ -124,9 +124,9 @@ func TestNamedLimitThePartitionWriterAndTheFinalizerThatSawTheSameLiveRowWriteTw
 	}
 }
 
-// KNOWN LIMIT (ticket 14016): a live row of the same second arrives after the scan; the marker and the row then hold one version
-// and which of the two a reader takes is a ClickHouse tie that these cells do not prove. The cell logs the winner it saw.
-func TestNamedLimitAMarkerCanTieALiveRowThatArrivedAfterTheScan(t *testing.T) {
+// A live row of the run's own snapshot second arrives after the scan. The marker sits one second below the snapshot, so the
+// live row is strictly newer: every reader shape, FINAL included, takes the live row, and no tie is left to ClickHouse.
+func TestALiveRowOfTheSnapshotThatArrivedAfterTheScanOutranksTheMarker(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
 	for name, retire := range map[string]func(driver.Conn, uuid.UUID){
@@ -201,14 +201,17 @@ WHERE org_id = ? AND repo_id = ? AND day = ? ORDER BY computed_at DESC LIMIT 1 B
 WHERE org_id = ? AND repo_id = ? AND day = ?`, snapshotOrg, repo, snapshotDay).Scan(&finalWinner, &finalRows); err != nil {
 				t.Fatal(err)
 			}
-			t.Logf("KNOWN LIMIT (ticket 14016): tie behaviour today: argMax winner retracted=%d; HAVING live-key read live=%d; LIMIT 1 BY newest row retracted=%d; FINAL (extra, not a production shape) retracted=%d of %d row(s); winner not proven for every reader",
+			t.Logf("OVERLAP readers: argMax retracted=%d; HAVING live-key read live=%d; LIMIT 1 BY newest row retracted=%d; FINAL retracted=%d of %d row(s)",
 				winner, liveByHaving, newestRetracted, finalWinner, finalRows)
-			if winner != 1 || liveByHaving != 0 || newestRetracted != 1 {
-				t.Fatalf("the tie reads argMax retracted=%d, HAVING live=%d, LIMIT 1 BY retracted=%d; today's pinned answers are %d, %d, %d",
-					winner, liveByHaving, newestRetracted, 1, 0, 1)
+			if winner != 0 || liveByHaving != 1 || newestRetracted != 0 || finalWinner != 0 || finalRows != 1 {
+				t.Fatalf("the late live row lost to the marker: argMax retracted=%d, HAVING live=%d, LIMIT 1 BY retracted=%d, FINAL retracted=%d of %d row(s); want 0, 1, 0, 0 of 1",
+					winner, liveByHaving, newestRetracted, finalWinner, finalRows)
 			}
-			if atNewest != 2 {
-				t.Fatalf("%d rows share the newest version of the key, the limit is the live row and the marker (2)", atNewest)
+			if atNewest != 1 {
+				t.Fatalf("%d rows share the newest version of the key, want the live row alone", atNewest)
+			}
+			if markers := markerRows(t, ctx, conn, repo); len(markers) != 1 {
+				t.Fatalf("markers %v, want the one marker of the stored row at :05 (one second below the snapshot :10)", markers)
 			}
 		})
 	}
@@ -234,7 +237,7 @@ func TestAMarkerCarriesTheValuesOfTheRowItRetires(t *testing.T) {
 }
 
 // The snapshot of a run is the instant its suite read happened. testops_risk reads the suites into the share, testops_test
-// writes later with its own clock: the marker and the row carry the read instant, never the later clock.
+// writes later with its own clock: the row carries the read instant and the marker one second below it, never the later clock.
 func TestTheSnapshotOfARunIsTheInstantItsCachedSuiteReadHappened(t *testing.T) {
 	f3Day := time.Date(2026, 7, 22, 0, 0, 0, 0, time.UTC)
 	f3Next := f3Day.Add(24 * time.Hour)
@@ -300,7 +303,7 @@ func TestTheSnapshotOfARunIsTheInstantItsCachedSuiteReadHappened(t *testing.T) {
 		repo := e.stack.repoID(t, org)
 		e.stack.pass(t, org, f3Run, f3Next, attempt2)
 		pass(withTestopsTestMetricShare(e.ctx), org, 10, 30)
-		want(t, "older run, read at :10, write at :30", e.stored(org, repo, f3Day), 1, newestAt(10))
+		want(t, "older run, read at :10, write at :30", e.stored(org, repo, f3Day), 1, newestAt(9))
 	})
 
 	t.Run("a_newer_live_record_is_not_retired_by_an_older_cached_read", func(t *testing.T) {
@@ -329,7 +332,7 @@ func TestTheSnapshotOfARunIsTheInstantItsCachedSuiteReadHappened(t *testing.T) {
 		e.stack.pass(t, org, f3Run, f3Next, attempt2)
 		pass(withTestopsTestMetricShare(e.ctx), org, 20, 20)
 		write(older, org, 30)
-		want(t, "newer run's marker at :20 kept against the older live read of :10", e.stored(org, repo, f3Day), 1, newestAt(20))
+		want(t, "newer run's marker at :19 kept against the older live read of :10", e.stored(org, repo, f3Day), 1, newestAt(19))
 	})
 }
 

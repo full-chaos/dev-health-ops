@@ -4493,8 +4493,45 @@ const registeredTestopsJobFailuresV1Document = `query TestOpsJobFailures($orgId:
 // (testdata/wire_capture/testopstestwindow_captured.graphql). The web query
 // (CHAOS-13774) must produce this exact text.
 // CHAOS-13868: it also selects `filterEmptyReason`, the server's reason for an empty team-scoped answer; the text before stays accepted
-// as a legacy text.
+// as a legacy text. It also selects `reportCompleteness` (partial, unmarked and unmeasured report runs); the text before
+// (V2) stays accepted as a legacy text.
 const registeredTestopsTestWindowDocument = `query TestOpsTestWindow($orgId: String!, $input: TestOpsTestWindowInput!) {
+  testopsTestWindow(orgId: $orgId, input: $input) {
+    sinceDate
+    untilDate
+    coverage {
+      completedRuns
+      runsWithTests
+      sharePct
+      __typename
+    }
+    cases {
+      passed
+      failed
+      skipped
+      quarantined
+      total
+      __typename
+    }
+    passRatePct
+    failureRatePct
+    flakeRatePct
+    filterEmptyReason
+    reportCompleteness {
+      reportRuns
+      partialRuns
+      unmarkedRuns
+      unmeasuredDays
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredTestopsTestWindowV2Document is the text of `testopsTestWindow` BEFORE the web selected `reportCompleteness`
+// (testdata/wire_capture/testopstestwindow_v2_captured.graphql). It stays a legacy text (see legacyDigestsByOperation) so a web
+// build still sending it keeps working while the new web rolls out.
+const registeredTestopsTestWindowV2Document = `query TestOpsTestWindow($orgId: String!, $input: TestOpsTestWindowInput!) {
   testopsTestWindow(orgId: $orgId, input: $input) {
     sinceDate
     untilDate
@@ -7529,7 +7566,7 @@ var legacyDigestsByOperation = map[string][]string{
 	"testOpsPipeline":               {digestHex(registeredTestOpsPipelineV1Document), digestHex(registeredTestOpsPipelineV2Document)},
 	"testOpsCoverage":               {digestHex(registeredTestOpsCoverageV1Document), digestHex(registeredTestOpsCoverageV2Document)},
 	"testopsJobFailures":            {digestHex(registeredTestopsJobFailuresV1Document)},
-	"testopsTestWindow":             {digestHex(registeredTestopsTestWindowV1Document)},
+	"testopsTestWindow":             {digestHex(registeredTestopsTestWindowV1Document), digestHex(registeredTestopsTestWindowV2Document)},
 	"testopsRisk":                   {digestHex(registeredTestopsRiskV1Document), digestHex(registeredTestopsRiskV2Document)},
 	"dataHealthIdentity":            {digestHex(registeredDataHealthIdentityV1Document)},
 	"aiGovernanceSummary":           {digestHex(registeredAiGovernanceSummaryV1Document)},

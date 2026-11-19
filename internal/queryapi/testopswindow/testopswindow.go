@@ -18,6 +18,9 @@
 //     window's repository days. Rates are weighted (summed counts), never a mean
 //     of the stored per-repository-day rates; those keep their own formula.
 //     failed_count already holds failed + error cases (testops.TestAccumulator).
+//   - Report completeness: the same rows' report_runs, partial_report_runs and
+//     unmarked_report_runs, summed over the repository days that carry them; a
+//     day stored before the counts is counted as unmeasured, never as complete.
 //
 // Team scope is repository OWNERSHIP (teamscope.RepoCondition, from
 // team_repo_ownership), as in testopsjobfailures; the team_id column of the
@@ -138,7 +141,11 @@ SELECT
     sum(total_cases) AS total,
     sum(flake_cases) AS flake_sum,
     sum(distinct_cases) AS distinct_sum,
-    countIf(flake_cases IS NULL OR distinct_cases IS NULL) AS rows_without_counts
+    countIf(flake_cases IS NULL OR distinct_cases IS NULL) AS rows_without_counts,
+    ifNull(sum(report_runs), 0) AS report_runs_sum,
+    ifNull(sum(partial_report_runs), 0) AS partial_runs_sum,
+    ifNull(sum(unmarked_report_runs), 0) AS unmarked_runs_sum,
+    countIf(report_runs IS NULL OR partial_report_runs IS NULL OR unmarked_report_runs IS NULL) AS unmeasured_days
 FROM (
     SELECT *
     FROM testops_test_metrics_daily
@@ -196,6 +203,10 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, since, until
 		},
 		PassRatePct:    percent(counts.passed, counts.passed+counts.failed),
 		FailureRatePct: percent(counts.failed, counts.passed+counts.failed),
+		ReportCompleteness: &model.TestOpsReportCompleteness{
+			ReportRuns: int(counts.reportRuns), PartialRuns: int(counts.partialRuns),
+			UnmarkedRuns: int(counts.unmarkedRuns), UnmeasuredDays: int(counts.unmeasuredDays),
+		},
 	}
 	if counts.rowsWithoutCounts == 0 && counts.flakeCases != nil && counts.distinctCases != nil {
 		result.FlakeRatePct = percent(*counts.flakeCases, *counts.distinctCases)
@@ -250,6 +261,8 @@ type caseSums struct {
 	passed, failed, skipped, quarantined, total uint64
 	flakeCases, distinctCases                   *uint64
 	rowsWithoutCounts                           uint64
+	reportRuns, partialRuns, unmarkedRuns       uint64
+	unmeasuredDays                              uint64
 }
 
 func readCases(ctx context.Context, client QueryClient, filter string, bindings []clickhouse.Binding) (caseSums, error) {
@@ -266,7 +279,8 @@ func readCases(ctx context.Context, client QueryClient, filter string, bindings 
 		return sums, errors.New("testopswindow: cases query returned no row")
 	}
 	if err := rows.Scan(&sums.passed, &sums.failed, &sums.skipped, &sums.quarantined, &sums.total,
-		&sums.flakeCases, &sums.distinctCases, &sums.rowsWithoutCounts); err != nil {
+		&sums.flakeCases, &sums.distinctCases, &sums.rowsWithoutCounts,
+		&sums.reportRuns, &sums.partialRuns, &sums.unmarkedRuns, &sums.unmeasuredDays); err != nil {
 		return sums, fmt.Errorf("testopswindow: cases scan: %w", err)
 	}
 	return sums, rows.Err()

@@ -105,7 +105,7 @@ func TestEveryProviderDecodesLargeCommentIDsExactly(t *testing.T) {
 			for _, id := range ids {
 				raws = append(raws, json.RawMessage(fmt.Sprintf(`{"id":%s,"body":"x","created_at":%q}`, id, created)))
 			}
-			rows, err := normalizeGitHubWorkItemComments(nativeTestClaim("github", "work-items"), "gh:acme/api#42", raws, nil, interactionIDTestNow)
+			rows, err := normalizeGitHubWorkItemComments(nativeTestClaim("github", "work-items"), "gh:acme/api#42", raws, githubIssueCommentRoute, nil, interactionIDTestNow)
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -221,11 +221,28 @@ leader worker. A row stays for its state's retention after it finishes:
 | --- | --- |
 | `RIVER_COMPLETED_JOB_RETENTION` | `24h` |
 | `RIVER_CANCELLED_JOB_RETENTION` | `24h` |
-| `RIVER_DISCARDED_JOB_RETENTION` | `168h` |
+| `RIVER_DISCARDED_JOB_RETENTION` | `696h` (29 days) |
 | `RIVER_JOB_CLEANER_TIMEOUT` | `30s` (one cleaner batch) |
 
 Each retention accepts 24h to 365 days. A job row older than its retention is
-gone, so `dho workers jobs inspect` cannot show it.
+gone, so `dho workers jobs inspect` cannot show it. The cleaner runs every
+30 seconds.
+
+A finished job row also holds its unique key. While the row exists, a new
+outbox row with the same key is matched to the old job, and no new job runs.
+The outbox remembers a key until the `prune_worker_job_terminal` schedule
+deletes its delivered row, after `WORKER_JOB_TERMINAL_RETENTION_DAYS` (default
+30 days). Keep every River retention at or below that outbox retention:
+
+- completed and cancelled `24h` are far below 30 days;
+- discarded `696h` is one day below it. A discarded job that finished within
+  a day of its delivery is deleted within one cleaner interval (30 s) of the
+  prune that frees its key. A discarded job that finished more than a day
+  after its delivery can still hold its key after that prune, and a repeat of
+  the key in that window runs no new job.
+
+If you lower `WORKER_JOB_TERMINAL_RETENTION_DAYS` below 29 days, lower
+`RIVER_DISCARDED_JOB_RETENTION` with it.
 
 Verify all of the following:
 

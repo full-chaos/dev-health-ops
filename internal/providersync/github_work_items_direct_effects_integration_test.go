@@ -366,8 +366,8 @@ func TestWorkItemsPartlyLandedBatchIsAConflict(t *testing.T) {
 // -----------------------------------------------------------------------------
 
 // A provider row never supplies description/priority_raw/service_class/due_at
-// to work_items, and write_work_item_transitions never writes provider. The
-// work_items write carries the value a key already holds for the four
+// to work_items. The transitions write stores the row's provider, which the
+// Python write_work_item_transitions left at its default. The work_items write carries the value a key already holds for the four
 // columns and never the provider row's own; with nothing held they stay at
 // their defaults. Asserting the stored columns proves it reached the table,
 // which reading the INSERT string cannot.
@@ -482,8 +482,8 @@ func TestDirectAdaptersLeaveThePythonOmittedColumnsAtTheirDefaults(t *testing.T)
 		).Scan(&provider); err != nil {
 			t.Fatalf("read provider: %v", err)
 		}
-		if provider != "" {
-			t.Fatalf("this unit wrote provider=%q, which write_work_item_transitions omits", provider)
+		if provider != "github" {
+			t.Fatalf("this unit wrote provider=%q, want the row's provider github", provider)
 		}
 	})
 }

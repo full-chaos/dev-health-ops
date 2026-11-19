@@ -1393,11 +1393,11 @@ type RepoCoverageBaseline struct {
 	RepoID string `json:"repoId"`
 	// The repository's full name in the org's catalogue. Null = the catalogue holds no name; never the id.
 	RepoName *string `json:"repoName,omitempty"`
-	// Mean line coverage, in percent (0 to 100), over the days of the 30 that hold a value. Null = fewer than 7 such days (``lineDays``): then there is no baseline. Never 0 for "none", never the current value.
+	// Line coverage, in percent (0 to 100), pooled over the counted days of the 30: covered lines over total lines. A counted day stores both line counts and more than 0 lines; a day with a percent but no line counts is in neither sum. Null = fewer than 7 counted days (``lineDays``): then there is no baseline. Never 0 for "none", never the current value.
 	LineBaselinePct *float64 `json:"lineBaselinePct,omitempty"`
-	// Days of the 30 that hold a line coverage value.
+	// Counted days of the 30: days that store both line counts and more than 0 lines.
 	LineDays int `json:"lineDays"`
-	// Mean branch coverage, in percent; the same rules as ``lineBaselinePct``.
+	// Mean branch coverage, in percent, over the days of the 30 that hold a value. Null = fewer than 7 such days (``branchDays``). Never 0 for "none", never the current value.
 	BranchBaselinePct *float64 `json:"branchBaselinePct,omitempty"`
 	// Days of the 30 that hold a branch coverage value.
 	BranchDays int `json:"branchDays"`
@@ -1535,11 +1535,11 @@ type SavedReportType struct {
 }
 
 type ScopeCoverageBaseline struct {
-	// Mean, in percent (0 to 100), of the scope's line coverage of each day that holds a value, over the 30 days. Null = fewer than 7 such days (``lineDays``): then there is no baseline. Never 0 for "none", never the current value.
+	// Line coverage of the scope, in percent (0 to 100): one ratio, covered lines over total lines of every counted repository day of the scope in the 30 days. A counted repository day stores both line counts and more than 0 lines; one with a percent but no line counts is in neither sum. Null = fewer than 7 days with a counted repository day (``lineDays``): then there is no baseline. Never 0 for "none", never the current value.
 	LineBaselinePct *float64 `json:"lineBaselinePct,omitempty"`
-	// Days of the 30 on which at least one repository of the scope holds a line coverage value.
+	// Days of the 30 on which at least one repository of the scope has a counted day.
 	LineDays int `json:"lineDays"`
-	// Mean branch coverage, in percent; the same rules as ``lineBaselinePct``.
+	// Mean, in percent, of the scope's branch coverage of each day that holds a value (the mean over its repositories), over the 30 days. Null = fewer than 7 such days (``branchDays``). Never 0 for "none", never the current value.
 	BranchBaselinePct *float64 `json:"branchBaselinePct,omitempty"`
 	// Days of the 30 on which at least one repository of the scope holds a branch coverage value.
 	BranchDays int `json:"branchDays"`
@@ -1708,6 +1708,18 @@ type TestOpsJobFailuresResult struct {
 	FilterEmptyReason *string `json:"filterEmptyReason,omitempty"`
 }
 
+// Report completeness of the runs behind the window's case counts, summed over its measured repository days (a run with counted suites on two days counts on each). A run is partial when a counted attempt, or its newest attempt, has a completeness row that names a lost report; unmarked when such an attempt has no completeness row (for example a provider that writes none); else complete. A repository day stored before these counts is not measured: it adds nothing to the sums and is counted in unmeasuredDays, never read as complete.
+type TestOpsReportCompleteness struct {
+	// Count of runs with a counted test suite, summed over the measured repository days.
+	ReportRuns int `json:"reportRuns"`
+	// Count of runs, of reportRuns, read as partial: a report was lost, so some of their cases are not counted.
+	PartialRuns int `json:"partialRuns"`
+	// Count of runs, of reportRuns, with no completeness mark: not known to be complete.
+	UnmarkedRuns int `json:"unmarkedRuns"`
+	// Count of repository days of the window with no completeness record: missing, not zero and not healthy. Such a day adds nothing to the three run counts.
+	UnmeasuredDays int `json:"unmeasuredDays"`
+}
+
 type TestOpsRiskBreakdownItem struct {
 	Category string  `json:"category"`
 	Hours    float64 `json:"hours"`
@@ -1798,6 +1810,8 @@ type TestOpsTestWindowResult struct {
 	FlakeRatePct *float64 `json:"flakeRatePct,omitempty"`
 	// Why the answer is empty, one value for the whole answer, set by the server and never derived by a client (CHAOS-9098). team_owns_no_repository: ``teamIds`` selects teams that together own no repository (team_repo_ownership, as of now). Null when ``teamIds`` is not set, and when the selected teams own one or more repositories, also when the window has no rows.
 	FilterEmptyReason *string `json:"filterEmptyReason,omitempty"`
+	// Report completeness of the runs behind ``cases``: partial and unmarked runs, and the repository days not measured.
+	ReportCompleteness *TestOpsReportCompleteness `json:"reportCompleteness"`
 }
 
 type ThroughputEstimateCoverage struct {

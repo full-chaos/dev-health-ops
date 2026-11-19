@@ -39,7 +39,7 @@ func legacyIDsChain(t *testing.T) (chmigrate.Baseline, []chmigrate.ChainFile, []
 	}
 	for index, file := range chain {
 		if file.Version == testopsLegacyIDsVersion {
-			return baseline, chain, chain[:index], file
+			return baseline, chain[:index+1], chain[:index], file
 		}
 	}
 	t.Fatalf("the live chain does not hold %s", testopsLegacyIDsVersion)

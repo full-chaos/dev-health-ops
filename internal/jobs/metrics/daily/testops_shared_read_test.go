@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -33,20 +34,21 @@ func TestTestopsTestMetricShareStoresOnlySuccessPerKey(t *testing.T) {
 		return []testops.TestMetric{{TotalCases: calls}}, nil
 	}
 
-	if _, err := share.recordFor(key, failing); !errors.Is(err, readFails) {
+	if _, _, err := share.readFor(key, time.Now, failing); !errors.Is(err, readFails) {
 		t.Fatalf("first family's failure = %v, want it returned unchanged", err)
 	}
-	record, err := share.recordFor(key, succeeding)
+	first := time.Date(2026, 8, 1, 0, 0, 10, 0, time.UTC)
+	record, readAt, err := share.readFor(key, func() time.Time { return first }, succeeding)
 	if err != nil || calls != 2 || len(record) != 1 || record[0].TotalCases != 2 {
 		t.Fatalf("after a failure the next caller must compute: record=%+v err=%v calls=%d", record, err, calls)
 	}
-	record, err = share.recordFor(key, failing)
-	if err != nil || calls != 2 || record[0].TotalCases != 2 {
+	record, readAt, err = share.readFor(key, func() time.Time { return first.Add(20 * time.Second) }, failing)
+	if err != nil || calls != 2 || record[0].TotalCases != 2 || !readAt.Equal(first) {
 		t.Fatalf("a stored success must be reused without computing: record=%+v err=%v calls=%d", record, err, calls)
 	}
 	for _, other := range []testopsTestMetricKey{otherRepo, otherWindow} {
 		before := calls
-		if _, err := share.recordFor(other, succeeding); err != nil || calls != before+1 {
+		if _, _, err := share.readFor(other, time.Now, succeeding); err != nil || calls != before+1 {
 			t.Fatalf("key %+v reused another key's record: err=%v calls=%d", other, err, calls)
 		}
 	}
@@ -54,7 +56,7 @@ func TestTestopsTestMetricShareStoresOnlySuccessPerKey(t *testing.T) {
 	var absent *testopsTestMetricShare
 	before := calls
 	for range 2 {
-		if _, err := absent.recordFor(key, succeeding); err != nil {
+		if _, _, err := absent.readFor(key, time.Now, succeeding); err != nil {
 			t.Fatalf("without a share: %v", err)
 		}
 	}

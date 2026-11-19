@@ -13,6 +13,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/scopelabel"
+	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
 const (
@@ -438,7 +439,8 @@ LIMIT 100`
 // rate weighted by executions. A day that measured no case stores 0/0 and adds nothing to either side. A repository
 // with a day that has no counts (rows written before they were stored) has NO rate, like the series: all or
 // nothing, never a rate over a subset of its days. cases_total is the executions of the days that measured cases.
-const flakyStatement = `SELECT
+// A day whose newest row retires it (package liverow) is not a day of the window: its NULL counts would blank the rate.
+var flakyStatement = `SELECT
     toString(repo_id) AS repo_id,
     sumIf(total_cases, distinct_cases > 0) AS cases_total,
     if(countIf(flake_cases IS NULL OR distinct_cases IS NULL) > 0, NULL,
@@ -452,6 +454,7 @@ FROM (
 ) AS testops_test_metrics_daily
 WHERE day >= today() - 30@@REPO@@
   AND org_id = {org_id:String}
+  AND ` + liverow.Predicate("testops_test_metrics_daily", "") + `
 GROUP BY repo_id
 HAVING cases_total >= {min_cases:UInt64}
    AND flake_share >= {flake_threshold:Float64}

@@ -800,6 +800,8 @@ A Linear or Jira work-items unit names every project it saw by an ensure row in 
 
 `completed_count`, `cycle_p50_hours`, `cycle_p90_hours` and `lead_p50_hours` of `issue_type_metrics_daily` follow the same rule. An item is active on a day from its creation until it ends; it ends on its `completed_at` only when its status is `done` or `canceled`, so an open item whose `completed_at` is before the day is active.
 
+`mttr_hours` (the stored daily value, the AI report chart and the operating review tile) takes a bug work item as a repair on the UTC day of its `completed_at` only when its status is terminal (`done` or `canceled`). A reopened bug that kept its `completed_at` is no repair. A repository-day whose only bugs are reopened ones has no MTTR (no data, not 0).
+
 ## Work items in progress at the end of a day
 
 `wip_count_end_of_day` (and `wip_unassigned_end_of_day`, the WIP age percentiles, `wip_congestion_ratio`, `predictability_score` and the person rows' WIP) counts an item at the end of a day when it started before the day ends and has not ended by then. Its end is the earlier of `completed_at` and `closed_at`, and it counts only when the status is terminal (`done` or `canceled`). A provider can reopen an item and keep its `completed_at` or `closed_at`: that open item stays in progress at the end of every later day.

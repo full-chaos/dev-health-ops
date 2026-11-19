@@ -328,6 +328,26 @@ var (
 		TeamColumn: "team_id", Scope: []string{"repo_id"},
 		Retracted: "retracted", Carried: []KeyColumn{{"team_id", KeyNullableString}, {"service_id", KeyNullableString}},
 	}
+	// The three pooled delivery tables hold one row for each (repository, day)
+	// and NO team column: a team is the owner of the repository at the read.
+	// A recompute of a day that finds no sample any more (an expired incident
+	// mapping, a cancelled deployment, a moved merge) produces no record, so the
+	// key that goes stale is the (repository, day) itself. A stored row can
+	// hold 0 in every count and NULL in every value, so the row that retires
+	// the key carries the Retracted marker. TeamColumn is "": the census holds
+	// these tables in its named list of team-less tables.
+	IncidentMetricsDaily = Table{
+		Table: "incident_metrics_daily", Family: "incident", DayColumn: "day",
+		Keys: []KeyColumn{{"repo_id", KeyUUID}}, Scope: []string{"repo_id"}, Retracted: "retracted",
+	}
+	DeployMetricsDaily = Table{
+		Table: "deploy_metrics_daily", Family: "deploy", DayColumn: "day",
+		Keys: []KeyColumn{{"repo_id", KeyUUID}}, Scope: []string{"repo_id"}, Retracted: "retracted",
+	}
+	RepoMetricsDaily = Table{
+		Table: "repo_metrics_daily", Family: "repo_user_commit", DayColumn: "day",
+		Keys: []KeyColumn{{"repo_id", KeyUUID}}, Scope: []string{"repo_id"}, Retracted: "retracted",
+	}
 	TeamComplexityDaily = Table{
 		Table: "team_complexity_daily", Family: "team_complexity", DayColumn: "day",
 		Keys:       []KeyColumn{{"team_id", KeyString}},
@@ -361,6 +381,9 @@ func All() []Table {
 		TestopsPipelineStability,
 		TestopsCoverageMetricsDaily,
 		TestopsPipelineMetricsDaily,
+		IncidentMetricsDaily,
+		DeployMetricsDaily,
+		RepoMetricsDaily,
 	}
 }
 

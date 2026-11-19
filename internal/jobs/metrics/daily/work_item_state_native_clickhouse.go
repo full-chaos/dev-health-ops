@@ -127,16 +127,20 @@ WHERE org_id = ? AND repo_id = ?
 // # Dedup contract
 //
 // `work_item_transitions` is ReplacingMergeTree(last_synced) ORDER BY
-// (repo_id, work_item_id, occurred_at) -- that ORDER BY key does NOT include
-// from_status/to_status/actor, so a plain FINAL would silently collapse two
-// genuinely DIFFERENT transitions that happen to share one occurred_at down
+// (org_id, repo_id, work_item_id, occurred_at) -- that ORDER BY key does NOT
+// include from_status/to_status/actor, so a plain FINAL would silently collapse
+// two genuinely DIFFERENT transitions that happen to share one occurred_at down
 // to whichever has the larger last_synced, losing a real transition. This
 // query GROUPs BY every semantic column of the event (org_id, work_item_id,
 // occurred_at, from_status, to_status, from_status_raw, to_status_raw, actor)
-// -- collapsing only re-synced COPIES of the identical event, never two
-// distinct same-instant transitions. repo_id and provider are NOT part of the
-// identity: neither is filled by the sync sink, and a copy of one event that
-// differs only in one of them is still the same event.
+// -- collapsing only re-synced COPIES of the identical event. That keeps two
+// distinct same-instant transitions only while their rows sit in parts not yet
+// merged: a background merge applies the same key and keeps one row per
+// instant (repo_id is the nil UUID for every row), so the read cannot bring
+// back a merged-away transition (schema fix: ticket 14190, filed separately).
+// repo_id and provider are NOT part of the identity: neither is filled by the
+// sync sink, and a copy of one event that differs only in one of them is still
+// the same event.
 func LoadWorkItemStateTransitions(
 	ctx context.Context, conn repositoryRows, organizationID string, repoID uuid.UUID, end time.Time,
 ) ([]workItemStateTransition, error) {

@@ -257,8 +257,7 @@ func segmentWorkItemStatuses(
 	if len(transitions) == 0 {
 		return nil
 	}
-	ordered := make([]workItemStateTransition, len(transitions))
-	copy(ordered, transitions)
+	ordered := workitemmetrics.OrderTransitions(workItemMetricsTransitions(transitions))
 	sort.SliceStable(ordered, func(i, j int) bool { return ordered[i].OccurredAt.Before(ordered[j].OccurredAt) })
 
 	var segments []workItemStateSegment

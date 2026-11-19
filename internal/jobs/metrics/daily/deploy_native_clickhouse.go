@@ -21,7 +21,7 @@ import (
 // 1218-1223); the canceled exclusion is deploymentstatus.Classify's, which the
 // compute applies as well. The zero-row source check reads this same text.
 var deploySource = `
-FROM deployments
+FROM deployments FINAL
 WHERE org_id = {org_id:String}
   AND deployed_at >= {start:DateTime64(3, 'UTC')} AND deployed_at < {end:DateTime64(3, 'UTC')}
   AND repo_id IN {repo_ids:Array(UUID)}
@@ -39,9 +39,10 @@ func deploySourceArgs(organizationID string, repoIDs []uuid.UUID, start, end tim
 
 // LoadDeployments ports load_cicd_data's deploy_query through deploySource --
 // see DeployExecutor's doc comment (deploy_native_executor.go) for why this
-// deliberately omits FINAL and filters on deployed_at alone rather than the
+// filters on deployed_at alone rather than the
 // four-way coalesce a DIFFERENT family's (DORA's) loader uses on the same
-// table. Only the columns compute_deploy_metrics_daily actually reads
+// table. It reads FINAL, so a re-synced deployment counts once, in its current
+// version, before ClickHouse merges the parts. Only the columns compute_deploy_metrics_daily actually reads
 // (compute_deployments.py:53-104) are selected -- deployment_id,
 // environment, pull_request_number etc. are part of DeploymentRow but never
 // read by this family's compute function.

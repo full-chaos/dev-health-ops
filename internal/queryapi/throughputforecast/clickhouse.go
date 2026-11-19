@@ -458,6 +458,7 @@ func loadReviewOverlay(
             FROM repo_metrics_daily
             WHERE day >= {start_date:Date} AND org_id = {org_id:String}
             GROUP BY repo_id, day
+            HAVING ` + liverow.NewestPredicate("repo_metrics_daily", "") + `
         )
         WHERE pr_first_review_p50_hours IS NOT NULL
     `
@@ -587,6 +588,7 @@ func loadIncidentOverlay(
             FROM incident_metrics_daily
             WHERE day >= {start_date:Date} AND org_id = {org_id:String}
             GROUP BY repo_id, day
+            HAVING ` + liverow.NewestPredicate("incident_metrics_daily", "") + `
         )
     `
 	bindings := []clickhouse.Binding{

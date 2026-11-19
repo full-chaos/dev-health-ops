@@ -232,7 +232,8 @@ a mean of the stored per-repository-day values of `testops_pipeline_metrics_dail
 
 The samples of a repository-day are the ones the daily job stored with that day's newest row, so a tile, a report chart
 and the stored row use one sample set. A run that is synced after the daily job ran counts after the next run of the daily
-job for its day, together with the stored row. A day whose newest row was written before the samples were stored
+job for its day, together with the stored row. A day whose runs are all gone at that next run (deleted, or moved to
+another day) is retired: it has no point and no stored value, never 0. A day whose newest row was written before the samples were stored
 (ClickHouse migration 161) uses the raw runs of that day. A repository-day with more than 100,000 samples of one kind stores none: it uses its raw rows, so for that day only a
 row synced after the daily job ran counts at once and the chart can differ from the stored row until the next run.
 
@@ -732,9 +733,13 @@ A Linear or Jira work-items unit names every project it saw by an ensure row in 
 - `skipped`: the stored row already decides the newest value.
 - `read_error`: the stored rows could not be read. The whole batch was written and a Warn line `project_catalog_ensure_read_failed` was logged. The unit does not fail.
 
+## Weekly throughput in the WIP congestion ratio
+
+`wip_congestion_ratio` of `work_item_metrics_daily` is `wip_count_end_of_day` divided by the weekly throughput of the day (at least 1). The weekly throughput counts an item of the day (created, started or completed on the day, or in progress at its end) only when its status is terminal (`done` or `canceled`) and its `completed_at` is in the 7 days that end with the day. A provider can reopen an item and keep its `completed_at`: that open item is no throughput.
+
 ## Completed work items
 
-`items_completed` (and the other completion columns of `work_item_metrics_daily` and `work_item_user_metrics_daily`: unassigned completions, story points, bug ratio, cycle and lead time) counts an item on a day only when its status is terminal (`done` or `canceled`) and its `completed_at` is on that day. This is the rule of `work_item_cycle_times`. A provider can reopen an item and keep its `completed_at`: that open item completes on no day.
+`items_completed` (and the other completion columns of `work_item_metrics_daily` and `work_item_user_metrics_daily`: unassigned completions, story points, bug ratio, cycle and lead time) counts an item on a day only when its status is terminal (`done` or `canceled`) and its `completed_at` is on that day. `work_items_completed` of `work_item_completion_daily` (and its `delivery_units`, `churn_loc` and `cycle_p50_hours`, which come from the same items) follows the same rule. This is the rule of `work_item_cycle_times`. A provider can reopen an item and keep its `completed_at`: that open item completes on no day.
 
 ## Work items in progress at the end of a day
 
@@ -751,6 +756,10 @@ The scope view (`row_view = 'scope'`) applies the same rule inside each work sco
 When an item leaves a day this way, its blocked hours of that day stored by an earlier compute are set to 0. Blocked Work under a repository filter reads those per-item hours, so it follows the same rule. Days that are not computed again keep their stored rows.
 
 `work_item_measure_capability` decides on the current copy in the same way over its 90-day window: an item counts in the window only when its current copy belongs to the window.
+
+## Estimate coverage backlog
+
+`estimate_coverage_metrics_daily` (`backlog_size`, `estimated_count`, `unestimated_count`, `ratio`) counts an item in the backlog of a day when it was created before the day ends and has not ended by then. Its end is the earlier of `completed_at` and `closed_at`, and it counts only when the status is terminal (`done` or `canceled`). A provider can reopen an item and keep its `completed_at` or `closed_at`: that open item stays in the backlog of every later day.
 
 ## Work-item person rows: persons in more than one team
 

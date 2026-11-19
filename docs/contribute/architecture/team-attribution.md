@@ -2281,6 +2281,22 @@ of zeros keeps `retracted = 0` and stays a real row.
   NOT filter before it picks the newest row: the row of zeros is what says the key holds nothing now, and a filter
   that ran first would serve the older row. It then gives 0 or no value, as for a key with no row.
 
+**The pooled daily tables of one row per (repository, day).** `testops_pipeline_metrics_daily`,
+`incident_metrics_daily`, `deploy_metrics_daily` and `repo_metrics_daily` store, with each row, the pooled samples of
+the day (ClickHouse migration 161). A recompute of a day that finds no sample any more (deleted runs, an expired
+incident mapping, a cancelled deployment, a moved merge) produced no record, so the old row and its samples stayed the
+newest row of the key. Each table has `retracted UInt8 DEFAULT 0` (ClickHouse migration 164); the family writes a row
+with `retracted = 1` over such a key of its own partition's repositories, at the instant of its read, so a newer
+measured row stays live.
+
+- `testops_pipeline_metrics_daily` is in the registry (`teamkeytables.TestopsPipelineMetricsDaily`, team and service
+  carried). The other three are read with the rule (`liverow`), and their writers follow.
+- Only the partition that computes a repository retires its day: the end of a run of the whole organization does not
+  retire these keys of a repository that is in no partition (`runScopeOnlyTables` in the census).
+- Every pooled report and tile source takes one live gate over both of its arms (`testopspooled.LiveRepoDays`): a
+  retired day is neither read from its stored samples nor from its raw rows, whatever its `pooled_samples_stored`.
+- Roll order: the migration first, then query-api and the report job, then the workers.
+
 The census `TestEveryReadOfARegisteredTableAppliesTheRule` (package `liverow`) reads the source and fails for a read
 of one of these tables that holds no predicate and is not listed there with its reason.
 
@@ -2300,7 +2316,7 @@ them is in their readers:
 
 | Table | Team id | Why no row of zeros | Reader rule |
 | --- | --- | --- | --- |
-| the six testops daily tables (`testops_pipeline_metrics_daily`, `testops_test_metrics_daily`, `testops_coverage_metrics_daily`, `testops_release_confidence`, `testops_quality_drag`, `testops_pipeline_stability`) | a VALUE of the (org, repository, day) key: the repository's authoritative active owner | a recompute writes the key again and replaces the team; there is no stale team key | the analytics readers take the newest row of the KEY (org, repository, day) and read the owners of the repository at the request; no analytics reader reads the stored team. The benchmarking job takes the newest row of the KEY first (`benchmarking.FetchMetricSeriesByScope`; `TestEveryMetricGroupsByTheKeyOfItsTable`) and then reads the owners of the repository at the run instant, with the same join as the analytics team series: a co-owned repository counts in full for each owner team and a rate is not scaled. A stored output row keeps the owners of the moment it was computed, so a later ownership change moves it only when the job runs again |
+| the five testops daily tables (`testops_test_metrics_daily`, `testops_coverage_metrics_daily`, `testops_release_confidence`, `testops_quality_drag`, `testops_pipeline_stability`) | a VALUE of the (org, repository, day) key: the repository's authoritative active owner | a recompute writes the key again and replaces the team; there is no stale team key | the analytics readers take the newest row of the KEY (org, repository, day) and read the owners of the repository at the request; no analytics reader reads the stored team. The benchmarking job takes the newest row of the KEY first (`benchmarking.FetchMetricSeriesByScope`; `TestEveryMetricGroupsByTheKeyOfItsTable`) and then reads the owners of the repository at the run instant, with the same join as the analytics team series: a co-owned repository counts in full for each owner team and a rate is not scaled. A stored output row keeps the owners of the moment it was computed, so a later ownership change moves it only when the job runs again |
 | the six benchmarking outputs (`testops_metric_baselines`, `testops_metric_anomalies`, `testops_maturity_bands`, `testops_metric_correlations`, `testops_period_comparisons`, `testops_benchmark_insights`) | `scope_key` of a row of `scope_type = 'team'` | append-only results, read by no reader; a row of zeros would be a result that was not computed. The one retraction the family writes is on a daily run of the whole organization with no repository: every key of the day gets a row with `retracted = 1` (migration `160_testops_benchmarking_retracted.sql`); a reader takes the newest row of a key and leaves the key out when it holds 1 | the job writes no team series of an inactive team (`teamactive`): an inactive team is not a target. Rows written before the fix stay; no reader shows them. A team row of `testops_metric_correlations` pairs the TestOps owner team at the run with the stored work-item team (a named limit): a correlation pair exists only where the TestOps owner team and the work-item team are the same team id; a co-owner team or a team that only has work items gets no pair row (`TestCorrelationPairNeedsTheSameTeamOnBothSides`). A reader of these rows names this limit in its own plan before it ships |
 | `capacity_forecasts` | a value of the forecast | one forecast per row, replaced by the next forecast of the same id | the forecast list with no team named lists the active teams and the forecasts with no team (`activeteams.ListablePredicate`); a named team is read as named |
 | `recommendations_daily` | in the key | a rule result (fired or not), not a count | the readers read only the team ids a request names (no rule) |
@@ -3409,7 +3425,8 @@ exact rules rather than a looser first-donor walk:
   an inheritance-safe type wins over any other type, then the lower type: a pull
   request with a native `relates_to` to an issue and a text `Blocks` link to it, written by
   one sync, keeps that issue as its donor. The cascade, the donor-change trigger, the
-  donor load and the reverse closure read the same collapse. The frozen Python
+  donor load, the reverse closure and the `team_repo_ownership` donor walk read the same
+  rule (`teamattribution.LatestDependencyEdgeWins`). The frozen Python
   kept the lower type alone, so the blocking link won that tie.
 - the donor must be an **issue** (`teamattribution.LinkedIssueDonorRefusal`, §0.1): a `pr`,
   `merge_request` or empty-`type` donor, or a target with no `work_items` row, is refused before the

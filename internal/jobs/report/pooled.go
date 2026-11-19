@@ -11,7 +11,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/testops"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/testopspooled"
-	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
 // pooledChart is the definition of a pooled chart metric: the value of a bucket is taken over the raw samples of its rows
@@ -92,11 +91,7 @@ var cicdRunsSource = `(
           AND ` + testops.NotOpenRunSQL + `
           AND (repo_id, toDate(finished_at)) IN (` + testopspooled.LegacyRepoDays("cicd_metrics_daily") + `)
     )
-    WHERE (repo_id, day) IN (
-        SELECT repo_id, day FROM cicd_metrics_daily
-        WHERE org_id = {org_id:String} AND day >= {start_date:Date} AND day < {end_date:Date}
-        GROUP BY repo_id, day
-        HAVING ` + liverow.NewestPredicate("cicd_metrics_daily", "") + `)
+    WHERE ` + testopspooled.LiveRepoDays("cicd_metrics_daily") + `
 ) AS cicd_pipeline_runs`
 
 // The writer's mean and p90 (linear between closest ranks), NULL for a group with no sample.

@@ -389,3 +389,36 @@ func TestBuildIndexCallsOnlyPgCatalogFunctions(t *testing.T) {
 		})
 	}
 }
+
+// The blocker sampler qualifies its operators: a timestamptz "-" that raises and an int "=" that is always false, both
+// ahead of pg_catalog on the session search_path, change neither the sample nor the blocker row it logs.
+func TestBuildIndexBlockerSampleUsesPgCatalogOperators(t *testing.T) {
+	d := newDownInstance(t)
+	uri := d.withoutIndex(t, "0159")
+	observer := connect(t, uri)
+	for _, statement := range []string{
+		"CREATE FUNCTION public.shadow_minus(timestamptz, timestamptz) RETURNS interval LANGUAGE plpgsql AS 'BEGIN RAISE EXCEPTION ''shadow minus called''; END'",
+		"CREATE OPERATOR public.- (LEFTARG = timestamptz, RIGHTARG = timestamptz, FUNCTION = public.shadow_minus)",
+		"CREATE FUNCTION public.shadow_equals(int, int) RETURNS boolean LANGUAGE sql AS 'SELECT false'",
+		"CREATE OPERATOR public.= (LEFTARG = int, RIGHTARG = int, FUNCTION = public.shadow_equals)",
+	} {
+		if _, err := observer.Exec(context.Background(), statement); err != nil {
+			t.Fatalf("%s: %v", statement, err)
+		}
+	}
+	release := holdWriter(t, uri)
+	defer release()
+	logs := &syncBuffer{}
+	run := connect(t, plantSearchPath(t, uri))
+	_, err := pgmigrate.BuildFailureStreakIndex(context.Background(), run, pgmigrate.IndexBuildOptions{
+		LockTimeout: 2 * time.Second, Attempts: 1, Deadline: 6 * time.Second, CleanupBudget: 2 * time.Second,
+		SampleEvery: 200 * time.Millisecond, HeartbeatEvery: time.Second,
+	}, slog.New(slog.NewJSONHandler(logs, nil)))
+	if err == nil {
+		t.Fatal("the build succeeded under a holder that never ended")
+	}
+	blockers := linesWith(logLines(t, logs.String()), "build-index: blocker")
+	if len(blockers) == 0 || blockers[0]["state"] != "idle in transaction" {
+		t.Fatalf("no blocker row for the holder with the shadow operators ahead of pg_catalog: %s", logs.String())
+	}
+}

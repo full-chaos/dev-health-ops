@@ -18,8 +18,17 @@ import (
 // of the module, up to the end of its string literal, and every teams column
 // list a writer gives teamprovider.Insert ([]string{"id", "team_uuid", ...});
 // a statement that is built from pieces is not seen whole.
+//
+// One writer copies the admin's value and never sets one of its own: the
+// team id carry (internal/providersync/team_id_carry.go) writes deleted_at
+// only through teamprovider.DeletedKept / DeletedSource, which copy a stored
+// admin delete inside the insert and refuse a row that states a deleted_at
+// (teamprovider TestACopiedDeletedAtIsNeverTheWritersOwn). copyRule pins the
+// copy rules to that one file.
 func TestOnlyTheAdminStoreWritesDeletedAt(t *testing.T) {
 	insert := regexp.MustCompile("(?s)INSERT INTO teams\\b[^;`\"]*|\\[\\]string\\{\"id\", \"team_uuid\"[^}]*\\}")
+	copyRule := regexp.MustCompile(`teamprovider\.Deleted(Kept|Source)\b`)
+	copiers := map[string]int{}
 	root := filepath.Join("..", "..", "..")
 	found, writers := map[string]int{}, 0
 	for _, directory := range []string{"internal", "cmd"} {
@@ -33,6 +42,10 @@ func TestOnlyTheAdminStoreWritesDeletedAt(t *testing.T) {
 			raw, err := os.ReadFile(path)
 			if err != nil {
 				return err
+			}
+			if n := len(copyRule.FindAllString(string(raw), -1)); n > 0 {
+				relative, _ := filepath.Rel(root, path)
+				copiers[filepath.ToSlash(relative)] += n
 			}
 			for _, statement := range insert.FindAllString(string(raw), -1) {
 				writers++
@@ -52,5 +65,8 @@ func TestOnlyTheAdminStoreWritesDeletedAt(t *testing.T) {
 	}
 	if len(found) != 1 || found["internal/api/teamsidentity/store.go"] != 1 {
 		t.Errorf("writers of teams.deleted_at = %v, want only the one column list of internal/api/teamsidentity/store.go", found)
+	}
+	if len(copiers) != 1 || copiers["internal/providersync/team_id_carry.go"] == 0 {
+		t.Errorf("writers that copy teams.deleted_at = %v, want only internal/providersync/team_id_carry.go", copiers)
 	}
 }

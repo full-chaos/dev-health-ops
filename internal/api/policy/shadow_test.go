@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -80,12 +81,21 @@ type testPDP struct {
 	obligations map[string]any
 	mu          sync.Mutex
 	seen        []pdpSeen
+	dead        atomic.Bool
+	deadHits    atomic.Int32
 }
 
 func newTestPDP(t *testing.T, verdict func(action string) (bool, string)) *testPDP {
 	t.Helper()
 	p := &testPDP{verdict: verdict}
 	p.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if p.dead.Load() {
+			p.deadHits.Add(1)
+			if conn, _, err := w.(http.Hijacker).Hijack(); err == nil {
+				_ = conn.Close()
+			}
+			return
+		}
 		var body struct {
 			PrincipalReference string `json:"principal_reference"`
 			Action             string `json:"action"`
@@ -126,6 +136,10 @@ func newTestPDP(t *testing.T, verdict func(action string) (bool, string)) *testP
 	t.Cleanup(p.srv.Close)
 	return p
 }
+
+// kill makes the PDP refuse every connection without releasing its address: the listener stays bound until t.Cleanup,
+// so no later test's PDP can rebind the URL.
+func (p *testPDP) kill() { p.dead.Store(true) }
 
 func (p *testPDP) client(t *testing.T) *pep.Client {
 	t.Helper()

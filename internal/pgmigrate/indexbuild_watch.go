@@ -38,9 +38,9 @@ type blockerWatch struct {
 
 const blockersSQL = `
 SELECT b.pid, COALESCE(a.application_name, ''), COALESCE(a.usename::text, ''), COALESCE(a.state, ''),
-       COALESCE(EXTRACT(EPOCH FROM (pg_catalog.now() - a.xact_start))::bigint, -1), COALESCE(a.wait_event_type, '')
+       COALESCE(EXTRACT(EPOCH FROM (pg_catalog.now() OPERATOR(pg_catalog.-) a.xact_start))::bigint, -1), COALESCE(a.wait_event_type, '')
 FROM pg_catalog.unnest(pg_catalog.pg_blocking_pids($1::int)) AS b(pid)
-LEFT JOIN pg_catalog.pg_stat_activity a ON a.pid = b.pid`
+LEFT JOIN pg_catalog.pg_stat_activity a ON a.pid OPERATOR(pg_catalog.=) b.pid`
 
 func startBlockerWatch(ctx context.Context, build *pgx.Conn, options IndexBuildOptions, logger *slog.Logger) *blockerWatch {
 	var buildPID int32

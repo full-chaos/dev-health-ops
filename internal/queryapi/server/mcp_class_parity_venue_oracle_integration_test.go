@@ -387,6 +387,9 @@ var mcpParityOverrides = map[string]map[string]string{
 		"valid_from": "CAST(now() - toIntervalDay(60) AS DateTime64(3, 'UTC'))",
 		"valid_to":   "CAST(NULL AS Nullable(DateTime64(3, 'UTC')))",
 	},
+	// retracted is the marker that retires a day (CHAOS-14008): a generated 1 would retire every generated row, so the table reads
+	// as empty. Every generated row is a measurement.
+	"testops_coverage_metrics_daily": {"retracted": "toUInt8(0)"},
 	"compounding_risk_daily": {
 		"scope":    "CAST(if(entity = 0, 'repo', 'team') AS Enum8('repo' = 1, 'team' = 2))",
 		"scope_id": "if(entity = 0, '%REPO%', arrayElement(%TEAMS%, entity + 1))",

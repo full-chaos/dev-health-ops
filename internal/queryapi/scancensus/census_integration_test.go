@@ -572,6 +572,13 @@ const nullableIntoPlainSites = `
 //	operatingreview.go fetchStateDurations 2999640fe32f -> 11d3ca602c18
 //	operatingreview.go fetchWorkItems a3d0e349ea87 -> 64839a153860
 //	search.go BuildSearchResponse 168278cbea0a -> afd45e38cfbd
+//
+// CHAOS-14008: two pins re-pinned by hand after reading the moved statement, digests copied from the local TestScanTypeCensus
+// failure output (not computed). The testops_coverage_metrics_daily row that retires a day carries the new UInt8 column retracted
+// (not Nullable); dedupFromMeasureSource wraps its SELECT * in a WHERE (liverow predicate); scan targets and types are unchanged:
+//
+//	ExecuteOrgTimeseries 1e3ee3af097b -> 6637e944ff79
+//	ExecuteTimeseries f2eec06b6811 -> 8842c256cd1a
 const unverifiedSites = `
 internal/queryapi/aggflame/clickhouse.go|fetchCycleBreakdown|*string,*float64,*uint64|a0d30b3aefa3|not-describable
 internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*string,*uint64,*[]string|8c4f62d6f207|not-describable

@@ -306,6 +306,19 @@ range. The stored `team_id` (the main owner at the end of the day) is not read:
   are nullable.
 - A service group reads the stored service.
 
+### Benchmarking flake and retry dependency rates
+
+The benchmarking point of `flake_rate` and `retry_dependency_rate` for a scope and a day is the sum of the numerators
+over the sum of the denominators of the repository-days in the scope. It is not the mean of the stored rates, so a
+repository-day weighs by its distinct cases. The denominator is the stored `distinct_cases`. The numerator of
+`flake_rate` is the stored `flake_cases`. The numerator of `retry_dependency_rate` is the stored rate times
+`distinct_cases`: a float, the same form as `rerun_rate` times `pipelines_count`, and not a stored count. A point whose
+denominator sums to 0 is no point, never 0.
+
+A repository-day is in neither sum when its rate is NULL (it measured no case), or its `distinct_cases` is NULL, or, for
+`flake_rate`, its `flake_cases` is NULL. A row stored before the counts existed has NULL counts, so it drops out of the
+point. A point made only of such rows has no value.
+
 ### AI report charts of CI/CD durations and queue time
 
 The AI report charts of three CI/CD metrics are taken over the samples of the window's pipeline runs that the CI/CD daily
@@ -377,6 +390,21 @@ row synced after the daily job ran counts at once and the chart can differ from 
   is one `unscoped` bucket.
 - The chart range includes its last day. A bucket with no sample has no point, never 0. The read has the same row bound
   as the TestOps pooled read.
+
+## TestOps cancel rate and rerun rate in report charts
+
+A report chart of `cancel_rate` or `rerun_rate` is the sum of the numerator over the sum of the denominator of the
+`testops_pipeline_metrics_daily` rows in its bucket. It is never a mean of the stored per-repository-day rates: a day of
+1 run would weigh the same as a day of 500.
+
+| Metric | Numerator | Denominator |
+| --- | --- | --- |
+| `cancel_rate` | `SUM(cancelled_count)` | `SUM(pipelines_count)` |
+| `rerun_rate` | `SUM(rerun_rate * pipelines_count)` | `SUM(pipelines_count)` |
+
+- The denominator is every run counted, the same as the stored rate. Cancelled, skipped and unfinished runs are in it.
+- No column stores the rerun count. The stored `rerun_rate` is reruns over `pipelines_count`, so the product is the count.
+- A bucket with no run has no point, never 0.
 
 ## TestOps release confidence and quality drag: flake and recurrence
 
@@ -689,11 +717,11 @@ A Linear or Jira work-items unit names every project it saw by an ensure row in 
 
 One work item (provider and id) can be stored under two repository ids. Example: a GitHub issue that the repository sync stores under its repository and that the Projects v2 board sync stores under no repository. Each stored row is a copy. The current copy is the copy with the newest `last_synced`; on a tie, the copy of the lower repository id.
 
-`work_item_cycle_times`, `work_item_metrics_daily` and `work_item_user_metrics_daily` decide on the current copy. An item counts on a day only when its current copy belongs to that day: created before the day ends, and not done before the day starts. An older copy never makes the item count. So an item whose current copy is done with no completion time counts on no day, and an item completes once, on its current copy's completion day.
+`work_item_cycle_times`, `work_item_metrics_daily` and `work_item_user_metrics_daily` decide on the current copy. An item counts on a day only when its current copy belongs to that day: created before the day ends, and not done before the day starts. An older copy never makes the item count. So an item whose current copy is done with no completion time counts on no day, and an item completes once, on its current copy's completion day. The request-time read of the work items linked to a repository (Home and Quadrant under a repository filter) decides on the same current copy.
 
 The scope view (`row_view = 'scope'`) applies the same rule inside each work scope: the current copy of the item in that scope. An item with copies in two scopes still counts in each scope (the sum over scopes can be more than the organization total). So the older copy's scope can count a completion that the organization view and `work_item_cycle_times` do not count.
 
-Not yet on this rule: `work_item_state_durations_daily`, `estimate_coverage_metrics_daily`, and the request-time read of the work items linked to a repository. These still choose, for each day, the newest copy among the copies that belong to that day. For an item with two copies, they can differ from the tables above.
+Not yet on this rule: `work_item_state_durations_daily` and `estimate_coverage_metrics_daily`. These still choose, for each day, the newest copy among the copies that belong to that day. For an item with two copies, they can differ from the tables above.
 
 ## Work-item person rows: persons in more than one team
 

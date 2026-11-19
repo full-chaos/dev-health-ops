@@ -221,8 +221,9 @@ func startAwayFromMidnight() time.Time {
 	return now
 }
 
-// deferralRepoFixture: an org with the items of repository X and 18 fillers with no repository. It returns a base
-// instant (millisecond precision) at least 3 s after the start of today.
+// deferralRepoFixture: an org with the pull requests of repository X (a pull request takes its repository owner's
+// team) and 18 fillers with no repository. It returns a base instant (millisecond precision) at least 3 s after the
+// start of today.
 func deferralRepoFixture(t *testing.T, items ...string) (driver.Conn, *WorkItemAttributionClickHouseWriter, string, uuid.UUID, time.Time) {
 	t.Helper()
 	ctx := context.Background()
@@ -239,7 +240,7 @@ func deferralRepoFixture(t *testing.T, items ...string) (driver.Conn, *WorkItemA
 	orgID := "org-deferralmarker-" + uuid.NewString()
 	repoX := uuid.New()
 	for _, item := range items {
-		seedWorkItemAttributionItem(t, ctx, conn, orgID, item, repoX, base)
+		seedWorkItemAttributionPullRequest(t, ctx, conn, orgID, item, repoX, base)
 	}
 	for i := 0; i < 18; i++ {
 		seedWorkItemAttributionItem(t, ctx, conn, orgID, fmt.Sprintf("filler-%d", i), uuid.Nil, base)

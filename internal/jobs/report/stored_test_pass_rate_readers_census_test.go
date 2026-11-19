@@ -33,7 +33,7 @@ type censusPin struct {
 var pinnedTableFiles = map[string]censusPin{
 	"internal/cigates/metricsproof/proof.go": {"bd1b94c430164bb9854ebf62b5ac652edb2fe757d4583dc360ffb41c250109ac",
 		"not a reader: names the table in the proof table map"},
-	"internal/jobs/metrics/daily/benchmarking/clickhouse.go": {"d88da4fdbc18f8d9c86852bf1ad02022625a0726ef4ac25483d9584c8669667e",
+	"internal/jobs/metrics/daily/benchmarking/clickhouse.go": {"1887de8d467c86365de1c9e23133a690d463992f20cbd61a2f34d3cf15df11e3",
 		"reader rule applied: pass_rate is pooled, passed_count over executedCases (passed_count + failed_count), no stored rate read; flake_rate and retry_dependency_rate are pooled over distinct_cases, a repo-day with a NULL rate or NULL counts in neither sum"},
 	"internal/jobs/metrics/daily/testops_native_clickhouse.go": {"4b27c97dd7dc144e00b7772a4e373a43e44903dbe7056893a3a29aa0d8ce1fac",
 		"writer: the daily writer of the stored rows"},

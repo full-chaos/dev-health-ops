@@ -117,7 +117,7 @@ type measure struct {
 func measureOf(teamIndex, dayIndex int) measure {
 	k, d := uint32(teamIndex), uint32(dayIndex)
 	return measure{
-		started: 2 + k, completed: 1 + k + d%2, wip: 3 + k, newItems: 4, newBugs: 1 + k%2,
+		started: 2 + k, completed: 1 + k + d%2, wip: 3 + k, newItems: 8, newBugs: k + 1,
 		cycleP50: 8 * float64(k+1), cycleP90: 16 * float64(k+1), wipAgeP50: 4 * float64(k+1),
 		congestion: 0.5 + 0.25*float64(k), defectRate: 0.125 * float64(k+1), bugRatio: 0.25,
 		predict: 0.5, storyPoints: float64(2 * (k + 1)),

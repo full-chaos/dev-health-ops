@@ -23,15 +23,35 @@ import (
 )
 
 // A work_graph_issue_pr change re-derives the linked issue at the next
-// backstop run. Yesterday's rows: LR-1, LM-1 and LK-1 take team-a from
-// explicit_text links to pull requests of repository A; LN-1 has no link.
-// Today two native links land and the real fallback retraction runs: PR A#7
-// is natively linked to LN-1 (LR-1's explicit_text row to A#7 is retracted),
-// and LM-1 is natively linked to PR B#9 of repository B (its explicit_text
-// row to A#8 is retracted). No ownership changed.
+// backstop run, for an issue of every provider. Yesterday's rows: R-1, M-1 and
+// K-1 take team-a from explicit_text links to pull requests of repository A;
+// N-1 has no link. Today two native links land and the real fallback
+// retraction runs: PR A#7 is natively linked to N-1 (R-1's explicit_text row to
+// A#7 is retracted), and M-1 is natively linked to PR B#9 of repository B (its
+// explicit_text row to A#8 is retracted). No ownership changed. A second run
+// writes nothing.
 func TestALinkChangeRederivesTheLinkedIssue(t *testing.T) {
 	ctx := context.Background()
 	conn := linkChangeClickHouse(t, ctx)
+	for _, kind := range []struct{ provider, itemType, prefix, suffix string }{
+		{"jira", "story", "jira:L", "-1"},
+		{"github", "issue", "gh:acme/tracker#", "1"},
+		{"gitlab", "issue", "gitlab:acme/tracker#", "1"},
+		{"linear", "issue", "linear:L", "-1"},
+	} {
+		t.Run(kind.provider, func(t *testing.T) {
+			id := func(letter string) string {
+				if kind.provider == "github" || kind.provider == "gitlab" {
+					return kind.prefix + map[string]string{"R": "1", "M": "2", "K": "3", "N": "4"}[letter] + kind.suffix
+				}
+				return kind.prefix + letter + kind.suffix
+			}
+			linkChangeCell(t, ctx, conn, kind.provider, kind.itemType, id("R"), id("M"), id("K"), id("N"))
+		})
+	}
+}
+
+func linkChangeCell(t *testing.T, ctx context.Context, conn driver.Conn, provider, itemType, removed, moved, kept, added string) {
 	writer, err := remaining.NewWorkItemAttributionClickHouseWriter(conn)
 	if err != nil {
 		t.Fatalf("new writer: %v", err)
@@ -42,7 +62,7 @@ func TestALinkChangeRederivesTheLinkedIssue(t *testing.T) {
 	}
 
 	orgID := "org-link-change-" + uuid.NewString()
-	repoA, repoB := uuid.New(), uuid.New()
+	repoA, repoB, tracker := uuid.New(), uuid.New(), uuid.New()
 	now := time.Now().UTC()
 	yesterday := now.Add(-24 * time.Hour)
 	setup := now.Add(-72 * time.Hour)
@@ -60,11 +80,14 @@ func TestALinkChangeRederivesTheLinkedIssue(t *testing.T) {
 		exec(`INSERT INTO work_items (repo_id, work_item_id, provider, type, project_id, status, created_at, org_id, last_synced)
 			VALUES (?, ?, 'github', 'pr', '', 'in_progress', ?, ?, ?)`, pr.repo, pr.id, setup, orgID, setup)
 	}
-	issues := []string{"jira:LR-1", "jira:LM-1", "jira:LK-1", "jira:LN-1"}
-	for _, id := range issues {
-		project := strings.TrimSuffix(strings.TrimPrefix(id, "jira:"), "-1")
+	issues := []string{removed, moved, kept, added}
+	for index, id := range issues {
+		project, repo := "", tracker
+		if provider == "jira" || provider == "linear" {
+			project, repo = fmt.Sprintf("P%d", index), uuid.Nil
+		}
 		exec(`INSERT INTO work_items (repo_id, work_item_id, provider, type, project_id, project_key, status, created_at, org_id, last_synced)
-			VALUES (?, ?, 'jira', 'story', ?, ?, 'in_progress', ?, ?, ?)`, uuid.Nil, id, project, project, setup, orgID, setup)
+			VALUES (?, ?, ?, ?, ?, ?, 'in_progress', ?, ?, ?)`, repo, id, provider, itemType, project, project, setup, orgID, setup)
 	}
 	for _, owner := range []struct {
 		repo uuid.UUID
@@ -80,9 +103,9 @@ func TestALinkChangeRederivesTheLinkedIssue(t *testing.T) {
 		exec(`INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id)
 			VALUES (?, ?, ?, 1.0, ?, 'cell', ?, ?)`, repo, issue, pr, tier, at, orgID)
 	}
-	link(repoA, "jira:LR-1", 7, "explicit_text", setup)
-	link(repoA, "jira:LM-1", 8, "explicit_text", setup)
-	link(repoA, "jira:LK-1", 8, "explicit_text", setup)
+	link(repoA, removed, 7, "explicit_text", setup)
+	link(repoA, moved, 8, "explicit_text", setup)
+	link(repoA, kept, 8, "explicit_text", setup)
 
 	// Yesterday's state: the rows the cascade gives the four issues on
 	// yesterday's facts, and an org-wide backstop marker after the ownership.
@@ -112,8 +135,8 @@ func TestALinkChangeRederivesTheLinkedIssue(t *testing.T) {
 
 	before := latestPrimary(t, ctx, conn, orgID)
 	for id, want := range map[string]string{
-		"jira:LR-1": "repo_ownership|team-a", "jira:LM-1": "repo_ownership|team-a",
-		"jira:LK-1": "repo_ownership|team-a", "jira:LN-1": "unassigned|",
+		removed: "repo_ownership|team-a", moved: "repo_ownership|team-a",
+		kept: "repo_ownership|team-a", added: "unassigned|",
 	} {
 		if before[id] != want {
 			t.Fatalf("setup: %s yesterday = %q, want %q (all %v)", id, before[id], want, before)
@@ -121,8 +144,8 @@ func TestALinkChangeRederivesTheLinkedIssue(t *testing.T) {
 	}
 
 	// Today: two native links land, then the real fallback retraction step.
-	link(repoA, "jira:LN-1", 7, "native", now)
-	link(repoB, "jira:LM-1", 9, "native", now)
+	link(repoA, added, 7, "native", now)
+	link(repoB, moved, 9, "native", now)
 	loader, err := issuepredges.NewLoader(conn)
 	if err != nil {
 		t.Fatalf("new loader: %v", err)
@@ -159,14 +182,24 @@ func TestALinkChangeRederivesTheLinkedIssue(t *testing.T) {
 	got := latestPrimary(t, ctx, conn, orgID)
 	t.Logf("RED14149 outcome %+v primary %v", outcome, got)
 	for _, want := range []struct{ id, row, why string }{
-		{"jira:LR-1", "unassigned|", "link removed: no team-a"},
-		{"jira:LM-1", "repo_ownership|team-b", "link moved to repository B"},
-		{"jira:LN-1", "repo_ownership|team-a", "new native link to repository A"},
-		{"jira:LK-1", "repo_ownership|team-a", "control: link kept"},
+		{removed, "unassigned|", "link removed: no team-a"},
+		{moved, "repo_ownership|team-b", "link moved to repository B"},
+		{added, "repo_ownership|team-a", "new native link to repository A"},
+		{kept, "repo_ownership|team-a", "control: link kept"},
 	} {
 		if got[want.id] != want.row {
 			t.Errorf("RED14149 FAIL %s (%s): primary %q, want %q", want.id, want.why, got[want.id], want.row)
 		}
+	}
+	if outcome.RowsWritten == 0 {
+		return
+	}
+	again, err := backstop.ComputeOrg(ctx, orgID)
+	if err != nil {
+		t.Fatalf("second ComputeOrg: %v", err)
+	}
+	if !again.SkippedNoop || again.RowsWritten != 0 {
+		t.Errorf("RED14149 FAIL second run %+v, want a no-op that writes nothing", again)
 	}
 }
 

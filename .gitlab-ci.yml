@@ -177,7 +177,7 @@ variables:
     DOCKER_TLS_CERTDIR: ""
   before_script:
     - apt-get update -y
-    - apt-get install -y --no-install-recommends jq postgresql-client python3 python3-pip
+    - apt-get install -y --no-install-recommends jq postgresql-client
     - !reference [.docker_cli, script]
     - go version
 

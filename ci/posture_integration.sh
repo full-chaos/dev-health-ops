@@ -25,6 +25,10 @@
 #   error exits non-zero. Runs testcontainers: follow the D6363 caps (capped.sh) and remove your own containers
 #   afterwards. The runner is fixed. --test-runner FILE is for tests only: EVERY stdout line starts SIMULATED, no line
 #   says RECEIPT, exit is 5.
+#   On a host with the go-guard shim first on PATH, --run skips the shim (a file whose 2nd line starts "# go-guard shim") and
+#   names the next real go on the caller PATH, and it refuses (exit 2) unless the run is inside capped.sh (GO_GUARD_CAPPED=1):
+#   go-slot.sh -t <sum of the inner caps, seconds> -m 16 -- bash ci/posture_integration.sh --run. The inner capped.sh calls
+#   stay as they are, so the whole script holds ONE go slot. Without the shim nothing changes.
 set -euo pipefail
 
 if [ -z "${POSTURE_CLEAN_ENV:-}" ]; then
@@ -41,6 +45,34 @@ if [ -z "${POSTURE_CLEAN_ENV:-}" ]; then
   # go is resolved from the caller PATH once, here; the receipt names the binary, its hash and its version. Hosted runners
   # install go through setup-go, so no toolchain location is hard-coded.
   first="$(command -v go)" || first=""
+  # The host go-guard shim (a file whose 2nd line starts "# go-guard shim") is not a toolchain: the receipt must name the
+  # real go behind it, found by the same PATH walk, and a --run outside capped.sh / go-slot.sh is refused while the shim
+  # is in play. Without the shim nothing changes. Shell builtins only; a symlink to the shim reads as the shim.
+  is_goguard() {
+    local l1="" l2=""
+    { IFS= read -r l1 && IFS= read -r l2; } < "$1" 2> /dev/null || return 1
+    case "${l2}" in "# go-guard shim"*) return 0 ;; esac
+    return 1
+  }
+  if [ -n "${first}" ] && is_goguard "${first}"; then
+    run_mode=0
+    for a in "$@"; do
+      if [ "${a}" = "--run" ]; then run_mode=1; fi
+    done
+    if [ "${run_mode}" -eq 1 ] && [ "${stub_mode}" -eq 0 ] && [ "${GO_GUARD_CAPPED:-}" != "1" ]; then
+      echo "posture_integration.sh --run: the go-guard shim is first on PATH and this run is not inside capped.sh. Run it in ONE slot: /var/lib/oci-cache/devhealth/scripts/go-slot.sh -t <sum of the inner caps, seconds> -m 16 -- bash ci/posture_integration.sh --run" >&2
+      exit 2
+    fi
+    first=""
+    IFS=: read -ra path_dirs <<< "${PATH}"
+    for d in "${path_dirs[@]}"; do
+      [ -n "${d}" ] || continue
+      [ -f "${d}/go" ] && [ -x "${d}/go" ] || continue
+      if is_goguard "${d}/go"; then continue; fi
+      first="${d}/go"
+      break
+    done
+  fi
   allow+=("POSTURE_GO_FIRST=${first}")
   if [ "${stub_mode}" -eq 1 ]; then
     # A simulated run is never a receipt: it may use the caller's cache dirs (hosted CI has no fixed paths) and its TMPDIR.

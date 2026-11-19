@@ -507,10 +507,8 @@ func (store *InProcessChunkLedger) MarkInventoryComplete(
 	}
 	total := checkpoint.PreparedChunks
 	// finalizePreparedChunksSQL, then finalizeChunkCheckpointSQL.
-	for ordinal, row := range store.chunks {
-		if ordinal < total {
-			row.totalChunks = total
-		}
+	if row, ok := store.chunks[total-1]; ok {
+		row.totalChunks = total
 	}
 	held := store.checkpoint
 	if held.NextOrdinal != total || held.PreparedChunks != total || (held.TotalChunks != 0 && held.TotalChunks != total) {

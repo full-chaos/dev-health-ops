@@ -246,14 +246,16 @@ type workItemStateSegment struct {
 	end    time.Time
 }
 
-// segmentWorkItemStatuses ports _segment_statuses byte-for-byte.
+// segmentWorkItemStatuses ports _segment_statuses.
 //
-// End of the final segment is completed_at if present, else computedAt (the
-// Go port has no updated_at fallback tier because
-// compute_work_item_state_durations_daily's caller never passes one either
-// -- job_daily.py:1582 does not read updated_at for this family; the
-// docstring's three-tier fallback describes the function signature's
-// generality, not this call site's actual behavior).
+// End of the final segment is completed_at when the item has one and either
+// its status or its last known transition is terminal (done or canceled);
+// else computedAt. A provider can reopen an item and keep its completed_at:
+// that open item keeps accruing time in its current status. When the last
+// known transition is terminal, the reopen is not in the transitions, so the
+// segment still ends at completed_at and accrues no time in that terminal
+// status. There is no updated_at fallback tier (job_daily.py:1582 never
+// passed one).
 //
 // created_at/completedAt/computedAt must already be UTC (both loaders and
 // ComputeFamily guarantee this); transitions are sorted here by occurred_at,
@@ -262,16 +264,17 @@ func segmentWorkItemStatuses(
 	createdAt time.Time, completedAt *time.Time, itemStatus string,
 	transitions []workItemStateTransition, computedAt time.Time,
 ) []workItemStateSegment {
-	endOfItem := computedAt
-	if completedAt != nil {
-		endOfItem = *completedAt
-	}
-
 	if len(transitions) == 0 {
 		return nil
 	}
 	ordered := workitemmetrics.OrderTransitions(workItemMetricsTransitions(transitions))
 	sort.SliceStable(ordered, func(i, j int) bool { return ordered[i].OccurredAt.Before(ordered[j].OccurredAt) })
+
+	endOfItem := computedAt
+	if completedAt != nil && (workitemmetrics.IsTerminalStatus(itemStatus) ||
+		workitemmetrics.IsTerminalStatus(ordered[len(ordered)-1].ToStatus)) {
+		endOfItem = *completedAt
+	}
 
 	var segments []workItemStateSegment
 

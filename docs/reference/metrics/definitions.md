@@ -515,6 +515,10 @@ full cycle time: it is a real input, not an outlier to remove.
   merged pull request is left out, not read as 0 hours. A person with no such day
   has no value (NULL) and no point on the cycle map.
 
+## Hours in a status after a reopen
+
+`work_item_state_durations_daily` gives an item's last status span an end at its `completed_at` only when the item's status is terminal (`done` or `canceled`), or when its last known status change goes to a terminal status. A provider can reopen an item and keep its `completed_at`: that open item keeps accruing hours in its current status. When the reopen is not in the item's status changes, the span still ends at `completed_at`, and the item gets no hours in the terminal status after it.
+
 ## Blocked hours in `work_item_state_durations_daily`
 
 `work_item_state_durations_daily` holds, for each day, the hours that work

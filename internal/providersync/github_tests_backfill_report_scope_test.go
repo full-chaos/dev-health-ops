@@ -1,9 +1,13 @@
 package providersync
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 )
 
 // githubTestsCreatedInRange applies a runs listing "created" qualifier (lo..hi,
@@ -103,9 +107,90 @@ func TestGitHubTestsBackfillReportScopeReadsOnlyRunsFinishedInItsWindow(t *testi
 		{"one second under since", "backfill", "2026-07-22T11:59:59Z", hourSince, hourBefore, false},
 		{"at since", "backfill", "2026-07-22T12:00:00Z", hourSince, hourBefore, true},
 		{"inside the window", "backfill", "2026-07-22T12:30:00Z", hourSince, hourBefore, true},
+		{"at before", "backfill", "2026-07-22T13:00:00Z", hourSince, hourBefore, false},
+		{"at before", "incremental", "2026-07-22T13:00:00Z", hourSince, hourBefore, true},
 		{"over one window before since", "incremental", "2026-07-22T10:59:59Z", hourSince, hourBefore, false},
 		{"previous hourly window", "full_resync", "2026-07-22T11:30:00Z", hourSince, hourBefore, true},
 	} {
 		runGitHubTestsReportScopeCell(t, cell)
+	}
+}
+
+// CHAOS-14213 (acp condition 1). One look still reads a run CREATED before the
+// window that finished inside it: the listing keeps its created-from lookback
+// (the run is created on the day before since), and the run is read once, by
+// the window it finished in, not by the previous backfill chunk it started in.
+func TestGitHubTestsBackfillReadsARunCreatedBeforeItsWindowOnceInTheWindowItFinished(t *testing.T) {
+	t.Parallel()
+	since := time.Date(2026, 7, 22, 1, 0, 0, 0, time.UTC)
+	before := since.Add(24 * time.Hour)
+	previousSince := since.Add(-24 * time.Hour)
+	for _, cell := range []struct {
+		name          string
+		since, before time.Time
+		wantReads     int
+	}{
+		{"this window", since, before, 1},
+		{"previous window", previousSince, since, 0},
+	} {
+		doer := githubTestsReportWindowDoerFor(t, "2026-07-22T02:00:00Z")
+		doer.createdAt, doer.startedAt, doer.filterCreated = "2026-07-21T23:00:00Z", "2026-07-21T23:01:00Z", true
+		claim := githubTestsWindowClaim(t, cell.since, cell.before)
+		claim.Mode = "backfill"
+		_, cases := collectGitHubTestsReportRows(t, doer, claim, before.Add(5*time.Minute))
+		lists, zips := githubTestsReportReads(doer)
+		if lists != cell.wantReads || zips != cell.wantReads || (cell.wantReads > 0) != (cases > 0) {
+			t.Errorf("%s [%s, %s): artifact lists=%d downloads=%d cases=%d, want %d read(s); run queries=%v",
+				cell.name, cell.since.Format(time.RFC3339), cell.before.Format(time.RFC3339), lists, zips, cases,
+				cell.wantReads, doer.runQueries)
+		}
+	}
+}
+
+// CHAOS-14213 (acp condition 2). With one look, a report lost in a backfill
+// unit's own window gets no second read from the next chunk, so the loss must
+// stay loud on its own unit: reports_complete=false, the counted cause in
+// `incomplete` (a gap cause for sync coverage, not a closed-with-reason one,
+// synccoverage closedWithReasonCauses) and the per-artifact marker a targeted
+// backfill uses.
+func TestGitHubTestsBackfillTransientReportLossStaysALoudGap(t *testing.T) {
+	t.Parallel()
+	doer := &githubTestsDownloadFailureDoer{t: t, artifacts: 2, noLocation: map[int]bool{1: true}}
+	claim := nativeTestClaim("github", "cicd")
+	since := time.Date(2026, 7, 22, 0, 0, 0, 0, time.UTC)
+	before := since.Add(24 * time.Hour)
+	claim.Mode, claim.SinceAt, claim.BeforeAt = "backfill", &since, &before
+	var final *CompleteRouteBatch
+	err := GitHubTestsRouteHandler{}.CollectChunks(
+		context.Background(), claim, providerfoundation.Credential{},
+		githubTestsClient(t, fakehttp.Client(doer)), before.Add(5*time.Minute), "",
+		func(emission ChunkRouteEmission) error {
+			if emission.Final {
+				batch := emission.Batch
+				final = &batch
+			}
+			return nil
+		},
+	)
+	if err != nil || final == nil {
+		t.Fatalf("CollectChunks err=%v final=%v: the unit must finish with the loss recorded", err, final != nil)
+	}
+	if doer.archiveRequests != 2 {
+		t.Fatalf("archive requests=%d, want 2: the run finished in the window must be read", doer.archiveRequests)
+	}
+	if complete, ok := final.Result["reports_complete"].(bool); !ok || complete {
+		t.Fatalf("reports_complete=%v, want false", final.Result["reports_complete"])
+	}
+	incomplete, ok := final.Result["incomplete"].([]GitHubTestsIncomplete)
+	if !ok {
+		t.Fatalf("incomplete=%#v, want the typed loss list", final.Result["incomplete"])
+	}
+	observation := githubTestsSkipObservation(t, incomplete, githubTestsReportMemberComponent)
+	if observation.Cause != githubTestsArtifactUnavailableCause || observation.Count != 1 {
+		t.Fatalf("observation=%+v, want cause=%s count=1", observation, githubTestsArtifactUnavailableCause)
+	}
+	markers, ok := final.Result["skipped_artifacts"].([]GitHubTestsSkippedArtifact)
+	if !ok || len(markers) != 1 || markers[0].Cause != githubTestsArtifactUnavailableCause {
+		t.Fatalf("skipped_artifacts=%#v, want one %s marker", final.Result["skipped_artifacts"], githubTestsArtifactUnavailableCause)
 	}
 }

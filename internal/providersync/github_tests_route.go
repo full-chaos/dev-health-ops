@@ -749,8 +749,14 @@ func githubTestsArtifactRunQuery(claim Claim) url.Values {
 // the claim's own cadence (the only figure this route actually knows) rather
 // than a fixed duration picked from a small sample.
 //
-// Both bounds fail open: a claim missing either edge (a backfill, or a still
-// -open forward claim) filters nothing on that edge, and a run with no
+// A backfill unit takes one look: only a run whose last-updated time is inside
+// its own window [since, before). Its chunks run in unit-id order, not time
+// order, so the next chunk's look is no later look; it only read the previous
+// chunk's reports again. A run created before since is still listed
+// (githubTestsArtifactRunsCreatedFrom) and read by the window it finished in.
+//
+// The claim edges fail open: a claim missing either edge (an open-start or a
+// still-open claim) filters nothing on that edge, and a run with no
 // last-updated time is never excluded -- a run we cannot date is a run we
 // must not silently drop.
 func githubTestsReportRunOutsideWindow(pipeline githubTestsPipelineRow, claim Claim) bool {
@@ -765,7 +771,11 @@ func githubTestsReportRunOutsideWindow(pipeline githubTestsPipelineRow, claim Cl
 	if width <= 0 {
 		return false
 	}
-	return pipeline.FinishedAt.UTC().Before(since.Add(-width))
+	finished := pipeline.FinishedAt.UTC()
+	if claim.Mode == "backfill" {
+		return finished.Before(since) || !finished.Before(claim.BeforeAt.UTC())
+	}
+	return finished.Before(since.Add(-width))
 }
 
 // githubTestsRunReadable: a run's report artifacts are read only once the run

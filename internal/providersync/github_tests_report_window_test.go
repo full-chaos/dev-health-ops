@@ -188,16 +188,16 @@ func TestGitHubTestsReportPhaseNeverSkipsARunWithoutAnUpdatedAt(t *testing.T) {
 	}
 }
 
-// A backfill claim carries no SinceAt. It must filter nothing, or the first
-// sync of a repository would collect no reports at all.
-func TestGitHubTestsReportPhaseFiltersNothingWithoutASinceBound(t *testing.T) {
+// A claim with no SinceAt (an open start) must filter nothing on that edge. A
+// backfill unit always carries both edges (its planner chunks since..before).
+func TestGitHubTestsReportPhaseFiltersNothingForAnOpenStartClaim(t *testing.T) {
 	t.Parallel()
 	claim := nativeTestClaim("github", "tests")
 	claim.SinceAt = nil
 	doer := githubTestsReportWindowDoerFor(t, "2020-01-01T00:00:00Z")
 	if _, cases := collectGitHubTestsReportRows(t, doer, claim,
 		time.Date(2026, 7, 22, 13, 5, 0, 0, time.UTC)); cases == 0 {
-		t.Fatalf("backfill claim projected no cases: %v", doer.requests)
+		t.Fatalf("open-start claim projected no cases: %v", doer.requests)
 	}
 }
 

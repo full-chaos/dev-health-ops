@@ -469,6 +469,8 @@ internal/providersync	team_absence_test.go	internal/providersync	dir	*
 internal/providersync	team_id_carry_seam_test.go	cmd	tree	*.go
 internal/providersync	team_id_carry_seam_test.go	internal	tree	*.go
 internal/providersync	team_membership_first_seen_test.go	.	tree	*.go
+internal/providersync	team_repo_ownership_evidence_census_test.go	cmd	tree	*.go
+internal/providersync	team_repo_ownership_evidence_census_test.go	internal	tree	*.go
 internal/providersync	watermark_write_boundary_test.go	internal/providersync	dir	*
 internal/pythonparity	errorsanitize_callers_test.go	unexpressed	-	*.go
 internal/pythonparity	goldenpayload_registry_test.go	internal/pythonparity	dir	*

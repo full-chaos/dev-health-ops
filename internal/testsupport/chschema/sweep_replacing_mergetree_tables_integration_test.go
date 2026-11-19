@@ -226,8 +226,13 @@ func sweepReplacingMergeTreeTables(t *testing.T) []replacingMergeTreeTable {
 // (org_id, repo_id, run_id, run_attempt) -- CHAOS-13826. A reader reads it
 // FINAL (a complete verdict outranks a partial one, then the newer walk) and
 // takes the row of max(run_attempt) per run.
+// 124 -> 125: 166_team_repo_ownership_evidence.sql adds
+// `team_repo_ownership_evidence` (version seen_at), keyed on (org_id, provider,
+// repo_full_name, team_id, input, input_key) -- CHAOS-9349. A reader takes the
+// newest version of each key (argMax over (seen_at, is_deleted)), then
+// is_deleted = 0.
 func TestSweepReplacingMergeTreeTablesMatchesTheAuthoritativeCount(t *testing.T) {
-	const wantCount = 124
+	const wantCount = 125
 
 	tables := sweepReplacingMergeTreeTables(t)
 	if len(tables) != wantCount {

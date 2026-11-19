@@ -313,8 +313,8 @@ func buildTeamRepoOwnershipDonorWalkOracleRowWith(
 	// re-lookup this test used to need is gone.
 	// CHAOS-4537 codex review P1 added a knownLinearTeamKeys param; nil here
 	// since no oracle case in this file exercises the Linear-only arm.
-	donorTeamID := buildDonorTeamIDResolver(byID, edges, projectToTeam, nil, nil)
-	teamID, _ := donorTeamID(decoded.SourceWorkItemID)
+	donorTeamID := buildDonorTeamIDResolver(byID, edges, projectToTeam, nil, nil, nil)
+	teamID := donorTeamID(decoded.SourceWorkItemID).teamID
 	row := teamRepoOwnershipDonorWalkOracleRow{}
 	if teamID != "" {
 		row.TeamID = &teamID

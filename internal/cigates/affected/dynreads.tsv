@@ -534,6 +534,7 @@ internal/providersync	snapshot_walk_end_rule_test.go
 internal/providersync	status_mapping.go
 internal/providersync	team_id_carry_seam_test.go
 internal/providersync	team_membership_first_seen_test.go
+internal/providersync	team_repo_ownership_evidence_census_test.go
 internal/providersync	watermark_write_boundary_test.go
 internal/pushcli	validate.go
 internal/pythonparity	errorsanitize_callers_test.go

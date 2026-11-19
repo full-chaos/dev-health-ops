@@ -101,11 +101,16 @@ type GitHubProjectV2StoredTransitionsClickHouseReader struct{ Conn driver.Conn }
 
 // One row per distinct event, the identity the daily loaders read
 // (jobs/metrics/daily/work_item_state_native_clickhouse.go): re-synced copies
-// collapse, two events at one instant do not.
+// collapse, two events at one instant do not, and a stale pre-170 board row is
+// dropped (workitemmetrics.StaleBoardTieZeroSQL).
 const gitHubProjectV2StoredTransitionsQuery = `
 SELECT work_item_id, occurred_at, from_status, to_status, to_status_raw
-FROM work_item_transitions
-WHERE org_id = ? AND work_item_id IN ?
+FROM (
+	SELECT ` + workitemmetrics.StoredTransitionColumnsSQL + `
+	FROM work_item_transitions
+	WHERE org_id = ? AND work_item_id IN ?
+)
+WHERE NOT ` + workitemmetrics.StaleBoardTieZeroSQL + `
 GROUP BY org_id, work_item_id, occurred_at, from_status, to_status, from_status_raw, to_status_raw, actor`
 
 func (reader GitHubProjectV2StoredTransitionsClickHouseReader) StoredTransitions(

@@ -3,6 +3,7 @@ package providersync
 import (
 	"encoding/json"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"log/slog"
 	"math/big"
 	"regexp"
@@ -1095,7 +1096,7 @@ func normalizeGitLabDependencies(
 		appendRow(source, target, relationship, raw, writerOf(source), nil)
 	}
 	for class, count := range rejectedReferences {
-		slog.Warn("providersync.gitlab.description_reference_rejected", "org_id", claim.OrgID, "issue", workItemID, "reason", class, "count", count)
+		slog.Warn("providersync.gitlab.description_reference_rejected", "org_id", claim.OrgID, "issue", logging.ProviderText(workItemID), "reason", class, "count", count)
 	}
 	seenExternal := map[string]struct{}{}
 	for _, match := range gitlabExternalKeyPattern.FindAllStringSubmatch(description, -1) {

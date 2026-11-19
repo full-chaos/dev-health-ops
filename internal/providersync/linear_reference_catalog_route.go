@@ -979,7 +979,7 @@ func collectLinearReferenceProjectTeams(
 	result.pages = pages + 1
 	if capped {
 		slog.Error("providersync.linear.nested_connection_bound_exceeded",
-			"owner", "project "+project.ID, "field", "teams", "pages", pages+1,
+			"owner", logging.ProviderText("project "+project.ID), "field", "teams", "pages", pages+1,
 			"items", len(raw)+len(project.Teams.Nodes), "max_pages", linearNestedHardMaxPages)
 		return result, fmt.Errorf(
 			"%w: linear teams of project %s still had a next page after %d pages (max %d pages)",
@@ -1026,7 +1026,7 @@ func collectLinearReferenceTeamMembers(
 	pages++ // the embedded first page
 	if capped {
 		slog.Error("providersync.linear.nested_connection_bound_exceeded",
-			"owner", "team "+team.ID, "field", "members", "pages", pages,
+			"owner", logging.ProviderText("team "+team.ID), "field", "members", "pages", pages,
 			"items", len(raw)+len(team.Members.Nodes), "max_pages", followUps+1)
 		return raw, pages, true, fmt.Errorf(
 			"%w: linear members of team %s still had a next page after %d pages (max %d pages)",

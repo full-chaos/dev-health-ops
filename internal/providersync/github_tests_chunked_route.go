@@ -434,7 +434,7 @@ func githubTestsCheckAllArtifactsUnreadable(cursor githubTestsChunkCursor, claim
 	attrs := []any{
 		"provider", claim.Provider, "dataset", claim.Dataset,
 		"org", claim.OrgID, "sync_run_id", claim.SyncRunID, "unit", claim.ID,
-		"repository", cursor.Repo, "seen", seen, "unreadable", unreadable,
+		"repository", logging.ProviderText(cursor.Repo), "seen", seen, "unreadable", unreadable,
 	}
 	// This failure path returns BEFORE githubTestsLogArtifactSkipSummary ever
 	// runs (codex review round 6, P2), so the run/artifact ids and cap an
@@ -510,7 +510,7 @@ func recordGitHubTestsInventoryTruncation(
 	slog.Warn(
 		"provider inventory page budget exhausted",
 		"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
-		"repository", cursor.Repo, "component", component, "pages", pagesSpent,
+		"repository", logging.ProviderText(cursor.Repo), "component", component, "pages", pagesSpent,
 	)
 	return cursor
 }
@@ -560,7 +560,7 @@ func recordGitHubTestsPerRunTruncation(
 	slog.Warn(
 		"provider per-run item cap reached; run committed with partial items",
 		"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
-		"repository", cursor.Repo, "component", component, "cause", cause,
+		"repository", logging.ProviderText(cursor.Repo), "component", component, "cause", cause,
 		logging.ProviderIDAttr("run", runID), "kept", kept,
 	)
 	return cursor
@@ -586,7 +586,7 @@ func recordGitHubTestsRunReportsDuplicate(
 	slog.Warn(
 		"provider run report artifacts overlap by content; see the artifact markers",
 		"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
-		"repository", cursor.Repo, "component", githubTestsRunReportsComponent, "cause", cause,
+		"repository", logging.ProviderText(cursor.Repo), "component", githubTestsRunReportsComponent, "cause", cause,
 		logging.ProviderIDAttr("run", runID), "rows", rows,
 	)
 	return cursor
@@ -723,7 +723,7 @@ func githubTestsLogArtifactSkipSummary(
 	attrs := make([]any, 0, 20+2*len(incomplete))
 	attrs = append(attrs,
 		"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
-		"repository", repo, "artifact_skip_total", artifactSkipTotal,
+		"repository", logging.ProviderText(repo), "artifact_skip_total", artifactSkipTotal,
 		"incomplete_total", githubTestsIncompleteCount(incomplete),
 		// totality_excluded_* (CHAOS-4315/CHAOS-4185 interaction fix): the two
 		// skip causes that never feed the ArchivesSeen/ArchivesUnreadable
@@ -917,7 +917,7 @@ func githubTestsResumeStart(
 	slog.Warn(
 		"provider page moved under a resume; re-anchoring and re-walking the page",
 		"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
-		"repository", cursor.Repo, "phase", phase,
+		"repository", logging.ProviderText(cursor.Repo), "phase", phase,
 		"stored_index", cursor.Index, "page_items", len(page.Items),
 	)
 	return 0, true
@@ -1657,7 +1657,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 					cursor.OpenFloorHit, cursor.OpenFloorRemaining = true, remaining
 					slog.Warn(
 						"open phase stopped: the installation's rate-limit headroom is under the floor, or its headers are missing",
-						"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID, "repository", cursor.Repo,
+						"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID, "repository", logging.ProviderText(cursor.Repo),
 						"remaining", remaining, "limit", rateObserved.limit, "floor", rateObserved.floor(), "reread", cursor.OpenDone,
 					)
 					cursor.Phase = "done"
@@ -1680,7 +1680,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 					slog.Info(
 						"open run no longer exists at the provider; its row is marked deleted",
 						"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
-						"repository", cursor.Repo, logging.ProviderIDAttr("run", row.RunID),
+						"repository", logging.ProviderText(cursor.Repo), logging.ProviderIDAttr("run", row.RunID),
 					)
 				} else if pipeline, include := normalizeGitHubTestsPipeline(claim, repoID, run, normalizedAt); include {
 					var detailErr error
@@ -1722,7 +1722,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		}
 		slog.Info(
 			"open phase finished",
-			"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID, "repository", cursor.Repo,
+			"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID, "repository", logging.ProviderText(cursor.Repo),
 			"reread", cursor.OpenDone, "cap", cursor.OpenCap, "cap_reached", cursor.OpenCapReached,
 			"floor_hit", cursor.OpenFloorHit, "skipped", cursor.OpenSkipped, "skip_limit_hit", cursor.OpenSkipLimitHit,
 			"rate_limit_remaining", rateObserved.remaining,
@@ -2175,7 +2175,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 							slog.Info(
 								"within-suite duplicate test-case names disambiguated with an ordinal suffix",
 								"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
-								"repository", cursor.Repo, logging.ProviderIDAttr("run", pipeline.RunID), "count", rows.DuplicateCases,
+								"repository", logging.ProviderText(cursor.Repo), logging.ProviderIDAttr("run", pipeline.RunID), "count", rows.DuplicateCases,
 							)
 						}
 						client.Metrics.RecordNonFiniteTestTime(claim.Provider, claim.Dataset, rows.NonFiniteTimes)
@@ -2183,7 +2183,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 							slog.Info(
 								"non-finite test time stored as NULL",
 								"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
-								"repository", cursor.Repo, logging.ProviderIDAttr("run", pipeline.RunID), "count", rows.NonFiniteTimes,
+								"repository", logging.ProviderText(cursor.Repo), logging.ProviderIDAttr("run", pipeline.RunID), "count", rows.NonFiniteTimes,
 							)
 						}
 						client.Metrics.RecordDuplicateTestSuite(claim.Provider, claim.Dataset, rows.DuplicateSuites)
@@ -2191,7 +2191,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 							slog.Info(
 								"sibling suite collision resolved: same-named suite objects disambiguated with an ordinal suffix",
 								"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
-								"repository", cursor.Repo, logging.ProviderIDAttr("run", pipeline.RunID), "count", rows.DuplicateSuites,
+								"repository", logging.ProviderText(cursor.Repo), logging.ProviderIDAttr("run", pipeline.RunID), "count", rows.DuplicateSuites,
 							)
 						}
 						// Hold the parsed rows until the run is decided; an artifact that would take the held rows past
@@ -2248,7 +2248,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 						slog.Warn(
 							"provider run report artifacts match by case identity but disagree on outcome; all are kept and the unit is not advanced",
 							"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
-							"repository", cursor.Repo, logging.ProviderIDAttr("run", pipeline.RunID),
+							"repository", logging.ProviderText(cursor.Repo), logging.ProviderIDAttr("run", pipeline.RunID),
 							"artifact_ids", strings.Join(mismatchIDs, ","),
 						)
 					}
@@ -2364,7 +2364,7 @@ func (handler GitHubTestsRouteHandler) ObserveCommittedChunk(claim Claim, chunk 
 	metrics.RecordOpenRunSkipped(claim.Provider, claim.Dataset, event.Reason)
 	slog.Warn(
 		"open run re-read failed with an error of that run; it is skipped this unit and read again on a later unit",
-		"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID, "repository", claim.SourceExternalID,
+		"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID, "repository", logging.ProviderText(claim.SourceExternalID),
 		logging.ProviderIDAttr("run", event.RunID), "reason", event.Reason, "status", event.Status, "route", event.Route,
 		"skipped", cursor.OpenSkipped,
 	)
@@ -2381,7 +2381,7 @@ func (handler GitHubTestsRouteHandler) ObserveUnconfirmedChunk(claim Claim, chun
 	}
 	slog.Warn(
 		"open run skip unconfirmed: the commit of its chunk failed and the checkpoint read back failed; if the commit landed, the skip is not recorded",
-		"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID, "repository", claim.SourceExternalID,
+		"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID, "repository", logging.ProviderText(claim.SourceExternalID),
 		logging.ProviderIDAttr("run", event.RunID), "chunk", chunk.Ordinal, "skip_reason", event.Reason, "outcome", "unknown",
 	)
 }

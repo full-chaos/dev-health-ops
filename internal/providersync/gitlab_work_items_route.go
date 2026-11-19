@@ -392,7 +392,7 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 			if unsupported > 0 {
 				issueLinksUnsupported += unsupported
 				slog.Warn("providersync.gitlab.issue_link_unsupported_shape",
-					"org_id", claim.OrgID, "unit_id", claim.ID, "issue", item.WorkItemID, "count", unsupported)
+					"org_id", claim.OrgID, "unit_id", claim.ID, "issue", logging.ProviderText(item.WorkItemID), "count", unsupported)
 			}
 			closing, closingPages, closingErr := collectGitLabClosingMergeRequests(
 				budgetAccount(ctx, "issues"), &counted, gitlabIssuesRoute+"/{iid}/closed_by", root+"/issues/"+strconv.Itoa(payload.IID)+"/closed_by",
@@ -418,7 +418,7 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 				counted.Metrics.RecordGitLabClosingMRFetch(outcome)
 				errorClass, errorType := logging.ErrorClass(closingErr), logging.ErrorType(closingErr) // never the error text (CHAOS-7933)
 				slog.Warn("providersync.gitlab.closing_mr_fetch_failed",
-					"org_id", claim.OrgID, "unit_id", claim.ID, "issue", item.WorkItemID, "outcome", outcome,
+					"org_id", claim.OrgID, "unit_id", claim.ID, "issue", logging.ProviderText(item.WorkItemID), "outcome", outcome,
 					"error_class", errorClass, "error_type", errorType)
 			} else {
 				counted.Metrics.RecordGitLabClosingMRFetch("synced")
@@ -614,7 +614,7 @@ func collectGitLabNestedPayloads(
 	if errors.Is(err, errGitLabNestedEmptyWithNext) {
 		owner, field := gitLabNestedOwnerAndField(path)
 		slog.Error("providersync.gitlab.nested_list_empty_page_with_next",
-			"owner", owner, "field", field, "page", collected.Pages+1, "max_pages", maxPages)
+			"owner", logging.ProviderText(owner), "field", field, "page", collected.Pages+1, "max_pages", maxPages)
 		return nil, collected.Pages, fmt.Errorf(
 			"%w: gitlab %s of %s ended on an empty page that still advertised a next page",
 			ErrPaginationCapExceeded, field, owner,
@@ -628,7 +628,7 @@ func collectGitLabNestedPayloads(
 	}
 	owner, field := gitLabNestedOwnerAndField(path)
 	slog.Error("providersync.gitlab.nested_list_bound_exceeded",
-		"owner", owner, "field", field, "pages", maxPages, "max_pages", maxPages)
+		"owner", logging.ProviderText(owner), "field", field, "pages", maxPages, "max_pages", maxPages)
 	return nil, maxPages, fmt.Errorf(
 		"%w: gitlab %s of %s still had a next page after %d pages (max %d pages)",
 		ErrPaginationCapExceeded, field, owner, maxPages, maxPages,
@@ -843,7 +843,7 @@ func (handler GitLabWorkItemsRouteHandler) collectGitLabGroupEpics(
 	result, listed := "error", 0
 	defer func() {
 		slog.Default().InfoContext(ctx, "gitlab_work_items_epics",
-			"org_id", claim.OrgID, "unit_id", claim.ID, "group", groupPath, "outcome", result,
+			"org_id", claim.OrgID, "unit_id", claim.ID, "group", logging.ProviderText(groupPath), "outcome", result,
 			"epics_listed", listed, "epics_written", outcome.synced, "epics_skipped", outcome.skipped,
 			"incomplete", len(outcome.incomplete))
 	}()
@@ -868,7 +868,7 @@ func (handler GitLabWorkItemsRouteHandler) collectGitLabGroupEpics(
 			status = providerErr.StatusCode
 		}
 		slog.Default().WarnContext(ctx, "gitlab_work_items_epics_fetch_failed",
-			"org_id", claim.OrgID, "unit_id", claim.ID, "group", groupPath, "part", what, "status", status,
+			"org_id", claim.OrgID, "unit_id", claim.ID, "group", logging.ProviderText(groupPath), "part", what, "status", status,
 			"error_class", errorClass, "error_type", errorType)
 		return nil
 	}
@@ -928,7 +928,7 @@ func (handler GitLabWorkItemsRouteHandler) collectGitLabGroupEpics(
 					reason = "empty_title"
 				}
 				slog.Default().WarnContext(ctx, "gitlab_work_items_epic_skipped",
-					"org_id", claim.OrgID, "unit_id", claim.ID, "group", groupPath, "iid", iidText, "reason", reason)
+					"org_id", claim.OrgID, "unit_id", claim.ID, "group", logging.ProviderText(groupPath), "iid", iidText, "reason", reason)
 				continue
 			}
 			return outcome, normalizeErr

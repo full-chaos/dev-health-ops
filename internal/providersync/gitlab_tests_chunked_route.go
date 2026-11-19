@@ -179,7 +179,7 @@ func recordGitLabTestsPerRunTruncation(
 	slog.Warn(
 		"provider per-run item cap reached; run committed with partial items",
 		"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
-		"repository", cursor.Repo, "component", component, logging.ProviderIDAttr("run", runID), "kept", kept,
+		"repository", logging.ProviderText(cursor.Repo), "component", component, logging.ProviderIDAttr("run", runID), "kept", kept,
 	)
 	return cursor
 }
@@ -213,7 +213,7 @@ func recordGitLabTestsSkippedItem(
 	slog.Warn(
 		"gitlab test item skipped: over the size cap",
 		"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
-		"repository", cursor.Repo, "component", component, logging.ProviderIDAttr("run", runID), "cap_bytes", capBytes,
+		"repository", logging.ProviderText(cursor.Repo), "component", component, logging.ProviderIDAttr("run", runID), "cap_bytes", capBytes,
 	)
 	return cursor
 }
@@ -248,7 +248,7 @@ func recordGitLabTestsInventoryTruncation(
 	slog.Warn(
 		"provider inventory page budget exhausted",
 		"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
-		"repository", cursor.Repo, "component", component, "pages", pagesSpent,
+		"repository", logging.ProviderText(cursor.Repo), "component", component, "pages", pagesSpent,
 	)
 	return cursor
 }
@@ -677,7 +677,7 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 						slog.Info(
 							"non-finite test time stored as NULL",
 							"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
-							"repository", cursor.Repo, logging.ProviderIDAttr("run", runID), "count", nonFinite,
+							"repository", logging.ProviderText(cursor.Repo), logging.ProviderIDAttr("run", runID), "count", nonFinite,
 						)
 					}
 					if duplicates := countDuplicateTestCases(reportCases); duplicates > 0 {
@@ -685,7 +685,7 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 						slog.Info(
 							"within-suite duplicate test-case names disambiguated with an ordinal suffix",
 							"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
-							"repository", cursor.Repo, logging.ProviderIDAttr("run", runID), "count", duplicates,
+							"repository", logging.ProviderText(cursor.Repo), logging.ProviderIDAttr("run", runID), "count", duplicates,
 						)
 					}
 					if duplicates := countDuplicateTestSuites(reportSuites); duplicates > 0 {
@@ -693,7 +693,7 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 						slog.Info(
 							"sibling suite collision resolved: same-named suite objects disambiguated with an ordinal suffix",
 							"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
-							"repository", cursor.Repo, logging.ProviderIDAttr("run", runID), "count", duplicates,
+							"repository", logging.ProviderText(cursor.Repo), logging.ProviderIDAttr("run", runID), "count", duplicates,
 						)
 					}
 					suites, cases = reportSuites, reportCases

@@ -94,6 +94,9 @@ type wireChartSpec struct {
 	OrganizationID string   `json:"org_id"`
 }
 
+// confidenceLevels are the confidence thresholds a plan may name; the footer writes the value.
+var confidenceLevels = map[string]bool{"direct_fact": true, "inferred": true, "hypothesis": true}
+
 func decodeReportDefinition(
 	reportID, organizationID string,
 	planJSON, parametersJSON []byte,
@@ -146,6 +149,9 @@ func decodeReportDefinition(
 	}}
 	if result.Plan.ConfidenceThreshold == "" {
 		result.Plan.ConfidenceThreshold = "direct_fact"
+	}
+	if !confidenceLevels[result.Plan.ConfidenceThreshold] {
+		return ReportDefinition{}, ErrContractMismatch
 	}
 	for _, chart := range plan.ChartSpecs {
 		groupBy, title := "", ""

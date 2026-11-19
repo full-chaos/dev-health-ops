@@ -271,7 +271,7 @@ func renderMarkdown(plan Plan, charts []ChartResult, narratives []narrative, pro
 	scope := formatScope(plan)
 	generated := strings.TrimSuffix(plan.CreatedAt.UTC().Format(time.RFC3339), "Z") + "+00:00"
 	lines = append(lines, "", "---",
-		fmt.Sprintf("Generated at %s | Confidence: %s | Scope: %s", generated, plan.ConfidenceThreshold, scope))
+		fmt.Sprintf("Generated at %s | Confidence: %s | Scope: %s", generated, markdownHeadingText(plan.ConfidenceThreshold), scope))
 	return strings.TrimSpace(strings.Join(lines, "\n")) + "\n"
 }
 
@@ -296,9 +296,9 @@ func renderChart(chart ChartResult) string {
 
 var markdownLineBreaks = strings.NewReplacer("\r\n", " ", "\n", " ", "\r", " ")
 
-// escapeMarkdown folds a line break to a space and puts a backslash before each character of escapes, so a value
-// stays on one line and reads as itself. "#" is always in the set: a value can never hold the "## Provenance"
-// line a reader splits the report on.
+// escapeMarkdown folds a line break to a space and puts a backslash before each character of escapes. A value
+// cannot start a block, a heading or a provenance split (a backslash and "#" are always in the set); inline Markdown
+// inside a value may render.
 func escapeMarkdown(value, escapes string) string {
 	value = markdownLineBreaks.Replace(value)
 	var b strings.Builder

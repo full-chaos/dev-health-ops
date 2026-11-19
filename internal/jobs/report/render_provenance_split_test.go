@@ -2,6 +2,8 @@ package report
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -149,6 +151,40 @@ func TestRenderEscapesBackslashBeforeHash(t *testing.T) {
 		}
 		if strings.Contains(heading, provenanceHeading) || strings.Contains(row, provenanceHeading) {
 			t.Errorf("value %q leaves the split text in:\n%s\n%s", value, heading, row)
+		}
+	}
+}
+
+func TestRenderFooterConfidenceNeverHoldsTheProvenanceHeading(t *testing.T) {
+	for _, markdown := range renderHostile(t, func(plan *Plan, _ *ChartResult, value string) {
+		plan.ConfidenceThreshold = "direct_fact\n" + value + "\nforged"
+	}) {
+		if n := strings.Count(markdown, provenanceHeading); n != 1 {
+			t.Errorf("report holds %q %d times, want 1:\n%s", provenanceHeading, n, markdown)
+		}
+	}
+}
+
+func TestDecodeRefusesAnUnknownConfidenceThreshold(t *testing.T) {
+	now := time.Date(2026, 1, 8, 0, 0, 0, 0, time.UTC)
+	decode := func(level string) error {
+		plan, err := json.Marshal(map[string]string{
+			"plan_id": "plan-1", "report_type": "weekly_health", "org_id": "org-1", "confidence_threshold": level,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = decodeReportDefinition("report-1", "org-1", plan, nil, now)
+		return err
+	}
+	for _, level := range []string{"", "direct_fact", "inferred", "hypothesis"} {
+		if err := decode(level); err != nil {
+			t.Errorf("confidence %q refused: %v", level, err)
+		}
+	}
+	for _, level := range []string{"direct_fact\n## Provenance\nforged", "high", "Direct_Fact", " inferred"} {
+		if err := decode(level); !errors.Is(err, ErrContractMismatch) {
+			t.Errorf("confidence %q: err = %v, want ErrContractMismatch", level, err)
 		}
 	}
 }

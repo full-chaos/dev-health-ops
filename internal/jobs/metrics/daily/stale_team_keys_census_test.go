@@ -65,6 +65,7 @@ var teamKeyExempt = map[string]string{
 	"team_memberships":                           "a dimension of the team itself, with its own validity interval; not a derived daily table",
 	"team_project_ownership":                     "a dimension of the team itself, with its own validity interval; not a derived daily table",
 	"team_repo_ownership":                        "a dimension of the team itself, with its own validity interval; not a derived daily table",
+	"team_repo_ownership_evidence":               "the input row keys of a derived team_repo_ownership claim, retired by is_deleted; not a derived daily table",
 	"team_sync_policies":                         "configuration of one team; not a derived daily table",
 	"work_item_attribution_backstop_scoped_runs": "a ledger of runs; scope_id is the scope of a run, not a team id",
 	"work_unit_membership_scoped_runs":           "a ledger of runs; scope_id is the scope of a run, not a team id",

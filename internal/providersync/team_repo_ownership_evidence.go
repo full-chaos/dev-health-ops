@@ -486,10 +486,12 @@ WHERE org_id = ? AND team_id != ''`,
 const teamRepoOwnershipEvidenceInsert = `INSERT INTO team_repo_ownership_evidence
 (org_id, provider, repo_full_name, team_id, input, input_key, seen_at, is_deleted)`
 
-// writeTeamRepoOwnershipEvidence writes the planned rows. seen_at is the wall
-// clock, not the run's clock: it orders versions of a key, and a pinned run
-// clock would give two runs one version.
-func writeTeamRepoOwnershipEvidence(ctx context.Context, conn driver.Conn, orgID string, writes []teamRepoOwnershipEvidenceWrite) error {
+// writeTeamRepoOwnershipEvidence writes the planned rows at the run's clock,
+// so a fixture world's pinned run writes the same rows every time. Two runs
+// at one instant (a pinned clock only) give a key one version: a retire wins
+// that tie (argMax over (seen_at, is_deleted)), so the store errs toward fewer
+// keys, the side that closes as before the store.
+func writeTeamRepoOwnershipEvidence(ctx context.Context, conn driver.Conn, orgID string, now time.Time, writes []teamRepoOwnershipEvidenceWrite) error {
 	if len(writes) == 0 {
 		return nil
 	}
@@ -498,7 +500,7 @@ func writeTeamRepoOwnershipEvidence(ctx context.Context, conn driver.Conn, orgID
 		return err
 	}
 	defer releaseTeamRepoOwnershipBatch(ctx, orgID, batch)
-	seenAt := time.Now().UTC().Truncate(time.Millisecond)
+	seenAt := now.UTC().Truncate(time.Millisecond)
 	for _, write := range writes {
 		deleted := uint8(0)
 		if write.deleted {

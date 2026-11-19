@@ -399,7 +399,7 @@ func (service TeamRepoOwnershipDerivationService) derive(ctx context.Context, or
 	for _, row := range append(append([]teamRepoOwnershipActiveRow(nil), closes...), voids...) {
 		closedClaims[inferredClaimOf(row)] = struct{}{}
 	}
-	if err := writeTeamRepoOwnershipEvidence(ctx, service.Conn, orgID,
+	if err := writeTeamRepoOwnershipEvidence(ctx, service.Conn, orgID, now,
 		evidence.upkeep(teamRepoOwnershipDerivedEvidence(derivation.Evidence, repos), closedClaims)); err != nil {
 		return 0, retracted, true, nil, err
 	}

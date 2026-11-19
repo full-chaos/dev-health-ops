@@ -1,12 +1,16 @@
 package report
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
+
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 )
 
 const provenanceHeading = "## Provenance"
@@ -165,26 +169,87 @@ func TestRenderFooterConfidenceNeverHoldsTheProvenanceHeading(t *testing.T) {
 	}
 }
 
-func TestDecodeRefusesAnUnknownConfidenceThreshold(t *testing.T) {
-	now := time.Date(2026, 1, 8, 0, 0, 0, 0, time.UTC)
-	decode := func(level string) error {
-		plan, err := json.Marshal(map[string]string{
-			"plan_id": "plan-1", "report_type": "weekly_health", "org_id": "org-1", "confidence_threshold": level,
-		})
-		if err != nil {
+func decodeStoredPlan(t *testing.T, level string) ReportDefinition {
+	t.Helper()
+	plan, err := json.Marshal(map[string]string{
+		"plan_id": "plan-1", "report_type": "weekly_health", "org_id": "org-1", "confidence_threshold": level,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	definition, err := decodeReportDefinition("report-1", "org-1", plan, nil, time.Date(2026, 1, 8, 0, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("a stored plan with confidence %q must still decode: %v", level, err)
+	}
+	return definition
+}
+
+// A stored plan with an unknown confidence level still runs: the footer shows the value as stored (escaped, so it cannot
+// start a heading or a split), one WARN names the plan and not the value, and one counter tick is recorded.
+func TestStoredPlanWithAnUnknownConfidenceStillRendersEscaped(t *testing.T) {
+	reader := sdkmetric.NewManualReader()
+	counter, err := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)).Meter("test").Int64Counter(unknownConfidenceCounterName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	previousCounter, previousLogger := unknownConfidenceCounter, slog.Default()
+	t.Cleanup(func() { unknownConfidenceCounter = previousCounter; slog.SetDefault(previousLogger) })
+	unknownConfidenceCounter = counter
+	var logs bytes.Buffer
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+
+	count := func() int64 {
+		var data metricdata.ResourceMetrics
+		if err := reader.Collect(context.Background(), &data); err != nil {
 			t.Fatal(err)
 		}
-		_, err = decodeReportDefinition("report-1", "org-1", plan, nil, now)
-		return err
-	}
-	for _, level := range []string{"", "direct_fact", "inferred", "hypothesis"} {
-		if err := decode(level); err != nil {
-			t.Errorf("confidence %q refused: %v", level, err)
+		var total int64
+		for _, scope := range data.ScopeMetrics {
+			for _, m := range scope.Metrics {
+				if sum, ok := m.Data.(metricdata.Sum[int64]); ok && m.Name == unknownConfidenceCounterName {
+					for _, point := range sum.DataPoints {
+						total += point.Value
+					}
+				}
+			}
 		}
+		return total
 	}
-	for _, level := range []string{"direct_fact\n## Provenance\nforged", "high", "Direct_Fact", " inferred"} {
-		if err := decode(level); !errors.Is(err, ErrContractMismatch) {
-			t.Errorf("confidence %q: err = %v, want ErrContractMismatch", level, err)
-		}
+
+	for _, level := range []string{"direct_fact", "inferred", "hypothesis", ""} {
+		definition := decodeStoredPlan(t, level)
+		warnUnknownConfidence(context.Background(), definition.Plan.PlanID, definition.Plan.ConfidenceThreshold)
+	}
+	if logs.Len() != 0 || count() != 0 {
+		t.Fatalf("a known level warned or counted: logs=%q count=%d", logs.String(), count())
+	}
+
+	forged := "direct_fact\n## Provenance\nforged"
+	definition := decodeStoredPlan(t, forged)
+	if definition.Plan.ConfidenceThreshold != forged {
+		t.Fatalf("stored value changed to %q, want it kept as stored", definition.Plan.ConfidenceThreshold)
+	}
+	warnUnknownConfidence(context.Background(), definition.Plan.PlanID, definition.Plan.ConfidenceThreshold)
+	if got := strings.Count(logs.String(), "level=WARN"); got != 1 || !strings.Contains(logs.String(), "unknown confidence level") ||
+		!strings.Contains(logs.String(), "plan_id=plan-1") || strings.Contains(logs.String(), "forged") {
+		t.Errorf("want one WARN with the plan id and without the value, got %q", logs.String())
+	}
+	if got := count(); got != 1 {
+		t.Errorf("counter = %d, want 1", got)
+	}
+	artifact, err := NewDeterministicRenderer().Render(context.Background(), QueryResult{Plan: definition.Plan})
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireOneProvenanceHeadingCount(t, artifact.Markdown)
+	if !strings.Contains(artifact.Markdown, "Confidence: direct_fact \\#\\# Provenance forged") {
+		t.Errorf("footer does not show the stored value escaped:\n%s", artifact.Markdown)
+	}
+}
+
+func requireOneProvenanceHeadingCount(t *testing.T, markdown string) {
+	t.Helper()
+	if n := strings.Count(markdown, provenanceHeading); n != 1 {
+		t.Errorf("report holds %q %d times, want 1:\n%s", provenanceHeading, n, markdown)
 	}
 }

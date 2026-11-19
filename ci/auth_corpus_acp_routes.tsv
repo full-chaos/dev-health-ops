@@ -1,5 +1,5 @@
-# The go-api routes of each AUTH_PROXY_* aggregate (internal/apiservice/authproxy.go sessionProxyRoutes and
-# routeProxyRoutes; TestAuthCorpusAcpRoutesAreTheProxyMap keeps the two equal). Leg acp of ci/auth_corpus_external.sh
+# The go-api routes of each AUTH_PROXY_* aggregate (internal/apiservice/authproxy.go sessionProxyRoutes,
+# routeProxyRoutes and oauthPairProxyRoutes; TestAuthCorpusAcpRoutesAreTheProxyMap keeps the two equal). Leg acp of ci/auth_corpus_external.sh
 # turns an aggregate's flag on only when auth-service serves every route of it, read from the running auth-service.
 # aggregate<TAB>method<TAB>pattern
 sessions	POST	/api/v1/auth/refresh
@@ -16,6 +16,9 @@ credentials	POST	/api/v1/auth/change-password
 social	POST	/api/v1/auth/social-login
 oidc	POST	/api/v1/auth/oidc/{provider_id}/authorize
 oidc	POST	/api/v1/auth/oidc/{provider_id}/callback
+oidc	POST	/api/v1/auth/oauth/{provider_id}/authorize
+oidc	GET	/api/v1/auth/oauth/{provider_id}/authorize
+oidc	POST	/api/v1/auth/oauth/{provider_id}/callback
 saml	GET	/api/v1/auth/saml/{provider_id}/metadata
 saml	POST	/api/v1/auth/saml/{provider_id}/initiate
 saml	POST	/api/v1/auth/saml/{provider_id}/acs

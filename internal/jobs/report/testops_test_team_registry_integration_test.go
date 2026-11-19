@@ -19,6 +19,11 @@ type testopsTestRow struct {
 func (r testopsTestRow) distinct() float64   { return r.passed + r.failed + r.skipped + r.quarantined }
 func (r testopsTestRow) flakeCases() float64 { return math.Round(r.flake * r.distinct()) }
 
+// failedNames is the row's distinct failed names (10 per failed case here) and recurrentNames those that also failed before
+// (the stored recurrence score of those names).
+func (r testopsTestRow) failedNames() float64    { return 10 * r.failed }
+func (r testopsTestRow) recurrentNames() float64 { return math.Round(r.recurrence * r.failedNames()) }
+
 func (e *pooledEnv) insertTestopsTestRow(org, repo, storedTeam string, row testopsTestRow) {
 	e.t.Helper()
 	var team any
@@ -27,25 +32,25 @@ func (e *pooledEnv) insertTestopsTestRow(org, repo, storedTeam string, row testo
 	}
 	e.exec(`INSERT INTO testops_test_metrics_daily (repo_id, day, total_cases, passed_count, failed_count, skipped_count, quarantined_count,
     pass_rate, failure_rate, flake_rate, retry_dependency_rate, total_suites, failure_recurrence_score, team_id, service_id, org_id, computed_at,
-    flake_cases, distinct_cases)
-VALUES (?, '2026-01-02', ?, ?, ?, ?, ?, 0.5, 0.5, ?, ?, ?, ?, ?, NULL, ?, '2026-01-02 23:00:00', ?, ?)`,
+    flake_cases, distinct_cases, recurrent_failed_names, distinct_failed_names)
+VALUES (?, '2026-01-02', ?, ?, ?, ?, ?, 0.5, 0.5, ?, ?, ?, ?, ?, NULL, ?, '2026-01-02 23:00:00', ?, ?, ?, ?)`,
 		repo, uint32(row.passed+row.failed+row.skipped), uint32(row.passed), uint32(row.failed), uint32(row.skipped), uint32(row.quarantined),
-		row.flake, row.retry, uint32(row.suites), row.recurrence, team, org, uint32(row.flakeCases()), uint32(row.distinct()))
+		row.flake, row.retry, uint32(row.suites), row.recurrence, team, org, uint32(row.flakeCases()), uint32(row.distinct()),
+		uint32(row.recurrentNames()), uint32(row.failedNames()))
 }
 
 // testopsTestWant is the value of a bucket of rows, or false for no point: counts are sums, pass_rate is the summed passed
 // over the summed passed and failed cases, flake_rate is the summed flake cases over the summed distinct cases,
 // retry_dependency_rate the summed retry-dependent cases (rate times distinct cases) over the same, and
-// failure_recurrence_score is still the mean of the stored repository-day values.
+// failure_recurrence_score the summed recurrent failed names over the summed distinct failed names (no point at 0).
 func testopsTestWant(metric string, rows []testopsTestRow) (float64, bool) {
 	var sum testopsTestRow
-	var flakeCases, retryCases, distinct float64
+	var flakeCases, retryCases, distinct, recurrentNames, failedNames float64
 	for _, row := range rows {
 		flakeCases, retryCases, distinct = flakeCases+row.flakeCases(), retryCases+row.retry*row.distinct(), distinct+row.distinct()
+		recurrentNames, failedNames = recurrentNames+row.recurrentNames(), failedNames+row.failedNames()
 		sum.passed, sum.failed, sum.skipped, sum.quarantined, sum.suites = sum.passed+row.passed, sum.failed+row.failed, sum.skipped+row.skipped, sum.quarantined+row.quarantined, sum.suites+row.suites
-		sum.flake, sum.retry, sum.recurrence = sum.flake+row.flake, sum.retry+row.retry, sum.recurrence+row.recurrence
 	}
-	n := float64(len(rows))
 	switch metric {
 	case "passed_count":
 		return sum.passed, true
@@ -74,7 +79,10 @@ func testopsTestWant(metric string, rows []testopsTestRow) (float64, bool) {
 	case "retry_dependency_rate":
 		return retryCases / distinct, true
 	default:
-		return sum.recurrence / n, true
+		if failedNames == 0 {
+			return 0, false
+		}
+		return recurrentNames / failedNames, true
 	}
 }
 

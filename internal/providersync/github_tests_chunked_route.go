@@ -271,6 +271,11 @@ func appendGitHubTestsSkippedArtifact(
 	// whether or not it fits the bounded sample below (codex review gate
 	// round 2, P1 -- see githubTestsChunkCursor.SkippedArtifactCauseCount).
 	causeCount = markGitHubTestsSkippedArtifactCauseCount(causeCount, record.Cause)
+	// One marker per (run, artifact, cause): a second skip of the same artifact and cause (another member of it, or a
+	// replayed read) is already located by the first marker, and a duplicate would push other artifacts out of the sample.
+	if githubTestsSkippedMarkerRecorded(records, record.RunID, record.ArtifactID, record.Cause) {
+		return records, overflow, causeOverflow, causeCount
+	}
 	if len(records) >= githubTestsMaxSkippedArtifactRecords {
 		return records, overflow + 1, markGitHubTestsSkippedArtifactCauseOverflow(causeOverflow, record.Cause), causeCount
 	}
@@ -2007,8 +2012,17 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 					// not fit is skipped whole with a marker and the walk goes on, so the order GitHub lists the artifacts in never
 					// decides which one survives. Each cause is recorded once per run, a marker once per skipped artifact.
 					var parsedReports []githubTestsParsedReport
-					// Guard skips of a replayed artifact are not counted again in the unit, but they are still this run's losses.
+					// Skips of a replayed artifact are not counted again in the unit, but they are still this run's losses.
 					var replayedRunLosses []string
+					// A deterministic whole-artifact skip whose marker is in the sample is a replay: not counted again, but still a
+					// loss of this run (CHAOS-14223). artifact_unavailable is not deduplicated: a later look can read the artifact.
+					replayedSkip := func(artifact githubTestsArtifactPayload, cause string) bool {
+						if !githubTestsSkippedMarkerRecorded(cursor.SkippedArtifacts, pipeline.RunID, string(artifact.ID), cause) {
+							return false
+						}
+						replayedRunLosses = append(replayedRunLosses, cause)
+						return true
+					}
 					heldRows := 0
 					reportRowsTruncated := false
 					skipReportOverBound := func(artifact githubTestsArtifactPayload) {
@@ -2113,6 +2127,9 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 							// skips still visible to the gate (3 corrupt + 2
 							// oversized -> 3/3, not 3/5).
 							if errors.Is(downloadErr, ErrGitHubTestsArtifactOversized) {
+								if replayedSkip(artifact, githubTestsArtifactOversizedCause) {
+									continue
+								}
 								cursor.Incomplete = recordGitHubTestsSkippedArtifact(
 									cursor.Incomplete, client, claim, cursor.Repo, pipeline.RunID,
 									githubTestsArtifactOversizedCause,
@@ -2197,6 +2214,10 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 							// bodies for every artifact would otherwise
 							// finalize the unit as healthy with zero report
 							// rows (CHAOS-4185 codex round 2).
+							if replayedSkip(artifact, githubTestsUnreadableArchiveCause) {
+								cursor.ArchivesUnreadable = bumpGitHubTestsArchiveCounter(cursor.ArchivesUnreadable)
+								continue
+							}
 							cursor.Incomplete = recordGitHubTestsSkippedArtifact(
 								cursor.Incomplete, client, claim, cursor.Repo, pipeline.RunID,
 								githubTestsUnreadableArchiveCause,
@@ -2222,6 +2243,10 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 							// keep walking: one bad artifact must not cost the
 							// healthy ones or the whole unit (CHAOS-4177).
 							if errors.Is(parseErr, ErrGitHubTestsArchiveUnreadable) {
+								if replayedSkip(artifact, githubTestsUnreadableArchiveCause) {
+									cursor.ArchivesUnreadable = bumpGitHubTestsArchiveCounter(cursor.ArchivesUnreadable)
+									continue
+								}
 								cursor.Incomplete = recordGitHubTestsSkippedArtifact(
 									cursor.Incomplete, client, claim, cursor.Repo, pipeline.RunID,
 									githubTestsUnreadableArchiveCause,
@@ -2241,12 +2266,12 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 							}
 							return fmt.Errorf("%w: artifact parse failed: %v", ErrGitHubTestsIncomplete, parseErr)
 						}
-						// A resumed walk can re-anchor and read this artifact again. The size-guard skips are deterministic, so a (run,
+						// A resumed walk can re-anchor and read this artifact again. The member skips are deterministic, so a (run,
 						// artifact, cause) already in the marker sample is a replay: its contribution is dropped, not counted twice
-						// (CHAOS-14030).
-						var replayedGuard []string
-						rows, replayedGuard = rows.withoutReplayedMemberGuardSkips(cursor.SkippedArtifacts, pipeline.RunID, string(artifact.ID))
-						replayedRunLosses = append(replayedRunLosses, replayedGuard...)
+						// (CHAOS-14030, CHAOS-14223).
+						var replayedMember []string
+						rows, replayedMember = rows.withoutReplayedMemberSkips(cursor.SkippedArtifacts, pipeline.RunID, string(artifact.ID))
+						replayedRunLosses = append(replayedRunLosses, replayedMember...)
 						reportIncomplete, optional := rows.optionalIncomplete()
 						if !optional {
 							return fmt.Errorf("%w: reports skipped=%d: unsafe archive bounds", ErrGitHubTestsIncomplete, rows.Skipped)
@@ -2291,7 +2316,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 						// Hold the parsed rows until the run is decided; an artifact that would take the held rows past
 						// githubTestsMaxHeldReportRowsPerRun is skipped whole before it is held.
 						held := githubTestsParsedReport{ID: artifact.ID, Name: artifact.Name, Suites: rows.Suites, Cases: rows.Cases, Coverage: rows.Coverage, Reports: rows.ReportsRead}
-						if held.Reports == 0 && len(rows.SkippedArtifacts) == 0 && len(reportIncomplete) == 0 && len(replayedGuard) == 0 {
+						if held.Reports == 0 && len(rows.SkippedArtifacts) == 0 && len(reportIncomplete) == 0 && len(replayedMember) == 0 {
 							nonReportArchives++ // read whole and held no report: not a report source of the run (CHAOS-13826)
 						}
 						if heldRows+held.rows() > githubTestsMaxHeldReportRowsPerRun {

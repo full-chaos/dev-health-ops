@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/llmbudget"
+	"github.com/full-chaos/dev-health-ops/internal/llmorgsettings"
 )
 
 func TestOperatorMaximumMicroUSD(t *testing.T) {
@@ -78,8 +79,10 @@ func TestApplyLLMSettingsRefusesABYOProviderWithoutAModel(t *testing.T) {
 	} {
 		in.requireModel = true
 		h := &handlers{
-			validateURL: func(context.Context, string) (bool, string, error) { return true, "", nil },
-			storedKey:   func(context.Context, string) (string, error) { return "", nil },
+			validateURL:        func(context.Context, string) (bool, string, error) { return true, "", nil },
+			storedKey:          func(context.Context, string) (string, error) { return "", nil },
+			storedPurposeKey:   func(context.Context, string, llmorgsettings.Purpose) (string, error) { return "", nil },
+			storedScopeBaseURL: func(context.Context, string, llmorgsettings.Purpose) (string, error) { return "", nil },
 		}
 		out, refusal, err := h.applyLLMSettings(context.Background(), "org", in)
 		if err != nil || out != nil || refusal == nil || refusal.status != 400 {
@@ -118,8 +121,10 @@ func TestByoProviderNeedsModel(t *testing.T) {
 
 func TestApplyLLMSettingsChecksTheBaseURLBeforeTheModel(t *testing.T) {
 	h := &handlers{
-		validateURL: func(context.Context, string) (bool, string, error) { return false, "bad host", nil },
-		storedKey:   func(context.Context, string) (string, error) { return "", nil },
+		validateURL:        func(context.Context, string) (bool, string, error) { return false, "bad host", nil },
+		storedKey:          func(context.Context, string) (string, error) { return "", nil },
+		storedPurposeKey:   func(context.Context, string, llmorgsettings.Purpose) (string, error) { return "", nil },
+		storedScopeBaseURL: func(context.Context, string, llmorgsettings.Purpose) (string, error) { return "", nil },
 	}
 	_, refusal, err := h.applyLLMSettings(context.Background(), "org", llmUpsert{provider: "openai", baseURL: strPtr("http://x.invalid"), requireModel: true})
 	if err != nil || refusal == nil || refusal.status != 400 || refusal.message() != "bad host" {

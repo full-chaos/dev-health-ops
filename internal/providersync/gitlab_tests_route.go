@@ -175,7 +175,7 @@ func (handler GitLabTestsRouteHandler) Collect(
 	for _, raw := range adapterPage.Items {
 		payload, err := decodeGitLabTestsPipeline(raw)
 		if err != nil {
-			return CompleteRouteBatch{}, err
+			return CompleteRouteBatch{}, providerfoundation.RouteFailure(gitlabPipelinesRoute, providerfoundation.ReasonBodyDecode, err)
 		}
 		if stringValue(payload.ID) == "" {
 			return CompleteRouteBatch{}, providerfoundation.ErrNormalizationInvalid
@@ -219,7 +219,7 @@ func (handler GitLabTestsRouteHandler) Collect(
 		for _, jobRaw := range jobPage.Items {
 			job, err := decodeGitLabTestsJob(jobRaw)
 			if err != nil {
-				return CompleteRouteBatch{}, err
+				return CompleteRouteBatch{}, providerfoundation.RouteFailure(gitlabPipelineJobsRoute, providerfoundation.ReasonBodyDecode, err)
 			}
 			row, ok := normalizeGitLabTestsJob(claim, repoID, pipeline.RunID, job, normalizedAt)
 			if !ok {
@@ -437,7 +437,7 @@ func selectGitLabTestsReportPipelines(
 		}
 		payload, err := decodeGitLabTestsPipeline(raw)
 		if err != nil {
-			return nil, err
+			return nil, providerfoundation.RouteFailure(gitlabPipelinesRoute, providerfoundation.ReasonBodyDecode, err)
 		}
 		if stringValue(payload.ID) == "" {
 			return nil, providerfoundation.ErrNormalizationInvalid
@@ -468,7 +468,7 @@ func selectGitLabTestsArtifactJobs(rawItems []json.RawMessage, maxArtifacts int)
 		}
 		job, err := decodeGitLabTestsJob(raw)
 		if err != nil {
-			return nil, err
+			return nil, providerfoundation.RouteFailure(gitlabPipelineJobsRoute, providerfoundation.ReasonBodyDecode, err)
 		}
 		if !gitLabTestsJobHasArtifacts(job) || gitLabTestsJobRetried(job) {
 			continue
@@ -488,7 +488,7 @@ func gitLabTestsQualifyingArtifactJobs(rawItems []json.RawMessage) (int, error) 
 	for _, raw := range rawItems {
 		job, err := decodeGitLabTestsJob(raw)
 		if err != nil {
-			return 0, err
+			return 0, providerfoundation.RouteFailure(gitlabPipelineJobsRoute, providerfoundation.ReasonBodyDecode, err)
 		}
 		if gitLabTestsJobHasArtifacts(job) && !gitLabTestsJobRetried(job) {
 			qualifying++

@@ -56,10 +56,15 @@ func TestRealClickHouse_CoverageBaselines(t *testing.T) {
 			t.Fatalf("seed: %v\n%s", err, statement)
 		}
 	}
+	// A line value p is stored with its counts, p of 100 lines; a NULL line value has no counts.
 	coverage := func(o, repo string, day time.Time, line, branch any, computed time.Time) {
+		var covered, total any
+		if p, ok := line.(float64); ok {
+			covered, total = uint32(p), uint32(100)
+		}
 		exec(`INSERT INTO testops_coverage_metrics_daily
-			(repo_id, day, line_coverage_pct, branch_coverage_pct, uncovered_files_count, coverage_regression_count, org_id, computed_at)
-			VALUES (?, ?, ?, ?, 0, 0, ?, ?)`, repo, day, line, branch, o, computed)
+			(repo_id, day, line_coverage_pct, lines_covered, lines_total, branch_coverage_pct, uncovered_files_count, coverage_regression_count, org_id, computed_at)
+			VALUES (?, ?, ?, ?, ?, ?, 0, 0, ?, ?)`, repo, day, line, covered, total, branch, o, computed)
 	}
 	exec(`INSERT INTO repos (id, repo, provider, org_id, created_at, last_synced) VALUES (?, ?, ?, ?, ?, ?)`, repoA, "acme/alpha", "github", org, older, older)
 	exec(`INSERT INTO repos (id, repo, provider, org_id, created_at, last_synced) VALUES (?, ?, ?, ?, ?, ?)`, repoB, "acme/beta", "gitlab", org, older, older)

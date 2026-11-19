@@ -273,3 +273,60 @@ func TestDeletedInstallationLogsCommitFailureWhenNoCredentialMatched(t *testing.
 		t.Fatalf("want one commit-failure error line and no success line, got:\n%s", logs.String())
 	}
 }
+
+// CHAOS-9590: the Info line after the commit tells a real deactivation from a
+// deleted installation whose organization has no github-app credential row.
+func TestDeletedInstallationLogsWhetherACredentialWasDeactivated(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		withCredential bool
+		want           string
+		notWant        string
+	}{
+		{
+			name:           "credential row matched",
+			withCredential: true,
+			want:           `msg="github app installation deleted: credential deactivated" installation_id=996 rows_deactivated=1`,
+			notWant:        "no github-app credential matched",
+		},
+		{
+			name:    "no credential row",
+			want:    `msg="github app installation deleted: no github-app credential matched, nothing deactivated" installation_id=996`,
+			notWant: "credential deactivated",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+			defer cancel()
+			admin, domain, _ := startSyncDispatchDatabase(ctx, t)
+			store := &PostgresStore{pool: domain}
+			statements := []string{
+				`INSERT INTO public.github_app_installations (id, installation_id, org_id, created_at, updated_at)
+					VALUES (gen_random_uuid(), 996, 'org-1', now(), now())`,
+			}
+			if tc.withCredential {
+				statements = append(statements,
+					`INSERT INTO public.integration_credentials (id, org_id, provider, name, is_active, created_at, updated_at)
+						VALUES (gen_random_uuid(), 'org-1', 'github', 'github-app', TRUE, now(), now())`)
+			}
+			for _, statement := range statements {
+				if _, err := admin.Exec(ctx, statement); err != nil {
+					t.Fatalf("%s: %v", statement, err)
+				}
+			}
+
+			var logs bytes.Buffer
+			previous := slog.Default()
+			slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+			t.Cleanup(func() { slog.SetDefault(previous) })
+
+			if _, err := store.UpsertGithubAppEvent(ctx, "installation",
+				[]byte(`{"action":"deleted","installation":{"id":996}}`), time.Now().UTC()); err != nil {
+				t.Fatalf("deleted installation event: %v", err)
+			}
+			if !strings.Contains(logs.String(), tc.want) || strings.Contains(logs.String(), tc.notWant) {
+				t.Fatalf("want a line with %q and none with %q, got:\n%s", tc.want, tc.notWant, logs.String())
+			}
+		})
+	}
+}

@@ -58,6 +58,9 @@ func TestBaselinesPoolTheLineCounts(t *testing.T) {
 			t.Fatalf("seed: %v\n%s", err, statement)
 		}
 	}
+	// The table is a ReplacingMergeTree: a background merge could drop the older versions before the read, and the
+	// version cells (older counted row under a newer row without counts) would then pin nothing.
+	exec(`SYSTEM STOP MERGES testops_coverage_metrics_daily`)
 	for repo, name := range map[string]string{repoA: "acme/alpha", repoB: "acme/beta", repoC: "acme/gamma"} {
 		exec(`INSERT INTO repos (id, repo, provider, org_id, created_at, last_synced) VALUES (?, ?, 'github', ?, ?, ?)`, repo, name, org, older, older)
 	}

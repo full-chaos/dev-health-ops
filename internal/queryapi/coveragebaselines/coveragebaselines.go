@@ -8,8 +8,9 @@
 // It is Go-only: no Python resolver exists for it.
 //
 // Computed in ClickHouse in one grouped statement over
-// testops_coverage_metrics_daily (one row per org, repository and day; a plain
-// MergeTree, so the newest version of a day is chosen here by computed_at).
+// testops_coverage_metrics_daily (one row per org, repository and day; a
+// ReplacingMergeTree whose merges are eventual, so the newest version of a day
+// is chosen here by computed_at).
 //
 // A baseline needs MinDays days with a value inside the 30. With fewer, the
 // mean of one or two days is the current value under another name, and a

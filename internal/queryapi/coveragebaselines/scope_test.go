@@ -115,8 +115,8 @@ func TestResolveScope_ReadsTheSameRowsAsThePerRepositoryBaseline(t *testing.T) {
 	}
 }
 
-// The value of a day is the mean over the repositories; the baseline is the mean
-// over the days. The text pins the three levels and their order; the values are
+// The line value of a day is the mean over the repositories and the line baseline the mean
+// over the days; the branch baseline is one pooled ratio over every counted repository-day. The text pins the three levels and their order; the values are
 // pinned on a real ClickHouse (scope_integration_test.go).
 func TestScopeStatement_IsTheMeanOfTheDayValuesNotOfTheRepositories(t *testing.T) {
 	client := &fakeClient{}
@@ -127,12 +127,14 @@ func TestScopeStatement_IsTheMeanOfTheDayValuesNotOfTheRepositories(t *testing.T
 	order := []string{
 		"avg(d.day_line_pct) AS line_mean",
 		"countIf(d.day_line_pct IS NOT NULL) AS line_days",
-		"avg(d.day_branch_pct) AS branch_mean",
-		"countIf(d.day_branch_pct IS NOT NULL) AS branch_days",
+		"sum(d.day_branch_num) / nullIf(sum(d.day_branch_den), 0) AS branch_mean",
+		"countIf(d.day_branch_den > 0) AS branch_days",
 		"avg(b.line_pct) AS day_line_pct",
-		"avg(b.branch_pct) AS day_branch_pct",
+		"sumIf(100 * b.branches_covered, " + branchCounted + ") AS day_branch_num",
+		"sumIf(b.branches_total, " + branchCounted + ") AS day_branch_den",
 		"(argMax(tuple(line_coverage_pct), computed_at)).1 AS line_pct",
-		"(argMax(tuple(branch_coverage_pct), computed_at)).1 AS branch_pct",
+		"(argMax(tuple(branches_total), computed_at)).1 AS branches_total",
+		"(argMax(tuple(branches_covered), computed_at)).1 AS branches_covered",
 		"GROUP BY repo_id, day",
 		"GROUP BY b.day",
 	}

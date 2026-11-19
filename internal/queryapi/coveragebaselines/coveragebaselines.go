@@ -78,7 +78,8 @@ func newestPerRepoDay(scopeFilter string) string {
                 repo_id,
                 day,
                 (argMax(tuple(line_coverage_pct), computed_at)).1 AS line_pct,
-                (argMax(tuple(branch_coverage_pct), computed_at)).1 AS branch_pct
+                (argMax(tuple(branches_total), computed_at)).1 AS branches_total,
+                (argMax(tuple(branches_covered), computed_at)).1 AS branches_covered
             FROM testops_coverage_metrics_daily
             WHERE org_id = {org_id:String}
               AND day >= {start_day:Date}
@@ -87,9 +88,20 @@ func newestPerRepoDay(scopeFilter string) string {
             HAVING ` + liverow.NewestPredicate("testops_coverage_metrics_daily", "")
 }
 
-// statement reads, per repository, the mean of each measure over the window and
-// the number of days that hold a value. avg() over a Nullable column leaves the
-// NULL days out and is NULL when no day holds a value.
+// The branch baseline is the branches covered over the branches total of the
+// counted repository-days of the window (as the benchmarking and analytics
+// branch coverage), never the mean of the stored percents. A repository-day
+// with a NULL count, or with no branches, is in neither sum and is not a day
+// with a value; a window of only such days has no value.
+const (
+	branchCounted = "b.branches_covered IS NOT NULL AND b.branches_total IS NOT NULL AND b.branches_total > 0"
+	branchPooled  = "sumIf(100 * b.branches_covered, " + branchCounted + ") / nullIf(sumIf(b.branches_total, " + branchCounted + "), 0)"
+)
+
+// statement reads, per repository, the mean line coverage over the window and
+// the pooled branch coverage, each with the number of days that hold a value.
+// avg() over a Nullable column leaves the NULL days out and is NULL when no day
+// holds a value.
 func statement(scopeFilter string) string {
 	return `
         SELECT
@@ -97,8 +109,8 @@ func statement(scopeFilter string) string {
             nullIf(r.repo, '') AS repo_name,
             avg(b.line_pct) AS line_mean,
             countIf(b.line_pct IS NOT NULL) AS line_days,
-            avg(b.branch_pct) AS branch_mean,
-            countIf(b.branch_pct IS NOT NULL) AS branch_days
+            ` + branchPooled + ` AS branch_mean,
+            countIf(` + branchCounted + `) AS branch_days
         FROM (` + newestPerRepoDay(scopeFilter) + `
         ) AS b
         LEFT JOIN (

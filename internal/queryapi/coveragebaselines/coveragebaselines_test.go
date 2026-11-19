@@ -175,9 +175,10 @@ func TestResolve_BindsTheOrgAndTheThirtyDaysBeforeTheEndDay(t *testing.T) {
 	for _, text := range []string{
 		"AND day >= {start_day:Date}", "AND day < {end_day:Date}",
 		"(argMax(tuple(line_coverage_pct), computed_at)).1 AS line_pct",
-		"(argMax(tuple(branch_coverage_pct), computed_at)).1 AS branch_pct",
+		"(argMax(tuple(branches_total), computed_at)).1 AS branches_total",
+		"(argMax(tuple(branches_covered), computed_at)).1 AS branches_covered",
 		"GROUP BY repo_id, day", "avg(b.line_pct) AS line_mean", "countIf(b.line_pct IS NOT NULL) AS line_days",
-		"avg(b.branch_pct) AS branch_mean", "countIf(b.branch_pct IS NOT NULL) AS branch_days", "ORDER BY repo_id",
+		"AS branch_mean", "countIf(" + branchCounted + ") AS branch_days", branchPooled, "ORDER BY repo_id",
 	} {
 		if !strings.Contains(client.statement, text) {
 			t.Errorf("the statement lacks %q", text)

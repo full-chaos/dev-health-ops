@@ -61,9 +61,14 @@ func TestRealClickHouse_CoverageScopeBaseline(t *testing.T) {
 		}
 	}
 	coverage := func(o, repo string, day time.Time, line, branch any, computed time.Time) {
+		// A stored branch percent carries the counts of a 100-branch repository-day.
+		var total, covered any
+		if pct, ok := branch.(float64); ok {
+			total, covered = uint32(100), uint32(pct)
+		}
 		exec(`INSERT INTO testops_coverage_metrics_daily
-			(repo_id, day, line_coverage_pct, branch_coverage_pct, uncovered_files_count, coverage_regression_count, org_id, computed_at)
-			VALUES (?, ?, ?, ?, 0, 0, ?, ?)`, repo, day, line, branch, o, computed)
+			(repo_id, day, line_coverage_pct, branch_coverage_pct, branches_total, branches_covered, uncovered_files_count, coverage_regression_count, org_id, computed_at)
+			VALUES (?, ?, ?, ?, ?, ?, 0, 0, ?, ?)`, repo, day, line, branch, total, covered, o, computed)
 	}
 	exec(`INSERT INTO repos (id, repo, provider, org_id, created_at, last_synced) VALUES (?, ?, ?, ?, ?, ?)`, repoA, "acme/alpha", "github", org, older, older)
 	exec(`INSERT INTO repos (id, repo, provider, org_id, created_at, last_synced) VALUES (?, ?, ?, ?, ?, ?)`, repoB, "acme/beta", "gitlab", org, older, older)

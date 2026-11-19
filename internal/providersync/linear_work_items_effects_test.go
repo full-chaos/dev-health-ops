@@ -212,8 +212,8 @@ func TestLinearDirectAdaptersFenceTenantAndMirrorSinkColumnOwnership(t *testing.
 		containsColumn(linearWorkItemsInsert, "due_at") {
 		t.Fatal("work_items adapter writes columns the Python sink does not own")
 	}
-	if containsColumn(linearWorkItemTransitionsInsert, "provider") {
-		t.Fatal("transition adapter writes provider, which the Python sink omits")
+	if !containsColumn(linearWorkItemTransitionsInsert, "provider") || containsColumn(linearWorkItemTransitionsSelect, "provider") {
+		t.Fatal("transition adapter must write provider, and the readback must not compare it (rows stored before hold an empty provider)")
 	}
 	for destination, query := range map[string]string{
 		"work_items":            linearWorkItemsSelect,

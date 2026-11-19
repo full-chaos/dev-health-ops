@@ -29,7 +29,7 @@ func TestWriteTestopsTestMetricsWritesAZeroCountPairForAnUnknownFlakeDay(t *test
 			t.Fatal(err)
 		}
 		row := conn.batch.appended[0]
-		flake, distinct := row[len(row)-8].(*uint32), row[len(row)-7].(*uint32)
+		flake, distinct := row[len(row)-10].(*uint32), row[len(row)-9].(*uint32)
 		if flake == nil || distinct == nil {
 			t.Fatalf("%s: pair = %v/%v, want both non-NULL (a NULL pair blanks the org series)", name, flake, distinct)
 		}

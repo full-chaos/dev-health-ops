@@ -478,6 +478,7 @@ internal/jobs/metrics/prrework	readers_census_test.go
 internal/jobs/metrics/remaining	capacity_native_test.go
 internal/jobs/metrics/remaining	capacity_schema_contract_pin_test.go
 internal/jobs/metrics/remaining	membership_golden_test.go
+internal/jobs/metrics/remaining	recommendations_gini_team_scope_test.go
 internal/jobs/metrics/remaining	recorded_paths_test.go
 internal/jobs/report	chart_fallback_test.go
 internal/jobs/report	cicd_pooled_test.go

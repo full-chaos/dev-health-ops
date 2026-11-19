@@ -394,6 +394,17 @@ func (facts matrixFacts) projectKeyHolders(projectID, provider string) map[strin
 	return providerless
 }
 
+// adminKeyHeld reports whether an active admin team (a team with no provider) of the organization holds a project id
+// as a project key.
+func (facts matrixFacts) adminKeyHeld(projectID string) bool {
+	for _, team := range facts.teams {
+		if team.Active && team.Provider == "" && projectID != "" && slices.Contains(team.ProjectKeys, projectID) {
+			return true
+		}
+	}
+	return false
+}
+
 // linkedRepoOwnersAt is the owner set, at an instant, of the repositories of an issue's linked pull requests of
 // its best tier (native > explicit_text > heuristic): each repository's owners by its own rows.
 func (facts matrixFacts) linkedRepoOwnersAt(issueID string, at time.Time) map[string]bool {
@@ -966,22 +977,20 @@ var matrixChecks = map[string]matrixCheck{
 	}},
 	"full_tie_owners_are_all_main": {"pull_requests", checkFullTieOwners},
 	"pull_request_admin_key_never_outranks_its_repository_owner": {"pull_requests", func(f matrixFacts, p string, _ ownerReaders) (r checkResult) {
-		// A manual mapping never outranks a native fact: an admin team (no provider) whose project key names a pull
-		// request's project id must not take the pull request above the owner of its repository.
+		// A manual mapping never outranks a native fact: a pull request whose project id an admin team (no provider)
+		// holds as a project key, and whose repository has owners on its day, takes one of those owners as its primary.
+		// The subjects are chosen by that input, never by the row the cascade wrote.
 		for id, item := range f.items {
-			if item.Provider != p || !isPullRequestItem(item) {
+			if item.Provider != p || !isPullRequestItem(item) || !f.adminKeyHeld(item.ProjectID) {
 				continue
 			}
-			row, ok := f.primary(id)
-			if !ok || row.Source != "issue_project" {
-				continue
-			}
-			if team, known := f.teams[row.TeamID]; !known || team.Provider != "" {
+			owners := f.ownersAt(f.repoOwnerRows(item.RepoID), f.itemDay(item))
+			if len(owners) == 0 {
 				continue
 			}
 			r.Subjects++
-			if owners := f.ownersAt(f.repoOwnerRows(item.RepoID), f.itemDay(item)); len(owners) > 0 {
-				r.Violations = append(r.Violations, fmt.Sprintf("%s -> %s by issue_project (admin key %q) above its repository owners %v", id, row.TeamID, item.ProjectID, sortedTeamSet(owners)))
+			if row, ok := f.primary(id); !ok || !owners[row.TeamID] {
+				r.Violations = append(r.Violations, fmt.Sprintf("%s -> %s by %s (admin key %q) instead of its repository owners %v", id, row.TeamID, row.Source, item.ProjectID, sortedTeamSet(owners)))
 			}
 		}
 		return r

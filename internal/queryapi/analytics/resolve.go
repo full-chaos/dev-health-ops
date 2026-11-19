@@ -227,13 +227,17 @@ func ResolveSelected(ctx context.Context, client QueryClient, orgID string, batc
 	// Index-ordered first-error scan: ALL of timeseries before ANY of
 	// breakdowns, regardless of which index actually failed or when
 	// (analytics.py:597-617's two separate enumerate loops).
+	// A read the client's cancel ended reports the cancel here; the GraphQL
+	// presenter writes no failure chain for it (graphql_error_presenter.go).
 	for i, o := range tsOutcomes {
 		if o.err != nil {
+			reportedAsClientCancel(ctx, o.err, "timeseries", "org_id", orgID, "index", i)
 			return nil, fmt.Errorf("analytics: timeseries[%d]: %w", i, o.err)
 		}
 	}
 	for i, o := range bdOutcomes {
 		if o.err != nil {
+			reportedAsClientCancel(ctx, o.err, "breakdown", "org_id", orgID, "index", i)
 			return nil, fmt.Errorf("analytics: breakdown[%d]: %w", i, o.err)
 		}
 	}

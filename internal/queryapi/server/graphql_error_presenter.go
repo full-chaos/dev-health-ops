@@ -11,6 +11,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/analytics"
 )
 
 const graphQLInternalMessage = "Internal Server Error"
@@ -53,6 +54,9 @@ func safeGraphQLErrorPresenter(label string, observe func(context.Context)) grap
 			chain = append(chain, unwrapped.Error())
 		}
 		requestID := graphQLRequestID(ctx)
+		// The read the client's cancel ended reports the cancel in its own
+		// phase (analytics/clientcancel.go); its chain is not a failure.
+		cancelled := analytics.ClientCancelled(ctx, err)
 		presented := graphql.DefaultErrorPresenter(ctx, err)
 		var client *policy.ClientError
 		switch {
@@ -62,8 +66,14 @@ func safeGraphQLErrorPresenter(label string, observe func(context.Context)) grap
 		default:
 			presented.Message = graphQLInternalMessage
 			presented.Extensions = withRequestID(presented.Extensions, requestID)
+			if cancelled {
+				return withMutationLocation(ctx, presented)
+			}
 			log.Printf("query-api: %s resolver error masked from the client: request_id=%s unwrap chain: %s",
 				label, logSafeRequestID(requestID), truncateForLog(strings.Join(chain, " <- "), maxUnwrapChainLogBytes))
+			return withMutationLocation(ctx, presented)
+		}
+		if cancelled {
 			return withMutationLocation(ctx, presented)
 		}
 		log.Printf("query-api: %s resolver error unwrap chain: request_id=%s %s",

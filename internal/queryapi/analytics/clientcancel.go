@@ -81,3 +81,14 @@ func reportedAsClientCancel(ctx context.Context, err error, phase string, attrs 
 	recordClientCancel(ctx, phase, attrs...)
 	return true
 }
+
+// ClientCancelled is clientCancelled for a caller outside this package.
+func ClientCancelled(ctx context.Context, err error) bool {
+	return clientCancelled(ctx, err)
+}
+
+// ReportedAsClientCancel is reportedAsClientCancel for a caller outside this
+// package that ends a read on err (a REST route, under its own phase).
+func ReportedAsClientCancel(ctx context.Context, err error, phase string, attrs ...any) bool {
+	return reportedAsClientCancel(ctx, err, phase, attrs...)
+}

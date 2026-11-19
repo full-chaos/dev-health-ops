@@ -291,6 +291,31 @@ var (
 		TeamColumn: "team_id", Scope: []string{"repo_id"},
 		Retracted: "retracted", Carried: []KeyColumn{{"team_id", KeyNullableString}, {"service_id", KeyNullableString}},
 	}
+	// The three testops_risk tables hold one row for each (repository, day); the
+	// team and the service of the repository are VALUE columns. A recompute of a
+	// day that gives the family no record for a table (the day's only run moved
+	// to another day, or no run of the day completed) writes no row, so the key
+	// that goes stale is the (repository, day) itself. A measured row can hold 0
+	// in every measure (a confidence of 0, a stability of 0), so the row that
+	// retires the key carries the Retracted marker.
+	TestopsReleaseConfidence = Table{
+		Table: "testops_release_confidence", Family: "testops_risk", DayColumn: "day",
+		Keys:       []KeyColumn{{"repo_id", KeyUUID}},
+		TeamColumn: "team_id", Scope: []string{"repo_id"},
+		Retracted: "retracted", Carried: []KeyColumn{{"team_id", KeyNullableString}, {"service_id", KeyNullableString}},
+	}
+	TestopsQualityDrag = Table{
+		Table: "testops_quality_drag", Family: "testops_risk", DayColumn: "day",
+		Keys:       []KeyColumn{{"repo_id", KeyUUID}},
+		TeamColumn: "team_id", Scope: []string{"repo_id"},
+		Retracted: "retracted", Carried: []KeyColumn{{"team_id", KeyNullableString}, {"service_id", KeyNullableString}},
+	}
+	TestopsPipelineStability = Table{
+		Table: "testops_pipeline_stability", Family: "testops_risk", DayColumn: "day",
+		Keys:       []KeyColumn{{"repo_id", KeyUUID}},
+		TeamColumn: "team_id", Scope: []string{"repo_id"},
+		Retracted: "retracted", Carried: []KeyColumn{{"team_id", KeyNullableString}, {"service_id", KeyNullableString}},
+	}
 	// testops_coverage_metrics_daily holds one row for each (repository, day); the
 	// team and the service of the repository are VALUE columns. A recompute of a
 	// day whose coverage record is gone (the run of the newest snapshot moved to
@@ -333,6 +358,9 @@ func All() []Table {
 		WorkItemUserMetricsDaily,
 		UserMetricsDaily,
 		TestopsTestMetricsDaily,
+		TestopsReleaseConfidence,
+		TestopsQualityDrag,
+		TestopsPipelineStability,
 		TestopsCoverageMetricsDaily,
 	}
 }

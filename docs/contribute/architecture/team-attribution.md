@@ -294,12 +294,13 @@ flowchart TD
 > - a `linked_issue` (5) candidate of an **issue**. Another issue's team is not ownership. A
 >   pull or merge request (`type` `pr` on GitHub, `merge_request` on GitLab) keeps its linked issue's
 >   team: the tree edge pull request → issue → project reaches the owner of the issue's project.
->   The donor of a `linked_issue` row must itself be an **issue**, for every provider, in the cascade and in
->   the donor-change backstop: a donor whose `type` is `pr` (GitHub) or `merge_request` (GitLab), whose `type`
+>   The donor of a `linked_issue` row must itself be an **issue**, for every provider, in the cascade, in
+>   the donor-change backstop and in the `team_repo_ownership` derivation donor walk: a donor whose `type` is `pr` (GitHub) or `merge_request` (GitLab), whose `type`
 >   is empty (a writer gap is never read as an issue), or that has no `work_items` row is refused. A pull
 >   request linked only to another pull request is not an edge of the tree and falls through to the next
 >   source. Each refusal is counted by reason (`pr_kind`, `empty_type`, `unknown`) in the
->   `work_item_attribution.linked_issue_donor_refused` Info log, so a writer that leaves `type` empty shows up.
+>   `work_item_attribution.linked_issue_donor_refused` Info log (the derivation:
+>   `team_repo_ownership_derivation.donor_refused`), so a writer that leaves `type` empty shows up.
 > - a `manual_fallback` (7) candidate of a **`member`** rule (`manual_fallback:member=<id>`). The
 >   rule names a person (the item's assignee). A `repo`, `project` or `issue_key_prefix` rule still
 >   wins when no higher source matched.
@@ -370,6 +371,21 @@ donor row resolving to a `work_items`
 row whose **own team came from a first-class fact (sources 0–3; membership never wins)** — a donor resolved only by
 `author_membership` or `manual_fallback` is NOT a valid donor, so neither a person-shaped author
 signal nor a bare prefix can ever be laundered into rank-5 inheritance (both fall through to 6/7).
+**Which donor a pull or merge request copies (the link tier).** The link of record of a pull or merge request and an
+issue is the `work_graph_issue_pr` row of the pair, with its provenance tier: native over explicit_text over
+heuristic. For a pull or merge request the cascade (`SelectLinkedIssueEdges`, read by `BuildLinkedIssueIndexFromRows`
+and by `donorChangedDependents`) takes its donor in this order: (1) an edge whose (pull request, issue) pair has no
+`work_graph_issue_pr` row is no donor, even when it is the only edge; an `extkey:` edge is resolved to its issue first
+and takes the tier of that pair. (2) Only the edges of the best tier present stay: a pull request with a native link
+takes no donor of a lower tier, and a native donor that gives no usable team (no own row, an inactive team) leaves the
+pull request without a `linked_issue` row, so it goes on to `manual_fallback` (6) and then `unassigned` (7), never to
+a text donor. (3) Among the edges that stay, the lowest donor id, then the relationship, wins. The row's evidence ends
+with `;link_tier=<tier>`. A source that is not a pull or merge request (`ghpr:<repo>#<n>`, `gitlab:<path>!<n>`; a GitLab issue is `gitlab:<path>#<n>`) has no link of record: its edges keep the
+donor id order and the evidence names no tier. Pinned by `TestLinkedIssueDonorNativeBeforeExplicitText`,
+`TestUnusableNativeDonorGivesNoTextDonorRow`, `TestRecordedTextEdgeBeatsUnrecordedEdge`,
+`TestUnrecordedEdgeIsNeverADonor`, `TestExtkeyEdgeTakesThePairTier`, `TestLinkedIssueEvidenceNamesTheTier` and
+`TestDonorChangedDependentsFollowTheLinkTier`.
+
 **The donor's team is its own attribution ROW as of the linked item's day, copied, never resolved again
 (daily partition semantics):** a donor that the same run writes gives the row
 that run computes for it with the facts of the linked item's day (a daily partition's day; the backstop's
@@ -379,7 +395,7 @@ and source, never a resolution of it. A donor with no row of its own gives nothi
 through) until it is attributed; a later run then copies its row. **A later change of the donor's row
 re-derives the items that copy it:** each backstop run reads the stored rows and re-derives an
 item that inherits through an inheritable edge when one of its donors has a primary row newer than the
-item's, and the donor the item would copy now (the cascade's winner over the stored rows: the lowest target id
+item's, and the donor the item would copy now (the cascade's winner over the stored rows: the donors of the best link tier, then the lowest target id
 whose newest primary row is own-sourced and names an active team, with that row's team) differs from the one
 its newest snapshot records: its primary `linked_issue` row, or for an issue the `linked_issue` provenance row (`is_primary = 0`) of the same snapshot (`donorChangedDependents`). An item whose own primary row has a team of its own
 (sources 0–3) outranks `linked_issue`, so its donors' changes trigger nothing. The
@@ -390,7 +406,7 @@ item is newer than every donor row, so the next run finds nothing, and a donor r
 triggers nothing (Info `work_item_attribution.donor_changed_dependents`, `WorkItemAttributionOutcome.DonorChangedDependents`;
 pinned by `TestADonorRowChangeRederivesOnlyTheItemsItChanges`, `TestADonorChangeReadsTheLinkedIssueRowOfTheItemsNewestSnapshot`, `TestAnIssuesLinkedRowFollowsItsDonorsChangedRow` and `TestADonorsChangedRowRederivesTheItemsThatCopyIt`,
 a donor of each of github, gitlab, jira and linear). The row's source must be one of sources 0–3 above. The row's evidence names the donor:
-`linked_issue=<donor_work_item_id>;dependency_type=<rel>;donor_provider=<p>;donor_source=<donor row source>` (the frozen
+`linked_issue=<donor_work_item_id>;dependency_type=<rel>;donor_provider=<p>;donor_source=<donor row source>[;link_tier=<tier>]` (the frozen
 Python oracles wrote `linked_issue=<item id>`, the item's own id; the oracle comparison declares that divergence,
 `pythonLinkedIssueEvidence`). Pinned by `TestALinkedItemCopiesItsDonorsRowOnly`, `TestALinkedItemIsRevisitedOnceItsDonorHasARow`,
 `TestAPullRequestCopiesItsDonorsStoredRow`, `TestALinkedItemCopiesTheTeamOfItsDonorsOwnRow` (real
@@ -1588,7 +1604,7 @@ project (section 0.1): a native team key gives one team.
     `TestTheTeamChurnQuadrantSumsEachRepositoryTimesOwnerShareAndConservesTheOrgChurn`.
   - Known limit: owners whose team is inactive hold a share that no point shows, so the organization's units in a
     repository with an inactive owner are partly in no point.
-- **`user_metrics_daily.team_id` is a membership label, NOT team attribution; ownership-based team answers must not read it.** The row the finalize step writes for a person holds the person's first team membership on the day, else `unassigned`: the git row is always written with `unassigned`, and the IC finalize step puts the membership team over it. Limit: a person who is a member of several teams gets only the FIRST of them, in the rank order of the attribution (primary first, then the more specific, then the lower priority number, the newer row, the team id); the other teams are not in the column. The rank applies after the teams whose newest row is inactive are left out: the next active membership is taken, else `unassigned`. This is the rule of a live row the finalize step writes; a retraction row (the row of zeros of the stale-key rule) carries the `team_id` stored on the row it retracts. The column is a label, never team attribution. A team answer takes its team from repository or project ownership (for a per-person table, through `repo_id` and the owner shares), never from this column. The AI analytics reviewer concentration (`aiReviewLoad`) and the cognitive load reader follow this rule: a team scope is the repositories the team owns (`teamscope.HeldRepoIDs`), and the census `TestNoAIAnalyticsOrCognitiveLoadReaderScopesUserMetricsDailyByTeamID` (`internal/queryapi/aianalytics`) fails on a read of `user_metrics_daily` in those packages that filters `team_id`.
+- **`user_metrics_daily.team_id` is a membership label, NOT team attribution; ownership-based team answers must not read it.** The row the finalize step writes for a person holds the person's first team membership on the day, else `unassigned`: the git row is always written with `unassigned`, and the IC finalize step puts the membership team over it. Limit: a person who is a member of several teams gets only the FIRST of them, in the rank order of the attribution (primary first, then the more specific, then the lower priority number, the newer row, the team id); the other teams are not in the column. The rank applies after the teams whose newest row is inactive are left out: the next active membership is taken, else `unassigned`. This is the rule of a live row the finalize step writes; a retraction row (the row of zeros of the stale-key rule) carries the `team_id` stored on the row it retracts. The column is a label, never team attribution. A team answer takes its team from repository or project ownership (for a per-person table, through `repo_id` and the owner shares), never from this column. The AI analytics reviewer concentration (`aiReviewLoad`) and the cognitive load reader follow this rule: a team scope is the repositories the team owns (`teamscope.HeldRepoIDs`), and the census `TestNoAIAnalyticsOrCognitiveLoadReaderScopesUserMetricsDailyByTeamID` (`internal/queryapi/aianalytics`) fails on a read of `user_metrics_daily` in those packages that filters `team_id`. The recommendations review-concentration rule follows it too: its reviewer Gini reads the reviews given in the repositories the team owns at the window end (`teamownership.OwnedRepoIDs`, the same repositories as its review latency), by anyone, and a co-owned repository counts whole in each owner team. A team that owns no repository has no Gini (no read is made), so the rule does not fire for it. The census `TestNoRecommendationsReaderScopesUserMetricsDailyByTeamID` (`internal/jobs/metrics/remaining`) fails on a read of `user_metrics_daily` in that package that filters `team_id`. The AI report charts of the 32 per-person metrics take the team from the owners of each row's repository at the report run, a co-owned repository whole for each owner (`repositoryOwnedTables` in `internal/jobs/report/pooled.go`); the two work-item metrics, whose rows hold no repository, are not applicable to a team.
 - **The person quadrant reads only that person's own rows.** At the person grain the quadrant resolves the
   person id to the person's identity strings and binds each read (`user_metrics_daily.identity_id`,
   `work_item_user_metrics_daily.user_identity`) to them. There is no membership-team lookup (`identities.team_ids`) and
@@ -2291,6 +2307,10 @@ them is in their readers:
 
 Asserted on real ClickHouse by `TestTestopsTeamSeriesHoldNoSupersededTeam` (the benchmarking reader: the inactive team is no target), `TestTestopsTeamSeriesTakeTheOwnersAtTheRun` (the benchmarking reader takes the owners at the run instant), by `TestTestopsTeamSeriesCoOwnedRepoShowsInFullInBothOwnerSeries`, `TestTestopsTeamSeriesAttributesAWholeWindowToTheOwnersToday` and `TestTestopsTeamSeriesFollowTheOwnershipRules` (the analytics team series, which read the owners at the request), by `TestTestopsPooledP95IsOnePercentileOverThePooledRuns`, `TestTestopsPooledQueueTimeIsTheMeanOfTheQueueSamples` and `TestTestopsPooledTeamReadsTheOwnersAtTheRequest` (the pooled P95 and queue series, a co-owned repository whole for each owner), and by `TestForecastListHoldsNoSupersededTeam`. A new query-api reader that groups or filters one of the three TestOps daily tables by the stored `team_id` fails `TestNoQueryAPIReaderGroupsOrFiltersTestopsDailyByTheStoredTeam`, a source census over the string literals of `internal/queryapi`.
 The acr readers of `capacity_forecasts` and `recommendations_daily` are the acr surface's own.
+The recommendations job evaluates two sets of teams: the teams with a live `work_item_metrics_daily` row of the last
+30 days, and the active teams that own a repository at the end of the evaluation window (`teamownership.OwnersByRepo`,
+the same instant as the owned repositories the loader reads). A team in both sets is evaluated once. So a team that owns
+repositories but has no work items gets its repository rules evaluated.
 
 Limits:
 
@@ -3391,6 +3411,9 @@ exact rules rather than a looser first-donor walk:
   one sync, keeps that issue as its donor. The cascade, the donor-change trigger, the
   donor load and the reverse closure read the same collapse. The frozen Python
   kept the lower type alone, so the blocking link won that tie.
+- the donor must be an **issue** (`teamattribution.LinkedIssueDonorRefusal`, §0.1): a `pr`,
+  `merge_request` or empty-`type` donor, or a target with no `work_items` row, is refused before the
+  tie-break, so it never shadows an issue donor.
 
 ---
 

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"log/slog"
 	"math"
 	"strconv"
@@ -73,7 +74,7 @@ func skipInteractionWithoutID(provider, orgID, workItemID string) {
 	}
 	slog.Warn("providersync.interaction.comment_missing_id",
 		"class", "missing_provider_comment_id", "provider", provider,
-		"org_id", orgID, "work_item_id", workItemID)
+		"org_id", orgID, "work_item_id", logging.ProviderText(workItemID))
 }
 
 // interactionIDFrom reads a provider comment id. Only a string or a number is

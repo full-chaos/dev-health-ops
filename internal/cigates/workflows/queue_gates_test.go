@@ -84,6 +84,14 @@ func otherLabelName(job string) string {
 	return "${{ " + otherLabelRun + " && '" + job + " (other label, not run)' || '" + job + "' }}"
 }
 
+// docker-images.yml has a `labeled` trigger for hotfix-image only: the run of any other label skips the image gate, and
+// the gate's name is an expression for the same reason as live-e2e's (see otherLabelName).
+const hotfixOtherLabelRun = "github.event.action == 'labeled' && github.event.label.name != 'hotfix-image'"
+
+func hotfixOtherLabelName(job string) string {
+	return "${{ " + hotfixOtherLabelRun + " && '" + job + " (other label, not run)' || '" + job + "' }}"
+}
+
 var queueGates = []queueGateSpec{
 	{
 		file:      "live-e2e.yml",
@@ -147,6 +155,7 @@ var queueGates = []queueGateSpec{
 	{
 		file:      "docker-images.yml",
 		job:       "image-queue-gate",
+		name:      hotfixOtherLabelName("image-queue-gate"),
 		condition: "always() && (github.event_name == 'pull_request' || github.event_name == 'merge_group') && (github.event.action != 'labeled' || github.event.label.name == 'hotfix-image')",
 		needs:     []string{"changes", "resolve", "go-build", "go-api-tools-build", "go-build-dho-arm64"},
 		env: map[string]string{
@@ -472,6 +481,59 @@ func TestLiveE2ELabeledTriggerPlantedDefects(t *testing.T) {
 	}
 }
 
+func TestImageQueueGateNameOnOtherLabelRun(t *testing.T) {
+	root := repoRoot(t)
+	const dock = ".github/workflows/docker-images.yml"
+	expectNoViolations(t, imageGateNameViolations(t, root))
+	expectViolation(t, imageGateNameViolations(t, plantTree(t, root, []string{dock}, mutation{dock, "    name: ${{ github.event.action == 'labeled' && github.event.label.name != 'hotfix-image' && 'image-queue-gate (other label, not run)' || 'image-queue-gate' }}\n", "    name: image-queue-gate\n"})), "image-queue-gate", "real name")
+}
+
+// imageGateNameViolations: a job skipped by `if:` posts a passing check, so on another label's run the gate must not
+// render its required name; on every other run it must render exactly that name.
+func imageGateNameViolations(t *testing.T, root string) []string {
+	t.Helper()
+	var out []string
+	j := pinJob(loadWf(t, root, "docker-images.yml"), "image-queue-gate")
+	if j == nil {
+		return []string{"docker-images.yml: no job image-queue-gate"}
+	}
+	raw := strings.TrimSpace(asString(j["name"]))
+	if m := queueBlockRE.FindStringSubmatch(raw); m != nil && strings.HasPrefix(raw, "${{") && strings.HasSuffix(raw, "}}") {
+		raw = strings.TrimSpace(m[1])
+	}
+	render := func(event, ref, action, label string) string {
+		ctx := queueContext(event, ref)
+		ctx["github.event.action"], ctx["github.event.label.name"] = action, label
+		if raw == "image-queue-gate" {
+			return raw
+		}
+		v, err := queueEval(raw, ctx)
+		if err != nil {
+			out = append(out, fmt.Sprintf("image-queue-gate.name: %v", err))
+			return ""
+		}
+		return v.s
+	}
+	for _, c := range []struct {
+		id, name string
+		other    bool
+	}{
+		{"synchronize", render("pull_request", "refs/pull/7/merge", "synchronize", ""), false},
+		{"hotfix-image added", render("pull_request", "refs/pull/7/merge", "labeled", "hotfix-image"), false},
+		{"other label added", render("pull_request", "refs/pull/7/merge", "labeled", "documentation"), true},
+		{"merge_group", render("merge_group", "refs/heads/gh-readonly-queue/main/pr-7-abcdef", "checks_requested", ""), false},
+		{"main push", render("push", "refs/heads/main", "", ""), false},
+	} {
+		if c.other && c.name == "image-queue-gate" {
+			out = append(out, fmt.Sprintf("image-queue-gate: on the %s run the gate posts under the real name: a skipped job posts a passing check and overwrites the head's verdict", c.id))
+		}
+		if !c.other && c.name != "image-queue-gate" {
+			out = append(out, fmt.Sprintf("image-queue-gate: on the %s run the check name is %q, want the required context", c.id, c.name))
+		}
+	}
+	return out
+}
+
 func TestQueueGatesJudgeEveryHeavyJob(t *testing.T) {
 	expectNoViolations(t, queueGateViolations(t, repoRoot(t)))
 }
@@ -491,7 +553,8 @@ func TestQueueGatesPlantedDefects(t *testing.T) {
 		{"go-queue-gate loses its docs selector", []mutation{{goYml, "CHANGES_CODE: ${{ needs.go-storage-integration-plan.outputs.docs_only == 'true' && 'false' || 'true' }}", "CHANGES_CODE: 'true'"}}, []string{"CHANGES_CODE"}},
 		{"image-queue-gate stops needing go-build", []mutation{{dock, "needs: [changes, resolve, go-build, go-api-tools-build, go-build-dho-arm64]", "needs: [changes, resolve, go-api-tools-build, go-build-dho-arm64]"}}, []string{"image-queue-gate", "needs"}},
 		{"image-queue-gate treats a hotfix label as ci:full on a draft", []mutation{{dock, "(!github.event.pull_request.draft && contains(github.event.pull_request.labels.*.name, 'hotfix-image'))", "contains(github.event.pull_request.labels.*.name, 'hotfix-image')"}}, []string{"HEAVY_ON_PR"}},
-		{"image-queue-gate is renamed", []mutation{{dock, "    name: image-queue-gate\n", "    name: images\n"}}, []string{"required context"}},
+		{"image-queue-gate is renamed", []mutation{{dock, "&& 'image-queue-gate (other label, not run)' || 'image-queue-gate' }}", "&& 'image-queue-gate (other label, not run)' || 'images' }}"}}, []string{"required context"}},
+		{"image-queue-gate keeps its real name on another label's run", []mutation{{dock, "    name: ${{ github.event.action == 'labeled' && github.event.label.name != 'hotfix-image' && 'image-queue-gate (other label, not run)' || 'image-queue-gate' }}\n", "    name: image-queue-gate\n"}}, []string{"image-queue-gate", "required context"}},
 		{"live-e2e fan-in loses always()", []mutation{{live, "    if: always() && (github.event_name == 'pull_request' || github.event_name == 'merge_group') && (github.event.action != 'labeled' || github.event.label.name == 'ci:full')\n    needs: [changes, live-e2e-run]", "    if: (github.event_name == 'pull_request' || github.event_name == 'merge_group') && (github.event.action != 'labeled' || github.event.label.name == 'ci:full')\n    needs: [changes, live-e2e-run]"}}, []string{"live-e2e.yml:live-e2e", "the if must be exactly"}},
 		{"metrics-executed-proof fan-in drops changes as its selector", []mutation{{live, "    needs: [changes, metrics-executed-proof-run]\n", "    needs: [metrics-executed-proof-run]\n"}}, []string{"live-e2e.yml:metrics-executed-proof", "needs"}},
 		{"metrics-executed-proof fan-in judges a metrics_proof skip as legitimate", []mutation{{live, "HEAVY_ON_PR: ${{ (contains(github.event.pull_request.labels.*.name, 'ci:full') || needs.changes.outputs.metrics_proof == 'true') && 'true' || 'false' }}", "HEAVY_ON_PR: ${{ contains(github.event.pull_request.labels.*.name, 'ci:full') && 'true' || 'false' }}"}}, []string{"live-e2e.yml:metrics-executed-proof", "HEAVY_ON_PR"}},

@@ -32,6 +32,7 @@ func TestATieOnLastSyncedKeepsTheInheritableEdge(t *testing.T) {
 func TestALinkedPullRequestKeepsItsNativeDonorOnATie(t *testing.T) {
 	at := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
 	derived := NewGitHubWorkItemDerivationContext(GithubWorkItemDerivationFacts{})
+	derived.LinkTiers = map[LinkPair]string{{PullRequest: "ghpr:acme/api#7", Issue: "gh:acme/api#11"}: "native", {PullRequest: "ghpr:acme/api#7", Issue: "gh:acme/api#22"}: "native"}
 	subjects := map[string]GithubWorkItemDerivationSubject{
 		"ghpr:acme/api#7": {WorkItemID: "ghpr:acme/api#7", Provider: "github", Type: "pr", OrgID: "org"},
 		"gh:acme/api#11":  {WorkItemID: "gh:acme/api#11", Provider: "github", Type: "issue", OrgID: "org"},
@@ -56,7 +57,7 @@ func TestALinkedPullRequestKeepsItsNativeDonorOnATie(t *testing.T) {
 			if got := index["ghpr:acme/api#7"][0]; got != "team-11" {
 				t.Errorf("the pull request inherits %q, want team-11 (evidence %q)", got, evidence["ghpr:acme/api#7"])
 			}
-			if want := "linked_issue=gh:acme/api#11;dependency_type=relates_to;donor_provider=github;donor_source=project_ownership"; evidence["ghpr:acme/api#7"] != want {
+			if want := "linked_issue=gh:acme/api#11;dependency_type=relates_to;donor_provider=github;donor_source=project_ownership;link_tier=native"; evidence["ghpr:acme/api#7"] != want {
 				t.Errorf("evidence %q, want %q", evidence["ghpr:acme/api#7"], want)
 			}
 		})

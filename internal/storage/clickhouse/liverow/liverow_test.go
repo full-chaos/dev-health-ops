@@ -99,7 +99,8 @@ func TestEveryRegistryTableHasARuleOrAReason(t *testing.T) {
 	want := []string{
 		"ai_governance_coverage_daily", "cicd_metrics_daily", "compounding_risk_daily", "ic_landscape_rolling_30d",
 		"issue_type_metrics_daily",
-		"team_cognitive_load_daily", "team_complexity_daily", "team_metrics_daily", "testops_coverage_metrics_daily", "testops_test_metrics_daily",
+		"team_cognitive_load_daily", "team_complexity_daily", "team_metrics_daily", "testops_coverage_metrics_daily",
+		"testops_pipeline_stability", "testops_quality_drag", "testops_release_confidence", "testops_test_metrics_daily",
 		"user_metrics_daily", "work_item_completion_daily", "work_item_metrics_daily", "work_item_state_durations_daily",
 		"work_item_user_metrics_daily",
 	}

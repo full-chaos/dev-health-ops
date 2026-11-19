@@ -14,6 +14,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/remaining/stepcause"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/linktier"
 	"github.com/full-chaos/dev-health-ops/internal/teamattribution"
 )
 
@@ -357,6 +358,10 @@ func (executor *WorkItemAttributionExecutor) buildRowsAtEachItemsDay(
 	if err != nil {
 		return nil, err
 	}
+	linkTiers, err := LoadWorkItemLinkTiers(ctx, executor.conn, orgID, dependencies)
+	if err != nil {
+		return nil, err
+	}
 	linkedPullRequests, err := LoadIssueLinkedPullRequests(ctx, executor.conn, orgID, subjects)
 	if err != nil {
 		return nil, err
@@ -377,6 +382,7 @@ func (executor *WorkItemAttributionExecutor) buildRowsAtEachItemsDay(
 		for id, row := range derived.OwnDonorRows(subjects, affectedIDs) {
 			donorRows[id] = row
 		}
+		derived.LinkTiers = linkTiers
 		linkedIssue, linkedEvidence, _, _ := derived.BuildLinkedIssueIndexFromRows("", subjects, donorRows, dependencies, nil)
 		if refused := derived.LinkedIssueDonorRefusalCounts(subjects, dependencies); len(refused) > 0 {
 			slog.Default().InfoContext(ctx, "work_item_attribution.linked_issue_donor_refused",
@@ -1151,6 +1157,59 @@ WHERE org_id = ? AND has(?, source_work_item_id)`, orgID, sourceIDs)
 		result = append(result, edge)
 	}
 	return result, stepcause.Failure(stepcause.IterateWorkItemDependencies, rows.Err())
+}
+
+// LoadWorkItemLinkTiers reads, for the pull and merge request sources of edges,
+// the provenance tier of each work_graph_issue_pr link of record: the table
+// row of the (pull request, issue) pair, which keeps its highest tier. The pull
+// request is named by its work item id; the table names it by repo and number.
+func LoadWorkItemLinkTiers(
+	ctx context.Context, conn driver.Conn, orgID string, edges []teamattribution.GithubWorkItemDerivationDependencyEdge,
+) (map[teamattribution.LinkPair]string, error) {
+	tiers := map[teamattribution.LinkPair]string{}
+	seen := map[string]struct{}{}
+	var sources []string
+	for _, edge := range edges {
+		if !teamattribution.IsPullRequestSource(edge.SourceWorkItemID) {
+			continue
+		}
+		if _, dup := seen[edge.SourceWorkItemID]; !dup {
+			seen[edge.SourceWorkItemID] = struct{}{}
+			sources = append(sources, edge.SourceWorkItemID)
+		}
+	}
+	for _, chunk := range chunkStringsByRenderedBytes(sources, workItemAttributionMaxArrayBytes) {
+		rows, err := conn.Query(ctx, `
+SELECT w.work_item_id, l.work_item_id, l.provenance
+FROM work_graph_issue_pr AS l FINAL
+INNER JOIN
+(
+    SELECT repo_id, work_item_id, toUInt32OrZero(extract(work_item_id, '[#!]([0-9]+)$')) AS pr_number
+    FROM work_items FINAL
+    WHERE org_id = ? AND has(?, work_item_id)
+) AS w ON w.repo_id = l.repo_id AND w.pr_number = l.pr_number
+WHERE l.org_id = ?`, orgID, chunk, orgID)
+		if err != nil {
+			return nil, stepcause.Failure(stepcause.QueryWorkItemDependencies, err)
+		}
+		for rows.Next() {
+			var pullRequest, issue, provenance string
+			if err := rows.Scan(&pullRequest, &issue, &provenance); err != nil {
+				_ = rows.Close()
+				return nil, stepcause.Failure(stepcause.ScanWorkItemDependenciesRow, err)
+			}
+			pair := teamattribution.LinkPair{PullRequest: pullRequest, Issue: issue}
+			if linktier.Rank(provenance) > linktier.Rank(tiers[pair]) {
+				tiers[pair] = provenance
+			}
+		}
+		iterateErr := rows.Err()
+		_ = rows.Close()
+		if err := stepcause.Failure(stepcause.IterateWorkItemDependencies, iterateErr); err != nil {
+			return nil, err
+		}
+	}
+	return tiers, nil
 }
 
 // WorkItemAttributionDonorTargets is workItemAttributionDonorTargets, exported

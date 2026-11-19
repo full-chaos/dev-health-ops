@@ -197,6 +197,9 @@ var staleKeyVersionSteps = map[string]time.Duration{
 	teamkeytables.WorkItemUserMetricsDaily.Table:     time.Second,
 	teamkeytables.UserMetricsDaily.Table:             time.Second,
 	teamkeytables.TestopsTestMetricsDaily.Table:      time.Second,
+	teamkeytables.TestopsReleaseConfidence.Table:     time.Second,
+	teamkeytables.TestopsQualityDrag.Table:           time.Second,
+	teamkeytables.TestopsPipelineStability.Table:     time.Second,
 	teamkeytables.TestopsCoverageMetricsDaily.Table:  time.Second,
 }
 
@@ -225,7 +228,10 @@ func staleKeyVersionAfter(table StaleKeyTable, at, stored time.Time) (time.Time,
 // whose stored row is not older than the snapshot is left alone (an equal
 // snapshot is a no-op).
 var snapshotMarkerTables = map[string]struct{}{
-	teamkeytables.TestopsTestMetricsDaily.Table: {},
+	teamkeytables.TestopsTestMetricsDaily.Table:  {},
+	teamkeytables.TestopsReleaseConfidence.Table: {},
+	teamkeytables.TestopsQualityDrag.Table:       {},
+	teamkeytables.TestopsPipelineStability.Table: {},
 }
 
 // staleKeySnapshot is the version a snapshot-stamped marker carries: the

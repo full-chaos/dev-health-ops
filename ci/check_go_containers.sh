@@ -737,24 +737,14 @@ smoke_query_api() {
     || die "dho query-api metrics endpoint did not become available"
   wait_for_status "http://${query_address}/query" 404 \
     || die "dho query-api mounted /query with no route configured"
-  # One release of compatibility (CHAOS-6447): the query listener still answers the
-  # probes the chart points at it, in the old shapes, until the deploy repo moves them
-  # to the operator listener; the following release removes this. /metrics is NOT part
-  # of that shim: a scrape endpoint is operational detail, so the query (public)
-  # listener never answers it and only the internal listener does.
-  wait_for_status "http://${query_address}/healthz" 200 \
-    || die "dho query-api no longer answers /healthz on the query listener"
-  wait_for_status "http://${query_address}/readyz" 200 \
-    || die "dho query-api no longer answers /readyz on the query listener"
-  wait_for_status "http://${internal_address}/metrics" 200 \
-    || die "dho query-api does not answer /metrics on the internal listener"
-  curl --silent --max-time 5 "http://${internal_address}/metrics" \
-    | grep -E '^target_info\{.*service_name="dev-health-query-api"' >/dev/null \
-    || die "dho query-api /metrics on the internal listener lost its target_info series"
-  [ "$(curl --silent --output /dev/null --write-out '%{http_code}' --max-time 5 "http://${query_address}/metrics")" = "404" ] \
-    || die "dho query-api answered /metrics on the query (public) listener"
-  [ "$(curl --silent --max-time 5 "http://${query_address}/readyz")" = "ready: /query not configured" ] \
-    || die "dho query-api compat /readyz on the query listener is not the old body"
+  # CHAOS-13492: the probes and the scrape live on the operator listener only; the query
+  # and internal listeners answer none of /healthz, /readyz, /metrics.
+  for listener_address in "${query_address}" "${internal_address}"; do
+    for operator_path in /healthz /readyz /metrics; do
+      [ "$(curl --silent --output /dev/null --write-out '%{http_code}' --max-time 5 "http://${listener_address}${operator_path}")" != "200" ] \
+        || die "dho query-api answered ${operator_path} on a non-operator listener"
+    done
+  done
   # The query routes stay off the operator listener.
   [ "$(curl --silent --output /dev/null --write-out '%{http_code}' --max-time 5 "http://${operator_address}/query")" != "200" ] \
     || die "dho query-api served /query on the operator listener"

@@ -163,8 +163,11 @@ func scan(t *testing.T, root string) ([]string, []finding) {
 				if strings.HasPrefix(strings.TrimSpace(line), "//") || (regions[number] >= 0 && isolated[regions[number]]) {
 					continue
 				}
+				joined, end := concatenation(lines, number)
 				for _, statement := range serverWide {
-					if statement.pattern.MatchString(line) && literalName(statement.pattern, line) {
+					// A joined match counts once, at the first line, unless one line of the concatenation matches alone.
+					if matches(statement.pattern, line) || (joined != "" && matches(statement.pattern, joined) &&
+						!anyMatches(statement.pattern, lines[number:end+1])) {
 						findings = append(findings, finding{filepath.ToSlash(relFile), number + 1, statement.name})
 					}
 				}
@@ -179,6 +182,51 @@ func scan(t *testing.T, root string) ([]string, []finding) {
 		return findings[i].line < findings[j].line
 	})
 	return optedIn, findings
+}
+
+func matches(pattern *regexp.Regexp, text string) bool {
+	return pattern.MatchString(text) && literalName(pattern, text)
+}
+
+func anyMatches(pattern *regexp.Regexp, lines []string) bool {
+	for _, line := range lines {
+		if matches(pattern, line) {
+			return true
+		}
+	}
+	return false
+}
+
+// literalBoundary is the end of one string literal, "+", and the start of the next.
+var literalBoundary = regexp.MustCompile("[\"`]\\s*\\+\\s*[\"`]")
+
+func continues(line string) bool {
+	return strings.HasSuffix(strings.TrimSpace(line), "+")
+}
+
+// concatenation returns the text of the concatenation that starts on
+// lines[start] (the line and each next line after a trailing "+") with every
+// boundary between two adjacent string literals removed, and the index of its
+// last line. The text is "" when lines[start] continues the line before it or
+// the concatenation joins no two literals.
+func concatenation(lines []string, start int) (string, int) {
+	if start > 0 && continues(lines[start-1]) {
+		return "", start
+	}
+	end := start
+	for end+1 < len(lines) && continues(lines[end]) {
+		end++
+	}
+	parts := make([]string, 0, end-start+1)
+	for _, line := range lines[start : end+1] {
+		parts = append(parts, strings.TrimSpace(line))
+	}
+	text := strings.Join(parts, " ")
+	joined := literalBoundary.ReplaceAllString(text, "")
+	if joined == text {
+		return "", start
+	}
+	return joined, end
 }
 
 // topLevelFuncs maps each line to the line index of the top-level func it is
@@ -436,6 +484,39 @@ func TestGuardFlagsDropsOfServerWideObjects(t *testing.T) {
 	for index, statement := range statements {
 		if want := index < len(flaggedStatements); flagged[index] != want {
 			t.Errorf("flagged = %v for %s, want %v", flagged[index], statement, want)
+		}
+	}
+}
+
+// TestGuardFlagsAStatementSplitAcrossLiterals: adjacent literals of one
+// concatenation are one statement, also when the concatenation spans lines.
+func TestGuardFlagsAStatementSplitAcrossLiterals(t *testing.T) {
+	statements := []string{
+		`exec("DROP " + "ROLE worker_test")`,
+		`exec("ALTER " + "SYSTEM SET work_mem = '7MB'")`,
+		`exec("DROP " + "DATABASE " + database)`,
+		"exec(`DROP ` + \"SCHEMA public CASCADE\")",
+		`exec("CREATE " + "ROLE venue_writer LOGIN")`,
+		`exec("ALTER" + " ROLE " + target + " NOLOGIN")`,
+		`exec("DROP " +`,
+		`	"ROLE worker_test")`,
+		`exec("SELECT 1; " +`,
+		`	"ALTER " +`,
+		`	"SYSTEM SET work_mem = '7MB'")`,
+		`exec("CREATE " + "ROLE " + role + " LOGIN")`,
+		`exec("DROP " + table)`,
+		`exec("SELECT 1 " + "FROM drop_rolemap")`,
+		`exec("DROP" + "ROLE x")`,
+		`query := "SELECT count() " +`,
+		`	"FROM default.events"`,
+		`exec("CREATE " +`,
+		`	"ROLE " + role)`,
+	}
+	want := map[int]bool{0: true, 1: true, 2: true, 3: true, 4: true, 5: true, 6: true, 8: true}
+	flagged := scanFixture(t, statements)
+	for index, statement := range statements {
+		if flagged[index] != want[index] {
+			t.Errorf("flagged = %v for line %d %s, want %v", flagged[index], index, statement, want[index])
 		}
 	}
 }

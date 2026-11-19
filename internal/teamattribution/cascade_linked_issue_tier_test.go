@@ -1,0 +1,274 @@
+package teamattribution
+
+import (
+	"strings"
+	"testing"
+)
+
+const tierPR = "ghpr:acme/api#7"
+
+func tierFixture(rows map[string]GithubWorkItemDerivationDonorRow, edges []GithubWorkItemDerivationDependencyEdge, tiers map[LinkPair]string) (map[string][3]string, map[string]string) {
+	derived := NewGitHubWorkItemDerivationContext(GithubWorkItemDerivationFacts{})
+	derived.LinkTiers = tiers
+	subjects := map[string]GithubWorkItemDerivationSubject{
+		tierPR:       {WorkItemID: tierPR, Provider: "github", Type: "pr", OrgID: "org"},
+		"jira:AAA-1": {WorkItemID: "jira:AAA-1", Provider: "jira", Type: "issue", OrgID: "org"},
+		"jira:ZZZ-9": {WorkItemID: "jira:ZZZ-9", Provider: "jira", Type: "issue", OrgID: "org"},
+	}
+	index, evidence, _, _ := derived.BuildLinkedIssueIndexFromRows("github", subjects, rows, edges, nil)
+	return index, evidence
+}
+
+func tierEdges(targets ...string) []GithubWorkItemDerivationDependencyEdge {
+	var edges []GithubWorkItemDerivationDependencyEdge
+	for _, target := range targets {
+		edges = append(edges, GithubWorkItemDerivationDependencyEdge{SourceWorkItemID: tierPR, TargetWorkItemID: target, RelationshipType: "relates_to"})
+	}
+	return edges
+}
+
+func ownRow(team string) GithubWorkItemDerivationDonorRow {
+	return GithubWorkItemDerivationDonorRow{TeamID: team, Source: "project_ownership"}
+}
+
+// R1: a native link outranks an explicit_text link whatever the target ids.
+func TestLinkedIssueDonorNativeBeforeExplicitText(t *testing.T) {
+	rows := map[string]GithubWorkItemDerivationDonorRow{"jira:AAA-1": ownRow("team-text"), "jira:ZZZ-9": ownRow("team-native")}
+	tiers := map[LinkPair]string{{tierPR, "jira:AAA-1"}: "explicit_text", {tierPR, "jira:ZZZ-9"}: "native"}
+	index, _ := tierFixture(rows, tierEdges("extkey:AAA-1", "jira:ZZZ-9"), tiers)
+	if got := index[tierPR][0]; got != "team-native" {
+		t.Fatalf("team %q, want team-native", got)
+	}
+}
+
+// R2: a native donor with no usable team gives no row; the text donor is out.
+func TestUnusableNativeDonorGivesNoTextDonorRow(t *testing.T) {
+	rows := map[string]GithubWorkItemDerivationDonorRow{"jira:AAA-1": ownRow("team-text"), "jira:ZZZ-9": {Source: "manual_fallback"}}
+	tiers := map[LinkPair]string{{tierPR, "jira:AAA-1"}: "explicit_text", {tierPR, "jira:ZZZ-9"}: "native"}
+	index, _ := tierFixture(rows, tierEdges("extkey:AAA-1", "jira:ZZZ-9"), tiers)
+	if got, ok := index[tierPR]; ok {
+		t.Fatalf("linked_issue row from %q, want none", got[0])
+	}
+}
+
+// R3: a recorded explicit_text edge beats an unrecorded edge to a lower id.
+func TestRecordedTextEdgeBeatsUnrecordedEdge(t *testing.T) {
+	rows := map[string]GithubWorkItemDerivationDonorRow{"jira:AAA-1": ownRow("team-a"), "jira:ZZZ-9": ownRow("team-b")}
+	tiers := map[LinkPair]string{{tierPR, "jira:ZZZ-9"}: "explicit_text"}
+	index, _ := tierFixture(rows, tierEdges("jira:AAA-1", "jira:ZZZ-9"), tiers)
+	if got := index[tierPR][0]; got != "team-b" {
+		t.Fatalf("team %q, want team-b", got)
+	}
+}
+
+// R4: an edge with no link of record is never a donor, even alone.
+func TestUnrecordedEdgeIsNeverADonor(t *testing.T) {
+	rows := map[string]GithubWorkItemDerivationDonorRow{"jira:AAA-1": ownRow("team-a")}
+	for _, target := range []string{"extkey:AAA-1", "jira:AAA-1"} {
+		t.Run(target, func(t *testing.T) {
+			index, _ := tierFixture(rows, tierEdges(target), map[LinkPair]string{})
+			if got, ok := index[tierPR]; ok {
+				t.Fatalf("linked_issue row from %q, want none", got[0])
+			}
+		})
+	}
+}
+
+// R4b: an extkey edge takes the tier of its resolved pair.
+func TestExtkeyEdgeTakesThePairTier(t *testing.T) {
+	rows := map[string]GithubWorkItemDerivationDonorRow{"jira:AAA-1": ownRow("team-a"), "jira:ZZZ-9": ownRow("team-b")}
+	tiers := map[LinkPair]string{{tierPR, "jira:AAA-1"}: "heuristic", {tierPR, "jira:ZZZ-9"}: "native"}
+	index, _ := tierFixture(rows, tierEdges("jira:AAA-1", "extkey:ZZZ-9"), tiers)
+	if got := index[tierPR][0]; got != "team-b" {
+		t.Fatalf("team %q, want team-b", got)
+	}
+}
+
+// R5: the linked_issue evidence names the tier of the link of record.
+func TestLinkedIssueEvidenceNamesTheTier(t *testing.T) {
+	rows := map[string]GithubWorkItemDerivationDonorRow{"jira:AAA-1": ownRow("team-a")}
+	tiers := map[LinkPair]string{{tierPR, "jira:AAA-1"}: "explicit_text"}
+	_, evidence := tierFixture(rows, tierEdges("jira:AAA-1"), tiers)
+	want := "linked_issue=jira:AAA-1;dependency_type=relates_to;donor_provider=jira;donor_source=project_ownership;link_tier=explicit_text"
+	if evidence[tierPR] != want {
+		t.Fatalf("evidence %q, want %q", evidence[tierPR], want)
+	}
+}
+
+// A source that is not a pull or merge request has no link of record: its
+// edges keep the id order and name no tier.
+func TestNonPullRequestSourceKeepsIdOrder(t *testing.T) {
+	derived := NewGitHubWorkItemDerivationContext(GithubWorkItemDerivationFacts{})
+	subjects := map[string]GithubWorkItemDerivationSubject{
+		"jira:ENG-5": {WorkItemID: "jira:ENG-5", Provider: "jira", OrgID: "org"},
+		"jira:AAA-1": {WorkItemID: "jira:AAA-1", Provider: "jira", Type: "issue", OrgID: "org"},
+		"jira:ZZZ-9": {WorkItemID: "jira:ZZZ-9", Provider: "jira", Type: "issue", OrgID: "org"},
+	}
+	rows := map[string]GithubWorkItemDerivationDonorRow{"jira:AAA-1": ownRow("team-a"), "jira:ZZZ-9": ownRow("team-b")}
+	edges := []GithubWorkItemDerivationDependencyEdge{
+		{SourceWorkItemID: "jira:ENG-5", TargetWorkItemID: "jira:ZZZ-9", RelationshipType: "relates_to"},
+		{SourceWorkItemID: "jira:ENG-5", TargetWorkItemID: "jira:AAA-1", RelationshipType: "relates_to"},
+	}
+	index, evidence, _, _ := derived.BuildLinkedIssueIndexFromRows("jira", subjects, rows, edges, nil)
+	if got := index["jira:ENG-5"][0]; got != "team-a" {
+		t.Fatalf("team %q, want team-a", got)
+	}
+	if want := "linked_issue=jira:AAA-1;dependency_type=relates_to;donor_provider=jira;donor_source=project_ownership"; evidence["jira:ENG-5"] != want {
+		t.Fatalf("evidence %q, want %q", evidence["jira:ENG-5"], want)
+	}
+}
+
+func TestOnlyPullAndMergeRequestsHaveALinkOfRecord(t *testing.T) {
+	for id, want := range map[string]bool{
+		"ghpr:acme/api#7": true, "gitlab:acme/app!7": true, "gitlab:group/sub/app!12": true,
+		"gitlab:acme/app#7": false, "gh:acme/api#7": false, "ghpr:acme/api!7": false, "gitlab:acme/app!0": false,
+		"ghpr:acme/api#": false, "ghpr:#7": false, "jira:ENG-1": false,
+	} {
+		if got := IsPullRequestSource(id); got != want {
+			t.Errorf("IsPullRequestSource(%q) = %v, want %v", id, got, want)
+		}
+	}
+}
+
+// A GitLab issue (gitlab:path#n) has no link of record: its donors keep id
+// order and never wait on a merge request of the same number.
+func TestAGitLabIssueKeepsIdOrder(t *testing.T) {
+	const issue = "gitlab:acme/app#7"
+	derived := NewGitHubWorkItemDerivationContext(GithubWorkItemDerivationFacts{})
+	derived.LinkTiers = map[LinkPair]string{{PullRequest: issue, Issue: "jira:ZZZ-9"}: "native"}
+	subjects := map[string]GithubWorkItemDerivationSubject{
+		issue:        {WorkItemID: issue, Provider: "gitlab", Type: "issue", OrgID: "org"},
+		"jira:AAA-1": {WorkItemID: "jira:AAA-1", Provider: "jira", Type: "issue", OrgID: "org"},
+		"jira:ZZZ-9": {WorkItemID: "jira:ZZZ-9", Provider: "jira", Type: "issue", OrgID: "org"},
+	}
+	rows := map[string]GithubWorkItemDerivationDonorRow{"jira:AAA-1": ownRow("team-a"), "jira:ZZZ-9": ownRow("team-b")}
+	edges := []GithubWorkItemDerivationDependencyEdge{
+		{SourceWorkItemID: issue, TargetWorkItemID: "jira:AAA-1", RelationshipType: "relates_to"},
+		{SourceWorkItemID: issue, TargetWorkItemID: "jira:ZZZ-9", RelationshipType: "relates_to"},
+	}
+	index, evidence, _, _ := derived.BuildLinkedIssueIndexFromRows("gitlab", subjects, rows, edges, nil)
+	if got := index[issue][0]; got != "team-a" {
+		t.Fatalf("team %q, want team-a (id order, no link tier)", got)
+	}
+	if want := "linked_issue=jira:AAA-1;dependency_type=relates_to;donor_provider=jira;donor_source=project_ownership"; evidence[issue] != want {
+		t.Fatalf("evidence %q, want %q", evidence[issue], want)
+	}
+}
+
+// T2: the pull and merge request rule across every provider's source kind in
+// one table. A pull or merge request takes the donor of the best recorded tier
+// and names it; an issue of any provider has no link of record and keeps the
+// donor id order.
+func TestLinkOfRecordRuleAcrossProviderSourceKinds(t *testing.T) {
+	for _, tc := range []struct {
+		name, source, provider string
+		tiered                 bool
+	}{
+		{"github pull request", "ghpr:acme/api#7", "github", true},
+		{"gitlab merge request", "gitlab:acme/app!7", "gitlab", true},
+		{"gitlab issue", "gitlab:acme/app#7", "gitlab", false},
+		{"github issue", "gh:acme/api#7", "github", false},
+		{"jira issue", "jira:ENG-5", "jira", false},
+		{"linear issue", "linear:ENG-5", "linear", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			derived := NewGitHubWorkItemDerivationContext(GithubWorkItemDerivationFacts{})
+			derived.LinkTiers = map[LinkPair]string{
+				{PullRequest: tc.source, Issue: "jira:AAA-1"}: "explicit_text",
+				{PullRequest: tc.source, Issue: "jira:ZZZ-9"}: "native",
+			}
+			subjects := map[string]GithubWorkItemDerivationSubject{
+				tc.source:    {WorkItemID: tc.source, Provider: tc.provider, OrgID: "org"},
+				"jira:AAA-1": {WorkItemID: "jira:AAA-1", Provider: "jira", Type: "issue", OrgID: "org"},
+				"jira:ZZZ-9": {WorkItemID: "jira:ZZZ-9", Provider: "jira", Type: "issue", OrgID: "org"},
+			}
+			rows := map[string]GithubWorkItemDerivationDonorRow{"jira:AAA-1": ownRow("team-a"), "jira:ZZZ-9": ownRow("team-b")}
+			edges := []GithubWorkItemDerivationDependencyEdge{
+				{SourceWorkItemID: tc.source, TargetWorkItemID: "jira:AAA-1", RelationshipType: "relates_to"},
+				{SourceWorkItemID: tc.source, TargetWorkItemID: "extkey:ZZZ-9", RelationshipType: "external_issue_key"},
+			}
+			index, evidence, _, _ := derived.BuildLinkedIssueIndexFromRows(tc.provider, subjects, rows, edges, nil)
+			wantTeam, wantTier := "team-a", ""
+			if tc.tiered {
+				wantTeam, wantTier = "team-b", ";link_tier=native"
+			}
+			if got := index[tc.source][0]; got != wantTeam {
+				t.Fatalf("team %q, want %q", got, wantTeam)
+			}
+			if got := evidence[tc.source]; strings.HasSuffix(got, wantTier) != true || (wantTier == "" && strings.Contains(got, "link_tier")) {
+				t.Fatalf("evidence %q, want tier suffix %q", got, wantTier)
+			}
+			// No link row at all: a pull or merge request has no donor; an issue keeps its donors.
+			derived.LinkTiers = map[LinkPair]string{}
+			index, _, _, _ = derived.BuildLinkedIssueIndexFromRows(tc.provider, subjects, rows, edges, nil)
+			if _, ok := index[tc.source]; ok == tc.tiered {
+				t.Fatalf("with no link row: present=%v, want %v", ok, !tc.tiered)
+			}
+		})
+	}
+}
+
+// K1-K7: the donor must be an issue (eligibility), but a refused native donor
+// still counts as "native present": it is dropped inside the native tier, and
+// a lower-tier donor never stands in for it.
+func TestARefusedNativeDonorStillBlocksTheLowerTiers(t *testing.T) {
+	prDonor := GithubWorkItemDerivationSubject{WorkItemID: "gh:acme/api#99", Provider: "github", Type: "pr", OrgID: "org"}
+	emptyDonor := GithubWorkItemDerivationSubject{WorkItemID: "jira:EMP-1", Provider: "jira", OrgID: "org"}
+	rows := map[string]GithubWorkItemDerivationDonorRow{
+		"gh:acme/api#99": ownRow("team-pr"), "jira:EMP-1": ownRow("team-empty"),
+		"jira:AAA-1": ownRow("team-a"), "jira:ZZZ-9": ownRow("team-b"),
+	}
+	for _, tc := range []struct {
+		name     string
+		subjects []GithubWorkItemDerivationSubject
+		rows     map[string]GithubWorkItemDerivationDonorRow
+		edges    []GithubWorkItemDerivationDependencyEdge
+		tiers    map[LinkPair]string
+		want     string
+		wantTier string
+	}{
+		{"K1 refused native pull request donor and a text issue donor", []GithubWorkItemDerivationSubject{prDonor}, rows,
+			tierEdges("gh:acme/api#99", "jira:AAA-1"),
+			map[LinkPair]string{{tierPR, "gh:acme/api#99"}: "native", {tierPR, "jira:AAA-1"}: "explicit_text"}, "", ""},
+		{"K2 refused native empty-type donor and a text issue donor", []GithubWorkItemDerivationSubject{emptyDonor}, rows,
+			tierEdges("jira:EMP-1", "jira:AAA-1"),
+			map[LinkPair]string{{tierPR, "jira:EMP-1"}: "native", {tierPR, "jira:AAA-1"}: "explicit_text"}, "", ""},
+		{"K3 eligible native donor with no usable team and a text issue donor", nil,
+			map[string]GithubWorkItemDerivationDonorRow{"jira:AAA-1": ownRow("team-a"), "jira:ZZZ-9": {Source: "manual_fallback"}},
+			tierEdges("jira:AAA-1", "jira:ZZZ-9"),
+			map[LinkPair]string{{tierPR, "jira:AAA-1"}: "explicit_text", {tierPR, "jira:ZZZ-9"}: "native"}, "", ""},
+		{"K4 one issue donor by an extkey and a direct edge beside a refused native pull request donor", []GithubWorkItemDerivationSubject{prDonor}, rows,
+			tierEdges("gh:acme/api#99", "extkey:ZZZ-9", "jira:ZZZ-9", "jira:AAA-1"),
+			map[LinkPair]string{{tierPR, "gh:acme/api#99"}: "native", {tierPR, "jira:ZZZ-9"}: "native", {tierPR, "jira:AAA-1"}: "explicit_text"}, "team-b", "native"},
+		{"K6 eligible native issue donor beside a refused native pull request donor", []GithubWorkItemDerivationSubject{prDonor}, rows,
+			tierEdges("gh:acme/api#99", "jira:ZZZ-9", "jira:AAA-1"),
+			map[LinkPair]string{{tierPR, "gh:acme/api#99"}: "native", {tierPR, "jira:ZZZ-9"}: "native", {tierPR, "jira:AAA-1"}: "explicit_text"}, "team-b", "native"},
+		{"K7 native edge to an unknown item and a text issue donor", nil, rows,
+			tierEdges("jira:NOPE-1", "jira:AAA-1"),
+			map[LinkPair]string{{tierPR, "jira:NOPE-1"}: "native", {tierPR, "jira:AAA-1"}: "explicit_text"}, "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			derived := NewGitHubWorkItemDerivationContext(GithubWorkItemDerivationFacts{})
+			derived.LinkTiers = tc.tiers
+			subjects := map[string]GithubWorkItemDerivationSubject{
+				tierPR:       {WorkItemID: tierPR, Provider: "github", Type: "pr", OrgID: "org"},
+				"jira:AAA-1": {WorkItemID: "jira:AAA-1", Provider: "jira", Type: "issue", OrgID: "org"},
+				"jira:ZZZ-9": {WorkItemID: "jira:ZZZ-9", Provider: "jira", Type: "issue", OrgID: "org"},
+			}
+			for _, subject := range tc.subjects {
+				subjects[subject.WorkItemID] = subject
+			}
+			index, evidence, _, _ := derived.BuildLinkedIssueIndexFromRows("github", subjects, tc.rows, tc.edges, nil)
+			got, present := index[tierPR]
+			if tc.want == "" {
+				if present {
+					t.Fatalf("linked_issue row from %q, want none", got[0])
+				}
+				return
+			}
+			if !present || got[0] != tc.want || !strings.HasSuffix(evidence[tierPR], ";link_tier="+tc.wantTier) {
+				t.Fatalf("team %q evidence %q, want %q with link_tier=%s", got[0], evidence[tierPR], tc.want, tc.wantTier)
+			}
+		})
+	}
+}

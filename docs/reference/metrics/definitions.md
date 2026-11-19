@@ -377,6 +377,21 @@ row synced after the daily job ran counts at once and the chart can differ from 
 - The chart range includes its last day. A bucket with no sample has no point, never 0. The read has the same row bound
   as the TestOps pooled read.
 
+## TestOps cancel rate and rerun rate in report charts
+
+A report chart of `cancel_rate` or `rerun_rate` is the sum of the numerator over the sum of the denominator of the
+`testops_pipeline_metrics_daily` rows in its bucket. It is never a mean of the stored per-repository-day rates: a day of
+1 run would weigh the same as a day of 500.
+
+| Metric | Numerator | Denominator |
+| --- | --- | --- |
+| `cancel_rate` | `SUM(cancelled_count)` | `SUM(pipelines_count)` |
+| `rerun_rate` | `SUM(rerun_rate * pipelines_count)` | `SUM(pipelines_count)` |
+
+- The denominator is every run counted, the same as the stored rate. Cancelled, skipped and unfinished runs are in it.
+- No column stores the rerun count. The stored `rerun_rate` is reruns over `pipelines_count`, so the product is the count.
+- A bucket with no run has no point, never 0.
+
 ## TestOps release confidence and quality drag: flake and recurrence
 
 The daily risk job (`testops_release_confidence`, `testops_quality_drag`) uses the day's test flake rate and failure

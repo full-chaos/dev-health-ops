@@ -346,8 +346,13 @@ over the sum of the stored `lines_total` of the repository-days in the scope. It
 percentages, so a repository-day weighs by its lines. A repository-day with a NULL count, or with `lines_total` of 0, is
 in neither sum, whatever its stored percentage. A point made only of such repository-days has no value, never 0.
 
-`branch_coverage_pct` is still the mean of the stored percentages of the repository-days: the daily rows hold no branch
-counts, so it is not pooled yet.
+### Benchmarking branch coverage
+
+The benchmarking point of `branch_coverage_pct` is pooled the same way, over the stored `branches_covered` and
+`branches_total` of the repository-days in the scope. A repository-day with a NULL branch count, or with `branches_total`
+of 0, is in neither sum, whatever its stored percentage. A point made only of such repository-days has no value: it is
+not measured, never 0. A day written before the branch counts were stored has no counts until the day is recomputed, so
+it shows no point until then.
 
 ### Benchmarking defect introduction rate
 

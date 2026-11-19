@@ -16,7 +16,8 @@ import (
 
 // The line coverage series of a group is its covered lines over its total lines, times 100, not the mean of the repo-day
 // percentages. A repo-day with a NULL count or no lines is in neither sum; a day with none left has no point. A retired
-// day is not a sample. branch_coverage_pct has no stored counts and stays the mean.
+// day is not a sample. The branch series is pooled the same way over the branch counts: see
+// testops_branch_coverage_pooled_integration_test.go.
 func TestLineCoverageSeriesIsPooledOverLines(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
@@ -100,7 +101,6 @@ VALUES (toUUID(?), ?, ?, ?, ?, ?, 0, 0, 'team-a', ?, ?, ?)`,
 		day2.Format(time.DateOnly): 50,
 		day4.Format(time.DateOnly): 80,
 	}
-	wantBranch := map[string]float64{day1.Format(time.DateOnly): 50}
 	check := func(scope, metric string, want map[string]float64, onlyDay1 bool) {
 		series, err := loader.FetchMetricSeriesByScope(ctx, metric, day1, day4, scope)
 		if err != nil {
@@ -132,6 +132,5 @@ VALUES (toUUID(?), ?, ?, ?, ?, ?, 0, 0, 'team-a', ?, ?, ?)`,
 	}
 	for _, scope := range []string{ScopeGlobal, ScopeTeam} {
 		check(scope, "line_coverage_pct", want, false)
-		check(scope, "branch_coverage_pct", wantBranch, true)
 	}
 }

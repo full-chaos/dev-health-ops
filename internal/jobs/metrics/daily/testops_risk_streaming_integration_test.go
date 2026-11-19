@@ -73,7 +73,7 @@ func TestTestopsRiskExecutorStreamsPastTheOldRowCapAgainstRealClickHouse(t *test
 			t.Fatal(err)
 		}
 	}
-	chschema.CreateTables(ctx, t, conn, "test_suite_results", "coverage_snapshots", "testops_release_confidence", "testops_quality_drag", "testops_pipeline_stability")
+	chschema.CreateTables(ctx, t, conn, "test_suite_results", "coverage_snapshots", "testops_run_report_completeness", "testops_release_confidence", "testops_quality_drag", "testops_pipeline_stability")
 	applyTestopsRepositoryOwnershipSchema(ctx, t, conn)
 
 	const orgID = "00000000-0000-4000-8000-000000000009"

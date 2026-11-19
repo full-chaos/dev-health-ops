@@ -1438,7 +1438,7 @@ controls: a link that is gone and an explicit empty list are closed).
 >   property of the repository; the share scales exposure counts). A sole owner of every repository it owns (share 1)
 >   is unchanged, bit for bit. Resolved through `teamresolve.ResolveOwnerSharesThenPatterns`.
 > - **A table with one row per repository** (the four TestOps families, one row per organization, repository and
->   day) stores the main owner only, as of the end of the day; a full tie stores the first tied team by rank. A second team has no row to live in, so the analytics series, breakdown and sankey do not group or filter by that stored team: they take the owners at the request (see "A TestOps rate and the counts beside it" above). The benchmarking job takes its team series from the owners at the run instant, like the analytics series. The AI report charts of the pipeline table take the owners at the report run too, a co-owned repository whole for each owner: the duration and queue charts over the raw runs, the counts and rates over the stored rows (`repositoryOwnedTables` in `internal/jobs/report/pooled.go`). A named limit: the report charts of the test and coverage tables still read the stored team.
+>   day) stores the main owner only, as of the end of the day; a full tie stores the first tied team by rank. A second team has no row to live in, so the analytics series, breakdown and sankey do not group or filter by that stored team: they take the owners at the request (see "A TestOps rate and the counts beside it" above). The benchmarking job takes its team series from the owners at the run instant, like the analytics series. The AI report charts of the pipeline and test tables take the owners at the report run too, a co-owned repository whole for each owner: the duration and queue charts over the raw runs, the counts and rates over the stored rows (`repositoryOwnedTables` in `internal/jobs/report/pooled.go`). A named limit: the report charts of the coverage table still read the stored team.
 
 A project (a Jira space connected to several Atlassian teams, a Linear or GitLab project with several owning
 teams, any provider) can belong to more than one team. An item of such a project is the work of EACH active
@@ -2722,7 +2722,10 @@ One path: `run_team_autoimport` → `team_autoimport_<provider>.populate()` → 
   `(source, target, relationship_type)` key, and
   `build_linked_issue_team_resolver`'s `latest_edge` collapse settles any
   conflict by `last_synced`, so a relationship retyped `relates_to` →
-  `blocked_by` still supersedes the stored inheritable row. Before this,
+  `blocked_by` still supersedes the stored inheritable row. On an equal
+  `last_synced` the inheritable row wins: one sync can write a native
+  `relates_to` and a text `Blocks` link for the same pair, and the native donor
+  stays. Before this,
   only the fresh edges were considered: because attribution rows are
   re-stamped on every run, a PR whose edge had aged out of the sync window
   was rebuilt as `unassigned`, superseding its own earlier correct
@@ -3356,7 +3359,12 @@ exact rules rather than a looser first-donor walk:
 - multiple donors → the lexicographically smallest canonical target wins
   (stable, since ClickHouse rows are unordered);
 - per `(source,target)` the **latest** edge by `last_synced` wins, so a flip
-  from `relates_to` to `blocked_by` stops inheriting.
+  from `relates_to` to `blocked_by` stops inheriting. On an equal `last_synced`
+  an inheritance-safe type wins over any other type, then the lower type: a pull
+  request with a native `relates_to` to an issue and a text `Blocks` link to it, written by
+  one sync, keeps that issue as its donor. The cascade, the donor-change trigger, the
+  donor load and the reverse closure read the same collapse. The frozen Python
+  kept the lower type alone, so the blocking link won that tie.
 
 ---
 

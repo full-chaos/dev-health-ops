@@ -43,6 +43,11 @@ type PostSyncPlan struct {
 	// days those rows touched (CHAOS-9169): a commit written for a day outside
 	// every window of the run marks its own day.
 	Git bool
+	// TestReports is true when a successful unit of the sync run wrote test
+	// suite rows (the cicd or tests target). Only then does the fan-out record
+	// the days of the suites of the runs it wrote, the older attempts' days
+	// included (CHAOS-14006).
+	TestReports bool
 	// RunStartedAt is sync_runs.started_at (created_at for a run that has
 	// none): no unit of the run wrote a raw row before it, apart from clock
 	// skew between processes.
@@ -736,7 +741,7 @@ LIMIT 1`, orgID, integrationID).Scan(&autoImport); err != nil && !errors.Is(err,
 	_, hasOperational := targets["operational"]
 	git := writesGitRows(targets)
 	dora := git || hasDeployments || hasCICD || hasIncidents || hasOperational
-	dailyRelevant := dailyMetricsTrigger(git, hasWorkItems, hasCICD, hasDeployments, hasIncidents)
+	dailyRelevant := dailyRelevantTargets(targets)
 	targetDay := anchor
 	backfillDays := 1
 	if to != nil {
@@ -764,7 +769,7 @@ LIMIT 1`, orgID, integrationID).Scan(&autoImport); err != nil && !errors.Is(err,
 		}
 	}
 	return &PostSyncPlan{
-		WorkItems: hasWorkItems, Git: git, RunStartedAt: startedAt,
+		WorkItems: hasWorkItems, Git: git, TestReports: writesTestReportRows(targets), RunStartedAt: startedAt,
 		WorkItemWindowDays: workItemWindowDays,
 		OrganizationID:     orgID, SyncRunID: args.SyncRunID(), TargetDay: targetDay,
 		BackfillDays: backfillDays, From: from, To: to,
@@ -801,6 +806,16 @@ func dailyMetricsTrigger(git, hasWorkItems, hasCICD, hasDeployments, hasIncident
 	return git || hasWorkItems || hasCICD || hasDeployments || hasIncidents
 }
 
+// dailyRelevantTargets is dailyMetricsTrigger over the targets of the
+// successful units. The tests target writes the same rows as cicd, so either
+// one triggers the daily run, and with it the touched record of the suite days.
+func dailyRelevantTargets(targets map[string]struct{}) bool {
+	_, hasWorkItems := targets["work-items"]
+	_, hasDeployments := targets["deployments"]
+	_, hasIncidents := targets["incidents"]
+	return dailyMetricsTrigger(writesGitRows(targets), hasWorkItems, writesTestReportRows(targets), hasDeployments, hasIncidents)
+}
+
 // writesGitRows says whether a successful unit of the sync run wrote commits
 // or pull requests (the git or the prs target): the same for every provider,
 // as it is read from the dataset capability of each unit, never from a name.
@@ -808,6 +823,15 @@ func writesGitRows(targets map[string]struct{}) bool {
 	_, hasGit := targets["git"]
 	_, hasPRs := targets["prs"]
 	return hasGit || hasPRs
+}
+
+// writesTestReportRows says whether a successful unit of the sync run wrote
+// test suite rows (the cicd or the tests target), read from the dataset
+// capability like writesGitRows.
+func writesTestReportRows(targets map[string]struct{}) bool {
+	_, hasCICD := targets["cicd"]
+	_, hasTests := targets["tests"]
+	return hasCICD || hasTests
 }
 
 func utcDay(value time.Time) time.Time {

@@ -28,6 +28,10 @@
 # CHAOS-13356: users are owned by auth-service, as prod (phase 4, usersOwnedStage owned): `up` copies the users the
 # caller already seeded into the auth schema with the seed tool (`dho auth users-backfill -insert-only`) before
 # auth-service starts; enable-mail switches credentials mail from console to a loopback capture sink.
+# CHAOS-13636: auth-service owns the SSO providers, as prod (the AUTH_SSO_PROVIDERS_OWNED and AUTH_MEMBERSHIP_ROUTES rows of
+# the flag table): every auth-migrate step runs with the switch (prod's auth-migrate and auth-grants Jobs), and go-api sends
+# the provider routes to auth-service. The invite key the membership routes need is a job-local key: prod uses go-api's
+# LINK_TOKEN_SECRET, which the caller sets later; no go-api call reaches an invite route here (org provisioning is off).
 # The https front (localhost:8443 to 127.0.0.1:8095) with STATE_DIR/tls is the caller's: the Go and web verifiers read
 # the issuer over https and nothing here serves TLS.
 set -euo pipefail
@@ -123,6 +127,7 @@ raw_env() {
       : "${AUTH_LOGIN_LOCKOUT_KEY:?AUTH_LOGIN_LOCKOUT_KEY is not set}" "${AUTH_RUNTIME_DATABASE_PASSWORD:?AUTH_RUNTIME_DATABASE_PASSWORD is not set}"
       : "${AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT:?AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT is not set}"
       : "${AUTH_AUTHORIZE_CALLER_SUBJECTS:?AUTH_AUTHORIZE_CALLER_SUBJECTS is not set}"
+      : "${AUTH_INVITE_TOKEN_SECRET:?AUTH_INVITE_TOKEN_SECRET is not set}"
       flag_rows auth-service
       # AUTH_REGISTER_LIMIT: go-api forwards register here (users owned) and every request of the run comes from one
       # address, so the 3/hour default would refuse the 4th sign-up. go-api's venue value, same form; prod sets none.
@@ -138,6 +143,7 @@ raw_env() {
         "AUTH_VALKEY_URI=${VALKEY_URI}" \
         "AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT=${AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT}" \
         "AUTH_AUTHORIZE_CALLER_SUBJECTS=${AUTH_AUTHORIZE_CALLER_SUBJECTS}" \
+        "AUTH_INVITE_TOKEN_SECRET=${AUTH_INVITE_TOKEN_SECRET}" \
         "AUTH_WORKLOAD_TRUST_DOMAIN=${TRUST_DOMAIN}" \
         "AUTH_WORKLOAD_EXCHANGE_CLUSTER_ISSUER=${CLUSTER_ISSUER}" \
         "AUTH_WORKLOAD_EXCHANGE_KUBE_API_URL=https://${TOKENREVIEW_ADDR}" \
@@ -178,12 +184,15 @@ with_env() {
 
 new_secret() { openssl rand -base64 32 | tr '+/' '-_' | tr -d '=\n'; }
 
-# migrate_run ROLE PASSWORD ARG...: auth-migrate with the environment of the compose one-shots.
+# migrate_run ROLE PASSWORD ARG...: auth-migrate with the environment of the compose one-shots, and the SSO providers switch
+# of auth-service's flags row (prod renders it on the auth-migrate and auth-grants Jobs from the same chart value).
 migrate_run() {
-  local user="$1" password="$2"
+  local user="$1" password="$2" sso_owned
   shift 2
+  sso_owned="$(flag_value auth-service AUTH_SSO_PROVIDERS_OWNED)"
+  [ -n "${sso_owned}" ] || die "the flags table has no auth-service AUTH_SSO_PROVIDERS_OWNED row"
   AUTH_MIGRATION_DATABASE_URI="$(dsn "${user}" "${password}")" \
-    AUTH_DATABASE_SCHEMA="${SCHEMA}" AUTH_USERS_OWNED=true \
+    AUTH_DATABASE_SCHEMA="${SCHEMA}" AUTH_USERS_OWNED=true AUTH_SSO_PROVIDERS_OWNED="${sso_owned}" \
     AUTH_RUNTIME_DATABASE_ROLE="${RUNTIME_ROLE}" AUTH_SCHEMA_OWNER_ROLE="${MIGRATION_ROLE}" \
     "${STATE}/bin/auth-migrate" "$@"
 }
@@ -308,7 +317,8 @@ up() {
   AUTH_LOGIN_LOCKOUT_KEY="$(new_secret)"
   AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT="$(principal_ref "${principal}")"
   AUTH_AUTHORIZE_CALLER_SUBJECTS="$(principal_ref "${web_principal}")"
-  export AUTH_SESSION_SUCCESSOR_KEY AUTH_LOGIN_LOCKOUT_KEY AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT AUTH_AUTHORIZE_CALLER_SUBJECTS
+  AUTH_INVITE_TOKEN_SECRET="$(new_secret)"
+  export AUTH_SESSION_SUCCESSOR_KEY AUTH_LOGIN_LOCKOUT_KEY AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT AUTH_AUTHORIZE_CALLER_SUBJECTS AUTH_INVITE_TOKEN_SECRET
   raw_env auth-service "${STATE}" >"${STATE}/auth-service.env"
   (
     cd "${STATE}"
@@ -359,9 +369,6 @@ down() {
   stop_pid "${STATE}/tokenreview.pid"
   stop_pid "${STATE}/idpstub.pid"
   stop_pid "${STATE}/smtpsink.pid"
-  if [ ! -L "${STATE}/license" ] && [ -d "${STATE}/license" ] && [ "$(cd "${STATE}/license" && pwd -P)" = "${STATE}/license" ]; then
-    rm -rf -- "${STATE}/license"
-  fi
   if [ ! -L "${STATE}/mail" ] && [ -d "${STATE}/mail" ] && [ "$(cd "${STATE}/mail" && pwd -P)" = "${STATE}/mail" ]; then
     rm -rf -- "${STATE}/mail/tokens"
   fi
@@ -528,11 +535,10 @@ enable_sso() {
   (cd "${ROOT}" && go build -trimpath -o "${STATE}/bin/idpstub" ./internal/testsupport/idpstub/cmd/idpstub)
   "${STATE}/bin/idpstub" certs -out "${STATE}/idp" -host localhost
   refresh_ca_bundle
-  mkdir -m 700 "${STATE}/license"
-  "${STATE}/bin/cigate" live-e2e mint-license "${STATE}/license/public.b64" "${STATE}/license/licence.txt"
+  # No process licence: prod go-api runs the community tier, so an SSO provider route admits a caller by its organization's
+  # own enterprise entitlement only (product rule C1, CHAOS-13636).
   touch "${STATE}/extra/go-api.env"
   chmod 600 "${STATE}/extra/go-api.env"
-  printf 'LICENSE_PUBLIC_KEY=%s\nLICENSE_KEY=%s\n' "$(cat "${STATE}/license/public.b64")" "$(cat "${STATE}/license/licence.txt")" >>"${STATE}/extra/go-api.env"
   printf '%s\n' 'AUTH_PROXY_OIDC=true' 'AUTH_PROXY_SAML=true' >>"${STATE}/extra/go-api.env"
   printf '%s\n' 'AUTH_SSO_ENABLED=true' "NODE_EXTRA_CA_CERTS=${STATE}/ca-bundle.pem" >>"${STATE}/extra/web.env"
   chmod 600 "${STATE}/auth-service.env"

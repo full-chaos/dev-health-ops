@@ -149,3 +149,58 @@ func TestTimeseriesRepoDimensionReadsANullRepoAsEmpty(t *testing.T) {
 		t.Fatalf("dimension values = %v, want the repo and the empty value of the row with no repository", dims)
 	}
 }
+
+// The sankey node/edge reads and the two timeseries reads scan a value that can
+// be NULL (toString of a Nullable dimension, date_trunc of a Nullable day) into
+// a nillable local and read NULL as the v2.49 zero value: "" or the zero date.
+func TestSankeyAndTimeseriesReadsKeepTheZeroValueOfANull(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	inst, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = inst.Close(context.Background()) }()
+	client, err := dhclickhouse.NewClickHouseQueryClientWithOptions(dhclickhouse.Options{DSN: inst.URI})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = client.Close() }()
+
+	t.Run("queryNodes", func(t *testing.T) {
+		nodes, err := queryNodes(ctx, client, compiledQuery{sql: "SELECT 'repo' AS dimension, toString(CAST(NULL AS Nullable(UUID))) AS node_id, toFloat64(1) AS value"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(nodes) != 1 || nodes[0].ID != "repo:" {
+			t.Fatalf("nodes = %+v, want one node with the empty id", nodes)
+		}
+	})
+	t.Run("queryEdges", func(t *testing.T) {
+		edges, err := queryEdges(ctx, client, compiledQuery{sql: "SELECT 'repo' AS source_dim, 'team' AS target_dim, toString(CAST(NULL AS Nullable(UUID))) AS source, 'team-a' AS target, toFloat64(1) AS value"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(edges) != 1 || edges[0].Source != "repo:" || edges[0].Target != "team:team-a" {
+			t.Fatalf("edges = %+v, want one edge from the empty repo id", edges)
+		}
+	})
+	t.Run("ExecuteTimeseries", func(t *testing.T) {
+		got, err := ExecuteTimeseries(ctx, client, compiledQuery{sql: "SELECT date_trunc('day', CAST(NULL AS Nullable(Date))) AS bucket, CAST(NULL AS Nullable(String)) AS dimension_value, toFloat64(1) AS value"}, "repo", "throughput")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got) != 1 || got[0].DimensionValue != "" || len(got[0].Buckets) != 1 || !got[0].Buckets[0].Date.Time().IsZero() {
+			t.Fatalf("series = %+v, want one series with the empty value and a zero bucket", got)
+		}
+	})
+	t.Run("ExecuteOrgTimeseries", func(t *testing.T) {
+		got, err := ExecuteOrgTimeseries(ctx, client, compiledQuery{sql: "SELECT date_trunc('day', CAST(NULL AS Nullable(Date))) AS bucket, toFloat64(1) AS numerator, toFloat64(2) AS denominator"}, "org", "pipeline_duration_p95", MeasurePipelineDurationP95)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got.Buckets) != 1 || !got.Buckets[0].Date.Time().IsZero() {
+			t.Fatalf("series = %+v, want one zero bucket", got)
+		}
+	})
+}

@@ -127,13 +127,20 @@ GROUP BY repo_id, team_id`, orgID, day, string(repoIDs[index])).Scan(&churn, &co
 				provider, churn, wantChurn[provider])
 		}
 	}
-	var bareChurn, bareCompleted uint64
+	var bareChurnValue, bareCompletedValue *uint64
 	if err := conn.QueryRow(ctx, `
 SELECT toUInt64(argMax(churn_loc, computed_at)), toUInt64(argMax(work_items_completed, computed_at))
 FROM work_item_completion_daily
 WHERE org_id = ? AND day = ? AND toString(repo_id) = ?
-GROUP BY repo_id, team_id`, orgID, day, bareRepo.String()).Scan(&bareChurn, &bareCompleted); err != nil {
+GROUP BY repo_id, team_id`, orgID, day, bareRepo.String()).Scan(&bareChurnValue, &bareCompletedValue); err != nil {
 		t.Fatalf("read the repository with no linked pull request: %v", err)
+	}
+	var bareChurn, bareCompleted uint64
+	if bareChurnValue != nil {
+		bareChurn = *bareChurnValue
+	}
+	if bareCompletedValue != nil {
+		bareCompleted = *bareCompletedValue
 	}
 	if bareCompleted != 1 || bareChurn != 0 {
 		t.Fatalf("no linked pull request: completed=%d churn_loc=%d, want 1 completed and churn_loc 0", bareCompleted, bareChurn)

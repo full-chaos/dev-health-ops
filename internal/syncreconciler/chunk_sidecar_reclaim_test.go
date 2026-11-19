@@ -3,10 +3,12 @@ package syncreconciler
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func TestDefaultChunkSidecarReclaimConfigPinsTheBounds(t *testing.T) {
@@ -51,24 +53,185 @@ func TestChunkSidecarReclaimRefusesInvalidConfiguration(t *testing.T) {
 	}
 }
 
-func TestChunkSidecarReclaimAllowanceIsASixtySecondWindow(t *testing.T) {
+func TestChunkReclaimLimiterIsASixtySecondWindowFromSettlement(t *testing.T) {
 	t.Parallel()
-	reclaim := &ChunkSidecarReclaim{config: DefaultChunkSidecarReclaimConfig()}
+	limiter := newChunkReclaimLimiter(256 << 20)
 	start := time.Date(2026, time.November, 19, 18, 0, 0, 0, time.UTC)
-	limit := reclaim.config.BytesPerMinute
-	reclaim.record(start, 100<<20)
-	reclaim.record(start.Add(30*time.Second), 150<<20)
+	first := limiter.reserve(start, 100<<20)
+	second := limiter.reserve(start, 150<<20)
+	if first == nil || second == nil {
+		t.Fatal("both reservations fit the window")
+	}
+	// Settled 30 s after admission: the charge runs from settlement.
+	limiter.settle(first, 100<<20, start.Add(30*time.Second))
+	limiter.settle(second, 150<<20, start)
 	for _, check := range []struct {
 		at   time.Duration
 		want int64
 	}{
-		{0, limit - 250<<20},
-		{59 * time.Second, limit - 250<<20},
-		{60 * time.Second, limit - 150<<20},
-		{90 * time.Second, limit},
+		{59 * time.Second, 6 << 20},
+		{60 * time.Second, 156 << 20},
+		{89 * time.Second, 156 << 20},
+		{90 * time.Second, 256 << 20},
 	} {
-		if got := reclaim.allowance(start.Add(check.at)); got != check.want {
-			t.Errorf("allowance at +%s = %d, want %d", check.at, got, check.want)
+		if got := limiter.available(start.Add(check.at)); got != check.want {
+			t.Errorf("available at +%s = %d, want %d", check.at, got, check.want)
+		}
+	}
+}
+
+func TestChunkReclaimLimiterCountsAnUnsettledReservationPastTheWindow(t *testing.T) {
+	t.Parallel()
+	limiter := newChunkReclaimLimiter(4 << 20)
+	start := time.Date(2026, time.November, 19, 18, 0, 0, 0, time.UTC)
+	inFlight := limiter.reserve(start, 4<<20)
+	if inFlight == nil {
+		t.Fatal("first reservation must fit")
+	}
+	if again := limiter.reserve(start.Add(5*time.Minute), 4<<20); again != nil {
+		t.Fatal("an unsettled reservation still holds its bytes after 60 s")
+	}
+	limiter.settle(inFlight, 0, start.Add(5*time.Minute))
+	if got := limiter.available(start.Add(5 * time.Minute)); got != 4<<20 {
+		t.Fatalf("a released reservation still counts: available %d", got)
+	}
+}
+
+func TestChunkReclaimLimiterAdmitsOverlappingReservationsOnce(t *testing.T) {
+	t.Parallel()
+	limiter := newChunkReclaimLimiter(4 << 20)
+	now := time.Date(2026, time.November, 19, 18, 0, 0, 0, time.UTC)
+	granted := make(chan int64, 16)
+	var wait sync.WaitGroup
+	for index := 0; index < 16; index++ {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			if spend := limiter.reserve(now, 4<<20); spend != nil {
+				granted <- spend.bytes
+			}
+		}()
+	}
+	wait.Wait()
+	close(granted)
+	var total int64
+	for bytes := range granted {
+		total += bytes
+	}
+	if total != 4<<20 {
+		t.Fatalf("16 overlapping reservations were granted %d bytes, want exactly the 4 MiB window", total)
+	}
+}
+
+func TestChunkSidecarReclaimProductionReclaimersShareOneLimiter(t *testing.T) {
+	t.Parallel()
+	pool := &pgxpool.Pool{}
+	first, err := NewChunkSidecarReclaim(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := NewChunkSidecarReclaim(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.limiter != second.limiter || first.limiter != processChunkReclaimLimiter {
+		t.Fatal("production reclaimers must share the process limiter")
+	}
+}
+
+func TestChunkSidecarReclaimConfigCannotRaiseTheBounds(t *testing.T) {
+	t.Parallel()
+	begin := func(context.Context) (pgx.Tx, error) { return nil, errors.New("unused") }
+	for name, mutate := range map[string]func(*ChunkSidecarReclaimConfig){
+		"257 rows":            func(config *ChunkSidecarReclaimConfig) { config.RowsPerStatement = 257 },
+		"33 MiB statement":    func(config *ChunkSidecarReclaimConfig) { config.BytesPerStatement = 33 << 20 },
+		"258 MiB per minute":  func(config *ChunkSidecarReclaimConfig) { config.BytesPerMinute = 258 << 20 },
+		"5 statements a tick": func(config *ChunkSidecarReclaimConfig) { config.StatementsPerTick = 5 },
+	} {
+		config := DefaultChunkSidecarReclaimConfig()
+		mutate(&config)
+		if _, err := newChunkSidecarReclaim(begin, config); !errors.Is(err, ErrInvalidConfiguration) {
+			t.Errorf("%s: error = %v, want ErrInvalidConfiguration", name, err)
+		}
+	}
+	lower := ChunkSidecarReclaimConfig{RowsPerStatement: 1, BytesPerStatement: 1, BytesPerMinute: maxChunkPayloadBytes, StatementsPerTick: 1}
+	if _, err := newChunkSidecarReclaim(begin, lower); err != nil {
+		t.Fatalf("lower bounds must stay valid: %v", err)
+	}
+}
+
+func TestMutationPipelineRefusesATypedNilChunkSidecarReclaim(t *testing.T) {
+	t.Parallel()
+	for name, reclaim := range map[string]ChunkSidecarReclaimStepper{
+		"nil pointer":  (*ChunkSidecarReclaim)(nil),
+		"nil function": pipelineChunkSidecarReclaimFunc(nil),
+	} {
+		if _, err := NewMutationPipeline(
+			pipelineLeaseRepairFunc(func(context.Context, time.Time, int) (LeaseRepairResult, error) { return LeaseRepairResult{}, nil }),
+			pipelineTerminalDeliveryRepairFunc(func(context.Context, time.Time, int) (TerminalDeliveryRepairResult, error) {
+				return TerminalDeliveryRepairResult{}, nil
+			}),
+			pipelineMaterializerFunc(func(context.Context, time.Time, time.Time, int) (MaterializerResult, error) {
+				return MaterializerResult{}, nil
+			}),
+			pipelineKernelFunc(func(context.Context, time.Time, int, time.Duration, AtLeastOncePublisher, PostSyncHandoff) (KernelResult, error) {
+				return KernelResult{}, nil
+			}),
+			pipelineObserverFunc(func(context.Context, time.Time, int) (Observation, error) { return Observation{}, nil }),
+			nil, nil, nil,
+			noopTerminalOutboxClose(),
+			noopOrphanedUnitRepair(),
+			reclaim,
+			DefaultMutationPipelineConfig(),
+		); !errors.Is(err, ErrInvalidConfiguration) {
+			t.Errorf("%s: error = %v, want ErrInvalidConfiguration", name, err)
+		}
+	}
+}
+
+// A repair or kernel failure aborts the delivery stages; it must not starve the
+// cleanup of units that are already terminal.
+func TestMutationPipelineRunsChunkSidecarReclaimWhenEarlierStagesAbort(t *testing.T) {
+	sentinel := errors.New("stage unavailable")
+	for name, failing := range map[string]StageName{"lease repair": StageLeaseRepair, "kernel": StageKernel} {
+		reclaimCalls := 0
+		pipeline, err := NewMutationPipeline(
+			pipelineLeaseRepairFunc(func(context.Context, time.Time, int) (LeaseRepairResult, error) {
+				if failing == StageLeaseRepair {
+					return LeaseRepairResult{}, sentinel
+				}
+				return LeaseRepairResult{}, nil
+			}),
+			pipelineTerminalDeliveryRepairFunc(func(context.Context, time.Time, int) (TerminalDeliveryRepairResult, error) {
+				return TerminalDeliveryRepairResult{}, nil
+			}),
+			pipelineMaterializerFunc(func(context.Context, time.Time, time.Time, int) (MaterializerResult, error) {
+				return MaterializerResult{}, nil
+			}),
+			pipelineKernelFunc(func(context.Context, time.Time, int, time.Duration, AtLeastOncePublisher, PostSyncHandoff) (KernelResult, error) {
+				if failing == StageKernel {
+					return KernelResult{}, sentinel
+				}
+				return KernelResult{}, nil
+			}),
+			pipelineObserverFunc(func(context.Context, time.Time, int) (Observation, error) { return Observation{}, nil }),
+			nil, nil, nil,
+			noopTerminalOutboxClose(),
+			noopOrphanedUnitRepair(),
+			pipelineChunkSidecarReclaimFunc(func(context.Context, time.Time, int) (ChunkSidecarReclaimResult, error) {
+				reclaimCalls++
+				return ChunkSidecarReclaimResult{}, nil
+			}),
+			DefaultMutationPipelineConfig(),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pipeline.Step(context.Background(), time.Now(), 10); err != nil {
+			t.Fatalf("%s: tick error %v", name, err)
+		}
+		if reclaimCalls != 1 {
+			t.Errorf("%s failed: reclaim ran %d times, want 1", name, reclaimCalls)
 		}
 	}
 }

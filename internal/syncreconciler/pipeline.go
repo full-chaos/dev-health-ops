@@ -250,7 +250,8 @@ func NewMutationPipeline(
 	// doc comment for why CHAOS-4583's closer carries no staged-rollout risk
 	// the way the sweep's terminalization did.
 	if repair == nil || terminal == nil || materializer == nil || kernel == nil ||
-		observer == nil || outboxClose == nil || orphanedUnit == nil || chunkReclaim == nil || !config.valid() {
+		observer == nil || outboxClose == nil || orphanedUnit == nil ||
+		chunkSidecarReclaimMissing(chunkReclaim) || !config.valid() {
 		return nil, ErrInvalidConfiguration
 	}
 	pipeline := &MutationPipeline{
@@ -1031,9 +1032,12 @@ func (pipeline *MutationPipeline) Step(
 		}
 	}
 
-	// After the kernel so it never delays a delivery. Its failure is absorbed
-	// and logged; the stage telemetry degrades readiness only on repeats.
-	if !aborted {
+	// After the kernel so it never delays a delivery, and NOT gated on
+	// aborted: a repair or kernel failure says nothing about terminal units'
+	// chunk rows, and gating on it let a busy kernel starve the cleanup. Its
+	// failure is absorbed and logged; the stage telemetry degrades readiness
+	// only on repeats.
+	if ctx.Err() == nil {
 		reclaimErr := pipeline.runStage(ctx, StageChunkSidecarReclaim, func(stageCtx context.Context) error {
 			_, stepErr := pipeline.chunkReclaim.Step(stageCtx, now, limit)
 			return stepErr

@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/domainroledb"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -187,7 +189,6 @@ func TestChunkSidecarReclaimPostgresContract(t *testing.T) {
 	venue := startChunkReclaimVenue(t, ctx)
 	now := time.Date(2026, time.November, 19, 18, 0, 0, 0, time.UTC)
 	unlimited := DefaultChunkSidecarReclaimConfig()
-	unlimited.BytesPerMinute = 1 << 40
 	oneStatement := unlimited
 	oneStatement.StatementsPerTick = 1
 
@@ -245,6 +246,8 @@ func TestChunkSidecarReclaimPostgresContract(t *testing.T) {
 		limited := DefaultChunkSidecarReclaimConfig()
 		limited.BytesPerMinute = 4 * chunkMiB
 		reclaim := newTestChunkReclaim(t, venue.Domain, limited)
+		clock := now
+		reclaim.clock = func() time.Time { return clock }
 		var logs bytes.Buffer
 		original := slog.Default()
 		slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
@@ -261,7 +264,8 @@ func TestChunkSidecarReclaimPostgresContract(t *testing.T) {
 			{61 * time.Second, 4 * chunkMiB, true, 2},
 			{122 * time.Second, 2 * chunkMiB, false, 0},
 		} {
-			result := stepChunkReclaim(t, ctx, reclaim, now.Add(want.at))
+			clock = now.Add(want.at)
+			result := stepChunkReclaim(t, ctx, reclaim, clock)
 			if result.Bytes != want.bytes || result.Throttled != want.throttled {
 				t.Fatalf("tick %d at +%s = %+v, want %d bytes, throttled %v", index, want.at, result, want.bytes, want.throttled)
 			}
@@ -394,4 +398,102 @@ func TestChunkSidecarReclaimPostgresContract(t *testing.T) {
 			wantChunkSidecars(t, ctx, venue.Admin, chunkReclaimUnitID(30+index), 0, 0)
 		}
 	})
+
+	t.Run("done follows the backlog count, not candidate selection", func(t *testing.T) {
+		resetChunkReclaimVenue(t, ctx, venue)
+		free, held := chunkReclaimUnitID(40), chunkReclaimUnitID(41)
+		seedChunkReclaimUnit(t, ctx, venue.Admin, free, "failed", 5, 1, now)
+		seedChunkReclaimUnit(t, ctx, venue.Admin, held, "failed", 5, 1, now)
+		holder, err := venue.Admin.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = holder.Rollback(ctx) }()
+		if _, err := holder.Exec(ctx, `SELECT 1 FROM public.sync_run_unit_chunk_checkpoints WHERE sync_run_unit_id = $1::uuid FOR UPDATE`, held); err != nil {
+			t.Fatal(err)
+		}
+		reclaim := newTestChunkReclaim(t, venue.Domain, unlimited)
+		result := stepChunkReclaim(t, ctx, reclaim, now)
+		if result.Units != 1 || result.Done || result.RemainingUnits != 1 {
+			t.Fatalf("with the last checkpoint locked elsewhere: %+v, want 1 unit, remaining 1, not done", result)
+		}
+		if result = stepChunkReclaim(t, ctx, reclaim, now); result.Statements != 0 || result.Done || result.RemainingUnits != 1 {
+			t.Fatalf("an active reclaimer whose only candidate is locked: %+v, want no statement, remaining 1, not done", result)
+		}
+		if err := holder.Rollback(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if result = stepChunkReclaim(t, ctx, reclaim, now); result.Units != 1 || !result.Done || result.RemainingUnits != 0 {
+			t.Fatalf("after the lock is gone: %+v, want the last unit and done", result)
+		}
+		if result = stepChunkReclaim(t, ctx, reclaim, now); result.Statements != 0 || result.Done || result.RemainingUnits != -1 {
+			t.Fatalf("idle tick after done: %+v, want no statement and no backlog read", result)
+		}
+	})
+
+	t.Run("a failure after a commit still logs the committed work", func(t *testing.T) {
+		resetChunkReclaimVenue(t, ctx, venue)
+		unit := chunkReclaimUnitID(50)
+		seedChunkReclaimUnit(t, ctx, venue.Admin, unit, "failed", 300, 1, now)
+		begins := 0
+		reclaim, err := newChunkSidecarReclaim(func(beginCtx context.Context) (pgx.Tx, error) {
+			begins++
+			if begins > 1 {
+				return nil, errors.New("begin refused")
+			}
+			return venue.Domain.Begin(beginCtx)
+		}, unlimited)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var logs bytes.Buffer
+		original := slog.Default()
+		slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
+		result, stepErr := reclaim.Step(ctx, now, 100)
+		slog.SetDefault(original)
+		if !errors.Is(stepErr, ErrUnavailable) {
+			t.Fatalf("step error = %v, want ErrUnavailable", stepErr)
+		}
+		if result.Rows != 256 || result.RemainingUnits != -1 || result.Done {
+			t.Fatalf("result = %+v, want the 256 committed rows, remaining -1, not done", result)
+		}
+		if !strings.Contains(logs.String(), `"msg":"syncreconciler.chunk_sidecar_reclaim","bytes":256,"rows":256,"units":0,"statements":1,"throttled":false,"remaining_units":-1,"done":false,"error":`) {
+			t.Fatalf("the tick line does not carry the committed work: %s", logs.String())
+		}
+		wantChunkSidecars(t, ctx, venue.Admin, unit, 1, 44)
+	})
+
+	t.Run("a COMMIT whose reply is lost keeps its whole reservation", func(t *testing.T) {
+		resetChunkReclaimVenue(t, ctx, venue)
+		unit := chunkReclaimUnitID(60)
+		seedChunkReclaimUnit(t, ctx, venue.Admin, unit, "failed", 10, chunkMiB, now)
+		config := unlimited
+		config.BytesPerStatement = 8 * chunkMiB
+		reclaim, err := newChunkSidecarReclaim(func(beginCtx context.Context) (pgx.Tx, error) {
+			tx, err := venue.Domain.Begin(beginCtx)
+			return lostCommitReplyTx{Tx: tx}, err
+		}, config)
+		if err != nil {
+			t.Fatal(err)
+		}
+		reclaim.clock = func() time.Time { return now }
+		if _, err := reclaim.Step(ctx, now, 1); !errors.Is(err, ErrUnavailable) {
+			t.Fatalf("step error = %v, want ErrUnavailable", err)
+		}
+		wantChunkSidecars(t, ctx, venue.Admin, unit, 1, 2)
+		if got := reclaim.limiter.available(now.Add(59 * time.Second)); got != config.BytesPerMinute-8*chunkMiB {
+			t.Fatalf("available after a lost COMMIT reply = %d, want the 8 MiB reservation still charged", got)
+		}
+	})
+}
+
+type lostCommitReplyTx struct {
+	pgx.Tx
+}
+
+func (tx lostCommitReplyTx) Commit(ctx context.Context) error {
+	if err := tx.Tx.Commit(ctx); err != nil {
+		return err
+	}
+	return errors.New("unexpected EOF after COMMIT")
 }

@@ -133,5 +133,16 @@ func computeTestopsTestMetricsWithoutTeams(
 	if err != nil {
 		return nil, err
 	}
-	return accumulator.Finish(historicalFailedNames), nil
+	metrics := accumulator.Finish(historicalFailedNames)
+	if len(metrics) == 0 {
+		return metrics, nil
+	}
+	reportRuns, err := loadNativeTestopsReportRunCounts(ctx, conn, orgID, repoID, start, end)
+	if err != nil {
+		return nil, err
+	}
+	for index := range metrics {
+		metrics[index].ReportRuns = reportRuns
+	}
+	return metrics, nil
 }

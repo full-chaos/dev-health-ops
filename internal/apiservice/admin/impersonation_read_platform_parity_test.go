@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -273,8 +274,8 @@ func TestAnAdminReadWithNoImpersonationStillAsksThePDP(t *testing.T) {
 	}
 }
 
-// A live-row platform admin's /admin/users writes are refused before any PDP call with the admin cell on: every one of
-// the four rows names admin.users and is enforced (D6833: the accepted write narrowing of the read-only impersonation
+// A live-row platform admin's /admin/users writes are refused with the impersonation 403 after exactly two PDP calls
+// (admin.users, members.manage) with the admin cell on: every one of the four rows names admin.users and is enforced (D6833: the accepted write narrowing of the read-only impersonation
 // flaw). The create and the delete stand for them here; apiservice pins all four.
 func TestAnImpersonationWriteOnAdminRoutesKeepsItsAnswer(t *testing.T) {
 	enforced, pdp := iprRig(t, true, true)
@@ -286,8 +287,8 @@ func TestAnImpersonationWriteOnAdminRoutesKeepsItsAnswer(t *testing.T) {
 		got := iprServe(enforced, write.method, write.path)
 		calls := pdp.take()
 		t.Logf("CELL|%s %s|enforce-on=%d %s|pdp_calls=%d %v", write.method, write.path, got.status, got.body, len(calls), calls)
-		if got.status != http.StatusForbidden || got.body != `{"detail":"Not allowed in an impersonation session"}` || len(calls) != 0 {
-			t.Errorf("%s %s: %d %s, %d PDP calls; want the impersonation 403 and 0", write.method, write.path, got.status, got.body, len(calls))
+		if got.status != http.StatusForbidden || got.body != `{"detail":"Not allowed in an impersonation session"}` || !reflect.DeepEqual(calls, []string{"admin.users", "members.manage"}) {
+			t.Errorf("%s %s: %d %s, PDP calls %v; want the impersonation 403 and [admin.users members.manage]", write.method, write.path, got.status, got.body, calls)
 		}
 	}
 }

@@ -21,9 +21,10 @@ import (
 // column.
 //
 // Every column list below is the Python sink's own column list, in the Python
-// sink's own order, including its omissions. A provider row never supplies a
-// value for work_items priority_raw/service_class/due_at, and
-// `work_item_transitions` never writes provider. The work_items write appends
+// sink's own order, including its omissions, with one exception: the
+// work_item_transitions write names provider, which the Python sink left at
+// its default. A provider row never supplies a value for work_items
+// priority_raw/service_class/due_at. The work_items write appends
 // those three columns and description (the stored-version contract in
 // stored_version.go): priority_raw/service_class carry the value the key
 // already holds; due_at is written as the row states it for gitlab, jira and
@@ -322,12 +323,12 @@ func workItemStoredRowsEqual(expected, actual workItemStoredRow) EffectInspectio
 // -----------------------------------------------------------------------------
 
 // GitHubWorkItemTransitionsClickHouseAdapter mirrors write_work_item_transitions
-// (metrics/sinks/clickhouse/work_graph.py:744). Note the absent `provider`
-// column: the Python sink builds no provider value for this table, so the stored
-// row carries the column default.
+// (metrics/sinks/clickhouse/work_graph.py:744), plus the `provider` column the
+// Python sink left at its default. The readback does not compare provider: a
+// row stored before provider was written holds an empty provider at the same key.
 type GitHubWorkItemTransitionsClickHouseAdapter struct{ Conn driver.Conn }
 
-const gitHubWorkItemTransitionsInsert = `INSERT INTO work_item_transitions (repo_id, work_item_id, occurred_at, from_status, to_status, from_status_raw, to_status_raw, actor, last_synced, org_id, source_id)`
+const gitHubWorkItemTransitionsInsert = `INSERT INTO work_item_transitions (repo_id, work_item_id, occurred_at, provider, from_status, to_status, from_status_raw, to_status_raw, actor, last_synced, org_id, source_id)`
 
 const gitHubWorkItemTransitionsSelect = `SELECT repo_id, work_item_id, occurred_at, from_status, to_status, from_status_raw, to_status_raw, actor, last_synced, org_id, source_id FROM work_item_transitions FINAL WHERE org_id = ? AND repo_id = ? AND work_item_id = ? AND occurred_at = toDateTime64(?, 3, 'UTC')`
 
@@ -335,6 +336,7 @@ type workItemTransitionStoredRow struct {
 	RepoID        uuid.UUID
 	WorkItemID    string
 	OccurredAt    time.Time
+	Provider      string
 	FromStatus    string
 	ToStatus      string
 	FromStatusRaw string
@@ -345,12 +347,31 @@ type workItemTransitionStoredRow struct {
 	SourceID      *uuid.UUID
 }
 
+// workItemTransitionProviderAccepted reports whether a transition row names a
+// provider that has a work-items capability (capabilities.go), spelled as the
+// registry spells it: the providers whose work-item routes write work_items.
+// Any other value is refused with an ERROR line, never written.
+func workItemTransitionProviderAccepted(ctx context.Context, row githubWorkItemTransitionRow) bool {
+	if _, ok := Capability(row.Provider, "work-items"); ok && row.Provider == strings.ToLower(strings.TrimSpace(row.Provider)) {
+		return true
+	}
+	logWorkItemTransitionProviderRefused(ctx, row.OrgID, row.Provider, row.WorkItemID)
+	return false
+}
+
+// logWorkItemTransitionProviderRefused is the ERROR line of every transition
+// sink that refuses a row for its provider.
+func logWorkItemTransitionProviderRefused(ctx context.Context, orgID, provider, workItemID string) {
+	slog.ErrorContext(ctx, "provider_sync.work_item_transition_provider_refused",
+		"org_id", orgID, "provider", provider, "work_item_id", workItemID)
+}
+
 func projectWorkItemTransition(row githubWorkItemTransitionRow) workItemTransitionStoredRow {
 	return workItemTransitionStoredRow{
 		// The semantic transition row carries no repo_id, so Python's
 		// `if repo_id_val: ... else uuid.UUID(int=0)` always takes the else
 		// branch for this unit.
-		RepoID: uuid.Nil, WorkItemID: row.WorkItemID,
+		RepoID: uuid.Nil, WorkItemID: row.WorkItemID, Provider: row.Provider,
 		OccurredAt: clickHouseMillis(row.OccurredAt), FromStatus: row.FromStatus,
 		ToStatus:      row.ToStatus,
 		FromStatusRaw: derefString(row.FromStatusRaw),
@@ -375,7 +396,7 @@ func (adapter GitHubWorkItemTransitionsClickHouseAdapter) WriteGitHubWorkItemEff
 		return err
 	}
 	for _, row := range rows {
-		if row.OrgID != identity.OrgID {
+		if row.OrgID != identity.OrgID || !workItemTransitionProviderAccepted(ctx, row) {
 			return ErrInvalidConfiguration
 		}
 	}
@@ -411,7 +432,7 @@ func (adapter GitHubWorkItemTransitionsClickHouseAdapter) InspectGitHubWorkItemE
 		return EffectConflict, err
 	}
 	for _, row := range rows {
-		if row.OrgID != identity.OrgID {
+		if row.OrgID != identity.OrgID || !workItemTransitionProviderAccepted(ctx, row) {
 			return EffectConflict, ErrInvalidConfiguration
 		}
 	}
@@ -1163,9 +1184,9 @@ func (row workItemStoredRow) values() []any {
 
 func (row workItemTransitionStoredRow) values() []any {
 	return []any{
-		row.RepoID, row.WorkItemID, row.OccurredAt, row.FromStatus, row.ToStatus,
-		row.FromStatusRaw, row.ToStatusRaw, row.Actor, row.LastSynced, row.OrgID,
-		row.SourceID,
+		row.RepoID, row.WorkItemID, row.OccurredAt, row.Provider, row.FromStatus,
+		row.ToStatus, row.FromStatusRaw, row.ToStatusRaw, row.Actor, row.LastSynced,
+		row.OrgID, row.SourceID,
 	}
 }
 

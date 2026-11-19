@@ -43,8 +43,9 @@ var revokedReadCells = []enforceCell{
 	{"billing", http.MethodGet, "/api/v1/billing/invoices"},
 }
 
-// With go-api enforce on, a live impersonation row refuses an enforced platform row or write before any decision point
-// call, also for a caller whose admin.impersonate was revoked; after the row ends the decision point decides.
+// With go-api enforce on, a live impersonation row refuses an enforced platform row or write, also for a caller whose
+// admin.impersonate was revoked: a write of an organization row unasked, a platform row after its role question only
+// (the allow is still the session refusal). After the row ends the decision point decides.
 func TestARevokedImpersonatorWithALiveRowIsRefusedOnEnforcedWriteAndPlatformRows(t *testing.T) {
 	for _, cell := range revokedRefusedCells {
 		t.Run(cell.namespace+" "+cell.method, func(t *testing.T) {
@@ -55,8 +56,8 @@ func TestARevokedImpersonatorWithALiveRowIsRefusedOnEnforcedWriteAndPlatformRows
 			if got.status != http.StatusForbidden || got.body != impersonationRefusalBody {
 				t.Errorf("live row: %d %q, want 403 %q", got.status, got.body, impersonationRefusalBody)
 			}
-			if n := len(pdp.calls()); n != 0 {
-				t.Errorf("live row: %d PDP calls, want 0", n)
+			if n, want := len(pdp.calls()), liveRowRoleCalls(shadowTestRows[cell.method+" "+cell.path], false, ""); n != want {
+				t.Errorf("live row: %d PDP calls, want %d", n, want)
 			}
 			if d := rec.snapshot(); !slices.Equal(d, []string{cell.namespace + "/impersonation_refused"}) {
 				t.Errorf("live row: decisions %v, want [%s/impersonation_refused]", d, cell.namespace)
@@ -66,6 +67,64 @@ func TestARevokedImpersonatorWithALiveRowIsRefusedOnEnforcedWriteAndPlatformRows
 			got = enforceRequest(enforceHandler(t, revokedImpersonatorStore(false, nil), userClaims(nil), newEnforcerFor(t, ended.client(t), onFor(cell.namespace))), cell.method, cell.path)
 			if got.status != http.StatusOK || len(ended.calls()) != 1 {
 				t.Errorf("row ended: %d %q, %d PDP calls, want 200 and 1", got.status, got.body, len(ended.calls()))
+			}
+		})
+	}
+}
+
+// A live row on an enforced platform row asks the row's role question first (decideLiveRow): a deny is the legacy
+// deny (counted deny), an allow or a failed question the session refusal (counted impersonation_refused, never a 503,
+// never served). An organization write row is refused unasked, whatever the decision point would say.
+func TestALiveRowOnAPlatformRowAsksTheRoleQuestionFirst(t *testing.T) {
+	orgless := func(c *AccessTokenClaims) { c.OrgID = nil }
+	for _, cell := range []struct {
+		name, verdict, method, path string
+		claims                      func(*AccessTokenClaims)
+		wantStatus                  int
+		wantBody, wantCounted       string
+		wantAsked                   []string
+	}{
+		{"platform deny", "deny", http.MethodGet, "/api/v1/admin/orgs", nil, http.StatusForbidden, superuserRefusalBody, "admin/deny", []string{ActionAdminOrgs}},
+		{"platform deny, no token org", "deny", http.MethodGet, "/api/v1/admin/orgs", orgless, http.StatusForbidden, `{"detail":"Organization context required"}`, "admin/deny", []string{ActionAdminOrgs}},
+		{"platform allow", "allow", http.MethodGet, "/api/v1/admin/orgs", nil, http.StatusForbidden, impersonationRefusalBody, "admin/impersonation_refused", []string{ActionAdminOrgs}},
+		{"platform question fails", "error", http.MethodGet, "/api/v1/admin/orgs", nil, http.StatusForbidden, impersonationRefusalBody, "admin/impersonation_refused", nil},
+		{"organization write deny", "deny", http.MethodPost, "/api/v1/admin/teams", nil, http.StatusForbidden, impersonationRefusalBody, "teams/impersonation_refused", nil},
+		{"organization write allow", "allow", http.MethodPost, "/api/v1/admin/teams", nil, http.StatusForbidden, impersonationRefusalBody, "teams/impersonation_refused", nil},
+	} {
+		t.Run(cell.name, func(t *testing.T) {
+			rec := recordEnforce(t)
+			verdict := allowAll
+			if cell.verdict != "allow" {
+				verdict = denyWith("role_lacks_action")
+			}
+			pdp := newTestPDP(t, verdict)
+			if cell.verdict == "error" {
+				pdp.kill()
+			}
+			namespace := shadowTestRows[cell.method+" "+cell.path].Namespace
+			store := revokedImpersonatorStore(true, nil)
+			got := enforceRequest(enforceHandler(t, store, userClaims(cell.claims), newEnforcerFor(t, pdp.client(t), onFor(namespace))), cell.method, cell.path)
+			if got.status != cell.wantStatus || strings.TrimSpace(got.body) != cell.wantBody {
+				t.Errorf("%d %q, want %d %q", got.status, got.body, cell.wantStatus, cell.wantBody)
+			}
+			if d := rec.snapshot(); !slices.Equal(d, []string{cell.wantCounted}) {
+				t.Errorf("counted %v, want [%s]", d, cell.wantCounted)
+			}
+			var asked []string
+			for _, call := range pdp.calls() {
+				if call.Type != "platform" || call.HasOrg || call.Principal != shadowBearer {
+					t.Errorf("PDP saw %+v, want the platform question of the caller's own bearer", call)
+				}
+				asked = append(asked, call.Action)
+			}
+			if !slices.Equal(asked, cell.wantAsked) {
+				t.Errorf("PDP asked %v, want %v", asked, cell.wantAsked)
+			}
+			if hits := pdp.deadHits.Load(); (cell.verdict == "error") != (hits > 0) {
+				t.Errorf("%d calls to the failing decision point, want the role question asked only when it fails", hits)
+			}
+			if store.sessionCalls != 1 {
+				t.Errorf("%d row reads, want 1", store.sessionCalls)
 			}
 		})
 	}
@@ -163,9 +222,9 @@ func TestEnforceOffIsUnchangedForARevokedImpersonator(t *testing.T) {
 	}
 }
 
-// With the shadow beside enforcement, as go-api installs them, a refusal by the live row asks no decision point
-// either: the shadow records impersonation_refused unasked. A failed row read leaves the session state unknown, so the
-// shadow records nothing and asks nothing.
+// With the shadow beside enforcement, as go-api installs them, a refusal by the live row asks the shadow nothing: the
+// shadow records impersonation_refused unasked, and the only call is the Enforcer's role question on a platform row
+// (decideLiveRow). A failed row read leaves the session state unknown, so the shadow records nothing and nothing is asked.
 func TestARevokedImpersonatorsRowRefusalAsksTheShadowNothing(t *testing.T) {
 	for _, cell := range revokedRefusedCells {
 		for name, readErr := range map[string]error{"live row": nil, "failing row read": errors.New("impersonation row read failed")} {
@@ -182,13 +241,13 @@ func TestARevokedImpersonatorsRowRefusalAsksTheShadowNothing(t *testing.T) {
 				mux.Handle("GET /api/v1/admin/orgs", guard.WrapPlatform(ActionAdminOrgs, echo))
 				got := enforceRequest(mux, cell.method, cell.path)
 				sh.wg.Wait()
-				want, wantResults := http.StatusForbidden, []string{"impersonation_refused"}
+				want, wantResults, wantCalls := http.StatusForbidden, []string{"impersonation_refused"}, liveRowRoleCalls(shadowTestRows[cell.method+" "+cell.path], false, "")
 				if readErr != nil {
-					want, wantResults = http.StatusServiceUnavailable, nil
+					want, wantResults, wantCalls = http.StatusServiceUnavailable, nil, 0
 				}
 				_, results := srec.snapshot()
-				if got.status != want || !slices.Equal(results, wantResults) || len(pdp.calls()) != 0 {
-					t.Errorf("%d, shadow %v, %d PDP calls; want %d, %v, 0", got.status, results, len(pdp.calls()), want, wantResults)
+				if got.status != want || !slices.Equal(results, wantResults) || len(pdp.calls()) != wantCalls {
+					t.Errorf("%d, shadow %v, %d PDP calls; want %d, %v, %d", got.status, results, len(pdp.calls()), want, wantResults, wantCalls)
 				}
 			})
 		}

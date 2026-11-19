@@ -222,7 +222,9 @@ func TestDenyTextRowsAnswerEveryCallerClassAsLegacy(t *testing.T) {
 				t.Logf("CELL\t%s\t%s\t%s\tlegacy=%d:%s\tnew=%d:%s\tpdp_calls=%d(%s)\t%s", posture.name, key, name, legacy.status, short(legacy.body), got.status, short(got.body), len(calls), action, result)
 				wantCalls, wantAction := 1, action
 				switch {
-				case name == "impersonating platform admin":
+				case name == "impersonating platform admin" && (posture.refuse || key != "POST /api/v1/telemetry/report"):
+					// the aggregate refuses first, or the organization row refuses a live row unasked; on the platform
+					// row the live row is refused after its role question only (decideLiveRow)
 					wantCalls = 0
 				case key == "PATCH /api/v1/orgs/me" && (name == "no platform role, no org claim" || name == "platform admin, no org claim"):
 					// an org-less caller on an organization row is asked the legacy org-less action

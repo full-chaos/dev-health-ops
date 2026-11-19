@@ -128,7 +128,8 @@ func TestTheHandoffConsumeRouteReadsNoRowUnderEnforcement(t *testing.T) {
 	}
 }
 
-// decide: only the exact consume template is exempt; every variant refuses an impersonating caller unasked.
+// decide: only the exact consume template is exempt; every variant refuses an impersonating caller after the row's role
+// question only.
 func TestTheHandoffConsumeExemptionIsTheExactTemplateOnly(t *testing.T) {
 	rows := maps.Clone(shadowTestRows)
 	rows[ImpersonationHandoffConsumePattern] = stopRouteRow(t)
@@ -144,7 +145,7 @@ func TestTheHandoffConsumeExemptionIsTheExactTemplateOnly(t *testing.T) {
 				t.Fatal(err)
 			}
 			got := enf.decide(context.Background(), enforceObservation{pattern: pattern, bearer: shadowBearer, userAccessToken: true, impersonating: true})
-			want, wantCalls, wantCounted := enforceImpersonationRefused, 0, "admin/impersonation_refused"
+			want, wantCalls, wantCounted := enforceImpersonationRefused, liveRowRoleCalls(rows[pattern], false, ""), "admin/impersonation_refused"
 			if pattern == ImpersonationHandoffConsumePattern {
 				want, wantCalls, wantCounted = enforceAllow, 1, "admin/allow"
 			}

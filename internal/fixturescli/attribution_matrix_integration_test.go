@@ -1758,6 +1758,45 @@ func rediscoverKnownDefects(ctx context.Context, t *testing.T, conn driver.Conn,
 
 	rediscoverFullTieDefects(t, facts, readers)
 
+	t.Run("an admin key over a pull request's repository owner", func(t *testing.T) {
+		// The CHAOS-14209 defect: a writer that ranks an admin team's key (a team with no provider) that names a pull
+		// request's repository above the repository's owner, so the admin team is the pull request's primary.
+		const check = "pull_request_admin_key_never_outranks_its_repository_owner"
+		if result := judge("github", check, facts, readers); len(result.Violations) > 0 {
+			t.Fatalf("an admin key outranks a repository owner before the plant: %v", result.Violations)
+		}
+		planted := withFacts("github", func(f *matrixFacts) {
+			var admins []string
+			for id, team := range f.teams {
+				if team.Active && team.Provider == "" && slices.Contains(team.ProjectKeys, githubAdminProject) {
+					admins = append(admins, id)
+				}
+			}
+			if len(admins) == 0 {
+				t.Fatal("the github world has no admin team that holds " + githubAdminProject)
+			}
+			sort.Strings(admins)
+			attribution := map[string][]attributionRow{}
+			for id, rows := range f.attribution {
+				attribution[id] = rows
+			}
+			for id, item := range f.items {
+				if !isPullRequestItem(item) || item.ProjectID != githubAdminProject {
+					continue
+				}
+				rows := append([]attributionRow{}, attribution[id]...)
+				for index := range rows {
+					rows[index].IsPrimary = 0
+				}
+				attribution[id] = append(rows, attributionRow{TeamID: admins[0], Source: "issue_project", Evidence: "issue_project_key=" + githubAdminProject, IsPrimary: 1})
+			}
+			f.attribution = attribution
+		})
+		if result := judge("github", check, planted, readers); len(result.Violations) == 0 {
+			t.Fatal("an admin key that outranks a pull request's repository owner is not found")
+		}
+	})
+
 	t.Run("a reader with its own ownership SQL", func(t *testing.T) {
 		planted := withReader("github", localOwnershipSQL(ctx, conn, orgs["github"]))
 		if result := judge("github", "readers_agree_with_the_ownership_rule", facts, planted); len(result.Violations) == 0 {

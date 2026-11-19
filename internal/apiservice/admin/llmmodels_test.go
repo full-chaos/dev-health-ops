@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/llmorgsettings"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
 
@@ -279,9 +280,11 @@ func (s *resolverSpy) validate(context.Context, string) (bool, string, error) {
 
 func newKeyGuardHandlers(spy *resolverSpy, stored string) *handlers {
 	return &handlers{
-		modelCache:  newLLMModelListCache(),
-		validateURL: spy.validate,
-		storedKey:   func(context.Context, string) (string, error) { return stored, nil },
+		modelCache:         newLLMModelListCache(),
+		validateURL:        spy.validate,
+		storedKey:          func(context.Context, string) (string, error) { return stored, nil },
+		storedPurposeKey:   func(context.Context, string, llmorgsettings.Purpose) (string, error) { return "", nil },
+		storedScopeBaseURL: func(context.Context, string, llmorgsettings.Purpose) (string, error) { return "", nil },
 	}
 }
 

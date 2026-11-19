@@ -89,6 +89,12 @@ The old collapse lost comments for good: the second of two same-millisecond comm
 
 Migration `107_work_item_interactions_comment_id.sql` is one `ALTER` and the view. The column is added with no `DEFAULT` (ClickHouse refuses a column with a default expression in the sorting key) and the key is extended in the same statement. It must be applied before a pod that writes `interaction_id` runs; an old pod's insert (no `interaction_id` in its column list) still works and writes a legacy row. A prepared snapshot stored by the previous release has interaction rows without an id: a new pod that replays one refuses it with `ErrPreviousReleaseSnapshot`, and the unit fails on its first attempt as `previous_release_snapshot` (no retry); the scope's next run is a new unit with a new snapshot. If the old pod had already written those rows (as legacy rows), the replay reads them back as exact and the unit succeeds.
 
+### Status transitions: `work_item_transitions.provider`
+
+Every writer of `work_item_transitions` stores `provider`: the native sync writes the row's provider (`github`, `gitlab`, `jira` or `linear`, the providers with a work-items capability), and the external push writes the batch source system, as it does for `work_items`. A transition row with any other provider is refused with an error and an `ERROR` log line; it is never written.
+
+Rows written before the writers stored `provider` hold an empty `provider`. There is no backfill: a row gets its provider only when a sync or a push writes the same transition again (same sorting key, newer `last_synced`). So the column is mixed. Until every row is re-synced, no reader filters or groups `work_item_transitions` by `provider`. To get the provider of a transition, join `work_items` on `(org_id, work_item_id)`. `provider` is not in the sorting key, so writing it changes no deduplication.
+
 ### Measure capability: `work_item_measure_capability`
 
 `work_item_metrics_daily` stores `bug_completed_ratio` and `story_points_completed` as non-null numbers, so a stored `0` cannot say whether the work was measured and came to zero or the provider does not track the measure. `work_item_measure_capability` (migration `111_work_item_measure_capability.sql`) holds that answer apart, for each organization, provider and measure, so a reader can answer "not applicable" instead of `0`.

@@ -1036,6 +1036,19 @@ func (derived GithubWorkItemDerivationContext) resolve(
 		"assignee_membership", "linked_issue", "author_membership",
 		"manual_fallback", "unassigned",
 	}
+	// CHAOS-14209: on a pull or merge request, an admin team's key (a team
+	// with no provider) is a manual mapping: a GitHub pull request's project
+	// id is its repository's name. It never outranks a native owner or a
+	// linked issue's donor, so it ranks after linked_issue. It stays before
+	// author_membership, so CHAOS-5649 rule 1 still holds when it wins.
+	if issueProject := bySource["issue_project"]; len(issueProject) > 0 && issueProject[0].TeamProvider == "" &&
+		GithubWorkItemDerivationIsPullOrMergeRequestType(subject.Provider, subject.Type) {
+		order = []string{
+			"native_team", "project_ownership", "repo_ownership",
+			"assignee_membership", "linked_issue", "issue_project", "author_membership",
+			"manual_fallback", "unassigned",
+		}
+	}
 	var primary *GithubWorkItemDerivationCandidate
 	var coOwners []GithubWorkItemDerivationCandidate
 	all := make([]GithubWorkItemDerivationCandidate, 0)
@@ -1296,6 +1309,32 @@ func BestTierLinkedPullRequests(
 	return kept
 }
 
+// LinkedPullRequestRepoEvidence is the evidence of an issue's repo_ownership
+// row taken from a linked pull request: the link's repository, number and tier.
+func LinkedPullRequestRepoEvidence(link GithubWorkItemDerivationLinkedPullRequest) string {
+	return fmt.Sprintf("repo_ownership=%s;work_graph_issue_pr=%d;tier=%s", link.RepoID, link.PRNumber, link.Tier)
+}
+
+// ParseLinkedPullRequestRepoEvidence reads back the link named by
+// LinkedPullRequestRepoEvidence; ok is false for any other evidence.
+func ParseLinkedPullRequestRepoEvidence(evidence string) (GithubWorkItemDerivationLinkedPullRequest, bool) {
+	parts := strings.Split(evidence, ";")
+	if len(parts) != 3 {
+		return GithubWorkItemDerivationLinkedPullRequest{}, false
+	}
+	repoID, okRepo := strings.CutPrefix(parts[0], "repo_ownership=")
+	number, okNumber := strings.CutPrefix(parts[1], "work_graph_issue_pr=")
+	tier, okTier := strings.CutPrefix(parts[2], "tier=")
+	if !okRepo || !okNumber || !okTier || repoID == "" || tier == "" {
+		return GithubWorkItemDerivationLinkedPullRequest{}, false
+	}
+	prNumber, err := strconv.ParseUint(number, 10, 32)
+	if err != nil {
+		return GithubWorkItemDerivationLinkedPullRequest{}, false
+	}
+	return GithubWorkItemDerivationLinkedPullRequest{RepoID: repoID, PRNumber: uint32(prNumber), Tier: tier}, true
+}
+
 // linkTierConfidence is the confidence of a repository owner reached through a
 // link of tier: the owner fact's own for a native link, one step lower on the
 // scale high > medium > low for explicit_text, and low for heuristic. A lower
@@ -1338,7 +1377,7 @@ func (derived GithubWorkItemDerivationContext) linkedPullRequestRepoCandidates(
 				if GithubWorkItemDerivationStringValue(candidate.TeamID) == "" || derived.candidateNamesInactiveTeam(candidate) {
 					continue
 				}
-				candidate.Evidence = fmt.Sprintf("repo_ownership=%s;work_graph_issue_pr=%d;tier=%s", link.RepoID, link.PRNumber, link.Tier)
+				candidate.Evidence = LinkedPullRequestRepoEvidence(link)
 				candidate.Confidence = linkTierConfidence(candidate.Confidence, link.Tier)
 				facts = append(facts, candidate)
 			}

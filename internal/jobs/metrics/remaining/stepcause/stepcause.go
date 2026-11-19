@@ -82,6 +82,15 @@ var (
 	ScanDonorKindDonorChange                          = Step{label: "scan donor work item kind (donor change)"}
 	IterateDonorKindsDonorChange                      = Step{label: "iterate donor work item kinds (donor change)"}
 	LoadInactiveTeamsDonorChange                      = Step{label: "load inactive teams (donor change)"}
+	QueryLinkChangeCandidates                         = Step{label: "query link change candidates"}
+	ScanLinkChangeCandidate                           = Step{label: "scan link change candidate"}
+	IterateLinkChangeCandidates                       = Step{label: "iterate link change candidates"}
+	QueryNewestRowsLinkChange                         = Step{label: "query newest attribution rows (link change)"}
+	ScanNewestRowLinkChange                           = Step{label: "scan newest attribution row (link change)"}
+	IterateNewestRowsLinkChange                       = Step{label: "iterate newest attribution rows (link change)"}
+	QueryLinksLinkChange                              = Step{label: "query work_graph_issue_pr (link change)"}
+	ScanLinkLinkChange                                = Step{label: "scan work_graph_issue_pr row (link change)"}
+	IterateLinksLinkChange                            = Step{label: "iterate work_graph_issue_pr rows (link change)"}
 	ClaimPartition                                    = Step{label: "claim_partition"}
 	LoadRun                                           = Step{label: "load_run"}
 	ComputePartition                                  = Step{label: "compute_partition"}

@@ -337,7 +337,7 @@ func externalInsertQuery(kind string) (string, error) {
 		"team.v1":                 "INSERT INTO teams (id,team_uuid,name,description,manual_members,project_keys,repo_patterns,is_active,updated_at,last_synced,org_id,provider,native_team_key,parent_team_id,source_id,created_at,provider_team_id,provider_name,gone_at)",
 		"identity.v1":             "INSERT INTO identities (org_id,canonical_id,identity_uuid,display_name,email,provider_identities,team_ids,is_active,updated_at,source_id)",
 		"work_item.v1":            "INSERT INTO work_items (repo_id,work_item_id,provider,title,type,status,status_raw,project_key,project_id,native_team_key,project_name,assignees,reporter,created_at,updated_at,started_at,completed_at,closed_at,labels,story_points,sprint_id,sprint_name,parent_id,epic_id,url,last_synced,org_id,source_id)",
-		"work_item_transition.v1": "INSERT INTO work_item_transitions (repo_id,work_item_id,occurred_at,from_status,to_status,from_status_raw,to_status_raw,actor,last_synced,org_id,source_id)",
+		"work_item_transition.v1": "INSERT INTO work_item_transitions (repo_id,work_item_id,occurred_at,provider,from_status,to_status,from_status_raw,to_status_raw,actor,last_synced,org_id,source_id)",
 		// The statement is NOT spelled here. projectmembership owns it, because
 		// the providersync effect adapter writes the same table and two
 		// independently maintained column lists agree only until someone edits
@@ -621,8 +621,16 @@ func externalWorkItemValues(source externalSinkBatch, payload map[string]any, no
 	}, nil
 }
 
+// externalTransitionValues stores the batch source system as provider, as
+// work_item.v1 does. A system whose work_item.v1 rows the push refuses
+// (externalAllowedKinds) is refused here too, with an ERROR line.
 func externalTransitionValues(source externalSinkBatch, payload map[string]any, now time.Time, scope *ExternalRecomputeScope) ([]any, error) {
 	system, sourceInstance := source.Pointer.SourceSystem, source.Pointer.SourceInstance
+	if _, accepted := externalAllowedKinds[system]["work_item.v1"]; !accepted {
+		slog.Error("external push: work_item_transition.v1 refused: source system has no work items",
+			"organization_id", source.Pointer.OrgID, "source_system", system)
+		return nil, fmt.Errorf("work_item_transition.v1: source system %q has no work items", system)
+	}
 	instance := externalWorkItemInstance(system, sourceInstance, "")
 	workItemID := externalWorkItemID(system, instance, stringField(payload, "externalKey"), stringField(payload, "workItemType"))
 	repoID := uuid.Nil
@@ -640,7 +648,7 @@ func externalTransitionValues(source externalSinkBatch, payload map[string]any, 
 		actor = externalIdentity(system, raw)
 	}
 	return []any{
-		repoID, workItemID, occurredAt,
+		repoID, workItemID, occurredAt, system,
 		stringField(payload, "fromStatus"), stringField(payload, "toStatus"),
 		stringField(payload, "fromStatusRaw"), stringField(payload, "toStatusRaw"),
 		actor, now, source.Pointer.OrgID, source.SourceID,

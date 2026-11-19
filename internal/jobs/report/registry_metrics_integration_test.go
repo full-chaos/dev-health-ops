@@ -253,6 +253,8 @@ func TestClickHouseQueryAdapterChartsEveryRegistryMetric(t *testing.T) {
 		// keep their seeded values; the seeded distinct_cases is shared by both rules).
 		"flake_rate":            {0, 2, 10},
 		"retry_dependency_rate": {0, 10},
+		// 1 recurrent failed name of 4 distinct failed names.
+		"failure_recurrence_score": {1, 4},
 	}
 	for _, name := range ruleMetrics {
 		rule, inputValues := chartRules[name], ruleInputValues[name]

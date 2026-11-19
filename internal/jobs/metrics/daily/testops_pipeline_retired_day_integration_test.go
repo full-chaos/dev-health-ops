@@ -66,7 +66,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, 100, 5, 0, NULL, 'svc-a', ?)`,
 		if err != nil {
 			t.Fatalf("%s: %v", id, err)
 		}
-		time.Sleep(1100 * time.Millisecond)
+		time.Sleep(2100 * time.Millisecond) // a retiring marker sits one second below the next snapshot: two seconds apart
 		return written
 	}
 	live := func(repo uuid.UUID) bool {

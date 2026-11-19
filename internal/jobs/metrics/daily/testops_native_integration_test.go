@@ -825,6 +825,7 @@ func sameCoverageMetric(a, b testops.CoverageMetric) bool {
 		sameFloatPtr(a.LineCoveragePct, b.LineCoveragePct) &&
 		sameFloatPtr(a.BranchCoveragePct, b.BranchCoveragePct) &&
 		sameUintPtr(a.LinesTotal, b.LinesTotal) && sameUintPtr(a.LinesCovered, b.LinesCovered) &&
+		sameUintPtr(a.BranchesTotal, b.BranchesTotal) && sameUintPtr(a.BranchesCovered, b.BranchesCovered) &&
 		sameFloatPtr(a.CoverageDeltaPct, b.CoverageDeltaPct) &&
 		a.UncoveredFilesCount == b.UncoveredFilesCount &&
 		a.CoverageRegressionCount == b.CoverageRegressionCount &&

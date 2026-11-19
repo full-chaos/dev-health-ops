@@ -290,16 +290,30 @@ func impersonating(next http.Handler) http.Handler {
 
 const impersonationRefusalBody = `{"detail":"Not allowed in an impersonation session"}`
 
-// An enforced write row, or a platform wrap, refuses a caller with a live go-api impersonation row before any decision
-// point call: the bearer is the actor's own, so the decision point would judge the actor in the actor's organization,
-// not the delegation. Its reads of other rows keep the legacy answer (impersonation_read_parity_test.go).
-func TestAnImpersonatingAdminOnAnEnforcedRowIsRefusedBeforeThePDP(t *testing.T) {
+// liveRowRoleCalls is the number of decision point requests decideLiveRow makes for a caller with a live row on row: the
+// role question on a platform row (a batch of two on an admin-or row with a token organization), none on an organization row.
+func liveRowRoleCalls(row ShadowRow, adminOr bool, org string) int {
+	switch {
+	case row.ResourceType != policycatalog.ScopePlatform:
+		return 0
+	case adminOr && org != "":
+		return 2
+	}
+	return 1
+}
+
+// An enforced write row, or a platform wrap, refuses a caller with a live go-api impersonation row: the bearer is the
+// actor's own, so the decision point would judge the actor in the actor's organization, not the delegation. An
+// organization row is refused unasked; a platform row asks only the role question first (decideLiveRow), and an allow
+// is still the session refusal. Its reads of other rows keep the legacy answer (impersonation_read_parity_test.go).
+func TestAnImpersonatingAdminOnAnEnforcedRowIsRefusedAfterTheRoleQuestionOnly(t *testing.T) {
 	for _, cell := range []struct {
 		namespace, method, path string
 		who                     persona
+		wantCalls               int
 	}{
-		{"teams", http.MethodPost, "/api/v1/admin/teams", personaAdmin},
-		{"admin", http.MethodGet, "/api/v1/admin/orgs", personaSuperuser},
+		{"teams", http.MethodPost, "/api/v1/admin/teams", personaAdmin, 0},
+		{"admin", http.MethodGet, "/api/v1/admin/orgs", personaSuperuser, 1},
 	} {
 		t.Run(cell.namespace, func(t *testing.T) {
 			rec := recordEnforce(t)
@@ -309,8 +323,8 @@ func TestAnImpersonatingAdminOnAnEnforcedRowIsRefusedBeforeThePDP(t *testing.T) 
 			if got.status != http.StatusForbidden || got.body != impersonationRefusalBody {
 				t.Errorf("impersonating caller on an enforced row: %d %q, want 403 %q", got.status, got.body, impersonationRefusalBody)
 			}
-			if n := len(pdp.calls()); n != 0 {
-				t.Errorf("%d PDP calls, want 0", n)
+			if n := len(pdp.calls()); n != cell.wantCalls {
+				t.Errorf("%d PDP calls, want %d", n, cell.wantCalls)
 			}
 			if d, u := rec.snapshot(), rec.unjudgedSnapshot(); !slices.Equal(d, []string{cell.namespace + "/impersonation_refused"}) || len(u) != 0 {
 				t.Errorf("decisions %v unjudged %v, want [%s/impersonation_refused] and none", d, u, cell.namespace)
@@ -431,7 +445,8 @@ var stopPatternVariants = []string{
 	"DELETE /api/v1/admin/impersonate/stop",
 }
 
-// An enforced row whose template is not exactly the stop route's refuses an impersonating caller unasked.
+// An enforced row whose template is not exactly the stop route's refuses an impersonating caller after the row's role
+// question only (the row is a platform row; the allow is still the session refusal).
 func TestTheStopExemptionIsTheExactTemplateOnly(t *testing.T) {
 	rows := maps.Clone(shadowTestRows)
 	rows[stopImpersonationPattern] = stopRouteRow(t)
@@ -447,7 +462,7 @@ func TestTheStopExemptionIsTheExactTemplateOnly(t *testing.T) {
 				t.Fatal(err)
 			}
 			got := enf.decide(context.Background(), enforceObservation{pattern: pattern, bearer: shadowBearer, userAccessToken: true, impersonating: true})
-			want, wantCalls, wantCounted := enforceImpersonationRefused, 0, "admin/impersonation_refused"
+			want, wantCalls, wantCounted := enforceImpersonationRefused, liveRowRoleCalls(rows[pattern], false, ""), "admin/impersonation_refused"
 			if pattern == stopImpersonationPattern {
 				want, wantCalls, wantCounted = enforceAllow, 1, "admin/allow"
 			}
@@ -459,7 +474,7 @@ func TestTheStopExemptionIsTheExactTemplateOnly(t *testing.T) {
 }
 
 // Through the mux: a request whose path or method is not the stop route's either reaches another enforced row and is
-// refused unasked, or reaches no handler at all. Only the exact stop request is served.
+// refused after that row's role question only, or reaches no handler at all. Only the exact stop request is served.
 func TestTheStopExemptionThroughTheMux(t *testing.T) {
 	const subtree = "POST /api/v1/admin/impersonate/"
 	rows := maps.Clone(shadowTestRows)
@@ -494,8 +509,12 @@ func TestTheStopExemptionThroughTheMux(t *testing.T) {
 			mux.Handle(subtree, guard.WrapPlatform(ActionAdminImpersonate, echo))
 			got := enforceRequest(impersonating(mux), cell.method, cell.path)
 			t.Logf("%s %s -> %d", cell.method, cell.path, got.status)
-			if n := len(pdp.calls()); n != 0 || strings.Contains(got.body, "user=") {
-				t.Errorf("%d PDP calls, served %q; want 0 and not served", n, got.body)
+			wantCalls := 0
+			if cell.refused {
+				wantCalls = liveRowRoleCalls(rows[subtree], false, "")
+			}
+			if n := len(pdp.calls()); n != wantCalls || strings.Contains(got.body, "user=") {
+				t.Errorf("%d PDP calls, served %q; want %d and not served", n, got.body, wantCalls)
 			}
 			if cell.refused {
 				if got.status != http.StatusForbidden || got.body != impersonationRefusalBody || !slices.Equal(rec.snapshot(), []string{"admin/impersonation_refused"}) {
@@ -532,7 +551,8 @@ func profilePath(route string) string {
 
 // With enforcement and the shadow both on, as go-api installs them on one guard, every non-stop go-api profile row
 // that is not a read refuses an impersonating caller with the 403 and counts it once in each: the enforcement outcome
-// and the shadow result impersonation_refused, with no decision point call.
+// and the shadow result impersonation_refused. The shadow asks nothing; the Enforcer asks a platform row's role
+// question only (decideLiveRow), an organization row nothing.
 func TestAnEnforcedImpersonationRefusalIsAlsoAShadowResultOnEveryProfileRow(t *testing.T) {
 	rows, err := ParseShadowRows(authv1.GoAPIEndpointProfiles, "dev-health-ops-api")
 	if err != nil {
@@ -567,8 +587,8 @@ func TestAnEnforcedImpersonationRefusalIsAlsoAShadowResultOnEveryProfileRow(t *t
 			if !slices.Equal(erec.snapshot(), []string{row.Namespace + "/impersonation_refused"}) || !slices.Equal(results, []string{"impersonation_refused"}) {
 				t.Errorf("enforcement %v shadow %v, want [%s/impersonation_refused] and [impersonation_refused]", erec.snapshot(), results, row.Namespace)
 			}
-			if n := len(pdp.calls()); n != 0 {
-				t.Errorf("%d PDP calls, want 0", n)
+			if n, want := len(pdp.calls()), liveRowRoleCalls(row, false, ""); n != want {
+				t.Errorf("%d PDP calls, want %d", n, want)
 			}
 		})
 	}

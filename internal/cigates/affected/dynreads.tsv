@@ -612,6 +612,7 @@ internal/queryapi/server	query_route_name_fields_legacy_test.go
 internal/queryapi/server	query_route_operating_review_no_data_test.go
 internal/queryapi/server	query_route_review_edges_names_test.go
 internal/queryapi/server	query_route_testops_filteremptyreason_documents_test.go
+internal/queryapi/server	query_route_testops_report_completeness_documents_test.go
 internal/queryapi/server	query_route_testops_risk_partial_documents_test.go
 internal/queryapi/server	query_route_testops_scope_documents_test.go
 internal/queryapi/server	query_route_wire_capture_test.go
@@ -649,6 +650,7 @@ internal/signingkey	jwks_key_test.go
 internal/signingkey	keygen.go
 internal/signingkey	keygen_state_test.go
 internal/signingkey	keygen_test.go
+internal/storage/clickhouse	batchctx_test.go
 internal/storage/clickhouse	worker_posture_test.go
 internal/storage/clickhouse/liverow	census_test.go
 internal/storage/postgres	api_authorization_platform_roles_test.go

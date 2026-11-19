@@ -126,6 +126,15 @@ func retentionUniqueKinds() []retentionUniqueKind {
 	}
 }
 
+// The cell below accepts any margin in (22h, 26h); this exact check closes
+// that gap and runs before PostgreSQL starts.
+func TestRetentionUniqueOutboxMarginIsExactlyOneDay(t *testing.T) {
+	margin := retentionUniqueOutboxRetention - config.DefaultDiscardedJobRetention
+	if margin != 24*time.Hour {
+		t.Fatalf("outbox retention - River discarded retention = %s, want exactly 24h", margin)
+	}
+}
+
 // TestRiverRetentionAgainstOutboxPruneForStableKeys runs the shipped default
 // River retention against the outbox prune. A key is published and
 // delivered, its River job finalizes after a given lag, the 30-day

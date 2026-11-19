@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"log/slog"
 	"strings"
 
 	"github.com/99designs/gqlgen/graphql"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/analytics"
 )
 
 const graphQLInternalMessage = "Internal Server Error"
@@ -53,6 +55,15 @@ func safeGraphQLErrorPresenter(label string, observe func(context.Context)) grap
 			chain = append(chain, unwrapped.Error())
 		}
 		requestID := graphQLRequestID(ctx)
+		// A resolver error the client's cancel caused is not a failure: no chain.
+		// An analytics read reported it in its own phase (and counted it); any
+		// other one (a mutation's commit) gets one INFO line of its own kind
+		// here, never the analytics read counter.
+		cancelled := analytics.ClientCancelled(ctx, err)
+		if cancelled && !analytics.ClientCancelReported(err) {
+			slog.InfoContext(ctx, "query-api: resolver ended by the client's cancel",
+				"presenter", label, "kind", graphQLOperationKind(ctx), "request_id", logSafeRequestID(requestID))
+		}
 		presented := graphql.DefaultErrorPresenter(ctx, err)
 		var client *policy.ClientError
 		switch {
@@ -62,14 +73,32 @@ func safeGraphQLErrorPresenter(label string, observe func(context.Context)) grap
 		default:
 			presented.Message = graphQLInternalMessage
 			presented.Extensions = withRequestID(presented.Extensions, requestID)
+			if cancelled {
+				return withMutationLocation(ctx, presented)
+			}
 			log.Printf("query-api: %s resolver error masked from the client: request_id=%s unwrap chain: %s",
 				label, logSafeRequestID(requestID), truncateForLog(strings.Join(chain, " <- "), maxUnwrapChainLogBytes))
+			return withMutationLocation(ctx, presented)
+		}
+		if cancelled {
 			return withMutationLocation(ctx, presented)
 		}
 		log.Printf("query-api: %s resolver error unwrap chain: request_id=%s %s",
 			label, logSafeRequestID(requestID), truncateForLog(strings.Join(chain, " <- "), maxUnwrapChainLogBytes))
 		return withMutationLocation(ctx, presented)
 	}
+}
+
+// graphQLOperationKind is the operation type of the request (query,
+// mutation, subscription), or "unknown" outside an operation.
+func graphQLOperationKind(ctx context.Context) string {
+	if !graphql.HasOperationContext(ctx) {
+		return "unknown"
+	}
+	if operation := graphql.GetOperationContext(ctx).Operation; operation != nil && operation.Operation != "" {
+		return string(operation.Operation)
+	}
+	return "unknown"
 }
 
 // authoredGraphQLError reports whether err holds a *gqlerror.Error that a

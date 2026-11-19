@@ -32,6 +32,14 @@ import (
 
 const groupedSankeyOrg = "seeded-sankey-grouped"
 
+const groupedSankeyWorkers = 8
+
+// groupedSankeyQueryTimeoutSeconds is both the max_execution_time compiled
+// into every query and the client's per-query budget, so the client does
+// not cut a query at its 10 s default first. Measured worst server time:
+// 9.9 s, with ClickHouse held to 0.5 CPU (CHAOS-14205).
+const groupedSankeyQueryTimeoutSeconds = 30
+
 func seedGroupedSankey(t *testing.T, ctx context.Context, conn stdclickhouse.Conn) {
 	t.Helper()
 	exec := func(what, sql string) {
@@ -193,12 +201,6 @@ func TestSankeyGrouped_SeededRealClickHouse_EqualsPerDimensionQueries(t *testing
 	chschema.CreateTables(ctx, t, conn, "work_unit_investments")
 	seedGroupedSankey(t, ctx, conn)
 
-	client, err := dhclickhouse.NewClickHouseQueryClientWithOptions(dhclickhouse.Options{DSN: inst.URI})
-	if err != nil {
-		t.Fatalf("construct ClickHouse query client: %v", err)
-	}
-	defer func() { _ = client.Close() }()
-
 	dims := []Dimension{DimensionTeam, DimensionTheme, DimensionSubcategory, DimensionRepo, DimensionWorkType}
 	limits := []struct{ nodes, edges int }{{3, 2}, {10, 3}, {100, 500}}
 	themeFilter := &model.FilterInput{Why: &model.WhyFilterInput{WorkCategory: []string{"feature_delivery"}}}
@@ -210,8 +212,10 @@ func TestSankeyGrouped_SeededRealClickHouse_EqualsPerDimensionQueries(t *testing
 		filters       *model.FilterInput
 	}
 	var domain []diffCase
+	maxPathLen := 0
 	for _, useInvestment := range []bool{true, false} {
 		for _, path := range groupedSankeyPaths(dims) {
+			maxPathLen = max(maxPathLen, len(path))
 			for _, measure := range []Measure{MeasureCount, MeasureChurnLOC} {
 				for _, lim := range limits {
 					for _, filters := range []*model.FilterInput{nil, themeFilter} {
@@ -231,6 +235,22 @@ func TestSankeyGrouped_SeededRealClickHouse_EqualsPerDimensionQueries(t *testing
 		}
 	}
 
+	// The per-dimension arm runs one nodes query and len(path)-1 edges
+	// queries at once, so each worker holds up to maxPathLen connections;
+	// a smaller pool makes a query wait for a connection inside its own
+	// budget (CHAOS-14205).
+	pool := groupedSankeyWorkers * maxPathLen
+	client, err := dhclickhouse.NewClickHouseQueryClientWithOptions(dhclickhouse.Options{
+		DSN:              inst.URI,
+		MaxOpenConns:     pool,
+		MaxIdleConns:     pool,
+		MaxExecutionTime: groupedSankeyQueryTimeoutSeconds,
+	})
+	if err != nil {
+		t.Fatalf("construct ClickHouse query client: %v", err)
+	}
+	defer func() { _ = client.Close() }()
+
 	// Each worker writes only its own results slot.
 	type result struct {
 		failure             string
@@ -240,15 +260,15 @@ func TestSankeyGrouped_SeededRealClickHouse_EqualsPerDimensionQueries(t *testing
 	results := make([]result, len(domain))
 	jobs := make(chan int)
 	var wg sync.WaitGroup
-	for w := 0; w < 8; w++ {
+	for w := 0; w < groupedSankeyWorkers; w++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for idx := range jobs {
 				c := domain[idx]
 				r := &results[idx]
-				nodesQ, edgesQ, oldErr := CompileSankey(c.req, groupedSankeyOrg, 30, c.useInvestment, c.filters)
-				grouped, newErr := CompileSankeyGrouped(c.req, groupedSankeyOrg, 30, c.useInvestment, c.filters)
+				nodesQ, edgesQ, oldErr := CompileSankey(c.req, groupedSankeyOrg, groupedSankeyQueryTimeoutSeconds, c.useInvestment, c.filters)
+				grouped, newErr := CompileSankeyGrouped(c.req, groupedSankeyOrg, groupedSankeyQueryTimeoutSeconds, c.useInvestment, c.filters)
 				if (oldErr == nil) != (newErr == nil) || (oldErr != nil && oldErr.Error() != newErr.Error()) {
 					r.failure = fmt.Sprintf("compile disagreement: per-dimension err=%v grouped err=%v", oldErr, newErr)
 					continue

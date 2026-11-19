@@ -13,11 +13,7 @@ import (
 
 // itemDecoderExceptions are item decoders whose callers do not name a route yet, each with its reason.
 var itemDecoderExceptions = map[string]string{
-	"decodeGitLabTestsPipeline":          "gitlab tests route, not in CHAOS-10292's site list: follow-up",
-	"decodeGitLabTestsJob":               "gitlab tests route, not in CHAOS-10292's site list: follow-up",
-	"gitLabRawSize":                      "decodes a field value of a GraphQL node, not a page item",
-	"adaptGitHubWorkItemPRSocialComment": "github work-items PR social adapter, not in CHAOS-10292's site list (next to 10291's social fetch): follow-up",
-	"adaptGitHubWorkItemPRSocialEvent":   "github work-items PR social adapter, not in CHAOS-10292's site list (next to 10291's social fetch): follow-up",
+	"gitLabRawSize": "decodes a field value of a GraphQL node, not a page item",
 }
 
 // TestItemDecoderFailuresCarryTheRoute: a providersync function whose first parameter is `raw json.RawMessage` and that returns the bare
@@ -53,8 +49,8 @@ func TestItemDecoderFailuresCarryTheRoute(t *testing.T) {
 			}
 		}
 	}
-	if len(decoders) < 10 {
-		t.Fatalf("found %d item decoders, want at least the 10 of CHAOS-10292: %v", len(decoders), decoders)
+	if len(decoders) < 24 {
+		t.Fatalf("found %d item decoders, want at least the 24 of CHAOS-10292 and CHAOS-13631: %v", len(decoders), decoders)
 	}
 	for name := range itemDecoderExceptions {
 		if !decoders[name] {
@@ -97,8 +93,8 @@ func TestItemDecoderFailuresCarryTheRoute(t *testing.T) {
 	if len(bad) > 0 {
 		t.Fatalf("item decoder calls whose error does not name a route:\n%s", strings.Join(bad, "\n"))
 	}
-	if calls < 13 {
-		t.Fatalf("checked %d item decoder calls, want the 13 call sites of CHAOS-10292", calls)
+	if calls < 36 {
+		t.Fatalf("checked %d item decoder calls, want the 36 call sites of CHAOS-10292 and CHAOS-13631", calls)
 	}
 }
 
@@ -197,4 +193,113 @@ func blockReturnsRouted(body *ast.BlockStmt, errName string) bool {
 	}
 	arg, ok := call.Args[2].(*ast.Ident)
 	return ok && arg.Name == errName
+}
+
+// inlineDecodeFamilies are the file families whose item decodes CHAOS-13631 moved into item decoders. The inline decodes of the
+// other files are not sorted yet (item or whole body): CHAOS-14235.
+var inlineDecodeFamilies = []string{"github_work_items_", "gitlab_tests_", "launchdarkly_"}
+
+// inlineDecodeExceptions are functions of those families that decode inline and return the bare ErrNormalizationInvalid,
+// keyed "file:function", each with its reason.
+var inlineDecodeExceptions = map[string]string{
+	"launchdarkly_references_clickhouse.go:parseLaunchDarklyCodeReferences": "decodes the whole code-references document, not a page item",
+}
+
+// TestInlineItemDecodesAreListed: an inline decode (json.Unmarshal or a Decoder's Decode in an if statement) whose branch returns the
+// bare ErrNormalizationInvalid names no route, and TestItemDecoderFailuresCarryTheRoute cannot see it. Outside an item decoder each
+// such function is moved into an item decoder or listed in inlineDecodeExceptions with its reason.
+func TestInlineItemDecodesAreListed(t *testing.T) {
+	t.Parallel()
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fset := token.NewFileSet()
+	found := map[string]bool{}
+	for _, name := range files {
+		if strings.HasSuffix(name, "_test.go") || !hasAnyPrefix(name, inlineDecodeFamilies) {
+			continue
+		}
+		file, err := parser.ParseFile(fset, name, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Body == nil || (fn.Recv == nil && takesRawMessage(fn) && returnsBareNormalizationInvalid(fn.Body)) {
+				continue
+			}
+			ast.Inspect(fn.Body, func(node ast.Node) bool {
+				ifStmt, ok := node.(*ast.IfStmt)
+				if ok && (containsDecodeCall(ifStmt.Init) || containsDecodeCall(ifStmt.Cond)) && returnsBareNormalizationInvalid(ifStmt.Body) {
+					found[name+":"+funcKey(fn)] = true
+				}
+				return true
+			})
+		}
+	}
+	var bad []string
+	for key := range found {
+		if inlineDecodeExceptions[key] == "" {
+			bad = append(bad, key)
+		}
+	}
+	for key := range inlineDecodeExceptions {
+		if !found[key] {
+			bad = append(bad, key+" (listed, no inline decode left: drop it)")
+		}
+	}
+	sort.Strings(bad)
+	if len(bad) > 0 {
+		t.Fatalf("inline decodes that return a bare ErrNormalizationInvalid, not in inlineDecodeExceptions:\n%s", strings.Join(bad, "\n"))
+	}
+}
+
+func hasAnyPrefix(name string, prefixes []string) bool {
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func funcKey(fn *ast.FuncDecl) string {
+	if fn.Recv == nil || len(fn.Recv.List) == 0 {
+		return fn.Name.Name
+	}
+	receiver := fn.Recv.List[0].Type
+	if star, ok := receiver.(*ast.StarExpr); ok {
+		receiver = star.X
+	}
+	if ident, ok := receiver.(*ast.Ident); ok {
+		return ident.Name + "." + fn.Name.Name
+	}
+	return fn.Name.Name
+}
+
+// containsDecodeCall: a json.Unmarshal call or a Decode method call (json.Decoder) inside node.
+func containsDecodeCall(node ast.Node) bool {
+	if node == nil {
+		return false
+	}
+	found := false
+	ast.Inspect(node, func(inner ast.Node) bool {
+		call, ok := inner.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		selector, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		if pkg, isIdent := selector.X.(*ast.Ident); isIdent && pkg.Name == "json" && selector.Sel.Name == "Unmarshal" {
+			found = true
+		}
+		if selector.Sel.Name == "Decode" {
+			found = true
+		}
+		return true
+	})
+	return found
 }

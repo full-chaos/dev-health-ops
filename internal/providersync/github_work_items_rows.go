@@ -277,6 +277,59 @@ type githubMilestonePayload struct {
 	DueOn     *string `json:"due_on"`
 }
 
+func decodeGitHubIssueWorkItem(raw json.RawMessage) (githubIssueWorkItemPayload, error) {
+	var issue githubIssueWorkItemPayload
+	if json.Unmarshal(raw, &issue) != nil {
+		return issue, providerfoundation.ErrNormalizationInvalid
+	}
+	return issue, nil
+}
+
+func decodeGitHubPullRequestWorkItem(raw json.RawMessage) (githubPullRequestWorkItemPayload, error) {
+	var pull githubPullRequestWorkItemPayload
+	if json.Unmarshal(raw, &pull) != nil {
+		return pull, providerfoundation.ErrNormalizationInvalid
+	}
+	return pull, nil
+}
+
+func decodeGitHubMilestone(raw json.RawMessage) (githubMilestonePayload, error) {
+	var milestone githubMilestonePayload
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if decoder.Decode(&milestone) != nil {
+		return milestone, providerfoundation.ErrNormalizationInvalid
+	}
+	return milestone, nil
+}
+
+func decodeGitHubWorkItemEvent(raw json.RawMessage) (githubWorkItemEventPayload, error) {
+	var event githubWorkItemEventPayload
+	if json.Unmarshal(raw, &event) != nil {
+		return event, providerfoundation.ErrNormalizationInvalid
+	}
+	return event, nil
+}
+
+func decodeGitHubWorkItemComment(raw json.RawMessage) (githubWorkItemCommentPayload, error) {
+	var comment githubWorkItemCommentPayload
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if decoder.Decode(&comment) != nil {
+		return comment, providerfoundation.ErrNormalizationInvalid
+	}
+	return comment, nil
+}
+
+// decodeGitHubWorkItemLinkbackComment keeps json.Unmarshal (no UseNumber, trailing data refused) for the linkback scan.
+func decodeGitHubWorkItemLinkbackComment(raw json.RawMessage) (githubWorkItemCommentPayload, error) {
+	var comment githubWorkItemCommentPayload
+	if json.Unmarshal(raw, &comment) != nil {
+		return comment, providerfoundation.ErrNormalizationInvalid
+	}
+	return comment, nil
+}
+
 type githubIdentityResolver func(githubWorkItemUserPayload) string
 
 // githubRepoNames names one repository twice (CHAOS-9879): Current is its
@@ -326,8 +379,11 @@ func githubIssueWorkItemSource(
 		repoID == uuid.Nil || normalizedAt.IsZero() {
 		return githubWorkItemSource{}, ErrInvalidConfiguration
 	}
-	var issue githubIssueWorkItemPayload
-	if json.Unmarshal(raw, &issue) != nil || issue.Number < 1 || strings.TrimSpace(issue.Title) == "" {
+	issue, err := decodeGitHubIssueWorkItem(raw)
+	if err != nil {
+		return githubWorkItemSource{}, providerfoundation.RouteFailure(githubIssuesRoute, providerfoundation.ReasonBodyDecode, err)
+	}
+	if issue.Number < 1 || strings.TrimSpace(issue.Title) == "" {
 		return githubWorkItemSource{}, providerfoundation.ErrNormalizationInvalid
 	}
 	createdAt := parseGitHubWorkItemTime(issue.CreatedAt)
@@ -401,11 +457,9 @@ func normalizeGitHubSprint(
 		normalizedAt.IsZero() {
 		return githubSprintRow{}, ErrInvalidConfiguration
 	}
-	var milestone githubMilestonePayload
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.UseNumber()
-	if decoder.Decode(&milestone) != nil {
-		return githubSprintRow{}, providerfoundation.ErrNormalizationInvalid
+	milestone, err := decodeGitHubMilestone(raw)
+	if err != nil {
+		return githubSprintRow{}, providerfoundation.RouteFailure(githubMilestonesRoute, providerfoundation.ReasonBodyDecode, err)
 	}
 	id := stringValue(milestone.ID)
 	if id == "" || id == "0" {
@@ -477,21 +531,21 @@ func normalizeGitHubIssueBundle(
 		return githubWorkItemRows{}, err
 	}
 	interactions, err := normalizeGitHubWorkItemComments(
-		claim, item.WorkItemID, comments, resolveIdentity, normalizedAt,
+		claim, item.WorkItemID, comments, githubIssueCommentRoute, resolveIdentity, normalizedAt,
 	)
 	if err != nil {
 		return githubWorkItemRows{}, err
 	}
-	var issue githubIssueWorkItemPayload
-	if json.Unmarshal(raw, &issue) != nil {
-		return githubWorkItemRows{}, providerfoundation.ErrNormalizationInvalid
+	issue, err := decodeGitHubIssueWorkItem(raw)
+	if err != nil {
+		return githubWorkItemRows{}, providerfoundation.RouteFailure(githubIssuesRoute, providerfoundation.ReasonBodyDecode, err)
 	}
 	body := ""
 	if issue.Body != nil {
 		body = *issue.Body
 	}
 	dependencies, err := extractGitHubWorkItemDependencies(
-		claim, item.WorkItemID, names.Identity, body, "", comments, normalizedAt,
+		claim, item.WorkItemID, names.Identity, body, "", comments, githubIssueCommentRoute, normalizedAt,
 	)
 	if err != nil {
 		return githubWorkItemRows{}, err
@@ -519,8 +573,11 @@ func normalizeGitHubPullRequestBundle(
 		repoID == uuid.Nil || normalizedAt.IsZero() {
 		return githubWorkItemRows{}, ErrInvalidConfiguration
 	}
-	var pull githubPullRequestWorkItemPayload
-	if json.Unmarshal(raw, &pull) != nil || pull.Number < 1 || strings.TrimSpace(pull.Title) == "" {
+	pull, err := decodeGitHubPullRequestWorkItem(raw)
+	if err != nil {
+		return githubWorkItemRows{}, providerfoundation.RouteFailure(githubPullRoute, providerfoundation.ReasonBodyDecode, err)
+	}
+	if pull.Number < 1 || strings.TrimSpace(pull.Title) == "" {
 		return githubWorkItemRows{}, providerfoundation.ErrNormalizationInvalid
 	}
 	createdAt := parseGitHubWorkItemTime(pull.CreatedAt)
@@ -608,7 +665,7 @@ func normalizeGitHubPullRequestBundle(
 		return githubWorkItemRows{}, err
 	}
 	interactions, err := normalizeGitHubWorkItemComments(
-		claim, item.WorkItemID, comments, resolveIdentity, normalizedAt,
+		claim, item.WorkItemID, comments, graphQLRoute, resolveIdentity, normalizedAt,
 	)
 	if err != nil {
 		return githubWorkItemRows{}, err
@@ -618,7 +675,7 @@ func normalizeGitHubPullRequestBundle(
 		body = *pull.Body
 	}
 	dependencies, err := extractGitHubWorkItemDependencies(
-		claim, item.WorkItemID, names.Identity, body, pull.Head.Ref, comments, normalizedAt,
+		claim, item.WorkItemID, names.Identity, body, pull.Head.Ref, comments, graphQLRoute, normalizedAt,
 	)
 	if err != nil {
 		return githubWorkItemRows{}, err
@@ -656,11 +713,16 @@ func normalizeGitHubWorkItemEvents(
 		payload githubWorkItemEventPayload
 		index   int
 	}
+	// An issue's events come from the REST events list, a pull request's from its GraphQL timeline.
+	eventsRoute := githubIssueEventsRoute
+	if pullRequest {
+		eventsRoute = graphQLRoute
+	}
 	events := make([]eventWithIndex, 0, len(rawEvents))
 	for index, raw := range rawEvents {
-		var event githubWorkItemEventPayload
-		if json.Unmarshal(raw, &event) != nil {
-			return nil, nil, providerfoundation.ErrNormalizationInvalid
+		event, err := decodeGitHubWorkItemEvent(raw)
+		if err != nil {
+			return nil, nil, providerfoundation.RouteFailure(eventsRoute, providerfoundation.ReasonBodyDecode, err)
 		}
 		events = append(events, eventWithIndex{payload: event, index: index})
 	}
@@ -779,16 +841,15 @@ func normalizeGitHubWorkItemComments(
 	claim Claim,
 	workItemID string,
 	rawComments []json.RawMessage,
+	commentsRoute string,
 	resolveIdentity githubIdentityResolver,
 	normalizedAt time.Time,
 ) ([]githubWorkItemInteractionRow, error) {
 	rows := make([]githubWorkItemInteractionRow, 0, len(rawComments))
 	for _, raw := range rawComments {
-		var comment githubWorkItemCommentPayload
-		decoder := json.NewDecoder(bytes.NewReader(raw))
-		decoder.UseNumber()
-		if decoder.Decode(&comment) != nil {
-			return nil, providerfoundation.ErrNormalizationInvalid
+		comment, err := decodeGitHubWorkItemComment(raw)
+		if err != nil {
+			return nil, providerfoundation.RouteFailure(commentsRoute, providerfoundation.ReasonBodyDecode, err)
 		}
 		id := interactionIDFrom(comment.ID)
 		if id == "" {
@@ -842,6 +903,14 @@ type githubClosingIssueReferenceNode struct {
 	} `json:"repository"`
 }
 
+func decodeGitHubClosingIssueReference(raw json.RawMessage) (githubClosingIssueReferenceNode, error) {
+	var node githubClosingIssueReferenceNode
+	if json.Unmarshal(raw, &node) != nil {
+		return node, providerfoundation.ErrNormalizationInvalid
+	}
+	return node, nil
+}
+
 // extractGitHubClosingIssueReferences emits the PRIMARY provider-attached
 // PR-issue link mechanism for GitHub (CHAOS-4757): GitHub's own
 // closingIssuesReferences on the PR node (populated by closing keywords in
@@ -861,9 +930,9 @@ func extractGitHubClosingIssueReferences(
 	rows := make([]githubWorkItemDependencyRow, 0, len(rawRefs))
 	seen := make(map[string]struct{}, len(rawRefs))
 	for _, raw := range rawRefs {
-		var node githubClosingIssueReferenceNode
-		if json.Unmarshal(raw, &node) != nil {
-			return nil, providerfoundation.ErrNormalizationInvalid
+		node, err := decodeGitHubClosingIssueReference(raw)
+		if err != nil {
+			return nil, providerfoundation.RouteFailure(graphQLRoute, providerfoundation.ReasonBodyDecode, err)
 		}
 		repoFullName := strings.TrimSpace(node.Repository.NameWithOwner)
 		if node.Number < 1 || repoFullName == "" {
@@ -905,6 +974,7 @@ func extractGitHubWorkItemDependencies(
 	body string,
 	branch string,
 	rawComments []json.RawMessage,
+	commentsRoute string,
 	normalizedAt time.Time,
 ) ([]githubWorkItemDependencyRow, error) {
 	rows := make([]githubWorkItemDependencyRow, 0)
@@ -977,9 +1047,9 @@ func extractGitHubWorkItemDependencies(
 	best := map[string]commentRelationship{}
 	rank := map[string]int{"blocked_by": 3, "blocks": 2, "relates_to": 1}
 	for _, raw := range rawComments {
-		var comment githubWorkItemCommentPayload
-		if json.Unmarshal(raw, &comment) != nil {
-			return nil, providerfoundation.ErrNormalizationInvalid
+		comment, err := decodeGitHubWorkItemLinkbackComment(raw)
+		if err != nil {
+			return nil, providerfoundation.RouteFailure(commentsRoute, providerfoundation.ReasonBodyDecode, err)
 		}
 		login := ""
 		if comment.User != nil && comment.User.Login != nil {

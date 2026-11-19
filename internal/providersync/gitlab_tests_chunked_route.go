@@ -705,11 +705,12 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 					if selectJobErr != nil {
 						return selectJobErr
 					}
-					overCap, overCapErr := gitLabTestsArtifactJobsOverCap(jobItems, gitLabTestsMaxArtifacts)
-					if overCapErr != nil {
-						return overCapErr
+					qualifying, qualifyErr := gitLabTestsQualifyingArtifactJobs(jobItems)
+					if qualifyErr != nil {
+						return qualifyErr
 					}
-					if overCap {
+					if qualifying > gitLabTestsMaxArtifacts {
+						reportGitLabTestsArtifactJobsOverCap(ctx, claim.Provider, claim.Dataset, claim.ID, cursor.Repo, runID, qualifying, gitLabTestsMaxArtifacts)
 						// The selection reads the first gitLabTestsMaxArtifacts and none of the others; the unit result does not
 						// record this cut (ticket 14144), the pipeline's verdict does.
 						runReport.lose(githubTestsPerRunCapCause)

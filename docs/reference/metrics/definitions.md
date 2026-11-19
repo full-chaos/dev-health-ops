@@ -305,6 +305,19 @@ range. The stored `team_id` (the main owner at the end of the day) is not read:
   are nullable.
 - A service group reads the stored service.
 
+### Benchmarking flake and retry dependency rates
+
+The benchmarking point of `flake_rate` and `retry_dependency_rate` for a scope and a day is the sum of the numerators
+over the sum of the denominators of the repository-days in the scope. It is not the mean of the stored rates, so a
+repository-day weighs by its distinct cases. The denominator is the stored `distinct_cases`. The numerator of
+`flake_rate` is the stored `flake_cases`. The numerator of `retry_dependency_rate` is the stored rate times
+`distinct_cases`: a float, the same form as `rerun_rate` times `pipelines_count`, and not a stored count. A point whose
+denominator sums to 0 is no point, never 0.
+
+A repository-day is in neither sum when its rate is NULL (it measured no case), or its `distinct_cases` is NULL, or, for
+`flake_rate`, its `flake_cases` is NULL. A row stored before the counts existed has NULL counts, so it drops out of the
+point. A point made only of such rows has no value.
+
 ### AI report charts of CI/CD durations and queue time
 
 The AI report charts of three CI/CD metrics are taken over the samples of the window's pipeline runs that the CI/CD daily
@@ -703,15 +716,13 @@ A Linear or Jira work-items unit names every project it saw by an ensure row in 
 
 One work item (provider and id) can be stored under two repository ids. Example: a GitHub issue that the repository sync stores under its repository and that the Projects v2 board sync stores under no repository. Each stored row is a copy. The current copy is the copy with the newest `last_synced`; on a tie, the copy of the lower repository id.
 
-`work_item_cycle_times`, `work_item_metrics_daily`, `work_item_user_metrics_daily`, `work_item_state_durations_daily`, `work_item_blocked_durations_daily` and `estimate_coverage_metrics_daily` decide on the current copy. An item counts on a day only when its current copy belongs to that day: created before the day ends, and not done before the day starts. An older copy never makes the item count. So an item whose current copy is done with no completion time counts on no day, and an item completes once, on its current copy's completion day.
+`work_item_cycle_times`, `work_item_metrics_daily`, `work_item_user_metrics_daily`, `work_item_state_durations_daily`, `work_item_blocked_durations_daily` and `estimate_coverage_metrics_daily` decide on the current copy. An item counts on a day only when its current copy belongs to that day: created before the day ends, and not done before the day starts. An older copy never makes the item count. So an item whose current copy is done with no completion time counts on no day, and an item completes once, on its current copy's completion day. The request-time read of the work items linked to a repository (Home and Quadrant under a repository filter) decides on the same current copy.
 
 The scope view (`row_view = 'scope'`) applies the same rule inside each work scope: the current copy of the item in that scope. An item with copies in two scopes still counts in each scope (the sum over scopes can be more than the organization total). So the older copy's scope can count a completion that the organization view and `work_item_cycle_times` do not count.
 
 When an item leaves a day this way, its blocked hours of that day stored by an earlier compute are set to 0. Blocked Work under a repository filter reads those per-item hours, so it follows the same rule. Days that are not computed again keep their stored rows.
 
 `work_item_measure_capability` decides on the current copy in the same way over its 90-day window: an item counts in the window only when its current copy belongs to the window.
-
-Not yet on this rule: the request-time read of the work items linked to a repository. It still chooses, for each day, the newest copy among the copies that belong to that day. For an item with two copies, it can differ from the tables above.
 
 ## Work-item person rows: persons in more than one team
 

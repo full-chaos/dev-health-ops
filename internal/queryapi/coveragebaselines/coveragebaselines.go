@@ -29,6 +29,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
+	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
 const (
@@ -70,7 +71,7 @@ func baseline(mean *float64, days int) *float64 {
 // of each (repository, day) of the window, inside the scope. The tuple keeps a
 // NULL of the newest version from being skipped for an older value. Both
 // baselines (per repository and of the whole scope) are built on this read, so
-// they cannot read different rows.
+// they cannot read different rows. A day whose newest row retires it (package liverow) is not a day of the window.
 func newestPerRepoDay(scopeFilter string) string {
 	return `
             SELECT
@@ -82,7 +83,8 @@ func newestPerRepoDay(scopeFilter string) string {
             WHERE org_id = {org_id:String}
               AND day >= {start_day:Date}
               AND day < {end_day:Date}` + scopeFilter + `
-            GROUP BY repo_id, day`
+            GROUP BY repo_id, day
+            HAVING ` + liverow.NewestPredicate("testops_coverage_metrics_daily", "")
 }
 
 // statement reads, per repository, the mean of each measure over the window and

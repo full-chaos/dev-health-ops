@@ -441,22 +441,22 @@ var coreOptions = []Option{
 	},
 	{
 		Flag: "completed-job-retention", Env: "RIVER_COMPLETED_JOB_RETENTION", Kind: KindDuration,
-		Default: defaultCompletedRetention.String(), Group: GroupDatabase,
+		Default: DefaultCompletedJobRetention.String(), Group: GroupDatabase,
 		Usage: "how long completed River jobs are kept (24h-8760h)",
 	},
 	{
 		Flag: "cancelled-job-retention", Env: "RIVER_CANCELLED_JOB_RETENTION", Kind: KindDuration,
-		Default: defaultCancelledRetention.String(), Group: GroupDatabase,
+		Default: DefaultCancelledJobRetention.String(), Group: GroupDatabase,
 		Usage: "how long cancelled River jobs are kept (24h-8760h)",
 	},
 	{
 		Flag: "discarded-job-retention", Env: "RIVER_DISCARDED_JOB_RETENTION", Kind: KindDuration,
-		Default: defaultDiscardedRetention.String(), Group: GroupDatabase,
+		Default: DefaultDiscardedJobRetention.String(), Group: GroupDatabase,
 		Usage: "how long discarded River jobs are kept (24h-8760h)",
 	},
 	{
 		Flag: "job-cleaner-timeout", Env: "RIVER_JOB_CLEANER_TIMEOUT", Kind: KindDuration,
-		Default: defaultJobCleanerTimeout.String(), Group: GroupDatabase,
+		Default: DefaultRiverJobCleanerTimeout.String(), Group: GroupDatabase,
 		Usage: "per-run timeout of the River job cleaner (5s-5m)",
 	},
 	// CHAOS-4092: reconciler-only, matching the unreclaimable-sweep flag's

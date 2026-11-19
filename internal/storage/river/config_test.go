@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	platformconfig "github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/riverqueue/river"
 )
 
@@ -22,11 +23,28 @@ func TestMaintenanceDefaultsAreBoundedAndApplied(t *testing.T) {
 	if target.CompletedJobRetentionPeriod != 24*time.Hour {
 		t.Fatalf("completed retention = %s", target.CompletedJobRetentionPeriod)
 	}
-	if target.CancelledJobRetentionPeriod != 24*time.Hour || target.DiscardedJobRetentionPeriod != 7*24*time.Hour {
+	if target.CancelledJobRetentionPeriod != 24*time.Hour || target.DiscardedJobRetentionPeriod != 29*24*time.Hour {
 		t.Fatalf("unexpected terminal retention: cancelled=%s discarded=%s", target.CancelledJobRetentionPeriod, target.DiscardedJobRetentionPeriod)
 	}
 	if target.JobCleanerTimeout != 30*time.Second {
 		t.Fatalf("cleaner timeout = %s", target.JobCleanerTimeout)
+	}
+}
+
+// The client config takes the platform defaults (config.Load); this keeps
+// DefaultMaintenanceConfig from drifting away from them.
+func TestDefaultMaintenanceConfigEqualsLoadedPlatformDefaults(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := platformconfig.Load(platformconfig.Spec{
+		Service:   "dev-health-worker",
+		LookupEnv: func(string) (string, bool) { return "", false },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := DefaultMaintenanceConfig(), MaintenanceConfigFromPlatform(cfg); got != want {
+		t.Fatalf("DefaultMaintenanceConfig() = %+v, config.Load defaults = %+v", got, want)
 	}
 }
 

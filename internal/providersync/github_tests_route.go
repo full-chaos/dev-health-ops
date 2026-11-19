@@ -749,11 +749,13 @@ func githubTestsArtifactRunQuery(claim Claim) url.Values {
 // the claim's own cadence (the only figure this route actually knows) rather
 // than a fixed duration picked from a small sample.
 //
-// A backfill unit takes one look: only a run whose last-updated time is inside
-// its own window [since, before). Its chunks run in unit-id order, not time
+// A backfill unit takes one look. Its chunks run in unit-id order, not time
 // order, so the next chunk's look is no later look; it only read the previous
-// chunk's reports again. A run created before since is still listed
-// (githubTestsArtifactRunsCreatedFrom) and read by the window it finished in.
+// chunk's reports again. It reads a run whose last-updated time is at or after
+// since and either before its before, or later but created before the next
+// chunk's listing floor (the next chunk, same width, cannot list that run).
+// So each run is read by one chunk: the one its last-updated time falls in, or
+// the last chunk that lists it.
 //
 // The claim edges fail open: a claim missing either edge (an open-start or a
 // still-open claim) filters nothing on that edge, and a run with no
@@ -773,9 +775,24 @@ func githubTestsReportRunOutsideWindow(pipeline githubTestsPipelineRow, claim Cl
 	}
 	finished := pipeline.FinishedAt.UTC()
 	if claim.Mode == "backfill" {
-		return finished.Before(since) || !finished.Before(claim.BeforeAt.UTC())
+		return finished.Before(since) || !githubTestsBackfillReadsLaterRun(pipeline, claim, finished)
 	}
 	return finished.Before(since.Add(-width))
+}
+
+func githubTestsBackfillReadsLaterRun(pipeline githubTestsPipelineRow, claim Claim, finished time.Time) bool {
+	before := claim.BeforeAt.UTC()
+	if finished.Before(before) || pipeline.QueuedAt == nil {
+		return true
+	}
+	next := claim
+	nextBefore := before.Add(before.Sub(claim.SinceAt.UTC()))
+	next.SinceAt, next.BeforeAt = &before, &nextBefore
+	nextFloor, err := time.Parse(time.DateOnly, githubTestsArtifactRunsCreatedFrom(next))
+	if err != nil {
+		return true
+	}
+	return pipeline.QueuedAt.UTC().Before(nextFloor)
 }
 
 // githubTestsRunReadable: a run's report artifacts are read only once the run

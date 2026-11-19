@@ -2,6 +2,7 @@ package providersync
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -192,5 +193,145 @@ func TestGitHubTestsBackfillTransientReportLossStaysALoudGap(t *testing.T) {
 	markers, ok := final.Result["skipped_artifacts"].([]GitHubTestsSkippedArtifact)
 	if !ok || len(markers) != 1 || markers[0].Cause != githubTestsArtifactUnavailableCause {
 		t.Fatalf("skipped_artifacts=%#v, want one %s marker", final.Result["skipped_artifacts"], githubTestsArtifactUnavailableCause)
+	}
+}
+
+// githubTestsBackfillChunkReads runs one backfill chunk over fixture run 9001
+// (listed only when its created_at is inside the chunk's created qualifier) and
+// returns how many times the chunk read the run's reports.
+func githubTestsBackfillChunkReads(t *testing.T, since, before time.Time, created, updated time.Time) int {
+	t.Helper()
+	doer := githubTestsReportWindowDoerFor(t, updated.UTC().Format(time.RFC3339))
+	doer.createdAt = created.UTC().Format(time.RFC3339)
+	doer.startedAt = created.Add(time.Minute).UTC().Format(time.RFC3339)
+	doer.filterCreated = true
+	claim := githubTestsWindowClaim(t, since, before)
+	claim.Mode = "backfill"
+	_, cases := collectGitHubTestsReportRows(t, doer, claim, updated.Add(time.Hour))
+	lists, zips := githubTestsReportReads(doer)
+	if lists != zips || (lists > 0) != (cases > 0) {
+		t.Fatalf("chunk [%s, %s): artifact lists=%d downloads=%d cases=%d, want a whole read or none",
+			since.Format(time.RFC3339), before.Format(time.RFC3339), lists, zips, cases)
+	}
+	return lists
+}
+
+// githubTestsBackfillTotalReads sums the reads of one run over contiguous
+// backfill chunks of one width starting at start.
+func githubTestsBackfillTotalReads(t *testing.T, start time.Time, width time.Duration, chunks int, created, updated time.Time) (int, []int) {
+	t.Helper()
+	perChunk := make([]int, chunks)
+	total := 0
+	for index := range chunks {
+		since := start.Add(time.Duration(index) * width)
+		perChunk[index] = githubTestsBackfillChunkReads(t, since, since.Add(width), created, updated)
+		total += perChunk[index]
+	}
+	return total, perChunk
+}
+
+// CHAOS-14213 r1 P2 (round repro TestReviewBackfillLongRunListingGap). A run
+// created before the finish chunk's listing floor and updated after the chunk
+// it was created in is read by the chunk that still lists it; one read in all.
+func TestGitHubTestsBackfillLongRunListingGap(t *testing.T) {
+	t.Parallel()
+	day := func(d, h, m int) time.Time { return time.Date(2026, 7, d, h, m, 0, 0, time.UTC) }
+	for _, cell := range []struct {
+		name             string
+		start            time.Time
+		width            time.Duration
+		created, updated time.Time
+		want             []int
+	}{
+		{"seven-day chunks", day(22, 0, 0), 7 * 24 * time.Hour, day(21, 23, 0), day(30, 0, 30), []int{1, 0}},
+		{"seven-day chunks, run at the finish chunk's listing floor", day(22, 0, 0), 7 * 24 * time.Hour, day(22, 0, 0), day(30, 0, 30), []int{0, 1}},
+		{"one-day chunks", day(22, 0, 0), 24 * time.Hour, day(21, 23, 0), day(23, 0, 30), []int{1, 0}},
+		{"one-day chunks, run at the finish chunk's listing floor", day(22, 0, 0), 24 * time.Hour, day(22, 0, 0), day(23, 0, 30), []int{0, 1}},
+	} {
+		total, perChunk := githubTestsBackfillTotalReads(t, cell.start, cell.width, len(cell.want), cell.created, cell.updated)
+		t.Logf("CELL %s: created=%s updated=%s reads per chunk=%v total=%d", cell.name,
+			cell.created.Format(time.RFC3339), cell.updated.Format(time.RFC3339), perChunk, total)
+		if total != 1 || !slices.Equal(perChunk, cell.want) {
+			t.Errorf("%s: reads per chunk=%v, want %v (one read in all)", cell.name, perChunk, cell.want)
+		}
+	}
+	doer := githubTestsReportWindowDoerFor(t, day(30, 0, 30).Format(time.RFC3339))
+	doer.createdAt, doer.startedAt, doer.filterCreated = day(21, 23, 0).Format(time.RFC3339), day(21, 23, 1).Format(time.RFC3339), true
+	claim := githubTestsWindowClaim(t, day(22, 0, 0), day(29, 0, 0))
+	if collectGitHubTestsReportRows(t, doer, claim, day(30, 1, 0)); !doer.fetchedArtifacts() {
+		t.Errorf("incremental control: the run was not read: %v", doer.requests)
+	}
+}
+
+// CHAOS-14213 (acp condition 2 of the r1 ruling). Over contiguous backfill
+// chunks of one width, every run updated at or after the first chunk's since is
+// read exactly once. Chunk 1 [b0, b1) is the reference: created in it, at the
+// next chunk's listing floor, one second under that floor, or before the first
+// chunk; updated at since, mid, at before, in the next chunk, or past the last.
+func TestGitHubTestsBackfillReadsEachRunOnceAcrossContiguousChunks(t *testing.T) {
+	t.Parallel()
+	const chunks = 4
+	for _, shape := range []struct {
+		name  string
+		start time.Time
+		width time.Duration
+	}{
+		{"1-day", time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC), 24 * time.Hour},
+		{"7-day", time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC), 7 * 24 * time.Hour},
+		{"30-hour off midnight", time.Date(2026, 7, 1, 6, 0, 0, 0, time.UTC), 30 * time.Hour},
+	} {
+		b0 := shape.start.Add(shape.width)
+		b1 := b0.Add(shape.width)
+		nextBefore := b1.Add(shape.width)
+		nextFloor, err := time.Parse(time.DateOnly, githubTestsArtifactRunsCreatedFrom(Claim{Unit: Unit{SinceAt: &b1, BeforeAt: &nextBefore}}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		createdAt := map[string]time.Time{
+			"in chunk": b0.Add(shape.width / 2), "== next_floor": nextFloor,
+			"next_floor - 1s": nextFloor.Add(-time.Second), "before the first chunk": shape.start.Add(-time.Hour),
+		}
+		updatedAt := map[string]time.Time{
+			"== since": b0, "mid": b0.Add(shape.width / 2), "== before": b1,
+			"next chunk": b1.Add(shape.width / 2), "past the last chunk": shape.start.Add(chunks*shape.width + time.Hour),
+		}
+		for _, createdName := range []string{"in chunk", "== next_floor", "next_floor - 1s", "before the first chunk"} {
+			for _, updatedName := range []string{"== since", "mid", "== before", "next chunk", "past the last chunk"} {
+				created, updated := createdAt[createdName], updatedAt[updatedName]
+				if created.Add(time.Minute).After(updated) {
+					continue
+				}
+				total, perChunk := githubTestsBackfillTotalReads(t, shape.start, shape.width, chunks, created, updated)
+				t.Logf("CELL %s created=%s (%s) updated=%s (%s): reads per chunk=%v total=%d want=1", shape.name,
+					created.Format(time.RFC3339), createdName, updated.Format(time.RFC3339), updatedName, perChunk, total)
+				if total != 1 {
+					t.Errorf("%s created %s updated %s: reads per chunk=%v, want exactly 1 read", shape.name, createdName, updatedName, perChunk)
+				}
+			}
+		}
+		// Residual (no unit knows it is the last chunk): a run listed by the
+		// last chunk's next window and updated past the last chunk is read by
+		// no backfill chunk; that window's own unit reads it.
+		created, updated := shape.start.Add(3*shape.width+shape.width/2), shape.start.Add(chunks*shape.width+time.Hour)
+		total, perChunk := githubTestsBackfillTotalReads(t, shape.start, shape.width, chunks, created, updated)
+		t.Logf("RESIDUAL %s created=%s updated=%s: reads per chunk=%v total=%d", shape.name,
+			created.Format(time.RFC3339), updated.Format(time.RFC3339), perChunk, total)
+		if total != 0 {
+			t.Errorf("%s residual: reads per chunk=%v, want 0 (left to the window of its updated_at)", shape.name, perChunk)
+		}
+	}
+}
+
+// CHAOS-14213 (acp condition 5). Chunks [a, b) and [b, c); a run updated at
+// exactly b is read once, by [b, c).
+func TestGitHubTestsBackfillRunUpdatedAtTheBoundaryIsReadOnceByTheLaterChunk(t *testing.T) {
+	t.Parallel()
+	a := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	width := 7 * 24 * time.Hour
+	b := a.Add(width)
+	total, perChunk := githubTestsBackfillTotalReads(t, a, width, 2, a.Add(width/2), b)
+	t.Logf("CELL boundary: reads per chunk=%v total=%d", perChunk, total)
+	if !slices.Equal(perChunk, []int{0, 1}) {
+		t.Errorf("reads per chunk=%v, want [0 1]: read once, by [b, c)", perChunk)
 	}
 }

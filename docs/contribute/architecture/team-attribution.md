@@ -335,8 +335,26 @@ flowchart TD
 > evidence names the link and its real tier: `repo_ownership=<repo id>;work_graph_issue_pr=<pr number>;tier=<tier>`. Both
 > writers (the daily `work_item_attribution` family and the backstop) read the links
 > (`LoadIssueLinkedPullRequests`), and a backstop run of a repository whose ownership changed re-derives the
-> issues linked to it. **Limit:** a new or removed link is not a backstop trigger; the daily family re-derives
-> the issue on its own days only, so a removed link can leave a stale team on an older issue (follow-up ticket filed).
+> issues linked to it. **A link change re-derives the issue:** each backstop run reads the stored rows (no
+> watermark, like a changed donor row) and re-derives an issue (not a pull / merge request) when a link its
+> newest rows name (`repo_ownership` evidence, any `is_primary`) is gone, has another tier or is below its best
+> tier now; when a best-tier link was written after its newest rows; or when its primary is `unassigned` or
+> `manual_fallback`, it has a best-tier link, and the cascade on the facts of its day (the re-derive's own) gives
+> another primary. The re-derive writes the cascade's full new row set (another owner, a project or fallback
+> source, or `unassigned`); nothing is deleted or zero-filled, and the newer set hides the old one from every
+> reader. With no ownership scope it is an item-only run; an item another writer already wrote today waits for
+> a later run (`alreadyCoveredToday`). After the re-derive the next run finds nothing (Info
+> `work_item_attribution.link_changed_issues`, `WorkItemAttributionOutcome.LinkChangedIssues`). Limits: a link the
+> evidence does not name can change the main owner only when two or more owner teams share the best tier, and
+> its removal alone is not seen; a native link carries its dependency row's time, so one written just before a
+> row is seen by the owner check, not by time; an issue whose link repository has an owner today but none on
+> its own day is re-checked each run and never written (Info `work_item_attribution.link_change_past_day_rechecks`);
+> a link removed at the provider stays in `work_graph_issue_pr` (`work_item_dependencies` keeps its rows), and a
+> dependency edge change is not a trigger. Pinned by `TestALinkChangeRederivesTheLinkedIssue` (github, gitlab,
+> jira and linear issues), `TestALinkChangeRunWithNoChangeWritesNothing`,
+> `TestALinkChangeOfAnIssueWithARowOfTodayWaitsForTheNextDay`, `TestARemovedCoOwnerLinkDropsTheCoOwnerRow`,
+> `TestALinkChangedIssueJoinsAScopedRun`, `TestAHigherTierLinkMovesTheIssue` and
+> `TestAnUnassignedIssueWithAnOwnedLinkTakesTheOwnerOnce`.
 > An issue of any provider, a Jira or Linear item included, with no other source above and no owned
 > best-tier repository ends `unassigned`. `TestAnIssueTakesTheOwnerOfItsLinkedPullRequestsRepository`,
 > `TestAPullRequestIgnoresLinkedPullRequestRepositories`, `TestBestTierLinkedPullRequests`,

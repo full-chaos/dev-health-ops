@@ -1028,11 +1028,11 @@ output, and claim expiration alone is not evidence retry is safe —
 actual review, and this bulk path must not quietly bypass that by
 auto-authorizing every ambiguous row with a generic hardcoded string. State
 what you actually checked — e.g. the redriven families' zero-row counters,
-or a fresh ClickHouse readback confirming no output landed yet. This matters
-most for families whose readers do not `argMax`/dedup by `computed_at` (e.g.
-`file_hotspots`/`file_metrics_daily`, which `SUM`s raw rows) — a needless
-retry there silently inflates scores rather than landing a harmless
-duplicate.
+or a fresh ClickHouse readback confirming no output landed yet. A redrive or
+retry of a family such as `file_hotspots` (tables `file_metrics_daily` and
+`file_hotspot_daily`, ReplacingMergeTree on the row key) stores new values that
+replace the earlier ones for that key: the newest row (by `computed_at`) wins and
+nothing is added to the old values. Readers dedup before they sum.
 
 Scoped to one organization and an inclusive UTC calendar-day range, in two
 steps that MUST run in this order (codex review, round 1: publishing a

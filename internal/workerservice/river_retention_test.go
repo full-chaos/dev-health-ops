@@ -19,7 +19,7 @@ var riverRetentionCases = []struct {
 	{
 		name:      "defaults",
 		env:       map[string]string{},
-		completed: 168 * time.Hour, cancelled: 696 * time.Hour, discarded: 696 * time.Hour,
+		completed: 24 * time.Hour, cancelled: 24 * time.Hour, discarded: 696 * time.Hour,
 		cleanerTimeout: 30 * time.Second,
 	},
 	{

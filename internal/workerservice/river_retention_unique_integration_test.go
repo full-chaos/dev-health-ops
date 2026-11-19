@@ -131,10 +131,11 @@ func retentionUniqueKinds() []retentionUniqueKind {
 // and the River job cleaner runs at the worker client's configured
 // retention. The same key is then published again.
 //
-// Lag <= 1 day: the finalized row is gone, so the repeat runs as a new job
-// (as with River's former defaults). Lag > 1 day + the prune slack: the
-// finalized row still holds the key and the repeat dedupes into it. That
-// residual is pinned so a change to it is seen.
+// Cancelled keeps River's 24h default, so its row is always gone and the
+// repeat runs as a new job. Discarded stays 29 days: with lag <= 1 day the
+// row is gone and the repeat runs as a new job; with lag > 1 day + the prune
+// slack the row still holds the key and the repeat dedupes into it. That
+// discarded-only residual is pinned so a change to it is seen.
 func TestRiverRetentionAgainstOutboxPruneForStableKeys(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
 	t.Cleanup(cancel)
@@ -204,86 +205,88 @@ func TestRiverRetentionAgainstOutboxPruneForStableKeys(t *testing.T) {
 	}
 
 	for _, kind := range retentionUniqueKinds() {
-		for _, state := range []string{"cancelled", "discarded"} {
-			for _, tc := range []struct {
-				name       string
-				lag        time.Duration
-				wantNewJob bool
-			}{
-				{name: "lag 1d: repeat makes a new job", lag: 24 * time.Hour, wantNewJob: true},
-				{name: "PIN residual lag 1d+2h: repeat dedupes into the finalized job", lag: 26 * time.Hour, wantNewJob: false},
-			} {
-				t.Run(kind.name+"/"+state+"/"+tc.name, func(t *testing.T) {
-					if _, err := admin.Exec(ctx, "TRUNCATE public.worker_job_outbox, "+
-						"public.worker_job_delivery_abandonments, public.worker_job_completion_fences, "+
-						"river.river_job RESTART IDENTITY CASCADE"); err != nil {
-						t.Fatal(err)
-					}
-					if err := producer.PublishStandalone(ctx, kind.kind, kind.envelope); err != nil {
-						t.Fatalf("first publish: %v", err)
-					}
-					firstJob := relay(t)
+		for _, tc := range []struct {
+			state      string
+			name       string
+			lag        time.Duration
+			wantNewJob bool
+		}{
+			{state: "cancelled", name: "lag 1d: repeat makes a new job", lag: 24 * time.Hour, wantNewJob: true},
+			{state: "cancelled", name: "lag 1d+2h: repeat makes a new job", lag: 26 * time.Hour, wantNewJob: true},
+			{state: "discarded", name: "lag 1d: repeat makes a new job", lag: 24 * time.Hour, wantNewJob: true},
+			{state: "discarded", name: "PIN residual lag 1d+2h: repeat dedupes into the finalized job", lag: 26 * time.Hour, wantNewJob: false},
+		} {
+			state := tc.state
+			t.Run(kind.name+"/"+state+"/"+tc.name, func(t *testing.T) {
+				if _, err := admin.Exec(ctx, "TRUNCATE public.worker_job_outbox, "+
+					"public.worker_job_delivery_abandonments, public.worker_job_completion_fences, "+
+					"river.river_job RESTART IDENTITY CASCADE"); err != nil {
+					t.Fatal(err)
+				}
+				if err := producer.PublishStandalone(ctx, kind.kind, kind.envelope); err != nil {
+					t.Fatalf("first publish: %v", err)
+				}
+				firstJob := relay(t)
 
-					// While the outbox row exists, the outbox itself refuses the repeat.
-					if err := producer.PublishStandalone(ctx, kind.kind, kind.envelope); !errors.Is(err, joboutbox.ErrDeliveryAlreadyTerminal) {
-						t.Fatalf("repeat before the prune = %v, want ErrDeliveryAlreadyTerminal", err)
-					}
+				// While the outbox row exists, the outbox itself refuses the repeat.
+				if err := producer.PublishStandalone(ctx, kind.kind, kind.envelope); !errors.Is(err, joboutbox.ErrDeliveryAlreadyTerminal) {
+					t.Fatalf("repeat before the prune = %v, want ErrDeliveryAlreadyTerminal", err)
+				}
 
-					cutoff := time.Now().UTC().Truncate(time.Second).Add(-retentionUniqueOutboxRetention)
-					delivered := cutoff.Add(-time.Hour)
-					outboxID := joboutbox.OutboxRowID(kind.envelope.IdempotencyKey).String()
-					if _, err := admin.Exec(ctx, `UPDATE public.worker_job_outbox
+				cutoff := time.Now().UTC().Truncate(time.Second).Add(-retentionUniqueOutboxRetention)
+				delivered := cutoff.Add(-time.Hour)
+				outboxID := joboutbox.OutboxRowID(kind.envelope.IdempotencyKey).String()
+				if _, err := admin.Exec(ctx, `UPDATE public.worker_job_outbox
 						SET created_at = $2, scheduled_at = $2, next_attempt_at = $2,
 						    delivered_at = $2, updated_at = $2
 						WHERE id = $1::uuid`, outboxID, delivered); err != nil {
-						t.Fatal(err)
-					}
-					if _, err := admin.Exec(ctx, `UPDATE river.river_job
+					t.Fatal(err)
+				}
+				if _, err := admin.Exec(ctx, `UPDATE river.river_job
 						SET state = $2::river.river_job_state, attempt = 1, created_at = $3,
 						    scheduled_at = $3, attempted_at = $3, finalized_at = $4
 						WHERE id = $1`, firstJob, state, delivered, delivered.Add(tc.lag)); err != nil {
-						t.Fatal(err)
-					}
+					t.Fatal(err)
+				}
 
-					pruned, err := repository.DeleteTerminalBefore(ctx, cutoff, 500)
-					if err != nil || pruned != 1 {
-						t.Fatalf("outbox prune deleted %d rows, %v; want 1", pruned, err)
-					}
-					cleanedAt := time.Now()
-					if _, err := cleaner.JobDeleteBefore(ctx, &riverdriver.JobDeleteBeforeParams{
-						CancelledDoDelete:           true,
-						CancelledFinalizedAtHorizon: cleanedAt.Add(-clientConfig.CancelledJobRetentionPeriod),
-						CompletedDoDelete:           true,
-						CompletedFinalizedAtHorizon: cleanedAt.Add(-clientConfig.CompletedJobRetentionPeriod),
-						DiscardedDoDelete:           true,
-						DiscardedFinalizedAtHorizon: cleanedAt.Add(-clientConfig.DiscardedJobRetentionPeriod),
-						Max:                         1000,
-						Schema:                      "river",
-					}); err != nil {
-						t.Fatal(err)
-					}
+				pruned, err := repository.DeleteTerminalBefore(ctx, cutoff, 500)
+				if err != nil || pruned != 1 {
+					t.Fatalf("outbox prune deleted %d rows, %v; want 1", pruned, err)
+				}
+				cleanedAt := time.Now()
+				if _, err := cleaner.JobDeleteBefore(ctx, &riverdriver.JobDeleteBeforeParams{
+					CancelledDoDelete:           true,
+					CancelledFinalizedAtHorizon: cleanedAt.Add(-clientConfig.CancelledJobRetentionPeriod),
+					CompletedDoDelete:           true,
+					CompletedFinalizedAtHorizon: cleanedAt.Add(-clientConfig.CompletedJobRetentionPeriod),
+					DiscardedDoDelete:           true,
+					DiscardedFinalizedAtHorizon: cleanedAt.Add(-clientConfig.DiscardedJobRetentionPeriod),
+					Max:                         1000,
+					Schema:                      "river",
+				}); err != nil {
+					t.Fatal(err)
+				}
 
-					if err := producer.PublishStandalone(ctx, kind.kind, kind.envelope); err != nil {
-						t.Fatalf("repeat after the prune: %v", err)
-					}
-					repeatJob := relay(t)
-					var jobs int
-					if err := admin.QueryRow(ctx, "SELECT count(*) FROM river.river_job").Scan(&jobs); err != nil {
-						t.Fatal(err)
-					}
-					if tc.wantNewJob {
-						if repeatJob == firstJob || jobs != 1 {
-							t.Fatalf("repeat job %d (first %d, %d River rows); want a new job and the finalized row cleaned",
-								repeatJob, firstJob, jobs)
-						}
-						return
-					}
-					if repeatJob != firstJob || jobs != 1 {
-						t.Fatalf("repeat job %d (first %d, %d River rows); want the repeat deduped into the finalized job",
+				if err := producer.PublishStandalone(ctx, kind.kind, kind.envelope); err != nil {
+					t.Fatalf("repeat after the prune: %v", err)
+				}
+				repeatJob := relay(t)
+				var jobs int
+				if err := admin.QueryRow(ctx, "SELECT count(*) FROM river.river_job").Scan(&jobs); err != nil {
+					t.Fatal(err)
+				}
+				if tc.wantNewJob {
+					if repeatJob == firstJob || jobs != 1 {
+						t.Fatalf("repeat job %d (first %d, %d River rows); want a new job and the finalized row cleaned",
 							repeatJob, firstJob, jobs)
 					}
-				})
-			}
+					return
+				}
+				if repeatJob != firstJob || jobs != 1 {
+					t.Fatalf("repeat job %d (first %d, %d River rows); want the repeat deduped into the finalized job",
+						repeatJob, firstJob, jobs)
+				}
+			})
 		}
 	}
 }

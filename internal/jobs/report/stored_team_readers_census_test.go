@@ -11,7 +11,6 @@ import (
 // repository-day (the main owner at the end of the day), each with the ticket that moves it to repository ownership.
 // Remove a table here when it joins repositoryOwnedTables.
 var storedTeamPending = map[string]string{
-	"testops_test_metrics_daily":     "CHAOS-14106",
 	"testops_coverage_metrics_daily": "CHAOS-14107",
 	"user_metrics_daily":             "CHAOS-14109",
 	"work_item_cycle_times":          "CHAOS-13917",

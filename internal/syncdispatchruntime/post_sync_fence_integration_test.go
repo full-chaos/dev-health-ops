@@ -93,6 +93,11 @@ func (store *countingTouchedDaysStore) RecordTouchedGit(context.Context, string,
 	return 0, nil
 }
 
+func (store *countingTouchedDaysStore) RecordTouchedTests(context.Context, string, time.Time) (uint64, error) {
+	store.calls++
+	return 0, nil
+}
+
 func (store *countingTouchedDaysStore) PendingDays(context.Context, string, int) (TouchedDaysPending, error) {
 	store.calls++
 	return TouchedDaysPending{}, nil

@@ -92,7 +92,7 @@ type lockedSession struct {
 
 func (s lockedSession) sameBackend(ctx context.Context) error {
 	var pid int32
-	if err := s.conn.QueryRow(ctx, "SELECT pg_backend_pid()").Scan(&pid); err != nil {
+	if err := s.conn.QueryRow(ctx, "SELECT pg_catalog.pg_backend_pid()").Scan(&pid); err != nil {
 		return fmt.Errorf("read the backend pid: %w", err)
 	}
 	if pid != s.pid {
@@ -184,7 +184,7 @@ func buildUnitsIndex(ctx context.Context, conn *pgx.Conn, index unitsIndex, opti
 		return result, fmt.Errorf("set lock_timeout: %w", err)
 	}
 	var hasTable bool
-	if err := conn.QueryRow(ctx, "SELECT to_regclass('public.sync_run_units') IS NOT NULL").Scan(&hasTable); err != nil {
+	if err := conn.QueryRow(ctx, "SELECT pg_catalog.to_regclass('public.sync_run_units') IS NOT NULL").Scan(&hasTable); err != nil {
 		return result, fmt.Errorf("look for sync_run_units: %w", err)
 	}
 	if !hasTable {
@@ -192,7 +192,7 @@ func buildUnitsIndex(ctx context.Context, conn *pgx.Conn, index unitsIndex, opti
 	}
 	var locked bool
 	var pid int32
-	if err := conn.QueryRow(ctx, "SELECT pg_try_advisory_lock($1), pg_backend_pid()", index.lockKey).Scan(&locked, &pid); err != nil {
+	if err := conn.QueryRow(ctx, "SELECT pg_catalog.pg_try_advisory_lock($1), pg_catalog.pg_backend_pid()", index.lockKey).Scan(&locked, &pid); err != nil {
 		return result, fmt.Errorf("take the build lock: %w", err)
 	}
 	if !locked {
@@ -346,7 +346,7 @@ func releaseBuildLock(ctx context.Context, session lockedSession, lockKey int64,
 		return nil
 	}
 	var released bool
-	if err := session.conn.QueryRow(releaseCtx, "SELECT pg_advisory_unlock($1)", lockKey).Scan(&released); err != nil {
+	if err := session.conn.QueryRow(releaseCtx, "SELECT pg_catalog.pg_advisory_unlock($1)", lockKey).Scan(&released); err != nil {
 		logger.Warn("build-index: build lock not released; the session end releases it", "reason", "unlock_failed", "sqlstate", sqlState(err))
 		return nil
 	}
@@ -360,7 +360,7 @@ func releaseBuildLock(ctx context.Context, session lockedSession, lockKey int64,
 func ms(d time.Duration) string { return strconv.FormatInt(d.Milliseconds(), 10) }
 
 func setWaitBounds(ctx context.Context, conn *pgx.Conn, lock, statement time.Duration) error {
-	_, err := conn.Exec(ctx, "SELECT set_config('lock_timeout', $1, false), set_config('statement_timeout', $2, false)", ms(lock), ms(statement))
+	_, err := conn.Exec(ctx, "SELECT pg_catalog.set_config('lock_timeout', $1, false), pg_catalog.set_config('statement_timeout', $2, false)", ms(lock), ms(statement))
 	return err
 }
 

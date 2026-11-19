@@ -169,6 +169,7 @@ func TestWorkItemMeasureCapabilityRetiresALiveKeyItDidNotProduce(t *testing.T) {
 			}
 		}},
 		{needles: []string{"work_items FINAL", "AS scopes"}, driver: func() chdriver.Rows { return &oneWorkItemScopedRow{} }},
+		{needles: []string{workItemCopiesReadSQL}, driver: func() chdriver.Rows { return &oneWorkItemCopyRow{} }},
 	}}
 	executor := capabilityRetireExecutor(conn, now)
 	written, err := executor.ComputeFinalizeFamily(context.Background(), Run{OrganizationID: capabilityRetireOrg, TargetDay: capabilityTestDay})

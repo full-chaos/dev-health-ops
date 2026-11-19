@@ -74,17 +74,17 @@ func TestComputeWorkItemCompletionDailyCountsTheDaysCompletions(t *testing.T) {
 	points := func(value float64) *float64 { return &value }
 	items := []Item{
 		// Completed on the day: 2.9 points count as 2 units.
-		{WorkItemID: "1", Provider: "github", Labels: []string{"quality"}, RepoID: &repo,
+		{WorkItemID: "1", Provider: "github", Labels: []string{"quality"}, RepoID: &repo, Status: "done",
 			CreatedAt: day.AddDate(0, 0, -3), StartedAt: timePointer(day.Add(-14 * time.Hour)),
 			CompletedAt: timePointer(day.Add(10 * time.Hour)), StoryPoints: points(2.9)},
 		// Completed on the day, zero points count as one unit; no team.
-		{WorkItemID: "2", Provider: "github", Labels: []string{"quality"}, RepoID: &repo,
+		{WorkItemID: "2", Provider: "github", Labels: []string{"quality"}, RepoID: &repo, Status: "done",
 			CreatedAt: day.AddDate(0, 0, -1), CompletedAt: timePointer(day.Add(12 * time.Hour)), StoryPoints: points(0)},
 		// Open on the day: not counted.
 		{WorkItemID: "3", Provider: "github", Labels: []string{"security"}, RepoID: &repo,
 			CreatedAt: day.Add(time.Hour)},
 		// Completed before the day and created after it: neither is active.
-		{WorkItemID: "4", Provider: "github", RepoID: &repo,
+		{WorkItemID: "4", Provider: "github", RepoID: &repo, Status: "done",
 			CreatedAt: day.AddDate(0, 0, -9), CompletedAt: timePointer(day.Add(-time.Second))},
 		{WorkItemID: "5", Provider: "github", RepoID: &repo, CreatedAt: end},
 	}

@@ -7,6 +7,8 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -
 ROOT="$(cd -- "${SCRIPT_DIR}/.." >/dev/null 2>&1 && pwd -P)"
 # shellcheck source=ci/lib/registry_retry.sh
 source "${SCRIPT_DIR}/lib/registry_retry.sh"
+# shellcheck source=ci/lib/pull_base_image.sh
+source "${SCRIPT_DIR}/lib/pull_base_image.sh"
 DOCKERFILE="${ROOT}/docker/go-worker.Dockerfile"
 IMAGE_PREFIX="${DEV_HEALTH_GO_IMAGE_PREFIX:-dev-health-go}"
 
@@ -119,7 +121,28 @@ cleanup_active_container() {
   fi
 }
 
-trap cleanup_active_container EXIT
+cleanup_base_tags() {
+  docker image rm ${PINNED_BASE_TAG:+"${PINNED_BASE_TAG}"} ${PINNED_RUNTIME_TAG:+"${PINNED_RUNTIME_TAG}"} >/dev/null 2>&1 || true
+}
+
+cleanup() {
+  cleanup_active_container
+  cleanup_base_tags
+}
+
+trap cleanup EXIT
+
+# Pulls the pinned base images once per run, with bounded retries (CHAOS-11653). The build image runs on the build host,
+# so it is pulled without DOCKER_DEFAULT_PLATFORM; the runtime image is pulled for the selected platform.
+pull_bases() {
+  [ -z "${PINNED_BASE_TAG:-}" ] || return 0
+  local had="${DOCKER_DEFAULT_PLATFORM+x}" platform="${DOCKER_DEFAULT_PLATFORM-}" rc=0
+  unset DOCKER_DEFAULT_PLATFORM
+  pull_pinned_base_image "${DOCKERFILE}" || rc=$?
+  [ -z "${had}" ] || export DOCKER_DEFAULT_PLATFORM="${platform}"
+  [ "${rc}" -eq 0 ] || die "base image pull failed"
+  pull_pinned_runtime_image "${DOCKERFILE}" || die "runtime image pull failed"
+}
 
 # Prints the image id GO_IMAGES_EXPECTED ("target=id,target=id") names for a target; fails when it names none.
 expected_image_id() {
@@ -196,8 +219,12 @@ build_target() {
       || die "prebuilt images serve only ${IMAGE_PREFIX}-<target>:ci, not ${tag}"
     verify_loaded_image "${target}"
   else
+    pull_bases
     registry_retry_run docker-build -- docker build \
       --file "${DOCKERFILE}" \
+      --pull=false \
+      --build-arg "GO_BUILD_IMAGE=${PINNED_BASE_TAG}" \
+      --build-arg "GO_RUNTIME_IMAGE=${PINNED_RUNTIME_TAG}" \
       --target "${target}" \
       --build-arg "VERSION=${VERSION}" \
       --build-arg "COMMIT=${COMMIT}" \
@@ -737,24 +764,14 @@ smoke_query_api() {
     || die "dho query-api metrics endpoint did not become available"
   wait_for_status "http://${query_address}/query" 404 \
     || die "dho query-api mounted /query with no route configured"
-  # One release of compatibility (CHAOS-6447): the query listener still answers the
-  # probes the chart points at it, in the old shapes, until the deploy repo moves them
-  # to the operator listener; the following release removes this. /metrics is NOT part
-  # of that shim: a scrape endpoint is operational detail, so the query (public)
-  # listener never answers it and only the internal listener does.
-  wait_for_status "http://${query_address}/healthz" 200 \
-    || die "dho query-api no longer answers /healthz on the query listener"
-  wait_for_status "http://${query_address}/readyz" 200 \
-    || die "dho query-api no longer answers /readyz on the query listener"
-  wait_for_status "http://${internal_address}/metrics" 200 \
-    || die "dho query-api does not answer /metrics on the internal listener"
-  curl --silent --max-time 5 "http://${internal_address}/metrics" \
-    | grep -E '^target_info\{.*service_name="dev-health-query-api"' >/dev/null \
-    || die "dho query-api /metrics on the internal listener lost its target_info series"
-  [ "$(curl --silent --output /dev/null --write-out '%{http_code}' --max-time 5 "http://${query_address}/metrics")" = "404" ] \
-    || die "dho query-api answered /metrics on the query (public) listener"
-  [ "$(curl --silent --max-time 5 "http://${query_address}/readyz")" = "ready: /query not configured" ] \
-    || die "dho query-api compat /readyz on the query listener is not the old body"
+  # CHAOS-13492: the probes and the scrape live on the operator listener only; the query
+  # and internal listeners answer none of /healthz, /readyz, /metrics.
+  for listener_address in "${query_address}" "${internal_address}"; do
+    for operator_path in /healthz /readyz /metrics; do
+      [ "$(curl --silent --output /dev/null --write-out '%{http_code}' --max-time 5 "http://${listener_address}${operator_path}")" != "200" ] \
+        || die "dho query-api answered ${operator_path} on a non-operator listener"
+    done
+  done
   # The query routes stay off the operator listener.
   [ "$(curl --silent --output /dev/null --write-out '%{http_code}' --max-time 5 "http://${operator_address}/query")" != "200" ] \
     || die "dho query-api served /query on the operator listener"

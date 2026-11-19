@@ -269,15 +269,22 @@ func renderMarkdown(plan Plan, charts []ChartResult, narratives []narrative, pro
 }
 
 func renderChart(chart ChartResult) string {
+	if chart.NotApplicable != "" {
+		return "#### " + chart.Title + "\n\n_Not applicable: " + chart.NotApplicable + "_"
+	}
+	note := ""
+	if chart.Note != "" {
+		note = "\n\n_Note: " + chart.Note + "_"
+	}
 	if len(chart.DataPoints) == 0 {
-		return "#### " + chart.Title + "\n\n_No data returned for this chart._"
+		return "#### " + chart.Title + "\n\n_No data returned for this chart._" + note
 	}
 	lines := []string{"#### " + chart.Title, "", "| x | y | group |", "| --- | ---: | --- |"}
 	for _, point := range chart.DataPoints {
 		lines = append(lines, fmt.Sprintf("| %s | %s | %s |",
 			markdownTableCell(point.X), strconv.FormatFloat(point.Y, 'f', -1, 64), markdownTableCell(point.Group)))
 	}
-	return strings.Join(lines, "\n")
+	return strings.Join(lines, "\n") + note
 }
 
 var markdownCellLineBreaks = strings.NewReplacer("\r\n", " ", "\n", " ", "\r", " ")

@@ -20,6 +20,7 @@ const imageReuseStubDocker = `#!/bin/sh
 echo "$@" >>"$STUB_LOG"
 if [ "$1 $2" = "image inspect" ]; then
   for last; do :; done
+  case "$*" in *RepoDigests*) echo "$last"; exit 0 ;; esac
   case " $STUB_MISSING " in *" $last "*) exit 1 ;; esac
   id="$(printf '%s' "$last" | sha256sum | cut -d' ' -f1)"
   printf 'sha256:%s\n' "$id"

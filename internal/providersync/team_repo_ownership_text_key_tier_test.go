@@ -68,7 +68,7 @@ func TestATextKeyDonorCountsAtTheExplicitTextTier(t *testing.T) {
 					webIssue := tracker + ":WEB-5"
 					workItems := []TeamRepoOwnershipWorkItem{
 						{WorkItemID: ownerIssue, Provider: ownerProvider, ProjectID: "owner-proj"},
-						{WorkItemID: webIssue, Provider: tracker, ProjectID: "web-proj"},
+						{WorkItemID: webIssue, Provider: tracker, Type: "issue", ProjectID: "web-proj"},
 						{WorkItemID: changeRequestID(cr, 427), Provider: cr.provider, Type: cr.itemType, RepoID: "repo-1"},
 						{WorkItemID: changeRequestID(cr, 445), Provider: cr.provider, Type: cr.itemType, RepoID: "repo-1"},
 					}
@@ -124,8 +124,8 @@ func TestANativeDonorOfThePullRequestIsPreferredOverATextKey(t *testing.T) {
 		for _, cr := range textKeyChangeRequests {
 			t.Run(tracker+"/"+cr.provider, func(t *testing.T) {
 				workItems := []TeamRepoOwnershipWorkItem{
-					{WorkItemID: "linear:ZZZ-1", Provider: "linear", ProjectID: "owner-proj"},
-					{WorkItemID: tracker + ":WEB-5", Provider: tracker, ProjectID: "web-proj"},
+					{WorkItemID: "linear:ZZZ-1", Provider: "linear", Type: "issue", ProjectID: "owner-proj"},
+					{WorkItemID: tracker + ":WEB-5", Provider: tracker, Type: "issue", ProjectID: "web-proj"},
 					{WorkItemID: changeRequestID(cr, 9), Provider: cr.provider, Type: cr.itemType, RepoID: "repo-1"},
 				}
 				edges := []TeamRepoOwnershipDependencyEdge{
@@ -150,7 +150,7 @@ func TestALinkWhoseItemReachesATeamOnlyThroughATextKeyCountsAsExplicitText(t *te
 			t.Run(tracker+"/"+cr.provider, func(t *testing.T) {
 				workItems := []TeamRepoOwnershipWorkItem{
 					{WorkItemID: "linear:CHAOS-1", Provider: "linear", ProjectID: "owner-proj"},
-					{WorkItemID: tracker + ":WEB-5", Provider: tracker, ProjectID: "web-proj"},
+					{WorkItemID: tracker + ":WEB-5", Provider: tracker, Type: "issue", ProjectID: "web-proj"},
 					{WorkItemID: changeRequestID(cr, 3), Provider: cr.provider, Type: cr.itemType},
 				}
 				edges := []TeamRepoOwnershipDependencyEdge{

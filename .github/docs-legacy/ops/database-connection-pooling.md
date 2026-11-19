@@ -149,10 +149,15 @@ of the migration DSN, or any budget increase that crosses those ceilings.
 
 River terminal-row cleanup is configured independently of product history:
 
-- `RIVER_COMPLETED_JOB_RETENTION=168h`;
-- `RIVER_CANCELLED_JOB_RETENTION=720h`;
-- `RIVER_DISCARDED_JOB_RETENTION=720h`; and
+- `RIVER_COMPLETED_JOB_RETENTION=24h`;
+- `RIVER_CANCELLED_JOB_RETENTION=24h`;
+- `RIVER_DISCARDED_JOB_RETENTION=168h`; and
 - `RIVER_JOB_CLEANER_TIMEOUT=30s`.
+
+These defaults equal River's own job cleaner defaults. The worker River client
+applies them; only a leader worker runs the cleaner. A longer retention also
+keeps a ByArgs unique insert deduplicating into a finalized job row with the
+same key for longer.
 
 Product-visible history remains in domain run tables; the River rows are
 bounded execution records.

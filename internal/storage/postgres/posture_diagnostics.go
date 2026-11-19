@@ -109,9 +109,13 @@ SELECT
 				)
 		)
 	) AS excess_insert,
+	-- RolePosture.RetiredTableUpdates ($9): a retired table-wide UPDATE held is no excess; a column UPDATE without it is.
 	relation IS NOT NULL AND NOT allow_update AND (
-		has_table_privilege($1, relation, 'UPDATE')
-		OR (has_any_column_privilege($1, relation, 'UPDATE') AND NOT table_name = ANY(COALESCE($6::text[], '{}'::text[])))
+		(has_table_privilege($1, relation, 'UPDATE') AND NOT table_name = ANY(COALESCE($9::text[], '{}'::text[])))
+		OR (has_any_column_privilege($1, relation, 'UPDATE') AND NOT has_table_privilege($1, relation, 'UPDATE')
+			AND table_name = ANY(COALESCE($9::text[], '{}'::text[])))
+		OR (has_any_column_privilege($1, relation, 'UPDATE') AND NOT table_name = ANY(COALESCE($6::text[], '{}'::text[]))
+			AND NOT table_name = ANY(COALESCE($9::text[], '{}'::text[])))
 	) AS excess_update,
 	relation IS NOT NULL AND NOT allow_delete AND has_table_privilege($1, relation, 'DELETE') AS excess_delete,
 	relation IS NOT NULL AND has_table_privilege($1, relation, 'TRUNCATE') AS excess_truncate,
@@ -130,7 +134,8 @@ SELECT
 	-- level only, as rolePostureQuery does.
 	relation IS NOT NULL AND has_any_column_privilege($1, relation, 'SELECT WITH GRANT OPTION') AS excess_select_grant,
 	relation IS NOT NULL AND allow_insert AND has_any_column_privilege($1, relation, 'INSERT WITH GRANT OPTION') AS excess_insert_grant,
-	relation IS NOT NULL AND allow_update AND has_any_column_privilege($1, relation, 'UPDATE WITH GRANT OPTION') AS excess_update_grant,
+	relation IS NOT NULL AND (allow_update OR table_name = ANY(COALESCE($9::text[], '{}'::text[])))
+		AND has_any_column_privilege($1, relation, 'UPDATE WITH GRANT OPTION') AS excess_update_grant,
 	relation IS NOT NULL AND allow_delete AND has_table_privilege($1, relation, 'DELETE WITH GRANT OPTION') AS excess_delete_grant,
 	-- RolePosture.RetiredTables: a retired table on which nothing is held passes.
 	relation IS NOT NULL
@@ -360,7 +365,8 @@ func DiagnoseRolePosture(
 	var gaps []PostureGap
 
 	if len(posture.RequiredTables) > 0 {
-		tableGaps, err := diagnoseTablePosture(ctx, pool, expectedRole, posture.RequiredTables, posture.ColumnScoped, posture.RetiredTables)
+		tableGaps, err := diagnoseTablePosture(ctx, pool, expectedRole, posture.RequiredTables, posture.ColumnScoped, posture.RetiredTables,
+			posture.RetiredTableUpdates)
 		if err != nil {
 			return nil, err
 		}
@@ -435,6 +441,7 @@ func diagnoseTablePosture(
 	tables []TablePrivilege,
 	columns []ColumnPrivilege,
 	retiredTables []string,
+	retiredTableUpdates []string,
 ) ([]PostureGap, error) {
 	retired := make(map[string]bool, len(retiredTables))
 	for _, name := range retiredTables {
@@ -462,6 +469,7 @@ func diagnoseTablePosture(
 	}
 	rows, err := pool.Query(
 		ctx, diagnoseTablePostureQuery, expectedRole, tableNames, allowInserts, allowUpdates, allowDeletes, columnUpdateTables, columnInsertTables, columnInsertNames,
+		retiredTableUpdates,
 	)
 	if err != nil {
 		return nil, ErrUnavailable

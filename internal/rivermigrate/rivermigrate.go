@@ -13,6 +13,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -577,14 +578,16 @@ func authSchemaOf(lookup func(string) (string, bool)) string {
 }
 
 // postureGrants converts one role's declared posture into the migration's
-// grant options, so the grant side and the readiness side are one list.
+// grant options, so the grant side and the readiness side are one list. A
+// retired table-wide UPDATE (RolePosture.RetiredTableUpdates) is still
+// granted: the drop is a later change of the posture, not of this step.
 func postureGrants(posture postgresstore.RolePosture) ([]riverstore.TableGrant, []riverstore.ColumnGrant, []string) {
 	grants := make([]riverstore.TableGrant, 0, len(posture.RequiredTables))
 	for _, table := range posture.RequiredTables {
 		grants = append(grants, riverstore.TableGrant{
 			TableName:   table.TableName,
 			AllowInsert: table.AllowInsert,
-			AllowUpdate: table.AllowUpdate,
+			AllowUpdate: table.AllowUpdate || slices.Contains(posture.RetiredTableUpdates, table.TableName),
 			AllowDelete: table.AllowDelete,
 		})
 	}

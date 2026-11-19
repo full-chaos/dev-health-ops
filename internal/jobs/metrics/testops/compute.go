@@ -112,6 +112,8 @@ type CoverageSnapshotRow struct {
 	LinesTotal        *uint32
 	LinesCovered      *uint32
 	LineCoveragePct   *float64
+	BranchesTotal     *uint32
+	BranchesCovered   *uint32
 	BranchCoveragePct *float64
 	TeamID            *string
 	ServiceID         *string
@@ -202,6 +204,8 @@ type CoverageMetric struct {
 	BranchCoveragePct       *float64
 	LinesTotal              *uint32
 	LinesCovered            *uint32
+	BranchesTotal           *uint32
+	BranchesCovered         *uint32
 	CoverageDeltaPct        *float64
 	UncoveredFilesCount     int
 	CoverageRegressionCount int
@@ -1030,6 +1034,7 @@ func ComputeCoverageMetric(repoID uuid.UUID, current, prior []CoverageSnapshotRo
 	metric := &CoverageMetric{
 		RepoID: repoID, LineCoveragePct: latest.LineCoveragePct, BranchCoveragePct: latest.BranchCoveragePct,
 		LinesTotal: latest.LinesTotal, LinesCovered: latest.LinesCovered,
+		BranchesTotal: latest.BranchesTotal, BranchesCovered: latest.BranchesCovered,
 		TeamID: resolveRepoTeam(latest.TeamID, repoName, resolver), ServiceID: latest.ServiceID, OrgID: latest.OrgID,
 	}
 	if latest.LineCoveragePct != nil && priorLatest != nil && priorLatest.LineCoveragePct != nil {

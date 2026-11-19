@@ -2364,7 +2364,7 @@ The recommendations job evaluates two sets of teams: the teams with a live `work
 the same instant as the owned repositories the loader reads). A team in both sets is evaluated once. So a team that owns
 repositories but has no work items gets its repository rules evaluated.
 
-The benchmarking line coverage of a point is the covered lines over the total lines of the point's repositories, times 100 (a repository-day weighs by its lines), not the mean of the stored percentages. A repository-day with a NULL line count, or with no lines, is in neither sum, and a point with no such repository-day has no value. The branch coverage has no stored counts and stays the mean of the stored percentages of the repository-days.
+The benchmarking line coverage of a point is the covered lines over the total lines of the point's repositories, times 100 (a repository-day weighs by its lines), not the mean of the stored percentages. A repository-day with a NULL line count, or with no lines, is in neither sum, and a point with no such repository-day has no value. The branch coverage is pooled the same way over `branches_covered` and `branches_total`; a repository-day written before the counts existed is in neither sum and reads as not measured until its day is recomputed.
 
 Limits:
 

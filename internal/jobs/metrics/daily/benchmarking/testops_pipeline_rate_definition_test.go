@@ -36,7 +36,7 @@ func TestRerunRateBenchmarkIsAPooledRatio(t *testing.T) {
 		t.Errorf("rerun_rate: table %q", definition.Table)
 	}
 	for name, other := range metricDefinitions {
-		pooled := name == "rerun_rate" || name == "success_rate" || name == "failure_rate" || name == "pass_rate" || name == "flake_rate" || name == "retry_dependency_rate" || name == "line_coverage_pct" || name == "defect_intro_rate"
+		pooled := name == "rerun_rate" || name == "success_rate" || name == "failure_rate" || name == "pass_rate" || name == "flake_rate" || name == "retry_dependency_rate" || name == "line_coverage_pct" || name == "branch_coverage_pct" || name == "defect_intro_rate"
 		if !pooled && (other.Numerator != "" || other.Denominator != "") {
 			t.Errorf("%s: pooled, which only the rate metrics are", name)
 		}

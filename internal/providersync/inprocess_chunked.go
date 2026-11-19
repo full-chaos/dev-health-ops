@@ -506,15 +506,14 @@ func (store *InProcessChunkLedger) MarkInventoryComplete(
 		return ErrChunkCheckpointConflict
 	}
 	total := checkpoint.PreparedChunks
-	// finalizePreparedChunksSQL, then finalizeChunkCheckpointSQL.
-	for ordinal, row := range store.chunks {
-		if ordinal < total {
-			row.totalChunks = total
-		}
-	}
 	held := store.checkpoint
 	if held.NextOrdinal != total || held.PreparedChunks != total || (held.TotalChunks != 0 && held.TotalChunks != total) {
 		return ErrChunkCheckpointConflict
+	}
+	// finalizePreparedChunksSQL, then finalizeChunkCheckpointSQL. A refusal above writes nothing, as the rolled-back
+	// PostgreSQL transaction does.
+	if row, ok := store.chunks[total-1]; ok {
+		row.totalChunks = total
 	}
 	held.TotalChunks, held.FinalOrdinal, held.InventoryComplete = total, total-1, true
 	held.UpdatedAt = now.UTC()

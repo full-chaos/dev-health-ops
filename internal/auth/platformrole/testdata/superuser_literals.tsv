@@ -12,7 +12,6 @@ internal/api/session/routes.go	handlers.me	1	response key
 internal/api/session/store.go	-	1	read: userColumns, used only through userColumnsFor
 internal/api/session/store.go	handlers.userColumnsFor	2	read: the off column of PlatformRoleRead
 internal/api/session/tokens.go	userInfo	1	response key
-internal/api/sso/sso.go	handlers.userReadSQL	1	read: the off column of PlatformRoleRead
 internal/apiservice/admin/guards.go	handlers.refuseSuperuserWrite	1	log key
 internal/apiservice/admin/guards.go	pgStore.targetsSuperuserSQL	1	read: the off column of PlatformRoleRead
 internal/apiservice/admin/orgs_provision.go	pgStore.isSuperuserSQL	1	read: the off column of PlatformRoleRead

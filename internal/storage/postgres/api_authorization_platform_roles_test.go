@@ -373,8 +373,6 @@ var goAPIUsersWriteSites = map[string]int{
 	"internal/api/session/changepassword.go":  1,
 	"internal/api/session/social.go":          1,
 	"internal/api/session/store.go":           1,
-	"internal/api/sso/oauth.go":               1,
-	"internal/api/sso/provision.go":           2,
 	"internal/apiservice/admin/userdelete.go": 1,
 	"internal/apiservice/admin/userstore.go":  5,
 }

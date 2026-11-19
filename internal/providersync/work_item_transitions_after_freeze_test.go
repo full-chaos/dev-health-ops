@@ -1,6 +1,9 @@
 package providersync
 
-import "fmt"
+import (
+	"fmt"
+	"maps"
+)
 
 // workItemTransitionColumnsAfterThePythonFreeze names every column of work_item_transitions that a migration added
 // after the Python producers and sinks were frozen. Go writes it; no frozen Python output can hold it. A frozen-oracle
@@ -47,11 +50,20 @@ func withoutTransitionColumnsAfterThePythonFreeze(columns []string, rows [][]any
 				kept = append(kept, value)
 				continue
 			}
-			if ordinal, isOrdinal := value.(uint16); !isOrdinal || ordinal != 0 {
+			if ordinal, isOrdinal := value.(uint32); !isOrdinal || ordinal != 0 {
 				problems = append(problems, fmt.Sprintf("row %d writes %v into %q: a frozen case is the only transition of its instant, so it must be 0", rowIndex, value, columns[index]))
 			}
 		}
 		keptRows = append(keptRows, kept)
 	}
 	return keptColumns, keptRows, problems
+}
+
+// withTransitionBoardSlotGoOnly is a frozen-oracle Go-only field map for a transition row: the base map plus
+// board_slot, the tie_ordinal slot of a Projects v2 board Status event (CHAOS-14190). The Python producers emitted no
+// board events, and a timeline row leaves it 0.
+func withTransitionBoardSlotGoOnly(base map[string]string) map[string]string {
+	out := maps.Clone(base)
+	out["board_slot"] = "the tie_ordinal slot of a Projects v2 board Status event (migration 170); Python emitted no board events and a timeline row leaves it 0"
+	return out
 }

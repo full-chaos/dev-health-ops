@@ -167,6 +167,7 @@ func TestSinkReadKeysAreRouteSignalsNotText(t *testing.T) {
 		"deployments":                 {"lifecycle_lookup_failed": reflect.Bool, "pull_request_lookup_failed": reflect.Bool},
 		"git_pull_requests":           {"reviews_lookup_failed": reflect.Bool},
 		"work_item_team_attributions": {"ownership_reason": reflect.String, "priority": reflect.Int},
+		"work_item_transitions":       {"board_slot": reflect.Int},
 	}
 	kinds := map[sinkReadKind]reflect.Kind{sinkReadBool: reflect.Bool, sinkReadInt: reflect.Int, sinkReadEnum: reflect.String}
 	if len(preparedRouteSinkReadKeys) != len(allowed) {

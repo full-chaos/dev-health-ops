@@ -2,8 +2,11 @@ package providersync
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
 	"log/slog"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -346,7 +349,10 @@ type workItemTransitionStoredRow struct {
 	LastSynced    time.Time
 	OrgID         string
 	SourceID      *uuid.UUID
-	TieOrdinal    uint16
+	TieOrdinal    uint32
+	// BoardSlot is not stored on its own: it is the tie_ordinal of a Projects v2 board Status event (see
+	// githubWorkItemTransitionRow.BoardSlot), 0 for every other transition.
+	BoardSlot uint32
 }
 
 // workItemTransitionProviderAccepted reports whether a transition row names a
@@ -380,6 +386,7 @@ func projectWorkItemTransition(row githubWorkItemTransitionRow) workItemTransiti
 		ToStatusRaw:   derefString(row.ToStatusRaw),
 		Actor:         derefString(row.Actor),
 		LastSynced:    clickHouseMillis(row.LastSynced), OrgID: row.OrgID, SourceID: nil,
+		BoardSlot: uint32(row.BoardSlot),
 	}
 }
 
@@ -1294,17 +1301,26 @@ func projectRows[T any](rows []T, project func(T) workItemTransitionStoredRow) [
 	return stored
 }
 
-// rankTransitionTies keeps one copy of each transition (the last, as the engine does) and numbers the transitions of
-// one item at one instant: tie_ordinal 0..n-1, ranked by the transition's own content. The only transition of an
-// instant is 0, so a re-sync replaces it whatever its statuses now say. Ranking by content, not by the order the
-// batch holds them, keeps the order a provider served the events in from moving a transition to another ordinal.
+// rankTransitionTies keeps one copy of each transition (the last, as the engine does) and gives each transition of
+// one item at one instant its tie_ordinal, in two disjoint spaces:
+//   - a Projects v2 board Status event takes its board's slot, 2^31 + a 31-bit hash of the board (boardTieSlot). A
+//     board emits at most one Status event per item, and every run emits the board's event in the board's own slot,
+//     so a run that brings only some of the events of an instant never moves one into another event's slot;
+//   - every other transition (the provider's own timeline, emitted complete for an item in every run that emits it)
+//     is ranked 0..n-1 among the timeline events of the instant by its own content, not by the order the batch holds
+//     them. The only one of an instant is 0, so a re-sync replaces it whatever its statuses now say.
 func rankTransitionTies(rows []workItemTransitionStoredRow) []workItemTransitionStoredRow {
 	rows = dedupeBySortingKey(rows, func(row workItemTransitionStoredRow) string {
-		return transitionInstantKey(row) + workItemKeySeparator + transitionTieOrder(row)
+		return transitionInstantKey(row) + workItemKeySeparator + strconv.FormatUint(uint64(row.BoardSlot), 10) +
+			workItemKeySeparator + transitionTieOrder(row)
 	})
 	ties := make(map[string][]int, len(rows))
 	instants := make([]string, 0, len(rows))
 	for index, row := range rows {
+		if row.BoardSlot != 0 {
+			rows[index].TieOrdinal = row.BoardSlot
+			continue
+		}
 		instant := transitionInstantKey(row)
 		if _, seen := ties[instant]; !seen {
 			instants = append(instants, instant)
@@ -1317,10 +1333,18 @@ func rankTransitionTies(rows []workItemTransitionStoredRow) []workItemTransition
 			return transitionTieOrder(rows[members[left]]) < transitionTieOrder(rows[members[right]])
 		})
 		for rank, index := range members {
-			rows[index].TieOrdinal = uint16(rank)
+			rows[index].TieOrdinal = uint32(rank)
 		}
 	}
 	return rows
+}
+
+// boardTieSlot is the tie_ordinal of every Status event of one Projects v2 board: 2^31 + the first 31 bits of
+// sha256(projectScopeID). It depends on the board alone, so adding, removing or reordering boards moves no other
+// board's slot. Two boards collide at 2^-31 per pair.
+func boardTieSlot(projectScopeID string) uint32 {
+	sum := sha256.Sum256([]byte(projectScopeID))
+	return 1<<31 | binary.BigEndian.Uint32(sum[:4])&0x7fffffff
 }
 
 func transitionInstantKey(row workItemTransitionStoredRow) string {

@@ -8,8 +8,8 @@ import (
 	"time"
 )
 
-func tieOrdinalsByContent(rows []workItemTransitionStoredRow) map[string]uint16 {
-	ordinals := make(map[string]uint16, len(rows))
+func tieOrdinalsByContent(rows []workItemTransitionStoredRow) map[string]uint32 {
+	ordinals := make(map[string]uint32, len(rows))
 	for _, row := range rankTransitionTies(rows) {
 		ordinals[transitionInstantKey(row)+workItemKeySeparator+transitionTieOrder(row)] = row.TieOrdinal
 	}
@@ -49,7 +49,7 @@ func TestRankTransitionTiesIsIndependentOfBatchOrder(t *testing.T) {
 			}
 		}
 	}
-	seen := map[uint16]int{}
+	seen := map[uint32]int{}
 	for key, ordinal := range want {
 		if key[len(key)-len("done"+workItemKeySeparator+"unknown"):] == "done"+workItemKeySeparator+"unknown" {
 			if ordinal != 0 {
@@ -64,7 +64,7 @@ func TestRankTransitionTiesIsIndependentOfBatchOrder(t *testing.T) {
 	}
 }
 
-func mapsEqual(left, right map[string]uint16) bool {
+func mapsEqual(left, right map[string]uint32) bool {
 	if len(left) != len(right) {
 		return false
 	}
@@ -101,19 +101,19 @@ func TestTieOrdinalIsStablePerProviderAcrossResyncs(t *testing.T) {
 	first := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
 	second := time.Date(2026, 11, 19, 0, 0, 0, 0, time.UTC)
 	at := func(value string) *string { return &value }
-	ordinals := func(t *testing.T, rows []workItemTransitionStoredRow) map[string]uint16 {
+	ordinals := func(t *testing.T, rows []workItemTransitionStoredRow) map[string]uint32 {
 		t.Helper()
 		for index := range rows {
 			rows[index].LastSynced = time.Time{}
 		}
 		return tieOrdinalsByContent(rows)
 	}
-	same := func(t *testing.T, name string, left, right map[string]uint16, ties int) {
+	same := func(t *testing.T, name string, left, right map[string]uint32, ties int) {
 		t.Helper()
 		if !mapsEqual(left, right) {
 			t.Fatalf("%s: ordinals %v then %v", name, left, right)
 		}
-		maxOrdinal := uint16(0)
+		maxOrdinal := uint32(0)
 		for _, ordinal := range left {
 			maxOrdinal = max(maxOrdinal, ordinal)
 		}
@@ -132,7 +132,7 @@ func TestTieOrdinalIsStablePerProviderAcrossResyncs(t *testing.T) {
 			raw, _ := json.Marshal(event)
 			events = append(events, raw)
 		}
-		run := func(normalizedAt time.Time) map[string]uint16 {
+		run := func(normalizedAt time.Time) map[string]uint32 {
 			rows, _, err := normalizeGitHubWorkItemEvents(nativeTestClaim("github", "work-items"), "gh:acme/api#1", false, events, created, nil, normalizedAt)
 			if err != nil {
 				t.Fatal(err)
@@ -142,7 +142,7 @@ func TestTieOrdinalIsStablePerProviderAcrossResyncs(t *testing.T) {
 		same(t, "github", run(first), run(second), 2)
 	})
 	t.Run("gitlab", func(t *testing.T) {
-		run := func(normalizedAt time.Time) map[string]uint16 {
+		run := func(normalizedAt time.Time) map[string]uint32 {
 			rows, _ := normalizeGitLabIssueTransitions(nativeTestClaim("gitlab", "work-items"), "gitlab:acme/api#1",
 				[]gitlabLabelEventPayload{
 					{Action: "add", CreatedAt: at("2026-03-02T09:00:00Z"), LabelName: "doing"},
@@ -159,7 +159,7 @@ func TestTieOrdinalIsStablePerProviderAcrossResyncs(t *testing.T) {
 			map[string]any{"id": "10002", "created": "2026-03-02T09:00:00.000+0000", "items": []any{
 				map[string]any{"field": "status", "fromString": "In Progress", "toString": "Done"}}},
 		}
-		run := func(served []any, normalizedAt time.Time) map[string]uint16 {
+		run := func(served []any, normalizedAt time.Time) map[string]uint32 {
 			rows := normalizeJiraTransitions(nativeTestClaim("jira", "work-items"), "OPS-1", map[string]any{"histories": served},
 				nil, created, mapping, nil, false, false, normalizedAt)
 			return ordinals(t, projectRows(rows, projectWorkItemTransition))
@@ -173,7 +173,7 @@ func TestTieOrdinalIsStablePerProviderAcrossResyncs(t *testing.T) {
 			{ID: "h2", CreatedAt: "2026-03-02T09:00:00.000Z", FromState: &linearStatePayload{Name: "In Progress", Type: "started"},
 				ToState: &linearStatePayload{Name: "Done", Type: "completed"}},
 		}
-		run := func(served []linearHistoryEntry, normalizedAt time.Time) map[string]uint16 {
+		run := func(served []linearHistoryEntry, normalizedAt time.Time) map[string]uint32 {
 			rows := normalizeLinearTransitions(nativeTestClaim("linear", "work-items"), "linear:ENG-1", served, normalizedAt)
 			return ordinals(t, projectRows(rows, projectLinearTransition))
 		}
@@ -181,7 +181,7 @@ func TestTieOrdinalIsStablePerProviderAcrossResyncs(t *testing.T) {
 	})
 	t.Run("projects v2", func(t *testing.T) {
 		column, set := "In Progress", "2026-03-02T09:00:00Z"
-		run := func(normalizedAt time.Time) map[string]uint16 {
+		run := func(normalizedAt time.Time) map[string]uint32 {
 			var item gitHubProjectV2ItemPayload
 			value := gitHubProjectV2FieldValuePayload{Typename: "ProjectV2ItemFieldSingleSelectValue", Name: &column, UpdatedAt: &set}
 			value.Field.Name = "Status"

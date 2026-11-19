@@ -72,3 +72,24 @@ func TestLinearMoveOutOfDuplicateStateIsAReopen(t *testing.T) {
 		t.Fatalf("reopens=%+v, want one canceled -> todo reopen from Duplicate", reopens)
 	}
 }
+
+func TestLinearStatusMapsTriageStateTypeToBacklog(t *testing.T) {
+	for _, stateType := range []string{"triage", "Triage"} {
+		if got := linearStatus(stateType); got != "backlog" {
+			t.Errorf("linearStatus(%q) = %q, want backlog", stateType, got)
+		}
+	}
+}
+
+func TestLinearMoveFromClosedIntoTriageIsAReopen(t *testing.T) {
+	var history []linearHistoryEntry
+	if err := json.Unmarshal([]byte(`[
+		{"id":"h1","createdAt":"2026-11-18T09:00:00Z","fromState":{"name":"In Progress","type":"started"},"toState":{"name":"Done","type":"completed"}},
+		{"id":"h2","createdAt":"2026-11-18T10:00:00Z","fromState":{"name":"Done","type":"completed"},"toState":{"name":"Triage","type":"triage"}}]`), &history); err != nil {
+		t.Fatal(err)
+	}
+	reopens := normalizeLinearReopens(nativeTestClaim("linear", "work-items"), "linear:ENG-1", history, linearDuplicateNow)
+	if len(reopens) != 1 || reopens[0].FromStatus != "done" || !reopens[0].OccurredAt.Equal(time.Date(2026, 11, 18, 10, 0, 0, 0, time.UTC)) {
+		t.Fatalf("reopens=%+v, want one reopen at the move from Done into Triage", reopens)
+	}
+}

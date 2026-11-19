@@ -4,7 +4,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"log/slog"
-	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -97,7 +96,7 @@ func TestSurrogateRefusalTableUnitRowsAnswerAsTheTableSays(t *testing.T) {
 			}()
 			switch {
 			case strings.HasSuffix(path, "/oidc/00000000-0000-4000-8000-000000000001/authorize"):
-				guard.BodyFirst(policy.Public, http.HandlerFunc(handlers{}.initiateOIDCAuth)).ServeHTTP(recorder, request)
+				guard.BodyFirst(policy.Public, newHandlers(Deps{}).refuseOIDCNotForwarded(body(oidcAuthRequest))).ServeHTTP(recorder, request)
 			case strings.HasSuffix(path, "/saml/{provider}/initiate"):
 				h := newHandlers(Deps{})
 				guard.BodyFirst(policy.Public, h.refuseSAMLNotForwarded(body(samlAuthRequest))).ServeHTTP(recorder, request)

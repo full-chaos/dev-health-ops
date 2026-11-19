@@ -928,7 +928,7 @@ func (handler GitLabWorkItemsRouteHandler) collectGitLabGroupEpics(
 					reason = "empty_title"
 				}
 				slog.Default().WarnContext(ctx, "gitlab_work_items_epic_skipped",
-					"org_id", claim.OrgID, "unit_id", claim.ID, "group", logging.ProviderText(groupPath), "iid", iidText, "reason", reason)
+					"org_id", claim.OrgID, "unit_id", claim.ID, "group", logging.ProviderText(groupPath), "iid", logging.ProviderText(iidText), "reason", reason)
 				continue
 			}
 			return outcome, normalizeErr

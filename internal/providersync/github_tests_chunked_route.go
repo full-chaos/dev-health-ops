@@ -2249,7 +2249,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 							"provider run report artifacts match by case identity but disagree on outcome; all are kept and the unit is not advanced",
 							"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
 							"repository", logging.ProviderText(cursor.Repo), logging.ProviderIDAttr("run", pipeline.RunID),
-							"artifact_ids", strings.Join(mismatchIDs, ","),
+							"artifact_ids", logging.ProviderText(strings.Join(mismatchIDs, ",")),
 						)
 					}
 					for _, index := range plan.OverBound {

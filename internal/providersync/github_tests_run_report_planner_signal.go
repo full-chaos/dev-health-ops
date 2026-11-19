@@ -50,7 +50,7 @@ func reportGitHubTestsPlannerKeeps(ctx context.Context, provider, dataset, unit,
 		slog.Warn(
 			"provider run report artifacts kept beside their parts: rows are stored twice",
 			"provider", provider, "dataset", dataset, "unit", unit, "repository", logging.ProviderText(repo), logging.ProviderIDAttr("run", runID),
-			"outcome", outcome.name, "artifact_ids", strings.Join(ids, ","),
+			"outcome", outcome.name, "artifact_ids", logging.ProviderText(strings.Join(ids, ",")),
 		)
 	}
 }

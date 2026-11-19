@@ -392,22 +392,27 @@ run_integration_go_test() {
 # args only, never env. DEV_HEALTH_GO_STEP_BOUND_SECS overrides the bound for tests.
 PROVIDERSYNC_STEP_BOUND_SECS=1380
 
-# run_shard_go_test NAME TIMEOUT REGEX PKG (CHAOS-13766): the one go test call of a daily, workerservice, queryapiserver or remaining
-# integration shard, run from the module root. With GO_INTEGRATION_LEG_JSON_DIR set (CI) it writes the events to
-# ${GO_INTEGRATION_LEG_JSON_DIR}/NAME.json and prints the plain log from them (a line that is not a JSON event is printed raw);
-# the raw events (they carry test output) stay on the runner and the workflow converts them to a JUnit part. pipefail keeps go
-# test's exit code. Unset (a local run): plain go test, as before.
-run_shard_go_test() {
-  local name="$1" tmo="$2" regex="$3" pkg="$4" dir="${GO_INTEGRATION_LEG_JSON_DIR:-}"
+# run_shard_json NAME CMD...  (CHAOS-13766): CMD is the one go test call of a daily, workerservice, queryapiserver or remaining
+# integration shard. With GO_INTEGRATION_LEG_JSON_DIR set (CI) it runs CMD with -json after the `test` word, keeps the events in
+# ${GO_INTEGRATION_LEG_JSON_DIR}/NAME.json and prints the plain log from them (a line that is not a JSON event is printed raw); the
+# raw events (they carry test output) stay on the runner and the workflow converts them to a JUnit part. pipefail keeps go test's
+# exit code. Unset (a local run): CMD as it is.
+run_shard_json() {
+  local name="$1" dir="${GO_INTEGRATION_LEG_JSON_DIR:-}" i
+  shift
   if [ -z "${dir}" ]; then
-    "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -tags=integration -count=1 -timeout="${tmo}" -run "${regex}" "${pkg}"
+    "$@"
     return
   fi
-  command -v jq >/dev/null 2>&1 || die "run_shard_go_test: GO_INTEGRATION_LEG_JSON_DIR needs jq to render go test -json"
-  if ! { mkdir -p -- "${dir}" && : >"${dir}/${name}.json"; }; then die "run_shard_go_test: cannot create ${dir}/${name}.json"; fi
+  command -v jq >/dev/null 2>&1 || die "run_shard_json: GO_INTEGRATION_LEG_JSON_DIR needs jq to render go test -json"
+  if ! { mkdir -p -- "${dir}" && : >"${dir}/${name}.json"; }; then die "run_shard_json: cannot create ${dir}/${name}.json"; fi
+  local -a cmd=("$@")
+  for ((i = 0; i < ${#cmd[@]}; i++)); do
+    if [ "${cmd[i]}" = test ]; then cmd=("${cmd[@]:0:i+1}" -json "${cmd[@]:i+1}"); break; fi
+  done
   (
     set -o pipefail
-    "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -tags=integration -count=1 -timeout="${tmo}" -json -run "${regex}" "${pkg}" \
+    "${cmd[@]}" \
       | tee "${dir}/${name}.json" \
       | jq -R -rj '. as $l | (try fromjson catch null) as $e | if ($e | type) == "object" then (if $e.Action == "output" then $e.Output else empty end) else $l + "\n" end'
   )
@@ -4447,7 +4452,7 @@ check_daily_test_shard() {
   tmo="$(job_go_test_timeout 22)" || return 2
   (
     cd "${ROOT}"
-    run_shard_go_test "daily-${shard}" "${tmo}" "${test_regex}" "./${DAILY_INTEGRATION_PACKAGE_KEY}"
+    run_shard_json "daily-${shard}" "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -tags=integration -count=1 -timeout="${tmo}" -run "${test_regex}" "./${DAILY_INTEGRATION_PACKAGE_KEY}"
   )
 }
 
@@ -4652,7 +4657,7 @@ check_workerservice_test_shard() {
   tmo="$(job_go_test_timeout 22)" || return 2
   (
     cd "${ROOT}"
-    run_shard_go_test "workerservice-${shard}" "${tmo}" "${test_regex}" "./${WORKERSERVICE_INTEGRATION_PACKAGE_KEY}"
+    run_shard_json "workerservice-${shard}" "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -tags=integration -count=1 -timeout="${tmo}" -run "${test_regex}" "./${WORKERSERVICE_INTEGRATION_PACKAGE_KEY}"
   )
 }
 
@@ -4857,7 +4862,7 @@ check_queryapiserver_test_shard() {
   tmo="$(job_go_test_timeout 22)" || return 2
   (
     cd "${ROOT}"
-    run_shard_go_test "queryapiserver-${shard}" "${tmo}" "${test_regex}" "./${QAPISERVER_INTEGRATION_PACKAGE_KEY}"
+    run_shard_json "queryapiserver-${shard}" "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -tags=integration -count=1 -timeout="${tmo}" -run "${test_regex}" "./${QAPISERVER_INTEGRATION_PACKAGE_KEY}"
   )
 }
 
@@ -5062,7 +5067,7 @@ check_remaining_test_shard() {
   tmo="$(job_go_test_timeout 22)" || return 2
   (
     cd "${ROOT}"
-    run_shard_go_test "remaining-${shard}" "${tmo}" "${test_regex}" "./${REMAINING_INTEGRATION_PACKAGE_KEY}"
+    run_shard_json "remaining-${shard}" "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -tags=integration -count=1 -timeout="${tmo}" -run "${test_regex}" "./${REMAINING_INTEGRATION_PACKAGE_KEY}"
   )
 }
 

@@ -354,10 +354,12 @@ func normalizeGitLabIssueWorkItem(
 	// The id carries the path the repository identity was minted from, so a
 	// renamed project keeps it (CHAOS-3383); project_id stays the current path.
 	workItemID := "gitlab:" + identityPath + "#" + strconv.Itoa(payload.IID)
-	transitions := normalizeGitLabIssueTransitions(
+	transitions, labelAdds := normalizeGitLabIssueTransitions(
 		claim, workItemID, labelEvents, stateEvents, createdAt.UTC(), statusMapping, resolveIdentity, normalizedAt,
 	)
-	startedAt, completedAt := gitlabWorkItemLifecycle(transitions, closedAt)
+	// started_at/completed_at keep reading the label adds only: a reopened
+	// issue must not gain completed_at from an earlier state close.
+	startedAt, completedAt := gitlabWorkItemLifecycle(labelAdds, closedAt)
 	// Python's provider enriches every issue with the label priority right
 	// after gitlab_issue_to_work_item (providers/gitlab/provider.py:261).
 	priority, serviceClass := gitlabPriorityFromLabels(labels)
@@ -512,7 +514,8 @@ func normalizeGitLabEpicStateEvents(
 // normalizeGitLabIssueTransitions folds an issue's resource label events and
 // resource state events by time. A label add keeps the single-label mapping. A
 // remove of a status-mapped label and a state event emit a row only when the
-// item status (labels first, then state, as the work item row) changes.
+// item status (labels first, then state, as the work item row) changes. The
+// second result holds the label-add rows alone.
 func normalizeGitLabIssueTransitions(
 	claim Claim,
 	workItemID string,
@@ -522,7 +525,7 @@ func normalizeGitLabIssueTransitions(
 	statusMapping *StatusMapping,
 	resolveIdentity gitlabIdentityResolver,
 	normalizedAt time.Time,
-) []gitlabWorkItemTransitionRow {
+) ([]gitlabWorkItemTransitionRow, []gitlabWorkItemTransitionRow) {
 	type issueEvent struct {
 		createdAt *string
 		label     *gitlabLabelEventPayload
@@ -539,11 +542,13 @@ func normalizeGitLabIssueTransitions(
 		return gitlabEventTime(events[left].createdAt).Before(gitlabEventTime(events[right].createdAt))
 	})
 	transitions := make([]gitlabWorkItemTransitionRow, 0, len(events))
+	labelAdds := make([]gitlabWorkItemTransitionRow, 0, len(labelEvents))
 	previous := "unknown"
 	issueState := "opened"
 	statusLabels := []string{}
 	for _, event := range events {
 		toStatus, toRaw := "", ""
+		labelAdd := false
 		var actor *string
 		if event.label != nil {
 			action := strings.ToLower(strings.TrimSpace(event.label.Action))
@@ -561,7 +566,7 @@ func normalizeGitLabIssueTransitions(
 			switch action {
 			case "add":
 				statusLabels = append(statusLabels, labelName)
-				toStatus, toRaw = mapped, labelName
+				toStatus, toRaw, labelAdd = mapped, labelName, true
 			case "remove":
 				statusLabels = removeWorkItemLabel(statusLabels, labelName, normKey)
 				toStatus, toRaw = statusMapping.NormalizeStatus("gitlab", "", statusLabels, issueState), "unlabeled:"+labelName
@@ -603,10 +608,13 @@ func normalizeGitLabIssueTransitions(
 		}
 		if validateGitLabTransitionRow(row, claim) == nil {
 			transitions = append(transitions, row)
+			if labelAdd {
+				labelAdds = append(labelAdds, row)
+			}
 		}
 		previous = toStatus
 	}
-	return transitions
+	return transitions, labelAdds
 }
 
 func normalizeGitLabMergeRequestWorkItem(

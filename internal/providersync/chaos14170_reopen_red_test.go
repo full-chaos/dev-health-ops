@@ -373,3 +373,29 @@ func TestChaos14170RefuteJiraDoneThenInProgress(t *testing.T) {
 	}
 	chaos14170CheckLastMatches(t, row.Status, steps)
 }
+
+func TestChaos14170GitLabIssueStateEventsKeepLifecycle(t *testing.T) {
+	var payload gitlabIssueWorkItemPayload
+	if err := json.Unmarshal([]byte(`{"iid":42,"title":"Reopened","state":"opened",
+		"created_at":"2026-10-01T00:00:00Z","updated_at":"2026-10-04T00:00:00Z","labels":[]}`), &payload); err != nil {
+		t.Fatal(err)
+	}
+	var states []gitlabStateEventPayload
+	if err := json.Unmarshal([]byte(`[
+		{"state":"closed","created_at":"2026-10-02T00:00:00Z"},
+		{"state":"reopened","created_at":"2026-10-03T00:00:00Z"}]`), &states); err != nil {
+		t.Fatal(err)
+	}
+	row, transitions, err := normalizeGitLabIssueWorkItem(
+		nativeTestClaim("gitlab", "work-items"), "acme/api", "acme/api", "org:gitlab:1",
+		uuid.MustParse("0b7e3d4e-1111-4222-8333-944455556666"), payload, nil, states,
+		loadRealStatusMapping(t), nil, chaos14170Now,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(transitions) != 2 || row.CompletedAt != nil || row.StartedAt != nil {
+		t.Fatalf("a reopened issue keeps no completed_at from a state close; rows=%d completed=%v started=%v",
+			len(transitions), row.CompletedAt, row.StartedAt)
+	}
+}

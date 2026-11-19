@@ -1558,10 +1558,11 @@ Finalize writes the run's once-only ledger row in `sync_run_post_dispatches`
 `post_sync` row after that: `dispatched` is its last state, for a fan-out that
 did its work and for one that never ran.
 
-The River job row does not last either. The worker's River clients leave the
-retention periods at River's defaults: a `completed` job row is deleted after
-24 hours, a `discarded` one after 7 days. The `RIVER_*_JOB_RETENTION` settings
-are read and logged, but no River client is given them.
+The River job row does not last either. River's job cleaner deletes a finished
+job row once its state's retention has passed: by default 24 hours for a
+`completed` row and 7 days for a `discarded` one (`RIVER_COMPLETED_JOB_RETENTION`,
+`RIVER_DISCARDED_JOB_RETENTION`; see
+[Workers and jobs](../../operate/run/workers-and-jobs.md)).
 
 So the durable record of a fan-out is the ledger row. The fan-out
 (`NativePostSyncService.Fanout`, `internal/syncdispatchruntime/native_post_sync.go`)
@@ -1571,7 +1572,7 @@ before the commit-time check:
 | Column | Value |
 | --- | --- |
 | `post_sync_outcome` | The fan-out outcome token: `published` (a daily run was started) or `no_repositories` (no plan, or a plan with no daily work). |
-| `post_sync_committed_at` | The time of the first commit that wrote the outcome. |
+| `post_sync_committed_at` | When the first committed fan-out wrote the outcome: the clock time of its last write, right before its commit. |
 
 The stamp commits with the work or rolls back with it, and the first committed
 outcome is kept: a later delivery of the same run changes nothing. So, after the

@@ -596,7 +596,8 @@ func (service *NativePostSyncService) observeTeamAutoimportFailure(
 
 // recordPostSyncOutcome stamps the fan-out outcome on the run's post_sync ledger row in the fan-out transaction, so the
 // stamp commits with the work (or rolls back with it) and outlives the River job row: a run whose fan-out never committed
-// keeps a NULL outcome. The first committed outcome is kept; a later delivery updates nothing. A run with no ledger row
+// keeps a NULL outcome. The time is clock_timestamp(), not now(): this is the pass's last write before its commit check,
+// and now() would give the start of a transaction whose stages can run for minutes. The first committed outcome is kept; a later delivery updates nothing. A run with no ledger row
 // is not an error (the fan-out goes on), but it is logged: nothing records that run's outcome.
 func (service *NativePostSyncService) recordPostSyncOutcome(
 	ctx context.Context, tx pgx.Tx, args PostSyncArgs, outcome jobruntime.PostSyncFanoutOutcome,
@@ -609,7 +610,7 @@ WITH ledger AS (
     WHERE sync_run_id = $1::uuid AND org_id = $2 AND kind = 'post_sync'
 ), stamped AS (
     UPDATE public.sync_run_post_dispatches AS stamp
-    SET post_sync_outcome = $3, post_sync_committed_at = now()
+    SET post_sync_outcome = $3, post_sync_committed_at = clock_timestamp()
     WHERE stamp.id IN (SELECT id FROM ledger) AND stamp.post_sync_outcome IS NULL
     RETURNING stamp.id
 )

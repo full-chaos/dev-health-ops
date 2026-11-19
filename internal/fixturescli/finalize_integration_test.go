@@ -260,7 +260,7 @@ func TestFinalizeSyntheticWritesTheFrozenPythonRows(t *testing.T) {
 	requireNonVacuous(t, "Go", got, targets)
 	assertRelations(t, uri)
 	got["integration_datasets"] = withoutStateStamp(t, got["integration_datasets"])
-	got["sync_run_post_dispatches"] = withoutRecordedAt(t, got["sync_run_post_dispatches"])
+	got["sync_run_post_dispatches"] = withoutGoOnlyLedgerColumns(t, got["sync_run_post_dispatches"])
 	if !reflect.DeepEqual(got, frozen) {
 		t.Fatalf("the rows the Go verb wrote differ from the frozen Python rows:\n%s", diffTables(frozen, got))
 	}
@@ -504,10 +504,11 @@ func withoutStateStamp(t *testing.T, rows []string) []string {
 	return out
 }
 
-// withoutRecordedAt checks that every sync_run_post_dispatches row the Go verb wrote carries the database clock in
-// recorded_at (revision 0161; the insert does not name the column, so its default fills it, and the Python producer
-// predates the column), then drops it so the rest of the row compares with the frozen Python row.
-func withoutRecordedAt(t *testing.T, rows []string) []string {
+// withoutGoOnlyLedgerColumns checks the sync_run_post_dispatches columns the Python producer predates, then drops them
+// so the rest of the row compares with the frozen Python row: recorded_at carries the database clock (revision 0161;
+// the insert does not name the column, so its default fills it), and post_sync_outcome / post_sync_committed_at
+// (revision 0166) are NULL, since finalize writes the ledger row before any post_sync fan-out.
+func withoutGoOnlyLedgerColumns(t *testing.T, rows []string) []string {
 	t.Helper()
 	out := make([]string, len(rows))
 	for index, row := range rows {
@@ -517,6 +518,12 @@ func withoutRecordedAt(t *testing.T, rows []string) []string {
 		}
 		if decoded["recorded_at"] != "<ts>" {
 			t.Errorf("sync_run_post_dispatches row %q has no recorded_at stamp", row)
+		}
+		for _, column := range []string{"post_sync_outcome", "post_sync_committed_at"} {
+			if value, present := decoded[column]; !present || value != nil {
+				t.Errorf("sync_run_post_dispatches row %q: %s = %v (present %v), want NULL", row, column, value, present)
+			}
+			delete(decoded, column)
 		}
 		delete(decoded, "recorded_at")
 		text, err := json.Marshal(decoded)

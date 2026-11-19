@@ -16,6 +16,9 @@ type runOrder struct {
 	id        string
 	createdAt time.Time
 	backfill  bool
+	// mode and triggeredBy are the stored columns backfill is derived from; readRunOrder fills them for the log.
+	mode        string
+	triggeredBy string
 }
 
 // olderRun is one open run of a bucket, older than the deciding run, that still has units waiting for a slot.
@@ -92,9 +95,9 @@ func wakeHeldBackRuns(ctx context.Context, db syncrunrollup.Execer, runIDs []str
 func readRunOrder(ctx context.Context, tx pgx.Tx, runID string) (runOrder, error) {
 	order := runOrder{id: runID}
 	err := tx.QueryRow(ctx, `
-SELECT created_at, (triggered_by = 'backfill' OR mode = 'backfill')
+SELECT created_at, (triggered_by = 'backfill' OR mode = 'backfill'), mode, triggered_by
 FROM public.sync_runs
-WHERE id = $1::uuid`, runID).Scan(&order.createdAt, &order.backfill)
+WHERE id = $1::uuid`, runID).Scan(&order.createdAt, &order.backfill, &order.mode, &order.triggeredBy)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return runOrder{}, fmt.Errorf("%w: read run order: sync run %s not found", ErrDiscoveryTransientFailure, runID)
 	}

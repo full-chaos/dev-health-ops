@@ -20,13 +20,13 @@ func TestComputeWorkItemCompletionDailyIsOneRowPerRepositoryAndTeam(t *testing.T
 	started := func(hours int) *time.Time { v := day.Add(-time.Duration(hours) * time.Hour); return &v }
 	points := 3.0
 	items := []Item{
-		{WorkItemID: "a", Provider: "github", RepoID: &repo, Labels: []string{"feature"}, CreatedAt: day.AddDate(0, 0, -5), StartedAt: started(10), CompletedAt: at(3)},
-		{WorkItemID: "b", Provider: "github", RepoID: &repo, Labels: []string{"bug"}, CreatedAt: day.AddDate(0, 0, -5), StartedAt: started(30), CompletedAt: at(5), StoryPoints: &points},
-		{WorkItemID: "c", Provider: "github", RepoID: &repo, Labels: []string{"chore"}, CreatedAt: day.AddDate(0, 0, -5), StartedAt: started(50), CompletedAt: at(7)},
-		{WorkItemID: "d", Provider: "github", RepoID: &repo, Labels: []string{"feature"}, CreatedAt: day.AddDate(0, 0, -5), CompletedAt: at(9)},
-		{WorkItemID: "e", Provider: "github", RepoID: nil, Labels: []string{"feature"}, CreatedAt: day.AddDate(0, 0, -5), CompletedAt: at(9)},
+		{WorkItemID: "a", Provider: "github", RepoID: &repo, Labels: []string{"feature"}, CreatedAt: day.AddDate(0, 0, -5), StartedAt: started(10), Status: "done", CompletedAt: at(3)},
+		{WorkItemID: "b", Provider: "github", RepoID: &repo, Labels: []string{"bug"}, CreatedAt: day.AddDate(0, 0, -5), StartedAt: started(30), Status: "done", CompletedAt: at(5), StoryPoints: &points},
+		{WorkItemID: "c", Provider: "github", RepoID: &repo, Labels: []string{"chore"}, CreatedAt: day.AddDate(0, 0, -5), StartedAt: started(50), Status: "done", CompletedAt: at(7)},
+		{WorkItemID: "d", Provider: "github", RepoID: &repo, Labels: []string{"feature"}, CreatedAt: day.AddDate(0, 0, -5), Status: "done", CompletedAt: at(9)},
+		{WorkItemID: "e", Provider: "github", RepoID: nil, Labels: []string{"feature"}, CreatedAt: day.AddDate(0, 0, -5), Status: "done", CompletedAt: at(9)},
 		{WorkItemID: "open", Provider: "github", RepoID: &repo, Labels: []string{"feature"}, CreatedAt: day.AddDate(0, 0, -1)},
-		{WorkItemID: "early", Provider: "github", RepoID: &repo, Labels: []string{"feature"}, CreatedAt: day.AddDate(0, 0, -9), CompletedAt: started(2)},
+		{WorkItemID: "early", Provider: "github", RepoID: &repo, Labels: []string{"feature"}, CreatedAt: day.AddDate(0, 0, -9), Status: "done", CompletedAt: started(2)},
 	}
 	rows, err := ComputeWorkItemCompletionDaily(items, day, end, teams("alpha", "alpha", "beta", "", "", "alpha", "alpha"))
 	if err != nil {
@@ -51,7 +51,7 @@ func TestComputeWorkItemCompletionDailyRefusesWhatItCannotCount(t *testing.T) {
 	end := day.AddDate(0, 0, 1)
 	done := day.Add(time.Hour)
 	bad := math.Inf(1)
-	items := []Item{{WorkItemID: "x", Provider: "github", CreatedAt: day.AddDate(0, 0, -1), CompletedAt: &done, StoryPoints: &bad}}
+	items := []Item{{WorkItemID: "x", Provider: "github", CreatedAt: day.AddDate(0, 0, -1), Status: "done", CompletedAt: &done, StoryPoints: &bad}}
 	if _, err := ComputeWorkItemCompletionDaily(items, day, end, teams("")); !errors.Is(err, ErrUnrepresentableDeliveryUnits) {
 		t.Fatalf("err = %v, want ErrUnrepresentableDeliveryUnits", err)
 	}
@@ -74,7 +74,7 @@ func TestComputeWorkItemCompletionDailyChurnIsTheSizeOfTheLinkedPullRequests(t *
 		t.Run(provider, func(t *testing.T) {
 			complete := func(id string, prs ...LinkedPR) Item {
 				return Item{WorkItemID: id, Provider: provider, RepoID: &repo,
-					CreatedAt: day.AddDate(0, 0, -2), CompletedAt: timePointer(day.Add(10 * time.Hour)), LinkedPRs: prs}
+					CreatedAt: day.AddDate(0, 0, -2), Status: "done", CompletedAt: timePointer(day.Add(10 * time.Hour)), LinkedPRs: prs}
 			}
 			items := []Item{
 				// PR 1 (100+20) by a native link and PR 2 (30+10) by a text link: 160.
@@ -108,7 +108,7 @@ func TestComputeWorkItemCompletionDailyChurnIsPerTeamRow(t *testing.T) {
 	prRepo := uuid.MustParse("22222222-2222-4222-8222-222222222222")
 	complete := func(id string, pr LinkedPR) Item {
 		return Item{WorkItemID: id, Provider: "github", RepoID: &repo,
-			CreatedAt: day.AddDate(0, 0, -1), CompletedAt: timePointer(day.Add(time.Hour)), LinkedPRs: []LinkedPR{pr}}
+			CreatedAt: day.AddDate(0, 0, -1), Status: "done", CompletedAt: timePointer(day.Add(time.Hour)), LinkedPRs: []LinkedPR{pr}}
 	}
 	items := []Item{
 		complete("1", linkedPR(prRepo, 1, LinkTierNative, lines(10), lines(1))),
@@ -127,7 +127,7 @@ func TestComputeWorkItemCompletionDailyChurnIsNullWithNoLinkedPullRequest(t *tes
 	day := time.Date(2026, 8, 3, 0, 0, 0, 0, time.UTC)
 	repo := uuid.MustParse("11111111-1111-4111-8111-111111111111")
 	items := []Item{{WorkItemID: "1", Provider: "github", RepoID: &repo,
-		CreatedAt: day.AddDate(0, 0, -1), CompletedAt: timePointer(day.Add(time.Hour))}}
+		CreatedAt: day.AddDate(0, 0, -1), Status: "done", CompletedAt: timePointer(day.Add(time.Hour))}}
 	rows, err := ComputeWorkItemCompletionDaily(items, day, day.AddDate(0, 0, 1), teams(""))
 	if err != nil {
 		t.Fatal(err)
@@ -142,9 +142,9 @@ func TestChurnInputsCountsTiersAndMissingSizes(t *testing.T) {
 	repo := uuid.New()
 	done := timePointer(day.Add(time.Hour))
 	items := []Item{
-		{WorkItemID: "1", CompletedAt: done, LinkedPRs: []LinkedPR{
+		{WorkItemID: "1", Status: "done", CompletedAt: done, LinkedPRs: []LinkedPR{
 			linkedPR(repo, 1, LinkTierNative, lines(1), lines(1)), linkedPR(repo, 2, LinkTierHeuristic, nil, nil)}},
-		{WorkItemID: "2", CompletedAt: done},
+		{WorkItemID: "2", Status: "done", CompletedAt: done},
 		{WorkItemID: "3", LinkedPRs: []LinkedPR{linkedPR(repo, 3, LinkTierNative, lines(1), lines(1))}},
 	}
 	stats := ChurnInputs(items, day, day.AddDate(0, 0, 1))
@@ -158,7 +158,7 @@ func TestComputeWorkItemCompletionDailyChurnCountsTheKnownPartOfAPartialSize(t *
 	day := time.Date(2026, 8, 3, 0, 0, 0, 0, time.UTC)
 	repo := uuid.MustParse("11111111-1111-4111-8111-111111111111")
 	items := []Item{{WorkItemID: "1", Provider: "github", RepoID: &repo,
-		CreatedAt: day.AddDate(0, 0, -1), CompletedAt: timePointer(day.Add(time.Hour)), LinkedPRs: []LinkedPR{
+		CreatedAt: day.AddDate(0, 0, -1), Status: "done", CompletedAt: timePointer(day.Add(time.Hour)), LinkedPRs: []LinkedPR{
 			linkedPR(repo, 1, LinkTierNative, nil, lines(12)),
 			linkedPR(repo, 2, LinkTierNative, lines(7), nil),
 			linkedPR(repo, 3, LinkTierNative, nil, nil)}}}
@@ -191,7 +191,7 @@ func TestComputeWorkItemCompletionDailyChurnNullIsNoSizedPullRequestAndZeroIsDat
 		"a sized pull request of 0 lines is a real zero": {[]LinkedPR{linkedPR(repo, 1, LinkTierNative, lines(0), lines(0))}, 0},
 	} {
 		items := []Item{{WorkItemID: "1", Provider: "github", RepoID: &repo,
-			CreatedAt: day.AddDate(0, 0, -1), CompletedAt: completed, LinkedPRs: links.prs}}
+			CreatedAt: day.AddDate(0, 0, -1), Status: "done", CompletedAt: completed, LinkedPRs: links.prs}}
 		rows, err := ComputeWorkItemCompletionDaily(items, day, day.AddDate(0, 0, 1), teams(""))
 		if err != nil {
 			t.Fatal(err)
@@ -201,3 +201,47 @@ func TestComputeWorkItemCompletionDailyChurnNullIsNoSizedPullRequestAndZeroIsDat
 		}
 	}
 }
+
+// An item whose provider reopened it and kept its completed_at completes on no day: no row, no delivery units, no
+// cycle hour, no churn, and ChurnInputs does not count it. A done or canceled item with the same dates counts.
+func TestComputeWorkItemCompletionDailyCountsAnItemOnlyWithATerminalStatus(t *testing.T) {
+	day := time.Date(2026, 8, 3, 0, 0, 0, 0, time.UTC)
+	end := day.AddDate(0, 0, 1)
+	repo := uuid.MustParse("11111111-1111-4111-8111-111111111111")
+	points := 3.0
+	for _, tc := range []struct {
+		status string
+		want   []WorkItemCompletionDailyRow
+	}{
+		{"in_progress", nil},
+		{"todo", nil},
+		{"backlog", nil},
+		{"blocked", nil},
+		{"in_review", nil},
+		{"unknown", nil},
+		{"", nil},
+		{"done", []WorkItemCompletionDailyRow{{RepoID: &repo, DeliveryUnits: 3, WorkItemsCompleted: 1, ChurnLOC: intPointer(11), CycleP50Hours: 34}}},
+		{"canceled", []WorkItemCompletionDailyRow{{RepoID: &repo, DeliveryUnits: 3, WorkItemsCompleted: 1, ChurnLOC: intPointer(11), CycleP50Hours: 34}}},
+	} {
+		items := []Item{{WorkItemID: "1", Provider: "github", RepoID: &repo, Status: tc.status,
+			CreatedAt: day.AddDate(0, 0, -2), StartedAt: timePointer(day.AddDate(0, 0, -1)),
+			CompletedAt: timePointer(day.Add(10 * time.Hour)), StoryPoints: &points,
+			LinkedPRs: []LinkedPR{linkedPR(repo, 1, LinkTierNative, lines(10), lines(1))}}}
+		rows, err := ComputeWorkItemCompletionDaily(items, day, end, teams(""))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(rows) != len(tc.want) || (len(rows) > 0 && !reflect.DeepEqual(rows, tc.want)) {
+			t.Errorf("status %q: rows %+v, want %+v", tc.status, rows, tc.want)
+		}
+		wantCompleted := len(tc.want)
+		if got := ChurnInputs(items, day, end).CompletedItems; got != wantCompleted {
+			t.Errorf("status %q: ChurnInputs completed items %d, want %d", tc.status, got, wantCompleted)
+		}
+		if got := CompletedOnDay(items[0], day, end); got != (wantCompleted == 1) {
+			t.Errorf("status %q: CompletedOnDay %v, want %v", tc.status, got, wantCompleted == 1)
+		}
+	}
+}
+
+func intPointer(value int) *int { return &value }

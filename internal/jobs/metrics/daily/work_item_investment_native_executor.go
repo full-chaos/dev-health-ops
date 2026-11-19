@@ -142,11 +142,7 @@ func attachWorkItemLinkedPullRequests(
 ) error {
 	var completedIDs []string
 	for _, item := range items {
-		if item.CompletedAt == nil {
-			continue
-		}
-		completed := item.CompletedAt.UTC()
-		if !completed.Before(start) && completed.Before(end) {
+		if workitemengine.CompletedOnDay(item, start, end) {
 			completedIDs = append(completedIDs, item.WorkItemID)
 		}
 	}

@@ -57,7 +57,8 @@ func (row issueTypeDayNewest) String() string {
 		row.created, row.completed, row.active, row.cycleP50, row.cycleP90, lead)
 }
 
-// readIssueTypeDayNewest reads the newest row of the day's one key (the reader rule: newest computed_at per key).
+// readIssueTypeDayNewest reads the newest row of the day's one key with the report reader's rule (dedupFromSource:
+// ORDER BY computed_at DESC LIMIT 1 BY key). Not argMax: argMax skips a NULL lead_p50_hours and returns an older row's.
 func readIssueTypeDayNewest(
 	t *testing.T, ctx context.Context, conn driver.Conn, orgID string, day time.Time,
 ) issueTypeDayNewest {
@@ -65,17 +66,11 @@ func readIssueTypeDayNewest(
 	var got issueTypeDayNewest
 	var keys uint64
 	if err := conn.QueryRow(ctx, `
-SELECT count(), toUInt64(any(created)), toUInt64(any(completed)), toUInt64(any(active)),
-       toFloat64(any(p50)), toFloat64(any(p90)), any(lead)
+SELECT count(), toUInt64(any(created_count)), toUInt64(any(completed_count)), toUInt64(any(active_count)),
+       toFloat64(any(cycle_p50_hours)), toFloat64(any(cycle_p90_hours)), anyRespectNulls(lead_p50_hours)
 FROM (
-  SELECT argMax(created_count, computed_at) AS created,
-         argMax(completed_count, computed_at) AS completed,
-         argMax(active_count, computed_at) AS active,
-         argMax(cycle_p50_hours, computed_at) AS p50,
-         argMax(cycle_p90_hours, computed_at) AS p90,
-         argMax(lead_p50_hours, computed_at) AS lead
-  FROM issue_type_metrics_daily WHERE org_id = ? AND day = ?
-  GROUP BY repo_id, provider, team_id, issue_type_norm)`, orgID, day).Scan(
+  SELECT * FROM issue_type_metrics_daily WHERE org_id = ? AND day = ?
+  ORDER BY computed_at DESC LIMIT 1 BY repo_id, provider, team_id, issue_type_norm)`, orgID, day).Scan(
 		&keys, &got.created, &got.completed, &got.active, &got.cycleP50, &got.cycleP90, &got.leadP50); err != nil {
 		t.Fatalf("read issue_type_metrics_daily day: %v", err)
 	}

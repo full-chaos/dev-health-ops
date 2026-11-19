@@ -8,10 +8,10 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/chmigrate"
 )
 
-const failureRecurrenceCountsVersion = "168_testops_test_failure_recurrence_counts.sql"
+const failureRecurrenceCountsVersion = "169_testops_test_failure_recurrence_counts.sql"
 
-// 168 adds exactly the two Nullable count columns of failure_recurrence_score, and nothing else.
-func TestMigration168IsTheTwoNullableRecurrenceCountColumns(t *testing.T) {
+// 169 adds exactly the two Nullable count columns of failure_recurrence_score, and nothing else.
+func TestMigration169IsTheTwoNullableRecurrenceCountColumns(t *testing.T) {
 	chain, err := chmigrate.LoadChain()
 	if err != nil {
 		t.Fatal(err)

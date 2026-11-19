@@ -664,6 +664,42 @@ func TestDomainRoleStillLacksTheVerbsItWasNotGranted(t *testing.T) {
 			why:       "once-only dispatch evidence; a run that could delete it could re-dispatch",
 		},
 		{
+			table:     "sync_run_post_dispatches",
+			verb:      "UPDATE (id)",
+			statement: "UPDATE public.sync_run_post_dispatches SET id = gen_random_uuid() WHERE sync_run_id = gen_random_uuid()",
+			why:       "the fan-out's UPDATE is column-scoped to its two outcome columns; the dispatch fields stay insert-once",
+		},
+		{
+			table:     "sync_run_post_dispatches",
+			verb:      "UPDATE (org_id)",
+			statement: "UPDATE public.sync_run_post_dispatches SET org_id = 'org' WHERE sync_run_id = gen_random_uuid()",
+			why:       "the fan-out's UPDATE is column-scoped to its two outcome columns; the dispatch fields stay insert-once",
+		},
+		{
+			table:     "sync_run_post_dispatches",
+			verb:      "UPDATE (sync_run_id)",
+			statement: "UPDATE public.sync_run_post_dispatches SET sync_run_id = gen_random_uuid() WHERE sync_run_id = gen_random_uuid()",
+			why:       "the fan-out's UPDATE is column-scoped to its two outcome columns; the dispatch fields stay insert-once",
+		},
+		{
+			table:     "sync_run_post_dispatches",
+			verb:      "UPDATE (kind)",
+			statement: "UPDATE public.sync_run_post_dispatches SET kind = 'post_sync' WHERE sync_run_id = gen_random_uuid()",
+			why:       "the fan-out's UPDATE is column-scoped to its two outcome columns; the dispatch fields stay insert-once",
+		},
+		{
+			table:     "sync_run_post_dispatches",
+			verb:      "UPDATE (dispatched_at)",
+			statement: "UPDATE public.sync_run_post_dispatches SET dispatched_at = now() WHERE sync_run_id = gen_random_uuid()",
+			why:       "the fan-out's UPDATE is column-scoped to its two outcome columns; the dispatch fields stay insert-once",
+		},
+		{
+			table:     "sync_run_post_dispatches",
+			verb:      "UPDATE (recorded_at)",
+			statement: "UPDATE public.sync_run_post_dispatches SET recorded_at = now() WHERE sync_run_id = gen_random_uuid()",
+			why:       "the fan-out's UPDATE is column-scoped to its two outcome columns; the dispatch fields stay insert-once",
+		},
+		{
 			table:     "job_runs",
 			verb:      "DELETE",
 			statement: "DELETE FROM public.job_runs WHERE id = gen_random_uuid()",
@@ -1132,6 +1168,7 @@ CREATE TABLE sync_compute_checkpoints (
 CREATE TABLE sync_run_post_dispatches (
  id uuid PRIMARY KEY, org_id text NOT NULL, sync_run_id uuid NOT NULL, kind text NOT NULL,
  dispatched_at timestamptz NOT NULL, recorded_at timestamptz NOT NULL DEFAULT now(),
+ post_sync_outcome text NULL, post_sync_committed_at timestamptz NULL,
  UNIQUE (sync_run_id, kind)
 );
 CREATE TABLE org_activity (

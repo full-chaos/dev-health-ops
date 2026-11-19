@@ -1549,6 +1549,46 @@ topology](#queue-topology)):**
   (`api/graphql/loaders/base.py`, `make_cache_key` + `mget`, 300 s TTL) are
   not epoch-aware and stay TTL-only — a follow-up, not part of this change.
 
+### The post_sync fan-out: outbox states and its durable outcome
+
+Finalize writes the run's once-only ledger row in `sync_run_post_dispatches`
+(kind `post_sync`) and arms the `post_sync` row of `sync_dispatch_outbox` as
+`pending`, in one transaction. The kernel claims that row and moves it to
+`dispatched` when it inserts the River `post_sync` job. Nothing closes a
+`post_sync` row after that: `dispatched` is its last state, for a fan-out that
+did its work and for one that never ran.
+
+The River job row does not last either. The worker's River clients leave the
+retention periods at River's defaults: a `completed` job row is deleted after
+24 hours, a `discarded` one after 7 days. The `RIVER_*_JOB_RETENTION` settings
+are read and logged, but no River client is given them.
+
+So the durable record of a fan-out is the ledger row. The fan-out
+(`NativePostSyncService.Fanout`, `internal/syncdispatchruntime/native_post_sync.go`)
+stamps two columns on it inside its own transaction, after every stage and just
+before the commit-time check:
+
+| Column | Value |
+| --- | --- |
+| `post_sync_outcome` | The fan-out outcome token: `published` (a daily run was started) or `no_repositories` (no plan, or a plan with no daily work). |
+| `post_sync_committed_at` | The time of the first commit that wrote the outcome. |
+
+The stamp commits with the work or rolls back with it, and the first committed
+outcome is kept: a later delivery of the same run changes nothing. So, after the
+River job row is gone:
+
+| Ledger row | Meaning |
+| --- | --- |
+| `published` | The fan-out committed and started daily work (its products are keyed `post-sync:<run id>`). |
+| `no_repositories` | The fan-out committed with no daily work: a no-op plan, or work other than daily metrics. |
+| both NULL | No committed fan-out is on record: it never ran, never committed, or ran before the columns existed (no row is backfilled). |
+
+The domain role, which runs the fan-out, holds UPDATE on these two columns
+only; every other ledger column stays insert-once. A delivery that is not
+current writes nothing. A run with no ledger row is not an error: the fan-out
+commits and logs one `post_sync_fanout.outcome_ledger_absent` warning with the
+run id.
+
 ## Deployment couplings
 
 ### Ordering is a dependency chain, not a convention

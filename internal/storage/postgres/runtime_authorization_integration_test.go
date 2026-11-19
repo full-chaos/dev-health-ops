@@ -115,7 +115,7 @@ func TestRuntimeAuthorizationBindsSeparateLeastPrivilegeRolePools(t *testing.T) 
 		// domainPosture() now requires them on the domain side. The coordinator
 		// keeps its own, unchanged declarations for the first two.
 		"CREATE TABLE public.sync_run_reference_discoveries (id uuid PRIMARY KEY)",
-		"CREATE TABLE public.sync_run_post_dispatches (id uuid PRIMARY KEY)",
+		"CREATE TABLE public.sync_run_post_dispatches (id uuid PRIMARY KEY, post_sync_outcome text NULL, post_sync_committed_at timestamptz NULL)",
 		"CREATE TABLE public.org_activity (org_id uuid PRIMARY KEY, has_data boolean NOT NULL, computed_at timestamptz, refreshed_at timestamptz NOT NULL)",
 		"CREATE TABLE public.sync_compute_checkpoints (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.job_runs (id uuid PRIMARY KEY)",
@@ -229,6 +229,7 @@ func TestRuntimeAuthorizationBindsSeparateLeastPrivilegeRolePools(t *testing.T) 
 		"GRANT SELECT, UPDATE ON TABLE public.sync_configurations TO " + runtimeAuthorizationDomainRole,
 		"GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_run_reference_discoveries TO " + runtimeAuthorizationDomainRole,
 		"GRANT SELECT, INSERT ON TABLE public.sync_run_post_dispatches, public.sync_compute_checkpoints TO " + runtimeAuthorizationDomainRole,
+		"GRANT UPDATE (post_sync_outcome, post_sync_committed_at) ON TABLE public.sync_run_post_dispatches TO " + runtimeAuthorizationDomainRole,
 		"GRANT SELECT, INSERT, UPDATE ON TABLE public.org_activity TO " + runtimeAuthorizationDomainRole,
 		"GRANT SELECT (completion_key), INSERT (completion_key) ON TABLE public.worker_job_completion_fences TO " + runtimeAuthorizationDomainRole,
 		"GRANT SELECT (id, org_id, source_id, scopes, expires_at, revoked_at) ON TABLE public.external_ingest_tokens TO " + runtimeAuthorizationDomainRole,

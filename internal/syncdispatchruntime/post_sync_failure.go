@@ -40,6 +40,7 @@ const (
 	stageDora                postSyncStage = "dora"
 	stageTeamAutoimport      postSyncStage = "team_autoimport"
 	stageOwnershipDerivation postSyncStage = "ownership_derivation"
+	stageOutcomeRecord       postSyncStage = "outcome_record"
 	stageTouchedSetup        postSyncStage = "touched_setup"
 	stageTouchedWindow       postSyncStage = "touched_window"
 	stageTouchedPlan         postSyncStage = "touched_plan"
@@ -60,7 +61,7 @@ var postSyncStages = map[postSyncStage]struct{}{
 	stageDaily: {}, stageTouchedStart: {}, stageWorkGraph: {}, stageInvestment: {}, stageMembership: {}, stageDora: {},
 	stageTeamAutoimport: {}, stageOwnershipDerivation: {}, stageTouchedSetup: {}, stageTouchedWindow: {}, stageTouchedPlan: {},
 	stageTouchedBegin: {}, stageDrainConstruct: {}, stageDrainInFlightBeg: {}, stageDrainStartBegin: {}, stageDrainStartLock: {},
-	stageDrainStartCommit: {}, stageDrainCheckBegin: {}, stageDrainCheckLock: {},
+	stageDrainStartCommit: {}, stageDrainCheckBegin: {}, stageDrainCheckLock: {}, stageOutcomeRecord: {},
 }
 
 // stepLabel is the log label of a stage: the stage itself when it is a declared one, "unknown" otherwise.

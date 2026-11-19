@@ -423,7 +423,7 @@ func TestPostSyncFenceRunsAsTheDomainRole(t *testing.T) {
 		org, run, outbox = postSyncFenceOrg, postSyncFenceRun, postSyncFenceOutbox
 		unit             = "20000000-0000-4000-8000-000000000006"
 	)
-	setup := func(t *testing.T) (context.Context, *pgxpool.Pool, *NativePostSyncService, *denialRecorder) {
+	setup := func(t *testing.T, logs *lockedLogBuffer) (context.Context, *pgxpool.Pool, *NativePostSyncService, *denialRecorder) {
 		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 		t.Cleanup(cancel)
 		admin, domain, denials, _ := startDomainRoleHarness(t, ctx, func(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
@@ -447,13 +447,19 @@ func TestPostSyncFenceRunsAsTheDomainRole(t *testing.T) {
 			  VALUES ($1,$2,$3,'success',1,1,0,$4)`, []any{run, org, postSyncFenceIntegration, day}},
 			{`INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status,since_at,before_at)
 			  VALUES ($1,$2,$3,'github','commits',$4,'success',$5,$5)`, []any{unit, org, run, postSyncFenceRepository, day}},
+			{`INSERT INTO sync_run_post_dispatches (id,org_id,sync_run_id,kind,dispatched_at)
+			  VALUES (gen_random_uuid(),$1,$2,'post_sync',$3)`, []any{org, run, day}},
 		} {
 			if _, err := admin.Exec(ctx, seed.statement, seed.args...); err != nil {
 				t.Fatalf("seed %s: %v", collapseStatement(seed.statement), err)
 			}
 		}
+		var logger *synclog.Logger
+		if logs != nil {
+			logger = synclog.New(slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+		}
 		service, err := NewNativePostSyncService(domain, noopPostSyncWriter{}, noopPostSyncRemaining{}, noopPostSyncWorkGraph{},
-			noopPostSyncPublish{}, noopPostSyncPublish{}, nil)
+			noopPostSyncPublish{}, noopPostSyncPublish{}, logger)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -464,16 +470,54 @@ func TestPostSyncFenceRunsAsTheDomainRole(t *testing.T) {
 		Version: ContractVersionV1, OrgID: org, RunID: run, DispatchOutbox: outbox,
 		RouteGeneration: postSyncRouteGeneration, DeliveryAttempt: 1,
 	}}
+	ledgerOutcome := func(t *testing.T, ctx context.Context, admin *pgxpool.Pool) (*string, *time.Time) {
+		t.Helper()
+		var outcome *string
+		var committedAt *time.Time
+		if err := admin.QueryRow(ctx, `SELECT post_sync_outcome, post_sync_committed_at FROM sync_run_post_dispatches
+			WHERE sync_run_id = $1 AND kind = 'post_sync'`, run).Scan(&outcome, &committedAt); err != nil {
+			t.Fatalf("ledger read: %v", err)
+		}
+		return outcome, committedAt
+	}
 	t.Run("commits", func(t *testing.T) {
-		ctx, _, service, denials := setup(t)
+		ctx, admin, service, denials := setup(t, nil)
 		err := service.Fanout(ctx, args)
 		denials.assertNone(t, "NativePostSyncService fenced fan-out")
 		if err != nil {
 			t.Fatalf("Fanout as the domain role: %v", err)
 		}
+		outcome, committedAt := ledgerOutcome(t, ctx, admin)
+		if outcome == nil || *outcome != string(jobruntime.PostSyncFanoutOutcomePublished) || committedAt == nil {
+			t.Fatalf("ledger outcome after the domain role's fan-out = %v at %v, want published with a commit time", outcome, committedAt)
+		}
+	})
+	// The domain role holds UPDATE on the two outcome columns only; a fan-out of a run with no ledger row commits and logs
+	// one WARN naming the run.
+	t.Run("ledger_absent_warns", func(t *testing.T) {
+		logs := &lockedLogBuffer{}
+		ctx, admin, service, denials := setup(t, logs)
+		if _, err := admin.Exec(ctx, `DELETE FROM sync_run_post_dispatches WHERE sync_run_id = $1`, run); err != nil {
+			t.Fatal(err)
+		}
+		err := service.Fanout(ctx, args)
+		denials.assertNone(t, "NativePostSyncService fan-out, ledger row absent")
+		if err != nil {
+			t.Fatalf("Fanout as the domain role with no ledger row: %v", err)
+		}
+		warned := 0
+		for _, line := range logs.lines() {
+			if strings.Contains(line, "level=WARN") && strings.Contains(line, "msg=post_sync_fanout.outcome_ledger_absent") &&
+				strings.Contains(line, "sync_run_id="+run) && strings.Contains(line, "outcome=published") {
+				warned++
+			}
+		}
+		if warned != 1 {
+			t.Fatalf("ledger-absent WARN lines = %d, want 1:\n%s", warned, strings.Join(logs.lines(), "\n"))
+		}
 	})
 	t.Run("row_busy_is_55P03", func(t *testing.T) {
-		ctx, admin, service, denials := setup(t)
+		ctx, admin, service, denials := setup(t, nil)
 		holder, err := admin.Begin(ctx)
 		if err != nil {
 			t.Fatal(err)

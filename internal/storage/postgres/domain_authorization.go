@@ -789,14 +789,15 @@ func domainPosture() RolePosture {
 			// heartbeated in place, and stamped terminal. Nothing removes it --
 			// it IS the durable evidence that discovery ran.
 			{"sync_run_reference_discoveries", true, true, false},
-			// CHAOS-4209, the once-only post-dispatch ledger. INSERT only:
-			// native_finalize_sync_run.go:253 inserts one row and treats the
-			// 23505 as "already dispatched by an earlier finalize". No statement
-			// updates or deletes it, so a bug that tried to re-open a dispatch
-			// would be refused by the database. SELECT comes with any
-			// RequiredTables row (see TablePrivilege); there is no server-owned
-			// column here for a column-scoped grant to protect, unlike
-			// worker_job_completion_fences.
+			// CHAOS-4209, the once-only post-dispatch ledger. INSERT, no
+			// table-wide UPDATE: native_finalize_sync_run.go inserts one row and
+			// treats the 23505 as "already dispatched by an earlier finalize", so
+			// a bug that tried to re-open a dispatch would be refused by the
+			// database. The fan-out's outcome stamp is the only UPDATE, and it is
+			// column-scoped below (post_sync_outcome, post_sync_committed_at):
+			// id, org_id, sync_run_id, kind, dispatched_at and recorded_at stay
+			// insert-once. SELECT comes with any RequiredTables row (see
+			// TablePrivilege).
 			{"sync_run_post_dispatches", true, false, false},
 			// CHAOS-4209, the compute-input checkpoint. INSERT only, via
 			// native_finalize_sync_run.go:782's `ON CONFLICT ON CONSTRAINT
@@ -990,6 +991,10 @@ func domainPosture() RolePosture {
 			{"memberships", "org_id", "SELECT"},
 			{"memberships", "role", "SELECT"},
 			{"memberships", "created_at", "SELECT"},
+			// The post_sync fan-out's outcome stamp on its ledger row
+			// (syncdispatchruntime recordPostSyncOutcome), and no other ledger column.
+			{"sync_run_post_dispatches", "post_sync_outcome", "UPDATE"},
+			{"sync_run_post_dispatches", "post_sync_committed_at", "UPDATE"},
 		},
 		// The heavy worker reads an org's categorization opt-in (pgmigrate 0156)
 		// and an opted-in org's categorize configuration and budget limit

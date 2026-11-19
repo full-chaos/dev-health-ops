@@ -53,7 +53,7 @@ func TestDonorChangeRefusesADonorThatIsNotAnIssue(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			refused := map[string]int{}
 			rows := map[string]workItemAttributionNewestPrimary{"P": tc.item, "D": donorRow}
-			got := donorChangedDependents(edges, nil, rows, tc.kinds, nil, refused)
+			got := donorChangedDependents(edges, nil, rows, tc.kinds, nil, refused, nil)
 			if fmt.Sprint(got) != fmt.Sprint(tc.want) {
 				t.Errorf("owed %v, want %v", got, tc.want)
 			}
@@ -81,7 +81,7 @@ func TestDonorChangeAPullRequestDonorDoesNotShadowAnIssueDonor(t *testing.T) {
 		"A": {WorkItemID: "A", Provider: "github", Type: "pr"},
 		"B": {WorkItemID: "B", Provider: "github", Type: "issue"},
 	}
-	if got := donorChangedDependents(edges, nil, rows, kinds, nil, nil); len(got) != 0 {
+	if got := donorChangedDependents(edges, nil, rows, kinds, nil, nil, nil); len(got) != 0 {
 		t.Errorf("owed %v: the newer pull request donor A changed nothing the item copies (B stays the winner)", got)
 	}
 }
@@ -117,7 +117,7 @@ func TestDonorChangeRepairsAStoredLinkToARefusedDonor(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rows := map[string]workItemAttributionNewestPrimary{"P": tc.item, "D": tc.donor}
-			if got := donorChangedDependents(edges, nil, rows, tc.kinds, nil, nil); fmt.Sprint(got) != fmt.Sprint(tc.want) {
+			if got := donorChangedDependents(edges, nil, rows, tc.kinds, nil, nil, nil); fmt.Sprint(got) != fmt.Sprint(tc.want) {
 				t.Errorf("owed %v, want %v", got, tc.want)
 			}
 		})
@@ -141,7 +141,7 @@ func TestDonorChangeARefusedDonorDoesNotAdvanceTheStalenessSignal(t *testing.T) 
 		"A-pr":    {WorkItemID: "A-pr", Provider: "github", Type: "pr"},
 		"B-issue": {WorkItemID: "B-issue", Provider: "github", Type: "issue"},
 	}
-	if got := donorChangedDependents(edges, nil, rows, kinds, nil, nil); len(got) != 0 {
+	if got := donorChangedDependents(edges, nil, rows, kinds, nil, nil, nil); len(got) != 0 {
 		t.Errorf("owed %v: only the refused donor is newer", got)
 	}
 }
@@ -164,7 +164,7 @@ func TestDonorChangeRefusalCountsAreOfDistinctEvaluatedDonors(t *testing.T) {
 		"owned-pr": {WorkItemID: "owned-pr", Provider: "github", Type: "pr"},
 	}
 	refused := map[string]int{}
-	donorChangedDependents(edges, map[string]string{}, rows, kinds, nil, refused)
+	donorChangedDependents(edges, map[string]string{}, rows, kinds, nil, refused, nil)
 	if fmt.Sprint(refused) != "map[empty_type:1 unknown:1]" {
 		t.Errorf("refused = %v, want map[empty_type:1 unknown:1]", refused)
 	}
@@ -208,7 +208,7 @@ func TestDonorChangeRefusalCountsAreOfCurrentEdgesOnly(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			rows := map[string]workItemAttributionNewestPrimary{"P": itemLinkedToOld}
 			refused := map[string]int{}
-			got := donorChangedDependents(tc.edges, tc.keys, rows, tc.kinds, nil, refused)
+			got := donorChangedDependents(tc.edges, tc.keys, rows, tc.kinds, nil, refused, nil)
 			if fmt.Sprint(refused) != tc.want {
 				t.Errorf("refused = %v, want %s", refused, tc.want)
 			}
@@ -240,7 +240,7 @@ func TestDonorChangeANativeTeamItemCountsNoRefusal(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			refused := map[string]int{}
-			got := donorChangedDependents(edges, nil, map[string]workItemAttributionNewestPrimary{"P": tc.item, "D": donor}, kinds, nil, refused)
+			got := donorChangedDependents(edges, nil, map[string]workItemAttributionNewestPrimary{"P": tc.item, "D": donor}, kinds, nil, refused, nil)
 			if fmt.Sprint(refused) != tc.want || len(got) != 0 {
 				t.Errorf("refused %v owed %v, want %s and none owed", refused, got, tc.want)
 			}

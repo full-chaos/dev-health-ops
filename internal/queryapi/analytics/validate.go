@@ -167,6 +167,18 @@ const (
 // actually fire; timeseries/breakdown's force_investment is always a
 // concrete bool and therefore NEVER auto-routes, so their WORK_TYPE gap
 // is reachable through an unset OR explicit-false useInvestment alike.
+// groupKeyNotNull is the health-path condition that keeps a NULL key out of a sankey node set. work_item_completion_daily
+// stores a work item with no repository as a NULL repo_id: such a node had a value and no edge (the edges never kept a
+// NULL key), and its share stays visible as the sankey's repoCoverage. The timeseries and the breakdown keep that share
+// as their unassigned group keyed "". The investment path's keys are never NULL (dbColumn names its unassigned
+// buckets), so it adds nothing there.
+func groupKeyNotNull(dimCol string, useInvestment bool) string {
+	if useInvestment {
+		return ""
+	}
+	return "\n  AND " + dimCol + " IS NOT NULL"
+}
+
 func dbColumn(dim Dimension, useInvestment bool) (string, error) {
 	if dim == DimensionAuthor {
 		return "", newValidationError("dimension", string(dim),

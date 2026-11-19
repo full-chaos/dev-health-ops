@@ -771,9 +771,16 @@ func scanMetricRows(ctx context.Context, client QueryClient, query string, bindi
 	var out []metricRow
 	for rows.Next() {
 		var row metricRow
-		if err := rows.Scan(&row.Bucket, &row.EntityID, &row.EntityLabel, &row.Value); err != nil {
+		var value *float64
+		if err := rows.Scan(&row.Bucket, &row.EntityID, &row.EntityLabel, &value); err != nil {
 			return nil, fmt.Errorf("%s scan: %w", errPrefix, err)
 		}
+		// A NULL value (a weighted mean over a weight of 0) is no measurement: the row is no point, never a 0. A team in
+		// scope with no point is served as a no-data point (idle.go).
+		if value == nil {
+			continue
+		}
+		row.Value = *value
 		out = append(out, row)
 	}
 	return out, rows.Err()

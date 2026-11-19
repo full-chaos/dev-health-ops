@@ -312,6 +312,14 @@ ORDER BY bucket ASC, value DESC, dimension_value ASC
 // ASC` already sorts them; Python does not re-sort after grouping,
 // neither does this).
 //
+// The REPO series keyed "" is the unassigned group: the work items with no
+// repository, which work_item_completion_daily stores with a NULL repo_id
+// (workitemengine). It is ONE series whose buckets sum those rows; it is not
+// left out, because no other field of the answer would show that share. A
+// repository's key is its UUID text, never "", so the group cannot merge
+// with a repository. "" names the unassigned repository on the investment
+// path too (dbColumn).
+//
 // The value column is scanned into *float64, not float64 -- CHAOS-4657
 // (chris 2026-08-31 04:18, Option B), the SAME shape and SAME product
 // ruling CHAOS-4650 applied to breakdown.go's breakdownRow.Value; see

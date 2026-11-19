@@ -389,7 +389,7 @@ func (retractor *RunStaleKeyRetractor) RetractStaleKeys(ctx context.Context, run
 		"user_metrics_daily_zero_rows", retracted[teamkeytables.UserMetricsDaily.Table],
 		"testops_test_metrics_daily_zero_rows", retracted[teamkeytables.TestopsTestMetricsDaily.Table],
 		"testops_coverage_metrics_daily_zero_rows", retracted[teamkeytables.TestopsCoverageMetricsDaily.Table],
-		// The repositories that a row of zeros of the two repository-scoped
+		// The repositories that a row of zeros of the repository-scoped
 		// tables hides (an empty id is the rows with no repository).
 		"repositories_superseded", len(superseded),
 		"repository_ids_superseded", supersededIDs, "repository_ids_superseded_more", supersededMore,

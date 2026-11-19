@@ -30,6 +30,9 @@ type WorkItemAttributionOutcome struct {
 	// DonorChangedDependents counts the items rederived because a donor's row
 	// changed after their linked_issue row (CHAOS-9478).
 	DonorChangedDependents int
+	// LinkChangedIssues counts the issues rederived because their stored rows
+	// no longer match their work_graph_issue_pr links (loadLinkChangedIssues).
+	LinkChangedIssues int
 }
 
 // ComputeOrg re-derives work_item_team_attributions for one org's AFFECTED
@@ -55,6 +58,11 @@ type WorkItemAttributionOutcome struct {
 //   - An item whose linked_issue donor's row changed after the item's own row
 //     is rederived too (CHAOS-9478, loadDonorChangedDependents), with no
 //     watermark: the stored rows decide, every run.
+//   - An issue whose stored rows no longer match its work_graph_issue_pr
+//     links is rederived the same way (loadLinkChangedIssues): a named link
+//     is gone, changed tier or is below the best tier, a best-tier link is
+//     newer than the rows, or an unassigned / manual_fallback issue now takes
+//     a linked repository's owner on its day.
 //
 // A scoped run also rederives its linked_issue CLOSURE, not just the
 // originally detected repo/project set -- an item one inheritable-dependency
@@ -99,15 +107,27 @@ func (executor *WorkItemAttributionExecutor) ComputeOrg(
 	if err != nil {
 		return WorkItemAttributionOutcome{}, err
 	}
+	donorChanged := len(dependents)
+	// An issue whose stored rows no longer match its work_graph_issue_pr
+	// links is owed a rederive the same way (CHAOS-14149).
+	linkChanged, err := executor.loadLinkChangedIssues(ctx, orgID, now)
+	if err != nil {
+		return WorkItemAttributionOutcome{}, err
+	}
+	if len(linkChanged) > 0 {
+		slog.Default().InfoContext(ctx, "work_item_attribution.link_changed_issues",
+			"org_id", orgID, "issues", len(linkChanged))
+		dependents = workItemAttributionUnion(dependents, linkChanged)
+	}
 	noScope := !scope.orgWide && len(scope.repoIDs) == 0 && len(scope.projectKeys) == 0
 	if noScope && len(dependents) == 0 {
 		outcome := WorkItemAttributionOutcome{SkippedNoop: true}
 		executor.observeRun(orgID, outcome)
 		return outcome, nil
 	}
-	if len(dependents) > 0 {
+	if donorChanged > 0 {
 		slog.Default().InfoContext(ctx, "work_item_attribution.donor_changed_dependents",
-			"org_id", orgID, "dependents", len(dependents), "item_only_run", noScope)
+			"org_id", orgID, "dependents", donorChanged, "item_only_run", noScope)
 	}
 
 	var subjects map[string]teamattribution.GithubWorkItemDerivationSubject
@@ -121,7 +141,7 @@ func (executor *WorkItemAttributionExecutor) ComputeOrg(
 	}
 	outcome := WorkItemAttributionOutcome{
 		OrgWide: scope.orgWide, RepoIDs: scope.repoIDs, ProjectKeys: scope.projectKeys,
-		ItemsSeen: len(subjects), DonorChangedDependents: len(dependents),
+		ItemsSeen: len(subjects), DonorChangedDependents: donorChanged, LinkChangedIssues: len(linkChanged),
 	}
 	if len(subjects) == 0 && (noScope || len(dependents) == 0) {
 		// The scope's ownership changed, but nothing in it has any work
@@ -1645,4 +1665,20 @@ func logLegacyGitLabOwnership(ctx context.Context, remapped, ambiguousDropped in
 		level = slog.LevelInfo
 	}
 	slog.Default().Log(ctx, level, "gitlab_legacy_ownership_remapped", "remapped", remapped, "ambiguous_dropped", ambiguousDropped)
+}
+
+// workItemAttributionUnion is the sorted union of two id lists.
+func workItemAttributionUnion(left, right []string) []string {
+	seen := make(map[string]struct{}, len(left)+len(right))
+	out := make([]string, 0, len(left)+len(right))
+	for _, ids := range [][]string{left, right} {
+		for _, id := range ids {
+			if _, ok := seen[id]; !ok {
+				seen[id] = struct{}{}
+				out = append(out, id)
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
 }

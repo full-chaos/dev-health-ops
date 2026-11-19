@@ -33,8 +33,8 @@ func integrationLegTimingsViolations(t *testing.T, root string) []string {
 	if !(runAt < reduceAt && reduceAt < uploadAt) {
 		add("go.yml: the order must be shard run, reduction, upload (got %d, %d, %d)", runAt, reduceAt, uploadAt)
 	}
-	if got := asString(asMap(run["env"])["GO_INTEGRATION_LEG_JSON_DIR"]); got != "${{ matrix.target == 'packages' && format('{0}/go-integration-leg-json', runner.temp) || '' }}" {
-		add("go.yml: the shard run's GO_INTEGRATION_LEG_JSON_DIR is %q, want the packages target only, under runner.temp (outside any uploaded path)", got)
+	if got := asString(asMap(run["env"])["GO_INTEGRATION_LEG_JSON_DIR"]); got != "${{ matrix.target != 'providersync' && format('{0}/go-integration-leg-json', runner.temp) || '' }}" {
+		add("go.yml: the shard run's GO_INTEGRATION_LEG_JSON_DIR is %q, want every target but providersync (it writes go-test-json/), under runner.temp (outside any uploaded path)", got)
 	}
 	if _, ok := asMap(run["env"])["GO_TEST_LEG_JSON_DIR"]; ok {
 		add("go.yml: the shard run sets GO_TEST_LEG_JSON_DIR (the test legs' variable); the shards use GO_INTEGRATION_LEG_JSON_DIR")
@@ -83,7 +83,7 @@ func TestIntegrationLegTimingsGuardPlantedDefectsAreCaught(t *testing.T) {
 		want string
 	}{
 		{"the raw events under the uploaded dir", mutation{gy, "format('{0}/go-integration-leg-json', runner.temp)", "'go-test-timings'"}, "outside any uploaded path"},
-		{"every target keeps -json", mutation{gy, "GO_INTEGRATION_LEG_JSON_DIR: ${{ matrix.target == 'packages' && format('{0}/go-integration-leg-json', runner.temp) || '' }}", "GO_INTEGRATION_LEG_JSON_DIR: ${{ format('{0}/go-integration-leg-json', runner.temp) }}"}, "packages target only"},
+		{"providersync gets the leg dir too", mutation{gy, "GO_INTEGRATION_LEG_JSON_DIR: ${{ matrix.target != 'providersync' && format('{0}/go-integration-leg-json', runner.temp) || '' }}", "GO_INTEGRATION_LEG_JSON_DIR: ${{ format('{0}/go-integration-leg-json', runner.temp) }}"}, "every target but providersync"},
 		{"the reduction keeps the output", mutation{gy, "(.Elapsed // 0)] | @tsv' \"${f}\"\n          done | gzip -9 > \"go-test-timings/integration-packages-", "(.Elapsed // 0), .Output] | @tsv' \"${f}\"\n          done | gzip -9 > \"go-test-timings/integration-packages-"}, "never .Output"},
 		{"the reduction runs only on success", mutation{gy, "      - name: Reduce the packages shard go test -json to per-test timings\n        if: always() && matrix.target == 'packages'", "      - name: Reduce the packages shard go test -json to per-test timings\n        if: matrix.target == 'packages'"}, "timings reduction condition"},
 		{"the upload decides the shard", mutation{gy, "      - name: Upload the packages shard per-test timings\n        if: always() && matrix.target == 'packages'\n        continue-on-error: true\n", "      - name: Upload the packages shard per-test timings\n        if: always() && matrix.target == 'packages'\n"}, "never decides the shard"},

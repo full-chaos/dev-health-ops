@@ -642,6 +642,7 @@ func writeTestopsTestMetrics(
 		suite_duration_p50_seconds, suite_duration_p95_seconds, failure_recurrence_score,
 		team_id, service_id, org_id, computed_at, flake_cases, distinct_cases,
 		pooled_service_ids, pooled_durations, pooled_samples_stored,
+		report_runs, partial_report_runs, unmarked_report_runs,
 		recurrent_failed_names, distinct_failed_names)`)
 	if err != nil {
 		return 0, fmt.Errorf("prepare testops_test_metrics_daily batch: %w", err)
@@ -659,6 +660,10 @@ func writeTestopsTestMetrics(
 			samples = nil
 		}
 		services, durations, _ := pooledSampleColumns(samples)
+		var reportRuns, partialReportRuns, unmarkedReportRuns *uint32
+		if counts := metric.ReportRuns; counts != nil {
+			reportRuns, partialReportRuns, unmarkedReportRuns = uint32PtrOf(counts.Runs), uint32PtrOf(counts.Partial), uint32PtrOf(counts.Unmarked)
+		}
 		if err := batch.Append(
 			metric.RepoID, chDate(day),
 			// total_cases/passed_count/failed_count/skipped_count/
@@ -677,6 +682,8 @@ func writeTestopsTestMetrics(
 			// (CHAOS-9737), so the org series can sum them.
 			flakeCases, distinctCases,
 			services, durations, pooledMarker(fit),
+			// report_runs/partial_report_runs/unmarked_report_runs: NULL only for a record whose completeness was not read.
+			reportRuns, partialReportRuns, unmarkedReportRuns,
 			// The two counts of failure_recurrence_score, on every row (0/0 on a day with no failed name): a report
 			// window pools them. A row written before the columns existed reads NULL and is in neither sum.
 			uint32PtrOf(metric.RecurrentFailedNames), uint32PtrOf(metric.DistinctFailedNames),

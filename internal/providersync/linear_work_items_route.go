@@ -1140,10 +1140,10 @@ func normalizeLinearReopens(
 		if entry.FromState == nil || entry.ToState == nil {
 			continue
 		}
-		fromType := strings.ToLower(entry.FromState.Type)
-		toType := strings.ToLower(entry.ToState.Type)
-		if (fromType != "completed" && fromType != "canceled" && fromType != "cancelled") ||
-			(toType != "backlog" && toType != "unstarted" && toType != "started") {
+		fromType := strings.ToLower(strings.TrimSpace(entry.FromState.Type))
+		toType := strings.ToLower(strings.TrimSpace(entry.ToState.Type))
+		if (fromType != "completed" && fromType != "canceled" && fromType != "cancelled" && fromType != "duplicate") ||
+			(toType != "triage" && toType != "backlog" && toType != "unstarted" && toType != "started") {
 			continue
 		}
 		occurred := parseLinearTime(entry.CreatedAt)
@@ -1989,7 +1989,7 @@ func linearIdentity(identity linearIdentityPayload) string {
 
 func linearStatus(stateType string) string {
 	switch strings.ToLower(strings.TrimSpace(stateType)) {
-	case "backlog":
+	case "triage", "backlog":
 		return "backlog"
 	case "unstarted":
 		return "todo"
@@ -1997,7 +1997,7 @@ func linearStatus(stateType string) string {
 		return "in_progress"
 	case "completed":
 		return "done"
-	case "canceled", "cancelled":
+	case "canceled", "cancelled", "duplicate":
 		return "canceled"
 	default:
 		return "unknown"

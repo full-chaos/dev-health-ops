@@ -22,8 +22,9 @@ func (conn *queryRecordingBatchConn) PrepareBatch(_ context.Context, query strin
 	return conn.batch, nil
 }
 
-// CHAOS-9737: the test metrics writer names flake_cases and distinct_cases in its INSERT and appends both counts in
-// the same order, so the org series can sum them. The two counts of failure_recurrence_score come last.
+// CHAOS-9737: the test metrics writer names flake_cases and distinct_cases in its INSERT and appends both counts
+// in the same order, before the pooled and the report completeness columns, so the org series can sum them. The two
+// counts of failure_recurrence_score come last.
 func TestWriteTestopsTestMetricsWritesFlakeAndDistinctCaseCounts(t *testing.T) {
 	conn := &queryRecordingBatchConn{batch: &recordingBatch{}}
 	metric := testops.TestMetric{
@@ -34,18 +35,18 @@ func TestWriteTestopsTestMetricsWritesFlakeAndDistinctCaseCounts(t *testing.T) {
 	if _, err := writeTestopsTestMetrics(context.Background(), conn, "org-1", day, day, []testops.TestMetric{metric}); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(strings.Join(strings.Fields(conn.query), " "), "computed_at, flake_cases, distinct_cases, pooled_service_ids, pooled_durations, pooled_samples_stored, recurrent_failed_names, distinct_failed_names)") {
-		t.Fatalf("INSERT does not name the two count columns, then the pooled columns, then the recurrence counts: %s", conn.query)
+	if !strings.Contains(strings.Join(strings.Fields(conn.query), " "), "computed_at, flake_cases, distinct_cases, pooled_service_ids, pooled_durations, pooled_samples_stored, report_runs, partial_report_runs, unmarked_report_runs, recurrent_failed_names, distinct_failed_names)") {
+		t.Fatalf("INSERT does not name the two count columns, then the pooled, report completeness and recurrence columns: %s", conn.query)
 	}
 	if len(conn.batch.appended) != 1 {
 		t.Fatalf("appended %d rows, want 1", len(conn.batch.appended))
 	}
 	row := conn.batch.appended[0]
-	flake, distinct := row[len(row)-7].(*uint32), row[len(row)-6].(*uint32)
+	flake, distinct := row[len(row)-10].(*uint32), row[len(row)-9].(*uint32)
 	if flake == nil || *flake != 2 || distinct == nil || *distinct != 8 {
 		t.Fatalf("counts = %v/%v, want 2/8", flake, distinct)
 	}
-	if want := 19 + 2 + 3 + 2; len(row) != want {
+	if want := 19 + 2 + 3 + 3 + 2; len(row) != want {
 		t.Fatalf("row has %d values, want %d", len(row), want)
 	}
 	recurrent, failedNames := row[len(row)-2].(*uint32), row[len(row)-1].(*uint32)

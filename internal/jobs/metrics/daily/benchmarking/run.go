@@ -2,6 +2,7 @@ package benchmarking
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sort"
 	"time"
@@ -89,14 +90,7 @@ func ComputeBenchmarkingForDay(
 
 		// --- baselines + maturity bands (runner.py:142-161) ---
 		func() {
-			maxWindow := 30
-			for _, window := range DefaultBaselineWindows {
-				if window > maxWindow {
-					maxWindow = window
-				}
-			}
-			startDay := asOfDay.AddDate(0, 0, -(maxWindow - 1))
-			series, err := fetcher.FetchMetricSeriesByScope(ctx, metricName, startDay, asOfDay, scopeType)
+			series, err := fetcher.FetchMetricSeriesByScope(ctx, metricName, baselineWindowStart(asOfDay), asOfDay, scopeType)
 			if err != nil {
 				warnFetchFailure("benchmark baselines failed",
 					"metric", metricName, "scope", scopeType, "error", err)
@@ -111,8 +105,7 @@ func ComputeBenchmarkingForDay(
 
 		// --- anomalies (runner.py:163-180) ---
 		func() {
-			startDay := asOfDay.AddDate(0, 0, -(DefaultRollingWindowDays + DefaultMinHistoryPoints))
-			series, err := fetcher.FetchMetricSeriesByScope(ctx, metricName, startDay, asOfDay, scopeType)
+			series, err := fetcher.FetchMetricSeriesByScope(ctx, metricName, anomalyWindowStart(asOfDay), asOfDay, scopeType)
 			if err != nil {
 				warnFetchFailure("benchmark anomalies failed",
 					"metric", metricName, "scope", scopeType, "error", err)
@@ -127,10 +120,7 @@ func ComputeBenchmarkingForDay(
 
 		// --- period comparisons (runner.py:182-199, via _build_period_comparisons) ---
 		func() {
-			currentEnd := asOfDay
-			currentStart := asOfDay.AddDate(0, 0, -(PeriodComparisonCurrentDays - 1))
-			priorEnd := currentStart.AddDate(0, 0, -1)
-			priorStart := priorEnd.AddDate(0, 0, -(PeriodComparisonPriorDays - 1))
+			currentStart, currentEnd, priorStart, priorEnd := comparisonWindows(asOfDay)
 
 			currentSeries, err := fetcher.FetchMetricSeriesByScope(ctx, metricName, currentStart, currentEnd, scopeType)
 			if err != nil {
@@ -160,8 +150,7 @@ func ComputeBenchmarkingForDay(
 	}
 
 	// --- correlations (runner.py:201-224) ---
-	corrEnd := asOfDay
-	corrStart := asOfDay.AddDate(0, 0, -(CorrelationWindowDays - 1))
+	corrStart, corrEnd := correlationWindowStart(asOfDay), asOfDay
 	for _, pair := range correlationPairs {
 		metricName, pairedMetricName, scopeType := pair[0], pair[1], pair[2]
 		func() {
@@ -192,6 +181,73 @@ func ComputeBenchmarkingForDay(
 	}
 	outputs.Insights = insights
 	return outputs, nil
+}
+
+func baselineWindowStart(asOfDay time.Time) time.Time {
+	maxWindow := 30
+	for _, window := range DefaultBaselineWindows {
+		if window > maxWindow {
+			maxWindow = window
+		}
+	}
+	return asOfDay.AddDate(0, 0, -(maxWindow - 1))
+}
+
+func anomalyWindowStart(asOfDay time.Time) time.Time {
+	return asOfDay.AddDate(0, 0, -(DefaultRollingWindowDays + DefaultMinHistoryPoints))
+}
+
+func comparisonWindows(asOfDay time.Time) (currentStart, currentEnd, priorStart, priorEnd time.Time) {
+	currentEnd = asOfDay
+	currentStart = asOfDay.AddDate(0, 0, -(PeriodComparisonCurrentDays - 1))
+	priorEnd = currentStart.AddDate(0, 0, -1)
+	priorStart = priorEnd.AddDate(0, 0, -(PeriodComparisonPriorDays - 1))
+	return currentStart, currentEnd, priorStart, priorEnd
+}
+
+func correlationWindowStart(asOfDay time.Time) time.Time {
+	return asOfDay.AddDate(0, 0, -(CorrelationWindowDays - 1))
+}
+
+// InputWindowStart is the first day any read of ComputeBenchmarkingForDay for
+// asOfDay takes; every read ends at asOfDay.
+func InputWindowStart(asOfDay time.Time) time.Time {
+	_, _, priorStart, _ := comparisonWindows(asOfDay)
+	start := baselineWindowStart(asOfDay)
+	for _, candidate := range []time.Time{anomalyWindowStart(asOfDay), priorStart, correlationWindowStart(asOfDay)} {
+		if candidate.Before(start) {
+			start = candidate
+		}
+	}
+	return start
+}
+
+// InputTables are the tables a row of ComputeBenchmarkingForDay with metrics
+// and pairs can come from: the table of each metric and of the left metric of
+// each pair, sorted. The right metric of a pair is not one: a correlation keeps
+// only a scope that the left series holds too (ComputeMetricCorrelation).
+func InputTables(metrics [][2]string, pairs [][3]string) ([]string, error) {
+	names := make([]string, 0, len(metrics)+len(pairs))
+	for _, entry := range metrics {
+		names = append(names, entry[0])
+	}
+	for _, pair := range pairs {
+		names = append(names, pair[0])
+	}
+	seen := map[string]bool{}
+	var tables []string
+	for _, name := range names {
+		definition, ok := metricDefinitions[CanonicalMetricName(name)]
+		if !ok {
+			return nil, fmt.Errorf("benchmarking: unsupported metric %q", name)
+		}
+		if !seen[definition.Table] {
+			seen[definition.Table] = true
+			tables = append(tables, definition.Table)
+		}
+	}
+	sort.Strings(tables)
+	return tables, nil
 }
 
 // sortedIntersection returns the scope keys present in both maps, ascending.

@@ -479,9 +479,10 @@ func remainingPageBudget(budget, spent int) (int, error) {
 // githubTestsMaxWalkRecords bounds the rows one chunked walk writes, summed over every phase and every attempt
 // (githubTestsWalkRecords). The page budgets bound the runs a walk lists, not the rows: one run's reports go up to
 // maxEffectRows, which the executor splits into 100-row chunks, so a walk of a busy repository could prepare chunks for many
-// hours while it held its cost-class slot. The value is max(2,000,000, 2x the largest successful GitHub tests/cicd unit of the
-// last 30 days on prod); the two prod backfill units that ran for 13+ hours held about 8,000,000.
-const githubTestsMaxWalkRecords = 2_000_000
+// hours while it held its cost-class slot. The value is 2x the largest successful backfill walk on prod, Nov 2026 (2,002,076
+// records; the largest incremental walk was 593,667), rounded up to the next 100,000. Two prod backfill walks that ran for 13+
+// hours without an end held about 8,000,000.
+const githubTestsMaxWalkRecords = 4_100_000
 
 // errGitHubTestsWalkBound stops a listing visit at the run where the walk reached githubTestsMaxWalkRecords.
 var errGitHubTestsWalkBound = errors.New("github tests walk record bound reached")

@@ -572,6 +572,49 @@ func TestGitHubTestsChunkRouteStoredCursorAtWalkBoundEndsWithoutListing(t *testi
 	}
 }
 
+// The largest successful prod backfill walk (2,002,076 records, Nov 2026) is well under the default bound: a stored cursor of
+// that size keeps listing with no truncation.
+func TestGitHubTestsChunkRouteStoredCursorOfTheLargestRealWalkKeepsListing(t *testing.T) {
+	doer := &githubTestsPagedDoer{t: t, pages: 3, perPage: 50}
+	stored, err := decodeGitHubTestsChunkCursor(githubTestsStalledBackfillCursor(t, githubTestsArtifactsPhase, "api.github.com"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored.Pipelines, stored.Jobs, stored.Acceptance, stored.Suites, stored.Cases, stored.Coverage = 3090, 30_000, 9_000, 60_000, 1_899_986, 0
+	if githubTestsWalkRecords(stored) != 2_002_076 {
+		t.Fatalf("premise broken: records=%d", githubTestsWalkRecords(stored))
+	}
+	raw, err := encodeGitHubTestsChunkCursor(stored)
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := ""
+	err = (GitHubTestsRouteHandler{}).CollectChunks(
+		context.Background(), nativeTestClaim("github", "cicd"), providerfoundation.Credential{},
+		githubTestsClient(t, fakehttp.Client(doer)), time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC), raw,
+		func(emission ChunkRouteEmission) error {
+			if emission.Final {
+				t.Fatal("a walk under the bound finalized on its first chunk")
+			}
+			last = emission.CursorAfter
+			return errGitHubTestsWalkContinuation
+		},
+	)
+	if !errors.Is(err, errGitHubTestsWalkContinuation) {
+		t.Fatalf("err=%v, want the walk to go on listing", err)
+	}
+	if doer.artifactListRequests == 0 {
+		t.Fatal("no artifacts listing request: the walk stopped under the bound")
+	}
+	cursor, err := decodeGitHubTestsChunkCursor(last)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cursor.Incomplete) != 0 {
+		t.Fatalf("incomplete=%+v under the bound, want none", cursor.Incomplete)
+	}
+}
+
 // githubTestsSeedCursorHandler emits one empty run chunk whose cursor is a stored cursor of an earlier release, the way a
 // running unit's checkpoint holds it when the workers roll.
 type githubTestsSeedCursorHandler struct{ cursor string }

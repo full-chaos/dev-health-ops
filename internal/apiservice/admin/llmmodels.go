@@ -502,23 +502,12 @@ func (h *handlers) modelList(ctx context.Context, orgID string, cfg readinessBYO
 // checkBaseURL is the one door to the base url validator for every reader in
 // this package: a url holding any of the keys is refused before a lookup.
 func (h *handlers) checkBaseURL(ctx context.Context, baseURL string, keys ...string) (valid bool, reason string, keyHit bool, err error) {
-	validate := llmorgsettings.BaseURLValidator(llmorgsettings.ValidateBaseURLChecked)
-	if h.validateURL != nil {
-		validate = h.validateURL
-	}
-	return llmorgsettings.CheckBaseURL(ctx, baseURL, keys, validate)
+	return llmorgsettings.CheckBaseURL(ctx, baseURL, keys, h.baseURLValidator())
 }
 
-func (h *handlers) storedLLMKey(ctx context.Context, orgID string) (string, error) {
-	if h.storedKey != nil {
-		return h.storedKey(ctx, orgID)
+func (h *handlers) baseURLValidator() llmorgsettings.BaseURLValidator {
+	if h.validateURL != nil {
+		return h.validateURL
 	}
-	cfg, err := h.loadReadinessBYOConfig(ctx, orgID)
-	if err != nil {
-		return "", err
-	}
-	if cfg.staleKey.Configured() {
-		return cfg.staleKey.Reveal(), nil
-	}
-	return cfg.apiKey.Reveal(), nil
+	return llmorgsettings.ValidateBaseURLChecked
 }

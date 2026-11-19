@@ -508,39 +508,9 @@ func (h *handlers) applyLLMSettings(ctx context.Context, orgID string, in llmUps
 	if in.baseURL != nil {
 		baseURLText = *in.baseURL
 	}
-	var keys []string
-	if in.apiKey != nil {
-		keys = append(keys, *in.apiKey)
+	if refusal, err := h.saveKeyRefusal(ctx, h.store.Pool, orgID, "", in.apiKey, in.baseURL, true); refusal != nil || err != nil {
+		return nil, refusal, err
 	}
-	if baseURLText != "" {
-		stored, err := h.storedLeakKeys(ctx, orgID)
-		if err != nil {
-			return nil, nil, err
-		}
-		keys = append(keys, stored...)
-	}
-	carried, err := h.otherBaseURLCarriesKey(ctx, orgID, "", in.apiKey)
-	if err != nil {
-		return nil, nil, err
-	}
-	if carried {
-		return nil, newLLMRefusal(http.StatusBadRequest, "error", "invalid_base_url", "feature", byoLLMFeature, "message", "Invalid LLM base_url"), nil
-	}
-	valid, reason, keyHit, splitErr := h.checkBaseURL(ctx, baseURLText, keys...)
-	if keyHit {
-		return nil, newLLMRefusal(http.StatusBadRequest, "error", "invalid_base_url", "feature", byoLLMFeature, "message", "Invalid LLM base_url"), nil
-	}
-	if splitErr != nil {
-		// urlsplit's ValueError escapes validate_llm_base_url: an unhandled 500.
-		return nil, nil, &llmStepError{"validate base url", splitErr}
-	}
-	if !valid {
-		if reason == "" {
-			reason = "Invalid LLM base_url"
-		}
-		return nil, newLLMRefusal(http.StatusBadRequest, "error", "invalid_base_url", "feature", byoLLMFeature, "message", reason), nil
-	}
-
 	if in.requireModel && byoProviderNeedsModel(in) {
 		return nil, newLLMRefusal(http.StatusBadRequest, "error", "model_required", "feature", byoLLMFeature, "message", "model is required when a BYO LLM provider is saved"), nil
 	}
@@ -555,6 +525,15 @@ func (h *handlers) applyLLMSettings(ctx context.Context, orgID string, in llmUps
 			_ = tx.Rollback(context.WithoutCancel(ctx))
 		}
 	}()
+	// Under the org's save lock the key checks run again on the transaction: a
+	// save of another scope that passed its checks before this one committed is
+	// seen here, so two saves never each store a url carrying the other's key.
+	if refusal, err := h.lockLLMSettingsSave(ctx, tx, orgID, ""); refusal != nil || err != nil {
+		return nil, refusal, err
+	}
+	if refusal, err := h.saveKeyRefusal(ctx, tx, orgID, "", in.apiKey, in.baseURL, false); refusal != nil || err != nil {
+		return nil, refusal, err
+	}
 	set := func(key string, value *string, encrypt bool, description string) error {
 		_, err := h.upsertSetting(ctx, tx, orgID, llmCategory, key, value, encrypt, &description)
 		return err

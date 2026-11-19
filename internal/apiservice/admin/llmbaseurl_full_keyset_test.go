@@ -3,6 +3,8 @@ package admin
 import (
 	"context"
 	"fmt"
+	"io"
+	"log/slog"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -24,11 +26,21 @@ func scopeKeyText(scope llmorgsettings.Purpose) string {
 	return "sk-scope-" + scopeName(scope) + "-0123456789"
 }
 
-// keysetWrite runs the PUT write of one scope up to its transaction: a nil
-// store panics at Begin, which reads as "reached the write".
+// keysetWrite runs the PUT write of one scope through the save lock and the
+// key checks inside it: the fake transaction panics at the first statement
+// after them, which reads as "reached the write".
 func keysetWrite(h *handlers, scope llmorgsettings.Purpose, apiKey, baseURL *string) (refusal *llmRefusal, reachedWrite bool, err error) {
+	if h.store.Pool == nil {
+		h.store.Pool = &saveLockDB{tx: &saveLockTx{}}
+	}
+	if h.logger == nil {
+		h.logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	}
 	defer func() {
-		if recover() != nil {
+		if recovered := recover(); recovered != nil {
+			if _, ok := recovered.(reachedSaveWrite); !ok {
+				panic(recovered)
+			}
 			reachedWrite = true
 		}
 	}()

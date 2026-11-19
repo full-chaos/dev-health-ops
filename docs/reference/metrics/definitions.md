@@ -570,6 +570,10 @@ full cycle time: it is a real input, not an outlier to remove.
 
 `work_item_state_durations_daily` gives an item's last status span an end at its `completed_at` only when the item's status is terminal (`done` or `canceled`), or when its last known status change goes to a terminal status. A provider can reopen an item and keep its `completed_at`: that open item keeps accruing hours in its current status. When the reopen is not in the item's status changes, the span still ends at `completed_at`, and the item gets no hours in the terminal status after it.
 
+## Status of a GitHub issue on a Projects v2 board
+
+For a GitHub issue on a Projects v2 board, the item's status is the last event of its stored status changes, in the order `work_item_state_durations_daily` uses: the repository's close, reopen and status-label events, and the board's Status value at the time it was set. GitHub does not serve past board moves, so the board gives one event per Status value, with no prior status, and the status changes have board detail only from the first sync that sees a Status value. A board item with no Status value keeps the status of its issue state and labels.
+
 ## Blocked hours in `work_item_state_durations_daily`
 
 `work_item_state_durations_daily` holds, for each day, the hours that work

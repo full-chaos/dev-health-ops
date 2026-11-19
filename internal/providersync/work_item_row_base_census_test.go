@@ -26,6 +26,8 @@ var workItemRowCensusAllowed = map[string]string{
 var workItemRowCensusFieldWrites = map[string]string{
 	"DueAtAbsent": "a marker set when an effect is decoded, not a provider field",
 	"Description": "the Projects v2 merge keeps the repository row's description, because the board query asks for no body",
+	"Status":      "the Projects v2 merge sets a board item's status from the last event of its stored and batch history",
+	"StatusRaw":   "the Projects v2 merge sets a board item's raw status from the same last event",
 }
 
 type workItemRowCensusFinding struct {

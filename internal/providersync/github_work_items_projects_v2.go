@@ -321,6 +321,13 @@ func (fetcher GitHubProjectV2Fetcher) Fetch(
 			if !emitted {
 				continue
 			}
+			event, hasEvent, err := githubProjectV2StatusEvent(claim, item, row.WorkItemID, normalizedAt)
+			if err != nil {
+				return finishGitHubProjectV2Fetch(result), err
+			}
+			if hasEvent {
+				result.Rows.StatusTransitions = append(result.Rows.StatusTransitions, event)
+			}
 			if index, exists := workItemIndex[row.WorkItemID]; exists {
 				result.Rows.WorkItems[index] = row
 			} else {
@@ -777,7 +784,10 @@ type gitHubProjectV2FieldValuePayload struct {
 	Title    *string     `json:"title"`
 	ID       *string     `json:"id"`
 	Number   json.Number `json:"number"`
-	Field    struct {
+	// UpdatedAt is asked on the single-select value only: the time the board's
+	// Status value was set, the one board event GitHub serves.
+	UpdatedAt *string `json:"updatedAt"`
+	Field     struct {
 		Name string `json:"name"`
 	} `json:"field"`
 }
@@ -1077,7 +1087,7 @@ func mergeGitHubProjectV2Rows(repository, projects githubWorkItemRows) githubWor
 // User does), so the author asks those on the User fragment and a Bot or
 // Mannequin author keeps its login (CHAOS-14195).
 const gitHubProjectV2FieldValueNodeFields = `__typename
-            ... on ProjectV2ItemFieldSingleSelectValue { name field { ... on ProjectV2SingleSelectField { name } } }
+            ... on ProjectV2ItemFieldSingleSelectValue { name updatedAt field { ... on ProjectV2SingleSelectField { name } } }
             ... on ProjectV2ItemFieldTextValue { text field { ... on ProjectV2FieldCommon { name } } }
             ... on ProjectV2ItemFieldIterationValue { title id field { ... on ProjectV2FieldCommon { name } } }
             ... on ProjectV2ItemFieldNumberValue { number field { ... on ProjectV2FieldCommon { name } } }`

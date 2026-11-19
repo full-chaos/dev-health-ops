@@ -31,6 +31,16 @@ func (githubProjectV2NoopSnapshotDiffReader) PriorActiveSubjects(
 	return nil, nil
 }
 
+// githubProjectV2NoStoredTransitions is the StoredTransitions double for the
+// route tests that do not exercise the stored history: nothing is stored.
+type githubProjectV2NoStoredTransitions struct{}
+
+func (githubProjectV2NoStoredTransitions) StoredTransitions(
+	context.Context, string, []string,
+) ([]githubWorkItemTransitionRow, error) {
+	return nil, nil
+}
+
 type githubWorkItemsRouteDoer struct {
 	t              *testing.T
 	rest           *githubWorkItemsRESTDoer
@@ -154,7 +164,7 @@ func TestGitHubWorkItemsRouteComposesRESTSocialProjectsRawRowsAndUsage(t *testin
 		Targets:   1,
 		Snapshots: []githubProjectV2BoardSnapshot{{ProjectScopeID: "ghprojv2:acme#3"}},
 	}}
-	handler := GitHubWorkItemsRouteHandler{Projects: projects, ProjectMembershipSnapshotDiff: githubProjectV2NoopSnapshotDiffReader{}}
+	handler := GitHubWorkItemsRouteHandler{Projects: projects, ProjectMembershipSnapshotDiff: githubProjectV2NoopSnapshotDiffReader{}, StoredTransitions: githubProjectV2NoStoredTransitions{}}
 
 	batch, err := handler.Collect(
 		context.Background(), claim,
@@ -294,7 +304,7 @@ func TestGitHubWorkItemsRouteComposesRESTSocialProjectsRawRowsAndUsage(t *testin
 			client.Metrics = metrics
 			batch, err := (GitHubWorkItemsRouteHandler{
 				Projects:                      GitHubProjectV2Fetcher{},
-				ProjectMembershipSnapshotDiff: githubProjectV2NoopSnapshotDiffReader{},
+				ProjectMembershipSnapshotDiff: githubProjectV2NoopSnapshotDiffReader{}, StoredTransitions: githubProjectV2NoStoredTransitions{},
 			}).Collect(
 				context.Background(), degradedClaim,
 				providerfoundation.Credential{Provider: "github", ID: degradedClaim.CredentialID},
@@ -348,7 +358,7 @@ func TestGitHubWorkItemsRouteRefusesAnUnwiredProjectsCollector(t *testing.T) {
 			"/repos/acme/api": {{body: `{"id":4567,"full_name":"Acme/API"}`}},
 		}},
 	}
-	batch, err := (GitHubWorkItemsRouteHandler{ProjectMembershipSnapshotDiff: githubProjectV2NoopSnapshotDiffReader{}}).Collect(
+	batch, err := (GitHubWorkItemsRouteHandler{ProjectMembershipSnapshotDiff: githubProjectV2NoopSnapshotDiffReader{}, StoredTransitions: githubProjectV2NoStoredTransitions{}}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
 		gitHubPullRequestClient(t, fakehttp.Client(doer), "https://api.github.com"), time.Now().UTC(),
@@ -380,7 +390,7 @@ func TestGitHubWorkItemsRouteRefusesAnUnwiredProjectsCollectorWithoutTargets(t *
 		t:    t,
 		rest: &githubWorkItemsRESTDoer{t: t, replies: githubWorkItemsRESTFixtures()},
 	}
-	_, err := (GitHubWorkItemsRouteHandler{ProjectMembershipSnapshotDiff: githubProjectV2NoopSnapshotDiffReader{}}).Collect(
+	_, err := (GitHubWorkItemsRouteHandler{ProjectMembershipSnapshotDiff: githubProjectV2NoopSnapshotDiffReader{}, StoredTransitions: githubProjectV2NoStoredTransitions{}}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
 		gitHubPullRequestClient(t, fakehttp.Client(doer), "https://api.github.com"), time.Now().UTC(),
@@ -427,7 +437,7 @@ func TestGitHubWorkItemsRouteTreatsEnvironmentProjectsAsNoConfiguration(t *testi
 		}},
 	}
 	projects := &githubWorkItemsRouteProjectPolicy{}
-	batch, err := (GitHubWorkItemsRouteHandler{Projects: projects, ProjectMembershipSnapshotDiff: githubProjectV2NoopSnapshotDiffReader{}}).Collect(
+	batch, err := (GitHubWorkItemsRouteHandler{Projects: projects, ProjectMembershipSnapshotDiff: githubProjectV2NoopSnapshotDiffReader{}, StoredTransitions: githubProjectV2NoStoredTransitions{}}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
 		gitHubPullRequestClient(t, fakehttp.Client(doer), "https://api.github.com"), time.Now().UTC(),
@@ -464,7 +474,7 @@ func TestGitHubWorkItemsRoutePreservesOptionalSocialFailureAndPhysicalUsage(t *t
 		graphqlReplies: []string{`{"errors":[{"message":"unavailable"}],"data":{"repository":null}}`},
 	}
 	batch, err := (GitHubWorkItemsRouteHandler{
-		Projects: GitHubProjectV2Fetcher{}, ProjectMembershipSnapshotDiff: githubProjectV2NoopSnapshotDiffReader{},
+		Projects: GitHubProjectV2Fetcher{}, ProjectMembershipSnapshotDiff: githubProjectV2NoopSnapshotDiffReader{}, StoredTransitions: githubProjectV2NoStoredTransitions{},
 	}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
@@ -521,7 +531,7 @@ func TestGitHubWorkItemsRouteContinuesPastOptionalRESTFailuresAndLandsEffects(t 
 			"/repos/acme/api/issues/42/comments": {{status: http.StatusBadGateway, body: `{"message":"down"}`}},
 		}},
 	}
-	batch, err := (GitHubWorkItemsRouteHandler{Projects: GitHubProjectV2Fetcher{}, ProjectMembershipSnapshotDiff: githubProjectV2NoopSnapshotDiffReader{}}).Collect(
+	batch, err := (GitHubWorkItemsRouteHandler{Projects: GitHubProjectV2Fetcher{}, ProjectMembershipSnapshotDiff: githubProjectV2NoopSnapshotDiffReader{}, StoredTransitions: githubProjectV2NoStoredTransitions{}}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
 		gitHubPullRequestClient(t, fakehttp.Client(doer), "https://api.github.com"), time.Now().UTC(),
@@ -577,7 +587,7 @@ func TestGitHubWorkItemsRouteContinuesPastUnprocessablePullRequest(t *testing.T)
 		// there fails the decode that adaptGitHubWorkItemPRSocialPayload runs.
 		graphqlReplies: []string{`{"data":{"repository":{"pr0":{"number":52,"comments":{"nodes":[{"databaseId":1,"body":"c","createdAt":{"bad":true},"author":{"login":"reviewer"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}},"timelineItems":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`},
 	}
-	batch, err := (GitHubWorkItemsRouteHandler{Projects: GitHubProjectV2Fetcher{}, ProjectMembershipSnapshotDiff: githubProjectV2NoopSnapshotDiffReader{}}).Collect(
+	batch, err := (GitHubWorkItemsRouteHandler{Projects: GitHubProjectV2Fetcher{}, ProjectMembershipSnapshotDiff: githubProjectV2NoopSnapshotDiffReader{}, StoredTransitions: githubProjectV2NoStoredTransitions{}}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
 		gitHubPullRequestClient(t, fakehttp.Client(doer), "https://api.github.com"), time.Now().UTC(),
@@ -636,7 +646,7 @@ func TestGitHubWorkItemsRouteFailsClosedOnMixedOptionalAndBlockingIncomplete(t *
 		rest:           &githubWorkItemsRESTDoer{t: t, replies: fixtures},
 		graphqlReplies: []string{stalled, stalled},
 	}
-	batch, err := (GitHubWorkItemsRouteHandler{Projects: GitHubProjectV2Fetcher{}, ProjectMembershipSnapshotDiff: githubProjectV2NoopSnapshotDiffReader{}}).Collect(
+	batch, err := (GitHubWorkItemsRouteHandler{Projects: GitHubProjectV2Fetcher{}, ProjectMembershipSnapshotDiff: githubProjectV2NoopSnapshotDiffReader{}, StoredTransitions: githubProjectV2NoStoredTransitions{}}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
 		gitHubPullRequestClient(t, fakehttp.Client(doer), "https://api.github.com"), time.Now().UTC(),
@@ -704,7 +714,7 @@ func TestGitHubWorkItemsRouteFailsClosedOnBlockingSocialCauses(t *testing.T) {
 				graphqlReplies: []string{test.reply, test.reply},
 			}
 			batch, err := (GitHubWorkItemsRouteHandler{
-				Projects: GitHubProjectV2Fetcher{}, Social: test.fetcher, ProjectMembershipSnapshotDiff: githubProjectV2NoopSnapshotDiffReader{},
+				Projects: GitHubProjectV2Fetcher{}, Social: test.fetcher, ProjectMembershipSnapshotDiff: githubProjectV2NoopSnapshotDiffReader{}, StoredTransitions: githubProjectV2NoStoredTransitions{},
 			}).Collect(
 				context.Background(), claim,
 				providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
@@ -754,7 +764,7 @@ func TestGitHubWorkItemsRouteFailsClosedOnRateLimitedSocialFetch(t *testing.T) {
 		graphqlReplies: []string{`{"message":"API rate limit exceeded"}`},
 		graphqlStatus:  []int{http.StatusForbidden},
 	}
-	batch, err := (GitHubWorkItemsRouteHandler{Projects: GitHubProjectV2Fetcher{}, ProjectMembershipSnapshotDiff: githubProjectV2NoopSnapshotDiffReader{}}).Collect(
+	batch, err := (GitHubWorkItemsRouteHandler{Projects: GitHubProjectV2Fetcher{}, ProjectMembershipSnapshotDiff: githubProjectV2NoopSnapshotDiffReader{}, StoredTransitions: githubProjectV2NoStoredTransitions{}}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
 		gitHubPullRequestClient(t, fakehttp.Client(doer), "https://api.github.com"), time.Now().UTC(),
@@ -781,7 +791,7 @@ func TestGitHubWorkItemsRouteFailsClosedOnRateLimitedIssueComments(t *testing.T)
 			"/repos/acme/api/issues/42/comments": {{status: http.StatusForbidden, body: `{"message":"API rate limit exceeded"}`}},
 		}},
 	}
-	batch, err := (GitHubWorkItemsRouteHandler{Projects: GitHubProjectV2Fetcher{}, ProjectMembershipSnapshotDiff: githubProjectV2NoopSnapshotDiffReader{}}).Collect(
+	batch, err := (GitHubWorkItemsRouteHandler{Projects: GitHubProjectV2Fetcher{}, ProjectMembershipSnapshotDiff: githubProjectV2NoopSnapshotDiffReader{}, StoredTransitions: githubProjectV2NoStoredTransitions{}}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
 		gitHubPullRequestClient(t, fakehttp.Client(doer), "https://api.github.com"), time.Now().UTC(),
@@ -816,7 +826,7 @@ func TestGitHubWorkItemsRouteIncompletenessSurvivesDurableCompletionEncoding(t *
 	}
 	batch, err := (GitHubWorkItemsRouteHandler{
 		Projects:                      GitHubProjectV2Fetcher{},
-		ProjectMembershipSnapshotDiff: githubProjectV2NoopSnapshotDiffReader{},
+		ProjectMembershipSnapshotDiff: githubProjectV2NoopSnapshotDiffReader{}, StoredTransitions: githubProjectV2NoStoredTransitions{},
 	}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
@@ -857,7 +867,7 @@ func TestGitHubWorkItemsRouteFailsBeforeFetchOnMalformedProjectsConfiguration(t 
 	}
 	_, err := (GitHubWorkItemsRouteHandler{
 		Projects:                      GitHubProjectV2Fetcher{},
-		ProjectMembershipSnapshotDiff: githubProjectV2NoopSnapshotDiffReader{},
+		ProjectMembershipSnapshotDiff: githubProjectV2NoopSnapshotDiffReader{}, StoredTransitions: githubProjectV2NoStoredTransitions{},
 	}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
@@ -903,7 +913,7 @@ func TestGitHubWorkItemsRouteErrorRetainsRequiredPhasePhysicalUsage(t *testing.T
 	}
 	_, err := (GitHubWorkItemsRouteHandler{
 		Projects:                      projects,
-		ProjectMembershipSnapshotDiff: githubProjectV2NoopSnapshotDiffReader{},
+		ProjectMembershipSnapshotDiff: githubProjectV2NoopSnapshotDiffReader{}, StoredTransitions: githubProjectV2NoStoredTransitions{},
 	}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
@@ -1111,7 +1121,7 @@ func githubWorkItemsRouteCollectWithCuts(t *testing.T, normalizedAt time.Time, c
 		Snapshots:       []githubProjectV2BoardSnapshot{{ProjectScopeID: "ghprojv2:acme#3"}},
 		LabelsTruncated: cuts.boardLabelsCut,
 	}}
-	handler := GitHubWorkItemsRouteHandler{Projects: projects, ProjectMembershipSnapshotDiff: githubProjectV2NoopSnapshotDiffReader{}}
+	handler := GitHubWorkItemsRouteHandler{Projects: projects, ProjectMembershipSnapshotDiff: githubProjectV2NoopSnapshotDiffReader{}, StoredTransitions: githubProjectV2NoStoredTransitions{}}
 	batch, err := handler.Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},

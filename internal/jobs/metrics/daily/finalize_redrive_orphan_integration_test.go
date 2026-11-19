@@ -573,3 +573,49 @@ func newFinalizeRedriveTestStackWithRiverSchema(t *testing.T) (*pgxpool.Pool, *P
 	}
 	return pool, store, publisher
 }
+
+func TestFailFinalizePermanentlyClosesTheRunsOpenRedriveEventAsClosedFailed(t *testing.T) {
+	ctx := context.Background()
+	pool, store, publisher := newFinalizeRedriveTestStack(t)
+
+	const (
+		orgID       = "00000000-0000-4000-8000-000000002801"
+		runID       = "00000000-0000-4000-8000-000000002802"
+		partitionID = "00000000-0000-4000-8000-000000002803"
+	)
+	now := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
+	targetDay := time.Date(2026, 5, 7, 0, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	insertFinalizeTestRun(t, ctx, pool, runID, orgID, targetDay, now)
+	insertFinalizeTestPartition(t, ctx, pool, partitionID, runID, 0, "succeeded", now)
+	if _, err := pool.Exec(ctx, `
+UPDATE daily_metrics_runs
+SET status = 'succeeded', finalization_status = 'succeeded', finalized_at = $1
+WHERE id = $2::uuid`, now, runID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.RedriveFinalizeForRange(
+		ctx, publisher, orgID, targetDay, targetDay, "permfail-nonce", true, testFinalizeRedriveReason, false,
+	); err != nil {
+		t.Fatalf("RedriveFinalizeForRange: %v", err)
+	}
+	claim, err := store.ClaimFinalize(ctx, runID)
+	if err != nil || claim == nil {
+		t.Fatalf("ClaimFinalize = %#v, %v", claim, err)
+	}
+	if err := store.FailFinalizePermanently(ctx, *claim); err != nil {
+		t.Fatalf("FailFinalizePermanently: %v", err)
+	}
+
+	var eventStatus string
+	var closedAt *time.Time
+	if err := pool.QueryRow(ctx, `
+SELECT status, closed_at FROM daily_metrics_finalize_redrive_events
+WHERE run_id = $1::uuid ORDER BY created_at LIMIT 1`, runID).
+		Scan(&eventStatus, &closedAt); err != nil {
+		t.Fatal(err)
+	}
+	if eventStatus != "closed_failed" || closedAt == nil {
+		t.Fatalf("redrive event after FailFinalizePermanently = status=%q closed_at=%v, want closed_failed with a timestamp", eventStatus, closedAt)
+	}
+}

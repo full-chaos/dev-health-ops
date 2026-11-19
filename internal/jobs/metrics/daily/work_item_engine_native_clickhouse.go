@@ -27,12 +27,12 @@ import (
 // day with no data the family stores none of them: issueTypeMetricsRowsToWrite.)
 //
 // activeOnDay=true returns the items that are active on the day: created before
-// the day ends, and not completed before the day starts. That is the SAME
-// predicate, on the same two columns, as the first statement of the investment
-// compute's loop (it skips every other item), so pushing it into the query
-// cannot change a row. It is deliberately NOT the `status != 'done'` predicate
-// of LoadWorkItemMetricsWorkItems: the investment compute reads completed_at,
-// never status.
+// the day ends, and not completed before the day starts. Every item the
+// investment compute counts (created before the day ends, CompletedOnDay) is in
+// that set, so pushing it into the query cannot change a row. It is
+// deliberately NOT the `status != 'done'` predicate of
+// LoadWorkItemMetricsWorkItems: the compute decides by status and completed_at
+// together (workitemengine.CompletedOnDay), not by status alone.
 //
 // `work_items` is ReplacingMergeTree(last_synced) keyed on
 // (repo_id, work_item_id): FINAL is a complete dedup.
@@ -47,7 +47,7 @@ func LoadWorkItemEngineWorkItems(
 		return nil, ErrInvalidState
 	}
 	query := `
-SELECT work_item_id, provider, type, title, labels, created_at, started_at, completed_at, story_points
+SELECT work_item_id, provider, type, title, labels, status, created_at, started_at, completed_at, story_points
 FROM work_items FINAL
 WHERE org_id = ? AND repo_id = ?`
 	arguments := []any{organizationID, repoID.String()}
@@ -78,7 +78,7 @@ ORDER BY work_item_id`
 			storyPoints *float64
 		)
 		if err := rows.Scan(
-			&item.WorkItemID, &item.Provider, &item.Type, &item.Title, &item.Labels,
+			&item.WorkItemID, &item.Provider, &item.Type, &item.Title, &item.Labels, &item.Status,
 			&item.CreatedAt, &startedAt, &completedAt, &storyPoints,
 		); err != nil {
 			return nil, fmt.Errorf("scan work item engine work item: %w", err)

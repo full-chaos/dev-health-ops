@@ -131,7 +131,7 @@ func TestTestopsPipelineStaleCutoffIsTheStoredComputedAtMinusTheLookback(t *test
 					if err != nil || written != 1 || !conn.batch.sent {
 						t.Fatalf("compute and write: rows %d, sent %t, err %v", written, conn.batch.sent, err)
 					}
-					if !strings.HasSuffix(strings.Join(strings.Fields(conn.query), " "), "computed_at, skipped_count, unfinished_count, other_count, unfinished_stale_count)") {
+					if !strings.HasSuffix(strings.Join(strings.Fields(conn.query), " "), "computed_at, skipped_count, unfinished_count, other_count, unfinished_stale_count, pooled_service_ids, pooled_durations, pooled_queues, pooled_samples_stored)") {
 						t.Fatalf("unexpected INSERT %q", conn.query)
 					}
 					row := conn.batch.appended[0]

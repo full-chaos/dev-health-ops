@@ -52,4 +52,10 @@ type CICDMetric struct {
 	P90DurationMinutes *float64
 	AvgQueueMinutes    *float64
 	ComputedAt         time.Time
+	// PooledRunMinutes/PooledQueueMinutes are the samples of the values above, one element per counted run (parallel,
+	// nil = no sample), stored with the row for the pooled report charts.
+	PooledRunMinutes   []*float64
+	PooledQueueMinutes []*float64
+	// PooledSamplesOverCap marks a row whose samples are over the daily cap: it stores none (pooled_samples_stored 2).
+	PooledSamplesOverCap bool
 }

@@ -37,8 +37,9 @@ import (
 // candidates) or written unassigned. After the fix: A resolves exactly one
 // candidate, source=linked_issue, team_id=team-linked, is_primary=1.
 //
-// CHAOS-9460: A copies D's own attribution row (D was attributed before, to
-// team-linked by repo_ownership), never a resolution of D on A's day; a donor
+// CHAOS-9460: A copies D's own attribution row (D, an issue, was attributed
+// before, to team-linked by project_ownership: an issue's repo_ownership row is
+// not a donor row), never a resolution of D on A's day; a donor
 // with no row gives nothing (TestALinkedItemCopiesTheTeamOfItsDonorsOwnRow).
 func TestWorkItemAttributionExecutorPreservesLinkedIssueFallback(t *testing.T) {
 	ctx := context.Background()
@@ -60,7 +61,7 @@ func TestWorkItemAttributionExecutorPreservesLinkedIssueFallback(t *testing.T) {
 	// matter what the fix does.
 	seedWorkItemAttributionLinkedRepoOwnership(t, ctx, conn, orgID, repoD, "team-linked", targetDay)
 	seedWorkItemAttributionLinkedDependency(t, ctx, conn, orgID, "A", "D", "relates_to", seededAt)
-	seedWorkItemAttributionStoredRow(t, ctx, conn, orgID, repoD, "D", "github", "team-linked", "repo_ownership", targetDay.Add(-time.Hour))
+	seedWorkItemAttributionStoredRow(t, ctx, conn, orgID, repoD, "D", "github", "team-linked", "project_ownership", targetDay.Add(-time.Hour))
 
 	executor, err := NewWorkItemAttributionExecutor(conn)
 	if err != nil {

@@ -15,6 +15,17 @@ type pipelineBucket struct {
 	success   int
 	durations []float64
 	queues    []float64
+	// runDurations/runQueues hold one element per counted run (nil = no sample of that kind), parallel.
+	runDurations []*float64
+	runQueues    []*float64
+}
+
+// nonNilSamples is a non-nil sample array: a row with no sample stores an empty array.
+func nonNilSamples(samples []*float64) []*float64 {
+	if samples == nil {
+		return []*float64{}
+	}
+	return samples
 }
 
 func utcDayWindow(day time.Time) (time.Time, time.Time) {
@@ -137,17 +148,22 @@ func ComputeCICDMetricsDaily(day time.Time, pipelineRuns []PipelineRunRow, compu
 			bucket.success++
 		}
 
+		var runDuration, runQueue *float64
 		durationMin := finishedAt.Sub(startedAt).Minutes()
 		if durationMin >= 0 {
 			bucket.durations = append(bucket.durations, durationMin)
+			runDuration = ptr(durationMin)
 		}
 
 		if row.QueuedAt != nil {
 			queueMin := startedAt.Sub(row.QueuedAt.UTC()).Minutes()
 			if queueMin >= 0 {
 				bucket.queues = append(bucket.queues, queueMin)
+				runQueue = ptr(queueMin)
 			}
 		}
+		bucket.runDurations = append(bucket.runDurations, runDuration)
+		bucket.runQueues = append(bucket.runQueues, runQueue)
 	}
 
 	// sorted(by_repo.items(), key=lambda kv: kv[0]) -- ascending by repo_id
@@ -183,6 +199,8 @@ func ComputeCICDMetricsDaily(day time.Time, pipelineRuns []PipelineRunRow, compu
 			P90DurationMinutes: p90Duration,
 			AvgQueueMinutes:    avgQueue,
 			ComputedAt:         computedAtUTC,
+			PooledRunMinutes:   nonNilSamples(bucket.runDurations),
+			PooledQueueMinutes: nonNilSamples(bucket.runQueues),
 		})
 	}
 	return records

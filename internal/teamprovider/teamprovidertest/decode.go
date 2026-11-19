@@ -84,6 +84,10 @@ func Decode(query string, args []any) ([]string, []teamprovider.Write, error) {
 				*target = parsed.UTC()
 			}
 		}
+		if rules := named["deleted_rule"]; len(rules) > r {
+			deleted, _ := rules[r].(uint32)
+			writes[r].Deleted = teamprovider.Deleted(deleted)
+		}
 		if masks := named["kept_mask"]; len(masks) > r {
 			mask, _ := masks[r].(uint32)
 			writes[r].Kept = teamprovider.Kept(mask)

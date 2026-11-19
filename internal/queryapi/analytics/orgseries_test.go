@@ -101,7 +101,7 @@ func TestCompileOrgTimeseries_PooledMeasuresReadThePooledSource(t *testing.T) {
 		if err != nil || !ok {
 			t.Fatalf("%s: ok=%v err=%v", measure, ok, err)
 		}
-		for _, want := range []string{c.source, c.value, "toFloat64(" + c.samples + ") AS denominator", "SELECT repo_id, day FROM testops_",
+		for _, want := range []string{c.source, c.value, "toFloat64(" + c.samples + ") AS denominator", "WHERE pooled_samples_stored = 1", "FROM testops_",
 			"team_scope_ids", fmt.Sprintf("max_rows_to_read = %d, read_overflow_mode = 'throw'", TestopsPooledMaxRowsToRead)} {
 			if !strings.Contains(q.sql, want) {
 				t.Errorf("%s: ORG SQL lacks %q:\n%s", measure, want, q.sql)

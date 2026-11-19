@@ -155,11 +155,54 @@ func (c *coverageRange) value() pyjson.Value {
 	return out
 }
 
+// longerWindowLimit caps the longer-window units one run lists.
+const longerWindowLimit = 10
+
+// requestedSplit is a run's requested range without its longer-window units
+// (a window longer than twice the run's median window), and those units
+// apart: one stuck unit then no longer stretches the run's range.
+type requestedSplit struct {
+	Since, Before time.Time
+	Units         int64
+	MedianSeconds int64
+	LongerUnits   int64
+	Longer        []longerWindowUnit
+}
+
+type longerWindowUnit struct {
+	SourceID, DatasetKey string
+	Since, Before        time.Time
+}
+
+func (c *requestedSplit) value() pyjson.Value {
+	if c == nil {
+		return nil
+	}
+	units := make([]pyjson.Value, len(c.Longer))
+	for index, unit := range c.Longer {
+		item := pyjson.NewObject()
+		item.Set("source_id", unit.SourceID)
+		item.Set("dataset_key", unit.DatasetKey)
+		item.Set("since", pyTime(unit.Since))
+		item.Set("before", pyTime(unit.Before))
+		units[index] = item
+	}
+	out := pyjson.NewObject()
+	out.Set("since", pyTime(c.Since))
+	out.Set("before", pyTime(c.Before))
+	out.Set("unit_count", pyjson.IntOf(c.Units))
+	out.Set("median_window_seconds", pyjson.IntOf(c.MedianSeconds))
+	out.Set("longer_window_unit_count", pyjson.IntOf(c.LongerUnits))
+	out.Set("longer_window_units", units)
+	return out
+}
+
 // unitRollup is _SyncRunUnitRollup.
 type unitRollup struct {
 	StatusCounts map[string]int64
 	Requested    *coverageRange
 	Covered      *coverageRange
+	Split        *requestedSplit
 }
 
 // plannerRollups is _planner_sync_runs_for_job_runs plus
@@ -187,8 +230,12 @@ func (h *handlers) plannerRollups(r *http.Request, org string, ids []uuid.UUID) 
 	if err != nil {
 		return nil, nil, err
 	}
+	splits, err := h.splitsByRun(r, org, ids)
+	if err != nil {
+		return nil, nil, err
+	}
 	for _, id := range ids {
-		rollups[id] = &unitRollup{StatusCounts: counts[id], Requested: requested[id], Covered: covered[id]}
+		rollups[id] = &unitRollup{StatusCounts: counts[id], Requested: requested[id], Covered: covered[id], Split: splits[id]}
 	}
 	return runs, rollups, nil
 }
@@ -223,6 +270,28 @@ func (h *handlers) rangesByRun(r *http.Request, org string, ids []uuid.UUID, suc
 			current.SourceIDs = append(current.SourceIDs, id)
 		}
 		sort.Strings(current.SourceIDs)
+	}
+	return out, nil
+}
+
+// splitsByRun folds unitWindowSplits' rows into one split per run.
+func (h *handlers) splitsByRun(r *http.Request, org string, ids []uuid.UUID) (map[uuid.UUID]*requestedSplit, error) {
+	rows, err := h.store.unitWindowSplits(r.Context(), org, ids, longerWindowLimit)
+	if err != nil {
+		return nil, err
+	}
+	out := map[uuid.UUID]*requestedSplit{}
+	for _, row := range rows {
+		current := out[row.RunID]
+		if current == nil {
+			current = &requestedSplit{Since: row.Since.UTC(), Before: row.Before.UTC(), Units: row.TypicalUnits,
+				MedianSeconds: row.MedianSeconds, LongerUnits: row.LongerUnits, Longer: []longerWindowUnit{}}
+			out[row.RunID] = current
+		}
+		if row.SourceID != nil && row.DatasetKey != nil && row.UnitSince != nil && row.UnitBefore != nil {
+			current.Longer = append(current.Longer, longerWindowUnit{SourceID: row.SourceID.String(), DatasetKey: *row.DatasetKey,
+				Since: row.UnitSince.UTC(), Before: row.UnitBefore.UTC()})
+		}
 	}
 	return out, nil
 }
@@ -383,15 +452,16 @@ func jobRunResponse(run *jobRun, result pyjson.Value, plannerRun *syncRun, rollu
 
 // jobEnrichment is _sync_run_job_enrichment (SyncRunJobEnrichment).
 func jobEnrichment(run *syncRun, rollup *unitRollup, total, completed, failed int64) *pyjson.Object {
-	var requested, covered pyjson.Value
+	var requested, covered, split pyjson.Value
 	if rollup != nil {
-		requested, covered = rollup.Requested.value(), rollup.Covered.value()
+		requested, covered, split = rollup.Requested.value(), rollup.Covered.value(), rollup.Split.value()
 	}
 	out := pyjson.NewObject()
 	out.Set("mode", run.Mode)
 	out.Set("triggered_by", run.TriggeredBy)
 	out.Set("requested_range", requested)
 	out.Set("covered_range", covered)
+	out.Set("requested_range_split", split)
 	out.Set("total_units", total)
 	out.Set("completed_units", completed)
 	out.Set("failed_units", failed)

@@ -4,9 +4,11 @@ import (
 	"bufio"
 	"context"
 	"errors"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -264,4 +266,113 @@ func funcCalls(file *ast.File, funcName, callee string) bool {
 		})
 	}
 	return found
+}
+
+// socketDeadlineBatch models clickhouse-go's Send on a stalled server: the driver
+// sets the socket deadline to the batch context's deadline, so the read can end
+// with the net deadline error before the context's own timer has fired.
+type socketDeadlineBatch struct {
+	driver.Batch
+	ctx            context.Context
+	early          bool
+	ctxDoneAtError bool
+}
+
+func (b *socketDeadlineBatch) Send() error {
+	deadline, _ := b.ctx.Deadline()
+	for !b.early && time.Now().Before(deadline) {
+	}
+	b.ctxDoneAtError = b.ctx.Err() != nil
+	return fmt.Errorf("query processing: failed to read packet: %w", &net.OpError{Op: "read", Net: "tcp", Err: os.ErrDeadlineExceeded})
+}
+func (b *socketDeadlineBatch) Abort() error { return nil }
+
+type socketDeadlineConn struct {
+	driver.Conn
+	early bool
+	batch *socketDeadlineBatch
+}
+
+func (c *socketDeadlineConn) PrepareBatch(ctx context.Context, _ string, _ ...driver.PrepareBatchOption) (driver.Batch, error) {
+	c.batch = &socketDeadlineBatch{ctx: ctx, early: c.early}
+	return c.batch, nil
+}
+
+// CHAOS-14255: the socket deadline the driver takes from the bound can end Send
+// before the bound's context timer fires; the error still names the bound.
+func TestASocketDeadlineAtTheBoundEndsWithErrBatchWriteBound(t *testing.T) {
+	for range 20 {
+		inner := &socketDeadlineConn{}
+		batch, err := wrapConn(inner, 5*time.Millisecond).PrepareBatch(context.Background(), "INSERT INTO t")
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = batch.Send()
+		if !errors.Is(err, ErrBatchWriteBound) || !errors.Is(err, os.ErrDeadlineExceeded) {
+			t.Fatalf("send = %v (context done at the socket error: %v); want ErrBatchWriteBound wrapping the socket deadline error", err, inner.batch.ctxDoneAtError)
+		}
+	}
+}
+
+// timerNotFiredCtx is a driver context whose deadline is set but whose timer has
+// not fired: the window where the socket deadline wins the race.
+type timerNotFiredCtx struct {
+	context.Context
+	deadline time.Time
+	hasDL    bool
+}
+
+func (c timerNotFiredCtx) Deadline() (time.Time, bool) { return c.deadline, c.hasDL }
+func (c timerNotFiredCtx) Err() error                  { return nil }
+
+func TestTheBoundEndedACallOnlyOnASocketDeadlineErrorAtOrAfterTheDeadline(t *testing.T) {
+	socketErr := fmt.Errorf("query processing: %w", &net.OpError{Op: "read", Net: "tcp", Err: os.ErrDeadlineExceeded})
+	past, future := time.Now().Add(-time.Millisecond), time.Now().Add(time.Hour)
+	for _, tc := range []struct {
+		name string
+		ctx  timerNotFiredCtx
+		err  error
+		want bool
+	}{
+		{"socket deadline error past the deadline", timerNotFiredCtx{context.Background(), past, true}, socketErr, true},
+		{"other error past the deadline", timerNotFiredCtx{context.Background(), past, true}, errors.New("server exception"), false},
+		{"socket deadline error before the deadline", timerNotFiredCtx{context.Background(), future, true}, socketErr, false},
+		{"socket deadline error with no deadline", timerNotFiredCtx{Context: context.Background()}, socketErr, false},
+	} {
+		if got := deadlineEnded(tc.ctx, tc.err); got != tc.want {
+			t.Errorf("%s: deadlineEnded = %v, want %v", tc.name, got, tc.want)
+		}
+		got := boundErr(tc.ctx, ErrBatchWriteBound, tc.err)
+		if errors.Is(got, ErrBatchWriteBound) != tc.want || !errors.Is(got, tc.err) {
+			t.Errorf("%s: boundErr = %v; want ErrBatchWriteBound %v and the driver error kept", tc.name, got, tc.want)
+		}
+	}
+}
+
+// A socket deadline under a caller deadline earlier than the bound names the
+// caller's deadline, not the bound.
+func TestASocketDeadlineAtTheCallerDeadlineDoesNotNameTheBound(t *testing.T) {
+	inner := &socketDeadlineConn{}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
+	defer cancel()
+	batch, err := wrapConn(inner, time.Minute).PrepareBatch(ctx, "INSERT INTO t")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := batch.Send(); errors.Is(err, ErrBatchWriteBound) || !errors.Is(err, context.DeadlineExceeded) || !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("send = %v; want the caller's deadline wrapping the socket deadline error, not ErrBatchWriteBound", err)
+	}
+}
+
+// A socket deadline error before the driver context's deadline (a dial or
+// handshake timeout of a re-acquired connection) is not the bound.
+func TestASocketDeadlineBeforeTheBoundStaysTheDriverError(t *testing.T) {
+	inner := &socketDeadlineConn{early: true}
+	batch, err := wrapConn(inner, time.Minute).PrepareBatch(context.Background(), "INSERT INTO t")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := batch.Send(); errors.Is(err, ErrBatchWriteBound) || errors.Is(err, context.DeadlineExceeded) || !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("send = %v; want the raw socket deadline error, not a bound", err)
+	}
 }

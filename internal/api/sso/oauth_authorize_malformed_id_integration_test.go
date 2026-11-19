@@ -13,8 +13,8 @@ import (
 	"github.com/google/uuid"
 )
 
-// On the real stack a malformed provider id gets the same status, content type and body bytes as a well-formed
-// provider id that has no row.
+// On the real stack with the OIDC forward off, a malformed provider id gets the same status, content type and body bytes
+// as a well-formed provider id that has no row: the 503 config_missing naming AUTH_PROXY_OIDC (CHAOS-14131).
 func TestOAuthAuthorizeMalformedIDAnswersAsAnUnknownIDOnARealDatabase(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -38,8 +38,8 @@ func TestOAuthAuthorizeMalformedIDAnswersAsAnUnknownIDOnARealDatabase(t *testing
 		return response.StatusCode, response.Header.Get("Content-Type"), string(raw)
 	}
 	wantStatus, wantType, wantBody := post(uuid.NewString())
-	if wantStatus != http.StatusNotFound {
-		t.Fatalf("unknown id: status %d %s, want 404", wantStatus, wantBody)
+	if wantStatus != http.StatusServiceUnavailable || !strings.Contains(wantBody, "AUTH_PROXY_OIDC is not set") {
+		t.Fatalf("unknown id: status %d %s, want 503 config_missing AUTH_PROXY_OIDC", wantStatus, wantBody)
 	}
 	for _, id := range []string{"providers", "not-a-uuid", "00000000-0000-4000-8000-00000000000g"} {
 		status, contentType, body := post(id)

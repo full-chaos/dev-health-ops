@@ -1,0 +1,11 @@
+{
+  "activate: again": "503 {\"detail\":{\"message\":\"SSO provider service unavailable\"}}",
+  "activate: another org's provider": "503 {\"detail\":{\"message\":\"SSO provider service unavailable\"}}",
+  "activate: oauth with a null config": "503 {\"detail\":{\"message\":\"SSO provider service unavailable\"}}",
+  "activate: owner, saml (masking, truncation, null domains)": "503 {\"detail\":{\"message\":\"SSO provider service unavailable\"}}",
+  "activate: provider id in braces": "503 {\"detail\":{\"message\":\"SSO provider service unavailable\"}}",
+  "activate: stored allowed_domains not a list (committed, then 500)": "503 {\"detail\":{\"message\":\"SSO provider service unavailable\"}}",
+  "activate: stored config not an object (committed, then 500)": "503 {\"detail\":{\"message\":\"SSO provider service unavailable\"}}",
+  "activate: unknown provider": "503 {\"detail\":{\"message\":\"SSO provider service unavailable\"}}",
+  "deactivate: admin, oidc (client_secret masked)": "503 {\"detail\":{\"message\":\"SSO provider service unavailable\"}}"
+}

@@ -125,7 +125,7 @@ var viewFilledAfterTheCapture = map[string]viewFilledTable{
 	// states each group's lead (merged_at; first_review_at with its counts).
 	"git_pull_request_kept": {
 		View: "git_pull_request_kept_mv", Source: "git_pull_requests",
-		Migration: "162_stored_version_kept_groups.sql",
+		Migration: "163_stored_version_kept_groups.sql",
 		Key:       []string{"org_id", "repo_id", "number"},
 		Column:    "merged",
 		SourceRule: "tuple(argMaxIf(tuple(merged_at), last_synced, merged_at IS NOT NULL), " +
@@ -136,7 +136,7 @@ var viewFilledAfterTheCapture = map[string]viewFilledTable{
 	// merged_at, with its pull request number and tier.
 	"deployment_kept": {
 		View: "deployment_kept_mv", Source: "deployments",
-		Migration:  "162_stored_version_kept_groups.sql",
+		Migration:  "163_stored_version_kept_groups.sql",
 		Key:        []string{"org_id", "repo_id", "deployment_id"},
 		Column:     "merged",
 		SourceRule: "argMaxIf(tuple(merged_at, pull_request_number, CAST(pull_request_tier, 'String')), last_synced, merged_at IS NOT NULL)",

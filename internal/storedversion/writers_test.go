@@ -42,8 +42,8 @@ var contractedWriters = map[string]string{
 	"internal/localgit/stored_version.go|repos":                                       "local sync repositories (dho sync git|prs|blame --provider local)",
 	"internal/localgit/stored_version.go|git_commits":                                 "local sync commits",
 	"internal/localgit/stored_version.go|git_pull_requests":                           "local sync pull requests (inferred from merge commits and refs)",
-	"internal/storedversion/repair.go|git_pull_requests":                              "kept-group repair (migration 162): one INSERT..SELECT of the FINAL row with a NULL lead filled from git_pull_request_kept, at the version + 1 ms; every other column is the FINAL row's (TestEveryKeptTableWriteRepairsItsKeys)",
-	"internal/storedversion/repair.go|deployments":                                    "kept-group repair (migration 162): one INSERT..SELECT of the FINAL row with a NULL merged_at filled, with its pull request pair, from deployment_kept, at the version + 1 ms; every other column is the FINAL row's",
+	"internal/storedversion/repair.go|git_pull_requests":                              "kept-group repair (migration 163): one INSERT..SELECT of the FINAL row with a NULL lead filled from git_pull_request_kept, at the version + 1 ms; every other column is the FINAL row's (TestEveryKeptTableWriteRepairsItsKeys)",
+	"internal/storedversion/repair.go|deployments":                                    "kept-group repair (migration 163): one INSERT..SELECT of the FINAL row with a NULL merged_at filled, with its pull request pair, from deployment_kept, at the version + 1 ms; every other column is the FINAL row's",
 }
 
 // outOfScopeWriters write operational_* tables: revisioned snapshots under
@@ -277,7 +277,7 @@ func TestEveryWriterOfAnInScopeKeyIsContractedOrListed(t *testing.T) {
 		len(found), len(contractedWriters), len(outOfScopeWriters), len(unresolvedWriters))
 }
 
-// keptRepairSites are the writes of a table with kept groups (migration 162). Each inserts under SyncContext, so its
+// keptRepairSites are the writes of a table with kept groups (migration 163). Each inserts under SyncContext, so its
 // repair read sees the insert, and repairs its keys after the insert.
 var keptRepairSites = map[string][]string{
 	"internal/providersync/github_prs_effects_clickhouse.go": {

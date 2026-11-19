@@ -13,11 +13,11 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/chmigrate"
 )
 
-const storedVersionKeptGroupsVersion = "162_stored_version_kept_groups.sql"
+const storedVersionKeptGroupsVersion = "163_stored_version_kept_groups.sql"
 
 var keptGroupObjects = []string{"git_pull_request_kept", "deployment_kept", "git_pull_request_kept_mv", "deployment_kept_mv"}
 
-// CHAOS-6014 C9: versions written before 162 (merges stopped, so the loser stays a physical row) feed the kept tables
+// CHAOS-6014 C9: versions written before 163 (merges stopped, so the loser stays a physical row) feed the kept tables
 // through the backfill, and the migration's last statements repair a NULL lead that a newer version carried; a second
 // upgrade writes nothing; the hand-run rollback drops the four objects and its version row, and up again restores them.
 func TestStoredVersionKeptGroupsBackfillRepairAndRollback(t *testing.T) {
@@ -77,14 +77,14 @@ func TestStoredVersionKeptGroupsBackfillRepairAndRollback(t *testing.T) {
 		return out
 	}
 	if got := present(); !reflect.DeepEqual(got, []uint64{0, 0, 0, 0}) {
-		t.Fatalf("before 162: objects %v, want none", got)
+		t.Fatalf("before 163: objects %v, want none", got)
 	}
 
 	if _, err := chmigrate.Upgrade(ctx, db, baseline, chain); err != nil {
 		t.Fatal(err)
 	}
 	if got := present(); !reflect.DeepEqual(got, []uint64{1, 1, 1, 1}) {
-		t.Fatalf("after 162: objects %v, want all four", got)
+		t.Fatalf("after 163: objects %v, want all four", got)
 	}
 	rows := readKeptGroupRows(t, ctx, conn)
 	want := keptGroupRows{
@@ -93,7 +93,7 @@ func TestStoredVersionKeptGroupsBackfillRepairAndRollback(t *testing.T) {
 		prRows:      3, deploymentRows: 3,
 	}
 	if rows != want {
-		t.Fatalf("after 162: %+v\nwant %+v (the backfill read the pre-162 loser, and the repair filled the NULL leads)", rows, want)
+		t.Fatalf("after 163: %+v\nwant %+v (the backfill read the pre-163 loser, and the repair filled the NULL leads)", rows, want)
 	}
 
 	// The migration can run again and writes nothing more.
@@ -101,13 +101,13 @@ func TestStoredVersionKeptGroupsBackfillRepairAndRollback(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := chmigrate.Upgrade(ctx, db, baseline, chain); err != nil {
-		t.Fatalf("second run of 162: %v", err)
+		t.Fatalf("second run of 163: %v", err)
 	}
 	if again := readKeptGroupRows(t, ctx, conn); again != want {
-		t.Fatalf("second run of 162: %+v, want %+v", again, want)
+		t.Fatalf("second run of 163: %+v, want %+v", again, want)
 	}
 
-	body, err := os.ReadFile("rollback/162_stored_version_kept_groups.down.sql")
+	body, err := os.ReadFile("rollback/163_stored_version_kept_groups.down.sql")
 	if err != nil {
 		t.Fatal(err)
 	}

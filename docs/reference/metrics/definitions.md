@@ -570,6 +570,8 @@ full cycle time: it is a real input, not an outlier to remove.
 
 `work_item_state_durations_daily` gives an item's last status span an end at its `completed_at` only when the item's status is terminal (`done` or `canceled`), or when its last known status change goes to a terminal status. A provider can reopen an item and keep its `completed_at`: that open item keeps accruing hours in its current status. When the reopen is not in the item's status changes, the span still ends at `completed_at`, and the item gets no hours in the terminal status after it.
 
+An item with no `completed_at` whose status or last recorded status change is terminal: its last span ends at that last status change. After the last recorded transition of an item whose status disagrees with it, no status time is counted: the time is unknown, so it counts neither in the terminal status nor in the item's current status. The hours of a day do not depend on when the day was computed.
+
 ## Blocked hours in `work_item_state_durations_daily`
 
 `work_item_state_durations_daily` holds, for each day, the hours that work

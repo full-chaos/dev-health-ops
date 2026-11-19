@@ -248,14 +248,16 @@ type workItemStateSegment struct {
 
 // segmentWorkItemStatuses ports _segment_statuses.
 //
-// End of the final segment is completed_at when the item has one and either
-// its status or its last known transition is terminal (done or canceled);
-// else computedAt. A provider can reopen an item and keep its completed_at:
-// that open item keeps accruing time in its current status. When the last
-// known transition is terminal, the reopen is not in the transitions, so the
-// segment still ends at completed_at and accrues no time in that terminal
-// status. There is no updated_at fallback tier (job_daily.py:1582 never
-// passed one).
+// When either the item's status or its last known transition is terminal
+// (done or canceled), the final segment ends at completed_at, or at the last
+// transition when completed_at is NULL; else at computedAt. A provider can
+// reopen an item and keep its completed_at: that open item keeps accruing time
+// in its current status. When the last known transition is terminal, the
+// reopen is not in the transitions, so the segment still ends at completed_at
+// and accrues no time in that terminal status. With a NULL completed_at the
+// time after the last transition is unknown and counts in no status: Python
+// ran it to computedAt, so its answer depended on the run time. There is no
+// updated_at fallback tier (job_daily.py:1582 never passed one).
 //
 // created_at/completedAt/computedAt must already be UTC (both loaders and
 // ComputeFamily guarantee this); transitions are sorted here by occurred_at,
@@ -271,9 +273,12 @@ func segmentWorkItemStatuses(
 	sort.SliceStable(ordered, func(i, j int) bool { return ordered[i].OccurredAt.Before(ordered[j].OccurredAt) })
 
 	endOfItem := computedAt
-	if completedAt != nil && (workitemmetrics.IsTerminalStatus(itemStatus) ||
-		workitemmetrics.IsTerminalStatus(ordered[len(ordered)-1].ToStatus)) {
-		endOfItem = *completedAt
+	last := ordered[len(ordered)-1]
+	if workitemmetrics.IsTerminalStatus(itemStatus) || workitemmetrics.IsTerminalStatus(last.ToStatus) {
+		endOfItem = last.OccurredAt
+		if completedAt != nil {
+			endOfItem = *completedAt
+		}
 	}
 
 	var segments []workItemStateSegment

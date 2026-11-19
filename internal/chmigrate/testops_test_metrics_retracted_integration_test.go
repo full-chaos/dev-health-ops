@@ -13,22 +13,22 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/chmigrate"
 )
 
-const retractedOrg = "org-160"
+const retractedOrg = "org-162"
 
-// retractedImageRead is the cases read of the build before 160 (internal/queryapi/testopswindow/testopswindow.go:132-151 at
+// retractedImageRead is the cases read of the build before 162 (internal/queryapi/testopswindow/testopswindow.go:132-151 at
 // origin/main e16b0441, casesStatement) with its bindings written in: the newest stored row of each repository day, summed.
 const retractedImageRead = `SELECT sum(passed_count), sum(failed_count), sum(total_cases), countIf(flake_cases IS NULL OR distinct_cases IS NULL)
 FROM (
     SELECT * FROM testops_test_metrics_daily
-    WHERE org_id = 'org-160' AND day >= '2026-08-10' AND day <= '2026-08-11'
+    WHERE org_id = 'org-162' AND day >= '2026-08-10' AND day <= '2026-08-11'
     ORDER BY computed_at DESC
     LIMIT 1 BY org_id, repo_id, day
 )`
 
-// The writer of the build before 160 names its columns and never names retracted.
+// The writer of the build before 162 names its columns and never names retracted.
 const retractedImageInsert = `INSERT INTO testops_test_metrics_daily (org_id, repo_id, day, total_cases, passed_count, failed_count, pass_rate,
   failure_rate, total_suites, flake_cases, distinct_cases, team_id, computed_at)
-VALUES ('org-160', toUUID('13928000-0000-4000-8000-0000000001b1'), '2026-08-11', 2, 2, 0, 1, 0, 1, 0, 2, 'team-1', '2026-08-13 10:00:00')`
+VALUES ('org-162', toUUID('13928000-0000-4000-8000-0000000001b1'), '2026-08-11', 2, 2, 0, 1, 0, 1, 0, 2, 'team-1', '2026-08-13 10:00:00')`
 
 func retractedColumn(ctx context.Context, t *testing.T, conn driver.Conn) string {
 	t.Helper()
@@ -47,10 +47,10 @@ WHERE database = currentDatabase() AND table = 'testops_test_metrics_daily' AND 
 	return column
 }
 
-// INVARIANT (CHAOS-13928): the rollback of 160 is "images back on a build without 160, then 160's down file". Up, down, up on a
-// real ClickHouse: the column is gone after the down file and its version row too; the read and the INSERT of the build before 160
-// work on the table in that shape (a marker row reads as a stored row of zeros, as the down file says); the upgrade applies 160 again.
-func TestRollback160UpDownUp(t *testing.T) {
+// INVARIANT (CHAOS-13928): the rollback of 162 is "images back on a build without 162, then 162's down file". Up, down, up on a
+// real ClickHouse: the column is gone after the down file and its version row too; the read and the INSERT of the build before 162
+// work on the table in that shape (a marker row reads as a stored row of zeros, as the down file says); the upgrade applies 162 again.
+func TestRollback162UpDownUp(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	scratch := scratchDatabase(t)
@@ -80,22 +80,22 @@ func TestRollback160UpDownUp(t *testing.T) {
 		}
 	}
 	exec(`INSERT INTO testops_test_metrics_daily (org_id, repo_id, day, total_cases, passed_count, failed_count, pass_rate, failure_rate,
-  total_suites, flake_cases, distinct_cases, team_id, computed_at) VALUES ('org-160', toUUID('13928000-0000-4000-8000-0000000001b1'), '2026-08-10', 4, 2, 2, 0.5, 0.5, 1, 1, 2, 'team-1', '2026-08-12 10:00:00')`)
+  total_suites, flake_cases, distinct_cases, team_id, computed_at) VALUES ('org-162', toUUID('13928000-0000-4000-8000-0000000001b1'), '2026-08-10', 4, 2, 2, 0.5, 0.5, 1, 1, 2, 'team-1', '2026-08-12 10:00:00')`)
 	exec(`INSERT INTO testops_test_metrics_daily (org_id, repo_id, day, team_id, computed_at, retracted)
-VALUES ('org-160', toUUID('13928000-0000-4000-8000-0000000001b1'), '2026-08-10', 'team-1', '2026-08-12 11:00:00', 1)`)
+VALUES ('org-162', toUUID('13928000-0000-4000-8000-0000000001b1'), '2026-08-10', 'team-1', '2026-08-12 11:00:00', 1)`)
 	versionRows := func() uint64 {
 		t.Helper()
 		var n uint64
-		if err := conn.QueryRow(ctx, "SELECT count() FROM schema_migrations WHERE version = ?", "160_testops_test_metrics_retracted.sql").Scan(&n); err != nil {
+		if err := conn.QueryRow(ctx, "SELECT count() FROM schema_migrations WHERE version = ?", "162_testops_test_metrics_retracted.sql").Scan(&n); err != nil {
 			t.Fatal(err)
 		}
 		return n
 	}
 	if versionRows() == 0 {
-		t.Fatal("at the head schema_migrations holds no 160")
+		t.Fatal("at the head schema_migrations holds no 162")
 	}
 
-	body, err := os.ReadFile("rollback/160_testops_test_metrics_retracted.down.sql")
+	body, err := os.ReadFile("rollback/162_testops_test_metrics_retracted.down.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,12 +106,12 @@ VALUES ('org-160', toUUID('13928000-0000-4000-8000-0000000001b1'), '2026-08-10',
 		t.Fatalf("after the down file the retracted column is still %q", got)
 	}
 	if versionRows() != 0 {
-		t.Fatal("after the down file schema_migrations still holds 160")
+		t.Fatal("after the down file schema_migrations still holds 162")
 	}
 
 	var passed, failed, total, withoutCounts uint64
 	if err := conn.QueryRow(ctx, retractedImageRead).Scan(&passed, &failed, &total, &withoutCounts); err != nil {
-		t.Fatalf("the read of the build before 160 fails on the rolled-back table: %v", err)
+		t.Fatalf("the read of the build before 162 fails on the rolled-back table: %v", err)
 	}
 	if total != 0 || passed != 0 || failed != 0 {
 		t.Fatalf("the older read gives passed %d failed %d total %d, want the marker row as a stored row of zeros (0, 0, 0)", passed, failed, total)
@@ -125,14 +125,14 @@ VALUES ('org-160', toUUID('13928000-0000-4000-8000-0000000001b1'), '2026-08-10',
 	}
 
 	result, err := chmigrate.Upgrade(ctx, db, baseline, chain)
-	if err != nil || len(result.Applied) != 1 || result.Applied[0] != "160_testops_test_metrics_retracted.sql" {
-		t.Fatalf("the upgrade after the rollback = %+v, %v; want 160 applied", result, err)
+	if err != nil || len(result.Applied) != 1 || result.Applied[0] != "162_testops_test_metrics_retracted.sql" {
+		t.Fatalf("the upgrade after the rollback = %+v, %v; want 162 applied", result, err)
 	}
 	if got := retractedColumn(ctx, t, conn); got != "UInt8 DEFAULT 0" {
 		t.Fatalf("after the upgrade again the retracted column is %q", got)
 	}
 	var live uint64
-	if err := conn.QueryRow(ctx, "SELECT countIf(retracted = 0) FROM testops_test_metrics_daily WHERE org_id = 'org-160'").Scan(&live); err != nil || live != 3 {
+	if err := conn.QueryRow(ctx, "SELECT countIf(retracted = 0) FROM testops_test_metrics_daily WHERE org_id = 'org-162'").Scan(&live); err != nil || live != 3 {
 		t.Fatalf("after the upgrade again %d rows read retracted = 0 (err %v), want all 3 stored rows (the marker row is a stored zero row now)", live, err)
 	}
 }

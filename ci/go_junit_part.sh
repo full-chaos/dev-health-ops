@@ -15,4 +15,7 @@ for dir in "$@"; do
     mv -- "${xml}" "${dest}/${xml##*/}"
   done
 done
+if ! find "${dest}" -maxdepth 1 -name '*.xml' | grep -q .; then
+  echo "::warning::go_junit_part: no JUnit part was written for this leg (no go test -json file, or the converter failed); the merged report will lack it"
+fi
 exit 0

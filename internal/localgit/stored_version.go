@@ -127,7 +127,12 @@ func (w Writer) writeContracted(ctx context.Context, contract storedversion.Cont
 	if _, err := contract.Apply(ctx, w.Conn, w.effectiveOrg(), insert, rows); err != nil {
 		return err
 	}
-	batch, err := w.Conn.PrepareBatch(ctx, insert)
+	kept, repairs := localKept[contract.Table]
+	insertCtx := ctx
+	if repairs {
+		insertCtx = storedversion.SyncContext(ctx)
+	}
+	batch, err := w.Conn.PrepareBatch(insertCtx, insert)
 	if err != nil {
 		return fmt.Errorf("prepare %s: %w", contract.Table, err)
 	}
@@ -137,8 +142,21 @@ func (w Writer) writeContracted(ctx context.Context, contract storedversion.Cont
 			return fmt.Errorf("append %s: %w", contract.Table, err)
 		}
 	}
-	return batch.Send()
+	if err := batch.Send(); err != nil {
+		return err
+	}
+	if !repairs {
+		return nil
+	}
+	keys, err := kept.BatchKeys(insert, values)
+	if err != nil {
+		return err
+	}
+	return kept.Repair(ctx, w.Conn, contract.Writer, w.effectiveOrg(), keys, nil)
 }
+
+// localKept names the tables with kept groups: their write repairs its keys after the insert.
+var localKept = map[string]storedversion.Kept{"git_pull_requests": storedversion.PullRequestKept}
 
 func (w Writer) effectiveOrg() string {
 	if w.OrgID != "" {

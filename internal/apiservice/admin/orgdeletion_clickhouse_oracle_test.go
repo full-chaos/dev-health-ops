@@ -213,4 +213,8 @@ var clickHouseOrgTablesAfterThePythonFreeze = map[string]string{
 	// The input evidence of each derived repo ownership claim (CHAOS-9349). Keyed by org_id and written by the repo
 	// ownership derivation, so an organization's rows must go when the organization is deleted.
 	"team_repo_ownership_evidence": "168_team_repo_ownership_evidence.sql",
+	// The kept groups of git_pull_requests and deployments (CHAOS-6014). Keyed by org_id and fed by a view from each base
+	// table, so an organization's rows must go when the organization is deleted.
+	"git_pull_request_kept": "166_stored_version_kept_groups.sql",
+	"deployment_kept":       "166_stored_version_kept_groups.sql",
 }

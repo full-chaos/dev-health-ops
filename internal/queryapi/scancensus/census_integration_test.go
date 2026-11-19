@@ -558,6 +558,19 @@ const nullableIntoPlainSites = `
 //
 //	ExecuteOrgTimeseries 30a7cdd2fa01 -> 1e3ee3af097b
 //
+// CHAOS-13928: five pins re-pinned by hand after reading each moved statement, digests copied from the local TestScanTypeCensus
+// failure output (not computed). A testops_test_metrics_daily row that retires a day carries the new UInt8 column retracted
+// (not Nullable); the readers add its liverow predicate to the WHERE of the statement and select no new column. flakyStatement
+// (loadClusters, loadDocDrift: digest only; loadFlaky: same scan targets, flake_share still Nullable scanned into **float64) and
+// dedupFromMeasureSource (ExecuteOrgTimeseries, ExecuteTimeseries: SELECT * wrapped in a WHERE; scan targets and types
+// unchanged) change only a filter:
+//
+//	loadClusters 8c4f62d6f207 -> f62124ab26af
+//	loadDocDrift ed7df227e4af -> ce3024a41da9
+//	loadFlaky 28265e8c788f -> 37c05084ba13
+//	ExecuteOrgTimeseries 1e3ee3af097b -> 6637e944ff79
+//	ExecuteTimeseries f2eec06b6811 -> 8842c256cd1a
+//
 // liverow gained a third rule form for a table with a Retracted column in its own writer (cicd_metrics_daily,
 // migration 159): Predicate and NewestPredicate have one more return statement, and the census evaluates every return
 // of a helper a site calls, so six sites that call liverow got more evaluated statements. Re-pinned by hand,
@@ -573,6 +586,12 @@ const nullableIntoPlainSites = `
 //	operatingreview.go fetchWorkItems a3d0e349ea87 -> 64839a153860
 //	search.go BuildSearchResponse 168278cbea0a -> afd45e38cfbd
 //
+// Both together (the retired-day predicate of testops_test_metrics_daily and the third liverow rule form) move one more
+// evaluated statement of flakyStatement, copied from the local TestScanTypeCensus failure output (not computed); scan
+// targets unchanged:
+//
+//	loadFlaky 37c05084ba13 -> 32950ea2e0be
+//
 // testopsrisk.go readDaily is pinned by hand (CHAOS-14009), digest copied from the local TestScanTypeCensus failure output
 // (not computed): dailyQuery now applies the live-row rule (liverow.NewestPredicate in the release and stability HAVING,
 // liverow.Predicate in the FINAL drag WHERE), and the census evaluates every return of those helpers, so the variants that
@@ -587,10 +606,10 @@ const nullableIntoPlainSites = `
 //	ExecuteTimeseries f2eec06b6811 -> 8842c256cd1a
 const unverifiedSites = `
 internal/queryapi/aggflame/clickhouse.go|fetchCycleBreakdown|*string,*float64,*uint64|a0d30b3aefa3|not-describable
-internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*string,*uint64,*[]string|8c4f62d6f207|not-describable
-internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*uint64,*[]string|8c4f62d6f207|not-describable
-internal/queryapi/aianalytics/ai_opportunities.go|loadDocDrift|*string,*uint64,*uint64|ed7df227e4af|not-describable
-internal/queryapi/aianalytics/ai_opportunities.go|loadFlaky|*string,*uint64,**float64|28265e8c788f|not-describable
+internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*string,*uint64,*[]string|f62124ab26af|not-describable
+internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*uint64,*[]string|f62124ab26af|not-describable
+internal/queryapi/aianalytics/ai_opportunities.go|loadDocDrift|*string,*uint64,*uint64|ce3024a41da9|not-describable
+internal/queryapi/aianalytics/ai_opportunities.go|loadFlaky|*string,*uint64,**float64|32950ea2e0be|not-describable
 internal/queryapi/aianalytics/flow_opportunities.go|loadRepoFlowRows|*string,*uint64,**float64,**float64,**float64,**float64|39a7e63ddf0e|not-describable
 internal/queryapi/aianalytics/flow_opportunities.go|loadTeamFlowRows|*string,*uint64,**float64,**float64,**float64|2653b84e5b21|not-describable
 internal/queryapi/aianalytics/loaders.go|loadLabels|*string,*string|ffbc61d0410c|spliced-select-list

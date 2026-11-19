@@ -2,9 +2,7 @@ package providersync
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"strconv"
 	"testing"
 	"time"
@@ -27,20 +25,13 @@ type gitHubProjectV2CompositionOracleRow struct {
 	Transitions []string `json:"transitions"`
 }
 
-type gitHubProjectV2PaginationOracleRow struct {
-	ItemIDs      []string `json:"item_ids"`
-	ChangeCounts []int    `json:"change_counts"`
-	OuterAfter   []string `json:"outer_after"`
-	ChangeAfter  []string `json:"change_after"`
-}
-
 func TestGitHubProjectV2WorkItemMatchesFrozenPythonProductionRow(t *testing.T) {
 	input := gitHubProjectV2OracleInput()
 	compareRowsAgainstPythonOracle(
 		t, "github/work-items-project-v2/row",
 		[]oracleCase{{ID: "issue_with_project_dimensions", Input: input}},
 		func(t *testing.T, input map[string]any) githubWorkItemRow {
-			row, _, emitted := buildGitHubProjectV2OracleRows(t, input)
+			row, emitted := buildGitHubProjectV2OracleRows(t, input)
 			if !emitted {
 				t.Fatal("Go normalizer skipped issue")
 			}
@@ -51,7 +42,7 @@ func TestGitHubProjectV2WorkItemMatchesFrozenPythonProductionRow(t *testing.T) {
 
 func TestGitHubProjectV2DraftIssueMatchesFrozenPythonProductionRow(t *testing.T) {
 	input := gitHubProjectV2DraftOracleInput()
-	row, _, emitted := buildGitHubProjectV2OracleRows(t, input)
+	row, emitted := buildGitHubProjectV2OracleRows(t, input)
 	if !emitted || row.WorkItemID != "ghproj:PVTI_DRAFT_1" {
 		t.Fatalf("Go draft issue emitted=%t work_item_id=%q", emitted, row.WorkItemID)
 	}
@@ -59,27 +50,11 @@ func TestGitHubProjectV2DraftIssueMatchesFrozenPythonProductionRow(t *testing.T)
 		t, "github/work-items-project-v2/row",
 		[]oracleCase{{ID: "draft_issue_with_project_dimensions", Input: input}},
 		func(t *testing.T, input map[string]any) githubWorkItemRow {
-			row, _, emitted := buildGitHubProjectV2OracleRows(t, input)
+			row, emitted := buildGitHubProjectV2OracleRows(t, input)
 			if !emitted {
 				t.Fatal("Go normalizer skipped draft issue")
 			}
 			return row
-		}, githubWorkItemWriteStampGoOnly,
-	)
-}
-
-func TestGitHubProjectV2TransitionMatchesFrozenPythonProductionRow(t *testing.T) {
-	input := gitHubProjectV2OracleInput()
-	input["transition_index"] = 1
-	compareRowsAgainstPythonOracle(
-		t, "github/work-items-project-v2/transition",
-		[]oracleCase{{ID: "complete_status_history", Input: input}},
-		func(t *testing.T, input map[string]any) githubWorkItemTransitionRow {
-			_, transitions, emitted := buildGitHubProjectV2OracleRows(t, input)
-			if !emitted || len(transitions) < 2 {
-				t.Fatalf("emitted=%t transitions=%+v", emitted, transitions)
-			}
-			return transitions[input["transition_index"].(int)]
 		}, githubWorkItemWriteStampGoOnly,
 	)
 }
@@ -98,8 +73,9 @@ func TestGitHubProjectV2TransitionMatchesFrozenPythonProductionRow(t *testing.T)
 //
 // The pin is not deleted, and that matters. `transition_count` stays compared,
 // so the other half of the decision -- that a PR board item still contributes
-// no status transitions, its `changes` history being CHAOS-4221's problem --
-// remains pinned to the recorded Python answer. Deleting the pair would have thrown that away
+// no status transitions -- remains pinned to the recorded Python answer. Since
+// CHAOS-14195 the board query reads no transitions for any item (GitHub's
+// ProjectV2Item has no `changes`), so Go's count is 0 by construction. Deleting the pair would have thrown that away
 // to record one divergence.
 //
 // The case input gained a repository and a createdAt so the divergence is real
@@ -118,9 +94,9 @@ func TestGitHubProjectV2PullRequestEmissionDivergesFromFrozenPythonDecision(t *t
 			"fieldValues": map[string]any{"nodes": []any{}}, "changes": map[string]any{"nodes": []any{}},
 		},
 	}
-	membership, transitions, emitted := buildGitHubProjectV2OracleDecision(t, withOracleOrg(input))
-	if !emitted || len(transitions) != 0 {
-		t.Fatalf("Go Projects v2 PR decision emitted=%t transitions=%d", emitted, len(transitions))
+	membership, emitted := buildGitHubProjectV2OracleDecision(t, withOracleOrg(input))
+	if !emitted {
+		t.Fatalf("Go Projects v2 PR decision emitted=%t", emitted)
 	}
 	// The divergence is only worth recording if what Go emits is joinable. A
 	// row that emitted but keyed to nothing would be a worse outcome than the
@@ -131,8 +107,8 @@ func TestGitHubProjectV2PullRequestEmissionDivergesFromFrozenPythonDecision(t *t
 	compareRowsAgainstPythonOracle(
 		t, "github/work-items-project-v2/pr-skip", []oracleCase{{ID: "pull_request", Input: input}},
 		func(t *testing.T, input map[string]any) gitHubProjectV2DecisionOracleRow {
-			_, transitions, emitted := buildGitHubProjectV2OracleDecision(t, withOracleOrg(input))
-			return gitHubProjectV2DecisionOracleRow{Emitted: emitted, TransitionCount: len(transitions)}
+			_, emitted := buildGitHubProjectV2OracleDecision(t, withOracleOrg(input))
+			return gitHubProjectV2DecisionOracleRow{Emitted: emitted, TransitionCount: 0}
 		}, nil,
 	)
 }
@@ -145,7 +121,7 @@ func TestGitHubProjectV2PullRequestEmissionDivergesFromFrozenPythonDecision(t *t
 // written moments later, which is the shape that hid this defect.
 func buildGitHubProjectV2OracleDecision(
 	t *testing.T, input map[string]any,
-) (projectmembership.Row, []githubWorkItemTransitionRow, bool) {
+) (projectmembership.Row, bool) {
 	t.Helper()
 	raw, err := json.Marshal(input["item_node"])
 	if err != nil {
@@ -162,11 +138,11 @@ func buildGitHubProjectV2OracleDecision(
 	normalizedAt := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
 	scopeID := input["project_scope_id"].(string)
 	membership, hasMembership := githubProjectV2MembershipRow(claim, item, scopeID, normalizedAt)
-	_, transitions, emittedWorkItem, err := normalizeGitHubProjectV2Item(claim, item, scopeID, nil, normalizedAt)
+	_, emittedWorkItem, err := normalizeGitHubProjectV2Item(claim, item, scopeID, nil, normalizedAt)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return membership, transitions, hasMembership || emittedWorkItem
+	return membership, hasMembership || emittedWorkItem
 }
 
 func withOracleOrg(input map[string]any) map[string]any {
@@ -228,42 +204,6 @@ func TestMergeGitHubProjectV2RowsMatchesFrozenPythonComposition(t *testing.T) {
 	)
 }
 
-func TestGitHubProjectV2PaginationMatchesFrozenPythonProducer(t *testing.T) {
-	compareRowsAgainstPythonOracle(
-		t, "github/work-items-project-v2/pagination", []oracleCase{{ID: "outer_and_nested", Input: map[string]any{}}},
-		func(t *testing.T, _ map[string]any) gitHubProjectV2PaginationOracleRow {
-			doer := &gitHubProjectV2Doer{t: t, replies: []string{
-				`{"data":{"organization":{"projectV2":{"items":{"nodes":[{"id":"PVTI_1","content":{"__typename":"DraftIssue","title":"one"},"fieldValues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},"changes":{"nodes":[{"createdAt":"2026-08-01T08:00:00Z"}],"pageInfo":{"hasNextPage":true,"endCursor":"change-1"}}}],"pageInfo":{"hasNextPage":true,"endCursor":"item-1"}}}}}}`,
-				`{"data":{"node":{"changes":{"nodes":[{"createdAt":"2026-08-02T08:00:00Z"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}`,
-				`{"data":{"organization":{"projectV2":{"items":{"nodes":[{"id":"PVTI_2","content":{"__typename":"DraftIssue","title":"two"},"fieldValues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},"changes":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`,
-			}}
-			evidence := FetchEvidence{}
-			items, err := fetchGitHubProjectV2Target(context.Background(), githubProjectV2TestClient(t, fakehttp.Client(doer)), GitHubProjectV2Target{OrgLogin: "acme", ProjectNumber: 3}, &evidence)
-			if err != nil {
-				t.Fatal(err)
-			}
-			row := gitHubProjectV2PaginationOracleRow{}
-			for _, item := range items.Items {
-				row.ItemIDs = append(row.ItemIDs, item.ID)
-				row.ChangeCounts = append(row.ChangeCounts, len(item.Changes.Nodes))
-			}
-			for _, body := range doer.bodies {
-				variables := body["variables"].(map[string]any)
-				if itemID, nested := variables["itemId"]; nested {
-					row.ChangeAfter = append(row.ChangeAfter, itemID.(string)+":"+variables["after"].(string))
-					continue
-				}
-				after := "<none>"
-				if variables["after"] != nil {
-					after = variables["after"].(string)
-				}
-				row.OuterAfter = append(row.OuterAfter, after)
-			}
-			return row
-		}, nil,
-	)
-}
-
 func gitHubProjectV2OracleInput() map[string]any {
 	return map[string]any{
 		"org_id": "org-acme", "project_scope_id": "ghprojv2:acme#3",
@@ -312,7 +252,7 @@ func gitHubProjectV2DraftOracleInput() map[string]any {
 	}
 }
 
-func buildGitHubProjectV2OracleRows(t *testing.T, input map[string]any) (githubWorkItemRow, []githubWorkItemTransitionRow, bool) {
+func buildGitHubProjectV2OracleRows(t *testing.T, input map[string]any) (githubWorkItemRow, bool) {
 	t.Helper()
 	raw, err := json.Marshal(input["item_node"])
 	if err != nil {
@@ -326,17 +266,17 @@ func buildGitHubProjectV2OracleRows(t *testing.T, input map[string]any) (githubW
 	}
 	claim := githubWorkItemOracleClaim()
 	claim.OrgID = input["org_id"].(string)
-	row, transitions, emitted, err := normalizeGitHubProjectV2Item(
+	row, emitted, err := normalizeGitHubProjectV2Item(
 		claim, item, input["project_scope_id"].(string), nil,
 		time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return row, transitions, emitted
+	return row, emitted
 }
 
-func buildGitHubProjectV2OracleRowsWithDefaults(t *testing.T, input map[string]any) (githubWorkItemRow, []githubWorkItemTransitionRow, bool) {
+func buildGitHubProjectV2OracleRowsWithDefaults(t *testing.T, input map[string]any) (githubWorkItemRow, bool) {
 	t.Helper()
 	copy := make(map[string]any, len(input)+1)
 	for key, value := range input {

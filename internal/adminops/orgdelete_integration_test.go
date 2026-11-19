@@ -147,6 +147,8 @@ var orgDeleteTablesAfterThePythonFreeze = map[string]string{
 	"project_team_ownership_groups_current": "147_project_team_ownership_groups.sql",      // CHAOS-6347
 	"testops_run_report_completeness":       "153_testops_run_report_completeness.sql",    // CHAOS-13826
 	"team_repo_ownership_evidence":          "168_team_repo_ownership_evidence.sql",       // CHAOS-9349
+	"git_pull_request_kept":                 "166_stored_version_kept_groups.sql",         // CHAOS-6014
+	"deployment_kept":                       "166_stored_version_kept_groups.sql",         // CHAOS-6014
 }
 
 // orgDeletePostgresTablesAfterThePythonFreeze names each PostgreSQL org-scoped table column a migration added

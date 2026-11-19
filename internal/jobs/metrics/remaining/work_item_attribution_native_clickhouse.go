@@ -258,20 +258,23 @@ func (executor *WorkItemAttributionExecutor) ComputeOrg(
 		}
 	}
 
-	// CHAOS-5078 codex r1 F2 fix: exclude any item the native daily
-	// `work_item_attribution` family has ALREADY written TODAY. Without
-	// this, an ownership change detected the same day daily already ran
+	// CHAOS-5078 codex r1 F2 fix: exclude any item that already has a
+	// work_item_team_attributions row computed TODAY (UTC), from any writer
+	// (daily, backstop or sync). Without this, an ownership change detected
+	// the same day daily already ran
 	// would make this backstop write a SECOND, newer row for the same
 	// (org, repo, work_item) -- work_item_team_attributions'
 	// ReplacingMergeTree(computed_at) does not collapse the two (source/
 	// team_id differ, so the ORDER BY key differs), so both stay resident
 	// and LoadWorkItemPrimaryTeamAttributions' (work_item_id,
 	// max(computed_at)) fence picks whichever wrote LAST -- not necessarily
-	// the row correct for the day being read. Deferring is safe: the
-	// ownership change is picked up on THIS backstop's next run (the
-	// watermark this run advances still reflects that the change was
-	// observed, just not written today), or overwritten by tomorrow's daily
-	// run regardless.
+	// the row correct for the day being read.
+	//
+	// This backstop's next run does NOT pick a deferred item up: the run
+	// marker published below advances over it, so the next run sees no
+	// change for its scope. The next daily run whose window holds the item,
+	// or the next sync of the item, rewrites it (ticket 14200 (filed
+	// separately)).
 	coveredToday, err := executor.alreadyCoveredToday(ctx, orgID, now, affectedIDs)
 	if err != nil {
 		return outcome, err
@@ -1494,8 +1497,7 @@ func LoadWorkItemDerivationFacts(
 
 // alreadyCoveredToday returns the subset of ids that already have a
 // work_item_team_attributions row computed on the SAME calendar day as now
-// (UTC) -- items the native daily `work_item_attribution` family has already
-// written for today. See the CHAOS-5078 codex r1 F2 fix comment at this
+// (UTC), from any writer. See the CHAOS-5078 codex r1 F2 fix comment at this
 // function's call site in ComputeOrg for why this exclusion exists.
 func (executor *WorkItemAttributionExecutor) alreadyCoveredToday(
 	ctx context.Context, orgID string, now time.Time, ids map[string]struct{},

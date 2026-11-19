@@ -122,6 +122,10 @@ VALUES ($1, 'venue-chdel-super@example.com', true, true, true, 0, now(), now())`
 		"testops_run_report_completeness": `INSERT INTO testops_run_report_completeness (org_id, repo_id, run_id, run_attempt, provider, complete, reasons, reports_expected, reports_admitted, last_synced, verdict_version) VALUES (?, generateUUIDv4(), 'run-1', 1, 'github_actions', 1, [], 1, 1, now64(3), 1)`,
 		// The input evidence of derived repo ownership (CHAOS-9349, migration 168).
 		"team_repo_ownership_evidence": `INSERT INTO team_repo_ownership_evidence (org_id, provider, repo_full_name, team_id, input, input_key, seen_at, is_deleted) VALUES (?, 'github', 'acme/repo', 'team-a', 'work_item', '["","jira:A-1"]', now64(3), 0)`,
+		// The kept groups (CHAOS-6014, migration 166) are fed only by their view: the row goes into the base table, and the
+		// view writes the one state row counted here.
+		"git_pull_request_kept": `INSERT INTO git_pull_requests (repo_id, number, created_at, merged_at, last_synced, org_id) VALUES (generateUUIDv4(), 1, now64(3), now64(3), now64(3), ?)`,
+		"deployment_kept":       `INSERT INTO deployments (repo_id, deployment_id, merged_at, last_synced, org_id) VALUES (generateUUIDv4(), 'deployment-1', now64(3), now64(3), ?)`,
 	}
 	for _, org := range []uuid.UUID{targetOrgID, controlOrgID} {
 		for table, insert := range shadowTables {

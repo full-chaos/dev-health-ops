@@ -11,6 +11,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -254,6 +255,7 @@ WHERE id = $1`, firstUnitID); err != nil {
 	if err := conn.Exec(ctx, gitPullRequestsDDL); err != nil {
 		t.Fatal(err)
 	}
+	chschema.CreateChainObjects(ctx, t, conn, keptGroupsMigration, "git_pull_request_kept", "git_pull_request_kept_mv")
 	if err := conn.Exec(ctx, gitPullRequestReviewsDDL); err != nil {
 		t.Fatal(err)
 	}

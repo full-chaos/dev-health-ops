@@ -24,8 +24,8 @@ const (
 // deploymentsSource holds the samples of the deploy writer (internal/jobs/metrics/daily/deploy_native_clickhouse.go and
 // numerical.ComputeDeployMetrics) stored with its newest row. Raw rule of a repository-day without stored samples: a
 // deployment counts on the UTC day of deployed_at, a cancelled one is no deployment, and its sample is finished_at -
-// started_at in hours when both are set and it is not negative. The raw rows are read without FINAL, as the writer reads
-// them, so a version not yet merged away is a sample of both.
+// started_at in hours when both are set and it is not negative. The raw rows are read without FINAL: the writer now
+// reads FINAL, but this arm stands only for days written before it did, so a version not yet merged away is a sample of both.
 var deploymentsSource = `(
     SELECT org_id, repo_id, day, ` + deliveryHoursSample + `
     FROM (
@@ -50,8 +50,8 @@ var deploymentsSource = `(
 
 // pullRequestSizesSource holds the size samples of the repo_user_commit writer (repouser.Compute) stored with its newest
 // row. Raw rule of a repository-day without stored samples: a pull request counts on the UTC day it merged, its size is
-// its additions plus its deletions, and a size of 0 is no sample. The raw rows are read without FINAL, as the writer
-// reads them.
+// its additions plus its deletions, and a size of 0 is no sample. The raw rows are read without FINAL: the writer now
+// reads FINAL, but this arm stands only for days written before it did.
 var pullRequestSizesSource = `(
     SELECT org_id, repo_id, day, ` + deliveryLOCSample + `
     FROM (

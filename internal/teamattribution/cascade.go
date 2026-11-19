@@ -173,6 +173,11 @@ type GithubWorkItemDerivationRepoFact struct {
 	// Unjoinable marks a name-keyed GitLab grant whose path two projects have
 	// used: it still counts as the team's ownership but joins no item by name.
 	Unjoinable bool
+	// LinkedRepoID is, for a name-keyed GitHub grant (repo_id NULL), the id of
+	// the one repos row of the same organization whose name is the grant's
+	// name (ResolveGitHubRepoNameFacts). An issue's linked pull request names
+	// its repository by id, so this is the id the grant reaches the issue by.
+	LinkedRepoID string
 }
 
 type GithubWorkItemDerivationMemberFact struct {
@@ -290,6 +295,9 @@ type GithubWorkItemDerivationContext struct {
 	projectByKey    map[string][]GithubWorkItemDerivationCandidate
 	repoByID        map[string][]GithubWorkItemDerivationCandidate
 	repoByName      map[string][]GithubWorkItemDerivationCandidate
+	// repoByLinkedID: repo id -> the candidates of the name-keyed grants that
+	// name it (LinkedRepoID); read by an issue's linked pull requests only.
+	repoByLinkedID map[string][]GithubWorkItemDerivationCandidate
 	// repoProvidersByID: repo id -> the providers of its ownership facts, so an
 	// item of another provider (an issue) reaches repoByID by the id alone.
 	repoProvidersByID map[string][]string
@@ -444,6 +452,7 @@ func NewGitHubWorkItemDerivationContext(
 		projectByKey:          map[string][]GithubWorkItemDerivationCandidate{},
 		repoByID:              map[string][]GithubWorkItemDerivationCandidate{},
 		repoByName:            map[string][]GithubWorkItemDerivationCandidate{},
+		repoByLinkedID:        map[string][]GithubWorkItemDerivationCandidate{},
 		repoProvidersByID:     map[string][]string{},
 		memberByID:            map[string][]GithubWorkItemDerivationCandidate{},
 		memberByUntypedFacet:  map[string][]GithubWorkItemDerivationCandidate{},
@@ -538,15 +547,22 @@ func NewGitHubWorkItemDerivationContext(
 			fmt.Sprintf("repo_ownership=%s", GithubWorkItemDerivationFirstNonEmpty(GithubWorkItemDerivationStringValue(fact.RepoID), fact.RepoFullName)),
 			fact.IsPrimary, fact.Specificity, fact.Priority, fact.UpdatedAt,
 		)
+		linkedID := ""
 		if fact.RepoID != nil && strings.TrimSpace(*fact.RepoID) != "" {
 			AppendDerivationCandidate(result.repoByID, AttributionMapKey(fact.Provider, *fact.RepoID), candidate)
-			repoID, provider := strings.TrimSpace(*fact.RepoID), strings.TrimSpace(fact.Provider)
+			linkedID = strings.TrimSpace(*fact.RepoID)
+		} else if strings.TrimSpace(fact.LinkedRepoID) != "" {
+			AppendDerivationCandidate(result.repoByLinkedID, AttributionMapKey(fact.Provider, fact.LinkedRepoID), candidate)
+			linkedID = strings.TrimSpace(fact.LinkedRepoID)
+		}
+		if linkedID != "" {
+			provider := strings.TrimSpace(fact.Provider)
 			known := false
-			for _, existing := range result.repoProvidersByID[repoID] {
+			for _, existing := range result.repoProvidersByID[linkedID] {
 				known = known || existing == provider
 			}
 			if !known {
-				result.repoProvidersByID[repoID] = append(result.repoProvidersByID[repoID], provider)
+				result.repoProvidersByID[linkedID] = append(result.repoProvidersByID[linkedID], provider)
 			}
 		}
 		if nameKey := GithubWorkItemDerivationFirstNonEmpty(fact.NameKey, fact.RepoFullName); nameKey != "" && !fact.Unjoinable {
@@ -657,7 +673,7 @@ func NewGitHubWorkItemDerivationContext(
 	// A fact of one provider names the team of that provider (the map key
 	// carries it); bind each candidate now, so nothing reads its id alone.
 	for _, byKey := range []map[string][]GithubWorkItemDerivationCandidate{
-		result.projectByID, result.projectByKey, result.repoByID, result.repoByName,
+		result.projectByID, result.projectByKey, result.repoByID, result.repoByName, result.repoByLinkedID,
 		result.memberByID, result.providerMemberByID,
 	} {
 		for key, candidates := range byKey {
@@ -1317,7 +1333,8 @@ func (derived GithubWorkItemDerivationContext) linkedPullRequestRepoCandidates(
 	for _, link := range BestTierLinkedPullRequests(derived.LinkedPullRequests[subject.WorkItemID]) {
 		var facts []GithubWorkItemDerivationCandidate
 		for _, provider := range derived.repoProvidersByID[link.RepoID] {
-			for _, candidate := range derived.repoByID[AttributionMapKey(provider, link.RepoID)] {
+			key := AttributionMapKey(provider, link.RepoID)
+			for _, candidate := range append(append([]GithubWorkItemDerivationCandidate(nil), derived.repoByID[key]...), derived.repoByLinkedID[key]...) {
 				if GithubWorkItemDerivationStringValue(candidate.TeamID) == "" || derived.candidateNamesInactiveTeam(candidate) {
 					continue
 				}
@@ -2362,7 +2379,7 @@ func (source ClickHouseFactSource) LoadRepos(
 	if source.OnLegacyGitLabOwnership != nil && remapped+ambiguous > 0 {
 		source.OnLegacyGitLabOwnership(ctx, remapped, ambiguous)
 	}
-	return result, nil
+	return source.resolveGitHubRepoNameFacts(ctx, orgID, result)
 }
 
 // GithubWorkItemDerivationAdminIdentity is one row of the ClickHouse

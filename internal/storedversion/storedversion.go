@@ -24,10 +24,13 @@
 //	   every column it writes.
 //
 // The read and the insert are two statements with no lock between them. A
-// second writer that inserts the same key inside that window loses its value
-// when this writer's version has the newer version column: this version
-// carries what the read saw. A failed read fails Apply, so the caller writes
-// nothing instead of blanks over established values.
+// second writer that inserts the same key after the read loses its value when
+// this writer's version has the newer version column: this version carries
+// what the read saw. For the kept groups of git_pull_requests and deployments
+// (Kept), each writer repairs its keys after its insert: a NULL lead in FINAL
+// over a group a version stated is filled from the kept table. A failed read
+// fails Apply, so the caller writes nothing instead of blanks over established
+// values.
 package storedversion
 
 import (

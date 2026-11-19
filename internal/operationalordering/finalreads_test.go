@@ -61,6 +61,8 @@ var classifiedDynamicFinalReads = map[string]struct {
 		"lineageSource reads the team-keyed daily rollups of the lineage registry that have a live-row rule (work_item_metrics_daily, team_metrics_daily); no operational table"},
 	"orgactivity/chread/chread.go": {1,
 		"Statement reads the team-keyed daily rollups among its four fixed metric tables (team_metrics_daily, work_item_metrics_daily); no operational table"},
+	"storedversion/repair.go": {1,
+		"the kept-group repair reads FINAL of git_pull_requests or deployments (storedversion.Kept.Base), neither an operational table"},
 	"storedversion/storedversion.go": {1,
 		"Apply reads the tables of the stored-version spec set; the operational writers are explicitly out of that set (storedversion/writers_test.go outOfScopeWriters)"},
 }

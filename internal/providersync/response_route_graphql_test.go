@@ -25,9 +25,6 @@ func TestGraphQLErrorsArraysInA2xxCarryRouteAndKeepSentinel(t *testing.T) {
 		"github project v2 items": {"github", graphQLErrorsBody, providerfoundation.ErrGraphQLResponse, func(c *providerfoundation.HTTPClient) error {
 			return fetchGitHubProjectV2GraphQL(ctx, c, "query", map[string]any{}, &gitHubProjectV2ItemsEnvelope{}, &FetchEvidence{})
 		}},
-		"github project v2 changes": {"github", graphQLErrorsBody, providerfoundation.ErrGraphQLResponse, func(c *providerfoundation.HTTPClient) error {
-			return fetchGitHubProjectV2GraphQL(ctx, c, "query", map[string]any{}, &gitHubProjectV2ChangesEnvelope{}, &FetchEvidence{})
-		}},
 		"github project v2 field values": {"github", graphQLErrorsBody, providerfoundation.ErrGraphQLResponse, func(c *providerfoundation.HTTPClient) error {
 			return fetchGitHubProjectV2GraphQL(ctx, c, "query", map[string]any{}, &gitHubProjectV2FieldValuesEnvelope{}, &FetchEvidence{})
 		}},

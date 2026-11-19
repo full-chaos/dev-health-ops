@@ -156,7 +156,8 @@ type productClickHouse interface {
 	// implementation) already satisfies it.
 	Query(context.Context, string, ...any) (driver.Rows, error)
 	// Exec runs the team.v1 write: one INSERT..SELECT that keeps the stored
-	// provider identity and admin roster (teamprovider.Insert).
+	// provider identity and admin roster (teamprovider.Insert), and the
+	// pull_request.v1 repair of its kept groups (storedversion.Kept.Repair).
 	Exec(context.Context, string, ...any) error
 }
 

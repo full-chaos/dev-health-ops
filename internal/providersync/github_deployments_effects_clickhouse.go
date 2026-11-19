@@ -7,6 +7,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	"github.com/full-chaos/dev-health-ops/internal/storedversion"
 )
 
 type GitHubDeploymentsClickHouseEffects struct {
@@ -82,20 +83,25 @@ func (sink deploymentsClickHouseEffects) WriteEffect(ctx context.Context, claim 
 		slog.Warn("providersync.deployment.carry_forward_guard_read_failed", "org_id", claim.OrgID, "provider", claim.Provider, "unit_id", claim.ID, "phase", "write", "cause", err.Error())
 		return err
 	}
-	batch, err := sink.Conn.PrepareBatch(ctx, deploymentsInsert)
+	batch, err := sink.Conn.PrepareBatch(storedversion.SyncContext(ctx), deploymentsInsert)
 	if err != nil {
 		return err
 	}
 	defer batch.Abort()
+	keys := make([][]any, 0, len(rows))
 	for _, row := range rows {
 		if err := batch.Append(row.RepoID, row.DeploymentID, row.Status, row.Environment, row.StartedAt, row.FinishedAt, row.DeployedAt, row.MergedAt, nullableUInt32(row.PullRequestNumber), row.PullRequestTier, row.ReleaseRef, row.ReleaseRefConfidence, row.OrgID, row.LastSynced); err != nil {
 			return err
 		}
+		keys = append(keys, []any{row.RepoID, row.DeploymentID})
 	}
 	if err := sink.Lease.Assert(ctx); err != nil {
 		return err
 	}
-	return batch.Send()
+	if err := batch.Send(); err != nil {
+		return err
+	}
+	return storedversion.DeploymentKept.Repair(ctx, sink.Conn, deploymentsContract.Writer, claim.OrgID, keys, sink.Lease.Assert)
 }
 
 func (sink deploymentsClickHouseEffects) InspectEffect(ctx context.Context, claim Claim, effect EffectBatch) (EffectInspection, error) {
@@ -185,10 +191,23 @@ func compareDeploymentVersion(expected, actual deploymentRow, found bool) Effect
 	if actual.LastSynced.UTC().Before(expected.LastSynced.UTC()) {
 		return EffectAbsent
 	}
+	// A winner up to RepairVersionWindow newer can be this write's own kept-group repair: the same row with a NULL
+	// merged_at filled, with its pull request pair (storedversion.Kept.Repair). Any other difference, or a newer version
+	// past the window, is another write.
+	repaired := false
 	if actual.LastSynced.UTC().After(expected.LastSynced.UTC()) {
+		if actual.LastSynced.UTC().After(expected.LastSynced.UTC().Add(storedversion.RepairVersionWindow)) {
+			return EffectConflict
+		}
+		repaired = true
+	}
+	if actual.RepoID != expected.RepoID || actual.DeploymentID != expected.DeploymentID || actual.OrgID != expected.OrgID || !stringPointersEqual(actual.Status, expected.Status) || !stringPointersEqual(actual.Environment, expected.Environment) || !timePointersEqual(actual.StartedAt, expected.StartedAt) || !timePointersEqual(actual.FinishedAt, expected.FinishedAt) || !timePointersEqual(actual.DeployedAt, expected.DeployedAt) || actual.ReleaseRef != expected.ReleaseRef || actual.ReleaseRefConfidence != expected.ReleaseRefConfidence {
 		return EffectConflict
 	}
-	if actual.RepoID != expected.RepoID || actual.DeploymentID != expected.DeploymentID || actual.OrgID != expected.OrgID || !stringPointersEqual(actual.Status, expected.Status) || !stringPointersEqual(actual.Environment, expected.Environment) || !timePointersEqual(actual.StartedAt, expected.StartedAt) || !timePointersEqual(actual.FinishedAt, expected.FinishedAt) || !timePointersEqual(actual.DeployedAt, expected.DeployedAt) || !timePointersEqual(actual.MergedAt, expected.MergedAt) || !intPointersEqual(actual.PullRequestNumber, expected.PullRequestNumber) || actual.PullRequestTier != expected.PullRequestTier || actual.ReleaseRef != expected.ReleaseRef || actual.ReleaseRefConfidence != expected.ReleaseRefConfidence {
+	if repaired && expected.MergedAt == nil && actual.MergedAt != nil {
+		return EffectExact
+	}
+	if !timePointersEqual(actual.MergedAt, expected.MergedAt) || !intPointersEqual(actual.PullRequestNumber, expected.PullRequestNumber) || actual.PullRequestTier != expected.PullRequestTier {
 		return EffectConflict
 	}
 	return EffectExact

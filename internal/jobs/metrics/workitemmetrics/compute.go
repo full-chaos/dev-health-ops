@@ -379,9 +379,11 @@ func ComputeDailyTriplet(
 		if IsTerminalStatus(item.Status) {
 			terminalAt = earliestTimePointer(completedAt, utcTimePointer(item.ClosedAt))
 		}
+		// A finished item with no end stamp is in progress on no day, as the loaders leave out a done one.
+		finishedWithNoEnd := IsTerminalStatus(item.Status) && terminalAt == nil
 		startedToday := inHalfOpenDay(startedAt, dayUTC, end)
 		completedToday := IsTerminalStatus(item.Status) && inHalfOpenDay(completedAt, dayUTC, end)
-		wipEndOfDay := startedAt != nil && startedAt.Before(end) &&
+		wipEndOfDay := startedAt != nil && startedAt.Before(end) && !finishedWithNoEnd &&
 			(terminalAt == nil || !terminalAt.Before(end))
 		createdToday := !createdAt.Before(dayUTC) && createdAt.Before(end)
 		if !startedToday && !completedToday && !wipEndOfDay && !createdToday {

@@ -176,9 +176,8 @@ func TestPooledLateSampleDelivery(t *testing.T) {
 
 // The incident mapping expires after the writer ran (a newer revision with valid_to before the chart's instant). The
 // chart and the stored row read the writer's mappings, so neither moves at "late". At "rerun" the writer finds no
-// incident for the repository-day and writes NO row, so the old row stays: chart = stored = the STALE value of the
-// first run. This pins the stale value on purpose; its retraction is ticket 14148 (filed separately), and a fix there
-// changes this cell.
+// incident for the repository-day and retires it with a marker row: the stored value and the chart are both absent
+// (none|none), never the first run's value and never 0.
 func TestPooledLateMappingExpiryIncident(t *testing.T) {
 	e := startPooledEnv(t)
 	org := e.newOrg()
@@ -206,10 +205,13 @@ VALUES (?, 'pagerduty', 'pd', 'repository_mapping', ?, now64(6), 2, '', 2, 2, ?,
 	e.computeDelivery(org, []string{repo}, day)
 	rerun := e.requireSameSampleSet("rerun", org, repo, day, keys)
 	for _, key := range keys {
-		t.Logf("STALE14148 %s: after the re-run the emptied repository-day serves %s (stored|chart), the first run's %s; retraction is ticket 14148", key.metric, rerun[key.metric], before[key.metric])
-		if rerun[key.metric] != before[key.metric] {
-			t.Errorf("%s: the emptied repository-day no longer serves the stale first-run value %s (got %s): ticket 14148 changed it, update this cell", key.metric, before[key.metric], rerun[key.metric])
+		t.Logf("RETIRED14148 %s: after the re-run the emptied repository-day serves %s (stored|chart), the first run served %s", key.metric, rerun[key.metric], before[key.metric])
+		if rerun[key.metric] != "none|none" {
+			t.Errorf("%s: the emptied repository-day serves %s (stored|chart), want none|none (retired, never the stale %s)", key.metric, rerun[key.metric], before[key.metric])
 		}
+	}
+	if rows, retracted := e.keyRows("incident_metrics_daily", org, repo, day); retracted != 1 {
+		t.Errorf("the newest row of the emptied repository-day holds retracted %d (%d rows), want the marker row", retracted, rows)
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -69,6 +70,7 @@ func liveStackEnv(t *testing.T, side string) map[string]string {
 		"AUTH_RUNTIME_DATABASE_PASSWORD=runtime-password-for-test",               // gitleaks:allow -- placeholder value fed to the environment printer, not a credential
 		"AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT=prn_hh9WycdvSHSM26P15yRmgA",
 		"AUTH_AUTHORIZE_CALLER_SUBJECTS=" + webSubject,
+		"AUTH_INVITE_TOKEN_SECRET=invite-secret-for-test", // gitleaks:allow -- placeholder value fed to the environment printer, not a credential
 	}
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
@@ -221,6 +223,65 @@ func TestLiveE2EPlatformRolesOwnedOnEveryProdSide(t *testing.T) {
 	}
 }
 
+// CHAOS-13636: prod runs the SSO provider routes on auth-service (deploy values.prod.yaml: go-api AUTH_SSO_PROVIDERS_OWNED,
+// authService.ssoProvidersOwned, auth-service AUTH_MEMBERSHIP_ROUTES with its invite key). go-api reads the switch on (no
+// WARN fallback to the stub path) and auth-service loads with the provider switch and the membership routes on: the
+// provider routes mount only with both (authruntime ssoProviderRoutes).
+func TestLiveE2ESSOProvidersOwnedOnGoAPIAndAuthService(t *testing.T) {
+	env := liveStackEnv(t, "go-api")
+	lookup := func(k string) (string, bool) { v, ok := env[k]; return v, ok }
+	proxy, err := apiservice.ParseAuthProxyConfig(lookup)
+	if err != nil {
+		t.Fatalf("FAIL: go-api refuses the proxy flags: %v", err)
+	}
+	var warned bytes.Buffer
+	if !apiservice.ParseSSOProvidersOwned(lookup, proxy, slog.New(slog.NewTextHandler(&warned, nil))) || warned.Len() != 0 {
+		t.Errorf("FAIL: go-api %s=%q reads off (warnings %q); prod sets it on", apiservice.SSOProvidersOwnedEnv, env[apiservice.SSOProvidersOwnedEnv], warned.String())
+	}
+	authEnv := liveStackEnv(t, "auth-service")
+	cfg, err := authconfig.Load(authconfig.Spec{LookupEnv: func(k string) (string, bool) { v, ok := authEnv[k]; return v, ok }})
+	if err != nil {
+		t.Fatalf("FAIL: auth-service refuses the live e2e environment: %v", err)
+	}
+	if !cfg.SSOProvidersOwned || !cfg.Provisioning.Routes {
+		t.Errorf("FAIL: auth-service SSOProvidersOwned=%v, membership routes=%v; prod runs both on", cfg.SSOProvidersOwned, cfg.Provisioning.Routes)
+	}
+	if value, ok := liveStackEnv(t, "web")[authconfig.EnvSSOProvidersOwned]; ok {
+		t.Errorf("FAIL: web carries %s=%q; prod renders it on no web workload", authconfig.EnvSSOProvidersOwned, value)
+	}
+}
+
+// up runs every auth-migrate step with the SSO provider switch on, as prod's auth-migrate and auth-grants Jobs do
+// (chart authService.ssoProvidersOwned): the owner's owner-move -grants-only gives the migrator the provider grants with
+// grant option, and the migrator's grants pass then gives them to the runtime role (prod 236-pre, then 236).
+func TestLiveE2EAuthStackUpRunsTheMigrateStepsWithSSOProvidersOwned(t *testing.T) {
+	t.Parallel()
+	state := filepath.Join(t.TempDir(), "state")
+	fake := liveE2EUpFakes(t, state)
+	runLiveE2EUp(t, fake+":"+os.Getenv("PATH"), fake, state)
+	calls := liveE2ERead(t, filepath.Join(state, "bin.calls"))
+	var migrate []string
+	for _, line := range strings.Split(strings.TrimSpace(calls), "\n") {
+		if strings.HasPrefix(line, "auth-migrate ") {
+			migrate = append(migrate, line)
+		}
+	}
+	if len(migrate) < 5 {
+		t.Fatalf("FAIL: up ran %d auth-migrate steps, want at least 5: %q", len(migrate), calls)
+	}
+	for _, line := range migrate {
+		if !strings.HasPrefix(line, "auth-migrate true ") {
+			t.Errorf("FAIL: an auth-migrate step ran without %s=true: %q", authconfig.EnvSSOProvidersOwned, line)
+		}
+	}
+	ownerMove := strings.Index(calls, "auth-migrate true owner-move -from postgres -to devhealth_auth_migrator -grants-only -apply\n")
+	grants := strings.Index(calls, "auth-migrate true grants\n")
+	start := strings.Index(calls, "auth-service true \n")
+	if ownerMove < 0 || grants < ownerMove || start < grants {
+		t.Errorf("FAIL: want owner-move (%d), then grants (%d), then auth-service with the switch (%d): %q", ownerMove, grants, start, calls)
+	}
+}
+
 func liveE2EUpFakes(t *testing.T, state string) string {
 	t.Helper()
 	fake := t.TempDir()
@@ -230,8 +291,11 @@ func liveE2EUpFakes(t *testing.T, state string) string {
 			t.Fatal(err)
 		}
 	}
+	// Every built binary records its name, the AUTH_SSO_PROVIDERS_OWNED it ran under and its arguments.
 	// The fake auth-service writes the subject before "started": up returns when curl sees "started", then tests read it.
-	write("go", "#!/bin/sh\nwhile [ \"$1\" != -o ]; do shift; done\nprintf '#!/bin/sh\\nprintf %%s \"$AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT\" > \"'"+state+"'/subject\"\\necho started\\n' > \"$2\"\nchmod 755 \"$2\"\n")
+	write("bin-template", "#!/bin/sh\nprintf '%s %s %s\\n' \"$(basename \"$0\")\" \"${AUTH_SSO_PROVIDERS_OWNED:-unset}\" \"$*\" >> '"+state+"/bin.calls'\n"+
+		"printf %s \"$AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT\" > '"+state+"/subject'\necho started\n")
+	write("go", "#!/bin/sh\nwhile [ \"$1\" != -o ]; do shift; done\ncp '"+fake+"/bin-template' \"$2\"\nchmod 755 \"$2\"\n")
 	write("psql", "#!/bin/sh\ncase \"$*\" in *-At*) echo 3b1e2c4d-5f60-4a71-8b92-0c1d2e3f4a5b ;; esac\n")
 	write("sleep", "#!/bin/sh\nexit 0\n")
 	write("curl", "#!/bin/sh\ngrep -q '^started$' '"+state+"/logs/auth-service.log'\n")
@@ -424,6 +488,7 @@ const (
 	sentinelSuccessor = "successor-key-sentinel"
 	sentinelLockout   = "lockout-key-sentinel"
 	sentinelDBPass    = "db-password-sentinel"
+	sentinelInvite    = "invite-secret-sentinel"
 )
 
 func sentinelEnv() []string {
@@ -434,6 +499,7 @@ func sentinelEnv() []string {
 		"AUTH_RUNTIME_DATABASE_PASSWORD=" + sentinelDBPass, // gitleaks:allow -- sentinel for the redaction cell, not a credential
 		"AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT=prn_subject-sentinel",
 		"AUTH_AUTHORIZE_CALLER_SUBJECTS=prn_caller-sentinel",
+		"AUTH_INVITE_TOKEN_SECRET=" + sentinelInvite, // gitleaks:allow -- sentinel for the redaction cell, not a credential
 	}
 }
 
@@ -446,7 +512,7 @@ func TestLiveE2EPrintEnvAuthServiceRedactsEverySecret(t *testing.T) {
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("FAIL: print-env auth-service: %v\n%s", err, errb.String())
 	}
-	for name, sentinel := range map[string]string{"AUTH_SESSION_SUCCESSOR_KEY": sentinelSuccessor, "AUTH_LOGIN_LOCKOUT_KEY": sentinelLockout, "database password": sentinelDBPass} {
+	for name, sentinel := range map[string]string{"AUTH_SESSION_SUCCESSOR_KEY": sentinelSuccessor, "AUTH_LOGIN_LOCKOUT_KEY": sentinelLockout, "database password": sentinelDBPass, "AUTH_INVITE_TOKEN_SECRET": sentinelInvite} {
 		if strings.Contains(out.String()+errb.String(), sentinel) {
 			t.Errorf("FAIL: print-env auth-service prints the %s value", name)
 		}
@@ -1565,73 +1631,45 @@ func TestLiveE2EMailTokenCallersCaptureWithoutTracing(t *testing.T) {
 	})
 }
 
-func TestLiveE2ESSOLicenseAndJITAreJobLocal(t *testing.T) {
+// CHAOS-13636: the auth-sso tier runs go-api with no process licence, as prod (community process tier): the SSO provider
+// routes then admit a caller by its organization's own enterprise entitlement only (product rule C1, sso gate.go). The JIT
+// switch is auth-service's and stays job-local.
+func TestLiveE2ESSOGoAPIHasNoProcessLicenceAndJITIsJobLocal(t *testing.T) {
 	state, _, run := liveE2EStubFakes(t)
 	if out, err := run("start-auth", state); err != nil {
 		t.Fatalf("start-auth: %v %s", err, out)
 	}
-	out, err := run("enable-sso", state)
-	if err != nil {
+	if out, err := run("enable-sso", state); err != nil {
 		t.Fatalf("enable-sso: %v %s", err, out)
-	}
-	if strings.Contains(out, "fake-license-public") || strings.Contains(out, "fake-license-value") {
-		t.Fatal("enable-sso printed a licence or verification key")
 	}
 	if n, _ := startCount(t, state); n != 2 {
 		t.Fatal("enable-sso must restart auth-service once")
 	}
-	goEnv := liveE2ERead(t, filepath.Join(state, "extra/go-api.env"))
-	for _, want := range []string{"LICENSE_PUBLIC_KEY=fake-license-public\n", "LICENSE_KEY=fake-license-value\n"} {
-		if strings.Count(goEnv, want) != 1 {
-			t.Fatal("go-api overlay lacks the licence inputs")
+	out, err := run("with-env", "go-api", state, "--", "env")
+	if err != nil {
+		t.Fatalf("with-env go-api: %v %s", err, out)
+	}
+	for _, name := range []string{"LICENSE_KEY", "LICENSE_PUBLIC_KEY"} {
+		if strings.Contains(out, "\n"+name+"=") || strings.HasPrefix(out, name+"=") {
+			t.Errorf("FAIL: go-api carries %s; prod go-api runs the community process tier", name)
 		}
+	}
+	if _, err := os.Lstat(filepath.Join(state, "license")); !os.IsNotExist(err) {
+		t.Errorf("FAIL: enable-sso made a licence directory (%v)", err)
 	}
 	for _, path := range []string{"auth-service.env", "auth-service.loaded"} {
 		if !strings.Contains(liveE2ERead(t, filepath.Join(state, path)), "AUTH_SSO_JIT=true\n") {
 			t.Fatal("auth-service did not save and load SSO JIT")
 		}
 	}
-	for path, mode := range map[string]os.FileMode{"license": 0o700, "license/public.b64": 0o600, "license/licence.txt": 0o600, "extra/go-api.env": 0o600, "auth-service.env": 0o600} {
+	for path, mode := range map[string]os.FileMode{"extra/go-api.env": 0o600, "auth-service.env": 0o600} {
 		info, err := os.Stat(filepath.Join(state, path))
 		if err != nil || info.Mode().Perm() != mode {
 			t.Fatalf("incorrect permissions for %s", path)
 		}
 	}
-	out, err = run("with-env", "go-api", state, "--", "bash", "-c", `[ "$LICENSE_PUBLIC_KEY" = fake-license-public ] && [ "$LICENSE_KEY" = fake-license-value ]`)
-	if err != nil || out != "" {
-		t.Fatal("go-api did not receive the licence inputs silently")
-	}
-	out, err = run("print-env", "go-api", state)
-	if err != nil || !strings.Contains(out, "LICENSE_KEY=<redacted>\n") || strings.Contains(out, "fake-license-value") {
-		t.Fatal("print-env exposed the licence")
-	}
-	err = filepath.WalkDir(state, func(path string, entry os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if path == filepath.Join(state, "license") {
-			return filepath.SkipDir
-		}
-		if entry.IsDir() || path == filepath.Join(state, "extra/go-api.env") {
-			return nil
-		}
-		raw, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		if bytes.Contains(raw, []byte("fake-license-public")) || bytes.Contains(raw, []byte("fake-license-value")) {
-			t.Error("licence input persisted outside its job-local files")
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	if out, err := run("down", state); err != nil {
 		t.Fatalf("down: %v %s", err, out)
-	}
-	if _, err := os.Lstat(filepath.Join(state, "license")); !os.IsNotExist(err) {
-		t.Fatal("down left the licence directory")
 	}
 }
 

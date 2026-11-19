@@ -437,7 +437,6 @@ internal/providersync/testdata/investment_configs/raises_rule_not_mapping.yaml
 internal/providersync/testdata/investment_configs/raises_rules_null.yaml
 internal/providersync/testdata/investment_configs/raises_sexagesimal_label.yaml
 internal/providersync/testdata/investment_configs/yes_priorities.yaml
-internal/providersync/testdata/oracle_frozen/README.md
 internal/providersync/testdata/prepared_snapshots/github_deployments_ledger.json
 internal/providersync/testdata/prepared_snapshots/github_deployments_payload.json
 internal/providersync/testdata/status_mapping_configs/case_folding.yaml

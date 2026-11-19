@@ -322,6 +322,11 @@ func (store *ClickHouseTouchedDaysStore) RecordTouchedGit(
 	); err != nil {
 		return 0, ErrTouchedDaysUnavailable
 	}
+	return store.recordedAt(ctx, organizationID, at)
+}
+
+// recordedAt counts the keys one record call appended at its clock at.
+func (store *ClickHouseTouchedDaysStore) recordedAt(ctx context.Context, organizationID string, at time.Time) (uint64, error) {
 	var recorded uint64
 	if err := store.conn.QueryRow(ctx, `
 SELECT count()
@@ -334,6 +339,53 @@ FROM (
 		return 0, ErrTouchedDaysUnavailable
 	}
 	return recorded, nil
+}
+
+// recordTouchedTestsSQL touches the day of every test suite row of each
+// workflow run (repo_id, run_id) that had a suite row written at or after the
+// bound: every attempt, every report slot and the legacy rows of the run. The
+// daily run counts only the newest attempt, so a re-run that moves a suite to
+// another day changes the day it left as well; that day has only rows written
+// before the bound. A suite's day is the UTC day of coalesce(started_at,
+// finished_at), the day the daily run reads it under. No FINAL: an older
+// version of a re-written key names a day of the same run.
+const recordTouchedTestsSQL = `
+INSERT INTO daily_metrics_touched_days (org_id, day, repo_id, kind, at)
+SELECT ?, day, repo_id, 'touched', fromUnixTimestamp64Milli(toInt64(?), 'UTC')
+FROM (
+    SELECT repo_id, toDate(coalesce(started_at, finished_at), 'UTC') AS day
+    FROM test_suite_results
+    WHERE org_id = ? AND coalesce(started_at, finished_at) IS NOT NULL
+      AND (repo_id, run_id) IN (
+          SELECT repo_id, run_id
+          FROM test_suite_results
+          WHERE org_id = ? AND last_synced >= fromUnixTimestamp64Milli(toInt64(?), 'UTC')
+      )
+)
+GROUP BY day, repo_id`
+
+// RecordTouchedTests appends the 'touched' events of the test suite days of
+// the runs written at or after since. It returns the number of keys it
+// appended.
+func (store *ClickHouseTouchedDaysStore) RecordTouchedTests(
+	ctx context.Context, organizationID string, since time.Time,
+) (uint64, error) {
+	if store == nil || store.conn == nil || organizationID == "" || since.IsZero() {
+		return 0, ErrTouchedDaysUnavailable
+	}
+	at, err := store.clock(ctx)
+	if err != nil {
+		return 0, err
+	}
+	sinceMillis := since.UTC().UnixMilli()
+	if err := store.conn.Exec(ctx, recordTouchedTestsSQL,
+		organizationID, at.UnixMilli(),
+		organizationID,
+		organizationID, sinceMillis,
+	); err != nil {
+		return 0, ErrTouchedDaysUnavailable
+	}
+	return store.recordedAt(ctx, organizationID, at)
 }
 
 // pendingTouchedKeysSQL is the reader contract of the table: aggregate for

@@ -33,6 +33,7 @@ var linkedIssueDonorSites = []string{
 var linkedIssueDonorGateExemptions = map[string]string{
 	"internal/jobs/metrics/remaining/work_item_attribution_native_clickhouse.go\x00workItemAttributionDonorTargets":           "loads the donor targets' rows; the team is decided by BuildLinkedIssueIndexFromRows",
 	"internal/jobs/metrics/remaining/work_item_attribution_native_clickhouse.go\x00loadInheritableDependencySourcesTargeting": "scope expansion: the sources of edges to a changed item, no team read",
+	"internal/teamattribution/cascade.go\x00LatestGitHubWorkItemDerivationDependencies":                                       "edge collapse (latest edge per pair, an inheritable type wins a tie); no donor or team read",
 }
 
 type linkedIssueDonorFunc struct {

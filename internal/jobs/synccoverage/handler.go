@@ -57,7 +57,8 @@ func (handler *Handler) Work(
 			handler.logger.WarnContext(ctx, "sync_coverage_refresh.config_failed",
 				slog.String("org_id", failure.OrgID),
 				slog.String("config_id", failure.ConfigID.String()),
-				slog.String("cause_class", coverage.FailureClass(failure.Err)))
+				slog.String("cause_class", coverage.FailureClass(failure.Err)),
+				slog.String("cause_detail", coverage.FailureDetail(failure.Err)))
 		}
 		return jobruntime.Retryable(jobruntime.WithSafeCauseText(
 			errors.New("one or more sync coverage projections failed"),

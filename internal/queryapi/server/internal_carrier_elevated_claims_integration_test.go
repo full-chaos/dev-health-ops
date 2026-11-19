@@ -197,7 +197,7 @@ func newElevatedClaimsPlane(t *testing.T, fixture *queryAPIRoleFixture, document
 	}, graphQLEdgeDeps{auth: auth, maxBytes: defaultGraphQLMaxQueryBytes})
 	env := qmEnv(t, pdptest.New(t), pdp.ModeEnforce, "analytics,metrics,git,work_items,integrations,reports,org", "")
 	handler, internal, mcp, _ := gatedListenerHandlers(knobs(env), mux, internalMux, mcpMux)
-	_, internalListener := Listeners("127.0.0.1:0", "127.0.0.1:0", &Plane{Handler: handler, InternalHandler: internal, MCPHandler: mcp}, nil, nil)
+	_, internalListener := Listeners("127.0.0.1:0", "127.0.0.1:0", &Plane{Handler: handler, InternalHandler: internal, MCPHandler: mcp}, nil)
 	if internalListener == nil {
 		t.Fatal("expected the internal listener")
 	}

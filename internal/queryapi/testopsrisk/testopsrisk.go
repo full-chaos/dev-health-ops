@@ -20,6 +20,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/scopelabel"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/latestrow"
+	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
 // QueryClient is the narrow ClickHouse boundary this package needs.
@@ -52,8 +53,10 @@ type dailyRow struct {
 // testops.StabilityLiveRowsSQL: a repo-day with no completed run has none.
 // The quality-drag table is read FINAL: one whole row per repo-day, the one a
 // merge keeps (the last inserted of equal computed_at), so a NULL part of that
-// row stays NULL and a merge never changes the answer.
-const dailyQuery = `SELECT
+// row stays NULL and a merge never changes the answer. A repo-day whose newest
+// row of a table retires the day (package liverow) is left out of that table's
+// aggregate: the day reads as absent, never 0.
+var dailyQuery = `SELECT
     day AS day,
     release_confidence,
     quality_drag_hours,
@@ -77,6 +80,7 @@ FROM (
           AND day >= {start:Date}
           AND day <= {end:Date}
         GROUP BY day, repo_id
+        HAVING ` + liverow.NewestPredicate("testops_release_confidence", "") + `
     )
     GROUP BY day
 ) AS release_daily
@@ -97,6 +101,7 @@ FULL OUTER JOIN (
     WHERE org_id = {org_id:String}
       AND day >= {start:Date}
       AND day <= {end:Date}
+      AND ` + liverow.Predicate("testops_quality_drag", "") + `
     GROUP BY day
 ) AS drag_daily USING (day)
 FULL OUTER JOIN (
@@ -112,7 +117,9 @@ ORDER BY day ASC
 SETTINGS join_use_nulls = 1`
 
 // quadrantQuery reads, per repository, the pipeline success rate and test
-// pass rate of its latest release-confidence row, least confident first. A
+// pass rate of its latest release-confidence row, least confident first: the
+// newest row of each repo-day, without the repo-days whose newest row retires
+// the day (package liverow), then the latest day of each repository. A
 // factor missing from that row's factors_json (absent key or JSON null) is
 // NULL, not 0. The Nullable value is wrapped in a tuple because argMax skips
 // NULL values, which would let an older row's factor stand in for the latest
@@ -125,19 +132,29 @@ var quadrantQuery = fmt.Sprintf(`SELECT
 FROM (
     SELECT
         repo_id,
-        tupleElement(argMax(
-            tuple(JSONExtract(factors_json, 'pipeline_success_rate', 'Nullable(Float64)')),
-            (day, computed_at)
-        ), 1) AS pipeline_success_rate,
-        tupleElement(argMax(
-            tuple(JSONExtract(factors_json, 'test_pass_rate', 'Nullable(Float64)')),
-            (day, computed_at)
-        ), 1) AS test_pass_rate,
-        argMax(confidence_score, (day, computed_at)) AS confidence_score
-    FROM testops_release_confidence
-    WHERE org_id = {org_id:String}
-      AND day >= {start:Date}
-      AND day <= {end:Date}
+        tupleElement(argMax(tuple(day_pipeline_success_rate), day), 1) AS pipeline_success_rate,
+        tupleElement(argMax(tuple(day_test_pass_rate), day), 1) AS test_pass_rate,
+        argMax(day_confidence_score, day) AS confidence_score
+    FROM (
+        SELECT
+            repo_id,
+            day,
+            tupleElement(argMax(
+                tuple(JSONExtract(factors_json, 'pipeline_success_rate', 'Nullable(Float64)')),
+                computed_at
+            ), 1) AS day_pipeline_success_rate,
+            tupleElement(argMax(
+                tuple(JSONExtract(factors_json, 'test_pass_rate', 'Nullable(Float64)')),
+                computed_at
+            ), 1) AS day_test_pass_rate,
+            argMax(confidence_score, computed_at) AS day_confidence_score
+        FROM testops_release_confidence
+        WHERE org_id = {org_id:String}
+          AND day >= {start:Date}
+          AND day <= {end:Date}
+        GROUP BY repo_id, day
+        HAVING %s
+    )
     GROUP BY repo_id
 ) AS latest
 LEFT JOIN (
@@ -148,7 +165,7 @@ LEFT JOIN (
 ) AS repos
   ON repos.id = latest.repo_id
 ORDER BY latest.confidence_score ASC
-LIMIT 50`, latestrow.ArgMaxKeepNullBy("repo", "last_synced"))
+LIMIT 50`, liverow.NewestPredicate("testops_release_confidence", ""), latestrow.ArgMaxKeepNullBy("repo", "last_synced"))
 
 func readDaily(ctx context.Context, client QueryClient, bindings []clickhouse.Binding) ([]dailyRow, error) {
 	rs, err := client.Query(ctx, dailyQuery, bindings)

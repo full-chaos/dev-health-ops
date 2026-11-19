@@ -680,6 +680,10 @@ A Linear or Jira work-items unit names every project it saw by an ensure row in 
 - `skipped`: the stored row already decides the newest value.
 - `read_error`: the stored rows could not be read. The whole batch was written and a Warn line `project_catalog_ensure_read_failed` was logged. The unit does not fail.
 
+## Weekly throughput in the WIP congestion ratio
+
+`wip_congestion_ratio` of `work_item_metrics_daily` is `wip_count_end_of_day` divided by the weekly throughput of the day (at least 1). The weekly throughput counts an item of the day (created, started or completed on the day, or in progress at its end) only when its status is terminal (`done` or `canceled`) and its `completed_at` is in the 7 days that end with the day. A provider can reopen an item and keep its `completed_at`: that open item is no throughput.
+
 ## Completed work items
 
 `items_completed` (and the other completion columns of `work_item_metrics_daily` and `work_item_user_metrics_daily`: unassigned completions, story points, bug ratio, cycle and lead time) counts an item on a day only when its status is terminal (`done` or `canceled`) and its `completed_at` is on that day. This is the rule of `work_item_cycle_times`. A provider can reopen an item and keep its `completed_at`: that open item completes on no day.

@@ -415,7 +415,7 @@ func ComputeDailyTriplet(
 				bucket.newBugs++
 			}
 		}
-		if completedAt != nil && !completedAt.Before(weekStart) && completedAt.Before(end) {
+		if IsTerminalStatus(item.Status) && completedAt != nil && !completedAt.Before(weekStart) && completedAt.Before(end) {
 			bucket.weeklyThroughput++
 		}
 		if startedToday {

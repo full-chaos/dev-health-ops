@@ -194,6 +194,42 @@ func (executor *BenchmarkingFinalizeExecutor) ComputeFinalizeFamily(
 		return 0, err
 	}
 
+	// A day whose window holds no live input key has no benchmark target in any
+	// partition: no compute can make a row of it. The read runs before the
+	// compute, which keeps going past a failed read; its own failure fails the run.
+	live, err := loader.LiveInputKeys(ctx, asOfDay,
+		benchmarking.DefaultBenchmarkMetrics, benchmarking.DefaultCorrelationPairs)
+	if err != nil {
+		logger.Error("benchmarking finalize live input read failed",
+			"run_id", run.ID, "organization_id", run.OrganizationID,
+			"target_day", asOfDay.Format("2006-01-02"), "error", err)
+		return 0, err
+	}
+	var liveKeys uint64
+	for _, keys := range live {
+		liveKeys += keys
+	}
+	if liveKeys == 0 {
+		stored, err := executor.store.LoadRun(ctx, run.ID)
+		if err != nil {
+			return 0, fmt.Errorf("%w: load the scope of the run: %v", errBenchmarkingFinalizeUnavailable, err)
+		}
+		// Only a run of the whole organization retires the rows of the organization.
+		if stored.FullOrg {
+			written, err := executor.retireDay(ctx, run.OrganizationID, asOfDay)
+			if err == nil {
+				logger.Info("benchmarking finalize retired the rows of a day with no live input in its window",
+					"run_id", run.ID, "organization_id", run.OrganizationID, "target_day", asOfDay.Format("2006-01-02"),
+					"window_start", benchmarking.InputWindowStart(asOfDay).Format("2006-01-02"),
+					"live_input_keys", live, "partitions_total", total, "rows_retired", written,
+					"reason", benchmarkingNoLiveInputInWindow)
+			}
+			return written, err
+		}
+		logger.Info("benchmarking finalize kept the rows of a day with no live input: not a run of the whole organization",
+			"run_id", run.ID, "organization_id", run.OrganizationID, "target_day", asOfDay.Format("2006-01-02"))
+	}
+
 	computedAt := executor.nowUTC()
 	// A TestOps team series takes the owners at the run, as the analytics team series take them at the request.
 	loader.SetOwnersAsOf(computedAt)

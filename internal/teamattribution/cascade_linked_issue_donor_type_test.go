@@ -28,7 +28,7 @@ func TestLinkedIssueDonorMustBeAnIssue(t *testing.T) {
 				"item":  {WorkItemID: "item", Provider: tc.provider, Type: tc.prType, OrgID: "org"},
 				"donor": {WorkItemID: "donor", Provider: tc.provider, Type: tc.donorType, OrgID: "org"},
 			}
-			rows := map[string]GithubWorkItemDerivationDonorRow{"donor": {TeamID: "team-donor", Source: "repo_ownership"}}
+			rows := map[string]GithubWorkItemDerivationDonorRow{"donor": {TeamID: "team-donor", Source: "project_ownership"}}
 			edges := []GithubWorkItemDerivationDependencyEdge{{SourceWorkItemID: "item", TargetWorkItemID: "donor", RelationshipType: "relates_to"}}
 			index, evidence, _, _ := derived.BuildLinkedIssueIndexFromRows(tc.provider, subjects, rows, edges, nil)
 			team, inherits := index["item"]
@@ -90,9 +90,9 @@ func TestLinkedIssueRefusedDonorDoesNotShadowAnIssueDonor(t *testing.T) {
 		"b-issue": {WorkItemID: "b-issue", Provider: "github", Type: "issue", OrgID: "org"},
 	}
 	rows := map[string]GithubWorkItemDerivationDonorRow{
-		"a-pr":    {TeamID: "team-pr", Source: "repo_ownership"},
-		"b-issue": {TeamID: "team-issue", Source: "repo_ownership"},
-		"c-ghost": {TeamID: "team-ghost", Source: "repo_ownership"},
+		"a-pr":    {TeamID: "team-pr", Source: "project_ownership"},
+		"b-issue": {TeamID: "team-issue", Source: "project_ownership"},
+		"c-ghost": {TeamID: "team-ghost", Source: "project_ownership"},
 	}
 	edges := []GithubWorkItemDerivationDependencyEdge{
 		{SourceWorkItemID: "item", TargetWorkItemID: "a-pr", RelationshipType: "relates_to"},

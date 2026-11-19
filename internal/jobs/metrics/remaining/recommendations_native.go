@@ -58,10 +58,10 @@ var recommendationsTableRequirements = map[string][]string{
 	// from the deprecated ratio column: the check names the columns the read
 	// uses, so a database that does not hold them yet is refused here and not
 	// at the first read.
-	"repo_metrics_daily": {
+	"repo_metrics_daily": withLiveRowColumns("repo_metrics_daily",
 		"repo_id", "day", "org_id", "pr_cycle_p75_hours", "computed_at",
 		prrework.ColumnMerged, prrework.ColumnReviewed, prrework.ColumnRework, prrework.ColumnNoSignal,
-	},
+	),
 	"user_metrics_daily": withLiveRowColumns("user_metrics_daily",
 		"repo_id", "day", "author_email", "team_id", "org_id", "reviews_given", "computed_at",
 	),

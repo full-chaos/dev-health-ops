@@ -60,6 +60,8 @@ var unruledReads = map[string]string{
 		"a retraction row must stay the newest row of its key, and it holds NULL",
 	"internal/jobs/metrics/remaining/recommendations_loader.go:loadCompoundingRiskPersisted": "the newest row of ONE team over the window, whole: a retraction row is that row, " +
 		"and it reads as the read answers for no row at all (no score, severity unknown)",
+	"internal/jobs/metrics/testops/rules_sql.go:StabilityLiveRowsSQL": "the newest testops_pipeline_metrics_daily row of a retired day holds 0 completed runs, so the read drops " +
+		"that day's stability row as the rule would; a HAVING on the pipeline side would turn the retired day into no pipeline row, which this read keeps",
 	"internal/jobs/metrics/remaining/capacity_native_clickhouse.go:capacityNewestRows": "the newest-version subquery of the capacity reads; the throughput and scope reads apply the rule after it, and the backlog sums the WIP on the newest day of the scope: a retraction row adds 0 and must stay in the newest-day pick",
 }
 
@@ -111,6 +113,14 @@ var namesOnly = map[string]struct{ reader, why string }{
 	"internal/jobs/metrics/daily/benchmarking/clickhouse.go": {"FetchMetricSeriesByScope", "metric definitions"},
 	"internal/queryapi/people/metricconfig.go":               {"liveWhere", "the person metric configs: every read of their tables takes its clause from liveWhere"},
 	"internal/queryapi/analytics/filtertranslation.go":       {"", "an error message that names the tables, no query"},
+	"internal/queryapi/analytics/testopsownership.go":        {"", "a table-name switch of the TestOps owner join, no query"},
+	"internal/queryapi/analytics/validate.go":                {"dedupFromMeasureSource", "the measure-to-table map; the read is the dedup source of timeseries.go"},
+	"internal/queryapi/testopspooled/testopspooled.go":       {"LiveRepoDays", "the pooled TestOps sources: the live gate over both arms"},
+	"internal/queryapi/pooledmttr/pooledmttr.go":             {"", "the pooled MTTR sources: each takes the live gate over both arms from testopspooled.LiveRepoDays"},
+	"internal/jobs/report/pooled.go":                         {"", "the pooled chart map and cicdRunsSource: every pooled source takes the live gate over both arms from testopspooled.LiveRepoDays"},
+	"internal/jobs/report/delivery_pooled.go":                {"", "the pooled delivery sources: each takes the live gate over both arms from testopspooled.LiveRepoDays"},
+	"internal/jobs/report/dedup.go":                          {"dedupFromSource", "the chart rules of a metric's table; the read is dedupFromSource"},
+	"internal/jobs/metrics/prrework/sql.go":                  {"", "the table name constant and the sum text; each reader of the counts applies the rule in its own statement"},
 }
 
 type declaration struct {

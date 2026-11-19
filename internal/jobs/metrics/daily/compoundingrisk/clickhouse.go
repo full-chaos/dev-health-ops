@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily/repouser"
+	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
 // conn is the narrow ClickHouse capability this package needs, matching
@@ -92,7 +93,10 @@ func NewClickHouseLoader(connection conn) (*ClickHouseLoader, error) {
 // reachable: one job writes all five columns for a repo/day in a single insert,
 // so they share a computed_at by construction. Rule found by
 // lane-port-ai-families.
-const repoMetricsQuery = `
+//
+// A repository whose newest row of the day retires it (package liverow, migration 163) has no row here: its column defaults
+// are not a measurement of rework, ownership or bus factor.
+var repoMetricsQuery = `
 SELECT
     repo_id,
     tupleElement(latest, 1) AS rework_churn_ratio_30d,
@@ -116,6 +120,7 @@ FROM (
       AND day = {day:Date}
       AND repo_id IN {repo_ids:Array(UUID)}
     GROUP BY org_id, repo_id
+    HAVING ` + liverow.NewestPredicate("repo_metrics_daily", "") + `
 )
 ORDER BY repo_id`
 
@@ -246,7 +251,7 @@ func (loader *ClickHouseLoader) LoadRepoMetrics(
 // own answer for that case is not itself deterministic. See BuildTeamRows'
 // doc comment for the same correction on the aggregation side, and
 // CHAOS-5204 for the tracking ticket.
-const repoMetricsOrgWideQuery = `
+var repoMetricsOrgWideQuery = `
 SELECT
     repo_id,
     tupleElement(latest, 1) AS rework_churn_ratio_30d,
@@ -269,6 +274,7 @@ FROM (
     WHERE org_id = {org_id:String}
       AND day = {day:Date}
     GROUP BY org_id, repo_id
+    HAVING ` + liverow.NewestPredicate("repo_metrics_daily", "") + `
 )
 ORDER BY repo_id`
 

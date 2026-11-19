@@ -84,7 +84,6 @@ var teamValueExempt = map[string]string{
 	"team_provider_observations":            "a fact table of what a provider reported for a team (drift review input), keyed by the observation; not derived from a day's compute",
 	"test_suite_results":                    "a fact table: one row is one suite result keyed by the result; the team is the attribution of the result when it was stored",
 	"testops_coverage_metrics_daily":        "a testops family table keyed by its own scope; the team is a value of the row and the family replaces the row of its key on a recompute",
-	"testops_pipeline_metrics_daily":        "a testops family table keyed by its own scope; the team is a value of the row and the family replaces the row of its key on a recompute",
 	"testops_pipeline_stability":            "a testops family table keyed by its own scope; the team is a value of the row and the family replaces the row of its key on a recompute",
 	"testops_quality_drag":                  "a testops family table keyed by its own scope; the team is a value of the row and the family replaces the row of its key on a recompute",
 	"testops_release_confidence":            "a testops family table keyed by its own scope; the team is a value of the row and the family replaces the row of its key on a recompute",
@@ -149,15 +148,16 @@ var teamKeyTableWriters = map[string]map[string]string{
 		"internal/testsupport/sessionscenario/sessionscenario.go": teamKeyWriterFixture,
 		"internal/testsupport/crossorg/retracted_people.go":       teamKeyWriterFixture,
 	},
-	"team_metrics_daily":           {"internal/jobs/metrics/daily/wellbeing_native_clickhouse.go": ""},
-	"ai_impact_metrics_daily":      {"internal/jobs/metrics/daily/ai_impact_native_clickhouse.go": ""},
-	"ai_governance_coverage_daily": {"internal/jobs/metrics/daily/ai_governance_native_clickhouse.go": ""},
-	"team_cognitive_load_daily":    {"internal/jobs/metrics/daily/team_cognitive_load_clickhouse.go": ""},
-	"team_complexity_daily":        {"internal/jobs/metrics/daily/team_complexity_clickhouse.go": ""},
-	"ic_landscape_rolling_30d":     {"internal/jobs/metrics/daily/icfinalize/executor.go": ""},
-	"compounding_risk_daily":       {"internal/jobs/metrics/daily/compoundingrisk/clickhouse.go": ""},
-	"issue_type_metrics_daily":     {"internal/jobs/metrics/workitemengine/inserts.go": ""},
-	"work_item_completion_daily":   {"internal/jobs/metrics/workitemengine/inserts.go": ""},
+	"team_metrics_daily":             {"internal/jobs/metrics/daily/wellbeing_native_clickhouse.go": ""},
+	"ai_impact_metrics_daily":        {"internal/jobs/metrics/daily/ai_impact_native_clickhouse.go": ""},
+	"ai_governance_coverage_daily":   {"internal/jobs/metrics/daily/ai_governance_native_clickhouse.go": ""},
+	"team_cognitive_load_daily":      {"internal/jobs/metrics/daily/team_cognitive_load_clickhouse.go": ""},
+	"team_complexity_daily":          {"internal/jobs/metrics/daily/team_complexity_clickhouse.go": ""},
+	"ic_landscape_rolling_30d":       {"internal/jobs/metrics/daily/icfinalize/executor.go": ""},
+	"compounding_risk_daily":         {"internal/jobs/metrics/daily/compoundingrisk/clickhouse.go": ""},
+	"issue_type_metrics_daily":       {"internal/jobs/metrics/workitemengine/inserts.go": ""},
+	"work_item_completion_daily":     {"internal/jobs/metrics/workitemengine/inserts.go": ""},
+	"testops_pipeline_metrics_daily": {"internal/jobs/metrics/daily/testops_native_clickhouse.go": ""},
 }
 
 // censusColumn is one column of a table of the schema.
@@ -1017,6 +1017,13 @@ func TestEveryWriterOfATeamKeyedTableCensusIsDeclared(t *testing.T) {
 // outside the run's repositories (OrganizationRunStaleKeyTables) are exactly
 // the tables of the rule whose key scope is the repository: a new table of
 // that kind is in the list, and a table of another kind is not.
+// runScopeOnlyTables are the repository-scoped tables whose keys only a run of the repository supersedes: the end of a run
+// of the whole organization does NOT supersede their keys of a repository that is in no partition (acp, 2026-11-19: a run
+// never retires keys outside its own set of repositories).
+var runScopeOnlyTables = map[string]string{
+	"testops_pipeline_metrics_daily": "a pooled daily table (migration 163): only the partition that computes the repository retires its day",
+}
+
 func TestTheOrganizationRunTablesAreTheRepositoryScopedTablesCensus(t *testing.T) {
 	listed := map[string]bool{}
 	for _, table := range OrganizationRunStaleKeyTables() {
@@ -1032,6 +1039,13 @@ func TestTheOrganizationRunTablesAreTheRepositoryScopedTablesCensus(t *testing.T
 		if byRepository {
 			repositoryScoped++
 		}
+		if _, runOnly := runScopeOnlyTables[table.Table]; runOnly {
+			if !byRepository || listed[table.Table] {
+				t.Errorf("%s is a run-scope-only table: its key scope must be the repository and it must not be in OrganizationRunStaleKeyTables", table.Table)
+			}
+			repositoryScoped--
+			continue
+		}
 		switch {
 		case byRepository && !listed[table.Table]:
 			t.Errorf("%s has the repository as its key scope and is not in OrganizationRunStaleKeyTables: the end of a run of the whole "+
@@ -1040,6 +1054,11 @@ func TestTheOrganizationRunTablesAreTheRepositoryScopedTablesCensus(t *testing.T
 			t.Errorf("%s is in OrganizationRunStaleKeyTables and its key scope is %v, not the repository", table.Table, table.Scope)
 		case listed[table.Table] && runLevel[table.Table]:
 			t.Errorf("%s is in both run-level lists", table.Table)
+		}
+	}
+	for table := range runScopeOnlyTables {
+		if _, declared := teamkeytables.ByTable(table); !declared {
+			t.Errorf("stale runScopeOnlyTables entry %s: no such registry table", table)
 		}
 	}
 	if repositoryScoped == 0 || len(listed) != repositoryScoped {

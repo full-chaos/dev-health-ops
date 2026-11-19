@@ -232,7 +232,8 @@ a mean of the stored per-repository-day values of `testops_pipeline_metrics_dail
 
 The samples of a repository-day are the ones the daily job stored with that day's newest row, so a tile, a report chart
 and the stored row use one sample set. A run that is synced after the daily job ran counts after the next run of the daily
-job for its day, together with the stored row. A day whose newest row was written before the samples were stored
+job for its day, together with the stored row. A day whose runs are all gone at that next run (deleted, or moved to
+another day) is retired: it has no point and no stored value, never 0. A day whose newest row was written before the samples were stored
 (ClickHouse migration 161) uses the raw runs of that day. A repository-day with more than 100,000 samples of one kind stores none: it uses its raw rows, so for that day only a
 row synced after the daily job ran counts at once and the chart can differ from the stored row until the next run.
 

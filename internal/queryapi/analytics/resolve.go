@@ -297,7 +297,7 @@ func ResolveSelected(ctx context.Context, client QueryClient, orgID string, batc
 	if selected.EvidenceQualityStats {
 		stats, err := resolveEvidenceQualityStats(ctx, client, orgID, batch, qualityInvestment, resolvedFilters)
 		if err != nil {
-			return nil, fmt.Errorf("analytics: evidenceQualityStats: %w", err)
+			return nil, fmt.Errorf("analytics: evidenceQualityStats: %w", markedIfClientCancel(ctx, err, "evidence_quality_stats", "org_id", orgID))
 		}
 		evidenceQualityStats = stats
 	}
@@ -305,7 +305,7 @@ func ResolveSelected(ctx context.Context, client QueryClient, orgID string, batc
 	// statement is sent only when the groups are selected.
 	evidenceQualityByGroup, err := resolveEvidenceQualityByGroup(ctx, client, orgID, batch, qualityInvestment, resolvedFilters, selected.EvidenceQualityByGroup)
 	if err != nil {
-		return nil, fmt.Errorf("analytics: evidenceQualityByGroup: %w", err)
+		return nil, fmt.Errorf("analytics: evidenceQualityByGroup: %w", markedIfClientCancel(ctx, err, "evidence_quality_by_group", "org_id", orgID))
 	}
 	// analytics.py:970-973: evidence_quality_distribution is literally
 	// evidence_quality_stats.band_counts, reused, never recomputed --
@@ -318,7 +318,7 @@ func ResolveSelected(ctx context.Context, client QueryClient, orgID string, batc
 
 	filterEmptyReason, err := resolveFilterEmptyReason(ctx, client, orgID, batch, useInvestment, selected.FilterEmptyReason)
 	if err != nil {
-		return nil, fmt.Errorf("analytics: filterEmptyReason: %w", err)
+		return nil, fmt.Errorf("analytics: filterEmptyReason: %w", markedIfClientCancel(ctx, err, "filter_empty_reason", "org_id", orgID))
 	}
 
 	return &model.AnalyticsResult{

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"log/slog"
 	"strings"
 
 	"github.com/99designs/gqlgen/graphql"
@@ -54,9 +55,15 @@ func safeGraphQLErrorPresenter(label string, observe func(context.Context)) grap
 			chain = append(chain, unwrapped.Error())
 		}
 		requestID := graphQLRequestID(ctx)
-		// A read the client's cancel ended is reported once as a cancel (by its
-		// analytics phase, else here under the label); its chain is not a failure.
-		cancelled := analytics.ReportedAsClientCancel(ctx, err, "graphql_"+label, "request_id", logSafeRequestID(requestID))
+		// A resolver error the client's cancel caused is not a failure: no chain.
+		// An analytics read reported it in its own phase (and counted it); any
+		// other one (a mutation's commit) gets one INFO line of its own kind
+		// here, never the analytics read counter.
+		cancelled := analytics.ClientCancelled(ctx, err)
+		if cancelled && !analytics.ClientCancelReported(err) {
+			slog.InfoContext(ctx, "query-api: resolver ended by the client's cancel",
+				"presenter", label, "kind", graphQLOperationKind(ctx), "request_id", logSafeRequestID(requestID))
+		}
 		presented := graphql.DefaultErrorPresenter(ctx, err)
 		var client *policy.ClientError
 		switch {
@@ -80,6 +87,18 @@ func safeGraphQLErrorPresenter(label string, observe func(context.Context)) grap
 			label, logSafeRequestID(requestID), truncateForLog(strings.Join(chain, " <- "), maxUnwrapChainLogBytes))
 		return withMutationLocation(ctx, presented)
 	}
+}
+
+// graphQLOperationKind is the operation type of the request (query,
+// mutation, subscription), or "unknown" outside an operation.
+func graphQLOperationKind(ctx context.Context) string {
+	if !graphql.HasOperationContext(ctx) {
+		return "unknown"
+	}
+	if operation := graphql.GetOperationContext(ctx).Operation; operation != nil && operation.Operation != "" {
+		return string(operation.Operation)
+	}
+	return "unknown"
 }
 
 // authoredGraphQLError reports whether err holds a *gqlerror.Error that a

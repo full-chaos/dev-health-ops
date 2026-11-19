@@ -18,10 +18,15 @@ import (
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/analytics"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/investmentexplain"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/reports"
 )
 
 type clientCancelLogRecord struct {
@@ -177,10 +182,10 @@ func TestAWorkUnitsReadTheClientCancelledIsNotADegradation(t *testing.T) {
 	}
 }
 
-// A resolver error that the client's cancel caused writes no unwrap chain; the
-// presenter reports the cancel under its label when no analytics phase did.
-// Any other resolver error, also one on a request the client has left since,
-// keeps its chain and is no cancel.
+// A resolver error that the client's cancel caused writes no unwrap chain. One
+// that no analytics phase reported gets ONE presenter line of its own kind and
+// no analytics cancel line. Any other resolver error, also one on a request
+// the client has left since, keeps its chain and is no cancel.
 func TestTheGraphQLPresenterWritesNoChainForAClientCancel(t *testing.T) {
 	present := safeGraphQLErrorPresenter("test", nil)
 	for _, test := range []struct {
@@ -203,17 +208,30 @@ func TestTheGraphQLPresenterWritesNoChainForAClientCancel(t *testing.T) {
 				}
 				records := logs()
 				chainLines := countLinesContaining(records, "query-api: test resolver error")
-				cancelLines, wrongLevel := countClientCancelLines(records, "graphql_test")
-				wantChain, wantCancel := 1, 0
+				presenterLines := countPresenterCancelLines(records, "test")
+				analyticsLines := countLinesContaining(records, "analytics: query cancelled by the client")
+				wantChain, wantPresenter := 1, 0
 				if request.wantCancel && !test.wantChain {
-					wantChain, wantCancel = 0, 1
+					wantChain, wantPresenter = 0, 1
 				}
-				if chainLines != wantChain || cancelLines != wantCancel || wrongLevel {
-					t.Errorf("chain lines = %d, cancel lines = %d (wrong level %v); want %d and %d", chainLines, cancelLines, wrongLevel, wantChain, wantCancel)
+				if chainLines != wantChain || presenterLines != wantPresenter || analyticsLines != 0 {
+					t.Errorf("chain lines = %d, presenter cancel lines = %d, analytics cancel lines = %d; want %d, %d and 0", chainLines, presenterLines, analyticsLines, wantChain, wantPresenter)
 				}
 			})
 		}
 	}
+}
+
+// countPresenterCancelLines counts the INFO lines the GraphQL presenter writes
+// for a cancel no analytics phase reported.
+func countPresenterCancelLines(records []clientCancelLogRecord, presenter string) int {
+	count := 0
+	for _, record := range records {
+		if record.msg == "query-api: resolver ended by the client's cancel" && record.attrs["presenter"] == presenter && record.level == slog.LevelInfo {
+			count++
+		}
+	}
+	return count
 }
 
 // readFunc is a ClickHouse client made of one function.
@@ -282,21 +300,11 @@ func TestAGraphQLAnalyticsReadTheClientCancelledIsOneCancelReport(t *testing.T) 
 		{"timeseries and breakdown of one batch", `timeseries { dimension } breakdowns { dimension }`,
 			map[string]any{"timeseries": timeseries, "breakdowns": breakdowns}, []string{"AS dimension_value"}, 2},
 	}
-	run := func(t *testing.T, selection string, batch map[string]any, client readFunc, ctx context.Context) string {
+	run := func(t *testing.T, selection string, batch map[string]any, client analytics.QueryClient, ctx context.Context) string {
 		t.Helper()
-		body, err := json.Marshal(map[string]any{
-			"query":     `query Q($orgId: String!, $batch: AnalyticsRequestInput!) { analytics(orgId: $orgId, batch: $batch) { ` + selection + ` } }`,
-			"variables": map[string]any{"orgId": "org-1", "batch": batch},
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		request := httptest.NewRequest(http.MethodPost, "/query", strings.NewReader(string(body)))
-		request.Header.Set("Content-Type", "application/json")
-		ctx = authctx.WithClaims(ctx, authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")})
-		rec := httptest.NewRecorder()
-		newGraphQLServer(&graph.Resolver{ClickHouse: client}).ServeHTTP(rec, request.WithContext(ctx))
-		return rec.Body.String()
+		return serveClientCancelGraphQL(t, ctx, &graph.Resolver{ClickHouse: client},
+			`query Q($orgId: String!, $batch: AnalyticsRequestInput!) { analytics(orgId: $orgId, batch: $batch) { `+selection+` } }`,
+			map[string]any{"orgId": "org-1", "batch": batch})
 	}
 	for _, cell := range cases {
 		t.Run(cell.name, func(t *testing.T) {
@@ -327,8 +335,9 @@ func TestAGraphQLAnalyticsReadTheClientCancelledIsOneCancelReport(t *testing.T) 
 				}
 			}
 			chains := countLinesContaining(records, "query-api: query resolver error")
-			if delta := clientCancelledCount(t) - before; lines != cell.reports || delta != int64(cell.reports) || chains != 0 {
-				t.Errorf("cancel lines = %d, count moved by %d, resolver chains = %d; want %d, %d and 0 (logs %+v)", lines, delta, chains, cell.reports, cell.reports, records)
+			presenter := countPresenterCancelLines(records, "query")
+			if delta := clientCancelledCount(t) - before; lines != cell.reports || delta != int64(cell.reports) || chains != 0 || presenter != 0 {
+				t.Errorf("cancel lines = %d, count moved by %d, resolver chains = %d, presenter lines = %d; want %d, %d, 0 and 0 (logs %+v)", lines, delta, chains, presenter, cell.reports, cell.reports, records)
 			}
 		})
 	}
@@ -349,4 +358,133 @@ func TestAGraphQLAnalyticsReadTheClientCancelledIsOneCancelReport(t *testing.T) 
 			t.Errorf("resolver chains = %d, cancel lines = %d, count moved by %d; want 1, 0 and 0", chains, cancels, delta)
 		}
 	})
+}
+
+func serveClientCancelGraphQL(t *testing.T, ctx context.Context, resolver *graph.Resolver, document string, variables map[string]any) string {
+	t.Helper()
+	body, err := json.Marshal(map[string]any{"query": document, "variables": variables})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/query", strings.NewReader(string(body)))
+	request.Header.Set("Content-Type", "application/json")
+	ctx = authctx.WithClaims(ctx, authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")})
+	rec := httptest.NewRecorder()
+	newGraphQLServer(resolver).ServeHTTP(rec, request.WithContext(ctx))
+	return rec.Body.String()
+}
+
+// One request shares ONE membership-scope lookup between its phases
+// (analytics.WithInvestmentMembershipScopeRequest). When the client's cancel
+// ends that lookup, every phase gets its error, but it is one read: exactly
+// one cancel report and no resolver chain, whichever phases read it.
+func TestASharedMembershipLookupTheClientCancelledIsOneCancelReport(t *testing.T) {
+	dates := map[string]any{"startDate": "2026-07-01", "endDate": "2026-07-04"}
+	breakdown := map[string]any{"dimension": "THEME", "measure": "COUNT", "topN": 10, "dateRange": dates}
+	series := map[string]any{"dimension": "THEME", "measure": "COUNT", "interval": "DAY", "dateRange": dates}
+	withSankey := sankeyBatch([]string{"THEME", "SUBCATEGORY"}, "2026-07-01", "2026-07-04")
+	for _, cell := range []struct {
+		name, selection string
+		batch           map[string]any
+	}{
+		{"timeseries and breakdown", `timeseries { dimension } breakdowns { dimension }`,
+			map[string]any{"useInvestment": true, "timeseries": []any{series}, "breakdowns": []any{breakdown}}},
+		{"two breakdowns", `breakdowns { dimension }`, map[string]any{"useInvestment": true, "breakdowns": []any{breakdown, breakdown}}},
+		{"sankey and its coverage", `sankey { nodes { id } coverage { teamCoverage } }`, withSankey},
+	} {
+		t.Run(cell.name, func(t *testing.T) {
+			logs := captureClientCancelLogs(t)
+			ctx, cancel := context.WithCancel(context.Background())
+			t.Cleanup(cancel)
+			var lookups, scopedReads atomic.Int64
+			client := analytics.PinInvestmentMembershipScope(readFunc(func(statementCtx context.Context, statement string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+				if strings.Contains(statement, "SELECT scope_mode, lag_seconds, latest_run_id") {
+					lookups.Add(1)
+					cancel()
+					return nil, fmt.Errorf("ClickHouse query failed: %w", statementCtx.Err())
+				}
+				for _, binding := range bindings {
+					if binding.Name == "investment_scope_run_id" {
+						scopedReads.Add(1)
+					}
+				}
+				return &oneRow{}, nil
+			}))
+			before := clientCancelledCount(t)
+			body := serveClientCancelGraphQL(t, analytics.WithInvestmentMembershipScopeRequest(ctx), &graph.Resolver{ClickHouse: client},
+				`query Q($orgId: String!, $batch: AnalyticsRequestInput!) { analytics(orgId: $orgId, batch: $batch) { `+cell.selection+` } }`,
+				map[string]any{"orgId": "org-1", "batch": cell.batch})
+			records := logs()
+			if lookups.Load() != 1 || scopedReads.Load() != 0 || !strings.Contains(body, graphQLInternalMessage) {
+				t.Fatalf("lookups = %d, scoped reads = %d, body %s: the cell did not reach one cancelled lookup and the presenter", lookups.Load(), scopedReads.Load(), body)
+			}
+			var phases []string
+			for _, record := range records {
+				if record.msg == "analytics: query cancelled by the client" {
+					phases = append(phases, record.attrs["phase"])
+				}
+			}
+			chains := countLinesContaining(records, "query-api: query resolver error")
+			presenter := countPresenterCancelLines(records, "query")
+			if delta := clientCancelledCount(t) - before; len(phases) != 1 || delta != 1 || chains != 0 || presenter != 0 {
+				t.Errorf("cancel lines %v, count moved by %d, resolver chains = %d, presenter lines = %d; want 1 line, 1, 0 and 0", phases, delta, chains, presenter)
+			}
+		})
+	}
+}
+
+type cancelledCommitBegin func(context.Context) (pgx.Tx, error)
+
+func (f cancelledCommitBegin) Begin(ctx context.Context) (pgx.Tx, error) { return f(ctx) }
+
+// cancelledCommitTx deletes the row, then the client leaves during the commit.
+type cancelledCommitTx struct {
+	pgx.Tx
+	cancel           context.CancelFunc
+	deletes, commits int
+}
+
+func (tx *cancelledCommitTx) Exec(_ context.Context, statement string, _ ...any) (pgconn.CommandTag, error) {
+	if !strings.HasPrefix(statement, "DELETE FROM saved_reports") {
+		return pgconn.CommandTag{}, fmt.Errorf("unexpected statement %q", statement)
+	}
+	tx.deletes++
+	return pgconn.NewCommandTag("DELETE 1"), nil
+}
+
+func (tx *cancelledCommitTx) Commit(ctx context.Context) error {
+	tx.commits++
+	tx.cancel()
+	return ctx.Err()
+}
+
+func (tx *cancelledCommitTx) Rollback(context.Context) error { return nil }
+
+// A mutation whose Postgres commit the client's cancel ended is not an
+// analytics read: one presenter line of kind "mutation", no resolver chain,
+// no analytics cancel line and no move of the analytics read counter.
+func TestACancelledMutationCommitIsNotAnAnalyticsCancel(t *testing.T) {
+	logs := captureClientCancelLogs(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	tx := &cancelledCommitTx{cancel: cancel}
+	writer := &reports.Writer{Pool: cancelledCommitBegin(func(context.Context) (pgx.Tx, error) { return tx, nil })}
+	before := clientCancelledCount(t)
+	body := serveClientCancelGraphQL(t, ctx, &graph.Resolver{ReportWriter: writer},
+		`mutation D { deleteSavedReport(orgId: "org-1", reportId: "13a0c122-d750-425d-9e59-0b5b7c1c383f") }`, nil)
+	records := logs()
+	if tx.deletes != 1 || tx.commits != 1 || !strings.Contains(body, graphQLInternalMessage) {
+		t.Fatalf("deletes = %d, commits = %d, body %s: the cell did not reach the commit and the presenter", tx.deletes, tx.commits, body)
+	}
+	kinds := 0
+	for _, record := range records {
+		if record.msg == "query-api: resolver ended by the client's cancel" && record.attrs["presenter"] == "query" && record.attrs["kind"] == "mutation" {
+			kinds++
+		}
+	}
+	analyticsLines := countLinesContaining(records, "analytics: query cancelled by the client")
+	chains := countLinesContaining(records, "query-api: query resolver error")
+	if delta := clientCancelledCount(t) - before; kinds != 1 || analyticsLines != 0 || chains != 0 || delta != 0 {
+		t.Errorf("mutation cancel lines = %d, analytics cancel lines = %d, resolver chains = %d, count moved by %d; want 1, 0, 0 and 0 (logs %+v)", kinds, analyticsLines, chains, delta, records)
+	}
 }

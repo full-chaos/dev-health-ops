@@ -965,6 +965,27 @@ var matrixChecks = map[string]matrixCheck{
 		return r
 	}},
 	"full_tie_owners_are_all_main": {"pull_requests", checkFullTieOwners},
+	"pull_request_admin_key_never_outranks_its_repository_owner": {"pull_requests", func(f matrixFacts, p string, _ ownerReaders) (r checkResult) {
+		// A manual mapping never outranks a native fact: an admin team (no provider) whose project key names a pull
+		// request's project id must not take the pull request above the owner of its repository.
+		for id, item := range f.items {
+			if item.Provider != p || !isPullRequestItem(item) {
+				continue
+			}
+			row, ok := f.primary(id)
+			if !ok || row.Source != "issue_project" {
+				continue
+			}
+			if team, known := f.teams[row.TeamID]; !known || team.Provider != "" {
+				continue
+			}
+			r.Subjects++
+			if owners := f.ownersAt(f.repoOwnerRows(item.RepoID), f.itemDay(item)); len(owners) > 0 {
+				r.Violations = append(r.Violations, fmt.Sprintf("%s -> %s by issue_project (admin key %q) above its repository owners %v", id, row.TeamID, item.ProjectID, sortedTeamSet(owners)))
+			}
+		}
+		return r
+	}},
 	"pull_request_team_is_not_a_membership": {"pull_requests", func(f matrixFacts, p string, _ ownerReaders) (r checkResult) {
 		linkedProvider := map[string]bool{}
 		for _, link := range f.links {

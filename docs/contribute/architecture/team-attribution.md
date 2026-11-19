@@ -355,10 +355,12 @@ flowchart TD
 > **GitHub has no project-owner producer.** No GitHub producer writes `team_project_ownership` (section 0.4b).
 > A GitHub issue's project owner comes only from an admin team whose `project_keys` holds the issue's project id
 > (its repository's full name, or a Projects v2 board id `ghprojv2:{login}#{n}`): that is an `issue_project`
-> candidate, and a donor of a linked pull request's `linked_issue` row. A key that is a repository's name also names
-> that repository's pull requests (a GitHub pull request's project id is its repository's name too), so the admin team
-> takes them by `issue_project` above their repository owner. Without such a key, a GitHub issue takes the repository
-> owner of its linked pull requests (above) or ends `unassigned`, and that repository owner is not a donor.
+> candidate, and a donor of a linked pull request's `linked_issue` row. Without such a key, a GitHub issue takes the
+> repository owner of its linked pull requests (above) or ends `unassigned`, and that repository owner is not a donor.
+> **Known defect** (ticket 14209 (filed separately)): a key equal to a repository's name also matches that repository's
+> pull requests (a GitHub pull request's project id is its repository's name too), so the admin team takes them by
+> `issue_project` above their repository owner. A manual mapping must never outrank a native fact; the matrix cell
+> `pull_request_admin_key_never_outranks_its_repository_owner` (github) is `known_red` for it.
 >
 > **The membership ownership gate applies to a pull or merge request and to other repo-bearing items, and
 > does not apply to an issue**: an issue has no repository field of its own and the gate reads
@@ -790,7 +792,8 @@ ticket and fails when it turns green, until it is moved to `pass`; every provide
 `not_applicable` entry with its rule, and every check of an entity is a cell or an `omitted` entry with its
 rule. The rule the cells apply is written once in the test (`ownersAt`): the rows valid on the item's day
 (§0.4j), of active teams, with the first recorded owners applied backward before the first record; the shared ownership readers are judged against that rule at now and on every item day, and apply the
-first owners backward. No cell is known red: the catalog writers start a link at its evidence
+first owners backward. One cell is known red: `pull_request_admin_key_never_outranks_its_repository_owner` (github,
+ticket 14209 (filed separately)), the admin team key that outranks a pull request's repository owner. The catalog writers start a link at its evidence
 (section 0.4b), and each provider world runs its team catalog again after its sync, the
 next catalog run that moves each link to its evidence; GitLab ownership names the catalog project.
 The inferred repository owner starts at its earliest linked evidence: its cell is pass. The GitHub cell of a pull request's `linked_issue` row

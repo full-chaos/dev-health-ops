@@ -447,6 +447,19 @@ func (adapter *ClickHouseQueryAdapter) executeChart(ctx context.Context, spec Ch
 	}
 	asOf := adapter.asOf()
 	definition = withRepositoryOwners(withPooledChart(withChartRule(definition), asOf), asOf)
+	result := ChartResult{
+		Spec: spec, Title: spec.Title, SourceTable: definition.SourceTable, Unit: definition.Unit,
+	}
+	if result.Title == "" {
+		result.Title = definition.DisplayName
+	}
+	if rule, ok := teamWorkItemRuleOf(spec, definition); ok {
+		if rule.whole {
+			result.NotApplicable = rule.reason
+			return result, nil
+		}
+		result.Note = rule.reason
+	}
 	statement, parameters, err := buildChartQuery(spec, definition)
 	if err != nil {
 		return ChartResult{}, err
@@ -457,12 +470,6 @@ func (adapter *ClickHouseQueryAdapter) executeChart(ctx context.Context, spec Ch
 		return ChartResult{}, fmt.Errorf("query report chart: %w", ErrDependencyUnavailable)
 	}
 	defer rows.Close()
-	result := ChartResult{
-		Spec: spec, Title: spec.Title, SourceTable: definition.SourceTable, Unit: definition.Unit,
-	}
-	if result.Title == "" {
-		result.Title = definition.DisplayName
-	}
 	for rows.Next() {
 		var group *string
 		var y *float64
@@ -708,6 +715,11 @@ func buildChartQuery(spec ChartSpec, definition metricDefinition) (string, []any
 		xExpression, xType, temporal = "toDate("+day+")", "Date", true
 	}
 	yExpression := fmt.Sprintf("avg(%s)", spec.Metric)
+	if definition.ownersAsOf != nil {
+		// avg() of no row is NaN, which a total (no GROUP BY) would draw as a point; a team that owns no repository and
+		// a window with no row have no value. The mean keys of user_metrics_daily reach this.
+		yExpression = fmt.Sprintf("avgOrNull(%s)", spec.Metric)
+	}
 	if strings.HasSuffix(spec.Metric, "_count") || definition.Unit == "count" {
 		// sum() of an unsigned integer column is UInt64 in ClickHouse and the
 		// chart read scans y into a float64, which the driver refuses. Cast

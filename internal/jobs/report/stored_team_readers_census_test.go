@@ -12,7 +12,6 @@ import (
 // Remove a table here when it joins repositoryOwnedTables.
 var storedTeamPending = map[string]string{
 	"testops_coverage_metrics_daily": "CHAOS-14107",
-	"user_metrics_daily":             "CHAOS-14109",
 	"work_item_cycle_times":          "CHAOS-13917",
 }
 
@@ -69,6 +68,9 @@ func TestNoReportChartReadsAStoredMainOwnerTeamCensus(t *testing.T) {
 		definition := withChartRule(registered)
 		if !repositoryOwnedTables[definition.SourceTable] || definition.ValueKind != valueKindNumeric || !definition.hasDimension("team") {
 			continue
+		}
+		if rule, ok := teamWorkItemRules[name]; ok && rule.whole && rule.table == definition.SourceTable {
+			continue // no team value at all: not applicable, no query (TestUserMetricsWorkItemKeysAreNotApplicableToATeam)
 		}
 		filtered, _ := cicdChartStatement(t, ChartSpec{ChartType: "scorecard", Metric: name, FilterTeams: []string{"team-1"}})
 		grouped, _ := cicdChartStatement(t, ChartSpec{ChartType: "bar", Metric: name, GroupBy: "team"})

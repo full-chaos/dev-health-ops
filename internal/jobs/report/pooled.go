@@ -245,10 +245,43 @@ func repositoryOwnerJoin(orgID string, teams []string, asOf time.Time) (string, 
     ) AS own ON toString(repo_id) = own.owned_repo_id`, fromWhere, scope), named, nil
 }
 
-// repositoryOwnedTables are the charted daily tables of one row per repository-day whose team is the owner of its
-// repository as of the chart run, as for a pooled chart: cicd_metrics_daily has no team column, and the stored team_id
-// of the two TestOps tables (pipeline, test) is the main owner at the end of the day only, so it is not read.
-var repositoryOwnedTables = map[string]bool{"cicd_metrics_daily": true, "testops_pipeline_metrics_daily": true, "testops_test_metrics_daily": true}
+// repositoryOwnedTables are the charted daily tables whose rows each hold one repository and whose team is the owner of
+// that repository as of the chart run, as for a pooled chart: cicd_metrics_daily has no team column, the stored team_id
+// of the two TestOps tables (pipeline, test) is the main owner at the end of the day only, and the stored team_id of
+// user_metrics_daily (one row per person, repository and day) is the person's membership label, so none is read.
+var repositoryOwnedTables = map[string]bool{"cicd_metrics_daily": true, "testops_pipeline_metrics_daily": true, "testops_test_metrics_daily": true,
+	"user_metrics_daily": true}
+
+// teamWorkItemRule is a key of a repository-owned table that is, wholly or in part, the work items of a person: they are
+// on the person's row of no repository (user_metrics_daily's synthesized repository), never on a repository row, so by
+// repository ownership they have no team value.
+type teamWorkItemRule struct {
+	table string
+	// whole: the key is work items only. Under a team filter or a team group it is not applicable: no query, no point.
+	// Else only its work-item part is left out, and the chart carries the note.
+	whole  bool
+	reason string
+}
+
+const workItemsNoTeamReason = "work items belong to no repository, so a team by repository ownership has no value of this metric. " +
+	"The work items of a team are in the work-item charts, by project ownership."
+
+var teamWorkItemRules = map[string]teamWorkItemRule{
+	"work_items_completed": {table: "user_metrics_daily", whole: true, reason: workItemsNoTeamReason},
+	"work_items_active":    {table: "user_metrics_daily", whole: true, reason: workItemsNoTeamReason},
+	"delivery_units": {table: "user_metrics_daily", reason: "for a team, this counts the merged pull requests of the team's repositories only: " +
+		"the completed work items in this metric belong to no repository and have no team value by repository ownership."},
+}
+
+// teamWorkItemRuleOf returns the work-item rule of a chart that reads a team (a team filter or a team group) by
+// repository ownership.
+func teamWorkItemRuleOf(spec ChartSpec, definition metricDefinition) (teamWorkItemRule, bool) {
+	if definition.ownersAsOf == nil || (len(spec.FilterTeams) == 0 && spec.GroupBy != "team") {
+		return teamWorkItemRule{}, false
+	}
+	rule, ok := teamWorkItemRules[definition.CanonicalName]
+	return rule, ok && rule.table == definition.SourceTable
+}
 
 // withRepositoryOwners returns the definition of a stored-row chart of a repository-owned table with its owners instant
 // asOf, when the metric has the team dimension.

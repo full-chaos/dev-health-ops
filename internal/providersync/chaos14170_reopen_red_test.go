@@ -399,3 +399,154 @@ func TestChaos14170GitLabIssueStateEventsKeepLifecycle(t *testing.T) {
 			len(transitions), row.CompletedAt, row.StartedAt)
 	}
 }
+
+var chaos14170GitHubStatusLabels = []string{"in progress", "doing", "wip", "in review", "needs review", "blocked", "todo", "to do", "ready", "done", "wontfix", "duplicate"}
+var chaos14170GitLabStatusLabels = []string{"in progress", "doing", "wip", "in review", "review", "blocked", "todo", "to do", "ready", "done", "wontfix", "duplicate"}
+
+func chaos14170RawCount(t *testing.T, raws []*string, prefix string) int {
+	t.Helper()
+	count := 0
+	for _, raw := range raws {
+		if raw != nil && len(*raw) >= len(prefix) && (*raw)[:len(prefix)] == prefix {
+			count++
+		}
+	}
+	return count
+}
+
+// The removal compares the folded status before and after the event, not the
+// last stored row: a close row says done while a status label still wins.
+func TestChaos14170GitHubCloseThenStatusLabelRemoved(t *testing.T) {
+	closed := `{"number":7,"title":"T","state":"closed","closed_at":"2026-10-03T00:00:00Z",
+		"created_at":"2026-10-01T00:00:00Z","updated_at":"2026-10-04T00:00:00Z","labels":[],"assignees":[]}`
+	for _, label := range chaos14170GitHubStatusLabels {
+		t.Run(label, func(t *testing.T) {
+			rows, err := normalizeGitHubIssueBundle(
+				githubWorkItemOracleClaim(), sameGitHubRepoNames("acme/api"),
+				uuid.MustParse("c7198fbc-1945-3717-05d8-eb78866b4e79"), json.RawMessage(closed),
+				[]json.RawMessage{
+					json.RawMessage(`{"event":"labeled","created_at":"2026-10-02T00:00:00Z","label":{"name":"` + label + `"}}`),
+					json.RawMessage(`{"event":"closed","created_at":"2026-10-03T00:00:00Z"}`),
+					json.RawMessage(`{"event":"unlabeled","created_at":"2026-10-04T00:00:00Z","label":{"name":"` + label + `"}}`),
+				}, nil, nil, chaos14170Now,
+			)
+			if err != nil || len(rows.WorkItems) != 1 {
+				t.Fatalf("rows=%d err=%v", len(rows.WorkItems), err)
+			}
+			raws, steps := []*string{}, []chaos14170Step{}
+			for _, tr := range rows.StatusTransitions {
+				raws = append(raws, tr.ToStatusRaw)
+				steps = append(steps, chaos14170Step{tr.OccurredAt, tr.ToStatus})
+			}
+			want := 1
+			if githubIssueStatus("", []string{label}) == "done" {
+				want = 0
+			}
+			if got := chaos14170RawCount(t, raws, "unlabeled:"); got != want {
+				t.Fatalf("unlabeled rows=%d want %d; steps=%v", got, want, steps)
+			}
+			chaos14170CheckLastMatches(t, rows.WorkItems[0].Status, steps)
+		})
+	}
+}
+
+// Two status labels: removing the winning one stores a row, removing the
+// losing one or a state change the labels outrank stores none.
+func TestChaos14170StatusLabelPairsFoldByPriority(t *testing.T) {
+	type pair struct{ high, low string }
+	pairs := []pair{}
+	order := []string{"done", "wontfix", "blocked", "in review", "in progress", "todo"}
+	for i := range order {
+		for j := i + 1; j < len(order); j++ {
+			pairs = append(pairs, pair{order[i], order[j]})
+		}
+	}
+	for _, p := range pairs {
+		t.Run(p.high+">"+p.low, func(t *testing.T) {
+			for _, removed := range []string{p.high, p.low} {
+				rows, err := normalizeGitHubIssueBundle(
+					githubWorkItemOracleClaim(), sameGitHubRepoNames("acme/api"),
+					uuid.MustParse("c7198fbc-1945-3717-05d8-eb78866b4e79"), json.RawMessage(chaos14170GitHubOpenIssue),
+					[]json.RawMessage{
+						json.RawMessage(`{"event":"labeled","created_at":"2026-10-02T00:00:00Z","label":{"name":"` + p.high + `"}}`),
+						json.RawMessage(`{"event":"labeled","created_at":"2026-10-02T01:00:00Z","label":{"name":"` + p.low + `"}}`),
+						json.RawMessage(`{"event":"unlabeled","created_at":"2026-10-03T00:00:00Z","label":{"name":"` + removed + `"}}`),
+					}, nil, nil, chaos14170Now,
+				)
+				if err != nil {
+					t.Fatal(err)
+				}
+				raws := []*string{}
+				var last githubWorkItemTransitionRow
+				for _, tr := range rows.StatusTransitions {
+					raws = append(raws, tr.ToStatusRaw)
+					last = tr
+				}
+				wantRows := 0
+				if removed == p.high {
+					wantRows = 1
+				}
+				if got := chaos14170RawCount(t, raws, "unlabeled:"); got != wantRows {
+					t.Fatalf("github remove %q: unlabeled rows=%d want %d", removed, got, wantRows)
+				}
+				if wantRows == 1 && last.ToStatus != githubIssueStatus("open", []string{p.low}) {
+					t.Fatalf("github remove %q: last to=%q", removed, last.ToStatus)
+				}
+			}
+			mapping := loadRealStatusMapping(t)
+			for _, removed := range []string{p.high, p.low, ""} {
+				events := `[{"action":"add","created_at":"2026-10-02T00:00:00Z","label":{"name":"` + p.high + `"}},
+					{"action":"add","created_at":"2026-10-02T01:00:00Z","label":{"name":"` + p.low + `"}}`
+				states := `[]`
+				if removed == "" {
+					states = `[{"state":"closed","created_at":"2026-10-03T00:00:00Z"}]`
+				} else {
+					events += `,{"action":"remove","created_at":"2026-10-03T00:00:00Z","label":{"name":"` + removed + `"}}`
+				}
+				_, steps := chaos14170GitLabIssue(t, "opened", `[]`, events+`]`, states)
+				wantRows := 2
+				if removed == p.high {
+					wantRows = 3
+				}
+				if len(steps) != wantRows {
+					t.Fatalf("gitlab remove %q: rows=%d want %d; steps=%v", removed, len(steps), wantRows, steps)
+				}
+				if wantRows == 3 && chaos14170Last(t, steps).to != mapping.NormalizeStatus("gitlab", "", []string{p.low}, "opened") {
+					t.Fatalf("gitlab remove %q: steps=%v", removed, steps)
+				}
+			}
+		})
+	}
+}
+
+// Without state history the fold reads the issue's current state.
+func TestChaos14170GitLabLabelRemovalWithoutStateHistory(t *testing.T) {
+	for _, label := range chaos14170GitLabStatusLabels {
+		t.Run(label, func(t *testing.T) {
+			var payload gitlabIssueWorkItemPayload
+			if err := json.Unmarshal([]byte(`{"iid":42,"title":"Closed","state":"closed","closed_at":"2026-10-04T00:00:00Z",
+				"created_at":"2026-10-01T00:00:00Z","updated_at":"2026-10-04T00:00:00Z","labels":[]}`), &payload); err != nil {
+				t.Fatal(err)
+			}
+			var events []gitlabLabelEventPayload
+			if err := json.Unmarshal([]byte(`[
+				{"action":"add","created_at":"2026-10-02T00:00:00Z","label":{"name":"`+label+`"}},
+				{"action":"remove","created_at":"2026-10-03T00:00:00Z","label":{"name":"`+label+`"}}]`), &events); err != nil {
+				t.Fatal(err)
+			}
+			row, transitions, err := normalizeGitLabIssueWorkItem(
+				nativeTestClaim("gitlab", "work-items"), "acme/api", "acme/api", "org:gitlab:1",
+				uuid.MustParse("0b7e3d4e-1111-4222-8333-944455556666"), payload, events, nil,
+				loadRealStatusMapping(t), nil, chaos14170Now,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			steps := []chaos14170Step{}
+			for _, tr := range transitions {
+				steps = append(steps, chaos14170Step{tr.OccurredAt, tr.ToStatus})
+			}
+			chaos14170CheckLastMatches(t, row.Status, steps)
+		})
+	}
+}

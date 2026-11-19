@@ -532,7 +532,8 @@ closed). The label wins over the state, as it does for the item's current status
   the status mapping knows that label and the item's status changes; its raw
   value is `unlabeled:<label>`. A close or reopen stores a transition with the
   raw value `closed`, `reopened` or `opened` when the item's status changes.
-  State events are read only when work item history is enabled.
+  State events are read only when work item history is enabled; without them
+  a removed label is read against the issue's current state.
 
 Each of these transitions has the time of the provider event. So an item that
 is open again ends its history in an open status, not in `done` or `canceled`.

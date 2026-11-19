@@ -355,7 +355,7 @@ func normalizeGitLabIssueWorkItem(
 	// renamed project keeps it (CHAOS-3383); project_id stays the current path.
 	workItemID := "gitlab:" + identityPath + "#" + strconv.Itoa(payload.IID)
 	transitions, labelAdds := normalizeGitLabIssueTransitions(
-		claim, workItemID, labelEvents, stateEvents, createdAt.UTC(), statusMapping, resolveIdentity, normalizedAt,
+		claim, workItemID, labelEvents, stateEvents, payload.State, createdAt.UTC(), statusMapping, resolveIdentity, normalizedAt,
 	)
 	// started_at/completed_at keep reading the label adds only: a reopened
 	// issue must not gain completed_at from an earlier state close.
@@ -514,13 +514,15 @@ func normalizeGitLabEpicStateEvents(
 // normalizeGitLabIssueTransitions folds an issue's resource label events and
 // resource state events by time. A label add keeps the single-label mapping. A
 // remove of a status-mapped label and a state event emit a row only when the
-// item status (labels first, then state, as the work item row) changes. The
-// second result holds the label-add rows alone.
+// folded item status (labels first, then state, as the work item row) changes. The
+// second result holds the label-add rows alone. Nil stateEvents means state
+// history was not fetched: the fold then reads the issue's current state.
 func normalizeGitLabIssueTransitions(
 	claim Claim,
 	workItemID string,
 	labelEvents []gitlabLabelEventPayload,
 	stateEvents []gitlabStateEventPayload,
+	currentState string,
 	createdAt time.Time,
 	statusMapping *StatusMapping,
 	resolveIdentity gitlabIdentityResolver,
@@ -545,6 +547,9 @@ func normalizeGitLabIssueTransitions(
 	labelAdds := make([]gitlabWorkItemTransitionRow, 0, len(labelEvents))
 	previous := "unknown"
 	issueState := "opened"
+	if stateEvents == nil && strings.EqualFold(strings.TrimSpace(currentState), "closed") {
+		issueState = "closed"
+	}
 	statusLabels := []string{}
 	for _, event := range events {
 		toStatus, toRaw := "", ""
@@ -568,9 +573,10 @@ func normalizeGitLabIssueTransitions(
 				statusLabels = append(statusLabels, labelName)
 				toStatus, toRaw, labelAdd = mapped, labelName, true
 			case "remove":
+				before := statusMapping.NormalizeStatus("gitlab", "", statusLabels, issueState)
 				statusLabels = removeWorkItemLabel(statusLabels, labelName, normKey)
 				toStatus, toRaw = statusMapping.NormalizeStatus("gitlab", "", statusLabels, issueState), "unlabeled:"+labelName
-				if toStatus == previous {
+				if toStatus == before {
 					continue
 				}
 			default:
@@ -578,6 +584,7 @@ func normalizeGitLabIssueTransitions(
 			}
 		} else {
 			state := strings.ToLower(strings.TrimSpace(event.state.State))
+			before := statusMapping.NormalizeStatus("gitlab", "", statusLabels, issueState)
 			switch state {
 			case "closed":
 				issueState = "closed"
@@ -587,7 +594,7 @@ func normalizeGitLabIssueTransitions(
 				continue
 			}
 			toStatus, toRaw = statusMapping.NormalizeStatus("gitlab", "", statusLabels, issueState), state
-			if toStatus == previous {
+			if toStatus == before {
 				continue
 			}
 			if event.state.User != nil {

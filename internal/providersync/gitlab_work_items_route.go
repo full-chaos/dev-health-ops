@@ -349,13 +349,17 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 		stateEvents := []gitlabStateEventPayload(nil)
 		if fetchHistory {
 			var eventPages int
-			stateEvents, eventPages, err = collectGitLabStateEvents(
+			// Non-nil even when empty: nil tells the fold that state history was not read.
+			stateEvents = []gitlabStateEventPayload{}
+			var fetched []gitlabStateEventPayload
+			fetched, eventPages, err = collectGitLabStateEvents(
 				budgetAccount(ctx, "notes"), &counted, gitlabIssuesRoute+"/{iid}/resource_state_events", root+"/issues/"+strconv.Itoa(payload.IID)+"/resource_state_events",
 				perPage, nestedMaxPages,
 			)
 			if err != nil {
 				return CompleteRouteBatch{}, err
 			}
+			stateEvents = append(stateEvents, fetched...)
 			pages += eventPages
 		}
 		item, transitions, normalizeErr := normalizeGitLabIssueWorkItem(

@@ -726,10 +726,13 @@ func normalizeGitHubWorkItemEvents(
 				}
 			case "unlabeled":
 				// The item status reads labels before state, so removing a status
-				// label can reopen the item without a closed/reopened event.
+				// label can reopen the item without a closed/reopened event. The
+				// row is stored when that folded status changes, whatever the last
+				// stored row says.
 				if event.Label != nil && githubIssueStatus("", []string{event.Label.Name}) != "unknown" {
+					before := githubIssueStatus(issueState, statusLabels)
 					statusLabels = removeWorkItemLabel(statusLabels, event.Label.Name, normalizeWorkItemLabel)
-					if after := githubIssueStatus(issueState, statusLabels); after != previous {
+					if after := githubIssueStatus(issueState, statusLabels); after != before {
 						toStatus, toRaw = after, "unlabeled:"+event.Label.Name
 					}
 				}

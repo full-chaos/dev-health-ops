@@ -4,7 +4,9 @@ package investment
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -26,7 +28,7 @@ import (
 // attachRunStamp gives the executor the production run stamp on the domain
 // pool and returns the stamps it issued so far.
 func attachRunStamp(executor *NativeExecutor, pool *pgxpool.Pool) func() []time.Time {
-	stamper, err := NewRunStamper(pool)
+	stamper, err := NewRunStamper(pool, testLogger())
 	if err != nil {
 		panic(err)
 	}
@@ -505,7 +507,7 @@ func TestRunStampsAreDistinctPerOrgUnderContention(t *testing.T) {
 	t.Cleanup(cancel)
 	pg := domainroledb.Start(t, ctx, "runstampload")
 	pg.RequireReady(t, ctx)
-	stamper, err := NewRunStamper(pg.Domain)
+	stamper, err := NewRunStamper(pg.Domain, testLogger())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -580,5 +582,34 @@ func TestRunStampLockNamespaceCollidesWithNoOtherTwoKeyLock(t *testing.T) {
 		if key == ours {
 			t.Errorf("run stamp namespace %q collides with %s (%d)", RunStampLockNamespace, name, key)
 		}
+	}
+}
+
+// A PostgreSQL clock that never leaves the stamped millisecond: the stamp is
+// refused with an error and a log line naming it, and the run writes nothing.
+func TestRunStampHeldClockFailsTheRunAndWritesNothing(t *testing.T) {
+	v := newRunStampVenue(t, insertArms[0])
+	executor := v.executor(t, categorize.MockProvider{})
+	logs := &syncBuffer{}
+	stamper, err := NewRunStamper(v.pg.Domain, debugLogger(logs))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stamper.clockLeftSQL = `SELECT false FROM pg_sleep(0.001) WHERE $1::timestamptz IS NOT NULL`
+	executor.SetRunStamp(stamper)
+
+	err = v.execute(v.h.ctx, executor, "run-stamp-held")
+	if !errors.Is(err, ErrRunStampClockHeld) || !errors.Is(err, workgraph.ErrUnavailable) {
+		t.Fatalf("run with a held clock: err = %v, want ErrRunStampClockHeld as dependency_unavailable", err)
+	}
+	logged := logs.String()
+	if !strings.Contains(logged, "investment run stamp refused") || !strings.Contains(logged, "stamp=") || !strings.Contains(logged, "org_id="+hierarchyCascadeTestOrg) {
+		t.Errorf("no log line names the refused stamp: %q", logged)
+	}
+	if rows := v.h.count(t, `SELECT count() FROM work_unit_investments`); rows != 0 {
+		t.Errorf("the refused run wrote %d investment rows", rows)
+	}
+	if held := v.advisoryLocks(t); held != 0 {
+		t.Errorf("%d advisory locks held after the refused stamp", held)
 	}
 }

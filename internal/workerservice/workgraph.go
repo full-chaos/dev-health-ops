@@ -83,7 +83,7 @@ func buildWorkgraphWorker(cfg config.Config, database workerDatabase, registry *
 		executor.SetCategorizeBYO(investment.NewOrgCategorizeBYO(postgresDatabase.pools.Domain, cipher, logger))
 		// The run version comes from the domain pool's clock under a per-org lock
 		// (CHAOS-14228); no stamper refuses the family instead of the worker clock.
-		stamper, stampErr := investment.NewRunStamper(postgresDatabase.pools.Domain)
+		stamper, stampErr := investment.NewRunStamper(postgresDatabase.pools.Domain, logger)
 		if stampErr != nil {
 			return workerFamily{}, errWorkerDependencyUnavailable
 		}

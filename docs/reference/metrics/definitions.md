@@ -226,9 +226,15 @@ they are. They are planned for rename or removal.
 
 ## TestOps P95 durations and queue time
 
-`PIPELINE_DURATION_P95`, `TEST_SUITE_DURATION_P95` and `PIPELINE_QUEUE_TIME` are pooled over raw samples. They are never
+`PIPELINE_DURATION_P95`, `TEST_SUITE_DURATION_P95` and `PIPELINE_QUEUE_TIME` are pooled over samples. They are never
 a mean of the stored per-repository-day values of `testops_pipeline_metrics_daily` or `testops_test_metrics_daily`: a
 95th percentile of a pool cannot be made from the 95th percentiles of its parts.
+
+The samples of a repository-day are the ones the daily job stored with that day's newest row, so a tile, a report chart
+and the stored row use one sample set. A run that is synced after the daily job ran counts after the next run of the daily
+job for its day, together with the stored row. A day whose newest row was written before the samples were stored
+(ClickHouse migration 161) uses the raw runs of that day. A repository-day with more than 100,000 samples of one kind stores none: it uses its raw rows, so for that day only a
+row synced after the daily job ran counts at once and the chart can differ from the stored row until the next run.
 
 | Measure | Value of a group | Sample |
 | --- | --- | --- |
@@ -236,7 +242,7 @@ a mean of the stored per-repository-day values of `testops_pipeline_metrics_dail
 | `TEST_SUITE_DURATION_P95` | 95th percentile, linear between closest ranks | a suite of `test_suite_results`: `duration_seconds` when not negative |
 | `PIPELINE_QUEUE_TIME` | mean of the queue samples: their total seconds divided by the number of runs with a queue sample | a run: `queue_seconds` when not negative, else `started_at - queued_at` when not negative |
 
-The samples are the daily writer's own rules. A run belongs to the UTC day it started; a suite to the day it started,
+The samples follow the daily job's own rules. A run belongs to the UTC day it started; a suite to the day it started,
 else finished. Only the repository-days that the daily job computed are read, so every series covers the days of the
 stored rows. A group with no sample is null, never 0.
 
@@ -246,8 +252,9 @@ stored rows. A group with no sample is null, never 0.
   the team series.
 - A week or month bucket and a breakdown over a window pool every run of the bucket or window.
 
-The raw tables have no day key, so a read scans the organization's run history. One statement reads at most
-`analytics.TestopsPooledMaxRowsToRead` rows (5,000,000). Past it the answer is unavailable: the GraphQL error carries
+A day with stored samples reads one daily row. A day without them reads the raw tables, which have no day key, so that
+read scans the organization's run history. One statement reads at most `analytics.TestopsPooledMaxRowsToRead` rows
+(5,000,000). Past it the answer is unavailable: the GraphQL error carries
 code `UNAVAILABLE`, reason `testops_pooled_read_bound` and the measure, and the analytics answer is null. It is never a
 partial value or a 0.
 
@@ -300,9 +307,12 @@ range. The stored `team_id` (the main owner at the end of the day) is not read:
 
 ### AI report charts of CI/CD durations and queue time
 
-The AI report charts of three CI/CD metrics are taken over the window's pipeline runs (`ci_pipeline_runs`), with the
-rules of the CI/CD daily job. They are never a mean of the stored per-repository-day values. No GraphQL measure reads
-them.
+The AI report charts of three CI/CD metrics are taken over the samples of the window's pipeline runs that the CI/CD daily
+job stored with each repository-day's newest row (`cicd_metrics_daily`). A day whose newest row was written before the
+samples were stored uses its raw runs (`ci_pipeline_runs`) with the same rules. A run that is synced after the daily job
+ran counts after the next run of the daily job for its day. They are never a mean of the stored per-repository-day
+values. No GraphQL measure reads them. A repository-day with more than 100,000 samples of one kind stores none: it uses its raw rows, so for that day only a
+row synced after the daily job ran counts at once and the chart can differ from the stored row until the next run.
 
 | Report metric | Value of a bucket | Sample |
 | --- | --- | --- |
@@ -333,15 +343,18 @@ For these four CI/CD metrics, a team is the owner of the repository when the rep
 
 ### AI report charts of deploy time, pull request size and MTTR
 
-The AI report charts of six delivery metrics are taken over the window's raw rows, with the rules of the daily job that
-stores them. They are never a mean of the stored per-repository-day values.
+The AI report charts of six delivery metrics are taken over the samples that the daily job stored with each
+repository-day's newest row. A day whose newest row was written before the samples were stored uses its raw rows with the
+same rules. A row that is synced after the daily job ran counts after the next run of the daily job for its day. They are
+never a mean of the stored per-repository-day values. A repository-day with more than 100,000 samples of one kind stores none: it uses its raw rows, so for that day only a
+row synced after the daily job ran counts at once and the chart can differ from the stored row until the next run.
 
 | Report metric | Value of a bucket | Sample |
 | --- | --- | --- |
 | `deploy_time_p50_hours` | median | a deployment: finished at minus started at, in hours |
 | `pr_size_p50_loc` | median | a merged pull request: additions plus deletions |
 | `pr_size_p90_loc` | 90th percentile | a merged pull request, as above |
-| `mttr_hours` | mean | a bug work item: completed at minus started at, in hours; the operating review tile serves this pooled mean, or the pooled incident median when one exists, with the incident mappings read at request time even for a past week |
+| `mttr_hours` | mean | a bug work item: completed at minus started at, in hours; the operating review tile serves this pooled mean, or the pooled incident median when one exists, with the incident mappings that the daily job read when it ran |
 | `mttr_p50_hours` | median | an incident: resolved at minus started at, in hours |
 | `mttr_p90_hours` | 90th percentile | an incident, as above |
 
@@ -355,7 +368,9 @@ stores them. They are never a mean of the stored per-repository-day values.
   repair time is a sample, as the daily job's mean includes it.
 - An incident counts on the UTC day it started, only when it is also resolved on that day, once for each repository
   that its service maps to. A deleted incident is no incident. A negative repair time is no sample. The service
-  mappings are the ones that are active and valid when the chart runs.
+  mappings are the ones that were active and valid when the daily job ran for that day. A mapping that changes later
+  changes the chart and the stored row at the next run of the daily job. If that run finds no incident for the
+  repository-day, it writes no row, so the old row and its samples stay (ticket 14148).
 - Only the repository-days that the daily job computed are read.
 - These metrics have no team or service dimension. A team filter does not narrow the chart, and a team or service group
   is one `unscoped` bucket.

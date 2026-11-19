@@ -251,13 +251,9 @@ type BugWorkItem struct {
 	CompletedAt time.Time
 }
 
-// MTTRByRepo mirrors the inline MTTR computation in job_daily.py (around
-// line 995): for bug work items completed within the day window, the mean
-// hours between started_at and completed_at, per repo. Callers pass only
-// type=="bug" rows with non-zero StartedAt/CompletedAt (job_daily.py filters
-// `item.type == "bug" and item.completed_at and item.started_at` before this
-// loop runs).
-func MTTRByRepo(day time.Time, bugItems []BugWorkItem) map[uuid.UUID]float64 {
+// RepairHoursByRepo returns the repair samples MTTRByRepo takes its mean over: completed at minus started at, in hours,
+// for each bug work item completed on day.
+func RepairHoursByRepo(day time.Time, bugItems []BugWorkItem) map[uuid.UUID][]float64 {
 	start, end := utcDayWindow(day)
 	hoursByRepo := map[uuid.UUID][]float64{}
 	for _, item := range bugItems {
@@ -268,6 +264,17 @@ func MTTRByRepo(day time.Time, bugItems []BugWorkItem) map[uuid.UUID]float64 {
 		hours := completedAt.Sub(item.StartedAt.UTC()).Seconds() / 3600.0
 		hoursByRepo[item.RepoID] = append(hoursByRepo[item.RepoID], hours)
 	}
+	return hoursByRepo
+}
+
+// MTTRByRepo mirrors the inline MTTR computation in job_daily.py (around
+// line 995): for bug work items completed within the day window, the mean
+// hours between started_at and completed_at, per repo. Callers pass only
+// type=="bug" rows with non-zero StartedAt/CompletedAt (job_daily.py filters
+// `item.type == "bug" and item.completed_at and item.started_at` before this
+// loop runs).
+func MTTRByRepo(day time.Time, bugItems []BugWorkItem) map[uuid.UUID]float64 {
+	hoursByRepo := RepairHoursByRepo(day, bugItems)
 	if len(hoursByRepo) == 0 {
 		return map[uuid.UUID]float64{}
 	}

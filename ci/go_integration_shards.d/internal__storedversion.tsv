@@ -1,0 +1,2 @@
+# CHAOS-6014: the first integration test of the package (TestKeptGroupRepairAgainstRealClickHouse), local `ok` 22.1 s rounded up; no hosted run yet.
+internal/storedversion	23

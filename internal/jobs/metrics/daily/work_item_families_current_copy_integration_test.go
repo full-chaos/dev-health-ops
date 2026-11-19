@@ -247,3 +247,28 @@ func TestCapabilityWindowLeavesAnItemWhoseCurrentCopyIsOutsideIt(t *testing.T) {
 		t.Errorf("story_points_completed = %+v, want %+v", got, want)
 	}
 }
+
+// Every item of the organization's window is off it (x only, its current copy completed before the window). The
+// first read saw rows, so the live keys of the day are retired with no proof of an empty window, and the run does
+// not fail.
+func TestCapabilityWindowRetiresTheKeysWhenEveryItemIsOffTheWindow(t *testing.T) {
+	ctx := context.Background()
+	c := newFamilyCopyCase(t, ctx, "org-14137-c2-")
+	two := 2.0
+	longBefore := c.day.AddDate(0, 0, -120)
+	created := c.day.AddDate(0, 0, -150)
+	storeFamilyCopy(t, ctx, c.conn, c.org, familyCopy{c.olderRepo, "x", "in_progress", "bug", "proj-a", created, nil, &two, c.olderSync})
+	storeFamilyCopy(t, ctx, c.conn, c.org, familyCopy{c.newRepo, "x", "done", "issue", "proj-a", created, &longBefore, nil, c.newSync})
+	seedCapabilityRow(t, ctx, c.conn, c.org, "github", "bug_completed_ratio", 1, 1, c.day, c.clock.Add(-24*time.Hour))
+	seedCapabilityRow(t, ctx, c.conn, c.org, "github", "story_points_completed", 1, 1, c.day, c.clock.Add(-24*time.Hour))
+	if _, err := computeWorkItemMeasureCapability(ctx, c.conn, c.org, c.day, c.clock); err != nil {
+		t.Fatalf("capability compute: %v", err)
+	}
+	answers := capabilityAnswers(t, ctx, c.conn, c.org, c.day)
+	retired := capabilityAnswer{tracked: 0, evidence: 0, items: 0}
+	for _, key := range []string{"github/bug_completed_ratio", "github/story_points_completed"} {
+		if got := answers[key]; got != retired {
+			t.Errorf("%s = %+v, want %+v (retired: no item of the window has its current copy in it)", key, got, retired)
+		}
+	}
+}

@@ -107,7 +107,7 @@ ORDER BY COALESCE(run.completed_at, run.started_at, run.created_at), unit.id`,
 	for rows.Next() {
 		rowCount++
 		if rowCount > maxProjectionRows {
-			return nil, nil, rowCount, fmt.Errorf("sync coverage projection row limit exceeded: %d", maxProjectionRows)
+			return nil, nil, rowCount, newLimitError("projection_row", rowCount, maxProjectionRows)
 		}
 		var sourceID uuid.UUID
 		var dataset, status string
@@ -197,9 +197,9 @@ ORDER BY COALESCE(run.completed_at, run.started_at, run.created_at), unit.id`,
 		for _, item := range subtractClosedRanges(state.Closed, state.Complete) {
 			windows = append(windows, unitWindow{Since: item.Interval.Since, Before: item.Interval.Before, SourceID: parts[0], DatasetKey: parts[1], Status: statusClosedWithReason, Reasons: item.Reasons})
 		}
-		if len(windows) > maxCompactWindows {
-			return nil, nil, rowCount, fmt.Errorf("sync coverage compact window limit exceeded: %d", maxCompactWindows)
-		}
+	}
+	if len(windows) > maxCompactWindows {
+		return nil, nil, rowCount, newLimitError("compact_window", len(windows), maxCompactWindows)
 	}
 	return windows, latestSuccessful, rowCount, nil
 }
@@ -344,7 +344,7 @@ WHERE org_id = $1 AND sync_config_id = $2 AND before_date >= $3::date`, config.O
 			}
 		}
 		if len(result) > maxBackfillPairs {
-			return nil, fmt.Errorf("sync coverage backfill pair limit exceeded: %d", maxBackfillPairs)
+			return nil, newLimitError("backfill_pair", len(result), maxBackfillPairs)
 		}
 	}
 	return result, nil

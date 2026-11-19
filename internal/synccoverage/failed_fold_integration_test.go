@@ -84,6 +84,48 @@ func TestFailedFoldStaysLinearAndKeepsThePayload(t *testing.T) {
 	t.Run("random unit sequences fold like the reference", func(t *testing.T) {
 		compareRandomSequences(t, ctx, pool, now, 10_000)
 	})
+
+	t.Run("the compact window cap fails loud with its class and count", func(t *testing.T) {
+		fixture := seedDisjointFailures(t, ctx, pool, "org-fold-cap", maxCompactWindows/2+1, now)
+		_, err := projector.Rebuild(ctx, fixture.OrgID, fixture.ConfigID)
+		if FailureClass(err) != "compact_window_limit" {
+			t.Fatalf("Rebuild over %d disjoint failed windows: err = %v, class %q, want compact_window_limit", maxCompactWindows/2+1, err, FailureClass(err))
+		}
+		if want := "sync coverage compact window limit exceeded: 30002 (limit 30000)"; FailureDetail(err) != want {
+			t.Fatalf("FailureDetail = %q, want %q", FailureDetail(err), want)
+		}
+	})
+}
+
+// seedDisjointFailures seeds one source with the given number of failed commits units, two hours apart: each unit
+// is its own requested and its own failed window, so two compact windows per unit.
+func seedDisjointFailures(t *testing.T, ctx context.Context, pool *pgxpool.Pool, orgID string, units int, now time.Time) foldVolume {
+	t.Helper()
+	fixture := foldVolume{OrgID: orgID, ConfigID: uuid.New(), IntegrationID: uuid.New()}
+	pgseed.Integration(ctx, t, pool, fixture.IntegrationID.String(), orgID, "github")
+	runID := uuid.New()
+	for _, statement := range []struct {
+		SQL  string
+		Args []any
+	}{
+		{`INSERT INTO sync_configurations (id,org_id,name,provider,sync_targets,is_active,planner_managed,integration_id,created_at,updated_at)
+VALUES ($1,$2,'sync','github','["git"]',TRUE,FALSE,$3,now(),now())`, []any{fixture.ConfigID, orgID, fixture.IntegrationID}},
+		{`INSERT INTO integration_sources (id,org_id,integration_id,provider,source_type,external_id,name,full_name,metadata,is_enabled,discovered_at,last_seen_at)
+VALUES (gen_random_uuid(),$1,$2,'github','repository','acme/cap','cap','acme/cap','{}'::json,TRUE,now(),now())`, []any{orgID, fixture.IntegrationID}},
+		{`INSERT INTO sync_runs (id,org_id,integration_id,triggered_by,mode,status,total_units,completed_units,failed_units,started_at,completed_at,created_at)
+VALUES ($1,$2,$3,'schedule','incremental','failed',0,0,0,$4,$4,$4)`, []any{runID, orgID, fixture.IntegrationID, now.Add(-time.Hour)}},
+		{`INSERT INTO sync_run_units (id,org_id,sync_run_id,integration_id,source_id,provider,dataset_key,processor_flags,since_at,before_at,status,created_at,updated_at,cost_class,mode,attempts)
+SELECT gen_random_uuid(), $1, $2, $3, src.id, 'github', 'commits', '{}'::json,
+       $4::timestamptz - (g * interval '2 hours'), $4::timestamptz - (g * interval '2 hours') + interval '1 hour',
+       'failed', $4, $4, 'rest_core', 'incremental', 1
+FROM integration_sources AS src CROSS JOIN generate_series(1,$5) g
+WHERE src.org_id = $1`, []any{orgID, runID, fixture.IntegrationID, now, units}},
+	} {
+		if _, err := pool.Exec(ctx, statement.SQL, statement.Args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return fixture
 }
 
 type foldVolume struct {

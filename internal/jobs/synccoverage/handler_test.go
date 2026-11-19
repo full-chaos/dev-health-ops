@@ -103,13 +103,14 @@ func logRecords(t *testing.T, projector *recordingProjector) (string, error) {
 
 func TestHandlerNamesEachFailingConfigAndItsCauseClass(t *testing.T) {
 	t.Parallel()
-	first, second := uuid.New(), uuid.New()
+	first, second, third := uuid.New(), uuid.New(), uuid.New()
 	flagsErr := fmt.Errorf("%w: processor_flags of work-items is ['sentinel-stored-value'], not a dict", coverage.ErrInvalidProcessorFlags)
 	projector := &recordingProjector{result: coverage.RefreshResult{
-		Refreshed: 1, Failed: 2,
+		Refreshed: 1, Failed: 3,
 		Failures: []coverage.RefreshFailure{
 			{OrgID: "org-a", ConfigID: first, Err: flagsErr},
 			{OrgID: "org-b", ConfigID: second, Err: fmt.Errorf("lock: %w", coverage.ErrConfigNotFound)},
+			{OrgID: "org-c", ConfigID: third, Err: fmt.Errorf("build: %w", &coverage.LimitError{Bound: "compact_window", Count: 30002, Max: 30000})},
 		},
 	}}
 	logs, err := logRecords(t, projector)
@@ -119,6 +120,8 @@ func TestHandlerNamesEachFailingConfigAndItsCauseClass(t *testing.T) {
 	for _, want := range []string{
 		"org_id=org-a", "config_id=" + first.String(), "cause_class=invalid_processor_flags",
 		"org_id=org-b", "config_id=" + second.String(), "cause_class=config_not_found",
+		"org_id=org-c", "config_id=" + third.String(), "cause_class=compact_window_limit",
+		`cause_detail="sync coverage compact window limit exceeded: 30002 (limit 30000)"`,
 	} {
 		if !strings.Contains(logs, want) {
 			t.Fatalf("log lacks %q:\n%s", want, logs)
@@ -127,11 +130,11 @@ func TestHandlerNamesEachFailingConfigAndItsCauseClass(t *testing.T) {
 	if strings.Contains(logs, "sentinel-stored-value") {
 		t.Fatalf("log carries a stored value:\n%s", logs)
 	}
-	if got := strings.Count(logs, "sync_coverage_refresh.config_failed"); got != 2 {
-		t.Fatalf("config_failed lines = %d, want 2", got)
+	if got := strings.Count(logs, "sync_coverage_refresh.config_failed"); got != 3 {
+		t.Fatalf("config_failed lines = %d, want 3", got)
 	}
 	cause, ok := jobruntime.SafeCause(err)
-	if !ok || cause != "sync coverage refresh: failed=2 refreshed=1" {
+	if !ok || cause != "sync coverage refresh: failed=3 refreshed=1" {
 		t.Fatalf("SafeCause = %q, %v", cause, ok)
 	}
 }

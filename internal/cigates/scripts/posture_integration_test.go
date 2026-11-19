@@ -1069,3 +1069,56 @@ func TestPostureIntegrationStubRunHandlesADashRelativeTmpdir(t *testing.T) {
 	}
 	requireEmptyDir(t, scratch, "a dash-relative TMPDIR after a failing exit")
 }
+
+// The host go-guard shim is first on PATH and is not a toolchain: --run must find the real go behind it by identity (the shim
+// file says "# go-guard shim" on line 2) and must refuse an un-capped run only while the shim is in play.
+func postureFakeShim(t *testing.T) (shimDir string) {
+	t.Helper()
+	shimDir = t.TempDir()
+	body := "#!/usr/bin/env bash\n# go-guard shim: test double, it must never run\necho \"fake go-guard ran\" >&2\nexit 96\n"
+	if err := os.WriteFile(filepath.Join(shimDir, "go"), []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return shimDir
+}
+
+func postureShimRun(t *testing.T, f postureFixture, path string, extraArgs []string, extraEnv ...string) cmdResult {
+	t.Helper()
+	paths := filepath.Join(t.TempDir(), "changed.txt")
+	if err := os.WriteFile(paths, []byte("internal/ok/ok_test.go\x00"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env := append(append(isolatedGoEnv(t), "PATH="+path), extraEnv...)
+	return cmdSpec{dir: f.dir, env: env}.run("bash", append([]string{filepath.Join(f.dir, "ci", "posture_integration.sh"), "--run", "--paths", paths}, extraArgs...)...)
+}
+
+func TestPostureIntegrationShimFirstOnPathResolvesTheRealGo(t *testing.T) {
+	f := postureDemo(t)
+	pass := filepath.Join(t.TempDir(), "runner.sh")
+	if err := os.WriteFile(pass, []byte("#!/bin/sh\nshift 5\nexec \"$@\"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := postureFakeShim(t) + string(os.PathListSeparator) + filepath.Dir(goBinary(t)) + string(os.PathListSeparator) + "/usr/bin:/bin"
+	res := postureShimRun(t, f, path, []string{"--test-runner", pass})
+	if res.code != 5 || strings.Contains(res.stderr, "fake go-guard ran") || strings.Contains(res.stderr, "cannot resolve the go toolchain") || postureRow(res, "SIMULATED-HEAD ") == "" {
+		t.Fatalf("shim first on PATH: exit %d stdout=%q stderr=%q, want the real go resolved and a simulated head", res.code, res.stdout, res.stderr)
+	}
+}
+
+func TestPostureIntegrationShimWithoutCappedIsRefused(t *testing.T) {
+	f := postureDemo(t)
+	path := postureFakeShim(t) + string(os.PathListSeparator) + filepath.Dir(goBinary(t)) + string(os.PathListSeparator) + "/usr/bin:/bin"
+	res := postureShimRun(t, f, path, nil)
+	if res.code != 2 || !strings.Contains(res.stderr, "go-slot.sh") || postureRow(res, "RECEIPT") != "" || strings.Contains(res.stdout, "POSTURE ") {
+		t.Fatalf("shim without GO_GUARD_CAPPED: exit %d stdout=%q stderr=%q, want exit 2, the go-slot.sh form, no verdict line", res.code, res.stdout, res.stderr)
+	}
+}
+
+func TestPostureIntegrationWithoutTheShimBehavesAsBefore(t *testing.T) {
+	f := postureDemo(t)
+	path := filepath.Dir(goBinary(t)) + string(os.PathListSeparator) + "/usr/bin:/bin"
+	res := postureShimRun(t, f, path, []string{"--only", "internal/empty"})
+	if res.code == 2 || strings.Contains(res.stderr, "go-guard") {
+		t.Fatalf("no shim: exit %d stderr=%q, want no go-guard refusal", res.code, res.stderr)
+	}
+}

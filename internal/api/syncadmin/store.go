@@ -27,6 +27,7 @@ type reader interface {
 	syncRunsByID(ctx context.Context, orgID string, ids []uuid.UUID) (map[uuid.UUID]*syncRun, error)
 	unitStatusCounts(ctx context.Context, orgID string, runIDs []uuid.UUID) (map[uuid.UUID]map[string]int64, error)
 	unitRanges(ctx context.Context, orgID string, runIDs []uuid.UUID, successOnly bool) ([]unitRange, error)
+	unitWindowSplits(ctx context.Context, orgID string, runIDs []uuid.UUID, longerLimit int) ([]unitWindowRow, error)
 	countBackfillJobs(ctx context.Context, orgID string) (int64, error)
 	backfillJobs(ctx context.Context, orgID string, limit, offset int64) ([]backfillJob, error)
 	unitActivity(ctx context.Context, orgID string, runID uuid.UUID) (*time.Time, *time.Time, error)
@@ -405,6 +406,69 @@ WHERE sync_run_id = ANY($1) AND org_id = $2 AND since_at IS NOT NULL AND before_
 		ranges = append(ranges, item)
 	}
 	return ranges, rows.Err()
+}
+
+// unitWindowRow is one row of unitWindowSplits: a run's split, with one of
+// its first longer-window units (the unit columns are NULL when it has none).
+type unitWindowRow struct {
+	RunID         uuid.UUID
+	MedianSeconds int64
+	Since, Before time.Time
+	TypicalUnits  int64
+	LongerUnits   int64
+	SourceID      *uuid.UUID
+	DatasetKey    *string
+	UnitSince     *time.Time
+	UnitBefore    *time.Time
+}
+
+// unitWindowSplitSQL splits each run's windowed units at twice the run's
+// median window (percentile_disc: the lower median). A unit whose window is
+// longer than that is a longer-window unit; the rest give the typical range.
+// A run whose median window is not positive has no longer-window unit.
+const unitWindowSplitSQL = `WITH unit AS (
+	SELECT sync_run_id, id, source_id, dataset_key, since_at, before_at, before_at - since_at AS span
+	FROM sync_run_units
+	WHERE sync_run_id = ANY($1) AND org_id = $2 AND since_at IS NOT NULL AND before_at IS NOT NULL
+), median AS (
+	SELECT sync_run_id, percentile_disc(0.5) WITHIN GROUP (ORDER BY span) AS span FROM unit GROUP BY sync_run_id
+), marked AS (
+	SELECT unit.sync_run_id, unit.id, unit.source_id, unit.dataset_key, unit.since_at, unit.before_at,
+		median.span AS median_span, (median.span > interval '0' AND unit.span > 2 * median.span) AS longer
+	FROM unit JOIN median ON median.sync_run_id = unit.sync_run_id
+), summary AS (
+	SELECT sync_run_id, min(median_span) AS median_span,
+		min(since_at) FILTER (WHERE NOT longer) AS since_at, max(before_at) FILTER (WHERE NOT longer) AS before_at,
+		count(*) FILTER (WHERE NOT longer) AS typical_units, count(*) FILTER (WHERE longer) AS longer_units
+	FROM marked GROUP BY sync_run_id
+), longest AS (
+	SELECT sync_run_id, source_id, dataset_key, since_at, before_at,
+		row_number() OVER (PARTITION BY sync_run_id ORDER BY since_at, id) AS rank
+	FROM marked WHERE longer
+)
+SELECT summary.sync_run_id, floor(extract(epoch FROM summary.median_span))::bigint, summary.since_at, summary.before_at,
+	summary.typical_units, summary.longer_units, longest.source_id, longest.dataset_key, longest.since_at, longest.before_at
+FROM summary LEFT JOIN longest ON longest.sync_run_id = summary.sync_run_id AND longest.rank <= $3
+ORDER BY summary.sync_run_id, longest.rank`
+
+// unitWindowSplits reads the requested window split of each run, with at
+// most longerLimit longer-window units per run, earliest since first.
+func (s store) unitWindowSplits(ctx context.Context, orgID string, runIDs []uuid.UUID, longerLimit int) ([]unitWindowRow, error) {
+	rows, err := s.pool.Query(ctx, unitWindowSplitSQL, runIDs, orgID, longerLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []unitWindowRow
+	for rows.Next() {
+		var item unitWindowRow
+		if err := rows.Scan(&item.RunID, &item.MedianSeconds, &item.Since, &item.Before, &item.TypicalUnits, &item.LongerUnits,
+			&item.SourceID, &item.DatasetKey, &item.UnitSince, &item.UnitBefore); err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
 }
 
 // backfillJob is one backfill_jobs row.

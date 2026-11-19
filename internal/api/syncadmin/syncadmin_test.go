@@ -351,7 +351,7 @@ func TestJobRunResponseMergesThePlannerRun(t *testing.T) {
 		`"started_at":"2026-05-01T10:00:00Z","completed_at":"2026-05-01T10:00:09.999999Z","duration_seconds":9,"items_synced":2,` +
 		`"result":{"sync_run_id":"x","keep":"b","items_synced":3,"extra":1,"sync_run_status":"running","total_units":5,"completed_units":2,"failed_units":1},` +
 		`"error":"jerr","triggered_by":"manual","sync_run":{"mode":"incremental","triggered_by":"manual","requested_range":null,` +
-		`"covered_range":null,"total_units":5,"completed_units":2,"failed_units":1,"sync_run_id":"00000000-0000-0000-0000-000000000001"},` +
+		`"covered_range":null,"requested_range_split":null,"total_units":5,"completed_units":2,"failed_units":1,"sync_run_id":"00000000-0000-0000-0000-000000000001"},` +
 		`"created_at":"2026-05-01T10:00:00Z"}`
 	if got := marshal(t, body); got != want {
 		t.Fatalf("got\n%s\nwant\n%s", got, want)

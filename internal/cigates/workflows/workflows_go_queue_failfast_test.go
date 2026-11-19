@@ -339,8 +339,18 @@ func namingStepDefects(doc yamlMap) []string {
 	if asString(n["if"]) != "failure()" {
 		out = append(out, fmt.Sprintf("the naming step if is %q, want failure()", asString(n["if"])))
 	}
-	if len(steps) != 2 {
-		out = append(out, fmt.Sprintf("go-storage-integration has %d steps, want the verdict step and the naming step", len(steps)))
+	// CHAOS-13766: the JUnit fan-in steps follow the two verdict steps. Each is diagnostics only: it runs after them, on every
+	// outcome, and is continue-on-error, so it cannot turn the job red or green.
+	if len(steps) < 2 || namingAt != 1 || verdictAt != 0 {
+		out = append(out, fmt.Sprintf("go-storage-integration has %d steps, want the verdict step, the naming step, then only the JUnit fan-in steps", len(steps)))
+	}
+	for i, s := range steps {
+		if i < 2 {
+			continue
+		}
+		if s["continue-on-error"] != true || asString(s["if"]) != "always()" {
+			out = append(out, fmt.Sprintf("go-storage-integration step %q after the naming step must be `if: always()` and continue-on-error: true", asString(s["name"])))
+		}
 	}
 	if job["if"] != "always()" {
 		out = append(out, "go-storage-integration must keep `if: always()`")

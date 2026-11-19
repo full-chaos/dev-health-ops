@@ -109,6 +109,22 @@ func maxFloat(values []float64) float64 {
 
 func ptr(value float64) *float64 { return &value }
 
+// pooledMarker is the pooled_samples_stored value of a row: 1 with its samples, 2 over the daily cap.
+func pooledMarker(overCap bool) uint8 {
+	if overCap {
+		return 2
+	}
+	return 1
+}
+
+// nonNilSamples is a non-nil sample array: a row with no sample stores an empty array, never NULL.
+func nonNilSamples(samples []float64) []float64 {
+	if samples == nil {
+		return []float64{}
+	}
+	return samples
+}
+
 // commitAgg mirrors compute.py's _CommitAgg: one row per (repo_id, commit_hash).
 type commitAgg struct {
 	repoID         uuid.UUID
@@ -622,6 +638,7 @@ func Compute(
 			MTTRHours:                  mttrHours,
 			ChangeFailureRate:          legacyRevertRatio,
 			ComputedAt:                 computedAtUTC,
+			PRSizeLOCSamples:           append([]float64{}, repoSizes...),
 		})
 	}
 

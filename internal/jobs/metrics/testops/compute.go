@@ -146,6 +146,16 @@ type PipelineMetric struct {
 	TeamID                *string
 	ServiceID             *string
 	OrgID                 string
+	// PooledSamples are the samples the duration and queue values above were taken over, stored with the row so the
+	// pooled readers read the same sample set as the stored values.
+	PooledSamples []PooledSample
+}
+
+// PooledSample is one counted run's (or suite's) samples with its own service id; nil is no sample.
+type PooledSample struct {
+	ServiceID *string
+	Duration  *float64
+	Queue     *float64
 }
 
 // TestMetric ports TestMetricsDailyRecord (testops_schemas.py:366).
@@ -166,6 +176,8 @@ type TestMetric struct {
 	SuiteDurationP50Seconds *float64
 	SuiteDurationP95Seconds *float64
 	FailureRecurrence       float64
+	// PooledSamples are the suite duration samples the suite percentiles above were taken over.
+	PooledSamples []PooledSample
 	// FlakeUnknown is set when the day holds case rows only of runs left out of
 	// the flake measures (runs not shown to be on the default branch). Nothing
 	// was measured: DistinctCases is 0, the rates above stay 0 here and the
@@ -508,6 +520,7 @@ type pipelineBucket struct {
 	pipelines, success, failure, cancelled, reruns int
 	skipped, unfinished, unfinishedStale, other    int
 	durations, queues                              []float64
+	samples                                        []PooledSample
 	orgID                                          string
 }
 
@@ -601,12 +614,17 @@ func (accumulator *PipelineAccumulator) Add(row PipelineRunRow) {
 	if row.RetryCount > 0 {
 		b.reruns++
 	}
-	if d := safeDurationSeconds(row.QueuedAt, row.StartedAt, row.FinishedAt, row.DurationSeconds, false); d != nil {
+	d := safeDurationSeconds(row.QueuedAt, row.StartedAt, row.FinishedAt, row.DurationSeconds, false)
+	if d != nil {
 		b.durations = append(b.durations, *d)
 	}
-	if q := safeDurationSeconds(row.QueuedAt, row.StartedAt, row.FinishedAt, row.QueueSeconds, true); q != nil {
+	q := safeDurationSeconds(row.QueuedAt, row.StartedAt, row.FinishedAt, row.QueueSeconds, true)
+	if q != nil {
 		b.queues = append(b.queues, *q)
 	}
+	// Every counted run is one element, a run with no sample included: the pooled readers then hold the same rows as
+	// the raw runs, so a computed day with no sample is a null bucket, not a missing one.
+	b.samples = append(b.samples, PooledSample{ServiceID: row.ServiceID, Duration: d, Queue: q})
 }
 
 // Finish emits the groups in Python's sorted (team_id, service_id) order.
@@ -637,6 +655,7 @@ func finishPipelineBucket(repoID uuid.UUID, k pipelineKey, b *pipelineBucket) Pi
 		FailureCount: b.failure, CancelledCount: b.cancelled,
 		SkippedCount: b.skipped, UnfinishedCount: b.unfinished,
 		OtherCount: b.other, UnfinishedStaleCount: b.unfinishedStale,
+		PooledSamples: b.samples,
 	}
 	// Success and failure rates are over the completed runs (succeeded or failed); cancelled, skipped and unfinished
 	// runs are in neither. A day with no completed run keeps 0 here (the columns are not nullable): every reader
@@ -719,6 +738,7 @@ func (accumulator *PipelineAccumulator) FinishRepoDay() *PipelineMetric {
 		merged.reruns += b.reruns
 		merged.durations = append(merged.durations, b.durations...)
 		merged.queues = append(merged.queues, b.queues...)
+		merged.samples = append(merged.samples, b.samples...)
 		if merged.orgID == "" {
 			merged.orgID = b.orgID
 		}
@@ -819,6 +839,7 @@ type TestAccumulator struct {
 	totalCases, passedCount, failedCount, skippedCount int
 	quarantinedCount                                   int
 	suiteDurations                                     []float64
+	suiteSamples                                       []PooledSample
 	caseStatuses                                       map[string]map[string]struct{}
 	caseHasRetry                                       map[string]bool
 	currentFailedNames                                 map[string]struct{}
@@ -857,9 +878,14 @@ func (accumulator *TestAccumulator) AddSuite(row SuiteRow) {
 	accumulator.failedCount += int(row.FailedCount) + int(row.ErrorCount)
 	accumulator.skippedCount += int(row.SkippedCount)
 	accumulator.quarantinedCount += int(row.QuarantinedCount)
+	var duration *float64
 	if row.DurationSeconds != nil && *row.DurationSeconds >= 0 {
 		accumulator.suiteDurations = append(accumulator.suiteDurations, *row.DurationSeconds)
+		value := *row.DurationSeconds
+		duration = &value
 	}
+	// Every counted suite is one element, a suite with no duration included (the raw suite rows' shape).
+	accumulator.suiteSamples = append(accumulator.suiteSamples, PooledSample{ServiceID: row.ServiceID, Duration: duration})
 }
 
 // AddCaseRow folds one raw test_case_results row in, reproducing Python's
@@ -945,6 +971,7 @@ func (accumulator *TestAccumulator) Finish(historicalFailedNames map[string]stru
 		RepoID: repoID, TotalCases: totalCases, PassedCount: passedCount,
 		FailedCount: failedCount, SkippedCount: skippedCount, QuarantinedCount: quarantinedCount,
 		TotalSuites: len(suites), FlakeCases: flakeCases, DistinctCases: distinctCases,
+		PooledSamples: accumulator.suiteSamples,
 	}
 	if totalCases > 0 {
 		metric.PassRate = float64(passedCount) / float64(totalCases)

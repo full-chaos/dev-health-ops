@@ -242,6 +242,10 @@ func TestClickHouseQueryAdapterChartsEveryRegistryMetric(t *testing.T) {
 		// 3 succeeded and 1 failed pipeline runs.
 		"failure_rate": {3, 1},
 		"success_rate": {3, 1},
+		// 4 pipeline runs, 1 cancelled; 4 runs with rerun_rate 0.25 (pipelines_count, cancelled_count and
+		// rerun_rate are registry metrics of their own and keep their seeded values).
+		"cancel_rate": {4, 1},
+		"rerun_rate":  {4, 0.25},
 		// 3 passed and 1 failed test cases (both counts are registry metrics of
 		// their own and keep their seeded values).
 		"pass_rate": {3, 1},

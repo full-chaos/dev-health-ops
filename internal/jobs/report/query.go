@@ -717,7 +717,7 @@ func buildChartQuery(spec ChartSpec, definition metricDefinition) (string, []any
 	yExpression := fmt.Sprintf("avg(%s)", spec.Metric)
 	if definition.ownersAsOf != nil {
 		// avg() of no row is NaN, which a total (no GROUP BY) would draw as a point; a team that owns no repository and
-		// a window with no row have no value.
+		// a window with no row have no value. The mean keys of user_metrics_daily reach this.
 		yExpression = fmt.Sprintf("avgOrNull(%s)", spec.Metric)
 	}
 	if strings.HasSuffix(spec.Metric, "_count") || definition.Unit == "count" {

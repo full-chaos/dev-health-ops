@@ -16,16 +16,18 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
-// benchmarkingSchema is the production shape of the tables this family touches:
-// `repos` (for the org anchor), one source metric table, and ALL SIX output
-// tables, copied from migration 031_testops_benchmarking.sql.
+// benchmarkingSchema is the hand-built table this family's tests need that no
+// chain migration changes: `repos` (for the org anchor). The source metric
+// table and ALL SIX output tables are built from the live migration chain
+// (chschema.CreateTables), so they carry every column the chain added, the
+// retraction marker of the empty-run retirement included.
 //
-// All six, not just the two the assertions read. The first version created only
-// those two, reasoning that "the other four share the same writer path and are
-// covered by the compute-side oracle". Both halves of that are true and the
-// conclusion still does not follow: the oracle covers the VALUES those tables
-// receive, but the writer prepares one batch PER TABLE and aborts on the first
-// that does not exist --
+// All six output tables, not just the two the assertions read. The first
+// version created only those two, reasoning that "the other four share the same
+// writer path and are covered by the compute-side oracle". Both halves of that
+// are true and the conclusion still does not follow: the oracle covers the
+// VALUES those tables receive, but the writer prepares one batch PER TABLE and
+// aborts on the first that does not exist --
 //
 //	prepare testops_period_comparisons batch: code: 60,
 //	message: Table worker_test.testops_period_comparisons does not exist
@@ -33,80 +35,11 @@ import (
 // so the run died before reaching any assertion. The question a write-path
 // fixture must answer is which tables the WRITER WRITES, never which tables the
 // assertions read.
-//
-// Note these six carry org_id as a plain column with DEFAULT ” and do NOT have
-// it in their sorting keys: migration 031 created them AFTER 027's org_id-first
-// sweep, so they were never part of it. That is production's real shape and is
-// reproduced faithfully rather than corrected here. It is safe today only
-// because all six are plain MergeTree (no dedup collapse) and the loader filters
-// org_id explicitly.
 var benchmarkingSchema = []string{
 	`CREATE TABLE repos (
     id UUID, org_id String, repo String, settings String, provider String,
     last_synced DateTime64(3, 'UTC')
 ) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, id)`,
-	// current_value/baseline_value/percentile_rank/p25-90_value and
-	// maturity_bands.value are Nullable(Float64) since migrations
-	// 090_testops_baselines_nullable_fields.sql and
-	// 092_testops_percentile_rank_nullable_field.sql (CHAOS-4806, ruling
-	// R73) -- a plain Float64 here would refuse the writer's *float64 nil
-	// writes with a real ClickHouse error instead of the production
-	// schema's actual NULL, silently diverging this fixture from what the
-	// migrations (and the writer's own struct types) now require.
-	// maturity_bands.percentile_rank stays required: ClassifyMaturityBands
-	// skips emitting a maturity-band row entirely when the source
-	// baseline's rank is undefined, so every row this table actually
-	// receives carries a real rank.
-	`CREATE TABLE testops_metric_baselines (
-    metric_name LowCardinality(String), scope_type LowCardinality(String), scope_key String,
-    period_start Date, period_end Date, rolling_window_days UInt16,
-    current_value Nullable(Float64), baseline_value Nullable(Float64), percentile_rank Nullable(Float64),
-    p25_value Nullable(Float64), p50_value Nullable(Float64), p75_value Nullable(Float64), p90_value Nullable(Float64),
-    sample_size UInt32, org_id LowCardinality(String) DEFAULT '', computed_at DateTime('UTC')
-) ENGINE MergeTree PARTITION BY toYYYYMM(period_end)
-  ORDER BY (metric_name, scope_type, scope_key, period_end, rolling_window_days)`,
-	`CREATE TABLE testops_maturity_bands (
-    metric_name LowCardinality(String), scope_type LowCardinality(String), scope_key String,
-    period_start Date, period_end Date, value Nullable(Float64), percentile_rank Float64,
-    maturity_band LowCardinality(String), confidence Float64,
-    org_id LowCardinality(String) DEFAULT '', computed_at DateTime('UTC')
-) ENGINE MergeTree PARTITION BY toYYYYMM(period_end)
-  ORDER BY (metric_name, scope_type, scope_key, period_end)`,
-	`CREATE TABLE testops_period_comparisons (
-    metric_name LowCardinality(String), scope_type LowCardinality(String), scope_key String,
-    current_period_start Date, current_period_end Date,
-    comparison_period_start Date, comparison_period_end Date,
-    current_value Float64, comparison_value Float64, absolute_delta Float64,
-    percentage_change Nullable(Float64), trend_direction LowCardinality(String),
-    org_id LowCardinality(String) DEFAULT '', computed_at DateTime('UTC')
-) ENGINE MergeTree PARTITION BY toYYYYMM(current_period_end)
-  ORDER BY (metric_name, scope_type, scope_key, current_period_end, comparison_period_end)`,
-	`CREATE TABLE testops_metric_anomalies (
-    metric_name LowCardinality(String), scope_type LowCardinality(String), scope_key String,
-    day Date, value Float64, baseline_value Float64, z_score Float64,
-    anomaly_type LowCardinality(String), direction LowCardinality(String),
-    severity LowCardinality(String), volatility_score Float64,
-    org_id LowCardinality(String) DEFAULT '', computed_at DateTime('UTC')
-) ENGINE MergeTree PARTITION BY toYYYYMM(day)
-  ORDER BY (metric_name, scope_type, scope_key, day, anomaly_type)`,
-	`CREATE TABLE testops_metric_correlations (
-    metric_name LowCardinality(String), paired_metric_name LowCardinality(String),
-    scope_type LowCardinality(String), scope_key String,
-    period_start Date, period_end Date, coefficient Float64, p_value Float64,
-    sample_size UInt32, is_significant UInt8, interpretation String,
-    org_id LowCardinality(String) DEFAULT '', computed_at DateTime('UTC')
-) ENGINE MergeTree PARTITION BY toYYYYMM(period_end)
-  ORDER BY (metric_name, paired_metric_name, scope_type, scope_key, period_end)`,
-	`CREATE TABLE testops_benchmark_insights (
-    insight_id String, insight_type LowCardinality(String),
-    scope_type LowCardinality(String), scope_key String,
-    metric_name LowCardinality(String), paired_metric_name Nullable(String),
-    period_start Nullable(Date), period_end Nullable(Date),
-    severity LowCardinality(String), summary String,
-    evidence_json String DEFAULT '{}',
-    org_id LowCardinality(String) DEFAULT '', computed_at DateTime('UTC')
-) ENGINE MergeTree PARTITION BY toYYYYMM(coalesce(period_end, toDate(computed_at)))
-  ORDER BY (insight_id, computed_at)`,
 }
 
 // TestBenchmarkingFinalizeRunsOnlyAfterEveryPartitionSucceeded is CHAOS-5194's
@@ -152,7 +85,7 @@ func TestBenchmarkingFinalizeRunsOnlyAfterEveryPartitionSucceeded(t *testing.T) 
 			t.Fatal(err)
 		}
 	}
-	chschema.CreateTables(ctx, t, conn, "testops_pipeline_metrics_daily")
+	chschema.CreateTables(ctx, t, conn, append([]string{"testops_pipeline_metrics_daily"}, benchmarkingWriteOrder...)...)
 
 	repos := seedBenchmarkingOrg(t, ctx, conn)
 	run := benchmarkingRun("run-race", repos)
@@ -258,20 +191,6 @@ var benchmarkingWriteOrder = []string{
 	"testops_period_comparisons",
 	"testops_metric_correlations",
 	"testops_benchmark_insights",
-}
-
-// benchmarkingDDL returns the CREATE statement for one output table out of
-// benchmarkingSchema, so a test can drop a table and put it back byte-identical
-// rather than keeping a second, drifting copy of the DDL.
-func benchmarkingDDL(t *testing.T, table string) string {
-	t.Helper()
-	for _, statement := range benchmarkingSchema {
-		if strings.HasPrefix(statement, "CREATE TABLE "+table+" ") {
-			return statement
-		}
-	}
-	t.Fatalf("no CREATE statement for %q in benchmarkingSchema", table)
-	return ""
 }
 
 const (
@@ -411,7 +330,7 @@ func TestBenchmarkingPartialWriteIsReportedWithItsTrueRowCount(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	chschema.CreateTables(ctx, t, conn, "testops_pipeline_metrics_daily")
+	chschema.CreateTables(ctx, t, conn, append([]string{"testops_pipeline_metrics_daily"}, benchmarkingWriteOrder...)...)
 
 	repos := seedBenchmarkingOrg(t, ctx, conn)
 	// All-succeeded fake Store: this test's job is the partial-write/
@@ -540,9 +459,7 @@ func TestBenchmarkingPartialWriteIsReportedWithItsTrueRowCount(t *testing.T) {
 	// a second copy. If this phase does NOT double the counts, the duplication
 	// hazard is not real on this schema and the sentinel above is guarding
 	// nothing; that is a failure of this test's premise, not a pass.
-	if err := conn.Exec(ctx, benchmarkingDDL(t, breakTable)); err != nil {
-		t.Fatal(err)
-	}
+	chschema.CreateTables(ctx, t, conn, breakTable)
 	if _, err := executor.ComputeFinalizeFamily(ctx, run); err != nil {
 		t.Fatalf("re-drive after restoring %s failed: %v", breakTable, err)
 	}

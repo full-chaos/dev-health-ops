@@ -282,9 +282,26 @@ func renderChart(chart ChartResult) string {
 	lines := []string{"#### " + chart.Title, "", "| x | y | group |", "| --- | ---: | --- |"}
 	for _, point := range chart.DataPoints {
 		lines = append(lines, fmt.Sprintf("| %s | %s | %s |",
-			point.X, strconv.FormatFloat(point.Y, 'f', -1, 64), point.Group))
+			markdownTableCell(point.X), strconv.FormatFloat(point.Y, 'f', -1, 64), markdownTableCell(point.Group)))
 	}
 	return strings.Join(lines, "\n") + note
+}
+
+var markdownCellLineBreaks = strings.NewReplacer("\r\n", " ", "\n", " ", "\r", " ")
+
+// markdownTableCell writes a label as one table cell that reads as the label:
+// a line break becomes a space, and each character that splits a cell or
+// starts inline Markdown gets a backslash escape.
+func markdownTableCell(value string) string {
+	value = markdownCellLineBreaks.Replace(value)
+	var b strings.Builder
+	for _, r := range value {
+		if strings.ContainsRune("\\|*_`[]<>~&", r) {
+			b.WriteByte('\\')
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
 }
 
 func formatScope(plan Plan) string {

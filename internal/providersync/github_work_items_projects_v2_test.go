@@ -365,9 +365,9 @@ func (doer *gitHubProjectV2Doer) Do(request *http.Request) (*http.Response, erro
 
 func TestGitHubProjectV2FetcherCompletesOuterAndNestedPagination(t *testing.T) {
 	doer := &gitHubProjectV2Doer{t: t, replies: []string{
-		`{"data":{"organization":{"projectV2":{"items":{"nodes":[{"id":"PVTI_1","content":{"__typename":"Issue","number":7,"title":"Ship it","state":"OPEN","createdAt":"2026-08-01T08:00:00Z","updatedAt":"2026-08-02T08:00:00Z","repository":{"nameWithOwner":"acme/api"},"labels":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},"assignees":{"nodes":[]}},"fieldValues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},"changes":{"nodes":[{"field":{"name":"Status"},"previousValue":{"name":"Todo"},"newValue":{"name":"Doing"},"createdAt":"2026-08-01T09:00:00Z","actor":{"login":"octocat"}}],"pageInfo":{"hasNextPage":true,"endCursor":"change-1"}}}],"pageInfo":{"hasNextPage":true,"endCursor":"item-1"}}}}}}`,
-		`{"data":{"node":{"changes":{"nodes":[{"field":{"name":"Status"},"previousValue":{"name":"Doing"},"newValue":{"name":"Done"},"createdAt":"2026-08-02T09:00:00Z","actor":{"login":"octocat"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}`,
-		`{"data":{"organization":{"projectV2":{"items":{"nodes":[{"id":"PVTI_2","content":{"__typename":"PullRequest","number":8,"title":"not a work item"},"fieldValues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},"changes":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`,
+		`{"data":{"organization":{"projectV2":{"items":{"nodes":[{"id":"PVTI_1","content":{"__typename":"Issue","number":7,"title":"Ship it","state":"OPEN","createdAt":"2026-08-01T08:00:00Z","updatedAt":"2026-08-02T08:00:00Z","repository":{"nameWithOwner":"acme/api"},"labels":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},"assignees":{"nodes":[]}},"fieldValues":{"nodes":[],"pageInfo":{"hasNextPage":true,"endCursor":"value-1"}}}],"pageInfo":{"hasNextPage":true,"endCursor":"item-1"}}}}}}`,
+		`{"data":{"node":{"fieldValues":{"nodes":[{"__typename":"ProjectV2ItemFieldSingleSelectValue","name":"Done","field":{"name":"Status"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}`,
+		`{"data":{"organization":{"projectV2":{"items":{"nodes":[{"id":"PVTI_2","content":{"__typename":"PullRequest","number":8,"title":"not a work item"},"fieldValues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`,
 	}}
 	client := githubProjectV2TestClient(t, fakehttp.Client(doer))
 	claim := githubWorkItemOracleClaim()
@@ -380,15 +380,18 @@ func TestGitHubProjectV2FetcherCompletesOuterAndNestedPagination(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Rows.WorkItems) != 1 || len(result.Rows.StatusTransitions) != 2 {
+	// The board query reads no transitions (CHAOS-14195: GitHub's ProjectV2Item
+	// has no `changes`); the nested page is the item's fieldValues continuation.
+	if len(result.Rows.WorkItems) != 1 || len(result.Rows.StatusTransitions) != 0 ||
+		result.Rows.WorkItems[0].Status != "done" {
 		t.Fatalf("rows=%+v", result.Rows)
 	}
-	// Records is 4, not 3: one work item, two status transitions, and the
-	// `projects` catalogue row for the configured board (CHAOS-4194). The PR
+	// Records is 2: one work item and the `projects` catalogue row for the
+	// configured board (CHAOS-4194). The PR
 	// item in this fixture carries no repository and no createdAt, so it
 	// produces NO membership row -- and is counted rather than dropped
 	// silently, which is the behaviour the ticket exists to end.
-	if result.Evidence.Pages != 3 || result.Evidence.Requests != 3 || result.Evidence.Records != 4 {
+	if result.Evidence.Pages != 3 || result.Evidence.Requests != 3 || result.Evidence.Records != 2 {
 		t.Fatalf("evidence=%+v", result.Evidence)
 	}
 	if len(result.Rows.Projects) != 1 || result.Rows.Projects[0].ID != "ghprojv2:acme#3" ||
@@ -423,7 +426,8 @@ func TestGitHubProjectV2FetcherCompletesOuterAndNestedPagination(t *testing.T) {
 	if got := result.Rows.WorkItems[0]; got.WorkItemID != "gh:acme/api#7" || got.RepoID != nil || got.ProjectID == nil || *got.ProjectID != "ghprojv2:acme#3" {
 		t.Fatalf("work item=%+v", got)
 	}
-	if len(doer.bodies) != 3 || doer.bodies[1]["query"] == doer.bodies[0]["query"] {
+	if len(doer.bodies) != 3 || doer.bodies[1]["query"] != gitHubProjectsV2FieldValuesQuery ||
+		doer.bodies[0]["query"] != gitHubProjectsV2ItemsQuery || doer.bodies[2]["query"] != gitHubProjectsV2ItemsQuery {
 		t.Fatalf("requests=%+v", doer.bodies)
 	}
 	outerQuery := doer.bodies[0]["query"].(string)
@@ -431,7 +435,7 @@ func TestGitHubProjectV2FetcherCompletesOuterAndNestedPagination(t *testing.T) {
 	if got := strings.Count(outerQuery, "labels(first: 100) { nodes { name } pageInfo { hasNextPage } }"); got != 2 {
 		t.Errorf("labels(first: 100) occurrences=%d want 2 (Issue and PullRequest)", got)
 	}
-	for _, leaf := range []string{"items(first: $first", "labels(first: 100) { nodes { name } pageInfo { hasNextPage } }", "assignees(first: 10)", "fieldValues(first: 100)", "changes(first: 100"} {
+	for _, leaf := range []string{"items(first: $first", "labels(first: 100) { nodes { name } pageInfo { hasNextPage } }", "assignees(first: 10)", "fieldValues(first: 100)"} {
 		if !strings.Contains(outerQuery, leaf) {
 			t.Errorf("query missing documented leaf bound %q", leaf)
 		}
@@ -487,26 +491,6 @@ func TestGitHubProjectV2FetcherCompletesOuterAndNestedPagination(t *testing.T) {
 				wantCause:    githubProjectsV2StructuralDegraded,
 			},
 			{
-				// codex adversarial review, CHAOS-4289 round 2: the outer
-				// `items` connection already refuses a null/omitted `nodes`
-				// (the "missing page info" case above), but the nested
-				// per-item `changes` connection is the same GraphQL shape and
-				// had no equivalent check -- an item reporting
-				// hasNextPage:false with `nodes` entirely omitted silently
-				// dropped its status-transition history while the board
-				// still reported Complete. The item itself (Issue #7 in
-				// acme/api) is otherwise fully identifiable, isolating this
-				// case to the pagination-completeness gate rather than
-				// item-identification (boardIncomplete).
-				name: "nested changes nodes missing",
-				reply: `{"data":{"organization":{"projectV2":{"items":{"nodes":[` +
-					`{"id":"PVTI_1","content":{"__typename":"Issue","number":7,"repository":{"nameWithOwner":"acme/api"}},"fieldValues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},"changes":{"pageInfo":{"hasNextPage":false,"endCursor":null}}}` +
-					`],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`,
-				wantComplete: false,
-				wantRemovals: 0,
-				wantCause:    githubProjectsV2StructuralDegraded,
-			},
-			{
 				name:         "genuinely empty board",
 				reply:        `{"data":{"organization":{"projectV2":{"items":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`,
 				wantComplete: true,
@@ -544,55 +528,6 @@ func TestGitHubProjectV2FetcherCompletesOuterAndNestedPagination(t *testing.T) {
 			})
 		}
 	}
-
-	// codex adversarial review, CHAOS-4289 round 3: the initial item.Changes
-	// payload's null/omitted `nodes` is refused above ("nested changes nodes
-	// missing"), but a CONTINUATION page -- fetched only when the initial
-	// page claims hasNextPage:true -- is the identical GraphQL shape and
-	// needs the identical check. Without it, a continuation page reporting
-	// hasNextPage:false with `nodes` entirely omitted silently truncated this
-	// item's status-transition history while the board still reported
-	// Complete. A t.Run inside this existing function, not a new top-level
-	// test: no new entry for ci/go_providersync_test_shards.tsv's exhaustive
-	// count (see test: keep providersync shard count stable, 792a147cd).
-	//
-	// The item (Issue #7 in acme/api) is otherwise fully identifiable,
-	// isolating this to the pagination-completeness gate rather than
-	// item-identification (boardIncomplete).
-	t.Run("continuation page missing nodes is incomplete", func(t *testing.T) {
-		doer := &gitHubProjectV2Doer{t: t, replies: []string{
-			`{"data":{"organization":{"projectV2":{"items":{"nodes":[` +
-				`{"id":"PVTI_1","content":{"__typename":"Issue","number":7,"repository":{"nameWithOwner":"acme/api"}},"fieldValues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},"changes":{"nodes":[` +
-				`{"field":{"name":"Status"},"previousValue":{"name":"Todo"},"newValue":{"name":"Doing"},"createdAt":"2026-08-01T09:00:00Z","actor":{"login":"octocat"}}` +
-				`],"pageInfo":{"hasNextPage":true,"endCursor":"change-1"}}}` +
-				`],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`,
-			// The continuation reply: valid, explicit hasNextPage:false, but
-			// `nodes` is entirely omitted -- the same malformed shape the
-			// initial page's own guard refuses.
-			`{"data":{"node":{"changes":{"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}`,
-		}}
-		claim := githubWorkItemOracleClaim()
-		claim.IntegrationConfig = map[string]any{"github_projects_v2": []any{map[string]any{"org_login": "acme", "project_number": 3}}}
-		result, err := (GitHubProjectV2Fetcher{}).Fetch(
-			context.Background(), claim,
-			providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
-			githubProjectV2TestClient(t, fakehttp.Client(doer)), time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC), nil,
-		)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(result.Snapshots) != 1 || result.Snapshots[0].Complete {
-			t.Fatalf("snapshot=%+v, want Complete=false", result.Snapshots)
-		}
-		if len(result.Snapshots[0].Subjects) != 1 || result.Snapshots[0].Subjects[0].SubjectID != "gh:acme/api#7" {
-			t.Fatalf("snapshot=%+v, want the Issue still positively identified", result.Snapshots)
-		}
-		if len(result.Incomplete) != 1 || result.Incomplete[0].Component != githubProjectsV2IncompleteComponent ||
-			result.Incomplete[0].Cause != githubProjectsV2StructuralDegraded {
-			t.Fatalf("incomplete=%+v, want exactly one %s/%s entry",
-				result.Incomplete, githubProjectsV2IncompleteComponent, githubProjectsV2StructuralDegraded)
-		}
-	})
 }
 
 func TestGitHubProjectV2FetcherFailsClosedOnUnusableCursors(t *testing.T) {
@@ -602,8 +537,7 @@ func TestGitHubProjectV2FetcherFailsClosedOnUnusableCursors(t *testing.T) {
 			`{"data":{"organization":{"projectV2":{"items":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`,
 		},
 		{
-			`{"data":{"organization":{"projectV2":{"items":{"nodes":[{"id":"PVTI_1","content":{"__typename":"DraftIssue","title":"Draft","createdAt":"2026-08-01T08:00:00Z","updatedAt":"2026-08-01T08:00:00Z"},"fieldValues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},"changes":{"nodes":[],"pageInfo":{"hasNextPage":true,"endCursor":null}}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`,
-			`{"data":{"node":{"changes":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}`,
+			`{"data":{"organization":{"projectV2":{"items":{"nodes":[{"id":"PVTI_1","content":{"__typename":"DraftIssue","title":"Draft","createdAt":"2026-08-01T08:00:00Z","updatedAt":"2026-08-01T08:00:00Z"},"fieldValues":{"nodes":[],"pageInfo":{"hasNextPage":true,"endCursor":null}}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`,
 		},
 	} {
 		doer := &gitHubProjectV2Doer{t: t, replies: replies}
@@ -793,7 +727,7 @@ func (reservation gitHubProjectV2Reservation) Release(context.Context) error {
 // across re-syncs.
 func TestGitHubProjectV2FetcherEmitsPullRequestBoardMembership(t *testing.T) {
 	doer := &gitHubProjectV2Doer{t: t, replies: []string{
-		`{"data":{"organization":{"projectV2":{"items":{"nodes":[{"id":"PVTI_PR","createdAt":"2026-08-01T08:00:00Z","content":{"__typename":"PullRequest","number":42,"title":"A PR","repository":{"nameWithOwner":"acme/api"}},"fieldValues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},"changes":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`,
+		`{"data":{"organization":{"projectV2":{"items":{"nodes":[{"id":"PVTI_PR","createdAt":"2026-08-01T08:00:00Z","content":{"__typename":"PullRequest","number":42,"title":"A PR","repository":{"nameWithOwner":"acme/api"}},"fieldValues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`,
 	}}
 	client := githubProjectV2TestClient(t, fakehttp.Client(doer))
 	claim := githubWorkItemOracleClaim()
@@ -860,7 +794,7 @@ func TestGitHubProjectV2FetcherEmitsPullRequestBoardMembership(t *testing.T) {
 // sync of a board that never changed. The two fetches below differ only in
 // normalizedAt, which is exactly the difference a re-sync makes.
 func TestGitHubProjectV2MembershipEventIDIsStableAcrossResyncs(t *testing.T) {
-	reply := `{"data":{"organization":{"projectV2":{"items":{"nodes":[{"id":"PVTI_PR","createdAt":"2026-08-01T08:00:00Z","content":{"__typename":"PullRequest","number":42,"title":"A PR","repository":{"nameWithOwner":"acme/api"}},"fieldValues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},"changes":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`
+	reply := `{"data":{"organization":{"projectV2":{"items":{"nodes":[{"id":"PVTI_PR","createdAt":"2026-08-01T08:00:00Z","content":{"__typename":"PullRequest","number":42,"title":"A PR","repository":{"nameWithOwner":"acme/api"}},"fieldValues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`
 	claim := githubWorkItemOracleClaim()
 	claim.IntegrationConfig = map[string]any{"github_projects_v2": []any{map[string]any{"org_login": "acme", "project_number": 3}}}
 	credential := providerfoundation.Credential{Provider: "github", ID: claim.CredentialID}
@@ -916,7 +850,7 @@ func TestGitHubProjectV2SnapshotCompleteAcrossEveryIdentificationOutcome(t *test
 
 	t.Run("issue missing repository is incomplete", func(t *testing.T) {
 		result := fetch(t, `{"data":{"organization":{"projectV2":{"items":{"nodes":[`+
-			`{"id":"PVTI_1","content":{"__typename":"Issue","number":7,"title":"no repo"},"fieldValues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},"changes":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}`+
+			`{"id":"PVTI_1","content":{"__typename":"Issue","number":7,"title":"no repo"},"fieldValues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}`+
 			`],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`)
 		if result.Snapshots[0].Complete || len(result.Snapshots[0].Subjects) != 0 {
 			t.Fatalf("snapshot=%+v, want Complete=false and no identified subjects", result.Snapshots[0])
@@ -935,7 +869,7 @@ func TestGitHubProjectV2SnapshotCompleteAcrossEveryIdentificationOutcome(t *test
 
 	t.Run("a board of only draft issues is complete", func(t *testing.T) {
 		result := fetch(t, `{"data":{"organization":{"projectV2":{"items":{"nodes":[`+
-			`{"id":"PVTI_1","content":{"__typename":"DraftIssue","title":"idea"},"fieldValues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},"changes":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}`+
+			`{"id":"PVTI_1","content":{"__typename":"DraftIssue","title":"idea"},"fieldValues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}`+
 			`],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`)
 		if !result.Snapshots[0].Complete || len(result.Snapshots[0].Subjects) != 0 {
 			t.Fatalf("snapshot=%+v, want Complete=true (a draft issue names no subject at all, which is complete information) and no subjects", result.Snapshots[0])
@@ -947,7 +881,7 @@ func TestGitHubProjectV2SnapshotCompleteAcrossEveryIdentificationOutcome(t *test
 
 	t.Run("an unrecognised content typename is incomplete", func(t *testing.T) {
 		result := fetch(t, `{"data":{"organization":{"projectV2":{"items":{"nodes":[`+
-			`{"id":"PVTI_1","content":{"__typename":"SomeFutureContentType"},"fieldValues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},"changes":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}`+
+			`{"id":"PVTI_1","content":{"__typename":"SomeFutureContentType"},"fieldValues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}`+
 			`],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`)
 		if result.Snapshots[0].Complete || len(result.Snapshots[0].Subjects) != 0 {
 			t.Fatalf("snapshot=%+v, want Complete=false: GitHub added a content kind this code has never seen", result.Snapshots[0])
@@ -961,9 +895,9 @@ func TestGitHubProjectV2SnapshotCompleteAcrossEveryIdentificationOutcome(t *test
 
 	t.Run("a fully identified mixed board is complete", func(t *testing.T) {
 		result := fetch(t, `{"data":{"organization":{"projectV2":{"items":{"nodes":[`+
-			`{"id":"PVTI_1","content":{"__typename":"Issue","number":7,"title":"ok","repository":{"nameWithOwner":"acme/api"},"labels":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},"assignees":{"nodes":[]}},"fieldValues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},"changes":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}},`+
-			`{"id":"PVTI_2","createdAt":"2026-08-01T08:00:00Z","content":{"__typename":"PullRequest","number":42,"title":"ok","repository":{"nameWithOwner":"acme/api"}},"fieldValues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},"changes":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}},`+
-			`{"id":"PVTI_3","content":{"__typename":"DraftIssue","title":"idea"},"fieldValues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},"changes":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}`+
+			`{"id":"PVTI_1","content":{"__typename":"Issue","number":7,"title":"ok","repository":{"nameWithOwner":"acme/api"},"labels":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},"assignees":{"nodes":[]}},"fieldValues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}},`+
+			`{"id":"PVTI_2","createdAt":"2026-08-01T08:00:00Z","content":{"__typename":"PullRequest","number":42,"title":"ok","repository":{"nameWithOwner":"acme/api"}},"fieldValues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}},`+
+			`{"id":"PVTI_3","content":{"__typename":"DraftIssue","title":"idea"},"fieldValues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}`+
 			`],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`)
 		if !result.Snapshots[0].Complete || len(result.Snapshots[0].Subjects) != 2 {
 			t.Fatalf("snapshot=%+v, want Complete=true with 2 identified subjects", result.Snapshots[0])
@@ -981,8 +915,7 @@ func TestGitHubProjectV2FetcherCountsBoardItemsWithMoreLabelsThanOnePage(t *test
 		return `{"id":"` + id + `","content":{"__typename":"Issue","number":` + strconv.Itoa(number) +
 			`,"title":"t","state":"OPEN","createdAt":"2026-08-01T08:00:00Z","updatedAt":"2026-08-02T08:00:00Z",` +
 			`"repository":{"nameWithOwner":"acme/api"},"labels":{"nodes":[{"name":"a"}],"pageInfo":{"hasNextPage":` +
-			strconv.FormatBool(hasNext) + `}},"assignees":{"nodes":[]}},"fieldValues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},` +
-			`"changes":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}`
+			strconv.FormatBool(hasNext) + `}},"assignees":{"nodes":[]}},"fieldValues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}`
 	}
 	doer := &gitHubProjectV2Doer{t: t, replies: []string{
 		`{"data":{"organization":{"projectV2":{"items":{"nodes":[` + item("PVTI_1", 1, true) + `,` + item("PVTI_2", 2, false) + `,` + item("PVTI_3", 3, true) +

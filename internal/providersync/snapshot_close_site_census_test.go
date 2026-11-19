@@ -19,13 +19,14 @@ var snapshotKindCensus = map[string]struct {
 	// does not hold is gone (snapshotAbsenceByKind).
 	absence string
 }{
-	// Scope: EVERY kind below closes only behind the one scope gate
+	// Scope: EVERY provider kind below closes only behind the one scope gate
 	// (ProveSoleScope: no other active integration of the provider in the
 	// organization). The rows of no kind carry an integration key, and
 	// public.integrations has no unique (org, provider) rule, so no kind can
 	// say "two integrations cannot exist": snapshotKindScope is the same for
 	// all, and TestSnapshotKindPolicyTableIsTheDocumentedOne pins it in the
-	// two documented tables.
+	// two documented tables. inferred_repo_ownership is no provider kind
+	// (snapshotKindScopes): it is derived from stored rows by its sole writer.
 	"linear_project_ownership": {"internal/providersync.LinearProjectOwnershipKind", "EmptyClosesNothing",
 		"one projects walk for the workspace: an answer with no project ownership is an access change before it is a removal", "direct answer"},
 	"linear_team_key_ownership": {"internal/providersync.LinearTeamKeyOwnershipKind", "EmptyClosesNothing",
@@ -51,6 +52,9 @@ var snapshotKindCensus = map[string]struct {
 			"scope only through atlassian_team_catalog", "direct answer"},
 	"atlassian_team_catalog": {"internal/providersync.AtlassianTeamCatalogKind", "EmptyClosesNothing",
 		"one team search for the organization: a search that answers no team is an access change before every team was deleted", "direct answer"},
+	"inferred_repo_ownership": {"internal/providersync.InferredRepoOwnershipKind", "EmptyClosesNothing",
+		"a run with no input row of any kind is inputs not ready and closes nothing; a claim the run does not derive closes " +
+			"only when every input row recorded as its evidence is in the run", "recorded input evidence"},
 }
 
 // snapshotCloseSites is every production function that turns the retractions
@@ -242,6 +246,20 @@ func TestEveryCloseSiteTakesTheTypedSnapshot(t *testing.T) {
 // documented tables word it.
 const snapshotKindScope = "sole integration"
 
+// snapshotKindsOutsideTheRule are the kinds no PlanSnapshot close site
+// decides, with where their closes are decided and tested.
+var snapshotKindsOutsideTheRule = map[string]string{
+	"inferred_repo_ownership": "TeamRepoOwnershipDerivationService.derive diffs its own derivation; a close takes the kind guard " +
+		"(team_repo_ownership_retraction_guard.go) and AbsenceByInputEvidence (team_repo_ownership_evidence_test.go, " +
+		"team_repo_ownership_input_evidence_integration_test.go)",
+}
+
+// snapshotKindScopes is the scope of a kind that is no provider kind: its
+// scope is a census fact, not a ProveSoleScope proof.
+var snapshotKindScopes = map[string]string{
+	"inferred_repo_ownership": "sole writer of inferred rows",
+}
+
 // TestSnapshotKindPolicyTableIsTheDocumentedOne compares the three places
 // that state what an empty answer of a fact kind means: the census (which
 // TestSnapshotKindCensus compares with the code that makes the kinds), the
@@ -256,7 +274,11 @@ func TestSnapshotKindPolicyTableIsTheDocumentedOne(t *testing.T) {
 		if !known {
 			t.Fatalf("the kind %q has the empty-answer policy %q, which this test has no wording for", name, entry.empty)
 		}
-		want[name] = snapshotKindScope + "; " + policy + "; " + entry.absence
+		scope := snapshotKindScope
+		if named, ok := snapshotKindScopes[name]; ok {
+			scope = named
+		}
+		want[name] = scope + "; " + policy + "; " + entry.absence
 	}
 	read := func(path string, row *regexp.Regexp) map[string]string {
 		t.Helper()
@@ -278,12 +300,12 @@ func TestSnapshotKindPolicyTableIsTheDocumentedOne(t *testing.T) {
 		}
 		return got
 	}
-	code := read("snapshot_kinds.go", regexp.MustCompile(`^//\t([a-z_]+)\s+(sole integration)\s+(closes nothing|is an answer)\s+(direct answer|one response or direct answer|the writer of the kind)$`))
+	code := read("snapshot_kinds.go", regexp.MustCompile(`^//\t([a-z_]+)\s+(sole integration|sole writer of inferred rows)\s+(closes nothing|is an answer)\s+(direct answer|one response or direct answer|the writer of the kind|recorded input evidence)$`))
 	if !reflect.DeepEqual(code, want) {
 		t.Errorf("the policy table in the doc comment of snapshot_kinds.go differs from the census.\n got  %v\n want %v", code, want)
 	}
 	document := read("../../docs/contribute/architecture/team-attribution.md",
-		regexp.MustCompile("^\\s*\\| `([a-z_]+)` \\|[^|]*\\|[^|]*\\| (sole integration) \\| (closes nothing|is an answer)\\b[^|]*\\| (direct answer|one response or direct answer|the writer of the kind) \\|$"))
+		regexp.MustCompile("^\\s*\\| `([a-z_]+)` \\|[^|]*\\|[^|]*\\| (sole integration|sole writer of inferred rows) \\| (closes nothing|is an answer)\\b[^|]*\\| (direct answer|one response or direct answer|the writer of the kind|recorded input evidence) \\|$"))
 	if !reflect.DeepEqual(document, want) {
 		t.Errorf("the kinds table of docs/contribute/architecture/team-attribution.md differs from the census.\n got  %v\n want %v", document, want)
 	}
@@ -306,6 +328,8 @@ func TestSnapshotKindPolicyTableIsTheDocumentedOne(t *testing.T) {
 //   - ownership_close_gate.go, the second call (ownershipCloseDecision.
 //     membershipSnapshot): the three team membership kinds, whose candidates
 //     the one writer MembershipSnapshotWriter.Snapshot decides fact by fact.
+//   - team_repo_ownership_evidence.go: inferred_repo_ownership, by the input
+//     rows recorded as each claim's evidence (newTeamRepoOwnershipEvidence).
 //
 // A new call, or a kind that moves from one statement to the other, is a
 // deliberate edit of this table, of snapshotKindCensus and of the two
@@ -315,13 +339,14 @@ var snapshotAbsenceCalls = map[string]map[string]int{
 	"internal/atlassianteams/write.go":                       {"AbsenceByListing": 3},
 	"internal/providersync/ownership_close_gate.go":          {"AbsenceByListing": 1, "AbsenceByCloseWriter": 1},
 	"internal/providersync/jira_team_catalog_route.go":       {"AbsenceByListing": 1},
+	"internal/providersync/team_repo_ownership_evidence.go":  {"AbsenceByInputEvidence": 1},
 }
 
 // TestAbsenceProofCensus pins who states the proof of an absence, and that no
 // walk is taken as that proof (CHAOS-9124 removed the last one, the end of a
 // cursor walk). It reads the source of the two packages that hold a close site.
 func TestAbsenceProofCensus(t *testing.T) {
-	call := regexp.MustCompile(`\b(?:providersync\.)?(AbsenceByListing|AbsenceByCloseWriter|AbsenceByWalk)(?:\[[^\]]+\])?\(`)
+	call := regexp.MustCompile(`\b(?:providersync\.)?(AbsenceByListing|AbsenceByCloseWriter|AbsenceByInputEvidence|AbsenceByWalk)(?:\[[^\]]+\])?\(`)
 	got := map[string]map[string]int{}
 	files := 0
 	for _, directory := range []string{".", "../atlassianteams"} {
@@ -371,8 +396,10 @@ func TestAbsenceProofCensus(t *testing.T) {
 	for _, entry := range snapshotKindCensus {
 		byAbsence[entry.absence]++
 	}
-	if byAbsence["direct answer"] != 5 || byAbsence["one response or direct answer"] != 3 || byAbsence["the writer of the kind"] != 3 || len(byAbsence) != 3 {
-		t.Errorf("the kinds by absence proof are %v, want 5 by the direct answer, 3 by one response or the direct answer and 3 by the writer of the kind", byAbsence)
+	if byAbsence["direct answer"] != 5 || byAbsence["one response or direct answer"] != 3 || byAbsence["the writer of the kind"] != 3 ||
+		byAbsence["recorded input evidence"] != 1 || len(byAbsence) != 4 {
+		t.Errorf("the kinds by absence proof are %v, want 5 by the direct answer, 3 by one response or the direct answer, 3 by the "+
+			"writer of the kind and 1 by the recorded input evidence", byAbsence)
 	}
 	// The writer's own proof is stated for the membership row type only, and
 	// its candidates reach one function: the writer that decides them.

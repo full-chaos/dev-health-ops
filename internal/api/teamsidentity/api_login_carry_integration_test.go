@@ -13,6 +13,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
@@ -117,5 +120,71 @@ func TestAnAdminTeamWriteThroughTheAPILoginCarriesEveryTable(t *testing.T) {
 		if carried == 0 {
 			t.Errorf("%s holds no row under linear:ENG after the carry", table)
 		}
+	}
+}
+
+// CHAOS-9349 ruling: the api login holds no grant on
+// team_repo_ownership_evidence, so the admin write path carries a derived repo
+// ownership claim WITHOUT its evidence keys (no 500); the next derive, as the
+// worker, records the keys of the carried claim.
+func TestAnAdminTeamWriteThroughTheAPILoginCarriesNoRepoOwnershipEvidence(t *testing.T) {
+	admin, api, ctx := apiLoginStores(t)
+	writeSeamSeed(t, admin, ctx, "linear", "ENG")
+	at := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	repoID := uuid.New()
+	for _, seed := range []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO repos (id, repo, org_id, provider, last_synced) VALUES (?, 'acme/api', 'org-1', 'github', ?)`, []any{repoID, at}},
+		{`INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, is_primary, specificity, priority, valid_from, valid_to, updated_at)
+			VALUES ('org-1', 'linear', 'ENG', 'linear-proj', NULL, 'native', 1, 100, 10, ?, NULL, ?)`, []any{at, at}},
+		{`INSERT INTO work_items (repo_id, work_item_id, provider, type, project_id, org_id, last_synced) VALUES (?, 'linear:G-1', 'linear', 'issue', 'linear-proj', 'org-1', ?)`,
+			[]any{uuid.Nil, at}},
+		{`INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id) VALUES (?, 'linear:G-1', 1, 1, 'native', 'seed', ?, 'org-1')`,
+			[]any{repoID, at}},
+		{`INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at)
+			VALUES ('org-1', 'github', 'ENG', ?, 'acme/api', 'exact', 'inferred', 1, 50, 0, ?, NULL, ?)`, []any{repoID, at, at}},
+		{`INSERT INTO team_repo_ownership_evidence (org_id, provider, repo_full_name, team_id, input, input_key, seen_at, is_deleted)
+			VALUES ('org-1', 'github', 'acme/api', 'ENG', 'work_item', '["","linear:G-1"]', ?, 0)`, []any{at}},
+	} {
+		if err := admin.Conn.Exec(ctx, seed.query, seed.args...); err != nil {
+			t.Fatalf("seed: %v\n%s", err, seed.query)
+		}
+	}
+	evidence := func(team string) uint64 {
+		t.Helper()
+		var count uint64
+		if err := admin.Conn.QueryRow(ctx, `SELECT count() FROM team_repo_ownership_evidence WHERE org_id = 'org-1' AND team_id = ? AND is_deleted = 0`, team).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		return count
+	}
+
+	h := newTestHandlers(api)
+	rec := writeSeamCall(t, h, h.createOrUpdateTeam, http.MethodPost, "/api/v1/admin/teams", "",
+		map[string]any{"team_id": "ENG", "name": "Renamed"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("create through the api login = %d %s", rec.Code, rec.Body.String())
+	}
+	var carried uint64
+	if err := admin.Conn.QueryRow(ctx, `SELECT count() FROM team_repo_ownership FINAL WHERE org_id = 'org-1' AND team_id = 'linear:ENG' AND valid_to IS NULL`).Scan(&carried); err != nil {
+		t.Fatal(err)
+	}
+	if carried != 1 {
+		t.Fatalf("open repo ownership rows under linear:ENG = %d, want the carried claim", carried)
+	}
+	if got := evidence("linear:ENG"); got != 0 {
+		t.Fatalf("evidence rows under linear:ENG after the api write = %d, want 0 (the api login carries no evidence)", got)
+	}
+	if got := evidence("ENG"); got != 1 {
+		t.Fatalf("evidence rows under ENG = %d, want the seeded row left as it was", got)
+	}
+
+	if _, _, _, _, err := (providersync.TeamRepoOwnershipDerivationService{Conn: admin.Conn}).Derive(ctx, "org-1"); err != nil {
+		t.Fatalf("derive: %v", err)
+	}
+	if got := evidence("linear:ENG"); got == 0 {
+		t.Fatal("the next derive recorded no evidence key for the carried claim")
 	}
 }

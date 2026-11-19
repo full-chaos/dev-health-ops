@@ -162,6 +162,8 @@ devhealth_query_api_work_graph_flow_outcome_total	outcome	code: internal/queryap
 devhealth_query_api_workgraph_membership_rows_per_endpoint		code: internal/queryapi/workgraph/membership_telemetry.go
 devhealth_query_api_workgraph_truncation_total	family,op	code: internal/queryapi/workgraph/teamattribution.go
 dev_health_stream_product_telemetry_nonfinite_total		code: internal/streamhandlers/product_telemetry_metrics.go
+dev_health_storedversion_kept_table_missing_total	table,writer	code: internal/storedversion/repair.go
+dev_health_storedversion_repair_unconverged_total	table,writer	code: internal/storedversion/repair.go
 devhealth_sync_work_items_limit_open_total		code: internal/api/syncadmin/manual_trigger.go
 dev_health_team_id_carry_kept_teams_not_restated_total		code: internal/providersync/team_id_carry.go
 dev_health_teams_identity_page_walk_failed_total	cause,provider,walk	code: internal/api/teamsidentity/page_walk.go

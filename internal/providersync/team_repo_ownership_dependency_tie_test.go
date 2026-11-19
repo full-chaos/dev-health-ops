@@ -75,7 +75,7 @@ func TestTheCascadeAndTheDonorWalkPickTheSameEdgeOnATie(t *testing.T) {
 			if teamattribution.GithubWorkItemDerivationInheritableRelationships[cascadeWinner] {
 				wantTeam = "team-platform"
 			}
-			gotTeam, _ := buildDonorTeamIDResolver(byID, walkEdges, projectToTeam, nil, nil)("ghpr:acme/repo-a#7")
+			gotTeam := buildDonorTeamIDResolver(byID, walkEdges, projectToTeam, nil, nil, nil)("ghpr:acme/repo-a#7").teamID
 			if gotTeam != wantTeam {
 				t.Errorf("%s then %s: donor walk team %q, cascade keeps %q (want team %q)", first, second, gotTeam, cascadeWinner, wantTeam)
 			}

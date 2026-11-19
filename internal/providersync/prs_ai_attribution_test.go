@@ -494,7 +494,7 @@ func githubWorkItemsRouteAttributionRows(t *testing.T) []githubAIAttributionRow 
 	}
 	handler := GitHubWorkItemsRouteHandler{
 		Projects:                      &githubWorkItemsRouteProjectPolicy{},
-		ProjectMembershipSnapshotDiff: githubProjectV2NoopSnapshotDiffReader{},
+		ProjectMembershipSnapshotDiff: githubProjectV2NoopSnapshotDiffReader{}, StoredTransitions: githubProjectV2NoStoredTransitions{},
 	}
 	batch, err := handler.Collect(
 		context.Background(), claim,

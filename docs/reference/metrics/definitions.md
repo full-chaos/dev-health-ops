@@ -349,6 +349,13 @@ in neither sum, whatever its stored percentage. A point made only of such reposi
 `branch_coverage_pct` is still the mean of the stored percentages of the repository-days: the daily rows hold no branch
 counts, so it is not pooled yet.
 
+### Benchmarking defect introduction rate
+
+The benchmarking point of `defect_intro_rate` for a scope and a day is the sum of the stored `new_bugs_count` over the
+sum of the stored `new_items_count` of the work item rows in the scope (one row per team, work scope and provider, the
+organization view). It is not the mean of the stored rates, so a row weighs by its new items. A row with no new item
+adds 0 to both sums. A point with no new item has no value, never 0.
+
 ### AI report charts of CI/CD durations and queue time
 
 The AI report charts of three CI/CD metrics are taken over the samples of the window's pipeline runs that the CI/CD daily
@@ -572,6 +579,33 @@ full cycle time: it is a real input, not an outlier to remove.
 
 An item with no `completed_at` whose status or last recorded status change is terminal: its last span ends at that last status change. After the last recorded transition of an item whose status disagrees with it, no status time is counted: the time is unknown, so it counts neither in the terminal status nor in the item's current status. The hours of a day do not depend on when the day was computed.
 
+## Status history from GitHub and GitLab issues
+
+The state family rebuilds each item's status over time from its stored status
+transitions. For GitHub and GitLab issues, a status can come from a label (for
+example `done`, `wontfix` or `in progress`) or from the issue state (open or
+closed). The label wins over the state, as it does for the item's current status.
+
+- **GitHub issues.** A transition is stored for each close, reopen and status
+  label added. When a status label is removed (an `unlabeled` event) and the
+  item's status changes because of it, a transition is stored with the raw
+  value `unlabeled:<label>`.
+- **GitLab issues.** Transitions come from two event lists, read in time
+  order: the label events and the native state events (close and reopen). An
+  added status label stores a transition. A removed label stores one only when
+  the status mapping knows that label and the item's status changes; its raw
+  value is `unlabeled:<label>`. A close or reopen stores a transition with the
+  raw value `closed`, `reopened` or `opened` when the item's status changes.
+  State events are read only when work item history is enabled; without them
+  a removed label is read against the issue's current state.
+
+Each of these transitions has the time of the provider event. So an item that
+is open again ends its history in an open status, not in `done` or `canceled`.
+
+## Status of a GitHub issue on a Projects v2 board
+
+For a GitHub issue on a Projects v2 board, the item's status is the last event of its stored status changes, in the order `work_item_state_durations_daily` uses: the repository's status changes above, and the board's Status value at the time it was set. GitHub does not serve past board moves, so the board gives one event per Status value, with no prior status, and the status changes have board detail only from the first sync that sees a Status value. A Status value that is not one of the known names (a custom column) goes to `unknown`, with its name kept as the raw status; when the issue was already closed at the time the value was set, it goes to `done` instead, or to `canceled` for an issue closed as not planned. A board item with no Status value keeps the status of its issue state and labels.
+
 ## Blocked hours in `work_item_state_durations_daily`
 
 `work_item_state_durations_daily` holds, for each day, the hours that work
@@ -774,6 +808,8 @@ A Linear or Jira work-items unit names every project it saw by an ensure row in 
 `items_completed` (and the other completion columns of `work_item_metrics_daily` and `work_item_user_metrics_daily`: unassigned completions, story points, bug ratio, cycle and lead time) counts an item on a day only when its status is terminal (`done` or `canceled`) and its `completed_at` is on that day. `work_items_completed` of `work_item_completion_daily` (and its `delivery_units`, `churn_loc` and `cycle_p50_hours`, which come from the same items) follows the same rule. This is the rule of `work_item_cycle_times`. A provider can reopen an item and keep its `completed_at`: that open item completes on no day.
 
 `completed_count`, `cycle_p50_hours`, `cycle_p90_hours` and `lead_p50_hours` of `issue_type_metrics_daily` follow the same rule. An item is active on a day from its creation until it ends; it ends on its `completed_at` only when its status is `done` or `canceled`, so an open item whose `completed_at` is before the day is active.
+
+`mttr_hours` (the stored daily value, the AI report chart and the operating review tile) takes a bug work item as a repair on the UTC day of its `completed_at` only when its status is terminal (`done` or `canceled`). A reopened bug that kept its `completed_at` is no repair. A repository-day whose only bugs are reopened ones has no MTTR (no data, not 0).
 
 ## Work items in progress at the end of a day
 

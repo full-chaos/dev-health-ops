@@ -11,11 +11,13 @@ import "time"
 //
 // The policy table.
 //
-// Scope: every kind closes only behind the one scope gate (ProveSoleScope:
+// Scope: every provider kind closes only behind the one scope gate (ProveSoleScope:
 // the run's integration is the only ACTIVE integration of its provider in the
 // organization). No row of any kind carries an integration key, and an
 // organization can hold two integrations of one provider, so a walk proves
-// its own scope only: no kind is exempt.
+// its own scope only: no provider kind is exempt. inferred_repo_ownership is
+// no provider kind: it is derived from stored rows, and its scope is that the
+// derivation is the sole writer of inferred rows (a census fact).
 //
 // Empty answer: "closes nothing": the kind has ONE walk for the whole provider
 // answer, and an answer with no row of the kind is more often an access
@@ -34,6 +36,7 @@ import "time"
 //	linear_team_memberships       sole integration  is an answer    the writer of the kind
 //	github_team_memberships       sole integration  is an answer    the writer of the kind
 //	gitlab_team_memberships       sole integration  is an answer    the writer of the kind
+//	inferred_repo_ownership       sole writer of inferred rows  closes nothing  recorded input evidence
 //
 // Absence: what proves that an open fact the run does not hold is gone
 // (AbsenceProof, an argument of every kind snapshot). "one response or direct
@@ -56,6 +59,9 @@ import "time"
 // "the writer of the kind": the rule lists every absent fact as a candidate
 // and the one writer of the kind (MembershipSnapshotWriter.Snapshot) closes a
 // candidate only on its own proof, fact by fact (AbsenceByCloseWriter).
+// "recorded input evidence": a fact the run does not derive closes only when
+// every input row recorded as its evidence is in the run; a missing row is not
+// a changed row (AbsenceByInputEvidence).
 
 // MembershipSnapshotRow is one team_memberships fact as the snapshot rule
 // reads it: the team, the member and the stored valid_from.
@@ -186,4 +192,24 @@ func GitHubTeamMembershipKind(closable []string) SnapshotKind[MembershipSnapshot
 // GitLabTeamMembershipKind is the GitLab group memberships.
 func GitLabTeamMembershipKind(closable []string) SnapshotKind[MembershipSnapshotRow] {
 	return NewSnapshotKind("gitlab_team_memberships", EmptyIsAnAnswer, teamMembershipHolds(closable))
+}
+
+// InferredRepoOwnershipClaim is one team's claim on one repository as the
+// derivation writes it (team_repo_ownership, source inferred): the table's key
+// without source and valid_from.
+type InferredRepoOwnershipClaim struct {
+	Provider, RepoFullName, TeamID string
+}
+
+// InferredRepoOwnershipKind is the source='inferred' rows of team_repo_ownership
+// (CHAOS-9349). It is no provider snapshot: the derivation reads stored input
+// rows, and TeamRepoOwnershipDerivationService is the only writer of the kind
+// (a census fact, TestInferredRepoOwnershipHasOneWriter), so its scope is not a
+// ProveSoleScope proof. A run with no input row of any kind closes nothing
+// (inputs not ready). A claim the run does not derive closes only when every
+// input row recorded as its evidence is in the run (AbsenceByInputEvidence).
+func InferredRepoOwnershipKind() SnapshotKind[InferredRepoOwnershipClaim] {
+	return NewSnapshotKind("inferred_repo_ownership", EmptyClosesNothing, func(claim InferredRepoOwnershipClaim) bool {
+		return claim.TeamID != "" && claim.RepoFullName != ""
+	})
 }

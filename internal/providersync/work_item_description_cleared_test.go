@@ -69,7 +69,7 @@ func TestGitLabIssueWorkItemStatesAClearedDescription(t *testing.T) {
 			}
 			row, _, err := normalizeGitLabIssueWorkItem(
 				nativeTestClaim("gitlab", "work-items"), "acme/api", "acme/api", "org:gitlab:1",
-				uuid.MustParse("0b7e3d4e-1111-4222-8333-944455556666"), payload, nil,
+				uuid.MustParse("0b7e3d4e-1111-4222-8333-944455556666"), payload, nil, nil,
 				loadRealStatusMapping(t), nil, time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC),
 			)
 			if err != nil {

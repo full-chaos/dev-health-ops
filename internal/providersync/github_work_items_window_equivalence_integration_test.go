@@ -321,6 +321,7 @@ INSERT INTO public.sync_run_units (
 				ProjectMembershipSnapshotDiff: GitHubProjectV2SnapshotDiffClickHouseReader{
 					Conn: conn,
 				},
+				StoredTransitions: GitHubProjectV2StoredTransitionsClickHouseReader{Conn: conn},
 			},
 			Comparator: ProductionContractComparator{},
 			Committer: EffectCommitter{

@@ -25,15 +25,13 @@ import (
 // divergence -- see LoadDeployments' doc comment (deploy_native_clickhouse.go)
 // for both:
 //
-//  1. NO FINAL, even though `deployments` is a ReplacingMergeTree and a
-//     DIFFERENT family's Go port (DORA's loadDeployments,
-//     dora_native_clickhouse.go:238) already queries the SAME table WITH
-//     FINAL. That is a different Python function on a different bridge --
-//     matching the ACTUAL Python this family replaces (load_cicd_data, not
-//     job_dora.py's _load_deployments) is what makes this executor
-//     row-identical to what it is replacing. Mirrors repouser's identical
-//     documented choice for git_commits/git_pull_requests (clickhouse.go:
-//     28-37 doc comment): "PARITY, not an oversight."
+//  1. FINAL, as DORA's loadDeployments (dora_native_clickhouse.go:238) reads
+//     the same ReplacingMergeTree table. Python's load_cicd_data reads it raw
+//     (a legacy path); the Go loader does not copy that, because a re-synced
+//     deployment (status moved to canceled, deployed_at on another day) would
+//     keep its old version counted until ClickHouse merges the parts. The
+//     window and canceled predicates are on non-key columns, so they apply to
+//     the current version.
 //  2. THE WINDOW FILTER IS deployed_at ONLY. compute_deploy_metrics_daily
 //     itself has a `deployed_at or started_at` fallback
 //     (compute_deployments.py:67, ported verbatim in

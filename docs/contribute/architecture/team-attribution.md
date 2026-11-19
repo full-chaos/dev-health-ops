@@ -344,6 +344,24 @@ flowchart TD
 > `TestAnIssueWithNoTeamTakesItsLinkedPullRequestRepoOwner` (every daily table) and
 > `TestABackstopRunOfAChangedRepoRederivesTheIssuesLinkedToIt` pin it.
 >
+> **A name-keyed grant reaches an issue too.** The GitHub team catalog writes every repository grant by name
+> (`repo_full_name`, `repo_id` NULL), and a linked pull request names its repository by id. `LoadRepos` resolves
+> such a GitHub grant to the id of the ONE `repos` row of the same organization whose name equals the grant's name
+> (case aside, the whole name; `ResolveGitHubRepoNameFacts`). A name that no `repos` row of the organization holds,
+> or that two rows hold, reaches no issue; a repository of another organization never counts. The pull request's
+> own `repo_ownership` is unchanged (it still matches the grant by name). `TestAnIssueTakesANameKeyedGrantOfItsLinkedPullRequestsRepository`
+> and `TestGitHubIssueTakesItsLinkedPullRequestsRepoOwnerInTheRealWorld` (the GitHub provider world, nothing seeded) pin it.
+>
+> **GitHub has no project-owner producer.** No GitHub producer writes `team_project_ownership` (section 0.4b).
+> A GitHub issue's project owner comes only from an admin team whose `project_keys` holds the issue's project id
+> (its repository's full name, or a Projects v2 board id `ghprojv2:{login}#{n}`): that is an `issue_project`
+> candidate, and a donor of a linked pull request's `linked_issue` row. Without such a key, a GitHub issue takes the
+> repository owner of its linked pull requests (above) or ends `unassigned`, and that repository owner is not a donor.
+> **Known defect** (ticket 14209 (filed separately)): a key equal to a repository's name also matches that repository's
+> pull requests (a GitHub pull request's project id is its repository's name too), so the admin team takes them by
+> `issue_project` above their repository owner. A manual mapping must never outrank a native fact; the matrix cell
+> `pull_request_admin_key_never_outranks_its_repository_owner` (github) is `known_red` for it.
+>
 > **The membership ownership gate applies to a pull or merge request and to other repo-bearing items, and
 > does not apply to an issue**: an issue has no repository field of its own and the gate reads
 > no linked-pull-request repository. The assignee's membership row of an issue is kept as provenance
@@ -774,12 +792,17 @@ ticket and fails when it turns green, until it is moved to `pass`; every provide
 `not_applicable` entry with its rule, and every check of an entity is a cell or an `omitted` entry with its
 rule. The rule the cells apply is written once in the test (`ownersAt`): the rows valid on the item's day
 (§0.4j), of active teams, with the first recorded owners applied backward before the first record; the shared ownership readers are judged against that rule at now and on every item day, and apply the
-first owners backward. No cell is known red: the catalog writers start a link at its evidence
+first owners backward. One cell is known red: `pull_request_admin_key_never_outranks_its_repository_owner` (github,
+ticket 14209 (filed separately)), the admin team key that outranks a pull request's repository owner. The catalog writers start a link at its evidence
 (section 0.4b), and each provider world runs its team catalog again after its sync, the
 next catalog run that moves each link to its evidence; GitLab ownership names the catalog project.
 The inferred repository owner starts at its earliest linked evidence: its cell is pass. The GitHub cell of a pull request's `linked_issue` row
 is pass: owners tied at the top rank with no main row (two `provider_access` grants) are all the
-donor's team on that day (`tiedOwnersAt`, §0.4d).
+donor's team on that day (`tiedOwnersAt`, §0.4d). The GitHub world holds no project ownership (no GitHub producer writes
+it); its donor is an admin team, written through the admin team writer (`KeyTeamIDsForWrite`, then
+`teamsidentity.Store.CreateOrUpdateTeam`), whose `project_keys` holds one repository's name: that repository's issues take
+the admin team by `issue_project`, and their linked pull requests copy it as a `linked_issue` row. A donor's team by
+`issue_project` with no ownership row of its project is a holder of the key that day (`projectKeyHolders`).
 A pull request's `linked_issue` row must name the team an issue it is actually linked to holds on its own on
 the pull request's day (a relation of record, or a link of record; an `extkey:` relation counts only through
 the one existing item of that key; the backstop follows the issue's later row changes). The acceptance gate (`TestCrossProviderAttributionMatrix/rediscovers_known_defects`) plants the
@@ -810,7 +833,7 @@ project's work items by `(provider, project_id)`; no reader has to join on `proj
 |---|---|---|---|---|
 | jira | native project id (`10001`) | the same id | the same id | one id |
 | linear | raw project UUID | the same UUID | the same UUID | one id |
-| github | Projects V2 board id (`ghprojv2:{login}#{n}`) | none: a team owns repositories (`team_repo_ownership`) | the same board id | one id |
+| github | Projects V2 board id (`ghprojv2:{login}#{n}`) | none: a team owns repositories (`team_repo_ownership`); an admin team's `project_keys` may name the board id or the repository name (`issue_project`) | the same board id | one id |
 | gitlab | `{org_id}:gitlab:{native id}` | the same id; the path is `project_key` | the same id; `work_items.project_key` is the project's minted `identity_path` (stable across a rename, so the metric work scope does not split) | one id for catalog, ownership and work items. A GitLab item written before the catalog id was adopted holds the path in `project_id`; the attribution reads map it, through its `repo_id` and `repos.provider_repo_id`, to the catalog id (`teamattribution.AnchorGitLabSubjectProjects`), and the old path is its project key. Name joins (repo ownership by full name, manual repo and project rules) accept both the current path and the identity path of the item's GitLab `repos` row, except an identity path another GitLab row now holds as its current path (a reused path belongs to the project at it; the old project's items answer only to their current path). The team issue-project key lookup follows the same set. A path is never an ownership join key: a stale item at a reused path joins nothing of the path's new owner |
 
 GitLab ownership rows written earlier hold the path as `project_id`. Until that sync, the attribution reads map such a row on the fly: a path-keyed GitLab ownership row is moved to the catalog id of the ONE project the `repos` rows name at that path (current or minted path; `teamattribution.LoadGitLabProjectNativesByPath`, `RemapLegacyGitLabProjectFacts`), so it lands on the same key as an item anchored to that id. A path two projects have used is not a grant for either: the row joins no item (the team still holds the ownership). The same rule applies to a repository-ownership row keyed by full name (it joins by the catalog id of the one project its path names); a path no `repos` row names stays as it is.
@@ -961,6 +984,7 @@ project's items by id. Now:
   | `linear_team_memberships` | Linear catalog | every team's member list to its end (the run fails before any write when one does not end) | sole integration | is an answer (per team) | the writer of the kind |
   | `github_team_memberships` | GitHub catalog | one member read per team, to the provider's end-of-list signal | sole integration | is an answer (per team) | the writer of the kind |
   | `gitlab_team_memberships` | GitLab catalog | one member read per group, to the provider's end-of-list signal | sole integration | is an answer (per group) | the writer of the kind |
+  | `inferred_repo_ownership` | repo ownership derivation | no walk: the stored input rows of the org, read whole | sole writer of inferred rows | closes nothing: no input row of any kind is inputs not ready | recorded input evidence |
 
   **Proof of an absence, for every kind** (`providersync.AbsenceProof`, an argument of every kind snapshot,
   so no kind can be stated without it; a kind that states none closes no absent fact). A walk that reached
@@ -1024,6 +1048,11 @@ project's items by id. Now:
     (`MembershipSnapshotWriter.Snapshot`) closes a candidate only on its own proof, fact by fact (the
     membership rules below: the direct lookup where the list is paged by offset, the list rule where it is
     paged by a cursor). The census allows this statement to the membership kinds only.
+  - **recorded input evidence** (`AbsenceByInputEvidence`; `inferred_repo_ownership`, the derived
+    `team_repo_ownership` rows). The kind is no provider snapshot: the derivation reads stored rows and is the
+    only writer of `source = 'inferred'` rows (a census fact, not a `ProveSoleScope` proof). A claim the run
+    does not derive closes only when every input row recorded as its evidence is in the run; see "A missing
+    input row holds the close" below.
   A walk that did NOT reach its proven end (an error, a cut, a bound) closes nothing, for every kind: that is
   the kind's `SnapshotProof`, as before.
 
@@ -3119,6 +3148,36 @@ log line, one WARN `team_repo_ownership_derivation.retraction_held` line per kin
 `open_rows_kept`), and `team_repo_ownership_retraction_held_total{kind,provider,reason}`. Pinned by
 `team_repo_ownership_retraction_guard_test.go` and `team_repo_ownership_retraction_guard_integration_test.go` (real
 ClickHouse, every ordered pair of jira, gitlab, github and linear).
+
+**A missing input row holds the close.** The kind guard proves that the run read the inputs of a provider; it cannot
+tell a changed row from a missing one, and a missing row (a sync gap, a partial write) derives nothing, as a row that
+no longer names the team does. So every run records, for every claim it derives, the keys of the input rows of every
+chain that gave the claim a link (`team_repo_ownership_evidence`, `team_repo_ownership_evidence.go`): the work item
+(`(repo_id, work_item_id)`), the `work_graph_issue_pr` row (`(repo_id, work_item_id, pr_number)`, no provenance), the
+dependency edge (`(source, target, relationship_type)`, the stored target, an `extkey:` text included) and the donor
+row of the CHOSEN donor only, and the project link (`(provider, project_id, team_id)`) or the Linear team (`id`) that
+names the team. A refused donor (not an issue) is never chosen, so it gives no evidence. An open row the run does not
+derive, a role close, and a floor void (open and earlier closed rows of a co-owner below the share floor) go through
+only when the kind guard holds AND every recorded key of the claim is in the run, with any value
+(`AbsenceByInputEvidence`). A missing key keeps the claim's rows (WARN `team_repo_ownership_derivation.retraction_held`,
+`kind` `input_evidence`, reasons `evidence_row_missing_work_item`, `_dependency`, `_issue_pr`, `_project_link`,
+`_linear_team`). A changed row is held: a donor whose type became a pull request, a pull request that lost its
+project, a closed project link and an inactive Linear team close the claim. A `work_graph_issue_pr` key is also held when
+the native-first rule removed it (a native link of its pull request or issue is in the run, or its issue side is a pull
+request). A key that the run holds and that no chain of the claim uses any more is retired; a key the run does not hold
+stays until the row comes back. Residuals:
+- a claim with no recorded key (written before the store) closes on the kind guard alone and is logged with its
+  own reason: INFO `team_repo_ownership_derivation.retracted_without_evidence` (`rows`, reason
+  `no_recorded_evidence`) and `retracted_without_evidence` in the run's stats. Such a claim that is never derived
+  again can still close on a missing input row, as before the store.
+- the project link key `(provider, project_id, team_id)` is coarser than the table's sort key (no `source`, no
+  `valid_from`): a new generation, a compaction or the Linear stale-row cleanup keeps the key, so it errs toward
+  holding the close, never toward a close on a missing row.
+- an `extkey:` target that becomes ambiguous (a second item takes the same key) gives no donor, but the recorded
+  edge and donor rows are still in the run: the claim closes (not held).
+- the team id carry moves a claim's keys to the new id on the worker paths only. The api's ClickHouse login has no
+  grant on `team_repo_ownership_evidence` (least privilege), so a claim an admin write carries has no recorded key
+  until the next derive records it: until then it closes on the kind guard alone (`no_recorded_evidence`).
 
 **Every owning team of a repo, each with its linked share; one main owner, or every team of a full tie.**
 The derivation counts each team's candidates on a repo per link tier. The tier of a `work_graph_issue_pr` candidate is that

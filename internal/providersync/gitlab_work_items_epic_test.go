@@ -95,7 +95,7 @@ func buildGitLabIssueProviderOracleRow(t *testing.T, input map[string]any) gitla
 	row, _, err := normalizeGitLabIssueWorkItem(
 		claim, input["repo_full_name"].(string), input["repo_full_name"].(string), "org:gitlab:1", repoID,
 		gitlabIssueWorkItemPayloadFromOracle(t, input).withFetchEpics(gitlabIssueFetchEpics(input)),
-		gitlabLabelEventsFromOracle(t, input), loadRealStatusMapping(t), nil, gitlabWorkItemsOracleNormalizedAt,
+		gitlabLabelEventsFromOracle(t, input), nil, loadRealStatusMapping(t), nil, gitlabWorkItemsOracleNormalizedAt,
 	)
 	if err != nil {
 		t.Fatal(err)

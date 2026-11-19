@@ -5,6 +5,10 @@
 # downloaded 2026-11-19. Untrimmed: the bytes below this header are the upstream file, sha256 1e4735996c829b8c906c38c052e6de32f99a10719bf668ab375ef13d8f09b6c1.
 # Refresh: download the file at a newer github/docs commit, replace everything below this header, update the commit,
 # date and sha256 lines, then rewrite the testdata manifest row.
+# Accepted validator difference (strict both ways, github_projects_v2_query_schema_test.go): gqlparser rule
+# OverlappingFieldsCanBeMerged reports 'Fields "state" conflict because they return conflicting types "IssueState!" and
+# "PullRequestState!"' at organization/projectV2/items/nodes/content/on PullRequest/state of the items query; GitHub's own
+# validator accepts that query. The cell fails on any other error, and also when this one stops appearing.
 """
 Marks an element of a GraphQL schema as only available via a preview header
 """

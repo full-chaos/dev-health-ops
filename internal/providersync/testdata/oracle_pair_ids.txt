@@ -28,9 +28,11 @@ github/work-items/interaction
 github/work-items/issue
 github/work-items/pr
 github/work-items-project-v2/composition
+github/work-items-project-v2/pagination
 github/work-items-project-v2/pr-skip
 github/work-items-project-v2/row
 github/work-items-project-v2/target-parser
+github/work-items-project-v2/transition
 github/work-items/pr-social-comment
 github/work-items/pr-social-event
 github/work-items/reopen

@@ -26,6 +26,8 @@ type githubTestsReportWindowDoer struct {
 	omitUpdatedAt bool
 	status        string
 	createdAt     string
+	startedAt     string
+	filterCreated bool
 	requests      []string
 	runQueries    []string
 }
@@ -48,12 +50,20 @@ func (doer *githubTestsReportWindowDoer) Do(request *http.Request) (*http.Respon
 		if created == "" {
 			created = "2026-07-22T10:00:00Z"
 		}
+		started := doer.startedAt
+		if started == "" {
+			started = "2026-07-22T10:01:00Z"
+		}
+		if doer.filterCreated && !githubTestsCreatedInRange(doer.t, request.URL.Query().Get("created"), created) {
+			body = `{"workflow_runs":[]}`
+			break
+		}
 		updated := `,"updated_at":"` + doer.updatedAt + `"`
 		if doer.omitUpdatedAt {
 			updated = ""
 		}
 		body = `{"workflow_runs":[{"id":9001,"name":"CI","status":"` + runStatus + `","conclusion":"success",` +
-			`"created_at":"` + created + `","run_started_at":"2026-07-22T10:01:00Z"` + updated +
+			`"created_at":"` + created + `","run_started_at":"` + started + `"` + updated +
 			`,"run_attempt":1,"event":"push","head_sha":"abc","head_branch":"main",` +
 			`"html_url":"https://github.com/acme/api/actions/runs/9001","pull_requests":[]}]}`
 	case "/repos/acme/api/actions/runs/9001/jobs":

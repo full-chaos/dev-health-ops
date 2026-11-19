@@ -153,6 +153,7 @@ func scan(t *testing.T, root string) ([]string, []finding) {
 			relFile, _ := filepath.Rel(root, file)
 			lines := strings.Split(source, "\n")
 			regions := topLevelFuncs(lines)
+			infos := lexLines(lines)
 			isolated := map[int]bool{}
 			for number, line := range lines {
 				if regions[number] >= 0 && isolatedCall.MatchString(line) {
@@ -163,7 +164,7 @@ func scan(t *testing.T, root string) ([]string, []finding) {
 				if strings.HasPrefix(strings.TrimSpace(line), "//") || (regions[number] >= 0 && isolated[regions[number]]) {
 					continue
 				}
-				joined, end := concatenation(lines, number)
+				joined, end := concatenation(infos, number)
 				for _, statement := range serverWide {
 					// A joined match counts once, at the first line, unless one line of the concatenation matches alone.
 					if matches(statement.pattern, line) || (joined != "" && matches(statement.pattern, joined) &&
@@ -185,6 +186,7 @@ func scan(t *testing.T, root string) ([]string, []finding) {
 }
 
 func matches(pattern *regexp.Regexp, text string) bool {
+	text = sqlData.ReplaceAllString(text, "''")
 	return pattern.MatchString(text) && literalName(pattern, text)
 }
 
@@ -200,30 +202,85 @@ func anyMatches(pattern *regexp.Regexp, lines []string) bool {
 // literalBoundary is the end of one string literal, "+", and the start of the next.
 var literalBoundary = regexp.MustCompile("[\"`]\\s*\\+\\s*[\"`]")
 
-func continues(line string) bool {
-	return strings.HasSuffix(strings.TrimSpace(line), "+")
+// sqlData is a single-quoted SQL literal; its content is data, not a statement.
+var sqlData = regexp.MustCompile(`'[^']*'`)
+
+// lineInfo is one source line read as Go code: code is the line without a
+// trailing // comment, startsInRaw and endsInRaw tell whether a raw string is
+// open at the line's start and end, and plus whether the code ends in "+".
+type lineInfo struct {
+	code        string
+	startsInRaw bool
+	endsInRaw   bool
+	plus        bool
+}
+
+func (l lineInfo) continues() bool { return l.plus || l.endsInRaw }
+
+func lexLines(lines []string) []lineInfo {
+	infos := make([]lineInfo, len(lines))
+	inRaw := false
+	for number, line := range lines {
+		info := lineInfo{startsInRaw: inRaw}
+		var code strings.Builder
+	scan:
+		for i := 0; i < len(line); i++ {
+			c := line[i]
+			switch {
+			case inRaw:
+				code.WriteByte(c)
+				inRaw = c != '`'
+			case c == '`':
+				code.WriteByte(c)
+				inRaw = true
+			case c == '"' || c == '\'':
+				code.WriteByte(c)
+				for i++; i < len(line); i++ {
+					code.WriteByte(line[i])
+					if line[i] == '\\' && i+1 < len(line) {
+						i++
+						code.WriteByte(line[i])
+					} else if line[i] == c {
+						break
+					}
+				}
+			case c == '/' && i+1 < len(line) && line[i+1] == '/':
+				break scan
+			default:
+				code.WriteByte(c)
+			}
+		}
+		info.code = code.String()
+		info.endsInRaw = inRaw
+		info.plus = !inRaw && strings.HasSuffix(strings.TrimSpace(info.code), "+")
+		infos[number] = info
+	}
+	return infos
 }
 
 // concatenation returns the text of the concatenation that starts on
-// lines[start] (the line and each next line after a trailing "+") with every
-// boundary between two adjacent string literals removed, and the index of its
-// last line. The text is "" when lines[start] continues the line before it or
-// the concatenation joins no two literals.
-func concatenation(lines []string, start int) (string, int) {
-	if start > 0 && continues(lines[start-1]) {
+// lines[start] (the line and each next line after a trailing "+", or while a
+// raw string stays open) with every boundary between two adjacent string
+// literals removed, and the index of its last line. The text is "" when
+// lines[start] continues the line before it or the concatenation joins no two
+// literals and spans no raw string.
+func concatenation(infos []lineInfo, start int) (string, int) {
+	if start > 0 && infos[start-1].continues() {
 		return "", start
 	}
 	end := start
-	for end+1 < len(lines) && continues(lines[end]) {
+	for end+1 < len(infos) && infos[end].continues() {
 		end++
 	}
 	parts := make([]string, 0, end-start+1)
-	for _, line := range lines[start : end+1] {
-		parts = append(parts, strings.TrimSpace(line))
+	rawSpan := false
+	for _, info := range infos[start : end+1] {
+		parts = append(parts, strings.TrimSpace(info.code))
+		rawSpan = rawSpan || info.startsInRaw
 	}
 	text := strings.Join(parts, " ")
 	joined := literalBoundary.ReplaceAllString(text, "")
-	if joined == text {
+	if joined == text && !rawSpan {
 		return "", start
 	}
 	return joined, end
@@ -511,8 +568,18 @@ func TestGuardFlagsAStatementSplitAcrossLiterals(t *testing.T) {
 		`	"FROM default.events"`,
 		`exec("CREATE " +`,
 		`	"ROLE " + role)`,
+		`exec("DROP " + // the next literal names the object`,
+		`	"ROLE worker_test")`,
+		"exec(`DROP",
+		"	` + \"ROLE worker_test\")",
+		"exec(`DROP",
+		"ROLE worker_test`)",
+		`exec("SELECT 'DROP " + "ROLE'")`,
+		`exec("SELECT 'DROP ROLE'")`,
+		`exec("SELECT " + // a comment that ends in a plus +`,
+		`	"1")`,
 	}
-	want := map[int]bool{0: true, 1: true, 2: true, 3: true, 4: true, 5: true, 6: true, 8: true}
+	want := map[int]bool{0: true, 1: true, 2: true, 3: true, 4: true, 5: true, 6: true, 8: true, 19: true, 21: true, 23: true}
 	flagged := scanFixture(t, statements)
 	for index, statement := range statements {
 		if flagged[index] != want[index] {

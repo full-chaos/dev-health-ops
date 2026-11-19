@@ -94,7 +94,7 @@ func NewClickHouseLoader(connection conn) (*ClickHouseLoader, error) {
 // so they share a computed_at by construction. Rule found by
 // lane-port-ai-families.
 //
-// A repository whose newest row of the day retires it (package liverow, migration 163) has no row here: its column defaults
+// A repository whose newest row of the day retires it (package liverow, migration 164) has no row here: its column defaults
 // are not a measurement of rework, ownership or bus factor.
 var repoMetricsQuery = `
 SELECT

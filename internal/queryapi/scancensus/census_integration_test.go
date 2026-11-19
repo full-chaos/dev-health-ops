@@ -514,7 +514,7 @@ const nullableIntoPlainSites = `
 // CHAOS-14148: eight pins re-pinned by hand, digests copied from the local TestScanTypeCensus failure output (not computed):
 // flow_opportunities.go (loadRepoFlowRows, loadTeamFlowRows), operatingreview.go (fetchChangeFailureAgg, fetchStateDurations,
 // fetchWorkItems), people/summary.go (fetchPersonCollaboration) and analytics/timeseries.go (ExecuteOrgTimeseries,
-// ExecuteTimeseries). The readers of the four pooled daily tables (migration 163) add the live-row rule (a WHERE or HAVING
+// ExecuteTimeseries). The readers of the four pooled daily tables (migration 164) add the live-row rule (a WHERE or HAVING
 // predicate, or the live-row wrapper of the dedup source), which changes the file's SQL digest of every site; no select list,
 // scan target or column type changed, and the reason class of each pin is kept.
 // unverifiedSites is `file|func|destinations|digest|reason`; see reasonClass.

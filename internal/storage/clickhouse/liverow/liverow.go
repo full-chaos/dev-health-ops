@@ -63,7 +63,7 @@ func NewestValue(column, prefix string) string {
 // the row that retires a key) and are not in the registry: cicd_metrics_daily (migration 159), whose (repository, day) the
 // cicd family retires when a recompute counts no run on it any more. A computed row stores 0.
 //
-// incident_metrics_daily, deploy_metrics_daily and repo_metrics_daily (migration 163) are listed here for their READERS
+// incident_metrics_daily, deploy_metrics_daily and repo_metrics_daily (migration 164) are listed here for their READERS
 // only: their families write the retraction row in the next change, which moves them into the registry (package
 // teamkeytables). Until then no writer stores 1, every row reads 0, and the rule keeps every row.
 var ownWriterRetracted = map[string]string{

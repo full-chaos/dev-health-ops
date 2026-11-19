@@ -171,7 +171,7 @@ func TestRendererAndArtifactMatchPythonGoldens(t *testing.T) {
 func TestBuildChartQueryMatchesPythonContract(t *testing.T) {
 	spec := ChartSpec{
 		ChartID: "chart-1", PlanID: "plan-1", ChartType: "line",
-		Metric: "flake_rate", GroupBy: "day", FilterTeams: []string{"team-a"},
+		Metric: "failure_recurrence_score", GroupBy: "day", FilterTeams: []string{"team-a"},
 		FilterRepos: []string{"repo-a"}, TimeRangeStart: "2026-01-01",
 		TimeRangeEnd: "2026-01-07", OrganizationID: "org-1",
 	}
@@ -180,7 +180,7 @@ func TestBuildChartQueryMatchesPythonContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, fragment := range []string{
-		"toDate(day) AS x", "avg(flake_rate) AS y", "FROM testops_test_metrics_daily",
+		"toDate(day) AS x", "avg(failure_recurrence_score) AS y", "FROM testops_test_metrics_daily",
 		"org_id = {org_id:String}", "team_id IN {filter_teams:Array(String)}",
 		"repo_id IN {filter_repos:Array(String)}", "ORDER BY x",
 	} {

@@ -377,6 +377,26 @@ row synced after the daily job ran counts at once and the chart can differ from 
 - The chart range includes its last day. A bucket with no sample has no point, never 0. The read has the same row bound
   as the TestOps pooled read.
 
+## TestOps flake rate and retry dependency rate in report charts
+
+A report chart of `flake_rate` or `retry_dependency_rate` is the sum of the numerator over the sum of the denominator of
+the `testops_test_metrics_daily` rows in its bucket. It is never a mean of the stored per-repository-day rates: a day of
+1 test case would weigh the same as a day of 500.
+
+| Metric | Numerator | Denominator |
+| --- | --- | --- |
+| `flake_rate` | `SUM(flake_cases)` | `SUM(distinct_cases)` |
+| `retry_dependency_rate` | `SUM(retry_dependency_rate * distinct_cases)` | `SUM(distinct_cases)` |
+
+- No column stores the retry-dependent count. The stored rate is that count over `distinct_cases`, so the product is the
+  count. It is a float, not a stored integer.
+- A repository-day is in neither sum when its rate is NULL (it measured no case) or its `distinct_cases` is NULL. For
+  `flake_rate`, a NULL `flake_cases` has the same effect. A row stored before the counts existed has NULL counts and drops
+  out.
+- A bucket with no measured repository-day has no point, never 0 and never NaN.
+- `failure_recurrence_score` is not yet a window value: the report chart still shows the mean of the stored
+  per-repository-day values.
+
 ## TestOps release confidence and quality drag: flake and recurrence
 
 The daily risk job (`testops_release_confidence`, `testops_quality_drag`) uses the day's test flake rate and failure

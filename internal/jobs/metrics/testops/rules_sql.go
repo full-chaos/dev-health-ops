@@ -24,6 +24,29 @@ const TestPassRateWindowSQL = `if(sum(passed_count) + sum(failed_count) = 0, NUL
 // TestRateCountColumns are the testops_test_metrics_daily columns TestPassRateWindowSQL reads.
 var TestRateCountColumns = []string{"passed_count", "failed_count"}
 
+// TestFlakeRateWindowSQL is the test flake rate of a set of testops_test_metrics_daily rows (already the newest row of
+// each key): their flake cases over their distinct cases, NULL when no row is measured. A row is measured when its
+// flake_rate, flake_cases and distinct_cases are all non-NULL (a day that measured no case, or a row stored before the
+// counts existed, is in neither sum). The stored flake_rate column is a mean-able ratio of unequal days and is not read
+// as a value.
+const TestFlakeRateWindowSQL = `if(sumIf(distinct_cases, flake_rate IS NOT NULL AND flake_cases IS NOT NULL AND distinct_cases IS NOT NULL) = 0, NULL, ` +
+	`toFloat64(sumIf(flake_cases, flake_rate IS NOT NULL AND flake_cases IS NOT NULL AND distinct_cases IS NOT NULL)) / ` +
+	`toFloat64(sumIf(distinct_cases, flake_rate IS NOT NULL AND flake_cases IS NOT NULL AND distinct_cases IS NOT NULL)))`
+
+// TestRetryDependencyRateWindowSQL is the test retry dependency rate of the same rows: their retry-dependent cases over
+// their distinct cases, NULL when no row is measured. No column stores the retry-dependent count; the stored rate is
+// that count over distinct_cases, so retry_dependency_rate times distinct_cases is the count (a float, not a stored
+// integer). A row is measured when its retry_dependency_rate and distinct_cases are non-NULL.
+const TestRetryDependencyRateWindowSQL = `if(sumIf(distinct_cases, retry_dependency_rate IS NOT NULL AND distinct_cases IS NOT NULL) = 0, NULL, ` +
+	`sumIf(retry_dependency_rate * distinct_cases, retry_dependency_rate IS NOT NULL AND distinct_cases IS NOT NULL) / ` +
+	`toFloat64(sumIf(distinct_cases, retry_dependency_rate IS NOT NULL AND distinct_cases IS NOT NULL)))`
+
+// TestFlakeRateCountColumns and TestRetryDependencyRateCountColumns are the columns the two case-count rules read.
+var (
+	TestFlakeRateCountColumns           = []string{"flake_rate", "flake_cases", "distinct_cases"}
+	TestRetryDependencyRateCountColumns = []string{"retry_dependency_rate", "distinct_cases"}
+)
+
 // StabilityLiveRowsSQL is the one read of testops_pipeline_stability values: the newest stability_index of each
 // (day, repo_id) of {org_id:String} between {start:Date} and {end:Date}, without the repo-days whose newest
 // testops_pipeline_metrics_daily row has no completed run. The stability writer writes no row for such a day, but a

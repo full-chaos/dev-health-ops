@@ -202,6 +202,9 @@ var zeroColumnsAfterTheCapture = map[string]map[string]string{
 	// The run attempt of a GitHub test-report row (CHAOS-13873): a captured row predates it.
 	"test_suite_results": {"run_attempt": "151_testops_report_slot_attempt.sql"},
 	"coverage_snapshots": {"run_attempt": "151_testops_report_slot_attempt.sql"},
+	// The rank of a transition among its item's transitions at one instant (CHAOS-14190): a captured row is the only
+	// transition of its instant as the Python sink wrote it, so it reads 0.
+	"work_item_transitions": {"tie_ordinal": "170_work_item_transitions_tie_ordinal.sql"},
 }
 
 // derivedColumnsAfterTheCapture names the Array(String) columns a migration

@@ -59,7 +59,6 @@ func startParityStack(t *testing.T, ctx context.Context) parityStack {
 	t.Cleanup(func() { conn.Close() })
 	for _, statement := range []string{
 		"CREATE TABLE ci_pipeline_runs (`repo_id` UUID, `run_id` String, `status` Nullable(String), `queued_at` Nullable(DateTime64(3, 'UTC')), `started_at` DateTime64(3, 'UTC'), `finished_at` Nullable(DateTime64(3, 'UTC')), `last_synced` DateTime64(3, 'UTC'), `org_id` String DEFAULT 'default', `pipeline_name` Nullable(String), `provider` LowCardinality(String) DEFAULT '', `duration_seconds` Nullable(Float64), `queue_seconds` Nullable(Float64), `retry_count` UInt32 DEFAULT 0, `cancel_reason` Nullable(String), `trigger_source` Nullable(String), `commit_hash` Nullable(String), `branch` Nullable(String), `pr_number` Nullable(UInt32), `team_id` Nullable(String), `service_id` Nullable(String)) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, run_id)",
-		"CREATE TABLE cicd_metrics_daily (`repo_id` UUID, `day` Date, `pipelines_count` UInt32, `success_rate` Float64, `avg_duration_minutes` Nullable(Float64), `p90_duration_minutes` Nullable(Float64), `avg_queue_minutes` Nullable(Float64), `computed_at` DateTime('UTC'), `org_id` String DEFAULT 'default', `retracted` UInt8 DEFAULT 0) ENGINE = ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, day)",
 		"CREATE TABLE deployments (`repo_id` UUID, `deployment_id` String, `status` Nullable(String), `environment` Nullable(String), `started_at` Nullable(DateTime64(3, 'UTC')), `finished_at` Nullable(DateTime64(3, 'UTC')), `deployed_at` Nullable(DateTime64(3, 'UTC')), `merged_at` Nullable(DateTime64(3, 'UTC')), `pull_request_number` Nullable(UInt32), `pull_request_tier` LowCardinality(String) DEFAULT '', `release_ref` String DEFAULT '', `release_ref_confidence` Float64 DEFAULT 0., `last_synced` DateTime64(3, 'UTC'), `org_id` String DEFAULT 'default') ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, deployment_id)",
 		"CREATE TABLE deploy_metrics_daily (`repo_id` UUID, `day` Date, `deployments_count` UInt32, `failed_deployments_count` UInt32, `deploy_time_p50_hours` Nullable(Float64), `lead_time_p50_hours` Nullable(Float64), `computed_at` DateTime('UTC'), `org_id` String DEFAULT 'default') ENGINE = ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, day)",
 		"CREATE TABLE test_case_results (`repo_id` UUID, `run_id` String, `suite_id` String, `case_id` String, `case_name` String, `class_name` Nullable(String), `status` LowCardinality(String), `duration_seconds` Nullable(Float64), `retry_attempt` UInt32 DEFAULT 0, `failure_message` Nullable(String), `failure_type` Nullable(String), `stack_trace` Nullable(String), `is_quarantined` UInt8 DEFAULT 0, `org_id` LowCardinality(String) DEFAULT '', `last_synced` DateTime64(3, 'UTC')) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, run_id, suite_id, case_id)",
@@ -85,7 +84,7 @@ func startParityStack(t *testing.T, ctx context.Context) parityStack {
 			t.Fatal(err)
 		}
 	}
-	chschema.CreateTables(ctx, t, conn, "test_suite_results", "coverage_snapshots")
+	chschema.CreateTables(ctx, t, conn, "test_suite_results", "coverage_snapshots", "cicd_metrics_daily", "testops_run_report_completeness")
 	applyTestopsRepositoryOwnershipSchema(ctx, t, conn)
 	return parityStack{pool: pool, conn: conn}
 }
@@ -679,6 +678,10 @@ func findQuery(queries []recordedQuery, query string) *recordedQuery {
 
 func findQueryContaining(queries []recordedQuery, fragment string) *recordedQuery {
 	for index := range queries {
+		// The risk job's tests-unknown reads read the same sources over other windows: not the day's read.
+		if strings.HasPrefix(queries[index].query, "SELECT DISTINCT repo_id") {
+			continue
+		}
 		if strings.Contains(queries[index].query, fragment) {
 			return &queries[index]
 		}

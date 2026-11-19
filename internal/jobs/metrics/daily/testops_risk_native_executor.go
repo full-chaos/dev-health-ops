@@ -93,6 +93,11 @@ func (executor *TestopsRiskExecutor) ComputeFamily(
 	var qualityDrag []testopsQualityDragRow
 	var pipelineStability []testopsPipelineStabilityRow
 
+	testsUnknown, err := loadTestopsRiskTestsUnknown(ctx, executor.conn, run.OrganizationID, repoIDs, historyStart, start, end)
+	if err != nil {
+		return 0, err
+	}
+
 	for _, repoID := range repoIDs {
 		repoName := repoID.String()
 
@@ -151,6 +156,12 @@ func (executor *TestopsRiskExecutor) ComputeFamily(
 		var testRepresentative *testops.TestMetric
 		if len(testMetrics) > 0 {
 			testRepresentative = &testMetrics[0]
+		}
+		// No test row, CI ran, and tests exist for the repo (a suite in the 29 days before, or a run of the day named
+		// partial): the tests were not read, so the flake and recurrence factors are unknown, not 0.
+		if _, unknown := testsUnknown[repoID]; unknown && testRepresentative == nil && pipeRepresentative != nil {
+			testRepresentative = unknownTestMetric(repoID, pipeRepresentative)
+			testMetrics = []testops.TestMetric{*testRepresentative}
 		}
 
 		confidencePipe, confidenceTest := repoSummedConfidenceInputs(pipeRepresentative, pipelineMetrics, testRepresentative, testMetrics)

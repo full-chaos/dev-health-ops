@@ -96,7 +96,9 @@ var teamValueExempt = map[string]string{
 // teamScopeKeyReason is why the benchmarking outputs take no row of zeros.
 const teamScopeKeyReason = "a benchmarking output: one result row per metric, scope and period, appended by the benchmarking job and read by no reader; " +
 	"scope_key is a team id only in a row of scope_type 'team', and the job reads a team series from the newest row of each key of its source " +
-	"and only for an active team (benchmarking.FetchMetricSeriesByScope), so it writes no new row under a superseded id; a row of zeros would be a result that was never computed"
+	"and only for an active team (benchmarking.FetchMetricSeriesByScope), so it writes no new row under a superseded id; a row of zeros would be a result that was never computed. " +
+	"The one retraction the family writes is on a run of the whole organization with no repository (CHAOS-14052, benchmarking_empty_run_retire.go): " +
+	"every key of the day, marked retracted = 1, not a stale team key"
 
 // teamScopeKeyExempt are the tables that hold a team id in scope_key and take
 // no row of zeros, each with the reason.

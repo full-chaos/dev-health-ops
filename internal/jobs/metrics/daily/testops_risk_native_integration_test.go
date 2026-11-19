@@ -90,7 +90,7 @@ func TestTestopsRiskExecutorComputeFamilyWritesAllThreeTablesAgainstRealClickHou
 			t.Fatal(err)
 		}
 	}
-	chschema.CreateTables(ctx, t, conn, "test_suite_results", "coverage_snapshots")
+	chschema.CreateTables(ctx, t, conn, "test_suite_results", "coverage_snapshots", "testops_run_report_completeness")
 	applyTestopsRepositoryOwnershipSchema(ctx, t, conn)
 
 	// Freeze background merges on the seeded source tables BEFORE anything is
@@ -335,7 +335,7 @@ func TestTestopsRiskExecutorComputeFamilyReportsPartialWriteAtTheCallSite(t *tes
 			t.Fatal(err)
 		}
 	}
-	chschema.CreateTables(ctx, t, conn, "test_suite_results", "coverage_snapshots")
+	chschema.CreateTables(ctx, t, conn, "test_suite_results", "coverage_snapshots", "testops_run_report_completeness")
 	applyTestopsRepositoryOwnershipSchema(ctx, t, conn)
 
 	const orgID = "00000000-0000-4000-8000-00000000000a"

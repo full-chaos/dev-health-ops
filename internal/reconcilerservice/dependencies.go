@@ -136,6 +136,9 @@ type postgresReconcilerDatabase struct {
 	queueProbe       postgres.LazyProbeCheck
 	coordinatorProbe postgres.LazyProbeCheck
 	riverSchemaProbe postgres.LazyProbeCheck
+	// postures are the cached domain posture checks handed out by DomainPostureCheck; Close stops them.
+	posturesMu sync.Mutex
+	postures   []*postgres.CachedPostureCheck
 }
 
 func openReconcilerDatabase(ctx context.Context, cfg config.Config) (reconcilerDatabase, error) {
@@ -182,10 +185,14 @@ func (database *postgresReconcilerDatabase) DomainPostureCheck(logger *slog.Logg
 	if database == nil || database.pools == nil || database.pools.Domain == nil {
 		return nil
 	}
-	return postgres.NewCachedPostureCheck(
+	check := postgres.NewCachedPostureCheck(
 		database.pools.ReadinessPool(), database.domainRole, database.riverSchema, postgres.DomainPosture(),
 		postgres.PostureCheckOptions{Logger: logger},
-	).Check
+	)
+	database.posturesMu.Lock()
+	database.postures = append(database.postures, check)
+	database.posturesMu.Unlock()
+	return check.Check
 }
 
 // ReadinessPool is the one-connection probe pool every domain-role readiness
@@ -296,8 +303,23 @@ func (database *postgresReconcilerDatabase) CoordinatorPool() *pgxpool.Pool {
 	return database.pools.Coordinator
 }
 
+// Close stops the readiness checks (each running one ends and logs first), then closes the pools
+// they run on.
 func (database *postgresReconcilerDatabase) Close() {
-	if database != nil && database.pools != nil {
+	if database == nil {
+		return
+	}
+	database.queueProbe.Close()
+	database.coordinatorProbe.Close()
+	database.riverSchemaProbe.Close()
+	database.posturesMu.Lock()
+	postures := database.postures
+	database.postures = nil
+	database.posturesMu.Unlock()
+	for _, check := range postures {
+		check.Close()
+	}
+	if database.pools != nil {
 		database.pools.Close()
 	}
 }

@@ -304,13 +304,20 @@ type ProbeConfig struct {
 // the same reason internal/auth/authstore.Postgres.Open does not: a
 // configured-but-unreachable database must not block process startup --
 // readiness is re-answered live by the registered check, not by Start.
-type pgxpoolComponent struct{ pool *pgxpool.Pool }
+type pgxpoolComponent struct {
+	pool *pgxpool.Pool
+	// posture runs on pool, so Shutdown stops it (its running execution ends and logs) first.
+	posture *postgres.CachedPostureCheck
+}
 
 func (p *pgxpoolComponent) Name() string { return "api-postgres" }
 
 func (p *pgxpoolComponent) Start(context.Context) error { return nil }
 
 func (p *pgxpoolComponent) Shutdown(context.Context) error {
+	if p.posture != nil {
+		p.posture.Close()
+	}
 	if p.pool != nil {
 		p.pool.Close()
 	}
@@ -402,7 +409,8 @@ func buildDeps(
 			return Deps{}, nil, dependencyFailure(ctx, nil, "api_postgres", "api_schema_behind", err)
 		}
 		deps.Pool = pool
-		components = append(components, &pgxpoolComponent{pool: pool})
+		poolComponent := &pgxpoolComponent{pool: pool}
+		components = append(components, poolComponent)
 		// CHAOS-6765: the whole-catalog posture query takes 1.4-1.9 s on the
 		// production catalog against the registry's 2 s per-check bound, so a
 		// per-probe check flapped readiness. The cached check runs it
@@ -417,6 +425,7 @@ func buildDeps(
 			pool, cfg.APIDatabaseRole, cfg.RiverDatabaseSchema, apiPosture,
 			postgres.PostureCheckOptions{Logger: logger},
 		)
+		poolComponent.posture = postureCheck
 		if err := registry.RegisterRequired(apiDatabaseCheck, postureCheck.Check); err != nil {
 			return Deps{}, nil, dependencyFailure(ctx, logger, "api_postgres", "api_postgres_check_register_failed", err)
 		}

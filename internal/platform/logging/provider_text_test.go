@@ -18,6 +18,8 @@ func TestProviderText(t *testing.T) {
 		{"non-ascii letters kept", "acme/über", "acme/über"},
 		{"exact bound", strings.Repeat("a", 128), strings.Repeat("a", 128)},
 		{"over bound", long, strings.Repeat("a", 128) + "...[cut]"},
+		{"escapes count against the bound", strings.Repeat("\n", 128), strings.Repeat(`\u000a`, 21) + "...[cut]"},
+		{"cut lands on an escape boundary", strings.Repeat("a", 125) + "\n", strings.Repeat("a", 125) + "...[cut]"},
 		{"cut counts runes", strings.Repeat("ü", 129), strings.Repeat("ü", 128) + "...[cut]"},
 	}
 	for _, c := range cases {

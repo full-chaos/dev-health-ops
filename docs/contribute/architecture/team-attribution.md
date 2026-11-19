@@ -2292,6 +2292,8 @@ them is in their readers:
 Asserted on real ClickHouse by `TestTestopsTeamSeriesHoldNoSupersededTeam` (the benchmarking reader: the inactive team is no target), `TestTestopsTeamSeriesTakeTheOwnersAtTheRun` (the benchmarking reader takes the owners at the run instant), by `TestTestopsTeamSeriesCoOwnedRepoShowsInFullInBothOwnerSeries`, `TestTestopsTeamSeriesAttributesAWholeWindowToTheOwnersToday` and `TestTestopsTeamSeriesFollowTheOwnershipRules` (the analytics team series, which read the owners at the request), by `TestTestopsPooledP95IsOnePercentileOverThePooledRuns`, `TestTestopsPooledQueueTimeIsTheMeanOfTheQueueSamples` and `TestTestopsPooledTeamReadsTheOwnersAtTheRequest` (the pooled P95 and queue series, a co-owned repository whole for each owner), and by `TestForecastListHoldsNoSupersededTeam`. A new query-api reader that groups or filters one of the three TestOps daily tables by the stored `team_id` fails `TestNoQueryAPIReaderGroupsOrFiltersTestopsDailyByTheStoredTeam`, a source census over the string literals of `internal/queryapi`.
 The acr readers of `capacity_forecasts` and `recommendations_daily` are the acr surface's own.
 
+The benchmarking line coverage of a point is the covered lines over the total lines of the point's repositories, times 100 (a repository-day weighs by its lines), not the mean of the stored percentages. A repository-day with a NULL line count, or with no lines, is in neither sum, and a point with no such repository-day has no value. The branch coverage has no stored counts and stays the mean of the stored percentages of the repository-days.
+
 Limits:
 
 - `estimate_coverage_metrics_daily` and the `unknown` bucket of `ai_impact_metrics_daily` hold real rows with every

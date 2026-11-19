@@ -41,7 +41,7 @@ var metricDefinitions = map[string]MetricDefinition{
 	"flake_rate":                pooledRate(testMetric(""), measuredCases("flake_cases", "flake_rate", "flake_cases"), measuredCases("flake_cases", "flake_rate", "distinct_cases")),
 	"retry_dependency_rate":     pooledRate(testMetric(""), measuredCases("distinct_cases", "retry_dependency_rate", "retry_dependency_rate * distinct_cases"), measuredCases("distinct_cases", "retry_dependency_rate", "distinct_cases")),
 	"failure_recurrence_score":  testMetric("failure_recurrence_score"),
-	"line_coverage_pct":         coverageMetric("line_coverage_pct"),
+	"line_coverage_pct":         pooledRate(coverageMetric(""), "if("+coveredLines+", 100 * lines_covered, NULL)", "if("+coveredLines+", lines_total, NULL)"),
 	"branch_coverage_pct":       coverageMetric("branch_coverage_pct"),
 	"coverage_delta_pct":        coverageMetric("coverage_delta_pct"),
 	"coverage_regression_count": coverageMetric("coverage_regression_count"),
@@ -125,6 +125,13 @@ func testMetric(column string) MetricDefinition {
 		ScopeSupport: testopsScopes(), InnerGroupColumns: []string{"repo_id"},
 	}
 }
+
+// coveredLines is a repo-day whose stored line counts measure a coverage: both counts set and lines_total above 0 (the
+// rule of the query-api line coverage). Any other repo-day (a NULL count, a stored pct with no counts, no lines) is in
+// neither sum, so a point made only of such repo-days has no value, never 0. The stored line_coverage_pct is not read.
+// branch_coverage_pct has no stored counts, so it stays the mean of the repo-day percentages, as do coverage_delta_pct
+// (a difference of two percentages) and coverage_regression_count (a count).
+const coveredLines = "lines_covered IS NOT NULL AND lines_total IS NOT NULL AND lines_total > 0"
 
 func coverageMetric(column string) MetricDefinition {
 	return MetricDefinition{

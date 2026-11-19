@@ -23,10 +23,11 @@ import (
 // After the fan-out's runs, D reads absent and D+1 counts the run once, in the stored rows and under the live-row
 // rule every reader of cicd_metrics_daily applies. T1: the sync window does not hold D (the hourly case). T2: it does.
 
-var (
-	movedDay  = time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC)
-	movedNext = movedDay.AddDate(0, 0, 1)
-)
+// movedDays are the day D the run first finished on and the day D+1 its rerun finishes on.
+func movedDays() (time.Time, time.Time) {
+	day := time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC)
+	return day, day.AddDate(0, 0, 1)
+}
 
 func writeCICDRun(t *testing.T, ctx context.Context, rig *touchedRig, org string, repo uuid.UUID, finished, synced time.Time) {
 	t.Helper()
@@ -43,6 +44,7 @@ func writeCICDRun(t *testing.T, ctx context.Context, rig *touchedRig, org string
 		t.Fatal(err)
 	}
 	capability, _ := providersync.Capability("github", "cicd")
+	movedDay, movedNext := movedDays()
 	since, before := movedDay.AddDate(0, 0, -1), movedNext.AddDate(0, 0, 1)
 	claim := providersync.Claim{
 		Unit: providersync.Unit{
@@ -82,6 +84,7 @@ func liveCICDDays(t *testing.T, ctx context.Context, rig *touchedRig, org string
 }
 
 func TestPostSyncRecomputesTheDayARerunMovedARunOff(t *testing.T) {
+	movedDay, movedNext := movedDays()
 	cases := []struct {
 		name          string
 		since, before time.Time

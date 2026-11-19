@@ -73,11 +73,52 @@ func defaultRecordClientCancel(ctx context.Context, phase string, attrs ...any) 
 
 // reportedAsClientCancel reports the end of a statement as a client cancel
 // when the client's cancel ended it (clientCancelled), and says whether it
-// did. A caller reports a failure only when this returns false.
+// did. A caller reports a failure only when this returns false. An error a
+// phase reported already (ClientCancelReported) is not reported again: one
+// read shared by several phases is one report.
 func reportedAsClientCancel(ctx context.Context, err error, phase string, attrs ...any) bool {
 	if !clientCancelled(ctx, err) {
 		return false
 	}
-	recordClientCancel(ctx, phase, attrs...)
+	if !ClientCancelReported(err) {
+		recordClientCancel(ctx, phase, attrs...)
+	}
 	return true
+}
+
+// reportedClientCancel marks an error whose client cancel a phase of this
+// package reported already, so the caller that ends the request on it (the
+// GraphQL presenter, a REST route) does not report it a second time.
+type reportedClientCancel struct{ err error }
+
+func (r *reportedClientCancel) Error() string { return r.err.Error() }
+func (r *reportedClientCancel) Unwrap() error { return r.err }
+
+// markedIfClientCancel reports err as a client cancel of phase when it is one
+// and returns it marked as reported; any other err is returned as it is.
+func markedIfClientCancel(ctx context.Context, err error, phase string, attrs ...any) error {
+	if !reportedAsClientCancel(ctx, err, phase, attrs...) {
+		return err
+	}
+	return &reportedClientCancel{err: err}
+}
+
+// ClientCancelReported says whether a phase of this package reported err as
+// a client cancel already (the error carries the mark).
+func ClientCancelReported(err error) bool {
+	var reported *reportedClientCancel
+	return logging.ErrorAs(err, &reported)
+}
+
+// ClientCancelled is the client cancel rule (clientCancelled) for a caller
+// outside this package that is not an analytics read: it reports nothing.
+func ClientCancelled(ctx context.Context, err error) bool {
+	return clientCancelled(ctx, err)
+}
+
+// ReportedAsClientCancel is reportedAsClientCancel for an analytics read
+// whose end a caller outside this package sees (a REST read route, under its
+// own phase): it counts in the analytics client_cancelled counter.
+func ReportedAsClientCancel(ctx context.Context, err error, phase string, attrs ...any) bool {
+	return reportedAsClientCancel(ctx, err, phase, attrs...)
 }

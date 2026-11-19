@@ -16,6 +16,7 @@ import (
 
 	authv1 "github.com/full-chaos/dev-health-ops/contracts/auth/v1"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
+	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/policycatalog"
 	"github.com/full-chaos/dev-health-ops/internal/auth/sessionid"
 	"github.com/full-chaos/dev-health-ops/internal/authzenforce"
@@ -107,6 +108,29 @@ type liveRowServed struct {
 // live (live), its platform role kept (superuser) or removed, the decision point in mode.
 func liveRowServe(t *testing.T, rows []liveRowRow, class liveRowClass, on, live, superuser bool, mode string) liveRowServed {
 	t.Helper()
+	return liveRowServeWith(t, rows, "admin", lifecycleRoutes, class, on, live, superuser, mode)
+}
+
+// liveRowServeWith is liveRowServe with the namespaces the cell turns on and the routes it mounts.
+func liveRowServeWith(t *testing.T, rows []liveRowRow, namespaces string, routes func(*testing.T, Deps) []httpapi.Route, class liveRowClass,
+	on, live, superuser bool, mode string) liveRowServed {
+	t.Helper()
+	handler, token, pdp := liveRowRig(t, namespaces, routes, class, on, live, superuser)
+	out := liveRowServed{answer: map[string]string{}, calls: map[string][]pep.Request{}}
+	for _, row := range rows {
+		pdp.reset(mode)
+		got := liveRowDo(handler, row.key, token)
+		out.answer[row.key] = strings.TrimSpace(strconv.Itoa(got.status) + " " + got.body)
+		out.calls[row.key] = pdp.calls()
+	}
+	return out
+}
+
+// liveRowRig is the api listener over routes for one class, with the cell off (on=false) or on for namespaces, and the
+// class's token.
+func liveRowRig(t *testing.T, namespaces string, routes func(*testing.T, Deps) []httpapi.Route, class liveRowClass,
+	on, live, superuser bool) (http.Handler, string, *cellPDP) {
+	t.Helper()
 	pdp := newCellPDP(t)
 	var enforcer func(*testing.T) *policy.Enforcer
 	if on {
@@ -115,7 +139,7 @@ func liveRowServe(t *testing.T, rows []liveRowRow, class liveRowClass, on, live,
 			if err != nil {
 				t.Fatal(err)
 			}
-			enf, err := policy.NewEnforcer(policy.EnforceConfig{Rows: mapping, Switch: authzenforce.Parse(authzenforce.GoAPI, "admin"),
+			enf, err := policy.NewEnforcer(policy.EnforceConfig{Rows: mapping, Switch: authzenforce.Parse(authzenforce.GoAPI, namespaces),
 				Decider: pdp, Timeout: 2 * time.Second, Logger: quietLogger()})
 			if err != nil {
 				t.Fatal(err)
@@ -138,7 +162,7 @@ func liveRowServe(t *testing.T, rows []liveRowRow, class liveRowClass, on, live,
 		if !live {
 			delete(s.imperson, probeAdminUser)
 		}
-	}, lifecycleRoutes, func(scope *policy.Scope) { scope.DeclaredRows(scopeRows) })
+	}, routes, func(scope *policy.Scope) { scope.DeclaredRows(scopeRows) })
 	claims := map[string]any{"sid": sessionid.Wire(cellAdminSID)}
 	if !class.orgClaim {
 		claims["org_id"] = nil
@@ -149,14 +173,7 @@ func liveRowServe(t *testing.T, rows []liveRowRow, class liveRowClass, on, live,
 		snap.platformRole = "platform_admin"
 	}
 	pdp.registerUsers([]usersCaller{{token: token, snap: snap, judged: true}})
-	out := liveRowServed{answer: map[string]string{}, calls: map[string][]pep.Request{}}
-	for _, row := range rows {
-		pdp.reset(mode)
-		got := liveRowDo(handler, row.key, token)
-		out.answer[row.key] = strings.TrimSpace(strconv.Itoa(got.status) + " " + got.body)
-		out.calls[row.key] = pdp.calls()
-	}
-	return out
+	return handler, token, pdp
 }
 
 func liveRowAdminOrWrite(row liveRowRow) bool {

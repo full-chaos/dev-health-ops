@@ -476,6 +476,51 @@ func remainingPageBudget(budget, spent int) (int, error) {
 	return budget - spent, nil
 }
 
+// githubTestsMaxWalkRecords bounds the rows one chunked walk writes, summed over every phase and every attempt
+// (githubTestsWalkRecords). The page budgets bound the runs a walk lists, not the rows: one run's reports go up to
+// maxEffectRows, which the executor splits into 100-row chunks, so a walk of a busy repository could prepare chunks for many
+// hours while it held its cost-class slot. The value is max(2,000,000, 2x the largest successful GitHub tests/cicd unit of the
+// last 30 days on prod); the two prod backfill units that ran for 13+ hours held about 8,000,000.
+const githubTestsMaxWalkRecords = 2_000_000
+
+// errGitHubTestsWalkBound stops a listing visit at the run where the walk reached githubTestsMaxWalkRecords.
+var errGitHubTestsWalkBound = errors.New("github tests walk record bound reached")
+
+// githubTestsWalkRecords is the rows the walk has written so far. Every addend is a cumulative cursor counter, so a stored
+// cursor of an earlier attempt or an earlier release already carries the total.
+func githubTestsWalkRecords(cursor githubTestsChunkCursor) int {
+	return cursor.Pipelines + cursor.Jobs + cursor.Acceptance + cursor.Suites + cursor.Cases + cursor.Coverage
+}
+
+// markGitHubTestsInventoryTruncated records that an inventory phase ended before the end of its listing: the unit finalizes
+// with reports_complete=false and no watermark (githubTestsWindowBlockingComponents).
+func markGitHubTestsInventoryTruncated(
+	cursor githubTestsChunkCursor, client *providerfoundation.HTTPClient, claim Claim, component string,
+) githubTestsChunkCursor {
+	cursor.Incomplete = mergeGitHubTestsIncomplete(cursor.Incomplete, GitHubTestsIncomplete{
+		Component: component, Cause: githubTestsPageBudgetCause, Count: 1,
+	})
+	if client != nil {
+		client.Metrics.RecordInventoryPageCap(claim.Provider, claim.Dataset)
+	}
+	return cursor
+}
+
+// recordGitHubTestsWalkBound ends an inventory phase at the walk record bound through the page-budget truncation: the same
+// observation, so the closed vocabulary and the coverage readers are unchanged; the WARN line names the bound.
+func recordGitHubTestsWalkBound(
+	cursor githubTestsChunkCursor, client *providerfoundation.HTTPClient, claim Claim, component string, bound int,
+) githubTestsChunkCursor {
+	cursor = markGitHubTestsInventoryTruncated(cursor, client, claim, component)
+	slog.Warn(
+		"provider walk record bound reached",
+		"provider", claim.Provider, "dataset", claim.Dataset, "mode", claim.Mode, "unit", claim.ID,
+		"repository", logging.ProviderText(cursor.Repo), "component", component,
+		"records", githubTestsWalkRecords(cursor), "bound", bound,
+	)
+	return cursor
+}
+
 // recordGitHubTestsInventoryTruncation finalizes an inventory phase that hit
 // its cumulative page budget WITHOUT failing the unit.
 //
@@ -501,12 +546,7 @@ func recordGitHubTestsInventoryTruncation(
 	component string,
 	pagesSpent int,
 ) githubTestsChunkCursor {
-	cursor.Incomplete = mergeGitHubTestsIncomplete(cursor.Incomplete, GitHubTestsIncomplete{
-		Component: component, Cause: githubTestsPageBudgetCause, Count: 1,
-	})
-	if client != nil {
-		client.Metrics.RecordInventoryPageCap(claim.Provider, claim.Dataset)
-	}
+	cursor = markGitHubTestsInventoryTruncated(cursor, client, claim, component)
 	slog.Warn(
 		"provider inventory page budget exhausted",
 		"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
@@ -1322,6 +1362,13 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 	if maxRuns < 1 || maxRuns > githubTestsMaxRuns || maxArtifacts < 1 || maxArtifacts > githubTestsMaxArtifacts || jobPages < 1 || jobPages > nativeMaxPages {
 		return ErrInvalidConfiguration
 	}
+	maxWalkRecords := handler.MaxWalkRecords
+	if maxWalkRecords == 0 {
+		maxWalkRecords = githubTestsMaxWalkRecords
+	}
+	if maxWalkRecords < 1 || maxWalkRecords > githubTestsMaxWalkRecords {
+		return ErrInvalidConfiguration
+	}
 	if err := validatePerRunPageBudget(
 		"MaxJobPages", jobPages, githubTestsPerRunPerPage, githubTestsMaxJobsPerRun,
 	); err != nil {
@@ -1495,6 +1542,9 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		}
 		start, _ := githubTestsResumeStart(cursor, page, client, claim, githubTestsRunsPhase)
 		for index := start; index < len(page.Items); index++ {
+			if githubTestsWalkRecords(cursor) >= maxWalkRecords {
+				return errGitHubTestsWalkBound
+			}
 			before := cursor
 			var run gitHubWorkflowRunPayload
 			decoder := json.NewDecoder(strings.NewReader(string(page.Items[index])))
@@ -1555,6 +1605,10 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 	}
 
 	for cursor.Phase == githubTestsRunsPhase {
+		if githubTestsWalkRecords(cursor) >= maxWalkRecords {
+			cursor = recordGitHubTestsWalkBound(cursor, client, claim, githubTestsRunInventoryComponent, maxWalkRecords)
+			break
+		}
 		query := githubTestsRunsQuery(claim, lookback, cursor.RangeHi)
 		allowance, budgetErr := remainingPageBudget(
 			(maxRuns+nativePerPage-1)/nativePerPage, cursor.RunPages)
@@ -1568,6 +1622,10 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		}
 		pageOptions := providerfoundation.GitHubPageOptions{Path: root + "/actions/runs", Route: githubRunsRoute, Query: query, DataKey: "workflow_runs", MaxPages: allowance, InitialURL: cursor.NextURL}
 		collection, visitErr := providerfoundation.VisitGitHubLinkPages(ctx, client, pageOptions, emitRunPage)
+		if errors.Is(visitErr, errGitHubTestsWalkBound) {
+			cursor = recordGitHubTestsWalkBound(cursor, client, claim, githubTestsRunInventoryComponent, maxWalkRecords)
+			break
+		}
 		if visitErr != nil {
 			return visitErr
 		}
@@ -1730,6 +1788,10 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		)
 	}
 	for cursor.Phase == githubTestsArtifactsPhase {
+		if githubTestsWalkRecords(cursor) >= maxWalkRecords {
+			cursor = recordGitHubTestsWalkBound(cursor, client, claim, githubTestsArtifactInventoryComponent, maxWalkRecords)
+			break
+		}
 		artifactQuery := githubTestsArtifactRunQueryAt(claim, cursor.RangeHi)
 		artifactPage := func(page providerfoundation.PageVisit) error {
 			cursor.Pages++
@@ -1777,6 +1839,9 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 				// safer failure mode than erasing real history.
 			}
 			for index := start; index < len(page.Items); index++ {
+				if githubTestsWalkRecords(cursor) >= maxWalkRecords {
+					return errGitHubTestsWalkBound
+				}
 				before := cursor
 				var run gitHubWorkflowRunPayload
 				decoder := json.NewDecoder(strings.NewReader(string(page.Items[index])))
@@ -2323,6 +2388,10 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 			return budgetErr
 		}
 		collection, visitErr := providerfoundation.VisitGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{Path: root + "/actions/runs", Route: githubRunsRoute, Query: artifactQuery, DataKey: "workflow_runs", MaxPages: allowance, InitialURL: cursor.NextURL}, artifactPage)
+		if errors.Is(visitErr, errGitHubTestsWalkBound) {
+			cursor = recordGitHubTestsWalkBound(cursor, client, claim, githubTestsArtifactInventoryComponent, maxWalkRecords)
+			break
+		}
 		if visitErr != nil {
 			return visitErr
 		}

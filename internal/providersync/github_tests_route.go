@@ -330,6 +330,8 @@ type GitHubTestsRouteHandler struct {
 	// RefreshLookback is how far before the window the runs phase lists; zero
 	// keeps githubTestsRefreshLookbackDefault.
 	RefreshLookback time.Duration
+	// MaxWalkRecords lowers githubTestsMaxWalkRecords when positive; zero keeps it.
+	MaxWalkRecords int
 }
 
 func (handler GitHubTestsRouteHandler) Collect(

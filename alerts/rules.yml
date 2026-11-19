@@ -501,11 +501,15 @@ groups:
         annotations:
           summary: "A daily metrics run can no longer finish"
           description: |
-            {{ $value | printf "%.0f" }} daily metrics run(s) were marked blocked in the last day:
-            a partition ended failed_permanent and nothing is left to advance, so the run stays
-            running and its completion fence is never written. List them with
-            `dho workers metrics daily-blocked --org <org>` (the partition failure reasons name
-            the cause), then decide on a `daily-redrive`.
+            {{ $value | printf "%.0f" }} daily metrics run(s) were marked blocked in the last day,
+            so their completion fence is never written. List them with
+            `dho workers metrics daily-blocked --org <org>`; the blocked reason names the action.
+            A partition reason (a partition ended failed_permanent and nothing is left to
+            advance; the run stays running): decide on a `daily-redrive` of the org-day.
+            finalize_failed (every partition succeeded, the finalize failed on its last attempt;
+            the run is failed): no redrive selects a failed run, so start a new run for the day
+            with `dho workers metrics daily-start --rerun-tag <tag>`. The old row stays listed
+            by daily-blocked after the rerun succeeds.
 
       - alert: DailyMetricsBlockedReconcileFailing
         expr: |

@@ -321,3 +321,41 @@ func buildTeamRepoOwnershipDonorWalkOracleRowWith(
 	}
 	return row
 }
+
+// TestTeamRepoOwnershipDonorWalkDeclaredDivergenceGoKeepsTheInheritableEdgeOnATie: the frozen Python collapse
+// (latest_edge) kept the lower relationship_type on an equal last_synced, so a blocks row beside the inheritable
+// row of the same pair dropped the donor. Go keeps the inheritable row, the cascade's rule
+// (teamattribution.LatestDependencyEdgeWins): the frozen case with a same-timestamp blocks row gives the frozen
+// case's team (testdata/oracle_frozen/README.md).
+func TestTeamRepoOwnershipDonorWalkDeclaredDivergenceGoKeepsTheInheritableEdgeOnATie(t *testing.T) {
+	var input map[string]any
+	for _, c := range teamRepoOwnershipDonorWalkOracleCases() {
+		if c.ID == "inheritable_relates_to_transfers" {
+			input = c.Input
+		}
+	}
+	if input == nil {
+		t.Fatal("frozen case inheritable_relates_to_transfers is gone")
+	}
+	want := buildTeamRepoOwnershipDonorWalkOracleRow(t, input)
+	if want.TeamID == nil {
+		t.Fatal("frozen case inheritable_relates_to_transfers gives no team")
+	}
+	inheritable := input["dependencies"].([]map[string]any)[0]
+	blocks := map[string]any{}
+	for key, value := range inheritable {
+		blocks[key] = value
+	}
+	blocks["relationship_type"] = "blocks"
+	for _, order := range [][]map[string]any{{blocks, inheritable}, {inheritable, blocks}} {
+		tied := map[string]any{}
+		for key, value := range input {
+			tied[key] = value
+		}
+		tied["dependencies"] = order
+		got := buildTeamRepoOwnershipDonorWalkOracleRow(t, tied)
+		if got.TeamID == nil || *got.TeamID != *want.TeamID {
+			t.Errorf("with a same-timestamp blocks row (%s first): team %v, want %q", order[0]["relationship_type"], got.TeamID, *want.TeamID)
+		}
+	}
+}

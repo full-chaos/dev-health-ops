@@ -1708,8 +1708,10 @@ jobs:
   # the merge queue, on the main push, and on a pull request only with ci:full (or a non-draft hotfix-image PR). In
   # the merge queue every build must succeed unless the entry is docs-only. A run started by any other label skips
   # `changes` and this gate with it (the run of the push it follows carries the verdict).
+  # A run started by another label skips this gate. A skipped job posts a passing check, so it must not carry the required
+  # name (it would hide a red verdict of the same head): GitHub names a job skipped by `if:` by the raw text of this expression.
   image-queue-gate:
-    name: image-queue-gate
+    name: ${{ github.event.action == 'labeled' && github.event.label.name != 'hotfix-image' && 'image-queue-gate (other label, not run)' || 'image-queue-gate' }}
     if: always() && (github.event_name == 'pull_request' || github.event_name == 'merge_group') && (github.event.action != 'labeled' || github.event.label.name == 'hotfix-image')
     needs: [changes, resolve, go-build, go-api-tools-build, go-build-dho-arm64]
     runs-on: ubuntu-latest

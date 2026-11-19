@@ -48,13 +48,14 @@ import (
 //       - only INHERITANCE-SAFE relationship types transfer a team
 //         (relates_to, relates, duplicates, external_issue_key); blocking
 //         links (blocks/blocked_by/is_blocked_by) routinely span teams and
-//         are never a donor edge (teamRepoOwnershipInheritableRelationshipTypes);
+//         are never a donor edge (the cascade's one list,
+//         teamattribution.GithubWorkItemDerivationInheritableRelationships);
 //       - per (source, target) pair, only the LATEST edge (by last_synced)
 //         counts -- a relationship-type flip supersedes the stale row
 //         instead of leaving an old inheritable edge alive alongside the
-//         new one; ties break on the lexicographically smaller
-//         relationship_type (deterministically prefers the safer blocking
-//         type over inheriting);
+//         new one; on an equal last_synced an inheritable type wins, then
+//         the lower relationship_type -- the cascade's own rule, one
+//         function (teamattribution.LatestDependencyEdgeWins);
 //       - a cross-provider `extkey:KEY` target (emitted by PR parsers for a
 //         Linear/Jira issue key mentioned in a PR body/branch name) is
 //         resolved against a Linear/Jira work-item-key index; a key that
@@ -380,19 +381,6 @@ func teamRepoOwnershipResolutionArmPriority(arm string) int {
 // known team id instead of looking the row up in team_project_ownership
 // (CHAOS-4537), so the row is vestigial from this reader's point of view; it
 // is still written (CHAOS-4458 part (b)).
-
-// teamRepoOwnershipInheritableRelationshipTypes mirrors
-// compute_work_items.py's _INHERITABLE_RELATIONSHIP_TYPES verbatim: only
-// edges that mean "this item does (or duplicates) the work of the linked
-// issue" are sound to inherit a team through. A blocking relationship
-// (blocks/blocked_by/is_blocked_by) connects items that are frequently
-// owned by DIFFERENT teams, so it must never drive attribution.
-var teamRepoOwnershipInheritableRelationshipTypes = map[string]bool{
-	"relates_to":         true,
-	"relates":            true,
-	"duplicates":         true,
-	"external_issue_key": true,
-}
 
 // teamRepoOwnershipLinkCounts is one team's link count per link tier on one
 // repo, indexed by linktier.Rank: native, explicit_text, heuristic, and
@@ -886,9 +874,7 @@ func buildDonorTeamIDResolver(
 	for _, edge := range edges {
 		key := pair{edge.SourceWorkItemID, edge.TargetWorkItemID}
 		current, ok := latestEdge[key]
-		if !ok ||
-			edge.LastSynced.After(current.LastSynced) ||
-			(edge.LastSynced.Equal(current.LastSynced) && edge.RelationshipType < current.RelationshipType) {
+		if !ok || teamattribution.LatestDependencyEdgeWins(edge.LastSynced, edge.RelationshipType, current.LastSynced, current.RelationshipType) {
 			latestEdge[key] = edge
 		}
 	}
@@ -917,7 +903,7 @@ func buildDonorTeamIDResolver(
 	targetTeam := map[string]resolvedTeam{}
 	refusedEdges := map[pair]string{}
 	for _, edge := range latestEdge {
-		if !teamRepoOwnershipInheritableRelationshipTypes[edge.RelationshipType] {
+		if !teamattribution.GithubWorkItemDerivationInheritableRelationships[edge.RelationshipType] {
 			continue
 		}
 		target := canonicalDependencyTarget(edge.TargetWorkItemID, keyIndex)

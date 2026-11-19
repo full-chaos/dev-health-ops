@@ -41,7 +41,7 @@ func TestJobTargetDiscoveryGivesRetractionRowsNoWeight(t *testing.T) {
 			scopes = append(scopes, *target.TeamID+" @ "+*target.WorkScopeID)
 		}
 		sort.Strings(scopes)
-		teams, err := recommendations.DiscoverTeamIDs(ctx, org)
+		teams, err := recommendations.DiscoverTeamIDs(ctx, org, time.Now().UTC())
 		if err != nil {
 			t.Fatalf("%s recommendation teams: %v", org, err)
 		}

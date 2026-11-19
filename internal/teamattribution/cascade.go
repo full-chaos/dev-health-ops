@@ -380,16 +380,28 @@ type GithubWorkItemDerivationDependencyEdge struct {
 	OrgID string
 }
 
+// LatestGitHubWorkItemDerivationDependencies keeps one edge per (source,
+// target): the newest by last_synced, so a retyped link replaces the old row.
+// On an equal last_synced an inheritable relationship wins (one sync can write
+// a native relates_to and a text "Blocks #11" for the same pair), then the
+// lower relationship. The frozen Python kept the lower relationship alone.
 func LatestGitHubWorkItemDerivationDependencies(
 	dependencies []GithubWorkItemDerivationDependencyEdge,
 ) map[struct{ source, target string }]GithubWorkItemDerivationDependencyEdge {
 	type edgeKey struct{ source, target string }
 	latest := map[edgeKey]GithubWorkItemDerivationDependencyEdge{}
+	tieWins := func(candidate, current string) bool {
+		candidateInherits := GithubWorkItemDerivationInheritableRelationships[candidate]
+		if candidateInherits != GithubWorkItemDerivationInheritableRelationships[current] {
+			return candidateInherits
+		}
+		return candidate < current
+	}
 	for _, dependency := range dependencies {
 		key := edgeKey{dependency.SourceWorkItemID, dependency.TargetWorkItemID}
 		current, exists := latest[key]
 		if !exists || dependency.LastSynced.After(current.LastSynced) ||
-			(dependency.LastSynced.Equal(current.LastSynced) && dependency.RelationshipType < current.RelationshipType) {
+			(dependency.LastSynced.Equal(current.LastSynced) && tieWins(dependency.RelationshipType, current.RelationshipType)) {
 			latest[key] = dependency
 		}
 	}

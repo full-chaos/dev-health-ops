@@ -524,7 +524,8 @@ func (writer *Writer) writeRepoMetrics(ctx context.Context, rows []RepoMetric, o
 		single_owner_file_ratio_30d, review_load_top_reviewer_ratio, bus_factor,
 		code_ownership_gini, mttr_hours, change_failure_rate, revert_rate,
 		change_failure_rate_incident, prs_merged_reviewed, prs_merged_rework,
-		prs_merged_no_rework_signal, pr_rework_ratio_reviewed, computed_at, org_id
+		prs_merged_no_rework_signal, pr_rework_ratio_reviewed,
+		pooled_pr_size_loc, pooled_bug_repair_hours, pooled_samples_stored, computed_at, org_id
 	)`)
 	if err != nil {
 		return 0, fmt.Errorf("prepare repo_metrics_daily batch: %w", err)
@@ -567,7 +568,9 @@ func (writer *Writer) writeRepoMetrics(ctx context.Context, rows []RepoMetric, o
 			row.ReworkChurnRatio30d, row.SingleOwnerFileRatio30d, row.ReviewLoadTopReviewerRatio,
 			busFactor, row.CodeOwnershipGini, row.MTTRHours, row.ChangeFailureRate,
 			row.RevertRate, row.ChangeFailureRateIncident, reviewed, rework, noSignal,
-			row.PRReworkRatioReviewed, row.ComputedAt, orgID,
+			row.PRReworkRatioReviewed,
+			nonNilSamples(row.PRSizeLOCSamples), nonNilSamples(row.BugRepairHoursSamples), pooledMarker(row.PooledSamplesOverCap),
+			row.ComputedAt, orgID,
 		); err != nil {
 			return 0, fmt.Errorf("append repo_metrics_daily row: %w", err)
 		}

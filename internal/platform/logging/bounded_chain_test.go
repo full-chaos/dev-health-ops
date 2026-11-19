@@ -202,3 +202,15 @@ func TestErrorTypeKeepsItsThirtyTwoStepReach(t *testing.T) {
 		t.Fatalf("ErrorType of a 20-deep chain = %q, want *errors.errorString", got)
 	}
 }
+
+func TestErrorLeavesListsEveryLeafOfAJoin(t *testing.T) {
+	a, b, c := errors.New("a"), errors.New("b"), errors.New("c")
+	err := fmt.Errorf("outer: %w", errors.Join(a, fmt.Errorf("mid: %w", b), c))
+	got := ErrorLeaves(err)
+	if len(got) != 3 || !chainIs(got, a) || !chainIs(got, b) || !chainIs(got, c) {
+		t.Fatalf("ErrorLeaves = %v, want a, b and c", got)
+	}
+	if ErrorLeaves(nil) != nil {
+		t.Fatal("ErrorLeaves(nil) is not nil")
+	}
+}

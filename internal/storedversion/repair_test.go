@@ -143,7 +143,7 @@ func TestRepairStopsAfterTheBoundWarnsAndCountsAndReturnsNil(t *testing.T) {
 	}
 }
 
-// A schema without migration 165 repairs nothing, loudly: each write logs one WARN that names the kept table and the
+// A schema without migration 166 repairs nothing, loudly: each write logs one WARN that names the kept table and the
 // org, and adds 1 to the counter.
 func TestRepairWithoutTheKeptTableWarnsCountsAndRepairsNothing(t *testing.T) {
 	reader := sdkmetric.NewManualReader()
@@ -162,7 +162,7 @@ func TestRepairWithoutTheKeptTableWarnsCountsAndRepairsNothing(t *testing.T) {
 	conn := &repairConn{readErr: &clickhouse.Exception{Code: unknownTable, Message: "Unknown table"}}
 	for write := 0; write < 2; write++ {
 		if err := DeploymentKept.Repair(context.Background(), conn, "provider_sync", "org-1", [][]any{{uuid.Nil, "d1"}}, nil); err != nil {
-			t.Fatalf("Repair = %v; want nil on a schema without migration 165", err)
+			t.Fatalf("Repair = %v; want nil on a schema without migration 166", err)
 		}
 	}
 	if len(conn.queries) != 2 || len(conn.execs) != 0 {
@@ -236,20 +236,20 @@ func TestRepairInsertFillsOnlyANullLead(t *testing.T) {
 	}
 }
 
-// Migration 165 ends with the repair of every key: the same statement Repair runs for a batch, without the filter.
-func TestMigration165RepairsEveryKeyWithTheWritersStatement(t *testing.T) {
+// Migration 166 ends with the repair of every key: the same statement Repair runs for a batch, without the filter.
+func TestMigration166RepairsEveryKeyWithTheWritersStatement(t *testing.T) {
 	chain, err := chmigrate.LoadChain()
 	if err != nil {
 		t.Fatal(err)
 	}
 	var statements []string
 	for _, file := range chain {
-		if file.Version == "165_stored_version_kept_groups.sql" {
+		if file.Version == "166_stored_version_kept_groups.sql" {
 			statements = chmigrate.SplitStatements(file.SQL)
 		}
 	}
 	if len(statements) == 0 {
-		t.Fatal("the chain holds no 165_stored_version_kept_groups.sql")
+		t.Fatal("the chain holds no 166_stored_version_kept_groups.sql")
 	}
 	space := regexp.MustCompile(`\s+`)
 	normal := func(sql string) string {
@@ -263,7 +263,7 @@ func TestMigration165RepairsEveryKeyWithTheWritersStatement(t *testing.T) {
 			found = found || normal(statement) == want
 		}
 		if !found {
-			t.Errorf("migration 165 has no statement equal to the %s repair:\n%s", kept.Base, want)
+			t.Errorf("migration 166 has no statement equal to the %s repair:\n%s", kept.Base, want)
 		}
 	}
 }

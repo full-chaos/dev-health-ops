@@ -268,20 +268,17 @@ func TestGitHubWorkItemsRouteComposesRESTSocialProjectsRawRowsAndUsage(t *testin
 		{
 			name: "unidentified item", reason: githubProjectsV2UnidentifiedItem,
 			reply: `{"data":{"organization":{"projectV2":{"items":{"nodes":[` +
-				`{"id":"PVTI_1","content":{"__typename":"SomeFutureContentType"},"fieldValues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},"changes":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}` +
+				`{"id":"PVTI_1","content":{"__typename":"SomeFutureContentType"},"fieldValues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}` +
 				`],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`,
 		},
-		// codex adversarial review, CHAOS-4289 round 2: this item (Issue #7 in
-		// acme/api) is otherwise fully identifiable -- boardIncomplete stays
-		// false -- so this is the ROUTE-LEVEL, behavioral proof that a
-		// null/omitted nested `changes.nodes` alone (distinct from the
-		// unidentified-item case above) also withholds the watermark, via the
-		// same structural_degradation reason the outer pagination checks use.
+		// An otherwise identifiable item (Issue #7 in acme/api) on a page whose
+		// pageInfo lacks hasNextPage: the structural_degradation reason alone
+		// also withholds the watermark.
 		{
-			name: "nested changes nodes missing", reason: githubProjectsV2StructuralDegraded,
+			name: "items page info missing hasNextPage", reason: githubProjectsV2StructuralDegraded,
 			reply: `{"data":{"organization":{"projectV2":{"items":{"nodes":[` +
-				`{"id":"PVTI_1","content":{"__typename":"Issue","number":7,"repository":{"nameWithOwner":"acme/api"}},"fieldValues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},"changes":{"pageInfo":{"hasNextPage":false,"endCursor":null}}}` +
-				`],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`,
+				`{"id":"PVTI_1","content":{"__typename":"Issue","number":7,"repository":{"nameWithOwner":"acme/api"}},"fieldValues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}` +
+				`],"pageInfo":{"endCursor":null}}}}}}`,
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {

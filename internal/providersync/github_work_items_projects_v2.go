@@ -312,7 +312,7 @@ func (fetcher GitHubProjectV2Fetcher) Fetch(
 				slog.Warn("providersync.github.projects_v2.item_labels_truncated",
 					"item", item.ID, "number", item.Content.Number, "read_labels", len(item.Content.Labels.Nodes))
 			}
-			row, transitions, emitted, err := normalizeGitHubProjectV2Item(
+			row, emitted, err := normalizeGitHubProjectV2Item(
 				claim, item, projectScopeID, resolveIdentity, normalizedAt,
 			)
 			if err != nil {
@@ -327,7 +327,6 @@ func (fetcher GitHubProjectV2Fetcher) Fetch(
 				workItemIndex[row.WorkItemID] = len(result.Rows.WorkItems)
 				result.Rows.WorkItems = append(result.Rows.WorkItems, row)
 			}
-			result.Rows.StatusTransitions = append(result.Rows.StatusTransitions, transitions...)
 		}
 		complete := targetResult.Complete && !boardIncomplete
 		result.Snapshots = append(result.Snapshots, githubProjectV2BoardSnapshot{
@@ -462,8 +461,8 @@ const (
 	// (providerfoundation maximumProviderPages, 10,000 pages), not the nested
 	// 100-page bound below.
 	gitHubProjectV2ItemsMaxPages = 10_000
-	// gitHubProjectV2NestedMaxPages bounds ONE item's nested list (changes,
-	// fieldValues): the first page embedded in the items query counts, so 99
+	// gitHubProjectV2NestedMaxPages bounds ONE item's nested fieldValues
+	// list: the first page embedded in the items query counts, so 99
 	// continuation pages follow it (CHAOS-8777).
 	gitHubProjectV2NestedMaxPages = nativeMaxPages
 )
@@ -541,69 +540,6 @@ func fetchGitHubProjectV2Target(
 		paginationComplete := connection.PageInfo != nil && connection.PageInfo.HasNextPage != nil
 		for index := range connection.Nodes {
 			item := connection.Nodes[index]
-			// codex adversarial review, CHAOS-4289 round 2: the outer `items`
-			// connection already refuses a null/omitted `nodes` (Items.Nodes ==
-			// nil above), because that shape is indistinguishable from "GitHub
-			// sent a malformed payload" rather than "genuinely zero". The nested
-			// per-item `changes` connection is the identical GraphQL shape and
-			// deserves the identical check -- without it, a null/omitted
-			// `changes.nodes` next to an explicit `hasNextPage:false` silently
-			// drops this item's status-transition history while the board
-			// still reports Complete.
-			if item.Changes.PageInfo == nil || item.Changes.PageInfo.HasNextPage == nil || item.Changes.Nodes == nil {
-				paginationComplete = false
-			} else if *item.Changes.PageInfo.HasNextPage {
-				cursor := strings.TrimSpace(item.Changes.PageInfo.EndCursor)
-				if cursor == "" || strings.TrimSpace(item.ID) == "" {
-					return gitHubProjectV2TargetFetchResult{}, providerfoundation.ErrPaginationInvalid
-				}
-				seenChanges := map[string]struct{}{}
-				// The first page is embedded in the items query and counts.
-				for changePages := 1; ; changePages++ {
-					if changePages >= gitHubProjectV2NestedMaxPages {
-						return gitHubProjectV2TargetFetchResult{}, gitHubProjectV2BoundExceeded(target, item.ID, "changes", changePages)
-					}
-					if _, repeated := seenChanges[cursor]; repeated {
-						return gitHubProjectV2TargetFetchResult{}, providerfoundation.ErrPaginationInvalid
-					}
-					seenChanges[cursor] = struct{}{}
-					var continuation gitHubProjectV2ChangesEnvelope
-					if err := fetchGitHubProjectV2GraphQL(ctx, client, gitHubProjectsV2ChangesQuery,
-						map[string]any{"itemId": item.ID, "after": cursor}, &continuation, evidence); err != nil {
-						return gitHubProjectV2TargetFetchResult{}, err
-					}
-					if continuation.Data.Node == nil {
-						return gitHubProjectV2TargetFetchResult{}, providerfoundation.ErrPaginationInvalid
-					}
-					more := continuation.Data.Node.Changes
-					// A null/omitted `nodes` appends nothing either way; check
-					// it before mutating item.Changes.Nodes purely so the
-					// degradation branch below reads as "this page told us
-					// nothing new", not as a side effect of the append.
-					//
-					// codex adversarial review, CHAOS-4289 round 3: a
-					// continuation page is the identical GraphQL shape as the
-					// initial item.Changes payload above, and needs the
-					// identical null/omitted `nodes` check -- without it, a
-					// continuation page reporting hasNextPage:false with
-					// `nodes` entirely omitted silently truncated this item's
-					// status-transition history while still looking complete.
-					degradedContinuation := more.PageInfo == nil || more.PageInfo.HasNextPage == nil || more.Nodes == nil
-					item.Changes.Nodes = append(item.Changes.Nodes, more.Nodes...)
-					if degradedContinuation {
-						paginationComplete = false
-						break
-					}
-					if !*more.PageInfo.HasNextPage {
-						break
-					}
-					next := strings.TrimSpace(more.PageInfo.EndCursor)
-					if next == "" || next == cursor {
-						return gitHubProjectV2TargetFetchResult{}, providerfoundation.ErrPaginationInvalid
-					}
-					cursor = next
-				}
-			}
 			if err := completeGitHubProjectV2FieldValues(ctx, client, target, &item, evidence); err != nil {
 				return gitHubProjectV2TargetFetchResult{}, err
 			}
@@ -774,23 +710,6 @@ func (envelope *gitHubProjectV2ItemsEnvelope) graphQLErrors() []json.RawMessage 
 	return envelope.Errors
 }
 
-type gitHubProjectV2ChangesEnvelope struct {
-	Data struct {
-		Node *struct {
-			Changes gitHubProjectV2Connection[gitHubProjectV2ChangePayload] `json:"changes"`
-		} `json:"node"`
-	} `json:"data"`
-	Errors []json.RawMessage `json:"errors"`
-}
-
-func (envelope *gitHubProjectV2ChangesEnvelope) responseShapeInvalid() bool {
-	return len(envelope.Errors) == 0 && envelope.Data.Node == nil
-}
-
-func (envelope *gitHubProjectV2ChangesEnvelope) graphQLErrors() []json.RawMessage {
-	return envelope.Errors
-}
-
 type gitHubProjectV2FieldValuesEnvelope struct {
 	Data struct {
 		Node *struct {
@@ -821,7 +740,6 @@ type gitHubProjectV2ItemPayload struct {
 	UpdatedAt   *string                                                     `json:"updatedAt"`
 	Content     gitHubProjectV2ContentPayload                               `json:"content"`
 	FieldValues gitHubProjectV2Connection[gitHubProjectV2FieldValuePayload] `json:"fieldValues"`
-	Changes     gitHubProjectV2Connection[gitHubProjectV2ChangePayload]     `json:"changes"`
 }
 
 func (payload *gitHubProjectV2ContentPayload) UnmarshalJSON(raw []byte) error {
@@ -862,22 +780,6 @@ type gitHubProjectV2FieldValuePayload struct {
 	Field    struct {
 		Name string `json:"name"`
 	} `json:"field"`
-}
-
-type gitHubProjectV2ChangePayload struct {
-	Field struct {
-		Name string `json:"name"`
-	} `json:"field"`
-	PreviousValue *struct {
-		Name *string `json:"name"`
-	} `json:"previousValue"`
-	NewValue *struct {
-		Name *string `json:"name"`
-	} `json:"newValue"`
-	CreatedAt *string `json:"createdAt"`
-	Actor     *struct {
-		Login *string `json:"login"`
-	} `json:"actor"`
 }
 
 // githubProjectV2MembershipRow builds the board-membership row for one Projects
@@ -988,13 +890,13 @@ func normalizeGitHubProjectV2Item(
 	projectScopeID string,
 	resolveIdentity githubIdentityResolver,
 	normalizedAt time.Time,
-) (githubWorkItemRow, []githubWorkItemTransitionRow, bool, error) {
+) (githubWorkItemRow, bool, error) {
 	if claim.Validate() != nil || claim.Provider != "github" || !isWorkItemFamilyDataset(claim.Dataset) ||
 		strings.TrimSpace(projectScopeID) == "" || normalizedAt.IsZero() {
-		return githubWorkItemRow{}, nil, false, ErrInvalidConfiguration
+		return githubWorkItemRow{}, false, ErrInvalidConfiguration
 	}
 	if item.Content.Typename == "PullRequest" || (item.Content.Typename != "Issue" && item.Content.Typename != "DraftIssue") {
-		return githubWorkItemRow{}, []githubWorkItemTransitionRow{}, false, nil
+		return githubWorkItemRow{}, false, nil
 	}
 	statusRaw, sprintName, sprintID := "", "", ""
 	var storyPoints *float64
@@ -1026,39 +928,6 @@ func normalizeGitHubProjectV2Item(
 	workItemID := "ghproj:" + item.ID
 	if content.Typename == "Issue" && strings.TrimSpace(content.Repository.NameWithOwner) != "" && content.Number > 0 {
 		workItemID = "gh:" + content.Repository.NameWithOwner + "#" + strconv.Itoa(content.Number)
-	}
-	transitions := make([]githubWorkItemTransitionRow, 0, len(item.Changes.Nodes))
-	for _, change := range item.Changes.Nodes {
-		fieldName := normalizeWorkItemLabel(change.Field.Name)
-		if fieldName != "status" && fieldName != "phase" {
-			continue
-		}
-		occurredAt := parseGitHubWorkItemTime(change.CreatedAt)
-		if occurredAt == nil || change.NewValue == nil || change.NewValue.Name == nil || strings.TrimSpace(*change.NewValue.Name) == "" {
-			continue
-		}
-		fromRaw, toRaw := "", strings.TrimSpace(*change.NewValue.Name)
-		if change.PreviousValue != nil && change.PreviousValue.Name != nil {
-			fromRaw = strings.TrimSpace(*change.PreviousValue.Name)
-		}
-		var actor *string
-		if change.Actor != nil && change.Actor.Login != nil {
-			identity := resolveGitHubWorkItemIdentity(githubWorkItemUserPayload{Login: change.Actor.Login}, resolveIdentity)
-			if identity != "" && identity != "unknown" {
-				actor = &identity
-			}
-		}
-		transition := githubWorkItemTransitionRow{
-			WorkItemID: workItemID, Provider: "github", OccurredAt: occurredAt.UTC(),
-			FromStatusRaw: nullableString(fromRaw), ToStatusRaw: nullableString(toRaw),
-			FromStatus: githubProjectV2Status(fromRaw, nil, ""),
-			ToStatus:   githubProjectV2Status(toRaw, nil, ""), Actor: actor, OrgID: claim.OrgID,
-			LastSynced: normalizedAt.UTC(),
-		}
-		if err := transition.validate(claim); err != nil {
-			return githubWorkItemRow{}, nil, false, err
-		}
-		transitions = append(transitions, transition)
 	}
 	createdAt := parseGitHubWorkItemTime(content.CreatedAt)
 	if createdAt == nil {
@@ -1132,9 +1001,9 @@ func normalizeGitHubProjectV2Item(
 	}
 	row, err := buildWorkItemRow(claim, source, normalizedAt)
 	if err != nil {
-		return githubWorkItemRow{}, nil, false, err
+		return githubWorkItemRow{}, false, err
 	}
-	return row, transitions, true, nil
+	return row, true, nil
 }
 
 func githubProjectV2Status(statusRaw string, labels []string, state string) string {
@@ -1201,9 +1070,12 @@ func mergeGitHubProjectV2Rows(repository, projects githubWorkItemRows) githubWor
 
 // assignees (10) keeps Python's leaf truncation. Labels are asked at GitHub's
 // page maximum (100) and a board item that still has more is counted and logged
-// (CHAOS-8777): a named limit, never silent. The outer items, the nested
-// changes and the nested fieldValues connections are fully paginated by the
-// fetcher, nested ones under the 100-page bound.
+// (CHAOS-8777): a named limit, never silent. The outer items and the nested
+// fieldValues connections are fully paginated by the fetcher, the nested one
+// under the 100-page bound. The query reads no board transitions: GitHub's
+// ProjectV2Item has no `changes` field, and Actor has no email or name (only
+// User does), so the author asks those on the User fragment and a Bot or
+// Mannequin author keeps its login (CHAOS-14195).
 const gitHubProjectV2FieldValueNodeFields = `__typename
             ... on ProjectV2ItemFieldSingleSelectValue { name field { ... on ProjectV2SingleSelectField { name } } }
             ... on ProjectV2ItemFieldTextValue { text field { ... on ProjectV2FieldCommon { name } } }
@@ -1220,14 +1092,13 @@ query($login: String!, $number: Int!, $after: String, $first: Int!) {
           id createdAt updatedAt
           content {
             __typename
-            ... on Issue { id number title url state createdAt updatedAt closedAt repository { nameWithOwner } labels(first: 100) { nodes { name } pageInfo { hasNextPage } } assignees(first: 10) { nodes { login email name } } author { login email name } }
-            ... on PullRequest { id number title url state createdAt updatedAt closedAt mergedAt repository { nameWithOwner } labels(first: 100) { nodes { name } pageInfo { hasNextPage } } assignees(first: 10) { nodes { login email name } } author { login email name } }
+            ... on Issue { id number title url state createdAt updatedAt closedAt repository { nameWithOwner } labels(first: 100) { nodes { name } pageInfo { hasNextPage } } assignees(first: 10) { nodes { login email name } } author { login ... on User { email name } } }
+            ... on PullRequest { id number title url state createdAt updatedAt closedAt mergedAt repository { nameWithOwner } labels(first: 100) { nodes { name } pageInfo { hasNextPage } } assignees(first: 10) { nodes { login email name } } author { login ... on User { email name } } }
             ... on DraftIssue { id title createdAt updatedAt }
           }
           fieldValues(first: 100) { nodes {
             ` + gitHubProjectV2FieldValueNodeFields + `
           } pageInfo { hasNextPage endCursor } }
-          changes(first: 100, orderBy: {field: CREATED_AT, direction: ASC}) { nodes { field { ... on ProjectV2FieldCommon { name } } previousValue { ... on ProjectV2ItemFieldSingleSelectValue { name } } newValue { ... on ProjectV2ItemFieldSingleSelectValue { name } } createdAt actor { login } } pageInfo { hasNextPage endCursor } }
         }
         pageInfo { hasNextPage endCursor }
       }
@@ -1243,18 +1114,6 @@ query($itemId: ID!, $after: String) {
         nodes {
           ` + gitHubProjectV2FieldValueNodeFields + `
         }
-        pageInfo { hasNextPage endCursor }
-      }
-    }
-  }
-}`
-
-const gitHubProjectsV2ChangesQuery = `
-query($itemId: ID!, $after: String) {
-  node(id: $itemId) {
-    ... on ProjectV2Item {
-      changes(first: 100, after: $after, orderBy: {field: CREATED_AT, direction: ASC}) {
-        nodes { field { ... on ProjectV2FieldCommon { name } } previousValue { ... on ProjectV2ItemFieldSingleSelectValue { name } } newValue { ... on ProjectV2ItemFieldSingleSelectValue { name } } createdAt actor { login } }
         pageInfo { hasNextPage endCursor }
       }
     }

@@ -62,22 +62,18 @@ func gitHubProjectV2PageInfoJSON(more bool, cursor string) string {
 	return `{"hasNextPage":` + strconv.FormatBool(more) + `,"endCursor":"` + cursor + `"}`
 }
 
-func gitHubProjectV2ItemJSON(fieldValues, changes string) string {
-	return gitHubProjectV2ItemWithLabelsJSON(`{"nodes":[],"pageInfo":`+gitHubProjectV2EndPage+`}`, fieldValues, changes)
+func gitHubProjectV2ItemJSON(fieldValues string) string {
+	return gitHubProjectV2ItemWithLabelsJSON(`{"nodes":[],"pageInfo":`+gitHubProjectV2EndPage+`}`, fieldValues)
 }
 
-func gitHubProjectV2ItemWithLabelsJSON(labels, fieldValues, changes string) string {
+func gitHubProjectV2ItemWithLabelsJSON(labels, fieldValues string) string {
 	return `{"id":"PVTI_1","content":{"__typename":"Issue","number":7,"title":"Ship it","state":"OPEN",` +
 		`"createdAt":"2026-08-01T08:00:00Z","updatedAt":"2026-08-02T08:00:00Z","repository":{"nameWithOwner":"acme/api"},` +
-		`"labels":` + labels + `,"assignees":{"nodes":[]}},"fieldValues":` + fieldValues + `,"changes":` + changes + `}`
+		`"labels":` + labels + `,"assignees":{"nodes":[]}},"fieldValues":` + fieldValues + `}`
 }
 
 func gitHubProjectV2ItemsReply(item string) string {
 	return `{"data":{"organization":{"projectV2":{"items":{"nodes":[` + item + `],"pageInfo":` + gitHubProjectV2EndPage + `}}}}}`
-}
-
-func gitHubProjectV2NoChanges() string {
-	return `{"nodes":[],"pageInfo":` + gitHubProjectV2EndPage + `}`
 }
 
 func gitHubProjectV2NumberValue(name string, value int) string {
@@ -109,7 +105,7 @@ func fieldValuesBoard(total, pageSize int) func(string, map[string]any) string {
 			start, _ := strconv.Atoi(strings.TrimPrefix(after, "v"))
 			return `{"data":{"node":{"fieldValues":` + page(start) + `}}}`
 		default:
-			return gitHubProjectV2ItemsReply(gitHubProjectV2ItemJSON(page(0), gitHubProjectV2NoChanges()))
+			return gitHubProjectV2ItemsReply(gitHubProjectV2ItemJSON(page(0)))
 		}
 	}
 }
@@ -153,45 +149,6 @@ func TestGitHubProjectV2FetcherFieldValuesBoundIsExactlyOneHundredPages(t *testi
 	}
 	if doer.requests != 100 {
 		t.Fatalf("requests=%d want 100 (no request past the bound)", doer.requests)
-	}
-}
-
-func changesBoard(total int) func(string, map[string]any) string {
-	change := func(index int) string {
-		return `{"field":{"name":"Status"},"previousValue":{"name":"Todo"},"newValue":{"name":"Doing"},` +
-			`"createdAt":"2026-08-01T09:` + fmt.Sprintf("%02d:%02d", (index/60)%60, index%60) + `Z","actor":{"login":"octocat"}}`
-	}
-	page := func(index int) string {
-		return `{"nodes":[` + change(index) + `],"pageInfo":` + gitHubProjectV2PageInfoJSON(index < total-1, "c"+strconv.Itoa(index)) + `}`
-	}
-	return func(query string, variables map[string]any) string {
-		if strings.Contains(query, "changes(first: 100, after: $after") {
-			after, _ := variables["after"].(string)
-			index, _ := strconv.Atoi(strings.TrimPrefix(after, "c"))
-			return `{"data":{"node":{"changes":` + page(index+1) + `}}}`
-		}
-		return gitHubProjectV2ItemsReply(gitHubProjectV2ItemJSON(`{"nodes":[],"pageInfo":`+gitHubProjectV2EndPage+`}`, page(0)))
-	}
-}
-
-// CHAOS-8777 r1 P1-1: the per-item changes loop had no bound (101 pages were
-// accepted). Literal numbers: 100 pages in all pass, 101 fail closed.
-func TestGitHubProjectV2FetcherChangesBoundIsExactlyOneHundredPages(t *testing.T) {
-	result, doer, err := fetchGitHubProjectV2Board(t, changesBoard(100))
-	if err != nil || len(result.Rows.StatusTransitions) != 100 || doer.requests != 100 {
-		t.Fatalf("100 pages: err=%v transitions=%d requests=%d", err, len(result.Rows.StatusTransitions), doer.requests)
-	}
-	_, doer, err = fetchGitHubProjectV2Board(t, changesBoard(101))
-	if !errors.Is(err, ErrPaginationCapExceeded) {
-		t.Fatalf("101 pages: err=%v want ErrPaginationCapExceeded", err)
-	}
-	for _, want := range []string{"changes of project acme#3 item PVTI_1", "after 100 pages"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Fatalf("error %q lacks %q", err, want)
-		}
-	}
-	if doer.requests != 100 {
-		t.Fatalf("requests=%d want 100", doer.requests)
 	}
 }
 
@@ -241,12 +198,12 @@ func TestGitHubProjectV2FetcherAnsweredConnectionWithoutPageInfoFailsClosed(t *t
 		item  string
 		field string
 	}{
-		{"fieldValues", gitHubProjectV2ItemJSON(withoutPageInfo, gitHubProjectV2NoChanges()), "fieldValues"},
-		{"fieldValues pageInfo without hasNextPage", gitHubProjectV2ItemJSON(`{"nodes":[`+values[0]+`],"pageInfo":{"endCursor":"x"}}`, gitHubProjectV2NoChanges()), "fieldValues"},
+		{"fieldValues", gitHubProjectV2ItemJSON(withoutPageInfo), "fieldValues"},
+		{"fieldValues pageInfo without hasNextPage", gitHubProjectV2ItemJSON(`{"nodes":[` + values[0] + `],"pageInfo":{"endCursor":"x"}}`), "fieldValues"},
 		{"labels pageInfo without hasNextPage", gitHubProjectV2ItemWithLabelsJSON(`{"nodes":[{"name":"a"}],"pageInfo":{"endCursor":"x"}}`,
-			`{"nodes":[],"pageInfo":`+gitHubProjectV2EndPage+`}`, gitHubProjectV2NoChanges()), "labels"},
+			`{"nodes":[],"pageInfo":`+gitHubProjectV2EndPage+`}`), "labels"},
 		{"labels", gitHubProjectV2ItemWithLabelsJSON(`{"nodes":[{"name":"a"}]}`,
-			`{"nodes":[],"pageInfo":`+gitHubProjectV2EndPage+`}`, gitHubProjectV2NoChanges()), "labels"},
+			`{"nodes":[],"pageInfo":`+gitHubProjectV2EndPage+`}`), "labels"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			result, doer, err := fetchGitHubProjectV2Board(t, func(string, map[string]any) string {
@@ -271,8 +228,7 @@ func TestGitHubProjectV2FetcherAnsweredConnectionWithoutPageInfoFailsClosed(t *t
 // that lost its pageInfo) has nothing to page and is not an error.
 func TestGitHubProjectV2FetcherAbsentConnectionsAreNotAmbiguous(t *testing.T) {
 	item := `{"id":"PVTI_1","content":{"__typename":"Issue","number":7,"title":"t","state":"OPEN",` +
-		`"createdAt":"2026-08-01T08:00:00Z","updatedAt":"2026-08-02T08:00:00Z","repository":{"nameWithOwner":"acme/api"}},` +
-		`"changes":` + gitHubProjectV2NoChanges() + `}`
+		`"createdAt":"2026-08-01T08:00:00Z","updatedAt":"2026-08-02T08:00:00Z","repository":{"nameWithOwner":"acme/api"}}}`
 	result, _, err := fetchGitHubProjectV2Board(t, func(string, map[string]any) string {
 		return gitHubProjectV2ItemsReply(item)
 	})

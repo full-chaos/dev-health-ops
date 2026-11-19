@@ -558,6 +558,12 @@ const nullableIntoPlainSites = `
 //	loadDocDrift ce3024a41da9 -> f049a4598b46
 //	loadFlaky 32950ea2e0be -> be2a35ea7bc8
 //
+// loadClusters re-pinned by hand (CHAOS-14256, r1), digest copied from the local TestScanTypeCensus failure output (not
+// computed): the body now sorts each cluster's pull request refs (sortPRRefs) after the scan. The SQL and the scan
+// targets (*string,*string,*uint64,*[]string and *string,*uint64,*[]string) are unchanged:
+//
+//	loadClusters f62124ab26af -> 0dcb9c7aceb8
+//
 // timeseries.go ExecuteOrgTimeseries re-pinned by hand, digest copied from the local TestScanTypeCensus failure output
 // (not computed): the org series of the pooled TestOps measures (PIPELINE_DURATION_P95, TEST_SUITE_DURATION_P95,
 // PIPELINE_QUEUE_TIME) take the bucket value unscaled when the sample count is above 0. The statement and the scan
@@ -614,8 +620,8 @@ const nullableIntoPlainSites = `
 //	ExecuteTimeseries f2eec06b6811 -> 8842c256cd1a
 const unverifiedSites = `
 internal/queryapi/aggflame/clickhouse.go|fetchCycleBreakdown|*string,*float64,*uint64|a0d30b3aefa3|not-describable
-internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*string,*uint64,*[]string|f62124ab26af|not-describable
-internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*uint64,*[]string|f62124ab26af|not-describable
+internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*string,*uint64,*[]string|0dcb9c7aceb8|not-describable
+internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*uint64,*[]string|0dcb9c7aceb8|not-describable
 internal/queryapi/aianalytics/ai_opportunities.go|loadDocDrift|*string,*uint64,*uint64|f049a4598b46|not-describable
 internal/queryapi/aianalytics/ai_opportunities.go|loadFlaky|*string,*uint64,**float64|be2a35ea7bc8|not-describable
 internal/queryapi/aianalytics/flow_opportunities.go|loadRepoFlowRows|*string,*uint64,**float64,**float64,**float64,**float64|39a7e63ddf0e|not-describable

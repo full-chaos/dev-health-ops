@@ -2,6 +2,8 @@ package aianalytics
 
 import (
 	"math"
+	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
@@ -65,4 +67,36 @@ func opportunityLess(a, b opportunity) bool {
 		return a.why < b.why
 	}
 	return strings.Join(a.refs, "\n") < strings.Join(b.refs, "\n")
+}
+
+// sortPRRefs puts a cluster's pull request refs ("git_pull_requests:<repository>:<number>") in one order before
+// firstFive cuts them: groupArray returns them in no fixed order, and they are served as evidence, drilldown chips
+// and the last key of opportunityLess. By repository, then number as a number; a ref whose number does not parse
+// comes after the numeric ones, by its text.
+func sortPRRefs(refs []string) {
+	sort.SliceStable(refs, func(i, j int) bool { return prRefLess(refs[i], refs[j]) })
+}
+
+func prRefLess(a, b string) bool {
+	ra, na, oka := splitPRRef(a)
+	rb, nb, okb := splitPRRef(b)
+	if ra != rb {
+		return ra < rb
+	}
+	if oka != okb {
+		return oka
+	}
+	if oka && na != nb {
+		return na < nb
+	}
+	return a < b
+}
+
+func splitPRRef(ref string) (repo string, number uint64, ok bool) {
+	i := strings.LastIndex(ref, ":")
+	if i < 0 {
+		return ref, 0, false
+	}
+	n, err := strconv.ParseUint(ref[i+1:], 10, 64)
+	return ref[:i], n, err == nil
 }

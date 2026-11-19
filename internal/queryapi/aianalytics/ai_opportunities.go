@@ -326,6 +326,7 @@ func loadClusters(ctx context.Context, client QueryClient, statement string, bin
 			return nil, fmt.Errorf("aianalytics: opportunity cluster scan: %w", err)
 		}
 		r.Count = int64(n)
+		sortPRRefs(r.Refs)
 		out = append(out, r)
 	}
 	if err := rs.Err(); err != nil {

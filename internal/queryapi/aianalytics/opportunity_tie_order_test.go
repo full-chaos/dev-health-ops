@@ -191,3 +191,112 @@ func TestOpportunityLessPutsNaNLast(t *testing.T) {
 		}
 	}
 }
+
+func tieRefs(repo string, nums ...string) []any {
+	out := []any{}
+	for _, n := range nums {
+		out = append(out, "git_pull_requests:"+repo+":"+n)
+	}
+	return out
+}
+
+func tieCards(t *testing.T, c oracleDCase, limit int) ([]string, string) {
+	t.Helper()
+	got, err := AiOpportunities(context.Background(), &fixtureClientD{c: c}, "org-1", nil, limit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cards []string
+	for _, r := range got.Recommendations {
+		var nums []string
+		for _, ref := range r.EvidenceRefs {
+			if strings.HasPrefix(ref, "git_pull_requests:"+tieRepo1+":") {
+				nums = append(nums, ref[strings.LastIndex(ref, ":")+1:])
+			}
+		}
+		cards = append(cards, string(r.Kind)+"["+strings.Join(nums, ",")+"]")
+	}
+	body, _ := json.Marshal(got.Recommendations)
+	return cards, string(body)
+}
+
+// TestAiOpportunitiesPRRefsOrderIsFixed: a workflow cluster's pull request refs arrive in groupArray order, which the
+// read does not fix. The served evidence, drilldown chips, the five kept and the rank of tied clusters must not depend
+// on it: the lowest-numbered five are served, in number order. CHAOS-14256.
+func TestAiOpportunitiesPRRefsOrderIsFixed(t *testing.T) {
+	orders := []struct {
+		name string
+		a, b []string
+		want string
+	}{
+		{"refs_5", []string{"1", "2", "3", "4", "5"}, []string{"5", "1", "2", "3", "4"}, "[1,2,3,4,5]"},
+		{"refs_6", []string{"1", "2", "3", "4", "5", "6"}, []string{"6", "1", "2", "3", "4", "5"}, "[1,2,3,4,5]"},
+	}
+	rules := []struct {
+		name, kind string
+		place      func(row map[string]any) oracleDCase
+	}{
+		{"repetitive", "REPETITIVE_CHANGE", func(row map[string]any) oracleDCase { return oracleDCase{Rep: []map[string]any{row}} }},
+		{"dependency", "DEPENDENCY_UPDATES", func(row map[string]any) oracleDCase { return oracleDCase{Dep: []map[string]any{row}} }},
+		{"migration", "MECHANICAL_MIGRATIONS", func(row map[string]any) oracleDCase { return oracleDCase{Mig: []map[string]any{row}} }},
+	}
+	for _, rule := range rules {
+		for _, o := range orders {
+			t.Run(rule.name+"/"+o.name, func(t *testing.T) {
+				var first string
+				for _, nums := range [][]string{o.a, o.b} {
+					row := map[string]any{"repo_id": tieRepo1, "title_prefix": "alpha", "prs_total": float64(len(nums)), "pr_refs": tieRefs(tieRepo1, nums...)}
+					cards, body := tieCards(t, rule.place(row), 25)
+					if want := []string{rule.kind + o.want}; !reflect.DeepEqual(cards, want) {
+						t.Errorf("refs %v: served %v, want %v", nums, cards, want)
+					}
+					if first == "" {
+						first = body
+					} else if body != first {
+						t.Errorf("refs %v: the body differs from the first order's\n got: %s\nwant: %s", nums, body, first)
+					}
+				}
+			})
+		}
+	}
+	tied := func(x, y []string) oracleDCase {
+		return oracleDCase{Rep: []map[string]any{
+			{"repo_id": tieRepo1, "title_prefix": "alpha", "prs_total": float64(10), "pr_refs": tieRefs(tieRepo1, x...)},
+			{"repo_id": tieRepo1, "title_prefix": "alpha", "prs_total": float64(10), "pr_refs": tieRefs(tieRepo1, y...)},
+		}}
+	}
+	for _, c := range []struct {
+		limit int
+		want  []string
+	}{
+		{1, []string{"REPETITIVE_CHANGE[1,7,8,9,10]"}},
+		{5, []string{"REPETITIVE_CHANGE[1,7,8,9,10]", "REPETITIVE_CHANGE[2,3,4,5,6]"}},
+	} {
+		for _, in := range []oracleDCase{
+			tied([]string{"1", "10", "7", "8", "9"}, []string{"2", "3", "4", "5", "6"}),
+			tied([]string{"7", "1", "10", "8", "9"}, []string{"6", "2", "3", "4", "5"}),
+			tied([]string{"6", "2", "3", "4", "5"}, []string{"9", "8", "7", "10", "1"}),
+		} {
+			if cards, _ := tieCards(t, in, c.limit); !reflect.DeepEqual(cards, c.want) {
+				t.Errorf("tied clusters, limit %d: served %v, want %v", c.limit, cards, c.want)
+			}
+		}
+	}
+}
+
+// TestPRRefLessNonNumericLast: refs sort by repository, then number; a ref whose number does not parse (none is built
+// by the reads: the number is a UInt32 column) sorts after the numeric ones, by its text, whatever the input order.
+func TestPRRefLessNonNumericLast(t *testing.T) {
+	in := []string{"git_pull_requests:r:abc", "git_pull_requests:r:10", "git_pull_requests:q:11", "git_pull_requests:r:9", "git_pull_requests:r:#3"}
+	want := []string{"git_pull_requests:q:11", "git_pull_requests:r:9", "git_pull_requests:r:10", "git_pull_requests:r:#3", "git_pull_requests:r:abc"}
+	for _, order := range tieOrders(len(in)) {
+		refs := make([]string, 0, len(in))
+		for _, j := range order {
+			refs = append(refs, in[j])
+		}
+		sortPRRefs(refs)
+		if !reflect.DeepEqual(refs, want) {
+			t.Errorf("order %v: sorted %v, want %v", order, refs, want)
+		}
+	}
+}

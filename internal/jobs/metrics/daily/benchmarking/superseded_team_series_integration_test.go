@@ -111,6 +111,10 @@ VALUES (?, 'github', ?, toUUID(?), ?, 'exact', 'native', 1, 10, 0, ?, ?)`,
 				insert = "INSERT INTO " + source.table + " (repo_id, day, " + source.column +
 					", team_id, org_id, computed_at, flake_cases, distinct_cases) VALUES (?, ?, ?, ?, ?, ?, toUInt32(round(?*10)), 10)"
 			}
+			if source.table == "testops_coverage_metrics_daily" {
+				insert = "INSERT INTO " + source.table + " (repo_id, day, " + source.column +
+					", team_id, org_id, computed_at, lines_total, lines_covered) VALUES (?, ?, ?, ?, ?, ?, 1000, toUInt32(round(?*10)))"
+			}
 			for _, row := range []struct {
 				repo string
 				team *string
@@ -124,7 +128,7 @@ VALUES (?, 'github', ?, toUUID(?), ?, 'exact', 'native', 1, 10, 0, ?, ?)`,
 				{repoC, nil, 0.4, newer},
 			} {
 				args := []any{row.repo, day, row.rate, row.team, org, row.at}
-				if source.table == "testops_test_metrics_daily" {
+				if source.table == "testops_test_metrics_daily" || source.table == "testops_coverage_metrics_daily" {
 					args = append(args, row.rate)
 				}
 				if err := admin.Exec(ctx, insert, args...); err != nil {

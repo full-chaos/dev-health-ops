@@ -103,8 +103,10 @@ type PendingOccurrence struct {
 	// config) is still refused -- this field WIDENS eligibility, it never
 	// makes the gate permissive by default.
 	ConfigSourceID *string
-	JobStatus      int
-	JobType        string
+	// ConfigIntegrationID is read only for the quarantine log line.
+	ConfigIntegrationID string
+	JobStatus           int
+	JobType             string
 }
 
 // PlanResult is the authoritative graph one materialization produced.
@@ -628,6 +630,12 @@ func (reconciler *OccurrenceReconciler) deferOccurrence(
 		return "", nil
 	}
 	if exhausted {
+		slog.WarnContext(ctx, "sync.occurrence.quarantined",
+			slog.String("org_id", occurrence.OrgID),
+			slog.String("integration_id", occurrence.ConfigIntegrationID),
+			slog.String("occurrence_id", occurrence.ID),
+			slog.String("failure_class", code),
+			slog.Int("attempt_count", attempt))
 		return OccurrenceReconcileQuarantined, nil
 	}
 	return OccurrenceReconcileRetry, nil
@@ -736,6 +744,7 @@ func lockPendingOccurrence(
 		&occurrence.ConfigActive,
 		&occurrence.ConfigPlannerManaged,
 		&occurrence.ConfigSourceID,
+		&occurrence.ConfigIntegrationID,
 		&occurrence.JobStatus,
 		&occurrence.JobType,
 	)
@@ -815,6 +824,7 @@ SELECT
     config.is_active,
     config.planner_managed,
     config.source_id::text,
+    COALESCE(config.integration_id::text, ''),
     job.status,
     job.job_type
 FROM public.scheduled_sync_occurrences AS occurrence

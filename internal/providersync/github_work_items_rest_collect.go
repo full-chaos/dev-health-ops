@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"log/slog"
 	"math"
 	"net/http"
@@ -38,7 +39,7 @@ const (
 // loudly. It carries no payload text and no credential.
 func githubWorkItemNestedBoundExceeded(repository string, number int, field string, pages int) error {
 	slog.Error("providersync.github.nested_list_bound_exceeded",
-		"repository", repository, "issue", number, "field", field, "pages", pages)
+		"repository", logging.ProviderText(repository), "issue", number, "field", field, "pages", pages)
 	return fmt.Errorf(
 		"%w: github %s of %s#%d still had a next page after %d pages",
 		ErrPaginationCapExceeded, field, repository, number, pages,
@@ -383,7 +384,7 @@ func (collector GitHubWorkItemsRESTCollector) collectIssues(
 					comments = comments[:options.commentsLimit]
 					result.CommentsTruncated++
 					slog.Warn("providersync.github.issue_comments_truncated_by_option",
-						"repository", result.RepoFullName, "issue", listed.Number,
+						"repository", logging.ProviderText(result.RepoFullName), "issue", listed.Number,
 						"comments_limit", options.commentsLimit)
 				}
 			}

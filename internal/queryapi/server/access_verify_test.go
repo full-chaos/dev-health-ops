@@ -233,7 +233,6 @@ func TestQueryAPIAccessRowsAreTheQueryAndInternalListenerInventory(t *testing.T)
 		"POST /graphql":                         true,
 		"GET /buildinfo":                        true,
 		"GET /api/v1/meta":                      false,
-		"GET /metrics":                          false,
 		"POST /api/v1/sankey":                   true,
 		"GET /api/v1/people/{person_id}/metric": true,
 	}
@@ -247,7 +246,7 @@ func TestQueryAPIAccessRowsAreTheQueryAndInternalListenerInventory(t *testing.T)
 			t.Errorf("%s: user %v, want %v", profile, row.AcceptsUser, flags)
 		}
 	}
-	for _, operatorOnly := range []string{"GET /healthz", "GET /readyz"} {
+	for _, operatorOnly := range []string{"GET /healthz", "GET /readyz", "GET /metrics"} {
 		if _, ok := byProfile[operatorOnly]; ok {
 			t.Errorf("%s is an operator-listener row; the validator must not hold it", operatorOnly)
 		}

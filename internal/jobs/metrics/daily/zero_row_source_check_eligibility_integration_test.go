@@ -53,6 +53,12 @@ func TestClickHouseSourceDataCheckerMatchesDailyEligibilityIntersection(t *testi
  ENGINE = MergeTree ORDER BY (org_id, repo_id, day)`,
 		`CREATE TABLE testops_quality_drag (org_id String, repo_id UUID, day Date)
  ENGINE = MergeTree ORDER BY (org_id, repo_id, day)`,
+		`CREATE TABLE deployments (
+    org_id String, repo_id UUID,
+    deployed_at Nullable(DateTime64(3, 'UTC')), finished_at Nullable(DateTime64(3, 'UTC')),
+    started_at Nullable(DateTime64(3, 'UTC')), last_synced Nullable(DateTime64(3, 'UTC')),
+    status Nullable(String)
+) ENGINE = MergeTree ORDER BY (org_id, repo_id)`,
 		`CREATE TABLE operational_incidents (
     org_id String, id String, service_id Nullable(String), source_revision DateTime64(6, 'UTC'),
     source_conflict_key String, ingest_revision UInt128, is_deleted UInt8,
@@ -72,7 +78,7 @@ func TestClickHouseSourceDataCheckerMatchesDailyEligibilityIntersection(t *testi
 			t.Fatal(err)
 		}
 	}
-	chschema.CreateTables(ctx, t, conn, "test_suite_results", "cicd_metrics_daily")
+	chschema.CreateTables(ctx, t, conn, "test_suite_results", "testops_release_confidence", "testops_pipeline_stability", "testops_quality_drag", "cicd_metrics_daily")
 
 	const (
 		runID       = "00000000-0000-4000-8000-000000000120"

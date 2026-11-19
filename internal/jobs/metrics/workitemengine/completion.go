@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workitemmetrics"
 )
 
 // WorkItemCompletionDailyRow is one work_item_completion_daily row without the caller's stamp: what was completed
@@ -33,7 +35,18 @@ type completionKey struct {
 	teamID string
 }
 
-// ComputeWorkItemCompletionDaily counts the items completed in [dayUTC, end) by (repository, team): the items
+// CompletedOnDay reports whether an item completed in [dayUTC, end): its status is terminal (done or canceled,
+// workitemmetrics.IsTerminalStatus) and its completed_at is in the day. A provider can reopen an item and keep its
+// completed_at; that open item completes on no day.
+func CompletedOnDay(item Item, dayUTC, end time.Time) bool {
+	if item.CompletedAt == nil || !workitemmetrics.IsTerminalStatus(item.Status) {
+		return false
+	}
+	completed := item.CompletedAt.UTC()
+	return !completed.Before(dayUTC) && completed.Before(end)
+}
+
+// ComputeWorkItemCompletionDaily counts the items completed in [dayUTC, end) (CompletedOnDay) by (repository, team): the items
 // active on the day that completed in it, their story-point delivery units, and the unassigned-team rule of the
 // rows it replaced (investment_metrics_daily), with no rule classification. Summed over the areas of those rows,
 // its counts equal theirs; the cycle p50 is the p50 of all the day's cycle hours of the key, not a p50 per area.
@@ -47,18 +60,10 @@ func ComputeWorkItemCompletionDaily(
 	buckets := make(map[completionKey]*completionBucket)
 	order := make([]completionKey, 0, len(items))
 	for index, item := range items {
-		created := item.CreatedAt.UTC()
-		if !created.Before(end) ||
-			(item.CompletedAt != nil && item.CompletedAt.UTC().Before(dayUTC)) {
-			continue
-		}
-		if item.CompletedAt == nil {
+		if !item.CreatedAt.UTC().Before(end) || !CompletedOnDay(item, dayUTC, end) {
 			continue
 		}
 		completed := item.CompletedAt.UTC()
-		if completed.Before(dayUTC) || !completed.Before(end) {
-			continue
-		}
 		team := normalizeTeamID(resolveTeam(index))
 		if team == unassignedTeamID {
 			team = ""
@@ -145,11 +150,7 @@ type ChurnStats struct {
 func ChurnInputs(items []Item, dayUTC, end time.Time) ChurnStats {
 	stats := ChurnStats{LinksByTier: map[string]int{}}
 	for _, item := range items {
-		if item.CompletedAt == nil {
-			continue
-		}
-		done := item.CompletedAt.UTC()
-		if done.Before(dayUTC) || !done.Before(end) {
+		if !CompletedOnDay(item, dayUTC, end) {
 			continue
 		}
 		stats.CompletedItems++

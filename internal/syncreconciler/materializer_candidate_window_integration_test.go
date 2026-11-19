@@ -80,7 +80,6 @@ func candidateIDs(t *testing.T, ctx context.Context, pool *pgxpool.Pool, sql str
 	if err := rows.Err(); err != nil {
 		t.Fatal(err)
 	}
-	sort.Strings(ids)
 	return ids
 }
 
@@ -129,18 +128,35 @@ func TestMaterializeDispatchSQLSelectsTheSameRunsAsTheJoinForm(t *testing.T) {
 	if len(want) != 4 {
 		t.Fatalf("legacy candidate set = %v, want 4 runs (the fixture changed)", want)
 	}
+	if !sort.StringsAreSorted(want) {
+		t.Fatalf("legacy candidate set = %v, want it in run id order (ORDER BY 1)", want)
+	}
+	// A limit below the candidate count makes the query's ORDER BY and LIMIT decide which runs it takes: the first
+	// runs in id order, as many as the limit.
+	for _, limit := range []int{maximumStepLimit, len(want), len(want) - 1, 1} {
+		wantLimited := want[:min(limit, len(want))]
+		got := materializedDispatchRuns(t, ctx, pool, now, cutoff, limit)
+		if fmt.Sprint(got) != fmt.Sprint(wantLimited) {
+			t.Fatalf("limit %d: new dispatch SQL materialized %v, want the first %d of the legacy set %v", limit, got, len(wantLimited), wantLimited)
+		}
+	}
+}
+
+func materializedDispatchRuns(t *testing.T, ctx context.Context, pool *pgxpool.Pool, now, cutoff time.Time, limit int) []string {
+	t.Helper()
 	tx, err := pool.Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	if _, err := tx.Exec(ctx, materializeDispatchSQL, now, cutoff, maximumStepLimit); err != nil {
+	if _, err := tx.Exec(ctx, materializeDispatchSQL, now, cutoff, limit); err != nil {
 		t.Fatal(err)
 	}
 	rows, err := tx.Query(ctx, `SELECT sync_run_id::text FROM public.sync_dispatch_outbox WHERE kind = 'dispatch_sync_run' ORDER BY 1`)
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer rows.Close()
 	var got []string
 	for rows.Next() {
 		var id string
@@ -149,10 +165,10 @@ func TestMaterializeDispatchSQLSelectsTheSameRunsAsTheJoinForm(t *testing.T) {
 		}
 		got = append(got, id)
 	}
-	rows.Close()
-	if fmt.Sprint(got) != fmt.Sprint(want) {
-		t.Fatalf("new dispatch SQL materialized %v, want the legacy set %v", got, want)
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
 	}
+	return got
 }
 
 func TestPostSyncLedgerRecordedAtIsTheDatabaseClock(t *testing.T) {
@@ -222,7 +238,7 @@ func TestMaterializePostSyncSQLRebuildsOnlyInsideTheWindow(t *testing.T) {
 	if _, err := pool.Exec(ctx, materializePostSyncSQL, now, maximumStepLimit); err != nil {
 		t.Fatal(err)
 	}
-	got := candidateIDs(t, ctx, pool, `SELECT sync_run_id::text FROM public.sync_dispatch_outbox WHERE kind = 'post_sync' AND attempts = 0 AND created_at >= now() - interval '1 minute' AND updated_at = $1`, now)
+	got := candidateIDs(t, ctx, pool, `SELECT sync_run_id::text FROM public.sync_dispatch_outbox WHERE kind = 'post_sync' AND attempts = 0 AND created_at >= now() - interval '1 minute' AND updated_at = $1 ORDER BY 1`, now)
 	var want []string
 	for run := range wantRebuilt {
 		want = append(want, run)

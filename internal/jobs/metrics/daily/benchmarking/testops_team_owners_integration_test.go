@@ -116,9 +116,16 @@ VALUES (?, 'github', ?, toUUID(?), ?, 'exact', 'inferred', 1, 10, 0, ?, ?, ?, ?)
 				insert = "INSERT INTO " + source.table + " (repo_id, day, " + source.column +
 					", team_id, org_id, computed_at, flake_cases, distinct_cases) VALUES (toUUID(?), ?, ?, ?, ?, ?, toUInt32(round(?*10)), 10)"
 			}
+			if source.table == "testops_coverage_metrics_daily" {
+				insert = "INSERT INTO " + source.table + " (repo_id, day, " + source.column +
+					", team_id, org_id, computed_at, lines_total, lines_covered) VALUES (toUUID(?), ?, ?, ?, ?, ?, 1000, toUInt32(round(?*10)))"
+			}
 			for _, day := range days {
 				for _, row := range stored {
 					args := []any{row.repo, day, row.value, row.team, org, day.Add(time.Hour)}
+					if source.table == "testops_coverage_metrics_daily" {
+						args = append(args, row.value)
+					}
 					if source.table == "testops_test_metrics_daily" {
 						args = append(args, row.value)
 					}

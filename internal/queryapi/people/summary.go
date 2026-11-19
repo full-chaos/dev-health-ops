@@ -174,8 +174,9 @@ func fetchLastIngestedAt(ctx context.Context, client QueryClient, orgID string) 
         SELECT maxOrNull(computed_at) AS last_ingested_at
         FROM repo_metrics_daily FINAL
         WHERE org_id = {org_id:String}
+          AND %s
         %s
-    `, settingsMaxExecutionTime())
+    `, liverow.Predicate("repo_metrics_daily", ""), settingsMaxExecutionTime())
 	rows, err := client.Query(ctx, query, []dhclickhouse.Binding{{Name: "org_id", Value: orgID}})
 	if err != nil {
 		return nil, fmt.Errorf("people: fetch_last_ingested_at query: %w", err)
@@ -255,8 +256,9 @@ func fetchCoverage(ctx context.Context, client QueryClient, startDay, endDay tim
         FROM repo_metrics_daily FINAL
         WHERE day >= {start_day:Date} AND day < {end_day:Date}
           AND org_id = {org_id:String}
+          AND %s
         %s
-    `, settingsMaxExecutionTime()), []dhclickhouse.Binding{
+    `, liverow.Predicate("repo_metrics_daily", ""), settingsMaxExecutionTime()), []dhclickhouse.Binding{
 		{Name: "start_day", Value: formatDay(startDay)},
 		{Name: "end_day", Value: formatDay(endDay)},
 		{Name: "org_id", Value: orgID},

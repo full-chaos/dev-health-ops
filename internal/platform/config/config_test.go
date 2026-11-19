@@ -594,10 +594,10 @@ func TestQueueControlAndRetentionDefaults(t *testing.T) {
 	if cfg.QueueDatabaseMaxConns != 2 || cfg.DomainDatabaseMaxConns != 4 {
 		t.Fatalf("unexpected connection budget: queue=%d domain=%d", cfg.QueueDatabaseMaxConns, cfg.DomainDatabaseMaxConns)
 	}
-	if cfg.CompletedJobRetention != 7*24*time.Hour {
+	if cfg.CompletedJobRetention != 24*time.Hour {
 		t.Fatalf("completed retention = %s", cfg.CompletedJobRetention)
 	}
-	if cfg.CancelledJobRetention != 30*24*time.Hour || cfg.DiscardedJobRetention != 30*24*time.Hour {
+	if cfg.CancelledJobRetention != 24*time.Hour || cfg.DiscardedJobRetention != 7*24*time.Hour {
 		t.Fatalf("unexpected terminal retention: cancelled=%s discarded=%s", cfg.CancelledJobRetention, cfg.DiscardedJobRetention)
 	}
 	if cfg.RiverJobCleanerTimeout != 30*time.Second {

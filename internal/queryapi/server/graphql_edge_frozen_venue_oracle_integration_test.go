@@ -153,7 +153,7 @@ func TestGraphQLEdgeFrozenVenueOracle(t *testing.T) {
 		t.Fatalf("build query-api over a dead Postgres: %v", err)
 	}
 	t.Cleanup(deadPlane.Close)
-	deadPublic, _ := Listeners("127.0.0.1:0", "", deadPlane, nil, []*net.IPNet(nil))
+	deadPublic, _ := Listeners("127.0.0.1:0", "", deadPlane, []*net.IPNet(nil))
 	if err := deadPublic.Start(ctx); err != nil {
 		t.Fatal(err)
 	}

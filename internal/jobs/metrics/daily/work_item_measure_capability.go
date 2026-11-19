@@ -59,27 +59,48 @@ var _ NativeFinalizeFamilyExecutor = (*WorkItemMeasureCapabilityExecutor)(nil)
 // capability rows, with the counts of the read and the write.
 const WorkItemMeasureCapabilityLogMessage = "daily work item measure capability"
 
+// workItemCapabilityRead is the items of the capability window: each item once, at its current copy.
+type workItemCapabilityRead struct {
+	items      []workitemmetrics.Item
+	duplicates int
+	// offWindow is the number of items the window read gave whose current copy is not in the window.
+	offWindow int
+}
+
 // loadWorkItemCapabilityItems reads every item of the organization in the
-// capability window of day, from every repository, each item counted once.
-// The capability answers for (organization, provider), so the read takes no
-// partition or scope filter: a subset of the items would answer "not tracked"
-// from the items it did not read.
+// capability window of day, from every repository, each item counted once at
+// its current copy (currentWorkItemCopies, the rule of the daily families): an
+// item whose current copy is not in the window is not an item of the window,
+// whatever an older copy says. The capability answers for (organization,
+// provider), so the read takes no partition or scope filter: a subset of the
+// items would answer "not tracked" from the items it did not read.
 func loadWorkItemCapabilityItems(
 	ctx context.Context, conn repositoryRows, organizationID string, day time.Time,
-) ([]workitemmetrics.Item, int, error) {
+) (workItemCapabilityRead, error) {
 	first, last := workitemmetrics.CapabilityWindow(day)
 	stored, err := loadWorkItemScopeItems(
 		ctx, conn, organizationID, first, last.AddDate(0, 0, 1), nil, false, false, true,
 	)
 	if err != nil {
-		return nil, 0, fmt.Errorf("load work item capability items: %w", err)
+		return workItemCapabilityRead{}, fmt.Errorf("load work item capability items: %w", err)
 	}
-	kept, duplicates := countWorkItemOncePerProviderAndID(stored)
-	rows := make([]workItemMetricsRow, 0, len(kept))
-	for _, row := range kept {
-		rows = append(rows, row.workItemMetricsRow)
+	winners, duplicates := countWorkItemOncePerProviderAndID(stored)
+	copies, err := loadWorkItemCopies(ctx, conn, organizationID, workItemIDsOf(winners))
+	if err != nil {
+		return workItemCapabilityRead{}, fmt.Errorf("load work item capability items: %w", err)
 	}
-	return workItemMetricsItems(rows), duplicates, nil
+	current := currentWorkItemCopies(copies)
+	read := workItemCapabilityRead{duplicates: duplicates}
+	rows := make([]workItemMetricsRow, 0, len(winners))
+	for _, row := range winners {
+		if currentCopy, found := current[workItemIdentity{row.Provider, row.WorkItemID}]; found && currentCopy.repoID == row.RepoID {
+			rows = append(rows, row.workItemMetricsRow)
+			continue
+		}
+		read.offWindow++
+	}
+	read.items = workItemMetricsItems(rows)
+	return read, nil
 }
 
 // computeWorkItemMeasureCapability reads the window, derives the rows and
@@ -97,21 +118,25 @@ func computeWorkItemMeasureCapability(
 	if err != nil {
 		return 0, err
 	}
-	items, duplicates, err := loadWorkItemCapabilityItems(ctx, conn, organizationID, day)
+	read, err := loadWorkItemCapabilityItems(ctx, conn, organizationID, day)
 	if err != nil {
 		return 0, err
 	}
-	rows := workitemmetrics.DeriveMeasureCapability(day, items)
+	rows := workitemmetrics.DeriveMeasureCapability(day, read.items)
 	written, err := WriteWorkItemMeasureCapability(ctx, conn, organizationID, rows, computedAt)
 	retired := 0
 	if err == nil {
-		retired, err = retireWorkItemMeasureCapability(ctx, conn, organizationID, day, computedAt, live, rows, len(items) == 0)
+		// The proof of an empty window is for a read that gave no row; a read whose every item is off the window
+		// saw the window's rows.
+		retired, err = retireWorkItemMeasureCapability(ctx, conn, organizationID, day, computedAt, live, rows,
+			len(read.items)+read.offWindow == 0)
 	}
 	slog.InfoContext(ctx, WorkItemMeasureCapabilityLogMessage,
 		"organization_id", organizationID,
 		"target_day", day,
-		"items", len(items),
-		"duplicate_items", duplicates,
+		"items", len(read.items),
+		"duplicate_items", read.duplicates,
+		"items_off_window", read.offWindow,
 		"rows", len(rows),
 		"rows_written", written,
 		"rows_retired", retired,

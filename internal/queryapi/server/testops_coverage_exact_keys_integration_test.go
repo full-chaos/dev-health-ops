@@ -71,8 +71,8 @@ func TestTestOpsCoverageRoute_ExactRepoKeysReturnBranchCoverageOutsideIndependen
 	seedCoverage := func(repo string, line, branch float64) {
 		t.Helper()
 		seed(`INSERT INTO testops_coverage_metrics_daily
-			(repo_id, day, line_coverage_pct, branch_coverage_pct, lines_total, lines_covered, uncovered_files_count, coverage_regression_count, org_id, computed_at)
-			VALUES (?, ?, ?, ?, 100, ?, 0, 0, ?, ?)`, repo, day, line, branch, uint32(line), orgID, computedAt)
+			(repo_id, day, line_coverage_pct, branch_coverage_pct, lines_total, lines_covered, branches_total, branches_covered, uncovered_files_count, coverage_regression_count, org_id, computed_at)
+			VALUES (?, ?, ?, ?, 100, ?, 100, ?, 0, 0, ?, ?)`, repo, day, line, branch, uint32(line), uint32(branch), orgID, computedAt)
 	}
 	seedRepo := func(repo, name string) {
 		t.Helper()

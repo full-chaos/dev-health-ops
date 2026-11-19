@@ -1,0 +1,14 @@
+-- work_item_transitions keeps every transition of an item at one instant (CHAOS-14190).
+--
+-- The key (org_id, repo_id, work_item_id, occurred_at) held one row per instant, and repo_id is the nil uuid on every
+-- row: two status changes of one item at one occurred_at (a reopen and a label in the same second) shared a key, and a
+-- merge kept one of them. tie_ordinal joins the key. The writers give 0 to the only transition of an instant, so a
+-- re-sync replaces it as before, and 1..n to the further transitions of a tie, ranked by the event's own content, not
+-- by the order the provider served it. The normalized and raw statuses and the actor stay out of the key: a status-map
+-- change or a rename re-writes the same rows instead of adding new ones.
+--
+-- ADD COLUMN and MODIFY ORDER BY in ONE statement: ClickHouse appends a column to the sorting key only in the ALTER
+-- that adds it, with no default expression. It changes the table metadata only: no part is rewritten, every stored row
+-- reads tie_ordinal 0 and stays in place. A build without this change writes no tie_ordinal (0), which is the old
+-- semantics. The statement can run again: the column exists and the key already ends with it.
+ALTER TABLE work_item_transitions ADD COLUMN IF NOT EXISTS tie_ordinal UInt16, MODIFY ORDER BY (org_id, repo_id, work_item_id, occurred_at, tie_ordinal);

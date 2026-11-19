@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
-	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
@@ -425,9 +424,9 @@ func (adapter LinearWorkItemsClickHouseAdapter) InspectLinearWorkItemEffect(
 	})
 }
 
-const linearWorkItemTransitionsInsert = `INSERT INTO work_item_transitions (repo_id, work_item_id, occurred_at, from_status, to_status, from_status_raw, to_status_raw, actor, last_synced, org_id, source_id)`
+const linearWorkItemTransitionsInsert = `INSERT INTO work_item_transitions (repo_id, work_item_id, occurred_at, from_status, to_status, from_status_raw, to_status_raw, actor, last_synced, org_id, source_id, tie_ordinal)`
 
-const linearWorkItemTransitionsSelect = `SELECT repo_id, work_item_id, occurred_at, from_status, to_status, from_status_raw, to_status_raw, actor, last_synced, org_id, source_id FROM work_item_transitions FINAL WHERE org_id = ? AND repo_id = ? AND work_item_id = ? AND occurred_at = toDateTime64(?, 3, 'UTC')`
+const linearWorkItemTransitionsSelect = `SELECT repo_id, work_item_id, occurred_at, from_status, to_status, from_status_raw, to_status_raw, actor, last_synced, org_id, source_id, tie_ordinal FROM work_item_transitions FINAL WHERE org_id = ? AND repo_id = ? AND work_item_id = ? AND occurred_at = toDateTime64(?, 3, 'UTC') AND tie_ordinal = ?`
 
 func projectLinearTransition(row linearWorkItemTransitionRow) workItemTransitionStoredRow {
 	return workItemTransitionStoredRow{
@@ -458,8 +457,8 @@ func (adapter LinearWorkItemTransitionsClickHouseAdapter) WriteLinearWorkItemEff
 			return ErrInvalidConfiguration
 		}
 	}
-	rows = dedupeBySortingKey(rows, linearTransitionSortingKey)
-	if len(rows) == 0 {
+	stored := rankTransitionTies(projectRows(rows, projectLinearTransition))
+	if len(stored) == 0 {
 		return nil
 	}
 	batch, err := adapter.Conn.PrepareBatch(ctx, linearWorkItemTransitionsInsert)
@@ -467,8 +466,8 @@ func (adapter LinearWorkItemTransitionsClickHouseAdapter) WriteLinearWorkItemEff
 		return err
 	}
 	defer batch.Abort()
-	for _, row := range rows {
-		if err := batch.Append(projectLinearTransition(row).values()...); err != nil {
+	for _, row := range stored {
+		if err := batch.Append(row.values()...); err != nil {
 			return err
 		}
 	}
@@ -492,15 +491,14 @@ func (adapter LinearWorkItemTransitionsClickHouseAdapter) InspectLinearWorkItemE
 			return EffectConflict, ErrInvalidConfiguration
 		}
 	}
-	rows = dedupeBySortingKey(rows, linearTransitionSortingKey)
-	if len(rows) == 0 {
+	stored := rankTransitionTies(projectRows(rows, projectLinearTransition))
+	if len(stored) == 0 {
 		return EffectAbsent, nil
 	}
-	return foldWorkItemInspections(rows, func(row linearWorkItemTransitionRow) (EffectInspection, error) {
-		expected := projectLinearTransition(row)
+	return foldWorkItemInspections(stored, func(expected workItemTransitionStoredRow) (EffectInspection, error) {
 		result, err := adapter.Conn.Query(
 			ctx, linearWorkItemTransitionsSelect, expected.OrgID, expected.RepoID,
-			expected.WorkItemID, clickHouseMillisParam(expected.OccurredAt),
+			expected.WorkItemID, clickHouseMillisParam(expected.OccurredAt), expected.TieOrdinal,
 		)
 		if err != nil {
 			return EffectConflict, err
@@ -513,7 +511,7 @@ func (adapter LinearWorkItemTransitionsClickHouseAdapter) InspectLinearWorkItemE
 				&actual.RepoID, &actual.WorkItemID, &actual.OccurredAt,
 				&actual.FromStatus, &actual.ToStatus, &actual.FromStatusRaw,
 				&actual.ToStatusRaw, &actual.Actor, &actual.LastSynced,
-				&actual.OrgID, &actual.SourceID,
+				&actual.OrgID, &actual.SourceID, &actual.TieOrdinal,
 			); err != nil {
 				return EffectConflict, err
 			}
@@ -542,13 +540,6 @@ func (adapter LinearWorkItemTransitionsClickHouseAdapter) InspectLinearWorkItemE
 
 func linearWorkItemSortingKey(row linearWorkItemRow) string {
 	return strings.Join([]string{row.OrgID, uuid.Nil.String(), row.WorkItemID}, workItemKeySeparator)
-}
-
-func linearTransitionSortingKey(row linearWorkItemTransitionRow) string {
-	return strings.Join([]string{
-		row.OrgID, uuid.Nil.String(), row.WorkItemID,
-		clickHouseMillis(row.OccurredAt).Format(time.RFC3339Nano),
-	}, workItemKeySeparator)
 }
 
 var _ LinearWorkItemEffectAdapter = LinearWorkItemsClickHouseAdapter{}

@@ -3,6 +3,7 @@ package providersync
 import (
 	"context"
 	"log/slog"
+	"sort"
 	"strings"
 	"time"
 
@@ -327,9 +328,9 @@ func workItemStoredRowsEqual(expected, actual workItemStoredRow) EffectInspectio
 // row carries the column default.
 type GitHubWorkItemTransitionsClickHouseAdapter struct{ Conn driver.Conn }
 
-const gitHubWorkItemTransitionsInsert = `INSERT INTO work_item_transitions (repo_id, work_item_id, occurred_at, from_status, to_status, from_status_raw, to_status_raw, actor, last_synced, org_id, source_id)`
+const gitHubWorkItemTransitionsInsert = `INSERT INTO work_item_transitions (repo_id, work_item_id, occurred_at, from_status, to_status, from_status_raw, to_status_raw, actor, last_synced, org_id, source_id, tie_ordinal)`
 
-const gitHubWorkItemTransitionsSelect = `SELECT repo_id, work_item_id, occurred_at, from_status, to_status, from_status_raw, to_status_raw, actor, last_synced, org_id, source_id FROM work_item_transitions FINAL WHERE org_id = ? AND repo_id = ? AND work_item_id = ? AND occurred_at = toDateTime64(?, 3, 'UTC')`
+const gitHubWorkItemTransitionsSelect = `SELECT repo_id, work_item_id, occurred_at, from_status, to_status, from_status_raw, to_status_raw, actor, last_synced, org_id, source_id, tie_ordinal FROM work_item_transitions FINAL WHERE org_id = ? AND repo_id = ? AND work_item_id = ? AND occurred_at = toDateTime64(?, 3, 'UTC') AND tie_ordinal = ?`
 
 type workItemTransitionStoredRow struct {
 	RepoID        uuid.UUID
@@ -343,6 +344,7 @@ type workItemTransitionStoredRow struct {
 	LastSynced    time.Time
 	OrgID         string
 	SourceID      *uuid.UUID
+	TieOrdinal    uint16
 }
 
 func projectWorkItemTransition(row githubWorkItemTransitionRow) workItemTransitionStoredRow {
@@ -379,8 +381,8 @@ func (adapter GitHubWorkItemTransitionsClickHouseAdapter) WriteGitHubWorkItemEff
 			return ErrInvalidConfiguration
 		}
 	}
-	rows = dedupeBySortingKey(rows, workItemTransitionSortingKey)
-	if len(rows) == 0 {
+	stored := rankTransitionTies(projectRows(rows, projectWorkItemTransition))
+	if len(stored) == 0 {
 		return nil
 	}
 	batch, err := adapter.Conn.PrepareBatch(ctx, gitHubWorkItemTransitionsInsert)
@@ -388,8 +390,8 @@ func (adapter GitHubWorkItemTransitionsClickHouseAdapter) WriteGitHubWorkItemEff
 		return err
 	}
 	defer batch.Abort()
-	for _, row := range rows {
-		if err := batch.Append(projectWorkItemTransition(row).values()...); err != nil {
+	for _, row := range stored {
+		if err := batch.Append(row.values()...); err != nil {
 			return err
 		}
 	}
@@ -415,16 +417,15 @@ func (adapter GitHubWorkItemTransitionsClickHouseAdapter) InspectGitHubWorkItemE
 			return EffectConflict, ErrInvalidConfiguration
 		}
 	}
-	rows = dedupeBySortingKey(rows, workItemTransitionSortingKey)
-	if len(rows) == 0 {
+	stored := rankTransitionTies(projectRows(rows, projectWorkItemTransition))
+	if len(stored) == 0 {
 		return emptyEffectInspection(), nil
 	}
-	return foldWorkItemInspections(rows, func(row githubWorkItemTransitionRow) (EffectInspection, error) {
-		expected := projectWorkItemTransition(row)
+	return foldWorkItemInspections(stored, func(expected workItemTransitionStoredRow) (EffectInspection, error) {
 		result, err := adapter.Conn.Query(
 			ctx, gitHubWorkItemTransitionsSelect,
 			expected.OrgID, expected.RepoID, expected.WorkItemID,
-			clickHouseMillisParam(expected.OccurredAt),
+			clickHouseMillisParam(expected.OccurredAt), expected.TieOrdinal,
 		)
 		if err != nil {
 			return EffectConflict, err
@@ -437,7 +438,7 @@ func (adapter GitHubWorkItemTransitionsClickHouseAdapter) InspectGitHubWorkItemE
 				&actual.RepoID, &actual.WorkItemID, &actual.OccurredAt,
 				&actual.FromStatus, &actual.ToStatus, &actual.FromStatusRaw,
 				&actual.ToStatusRaw, &actual.Actor, &actual.LastSynced,
-				&actual.OrgID, &actual.SourceID,
+				&actual.OrgID, &actual.SourceID, &actual.TieOrdinal,
 			); err != nil {
 				return EffectConflict, err
 			}
@@ -1165,7 +1166,7 @@ func (row workItemTransitionStoredRow) values() []any {
 	return []any{
 		row.RepoID, row.WorkItemID, row.OccurredAt, row.FromStatus, row.ToStatus,
 		row.FromStatusRaw, row.ToStatusRaw, row.Actor, row.LastSynced, row.OrgID,
-		row.SourceID,
+		row.SourceID, row.TieOrdinal,
 	}
 }
 
@@ -1264,11 +1265,52 @@ func workItemSortingKey(row githubWorkItemRow) string {
 	return strings.Join([]string{row.OrgID, repoID.String(), row.WorkItemID}, workItemKeySeparator)
 }
 
-func workItemTransitionSortingKey(row githubWorkItemTransitionRow) string {
-	// repo_id is always the nil UUID for this unit; see projectWorkItemTransition.
+func projectRows[T any](rows []T, project func(T) workItemTransitionStoredRow) []workItemTransitionStoredRow {
+	stored := make([]workItemTransitionStoredRow, 0, len(rows))
+	for _, row := range rows {
+		stored = append(stored, project(row))
+	}
+	return stored
+}
+
+// rankTransitionTies keeps one copy of each transition (the last, as the engine does) and numbers the transitions of
+// one item at one instant: tie_ordinal 0..n-1, ranked by the transition's own content. The only transition of an
+// instant is 0, so a re-sync replaces it whatever its statuses now say. Ranking by content, not by the order the
+// batch holds them, keeps the order a provider served the events in from moving a transition to another ordinal.
+func rankTransitionTies(rows []workItemTransitionStoredRow) []workItemTransitionStoredRow {
+	rows = dedupeBySortingKey(rows, func(row workItemTransitionStoredRow) string {
+		return transitionInstantKey(row) + workItemKeySeparator + transitionTieOrder(row)
+	})
+	ties := make(map[string][]int, len(rows))
+	instants := make([]string, 0, len(rows))
+	for index, row := range rows {
+		instant := transitionInstantKey(row)
+		if _, seen := ties[instant]; !seen {
+			instants = append(instants, instant)
+		}
+		ties[instant] = append(ties[instant], index)
+	}
+	for _, instant := range instants {
+		members := ties[instant]
+		sort.SliceStable(members, func(left, right int) bool {
+			return transitionTieOrder(rows[members[left]]) < transitionTieOrder(rows[members[right]])
+		})
+		for rank, index := range members {
+			rows[index].TieOrdinal = uint16(rank)
+		}
+	}
+	return rows
+}
+
+func transitionInstantKey(row workItemTransitionStoredRow) string {
 	return strings.Join([]string{
-		row.OrgID, uuid.Nil.String(), row.WorkItemID,
-		clickHouseMillis(row.OccurredAt).Format(time.RFC3339Nano),
+		row.OrgID, row.RepoID.String(), row.WorkItemID, row.OccurredAt.UTC().Format(time.RFC3339Nano),
+	}, workItemKeySeparator)
+}
+
+func transitionTieOrder(row workItemTransitionStoredRow) string {
+	return strings.Join([]string{
+		row.ToStatusRaw, row.FromStatusRaw, row.Actor, row.ToStatus, row.FromStatus,
 	}, workItemKeySeparator)
 }
 

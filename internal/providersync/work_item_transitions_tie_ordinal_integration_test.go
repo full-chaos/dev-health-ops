@@ -175,3 +175,60 @@ func TestTransitionWritersKeepEveryTransitionOfATieInstant(t *testing.T) {
 		})
 	}
 }
+
+func tieRow(item, from, to, toRaw string, at, synced time.Time) githubWorkItemTransitionRow {
+	return githubWorkItemTransitionRow{
+		WorkItemID: item, Provider: "github", OccurredAt: at, ToStatusRaw: &toRaw,
+		FromStatus: from, ToStatus: to, OrgID: nativeTestClaim("github", "work-items").OrgID, LastSynced: synced,
+	}
+}
+
+// A re-sync rewrites the same events: the rows of an instant are replaced, never added to, whatever the pair now says
+// (a status-map change, a board value whose status follows the issue state), and a tie that GROWS by an event (a
+// normalizer change that adds one) gets every row rewritten with no stale row. A tie that SHRINKS keeps the dropped
+// event's row: the one named residual, pinned here so a change to it is seen.
+func TestTransitionWritersReplaceOnResyncAndGrowATie(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	orgID := nativeTestClaim("github", "work-items").OrgID
+	at := time.Date(2026, 3, 2, 9, 0, 0, 0, time.UTC)
+	first := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	second := time.Date(2026, 11, 19, 0, 0, 0, 0, time.UTC)
+	for _, c := range []struct {
+		name         string
+		sync1, sync2 []githubWorkItemTransitionRow
+		want         uint64
+	}{
+		{"status-map change re-normalizes one event",
+			[]githubWorkItemTransitionRow{tieRow("gh:cell/map#1", "backlog", "todo", "Selected for Development", at, first)},
+			[]githubWorkItemTransitionRow{tieRow("gh:cell/map#1", "backlog", "in_progress", "Selected for Development", at, second)}, 1},
+		{"board value of an unmapped column follows the issue state",
+			[]githubWorkItemTransitionRow{tieRow("gh:cell/board#1", "unknown", "done", "Waiting on vendor", at, first)},
+			[]githubWorkItemTransitionRow{tieRow("gh:cell/board#1", "unknown", "unknown", "Waiting on vendor", at, second)}, 1},
+		{"a tie grows by one event",
+			[]githubWorkItemTransitionRow{tieRow("gh:cell/grow#1", "done", "in_progress", "in progress", at, first)},
+			[]githubWorkItemTransitionRow{
+				tieRow("gh:cell/grow#1", "done", "todo", "reopened", at, second),
+				tieRow("gh:cell/grow#1", "todo", "in_progress", "in progress", at, second)}, 2},
+		{"a tie shrinks by one event (residual: the dropped row stays)",
+			[]githubWorkItemTransitionRow{
+				tieRow("gh:cell/shrink#1", "done", "todo", "reopened", at, first),
+				tieRow("gh:cell/shrink#1", "todo", "in_progress", "in progress", at, first)},
+			[]githubWorkItemTransitionRow{tieRow("gh:cell/shrink#1", "done", "in_progress", "in progress", at, second)}, 2},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if err := githubFamilyTieWriter(conn, c.sync1).write(ctx, t); err != nil {
+				t.Fatal(err)
+			}
+			second := githubFamilyTieWriter(conn, c.sync2)
+			if err := second.write(ctx, t); err != nil {
+				t.Fatal(err)
+			}
+			if stored := storedTransitionsAfterMerge(ctx, t, conn, orgID, c.sync1[0].WorkItemID); stored != c.want {
+				t.Fatalf("after OPTIMIZE FINAL: %d rows, want %d", stored, c.want)
+			}
+			if inspection, err := second.inspect(ctx, t); err != nil || inspection != EffectExact {
+				t.Fatalf("inspection of the re-sync=%s err=%v, want exact", inspection, err)
+			}
+		})
+	}
+}

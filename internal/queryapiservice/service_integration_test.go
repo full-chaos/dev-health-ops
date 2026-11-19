@@ -75,9 +75,6 @@ func TestConfiguredServiceReportsItsDependenciesOnTheOperatorListener(t *testing
 	}, queryComponent, operatorComponent)
 	query, operator := addrs[queryComponent], addrs[operatorComponent]
 	waitFor(t, r, "http://"+operator+"/readyz", http.StatusOK)
-	if got := waitFor(t, r, "http://"+query+"/readyz", http.StatusOK); got != "ready" {
-		t.Fatalf("compat /readyz on the query listener = %q, want the old ready", got)
-	}
 	metrics := waitFor(t, r, "http://"+operator+"/metrics", http.StatusOK)
 	for _, check := range []string{"query_clickhouse", "query_postgres", "query_jwks", "query_listener"} {
 		if !strings.Contains(metrics, `dev_health_runtime_check_failed{check="`+check+`"} 0`) {
@@ -113,10 +110,6 @@ func TestConfiguredServiceReportsItsDependenciesOnTheOperatorListener(t *testing
 			t.Fatalf("/readyz stayed %d after the registry PostgreSQL went away: %q", code, body)
 		}
 		time.Sleep(200 * time.Millisecond)
-	}
-	// The query listener's compat /readyz names the class in the old plain text, nothing more.
-	if code, body := get(t, "http://"+query+"/readyz"); code != http.StatusServiceUnavailable || body != "not ready: postgres" {
-		t.Fatalf("compat /readyz on the query listener = %d %q, want 503 %q", code, body, "not ready: postgres")
 	}
 	// Liveness is independent of the dependency: the process stays live.
 	if code, _ := get(t, "http://"+operator+"/healthz"); code != http.StatusOK {

@@ -235,7 +235,7 @@ func (v *qpVenue) build(t *testing.T, ctx context.Context, name string, settings
 		t.Fatalf("build %s: %v", name, err)
 	}
 	t.Cleanup(plane.Close)
-	public, internal := server.Listeners("127.0.0.1:0", "127.0.0.1:0", plane, nil, nil)
+	public, internal := server.Listeners("127.0.0.1:0", "127.0.0.1:0", plane, nil)
 	mcp := server.MCPListener("127.0.0.1:0", plane, nil)
 	b := &qpBuild{name: name, pdp: counter}
 	for _, l := range []struct {

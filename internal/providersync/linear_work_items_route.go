@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -567,7 +568,7 @@ func linearNestedPageLimit() int { return linearNestedHardMaxPages }
 // wraps ErrPaginationCapExceeded so the unit fails permanently and loudly.
 func linearNestedBoundExceeded(owner, field string, pages, items int) error {
 	slog.Error("providersync.linear.nested_connection_bound_exceeded",
-		"owner", owner, "field", field, "pages", pages, "items", items,
+		"owner", logging.ProviderText(owner), "field", field, "pages", pages, "items", items,
 		"max_pages", linearNestedHardMaxPages)
 	return fmt.Errorf(
 		"%w: linear %s of %s still had a next page after %d pages (%d items, max %d pages)",
@@ -1094,7 +1095,7 @@ func normalizeLinearDependencies(
 	for _, attachment := range payload.Attachments.Nodes {
 		source, rejected := linearAttachmentSource(attachment)
 		if rejected {
-			slog.Warn("providersync.linear.attachment_gitlab_reference_rejected", "org_id", claim.OrgID, "issue", workItemID)
+			slog.Warn("providersync.linear.attachment_gitlab_reference_rejected", "org_id", claim.OrgID, "issue", logging.ProviderText(workItemID))
 			continue
 		}
 		if source != "" {

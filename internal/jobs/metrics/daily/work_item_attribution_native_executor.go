@@ -192,6 +192,11 @@ func (executor *WorkItemAttributionExecutor) ComputeFamily(
 		if err != nil {
 			return total, err
 		}
+		linkTiers, err := remaining.LoadWorkItemLinkTiers(ctx, executor.conn, run.OrganizationID, dependencies)
+		if err != nil {
+			return total, err
+		}
+		repoDerived.LinkTiers = linkTiers
 		linkedIssue, linkedEvidence, _, _ := repoDerived.BuildLinkedIssueIndexFromRows("", subjects, donorRows, dependencies, nil)
 		if refused := repoDerived.LinkedIssueDonorRefusalCounts(subjects, dependencies); len(refused) > 0 {
 			slog.Default().InfoContext(ctx, "work_item_attribution.linked_issue_donor_refused",

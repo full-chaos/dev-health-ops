@@ -182,7 +182,7 @@ func TestBuildChartQueryMatchesPythonContract(t *testing.T) {
 	for _, fragment := range []string{
 		"toDate(day) AS x", "avg(flake_rate) AS y", "FROM testops_test_metrics_daily",
 		"org_id = {org_id:String}", "team_id IN {filter_teams:Array(String)}",
-		"repo_id IN {filter_repos:Array(String)}", "ORDER BY x",
+		"toString(repo_id) IN {filter_repos:Array(String)}", "ORDER BY x",
 	} {
 		if !strings.Contains(query, fragment) {
 			t.Fatalf("query missing %q:\n%s", fragment, query)

@@ -209,6 +209,15 @@ var errTeamIDCarryUnkeyed = errors.New("team id carry: planned id without a prov
 // failure part way the old team is still found active, so a re-run moves
 // what is left.
 func CarryTeamIDs(ctx context.Context, conn TeamIDCarryConn, orgID string, at time.Time, dryRun bool) (TeamIDCarryOutcome, error) {
+	return carryTeamIDs(ctx, conn, orgID, at, dryRun, true)
+}
+
+// carryTeamIDs is CarryTeamIDs. evidence false leaves the input evidence of
+// derived repo ownership where it is: the api's ClickHouse login holds no
+// grant on team_repo_ownership_evidence (least privilege, CHAOS-9349 ruling),
+// so a claim the admin write path carries has no recorded key until the next
+// derive records it (the bootstrap rule for that window).
+func carryTeamIDs(ctx context.Context, conn TeamIDCarryConn, orgID string, at time.Time, dryRun, evidence bool) (TeamIDCarryOutcome, error) {
 	orgID = strings.TrimSpace(orgID)
 	if ctx == nil || conn == nil || orgID == "" || at.IsZero() {
 		return TeamIDCarryOutcome{}, ErrInvalidConfiguration
@@ -227,7 +236,7 @@ func CarryTeamIDs(ctx context.Context, conn TeamIDCarryConn, orgID string, at ti
 	if teamGroups == 0 && observations == 0 {
 		return outcome, nil
 	}
-	carry := teamIDCarryRun{ctx: ctx, conn: conn, org: org, orgID: orgID, at: at, outcome: &outcome}
+	carry := teamIDCarryRun{ctx: ctx, conn: conn, org: org, orgID: orgID, at: at, outcome: &outcome, evidence: evidence}
 	if err := carry.plan(); err != nil {
 		return TeamIDCarryOutcome{}, err
 	}
@@ -297,6 +306,9 @@ type teamIDCarryRun struct {
 	orgID   string
 	at      time.Time
 	outcome *TeamIDCarryOutcome
+	// evidence: the run also records the moved claims' input evidence keys
+	// under the new id (the worker paths; not the api login).
+	evidence bool
 
 	// target: old id -> provider -> new id, for every provider group that
 	// moves. groups: old id -> every provider with a bare row of that id.
@@ -882,7 +894,7 @@ func (run *teamIDCarryRun) planLink(link teamIDCarryLink) error {
 // old id's keys stay; its rows are closed by planLink, so no run reads them.
 func (run *teamIDCarryRun) planRepoOwnershipEvidence() error {
 	oldIDs, _ := run.linkIDs()
-	if len(oldIDs) == 0 {
+	if !run.evidence || len(oldIDs) == 0 {
 		return nil
 	}
 	live, err := run.read(`SELECT org_id, provider, repo_full_name, team_id, input, input_key, last_seen AS seen_at, toUInt8(0) AS is_deleted `+
@@ -1395,7 +1407,11 @@ func (row chRow) with(column string, value any) chRow {
 // logs what moved; a write path calls it before it reads or writes a team
 // id (see CarryTeamIDs). An error stops the path before it writes.
 func CarryTeamIDsBeforeWrite(ctx context.Context, conn TeamIDCarryConn, orgID, writer string) error {
-	outcome, err := CarryTeamIDs(ctx, conn, orgID, time.Now().UTC(), false)
+	return carryTeamIDsBeforeWrite(ctx, conn, orgID, writer, true)
+}
+
+func carryTeamIDsBeforeWrite(ctx context.Context, conn TeamIDCarryConn, orgID, writer string, evidence bool) error {
+	outcome, err := carryTeamIDs(ctx, conn, orgID, time.Now().UTC(), false, evidence)
 	if err != nil {
 		return err
 	}

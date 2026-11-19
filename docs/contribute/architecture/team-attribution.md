@@ -3130,6 +3130,9 @@ stays until the row comes back. Residuals:
   holding the close, never toward a close on a missing row.
 - an `extkey:` target that becomes ambiguous (a second item takes the same key) gives no donor, but the recorded
   edge and donor rows are still in the run: the claim closes (not held).
+- the team id carry moves a claim's keys to the new id on the worker paths only. The api's ClickHouse login has no
+  grant on `team_repo_ownership_evidence` (least privilege), so a claim an admin write carries has no recorded key
+  until the next derive records it: until then it closes on the kind guard alone (`no_recorded_evidence`).
 
 **Every owning team of a repo, each with its linked share; one main owner, or every team of a full tie.**
 The derivation counts each team's candidates on a repo per link tier. The tier of a `work_graph_issue_pr` candidate is that

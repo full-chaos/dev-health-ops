@@ -176,6 +176,10 @@ type TestMetric struct {
 	SuiteDurationP50Seconds *float64
 	SuiteDurationP95Seconds *float64
 	FailureRecurrence       float64
+	// RecurrentFailedNames and DistinctFailedNames are the two counts of FailureRecurrence: the failed names of the day
+	// that also failed in the history window, and the distinct failed names of the day (0 and 0 with no failed name).
+	RecurrentFailedNames int
+	DistinctFailedNames  int
 	// PooledSamples are the suite duration samples the suite percentiles above were taken over.
 	PooledSamples []PooledSample
 	// FlakeUnknown is set when the day holds case rows only of runs left out of
@@ -971,6 +975,7 @@ func (accumulator *TestAccumulator) Finish(historicalFailedNames map[string]stru
 		RepoID: repoID, TotalCases: totalCases, PassedCount: passedCount,
 		FailedCount: failedCount, SkippedCount: skippedCount, QuarantinedCount: quarantinedCount,
 		TotalSuites: len(suites), FlakeCases: flakeCases, DistinctCases: distinctCases,
+		RecurrentFailedNames: recurrentFailures, DistinctFailedNames: len(currentFailedNames),
 		PooledSamples: accumulator.suiteSamples,
 	}
 	if totalCases > 0 {

@@ -12,24 +12,12 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/testops"
 )
 
-// pendingFailureRecurrenceCountColumns is the proposed migration of the two count columns, run here until it is in the
-// chain.
-var pendingFailureRecurrenceCountColumns = []string{
-	`ALTER TABLE testops_test_metrics_daily ADD COLUMN IF NOT EXISTS recurrent_failed_names Nullable(UInt32)`,
-	`ALTER TABLE testops_test_metrics_daily ADD COLUMN IF NOT EXISTS distinct_failed_names Nullable(UInt32)`,
-}
-
 // The daily writer stores the two counts of failure_recurrence_score: the failed names of the day that also failed in
 // the history window, and the distinct failed names of the day. A day with no failed name stores 0 and 0.
 func TestTestopsTestMetricsStoreFailureRecurrenceCounts(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
 	conn := startDefaultBranchClickHouse(ctx, t)
-	for _, statement := range pendingFailureRecurrenceCountColumns {
-		if err := conn.Exec(ctx, statement); err != nil {
-			t.Fatal(err)
-		}
-	}
 	day := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
 	failing := uuid.MustParse("00000000-0000-4000-8000-0000000000e1")
 	green := uuid.MustParse("00000000-0000-4000-8000-0000000000e2")

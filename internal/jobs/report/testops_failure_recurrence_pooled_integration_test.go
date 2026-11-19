@@ -35,15 +35,6 @@ func TestFailureRecurrenceChartIsPooledOverRepositoryDays(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	// The proposed migration of the two count columns, run here until it is in the chain.
-	for _, statement := range []string{
-		`ALTER TABLE testops_test_metrics_daily ADD COLUMN IF NOT EXISTS recurrent_failed_names Nullable(UInt32)`,
-		`ALTER TABLE testops_test_metrics_daily ADD COLUMN IF NOT EXISTS distinct_failed_names Nullable(UInt32)`,
-	} {
-		if err := conn.Exec(ctx, statement); err != nil {
-			t.Fatal(err)
-		}
-	}
 
 	const (
 		org = "org-failure-recurrence"

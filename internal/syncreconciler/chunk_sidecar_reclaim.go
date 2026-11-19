@@ -57,37 +57,52 @@ type chunkSidecarReclaimTickLockFunc func(context.Context) (release func(), acqu
 // reclaim tick (CHAOS-14243); no other code in this repository takes it.
 const chunkSidecarReclaimLockKey int64 = 1424300000000001
 
-// poolChunkSidecarReclaimTickLock holds a session-level advisory lock on one
-// pooled connection for the tick. A connection whose unlock cannot be
-// confirmed is closed, which ends its session and so its lock, instead of
-// going back to the pool still holding it.
+// poolChunkSidecarReclaimTickLock takes a TRANSACTION-level advisory lock in
+// one explicit transaction on one pooled connection and keeps that transaction
+// open for the tick. The domain DSN goes through PgBouncer in transaction mode
+// (chart go-pgbouncer.yaml POSTGRES_URI -> go-pgbouncer-transaction), which
+// pins a server connection only for a transaction, so a session lock could be
+// taken on one server connection and "released" on another. The transaction
+// lock ends with the transaction on the same server connection. A connection
+// whose rollback is not confirmed is closed (fresh context), which ends the
+// transaction and its lock on the server side.
 func poolChunkSidecarReclaimTickLock(pool *pgxpool.Pool) chunkSidecarReclaimTickLockFunc {
 	return func(ctx context.Context) (func(), bool, error) {
 		conn, err := pool.Acquire(ctx)
 		if err != nil {
 			return nil, false, err
 		}
-		var acquired bool
-		if err := conn.QueryRow(ctx, `SELECT pg_catalog.pg_try_advisory_lock($1)`, chunkSidecarReclaimLockKey).Scan(&acquired); err != nil {
+		discard := func() {
 			closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
 			_ = conn.Conn().Close(closeCtx)
-			cancel()
 			conn.Release()
+		}
+		end := func(tx pgx.Tx) {
+			rollbackCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			err := tx.Rollback(rollbackCtx)
+			cancel()
+			if err != nil {
+				discard()
+				return
+			}
+			conn.Release()
+		}
+		tx, err := conn.Begin(ctx)
+		if err != nil {
+			discard()
+			return nil, false, err
+		}
+		var acquired bool
+		if err := tx.QueryRow(ctx, `SELECT pg_catalog.pg_try_advisory_xact_lock($1)`, chunkSidecarReclaimLockKey).Scan(&acquired); err != nil {
+			discard()
 			return nil, false, err
 		}
 		if !acquired {
-			conn.Release()
+			end(tx)
 			return nil, false, nil
 		}
-		return func() {
-			unlockCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			var unlocked bool
-			if err := conn.QueryRow(unlockCtx, `SELECT pg_catalog.pg_advisory_unlock($1)`, chunkSidecarReclaimLockKey).Scan(&unlocked); err != nil || !unlocked {
-				_ = conn.Conn().Close(unlockCtx)
-			}
-			conn.Release()
-		}, true, nil
+		return func() { end(tx) }, true, nil
 	}
 }
 

@@ -143,9 +143,10 @@ func (executor *IncidentExecutor) ComputeFamily(
 	for _, record := range records {
 		produced = append(produced, staleKey{record.RepoID.String()})
 	}
-	snapshot := computedAt.UTC().Truncate(time.Second)
-	retired, err := supersedeStaleTeamKeysAt(ctx, executor.conn, teamkeytables.IncidentMetricsDaily, run.OrganizationID,
-		dayStart, newStaleKeyScope(repositoryScopeTuples(repoIDs)...), produced, func(staleKey) time.Time { return snapshot })
+	// The table is snapshot-stamped (stale_team_keys.go): the marker carries computedAt, taken before the read, and a key
+	// whose stored row is not older than it (a newer run wrote it) gets no marker.
+	retired, err := supersedeStaleTeamKeys(ctx, executor.conn, teamkeytables.IncidentMetricsDaily, run.OrganizationID,
+		dayStart, newStaleKeyScope(repositoryScopeTuples(repoIDs)...), produced, computedAt)
 	if err != nil {
 		return written + retired, fmt.Errorf("retire stale incident_metrics_daily days: %w", err)
 	}

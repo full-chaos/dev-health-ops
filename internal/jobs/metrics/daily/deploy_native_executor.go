@@ -115,8 +115,8 @@ func (executor *DeployExecutor) ComputeFamily(
 	for _, metric := range metrics {
 		produced = append(produced, staleKey{metric.RepoID})
 	}
-	retired, err := supersedeStaleTeamKeysAt(ctx, executor.conn, teamkeytables.DeployMetricsDaily, run.OrganizationID,
-		day, newStaleKeyScope(repositoryScopeTuples(repoIDs)...), produced, func(staleKey) time.Time { return snapshot })
+	retired, err := supersedeStaleTeamKeys(ctx, executor.conn, teamkeytables.DeployMetricsDaily, run.OrganizationID,
+		day, newStaleKeyScope(repositoryScopeTuples(repoIDs)...), produced, snapshot)
 	if err != nil {
 		return written + retired, fmt.Errorf("retire stale deploy_metrics_daily days: %w", err)
 	}

@@ -37,7 +37,7 @@ var pinnedTableFiles = map[string]censusPin{
 		"reader rule applied: pass_rate is pooled, passed_count over executedCases (passed_count + failed_count), no stored rate read; flake_rate and retry_dependency_rate are pooled over distinct_cases, a repo-day with a NULL rate or NULL counts in neither sum"},
 	"internal/jobs/metrics/daily/testops_native_clickhouse.go": {"4b27c97dd7dc144e00b7772a4e373a43e44903dbe7056893a3a29aa0d8ce1fac",
 		"writer: the daily writer of the stored rows"},
-	"internal/jobs/metrics/daily/testops_native_executor.go": {"f53db0a4b1b8a82488cb72d46f497b115a5285af343b1d3a2630ea739a4bf6d5",
+	"internal/jobs/metrics/daily/testops_native_executor.go": {"441ab293c9aebdffc771952088a5248f292d2b8063b3a4d697f10b009bbfacc6",
 		"not a reader: the coverage and pipeline writers retire a day (a marker row); the file names the test table in comments only"},
 	"internal/jobs/metrics/testops/rules_sql.go": {"3cce90a839a41d3c4fb2e3bb3b4fd22a6e0f63ea508e120c627a115caeb63f5f",
 		"reader rule applied: TestPassRateWindowSQL, over passed_count and failed_count; CHAOS-14009 adds the retired-day HAVING to StabilityLiveRowsSQL only"},

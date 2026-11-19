@@ -245,8 +245,8 @@ func (executor *RepoUserCommitExecutor) ComputeFamily(
 	for _, row := range result.RepoMetrics {
 		producedRepos = append(producedRepos, staleKey{row.RepoID.String()})
 	}
-	retired, err := supersedeStaleTeamKeysAt(ctx, executor.conn, teamkeytables.RepoMetricsDaily, run.OrganizationID, dayStart,
-		newStaleKeyScope(repositories...), producedRepos, func(staleKey) time.Time { return snapshot })
+	retired, err := supersedeStaleTeamKeys(ctx, executor.conn, teamkeytables.RepoMetricsDaily, run.OrganizationID, dayStart,
+		newStaleKeyScope(repositories...), producedRepos, snapshot)
 	total += retired
 	if err != nil {
 		return wrapRepoUserCommitPartialWrite(total, fmt.Errorf("retire stale repo_metrics_daily days: %w", err))

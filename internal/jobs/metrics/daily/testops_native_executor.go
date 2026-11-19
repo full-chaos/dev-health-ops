@@ -178,10 +178,10 @@ func (executor *TestopsPipelineExecutor) ComputeFamily(
 	for _, repoID := range scope.repoIDs {
 		repositories = append(repositories, []string{repoID.String()})
 	}
-	// The marker carries the instant of this run (computedAt, taken before the reads), never a version raised above a stored
-	// row: a newer run that stored a measured row since is newer than this marker and stays the live row of its key.
-	retired, err := supersedeStaleTeamKeysAt(ctx, executor.conn, teamkeytables.TestopsPipelineMetricsDaily, run.OrganizationID,
-		scope.day, newStaleKeyScope(repositories...), produced, func(staleKey) time.Time { return computedAt })
+	// The table is snapshot-stamped (stale_team_keys.go): the marker carries computedAt, taken before the reads, and a key
+	// whose stored row is not older than it (a newer run wrote it) gets no marker.
+	retired, err := supersedeStaleTeamKeys(ctx, executor.conn, teamkeytables.TestopsPipelineMetricsDaily, run.OrganizationID,
+		scope.day, newStaleKeyScope(repositories...), produced, computedAt)
 	if err != nil {
 		return written + retired, fmt.Errorf("retire stale testops_pipeline_metrics_daily days: %w", err)
 	}

@@ -41,6 +41,7 @@ internal/providerfoundation	clients.go	internal/clicredentials
 internal/providerfoundation	clients.go	internal/fixturescli
 internal/providerfoundation	clients.go	internal/goapicli/restprove
 internal/providerfoundation	clients.go	internal/jobrescue
+internal/providerfoundation	clients.go	internal/jobs/metrics/daily
 internal/providerfoundation	clients.go	internal/jobs/operational
 internal/providerfoundation	clients.go	internal/jobs/providerunit
 internal/providerfoundation	clients.go	internal/jobs/synccoverage

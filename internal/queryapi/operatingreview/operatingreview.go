@@ -640,7 +640,7 @@ func fetchRepoMetrics(ctx context.Context, client QueryClient, orgID string, sta
           FROM repo_metrics_daily
           WHERE org_id = {org_id:String}
             AND day >= {start:Date} AND day < {end:Date}
-          GROUP BY day, repo_id
+          GROUP BY day, repo_id` + liveRowHaving("repo_metrics_daily") + `
         )`
 
 	bindings := periodBindings(orgID, start, end, nil)
@@ -840,7 +840,7 @@ func fetchDeploymentsAgg(ctx context.Context, client QueryClient, orgID string, 
           FROM deploy_metrics_daily
           WHERE org_id = {org_id:String}
             AND day >= {start:Date} AND day < {end:Date}
-          GROUP BY day, repo_id
+          GROUP BY day, repo_id` + liveRowHaving("deploy_metrics_daily") + `
         )`
 
 	bindings := periodBindings(orgID, start, end, nil)
@@ -890,7 +890,7 @@ func fetchIncidentsAgg(ctx context.Context, client QueryClient, orgID string, st
           FROM incident_metrics_daily
           WHERE org_id = {org_id:String}
             AND day >= {start:Date} AND day < {end:Date}
-          GROUP BY day, repo_id
+          GROUP BY day, repo_id` + liveRowHaving("incident_metrics_daily") + `
         )`
 
 	bindings := periodBindings(orgID, start, end, nil)

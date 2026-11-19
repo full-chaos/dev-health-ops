@@ -24,7 +24,7 @@ func listenerPlane(t *testing.T) *Plane {
 func TestListenerBindsInStartAndStopsInShutdown(t *testing.T) {
 	plane := listenerPlane(t)
 	defer plane.Close()
-	public, internal := Listeners("127.0.0.1:0", "", plane, nil, nil)
+	public, internal := Listeners("127.0.0.1:0", "", plane, nil)
 	if internal != nil {
 		t.Fatalf("an internal listener exists with no internal address")
 	}
@@ -68,7 +68,7 @@ func TestListenerFailsStartWhenTheAddressIsTaken(t *testing.T) {
 	defer occupied.Close()
 	plane := listenerPlane(t)
 	defer plane.Close()
-	public, _ := Listeners(occupied.Addr().String(), "", plane, nil, nil)
+	public, _ := Listeners(occupied.Addr().String(), "", plane, nil)
 	if err := public.Start(context.Background()); err == nil {
 		t.Fatal("Start succeeded on a taken address")
 	}
@@ -87,7 +87,7 @@ func TestListenerFailsStartWhenTheAddressIsTaken(t *testing.T) {
 func TestInternalListenerExistsOnlyWhenItsAddressIsSet(t *testing.T) {
 	plane := listenerPlane(t)
 	defer plane.Close()
-	public, internal := Listeners("127.0.0.1:0", "127.0.0.1:0", plane, nil, nil)
+	public, internal := Listeners("127.0.0.1:0", "127.0.0.1:0", plane, nil)
 	if public == nil || internal == nil {
 		t.Fatalf("public=%v internal=%v, want both", public, internal)
 	}
@@ -114,7 +114,7 @@ func TestInternalOnlyRouteExistsOnlyOnTheInternalListener(t *testing.T) {
 	})
 	plane.InternalHandler = internalMux
 
-	public, internal := Listeners("127.0.0.1:0", "127.0.0.1:0", plane, nil, nil)
+	public, internal := Listeners("127.0.0.1:0", "127.0.0.1:0", plane, nil)
 	ctx := context.Background()
 	if err := public.Start(ctx); err != nil {
 		t.Fatal(err)

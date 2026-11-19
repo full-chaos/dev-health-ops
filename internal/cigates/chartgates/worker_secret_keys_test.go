@@ -450,7 +450,7 @@ func TestWorkerSecretKeysGuardsPlantedDefects(t *testing.T) {
 			mut(chartFile(workers), "            {{- range $blank := include \"dev-health.goWorkerDSNNames\" $ | fromJsonArray }}", "            {{- range $blank := list }}"),
 			workerDSNBlanksRenderLast, "no optional secret reference or no blank"},
 		{"the-chart-list-loses-a-dsn-name", reader,
-			mut(chartFile("templates/_helpers.tpl"), `"API_DATABASE_URI" `, ""),
+			mutInDefine(chartFile("templates/_helpers.tpl"), "dev-health.goWorkerDSNNames", `"API_DATABASE_URI" `, ""),
 			func(g *guard) {
 				chartDSNListMatchesDSNClass(g, map[string][]string{"API_DATABASE_URI": {"internal/apiservice/service.go"}})
 			}, "API_DATABASE_URI is a database DSN secret"},

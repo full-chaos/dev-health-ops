@@ -19,7 +19,8 @@ const HoursSample = "delivery_hours_sample"
 // repository-day whose newest row holds no samples (written before migration 161) reads the raw rows with the writer's
 // rule: a work item of type bug with both lifecycle times and a terminal status (done or canceled) counts on the UTC day
 // it completed, and its sample is completed_at - started_at in hours, a negative one included, as the writer's mean
-// includes it.
+// includes it. A retired repository-day (newest row retracted = 1) is in neither arm (testopspooled.LiveRepoDays), as
+// in IncidentRepairsSource.
 var BugRepairsSource = `(
     SELECT org_id, repo_id, day, ` + HoursSample + `
     FROM (
@@ -40,6 +41,7 @@ var BugRepairsSource = `(
           AND toDate(completed_at, 'UTC') >= {start_date:Date} AND toDate(completed_at, 'UTC') < {end_date:Date}
           AND (repo_id, toDate(completed_at, 'UTC')) IN (` + testopspooled.LegacyRepoDays("repo_metrics_daily") + `)
     )
+    WHERE ` + testopspooled.LiveRepoDays("repo_metrics_daily") + `
 ) AS pooled_bug_repairs`
 
 // IncidentRepairsSource holds the samples of the incident writer (daily.LoadIncidentsStarted and
@@ -87,6 +89,7 @@ var IncidentRepairsSource = `(
         )
         WHERE (repo_id, day) IN (` + testopspooled.LegacyRepoDays("incident_metrics_daily") + `)
     )
+    WHERE ` + testopspooled.LiveRepoDays("incident_metrics_daily") + `
 ) AS pooled_incident_repairs`
 
 // The writers' median, p90 (linear between closest ranks) and mean, NULL for a group with no sample.

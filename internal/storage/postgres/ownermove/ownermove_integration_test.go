@@ -594,3 +594,31 @@ func TestPin(t *testing.T) {
 		t.Fatalf("the pin after the probes: %v", err)
 	}
 }
+
+// VerifyPin qualifies current_database() and count(*): a function and an aggregate of those names in a schema ahead of
+// pg_catalog on the session search_path are never called.
+func TestPinCallsOnlyPgCatalogFunctions(t *testing.T) {
+	ctx := context.Background()
+	e := newMoveEnv(t, ctx)
+	e.move(t, ctx, Apply, e.old, e.next, false)
+	exec(t, ctx, e.admin,
+		`CREATE SCHEMA omv_hostile`,
+		`GRANT USAGE ON SCHEMA omv_hostile TO `+e.next,
+		`CREATE FUNCTION omv_hostile.current_database() RETURNS name LANGUAGE plpgsql AS 'BEGIN RAISE EXCEPTION ''shadow current_database called''; END'`,
+		`CREATE FUNCTION omv_hostile.shadow_count(bigint) RETURNS bigint LANGUAGE plpgsql AS 'BEGIN RAISE EXCEPTION ''shadow count called''; END'`,
+		`CREATE AGGREGATE omv_hostile.count(*) (SFUNC = omv_hostile.shadow_count, STYPE = bigint)`,
+		`GRANT EXECUTE ON FUNCTION omv_hostile.current_database(), omv_hostile.shadow_count(bigint) TO `+e.next,
+	)
+	t.Cleanup(func() { _, _ = e.admin.Exec(context.Background(), `DROP SCHEMA IF EXISTS omv_hostile CASCADE`) })
+	parsed, err := url.Parse(e.nextURI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	query := parsed.Query()
+	query.Set("search_path", "omv_hostile,pg_catalog")
+	parsed.RawQuery = query.Encode()
+	hostile := dial(t, ctx, parsed.String())
+	if err := VerifyPin(ctx, hostile, e.next, "river"); err != nil {
+		t.Fatalf("the pin under a hostile search_path: %v", err)
+	}
+}

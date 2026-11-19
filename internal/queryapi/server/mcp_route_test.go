@@ -106,7 +106,7 @@ func newMCPTestListeners(t *testing.T, ch *countingMCPClient, sw routeswitch.Swi
 	internalMux.Handle("/", handler)
 	plane := &Plane{Handler: handler, InternalHandler: internalMux, MCPHandler: mcpMux}
 
-	public, internal := Listeners("127.0.0.1:0", "127.0.0.1:0", plane, nil, nil)
+	public, internal := Listeners("127.0.0.1:0", "127.0.0.1:0", plane, nil)
 	mcp := MCPListener("127.0.0.1:0", plane, nil)
 	if internal == nil || mcp == nil {
 		t.Fatal("expected internal and MCP listeners")

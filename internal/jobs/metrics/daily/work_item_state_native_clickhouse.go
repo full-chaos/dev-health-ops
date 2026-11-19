@@ -3,6 +3,7 @@ package daily
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/chtime"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/querybound"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workitemmetrics"
 	"github.com/full-chaos/dev-health-ops/internal/teamkeytables"
 )
@@ -127,16 +129,20 @@ WHERE org_id = ? AND repo_id = ?
 // # Dedup contract
 //
 // `work_item_transitions` is ReplacingMergeTree(last_synced) ORDER BY
-// (repo_id, work_item_id, occurred_at) -- that ORDER BY key does NOT include
-// from_status/to_status/actor, so a plain FINAL would silently collapse two
-// genuinely DIFFERENT transitions that happen to share one occurred_at down
+// (org_id, repo_id, work_item_id, occurred_at) -- that ORDER BY key does NOT
+// include from_status/to_status/actor, so a plain FINAL would silently collapse
+// two genuinely DIFFERENT transitions that happen to share one occurred_at down
 // to whichever has the larger last_synced, losing a real transition. This
 // query GROUPs BY every semantic column of the event (org_id, work_item_id,
 // occurred_at, from_status, to_status, from_status_raw, to_status_raw, actor)
-// -- collapsing only re-synced COPIES of the identical event, never two
-// distinct same-instant transitions. repo_id and provider are NOT part of the
-// identity: neither is filled by the sync sink, and a copy of one event that
-// differs only in one of them is still the same event.
+// -- collapsing only re-synced COPIES of the identical event. That keeps two
+// distinct same-instant transitions only while their rows sit in parts not yet
+// merged: a background merge applies the same key and keeps one row per
+// instant (repo_id is the nil UUID for every row), so the read cannot bring
+// back a merged-away transition (schema fix: ticket 14190, filed separately).
+// repo_id and provider are NOT part of the identity: neither is filled by the
+// sync sink, and a copy of one event that differs only in one of them is still
+// the same event.
 func LoadWorkItemStateTransitions(
 	ctx context.Context, conn repositoryRows, organizationID string, repoID uuid.UUID, end time.Time,
 ) ([]workItemStateTransition, error) {
@@ -449,4 +455,96 @@ func WriteWorkItemBlockedDurationsDaily(
 		return len(rows), fmt.Errorf("send work_item_blocked_durations_daily batch: %w", err)
 	}
 	return len(rows), nil
+}
+
+// liveBlockedSnapshotsOfItemsSQL reads, for the listed items of one day, the newest blocked snapshot of each
+// (provider, item) whose duration is above 0. Its arguments are the organization, the day and the ids.
+const liveBlockedSnapshotsOfItemsSQL = `
+SELECT provider, work_item_id,
+       argMax(work_scope_id, computed_at), argMax(team_id, computed_at), argMax(team_name, computed_at),
+       max(computed_at)
+FROM work_item_blocked_durations_daily
+WHERE org_id = ? AND day = ? AND work_item_id IN ?
+GROUP BY provider, work_item_id
+HAVING argMax(duration_hours, computed_at) > 0`
+
+type workItemStateRetractConn interface {
+	repositoryRows
+	workItemStateBatchConn
+}
+
+// retractBlockedSnapshotsOfItemsOffTheDay writes a 0 snapshot over each live positive blocked snapshot of an item
+// that is not an item of the day (its current copy does not pass the day; keepCurrentCopiesOfDay). The family writes
+// a snapshot only for an item it computes, so without the 0 an earlier compute's positive snapshot stays the newest.
+// An item with no live positive snapshot gets no row. Each 0 is newer than the snapshot it supersedes (computedAt, or
+// one millisecond after the stored snapshot).
+func retractBlockedSnapshotsOfItemsOffTheDay(
+	ctx context.Context, conn workItemStateRetractConn, organizationID string, day time.Time,
+	offTheDay map[workItemIdentity]struct{}, computedAt time.Time,
+) (int, error) {
+	if len(offTheDay) == 0 {
+		return 0, nil
+	}
+	ids := make([]string, 0, len(offTheDay))
+	seen := make(map[string]struct{}, len(offTheDay))
+	for identity := range offTheDay {
+		if _, duplicate := seen[identity.workItemID]; !duplicate {
+			seen[identity.workItemID] = struct{}{}
+			ids = append(ids, identity.workItemID)
+		}
+	}
+	sort.Strings(ids)
+	dayValue := workitemmetrics.UTCDay(day)
+	type liveSnapshot struct {
+		row    workItemBlockedDurationDailyRow
+		stored time.Time
+	}
+	var live []liveSnapshot
+	for _, chunk := range querybound.ChunkStringsByRenderedBytes(ids, maxWorkItemScopeFilterBytes) {
+		rows, err := conn.Query(ctx, liveBlockedSnapshotsOfItemsSQL, organizationID, dayValue, chunk)
+		if err != nil {
+			return 0, fmt.Errorf("load live blocked snapshots: %w", err)
+		}
+		for rows.Next() {
+			var snapshot liveSnapshot
+			if err := rows.Scan(&snapshot.row.Provider, &snapshot.row.WorkItemID, &snapshot.row.WorkScopeID,
+				&snapshot.row.TeamID, &snapshot.row.TeamName, &snapshot.stored); err != nil {
+				rows.Close()
+				return 0, fmt.Errorf("scan live blocked snapshot: %w", err)
+			}
+			if _, off := offTheDay[workItemIdentity{snapshot.row.Provider, snapshot.row.WorkItemID}]; off {
+				live = append(live, snapshot)
+			}
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return 0, fmt.Errorf("iterate live blocked snapshots: %w", err)
+		}
+	}
+	if len(live) == 0 {
+		return 0, nil
+	}
+	batch, err := conn.PrepareBatch(ctx, `INSERT INTO work_item_blocked_durations_daily (
+		day, provider, work_scope_id, team_id, team_name, work_item_id,
+		duration_hours, computed_at, org_id)`)
+	if err != nil {
+		return 0, fmt.Errorf("prepare work_item_blocked_durations_daily retraction batch: %w", err)
+	}
+	for _, snapshot := range live {
+		version := computedAt.UTC().Truncate(time.Millisecond)
+		if floor := snapshot.stored.UTC().Truncate(time.Millisecond).Add(time.Millisecond); floor.After(version) {
+			version = floor
+		}
+		row := snapshot.row
+		if err := batch.Append(
+			dayValue, row.Provider, row.WorkScopeID, row.TeamID, row.TeamName, row.WorkItemID, 0.0, version, organizationID,
+		); err != nil {
+			return 0, fmt.Errorf("append work_item_blocked_durations_daily retraction row: %w", err)
+		}
+	}
+	if err := batch.Send(); err != nil {
+		return len(live), fmt.Errorf("send work_item_blocked_durations_daily retraction batch: %w", err)
+	}
+	return len(live), nil
 }

@@ -106,11 +106,6 @@ func servedRoutes(t *testing.T) map[string]bool {
 		switch {
 		case file == "listener.go":
 			return nil
-		case file == "operator_compat.go":
-			if path == "/metrics" {
-				return []string{"internal"}
-			}
-			return []string{"query", "internal"}
 		case receiver == "mcpMux":
 			return []string{"mcp"}
 		case receiver == "internalMux":

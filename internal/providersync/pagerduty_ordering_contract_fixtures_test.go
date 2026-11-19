@@ -49,7 +49,7 @@ func pagerDutyContractSinkCases(t *testing.T, orgID string) []pagerDutyContractS
 	must(err)
 	mapping, err := pagerDutyServiceMappingFromReference(service,
 		pagerDutyServiceRepositoryReference{Provider: "github", FullName: "full-chaos/payments"},
-		pagerDutyMappingMetadata, at, "")
+		pagerDutyMappingMetadata, at)
 	must(err)
 	servicesSink := func(conn driver.Conn) pagerDutyContractEffects {
 		return PagerDutyServicesClickHouseEffects{

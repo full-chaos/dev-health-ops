@@ -42,6 +42,7 @@ internal/jobcontract	registry.go	internal/jobrescue
 internal/jobcontract	registry.go	internal/jobruntime
 internal/jobcontract	registry.go	internal/jobs/dimensionfold
 internal/jobcontract	registry.go	internal/jobs/metrics/daily
+internal/jobcontract	registry.go	internal/jobs/metrics/daily/domainrolecell
 internal/jobcontract	registry.go	internal/jobs/metrics/remaining
 internal/jobcontract	registry.go	internal/jobs/report
 internal/jobcontract	registry.go	internal/jobs/workgraph

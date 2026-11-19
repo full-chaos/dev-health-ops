@@ -3,6 +3,7 @@ package providersync
 import (
 	"context"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -169,7 +170,7 @@ func extractJiraDevStatusDependencies(
 		for _, pullRequest := range detail.PullRequests {
 			source, rejected := jiraDevStatusPullRequestSource(pullRequest.URL)
 			if rejected {
-				slog.Warn("providersync.jira.dev_status_gitlab_reference_rejected", "org_id", claim.OrgID, "issue", workItemID)
+				slog.Warn("providersync.jira.dev_status_gitlab_reference_rejected", "org_id", claim.OrgID, "issue", logging.ProviderText(workItemID))
 				continue
 			}
 			if source == "" || source == workItemID {

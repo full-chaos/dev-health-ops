@@ -9,6 +9,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/rowview"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
+	"github.com/full-chaos/dev-health-ops/internal/teamownership"
 )
 
 // recommendationsDetachedWriteTimeout bounds the post-cancellation write.
@@ -40,14 +41,19 @@ var discoverTeamIDsSQL = `
       AND ` + rowview.OrgPredicate("work_item_metrics_daily", "") + `
       AND ` + liverow.Predicate("work_item_metrics_daily", "")
 
-// DiscoverTeamIDs returns the teams with recent activity for an org.
+// DiscoverTeamIDs returns the teams to evaluate for an org: the teams with
+// recent work item rows, plus the active teams that own a repository at asOf
+// (the window end; teamownership.OwnersByRepo). A team in both sets is listed
+// once. Without the owner teams, a team that owns repositories but has no work
+// item rows is never evaluated, and its repository-based rules never fire.
 //
 // The org predicate is appended only for a real org, matching the reference:
 // "default" is the single-tenant sentinel and is not a value present in
 // org_id, so filtering on it would return no teams and silently evaluate
-// nothing at all.
+// nothing at all. The owner teams are read only for a real org for the same
+// reason.
 func (executor *RecommendationsExecutor) DiscoverTeamIDs(
-	ctx context.Context, orgID string,
+	ctx context.Context, orgID string, asOf time.Time,
 ) ([]string, error) {
 	if executor == nil || executor.conn == nil {
 		return nil, ErrRecommendationsUnavailable
@@ -66,18 +72,35 @@ func (executor *RecommendationsExecutor) DiscoverTeamIDs(
 	}
 	defer func() { _ = rows.Close() }()
 
+	seen := map[string]bool{}
 	var teamIDs []string
+	add := func(teamID string) {
+		if teamID != "" && !seen[teamID] {
+			seen[teamID] = true
+			teamIDs = append(teamIDs, teamID)
+		}
+	}
 	for rows.Next() {
 		var teamID string
 		if err := rows.Scan(&teamID); err != nil {
 			return nil, fmt.Errorf("scan recommendation team id: %w", err)
 		}
-		if teamID != "" {
-			teamIDs = append(teamIDs, teamID)
-		}
+		add(teamID)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate recommendation team ids: %w", err)
+	}
+
+	if orgID != "" && orgID != "default" {
+		owners, err := teamownership.OwnersByRepo(ctx, executor.conn, orgID, asOf)
+		if err != nil {
+			return nil, fmt.Errorf("discover recommendation repository owner teams: %w", err)
+		}
+		for _, ownerTeams := range owners {
+			for _, teamID := range ownerTeams {
+				add(teamID)
+			}
+		}
 	}
 
 	// A DELIBERATE, OBSERVABLE DIVERGENCE FROM THE ORACLE. Ruled, and listed as
@@ -160,7 +183,7 @@ func (executor *RecommendationsExecutor) ComputeOrg(
 	// defensive-looking normalisation.
 	teamIDs := []string{teamID}
 	if teamID == "" {
-		discovered, err := executor.DiscoverTeamIDs(ctx, orgID)
+		discovered, err := executor.DiscoverTeamIDs(ctx, orgID, recommendationsWindowEnd(now))
 		if err != nil {
 			return OrgOutcome{}, err
 		}

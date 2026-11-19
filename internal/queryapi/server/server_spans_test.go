@@ -340,9 +340,8 @@ func TestTheMCPGraphQLServerMarksErrorsOnTheServerSpanToo(t *testing.T) {
 }
 
 // TestTheRealPlaneAndListenersNameTheSpanByTheInnermostPattern drives the
-// chain the binary actually serves (Build, then Listeners with the operator
-// "extra" handler on /healthz and /readyz, the response-model marker, the
-// identity middleware) and checks the span carries the pattern of the
+// chain the binary actually serves (Build, then Listeners, the response-model
+// marker, the identity middleware) and checks the span carries the pattern of the
 // innermost mux that took the request, not the catch-all "/" of an outer one.
 // A layer that copied the request between the muxes would turn this red.
 func TestTheRealPlaneAndListenersNameTheSpanByTheInnermostPattern(t *testing.T) {
@@ -352,15 +351,13 @@ func TestTheRealPlaneAndListenersNameTheSpanByTheInnermostPattern(t *testing.T) 
 		t.Fatal(err)
 	}
 	defer plane.Close()
-	extra := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
-	public, internal := Listeners("127.0.0.1:0", "127.0.0.1:0", plane, extra, nil)
+	public, internal := Listeners("127.0.0.1:0", "127.0.0.1:0", plane, nil)
 	for _, listener := range []*Listener{public, internal} {
 		send(listener.server.Handler, http.MethodGet, "/api/v1/not-a-route", nil)
-		send(listener.server.Handler, http.MethodGet, "/healthz", nil)
 	}
 	spans := read()
 	if len(spans) != 2 {
-		t.Fatalf("got %d spans, want 2 (the catch-all request on each listener, none for /healthz): %v", len(spans), spans)
+		t.Fatalf("got %d spans, want 2 (the catch-all request on each listener): %v", len(spans), spans)
 	}
 	for _, span := range spans {
 		if span.GetName() != "GET /api/v1/" {

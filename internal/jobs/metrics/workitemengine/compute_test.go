@@ -43,7 +43,7 @@ func TestComputeIssueTypeMetricsDailyOpensABucketForEveryItem(t *testing.T) {
 		// Completed on the day, 26 hours after its start and 82 hours after its creation.
 		{WorkItemID: "1", Provider: "github", Type: "issue", Labels: []string{"bug"}, RepoID: &repo,
 			CreatedAt: day.AddDate(0, 0, -3), StartedAt: timePointer(day.Add(-16 * time.Hour)),
-			CompletedAt: timePointer(day.Add(10 * time.Hour))},
+			Status: "done", CompletedAt: timePointer(day.Add(10 * time.Hour))},
 		// Created on the day, open: the same key as item 1.
 		{WorkItemID: "2", Provider: "github", Type: "issue", Labels: []string{"bug"}, RepoID: &repo,
 			CreatedAt: day.Add(8 * time.Hour)},
@@ -52,7 +52,7 @@ func TestComputeIssueTypeMetricsDailyOpensABucketForEveryItem(t *testing.T) {
 			CreatedAt: end.Add(time.Hour)},
 		// Completed before the day, no repository, a team with spaces around it.
 		{WorkItemID: "4", Provider: "linear", Type: "task", RepoID: &nilRepo,
-			CreatedAt: day.AddDate(0, 0, -9), CompletedAt: timePointer(day.AddDate(0, 0, -2))},
+			CreatedAt: day.AddDate(0, 0, -9), Status: "done", CompletedAt: timePointer(day.AddDate(0, 0, -2))},
 	}
 	got := ComputeIssueTypeMetricsDaily(items, day, end, teams("", "", "", " team-a "), labelNormalizer{})
 	want := []IssueTypeMetricsDailyRow{
@@ -74,17 +74,17 @@ func TestComputeWorkItemCompletionDailyCountsTheDaysCompletions(t *testing.T) {
 	points := func(value float64) *float64 { return &value }
 	items := []Item{
 		// Completed on the day: 2.9 points count as 2 units.
-		{WorkItemID: "1", Provider: "github", Labels: []string{"quality"}, RepoID: &repo,
+		{WorkItemID: "1", Provider: "github", Labels: []string{"quality"}, RepoID: &repo, Status: "done",
 			CreatedAt: day.AddDate(0, 0, -3), StartedAt: timePointer(day.Add(-14 * time.Hour)),
 			CompletedAt: timePointer(day.Add(10 * time.Hour)), StoryPoints: points(2.9)},
 		// Completed on the day, zero points count as one unit; no team.
-		{WorkItemID: "2", Provider: "github", Labels: []string{"quality"}, RepoID: &repo,
+		{WorkItemID: "2", Provider: "github", Labels: []string{"quality"}, RepoID: &repo, Status: "done",
 			CreatedAt: day.AddDate(0, 0, -1), CompletedAt: timePointer(day.Add(12 * time.Hour)), StoryPoints: points(0)},
 		// Open on the day: not counted.
 		{WorkItemID: "3", Provider: "github", Labels: []string{"security"}, RepoID: &repo,
 			CreatedAt: day.Add(time.Hour)},
 		// Completed before the day and created after it: neither is active.
-		{WorkItemID: "4", Provider: "github", RepoID: &repo,
+		{WorkItemID: "4", Provider: "github", RepoID: &repo, Status: "done",
 			CreatedAt: day.AddDate(0, 0, -9), CompletedAt: timePointer(day.Add(-time.Second))},
 		{WorkItemID: "5", Provider: "github", RepoID: &repo, CreatedAt: end},
 	}
@@ -111,20 +111,20 @@ func TestComputeIssueTypeMetricsDailyLeadTimeIsTheUpperMedianOfCompletedMinusCre
 			completedAt := func(hour int) *time.Time { return timePointer(day.Add(time.Duration(hour) * time.Hour)) }
 			items := []Item{
 				// 10h, 34h and 106h: the upper median of three is 34h.
-				{WorkItemID: "1", Provider: provider, Type: "bug", CreatedAt: day, CompletedAt: completedAt(10)},
-				{WorkItemID: "2", Provider: provider, Type: "bug", CreatedAt: day.Add(-24 * time.Hour), CompletedAt: completedAt(10)},
-				{WorkItemID: "3", Provider: provider, Type: "bug", CreatedAt: day.Add(-96 * time.Hour), CompletedAt: completedAt(10)},
+				{WorkItemID: "1", Provider: provider, Type: "bug", CreatedAt: day, Status: "done", CompletedAt: completedAt(10)},
+				{WorkItemID: "2", Provider: provider, Type: "bug", CreatedAt: day.Add(-24 * time.Hour), Status: "done", CompletedAt: completedAt(10)},
+				{WorkItemID: "3", Provider: provider, Type: "bug", CreatedAt: day.Add(-96 * time.Hour), Status: "done", CompletedAt: completedAt(10)},
 				// Completed on the day but created later: no lead time, left out of the p50 (not taken as 0).
-				{WorkItemID: "4", Provider: provider, Type: "bug", CreatedAt: day.Add(20 * time.Hour), CompletedAt: completedAt(10)},
+				{WorkItemID: "4", Provider: provider, Type: "bug", CreatedAt: day.Add(20 * time.Hour), Status: "done", CompletedAt: completedAt(10)},
 				// No creation time at all, and the Unix epoch the store holds for it: left out as well.
-				{WorkItemID: "5b", Provider: provider, Type: "bug", CreatedAt: time.Unix(0, 0).UTC(), CompletedAt: completedAt(10)},
-				{WorkItemID: "5", Provider: provider, Type: "bug", CompletedAt: completedAt(10)},
+				{WorkItemID: "5b", Provider: provider, Type: "bug", CreatedAt: time.Unix(0, 0).UTC(), Status: "done", CompletedAt: completedAt(10)},
+				{WorkItemID: "5", Provider: provider, Type: "bug", Status: "done", CompletedAt: completedAt(10)},
 				// Completed on another day: its lead time belongs to that day.
 				{WorkItemID: "6", Provider: provider, Type: "bug", CreatedAt: day.Add(-500 * time.Hour),
-					CompletedAt: timePointer(day.Add(-time.Hour))},
+					Status: "done", CompletedAt: timePointer(day.Add(-time.Hour))},
 				// Created and completed at the same instant: no lead time, so a stored 0 always means none.
-				{WorkItemID: "6b", Provider: provider, Type: "bug", CreatedAt: day.Add(3 * time.Hour), CompletedAt: completedAt(3)},
-				{WorkItemID: "6c", Provider: provider, Type: "bug", CreatedAt: day.Add(4 * time.Hour), CompletedAt: completedAt(4)},
+				{WorkItemID: "6b", Provider: provider, Type: "bug", CreatedAt: day.Add(3 * time.Hour), Status: "done", CompletedAt: completedAt(3)},
+				{WorkItemID: "6c", Provider: provider, Type: "bug", CreatedAt: day.Add(4 * time.Hour), Status: "done", CompletedAt: completedAt(4)},
 				// Open: no lead time.
 				{WorkItemID: "7", Provider: provider, Type: "bug", CreatedAt: day.Add(-300 * time.Hour)},
 			}
@@ -143,7 +143,7 @@ func TestComputeIssueTypeMetricsDailyLeadTimeIsNullWhenNothingCompletedHasOne(t 
 	day := time.Date(2026, 8, 3, 0, 0, 0, 0, time.UTC)
 	items := []Item{
 		{WorkItemID: "1", Provider: "github", Type: "bug", CreatedAt: day.Add(-time.Hour)},
-		{WorkItemID: "2", Provider: "github", Type: "bug", CreatedAt: day.Add(5 * time.Hour), CompletedAt: timePointer(day.Add(time.Hour))},
+		{WorkItemID: "2", Provider: "github", Type: "bug", CreatedAt: day.Add(5 * time.Hour), Status: "done", CompletedAt: timePointer(day.Add(time.Hour))},
 	}
 	rows := ComputeIssueTypeMetricsDaily(items, day, day.AddDate(0, 0, 1), teams("", ""), labelNormalizer{})
 	if len(rows) != 1 || rows[0].CompletedCount != 1 || rows[0].LeadP50Hours != nil {
@@ -154,16 +154,44 @@ func TestComputeIssueTypeMetricsDailyLeadTimeIsNullWhenNothingCompletedHasOne(t 
 func TestLeadTimeInputsCountsCompletedAndExcludedItems(t *testing.T) {
 	day := time.Date(2026, 8, 3, 0, 0, 0, 0, time.UTC)
 	items := []Item{
-		{WorkItemID: "1", CreatedAt: day.Add(-time.Hour), CompletedAt: timePointer(day.Add(time.Hour))},
-		{WorkItemID: "2", CompletedAt: timePointer(day.Add(time.Hour))},
-		{WorkItemID: "3", CreatedAt: day.Add(5 * time.Hour), CompletedAt: timePointer(day.Add(time.Hour))},
+		{WorkItemID: "1", CreatedAt: day.Add(-time.Hour), Status: "done", CompletedAt: timePointer(day.Add(time.Hour))},
+		{WorkItemID: "2", Status: "done", CompletedAt: timePointer(day.Add(time.Hour))},
+		{WorkItemID: "3", CreatedAt: day.Add(5 * time.Hour), Status: "done", CompletedAt: timePointer(day.Add(time.Hour))},
 		{WorkItemID: "4", CreatedAt: day.Add(-time.Hour)},
-		{WorkItemID: "5", CreatedAt: day.Add(-48 * time.Hour), CompletedAt: timePointer(day.Add(-time.Hour))},
-		{WorkItemID: "6", CreatedAt: time.Unix(0, 0).UTC(), CompletedAt: timePointer(day.Add(time.Hour))},
-		{WorkItemID: "7", CreatedAt: day.Add(time.Hour), CompletedAt: timePointer(day.Add(time.Hour))},
+		{WorkItemID: "5", CreatedAt: day.Add(-48 * time.Hour), Status: "done", CompletedAt: timePointer(day.Add(-time.Hour))},
+		{WorkItemID: "6", CreatedAt: time.Unix(0, 0).UTC(), Status: "done", CompletedAt: timePointer(day.Add(time.Hour))},
+		{WorkItemID: "7", CreatedAt: day.Add(time.Hour), Status: "done", CompletedAt: timePointer(day.Add(time.Hour))},
 	}
 	if completed, excluded := LeadTimeInputs(items, day, day.AddDate(0, 0, 1)); completed != 5 || excluded != 4 {
 		t.Fatalf("completed=%d excluded=%d, want 5 and 4", completed, excluded)
+	}
+}
+
+// A provider can reopen an item and keep its completed_at: that open item is active on the day but completes on no
+// day, so it adds no completion, cycle time or lead time. A canceled item with the same dates counts.
+func TestComputeIssueTypeMetricsDailyCountsACompletionOnlyWithATerminalStatus(t *testing.T) {
+	day := time.Date(2026, 8, 3, 0, 0, 0, 0, time.UTC)
+	end := day.AddDate(0, 0, 1)
+	for _, tc := range []struct {
+		status string
+		want   IssueTypeMetricsDailyRow
+	}{
+		{"in_progress", IssueTypeMetricsDailyRow{Provider: "github", TeamID: "unassigned", IssueTypeNorm: "github:bug",
+			ActiveCount: 1}},
+		{"canceled", IssueTypeMetricsDailyRow{Provider: "github", TeamID: "unassigned", IssueTypeNorm: "github:bug",
+			CompletedCount: 1, ActiveCount: 1, CycleP50Hours: 34, CycleP90Hours: 34, LeadP50Hours: floatPointer(58)}},
+	} {
+		items := []Item{{WorkItemID: "1", Provider: "github", Type: "bug", Status: tc.status,
+			CreatedAt: day.AddDate(0, 0, -2), StartedAt: timePointer(day.AddDate(0, 0, -1)),
+			CompletedAt: timePointer(day.Add(10 * time.Hour))}}
+		rows := ComputeIssueTypeMetricsDaily(items, day, end, teams(""), labelNormalizer{})
+		if len(rows) != 1 || !reflect.DeepEqual(rows[0], tc.want) {
+			t.Errorf("status %s: rows %+v, want [%+v]", tc.status, rows, tc.want)
+		}
+		wantCompleted := tc.want.CompletedCount
+		if completed, _ := LeadTimeInputs(items, day, end); completed != wantCompleted {
+			t.Errorf("status %s: LeadTimeInputs completed=%d, want %d", tc.status, completed, wantCompleted)
+		}
 	}
 }
 

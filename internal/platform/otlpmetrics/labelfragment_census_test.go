@@ -179,11 +179,6 @@ func buildFragmentCensus(t *testing.T, root string) fragmentCensus {
 		if !strings.Contains(src, "# TYPE") {
 			continue
 		}
-		if _, skip := operatorPullOnly[rel]; skip {
-			c.typeFiles++
-			c.typeLines += strings.Count(src, "# TYPE")
-			continue
-		}
 		c.typeFiles++
 		dir := filepath.ToSlash(filepath.Dir(rel))
 		consts := packageConsts(byDir[dir])
@@ -330,12 +325,6 @@ var pinnedFragments = []struct {
 var poolstatCallers = []struct{ file, metric string }{
 	{"internal/schedulerservice/dependencies.go", "scheduler_database_pool_saturation_ratio"},
 	{"internal/reconcilerservice/dependencies.go", "reconciler_database_pool_saturation_ratio"},
-}
-
-// operatorPullOnly are the files that write a family only on the operator /metrics pull path of the query API, never through
-// a health.Registry fragment: the Gatherer does not see them.
-var operatorPullOnly = map[string]string{
-	"internal/queryapi/server/operator_compat.go": "target_info of the old query listener, written into the /metrics answer",
 }
 
 // splitCallArgs returns the top-level arguments of the call whose "(" is at open.
@@ -759,9 +748,9 @@ func TestFragmentLabelsTableEqualsTheCensus(t *testing.T) {
 			t.Errorf("unlabeledWriters lists %s, but the census now matches or covers it (or the family is gone): drop the entry", name)
 		}
 	}
-	// CHAOS-11813 retired the legacy ingest fragment (its TYPE line; 122 before).
-	if c.typeFiles < 39 || c.typeLines < 121 || len(want) < 280 {
-		t.Errorf("the census read %d files, %d TYPE lines, %d families: fewer than the 39 files and 121 lines of the base", c.typeFiles, c.typeLines, len(want))
+	// CHAOS-11813 retired the legacy ingest fragment (its TYPE line; 122 before); CHAOS-13492 removed the query compat /metrics writer (one file; 39 before).
+	if c.typeFiles < 38 || c.typeLines < 121 || len(want) < 280 {
+		t.Errorf("the census read %d files, %d TYPE lines, %d families: fewer than the 38 files and 121 lines of the base", c.typeFiles, c.typeLines, len(want))
 	}
 	t.Logf("%d files with # TYPE, %d TYPE lines, %d families", c.typeFiles, c.typeLines, len(want))
 }

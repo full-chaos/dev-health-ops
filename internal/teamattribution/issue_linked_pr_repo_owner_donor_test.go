@@ -15,6 +15,7 @@ func TestAnIssuesLinkedPullRequestRepoOwnerIsNotADonor(t *testing.T) {
 				t.Helper()
 				derived := NewGitHubWorkItemDerivationContext(facts)
 				derived.LinkedPullRequests = map[string][]GithubWorkItemDerivationLinkedPullRequest{issueID: {linkedPR(linkedRepoA, 1, "native")}}
+				derived.LinkTiers = map[LinkPair]string{{PullRequest: kind.prID, Issue: issueID}: "native"}
 				subjects := map[string]GithubWorkItemDerivationSubject{
 					kind.prID: {WorkItemID: kind.prID, Provider: kind.provider, Type: kind.prType, RepoID: &prRepo, OrgID: "org"},
 					issueID:   issue,

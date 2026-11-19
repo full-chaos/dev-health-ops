@@ -89,3 +89,28 @@ func TestRowsByDayCountsAnItemOnItsCurrentCopy(t *testing.T) {
 		})
 	}
 }
+
+// The request-time read follows the daily rule: a canceled item with started_at and no completed_at or closed_at is
+// not in progress at the end of any day; an open item with no end is.
+func TestRowsByDayLeavesAFinishedItemWithNoEndOutOfWIP(t *testing.T) {
+	from, to := time.Date(2026, 8, 14, 0, 0, 0, 0, time.UTC), time.Date(2026, 8, 17, 0, 0, 0, 0, time.UTC)
+	synced := time.Date(2026, 8, 25, 22, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		status string
+		want   int
+	}{
+		{"canceled", 0},
+		{"in_progress", 1},
+	} {
+		rows := RowsByDay(from, to, []Version{testCopy(testRepo1, tc.status, synced, nil)}, nil)
+		for day := from; day.Before(to); day = day.AddDate(0, 0, 1) {
+			wip := 0
+			for _, row := range rows[day] {
+				wip += row.WIPCountEndOfDay
+			}
+			if wip != tc.want {
+				t.Errorf("%s, no completed_at, no closed_at, day %s: wip %d; want %d", tc.status, day.Format("2006-01-02"), wip, tc.want)
+			}
+		}
+	}
+}

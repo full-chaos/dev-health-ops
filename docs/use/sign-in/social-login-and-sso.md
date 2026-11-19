@@ -19,7 +19,7 @@ Dev Health has three ways to sign in. They differ in who holds the credential an
 | --- | --- | --- |
 | Email and password | Dev Health | Always available for accounts created with a password |
 | Social sign-in | GitHub, GitLab, or Google | The deployment: a provider button appears only when the deployment has configured it |
-| Single sign-on (SSO) | Your organization's identity provider | The deployment turns it on, and your administrator gives you a provider ID |
+| Single sign-on (SSO) | Your organization's identity provider | The deployment turns it on, and your administrator shares a sign-in link |
 
 ## Social sign-in
 
@@ -36,15 +36,14 @@ Which providers appear is decided by whoever runs your deployment, not per organ
 
 Single sign-on uses your organization's identity provider. It supports OpenID Connect and SAML.
 
-The sign-in page shows the single sign-on form only when the deployment has turned SSO on. There is no list of providers. Your administrator gives you a provider ID.
+The sign-in page has no single sign-on form and no list of providers. Single sign-on starts from a link that your organization administrator shares.
 
-1. On the sign-in page, choose **OpenID Connect** or **SAML** as the protocol.
-2. Enter the provider ID your administrator shared.
-3. Select **Continue with single sign-on**, then sign in at your identity provider.
+1. Open the link your administrator shared.
+2. Sign in at your identity provider.
 
-Expected result: you return to Dev Health signed in. If you came from a link, you return to that page.
+Expected result: you return to Dev Health signed in. If the link led to a specific page, you return to that page.
 
-If the provider ID is not in the correct form, the page asks for the provider ID your administrator shared. If SSO is off for the deployment, the form is absent.
+If SSO is off for the deployment, or the link is not valid, you land on the sign-in page with a message.
 
 | Message after you return | What it means |
 | --- | --- |

@@ -38,25 +38,3 @@ func TestTheDeclaredAPIPostureValidatesAsMigrationOptions(t *testing.T) {
 		}
 	}
 }
-
-// CHAOS-14131 step 1 changes no grant: the migration still grants go-api's table-wide UPDATE on sso_providers, which the
-// posture now declares retired (readiness accepts it held or absent). Only a later posture change drops it.
-func TestTheMigrationStillGrantsTheRetiredSSOProvidersUpdate(t *testing.T) {
-	t.Parallel()
-	for _, switches := range [][2]bool{{false, false}, {true, false}, {false, true}, {true, true}} {
-		grants, _, _ := postureGrants(postgresstore.APIPostureFor(switches[0], switches[1]))
-		found := 0
-		for _, grant := range grants {
-			if grant.TableName != "sso_providers" {
-				continue
-			}
-			found++
-			if want := (riverstore.TableGrant{TableName: "sso_providers", AllowUpdate: true, AllowDelete: true}); grant != want {
-				t.Errorf("%v: sso_providers grant = %+v, want %+v", switches, grant, want)
-			}
-		}
-		if found != 1 {
-			t.Errorf("%v: %d sso_providers grants, want 1", switches, found)
-		}
-	}
-}

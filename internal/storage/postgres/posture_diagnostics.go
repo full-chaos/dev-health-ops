@@ -83,7 +83,9 @@ SELECT
 	relation IS NULL AS table_missing,
 	relation IS NOT NULL AND NOT has_table_privilege($1, relation, 'SELECT') AS missing_select,
 	relation IS NOT NULL AND allow_insert AND NOT has_table_privilege($1, relation, 'INSERT') AS missing_insert,
-	relation IS NOT NULL AND allow_update AND NOT has_table_privilege($1, relation, 'UPDATE') AS missing_update,
+	-- RolePosture.RetiredTableUpdates ($9): a retired table-wide UPDATE may be absent.
+	relation IS NOT NULL AND allow_update AND NOT table_name = ANY(COALESCE($9::text[], '{}'::text[]))
+		AND NOT has_table_privilege($1, relation, 'UPDATE') AS missing_update,
 	relation IS NOT NULL AND allow_delete AND NOT has_table_privilege($1, relation, 'DELETE') AS missing_delete,
 	-- CHAOS-5436: rolePostureQuery's required_tables predicate refuses on
 	-- EITHER direction of mismatch (a required privilege absent, OR a
@@ -109,13 +111,14 @@ SELECT
 				)
 		)
 	) AS excess_insert,
-	-- RolePosture.RetiredTableUpdates ($9): a retired table-wide UPDATE held is no excess; a column UPDATE without it is.
-	relation IS NOT NULL AND NOT allow_update AND (
-		(has_table_privilege($1, relation, 'UPDATE') AND NOT table_name = ANY(COALESCE($9::text[], '{}'::text[])))
-		OR (has_any_column_privilege($1, relation, 'UPDATE') AND NOT has_table_privilege($1, relation, 'UPDATE')
-			AND table_name = ANY(COALESCE($9::text[], '{}'::text[])))
-		OR (has_any_column_privilege($1, relation, 'UPDATE') AND NOT table_name = ANY(COALESCE($6::text[], '{}'::text[]))
-			AND NOT table_name = ANY(COALESCE($9::text[], '{}'::text[])))
+	relation IS NOT NULL AND (
+		(NOT allow_update AND (
+			has_table_privilege($1, relation, 'UPDATE')
+			OR (has_any_column_privilege($1, relation, 'UPDATE') AND NOT table_name = ANY(COALESCE($6::text[], '{}'::text[])))
+		))
+		-- RolePosture.RetiredTableUpdates ($9): a retired UPDATE held on columns alone is excess.
+		OR (table_name = ANY(COALESCE($9::text[], '{}'::text[]))
+			AND has_any_column_privilege($1, relation, 'UPDATE') AND NOT has_table_privilege($1, relation, 'UPDATE'))
 	) AS excess_update,
 	relation IS NOT NULL AND NOT allow_delete AND has_table_privilege($1, relation, 'DELETE') AS excess_delete,
 	relation IS NOT NULL AND has_table_privilege($1, relation, 'TRUNCATE') AS excess_truncate,
@@ -134,8 +137,7 @@ SELECT
 	-- level only, as rolePostureQuery does.
 	relation IS NOT NULL AND has_any_column_privilege($1, relation, 'SELECT WITH GRANT OPTION') AS excess_select_grant,
 	relation IS NOT NULL AND allow_insert AND has_any_column_privilege($1, relation, 'INSERT WITH GRANT OPTION') AS excess_insert_grant,
-	relation IS NOT NULL AND (allow_update OR table_name = ANY(COALESCE($9::text[], '{}'::text[])))
-		AND has_any_column_privilege($1, relation, 'UPDATE WITH GRANT OPTION') AS excess_update_grant,
+	relation IS NOT NULL AND allow_update AND has_any_column_privilege($1, relation, 'UPDATE WITH GRANT OPTION') AS excess_update_grant,
 	relation IS NOT NULL AND allow_delete AND has_table_privilege($1, relation, 'DELETE WITH GRANT OPTION') AS excess_delete_grant,
 	-- RolePosture.RetiredTables: a retired table on which nothing is held passes.
 	relation IS NOT NULL

@@ -419,10 +419,11 @@ SELECT
 			)
 			-- RolePosture.RetiredTableUpdates: a retired table-wide UPDATE may be held (exactly, no option) or absent.
 			OR (NOT required.update_retired AND ('UPDATE' = ANY (held.table_level)) <> required.allow_update)
+			-- A retired UPDATE may not be held on columns alone.
+			OR (required.update_retired AND 'UPDATE' = ANY (held.any_column) AND NOT 'UPDATE' = ANY (held.table_level))
 			OR (
 				NOT required.allow_update
 				AND 'UPDATE' = ANY (held.any_column)
-				AND NOT (required.update_retired AND 'UPDATE' = ANY (held.table_level))
 				-- CHAOS-6747: a table named in BOTH manifests is mixed: its
 				-- table-wide flags govern the table-wide ACL, and a column
 				-- UPDATE the posture declares is held on top of them. The
@@ -630,11 +631,12 @@ type RolePosture struct {
 	// one, or any undeclared column privilege, is refused as before.
 	RetiredColumns []ColumnPrivilege
 	// RetiredTableUpdates names RequiredTables entries whose table-wide UPDATE no
-	// code of the role uses any more, while the table stays (AllowUpdate is
-	// false). A running migration may still grant it; readiness accepts it held
-	// exactly (no grant option) or not held. A column UPDATE without the
-	// table-wide one is refused, as is any other privilege the entry does not
-	// declare.
+	// code of the role uses any more, while the table stays. The entry still
+	// declares AllowUpdate, so the migration (which reads only the
+	// RequiredTables flags) grants it as before; readiness and
+	// DiagnoseRolePosture accept it held exactly (no grant option) or not held.
+	// A column UPDATE without the table-wide one is refused, as is any other
+	// privilege the entry does not declare.
 	RetiredTableUpdates []string
 }
 
@@ -1582,8 +1584,8 @@ func retiredTableFlags(posture RolePosture) ([]bool, error) {
 }
 
 // retiredTableUpdateFlags is $14: one flag per RequiredTables entry, true for a table RetiredTableUpdates names. A named
-// table must be exactly one RequiredTables entry that does not allow UPDATE, is not a retired table, and is not
-// column-scoped: the rule judges the table-wide UPDATE only.
+// table must be exactly one RequiredTables entry that declares UPDATE (the migration grants it), is not a retired table,
+// and is not column-scoped: the rule judges the table-wide UPDATE only.
 func retiredTableUpdateFlags(posture RolePosture) ([]bool, error) {
 	flags := make([]bool, len(posture.RequiredTables))
 	seen := make(map[string]bool, len(posture.RetiredTableUpdates))
@@ -1599,8 +1601,8 @@ func retiredTableUpdateFlags(posture RolePosture) ([]bool, error) {
 			}
 			matches++
 			flags[i] = true
-			if table.AllowUpdate {
-				return nil, fmt.Errorf("postgres: retired table UPDATE %q is also allowed", name)
+			if !table.AllowUpdate {
+				return nil, fmt.Errorf("postgres: retired table UPDATE %q does not declare UPDATE", name)
 			}
 		}
 		if matches != 1 {

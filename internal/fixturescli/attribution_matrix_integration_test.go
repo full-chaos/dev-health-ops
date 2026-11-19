@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -17,11 +18,13 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/teamsidentity"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/remaining"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/linktier"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	chstorage "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
+	"github.com/full-chaos/dev-health-ops/internal/teamid"
 	"github.com/full-chaos/dev-health-ops/internal/teamownership"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 )
@@ -151,8 +154,9 @@ type matrixFacts struct {
 }
 
 type matrixTeam struct {
-	Provider string
-	Active   bool
+	Provider    string
+	Active      bool
+	ProjectKeys []string
 }
 
 type matrixRepo struct {
@@ -191,13 +195,14 @@ func loadMatrixFacts(ctx context.Context, t *testing.T, conn driver.Conn, org st
 		authors: map[string]string{},
 	}
 	args := []any{org}
-	matrixQuery(ctx, t, conn, `SELECT id, provider, is_active FROM teams FINAL WHERE org_id = ?`, args, func(rows driver.Rows) error {
+	matrixQuery(ctx, t, conn, `SELECT id, provider, is_active, project_keys FROM teams FINAL WHERE org_id = ?`, args, func(rows driver.Rows) error {
 		var id, provider string
 		var active uint8
-		if err := rows.Scan(&id, &provider, &active); err != nil {
+		var keys []string
+		if err := rows.Scan(&id, &provider, &active, &keys); err != nil {
 			return err
 		}
-		facts.teams[id] = matrixTeam{Provider: provider, Active: active == 1}
+		facts.teams[id] = matrixTeam{Provider: provider, Active: active == 1, ProjectKeys: keys}
 		return nil
 	})
 	matrixQuery(ctx, t, conn, `SELECT team_id, provider, ifNull(toString(repo_id), ''), repo_full_name, toString(source), valid_from, valid_to,
@@ -367,6 +372,28 @@ func (facts matrixFacts) repoOwnerRows(repoID string) []ownershipRow {
 	return out
 }
 
+// projectKeyHolders are the active teams whose project_keys hold a project id, of the item's provider, else the teams
+// with no provider (an admin team): the issue_project rule of the cascade (keyHoldersOfProvider). Team keys are the
+// team's current state, valid on every day.
+func (facts matrixFacts) projectKeyHolders(projectID, provider string) map[string]bool {
+	own, providerless := map[string]bool{}, map[string]bool{}
+	for id, team := range facts.teams {
+		if !team.Active || projectID == "" || !slices.Contains(team.ProjectKeys, projectID) {
+			continue
+		}
+		switch team.Provider {
+		case provider:
+			own[id] = true
+		case "":
+			providerless[id] = true
+		}
+	}
+	if len(own) > 0 {
+		return own
+	}
+	return providerless
+}
+
 // linkedRepoOwnersAt is the owner set, at an instant, of the repositories of an issue's linked pull requests of
 // its best tier (native > explicit_text > heuristic): each repository's owners by its own rows.
 func (facts matrixFacts) linkedRepoOwnersAt(issueID string, at time.Time) map[string]bool {
@@ -435,6 +462,9 @@ func (facts matrixFacts) donorTeamsOnDay(donor string, day time.Time) map[string
 		return map[string]bool{own.TeamID: true}
 	}
 	item := facts.items[donor]
+	if own.Source == "issue_project" && len(facts.projectOwnerRows(item.ProjectID)) == 0 {
+		return facts.projectKeyHolders(item.ProjectID, item.Provider)
+	}
 	var rows []ownershipRow
 	if own.Source == "repo_ownership" {
 		rows = facts.repoOwnerRows(item.RepoID)
@@ -991,6 +1021,14 @@ var matrixChecks = map[string]matrixCheck{
 				continue
 			case "issue_project", "project_ownership":
 				rows = f.projectOwnerRows(item.ProjectID)
+				// A project no ownership row names: its team is a holder of the project id as a team key.
+				if len(rows) == 0 && row.Source == "issue_project" {
+					r.Subjects++
+					if holders := f.projectKeyHolders(item.ProjectID, item.Provider); !holders[row.TeamID] {
+						r.Violations = append(r.Violations, fmt.Sprintf("%s -> %s by issue_project; holders of key %q %v", id, row.TeamID, item.ProjectID, sortedTeamSet(holders)))
+					}
+					continue
+				}
 			case "repo_ownership":
 				// An issue takes no repo_ownership from its own repository, only from the repositories of its
 				// best-tier linked pull requests.
@@ -1325,7 +1363,7 @@ func producedMatrixState(ctx context.Context, t *testing.T) (driver.Conn, map[st
 	readers := map[string]ownerReaders{}
 	for provider, org := range orgs {
 		if provider == "github" {
-			seedGithubIssueProjects(ctx, t, conn, org, now)
+			writeGithubAdminProjectTeam(ctx, t, conn, org)
 		}
 		tie := seedFullTie(ctx, t, conn, provider, org, now)
 		var first time.Time
@@ -1701,35 +1739,32 @@ func rediscoverKnownDefects(ctx context.Context, t *testing.T, conn driver.Conn,
 	})
 }
 
-// pull_request_inherits_only_from_a_linked_issue on github is a MECHANISM cell with seeded issue-project ownership; no GitHub producer
-// writes team_project_ownership today, so on real GitHub data a github issue has no team under the issue rule and a github PR inherits
-// no team from it.
-// seedGithubIssueProjects gives the github world's issues a project owned by a team. A GitHub issue's project is its
-// repository's full name; the world holds no project ownership row (no GitHub producer writes one), and an issue takes
-// no team from its own repository, so without a project owner no github issue has a team and no pull request has an
-// issue to inherit one from. Source rows only, like seedFullTie: the production verbs derive the attribution.
-func seedGithubIssueProjects(ctx context.Context, t *testing.T, conn driver.Conn, org string, now time.Time) {
+// githubAdminProject is the project id an admin team of the github world holds as a project key: a GitHub
+// issue's project id is its repository's full name.
+const githubAdminProject = "chaos-fixtures/payments-api"
+
+// writeGithubAdminProjectTeam writes, through the admin team writer (the web admin's create-team path: the team id
+// keyed by providersync.KeyTeamIDsForWrite, then teamsidentity.Store.CreateOrUpdateTeam), a custom team whose
+// project_keys holds a project id of the github world. No GitHub producer writes project ownership; an admin team's
+// key is the one source a GitHub issue takes a project team from (issue_project), and so the one donor a linked
+// pull request's linked_issue row can copy on GitHub.
+func writeGithubAdminProjectTeam(ctx context.Context, t *testing.T, conn driver.Conn, org string) {
 	t.Helper()
-	ownedFrom := now.UTC().Truncate(24*time.Hour).AddDate(0, 0, -400)
-	// payments-api is held by two teams (a main owner and a co-owner): every owner of the project takes its issues.
-	for _, project := range []struct {
-		id, team string
-		primary  int
-	}{
-		{"chaos-fixtures/payments-api", "gh:payments", 1},
-		{"chaos-fixtures/payments-api", "gh:platform", 2},
-		{"chaos-fixtures/platform-core", "gh:platform", 1},
-	} {
-		var items uint64
-		matrixQuery(ctx, t, conn, `SELECT count() FROM work_items FINAL WHERE org_id = ? AND provider = 'github' AND project_id = ?`, []any{org, project.id}, func(rows driver.Rows) error {
-			return rows.Scan(&items)
-		})
-		if items == 0 {
-			t.Fatalf("the github world holds no work item of project %s: a world that changed under the project owner", project.id)
-		}
-		if err := conn.Exec(ctx, `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, is_primary, specificity, priority, valid_from, updated_at)
-VALUES (?, 'github', ?, ?, ?, 'native', ?, 110, 10, ?, ?)`, org, project.team, project.id, project.id, project.primary, ownedFrom, ownedFrom); err != nil {
-			t.Fatalf("github issue project ownership %s: %v", project.id, err)
-		}
+	var items uint64
+	matrixQuery(ctx, t, conn, `SELECT count() FROM work_items FINAL WHERE org_id = ? AND provider = 'github' AND project_id = ?`, []any{org, githubAdminProject}, func(rows driver.Rows) error {
+		return rows.Scan(&items)
+	})
+	if items == 0 {
+		t.Fatalf("the github world holds no work item of project %s: a world that changed under the admin team", githubAdminProject)
+	}
+	keyed, err := providersync.KeyTeamIDsForWrite(ctx, conn, org, "admin_team", providersync.AdminTeamIDRefs("issue-triage"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	projectKeys, repoPatterns := []string{githubAdminProject}, []string{}
+	if _, err := (teamsidentity.Store{Conn: conn}).CreateOrUpdateTeam(ctx, org, teamsidentity.TeamWrite{
+		Origin: teamid.Custom, TeamID: keyed[0], Name: "Issue triage", ProjectKeys: &projectKeys, RepoPatterns: &repoPatterns,
+	}); err != nil {
+		t.Fatalf("admin team with project key %s: %v", githubAdminProject, err)
 	}
 }

@@ -355,8 +355,10 @@ flowchart TD
 > **GitHub has no project-owner producer.** No GitHub producer writes `team_project_ownership` (section 0.4b).
 > A GitHub issue's project owner comes only from an admin team whose `project_keys` holds the issue's project id
 > (its repository's full name, or a Projects v2 board id `ghprojv2:{login}#{n}`): that is an `issue_project`
-> candidate, and a donor of a linked pull request's `linked_issue` row. Without one, a GitHub issue takes the
-> repository owner of its linked pull requests (above) or ends `unassigned`, and that repository owner is not a donor.
+> candidate, and a donor of a linked pull request's `linked_issue` row. A key that is a repository's name also names
+> that repository's pull requests (a GitHub pull request's project id is its repository's name too), so the admin team
+> takes them by `issue_project` above their repository owner. Without such a key, a GitHub issue takes the repository
+> owner of its linked pull requests (above) or ends `unassigned`, and that repository owner is not a donor.
 >
 > **The membership ownership gate applies to a pull or merge request and to other repo-bearing items, and
 > does not apply to an issue**: an issue has no repository field of its own and the gate reads
@@ -793,7 +795,11 @@ first owners backward. No cell is known red: the catalog writers start a link at
 next catalog run that moves each link to its evidence; GitLab ownership names the catalog project.
 The inferred repository owner starts at its earliest linked evidence: its cell is pass. The GitHub cell of a pull request's `linked_issue` row
 is pass: owners tied at the top rank with no main row (two `provider_access` grants) are all the
-donor's team on that day (`tiedOwnersAt`, §0.4d).
+donor's team on that day (`tiedOwnersAt`, §0.4d). The GitHub world holds no project ownership (no GitHub producer writes
+it); its donor is an admin team, written through the admin team writer (`KeyTeamIDsForWrite`, then
+`teamsidentity.Store.CreateOrUpdateTeam`), whose `project_keys` holds one repository's name: that repository's issues take
+the admin team by `issue_project`, and their linked pull requests copy it as a `linked_issue` row. A donor's team by
+`issue_project` with no ownership row of its project is a holder of the key that day (`projectKeyHolders`).
 A pull request's `linked_issue` row must name the team an issue it is actually linked to holds on its own on
 the pull request's day (a relation of record, or a link of record; an `extkey:` relation counts only through
 the one existing item of that key; the backstop follows the issue's later row changes). The acceptance gate (`TestCrossProviderAttributionMatrix/rediscovers_known_defects`) plants the

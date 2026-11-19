@@ -39,7 +39,7 @@ type saveLockTx struct {
 
 func (x *saveLockTx) Exec(_ context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
 	switch sql {
-	case llmSettingsSaveLockTimeoutSQL, llmSettingsSaveLockSQL, llmSettingsSaveLockTimeoutResetSQL:
+	case llmSettingsSaveLockTimeoutSQL, llmSettingsSaveLockSQL, llmSettingsSaveLockTimeoutRestoreSQL:
 	default:
 		panic(reachedSaveWrite{})
 	}
@@ -50,7 +50,21 @@ func (x *saveLockTx) Exec(_ context.Context, sql string, args ...any) (pgconn.Co
 	return pgconn.NewCommandTag("SELECT 1"), nil
 }
 
-func (x *saveLockTx) QueryRow(context.Context, string, ...any) pgx.Row { panic(reachedSaveWrite{}) }
+func (x *saveLockTx) QueryRow(_ context.Context, sql string, args ...any) pgx.Row {
+	if sql != llmSettingsSaveLockTimeoutReadSQL {
+		panic(reachedSaveWrite{})
+	}
+	x.statements, x.args = append(x.statements, sql), append(x.args, args)
+	return lockTimeoutRow("7s")
+}
+
+// lockTimeoutRow is the session's lock_timeout as current_setting reads it.
+type lockTimeoutRow string
+
+func (r lockTimeoutRow) Scan(dest ...any) error {
+	*dest[0].(*string) = string(r)
+	return nil
+}
 
 func (x *saveLockTx) Query(context.Context, string, ...any) (pgx.Rows, error) {
 	panic(reachedSaveWrite{})
@@ -81,9 +95,10 @@ func saveLockTimeoutCounts(t *testing.T) map[string]int64 {
 }
 
 // Every save transaction, default and purpose, starts with the bounded save
-// lock of the org and nothing else before it.
+// lock of the org and nothing else before it, and gives the session's own
+// lock_timeout back right after it.
 func TestLLMSettingsSaveTakesTheOrgSaveLockFirst(t *testing.T) {
-	want := []string{llmSettingsSaveLockTimeoutSQL, llmSettingsSaveLockSQL, llmSettingsSaveLockTimeoutResetSQL}
+	want := []string{llmSettingsSaveLockTimeoutReadSQL, llmSettingsSaveLockTimeoutSQL, llmSettingsSaveLockSQL, llmSettingsSaveLockTimeoutRestoreSQL}
 	if llmSettingsSaveLockTimeoutSQL != `SET LOCAL lock_timeout = '2000ms'` {
 		t.Fatalf("lock timeout statement %q", llmSettingsSaveLockTimeoutSQL)
 	}
@@ -98,8 +113,11 @@ func TestLLMSettingsSaveTakesTheOrgSaveLockFirst(t *testing.T) {
 		if !slices.Equal(tx.statements, want) {
 			t.Fatalf("%s: statements %q, want %q", scopeName(scope), tx.statements, want)
 		}
-		if got := tx.args[1]; len(got) != 1 || got[0] != "llm-settings-save:org" {
+		if got := tx.args[2]; len(got) != 1 || got[0] != "llm-settings-save:org" {
 			t.Fatalf("%s: lock args %v", scopeName(scope), got)
+		}
+		if got := tx.args[3]; len(got) != 1 || got[0] != "7s" {
+			t.Fatalf("%s: restore args %v, want the read value", scopeName(scope), got)
 		}
 	}
 }

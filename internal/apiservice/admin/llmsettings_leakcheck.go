@@ -28,10 +28,12 @@ const llmSettingsSaveLockPrefix = "llm-settings-save:"
 const llmSettingsSaveLockTimeout = "2000ms"
 
 const (
-	llmSettingsSaveLockTimeoutSQL = `SET LOCAL lock_timeout = '` + llmSettingsSaveLockTimeout + `'`
-	llmSettingsSaveLockSQL        = `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`
-	// The bound is for the save lock only: later row and budget lock waits keep the session's.
-	llmSettingsSaveLockTimeoutResetSQL = `SET LOCAL lock_timeout TO DEFAULT`
+	llmSettingsSaveLockTimeoutReadSQL = `SELECT current_setting('lock_timeout')`
+	llmSettingsSaveLockTimeoutSQL     = `SET LOCAL lock_timeout = '` + llmSettingsSaveLockTimeout + `'`
+	llmSettingsSaveLockSQL            = `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`
+	// The bound is for the save lock only: later row and budget lock waits get
+	// the session's own value back (TO DEFAULT would drop a session SET).
+	llmSettingsSaveLockTimeoutRestoreSQL = `SELECT set_config('lock_timeout', $1, true)`
 )
 
 const pgLockNotAvailable = "55P03"
@@ -49,6 +51,10 @@ var llmSettingsSaveLockTimeouts = func() metric.Int64Counter {
 // lockLLMSettingsSave takes the org's save lock as the first statements of a
 // save transaction. A wait past the timeout is the 409 setting_changed.
 func (h *handlers) lockLLMSettingsSave(ctx context.Context, tx pgExecer, orgID string, scope llmorgsettings.Purpose) (*llmRefusal, error) {
+	var previous string
+	if err := tx.QueryRow(ctx, llmSettingsSaveLockTimeoutReadSQL).Scan(&previous); err != nil {
+		return nil, &llmStepError{"read lock timeout", err}
+	}
 	if _, err := tx.Exec(ctx, llmSettingsSaveLockTimeoutSQL); err != nil {
 		return nil, &llmStepError{"bound llm settings save lock", err}
 	}
@@ -65,8 +71,8 @@ func (h *handlers) lockLLMSettingsSave(ctx context.Context, tx pgExecer, orgID s
 		}
 		return nil, &llmStepError{"lock llm settings save", err}
 	}
-	if _, err := tx.Exec(ctx, llmSettingsSaveLockTimeoutResetSQL); err != nil {
-		return nil, &llmStepError{"reset llm settings save lock bound", err}
+	if _, err := tx.Exec(ctx, llmSettingsSaveLockTimeoutRestoreSQL, previous); err != nil {
+		return nil, &llmStepError{"restore lock timeout", err}
 	}
 	return nil, nil
 }

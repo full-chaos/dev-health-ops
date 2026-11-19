@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
@@ -56,13 +57,32 @@ var (
 	teamRepoOwnershipRemoveDynamic = regexp.MustCompile("(?i)(?:\"(?:ALTER TABLE|DELETE FROM|TRUNCATE TABLE|TRUNCATE)\\s*`?\"\\s*\\+|(?:ALTER TABLE|DELETE FROM|TRUNCATE TABLE|TRUNCATE)\\s+`?%s)")
 )
 
+var (
+	teamRepoOwnershipSourcesOnce sync.Once
+	teamRepoOwnershipSources     map[string]string
+	teamRepoOwnershipSourcesErr  error
+)
+
 // teamRepoOwnershipProductionSources reads every non-test Go file of the
-// module's internal and cmd trees.
+// module's internal and cmd trees, once for both censuses.
 func teamRepoOwnershipProductionSources(t *testing.T) map[string]string {
 	t.Helper()
+	teamRepoOwnershipSourcesOnce.Do(func() {
+		teamRepoOwnershipSources, teamRepoOwnershipSourcesErr = readTeamRepoOwnershipProductionSources()
+	})
+	if teamRepoOwnershipSourcesErr != nil {
+		t.Fatal(teamRepoOwnershipSourcesErr)
+	}
+	if len(teamRepoOwnershipSources) < 500 {
+		t.Fatalf("the census read %d source files: it measured nothing", len(teamRepoOwnershipSources))
+	}
+	return teamRepoOwnershipSources
+}
+
+func readTeamRepoOwnershipProductionSources() (map[string]string, error) {
 	root, err := moduleroot.Root()
 	if err != nil {
-		t.Fatal(err)
+		return nil, err
 	}
 	sources := map[string]string{}
 	for _, tree := range []string{"internal", "cmd"} {
@@ -88,13 +108,10 @@ func teamRepoOwnershipProductionSources(t *testing.T) map[string]string {
 			return nil
 		})
 		if err != nil {
-			t.Fatal(err)
+			return nil, err
 		}
 	}
-	if len(sources) < 500 {
-		t.Fatalf("the census read %d source files: it measured nothing", len(sources))
-	}
-	return sources
+	return sources, nil
 }
 
 func censusKeys(found map[string]bool) []string {
@@ -125,6 +142,10 @@ func TestInferredRepoOwnershipHasOneWriter(t *testing.T) {
 	sources := teamRepoOwnershipProductionSources(t)
 	found := map[string]bool{}
 	for path, source := range sources {
+		// The literal checks only skip the regexes on files that cannot match them.
+		if !strings.Contains(source, "team_repo_ownership") && !strings.Contains(source, "teamRepoOwnership") {
+			continue
+		}
 		if teamRepoOwnershipWriteStatic.MatchString(source) ||
 			(teamRepoOwnershipWriteDynamic.MatchString(source) && teamRepoOwnershipTableLiteral.MatchString(source)) {
 			found[path] = true
@@ -143,13 +164,38 @@ func TestInferredRepoOwnershipHasOneWriter(t *testing.T) {
 	}
 }
 
+// teamRepoOwnershipRemoveWords are the spellings of the verbs a remover form
+// holds; only a line that holds one is matched against the case-blind forms
+// (a whole-file case-blind match of every source is too slow under -race).
+var teamRepoOwnershipRemoveWords = []string{"DELETE", "delete", "Delete", "TRUNCATE", "truncate", "Truncate"}
+
+func teamRepoOwnershipRemovesRows(source string) bool {
+	holds := func(text string) bool {
+		for _, word := range teamRepoOwnershipRemoveWords {
+			if strings.Contains(text, word) {
+				return true
+			}
+		}
+		return false
+	}
+	if !holds(source) {
+		return false
+	}
+	for _, line := range strings.Split(source, "\n") {
+		if holds(line) && (teamRepoOwnershipRemoveStatic.MatchString(line) || teamRepoOwnershipRemoveDynamic.MatchString(line)) {
+			return true
+		}
+	}
+	return false
+}
+
 // TestTeamRepoOwnershipInputRemoverCensus: every statement that removes rows
 // of an input table of the derivation (and every dynamic remover, whatever
 // table it names) is named with its witness.
 func TestTeamRepoOwnershipInputRemoverCensus(t *testing.T) {
 	found := map[string]bool{}
 	for path, source := range teamRepoOwnershipProductionSources(t) {
-		if teamRepoOwnershipRemoveStatic.MatchString(source) || teamRepoOwnershipRemoveDynamic.MatchString(source) {
+		if teamRepoOwnershipRemovesRows(source) {
 			found[path] = true
 		}
 	}
@@ -166,8 +212,9 @@ func TestTeamRepoOwnershipCensusFormsAreFound(t *testing.T) {
 		"ALTER TABLE `teams` DELETE WHERE id = ?",
 		"TRUNCATE TABLE work_graph_issue_pr",
 		"DELETE FROM team_project_ownership WHERE org_id = ?",
+		"const x = `ALTER TABLE work_graph_issue_pr DELETE\nWHERE org_id = ?`",
 	} {
-		if !teamRepoOwnershipRemoveStatic.MatchString(form) {
+		if !teamRepoOwnershipRemovesRows(form) {
 			t.Errorf("static remover form not found: %s", form)
 		}
 	}

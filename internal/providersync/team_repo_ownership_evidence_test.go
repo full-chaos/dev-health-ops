@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/issueprlinks"
 )
 
 func evidenceInputs(keys map[teamRepoOwnershipEvidenceKey]struct{}) []string {
@@ -173,5 +175,36 @@ func TestEvidenceUpkeep(t *testing.T) {
 	})
 	if !reflect.DeepEqual(writes, want) {
 		t.Fatalf("upkeep\n got  %+v\n want %+v", writes, want)
+	}
+}
+
+// The witness rule restated in providersync agrees with the native-first rule
+// of issueprlinks (Outranks and IsPullRequestWorkItem).
+func TestEvidenceWitnessAgreesWithIssuePRLinks(t *testing.T) {
+	repo, other := uuid.New(), uuid.New()
+	stored := []TeamRepoOwnershipIssuePRLink{
+		{RepoID: repo.String(), WorkItemID: "jira:N-1", PRNumber: 5, Provenance: "native"},
+		{RepoID: other.String(), WorkItemID: "jira:N-2", PRNumber: 7, Provenance: "heuristic"},
+	}
+	links := make([]issueprlinks.Link, 0, len(stored))
+	for _, link := range stored {
+		links = append(links, issueprlinks.Link{RepoID: uuid.MustParse(link.RepoID), WorkItemID: link.WorkItemID, PRNumber: link.PRNumber, Provenance: link.Provenance})
+	}
+	native := issueprlinks.NewNativeLinks(links)
+	held := newTeamRepoOwnershipEvidenceHeld(nil, nil, stored, nil, nil)
+	for _, cell := range []struct {
+		repo   uuid.UUID
+		number uint32
+		item   string
+	}{
+		{repo, 5, "jira:X-1"}, {repo, 6, "jira:N-1"}, {repo, 6, "jira:X-1"}, {other, 7, "jira:X-2"}, {other, 5, "jira:X-3"},
+		{repo, 6, "ghpr:acme/app#12"}, {repo, 6, "gitlab:group/app!3"}, {repo, 6, "ghpr:acme/app#0"}, {repo, 6, "ghpr:#4"},
+		{repo, 6, "gitlab:group/app!x"}, {repo, 6, "gh:acme/app#12"}, {repo, 6, "ghpr:acme/app#4294967296"},
+	} {
+		want := native.Outranks(cell.repo, cell.number, cell.item) || issueprlinks.IsPullRequestWorkItem(cell.item)
+		missing := teamRepoOwnershipIssuePREvidence(TeamRepoOwnershipIssuePRLink{RepoID: cell.repo.String(), WorkItemID: cell.item, PRNumber: cell.number})
+		if got := held.holds(missing); got != want {
+			t.Errorf("%v: providersync witness %v, issueprlinks %v", cell, got, want)
+		}
 	}
 }

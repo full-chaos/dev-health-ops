@@ -885,10 +885,11 @@ func (run *teamIDCarryRun) planRepoOwnershipEvidence() error {
 	if len(oldIDs) == 0 {
 		return nil
 	}
-	live, err := run.read(`SELECT org_id, provider, repo_full_name, team_id, input, input_key, max(seen_at) AS seen_at, `+
-		`toUInt8(0) AS is_deleted FROM team_repo_ownership_evidence WHERE org_id = {org_id:String} AND team_id IN {ids:Array(String)} `+
-		`GROUP BY org_id, provider, repo_full_name, team_id, input, input_key `+
-		`HAVING argMax(team_repo_ownership_evidence.is_deleted, (team_repo_ownership_evidence.seen_at, team_repo_ownership_evidence.is_deleted)) = 0`,
+	live, err := run.read(`SELECT org_id, provider, repo_full_name, team_id, input, input_key, last_seen AS seen_at, toUInt8(0) AS is_deleted `+
+		`FROM (SELECT org_id, provider, repo_full_name, team_id, input, input_key, max(seen_at) AS last_seen, `+
+		`argMax(is_deleted, (seen_at, is_deleted)) AS deleted FROM team_repo_ownership_evidence `+
+		`WHERE org_id = {org_id:String} AND team_id IN {ids:Array(String)} `+
+		`GROUP BY org_id, provider, repo_full_name, team_id, input, input_key) WHERE deleted = 0`,
 		run.org, clickhouse.Named("ids", oldIDs))
 	if err != nil {
 		return fmt.Errorf("team id carry: read team_repo_ownership_evidence: %w", err)

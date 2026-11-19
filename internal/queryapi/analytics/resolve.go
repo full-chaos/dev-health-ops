@@ -200,10 +200,12 @@ func ResolveSelected(ctx context.Context, client QueryClient, orgID string, batc
 	type tsOutcome struct {
 		result []model.TimeseriesResult
 		err    error
+		ended  error
 	}
 	type bdOutcome struct {
 		result model.BreakdownResult
 		err    error
+		ended  error
 	}
 	tsOutcomes := make([]tsOutcome, len(batch.Timeseries))
 	bdOutcomes := make([]bdOutcome, len(batch.Breakdowns))
@@ -214,12 +216,14 @@ func ResolveSelected(ctx context.Context, client QueryClient, orgID string, batc
 		go func(i int, input model.TimeseriesRequestInput) {
 			defer wg.Done()
 			tsOutcomes[i].result, tsOutcomes[i].err = resolveOneTimeseries(ctx, client, orgID, input, useInvestment, resolvedFilters, selected.TimeseriesScope)
+			tsOutcomes[i].ended = contextErrAtEnd(ctx)
 		}(i, input)
 	}
 	for i, input := range batch.Breakdowns {
 		go func(i int, input model.BreakdownRequestInput) {
 			defer wg.Done()
 			bdOutcomes[i].result, bdOutcomes[i].err = resolveOneBreakdown(ctx, client, orgID, input, useInvestment, resolvedFilters, selected.Breakdowns)
+			bdOutcomes[i].ended = contextErrAtEnd(ctx)
 		}(i, input)
 	}
 	wg.Wait()
@@ -232,12 +236,12 @@ func ResolveSelected(ctx context.Context, client QueryClient, orgID string, batc
 	// from reporting it again (graphql_error_presenter.go).
 	for i := range tsOutcomes {
 		if tsOutcomes[i].err != nil {
-			tsOutcomes[i].err = markedIfClientCancel(ctx, tsOutcomes[i].err, "timeseries", "org_id", orgID, "index", i)
+			tsOutcomes[i].err = markedIfClientCancelAt(ctx, tsOutcomes[i].ended, tsOutcomes[i].err, "timeseries", "org_id", orgID, "index", i)
 		}
 	}
 	for i := range bdOutcomes {
 		if bdOutcomes[i].err != nil {
-			bdOutcomes[i].err = markedIfClientCancel(ctx, bdOutcomes[i].err, "breakdown", "org_id", orgID, "index", i)
+			bdOutcomes[i].err = markedIfClientCancelAt(ctx, bdOutcomes[i].ended, bdOutcomes[i].err, "breakdown", "org_id", orgID, "index", i)
 		}
 	}
 	for i, o := range tsOutcomes {

@@ -300,6 +300,7 @@ func normalizeGitLabIssueWorkItem(
 	repoID uuid.UUID,
 	payload gitlabIssueWorkItemPayload,
 	labelEvents []gitlabLabelEventPayload,
+	stateEvents []gitlabStateEventPayload,
 	statusMapping *StatusMapping,
 	resolveIdentity gitlabIdentityResolver,
 	normalizedAt time.Time,
@@ -353,8 +354,8 @@ func normalizeGitLabIssueWorkItem(
 	// The id carries the path the repository identity was minted from, so a
 	// renamed project keeps it (CHAOS-3383); project_id stays the current path.
 	workItemID := "gitlab:" + identityPath + "#" + strconv.Itoa(payload.IID)
-	transitions := normalizeGitLabIssueLabelTransitions(
-		claim, workItemID, labelEvents, createdAt.UTC(), statusMapping, normalizedAt,
+	transitions := normalizeGitLabIssueTransitions(
+		claim, workItemID, labelEvents, stateEvents, createdAt.UTC(), statusMapping, resolveIdentity, normalizedAt,
 	)
 	startedAt, completedAt := gitlabWorkItemLifecycle(transitions, closedAt)
 	// Python's provider enriches every issue with the label priority right
@@ -508,53 +509,102 @@ func normalizeGitLabEpicStateEvents(
 	return transitions
 }
 
-func normalizeGitLabIssueLabelTransitions(
+// normalizeGitLabIssueTransitions folds an issue's resource label events and
+// resource state events by time. A label add keeps the single-label mapping. A
+// remove of a status-mapped label and a state event emit a row only when the
+// item status (labels first, then state, as the work item row) changes.
+func normalizeGitLabIssueTransitions(
 	claim Claim,
 	workItemID string,
-	events []gitlabLabelEventPayload,
+	labelEvents []gitlabLabelEventPayload,
+	stateEvents []gitlabStateEventPayload,
 	createdAt time.Time,
 	statusMapping *StatusMapping,
+	resolveIdentity gitlabIdentityResolver,
 	normalizedAt time.Time,
 ) []gitlabWorkItemTransitionRow {
-	sorted := append([]gitlabLabelEventPayload(nil), events...)
-	sort.SliceStable(sorted, func(left, right int) bool {
-		return gitlabEventTime(sorted[left].CreatedAt).Before(gitlabEventTime(sorted[right].CreatedAt))
+	type issueEvent struct {
+		createdAt *string
+		label     *gitlabLabelEventPayload
+		state     *gitlabStateEventPayload
+	}
+	events := make([]issueEvent, 0, len(labelEvents)+len(stateEvents))
+	for index := range labelEvents {
+		events = append(events, issueEvent{createdAt: labelEvents[index].CreatedAt, label: &labelEvents[index]})
+	}
+	for index := range stateEvents {
+		events = append(events, issueEvent{createdAt: stateEvents[index].CreatedAt, state: &stateEvents[index]})
+	}
+	sort.SliceStable(events, func(left, right int) bool {
+		return gitlabEventTime(events[left].createdAt).Before(gitlabEventTime(events[right].createdAt))
 	})
-	transitions := make([]gitlabWorkItemTransitionRow, 0, len(sorted))
+	transitions := make([]gitlabWorkItemTransitionRow, 0, len(events))
 	previous := "unknown"
-	for _, event := range sorted {
-		action := strings.ToLower(strings.TrimSpace(event.Action))
-		if action != "add" && action != "remove" {
-			continue
+	issueState := "opened"
+	statusLabels := []string{}
+	for _, event := range events {
+		toStatus, toRaw := "", ""
+		var actor *string
+		if event.label != nil {
+			action := strings.ToLower(strings.TrimSpace(event.label.Action))
+			labelName := event.label.Label.Name
+			if labelName == "" {
+				labelName = event.label.LabelName
+			}
+			if labelName == "" {
+				continue
+			}
+			mapped := statusMapping.NormalizeStatus("gitlab", "", []string{labelName}, "")
+			if mapped == "unknown" {
+				continue
+			}
+			switch action {
+			case "add":
+				statusLabels = append(statusLabels, labelName)
+				toStatus, toRaw = mapped, labelName
+			case "remove":
+				statusLabels = removeWorkItemLabel(statusLabels, labelName, normKey)
+				toStatus, toRaw = statusMapping.NormalizeStatus("gitlab", "", statusLabels, issueState), "unlabeled:"+labelName
+				if toStatus == previous {
+					continue
+				}
+			default:
+				continue
+			}
+		} else {
+			state := strings.ToLower(strings.TrimSpace(event.state.State))
+			switch state {
+			case "closed":
+				issueState = "closed"
+			case "opened", "reopened":
+				issueState = "opened"
+			default:
+				continue
+			}
+			toStatus, toRaw = statusMapping.NormalizeStatus("gitlab", "", statusLabels, issueState), state
+			if toStatus == previous {
+				continue
+			}
+			if event.state.User != nil {
+				identity := resolveGitLabWorkItemIdentity(*event.state.User, resolveIdentity)
+				if identity != "" && identity != "unknown" {
+					actor = &identity
+				}
+			}
 		}
-		labelName := event.Label.Name
-		if labelName == "" {
-			labelName = event.LabelName
-		}
-		if labelName == "" {
-			continue
-		}
-		labels := []string{}
-		if action == "add" {
-			labels = []string{labelName}
-		}
-		mapped := statusMapping.NormalizeStatus("gitlab", "", labels, "")
-		if mapped == "unknown" {
-			continue
-		}
-		occurred := parseGitLabWorkItemTime(event.CreatedAt)
+		occurred := parseGitLabWorkItemTime(event.createdAt)
 		if occurred == nil {
 			occurred = &createdAt
 		}
 		row := gitlabWorkItemTransitionRow{
 			WorkItemID: workItemID, Provider: "gitlab", OccurredAt: occurred.UTC(),
-			FromStatusRaw: nil, ToStatusRaw: stringPointer(labelName), FromStatus: previous,
-			ToStatus: mapped, OrgID: claim.OrgID, LastSynced: normalizedAt.UTC(),
+			FromStatusRaw: nil, ToStatusRaw: stringPointer(toRaw), FromStatus: previous,
+			ToStatus: toStatus, Actor: actor, OrgID: claim.OrgID, LastSynced: normalizedAt.UTC(),
 		}
 		if validateGitLabTransitionRow(row, claim) == nil {
 			transitions = append(transitions, row)
 		}
-		previous = mapped
+		previous = toStatus
 	}
 	return transitions
 }

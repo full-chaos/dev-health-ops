@@ -683,6 +683,8 @@ func normalizeGitHubWorkItemEvents(
 		previous = "in_progress"
 	}
 	mergedInHistory := false
+	issueState := "open"
+	statusLabels := []string{}
 	transitions := make([]githubWorkItemTransitionRow, 0, len(events))
 	reopens := make([]githubWorkItemReopenRow, 0)
 	for _, wrapped := range events {
@@ -710,13 +712,25 @@ func normalizeGitHubWorkItemEvents(
 			switch eventType {
 			case "closed":
 				toStatus, toRaw = "done", "closed"
+				issueState = "closed"
 			case "reopened":
 				toStatus, toRaw = "todo", "reopened"
+				issueState = "open"
 			case "labeled":
 				if event.Label != nil {
 					mapped := githubIssueStatus("", []string{event.Label.Name})
 					if mapped != "unknown" {
 						toStatus, toRaw = mapped, event.Label.Name
+						statusLabels = append(statusLabels, event.Label.Name)
+					}
+				}
+			case "unlabeled":
+				// The item status reads labels before state, so removing a status
+				// label can reopen the item without a closed/reopened event.
+				if event.Label != nil && githubIssueStatus("", []string{event.Label.Name}) != "unknown" {
+					statusLabels = removeWorkItemLabel(statusLabels, event.Label.Name, normalizeWorkItemLabel)
+					if after := githubIssueStatus(issueState, statusLabels); after != previous {
+						toStatus, toRaw = after, "unlabeled:"+event.Label.Name
 					}
 				}
 			}
@@ -1347,6 +1361,16 @@ func githubPriorityFromLabels(labels []string) (*string, *string) {
 
 func normalizeWorkItemLabel(value string) string {
 	return strings.Join(strings.Fields(strings.ToLower(strings.TrimSpace(value))), " ")
+}
+
+func removeWorkItemLabel(labels []string, name string, key func(string) string) []string {
+	kept := labels[:0]
+	for _, label := range labels {
+		if key(label) != key(name) {
+			kept = append(kept, label)
+		}
+	}
+	return kept
 }
 
 // parseGitHubWorkItemTime preserves the provider dataclass's full timestamp

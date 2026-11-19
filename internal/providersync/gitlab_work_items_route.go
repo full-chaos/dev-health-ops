@@ -346,8 +346,20 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 			}
 			pages += labelPages
 		}
+		stateEvents := []gitlabStateEventPayload(nil)
+		if fetchHistory {
+			var eventPages int
+			stateEvents, eventPages, err = collectGitLabStateEvents(
+				budgetAccount(ctx, "notes"), &counted, gitlabIssuesRoute+"/{iid}/resource_state_events", root+"/issues/"+strconv.Itoa(payload.IID)+"/resource_state_events",
+				perPage, nestedMaxPages,
+			)
+			if err != nil {
+				return CompleteRouteBatch{}, err
+			}
+			pages += eventPages
+		}
 		item, transitions, normalizeErr := normalizeGitLabIssueWorkItem(
-			claim, fullName, repoIdentity.Path, catalogProjectID, repoID, payload.withFetchEpics(fetchEpics), labelEvents, handler.StatusMapping,
+			claim, fullName, repoIdentity.Path, catalogProjectID, repoID, payload.withFetchEpics(fetchEpics), labelEvents, stateEvents, handler.StatusMapping,
 			handler.ResolveIdentity, normalizedAt,
 		)
 		if normalizeErr != nil {
@@ -356,16 +368,8 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 		rows.WorkItems = append(rows.WorkItems, item)
 		rows.StatusTransitions = append(rows.StatusTransitions, transitions...)
 		if fetchHistory {
-			events, eventPages, eventErr := collectGitLabStateEvents(
-				budgetAccount(ctx, "notes"), &counted, gitlabIssuesRoute+"/{iid}/resource_state_events", root+"/issues/"+strconv.Itoa(payload.IID)+"/resource_state_events",
-				perPage, nestedMaxPages,
-			)
-			if eventErr != nil {
-				return CompleteRouteBatch{}, eventErr
-			}
-			pages += eventPages
 			rows.ReopenEvents = append(rows.ReopenEvents,
-				normalizeGitLabIssueReopens(claim, item.WorkItemID, events, handler.ResolveIdentity, normalizedAt)...)
+				normalizeGitLabIssueReopens(claim, item.WorkItemID, stateEvents, handler.ResolveIdentity, normalizedAt)...)
 		}
 		if fetchLinks {
 			links, linkPages, linkErr := collectGitLabIssueLinks(

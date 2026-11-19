@@ -13,7 +13,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/chmigrate"
 )
 
-// riskRetractedImageInserts are the writes of the build before 160 (writeTestopsRisk): they name their columns and never
+// riskRetractedImageInserts are the writes of the build before 162 (writeTestopsRisk): they name their columns and never
 // name retracted.
 var riskRetractedImageInserts = map[string]string{
 	"testops_release_confidence": `INSERT INTO testops_release_confidence (repo_id, day, confidence_score, pipeline_success_factor,
@@ -27,7 +27,7 @@ VALUES (toUUID('14009000-0000-4000-8000-0000000001b1'), '2026-08-11', 0.5, 0.5, 
 VALUES (toUUID('14009000-0000-4000-8000-0000000001b1'), '2026-08-11', 0.5, 0.5, 0, 0, NULL, 'team-1', 'svc-1', 'org-158', '2026-08-13 10:00:00')`,
 }
 
-// riskRetractedImageRead is the newest-row read of the build before 160 (testopsrisk dailyQuery: argMax by computed_at
+// riskRetractedImageRead is the newest-row read of the build before 162 (testopsrisk dailyQuery: argMax by computed_at
 // per repository day), counted.
 func riskRetractedImageRead(table string) string {
 	return `SELECT count() FROM (SELECT day, repo_id, max(computed_at) FROM ` + table + `
@@ -54,11 +54,11 @@ WHERE database = currentDatabase() AND table IN ('testops_release_confidence', '
 	return columns
 }
 
-// INVARIANT (CHAOS-14009): the rollback of 160 is "images back on a build without 160, then 160's down file". Up, down, up on
+// INVARIANT (CHAOS-14009): the rollback of 162 is "images back on a build without 162, then 162's down file". Up, down, up on
 // a real ClickHouse: the columns are gone after the down file and its version row too; the read and the INSERT of the build
-// before 160 work on the tables in that shape (a marker row reads as a stored row of zeros, as the down file says); the upgrade
-// applies 160 again.
-func TestRollback160UpDownUp(t *testing.T) {
+// before 162 work on the tables in that shape (a marker row reads as a stored row of zeros, as the down file says); the upgrade
+// applies 162 again.
+func TestRollback162UpDownUp(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	scratch := scratchDatabase(t)
@@ -112,7 +112,7 @@ VALUES (toUUID('14009000-0000-4000-8000-0000000001b1'), '2026-08-10', 'team-1', 
 		t.Fatalf("at the head schema_migrations holds no %s", testopsRiskRetractedVersion)
 	}
 
-	body, err := os.ReadFile("rollback/160_testops_risk_retracted.down.sql")
+	body, err := os.ReadFile("rollback/162_testops_risk_retracted.down.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +129,7 @@ VALUES (toUUID('14009000-0000-4000-8000-0000000001b1'), '2026-08-10', 'team-1', 
 	for _, table := range testopsRiskRetractedTables {
 		var keys uint64
 		if err := conn.QueryRow(ctx, riskRetractedImageRead(table)).Scan(&keys); err != nil {
-			t.Fatalf("the read of the build before 160 fails on the rolled-back %s: %v", table, err)
+			t.Fatalf("the read of the build before 162 fails on the rolled-back %s: %v", table, err)
 		}
 		if keys != 1 {
 			t.Fatalf("the older read of %s gives %d keys, want the marker row as one stored row of zeros", table, keys)

@@ -495,6 +495,7 @@ func TestTestopsCaseAggregateEqualsLegacyReadAndDoesNotScanHistory(t *testing.T)
 	legacyReads := measureCaseResultsReads(ctx, t, conn, func() { legacy, _ = legacyCaseAggregate(ctx, t, conn, repo.id, w) })
 	var bounded testops.TestMetric
 	boundedReads := measureCaseResultsReads(ctx, t, conn, func() { bounded = computeDefaultBranchTestMetric(ctx, t, conn, w, repo.id) })
+	bounded.ReportRuns = nil // the legacy read has no report completeness read
 
 	if !reflect.DeepEqual(legacy, bounded) {
 		t.Fatalf("the bounded read moved the record:\nlegacy  %+v\nbounded %+v", legacy, bounded)
@@ -540,6 +541,7 @@ func TestTestopsCaseAggregateExclusionInSuiteSetsEqualsPreviousFormAndSkipsPullR
 		previous, _ := previousExclusionCaseAggregate(ctx, t, conn, repo.id, w, "main")
 		current := computeDefaultBranchTestMetric(ctx, t, conn, w, repo.id)
 		current.FlakeUnknown = false // the previous form had no such mark
+		current.ReportRuns = nil     // nor a report completeness read
 		if !reflect.DeepEqual(previous, current) {
 			t.Errorf("repo %s: the exclusion inside the suite sets moved the record:\nprevious %+v\ncurrent  %+v", repo.id, previous, current)
 		}
@@ -570,6 +572,7 @@ FROM numbers(30000)`, bulk.id, defaultBranchTestOrg, synced); err != nil {
 	})
 	currentReads := measureCaseResultsReads(ctx, t, conn, func() { current = computeDefaultBranchTestMetric(ctx, t, conn, w, bulk.id) })
 	current.FlakeUnknown = false
+	current.ReportRuns = nil
 	if !reflect.DeepEqual(previous, current) {
 		t.Fatalf("the bulk fixture moved the record:\nprevious %+v\ncurrent  %+v", previous, current)
 	}

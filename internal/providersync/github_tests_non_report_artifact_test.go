@@ -357,7 +357,7 @@ func TestGitHubTestsDockerBuildArtifactsDoNotConsumePerRunArtifactCap(t *testing
 func TestGitHubTestsShardTimingJUnitPartAndSBOMArtifactsExcluded(t *testing.T) {
 	for _, name := range []string{
 		"go-test-timings-integration-packages-17", "go-test-timings-test-1-of-10", "GO-TEST-TIMINGS-race-2-of-6",
-		"go-junit-part-packages-3", "go-junit-part-daily-1",
+		"go-junit-part-packages-3", "go-junit-part-daily-1", "go-junit-part-race-2-of-16", "GO-JUNIT-PART-test-1-of-13",
 		"go-auth-service-sbom.spdx.json", "go-migrate-sbom.spdx.json", "X.SPDX.JSON",
 	} {
 		if selected, _ := githubTestsArtifactSelectionSeam(name); selected {
@@ -365,7 +365,7 @@ func TestGitHubTestsShardTimingJUnitPartAndSBOMArtifactsExcluded(t *testing.T) {
 		}
 	}
 	for _, name := range []string{
-		"go-test-providersync-1", "go-test-json-race-1-of-6", "go-test-junit-integration",
+		"go-test-providersync-1", "go-test-json-race-1-of-6", "go-test-junit-integration", "go-test-junit-quality",
 		"go-test-junit-test-1-of-10", "coverage-lcov-1-1", "playwright-results-default-1-1-1", "sbom.json",
 	} {
 		if selected, reason := githubTestsArtifactSelectionSeam(name); !selected {

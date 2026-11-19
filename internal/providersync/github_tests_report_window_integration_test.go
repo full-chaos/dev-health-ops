@@ -26,7 +26,16 @@ func githubTestsCommitReportWindowPass(
 	doer providerfoundation.HTTPDoer, orgID string, since, before, normalizedAt time.Time,
 ) int {
 	t.Helper()
+	return githubTestsCommitReportWindowPassMode(t, ctx, sink, doer, orgID, "incremental", since, before, normalizedAt)
+}
+
+func githubTestsCommitReportWindowPassMode(
+	t *testing.T, ctx context.Context, sink GitHubTestsClickHouseEffects,
+	doer providerfoundation.HTTPDoer, orgID, mode string, since, before, normalizedAt time.Time,
+) int {
+	t.Helper()
 	claim := nativeTestClaim("github", "tests")
+	claim.Mode = mode
 	claim.OrgID = orgID
 	claim.ID = uuid.NewString()
 	claim.SyncRunID = uuid.NewString()

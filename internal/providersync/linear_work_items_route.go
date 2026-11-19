@@ -1140,8 +1140,8 @@ func normalizeLinearReopens(
 		if entry.FromState == nil || entry.ToState == nil {
 			continue
 		}
-		fromType := strings.ToLower(entry.FromState.Type)
-		toType := strings.ToLower(entry.ToState.Type)
+		fromType := strings.ToLower(strings.TrimSpace(entry.FromState.Type))
+		toType := strings.ToLower(strings.TrimSpace(entry.ToState.Type))
 		if (fromType != "completed" && fromType != "canceled" && fromType != "cancelled" && fromType != "duplicate") ||
 			(toType != "triage" && toType != "backlog" && toType != "unstarted" && toType != "started") {
 			continue

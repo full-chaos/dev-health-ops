@@ -93,3 +93,15 @@ func TestLinearMoveFromClosedIntoTriageIsAReopen(t *testing.T) {
 		t.Fatalf("reopens=%+v, want one reopen at the move from Done into Triage", reopens)
 	}
 }
+
+func TestLinearReopenFilterTrimsStateTypesAsTheStatusMapDoes(t *testing.T) {
+	var history []linearHistoryEntry
+	if err := json.Unmarshal([]byte(`[
+		{"id":"h1","createdAt":"2026-11-18T10:00:00Z","fromState":{"name":"Duplicate","type":" Duplicate "},"toState":{"name":"Todo","type":" unstarted "}}]`), &history); err != nil {
+		t.Fatal(err)
+	}
+	reopens := normalizeLinearReopens(nativeTestClaim("linear", "work-items"), "linear:ENG-1", history, linearDuplicateNow)
+	if len(reopens) != 1 || reopens[0].FromStatus != "canceled" || reopens[0].ToStatus != "todo" {
+		t.Fatalf("reopens=%+v, want one canceled -> todo reopen for padded state types", reopens)
+	}
+}

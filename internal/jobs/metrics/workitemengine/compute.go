@@ -61,7 +61,7 @@ type Item struct {
 	StartedAt   *time.Time
 	CompletedAt *time.Time
 	StoryPoints *float64
-	// Status is the normalized status category of work_items.status. Only the completion compute reads it.
+	// Status is the normalized status category of work_items.status. Only CompletedOnDay reads it.
 	Status string
 	// LinkedPRs are the pull requests linked to the item through work_graph_issue_pr. The daily completion
 	// compute reads them for churn_loc; no other compute does.
@@ -185,23 +185,21 @@ func ComputeIssueTypeMetricsDaily(
 		if !created.Before(dayUTC) && created.Before(end) {
 			bucket.created++
 		}
-		if item.CompletedAt != nil {
+		if CompletedOnDay(item, dayUTC, end) {
 			completed := item.CompletedAt.UTC()
-			if !completed.Before(dayUTC) && completed.Before(end) {
-				bucket.completed++
-				if item.StartedAt != nil {
-					cycle := completed.Sub(item.StartedAt.UTC()).Hours()
-					if cycle >= 0 {
-						bucket.cycleHours = append(bucket.cycleHours, cycle)
-					}
+			bucket.completed++
+			if item.StartedAt != nil {
+				cycle := completed.Sub(item.StartedAt.UTC()).Hours()
+				if cycle >= 0 {
+					bucket.cycleHours = append(bucket.cycleHours, cycle)
 				}
-				// Lead time runs from creation to completion. An item with no
-				// created_at (the zero time) or a creation after its
-				// completion, or at the same instant, has no lead time: it is left out of the p50, so a stored 0 always means no lead time (see
-				// LeadTimeInputs), never taken as 0 hours.
-				if lead := completed.Sub(created).Hours(); hasCreationTime(item.CreatedAt) && lead > 0 {
-					bucket.leadHours = append(bucket.leadHours, lead)
-				}
+			}
+			// Lead time runs from creation to completion. An item with no
+			// created_at (the zero time) or a creation after its
+			// completion, or at the same instant, has no lead time: it is left out of the p50, so a stored 0 always means no lead time (see
+			// LeadTimeInputs), never taken as 0 hours.
+			if lead := completed.Sub(created).Hours(); hasCreationTime(item.CreatedAt) && lead > 0 {
+				bucket.leadHours = append(bucket.leadHours, lead)
 			}
 		}
 		if created.Before(end) &&
@@ -255,18 +253,15 @@ func hasCreationTime(created time.Time) bool {
 	return !created.IsZero() && created.UTC().After(time.Unix(0, 0))
 }
 
-// LeadTimeInputs counts the items completed in [dayUTC, end) and, of those, the ones left out of the lead-time p50
+// LeadTimeInputs counts the items completed in [dayUTC, end) (CompletedOnDay) and, of those, the ones left out of the lead-time p50
 // because they have no created_at or were created after they completed. The caller logs it; this package holds no
 // logger.
 func LeadTimeInputs(items []Item, dayUTC, end time.Time) (completed, excluded int) {
 	for _, item := range items {
-		if item.CompletedAt == nil {
+		if !CompletedOnDay(item, dayUTC, end) {
 			continue
 		}
 		done := item.CompletedAt.UTC()
-		if done.Before(dayUTC) || !done.Before(end) {
-			continue
-		}
 		completed++
 		if !hasCreationTime(item.CreatedAt) || done.Sub(item.CreatedAt.UTC()) <= 0 {
 			excluded++

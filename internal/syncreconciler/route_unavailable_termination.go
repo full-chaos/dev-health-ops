@@ -250,7 +250,7 @@ func (sweep *UnreclaimableSweep) terminalizeRouteUnavailable(
 		return candidates[left].syncRunID < candidates[right].syncRunID
 	})
 
-	var wakeRuns []string
+	var wakeRuns []syncrunrollup.SlotFree
 	for _, candidate := range candidates {
 		affected, err := sweep.terminalizeOneRouteUnavailable(
 			ctx, tx, candidate, result.RouteUnavailableFault, now,
@@ -263,7 +263,7 @@ func (sweep *UnreclaimableSweep) terminalizeRouteUnavailable(
 		}
 		result.RouteUnavailableTerminalized += int(affected)
 		if affected == 1 {
-			wakeRuns = appendWakeRun(wakeRuns, candidate.syncRunID)
+			wakeRuns = appendWakeRun(wakeRuns, syncrunrollup.SlotFree{RunID: candidate.syncRunID, OrgID: candidate.orgID, Provider: candidate.provider, CostClass: candidate.costClass})
 		}
 	}
 

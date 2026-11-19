@@ -124,6 +124,38 @@ func backoffCountdown(base, limit, idle time.Duration, syncRunID string) (time.D
 	return jittered, level
 }
 
+// Non-head re-arm (CHAOS-14250). A run capped behind a run of its own class is not the one a free slot goes to: the
+// slot-free wake (syncrunrollup.WakeBucketHead) wakes the bucket head, and the head polls at the back-off above. The
+// others only bound a lost wake, so they re-arm at depth x cappedRearmPerWaitingRun between cappedRearmFloor and
+// SYNC_DISPATCH_CAPPED_REARM_MAX: their passes together stay near one a minute per bucket however long the queue.
+const (
+	cappedRearmMaxDefaultSeconds = 3600
+	cappedRearmFloor             = 30 * time.Minute
+	cappedRearmPerWaitingRun     = time.Minute
+)
+
+// cappedRearmMax is the ceiling of the non-head re-arm; never below the back-off ceiling.
+func cappedRearmMax() time.Duration {
+	limit := time.Duration(budgetEnvInt("SYNC_DISPATCH_CAPPED_REARM_MAX", cappedRearmMaxDefaultSeconds)) * time.Second
+	if floor := redispatchCountdownMax(redispatchCountdown()); limit < floor {
+		return floor
+	}
+	return limit
+}
+
+// nonHeadRearmCountdown is the re-arm of a non-head capped run with depth runs waiting in its bucket, spread by the
+// run id like backoffCountdown and kept between the floor and the ceiling.
+func nonHeadRearmCountdown(depth int, syncRunID string) time.Duration {
+	limit := cappedRearmMax()
+	floor := min(cappedRearmFloor, limit)
+	raw := min(max(time.Duration(depth)*cappedRearmPerWaitingRun, floor), limit)
+	hash := fnv.New32a()
+	_, _ = hash.Write([]byte(syncRunID + ":capped"))
+	unit := float64(hash.Sum32())/float64(^uint32(0))*2 - 1
+	jittered := raw + time.Duration(float64(raw)*redispatchBackoffJitter*unit)
+	return min(max(jittered, floor), limit)
+}
+
 // lastRunProgressAt is the newest end of a unit of the run (success or
 // failed), else the oldest unit creation. A running unit's heartbeat is not
 // progress: a long chunked unit must not keep the re-arm at the base.

@@ -126,7 +126,12 @@ WHERE id = $1::uuid`, runID).Scan(&order.createdAt, &order.backfill, &order.mode
 //     through the other signs;
 //   - heartbeat: a running unit sent a heartbeat;
 //   - lease: a running unit holds a live lease;
-//   - dispatching: a unit was claimed (dispatching) inside the window.
+//   - dispatching: a unit was claimed (dispatching) inside the window;
+//   - woken: its dispatch wakeup is due inside the window and not yet past it (pending, or dispatched and not yet
+//     re-armed), and its reference discovery succeeded. A slot-free wake makes the bucket head due at once, so the
+//     freeing run's own pass holds the slot back for it (CHAOS-14250). A run that waits only behind the cap re-arms
+//     into the future and is not woken; a run whose pass never runs (paused route) falls out of the window after the
+//     bound; a run whose pass runs and cannot claim (budget, cooldown) re-arms into the future at once.
 //
 // The unit probes read only the run's running or dispatching units (ix_sync_run_units_run_status), which the
 // concurrency caps keep few; a run's planned backlog and its finished units are never read.
@@ -184,6 +189,19 @@ WHERE run.status NOT IN ('success', 'partial_failed', 'failed')
                 AND unit.updated_at > $7::timestamptz - make_interval(secs => $9::double precision)
             LIMIT 1
         )
+        OR EXISTS (
+            SELECT 1 FROM public.sync_dispatch_outbox AS outbox
+            WHERE outbox.sync_run_id = run.id AND outbox.kind = 'dispatch_sync_run'
+                AND outbox.status IN ('pending', 'dispatched')
+                AND outbox.available_at <= $7::timestamptz
+                AND outbox.available_at > $7::timestamptz - make_interval(secs => $9::double precision)
+                AND EXISTS (
+                    SELECT 1 FROM public.sync_run_reference_discoveries AS discovery
+                    WHERE discovery.sync_run_id = run.id AND discovery.status = 'success'
+                    LIMIT 1
+                )
+            LIMIT 1
+        )
     )
 ORDER BY run.created_at, run.id
 LIMIT $10`
@@ -214,4 +232,35 @@ func readOlderRuns(ctx context.Context, tx pgx.Tx, bucket dispatchBucket, self r
 		return nil, fmt.Errorf("%w: iterate older runs in bucket: %w", ErrDiscoveryTransientFailure, err)
 	}
 	return older, nil
+}
+
+// bucketQueueDepthReadLimit bounds the waiting runs counted for the non-head re-arm: past it the re-arm is at its
+// ceiling anyway (cappedRearmPerWaitingRun x limit >= the default SYNC_DISPATCH_CAPPED_REARM_MAX).
+const bucketQueueDepthReadLimit = 64
+
+// bucketQueueSQL reads, for a run capped in a bucket, how many runs wait in the bucket (bounded) and whether a run of
+// its own class waits ahead of it: the waiter set of the slot-free wake (syncrunrollup.BucketWaitingRunPredicate).
+var bucketQueueSQL = `
+SELECT
+    (SELECT count(*)::int FROM (
+        SELECT 1 FROM public.sync_runs AS run
+        WHERE ` + syncrunrollup.BucketWaitingRunPredicate("$1", "$2", "$3", "$4::timestamptz") + `
+        LIMIT $8
+    ) AS waiting),
+    EXISTS (
+        SELECT 1 FROM public.sync_runs AS run
+        WHERE ` + syncrunrollup.BucketWaitingRunPredicate("$1", "$2", "$3", "$4::timestamptz") + `
+            AND (run.triggered_by = 'backfill' OR run.mode = 'backfill') = $5::boolean
+            AND (run.created_at, run.id) < ($6::timestamptz, $7::uuid)
+    )`
+
+// readBucketQueue runs bucketQueueSQL for one bucket in the guard transaction.
+func readBucketQueue(ctx context.Context, tx pgx.Tx, bucket dispatchBucket, self runOrder, now time.Time) (bool, int, error) {
+	var depth int
+	var olderInClass bool
+	if err := tx.QueryRow(ctx, bucketQueueSQL, bucket.orgID, bucket.provider, bucket.costClass, now,
+		self.backfill, self.createdAt, self.id, bucketQueueDepthReadLimit).Scan(&depth, &olderInClass); err != nil {
+		return false, 0, fmt.Errorf("%w: read bucket queue: %w", ErrDiscoveryTransientFailure, err)
+	}
+	return olderInClass, depth, nil
 }

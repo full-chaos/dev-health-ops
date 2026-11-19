@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime/synclog"
+	"sort"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -620,6 +621,12 @@ WHERE id = $1::uuid`,
 	if len(decision.heldBackRunIDs) > 0 {
 		defer wakeHeldBackRuns(ctx, service.pool, decision.heldBackRunIDs, service.nowUTC())
 	}
+	// CHAOS-14250: a bucket gave this pass slots it did not fill (budget, cooldown, a deferred or terminalized unit,
+	// or fewer units than slots). The slot-free wake reached this run as the head, so nobody else is coming for them:
+	// hand them to the next waiting run of this run's class, after the commit and the re-arm below.
+	for _, bucket := range handOffBuckets(decision.grantedSlots, claimedUnits) {
+		defer syncrunrollup.WakeNextInClass(ctx, service.pool, bucket.orgID, bucket.provider, bucket.costClass, run.id, service.nowUTC())
+	}
 
 	if riverQueued > 0 {
 		switch {
@@ -686,6 +693,12 @@ WHERE id = $1::uuid`,
 		// cap or a long unit; the re-arm backs off with the idle time and a
 		// unit end wakes the pass at once (CHAOS-10013).
 		backoff, backoffAttrs := rearmBackoff(ctx, service.pool, service.logger, run.id, armAt)
+		// CHAOS-14250: a run with a run of its class ahead of it in every bucket it is capped in waits for the
+		// slot-free wake of the head; its own re-arm only bounds a lost wake.
+		if decision.nonHeadRearm > backoff {
+			backoff = decision.nonHeadRearm
+			backoffAttrs = []synclog.Attr{synclog.Count(synclog.KeyBackoffSeconds, int(backoff.Seconds()))}
+		}
 		scheduleRedispatch(ctx, service.pool, service.logger, run.id, dueNowRearmAtAfter(counts.nextDeferredAt, armAt, backoff), armAt, backoffAttrs...)
 		service.logger.Info(ctx, synclog.MsgDispatchSyncRunNoop, synclog.Run(synclog.ParseID(run.id)), synclog.Count(synclog.KeyQueuedUnits, 0), synclog.Count(synclog.KeyPendingUnits, counts.dispatchable))
 		return nil
@@ -950,4 +963,26 @@ WHERE id = $1::uuid`,
 	flushPostCommitLogs(ctx)
 	flushRollupBumpTally(ctx, service.metrics)
 	return nil
+}
+
+// handOffBuckets lists the buckets that granted this pass more slots than it claimed there, in bucket order.
+func handOffBuckets(granted map[dispatchBucket]int, claimed []budgetUnit) []dispatchBucket {
+	claimedIn := make(map[dispatchBucket]int, len(granted))
+	for _, unit := range claimed {
+		claimedIn[dispatchBucket{orgID: unit.orgID, provider: unit.provider, costClass: unit.costClass}]++
+	}
+	var buckets []dispatchBucket
+	for bucket, slots := range granted {
+		if slots > claimedIn[bucket] {
+			buckets = append(buckets, bucket)
+		}
+	}
+	sort.Slice(buckets, func(i, j int) bool {
+		a, b := buckets[i], buckets[j]
+		if a.provider != b.provider {
+			return a.provider < b.provider
+		}
+		return a.costClass < b.costClass
+	})
+	return buckets
 }

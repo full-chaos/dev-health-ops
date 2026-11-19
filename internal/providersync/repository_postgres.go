@@ -1194,11 +1194,14 @@ func bumpSyncRunRollup(
 	return syncrunrollup.Bump(ctx, tx, syncRunID)
 }
 
-// wakeDispatch arms the run's next dispatch pass now that this unit has left
-// its concurrency slot (CHAOS-10013). It runs after the unit's commit, as its
-// own statement, and never fails the completion: see syncrunrollup.WakeDispatch.
+// wakeDispatch arms the bucket head's and the run's next dispatch pass now that
+// this unit has left its concurrency slot (CHAOS-10013). It runs after the
+// unit's commit and never fails the completion: see
+// syncrunrollup.WakeAfterSlotFree.
 func (repository *PostgresRepository) wakeDispatch(ctx context.Context, claim Claim, completedAt time.Time) {
-	syncrunrollup.WakeDispatch(ctx, repository.Pool, claim.SyncRunID, completedAt, syncrunrollup.DispatchWakePathProviderUnit)
+	syncrunrollup.WakeAfterSlotFree(ctx, repository.Pool, syncrunrollup.SlotFree{
+		RunID: claim.SyncRunID, OrgID: claim.OrgID, Provider: claim.Provider, CostClass: string(claim.CostClass),
+	}, completedAt, syncrunrollup.DispatchWakePathProviderUnit)
 }
 
 // recordSyncRunRollupBumpPath is the path label for every call in this

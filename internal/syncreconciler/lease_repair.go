@@ -177,7 +177,7 @@ func (repair *LeaseRepair) Step(ctx context.Context, now time.Time, limit int) (
 		return candidates[left].syncRunID < candidates[right].syncRunID
 	})
 	result := LeaseRepairResult{Selected: len(candidates)}
-	wakeRuns := make([]string, 0, len(candidates))
+	wakeRuns := make([]syncrunrollup.SlotFree, 0, len(candidates))
 	for _, candidate := range candidates {
 		decision := decideExpiredLeaseRepair(candidate, repair.config)
 		var affected int64
@@ -228,7 +228,7 @@ func (repair *LeaseRepair) Step(ctx context.Context, now time.Time, limit int) (
 			return LeaseRepairResult{}, ErrUnavailable
 		}
 		if affected == 1 {
-			wakeRuns = appendWakeRun(wakeRuns, candidate.syncRunID)
+			wakeRuns = appendWakeRun(wakeRuns, syncrunrollup.SlotFree{RunID: candidate.syncRunID, OrgID: candidate.orgID, Provider: candidate.provider, CostClass: candidate.costClass})
 		}
 	}
 	if err := tx.Commit(ctx); err != nil {

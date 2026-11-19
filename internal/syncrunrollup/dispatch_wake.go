@@ -171,6 +171,10 @@ const (
 	DispatchWakePathDispatchPass       = "dispatch_pass"
 	// DispatchWakePathHoldBack: a pass left free slots to an older run of the bucket and wakes it (CHAOS-8880).
 	DispatchWakePathHoldBack = "hold_back"
+	// DispatchWakePathBucketHead: a unit left its slot and the bucket's head run is woken for it.
+	DispatchWakePathBucketHead = "bucket_head"
+	// DispatchWakePathHandOff: a pass left granted slots of a bucket unused and wakes the next run of its class.
+	DispatchWakePathHandOff = "hand_off"
 )
 
 // DispatchWakeTimeout bounds one wake statement. The wake is best effort and
@@ -198,9 +202,15 @@ const (
 // countdown already covers. For the same reason it returns no error: a failed
 // wake is logged and counted, and the caller's commit stands.
 func WakeDispatch(ctx context.Context, db Execer, syncRunID string, now time.Time, path string) bool {
+	return runWake(ctx, db, syncRunID, now, path, WakeDispatchSQL, uuid.New(), syncRunID, now.UTC())
+}
+
+// runWake runs one wake statement under DispatchWakeTimeout and records its outcome; syncRunID names the run in the
+// log lines.
+func runWake(ctx context.Context, db Execer, syncRunID string, now time.Time, path, statement string, arguments ...any) bool {
 	wakeCtx, cancel := context.WithTimeout(ctx, DispatchWakeTimeout)
 	defer cancel()
-	command, err := db.Exec(wakeCtx, WakeDispatchSQL, uuid.New(), syncRunID, now.UTC())
+	command, err := db.Exec(wakeCtx, statement, arguments...)
 	if err != nil {
 		dispatchWakeCounts.record(path, DispatchWakeOutcomeFailed)
 		synclog.Default().Warn(ctx, synclog.MsgDispatchSyncRunUnitCompletionWakeFailed,
@@ -225,8 +235,9 @@ func WakeDispatch(ctx context.Context, db Execer, syncRunID string, now time.Tim
 
 var (
 	dispatchWakePaths = []string{
-		DispatchWakePathDispatchPass, DispatchWakePathHoldBack, DispatchWakePathLeaseRepair, DispatchWakePathProviderUnit,
-		DispatchWakePathRouteUnavailable, DispatchWakePathUnreclaimableSweep,
+		DispatchWakePathBucketHead, DispatchWakePathDispatchPass, DispatchWakePathHandOff, DispatchWakePathHoldBack,
+		DispatchWakePathLeaseRepair, DispatchWakePathProviderUnit, DispatchWakePathRouteUnavailable,
+		DispatchWakePathUnreclaimableSweep,
 	}
 	dispatchWakeOutcomes = []string{DispatchWakeOutcomeArmed, DispatchWakeOutcomeFailed, DispatchWakeOutcomeNotWaiting}
 )

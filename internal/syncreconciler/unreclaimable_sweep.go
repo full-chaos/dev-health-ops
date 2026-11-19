@@ -647,7 +647,7 @@ func (sweep *UnreclaimableSweep) Step(
 		return candidates[left].syncRunID < candidates[right].syncRunID
 	})
 
-	var wakeRuns []string
+	var wakeRuns []syncrunrollup.SlotFree
 	for _, candidate := range candidates {
 		affected, err := sweep.terminalize(ctx, tx, candidate, now)
 		if err != nil {
@@ -658,7 +658,7 @@ func (sweep *UnreclaimableSweep) Step(
 		}
 		result.Terminalized += int(affected)
 		if affected == 1 {
-			wakeRuns = appendWakeRun(wakeRuns, candidate.syncRunID)
+			wakeRuns = appendWakeRun(wakeRuns, syncrunrollup.SlotFree{RunID: candidate.syncRunID, OrgID: candidate.orgID, Provider: candidate.provider, CostClass: candidate.costClass})
 		}
 	}
 

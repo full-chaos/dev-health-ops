@@ -192,7 +192,7 @@ func ResolveSelected(ctx context.Context, client QueryClient, orgID string, batc
 	// Phase 0: repo-filter resolution. FATAL on error.
 	resolvedFilters, err := ResolveAnalyticsRepoFilters(ctx, client, orgID, batch.Filters)
 	if err != nil {
-		return nil, fmt.Errorf("analytics: repo filter resolution: %w", err)
+		return nil, fmt.Errorf("analytics: repo filter resolution: %w", markedIfClientCancel(ctx, err, "repo_filter", "org_id", orgID))
 	}
 
 	// Phase 1: timeseries + breakdowns, concurrent, index-ordered first
@@ -227,17 +227,26 @@ func ResolveSelected(ctx context.Context, client QueryClient, orgID string, batc
 	// Index-ordered first-error scan: ALL of timeseries before ANY of
 	// breakdowns, regardless of which index actually failed or when
 	// (analytics.py:597-617's two separate enumerate loops).
-	// A read the client's cancel ended reports the cancel here; the GraphQL
-	// presenter writes no failure chain for it (graphql_error_presenter.go).
+	// Every statement the client's cancel ended is reported here, not only
+	// the one whose error is returned; the mark keeps the GraphQL presenter
+	// from reporting it again (graphql_error_presenter.go).
+	for i := range tsOutcomes {
+		if tsOutcomes[i].err != nil {
+			tsOutcomes[i].err = markedIfClientCancel(ctx, tsOutcomes[i].err, "timeseries", "org_id", orgID, "index", i)
+		}
+	}
+	for i := range bdOutcomes {
+		if bdOutcomes[i].err != nil {
+			bdOutcomes[i].err = markedIfClientCancel(ctx, bdOutcomes[i].err, "breakdown", "org_id", orgID, "index", i)
+		}
+	}
 	for i, o := range tsOutcomes {
 		if o.err != nil {
-			reportedAsClientCancel(ctx, o.err, "timeseries", "org_id", orgID, "index", i)
 			return nil, fmt.Errorf("analytics: timeseries[%d]: %w", i, o.err)
 		}
 	}
 	for i, o := range bdOutcomes {
 		if o.err != nil {
-			reportedAsClientCancel(ctx, o.err, "breakdown", "org_id", orgID, "index", i)
 			return nil, fmt.Errorf("analytics: breakdown[%d]: %w", i, o.err)
 		}
 	}
@@ -594,7 +603,9 @@ func resolveSankey(ctx context.Context, client QueryClient, orgID string, input 
 		//
 		// A request the client closed is a cancel, not a failed read
 		// (clientcancel.go): one INFO line, no failure report.
-		if !reportedAsClientCancel(ctx, execErr, "sankey", "org_id", orgID, "path", pathLabel(req.Path), "use_investment", useInvestment) {
+		if reportedAsClientCancel(ctx, execErr, "sankey", "org_id", orgID, "path", pathLabel(req.Path), "use_investment", useInvestment) {
+			execErr = &reportedClientCancel{err: execErr}
+		} else {
 			recordDegradation(ctx, "sankey", execErr)
 			slog.WarnContext(ctx, "analytics: sankey query failed",
 				"org_id", orgID, "path", pathLabel(req.Path), "use_investment", useInvestment, "error", execErr)

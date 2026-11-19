@@ -54,9 +54,9 @@ func safeGraphQLErrorPresenter(label string, observe func(context.Context)) grap
 			chain = append(chain, unwrapped.Error())
 		}
 		requestID := graphQLRequestID(ctx)
-		// The read the client's cancel ended reports the cancel in its own
-		// phase (analytics/clientcancel.go); its chain is not a failure.
-		cancelled := analytics.ClientCancelled(ctx, err)
+		// A read the client's cancel ended is reported once as a cancel (by its
+		// analytics phase, else here under the label); its chain is not a failure.
+		cancelled := analytics.ReportedAsClientCancel(ctx, err, "graphql_"+label, "request_id", logSafeRequestID(requestID))
 		presented := graphql.DefaultErrorPresenter(ctx, err)
 		var client *policy.ClientError
 		switch {

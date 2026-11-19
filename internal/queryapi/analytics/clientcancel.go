@@ -82,13 +82,34 @@ func reportedAsClientCancel(ctx context.Context, err error, phase string, attrs 
 	return true
 }
 
-// ClientCancelled is clientCancelled for a caller outside this package.
-func ClientCancelled(ctx context.Context, err error) bool {
-	return clientCancelled(ctx, err)
+// reportedClientCancel marks an error whose client cancel a phase of this
+// package reported already, so the caller that ends the request on it (the
+// GraphQL presenter, a REST route) does not report it a second time.
+type reportedClientCancel struct{ err error }
+
+func (r *reportedClientCancel) Error() string { return r.err.Error() }
+func (r *reportedClientCancel) Unwrap() error { return r.err }
+
+// markedIfClientCancel reports err as a client cancel of phase when it is one
+// and returns it marked as reported; any other err is returned as it is.
+func markedIfClientCancel(ctx context.Context, err error, phase string, attrs ...any) error {
+	if !reportedAsClientCancel(ctx, err, phase, attrs...) {
+		return err
+	}
+	return &reportedClientCancel{err: err}
 }
 
-// ReportedAsClientCancel is reportedAsClientCancel for a caller outside this
-// package that ends a read on err (a REST route, under its own phase).
+// ReportedAsClientCancel says whether err ends a read that the client's
+// cancel ended. It reports the cancel under phase unless a phase of this
+// package reported it already (the error carries the mark): one report per
+// cancelled read, whichever layer sees it last.
 func ReportedAsClientCancel(ctx context.Context, err error, phase string, attrs ...any) bool {
-	return reportedAsClientCancel(ctx, err, phase, attrs...)
+	if !clientCancelled(ctx, err) {
+		return false
+	}
+	var reported *reportedClientCancel
+	if !logging.ErrorAs(err, &reported) {
+		recordClientCancel(ctx, phase, attrs...)
+	}
+	return true
 }

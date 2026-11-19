@@ -3,6 +3,7 @@ package analytics
 import (
 	"context"
 	"log/slog"
+	"sort"
 	"testing"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
@@ -10,10 +11,12 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 )
 
-// A timeseries or breakdown statement of a batch that the client's cancel
+// Each timeseries or breakdown statement of a batch that the client's cancel
 // ended reports the cancel in its own phase (one INFO line, one cancel
-// report). On a live request or one whose deadline passed the same error is
-// no cancel. Either way Resolve still returns the error.
+// report), not only the one whose error Resolve returns; the returned error
+// carries the mark, so ReportedAsClientCancel (the presenter, a REST route)
+// does not report it again. On a live request the same error is no cancel.
+// Either way Resolve still returns the error.
 func TestATimeseriesOrBreakdownTheClientCancelledIsReportedAsACancel(t *testing.T) {
 	cancelledByClient := func() error {
 		return &fakeOperationError{operation: "query", cause: &clickhousedriver.Exception{
@@ -21,14 +24,19 @@ func TestATimeseriesOrBreakdownTheClientCancelledIsReportedAsACancel(t *testing.
 		}}
 	}
 	phases := []struct {
-		phase string
-		match string
-		batch model.AnalyticsRequestInput
+		name   string
+		phases []string
+		match  []string
+		batch  model.AnalyticsRequestInput
 	}{
-		{"timeseries", "repo_id AS dimension_value", model.AnalyticsRequestInput{
+		{"timeseries", []string{"timeseries"}, []string{"repo_id AS dimension_value"}, model.AnalyticsRequestInput{
 			Timeseries: []model.TimeseriesRequestInput{tsInput(model.DimensionInputRepo, model.MeasureInputCount)},
 		}},
-		{"breakdown", "LIMIT {top_n:UInt32}", model.AnalyticsRequestInput{
+		{"breakdown", []string{"breakdown"}, []string{"LIMIT {top_n:UInt32}"}, model.AnalyticsRequestInput{
+			Breakdowns: []model.BreakdownRequestInput{bdInput(model.DimensionInputRepo, model.MeasureInputCount)},
+		}},
+		{"timeseries and breakdown", []string{"timeseries", "breakdown"}, []string{"LIMIT {top_n:UInt32}", "repo_id AS dimension_value"}, model.AnalyticsRequestInput{
+			Timeseries: []model.TimeseriesRequestInput{tsInput(model.DimensionInputRepo, model.MeasureInputCount)},
 			Breakdowns: []model.BreakdownRequestInput{bdInput(model.DimensionInputRepo, model.MeasureInputCount)},
 		}},
 	}
@@ -46,7 +54,7 @@ func TestATimeseriesOrBreakdownTheClientCancelledIsReportedAsACancel(t *testing.
 	}
 	for _, phase := range phases {
 		for _, request := range contexts {
-			t.Run(phase.phase+"/"+request.name, func(t *testing.T) {
+			t.Run(phase.name+"/"+request.name, func(t *testing.T) {
 				records := captureSlog(t)
 				var cancels []string
 				origCancel := recordClientCancel
@@ -57,28 +65,54 @@ func TestATimeseriesOrBreakdownTheClientCancelledIsReportedAsACancel(t *testing.
 				t.Cleanup(func() { recordClientCancel = origCancel })
 
 				client := &routingFakeClient{}
-				client.onErr(phase.match, cancelledByClient())
-				if _, err := Resolve(request.make(t), client, "org-1", phase.batch); err == nil {
+				for _, match := range phase.match {
+					client.onErr(match, cancelledByClient())
+				}
+				ctx := request.make(t)
+				_, err := Resolve(ctx, client, "org-1", phase.batch)
+				if err == nil {
 					t.Fatal("Resolve returned no error")
 				}
+				if got := ReportedAsClientCancel(ctx, err, "caller"); got != request.wantCancel {
+					t.Errorf("ReportedAsClientCancel of the returned error = %v, want %v", got, request.wantCancel)
+				}
 
-				cancelLines := 0
+				var lines []string
 				for _, record := range *records {
-					if record.msg == "analytics: query cancelled by the client" && record.attrs["phase"] == phase.phase {
+					if record.msg == "analytics: query cancelled by the client" {
 						if record.level != slog.LevelInfo {
 							t.Errorf("the cancel line is at %v, want INFO", record.level)
 						}
-						cancelLines++
+						name, _ := record.attrs["phase"].(string)
+						lines = append(lines, name)
 					}
 				}
-				want := 0
+				var want []string
 				if request.wantCancel {
-					want = 1
+					want = phase.phases
 				}
-				if len(cancels) != want || cancelLines != want {
-					t.Errorf("cancel reports = %v, cancel lines = %d; want %d of each", cancels, cancelLines, want)
+				if !sameStrings(cancels, want) || !sameStrings(lines, want) {
+					t.Errorf("cancel reports = %v, cancel lines = %v; want %v of each (none for the caller)", cancels, lines, want)
 				}
 			})
 		}
 	}
+}
+
+func sameStrings(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	sorted := func(in []string) []string {
+		out := append([]string(nil), in...)
+		sort.Strings(out)
+		return out
+	}
+	g, w := sorted(got), sorted(want)
+	for i := range g {
+		if g[i] != w[i] {
+			return false
+		}
+	}
+	return true
 }

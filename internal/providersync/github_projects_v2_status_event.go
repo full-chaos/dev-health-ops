@@ -33,8 +33,8 @@ func githubProjectV2StatusEvent(
 	if status == nil {
 		return githubWorkItemTransitionRow{}, false, false, nil
 	}
-	raw := strings.TrimSpace(*status.Name)
-	if raw == "" {
+	raw := *status.Name
+	if strings.TrimSpace(raw) == "" {
 		return githubWorkItemTransitionRow{}, false, false, nil
 	}
 	occurredAt := parseGitHubWorkItemTime(status.UpdatedAt)
@@ -191,7 +191,9 @@ func settleGitHubProjectV2Status(
 	return merged
 }
 
-// lastGitHubTransition is the last element of workitemmetrics.OrderTransitions.
+// lastGitHubTransition is the last element of workitemmetrics.OrderTransitions,
+// with every time at the stored precision (clickHouseMillis), so the batch
+// orders its events the way a later read of the stored rows does.
 // Two events with the same instant and statuses but different raw values are
 // one step of that order; the smaller raw value is taken, so the answer does
 // not depend on the read order.
@@ -202,7 +204,7 @@ func lastGitHubTransition(events []githubWorkItemTransitionRow) (githubWorkItemT
 	ordered := make([]workitemmetrics.Transition, 0, len(events))
 	for _, event := range events {
 		ordered = append(ordered, workitemmetrics.Transition{
-			WorkItemID: event.WorkItemID, OccurredAt: event.OccurredAt,
+			WorkItemID: event.WorkItemID, OccurredAt: clickHouseMillis(event.OccurredAt),
 			FromStatus: event.FromStatus, ToStatus: event.ToStatus,
 		})
 	}
@@ -211,7 +213,7 @@ func lastGitHubTransition(events []githubWorkItemTransitionRow) (githubWorkItemT
 	var last githubWorkItemTransitionRow
 	found := false
 	for _, event := range events {
-		if !event.OccurredAt.Equal(want.OccurredAt) || event.FromStatus != want.FromStatus || event.ToStatus != want.ToStatus {
+		if !clickHouseMillis(event.OccurredAt).Equal(want.OccurredAt) || event.FromStatus != want.FromStatus || event.ToStatus != want.ToStatus {
 			continue
 		}
 		if !found || rawLess(event.ToStatusRaw, last.ToStatusRaw) {

@@ -241,6 +241,39 @@ func TestChaos14184SameInstantOrdersByTheSharedOrder(t *testing.T) {
 	}
 }
 
+// The batch orders its events at the stored precision (milliseconds), so the
+// status it writes is the last event a later read of the stored rows finds:
+// a repository close 0.2 ms after the board value is the same stored instant.
+func TestChaos14184OrdersAtTheStoredPrecision(t *testing.T) {
+	repository := chaos14184Repository(t, chaos14184ClosedIssue, chaos14184CloseEvent)
+	for index := range repository.StatusTransitions {
+		if repository.StatusTransitions[index].ToStatus == "done" {
+			repository.StatusTransitions[index].OccurredAt = repository.StatusTransitions[index].OccurredAt.Add(600 * time.Microsecond)
+		}
+	}
+	board := chaos14184Board(t, chaos14184Item("CLOSED", "2026-10-03T00:00:00Z", "In Progress", "2026-10-03T00:00:00.0004Z"), chaos14184Now())
+	merged := chaos14184Merge(t, repository, board)
+	stored := make([]githubWorkItemTransitionRow, 0, len(merged.StatusTransitions))
+	for _, transition := range merged.StatusTransitions {
+		transition.OccurredAt = clickHouseMillis(transition.OccurredAt)
+		stored = append(stored, transition)
+	}
+	if last := chaos14184Last(t, stored); merged.WorkItems[0].Status != last.ToStatus || last.ToStatus != "in_progress" {
+		t.Fatalf("status=%q, last stored event to_status=%q, want both in_progress", merged.WorkItems[0].Status, last.ToStatus)
+	}
+}
+
+// status_raw keeps the payload value as GitHub sent it (the board row's raw
+// value); only the mapping reads it trimmed.
+func TestChaos14184StatusRawKeepsThePayloadValue(t *testing.T) {
+	board := chaos14184Board(t, chaos14184Item("OPEN", "", " In Progress ", "2026-10-02T00:00:00Z"), chaos14184Now())
+	if len(board.StatusTransitions) != 1 || *board.StatusTransitions[0].ToStatusRaw != " In Progress " ||
+		board.StatusTransitions[0].ToStatus != "in_progress" {
+		t.Fatalf("events=%+v", board.StatusTransitions)
+	}
+	chaos14184Check(t, chaos14184Merge(t, chaos14184EmptyRows(), board), "in_progress", " In Progress ")
+}
+
 // F1: no Status value on the board item: no board event, and the status is
 // today's fallback from the issue state.
 func TestChaos14184NoStatusValueKeepsTheFallback(t *testing.T) {

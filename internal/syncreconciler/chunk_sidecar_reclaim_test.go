@@ -3,6 +3,7 @@ package syncreconciler
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -10,6 +11,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+func freeTickLock(context.Context) (func(), bool, error) { return func() {}, true, nil }
 
 func TestDefaultChunkSidecarReclaimConfigPinsTheBounds(t *testing.T) {
 	t.Parallel()
@@ -41,12 +44,15 @@ func TestChunkSidecarReclaimRefusesInvalidConfiguration(t *testing.T) {
 	} {
 		config := DefaultChunkSidecarReclaimConfig()
 		mutate(&config)
-		if _, err := newChunkSidecarReclaim(begin, config); !errors.Is(err, ErrInvalidConfiguration) {
+		if _, err := newChunkSidecarReclaim(begin, freeTickLock, config); !errors.Is(err, ErrInvalidConfiguration) {
 			t.Errorf("%s: error = %v, want ErrInvalidConfiguration", name, err)
 		}
 	}
-	if _, err := newChunkSidecarReclaim(nil, DefaultChunkSidecarReclaimConfig()); !errors.Is(err, ErrInvalidConfiguration) {
+	if _, err := newChunkSidecarReclaim(nil, freeTickLock, DefaultChunkSidecarReclaimConfig()); !errors.Is(err, ErrInvalidConfiguration) {
 		t.Errorf("nil begin: error = %v, want ErrInvalidConfiguration", err)
+	}
+	if _, err := newChunkSidecarReclaim(begin, nil, DefaultChunkSidecarReclaimConfig()); !errors.Is(err, ErrInvalidConfiguration) {
+		t.Errorf("nil tick lock: error = %v, want ErrInvalidConfiguration", err)
 	}
 	if _, err := NewChunkSidecarReclaim(nil); !errors.Is(err, ErrInvalidConfiguration) {
 		t.Errorf("nil pool: error = %v, want ErrInvalidConfiguration", err)
@@ -150,12 +156,12 @@ func TestChunkSidecarReclaimConfigCannotRaiseTheBounds(t *testing.T) {
 	} {
 		config := DefaultChunkSidecarReclaimConfig()
 		mutate(&config)
-		if _, err := newChunkSidecarReclaim(begin, config); !errors.Is(err, ErrInvalidConfiguration) {
+		if _, err := newChunkSidecarReclaim(begin, freeTickLock, config); !errors.Is(err, ErrInvalidConfiguration) {
 			t.Errorf("%s: error = %v, want ErrInvalidConfiguration", name, err)
 		}
 	}
 	lower := ChunkSidecarReclaimConfig{RowsPerStatement: 1, BytesPerStatement: 1, BytesPerMinute: maxChunkPayloadBytes, StatementsPerTick: 1}
-	if _, err := newChunkSidecarReclaim(begin, lower); err != nil {
+	if _, err := newChunkSidecarReclaim(begin, freeTickLock, lower); err != nil {
 		t.Fatalf("lower bounds must stay valid: %v", err)
 	}
 }
@@ -241,7 +247,7 @@ func TestChunkSidecarReclaimStepRefusesBadArguments(t *testing.T) {
 	reclaim, err := newChunkSidecarReclaim(func(context.Context) (pgx.Tx, error) {
 		t.Fatal("begin must not run for refused arguments")
 		return nil, nil
-	}, DefaultChunkSidecarReclaimConfig())
+	}, freeTickLock, DefaultChunkSidecarReclaimConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -255,5 +261,43 @@ func TestChunkSidecarReclaimStepRefusesBadArguments(t *testing.T) {
 	var missing *ChunkSidecarReclaim
 	if _, err := missing.Step(context.Background(), now, 1); !errors.Is(err, ErrInvalidConfiguration) {
 		t.Errorf("nil reclaim: error = %v", err)
+	}
+}
+
+func TestMutationPipelineCountsChunkSidecarReclaimLockSkips(t *testing.T) {
+	pipeline, err := NewMutationPipeline(
+		pipelineLeaseRepairFunc(func(context.Context, time.Time, int) (LeaseRepairResult, error) { return LeaseRepairResult{}, nil }),
+		pipelineTerminalDeliveryRepairFunc(func(context.Context, time.Time, int) (TerminalDeliveryRepairResult, error) {
+			return TerminalDeliveryRepairResult{}, nil
+		}),
+		pipelineMaterializerFunc(func(context.Context, time.Time, time.Time, int) (MaterializerResult, error) {
+			return MaterializerResult{}, nil
+		}),
+		pipelineKernelFunc(func(context.Context, time.Time, int, time.Duration, AtLeastOncePublisher, PostSyncHandoff) (KernelResult, error) {
+			return KernelResult{}, nil
+		}),
+		pipelineObserverFunc(func(context.Context, time.Time, int) (Observation, error) { return Observation{}, nil }),
+		nil, nil, nil,
+		noopTerminalOutboxClose(),
+		noopOrphanedUnitRepair(),
+		pipelineChunkSidecarReclaimFunc(func(context.Context, time.Time, int) (ChunkSidecarReclaimResult, error) {
+			return ChunkSidecarReclaimResult{LockSkipped: true, RemainingUnits: -1}, nil
+		}),
+		DefaultMutationPipelineConfig(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for tick := 0; tick < 2; tick++ {
+		if _, err := pipeline.Step(context.Background(), time.Now(), 10); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var rendered strings.Builder
+	if err := pipeline.WritePrometheus(&rendered); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(rendered.String(), "\nsync_reconciler_chunk_sidecar_reclaim_lock_skipped_total 2\n") {
+		t.Fatalf("lock-skip counter not rendered as 2:\n%s", rendered.String())
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"reflect"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -25,19 +26,70 @@ import (
 // own transaction, holds only the candidate's checkpoint row lock, and deletes
 // at most RowsPerStatement rows and BytesPerStatement payload bytes (the first
 // row always goes). The checkpoint row goes last, once no chunk row is left, so
-// its ON DELETE CASCADE never deletes chunk rows. The limiter bounds the
-// payload deleted in any 60-second window.
+// its ON DELETE CASCADE never deletes chunk rows.
+//
+// Every tick first takes a cluster-wide advisory lock
+// (chunkSidecarReclaimLockKey) for its whole length; a tick that does not get
+// it is skipped and counted, so only one reconciler deletes at a time. The
+// in-process limiter bounds the payload that holder deletes in any 60-second
+// window. When the lock moves to another process, that process's limiter
+// starts empty (the handover case: each process that wins the lock within one
+// window can delete up to BytesPerMinute).
 type ChunkSidecarReclaim struct {
-	begin   chunkSidecarReclaimBeginFunc
-	config  ChunkSidecarReclaimConfig
-	limiter *chunkReclaimLimiter
-	clock   func() time.Time
+	begin    chunkSidecarReclaimBeginFunc
+	tickLock chunkSidecarReclaimTickLockFunc
+	config   ChunkSidecarReclaimConfig
+	limiter  *chunkReclaimLimiter
+	clock    func() time.Time
 
-	mu     sync.Mutex
-	active bool
+	mu          sync.Mutex
+	active      bool
+	lockSkipped atomic.Uint64
 }
 
 type chunkSidecarReclaimBeginFunc func(context.Context) (pgx.Tx, error)
+
+// chunkSidecarReclaimTickLockFunc takes the tick lock without waiting. When
+// acquired, release must be called once the tick is over.
+type chunkSidecarReclaimTickLockFunc func(context.Context) (release func(), acquired bool, err error)
+
+// chunkSidecarReclaimLockKey is the single-bigint advisory lock key of the
+// reclaim tick (CHAOS-14243); no other code in this repository takes it.
+const chunkSidecarReclaimLockKey int64 = 1424300000000001
+
+// poolChunkSidecarReclaimTickLock holds a session-level advisory lock on one
+// pooled connection for the tick. A connection whose unlock cannot be
+// confirmed is closed, which ends its session and so its lock, instead of
+// going back to the pool still holding it.
+func poolChunkSidecarReclaimTickLock(pool *pgxpool.Pool) chunkSidecarReclaimTickLockFunc {
+	return func(ctx context.Context) (func(), bool, error) {
+		conn, err := pool.Acquire(ctx)
+		if err != nil {
+			return nil, false, err
+		}
+		var acquired bool
+		if err := conn.QueryRow(ctx, `SELECT pg_catalog.pg_try_advisory_lock($1)`, chunkSidecarReclaimLockKey).Scan(&acquired); err != nil {
+			closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			_ = conn.Conn().Close(closeCtx)
+			cancel()
+			conn.Release()
+			return nil, false, err
+		}
+		if !acquired {
+			conn.Release()
+			return nil, false, nil
+		}
+		return func() {
+			unlockCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			var unlocked bool
+			if err := conn.QueryRow(unlockCtx, `SELECT pg_catalog.pg_advisory_unlock($1)`, chunkSidecarReclaimLockKey).Scan(&unlocked); err != nil || !unlocked {
+				_ = conn.Conn().Close(unlockCtx)
+			}
+			conn.Release()
+		}, true, nil
+	}
+}
 
 // ChunkSidecarReclaimStepper is the pipeline seam for ChunkSidecarReclaim.
 type ChunkSidecarReclaimStepper interface {
@@ -63,6 +115,7 @@ type ChunkSidecarReclaimResult struct {
 	Throttled      bool
 	RemainingUnits int64
 	Done           bool
+	LockSkipped    bool
 }
 
 // maxChunkPayloadBytes is ck_sync_chunk_payload_bytes' upper bound: a statement
@@ -96,7 +149,7 @@ func NewChunkSidecarReclaim(pool *pgxpool.Pool) (*ChunkSidecarReclaim, error) {
 	if pool == nil {
 		return nil, ErrInvalidConfiguration
 	}
-	reclaim, err := newChunkSidecarReclaim(pool.Begin, DefaultChunkSidecarReclaimConfig())
+	reclaim, err := newChunkSidecarReclaim(pool.Begin, poolChunkSidecarReclaimTickLock(pool), DefaultChunkSidecarReclaimConfig())
 	if err != nil {
 		return nil, err
 	}
@@ -109,19 +162,26 @@ func NewChunkSidecarReclaimWithConfig(pool *pgxpool.Pool, config ChunkSidecarRec
 	if pool == nil {
 		return nil, ErrInvalidConfiguration
 	}
-	return newChunkSidecarReclaim(pool.Begin, config)
+	return newChunkSidecarReclaim(pool.Begin, poolChunkSidecarReclaimTickLock(pool), config)
 }
 
-func newChunkSidecarReclaim(begin chunkSidecarReclaimBeginFunc, config ChunkSidecarReclaimConfig) (*ChunkSidecarReclaim, error) {
-	if begin == nil || !config.valid() {
+func newChunkSidecarReclaim(begin chunkSidecarReclaimBeginFunc, tickLock chunkSidecarReclaimTickLockFunc, config ChunkSidecarReclaimConfig) (*ChunkSidecarReclaim, error) {
+	if begin == nil || tickLock == nil || !config.valid() {
 		return nil, ErrInvalidConfiguration
 	}
 	return &ChunkSidecarReclaim{
-		begin:   begin,
-		config:  config,
-		limiter: newChunkReclaimLimiter(config.BytesPerMinute),
-		clock:   time.Now,
+		begin:    begin,
+		tickLock: tickLock,
+		config:   config,
+		limiter:  newChunkReclaimLimiter(config.BytesPerMinute),
+		clock:    time.Now,
 	}, nil
+}
+
+// LockSkippedTicks counts the ticks skipped because another session held the
+// tick lock.
+func (reclaim *ChunkSidecarReclaim) LockSkippedTicks() uint64 {
+	return reclaim.lockSkipped.Load()
 }
 
 // chunkSidecarReclaimMissing reports a nil dependency, including a typed nil
@@ -204,13 +264,22 @@ WHERE unit.status IN ('success', 'failed')`
 // never from candidate selection; a tick that committed work logs it even when
 // a later statement or the count fails.
 func (reclaim *ChunkSidecarReclaim) Step(ctx context.Context, now time.Time, limit int) (ChunkSidecarReclaimResult, error) {
-	if reclaim == nil || reclaim.begin == nil || reclaim.limiter == nil || reclaim.clock == nil ||
-		ctx == nil || now.IsZero() || limit < 1 {
+	if reclaim == nil || reclaim.begin == nil || reclaim.tickLock == nil || reclaim.limiter == nil ||
+		reclaim.clock == nil || ctx == nil || now.IsZero() || limit < 1 {
 		return ChunkSidecarReclaimResult{}, ErrInvalidConfiguration
 	}
 	if err := ctx.Err(); err != nil {
 		return ChunkSidecarReclaimResult{}, err
 	}
+	release, acquired, err := reclaim.tickLock(ctx)
+	if err != nil {
+		return reclaim.report(ChunkSidecarReclaimResult{RemainingUnits: -1}, reclaimError(ctx, err))
+	}
+	if !acquired {
+		reclaim.lockSkipped.Add(1)
+		return ChunkSidecarReclaimResult{RemainingUnits: -1, LockSkipped: true}, nil
+	}
+	defer release()
 	statements := reclaim.config.StatementsPerTick
 	if limit < statements {
 		statements = limit

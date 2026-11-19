@@ -442,7 +442,7 @@ func TestChunkSidecarReclaimPostgresContract(t *testing.T) {
 				return nil, errors.New("begin refused")
 			}
 			return venue.Domain.Begin(beginCtx)
-		}, unlimited)
+		}, poolChunkSidecarReclaimTickLock(venue.Domain), unlimited)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -475,7 +475,7 @@ func TestChunkSidecarReclaimPostgresContract(t *testing.T) {
 				return nil, errors.New("begin refused")
 			}
 			return venue.Domain.Begin(beginCtx)
-		}, config)
+		}, poolChunkSidecarReclaimTickLock(venue.Domain), config)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -496,6 +496,91 @@ func TestChunkSidecarReclaimPostgresContract(t *testing.T) {
 		}
 	})
 
+	t.Run("cluster lock: two reclaimers at once, only one deletes in a tick", func(t *testing.T) {
+		resetChunkReclaimVenue(t, ctx, venue)
+		unit := chunkReclaimUnitID(70)
+		seedChunkReclaimUnit(t, ctx, venue.Admin, unit, "failed", 20, chunkMiB, now)
+		limited := DefaultChunkSidecarReclaimConfig()
+		limited.BytesPerMinute = 4 * chunkMiB
+		entered, gate := make(chan struct{}), make(chan struct{})
+		var once sync.Once
+		first, err := newChunkSidecarReclaim(func(beginCtx context.Context) (pgx.Tx, error) {
+			once.Do(func() {
+				close(entered)
+				<-gate
+			})
+			return venue.Domain.Begin(beginCtx)
+		}, poolChunkSidecarReclaimTickLock(venue.Domain), limited)
+		if err != nil {
+			t.Fatal(err)
+		}
+		second, err := newChunkSidecarReclaim(venue.Domain.Begin, poolChunkSidecarReclaimTickLock(venue.Domain), limited)
+		if err != nil {
+			t.Fatal(err)
+		}
+		first.clock = func() time.Time { return now }
+		second.clock = func() time.Time { return now }
+		type outcome struct {
+			result ChunkSidecarReclaimResult
+			err    error
+		}
+		done := make(chan outcome, 1)
+		go func() {
+			result, stepErr := first.Step(ctx, now, 100)
+			done <- outcome{result, stepErr}
+		}()
+		<-entered
+		skipped, err := second.Step(ctx, now, 100)
+		close(gate)
+		held := <-done
+		if err != nil || held.err != nil {
+			t.Fatalf("step errors: %v / %v", held.err, err)
+		}
+		if !skipped.LockSkipped || skipped.Bytes != 0 || second.LockSkippedTicks() != 1 {
+			t.Fatalf("second reclaimer during the first one's tick = %+v (skipped ticks %d), want a skipped tick and no delete", skipped, second.LockSkippedTicks())
+		}
+		if held.result.LockSkipped || held.result.Bytes != 4*chunkMiB {
+			t.Fatalf("lock holder = %+v, want 4 MiB deleted", held.result)
+		}
+		if total := held.result.Bytes + skipped.Bytes; total > limited.BytesPerMinute {
+			t.Fatalf("both reclaimers deleted %d bytes in one tick, cap %d", total, limited.BytesPerMinute)
+		}
+		wantChunkSidecars(t, ctx, venue.Admin, unit, 1, 16)
+	})
+
+	t.Run("cluster lock: held by another session, the tick is skipped and counted", func(t *testing.T) {
+		resetChunkReclaimVenue(t, ctx, venue)
+		unit := chunkReclaimUnitID(71)
+		seedChunkReclaimUnit(t, ctx, venue.Admin, unit, "failed", 5, 1, now)
+		holder, err := venue.Admin.Acquire(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer holder.Release()
+		if _, err := holder.Exec(ctx, `SELECT pg_advisory_lock($1)`, chunkSidecarReclaimLockKey); err != nil {
+			t.Fatal(err)
+		}
+		reclaim := newTestChunkReclaim(t, venue.Domain, unlimited)
+		result, err := reclaim.Step(ctx, now, 100)
+		if err != nil || !result.LockSkipped || result.Statements != 0 || reclaim.LockSkippedTicks() != 1 {
+			t.Fatalf("tick under another session's lock = %+v / %v (skipped ticks %d), want skipped, no error, counter 1", result, err, reclaim.LockSkippedTicks())
+		}
+		wantChunkSidecars(t, ctx, venue.Admin, unit, 1, 5)
+		if _, err := holder.Exec(ctx, `SELECT pg_advisory_unlock($1)`, chunkSidecarReclaimLockKey); err != nil {
+			t.Fatal(err)
+		}
+		if result = stepChunkReclaim(t, ctx, reclaim, now); result.LockSkipped || result.Units != 1 || reclaim.LockSkippedTicks() != 1 {
+			t.Fatalf("tick after the lock is free = %+v (skipped ticks %d), want the unit reclaimed", result, reclaim.LockSkippedTicks())
+		}
+		var held int
+		if err := venue.Admin.QueryRow(ctx, `SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND granted`).Scan(&held); err != nil {
+			t.Fatal(err)
+		}
+		if held != 0 {
+			t.Fatalf("%d advisory locks still held after the tick; the reclaimer must release its tick lock", held)
+		}
+	})
+
 	t.Run("a COMMIT whose reply is lost keeps its whole reservation", func(t *testing.T) {
 		resetChunkReclaimVenue(t, ctx, venue)
 		unit := chunkReclaimUnitID(60)
@@ -505,7 +590,7 @@ func TestChunkSidecarReclaimPostgresContract(t *testing.T) {
 		reclaim, err := newChunkSidecarReclaim(func(beginCtx context.Context) (pgx.Tx, error) {
 			tx, err := venue.Domain.Begin(beginCtx)
 			return lostCommitReplyTx{Tx: tx}, err
-		}, config)
+		}, poolChunkSidecarReclaimTickLock(venue.Domain), config)
 		if err != nil {
 			t.Fatal(err)
 		}

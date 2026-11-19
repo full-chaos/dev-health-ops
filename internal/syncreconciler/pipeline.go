@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/dbphase"
@@ -180,6 +181,9 @@ type MutationPipeline struct {
 	// one shared Go instance.
 	rollupBumps rollupBumpCounts
 	slowLog     stageSlowLog
+	// chunkReclaimLockSkipped counts reclaim ticks another session's tick
+	// lock skipped (sync_reconciler_chunk_sidecar_reclaim_lock_skipped_total).
+	chunkReclaimLockSkipped atomic.Uint64
 }
 
 // rollupBumpCounts is this package's own minimal counter for
@@ -1039,7 +1043,10 @@ func (pipeline *MutationPipeline) Step(
 	// only on repeats.
 	if ctx.Err() == nil {
 		reclaimErr := pipeline.runStage(ctx, StageChunkSidecarReclaim, func(stageCtx context.Context) error {
-			_, stepErr := pipeline.chunkReclaim.Step(stageCtx, now, limit)
+			reclaimed, stepErr := pipeline.chunkReclaim.Step(stageCtx, now, limit)
+			if reclaimed.LockSkipped {
+				pipeline.chunkReclaimLockSkipped.Add(1)
+			}
 			return stepErr
 		})
 		if reclaimErr != nil && ctx.Err() != nil {
@@ -1628,6 +1635,8 @@ func (pipeline *MutationPipeline) WritePrometheus(output io.Writer) error {
 		fmt.Fprintf(&text, "dev_health_sync_run_rollup_bumped_total{outcome=%q,path=%q} %d\n",
 			"failed", path, rollupBumps[[2]string{"failed", path}])
 	}
+	text.WriteString("# HELP sync_reconciler_chunk_sidecar_reclaim_lock_skipped_total Chunk sidecar reclaim ticks skipped because another reconciler session held the cluster-wide reclaim lock (CHAOS-14243).\n# TYPE sync_reconciler_chunk_sidecar_reclaim_lock_skipped_total counter\n")
+	fmt.Fprintf(&text, "sync_reconciler_chunk_sidecar_reclaim_lock_skipped_total %d\n", pipeline.chunkReclaimLockSkipped.Load())
 	_, err := io.WriteString(output, text.String())
 	return err
 }

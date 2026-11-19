@@ -2,6 +2,7 @@ package providersync
 
 import (
 	"context"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -15,11 +16,13 @@ import (
 // serves no past board moves, only the current Status value and the time it
 // was set. Every field comes from the payload, so a re-sync of the same value
 // writes the same row. The board knows no prior status: FromStatus is
-// "unknown", the token the repository chain starts with. A value with no time
-// or with no status mapping is not an event.
+// "unknown", the token the repository chain starts with. A value with no
+// status mapping is not an event. A value with no or an unparsable updatedAt
+// (GitHub serves it as DateTime!) is not an event either, and timeMissing
+// tells the caller to count it.
 func githubProjectV2StatusEvent(
 	claim Claim, item gitHubProjectV2ItemPayload, workItemID string, normalizedAt time.Time,
-) (githubWorkItemTransitionRow, bool, error) {
+) (event githubWorkItemTransitionRow, hasEvent bool, timeMissing bool, err error) {
 	var status *gitHubProjectV2FieldValuePayload
 	for index, value := range item.FieldValues.Nodes {
 		if value.Typename == "ProjectV2ItemFieldSingleSelectValue" &&
@@ -28,23 +31,42 @@ func githubProjectV2StatusEvent(
 		}
 	}
 	if status == nil {
-		return githubWorkItemTransitionRow{}, false, nil
+		return githubWorkItemTransitionRow{}, false, false, nil
+	}
+	raw := strings.TrimSpace(*status.Name)
+	if raw == "" {
+		return githubWorkItemTransitionRow{}, false, false, nil
 	}
 	occurredAt := parseGitHubWorkItemTime(status.UpdatedAt)
-	raw := strings.TrimSpace(*status.Name)
-	toStatus := githubProjectV2Status(raw, nil, "")
-	if occurredAt == nil || raw == "" || toStatus == "unknown" {
-		return githubWorkItemTransitionRow{}, false, nil
+	if occurredAt == nil {
+		return githubWorkItemTransitionRow{}, false, true, nil
 	}
-	event := githubWorkItemTransitionRow{
+	toStatus := githubProjectV2Status(raw, nil, "")
+	if toStatus == "unknown" {
+		return githubWorkItemTransitionRow{}, false, false, nil
+	}
+	event = githubWorkItemTransitionRow{
 		WorkItemID: workItemID, Provider: "github", OccurredAt: occurredAt.UTC(),
 		ToStatusRaw: &raw, FromStatus: "unknown", ToStatus: toStatus,
 		OrgID: claim.OrgID, LastSynced: normalizedAt.UTC(),
 	}
 	if err := event.validate(claim); err != nil {
-		return githubWorkItemTransitionRow{}, false, err
+		return githubWorkItemTransitionRow{}, false, false, err
 	}
-	return event, true, nil
+	return event, true, false, nil
+}
+
+// reportGitHubProjectV2StatusTimeMissing is the one record per unit of the
+// board items whose Status value came with no usable updatedAt. Those items
+// keep the board value as their status and add no event, so without this line
+// a payload change would silently stop the board side of the history.
+func reportGitHubProjectV2StatusTimeMissing(ctx context.Context, claim Claim, items int) {
+	if items == 0 {
+		return
+	}
+	slog.Default().WarnContext(ctx, "github_projects_v2.status_value_time_missing",
+		"provider", claim.Provider, "dataset", claim.Dataset,
+		"org_id", claim.OrgID, "unit", claim.ID, "integration", claim.IntegrationID, "items", items)
 }
 
 // githubProjectV2StoredTransitionsReader reads the transitions earlier runs

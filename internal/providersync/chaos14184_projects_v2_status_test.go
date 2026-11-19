@@ -1,10 +1,13 @@
 package providersync
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -84,7 +87,7 @@ func chaos14184Board(t *testing.T, item string, normalizedAt time.Time) githubWo
 		t.Fatalf("kept=%v err=%v", kept, err)
 	}
 	rows := githubWorkItemRows{WorkItems: []githubWorkItemRow{row}, StatusTransitions: []githubWorkItemTransitionRow{}}
-	event, hasEvent, err := githubProjectV2StatusEvent(claim, payload, row.WorkItemID, normalizedAt)
+	event, hasEvent, _, err := githubProjectV2StatusEvent(claim, payload, row.WorkItemID, normalizedAt)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -351,12 +354,18 @@ func TestChaos14184FetchEmitsTheBoardStatusEvent(t *testing.T) {
 	claim := githubWorkItemOracleClaim()
 	claim.IntegrationConfig = map[string]any{"github_projects_v2": []any{map[string]any{"org_login": "acme", "project_number": 3}}}
 	normalizedAt := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
-	result, err := (GitHubProjectV2Fetcher{}).Fetch(
-		context.Background(), claim, providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
-		githubProjectV2TestClient(t, fakehttp.Client(doer)), normalizedAt, nil,
-	)
-	if err != nil {
-		t.Fatal(err)
+	var result GitHubProjectV2FetchResult
+	if lines := chaos14184StatusTimeMissingLines(t, func() {
+		var err error
+		result, err = (GitHubProjectV2Fetcher{}).Fetch(
+			context.Background(), claim, providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
+			githubProjectV2TestClient(t, fakehttp.Client(doer)), normalizedAt, nil,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}); len(lines) != 0 {
+		t.Fatalf("a well-formed board logged status_value_time_missing: %v", lines)
 	}
 	raw := "In Review"
 	want := []githubWorkItemTransitionRow{{
@@ -365,6 +374,85 @@ func TestChaos14184FetchEmitsTheBoardStatusEvent(t *testing.T) {
 	}}
 	if !reflect.DeepEqual(result.Rows.StatusTransitions, want) {
 		t.Fatalf("events=%+v, want %+v", result.Rows.StatusTransitions, want)
+	}
+}
+
+// chaos14184StatusTimeMissingLines are the status_value_time_missing records
+// logged while fetch runs.
+func chaos14184StatusTimeMissingLines(t *testing.T, fetch func()) []map[string]any {
+	t.Helper()
+	var logs bytes.Buffer
+	swapDefaultLogger(t, slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	fetch()
+	var lines []map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
+		var record map[string]any
+		if line == "" || json.Unmarshal([]byte(line), &record) != nil {
+			continue
+		}
+		if record["msg"] == "github_projects_v2.status_value_time_missing" {
+			lines = append(lines, record)
+		}
+	}
+	return lines
+}
+
+// A Status value with no or an unparsable updatedAt (GitHub serves it as
+// DateTime!) is malformed: no board event, the item keeps the board value as
+// its status (also next to a newer repository close), and the unit logs ONE
+// WARN line with the count. A well-formed item on the same board still emits
+// its event.
+func TestChaos14184MalformedStatusTimeIsLoudAndKeepsTheBoardStatus(t *testing.T) {
+	item := func(id string, number int, status, at string) string {
+		updated := ""
+		if at != "" {
+			updated = `,"updatedAt":"` + at + `"`
+		}
+		return `{"id":"` + id + `","content":{"__typename":"Issue","number":` + strconv.Itoa(number) +
+			`,"title":"t","state":"OPEN","createdAt":"2026-08-01T08:00:00Z","updatedAt":"2026-08-02T08:00:00Z","repository":{"nameWithOwner":"acme/api"},"labels":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},"assignees":{"nodes":[]}},` +
+			`"fieldValues":{"nodes":[{"__typename":"ProjectV2ItemFieldSingleSelectValue","name":"` + status + `"` + updated +
+			`,"field":{"name":"Status"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}`
+	}
+	doer := &gitHubProjectV2Doer{t: t, replies: []string{
+		`{"data":{"organization":{"projectV2":{"items":{"nodes":[` +
+			item("PVTI_1", 7, "In Progress", "") + `,` +
+			item("PVTI_2", 8, "In Progress", "not-a-time") + `,` +
+			item("PVTI_3", 9, "Done", "2026-08-03T09:30:00Z") +
+			`],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`,
+	}}
+	claim := githubWorkItemOracleClaim()
+	claim.IntegrationConfig = map[string]any{"github_projects_v2": []any{map[string]any{"org_login": "acme", "project_number": 3}}}
+	var result GitHubProjectV2FetchResult
+	lines := chaos14184StatusTimeMissingLines(t, func() {
+		var err error
+		result, err = (GitHubProjectV2Fetcher{}).Fetch(
+			context.Background(), claim, providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
+			githubProjectV2TestClient(t, fakehttp.Client(doer)), time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC), nil,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+	})
+	if len(lines) != 1 || lines[0]["level"] != "WARN" || lines[0]["items"] != float64(2) ||
+		lines[0]["unit"] != claim.ID || lines[0]["org_id"] != claim.OrgID {
+		t.Fatalf("status_value_time_missing lines=%v, want one WARN line with items=2 for the unit", lines)
+	}
+	if len(result.Rows.StatusTransitions) != 1 || result.Rows.StatusTransitions[0].WorkItemID != "gh:acme/api#9" {
+		t.Fatalf("events=%+v, want only the well-formed item's", result.Rows.StatusTransitions)
+	}
+	statuses := map[string]string{}
+	for _, row := range result.Rows.WorkItems {
+		statuses[row.WorkItemID] = row.Status
+	}
+	if statuses["gh:acme/api#7"] != "in_progress" || statuses["gh:acme/api#8"] != "in_progress" || statuses["gh:acme/api#9"] != "done" {
+		t.Fatalf("statuses=%v", statuses)
+	}
+	// Section 1 of the rule: no board event = the item keeps today's status,
+	// even next to a newer repository close.
+	repository := chaos14184Repository(t, chaos14184ClosedIssue, chaos14184CloseEvent)
+	board := chaos14184Board(t, chaos14184Item("CLOSED", "2026-10-03T00:00:00Z", "In Progress", ""), chaos14184Now())
+	if merged := chaos14184Merge(t, repository, board); merged.WorkItems[0].Status != "in_progress" {
+		t.Fatalf("status=%q, want the board value in_progress", merged.WorkItems[0].Status)
 	}
 }
 

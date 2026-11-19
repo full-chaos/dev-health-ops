@@ -248,6 +248,7 @@ func (fetcher GitHubProjectV2Fetcher) Fetch(
 	// Python's dict preserves first insertion position while later values win.
 	// Preserve that exact behavior across targets, including duplicate targets.
 	workItemIndex := map[string]int{}
+	statusTimeMissing := 0
 	for _, target := range targets {
 		targetResult, err := fetchGitHubProjectV2Target(ctx, &counted, target, &result.Evidence)
 		if err != nil {
@@ -321,9 +322,12 @@ func (fetcher GitHubProjectV2Fetcher) Fetch(
 			if !emitted {
 				continue
 			}
-			event, hasEvent, err := githubProjectV2StatusEvent(claim, item, row.WorkItemID, normalizedAt)
+			event, hasEvent, timeMissing, err := githubProjectV2StatusEvent(claim, item, row.WorkItemID, normalizedAt)
 			if err != nil {
 				return finishGitHubProjectV2Fetch(result), err
+			}
+			if timeMissing {
+				statusTimeMissing++
 			}
 			if hasEvent {
 				result.Rows.StatusTransitions = append(result.Rows.StatusTransitions, event)
@@ -364,6 +368,7 @@ func (fetcher GitHubProjectV2Fetcher) Fetch(
 		}
 	}
 	reportGitHubProjectV2MembershipSkips(claim, result.MembershipSkips)
+	reportGitHubProjectV2StatusTimeMissing(ctx, claim, statusTimeMissing)
 	return finishGitHubProjectV2Fetch(result), nil
 }
 

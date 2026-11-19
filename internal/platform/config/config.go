@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/full-chaos/dev-health-ops/internal/platform/dsnclass"
@@ -1574,12 +1575,23 @@ func clickHouseHTTPScheme(value secrets.Value) string {
 	return ""
 }
 
+// hasHostName reports whether the URL names a host: a bracketed IPv6 literal, or a hostname with a letter or digit.
+func hasHostName(parsed *url.URL) bool {
+	host := parsed.Hostname()
+	if strings.HasPrefix(parsed.Host, "[") {
+		return net.ParseIP(host) != nil
+	}
+	return strings.ContainsFunc(host, func(r rune) bool {
+		return unicode.IsLetter(r) || unicode.IsDigit(r)
+	})
+}
+
 func validateClickHouseServiceURI(key string, value secrets.Value) error {
 	if err := validateURI(key, value, "clickhouse", "http", "https"); err != nil {
 		return err
 	}
 	if clickHouseHTTPScheme(value) != "" {
-		if parsed, err := url.Parse(value.Reveal()); err != nil || parsed.Hostname() == "" {
+		if parsed, err := url.Parse(value.Reveal()); err != nil || !hasHostName(parsed) {
 			return fmt.Errorf("%s must be a valid supported URI", key)
 		}
 	}

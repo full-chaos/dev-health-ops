@@ -94,11 +94,22 @@ func TestServiceClickHouseDSNWarnsOnNonNativeScheme(t *testing.T) {
 	}
 }
 
+func TestServiceClickHouseDSNAcceptsBracketedIPv6(t *testing.T) {
+	t.Parallel()
+
+	for _, dsn := range []string{"http://[::1]:8123/db", "https://[2001:db8::1]:8443/db", "http://h:8123/db"} {
+		cfg, err := Load(workerSpec(map[string]string{"CLICKHOUSE_URI": dsn}))
+		if err != nil || len(cfg.NonNativeClickHouseKeys) != 1 {
+			t.Fatalf("Load(%q) = %v, flagged %v", dsn, err, cfg.NonNativeClickHouseKeys)
+		}
+	}
+}
+
 func TestServiceClickHouseDSNStillRefusesHostlessNonNative(t *testing.T) {
 	t.Parallel()
 
 	for _, key := range []string{"CLICKHOUSE_URI", "API_CLICKHOUSE_URI"} {
-		for _, dsn := range []string{"http:///default", "https:///default", "https://:8123/x", "http://:8123"} {
+		for _, dsn := range []string{"http:///default", "https:///default", "https://:8123/x", "http://:8123", "http://,/default", "https://,/default", "https://,:8123/x", "http://[::1"} {
 			t.Run(key+"/"+dsn, func(t *testing.T) {
 				t.Parallel()
 				if _, err := Load(workerSpec(map[string]string{key: dsn})); err == nil {

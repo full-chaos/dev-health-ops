@@ -3,11 +3,19 @@
 package pgmigrate_test
 
 import (
+	"bufio"
+	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
+	"io"
 	"log/slog"
+	"net"
 	"net/url"
+	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -31,26 +39,174 @@ func plantSearchPath(t *testing.T, uri string) string {
 	return parsed.String()
 }
 
-// plantBackendPID makes pg_backend_pid() on a planted session return the real pid plus public.plant_backend.delta, as a
-// transaction-mode pooler that moves the session to another backend would.
-func plantBackendPID(t *testing.T, conn *pgx.Conn) {
+// wirePlant relays sessions to the server and rewrites result columns on the wire, the way a client reads them after a
+// transaction-mode pooler moved its session: the server runs pg_catalog's own functions, and the client sees a changed
+// pg_backend_pid or a pg_advisory_unlock that answers false. Its URI asks for the simple protocol, so every result
+// carries its own RowDescription (column names, text format).
+type wirePlant struct {
+	uri         string
+	pidDelta    atomic.Int32
+	unlockFalse atomic.Bool
+}
+
+func newWirePlant(t *testing.T, uri string) *wirePlant {
 	t.Helper()
-	for _, sql := range []string{
-		"CREATE TABLE public.plant_backend (delta integer NOT NULL)",
-		"INSERT INTO public.plant_backend VALUES (0)",
-		"CREATE FUNCTION public.pg_backend_pid() RETURNS integer LANGUAGE sql AS 'SELECT pg_catalog.pg_backend_pid() + (SELECT delta FROM public.plant_backend)'",
-	} {
-		if _, err := conn.Exec(context.Background(), sql); err != nil {
-			t.Fatalf("%s: %v", sql, err)
+	parsed, err := url.Parse(uri)
+	if err != nil {
+		t.Fatal(err)
+	}
+	upstream := parsed.Host
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed.Host = listener.Addr().String()
+	query := parsed.Query()
+	query.Set("sslmode", "disable")
+	query.Set("default_query_exec_mode", "simple_protocol")
+	parsed.RawQuery = query.Encode()
+	plant := &wirePlant{uri: parsed.String()}
+
+	var mu sync.Mutex
+	var open []net.Conn
+	var relays sync.WaitGroup
+	t.Cleanup(func() {
+		_ = listener.Close()
+		mu.Lock()
+		for _, conn := range open {
+			_ = conn.Close()
+		}
+		mu.Unlock()
+		relays.Wait()
+	})
+	relays.Add(1)
+	go func() {
+		defer relays.Done()
+		for {
+			client, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			server, err := net.Dial("tcp", upstream)
+			if err != nil {
+				_ = client.Close()
+				continue
+			}
+			mu.Lock()
+			open = append(open, client, server)
+			mu.Unlock()
+			relays.Add(2)
+			go func() {
+				defer relays.Done()
+				_, _ = io.Copy(server, client)
+				_ = server.Close()
+			}()
+			go func() {
+				defer relays.Done()
+				plant.relayBackend(client, server)
+				_ = client.Close()
+			}()
+		}
+	}()
+	return plant
+}
+
+// relayBackend copies the server's messages to the client and rewrites the DataRow messages of a result whose
+// RowDescription names a planted column in text format.
+func (p *wirePlant) relayBackend(client io.Writer, server io.Reader) {
+	reader := bufio.NewReader(server)
+	pidColumn, unlockColumn := -1, -1
+	for {
+		header := make([]byte, 5)
+		if _, err := io.ReadFull(reader, header); err != nil {
+			return
+		}
+		length := binary.BigEndian.Uint32(header[1:])
+		if length < 4 {
+			return
+		}
+		body := make([]byte, length-4)
+		if _, err := io.ReadFull(reader, body); err != nil {
+			return
+		}
+		switch header[0] {
+		case 'T':
+			pidColumn, unlockColumn = plantedColumns(body)
+		case 'D':
+			body = p.rewriteDataRow(body, pidColumn, unlockColumn)
+			binary.BigEndian.PutUint32(header[1:], uint32(len(body)+4))
+		}
+		if _, err := client.Write(append(header, body...)); err != nil {
+			return
 		}
 	}
 }
 
-func setPlantedDelta(t *testing.T, conn *pgx.Conn, delta int) {
-	t.Helper()
-	if _, err := conn.Exec(context.Background(), "UPDATE public.plant_backend SET delta = $1", delta); err != nil {
-		t.Fatal(err)
+// plantedColumns reads a RowDescription body: the text-format column named pg_backend_pid and the one named
+// pg_advisory_unlock, -1 when absent.
+func plantedColumns(body []byte) (pid, unlock int) {
+	pid, unlock = -1, -1
+	if len(body) < 2 {
+		return
 	}
+	count := int(binary.BigEndian.Uint16(body))
+	rest := body[2:]
+	for column := 0; column < count; column++ {
+		end := bytes.IndexByte(rest, 0)
+		if end < 0 || len(rest) < end+19 {
+			return -1, -1
+		}
+		name := string(rest[:end])
+		textFormat := binary.BigEndian.Uint16(rest[end+17:]) == 0
+		rest = rest[end+19:]
+		switch {
+		case name == "pg_backend_pid" && textFormat:
+			pid = column
+		case name == "pg_advisory_unlock" && textFormat:
+			unlock = column
+		}
+	}
+	return pid, unlock
+}
+
+func (p *wirePlant) rewriteDataRow(body []byte, pidColumn, unlockColumn int) []byte {
+	delta, unlockFalse := int(p.pidDelta.Load()), p.unlockFalse.Load()
+	if (pidColumn < 0 || delta == 0) && (unlockColumn < 0 || !unlockFalse) {
+		return body
+	}
+	if len(body) < 2 {
+		return body
+	}
+	count := int(binary.BigEndian.Uint16(body))
+	out := append([]byte{}, body[:2]...)
+	rest := body[2:]
+	for column := 0; column < count; column++ {
+		if len(rest) < 4 {
+			return body
+		}
+		size := int32(binary.BigEndian.Uint32(rest))
+		rest = rest[4:]
+		if size < 0 {
+			out = binary.BigEndian.AppendUint32(out, uint32(size))
+			continue
+		}
+		if len(rest) < int(size) {
+			return body
+		}
+		value := rest[:size]
+		rest = rest[size:]
+		switch {
+		case column == pidColumn && delta != 0:
+			if pid, err := strconv.Atoi(string(value)); err == nil {
+				value = []byte(strconv.Itoa(pid + delta))
+			}
+		case column == unlockColumn && unlockFalse:
+			value = []byte("f")
+		}
+		out = binary.BigEndian.AppendUint32(out, uint32(len(value)))
+		out = append(out, value...)
+	}
+	return out
 }
 
 // holdTableLock holds SHARE UPDATE EXCLUSIVE on sync_run_units, so a run stops at its table-lock probe until commit.
@@ -78,8 +234,8 @@ WHERE locktype = 'relation' AND relation = 'public.sync_run_units'::regclass AND
 	}
 }
 
-// The session moves to another backend between the build lock and the first DDL (planted: pg_backend_pid() changes while
-// the run waits at its table-lock probe). The run refuses with no DDL, no retry and no cleanup: the INVALID index stays the
+// The session moves to another backend between the build lock and the first DDL (planted on the wire: pg_backend_pid()
+// reads a changed pid while the run waits at its table-lock probe). The run refuses with no DDL, no retry and no cleanup: the INVALID index stays the
 // same relation. The verb reports it as build_index_session_changed.
 func TestBuildIndexRefusesWhenTheBackendChangesUnderTheBuildLock(t *testing.T) {
 	d := newDownInstance(t)
@@ -87,8 +243,8 @@ func TestBuildIndexRefusesWhenTheBackendChangesUnderTheBuildLock(t *testing.T) {
 	plantInvalidIndex(t, uri)
 	observer := connect(t, uri)
 	before := streakIndexState(t, observer)
-	plantBackendPID(t, observer)
-	planted := plantSearchPath(t, uri)
+	plant := newWirePlant(t, uri)
+	planted := plant.uri
 	ctx := context.Background()
 
 	gate := holdTableLock(t, uri)
@@ -102,7 +258,7 @@ func TestBuildIndexRefusesWhenTheBackendChangesUnderTheBuildLock(t *testing.T) {
 		runDone <- buildOutcome{result, err}
 	}()
 	waitUntil(t, 20*time.Second, "the run's table-lock probe to wait", probeWaits(t, observer))
-	setPlantedDelta(t, observer, 1)
+	plant.pidDelta.Store(1)
 	if err := gate.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +294,7 @@ func TestBuildIndexRefusesWhenTheBackendChangesUnderTheBuildLock(t *testing.T) {
 	if err := run.Close(ctx); err != nil {
 		t.Fatal(err)
 	}
-	setPlantedDelta(t, observer, 0)
+	plant.pidDelta.Store(0)
 	gate = holdTableLock(t, uri)
 	verbDone := make(chan string, 1)
 	go func() {
@@ -149,7 +305,7 @@ func TestBuildIndexRefusesWhenTheBackendChangesUnderTheBuildLock(t *testing.T) {
 		verbDone <- stderr
 	}()
 	waitUntil(t, 20*time.Second, "the verb's table-lock probe to wait", probeWaits(t, observer))
-	setPlantedDelta(t, observer, 1)
+	plant.pidDelta.Store(1)
 	if err := gate.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -161,18 +317,16 @@ func TestBuildIndexRefusesWhenTheBackendChangesUnderTheBuildLock(t *testing.T) {
 	}
 }
 
-// pg_advisory_unlock returns false at the release (planted: it unlocks, then answers false). The run reports it with its
-// own reason, as an error and as a Warn line, never silently.
+// pg_advisory_unlock returns false at the release (planted on the wire: the server unlocks, the client reads false). The
+// run reports it with its own reason, as an error and as a Warn line, never silently.
 func TestBuildIndexReportsAnUnlockThatReturnsFalse(t *testing.T) {
 	length := headPosition(t)
 	d := newDownInstance(t)
 	uri := d.at(t, length)
 	observer := connect(t, uri)
-	if _, err := observer.Exec(context.Background(),
-		"CREATE FUNCTION public.pg_advisory_unlock(key bigint) RETURNS boolean LANGUAGE plpgsql AS 'BEGIN PERFORM pg_catalog.pg_advisory_unlock(key); RETURN false; END'"); err != nil {
-		t.Fatal(err)
-	}
-	run, _ := tracedConn(t, plantSearchPath(t, uri))
+	plant := newWirePlant(t, uri)
+	plant.unlockFalse.Store(true)
+	run, _ := tracedConn(t, plant.uri)
 	logs := &syncBuffer{}
 	result, err := pgmigrate.BuildFailureStreakIndex(context.Background(), run,
 		pgmigrate.IndexBuildOptions{LockTimeout: 2 * time.Second, Attempts: 1, Deadline: 30 * time.Second},
@@ -192,5 +346,46 @@ func TestBuildIndexReportsAnUnlockThatReturnsFalse(t *testing.T) {
 	var free bool
 	if err := observer.QueryRow(context.Background(), "SELECT pg_try_advisory_lock($1)", buildLockKey).Scan(&free); err != nil || !free {
 		t.Fatalf("the build lock is still held after the run (err %v)", err)
+	}
+}
+
+// Every catalog function a run calls is pg_catalog-qualified: a function of the same signature that the session
+// search_path puts ahead of pg_catalog is never called, and the run builds the index and releases the build lock.
+func TestBuildIndexCallsOnlyPgCatalogFunctions(t *testing.T) {
+	for _, shadow := range []string{
+		"pg_backend_pid() RETURNS integer",
+		"pg_try_advisory_lock(key bigint) RETURNS boolean",
+		"pg_advisory_unlock(key bigint) RETURNS boolean",
+		"to_regclass(name text) RETURNS regclass",
+		"set_config(name text, value text, is_local boolean) RETURNS text",
+	} {
+		name := shadow[:strings.IndexByte(shadow, '(')]
+		t.Run(name, func(t *testing.T) {
+			d := newDownInstance(t)
+			uri := d.withoutIndex(t, "0159")
+			observer := connect(t, uri)
+			if _, err := observer.Exec(context.Background(), "CREATE FUNCTION public."+shadow+
+				" LANGUAGE plpgsql AS 'BEGIN RAISE EXCEPTION ''shadow "+name+" called''; END'"); err != nil {
+				t.Fatal(err)
+			}
+			run, _ := tracedConn(t, plantSearchPath(t, uri))
+			logs := &syncBuffer{}
+			result, err := pgmigrate.BuildFailureStreakIndex(context.Background(), run,
+				pgmigrate.IndexBuildOptions{LockTimeout: 2 * time.Second, Attempts: 1, Deadline: 30 * time.Second},
+				slog.New(slog.NewJSONHandler(logs, nil)))
+			if err != nil || result.Action != "built" || !result.Valid {
+				t.Fatalf("result %+v err %v, want the index built", result, err)
+			}
+			if strings.Contains(logs.String(), "shadow") {
+				t.Fatalf("the run called the shadow %s:\n%s", name, logs.String())
+			}
+			if state := streakIndexState(t, observer); !state.valid {
+				t.Fatalf("index %+v after the run, want it valid", state)
+			}
+			var free bool
+			if err := observer.QueryRow(context.Background(), "SELECT pg_catalog.pg_try_advisory_lock($1)", buildLockKey).Scan(&free); err != nil || !free {
+				t.Fatalf("the build lock is still held after the run (err %v)", err)
+			}
+		})
 	}
 }

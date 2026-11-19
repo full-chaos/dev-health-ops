@@ -476,7 +476,7 @@ func recordNonFiniteReleaseRefConfidence(client *providerfoundation.HTTPClient, 
 	slog.Info(
 		"non-finite release_ref_confidence stored as the unreadable-value rule",
 		"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
-		"repository", repository, "count", count,
+		"repository", logging.ProviderText(repository), "count", count,
 	)
 }
 

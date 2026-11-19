@@ -204,6 +204,7 @@ func TestRecommendationsLoaderMatchesFrozenPythonAgainstClickHouse(t *testing.T)
 	}
 
 	assertCHAOS4897FixIsPresent(t, snapshots[loaderTeamA], snapshots[loaderTeamB])
+	assertReviewerGiniReadsOwnedRepositories(t, snapshots[loaderTeamA], snapshots[loaderTeamB])
 	assertOwnershipIsResolvedAsOfWindowEnd(t, snapshots[loaderTeamA])
 	assertZeroOwnedReposIsAbsentNotOrgWide(t, ctx, conn, loader, windowStart, windowEnd)
 	assertHotspotBoundaryIsMeasured(t, ctx, conn, python)
@@ -407,6 +408,25 @@ func assertCHAOS4897FixIsPresent(t *testing.T, alpha, beta MetricsSnapshot) {
 		beta.HotspotChurnOverlap, beta.HotspotChurnOverlapKnown)
 }
 
+// assertReviewerGiniReadsOwnedRepositories pins the Go side of the reviewer_gini
+// divergence (ticket 14163). Every seeded reviewer row of loaderOrgID is on
+// repoAlpha, which alpha owns: alpha's loads are all five reviewers (a, b, c of
+// its membership label and d, e of beta's), and beta, which owns only repoBeta,
+// has no reviewer row and so no Gini. The Python reference read the label:
+// [40 2 1] for alpha and [10 10] (Gini 0) for beta.
+func assertReviewerGiniReadsOwnedRepositories(t *testing.T, alpha, beta MetricsSnapshot) {
+	t.Helper()
+	want, wantKnown := Gini([]float64{40, 2, 1, 10, 10})
+	if !wantKnown || !alpha.ReviewerGiniKnown || alpha.ReviewerGini != want {
+		t.Errorf("alpha reviewer_gini = %v/%v, want %v (the five reviewers of its owned repoAlpha, by anyone)",
+			alpha.ReviewerGini, alpha.ReviewerGiniKnown, want)
+	}
+	if beta.ReviewerGiniKnown {
+		t.Errorf("beta reviewer_gini = %v, want absent: beta owns repoBeta, which has no reviewer row; its members' reviews in repoAlpha are alpha's",
+			beta.ReviewerGini)
+	}
+}
+
 // pythonStringOrAbsent renders a pythonSnapshot optional field for a log
 // line: the Python reference encodes an absent value as a JSON null, which
 // decodes to a nil *string -- printed as "<absent>" rather than an empty
@@ -464,7 +484,6 @@ func compareSnapshotAgainstPython(t *testing.T, teamID string, got MetricsSnapsh
 	compareList(t, teamID, "wip_by_day", got.WIPByDay, want.WIPByDay)
 	compareList(t, teamID, "throughput_by_cycle", got.ThroughputByCycle, want.ThroughputByCycle)
 	compareList(t, teamID, "cycle_time_by_day", got.CycleTimeByDay, want.CycleTimeByDay)
-	compareOptional(t, teamID, "reviewer_gini", got.ReviewerGini, got.ReviewerGiniKnown, want.ReviewerGini)
 	compareOptional(t, teamID, "after_hours_ratio", got.AfterHoursRatio, got.AfterHoursRatioKnown, want.AfterHoursRatio)
 	compareOptional(t, teamID, "compounding_risk_score", got.CompoundingRiskScore, got.CompoundingRiskScoreKnown, want.CompoundingRiskScore)
 	if expectOwnedRepoScopeDivergence {
@@ -488,7 +507,15 @@ func compareSnapshotAgainstPython(t *testing.T, teamID string, got MetricsSnapsh
 			got.ReworkChurnRatio, got.ReworkChurnRatioKnown, pythonStringOrAbsent(want.ReworkChurnRatio),
 			got.HotspotComplexityDelta, got.HotspotComplexityDeltaKnown, pythonStringOrAbsent(want.HotspotComplexityDelta),
 			got.HotspotChurnOverlap, got.HotspotChurnOverlapKnown, pythonStringOrAbsent(want.HotspotChurnOverlap))
+		// DECLARED DIVERGENCE, ticket 14163: Python read the reviewer loads of
+		// user_metrics_daily.team_id, the person's membership label; Go reads
+		// the reviews given in the team's owned repositories (membership ->
+		// ownership). The Go values are asserted in
+		// assertReviewerGiniReadsOwnedRepositories; the golden is unchanged.
+		t.Logf("%s: reviewer_gini is a declared divergence (ticket 14163, membership -> ownership): go=%v/%v py=%s",
+			teamID, got.ReviewerGini, got.ReviewerGiniKnown, pythonStringOrAbsent(want.ReviewerGini))
 	} else {
+		compareOptional(t, teamID, "reviewer_gini", got.ReviewerGini, got.ReviewerGiniKnown, want.ReviewerGini)
 		compareOptional(t, teamID, "review_latency_p75_hours", got.ReviewLatencyP75Hours, got.ReviewLatencyP75HoursKnown, want.ReviewLatencyP75Hours)
 		// DECLARED DIVERGENCE, this one field: the reference reads the stored
 		// pr_rework_ratio of each repository's newest row (pull requests with
@@ -1070,8 +1097,10 @@ func seedLoaderFixture(t *testing.T, ctx context.Context, conn driver.Conn) (res
 		mustTimestamp(t, "2026-01-01 00:00:00"), mustTimestamp(t, "2026-09-01 00:00:00"),
 		mustTimestamp(t, "2026-01-01 00:00:00"))
 
-	// user_metrics_daily: reviewer gini, team-scoped. Skewed for alpha, even
-	// for beta, so the two teams' gini genuinely differ.
+	// user_metrics_daily: reviewer gini. Skewed for alpha's label, even for
+	// beta's, so the two teams' Python gini genuinely differ. Every row is on
+	// repoAlpha: Go reads the owned repositories (ticket 14163), so all five
+	// are alpha's reviewers and beta has none (assertReviewerGiniReadsOwnedRepositories).
 	for _, seed := range []struct {
 		team, email string
 		day         string

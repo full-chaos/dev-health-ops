@@ -1319,7 +1319,7 @@ func githubIssueType(labels []string) string {
 	for _, wanted := range []string{"incident", "bug", "chore"} {
 		for _, label := range labels {
 			normalized := normalizeWorkItemLabel(label)
-			if (wanted == "bug" && (normalized == "bug" || normalized == "type: bug")) ||
+			if (wanted == "bug" && (normalized == "bug" || normalized == "type: bug" || normalized == "type:bug")) ||
 				(wanted == "incident" && normalized == "incident") ||
 				(wanted == "chore" && (normalized == "chore" || normalized == "maintenance")) {
 				return wanted

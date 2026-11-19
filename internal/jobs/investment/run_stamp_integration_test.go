@@ -109,8 +109,9 @@ func newRunStampVenue(t *testing.T, arm insertArm) *runStampVenue {
 		h:   h,
 		pg:  pg,
 		arm: arm,
-		// Every run reads this instant from the worker clock.
-		at: now.Truncate(time.Millisecond),
+		// Every run reads this instant from the worker clock. It lies an hour
+		// before the venue, so no PostgreSQL stamp taken in it can equal it.
+		at: now.Add(-time.Hour).Truncate(time.Millisecond),
 		scope: `{"force":true,"from_date":"` + h.windowStart.Format("2006-01-02") +
 			`","to_date":"` + h.windowEnd.Format("2006-01-02") + `"}`,
 	}

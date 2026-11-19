@@ -12185,13 +12185,15 @@ type TestOpsTestCaseCounts {
 Report completeness of the runs behind the window's case counts, summed over its measured repository days (a run with counted suites on two days counts on each). A run is partial when a counted attempt, or its newest attempt, has a completeness row that names a lost report; unmarked when such an attempt has no completeness row (for example a provider that writes none); else complete. A repository day stored before these counts is not measured: it adds nothing to the sums and is counted in unmeasuredDays, never read as complete.
 """
 type TestOpsReportCompleteness {
-  """Runs with a counted test suite, summed over the measured repository days."""
+  """Count of runs with a counted test suite, summed over the measured repository days."""
   reportRuns: Int!
-  """Of reportRuns, the runs read as partial: some of their cases are not counted."""
+  """Count of runs, of reportRuns, read as partial: a report was lost, so some of their cases are not counted."""
   partialRuns: Int!
-  """Of reportRuns, the runs with no completeness mark: not known to be complete."""
+  """Count of runs, of reportRuns, with no completeness mark: not known to be complete."""
   unmarkedRuns: Int!
-  """Repository days of the window whose stored row carries no completeness counts (not measured, not 0)."""
+  """
+  Count of repository days of the window with no completeness record: missing, not zero and not healthy. Such a day adds nothing to the three run counts.
+  """
   unmeasuredDays: Int!
 }
 

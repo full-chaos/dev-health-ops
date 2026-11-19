@@ -36,8 +36,9 @@ const groupedSankeyWorkers = 8
 
 // groupedSankeyQueryTimeoutSeconds is both the max_execution_time compiled
 // into every query and the client's per-query budget, so the client does
-// not cut a query at its 10 s default first. Measured worst server time:
-// 9.9 s, with ClickHouse held to 0.5 CPU (CHAOS-14205).
+// not cut a query at its 10 s default first. Measured worst query with
+// ClickHouse held to 0.5 CPU (CHAOS-14205): 9.9 s server time behind the
+// old 8-connection pool, 15.1 s with this pool.
 const groupedSankeyQueryTimeoutSeconds = 30
 
 func seedGroupedSankey(t *testing.T, ctx context.Context, conn stdclickhouse.Conn) {

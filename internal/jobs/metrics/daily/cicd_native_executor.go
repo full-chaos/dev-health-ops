@@ -83,19 +83,25 @@ func (executor *CICDExecutor) ComputeFamily(
 	dayStart := time.Date(run.TargetDay.UTC().Year(), run.TargetDay.UTC().Month(), run.TargetDay.UTC().Day(), 0, 0, 0, 0, time.UTC)
 	dayEnd := dayStart.AddDate(0, 0, 1)
 
+	// The version of every row is the instant of the source read, taken before it (CHAOS-14016): a compute that read
+	// earlier never replaces the row of one that read later, however late it writes (cicd.FenceDay).
+	snapshot := executor.nowUTC().Truncate(time.Second)
 	pipelineRuns, err := executor.loader.LoadPipelineRuns(ctx, run.OrganizationID, repoIDs, dayStart, dayEnd)
 	if err != nil {
 		return 0, err
 	}
-
-	computedAt := executor.nowUTC()
-	result := cicd.ComputeCICDMetricsDaily(dayStart, pipelineRuns, computedAt)
+	result := cicd.ComputeCICDMetricsDaily(dayStart, pipelineRuns, snapshot)
 	for i := range result {
 		if !pooledSamplesFit(ctx, "cicd", run.OrganizationID, result[i].RepoID.String(), dayStart, len(result[i].PooledRunMinutes)) {
 			result[i].PooledRunMinutes, result[i].PooledQueueMinutes = []*float64{}, []*float64{}
 			result[i].PooledSamplesOverCap = true
 		}
 	}
+	stored, err := executor.loader.LoadStoredKeys(ctx, run.OrganizationID, repoIDs, dayStart)
+	if err != nil {
+		return 0, err
+	}
+	result = cicd.FenceDay(dayStart, result, stored, snapshot)
 
 	rowsWritten, err := executor.writer.WriteResult(ctx, result, run.OrganizationID)
 	if err != nil {

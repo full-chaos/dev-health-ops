@@ -361,6 +361,64 @@ ORDER BY scope_key, day`, outerValue, inner, outerWhere)
 	return result, nil
 }
 
+// LiveInputKeys counts, per table of InputTables(metrics, pairs), the
+// organization's (repo_id, day) keys over [InputWindowStart(asOfDay), asOfDay]
+// whose newest row is live by the rule FetchMetricSeriesByScope applies. Every
+// table is in the result, 0 when it holds no such key. A failed read is an
+// error, never 0.
+func (loader *ClickHouseLoader) LiveInputKeys(
+	ctx context.Context, asOfDay time.Time, metrics [][2]string, pairs [][3]string,
+) (map[string]uint64, error) {
+	if loader == nil || loader.conn == nil {
+		return nil, fmt.Errorf("benchmarking: loader unavailable")
+	}
+	tables, err := InputTables(metrics, pairs)
+	if err != nil {
+		return nil, err
+	}
+	arms := make([]string, 0, len(tables))
+	for _, table := range tables {
+		arms = append(arms, fmt.Sprintf(`
+    SELECT '%s' AS input_table
+    FROM %s
+    WHERE day >= {start_day:Date} AND day <= {end_day:Date} AND org_id = {org_id:String}
+    GROUP BY org_id, day, repo_id%s`, table, table, liveRowHaving(table)))
+	}
+	query := `
+SELECT input_table, count() AS live_keys
+FROM (` + strings.Join(arms, "\n    UNION ALL") + `
+)
+GROUP BY input_table
+ORDER BY input_table`
+	rows, err := loader.conn.Query(ctx, query,
+		clickhouse.Named("start_day", InputWindowStart(asOfDay).Format(clickHouseDateLayout)),
+		clickhouse.Named("end_day", asOfDay.Format(clickHouseDateLayout)),
+		clickhouse.Named("org_id", loader.orgID),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("benchmarking: read the live input keys: %w", err)
+	}
+	defer rows.Close()
+	live := make(map[string]uint64, len(tables))
+	for _, table := range tables {
+		live[table] = 0
+	}
+	for rows.Next() {
+		var (
+			table string
+			keys  uint64
+		)
+		if err := rows.Scan(&table, &keys); err != nil {
+			return nil, fmt.Errorf("benchmarking: scan the live input keys: %w", err)
+		}
+		live[table] = keys
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("benchmarking: read the live input keys: %w", err)
+	}
+	return live, nil
+}
+
 // ownersJoin is the statement of a TestOps team series: the newest value of each (org, repository, day) key, then
 // the owners of the repository at asOf by the ownership rule of every team scope (teamscope.OwnershipFromWhere:
 // validity window, active teams, catalog guard). A co-owned repository goes in full to each owner, never at its share,

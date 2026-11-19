@@ -81,6 +81,13 @@ func buildWorkgraphWorker(cfg config.Config, database workerDatabase, registry *
 	if executor, isNative := nativeInvestment.(*investment.NativeExecutor); isNative {
 		cipher, _ := providerfoundation.NewFernetDecryptor(cfg.SettingsEncryptionKey, cfg.SettingsEncryptionSalt.Reveal())
 		executor.SetCategorizeBYO(investment.NewOrgCategorizeBYO(postgresDatabase.pools.Domain, cipher, logger))
+		// The run version comes from the domain pool's clock under a per-org lock
+		// (CHAOS-14228); no stamper refuses the family instead of the worker clock.
+		stamper, stampErr := investment.NewRunStamper(postgresDatabase.pools.Domain)
+		if stampErr != nil {
+			return workerFamily{}, errWorkerDependencyUnavailable
+		}
+		executor.SetRunStamp(stamper)
 	}
 
 	idempotency, err := newOperationalIdempotency(postgresDatabase.pools.Domain, observer)

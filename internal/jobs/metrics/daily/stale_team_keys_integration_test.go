@@ -393,6 +393,10 @@ func TestARowOfZerosIsStrictlyNewerThanTheRowItSupersedes(t *testing.T) {
 	conn := workItemAttributionLinkedIssueMigratedClickHouse(t, ctx)
 	stored := staleKeyRuleDay.Add(30 * time.Hour)
 	for _, table := range StaleTeamKeyTables() {
+		// A snapshot-stamped marker is not raised above the stored row: a key whose row is not older than the snapshot is left alone.
+		if _, snapshot := snapshotMarkerTables[table.Table]; snapshot {
+			continue
+		}
 		for _, testCase := range []struct {
 			name, team string
 			clock      time.Time

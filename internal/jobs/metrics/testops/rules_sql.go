@@ -1,5 +1,7 @@
 package testops
 
+import "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
+
 // PipelineFailureRateWindowSQL is the pipeline failure rate of a set of testops_pipeline_metrics_daily rows (already
 // the newest row of each key): their failures over their completed runs (succeeded or failed), NULL when none
 // completed. The stored failure_rate column holds 0 on a day with no completed run and is not read.
@@ -47,8 +49,9 @@ var TestRateCountColumns = []string{"passed_count", "failed_count"}
 // testops_pipeline_metrics_daily row has no completed run. The stability writer writes no row for such a day, but a
 // row written before the success rate counted completed runs only stays the newest row of its key (the table keeps
 // it), so the read leaves it out: a day with no completed run has no stability, never an old 0. A stability row with
-// no pipeline row is kept (the outer side of the join reads NULL under join_use_nulls = 1, which the caller sets).
-const StabilityLiveRowsSQL = `SELECT stability.day AS day, stability.repo_id AS repo_id, stability.stability_index AS stability_index
+// no pipeline row is kept (the outer side of the join reads NULL under join_use_nulls = 1, which the caller sets). A
+// repo-day whose newest stability row retires the day (package liverow) has no stability either.
+var StabilityLiveRowsSQL = `SELECT stability.day AS day, stability.repo_id AS repo_id, stability.stability_index AS stability_index
 FROM (
     SELECT day, repo_id, argMax(stability_index, computed_at) AS stability_index
     FROM testops_pipeline_stability
@@ -56,6 +59,7 @@ FROM (
       AND day >= {start:Date}
       AND day <= {end:Date}
     GROUP BY day, repo_id
+    HAVING ` + liverow.NewestPredicate("testops_pipeline_stability", "") + `
 ) AS stability
 LEFT JOIN (
     SELECT day, repo_id, argMax(success_count + failure_count, computed_at) AS completed_runs

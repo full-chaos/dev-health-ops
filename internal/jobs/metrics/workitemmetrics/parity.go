@@ -96,8 +96,7 @@ func FlowBreakdown(startedAt, completedAt time.Time, transitions []Transition) (
 	if !start.Before(end) {
 		return 0, 0
 	}
-	sorted := append([]Transition(nil), transitions...)
-	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].OccurredAt.Before(sorted[j].OccurredAt) })
+	sorted := OrderTransitions(transitions)
 
 	// Python seeds current_status from the LAST transition at or before
 	// started_at, then applies the unknown/todo/backlog -> in_progress default.

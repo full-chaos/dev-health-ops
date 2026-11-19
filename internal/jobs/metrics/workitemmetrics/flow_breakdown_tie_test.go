@@ -81,3 +81,57 @@ func toStatuses(values []Transition) string {
 	}
 	return fmt.Sprint(out)
 }
+
+func TestFlowBreakdownSameInstantTransitionsFollowTheStatusChain(t *testing.T) {
+	start := time.Date(2026, 8, 3, 0, 0, 0, 0, time.UTC)
+	end := start.Add(24 * time.Hour)
+	tr := func(hours int, from, to string) Transition {
+		return Transition{WorkItemID: "item-1", OccurredAt: start.Add(time.Duration(hours) * time.Hour), FromStatus: from, ToStatus: to}
+	}
+	cases := []struct {
+		name       string
+		fixed      []Transition
+		tie        []Transition
+		wantActive float64
+		wantWait   float64
+		chain      bool
+	}{
+		{
+			name:       "chain todo->in_progress->blocked ends blocked",
+			fixed:      []Transition{tr(0, "", "todo")},
+			tie:        []Transition{tr(6, "in_progress", "blocked"), tr(6, "todo", "in_progress")},
+			wantActive: 6, wantWait: 18, chain: true,
+		},
+		{
+			name:       "chain at started_at seeds the chain's last status",
+			tie:        []Transition{tr(0, "in_progress", "waiting"), tr(0, "", "in_progress")},
+			wantActive: 0, wantWait: 24, chain: true,
+		},
+		{
+			name:  "cycle with no chain head is deterministic",
+			fixed: []Transition{tr(0, "", "todo")},
+			tie:   []Transition{tr(6, "blocked", "in_progress"), tr(6, "in_progress", "blocked")},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var firstActive, firstWait float64
+			for index, order := range permuteTransitions(tc.tie) {
+				transitions := append(append([]Transition(nil), tc.fixed...), order...)
+				active, wait := FlowBreakdown(start, end, transitions)
+				if tc.chain && (active != tc.wantActive || wait != tc.wantWait) {
+					t.Errorf("tie order %s: got active=%v wait=%v, want active=%v wait=%v",
+						toStatuses(order), active, wait, tc.wantActive, tc.wantWait)
+				}
+				if index == 0 {
+					firstActive, firstWait = active, wait
+					continue
+				}
+				if active != firstActive || wait != firstWait {
+					t.Errorf("must not depend on row order: tie order %s gives active=%v wait=%v; first order gives active=%v wait=%v",
+						toStatuses(order), active, wait, firstActive, firstWait)
+				}
+			}
+		})
+	}
+}

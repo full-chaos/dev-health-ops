@@ -13,7 +13,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
-	"github.com/full-chaos/dev-health-ops/internal/scheduler/fixed"
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
@@ -22,7 +21,13 @@ import (
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 )
 
-const retentionUniqueRolePassword = "retention_unique_password"
+const (
+	retentionUniqueRolePassword = "retention_unique_password"
+	// The prune_worker_job_terminal default (scheduler/fixed/producers.go:369-395),
+	// not imported: a test import of scheduler/fixed would tie this package's
+	// test selection to every scheduler change.
+	retentionUniqueOutboxRetention = 30 * 24 * time.Hour
+)
 
 type retentionUniqueKind struct {
 	name     string
@@ -120,8 +125,8 @@ func retentionUniqueKinds() []retentionUniqueKind {
 }
 
 // TestRiverRetentionAgainstOutboxPruneForStableKeys runs the shipped default
-// River retention against the shipped outbox prune. A key is published and
-// delivered, its River job finalizes after a given lag, the
+// River retention against the outbox prune. A key is published and
+// delivered, its River job finalizes after a given lag, the 30-day
 // prune_worker_job_terminal cutoff removes the outbox row one hour past it,
 // and the River job cleaner runs at the worker client's configured
 // retention. The same key is then published again.
@@ -131,21 +136,16 @@ func retentionUniqueKinds() []retentionUniqueKind {
 // finalized row still holds the key and the repeat dedupes into it. That
 // residual is pinned so a change to it is seen.
 func TestRiverRetentionAgainstOutboxPruneForStableKeys(t *testing.T) {
-	t.Setenv("WORKER_JOB_TERMINAL_RETENTION_DAYS", "")
 	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
 	t.Cleanup(cancel)
 
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	instance := pgschema.Start(ctx, t)
 	t.Cleanup(func() { _ = instance.Close(context.Background()) })
 	admin, err := pgxpool.New(ctx, instance.URI)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(admin.Close)
-	pgschema.Apply(ctx, t, admin)
 	domainRole, err := containers.RoleName("retention_unique_domain", instance)
 	if err != nil {
 		t.Fatal(err)
@@ -229,8 +229,7 @@ func TestRiverRetentionAgainstOutboxPruneForStableKeys(t *testing.T) {
 						t.Fatalf("repeat before the prune = %v, want ErrDeliveryAlreadyTerminal", err)
 					}
 
-					occurrence := time.Now().UTC().Truncate(time.Second)
-					cutoff := retentionUniqueOutboxCutoff(t, ctx, occurrence)
+					cutoff := time.Now().UTC().Truncate(time.Second).Add(-retentionUniqueOutboxRetention)
 					delivered := cutoff.Add(-time.Hour)
 					outboxID := joboutbox.OutboxRowID(kind.envelope.IdempotencyKey).String()
 					if _, err := admin.Exec(ctx, `UPDATE public.worker_job_outbox
@@ -287,25 +286,6 @@ func TestRiverRetentionAgainstOutboxPruneForStableKeys(t *testing.T) {
 			}
 		}
 	}
-}
-
-func retentionUniqueOutboxCutoff(t *testing.T, ctx context.Context, occurrence time.Time) time.Time {
-	t.Helper()
-	outcome, err := fixed.NewRetentionProducer().Produce(ctx, nil,
-		fixed.Schedule{ID: "prune_worker_job_terminal"},
-		fixed.Occurrence{Key: "retention-unique", ScheduledFor: occurrence})
-	if err != nil || len(outcome.Requests) != 1 {
-		t.Fatalf("retention producer = %#v, %v", outcome, err)
-	}
-	payload, ok := outcome.Requests[0].Envelope.Payload.(jobcontract.RetentionCleanupPayload)
-	if !ok || payload.RetentionPolicy != jobcontract.RetentionWorkerTerminal {
-		t.Fatalf("retention payload = %#v", outcome.Requests[0].Envelope.Payload)
-	}
-	cutoff, err := time.Parse(time.RFC3339, payload.DeleteBefore)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return cutoff
 }
 
 func retentionUniqueRolePool(t *testing.T, ctx context.Context, raw, role string) *pgxpool.Pool {

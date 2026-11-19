@@ -26,13 +26,14 @@ func TestALinkedItemCopiesItsDonorsRowOnly(t *testing.T) {
 				rows map[string]GithubWorkItemDerivationDonorRow
 				want string
 			}{
-				{"the donor's row wins over its resolution here", map[string]GithubWorkItemDerivationDonorRow{"donor": {TeamID: "team-row", Source: "repo_ownership"}}, "team-row"},
+				{"the donor's row wins over its resolution here", map[string]GithubWorkItemDerivationDonorRow{"donor": {TeamID: "team-row", Source: "project_ownership"}}, "team-row"},
+				{"an issue's repo_ownership row gives nothing", map[string]GithubWorkItemDerivationDonorRow{"donor": {TeamID: "team-row", Source: "repo_ownership"}}, ""},
 				{"no donor row gives nothing", map[string]GithubWorkItemDerivationDonorRow{}, ""},
 				{"an inherited row gives nothing", map[string]GithubWorkItemDerivationDonorRow{"donor": {TeamID: "team-row", Source: "linked_issue"}}, ""},
 				{"a membership row gives nothing", map[string]GithubWorkItemDerivationDonorRow{"donor": {TeamID: "team-row", Source: "assignee_membership"}}, ""},
 				{"a fallback row gives nothing", map[string]GithubWorkItemDerivationDonorRow{"donor": {TeamID: "team-row", Source: "manual_fallback"}}, ""},
 				{"a native team row gives its team", map[string]GithubWorkItemDerivationDonorRow{"donor": {TeamID: "team-row", Source: "native_team"}}, "team-row"},
-				{"a row with no team gives nothing", map[string]GithubWorkItemDerivationDonorRow{"donor": {Source: "repo_ownership"}}, ""},
+				{"a row with no team gives nothing", map[string]GithubWorkItemDerivationDonorRow{"donor": {Source: "project_ownership"}}, ""},
 			} {
 				index, evidence, _, _ := derived.BuildLinkedIssueIndexFromRows(provider, subjects, tc.rows, edges, nil)
 				inherited, ok := index["pr"]
@@ -119,6 +120,7 @@ func TestAStoredDonorRowBindsTheTeamOfTheDonorsProvider(t *testing.T) {
 			}
 			edges := []GithubWorkItemDerivationDependencyEdge{{SourceWorkItemID: "ghpr:acme/api#7", TargetWorkItemID: "jira:ENG-1", RelationshipType: "relates_to"}}
 			rows := map[string]GithubWorkItemDerivationDonorRow{"jira:ENG-1": {TeamID: "shared-id", Source: "project_ownership"}}
+			derived.LinkTiers = map[LinkPair]string{{PullRequest: "ghpr:acme/api#7", Issue: "jira:ENG-1"}: "native", {PullRequest: "ghpr:acme/api#7", Issue: "donor"}: "native"}
 			derived.LinkedIssue, derived.LinkedIssueEvidence, _, _ = derived.BuildLinkedIssueIndexFromRows("github", subjects, rows, edges, nil)
 			teamID, _, candidates := derived.Resolve(subjects["ghpr:acme/api#7"])
 			if got := GithubWorkItemDerivationStringValue(teamID); got != tc.want {
@@ -199,6 +201,7 @@ func TestADonorsAdminTeamKeepsItsIdentity(t *testing.T) {
 				t.Fatalf("the donor's own row here is %+v, not the admin team this case needs", own["donor"])
 			}
 			edges := []GithubWorkItemDerivationDependencyEdge{{SourceWorkItemID: "ghpr:acme/api#7", TargetWorkItemID: "donor", RelationshipType: "relates_to"}}
+			derived.LinkTiers = map[LinkPair]string{{PullRequest: "ghpr:acme/api#7", Issue: "jira:ENG-1"}: "native", {PullRequest: "ghpr:acme/api#7", Issue: "donor"}: "native"}
 			derived.LinkedIssue, derived.LinkedIssueEvidence, _, _ = derived.BuildLinkedIssueIndexFromRows("github", subjects, own, edges, nil)
 			_, _, candidates := derived.Resolve(subjects["ghpr:acme/api#7"])
 			found := false
@@ -250,6 +253,7 @@ func TestAStoredAdminDonorRowKeepsItsIdentity(t *testing.T) {
 				}
 				edges := []GithubWorkItemDerivationDependencyEdge{{SourceWorkItemID: "ghpr:acme/api#7", TargetWorkItemID: "donor", RelationshipType: "relates_to"}}
 				rows := map[string]GithubWorkItemDerivationDonorRow{"donor": {TeamID: "shared", TeamName: tc.storedName, Source: "issue_project"}}
+				derived.LinkTiers = map[LinkPair]string{{PullRequest: "ghpr:acme/api#7", Issue: "jira:ENG-1"}: "native", {PullRequest: "ghpr:acme/api#7", Issue: "donor"}: "native"}
 				derived.LinkedIssue, derived.LinkedIssueEvidence, _, _ = derived.BuildLinkedIssueIndexFromRows("github", subjects, rows, edges, nil)
 				_, _, candidates := derived.Resolve(subjects["ghpr:acme/api#7"])
 				var linked *GithubWorkItemDerivationCandidate
@@ -301,6 +305,7 @@ func TestAStoredDonorRowPrefersAnActiveTeamOfTheDonorsProvider(t *testing.T) {
 			}
 			edges := []GithubWorkItemDerivationDependencyEdge{{SourceWorkItemID: "ghpr:acme/api#7", TargetWorkItemID: "donor", RelationshipType: "relates_to"}}
 			rows := map[string]GithubWorkItemDerivationDonorRow{"donor": {TeamID: "shared", TeamName: "Platform", Source: "project_ownership"}}
+			derived.LinkTiers = map[LinkPair]string{{PullRequest: "ghpr:acme/api#7", Issue: "donor"}: "native"}
 			index, _, _, _ := derived.BuildLinkedIssueIndexFromRows("github", subjects, rows, edges, nil)
 			got, ok := index["ghpr:acme/api#7"]
 			if !ok || got[0] != "shared" || got[2] != tc.wantProvider {

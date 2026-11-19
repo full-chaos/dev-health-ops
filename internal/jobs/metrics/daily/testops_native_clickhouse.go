@@ -568,11 +568,18 @@ func writeTestopsPipelineMetrics(
 		success_rate, failure_rate, cancel_rate, rerun_rate,
 		median_duration_seconds, p95_duration_seconds, avg_queue_seconds, p95_queue_seconds,
 		team_id, service_id, org_id, computed_at,
-		skipped_count, unfinished_count, other_count, unfinished_stale_count)`)
+		skipped_count, unfinished_count, other_count, unfinished_stale_count,
+		pooled_service_ids, pooled_durations, pooled_queues, pooled_samples_stored)`)
 	if err != nil {
 		return 0, fmt.Errorf("prepare testops_pipeline_metrics_daily batch: %w", err)
 	}
 	for _, metric := range metrics {
+		samples := metric.PooledSamples
+		fit := pooledSamplesFit(ctx, "testops_pipeline", organizationID, metric.RepoID.String(), day, len(samples))
+		if !fit {
+			samples = nil
+		}
+		services, durations, queues := pooledSampleColumns(samples)
 		if err := batch.Append(
 			metric.RepoID, chDate(day),
 			// pipelines_count/success_count/failure_count/cancelled_count
@@ -587,6 +594,7 @@ func writeTestopsPipelineMetrics(
 			metric.TeamID, metric.ServiceID, organizationID, computedAt.UTC(),
 			uint32PtrOf(metric.SkippedCount), uint32PtrOf(metric.UnfinishedCount),
 			uint32PtrOf(metric.OtherCount), uint32PtrOf(metric.UnfinishedStaleCount),
+			services, durations, queues, pooledMarker(fit),
 		); err != nil {
 			return 0, fmt.Errorf("append testops_pipeline_metrics_daily row: %w", err)
 		}
@@ -632,7 +640,8 @@ func writeTestopsTestMetrics(
 		repo_id, day, total_cases, passed_count, failed_count, skipped_count, quarantined_count,
 		pass_rate, failure_rate, flake_rate, retry_dependency_rate, total_suites,
 		suite_duration_p50_seconds, suite_duration_p95_seconds, failure_recurrence_score,
-		team_id, service_id, org_id, computed_at, flake_cases, distinct_cases)`)
+		team_id, service_id, org_id, computed_at, flake_cases, distinct_cases,
+		pooled_service_ids, pooled_durations, pooled_samples_stored)`)
 	if err != nil {
 		return 0, fmt.Errorf("prepare testops_test_metrics_daily batch: %w", err)
 	}
@@ -643,6 +652,12 @@ func writeTestopsTestMetrics(
 		// day is unknown. A NULL pair would blank the whole org day instead.
 		flakeCases, distinctCases := uint32PtrOf(metric.FlakeCases), uint32PtrOf(metric.DistinctCases)
 		flakeRate, retryDependencyRate, failureRecurrence := measuredCaseRates(metric)
+		samples := metric.PooledSamples
+		fit := pooledSamplesFit(ctx, "testops_test", organizationID, metric.RepoID.String(), day, len(samples))
+		if !fit {
+			samples = nil
+		}
+		services, durations, _ := pooledSampleColumns(samples)
 		if err := batch.Append(
 			metric.RepoID, chDate(day),
 			// total_cases/passed_count/failed_count/skipped_count/
@@ -660,6 +675,7 @@ func writeTestopsTestMetrics(
 			// the columns existed reads NULL, a row written now carries both counts
 			// (CHAOS-9737), so the org series can sum them.
 			flakeCases, distinctCases,
+			services, durations, pooledMarker(fit),
 		); err != nil {
 			return 0, fmt.Errorf("append testops_test_metrics_daily row: %w", err)
 		}

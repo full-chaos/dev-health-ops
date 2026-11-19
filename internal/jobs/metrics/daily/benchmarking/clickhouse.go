@@ -38,10 +38,10 @@ var metricDefinitions = map[string]MetricDefinition{
 	"avg_queue_seconds":         pipelineMetric("avg_queue_seconds"),
 	"p95_queue_seconds":         pipelineMetric("p95_queue_seconds"),
 	"pass_rate":                 pooledRate(testMetric(""), "passed_count", executedCases),
-	"flake_rate":                testMetric("flake_rate"),
-	"retry_dependency_rate":     testMetric("retry_dependency_rate"),
+	"flake_rate":                pooledRate(testMetric(""), measuredCases("flake_cases", "flake_rate", "flake_cases"), measuredCases("flake_cases", "flake_rate", "distinct_cases")),
+	"retry_dependency_rate":     pooledRate(testMetric(""), measuredCases("distinct_cases", "retry_dependency_rate", "retry_dependency_rate * distinct_cases"), measuredCases("distinct_cases", "retry_dependency_rate", "distinct_cases")),
 	"failure_recurrence_score":  testMetric("failure_recurrence_score"),
-	"line_coverage_pct":         coverageMetric("line_coverage_pct"),
+	"line_coverage_pct":         pooledRate(coverageMetric(""), "if("+coveredLines+", 100 * lines_covered, NULL)", "if("+coveredLines+", lines_total, NULL)"),
 	"branch_coverage_pct":       coverageMetric("branch_coverage_pct"),
 	"coverage_delta_pct":        coverageMetric("coverage_delta_pct"),
 	"coverage_regression_count": coverageMetric("coverage_regression_count"),
@@ -111,12 +111,27 @@ const completedRuns = "success_count + failure_count"
 // read; the counts are exact UInt32 columns.
 const executedCases = "passed_count + failed_count"
 
+// measuredCases is a flake or retry count or the distinct cases of a repo-day, NULL when the rate, the distinct cases
+// or (for flake) the flake cases are NULL (a day that measured no case, or a row stored before the counts existed), so such a
+// repo-day is in neither sum. retry_dependency_rate * distinct_cases is a float, the form of rerun_rate *
+// pipelines_count, not a stored count.
+func measuredCases(count, rate, expression string) string {
+	return "if(" + rate + " IS NULL OR distinct_cases IS NULL OR " + count + " IS NULL, NULL, " + expression + ")"
+}
+
 func testMetric(column string) MetricDefinition {
 	return MetricDefinition{
 		Table: "testops_test_metrics_daily", ValueColumn: column,
 		ScopeSupport: testopsScopes(), InnerGroupColumns: []string{"repo_id"},
 	}
 }
+
+// coveredLines is a repo-day whose stored line counts measure a coverage: both counts set and lines_total above 0 (the
+// rule of the query-api line coverage). Any other repo-day (a NULL count, a stored pct with no counts, no lines) is in
+// neither sum, so a point made only of such repo-days has no value, never 0. The stored line_coverage_pct is not read.
+// branch_coverage_pct has no stored counts, so it stays the mean of the repo-day percentages, as do coverage_delta_pct
+// (a difference of two percentages) and coverage_regression_count (a count).
+const coveredLines = "lines_covered IS NOT NULL AND lines_total IS NOT NULL AND lines_total > 0"
 
 func coverageMetric(column string) MetricDefinition {
 	return MetricDefinition{

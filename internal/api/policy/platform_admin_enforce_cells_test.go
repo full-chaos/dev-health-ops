@@ -336,7 +336,7 @@ func TestPlatformAdminRowsFailClosedWithoutAVerdict(t *testing.T) {
 		t.Run(pattern, func(t *testing.T) {
 			dead := newTestPDP(t, allowAll)
 			deadEnforcer := productionEnforcer(t, dead, "admin")
-			dead.srv.Close()
+			dead.kill()
 			got := serveCell(cellHandler(t, legacyStore(true, "admin"), userClaims(nil), deadEnforcer), pattern, cellBearer())
 			if got.status != http.StatusServiceUnavailable || got.header.Get("Retry-After") != enforceRetryAfter {
 				t.Fatalf("dead PDP: %d %q Retry-After %q, want 503 and %q", got.status, got.body, got.header.Get("Retry-After"), enforceRetryAfter)

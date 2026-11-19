@@ -30,8 +30,9 @@ import (
 //   - a CURRENT relation, a relation the rule cannot decide (an end that is no
 //     stored item, a row of another semantics version) and every row of
 //     another relationship type stay. Blocking relations never drive team
-//     attribution (teamRepoOwnershipInheritableRelationshipTypes), so no
-//     attribution reader sees a deleted row.
+//     attribution
+//     (teamattribution.GithubWorkItemDerivationInheritableRelationships), so
+//     no attribution reader sees a deleted row.
 //   - a removed row inside the retention stays. The retention is the time the
 //     graph projector needs to retract the edge of a removed link and the
 //     time the daily blocked-hours recompute still reads, and a removed row

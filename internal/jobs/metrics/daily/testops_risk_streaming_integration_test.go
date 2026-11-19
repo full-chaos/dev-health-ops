@@ -68,30 +68,12 @@ func TestTestopsRiskExecutorStreamsPastTheOldRowCapAgainstRealClickHouse(t *test
     stack_trace Nullable(String), is_quarantined UInt8 DEFAULT 0,
     org_id LowCardinality(String) DEFAULT '', last_synced DateTime64(3, 'UTC')
 ) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (repo_id, run_id, suite_id, case_id)`,
-		`CREATE TABLE testops_release_confidence (
-    repo_id UUID, day Date, confidence_score Float64, pipeline_success_factor Float64,
-    test_pass_factor Float64, coverage_factor Float64, flake_penalty Float64, regression_penalty Float64,
-    factors_json String DEFAULT '{}', team_id Nullable(String), service_id Nullable(String),
-    org_id LowCardinality(String) DEFAULT '', computed_at DateTime('UTC')
-) ENGINE MergeTree PARTITION BY toYYYYMM(day) ORDER BY (repo_id, day)`,
-		`CREATE TABLE testops_quality_drag (
-    repo_id UUID, day Date, drag_hours Nullable(Float64), failure_rework_hours Nullable(Float64),
-    flake_investigation_hours Nullable(Float64), queue_wait_hours Nullable(Float64), retry_overhead_hours Nullable(Float64),
-    factors_json String DEFAULT '{}', team_id Nullable(String), service_id Nullable(String),
-    org_id LowCardinality(String) DEFAULT '', computed_at DateTime('UTC')
-) ENGINE MergeTree PARTITION BY toYYYYMM(day) ORDER BY (repo_id, day)`,
-		`CREATE TABLE testops_pipeline_stability (
-    repo_id UUID, day Date, stability_index Float64, success_rate_7d Float64, success_rate_trend Float64,
-    failure_clustering_score Float64, median_recovery_time_seconds Nullable(Float64),
-    team_id Nullable(String), service_id Nullable(String), org_id LowCardinality(String) DEFAULT '',
-    computed_at DateTime('UTC')
-) ENGINE MergeTree PARTITION BY toYYYYMM(day) ORDER BY (repo_id, day)`,
 	} {
 		if err := conn.Exec(ctx, statement); err != nil {
 			t.Fatal(err)
 		}
 	}
-	chschema.CreateTables(ctx, t, conn, "test_suite_results", "coverage_snapshots", "testops_run_report_completeness")
+	chschema.CreateTables(ctx, t, conn, "test_suite_results", "coverage_snapshots", "testops_run_report_completeness", "testops_release_confidence", "testops_quality_drag", "testops_pipeline_stability")
 	applyTestopsRepositoryOwnershipSchema(ctx, t, conn)
 
 	const orgID = "00000000-0000-4000-8000-000000000009"

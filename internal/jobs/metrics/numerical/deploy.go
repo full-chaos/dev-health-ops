@@ -45,6 +45,8 @@ type DeployMetric struct {
 	DeployTimeP50Hours     *float64
 	LeadTimeP50Hours       *float64
 	ComputedAt             time.Time
+	// DeployHoursSamples are the samples of DeployTimeP50Hours, stored with the row for the pooled report chart.
+	DeployHoursSamples []float64
 }
 
 type deployMetricsBucket struct {
@@ -129,6 +131,7 @@ func ComputeDeployMetrics(day time.Time, deployments []DeployRow, computedAt tim
 			DeploymentsCount:       bucket.deployments,
 			FailedDeploymentsCount: bucket.failed,
 			ComputedAt:             computedAtUTC,
+			DeployHoursSamples:     append([]float64{}, bucket.durations...),
 		}
 		if len(bucket.durations) > 0 {
 			value := deployPercentile(bucket.durations, 50.0)

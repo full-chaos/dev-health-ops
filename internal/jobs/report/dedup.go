@@ -64,17 +64,31 @@ type chartRule struct {
 // skipped and running included) and held 0 on a day with no run counted; it is
 // no longer charted.
 //
+// The pipeline cancel and rerun rates are the bucket's cancelled runs (or reruns) over all its runs, the stored
+// denominator, from the counts of testops_pipeline_metrics_daily. A mean of the stored per-repository-day rates weighs
+// a day of 1 run like a day of 500, and holds 0 (NaN in a bucket with no row) where no run was counted. A bucket with
+// no run has no point.
+//
 // The test pass rate is the bucket's passed cases over its passed and failed
 // cases, from the counts of testops_test_metrics_daily, as the TestOps Tests
 // page reads them. The stored pass_rate column divides by every case (skipped
 // ones too) and holds 0 on a day where every case was skipped, so it is never
 // charted. A bucket with no passed or failed case has no point.
+//
+// The test flake rate and retry dependency rate are the bucket's flake (retry-dependent) cases over its distinct cases,
+// from the counts of testops_test_metrics_daily. A mean of the stored repository-day rates weighs a day of 1 case like a
+// day of 500. A repository-day with a NULL rate or NULL counts is in neither sum, and a bucket made only of such days
+// has no point. The failure recurrence score has no stored count and is still the mean of the stored values.
 var chartRules = map[string]chartRule{
-	"change_failure_rate": {table: changefailure.Table, expression: changefailure.WindowRateSQL, inputs: changefailure.CountColumns},
-	"pr_rework_ratio":     {table: prrework.Table, expression: prrework.WindowRateSQL, inputs: prrework.CountColumns},
-	"failure_rate":        {table: "testops_pipeline_metrics_daily", expression: testops.PipelineFailureRateWindowSQL, inputs: testops.PipelineRateCountColumns},
-	"success_rate":        {table: "testops_pipeline_metrics_daily", expression: testops.PipelineSuccessRateWindowSQL, inputs: testops.PipelineRateCountColumns},
-	"pass_rate":           {table: "testops_test_metrics_daily", expression: testops.TestPassRateWindowSQL, inputs: testops.TestRateCountColumns},
+	"change_failure_rate":   {table: changefailure.Table, expression: changefailure.WindowRateSQL, inputs: changefailure.CountColumns},
+	"pr_rework_ratio":       {table: prrework.Table, expression: prrework.WindowRateSQL, inputs: prrework.CountColumns},
+	"failure_rate":          {table: "testops_pipeline_metrics_daily", expression: testops.PipelineFailureRateWindowSQL, inputs: testops.PipelineRateCountColumns},
+	"success_rate":          {table: "testops_pipeline_metrics_daily", expression: testops.PipelineSuccessRateWindowSQL, inputs: testops.PipelineRateCountColumns},
+	"cancel_rate":           {table: "testops_pipeline_metrics_daily", expression: testops.PipelineCancelRateWindowSQL, inputs: testops.PipelineCancelRateCountColumns},
+	"rerun_rate":            {table: "testops_pipeline_metrics_daily", expression: testops.PipelineRerunRateWindowSQL, inputs: testops.PipelineRerunRateCountColumns},
+	"pass_rate":             {table: "testops_test_metrics_daily", expression: testops.TestPassRateWindowSQL, inputs: testops.TestRateCountColumns},
+	"flake_rate":            {table: "testops_test_metrics_daily", expression: testops.TestFlakeRateWindowSQL, inputs: testops.TestFlakeRateCountColumns},
+	"retry_dependency_rate": {table: "testops_test_metrics_daily", expression: testops.TestRetryDependencyRateWindowSQL, inputs: testops.TestRetryDependencyRateCountColumns},
 }
 
 // withChartRule returns the definition a chart of the metric is built from:

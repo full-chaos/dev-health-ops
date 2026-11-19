@@ -258,11 +258,12 @@ func TestAnEnforcerWithNoDecisionPointKeepsTheLegacyAnswerOffItsNamespaces(t *te
 func TestADeadPDPIsA503NotALegacyAllow(t *testing.T) {
 	pdp := newTestPDP(t, allowAll)
 	client := pdp.client(t)
-	pdp.srv.Close()
+	pdp.kill()
 	got := enforceRequest(enforceHandler(t, personaStore(personaSuperuser), userClaims(nil), newEnforcerFor(t, client, onFor("teams"))), "GET", "/api/v1/admin/teams")
 	if got.status != http.StatusServiceUnavailable {
 		t.Fatalf("dead PDP: %d %q, want 503", got.status, got.body)
 	}
+	t.Run("an allow PDP binding the dead address changes nothing", deadPDPAddressStaysDead)
 }
 
 func fixtureBearerHandler(t *testing.T, enf *Enforcer) http.Handler {
@@ -384,7 +385,7 @@ func TestTheStopRouteOfAnImpersonatingAdminIsDecidedByThePDP(t *testing.T) {
 			pdp.obligations = cell.obligations
 			client := pdp.client(t)
 			if cell.dead {
-				pdp.srv.Close()
+				pdp.kill()
 			}
 			got := enforceRequest(stopRouteHandler(t, client), http.MethodPost, stopImpersonationRoute)
 			if got.status != cell.status || (cell.body != "" && got.body != cell.body) {
@@ -686,7 +687,7 @@ func TestTheEnforcementOutcomeSetIsClosed(t *testing.T) {
 	t.Cleanup(func() { enforceDecisionAdd = previous })
 	allow, deny, dead := newTestPDP(t, allowAll), newTestPDP(t, denyWith("role_lacks_action")), newTestPDP(t, allowAll)
 	deadClient := dead.client(t)
-	dead.srv.Close()
+	dead.kill()
 	for _, h := range []http.Handler{
 		enforceHandler(t, personaStore(personaAdmin), userClaims(nil), newEnforcerFor(t, allow.client(t), onFor("teams"))),
 		enforceHandler(t, personaStore(personaAdmin), userClaims(nil), newEnforcerFor(t, deny.client(t), onFor("teams"))),

@@ -18,12 +18,14 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/querybound"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/linktier"
 	"github.com/full-chaos/dev-health-ops/internal/ownershipwindow"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/teamactive"
@@ -288,6 +290,9 @@ type GithubWorkItemDerivationContext struct {
 	projectByKey    map[string][]GithubWorkItemDerivationCandidate
 	repoByID        map[string][]GithubWorkItemDerivationCandidate
 	repoByName      map[string][]GithubWorkItemDerivationCandidate
+	// repoProvidersByID: repo id -> the providers of its ownership facts, so an
+	// item of another provider (an issue) reaches repoByID by the id alone.
+	repoProvidersByID map[string][]string
 	// memberByID (admin layer, provider-scoped) and memberByUntypedFacet
 	// (admin layer, no provider tag) together form the AUTHORITATIVE
 	// membership layer; providerMemberByID (auto-import team_memberships)
@@ -305,7 +310,14 @@ type GithubWorkItemDerivationContext struct {
 	// copies. An item with no entry keeps the reference evidence
 	// "linked_issue=<item id>".
 	LinkedIssueEvidence map[string]string
-	StoredEdgeMerge     GithubWorkItemStoredEdgeMergeObservation
+	// LinkTiers: the provenance tier of the work_graph_issue_pr link of record
+	// of each (pull request, issue) pair. BuildLinkedIssueIndexFromRows reads
+	// it for an item whose source is a pull or merge request.
+	LinkTiers map[LinkPair]string
+	// LinkedPullRequests: issue id -> its work_graph_issue_pr rows, of every
+	// tier (linkedPullRequestRepoCandidates keeps the issue's best tier).
+	LinkedPullRequests map[string][]GithubWorkItemDerivationLinkedPullRequest
+	StoredEdgeMerge    GithubWorkItemStoredEdgeMergeObservation
 	// GitLabPathsByWorkItem: item id -> the paths its GitLab repos row answers to
 	// (AnchorGitLabSubjectProjects), for a subject built from a freshly written
 	// row, which carries none. resolve fills them in when the subject has none.
@@ -368,6 +380,10 @@ type GithubWorkItemDerivationEdgeKey struct {
 // (mergeStoredInheritableWorkItemEdges, githubWorkItemDerivationDonorTargets,
 // loadWorkItemDerivationContextForProvider) convert to this shape at the call
 // boundary.
+// LinkPair names one pull request (or merge request) work item and one issue
+// work item: the grain of a work_graph_issue_pr link of record.
+type LinkPair struct{ PullRequest, Issue string }
+
 type GithubWorkItemDerivationDependencyEdge struct {
 	SourceWorkItemID string
 	TargetWorkItemID string
@@ -380,28 +396,35 @@ type GithubWorkItemDerivationDependencyEdge struct {
 	OrgID string
 }
 
+// LatestDependencyEdgeWins reports whether a dependency row replaces the held
+// row of the same (source, target): the newer last_synced wins, so a retyped
+// link replaces the old row. On an equal last_synced an inheritable
+// relationship wins (one sync can write a native relates_to and a text
+// "Blocks #11" for the same pair), then the lower relationship. The frozen
+// Python kept the lower relationship alone. Every collapse of dependency edges
+// by (source, target) decides with this function.
+func LatestDependencyEdgeWins(candidateSynced time.Time, candidateType string, heldSynced time.Time, heldType string) bool {
+	if !candidateSynced.Equal(heldSynced) {
+		return candidateSynced.After(heldSynced)
+	}
+	candidateInherits := GithubWorkItemDerivationInheritableRelationships[candidateType]
+	if candidateInherits != GithubWorkItemDerivationInheritableRelationships[heldType] {
+		return candidateInherits
+	}
+	return candidateType < heldType
+}
+
 // LatestGitHubWorkItemDerivationDependencies keeps one edge per (source,
-// target): the newest by last_synced, so a retyped link replaces the old row.
-// On an equal last_synced an inheritable relationship wins (one sync can write
-// a native relates_to and a text "Blocks #11" for the same pair), then the
-// lower relationship. The frozen Python kept the lower relationship alone.
+// target), chosen by LatestDependencyEdgeWins.
 func LatestGitHubWorkItemDerivationDependencies(
 	dependencies []GithubWorkItemDerivationDependencyEdge,
 ) map[struct{ source, target string }]GithubWorkItemDerivationDependencyEdge {
 	type edgeKey struct{ source, target string }
 	latest := map[edgeKey]GithubWorkItemDerivationDependencyEdge{}
-	tieWins := func(candidate, current string) bool {
-		candidateInherits := GithubWorkItemDerivationInheritableRelationships[candidate]
-		if candidateInherits != GithubWorkItemDerivationInheritableRelationships[current] {
-			return candidateInherits
-		}
-		return candidate < current
-	}
 	for _, dependency := range dependencies {
 		key := edgeKey{dependency.SourceWorkItemID, dependency.TargetWorkItemID}
 		current, exists := latest[key]
-		if !exists || dependency.LastSynced.After(current.LastSynced) ||
-			(dependency.LastSynced.Equal(current.LastSynced) && tieWins(dependency.RelationshipType, current.RelationshipType)) {
+		if !exists || LatestDependencyEdgeWins(dependency.LastSynced, dependency.RelationshipType, current.LastSynced, current.RelationshipType) {
 			latest[key] = dependency
 		}
 	}
@@ -421,11 +444,13 @@ func NewGitHubWorkItemDerivationContext(
 		projectByKey:          map[string][]GithubWorkItemDerivationCandidate{},
 		repoByID:              map[string][]GithubWorkItemDerivationCandidate{},
 		repoByName:            map[string][]GithubWorkItemDerivationCandidate{},
+		repoProvidersByID:     map[string][]string{},
 		memberByID:            map[string][]GithubWorkItemDerivationCandidate{},
 		memberByUntypedFacet:  map[string][]GithubWorkItemDerivationCandidate{},
 		providerMemberByID:    map[string][]GithubWorkItemDerivationCandidate{},
 		manualFallbacks:       append([]GithubWorkItemDerivationManualFallback(nil), facts.ManualFallbacks...),
 		LinkedIssue:           map[string][3]string{},
+		LinkedPullRequests:    map[string][]GithubWorkItemDerivationLinkedPullRequest{},
 		teamsWithOwnership:    map[string]struct{}{},
 		teamsKnownFromCatalog: map[string]struct{}{},
 		inactiveTeams:         map[string]struct{}{},
@@ -515,6 +540,14 @@ func NewGitHubWorkItemDerivationContext(
 		)
 		if fact.RepoID != nil && strings.TrimSpace(*fact.RepoID) != "" {
 			AppendDerivationCandidate(result.repoByID, AttributionMapKey(fact.Provider, *fact.RepoID), candidate)
+			repoID, provider := strings.TrimSpace(*fact.RepoID), strings.TrimSpace(fact.Provider)
+			known := false
+			for _, existing := range result.repoProvidersByID[repoID] {
+				known = known || existing == provider
+			}
+			if !known {
+				result.repoProvidersByID[repoID] = append(result.repoProvidersByID[repoID], provider)
+			}
 		}
 		if nameKey := GithubWorkItemDerivationFirstNonEmpty(fact.NameKey, fact.RepoFullName); nameKey != "" && !fact.Unjoinable {
 			AppendDerivationCandidate(result.repoByName, AttributionMapKey(fact.Provider, nameKey), candidate)
@@ -852,9 +885,9 @@ func (derived GithubWorkItemDerivationContext) resolve(
 		bySource["project_ownership"] = append(bySource["project_ownership"], candidate)
 	}
 	// An issue takes no team from its own repository field (entity tree: its
-	// repositories are those of its linked pull requests; it reaches a team's
-	// ownership through the linked_issue tier). Only a pull / merge request takes
-	// repo_ownership from its own repo_id.
+	// repositories are those of its linked pull requests). Only a pull / merge
+	// request takes repo_ownership from its own repo_id; an issue takes it from
+	// the repositories of its linked pull requests (work_graph_issue_pr).
 	if GithubWorkItemDerivationIsPullOrMergeRequestType(subject.Provider, subject.Type) {
 		bySource["repo_ownership"] = append(
 			bySource["repo_ownership"],
@@ -864,6 +897,8 @@ func (derived GithubWorkItemDerivationContext) resolve(
 			bySource["repo_ownership"],
 			derived.repoByNames(subject)...,
 		)
+	} else {
+		bySource["repo_ownership"] = append(bySource["repo_ownership"], derived.linkedPullRequestRepoCandidates(subject)...)
 	}
 	// CHAOS-4321 (chris's ruling, 2026-08-26, refined 08:30 PT): membership-
 	// based attribution -- assignee AND author alike -- is a TWO-LAYER
@@ -1196,6 +1231,146 @@ func AttributionRowPreference(isPrimary int) int {
 	}
 }
 
+// GithubWorkItemDerivationLinkedPullRequest is one work_graph_issue_pr row of an
+// issue: the repository and number of the linked pull request, and the link's
+// tier (provenance).
+type GithubWorkItemDerivationLinkedPullRequest struct {
+	RepoID   string
+	PRNumber uint32
+	Tier     string
+}
+
+// BestTierLinkedPullRequests keeps the links of the issue's best tier
+// (linktier.Rank), once each, sorted by repository and number. A link of an
+// unknown tier never counts, and a lower tier never counts when a higher one
+// is present, even when the higher tier names no owner.
+func BestTierLinkedPullRequests(
+	links []GithubWorkItemDerivationLinkedPullRequest,
+) []GithubWorkItemDerivationLinkedPullRequest {
+	best := 0
+	for _, link := range links {
+		if rank := linktier.Rank(link.Tier); rank > best && strings.TrimSpace(link.RepoID) != "" {
+			best = rank
+		}
+	}
+	if best == 0 {
+		return nil
+	}
+	type linkKey struct {
+		repoID   string
+		prNumber uint32
+	}
+	seen := map[linkKey]bool{}
+	var kept []GithubWorkItemDerivationLinkedPullRequest
+	for _, link := range links {
+		link.RepoID = strings.TrimSpace(link.RepoID)
+		key := linkKey{link.RepoID, link.PRNumber}
+		if link.RepoID == "" || linktier.Rank(link.Tier) != best || seen[key] {
+			continue
+		}
+		seen[key] = true
+		kept = append(kept, link)
+	}
+	sort.Slice(kept, func(left, right int) bool {
+		if kept[left].RepoID != kept[right].RepoID {
+			return kept[left].RepoID < kept[right].RepoID
+		}
+		return kept[left].PRNumber < kept[right].PRNumber
+	})
+	return kept
+}
+
+// linkTierConfidence is the confidence of a repository owner reached through a
+// link of tier: the owner fact's own for a native link, one step lower on the
+// scale high > medium > low for explicit_text, and low for heuristic. A lower
+// tier is never as confident as a native link.
+func linkTierConfidence(confidence, tier string) string {
+	switch tier {
+	case linktier.Native:
+		return confidence
+	case linktier.ExplicitText:
+		if confidence == "high" {
+			return "medium"
+		}
+		return "low"
+	default:
+		return "low"
+	}
+}
+
+// linkedPullRequestRepoCandidates gives an issue the repo_ownership candidates
+// of the repositories of its linked pull requests, at the issue's best link
+// tier only (team-attribution.md section 0.1). Each link counts once for the
+// team the repo_ownership tier gives a pull request of its repository (its
+// first ranked active fact that is not a co-owner fact). The team with the
+// most links is the main owner, a tie going to RankDerivationCandidates, then
+// the lowest team id; every other team of those repositories' facts is a
+// co-owner (section 0.4d). A team's candidate is its best ranked fact, and its
+// evidence names the repository, the pull request and the tier of that fact's
+// link; its confidence is lowered for a link below the native tier
+// (linkTierConfidence). With no main owner no candidate can be the primary.
+func (derived GithubWorkItemDerivationContext) linkedPullRequestRepoCandidates(
+	subject GithubWorkItemDerivationSubject,
+) []GithubWorkItemDerivationCandidate {
+	byTeam := map[string][]GithubWorkItemDerivationCandidate{}
+	linkCounts := map[string]int{}
+	for _, link := range BestTierLinkedPullRequests(derived.LinkedPullRequests[subject.WorkItemID]) {
+		var facts []GithubWorkItemDerivationCandidate
+		for _, provider := range derived.repoProvidersByID[link.RepoID] {
+			for _, candidate := range derived.repoByID[AttributionMapKey(provider, link.RepoID)] {
+				if GithubWorkItemDerivationStringValue(candidate.TeamID) == "" || derived.candidateNamesInactiveTeam(candidate) {
+					continue
+				}
+				candidate.Evidence = fmt.Sprintf("repo_ownership=%s;work_graph_issue_pr=%d;tier=%s", link.RepoID, link.PRNumber, link.Tier)
+				candidate.Confidence = linkTierConfidence(candidate.Confidence, link.Tier)
+				facts = append(facts, candidate)
+			}
+		}
+		ranked := RankDerivationCandidates(facts)
+		for _, candidate := range ranked {
+			if candidate.IsPrimary != AttributionCoOwner {
+				linkCounts[*candidate.TeamID]++
+				break
+			}
+		}
+		for _, candidate := range ranked {
+			byTeam[*candidate.TeamID] = append(byTeam[*candidate.TeamID], candidate)
+		}
+	}
+	if len(byTeam) == 0 {
+		return nil
+	}
+	teams := make([]string, 0, len(byTeam))
+	for team := range byTeam {
+		teams = append(teams, team)
+	}
+	sort.Strings(teams)
+	most := 0
+	for _, count := range linkCounts {
+		most = max(most, count)
+	}
+	result := make([]GithubWorkItemDerivationCandidate, 0, len(teams))
+	var tied []GithubWorkItemDerivationCandidate
+	for _, team := range teams {
+		best := RankDerivationCandidates(byTeam[team])[0]
+		result = append(result, best)
+		if most > 0 && linkCounts[team] == most {
+			tied = append(tied, best)
+		}
+	}
+	mainTeam := ""
+	if len(tied) > 0 {
+		mainTeam = GithubWorkItemDerivationStringValue(RankDerivationCandidates(tied)[0].TeamID)
+	}
+	for index := range result {
+		result[index].IsPrimary = AttributionCoOwner
+		if GithubWorkItemDerivationStringValue(result[index].TeamID) == mainTeam {
+			result[index].IsPrimary = AttributionPrimary
+		}
+	}
+	return result
+}
+
 // projectCoOwners returns, for a primary that came from the item's project
 // (issue_project, project_ownership) or repository (repo_ownership), the
 // candidates of the same source that name another team, at any rank: one per
@@ -1506,10 +1681,11 @@ type GithubWorkItemDerivationDonorRow struct {
 
 // linkedIssueDonorSources are the sources of a row that gives its team to a
 // linked item: a team the item holds on its own, never an inherited,
-// membership, fallback or unassigned row.
+// membership, fallback or unassigned row. An issue's repo_ownership row is
+// not one: it is the owner of a linked pull request's repository, and a pull
+// request linked to the issue would take it over a second hop.
 var linkedIssueDonorSources = map[string]bool{
 	"native_team": true, "issue_project": true, "project_ownership": true,
-	"repo_ownership": true,
 }
 
 // IsLinkedIssueDonorSource reports whether a row of this source gives its team
@@ -1757,13 +1933,7 @@ func (derived GithubWorkItemDerivationContext) BuildLinkedIssueIndexFromRows(
 		donors[id] = [3]string{row.TeamID, GithubWorkItemDerivationFirstNonEmpty(GithubWorkItemDerivationStringValue(bound.TeamName), teamName), bound.TeamProvider}
 	}
 	baseNative, keyIndex := derived.linkedIssueSubjectIndexes(subjects)
-	type linkedDonor struct {
-		target       string
-		relationship string
-		team         [3]string
-		storedOnly   bool
-	}
-	candidates := map[string][]linkedDonor{}
+	edgesBySource := map[string][]LinkedIssueEdge{}
 	for _, dependency := range LatestGitHubWorkItemDerivationDependencies(dependencies) {
 		if !GithubWorkItemDerivationInheritableRelationships[dependency.RelationshipType] || baseNative[dependency.SourceWorkItemID] {
 			continue
@@ -1775,33 +1945,41 @@ func (derived GithubWorkItemDerivationContext) BuildLinkedIssueIndexFromRows(
 		if target == "" {
 			continue
 		}
-		if donor, exists := donors[target]; exists {
-			candidates[dependency.SourceWorkItemID] = append(candidates[dependency.SourceWorkItemID], linkedDonor{
-				target: target, relationship: dependency.RelationshipType, team: donor,
-				storedOnly: storedOnly[GithubWorkItemDerivationEdgeKey{
-					Source:           dependency.SourceWorkItemID,
-					Target:           dependency.TargetWorkItemID,
-					RelationshipType: dependency.RelationshipType,
-				}],
-			})
-		}
+		edgesBySource[dependency.SourceWorkItemID] = append(edgesBySource[dependency.SourceWorkItemID], LinkedIssueEdge{
+			Target: target, Relationship: dependency.RelationshipType,
+			StoredOnly: storedOnly[GithubWorkItemDerivationEdgeKey{
+				Source:           dependency.SourceWorkItemID,
+				Target:           dependency.TargetWorkItemID,
+				RelationshipType: dependency.RelationshipType,
+			}],
+		})
 	}
 	result := map[string][3]string{}
 	evidence := map[string]string{}
 	rescues := 0
 	crossProviderRescues := 0
-	for source, possible := range candidates {
-		sort.Slice(possible, func(left, right int) bool {
-			if possible[left].target != possible[right].target {
-				return possible[left].target < possible[right].target
+	for source, edges := range edgesBySource {
+		// The tier set is chosen BEFORE the usable-donor filter: a native
+		// edge whose donor gives no team leaves the item without a row; a
+		// lower-tier donor never stands in for it.
+		var winner LinkedIssueEdge
+		found := false
+		for _, edge := range SelectLinkedIssueEdges(source, edges, derived.LinkTiers) {
+			if _, usable := donors[edge.Target]; usable {
+				winner, found = edge, true
+				break
 			}
-			return possible[left].relationship < possible[right].relationship
-		})
-		winner := possible[0]
-		result[source] = winner.team
+		}
+		if !found {
+			continue
+		}
+		result[source] = donors[winner.Target]
 		evidence[source] = fmt.Sprintf("linked_issue=%s;dependency_type=%s;donor_provider=%s;donor_source=%s",
-			winner.target, winner.relationship, strings.TrimSpace(subjects[winner.target].Provider), donorRows[winner.target].Source)
-		if !winner.storedOnly {
+			winner.Target, winner.Relationship, strings.TrimSpace(subjects[winner.Target].Provider), donorRows[winner.Target].Source)
+		if winner.Tier != "" {
+			evidence[source] += ";link_tier=" + winner.Tier
+		}
+		if !winner.StoredOnly {
 			continue
 		}
 		rescues++
@@ -1810,12 +1988,83 @@ func (derived GithubWorkItemDerivationContext) BuildLinkedIssueIndexFromRows(
 		// but the defect is structural (one provider's sync mints the edge,
 		// another provider's writer needs it), so the observation must count
 		// the structure rather than one extractor's name.
-		if donor, exists := subjects[winner.target]; exists &&
+		if donor, exists := subjects[winner.Target]; exists &&
 			strings.TrimSpace(donor.Provider) != strings.TrimSpace(provider) {
 			crossProviderRescues++
 		}
 	}
 	return result, evidence, rescues, crossProviderRescues
+}
+
+// LinkedIssueEdge is one inheritable edge of an item, its target already
+// resolved to a work item id.
+type LinkedIssueEdge struct {
+	Target       string
+	Relationship string
+	// Tier is set by SelectLinkedIssueEdges: the provenance tier of the link of
+	// record of the (source, target) pair; empty for a source that is not a
+	// pull or merge request.
+	Tier       string
+	StoredOnly bool
+}
+
+// IsPullRequestSource reports whether a work item id names a pull request
+// (`ghpr:<repo>#<n>`) or a merge request (`gitlab:<path>!<n>`), the sources
+// that have a link of record; the rule is the work-graph parser's
+// (issueprlinks.ParsePRSource). A GitLab issue is `gitlab:<path>#<n>`: not one.
+func IsPullRequestSource(workItemID string) bool {
+	rest, separator, ok := "", "", false
+	if rest, ok = strings.CutPrefix(workItemID, "ghpr:"); ok {
+		separator = "#"
+	} else if rest, ok = strings.CutPrefix(workItemID, "gitlab:"); ok {
+		separator = "!"
+	} else {
+		return false
+	}
+	index := strings.LastIndex(rest, separator)
+	if index <= 0 {
+		return false
+	}
+	number, err := strconv.ParseUint(rest[index+1:], 10, 32)
+	return err == nil && number > 0
+}
+
+// SelectLinkedIssueEdges orders the donors an item may copy: the one rule of
+// the cascade (BuildLinkedIssueIndexFromRows) and of the donor-change trigger.
+// For a pull or merge request the link of record is work_graph_issue_pr: an
+// edge whose (source, target) pair has no row is no donor, and only the edges
+// of the best tier present stay (native over explicit_text over heuristic; a
+// pull request with a native link takes nothing lower, chris 2026-10-15). The
+// rest are in target id then relationship order. Any other source has no link
+// of record and keeps that id order.
+func SelectLinkedIssueEdges(source string, edges []LinkedIssueEdge, tiers map[LinkPair]string) []LinkedIssueEdge {
+	selected := make([]LinkedIssueEdge, 0, len(edges))
+	if IsPullRequestSource(source) {
+		best := 0
+		for _, edge := range edges {
+			edge.Tier = tiers[LinkPair{PullRequest: source, Issue: edge.Target}]
+			rank := linktier.Rank(edge.Tier)
+			if rank == 0 {
+				continue
+			}
+			if rank > best {
+				best = rank
+				selected = selected[:0]
+			}
+			if rank == best {
+				selected = append(selected, edge)
+			}
+		}
+	} else {
+		selected = append(selected, edges...)
+	}
+	sort.Slice(selected, func(left, right int) bool {
+		if selected[left].Target != selected[right].Target {
+			return selected[left].Target < selected[right].Target
+		}
+		return selected[left].Relationship < selected[right].Relationship
+	})
+	return selected
 }
 
 func (derived GithubWorkItemDerivationContext) ResolveWithoutLinked(
@@ -2535,6 +2784,44 @@ LIMIT ?`, orgID, ids, len(ids)+1)
 		if row.TeamID != "" {
 			result[id] = row
 		}
+	}
+	return rows.Err()
+}
+
+// LoadIssueLinkedPullRequests reads the work_graph_issue_pr rows of the items
+// of ids, of every tier (the cascade keeps each issue's best tier). One
+// statement per bounded chunk of ids (querybound): an item's rows are in the
+// one chunk that carries its id.
+func (source ClickHouseFactSource) LoadIssueLinkedPullRequests(
+	ctx context.Context, orgID string, ids []string,
+) (map[string][]GithubWorkItemDerivationLinkedPullRequest, error) {
+	result := map[string][]GithubWorkItemDerivationLinkedPullRequest{}
+	for _, chunk := range querybound.ChunkStringsByRenderedBytes(ids, querybound.MaxArrayBytes) {
+		if err := source.loadIssueLinkedPullRequestsChunk(ctx, orgID, chunk, result); err != nil {
+			return nil, err
+		}
+	}
+	return result, nil
+}
+
+func (source ClickHouseFactSource) loadIssueLinkedPullRequestsChunk(
+	ctx context.Context, orgID string, ids []string, result map[string][]GithubWorkItemDerivationLinkedPullRequest,
+) error {
+	rows, err := source.Conn.Query(ctx, `
+SELECT work_item_id, toString(repo_id), pr_number, provenance
+FROM work_graph_issue_pr FINAL
+WHERE org_id = ? AND has(?, work_item_id)`, orgID, ids)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		var link GithubWorkItemDerivationLinkedPullRequest
+		if err := rows.Scan(&id, &link.RepoID, &link.PRNumber, &link.Tier); err != nil {
+			return err
+		}
+		result[id] = append(result[id], link)
 	}
 	return rows.Err()
 }

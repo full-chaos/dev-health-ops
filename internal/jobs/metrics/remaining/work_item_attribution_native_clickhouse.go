@@ -14,6 +14,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/remaining/stepcause"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/linktier"
 	"github.com/full-chaos/dev-health-ops/internal/teamattribution"
 )
 
@@ -257,20 +258,23 @@ func (executor *WorkItemAttributionExecutor) ComputeOrg(
 		}
 	}
 
-	// CHAOS-5078 codex r1 F2 fix: exclude any item the native daily
-	// `work_item_attribution` family has ALREADY written TODAY. Without
-	// this, an ownership change detected the same day daily already ran
+	// CHAOS-5078 codex r1 F2 fix: exclude any item that already has a
+	// work_item_team_attributions row computed TODAY (UTC), from any writer
+	// (daily, backstop or sync). Without this, an ownership change detected
+	// the same day daily already ran
 	// would make this backstop write a SECOND, newer row for the same
 	// (org, repo, work_item) -- work_item_team_attributions'
 	// ReplacingMergeTree(computed_at) does not collapse the two (source/
 	// team_id differ, so the ORDER BY key differs), so both stay resident
 	// and LoadWorkItemPrimaryTeamAttributions' (work_item_id,
 	// max(computed_at)) fence picks whichever wrote LAST -- not necessarily
-	// the row correct for the day being read. Deferring is safe: the
-	// ownership change is picked up on THIS backstop's next run (the
-	// watermark this run advances still reflects that the change was
-	// observed, just not written today), or overwritten by tomorrow's daily
-	// run regardless.
+	// the row correct for the day being read.
+	//
+	// This backstop's next run does NOT pick a deferred item up: the run
+	// marker published below advances over it, so the next run sees no
+	// change for its scope. The next daily run whose window holds the item,
+	// or the next sync of the item, rewrites it (ticket 14200 (filed
+	// separately)).
 	coveredToday, err := executor.alreadyCoveredToday(ctx, orgID, now, affectedIDs)
 	if err != nil {
 		return outcome, err
@@ -357,6 +361,14 @@ func (executor *WorkItemAttributionExecutor) buildRowsAtEachItemsDay(
 	if err != nil {
 		return nil, err
 	}
+	linkTiers, err := LoadWorkItemLinkTiers(ctx, executor.conn, orgID, dependencies)
+	if err != nil {
+		return nil, err
+	}
+	linkedPullRequests, err := LoadIssueLinkedPullRequests(ctx, executor.conn, orgID, subjects)
+	if err != nil {
+		return nil, err
+	}
 
 	var rows []WorkItemAttributionRow
 	for _, day := range days {
@@ -365,6 +377,7 @@ func (executor *WorkItemAttributionExecutor) buildRowsAtEachItemsDay(
 			return nil, err
 		}
 		derived := teamattribution.NewGitHubWorkItemDerivationContext(facts)
+		derived.LinkedPullRequests = linkedPullRequests
 		donorRows := make(map[string]teamattribution.GithubWorkItemDerivationDonorRow, len(stored))
 		for id, row := range stored {
 			donorRows[id] = row
@@ -372,6 +385,7 @@ func (executor *WorkItemAttributionExecutor) buildRowsAtEachItemsDay(
 		for id, row := range derived.OwnDonorRows(subjects, affectedIDs) {
 			donorRows[id] = row
 		}
+		derived.LinkTiers = linkTiers
 		linkedIssue, linkedEvidence, _, _ := derived.BuildLinkedIssueIndexFromRows("", subjects, donorRows, dependencies, nil)
 		if refused := derived.LinkedIssueDonorRefusalCounts(subjects, dependencies); len(refused) > 0 {
 			slog.Default().InfoContext(ctx, "work_item_attribution.linked_issue_donor_refused",
@@ -384,6 +398,31 @@ func (executor *WorkItemAttributionExecutor) buildRowsAtEachItemsDay(
 		rows = append(rows, BuildWorkItemAttributionRows(orgID, now, idsByDay[day], subjects, derived)...)
 	}
 	return rows, nil
+}
+
+// LoadIssueLinkedPullRequests reads the work_graph_issue_pr rows of every
+// subject that is not a pull or merge request: an issue takes the owners of
+// the repositories of its linked pull requests (teamattribution
+// linkedPullRequestRepoCandidates).
+func LoadIssueLinkedPullRequests(
+	ctx context.Context, conn driver.Conn, orgID string,
+	subjects map[string]teamattribution.GithubWorkItemDerivationSubject,
+) (map[string][]teamattribution.GithubWorkItemDerivationLinkedPullRequest, error) {
+	var ids []string
+	for id, subject := range subjects {
+		if !teamattribution.GithubWorkItemDerivationIsPullOrMergeRequestType(subject.Provider, subject.Type) {
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		return map[string][]teamattribution.GithubWorkItemDerivationLinkedPullRequest{}, nil
+	}
+	sort.Strings(ids)
+	links, err := teamattribution.ClickHouseFactSource{Conn: conn}.LoadIssueLinkedPullRequests(ctx, orgID, ids)
+	if err != nil {
+		return nil, stepcause.Failure(stepcause.LoadIssueLinkedPullRequests, err)
+	}
+	return links, nil
 }
 
 // LinkedIssueDonorRows is the donor row of every subject (CHAOS-9460): the
@@ -917,8 +956,11 @@ WHERE org_id = ?`
 		// EITHER its project_key or its project_id names a scope that
 		// changed, regardless of which identifier space detectScope used
 		// to notice the change.
-		query += " AND (has(?, toString(repo_id)) OR has(?, project_key) OR has(?, project_id))"
-		args = append(args, scope.repoIDs, scope.projectKeys, scope.projectKeys)
+		// An issue of a changed repository is one linked to it in
+		// work_graph_issue_pr: it takes the repository's owners.
+		query += ` AND (has(?, toString(repo_id)) OR has(?, project_key) OR has(?, project_id)
+    OR work_item_id IN (SELECT work_item_id FROM work_graph_issue_pr FINAL WHERE org_id = ? AND has(?, toString(repo_id))))`
+		args = append(args, scope.repoIDs, scope.projectKeys, scope.projectKeys, orgID, scope.repoIDs)
 	}
 	return executor.querySubjects(ctx, query, args...)
 }
@@ -1118,6 +1160,59 @@ WHERE org_id = ? AND has(?, source_work_item_id)`, orgID, sourceIDs)
 		result = append(result, edge)
 	}
 	return result, stepcause.Failure(stepcause.IterateWorkItemDependencies, rows.Err())
+}
+
+// LoadWorkItemLinkTiers reads, for the pull and merge request sources of edges,
+// the provenance tier of each work_graph_issue_pr link of record: the table
+// row of the (pull request, issue) pair, which keeps its highest tier. The pull
+// request is named by its work item id; the table names it by repo and number.
+func LoadWorkItemLinkTiers(
+	ctx context.Context, conn driver.Conn, orgID string, edges []teamattribution.GithubWorkItemDerivationDependencyEdge,
+) (map[teamattribution.LinkPair]string, error) {
+	tiers := map[teamattribution.LinkPair]string{}
+	seen := map[string]struct{}{}
+	var sources []string
+	for _, edge := range edges {
+		if !teamattribution.IsPullRequestSource(edge.SourceWorkItemID) {
+			continue
+		}
+		if _, dup := seen[edge.SourceWorkItemID]; !dup {
+			seen[edge.SourceWorkItemID] = struct{}{}
+			sources = append(sources, edge.SourceWorkItemID)
+		}
+	}
+	for _, chunk := range chunkStringsByRenderedBytes(sources, workItemAttributionMaxArrayBytes) {
+		rows, err := conn.Query(ctx, `
+SELECT w.work_item_id, l.work_item_id, l.provenance
+FROM work_graph_issue_pr AS l FINAL
+INNER JOIN
+(
+    SELECT repo_id, work_item_id, toUInt32OrZero(extract(work_item_id, '[#!]([0-9]+)$')) AS pr_number
+    FROM work_items FINAL
+    WHERE org_id = ? AND has(?, work_item_id)
+) AS w ON w.repo_id = l.repo_id AND w.pr_number = l.pr_number
+WHERE l.org_id = ?`, orgID, chunk, orgID)
+		if err != nil {
+			return nil, stepcause.Failure(stepcause.QueryWorkItemDependencies, err)
+		}
+		for rows.Next() {
+			var pullRequest, issue, provenance string
+			if err := rows.Scan(&pullRequest, &issue, &provenance); err != nil {
+				_ = rows.Close()
+				return nil, stepcause.Failure(stepcause.ScanWorkItemDependenciesRow, err)
+			}
+			pair := teamattribution.LinkPair{PullRequest: pullRequest, Issue: issue}
+			if linktier.Rank(provenance) > linktier.Rank(tiers[pair]) {
+				tiers[pair] = provenance
+			}
+		}
+		iterateErr := rows.Err()
+		_ = rows.Close()
+		if err := stepcause.Failure(stepcause.IterateWorkItemDependencies, iterateErr); err != nil {
+			return nil, err
+		}
+	}
+	return tiers, nil
 }
 
 // WorkItemAttributionDonorTargets is workItemAttributionDonorTargets, exported
@@ -1402,8 +1497,7 @@ func LoadWorkItemDerivationFacts(
 
 // alreadyCoveredToday returns the subset of ids that already have a
 // work_item_team_attributions row computed on the SAME calendar day as now
-// (UTC) -- items the native daily `work_item_attribution` family has already
-// written for today. See the CHAOS-5078 codex r1 F2 fix comment at this
+// (UTC), from any writer. See the CHAOS-5078 codex r1 F2 fix comment at this
 // function's call site in ComputeOrg for why this exclusion exists.
 func (executor *WorkItemAttributionExecutor) alreadyCoveredToday(
 	ctx context.Context, orgID string, now time.Time, ids map[string]struct{},

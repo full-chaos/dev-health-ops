@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -258,7 +259,7 @@ func (fetcher GitHubWorkItemPRSocialFetcher) drainComments(
 		// and logged, never silent. No payload text.
 		payload.CommentsTruncated = true
 		slog.Warn("providersync.github.pr_comments_truncated_by_option",
-			"repository", repository, "pull_request", number, "comments_limit", limit)
+			"repository", logging.ProviderText(repository), "pull_request", number, "comments_limit", limit)
 	}
 	return nil
 }
@@ -311,7 +312,7 @@ func (fetcher GitHubWorkItemPRSocialFetcher) drainEvents(
 // the log names the PR and the field.
 func githubWorkItemSocialBoundExceeded(repository string, number int, field string, pages int) error {
 	slog.Error("providersync.github.nested_list_bound_exceeded",
-		"repository", repository, "pull_request", number, "field", field, "pages", pages)
+		"repository", logging.ProviderText(repository), "pull_request", number, "field", field, "pages", pages)
 	return fmt.Errorf("%w: %s of %s#%d after %d pages",
 		errGitHubWorkItemPRSocialItemPageBound, field, repository, number, pages)
 }

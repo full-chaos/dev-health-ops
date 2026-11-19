@@ -226,9 +226,16 @@ they are. They are planned for rename or removal.
 
 ## TestOps P95 durations and queue time
 
-`PIPELINE_DURATION_P95`, `TEST_SUITE_DURATION_P95` and `PIPELINE_QUEUE_TIME` are pooled over raw samples. They are never
+`PIPELINE_DURATION_P95`, `TEST_SUITE_DURATION_P95` and `PIPELINE_QUEUE_TIME` are pooled over samples. They are never
 a mean of the stored per-repository-day values of `testops_pipeline_metrics_daily` or `testops_test_metrics_daily`: a
 95th percentile of a pool cannot be made from the 95th percentiles of its parts.
+
+The samples of a repository-day are the ones the daily job stored with that day's newest row, so a tile, a report chart
+and the stored row use one sample set. A run that is synced after the daily job ran counts after the next run of the daily
+job for its day, together with the stored row. A day whose runs are all gone at that next run (deleted, or moved to
+another day) is retired: it has no point and no stored value, never 0. A day whose newest row was written before the samples were stored
+(ClickHouse migration 161) uses the raw runs of that day. A repository-day with more than 100,000 samples of one kind stores none: it uses its raw rows, so for that day only a
+row synced after the daily job ran counts at once and the chart can differ from the stored row until the next run.
 
 | Measure | Value of a group | Sample |
 | --- | --- | --- |
@@ -236,7 +243,7 @@ a mean of the stored per-repository-day values of `testops_pipeline_metrics_dail
 | `TEST_SUITE_DURATION_P95` | 95th percentile, linear between closest ranks | a suite of `test_suite_results`: `duration_seconds` when not negative |
 | `PIPELINE_QUEUE_TIME` | mean of the queue samples: their total seconds divided by the number of runs with a queue sample | a run: `queue_seconds` when not negative, else `started_at - queued_at` when not negative |
 
-The samples are the daily writer's own rules. A run belongs to the UTC day it started; a suite to the day it started,
+The samples follow the daily job's own rules. A run belongs to the UTC day it started; a suite to the day it started,
 else finished. Only the repository-days that the daily job computed are read, so every series covers the days of the
 stored rows. A group with no sample is null, never 0.
 
@@ -246,8 +253,9 @@ stored rows. A group with no sample is null, never 0.
   the team series.
 - A week or month bucket and a breakdown over a window pool every run of the bucket or window.
 
-The raw tables have no day key, so a read scans the organization's run history. One statement reads at most
-`analytics.TestopsPooledMaxRowsToRead` rows (5,000,000). Past it the answer is unavailable: the GraphQL error carries
+A day with stored samples reads one daily row. A day without them reads the raw tables, which have no day key, so that
+read scans the organization's run history. One statement reads at most `analytics.TestopsPooledMaxRowsToRead` rows
+(5,000,000). Past it the answer is unavailable: the GraphQL error carries
 code `UNAVAILABLE`, reason `testops_pooled_read_bound` and the measure, and the analytics answer is null. It is never a
 partial value or a 0.
 
@@ -298,11 +306,57 @@ range. The stored `team_id` (the main owner at the end of the day) is not read:
   are nullable.
 - A service group reads the stored service.
 
+The report charts of the 32 per-person metrics of `user_metrics_daily` (one row per person, repository and day: for
+example `commits_count`, `loc_added`, `prs_merged`, `reviews_given`, `pr_cycle_p90_hours`) take the team from the
+repository of each row. A team is the owner of that repository when the report runs, for every day of the range. The
+stored `team_id` (the person's first team membership, a label) is not read:
+
+- A team filter keeps the rows of the repositories the filtered teams own, whoever the person is a member of. Two
+  filtered teams that share a repository read it once.
+- A team group gives one bucket per owner team. A co-owned repository counts whole in each owner's bucket, so the buckets
+  can add up to more than the organization. A repository with no owner is in no team bucket, and `unassigned` is no
+  bucket.
+- A team that owns no repository: the four sum metrics (`commits_count`, `context_spread_count`, `large_commits_count`,
+  `delivery_units`) are 0; the other metrics are a mean of the stored values and have no point.
+- `work_items_completed` and `work_items_active` are on the person's row of no repository: work items belong to no
+  repository. Under a team filter or a team group they are not applicable, with that reason, never 0. The work items of a
+  team are in the work-item charts, by project ownership.
+- `delivery_units` of a team counts the merged pull requests of the team's repositories only; the chart notes that its
+  completed work items have no team value.
+- A chart with no team filter and no team group is the organization, as before. A mean with no row in its bucket has no
+  point, never NaN; this holds for the organization too.
+
+### Benchmarking flake and retry dependency rates
+
+The benchmarking point of `flake_rate` and `retry_dependency_rate` for a scope and a day is the sum of the numerators
+over the sum of the denominators of the repository-days in the scope. It is not the mean of the stored rates, so a
+repository-day weighs by its distinct cases. The denominator is the stored `distinct_cases`. The numerator of
+`flake_rate` is the stored `flake_cases`. The numerator of `retry_dependency_rate` is the stored rate times
+`distinct_cases`: a float, the same form as `rerun_rate` times `pipelines_count`, and not a stored count. A point whose
+denominator sums to 0 is no point, never 0.
+
+A repository-day is in neither sum when its rate is NULL (it measured no case), or its `distinct_cases` is NULL, or, for
+`flake_rate`, its `flake_cases` is NULL. A row stored before the counts existed has NULL counts, so it drops out of the
+point. A point made only of such rows has no value.
+
+### Benchmarking line coverage
+
+The benchmarking point of `line_coverage_pct` for a scope and a day is 100 times the sum of the stored `lines_covered`
+over the sum of the stored `lines_total` of the repository-days in the scope. It is not the mean of the stored
+percentages, so a repository-day weighs by its lines. A repository-day with a NULL count, or with `lines_total` of 0, is
+in neither sum, whatever its stored percentage. A point made only of such repository-days has no value, never 0.
+
+`branch_coverage_pct` is still the mean of the stored percentages of the repository-days: the daily rows hold no branch
+counts, so it is not pooled yet.
+
 ### AI report charts of CI/CD durations and queue time
 
-The AI report charts of three CI/CD metrics are taken over the window's pipeline runs (`ci_pipeline_runs`), with the
-rules of the CI/CD daily job. They are never a mean of the stored per-repository-day values. No GraphQL measure reads
-them.
+The AI report charts of three CI/CD metrics are taken over the samples of the window's pipeline runs that the CI/CD daily
+job stored with each repository-day's newest row (`cicd_metrics_daily`). A day whose newest row was written before the
+samples were stored uses its raw runs (`ci_pipeline_runs`) with the same rules. A run that is synced after the daily job
+ran counts after the next run of the daily job for its day. They are never a mean of the stored per-repository-day
+values. No GraphQL measure reads them. A repository-day with more than 100,000 samples of one kind stores none: it uses its raw rows, so for that day only a
+row synced after the daily job ran counts at once and the chart can differ from the stored row until the next run.
 
 | Report metric | Value of a bucket | Sample |
 | --- | --- | --- |
@@ -333,15 +387,18 @@ For these four CI/CD metrics, a team is the owner of the repository when the rep
 
 ### AI report charts of deploy time, pull request size and MTTR
 
-The AI report charts of six delivery metrics are taken over the window's raw rows, with the rules of the daily job that
-stores them. They are never a mean of the stored per-repository-day values.
+The AI report charts of six delivery metrics are taken over the samples that the daily job stored with each
+repository-day's newest row. A day whose newest row was written before the samples were stored uses its raw rows with the
+same rules. A row that is synced after the daily job ran counts after the next run of the daily job for its day. They are
+never a mean of the stored per-repository-day values. A repository-day with more than 100,000 samples of one kind stores none: it uses its raw rows, so for that day only a
+row synced after the daily job ran counts at once and the chart can differ from the stored row until the next run.
 
 | Report metric | Value of a bucket | Sample |
 | --- | --- | --- |
 | `deploy_time_p50_hours` | median | a deployment: finished at minus started at, in hours |
 | `pr_size_p50_loc` | median | a merged pull request: additions plus deletions |
 | `pr_size_p90_loc` | 90th percentile | a merged pull request, as above |
-| `mttr_hours` | mean | a bug work item: completed at minus started at, in hours; the operating review tile serves this pooled mean, or the pooled incident median when one exists, with the incident mappings read at request time even for a past week |
+| `mttr_hours` | mean | a bug work item: completed at minus started at, in hours; the operating review tile serves this pooled mean, or the pooled incident median when one exists, with the incident mappings that the daily job read when it ran |
 | `mttr_p50_hours` | median | an incident: resolved at minus started at, in hours |
 | `mttr_p90_hours` | 90th percentile | an incident, as above |
 
@@ -355,12 +412,49 @@ stores them. They are never a mean of the stored per-repository-day values.
   repair time is a sample, as the daily job's mean includes it.
 - An incident counts on the UTC day it started, only when it is also resolved on that day, once for each repository
   that its service maps to. A deleted incident is no incident. A negative repair time is no sample. The service
-  mappings are the ones that are active and valid when the chart runs.
+  mappings are the ones that were active and valid when the daily job ran for that day. A mapping that changes later
+  changes the chart and the stored row at the next run of the daily job. If that run finds no incident for the
+  repository-day, it writes no row, so the old row and its samples stay (ticket 14148).
 - Only the repository-days that the daily job computed are read.
 - These metrics have no team or service dimension. A team filter does not narrow the chart, and a team or service group
   is one `unscoped` bucket.
 - The chart range includes its last day. A bucket with no sample has no point, never 0. The read has the same row bound
   as the TestOps pooled read.
+
+## TestOps flake rate and retry dependency rate in report charts
+
+A report chart of `flake_rate` or `retry_dependency_rate` is the sum of the numerator over the sum of the denominator of
+the `testops_test_metrics_daily` rows in its bucket. It is never a mean of the stored per-repository-day rates: a day of
+1 test case would weigh the same as a day of 500.
+
+| Metric | Numerator | Denominator |
+| --- | --- | --- |
+| `flake_rate` | `SUM(flake_cases)` | `SUM(distinct_cases)` |
+| `retry_dependency_rate` | `SUM(retry_dependency_rate * distinct_cases)` | `SUM(distinct_cases)` |
+
+- No column stores the retry-dependent count. The stored rate is that count over `distinct_cases`, so the product is the
+  count. It is a float, not a stored integer.
+- A repository-day is in neither sum when its rate is NULL (it measured no case) or its `distinct_cases` is NULL. For
+  `flake_rate`, a NULL `flake_cases` has the same effect. A row stored before the counts existed has NULL counts and drops
+  out.
+- A bucket with no measured repository-day has no point, never 0 and never NaN.
+- `failure_recurrence_score` is not yet a window value: the report chart still shows the mean of the stored
+  per-repository-day values.
+
+## TestOps cancel rate and rerun rate in report charts
+
+A report chart of `cancel_rate` or `rerun_rate` is the sum of the numerator over the sum of the denominator of the
+`testops_pipeline_metrics_daily` rows in its bucket. It is never a mean of the stored per-repository-day rates: a day of
+1 run would weigh the same as a day of 500.
+
+| Metric | Numerator | Denominator |
+| --- | --- | --- |
+| `cancel_rate` | `SUM(cancelled_count)` | `SUM(pipelines_count)` |
+| `rerun_rate` | `SUM(rerun_rate * pipelines_count)` | `SUM(pipelines_count)` |
+
+- The denominator is every run counted, the same as the stored rate. Cancelled, skipped and unfinished runs are in it.
+- No column stores the rerun count. The stored `rerun_rate` is reruns over `pipelines_count`, so the product is the count.
+- A bucket with no run has no point, never 0.
 
 ## TestOps release confidence and quality drag: flake and recurrence
 
@@ -471,6 +565,10 @@ full cycle time: it is a real input, not an outlier to remove.
   point's day, read only from the days with a merged pull request. A day with no
   merged pull request is left out, not read as 0 hours. A person with no such day
   has no value (NULL) and no point on the cycle map.
+
+## Hours in a status after a reopen
+
+`work_item_state_durations_daily` gives an item's last status span an end at its `completed_at` only when the item's status is terminal (`done` or `canceled`), or when its last known status change goes to a terminal status. A provider can reopen an item and keep its `completed_at`: that open item keeps accruing hours in its current status. When the reopen is not in the item's status changes, the span still ends at `completed_at`, and the item gets no hours in the terminal status after it.
 
 ## Blocked hours in `work_item_state_durations_daily`
 
@@ -665,21 +763,37 @@ A Linear or Jira work-items unit names every project it saw by an ensure row in 
 - `skipped`: the stored row already decides the newest value.
 - `read_error`: the stored rows could not be read. The whole batch was written and a Warn line `project_catalog_ensure_read_failed` was logged. The unit does not fail.
 
+## Weekly throughput in the WIP congestion ratio
+
+`wip_congestion_ratio` of `work_item_metrics_daily` is `wip_count_end_of_day` divided by the weekly throughput of the day (at least 1). The weekly throughput counts an item of the day (created, started or completed on the day, or in progress at its end) only when its status is terminal (`done` or `canceled`) and its `completed_at` is in the 7 days that end with the day. A provider can reopen an item and keep its `completed_at`: that open item is no throughput.
+
 ## Completed work items
 
 `items_completed` (and the other completion columns of `work_item_metrics_daily` and `work_item_user_metrics_daily`: unassigned completions, story points, bug ratio, cycle and lead time) counts an item on a day only when its status is terminal (`done` or `canceled`) and its `completed_at` is on that day. `work_items_completed` of `work_item_completion_daily` (and its `delivery_units`, `churn_loc` and `cycle_p50_hours`, which come from the same items) follows the same rule. This is the rule of `work_item_cycle_times`. A provider can reopen an item and keep its `completed_at`: that open item completes on no day.
 
 `completed_count`, `cycle_p50_hours`, `cycle_p90_hours` and `lead_p50_hours` of `issue_type_metrics_daily` follow the same rule. An item is active on a day from its creation until it ends; it ends on its `completed_at` only when its status is `done` or `canceled`, so an open item whose `completed_at` is before the day is active.
 
+## Work items in progress at the end of a day
+
+`wip_count_end_of_day` (and `wip_unassigned_end_of_day`, the WIP age percentiles, `wip_congestion_ratio`, `predictability_score` and the person rows' WIP) counts an item at the end of a day when it started before the day ends and has not ended by then. Its end is the earlier of `completed_at` and `closed_at`, and it counts only when the status is terminal (`done` or `canceled`). A provider can reopen an item and keep its `completed_at` or `closed_at`: that open item stays in progress at the end of every later day.
+
+A finished item (`done` or `canceled`) with no `completed_at` and no `closed_at` is not in progress at the end of any day (`wip_count_end_of_day`, the person rows' WIP and the values made from them), the same as the done item that the loaders leave out. Limit: with no end stamp there is no day it finished, so the item leaves WIP on every recomputed day, also on days before it finished. A day that is not computed again keeps the rows it has.
+
 ## Work items stored under more than one repository
 
 One work item (provider and id) can be stored under two repository ids. Example: a GitHub issue that the repository sync stores under its repository and that the Projects v2 board sync stores under no repository. Each stored row is a copy. The current copy is the copy with the newest `last_synced`; on a tie, the copy of the lower repository id.
 
-`work_item_cycle_times`, `work_item_metrics_daily` and `work_item_user_metrics_daily` decide on the current copy. An item counts on a day only when its current copy belongs to that day: created before the day ends, and not done before the day starts. An older copy never makes the item count. So an item whose current copy is done with no completion time counts on no day, and an item completes once, on its current copy's completion day.
+`work_item_cycle_times`, `work_item_metrics_daily`, `work_item_user_metrics_daily`, `work_item_state_durations_daily`, `work_item_blocked_durations_daily` and `estimate_coverage_metrics_daily` decide on the current copy. An item counts on a day only when its current copy belongs to that day: created before the day ends, and not done before the day starts. An older copy never makes the item count. So an item whose current copy is done with no completion time counts on no day, and an item completes once, on its current copy's completion day. The request-time read of the work items linked to a repository (Home and Quadrant under a repository filter) decides on the same current copy.
 
 The scope view (`row_view = 'scope'`) applies the same rule inside each work scope: the current copy of the item in that scope. An item with copies in two scopes still counts in each scope (the sum over scopes can be more than the organization total). So the older copy's scope can count a completion that the organization view and `work_item_cycle_times` do not count.
 
-Not yet on this rule: `work_item_state_durations_daily`, `estimate_coverage_metrics_daily`, and the request-time read of the work items linked to a repository. These still choose, for each day, the newest copy among the copies that belong to that day. For an item with two copies, they can differ from the tables above.
+When an item leaves a day this way, its blocked hours of that day stored by an earlier compute are set to 0. Blocked Work under a repository filter reads those per-item hours, so it follows the same rule. Days that are not computed again keep their stored rows.
+
+`work_item_measure_capability` decides on the current copy in the same way over its 90-day window: an item counts in the window only when its current copy belongs to the window.
+
+## Estimate coverage backlog
+
+`estimate_coverage_metrics_daily` (`backlog_size`, `estimated_count`, `unestimated_count`, `ratio`) counts an item in the backlog of a day when it was created before the day ends and has not ended by then. Its end is the earlier of `completed_at` and `closed_at`, and it counts only when the status is terminal (`done` or `canceled`). A provider can reopen an item and keep its `completed_at` or `closed_at`: that open item stays in the backlog of every later day.
 
 ## Work-item person rows: persons in more than one team
 
@@ -689,7 +803,7 @@ The counter `dev_health_work_item_user_rows_spanning_teams_total{provider}` coun
 
 ## Person rows: the team column of `user_metrics_daily`
 
-`user_metrics_daily.team_id` is a membership label, NOT team attribution; ownership-based team answers must not read it. The row the finalize step writes for a person holds the person's first team membership on the day, else `unassigned`: the git row is always written with `unassigned`, and the IC finalize step puts the membership team over it. Limit: a person who is a member of several teams gets only the FIRST of them, in the rank order of the attribution (primary first, then the more specific, then the lower priority number, the newer row, the team id); the other teams are not in the column. The rank applies after the teams whose newest row is inactive are left out: the next active membership is taken, else `unassigned`. This is the rule of a live row the finalize step writes; a retraction row (the row of zeros of the stale-key rule) carries the `team_id` stored on the row it retracts. The column is a label, never team attribution. A team answer takes its team from repository or project ownership (for a per-person table, through `repo_id` and the owner shares), never from this column. The AI analytics reviewer concentration (`aiReviewLoad`) and the cognitive load reader follow this rule: a team scope is the repositories the team owns (`teamscope.HeldRepoIDs`), and the census `TestNoAIAnalyticsOrCognitiveLoadReaderScopesUserMetricsDailyByTeamID` (`internal/queryapi/aianalytics`) fails on a read of `user_metrics_daily` in those packages that filters `team_id`.
+`user_metrics_daily.team_id` is a membership label, NOT team attribution; ownership-based team answers must not read it. The row the finalize step writes for a person holds the person's first team membership on the day, else `unassigned`: the git row is always written with `unassigned`, and the IC finalize step puts the membership team over it. Limit: a person who is a member of several teams gets only the FIRST of them, in the rank order of the attribution (primary first, then the more specific, then the lower priority number, the newer row, the team id); the other teams are not in the column. The rank applies after the teams whose newest row is inactive are left out: the next active membership is taken, else `unassigned`. This is the rule of a live row the finalize step writes; a retraction row (the row of zeros of the stale-key rule) carries the `team_id` stored on the row it retracts. The column is a label, never team attribution. A team answer takes its team from repository or project ownership (for a per-person table, through `repo_id` and the owner shares), never from this column. The AI analytics reviewer concentration (`aiReviewLoad`) and the cognitive load reader follow this rule: a team scope is the repositories the team owns (`teamscope.HeldRepoIDs`), and the census `TestNoAIAnalyticsOrCognitiveLoadReaderScopesUserMetricsDailyByTeamID` (`internal/queryapi/aianalytics`) fails on a read of `user_metrics_daily` in those packages that filters `team_id`. The recommendations review-concentration rule follows it too: its reviewer Gini reads the reviews given in the repositories the team owns at the window end (`teamownership.OwnedRepoIDs`, the same repositories as its review latency), by anyone, and a co-owned repository counts whole in each owner team. A team that owns no repository has no Gini (no read is made), so the rule does not fire for it. The census `TestNoRecommendationsReaderScopesUserMetricsDailyByTeamID` (`internal/jobs/metrics/remaining`) fails on a read of `user_metrics_daily` in that package that filters `team_id`.
 
 ## Refused manual sync triggers
 

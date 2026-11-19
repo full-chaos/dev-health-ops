@@ -387,6 +387,8 @@ func BuildScheduledPlan(input PlannerInput) ([]PlannedUnit, error) {
 					slog.String("dataset", dataset.Key),
 					slog.String("org_id", input.OrgID),
 					slog.String("source_id", source.ID))
+			case input.executedProofWaived(descriptor):
+				globalPlanGateTelemetry.observe(provider, dataset.Key, planGateOutcomeWaived)
 			}
 			if !known || !descriptor.RouteReady || !descriptor.Plannable ||
 				// CHAOS-4060: fixture/golden proof no longer licenses new work
@@ -592,6 +594,8 @@ func buildWorkItemFamilyUnit(
 			slog.String("dataset", canonicalWorkItemsDataset),
 			slog.String("org_id", input.OrgID),
 			slog.String("source_id", source.ID))
+	case input.executedProofWaived(canonicalDescriptor):
+		globalPlanGateTelemetry.observe(provider, canonicalWorkItemsDataset, planGateOutcomeWaived)
 	}
 	if !known || !canonicalDescriptor.RouteReady || !canonicalDescriptor.Plannable ||
 		// CHAOS-4060: same executed-proof requirement as the non-family gate
@@ -775,6 +779,8 @@ func foldContributingFamilyUnit(
 			slog.String("dataset", canonicalDataset),
 			slog.String("org_id", input.OrgID),
 			slog.String("source_id", source.ID))
+	case input.executedProofWaived(canonicalDescriptor):
+		globalPlanGateTelemetry.observe(provider, canonicalDataset, planGateOutcomeWaived)
 	}
 	if !known || !canonicalDescriptor.RouteReady || !canonicalDescriptor.Plannable ||
 		replayNoUnit || !input.executedProofSatisfied(canonicalDescriptor) {
@@ -1344,4 +1350,14 @@ func (input PlannerInput) executedProofSatisfied(descriptor providersync.Complet
 		return true
 	}
 	return descriptor.ExecutedProofSatisfied(input.ExecutedProof)
+}
+
+// executedProofWaived is true only when a waiver let a pair through that the evidence alone would have refused.
+func (input PlannerInput) executedProofWaived(descriptor providersync.CompleteRouteDescriptor) bool {
+	if input.CommittedUnits != nil || descriptor.ExecutedProofWaiver == nil {
+		return false
+	}
+	withoutWaiver := descriptor
+	withoutWaiver.ExecutedProofWaiver = nil
+	return !withoutWaiver.ExecutedProofSatisfied(input.ExecutedProof)
 }

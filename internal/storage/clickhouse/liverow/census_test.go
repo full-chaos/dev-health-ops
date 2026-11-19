@@ -86,6 +86,8 @@ var namesOnly = map[string]struct{ reader, why string }{
 	"internal/cigates/metricsproof/proof.go":                    {"", "executed-proof readback of the rows one CI run wrote: table names of its family maps, no product read"},
 	"internal/jobs/metrics/workitemengine/":                     {"", "compute and insert of the work item engine rows (writer)"},
 	"internal/teamkeytables/teamkeytables.go":                   {"", "the registry of the tables and their measures"},
+	"internal/queryapi/analytics/validate.go":                   {"dedupFromMeasureSource", "the source table of each measure; every read of it takes its FROM from dedupFromMeasureSource"},
+	"internal/queryapi/analytics/testopsownership.go":           {"dedupFromMeasureSource", "the TestOps measure tables of the ownership join; the read of the table is dedupFromMeasureSource"},
 	"internal/queryapi/rowview/rowview.go":                      {"", "the reader side of the view column: table names of its registry, no query"},
 	"internal/storage/clickhouse/liverow/liverow.go":            {"", "the reader side of the rule"},
 	"internal/testsupport/":                                     {"", "test seeds"},
@@ -111,6 +113,12 @@ var namesOnly = map[string]struct{ reader, why string }{
 	"internal/jobs/metrics/daily/benchmarking/clickhouse.go": {"FetchMetricSeriesByScope", "metric definitions"},
 	"internal/queryapi/people/metricconfig.go":               {"liveWhere", "the person metric configs: every read of their tables takes its clause from liveWhere"},
 	"internal/queryapi/analytics/filtertranslation.go":       {"", "an error message that names the tables, no query"},
+	"internal/queryapi/testopspooled/testopspooled.go":       {"LiveRepoDays", "the pooled TestOps sources: the live gate over both arms"},
+	"internal/queryapi/pooledmttr/pooledmttr.go":             {"", "the pooled MTTR sources: each takes the live gate over both arms from testopspooled.LiveRepoDays"},
+	"internal/jobs/report/pooled.go":                         {"", "the pooled chart map and cicdRunsSource: every pooled source takes the live gate over both arms from testopspooled.LiveRepoDays"},
+	"internal/jobs/report/delivery_pooled.go":                {"", "the pooled delivery sources: each takes the live gate over both arms from testopspooled.LiveRepoDays"},
+	"internal/jobs/report/dedup.go":                          {"dedupFromSource", "the chart rules of a metric's table; the read is dedupFromSource"},
+	"internal/jobs/metrics/prrework/sql.go":                  {"", "the table name constant and the sum text; each reader of the counts applies the rule in its own statement"},
 }
 
 type declaration struct {

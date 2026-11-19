@@ -235,6 +235,7 @@ FROM (
     ) AS repo_metrics_daily
     WHERE day >= today() - {window_days:UInt32}@@REPO@@
       AND org_id = {org_id:String}
+      AND ` + liverow.Predicate("repo_metrics_daily", "") + `
     GROUP BY repo_id
     HAVING data_days >= 5
 ) AS m

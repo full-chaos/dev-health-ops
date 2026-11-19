@@ -39,6 +39,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/testopsjobfailures"
+	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
 // MaxWindowDays is the most days untilDate may be after sinceDate, as for
@@ -125,7 +126,8 @@ WHERE org_id = {org_id:String}
 }
 
 // casesStatement reads the newest stored row of each repository day (the daily
-// job appends a row per recompute; the other readers dedupe the same way).
+// job appends a row per recompute; the other readers dedupe the same way), and
+// leaves out a day whose newest row retires it (package liverow): absent, not 0.
 func casesStatement(filter string) string {
 	return `
 SELECT
@@ -145,7 +147,8 @@ FROM (
           AND day <= {until_date:Date}` + filter + `
     ORDER BY computed_at DESC
     LIMIT 1 BY org_id, repo_id, day
-)`
+) AS testops_test_metrics_daily
+WHERE ` + liverow.Predicate("testops_test_metrics_daily", "")
 }
 
 func percent(numerator, denominator uint64) *float64 {

@@ -311,12 +311,15 @@ func (loader *ClickHouseLoader) LoadWindowCommitStats(
 // bugWorkItemsQuery selects bug-type work items with both lifecycle
 // timestamps set, mirroring the `item.type == "bug" and item.completed_at
 // and item.started_at` guard in job_daily.py before MTTRByRepo's caller
-// filters by day.
+// filters by day. Unlike job_daily.py, a bug counts only with a terminal
+// status (workitemmetrics.IsTerminalStatus): a reopened bug that kept its
+// completed_at is not repaired.
 const bugWorkItemsQuery = `
 SELECT repo_id, started_at, completed_at
 FROM work_items FINAL
 WHERE type = 'bug' AND repo_id IN {repo_ids:Array(UUID)} AND org_id = {org_id:String}
   AND started_at IS NOT NULL AND completed_at IS NOT NULL
+  AND status IN ('done', 'canceled')
   AND completed_at >= {start:DateTime} AND completed_at < {end:DateTime}`
 
 // LoadBugWorkItems loads bug work items completed within [start, end) for

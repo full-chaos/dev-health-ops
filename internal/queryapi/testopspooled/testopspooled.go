@@ -110,7 +110,8 @@ var PipelineRunsSource = `(
 
 // SuiteRunsSource reads, for a repository-day without stored samples, the suite rows the readers count: the newest
 // attempt of each report slot, a legacy row only when no kept slotted row lists its id (SuiteRowsNewestAttempt). A var:
-// the fragment is built, not written.
+// the fragment is built, not written. Both arms read only the keys whose NEWEST row is live (package liverow): a retired
+// repository-day (newest row retracted = 1, a row that holds no samples) admits no stored sample and no raw suite.
 var SuiteRunsSource = `(
     SELECT org_id, repo_id, service_id, day, duration_sample
     FROM (
@@ -136,6 +137,7 @@ var SuiteRunsSource = `(
           AND ` + SuiteRowsNewestAttempt("", Scope{}) + `
           AND (repo_id, toDate(coalesce(started_at, finished_at))) IN (` + LegacyRepoDays("testops_test_metrics_daily") + `)
     )
+    WHERE ` + LiveRepoDays("testops_test_metrics_daily") + `
 ) AS testops_suite_runs`
 
 // P95 is the 95th percentile of a group's duration samples, NULL for a group with none.

@@ -46,6 +46,13 @@ func CompletedOnDay(item Item, dayUTC, end time.Time) bool {
 	return !completed.Before(dayUTC) && completed.Before(end)
 }
 
+// EndedBefore reports whether an item ended before dayUTC: its status is terminal (done or canceled,
+// workitemmetrics.IsTerminalStatus) and its completed_at is before dayUTC. A provider can reopen an item and keep its
+// completed_at; that open item has not ended.
+func EndedBefore(item Item, dayUTC time.Time) bool {
+	return item.CompletedAt != nil && workitemmetrics.IsTerminalStatus(item.Status) && item.CompletedAt.UTC().Before(dayUTC)
+}
+
 // ComputeWorkItemCompletionDaily counts the items completed in [dayUTC, end) (CompletedOnDay) by (repository, team): the items
 // active on the day that completed in it, their story-point delivery units, and the unassigned-team rule of the
 // rows it replaced (investment_metrics_daily), with no rule classification. Summed over the areas of those rows,

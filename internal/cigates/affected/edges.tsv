@@ -25,7 +25,6 @@ internal/api/oauthprovider	environment_proxy_test.go	unexpressed
 internal/api/policy	principalonce_test.go	unexpressed
 internal/api/policy	store_integration_test.go	unexpressed
 internal/api/restcore	environment_proxy_test.go	unexpressed
-internal/api/sso	environment_proxy_test.go	unexpressed
 internal/api/teamsidentity	environment_proxy_test.go	unexpressed
 internal/apiservice	environment_proxy_test.go	unexpressed
 internal/atlassianteams	environment_proxy_test.go	unexpressed

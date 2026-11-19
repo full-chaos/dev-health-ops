@@ -215,7 +215,7 @@ func newRigA(t *testing.T) *qGateRig {
 	handler := planeHandler(mux, rig.gate)
 	internalMux.Handle("/", handler)
 	plane := &Plane{Handler: handler, InternalHandler: withGate(internalMux, rig.gate), MCPHandler: withGate(mcpMux, rig.gate)}
-	public, internal := Listeners("127.0.0.1:0", "127.0.0.1:0", plane, nil, nil)
+	public, internal := Listeners("127.0.0.1:0", "127.0.0.1:0", plane, nil)
 	mcp := MCPListener("127.0.0.1:0", plane, nil)
 	if internal == nil || mcp == nil {
 		t.Fatal("expected internal and MCP listeners")
@@ -286,7 +286,7 @@ func newRigB(t *testing.T, restB []string) *qGateRig {
 	if err != nil {
 		t.Fatal(err)
 	}
-	public, internal := Listeners("127.0.0.1:0", "127.0.0.1:0", plane, OperatorCompat(registry, operator, "dev-health-query-api"), nil)
+	public, internal := Listeners("127.0.0.1:0", "127.0.0.1:0", plane, nil)
 	mcp := MCPListener("127.0.0.1:0", plane, nil)
 	if internal == nil || mcp == nil {
 		t.Fatal("expected internal and MCP listeners")

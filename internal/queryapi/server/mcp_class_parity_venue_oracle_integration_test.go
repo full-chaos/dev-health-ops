@@ -464,7 +464,7 @@ func mcpParityStartPlane(t *testing.T, ctx context.Context, venue *venueoracle.V
 	}
 	t.Cleanup(plane.Close)
 	_, loopback, _ := net.ParseCIDR("127.0.0.1/32")
-	public, internal := Listeners("127.0.0.1:0", "127.0.0.1:0", plane, nil, []*net.IPNet{loopback})
+	public, internal := Listeners("127.0.0.1:0", "127.0.0.1:0", plane, []*net.IPNet{loopback})
 	mcp := MCPListener("127.0.0.1:0", plane, []*net.IPNet{loopback})
 	for _, listener := range []*Listener{public, internal, mcp} {
 		if listener == nil {

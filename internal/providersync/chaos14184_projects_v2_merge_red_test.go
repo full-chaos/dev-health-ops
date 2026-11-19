@@ -3,6 +3,7 @@ package providersync
 import (
 	"encoding/json"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -131,4 +132,35 @@ func TestChaos14184RefuteBoardMoveAfterRepositoryClose(t *testing.T) {
 		"changes":{"nodes":[{"field":{"name":"Status"},"previousValue":{"name":"In Progress"},"newValue":{"name":"In Review"},"createdAt":"2026-10-04T00:00:00Z"}]}}`,
 		chaos14184Now())
 	chaos14184CheckLastMatches(t, mergeGitHubProjectV2Rows(repository, board))
+}
+
+// RED (main): the board's current Status value needs its own time to join the
+// timeline. GitHub serves ProjectV2ItemFieldSingleSelectValue.updatedAt
+// (DateTime!), but the query does not ask for it and the decoder has no field
+// for it; and the query asks ProjectV2Item.changes, which GitHub does not serve
+// (live introspection fields: content createdAt creator fieldValueByName
+// fieldValues fullDatabaseId id isArchived project type updatedAt).
+func TestChaos14184RedStatusValueTimeAndLiveSchema(t *testing.T) {
+	var value gitHubProjectV2FieldValuePayload
+	if err := json.Unmarshal([]byte(`{"__typename":"ProjectV2ItemFieldSingleSelectValue","name":"Done",
+		"updatedAt":"2026-10-05T00:00:00Z","field":{"name":"Status"}}`), &value); err != nil {
+		t.Fatal(err)
+	}
+	reencoded, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var problems []string
+	if !strings.Contains(string(reencoded), "2026-10-05T00:00:00Z") {
+		problems = append(problems, "decoded Status value drops updatedAt: "+string(reencoded))
+	}
+	if !strings.Contains(gitHubProjectV2FieldValueNodeFields, "updatedAt") {
+		problems = append(problems, "field value fragment does not ask updatedAt")
+	}
+	if strings.Contains(gitHubProjectsV2ItemsQuery, "changes(") {
+		problems = append(problems, "items query asks ProjectV2Item.changes, absent on live GitHub")
+	}
+	if len(problems) > 0 {
+		t.Fatalf("%v", problems)
+	}
 }

@@ -225,16 +225,16 @@ func TestChunkSidecarReclaimPostgresContract(t *testing.T) {
 		wantChunkSidecars(t, ctx, venue.Admin, unit, 0, 0)
 	})
 
-	t.Run("byte cap: the first row always goes", func(t *testing.T) {
+	t.Run("byte cap: the smallest legal cap still deletes one largest row", func(t *testing.T) {
 		resetChunkReclaimVenue(t, ctx, venue)
 		unit := chunkReclaimUnitID(3)
-		seedChunkReclaimUnit(t, ctx, venue.Admin, unit, "failed", 2, 2*chunkMiB, now)
+		seedChunkReclaimUnit(t, ctx, venue.Admin, unit, "failed", 2, maxChunkPayloadBytes, now)
 		small := oneStatement
-		small.BytesPerStatement = chunkMiB
+		small.BytesPerStatement = maxChunkPayloadBytes
 		reclaim := newTestChunkReclaim(t, venue.Domain, small)
 		result := stepChunkReclaim(t, ctx, reclaim, now)
-		if result.Rows != 1 || result.Bytes != 2*chunkMiB {
-			t.Fatalf("statement = %+v, want exactly the first 2 MiB row", result)
+		if result.Rows != 1 || result.Bytes != maxChunkPayloadBytes {
+			t.Fatalf("statement = %+v, want exactly one %d-byte row", result, maxChunkPayloadBytes)
 		}
 		wantChunkSidecars(t, ctx, venue.Admin, unit, 1, 1)
 	})

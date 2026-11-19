@@ -145,6 +145,23 @@ func TestChunkSidecarReclaimProductionReclaimersShareOneLimiter(t *testing.T) {
 	}
 }
 
+// The statement cap may not go below the largest row the stage can delete
+// (ck_sync_chunk_payload_bytes), so a reservation always covers the first row.
+func TestChunkSidecarReclaimConfigRefusesAStatementCapBelowOneRow(t *testing.T) {
+	t.Parallel()
+	begin := func(context.Context) (pgx.Tx, error) { return nil, errors.New("unused") }
+	config := DefaultChunkSidecarReclaimConfig()
+	config.BytesPerStatement = maxChunkPayloadBytes - 1
+	if _, err := newChunkSidecarReclaim(begin, freeTickLock, config); !errors.Is(err, ErrInvalidConfiguration) {
+		t.Fatalf("BytesPerStatement %d below the %d-byte row bound: error = %v, want ErrInvalidConfiguration",
+			config.BytesPerStatement, maxChunkPayloadBytes, err)
+	}
+	config.BytesPerStatement = maxChunkPayloadBytes
+	if _, err := newChunkSidecarReclaim(begin, freeTickLock, config); err != nil {
+		t.Fatalf("BytesPerStatement at the row bound must be valid: %v", err)
+	}
+}
+
 func TestChunkSidecarReclaimConfigCannotRaiseTheBounds(t *testing.T) {
 	t.Parallel()
 	begin := func(context.Context) (pgx.Tx, error) { return nil, errors.New("unused") }
@@ -160,7 +177,7 @@ func TestChunkSidecarReclaimConfigCannotRaiseTheBounds(t *testing.T) {
 			t.Errorf("%s: error = %v, want ErrInvalidConfiguration", name, err)
 		}
 	}
-	lower := ChunkSidecarReclaimConfig{RowsPerStatement: 1, BytesPerStatement: 1, BytesPerMinute: maxChunkPayloadBytes, StatementsPerTick: 1}
+	lower := ChunkSidecarReclaimConfig{RowsPerStatement: 1, BytesPerStatement: maxChunkPayloadBytes, BytesPerMinute: maxChunkPayloadBytes, StatementsPerTick: 1}
 	if _, err := newChunkSidecarReclaim(begin, freeTickLock, lower); err != nil {
 		t.Fatalf("lower bounds must stay valid: %v", err)
 	}

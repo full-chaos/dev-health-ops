@@ -118,8 +118,9 @@ type ChunkSidecarReclaimResult struct {
 	LockSkipped    bool
 }
 
-// maxChunkPayloadBytes is ck_sync_chunk_payload_bytes' upper bound: a statement
-// is admitted only when the window can take one whole row.
+// maxChunkPayloadBytes is ck_sync_chunk_payload_bytes' upper bound, the largest
+// row the stage can delete: a statement is admitted only when the window can
+// take one whole row, and BytesPerStatement may not go below it.
 const maxChunkPayloadBytes = 2 << 20
 
 const chunkReclaimWindow = time.Minute
@@ -136,7 +137,7 @@ func DefaultChunkSidecarReclaimConfig() ChunkSidecarReclaimConfig {
 func (config ChunkSidecarReclaimConfig) valid() bool {
 	ceiling := DefaultChunkSidecarReclaimConfig()
 	return config.RowsPerStatement >= 1 && config.RowsPerStatement <= ceiling.RowsPerStatement &&
-		config.BytesPerStatement >= 1 && config.BytesPerStatement <= ceiling.BytesPerStatement &&
+		config.BytesPerStatement >= maxChunkPayloadBytes && config.BytesPerStatement <= ceiling.BytesPerStatement &&
 		config.BytesPerMinute >= maxChunkPayloadBytes && config.BytesPerMinute <= ceiling.BytesPerMinute &&
 		config.StatementsPerTick >= 1 && config.StatementsPerTick <= ceiling.StatementsPerTick
 }

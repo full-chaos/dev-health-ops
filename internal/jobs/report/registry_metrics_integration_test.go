@@ -249,6 +249,10 @@ func TestClickHouseQueryAdapterChartsEveryRegistryMetric(t *testing.T) {
 		// 3 passed and 1 failed test cases (both counts are registry metrics of
 		// their own and keep their seeded values).
 		"pass_rate": {3, 1},
+		// 2 flake cases of 10 distinct cases (flake_rate and retry_dependency_rate are registry metrics of their own and
+		// keep their seeded values; the seeded distinct_cases is shared by both rules).
+		"flake_rate":            {0, 2, 10},
+		"retry_dependency_rate": {0, 10},
 	}
 	for _, name := range ruleMetrics {
 		rule, inputValues := chartRules[name], ruleInputValues[name]

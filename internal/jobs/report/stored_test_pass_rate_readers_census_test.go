@@ -35,7 +35,7 @@ var pinnedTableFiles = map[string]censusPin{
 		"not a reader: names the table in the proof table map"},
 	"internal/jobs/metrics/daily/benchmarking/clickhouse.go": {"d88da4fdbc18f8d9c86852bf1ad02022625a0726ef4ac25483d9584c8669667e",
 		"reader rule applied: pass_rate is pooled, passed_count over executedCases (passed_count + failed_count), no stored rate read; flake_rate and retry_dependency_rate are pooled over distinct_cases, a repo-day with a NULL rate or NULL counts in neither sum"},
-	"internal/jobs/metrics/daily/stale_team_keys_run.go": {"96eee7df7f9bc778ca4c11caba235bd4d7338323783f5cc50a3992dce71cb28a",
+	"internal/jobs/metrics/daily/stale_team_keys_run.go": {"24e948f60266e02b4fe0380227b9477953c9c41979d50fdbfa69cec1a13d6e56",
 		"not a reader: the run-level retraction lists the table (a writer of marker rows)"},
 	"internal/jobs/metrics/daily/testops_native_clickhouse.go": {"4b27c97dd7dc144e00b7772a4e373a43e44903dbe7056893a3a29aa0d8ce1fac",
 		"writer: the daily writer of the stored rows"},

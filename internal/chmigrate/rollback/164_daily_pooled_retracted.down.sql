@@ -1,5 +1,5 @@
--- Rollback of 163_daily_pooled_retracted.sql. It is NOT part of the chain (the migrator reads sql/ only); an operator runs it by
--- hand, and only after query-api and the worker image are back on a build without 163 (that build neither writes nor reads the
+-- Rollback of 164_daily_pooled_retracted.sql. It is NOT part of the chain (the migrator reads sql/ only); an operator runs it by
+-- hand, and only after query-api and the worker image are back on a build without 164 (that build neither writes nor reads the
 -- column).
 --
 -- The column is dropped from the four tables. A row that retired a repository-day stays and then reads as a stored row with the
@@ -10,4 +10,4 @@ ALTER TABLE incident_metrics_daily DROP COLUMN IF EXISTS retracted SETTINGS muta
 ALTER TABLE deploy_metrics_daily DROP COLUMN IF EXISTS retracted SETTINGS mutations_sync = 2;
 ALTER TABLE repo_metrics_daily DROP COLUMN IF EXISTS retracted SETTINGS mutations_sync = 2;
 ALTER TABLE testops_pipeline_metrics_daily DROP COLUMN IF EXISTS retracted SETTINGS mutations_sync = 2;
-ALTER TABLE schema_migrations DELETE WHERE version = '163_daily_pooled_retracted.sql' SETTINGS mutations_sync = 2;
+ALTER TABLE schema_migrations DELETE WHERE version = '164_daily_pooled_retracted.sql' SETTINGS mutations_sync = 2;

@@ -11,16 +11,16 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/chmigrate"
 )
 
-// deployImageInsert is the deploy write of the build before 163 (deploy_native_clickhouse.go WriteDeployMetricsDaily): it names
+// deployImageInsert is the deploy write of the build before 164 (deploy_native_clickhouse.go WriteDeployMetricsDaily): it names
 // its columns and never names retracted.
 const deployImageInsert = `INSERT INTO deploy_metrics_daily (repo_id, day, deployments_count, failed_deployments_count,
   deploy_time_p50_hours, lead_time_p50_hours, computed_at, org_id, pooled_deploy_hours, pooled_samples_stored)
-VALUES ('16300000-0000-4000-8000-000000000001', '2026-09-10', 2, 0, 3, NULL, '2026-09-11 10:00:00', 'org-163', [1, 5], 1)`
+VALUES ('16400000-0000-4000-8000-000000000001', '2026-09-10', 2, 0, 3, NULL, '2026-09-11 10:00:00', 'org-164', [1, 5], 1)`
 
-// The rollback of 163 is "query-api and the worker image back on a build without 163, then 163's down file". Up, down, up on a
+// The rollback of 164 is "query-api and the worker image back on a build without 164, then 164's down file". Up, down, up on a
 // real ClickHouse: the column of each of the four tables is gone after the down file and its version row too; the write of the
-// build before 163 works on the table in that shape; the upgrade applies 163 again and every stored row reads 0.
-func TestRollback163UpDownUp(t *testing.T) {
+// build before 164 works on the table in that shape; the upgrade applies 164 again and every stored row reads 0.
+func TestRollback164UpDownUp(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	scratch := scratchDatabase(t)
@@ -53,7 +53,7 @@ func TestRollback163UpDownUp(t *testing.T) {
 	}
 	exec(deployImageInsert)
 	exec(`INSERT INTO deploy_metrics_daily (repo_id, day, org_id, retracted, computed_at)
-VALUES ('16300000-0000-4000-8000-000000000001', '2026-09-10', 'org-163', 1, '2026-09-11 11:00:00')`)
+VALUES ('16400000-0000-4000-8000-000000000001', '2026-09-10', 'org-164', 1, '2026-09-11 11:00:00')`)
 	versionRows := func() uint64 {
 		t.Helper()
 		var n uint64
@@ -63,10 +63,10 @@ VALUES ('16300000-0000-4000-8000-000000000001', '2026-09-10', 'org-163', 1, '202
 		return n
 	}
 	if versionRows() == 0 {
-		t.Fatal("at the head schema_migrations holds no 163")
+		t.Fatal("at the head schema_migrations holds no 164")
 	}
 
-	body, err := os.ReadFile("rollback/163_daily_pooled_retracted.down.sql")
+	body, err := os.ReadFile("rollback/164_daily_pooled_retracted.down.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,16 +79,16 @@ VALUES ('16300000-0000-4000-8000-000000000001', '2026-09-10', 'org-163', 1, '202
 		}
 	}
 	if versionRows() != 0 {
-		t.Fatal("after the down file schema_migrations still holds 163")
+		t.Fatal("after the down file schema_migrations still holds 164")
 	}
 	exec(deployImageInsert)
 
 	result, err := chmigrate.Upgrade(ctx, db, baseline, chain)
 	if err != nil || len(result.Applied) != 1 || result.Applied[0] != dailyPooledRetractedVersion {
-		t.Fatalf("the upgrade after the rollback = %+v, %v; want 163 applied", result, err)
+		t.Fatalf("the upgrade after the rollback = %+v, %v; want 164 applied", result, err)
 	}
 	var stored, live uint64
-	if err := conn.QueryRow(ctx, "SELECT count(), countIf(retracted = 0) FROM deploy_metrics_daily WHERE org_id = 'org-163'").
+	if err := conn.QueryRow(ctx, "SELECT count(), countIf(retracted = 0) FROM deploy_metrics_daily WHERE org_id = 'org-164'").
 		Scan(&stored, &live); err != nil || stored != 3 || live != 3 {
 		t.Fatalf("after the upgrade again %d of %d rows read retracted = 0 (err %v), want all 3", live, stored, err)
 	}

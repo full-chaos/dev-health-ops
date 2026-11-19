@@ -2269,7 +2269,7 @@ of zeros keeps `retracted = 0` and stays a real row.
 `incident_metrics_daily`, `deploy_metrics_daily` and `repo_metrics_daily` store, with each row, the pooled samples of
 the day (ClickHouse migration 161). A recompute of a day that finds no sample any more (deleted runs, an expired
 incident mapping, a cancelled deployment, a moved merge) produced no record, so the old row and its samples stayed the
-newest row of the key. Each table has `retracted UInt8 DEFAULT 0` (ClickHouse migration 163); the family writes a row
+newest row of the key. Each table has `retracted UInt8 DEFAULT 0` (ClickHouse migration 164); the family writes a row
 with `retracted = 1` over such a key of its own partition's repositories, at the instant of its read, so a newer
 measured row stays live.
 

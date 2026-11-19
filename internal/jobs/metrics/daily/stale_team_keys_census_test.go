@@ -1052,10 +1052,10 @@ var teamlessRetractedTables = map[string]string{
 // of the whole organization does NOT supersede their keys of a repository that is in no partition (acp, 2026-11-19: a run
 // never retires keys outside its own set of repositories).
 var runScopeOnlyTables = map[string]string{
-	"testops_pipeline_metrics_daily": "a pooled daily table (migration 163): only the partition that computes the repository retires its day",
-	"incident_metrics_daily":         "a pooled daily table (migration 163): only the partition that computes the repository retires its day",
-	"deploy_metrics_daily":           "a pooled daily table (migration 163): only the partition that computes the repository retires its day",
-	"repo_metrics_daily":             "a pooled daily table (migration 163): only the partition that computes the repository retires its day",
+	"testops_pipeline_metrics_daily": "a pooled daily table (migration 164): only the partition that computes the repository retires its day",
+	"incident_metrics_daily":         "a pooled daily table (migration 164): only the partition that computes the repository retires its day",
+	"deploy_metrics_daily":           "a pooled daily table (migration 164): only the partition that computes the repository retires its day",
+	"repo_metrics_daily":             "a pooled daily table (migration 164): only the partition that computes the repository retires its day",
 }
 
 func TestTheOrganizationRunTablesAreTheRepositoryScopedTablesCensus(t *testing.T) {

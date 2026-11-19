@@ -8,14 +8,14 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/chmigrate"
 )
 
-const dailyPooledRetractedVersion = "163_daily_pooled_retracted.sql"
+const dailyPooledRetractedVersion = "164_daily_pooled_retracted.sql"
 
 var dailyPooledRetractedTables = []string{
 	"incident_metrics_daily", "deploy_metrics_daily", "repo_metrics_daily", "testops_pipeline_metrics_daily",
 }
 
-// 163 adds exactly the retraction marker of the four pooled daily tables, defaulted to 0, and nothing else.
-func TestMigration163IsTheOneDefaultedMarkerColumnOfTheFourPooledDailyTables(t *testing.T) {
+// 164 adds exactly the retraction marker of the four pooled daily tables, defaulted to 0, and nothing else.
+func TestMigration164IsTheOneDefaultedMarkerColumnOfTheFourPooledDailyTables(t *testing.T) {
 	chain, err := chmigrate.LoadChain()
 	if err != nil {
 		t.Fatal(err)

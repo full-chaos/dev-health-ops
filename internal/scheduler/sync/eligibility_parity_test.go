@@ -551,6 +551,7 @@ func TestCandidateSQLPredicateSurfaceIsPinned(t *testing.T) {
 func TestLockedMaterializationPredicateSurfaceIsPinned(t *testing.T) {
 	want := []string{
 		"config.id",
+		"config.integration_id", // selected for the quarantine log line only, never a predicate
 		"config.is_active",
 		"config.org_id",
 		"config.planner_managed",

@@ -339,6 +339,16 @@ A repository-day is in neither sum when its rate is NULL (it measured no case), 
 `flake_rate`, its `flake_cases` is NULL. A row stored before the counts existed has NULL counts, so it drops out of the
 point. A point made only of such rows has no value.
 
+### Benchmarking line coverage
+
+The benchmarking point of `line_coverage_pct` for a scope and a day is 100 times the sum of the stored `lines_covered`
+over the sum of the stored `lines_total` of the repository-days in the scope. It is not the mean of the stored
+percentages, so a repository-day weighs by its lines. A repository-day with a NULL count, or with `lines_total` of 0, is
+in neither sum, whatever its stored percentage. A point made only of such repository-days has no value, never 0.
+
+`branch_coverage_pct` is still the mean of the stored percentages of the repository-days: the daily rows hold no branch
+counts, so it is not pooled yet.
+
 ### AI report charts of CI/CD durations and queue time
 
 The AI report charts of three CI/CD metrics are taken over the samples of the window's pipeline runs that the CI/CD daily
@@ -410,6 +420,26 @@ row synced after the daily job ran counts at once and the chart can differ from 
   is one `unscoped` bucket.
 - The chart range includes its last day. A bucket with no sample has no point, never 0. The read has the same row bound
   as the TestOps pooled read.
+
+## TestOps flake rate and retry dependency rate in report charts
+
+A report chart of `flake_rate` or `retry_dependency_rate` is the sum of the numerator over the sum of the denominator of
+the `testops_test_metrics_daily` rows in its bucket. It is never a mean of the stored per-repository-day rates: a day of
+1 test case would weigh the same as a day of 500.
+
+| Metric | Numerator | Denominator |
+| --- | --- | --- |
+| `flake_rate` | `SUM(flake_cases)` | `SUM(distinct_cases)` |
+| `retry_dependency_rate` | `SUM(retry_dependency_rate * distinct_cases)` | `SUM(distinct_cases)` |
+
+- No column stores the retry-dependent count. The stored rate is that count over `distinct_cases`, so the product is the
+  count. It is a float, not a stored integer.
+- A repository-day is in neither sum when its rate is NULL (it measured no case) or its `distinct_cases` is NULL. For
+  `flake_rate`, a NULL `flake_cases` has the same effect. A row stored before the counts existed has NULL counts and drops
+  out.
+- A bucket with no measured repository-day has no point, never 0 and never NaN.
+- `failure_recurrence_score` is not yet a window value: the report chart still shows the mean of the stored
+  per-repository-day values.
 
 ## TestOps cancel rate and rerun rate in report charts
 
@@ -741,9 +771,13 @@ A Linear or Jira work-items unit names every project it saw by an ensure row in 
 
 `items_completed` (and the other completion columns of `work_item_metrics_daily` and `work_item_user_metrics_daily`: unassigned completions, story points, bug ratio, cycle and lead time) counts an item on a day only when its status is terminal (`done` or `canceled`) and its `completed_at` is on that day. `work_items_completed` of `work_item_completion_daily` (and its `delivery_units`, `churn_loc` and `cycle_p50_hours`, which come from the same items) follows the same rule. This is the rule of `work_item_cycle_times`. A provider can reopen an item and keep its `completed_at`: that open item completes on no day.
 
+`completed_count`, `cycle_p50_hours`, `cycle_p90_hours` and `lead_p50_hours` of `issue_type_metrics_daily` follow the same rule. An item is active on a day from its creation until it ends; it ends on its `completed_at` only when its status is `done` or `canceled`, so an open item whose `completed_at` is before the day is active.
+
 ## Work items in progress at the end of a day
 
 `wip_count_end_of_day` (and `wip_unassigned_end_of_day`, the WIP age percentiles, `wip_congestion_ratio`, `predictability_score` and the person rows' WIP) counts an item at the end of a day when it started before the day ends and has not ended by then. Its end is the earlier of `completed_at` and `closed_at`, and it counts only when the status is terminal (`done` or `canceled`). A provider can reopen an item and keep its `completed_at` or `closed_at`: that open item stays in progress at the end of every later day.
+
+A finished item (`done` or `canceled`) with no `completed_at` and no `closed_at` is not in progress at the end of any day (`wip_count_end_of_day`, the person rows' WIP and the values made from them), the same as the done item that the loaders leave out. Limit: with no end stamp there is no day it finished, so the item leaves WIP on every recomputed day, also on days before it finished. A day that is not computed again keeps the rows it has.
 
 ## Work items stored under more than one repository
 

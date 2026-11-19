@@ -6,6 +6,7 @@
 internal/api/policy
 internal/joboperator
 internal/jobs/investment
+internal/jobs/metrics/daily/domainrolecell
 internal/jobs/operational
 internal/llmorgsettings
 internal/pgmigrate

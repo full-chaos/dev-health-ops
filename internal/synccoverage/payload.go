@@ -1,7 +1,6 @@
 package synccoverage
 
 import (
-	"fmt"
 	"sort"
 	"time"
 
@@ -23,7 +22,7 @@ type payloadInput struct {
 
 func buildPayload(input payloadInput) (projectionPayload, error) {
 	if len(input.Windows) > maxCompactWindows {
-		return nil, fmt.Errorf("sync coverage compact window limit exceeded: %d", maxCompactWindows)
+		return nil, newLimitError("compact_window", len(input.Windows), maxCompactWindows)
 	}
 	scheduleInterval := intervalForSchedule(input.Schedule, input.Now)
 	paused := !input.Config.Active
@@ -66,7 +65,7 @@ func buildPayload(input payloadInput) (projectionPayload, error) {
 				}
 				expanded++
 				if expanded > maxBackfillPairs {
-					return nil, fmt.Errorf("sync coverage backfill pair limit exceeded: %d", maxBackfillPairs)
+					return nil, newLimitError("backfill_pair", expanded, maxBackfillPairs)
 				}
 				key := sourceID + "\x00" + dataset
 				backfillByPair[key] = append(backfillByPair[key], coverageInterval{

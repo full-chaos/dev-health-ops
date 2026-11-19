@@ -640,3 +640,30 @@ func TestPostureDeltaReadsARetiredTablesListAsNoGrant(t *testing.T) {
 		}
 	}
 }
+
+// RetiredTableUpdates grants nothing (the row keeps its UPDATE flag, granted as before): a literal list of names that
+// are rows declaring UPDATE leaves the delta as it was; any other form, a name that is not a row, or a row without
+// UPDATE fails the step (CHAOS-14131).
+func TestPostureDeltaReadsARetiredTableUpdatesListAsNoGrant(t *testing.T) {
+	withRetired := func(list string) string {
+		return strings.Replace(postureV2, "return []RequiredTable{\n", "return Posture{\n\t\tRetiredTableUpdates: "+list+",\n\t\tRequiredTables: []RequiredTable{\n", 1)
+	}
+	_, _, plain := posture(t, "api", "api_authorization.go", postureV1, postureV2)
+	const withUpdate = "beta" // postureV2: {"beta", true, true, false}
+	code, stdout, lines := posture(t, "api", "api_authorization.go", postureV1, withRetired(`[]string{"`+withUpdate+`"}`))
+	if code != 0 || strings.Contains(stdout, "unparsable") || strings.Join(lines, "\n") != strings.Join(plain, "\n") || len(plain) == 0 {
+		t.Errorf("a retired UPDATE: exit %d, stdout %q, lines %v; want the plain delta %v", code, stdout, lines, plain)
+	}
+	for name, list := range map[string]string{
+		"not a row":          `[]string{"no_such_table"}`,
+		"identifier":         `retired`,
+		"call":               `retiredUpdates()`,
+		"not quoted":         `[]string{` + withUpdate + `}`,
+		"row without UPDATE": `[]string{"alpha"}`,
+	} {
+		code, stdout, lines := posture(t, "api", "api_authorization.go", postureV1, withRetired(list))
+		if code == 0 || !strings.Contains(stdout, "unparsable") || len(lines) != 0 {
+			t.Errorf("%s: exit %d, stdout %q, lines %v", name, code, stdout, lines)
+		}
+	}
+}

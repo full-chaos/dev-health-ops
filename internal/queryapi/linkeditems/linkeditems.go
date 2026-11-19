@@ -30,8 +30,8 @@ type RowQuerier interface {
 const Subquery = `(SELECT work_item_id FROM work_graph_issue_pr FINAL
         WHERE org_id = {org_id:String} AND repo_id IN {link_repo_ids:Array(UUID)})`
 
-// Version is one stored work_items row of a linked item: the item, the repository
-// id of the row and its version.
+// Version is one stored work_items row (copy) of a linked item: the item, the
+// repository id of the row and its version.
 type Version struct {
 	Item   workitemmetrics.StoredItem
 	RepoID string
@@ -81,11 +81,11 @@ func (l Loader) Read(ctx context.Context) ([]Version, map[Address]workitemmetric
 	return versions, attributions, nil
 }
 
-// readItems reads the stored rows of the linked items that the work_item family
-// would load for some day of the window: the family's predicate (created before
-// the window ends and either not done or completed no earlier than its start), over
-// the union of the days, from work_items FINAL. Every version is kept: the version
-// an item is on a day is chosen per day by RowsByDay, with the daily job's own rule.
+// readItems reads every stored row (copy) of the linked items that the work_item
+// family would load for some day of the window: an item with a copy that passes the
+// family's predicate (created before the window ends and either not done or completed
+// no earlier than its start), over the union of the days. A copy that does not pass
+// the window is read too, because it can be the item's current copy (RowsByDay).
 func (l Loader) readItems(ctx context.Context) ([]Version, error) {
 	rows, err := l.Client.Query(ctx, `
 SELECT toString(repo_id), last_synced,
@@ -93,9 +93,13 @@ SELECT toString(repo_id), last_synced,
        created_at, completed_at, type, assignees, started_at, closed_at, story_points
 FROM work_items FINAL
 WHERE org_id = {org_id:String}
-  AND created_at < toDateTime64({win_end:Date}, 3, 'UTC')
-  AND (status != 'done' OR completed_at >= toDateTime64({win_start:Date}, 3, 'UTC'))
-  AND work_item_id IN `+Subquery+l.Budget, l.Bindings())
+  AND (provider, work_item_id) IN (
+      SELECT provider, work_item_id
+      FROM work_items FINAL
+      WHERE org_id = {org_id:String}
+        AND created_at < toDateTime64({win_end:Date}, 3, 'UTC')
+        AND (status != 'done' OR completed_at >= toDateTime64({win_start:Date}, 3, 'UTC'))
+        AND work_item_id IN `+Subquery+`)`+l.Budget, l.Bindings())
 	if err != nil {
 		return nil, fmt.Errorf("linkeditems: items: %w", err)
 	}
@@ -149,39 +153,42 @@ WHERE org_id = {org_id:String} AND is_primary = 1
 		if err := rows.Scan(&address.RepoID, &address.Provider, &address.WorkItemID, &attribution.TeamID, &attribution.TeamName); err != nil {
 			return nil, fmt.Errorf("linkeditems: attributions scan: %w", err)
 		}
-		// Every stored row of an item keeps its own attribution: the day's chosen
-		// version (RowsByDay) takes the attribution of the row it is.
+		// Every stored row of an item keeps its own attribution: the item's current
+		// copy (RowsByDay) takes the attribution of the row it is.
 		out[address] = attribution
 	}
 	return out, rows.Err()
 }
 
-// RowsByDay runs the work_item family's compute for every day of [from, to). For
-// each day the rows are the versions that pass the day's predicate, each item once
-// by the daily job's own rule (workitemmetrics.OncePerProviderAndID: a version that
-// does not pass the day's predicate does not compete), each with the attribution of
-// the stored row it is. The compute itself keeps the items that are relevant to the
-// day, as it does for the daily job.
+// RowsByDay runs the work_item family's compute for every day of [from, to). An item
+// counts on a day only when its current copy passes the day's predicate, the rule of
+// the daily work item tables: the current copy is workitemmetrics.OncePerProviderAndID
+// over every copy, with no day predicate (the newest last_synced; on a tie, the lower
+// repository id). An older copy never makes the item count. Each item takes the
+// attribution of its current copy's stored row. The compute itself keeps the items
+// that are relevant to the day, as it does for the daily job.
 func RowsByDay(from, to time.Time, versions []Version, attributions map[Address]workitemmetrics.PrimaryAttribution) map[time.Time][]workitemmetrics.MetricsDailyRow {
 	out := map[time.Time][]workitemmetrics.MetricsDailyRow{}
 	if len(versions) == 0 {
 		return out
 	}
+	keys := make([]workitemmetrics.ItemVersion, len(versions))
+	for index, v := range versions {
+		keys[index] = v.version()
+	}
+	kept, _ := workitemmetrics.OncePerProviderAndID(keys)
+	current := make([]Version, 0, len(kept))
+	for _, index := range kept {
+		current = append(current, versions[index])
+	}
 	for day := from; day.Before(to); day = day.AddDate(0, 0, 1) {
 		dayEnd := day.AddDate(0, 0, 1)
-		var passing []Version
-		var keys []workitemmetrics.ItemVersion
-		for _, v := range versions {
-			if workitemmetrics.PassesDayPredicate(v.Item.Status, v.Item.CreatedAt, v.Item.CompletedAt, day, dayEnd) {
-				passing = append(passing, v)
-				keys = append(keys, v.version())
-			}
-		}
-		kept, _ := workitemmetrics.OncePerProviderAndID(keys)
-		items := make([]workitemmetrics.StoredItem, 0, len(kept))
+		var items []workitemmetrics.StoredItem
 		dayAttributions := map[string]workitemmetrics.PrimaryAttribution{}
-		for _, index := range kept {
-			v := passing[index]
+		for _, v := range current {
+			if !workitemmetrics.PassesDayPredicate(v.Item.Status, v.Item.CreatedAt, v.Item.CompletedAt, day, dayEnd) {
+				continue
+			}
 			items = append(items, v.Item)
 			if attribution, found := attributions[Address{v.Item.Provider, v.Item.WorkItemID, v.RepoID}]; found {
 				dayAttributions[v.Item.WorkItemID] = attribution

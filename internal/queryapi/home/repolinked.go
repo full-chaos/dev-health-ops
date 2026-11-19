@@ -86,10 +86,10 @@ type RepoLinkCoverage struct {
 // repoLinkedView is everything one request reads once for the four metrics.
 type repoLinkedView struct {
 	state string
-	// versions are the stored rows of the linked items that pass the predicate of
-	// some day of the two windows, every version of every item: which version an item
-	// is on a day is decided per day (workitemmetrics.OncePerProviderAndID), as the
-	// daily job decides it.
+	// versions are every stored row (copy) of the linked items that have a copy that
+	// passes the predicate of some day of the two windows: an item counts on a day
+	// only when its current copy passes it (linkeditems.RowsByDay), as the daily job
+	// decides it.
 	versions       []linkeditems.Version
 	attributions   map[linkeditems.Address]workitemmetrics.PrimaryAttribution
 	blocked        []blockedItemRow

@@ -117,7 +117,7 @@ type githubTestsRunReportPlan struct {
 	UndoneByAdmission []int
 }
 
-// githubTestsReportMismatch is a copy or aggregate kept with its parts (CHAOS-13991): its overlap group (githubTestsPlanRunReports)
+// githubTestsReportMismatch is a copy or aggregate kept with its parts (CHAOS-13991): its touch group (githubTestsPlanRunReports)
 // holds a copy or aggregate whose cases match their copy or parts by identity but that holds an outcome, another stored field or
 // coverage rows they do not. Parts are the artifacts it was compared with.
 type githubTestsReportMismatch struct {
@@ -165,11 +165,12 @@ var githubTestsDefaultPartitionBound = githubTestsPartitionBound{Work: 1 << 23}
 // representative. (2) Aggregates: among representatives, smallest first, an artifact whose case identities are a disjoint union of
 // two or more smaller artifacts' that are not themselves aggregates is an aggregate of those parts. Its parts are searched first
 // among the artifacts whose suites (each with its cases) are all in the aggregate, so a partition that holds every stored row is
-// found whatever the upload order; only when none exists is a partition by case identity alone its parts. (3) Overlap groups:
-// artifacts that share a case identity are one group. A copy or aggregate is lossless when it holds no coverage rows and its
-// suites equal its representative's or its parts' together (githubTestsReportLossless). In a group where every copy and aggregate
-// is lossless they are dropped as aggregate_of_parts; in any other group every artifact is kept and each copy and aggregate is
-// reported as a mismatch. (4) The survivors are admitted whole, in the given order (ascending declared size), under the run bound,
+// found whatever the upload order; only when none exists is a partition by case identity alone its parts. (3) Touch groups: a
+// copy and its representative are one group, and so are two artifacts that hold one equal suite instance (githubTestsReportContent).
+// A partition by case identity alone joins nothing: when matrix legs share identities, it can match either leg (CHAOS-14045). A copy
+// or aggregate is lossless when it holds no coverage rows and its suites equal its representative's or its parts' together
+// (githubTestsReportLossless). In a group where every copy and aggregate is lossless they are dropped as aggregate_of_parts; in any
+// other group every artifact is kept and each copy and aggregate is reported as a mismatch. (4) The survivors are admitted whole, in the given order (ascending declared size), under the run bound,
 // the rest skipped whole; a drop whose representative or parts are not all admitted (or dropped with theirs admitted) is undone and
 // the admission rerun, so a drop never loses a row the bound cut. The decision reads only the parsed rows, so it does not depend on
 // names, the provider, or the order the listing came back in. parsed must already be in admission order.
@@ -346,20 +347,31 @@ func githubTestsPlanRunReportsWithin(parsed []githubTestsParsedReport, bound git
 		}
 		return index
 	}
-	owner := map[string]int{}
-	for _, index := range candidates {
-		for key := range identities[index] {
-			if first, seen := owner[key]; seen {
-				group[root(index)] = root(first)
-				continue
-			}
-			owner[key] = index
-		}
-	}
 	conflict := make([]bool, len(parsed))
-	for _, link := range relations {
-		if !link.lossless {
-			conflict[root(link.index)] = true
+	if slices.ContainsFunc(relations, func(link relation) bool { return !link.lossless }) {
+		owner := map[string]int{}
+		for _, index := range candidates {
+			counts, err := content(index)
+			if err != nil {
+				return githubTestsRunReportPlan{}, err
+			}
+			for key := range counts {
+				if first, seen := owner[key]; seen {
+					group[root(index)] = root(first)
+					continue
+				}
+				owner[key] = index
+			}
+		}
+		for _, link := range relations {
+			if !aggregate[link.index] {
+				group[root(link.index)] = root(link.parts[0])
+			}
+		}
+		for _, link := range relations {
+			if !link.lossless {
+				conflict[root(link.index)] = true
+			}
 		}
 	}
 	dropped := make([]bool, len(parsed))

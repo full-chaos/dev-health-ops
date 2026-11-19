@@ -3,10 +3,13 @@ package report
 // formMetricNames maps a metric label of the web New Report form to the report registry metric of the same quantity.
 // Each entry follows the label the product already shows: web src/lib/metrics/catalog.ts -> ops
 // internal/queryapi/home/metricspec.go (same table and rule as the report chart rule in dedup.go chartRules).
-// A label with no such chain is absent: it gets no chart.
+// "Deployment Frequency" is the former form label of Deploy Frequency, kept for stored reports. A label with no such
+// chain is absent: it gets no chart.
 var formMetricNames = map[string]string{
-	"Change Failure Rate": "change_failure_rate",
-	"CI Success Rate":     "success_rate",
+	"Change Failure Rate":  "change_failure_rate",
+	"CI Success Rate":      "success_rate",
+	"Deploy Frequency":     "deployments_count",
+	"Deployment Frequency": "deployments_count",
 }
 
 // defaultChartSpecs makes one daily line chart per chartable requested metric, in request order, once each.

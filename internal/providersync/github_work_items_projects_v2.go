@@ -248,6 +248,7 @@ func (fetcher GitHubProjectV2Fetcher) Fetch(
 	// Python's dict preserves first insertion position while later values win.
 	// Preserve that exact behavior across targets, including duplicate targets.
 	workItemIndex := map[string]int{}
+	statusTimeMissing := 0
 	for _, target := range targets {
 		targetResult, err := fetchGitHubProjectV2Target(ctx, &counted, target, &result.Evidence)
 		if err != nil {
@@ -321,6 +322,16 @@ func (fetcher GitHubProjectV2Fetcher) Fetch(
 			if !emitted {
 				continue
 			}
+			event, hasEvent, timeMissing, err := githubProjectV2StatusEvent(claim, item, row.WorkItemID, normalizedAt)
+			if err != nil {
+				return finishGitHubProjectV2Fetch(result), err
+			}
+			if timeMissing {
+				statusTimeMissing++
+			}
+			if hasEvent {
+				result.Rows.StatusTransitions = append(result.Rows.StatusTransitions, event)
+			}
 			if index, exists := workItemIndex[row.WorkItemID]; exists {
 				result.Rows.WorkItems[index] = row
 			} else {
@@ -357,6 +368,7 @@ func (fetcher GitHubProjectV2Fetcher) Fetch(
 		}
 	}
 	reportGitHubProjectV2MembershipSkips(claim, result.MembershipSkips)
+	reportGitHubProjectV2StatusTimeMissing(ctx, claim, statusTimeMissing)
 	return finishGitHubProjectV2Fetch(result), nil
 }
 
@@ -763,7 +775,9 @@ type gitHubProjectV2ContentPayload struct {
 	CreatedAt  *string `json:"createdAt"`
 	UpdatedAt  *string `json:"updatedAt"`
 	ClosedAt   *string `json:"closedAt"`
-	Repository struct {
+	// StateReason is asked on Issue only (COMPLETED, NOT_PLANNED, ...).
+	StateReason *string `json:"stateReason"`
+	Repository  struct {
 		NameWithOwner string `json:"nameWithOwner"`
 	} `json:"repository"`
 	Labels    gitHubProjectV2Connection[githubWorkItemLabelPayload] `json:"labels"`
@@ -777,7 +791,10 @@ type gitHubProjectV2FieldValuePayload struct {
 	Title    *string     `json:"title"`
 	ID       *string     `json:"id"`
 	Number   json.Number `json:"number"`
-	Field    struct {
+	// UpdatedAt is asked on the single-select value only: the time the board's
+	// Status value was set, the one board event GitHub serves.
+	UpdatedAt *string `json:"updatedAt"`
+	Field     struct {
 		Name string `json:"name"`
 	} `json:"field"`
 }
@@ -1077,7 +1094,7 @@ func mergeGitHubProjectV2Rows(repository, projects githubWorkItemRows) githubWor
 // User does), so the author asks those on the User fragment and a Bot or
 // Mannequin author keeps its login (CHAOS-14195).
 const gitHubProjectV2FieldValueNodeFields = `__typename
-            ... on ProjectV2ItemFieldSingleSelectValue { name field { ... on ProjectV2SingleSelectField { name } } }
+            ... on ProjectV2ItemFieldSingleSelectValue { name updatedAt field { ... on ProjectV2SingleSelectField { name } } }
             ... on ProjectV2ItemFieldTextValue { text field { ... on ProjectV2FieldCommon { name } } }
             ... on ProjectV2ItemFieldIterationValue { title id field { ... on ProjectV2FieldCommon { name } } }
             ... on ProjectV2ItemFieldNumberValue { number field { ... on ProjectV2FieldCommon { name } } }`
@@ -1092,7 +1109,7 @@ query($login: String!, $number: Int!, $after: String, $first: Int!) {
           id createdAt updatedAt
           content {
             __typename
-            ... on Issue { id number title url state createdAt updatedAt closedAt repository { nameWithOwner } labels(first: 100) { nodes { name } pageInfo { hasNextPage } } assignees(first: 10) { nodes { login email name } } author { login ... on User { email name } } }
+            ... on Issue { id number title url state stateReason createdAt updatedAt closedAt repository { nameWithOwner } labels(first: 100) { nodes { name } pageInfo { hasNextPage } } assignees(first: 10) { nodes { login email name } } author { login ... on User { email name } } }
             ... on PullRequest { id number title url state createdAt updatedAt closedAt mergedAt repository { nameWithOwner } labels(first: 100) { nodes { name } pageInfo { hasNextPage } } assignees(first: 10) { nodes { login email name } } author { login ... on User { email name } } }
             ... on DraftIssue { id title createdAt updatedAt }
           }

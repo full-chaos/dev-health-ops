@@ -168,6 +168,7 @@ VALUES ($1, $3, $2, 'work-items',
 				ProjectMembershipSnapshotDiff: GitHubProjectV2SnapshotDiffClickHouseReader{
 					Conn: conn,
 				},
+				StoredTransitions: GitHubProjectV2StoredTransitionsClickHouseReader{Conn: conn},
 			}
 			executor := CompleteRouteExecutor{
 				Credentials: providerfoundation.CredentialResolver{

@@ -204,7 +204,11 @@ type GitHubWorkItemsRouteHandler struct {
 	// misconstructed for every claim, not just the ones that happen to
 	// configure a Projects v2 target.
 	ProjectMembershipSnapshotDiff githubProjectV2SnapshotDiffReader
-	ResolveIdentity               githubIdentityResolver
+	// StoredTransitions reads the stored history of the board items, so their
+	// status is the last event of the whole history, not of this batch.
+	// Required unconditionally, like ProjectMembershipSnapshotDiff.
+	StoredTransitions githubProjectV2StoredTransitionsReader
+	ResolveIdentity   githubIdentityResolver
 }
 
 var githubWorkItemDerivedDestinations = []string{
@@ -252,6 +256,9 @@ func (handler GitHubWorkItemsRouteHandler) Collect(
 		return CompleteRouteBatch{}, ErrInvalidConfiguration
 	}
 	if handler.ProjectMembershipSnapshotDiff == nil {
+		return CompleteRouteBatch{}, ErrInvalidConfiguration
+	}
+	if handler.StoredTransitions == nil {
 		return CompleteRouteBatch{}, ErrInvalidConfiguration
 	}
 	options, err := githubWorkItemsRESTOptionsForClaim(claim)
@@ -437,7 +444,10 @@ func (handler GitHubWorkItemsRouteHandler) Collect(
 			return CompleteRouteBatch{}, usage.wrap(err)
 		}
 		projectResult.Rows.ProjectMemberships = append(projectResult.Rows.ProjectMemberships, diffRows...)
-		rows = mergeGitHubProjectV2Rows(rows, projectResult.Rows)
+		rows, err = mergeGitHubProjectV2RowsWithStored(ctx, handler.StoredTransitions, claim.OrgID, rows, projectResult.Rows)
+		if err != nil {
+			return CompleteRouteBatch{}, usage.wrap(err)
+		}
 		projectState = "included"
 	}
 	finishGitHubWorkItemsEvidence(&evidence, rows)

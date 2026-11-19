@@ -83,6 +83,10 @@ func TestPRLinkedToAnIssueWhoseOnlyDonorRowWasRepoOwnership(t *testing.T) {
 			for id := range subjects {
 				all[id] = struct{}{}
 			}
+			derived.LinkTiers = map[LinkPair]string{}
+			for _, edge := range edges {
+				derived.LinkTiers[LinkPair{PullRequest: edge.SourceWorkItemID, Issue: edge.TargetWorkItemID}] = "native"
+			}
 			teams, evidence, _, _ := derived.BuildLinkedIssueIndexFromRows(kind.provider, subjects, derived.OwnDonorRows(subjects, all), edges, nil)
 			derived.LinkedIssue, derived.LinkedIssueEvidence = teams, evidence
 			_, _, candidates := derived.Resolve(subjects[kind.prID])

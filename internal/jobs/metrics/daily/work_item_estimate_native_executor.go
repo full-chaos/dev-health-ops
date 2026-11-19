@@ -80,13 +80,17 @@ func (executor *WorkItemEstimateExecutor) ComputeFamily(
 }
 
 // computeWorkItemEstimateRows reads the work scopes of the partition's
-// repositories and computes the estimate-coverage rows of the day. It writes
+// repositories and computes the estimate-coverage rows of the day, from the
+// items whose current copy is the copy the day read (keepCurrentCopiesOfDay). It writes
 // nothing (see computeWorkItemTriplet for its two callers).
 func computeWorkItemEstimateRows(
 	ctx context.Context, conn driver.Conn, run Run, partition Partition, scope workItemPartitionScope,
 ) (workItemScopeRead, []workitemmetrics.EstimateCoverageRow, error) {
 	read, err := loadWorkItemScopeRead(ctx, conn, "work_item_estimate", run, partition, scope, false, true, false)
 	if err != nil {
+		return workItemScopeRead{}, nil, err
+	}
+	if read, err = keepCurrentCopiesOfDay(ctx, conn, run.OrganizationID, read); err != nil {
 		return workItemScopeRead{}, nil, err
 	}
 	if len(read.Items) == 0 {

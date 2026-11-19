@@ -281,11 +281,10 @@ INSERT INTO ci_pipeline_runs (repo_id, run_id, status, queued_at, started_at, fi
 	}
 }
 
-// A recompute of a day that now has no run writes nothing: no zero-run row (a
-// reader would take it for a measurement) and no overwrite of a count another
-// job published. A stored count for a day whose run moved stays until a
-// retraction design with a write fence exists.
-func TestCICDComputeFamilyEmptyRecomputeWritesNothing(t *testing.T) {
+// A recompute of a day that now has no run retires the day (CHAOS-14016): it writes one row with retracted = 1 over
+// the count published before, never a zero-run measurement (a reader would take it for one). FINAL serves the
+// retraction row; the count it retires reads as absent in every reader (the live-row rule, package liverow).
+func TestCICDComputeFamilyEmptyRecomputeRetiresTheDay(t *testing.T) {
 	ctx, conn := startCICDDayDB(t)
 	const org = "00000000-0000-4000-8000-0000000000d0"
 	const repo = "00000000-0000-4000-8000-0000000000d3"
@@ -306,16 +305,17 @@ INSERT INTO ci_pipeline_runs (repo_id, run_id, status, queued_at, started_at, fi
 	computeCICDDay(ctx, t, executor, org, repo, "2026-01-02", time.Date(2026, 1, 3, 1, 0, 0, 0, time.UTC))
 	insert("2026-01-03 12:00:00", "2026-01-03 10:00:00", "2026-01-03 10:30:00")
 	computeCICDDay(ctx, t, executor, org, repo, "2026-01-02", time.Date(2026, 1, 4, 1, 0, 0, 0, time.UTC))
-	var zeroRows uint64
-	row := conn.QueryRow(ctx, "SELECT count() FROM cicd_metrics_daily WHERE org_id = ? AND repo_id = ? AND pipelines_count = 0", org, repo)
-	if err := row.Scan(&zeroRows); err != nil {
+	var measuredZero, retractions uint64
+	row := conn.QueryRow(ctx, "SELECT countIf(pipelines_count = 0 AND retracted = 0), countIf(retracted = 1) FROM cicd_metrics_daily WHERE org_id = ? AND repo_id = ?", org, repo)
+	if err := row.Scan(&measuredZero, &retractions); err != nil {
 		t.Fatal(err)
 	}
-	if zeroRows != 0 {
-		t.Fatalf("%d zero-run rows stored, want none", zeroRows)
+	if measuredZero != 0 || retractions != 1 {
+		t.Fatalf("%d zero-run measurement rows and %d retraction rows stored, want 0 and 1", measuredZero, retractions)
 	}
-	if got := storedCICDCount(ctx, t, conn, org, repo, "2026-01-02"); got != 1 {
-		t.Fatalf("2026-01-02 pipelines_count = %d, want the published 1 left as it was", got)
+	var retracted uint8
+	if err := conn.QueryRow(ctx, "SELECT retracted FROM cicd_metrics_daily FINAL WHERE org_id = ? AND repo_id = ? AND day = '2026-01-02'", org, repo).Scan(&retracted); err != nil || retracted != 1 {
+		t.Fatalf("2026-01-02 newest row retracted = %d (%v), want the retraction row", retracted, err)
 	}
 }
 

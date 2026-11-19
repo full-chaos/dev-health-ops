@@ -104,16 +104,25 @@ VALUES (?, 'github', ?, toUUID(?), ?, 'exact', 'inferred', 1, 10, 0, ?, ?, ?, ?)
 	} {
 		t.Run(source.table, func(t *testing.T) {
 			// rerun_rate is read as reruns over runs: every repo-day has the same 10 runs, so the
-			// weights are equal and the expected values are those of the stored rates.
+			// weights are equal and the expected values are those of the stored rates. The test table gets 10 distinct
+			// cases and the rate's share of them as flake cases, for the same reason.
 			insert := "INSERT INTO " + source.table + " (repo_id, day, " + source.column +
 				", team_id, org_id, computed_at, pipelines_count) VALUES (toUUID(?), ?, ?, ?, ?, ?, 10)"
 			if source.table != "testops_pipeline_metrics_daily" {
 				insert = "INSERT INTO " + source.table + " (repo_id, day, " + source.column +
 					", team_id, org_id, computed_at) VALUES (toUUID(?), ?, ?, ?, ?, ?)"
 			}
+			if source.table == "testops_test_metrics_daily" {
+				insert = "INSERT INTO " + source.table + " (repo_id, day, " + source.column +
+					", team_id, org_id, computed_at, flake_cases, distinct_cases) VALUES (toUUID(?), ?, ?, ?, ?, ?, toUInt32(round(?*10)), 10)"
+			}
 			for _, day := range days {
 				for _, row := range stored {
-					if err := admin.Exec(ctx, insert, row.repo, day, row.value, row.team, org, day.Add(time.Hour)); err != nil {
+					args := []any{row.repo, day, row.value, row.team, org, day.Add(time.Hour)}
+					if source.table == "testops_test_metrics_daily" {
+						args = append(args, row.value)
+					}
+					if err := admin.Exec(ctx, insert, args...); err != nil {
 						t.Fatalf("insert %s: %v", row.repo, err)
 					}
 				}

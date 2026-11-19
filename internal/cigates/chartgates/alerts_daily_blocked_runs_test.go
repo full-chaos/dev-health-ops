@@ -17,6 +17,11 @@ const (
 	dailyBlockedReconcileMn = "dev_health_daily_metrics_runs_blocked_reconcile_failed_total"
 	dailyBlockedGoRel       = "internal/jobruntime/telemetry.go"
 	dailyBlockedDocs        = "docs/operate/observe/dashboards-and-alerts.md"
+	dailyBlockedReasonsRel  = "internal/jobs/metrics/daily/blocked.go"
+	dailyBlockedFinalize    = "finalize_failed"
+	dailyBlockedRerun       = "daily-start --rerun-tag"
+	dailyBlockedRedrive     = "daily-redrive"
+	dailyBlockedStaleRow    = "row stays listed by `daily-blocked`"
 )
 
 func dailyBlockedAlertsAreTheGroup(g *guard) {
@@ -56,12 +61,27 @@ func dailyBlockedDocsNameTheRules(g *guard) {
 	}
 }
 
+// A finalize_failed run has status failed, which no redrive selects, so the alert and the runbook must name
+// the rerun for that reason and keep the redrive for the partition reasons.
+func dailyBlockedActionPerReason(g *guard) {
+	g.expect(strings.Contains(g.read(dailyBlockedReasonsRel), `BlockedReasonFinalizeFailed = "`+dailyBlockedFinalize+`"`), "%s no longer defines the reason %s", dailyBlockedReasonsRel, dailyBlockedFinalize)
+	text := oneLine(str(mp(alertNamed(g, dailyBlockedAlert)["annotations"])["description"]))
+	for _, want := range []string{dailyBlockedFinalize, dailyBlockedRerun, dailyBlockedRedrive} {
+		g.expect(strings.Contains(text, want), "%s description does not name %q", dailyBlockedAlert, want)
+	}
+	docs := oneLine(g.read(dailyBlockedDocs))
+	for _, want := range []string{dailyBlockedFinalize, dailyBlockedRerun, dailyBlockedRedrive, dailyBlockedStaleRow} {
+		g.expect(strings.Contains(docs, want), "%s does not name %q", dailyBlockedDocs, want)
+	}
+}
+
 func TestDailyBlockedRunAlertsGuardRealTree(t *testing.T) {
 	runReal(t,
 		check{"daily-blocked-alerts-are-the-group", dailyBlockedAlertsAreTheGroup},
 		check{"daily-blocked-rule-text", dailyBlockedRuleText},
 		check{"daily-blocked-metrics-are-emitted", dailyBlockedMetricsAreEmitted},
 		check{"daily-blocked-docs-name-the-rules", dailyBlockedDocsNameTheRules},
+		check{"daily-blocked-action-per-reason", dailyBlockedActionPerReason},
 	)
 }
 
@@ -69,6 +89,7 @@ func TestDailyBlockedRunAlertsGuardPlantedDefects(t *testing.T) {
 	rules := []string{rulesRel, dailyBlockedGoRel}
 	const marked = "sum(increase(" + dailyBlockedMarked + "[24h])) > 0"
 	const reconcile = "sum(increase(" + dailyBlockedReconcileMn + "[24h])) > 0"
+	perReason := []string{rulesRel, dailyBlockedDocs, dailyBlockedReasonsRel}
 	runPlanted(t, []planted{
 		{"daily-blocked-rule-reads-the-cleared-counter", rules, mut(rulesRel, marked, strings.Replace(marked, "marked", "cleared", 1)), dailyBlockedRuleText, "want"},
 		{"daily-blocked-threshold-raised", rules, mut(rulesRel, marked, strings.Replace(marked, "> 0", "> 5", 1)), dailyBlockedRuleText, "want"},
@@ -78,5 +99,10 @@ func TestDailyBlockedRunAlertsGuardPlantedDefects(t *testing.T) {
 		{"daily-blocked-rule-renamed", rules, mut(rulesRel, "- alert: "+dailyBlockedAlert, "- alert: "+dailyBlockedAlert+"X"), dailyBlockedAlertsAreTheGroup, "want exactly"},
 		{"daily-blocked-counter-renamed-in-go", rules, mutAll(dailyBlockedGoRel, `"`+dailyBlockedMarked+`"`, `"dev_health_daily_metrics_runs_blocked_marked_renamed_total"`), dailyBlockedMetricsAreEmitted, "no longer emits"},
 		{"daily-blocked-docs-lose-a-rule", []string{dailyBlockedDocs}, mutAll(dailyBlockedDocs, dailyBlockedReconcile, "TheRule"), dailyBlockedDocsNameTheRules, "does not name"},
+		{"daily-blocked-alert-drops-the-rerun", perReason, mutAll(rulesRel, dailyBlockedRerun, "daily-start"), dailyBlockedActionPerReason, "description does not name"},
+		{"daily-blocked-alert-drops-the-finalize-reason", perReason, mutAll(rulesRel, dailyBlockedFinalize, "finalize"), dailyBlockedActionPerReason, "description does not name"},
+		{"daily-blocked-docs-drop-the-rerun", perReason, mutAll(dailyBlockedDocs, dailyBlockedRerun, "daily-start"), dailyBlockedActionPerReason, dailyBlockedDocs + " does not name"},
+		{"daily-blocked-docs-drop-the-stale-row", perReason, mutAll(dailyBlockedDocs, dailyBlockedStaleRow, "row is gone from `daily-blocked`"), dailyBlockedActionPerReason, dailyBlockedDocs + " does not name"},
+		{"daily-blocked-finalize-reason-renamed-in-go", perReason, mutAll(dailyBlockedReasonsRel, `"`+dailyBlockedFinalize+`"`, `"finalize_failed_terminal"`), dailyBlockedActionPerReason, "no longer defines the reason"},
 	})
 }

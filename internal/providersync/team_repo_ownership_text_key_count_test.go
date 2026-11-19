@@ -6,7 +6,7 @@ import "testing"
 // text key skipped for a native link, for the run's log line and stats.
 func TestTheTextKeyCountersCountWhatTheRunDid(t *testing.T) {
 	workItems := []TeamRepoOwnershipWorkItem{
-		{WorkItemID: "jira:WEB-5", Provider: "jira", ProjectID: "web-proj"},
+		{WorkItemID: "jira:WEB-5", Provider: "jira", Type: "issue", ProjectID: "web-proj"},
 		{WorkItemID: "linear:CHAOS-1", Provider: "linear", ProjectID: "owner-proj"},
 		{WorkItemID: "ghpr:full-chaos/deploy#427", Provider: "github", Type: "pr", RepoID: "repo-1"},
 		{WorkItemID: "gitlab:full-chaos/deploy!704", Provider: "gitlab", Type: "merge_request", RepoID: "repo-1"},

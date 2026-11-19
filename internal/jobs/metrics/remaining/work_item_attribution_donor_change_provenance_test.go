@@ -44,7 +44,7 @@ func TestADonorChangeReadsTheLinkedIssueRowOfTheItemsNewestSnapshot(t *testing.T
 			"I": issue("unassigned", "D", "team-a", before.Add(-time.Hour)), "D": own("team-a")}, []string{"I"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := donorChangedDependents(edges, nil, tc.rows, issueKindsOf(tc.rows), nil, nil)
+			got := donorChangedDependents(edges, nil, tc.rows, issueKindsOf(tc.rows), nil, nil, nil)
 			if fmt.Sprint(got) != fmt.Sprint(tc.want) {
 				t.Errorf("owed %v, want %v", got, tc.want)
 			}

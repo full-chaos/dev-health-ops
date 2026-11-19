@@ -272,6 +272,7 @@ func newGitHubTestsIntegrationSink(t *testing.T) (context.Context, GitHubTestsCl
 			t.Fatal(err)
 		}
 	}
-	chschema.CreateTables(ctx, t, conn, "test_suite_results", "coverage_snapshots", "testops_run_report_completeness")
+	chschema.CreateTables(ctx, t, conn, "test_suite_results", "coverage_snapshots", "testops_run_report_completeness",
+		"daily_metrics_touched_days")
 	return ctx, GitHubTestsClickHouseEffects{Conn: conn, Lease: providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil })}
 }

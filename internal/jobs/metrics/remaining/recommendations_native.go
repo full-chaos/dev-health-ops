@@ -320,7 +320,7 @@ func (executor *RecommendationsExecutor) ComputeTeam(
 	// Both bounds derived ONCE from the caller's instant. Deriving them per
 	// rule would let a run straddle UTC midnight and emit two window_ends,
 	// which the argMax reader treats as two separate states.
-	windowEnd := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	windowEnd := recommendationsWindowEnd(now)
 	windowStart := windowEnd.AddDate(0, 0, -windowDays)
 
 	snapshot, err := executor.loader.LoadTeamMetricsWindow(ctx, teamID, orgID, windowStart, windowEnd)
@@ -328,6 +328,12 @@ func (executor *RecommendationsExecutor) ComputeTeam(
 		return nil, err
 	}
 	return EvaluateState(snapshot, now, ruleVersion)
+}
+
+// recommendationsWindowEnd is the end of the evaluation window for `now`: its
+// UTC day start. Team discovery reads repository owners at the same instant.
+func recommendationsWindowEnd(now time.Time) time.Time {
+	return time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
 }
 
 // newClickHouseOnlyExecutor builds an executor with NO Postgres pool, for tests

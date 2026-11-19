@@ -19,11 +19,11 @@ func TestMaintenanceDefaultsAreBoundedAndApplied(t *testing.T) {
 	if err := ApplyMaintenance(target, maintenance); err != nil {
 		t.Fatal(err)
 	}
-	if target.CompletedJobRetentionPeriod != 7*24*time.Hour {
+	if target.CompletedJobRetentionPeriod != 24*time.Hour {
 		t.Fatalf("completed retention = %s", target.CompletedJobRetentionPeriod)
 	}
-	if target.CancelledJobRetentionPeriod != 30*24*time.Hour || target.DiscardedJobRetentionPeriod != 30*24*time.Hour {
-		t.Fatalf("unexpected long retention: cancelled=%s discarded=%s", target.CancelledJobRetentionPeriod, target.DiscardedJobRetentionPeriod)
+	if target.CancelledJobRetentionPeriod != 24*time.Hour || target.DiscardedJobRetentionPeriod != 7*24*time.Hour {
+		t.Fatalf("unexpected terminal retention: cancelled=%s discarded=%s", target.CancelledJobRetentionPeriod, target.DiscardedJobRetentionPeriod)
 	}
 	if target.JobCleanerTimeout != 30*time.Second {
 		t.Fatalf("cleaner timeout = %s", target.JobCleanerTimeout)

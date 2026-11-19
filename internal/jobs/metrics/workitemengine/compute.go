@@ -61,6 +61,8 @@ type Item struct {
 	StartedAt   *time.Time
 	CompletedAt *time.Time
 	StoryPoints *float64
+	// Status is the normalized status category of work_items.status. Only the completion compute reads it.
+	Status string
 	// LinkedPRs are the pull requests linked to the item through work_graph_issue_pr. The daily completion
 	// compute reads them for churn_loc; no other compute does.
 	LinkedPRs []LinkedPR

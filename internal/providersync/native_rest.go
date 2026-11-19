@@ -753,7 +753,7 @@ func issueStatusAndType(state string, draft bool, labels []string) (string, stri
 	itemType := "issue"
 	for _, label := range labels {
 		switch strings.ToLower(strings.TrimSpace(label)) {
-		case "bug", "type: bug":
+		case "bug", "type: bug", "type:bug":
 			itemType = "bug"
 		case "story", "feature", "type: story":
 			itemType = "story"

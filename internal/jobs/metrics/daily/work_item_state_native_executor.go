@@ -257,7 +257,7 @@ func segmentWorkItemStatuses(
 	if len(transitions) == 0 {
 		return nil
 	}
-	ordered := orderWorkItemStateTransitions(transitions)
+	ordered := workitemmetrics.OrderTransitions(workItemMetricsTransitions(transitions))
 	sort.SliceStable(ordered, func(i, j int) bool { return ordered[i].OccurredAt.Before(ordered[j].OccurredAt) })
 
 	var segments []workItemStateSegment
@@ -292,67 +292,6 @@ func segmentWorkItemStatuses(
 		}
 	}
 	return filtered
-}
-
-// orderWorkItemStateTransitions orders transitions by occurred_at and walks the status chain inside one instant, so
-// the order never depends on the loader's row order. A tie with no chain keeps (from_status, to_status) string order
-// and never reads the item's current status: a past day's segments must not change when that status changes.
-func orderWorkItemStateTransitions(transitions []workItemStateTransition) []workItemStateTransition {
-	sorted := make([]workItemStateTransition, len(transitions))
-	copy(sorted, transitions)
-	sort.Slice(sorted, func(i, j int) bool {
-		left, right := sorted[i], sorted[j]
-		if !left.OccurredAt.Equal(right.OccurredAt) {
-			return left.OccurredAt.Before(right.OccurredAt)
-		}
-		if left.FromStatus != right.FromStatus {
-			return left.FromStatus < right.FromStatus
-		}
-		return left.ToStatus < right.ToStatus
-	})
-
-	ordered := make([]workItemStateTransition, 0, len(sorted))
-	prior, known := "", false
-	for start := 0; start < len(sorted); {
-		end := start + 1
-		for end < len(sorted) && sorted[end].OccurredAt.Equal(sorted[start].OccurredAt) {
-			end++
-		}
-		remaining := append([]workItemStateTransition(nil), sorted[start:end]...)
-		for len(remaining) > 0 {
-			pick := nextWorkItemStateTransitionInChain(remaining, prior, known)
-			ordered = append(ordered, remaining[pick])
-			prior, known = remaining[pick].ToStatus, true
-			remaining = append(remaining[:pick], remaining[pick+1:]...)
-		}
-		start = end
-	}
-	return ordered
-}
-
-// nextWorkItemStateTransitionInChain picks the transition that leaves the prior status, else a chain head (its
-// from_status is no other remaining transition's to_status), else the first in string order.
-func nextWorkItemStateTransitionInChain(remaining []workItemStateTransition, prior string, known bool) int {
-	if known {
-		for i, transition := range remaining {
-			if transition.FromStatus == prior {
-				return i
-			}
-		}
-	}
-	for i, transition := range remaining {
-		head := true
-		for j, other := range remaining {
-			if j != i && other.ToStatus == transition.FromStatus {
-				head = false
-				break
-			}
-		}
-		if head {
-			return i
-		}
-	}
-	return 0
 }
 
 // overlayWorkItemStateBlocked applies workitemmetrics.OverlayBlocked to this

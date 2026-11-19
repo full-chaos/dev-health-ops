@@ -75,11 +75,12 @@ type Item struct {
 }
 
 // Transition is one status transition, reduced to the fields
-// _calculate_flow_breakdown reads (compute_work_items.py:969). from_status is
-// absent because that function never reads it.
+// _calculate_flow_breakdown reads (compute_work_items.py:969) plus FromStatus,
+// which OrderTransitions reads to order transitions that share one occurred_at.
 type Transition struct {
 	WorkItemID string
 	OccurredAt time.Time
+	FromStatus string
 	ToStatus   string
 }
 

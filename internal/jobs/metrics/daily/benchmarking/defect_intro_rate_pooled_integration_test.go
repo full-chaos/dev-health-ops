@@ -46,9 +46,10 @@ func TestDefectIntroRateSeriesIsPooledOverNewItems(t *testing.T) {
 		if items > 0 {
 			rate = float64(bugs) / float64(items)
 		}
+		// items_completed 1 keeps every row live: a row of zeros only is a retraction row, not a day with no new item.
 		if err := admin.Exec(ctx, `INSERT INTO work_item_metrics_daily
-    (org_id, day, provider, work_scope_id, team_id, team_name, new_bugs_count, new_items_count, defect_intro_rate, computed_at)
-VALUES (?, ?, 'jira', ?, 'team-a', 'team-a', ?, ?, ?, ?)`, org, day, scope, bugs, items, rate, computed); err != nil {
+    (org_id, day, provider, work_scope_id, team_id, team_name, items_completed, new_bugs_count, new_items_count, defect_intro_rate, computed_at)
+VALUES (?, ?, 'jira', ?, 'team-a', 'team-a', 1, ?, ?, ?, ?)`, org, day, scope, bugs, items, rate, computed); err != nil {
 			t.Fatal(err)
 		}
 	}

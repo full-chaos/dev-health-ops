@@ -53,11 +53,10 @@ var metricDefinitions = map[string]MetricDefinition{
 		// Each item once in the organization (CHAOS-8863): legacy rows and the org view.
 		ExtraFilters: []string{rowview.OrgPredicate("work_item_metrics_daily", "")},
 	},
-	// The stored rate is new_bugs_count / new_items_count, 0 when there is no new item. A row with no new item adds 0
-	// to both sums, so a point with none has no value, never 0.
+	// The stored rate is new_bugs_count / new_items_count, 0 when there is no new item, and is not read. A row with no
+	// new item adds 0 to both sums, so a point with none has no value, never 0.
 	"defect_intro_rate": pooledRate(MetricDefinition{
 		Table:             "work_item_metrics_daily",
-		ValueColumn:       "defect_intro_rate",
 		ScopeSupport:      map[string]bool{ScopeTeam: true, ScopeGlobal: true},
 		InnerGroupColumns: []string{"team_id", "work_scope_id", "provider", "row_view"},
 		// Each item once in the organization (CHAOS-8863): legacy rows and the org view.

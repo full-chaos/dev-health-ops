@@ -33,8 +33,8 @@ type censusPin struct {
 var pinnedTableFiles = map[string]censusPin{
 	"internal/cigates/metricsproof/proof.go": {"bd1b94c430164bb9854ebf62b5ac652edb2fe757d4583dc360ffb41c250109ac",
 		"not a reader: names the table in the proof table map"},
-	"internal/jobs/metrics/daily/benchmarking/clickhouse.go": {"4a94b93a07b74918541a23fff908e862a7206c37c60391a1db2e12ad0db4f0a7",
-		"reader rule applied: pass_rate is pooled, passed_count over executedCases (passed_count + failed_count), no stored rate read; flake_rate and retry_dependency_rate are pooled over distinct_cases, a repo-day with a NULL rate or NULL counts in neither sum; line_coverage_pct is pooled over lines_total (not the test table)"},
+	"internal/jobs/metrics/daily/benchmarking/clickhouse.go": {"9464311c20588b17e82f85d6288b9f07fa5d19d1c223eb79871b0fb601db0397",
+		"reader rule applied: pass_rate is pooled, passed_count over executedCases (passed_count + failed_count), no stored rate read; flake_rate and retry_dependency_rate are pooled over distinct_cases, a repo-day with a NULL rate or NULL counts in neither sum; line_coverage_pct is pooled over lines_total and defect_intro_rate over new_items_count (not the test table)"},
 	"internal/jobs/metrics/daily/stale_team_keys_run.go": {"66f4b1c667d7396c8e904c814db52f2995cfab02d341ba5ad2c7fe5423f72bda",
 		"not a reader: the run-level retraction lists the table (a writer of marker rows)"},
 	"internal/jobs/metrics/daily/testops_native_clickhouse.go": {"4b27c97dd7dc144e00b7772a4e373a43e44903dbe7056893a3a29aa0d8ce1fac",

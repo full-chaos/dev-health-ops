@@ -349,6 +349,13 @@ in neither sum, whatever its stored percentage. A point made only of such reposi
 `branch_coverage_pct` is still the mean of the stored percentages of the repository-days: the daily rows hold no branch
 counts, so it is not pooled yet.
 
+### Benchmarking defect introduction rate
+
+The benchmarking point of `defect_intro_rate` for a scope and a day is the sum of the stored `new_bugs_count` over the
+sum of the stored `new_items_count` of the work item rows in the scope (one row per team, work scope and provider, the
+organization view). It is not the mean of the stored rates, so a row weighs by its new items. A row with no new item
+adds 0 to both sums. A point with no new item has no value, never 0.
+
 ### AI report charts of CI/CD durations and queue time
 
 The AI report charts of three CI/CD metrics are taken over the samples of the window's pipeline runs that the CI/CD daily

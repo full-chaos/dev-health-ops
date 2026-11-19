@@ -1218,3 +1218,16 @@ func TestPostureIntegrationShimMarkerOnAnUnterminatedLineIsStillTheShim(t *testi
 		t.Fatalf("unterminated marker: exit %d stdout=%q stderr=%q, want the refusal", res.code, res.stdout, res.stderr)
 	}
 }
+
+func TestPostureIntegrationCdpathDoesNotBreakTheSelfPath(t *testing.T) {
+	f := postureDemo(t)
+	paths := filepath.Join(t.TempDir(), "changed.txt")
+	if err := os.WriteFile(paths, []byte("internal/ok/ok_test.go\x00"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env := append(isolatedGoEnv(t), "PATH="+postureShimPath(t, filepath.Dir(goBinary(t)), "/usr/bin:/bin"), "CDPATH=.")
+	res := cmdSpec{dir: f.dir, env: env}.run("bash", "ci/posture_integration.sh", "--run", "--paths", paths)
+	if res.code != 2 || !strings.Contains(res.stderr, "go-slot.sh") {
+		t.Fatalf("CDPATH=. with a relative script path: exit %d stdout=%q stderr=%q, want the exit-2 slot refusal", res.code, res.stdout, res.stderr)
+	}
+}

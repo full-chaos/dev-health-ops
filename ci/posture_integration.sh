@@ -36,7 +36,7 @@ if [ -z "${POSTURE_CLEAN_ENV:-}" ]; then
   src="${BASH_SOURCE[0]}"
   dir="${src%/*}"
   [ "${dir}" != "${src}" ] || dir="."
-  self="$(cd "${dir}" && pwd)/${src##*/}"
+  self="$(CDPATH= cd "${dir}" && pwd)/${src##*/}"
   stub_mode=0
   for a in "$@"; do
     if [ "${a}" = "--test-runner" ]; then stub_mode=1; fi

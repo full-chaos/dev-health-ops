@@ -1693,12 +1693,13 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 			cursor.Phase = "done"
 			return nil
 		}
-		// The open phase re-reads runs older than the window; the next unit re-reads what a bound stop leaves, so the stop ends
-		// the phase like the rate floor does, without an inventory observation.
+		// The open phase re-reads runs older than the window; the next unit re-reads what a bound stop leaves, so the stop adds
+		// no inventory observation. It is published as a cap stop (open_runs_cap_reached): the open rows were not all re-read.
 		stopAtWalkBound := func() bool {
 			if githubTestsWalkRecords(cursor) < maxWalkRecords {
 				return false
 			}
+			cursor.OpenCapReached = true
 			logGitHubTestsWalkBound(cursor, claim, githubTestsOpenRunsWalkBoundComponent, maxWalkRecords)
 			return true
 		}

@@ -947,6 +947,9 @@ func TestGitHubTestsChunkRouteWalkBoundSkipsTheOpenPhase(t *testing.T) {
 	if got := githubTestsResultRecords(t, walk.final.Result); got != 1 {
 		t.Fatalf("records=%d, want the walk to stop at the bound of 1", got)
 	}
+	if capReached, _ := walk.final.Result[GitHubTestsResultKeyOpenCapReached].(bool); !capReached {
+		t.Fatalf("open_runs_cap_reached=%v, want true: the bound left the open phase unread", walk.final.Result[GitHubTestsResultKeyOpenCapReached])
+	}
 }
 
 // A stored cursor already at the bound ends without the open phase too.
@@ -1016,5 +1019,8 @@ func TestGitHubTestsChunkRouteOpenPhaseStopsAtTheWalkBound(t *testing.T) {
 	}
 	if complete, _ := walk.final.Result[GitHubTestsResultKeyReportsComplete].(bool); !complete {
 		t.Fatalf("reports_complete=%v, want true: the inventory finished before the bound", walk.final.Result[GitHubTestsResultKeyReportsComplete])
+	}
+	if capReached, _ := walk.final.Result[GitHubTestsResultKeyOpenCapReached].(bool); !capReached {
+		t.Fatalf("open_runs_cap_reached=%v, want true: the bound stopped the open phase before its last run", walk.final.Result[GitHubTestsResultKeyOpenCapReached])
 	}
 }

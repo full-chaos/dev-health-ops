@@ -1036,6 +1036,19 @@ func (derived GithubWorkItemDerivationContext) resolve(
 		"assignee_membership", "linked_issue", "author_membership",
 		"manual_fallback", "unassigned",
 	}
+	// CHAOS-14209: on a pull or merge request, an admin team's key (a team
+	// with no provider) is a manual mapping: a GitHub pull request's project
+	// id is its repository's name. It never outranks a native owner or a
+	// linked issue's donor, so it ranks after linked_issue. It stays before
+	// author_membership, so CHAOS-5649 rule 1 still holds when it wins.
+	if issueProject := bySource["issue_project"]; len(issueProject) > 0 && issueProject[0].TeamProvider == "" &&
+		GithubWorkItemDerivationIsPullOrMergeRequestType(subject.Provider, subject.Type) {
+		order = []string{
+			"native_team", "project_ownership", "repo_ownership",
+			"assignee_membership", "linked_issue", "issue_project", "author_membership",
+			"manual_fallback", "unassigned",
+		}
+	}
 	var primary *GithubWorkItemDerivationCandidate
 	var coOwners []GithubWorkItemDerivationCandidate
 	all := make([]GithubWorkItemDerivationCandidate, 0)

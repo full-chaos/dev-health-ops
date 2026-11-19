@@ -79,8 +79,8 @@ VALUES (?, ?, 4, 2, 2, 0.5, 0.5, 0.5, 1, 1, 2, 'team-1', 'svc-1', ?, ?)`, repo, 
 		if got := zeroPartitionState(t, ctx, conn, org, held, day); got.rows != 1 || got.retracted != 0 {
 			t.Errorf("(a) the repository the organization holds lost its key to a run with no partition: %+v, want its one live row untouched", got)
 		}
-		if got := zeroPartitionState(t, ctx, conn, org, gone, day); got.rows != 2 || got.retracted != 1 || !got.newest.Equal(clock) {
-			t.Errorf("(b) the repository the organization no longer holds: %+v, want a marker at the run's clock %s", got, clock)
+		if got := zeroPartitionState(t, ctx, conn, org, gone, day); got.rows != 2 || got.retracted != 1 || !got.newest.Equal(clock.Add(-time.Second)) {
+			t.Errorf("(b) the repository the organization no longer holds: %+v, want a marker one second below the run's clock %s", got, clock)
 		}
 	})
 

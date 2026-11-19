@@ -239,9 +239,9 @@ func staleKeyVersionAfter(table StaleKeyTable, at, stored time.Time) (time.Time,
 // instant of the run that writes it. Two runs of one repository and day can
 // overlap (distinct generations are distinct runs and nothing serialises their
 // execution), so for such a table the newest snapshot wins: the marker is
-// stamped with the run's snapshot, never raised above a stored row, and a key
-// whose stored row is not older than the snapshot is left alone (an equal
-// snapshot is a no-op).
+// stamped one unit below the run's snapshot, never raised above a stored row,
+// and a key whose stored row is not at least one unit older than the marker is
+// left alone (an equal snapshot is a no-op).
 var snapshotMarkerTables = map[string]struct{}{
 	teamkeytables.TestopsTestMetricsDaily.Table:     {},
 	teamkeytables.TestopsReleaseConfidence.Table:    {},
@@ -254,13 +254,48 @@ var snapshotMarkerTables = map[string]struct{}{
 }
 
 // staleKeySnapshot is the version a snapshot-stamped marker carries: the
-// snapshot cut to the unit of the table's computed_at column, the form a stored
-// row of the same instant holds.
+// snapshot cut to the unit of the table's computed_at column, minus one unit.
+// A row that a run of this snapshot or a newer one writes, also between the
+// read of the live keys and the marker's insert, is then strictly newer than the
+// marker for an argMax reader, for FINAL and for a ReplacingMergeTree merge:
+// no tie on computed_at, so no insert order decides which row is live.
 func staleKeySnapshot(table StaleKeyTable, at time.Time) (time.Time, bool) {
 	if _, ok := snapshotMarkerTables[table.Table]; !ok {
 		return time.Time{}, false
 	}
-	return at.UTC().Truncate(staleKeyVersionSteps[table.Table]), true
+	step := staleKeyVersionSteps[table.Table]
+	return at.UTC().Truncate(step).Add(-step), true
+}
+
+// staleKeySnapshotRetires is whether a run of snapshot at retires a key whose
+// newest stored row has computed_at stored: only a row at most two units below
+// the snapshot, so that its marker (one unit below) is strictly newer than it.
+// A row stored exactly one unit below the snapshot is deferred: the next run of
+// the repository-day with a later snapshot writes that marker.
+func staleKeySnapshotRetires(table StaleKeyTable, at, stored time.Time) bool {
+	step := staleKeyVersionSteps[table.Table]
+	return !stored.After(at.UTC().Truncate(step).Add(-2 * step))
+}
+
+// staleKeySnapshotDefers is whether a stale key that a run of snapshot at does
+// not retire is left only because its stored row is one unit below the snapshot.
+func staleKeySnapshotDefers(table StaleKeyTable, at, stored time.Time) bool {
+	return !staleKeySnapshotRetires(table, at, stored) && stored.Before(at.UTC().Truncate(staleKeyVersionSteps[table.Table]))
+}
+
+// StaleKeysSnapshotDeferredLogMessage is the line a snapshot-stamped run writes
+// when it leaves stale keys whose stored row is one unit below its snapshot:
+// their marker could not be strictly newer than the row and older than the
+// snapshot, so a later run writes it.
+const StaleKeysSnapshotDeferredLogMessage = "daily stale team keys: stale keys stored one unit below the snapshot are left to the next run"
+
+func logStaleKeysSnapshotDeferred(table StaleKeyTable, organizationID string, day, at time.Time, deferred int) {
+	if deferred == 0 {
+		return
+	}
+	slog.Default().Warn(StaleKeysSnapshotDeferredLogMessage,
+		"organization_id", organizationID, "target_day", staleKeyDay(day).Format("2006-01-02"),
+		"table", table.Table, "snapshot", at.UTC().Format(time.RFC3339), "deferred_keys", deferred)
 }
 
 func staleKeyDay(day time.Time) time.Time {
@@ -329,8 +364,8 @@ func supersedeStaleTeamKeys(
 	if _, err := staleKeyVersionAfter(table, computedAt, time.Time{}); err != nil {
 		return 0, err
 	}
-	if snapshot, ok := staleKeySnapshot(table, computedAt); ok {
-		return supersedeStaleKeysAtSnapshot(ctx, conn, table, organizationID, day, scope, produced, snapshot)
+	if _, ok := staleKeySnapshot(table, computedAt); ok {
+		return supersedeStaleKeysAtSnapshot(ctx, conn, table, organizationID, day, scope, produced, computedAt)
 	}
 	return supersedeStaleKeys(ctx, conn, table, organizationID, day, scope, produced,
 		func(_ staleKey, stored time.Time) time.Time {
@@ -400,12 +435,14 @@ func supersedeSynthesizedUserKeys(
 }
 
 // supersedeStaleKeysAtSnapshot is supersedeStaleKeys for a snapshot-stamped
-// table: the live keys of the scope that the run did not produce get a marker at
-// the snapshot, except a key whose stored row is not older than the snapshot
-// (a newer run, or this instant, already wrote it).
+// table: the live keys of the scope that the run did not produce get a marker
+// one unit below the snapshot at, except a key whose stored row is not at least
+// one unit older than that marker (a newer run, this instant or the unit just
+// below it wrote it). The keys stored exactly one unit below the snapshot are
+// counted and logged (StaleKeysSnapshotDeferredLogMessage).
 func supersedeStaleKeysAtSnapshot(
 	ctx context.Context, conn staleKeyConn, table StaleKeyTable, organizationID string, day time.Time,
-	scope staleKeyScope, produced []staleKey, snapshot time.Time,
+	scope staleKeyScope, produced []staleKey, at time.Time,
 ) (int, error) {
 	if err := table.Valid(); err != nil {
 		return 0, fmt.Errorf("%w: %v", ErrInvalidState, err)
@@ -420,14 +457,20 @@ func supersedeStaleKeysAtSnapshot(
 	if err != nil {
 		return 0, err
 	}
+	marker, _ := staleKeySnapshot(table, at)
 	var older []staleKey
+	deferred := 0
 	for _, key := range staleKeysOf(table, live, scope, false, produced) {
-		if versions[key.text()].Before(snapshot) {
+		stored := versions[key.text()]
+		if staleKeySnapshotRetires(table, at, stored) {
 			older = append(older, key)
+		} else if staleKeySnapshotDefers(table, at, stored) {
+			deferred++
 		}
 	}
+	logStaleKeysSnapshotDeferred(table, organizationID, day, at, deferred)
 	return writeStaleKeyZeroRows(ctx, conn, table, organizationID, day, older,
-		func(staleKey) time.Time { return snapshot }, carried)
+		func(staleKey) time.Time { return marker }, carried)
 }
 
 // supersedeStaleKeys is the rule of a family. versionOf gets a stale key and
@@ -595,6 +638,9 @@ type outsideRunRetraction struct {
 	// notInRun the repositories the organization holds that are in no
 	// partition of the run. Both sorted, each repository once.
 	superseded, notInRun []string
+	// deferred is the stale keys of a snapshot-stamped table whose stored row
+	// is one unit below the snapshot: no marker this run, a later run writes it.
+	deferred int
 }
 
 // retractStaleTeamKeysOutsideRun is the rule of a run of the whole
@@ -619,7 +665,10 @@ type outsideRunRetraction struct {
 //
 // The version is the clock, raised above every stored row of the day: the
 // row of zeros is then the newest row of its key, and for a reader that keeps
-// the newest generation of a repository it is the whole generation.
+// the newest generation of a repository it is the whole generation. A
+// snapshot-stamped table takes the marker of staleKeySnapshot instead (one unit
+// below the clock's snapshot) and retires only a key that
+// staleKeySnapshotRetires; deferred counts the keys it leaves to a later run.
 func retractStaleTeamKeysOutsideRun(
 	ctx context.Context, conn staleKeyConn, table StaleKeyTable, organizationID string, day time.Time,
 	owned staleKeyScope, readPresent func(context.Context) (staleKeyScope, error), clock time.Time,
@@ -671,11 +720,17 @@ func retractStaleTeamKeysOutsideRun(
 			result.kept++
 			continue
 		}
-		if snapshotStamped && !versions[key.text()].Before(snapshot) {
+		if snapshotStamped && !staleKeySnapshotRetires(table, clock, versions[key.text()]) {
+			if staleKeySnapshotDefers(table, clock, versions[key.text()]) {
+				result.deferred++
+			}
 			continue
 		}
 		outside = append(outside, key)
 		supersededRepositories[repository] = struct{}{}
+	}
+	if snapshotStamped {
+		logStaleKeysSnapshotDeferred(table, organizationID, day, clock, result.deferred)
 	}
 	if len(outside) == 0 {
 		return result, nil

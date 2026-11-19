@@ -62,8 +62,8 @@ func impersonationReadMounts() []parityMount {
 }
 
 // An admin with a live go-api impersonation row (its own bearer: a routed user access token or the signed fixture token) reads an enforced row: the answer
-// is the one the row gives with its cell off, served as the target organization (product rule 1). The platform row
-// keeps its legacy impersonation refusal.
+// is the one the row gives with its cell off, served as the target organization (product rule 1), with no decision point
+// call. The platform row keeps its legacy impersonation refusal after its role question only (decideLiveRow).
 func TestAnImpersonatingAdminsReadOnAnEnforcedRowEqualsTheLegacyAnswer(t *testing.T) {
 	rows := goAPIRows(t)
 	tokens := []struct {
@@ -94,8 +94,8 @@ func TestAnImpersonatingAdminsReadOnAnEnforcedRowEqualsTheLegacyAnswer(t *testin
 				if enforced.status != legacy.status || enforced.body != legacy.body {
 					t.Errorf("enforce-on %d %q, cells-off %d %q: want the cells-off answer", enforced.status, enforced.body, legacy.status, legacy.body)
 				}
-				if n := len(pdp.calls()); n != 0 {
-					t.Errorf("%d PDP calls, want 0: the decision point would judge the admin's own bearer, not the session", n)
+				if n, want := len(pdp.calls()), liveRowRoleCalls(row, false, ""); n != want {
+					t.Errorf("%d PDP calls, want %d: on a read only a platform row's role question is asked of the admin's own bearer", n, want)
 				}
 			})
 		}

@@ -27,7 +27,7 @@ func chartMetrics(definition ReportDefinition) []string {
 
 func TestDefaultPlanChartsEachFormLabelWithAProductMapping(t *testing.T) {
 	definition := decodeDefault(t, `{"scope":"org","dateRange":"last_7_days","metrics":["Deployment Frequency","Lead Time","Change Failure Rate","Time to Restore","Test Coverage","CI Success Rate"]}`)
-	if got, want := chartMetrics(definition), []string{"change_failure_rate", "success_rate"}; !reflect.DeepEqual(got, want) {
+	if got, want := chartMetrics(definition), []string{"deployments_count", "change_failure_rate", "success_rate"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("chart metrics = %v, want %v", got, want)
 	}
 	for _, chart := range definition.Charts {
@@ -36,6 +36,20 @@ func TestDefaultPlanChartsEachFormLabelWithAProductMapping(t *testing.T) {
 			chart.TimeRangeStart != "2026-11-11" || chart.TimeRangeEnd != "2026-11-18" {
 			t.Fatalf("chart = %#v", chart)
 		}
+	}
+}
+
+func TestDefaultPlanChartsDeployFrequencyUnderBothLabelsOnce(t *testing.T) {
+	definition := decodeDefault(t, `{"metrics":["Deploy Frequency","Deployment Frequency","deployments_count"]}`)
+	if got, want := chartMetrics(definition), []string{"deployments_count"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("chart metrics = %v, want %v", got, want)
+	}
+}
+
+func TestDefaultPlanSkipsLabelsWithoutAProductMetric(t *testing.T) {
+	definition := decodeDefault(t, `{"metrics":["Lead Time","Time to Restore","Test Coverage"]}`)
+	if got := definition.Charts; len(got) != 0 {
+		t.Fatalf("charts = %v, want none", got)
 	}
 }
 

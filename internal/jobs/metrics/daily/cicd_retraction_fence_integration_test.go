@@ -108,6 +108,16 @@ func TestCICDRecomputeRetiresADayItNoLongerCounts(t *testing.T) {
 	if _, pipelines, retracted := e.newest(org, fenceRepo, "2026-08-20"); retracted != 1 || pipelines != 0 {
 		t.Errorf("after the rerun: D's newest row holds %d pipelines, retracted %d; want the retraction row (0, 1)", pipelines, retracted)
 	}
+	// The retraction row carries no pooled sample of the row it retires (CHAOS-14025 columns): empty arrays, marker 0.
+	var runSamples, queueSamples uint64
+	var marker uint8
+	if err := e.conn.QueryRow(e.ctx, `SELECT length(pooled_run_minutes), length(pooled_queue_minutes), pooled_samples_stored
+FROM cicd_metrics_daily FINAL WHERE org_id = ? AND repo_id = toUUID(?) AND day = '2026-08-20'`, org, fenceRepo).Scan(&runSamples, &queueSamples, &marker); err != nil {
+		t.Fatal(err)
+	}
+	if runSamples != 0 || queueSamples != 0 || marker != 0 {
+		t.Errorf("the retraction row holds %d run and %d queue samples, marker %d; want none and 0", runSamples, queueSamples, marker)
+	}
 	if _, pipelines, retracted := e.newest(org, fenceRepo, "2026-08-21"); pipelines != 1 || retracted != 0 {
 		t.Errorf("after the rerun: D+1 holds %d pipelines (retracted %d), want 1 live", pipelines, retracted)
 	}

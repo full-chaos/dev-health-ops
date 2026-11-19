@@ -202,8 +202,9 @@ func (e *f3Env) columns(table string) []string {
 // compute runs the production pipeline and test executors for the org's repository and the day.
 func (e *f3Env) compute(org string, day time.Time) {
 	e.t.Helper()
-	// computed_at is whole seconds and a retiring marker carries the run's snapshot: a compute starts a unit after the row it may retire.
-	time.Sleep(1100 * time.Millisecond)
+	// computed_at is whole seconds and a retiring marker sits one unit below the run's snapshot: it retires only a row at least
+	// two units older than the snapshot, so a compute starts two units after the row it may retire.
+	time.Sleep(2100 * time.Millisecond)
 	repo := e.stack.repoID(e.t, org)
 	run := Run{ID: fmt.Sprintf("run-%s-%s-%d", org, day.Format(time.DateOnly), time.Now().UnixNano()), OrganizationID: org, TargetDay: day}
 	part := Partition{ID: "part-" + run.ID, RunID: run.ID, RepoIDs: []RepositoryID{RepositoryID(repo.String())}}

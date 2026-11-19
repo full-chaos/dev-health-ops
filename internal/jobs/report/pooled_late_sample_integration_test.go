@@ -29,8 +29,9 @@ var lateSampleCICDKeys = []lateSampleKey{
 	{"avg_queue_minutes", "cicd_metrics_daily"},
 }
 
-// writerTick passes one second, so a re-run's computed_at (a DateTime of seconds) is newer than the first run's.
-func writerTick() { time.Sleep(1100 * time.Millisecond) }
+// writerTick passes two seconds, so a re-run's computed_at (a DateTime of seconds) is newer than the first run's, and so is
+// the retiring marker of a snapshot-stamped table (one second below the re-run's snapshot).
+func writerTick() { time.Sleep(2100 * time.Millisecond) }
 
 // sameSampleSet compares the stored value of the repository-day with the chart of a window that holds only that day.
 func (e *pooledEnv) sameSampleSet(phase, org, repo, day string, keys []lateSampleKey) (moved map[string]bool, values map[string]string) {

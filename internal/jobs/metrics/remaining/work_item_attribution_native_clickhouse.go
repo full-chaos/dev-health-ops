@@ -260,7 +260,8 @@ func (executor *WorkItemAttributionExecutor) ComputeOrg(
 
 	// CHAOS-5078 codex r1 F2 fix: exclude any item that already has a
 	// work_item_team_attributions row computed TODAY (UTC), from any writer
-	// (daily, backstop or sync). Without this, an ownership change detected
+	// (the daily family or an earlier backstop run; the provider sync stores
+	// no attribution rows). Without this, an ownership change detected
 	// the same day daily already ran
 	// would make this backstop write a SECOND, newer row for the same
 	// (org, repo, work_item) -- work_item_team_attributions'
@@ -270,11 +271,13 @@ func (executor *WorkItemAttributionExecutor) ComputeOrg(
 	// max(computed_at)) fence picks whichever wrote LAST -- not necessarily
 	// the row correct for the day being read.
 	//
-	// This backstop's next run does NOT pick a deferred item up: the run
-	// marker published below advances over it, so the next run sees no
-	// change for its scope. The next daily run whose window holds the item,
-	// or the next sync of the item, rewrites it (ticket 14200 (filed
-	// separately)).
+	// A deferred item's row of today may predate the change this run saw, and
+	// no other writer is bound to fix it: the daily family rewrites only the
+	// open (or completed that day) items of a repository in its partition, so
+	// a done item, an item with no repository or one of a repository outside
+	// `repos` would keep that row. The run's markers are therefore held just
+	// before the earliest deferred row (workItemAttributionMarkerAt): the next
+	// run sees the change again if it came after that row, and rederives it.
 	coveredToday, err := executor.alreadyCoveredToday(ctx, orgID, now, affectedIDs)
 	if err != nil {
 		return outcome, err
@@ -303,11 +306,29 @@ func (executor *WorkItemAttributionExecutor) ComputeOrg(
 	if err != nil {
 		return outcome, err
 	}
-	if err := executor.publishRunMarkers(ctx, orgID, scope, now, runID); err != nil {
+	if err := executor.publishRunMarkers(ctx, orgID, scope, workItemAttributionMarkerAt(now, coveredToday), runID); err != nil {
 		return outcome, err
 	}
 	executor.observeRun(orgID, outcome)
 	return outcome, nil
+}
+
+// workItemAttributionMarkerHoldBack is the writer rank fold's largest offset
+// (workitemcontract.AttributionVersionFold: daily +2) plus one unit: a stored
+// computed_at minus this is before the instant the row was computed.
+const workItemAttributionMarkerHoldBack = 3 * workItemAttributionStampPrecision
+
+// workItemAttributionMarkerAt is the completed_at of a run's markers: now, or,
+// when the run deferred items, just before the earliest of their newest rows
+// of today (covered), so the markers never claim coverage the run did not give.
+func workItemAttributionMarkerAt(now time.Time, covered map[string]time.Time) time.Time {
+	markerAt := now
+	for _, computedAt := range covered {
+		if held := computedAt.Add(-workItemAttributionMarkerHoldBack); held.Before(markerAt) {
+			markerAt = held
+		}
+	}
+	return markerAt
 }
 
 // buildRowsAtEachItemsDay resolves every affected item with the ownership and
@@ -1497,12 +1518,13 @@ func LoadWorkItemDerivationFacts(
 
 // alreadyCoveredToday returns the subset of ids that already have a
 // work_item_team_attributions row computed on the SAME calendar day as now
-// (UTC), from any writer. See the CHAOS-5078 codex r1 F2 fix comment at this
-// function's call site in ComputeOrg for why this exclusion exists.
+// (UTC), from any writer, each with the computed_at of its newest such row.
+// See the CHAOS-5078 codex r1 F2 fix comment at this function's call site in
+// ComputeOrg for why this exclusion exists.
 func (executor *WorkItemAttributionExecutor) alreadyCoveredToday(
 	ctx context.Context, orgID string, now time.Time, ids map[string]struct{},
-) (map[string]struct{}, error) {
-	covered := map[string]struct{}{}
+) (map[string]time.Time, error) {
+	covered := map[string]time.Time{}
 	if len(ids) == 0 {
 		return covered, nil
 	}
@@ -1522,12 +1544,13 @@ func (executor *WorkItemAttributionExecutor) alreadyCoveredToday(
 }
 
 func (executor *WorkItemAttributionExecutor) collectAlreadyCoveredToday(
-	ctx context.Context, orgID string, now time.Time, ids []string, covered map[string]struct{},
+	ctx context.Context, orgID string, now time.Time, ids []string, covered map[string]time.Time,
 ) error {
 	rows, err := executor.conn.Query(ctx, `
-SELECT DISTINCT work_item_id
+SELECT work_item_id, max(computed_at)
 FROM work_item_team_attributions
-WHERE org_id = ? AND has(?, work_item_id) AND toDate(computed_at) = toDate(?)`,
+WHERE org_id = ? AND has(?, work_item_id) AND toDate(computed_at) = toDate(?)
+GROUP BY work_item_id`,
 		orgID, ids, now)
 	if err != nil {
 		return stepcause.Failure(stepcause.QueryAlreadyCoveredTodayAttributions, err)
@@ -1535,10 +1558,11 @@ WHERE org_id = ? AND has(?, work_item_id) AND toDate(computed_at) = toDate(?)`,
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var id string
-		if err := rows.Scan(&id); err != nil {
+		var computedAt time.Time
+		if err := rows.Scan(&id, &computedAt); err != nil {
 			return stepcause.Failure(stepcause.ScanAlreadyCoveredTodayRow, err)
 		}
-		covered[id] = struct{}{}
+		covered[id] = computedAt
 	}
 	return stepcause.Failure(stepcause.IterateAlreadyCoveredTodayRows, rows.Err())
 }

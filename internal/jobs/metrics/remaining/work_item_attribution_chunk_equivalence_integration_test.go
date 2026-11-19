@@ -97,7 +97,7 @@ func TestChunkedAttributionReadsEqualTheUnchunkedReads(t *testing.T) {
 	type result struct {
 		edges   []teamattribution.GithubWorkItemDerivationDependencyEdge
 		sources []string
-		covered map[string]struct{}
+		covered map[string]time.Time
 		donors  map[string]teamattribution.GithubWorkItemDerivationSubject
 		queries int
 	}

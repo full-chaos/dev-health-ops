@@ -224,12 +224,12 @@ func TestChaos14170RedGitHubBoardStatusOpenAfterRepositoryClose(t *testing.T) {
 		"changes":{"nodes":[{"field":{"name":"Status"},"previousValue":{"name":"Todo"},"newValue":{"name":"In Progress"},"createdAt":"2026-10-02T00:00:00Z"}]}}`), &payload); err != nil {
 		t.Fatal(err)
 	}
-	row, transitions, kept, err := normalizeGitHubProjectV2Item(claim, payload, "ghprojv2:acme/1", nil, chaos14170Now)
+	row, kept, err := normalizeGitHubProjectV2Item(claim, payload, "ghprojv2:acme/1", nil, chaos14170Now)
 	if err != nil || !kept {
 		t.Fatalf("kept=%v err=%v", kept, err)
 	}
 	merged := mergeGitHubProjectV2Rows(repository, githubWorkItemRows{
-		WorkItems: []githubWorkItemRow{row}, StatusTransitions: transitions,
+		WorkItems: []githubWorkItemRow{row},
 	})
 	if len(merged.WorkItems) != 1 {
 		t.Fatalf("work items=%d", len(merged.WorkItems))
@@ -273,6 +273,7 @@ func TestChaos14170RefuteGitHubPullRequestCloseThenReopen(t *testing.T) {
 }
 
 func TestChaos14170RefuteGitHubBoardDoneThenInProgress(t *testing.T) {
+	t.Skip("board status history: GitHub's ProjectV2Item has no `changes` (CHAOS-14195), so the board stores no transitions; the Status event at updatedAt is ticket 14184")
 	var payload gitHubProjectV2ItemPayload
 	if err := json.Unmarshal([]byte(`{"id":"PVTI_2","createdAt":"2026-10-01T00:00:00Z",
 		"content":{"__typename":"DraftIssue","id":"DI_1","title":"Draft",
@@ -283,15 +284,11 @@ func TestChaos14170RefuteGitHubBoardDoneThenInProgress(t *testing.T) {
 			{"field":{"name":"Status"},"previousValue":{"name":"Done"},"newValue":{"name":"In Progress"},"createdAt":"2026-10-03T00:00:00Z"}]}}`), &payload); err != nil {
 		t.Fatal(err)
 	}
-	row, transitions, kept, err := normalizeGitHubProjectV2Item(nativeTestClaim("github", "work-items"), payload, "ghprojv2:acme/1", nil, chaos14170Now)
+	row, kept, err := normalizeGitHubProjectV2Item(nativeTestClaim("github", "work-items"), payload, "ghprojv2:acme/1", nil, chaos14170Now)
 	if err != nil || !kept {
 		t.Fatalf("kept=%v err=%v", kept, err)
 	}
-	steps := []chaos14170Step{}
-	for _, tr := range transitions {
-		steps = append(steps, chaos14170Step{tr.OccurredAt, tr.ToStatus})
-	}
-	chaos14170CheckLastMatches(t, row.Status, steps)
+	chaos14170CheckLastMatches(t, row.Status, nil)
 }
 
 func TestChaos14170RefuteGitLabStateEventsCloseThenReopen(t *testing.T) {

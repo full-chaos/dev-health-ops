@@ -21,3 +21,10 @@ Prefer the supported GitHub App flow when the deployment exposes it.
 6. Verify repository coverage and freshness before using product results.
 
 Keep app IDs, client secrets, private keys, and installation credentials in the approved secret store. Do not paste them into the UI unless the supported flow explicitly requires that field.
+
+## Token scopes
+
+If the connection uses a classic personal access token, give the token these scopes:
+
+- `read:project`, to read GitHub Projects (v2) boards.
+- `user:email` or `read:user`, to read the email address of an issue or pull request author.

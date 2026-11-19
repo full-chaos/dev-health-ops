@@ -89,7 +89,7 @@ var loadedFrozenContentDigests = map[string]string{
 	"gitlab_chaos-gl__billing-service_r2_160d_c0_p3_t4_s1_raw.json.gz":                "b1c179b2bcbf445361180cf846ead3c09d9b60b455e485d5dddfcd23dcbe6ba5",
 	"jira_chaos-fx__PAY_r2_180d_c0_p4_t4_s1_raw.json.gz":                              "015b86bfc57d761e96ef6f6c05cd9753d694d8140cf4c8151b78ae5d7c595251",
 	"linear_chaos-fx__ENG_r2_160d_c0_p4_t4_s1_raw.json.gz":                            "1be37376992ab32cf18d99e2395d2be65e7fe869e8cbfa2c69ad5b225bef21bf",
-	"mixed_chaos-fixtures__shared-api_r18_180d_c0_p189_t8_s9440_raw.json.gz":          "b4ed6a5e8582cfe94932a74a0385a030287eae2c38b6e1dceb841518bde69f2e",
+	"mixed_chaos-fixtures__shared-api_r18_180d_c0_p189_t8_s9440_raw.json.gz":          "ca3e96edec602256056889ae062574098d26eefe5730a2268be3ef9de877398c",
 	"synthetic_acme__live-e2e_r1_14d_c6_p24_t10_s20260219_mg.json.gz":                 "cec7a2964706cca515736b4a3d96e8fe5a71cfc974e0cd2d75a9d3afed1578d3",
 	"synthetic_ci-metrics-executed-proof__repo_r1_7d_c5_p20_t1_s4276_raw.json.gz":     "1736c6081da3c8acea0bfb54ee82d9a32376ddf94e5fbaa35b0b11a569e4e0d6",
 }

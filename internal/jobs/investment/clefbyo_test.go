@@ -91,7 +91,7 @@ func (stub *clefBYO) build() *orgCategorizeBYO {
 	return &orgCategorizeBYO{
 		logger:  logger,
 		optedIn: func(context.Context, string) (bool, error) { return true, nil },
-		gate: func(context.Context, string) llmorgsettings.Decision {
+		gate: func(context.Context, string, llmorgsettings.ConfigSource) llmorgsettings.Decision {
 			return llmorgsettings.Decision{Kind: llmorgsettings.Own}
 		},
 		config: func(context.Context, string) (llmorgsettings.OrgConfig, bool, error) {

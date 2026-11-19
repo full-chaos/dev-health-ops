@@ -44,6 +44,13 @@ func CheckCredentials(ctx context.Context, provider, apiKey, baseURL string) (Co
 	return checkCredentials(ctx, provider, apiKey, baseURL, false)
 }
 
+// CheckStoredCredentials is CheckCredentials for a reader that has checked the
+// base url against the org's other stored keys: keyInBaseURL refuses the url
+// before any lookup, in the same order as CheckOrgConfig.
+func CheckStoredCredentials(ctx context.Context, provider, apiKey, baseURL string, keyInBaseURL bool) (ConfigReason, error) {
+	return checkCredentials(ctx, provider, apiKey, baseURL, keyInBaseURL)
+}
+
 // CheckOrgConfig is CheckConfig over an OrgConfig: its KeyInBaseURL flag (a key
 // the org stores other than the served one) refuses the url before any lookup.
 func CheckOrgConfig(ctx context.Context, cfg OrgConfig) (ConfigReason, error) {

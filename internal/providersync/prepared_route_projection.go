@@ -78,13 +78,6 @@ var preparedRouteSinkReadKeys = map[string]map[string]sinkReadSignal{
 		"priority":         {kind: sinkReadInt},
 		"ownership_reason": {kind: sinkReadEnum, values: teamAttributionOwnershipReasons},
 	},
-	"work_item_transitions": {"provider": {kind: sinkReadEnum, values: workItemTransitionProviders}},
-}
-
-// workItemTransitionProviders is every provider a work-item transition row
-// names; the GitLab and Linear transition sinks refuse a row of another.
-var workItemTransitionProviders = map[string]bool{
-	"github": true, "gitlab": true, "jira": true, "linear": true,
 }
 
 // teamAttributionOwnershipReasons is every value a team-attribution row's

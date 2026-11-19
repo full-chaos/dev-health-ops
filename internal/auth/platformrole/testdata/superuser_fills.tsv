@@ -6,8 +6,6 @@ internal/api/policy/accessroute_user.go	PGStore.AccessUser	1	switched read (acce
 internal/api/policy/store.go	PGStore.UserState	1	switched read (userStateSQL)
 internal/api/session/routes.go	handlers.switchOrg	1	switched read (userColumnsFor "u")
 internal/api/session/store.go	scanUsers	1	switched read (userColumnsFor, every caller)
-internal/api/sso/oauth.go	handlers.oauthProvisionUser	1	switched read (signInUser)
-internal/api/sso/provision.go	handlers.provisionOrGetUser	1	switched read (signInUser)
 internal/apiservice/admin/guards.go	superuserTx.refuse	1	switched read (targetsSuperuserSQL)
 internal/apiservice/admin/orgs_provision.go	pgStore.isSuperuser	1	switched read (isSuperuserSQL)
 internal/apiservice/admin/store.go	pgStore.userByID	1	switched read (targetUserSQL)

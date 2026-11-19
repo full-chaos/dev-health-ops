@@ -6,6 +6,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
 
@@ -84,5 +87,23 @@ func TestDelegatedDecisionEventTypeIsAppendOnly(t *testing.T) {
 	if EventAuthorizeDelegatedDecided != "auth.authorize.delegated_decided" || !appendOnlyEventTypes[EventAuthorizeDelegatedDecided] {
 		t.Fatalf("%q append-only=%v, want auth.authorize.delegated_decided append-only", EventAuthorizeDelegatedDecided,
 			appendOnlyEventTypes[EventAuthorizeDelegatedDecided])
+	}
+}
+
+func TestAppendAllKeepsTheCanceledBeginClass(t *testing.T) {
+	pool, err := pgxpool.New(context.Background(), "postgres://u:p@127.0.0.1:1/db")
+	if err != nil {
+		t.Fatalf("pool: %v", err)
+	}
+	t.Cleanup(pool.Close)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	ev := AuditEvent{EventType: EventAuthorizeHighRiskDecided, Outcome: OutcomeDenied, Attributes: highRiskAttrs()}
+	err = AppendAll(ctx, pool, authschema.ValidatedIdentifier{}, ev)
+	if !errors.Is(err, ErrMutationFailed) || !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want ErrMutationFailed wrapping context.Canceled", err)
+	}
+	if got := logging.ErrorClass(err); got != logging.ErrorClassCanceled {
+		t.Fatalf("error class = %q, want %q", got, logging.ErrorClassCanceled)
 	}
 }

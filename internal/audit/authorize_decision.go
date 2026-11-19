@@ -53,7 +53,7 @@ func AppendAll(ctx context.Context, pool *pgxpool.Pool, schema authschema.Valida
 	}
 	tx, err := pool.Begin(ctx)
 	if err != nil {
-		return fmt.Errorf("%w: beginning the transaction", ErrMutationFailed)
+		return fmt.Errorf("%w: beginning the transaction: %w", ErrMutationFailed, err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	if err := armTx(ctx, tx); err != nil {
@@ -65,7 +65,7 @@ func AppendAll(ctx context.Context, pool *pgxpool.Pool, schema authschema.Valida
 		}
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("%w: committing", ErrMutationFailed)
+		return fmt.Errorf("%w: committing: %w", ErrMutationFailed, err)
 	}
 	return nil
 }

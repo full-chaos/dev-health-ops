@@ -362,3 +362,28 @@ func TestDerivedRepoOwnershipEvidenceIsCarriedWithTheTeamID(t *testing.T) {
 	org.assertOpenOwner("acme/repo-1", carried[0])
 	org.assertOpenOwner("acme/repo-2", carried[0])
 }
+
+// D-cell (CHAOS-14169 on CHAOS-9349), against the store: one sync writes a
+// relates_to and a blocks edge of the same pull request and donor at one
+// last_synced. The walk keeps the inheritable edge, the claim is derived, and
+// the recorded dependency key is the relates_to edge, not the blocks edge.
+func TestDerivedRepoOwnershipRecordsTheEdgeTheTieRuleKeeps(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	org := newRetractionGuardOrg(t, ctx, conn, "chaos-9349-tie", "acme/repo-r")
+	seedTeamProjectOwnership(t, ctx, conn, org.orgID, "jira", "jira-proj-d", "team-d", true, org.at)
+	seedWorkItemOfType(t, ctx, conn, org.orgID, "ghpr:acme/repo-r#1", "github", "pr", org.repos["acme/repo-r"], "", org.at)
+	seedWorkItem(t, ctx, conn, org.orgID, "jira:D-1", "jira", uuid.Nil, "jira-proj-d", org.at)
+	seedWorkItemDependency(t, ctx, conn, org.orgID, "ghpr:acme/repo-r#1", "jira:D-1", "blocks", org.at)
+	seedWorkItemDependency(t, ctx, conn, org.orgID, "ghpr:acme/repo-r#1", "jira:D-1", "relates_to", org.at)
+	org.mustDerive(1, 0, 0)
+	org.assertOpenOwner("acme/repo-r", "team-d")
+	var dependency []string
+	for _, key := range org.liveEvidence("acme/repo-r", "team-d") {
+		if strings.HasPrefix(key, "dependency ") {
+			dependency = append(dependency, key)
+		}
+	}
+	if want := `dependency ["ghpr:acme/repo-r#1","jira:D-1","relates_to"]`; len(dependency) != 1 || dependency[0] != want {
+		t.Fatalf("recorded dependency keys = %v, want [%s]", dependency, want)
+	}
+}

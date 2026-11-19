@@ -4,6 +4,7 @@ import (
 	"reflect"
 	"sort"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -206,5 +207,35 @@ func TestEvidenceWitnessAgreesWithIssuePRLinks(t *testing.T) {
 		if got := held.holds(missing); got != want {
 			t.Errorf("%v: providersync witness %v, issueprlinks %v", cell, got, want)
 		}
+	}
+}
+
+// D-cell (CHAOS-14169 on CHAOS-9349): a tied inheritable and non-inheritable
+// edge of one (source, donor) pair: the walk keeps the inheritable edge
+// (teamattribution.LatestDependencyEdgeWins), and the chain records that
+// edge's key, never the other one, in both input orders.
+func TestDerivationRecordsTheEdgeTheTieRuleKeeps(t *testing.T) {
+	repo := uuid.NewString()
+	at := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
+	links := []TeamRepoOwnershipProjectLink{{Provider: "jira", ProjectID: "P", TeamID: "team-p", IsPrimary: true}}
+	items := []TeamRepoOwnershipWorkItem{
+		{WorkItemID: "ghpr:a/r#1", Provider: "github", Type: "pr", RepoID: repo},
+		{WorkItemID: "jira:P-1", Provider: "jira", Type: "issue", ProjectID: "P"},
+	}
+	inheritable := TeamRepoOwnershipDependencyEdge{SourceWorkItemID: "ghpr:a/r#1", TargetWorkItemID: "jira:P-1", RelationshipType: "relates_to", LastSynced: at}
+	blocking := TeamRepoOwnershipDependencyEdge{SourceWorkItemID: "ghpr:a/r#1", TargetWorkItemID: "jira:P-1", RelationshipType: "blocks", LastSynced: at}
+	for name, edges := range map[string][]TeamRepoOwnershipDependencyEdge{
+		"inheritable first": {inheritable, blocking},
+		"blocking first":    {blocking, inheritable},
+	} {
+		t.Run(name, func(t *testing.T) {
+			derivation := deriveTeamRepoOwnership("org", links, items, edges, nil, nil)
+			got := evidenceInputs(derivation.Evidence[teamRepoOwnershipClaimRef{TeamID: "team-p", RepoID: repo}])
+			want := []string{`dependency ["ghpr:a/r#1","jira:P-1","relates_to"]`, `project_link ["jira","P","team-p"]`,
+				`work_item ["","jira:P-1"]`, `work_item ["` + repo + `","ghpr:a/r#1"]`}
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("evidence\n got  %v\n want %v", got, want)
+			}
+		})
 	}
 }

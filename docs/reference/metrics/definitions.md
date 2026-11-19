@@ -673,11 +673,11 @@ A Linear or Jira work-items unit names every project it saw by an ensure row in 
 
 One work item (provider and id) can be stored under two repository ids. Example: a GitHub issue that the repository sync stores under its repository and that the Projects v2 board sync stores under no repository. Each stored row is a copy. The current copy is the copy with the newest `last_synced`; on a tie, the copy of the lower repository id.
 
-`work_item_cycle_times`, `work_item_metrics_daily` and `work_item_user_metrics_daily` decide on the current copy. An item counts on a day only when its current copy belongs to that day: created before the day ends, and not done before the day starts. An older copy never makes the item count. So an item whose current copy is done with no completion time counts on no day, and an item completes once, on its current copy's completion day.
+`work_item_cycle_times`, `work_item_metrics_daily` and `work_item_user_metrics_daily` decide on the current copy. An item counts on a day only when its current copy belongs to that day: created before the day ends, and not done before the day starts. An older copy never makes the item count. So an item whose current copy is done with no completion time counts on no day, and an item completes once, on its current copy's completion day. The request-time read of the work items linked to a repository (Home and Quadrant under a repository filter) decides on the same current copy.
 
 The scope view (`row_view = 'scope'`) applies the same rule inside each work scope: the current copy of the item in that scope. An item with copies in two scopes still counts in each scope (the sum over scopes can be more than the organization total). So the older copy's scope can count a completion that the organization view and `work_item_cycle_times` do not count.
 
-Not yet on this rule: `work_item_state_durations_daily`, `estimate_coverage_metrics_daily`, and the request-time read of the work items linked to a repository. These still choose, for each day, the newest copy among the copies that belong to that day. For an item with two copies, they can differ from the tables above.
+Not yet on this rule: `work_item_state_durations_daily` and `estimate_coverage_metrics_daily`. These still choose, for each day, the newest copy among the copies that belong to that day. For an item with two copies, they can differ from the tables above.
 
 ## Work-item person rows: persons in more than one team
 

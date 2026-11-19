@@ -31,9 +31,11 @@ func NewerItemVersion(candidate, current ItemVersion) bool {
 // OncePerProviderAndID is the rule for one work item that is stored under two
 // repository ids: the item counts once, and the row with the newest last_synced is
 // the item (on a tie, the lower repository id). It returns the indexes of the kept
-// rows, in the order the items first appear, and the number of rows dropped. It is
-// applied to the rows of ONE day (the rows that pass the day's predicate), as the
-// daily job does: a version that does not pass the day's predicate does not compete.
+// rows, in the order the items first appear, and the number of rows dropped. Over
+// every row of the items, with no day predicate, the kept row is the item's current
+// copy. The daily work item tables and the request-time read of a repository's
+// linked items count an item on a day only when its current copy passes the day's
+// predicate: an older copy never makes the item count.
 func OncePerProviderAndID(versions []ItemVersion) (kept []int, duplicates int) {
 	return oncePer(versions, false)
 }

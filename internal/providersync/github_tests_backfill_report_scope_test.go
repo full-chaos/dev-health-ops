@@ -2,6 +2,7 @@ package providersync
 
 import (
 	"context"
+	"net/url"
 	"slices"
 	"strings"
 	"testing"
@@ -198,8 +199,19 @@ func TestGitHubTestsBackfillTransientReportLossStaysALoudGap(t *testing.T) {
 
 // githubTestsBackfillChunkReads runs one backfill chunk over fixture run 9001
 // (listed only when its created_at is inside the chunk's created qualifier) and
-// returns how many times the chunk read the run's reports.
-func githubTestsBackfillChunkReads(t *testing.T, since, before time.Time, created, updated time.Time) int {
+// returns how many times the chunk read the run's reports. next is the claim's
+// BackfillNext (nil = tiling not known).
+func githubTestsBackfillChunkReads(t *testing.T, since, before time.Time, next *BackfillNextWindow, created, updated time.Time) int {
+	t.Helper()
+	lists, _ := githubTestsBackfillChunkReadsAt(t, since, before, next, created, updated, updated.Add(time.Hour))
+	return lists
+}
+
+// githubTestsBackfillChunkReadsAt is githubTestsBackfillChunkReads at a given
+// normalize time; it also returns the runs listings' raw queries.
+func githubTestsBackfillChunkReadsAt(
+	t *testing.T, since, before time.Time, next *BackfillNextWindow, created, updated, normalizedAt time.Time,
+) (int, []string) {
 	t.Helper()
 	doer := githubTestsReportWindowDoerFor(t, updated.UTC().Format(time.RFC3339))
 	doer.createdAt = created.UTC().Format(time.RFC3339)
@@ -207,25 +219,38 @@ func githubTestsBackfillChunkReads(t *testing.T, since, before time.Time, create
 	doer.filterCreated = true
 	claim := githubTestsWindowClaim(t, since, before)
 	claim.Mode = "backfill"
-	_, cases := collectGitHubTestsReportRows(t, doer, claim, updated.Add(time.Hour))
+	claim.BackfillNext = next
+	_, cases := collectGitHubTestsReportRows(t, doer, claim, normalizedAt)
 	lists, zips := githubTestsReportReads(doer)
 	if lists != zips || (lists > 0) != (cases > 0) {
 		t.Fatalf("chunk [%s, %s): artifact lists=%d downloads=%d cases=%d, want a whole read or none",
 			since.Format(time.RFC3339), before.Format(time.RFC3339), lists, zips, cases)
 	}
-	return lists
+	return lists, doer.runQueries
+}
+
+// githubTestsBackfillNextOf is the BackfillNext the claim SQL gives chunk index
+// of the tiling edges: the next chunk's before, or none for the last chunk.
+func githubTestsBackfillNextOf(edges []time.Time, index int) *BackfillNextWindow {
+	if index+2 >= len(edges) {
+		return &BackfillNextWindow{}
+	}
+	nextBefore := edges[index+2]
+	return &BackfillNextWindow{BeforeAt: &nextBefore}
 }
 
 // githubTestsBackfillTotalReads sums the reads of one run over contiguous
-// backfill chunks of one width starting at start.
+// backfill chunks of one width starting at start, each claim knowing the tiling.
 func githubTestsBackfillTotalReads(t *testing.T, start time.Time, width time.Duration, chunks int, created, updated time.Time) (int, []int) {
 	t.Helper()
-	perChunk := make([]int, chunks)
+	edges := make([]time.Time, chunks+1)
+	for index := range edges {
+		edges[index] = start.Add(time.Duration(index) * width)
+	}
+	perChunk := githubTestsBackfillReadsOverWindows(t, edges, created, updated)
 	total := 0
-	for index := range chunks {
-		since := start.Add(time.Duration(index) * width)
-		perChunk[index] = githubTestsBackfillChunkReads(t, since, since.Add(width), created, updated)
-		total += perChunk[index]
+	for _, reads := range perChunk {
+		total += reads
 	}
 	return total, perChunk
 }
@@ -309,15 +334,14 @@ func TestGitHubTestsBackfillReadsEachRunOnceAcrossContiguousChunks(t *testing.T)
 				}
 			}
 		}
-		// Residual (no unit knows it is the last chunk): a run listed by the
-		// last chunk's next window and updated past the last chunk is read by
-		// no backfill chunk; that window's own unit reads it.
+		// CHAOS-14222: the last chunk knows it is last, so a run it lists and
+		// that is updated past the last chunk is read once, by the last chunk.
 		created, updated := shape.start.Add(3*shape.width+shape.width/2), shape.start.Add(chunks*shape.width+time.Hour)
 		total, perChunk := githubTestsBackfillTotalReads(t, shape.start, shape.width, chunks, created, updated)
-		t.Logf("RESIDUAL %s created=%s updated=%s: reads per chunk=%v total=%d", shape.name,
+		t.Logf("CELL %s past the last chunk created=%s updated=%s: reads per chunk=%v total=%d", shape.name,
 			created.Format(time.RFC3339), updated.Format(time.RFC3339), perChunk, total)
-		if total != 0 {
-			t.Errorf("%s residual: reads per chunk=%v, want 0 (left to the window of its updated_at)", shape.name, perChunk)
+		if !slices.Equal(perChunk, []int{0, 0, 0, 1}) {
+			t.Errorf("%s past the last chunk: reads per chunk=%v, want [0 0 0 1] (the last chunk reads it)", shape.name, perChunk)
 		}
 	}
 }
@@ -337,43 +361,52 @@ func TestGitHubTestsBackfillRunUpdatedAtTheBoundaryIsReadOnceByTheLaterChunk(t *
 }
 
 // githubTestsBackfillReadsOverWindows sums one run's reads over contiguous
-// backfill chunks of any widths (edges[i], edges[i+1]).
+// backfill chunks of any widths (edges[i], edges[i+1]); each claim carries the
+// tiling the claim SQL gives it (the real next chunk, or last).
 func githubTestsBackfillReadsOverWindows(t *testing.T, edges []time.Time, created, updated time.Time) []int {
 	t.Helper()
 	perChunk := make([]int, len(edges)-1)
 	for index := range perChunk {
-		perChunk[index] = githubTestsBackfillChunkReads(t, edges[index], edges[index+1], created, updated)
+		perChunk[index] = githubTestsBackfillChunkReads(t, edges[index], edges[index+1], githubTestsBackfillNextOf(edges, index), created, updated)
 	}
 	return perChunk
 }
 
-// RESIDUAL (ticket 14222): a chunk takes the next chunk's listing floor from a
-// next window of its OWN width. The planner's last chunk can be shorter
-// (a range [D, D+8d) gives [D, D+7d) and [D+7d, D+8d)), and its own floor is
-// later. A run created between the two floors and updated inside the last
-// chunk is read by no chunk. WANT = today's value 0; a fix flips it.
-func TestGitHubTestsBackfillRESIDUALShorterLastChunkReadsNothing(t *testing.T) {
+// githubTestsBackfillReadsOverWindowsUnknownTiling is the same walk with no
+// tiling on any claim (BackfillNext nil: an in-process or old claim).
+func githubTestsBackfillReadsOverWindowsUnknownTiling(t *testing.T, edges []time.Time, created, updated time.Time) []int {
+	t.Helper()
+	perChunk := make([]int, len(edges)-1)
+	for index := range perChunk {
+		perChunk[index] = githubTestsBackfillChunkReads(t, edges[index], edges[index+1], nil, created, updated)
+	}
+	return perChunk
+}
+
+// CHAOS-14222: the planner's last chunk can be shorter (a range [D, D+8d)
+// gives [D, D+7d) and [D+7d, D+8d)), so its own listing floor is later than a
+// same-width guess. A run created between the two floors and updated inside the
+// last chunk is not listed by the last chunk; the first chunk knows the real
+// next floor and reads it. Was RESIDUAL...ShorterLastChunkReadsNothing ([0 0]).
+func TestGitHubTestsBackfillShorterLastChunkReadsOnce(t *testing.T) {
 	t.Parallel()
 	d := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
 	edges := []time.Time{d, d.AddDate(0, 0, 7), d.AddDate(0, 0, 8)}
 	created, updated := d.AddDate(0, 0, 3), d.AddDate(0, 0, 7).Add(12*time.Hour)
 	perChunk := githubTestsBackfillReadsOverWindows(t, edges, created, updated)
-	t.Logf("RESIDUAL shorter last chunk: chunks [%s,%s) [%s,%s) created=%s updated=%s reads per chunk=%v",
+	t.Logf("CELL shorter last chunk: chunks [%s,%s) [%s,%s) created=%s updated=%s reads per chunk=%v",
 		edges[0].Format(time.RFC3339), edges[1].Format(time.RFC3339), edges[1].Format(time.RFC3339), edges[2].Format(time.RFC3339),
 		created.Format(time.RFC3339), updated.Format(time.RFC3339), perChunk)
-	if !slices.Equal(perChunk, []int{0, 0}) {
-		t.Errorf("reads per chunk=%v, want today's residual [0 0]", perChunk)
+	if !slices.Equal(perChunk, []int{1, 0}) {
+		t.Errorf("reads per chunk=%v, want [1 0]: the first chunk is the last one that lists the run", perChunk)
 	}
 }
 
-// RESIDUAL (ticket 14222): a chunk a whole day or more shorter than the chunk
-// after it computes a later next floor than the next chunk really uses, so a
-// run created between the two floors and updated in the next chunk is read by
-// both. WANT = today's value 2 (the second read writes no new row: the
-// integration cell TestGitHubTestsBackfillIntegrationRESIDUALSecondReadWritesNoNewRow).
-// The planner's first chunk runs from since to the 7th date after it, so it is
-// less than one day short and the DateOnly floor absorbs it: 1 read.
-func TestGitHubTestsBackfillRESIDUALShorterFirstChunkReadsTwice(t *testing.T) {
+// CHAOS-14222: a chunk a whole day or more shorter than the chunk after it
+// takes the real next floor, so a run the next chunk lists is left to it: one
+// read. Was RESIDUAL...ShorterFirstChunkReadsTwice ([1 1]). The planner's own
+// first chunk (less than one day short) reads once either way.
+func TestGitHubTestsBackfillShorterFirstChunkReadsOnce(t *testing.T) {
 	t.Parallel()
 	a := time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC)
 	for _, cell := range []struct {
@@ -383,15 +416,143 @@ func TestGitHubTestsBackfillRESIDUALShorterFirstChunkReadsTwice(t *testing.T) {
 		want             []int
 	}{
 		{"1-day chunk before a 7-day chunk", []time.Time{a, a.AddDate(0, 0, 1), a.AddDate(0, 0, 8)},
-			a.Add(-12 * time.Hour), a.AddDate(0, 0, 3), []int{1, 1}},
+			a.Add(-12 * time.Hour), a.AddDate(0, 0, 3), []int{0, 1}},
 		{"planner first chunk from 12:00 before a 7-day chunk", []time.Time{a.Add(12 * time.Hour), a.AddDate(0, 0, 7), a.AddDate(0, 0, 14)},
 			a.Add(-12 * time.Hour), a.AddDate(0, 0, 10), []int{1, 0}},
 	} {
 		perChunk := githubTestsBackfillReadsOverWindows(t, cell.edges, cell.created, cell.updated)
-		t.Logf("RESIDUAL %s: created=%s updated=%s reads per chunk=%v", cell.name,
+		t.Logf("CELL %s: created=%s updated=%s reads per chunk=%v", cell.name,
 			cell.created.Format(time.RFC3339), cell.updated.Format(time.RFC3339), perChunk)
 		if !slices.Equal(perChunk, cell.want) {
-			t.Errorf("%s: reads per chunk=%v, want today's value %v", cell.name, perChunk, cell.want)
+			t.Errorf("%s: reads per chunk=%v, want %v", cell.name, perChunk, cell.want)
+		}
+	}
+}
+
+// CHAOS-14222 (acp condition 4): a claim with no tiling (BackfillNext nil: an
+// in-process or old claim) keeps the same-width rule of ops #6587, so the two
+// shapes above read as before: [0 0] and [1 1].
+func TestGitHubTestsBackfillUnknownTilingKeepsTheSameWidthRule(t *testing.T) {
+	t.Parallel()
+	d := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	a := time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC)
+	for _, cell := range []struct {
+		name             string
+		edges            []time.Time
+		created, updated time.Time
+		want             []int
+	}{
+		{"shorter last chunk", []time.Time{d, d.AddDate(0, 0, 7), d.AddDate(0, 0, 8)}, d.AddDate(0, 0, 3), d.AddDate(0, 0, 7).Add(12 * time.Hour), []int{0, 0}},
+		{"1-day chunk before a 7-day chunk", []time.Time{a, a.AddDate(0, 0, 1), a.AddDate(0, 0, 8)}, a.Add(-12 * time.Hour), a.AddDate(0, 0, 3), []int{1, 1}},
+		{"past the last chunk", []time.Time{d, d.AddDate(0, 0, 7), d.AddDate(0, 0, 8)}, d.AddDate(0, 0, 7).Add(6 * time.Hour), d.AddDate(0, 0, 8).Add(time.Hour), []int{0, 0}},
+	} {
+		perChunk := githubTestsBackfillReadsOverWindowsUnknownTiling(t, cell.edges, cell.created, cell.updated)
+		t.Logf("CELL nil tiling %s: reads per chunk=%v", cell.name, perChunk)
+		if !slices.Equal(perChunk, cell.want) {
+			t.Errorf("nil tiling %s: reads per chunk=%v, want the same-width rule %v", cell.name, perChunk, cell.want)
+		}
+	}
+}
+
+// CHAOS-14222: over the planner's real tilings (resolveBackfillWindows for
+// github/tests: a short first chunk, 7-day interior chunks, a short last chunk,
+// a lone short chunk), every run some chunk lists (created from the first
+// chunk's floor to the range's before) and updated at or after the range's
+// since is read exactly once.
+func TestGitHubTestsBackfillMixedWidthTilingReadsEachRunOnce(t *testing.T) {
+	t.Parallel()
+	at := func(day, hour int) time.Time { return time.Date(2026, 7, day, hour, 0, 0, 0, time.UTC) }
+	for _, tiling := range []struct {
+		name  string
+		edges []time.Time
+	}{
+		{"[07-01, 07-09)", []time.Time{at(1, 0), at(8, 0), at(9, 0)}},
+		{"[07-01 12:00, 07-17 06:00)", []time.Time{at(1, 12), at(8, 0), at(15, 0), at(17, 6)}},
+		{"[07-01, 07-15)", []time.Time{at(1, 0), at(8, 0), at(15, 0)}},
+		{"[07-01 06:00, 07-01 18:00)", []time.Time{at(1, 6), at(1, 18)}},
+	} {
+		edges := tiling.edges
+		first, last := edges[0], edges[len(edges)-1]
+		floorOf := func(index int) time.Time {
+			floor, err := time.Parse(time.DateOnly, githubTestsArtifactRunsCreatedFrom(Claim{Unit: Unit{SinceAt: &edges[index], BeforeAt: &edges[index+1]}}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			return floor
+		}
+		firstFloor := floorOf(0)
+		created := []time.Time{firstFloor, firstFloor.Add(time.Hour), first.Add(-12 * time.Hour)}
+		var updated []time.Time
+		for index := 0; index+1 < len(edges); index++ {
+			since, before := edges[index], edges[index+1]
+			floor, mid := floorOf(index), since.Add(before.Sub(since)/2)
+			created = append(created, floor, floor.Add(-time.Second), mid, before.Add(-2*time.Hour), since)
+			updated = append(updated, since, mid, before.Add(-time.Second), before.AddDate(0, 0, 3))
+		}
+		updated = append(updated, last, last.Add(time.Hour), last.AddDate(0, 0, 9))
+		cells := 0
+		for _, c := range created {
+			if c.Before(firstFloor) || c.After(last) {
+				continue
+			}
+			for _, u := range updated {
+				if u.Before(first) || c.Add(time.Minute).After(u) {
+					continue
+				}
+				perChunk := githubTestsBackfillReadsOverWindows(t, edges, c, u)
+				total := 0
+				for _, reads := range perChunk {
+					total += reads
+				}
+				cells++
+				if total != 1 {
+					t.Errorf("%s created=%s updated=%s: reads per chunk=%v, want exactly 1", tiling.name,
+						c.Format(time.RFC3339), u.Format(time.RFC3339), perChunk)
+				}
+			}
+		}
+		t.Logf("CELL %s: %d runs, each read once", tiling.name, cells)
+	}
+}
+
+// CHAOS-14222 (acp condition 1). The last chunk reads with no upper bound on
+// updated_at, but only runs its runs listing returns, and that listing is
+// created from its floor to its own before (githubTestsArtifactRunQuery). A
+// backfill that ended weeks ago reads a run created inside it and updated
+// today, and does not read a run created after it or before its floor.
+func TestGitHubTestsBackfillLastChunkReadsOnlyRunsCreatedInItsListing(t *testing.T) {
+	t.Parallel()
+	d := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	since, before := d, d.AddDate(0, 0, 1)
+	now := d.AddDate(0, 0, 40)
+	last := &BackfillNextWindow{}
+	for _, cell := range []struct {
+		name    string
+		created time.Time
+		want    int
+	}{
+		{"created inside the chunk", d.Add(12 * time.Hour), 1},
+		{"created at the floor", d.AddDate(0, 0, -1), 1},
+		{"created before the floor", d.AddDate(0, 0, -1).Add(-time.Hour), 0},
+		{"created after the backfill", before.Add(time.Hour), 0},
+		{"created weeks after the backfill", d.AddDate(0, 0, 30), 0},
+	} {
+		reads, queries := githubTestsBackfillChunkReadsAt(t, since, before, last, cell.created, now.Add(-time.Hour), now)
+		t.Logf("CELL last chunk bound %s: reads=%d runs queries=%v", cell.name, reads, queries)
+		if reads != cell.want {
+			t.Errorf("%s: reads=%d, want %d", cell.name, reads, cell.want)
+		}
+		if len(queries) == 0 {
+			t.Fatalf("%s: no runs listing", cell.name)
+		}
+		for _, query := range queries {
+			values, err := url.ParseQuery(query)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if created := values.Get("created"); !strings.HasSuffix(created, ".."+before.Format(time.RFC3339)) {
+				t.Errorf("%s: runs listing created=%q, want it to end at the chunk's before %s", cell.name, created, before.Format(time.RFC3339))
+			}
 		}
 	}
 }

@@ -478,7 +478,11 @@ func (h *handlers) modelList(ctx context.Context, orgID string, cfg readinessBYO
 		}
 		return respond(nil, llmModelsSourceCatalog, reason, nil), nil
 	}
-	valid, _, _, err := h.checkBaseURL(ctx, cfg.baseURL, apiKey, cfg.staleKey.Reveal())
+	keys, err := h.readerLeakKeys(ctx, orgID, cfg.baseURL, apiKey, cfg.staleKey.Reveal())
+	if err != nil {
+		return nil, err
+	}
+	valid, _, _, err := h.checkBaseURL(ctx, cfg.baseURL, keys...)
 	if err != nil {
 		return nil, err
 	}

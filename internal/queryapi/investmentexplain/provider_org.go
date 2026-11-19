@@ -21,11 +21,14 @@ package investmentexplain
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 	"log"
 	"net/url"
+	"strings"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/categorize"
 	"github.com/full-chaos/dev-health-ops/internal/llmbudget"
@@ -316,20 +319,20 @@ var logOrgBaseURLSSRFFallback = func(ctx context.Context, orgSettings llmorgsett
 	if ok, _ := validateRawBaseURL(ctx, rawURL); ok {
 		return // not usable for some OTHER reason (e.g. incomplete api_key)
 	}
-	scheme, host := schemeAndHostForLogging(rawURL)
+	scheme, hostHash := schemeAndHostForLogging(rawURL)
 	log.Printf(
 		"investment/explain: org %s configured a BYO base_url for provider %s that failed "+
-			"the SSRF guard (scheme=%s host=%s); falling back to the platform default provider",
-		orgID, provider, scheme, host,
+			"the SSRF guard (scheme=%s host_hash=%s); falling back to the platform default provider",
+		orgID, provider, scheme, hostHash,
 	)
 }
 
-// schemeAndHostForLogging extracts ONLY the scheme and host from a
-// base_url for a log line -- never the path, query, userinfo, or any
-// other component, so a credential accidentally embedded in the URL
-// (userinfo, a query-string API key) can never reach a log. An
-// unparseable URL logs as "invalid"/"invalid" rather than the raw value.
-func schemeAndHostForLogging(rawURL string) (scheme, host string) {
+// schemeAndHostForLogging extracts ONLY the scheme and a hash of the host
+// from a base_url for a log line -- never the host text, path, query,
+// userinfo, or any other component, so a credential embedded anywhere in the
+// URL (a host label included) can never reach a log. An unparseable URL logs
+// as "invalid"/"invalid" rather than the raw value.
+func schemeAndHostForLogging(rawURL string) (scheme, hostHash string) {
 	parsed, err := url.Parse(rawURL)
 	if err != nil {
 		return "invalid", "invalid"
@@ -340,11 +343,19 @@ func schemeAndHostForLogging(rawURL string) (scheme, host string) {
 		scheme = parsed.Scheme
 	}
 	if parsed.Hostname() == "" {
-		host = "unknown"
+		hostHash = "unknown"
 	} else {
-		host = parsed.Hostname()
+		hostHash = hashedLogValue(parsed.Hostname())
 	}
-	return scheme, host
+	return scheme, hostHash
+}
+
+// hashedLogValue is credentials.py's _hashed_log_value: sha256 hex digest,
+// first 16 hex characters, over the value with CR/LF stripped first.
+func hashedLogValue(value string) string {
+	safe := strings.NewReplacer("\r", "", "\n", "").Replace(value)
+	sum := sha256.Sum256([]byte(safe))
+	return hex.EncodeToString(sum[:])[:16]
 }
 
 // newProviderFromCredentials/newProviderFromEnv are newProviderForOrg's

@@ -192,7 +192,7 @@ func ResolveSelected(ctx context.Context, client QueryClient, orgID string, batc
 	// Phase 0: repo-filter resolution. FATAL on error.
 	resolvedFilters, err := ResolveAnalyticsRepoFilters(ctx, client, orgID, batch.Filters)
 	if err != nil {
-		return nil, fmt.Errorf("analytics: repo filter resolution: %w", err)
+		return nil, fmt.Errorf("analytics: repo filter resolution: %w", markedIfClientCancel(ctx, err, "repo_filter", "org_id", orgID))
 	}
 
 	// Phase 1: timeseries + breakdowns, concurrent, index-ordered first
@@ -227,6 +227,19 @@ func ResolveSelected(ctx context.Context, client QueryClient, orgID string, batc
 	// Index-ordered first-error scan: ALL of timeseries before ANY of
 	// breakdowns, regardless of which index actually failed or when
 	// (analytics.py:597-617's two separate enumerate loops).
+	// Every statement the client's cancel ended is reported here, not only
+	// the one whose error is returned; the mark keeps the GraphQL presenter
+	// from reporting it again (graphql_error_presenter.go).
+	for i := range tsOutcomes {
+		if tsOutcomes[i].err != nil {
+			tsOutcomes[i].err = markedIfClientCancel(ctx, tsOutcomes[i].err, "timeseries", "org_id", orgID, "index", i)
+		}
+	}
+	for i := range bdOutcomes {
+		if bdOutcomes[i].err != nil {
+			bdOutcomes[i].err = markedIfClientCancel(ctx, bdOutcomes[i].err, "breakdown", "org_id", orgID, "index", i)
+		}
+	}
 	for i, o := range tsOutcomes {
 		if o.err != nil {
 			return nil, fmt.Errorf("analytics: timeseries[%d]: %w", i, o.err)
@@ -284,7 +297,7 @@ func ResolveSelected(ctx context.Context, client QueryClient, orgID string, batc
 	if selected.EvidenceQualityStats {
 		stats, err := resolveEvidenceQualityStats(ctx, client, orgID, batch, qualityInvestment, resolvedFilters)
 		if err != nil {
-			return nil, fmt.Errorf("analytics: evidenceQualityStats: %w", err)
+			return nil, fmt.Errorf("analytics: evidenceQualityStats: %w", markedIfClientCancel(ctx, err, "evidence_quality_stats", "org_id", orgID))
 		}
 		evidenceQualityStats = stats
 	}
@@ -292,7 +305,7 @@ func ResolveSelected(ctx context.Context, client QueryClient, orgID string, batc
 	// statement is sent only when the groups are selected.
 	evidenceQualityByGroup, err := resolveEvidenceQualityByGroup(ctx, client, orgID, batch, qualityInvestment, resolvedFilters, selected.EvidenceQualityByGroup)
 	if err != nil {
-		return nil, fmt.Errorf("analytics: evidenceQualityByGroup: %w", err)
+		return nil, fmt.Errorf("analytics: evidenceQualityByGroup: %w", markedIfClientCancel(ctx, err, "evidence_quality_by_group", "org_id", orgID))
 	}
 	// analytics.py:970-973: evidence_quality_distribution is literally
 	// evidence_quality_stats.band_counts, reused, never recomputed --
@@ -305,7 +318,7 @@ func ResolveSelected(ctx context.Context, client QueryClient, orgID string, batc
 
 	filterEmptyReason, err := resolveFilterEmptyReason(ctx, client, orgID, batch, useInvestment, selected.FilterEmptyReason)
 	if err != nil {
-		return nil, fmt.Errorf("analytics: filterEmptyReason: %w", err)
+		return nil, fmt.Errorf("analytics: filterEmptyReason: %w", markedIfClientCancel(ctx, err, "filter_empty_reason", "org_id", orgID))
 	}
 
 	return &model.AnalyticsResult{
@@ -590,7 +603,9 @@ func resolveSankey(ctx context.Context, client QueryClient, orgID string, input 
 		//
 		// A request the client closed is a cancel, not a failed read
 		// (clientcancel.go): one INFO line, no failure report.
-		if !reportedAsClientCancel(ctx, execErr, "sankey", "org_id", orgID, "path", pathLabel(req.Path), "use_investment", useInvestment) {
+		if reportedAsClientCancel(ctx, execErr, "sankey", "org_id", orgID, "path", pathLabel(req.Path), "use_investment", useInvestment) {
+			execErr = &reportedClientCancel{err: execErr}
+		} else {
 			recordDegradation(ctx, "sankey", execErr)
 			slog.WarnContext(ctx, "analytics: sankey query failed",
 				"org_id", orgID, "path", pathLabel(req.Path), "use_investment", useInvestment, "error", execErr)

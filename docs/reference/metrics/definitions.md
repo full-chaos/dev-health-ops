@@ -318,6 +318,16 @@ A repository-day is in neither sum when its rate is NULL (it measured no case), 
 `flake_rate`, its `flake_cases` is NULL. A row stored before the counts existed has NULL counts, so it drops out of the
 point. A point made only of such rows has no value.
 
+### Benchmarking line coverage
+
+The benchmarking point of `line_coverage_pct` for a scope and a day is 100 times the sum of the stored `lines_covered`
+over the sum of the stored `lines_total` of the repository-days in the scope. It is not the mean of the stored
+percentages, so a repository-day weighs by its lines. A repository-day with a NULL count, or with `lines_total` of 0, is
+in neither sum, whatever its stored percentage. A point made only of such repository-days has no value, never 0.
+
+`branch_coverage_pct` is still the mean of the stored percentages of the repository-days: the daily rows hold no branch
+counts, so it is not pooled yet.
+
 ### AI report charts of CI/CD durations and queue time
 
 The AI report charts of three CI/CD metrics are taken over the samples of the window's pipeline runs that the CI/CD daily

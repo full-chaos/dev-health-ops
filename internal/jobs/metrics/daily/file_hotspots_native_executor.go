@@ -571,7 +571,8 @@ func uint32ColumnValue(value int, table, column string, repoID uuid.UUID, key st
 // day, path) (baseline/head.json), so a re-insert of the same key does not add
 // to the prior row: the newest computed_at wins once parts merge, and until
 // then both rows are visible. Every reader dedups via
-// `ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day, path`, matching that migration's v_file_hotspots_windowed
+// `ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day, path`, matching
+// migration 083_dedup_file_hotspots_windowed_view.sql's v_file_hotspots_windowed
 // view and clickhouse_dedup.dedup_from()'s other Python readers.
 func writeFileMetricsDaily(
 	ctx context.Context, conn fileMetricsBatchConn, organizationID string, rows []fileMetricsDailyRow,
@@ -633,7 +634,8 @@ func writeFileMetricsDaily(
 // (sinks/clickhouse/work_graph.py:499) -- same table, same column order.
 // Like file_metrics_daily, file_hotspot_daily is ReplacingMergeTree(computed_at)
 // on (org_id, repo_id, day, file_path); readers dedup via
-// argMax(<col>, computed_at) grouped by (repo_id, file_path) (v_file_hotspots_windowed's `lookup` subquery) or the full
+// argMax(<col>, computed_at) grouped by (repo_id, file_path)
+// (v_file_hotspots_windowed's `lookup` subquery) or the full
 // (org_id, repo_id, day, file_path) key (clickhouse_dedup.dedup_from()'s
 // other Python readers).
 func writeFileHotspotDaily(

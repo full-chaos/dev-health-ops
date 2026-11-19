@@ -53,7 +53,7 @@ func newGitLabTestsRunJobs(items []json.RawMessage) (gitLabTestsRunJobs, error) 
 	for _, raw := range items {
 		job, err := decodeGitLabTestsJob(raw)
 		if err != nil {
-			return gitLabTestsRunJobs{}, err
+			return gitLabTestsRunJobs{}, providerfoundation.RouteFailure(gitlabPipelineJobsRoute, providerfoundation.ReasonBodyDecode, err)
 		}
 		id := stringValue(job.ID)
 		if id == "" {

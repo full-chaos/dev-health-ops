@@ -56,4 +56,8 @@ const (
 	gitlabDependenciesRoute  = gitlabProjectRoute + "/dependencies"
 	gitlabMilestonesRoute    = gitlabProjectRoute + "/milestones"
 	gitlabVersionRoute       = "/version"
+
+	launchDarklyFlagsRoute = "/api/v2/flags/{project}"
+	// The audit log walk sends this literal route from providerfoundation.
+	launchDarklyAuditRoute = "/api/v2/auditlog"
 )

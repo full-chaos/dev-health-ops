@@ -301,7 +301,9 @@ func TestLeaseSessionRunKeepsRenewingPastTheClaimTimeExpiry(t *testing.T) {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if clock.Now().After(claimExpiry) {
+		// Signal on the renewal after the first post-expiry one: the heartbeat
+		// got here only by accepting that grant and looping.
+		if clock.Now().After(claimExpiry.Add(step)) {
 			once.Do(func() { close(renewedPastClaimExpiry) })
 		}
 		clock.advance(step)
@@ -316,6 +318,8 @@ func TestLeaseSessionRunKeepsRenewingPastTheClaimTimeExpiry(t *testing.T) {
 		case <-ctx.Done():
 			return context.Cause(ctx)
 		case <-renewedPastClaimExpiry:
+		case <-time.After(10 * time.Second):
+			return errors.New("no renewal past the claim-time expiry")
 		}
 		return guard.Assert(ctx)
 	})

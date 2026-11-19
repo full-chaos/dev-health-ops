@@ -775,7 +775,9 @@ type gitHubProjectV2ContentPayload struct {
 	CreatedAt  *string `json:"createdAt"`
 	UpdatedAt  *string `json:"updatedAt"`
 	ClosedAt   *string `json:"closedAt"`
-	Repository struct {
+	// StateReason is asked on Issue only (COMPLETED, NOT_PLANNED, ...).
+	StateReason *string `json:"stateReason"`
+	Repository  struct {
 		NameWithOwner string `json:"nameWithOwner"`
 	} `json:"repository"`
 	Labels    gitHubProjectV2Connection[githubWorkItemLabelPayload] `json:"labels"`
@@ -1107,7 +1109,7 @@ query($login: String!, $number: Int!, $after: String, $first: Int!) {
           id createdAt updatedAt
           content {
             __typename
-            ... on Issue { id number title url state createdAt updatedAt closedAt repository { nameWithOwner } labels(first: 100) { nodes { name } pageInfo { hasNextPage } } assignees(first: 10) { nodes { login email name } } author { login ... on User { email name } } }
+            ... on Issue { id number title url state stateReason createdAt updatedAt closedAt repository { nameWithOwner } labels(first: 100) { nodes { name } pageInfo { hasNextPage } } assignees(first: 10) { nodes { login email name } } author { login ... on User { email name } } }
             ... on PullRequest { id number title url state createdAt updatedAt closedAt mergedAt repository { nameWithOwner } labels(first: 100) { nodes { name } pageInfo { hasNextPage } } assignees(first: 10) { nodes { login email name } } author { login ... on User { email name } } }
             ... on DraftIssue { id title createdAt updatedAt }
           }

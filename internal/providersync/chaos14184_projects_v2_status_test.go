@@ -54,9 +54,18 @@ func chaos14184RepositoryAt(t *testing.T, normalizedAt time.Time, issue string, 
 // chaos14184Item is board item PVTI_1 for issue acme/api#9. status "" = no
 // Status value; statusAt "" = a Status value with no updatedAt.
 func chaos14184Item(state, closedAt, status, statusAt string) string {
+	return chaos14184ItemReason(state, closedAt, "", status, statusAt)
+}
+
+// chaos14184ItemReason is chaos14184Item with the issue's stateReason ("" =
+// absent).
+func chaos14184ItemReason(state, closedAt, reason, status, statusAt string) string {
 	closed := ""
 	if closedAt != "" {
 		closed = `,"closedAt":"` + closedAt + `"`
+	}
+	if reason != "" {
+		closed += `,"stateReason":"` + reason + `"`
 	}
 	values := ""
 	if status != "" {
@@ -281,6 +290,80 @@ func TestChaos14184StatusRawKeepsThePayloadValue(t *testing.T) {
 		t.Fatalf("events=%+v", board.StatusTransitions)
 	}
 	chaos14184Check(t, chaos14184Merge(t, chaos14184EmptyRows(), board), "in_progress", " In Progress ")
+}
+
+// A board value the mapping does not know (a custom column) is an event too:
+// to "unknown", raw kept. The item's status is then the last event: here the
+// card left "In Progress" (stored) for a custom column on an open issue.
+func TestChaos14184UnmappedBoardValueIsAnUnknownEvent(t *testing.T) {
+	stored := chaos14184Board(t, chaos14184Item("OPEN", "", "In Progress", "2026-10-02T00:00:00Z"), chaos14184Now()).StatusTransitions
+	for _, content := range []string{"Issue", "DraftIssue"} {
+		item := chaos14184Item("OPEN", "", "Customer Validation", "2026-10-04T00:00:00Z")
+		if content == "DraftIssue" {
+			item = `{"id":"PVTI_1","createdAt":"2026-10-01T00:00:00Z",
+			"content":{"__typename":"DraftIssue","title":"Draft","createdAt":"2026-10-01T00:00:00Z","updatedAt":"2026-10-04T00:00:00Z"},
+			"fieldValues":{"nodes":[{"__typename":"ProjectV2ItemFieldSingleSelectValue","name":"Customer Validation","updatedAt":"2026-10-04T00:00:00Z","field":{"name":"Status"}}]}}`
+		}
+		board := chaos14184Board(t, item, chaos14184Now())
+		if len(board.StatusTransitions) != 1 || board.StatusTransitions[0].ToStatus != "unknown" ||
+			*board.StatusTransitions[0].ToStatusRaw != "Customer Validation" {
+			t.Fatalf("%s: board events=%+v, want one to unknown with the raw value", content, board.StatusTransitions)
+		}
+		if content == "Issue" {
+			chaos14184Check(t, chaos14184Merge(t, chaos14184EmptyRows(), board, stored...), "unknown", "Customer Validation", stored...)
+		} else {
+			chaos14184Check(t, chaos14184Merge(t, chaos14184EmptyRows(), board), "unknown", "Customer Validation")
+		}
+	}
+}
+
+// The native close outranks an unmapped column: an issue closed on 10-03 and
+// then moved to a custom "Shipped" column on 10-04 stays done and keeps its
+// completion. A custom column set BEFORE the close is "unknown", and the close
+// after it is the last event.
+func TestChaos14184UnmappedValueAfterTheCloseKeepsDone(t *testing.T) {
+	repository := chaos14184Repository(t, chaos14184ClosedIssue, chaos14184CloseEvent)
+	board := chaos14184Board(t, chaos14184Item("CLOSED", "2026-10-03T00:00:00Z", "Shipped", "2026-10-04T00:00:00Z"), chaos14184Now())
+	if len(board.StatusTransitions) != 1 || board.StatusTransitions[0].ToStatus != "done" {
+		t.Fatalf("board events=%+v, want one to done", board.StatusTransitions)
+	}
+	merged := chaos14184Merge(t, repository, board)
+	chaos14184Check(t, merged, "done", "Shipped")
+	if completed := merged.WorkItems[0].CompletedAt; completed == nil || !completed.Equal(time.Date(2026, 10, 3, 0, 0, 0, 0, time.UTC)) {
+		t.Fatalf("completed_at=%v, want the close 10-03", completed)
+	}
+
+	before := chaos14184Board(t, chaos14184Item("CLOSED", "2026-10-03T00:00:00Z", "Shipped", "2026-10-02T00:00:00Z"), chaos14184Now())
+	if len(before.StatusTransitions) != 1 || before.StatusTransitions[0].ToStatus != "unknown" {
+		t.Fatalf("value before the close: board events=%+v, want one to unknown", before.StatusTransitions)
+	}
+	chaos14184Check(t, chaos14184Merge(t, repository, before), "done", "closed")
+}
+
+// A not-planned close and an unmapped column after it: canceled.
+func TestChaos14184UnmappedValueAfterANotPlannedCloseIsCanceled(t *testing.T) {
+	repository := chaos14184Repository(t, chaos14184ClosedIssue, chaos14184CloseEvent)
+	board := chaos14184Board(t, chaos14184ItemReason("CLOSED", "2026-10-03T00:00:00Z", "NOT_PLANNED", "Shipped", "2026-10-04T00:00:00Z"), chaos14184Now())
+	chaos14184Check(t, chaos14184Merge(t, repository, board), "canceled", "Shipped")
+	completed := chaos14184Board(t, chaos14184ItemReason("CLOSED", "2026-10-03T00:00:00Z", "COMPLETED", "Shipped", "2026-10-04T00:00:00Z"), chaos14184Now())
+	chaos14184Check(t, chaos14184Merge(t, repository, completed), "done", "Shipped")
+}
+
+// A mapped board value on a closed issue keeps today's rule (the mapped value
+// wins over the issue state): the close does not override it.
+func TestChaos14184MappedValueOnAClosedIssueKeepsTheMappedStatus(t *testing.T) {
+	repository := chaos14184Repository(t, chaos14184ClosedIssue, chaos14184CloseEvent)
+	board := chaos14184Board(t, chaos14184ItemReason("CLOSED", "2026-10-03T00:00:00Z", "NOT_PLANNED", "In Progress", "2026-10-04T00:00:00Z"), chaos14184Now())
+	chaos14184Check(t, chaos14184Merge(t, repository, board), "in_progress", "In Progress")
+}
+
+// An issue that is open now takes no close from a closedAt older than the
+// value: the unmapped column is "unknown".
+func TestChaos14184UnmappedValueOnAnOpenIssueIgnoresAnOldClosedAt(t *testing.T) {
+	board := chaos14184Board(t, chaos14184Item("OPEN", "2026-10-02T00:00:00Z", "Shipped", "2026-10-04T00:00:00Z"), chaos14184Now())
+	if len(board.StatusTransitions) != 1 || board.StatusTransitions[0].ToStatus != "unknown" {
+		t.Fatalf("board events=%+v, want one to unknown", board.StatusTransitions)
+	}
 }
 
 // F1: no Status value on the board item: no board event, and the status is

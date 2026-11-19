@@ -17,9 +17,9 @@ import (
 // was set. Every field comes from the payload, so a re-sync of the same value
 // writes the same row. The board knows no prior status: FromStatus is
 // "unknown", the token the repository chain starts with. A value with no
-// status mapping is not an event. A value with no or an unparsable updatedAt
-// (GitHub serves it as DateTime!) is not an event either, and timeMissing
-// tells the caller to count it.
+// status mapping is an event too (githubProjectV2UnmappedStatus). A value with
+// no or an unparsable updatedAt (GitHub serves it as DateTime!) is not an
+// event, and timeMissing tells the caller to count it.
 func githubProjectV2StatusEvent(
 	claim Claim, item gitHubProjectV2ItemPayload, workItemID string, normalizedAt time.Time,
 ) (event githubWorkItemTransitionRow, hasEvent bool, timeMissing bool, err error) {
@@ -43,7 +43,7 @@ func githubProjectV2StatusEvent(
 	}
 	toStatus := githubProjectV2Status(raw, nil, "")
 	if toStatus == "unknown" {
-		return githubWorkItemTransitionRow{}, false, false, nil
+		toStatus = githubProjectV2UnmappedStatus(item.Content, *occurredAt)
 	}
 	event = githubWorkItemTransitionRow{
 		WorkItemID: workItemID, Provider: "github", OccurredAt: occurredAt.UTC(),
@@ -54,6 +54,25 @@ func githubProjectV2StatusEvent(
 		return githubWorkItemTransitionRow{}, false, false, err
 	}
 	return event, true, false, nil
+}
+
+// githubProjectV2UnmappedStatus is the status of a board value the mapping
+// does not know (a custom column): "unknown", unless the issue was already
+// closed when the value was set (closed now, closedAt <= the value's
+// updatedAt): the native close outranks an unmapped column, so the event goes
+// to done, or to canceled for a not-planned close. A closed state is required
+// as well as closedAt, so an issue open now never takes a close from an older
+// closedAt.
+func githubProjectV2UnmappedStatus(content gitHubProjectV2ContentPayload, at time.Time) string {
+	closedAt := parseGitHubWorkItemTime(content.ClosedAt)
+	if content.Typename != "Issue" || content.State == nil || normalizeWorkItemLabel(*content.State) != "closed" ||
+		closedAt == nil || closedAt.After(at) {
+		return "unknown"
+	}
+	if content.StateReason != nil && normalizeWorkItemLabel(*content.StateReason) == "not_planned" {
+		return "canceled"
+	}
+	return "done"
 }
 
 // reportGitHubProjectV2StatusTimeMissing is the one record per unit of the

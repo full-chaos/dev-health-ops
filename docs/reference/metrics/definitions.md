@@ -595,7 +595,7 @@ is open again ends its history in an open status, not in `done` or `canceled`.
 
 ## Status of a GitHub issue on a Projects v2 board
 
-For a GitHub issue on a Projects v2 board, the item's status is the last event of its stored status changes, in the order `work_item_state_durations_daily` uses: the repository's status changes above, and the board's Status value at the time it was set. GitHub does not serve past board moves, so the board gives one event per Status value, with no prior status, and the status changes have board detail only from the first sync that sees a Status value. A board item with no Status value keeps the status of its issue state and labels.
+For a GitHub issue on a Projects v2 board, the item's status is the last event of its stored status changes, in the order `work_item_state_durations_daily` uses: the repository's status changes above, and the board's Status value at the time it was set. GitHub does not serve past board moves, so the board gives one event per Status value, with no prior status, and the status changes have board detail only from the first sync that sees a Status value. A Status value that is not one of the known names (a custom column) goes to `unknown`, with its name kept as the raw status; when the issue was already closed at the time the value was set, it goes to `done` instead, or to `canceled` for an issue closed as not planned. A board item with no Status value keeps the status of its issue state and labels.
 
 ## Blocked hours in `work_item_state_durations_daily`
 

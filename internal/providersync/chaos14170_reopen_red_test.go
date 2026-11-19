@@ -1,12 +1,16 @@
 package providersync
 
 import (
+	"context"
 	"encoding/json"
 	"sort"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 )
 
 type chaos14170Step struct {
@@ -199,12 +203,12 @@ func TestChaos14170GitHubIssueUnlabeledKeepsStateStatus(t *testing.T) {
 	})
 }
 
-// GitHub issue on a Projects v2 board: the board row replaces the repository
-// row (status from the board), while the transitions are the union of the
-// repository events and the board changes. A repository close with no board
-// move leaves an open board status after a "done" transition.
+// GitHub issue on a Projects v2 board. The board half is the production
+// fetch: the board's one event is its current Status value at updatedAt
+// (GitHub serves no past board moves). The status is the last event of the
+// merged history. A repository close with no board move must not leave an open
+// board status after a "done" transition.
 func TestChaos14170RedGitHubBoardStatusOpenAfterRepositoryClose(t *testing.T) {
-	t.Skip("board status vs repository close: ticket 14184 (filed separately)")
 	claim := nativeTestClaim("github", "work-items")
 	repository, err := normalizeGitHubIssueBundle(
 		claim, sameGitHubRepoNames("acme/api"), uuid.MustParse("c7198fbc-1945-3717-05d8-eb78866b4e79"),
@@ -215,22 +219,13 @@ func TestChaos14170RedGitHubBoardStatusOpenAfterRepositoryClose(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var payload gitHubProjectV2ItemPayload
-	if err := json.Unmarshal([]byte(`{"id":"PVTI_1","createdAt":"2026-10-01T00:00:00Z",
+	board := chaos14170BoardFetch(t, `{"id":"PVTI_1","createdAt":"2026-10-01T00:00:00Z",
 		"content":{"__typename":"Issue","id":"I_1","number":9,"title":"T","state":"CLOSED",
 		"createdAt":"2026-10-01T00:00:00Z","updatedAt":"2026-10-03T00:00:00Z","closedAt":"2026-10-03T00:00:00Z",
-		"repository":{"nameWithOwner":"acme/api"},"labels":{"nodes":[]},"assignees":{"nodes":[]}},
-		"fieldValues":{"nodes":[{"__typename":"ProjectV2ItemFieldSingleSelectValue","name":"In Progress","field":{"name":"Status"}}]},
-		"changes":{"nodes":[{"field":{"name":"Status"},"previousValue":{"name":"Todo"},"newValue":{"name":"In Progress"},"createdAt":"2026-10-02T00:00:00Z"}]}}`), &payload); err != nil {
-		t.Fatal(err)
-	}
-	row, kept, err := normalizeGitHubProjectV2Item(claim, payload, "ghprojv2:acme/1", nil, chaos14170Now)
-	if err != nil || !kept {
-		t.Fatalf("kept=%v err=%v", kept, err)
-	}
-	merged := mergeGitHubProjectV2Rows(repository, githubWorkItemRows{
-		WorkItems: []githubWorkItemRow{row},
-	})
+		"repository":{"nameWithOwner":"acme/api"},"labels":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},"assignees":{"nodes":[]}},
+		"fieldValues":{"nodes":[{"__typename":"ProjectV2ItemFieldSingleSelectValue","name":"In Progress","updatedAt":"2026-10-02T00:00:00Z","field":{"name":"Status"}}],
+		"pageInfo":{"hasNextPage":false,"endCursor":null}}}`)
+	merged := chaos14170RouteBoardMerge(t, repository, board, nil)
 	if len(merged.WorkItems) != 1 {
 		t.Fatalf("work items=%d", len(merged.WorkItems))
 	}
@@ -241,6 +236,25 @@ func TestChaos14170RedGitHubBoardStatusOpenAfterRepositoryClose(t *testing.T) {
 		}
 	}
 	chaos14170CheckLastMatches(t, merged.WorkItems[0].Status, steps)
+}
+
+// chaos14170BoardFetch runs the production Projects v2 fetch over one board
+// item.
+func chaos14170BoardFetch(t *testing.T, item string) githubWorkItemRows {
+	t.Helper()
+	doer := &gitHubProjectV2Doer{t: t, replies: []string{
+		`{"data":{"organization":{"projectV2":{"items":{"nodes":[` + item + `],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`,
+	}}
+	claim := githubWorkItemOracleClaim()
+	claim.IntegrationConfig = map[string]any{"github_projects_v2": []any{map[string]any{"org_login": "acme", "project_number": 1}}}
+	result, err := (GitHubProjectV2Fetcher{}).Fetch(
+		context.Background(), claim, providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
+		githubProjectV2TestClient(t, fakehttp.Client(doer)), chaos14170Now, nil,
+	)
+	if err != nil || len(result.Rows.WorkItems) != 1 {
+		t.Fatalf("board rows=%d err=%v", len(result.Rows.WorkItems), err)
+	}
+	return result.Rows
 }
 
 // Refuting cells: these paths store the reopen today.
@@ -272,23 +286,30 @@ func TestChaos14170RefuteGitHubPullRequestCloseThenReopen(t *testing.T) {
 	chaos14170CheckLastMatches(t, rows.WorkItems[0].Status, steps)
 }
 
+// A draft on a board moved to Done, then back to In Progress. GitHub serves
+// only the current Status value, so each sync stores the value it sees at its
+// updatedAt: sync 1 sees Done, sync 2 sees In Progress. The stored history ends
+// in the item's status.
 func TestChaos14170RefuteGitHubBoardDoneThenInProgress(t *testing.T) {
-	t.Skip("board status history: GitHub's ProjectV2Item has no `changes` (CHAOS-14195), so the board stores no transitions; the Status event at updatedAt is ticket 14184")
-	var payload gitHubProjectV2ItemPayload
-	if err := json.Unmarshal([]byte(`{"id":"PVTI_2","createdAt":"2026-10-01T00:00:00Z",
+	draft := func(status, at string) string {
+		return `{"id":"PVTI_2","createdAt":"2026-10-01T00:00:00Z",
 		"content":{"__typename":"DraftIssue","id":"DI_1","title":"Draft",
-		"createdAt":"2026-10-01T00:00:00Z","updatedAt":"2026-10-03T00:00:00Z"},
-		"fieldValues":{"nodes":[{"__typename":"ProjectV2ItemFieldSingleSelectValue","name":"In Progress","field":{"name":"Status"}}]},
-		"changes":{"nodes":[
-			{"field":{"name":"Status"},"previousValue":{"name":"In Progress"},"newValue":{"name":"Done"},"createdAt":"2026-10-02T00:00:00Z"},
-			{"field":{"name":"Status"},"previousValue":{"name":"Done"},"newValue":{"name":"In Progress"},"createdAt":"2026-10-03T00:00:00Z"}]}}`), &payload); err != nil {
-		t.Fatal(err)
+		"createdAt":"2026-10-01T00:00:00Z","updatedAt":"` + at + `"},
+		"fieldValues":{"nodes":[{"__typename":"ProjectV2ItemFieldSingleSelectValue","name":"` + status + `","updatedAt":"` + at + `","field":{"name":"Status"}}],
+		"pageInfo":{"hasNextPage":false,"endCursor":null}}}`
 	}
-	row, kept, err := normalizeGitHubProjectV2Item(nativeTestClaim("github", "work-items"), payload, "ghprojv2:acme/1", nil, chaos14170Now)
-	if err != nil || !kept {
-		t.Fatalf("kept=%v err=%v", kept, err)
+	empty := githubWorkItemRows{WorkItems: []githubWorkItemRow{}, StatusTransitions: []githubWorkItemTransitionRow{}}
+	first := chaos14170RouteBoardMerge(t, empty, chaos14170BoardFetch(t, draft("Done", "2026-10-02T00:00:00Z")), nil)
+	stored := first.StatusTransitions
+	second := chaos14170RouteBoardMerge(t, empty, chaos14170BoardFetch(t, draft("In Progress", "2026-10-03T00:00:00Z")), stored)
+	steps := []chaos14170Step{}
+	for _, tr := range append(append([]githubWorkItemTransitionRow{}, stored...), second.StatusTransitions...) {
+		steps = append(steps, chaos14170Step{tr.OccurredAt, tr.ToStatus})
 	}
-	chaos14170CheckLastMatches(t, row.Status, nil)
+	if len(steps) != 2 {
+		t.Fatalf("stored board events=%v, want Done then In Progress", steps)
+	}
+	chaos14170CheckLastMatches(t, second.WorkItems[0].Status, steps)
 }
 
 func TestChaos14170RefuteGitLabStateEventsCloseThenReopen(t *testing.T) {

@@ -124,6 +124,15 @@ func chaos14184Merge(t *testing.T, repository, board githubWorkItemRows, stored 
 	return merged
 }
 
+// chaos14170RouteBoardMerge is the route's board merge (the stored history
+// read through a fake reader) for the CHAOS-14170 board cells.
+func chaos14170RouteBoardMerge(
+	t *testing.T, repository, board githubWorkItemRows, stored []githubWorkItemTransitionRow,
+) githubWorkItemRows {
+	t.Helper()
+	return chaos14184Merge(t, repository, board, stored...)
+}
+
 // chaos14184Last is the last event of an item's history in the shared order.
 func chaos14184Last(t *testing.T, transitions []githubWorkItemTransitionRow) workitemmetrics.Transition {
 	t.Helper()

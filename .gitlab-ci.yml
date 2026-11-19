@@ -177,7 +177,7 @@ variables:
     DOCKER_TLS_CERTDIR: ""
   before_script:
     - apt-get update -y
-    - apt-get install -y --no-install-recommends jq postgresql-client python3 python3-pip
+    - apt-get install -y --no-install-recommends jq postgresql-client
     - !reference [.docker_cli, script]
     - go version
 
@@ -844,15 +844,23 @@ security:go-image-build:
       - TARGET: ["operator", "contractcheck", "migrate", "dho", "auth-service", "auth-migrate"]
   script:
     - |
-      docker build \
-        --file docker/go-worker.Dockerfile \
-        --target "${TARGET}" \
-        --build-arg VERSION=phase1-ci \
-        --build-arg COMMIT=0000000000000000000000000000000000000000 \
-        --build-arg BUILD_TIME=1970-01-01T00:00:00Z \
-        --build-arg SOURCE_DATE_EPOCH=0 \
-        --tag "dev-health-go-${TARGET}:security" \
-        .
+      bash -euo pipefail -c '
+        source ci/lib/pull_base_image.sh
+        pull_pinned_base_image docker/go-worker.Dockerfile
+        pull_pinned_runtime_image docker/go-worker.Dockerfile
+        docker build \
+          --pull=false \
+          --build-arg GO_BUILD_IMAGE="${PINNED_BASE_TAG}" \
+          --build-arg GO_RUNTIME_IMAGE="${PINNED_RUNTIME_TAG}" \
+          --file docker/go-worker.Dockerfile \
+          --target "${TARGET}" \
+          --build-arg VERSION=phase1-ci \
+          --build-arg COMMIT=0000000000000000000000000000000000000000 \
+          --build-arg BUILD_TIME=1970-01-01T00:00:00Z \
+          --build-arg SOURCE_DATE_EPOCH=0 \
+          --tag "dev-health-go-${TARGET}:security" \
+          .
+      '
     - mkdir -p images
     - docker save -o "images/${TARGET}.tar" "dev-health-go-${TARGET}:security"
   artifacts:

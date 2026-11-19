@@ -10,14 +10,14 @@ import (
 
 // testopsPipelineStoredRow is the writer's newest row of one repository-day of testops_pipeline_metrics_daily.
 type testopsPipelineStoredRow struct {
-	success, failure, cancelled, cancelRate, rerunRate float64
-	team                                               string
+	success, failure, cancelled, cancelRate, rerunRate, runs float64
+	team                                                     string
 }
 
 func (e *pooledEnv) storedPipelineRows(org string) map[string]testopsPipelineStoredRow {
 	e.t.Helper()
 	rows, err := e.conn.Query(e.ctx, `SELECT toString(repo_id), toFloat64(success_count), toFloat64(failure_count), toFloat64(cancelled_count),
-    cancel_rate, rerun_rate, ifNull(team_id, '')
+    cancel_rate, rerun_rate, toFloat64(pipelines_count), ifNull(team_id, '')
 FROM testops_pipeline_metrics_daily WHERE org_id = ? ORDER BY computed_at DESC LIMIT 1 BY repo_id, day`, org)
 	if err != nil {
 		e.t.Fatal(err)
@@ -27,7 +27,7 @@ FROM testops_pipeline_metrics_daily WHERE org_id = ? ORDER BY computed_at DESC L
 	for rows.Next() {
 		var repo string
 		var row testopsPipelineStoredRow
-		if err := rows.Scan(&repo, &row.success, &row.failure, &row.cancelled, &row.cancelRate, &row.rerunRate, &row.team); err != nil {
+		if err := rows.Scan(&repo, &row.success, &row.failure, &row.cancelled, &row.cancelRate, &row.rerunRate, &row.runs, &row.team); err != nil {
 			e.t.Fatal(err)
 		}
 		out[repo] = row
@@ -36,13 +36,13 @@ FROM testops_pipeline_metrics_daily WHERE org_id = ? ORDER BY computed_at DESC L
 }
 
 // testopsPipelineWant is the value of a bucket of rows, or false for no point: counts are sums; the success and failure
-// rates are the summed successes (failures) over the summed completed runs; cancel_rate and rerun_rate are the mean of the
-// stored repository-day values (ticket 14108 changes that rule; this cell only moves the rows a team reads).
+// rates are the summed successes (failures) over the summed completed runs; cancel_rate and rerun_rate are the summed
+// cancelled runs (reruns, the stored rate times the runs) over the summed runs, no point when the rows have no run.
 func testopsPipelineWant(metric string, rows []testopsPipelineStoredRow) (float64, bool) {
-	var success, failure, cancelled, cancelRate, rerunRate float64
+	var success, failure, cancelled, reruns, runs float64
 	for _, row := range rows {
 		success, failure, cancelled = success+row.success, failure+row.failure, cancelled+row.cancelled
-		cancelRate, rerunRate = cancelRate+row.cancelRate, rerunRate+row.rerunRate
+		reruns, runs = reruns+row.rerunRate*row.runs, runs+row.runs
 	}
 	switch metric {
 	case "success_count":
@@ -60,15 +60,15 @@ func testopsPipelineWant(metric string, rows []testopsPipelineStoredRow) (float6
 		}
 		return failure / (success + failure), true
 	case "cancel_rate":
-		if len(rows) == 0 {
+		if runs == 0 {
 			return 0, false
 		}
-		return cancelRate / float64(len(rows)), true
+		return cancelled / runs, true
 	default:
-		if len(rows) == 0 {
+		if runs == 0 {
 			return 0, false
 		}
-		return rerunRate / float64(len(rows)), true
+		return reruns / runs, true
 	}
 }
 

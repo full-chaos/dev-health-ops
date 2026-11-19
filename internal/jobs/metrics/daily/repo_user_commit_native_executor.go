@@ -109,6 +109,7 @@ func (executor *RepoUserCommitExecutor) ComputeFamily(
 	}
 
 	mttrByRepo := repouser.MTTRByRepo(dayStart, bugItems)
+	repairHoursByRepo := repouser.RepairHoursByRepo(dayStart, bugItems)
 	reworkByRepo := make(map[uuid.UUID]float64, len(repoIDs))
 	singleOwnerByRepo := make(map[uuid.UUID]float64, len(repoIDs))
 	busFactorByRepo := make(map[uuid.UUID]int, len(repoIDs))
@@ -164,6 +165,15 @@ func (executor *RepoUserCommitExecutor) ComputeFamily(
 		mttrByRepo, reworkByRepo, singleOwnerByRepo, busFactorByRepo, giniByRepo,
 	)
 	repouser.ApplyChangeFailure(&result, dayStart, changeFailure, storedChangeFailure, computedAt)
+	for i := range result.RepoMetrics {
+		row := &result.RepoMetrics[i]
+		row.BugRepairHoursSamples = repairHoursByRepo[row.RepoID]
+		if !pooledSamplesFit(ctx, "repo_user_commit", run.OrganizationID, row.RepoID.String(), dayStart,
+			max(len(row.PRSizeLOCSamples), len(row.BugRepairHoursSamples))) {
+			row.PRSizeLOCSamples, row.BugRepairHoursSamples = nil, nil
+			row.PooledSamplesOverCap = true
+		}
+	}
 	// The rework ratio counts reviewed pull requests only, and only of a
 	// provider that can store a changes-requested review. That capability is
 	// the provider layer's declaration, asked for each repository's provider;

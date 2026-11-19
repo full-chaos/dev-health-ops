@@ -87,7 +87,7 @@ func TestPlatformQuestionWithADeadDecisionPointKeepsTheRetryAnswer(t *testing.T)
 		t.Run(pattern, func(t *testing.T) {
 			dead := newTestPDP(t, allowAll)
 			deadEnforcer := productionEnforcer(t, dead, "admin")
-			dead.srv.Close()
+			dead.kill()
 			got := serveCell(platformQuestionHandler(t, deadEnforcer), pattern, cellBearer())
 			if got.status != http.StatusServiceUnavailable || got.body != enforceUnavailableBody || got.header.Get("Retry-After") != enforceRetryAfter {
 				t.Fatalf("dead PDP: %d %q Retry-After %q, want 503 %q Retry-After %s",
@@ -97,7 +97,7 @@ func TestPlatformQuestionWithADeadDecisionPointKeepsTheRetryAnswer(t *testing.T)
 	}
 	dead := newTestPDP(t, allowAll)
 	deadEnforcer := productionEnforcer(t, dead, "admin")
-	dead.srv.Close()
+	dead.kill()
 	got := seamServe(seamHandler(t, legacyStore(true, "member"), userClaims(nil), deadEnforcer), http.MethodPost, "/api/v1/telemetry/opt-in")
 	if got.status != http.StatusServiceUnavailable || got.body != enforceUnavailableBody || got.header.Get("Retry-After") != enforceRetryAfter {
 		t.Fatalf("handler question, dead PDP: %d %q Retry-After %q, want 503 %q Retry-After %s",

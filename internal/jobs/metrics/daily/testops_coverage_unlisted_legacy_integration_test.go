@@ -19,6 +19,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
 func covLegacyZip(t *testing.T, name, body string) []byte {
@@ -104,10 +106,14 @@ func (e *f3Env) coverageServed(org string, day time.Time) string {
 	if _, err := risk.ComputeFamily(e.ctx, run, part); err != nil {
 		e.t.Fatal(err)
 	}
+	newest := func(column string) string {
+		return "(SELECT argMax(" + column + ", computed_at) FROM testops_coverage_metrics_daily WHERE org_id = ? AND day = toDate(?) " +
+			"GROUP BY repo_id, day HAVING " + liverow.NewestPredicate("testops_coverage_metrics_daily", "") + ")"
+	}
 	var served string
 	if err := e.stack.conn.QueryRow(e.ctx, `SELECT concat(
-  'line_coverage_pct=', toString((SELECT any(line_coverage_pct) FROM testops_coverage_metrics_daily FINAL WHERE org_id = ? AND day = toDate(?))),
-  ' lines_covered=', toString((SELECT any(lines_covered) FROM testops_coverage_metrics_daily FINAL WHERE org_id = ? AND day = toDate(?))),
+  'line_coverage_pct=', toString(`+newest("line_coverage_pct")+`),
+  ' lines_covered=', toString(`+newest("lines_covered")+`),
   ' coverage_factor=', toString((SELECT any(coverage_factor) FROM testops_release_confidence FINAL WHERE org_id = ? AND day = toDate(?))))`,
 		org, day.Format(time.DateOnly), org, day.Format(time.DateOnly), org, day.Format(time.DateOnly)).Scan(&served); err != nil {
 		e.t.Fatal(err)

@@ -163,20 +163,32 @@ func TestSegmentWorkItemStatusesFromStatusFallback(t *testing.T) {
 	}
 }
 
-// TestSegmentWorkItemStatusesCompletedAtWinsOverComputedAt ports the
-// "end_of_item = completed_at if present else computed_at" rule.
-func TestSegmentWorkItemStatusesCompletedAtWinsOverComputedAt(t *testing.T) {
+// TestSegmentWorkItemStatusesEndsAtCompletedAtOnlyWhenTerminal: completed_at ends
+// the last segment when the status or the last known transition is terminal;
+// an open item with a kept completed_at runs to computed_at.
+func TestSegmentWorkItemStatusesEndsAtCompletedAtOnlyWhenTerminal(t *testing.T) {
 	created := mustParseUTC(t, "2025-12-17T00:00:00Z")
 	completed := mustParseUTC(t, "2025-12-18T06:00:00Z")
 	computedAt := mustParseUTC(t, "2025-12-19T00:00:00Z")
-	segments := segmentWorkItemStatuses(created, &completed, "todo", []workItemStateTransition{
-		{OccurredAt: mustParseUTC(t, "2025-12-18T00:00:00Z"), FromStatus: "backlog", ToStatus: "in_progress"},
-	}, computedAt)
-	if len(segments) != 2 {
-		t.Fatalf("got %d segments, want 2: %#v", len(segments), segments)
-	}
-	if !segments[1].end.Equal(completed) {
-		t.Fatalf("segments[1].end=%v, want completed_at %v", segments[1].end, completed)
+	for _, tc := range []struct {
+		status, lastTo string
+		wantEnd        time.Time
+	}{
+		{"done", "in_progress", completed},
+		{"canceled", "in_progress", completed},
+		{"todo", "in_progress", computedAt},
+		{"todo", "done", completed},
+		{"in_progress", "canceled", completed},
+	} {
+		segments := segmentWorkItemStatuses(created, &completed, tc.status, []workItemStateTransition{
+			{OccurredAt: mustParseUTC(t, "2025-12-18T00:00:00Z"), FromStatus: "backlog", ToStatus: tc.lastTo},
+		}, computedAt)
+		if len(segments) != 2 {
+			t.Fatalf("status %s, last to %s: got %d segments, want 2: %#v", tc.status, tc.lastTo, len(segments), segments)
+		}
+		if !segments[1].end.Equal(tc.wantEnd) {
+			t.Fatalf("status %s, last to %s: segments[1].end=%v, want %v", tc.status, tc.lastTo, segments[1].end, tc.wantEnd)
+		}
 	}
 }
 

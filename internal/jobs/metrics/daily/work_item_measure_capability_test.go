@@ -98,14 +98,18 @@ type capabilityFinalizeConn struct {
 
 func (conn *capabilityFinalizeConn) Query(_ context.Context, query string, _ ...any) (chdriver.Rows, error) {
 	conn.queries++
+	if query == workItemCopiesReadSQL {
+		return &oneWorkItemCopyRow{}, nil
+	}
 	if strings.Contains(query, "work_items FINAL") {
 		return &oneWorkItemScopedRow{}, nil
 	}
 	return &emptyWorkItemRelatedRows{}, nil
 }
 
-// The finalize family reads the organization's items once and writes the
-// two rows of the one github item; an ambiguous Send reports both rows.
+// The finalize family reads the organization's items once, then their copies
+// (the current-copy rule), and writes the two rows of the one github item; an
+// ambiguous Send reports both rows.
 func TestWorkItemMeasureCapabilityFinalizeWritesAndCountsOnSendAmbiguity(t *testing.T) {
 	for _, sendErr := range []error{nil, errors.New("ambiguous send")} {
 		conn := &capabilityFinalizeConn{capabilityRecordingConn: capabilityRecordingConn{batch: &capabilityRecordingBatch{sendErr: sendErr}}}
@@ -114,8 +118,8 @@ func TestWorkItemMeasureCapabilityFinalizeWritesAndCountsOnSendAmbiguity(t *test
 		if written != 2 || (err != nil) != (sendErr != nil) {
 			t.Fatalf("send error %v: written=%d err=%v, want 2 rows and the send error", sendErr, written, err)
 		}
-		if conn.queries != 2 {
-			t.Fatalf("queries = %d, want the read of the live keys of the day and one read of the organization's items", conn.queries)
+		if conn.queries != 3 {
+			t.Fatalf("queries = %d, want the read of the live keys of the day, one read of the organization's items and one of their copies", conn.queries)
 		}
 	}
 }

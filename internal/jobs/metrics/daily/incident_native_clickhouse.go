@@ -251,16 +251,23 @@ func WriteIncidentMetricsDaily(
 		return 0, ErrInvalidState
 	}
 	batch, err := conn.PrepareBatch(ctx, `INSERT INTO incident_metrics_daily (
-		repo_id, day, incidents_count, mttr_p50_hours, mttr_p90_hours, computed_at, org_id)`)
+		repo_id, day, incidents_count, mttr_p50_hours, mttr_p90_hours, computed_at, org_id,
+		pooled_repair_hours, pooled_samples_stored)`)
 	if err != nil {
 		return 0, fmt.Errorf("prepare incident_metrics_daily batch: %w", err)
 	}
 	computedAtUTC := computedAt.UTC()
 	for _, record := range records {
+		samples := record.RepairHoursSamples
+		fit := pooledSamplesFit(ctx, "incident", organizationID, record.RepoID.String(), record.Day, len(samples))
+		if !fit {
+			samples = nil
+		}
 		if err := batch.Append(
 			record.RepoID, record.Day, record.IncidentsCount,
 			record.MTTRP50Hours, record.MTTRP90Hours,
 			computedAtUTC, organizationID,
+			float64Samples(samples), pooledMarker(fit),
 		); err != nil {
 			return 0, fmt.Errorf("append incident_metrics_daily row: %w", err)
 		}

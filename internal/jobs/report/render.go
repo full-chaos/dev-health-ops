@@ -245,6 +245,13 @@ func renderMarkdown(plan Plan, charts []ChartResult, narratives []narrative, pro
 			lines = append(lines, renderChart(chart), "")
 		}
 	}
+	if len(plan.UnchartedMetrics) > 0 {
+		lines = append(lines, "## Requested Metrics Without a Chart")
+		for _, metric := range plan.UnchartedMetrics {
+			lines = append(lines, "- "+markdownLineText(metric.Label)+": "+metric.Reason)
+		}
+		lines = append(lines, "")
+	}
 	lines = append(lines, "## Provenance", "")
 	if len(provenance) == 0 {
 		lines = append(lines, "No provenance records available.")
@@ -285,6 +292,12 @@ func renderChart(chart ChartResult) string {
 			markdownTableCell(point.X), strconv.FormatFloat(point.Y, 'f', -1, 64), markdownTableCell(point.Group)))
 	}
 	return strings.Join(lines, "\n") + note
+}
+
+// markdownLineText writes a label as plain text on one line: the table-cell escape plus "#", so no label can start a
+// heading such as the "## Provenance" line a reader splits the report on.
+func markdownLineText(value string) string {
+	return strings.ReplaceAll(markdownTableCell(value), "#", "\\#")
 }
 
 var markdownCellLineBreaks = strings.NewReplacer("\r\n", " ", "\n", " ", "\r", " ")

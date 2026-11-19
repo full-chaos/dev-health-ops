@@ -185,6 +185,98 @@ func TestFinalizeFailedBlockedMarkerCover(t *testing.T) {
 		}
 	})
 
+	// A store on the same schema whose clock the cell moves, so a mark and a
+	// later clear stamp different times.
+	var clock time.Time
+	ticking, err := NewPostgresStore(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ticking.now = func() time.Time { return clock }
+	updatedAt := func(t *testing.T, runID string) time.Time {
+		t.Helper()
+		var at time.Time
+		if err := pool.QueryRow(ctx, `SELECT updated_at FROM daily_metrics_runs WHERE id = $1::uuid`, runID).Scan(&at); err != nil {
+			t.Fatal(err)
+		}
+		return at.UTC()
+	}
+	marked := base.Add(48 * time.Hour)
+	cleared := base.Add(72 * time.Hour)
+
+	t.Run("ACoveredFinalizeClearKeepsTheFailedRunsUpdatedAt", func(t *testing.T) {
+		for _, cover := range []string{"full-org", "repository-superset", "finalize-redrive", "partition-recompute"} {
+			t.Run(cover, func(t *testing.T) {
+				s := seed(t)
+				fullOrg := cover != "repository-superset"
+				failed := s.run(coverDay, "failed", "failed", fullOrg, 0, ok(r1, r2))
+				clock = marked
+				s.reconcile(ticking)
+				expect(t, s, failed, BlockedReasonFinalizeFailed, "no later run yet")
+				later := s.run(coverDay, "succeeded", "succeeded", fullOrg, 10, ok(r1), ok(r2, r3))
+				if cover == "finalize-redrive" || cover == "partition-recompute" {
+					s.reopen(later, cover)
+				}
+				clock = cleared
+				outcome := s.reconcile(ticking)
+				got := updatedAt(t, failed)
+				t.Logf("%s: cleared=%d failed=%q updated_at=%s (marked at %s, clear pass at %s)",
+					cover, outcome.Cleared, s.reason(failed), got.Format(time.RFC3339), marked.Format(time.RFC3339), cleared.Format(time.RFC3339))
+				expect(t, s, failed, "", "the later run covers the failed run")
+				if outcome.Cleared != 1 || !got.Equal(marked) {
+					t.Fatalf("cleared=%d updated_at=%s, want 1 and %s unchanged: a covered clear changes only the marker",
+						outcome.Cleared, got.Format(time.RFC3339), marked.Format(time.RFC3339))
+				}
+			})
+		}
+	})
+
+	t.Run("ATransitionThatIsNotACoveredClearStampsUpdatedAt", func(t *testing.T) {
+		t.Run("finalize-failed-mark", func(t *testing.T) {
+			s := seed(t)
+			failed := s.run(coverDay, "failed", "failed", true, 0, ok(r1))
+			clock = marked
+			outcome := s.reconcile(ticking)
+			got := updatedAt(t, failed)
+			t.Logf("marked=%d updated_at=%s", outcome.Marked, got.Format(time.RFC3339))
+			if outcome.Marked != 1 || !got.Equal(marked) {
+				t.Fatalf("marked=%d updated_at=%s, want 1 and %s", outcome.Marked, got.Format(time.RFC3339), marked.Format(time.RFC3339))
+			}
+		})
+		t.Run("partition-reason-clear", func(t *testing.T) {
+			s := seed(t)
+			blocked := s.run(coverDay, "running", "pending", true, 0, ok(r1), coverPartition{repos: []string{r2}, status: "failed_permanent"})
+			clock = marked
+			s.reconcile(ticking)
+			expect(t, s, blocked, BlockedReasonPartialPartitionsPermanent, "a failed_permanent partition with nothing left to run")
+			if _, err := pool.Exec(ctx, `UPDATE daily_metrics_partitions SET status = 'failed', failure_reason = NULL
+                WHERE run_id = $1::uuid AND status = 'failed_permanent'`, blocked); err != nil {
+				t.Fatal(err)
+			}
+			clock = cleared
+			outcome := s.reconcile(ticking)
+			got := updatedAt(t, blocked)
+			t.Logf("cleared=%d updated_at=%s", outcome.Cleared, got.Format(time.RFC3339))
+			expect(t, s, blocked, "", "the partition is dispatchable again")
+			if outcome.Cleared != 1 || !got.Equal(cleared) {
+				t.Fatalf("cleared=%d updated_at=%s, want 1 and %s", outcome.Cleared, got.Format(time.RFC3339), cleared.Format(time.RFC3339))
+			}
+		})
+		t.Run("partition-reason-mark-with-a-later-covering-run", func(t *testing.T) {
+			s := seed(t)
+			blocked := s.run(coverDay, "running", "pending", true, 0, ok(r1), coverPartition{repos: []string{r2}, status: "failed_permanent"})
+			s.run(coverDay, "succeeded", "succeeded", true, 10, ok(r1, r2))
+			clock = marked
+			outcome := s.reconcile(ticking)
+			got := updatedAt(t, blocked)
+			t.Logf("marked=%d updated_at=%s", outcome.Marked, got.Format(time.RFC3339))
+			expect(t, s, blocked, BlockedReasonPartialPartitionsPermanent, "the cover rule sits on the finalize arm only")
+			if outcome.Marked != 1 || !got.Equal(marked) {
+				t.Fatalf("marked=%d updated_at=%s, want 1 and %s", outcome.Marked, got.Format(time.RFC3339), marked.Format(time.RFC3339))
+			}
+		})
+	})
+
 	t.Run("ARepositoryScopedLaterRunReopenedWithPendingPartitionsKeepsTheClearAndRaisesNoAlert", func(t *testing.T) {
 		s := seed(t)
 		failed := s.run(coverDay, "failed", "failed", false, 0, ok(r1, r2))

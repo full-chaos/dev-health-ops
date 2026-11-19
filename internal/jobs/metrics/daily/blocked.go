@@ -169,8 +169,8 @@ const finalizeCoveredByLaterRunSQL = `EXISTS (
 // state writes zero rows, so this can run on every tick without churning
 // updated_at or generating write load proportional to the number of runs.
 const reconcileBlockedRunsSQL = `
-WITH decided AS (
-    SELECT run.id,
+WITH shaped AS (
+    SELECT run.id, run.org_id, run.target_day, run.created_at, run.full_org,
            EXISTS (
                SELECT 1 FROM public.daily_metrics_partitions AS partition
                WHERE partition.run_id = run.id
@@ -224,8 +224,7 @@ WITH decided AS (
                    SELECT 1 FROM public.daily_metrics_partitions AS partition
                    WHERE partition.run_id = run.id
                )
-               AND NOT ` + finalizeCoveredByLaterRunSQL + `
-           ) AS finalize_blocked,
+           ) AS finalize_terminal,
            NOT EXISTS (
                SELECT 1 FROM public.daily_metrics_partitions AS partition
                WHERE partition.run_id = run.id
@@ -251,6 +250,15 @@ WITH decided AS (
     --
     -- The guards are what make this correct, not the absence of overlap.
     WHERE run.org_id = $1::uuid AND run.status IN ('running', 'failed')
+),
+covered AS (
+    SELECT run.*, (run.finalize_terminal AND ` + finalizeCoveredByLaterRunSQL + `) AS finalize_covered
+    FROM shaped AS run
+),
+decided AS (
+    SELECT covered.id, covered.blocked, covered.none_succeeded, covered.finalize_covered,
+           covered.finalize_terminal AND NOT covered.finalize_covered AS finalize_blocked
+    FROM covered
 )
 UPDATE public.daily_metrics_runs AS run
 SET blocked_at = CASE WHEN decided.blocked OR decided.finalize_blocked THEN $2::timestamptz ELSE NULL END,
@@ -264,7 +272,9 @@ SET blocked_at = CASE WHEN decided.blocked OR decided.finalize_blocked THEN $2::
         WHEN decided.finalize_blocked THEN $5
         ELSE NULL
     END,
-    updated_at = $2
+    -- A covered finalize clear changes only the marker: the failed run keeps
+    -- its updated_at. Every other transition stamps it.
+    updated_at = CASE WHEN decided.finalize_covered THEN run.updated_at ELSE $2 END
 FROM decided
 WHERE run.id = decided.id
   AND (decided.blocked OR decided.finalize_blocked) <> (run.blocked_at IS NOT NULL)

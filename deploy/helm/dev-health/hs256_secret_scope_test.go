@@ -224,12 +224,18 @@ func TestWebAuthSecretKeyForm(t *testing.T) {
 			t.Errorf("%s: want a refusal naming web.authSecret.key, got err=%v\n%.300s", name, err, out)
 		}
 	}
-	out, err := helmOut(t, true, append(append([]string{}, base...), "--set", "web.authSecret.key=123")...)
-	if err != nil {
-		t.Fatalf("a numeric web.authSecret.key must render: %v\n%.300s", err, out)
+	out, err := helmOut(t, true, append(append([]string{}, base...), "--set-string", "web.authSecret.key=")...)
+	if err == nil || !strings.Contains(out, "web.authSecret.key must be a Secret key") {
+		t.Errorf("empty key: want a refusal naming web.authSecret.key, got err=%v\n%.300s", err, out)
 	}
-	web, _ := docByName(t, out, "Deployment", "hs256-dev-health-web")
-	if !strings.Contains(web, "key: \"123\"") {
-		t.Fatalf("web AUTH_SECRET key is not \"123\":\n%s", web)
+	for _, key := range []string{"123", "0"} {
+		out, err := helmOut(t, true, append(append([]string{}, base...), "--set-json", "web.authSecret.key="+key)...)
+		if err != nil {
+			t.Fatalf("numeric key %s must render: %v\n%.300s", key, err, out)
+		}
+		web, _ := docByName(t, out, "Deployment", "hs256-dev-health-web")
+		if !strings.Contains(web, "key: \""+key+"\"") {
+			t.Fatalf("web AUTH_SECRET key is not %q:\n%s", key, web)
+		}
 	}
 }

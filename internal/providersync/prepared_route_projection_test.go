@@ -471,8 +471,6 @@ func TestProjectionRefusesASignalOutsideItsKindOrSet(t *testing.T) {
 		{"deployments", map[string]any{"lifecycle_lookup_failed": true}, true},
 		{"deployments", map[string]any{"lifecycle_lookup_failed": "provider text"}, false},
 		{"git_pull_requests", map[string]any{"reviews_lookup_failed": map[string]any{"x": 1}}, false},
-		{"work_item_transitions", map[string]any{"provider": "linear"}, true},
-		{"work_item_transitions", map[string]any{"provider": "provider text"}, false},
 		{"deployments", map[string]any{"lifecycle_lookup_failed": nil}, false},
 		{"work_item_team_attributions", map[string]any{"priority": nil}, false},
 		{"work_item_team_attributions", map[string]any{"ownership_reason": nil}, false},

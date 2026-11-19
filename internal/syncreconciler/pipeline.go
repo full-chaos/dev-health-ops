@@ -160,6 +160,7 @@ type MutationPipeline struct {
 	sweep        UnreclaimableSweepStepper
 	outboxClose  TerminalOutboxCloseStepper
 	orphanedUnit OrphanedUnitRepairStepper
+	chunkReclaim ChunkSidecarReclaimStepper
 	config       MutationPipelineConfig
 
 	stages stageTelemetry
@@ -242,13 +243,14 @@ func NewMutationPipeline(
 	sweep UnreclaimableSweepStepper,
 	outboxClose TerminalOutboxCloseStepper,
 	orphanedUnit OrphanedUnitRepairStepper,
+	chunkReclaim ChunkSidecarReclaimStepper,
 	config MutationPipelineConfig,
 ) (*MutationPipeline, error) {
 	// outboxClose is REQUIRED, unlike sweep -- see TerminalOutboxCloseStepper's
 	// doc comment for why CHAOS-4583's closer carries no staged-rollout risk
 	// the way the sweep's terminalization did.
 	if repair == nil || terminal == nil || materializer == nil || kernel == nil ||
-		observer == nil || outboxClose == nil || orphanedUnit == nil || !config.valid() {
+		observer == nil || outboxClose == nil || orphanedUnit == nil || chunkReclaim == nil || !config.valid() {
 		return nil, ErrInvalidConfiguration
 	}
 	pipeline := &MutationPipeline{
@@ -262,6 +264,7 @@ func NewMutationPipeline(
 		sweep:        sweep,
 		outboxClose:  outboxClose,
 		orphanedUnit: orphanedUnit,
+		chunkReclaim: chunkReclaim,
 		config:       config,
 		stages:       newStageTelemetry(),
 		runawayLog:   newRunawayLogState(),
@@ -1025,6 +1028,24 @@ func (pipeline *MutationPipeline) Step(
 				return recovered, err
 			}
 			aborted = true
+		}
+	}
+
+	// After the kernel so it never delays a delivery. Its failure is absorbed
+	// and logged; the stage telemetry degrades readiness only on repeats.
+	if !aborted {
+		reclaimErr := pipeline.runStage(ctx, StageChunkSidecarReclaim, func(stageCtx context.Context) error {
+			_, stepErr := pipeline.chunkReclaim.Step(stageCtx, now, limit)
+			return stepErr
+		})
+		if reclaimErr != nil && ctx.Err() != nil {
+			return recovered, reclaimErr
+		}
+		if reclaimErr != nil {
+			slog.Warn(
+				"syncreconciler.chunk_sidecar_reclaim_stage_failed",
+				"error", reclaimErr.Error(),
+			)
 		}
 	}
 

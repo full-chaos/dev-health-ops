@@ -61,6 +61,7 @@ func newStageBehaviorPipeline(t *testing.T, config MutationPipelineConfig, behav
 		pipelineOrphanedUnitRepairFunc(func(ctx context.Context, _ time.Time, _ int) (OrphanedUnitRepairResult, error) {
 			return OrphanedUnitRepairResult{}, run(StageOrphanedUnitRepair, ctx)
 		}),
+		noopChunkSidecarReclaim(),
 		config,
 	)
 	if err != nil {

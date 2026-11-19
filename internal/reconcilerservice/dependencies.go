@@ -437,6 +437,12 @@ func buildSyncMutationPipeline(
 	if err != nil {
 		return nil, err
 	}
+	// The domain role holds DELETE on both chunk tables (storage/postgres
+	// domainPosture).
+	chunkReclaim, err := syncreconciler.NewChunkSidecarReclaim(domainPool)
+	if err != nil {
+		return nil, err
+	}
 	materializer, err := syncreconciler.NewMaterializer(coordinatorPool)
 	if err != nil {
 		return nil, err
@@ -503,6 +509,7 @@ func buildSyncMutationPipeline(
 		sweep,
 		outboxClose,
 		orphanedUnitRepair,
+		chunkReclaim,
 		pipelineConfig,
 	)
 }

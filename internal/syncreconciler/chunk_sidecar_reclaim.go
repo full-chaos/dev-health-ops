@@ -257,12 +257,13 @@ func (reclaim *ChunkSidecarReclaim) Step(ctx context.Context, now time.Time, lim
 }
 
 // report writes the one per-tick line and passes err through. A failed tick
-// keeps its committed totals and reports remaining_units=-1 (not measured).
+// keeps its committed totals and reports remaining_units=-1 (not measured); it
+// stays silent only when the reclaimer was idle and nothing was throttled.
 func (reclaim *ChunkSidecarReclaim) report(result ChunkSidecarReclaimResult, err error) (ChunkSidecarReclaimResult, error) {
 	if err != nil {
 		result.RemainingUnits = -1
 		result.Done = false
-		if result.Statements == 0 {
+		if result.Statements == 0 && !result.Throttled && !reclaim.isActive() {
 			return result, err
 		}
 	}

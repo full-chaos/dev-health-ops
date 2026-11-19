@@ -463,6 +463,39 @@ func TestChunkSidecarReclaimPostgresContract(t *testing.T) {
 		wantChunkSidecars(t, ctx, venue.Admin, unit, 1, 44)
 	})
 
+	t.Run("an active reclaimer logs a tick that fails before any commit", func(t *testing.T) {
+		resetChunkReclaimVenue(t, ctx, venue)
+		unit := chunkReclaimUnitID(55)
+		seedChunkReclaimUnit(t, ctx, venue.Admin, unit, "failed", 300, 1, now)
+		config := unlimited
+		config.StatementsPerTick = 1
+		refuse := false
+		reclaim, err := newChunkSidecarReclaim(func(beginCtx context.Context) (pgx.Tx, error) {
+			if refuse {
+				return nil, errors.New("begin refused")
+			}
+			return venue.Domain.Begin(beginCtx)
+		}, config)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if first := stepChunkReclaim(t, ctx, reclaim, now); first.Rows != 256 || first.RemainingUnits != 1 {
+			t.Fatalf("first tick = %+v, want 256 rows and 1 remaining unit", first)
+		}
+		refuse = true
+		var logs bytes.Buffer
+		original := slog.Default()
+		slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
+		result, stepErr := reclaim.Step(ctx, now, 100)
+		slog.SetDefault(original)
+		if !errors.Is(stepErr, ErrUnavailable) || result.Statements != 0 || result.RemainingUnits != -1 {
+			t.Fatalf("failed tick = %+v / %v, want no statement, remaining -1, ErrUnavailable", result, stepErr)
+		}
+		if !strings.Contains(logs.String(), `"msg":"syncreconciler.chunk_sidecar_reclaim","bytes":0,"rows":0,"units":0,"statements":0,"throttled":false,"remaining_units":-1,"done":false,"error":`) {
+			t.Fatalf("an active reclaimer's failed tick wrote no tick line: %s", logs.String())
+		}
+	})
+
 	t.Run("a COMMIT whose reply is lost keeps its whole reservation", func(t *testing.T) {
 		resetChunkReclaimVenue(t, ctx, venue)
 		unit := chunkReclaimUnitID(60)

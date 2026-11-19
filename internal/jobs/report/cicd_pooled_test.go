@@ -29,7 +29,7 @@ func TestCicdPooledRulesAreTheWritersOwn(t *testing.T) {
 		{"a deleted run is no run", "PipelineRunsSource", "AND " + deleted, "AND " + cicdCountedRunPredicate},
 		{"the run finishes on the day", "PipelineRunsSource",
 			"WHERE finished_at >= {start:DateTime64(3, 'UTC')} AND finished_at < {end:DateTime64(3, 'UTC')}",
-			"AND finished_at IS NOT NULL\n      AND toDate(finished_at) >= {start_date:Date} AND toDate(finished_at) < {end_date:Date}"},
+			"AND finished_at IS NOT NULL\n          AND toDate(finished_at) >= {start_date:Date} AND toDate(finished_at) < {end_date:Date}"},
 		{"the run is counted on its finish day", "PipelineRunsSource",
 			"WHERE finished_at >= {start:DateTime64(3, 'UTC')} AND finished_at < {end:DateTime64(3, 'UTC')}",
 			"toDate(finished_at) AS day"},
@@ -37,6 +37,9 @@ func TestCicdPooledRulesAreTheWritersOwn(t *testing.T) {
 			"if(finished_at >= started_at, dateDiff('millisecond', started_at, finished_at) / 60000, NULL) AS " + cicdRunMinutes},
 		{"queue sample", "compute.go", "if row.QueuedAt != nil {\n\t\t\tqueueMin := startedAt.Sub(row.QueuedAt.UTC()).Minutes()\n\t\t\tif queueMin >= 0 {",
 			"if(queued_at IS NOT NULL AND started_at >= queued_at, dateDiff('millisecond', queued_at, started_at) / 60000, NULL) AS " + cicdQueueMinutes},
+		{"the stored samples are the writer's own samples, one per counted run", "compute.go",
+			"bucket.runDurations = append(bucket.runDurations, runDuration)\n\t\tbucket.runQueues = append(bucket.runQueues, runQueue)",
+			"ARRAY JOIN pooled_run_minutes AS stored_run_minutes, pooled_queue_minutes AS stored_queue_minutes"},
 	}
 	for _, pin := range pins {
 		writer := cicd.PipelineRunsSource
@@ -90,7 +93,7 @@ func TestCicdPooledStatementReadsComputedDaysUnderTheBound(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, want := range []string{"SELECT repo_id, day FROM cicd_metrics_daily", "max_rows_to_read = 5000000, read_overflow_mode = 'throw'", "HAVING y IS NOT NULL"} {
+		for _, want := range []string{"FROM cicd_metrics_daily\n", "WHERE pooled_samples_stored = 1", "WHERE pooled_samples_stored != 1", "max_rows_to_read = 5000000, read_overflow_mode = 'throw'", "HAVING y IS NOT NULL"} {
 			if !strings.Contains(statement, want) {
 				t.Errorf("%s: the statement has no %q:\n%s", metric, want, statement)
 			}

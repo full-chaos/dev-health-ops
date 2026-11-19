@@ -111,7 +111,7 @@ func TestPagerDutyServicesMappingSnapshotKeepsStoredLegacyHeuristicRows(t *testi
 					source = pagerDutyMappingAdmin
 				}
 				row, err := pagerDutyServiceMappingFromReference(service(s.serviceID, seededAt),
-					pagerDutyServiceRepositoryReference{Provider: "github", FullName: s.repo}, source, seededAt, "")
+					pagerDutyServiceRepositoryReference{Provider: "github", FullName: s.repo}, source, seededAt)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -134,7 +134,7 @@ func TestPagerDutyServicesMappingSnapshotKeepsStoredLegacyHeuristicRows(t *testi
 
 			snapshotRow, err := pagerDutyServiceMappingFromReference(service("PS1", syncedAt),
 				pagerDutyServiceRepositoryReference{Provider: "github", FullName: "full-chaos/payments"},
-				pagerDutyMappingMetadata, syncedAt, "")
+				pagerDutyMappingMetadata, syncedAt)
 			if err != nil {
 				t.Fatal(err)
 			}

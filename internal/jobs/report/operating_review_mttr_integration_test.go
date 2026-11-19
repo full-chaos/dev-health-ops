@@ -80,47 +80,71 @@ func TestOperatingReviewMTTRTileEqualsPooled(t *testing.T) {
 	}
 }
 
-// The availability of the tile is that of the pooled result: a sample the daily writer has not seen is data, and a stored
-// value whose sample is gone is no data, not a measured zero.
+// The availability of the tile is that of the sample set the daily writer stored (CHAOS-14025): a bug synced after the
+// writer ran is no data until the writer runs again, and a stored value whose sample is gone stays data until then. On
+// the next run the tile, the report and the stored row move together. Never a measured zero.
 func TestOperatingReviewMTTRTileDataFollowsThePool(t *testing.T) {
 	e := startPooledEnv(t)
 	client := mttrTileClient(e)
 	at := func(day time.Time, i int) time.Time { return day.Add(time.Duration(i+1) * 30 * time.Minute) }
+	day := deliveryDay1.Format(time.DateOnly)
+	chart := func(org string) (float64, bool) {
+		value, ok := e.deliveryChart(org, "mttr_hours", "", "scorecard", "2026-02-02", "2026-02-08")["total"]
+		return value, ok
+	}
 
-	// a: the writer ran with no bug (stored MTTR NULL); a bug completed that day is synced after it. Pooled 4, data.
+	// a: the writer ran with no bug (stored MTTR NULL); a bug completed that day is synced after it. No data until the
+	// writer runs again; then 4 with data.
 	orgA := e.newOrg()
 	const repoA = "14026000-0000-4000-8000-0000000000f1"
 	e.insertRepo(orgA, repoA)
 	e.insertPullRequest(orgA, repoA, 1, at(deliveryDay1, 0), 5, 5)
-	e.computeDelivery(orgA, []string{repoA}, deliveryDay1.Format(time.DateOnly))
+	e.computeDelivery(orgA, []string{repoA}, day)
 	e.insertBug(orgA, repoA, "late", "bug", at(deliveryDay1, 1), at(deliveryDay1, 1).Add(4*time.Hour))
 	valueA, hasA := mttrTile(e, client, orgA)
-	pooledA := e.deliveryChart(orgA, "mttr_hours", "", "scorecard", "2026-02-02", "2026-02-08")["total"]
-	if !hasA || !near(valueA, 4) || !near(pooledA, 4) {
-		t.Errorf("a (pooled sample, stored NULL): tile %v (hasData %v), pooled %v, want 4 with data", valueA, hasA, pooledA)
+	pooledA, pointA := chart(orgA)
+	if hasA || valueA != 0 || pointA {
+		t.Errorf("a before the re-run (late bug, stored NULL): tile %v (hasData %v), chart %v (point %v), want no data and no point", valueA, hasA, pooledA, pointA)
+	}
+	writerTick()
+	e.computeDelivery(orgA, []string{repoA}, day)
+	valueA, hasA = mttrTile(e, client, orgA)
+	pooledA, pointA = chart(orgA)
+	storedA := e.storedDelivery(orgA, repoA, "repo_metrics_daily", "mttr_hours")[day]
+	if !hasA || !near(valueA, 4) || !pointA || !near(pooledA, 4) || !near(storedA, 4) {
+		t.Errorf("a after the re-run: tile %v (hasData %v), chart %v, stored %v, want all 4 with data", valueA, hasA, pooledA, storedA)
 	}
 
-	// b: the writer stored 2 h; the work item is then corrected to a story, so the pool is empty. No data, not 0.
+	// b: the writer stored 2 h; the work item is then corrected to a story. The tile keeps the stored 2 h until the
+	// writer runs again; then no data, not 0.
 	orgB := e.newOrg()
 	const repoB = "14026000-0000-4000-8000-0000000000f2"
 	e.insertRepo(orgB, repoB)
 	e.insertBug(orgB, repoB, "gone", "bug", at(deliveryDay1, 0), at(deliveryDay1, 0).Add(2*time.Hour))
 	e.insertPullRequest(orgB, repoB, 1, at(deliveryDay1, 0), 5, 5)
-	e.computeDelivery(orgB, []string{repoB}, deliveryDay1.Format(time.DateOnly))
-	stored := e.storedDelivery(orgB, repoB, "repo_metrics_daily", "mttr_hours")
+	e.computeDelivery(orgB, []string{repoB}, day)
 	e.exec(`INSERT INTO work_items (repo_id, work_item_id, provider, type, created_at, updated_at, started_at, completed_at, last_synced, org_id)
 VALUES (?, 'gone', 'jira', 'story', ?, ?, ?, ?, '2026-02-03 00:00:00.000', ?)`,
 		repoB, at(deliveryDay1, 0).Format(deliveryTimeFormat), at(deliveryDay1, 0).Format(deliveryTimeFormat), at(deliveryDay1, 0).Format(deliveryTimeFormat),
 		at(deliveryDay1, 0).Add(2*time.Hour).Format(deliveryTimeFormat), orgB)
 	valueB, hasB := mttrTile(e, client, orgB)
-	if !near(stored["2026-02-02"], 2) || hasB || valueB != 0 {
-		t.Errorf("b (empty pool, stored 2): stored %v, tile %v (hasData %v), want stored 2 and no data", stored, valueB, hasB)
+	pooledB, pointB := chart(orgB)
+	storedB := e.storedDelivery(orgB, repoB, "repo_metrics_daily", "mttr_hours")[day]
+	if !hasB || !near(valueB, 2) || !pointB || !near(pooledB, 2) || !near(storedB, 2) {
+		t.Errorf("b before the re-run (story correction): tile %v (hasData %v), chart %v, stored %v, want all 2 with data", valueB, hasB, pooledB, storedB)
+	}
+	writerTick()
+	e.computeDelivery(orgB, []string{repoB}, day)
+	valueB, hasB = mttrTile(e, client, orgB)
+	pooledB, pointB = chart(orgB)
+	if hasB || valueB != 0 || pointB {
+		t.Errorf("b after the re-run (empty pool): tile %v (hasData %v), chart %v (point %v), want no data and no point", valueB, hasB, pooledB, pointB)
 	}
 }
 
-// A mapping that became valid after the week ended but before the request counts for the tile as for the report: both
-// read the incident mappings at the request instant.
-func TestOperatingReviewMTTRTileReadsMappingsAtRequestTime(t *testing.T) {
+// A mapping that became valid after the week ended but before the daily writer ran counts for the tile as for the
+// report: both read the samples the writer stored, through the incident mappings valid at its run (CHAOS-14025).
+func TestOperatingReviewMTTRTileReadsTheWritersMappings(t *testing.T) {
 	e := startPooledEnv(t)
 	client := mttrTileClient(e)
 	org := e.newOrg()

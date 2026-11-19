@@ -71,6 +71,7 @@ var (
 	ScanWorkItemCompletionDay                         = Step{label: "scan work item completion day"}
 	IterateWorkItemCompletionDays                     = Step{label: "iterate work item completion days"}
 	LoadLinkedIssueDonorRows                          = Step{label: "load linked issue donor rows"}
+	LoadIssueLinkedPullRequests                       = Step{label: "load issue linked pull requests"}
 	QueryWorkItemDependenciesDonorChange              = Step{label: "query work_item_dependencies (donor change)"}
 	ScanWorkItemDependenciesRowDonorChange            = Step{label: "scan work_item_dependencies row (donor change)"}
 	IterateWorkItemDependenciesDonorChange            = Step{label: "iterate work_item_dependencies rows (donor change)"}

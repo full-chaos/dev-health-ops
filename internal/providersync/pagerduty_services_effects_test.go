@@ -49,7 +49,7 @@ func TestPagerDutyServicesEffectsRejectForeignScopeOrderingTamperAndMixedInstanc
 
 	mapping, err := pagerDutyServiceMappingFromReference(
 		service, pagerDutyServiceRepositoryReference{Provider: "github", FullName: "full-chaos/payments"},
-		pagerDutyMappingMetadata, now, "",
+		pagerDutyMappingMetadata, now,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -101,7 +101,7 @@ func TestPagerDutyServicesTombstonesAdvanceVersionsAndPreserveMappingOwnership(t
 	}
 	mapping, err := pagerDutyServiceMappingFromReference(
 		service, pagerDutyServiceRepositoryReference{Provider: "github", FullName: "full-chaos/payments"},
-		pagerDutyMappingMetadata, now, "",
+		pagerDutyMappingMetadata, now,
 	)
 	if err != nil {
 		t.Fatal(err)

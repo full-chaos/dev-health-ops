@@ -31,7 +31,7 @@ func keptAt(offset time.Duration) time.Time {
 	return time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC).Add(offset)
 }
 
-// newKeptConn migrates a ClickHouse container through the whole chain (migration 160 included) and stops merges of
+// newKeptConn migrates a ClickHouse container through the whole chain (migration 162 included) and stops merges of
 // git_pull_requests, so every inserted version stays a physical row.
 func newKeptConn(t *testing.T) (context.Context, driver.Conn) {
 	t.Helper()
@@ -133,7 +133,7 @@ func repairKey(ctx context.Context, t *testing.T, conn Repairer, number uint32) 
 	}
 }
 
-// CHAOS-6014 cells of the repair itself, on the migrated schema (migration 160).
+// CHAOS-6014 cells of the repair itself, on the migrated schema (migration 162).
 func TestKeptGroupRepairAgainstRealClickHouse(t *testing.T) {
 	ctx, conn := newKeptConn(t)
 
@@ -256,7 +256,7 @@ func TestKeptGroupRepairAgainstRealClickHouse(t *testing.T) {
 		}
 		swept := false
 		for _, file := range chain {
-			if file.Version != "160_stored_version_kept_groups.sql" {
+			if file.Version != "162_stored_version_kept_groups.sql" {
 				continue
 			}
 			for _, statement := range chmigrate.SplitStatements(file.SQL) {
@@ -269,7 +269,7 @@ func TestKeptGroupRepairAgainstRealClickHouse(t *testing.T) {
 			}
 		}
 		if !swept {
-			t.Fatal("migration 160 has no git_pull_requests repair statement")
+			t.Fatal("migration 162 has no git_pull_requests repair statement")
 		}
 		if final, _ := readReview(ctx, t, conn, 6); final.firstReview != "2026-07-23 11:30:00.000" || final.reviews != 2 {
 			t.Fatalf("FINAL = %+v after the migration repair; want (11:30, 2)", final)

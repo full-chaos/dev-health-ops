@@ -2,6 +2,9 @@ package providersync
 
 import (
 	"fmt"
+	"maps"
+	"math/rand/v2"
+	"slices"
 	"testing"
 )
 
@@ -118,4 +121,143 @@ func TestGitHubTestsRunReportsKeepTheOtherTotalWhenLegsShareASuiteInstance(t *te
 	}
 	mismatch := githubTestsAggregateMismatchCause
 	assertGroupDecision(t, artifacts, map[string]string{"4": mismatch, "5": mismatch, "6": mismatch})
+}
+
+// matrixRoleWalk walks the artifacts (each with its role and id; size = its archive size) and returns the decision by role: the
+// marker cause, or "kept".
+func matrixRoleWalk(t *testing.T, roles []string, artifacts []rowsArtifact) (githubTestsWalk, map[string]string) {
+	t.Helper()
+	sized := slices.Clone(artifacts)
+	for index := range sized {
+		members := map[string]string{"junit.xml": sized[index].body}
+		maps.Copy(members, sized[index].extra)
+		sized[index].size = int64(len(githubTestsZip(t, members)))
+	}
+	walk, _, _ := rowsWalk(t, 1, sized...)
+	causes := markerCauses(walk)
+	decisions := map[string]string{}
+	for index, role := range roles {
+		decisions[role] = "kept"
+		if cause, ok := causes[sized[index].id]; ok {
+			decisions[role] = cause
+		}
+	}
+	return walk, decisions
+}
+
+// CHAOS-14045 round 1 P1: a copy family's representative is chosen by content, so two timed copies of which only one holds
+// coverage rows give the same stored rows, markers and watermark whichever is uploaded first. The coverage-bearing copy is the
+// representative: the plain copy holds nothing it does not, so it is dropped, and a mismatch is seeded only by a real
+// disagreement. The expected suite counts are the rows each distinct suite instance contributes once: an exact total whose touch
+// group holds no mismatch is dropped, and so is the plain copy.
+func TestGitHubTestsRunReportsCopyRepresentativeIsChosenByContent(t *testing.T) {
+	leftA := fxSuite{name: "left", cases: []fxCase{{name: "a", dur: "0.125"}}}
+	rightA := fxSuite{name: "right", cases: []fxCase{{name: "b", dur: "0.125"}}}
+	badA := fxSuite{name: "left", cases: []fxCase{{name: "a", dur: "0.125", status: "failed"}}}
+	leftB := fxSuite{name: "left", cases: []fxCase{{name: "a", dur: "0.25"}}}
+	rightB := fxSuite{name: "right", cases: []fxCase{{name: "b", dur: "0.25"}}}
+	drop, mismatch := githubTestsAggregateOfPartsCause, githubTestsAggregateMismatchCause
+	for _, coverage := range []struct {
+		name  string
+		files map[string]string
+	}{
+		{"lcov", map[string]string{"coverage.info": groupLCOV}},
+		{"cobertura", map[string]string{"coverage.xml": groupCobertura}},
+		{"both", map[string]string{"coverage.info": groupLCOV, "coverage.xml": groupCobertura}},
+	} {
+		for _, layout := range []struct {
+			name     string
+			roles    []string
+			suites   [][]fxSuite
+			want     map[string]string
+			rows     int
+			advances bool
+		}{
+			// One suite instance (left of leg B, with its coverage): 1 suite.
+			{"copy-only", []string{"plain", "covered"}, [][]fxSuite{{leftB}, {leftB}},
+				map[string]string{"plain": drop, "covered": "kept"}, 1, true},
+			// left-B (covered copy) and right-B: 2 suites; the plain copy and total-b hold only those rows.
+			{"touching-exact-total", []string{"plain", "covered", "right-b", "total-b"}, [][]fxSuite{{leftB}, {leftB}, {rightB}, {leftB, rightB}},
+				map[string]string{"plain": drop, "covered": "kept", "right-b": "kept", "total-b": drop}, 2, true},
+			// Leg B as above (2) plus leg A's two shards (2) and its mismatched total (2), which touches only leg A: 6 suites.
+			{"exact-total-beside-an-independent-mismatch",
+				[]string{"plain", "covered", "right-b", "total-b", "left-a", "right-a", "total-a"},
+				[][]fxSuite{{leftB}, {leftB}, {rightB}, {leftB, rightB}, {leftA}, {rightA}, {badA, rightA}},
+				map[string]string{"plain": drop, "covered": "kept", "right-b": "kept", "total-b": drop, "left-a": "kept", "right-a": "kept", "total-a": mismatch}, 6, false},
+			// The copies are totals of two shards; the covered total disagrees with its shards (coverage), so it and its plain copy
+			// are kept and reported: 2 + 2 + 1 + 1 = 6 suites.
+			{"copies-of-a-total", []string{"plain", "covered", "left-b", "right-b"}, [][]fxSuite{{leftB, rightB}, {leftB, rightB}, {leftB}, {rightB}},
+				map[string]string{"plain": mismatch, "covered": mismatch, "left-b": "kept", "right-b": "kept"}, 6, false},
+		} {
+			t.Run(coverage.name+"/"+layout.name, func(t *testing.T) {
+				for _, coveredFirst := range []bool{false, true} {
+					for _, reversed := range []bool{false, true} {
+						artifacts := make([]rowsArtifact, len(layout.roles))
+						for index, suites := range layout.suites {
+							artifacts[index] = rowsArtifact{id: fmt.Sprint(index + 1), body: fxJUnit(suites)}
+						}
+						artifacts[1].extra = coverage.files
+						if coveredFirst {
+							artifacts[0].id, artifacts[1].id = artifacts[1].id, artifacts[0].id
+						}
+						roles := slices.Clone(layout.roles)
+						if reversed {
+							slices.Reverse(artifacts)
+							slices.Reverse(roles)
+						}
+						walk, got := matrixRoleWalk(t, roles, artifacts)
+						if !maps.Equal(got, layout.want) || walk.cursor.Suites != layout.rows || walk.cursor.Cases != layout.rows ||
+							walk.cursor.Coverage == 0 || (walk.final.Watermark != nil) != layout.advances {
+							t.Fatalf("covered first %t, listing reversed %t: decisions %v, suites %d, cases %d, coverage %d, advanced %t; "+
+								"want %v, %d suites and cases, coverage kept, advanced %t", coveredFirst, reversed, got, walk.cursor.Suites,
+								walk.cursor.Cases, walk.cursor.Coverage, walk.final.Watermark != nil, layout.want, layout.rows, layout.advances)
+						}
+					}
+				}
+			})
+		}
+	}
+}
+
+func matrixJobLog() string {
+	log := make([]byte, 600_000)
+	samples := rand.NewPCG(63, 79)
+	for index := range log {
+		log[index] = byte(' ' + samples.Uint64()%95)
+	}
+	return string(log)
+}
+
+// CHAOS-14045 round 1 P2(1): the run's report rows are admitted on the final kept set, after the drops. Dropping leg B's exact
+// total frees budget, which an unrelated report of 99,990 rows then fills; leg A's mismatched total (it carries a large test log,
+// so it sorts last) no longer fits and is refused with per_run_cap, the committed rows stay within the run bound (100,006 held),
+// and the watermark is withheld.
+func TestGitHubTestsRunReportsAdmitOnTheFinalKeptSet(t *testing.T) {
+	artifacts, late, goodTotal := matrixLegs(matrixLegsLayout{shards: 2}, true, false)
+	for index := range artifacts {
+		if artifacts[index].id == late {
+			artifacts[index].extra = map[string]string{"test.log": matrixJobLog()}
+		}
+	}
+	artifacts = append(artifacts, rowsArtifact{id: "7", body: githubTestsNamedMultiSuiteJUnit("unrelated-", 49_995)})
+	walk, got := matrixRoleWalk(t, []string{"1", "2", "3", "4", "5", "6", "7"}, artifacts)
+	var lateCauses []string
+	for _, marker := range walk.cursor.SkippedArtifacts {
+		if marker.ArtifactID == late {
+			lateCauses = append(lateCauses, marker.Cause)
+		}
+	}
+	if rows := committedReportRows(walk); rows > githubTestsMaxReportRowsPerRun {
+		t.Fatalf("committed %d report rows, over the run bound %d", rows, githubTestsMaxReportRowsPerRun)
+	}
+	if !slices.Contains(lateCauses, githubTestsPerRunCapCause) || got["7"] != "kept" || got[goodTotal] != githubTestsAggregateOfPartsCause {
+		t.Fatalf("late artifact %s markers %v, decisions %v: want the late artifact refused with per_run_cap, the unrelated report "+
+			"kept and leg B's exact total dropped", late, lateCauses, got)
+	}
+	if observed(walk, githubTestsPerRunCapCause) != 1 {
+		t.Fatalf("observations %+v, want per_run_cap once", walk.cursor.Incomplete)
+	}
+	if walk.final.Watermark != nil {
+		t.Fatal("the watermark advanced although the run was cut by the bound")
+	}
 }

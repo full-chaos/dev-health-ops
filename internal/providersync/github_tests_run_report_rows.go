@@ -9,6 +9,7 @@ import (
 	"slices"
 	"sort"
 	"strconv"
+	"strings"
 )
 
 // githubTestsRowsJSONBytes is the JSON size of the rows as the effect batch counts them: BuildEffectBatch compacts the
@@ -159,10 +160,10 @@ type githubTestsPartitionBound struct {
 // 73,000 held rows spends about 290,000.
 var githubTestsDefaultPartitionBound = githubTestsPartitionBound{Work: 1 << 23}
 
-// githubTestsPlanRunReports decides a run's report artifacts. (1) Copies: an artifact equal to one with a lower id on every case's
-// class, name, outcome and duration and on every suite's name, start and duration, both carrying durations at all (without them two
-// reports cannot be told from two real executions of the same tests, such as matrix legs), is a copy of the lowest such id, its
-// representative. (2) Aggregates: among representatives, smallest first, an artifact whose case identities are a disjoint union of
+// githubTestsPlanRunReports decides a run's report artifacts. (1) Copies: artifacts equal on every case's class, name, outcome and
+// duration and on every suite's name, start and duration, all carrying durations at all (without them two reports cannot be told
+// from two real executions of the same tests, such as matrix legs), are one copy family; its representative is chosen by content
+// (githubTestsCopyRepresentative), the others are its copies. (2) Aggregates: among representatives, smallest first, an artifact whose case identities are a disjoint union of
 // two or more smaller artifacts' that are not themselves aggregates is an aggregate of those parts. Its parts are searched first
 // among the artifacts whose suites (each with its cases) are all in the aggregate, so a partition that holds every stored row is
 // found whatever the upload order; only when none exists is a partition by case identity alone its parts. (3) Touch groups: a
@@ -232,24 +233,39 @@ func githubTestsPlanRunReportsWithin(parsed []githubTestsParsedReport, bound git
 	var relations []relation
 	byID := append([]int(nil), candidates...)
 	sort.SliceStable(byID, func(i, j int) bool { return githubTestsArtifactIDLess(parsed[byID[i]].ID, parsed[byID[j]].ID) })
-	var representatives []int
+	var families [][]int
 	for _, index := range byID {
-		representative := -1
-		for _, other := range representatives {
-			if timed[index] && timed[other] && githubTestsCountsEqual(copies[index], copies[other]) {
-				representative = other
+		placed := false
+		for family, members := range families {
+			if first := members[0]; timed[index] && timed[first] && githubTestsCountsEqual(copies[index], copies[first]) {
+				families[family], placed = append(members, index), true
 				break
 			}
 		}
-		if representative < 0 {
-			representatives = append(representatives, index)
-			continue
+		if !placed {
+			families = append(families, []int{index})
 		}
-		lossless, err := githubTestsReportLossless(parsed[index], content, index, []int{representative})
-		if err != nil {
-			return githubTestsRunReportPlan{}, err
+	}
+	var representatives []int
+	for _, members := range families {
+		representative := members[0]
+		if len(members) > 1 {
+			var err error
+			if representative, err = githubTestsCopyRepresentative(parsed, content, members); err != nil {
+				return githubTestsRunReportPlan{}, err
+			}
 		}
-		relations = append(relations, relation{index: index, parts: []int{representative}, lossless: lossless})
+		representatives = append(representatives, representative)
+		for _, index := range members {
+			if index == representative {
+				continue
+			}
+			lossless, err := githubTestsReportLossless(parsed[index], content, index, []int{representative})
+			if err != nil {
+				return githubTestsRunReportPlan{}, err
+			}
+			relations = append(relations, relation{index: index, parts: []int{representative}, lossless: lossless})
+		}
 	}
 	bySize := append([]int(nil), representatives...)
 	sort.SliceStable(bySize, func(i, j int) bool { return len(parsed[bySize[i]].Cases) < len(parsed[bySize[j]].Cases) })
@@ -458,6 +474,42 @@ func githubTestsPlanRunReportsWithin(parsed []githubTestsParsedReport, bound git
 
 // githubTestsContentWithin says whether every suite instance of the report at part (githubTestsReportContent) is also in the report
 // at whole, as many times, counting one work unit per instance read.
+// githubTestsCopyRepresentative picks a copy family's representative by content, not by id (CHAOS-14045): a member that holds
+// coverage rows first (a copy is dropped only without them, so a family with one coverage-bearing member then drops the others in
+// any upload order), then the lowest content digest, then the lowest id (members are in id order).
+func githubTestsCopyRepresentative(
+	parsed []githubTestsParsedReport, content func(int) (githubTestsCaseCounts, error), members []int,
+) (int, error) {
+	digest := func(index int) (string, error) {
+		counts, err := content(index)
+		if err != nil {
+			return "", err
+		}
+		keys := make([]string, 0, len(counts))
+		for key, count := range counts {
+			keys = append(keys, key+":"+strconv.Itoa(count))
+		}
+		sort.Strings(keys)
+		return strings.Join(keys, ","), nil
+	}
+	best := members[0]
+	bestDigest, err := digest(best)
+	if err != nil {
+		return 0, err
+	}
+	for _, index := range members[1:] {
+		indexDigest, err := digest(index)
+		if err != nil {
+			return 0, err
+		}
+		covered, bestCovered := len(parsed[index].Coverage) > 0, len(parsed[best].Coverage) > 0
+		if (covered && !bestCovered) || (covered == bestCovered && indexDigest < bestDigest) {
+			best, bestDigest = index, indexDigest
+		}
+	}
+	return best, nil
+}
+
 func githubTestsContentWithin(content func(int) (githubTestsCaseCounts, error), part, whole int, work *int) (bool, error) {
 	partContent, err := content(part)
 	if err != nil {

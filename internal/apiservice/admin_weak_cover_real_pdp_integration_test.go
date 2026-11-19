@@ -742,10 +742,11 @@ func (w *wcWorld) cellOn(t *testing.T, sides wcSides, c *wcCaller, rowIndex int)
 		if a.status == 0 {
 			t.Fatalf("%s side: no answer", wcSideName[side])
 		}
-		// A side that ran to the client deadline got the Enforcer's fallback, not a decision: say so, not a parity diff.
-		if limit := sides.plane.ClientTimeout(); a.body == wcPEPUnavailable && a.elapsed >= limit {
-			t.Errorf("TIMEOUT-FALLBACK %s %s %s side: the decision point did not answer within the client deadline %s (took %s, decisions %v): "+
-				"an environment stall, not a parity result", c.spec.label, r.name, wcSideName[side], limit, a.elapsed.Round(time.Millisecond), a.decisions)
+		// A side whose decision call gave no decision got the Enforcer's fallback: say so, not a parity diff.
+		if a.body == wcPEPUnavailable && slices.ContainsFunc(a.decisions, func(d string) bool { return strings.Contains(d, " status=") }) {
+			t.Errorf("TIMEOUT-FALLBACK %s %s %s side: the decision point gave no decision within the client deadline %s (decisions %v, took %s): "+
+				"an environment stall or a decision point failure, not a parity result", c.spec.label, r.name, wcSideName[side],
+				sides.plane.ClientTimeout(), a.decisions, a.elapsed.Round(time.Millisecond))
 		}
 	}
 	// The live members namespace asks admin.orgs as its platform alternative on the site_org_* rows, on both sides.
@@ -1069,13 +1070,14 @@ func TestAdminWeakCoverRealPDPDeadDecisionPoint(t *testing.T) {
 // go-api's own decision point deadlines, as production builds them: the client's shadowPDPTimeout (shadow.go) and the
 // Enforcer's default (policy/enforce.go; production's EnforceConfig sets no Timeout), against a decision point that
 // stalls past them: the admin cell fails closed with 503 and Retry-After 5, ended by the deadline and not by the stall,
-// and the late decision is drained into this cell. The rig's longer deadlines cannot hide this answer.
+// and the late decision is drained into this cell. The rig's longer deadlines cannot hide this answer. The cell pins the
+// answer at the production deadlines, not their values: how the held read ended says which ran out first.
 func TestAdminWeakCoverRealPDPProdDeadlineFailsClosed(t *testing.T) {
 	ctx := context.Background()
 	w := newWCWorld(t, ctx, wcModes[1])
-	stall := shadowPDPTimeout + 2*time.Second
+	held := wcStallState{stall: shadowPDPTimeout + 2*time.Second, ended: make(chan string, 8)}
 	slow := authplane.StartAuthorize(t, ctx, w.env.URI, w.key, authplane.AuthorizeOptions{PlatformRolesOwned: true, UsersOwned: true,
-		ClientTimeout: shadowPDPTimeout, Wrap: func(s authapi.DecisionState) authapi.DecisionState { return wcStallState{inner: s, stall: stall} }})
+		ClientTimeout: shadowPDPTimeout, Wrap: func(s authapi.DecisionState) authapi.DecisionState { held.inner = s; return held }})
 	// Enforcer timeout 0: production's EnforceConfig sets none (enforcer.go:79), so the Enforcer's own default applies.
 	handler, admin := w.goAPI(t, slow, wcLiveEnforce+",admin", AuthProxyConfig{}, 0)
 	c := w.seed(t, ctx, wcSpecs[1])
@@ -1092,29 +1094,49 @@ func TestAdminWeakCoverRealPDPProdDeadlineFailsClosed(t *testing.T) {
 		t.Errorf("stalled decision point: %d Retry-After %q %s, %d user-admin calls; want 503, Retry-After 5, %s and none",
 			a.status, a.retryAfter, a.body, len(a.usersAdmin), wcPEPUnavailable)
 	}
-	if a.elapsed < shadowPDPTimeout || a.elapsed >= stall {
-		t.Errorf("answered after %s: want the %s deadline to end the call, before the %s stall", a.elapsed, shadowPDPTimeout, stall)
+	var ends []string
+	for len(held.ended) > 0 {
+		ends = append(ends, <-held.ended)
+	}
+	if len(ends) != 1 || ends[0] != wcEndedByCall {
+		t.Errorf("held decision reads ended %v: want one, ended by its call (the deadline), before the %s stall", ends, held.stall)
 	}
 	if len(a.decisions) != 1 || !strings.HasPrefix(a.decisions[0], r.action+" platform ") || !strings.Contains(a.decisions[0], " status=") {
 		t.Errorf("decisions %v: want the one late %s call, drained into this cell", a.decisions, r.action)
 	}
 }
 
-// wcStallState holds each decision read for stall, or until its call ends.
+// wcStallState holds each decision read for stall, or until its call ends, and sends on ended how the hold ended.
 type wcStallState struct {
 	inner authapi.DecisionState
 	stall time.Duration
+	ended chan string
 }
+
+const (
+	wcEndedByCall  = "call_ended"
+	wcEndedByStall = "stall_ran_out"
+)
 
 func (s wcStallState) Read(ctx context.Context, fn func(authapi.DecisionTx) error) error {
 	timer := time.NewTimer(s.stall)
 	defer timer.Stop()
 	select {
 	case <-timer.C:
+		s.end(wcEndedByStall)
 	case <-ctx.Done():
+		s.end(wcEndedByCall)
 		return ctx.Err()
 	}
 	return s.inner.Read(ctx, fn)
+}
+
+// end never blocks a decision read; a full channel already fails the one-read assert.
+func (s wcStallState) end(how string) {
+	select {
+	case s.ended <- how:
+	default:
+	}
 }
 
 // Planted defects in the decision state the production builder reads (P5 S1-S3). Each plant must flip the cell it

@@ -315,13 +315,19 @@ func (p *pgxpoolComponent) Name() string { return "api-postgres" }
 func (p *pgxpoolComponent) Start(context.Context) error { return nil }
 
 func (p *pgxpoolComponent) Shutdown(context.Context) error {
+	p.Release()
+	return nil
+}
+
+// Release stops the posture check, then closes the pool; the runtime calls it when it never
+// started this component.
+func (p *pgxpoolComponent) Release() {
 	if p.posture != nil {
 		p.posture.Close()
 	}
 	if p.pool != nil {
 		p.pool.Close()
 	}
-	return nil
 }
 
 // valkeyComponent closes the client on shutdown.

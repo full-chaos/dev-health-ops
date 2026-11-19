@@ -183,9 +183,13 @@ type postgresWorkerDatabase struct {
 	postureOptions   postgres.PostureCheckOptions
 	queueProbe       postgres.LazyProbeCheck
 	riverSchemaProbe postgres.LazyProbeCheck
-	// postures are the cached domain posture checks handed out by DomainPostureCheck; Close stops them.
-	posturesMu sync.Mutex
-	postures   []*postgres.CachedPostureCheck
+	// postures are the cached domain posture checks handed out by DomainPostureCheck; Close seals the
+	// list (a later DomainPostureCheck answers ErrUnavailable) and stops them. A second Close waits for
+	// the first (closeOnce).
+	posturesMu     sync.Mutex
+	posturesClosed bool
+	postures       []*postgres.CachedPostureCheck
+	closeOnce      sync.Once
 }
 
 func (database *postgresWorkerDatabase) NewWorkerPresence(
@@ -254,13 +258,18 @@ func (database *postgresWorkerDatabase) DomainPostureCheck(logger *slog.Logger) 
 	if database == nil || database.pools == nil || database.pools.Domain == nil {
 		return nil
 	}
+	database.posturesMu.Lock()
+	defer database.posturesMu.Unlock()
+	if database.posturesClosed {
+		return func(context.Context) error {
+			return fmt.Errorf("%w: domain posture check closed", postgres.ErrUnavailable)
+		}
+	}
 	check := postgres.NewCachedPostureCheck(
 		database.pools.ReadinessPool(), database.domainRole, database.riverSchema, postgres.DomainPosture(),
 		postgres.PostureCheckOptions{Logger: logger},
 	)
-	database.posturesMu.Lock()
 	database.postures = append(database.postures, check)
-	database.posturesMu.Unlock()
 	return check.Check
 }
 
@@ -387,12 +396,17 @@ func (database *postgresWorkerDatabase) Close() {
 	if database == nil {
 		return
 	}
-	database.queueProbe.Close()
-	database.riverSchemaProbe.Close()
+	database.closeOnce.Do(database.close)
+}
+
+func (database *postgresWorkerDatabase) close() {
 	database.posturesMu.Lock()
+	database.posturesClosed = true
 	postures := database.postures
 	database.postures = nil
 	database.posturesMu.Unlock()
+	database.queueProbe.Close()
+	database.riverSchemaProbe.Close()
 	for _, check := range postures {
 		check.Close()
 	}
@@ -2329,13 +2343,19 @@ func (component workerDatabaseLifecycle) Start(context.Context) error {
 }
 
 func (component workerDatabaseLifecycle) Shutdown(context.Context) error {
+	component.Release()
+	return nil
+}
+
+// Release stops the census, then closes the database (its readiness checks first); the runtime
+// calls it when it never started this component.
+func (component workerDatabaseLifecycle) Release() {
 	if component.contractVersions != nil {
 		component.contractVersions.Close()
 	}
 	if component.database != nil {
 		component.database.Close()
 	}
-	return nil
 }
 
 // enforceClickHouseSchema opens one short ClickHouse connection and gates on schema_migrations. A

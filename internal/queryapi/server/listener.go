@@ -166,8 +166,13 @@ type Closer struct{ Plane *Plane }
 func (Closer) Name() string                { return "query-routes" }
 func (Closer) Start(context.Context) error { return nil }
 func (c Closer) Shutdown(context.Context) error {
+	c.Release()
+	return nil
+}
+
+// Release closes the plane; the runtime calls it when it never started this component.
+func (c Closer) Release() {
 	if c.Plane != nil && c.Plane.Close != nil {
 		c.Plane.Close()
 	}
-	return nil
 }

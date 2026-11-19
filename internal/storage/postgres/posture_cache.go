@@ -219,7 +219,7 @@ func (c *CachedPostureCheck) Check(ctx context.Context) error {
 			return nil
 		}
 	}
-	if c.refused != nil && now.Sub(c.refusedAt) < c.refusalTTL {
+	if c.refused != nil && (c.closed || now.Sub(c.refusedAt) < c.refusalTTL) {
 		err := c.refused
 		c.mu.Unlock()
 		return err
@@ -388,7 +388,7 @@ func (c *CachedPostureCheck) startFlightLocked() *postureFlight {
 
 func (c *CachedPostureCheck) execute(flight *postureFlight) {
 	defer c.running.Done()
-	ctx, cancel := context.WithTimeout(c.runCtx, c.runTimeout)
+	ctx, cancel := context.WithTimeout(withPostureOwner(c.runCtx), c.runTimeout)
 	defer cancel()
 	started := c.now()
 	err := c.protectedRun(ctx)

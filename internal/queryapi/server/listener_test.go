@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -171,4 +172,21 @@ func TestCloserReleasesThePlaneOnShutdown(t *testing.T) {
 	if err := (Closer{}).Shutdown(context.Background()); err != nil {
 		t.Fatalf("a Closer with no plane: %v", err)
 	}
+}
+
+// CHAOS-8654 r1: a runtime that never starts the closer (a cancelled start, an earlier component's
+// bind failure) releases it, and the plane closes its routes (the posture check first, then the
+// pool) once however often it is asked.
+func TestCloserReleaseClosesThePlaneOnce(t *testing.T) {
+	closed := 0
+	closer := Closer{Plane: &Plane{Close: sync.OnceFunc(func() { closed++ })}}
+	closer.Release()
+	if err := closer.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	closer.Release()
+	if closed != 1 {
+		t.Fatalf("plane closed %d times, want once", closed)
+	}
+	(Closer{}).Release()
 }

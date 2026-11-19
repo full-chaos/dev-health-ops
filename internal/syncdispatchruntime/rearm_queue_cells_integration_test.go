@@ -4,6 +4,7 @@ package syncdispatchruntime
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"testing"
@@ -12,6 +13,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/syncrunrollup"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -457,6 +460,146 @@ func TestBudgetRefusedHeadHandsTheSlotOn(t *testing.T) {
 		if !claimed || first.Sub(freedAt) > admissionLivenessBound() {
 			t.Fatalf("next run behind a budget-refused head claimed %v, %s after the slot freed; want within the liveness bound %s",
 				claimed, first.Sub(freedAt).Round(time.Second), admissionLivenessBound())
+		}
+	})
+}
+
+// refusedQueuePasses: `waiting` scheduled runs wait with 2 planned medium units each that the provider budget refuses
+// (estimate 150 > limit 100; deferral 1800 s so the budget's own 60 s deferral cadence is held out of the hour). One
+// slot frees at t0+20 min, after every waiter's first pass. Returns the passes in the hour [t0+10 min, t0+70 min) and
+// the hand-off wakes armed by the freed slot.
+func refusedQueuePasses(t *testing.T, waiting int) (int, uint64) {
+	var passes int
+	var handOffs uint64
+	withRearmQueuePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
+		t.Setenv("SYNC_DISPATCH_REDISPATCH_COUNTDOWN", "60")
+		t.Setenv("SYNC_DISPATCH_REDISPATCH_COUNTDOWN_MAX", "300")
+		t.Setenv("SYNC_DISPATCH_CAPPED_REARM_MAX", "3600")
+		t.Setenv("SYNC_BUDGET_DEFAULT_LIMIT", "100")
+		t.Setenv("SYNC_BUDGET_BUCKET_LIMITS", "")
+		t.Setenv("SYNC_BUDGET_DEFERRAL_SECONDS", "1800")
+		t0 := pgNow()
+		sim := newRQSim(t, ctx, pool, t0, 10*time.Hour)
+		sim.seedRun(0, "schedule", "incremental", t0.Add(-40*time.Hour), 0, 1, nil, t0.Add(20*time.Minute))
+		sim.seedRun(1, "backfill", "backfill", t0.Add(-40*time.Hour), 0, 1, nil, t0.Add(10*time.Hour))
+		estimates := map[string][]budgetEstimate{}
+		for i := 2; i < 2+waiting; i++ {
+			wake := t0.Add(time.Duration(i) * 300 * time.Second / time.Duration(2+waiting))
+			sim.seedRun(i, "schedule", "incremental", t0.Add(-30*time.Hour+time.Duration(i)*time.Second), 2, 0, &wake, time.Time{})
+			for n := 0; n < 2; n++ {
+				estimates[rqID(3, i, n)] = estimateFor(150, "github", "rest_core", "work-items")
+			}
+		}
+		sim.service.bridge = &fakeBudgetEstimator{estimates: estimates}
+		from, to := t0.Add(10*time.Minute), t0.Add(70*time.Minute)
+		freedAt := t0.Add(20 * time.Minute)
+		for sim.step(freedAt.Add(-time.Second)) {
+		}
+		before := syncrunrollup.DispatchWakeCount(syncrunrollup.DispatchWakePathHandOff, syncrunrollup.DispatchWakeOutcomeArmed)
+		for sim.step(freedAt.Add(time.Minute)) {
+		}
+		handOffs = syncrunrollup.DispatchWakeCount(syncrunrollup.DispatchWakePathHandOff, syncrunrollup.DispatchWakeOutcomeArmed) - before
+		for sim.step(to) {
+		}
+		for _, pass := range sim.passes {
+			if !pass.at.Before(from) && pass.at.Before(to) {
+				passes++
+				if pass.claimed > 0 {
+					t.Fatalf("pass of %s at %s claimed a refused unit: the cell's premise is broken", pass.runID, pass.at)
+				}
+			}
+		}
+	})
+	return passes, handOffs
+}
+
+// TestRefusedQueueHandOffChainIsBounded (cell F, acp chain bound): 50 waiting runs that all cannot claim (budget
+// refused) and one freed slot. The freed slot buys at most one hand-off (the head hands to the next run, which does
+// not hand on), and the hour's passes stay within cell A's bound (N=50 <= N=5 + 60).
+func TestRefusedQueueHandOffChainIsBounded(t *testing.T) {
+	smallPasses, smallHandOffs := refusedQueuePasses(t, 5)
+	bigPasses, bigHandOffs := refusedQueuePasses(t, 50)
+	t.Logf("refused queue, one slot freed: N=5 -> %d passes/h, %d hand-offs; N=50 -> %d passes/h, %d hand-offs",
+		smallPasses, smallHandOffs, bigPasses, bigHandOffs)
+	if smallHandOffs > 1 || bigHandOffs > 1 {
+		t.Fatalf("one freed slot armed %d (N=5) and %d (N=50) hand-off wakes, want at most 1 (the chain bound)", smallHandOffs, bigHandOffs)
+	}
+	if bigPasses > smallPasses+60 {
+		t.Fatalf("passes per hour behind refused heads grow with the queue: N=5 -> %d/h, N=50 -> %d/h (want N=50 <= N=5 + 60)", smallPasses, bigPasses)
+	}
+}
+
+// TestHandOffWakeHoldsNoRowAcrossThePassCommit (cell G, acp 14265 condition 5): the wake a pass of run A issues for
+// run B runs after A's commit, as its own statement, so it never holds B's outbox row across A's commit. B's
+// dispatch fence holds B's row (FOR NO KEY UPDATE NOWAIT, as transport_fence.go's commit snapshot does) while A's
+// pass runs and hands its free slot to B: A's pass must still commit (its units are deferred and visible before B's
+// fence lets go), B's fence must re-lock NOWAIT and commit without error, and after A's pass no lock of it remains on
+// B's row.
+func TestHandOffWakeHoldsNoRowAcrossThePassCommit(t *testing.T) {
+	withRearmQueuePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
+		t.Setenv("SYNC_BUDGET_DEFAULT_LIMIT", "100")
+		t.Setenv("SYNC_BUDGET_BUCKET_LIMITS", "")
+		t0 := pgNow()
+		sim := newRQSim(t, ctx, pool, t0, time.Hour)
+		sim.seedRun(0, "backfill", "backfill", t0.Add(-40*time.Hour), 0, 1, nil, t0.Add(10*time.Hour))
+		due := t0
+		runA := sim.seedRun(1, "schedule", "incremental", t0.Add(-3*time.Hour), 2, 0, &due, time.Time{})
+		later := t0.Add(30 * time.Minute)
+		runB := sim.seedRun(2, "schedule", "incremental", t0.Add(-2*time.Hour), 2, 0, &later, time.Time{})
+		sim.service.bridge = &fakeBudgetEstimator{estimates: map[string][]budgetEstimate{
+			rqID(3, 1, 0): estimateFor(150, "github", "rest_core", "work-items"),
+			rqID(3, 1, 1): estimateFor(150, "github", "rest_core", "work-items"),
+		}}
+		lockB := func(tx pgx.Tx) error {
+			_, err := tx.Exec(ctx, `SELECT 1 FROM sync_dispatch_outbox WHERE sync_run_id = $1::uuid AND kind = 'dispatch_sync_run' FOR NO KEY UPDATE NOWAIT`, runB)
+			return err
+		}
+		fenceB, err := pool.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = fenceB.Rollback(ctx) }()
+		if err := lockB(fenceB); err != nil {
+			t.Fatalf("B's fence lock: %v", err)
+		}
+		handOffsBefore := syncrunrollup.DispatchWakeCount(syncrunrollup.DispatchWakePathHandOff, syncrunrollup.DispatchWakeOutcomeFailed) +
+			syncrunrollup.DispatchWakeCount(syncrunrollup.DispatchWakePathHandOff, syncrunrollup.DispatchWakeOutcomeArmed)
+		started := time.Now()
+		if !sim.step(t0) {
+			t.Fatal("A's pass did not run")
+		}
+		elapsed := time.Since(started)
+		var retrying int
+		if err := pool.QueryRow(ctx, `SELECT count(*) FROM sync_run_units WHERE sync_run_id = $1::uuid AND status = 'retrying'`, runA).Scan(&retrying); err != nil {
+			t.Fatal(err)
+		}
+		handOffs := syncrunrollup.DispatchWakeCount(syncrunrollup.DispatchWakePathHandOff, syncrunrollup.DispatchWakeOutcomeFailed) +
+			syncrunrollup.DispatchWakeCount(syncrunrollup.DispatchWakePathHandOff, syncrunrollup.DispatchWakeOutcomeArmed) - handOffsBefore
+		t.Logf("cond-5: A's pass returned in %s while B's fence held B's row; A's units committed (retrying=%d) before B's fence let go; hand-off wakes tried=%d",
+			elapsed.Round(time.Millisecond), retrying, handOffs)
+		if retrying < 1 {
+			t.Fatalf("A's pass did not commit while B's fence held B's row: retrying=%d, want >= 1 (its budget deferral)", retrying)
+		}
+		if handOffs != 1 {
+			t.Fatalf("A's pass tried %d hand-off wakes, want 1 (the cell's premise)", handOffs)
+		}
+		if err := lockB(fenceB); err != nil {
+			t.Fatalf("B's fence failed to re-lock its row NOWAIT after A's pass: %v", err)
+		}
+		if err := fenceB.Commit(ctx); err != nil {
+			t.Fatalf("B's fence commit: %v", err)
+		}
+		check, err := pool.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = check.Rollback(ctx) }()
+		if err := lockB(check); err != nil {
+			var pgErr *pgconn.PgError
+			if errors.As(err, &pgErr) {
+				t.Fatalf("B's row still locked after A's pass returned (%s): the wake held it past A's commit", pgErr.Code)
+			}
+			t.Fatal(err)
 		}
 	})
 }

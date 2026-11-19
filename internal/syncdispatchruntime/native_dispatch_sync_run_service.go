@@ -623,7 +623,9 @@ WHERE id = $1::uuid`,
 	}
 	// CHAOS-14250: a bucket gave this pass slots it did not fill (budget, cooldown, a deferred or terminalized unit,
 	// or fewer units than slots). The slot-free wake reached this run as the head, so nobody else is coming for them:
-	// hand them to the next waiting run of this run's class, after the commit and the re-arm below.
+	// hand them to the next waiting run of this run's class, after the commit and the re-arm below, each wake its own
+	// statement outside this pass's transaction. Only the first run of its class hands off (the chain bound in
+	// syncrunrollup.WakeBucketHeadSQL), so one freed slot buys at most one hand-off.
 	for _, bucket := range handOffBuckets(decision.grantedSlots, claimedUnits) {
 		defer syncrunrollup.WakeNextInClass(ctx, service.pool, bucket.orgID, bucket.provider, bucket.costClass, run.id, service.nowUTC())
 	}

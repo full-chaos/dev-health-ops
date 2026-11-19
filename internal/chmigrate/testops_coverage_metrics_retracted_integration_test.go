@@ -13,9 +13,9 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/chmigrate"
 )
 
-const coverageVersion = "161_testops_coverage_metrics_retracted.sql"
+const coverageVersion = "162_testops_coverage_metrics_retracted.sql"
 
-// The coverage baseline read of the build before 161 (internal/queryapi/coveragebaselines newestPerRepoDay) with its bindings
+// The coverage baseline read of the build before 162 (internal/queryapi/coveragebaselines newestPerRepoDay) with its bindings
 // written in: the newest stored row of each repository day.
 const coverageImageRead = `SELECT count(), countIf(line_pct IS NOT NULL) FROM (
     SELECT repo_id, day, (argMax(tuple(line_coverage_pct), computed_at)).1 AS line_pct
@@ -23,7 +23,7 @@ const coverageImageRead = `SELECT count(), countIf(line_pct IS NOT NULL) FROM (
     WHERE org_id = 'org-160' AND day >= '2026-08-10' AND day < '2026-08-12'
     GROUP BY repo_id, day)`
 
-// The writer of the build before 161 names its columns and never names retracted.
+// The writer of the build before 162 names its columns and never names retracted.
 const coverageImageInsert = `INSERT INTO testops_coverage_metrics_daily (repo_id, day, line_coverage_pct, branch_coverage_pct, uncovered_files_count,
   coverage_regression_count, team_id, org_id, computed_at)
 VALUES (toUUID('14008000-0000-4000-8000-0000000001b1'), '2026-08-11', 80, 70, 0, 0, 'team-1', 'org-160', '2026-08-13 10:00:00')`
@@ -45,11 +45,11 @@ WHERE database = currentDatabase() AND table = 'testops_coverage_metrics_daily' 
 	return column
 }
 
-// INVARIANT (CHAOS-14008): the rollback of 161 is "images back on a build without 161, then 161's down file". Up, down, up on a
-// real ClickHouse: the column is gone after the down file and its version row too; the read and the INSERT of the build before 161
+// INVARIANT (CHAOS-14008): the rollback of 162 is "images back on a build without 162, then 162's down file". Up, down, up on a
+// real ClickHouse: the column is gone after the down file and its version row too; the read and the INSERT of the build before 162
 // work on the table in that shape (a marker row reads as a stored row with NULL percentages, as the down file says); the upgrade
-// applies 161 again.
-func TestRollback161UpDownUp(t *testing.T) {
+// applies 162 again.
+func TestRollback162UpDownUp(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	scratch := scratchDatabase(t)
@@ -91,10 +91,10 @@ VALUES (toUUID('14008000-0000-4000-8000-0000000001b1'), '2026-08-10', 0, 0, 'tea
 		return n
 	}
 	if versionRows() == 0 {
-		t.Fatal("at the head schema_migrations holds no 161")
+		t.Fatal("at the head schema_migrations holds no 162")
 	}
 
-	body, err := os.ReadFile("rollback/161_testops_coverage_metrics_retracted.down.sql")
+	body, err := os.ReadFile("rollback/162_testops_coverage_metrics_retracted.down.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,12 +105,12 @@ VALUES (toUUID('14008000-0000-4000-8000-0000000001b1'), '2026-08-10', 0, 0, 'tea
 		t.Fatalf("after the down file the retracted column is still %q", got)
 	}
 	if versionRows() != 0 {
-		t.Fatal("after the down file schema_migrations still holds 161")
+		t.Fatal("after the down file schema_migrations still holds 162")
 	}
 
 	var days, withLine uint64
 	if err := conn.QueryRow(ctx, coverageImageRead).Scan(&days, &withLine); err != nil {
-		t.Fatalf("the read of the build before 161 fails on the rolled-back table: %v", err)
+		t.Fatalf("the read of the build before 162 fails on the rolled-back table: %v", err)
 	}
 	if days != 1 || withLine != 0 {
 		t.Fatalf("the older read gives %d day(s) with %d line value(s), want the marker row as a stored row with no value (1, 0)", days, withLine)
@@ -125,7 +125,7 @@ VALUES (toUUID('14008000-0000-4000-8000-0000000001b1'), '2026-08-10', 0, 0, 'tea
 
 	result, err := chmigrate.Upgrade(ctx, db, baseline, chain)
 	if err != nil || len(result.Applied) != 1 || result.Applied[0] != coverageVersion {
-		t.Fatalf("the upgrade after the rollback = %+v, %v; want 161 applied", result, err)
+		t.Fatalf("the upgrade after the rollback = %+v, %v; want 162 applied", result, err)
 	}
 	if got := coverageRetractedColumn(ctx, t, conn); got != "UInt8 DEFAULT 0" {
 		t.Fatalf("after the upgrade again the retracted column is %q", got)

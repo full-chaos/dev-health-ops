@@ -3409,7 +3409,8 @@ exact rules rather than a looser first-donor walk:
   an inheritance-safe type wins over any other type, then the lower type: a pull
   request with a native `relates_to` to an issue and a text `Blocks` link to it, written by
   one sync, keeps that issue as its donor. The cascade, the donor-change trigger, the
-  donor load and the reverse closure read the same collapse. The frozen Python
+  donor load, the reverse closure and the `team_repo_ownership` donor walk read the same
+  rule (`teamattribution.LatestDependencyEdgeWins`). The frozen Python
   kept the lower type alone, so the blocking link won that tie.
 - the donor must be an **issue** (`teamattribution.LinkedIssueDonorRefusal`, §0.1): a `pr`,
   `merge_request` or empty-`type` donor, or a target with no `work_items` row, is refused before the

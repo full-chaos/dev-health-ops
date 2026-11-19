@@ -15,8 +15,8 @@ import (
 const HoursSample = "delivery_hours_sample"
 
 // BugRepairsSource holds the repair samples of mttr_hours (repouser.MTTRByRepo over the loader's bug work items): a work
-// item of type bug with both lifecycle times counts on the UTC day it completed, and its sample is completed_at -
-// started_at in hours, a negative one included, as the writer's mean includes it.
+// item of type bug with both lifecycle times and a terminal status (done or canceled) counts on the UTC day it completed,
+// and its sample is completed_at - started_at in hours, a negative one included, as the writer's mean includes it.
 const BugRepairsSource = `(
     SELECT
         org_id,
@@ -26,6 +26,7 @@ const BugRepairsSource = `(
     FROM work_items FINAL
     WHERE org_id = {org_id:String}
       AND type = 'bug' AND started_at IS NOT NULL AND completed_at IS NOT NULL
+      AND status IN ('done', 'canceled')
       AND toDate(completed_at, 'UTC') >= {start_date:Date} AND toDate(completed_at, 'UTC') < {end_date:Date}
       AND (repo_id, toDate(completed_at, 'UTC')) IN (
           SELECT repo_id, day FROM repo_metrics_daily

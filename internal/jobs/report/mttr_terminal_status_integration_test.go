@@ -45,7 +45,7 @@ func TestMTTRCountsOnlyABugWithATerminalStatus(t *testing.T) {
 			len(open), stored, pooled, tile, hasTile)
 	}
 
-	// only open: a single reopened bug that kept its completed_at. No repair: no stored MTTR, no pooled sample, no data.
+	// only open: a single reopened bug that kept its completed_at. No repair: the stored row, the chart and the tile hold no data, never 0.
 	orgOpen := e.newOrg()
 	const repoOpen = "14154000-0000-4000-8000-0000000000a2"
 	e.insertRepo(orgOpen, repoOpen)
@@ -53,9 +53,12 @@ func TestMTTRCountsOnlyABugWithATerminalStatus(t *testing.T) {
 	e.insertPullRequest(orgOpen, repoOpen, 1, at(0), 5, 5)
 	e.computeDelivery(orgOpen, []string{repoOpen}, day)
 	storedOpen := e.storedDelivery(orgOpen, repoOpen, "repo_metrics_daily", "mttr_hours")
+	chartOpen := e.deliveryChart(orgOpen, "mttr_hours", "", "scorecard", "2026-02-02", "2026-02-08")
 	tileOpen, hasOpen := mttrTile(e, client, orgOpen)
-	if _, ok := storedOpen[day]; ok || hasOpen {
-		t.Errorf("only open (in_progress, 12 h, completed_at kept): stored %v, tile %v (hasData %v), want no stored MTTR and no data",
-			storedOpen, tileOpen, hasOpen)
+	_, storedHas := storedOpen[day]
+	_, chartHas := chartOpen["total"]
+	if storedHas || chartHas || hasOpen {
+		t.Errorf("only open (in_progress, 12 h, completed_at kept): stored %v, chart %v, tile %v (hasData %v), want no data on each, never 0",
+			storedOpen, chartOpen, tileOpen, hasOpen)
 	}
 }

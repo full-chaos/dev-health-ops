@@ -48,13 +48,14 @@ const (
 // clientCancelled reports whether err is the end of a statement that the
 // client's cancel of the request ended: every leaf of the error tree is the
 // context's cancel or a ClickHouse cancel exception. A joined error that also
-// holds a deadline or any other failure is a failure.
+// holds a deadline or any other failure is a failure, and so is a tree too
+// large to read to its end.
 func clientCancelled(ctx context.Context, err error) bool {
 	if ctx == nil || err == nil || !errors.Is(ctx.Err(), context.Canceled) {
 		return false
 	}
-	leaves := logging.ErrorLeaves(err)
-	if len(leaves) == 0 {
+	leaves, complete := logging.ErrorLeaves(err)
+	if !complete || len(leaves) == 0 {
 		return false
 	}
 	for _, leaf := range leaves {

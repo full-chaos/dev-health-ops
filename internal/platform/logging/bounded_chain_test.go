@@ -206,11 +206,28 @@ func TestErrorTypeKeepsItsThirtyTwoStepReach(t *testing.T) {
 func TestErrorLeavesListsEveryLeafOfAJoin(t *testing.T) {
 	a, b, c := errors.New("a"), errors.New("b"), errors.New("c")
 	err := fmt.Errorf("outer: %w", errors.Join(a, fmt.Errorf("mid: %w", b), c))
-	got := ErrorLeaves(err)
-	if len(got) != 3 || !chainIs(got, a) || !chainIs(got, b) || !chainIs(got, c) {
+	got, complete := ErrorLeaves(err)
+	if !complete || len(got) != 3 || !chainIs(got, a) || !chainIs(got, b) || !chainIs(got, c) {
 		t.Fatalf("ErrorLeaves = %v, want a, b and c", got)
 	}
-	if ErrorLeaves(nil) != nil {
-		t.Fatal("ErrorLeaves(nil) is not nil")
+	if leaves, complete := ErrorLeaves(nil); leaves != nil || !complete {
+		t.Fatal("ErrorLeaves(nil) is not empty and complete")
+	}
+}
+
+func TestErrorLeavesSaysWhenABoundCutTheTree(t *testing.T) {
+	wide := make([]error, maxChainNodes+10)
+	for i := range wide {
+		wide[i] = fmt.Errorf("leaf %d", i)
+	}
+	if _, complete := ErrorLeaves(errors.Join(wide...)); complete {
+		t.Error("a tree wider than the node bound reads as complete")
+	}
+	var deep error = errors.New("bottom")
+	for i := 0; i < maxChainDepth+5; i++ {
+		deep = fmt.Errorf("level %d: %w", i, deep)
+	}
+	if _, complete := ErrorLeaves(deep); complete {
+		t.Error("a tree deeper than the depth bound reads as complete")
 	}
 }

@@ -168,6 +168,14 @@ func TestOnlyAnErrorThatSaysCancelledIsAClientCancel(t *testing.T) {
 	exception := func(code int32, name string) error {
 		return fmt.Errorf("query: %w", &fakeOperationError{operation: "query", cause: &clickhousedriver.Exception{Code: code, Name: name}})
 	}
+	cancelledLeaves := make([]error, 100)
+	for i := range cancelledLeaves {
+		cancelledLeaves[i] = &clickhousedriver.Exception{Code: 735, Name: "QUERY_WAS_CANCELLED_BY_CLIENT"}
+	}
+	var tooDeep error = exception(735, "QUERY_WAS_CANCELLED_BY_CLIENT")
+	for i := 0; i < 40; i++ {
+		tooDeep = fmt.Errorf("level: %w", tooDeep)
+	}
 	for _, test := range []struct {
 		name string
 		err  error
@@ -188,6 +196,8 @@ func TestOnlyAnErrorThatSaysCancelledIsAClientCancel(t *testing.T) {
 		{"joined: cancelled (394) and deadline", errors.Join(exception(394, "QUERY_WAS_CANCELLED"), context.DeadlineExceeded), false},
 		{"joined: cancel and another error", errors.Join(context.Canceled, errors.New("connection reset")), false},
 		{"joined: two cancels (735 and 394)", errors.Join(exception(735, "QUERY_WAS_CANCELLED_BY_CLIENT"), exception(394, "QUERY_WAS_CANCELLED")), true},
+		{"joined: 100 cancels, past the node bound", errors.Join(cancelledLeaves...), false},
+		{"joined: a 735 in sight and a 735 past the depth bound", errors.Join(&clickhousedriver.Exception{Code: 735}, tooDeep), false},
 		{"joined: 735 and the context's cancel", errors.Join(exception(735, "QUERY_WAS_CANCELLED_BY_CLIENT"), context.Canceled), true},
 	} {
 		t.Run(test.name, func(t *testing.T) {

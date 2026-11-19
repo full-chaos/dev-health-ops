@@ -756,6 +756,10 @@ When an item leaves a day this way, its blocked hours of that day stored by an e
 
 `work_item_measure_capability` decides on the current copy in the same way over its 90-day window: an item counts in the window only when its current copy belongs to the window.
 
+## Estimate coverage backlog
+
+`estimate_coverage_metrics_daily` (`backlog_size`, `estimated_count`, `unestimated_count`, `ratio`) counts an item in the backlog of a day when it was created before the day ends and has not ended by then. Its end is the earlier of `completed_at` and `closed_at`, and it counts only when the status is terminal (`done` or `canceled`). A provider can reopen an item and keep its `completed_at` or `closed_at`: that open item stays in the backlog of every later day.
+
 ## Work-item person rows: persons in more than one team
 
 `work_item_user_metrics_daily` keeps one row for each person, work scope and day: its key has no team. A person whose work items of one day belong to more than one team gets one row that sums all the person's items and takes its cycle percentiles over all of them. The team columns of that row name the team with the most of the person's items that day (the lowest team id on a tie).

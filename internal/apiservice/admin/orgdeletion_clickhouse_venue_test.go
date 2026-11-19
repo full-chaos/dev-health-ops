@@ -120,7 +120,7 @@ VALUES ($1, 'venue-chdel-super@example.com', true, true, true, 0, now(), now())`
 		"project_team_ownership_groups_log": `INSERT INTO project_team_ownership_groups_log (org_id, row_key, project_id, team_id, source_name, provider, content_hash, stored_at, is_deleted) VALUES (?, 'jira:p-1:t-1:native', 'p-1', 't-1', 'native', 'jira', 1, now64(6), 1)`,
 		// The per-run report completeness (CHAOS-13826, migration 153).
 		"testops_run_report_completeness": `INSERT INTO testops_run_report_completeness (org_id, repo_id, run_id, run_attempt, provider, complete, reasons, reports_expected, reports_admitted, last_synced, verdict_version) VALUES (?, generateUUIDv4(), 'run-1', 1, 'github_actions', 1, [], 1, 1, now64(3), 1)`,
-		// The input evidence of derived repo ownership (CHAOS-9349, migration 166).
+		// The input evidence of derived repo ownership (CHAOS-9349, migration 168).
 		"team_repo_ownership_evidence": `INSERT INTO team_repo_ownership_evidence (org_id, provider, repo_full_name, team_id, input, input_key, seen_at, is_deleted) VALUES (?, 'github', 'acme/repo', 'team-a', 'work_item', '["","jira:A-1"]', now64(3), 0)`,
 	}
 	for _, org := range []uuid.UUID{targetOrgID, controlOrgID} {

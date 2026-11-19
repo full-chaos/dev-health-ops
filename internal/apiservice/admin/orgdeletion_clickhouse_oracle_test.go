@@ -212,5 +212,5 @@ var clickHouseOrgTablesAfterThePythonFreeze = map[string]string{
 	"testops_run_report_completeness": "153_testops_run_report_completeness.sql",
 	// The input evidence of each derived repo ownership claim (CHAOS-9349). Keyed by org_id and written by the repo
 	// ownership derivation, so an organization's rows must go when the organization is deleted.
-	"team_repo_ownership_evidence": "166_team_repo_ownership_evidence.sql",
+	"team_repo_ownership_evidence": "168_team_repo_ownership_evidence.sql",
 }

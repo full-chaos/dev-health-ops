@@ -751,6 +751,8 @@ A Linear or Jira work-items unit names every project it saw by an ensure row in 
 
 `items_completed` (and the other completion columns of `work_item_metrics_daily` and `work_item_user_metrics_daily`: unassigned completions, story points, bug ratio, cycle and lead time) counts an item on a day only when its status is terminal (`done` or `canceled`) and its `completed_at` is on that day. `work_items_completed` of `work_item_completion_daily` (and its `delivery_units`, `churn_loc` and `cycle_p50_hours`, which come from the same items) follows the same rule. This is the rule of `work_item_cycle_times`. A provider can reopen an item and keep its `completed_at`: that open item completes on no day.
 
+`completed_count`, `cycle_p50_hours`, `cycle_p90_hours` and `lead_p50_hours` of `issue_type_metrics_daily` follow the same rule. Its `active_count` does not change: an open item whose `completed_at` is on the day is active on that day.
+
 ## Work items in progress at the end of a day
 
 `wip_count_end_of_day` (and `wip_unassigned_end_of_day`, the WIP age percentiles, `wip_congestion_ratio`, `predictability_score` and the person rows' WIP) counts an item at the end of a day when it started before the day ends and has not ended by then. Its end is the earlier of `completed_at` and `closed_at`, and it counts only when the status is terminal (`done` or `canceled`). A provider can reopen an item and keep its `completed_at` or `closed_at`: that open item stays in progress at the end of every later day.

@@ -107,11 +107,11 @@ WHERE org_id = ? AND day = ? AND row_view = 'org' GROUP BY status`, orgID, day)
 		}
 		rows.Close()
 		if !reflect.DeepEqual(got, want) {
-			t.Errorf("variant %02d (done read first: %v): hours by status %v, want %v", variant, doneFirst, got, want)
+			t.Errorf("variant %02d (unfiltered probe read done first: %v): hours by status %v, want %v", variant, doneFirst, got, want)
 		}
 	}
 	if orders[true] == 0 || orders[false] == 0 {
-		t.Fatalf("precondition: the %d variants read the tie in one order only (done first %d, reopen first %d); add variants", variants, orders[true], orders[false])
+		t.Fatalf("precondition: the unfiltered probe read the tie in one order only over %d variants (done first %d, reopen first %d); add variants", variants, orders[true], orders[false])
 	}
-	t.Logf("tie read order over %d variants: done first %d, reopen first %d", variants, orders[true], orders[false])
+	t.Logf("unfiltered probe tie read order over %d variants: done first %d, reopen first %d", variants, orders[true], orders[false])
 }

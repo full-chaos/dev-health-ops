@@ -89,6 +89,11 @@ type viewFilledTable struct {
 	// SourceWhere, when set, is the filter of the view: only the Source
 	// rows it keeps reach the table, so only they enter the rule.
 	SourceWhere string
+	// TableRule, when set, is the read of the table's value over the key in
+	// place of the aggregate of Column: the merge of an AggregatingMergeTree
+	// state. Such a table holds aggregate states, so no world freezes it; a
+	// provider world holds it to its rule on the producers' database instead.
+	TableRule string
 }
 
 // viewFilledAfterTheCapture names every table a migration added, after the
@@ -115,6 +120,27 @@ var viewFilledAfterTheCapture = map[string]viewFilledTable{
 		Column:      "relations_read_at",
 		SourceRule:  "max(last_synced)",
 		SourceWhere: "NOT (provider = 'github' AND startsWith(project_id, 'ghprojv2:'))",
+	},
+	// The kept groups of a pull request: per key, the newest version that
+	// states each group's lead (merged_at; first_review_at with its counts).
+	"git_pull_request_kept": {
+		View: "git_pull_request_kept_mv", Source: "git_pull_requests",
+		Migration: "160_stored_version_kept_groups.sql",
+		Key:       []string{"org_id", "repo_id", "number"},
+		Column:    "merged",
+		SourceRule: "tuple(argMaxIf(tuple(merged_at), last_synced, merged_at IS NOT NULL), " +
+			"argMaxIf(tuple(first_review_at, changes_requested_count, reviews_count), last_synced, first_review_at IS NOT NULL))",
+		TableRule: "tuple(argMaxIfMerge(`merged`), argMaxIfMerge(`review`))",
+	},
+	// The kept group of a deployment: per key, the newest version that states
+	// merged_at, with its pull request number and tier.
+	"deployment_kept": {
+		View: "deployment_kept_mv", Source: "deployments",
+		Migration:  "160_stored_version_kept_groups.sql",
+		Key:        []string{"org_id", "repo_id", "deployment_id"},
+		Column:     "merged",
+		SourceRule: "argMaxIf(tuple(merged_at, pull_request_number, CAST(pull_request_tier, 'String')), last_synced, merged_at IS NOT NULL)",
+		TableRule:  "argMaxIfMerge(`merged`)",
 	},
 }
 
@@ -515,13 +541,16 @@ func viewFilledTableProblems(t *testing.T, dsn, name string, rule viewFilledTabl
 // each as the aggregate over the key.
 func viewFilledQueries(name string, rule viewFilledTable) (want, got string) {
 	keys := "`" + strings.Join(rule.Key, "`, `") + "`"
-	aggregate := rule.SourceRule[:strings.Index(rule.SourceRule, "(")]
+	read := rule.TableRule
+	if read == "" {
+		read = rule.SourceRule[:strings.Index(rule.SourceRule, "(")] + "(`" + rule.Column + "`)"
+	}
 	where := ""
 	if rule.SourceWhere != "" {
 		where = " WHERE " + rule.SourceWhere
 	}
 	want = fmt.Sprintf("SELECT %s, toString(%s) FROM `%s`%s GROUP BY %s ORDER BY %s FORMAT TSV", keys, rule.SourceRule, rule.Source, where, keys, keys)
-	got = fmt.Sprintf("SELECT %s, toString(%s(`%s`)) FROM `%s` GROUP BY %s ORDER BY %s FORMAT TSV", keys, aggregate, rule.Column, name, keys, keys)
+	got = fmt.Sprintf("SELECT %s, toString(%s) FROM `%s` GROUP BY %s ORDER BY %s FORMAT TSV", keys, read, name, keys, keys)
 	return want, got
 }
 
@@ -801,6 +830,10 @@ func TestViewFilledRulesReadTheSourceRowsTheirViewKeeps(t *testing.T) {
 	}
 	if !strings.Contains(got, "toString(max(`relations_read_at`)) FROM `work_item_relations_read`") || strings.Contains(got, "WHERE") {
 		t.Fatalf("the table read = %q", got)
+	}
+	_, kept := viewFilledQueries("git_pull_request_kept", viewFilledAfterTheCapture["git_pull_request_kept"])
+	if !strings.Contains(kept, "toString(tuple(argMaxIfMerge(`merged`), argMaxIfMerge(`review`))) FROM `git_pull_request_kept`") {
+		t.Fatalf("the kept table read = %q, want the merge of its states", kept)
 	}
 	firstSeen, _ := viewFilledQueries("work_item_dependency_first_seen", viewFilledAfterTheCapture["work_item_dependency_first_seen"])
 	if strings.Contains(firstSeen, "WHERE") {

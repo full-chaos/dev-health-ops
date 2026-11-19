@@ -425,13 +425,13 @@ func (adapter LinearWorkItemsClickHouseAdapter) InspectLinearWorkItemEffect(
 	})
 }
 
-const linearWorkItemTransitionsInsert = `INSERT INTO work_item_transitions (repo_id, work_item_id, occurred_at, from_status, to_status, from_status_raw, to_status_raw, actor, last_synced, org_id, source_id)`
+const linearWorkItemTransitionsInsert = `INSERT INTO work_item_transitions (repo_id, work_item_id, occurred_at, provider, from_status, to_status, from_status_raw, to_status_raw, actor, last_synced, org_id, source_id)`
 
 const linearWorkItemTransitionsSelect = `SELECT repo_id, work_item_id, occurred_at, from_status, to_status, from_status_raw, to_status_raw, actor, last_synced, org_id, source_id FROM work_item_transitions FINAL WHERE org_id = ? AND repo_id = ? AND work_item_id = ? AND occurred_at = toDateTime64(?, 3, 'UTC')`
 
 func projectLinearTransition(row linearWorkItemTransitionRow) workItemTransitionStoredRow {
 	return workItemTransitionStoredRow{
-		RepoID: uuid.Nil, WorkItemID: row.WorkItemID,
+		RepoID: uuid.Nil, WorkItemID: row.WorkItemID, Provider: row.Provider,
 		OccurredAt: clickHouseMillis(row.OccurredAt), FromStatus: row.FromStatus,
 		ToStatus: row.ToStatus, FromStatusRaw: derefString(row.FromStatusRaw),
 		ToStatusRaw: derefString(row.ToStatusRaw), Actor: derefString(row.Actor),
@@ -454,7 +454,11 @@ func (adapter LinearWorkItemTransitionsClickHouseAdapter) WriteLinearWorkItemEff
 		return err
 	}
 	for _, row := range rows {
-		if row.OrgID != identity.OrgID || row.Provider != "linear" {
+		if row.OrgID != identity.OrgID {
+			return ErrInvalidConfiguration
+		}
+		if row.Provider != "linear" {
+			logWorkItemTransitionProviderRefused(ctx, row.OrgID, row.Provider, row.WorkItemID)
 			return ErrInvalidConfiguration
 		}
 	}
@@ -488,7 +492,11 @@ func (adapter LinearWorkItemTransitionsClickHouseAdapter) InspectLinearWorkItemE
 		return EffectConflict, err
 	}
 	for _, row := range rows {
-		if row.OrgID != identity.OrgID || row.Provider != "linear" {
+		if row.OrgID != identity.OrgID {
+			return EffectConflict, ErrInvalidConfiguration
+		}
+		if row.Provider != "linear" {
+			logWorkItemTransitionProviderRefused(ctx, row.OrgID, row.Provider, row.WorkItemID)
 			return EffectConflict, ErrInvalidConfiguration
 		}
 	}

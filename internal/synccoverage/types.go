@@ -122,6 +122,8 @@ type pairState struct {
 	// Closed whatever the order of the units.
 	Closed   []closedRange
 	Complete []coverageInterval
+	// failedHasShort: Failed may hold an interval no longer than intervalAdjacencyTolerance (see subtractFailed).
+	failedHasShort bool
 }
 
 type pairCoverage struct {

@@ -159,7 +159,7 @@ ORDER BY COALESCE(run.completed_at, run.started_at, run.created_at), unit.id`,
 			// (whatever its order) removes the reason.
 			if status == "success" && reportsIncomplete && effectiveKey == "tests" {
 				if len(closedReasons) == 0 {
-					state.Failed = subtractIntervals(state.Failed, []coverageInterval{interval})
+					state.subtractFailed(interval)
 					continue
 				}
 				state.Closed = append(state.Closed, closedRange{Interval: interval, Reasons: closedReasons})
@@ -169,13 +169,13 @@ ORDER BY COALESCE(run.completed_at, run.started_at, run.created_at), unit.id`,
 			switch status {
 			case "success":
 				state.Covered = append(state.Covered, interval)
-				state.Failed = subtractIntervals(state.Failed, []coverageInterval{interval})
+				state.subtractFailed(interval)
 				value := runTime.UTC()
 				if latestSuccessful == nil || value.After(*latestSuccessful) {
 					latestSuccessful = &value
 				}
 			case "failed":
-				state.Failed = mergeIntervals(append(state.Failed, interval))
+				state.addFailed(interval)
 			}
 		}
 	}

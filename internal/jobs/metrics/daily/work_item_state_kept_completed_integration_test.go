@@ -16,7 +16,8 @@ import (
 
 // A work item done two days before the day and reopened the day before, whose provider kept its completed_at: on
 // the day it is in progress for all 24 hours, in the org view and the scope view, and it has its blocked-hours row.
-// The same history with a terminal status, done or canceled on the day, ends at its completed_at as before.
+// The same history with a terminal status, done or canceled on the day, ends at its completed_at as before. An open
+// item whose last known transition is terminal also ends at its completed_at.
 func TestWorkItemStateKeepsAccruingAReopenedItemWithAKeptCompletedAt(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
@@ -51,16 +52,27 @@ func TestWorkItemStateKeepsAccruingAReopenedItemWithAKeptCompletedAt(t *testing.
 		history      [][3]any // occurred_at, from_status, to_status
 		wantStatus   string
 		wantHours    float64
+		wantBlocked  uint64
 	}{
 		{"reopened_in_progress", "in_progress", doneBefore, [][3]any{
 			{started, "todo", "in_progress"}, {doneBefore, "in_progress", "done"}, {reopened, "done", "in_progress"},
-		}, "in_progress", 24},
+		}, "in_progress", 24, 1},
 		{"done_on_day", "done", doneOnDay, [][3]any{
 			{started, "todo", "in_progress"}, {doneOnDay, "in_progress", "done"},
-		}, "in_progress", 10},
+		}, "in_progress", 10, 1},
 		{"canceled_on_day", "canceled", doneOnDay, [][3]any{
 			{started, "todo", "in_progress"}, {doneOnDay, "in_progress", "canceled"},
-		}, "in_progress", 10},
+		}, "in_progress", 10, 1},
+		// The reopen is not in the transitions: the last known transition is terminal, so the item ends at its
+		// completed_at as before and gets no hours in that terminal status (ticket 14170, filed separately).
+		{"reopen_missing_last_done", "in_progress", doneBefore, [][3]any{
+			{started, "todo", "in_progress"}, {doneBefore, "in_progress", "done"},
+		}, "done", 0, 0},
+		// The reopen comes after the day: the day reads only the transitions before its end, so on the day the last
+		// known transition is terminal and the item gets no hours in that terminal status.
+		{"reopened_after_day", "in_progress", doneBefore, [][3]any{
+			{started, "todo", "in_progress"}, {doneBefore, "in_progress", "done"}, {day.Add(30 * time.Hour), "done", "in_progress"},
+		}, "done", 0, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			orgID := "org-14155-" + tc.name + "-" + uuid.NewString()
@@ -107,10 +119,10 @@ SELECT count() FROM work_item_blocked_durations_daily FINAL WHERE org_id = ? AND
 			).Scan(&blockedRows); err != nil {
 				t.Fatalf("read work_item_blocked_durations_daily: %v", err)
 			}
-			if orgHours != tc.wantHours || scopeHours != tc.wantHours || otherRows != 0 || blockedRows != 1 {
-				t.Errorf("status %s, completed_at %s, day %s: %s hours org %v, scope %v; rows of other statuses %d; blocked rows %d; want %v hours in each view, 0 other rows, 1 blocked row",
+			if orgHours != tc.wantHours || scopeHours != tc.wantHours || otherRows != 0 || blockedRows != tc.wantBlocked {
+				t.Errorf("status %s, completed_at %s, day %s: %s hours org %v, scope %v; rows of other statuses %d; blocked rows %d; want %v hours in each view, 0 other rows, %d blocked rows",
 					tc.status, tc.completedAt.Format(time.RFC3339), day.Format("2006-01-02"), tc.wantStatus,
-					orgHours, scopeHours, otherRows, blockedRows, tc.wantHours)
+					orgHours, scopeHours, otherRows, blockedRows, tc.wantHours, tc.wantBlocked)
 			}
 		})
 	}

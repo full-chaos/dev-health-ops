@@ -344,6 +344,20 @@ flowchart TD
 > `TestAnIssueWithNoTeamTakesItsLinkedPullRequestRepoOwner` (every daily table) and
 > `TestABackstopRunOfAChangedRepoRederivesTheIssuesLinkedToIt` pin it.
 >
+> **A name-keyed grant reaches an issue too.** The GitHub team catalog writes every repository grant by name
+> (`repo_full_name`, `repo_id` NULL), and a linked pull request names its repository by id. `LoadRepos` resolves
+> such a GitHub grant to the id of the ONE `repos` row of the same organization whose name equals the grant's name
+> (case aside, the whole name; `ResolveGitHubRepoNameFacts`). A name that no `repos` row of the organization holds,
+> or that two rows hold, reaches no issue; a repository of another organization never counts. The pull request's
+> own `repo_ownership` is unchanged (it still matches the grant by name). `TestAnIssueTakesANameKeyedGrantOfItsLinkedPullRequestsRepository`
+> and `TestGitHubIssueTakesItsLinkedPullRequestsRepoOwnerInTheRealWorld` (the GitHub provider world, nothing seeded) pin it.
+>
+> **GitHub has no project-owner producer.** No GitHub producer writes `team_project_ownership` (section 0.4b).
+> A GitHub issue's project owner comes only from an admin team whose `project_keys` holds the issue's project id
+> (its repository's full name, or a Projects v2 board id `ghprojv2:{login}#{n}`): that is an `issue_project`
+> candidate, and a donor of a linked pull request's `linked_issue` row. Without one, a GitHub issue takes the
+> repository owner of its linked pull requests (above) or ends `unassigned`, and that repository owner is not a donor.
+>
 > **The membership ownership gate applies to a pull or merge request and to other repo-bearing items, and
 > does not apply to an issue**: an issue has no repository field of its own and the gate reads
 > no linked-pull-request repository. The assignee's membership row of an issue is kept as provenance
@@ -810,7 +824,7 @@ project's work items by `(provider, project_id)`; no reader has to join on `proj
 |---|---|---|---|---|
 | jira | native project id (`10001`) | the same id | the same id | one id |
 | linear | raw project UUID | the same UUID | the same UUID | one id |
-| github | Projects V2 board id (`ghprojv2:{login}#{n}`) | none: a team owns repositories (`team_repo_ownership`) | the same board id | one id |
+| github | Projects V2 board id (`ghprojv2:{login}#{n}`) | none: a team owns repositories (`team_repo_ownership`); an admin team's `project_keys` may name the board id or the repository name (`issue_project`) | the same board id | one id |
 | gitlab | `{org_id}:gitlab:{native id}` | the same id; the path is `project_key` | the same id; `work_items.project_key` is the project's minted `identity_path` (stable across a rename, so the metric work scope does not split) | one id for catalog, ownership and work items. A GitLab item written before the catalog id was adopted holds the path in `project_id`; the attribution reads map it, through its `repo_id` and `repos.provider_repo_id`, to the catalog id (`teamattribution.AnchorGitLabSubjectProjects`), and the old path is its project key. Name joins (repo ownership by full name, manual repo and project rules) accept both the current path and the identity path of the item's GitLab `repos` row, except an identity path another GitLab row now holds as its current path (a reused path belongs to the project at it; the old project's items answer only to their current path). The team issue-project key lookup follows the same set. A path is never an ownership join key: a stale item at a reused path joins nothing of the path's new owner |
 
 GitLab ownership rows written earlier hold the path as `project_id`. Until that sync, the attribution reads map such a row on the fly: a path-keyed GitLab ownership row is moved to the catalog id of the ONE project the `repos` rows name at that path (current or minted path; `teamattribution.LoadGitLabProjectNativesByPath`, `RemapLegacyGitLabProjectFacts`), so it lands on the same key as an item anchored to that id. A path two projects have used is not a grant for either: the row joins no item (the team still holds the ownership). The same rule applies to a repository-ownership row keyed by full name (it joins by the catalog id of the one project its path names); a path no `repos` row names stays as it is.

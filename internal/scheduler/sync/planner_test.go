@@ -513,6 +513,7 @@ func TestBuildScheduledPlanWorkItemFamilyExecutedProofWaiverCoversEveryProvider(
 	} {
 		plannedBefore := globalPlanGateTelemetry.snapshotForTest(cell.provider, canonicalWorkItemsDataset, planGateOutcomePlanned)
 		unsatisfiedBefore := globalPlanGateTelemetry.snapshotForTest(cell.provider, canonicalWorkItemsDataset, planGateOutcomeExecutedProofUnsatisfied)
+		waivedBefore := globalPlanGateTelemetry.snapshotForTest(cell.provider, canonicalWorkItemsDataset, planGateOutcomeWaived)
 		units, err := BuildScheduledPlan(PlannerInput{
 			OrgID: "org", IntegrationID: "integration", Mode: SyncModeIncremental, Now: now,
 			Sources:  []PlanSource{{ID: "source", ExternalID: cell.source, Provider: cell.provider, FullName: cell.source}},
@@ -534,6 +535,53 @@ func TestBuildScheduledPlanWorkItemFamilyExecutedProofWaiverCoversEveryProvider(
 		if got := globalPlanGateTelemetry.snapshotForTest(cell.provider, canonicalWorkItemsDataset, planGateOutcomeExecutedProofUnsatisfied); got != unsatisfiedBefore {
 			t.Fatalf("%s executed_proof_unsatisfied count %d -> %d, want unchanged", cell.provider, unsatisfiedBefore, got)
 		}
+		if got := globalPlanGateTelemetry.snapshotForTest(cell.provider, canonicalWorkItemsDataset, planGateOutcomeWaived); got != waivedBefore+1 {
+			t.Fatalf("%s waived count %d -> %d, want +1", cell.provider, waivedBefore, got)
+		}
+	}
+}
+
+func TestBuildScheduledPlanWaivedCountsOnlyUnprovenPairs(t *testing.T) {
+	now := time.Date(2026, 11, 13, 12, 0, 0, 0, time.UTC)
+	for name, evidence := range map[string]*providersync.ExecutedProofEvidence{
+		"proven":          {Proven: map[string]bool{"github/work-items": true}, Attempted: map[string]bool{"github/work-items": true}},
+		"never attempted": {Proven: map[string]bool{}, Attempted: map[string]bool{}},
+	} {
+		before := globalPlanGateTelemetry.snapshotForTest("github", canonicalWorkItemsDataset, planGateOutcomeWaived)
+		units, err := BuildScheduledPlan(PlannerInput{
+			OrgID: "org", IntegrationID: "integration", Mode: SyncModeIncremental, Now: now,
+			Sources:       []PlanSource{{ID: "source", ExternalID: "owner/repo", Provider: "github", FullName: "owner/repo"}},
+			Datasets:      []PlanDataset{{Key: "work-items"}},
+			ExecutedProof: evidence,
+		})
+		if err != nil || len(units) != 1 {
+			t.Fatalf("%s: units=%+v err=%v, want one unit", name, units, err)
+		}
+		if got := globalPlanGateTelemetry.snapshotForTest("github", canonicalWorkItemsDataset, planGateOutcomeWaived); got != before {
+			t.Fatalf("%s: waived count %d -> %d, want unchanged", name, before, got)
+		}
+	}
+}
+
+func TestBuildBackfillPlanCountsWaivedWorkItemsPair(t *testing.T) {
+	now := time.Date(2026, 11, 13, 12, 0, 0, 0, time.UTC)
+	since, before := now.AddDate(0, 0, -3), now.AddDate(0, 0, -1)
+	waivedBefore := globalPlanGateTelemetry.snapshotForTest("jira", canonicalWorkItemsDataset, planGateOutcomeWaived)
+	units, err := BuildBackfillPlan(PlannerInput{
+		OrgID: "org", IntegrationID: "integration", Mode: SyncModeBackfill, Now: now,
+		Since: &since, Before: &before,
+		Sources:  []PlanSource{{ID: "source", ExternalID: "PROJ", Provider: "jira", FullName: "PROJ"}},
+		Datasets: []PlanDataset{{Key: "work-items"}},
+		ExecutedProof: &providersync.ExecutedProofEvidence{
+			Proven:    map[string]bool{},
+			Attempted: map[string]bool{"jira/work-items": true},
+		},
+	})
+	if err != nil || len(units) == 0 {
+		t.Fatalf("units=%+v err=%v, want at least one unit", units, err)
+	}
+	if got := globalPlanGateTelemetry.snapshotForTest("jira", canonicalWorkItemsDataset, planGateOutcomeWaived); got != waivedBefore+1 {
+		t.Fatalf("waived count %d -> %d, want +1", waivedBefore, got)
 	}
 }
 

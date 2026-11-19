@@ -563,7 +563,7 @@ func buildChartWhere(spec ChartSpec, definition metricDefinition) (string, []any
 		parameters = append(parameters, named...)
 	}
 	if len(spec.FilterRepos) > 0 && definition.hasDimension("repo") {
-		clauses = append(clauses, "repo_id IN {filter_repos:Array(String)}")
+		clauses = append(clauses, "toString(repo_id) IN {filter_repos:Array(String)}")
 		parameters = append(parameters, clickhouse.Named("filter_repos", spec.FilterRepos))
 	}
 	return strings.Join(clauses, " AND\n        "), parameters, nil

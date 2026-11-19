@@ -67,6 +67,21 @@ var (
 	TestRetryDependencyRateCountColumns = []string{"retry_dependency_rate", "distinct_cases"}
 )
 
+// TestFailureRecurrenceMeasuredSQL is a testops_test_metrics_daily row that carries both counts of
+// failure_recurrence_score. A row stored before the counts existed has neither and is in neither sum.
+const TestFailureRecurrenceMeasuredSQL = `recurrent_failed_names IS NOT NULL AND distinct_failed_names IS NOT NULL`
+
+// TestFailureRecurrenceWindowSQL is the failure recurrence score of a set of testops_test_metrics_daily rows (already
+// the newest row of each key): their recurrent failed names over their distinct failed names, NULL when that sum is 0
+// (no failed test in the rows, or only rows without the counts). The stored failure_recurrence_score column is a ratio
+// of unequal days and is not read: a mean of it weighs a day of 1 failed name like a day of 50.
+const TestFailureRecurrenceWindowSQL = `if(sumIf(distinct_failed_names, ` + TestFailureRecurrenceMeasuredSQL + `) = 0, NULL, ` +
+	`toFloat64(sumIf(recurrent_failed_names, ` + TestFailureRecurrenceMeasuredSQL + `)) / ` +
+	`toFloat64(sumIf(distinct_failed_names, ` + TestFailureRecurrenceMeasuredSQL + `)))`
+
+// TestFailureRecurrenceCountColumns are the columns TestFailureRecurrenceWindowSQL reads.
+var TestFailureRecurrenceCountColumns = []string{"recurrent_failed_names", "distinct_failed_names"}
+
 // StabilityLiveRowsSQL is the one read of testops_pipeline_stability values: the newest stability_index of each
 // (day, repo_id) of {org_id:String} between {start:Date} and {end:Date}, without the repo-days whose newest
 // testops_pipeline_metrics_daily row has no completed run. The stability writer writes no row for such a day, but a

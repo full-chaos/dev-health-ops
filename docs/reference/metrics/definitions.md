@@ -339,6 +339,14 @@ A repository-day is in neither sum when its rate is NULL (it measured no case), 
 `flake_rate`, its `flake_cases` is NULL. A row stored before the counts existed has NULL counts, so it drops out of the
 point. A point made only of such rows has no value.
 
+### Benchmarking failure recurrence score
+
+The benchmarking point of `failure_recurrence_score` for a scope and a day is the sum of the stored
+`recurrent_failed_names` over the sum of the stored `distinct_failed_names` of the repository-days in the scope. It is not
+the mean of the stored scores, so a repository-day weighs by its distinct failed test names. A repository-day is in
+neither sum when one of its two counts is NULL (a row stored before the counts existed). A point whose denominator sums
+to 0 has no value: the score is not applicable (no failed test), never 0.
+
 ### Benchmarking line coverage
 
 The benchmarking point of `line_coverage_pct` for a scope and a day is 100 times the sum of the stored `lines_covered`
@@ -450,8 +458,26 @@ the `testops_test_metrics_daily` rows in its bucket. It is never a mean of the s
   `flake_rate`, a NULL `flake_cases` has the same effect. A row stored before the counts existed has NULL counts and drops
   out.
 - A bucket with no measured repository-day has no point, never 0 and never NaN.
-- `failure_recurrence_score` is not yet a window value: the report chart still shows the mean of the stored
-  per-repository-day values.
+
+## TestOps failure recurrence score in report charts
+
+A report chart of `failure_recurrence_score` is the sum of the numerator over the sum of the denominator of the
+`testops_test_metrics_daily` rows in its bucket. It is never a mean of the stored per-repository-day scores: a day with
+1 failed test would weigh the same as a day with 50.
+
+| Metric | Numerator | Denominator |
+| --- | --- | --- |
+| `failure_recurrence_score` | `SUM(recurrent_failed_names)` | `SUM(distinct_failed_names)` |
+
+- `distinct_failed_names` is the number of distinct test names that failed on the repository-day. `recurrent_failed_names`
+  is the number of those names that also failed in the 29 days before it. `failed_count` counts failed executions,
+  retries included, so it is not the denominator.
+- A repository-day is in neither sum when one of its two counts is NULL. A row stored before the counts existed has NULL
+  counts and drops out. A bucket made only of such rows has no point.
+- A bucket whose `distinct_failed_names` sum to 0 has no point: the score is not applicable (no failed test in the
+  window). It is not missing data and it is not 0.
+- A bucket that has rows with counts and rows without them takes only the rows with counts, so its point covers only part
+  of its days. The chart has no mark for such a point.
 
 ## TestOps cancel rate and rerun rate in report charts
 

@@ -15,10 +15,11 @@ import (
 )
 
 // A TestOps test repo-day with no measured case stores NULL in flake_rate,
-// retry_dependency_rate and failure_recurrence_score. A benchmark series of the
-// three reads such a row as no sample: the day's value is the measured repos'
-// mean, a day on which no repo measured a case has no point (never a 0), and a
-// newest NULL row is not replaced by an older measured row of the same key.
+// retry_dependency_rate and failure_recurrence_score, 0 of 0 cases and 0 of 0
+// failed names (the writer). A benchmark series of the three reads such a row as
+// no sample: the day's value is the measured repos' pooled value, a day on which
+// no repo measured a case has no point (never a 0), and a newest unmeasured row
+// is not replaced by an older measured row of the same key.
 func TestTestOpsRateSeriesLeaveOutARepoDayWithNoMeasuredCase(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
@@ -50,18 +51,22 @@ func TestTestOpsRateSeriesLeaveOutARepoDayWithNoMeasuredCase(t *testing.T) {
 	newer := older.Add(time.Hour)
 	row := func(repo string, day time.Time, rates *float64, computedAt time.Time) {
 		t.Helper()
-		// 5 distinct cases of which 1 (0.2) or 0 are flaky; a NULL rate is a day with no measured case.
+		// 5 distinct cases of which 1 (0.2) are flaky, and 1 of 5 failed names recurrent (0.2); a NULL rate is a day with
+		// no measured case: no flake counts, and 0 of 0 failed names as the writer stores them.
 		var flakeCases, distinctCases *uint32
+		zero := uint32(0)
+		recurrentNames, failedNames := &zero, &zero
 		if rates != nil {
 			one, five := uint32(1), uint32(5)
 			flakeCases, distinctCases = &one, &five
+			recurrentNames, failedNames = &one, &five
 		}
 		if err := admin.Exec(ctx, `INSERT INTO testops_test_metrics_daily
     (repo_id, day, total_cases, passed_count, failed_count, skipped_count, quarantined_count, pass_rate, failure_rate,
      flake_rate, retry_dependency_rate, total_suites, failure_recurrence_score, org_id, computed_at,
-     flake_cases, distinct_cases)
-VALUES (toUUID(?), ?, 10, 10, 0, 0, 0, 1, 0, ?, ?, 1, ?, ?, ?, ?, ?)`,
-			repo, day, rates, rates, rates, org, computedAt, flakeCases, distinctCases); err != nil {
+     flake_cases, distinct_cases, recurrent_failed_names, distinct_failed_names)
+VALUES (toUUID(?), ?, 10, 10, 0, 0, 0, 1, 0, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)`,
+			repo, day, rates, rates, rates, org, computedAt, flakeCases, distinctCases, recurrentNames, failedNames); err != nil {
 			t.Fatal(err)
 		}
 	}

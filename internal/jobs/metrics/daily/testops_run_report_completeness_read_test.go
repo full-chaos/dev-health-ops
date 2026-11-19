@@ -73,8 +73,8 @@ func TestLoadNativeTestopsReportRunCountsFailedReadReturnsTheError(t *testing.T)
 	}
 }
 
-// The writer names the three completeness columns last and writes the counts, NULL only for a record whose completeness was not
-// read.
+// The writer names the three completeness columns right before the two failure recurrence counts (the last columns) and writes
+// the counts, NULL only for a record whose completeness was not read.
 func TestWriteTestopsTestMetricsWritesReportRunCounts(t *testing.T) {
 	day := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
 	for name, test := range map[string]struct {
@@ -90,11 +90,11 @@ func TestWriteTestopsTestMetricsWritesReportRunCounts(t *testing.T) {
 		if _, err := writeTestopsTestMetrics(context.Background(), conn, "org-1", day, day, []testops.TestMetric{metric}); err != nil {
 			t.Fatal(err)
 		}
-		if !strings.HasSuffix(strings.Join(strings.Fields(conn.query), " "), "pooled_samples_stored, report_runs, partial_report_runs, unmarked_report_runs)") {
-			t.Fatalf("%s: INSERT does not name the completeness columns last: %s", name, conn.query)
+		if !strings.HasSuffix(strings.Join(strings.Fields(conn.query), " "), "pooled_samples_stored, report_runs, partial_report_runs, unmarked_report_runs, recurrent_failed_names, distinct_failed_names)") {
+			t.Fatalf("%s: INSERT does not name the completeness columns before the recurrence counts: %s", name, conn.query)
 		}
 		row := conn.batch.appended[0]
-		for index, value := range row[len(row)-3:] {
+		for index, value := range row[len(row)-5 : len(row)-2] {
 			got := value.(*uint32)
 			if test.want == nil {
 				if got != nil {

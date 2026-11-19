@@ -12,6 +12,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/testops"
 	"github.com/full-chaos/dev-health-ops/internal/ownershipwindow"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/rowview"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
@@ -40,7 +41,7 @@ var metricDefinitions = map[string]MetricDefinition{
 	"pass_rate":                 pooledRate(testMetric(""), "passed_count", executedCases),
 	"flake_rate":                pooledRate(testMetric(""), measuredCases("flake_cases", "flake_rate", "flake_cases"), measuredCases("flake_cases", "flake_rate", "distinct_cases")),
 	"retry_dependency_rate":     pooledRate(testMetric(""), measuredCases("distinct_cases", "retry_dependency_rate", "retry_dependency_rate * distinct_cases"), measuredCases("distinct_cases", "retry_dependency_rate", "distinct_cases")),
-	"failure_recurrence_score":  testMetric("failure_recurrence_score"),
+	"failure_recurrence_score":  pooledRate(testMetric(""), recurrenceCounted("recurrent_failed_names"), recurrenceCounted("distinct_failed_names")),
 	"line_coverage_pct":         pooledRate(coverageMetric(""), "if("+coveredLines+", 100 * lines_covered, NULL)", "if("+coveredLines+", lines_total, NULL)"),
 	"branch_coverage_pct":       pooledRate(coverageMetric(""), "if("+coveredBranches+", 100 * branches_covered, NULL)", "if("+coveredBranches+", branches_total, NULL)"),
 	"coverage_delta_pct":        coverageMetric("coverage_delta_pct"),
@@ -118,6 +119,13 @@ const executedCases = "passed_count + failed_count"
 // pipelines_count, not a stored count.
 func measuredCases(count, rate, expression string) string {
 	return "if(" + rate + " IS NULL OR distinct_cases IS NULL OR " + count + " IS NULL, NULL, " + expression + ")"
+}
+
+// recurrenceCounted is a count of failure_recurrence_score on a repo-day that carries both counts, NULL on any other
+// (a row stored before the counts existed): such a repo-day is in neither sum. A point whose distinct failed names sum
+// to 0 has no failed test and no value, never 0.
+func recurrenceCounted(column string) string {
+	return "if(" + testops.TestFailureRecurrenceMeasuredSQL + ", " + column + ", NULL)"
 }
 
 func testMetric(column string) MetricDefinition {

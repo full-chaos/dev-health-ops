@@ -19,6 +19,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/remaining"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/linktier"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	chstorage "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/teamownership"
@@ -364,6 +365,27 @@ func (facts matrixFacts) repoOwnerRows(repoID string) []ownershipRow {
 		}
 	}
 	return out
+}
+
+// linkedRepoOwnersAt is the owner set, at an instant, of the repositories of an issue's linked pull requests of
+// its best tier (native > explicit_text > heuristic): each repository's owners by its own rows.
+func (facts matrixFacts) linkedRepoOwnersAt(issueID string, at time.Time) map[string]bool {
+	best := 0
+	for _, link := range facts.links {
+		if link.WorkItemID == issueID {
+			best = max(best, linktier.Rank(link.Provenance))
+		}
+	}
+	owners := map[string]bool{}
+	for _, link := range facts.links {
+		if link.WorkItemID != issueID || best == 0 || linktier.Rank(link.Provenance) != best {
+			continue
+		}
+		for team := range facts.ownersAt(facts.repoOwnerRows(link.RepoID), at) {
+			owners[team] = true
+		}
+	}
+	return owners
 }
 
 func (facts matrixFacts) projectOwnerRows(projectID string) []ownershipRow {
@@ -970,9 +992,16 @@ var matrixChecks = map[string]matrixCheck{
 			case "issue_project", "project_ownership":
 				rows = f.projectOwnerRows(item.ProjectID)
 			case "repo_ownership":
-				// An issue takes no repo_ownership from its own repository.
+				// An issue takes no repo_ownership from its own repository, only from the repositories of its
+				// best-tier linked pull requests.
 				r.Subjects++
-				r.Violations = append(r.Violations, fmt.Sprintf("%s -> %s by repo_ownership; an issue takes no team from its own repository", id, row.TeamID))
+				if !strings.Contains(row.Evidence, "work_graph_issue_pr=") {
+					r.Violations = append(r.Violations, fmt.Sprintf("%s -> %s by repo_ownership; an issue takes no team from its own repository", id, row.TeamID))
+					continue
+				}
+				if owners := f.linkedRepoOwnersAt(id, f.itemDay(item)); !owners[row.TeamID] {
+					r.Violations = append(r.Violations, fmt.Sprintf("%s (%s) -> %s by repo_ownership; its linked repositories' owners that day %v", id, f.itemDay(item).Format(time.DateOnly), row.TeamID, sortedTeamSet(owners)))
+				}
 				continue
 			default:
 				continue
@@ -1008,8 +1037,13 @@ var matrixChecks = map[string]matrixCheck{
 				continue
 			}
 			owners := f.ownersAt(f.projectOwnerRows(item.ProjectID), f.itemDay(item))
+			primary, ok := f.primary(id)
+			// With no project owner, the owners of its best-tier linked repositories take the item.
+			if len(owners) == 0 && ok && primary.Source == "repo_ownership" {
+				owners = f.linkedRepoOwnersAt(id, f.itemDay(item))
+			}
 			// The item's own native team wins (team-attribution.md 0.4d, D5206): no co-owner then.
-			if primary, ok := f.primary(id); len(owners) < 2 || (ok && primary.Source == "native_team") {
+			if len(owners) < 2 || (ok && primary.Source == "native_team") {
 				continue
 			}
 			r.Subjects++

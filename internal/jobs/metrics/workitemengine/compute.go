@@ -61,7 +61,7 @@ type Item struct {
 	StartedAt   *time.Time
 	CompletedAt *time.Time
 	StoryPoints *float64
-	// Status is the normalized status category of work_items.status. Only CompletedOnDay reads it.
+	// Status is the normalized status category of work_items.status. Only CompletedOnDay and EndedBefore read it.
 	Status string
 	// LinkedPRs are the pull requests linked to the item through work_graph_issue_pr. The daily completion
 	// compute reads them for churn_loc; no other compute does.
@@ -202,8 +202,7 @@ func ComputeIssueTypeMetricsDaily(
 				bucket.leadHours = append(bucket.leadHours, lead)
 			}
 		}
-		if created.Before(end) &&
-			(item.CompletedAt == nil || !item.CompletedAt.UTC().Before(dayUTC)) {
+		if created.Before(end) && !EndedBefore(item, dayUTC) {
 			bucket.active++
 		}
 	}

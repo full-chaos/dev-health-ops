@@ -373,7 +373,11 @@ func ComputeDailyTriplet(
 		}
 		startedAt := utcTimePointer(item.StartedAt)
 		completedAt := utcTimePointer(item.CompletedAt)
-		terminalAt := earliestTimePointer(completedAt, utcTimePointer(item.ClosedAt))
+		// An item that is open now is still in progress, whatever completed_at or closed_at its provider kept.
+		var terminalAt *time.Time
+		if IsTerminalStatus(item.Status) {
+			terminalAt = earliestTimePointer(completedAt, utcTimePointer(item.ClosedAt))
+		}
 		startedToday := inHalfOpenDay(startedAt, dayUTC, end)
 		completedToday := IsTerminalStatus(item.Status) && inHalfOpenDay(completedAt, dayUTC, end)
 		wipEndOfDay := startedAt != nil && startedAt.Before(end) &&

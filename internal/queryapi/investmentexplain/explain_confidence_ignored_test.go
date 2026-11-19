@@ -36,12 +36,14 @@ func TestParseInvestmentMixResponseKeepsTheAnswerWhenTheModelConfidenceBreaksARu
 			mutate:   func(c map[string]any, _ map[string]any) { c["drivers"] = []any{"ok", "  "} },
 			wantRule: "confidence_driver_invalid",
 			wantPath: "confidence.drivers[1]",
+			wantHas:  "  ",
 		},
 		{
 			name:     "too many drivers",
 			mutate:   func(c map[string]any, _ map[string]any) { c["drivers"] = make([]any, 11) },
 			wantRule: "confidence_drivers_too_many",
 			wantPath: "confidence.drivers",
+			wantHas:  "11",
 		},
 		{
 			name:     "level invalid",
@@ -55,12 +57,14 @@ func TestParseInvestmentMixResponseKeepsTheAnswerWhenTheModelConfidenceBreaksARu
 			mutate:   func(c map[string]any, _ map[string]any) { c["band_mix"].(map[string]any)["high"] = -1 },
 			wantRule: "confidence_band_mix_value_invalid",
 			wantPath: "confidence.band_mix.high",
+			wantHas:  "-1",
 		},
 		{
 			name:     "confidence not an object",
 			mutate:   func(_ map[string]any, doc map[string]any) { doc["confidence"] = "moderate" },
 			wantRule: "confidence_not_object",
 			wantPath: "confidence.$",
+			wantHas:  "moderate",
 		},
 	}
 	for _, tc := range cases {

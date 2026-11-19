@@ -1,6 +1,7 @@
 package workerservice
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -8,6 +9,7 @@ import (
 	"fmt"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	"io"
+	"log/slog"
 	"net"
 	"syscall"
 	"testing"
@@ -180,5 +182,26 @@ func TestStartupRetryJitterStaysInTheTwentyPercentBandAndSpreads(t *testing.T) {
 	}
 	if got := postgres.DialRetryJitter(0); got != 0 {
 		t.Fatalf("jitter(0) = %v, want 0", got)
+	}
+}
+
+func TestWorkerProcessPresenceGiveUpCarriesNoUnreachableCause(t *testing.T) {
+	t.Parallel()
+	presence := &presenceFake{errs: []error{&pgconn.PgError{Code: "28P01"}}}
+	clock := &preclaimFakeClock{}
+	var logs bytes.Buffer
+	component := workerProcessComponent{
+		presence: presence, startBudget: time.Minute, now: clock.now, sleep: clock.sleep,
+		logger: slog.New(slog.NewJSONHandler(&logs, nil)),
+	}
+	if err := component.Start(context.Background()); err == nil {
+		t.Fatal("Start() = nil, want the auth error")
+	}
+	records := logRecords(t, logs.Bytes())
+	requireNoUnreachableCause(t, records, "worker presence registration refused")
+	for _, record := range records {
+		if record["reason"] != "presence_start_failed" {
+			t.Fatalf("reason = %v, want presence_start_failed", record["reason"])
+		}
 	}
 }

@@ -437,6 +437,7 @@ internal/gqlgenguard	testsupport_test.go
 internal/httpguard	origin_census_test.go
 internal/httpguard	redirect_sites_test.go
 internal/identityalias	resolver.go
+internal/ingressplanes	compose_bigboy_clickhouse_probe_test.go
 internal/ingressplanes	compose_bigboy_system_logs_test.go
 internal/ingressplanes	compose_stack_test.go
 internal/ingressplanes	compose_system_logs_test.go

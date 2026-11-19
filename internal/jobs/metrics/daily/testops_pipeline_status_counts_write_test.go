@@ -11,7 +11,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/testops"
 )
 
-// The pipeline writer names the four bucket columns last in its INSERT and appends each count, in the same order.
+// The pipeline writer names the four bucket columns after computed_at, then the pooled sample columns, and appends each
+// count in the same order.
 func TestWriteTestopsPipelineMetricsWritesTheFourBucketCounts(t *testing.T) {
 	conn := &queryRecordingBatchConn{batch: &recordingBatch{}}
 	metric := testops.PipelineMetric{
@@ -24,18 +25,18 @@ func TestWriteTestopsPipelineMetricsWritesTheFourBucketCounts(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !strings.Contains(strings.Join(strings.Fields(conn.query), " "),
-		"computed_at, skipped_count, unfinished_count, other_count, unfinished_stale_count)") {
-		t.Fatalf("INSERT does not end with the four bucket columns: %s", conn.query)
+		"computed_at, skipped_count, unfinished_count, other_count, unfinished_stale_count, pooled_service_ids, pooled_durations, pooled_queues, pooled_samples_stored)") {
+		t.Fatalf("INSERT does not name the four bucket columns, then the pooled columns: %s", conn.query)
 	}
 	if len(conn.batch.appended) != 1 {
 		t.Fatalf("appended %d rows, want 1", len(conn.batch.appended))
 	}
 	row := conn.batch.appended[0]
-	if want := 18 + 4; len(row) != want {
+	if want := 18 + 4 + 4; len(row) != want {
 		t.Fatalf("row has %d values, want %d", len(row), want)
 	}
 	want := []uint32{2, 6, 0, 1}
-	for index, value := range row[len(row)-4:] {
+	for index, value := range row[len(row)-8 : len(row)-4] {
 		count, ok := value.(*uint32)
 		if !ok || count == nil || *count != want[index] {
 			t.Errorf("bucket value %d = %#v, want %d", index, value, want[index])

@@ -143,7 +143,8 @@ func (writer *Writer) WriteResult(ctx context.Context, rows []CICDMetric, orgID 
 	}
 	batch, err := writer.conn.PrepareBatch(ctx, `INSERT INTO cicd_metrics_daily (
 		repo_id, day, pipelines_count, success_rate, avg_duration_minutes,
-		p90_duration_minutes, avg_queue_minutes, computed_at, org_id
+		p90_duration_minutes, avg_queue_minutes, computed_at, org_id,
+		pooled_run_minutes, pooled_queue_minutes, pooled_samples_stored
 	)`)
 	if err != nil {
 		return 0, fmt.Errorf("prepare cicd_metrics_daily batch: %w", err)
@@ -156,6 +157,7 @@ func (writer *Writer) WriteResult(ctx context.Context, rows []CICDMetric, orgID 
 			row.RepoID, row.Day, uint32(row.PipelinesCount), row.SuccessRate,
 			row.AvgDurationMinutes, row.P90DurationMinutes, row.AvgQueueMinutes,
 			row.ComputedAt, orgID,
+			row.PooledRunMinutes, row.PooledQueueMinutes, pooledMarker(row.PooledSamplesOverCap),
 		); err != nil {
 			return 0, fmt.Errorf("append cicd_metrics_daily row: %w", err)
 		}
@@ -180,4 +182,12 @@ func derefStr(value *string) string {
 		return ""
 	}
 	return *value
+}
+
+// pooledMarker is the pooled_samples_stored value of a row: 1 with its samples, 2 over the daily cap.
+func pooledMarker(overCap bool) uint8 {
+	if overCap {
+		return 2
+	}
+	return 1
 }

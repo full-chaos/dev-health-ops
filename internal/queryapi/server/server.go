@@ -88,9 +88,8 @@ func newListenerServers(publicAddr, internalAddr string, publicBase, internalBas
 	return public, internal
 }
 
-// queryProbePaths are the paths the query listeners answer for the kubelet and
-// the scraper; they get no span (a span per probe is volume with no
-// information).
+// queryProbePaths are the operator-surface paths (served on the operator listener
+// only, CHAOS-13492); a stray request to one on a query listener gets no span either.
 var queryProbePaths = []string{"/healthz", "/readyz", "/metrics"}
 
 // traceListener wraps one listener's mux with the server span the api

@@ -19,9 +19,10 @@ const (
 
 func readerHandlers(spy *resolverSpy) *handlers {
 	return &handlers{
-		validateURL:      spy.validate,
-		storedKey:        func(context.Context, string) (string, error) { return readerStoredKey, nil },
-		storedPurposeKey: func(context.Context, string, llmorgsettings.Purpose) (string, error) { return readerPurposeKey, nil },
+		validateURL:        spy.validate,
+		storedKey:          func(context.Context, string) (string, error) { return readerStoredKey, nil },
+		storedPurposeKey:   func(context.Context, string, llmorgsettings.Purpose) (string, error) { return readerPurposeKey, nil },
+		storedScopeBaseURL: func(context.Context, string, llmorgsettings.Purpose) (string, error) { return "", nil },
 	}
 }
 

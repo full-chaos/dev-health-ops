@@ -337,6 +337,28 @@ var routeProxyRoutes = map[string]AuthAggregate{
 	"POST /api/v1/auth/saml/{provider_id}/acs":       AuthSAML,
 }
 
+// oauthPairProxyRoutes are the internal/api/sso OAuth sign-in routes, forwarded through sso.Deps.Inner like routeProxyRoutes.
+// Keyed by auth-service's own patterns: go-api mounts no route with these keys (oauthPairPattern), so no per-route series is
+// seeded for them.
+var oauthPairProxyRoutes = map[string]AuthAggregate{
+	"POST /api/v1/auth/oauth/{provider_id}/authorize": AuthOIDC,
+	"GET /api/v1/auth/oauth/{provider_id}/authorize":  AuthOIDC,
+	"POST /api/v1/auth/oauth/{provider_id}/callback":  AuthOIDC,
+}
+
+// oauthPairPattern is the one pattern internal/api/sso mounts for its three OAuth sign-in routes (net/http refuses the
+// overlapping patterns); the pair names each dispatched route to Inner with auth-service's own pattern above. Its POST and GET
+// carry the body-keeping wrapper under AuthOIDC; the other methods answer go-api's own 405 or 404.
+const oauthPairPattern = "/api/v1/auth/oauth/{first}/{second}"
+
+// oauthPairAggregate is the aggregate the wrapper of a mounted OAuth pair route counts under, if any.
+func oauthPairAggregate(method, pattern string) (AuthAggregate, bool) {
+	if pattern == oauthPairPattern && (method == http.MethodPost || method == http.MethodGet) {
+		return AuthOIDC, true
+	}
+	return "", false
+}
+
 // ownerAuthenticatedRoutes are the proxied routes that auth-service alone authenticates, validates and limits once
 // their aggregate is on: go-api forwards them unread, with no guard, body validator or rate limiter of its own, and
 // its scope layers skip them (ScopeExemptRoutes), so a token addressed to auth-service never reaches go-api's verifier
@@ -362,7 +384,7 @@ func (c AuthProxyConfig) ScopeExemptRoutes() map[string]bool {
 // one method.
 var patternAggregate = func() map[string]AuthAggregate {
 	out := map[string]AuthAggregate{}
-	for _, routes := range []map[string]AuthAggregate{sessionProxyRoutes, routeProxyRoutes} {
+	for _, routes := range []map[string]AuthAggregate{sessionProxyRoutes, routeProxyRoutes, oauthPairProxyRoutes} {
 		for key, aggregate := range routes {
 			_, pattern, _ := strings.Cut(key, " ")
 			out[pattern] = aggregate
@@ -547,6 +569,9 @@ func (p *authProxy) wrap(routes []httpapi.Route) []httpapi.Route {
 		aggregate, ok := sessionProxyRoutes[key]
 		if !ok {
 			aggregate, ok = routeProxyRoutes[key]
+		}
+		if !ok {
+			aggregate, ok = oauthPairAggregate(routes[index].Method, routes[index].Pattern)
 		}
 		if !ok {
 			continue

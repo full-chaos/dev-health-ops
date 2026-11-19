@@ -12,6 +12,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/testops"
 	"github.com/full-chaos/dev-health-ops/internal/ownershipwindow"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/rowview"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
@@ -40,9 +41,9 @@ var metricDefinitions = map[string]MetricDefinition{
 	"pass_rate":                 pooledRate(testMetric(""), "passed_count", executedCases),
 	"flake_rate":                pooledRate(testMetric(""), measuredCases("flake_cases", "flake_rate", "flake_cases"), measuredCases("flake_cases", "flake_rate", "distinct_cases")),
 	"retry_dependency_rate":     pooledRate(testMetric(""), measuredCases("distinct_cases", "retry_dependency_rate", "retry_dependency_rate * distinct_cases"), measuredCases("distinct_cases", "retry_dependency_rate", "distinct_cases")),
-	"failure_recurrence_score":  testMetric("failure_recurrence_score"),
+	"failure_recurrence_score":  pooledRate(testMetric(""), recurrenceCounted("recurrent_failed_names"), recurrenceCounted("distinct_failed_names")),
 	"line_coverage_pct":         pooledRate(coverageMetric(""), "if("+coveredLines+", 100 * lines_covered, NULL)", "if("+coveredLines+", lines_total, NULL)"),
-	"branch_coverage_pct":       coverageMetric("branch_coverage_pct"),
+	"branch_coverage_pct":       pooledRate(coverageMetric(""), "if("+coveredBranches+", 100 * branches_covered, NULL)", "if("+coveredBranches+", branches_total, NULL)"),
 	"coverage_delta_pct":        coverageMetric("coverage_delta_pct"),
 	"coverage_regression_count": coverageMetric("coverage_regression_count"),
 	"cycle_time_hours": {
@@ -120,6 +121,13 @@ func measuredCases(count, rate, expression string) string {
 	return "if(" + rate + " IS NULL OR distinct_cases IS NULL OR " + count + " IS NULL, NULL, " + expression + ")"
 }
 
+// recurrenceCounted is a count of failure_recurrence_score on a repo-day that carries both counts, NULL on any other
+// (a row stored before the counts existed): such a repo-day is in neither sum. A point whose distinct failed names sum
+// to 0 has no failed test and no value, never 0.
+func recurrenceCounted(column string) string {
+	return "if(" + testops.TestFailureRecurrenceMeasuredSQL + ", " + column + ", NULL)"
+}
+
 func testMetric(column string) MetricDefinition {
 	return MetricDefinition{
 		Table: "testops_test_metrics_daily", ValueColumn: column,
@@ -130,9 +138,12 @@ func testMetric(column string) MetricDefinition {
 // coveredLines is a repo-day whose stored line counts measure a coverage: both counts set and lines_total above 0 (the
 // rule of the query-api line coverage). Any other repo-day (a NULL count, a stored pct with no counts, no lines) is in
 // neither sum, so a point made only of such repo-days has no value, never 0. The stored line_coverage_pct is not read.
-// branch_coverage_pct has no stored counts, so it stays the mean of the repo-day percentages, as do coverage_delta_pct
-// (a difference of two percentages) and coverage_regression_count (a count).
+// coverage_delta_pct (a difference of two percentages) and coverage_regression_count (a count) stay the mean.
 const coveredLines = "lines_covered IS NOT NULL AND lines_total IS NOT NULL AND lines_total > 0"
+
+// coveredBranches is the same rule over the stored branch counts. A row stored before the counts existed reads NULL and
+// is in neither sum; the stored branch_coverage_pct is not read.
+const coveredBranches = "branches_covered IS NOT NULL AND branches_total IS NOT NULL AND branches_total > 0"
 
 func coverageMetric(column string) MetricDefinition {
 	return MetricDefinition{

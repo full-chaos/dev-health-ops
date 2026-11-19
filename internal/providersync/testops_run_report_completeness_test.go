@@ -237,7 +237,7 @@ func TestRunLossReasonsSeeASkipTheMarkerSampleDropped(t *testing.T) {
 	for index := 0; index < githubTestsMaxSkippedArtifactRecords; index++ {
 		cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow, cursor.SkippedArtifactCauseOverflow, cursor.SkippedArtifactCauseCount = appendGitHubTestsSkippedArtifact(
 			cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow, cursor.SkippedArtifactCauseOverflow, cursor.SkippedArtifactCauseCount,
-			GitHubTestsSkippedArtifact{RunID: "1", ArtifactID: "a", Cause: githubTestsArtifactUnavailableCause},
+			GitHubTestsSkippedArtifact{RunID: "1", ArtifactID: fmt.Sprint("a", index), Cause: githubTestsArtifactUnavailableCause},
 		)
 	}
 	before := githubTestsTakeRunLossCounts(cursor)

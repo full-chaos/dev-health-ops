@@ -32,7 +32,7 @@ type proxiedAuthRoute struct {
 }
 
 // proxiedAuthRoutes is a copy of go-api's route table (internal/apiservice
-// authproxy.go sessionProxyRoutes and routeProxyRoutes); the drift test below
+// authproxy.go sessionProxyRoutes, routeProxyRoutes and oauthPairProxyRoutes); the drift test below
 // fails when the two differ. The session issue route (authapi.PatternIssueSession)
 // is not listed: go-api calls it with a service credential and never forwards it.
 var proxiedAuthRoutes = []proxiedAuthRoute{
@@ -50,6 +50,9 @@ var proxiedAuthRoutes = []proxiedAuthRoute{
 	{"POST /api/v1/auth/social-login", "AuthSocial", 3},
 	{"POST /api/v1/auth/oidc/{provider_id}/authorize", "AuthOIDC", 0},
 	{"POST /api/v1/auth/oidc/{provider_id}/callback", "AuthOIDC", 0},
+	{"POST /api/v1/auth/oauth/{provider_id}/authorize", "AuthOIDC", 0},
+	{"GET /api/v1/auth/oauth/{provider_id}/authorize", "AuthOIDC", 0},
+	{"POST /api/v1/auth/oauth/{provider_id}/callback", "AuthOIDC", 0},
 	{"GET /api/v1/auth/saml/{provider_id}/metadata", "AuthSAML", 0},
 	{"POST /api/v1/auth/saml/{provider_id}/initiate", "AuthSAML", 0},
 	{"POST /api/v1/auth/saml/{provider_id}/acs", "AuthSAML", 0},

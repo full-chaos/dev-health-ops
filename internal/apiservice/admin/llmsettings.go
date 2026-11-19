@@ -513,11 +513,18 @@ func (h *handlers) applyLLMSettings(ctx context.Context, orgID string, in llmUps
 		keys = append(keys, *in.apiKey)
 	}
 	if baseURLText != "" {
-		stored, err := readableStoredKey(h.storedLLMKey(ctx, orgID))
+		stored, err := h.storedLeakKeys(ctx, orgID)
 		if err != nil {
-			return nil, nil, &llmStepError{"read stored llm key", err}
+			return nil, nil, err
 		}
-		keys = append(keys, stored)
+		keys = append(keys, stored...)
+	}
+	carried, err := h.otherBaseURLCarriesKey(ctx, orgID, "", in.apiKey)
+	if err != nil {
+		return nil, nil, err
+	}
+	if carried {
+		return nil, newLLMRefusal(http.StatusBadRequest, "error", "invalid_base_url", "feature", byoLLMFeature, "message", "Invalid LLM base_url"), nil
 	}
 	valid, reason, keyHit, splitErr := h.checkBaseURL(ctx, baseURLText, keys...)
 	if keyHit {

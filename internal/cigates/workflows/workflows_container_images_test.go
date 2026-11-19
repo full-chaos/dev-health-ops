@@ -241,6 +241,93 @@ func TestEveryWorkflowJobStartingContainersAuthenticatesAndPrePulls(t *testing.T
 	}
 }
 
+// authNonContainerStages: the `ci/check_go.sh auth STAGE` stages that start no container. Fail closed: any other stage
+// counts as starting Testcontainers.
+var authNonContainerStages = map[string]bool{
+	"fmt": true, "vet": true, "test": true, "race": true, "test-leg": true, "race-leg": true, "history": true, "fuzz": true,
+	"fuzz-registry": true, "vuln": true, "middleware": true, "closure": true, "relevant": true, "paths-selftest": true,
+	"scope-selftest": true,
+}
+
+var checkGoAuthStage = regexp.MustCompile(`ci/check_go\.sh` + pyS + `+auth` + pyS + `+(` + pyNotS + `+)`)
+
+func authStepStartsContainers(command string) bool {
+	for _, m := range checkGoAuthStage.FindAllStringSubmatch(command, -1) {
+		if !authNonContainerStages[m[1]] {
+			return true
+		}
+	}
+	return false
+}
+
+// CHAOS-13779: an auth job that starts Testcontainers pulled postgres from Docker Hub inside parallel tests, with no
+// login and no pre-pull, and one container create got "No such image". Such a job takes the go.yml form.
+func TestAuthServiceJobsStartingContainersAuthenticateAndPrePull(t *testing.T) {
+	jobs := jobsAsMaps(loadWf(t, rootOf(t), "go-auth-service.yml"))
+	var offenders []string
+	found := 0
+	for _, name := range sortedKeysOf(jobs) {
+		job := jobs[name]
+		var kinds []string
+		for _, s := range stepsOf(job) {
+			kind := stepKind(s)
+			if kind == "harness" {
+				kind = ""
+			}
+			if authStepStartsContainers(asString(s["run"])) {
+				kind = "harness"
+			}
+			kinds = append(kinds, kind)
+		}
+		harness, login, prepull := firstIndex(kinds, "harness"), firstIndex(kinds, "login"), firstIndex(kinds, "prepull")
+		if harness < 0 {
+			continue
+		}
+		found++
+		switch {
+		case login < 0:
+			offenders = append(offenders, name+": starts Testcontainers with no ghcr.io login step")
+		case prepull < 0:
+			offenders = append(offenders, fmt.Sprintf("%s: starts Testcontainers with no `%s` step", name, prepullCommand))
+		case login > prepull:
+			offenders = append(offenders, name+": logs in AFTER pre-pulling")
+		case prepull > harness:
+			offenders = append(offenders, name+": pre-pulls AFTER starting Testcontainers")
+		}
+		if got := asString(asMap(job["env"])["TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX"]); got != "ghcr.io/${{ github.repository_owner }}" {
+			offenders = append(offenders, fmt.Sprintf("%s: job env TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX = %q, want the ghcr mirror", name, got))
+		}
+	}
+	if found == 0 {
+		t.Fatal("no go-auth-service.yml job starts Testcontainers: the stage classification has rotted")
+	}
+	if len(offenders) > 0 {
+		t.Fatal(strings.Join(offenders, "\n"))
+	}
+}
+
+// The non-container list holds only while the auth test and race legs run without the integration tag.
+func TestAuthNonContainerLegsCarryNoIntegrationTag(t *testing.T) {
+	body := checkGoFunctions(t, readFile(t, filepath.Join(rootOf(t), "ci", "check_go.sh")))["auth_leg_flags"]
+	arms := map[string]string{}
+	for _, m := range regexp.MustCompile(`(?ms)^    ([a-z-]+)\)(.*?);;`).FindAllStringSubmatch(body, -1) {
+		arms[m[1]] = m[2]
+	}
+	for _, kind := range []string{"test", "race", "race-integration"} {
+		if _, ok := arms[kind]; !ok {
+			t.Fatalf("auth_leg_flags has no %q arm: the parse has rotted", kind)
+		}
+	}
+	for _, kind := range []string{"test", "race"} {
+		if strings.Contains(arms[kind], "-tags") {
+			t.Errorf("auth_leg_flags %s carries a -tags flag, but auth %s-leg is listed as starting no container", kind, kind)
+		}
+	}
+	if !strings.Contains(arms["race-integration"], "-tags=integration") {
+		t.Error("auth_leg_flags race-integration lost -tags=integration: the cross-check has rotted")
+	}
+}
+
 func sortedKeysOf(m map[string]yamlMap) []string {
 	keys := make([]string, 0, len(m))
 	for k := range m {

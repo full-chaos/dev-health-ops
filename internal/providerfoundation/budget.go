@@ -1863,7 +1863,7 @@ func (m *Metrics) WritePrometheus(writer io.Writer) error {
 	}
 	if err := writeProviderDatasetReasonCounter(
 		writer, "dev_health_provider_artifact_skipped_total",
-		"Provider artifacts skipped as unreadable while the rest of the inventory continued, by bounded provider, dataset, and reason.",
+		"Provider artifact skips while the rest of the inventory continued, by bounded provider, dataset, and reason. Counts skipped looks, not distinct artifacts; artifact_unavailable counts per failed look.",
 		"reason", m.artifactSkipped,
 	); err != nil {
 		return err

@@ -13,7 +13,7 @@ import (
 
 // Rows stored before the Duplicate and Triage mapping carry 'unknown' for those states. A later sync of the same
 // Linear history writes the new statuses at the same (org, repo, item, occurred_at) key, so a FINAL read returns only
-// the new row for each move. Stored rows are written in the prod form: the Linear INSERT leaves provider empty, repo_id is
+// the new row for each move. Stored rows are written in the prod form: the Linear INSERT writes provider linear, repo_id is
 // the nil uuid, occurred_at has the milliseconds of a Linear history node.
 func TestLinearResyncReplacesTheStoredDuplicateAndTriageRows(t *testing.T) {
 	ctx, conn := newWorkItemEffectsConn(t)
@@ -127,10 +127,10 @@ ORDER BY work_item_id, occurred_at`, claim.OrgID)
 		m := moves[index]
 		t.Logf("FINAL %s %s provider=%q repo=%s %s -> %s (%s -> %s) last_synced=%s",
 			item, occurred.UTC().Format(time.RFC3339Nano), provider, repoID, from, to, fromRaw, toRaw, synced.UTC().Format(time.RFC3339))
-		if item != m.item || !occurred.Equal(at(m.at)) || provider != "" || repoID != "00000000-0000-0000-0000-000000000000" ||
+		if item != m.item || !occurred.Equal(at(m.at)) || provider != "linear" || repoID != "00000000-0000-0000-0000-000000000000" ||
 			from != m.fixFrom || to != m.fixTo || fromRaw != m.fromName || toRaw != m.toName || !synced.Equal(resyncAt) {
-			t.Errorf("row %d: got %s %s %s -> %s synced %s; want %s %s %s -> %s synced %s", index,
-				item, occurred.UTC().Format(time.RFC3339Nano), from, to, synced.UTC(), m.item, m.at, m.fixFrom, m.fixTo, resyncAt)
+			t.Errorf("row %d: got %s %s provider=%q %s -> %s synced %s; want %s %s provider=\"linear\" %s -> %s synced %s", index,
+				item, occurred.UTC().Format(time.RFC3339Nano), provider, from, to, synced.UTC(), m.item, m.at, m.fixFrom, m.fixTo, resyncAt)
 		}
 		index++
 	}

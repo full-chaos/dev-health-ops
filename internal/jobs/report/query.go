@@ -100,9 +100,13 @@ func decodeReportDefinition(
 	now time.Time,
 ) (ReportDefinition, error) {
 	var plan wirePlan
+	var uncharted []UnchartedMetric
 	if len(planJSON) > 0 && string(planJSON) != "null" && string(planJSON) != "{}" {
 		if err := json.Unmarshal(planJSON, &plan); err != nil {
 			return ReportDefinition{}, fmt.Errorf("decode report plan: %w", ErrContractMismatch)
+		}
+		if len(plan.ChartSpecs) == 0 {
+			uncharted = savedPlanUncharted(plan)
 		}
 	} else {
 		var parameters map[string]any
@@ -112,7 +116,7 @@ func decodeReportDefinition(
 			}
 		}
 		plan = defaultWirePlan(reportID, organizationID, parameters, now)
-		plan.ChartSpecs = defaultChartSpecs(plan)
+		plan.ChartSpecs, uncharted = defaultChartSpecs(plan)
 	}
 	if plan.PlanID == "" || plan.ReportType == "" {
 		return ReportDefinition{}, ErrContractMismatch
@@ -138,6 +142,7 @@ func decodeReportDefinition(
 		TimeRangeEnd: plan.TimeRangeEnd, ComparisonPeriod: plan.ComparisonPeriod,
 		Sections: append([]string(nil), plan.Sections...), RequestedMetrics: append([]string(nil), plan.RequestedMetrics...),
 		ConfidenceThreshold: plan.ConfidenceThreshold, CreatedAt: createdAt, OrganizationID: plan.OrganizationID,
+		UnchartedMetrics: uncharted,
 	}}
 	if result.Plan.ConfidenceThreshold == "" {
 		result.Plan.ConfidenceThreshold = "direct_fact"

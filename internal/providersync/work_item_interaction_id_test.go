@@ -38,7 +38,7 @@ func interactionIDProviders() []interactionIDProvider {
 				raws = append(raws, raw)
 			}
 			rows, err := normalizeGitHubWorkItemComments(
-				nativeTestClaim("github", "work-items"), "gh:acme/api#42", raws, nil, interactionIDTestNow)
+				nativeTestClaim("github", "work-items"), "gh:acme/api#42", raws, githubIssueCommentRoute, nil, interactionIDTestNow)
 			if err != nil {
 				t.Fatal(err)
 			}

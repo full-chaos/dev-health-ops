@@ -36,14 +36,28 @@ import (
 // goAPIClientService is the client_service go-api's decision point client names.
 const goAPIClientService = "dev-health-ops-api"
 
+// The rig's deadlines are above go-api's 2 s PEP deadline on purpose: hosted CI runners stall a database commit for
+// 2 s and more, and a cell judges the decision, not the latency budget. A cell that pins go-api's deadline passes
+// AuthorizeOptions.ClientTimeout. The server's request timeout stays above the client's, so the client always ends first.
+const (
+	RigClientTimeout  = 10 * time.Second
+	rigRequestTimeout = 15 * time.Second
+	// drainLimit bounds Take's wait for a decision call still being served.
+	drainLimit = 15 * time.Second
+)
+
 // Authorize is a running decision point: auth-service's authorize routes, built by authruntime's production builder
 // (AuthorizeRoutesWithoutFeed) over the auth schema of a test database, with the plane's access token key as the
 // signer. Client is go-api's decision point client for it, presenting a workload token the routes' caller gate admits.
 type Authorize struct {
-	Client *pep.Client
-	server *httptest.Server
-	mu     sync.Mutex
-	seen   []string
+	Client        *pep.Client
+	clientTimeout time.Duration
+	server        *httptest.Server
+	mu            sync.Mutex
+	seen          []string
+	// inflight counts the calls being served; idle is closed while it is 0.
+	inflight int
+	idle     chan struct{}
 }
 
 // AuthorizeOptions are the decision point's switches.
@@ -53,6 +67,8 @@ type AuthorizeOptions struct {
 	PlatformRolesOwned, UsersOwned bool
 	// Wrap, when set, wraps the decision state the routes read (a planted defect).
 	Wrap func(authapi.DecisionState) authapi.DecisionState
+	// ClientTimeout is Client's deadline; 0 is RigClientTimeout.
+	ClientTimeout time.Duration
 }
 
 // StartAuthorize serves the decision point over the database at adminURI, whose auth schema (Schema) is already
@@ -87,11 +103,15 @@ func StartAuthorize(t testing.TB, ctx context.Context, adminURI string, key Key,
 	}
 	// Served as auth-service serves its routes (the authorize handler fixture's server options).
 	served, err := httpapi.NewServer(httpapi.ServerOptions{Address: "127.0.0.1:0", Logger: slog.New(slog.DiscardHandler), Routes: routes,
-		RequestTimeout: 5 * time.Second, MaxBodyBytes: 1 << 20, RateLimit: 1000, RateLimitBurst: 1000})
+		RequestTimeout: rigRequestTimeout, MaxBodyBytes: 1 << 20, RateLimit: 1000, RateLimitBurst: 1000})
 	if err != nil {
 		t.Fatal(err)
 	}
-	a := &Authorize{}
+	a := &Authorize{clientTimeout: opts.ClientTimeout, idle: make(chan struct{})}
+	if a.clientTimeout == 0 {
+		a.clientTimeout = RigClientTimeout
+	}
+	close(a.idle)
 	a.server = httptest.NewServer(a.record(served.Handler()))
 	t.Cleanup(a.server.Close)
 	workload := authorizeWorkloadClient(t, signer, subject)
@@ -100,7 +120,7 @@ func StartAuthorize(t testing.TB, ctx context.Context, adminURI string, key Key,
 		t.Fatal(err)
 	}
 	if a.Client, err = pep.New(pep.Config{BaseURL: a.server.URL, AllowPlainHTTP: true, HTTPClient: httpClient,
-		ClientService: goAPIClientService, Timeout: 2 * time.Second}); err != nil {
+		ClientService: goAPIClientService, Timeout: a.clientTimeout}); err != nil {
 		t.Fatal(err)
 	}
 	return a
@@ -109,14 +129,46 @@ func StartAuthorize(t testing.TB, ctx context.Context, adminURI string, key Key,
 // Stop closes the decision point: every later call fails, as an outage does.
 func (a *Authorize) Stop() { a.server.Close() }
 
+// ClientTimeout is Client's deadline.
+func (a *Authorize) ClientTimeout() time.Duration { return a.clientTimeout }
+
 // Take returns the decisions made since the last Take, one line each: "<action> <resource type>[/<org>]
-// allowed=<bool> reason=<code>", and forgets them.
-func (a *Authorize) Take() []string {
+// allowed=<bool> reason=<code>", and forgets them. It first waits for every call still being served: a call its
+// client gave up on ends after the client's answer, and its line belongs to the cell that made it, not the next one.
+// A call still served after drainLimit is an error, never a silent return.
+func (a *Authorize) Take() ([]string, error) {
+	a.mu.Lock()
+	idle := a.idle
+	a.mu.Unlock()
+	timer := time.NewTimer(drainLimit)
+	defer timer.Stop()
+	select {
+	case <-idle:
+	case <-timer.C:
+		return nil, fmt.Errorf("authplane: a decision call is still being served after %s", drainLimit)
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	out := slices.Clone(a.seen)
 	a.seen = nil
-	return out
+	return out, nil
+}
+
+func (a *Authorize) begin() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.inflight == 0 {
+		a.idle = make(chan struct{})
+	}
+	a.inflight++
+}
+
+// end runs with a.mu held.
+func (a *Authorize) end() {
+	a.inflight--
+	if a.inflight == 0 {
+		close(a.idle)
+	}
 }
 
 type wireQuestion struct {
@@ -135,6 +187,7 @@ type wireAnswer struct {
 // record keeps each decision of a single or batch call: the question from the request, the verdict from the answer.
 func (a *Authorize) record(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		a.begin()
 		raw, _ := io.ReadAll(r.Body)
 		r.Body = io.NopCloser(bytes.NewReader(raw))
 		rec := httptest.NewRecorder()
@@ -176,6 +229,7 @@ func (a *Authorize) record(next http.Handler) http.Handler {
 		}
 		a.mu.Lock()
 		defer a.mu.Unlock()
+		defer a.end()
 		for i, q := range questions {
 			line := q.Action + " " + q.Resource.Type
 			if q.Resource.Org != "" {

@@ -192,9 +192,11 @@ func TestBackfillClaimPicksOneNextChunkFromDuplicateSiblings(t *testing.T) {
 }
 
 // CHAOS-14222 (acp condition 3). With many runs of one source, the sibling
-// lookup of the claim SQL reads sync_run_units through
-// ix_sync_run_units_run_status (sync_run_id, status). EXPLAIN only: the claim
-// is not executed.
+// lookup of the claim SQL reads sync_run_units through an index keyed by
+// sync_run_id (ix_sync_run_units_run_status (sync_run_id, status) or
+// ix_sync_run_units_status_available (sync_run_id, status, available_at); the
+// planner picks either), never a sequential scan. EXPLAIN only: the claim is
+// not executed.
 func TestBackfillClaimSiblingLookupUsesTheRunStatusIndex(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
@@ -223,9 +225,29 @@ func TestBackfillClaimSiblingLookupUsesTheRunStatusIndex(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Logf("EXPLAIN claimUnitSQL:\n%s", strings.Join(plan, "\n"))
+	var runIndexes []string
+	indexRows, err := fixture.venue.Admin.Query(ctx, `
+SELECT indexname || ': ' || indexdef FROM pg_indexes
+WHERE schemaname = 'public' AND tablename = 'sync_run_units' AND indexdef LIKE '%(sync_run_id%'
+ORDER BY indexname`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for indexRows.Next() {
+		var index string
+		if err := indexRows.Scan(&index); err != nil {
+			t.Fatal(err)
+		}
+		runIndexes = append(runIndexes, index)
+	}
+	if err := indexRows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("sync_run_units indexes led by sync_run_id:\n%s", strings.Join(runIndexes, "\n"))
 	lateral := strings.Join(plan[backfillNextLateralStart(plan):], "\n")
-	if !strings.Contains(lateral, "ix_sync_run_units_run_status") {
-		t.Errorf("the sibling lookup does not use ix_sync_run_units_run_status:\n%s", lateral)
+	runKeyed := strings.Contains(lateral, "ix_sync_run_units_run_status") || strings.Contains(lateral, "ix_sync_run_units_status_available")
+	if !runKeyed || !strings.Contains(lateral, "sync_run_id = claimed.sync_run_id") || strings.Contains(lateral, "Seq Scan") {
+		t.Errorf("the sibling lookup is not an index scan keyed by sync_run_id:\n%s", lateral)
 	}
 }
 

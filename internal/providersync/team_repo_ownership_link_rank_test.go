@@ -32,7 +32,7 @@ func TestATextKeyDonorOnAHeuristicLinkStaysHeuristic(t *testing.T) {
 			t.Run(tracker+"/"+cr.provider, func(t *testing.T) {
 				workItems := []TeamRepoOwnershipWorkItem{
 					{WorkItemID: "linear:CHAOS-1", Provider: "linear", ProjectID: "owner-proj"},
-					{WorkItemID: tracker + ":WEB-5", Provider: tracker, ProjectID: "web-proj"},
+					{WorkItemID: tracker + ":WEB-5", Provider: tracker, Type: "issue", ProjectID: "web-proj"},
 					{WorkItemID: changeRequestID(cr, 3), Provider: cr.provider, Type: cr.itemType},
 				}
 				dependencyEdges := []TeamRepoOwnershipDependencyEdge{

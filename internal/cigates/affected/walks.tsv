@@ -572,6 +572,7 @@ internal/teamactive	roster_census_test.go	unexpressed	-	*.go
 internal/teamattribution	is_primary_census_test.go	.	tree	*.go
 internal/teamattribution	is_primary_census_test.go	internal	tree	*.go
 internal/teamattribution	is_primary_census_test.go	unexpressed	-	-
+internal/teamattribution	linked_issue_donor_census_test.go	.	tree	*.go
 internal/teamcreated	census_test.go	cmd	tree	*
 internal/teamcreated	census_test.go	internal	tree	*
 internal/teamprovider	census_test.go	cmd	tree	*

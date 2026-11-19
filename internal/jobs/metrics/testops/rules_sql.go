@@ -15,6 +15,24 @@ const PipelineSuccessRateWindowSQL = `if(sum(success_count) + sum(failure_count)
 // PipelineRateCountColumns are the testops_pipeline_metrics_daily columns the two window rules read.
 var PipelineRateCountColumns = []string{"success_count", "failure_count"}
 
+// PipelineCancelRateWindowSQL is the pipeline cancel rate of the same rows: their cancelled runs over all their runs
+// (pipelines_count, the denominator of the stored cancel_rate), NULL when they have no run. The stored cancel_rate
+// column holds 0 on a day with no run and is not read: a mean of it weighs a day of 1 run like a day of 500.
+const PipelineCancelRateWindowSQL = `if(sum(pipelines_count) = 0, NULL, ` +
+	`toFloat64(sum(cancelled_count)) / toFloat64(sum(pipelines_count)))`
+
+// PipelineRerunRateWindowSQL is the pipeline rerun rate of the same rows: their reruns over all their runs, NULL when
+// they have no run. No column stores the rerun count; the stored rerun_rate is reruns / pipelines_count, so
+// rerun_rate times pipelines_count is the count (the terms query-api reads). rerun_rate is not Nullable.
+const PipelineRerunRateWindowSQL = `if(sum(pipelines_count) = 0, NULL, ` +
+	`sum(rerun_rate * pipelines_count) / toFloat64(sum(pipelines_count)))`
+
+// PipelineCancelRateCountColumns and PipelineRerunRateCountColumns are the columns the two run-count rules read.
+var (
+	PipelineCancelRateCountColumns = []string{"pipelines_count", "cancelled_count"}
+	PipelineRerunRateCountColumns  = []string{"pipelines_count", "rerun_rate"}
+)
+
 // TestPassRateWindowSQL is the test pass rate of a set of testops_test_metrics_daily rows (already the newest row of
 // each key): their passed cases over their passed and failed cases, NULL when they have neither. The stored pass_rate
 // column divides by every case, skipped ones too, holds 0 on a day where every case was skipped, and is not read.

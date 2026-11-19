@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/testops"
+	"github.com/full-chaos/dev-health-ops/internal/teamkeytables"
 )
 
 // -----------------------------------------------------------------------
@@ -277,8 +278,31 @@ func (executor *TestopsCoverageExecutor) ComputeFamily(
 			metrics = append(metrics, *metric)
 		}
 	}
-	return writeTestopsCoverageMetrics(
+	written, err := writeTestopsCoverageMetrics(
 		ctx, executor.conn, run.OrganizationID, scope.day, scope.computedAt, metrics)
+	if err != nil {
+		return written, err
+	}
+	// A repository of this partition whose stored row of the day is live and that has no record now (its newest coverage
+	// snapshot moved to another day) gets a row that retires the key (stale_team_keys.go): the day then reads as absent,
+	// never 0. A repository with no stored row gets nothing: missing stays missing.
+	produced := make([]staleKey, 0, len(metrics))
+	for _, metric := range metrics {
+		produced = append(produced, staleKey{metric.RepoID.String()})
+	}
+	repositories := make([][]string, 0, len(scope.repoIDs))
+	for _, repoID := range scope.repoIDs {
+		repositories = append(repositories, []string{repoID.String()})
+	}
+	// The marker carries the instant of this run (scope.computedAt, taken before the reads), never a version raised above a stored
+	// row: a newer run that stored a measured row since is newer than this marker and stays the live row of its key.
+	snapshot := scope.computedAt.UTC().Truncate(time.Second)
+	retired, err := supersedeStaleTeamKeysAt(ctx, executor.conn, teamkeytables.TestopsCoverageMetricsDaily, run.OrganizationID,
+		scope.day, newStaleKeyScope(repositories...), produced, func(staleKey) time.Time { return snapshot })
+	if err != nil {
+		return written + retired, fmt.Errorf("retire stale testops_coverage_metrics_daily days: %w", err)
+	}
+	return written + retired, nil
 }
 
 var (

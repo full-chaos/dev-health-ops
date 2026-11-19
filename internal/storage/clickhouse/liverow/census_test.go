@@ -86,6 +86,8 @@ var namesOnly = map[string]struct{ reader, why string }{
 	"internal/cigates/metricsproof/proof.go":                    {"", "executed-proof readback of the rows one CI run wrote: table names of its family maps, no product read"},
 	"internal/jobs/metrics/workitemengine/":                     {"", "compute and insert of the work item engine rows (writer)"},
 	"internal/teamkeytables/teamkeytables.go":                   {"", "the registry of the tables and their measures"},
+	"internal/queryapi/analytics/validate.go":                   {"dedupFromMeasureSource", "the source table of each measure; every read of it takes its FROM from dedupFromMeasureSource"},
+	"internal/queryapi/analytics/testopsownership.go":           {"dedupFromMeasureSource", "the TestOps measure tables of the ownership join; the read of the table is dedupFromMeasureSource"},
 	"internal/queryapi/rowview/rowview.go":                      {"", "the reader side of the view column: table names of its registry, no query"},
 	"internal/storage/clickhouse/liverow/liverow.go":            {"", "the reader side of the rule"},
 	"internal/testsupport/":                                     {"", "test seeds"},

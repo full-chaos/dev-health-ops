@@ -54,9 +54,13 @@ func Query(r *http.Request) url.Values {
 // pairs split on "&" only (a ";" is a literal byte), a pair without "=" has an
 // empty value, "+" is a space, each well-formed %XX is one byte and any other
 // "%" stays literal, and the bytes read as UTF-8 with errors="replace"
-// (CPython's rule: one U+FFFD per maximal ill-formed subpart). One residual:
-// Starlette reads RAW (unescaped) bytes >= 0x80 as latin-1; here raw valid
-// UTF-8 stays as written.
+// (CPython's rule: one U+FFFD per maximal ill-formed subpart). One declared
+// divergence (CHAOS-14073): Starlette decodes the RAW (not percent-encoded)
+// query as latin-1 before parse_qsl, so raw UTF-8 "é" reads there as "Ã©" and a
+// raw 0xFF as "ÿ". Here a raw byte >= 0x80 reads as UTF-8 like a percent-encoded
+// one ("é", U+FFFD), because the latin-1 reading is mojibake. A percent-encoded
+// input, the form every conforming client sends, reads the same in both.
+// query_raw_bytes_test.go pins both forms with the recorded Starlette values.
 func ParseQuery(raw string) url.Values {
 	values := url.Values{}
 	for _, pair := range strings.Split(raw, "&") {

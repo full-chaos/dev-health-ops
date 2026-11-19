@@ -53,7 +53,8 @@ func TestParseQueryIsCPythonParseQsl(t *testing.T) {
 		{"sid=x;y=1&sid=z", url.Values{"sid": {"x;y=1", "z"}}},
 		{";", url.Values{";": {""}}},
 		{";=;", url.Values{";": {";"}}},
-		// Go only (a Python str cannot hold a raw invalid byte): it reads as U+FFFD like an escaped one.
+		// Go only (a Python str cannot hold a raw invalid byte): it reads as U+FFFD like an escaped one. Starlette reads raw bytes as
+		// latin-1: the declared divergence is pinned in query_raw_bytes_test.go (CHAOS-14073).
 		{"k=\xff", url.Values{"k": {"�"}}},
 	} {
 		if got := ParseQuery(tc.raw); !reflect.DeepEqual(got, tc.want) {

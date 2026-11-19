@@ -145,7 +145,7 @@ func TestServedOrgAnOutageIsTheEnforced503ForAnotherOrgAndForNoTokenOrg(t *testi
 	namespace := servedOrgNamespace(t, row.pattern)
 	pdp := newTestPDP(t, allowAll)
 	enforcer := servedOrgEnforcer(t, pdp, namespace)
-	pdp.srv.Close()
+	pdp.kill()
 	got := servedOrgServe(t, row, servedOrgSetup{who: personaAdmin, adminOf: []string{memberOrg}, enforcer: enforcer}, memberOrg)
 	if got.status != http.StatusServiceUnavailable {
 		t.Errorf("another org, PDP dead: %d %q, want the enforced 503", got.status, got.body)
@@ -184,7 +184,7 @@ func TestServedOrgEveryDecisionLogsBothOrganizationsAtInfo(t *testing.T) {
 			t.Fatal(err)
 		}
 		if tc.mode == "dead" {
-			pdp.srv.Close()
+			pdp.kill()
 		}
 		servedOrgServe(t, row, servedOrgSetup{who: personaAdmin, adminOf: []string{memberOrg}, enforcer: enforcer}, tc.served)
 		var got []string

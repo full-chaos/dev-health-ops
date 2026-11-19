@@ -86,6 +86,7 @@ func OrganizationRunStaleKeyTables() []StaleKeyTable {
 		teamkeytables.AIImpactMetricsDaily,
 		teamkeytables.UserMetricsDaily,
 		teamkeytables.TestopsTestMetricsDaily,
+		teamkeytables.TestopsCoverageMetricsDaily,
 	}
 }
 
@@ -362,6 +363,7 @@ func (retractor *RunStaleKeyRetractor) RetractStaleKeys(ctx context.Context, run
 			"ai_impact_metrics_daily_keys_left", left[teamkeytables.AIImpactMetricsDaily.Table],
 			"user_metrics_daily_keys_left", left[teamkeytables.UserMetricsDaily.Table],
 			"testops_test_metrics_daily_keys_left", left[teamkeytables.TestopsTestMetricsDaily.Table],
+			"testops_coverage_metrics_daily_keys_left", left[teamkeytables.TestopsCoverageMetricsDaily.Table],
 		)
 	}
 	supersededIDs, supersededMore := loggedRepositoryIDs(superseded)
@@ -386,6 +388,7 @@ func (retractor *RunStaleKeyRetractor) RetractStaleKeys(ctx context.Context, run
 		"ai_impact_metrics_daily_zero_rows", retracted[teamkeytables.AIImpactMetricsDaily.Table],
 		"user_metrics_daily_zero_rows", retracted[teamkeytables.UserMetricsDaily.Table],
 		"testops_test_metrics_daily_zero_rows", retracted[teamkeytables.TestopsTestMetricsDaily.Table],
+		"testops_coverage_metrics_daily_zero_rows", retracted[teamkeytables.TestopsCoverageMetricsDaily.Table],
 		// The repositories that a row of zeros of the two repository-scoped
 		// tables hides (an empty id is the rows with no repository).
 		"repositories_superseded", len(superseded),

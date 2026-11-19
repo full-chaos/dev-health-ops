@@ -41,6 +41,7 @@ func TestClickHouseSourceDataCheckerMatchesDailyEligibilityIntersection(t *testi
 	}
 	defer conn.Close()
 
+	chschema.CreateTables(ctx, t, conn, "deploy_metrics_daily", "incident_metrics_daily")
 	for _, statement := range []string{
 		`CREATE TABLE ci_pipeline_runs (
     org_id String, repo_id UUID, run_id String DEFAULT toString(generateUUIDv4()), status Nullable(String),
@@ -52,10 +53,6 @@ func TestClickHouseSourceDataCheckerMatchesDailyEligibilityIntersection(t *testi
     started_at Nullable(DateTime64(3, 'UTC')), last_synced Nullable(DateTime64(3, 'UTC')),
     status Nullable(String)
 ) ENGINE = MergeTree ORDER BY (org_id, repo_id)`,
-		`CREATE TABLE deploy_metrics_daily (org_id String, repo_id UUID, day Date)
- ENGINE = MergeTree ORDER BY (org_id, repo_id, day)`,
-		`CREATE TABLE incident_metrics_daily (org_id String, repo_id UUID, day Date)
- ENGINE = MergeTree ORDER BY (org_id, repo_id, day)`,
 		`CREATE TABLE operational_incidents (
     org_id String, id String, service_id Nullable(String), source_revision DateTime64(6, 'UTC'),
     source_conflict_key String, ingest_revision UInt128, is_deleted UInt8,

@@ -69,7 +69,6 @@ func startPostureHarness(t *testing.T) *postureHarness {
 		"CREATE TABLE team_project_ownership (org_id String, project_id String) ENGINE = ReplacingMergeTree() ORDER BY project_id",
 		"CREATE TABLE team_repo_ownership (org_id String, repo_full_name String) ENGINE = ReplacingMergeTree() ORDER BY repo_full_name",
 		"CREATE TABLE other_table (id String) ENGINE = ReplacingMergeTree() ORDER BY id",
-		"CREATE TABLE repo_metrics_daily (org_id String) ENGINE = ReplacingMergeTree() ORDER BY org_id",
 		"CREATE TABLE user_metrics_daily (org_id String) ENGINE = ReplacingMergeTree() ORDER BY org_id",
 		"CREATE TABLE team_metrics_daily (org_id String) ENGINE = ReplacingMergeTree() ORDER BY org_id",
 		"CREATE TABLE work_item_metrics_daily (org_id String) ENGINE = ReplacingMergeTree() ORDER BY org_id",

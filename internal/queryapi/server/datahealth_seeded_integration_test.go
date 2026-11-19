@@ -66,7 +66,6 @@ CREATE TABLE identities (
     is_active UInt8 DEFAULT 1, updated_at DateTime64(6)
 ) ENGINE = ReplacingMergeTree(updated_at) ORDER BY (org_id, canonical_id);
 
-CREATE TABLE repo_metrics_daily (org_id String, day Date, computed_at DateTime('UTC')) ENGINE = MergeTree ORDER BY (org_id, day);
 `
 
 func TestDataHealthReadersSeededRealStores(t *testing.T) {
@@ -120,7 +119,7 @@ func TestDataHealthReadersSeededRealStores(t *testing.T) {
 			t.Fatalf("clickhouse ddl %q: %v", stmt, err)
 		}
 	}
-	chschema.CreateTables(ctx, t, conn, "work_unit_investments")
+	chschema.CreateTables(ctx, t, conn, "work_unit_investments", "repo_metrics_daily")
 	pool, err := pgxpool.New(ctx, pgInst.URI)
 	if err != nil {
 		t.Fatal(err)

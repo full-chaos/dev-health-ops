@@ -29,6 +29,8 @@ type Config struct {
 	ConnMaxLifetime time.Duration
 	// Settings are session settings sent with every query; they win over DSN parameters.
 	Settings map[string]any
+	// BatchWriteBound is the total bound of one batch (PrepareBatch to Send); zero = DefaultBatchWriteBound.
+	BatchWriteBound time.Duration
 }
 
 func DefaultConfig(dsn string) Config {
@@ -126,9 +128,9 @@ func OpenWith(ctx context.Context, config Config, wait func(context.Context, fun
 	if config.MaxIdleConns > 1 {
 		WarmPool(ctx, connection.Ping, config.MaxIdleConns)
 	}
-	return wrapConn(connection), nil
+	return wrapConn(connection, config.BatchWriteBound), nil
 }
 
-func wrapConn(connection driver.Conn) driver.Conn {
-	return newSpanConn(retryConn{detachedBatchConn{connection}}, dbspan.NewEmitter(dbspan.SystemClickHouse, ""))
+func wrapConn(connection driver.Conn, batchWriteBound time.Duration) driver.Conn {
+	return newSpanConn(retryConn{detachedBatchConn{Conn: connection, bound: batchWriteBound}}, dbspan.NewEmitter(dbspan.SystemClickHouse, ""))
 }

@@ -14,18 +14,24 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
 // stallProxy forwards TCP both ways until stall; then it holds every byte the
-// server sends, so the client's next read waits on a server that stalled.
+// server sends until resume, so the client's next read waits on a stalled server.
 type stallProxy struct {
-	listener net.Listener
-	target   string
-	stalled  atomic.Bool
-	done     chan struct{}
-	wg       sync.WaitGroup
+	listener   net.Listener
+	target     string
+	stalled    atomic.Bool
+	resume     chan struct{}
+	resumeOnce sync.Once
+	done       chan struct{}
+	wg         sync.WaitGroup
 }
+
+func (p *stallProxy) unstall() { p.resumeOnce.Do(func() { close(p.resume) }) }
 
 func startStallProxy(t *testing.T, target string) *stallProxy {
 	t.Helper()
@@ -33,7 +39,7 @@ func startStallProxy(t *testing.T, target string) *stallProxy {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := &stallProxy{listener: listener, target: target, done: make(chan struct{})}
+	p := &stallProxy{listener: listener, target: target, resume: make(chan struct{}), done: make(chan struct{})}
 	p.wg.Add(1)
 	go p.accept()
 	t.Cleanup(func() {
@@ -79,8 +85,11 @@ func (p *stallProxy) serverToClient(server, client net.Conn) {
 		n, err := server.Read(buf)
 		if n > 0 {
 			if p.stalled.Load() {
-				<-p.done
-				return
+				select {
+				case <-p.resume:
+				case <-p.done:
+					return
+				}
 			}
 			if _, werr := client.Write(buf[:n]); werr != nil {
 				return
@@ -92,12 +101,8 @@ func (p *stallProxy) serverToClient(server, client net.Conn) {
 	}
 }
 
-// CHAOS-14054 bound: the driver's batch context is never cancelled, so a cancel
-// does not end an in-flight Send. The driver's ReadTimeout still does: a server
-// that stalls its answer to a batch ends Send with a timeout within ReadTimeout.
-func TestAStalledServerReadStillEndsADetachedBatchSendWithinReadTimeout(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
-	t.Cleanup(cancel)
+func openThroughStallProxy(t *testing.T, ctx context.Context, readTimeout, batchBound time.Duration) (*stallProxy, driver.Conn) {
+	t.Helper()
 	instance, err := containers.StartClickHouse(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -113,10 +118,10 @@ func TestAStalledServerReadStillEndsADetachedBatchSendWithinReadTimeout(t *testi
 	}
 	proxy := startStallProxy(t, dsn.Host)
 	dsn.Host = proxy.listener.Addr().String()
-	const readTimeout = 3 * time.Second
 	config := DefaultConfig(dsn.String())
 	config.MaxOpenConns, config.MaxIdleConns = 1, 1
 	config.ReadTimeout = readTimeout
+	config.BatchWriteBound = batchBound
 	conn, err := Open(ctx, config)
 	if err != nil {
 		t.Fatal(err)
@@ -125,29 +130,61 @@ func TestAStalledServerReadStillEndsADetachedBatchSendWithinReadTimeout(t *testi
 	if err := conn.Exec(ctx, `CREATE TABLE batch_stalled_read (x UInt64) ENGINE = Memory`); err != nil {
 		t.Fatal(err)
 	}
+	return proxy, conn
+}
 
-	callerCtx, cancelCaller := context.WithCancel(ctx)
-	defer cancelCaller()
-	batch, err := conn.PrepareBatch(callerCtx, `INSERT INTO batch_stalled_read (x)`)
+func prepareOneRow(t *testing.T, ctx context.Context, conn driver.Conn) driver.Batch {
+	t.Helper()
+	batch, err := conn.PrepareBatch(ctx, `INSERT INTO batch_stalled_read (x)`)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := batch.Append(uint64(1)); err != nil {
 		t.Fatal(err)
 	}
+	return batch
+}
+
+// CHAOS-14054: a caller cancel does not abort an in-flight batch write: the
+// server stalls its answer, the caller cancels, the server answers, the row lands.
+func TestACallerCancelDoesNotAbortAnInFlightBatchWrite(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	t.Cleanup(cancel)
+	proxy, conn := openThroughStallProxy(t, ctx, time.Minute, time.Minute)
+	callerCtx, cancelCaller := context.WithCancel(ctx)
+	defer cancelCaller()
+	batch := prepareOneRow(t, callerCtx, conn)
 	proxy.stalled.Store(true)
-	cancelAt := time.AfterFunc(200*time.Millisecond, cancelCaller)
-	defer cancelAt.Stop()
-	start := time.Now()
-	err = batch.Send()
-	elapsed := time.Since(start)
-	if err == nil {
-		t.Fatal("Send to a stalled server returned no error")
+	sent := make(chan error, 1)
+	go func() { sent <- batch.Send() }()
+	time.Sleep(200 * time.Millisecond)
+	cancelCaller()
+	time.Sleep(200 * time.Millisecond)
+	proxy.unstall()
+	if err := <-sent; err != nil {
+		t.Fatalf("the caller's cancel aborted the in-flight write: %v", err)
 	}
-	if !errors.Is(err, os.ErrDeadlineExceeded) {
-		t.Fatalf("Send error is not the read deadline: %v", err)
+	var rows uint64
+	if err := conn.QueryRow(ctx, `SELECT count() FROM batch_stalled_read`).Scan(&rows); err != nil || rows != 1 {
+		t.Fatalf("rows = %d (%v); want the one row the write sent", rows, err)
 	}
-	if elapsed < readTimeout-500*time.Millisecond || elapsed > readTimeout+5*time.Second {
-		t.Fatalf("Send ended after %s; want about ReadTimeout %s (the cancel at 200ms does not end it)", elapsed, readTimeout)
+}
+
+// CHAOS-14054 bound: with the caller cancel detached, the batch's own bound ends
+// a write the server stalls, before the (longer) ReadTimeout: ErrBatchWriteBound
+// wrapping the driver's deadline error. Asserted by error, not by elapsed time.
+func TestAStalledBatchWriteEndsWithErrBatchWriteBound(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	t.Cleanup(cancel)
+	proxy, conn := openThroughStallProxy(t, ctx, time.Minute, 2*time.Second)
+	batch := prepareOneRow(t, ctx, conn)
+	proxy.stalled.Store(true)
+	err := batch.Send()
+	if !errors.Is(err, ErrBatchWriteBound) {
+		t.Fatalf("Send to a stalled server = %v; want ErrBatchWriteBound", err)
 	}
+	if !errors.Is(err, os.ErrDeadlineExceeded) && !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Send to a stalled server = %v; want the driver's deadline error under ErrBatchWriteBound", err)
+	}
+	t.Logf("stalled write ended with: %v", err)
 }

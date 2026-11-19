@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 )
@@ -22,33 +23,46 @@ type recordingBatchConn struct {
 	prepares int
 	ctx      context.Context
 	batch    *recordingBatch
+	block    bool
 }
 
 func (c *recordingBatchConn) PrepareBatch(ctx context.Context, _ string, _ ...driver.PrepareBatchOption) (driver.Batch, error) {
 	c.prepares++
 	c.ctx = ctx
-	c.batch = &recordingBatch{}
+	c.batch = &recordingBatch{ctx: ctx, block: c.block}
 	return c.batch, nil
 }
 
+// recordingBatch: with block, Send waits like a stalled server until its driver
+// context ends and returns the driver's deadline error.
 type recordingBatch struct {
 	driver.Batch
-	sends, aborts int
+	ctx                   context.Context
+	block                 bool
+	sends, aborts, closes int
 }
 
-func (b *recordingBatch) Send() error  { b.sends++; return nil }
+func (b *recordingBatch) Send() error {
+	b.sends++
+	if b.block {
+		select {
+		case <-b.ctx.Done():
+			return b.ctx.Err()
+		case <-time.After(10 * time.Second):
+			return errors.New("the driver context never ended: the batch has no bound")
+		}
+	}
+	return nil
+}
 func (b *recordingBatch) Abort() error { b.aborts++; return nil }
+func (b *recordingBatch) Close() error { b.closes++; return nil }
 
-func TestTheDriverBatchContextIsNeverCancelledAndKeepsTheCallersValues(t *testing.T) {
+func TestACallerCancelNeverReachesTheDriverBatchContext(t *testing.T) {
 	inner := &recordingBatchConn{}
 	ctx, cancel := context.WithCancel(context.WithValue(context.Background(), batchCtxKey{}, "kept"))
-	defer cancel()
-	batch, err := wrapConn(inner).PrepareBatch(ctx, "INSERT INTO t")
+	batch, err := wrapConn(inner, time.Minute).PrepareBatch(ctx, "INSERT INTO t")
 	if err != nil {
 		t.Fatal(err)
-	}
-	if inner.ctx.Done() != nil {
-		t.Fatal("the driver's batch context can be cancelled: its Send watchdog can close a pooled connection")
 	}
 	if got := inner.ctx.Value(batchCtxKey{}); got != "kept" {
 		t.Fatalf("the driver's batch context lost the caller's values: %v", got)
@@ -56,13 +70,72 @@ func TestTheDriverBatchContextIsNeverCancelledAndKeepsTheCallersValues(t *testin
 	if err := batch.Send(); err != nil || inner.batch.sends != 1 || inner.batch.aborts != 0 {
 		t.Fatalf("send = %v, sends %d aborts %d; want one send", err, inner.batch.sends, inner.batch.aborts)
 	}
+	cancel()
+	if err := inner.ctx.Err(); err != nil {
+		t.Fatalf("the driver's batch context ended right after Send and the caller's cancel (%v): its late Send watchdog can close a pooled connection", err)
+	}
+}
+
+func TestTheDriverBatchContextCarriesTheBoundOrTheEarlierCallerDeadline(t *testing.T) {
+	inner := &recordingBatchConn{}
+	before := time.Now()
+	if _, err := wrapConn(inner, time.Minute).PrepareBatch(context.Background(), "INSERT INTO t"); err != nil {
+		t.Fatal(err)
+	}
+	deadline, ok := inner.ctx.Deadline()
+	if !ok || deadline.Before(before.Add(time.Minute)) || deadline.After(time.Now().Add(time.Minute)) {
+		t.Fatalf("driver deadline = %v (set %v); want the bound, one minute after PrepareBatch", deadline, ok)
+	}
+	callerDeadline := time.Now().Add(5 * time.Second)
+	ctx, cancel := context.WithDeadline(context.Background(), callerDeadline)
+	defer cancel()
+	if _, err := wrapConn(inner, time.Minute).PrepareBatch(ctx, "INSERT INTO t"); err != nil {
+		t.Fatal(err)
+	}
+	if deadline, ok := inner.ctx.Deadline(); !ok || !deadline.Equal(callerDeadline) {
+		t.Fatalf("driver deadline = %v (set %v); want the earlier caller deadline %v", deadline, ok, callerDeadline)
+	}
+	if _, err := wrapConn(inner, 0).PrepareBatch(context.Background(), "INSERT INTO t"); err != nil {
+		t.Fatal(err)
+	}
+	if deadline, ok := inner.ctx.Deadline(); !ok || deadline.Before(before.Add(DefaultBatchWriteBound)) {
+		t.Fatalf("zero bound: driver deadline = %v (set %v); want DefaultBatchWriteBound", deadline, ok)
+	}
+}
+
+func TestABatchPastItsBoundEndsWithErrBatchWriteBound(t *testing.T) {
+	inner := &recordingBatchConn{block: true}
+	batch, err := wrapConn(inner, 50*time.Millisecond).PrepareBatch(context.Background(), "INSERT INTO t")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = batch.Send()
+	if !errors.Is(err, ErrBatchWriteBound) || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("send = %v; want ErrBatchWriteBound wrapping the driver's deadline error", err)
+	}
+	if !errors.Is(context.Cause(inner.ctx), ErrBatchWriteBound) {
+		t.Fatalf("driver context cause = %v; want ErrBatchWriteBound", context.Cause(inner.ctx))
+	}
+}
+
+func TestABatchPastTheCallerDeadlineEndsWithTheCallerDeadlineNotTheBound(t *testing.T) {
+	inner := &recordingBatchConn{block: true}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	batch, err := wrapConn(inner, time.Minute).PrepareBatch(ctx, "INSERT INTO t")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := batch.Send(); !errors.Is(err, context.DeadlineExceeded) || errors.Is(err, ErrBatchWriteBound) {
+		t.Fatalf("send = %v; want the caller's deadline, not ErrBatchWriteBound", err)
+	}
 }
 
 func TestADoneCallerContextRefusesTheBatchBeforeTheDriver(t *testing.T) {
 	inner := &recordingBatchConn{}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := wrapConn(inner).PrepareBatch(ctx, "INSERT INTO t"); !errors.Is(err, context.Canceled) || inner.prepares != 0 {
+	if _, err := wrapConn(inner, time.Minute).PrepareBatch(ctx, "INSERT INTO t"); !errors.Is(err, context.Canceled) || inner.prepares != 0 {
 		t.Fatalf("err = %v, driver prepares %d; want context.Canceled and no prepare", err, inner.prepares)
 	}
 }
@@ -70,13 +143,19 @@ func TestADoneCallerContextRefusesTheBatchBeforeTheDriver(t *testing.T) {
 func TestACallerCancelledBeforeSendAbortsTheBatchAndSendsNothing(t *testing.T) {
 	inner := &recordingBatchConn{}
 	ctx, cancel := context.WithCancel(context.Background())
-	batch, err := wrapConn(inner).PrepareBatch(ctx, "INSERT INTO t")
+	batch, err := wrapConn(inner, time.Minute).PrepareBatch(ctx, "INSERT INTO t")
 	if err != nil {
 		t.Fatal(err)
 	}
 	cancel()
+	if err := batch.Flush(); !errors.Is(err, context.Canceled) {
+		t.Fatalf("flush = %v; want context.Canceled", err)
+	}
 	if err := batch.Send(); !errors.Is(err, context.Canceled) || inner.batch.sends != 0 || inner.batch.aborts != 1 {
 		t.Fatalf("send = %v, sends %d aborts %d; want context.Canceled, no send, one abort", err, inner.batch.sends, inner.batch.aborts)
+	}
+	if !errors.Is(inner.ctx.Err(), context.Canceled) {
+		t.Fatalf("driver context after an abort with no Send = %v; want cancelled at once", inner.ctx.Err())
 	}
 }
 

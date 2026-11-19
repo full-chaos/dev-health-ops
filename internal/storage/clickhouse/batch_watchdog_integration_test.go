@@ -48,7 +48,7 @@ func calledFromClickHouseWatchdog() bool {
 // write under its own WithTimeout, then the next write) must not lose the pooled
 // connection the next batch holds. On clickhouse-go v2.49 a late watchdog closed
 // it ("use of closed network connection"); detachedBatchConn gives the driver a
-// context its watchdog never fires on.
+// context the caller's cancel does not reach.
 func TestABatchContextCanceledAfterSendLeavesThePooledConnectionOpen(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	t.Cleanup(cancel)
@@ -90,7 +90,7 @@ func TestABatchContextCanceledAfterSendLeavesThePooledConnectionOpen(t *testing.
 		writeCtx := &lateWatchdogContext{Context: parent, gate: make(chan struct{})}
 		// A driver whose Send waits for its watchdog would wait on the gate: open it
 		// after a bound and before the cancel, so that Send ends uncancelled.
-		timer := time.AfterFunc(200*time.Millisecond, writeCtx.release)
+		timer := time.AfterFunc(5*time.Second, writeCtx.release)
 		if err := insert(writeCtx, 1); err != nil {
 			t.Fatalf("round %d: first write: %v", round, err)
 		}

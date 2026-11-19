@@ -6,10 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
@@ -103,13 +106,14 @@ func logRecords(t *testing.T, projector *recordingProjector) (string, error) {
 
 func TestHandlerNamesEachFailingConfigAndItsCauseClass(t *testing.T) {
 	t.Parallel()
-	first, second := uuid.New(), uuid.New()
+	first, second, third := uuid.New(), uuid.New(), uuid.New()
 	flagsErr := fmt.Errorf("%w: processor_flags of work-items is ['sentinel-stored-value'], not a dict", coverage.ErrInvalidProcessorFlags)
 	projector := &recordingProjector{result: coverage.RefreshResult{
-		Refreshed: 1, Failed: 2,
+		Refreshed: 1, Failed: 3,
 		Failures: []coverage.RefreshFailure{
 			{OrgID: "org-a", ConfigID: first, Err: flagsErr},
 			{OrgID: "org-b", ConfigID: second, Err: fmt.Errorf("lock: %w", coverage.ErrConfigNotFound)},
+			{OrgID: "org-c", ConfigID: third, Err: fmt.Errorf("build: %w", &coverage.LimitError{Bound: "compact_window", Count: 30002, Max: 30000})},
 		},
 	}}
 	logs, err := logRecords(t, projector)
@@ -119,6 +123,8 @@ func TestHandlerNamesEachFailingConfigAndItsCauseClass(t *testing.T) {
 	for _, want := range []string{
 		"org_id=org-a", "config_id=" + first.String(), "cause_class=invalid_processor_flags",
 		"org_id=org-b", "config_id=" + second.String(), "cause_class=config_not_found",
+		"org_id=org-c", "config_id=" + third.String(), "cause_class=compact_window_limit",
+		`cause_detail="sync coverage compact window limit exceeded: 30002 (limit 30000)"`,
 	} {
 		if !strings.Contains(logs, want) {
 			t.Fatalf("log lacks %q:\n%s", want, logs)
@@ -127,12 +133,51 @@ func TestHandlerNamesEachFailingConfigAndItsCauseClass(t *testing.T) {
 	if strings.Contains(logs, "sentinel-stored-value") {
 		t.Fatalf("log carries a stored value:\n%s", logs)
 	}
-	if got := strings.Count(logs, "sync_coverage_refresh.config_failed"); got != 2 {
-		t.Fatalf("config_failed lines = %d, want 2", got)
+	if got := strings.Count(logs, "sync_coverage_refresh.config_failed"); got != 3 {
+		t.Fatalf("config_failed lines = %d, want 3", got)
 	}
 	cause, ok := jobruntime.SafeCause(err)
-	if !ok || cause != "sync coverage refresh: failed=2 refreshed=1" {
+	if !ok || cause != "sync coverage refresh: failed=3 refreshed=1" {
 		t.Fatalf("SafeCause = %q, %v", cause, ok)
+	}
+}
+
+// TestHandlerLogsNoErrorText fails one config per coarse class, each error carrying a marker, and requires the
+// config_failed lines to name the classes and carry no marker: only a limit's counts reach cause_detail.
+func TestHandlerLogsNoErrorText(t *testing.T) {
+	t.Parallel()
+	const marker = "sentinel-stored-value"
+	failures := []struct {
+		err   error
+		class string
+	}{
+		{&pgconn.PgError{Code: "57014", Message: marker, Detail: marker}, "postgres_57014"},
+		{fmt.Errorf("query %s: %w", marker, context.DeadlineExceeded), "deadline_exceeded"},
+		{fmt.Errorf("query %s: %w", marker, context.Canceled), "context_canceled"},
+		{fmt.Errorf("query %s: %w", marker, &net.OpError{Op: "read", Err: errors.New(marker)}), "connection"},
+		{fmt.Errorf("scan %s: %w", marker, pgx.ScanArgError{ColumnIndex: 2, Err: errors.New(marker)}), "decode"},
+		{fmt.Errorf("%w: %s", coverage.ErrInvalidProcessorFlags, marker), "invalid_processor_flags"},
+		{fmt.Errorf("fold %s: %w", marker, &coverage.LimitError{Bound: "compact_window", Count: 30002, Max: 30000}), "compact_window_limit"},
+		{errors.New(marker), "other"},
+	}
+	result := coverage.RefreshResult{Failed: len(failures)}
+	for _, failure := range failures {
+		result.Failures = append(result.Failures, coverage.RefreshFailure{OrgID: "org-a", ConfigID: uuid.New(), Err: failure.err})
+	}
+	logs, err := logRecords(t, &recordingProjector{result: result})
+	if err == nil {
+		t.Fatal("Work() = nil, want retryable")
+	}
+	for _, failure := range failures {
+		if !strings.Contains(logs, "cause_class="+failure.class+" ") {
+			t.Errorf("log lacks cause_class=%s:\n%s", failure.class, logs)
+		}
+	}
+	if strings.Contains(logs, marker) {
+		t.Fatalf("an error text reached the log:\n%s", logs)
+	}
+	if got := strings.Count(logs, `cause_detail=""`); got != len(failures)-1 {
+		t.Fatalf("empty cause_detail lines = %d, want %d:\n%s", got, len(failures)-1, logs)
 	}
 }
 

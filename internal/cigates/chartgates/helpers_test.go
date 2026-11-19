@@ -516,6 +516,29 @@ func mut(rel, old, repl string) func(*testing.T, string) {
 	return func(t *testing.T, root string) { plant(t, root, rel, old, repl) }
 }
 
+// mutInDefine plants inside one named template define block, so a new helper that spells the same text earlier in the file cannot take the plant.
+func mutInDefine(rel, define, old, repl string) func(*testing.T, string) {
+	return func(t *testing.T, root string) {
+		t.Helper()
+		b := mustRead(t, rootPath(root, rel))
+		head := `{{- define "` + define + `" -}}`
+		start := strings.Index(b, head)
+		if start < 0 {
+			t.Fatalf("plant %s: define %q not found, the anchor is gone", rel, define)
+		}
+		end := strings.Index(b[start:], "{{- end }}")
+		if end < 0 {
+			t.Fatalf("plant %s: define %q has no end", rel, define)
+		}
+		end += start
+		block := b[start:end]
+		if strings.Count(block, old) != 1 {
+			t.Fatalf("plant %s: %q occurs %d times in define %q, want exactly 1", rel, old, strings.Count(block, old), define)
+		}
+		writeFile(t, root, rel, b[:start]+strings.Replace(block, old, repl, 1)+b[end:])
+	}
+}
+
 // all applies several mutations in order: a defense-in-depth rule (template fail plus schema) needs both
 // layers removed before the guard has anything to catch.
 func all(ms ...func(*testing.T, string)) func(*testing.T, string) {

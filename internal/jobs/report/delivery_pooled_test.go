@@ -56,6 +56,8 @@ func TestDeliveryPooledRulesAreTheWritersOwn(t *testing.T) {
 			bugRepairsSource, "FROM work_items FINAL"},
 		{"a repair is a bug with both lifecycle times", "repouser loader", "AND started_at IS NOT NULL AND completed_at IS NOT NULL", bugRepairsSource,
 			"AND type = 'bug' AND started_at IS NOT NULL AND completed_at IS NOT NULL"},
+		{"a repair is a bug with a terminal status", "repouser loader", "\n  AND status IN ('done', 'canceled')\n", bugRepairsSource,
+			"\n          AND status IN ('done', 'canceled')\n"},
 		{"a repair counts on the day it completed", "repouser quality", "if completedAt.Before(start) || !completedAt.Before(end) {", bugRepairsSource,
 			"toDate(completed_at, 'UTC') AS day"},
 		{"repair sample, a negative one included", "repouser quality", "hours := completedAt.Sub(item.StartedAt.UTC()).Seconds() / 3600.0\n", bugRepairsSource,

@@ -4,6 +4,7 @@ package report
 
 import (
 	"fmt"
+	"math"
 	"testing"
 	"time"
 )
@@ -14,6 +15,10 @@ type testopsTestRow struct {
 	flake, retry, recurrence                     float64
 }
 
+// distinct is the row's distinct cases and flakeCases its flake cases (the stored flake rate of those cases).
+func (r testopsTestRow) distinct() float64   { return r.passed + r.failed + r.skipped + r.quarantined }
+func (r testopsTestRow) flakeCases() float64 { return math.Round(r.flake * r.distinct()) }
+
 func (e *pooledEnv) insertTestopsTestRow(org, repo, storedTeam string, row testopsTestRow) {
 	e.t.Helper()
 	var team any
@@ -21,18 +26,22 @@ func (e *pooledEnv) insertTestopsTestRow(org, repo, storedTeam string, row testo
 		team = storedTeam
 	}
 	e.exec(`INSERT INTO testops_test_metrics_daily (repo_id, day, total_cases, passed_count, failed_count, skipped_count, quarantined_count,
-    pass_rate, failure_rate, flake_rate, retry_dependency_rate, total_suites, failure_recurrence_score, team_id, service_id, org_id, computed_at)
-VALUES (?, '2026-01-02', ?, ?, ?, ?, ?, 0.5, 0.5, ?, ?, ?, ?, ?, NULL, ?, '2026-01-02 23:00:00')`,
+    pass_rate, failure_rate, flake_rate, retry_dependency_rate, total_suites, failure_recurrence_score, team_id, service_id, org_id, computed_at,
+    flake_cases, distinct_cases)
+VALUES (?, '2026-01-02', ?, ?, ?, ?, ?, 0.5, 0.5, ?, ?, ?, ?, ?, NULL, ?, '2026-01-02 23:00:00', ?, ?)`,
 		repo, uint32(row.passed+row.failed+row.skipped), uint32(row.passed), uint32(row.failed), uint32(row.skipped), uint32(row.quarantined),
-		row.flake, row.retry, uint32(row.suites), row.recurrence, team, org)
+		row.flake, row.retry, uint32(row.suites), row.recurrence, team, org, uint32(row.flakeCases()), uint32(row.distinct()))
 }
 
 // testopsTestWant is the value of a bucket of rows, or false for no point: counts are sums, pass_rate is the summed passed
-// over the summed passed and failed cases, and the three ratio keys are the mean of the stored repository-day values (ticket
-// 14125 (filed separately) changes that rule; this cell only moves the rows a team reads).
+// over the summed passed and failed cases, flake_rate is the summed flake cases over the summed distinct cases,
+// retry_dependency_rate the summed retry-dependent cases (rate times distinct cases) over the same, and
+// failure_recurrence_score is still the mean of the stored repository-day values.
 func testopsTestWant(metric string, rows []testopsTestRow) (float64, bool) {
 	var sum testopsTestRow
+	var flakeCases, retryCases, distinct float64
 	for _, row := range rows {
+		flakeCases, retryCases, distinct = flakeCases+row.flakeCases(), retryCases+row.retry*row.distinct(), distinct+row.distinct()
 		sum.passed, sum.failed, sum.skipped, sum.quarantined, sum.suites = sum.passed+row.passed, sum.failed+row.failed, sum.skipped+row.skipped, sum.quarantined+row.quarantined, sum.suites+row.suites
 		sum.flake, sum.retry, sum.recurrence = sum.flake+row.flake, sum.retry+row.retry, sum.recurrence+row.recurrence
 	}
@@ -61,9 +70,9 @@ func testopsTestWant(metric string, rows []testopsTestRow) (float64, bool) {
 	}
 	switch metric {
 	case "flake_rate":
-		return sum.flake / n, true
+		return flakeCases / distinct, true
 	case "retry_dependency_rate":
-		return sum.retry / n, true
+		return retryCases / distinct, true
 	default:
 		return sum.recurrence / n, true
 	}

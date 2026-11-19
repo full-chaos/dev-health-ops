@@ -277,6 +277,45 @@ var (
 		TeamColumn: "team_id", Scope: []string{"repo_id"}, Labels: []string{"team_name"},
 		Retracted: "retracted", Carried: []KeyColumn{{"team_id", KeyNullableString}, {"team_name", KeyNullableString}},
 	}
+	// testops_test_metrics_daily holds one row for each (repository, day); the
+	// team and the service of the repository are VALUE columns. A recompute of a
+	// day that counts no kept suite any more (the newest attempt of its run moved
+	// to a later day) produces no record, so the key that goes stale is the
+	// (repository, day) itself. A stored row can hold 0 in every count (a day
+	// stored by an older build whose cases were all of a moved run), so no
+	// measure tells the row that retires the key from it: that row carries the
+	// Retracted marker.
+	TestopsTestMetricsDaily = Table{
+		Table: "testops_test_metrics_daily", Family: "testops_test", DayColumn: "day",
+		Keys:       []KeyColumn{{"repo_id", KeyUUID}},
+		TeamColumn: "team_id", Scope: []string{"repo_id"},
+		Retracted: "retracted", Carried: []KeyColumn{{"team_id", KeyNullableString}, {"service_id", KeyNullableString}},
+	}
+	// The three testops_risk tables hold one row for each (repository, day); the
+	// team and the service of the repository are VALUE columns. A recompute of a
+	// day that gives the family no record for a table (the day's only run moved
+	// to another day, or no run of the day completed) writes no row, so the key
+	// that goes stale is the (repository, day) itself. A measured row can hold 0
+	// in every measure (a confidence of 0, a stability of 0), so the row that
+	// retires the key carries the Retracted marker.
+	TestopsReleaseConfidence = Table{
+		Table: "testops_release_confidence", Family: "testops_risk", DayColumn: "day",
+		Keys:       []KeyColumn{{"repo_id", KeyUUID}},
+		TeamColumn: "team_id", Scope: []string{"repo_id"},
+		Retracted: "retracted", Carried: []KeyColumn{{"team_id", KeyNullableString}, {"service_id", KeyNullableString}},
+	}
+	TestopsQualityDrag = Table{
+		Table: "testops_quality_drag", Family: "testops_risk", DayColumn: "day",
+		Keys:       []KeyColumn{{"repo_id", KeyUUID}},
+		TeamColumn: "team_id", Scope: []string{"repo_id"},
+		Retracted: "retracted", Carried: []KeyColumn{{"team_id", KeyNullableString}, {"service_id", KeyNullableString}},
+	}
+	TestopsPipelineStability = Table{
+		Table: "testops_pipeline_stability", Family: "testops_risk", DayColumn: "day",
+		Keys:       []KeyColumn{{"repo_id", KeyUUID}},
+		TeamColumn: "team_id", Scope: []string{"repo_id"},
+		Retracted: "retracted", Carried: []KeyColumn{{"team_id", KeyNullableString}, {"service_id", KeyNullableString}},
+	}
 	// testops_coverage_metrics_daily holds one row for each (repository, day); the
 	// team and the service of the repository are VALUE columns. A recompute of a
 	// day whose coverage record is gone (the run of the newest snapshot moved to
@@ -289,6 +328,39 @@ var (
 		Keys:       []KeyColumn{{"repo_id", KeyUUID}},
 		TeamColumn: "team_id", Scope: []string{"repo_id"},
 		Retracted: "retracted", Carried: []KeyColumn{{"team_id", KeyNullableString}, {"service_id", KeyNullableString}},
+	}
+	// testops_pipeline_metrics_daily holds one row for each (repository, day);
+	// the team and the service of the repository are VALUE columns. A recompute
+	// of a day that counts no run any more (the provider deleted the runs, or a
+	// run moved to another day) produces no record, so the key that goes stale
+	// is the (repository, day) itself. A stored row can hold 0 in every count
+	// and NULL in every value, so no measure tells the row that retires the key
+	// from it: that row carries the Retracted marker.
+	TestopsPipelineMetricsDaily = Table{
+		Table: "testops_pipeline_metrics_daily", Family: "testops_pipeline", DayColumn: "day",
+		Keys:       []KeyColumn{{"repo_id", KeyUUID}},
+		TeamColumn: "team_id", Scope: []string{"repo_id"},
+		Retracted: "retracted", Carried: []KeyColumn{{"team_id", KeyNullableString}, {"service_id", KeyNullableString}},
+	}
+	// The three pooled delivery tables hold one row for each (repository, day)
+	// and NO team column: a team is the owner of the repository at the read.
+	// A recompute of a day that finds no sample any more (an expired incident
+	// mapping, a cancelled deployment, a moved merge) produces no record, so the
+	// key that goes stale is the (repository, day) itself. A stored row can
+	// hold 0 in every count and NULL in every value, so the row that retires
+	// the key carries the Retracted marker. TeamColumn is "": the census holds
+	// these tables in its named list of team-less tables.
+	IncidentMetricsDaily = Table{
+		Table: "incident_metrics_daily", Family: "incident", DayColumn: "day",
+		Keys: []KeyColumn{{"repo_id", KeyUUID}}, Scope: []string{"repo_id"}, Retracted: "retracted",
+	}
+	DeployMetricsDaily = Table{
+		Table: "deploy_metrics_daily", Family: "deploy", DayColumn: "day",
+		Keys: []KeyColumn{{"repo_id", KeyUUID}}, Scope: []string{"repo_id"}, Retracted: "retracted",
+	}
+	RepoMetricsDaily = Table{
+		Table: "repo_metrics_daily", Family: "repo_user_commit", DayColumn: "day",
+		Keys: []KeyColumn{{"repo_id", KeyUUID}}, Scope: []string{"repo_id"}, Retracted: "retracted",
 	}
 	TeamComplexityDaily = Table{
 		Table: "team_complexity_daily", Family: "team_complexity", DayColumn: "day",
@@ -318,7 +390,15 @@ func All() []Table {
 		TeamComplexityDaily,
 		WorkItemUserMetricsDaily,
 		UserMetricsDaily,
+		TestopsTestMetricsDaily,
+		TestopsReleaseConfidence,
+		TestopsQualityDrag,
+		TestopsPipelineStability,
 		TestopsCoverageMetricsDaily,
+		TestopsPipelineMetricsDaily,
+		IncidentMetricsDaily,
+		DeployMetricsDaily,
+		RepoMetricsDaily,
 	}
 }
 

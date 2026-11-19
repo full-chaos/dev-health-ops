@@ -195,15 +195,9 @@ func stop(t *testing.T, r running) {
 }
 
 // The service serves its query routes on --query-addr and the operator surface
-// (/healthz, /readyz, /metrics) on --http-addr; for one release (D2627) the query
-// listener also answers the operator PROBE paths in their old shapes, and a query route
-// never meets the operator listener. /metrics is not part of the compat shim: it is
-// operational detail, not a probe, so CHAOS-7097 mounts it on the INTERNAL route set
-// only -- this config sets no --internal-addr, so the query listener (a public one)
-// correctly has no /metrics of its own; the operator listener's own /metrics
-// (health.NewServer's route, independent of this split) is the real, always-on scrape
-// target throughout, unaffected -- see TestOperatorMetricsCarryTheReadinessOutcomeCounter.
-func TestServesTheQueryRoutesAndTheOperatorSurfaceOnBothListenersForOneRelease(t *testing.T) {
+// (/healthz, /readyz, /metrics) on --http-addr only (CHAOS-13492): the query listener
+// answers none of the operator paths, and a query route never meets the operator listener.
+func TestServesTheQueryRoutesOnTheQueryListenerAndTheOperatorSurfaceOnTheOperatorListenerOnly(t *testing.T) {
 	r, addrs := startBound(t, []string{"--query-addr", anyPort, "--http-addr", anyPort}, nil, queryComponent, operatorComponent)
 	query, operator := addrs[queryComponent], addrs[operatorComponent]
 	waitFor(t, r, "http://"+operator+"/healthz", http.StatusOK)
@@ -212,17 +206,10 @@ func TestServesTheQueryRoutesAndTheOperatorSurfaceOnBothListenersForOneRelease(t
 		t.Fatalf("operator /readyz = %q: no /query configured is one explicit passing check, ready", body)
 	}
 	waitFor(t, r, "http://"+query+"/registry", http.StatusNotFound) // not configured: unmounted, but the listener answers
-	// One release of compatibility (the compat shim): the query listener still answers the two
-	// operator PROBE paths in the shapes the chart's probes know, until the deploy repo
-	// moves them. The release after this one removes them, and this block with them.
-	if got := waitFor(t, r, "http://"+query+"/healthz", http.StatusOK); got != "ok" {
-		t.Fatalf("compat /healthz = %q, want the old plain ok", got)
-	}
-	if got := waitFor(t, r, "http://"+query+"/readyz", http.StatusOK); got != "ready: /query not configured" {
-		t.Fatalf("compat /readyz = %q, want the old not-configured body", got)
-	}
-	if code, _ := get(t, "http://"+query+"/metrics"); code == http.StatusOK {
-		t.Fatalf("the query listener answered /metrics with 200: it must be internal-only, never the public query listener")
+	for _, path := range []string{"/healthz", "/readyz", "/metrics"} {
+		if code, _ := get(t, "http://"+query+path); code != http.StatusNotFound {
+			t.Fatalf("the query listener answered %s with %d, want 404", path, code)
+		}
 	}
 	// The always-on, unaffected real target: the operator listener's own /metrics.
 	// (Not asserting target_info here, unlike the retired query-compat check above
@@ -349,20 +336,18 @@ func TestSettingsComeFromTheFlagsThenTheEnvironment(t *testing.T) {
 // CHAOS-6780: --internal-addr (QUERY_API_INTERNAL_ADDR) opens the second listener and
 // all three close on shutdown; the three addresses must differ.
 //
-// With an internal listener actually configured, the compat /metrics moves there
-// -- reachable on the internal address, absent on the public query address, the exact
-// pairing CHAOS-7097's route-set split exists to make structural.
+// With an internal listener actually configured, neither it nor the query listener
+// answers /metrics (CHAOS-13492): the scrape lives on the operator listener only.
 func TestOpensTheInternalListenerWhenItsAddressIsSet(t *testing.T) {
 	r, addrs := startBound(t, []string{"--query-addr", anyPort, "--internal-addr", anyPort, "--http-addr", anyPort}, nil, queryComponent, internalComponent, operatorComponent)
 	query, internal, operator := addrs[queryComponent], addrs[internalComponent], addrs[operatorComponent]
 	waitFor(t, r, "http://"+operator+"/readyz", http.StatusOK)
 	waitFor(t, r, "http://"+query+"/registry", http.StatusNotFound)
 	waitFor(t, r, "http://"+internal+"/registry", http.StatusNotFound)
-	if code, _ := get(t, "http://"+query+"/metrics"); code == http.StatusOK {
-		t.Fatal("the PUBLIC query listener answered /metrics with 200 even with an internal listener configured")
-	}
-	if got := waitFor(t, r, "http://"+internal+"/metrics", http.StatusOK); !strings.Contains(got, `dev_health_runtime_info{service="dev-health-query-api"`) {
-		t.Fatalf("the INTERNAL listener's /metrics is not the process metrics:\n%s", got)
+	for name, addr := range map[string]string{"query": query, "internal": internal} {
+		if code, _ := get(t, "http://"+addr+"/metrics"); code != http.StatusNotFound {
+			t.Fatalf("the %s listener answered /metrics with %d, want 404", name, code)
+		}
 	}
 	stop(t, r)
 	for _, addr := range []string{query, internal, operator} {
@@ -379,9 +364,8 @@ func TestOpensTheInternalListenerWhenItsAddressIsSet(t *testing.T) {
 // configured, so every path answers 404), and it closes on shutdown.
 func TestOpensTheMCPListenerWhenItsAddressIsSet(t *testing.T) {
 	r, addrs := startBound(t, []string{"--query-addr", anyPort, "--internal-addr", anyPort, "--mcp-addr", anyPort, "--mcp-boundary", "networkpolicy", "--http-addr", anyPort}, nil, internalComponent, mcpComponent, operatorComponent)
-	internal, mcp, operator := addrs[internalComponent], addrs[mcpComponent], addrs[operatorComponent]
+	mcp, operator := addrs[mcpComponent], addrs[operatorComponent]
 	waitFor(t, r, "http://"+operator+"/readyz", http.StatusOK)
-	waitFor(t, r, "http://"+internal+"/metrics", http.StatusOK)
 	for _, path := range []string{"/metrics", "/healthz", "/readyz", "/registry", "/buildinfo", "/query"} {
 		waitFor(t, r, "http://"+mcp+path, http.StatusNotFound)
 	}

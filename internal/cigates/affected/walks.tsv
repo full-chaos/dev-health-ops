@@ -398,6 +398,7 @@ internal/jobs/metrics/prrework	readers_census_test.go	internal/queryapi/explain	
 internal/jobs/metrics/prrework	readers_census_test.go	internal/queryapi/operatingreview	dir	*
 internal/jobs/metrics/remaining	capacity_schema_contract_pin_test.go	unexpressed	-	-
 internal/jobs/metrics/remaining	executor_clock_ast_test.go	internal/jobs/metrics/remaining	dir	*
+internal/jobs/metrics/remaining	recommendations_gini_team_scope_test.go	internal/jobs/metrics/remaining	dir	*
 internal/jobs/operational	billingemail_test.go	internal/jobs/operational/testdata/billing_email	dir	*
 internal/jobs/operational	venue_golden_address_test.go	internal/jobs/operational/testdata/golden	dir	*
 internal/jobs/report	stored_test_pass_rate_readers_census_test.go	.	tree	*.go
@@ -573,6 +574,7 @@ internal/teamactive	roster_census_test.go	unexpressed	-	*.go
 internal/teamattribution	is_primary_census_test.go	.	tree	*.go
 internal/teamattribution	is_primary_census_test.go	internal	tree	*.go
 internal/teamattribution	is_primary_census_test.go	unexpressed	-	-
+internal/teamattribution	linked_issue_donor_census_test.go	.	tree	*.go
 internal/teamcreated	census_test.go	cmd	tree	*
 internal/teamcreated	census_test.go	internal	tree	*
 internal/teamprovider	census_test.go	cmd	tree	*

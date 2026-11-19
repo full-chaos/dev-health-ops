@@ -52,11 +52,14 @@ var (
 		"POST /api/v1/auth/social-login":        AuthSocial,
 	}
 	wantRouteProxyRoutes = map[string]AuthAggregate{
-		"POST /api/v1/auth/oidc/{provider_id}/authorize": AuthOIDC,
-		"POST /api/v1/auth/oidc/{provider_id}/callback":  AuthOIDC,
-		"GET /api/v1/auth/saml/{provider_id}/metadata":   AuthSAML,
-		"POST /api/v1/auth/saml/{provider_id}/initiate":  AuthSAML,
-		"POST /api/v1/auth/saml/{provider_id}/acs":       AuthSAML,
+		"POST /api/v1/auth/oidc/{provider_id}/authorize":  AuthOIDC,
+		"POST /api/v1/auth/oidc/{provider_id}/callback":   AuthOIDC,
+		"POST /api/v1/auth/oauth/{provider_id}/authorize": AuthOIDC,
+		"GET /api/v1/auth/oauth/{provider_id}/authorize":  AuthOIDC,
+		"POST /api/v1/auth/oauth/{provider_id}/callback":  AuthOIDC,
+		"GET /api/v1/auth/saml/{provider_id}/metadata":    AuthSAML,
+		"POST /api/v1/auth/saml/{provider_id}/initiate":   AuthSAML,
+		"POST /api/v1/auth/saml/{provider_id}/acs":        AuthSAML,
 	}
 )
 
@@ -187,6 +190,10 @@ func TestAuthProxyRouteMapIsTheD1Map(t *testing.T) {
 		}
 	}
 	for key := range wantRouteProxyRoutes {
+		if method, pattern, _ := strings.Cut(key, " "); strings.HasPrefix(pattern, "/api/v1/auth/oauth/") {
+			// The OAuth pair mounts one dispatcher pattern for its three routes.
+			key = method + " /api/v1/auth/oauth/{first}/{second}"
+		}
 		if !mounted[key] {
 			t.Errorf("%s is mapped but not mounted", key)
 		}
@@ -333,6 +340,9 @@ var proxyCalls = []proxyCall{
 	{http.MethodPost, "/api/v1/auth/social-login", `{"provider": "github", "access_token": "gho_x"}`, false, AuthSocial},
 	{http.MethodPost, "/api/v1/auth/oidc/p-1/authorize", `{}`, false, AuthOIDC},
 	{http.MethodPost, "/api/v1/auth/oidc/p-1/callback", `{"code": "c", "state": "s"}`, false, AuthOIDC},
+	{http.MethodPost, "/api/v1/auth/oauth/p-1/authorize", `{}`, false, AuthOIDC},
+	{http.MethodPost, "/api/v1/auth/oauth/p-1/callback", `{"code": "c", "state": "s"}`, false, AuthOIDC},
+	{http.MethodGet, "/api/v1/auth/oauth/github/authorize?org_id=3a6f0c52-9b0e-4d7a-8f3b-2c1d5e6f7a8b", "", false, AuthOIDC},
 	{http.MethodGet, "/api/v1/auth/saml/p-1/metadata", "", false, AuthSAML},
 	{http.MethodPost, "/api/v1/auth/saml/p-1/initiate", `{"relay_state": "/x"}`, false, AuthSAML},
 	{http.MethodPost, "/api/v1/auth/saml/p-1/acs", `{"SAMLResponse": "PHNhbWw+", "RelayState": "r"}`, false, AuthSAML},
@@ -464,8 +474,8 @@ func TestAuthProxyLeavesUnmappedAuthRoutesInGoAPI(t *testing.T) {
 		{method: http.MethodGet, target: "/api/v1/auth/onboarding/state", bearer: true},
 		{method: http.MethodGet, target: "/api/v1/auth/sso/providers", bearer: true},
 		{method: http.MethodPost, target: "/api/v1/auth/oauth/providers", body: `{}`, bearer: true},
-		{method: http.MethodPost, target: "/api/v1/auth/oauth/p-1/authorize", body: `{}`},
-		{method: http.MethodGet, target: "/api/v1/auth/oauth/github/authorize"},
+		{method: http.MethodPut, target: "/api/v1/auth/oauth/p-1/authorize", body: `{}`},
+		{method: http.MethodPost, target: "/api/v1/auth/oauth/p-1/other", body: `{}`},
 	} {
 		recorder := httptest.NewRecorder()
 		handler.ServeHTTP(recorder, call.request(t))

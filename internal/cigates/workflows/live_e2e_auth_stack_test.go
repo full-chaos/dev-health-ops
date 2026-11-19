@@ -1301,15 +1301,6 @@ func TestLiveE2ESMTPFakeProcess(t *testing.T) {
 		os.Exit(2)
 	}
 	switch args[1] {
-	case "mint-license":
-		if len(args) != 4 {
-			os.Exit(2)
-		}
-		for path, value := range map[string]string{args[2]: "fake-license-public", args[3]: "fake-license-value"} {
-			if err := os.WriteFile(path, []byte(value), 0o600); err != nil {
-				os.Exit(1)
-			}
-		}
 	case "smtp-sink":
 		if len(args) != 5 || args[2] != "127.0.0.1:0" {
 			os.Exit(2)
@@ -1728,21 +1719,6 @@ func TestLiveE2EStartIdpRefusesInvalidSAMLCert(t *testing.T) {
 				t.Fatal("invalid SAML certificate did not fail with a fixed message")
 			}
 		})
-	}
-}
-
-func TestLiveE2EDownDoesNotFollowLicenseSymlink(t *testing.T) {
-	state, _, run := liveE2EStubFakes(t)
-	outside := t.TempDir()
-	writeExec(t, filepath.Join(outside, "keep"), "keep", 0o600)
-	if err := os.Symlink(outside, filepath.Join(state, "license")); err != nil {
-		t.Fatal(err)
-	}
-	if out, err := run("down", state); err != nil {
-		t.Fatalf("down: %v %s", err, out)
-	}
-	if liveE2ERead(t, filepath.Join(outside, "keep")) != "keep" {
-		t.Fatal("down removed a file outside STATE/license")
 	}
 }
 

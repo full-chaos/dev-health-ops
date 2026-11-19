@@ -35,8 +35,8 @@ type completionKey struct {
 	teamID string
 }
 
-// CompletedOnDay reports whether an item completed in [dayUTC, end): its status is terminal (done or canceled, the
-// rule of work_item_metrics_daily) and its completed_at is in the day. A provider can reopen an item and keep its
+// CompletedOnDay reports whether an item completed in [dayUTC, end): its status is terminal (done or canceled,
+// workitemmetrics.IsTerminalStatus) and its completed_at is in the day. A provider can reopen an item and keep its
 // completed_at; that open item completes on no day.
 func CompletedOnDay(item Item, dayUTC, end time.Time) bool {
 	if item.CompletedAt == nil || !workitemmetrics.IsTerminalStatus(item.Status) {

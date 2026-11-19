@@ -544,11 +544,25 @@ jobs:
             jq -R -r 'fromjson? | select(type == "object" and ((.Test // "") != "") and (.Action == "pass" or .Action == "fail" or .Action == "skip")) | [.Package, .Test, .Action, (.Elapsed // 0)] | @tsv' "${f}"
           done | gzip -9 > "go-test-timings/${{ matrix.name }}.tsv.gz"
 
-      - name: Write JUnit XML next to the providersync race slice's go test -json (race legs)
+      - name: Write JUnit XML parts of the leg's go test -json
         continue-on-error: true
-        if: always() && startsWith(matrix.name, 'race-') && steps.relevance.outputs.relevant == 'true'
-        # CHAOS-13193: the product tests sync reads .xml and .info members only; the .json stays.
-        run: bash ci/go_test_json_to_junit.sh go-test-json
+        if: always() && steps.relevance.outputs.relevant == 'true' && (startsWith(matrix.name, 'test-') || startsWith(matrix.name, 'race-'))
+        # CHAOS-13193: the product tests sync reads .xml and .info members only; the .json stays. CHAOS-13766: the leg's own events
+        # (the runner-only leg directory) and the race legs' providersync slice (go-test-json/) become one go-junit-part-<leg>
+        # artifact (excluded from the sync's artifact cap); the go-quality job merges the parts into one report.
+        env:
+          LEG_JSON_DIR: ${{ runner.temp }}/go-test-leg-json
+        run: bash ci/go_junit_part.sh go-junit-part go-test-json "${LEG_JSON_DIR}"
+
+      - name: Upload the leg's JUnit part
+        continue-on-error: true
+        if: always() && steps.relevance.outputs.relevant == 'true' && (startsWith(matrix.name, 'test-') || startsWith(matrix.name, 'race-'))
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: go-junit-part-${{ matrix.name }}
+          path: go-junit-part/
+          retention-days: 7
+          if-no-files-found: ignore
 
       - name: Upload the providersync race slice's go test -json (race legs)
         continue-on-error: true
@@ -806,6 +820,44 @@ jobs:
         run: |
           chmod +x ci/aggregate_gate_results.sh
           ./ci/aggregate_gate_results.sh
+
+      # CHAOS-13766: fan-in of the leg JUnit parts, after the verdict above (best effort: none of these steps can change the
+      # job's result). The merged report is the ONE go-test-junit-quality artifact of the run; every testcase is kept.
+      - name: Download the leg JUnit parts
+        if: always()
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: go-junit-part-*
+          path: junit-parts
+
+      - name: Merge the leg JUnit parts into one report
+        if: always()
+        continue-on-error: true
+        env:
+          JUNIT_MERGED_NAME: go-quality-junit
+        run: |
+          mkdir -p junit-merged
+          # The parts are go-junit-report documents: one <testsuites> root each. Every <testsuite> (so every testcase, a failed
+          # one with its full output) is copied unchanged under one new root.
+          {
+            printf '<?xml version="1.0" encoding="UTF-8"?>\n<testsuites>\n'
+            while IFS= read -r part; do
+              awk '/^<\?xml/ { next } /<testsuites[ >\/]/ { root = 1 } root { if ($0 ~ />[ \t]*$/) root = 0; next } /<\/testsuites>/ { next } { print }' "${part}"
+            done < <(find junit-parts -type f -name '*.xml' | LC_ALL=C sort)
+            printf '</testsuites>\n'
+          } > "junit-merged/${JUNIT_MERGED_NAME}.xml"
+          echo "merged $(find junit-parts -type f -name '*.xml' | wc -l) part(s), $(grep -c '<testcase' "junit-merged/${JUNIT_MERGED_NAME}.xml" || true) testcase line(s)"
+
+      - name: Upload the merged go-quality JUnit report
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: go-test-junit-quality
+          path: junit-merged/
+          retention-days: 14
+          if-no-files-found: warn
 
   # CHAOS-11733: a merge queue entry can fail first in any workflow, not only go.yml. When any job of this workflow fails on a
   # merge_group run, cancel the runs stacked on this red entry (same job and script as go.yml). Not a required context

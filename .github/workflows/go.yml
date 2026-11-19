@@ -696,16 +696,32 @@ jobs:
 
       - name: Run isolated storage integration shard ${{ matrix.target }} ${{ matrix.shard }}
         env:
-          # The packages shards run each go test group with -json into this runner directory and print the plain log from
-          # it; the raw events (they carry test output) never leave the runner. Empty for the other targets: plain go test.
-          GO_INTEGRATION_LEG_JSON_DIR: ${{ matrix.target == 'packages' && format('{0}/go-integration-leg-json', runner.temp) || '' }}
+          # Every integration shard (CHAOS-13766; the providersync shards write their own go-test-json/) runs each go test group
+          # with -json into this runner directory and prints the plain log from it; the raw events (they carry test output)
+          # never leave the runner: the JUnit step below and the timings reduction read them.
+          GO_INTEGRATION_LEG_JSON_DIR: ${{ matrix.target != 'providersync' && format('{0}/go-integration-leg-json', runner.temp) || '' }}
         run: bash ci/check_go.sh integration-shard "${{ matrix.target }}" "${{ matrix.shard }}"
 
-      - name: Write JUnit XML next to the per-test json
+      - name: Write JUnit XML parts of the shard's go test -json
         continue-on-error: true
-        if: always() && matrix.target == 'providersync'
-        # CHAOS-13193: the product tests sync reads .xml and .info members only; the .json stays for the shard weights.
-        run: bash ci/go_test_json_to_junit.sh go-test-json
+        if: always()
+        # CHAOS-13193: the product tests sync reads .xml and .info members only. CHAOS-13766: every shard converts its own events
+        # (providersync: go-test-json/, the others: the runner-only leg directory) into one go-junit-part-<target>-<shard>
+        # artifact (excluded from the sync's 25-artifact cap); go-storage-integration merges the parts into one report. The XML
+        # leaves go-test-json/, so the providersync json artifact below is not a second report of the same tests.
+        env:
+          LEG_JSON_DIR: ${{ runner.temp }}/go-integration-leg-json
+        run: bash ci/go_junit_part.sh go-junit-part go-test-json "${LEG_JSON_DIR}"
+
+      - name: Upload the shard's JUnit part
+        continue-on-error: true
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: go-junit-part-${{ matrix.target }}-${{ matrix.shard }}
+          path: go-junit-part/
+          retention-days: 7
+          if-no-files-found: ignore
 
       - name: Upload per-test timing json
         continue-on-error: true
@@ -978,6 +994,45 @@ jobs:
           printf 'timed_out=%s\n' "$(paste -sd, "${timed_file}")" >> "${output}" || true
           rm -f -- "${timed_file}"
           exit 0
+
+      # CHAOS-13766: fan-in of the shard JUnit parts. Best effort and after the verdict above: none of these steps can change the
+      # job's result. The merged report is the ONE go-test-junit-integration artifact of the run (the parts are excluded from
+      # the sync's artifact cap by their go-junit-part- prefix); every testcase is kept, failed ones with their full output.
+      - name: Download the shard JUnit parts
+        if: always()
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: go-junit-part-*
+          path: junit-parts
+
+      - name: Merge the shard JUnit parts into one report
+        if: always()
+        continue-on-error: true
+        env:
+          JUNIT_MERGED_NAME: go-integration-junit
+        run: |
+          mkdir -p junit-merged
+          # The parts are go-junit-report documents: one <testsuites> root each. Every <testsuite> (so every testcase, a failed
+          # one with its full output) is copied unchanged under one new root.
+          {
+            printf '<?xml version="1.0" encoding="UTF-8"?>\n<testsuites>\n'
+            while IFS= read -r part; do
+              awk '/^<\?xml/ { next } /<testsuites[ >\/]/ { root = 1 } root { if ($0 ~ />[ \t]*$/) root = 0; next } /<\/testsuites>/ { next } { print }' "${part}"
+            done < <(find junit-parts -type f -name '*.xml' | LC_ALL=C sort)
+            printf '</testsuites>\n'
+          } > "junit-merged/${JUNIT_MERGED_NAME}.xml"
+          echo "merged $(find junit-parts -type f -name '*.xml' | wc -l) part(s), $(grep -c '<testcase' "junit-merged/${JUNIT_MERGED_NAME}.xml" || true) testcase line(s)"
+
+      - name: Upload the merged integration JUnit report
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: go-test-junit-integration
+          path: junit-merged/
+          retention-days: 14
+          if-no-files-found: warn
 
   # Merge queue only. GitHub rebuilds the entries stacked on a red entry but leaves their old runs running; this job
   # cancels those stale runs (strict gh-readonly-queue branch chain from this entry's head_sha, POST .../cancel only).

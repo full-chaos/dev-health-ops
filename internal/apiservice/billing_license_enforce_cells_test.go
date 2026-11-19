@@ -354,9 +354,10 @@ func TestBillingClassARowsAskNothingWithTheSwitchOff(t *testing.T) {
 	}
 }
 
-// Class A with its namespace on: a caller with a live go-api impersonation row asks no PDP. A write is refused with a
-// 403 (12814 option A, as built); a read keeps the answer the row gives with its cell off (product rule 1).
-func TestBillingClassARowsRefuseAnImpersonatingCallerBeforeThePDP(t *testing.T) {
+// Class A with its namespace on: a caller with a live go-api impersonation row is refused a write with a 403 (12814
+// option A, as built), an organization row unasked and the platform row after its role question only (decideLiveRow);
+// a read keeps the answer the row gives with its cell off (product rule 1), unasked.
+func TestBillingClassARowsRefuseAnImpersonatingCallerAfterTheRoleQuestionOnly(t *testing.T) {
 	pdp := newBillingCellPDP(t, "allow")
 	rig, off := newCellRig(t, cellAllNamespaces, pdp.client(t), false), newCellRig(t, "", nil, false)
 	impersonating := func(rig *cellRig) map[string]string {
@@ -376,8 +377,9 @@ func TestBillingClassARowsRefuseAnImpersonatingCallerBeforeThePDP(t *testing.T) 
 			t.Errorf("%s: %d %s X-Impersonating %q, want 403 for the impersonation session", key, status, body, header.Get("X-Impersonating"))
 		}
 	}
-	if n := len(pdp.calls()); n != 0 {
-		t.Errorf("%d PDP calls for an impersonating caller, want 0", n)
+	calls := pdp.calls()
+	if len(calls) != 1 || calls[0].action != "admin.billing" || calls[0].kind != "platform" || calls[0].org != "" {
+		t.Errorf("PDP calls %+v for an impersonating caller, want the one admin.billing platform question (pull-stripe)", calls)
 	}
 }
 

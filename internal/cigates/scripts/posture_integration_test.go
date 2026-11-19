@@ -1122,3 +1122,99 @@ func TestPostureIntegrationWithoutTheShimBehavesAsBefore(t *testing.T) {
 		t.Fatalf("no shim: exit %d stderr=%q, want no go-guard refusal", res.code, res.stderr)
 	}
 }
+
+func postureCmd(t *testing.T, f postureFixture, path string, args ...string) cmdResult {
+	t.Helper()
+	env := append(isolatedGoEnv(t), "PATH="+path)
+	return cmdSpec{dir: f.dir, env: env}.run("bash", append([]string{filepath.Join(f.dir, "ci", "posture_integration.sh")}, args...)...)
+}
+
+func postureShimPath(t *testing.T, extra ...string) string {
+	t.Helper()
+	return strings.Join(append([]string{postureFakeShim(t)}, extra...), string(os.PathListSeparator))
+}
+
+func TestPostureIntegrationShimRefusalFollowsTheRunnersOwnArgumentParse(t *testing.T) {
+	f := postureDemo(t)
+	paths := filepath.Join(t.TempDir(), "changed.txt")
+	if err := os.WriteFile(paths, []byte("internal/ok/ok_test.go\x00"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	path := postureShimPath(t, filepath.Dir(goBinary(t)), "/usr/bin:/bin")
+	for name, args := range map[string][]string{
+		"empty runner value":          {"--run", "--paths", paths, "--test-runner", ""},
+		"empty final runner value":    {"--run", "--paths", paths, "--test-runner", "/bin/true", "--test-runner", ""},
+		"--test-runner as a filename": {"--run", "--paths", "--test-runner"},
+		"--test-runner as a package":  {"--run", "--paths", paths, "--only", "--test-runner"},
+	} {
+		res := postureCmd(t, f, path, args...)
+		if res.code != 2 || !strings.Contains(res.stderr, "go-slot.sh") || strings.Contains(res.stdout, "RECEIPT") {
+			t.Fatalf("%s: exit %d stdout=%q stderr=%q, want exit 2 and the go-slot.sh form", name, res.code, res.stdout, res.stderr)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(f.dir, "--run"), []byte("internal/ok/ok_test.go\x00"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for name, args := range map[string][]string{
+		"--run as a filename":      {"--paths", "--run"},
+		"--run as a package value": {"--paths", paths, "--only", "--run"},
+		"--run as a runner value":  {"--paths", paths, "--test-runner", "--run"},
+	} {
+		res := postureCmd(t, f, path, args...)
+		if res.code != 0 || strings.Contains(res.stderr, "go-slot.sh") || !strings.Contains(res.stdout, "BASE paths-file") {
+			t.Fatalf("%s: exit %d stdout=%q stderr=%q, want a plain listing", name, res.code, res.stdout, res.stderr)
+		}
+	}
+}
+
+func TestPostureIntegrationRelativeAndEmptyPathEntriesAreAnchoredToTheCallerDirectory(t *testing.T) {
+	f := postureDemo(t)
+	if err := os.MkdirAll(filepath.Join(f.dir, "local-go", "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, link := range []string{filepath.Join(f.dir, "local-go", "bin", "go"), filepath.Join(f.dir, "go")} {
+		if err := os.Symlink(goBinary(t), link); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(f.dir, ".git", "info", "exclude"), []byte("/go\n/local-go/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pass := filepath.Join(t.TempDir(), "runner.sh")
+	if err := os.WriteFile(pass, []byte("#!/bin/sh\nshift 5\nexec \"$@\"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	paths := filepath.Join(t.TempDir(), "changed.txt")
+	if err := os.WriteFile(paths, []byte("internal/ok/ok_test.go\x00"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	shim := postureFakeShim(t)
+	for name, path := range map[string]string{
+		"relative dir":         shim + ":local-go/bin",
+		"dot":                  shim + ":.",
+		"trailing empty field": shim + ":",
+		"middle empty field":   shim + "::" + "/nonexistent",
+	} {
+		res := postureCmd(t, f, path, "--run", "--paths", paths, "--test-runner", pass)
+		if res.code != 5 || postureRow(res, "SIMULATED-HEAD ") == "" || strings.Contains(res.stderr, "cannot resolve") {
+			t.Fatalf("%s: exit %d stdout=%q stderr=%q, want the caller-relative go resolved", name, res.code, res.stdout, res.stderr)
+		}
+	}
+}
+
+func TestPostureIntegrationShimMarkerOnAnUnterminatedLineIsStillTheShim(t *testing.T) {
+	f := postureDemo(t)
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go"), []byte("#!/usr/bin/env bash\n# go-guard shim: test double, no newline at the end"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := dir + string(os.PathListSeparator) + filepath.Dir(goBinary(t)) + string(os.PathListSeparator) + "/usr/bin:/bin"
+	paths := filepath.Join(t.TempDir(), "changed.txt")
+	if err := os.WriteFile(paths, []byte("internal/ok/ok_test.go\x00"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	res := postureCmd(t, f, path, "--run", "--paths", paths)
+	if res.code != 2 || !strings.Contains(res.stderr, "go-slot.sh") {
+		t.Fatalf("unterminated marker: exit %d stdout=%q stderr=%q, want the refusal", res.code, res.stdout, res.stderr)
+	}
+}

@@ -52,6 +52,7 @@ spec:
               value: {{ .Values.web.env.AUTH_SECRET | quote }}
             {{- else if .Values.web.authSecret.secretName }}
             {{- include "dev-health.webSecretGuard" (dict "ctx" . "name" .Values.web.authSecret.secretName "key" (.Values.web.authSecret.key | default "AUTH_SECRET") "what" "web.authSecret") }}
+            {{- if not (include "dev-health.validSecretKey" (.Values.web.authSecret.key | default "AUTH_SECRET" | toString)) }}{{- fail "web.authSecret.key must be a Secret key: letters, digits, '-', '_' and '.', at most 253 characters, not '.', '..' or a name that starts with '..' (quote a numeric key in values: key: \"123\")" }}{{- end }}
             - name: AUTH_SECRET
               valueFrom:
                 secretKeyRef:

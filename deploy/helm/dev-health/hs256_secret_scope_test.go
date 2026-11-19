@@ -214,3 +214,22 @@ func TestProdShapedWebExtraEnvOAuthKeysRender(t *testing.T) {
 		}
 	}
 }
+
+// web.authSecret.key is checked for Secret key form; a numeric key is a valid Secret key once rendered as a string.
+func TestWebAuthSecretKeyForm(t *testing.T) {
+	base := []string{"--set", "web.env.BACKEND_URL=http://x", "--set", "web.authSecret.secretName=web-auth-ok"}
+	for name, key := range map[string]string{"space": "bad key", "slash": "a/b", "dot": ".", "dotdot prefix": "..x"} {
+		out, err := helmOut(t, true, append(append([]string{}, base...), "--set-string", "web.authSecret.key="+key)...)
+		if err == nil || !strings.Contains(out, "web.authSecret.key must be a Secret key") {
+			t.Errorf("%s: want a refusal naming web.authSecret.key, got err=%v\n%.300s", name, err, out)
+		}
+	}
+	out, err := helmOut(t, true, append(append([]string{}, base...), "--set", "web.authSecret.key=123")...)
+	if err != nil {
+		t.Fatalf("a numeric web.authSecret.key must render: %v\n%.300s", err, out)
+	}
+	web, _ := docByName(t, out, "Deployment", "hs256-dev-health-web")
+	if !strings.Contains(web, "key: \"123\"") {
+		t.Fatalf("web AUTH_SECRET key is not \"123\":\n%s", web)
+	}
+}

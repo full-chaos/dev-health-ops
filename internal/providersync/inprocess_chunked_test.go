@@ -131,6 +131,61 @@ func TestInProcessChunkLedgerRunsAChunkThroughItsLife(t *testing.T) {
 	}
 }
 
+// A finalize refused because the checkpoint expects more chunks than are prepared leaves every chunk's total as it was,
+// as the rolled-back PostgreSQL transaction does; the later finalize stamps only the final chunk (CHAOS-14242).
+func TestInProcessChunkLedgerRefusedFinalizeWritesNoChunkTotal(t *testing.T) {
+	ctx := context.Background()
+	claim := nativeTestClaim("github", "tests")
+	store := NewInProcessChunkLedger(claim)
+	now := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
+	commit := func(ordinal int, complete bool) {
+		t.Helper()
+		effect := effectBatchFixture(t, "ci_pipeline_runs", EffectReadbackRequired, `{"org_id":"org-acme","run_id":"`+fmt.Sprint(ordinal)+`"}`)
+		chunk := PreparedProviderChunk{
+			SchemaVersion: chunkPayloadSchemaVersion, RouteVersion: chunkRouteVersion,
+			Ordinal: ordinal, TotalChunks: 2, InventoryComplete: complete, Effects: []EffectBatch{effect},
+		}
+		if complete {
+			chunk.Result = map[string]any{"complete": true}
+		}
+		prepared, err := store.PrepareChunk(ctx, claim, chunk, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := store.BeginChunkEffect(ctx, claim, ordinal, 0, effect.ContentDigest, now); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.CommitChunkEffect(ctx, claim, ordinal, 0, effect.ContentDigest, now); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.MarkChunkCommitted(ctx, claim, ordinal, prepared.ManifestDigest, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	total := func(ordinal int) int {
+		t.Helper()
+		chunk, err := store.LoadPreparedChunk(ctx, claim, ordinal, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return chunk.TotalChunks
+	}
+	commit(0, false)
+	if err := store.MarkInventoryComplete(ctx, claim, now); !errors.Is(err, ErrChunkCheckpointConflict) {
+		t.Fatalf("finalize with 1 of 2 chunks prepared: %v", err)
+	}
+	if got := total(0); got != 2 {
+		t.Fatalf("refused finalize rewrote chunk 0 total to %d, want 2", got)
+	}
+	commit(1, true)
+	if err := store.MarkInventoryComplete(ctx, claim, now); err != nil {
+		t.Fatal(err)
+	}
+	if got0, got1 := total(0), total(1); got0 != 2 || got1 != 2 {
+		t.Fatalf("totals after finalize = [%d %d], want [2 2]", got0, got1)
+	}
+}
+
 // A cancelled context fails the call and leaves the state alone, as it does against
 // PostgreSQL (a transaction cannot begin, a query fails): the r1 defect of #3252.
 func TestInProcessChunkLedgerRefusesACancelledContextWithoutChangingState(t *testing.T) {

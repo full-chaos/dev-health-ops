@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
+	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -812,5 +813,208 @@ func TestGitHubTestsChunkRouteRefusesAWalkBoundOutsideItsRange(t *testing.T) {
 		if !errors.Is(err, ErrInvalidConfiguration) {
 			t.Fatalf("MaxWalkRecords=%d err=%v, want ErrInvalidConfiguration", bound, err)
 		}
+	}
+}
+
+// githubTestsPagedReportDoer is githubTestsPagedDoer with one JUnit report artifact on every run, so the artifacts phase writes rows.
+type githubTestsPagedReportDoer struct {
+	*githubTestsPagedDoer
+	archive []byte
+}
+
+func (doer githubTestsPagedReportDoer) Do(request *http.Request) (*http.Response, error) {
+	path := request.URL.Path
+	header := http.Header{"Content-Type": {"application/json"}}
+	switch {
+	case strings.HasPrefix(path, "/repos/acme/api/actions/runs/") && strings.HasSuffix(path, "/artifacts"):
+		id := strings.Split(strings.TrimPrefix(path, "/repos/acme/api/actions/runs/"), "/")[0]
+		return githubTestsHTTPResponse(request, header, `{"artifacts":[{"id":1`+id+`,"name":"go-test-`+id+`","expired":false}]}`), nil
+	case strings.HasPrefix(path, "/repos/acme/api/actions/artifacts/") && strings.HasSuffix(path, "/zip"):
+		header.Set("Location", "https://blob.example/report.zip")
+		return &http.Response{StatusCode: http.StatusFound, Header: header, Body: io.NopCloser(strings.NewReader("")), Request: request}, nil
+	case path == "/report.zip":
+		header.Set("Content-Type", "application/zip")
+		return &http.Response{StatusCode: http.StatusOK, Header: header, Body: io.NopCloser(strings.NewReader(string(doer.archive))), Request: request}, nil
+	}
+	return doer.githubTestsPagedDoer.Do(request)
+}
+
+// collectGitHubTestsOnePass runs CollectChunks once with an emit that never yields and returns the terminal cursor.
+func collectGitHubTestsOnePass(t *testing.T, handler GitHubTestsRouteHandler, claim Claim, doer providerfoundation.HTTPDoer) githubTestsChunkCursor {
+	t.Helper()
+	terminal := ""
+	err := handler.CollectChunks(
+		context.Background(), claim, providerfoundation.Credential{},
+		githubTestsClient(t, fakehttp.Client(doer)), time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC), "",
+		func(emission ChunkRouteEmission) error {
+			terminal = emission.CursorAfter
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cursor, err := decodeGitHubTestsChunkCursor(terminal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cursor
+}
+
+// A runs page whose last run reaches the bound ends the phase there: the visitor must not follow the next link.
+func TestGitHubTestsChunkRouteRunsPageEndingAtTheBoundListsNoNextPage(t *testing.T) {
+	doer := &githubTestsPagedDoer{t: t, pages: 3, perPage: 2}
+	cursor := collectGitHubTestsOnePass(t, GitHubTestsRouteHandler{MaxWalkRecords: 2}, nativeTestClaim("github", "tests"), doer)
+	if doer.runListRequests != 1 || doer.artifactListRequests != 0 {
+		t.Fatalf("listing requests runs=%d artifacts=%d, want only the first runs page", doer.runListRequests, doer.artifactListRequests)
+	}
+	if cursor.Pipelines != 2 || !githubTestsHasPageBudgetObservation(cursor, githubTestsRunInventoryComponent) || cursor.Phase != "done" {
+		t.Fatalf("pipelines=%d phase=%q incomplete=%+v, want 2 runs, run inventory truncated, done",
+			cursor.Pipelines, cursor.Phase, cursor.Incomplete)
+	}
+}
+
+// The artifacts twin: a page whose last run's reports reach the bound lists no next page.
+func TestGitHubTestsChunkRouteArtifactsPageEndingAtTheBoundListsNoNextPage(t *testing.T) {
+	archive := githubTestsZip(t, map[string]string{"junit.xml": githubTestsJUnitFixture})
+	claim := nativeTestClaim("github", "tests")
+	full := collectGitHubTestsOnePass(t, GitHubTestsRouteHandler{}, claim,
+		githubTestsPagedReportDoer{githubTestsPagedDoer: &githubTestsPagedDoer{t: t, pages: 3, perPage: 2}, archive: archive})
+	runsPhase := full.Pipelines + full.Jobs + full.Acceptance
+	perRun := (githubTestsWalkRecords(full) - runsPhase) / 6
+	if full.Pipelines != 6 || perRun == 0 || runsPhase+6*perRun != githubTestsWalkRecords(full) || len(full.Incomplete) != 0 {
+		t.Fatalf("premise broken: pipelines=%d records=%d runs-phase=%d incomplete=%+v", full.Pipelines, githubTestsWalkRecords(full), runsPhase, full.Incomplete)
+	}
+	doer := &githubTestsPagedDoer{t: t, pages: 3, perPage: 2}
+	bounded := collectGitHubTestsOnePass(t, GitHubTestsRouteHandler{MaxWalkRecords: runsPhase + 2*perRun}, claim,
+		githubTestsPagedReportDoer{githubTestsPagedDoer: doer, archive: archive})
+	if doer.artifactListRequests != 1 {
+		t.Fatalf("artifacts listing requests=%d, want only the first page", doer.artifactListRequests)
+	}
+	if githubTestsWalkRecords(bounded) != runsPhase+2*perRun || !githubTestsHasPageBudgetObservation(bounded, githubTestsArtifactInventoryComponent) {
+		t.Fatalf("records=%d incomplete=%+v, want the first page's reports and the artifact inventory truncated",
+			githubTestsWalkRecords(bounded), bounded.Incomplete)
+	}
+}
+
+// A listing whose last page ends exactly at the bound is complete: only the next phase is truncated.
+func TestGitHubTestsChunkRouteListingEndingExactlyAtTheBoundIsComplete(t *testing.T) {
+	archive := githubTestsZip(t, map[string]string{"junit.xml": githubTestsJUnitFixture})
+	claim := nativeTestClaim("github", "tests")
+	full := collectGitHubTestsOnePass(t, GitHubTestsRouteHandler{}, claim,
+		githubTestsPagedReportDoer{githubTestsPagedDoer: &githubTestsPagedDoer{t: t, pages: 3, perPage: 2}, archive: archive})
+	runsPhase := full.Pipelines + full.Jobs + full.Acceptance
+
+	runsEnd := collectGitHubTestsOnePass(t, GitHubTestsRouteHandler{MaxWalkRecords: runsPhase}, claim,
+		githubTestsPagedReportDoer{githubTestsPagedDoer: &githubTestsPagedDoer{t: t, pages: 3, perPage: 2}, archive: archive})
+	if githubTestsHasPageBudgetObservation(runsEnd, githubTestsRunInventoryComponent) ||
+		!githubTestsHasPageBudgetObservation(runsEnd, githubTestsArtifactInventoryComponent) {
+		t.Fatalf("runs listing ended at the bound: incomplete=%+v, want only the artifact inventory truncated", runsEnd.Incomplete)
+	}
+
+	artifactsEnd := collectGitHubTestsOnePass(t, GitHubTestsRouteHandler{MaxWalkRecords: githubTestsWalkRecords(full)}, claim,
+		githubTestsPagedReportDoer{githubTestsPagedDoer: &githubTestsPagedDoer{t: t, pages: 3, perPage: 2}, archive: archive})
+	if len(artifactsEnd.Incomplete) != 0 || githubTestsWalkRecords(artifactsEnd) != githubTestsWalkRecords(full) {
+		t.Fatalf("artifacts listing ended at the bound: incomplete=%+v records=%d, want a complete walk of %d",
+			artifactsEnd.Incomplete, githubTestsWalkRecords(artifactsEnd), githubTestsWalkRecords(full))
+	}
+}
+
+func githubTestsResultRecords(t *testing.T, result map[string]any) int {
+	t.Helper()
+	total := 0
+	for _, key := range []string{"pipeline_runs_synced", "job_runs_synced", "acceptance_checks_synced", "test_suites_synced", "test_cases_synced", "coverage_snapshots_synced"} {
+		value, ok := result[key].(int)
+		if !ok {
+			t.Fatalf("result[%s]=%#v, want an int", key, result[key])
+		}
+		total += value
+	}
+	return total
+}
+
+// The bound is terminal across phases: a walk stopped by it in an inventory phase does not go on to re-read open runs by id.
+func TestGitHubTestsChunkRouteWalkBoundSkipsTheOpenPhase(t *testing.T) {
+	repoID := listingRepoID(t)
+	stale := listingSince.Add(-30 * 24 * time.Hour)
+	fake := newListingFake(t, makeListingRuns(1, 2, listingSince, time.Minute))
+	fake.byID[7001] = listingRun{id: 7001, created: stale, updated: stale.Add(time.Hour), status: "completed", conclusion: "success"}
+	reader := &fakeOpenRuns{rows: []githubTestsPipelineRow{openRow(repoID, "7001", stale, "running")}}
+	walk := walkListing(t, GitHubTestsRouteHandler{OpenRuns: reader, MaxWalkRecords: 1}, openWindowClaim(), fake, 0)
+	if len(fake.runGets) != 0 || reader.calls != 0 || reader.backlogs != 0 {
+		t.Fatalf("by-id reads=%v open reads=%d backlog reads=%d after the bound, want none", fake.runGets, reader.calls, reader.backlogs)
+	}
+	if got := githubTestsResultRecords(t, walk.final.Result); got != 1 {
+		t.Fatalf("records=%d, want the walk to stop at the bound of 1", got)
+	}
+}
+
+// A stored cursor already at the bound ends without the open phase too.
+func TestGitHubTestsChunkRouteStoredCursorAtWalkBoundSkipsTheOpenPhase(t *testing.T) {
+	for _, phase := range []string{githubTestsArtifactsPhase, githubTestsOpenPhase} {
+		t.Run(phase, func(t *testing.T) {
+			repoID := listingRepoID(t)
+			stale := listingSince.Add(-30 * 24 * time.Hour)
+			fake := newListingFake(t, makeListingRuns(1, 2, listingSince, time.Minute))
+			fake.byID[7001] = listingRun{id: 7001, created: stale, updated: stale.Add(time.Hour), status: "completed", conclusion: "success"}
+			reader := &fakeOpenRuns{rows: []githubTestsPipelineRow{openRow(repoID, "7001", stale, "running")}}
+			raw, err := encodeGitHubTestsChunkCursor(githubTestsChunkCursor{Phase: phase, Pipelines: 5, Repo: "acme/api", OpenCap: 10})
+			if err != nil {
+				t.Fatal(err)
+			}
+			finalSeen := false
+			err = (GitHubTestsRouteHandler{OpenRuns: reader, MaxWalkRecords: 5}).CollectChunks(
+				context.Background(), openWindowClaim(), providerfoundation.Credential{},
+				githubTestsClient(t, fakehttp.Client(fake)), time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC), raw,
+				func(emission ChunkRouteEmission) error {
+					if !emission.Final {
+						return errGitHubTestsWalkContinuation
+					}
+					finalSeen = true
+					return nil
+				},
+			)
+			if err != nil || !finalSeen {
+				t.Fatalf("err=%v final=%v, want the unit to finalize on this attempt", err, finalSeen)
+			}
+			if len(fake.runGets) != 0 || reader.calls != 0 || fake.listPages != 0 {
+				t.Fatalf("by-id reads=%v open reads=%d listing pages=%d at the bound, want none", fake.runGets, reader.calls, fake.listPages)
+			}
+		})
+	}
+}
+
+// An open phase that reaches the bound stops before the next by-id read; the inventory it already finished stays complete.
+func TestGitHubTestsChunkRouteOpenPhaseStopsAtTheWalkBound(t *testing.T) {
+	repoID := listingRepoID(t)
+	stale := listingSince.Add(-30 * 24 * time.Hour)
+	setup := func() (*listingFake, *fakeOpenRuns) {
+		fake := newListingFake(t, makeListingRuns(1, 2, listingSince, time.Minute))
+		fake.byID[7001] = listingRun{id: 7001, created: stale, updated: stale.Add(time.Hour), status: "completed", conclusion: "success"}
+		fake.byID[7002] = listingRun{id: 7002, created: stale.Add(time.Minute), updated: stale.Add(time.Hour), status: "completed", conclusion: "success"}
+		return fake, &fakeOpenRuns{rows: []githubTestsPipelineRow{
+			openRow(repoID, "7001", stale, "running"), openRow(repoID, "7002", stale.Add(time.Minute), "running"),
+		}}
+	}
+	fake, _ := setup()
+	inventory := githubTestsResultRecords(t, walkListing(t, GitHubTestsRouteHandler{}, openWindowClaim(), fake, 0).final.Result)
+	fake, reader := setup()
+	all := githubTestsResultRecords(t, walkListing(t, GitHubTestsRouteHandler{OpenRuns: reader}, openWindowClaim(), fake, 0).final.Result)
+	perOpenRun := (all - inventory) / 2
+	if perOpenRun == 0 || inventory+2*perOpenRun != all || len(fake.runGets) != 2 {
+		t.Fatalf("premise broken: inventory=%d all=%d by-id reads=%v", inventory, all, fake.runGets)
+	}
+	fake, reader = setup()
+	var logged bytes.Buffer
+	swapDefaultLogger(t, slog.New(slog.NewJSONHandler(&logged, nil)))
+	walk := walkListing(t, GitHubTestsRouteHandler{OpenRuns: reader, MaxWalkRecords: inventory + perOpenRun}, openWindowClaim(), fake, 0)
+	if !strings.Contains(logged.String(), `"msg":"provider walk record bound reached"`) || !strings.Contains(logged.String(), `"component":"open_runs"`) {
+		t.Fatalf("no WARN line for the open-phase stop in %s", logged.String())
+	}
+	if len(fake.runGets) != 1 || fake.runGets[0] != 7001 {
+		t.Fatalf("by-id reads=%v, want only 7001 before the bound", fake.runGets)
+	}
+	if complete, _ := walk.final.Result[GitHubTestsResultKeyReportsComplete].(bool); !complete {
+		t.Fatalf("reports_complete=%v, want true: the inventory finished before the bound", walk.final.Result[GitHubTestsResultKeyReportsComplete])
 	}
 }

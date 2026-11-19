@@ -513,13 +513,20 @@ func recordGitHubTestsWalkBound(
 	cursor githubTestsChunkCursor, client *providerfoundation.HTTPClient, claim Claim, component string, bound int,
 ) githubTestsChunkCursor {
 	cursor = markGitHubTestsInventoryTruncated(cursor, client, claim, component)
+	logGitHubTestsWalkBound(cursor, claim, component, bound)
+	return cursor
+}
+
+// githubTestsOpenRunsWalkBoundComponent names the open phase in the walk-bound WARN line only; it is not an inventory component.
+const githubTestsOpenRunsWalkBoundComponent = "open_runs"
+
+func logGitHubTestsWalkBound(cursor githubTestsChunkCursor, claim Claim, component string, bound int) {
 	slog.Warn(
 		"provider walk record bound reached",
 		"provider", claim.Provider, "dataset", claim.Dataset, "mode", claim.Mode, "unit", claim.ID,
 		"repository", logging.ProviderText(cursor.Repo), "component", component,
 		"records", githubTestsWalkRecords(cursor), "bound", bound,
 	)
-	return cursor
 }
 
 // recordGitHubTestsInventoryTruncation finalizes an inventory phase that hit
@@ -1602,6 +1609,11 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 				cursor = endRunsRange(cursor)
 			}
 		}
+		// The visitor follows the next link as soon as this returns: a page that ends at the bound stops here. A listing that
+		// ended at the bound has left the phase, so its inventory is complete.
+		if cursor.Phase == githubTestsRunsPhase && githubTestsWalkRecords(cursor) >= maxWalkRecords {
+			return errGitHubTestsWalkBound
+		}
 		return nil
 	}
 
@@ -1681,6 +1693,18 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 			cursor.Phase = "done"
 			return nil
 		}
+		// The open phase re-reads runs older than the window; the next unit re-reads what a bound stop leaves, so the stop ends
+		// the phase like the rate floor does, without an inventory observation.
+		stopAtWalkBound := func() bool {
+			if githubTestsWalkRecords(cursor) < maxWalkRecords {
+				return false
+			}
+			logGitHubTestsWalkBound(cursor, claim, githubTestsOpenRunsWalkBoundComponent, maxWalkRecords)
+			return true
+		}
+		if stopAtWalkBound() {
+			return nil
+		}
 		startedBefore := claim.SinceAt.UTC().Add(-lookback)
 		if cursor.OpenCap == 0 {
 			backlog, err := handler.OpenRuns.OpenRunBacklog(ctx, claim, repoID, startedBefore, githubTestsOpenRunBacklogThreshold+1)
@@ -1711,6 +1735,9 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 			for _, row := range rows {
 				if cursor.OpenSkipped >= cursor.OpenCap {
 					break
+				}
+				if stopAtWalkBound() {
+					return nil
 				}
 				if hit, remaining := rateObserved.belowFloor(); hit {
 					cursor.OpenFloorHit, cursor.OpenFloorRemaining = true, remaining
@@ -2375,6 +2402,9 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 				if cursor.NextURL == "" {
 					cursor = endArtifactsRange(cursor)
 				}
+			}
+			if cursor.Phase == githubTestsArtifactsPhase && githubTestsWalkRecords(cursor) >= maxWalkRecords {
+				return errGitHubTestsWalkBound
 			}
 			return nil
 		}

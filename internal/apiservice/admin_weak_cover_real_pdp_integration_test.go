@@ -217,8 +217,8 @@ func (w *wcWorld) newSides(t *testing.T, ctx context.Context, wrap func(authapi.
 	t.Helper()
 	var s wcSides
 	s.plane = authplane.StartAuthorize(t, ctx, w.env.URI, w.key, authplane.AuthorizeOptions{PlatformRolesOwned: w.mode.authOwned, UsersOwned: true, Wrap: wrap})
-	s.handlers[wcOff], s.admins[wcOff] = w.goAPI(t, s.plane, wcLiveEnforce, AuthProxyConfig{})
-	s.handlers[wcOn], s.admins[wcOn] = w.goAPI(t, s.plane, wcLiveEnforce+",admin", AuthProxyConfig{})
+	s.handlers[wcOff], s.admins[wcOff] = w.goAPI(t, s.plane, wcLiveEnforce, AuthProxyConfig{}, authplane.RigClientTimeout)
+	s.handlers[wcOn], s.admins[wcOn] = w.goAPI(t, s.plane, wcLiveEnforce+",admin", AuthProxyConfig{}, authplane.RigClientTimeout)
 	return s
 }
 
@@ -239,8 +239,8 @@ func (w *wcWorld) impSwitchOnSides(t *testing.T) wcSides {
 		t.Fatal("the proxy config does not turn impersonation through auth-service on")
 	}
 	s := wcSides{plane: w.main.plane}
-	s.handlers[wcOff], s.admins[wcOff] = w.goAPI(t, s.plane, wcLiveEnforce, proxy)
-	s.handlers[wcOn], s.admins[wcOn] = w.goAPI(t, s.plane, wcLiveEnforce+",admin", proxy)
+	s.handlers[wcOff], s.admins[wcOff] = w.goAPI(t, s.plane, wcLiveEnforce, proxy, authplane.RigClientTimeout)
+	s.handlers[wcOn], s.admins[wcOn] = w.goAPI(t, s.plane, wcLiveEnforce+",admin", proxy, authplane.RigClientTimeout)
 	return s
 }
 
@@ -322,8 +322,9 @@ func (a *wcUsersAdmin) DeleteUser(_ context.Context, in authprovision.UserDelete
 
 // goAPI is go-api's handler as service.go builds it: newProtection over the database, the user access tokens routed by
 // the endpoint-profile rows, the Enforcer over the profile rows with the enforce set, the production scope layers.
-// Users are owned (AUTH_USERS_OWNED, as in prod) with the stub user-admin client.
-func (w *wcWorld) goAPI(t *testing.T, plane *authplane.Authorize, enforce string, proxy AuthProxyConfig) (http.Handler, *wcUsersAdmin) {
+// Users are owned (AUTH_USERS_OWNED, as in prod) with the stub user-admin client. enforceTimeout is the Enforcer's
+// deadline per decision call; 0 is its production default.
+func (w *wcWorld) goAPI(t *testing.T, plane *authplane.Authorize, enforce string, proxy AuthProxyConfig, enforceTimeout time.Duration) (http.Handler, *wcUsersAdmin) {
 	t.Helper()
 	protected, err := newProtection(apiTestConfig(), w.env.Admin, w.mode.goOwned, proxy, quietLogger())
 	if err != nil {
@@ -337,7 +338,7 @@ func (w *wcWorld) goAPI(t *testing.T, plane *authplane.Authorize, enforce string
 		t.Fatal(err)
 	}
 	enf, err := policy.NewEnforcer(policy.EnforceConfig{Decider: plane.Client, Rows: rows,
-		Switch: authzenforce.Parse(authzenforce.GoAPI, enforce), Logger: quietLogger()})
+		Switch: authzenforce.Parse(authzenforce.GoAPI, enforce), Logger: quietLogger(), Timeout: enforceTimeout})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1047,7 +1048,7 @@ func TestAdminWeakCoverRealPDPDeadDecisionPoint(t *testing.T) {
 	w := newWCWorld(t, ctx, wcModes[0])
 	dead := authplane.StartAuthorize(t, ctx, w.env.URI, w.key, authplane.AuthorizeOptions{UsersOwned: true})
 	dead.Stop()
-	w.main.handlers[wcOn], w.main.admins[wcOn] = w.goAPI(t, dead, wcLiveEnforce+",admin", AuthProxyConfig{})
+	w.main.handlers[wcOn], w.main.admins[wcOn] = w.goAPI(t, dead, wcLiveEnforce+",admin", AuthProxyConfig{}, authplane.RigClientTimeout)
 	// pa_foreign_org: its org claim lets the acr revoke row reach its HoldsPlatform site.
 	c := w.seed(t, ctx, wcSpecs[5])
 	for i, r := range wcRows(c, wcOff) {
@@ -1065,16 +1066,18 @@ func TestAdminWeakCoverRealPDPDeadDecisionPoint(t *testing.T) {
 	}
 }
 
-// go-api's own decision point deadline (shadowPDPTimeout: the one client of the shadow and the Enforcer) against a
-// decision point that stalls past it: the admin cell fails closed with 503 and Retry-After 5, ended by the deadline and
-// not by the stall, and the late decision is drained into this cell. The rig's longer deadline cannot hide this answer.
+// go-api's own decision point deadlines, as production builds them: the client's shadowPDPTimeout (shadow.go) and the
+// Enforcer's default (policy/enforce.go; production's EnforceConfig sets no Timeout), against a decision point that
+// stalls past them: the admin cell fails closed with 503 and Retry-After 5, ended by the deadline and not by the stall,
+// and the late decision is drained into this cell. The rig's longer deadlines cannot hide this answer.
 func TestAdminWeakCoverRealPDPProdDeadlineFailsClosed(t *testing.T) {
 	ctx := context.Background()
 	w := newWCWorld(t, ctx, wcModes[1])
 	stall := shadowPDPTimeout + 2*time.Second
 	slow := authplane.StartAuthorize(t, ctx, w.env.URI, w.key, authplane.AuthorizeOptions{PlatformRolesOwned: true, UsersOwned: true,
 		ClientTimeout: shadowPDPTimeout, Wrap: func(s authapi.DecisionState) authapi.DecisionState { return wcStallState{inner: s, stall: stall} }})
-	handler, admin := w.goAPI(t, slow, wcLiveEnforce+",admin", AuthProxyConfig{})
+	// Enforcer timeout 0: production's EnforceConfig sets none (enforcer.go:79), so the Enforcer's own default applies.
+	handler, admin := w.goAPI(t, slow, wcLiveEnforce+",admin", AuthProxyConfig{}, 0)
 	c := w.seed(t, ctx, wcSpecs[1])
 	r := wcRows(c, wcOn)[0]
 	if c.spec.label != "pa_orgless" || r.name != "r21_list" {

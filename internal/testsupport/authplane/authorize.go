@@ -36,9 +36,10 @@ import (
 // goAPIClientService is the client_service go-api's decision point client names.
 const goAPIClientService = "dev-health-ops-api"
 
-// The rig's deadlines are above go-api's 2 s PEP deadline on purpose: hosted CI runners stall a database commit for
-// 2 s and more, and a cell judges the decision, not the latency budget. A cell that pins go-api's deadline passes
-// AuthorizeOptions.ClientTimeout. The server's request timeout stays above the client's, so the client always ends first.
+// The rig's deadlines are above go-api's 2 s decision deadlines on purpose: hosted CI runners stall a database commit
+// for 2 s and more, and a cell judges the decision, not the latency budget. A rig go-api gives its Enforcer
+// RigClientTimeout too; a cell that pins go-api's deadlines passes AuthorizeOptions.ClientTimeout and leaves the
+// Enforcer at its default. The server's request timeout stays above the client's, so the client always ends first.
 const (
 	RigClientTimeout  = 10 * time.Second
 	rigRequestTimeout = 15 * time.Second

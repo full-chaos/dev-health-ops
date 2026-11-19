@@ -67,7 +67,7 @@ func startRiskRetiredStack(ctx context.Context, t *testing.T) riskRetiredStack {
 			t.Fatal(err)
 		}
 	}
-	chschema.CreateTables(ctx, t, conn, append([]string{"test_suite_results", "coverage_snapshots"}, testopsRiskOutputTables...)...)
+	chschema.CreateTables(ctx, t, conn, append([]string{"test_suite_results", "coverage_snapshots", "testops_run_report_completeness"}, testopsRiskOutputTables...)...)
 	applyTestopsRepositoryOwnershipSchema(ctx, t, conn)
 	seedTestopsAuthoritativeOwner(ctx, t, conn, riskRetiredOrgID, uuid.MustParse(riskRetiredRepo), riskRetiredDay)
 

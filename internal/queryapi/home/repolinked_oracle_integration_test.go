@@ -408,10 +408,10 @@ func repoLinkedSeedRepos(ctx context.Context, t *testing.T, admin stdclickhouse.
 	}
 }
 
-// One work item stored under two repository ids is the version that passes the DAY's
-// predicate and is newest among those, chosen per day as the daily job chooses it: an
-// older open version still counts on the days a newer, completed version does not pass.
-func TestRepoLinkedVersionIsChosenPerDayAsTheDailyJobChoosesIt(t *testing.T) {
+// One work item stored under two repository ids counts on its current copy (the newest
+// last_synced over every copy), as the daily job decides it: an older open copy does not
+// keep the item in progress on the days its newer, completed copy does not pass.
+func TestRepoLinkedItemIsNotInProgressFromAnOlderOpenCopy(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
 	admin, client := newHomeTestClickHouse(ctx, t)
@@ -433,14 +433,23 @@ VALUES (toUUID('%s'), 'gh:a/r#1', 1, 1.0, 'native', '', %s, '%s')`, oracleR1, or
 		t.Fatal(err)
 	}
 	start, end := time.Date(2026, 8, 18, 0, 0, 0, 0, time.UTC), time.Date(2026, 8, 25, 0, 0, 0, 0, time.UTC)
-	got, err := computeMetricDelta(ctx, client, metricSpecByName(t, "wip_saturation"), start, end, time.Date(2026, 8, 11, 0, 0, 0, 0, time.UTC), start,
+	compareStart := time.Date(2026, 8, 11, 0, 0, 0, 0, time.UTC)
+	fillDailyTables(ctx, t, admin, org, compareStart, end)
+	spec := metricSpecByName(t, "wip_saturation")
+	got, err := computeMetricDelta(ctx, client, spec, start, end, compareStart, start,
 		Filters{What: WhatFilter{Repos: []string{oracleR1}}}, org, end)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !got.HasData || got.Value <= 0 {
-		t.Errorf("wip_saturation = %v (has data %v): on the days of the current window only the open version passes the predicate, so the item is in progress", got.Value, got.HasData)
+	daily, err := computeMetricDelta(ctx, client, spec, start, end, compareStart, start, Filters{}, org, end)
+	if err != nil {
+		t.Fatal(err)
 	}
+	t.Logf("wip_saturation: request-time %v (has data %v), daily tables %v (has data %v)", got.Value, got.HasData, daily.Value, daily.HasData)
+	if got.HasData || got.Value != 0 {
+		t.Errorf("wip_saturation = %v (has data %v): the current copy completed before the window, so the item is in progress on no day of it", got.Value, got.HasData)
+	}
+	sameDelta(t, "wip_saturation", got, daily)
 }
 
 // The identity of an item in this read is its provider and its id. A blocked-duration

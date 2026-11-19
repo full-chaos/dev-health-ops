@@ -573,6 +573,12 @@ const nullableIntoPlainSites = `
 // name another table's marker columns are refused by the server. Read by hand: the select list, the column types and the
 // nine scan targets are unchanged (day Date into **time.Time, the Float64 means and Nullable(Float64) sums into **float64,
 // partial_rows UInt64 into **uint64); only a WHERE line and two HAVING clauses were added.
+// CHAOS-14008: two pins re-pinned by hand after reading the moved statement, digests copied from the local TestScanTypeCensus
+// failure output (not computed). The testops_coverage_metrics_daily row that retires a day carries the new UInt8 column retracted
+// (not Nullable); dedupFromMeasureSource wraps its SELECT * in a WHERE (liverow predicate); scan targets and types are unchanged:
+//
+//	ExecuteOrgTimeseries 1e3ee3af097b -> 6637e944ff79
+//	ExecuteTimeseries f2eec06b6811 -> 8842c256cd1a
 const unverifiedSites = `
 internal/queryapi/aggflame/clickhouse.go|fetchCycleBreakdown|*string,*float64,*uint64|a0d30b3aefa3|not-describable
 internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*string,*uint64,*[]string|8c4f62d6f207|not-describable
@@ -591,8 +597,8 @@ internal/queryapi/analytics/investmentquality.go|executeEvidenceQualityByGroup|*
 internal/queryapi/analytics/investmentquality.go|executeInvestmentQualityStats|*uint64,*uint64,*float64,*float64,*uint64,*uint64,*uint64,*uint64,*uint64,*uint64,*uint64|2219e7f838c7|statement-not-static
 internal/queryapi/analytics/sankeycoverage.go|runSankeyCoverageQuery|*float64,*float64,*float64,*float64,**float64,**float64,**float64,**float64,**float64|7474017a0a07|statement-not-static
 internal/queryapi/analytics/sankeygrouped.go|executeSankeyGrouped|[]any|02426fb74c03|variadic-destinations
-internal/queryapi/analytics/timeseries.go|ExecuteOrgTimeseries|*time.Time,**float64,**float64|1e3ee3af097b|statement-not-static
-internal/queryapi/analytics/timeseries.go|ExecuteTimeseries|*time.Time,*string,**float64|f2eec06b6811|statement-not-static
+internal/queryapi/analytics/timeseries.go|ExecuteOrgTimeseries|*time.Time,**float64,**float64|6637e944ff79|statement-not-static
+internal/queryapi/analytics/timeseries.go|ExecuteTimeseries|*time.Time,*string,**float64|8842c256cd1a|statement-not-static
 internal/queryapi/cognitiveload/cognitiveload.go|fetchOwnershipCandidates|*string,*string,*uint8,*uint16|e598129679a3|spliced-select-list
 internal/queryapi/complexitytimeseries/complexitytimeseries.go|fetchFileTimeseries|*time.Time,*string,*string,**uint32,**float64,**uint32,**uint32|69bcb13af3df|spliced-select-list
 internal/queryapi/complexitytimeseries/complexitytimeseries.go|fetchRepoTimeseries|*time.Time,*string,**uint64,**uint64,**float64,**uint64,**uint64|2d500256c88b|spliced-select-list

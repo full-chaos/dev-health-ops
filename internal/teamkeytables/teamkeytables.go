@@ -68,7 +68,7 @@ type Table struct {
 	// Retracted is the UInt8 column (DEFAULT 0) that marks a row of zeros, for a
 	// table in which a MEASURED row can hold 0 in every measure, so a row of
 	// zeros cannot be told from it by its measures (the two user-level tables,
-	// CHAOS-9135). A computed row stores 0, the row of zeros of the writer
+	// CHAOS-9135, and the TestOps coverage table). A computed row stores 0, the row of zeros of the writer
 	// stores 1, and a key is live while its NEWEST row holds 0. The marker is
 	// read after the newest row of a key is chosen, never before: a retraction
 	// newer than a value hides it, and a value newer than a retraction shows
@@ -76,7 +76,8 @@ type Table struct {
 	Retracted string
 	// Carried are the value columns that the row of zeros of a table with a
 	// Retracted column copies from the NEWEST row of its key (team_id and
-	// team_name of the user-level tables). A reader that filters on one of them
+	// team_name of the user-level tables, team_id and service_id of the TestOps
+	// coverage table). A reader that filters on one of them
 	// BEFORE it takes the newest row of a key then keeps the row of zeros next
 	// to the row it retracts, and the newest of the two wins. Without the copy
 	// that filter would drop the row of zeros and serve the older row.
@@ -301,6 +302,19 @@ var (
 		TeamColumn: "team_id", Scope: []string{"repo_id"},
 		Retracted: "retracted", Carried: []KeyColumn{{"team_id", KeyNullableString}, {"service_id", KeyNullableString}},
 	}
+	// testops_coverage_metrics_daily holds one row for each (repository, day); the
+	// team and the service of the repository are VALUE columns. A recompute of a
+	// day whose coverage record is gone (the run of the newest snapshot moved to
+	// another day) produces no record, so the key that goes stale is the
+	// (repository, day) itself. A stored row can hold NULL in every percentage,
+	// so no measure tells the row that retires the key from it: that row carries
+	// the Retracted marker.
+	TestopsCoverageMetricsDaily = Table{
+		Table: "testops_coverage_metrics_daily", Family: "testops_coverage", DayColumn: "day",
+		Keys:       []KeyColumn{{"repo_id", KeyUUID}},
+		TeamColumn: "team_id", Scope: []string{"repo_id"},
+		Retracted: "retracted", Carried: []KeyColumn{{"team_id", KeyNullableString}, {"service_id", KeyNullableString}},
+	}
 	TeamComplexityDaily = Table{
 		Table: "team_complexity_daily", Family: "team_complexity", DayColumn: "day",
 		Keys:       []KeyColumn{{"team_id", KeyString}},
@@ -332,6 +346,7 @@ func All() []Table {
 		TestopsReleaseConfidence,
 		TestopsQualityDrag,
 		TestopsPipelineStability,
+		TestopsCoverageMetricsDaily,
 	}
 }
 

@@ -199,6 +199,7 @@ var staleKeyVersionSteps = map[string]time.Duration{
 	teamkeytables.TestopsReleaseConfidence.Table:     time.Second,
 	teamkeytables.TestopsQualityDrag.Table:           time.Second,
 	teamkeytables.TestopsPipelineStability.Table:     time.Second,
+	teamkeytables.TestopsCoverageMetricsDaily.Table:  time.Second,
 }
 
 // staleKeyVersionAfter is the version of a row that must be strictly newer

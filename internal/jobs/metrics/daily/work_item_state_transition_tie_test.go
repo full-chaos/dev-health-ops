@@ -37,32 +37,33 @@ func TestSegmentWorkItemStatusesSameInstantTransitionsAreOrderFree(t *testing.T)
 		name        string
 		status      string
 		transitions []workItemStateTransition
-		want        []string // nil = order-free only
+		completedAt *time.Time // a done item carries one, so its done segment shows which transition is last
+		want        []string   // nil = order-free only
 	}{
 		{"chain_at_one_instant", "done", []workItemStateTransition{
 			{OccurredAt: t1, FromStatus: "todo", ToStatus: "in_progress"},
 			{OccurredAt: t1, FromStatus: "in_progress", ToStatus: "done"},
-		}, []string{seg("todo", created, t1), seg("done", t1, computedAt)}},
+		}, &computedAt, []string{seg("todo", created, t1), seg("done", t1, computedAt)}},
 		{"three_step_chain_at_one_instant", "done", []workItemStateTransition{
 			{OccurredAt: t1, FromStatus: "todo", ToStatus: "in_progress"},
 			{OccurredAt: t1, FromStatus: "in_progress", ToStatus: "in_review"},
 			{OccurredAt: t1, FromStatus: "in_review", ToStatus: "done"},
-		}, []string{seg("todo", created, t1), seg("done", t1, computedAt)}},
+		}, &computedAt, []string{seg("todo", created, t1), seg("done", t1, computedAt)}},
 		{"reopen_and_done_at_one_instant", "in_progress", []workItemStateTransition{
 			{OccurredAt: t1, FromStatus: "todo", ToStatus: "in_progress"},
 			{OccurredAt: t2, FromStatus: "in_progress", ToStatus: "done"},
 			{OccurredAt: t2, FromStatus: "done", ToStatus: "in_progress"},
-		}, []string{seg("todo", created, t1), seg("in_progress", t1, t2), seg("in_progress", t2, computedAt)}},
+		}, nil, []string{seg("todo", created, t1), seg("in_progress", t1, t2), seg("in_progress", t2, computedAt)}},
 		{"cycle_at_first_instant", "in_progress", []workItemStateTransition{
 			{OccurredAt: t1, FromStatus: "in_progress", ToStatus: "done"},
 			{OccurredAt: t1, FromStatus: "done", ToStatus: "in_progress"},
-		}, nil},
+		}, nil, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var first []string
 			for i, order := range transitionPermutations(tc.transitions) {
 				var got []string
-				for _, segment := range segmentWorkItemStatuses(created, nil, tc.status, order, computedAt) {
+				for _, segment := range segmentWorkItemStatuses(created, tc.completedAt, tc.status, order, computedAt) {
 					got = append(got, seg(segment.status, segment.start, segment.end))
 				}
 				if i == 0 {

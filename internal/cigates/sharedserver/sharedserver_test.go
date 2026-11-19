@@ -223,7 +223,7 @@ func lexLines(lines []string) []lineInfo {
 	for number, line := range lines {
 		info := lineInfo{startsInRaw: inRaw}
 		var code strings.Builder
-	scan:
+	comment:
 		for i := 0; i < len(line); i++ {
 			c := line[i]
 			switch {
@@ -245,7 +245,7 @@ func lexLines(lines []string) []lineInfo {
 					}
 				}
 			case c == '/' && i+1 < len(line) && line[i+1] == '/':
-				break scan
+				break comment
 			default:
 				code.WriteByte(c)
 			}

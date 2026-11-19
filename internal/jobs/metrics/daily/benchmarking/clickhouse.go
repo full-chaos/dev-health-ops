@@ -30,14 +30,14 @@ type conn interface {
 // The value column, the grouping columns and the supported scopes are all part
 // of the query's meaning, so they are reproduced rather than re-derived.
 var metricDefinitions = map[string]MetricDefinition{
-	"success_rate":              pooledPipelineRate("success_count", completedRuns),
-	"failure_rate":              pooledPipelineRate("failure_count", completedRuns),
-	"rerun_rate":                pooledPipelineRate("rerun_rate * pipelines_count", "pipelines_count"),
+	"success_rate":              pooledRate(pipelineMetric(""), "success_count", completedRuns),
+	"failure_rate":              pooledRate(pipelineMetric(""), "failure_count", completedRuns),
+	"rerun_rate":                pooledRate(pipelineMetric(""), "rerun_rate * pipelines_count", "pipelines_count"),
 	"median_duration_seconds":   pipelineMetric("median_duration_seconds"),
 	"p95_duration_seconds":      pipelineMetric("p95_duration_seconds"),
 	"avg_queue_seconds":         pipelineMetric("avg_queue_seconds"),
 	"p95_queue_seconds":         pipelineMetric("p95_queue_seconds"),
-	"pass_rate":                 testMetric(passedCaseRate),
+	"pass_rate":                 pooledRate(testMetric(""), "passed_count", executedCases),
 	"flake_rate":                testMetric("flake_rate"),
 	"retry_dependency_rate":     testMetric("retry_dependency_rate"),
 	"failure_recurrence_score":  testMetric("failure_recurrence_score"),
@@ -91,11 +91,10 @@ func pipelineMetric(column string) MetricDefinition {
 	}
 }
 
-// pooledPipelineRate is a ratio of stored runs: the group's numerator over its denominator, so a repo-day weighs by
-// its runs. A stored rate times pipelines_count is its count (rerun_rate is reruns / pipelines_count, unrounded). A
+// pooledRate is a ratio of stored counts: the group's numerator over its denominator, so a repo-day weighs by its
+// denominator. A stored rate times pipelines_count is its count (rerun_rate is reruns / pipelines_count, unrounded). A
 // repo-day whose denominator is 0 adds 0 to both sums.
-func pooledPipelineRate(numerator, denominator string) MetricDefinition {
-	definition := pipelineMetric("")
+func pooledRate(definition MetricDefinition, numerator, denominator string) MetricDefinition {
 	definition.Numerator, definition.Denominator = numerator, denominator
 	return definition
 }
@@ -106,10 +105,11 @@ func pooledPipelineRate(numerator, denominator string) MetricDefinition {
 // the counts are exact UInt32 columns.
 const completedRuns = "success_count + failure_count"
 
-// passedCaseRate is a stored row's passed cases over its passed and failed cases, NULL on a row with neither: the
-// series drops NULL values, so a day where every case was skipped is never a sample of 0. The stored pass_rate column
-// divides by every case, skipped ones too, holds 0 on that day and is not read.
-const passedCaseRate = "if(passed_count + failed_count = 0, NULL, passed_count / (passed_count + failed_count))"
+// executedCases are the cases that passed or failed: the denominator of the pass rate. A repo-day with none (every
+// case skipped, or a retraction row of zeros) is in neither sum, so a day with none in the group has no point, never a
+// sample of 0. The stored pass_rate column divides by every case, skipped ones too, holds 0 on that day and is not
+// read; the counts are exact UInt32 columns.
+const executedCases = "passed_count + failed_count"
 
 func testMetric(column string) MetricDefinition {
 	return MetricDefinition{

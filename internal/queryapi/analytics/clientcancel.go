@@ -46,16 +46,29 @@ const (
 )
 
 // clientCancelled reports whether err is the end of a statement that the
-// client's cancel of the request ended.
+// client's cancel of the request ended: every leaf of the error tree is the
+// context's cancel or a ClickHouse cancel exception. A joined error that also
+// holds a deadline or any other failure is a failure, and so is a tree too
+// large to read to its end.
 func clientCancelled(ctx context.Context, err error) bool {
 	if ctx == nil || err == nil || !errors.Is(ctx.Err(), context.Canceled) {
 		return false
 	}
-	var exception *clickhousedriver.Exception
-	if logging.ErrorAs(err, &exception) && exception != nil {
-		return exception.Code == clickHouseQueryWasCancelledByClient || exception.Code == clickHouseQueryWasCancelled
+	leaves, complete := logging.ErrorLeaves(err)
+	if !complete || len(leaves) == 0 {
+		return false
 	}
-	return logging.ErrorClass(err) == logging.ErrorClassCanceled
+	for _, leaf := range leaves {
+		if leaf == context.Canceled {
+			continue
+		}
+		var exception *clickhousedriver.Exception
+		if !errors.As(leaf, &exception) || exception == nil ||
+			(exception.Code != clickHouseQueryWasCancelledByClient && exception.Code != clickHouseQueryWasCancelled) {
+			return false
+		}
+	}
+	return true
 }
 
 // recordClientCancel is a package var for the reason recordDegradation is

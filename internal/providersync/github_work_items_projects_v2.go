@@ -271,6 +271,9 @@ func (fetcher GitHubProjectV2Fetcher) Fetch(
 			fmt.Sprintf("%s #%d", target.OrgLogin, target.ProjectNumber), normalizedAt,
 		).WithState(projectmembership.GitHubProjectV2State(targetResult.Closed)))
 		boardSubjects := make([]githubProjectV2SnapshotSubject, 0, len(items))
+		boardSlot := boardTieSlot(projectScopeID)
+		boardItems := make(map[string]githubProjectV2BoardItem, len(items))
+		boardItemOrder := make([]string, 0, len(items))
 		// boardIncomplete tracks whether this sync could positively identify
 		// EVERY board item that has a subject to name (codex round 1 finding,
 		// CHAOS-4193d). A DraftIssue genuinely has no subject -- omitting it is
@@ -329,14 +332,25 @@ func (fetcher GitHubProjectV2Fetcher) Fetch(
 			if timeMissing {
 				statusTimeMissing++
 			}
-			if hasEvent {
-				result.Rows.StatusTransitions = append(result.Rows.StatusTransitions, event)
+			event.BoardSlot = int(boardSlot)
+			if _, seen := boardItems[row.WorkItemID]; !seen {
+				boardItemOrder = append(boardItemOrder, row.WorkItemID)
 			}
-			if index, exists := workItemIndex[row.WorkItemID]; exists {
-				result.Rows.WorkItems[index] = row
+			boardItems[row.WorkItemID] = githubProjectV2BoardItem{row: row, event: event, hasEvent: hasEvent}
+		}
+		// ONE choice per work item of this board: the last board item that names it. Its row is the board's
+		// work_items row and its Status value is the board's one event for the item, so the row and the event always
+		// come from the same board item, and the board writes at most one event into its slot.
+		for _, workItemID := range boardItemOrder {
+			kept := boardItems[workItemID]
+			if kept.hasEvent {
+				result.Rows.StatusTransitions = append(result.Rows.StatusTransitions, kept.event)
+			}
+			if index, exists := workItemIndex[workItemID]; exists {
+				result.Rows.WorkItems[index] = kept.row
 			} else {
-				workItemIndex[row.WorkItemID] = len(result.Rows.WorkItems)
-				result.Rows.WorkItems = append(result.Rows.WorkItems, row)
+				workItemIndex[workItemID] = len(result.Rows.WorkItems)
+				result.Rows.WorkItems = append(result.Rows.WorkItems, kept.row)
 			}
 		}
 		complete := targetResult.Complete && !boardIncomplete
@@ -752,6 +766,13 @@ type gitHubProjectV2ItemPayload struct {
 	UpdatedAt   *string                                                     `json:"updatedAt"`
 	Content     gitHubProjectV2ContentPayload                               `json:"content"`
 	FieldValues gitHubProjectV2Connection[gitHubProjectV2FieldValuePayload] `json:"fieldValues"`
+}
+
+// githubProjectV2BoardItem is the board item a board keeps for one work item: its work_items row and its Status event.
+type githubProjectV2BoardItem struct {
+	row      githubWorkItemRow
+	event    githubWorkItemTransitionRow
+	hasEvent bool
 }
 
 func (payload *gitHubProjectV2ContentPayload) UnmarshalJSON(raw []byte) error {

@@ -405,6 +405,9 @@ type linearWorkItemRow struct {
 }
 
 type linearWorkItemTransitionRow struct {
+	// BoardSlot is the shared sink-read key of work_item_transitions (githubWorkItemTransitionRow.BoardSlot). Linear has
+	// no board events: it is always 0 here, and the Linear sink ranks every row by content.
+	BoardSlot     int       `json:"board_slot,omitempty"`
 	WorkItemID    string    `json:"work_item_id"`
 	Provider      string    `json:"provider"`
 	OccurredAt    time.Time `json:"occurred_at"`

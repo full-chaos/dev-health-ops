@@ -209,13 +209,13 @@ func TestWorkItemExecutorsRoundTripAgainstRealClickHouse(t *testing.T) {
 	defer conn.Close()
 
 	// Column types AND SORTING KEYS mirror production. The keys come from the
-	// LATEST migration that touched each table, which for five of these is a
-	// PYTHON migration, not a .sql one:
+	// LATEST migration that touched each table, which for four of these is a
+	// PYTHON migration, not a .sql one (work_item_transitions and
+	// work_item_user_metrics_daily come from CreateTables, below):
 	//
 	//   055_rmt (work_item_daily_rollups) work_item_metrics_daily     ENGINE ReplacingMergeTree(computed_at)
 	//                                   work_item_user_metrics_daily ENGINE ReplacingMergeTree(computed_at)
 	//   042_rmt_org_id_dedup_keys.py    work_items                  (org_id, repo_id, work_item_id)
-	//                                   work_item_transitions       (org_id, repo_id, work_item_id, occurred_at)
 	//   027_add_org_id_to_sorting_keys.py
 	//                                   work_item_metrics_daily     (org_id, provider, day, work_scope_id, team_id)
 	//                                   work_item_user_metrics_daily(org_id, provider, work_scope_id, user_identity, day)
@@ -242,11 +242,6 @@ func TestWorkItemExecutorsRoundTripAgainstRealClickHouse(t *testing.T) {
     story_points Nullable(Float64),
     org_id String, last_synced DateTime64(3, 'UTC')
 ) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, work_item_id)`,
-		`CREATE TABLE work_item_transitions (
-    repo_id UUID, work_item_id String, occurred_at DateTime64(3, 'UTC'), provider String,
-    from_status String, to_status String, from_status_raw String, to_status_raw String,
-    actor String, org_id String, last_synced DateTime64(3, 'UTC')
-) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, work_item_id, occurred_at)`,
 		`CREATE TABLE work_item_team_attributions (
     org_id String, repo_id UUID, work_item_id String, provider String,
     team_id Nullable(String), team_name Nullable(String),
@@ -290,7 +285,7 @@ ORDER BY (org_id, day, provider, work_scope_id, ifNull(team_id, ''))`,
 			t.Fatal(err)
 		}
 	}
-	chschema.CreateTables(ctx, t, conn, "work_item_user_metrics_daily")
+	chschema.CreateTables(ctx, t, conn, "work_item_transitions", "work_item_user_metrics_daily")
 
 	assertFixtureSchemaMatchesProduction(ctx, t, conn)
 
@@ -665,7 +660,7 @@ var productionSchema = []struct {
 	sortingKey string
 }{
 	{"work_items", "ReplacingMergeTree(last_synced)", "org_id, repo_id, work_item_id"},
-	{"work_item_transitions", "ReplacingMergeTree(last_synced)", "org_id, repo_id, work_item_id, occurred_at"},
+	{"work_item_transitions", "ReplacingMergeTree(last_synced)", "org_id, repo_id, work_item_id, occurred_at, tie_ordinal"},
 	{"work_item_team_attributions", "ReplacingMergeTree(computed_at)", "org_id, repo_id, work_item_id, ifNull(team_id, ''), source"},
 	{"work_item_metrics_daily", "ReplacingMergeTree(computed_at)", "org_id, provider, day, work_scope_id, team_id, row_view"},
 	{"work_item_user_metrics_daily", "ReplacingMergeTree(computed_at)", "org_id, provider, work_scope_id, user_identity, day, row_view"},

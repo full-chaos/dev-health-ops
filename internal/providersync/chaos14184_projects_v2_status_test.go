@@ -496,6 +496,7 @@ func TestChaos14184FetchEmitsTheBoardStatusEvent(t *testing.T) {
 	want := []githubWorkItemTransitionRow{{
 		WorkItemID: "gh:acme/api#7", Provider: "github", OccurredAt: time.Date(2026, 8, 3, 9, 30, 0, 0, time.UTC),
 		ToStatusRaw: &raw, FromStatus: "unknown", ToStatus: "in_review", OrgID: claim.OrgID, LastSynced: normalizedAt,
+		BoardSlot: int(boardTieSlot("ghprojv2:acme#3")),
 	}}
 	if !reflect.DeepEqual(result.Rows.StatusTransitions, want) {
 		t.Fatalf("events=%+v, want %+v", result.Rows.StatusTransitions, want)

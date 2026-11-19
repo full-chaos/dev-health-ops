@@ -73,7 +73,8 @@ var preparedRouteSinkReadKeys = map[string]map[string]sinkReadSignal{
 		"lifecycle_lookup_failed":    {kind: sinkReadBool},
 		"pull_request_lookup_failed": {kind: sinkReadBool},
 	},
-	"git_pull_requests": {"reviews_lookup_failed": {kind: sinkReadBool}},
+	"git_pull_requests":     {"reviews_lookup_failed": {kind: sinkReadBool}},
+	"work_item_transitions": {"board_slot": {kind: sinkReadInt}},
 	"work_item_team_attributions": {
 		"priority":         {kind: sinkReadInt},
 		"ownership_reason": {kind: sinkReadEnum, values: teamAttributionOwnershipReasons},

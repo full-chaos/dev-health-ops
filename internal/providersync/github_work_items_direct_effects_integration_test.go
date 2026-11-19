@@ -695,10 +695,21 @@ func TestDirectAdaptersSurviveTwoRowsSharingASortingKeyInOneBatch(t *testing.T) 
 		adapter := GitHubWorkItemTransitionsClickHouseAdapter{Conn: conn}
 		first := workItemTransitionTestRow(orgID, now)
 		second := workItemTransitionTestRow(orgID, now)
-		second.ToStatus = "done" // same key, different payload
-		assertCollapsesToTheLastRow(t, ctx, conn, adapter,
-			"work_item_transitions", first, second,
-			`SELECT to_status FROM work_item_transitions FINAL WHERE org_id = ?`, orgID, "done")
+		second.ToStatus = "done" // one instant, another transition: a tie, and tie_ordinal keeps both (CHAOS-14190)
+		identity, effect := workItemEffect(t, "work_item_transitions", first, second)
+		if err := adapter.WriteGitHubWorkItemEffect(ctx, identity, effect); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		if inspection, err := adapter.InspectGitHubWorkItemEffect(ctx, identity, effect); err != nil || inspection != EffectExact {
+			t.Fatalf("after write: inspection=%s err=%v, want exact", inspection, err)
+		}
+		var stored uint64
+		if err := conn.QueryRow(ctx, `SELECT count() FROM work_item_transitions FINAL WHERE org_id = ?`, orgID).Scan(&stored); err != nil {
+			t.Fatal(err)
+		}
+		if stored != 2 {
+			t.Fatalf("stored %d transitions of the tie, want 2", stored)
+		}
 	})
 
 	t.Run("work_item_reopen_events", func(t *testing.T) {

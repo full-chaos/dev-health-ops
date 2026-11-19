@@ -49,7 +49,7 @@ func TestGitLabFetchStatusTransitionMatchesFrozenPythonProducer(t *testing.T) {
 			},
 		}},
 		buildGitLabFetchStatusTransitionOracleRow,
-		gitlabWorkItemsFetchGoOnlyFields,
+		withTransitionBoardSlotGoOnly(gitlabWorkItemsFetchGoOnlyFields),
 	)
 }
 

@@ -122,13 +122,13 @@ func Routes(deps Deps) []httpapi.Route {
 	route := func(method, path string, handler http.Handler) httpapi.Route {
 		return httpapi.Route{Method: method, Pattern: prefix + path, Handler: handler}
 	}
-	// initiateOIDCAuth and oidcCallback need StateSecret (the AEAD opaque
-	// state token, state.go) and Signer (the login token pair) to run
-	// for real; a caller that wires neither -- an existing Deps literal
-	// from before this PR, or a deliberately license-shimmed deployment
-	// -- gets the same process-tier-only shim the other 15 routes still
-	// answer, rather than a route that mints a state no callback could
-	// ever decrypt.
+	// With AUTH_PROXY_OIDC off (Inner does not forward), the two OIDC routes answer in this order, and the OAuth pair
+	// (oauthPair) the same: no SSO_STATE_SECRET -> 503 config_missing naming SSO_STATE_SECRET, before any body check
+	// (orStateMissing); a state secret but no session issuer (AUTH_PROXY_SESSIONS off) -> 503 naming
+	// AUTH_PROXY_SESSIONS (refuseSessionsOff, below); else the body's 422, then 503 naming AUTH_PROXY_OIDC
+	// (refuseOIDCNotForwarded). go-api has no own OIDC or OAuth sign-in (CHAOS-14131); none of these answers reads or
+	// writes a provider row. TestOIDCAndOAuthForwardOffPrecedence pins the order.
+	//
 	oidcAuthorize := h.orStateMissing(h.gated(body(oidcAuthRequest)))
 	oidcCallbackHandler := h.orStateMissing(h.gated(body(oidcCallbackRequest)))
 	if h.signIn() {
@@ -282,11 +282,9 @@ type pairRoute struct {
 // (FastAPI routes do not add HEAD); else 404.
 func (h handlers) oauthPair() http.Handler {
 	g := h.Guard
-	// CHAOS-6986: like OIDC (initiateOIDCAuth/oidcCallback), the three real
-	// OAuth handlers need StateSecret (the AEAD opaque state token,
-	// oauthstate.go) and Signer (the login token pair, login.go's
-	// finishSSOLogin) to run for real; without either, these three stay the
-	// process-tier-only shim.
+	// The three OAuth sign-in routes answer with AUTH_PROXY_OIDC off in the OIDC routes' order (Routes): no
+	// SSO_STATE_SECRET -> 503 naming it; sessions off -> 503 naming AUTH_PROXY_SESSIONS; else 422, then 503 naming
+	// AUTH_PROXY_OIDC.
 	oauthAuthorize := h.orStateMissing(h.gated(body(oauthAuthRequest)))
 	oauthCallbackHandler := h.orStateMissing(h.gated(body(oauthCallbackRequest)))
 	oauthByType := h.orStateMissing(h.gated(byTypeQuery))
@@ -364,8 +362,9 @@ func (h handlers) refuseSAMLNotForwarded(validate validator) http.Handler {
 	})
 }
 
-// refuseOIDCNotForwarded is an OIDC or OAuth sign-in route while AUTH_PROXY_OIDC is off: its 422, else 503 config_missing
-// naming AUTH_PROXY_OIDC. go-api has no own OIDC or OAuth sign-in; auth-service serves both (CHAOS-14131).
+// refuseOIDCNotForwarded is an OIDC or OAuth sign-in route while AUTH_PROXY_OIDC is off and go-api's sign-in is configured
+// (state secret and session issuer; otherwise those config_missing answers come first, see Routes): its 422, else 503
+// config_missing naming AUTH_PROXY_OIDC. go-api has no own OIDC or OAuth sign-in; auth-service serves both (CHAOS-14131).
 func (h handlers) refuseOIDCNotForwarded(validate validator) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var errs pybody.Errors

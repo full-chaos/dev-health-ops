@@ -14,8 +14,9 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 )
 
-// With sign-in configured and no OIDC forward, the 2 OIDC and 3 OAuth sign-in routes answer 503 config_missing naming
-// AUTH_PROXY_OIDC: go-api has no local OIDC or OAuth sign-in (CHAOS-14131), so it reads and writes no provider row.
+// With sign-in configured (state secret and session issuer) and no OIDC forward, the 2 OIDC and 3 OAuth sign-in routes
+// answer 503 config_missing naming AUTH_PROXY_OIDC: go-api has no local OIDC or OAuth sign-in (CHAOS-14131), so it reads
+// and writes no provider row. TestOIDCAndOAuthForwardOffPrecedence pins the other configurations.
 func TestOIDCAndOAuthForwardOffAnswerConfigMissing(t *testing.T) {
 	logger := slog.New(slog.DiscardHandler)
 	routes := Routes(Deps{

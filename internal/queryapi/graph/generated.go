@@ -11779,12 +11779,12 @@ type RepoCoverageBaseline {
   """The repository's full name in the org's catalogue. Null = the catalogue holds no name; never the id."""
   repoName: String
   """
-  Mean line coverage, in percent (0 to 100), over the days of the 30 that hold a value. Null = fewer than 7 such days (` + "`" + `` + "`" + `lineDays` + "`" + `` + "`" + `): then there is no baseline. Never 0 for "none", never the current value.
+  Line coverage, in percent (0 to 100), pooled over the counted days of the 30: covered lines over total lines. A counted day stores both line counts and more than 0 lines; a day with a percent but no line counts is in neither sum. Null = fewer than 7 counted days (` + "`" + `` + "`" + `lineDays` + "`" + `` + "`" + `): then there is no baseline. Never 0 for "none", never the current value.
   """
   lineBaselinePct: Float
-  """Days of the 30 that hold a line coverage value."""
+  """Counted days of the 30: days that store both line counts and more than 0 lines."""
   lineDays: Int!
-  """Mean branch coverage, in percent; the same rules as ` + "`" + `` + "`" + `lineBaselinePct` + "`" + `` + "`" + `."""
+  """Mean branch coverage, in percent, over the days of the 30 that hold a value. Null = fewer than 7 such days (` + "`" + `` + "`" + `branchDays` + "`" + `` + "`" + `). Never 0 for "none", never the current value."""
   branchBaselinePct: Float
   """Days of the 30 that hold a branch coverage value."""
   branchDays: Int!
@@ -11947,12 +11947,12 @@ type SavedReportType {
 
 type ScopeCoverageBaseline {
   """
-  Mean, in percent (0 to 100), of the scope's line coverage of each day that holds a value, over the 30 days. Null = fewer than 7 such days (` + "`" + `` + "`" + `lineDays` + "`" + `` + "`" + `): then there is no baseline. Never 0 for "none", never the current value.
+  Line coverage of the scope, in percent (0 to 100): one ratio, covered lines over total lines of every counted repository day of the scope in the 30 days. A counted repository day stores both line counts and more than 0 lines; one with a percent but no line counts is in neither sum. Null = fewer than 7 days with a counted repository day (` + "`" + `` + "`" + `lineDays` + "`" + `` + "`" + `): then there is no baseline. Never 0 for "none", never the current value.
   """
   lineBaselinePct: Float
-  """Days of the 30 on which at least one repository of the scope holds a line coverage value."""
+  """Days of the 30 on which at least one repository of the scope has a counted day."""
   lineDays: Int!
-  """Mean branch coverage, in percent; the same rules as ` + "`" + `` + "`" + `lineBaselinePct` + "`" + `` + "`" + `."""
+  """Mean, in percent, of the scope's branch coverage of each day that holds a value (the mean over its repositories), over the 30 days. Null = fewer than 7 such days (` + "`" + `` + "`" + `branchDays` + "`" + `` + "`" + `). Never 0 for "none", never the current value."""
   branchBaselinePct: Float
   """Days of the 30 on which at least one repository of the scope holds a branch coverage value."""
   branchDays: Int!

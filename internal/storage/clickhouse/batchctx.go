@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
@@ -56,17 +57,18 @@ func (c detachedBatchConn) PrepareBatch(ctx context.Context, query string, opts 
 	driverCtx, cancel := context.WithDeadlineCause(context.WithoutCancel(ctx), deadline, cause)
 	batch, err := c.Conn.PrepareBatch(driverCtx, query, opts...)
 	if err != nil || batch == nil {
-		err = boundErr(driverCtx, err)
+		err = boundErr(driverCtx, cause, err)
 		cancel()
 		return batch, err
 	}
-	return &detachedBatch{Batch: batch, ctx: ctx, driverCtx: driverCtx, cancel: cancel}, nil
+	return &detachedBatch{Batch: batch, ctx: ctx, driverCtx: driverCtx, cause: cause, cancel: cancel}, nil
 }
 
 type detachedBatch struct {
 	driver.Batch
 	ctx       context.Context
 	driverCtx context.Context
+	cause     error
 	cancel    context.CancelFunc
 	sent      bool
 }
@@ -87,7 +89,7 @@ func (b *detachedBatch) Send() error {
 		return err
 	}
 	b.sent = true
-	err := boundErr(b.driverCtx, b.Batch.Send())
+	err := boundErr(b.driverCtx, b.cause, b.Batch.Send())
 	b.release()
 	return err
 }
@@ -96,7 +98,7 @@ func (b *detachedBatch) Flush() error {
 	if err := b.ctx.Err(); err != nil {
 		return err
 	}
-	return boundErr(b.driverCtx, b.Batch.Flush())
+	return boundErr(b.driverCtx, b.cause, b.Batch.Flush())
 }
 
 func (b *detachedBatch) Abort() error {
@@ -106,20 +108,29 @@ func (b *detachedBatch) Abort() error {
 }
 
 func (b *detachedBatch) Close() error {
-	err := boundErr(b.driverCtx, b.Batch.Close())
+	err := boundErr(b.driverCtx, b.cause, b.Batch.Close())
 	b.release()
 	return err
 }
 
 // boundErr names the bound that ended a driver call: ErrBatchWriteBound, or the
-// caller's own deadline.
-func boundErr(driverCtx context.Context, err error) error {
-	if err == nil || !errors.Is(driverCtx.Err(), context.DeadlineExceeded) {
+// caller's own deadline. The driver sets the socket deadline to the driver
+// context's deadline, so a socket deadline error at or after that deadline is the
+// bound too, even when it beats the context's own timer (CHAOS-14255).
+func boundErr(driverCtx context.Context, cause, err error) error {
+	if err == nil || !deadlineEnded(driverCtx, err) {
 		return err
 	}
-	cause := context.Cause(driverCtx)
 	if errors.Is(err, cause) {
 		return err
 	}
 	return fmt.Errorf("%w: %w", cause, err)
+}
+
+func deadlineEnded(driverCtx context.Context, err error) bool {
+	if errors.Is(driverCtx.Err(), context.DeadlineExceeded) {
+		return true
+	}
+	deadline, ok := driverCtx.Deadline()
+	return ok && errors.Is(err, os.ErrDeadlineExceeded) && !time.Now().Before(deadline)
 }

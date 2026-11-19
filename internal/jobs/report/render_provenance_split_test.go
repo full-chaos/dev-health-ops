@@ -12,7 +12,7 @@ const provenanceHeading = "## Provenance"
 // hostileValues are free text a plan or a data point can hold that a reader must never take for the Provenance
 // heading it splits the report on (web MarkdownRenderer splitProvenance).
 var hostileValues = []string{
-	provenanceHeading, "### Provenance", "a " + provenanceHeading, "x\n" + provenanceHeading, "x\r\n" + provenanceHeading + "\r\ny",
+	provenanceHeading, "### Provenance", `\## Provenance`, `\\## Provenance`, "a " + provenanceHeading, "x\n" + provenanceHeading, "x\r\n" + provenanceHeading + "\r\ny",
 }
 
 func renderHostile(t *testing.T, mutate func(plan *Plan, chart *ChartResult, value string)) []string {
@@ -128,6 +128,27 @@ func TestRenderChartTitleStaysOneHeadingLine(t *testing.T) {
 		out := renderChart(ChartResult{Title: title, DataPoints: []DataPoint{{X: "x", Y: 1}}})
 		if first, _, _ := strings.Cut(out, "\n"); first != "#### a b" {
 			t.Errorf("title %q renders as the first line %q, want \"#### a b\"", title, first)
+		}
+	}
+}
+
+// A user backslash must not undo the "#" escape: the backslash is escaped first, so `a \# b` reads as `a \# b` (the
+// backslash kept) and `\## Provenance` at a line start never reads as a heading or holds the split text.
+func TestRenderEscapesBackslashBeforeHash(t *testing.T) {
+	for _, value := range []string{`a \# b`, `\## Provenance`, `\\# x`, `end\`} {
+		heading := renderChart(ChartResult{Title: value, DataPoints: []DataPoint{{X: "x", Y: 1}}})
+		first, _, _ := strings.Cut(heading, "\n")
+		if got := cellText(strings.TrimPrefix(first, "#### ")); got != value {
+			t.Errorf("title %q renders %q (written %q), want the value back", value, got, first)
+		}
+		row := strings.Split(renderChart(ChartResult{Title: "t", DataPoints: []DataPoint{{X: value, Y: 1, Group: value}}}), "\n")[4]
+		for _, i := range []int{0, 2} {
+			if got := cellText(strings.TrimSpace(splitRow(row)[i])); got != value {
+				t.Errorf("cell %d of %q reads %q, want the value back", i, row, got)
+			}
+		}
+		if strings.Contains(heading, provenanceHeading) || strings.Contains(row, provenanceHeading) {
+			t.Errorf("value %q leaves the split text in:\n%s\n%s", value, heading, row)
 		}
 	}
 }

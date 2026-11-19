@@ -273,7 +273,7 @@ func TestRegistryDeliveryRowsWithNoSample(t *testing.T) {
 }
 
 // A one-repository-day bucket is the stored value even when a deployment or a pull request has two stored versions in
-// unmerged parts (a resync): the chart reads the rows the writer reads. An incident repair time keeps the microseconds the
+// unmerged parts (a resync): the writer stores the current version and the chart reads what it stored. An incident repair time keeps the microseconds the
 // writer subtracts.
 func TestRegistryDeliveryDayBucketIsTheStoredValue(t *testing.T) {
 	e := startPooledEnv(t)

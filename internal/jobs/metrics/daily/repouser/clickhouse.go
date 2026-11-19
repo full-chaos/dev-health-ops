@@ -30,16 +30,12 @@ type conn interface {
 // on why batching every repo in a partition into one query is equivalent to
 // Python's per-repo loop (job_daily.py:956).
 //
-// None of these queries read git_commits/git_commit_stats/git_pull_requests/
-// git_pull_request_reviews with FINAL, even though all four are
-// ReplacingMergeTree tables that CAN carry more than one version of a row
-// between merges (e.g. mid-resync). This is PARITY, not an oversight:
-// load_git_rows' real SQL (loaders/clickhouse.py:110-164) never uses FINAL
-// on these four tables either (verified by grep -- FINAL appears elsewhere
-// in that file for work_items/ci_pipeline_runs/test_suite_results, never
-// here). If duplicate-version double-counting during a resync race turns
-// out to matter, it is a shared Python+Go gap to close in both places at
-// once, not something to "fix" unilaterally on the Go side alone.
+// The pull request query reads git_pull_requests FINAL: a re-synced pull
+// request (merge moved, counts changed) keeps its old version until
+// ClickHouse merges the parts, and the window predicates are on non-key
+// columns, so FINAL applies them to the current version. The commit,
+// commit stat and review queries still read raw, as load_git_rows does
+// (loaders/clickhouse.py:110-164); they are not changed here.
 type ClickHouseLoader struct {
 	conn conn
 }
@@ -177,7 +173,7 @@ SELECT
   repo_id, number, author_email, author_name, created_at, merged_at,
   first_review_at, first_comment_at, changes_requested_count, reviews_count,
   comments_count, additions, deletions, changed_files
-FROM git_pull_requests
+FROM git_pull_requests FINAL
 WHERE
   ((created_at >= {start:DateTime} AND created_at < {end:DateTime})
    OR (merged_at IS NOT NULL AND merged_at >= {start:DateTime} AND merged_at < {end:DateTime}))

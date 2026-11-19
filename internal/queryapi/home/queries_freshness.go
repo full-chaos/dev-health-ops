@@ -32,6 +32,7 @@ import (
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
+	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
 // fetchLastIngestedAt ports fetch_last_ingested_at (api/queries/
@@ -43,6 +44,7 @@ func fetchLastIngestedAt(ctx context.Context, client QueryClient, orgID string) 
         SELECT maxOrNull(computed_at) AS last_ingested_at
         FROM repo_metrics_daily FINAL
         WHERE org_id = {org_id:String}
+          AND ` + liverow.Predicate("repo_metrics_daily", "") + `
     `
 	bindings := []dhclickhouse.Binding{{Name: "org_id", Value: orgID}}
 	rows, err := client.Query(ctx, query, bindings)
@@ -85,6 +87,7 @@ func fetchCoverage(ctx context.Context, client QueryClient, startDay, endDay tim
         FROM repo_metrics_daily FINAL
         WHERE day >= {start_day:Date} AND day < {end_day:Date}
           AND org_id = {org_id:String}
+          AND `+liverow.Predicate("repo_metrics_daily", "")+`
     `, windowBindings)
 	if err != nil {
 		return Coverage{}, fmt.Errorf("home: fetch_coverage covered repos: %w", err)
@@ -162,6 +165,7 @@ func fetchScopeDataConfidence(ctx context.Context, client QueryClient, f Filters
             FROM repo_metrics_daily FINAL
             WHERE day >= {start_day:Date} AND day < {end_day:Date}
               AND org_id = {org_id:String}
+              AND `+liverow.Predicate("repo_metrics_daily", "")+`
             GROUP BY repo_id
         ) AS metrics ON metrics.repo_id = r.id
         WHERE r.org_id = {org_id:String}

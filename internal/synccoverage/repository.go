@@ -63,7 +63,7 @@ WHERE org_id = $1 AND integration_id = $2 AND is_enabled IS TRUE`
 	for rows.Next() {
 		if len(scope.Sources) >= maxSources {
 			rows.Close()
-			return effectiveScope{}, fmt.Errorf("sync coverage source limit exceeded: %d", maxSources)
+			return effectiveScope{}, newLimitError("source", maxSources+1, maxSources)
 		}
 		var item source
 		if err := rows.Scan(&item.ID, &item.Name, &item.FullName); err != nil {
@@ -141,7 +141,7 @@ WHERE org_id = $1 AND integration_id = $2 AND is_enabled IS TRUE`
 	scope.DatasetKeys = uniqueSorted(supportedDatasetKeys(config.Provider, scope.DatasetKeys))
 	sort.Slice(scope.Sources, func(i, j int) bool { return scope.Sources[i].ID.String() < scope.Sources[j].ID.String() })
 	if len(scope.Sources)*len(scope.DatasetKeys) > maxPairs {
-		return effectiveScope{}, fmt.Errorf("sync coverage pair limit exceeded: %d", maxPairs)
+		return effectiveScope{}, newLimitError("pair", len(scope.Sources)*len(scope.DatasetKeys), maxPairs)
 	}
 	return scope, nil
 }
@@ -173,7 +173,7 @@ WHERE org_id = $1 AND integration_id = $2`, orgID, integrationID)
 	seen := 0
 	for rows.Next() {
 		if seen >= maxDatasets {
-			return nil, false, fmt.Errorf("sync coverage dataset limit exceeded: %d", maxDatasets)
+			return nil, false, newLimitError("dataset", maxDatasets+1, maxDatasets)
 		}
 		seen++
 		var key string

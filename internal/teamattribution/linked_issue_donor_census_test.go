@@ -19,7 +19,6 @@ import (
 // to a donor.
 var linkedIssueDonorGates = map[string]bool{
 	"GithubWorkItemDerivationInheritableRelationships": true,
-	"teamRepoOwnershipInheritableRelationshipTypes":    true,
 }
 
 // linkedIssueDonorSites are the walks that take a team from a donor. Each must call LinkedIssueDonorRefusal.
@@ -33,7 +32,7 @@ var linkedIssueDonorSites = []string{
 var linkedIssueDonorGateExemptions = map[string]string{
 	"internal/jobs/metrics/remaining/work_item_attribution_native_clickhouse.go\x00workItemAttributionDonorTargets":           "loads the donor targets' rows; the team is decided by BuildLinkedIssueIndexFromRows",
 	"internal/jobs/metrics/remaining/work_item_attribution_native_clickhouse.go\x00loadInheritableDependencySourcesTargeting": "scope expansion: the sources of edges to a changed item, no team read",
-	"internal/teamattribution/cascade.go\x00LatestGitHubWorkItemDerivationDependencies":                                       "edge collapse (latest edge per pair, an inheritable type wins a tie); no donor or team read",
+	"internal/teamattribution/cascade.go\x00LatestDependencyEdgeWins":                                                         "edge tie rule (latest edge per pair, an inheritable type wins a tie); no donor or team read",
 }
 
 type linkedIssueDonorFunc struct {
@@ -223,6 +222,23 @@ func TestLinkedIssueDonorCensusRedPairs(t *testing.T) {
 		if violations := linkedIssueDonorCensusViolations(funcs, copiedGates); !containsString(violations, want) {
 			t.Fatalf("violations %q, want %q", violations, want)
 		}
+	})
+	t.Run("the repository-ownership copy of the gate put back", func(t *testing.T) {
+		rel := "internal/providersync/team_repo_ownership_derivation.go"
+		content, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		planted := append(append([]byte{}, content...), []byte("\nvar teamRepoOwnershipInheritableRelationshipTypes = map[string]bool{\n"+
+			"\t\"relates_to\": true, \"relates\": true, \"duplicates\": true, \"external_issue_key\": true,\n}\n")...)
+		funcs, copiedGates := linkedIssueDonorCensus(t, root, map[string][]byte{rel: planted})
+		want := "copy of an inheritable-relationship gate at " + rel + ":"
+		for _, violation := range linkedIssueDonorCensusViolations(funcs, copiedGates) {
+			if strings.HasPrefix(violation, want) {
+				return
+			}
+		}
+		t.Fatalf("no violation starts with %q", want)
 	})
 	t.Run("a copied gate", func(t *testing.T) {
 		walk := []byte("package fake\n\nvar inheritable = map[string]bool{\"relates_to\": true, \"external_issue_key\": true}\n")

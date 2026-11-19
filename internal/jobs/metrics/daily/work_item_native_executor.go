@@ -295,6 +295,7 @@ func workItemMetricsTransitions(rows []workItemStateTransition) []workitemmetric
 		transitions = append(transitions, workitemmetrics.Transition{
 			WorkItemID: row.WorkItemID,
 			OccurredAt: row.OccurredAt,
+			FromStatus: row.FromStatus,
 			ToStatus:   row.ToStatus,
 		})
 	}

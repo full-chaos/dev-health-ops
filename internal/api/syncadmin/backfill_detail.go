@@ -12,6 +12,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
+	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
 // getBackfillJob is sync.py's get_backfill_job: the org's job
@@ -72,6 +73,25 @@ FROM %s
 WHERE org_id = {org_id:String}
   AND day >= {start:Date} AND day <= {end:Date}
 GROUP BY day`
+
+// rowsPerDayStatement counts, for a table with a live-row rule, only the repositories whose NEWEST row of the day is a
+// measurement: a retired repository-day (package liverow) has no data.
+func rowsPerDayStatement(table string) string {
+	if !liverow.Registered(table) {
+		return fmt.Sprintf(rowsPerDayQuery, table)
+	}
+	return `
+SELECT day, count() AS row_count
+FROM (
+    SELECT day, repo_id
+    FROM ` + table + `
+    WHERE org_id = {org_id:String}
+      AND day >= {start:Date} AND day <= {end:Date}
+    GROUP BY day, repo_id
+    HAVING ` + liverow.NewestPredicate(table, "") + `
+)
+GROUP BY day`
+}
 
 const compoundingRiskQuery = `
 WITH latest AS (
@@ -200,7 +220,7 @@ func assembleDiagnostics(start, end time.Time, metrics, complexity map[string]in
 }
 
 func (c clickhouseDiagnostics) rowsPerDay(ctx context.Context, table string, params []any) (map[string]int64, error) {
-	rows, err := c.conn.Query(ctx, fmt.Sprintf(rowsPerDayQuery, table), params...)
+	rows, err := c.conn.Query(ctx, rowsPerDayStatement(table), params...)
 	if err != nil {
 		return nil, fmt.Errorf("query %s diagnostics: %w", table, err)
 	}

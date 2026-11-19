@@ -88,10 +88,12 @@ const (
 	// deploy/go-workers/deployment.json for every coordinator process today
 	// (reconciler, scheduler, worker-operator).
 	defaultCoordinatorMaxConns = 2
-	defaultCompletedRetention  = 7 * 24 * time.Hour
-	defaultCancelledRetention  = 30 * 24 * time.Hour
-	defaultDiscardedRetention  = 30 * 24 * time.Hour
-	defaultJobCleanerTimeout   = 30 * time.Second
+	// River's own job cleaner defaults: raising one lengthens how long a
+	// ByArgs unique insert dedupes into a finalized row with the same key.
+	defaultCompletedRetention = 24 * time.Hour
+	defaultCancelledRetention = 24 * time.Hour
+	defaultDiscardedRetention = 7 * 24 * time.Hour
+	defaultJobCleanerTimeout  = 30 * time.Second
 	// defaultSyncObservationTimeout mirrors syncreconciler's own unconfigured
 	// default (CHAOS-4092) so a deployment that never sets the override sees
 	// no behavior change from this option's introduction.

@@ -111,10 +111,14 @@ func (executor *WorkItemStateExecutor) ComputeFamily(
 	if err != nil {
 		return 0, err
 	}
+	retracted, err := retractBlockedSnapshotsOfItemsOffTheDay(ctx, executor.conn, run.OrganizationID, day, computed.offTheDay, computedAt)
+	if err != nil {
+		return wrapWorkItemScopePartialWrite("work_item_state", retracted, partition, err)
+	}
 	// With no item, or no transition for any item, every item is skipped
 	// (Python's `if not item_transitions: continue`), so nothing was computed.
 	if !computed.ran {
-		return 0, nil
+		return retracted, nil
 	}
 	// One line per partition, no id: how many relations the end rule closed,
 	// by provider, and how many of them are the named case of a github issue
@@ -142,18 +146,19 @@ func (executor *WorkItemStateExecutor) ComputeFamily(
 		_ = executor.missingAttributionObserver.ObserveWorkItemStateMissingAttribution(missingAttribution)
 	}
 	if len(rows) == 0 && len(computed.scopeRows) == 0 {
-		return 0, nil
+		return retracted, nil
 	}
 
 	// Each writer reports its true row count on an ambiguous Send error, so
 	// the count is added before the error check. Each view's rows are
 	// written under that view; blocked durations are per item, from the org
 	// set.
-	total, err := WriteWorkItemStateDurationsDaily(ctx, executor.conn, run.OrganizationID, day, rows, computed.scopeRows, computedAt)
+	written, err := WriteWorkItemStateDurationsDaily(ctx, executor.conn, run.OrganizationID, day, rows, computed.scopeRows, computedAt)
+	total := retracted + written
 	if err != nil {
 		return wrapWorkItemScopePartialWrite("work_item_state", total, partition, err)
 	}
-	written, err := WriteWorkItemBlockedDurationsDaily(ctx, executor.conn, run.OrganizationID, day, itemRows, computedAt)
+	written, err = WriteWorkItemBlockedDurationsDaily(ctx, executor.conn, run.OrganizationID, day, itemRows, computedAt)
 	total += written
 	if err != nil {
 		return wrapWorkItemScopePartialWrite("work_item_state", total, partition, err)
@@ -174,12 +179,16 @@ type workItemStateComputed struct {
 	itemRows           []workItemBlockedDurationDailyRow
 	missingAttribution int
 	ended              workitemmetrics.EndedRelationStats
+	// offTheDay are the items of the day's read that are not items of the day: their current copy does not pass
+	// the day (keepCurrentCopiesOfDay).
+	offTheDay map[workItemIdentity]struct{}
 }
 
 // computeWorkItemStateRows reads the work scopes of the partition's
 // repositories and the blocked spans, and computes the state-duration rows of
-// the day. It writes nothing, logs nothing and observes nothing (see
-// computeWorkItemTriplet for its two callers).
+// the day from the items whose current copy is the copy the day read
+// (keepCurrentCopiesOfDay). It writes nothing, logs nothing and observes
+// nothing (see computeWorkItemTriplet for its two callers).
 //
 // The blocked spans (CHAOS-8493) are organization-wide -- a blocker lives in
 // any repository, or in none. A failed read is returned. Computing without it
@@ -192,7 +201,11 @@ func computeWorkItemStateRows(
 	if err != nil {
 		return workItemStateComputed{}, err
 	}
-	computed := workItemStateComputed{read: read}
+	dayItems := read.Items
+	if read, err = keepCurrentCopiesOfDay(ctx, conn, run.OrganizationID, read); err != nil {
+		return workItemStateComputed{}, err
+	}
+	computed := workItemStateComputed{read: read, offTheDay: itemsOffTheDay(dayItems, read.Items)}
 	if read.empty() || len(read.Transitions) == 0 {
 		return computed, nil
 	}
@@ -523,3 +536,19 @@ func resolveWorkItemPrimaryTeam(attribution workItemPrimaryAttribution) (teamID,
 }
 
 var _ NativeFamilyExecutor = (*WorkItemStateExecutor)(nil)
+
+// itemsOffTheDay are the items of read that kept does not hold.
+func itemsOffTheDay(read, kept []workItemMetricsRow) map[workItemIdentity]struct{} {
+	held := make(map[workItemIdentity]struct{}, len(kept))
+	for _, row := range kept {
+		held[workItemIdentity{row.Provider, row.WorkItemID}] = struct{}{}
+	}
+	off := make(map[workItemIdentity]struct{})
+	for _, row := range read {
+		identity := workItemIdentity{row.Provider, row.WorkItemID}
+		if _, found := held[identity]; !found {
+			off[identity] = struct{}{}
+		}
+	}
+	return off
+}

@@ -18,9 +18,10 @@ const (
 
 // ghcrMergeGroupJobs are the jobs that run on merge_group and log in to ghcr.io.
 var ghcrMergeGroupJobs = map[string][]string{
-	"go.yml":            {"go-storage-integration-shard", "go-auth-compose-proof", "go-auth-web-proxy-proof"},
-	"go-quality.yml":    {"go-quality-leg"},
-	"docker-images.yml": {"go-build", "go-build-dho-arm64", "go-api-tools-build"},
+	"go.yml":              {"go-storage-integration-shard", "go-auth-compose-proof", "go-auth-web-proxy-proof"},
+	"go-quality.yml":      {"go-quality-leg"},
+	"docker-images.yml":   {"go-build", "go-build-dho-arm64", "go-api-tools-build"},
+	"go-auth-service.yml": {"auth-race-integration"},
 }
 
 // ghcrNoMergeGroupRun are ghcr.io logins in workflows with a merge_group trigger whose jobs never run in the queue.
@@ -118,7 +119,7 @@ func ghcrRetryOffenders(job yamlMap) []string {
 func TestMergeGroupGhcrLoginsRetryAndLogOut(t *testing.T) {
 	root := rootOf(t)
 	var offenders []string
-	for _, wf := range sortedKeys(yamlMap{"go.yml": 1, "go-quality.yml": 1, "docker-images.yml": 1}) {
+	for _, wf := range sortedKeys(yamlMap{"go.yml": 1, "go-quality.yml": 1, "docker-images.yml": 1, "go-auth-service.yml": 1}) {
 		jobs := jobsAsMaps(loadWf(t, root, wf))
 		for _, jn := range ghcrMergeGroupJobs[wf] {
 			job, ok := jobs[jn]

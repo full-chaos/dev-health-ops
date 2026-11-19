@@ -86,8 +86,8 @@ type Deps struct {
 	// credentials.Routes already uses for admin-configured URLs) for the
 	// social OAuth calls.
 	HTTPClient *http.Client
-	// Inner, when set, replaces the innermost handler of the five sign-in
-	// routes (OIDC authorize/callback, SAML metadata/initiate/acs); the guard
+	// Inner, when set, replaces the innermost handler of the sign-in routes
+	// (OIDC authorize/callback, the OAuth pair, SAML metadata/initiate/acs); the guard
 	// and its body checks in front stay. It gets the full route pattern; nil
 	// serves local.
 	Inner func(pattern string, local http.Handler) http.Handler
@@ -297,6 +297,12 @@ func (h handlers) oauthPair() http.Handler {
 	}
 	if h.sessionsOff() {
 		oauthAuthorize, oauthCallbackHandler, oauthByType = http.HandlerFunc(h.refuseSessionsOff), http.HandlerFunc(h.refuseSessionsOff), http.HandlerFunc(h.refuseSessionsOff)
+	}
+	if h.Inner != nil {
+		// auth-service serves the three OAuth routes; the two authorize routes share its pattern.
+		oauthAuthorize = h.Inner("/api/v1/auth/oauth/{provider_id}/authorize", oauthAuthorize)
+		oauthCallbackHandler = h.Inner("/api/v1/auth/oauth/{provider_id}/callback", oauthCallbackHandler)
+		oauthByType = h.Inner("/api/v1/auth/oauth/{provider_id}/authorize", oauthByType)
 	}
 	routes := []pairRoute{
 		{http.MethodPost, func(_, second string) bool { return second == "authorize" },

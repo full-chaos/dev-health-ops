@@ -75,11 +75,12 @@ type Item struct {
 }
 
 // Transition is one status transition, reduced to the fields
-// _calculate_flow_breakdown reads (compute_work_items.py:969). from_status is
-// absent because that function never reads it.
+// _calculate_flow_breakdown reads (compute_work_items.py:969) plus FromStatus,
+// which OrderTransitions reads to order transitions that share one occurred_at.
 type Transition struct {
 	WorkItemID string
 	OccurredAt time.Time
+	FromStatus string
 	ToStatus   string
 }
 
@@ -419,7 +420,7 @@ func ComputeDailyTriplet(
 				bucket.newBugs++
 			}
 		}
-		if completedAt != nil && !completedAt.Before(weekStart) && completedAt.Before(end) {
+		if IsTerminalStatus(item.Status) && completedAt != nil && !completedAt.Before(weekStart) && completedAt.Before(end) {
 			bucket.weeklyThroughput++
 		}
 		if startedToday {
@@ -591,7 +592,11 @@ func ComputeEstimateCoverage(day time.Time, items []Item, resolve Resolver) []Es
 
 	for index, item := range items {
 		createdAt := item.CreatedAt.UTC()
-		terminalAt := earliestTimePointer(utcTimePointer(item.CompletedAt), utcTimePointer(item.ClosedAt))
+		// An item that is open now is still in the backlog, whatever completed_at or closed_at its provider kept.
+		var terminalAt *time.Time
+		if IsTerminalStatus(item.Status) {
+			terminalAt = earliestTimePointer(utcTimePointer(item.CompletedAt), utcTimePointer(item.ClosedAt))
+		}
 		if !createdAt.Before(end) {
 			continue
 		}

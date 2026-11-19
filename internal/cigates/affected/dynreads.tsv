@@ -291,6 +291,7 @@ internal/cigates/integrationshards	shard_run_tee_bound_test.go
 internal/cigates/integrationshards	shard_start_order_test.go
 internal/cigates/integrationshards	side_effect_hooks_test.go
 internal/cigates/livee2e	cli.go
+internal/cigates/livee2e	gitlab_nopython_test.go
 internal/cigates/livee2e	smtpsink.go
 internal/cigates/livee2e	smtpsink_test.go
 internal/cigates/livee2e	tokenreview.go
@@ -478,6 +479,7 @@ internal/jobs/metrics/prrework	readers_census_test.go
 internal/jobs/metrics/remaining	capacity_native_test.go
 internal/jobs/metrics/remaining	capacity_schema_contract_pin_test.go
 internal/jobs/metrics/remaining	membership_golden_test.go
+internal/jobs/metrics/remaining	recommendations_gini_team_scope_test.go
 internal/jobs/metrics/remaining	recorded_paths_test.go
 internal/jobs/report	chart_fallback_test.go
 internal/jobs/report	cicd_pooled_test.go

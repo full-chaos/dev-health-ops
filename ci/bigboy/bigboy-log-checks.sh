@@ -9,7 +9,7 @@ echo "identity_refusal_total=$tot containers_scanned=$(echo "$NAMES" | wc -w)"; 
 ip() { docker inspect "$1" --format '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}' 2>/dev/null | awk '{print $1}'; }
 chk() { st=$(curl -s -o /dev/null -m 5 -w '%{http_code}' "http://$2"); echo "ready $1 ${2#*/}=$st"; [ "$st" = 200 ] || fail=1; }
 for c in dev-health-go-api-1; do a=$(ip $c); [ -n "$a" ] && { chk $c $a:8080/readyz; }; done
-for c in $(echo "$NAMES" | grep -E 'query-api'); do a=$(ip $c); [ -n "$a" ] && chk $c $a:8090/readyz; done
+for c in $(echo "$NAMES" | grep -E 'query-api'); do a=$(ip $c); [ -n "$a" ] && chk $c $a:8080/readyz; done
 codes=$(for c in $NAMES; do docker logs "$c" 2>&1 | grep -oE "SQLSTATE [0-9A-Z]{5}|\(SQLSTATE [0-9A-Z]{5}\)" ; done | grep -oE "[0-9A-Z]{5}" | sort | uniq -c | sort -rn)
 echo "sqlstate_codes: $(echo "$codes" | tr '\n' ';' | sed 's/  */ /g')"; n42846=$(echo "$codes" | awk '$2=="42846"{print $1}'); echo "sqlstate_42846=${n42846:-0}"; [ "${n42846:-0}" = 0 ] || fail=1
 [ $fail = 0 ] && echo LOG_CHECKS_OK || echo LOG_CHECKS_FAIL

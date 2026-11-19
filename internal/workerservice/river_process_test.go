@@ -204,3 +204,42 @@ func TestRiverWorkerProcessStartRefusesNilClient(t *testing.T) {
 		t.Fatalf("Start() error = %v, want errWorkerDependencyUnavailable", err)
 	}
 }
+
+func requireNoUnreachableCause(t *testing.T, records []map[string]any, msg string) {
+	t.Helper()
+	seen := 0
+	for _, record := range records {
+		if record["msg"] != msg {
+			continue
+		}
+		seen++
+		if cause, ok := record["cause"]; ok {
+			t.Fatalf("%q carries cause=%v on a non-transient failure: %v", msg, cause, record)
+		}
+		if record["error_category"] != "dependency_unavailable" {
+			t.Fatalf("%q lost its error_category: %v", msg, record)
+		}
+	}
+	if seen == 0 {
+		t.Fatalf("no %q record in %v", msg, records)
+	}
+}
+
+func TestRiverWorkerProcessNonTransientLinesCarryNoUnreachableCause(t *testing.T) {
+	t.Parallel()
+	process := newTestRiverWorkerProcess(t)
+	var logs bytes.Buffer
+	process.logger = slog.New(slog.NewJSONHandler(&logs, nil))
+	process.budget = 5 * time.Second
+	clock := newFakeRetryClock()
+	process.now = clock.Now
+	process.sleep = clock.Sleep
+	process.startClient = func(context.Context) error { return context.DeadlineExceeded }
+
+	if err := process.Start(context.Background()); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Start() error = %v, want context.DeadlineExceeded", err)
+	}
+	records := logRecords(t, logs.Bytes())
+	requireNoUnreachableCause(t, records, "river workers start timed out, retrying")
+	requireNoUnreachableCause(t, records, "river workers start refused")
+}

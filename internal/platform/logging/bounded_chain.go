@@ -26,10 +26,17 @@ func boundedChainTo(err error, depthBound int) []error {
 
 // boundedChainBounds is boundedChain with its own depth and node bounds.
 func boundedChainBounds(err error, depthBound, nodeBound int) []error {
+	chain, _ := boundedChainWalk(err, depthBound, nodeBound)
+	return chain
+}
+
+// boundedChainWalk is the walk of boundedChainBounds; truncated is true when a bound or a panicking Unwrap left an error of the tree
+// out of the chain.
+func boundedChainWalk(err error, depthBound, nodeBound int) (chain []error, truncated bool) {
 	if err == nil {
-		return nil
+		return nil, false
 	}
-	chain := make([]error, 0, 8)
+	chain = make([]error, 0, 8)
 	// The queue holds the child lists as the errors returned them, not a copy of every child: a join of a million errors costs
 	// one list, and the walk stops at nodeBound whatever the width.
 	type group struct {
@@ -37,22 +44,37 @@ func boundedChainBounds(err error, depthBound, nodeBound int) []error {
 		depth int
 	}
 	groups := []group{{[]error{err}, 0}}
-	for next := 0; next < len(groups) && len(chain) < nodeBound; next++ {
+	next := 0
+	for ; next < len(groups) && len(chain) < nodeBound; next++ {
 		current := groups[next]
 		for _, candidate := range current.errs {
-			if len(chain) >= nodeBound {
-				break
+			if candidate == nil || seen(chain, candidate) {
+				continue
 			}
-			if candidate == nil || current.depth > depthBound || seen(chain, candidate) {
+			if len(chain) >= nodeBound {
+				return chain, true
+			}
+			if current.depth > depthBound {
+				truncated = true
 				continue
 			}
 			chain = append(chain, candidate)
-			if children := unwrapped(candidate); len(children) > 0 {
+			children := unwrapped(candidate)
+			if len(children) > 0 {
 				groups = append(groups, group{children, current.depth + 1})
+			} else if !isLeaf(candidate) {
+				truncated = true
 			}
 		}
 	}
-	return chain
+	for ; next < len(groups); next++ {
+		for _, candidate := range groups[next].errs {
+			if candidate != nil && !seen(chain, candidate) {
+				return chain, true
+			}
+		}
+	}
+	return chain, truncated
 }
 
 // seen reports whether err is already in chain, comparing by identity where the dynamic type is comparable (a panic on an
@@ -198,6 +220,18 @@ func isLeaf(err error) (leaf bool) {
 		}
 	}
 	return true
+}
+
+// ErrorLeaves lists the leaves (isLeaf) of the bounded chain of err, outermost first. A join of several errors has one leaf for each.
+// complete is false when a bound or a panicking Unwrap left part of the tree out: the leaves are then not all of them.
+func ErrorLeaves(err error) (leaves []error, complete bool) {
+	chain, truncated := boundedChainWalk(err, maxChainDepth, maxChainNodes)
+	for _, node := range chain {
+		if isLeaf(node) {
+			leaves = append(leaves, node)
+		}
+	}
+	return leaves, !truncated
 }
 
 // ErrorAs is errors.As over a BOUNDED chain with the As methods under recover: a self-returning or panicking Unwrap, a cycle or a

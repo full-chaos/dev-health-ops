@@ -3,6 +3,7 @@
 package sso_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -275,4 +276,22 @@ func TestProviderRoutesDenyWhenTheEntitlementStoreFails(t *testing.T) {
 	if status, _ := st.do(t, st.on, http.MethodGet, "/sso/providers", token, ""); status != http.StatusOK {
 		t.Fatalf("store back: %d, want 200", status)
 	}
+}
+
+// syncBuffer is a log sink the stack's handlers write to while a test reads it.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }

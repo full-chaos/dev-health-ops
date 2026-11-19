@@ -16,8 +16,8 @@ func TestRetiredTableFlagsMarkExactlyTheNamedRequiredTable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(args) != 13 {
-		t.Fatalf("rolePostureArgs gave %d parameters, want 13", len(args))
+	if len(args) != 14 {
+		t.Fatalf("rolePostureArgs gave %d parameters, want 14", len(args))
 	}
 	flags, ok := args[11].([]bool)
 	if !ok || len(flags) != 3 || flags[0] || !flags[1] || flags[2] {

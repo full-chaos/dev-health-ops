@@ -1659,8 +1659,17 @@ func (store *PostgresStore) FailFinalizePermanently(ctx context.Context, claim F
 	if !store.valid() || !validUUID(claim.Run.ID) || !validUUID(claim.Token) {
 		return ErrUnavailable
 	}
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return ErrUnavailable
+	}
+	defer func() {
+		rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		_ = tx.Rollback(rollbackCtx)
+	}()
 	now := store.now().UTC()
-	command, err := store.pool.Exec(ctx, `
+	command, err := tx.Exec(ctx, `
 UPDATE public.daily_metrics_runs
 SET status = 'failed', finalization_status = 'failed',
     finalization_claim_token = NULL, finalization_lease_expires_at = NULL,
@@ -1674,6 +1683,17 @@ WHERE id = $2::uuid AND finalization_status = 'running'
 	if command.RowsAffected() != 1 {
 		return ErrLeaseLost
 	}
+	closedCommand, err := tx.Exec(ctx, `
+UPDATE public.daily_metrics_finalize_redrive_events
+SET status = 'closed_failed', closed_at = $1
+WHERE run_id = $2::uuid AND status = 'open'`, now, claim.Run.ID)
+	if err != nil {
+		return ErrUnavailable
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return ErrUnavailable
+	}
+	store.observeFinalizeRedrive("redriven_failed", int(closedCommand.RowsAffected()))
 	return nil
 }
 

@@ -1,8 +1,8 @@
 {
-  "oauth authorize: valid": "400 {\"detail\":\"OAuth provider is not active\"}",
-  "oauth by type: valid": "404 {\"detail\":\"No active github OAuth provider found for this organization\"}",
-  "oauth callback: valid": "400 {\"detail\":\"OAuth provider is not active\"}",
-  "oidc authorize: valid": "200 {\"authorization_url\":\"https://issuer.example/authorize?client_id=cid&code_challenge=<per request>&code_challenge_method=S256&nonce=<per request>&redirect_uri=http%3A%2F%2Flocalhost%3A8000%2Foidc%2F22000000-0000-4000-8000-000000000002%2Fcallback&response_type=code&scope=openid&state=<per request>\",\"state\":\"<sealed per request>\"}",
-  "oidc callback: valid": "400 {\"detail\":\"OIDC authentication failed\"}",
-  "overlap: GET /oauth/providers/authorize": "400 {\"detail\":\"Invalid OAuth provider type\"}"
+  "oauth authorize: valid": "503 {\"detail\":{\"message\":\"AUTH_PROXY_OIDC is not set\",\"reason_code\":\"config_missing\"}}",
+  "oauth by type: valid": "503 {\"detail\":{\"message\":\"AUTH_PROXY_OIDC is not set\",\"reason_code\":\"config_missing\"}}",
+  "oauth callback: valid": "503 {\"detail\":{\"message\":\"AUTH_PROXY_OIDC is not set\",\"reason_code\":\"config_missing\"}}",
+  "oidc authorize: valid": "503 {\"detail\":{\"message\":\"AUTH_PROXY_OIDC is not set\",\"reason_code\":\"config_missing\"}}",
+  "oidc callback: valid": "503 {\"detail\":{\"message\":\"AUTH_PROXY_OIDC is not set\",\"reason_code\":\"config_missing\"}}",
+  "overlap: GET /oauth/providers/authorize": "503 {\"detail\":{\"message\":\"AUTH_PROXY_OIDC is not set\",\"reason_code\":\"config_missing\"}}"
 }

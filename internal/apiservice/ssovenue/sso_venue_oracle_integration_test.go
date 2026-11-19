@@ -244,16 +244,24 @@ func TestSSORoutesVenueOracle(t *testing.T) {
 	oauthProvidersRetiredPin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{
 		Path: "testdata/oauth-providers-retired.go-pin.json", SHA256: oauthProvidersRetiredPinSHA256, Ruling: oauthProvidersRetiredRuling,
 	})
+	statusWithoutClientPin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{
+		Path: "testdata/status-without-client.go-pin.json", SHA256: statusWithoutClientPinSHA256, Ruling: statusWithoutClientRuling,
+	})
+	rows := `SELECT id, org_id, name, protocol, status, is_default, allow_idp_initiated, auto_provision_users, default_role,
+		config::text, coalesce(encrypted_secrets::text, '<null>'), coalesce(allowed_domains::text, '<null>'),
+		created_at, updated_at > created_at FROM sso_providers ORDER BY id`
+	seededRows := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), rows)
 	var orglessRefused []string
 	// The owner's tokens with an org claim it holds no membership in (another org, not a UUID): the legacy answer stays
 	// the wanted one (product rule 1). The other org's token claims the owner role, which the handler reads
-	// (api/sso/providers.go setStatus); a user access token carries no role claim.
+	// (api/sso/providers_proxy.go providerScope); a user access token carries no role claim.
 	receipt := venueoracle.Diff(t, startGoAPI(t, ctx, venue, key), requests, python, venueoracle.DiffOptions{
 		Golden: golden, Retire: func(request venueoracle.Request) bool { return signInRetired[request.Name] }, Pin: signInPin,
 		Retirements: []venueoracle.Retirement{
 			{Match: func(request venueoracle.Request) bool { return samlForwardOnly[request.Name] }, Pin: samlForwardOnlyPin},
 			{Match: func(request venueoracle.Request) bool { return request.Name == providersAuthorizeStep }, Pin: providersAuthorizePin},
 			{Match: func(request venueoracle.Request) bool { return oauthProvidersRetired[request.Name] }, Pin: oauthProvidersRetiredPin},
+			{Match: func(request venueoracle.Request) bool { return statusWithoutClient[request.Name] }, Pin: statusWithoutClientPin},
 		},
 		KnownDivergences: []venueoracle.KnownDivergence{
 			{Match: func(request venueoracle.Request) bool { return request.Name == "activate: token of the other org" }, Ticket: venueoracle.RoleClaimGap},
@@ -273,13 +281,15 @@ func TestSSORoutesVenueOracle(t *testing.T) {
 	if len(orglessRefused) != 1 {
 		t.Errorf("org-less refusals declared: %v, want exactly 1", orglessRefused)
 	}
-	rows := `SELECT id, org_id, name, protocol, status, is_default, allow_idp_initiated, auto_provision_users, default_role,
-		config::text, coalesce(encrypted_secrets::text, '<null>'), coalesce(allowed_domains::text, '<null>'),
-		created_at, updated_at > created_at FROM sso_providers ORDER BY id`
+	// go-api writes no sso_providers row (CHAOS-14131): its rows after the requests are the seeded ones. The Python plane's
+	// rows (it activated and deactivated providers) are inspected, not compared.
 	goRows := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), rows)
-	pyRows := golden.CompareRows(t, "sso_providers", goRows)
-	same := pyRows == goRows && pyRows != ""
-	receipt += "sso_providers rows after the requests: " + venueoracle.Mark(same) + "\n"
+	pyRows := golden.InspectRows(t, "sso_providers")
+	same := goRows == seededRows && goRows != ""
+	receipt += "sso_providers rows after the requests (go-api wrote none): " + venueoracle.Mark(same) + "\n"
+	if !same {
+		t.Errorf("go-api changed sso_providers rows:\n seeded %s\n after  %s", seededRows, goRows)
+	}
 	if pyRows == "" {
 		t.Error("sso_providers rows are empty")
 	}
@@ -287,17 +297,17 @@ func TestSSORoutesVenueOracle(t *testing.T) {
 		_ = os.WriteFile(path, []byte(receipt), 0o600)
 	}
 	t.Log("\n" + receipt)
-	venueoracle.FinishPins(t, signInPin, samlForwardOnlyPin, providersAuthorizePin, oauthProvidersRetiredPin)
+	venueoracle.FinishPins(t, signInPin, samlForwardOnlyPin, providersAuthorizePin, oauthProvidersRetiredPin, statusWithoutClientPin)
 	golden.Finish(t)
 }
 
 // signInRuling retires the Python answers of the sign-in steps: the frozen 402 is the license shim go-api answered
 // only without a token minter, a state production never ran; with a session issuer go-api runs the real handlers, as
 // production did before and after the HS256 minter was retired.
-const signInRuling = "license shim unreachable with a session issuer; prod served the real handlers before and after (CHAOS-13155)"
+const signInRuling = "CHAOS-14131: go-api's OIDC and OAuth sign-in routes are forward-only (prod AUTH_PROXY_OIDC=true); the venue runs without the forward"
 
 // signInPinSHA256 is the digest of testdata/signin.go-pin.json.
-const signInPinSHA256 = "0ac87f207ff268dceddd648e7959abae3427e075ab6957d69ad01112a29f44f7"
+const signInPinSHA256 = "b04bb649d8b23b26058cb03bdb558cd23e9615ca1deffbdf4db171454340ae0b"
 
 // signInRetired are the sign-in steps signInRuling retired. Each real handler checks the org's enterprise
 // entitlement first (requireEntitlement, internal/api/sso/gate.go); the seeded organizations are enterprise.
@@ -311,20 +321,35 @@ const samlForwardOnlyRuling = "CHAOS-13948: go-api's SAML routes are forward-onl
 
 const samlForwardOnlyPinSHA256 = "1fc40a3ed7c11bd401e5f6acf27e6a54f8d584d74c6db1475753140f8da73da9"
 
+// statusWithoutClientRuling retires the Python answers of the activate and deactivate steps that reach the status write:
+// go-api writes no sso_providers row (auth-service owns the providers); without the provider client (the venue has none)
+// the route keeps its caller and id refusals, then answers the named 503.
+const statusWithoutClientRuling = "CHAOS-14131: go-api has no local provider status write; without the auth-service provider client activate and deactivate answer the named 503"
+
+// statusWithoutClientPinSHA256 is the digest of testdata/status-without-client.go-pin.json.
+const statusWithoutClientPinSHA256 = "2818b5c05f0ccea8d9a58406a1dd0d59f3902e529c904ebeb012c75a42ae00e3"
+
+var statusWithoutClient = map[string]bool{
+	"activate: owner, saml (masking, truncation, null domains)": true, "activate: again": true,
+	"deactivate: admin, oidc (client_secret masked)": true, "activate: oauth with a null config": true,
+	"activate: another org's provider": true, "activate: unknown provider": true, "activate: provider id in braces": true,
+	"activate: stored config not an object (committed, then 500)": true, "activate: stored allowed_domains not a list (committed, then 500)": true,
+}
+
 var samlForwardOnly = map[string]bool{
 	"saml metadata": true, "saml initiate: valid": true, "saml acs: by name": true,
 }
 
-// providersAuthorizeStep sends "providers", not a provider UUID, to the real initiateOAuthAuth: it answers as a
-// well-formed id with no row (internal/api/sso/oauth.go writeOAuthProviderNotFound).
+// providersAuthorizeStep sends "providers", not a provider UUID, to the OAuth authorize route: forward-only, it answers
+// the 503 config_missing naming AUTH_PROXY_OIDC (CHAOS-14131).
 const providersAuthorizeStep = "overlap: POST /oauth/providers/authorize"
 
 // providersAuthorizeRuling retires the step's Python answer: the frozen 402 is the license shim, and legacy's real
 // handler took provider_id: str and raised a 500 on uuid.UUID(), a defect.
-const providersAuthorizeRuling = "CHAOS-13328: a malformed provider id answers as an unknown id (the legacy 500 was a defect; the frozen 402 is the license shim)"
+const providersAuthorizeRuling = "CHAOS-14131: the OAuth authorize route is forward-only (prod AUTH_PROXY_OIDC=true); the venue runs without the forward"
 
 // providersAuthorizePinSHA256 is the digest of testdata/providers-authorize.go-pin.json.
-const providersAuthorizePinSHA256 = "cf7ba866886071e670390d379d7152f61035ff7666e2844192864cfa4258c510"
+const providersAuthorizePinSHA256 = "b3bcf9c7b34ff7ed3aa03b7381c224c277529477fa44a8e34d9d3bba74e3355e"
 
 // oauthProvidersRetiredRuling retires the Python answers of the OAuth provider create and patch steps: go-api mounts
 // neither route (no service writes an oauth_* provider row, no client called them), so each path is the not-found and

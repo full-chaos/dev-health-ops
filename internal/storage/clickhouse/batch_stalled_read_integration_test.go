@@ -174,7 +174,6 @@ func TestACallerCancelDoesNotAbortAnInFlightBatchWrite(t *testing.T) {
 // a write the server stalls, before the (longer) ReadTimeout: ErrBatchWriteBound
 // wrapping the driver's deadline error. Asserted by error, not by elapsed time.
 func TestAStalledBatchWriteEndsWithErrBatchWriteBound(t *testing.T) {
-	t.Skip("CHAOS-14255: red on main (stalled Send returns the driver i/o timeout, not ErrBatchWriteBound); fix in #6623 removes this skip")
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	t.Cleanup(cancel)
 	proxy, conn := openThroughStallProxy(t, ctx, time.Minute, 2*time.Second)

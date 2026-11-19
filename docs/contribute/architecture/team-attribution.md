@@ -358,7 +358,7 @@ flowchart TD
 > candidate, and a donor of a linked pull request's `linked_issue` row. Without such a key, a GitHub issue takes the
 > repository owner of its linked pull requests (above) or ends `unassigned`, and that repository owner is not a donor.
 >
-> **On a pull or merge request an admin key is a fallback (CHAOS-14209).** A key equal to a repository's name also
+> **On a pull or merge request an admin key is a fallback.** A key equal to a repository's name also
 > matches that repository's pull requests (a GitHub pull request's project id is its repository's name too). On a pull
 > or merge request (`type` `pr` on GitHub, `merge_request` on GitLab) the `issue_project` candidate of an admin team (a
 > team with no provider, section 0.4e) is a manual mapping, so it ranks with the manual mappings: after `linked_issue`,
@@ -510,7 +510,7 @@ means the ClickHouse `teams` dimension is empty.
 | # | `source` | Resolves from (ClickHouse) | Confidence | Beats | Never overrides | Evidence keys |
 |--:|---|---|---|---|---|---|
 | 0 | `native_team` | `WorkItem.native_team_key` → `teams` of the item's provider, else admin teams (section 0.4e) | high | all below | — (top) | `native_team_key` |
-| 1 | `issue_project` | native issue project key → `teams` of the item's provider that hold it, else admin teams (section 0.4e) | high | 2–8; on a pull or merge request an admin team's key beats only 6–8 (it ranks after `linked_issue`, CHAOS-14209) | 0; on a pull or merge request an admin team's key also 2, 3, 5 | `project_id, owner_team` |
+| 1 | `issue_project` | native issue project key → `teams` of the item's provider that hold it, else admin teams (section 0.4e) | high | 2–8; on a pull or merge request an admin team's key beats only 6–8 (it ranks after `linked_issue`) | 0; on a pull or merge request an admin team's key also 2, 3, 5 | `project_id, owner_team` |
 | 2 | `project_ownership` | `team_project_ownership` | high | 3–8 | 0–1 | `project_id, provider` |
 | 3 | `repo_ownership` (a pull / merge request: its own `repo_id`; an issue: the repositories of its linked pull requests in `work_graph_issue_pr`, its best tier only, never its own `repo_id`) | `team_repo_ownership` (an issue: through `work_graph_issue_pr`) | medium; high from a main-owner row (`is_primary = 1`, e.g. the inferred main owner); an issue: one step lower for an `explicit_text` link, `low` for a `heuristic` link | 4–8 | 0–2 | `repo_full_name`; an issue: `repo_ownership=<repo id>;work_graph_issue_pr=<pr number>;tier=<tier>` |
 | 4 | `assignee_membership` | two-layer: `identities`/`teams` (admin override, single-team) else `team_memberships` (provider fallback, single-team) | high (admin) / medium (provider) | none: provenance only, never `is_primary` | 0–3 | `canonical_id, identity` (evidence text: `assignee_membership=<id>`) |
@@ -799,7 +799,7 @@ ticket and fails when it turns green, until it is moved to `pass`; every provide
 rule. The rule the cells apply is written once in the test (`ownersAt`): the rows valid on the item's day
 (§0.4j), of active teams, with the first recorded owners applied backward before the first record; the shared ownership readers are judged against that rule at now and on every item day, and apply the
 first owners backward. No cell is known red: `pull_request_admin_key_never_outranks_its_repository_owner` (github) is
-pass since CHAOS-14209 (an admin key is a fallback on a pull request, section 0.1), and the acceptance gate plants the
+pass (an admin key is a fallback on a pull request, section 0.1), and the acceptance gate plants the
 admin key above a pull request's repository owner to keep it red on that defect. The catalog writers start a link at its evidence
 (section 0.4b), and each provider world runs its team catalog again after its sync, the
 next catalog run that moves each link to its evidence; GitLab ownership names the catalog project.

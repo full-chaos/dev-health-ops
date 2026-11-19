@@ -83,7 +83,6 @@ var teamValueExempt = map[string]string{
 	"coverage_snapshots":                    "a fact table of one coverage snapshot keyed by the snapshot; the team is the attribution of the snapshot when it was stored",
 	"team_provider_observations":            "a fact table of what a provider reported for a team (drift review input), keyed by the observation; not derived from a day's compute",
 	"test_suite_results":                    "a fact table: one row is one suite result keyed by the result; the team is the attribution of the result when it was stored",
-	"testops_test_metrics_daily":            "a testops family table keyed by its own scope; the team is a value of the row and the family replaces the row of its key on a recompute",
 	"work_item_blocked_durations_daily": "a per-item daily fact keyed by (day, provider, work item): one row is one item on one day; the team is the attribution of the item when it was computed. " +
 		"It holds the same kind of stale key as the user-level tables (an item that no longer qualifies for a day) and is NOT covered by the change that added the marker column: a follow-up",
 	"work_item_cycle_times": "a fact table: one row is one completed work item keyed by the item; the team is the attribution of the item when it was computed and the next compute of the item replaces the row",
@@ -153,6 +152,7 @@ var teamKeyTableWriters = map[string]map[string]string{
 	"compounding_risk_daily":         {"internal/jobs/metrics/daily/compoundingrisk/clickhouse.go": ""},
 	"issue_type_metrics_daily":       {"internal/jobs/metrics/workitemengine/inserts.go": ""},
 	"work_item_completion_daily":     {"internal/jobs/metrics/workitemengine/inserts.go": ""},
+	"testops_test_metrics_daily":     {"internal/jobs/metrics/daily/testops_native_clickhouse.go": ""},
 	"testops_release_confidence":     {"internal/jobs/metrics/daily/testops_risk_native_clickhouse.go": ""},
 	"testops_quality_drag":           {"internal/jobs/metrics/daily/testops_risk_native_clickhouse.go": ""},
 	"testops_pipeline_stability":     {"internal/jobs/metrics/daily/testops_risk_native_clickhouse.go": ""},

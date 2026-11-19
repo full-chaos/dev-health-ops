@@ -1,0 +1,14 @@
+-- A marker for the row that retires a TestOps test day (testops_test_metrics_daily).
+--
+--   testops_test_metrics_daily.retracted  UInt8 DEFAULT 0
+--
+-- The table holds one row for each (org, repo, day) and a reader takes the newest row of a key. A recompute of a day that
+-- counts no kept suite any more (the run's newest attempt moved to a later day) produces no record, so the row written before
+-- the move stayed the newest row of its key for ever. The testops_test family now writes a row over such a key with 1 here:
+-- the key, computed_at and the team of the row it retires, the column default in every measure. A reader takes the NEWEST row
+-- of each key first and leaves the key out when that row holds 1, so the day reads as absent, never as 0.
+--
+-- The column is not in the sorting key, the partition key or the version column. ADD COLUMN with a DEFAULT changes the table
+-- metadata only: no part is rewritten and no mutation is queued. Every stored row reads 0, a row the compute made. A build
+-- without this migration names its columns in every INSERT, so it writes 0. Every statement can run again.
+ALTER TABLE testops_test_metrics_daily ADD COLUMN IF NOT EXISTS retracted UInt8 DEFAULT 0;

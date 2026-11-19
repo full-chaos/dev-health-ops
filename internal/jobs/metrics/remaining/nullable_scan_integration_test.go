@@ -48,3 +48,35 @@ func TestFetchGitFilesNeverScansANullContents(t *testing.T) {
 		t.Fatalf("files = %+v, want only main.go: the NULL contents row is filtered, not scanned", files)
 	}
 }
+
+// detectScope scans a Nullable scope key (team_repo_ownership.repo_id,
+// team_project_ownership.project_key) into a string; each WHERE drops the NULL
+// key before the scan.
+func TestDetectScopeNeverScansANullScopeKey(t *testing.T) {
+	ctx := context.Background()
+	conn := workItemAttributionMigratedClickHouse(t, ctx)
+	writer, err := NewWorkItemAttributionClickHouseWriter(conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	executor, err := NewWorkItemAttributionExecutor(ctx, conn, writer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const org = "org-null-scope-key-14218"
+	lastRun := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	changed := time.Date(2026, 8, 12, 0, 0, 0, 0, time.UTC)
+	asOf := time.Date(2026, 8, 15, 0, 0, 0, 0, time.UTC)
+	if err := writer.WriteAttributionRun(ctx, WorkItemAttributionRunRecord{OrgID: org, RunID: "run-" + org, CompletedAt: lastRun}); err != nil {
+		t.Fatal(err)
+	}
+	seedWorkItemAttributionProjectOwnershipAt(t, ctx, conn, org, "jira", "P-1", nil, "team-a", changed, changed)
+	if err := conn.Exec(ctx, `INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source,
+		is_primary, specificity, priority, valid_from, valid_to, updated_at)
+		VALUES (?, 'github', 'team-a', NULL, 'acme/web', 'exact', 'native', 1, 100, 0, ?, NULL, ?)`, org, changed, changed); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := executor.detectScope(ctx, org, asOf); err != nil {
+		t.Fatal(err)
+	}
+}

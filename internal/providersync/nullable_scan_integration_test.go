@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ClickHouse/clickhouse-go/v2"
+
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
@@ -79,4 +81,71 @@ func TestEffectReadBacksScanNullColumnsAsTheZeroValue(t *testing.T) {
 			t.Fatalf("inspection = %v, want EffectExact: a NULL provider reads back as empty", inspection)
 		}
 	})
+}
+
+// A scalar subquery is typed Nullable(T) by ClickHouse. A count() subquery
+// always yields one row, so these count reads never scan a NULL, even on an
+// organization with no rows.
+func TestCountReadsOverScalarSubqueriesNeverScanANull(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	t.Cleanup(cancel)
+	instance, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = instance.Close(context.Background()) })
+	chschema.Apply(ctx, t, instance)
+	conn, err := clickhousestore.Open(ctx, clickhousestore.DefaultConfig(instance.URI))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	const orgID = "00000000-0000-4000-8000-0000000142e1"
+
+	t.Run("teamIDCarryCount", func(t *testing.T) {
+		groups, observations, malformed, err := teamIDCarryCount(ctx, conn, clickhouse.Named("org_id", orgID))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if groups != 0 || observations != 0 || malformed != 0 {
+			t.Fatalf("counts = %d %d %d, want zeros for an empty organization", groups, observations, malformed)
+		}
+	})
+	t.Run("RetireJiraProjectAsTeamRows", func(t *testing.T) {
+		outcome, err := RetireJiraProjectAsTeamRows(ctx, conn, orgID, time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC), true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if outcome.Teams != 0 || outcome.OwnershipRows != 0 {
+			t.Fatalf("outcome = %+v, want zero counts for an empty organization", outcome)
+		}
+	})
+}
+
+// storedPipelineFinishDaysSQL reads toDate(finished_at) into a time.Time; its
+// WHERE drops a NULL finished_at row before the scan.
+func TestStoredPipelineFinishDaysNeverScanANullFinish(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	t.Cleanup(cancel)
+	instance, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = instance.Close(context.Background()) })
+	chschema.Apply(ctx, t, instance)
+	conn, err := clickhousestore.Open(ctx, clickhousestore.DefaultConfig(instance.URI))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	const orgID = "00000000-0000-4000-8000-0000000142e2"
+	const repoID = "00000000-0000-4000-8000-0000000142e3"
+	synced := time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC)
+	if err := conn.Exec(ctx, `INSERT INTO ci_pipeline_runs (org_id, repo_id, run_id, finished_at, last_synced) VALUES (?, ?, 'run-1', NULL, ?)`,
+		orgID, repoID, synced); err != nil {
+		t.Fatal(err)
+	}
+	if err := recordMovedPipelineFinishDays(ctx, conn, orgID, []githubTestsPipelineRow{{RepoID: repoID, RunID: "run-1", FinishedAt: &synced}}); err != nil {
+		t.Fatal(err)
+	}
 }

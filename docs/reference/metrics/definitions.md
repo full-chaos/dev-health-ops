@@ -306,6 +306,26 @@ range. The stored `team_id` (the main owner at the end of the day) is not read:
   are nullable.
 - A service group reads the stored service.
 
+The report charts of the 32 per-person metrics of `user_metrics_daily` (one row per person, repository and day: for
+example `commits_count`, `loc_added`, `prs_merged`, `reviews_given`, `pr_cycle_p90_hours`) take the team from the
+repository of each row. A team is the owner of that repository when the report runs, for every day of the range. The
+stored `team_id` (the person's first team membership, a label) is not read:
+
+- A team filter keeps the rows of the repositories the filtered teams own, whoever the person is a member of. Two
+  filtered teams that share a repository read it once.
+- A team group gives one bucket per owner team. A co-owned repository counts whole in each owner's bucket, so the buckets
+  can add up to more than the organization. A repository with no owner is in no team bucket, and `unassigned` is no
+  bucket.
+- A team that owns no repository: the four sum metrics (`commits_count`, `context_spread_count`, `large_commits_count`,
+  `delivery_units`) are 0; the other metrics are a mean of the stored values and have no point.
+- `work_items_completed` and `work_items_active` are on the person's row of no repository: work items belong to no
+  repository. Under a team filter or a team group they are not applicable, with that reason, never 0. The work items of a
+  team are in the work-item charts, by project ownership.
+- `delivery_units` of a team counts the merged pull requests of the team's repositories only; the chart notes that its
+  completed work items have no team value.
+- A chart with no team filter and no team group is the organization, as before. A mean with no row in its bucket has no
+  point, never NaN; this holds for the organization too.
+
 ### Benchmarking flake and retry dependency rates
 
 The benchmarking point of `flake_rate` and `retry_dependency_rate` for a scope and a day is the sum of the numerators
@@ -712,6 +732,10 @@ A Linear or Jira work-items unit names every project it saw by an ensure row in 
 - `written`: the row was written.
 - `skipped`: the stored row already decides the newest value.
 - `read_error`: the stored rows could not be read. The whole batch was written and a Warn line `project_catalog_ensure_read_failed` was logged. The unit does not fail.
+
+## Weekly throughput in the WIP congestion ratio
+
+`wip_congestion_ratio` of `work_item_metrics_daily` is `wip_count_end_of_day` divided by the weekly throughput of the day (at least 1). The weekly throughput counts an item of the day (created, started or completed on the day, or in progress at its end) only when its status is terminal (`done` or `canceled`) and its `completed_at` is in the 7 days that end with the day. A provider can reopen an item and keep its `completed_at`: that open item is no throughput.
 
 ## Completed work items
 

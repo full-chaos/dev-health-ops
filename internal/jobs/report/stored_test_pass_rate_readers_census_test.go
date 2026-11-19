@@ -43,7 +43,7 @@ var pinnedTableFiles = map[string]censusPin{
 		"reader rule applied: TestPassRateWindowSQL, over passed_count and failed_count; CHAOS-14009 adds the retired-day HAVING to StabilityLiveRowsSQL only"},
 	"internal/jobs/report/dedup.go": {"6ec9f91d4876ee4c5ecc2daecddcc0714041b550b79d1a57562ecdf2e1b3f2b2",
 		"reader rule applied: the pass_rate chart rule reads the counts"},
-	"internal/jobs/report/pooled.go": {"3ccec716b47a26b88ad30ab8f9296e577cc6d28b4df7ec9738654dd99215d4f4",
+	"internal/jobs/report/pooled.go": {"91e9760c0b9c160d8b2bba40e517f9772dc32e8c06a827d4d0640315405ca5b9",
 		"not a reader of pass_rate: suite duration percentiles"},
 	"internal/jobs/report/tablereads.go": {"90914bad43fc7f67f51fe068101b4808e68a525bd171c42e2c3f11c3c8db128f",
 		"not a reader: the newest-row key of the table"},

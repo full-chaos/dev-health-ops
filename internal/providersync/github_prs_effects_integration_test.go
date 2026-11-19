@@ -19,7 +19,7 @@ import (
 )
 
 // keptGroupsMigration creates the kept groups of git_pull_requests and deployments (CHAOS-6014).
-const keptGroupsMigration = "163_stored_version_kept_groups.sql"
+const keptGroupsMigration = "165_stored_version_kept_groups.sql"
 
 // gitPullRequestsDDL mirrors the production table after migration 027
 // (org_id column + org_id-first sort key). The engine and version column are

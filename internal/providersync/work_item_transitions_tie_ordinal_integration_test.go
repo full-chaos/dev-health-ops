@@ -232,3 +232,57 @@ func TestTransitionWritersReplaceOnResyncAndGrowATie(t *testing.T) {
 		})
 	}
 }
+
+// A status-map change that swaps which transition of a two-event tie ranks first: both events keep their raw values
+// and only the normalized from_status moves, so the content rank of the pair flips. The re-sync rewrites both
+// ordinals of the instant: exactly the two new rows remain, no stale row of the old mapping and no duplicate.
+func TestTransitionWritersRewriteATieWhoseRankSwapsOnAStatusMapChange(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	orgID := nativeTestClaim("github", "work-items").OrgID
+	item := "gh:cell/swap#1"
+	at := time.Date(2026, 3, 2, 9, 0, 0, 0, time.UTC)
+	first := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	second := time.Date(2026, 11, 19, 0, 0, 0, 0, time.UTC)
+	done := "Done"
+	row := func(from string, synced time.Time) githubWorkItemTransitionRow {
+		return githubWorkItemTransitionRow{
+			WorkItemID: item, Provider: "github", OccurredAt: at, ToStatusRaw: &done,
+			FromStatus: from, ToStatus: "done", OrgID: orgID, LastSynced: synced,
+		}
+	}
+	// Old mapping: in_progress ranks before todo. New mapping: the todo event is now backlog, which ranks first.
+	if err := githubFamilyTieWriter(conn, []githubWorkItemTransitionRow{row("todo", first), row("in_progress", first)}).write(ctx, t); err != nil {
+		t.Fatal(err)
+	}
+	resync := githubFamilyTieWriter(conn, []githubWorkItemTransitionRow{row("backlog", second), row("in_progress", second)})
+	if err := resync.write(ctx, t); err != nil {
+		t.Fatal(err)
+	}
+	if stored := storedTransitionsAfterMerge(ctx, t, conn, orgID, item); stored != 2 {
+		t.Fatalf("after OPTIMIZE FINAL: %d rows, want 2", stored)
+	}
+	rows, err := conn.Query(ctx, `SELECT from_status, to_status, last_synced FROM work_item_transitions WHERE org_id = ? AND work_item_id = ? ORDER BY from_status`, orgID, item)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var got []string
+	for rows.Next() {
+		var from, to string
+		var synced time.Time
+		if err := rows.Scan(&from, &to, &synced); err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, from+"->"+to+"@"+synced.UTC().Format("2006-01-02"))
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"backlog->done@2026-11-19", "in_progress->done@2026-11-19"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("stored %v, want %v (no stale todo->done, no duplicate)", got, want)
+	}
+	if inspection, err := resync.inspect(ctx, t); err != nil || inspection != EffectExact {
+		t.Fatalf("inspection of the re-sync=%s err=%v, want exact", inspection, err)
+	}
+}

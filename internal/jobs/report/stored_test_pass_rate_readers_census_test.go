@@ -39,7 +39,7 @@ var pinnedTableFiles = map[string]censusPin{
 		"not a reader: the run-level retraction lists the table (a writer of marker rows)"},
 	"internal/jobs/metrics/daily/testops_native_clickhouse.go": {"4b27c97dd7dc144e00b7772a4e373a43e44903dbe7056893a3a29aa0d8ce1fac",
 		"writer: the daily writer of the stored rows"},
-	"internal/jobs/metrics/daily/testops_native_executor.go": {"f7060a37b6d15a7a456163534ea1a3c6fb28cfcebc27ee1111872fea7ff523a7",
+	"internal/jobs/metrics/daily/testops_native_executor.go": {"b6c7b19057dbeed7c31a17263ba162a8dbfb067d3d936d7185d45935d928bc5e",
 		"not a reader: the test, coverage and pipeline writers retire a day (a marker row); the file names the test table only in comments and an error text"},
 	"internal/jobs/metrics/testops/rules_sql.go": {"e3abfcd16187b4ba3fa0c1d5557de7f907696e9cb610eb1d91997edd317e1b4c",
 		"reader rule applied: TestPassRateWindowSQL, over passed_count and failed_count; the retired-day HAVING is added to StabilityLiveRowsSQL only"},
@@ -61,7 +61,7 @@ var pinnedTableFiles = map[string]censusPin{
 		"not a reader of pass_rate: the pooled sources read stored duration samples or raw rows; the live gate leaves a retired day out of both arms"},
 	"internal/queryapi/testopswindow/testopswindow.go": {"58114dc318a1af5eba4f5d659917183ff8ac30d7247bdb9e70f529aaaebdeadf",
 		"reader rule applied: newest-row subquery then the live-row filter, the outer query names the case counts"},
-	"internal/teamkeytables/teamkeytables.go": {"08b87df2f699d38caf290e0a2ad953264e4185f483d4c7f9bb4f9d6051abd81a",
+	"internal/teamkeytables/teamkeytables.go": {"2435f1299cefdf9a5b1fb3fcd6e792c24221e89469767cf4841dc78bf4c07f3a",
 		"not a reader: the registry of the tables, their marker column and carried values"},
 }
 

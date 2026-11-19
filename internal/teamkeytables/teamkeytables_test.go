@@ -27,7 +27,7 @@ func TestEveryDeclaredTableIsValidAndFoundByItsName(t *testing.T) {
 			t.Errorf("ByTable(%q) = %q, %v", table.Table, found.Table, ok)
 		}
 	}
-	if _, ok := ByTable("repo_metrics_daily"); ok {
+	if _, ok := ByTable("repo_complexity_daily"); ok {
 		t.Error("ByTable finds a table that takes no rule")
 	}
 	if err := (Table{Table: "x", DayColumn: "day", Keys: []KeyColumn{{"team_id", KeyString}}}).Valid(); !errors.Is(err, ErrInvalid) {

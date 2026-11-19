@@ -189,6 +189,7 @@ river.work_duration_histogram	attempt,cancel,kind,priority,queue,snooze,status	t
 session_org_activity_fallback_total		code: internal/api/session/activity_metrics.go
 session_org_activity_read_failures_total	error_class,table	code: internal/api/session/activity_metrics.go
 sync_finalize_delivery_not_current_total	reason	code: internal/syncdispatchruntime/native_finalize_sync_run.go
+sync_fence_commit_snapshot_busy_total	kind,reason	code: internal/syncdispatchruntime/transport_fence.go
 sync_route_generation_stranded_total	action,kind	code: internal/syncreconciler/generation_reconcile.go
 team_catalog_snapshot_close_abandoned_total	kind,provider,reason	code: internal/providersync/snapshot_close_report.go
 team_repo_ownership_retraction_held_total	kind,provider,reason	code: internal/providersync/team_repo_ownership_retraction_guard.go

@@ -152,7 +152,7 @@ func (service *NativeFinalizeSyncRunService) Finalize(ctx context.Context, args 
 	if service == nil || service.pool == nil || ctx == nil || args.valid() != nil {
 		return ErrFinalizeSyncRunUnavailable
 	}
-	fence := &transportFence{args: args, kind: outboxKindFinalizeSyncRun, unavailable: ErrFinalizeSyncRunUnavailable}
+	fence := &transportFence{args: args, kind: outboxKindFinalizeSyncRun, unavailable: ErrFinalizeSyncRunUnavailable, logger: service.logger}
 	return service.finalize(ctx, args.OrganizationID(), args.SyncRunID(), fence, func(ctx context.Context, tx pgx.Tx, atCommit *commitOutcome) {
 		service.reportDeliveryNotCurrent(ctx, tx, args, atCommit)
 	})

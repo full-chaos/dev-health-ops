@@ -17,10 +17,9 @@ var riverRetentionCases = []struct {
 	cleanerTimeout                  time.Duration
 }{
 	{
-		// River's own defaults, so wiring the config changes no behavior.
 		name:      "defaults",
 		env:       map[string]string{},
-		completed: 24 * time.Hour, cancelled: 24 * time.Hour, discarded: 168 * time.Hour,
+		completed: 168 * time.Hour, cancelled: 696 * time.Hour, discarded: 696 * time.Hour,
 		cleanerTimeout: 30 * time.Second,
 	},
 	{

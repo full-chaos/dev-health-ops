@@ -408,6 +408,10 @@ var productionReconcilerDependencySources = reconcilerDependencySources{
 //   - LeaseRepair, the Observer, and the sync-dispatch reference read inside
 //     the publish closure: DOMAIN pool. Every table they touch is
 //     domain-granted, and widening them would defeat the split.
+//   - ChunkSidecarReclaim (CHAOS-14243): DOMAIN pool. It reads sync_run_units
+//     and deletes from sync_run_unit_effect_chunks and
+//     sync_run_unit_chunk_checkpoints, which domainPosture grants DELETE on
+//     and no other runtime role holds at all.
 //
 // pool_composition_test.go enforces this list against the source rather than
 // trusting it: a component added on a pool this comment does not name fails
@@ -437,8 +441,6 @@ func buildSyncMutationPipeline(
 	if err != nil {
 		return nil, err
 	}
-	// The domain role holds DELETE on both chunk tables (storage/postgres
-	// domainPosture).
 	chunkReclaim, err := syncreconciler.NewChunkSidecarReclaim(domainPool)
 	if err != nil {
 		return nil, err

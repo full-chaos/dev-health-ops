@@ -326,7 +326,7 @@ var errStageDegraded = errors.New("syncreconciler: stage failed its last " +
 var errStepOverrun = errors.New("syncreconciler: stage has been running past its budget and margin")
 
 // runStage bounds one stage call to its own budget instead of letting it
-// share the whole tick's envelope with its seven siblings (CHAOS-4239), and
+// share the whole tick's envelope with its eight siblings (CHAOS-4239), and
 // records the outcome unconditionally: a stage that runs to completion inside
 // its budget still gets its duration recorded, so the gauge is never silently
 // empty for a healthy stage.

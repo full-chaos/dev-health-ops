@@ -65,9 +65,9 @@ const (
 )
 
 // StageBudgets gives each MutationPipeline stage its own bounded sub-context
-// instead of every stage racing one flat envelope for the whole 8-stage/3-pool
+// instead of every stage racing one flat envelope for the whole 9-stage/3-pool
 // pipeline (CHAOS-4239). A stage that exceeds its own budget fails only
-// itself; it can no longer starve its seven siblings of the time they need.
+// itself; it can no longer starve its eight siblings of the time they need.
 type StageBudgets map[StageName]time.Duration
 
 // DefaultStageBudgets sizes each stage from what it actually does, not from

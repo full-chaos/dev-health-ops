@@ -3,6 +3,7 @@ package syncreconciler
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -284,7 +285,7 @@ func reclaimError(ctx context.Context, err error) error {
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return ctxErr
 	}
-	return errors.Join(ErrUnavailable, err)
+	return fmt.Errorf("%w: chunk sidecar reclaim: %w", ErrUnavailable, err)
 }
 
 func (reclaim *ChunkSidecarReclaim) allowance(now time.Time) int64 {

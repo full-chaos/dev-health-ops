@@ -106,6 +106,9 @@ type guardDecision struct {
 	authorizedUnitIDs map[string]bool
 	// heldBackRunIDs are the older runs this pass left free slots to (CHAOS-8880), oldest first per bucket.
 	heldBackRunIDs []string
+	// runMode and runTriggeredBy are the deciding run's stored mode and trigger, for the capped log line.
+	runMode        string
+	runTriggeredBy string
 }
 
 // syncUnitConcurrencyPerBucket mirrors guard.py's
@@ -255,7 +258,7 @@ func authorizeRun(ctx context.Context, tx pgx.Tx, logger *synclog.Logger, orgID,
 		// The total cap is opt-in (SYNC_RUN_MAX_UNITS; unset or 0 = none) and is the
 		// same value the materializer reads; the org's tier limit no longer sets it.
 		totalCap: scheduledsync.UnitCapFromEnv,
-		activeCount: func(bucket dispatchBucket) (int, error) {
+		activeCount: func(bucket dispatchBucket) (int, int, error) {
 			return countActiveBucketUnits(ctx, tx, bucket, staleCutoff, now)
 		},
 		emit: func(bucket dispatchBucket, activeCount, reclaimedStale, cappedNew, cappedStale, headroom, heldBack int) {
@@ -267,14 +270,17 @@ func authorizeRun(ctx context.Context, tx pgx.Tx, logger *synclog.Logger, orgID,
 	source := func(fold func(dispatchGuardUnit) error) error {
 		return forEachDispatchGuardUnit(ctx, tx, runID, fold)
 	}
-	return decideDispatchGuard(source, env, orgID, now)
+	decision, err := decideDispatchGuard(source, env, orgID, now)
+	decision.runMode, decision.runTriggeredBy = self.mode, self.triggeredBy
+	return decision, err
 }
 
 // guardEnv is everything decideDispatchGuard needs from the database, so the decision runs on a fake in tests.
 type guardEnv struct {
 	lockBuckets func([]dispatchBucket) error
 	totalCap    func() int
-	activeCount func(dispatchBucket) (int, error)
+	// activeCount returns the bucket's active units and, of those, the units of backfill runs, from one read.
+	activeCount func(dispatchBucket) (active, activeBackfill int, err error)
 	emit        func(bucket dispatchBucket, activeCount, reclaimedStale, cappedNew, cappedStale, headroom, heldBack int)
 	// self is the deciding run's admission position; olderRuns lists the bucket's older open runs with waiting units
 	// (CHAOS-8880).
@@ -443,19 +449,21 @@ func decideDispatchGuard(source guardUnitSource, env guardEnv, orgID string, now
 	livenessBound := admissionLivenessBound()
 	var heldBackRunIDs []string
 	for _, bucket := range allBuckets {
-		activeCount, err := env.activeCount(bucket)
+		activeCount, activeBackfill, err := env.activeCount(bucket)
 		if err != nil {
 			return guardDecision{}, err
 		}
 		activeCounts[bucket] = activeCount
-		slots := concurrencyCapForCostClass(bucket.costClass) - activeCount
+		capValue := concurrencyCapForCostClass(bucket.costClass)
+		slots := capValue - activeCount
 		if slots < 0 {
 			slots = 0
 		}
 		// CHAOS-8880: free slots go to older live runs of the bucket first. Read under the bucket lock, in this
 		// transaction, right after the active count the slots come from.
+		var older []olderRun
 		if slots > 0 && env.olderRuns != nil {
-			older, err := env.olderRuns(bucket)
+			older, err = env.olderRuns(bucket)
 			if err != nil {
 				return guardDecision{}, err
 			}
@@ -465,6 +473,9 @@ func decideDispatchGuard(source guardUnitSource, env guardEnv, orgID string, now
 			if oldest != "" {
 				heldBackRunIDs = append(heldBackRunIDs, oldest)
 			}
+		}
+		if slots > 0 {
+			slots = min(slots, backfillSlotLimit(env.self, capValue, activeBackfill, older, now, livenessBound))
 		}
 		folds[bucket] = &guardBucketFold{slots: slots}
 	}
@@ -570,32 +581,59 @@ func forEachDispatchGuardUnit(ctx context.Context, tx pgx.Tx, runID string, fold
 	})
 }
 
+// backfillSlotLimit is the most units a backfill run's pass may admit in a bucket (CHAOS-14211): backfill units hold
+// at most cap-1 of the bucket's slots, so one slot always stays for non-backfill work, and the backfill share goes to
+// older live backfill runs first. A non-backfill run, or a bucket with cap 1 (a reserve there would stop backfill for
+// ever), has no limit beyond the cap.
+func backfillSlotLimit(self runOrder, capValue, activeBackfill int, older []olderRun, now time.Time, bound time.Duration) int {
+	if !self.backfill || capValue < 2 {
+		return capValue
+	}
+	share := capValue - 1 - activeBackfill
+	if share <= 0 {
+		return 0
+	}
+	olderBackfill := make([]olderRun, 0, len(older))
+	for _, run := range older {
+		if run.backfill {
+			olderBackfill = append(olderBackfill, run)
+		}
+	}
+	held, _ := holdBackFor(self, olderBackfill, share, now, bound)
+	return share - held
+}
+
 // countActiveBucketUnits counts the capacity-CONSUMER set for one bucket
 // across ALL runs (guard.py:230-260): fresh DISPATCHING (updated_at >
 // staleCutoff) OR live RUNNING (lease_expires_at NULL, unknown/
 // pre-migration and therefore live, OR lease_expires_at > now). RETRYING
 // never consumes capacity. Consumer and candidate sets are disjoint by
-// construction; no subtraction is performed.
+// construction; no subtraction is performed. The second count is the part
+// of that set whose run is a backfill (readRunOrder's rule), from the same
+// read (CHAOS-14211).
 //
 // Error classification: same as loadDispatchGuardUnits -- a bare query
 // execution failure, retryable.
-func countActiveBucketUnits(ctx context.Context, tx pgx.Tx, bucket dispatchBucket, staleCutoff, now time.Time) (int, error) {
-	var count int
+func countActiveBucketUnits(ctx context.Context, tx pgx.Tx, bucket dispatchBucket, staleCutoff, now time.Time) (int, int, error) {
+	var count, backfill int
 	err := tx.QueryRow(ctx, `
-SELECT count(*) FROM public.sync_run_units
-WHERE org_id = $1 AND provider = $2 AND cost_class = $3
+SELECT count(*),
+       count(*) FILTER (WHERE run.triggered_by = 'backfill' OR run.mode = 'backfill')
+FROM public.sync_run_units AS unit
+LEFT JOIN public.sync_runs AS run ON run.id = unit.sync_run_id
+WHERE unit.org_id = $1 AND unit.provider = $2 AND unit.cost_class = $3
   AND (
-        (status = $4 AND updated_at > $5)
-     OR (status = $6 AND (lease_expires_at IS NULL OR lease_expires_at > $7))
+        (unit.status = $4 AND unit.updated_at > $5)
+     OR (unit.status = $6 AND (unit.lease_expires_at IS NULL OR unit.lease_expires_at > $7))
       )`,
 		bucket.orgID, bucket.provider, bucket.costClass,
 		syncRunUnitStatusDispatching, staleCutoff,
 		syncRunUnitStatusRunning, now,
-	).Scan(&count)
+	).Scan(&count, &backfill)
 	if err != nil {
-		return 0, fmt.Errorf("%w: count active bucket units: %w", ErrDiscoveryTransientFailure, err)
+		return 0, 0, fmt.Errorf("%w: count active bucket units: %w", ErrDiscoveryTransientFailure, err)
 	}
-	return count, nil
+	return count, backfill, nil
 }
 
 // sortBucketList ports guard.py's `sorted(set(...))` -- deterministic ordering is what makes the advisory
@@ -664,6 +702,15 @@ func acquireBucketAdvisoryLocks(ctx context.Context, tx pgx.Tx, buckets []dispat
 		keys[index] = bucketAdvisoryLockKey(bucket)
 	}
 	return acquireAdvisoryLocksBounded(ctx, tx, keys, "bucket", dispatchLockWaitBudget)
+}
+
+// logConcurrencyCapped writes the capped line of a pass; mode and triggered_by say whether the backfill share
+// (CHAOS-14211) applied to the run.
+func logConcurrencyCapped(ctx context.Context, logger *synclog.Logger, runID string, capped int, decision guardDecision) {
+	logger.Info(ctx, synclog.MsgDispatchSyncRunConcurrencyCapped, synclog.Run(synclog.ParseID(runID)),
+		synclog.Count(synclog.KeyCappedCount, capped), synclog.Text(synclog.KeyReason, synclog.ParseLabel(decision.reasonCode)),
+		synclog.Text(synclog.KeyTriggerMode, synclog.ParseLabel(decision.runMode)),
+		synclog.Text(synclog.KeyTriggeredBy, synclog.ParseLabel(decision.runTriggeredBy)))
 }
 
 // emitBucketDecision ports _emit_bucket_decision: a structured log line

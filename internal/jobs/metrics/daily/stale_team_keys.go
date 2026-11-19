@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily/icfinalize"
 	"github.com/full-chaos/dev-health-ops/internal/teamkeytables"
@@ -78,6 +79,16 @@ func newStaleKeyScope(tuples ...[]string) staleKeyScope {
 		scope[strings.Join(tuple, "\x00")] = struct{}{}
 	}
 	return scope
+}
+
+// repositoryScopeTuples is the scope of a partition of repositories for a
+// table whose Scope is repo_id: one tuple for each repository of the partition.
+func repositoryScopeTuples(repoIDs []uuid.UUID) [][]string {
+	tuples := make([][]string, 0, len(repoIDs))
+	for _, repoID := range repoIDs {
+		tuples = append(tuples, []string{repoID.String()})
+	}
+	return tuples
 }
 
 // staleKeyConn is what the rule needs of a connection.
@@ -201,6 +212,9 @@ var staleKeyVersionSteps = map[string]time.Duration{
 	teamkeytables.TestopsPipelineStability.Table:     time.Second,
 	teamkeytables.TestopsCoverageMetricsDaily.Table:  time.Second,
 	teamkeytables.TestopsPipelineMetricsDaily.Table:  time.Second,
+	teamkeytables.IncidentMetricsDaily.Table:         time.Second,
+	teamkeytables.DeployMetricsDaily.Table:           time.Second,
+	teamkeytables.RepoMetricsDaily.Table:             time.Second,
 }
 
 // staleKeyVersionAfter is the version of a row that must be strictly newer
@@ -228,9 +242,13 @@ func staleKeyVersionAfter(table StaleKeyTable, at, stored time.Time) (time.Time,
 // whose stored row is not older than the snapshot is left alone (an equal
 // snapshot is a no-op).
 var snapshotMarkerTables = map[string]struct{}{
-	teamkeytables.TestopsReleaseConfidence.Table: {},
-	teamkeytables.TestopsQualityDrag.Table:       {},
-	teamkeytables.TestopsPipelineStability.Table: {},
+	teamkeytables.TestopsReleaseConfidence.Table:    {},
+	teamkeytables.TestopsQualityDrag.Table:          {},
+	teamkeytables.TestopsPipelineStability.Table:    {},
+	teamkeytables.TestopsPipelineMetricsDaily.Table: {},
+	teamkeytables.IncidentMetricsDaily.Table:        {},
+	teamkeytables.DeployMetricsDaily.Table:          {},
+	teamkeytables.RepoMetricsDaily.Table:            {},
 }
 
 // staleKeySnapshot is the version a snapshot-stamped marker carries: the

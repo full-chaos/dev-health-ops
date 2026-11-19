@@ -201,7 +201,7 @@ func workItemHierarchyProbes() map[string]workItemHierarchyProbe {
 				"created_at":"2026-10-01T00:00:00Z","labels":[],"epic":{"id":900,"iid":4,"group_id":12}}`), &payload); err != nil {
 				t.Fatal(err)
 			}
-			row, _, err := normalizeGitLabIssueWorkItem(nativeTestClaim("gitlab", "work-items"), "acme/api", "acme/api", "org:gitlab:1", repoID, payload, nil,
+			row, _, err := normalizeGitLabIssueWorkItem(nativeTestClaim("gitlab", "work-items"), "acme/api", "acme/api", "org:gitlab:1", repoID, payload, nil, nil,
 				loadRealStatusMapping(t), nil, now)
 			if err != nil {
 				t.Fatal(err)

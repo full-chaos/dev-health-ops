@@ -570,6 +570,29 @@ full cycle time: it is a real input, not an outlier to remove.
 
 `work_item_state_durations_daily` gives an item's last status span an end at its `completed_at` only when the item's status is terminal (`done` or `canceled`), or when its last known status change goes to a terminal status. A provider can reopen an item and keep its `completed_at`: that open item keeps accruing hours in its current status. When the reopen is not in the item's status changes, the span still ends at `completed_at`, and the item gets no hours in the terminal status after it.
 
+## Status history from GitHub and GitLab issues
+
+The state family rebuilds each item's status over time from its stored status
+transitions. For GitHub and GitLab issues, a status can come from a label (for
+example `done`, `wontfix` or `in progress`) or from the issue state (open or
+closed). The label wins over the state, as it does for the item's current status.
+
+- **GitHub issues.** A transition is stored for each close, reopen and status
+  label added. When a status label is removed (an `unlabeled` event) and the
+  item's status changes because of it, a transition is stored with the raw
+  value `unlabeled:<label>`.
+- **GitLab issues.** Transitions come from two event lists, read in time
+  order: the label events and the native state events (close and reopen). An
+  added status label stores a transition. A removed label stores one only when
+  the status mapping knows that label and the item's status changes; its raw
+  value is `unlabeled:<label>`. A close or reopen stores a transition with the
+  raw value `closed`, `reopened` or `opened` when the item's status changes.
+  State events are read only when work item history is enabled; without them
+  a removed label is read against the issue's current state.
+
+Each of these transitions has the time of the provider event. So an item that
+is open again ends its history in an open status, not in `done` or `canceled`.
+
 ## Blocked hours in `work_item_state_durations_daily`
 
 `work_item_state_durations_daily` holds, for each day, the hours that work

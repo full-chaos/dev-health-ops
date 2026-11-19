@@ -157,3 +157,76 @@ func TestPostSyncOutcomeGrantAsTheNosuperuserOwner(t *testing.T) {
 		t.Errorf("DELETE as the domain role: %v, want 42501", err)
 	}
 }
+
+// A database without the ledger table, and one migrated to revision 0165 (the ledger with no outcome columns), both
+// take the runtime grants: the outcome column grant is skipped, never an error.
+func TestPostSyncOutcomeGrantIsSkippedWithoutTheColumns(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	for _, schema := range []struct {
+		name     string
+		migrated bool
+	}{
+		{"no ledger table", false},
+		{"schema at 0165", true},
+	} {
+		t.Run(schema.name, func(t *testing.T) {
+			instance, err := containers.StartPostgres(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer closeInstance(t, instance)
+			domainRole, err := containers.RoleName("outcome_skip_domain", instance)
+			if err != nil {
+				t.Fatal(err)
+			}
+			queueRole, err := containers.RoleName("outcome_skip_queue", instance)
+			if err != nil {
+				t.Fatal(err)
+			}
+			adminPool := openPool(t, ctx, instance.URI)
+			defer adminPool.Close()
+			defer containers.DropRole(adminPool, domainRole, t.Logf)
+			defer containers.DropRole(adminPool, queueRole, t.Logf)
+			createRuntimeRoles(t, ctx, adminPool, domainRole, queueRole)
+			if schema.migrated {
+				baseline, err := pgmigrate.LoadBaseline()
+				if err != nil {
+					t.Fatal(err)
+				}
+				chain, err := pgmigrate.LoadChain()
+				if err != nil {
+					t.Fatal(err)
+				}
+				var before []pgmigrate.ChainFile
+				for _, file := range chain {
+					if file.Revision == "0166" {
+						break
+					}
+					before = append(before, file)
+				}
+				if len(before) != len(chain)-1 {
+					t.Fatalf("chain to 0165: kept %d of %d files, want all but 0166", len(before), len(chain))
+				}
+				conn, err := pgx.Connect(ctx, instance.URI)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer func() { _ = conn.Close(context.Background()) }()
+				if _, err := pgmigrate.Upgrade(ctx, conn, baseline, before); err != nil {
+					t.Fatalf("baseline and chain to 0165: %v", err)
+				}
+				var columns int
+				if err := adminPool.QueryRow(ctx, `SELECT count(*) FROM pg_attribute WHERE attrelid = 'public.sync_run_post_dispatches'::regclass
+					AND attname IN ('post_sync_outcome', 'post_sync_committed_at') AND NOT attisdropped`).Scan(&columns); err != nil || columns != 0 {
+					t.Fatalf("outcome columns at 0165 = %d (%v), want 0", columns, err)
+				}
+			}
+			if _, err := riverstore.ApplyPinnedMigrations(ctx, adminPool, riverstore.MigrationOptions{
+				Schema: "river", DomainRole: domainRole, QueueRole: queueRole,
+			}); err != nil {
+				t.Fatalf("runtime grants (%s): %v", schema.name, err)
+			}
+		})
+	}
+}

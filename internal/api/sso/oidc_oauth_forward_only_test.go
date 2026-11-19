@@ -75,3 +75,31 @@ func (o oidcNoUpstream) RoundTrip(*http.Request) (*http.Response, error) {
 	o.t.Error("OIDC forward off reached an upstream")
 	return nil, fmt.Errorf("no upstream")
 }
+
+// Without the auth-service provider client (AUTH_SSO_PROVIDERS_OWNED off, or a client that could not be built), activate and
+// deactivate keep the role refusal and then answer the named 503, touching no pool (the zero pool would panic): go-api has no
+// local status write (CHAOS-14131).
+func TestStatusRoutesWithoutTheProviderClientAnswerTheNamed503(t *testing.T) {
+	f := newProxyFixture(t)
+	f.h = newHandlers(Deps{Pool: &pgxpool.Pool{}, Logger: slog.New(slog.DiscardHandler)})
+	unavailable, refused := httptest.NewRecorder(), httptest.NewRecorder()
+	policy.WriteDetail(unavailable, http.StatusServiceUnavailable, policy.ErrorDetail(providersUnavailableText), nil)
+	policy.WriteDetail(refused, http.StatusForbidden, textAdminRequired, nil)
+	for _, status := range []string{"active", "inactive"} {
+		for _, role := range []string{"owner", "admin", "member"} {
+			want := unavailable
+			if role == "member" {
+				want = refused
+			}
+			recorder := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodPost, "/x", nil)
+			request.SetPathValue("provider_id", "00000000-0000-4000-8000-000000000001")
+			request = request.WithContext(policy.WithUser(request.Context(), &policy.User{ID: f.user, UserID: f.user.String(),
+				OrgID: f.org.String(), Role: role}))
+			serveRecovered(f.h.statusRoute(status), recorder, request)
+			if recorder.Code != want.Code || !bytes.Equal(recorder.Body.Bytes(), want.Body.Bytes()) {
+				t.Errorf("%s as %s = %d %q, want %d %q", status, role, recorder.Code, recorder.Body.Bytes(), want.Code, want.Body.Bytes())
+			}
+		}
+	}
+}

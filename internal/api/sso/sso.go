@@ -132,8 +132,8 @@ func Routes(deps Deps) []httpapi.Route {
 	oidcAuthorize := h.orStateMissing(h.gated(body(oidcAuthRequest)))
 	oidcCallbackHandler := h.orStateMissing(h.gated(body(oidcCallbackRequest)))
 	if h.signIn() {
-		oidcAuthorize = http.HandlerFunc(h.initiateOIDCAuth)
-		oidcCallbackHandler = http.HandlerFunc(h.oidcCallback)
+		oidcAuthorize = h.refuseOIDCNotForwarded(body(oidcAuthRequest))
+		oidcCallbackHandler = h.refuseOIDCNotForwarded(body(oidcCallbackRequest))
 	}
 	// The three SAML routes have no local sign-in in go-api: auth-service
 	// serves them, and Inner forwards them while AUTH_PROXY_SAML is on (the
@@ -176,10 +176,10 @@ func Routes(deps Deps) []httpapi.Route {
 		}
 		return g.BodyFirst(policy.Authenticated, h.gated(validate))
 	}
-	activate, deactivate := h.setStatus("active"), h.setStatus("inactive")
-	if h.Providers != nil {
-		activate, deactivate = h.setStatusViaProviders("active"), h.setStatusViaProviders("inactive")
-	}
+	// activate and deactivate call auth-service; without its client they answer the named 503
+	// (statusRoute): go-api writes no provider row (CHAOS-14131).
+	activate := h.statusRoute("active")
+	deactivate := h.statusRoute("inactive")
 	routes := []httpapi.Route{
 		route(http.MethodGet, "/sso/providers", providerWrap(listQuery, h.listProviders)),
 		route(http.MethodPost, "/sso/providers", providerBodyFirst(body(ssoProviderCreate), h.createProvider)),
@@ -291,9 +291,9 @@ func (h handlers) oauthPair() http.Handler {
 	oauthCallbackHandler := h.orStateMissing(h.gated(body(oauthCallbackRequest)))
 	oauthByType := h.orStateMissing(h.gated(byTypeQuery))
 	if h.signIn() {
-		oauthAuthorize = http.HandlerFunc(h.initiateOAuthAuth)
-		oauthCallbackHandler = http.HandlerFunc(h.oauthCallback)
-		oauthByType = http.HandlerFunc(h.initiateOAuthByType)
+		oauthAuthorize = h.refuseOIDCNotForwarded(body(oauthAuthRequest))
+		oauthCallbackHandler = h.refuseOIDCNotForwarded(body(oauthCallbackRequest))
+		oauthByType = h.refuseOIDCNotForwarded(byTypeQuery)
 	}
 	if h.sessionsOff() {
 		oauthAuthorize, oauthCallbackHandler, oauthByType = http.HandlerFunc(h.refuseSessionsOff), http.HandlerFunc(h.refuseSessionsOff), http.HandlerFunc(h.refuseSessionsOff)
@@ -364,6 +364,38 @@ func (h handlers) refuseSAMLNotForwarded(validate validator) http.Handler {
 	})
 }
 
+// refuseOIDCNotForwarded is an OIDC or OAuth sign-in route while AUTH_PROXY_OIDC is off: its 422, else 503 config_missing
+// naming AUTH_PROXY_OIDC. go-api has no own OIDC or OAuth sign-in; auth-service serves both (CHAOS-14131).
+func (h handlers) refuseOIDCNotForwarded(validate validator) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var errs pybody.Errors
+		validate(r, &errs)
+		if len(errs) > 0 {
+			policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(errs), nil)
+			return
+		}
+		h.Logger.ErrorContext(r.Context(), "sso route refused: AUTH_PROXY_OIDC is not on", "path", r.Pattern)
+		policy.WriteConfigMissing(w, "AUTH_PROXY_OIDC")
+	})
+}
+
+// statusRoute is activate or deactivate: auth-service's status write while it owns the providers. Without its client the
+// caller and id checks answer as before, then the named 503: go-api writes no provider row.
+func (h handlers) statusRoute(status string) http.Handler {
+	if h.Providers != nil {
+		return h.setStatusViaProviders(status)
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, _, ok := h.providerScope(w, r, true); !ok {
+			return
+		}
+		if _, ok := h.providerID(w, r); !ok {
+			return
+		}
+		h.providerFault(w, r, "set status", authprovision.ErrUnavailable)
+	})
+}
+
 func newHandlers(deps Deps) handlers {
 	if deps.Logger == nil {
 		deps.Logger = slog.Default()
@@ -380,30 +412,5 @@ func newHandlers(deps Deps) handlers {
 			return licensing.OrgHasFeature(ctx, pool, orgID, ssoFeature)
 		}
 	}
-	deps.oidcClient = deps.HTTPClient
-	if deps.HTTPClient == nil {
-		deps.HTTPClient = defaultSocialClient()
-		deps.oidcClient = defaultOIDCClient()
-	}
 	return handlers{deps}
-}
-
-// userReadSQL is the sign-in read of a users row by id: columns, then
-// is_superuser (by the platform roles switch) and token_version.
-func (h handlers) userReadSQL(columns string) (string, error) {
-	superuser, err := h.PlatformRoles.Superuser("is_superuser", "users.id")
-	if err != nil {
-		return "", err
-	}
-	return `SELECT ` + columns + superuser + `, token_version
-FROM users WHERE id = $1::uuid`, nil
-}
-
-// signInUser reads a sign-in's users row by id into dest (userReadSQL).
-func (h handlers) signInUser(ctx context.Context, columns string, userID any, dest ...any) error {
-	query, err := h.userReadSQL(columns)
-	if err != nil {
-		return err
-	}
-	return h.Pool.QueryRow(ctx, query, userID).Scan(dest...)
 }

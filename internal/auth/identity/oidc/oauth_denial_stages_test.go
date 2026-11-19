@@ -6,10 +6,6 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
-	"regexp"
-	"strings"
 	"testing"
 	"time"
 
@@ -20,7 +16,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity/social"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 )
 
 // stageCase is one OAuth callback: the provider's answer, the account stores, and how the state and cookie come back.
@@ -204,39 +199,13 @@ func TestOAuthStageRowWriteFailureIsThe500(t *testing.T) {
 	}
 }
 
-// The messages are go-api's own error texts, byte for byte: the exported ones by value, the unexported ones as the
-// literal go-api declares (internal/api/sso).
+// The messages are go-api's own error texts, byte for byte, for the exported ones (by value). go-api's own OAuth sign-in,
+// which declared the unexported ones, is gone (CHAOS-14131): auth-service's texts are the sign-in's texts now.
 func TestOAuthStageMessagesAreGoAPIsErrorTexts(t *testing.T) {
 	if msgMissingProviderID != oauthprovider.ErrMissingProviderID.Error() {
 		t.Errorf("missing provider id %q, go-api %q", msgMissingProviderID, oauthprovider.ErrMissingProviderID.Error())
 	}
 	if msgInvalidProviderID != identity.ErrInvalidProviderID.Error() {
 		t.Errorf("invalid provider id %q, go-api %q", msgInvalidProviderID, identity.ErrInvalidProviderID.Error())
-	}
-	root, err := moduleroot.Root()
-	if err != nil {
-		t.Fatal(err)
-	}
-	var source strings.Builder
-	for _, f := range []string{"oauth.go", "provision.go"} {
-		raw, err := os.ReadFile(filepath.Join(root, "internal", "api", "sso", f))
-		if err != nil {
-			t.Fatal(err)
-		}
-		source.Write(raw)
-	}
-	declared := func(pattern string) bool { return regexp.MustCompile(pattern).MatchString(source.String()) }
-	for name, pattern := range map[string]string{
-		"invalid provider email": `var errInvalidProviderEmail = errors\.New\(` + regexp.QuoteMeta(`"`+msgInvalidProviderEmail+`"`) + `\)`,
-		"no verified email":      `var errOAuthNoVerifiedEmail = errors\.New\(` + regexp.QuoteMeta(`"`+msgNoVerifiedEmail+`"`) + `\)`,
-		"auto-provisioning off":  `var errOAuthAutoProvisionDisabled = errors\.New\(` + regexp.QuoteMeta(`"`+provisioningMessages[ReasonProvisioningDisabled]+`"`) + `\)`,
-		"identity conflict":      `var errIdentityConflict = errors\.New\(` + regexp.QuoteMeta(`"`+provisioningMessages[ReasonIdentityConflict]+`"`) + `\)`,
-		"membership required":    `var errMembershipRequired = errors\.New\(` + regexp.QuoteMeta(`"`+provisioningMessages[ReasonMembershipRequired]+`"`) + `\)`,
-		"state expired":          `ssoAuthErr\(` + regexp.QuoteMeta(`"`+msgStateExpired+`"`) + `\)`,
-		"state mismatch":         `ssoAuthErr\(` + regexp.QuoteMeta(`"`+msgStateMismatch+`"`) + `\)`,
-	} {
-		if !declared(pattern) {
-			t.Errorf("%s: go-api declares no %s", name, pattern)
-		}
 	}
 }

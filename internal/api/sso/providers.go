@@ -15,7 +15,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
 	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
-	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
 // providerRow is one sso_providers row as _provider_to_response reads it.
@@ -34,62 +33,6 @@ type providerRow struct {
 	// Not selected by providerColumns (every other route only needs the
 	// public columns); the two OIDC routes fetch it themselves.
 	EncryptedSecrets *string
-}
-
-// setStatus is POST /sso/providers/{provider_id}/activate and /deactivate
-// (router.py activate_sso_provider, deactivate_sso_provider): an owner or
-// admin sets the status of one of their organization's providers.
-func (h handlers) setStatus(status string) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ctx := r.Context()
-		caller := policy.UserFrom(ctx)
-		if caller.Role != "owner" && caller.Role != "admin" {
-			policy.WriteDetail(w, http.StatusForbidden, "Admin access required", nil)
-			return
-		}
-		// uuid.UUID(user.org_id), then uuid.UUID(provider_id): a ValueError
-		// from either is not caught, the Python api's bare 500.
-		orgID, err := pythonparity.ParseUUID(caller.OrgID)
-		if err != nil {
-			h.fail(w, r, "parse org id", err)
-			return
-		}
-		providerID, err := pythonparity.ParseUUID(r.PathValue("provider_id"))
-		if err != nil {
-			h.fail(w, r, "parse provider id", err)
-			return
-		}
-		tx, err := h.Pool.Begin(ctx)
-		if err != nil {
-			h.fail(w, r, "begin", err)
-			return
-		}
-		defer func() { _ = tx.Rollback(context.Background()) }()
-		row, err := scanProvider(tx.QueryRow(ctx, `UPDATE sso_providers SET status = $3, updated_at = $4
-WHERE id = $1::uuid AND org_id = $2::uuid
-RETURNING `+providerColumns, providerID, orgID, status, h.Now().UTC()))
-		if errors.Is(err, pgx.ErrNoRows) {
-			policy.WriteDetail(w, http.StatusNotFound, "SSO provider not found", nil)
-			return
-		}
-		if err != nil {
-			h.fail(w, r, "update provider", err)
-			return
-		}
-		// The route commits before it renders the response, so a stored
-		// config or allowed_domains of the wrong shape (_provider_to_response's
-		// TypeError, a 500) still leaves the new status written.
-		if err := tx.Commit(ctx); err != nil {
-			h.fail(w, r, "commit", err)
-			return
-		}
-		out, err := providerResponse(row)
-		if err != nil {
-			h.fail(w, r, "render provider", err)
-			return
-		}
-		policy.WriteModel(w, http.StatusOK, out, nil)
-	})
 }
 
 const providerColumns = `id::text, org_id::text, name, protocol, status, default_role, is_default, allow_idp_initiated,

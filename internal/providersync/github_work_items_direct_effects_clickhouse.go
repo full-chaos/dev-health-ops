@@ -355,9 +355,15 @@ func workItemTransitionProviderAccepted(ctx context.Context, row githubWorkItemT
 	if _, ok := Capability(row.Provider, "work-items"); ok && row.Provider == strings.ToLower(strings.TrimSpace(row.Provider)) {
 		return true
 	}
-	slog.ErrorContext(ctx, "provider_sync.work_item_transition_provider_refused",
-		"org_id", row.OrgID, "provider", row.Provider, "work_item_id", row.WorkItemID)
+	logWorkItemTransitionProviderRefused(ctx, row.OrgID, row.Provider, row.WorkItemID)
 	return false
+}
+
+// logWorkItemTransitionProviderRefused is the ERROR line of every transition
+// sink that refuses a row for its provider.
+func logWorkItemTransitionProviderRefused(ctx context.Context, orgID, provider, workItemID string) {
+	slog.ErrorContext(ctx, "provider_sync.work_item_transition_provider_refused",
+		"org_id", orgID, "provider", provider, "work_item_id", workItemID)
 }
 
 func projectWorkItemTransition(row githubWorkItemTransitionRow) workItemTransitionStoredRow {

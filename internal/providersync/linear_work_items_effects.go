@@ -454,7 +454,11 @@ func (adapter LinearWorkItemTransitionsClickHouseAdapter) WriteLinearWorkItemEff
 		return err
 	}
 	for _, row := range rows {
-		if row.OrgID != identity.OrgID || row.Provider != "linear" {
+		if row.OrgID != identity.OrgID {
+			return ErrInvalidConfiguration
+		}
+		if row.Provider != "linear" {
+			logWorkItemTransitionProviderRefused(ctx, row.OrgID, row.Provider, row.WorkItemID)
 			return ErrInvalidConfiguration
 		}
 	}
@@ -488,7 +492,11 @@ func (adapter LinearWorkItemTransitionsClickHouseAdapter) InspectLinearWorkItemE
 		return EffectConflict, err
 	}
 	for _, row := range rows {
-		if row.OrgID != identity.OrgID || row.Provider != "linear" {
+		if row.OrgID != identity.OrgID {
+			return EffectConflict, ErrInvalidConfiguration
+		}
+		if row.Provider != "linear" {
+			logWorkItemTransitionProviderRefused(ctx, row.OrgID, row.Provider, row.WorkItemID)
 			return EffectConflict, ErrInvalidConfiguration
 		}
 	}

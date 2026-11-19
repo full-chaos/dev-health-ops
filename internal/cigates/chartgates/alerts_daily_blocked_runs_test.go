@@ -21,7 +21,8 @@ const (
 	dailyBlockedFinalize    = "finalize_failed"
 	dailyBlockedRerun       = "daily-start --rerun-tag"
 	dailyBlockedRedrive     = "daily-redrive"
-	dailyBlockedStaleRow    = "row stays listed by `daily-blocked`"
+	dailyBlockedClearRow    = "row clears from `daily-blocked`"
+	dailyBlockedWindow      = "Recompute window"
 	dailyBlockedOperatorRel = "docs/operate/runbooks/operator-commands.md"
 	dailyBlockedOperatorRow = "metrics daily-blocked --org"
 	dailyBlockedPartition   = "partition reason"
@@ -114,7 +115,7 @@ func dailyBlockedActionPerReason(g *guard) {
 	}
 	dailyBlockedPairs(g, dailyBlockedAlert+" description", text)
 	docs := oneLine(g.read(dailyBlockedDocs))
-	for _, want := range []string{dailyBlockedFinalize, dailyBlockedRerun, dailyBlockedRedrive, dailyBlockedStaleRow} {
+	for _, want := range []string{dailyBlockedFinalize, dailyBlockedRerun, dailyBlockedRedrive, dailyBlockedClearRow, dailyBlockedWindow} {
 		g.expect(strings.Contains(docs, want), "%s does not name %q", dailyBlockedDocs, want)
 	}
 	dailyBlockedPairs(g, dailyBlockedDocs, docs)
@@ -173,7 +174,8 @@ func TestDailyBlockedRunAlertsGuardPlantedDefects(t *testing.T) {
 		{"daily-blocked-alert-drops-the-rerun", perReason, mutAll(rulesRel, dailyBlockedRerun, "daily-start"), dailyBlockedActionPerReason, "description does not name"},
 		{"daily-blocked-alert-drops-the-finalize-reason", perReason, mutAll(rulesRel, dailyBlockedFinalize, "finalize"), dailyBlockedActionPerReason, "description does not name"},
 		{"daily-blocked-docs-drop-the-rerun", perReason, mutAll(dailyBlockedDocs, dailyBlockedRerun, "daily-start"), dailyBlockedActionPerReason, dailyBlockedDocs + " does not name"},
-		{"daily-blocked-docs-drop-the-stale-row", perReason, mutAll(dailyBlockedDocs, dailyBlockedStaleRow, "row is gone from `daily-blocked`"), dailyBlockedActionPerReason, dailyBlockedDocs + " does not name"},
+		{"daily-blocked-docs-drop-the-clear-row", perReason, mutAll(dailyBlockedDocs, dailyBlockedClearRow, "row stays listed by `daily-blocked`"), dailyBlockedActionPerReason, dailyBlockedDocs + " does not name"},
+		{"daily-blocked-docs-drop-the-recompute-window", perReason, mutAll(dailyBlockedDocs, dailyBlockedWindow, "Window"), dailyBlockedActionPerReason, dailyBlockedDocs + " does not name"},
 		{"daily-blocked-alert-swaps-the-actions", perReason, swapActions(rulesRel), dailyBlockedActionPerReason, "is paired with"},
 		{"daily-blocked-docs-swap-the-actions", perReason, swapActions(dailyBlockedDocs), dailyBlockedActionPerReason, dailyBlockedDocs + ": "},
 		{"daily-blocked-operator-commands-swap-the-actions", perReason, swapActions(dailyBlockedOperatorRel), dailyBlockedActionPerReason, dailyBlockedOperatorRel + ": "},

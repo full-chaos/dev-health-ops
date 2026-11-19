@@ -81,6 +81,8 @@ func (repository *PostgresRepository) Claim(ctx context.Context, request ClaimRe
 	}
 	var claim Claim
 	var processorFlags, datasetOptions, unitResult, sourceMetadata, integrationConfig []byte
+	var backfillTiling bool
+	var backfillNextBefore *time.Time
 	err := repository.Pool.QueryRow(
 		ctx,
 		claimUnitSQL,
@@ -115,6 +117,8 @@ func (repository *PostgresRepository) Claim(ctx context.Context, request ClaimRe
 		&claim.CredentialID,
 		&claim.CredentialFingerprint,
 		&claim.AuthSource,
+		&backfillTiling,
+		&backfillNextBefore,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Claim{}, ErrUnitNotClaimable
@@ -123,6 +127,9 @@ func (repository *PostgresRepository) Claim(ctx context.Context, request ClaimRe
 		return Claim{}, ErrInvalidConfiguration
 	}
 	claim.Owner = request.Owner
+	if backfillTiling {
+		claim.BackfillNext = &BackfillNextWindow{BeforeAt: backfillNextBefore}
+	}
 	if decodeErr := decodeClaimJSON(processorFlags, &claim.ProcessorFlags); decodeErr != nil {
 		return Claim{}, decodeErr
 	}
@@ -872,7 +879,9 @@ SELECT
     COALESCE(integration.config::text, '{}'),
     COALESCE(run.credential_id, integration.credential_id)::text,
     COALESCE(run.credential_fingerprint, ''),
-    COALESCE(run.auth_source, 'integration_credential')
+    COALESCE(run.auth_source, 'integration_credential'),
+    claimed.mode = 'backfill' AND claimed.before_at IS NOT NULL,
+    next_chunk.before_at
 FROM claimed
 JOIN public.sync_runs AS run
   ON run.id = claimed.sync_run_id AND run.org_id = claimed.org_id
@@ -885,7 +894,22 @@ JOIN public.integration_sources AS source
 LEFT JOIN public.integration_datasets AS dataset
   ON dataset.integration_id = claimed.integration_id
  AND dataset.org_id = claimed.org_id
- AND dataset.dataset_key = claimed.dataset_key`
+ AND dataset.dataset_key = claimed.dataset_key
+-- CHAOS-14222: the backfill chunk that starts at this unit's before_at (the
+-- planner writes a run's units in one transaction). NULL = none: the last
+-- chunk. Two such rows: the earliest before_at, so the read rule takes the
+-- later listing floor and reads a run rather than drop it.
+LEFT JOIN LATERAL (
+    SELECT min(sibling.before_at) AS before_at
+    FROM public.sync_run_units AS sibling
+    WHERE claimed.mode = 'backfill'
+      AND sibling.sync_run_id = claimed.sync_run_id
+      AND sibling.org_id = claimed.org_id
+      AND sibling.source_id = claimed.source_id
+      AND sibling.dataset_key = claimed.dataset_key
+      AND sibling.mode = 'backfill'
+      AND sibling.since_at = claimed.before_at
+) AS next_chunk ON true`
 
 const assertLeaseSQL = `
 SELECT EXISTS (

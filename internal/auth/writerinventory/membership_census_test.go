@@ -24,8 +24,6 @@ const (
 	cellInviteJoin    = "internal/api/session/invites_provision_integration_test.go|TestInviteJoinsGoThroughAuthWithNoGoAPITransaction"
 	cellOnboard       = "internal/api/session/invites_provision_integration_test.go|TestOnboardCreateOrgGoesToAuthWithTheSwitchOn"
 	cellSessionRefuse = "internal/api/session/usersowned_test.go|TestUsersOwnedRefusesEverySessionWriterBeforeTouchingTheDatabase"
-	cellSSOCreate     = "internal/api/sso/usersowned_test.go|TestUsersOwnedRefusesTheSSOAccountCreate"
-	cellSSOJoin       = "internal/api/sso/usersowned_join_integration_test.go|TestSSOJoinRefusedWhileUsersOwned"
 	cellMemberRoutes  = "internal/apiservice/admin/orgs_provision_test.go|TestProvisionSwitchOnCallsAuthOnceAndWritesNothing"
 	cellOperatorCLI   = "internal/apiservice/admin/operator_provision_test.go|TestOperatorMembershipChangeGoesThroughTheRouteWhateverTheSwitchSays"
 	cellOrgCreateHTTP = "internal/apiservice/admin/orgcreate_provision_test.go|TestAdminCreateGoesToAuthWithTheSwitchOn"
@@ -36,9 +34,6 @@ const (
 // Keyed File|Func|Verb on the allowlist's go-api public.memberships rows.
 var membershipWriterCensus = map[string]membershipSite{
 	"internal/api/session/register.go|insertMembership|INSERT": {membershipRouted, []string{cellInviteJoin, cellOnboard, cellSessionRefuse}},
-
-	"internal/api/sso/provision.go|handlers.createAccountAndMembership|INSERT": {membershipRefused, []string{cellSSOCreate}},
-	"internal/api/sso/provision.go|handlers.membershipOrJoin|INSERT":           {membershipRefused, []string{cellSSOJoin}},
 
 	"internal/apiservice/admin/orgstore.go|pgStore.insertMembershipTx|INSERT":   {membershipRouted, []string{cellMemberRoutes, cellOrgCreateHTTP, cellOrgCreateCLI, cellUserCreate}},
 	"internal/apiservice/admin/orgstore.go|pgStore.updateMembershipRole|UPDATE": {membershipRouted, []string{cellMemberRoutes, cellOperatorCLI}},

@@ -550,6 +550,14 @@ const nullableIntoPlainSites = `
 //	loadDocDrift 1b7d64b044ee -> ed7df227e4af
 //	loadFlaky a06340e42973 -> 28265e8c788f
 //
+// ai_opportunities.go re-pinned by hand again (CHAOS-14256), digests copied from the local TestScanTypeCensus failure output
+// (not computed): loadDocDrift and loadFlaky now build their opportunity with the unclamped score (scoreDeltaRaw), and the
+// impact read gains an ORDER BY over its group key. The SQL and the scan targets of both sites are unchanged
+// (*string,*uint64,*uint64 and *string,*uint64,**float64; flake_share stays Nullable(Float64) into **float64):
+//
+//	loadDocDrift ce3024a41da9 -> f049a4598b46
+//	loadFlaky 32950ea2e0be -> be2a35ea7bc8
+//
 // timeseries.go ExecuteOrgTimeseries re-pinned by hand, digest copied from the local TestScanTypeCensus failure output
 // (not computed): the org series of the pooled TestOps measures (PIPELINE_DURATION_P95, TEST_SUITE_DURATION_P95,
 // PIPELINE_QUEUE_TIME) take the bucket value unscaled when the sample count is above 0. The statement and the scan
@@ -608,8 +616,8 @@ const unverifiedSites = `
 internal/queryapi/aggflame/clickhouse.go|fetchCycleBreakdown|*string,*float64,*uint64|a0d30b3aefa3|not-describable
 internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*string,*uint64,*[]string|f62124ab26af|not-describable
 internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*uint64,*[]string|f62124ab26af|not-describable
-internal/queryapi/aianalytics/ai_opportunities.go|loadDocDrift|*string,*uint64,*uint64|ce3024a41da9|not-describable
-internal/queryapi/aianalytics/ai_opportunities.go|loadFlaky|*string,*uint64,**float64|32950ea2e0be|not-describable
+internal/queryapi/aianalytics/ai_opportunities.go|loadDocDrift|*string,*uint64,*uint64|f049a4598b46|not-describable
+internal/queryapi/aianalytics/ai_opportunities.go|loadFlaky|*string,*uint64,**float64|be2a35ea7bc8|not-describable
 internal/queryapi/aianalytics/flow_opportunities.go|loadRepoFlowRows|*string,*uint64,**float64,**float64,**float64,**float64|39a7e63ddf0e|not-describable
 internal/queryapi/aianalytics/flow_opportunities.go|loadTeamFlowRows|*string,*uint64,**float64,**float64,**float64|2653b84e5b21|not-describable
 internal/queryapi/aianalytics/loaders.go|loadLabels|*string,*string|ffbc61d0410c|spliced-select-list

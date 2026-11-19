@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily/icfinalize"
 	"github.com/full-chaos/dev-health-ops/internal/teamkeytables"
@@ -80,6 +81,16 @@ func newStaleKeyScope(tuples ...[]string) staleKeyScope {
 	return scope
 }
 
+// repositoryScopeTuples is the scope of a partition of repositories for a
+// table whose Scope is repo_id: one tuple for each repository of the partition.
+func repositoryScopeTuples(repoIDs []uuid.UUID) [][]string {
+	tuples := make([][]string, 0, len(repoIDs))
+	for _, repoID := range repoIDs {
+		tuples = append(tuples, []string{repoID.String()})
+	}
+	return tuples
+}
+
 // staleKeyConn is what the rule needs of a connection.
 type staleKeyConn interface {
 	Query(ctx context.Context, query string, args ...any) (driver.Rows, error)
@@ -141,6 +152,9 @@ var staleKeyVersionSteps = map[string]time.Duration{
 	teamkeytables.UserMetricsDaily.Table:             time.Second,
 	teamkeytables.TestopsCoverageMetricsDaily.Table:  time.Second,
 	teamkeytables.TestopsPipelineMetricsDaily.Table:  time.Second,
+	teamkeytables.IncidentMetricsDaily.Table:         time.Second,
+	teamkeytables.DeployMetricsDaily.Table:           time.Second,
+	teamkeytables.RepoMetricsDaily.Table:             time.Second,
 }
 
 // staleKeyVersionAfter is the version of a row that must be strictly newer

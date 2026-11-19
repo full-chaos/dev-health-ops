@@ -8,6 +8,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/numerical"
+	"github.com/full-chaos/dev-health-ops/internal/teamkeytables"
 )
 
 // DeployExecutor is the NATIVE implementation of the `deploy` metrics.daily
@@ -93,6 +94,8 @@ func (executor *DeployExecutor) ComputeFamily(
 	start := day
 	end := start.Add(24 * time.Hour)
 
+	// The instant of the read, taken before it: the version of a row that retires a key (see below).
+	snapshot := executor.nowUTC().UTC().Truncate(time.Second)
 	rows, err := LoadDeployments(ctx, executor.conn, run.OrganizationID, repoIDs, start, end)
 	if err != nil {
 		return 0, err
@@ -105,7 +108,19 @@ func (executor *DeployExecutor) ComputeFamily(
 	if err != nil {
 		return 0, err
 	}
-	return written, nil
+	// A repository of this partition whose stored row of the day is live and that has no deployment now (cancelled, or
+	// moved to another day) gets a row that retires the key (stale_team_keys.go), at the instant of the read: the day then
+	// reads as absent, never 0. A repository with no stored row gets nothing; only the partition's own repositories.
+	produced := make([]staleKey, 0, len(metrics))
+	for _, metric := range metrics {
+		produced = append(produced, staleKey{metric.RepoID})
+	}
+	retired, err := supersedeStaleTeamKeysAt(ctx, executor.conn, teamkeytables.DeployMetricsDaily, run.OrganizationID,
+		day, newStaleKeyScope(repositoryScopeTuples(repoIDs)...), produced, func(staleKey) time.Time { return snapshot })
+	if err != nil {
+		return written + retired, fmt.Errorf("retire stale deploy_metrics_daily days: %w", err)
+	}
+	return written + retired, nil
 }
 
 var _ NativeFamilyExecutor = (*DeployExecutor)(nil)

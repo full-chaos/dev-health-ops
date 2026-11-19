@@ -95,6 +95,8 @@ func (executor *RepoUserCommitExecutor) ComputeFamily(
 	dayEnd := dayStart.AddDate(0, 0, 1)
 	windowStart := dayStart.AddDate(0, 0, -(repoUserCommitWindowDays - 1))
 
+	// The instant of the first read, taken before it: the version of a repo_metrics_daily row that retires a key (below).
+	snapshot := executor.nowUTC().UTC().Truncate(time.Second)
 	commits, prs, reviews, err := executor.loader.LoadGitRows(ctx, run.OrganizationID, repoIDs, dayStart, dayEnd)
 	if err != nil {
 		return 0, err
@@ -235,6 +237,19 @@ func (executor *RepoUserCommitExecutor) ComputeFamily(
 	total := repoRows + userRows + commitRows + changeFailureRows + superseded
 	if err != nil {
 		return wrapRepoUserCommitPartialWrite(total, fmt.Errorf("retract stale user_metrics_daily keys: %w", err))
+	}
+	// A repository of this partition whose stored repo_metrics_daily row of the day is live and that has no commit and no
+	// pull request on the day now gets a row that retires the key, at the instant of the first read: the day then reads as
+	// absent, never 0. A repository with no stored row gets nothing; only the partition's own repositories.
+	producedRepos := make([]staleKey, 0, len(result.RepoMetrics))
+	for _, row := range result.RepoMetrics {
+		producedRepos = append(producedRepos, staleKey{row.RepoID.String()})
+	}
+	retired, err := supersedeStaleTeamKeysAt(ctx, executor.conn, teamkeytables.RepoMetricsDaily, run.OrganizationID, dayStart,
+		newStaleKeyScope(repositories...), producedRepos, func(staleKey) time.Time { return snapshot })
+	total += retired
+	if err != nil {
+		return wrapRepoUserCommitPartialWrite(total, fmt.Errorf("retire stale repo_metrics_daily days: %w", err))
 	}
 	return total, nil
 }

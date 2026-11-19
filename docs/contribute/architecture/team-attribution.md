@@ -984,6 +984,7 @@ project's items by id. Now:
   | `linear_team_memberships` | Linear catalog | every team's member list to its end (the run fails before any write when one does not end) | sole integration | is an answer (per team) | the writer of the kind |
   | `github_team_memberships` | GitHub catalog | one member read per team, to the provider's end-of-list signal | sole integration | is an answer (per team) | the writer of the kind |
   | `gitlab_team_memberships` | GitLab catalog | one member read per group, to the provider's end-of-list signal | sole integration | is an answer (per group) | the writer of the kind |
+  | `inferred_repo_ownership` | repo ownership derivation | no walk: the stored input rows of the org, read whole | sole writer of inferred rows | closes nothing: no input row of any kind is inputs not ready | recorded input evidence |
 
   **Proof of an absence, for every kind** (`providersync.AbsenceProof`, an argument of every kind snapshot,
   so no kind can be stated without it; a kind that states none closes no absent fact). A walk that reached
@@ -1047,6 +1048,11 @@ project's items by id. Now:
     (`MembershipSnapshotWriter.Snapshot`) closes a candidate only on its own proof, fact by fact (the
     membership rules below: the direct lookup where the list is paged by offset, the list rule where it is
     paged by a cursor). The census allows this statement to the membership kinds only.
+  - **recorded input evidence** (`AbsenceByInputEvidence`; `inferred_repo_ownership`, the derived
+    `team_repo_ownership` rows). The kind is no provider snapshot: the derivation reads stored rows and is the
+    only writer of `source = 'inferred'` rows (a census fact, not a `ProveSoleScope` proof). A claim the run
+    does not derive closes only when every input row recorded as its evidence is in the run; see "A missing
+    input row holds the close" below.
   A walk that did NOT reach its proven end (an error, a cut, a bound) closes nothing, for every kind: that is
   the kind's `SnapshotProof`, as before.
 
@@ -3142,6 +3148,36 @@ log line, one WARN `team_repo_ownership_derivation.retraction_held` line per kin
 `open_rows_kept`), and `team_repo_ownership_retraction_held_total{kind,provider,reason}`. Pinned by
 `team_repo_ownership_retraction_guard_test.go` and `team_repo_ownership_retraction_guard_integration_test.go` (real
 ClickHouse, every ordered pair of jira, gitlab, github and linear).
+
+**A missing input row holds the close.** The kind guard proves that the run read the inputs of a provider; it cannot
+tell a changed row from a missing one, and a missing row (a sync gap, a partial write) derives nothing, as a row that
+no longer names the team does. So every run records, for every claim it derives, the keys of the input rows of every
+chain that gave the claim a link (`team_repo_ownership_evidence`, `team_repo_ownership_evidence.go`): the work item
+(`(repo_id, work_item_id)`), the `work_graph_issue_pr` row (`(repo_id, work_item_id, pr_number)`, no provenance), the
+dependency edge (`(source, target, relationship_type)`, the stored target, an `extkey:` text included) and the donor
+row of the CHOSEN donor only, and the project link (`(provider, project_id, team_id)`) or the Linear team (`id`) that
+names the team. A refused donor (not an issue) is never chosen, so it gives no evidence. An open row the run does not
+derive, a role close, and a floor void (open and earlier closed rows of a co-owner below the share floor) go through
+only when the kind guard holds AND every recorded key of the claim is in the run, with any value
+(`AbsenceByInputEvidence`). A missing key keeps the claim's rows (WARN `team_repo_ownership_derivation.retraction_held`,
+`kind` `input_evidence`, reasons `evidence_row_missing_work_item`, `_dependency`, `_issue_pr`, `_project_link`,
+`_linear_team`). A changed row is held: a donor whose type became a pull request, a pull request that lost its
+project, a closed project link and an inactive Linear team close the claim. A `work_graph_issue_pr` key is also held when
+the native-first rule removed it (a native link of its pull request or issue is in the run, or its issue side is a pull
+request). A key that the run holds and that no chain of the claim uses any more is retired; a key the run does not hold
+stays until the row comes back. Residuals:
+- a claim with no recorded key (written before the store) closes on the kind guard alone and is logged with its
+  own reason: INFO `team_repo_ownership_derivation.retracted_without_evidence` (`rows`, reason
+  `no_recorded_evidence`) and `retracted_without_evidence` in the run's stats. Such a claim that is never derived
+  again can still close on a missing input row, as before the store.
+- the project link key `(provider, project_id, team_id)` is coarser than the table's sort key (no `source`, no
+  `valid_from`): a new generation, a compaction or the Linear stale-row cleanup keeps the key, so it errs toward
+  holding the close, never toward a close on a missing row.
+- an `extkey:` target that becomes ambiguous (a second item takes the same key) gives no donor, but the recorded
+  edge and donor rows are still in the run: the claim closes (not held).
+- the team id carry moves a claim's keys to the new id on the worker paths only. The api's ClickHouse login has no
+  grant on `team_repo_ownership_evidence` (least privilege), so a claim an admin write carries has no recorded key
+  until the next derive records it: until then it closes on the kind guard alone (`no_recorded_evidence`).
 
 **Every owning team of a repo, each with its linked share; one main owner, or every team of a full tie.**
 The derivation counts each team's candidates on a repo per link tier. The tier of a `work_graph_issue_pr` candidate is that

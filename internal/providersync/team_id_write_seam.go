@@ -64,7 +64,8 @@ func AdminTeamIDRefs(ids ...string) []TeamIDRef {
 // but the carry is written.
 // See docs/contribute/architecture/team-attribution.md "Team ids".
 func KeyTeamIDsForWrite(ctx context.Context, conn TeamIDCarryConn, orgID, writer string, refs []TeamIDRef) ([]string, error) {
-	if err := CarryTeamIDsBeforeWrite(ctx, conn, orgID, writer); err != nil {
+	// The admin write path runs as the api login: no repo ownership evidence carry (carryTeamIDs).
+	if err := carryTeamIDsBeforeWrite(ctx, conn, orgID, writer, false); err != nil {
 		return nil, err
 	}
 	var candidates []string

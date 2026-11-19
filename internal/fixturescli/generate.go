@@ -68,7 +68,7 @@ var frozenWorldDigests = map[string]string{
 	"testdata/generate/gitlab_chaos-gl__billing-service_r2_160d_c0_p3_t4_s1_raw.json.gz":    "0ea2adae7354115eb566d70060fd83ae28ddb4b5265884cbf8350268264ef0be",
 	"testdata/generate/github_chaos-fixtures__payments-api_r2_120d_c0_p6_t4_s1_raw.json.gz": "d7a09a2d59f714e645181ac4b468d55a0275ddac892ffaf3f2197a570c5c367c",
 	// The mixed-provider demo world (provider_worlds_demo_*).
-	"testdata/generate/mixed_chaos-fixtures__shared-api_r18_180d_c0_p189_t8_s9440_raw.json.gz": "b0395375a13207831d44f2b3fe241cc8f319b3ff569699cc938faae2e11e67a3",
+	"testdata/generate/mixed_chaos-fixtures__shared-api_r18_180d_c0_p189_t8_s9440_raw.json.gz": "96fb6942fe104f9b421b29951a74d7c7f3b90705e38499dea84e4528d736fe31",
 }
 
 // producedWorlds are the provider worlds (github of the real shape, gitlab, jira, linear): written by the

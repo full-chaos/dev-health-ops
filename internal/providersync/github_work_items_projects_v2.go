@@ -310,7 +310,7 @@ func (fetcher GitHubProjectV2Fetcher) Fetch(
 			if labels := item.Content.Labels.PageInfo; labels != nil && labels.HasNextPage != nil && *labels.HasNextPage {
 				result.LabelsTruncated++
 				slog.Warn("providersync.github.projects_v2.item_labels_truncated",
-					"item", item.ID, "number", item.Content.Number, "read_labels", len(item.Content.Labels.Nodes))
+					"item", logging.ProviderText(item.ID), "number", item.Content.Number, "read_labels", len(item.Content.Labels.Nodes))
 			}
 			row, transitions, emitted, err := normalizeGitHubProjectV2Item(
 				claim, item, projectScopeID, resolveIdentity, normalizedAt,
@@ -475,7 +475,7 @@ const (
 func gitHubProjectV2BoundExceeded(target GitHubProjectV2Target, itemID, field string, pages int) error {
 	slog.Error("providersync.github.projects_v2.list_bound_exceeded",
 		"org_login", target.OrgLogin, "project_number", target.ProjectNumber,
-		"item", itemID, "field", field, "pages", pages)
+		"item", logging.ProviderText(itemID), "field", field, "pages", pages)
 	owner := fmt.Sprintf("project %s#%d", target.OrgLogin, target.ProjectNumber)
 	if itemID != "" {
 		owner += " item " + itemID
@@ -644,7 +644,7 @@ func gitHubProjectV2RequirePageInfo(target GitHubProjectV2Target, itemID, field 
 	}
 	slog.Error("providersync.github.projects_v2.page_info_missing",
 		"org_login", target.OrgLogin, "project_number", target.ProjectNumber,
-		"item", itemID, "field", field)
+		"item", logging.ProviderText(itemID), "field", field)
 	return fmt.Errorf("%w: github projects v2 %s of project %s#%d item %s came back without pageInfo",
 		providerfoundation.ErrPaginationInvalid, field, target.OrgLogin, target.ProjectNumber, itemID)
 }

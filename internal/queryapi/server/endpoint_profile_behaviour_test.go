@@ -123,7 +123,7 @@ func newAccessStackRefusing(t *testing.T, store queryAPIUserStore, setup *access
 	if err != nil {
 		t.Fatal(err)
 	}
-	public, internal := Listeners("127.0.0.1:0", "127.0.0.1:0", plane, OperatorCompat(registry, operator, "dev-health-query-api"), nil)
+	public, internal := Listeners("127.0.0.1:0", "127.0.0.1:0", plane, nil)
 	mcp := MCPListener("127.0.0.1:0", plane, nil)
 	if internal == nil || mcp == nil {
 		t.Fatal("expected internal and MCP listeners")

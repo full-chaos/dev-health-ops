@@ -42,6 +42,10 @@ import (
 // CHAOS-4281's follow-up note. recommendations_loader_integration_test.go's
 // parity check excludes exactly these four fields for exactly this reason;
 // do not "fix" the divergence by reverting this scoping to match Python.
+//
+// q_gini (reviewer_gini) reads the same owned repositories (CHAOS-14163). It
+// had a team_id column to filter on, but user_metrics_daily.team_id is the
+// person's membership label, not the team; the parity check excludes it too.
 
 // RecommendationsLoader reads one team's signal window out of ClickHouse.
 //
@@ -198,7 +202,7 @@ func (loader *RecommendationsLoader) loadWIPThroughput(
 
 // loadReviewSignals ports _load_review_signals.
 //
-// MIXED SCOPING, and the halves disagree.
+// Both halves read the team's owned repositories.
 //
 // q_lat is scoped to ownedRepoIDs (CHAOS-4897): repo_metrics_daily has no
 // team_id column, so review latency is averaged only over the repos
@@ -207,8 +211,12 @@ func (loader *RecommendationsLoader) loadWIPThroughput(
 // running the query unscoped in that case would silently reintroduce the
 // org-wide defect at the empty-ownership boundary.
 //
-// q_gini IS team-scoped (user_metrics_daily carries team_id) and unaffected
-// by ownedRepoIDs.
+// q_gini reads the same ownedRepoIDs (CHAOS-14163): the reviews given in the
+// team's repositories, by anyone. user_metrics_daily.team_id is the person's
+// membership label, not the team (CHAOS-4396), so it is not read. A co-owned
+// repository is in each owner's set and counts whole for each. An empty
+// ownedRepoIDs is absent with no query, as q_lat. This departs from the
+// Python reference, which read the label.
 //
 // Note also that the review-concentration evidence row records
 // metric_table="review_edge_daily" while the gini value comes from
@@ -218,14 +226,12 @@ func (loader *RecommendationsLoader) loadWIPThroughput(
 func (loader *RecommendationsLoader) loadReviewSignals(
 	ctx context.Context, teamID string, ownedRepoIDs []uuid.UUID, windowStart, windowEnd time.Time,
 ) (latency float64, latencyKnown bool, gini float64, giniKnown bool, err error) {
-	arguments := loader.windowArguments(teamID, windowStart, windowEnd)
-
 	if len(ownedRepoIDs) == 0 {
-		latency, latencyKnown = 0, false
-	} else {
-		latencyArguments := loader.windowArguments(teamID, windowStart, windowEnd)
-		latencyArguments["repo_ids"] = ownedRepoIDs
-		latencyQuery := `
+		return 0, false, 0, false, nil
+	}
+	arguments := loader.windowArguments(teamID, windowStart, windowEnd)
+	arguments["repo_ids"] = ownedRepoIDs
+	latencyQuery := `
             SELECT avg(p75) AS avg_p75
             FROM (
                 SELECT repo_id, argMax(pr_cycle_p75_hours, computed_at) AS p75
@@ -235,27 +241,26 @@ func (loader *RecommendationsLoader) loadReviewSignals(
                 GROUP BY repo_id
             )
         `
-		latencyRows, latencyErr := loader.conn.Query(ctx, latencyQuery, namedArguments(latencyArguments)...)
-		if latencyErr != nil {
-			return 0, false, 0, false, fmt.Errorf("load review latency: %w", latencyErr)
+	latencyRows, latencyErr := loader.conn.Query(ctx, latencyQuery, namedArguments(arguments)...)
+	if latencyErr != nil {
+		return 0, false, 0, false, fmt.Errorf("load review latency: %w", latencyErr)
+	}
+	// The reference reads row zero if any row exists, and treats no rows as
+	// None. ClickHouse's avg() over an empty set returns one NULL row rather
+	// than zero rows, so both spellings arrive here as "absent".
+	if latencyRows.Next() {
+		// avg() over a non-Nullable Float64 column is itself non-Nullable and
+		// returns NaN for an empty set, which _safe_float turns into absent --
+		// so the empty case arrives here as NaN rather than as NULL.
+		var average float64
+		if scanErr := latencyRows.Scan(&average); scanErr != nil {
+			latencyRows.Close()
+			return 0, false, 0, false, fmt.Errorf("scan review latency: %w", scanErr)
 		}
-		// The reference reads row zero if any row exists, and treats no rows as
-		// None. ClickHouse's avg() over an empty set returns one NULL row rather
-		// than zero rows, so both spellings arrive here as "absent".
-		if latencyRows.Next() {
-			// avg() over a non-Nullable Float64 column is itself non-Nullable and
-			// returns NaN for an empty set, which _safe_float turns into absent --
-			// so the empty case arrives here as NaN rather than as NULL.
-			var average float64
-			if scanErr := latencyRows.Scan(&average); scanErr != nil {
-				latencyRows.Close()
-				return 0, false, 0, false, fmt.Errorf("scan review latency: %w", scanErr)
-			}
-			latency, latencyKnown = safeFloat(&average)
-		}
-		if closeErr := latencyRows.Close(); closeErr != nil {
-			return 0, false, 0, false, closeErr
-		}
+		latency, latencyKnown = safeFloat(&average)
+	}
+	if closeErr := latencyRows.Close(); closeErr != nil {
+		return 0, false, 0, false, closeErr
 	}
 
 	giniQuery := `
@@ -264,7 +269,7 @@ func (loader *RecommendationsLoader) loadReviewSignals(
                 SELECT repo_id, author_email, day,
                        argMax(reviews_given, computed_at) AS rev
                 FROM user_metrics_daily
-                WHERE team_id = {team_id:String}
+                WHERE repo_id IN {repo_ids:Array(UUID)}
                   AND day >= {start:Date} AND day < {end:Date}` + loader.orgClause() + `
                 GROUP BY repo_id, author_email, day
                 HAVING ` + liverow.NewestPredicate("user_metrics_daily", "") + `

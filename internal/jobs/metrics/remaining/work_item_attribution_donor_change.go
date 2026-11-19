@@ -82,8 +82,12 @@ func (executor *WorkItemAttributionExecutor) loadDonorChangedDependents(
 	if err != nil {
 		return nil, stepcause.Failure(stepcause.LoadInactiveTeamsDonorChange, err)
 	}
+	linkTiers, err := LoadWorkItemLinkTiers(ctx, executor.conn, orgID, edges)
+	if err != nil {
+		return nil, err
+	}
 	refused := map[string]int{}
-	owed := donorChangedDependents(edges, keyIndex, rows, kinds, inactive, refused)
+	owed := donorChangedDependents(edges, keyIndex, rows, kinds, inactive, refused, linkTiers)
 	if len(refused) > 0 {
 		slog.Default().InfoContext(ctx, "work_item_attribution.linked_issue_donor_refused",
 			"org_id", orgID, "pr_kind", refused[teamattribution.LinkedIssueDonorRefusedPullKind],
@@ -100,7 +104,8 @@ func (executor *WorkItemAttributionExecutor) loadDonorChangedDependents(
 // linked_issue row, or the provenance linked_issue row of the same snapshot). The donor it
 // would copy is the cascade's winner (BuildLinkedIssueIndexFromRows): of its
 // donors whose newest primary row has a team of its own (an own source) that
-// is active, the lowest target id, then relationship, with that row's team. An
+// is active, those of the best link tier (SelectLinkedIssueEdges), the lowest
+// target id, then relationship, with that row's team. An
 // item whose own primary row has a team of its own (an own source: native
 // team, project or repository ownership) outranks linked_issue, so a donor
 // never gives it its primary row. A donor recomputed
@@ -118,9 +123,9 @@ func donorChangedDependents(
 	kinds map[string]teamattribution.GithubWorkItemDerivationSubject,
 	inactive teamactive.Inactive,
 	refused map[string]int,
+	linkTiers map[teamattribution.LinkPair]string,
 ) []string {
-	type donor struct{ target, relationship string }
-	donors := map[string][]donor{}
+	donors := map[string][]teamattribution.LinkedIssueEdge{}
 	unresolved := map[string][]string{}
 	for _, edge := range teamattribution.LatestGitHubWorkItemDerivationDependencies(edges) {
 		if !teamattribution.GithubWorkItemDerivationInheritableRelationships[edge.RelationshipType] {
@@ -141,7 +146,7 @@ func donorChangedDependents(
 		if target == edge.SourceWorkItemID {
 			continue
 		}
-		donors[edge.SourceWorkItemID] = append(donors[edge.SourceWorkItemID], donor{target, edge.RelationshipType})
+		donors[edge.SourceWorkItemID] = append(donors[edge.SourceWorkItemID], teamattribution.LinkedIssueEdge{Target: target, Relationship: edge.RelationshipType})
 	}
 	var owed []string
 	refusedBy := map[string]string{}
@@ -171,9 +176,9 @@ func donorChangedDependents(
 				refuse(raw, teamattribution.LinkedIssueDonorRefusedUnknown)
 			}
 			for _, candidate := range linked {
-				kind, known := kinds[candidate.target]
+				kind, known := kinds[candidate.Target]
 				if reason := teamattribution.LinkedIssueDonorRefusal(kind, known); reason != "" {
-					refuse(candidate.target, reason)
+					refuse(candidate.Target, reason)
 				}
 			}
 		}
@@ -184,29 +189,30 @@ func donorChangedDependents(
 		if teamattribution.IsLinkedIssueDonorSource(own.Source) {
 			continue
 		}
-		sort.Slice(linked, func(left, right int) bool {
-			if linked[left].target != linked[right].target {
-				return linked[left].target < linked[right].target
-			}
-			return linked[left].relationship < linked[right].relationship
-		})
 		changed, wantDonor, wantTeam := false, "", ""
 		for _, candidate := range linked {
 			// A refused donor is no donor: it neither gives a team nor advances the staleness signal.
-			kind, known := kinds[candidate.target]
+			kind, known := kinds[candidate.Target]
 			if teamattribution.LinkedIssueDonorRefusal(kind, known) != "" {
 				continue
 			}
-			row, ok := rows[candidate.target]
-			if !ok {
+			if row, ok := rows[candidate.Target]; ok {
+				changed = changed || row.ComputedAt.After(own.ComputedAt)
+			}
+		}
+		// Tier presence is read over EVERY edge, a refused donor included (a pull request with a native
+		// link takes nothing lower); a refused donor is then dropped inside the best tier.
+		for _, candidate := range teamattribution.SelectLinkedIssueEdges(item, linked, linkTiers) {
+			kind, known := kinds[candidate.Target]
+			if teamattribution.LinkedIssueDonorRefusal(kind, known) != "" {
 				continue
 			}
-			changed = changed || row.ComputedAt.After(own.ComputedAt)
-			if row.TeamID == "" || !teamattribution.IsLinkedIssueDonorSource(row.Source) {
+			row, ok := rows[candidate.Target]
+			if !ok || row.TeamID == "" || !teamattribution.IsLinkedIssueDonorSource(row.Source) {
 				continue
 			}
 			if wantDonor == "" && !inactive.Has(row.TeamID) {
-				wantDonor, wantTeam = candidate.target, row.TeamID
+				wantDonor, wantTeam = candidate.Target, row.TeamID
 			}
 		}
 		if !changed {

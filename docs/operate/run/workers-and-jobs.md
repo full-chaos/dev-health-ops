@@ -214,6 +214,19 @@ dho workers jobs inspect <id>
 See [Operator commands § Blocked/failed partition inspection and repair](../runbooks/operator-commands.md#b-blockedfailed-partition-inspection-and-repair)
 for the full read-only inspection surface (jobs, metrics executions, workgraph requests).
 
+Finished River job rows are deleted by the job cleaner, which runs on the
+leader worker. A row stays for its state's retention after it finishes:
+
+| Setting | Default |
+| --- | --- |
+| `RIVER_COMPLETED_JOB_RETENTION` | `24h` |
+| `RIVER_CANCELLED_JOB_RETENTION` | `24h` |
+| `RIVER_DISCARDED_JOB_RETENTION` | `168h` |
+| `RIVER_JOB_CLEANER_TIMEOUT` | `30s` (one cleaner batch) |
+
+Each retention accepts 24h to 365 days. A job row older than its retention is
+gone, so `dho workers jobs inspect` cannot show it.
+
 Verify all of the following:
 
 - every emitted queue has an intended consumer;

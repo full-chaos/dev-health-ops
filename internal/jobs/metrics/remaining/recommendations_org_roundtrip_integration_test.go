@@ -56,7 +56,7 @@ func TestOneOrgSurvivesDiscoveryComputeAndWrite(t *testing.T) {
 	// Discovery first, on its own, because a silently empty result would make
 	// every later assertion vacuous -- ComputeOrg treats "no teams" as a
 	// successful no-op, so a broken query reads as a healthy quiet org.
-	teamIDs, err := executor.DiscoverTeamIDs(ctx, loaderOrgID)
+	teamIDs, err := executor.DiscoverTeamIDs(ctx, loaderOrgID, mustDate(t, loaderWindowEnd))
 	if err != nil {
 		t.Fatalf("discover teams: %v", err)
 	}
@@ -527,7 +527,7 @@ func TestCancellationAfterTheLastTeamStillPersistsOnAContainer(t *testing.T) {
 		t.Fatalf("construct executor: %v", err)
 	}
 
-	teamIDs, err := executor.DiscoverTeamIDs(ctx, loaderOrgID)
+	teamIDs, err := executor.DiscoverTeamIDs(ctx, loaderOrgID, mustDate(t, loaderWindowEnd))
 	if err != nil {
 		t.Fatalf("discover teams: %v", err)
 	}

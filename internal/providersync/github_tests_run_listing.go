@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"io"
 	"log/slog"
 	"net/http"
@@ -370,7 +371,7 @@ func recordGitHubTestsSaturated(
 	slog.Warn(
 		"provider listing saturated: the created range cannot be walked past the result cap",
 		"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
-		"repository", cursor.Repo, "phase", phase, "component", component, "range_hi", rangeHi, "items", items,
+		"repository", logging.ProviderText(cursor.Repo), "phase", phase, "component", component, "range_hi", rangeHi, "items", items,
 	)
 	return cursor
 }

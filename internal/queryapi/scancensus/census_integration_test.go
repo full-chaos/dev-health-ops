@@ -573,6 +573,12 @@ const nullableIntoPlainSites = `
 //	operatingreview.go fetchWorkItems a3d0e349ea87 -> 64839a153860
 //	search.go BuildSearchResponse 168278cbea0a -> afd45e38cfbd
 //
+// testopsrisk.go readDaily is pinned by hand (CHAOS-14009), digest copied from the local TestScanTypeCensus failure output
+// (not computed): dailyQuery now applies the live-row rule (liverow.NewestPredicate in the release and stability HAVING,
+// liverow.Predicate in the FINAL drag WHERE), and the census evaluates every return of those helpers, so the variants that
+// name another table's marker columns are refused by the server. Read by hand: the select list, the column types and the
+// nine scan targets are unchanged (day Date into **time.Time, the Float64 means and Nullable(Float64) sums into **float64,
+// partial_rows UInt64 into **uint64); only a WHERE line and two HAVING clauses were added.
 // CHAOS-14008: two pins re-pinned by hand after reading the moved statement, digests copied from the local TestScanTypeCensus
 // failure output (not computed). The testops_coverage_metrics_daily row that retires a day carries the new UInt8 column retracted
 // (not Nullable); dedupFromMeasureSource wraps its SELECT * in a WHERE (liverow predicate); scan targets and types are unchanged:
@@ -653,6 +659,7 @@ internal/queryapi/routeswitch/class_decision_switch.go|Enabled|*string|7a40513e2
 internal/queryapi/sankey/queries.go|fetchExpenseCounts|*float64,*float64,*float64|d97047e82483|not-describable
 internal/queryapi/sankey/queries.go|fetchStateStatusCounts|*string,*float64|d810cfa8eeb7|not-describable
 internal/queryapi/server/mcp_route.go|Scan|[]any|073743d6899c|variadic-destinations
+internal/queryapi/testopsrisk/testopsrisk.go|readDaily|**time.Time,**float64,**float64,**float64,**float64,**float64,**float64,**uint64,**float64|2072b04aaa64|not-describable
 internal/queryapi/workgraph/edges.go|countMatchingEdges|*uint64|8d8175642fa2|not-describable
 internal/queryapi/workgraph/edges.go|fetchDedupedEdgeRows|*string,*string,*string,*string,*string,*string,*string,*string,*string,*float64,*string|9ec6525b760f|statement-not-static
 internal/queryapi/workgraph/edges.go|queryDependencyEdges|*string,*string,*string,*string,*string,*string,*string,*string,*string,*float64,*string|c998ded583fc|statement-not-static

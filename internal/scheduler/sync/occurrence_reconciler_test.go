@@ -3,9 +3,11 @@ package sync
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -159,5 +161,50 @@ func TestDeferOccurrenceBeginFailureIsMarkedAsAFailureRecordWrite(t *testing.T) 
 	_, err := r.deferOccurrence(context.Background(), time.Now(), PendingOccurrence{ID: "o"}, OccurrenceErrorPlannerError)
 	if !errors.Is(err, errFailureRecordWrite) || !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestDeferOccurrenceExhaustionLogsOneQuarantineWarn(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	b := &beginRecorder{tx: &deferralTx{}}
+	occurrence := PendingOccurrence{
+		ID: "occ-1", OrgID: "org-1", ConfigIntegrationID: "int-1",
+		AttemptCount: occurrenceReconcileMaxAttempts - 1,
+	}
+	outcome, err := newDeferralReconciler(b).deferOccurrence(
+		context.Background(), time.Now(), occurrence, OccurrenceErrorPlannerError)
+	if err != nil || outcome != OccurrenceReconcileQuarantined {
+		t.Fatalf("outcome=%q err=%v", outcome, err)
+	}
+	var line map[string]any
+	if err := json.Unmarshal(bytes.TrimSpace(buf.Bytes()), &line); err != nil {
+		t.Fatalf("want exactly one JSON log line, got %q: %v", buf.String(), err)
+	}
+	want := map[string]any{
+		"level": "WARN", "msg": "sync.occurrence.quarantined", "org_id": "org-1",
+		"integration_id": "int-1", "occurrence_id": "occ-1",
+		"failure_class": OccurrenceErrorPlannerError,
+		"attempt_count": float64(occurrenceReconcileMaxAttempts),
+	}
+	for k, v := range want {
+		if line[k] != v {
+			t.Fatalf("%s = %v, want %v (line %v)", k, line[k], v, line)
+		}
+	}
+}
+
+func TestDeferOccurrenceRetryLogsNoQuarantineLine(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	b := &beginRecorder{tx: &deferralTx{}}
+	_, err := newDeferralReconciler(b).deferOccurrence(
+		context.Background(), time.Now(), PendingOccurrence{ID: "o"}, OccurrenceErrorPlannerError)
+	if err != nil || buf.Len() != 0 {
+		t.Fatalf("err=%v log=%q", err, buf.String())
 	}
 }

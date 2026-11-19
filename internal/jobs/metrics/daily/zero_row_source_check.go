@@ -172,6 +172,16 @@ func (checker *ClickHouseSourceDataChecker) ZeroRowFamilies(
 	}
 	orgID, day, repositoryIDs := snapshot.orgID, snapshot.day, snapshot.repositoryIDs
 	output := func(table string) (bool, error) {
+		if liverow.Registered(table) {
+			// A repository-day whose NEWEST row retires the day is no output, also when an older live row is stored
+			// under it.
+			return checker.exists(ctx, `
+SELECT 1 FROM `+table+`
+WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(UUID)} AND day = {day:Date}
+GROUP BY repo_id
+HAVING `+liverow.NewestPredicate(table, "")+`
+LIMIT 1`, orgID, day, repositoryIDs)
+		}
 		return checker.exists(ctx, `
 SELECT 1 FROM `+table+`
 WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(UUID)} AND day = {day:Date}

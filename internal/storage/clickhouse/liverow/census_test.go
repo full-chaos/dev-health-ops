@@ -60,8 +60,6 @@ var unruledReads = map[string]string{
 		"a retraction row must stay the newest row of its key, and it holds NULL",
 	"internal/jobs/metrics/remaining/recommendations_loader.go:loadCompoundingRiskPersisted": "the newest row of ONE team over the window, whole: a retraction row is that row, " +
 		"and it reads as the read answers for no row at all (no score, severity unknown)",
-	"internal/jobs/metrics/testops/rules_sql.go:StabilityLiveRowsSQL": "the newest testops_pipeline_metrics_daily row of a retired day holds 0 completed runs, so the read drops " +
-		"that day's stability row as the rule would; a HAVING on the pipeline side would turn the retired day into no pipeline row, which this read keeps",
 	"internal/jobs/metrics/remaining/capacity_native_clickhouse.go:capacityNewestRows": "the newest-version subquery of the capacity reads; the throughput and scope reads apply the rule after it, and the backlog sums the WIP on the newest day of the scope: a retraction row adds 0 and must stay in the newest-day pick",
 }
 

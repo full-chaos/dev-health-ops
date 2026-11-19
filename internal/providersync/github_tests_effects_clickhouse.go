@@ -60,11 +60,6 @@ func (sink TestOpsClickHouseEffects) WriteEffect(ctx context.Context, claim Clai
 		if len(rows) == 0 {
 			return sink.Lease.Assert(ctx)
 		}
-		batch, err := sink.Conn.PrepareBatch(ctx, `INSERT INTO ci_pipeline_runs (org_id,repo_id,run_id,pipeline_name,provider,status,queued_at,started_at,finished_at,duration_seconds,queue_seconds,retry_count,cancel_reason,trigger_source,commit_hash,branch,pr_number,team_id,service_id,last_synced)`)
-		if err != nil {
-			return err
-		}
-		defer batch.Abort()
 		seen := make(map[string]struct{}, len(rows))
 		for _, row := range rows {
 			if err := validateGitHubTestsRow(claim, row.OrgID, row.RepoID, row.RunID, row.LastSynced); err != nil {
@@ -76,6 +71,16 @@ func (sink TestOpsClickHouseEffects) WriteEffect(ctx context.Context, claim Clai
 			if !recordGitHubTestsKey(seen, row.OrgID, row.RepoID, row.RunID) {
 				return duplicateNaturalKeyError(effect.Destination, "org_id", row.OrgID, "repo_id", row.RepoID, "run_id", row.RunID)
 			}
+		}
+		if err := recordMovedPipelineFinishDays(ctx, sink.Conn, claim.OrgID, rows); err != nil {
+			return err
+		}
+		batch, err := sink.Conn.PrepareBatch(ctx, `INSERT INTO ci_pipeline_runs (org_id,repo_id,run_id,pipeline_name,provider,status,queued_at,started_at,finished_at,duration_seconds,queue_seconds,retry_count,cancel_reason,trigger_source,commit_hash,branch,pr_number,team_id,service_id,last_synced)`)
+		if err != nil {
+			return err
+		}
+		defer batch.Abort()
+		for _, row := range rows {
 			if err := batch.Append(row.OrgID, row.RepoID, row.RunID, row.PipelineName, row.Provider, row.Status, row.QueuedAt, row.StartedAt, row.FinishedAt, row.DurationSeconds, row.QueueSeconds, row.RetryCount, row.CancelReason, row.TriggerSource, row.CommitHash, row.Branch, row.PRNumber, row.TeamID, row.ServiceID, row.LastSynced); err != nil {
 				return err
 			}

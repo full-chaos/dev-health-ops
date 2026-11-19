@@ -94,6 +94,37 @@ func TestServiceClickHouseDSNWarnsOnNonNativeScheme(t *testing.T) {
 	}
 }
 
+func TestServiceClickHouseDSNStillRefusesHostlessNonNative(t *testing.T) {
+	t.Parallel()
+
+	for _, key := range []string{"CLICKHOUSE_URI", "API_CLICKHOUSE_URI"} {
+		for _, dsn := range []string{"http:///default", "https:///default", "https://:8123/x", "http://:8123"} {
+			t.Run(key+"/"+dsn, func(t *testing.T) {
+				t.Parallel()
+				if _, err := Load(workerSpec(map[string]string{key: dsn})); err == nil {
+					t.Fatalf("%s accepted hostless %q", key, dsn)
+				}
+			})
+		}
+	}
+}
+
+func TestObserveNonNativeClickHouseNilLoggerStillSetsGauge(t *testing.T) {
+	reader := sdkmetric.NewManualReader()
+	previous := otel.GetMeterProvider()
+	otel.SetMeterProvider(sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)))
+	t.Cleanup(func() { otel.SetMeterProvider(previous) })
+
+	cfg, err := Load(workerSpec(map[string]string{"CLICKHOUSE_URI": "http://h:8123/db"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ObserveNonNativeClickHouse(context.Background(), nil, cfg)
+	if got := nonNativeGaugeByKey(t, reader); got["CLICKHOUSE_URI"] != 1 {
+		t.Fatalf("gauge = %v, want CLICKHOUSE_URI=1", got)
+	}
+}
+
 func TestResolveDSNStillAcceptsHTTPClickHouseForCLIs(t *testing.T) {
 	t.Parallel()
 

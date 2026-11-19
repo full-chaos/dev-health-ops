@@ -20,16 +20,15 @@ var clickHouseServiceKeys = []string{"CLICKHOUSE_URI", "API_CLICKHOUSE_URI"}
 
 // ObserveNonNativeClickHouse writes one WARN line and sets the gauge to 1 for each key in
 // cfg.NonNativeClickHouseKeys, and to 0 for each other service key. The line names the key and scheme only, never the
-// DSN. Call it once at start, after the process meter provider is installed.
+// DSN. A nil logger skips the line; the gauge is still set. Call it once at start, after the process meter provider is installed.
 func ObserveNonNativeClickHouse(ctx context.Context, logger *slog.Logger, cfg Config) {
-	if logger == nil {
-		logger = slog.Default()
-	}
 	flagged := map[string]bool{}
 	for _, key := range cfg.NonNativeClickHouseKeys {
 		flagged[key] = true
-		logger.WarnContext(ctx, "ClickHouse service DSN uses a non-native scheme; use clickhouse://",
-			"key", key, "scheme", clickHouseHTTPScheme(cfg.clickHouseDSN(key)))
+		if logger != nil {
+			logger.WarnContext(ctx, "ClickHouse service DSN uses a non-native scheme; use clickhouse://",
+				"key", key, "scheme", clickHouseHTTPScheme(cfg.clickHouseDSN(key)))
+		}
 	}
 	for _, key := range clickHouseServiceKeys {
 		recordNonNative(ctx, key, flagged[key])

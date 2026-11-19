@@ -1575,10 +1575,15 @@ func clickHouseHTTPScheme(value secrets.Value) string {
 }
 
 func validateClickHouseServiceURI(key string, value secrets.Value) error {
-	if clickHouseHTTPScheme(value) != "" {
-		return nil
+	if err := validateURI(key, value, "clickhouse", "http", "https"); err != nil {
+		return err
 	}
-	return validateURI(key, value, "clickhouse")
+	if clickHouseHTTPScheme(value) != "" {
+		if parsed, err := url.Parse(value.Reveal()); err != nil || parsed.Hostname() == "" {
+			return fmt.Errorf("%s must be a valid supported URI", key)
+		}
+	}
+	return nil
 }
 
 func validateURI(key string, value secrets.Value, schemes ...string) error {

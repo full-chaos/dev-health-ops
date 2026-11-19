@@ -516,6 +516,31 @@ func TestPostSyncFenceRunsAsTheDomainRole(t *testing.T) {
 			t.Fatalf("ledger-absent WARN lines = %d, want 1:\n%s", warned, strings.Join(logs.lines(), "\n"))
 		}
 	})
+	// The stamp's time is the clock at the stamp, not the transaction start: after an earlier write in the same
+	// transaction, the stamped post_sync_committed_at is later than transaction_timestamp(), read in that transaction.
+	t.Run("stamp_time_follows_earlier_write", func(t *testing.T) {
+		ctx, _, service, denials := setup(t, nil)
+		tx, err := service.pool.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = tx.Rollback(context.Background()) }()
+		if _, err := tx.Exec(ctx, `UPDATE sync_dispatch_outbox SET updated_at = clock_timestamp() WHERE id = $1`, outbox); err != nil {
+			t.Fatalf("earlier write: %v", err)
+		}
+		if err := service.recordPostSyncOutcome(ctx, tx, args, jobruntime.PostSyncFanoutOutcomePublished); err != nil {
+			t.Fatalf("stamp: %v", err)
+		}
+		var later bool
+		if err := tx.QueryRow(ctx, `SELECT post_sync_committed_at > transaction_timestamp() FROM sync_run_post_dispatches
+			WHERE sync_run_id = $1 AND kind = 'post_sync'`, run).Scan(&later); err != nil {
+			t.Fatalf("read in the same transaction: %v", err)
+		}
+		denials.assertNone(t, "the outcome stamp after an earlier write")
+		if !later {
+			t.Fatal("post_sync_committed_at is not later than transaction_timestamp(): the stamp took the transaction start, not the clock at the stamp")
+		}
+	})
 	t.Run("row_busy_is_55P03", func(t *testing.T) {
 		ctx, admin, service, denials := setup(t, nil)
 		holder, err := admin.Begin(ctx)

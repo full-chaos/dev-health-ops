@@ -43,10 +43,13 @@ type NativeExecutor struct {
 	writer *chwrite.Writer
 	logger *slog.Logger
 	// now is injectable so a test can pin the run clock; production passes
-	// time.Now. computed_at is a ReplacingMergeTree VERSION column on all three
-	// output tables, so the clock is not cosmetic -- two runs with the same
-	// stamp collapse into one row.
+	// time.Now. It sets the run window. computed_at is runStamp's stamp.
 	now func() time.Time
+	// runStamp issues the run's computed_at, a ReplacingMergeTree VERSION
+	// column on all three output tables: two runs of one org with one stamp
+	// collapse into one row. The worker wiring always sets it; nil (tests
+	// only) stamps with now.
+	runStamp RunStamp
 	// newProvider resolves and constructs the LLM provider for one run. A
 	// function rather than a stored Provider because the scope names the
 	// provider and because the run must Close() it, mirroring Python's
@@ -82,6 +85,11 @@ type NativeExecutor struct {
 	// byo is the optional categorization on an org's own model (D6279). Nil, the
 	// default, means no org can use it.
 	byo CategorizeBYO
+}
+
+// SetRunStamp wires the per-org run stamp (runstamp.go).
+func (executor *NativeExecutor) SetRunStamp(stamp RunStamp) {
+	executor.runStamp = stamp
 }
 
 // SetCategorizeBYO wires the per-org opt-in categorization on the org's own
@@ -442,6 +450,16 @@ func (executor *NativeExecutor) Execute(ctx context.Context, claim workgraph.Cla
 		}
 	}
 
+	// Stamped after every refusal above and before any read or write of the
+	// run: the later-started run of an org is the newer version.
+	computedAt := now
+	if executor.runStamp != nil {
+		computedAt, err = executor.runStamp.Stamp(ctx, orgID)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	cfg := Config{
 		OrgID:   orgID,
 		FromTS:  fromTS,
@@ -478,7 +496,7 @@ func (executor *NativeExecutor) Execute(ctx context.Context, claim workgraph.Cla
 		// oracle would flag this column on every row. Proposed as a follow-up
 		// on CHAOS-4441 instead.
 		RunID:      newRunID(),
-		ComputedAt: now,
+		ComputedAt: computedAt,
 	}
 
 	stats, err := materializer.Run(ctx, cfg)

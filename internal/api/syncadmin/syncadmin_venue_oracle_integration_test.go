@@ -128,6 +128,11 @@ func TestSyncAdminReadsVenueOracle(t *testing.T) {
 	inspectDiagnostics := inspectBackfillDiagnostics(t)
 	derived := newDerivedTargets(`[]`, ids.cfgPlanner, ids.cfgNoSources, ids.cfgCrossOrg)
 	pin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/sync-admin-reads.go-pin.json", SHA256: syncAdminReadsPinSHA256, Ruling: syncAdminReadsRuling})
+	// Named divergence (CHAOS-13703): sync_run.requested_range_split is a
+	// Go-only field the recorded Python answer never had. It is cut from
+	// the Go body before the compare and checked on the raw Go body below.
+	requestedSplit := regexp.MustCompile(`,"requested_range_split":(?:null|\{[^{]*?"longer_window_units":\[[^\]]*\]\})`)
+	splitSeen := false
 	receipt := venueoracle.Diff(t, base, requests, python, venueoracle.DiffOptions{
 		Golden: golden,
 		Retire: retiredSyncAdminReadsRequest,
@@ -139,7 +144,7 @@ func TestSyncAdminReadsVenueOracle(t *testing.T) {
 		// pinned exactly by the live model oracle at a fixed now.
 		Normalize: func(request venueoracle.Request, body string) string {
 			if !strings.HasSuffix(strings.SplitN(request.Path, "?", 2)[0], "/units") {
-				return derived.normalize(body)
+				return requestedSplit.ReplaceAllString(derived.normalize(body), "")
 			}
 			return lagSeconds.ReplaceAllString(body, `"lag_seconds":"<volatile>"`)
 		},
@@ -148,6 +153,18 @@ func TestSyncAdminReadsVenueOracle(t *testing.T) {
 		Inspect: func(request venueoracle.Request, goResponse venueoracle.Response) {
 			derived.inspect(t, request.Name, goResponse.Body)
 			inspectDiagnostics(request, goResponse)
+			if request.Name == "jobs planner " {
+				splitSeen = true
+				// runP1: src1 1 day, src3 2 days less 0.5 s (the lower
+				// median), src2 39 days: src2 is set apart, the other two
+				// give the range; the window-less unit is not counted.
+				want := `"requested_range_split":{"since":"2026-03-30T00:00:00.500000Z","before":"2026-04-02T00:00:00Z","unit_count":2,` +
+					`"median_window_seconds":172799,"longer_window_unit_count":1,"longer_window_units":[{"source_id":"` + ids.src2.String() +
+					`","dataset_key":"commits","since":"2026-03-01T00:00:00Z","before":"2026-04-09T00:00:00Z"}]}`
+				if !strings.Contains(goResponse.Body, want) {
+					t.Errorf("jobs planner body lacks %s:\n%s", want, goResponse.Body)
+				}
+			}
 			if request.Name != "run units rich " {
 				return
 			}
@@ -165,6 +182,9 @@ func TestSyncAdminReadsVenueOracle(t *testing.T) {
 		},
 	})
 	t.Logf("receipt (%d requests):\n%s", len(requests), receipt)
+	if !splitSeen {
+		t.Error(`no "jobs planner " request: the requested_range_split check never ran`)
+	}
 	derived.finish(t)
 	pin.Finish(t)
 	golden.Finish(t)

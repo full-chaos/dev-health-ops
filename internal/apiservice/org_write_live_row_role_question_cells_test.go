@@ -163,7 +163,8 @@ func orgWriteBare(calls []pep.Request) []pep.Request {
 
 // The decision point requests of one demoted live-row request on an organization write row: exactly the question the
 // guard asks with no row, once (one request; none for a token with no organization on an AdminOrg row), and none on a
-// row refused before the guard. Each high-risk request writes one auth.authorize.high_risk_decided event (R1).
+// row refused before the guard. Each high-risk request writes one auth.authorize.high_risk_decided event (R1): 333 of the
+// 337 requests (the 4 others ask integrations.read, of the discover route).
 func TestAnOrganizationWriteLiveRowAsksExactlyTheNoRowQuestion(t *testing.T) {
 	rows := orgWriteRows(t)
 	asked, highRisk, unasked := 0, 0, 0
@@ -173,9 +174,9 @@ func TestAnOrganizationWriteLiveRowAsksExactlyTheNoRowQuestion(t *testing.T) {
 		for _, row := range rows {
 			got := orgWriteBare(on.calls[row.key])
 			want := orgWriteWantCalls(row, class)
-			if len(got) == 0 && len(norow.calls[row.key]) == 0 {
-				// Refused before the guard (membership, body, method, a RefuseImpersonation row), or AdminOrg with no
-				// organization: no question with or without a row.
+			if len(got) == 0 && (len(norow.calls[row.key]) == 0 || row.namespace == "billing" && on.answer[row.key] == "403 "+impersonationBody) {
+				// Refused before the guard with or without a row (membership, body, method), AdminOrg with no
+				// organization, or a billing write: RefuseImpersonation refuses a live row before the guard.
 				unasked++
 				continue
 			}
@@ -197,8 +198,8 @@ func TestAnOrganizationWriteLiveRowAsksExactlyTheNoRowQuestion(t *testing.T) {
 			asked += len(got)
 		}
 	}
-	if asked != 345 || highRisk != 341 {
-		t.Errorf("asked %d requests, %d high risk; want 345 and 341", asked, highRisk)
+	if asked != 337 || highRisk != 333 {
+		t.Errorf("asked %d requests, %d high risk; want 337 and 333", asked, highRisk)
 	}
 	t.Logf("ASKED requests=%d high_risk=%d unasked_cells=%d", asked, highRisk, unasked)
 }

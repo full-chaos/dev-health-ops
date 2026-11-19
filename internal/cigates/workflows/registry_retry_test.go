@@ -68,6 +68,7 @@ func newRRBox(t *testing.T) rrBox {
 	docker := `#!/bin/sh
 printf '%s\n' "$*" >> "` + b.calls + `"
 case "$*" in
+  *RepoDigests*) for a; do last="$a"; done; echo "$last"; exit 0 ;;
   *"image inspect"*) echo sha256:0123 ; exit 0 ;;
   $FAKE_MATCH)
     n=$(cat "` + b.dir + `/n" 2>/dev/null || echo 0)
@@ -261,6 +262,39 @@ func TestBuildSharedRetriesARegistryBlobFetchFailure(t *testing.T) {
 	rc, builds, sleeps, out := runBuildShared(t, 2, rrLayer)
 	if rc != 0 || builds != 8 || sleeps != "10 30" {
 		t.Errorf("want rc 0, 6 targets + 2 retried builds = 8, sleeps 10 30; got rc=%d builds=%d sleeps=%q\n%s", rc, builds, sleeps, out)
+	}
+}
+
+// CHAOS-11653: both pinned base images are pulled once (with retry), before the first build, and every build uses them.
+func TestBuildSharedPullsThePinnedBasesOnceBeforeTheBuilds(t *testing.T) {
+	b := newRRBox(t)
+	cmd := exec.Command("bash", filepath.Join(authProofRoot(t), "ci", "check_go_containers.sh"), "build-shared", filepath.Join(b.dir, "shared"))
+	cmd.Dir = b.dir
+	cmd.Env = b.env("FAKE_MATCH=NOMATCH")
+	if raw, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("build-shared failed: %v\n%s", err, raw)
+	}
+	raw, _ := os.ReadFile(b.calls)
+	pulls, builds, firstBuild, lastPull := 0, 0, -1, -1
+	for i, l := range strings.Split(string(raw), "\n") {
+		switch {
+		case strings.HasPrefix(l, "pull "):
+			pulls++
+			lastPull = i
+		case strings.HasPrefix(l, "build "):
+			builds++
+			if firstBuild < 0 {
+				firstBuild = i
+			}
+			for _, want := range []string{"--pull=false", "GO_BUILD_IMAGE=dho-go-build-base:", "GO_RUNTIME_IMAGE=dho-go-runtime-base:"} {
+				if !strings.Contains(l, want) {
+					t.Errorf("a build without %q: %s", want, l)
+				}
+			}
+		}
+	}
+	if pulls != 2 || builds != 6 || lastPull > firstBuild {
+		t.Errorf("want 2 pulls (build image, runtime image) before 6 builds; got pulls=%d builds=%d lastPull=%d firstBuild=%d\n%s", pulls, builds, lastPull, firstBuild, raw)
 	}
 }
 

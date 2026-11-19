@@ -37,7 +37,7 @@ func allowlistListenerAddr(t *testing.T, allowed []*net.IPNet) (addr string, hit
 		plane.Handler.ServeHTTP(w, r)
 	})
 	countingPlane := &Plane{Handler: countingHandler, Close: plane.Close}
-	_, internal := Listeners("127.0.0.1:0", "127.0.0.1:0", countingPlane, nil, allowed)
+	_, internal := Listeners("127.0.0.1:0", "127.0.0.1:0", countingPlane, allowed)
 	if internal == nil {
 		t.Fatal("no internal listener built")
 	}

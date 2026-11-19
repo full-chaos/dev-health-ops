@@ -8,6 +8,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/numerical"
+	"github.com/full-chaos/dev-health-ops/internal/teamkeytables"
 )
 
 // DeployExecutor is the NATIVE implementation of the `deploy` metrics.daily
@@ -24,15 +25,13 @@ import (
 // divergence -- see LoadDeployments' doc comment (deploy_native_clickhouse.go)
 // for both:
 //
-//  1. NO FINAL, even though `deployments` is a ReplacingMergeTree and a
-//     DIFFERENT family's Go port (DORA's loadDeployments,
-//     dora_native_clickhouse.go:238) already queries the SAME table WITH
-//     FINAL. That is a different Python function on a different bridge --
-//     matching the ACTUAL Python this family replaces (load_cicd_data, not
-//     job_dora.py's _load_deployments) is what makes this executor
-//     row-identical to what it is replacing. Mirrors repouser's identical
-//     documented choice for git_commits/git_pull_requests (clickhouse.go:
-//     28-37 doc comment): "PARITY, not an oversight."
+//  1. FINAL, as DORA's loadDeployments (dora_native_clickhouse.go:238) reads
+//     the same ReplacingMergeTree table. Python's load_cicd_data reads it raw
+//     (a legacy path); the Go loader does not copy that, because a re-synced
+//     deployment (status moved to canceled, deployed_at on another day) would
+//     keep its old version counted until ClickHouse merges the parts. The
+//     window and canceled predicates are on non-key columns, so they apply to
+//     the current version.
 //  2. THE WINDOW FILTER IS deployed_at ONLY. compute_deploy_metrics_daily
 //     itself has a `deployed_at or started_at` fallback
 //     (compute_deployments.py:67, ported verbatim in
@@ -93,6 +92,8 @@ func (executor *DeployExecutor) ComputeFamily(
 	start := day
 	end := start.Add(24 * time.Hour)
 
+	// The instant of the read, taken before it: the version of a row that retires a key (see below).
+	snapshot := executor.nowUTC().UTC().Truncate(time.Second)
 	rows, err := LoadDeployments(ctx, executor.conn, run.OrganizationID, repoIDs, start, end)
 	if err != nil {
 		return 0, err
@@ -105,7 +106,19 @@ func (executor *DeployExecutor) ComputeFamily(
 	if err != nil {
 		return 0, err
 	}
-	return written, nil
+	// A repository of this partition whose stored row of the day is live and that has no deployment now (cancelled, or
+	// moved to another day) gets a row that retires the key (stale_team_keys.go), at the instant of the read: the day then
+	// reads as absent, never 0. A repository with no stored row gets nothing; only the partition's own repositories.
+	produced := make([]staleKey, 0, len(metrics))
+	for _, metric := range metrics {
+		produced = append(produced, staleKey{metric.RepoID})
+	}
+	retired, err := supersedeStaleTeamKeys(ctx, executor.conn, teamkeytables.DeployMetricsDaily, run.OrganizationID,
+		day, newStaleKeyScope(repositoryScopeTuples(repoIDs)...), produced, snapshot)
+	if err != nil {
+		return written + retired, fmt.Errorf("retire stale deploy_metrics_daily days: %w", err)
+	}
+	return written + retired, nil
 }
 
 var _ NativeFamilyExecutor = (*DeployExecutor)(nil)

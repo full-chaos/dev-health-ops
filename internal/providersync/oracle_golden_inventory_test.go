@@ -156,12 +156,17 @@ func TestEveryOraclePairHasAFrozenGolden(t *testing.T) {
 }
 
 // retiredPairHarnessSources are the pairs whose feature was removed and whose goldens and tests went with it
-// (CHAOS-9200, on chris's word 2026-10-11: the investment rule classifier). They stay in the pair list and
-// no golden may answer them.
+// (CHAOS-9200, on chris's word 2026-10-11: the investment rule classifier; CHAOS-14195: the Projects v2
+// `changes` history, which GitHub's schema does not have). They stay in the pair list and no golden may
+// answer them.
 var retiredPairHarnessSources = map[string]string{
 	"analytics/investment/classify":   "investment rule classifier removed, CHAOS-9200",
 	"analytics/investment/divergence": "investment rule classifier removed, CHAOS-9200",
 	"analytics/investment/refusal":    "investment rule classifier removed, CHAOS-9200",
+	"github/work-items-project-v2/pagination": "the frozen Python producer pages ProjectV2Item.changes; GitHub's schema has no such field " +
+		"(github/docs schema.docs.graphql at ce1eb2007), so the Go board query asks no changes and makes no nested changes call, CHAOS-14195",
+	"github/work-items-project-v2/transition": "the frozen Python producer builds status transitions from ProjectV2Item.changes; GitHub's schema has " +
+		"no such field (github/docs schema.docs.graphql at ce1eb2007), so the Go board query yields no transitions, CHAOS-14195",
 }
 
 // TestAFrozenPairAnswerRefusesAnUntaggedLeaf pins the tagged-leaf rule of a

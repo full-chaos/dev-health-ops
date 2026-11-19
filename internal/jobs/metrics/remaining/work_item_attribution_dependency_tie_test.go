@@ -36,7 +36,7 @@ func TestTheDonorChangeTriggerKeepsTheInheritableEdgeOnATie(t *testing.T) {
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := donorChangedDependents(tc.edges, nil, tc.rows, issueKindsOf(tc.rows), nil, nil); fmt.Sprint(got) != "[P]" {
+			if got := donorChangedDependents(tc.edges, nil, tc.rows, issueKindsOf(tc.rows), nil, nil, nil); fmt.Sprint(got) != "[P]" {
 				t.Errorf("owed %v, want [P]", got)
 			}
 		})

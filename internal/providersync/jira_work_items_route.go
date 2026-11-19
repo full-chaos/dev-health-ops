@@ -759,5 +759,5 @@ func (sample *jiraCommentPermanentSample) add(err error) {
 func (sample jiraCommentPermanentSample) log(claim Claim) {
 	slog.Warn("providersync.jira.comments_read_permanent",
 		"org_id", claim.OrgID, "unit_id", claim.ID, "skipped_issues", sample.Count,
-		"first_class", sample.Class, "first_status", sample.Status, "first_reason", sample.Reason)
+		"first_class", sample.Class, "first_status", sample.Status, "first_reason", logging.ProviderText(sample.Reason))
 }

@@ -14,7 +14,8 @@ import (
 // writers stored with the newest row of each repository-day, so a bucket of one repository-day is that day's stored value
 // and a row synced after the writer ran counts after its next run. A repository-day whose newest row holds no samples
 // (written before migration 161) reads its raw rows with the writers' own sample rules (delivery_pooled_test.go pins each
-// rule to the writer text it restates).
+// rule to the writer text it restates). A retired repository-day (newest row retracted = 1) is in neither arm
+// (testopspooled.LiveRepoDays).
 const (
 	deliveryHoursSample = pooledmttr.HoursSample
 	deliveryLOCSample   = "delivery_loc_sample"
@@ -23,8 +24,8 @@ const (
 // deploymentsSource holds the samples of the deploy writer (internal/jobs/metrics/daily/deploy_native_clickhouse.go and
 // numerical.ComputeDeployMetrics) stored with its newest row. Raw rule of a repository-day without stored samples: a
 // deployment counts on the UTC day of deployed_at, a cancelled one is no deployment, and its sample is finished_at -
-// started_at in hours when both are set and it is not negative. The raw rows are read without FINAL, as the writer reads
-// them, so a version not yet merged away is a sample of both.
+// started_at in hours when both are set and it is not negative. The raw rows are read without FINAL: the writer now
+// reads FINAL, but this arm stands only for days written before it did, so a version not yet merged away is a sample of both.
 var deploymentsSource = `(
     SELECT org_id, repo_id, day, ` + deliveryHoursSample + `
     FROM (
@@ -44,12 +45,13 @@ var deploymentsSource = `(
           AND ` + deploymentstatus.CanceledExclusionSQL("status") + `
           AND (repo_id, toDate(deployed_at)) IN (` + testopspooled.LegacyRepoDays("deploy_metrics_daily") + `)
     )
+    WHERE ` + testopspooled.LiveRepoDays("deploy_metrics_daily") + `
 ) AS pooled_deployments`
 
 // pullRequestSizesSource holds the size samples of the repo_user_commit writer (repouser.Compute) stored with its newest
 // row. Raw rule of a repository-day without stored samples: a pull request counts on the UTC day it merged, its size is
-// its additions plus its deletions, and a size of 0 is no sample. The raw rows are read without FINAL, as the writer
-// reads them.
+// its additions plus its deletions, and a size of 0 is no sample. The raw rows are read without FINAL: the writer now
+// reads FINAL, but this arm stands only for days written before it did.
 var pullRequestSizesSource = `(
     SELECT org_id, repo_id, day, ` + deliveryLOCSample + `
     FROM (
@@ -69,6 +71,7 @@ var pullRequestSizesSource = `(
           AND ifNull(additions, 0) + ifNull(deletions, 0) > 0
           AND (repo_id, toDate(merged_at)) IN (` + testopspooled.LegacyRepoDays("repo_metrics_daily") + `)
     )
+    WHERE ` + testopspooled.LiveRepoDays("repo_metrics_daily") + `
 ) AS pooled_pull_requests`
 
 // The MTTR sources and the hours expressions live in pooledmttr, which the operating review tile reads too.

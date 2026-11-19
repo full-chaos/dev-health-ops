@@ -44,8 +44,8 @@ VALUES (?, ?, 'dev', 'dev@example.invalid', ?, ?, ?, ?, '2026-02-01 00:00:00.000
 
 func (e *pooledEnv) insertBug(org, repo, id, kind string, started, completed time.Time) {
 	e.t.Helper()
-	e.exec(`INSERT INTO work_items (repo_id, work_item_id, provider, type, created_at, updated_at, started_at, completed_at, last_synced, org_id)
-VALUES (?, ?, 'jira', ?, ?, ?, ?, ?, '2026-02-01 00:00:00.000', ?)`,
+	e.exec(`INSERT INTO work_items (repo_id, work_item_id, provider, type, status, created_at, updated_at, started_at, completed_at, last_synced, org_id)
+VALUES (?, ?, 'jira', ?, 'done', ?, ?, ?, ?, '2026-02-01 00:00:00.000', ?)`,
 		repo, id, kind, started.Format(deliveryTimeFormat), completed.Format(deliveryTimeFormat), started.Format(deliveryTimeFormat), completed.Format(deliveryTimeFormat), org)
 }
 
@@ -273,7 +273,7 @@ func TestRegistryDeliveryRowsWithNoSample(t *testing.T) {
 }
 
 // A one-repository-day bucket is the stored value even when a deployment or a pull request has two stored versions in
-// unmerged parts (a resync): the chart reads the rows the writer reads. An incident repair time keeps the microseconds the
+// unmerged parts (a resync): the writer stores the current version and the chart reads what it stored. An incident repair time keeps the microseconds the
 // writer subtracts.
 func TestRegistryDeliveryDayBucketIsTheStoredValue(t *testing.T) {
 	e := startPooledEnv(t)

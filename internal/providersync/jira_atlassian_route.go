@@ -1146,11 +1146,11 @@ func recordJiraDevStatusTypeOutcome(client *providerfoundation.HTTPClient, claim
 	if outcome.Err != nil {
 		errorClass, errorType := logging.ErrorClass(outcome.Err), logging.ErrorType(outcome.Err) // never the error text (CHAOS-7933)
 		slog.Warn("providersync.jira.dev_status_type_failed",
-			"org_id", claim.OrgID, "unit_id", claim.ID, "issue", issue, "application_type", outcome.ApplicationType,
+			"org_id", claim.OrgID, "unit_id", claim.ID, "issue", logging.ProviderText(issue), "application_type", outcome.ApplicationType,
 			"outcome", outcome.Outcome, "pull_requests", outcome.PullRequests, "error_class", errorClass, "error_type", errorType)
 		return
 	}
 	slog.Info("providersync.jira.dev_status_type",
-		"org_id", claim.OrgID, "unit_id", claim.ID, "issue", issue, "application_type", outcome.ApplicationType,
+		"org_id", claim.OrgID, "unit_id", claim.ID, "issue", logging.ProviderText(issue), "application_type", outcome.ApplicationType,
 		"outcome", outcome.Outcome, "pull_requests", outcome.PullRequests)
 }

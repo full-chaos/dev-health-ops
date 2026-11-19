@@ -161,8 +161,31 @@ func (executor *TestopsPipelineExecutor) ComputeFamily(
 			metrics = append(metrics, *merged)
 		}
 	}
-	return writeTestopsPipelineMetrics(
+	written, err := writeTestopsPipelineMetrics(
 		ctx, executor.conn, run.OrganizationID, scope.day, computedAt, metrics)
+	if err != nil {
+		return written, err
+	}
+	// A repository of this partition whose stored row of the day is live and that has no record now (its runs were deleted
+	// or moved to another day) gets a row that retires the key (stale_team_keys.go): the day then reads as absent, never 0.
+	// A repository with no stored row gets nothing: missing stays missing. Only the partition's own repositories are in
+	// scope: a run never retires a key of a repository outside its set.
+	produced := make([]staleKey, 0, len(metrics))
+	for _, metric := range metrics {
+		produced = append(produced, staleKey{metric.RepoID.String()})
+	}
+	repositories := make([][]string, 0, len(scope.repoIDs))
+	for _, repoID := range scope.repoIDs {
+		repositories = append(repositories, []string{repoID.String()})
+	}
+	// The table is snapshot-stamped (stale_team_keys.go): the marker carries computedAt, taken before the reads, and a key
+	// whose stored row is not older than it (a newer run wrote it) gets no marker.
+	retired, err := supersedeStaleTeamKeys(ctx, executor.conn, teamkeytables.TestopsPipelineMetricsDaily, run.OrganizationID,
+		scope.day, newStaleKeyScope(repositories...), produced, computedAt)
+	if err != nil {
+		return written + retired, fmt.Errorf("retire stale testops_pipeline_metrics_daily days: %w", err)
+	}
+	return written + retired, nil
 }
 
 // -----------------------------------------------------------------------
@@ -206,19 +229,47 @@ func (executor *TestopsTestExecutor) ComputeFamily(
 	// -- see testopsTestMetricShare.
 	historyStart := scope.day.AddDate(0, 0, -29)
 
+	// The snapshot of the run is the instant its inputs were read: the oldest read of the partition's repositories. A
+	// suite read that testops_risk made earlier in the pass and shared keeps its own instant, never this family's later
+	// clock (a later stamp would outrank a newer run's row that the older read cannot see).
+	snapshot := scope.computedAt
 	var metrics []testops.TestMetric
-	for _, repoID := range scope.repoIDs {
-		repoMetrics, err := loadTestopsTestMetrics(
-			ctx, executor.conn, run.OrganizationID, repoID, repoID.String(), scope.resolver,
+	for index, repoID := range scope.repoIDs {
+		repoMetrics, readAt, err := loadTestopsTestMetrics(
+			ctx, executor.nowUTC, executor.conn, run.OrganizationID, repoID, repoID.String(), scope.resolver,
 			historyStart, scope.start, scope.end,
 		)
 		if err != nil {
 			return 0, err
 		}
+		if index == 0 || readAt.Before(snapshot) {
+			snapshot = readAt
+		}
 		metrics = append(metrics, repoMetrics...)
 	}
-	return writeTestopsTestMetrics(
-		ctx, executor.conn, run.OrganizationID, scope.day, scope.computedAt, metrics)
+	written, err := writeTestopsTestMetrics(
+		ctx, executor.conn, run.OrganizationID, scope.day, snapshot, metrics)
+	if err != nil {
+		return written, err
+	}
+	// A repository of this partition whose stored row of the day is live and that
+	// has no record now (its counted suites moved to another day) gets a row that
+	// retires the key (stale_team_keys.go): the day then reads as absent, never 0.
+	// A repository with no stored row gets nothing: missing stays missing.
+	produced := make([]staleKey, 0, len(metrics))
+	for _, metric := range metrics {
+		produced = append(produced, staleKey{metric.RepoID.String()})
+	}
+	repositories := make([][]string, 0, len(scope.repoIDs))
+	for _, repoID := range scope.repoIDs {
+		repositories = append(repositories, []string{repoID.String()})
+	}
+	retired, err := supersedeStaleTeamKeys(ctx, executor.conn, teamkeytables.TestopsTestMetricsDaily, run.OrganizationID,
+		scope.day, newStaleKeyScope(repositories...), produced, snapshot)
+	if err != nil {
+		return written + retired, fmt.Errorf("retire stale testops_test_metrics_daily days: %w", err)
+	}
+	return written + retired, nil
 }
 
 // -----------------------------------------------------------------------

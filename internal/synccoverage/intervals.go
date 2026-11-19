@@ -1,6 +1,7 @@
 package synccoverage
 
 import (
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -247,4 +248,56 @@ func groupClosedRanges(closed []closedRange, combine func([]coverageInterval) []
 		return strings.Join(result[i].Reasons, ",") < strings.Join(result[j].Reasons, ",")
 	})
 	return result
+}
+
+// subtractFailed is state.Failed = subtractIntervals(state.Failed, []coverageInterval{interval}) without a sort and
+// copy of the whole list per row (CHAOS-14167). Failed is always mergeIntervals output (sorted, apart by more than
+// intervalAdjacencyTolerance) and subtractIntervals cuts each failed interval on its own, so only the intervals that
+// overlap interval change. The one other effect of subtractIntervals, dropping every interval no longer than
+// intervalAdjacencyTolerance, is kept: only addFailed can leave one, and it sets failedHasShort.
+func (state *pairState) subtractFailed(interval coverageInterval) {
+	failed := state.Failed
+	if state.failedHasShort {
+		kept := make([]coverageInterval, 0, len(failed))
+		for _, item := range failed {
+			if item.Before.Sub(item.Since) > intervalAdjacencyTolerance {
+				kept = append(kept, item)
+			}
+		}
+		failed = kept
+		state.failedHasShort = false
+	}
+	low := sort.Search(len(failed), func(index int) bool { return failed[index].Before.After(interval.Since) })
+	high := low
+	for high < len(failed) && failed[high].Since.Before(interval.Before) {
+		high++
+	}
+	if low < high {
+		failed = slices.Replace(failed, low, high, subtractIntervals(failed[low:high], []coverageInterval{interval})...)
+	}
+	state.Failed = failed
+}
+
+// addFailed is state.Failed = mergeIntervals(append(state.Failed, interval)) for the merged Failed list: only the
+// run of failed intervals that mergeIntervals would join with interval is merged again.
+func (state *pairState) addFailed(interval coverageInterval) {
+	failed := state.Failed
+	low := sort.Search(len(failed), func(index int) bool {
+		return !interval.Since.After(failed[index].Before.Add(intervalAdjacencyTolerance))
+	})
+	end := interval.Before
+	high := low
+	for high < len(failed) && !failed[high].Since.After(end.Add(intervalAdjacencyTolerance)) {
+		if failed[high].Before.After(end) {
+			end = failed[high].Before
+		}
+		high++
+	}
+	merged := mergeIntervals(append(slices.Clone(failed[low:high]), interval))
+	for _, item := range merged {
+		if item.Before.Sub(item.Since) <= intervalAdjacencyTolerance {
+			state.failedHasShort = true
+		}
+	}
+	state.Failed = slices.Replace(failed, low, high, merged...)
 }

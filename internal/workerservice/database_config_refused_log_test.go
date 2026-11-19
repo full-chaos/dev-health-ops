@@ -43,6 +43,9 @@ func TestRefusedDatabaseConfigurationIsLoggedAtStartup(t *testing.T) {
 				t.Fatalf("components = %d, err = %v; want live and unready", len(components), err)
 			}
 			line := out.String()
+			if got := strings.Count(line, "database configuration refused"); got != 1 {
+				t.Fatalf("refusal logged %d times, want exactly 1: %s", got, line)
+			}
 			for _, want := range []string{"level=ERROR", "database configuration refused", row.want} {
 				if !strings.Contains(line, want) {
 					t.Fatalf("log %q lacks %q", line, want)

@@ -134,6 +134,9 @@ type TeamRepoOwnershipDerivationStats struct {
 	// native issue link.
 	TextKeyCandidates        int
 	TextKeysSkippedForNative int
+	// DonorsRefused counts, by reason (pr_kind, empty_type, unknown), the distinct (source, donor) edges whose donor the
+	// run did not use because it is not an issue (teamattribution.LinkedIssueDonorRefusal).
+	DonorsRefused map[string]int
 }
 
 // Derive is DeriveWithStats without the stats (the form the integration tests and the older callers use).
@@ -262,6 +265,14 @@ func (service TeamRepoOwnershipDerivationService) derive(ctx context.Context, or
 		slog.Default().InfoContext(ctx, "team_repo_ownership_derivation.text_key_donors",
 			"org_id", orgID, "explicit_text_candidates", derivation.TextKeyCandidates,
 			"skipped_for_native_link", derivation.TextKeysSkippedForNative)
+	}
+
+	stats.DonorsRefused = derivation.DonorsRefused
+	if len(derivation.DonorsRefused) > 0 {
+		slog.Default().InfoContext(ctx, "team_repo_ownership_derivation.donor_refused",
+			"org_id", orgID, "pr_kind", derivation.DonorsRefused[teamattribution.LinkedIssueDonorRefusedPullKind],
+			"empty_type", derivation.DonorsRefused[teamattribution.LinkedIssueDonorRefusedEmptyType],
+			"unknown", derivation.DonorsRefused[teamattribution.LinkedIssueDonorRefusedUnknown])
 	}
 
 	activeRows, err := loadTeamRepoOwnershipActiveInferredRows(ctx, service.Conn, orgID)

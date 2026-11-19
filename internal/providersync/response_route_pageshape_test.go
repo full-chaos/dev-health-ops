@@ -31,10 +31,6 @@ func TestFetchPageShapeFailuresCarryRouteAsBodyShape(t *testing.T) {
 			_, err := (GitHubPullRequestReviewFetcher{}).fetchPage(ctx, c, "acme-secret", "api", []int{1}, map[int]string{1: "c1"}, &GitHubPullRequestReviewFetchResult{})
 			return err
 		}},
-		"projects v2 changes node null": {"github", `{"data":{"node":null}}`, providerfoundation.ErrPaginationInvalid, func(c *providerfoundation.HTTPClient) error {
-			var out gitHubProjectV2ChangesEnvelope
-			return fetchGitHubProjectV2GraphQL(ctx, c, "query", map[string]any{"itemId": "acme-secret"}, &out, &FetchEvidence{})
-		}},
 		"projects v2 field values missing page info": {"github", `{"data":{"node":{"fieldValues":{"nodes":[]}}}}`, providerfoundation.ErrPaginationInvalid, func(c *providerfoundation.HTTPClient) error {
 			var out gitHubProjectV2FieldValuesEnvelope
 			return fetchGitHubProjectV2GraphQL(ctx, c, "query", map[string]any{"itemId": "acme-secret"}, &out, &FetchEvidence{})

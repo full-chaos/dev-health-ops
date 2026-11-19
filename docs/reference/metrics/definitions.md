@@ -354,6 +354,17 @@ of 0, is in neither sum, whatever its stored percentage. A point made only of su
 not measured, never 0. A day written before the branch counts were stored has no counts until the day is recomputed, so
 it shows no point until then.
 
+### Query-api branch coverage
+
+The analytics measure `COVERAGE_BRANCH_PCT` and the branch baselines of `coverageBaselines` and `coverageScopeBaseline`
+are pooled the same way: 100 times the sum of the stored `branches_covered` over the sum of the stored `branches_total`
+of the repository-days in the group (or in the 30-day window), not the mean of the stored percentages. A repository-day
+with a NULL branch count, or with `branches_total` of 0, is in neither sum and is not a day with a value, whatever its
+stored percentage. A group or window made only of such repository-days has no value (a null baseline over 0 days), never
+0. The scope baseline is one pooled ratio over every counted repository-day of the window, not the mean of the day
+values. A day written before the branch counts were stored shows no branch value until it is recomputed. The line
+baselines stay the mean of the stored percentages.
+
 ### Benchmarking defect introduction rate
 
 The benchmarking point of `defect_intro_rate` for a scope and a day is the sum of the stored `new_bugs_count` over the

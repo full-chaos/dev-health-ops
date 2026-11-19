@@ -305,6 +305,19 @@ range. The stored `team_id` (the main owner at the end of the day) is not read:
   are nullable.
 - A service group reads the stored service.
 
+### Benchmarking flake and retry dependency rates
+
+The benchmarking point of `flake_rate` and `retry_dependency_rate` for a scope and a day is the sum of the numerators
+over the sum of the denominators of the repository-days in the scope. It is not the mean of the stored rates, so a
+repository-day weighs by its distinct cases. The denominator is the stored `distinct_cases`. The numerator of
+`flake_rate` is the stored `flake_cases`. The numerator of `retry_dependency_rate` is the stored rate times
+`distinct_cases`: a float, the same form as `rerun_rate` times `pipelines_count`, and not a stored count. A point whose
+denominator sums to 0 is no point, never 0.
+
+A repository-day is in neither sum when its rate is NULL (it measured no case), or its `distinct_cases` is NULL, or, for
+`flake_rate`, its `flake_cases` is NULL. A row stored before the counts existed has NULL counts, so it drops out of the
+point. A point made only of such rows has no value.
+
 ### AI report charts of CI/CD durations and queue time
 
 The AI report charts of three CI/CD metrics are taken over the samples of the window's pipeline runs that the CI/CD daily

@@ -21,6 +21,8 @@
 
 package testopspooled
 
+import "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
+
 const (
 	PipelineRunsAlias = "testops_pipeline_runs"
 	SuiteRunsAlias    = "testops_suite_runs"
@@ -57,6 +59,19 @@ func LegacyRepoDays(table string) string {
 	return `SELECT repo_id, day FROM ` + NewestStoredRows(table) + ` WHERE pooled_samples_stored != 1`
 }
 
+// LiveRepoDays is the live gate of a pooled source, over BOTH of its arms: the repository-days of the read window whose
+// NEWEST row of table is a measurement (package liverow). A retired repository-day (its newest row holds retracted = 1, a row
+// written with the column defaults, so pooled_samples_stored 0) is left out: the retracted flag wins over the pooled marker,
+// so neither the older row's stored samples nor a raw row synced after the retraction is a sample. The rule is applied to
+// the newest row of a key, after the GROUP BY of the key. A table with no rule panics (liverow.NewestPredicate).
+func LiveRepoDays(table string) string {
+	return `(repo_id, day) IN (
+        SELECT repo_id, day FROM ` + table + `
+        WHERE org_id = {org_id:String} AND day >= {start_date:Date} AND day < {end_date:Date}
+        GROUP BY repo_id, day
+        HAVING ` + liverow.NewestPredicate(table, "") + `)`
+}
+
 // The pooled sources. Neither carries a team column: a TestOps team is the owner of the repository at the request. A
 // repository-day's samples are the ones the daily writer stored with its newest row (one result row per stored run or
 // suite), so a source and the stored value read one sample set; a row synced after the writer ran counts after its next
@@ -90,6 +105,7 @@ var PipelineRunsSource = `(
           AND ` + CountedRunPredicate + `
           AND (repo_id, toDate(started_at)) IN (` + LegacyRepoDays("testops_pipeline_metrics_daily") + `)
     )
+    WHERE ` + LiveRepoDays("testops_pipeline_metrics_daily") + `
 ) AS testops_pipeline_runs`
 
 // SuiteRunsSource reads, for a repository-day without stored samples, the suite rows the readers count: the newest

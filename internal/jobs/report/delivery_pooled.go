@@ -14,7 +14,8 @@ import (
 // writers stored with the newest row of each repository-day, so a bucket of one repository-day is that day's stored value
 // and a row synced after the writer ran counts after its next run. A repository-day whose newest row holds no samples
 // (written before migration 161) reads its raw rows with the writers' own sample rules (delivery_pooled_test.go pins each
-// rule to the writer text it restates).
+// rule to the writer text it restates). A retired repository-day (newest row retracted = 1) is in neither arm
+// (testopspooled.LiveRepoDays).
 const (
 	deliveryHoursSample = pooledmttr.HoursSample
 	deliveryLOCSample   = "delivery_loc_sample"
@@ -44,6 +45,7 @@ var deploymentsSource = `(
           AND ` + deploymentstatus.CanceledExclusionSQL("status") + `
           AND (repo_id, toDate(deployed_at)) IN (` + testopspooled.LegacyRepoDays("deploy_metrics_daily") + `)
     )
+    WHERE ` + testopspooled.LiveRepoDays("deploy_metrics_daily") + `
 ) AS pooled_deployments`
 
 // pullRequestSizesSource holds the size samples of the repo_user_commit writer (repouser.Compute) stored with its newest
@@ -69,6 +71,7 @@ var pullRequestSizesSource = `(
           AND ifNull(additions, 0) + ifNull(deletions, 0) > 0
           AND (repo_id, toDate(merged_at)) IN (` + testopspooled.LegacyRepoDays("repo_metrics_daily") + `)
     )
+    WHERE ` + testopspooled.LiveRepoDays("repo_metrics_daily") + `
 ) AS pooled_pull_requests`
 
 // The MTTR sources and the hours expressions live in pooledmttr, which the operating review tile reads too.

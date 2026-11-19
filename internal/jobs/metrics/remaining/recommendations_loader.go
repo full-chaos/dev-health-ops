@@ -332,7 +332,8 @@ func (loader *RecommendationsLoader) loadReworkRatio(
                   AND day >= {start:Date} AND day < {end:Date}` + loader.orgClause() + `
                 ORDER BY computed_at DESC
                 LIMIT 1 BY repo_id, day
-            )
+            ) AS newest
+            WHERE ` + liverow.Predicate("repo_metrics_daily", "newest") + `
         `
 	rows, err := loader.conn.Query(ctx, query, namedArguments(arguments)...)
 	if err != nil {

@@ -85,10 +85,6 @@ func clientCancelledAt(ctxErr, err error) bool {
 	return true
 }
 
-// contextErrAtEnd is a package var so a test can order two concurrent reads
-// around the moment each one's end is judged.
-var contextErrAtEnd = func(ctx context.Context) error { return ctx.Err() }
-
 // recordClientCancel is a package var for the reason recordDegradation is
 // one: a test must be able to see that a cancel was reported as a cancel.
 var recordClientCancel = defaultRecordClientCancel

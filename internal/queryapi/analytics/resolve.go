@@ -125,6 +125,16 @@ func EverythingSelected() Selection {
 // ResolveSelected is Resolve for an operation whose selection is known: the
 // statements of a part the operation did not select are not sent.
 func ResolveSelected(ctx context.Context, client QueryClient, orgID string, batch model.AnalyticsRequestInput, selected Selection) (*model.AnalyticsResult, error) {
+	return resolveSelected(ctx, client, orgID, batch, selected, nil)
+}
+
+// resolveSelected is ResolveSelected with readEnded, the way a read of the
+// batch learns the context state at the moment it ended (nil: ctx.Err()); a
+// test sets it to order two concurrent reads.
+func resolveSelected(ctx context.Context, client QueryClient, orgID string, batch model.AnalyticsRequestInput, selected Selection, readEnded func(context.Context) error) (*model.AnalyticsResult, error) {
+	if readEnded == nil {
+		readEnded = func(ctx context.Context) error { return ctx.Err() }
+	}
 	if err := validateSubRequestCount(len(batch.Timeseries), len(batch.Breakdowns), batch.Sankey != nil, batch.FlowMatrix != nil); err != nil {
 		return nil, err
 	}
@@ -216,14 +226,14 @@ func ResolveSelected(ctx context.Context, client QueryClient, orgID string, batc
 		go func(i int, input model.TimeseriesRequestInput) {
 			defer wg.Done()
 			tsOutcomes[i].result, tsOutcomes[i].err = resolveOneTimeseries(ctx, client, orgID, input, useInvestment, resolvedFilters, selected.TimeseriesScope)
-			tsOutcomes[i].ended = contextErrAtEnd(ctx)
+			tsOutcomes[i].ended = readEnded(ctx)
 		}(i, input)
 	}
 	for i, input := range batch.Breakdowns {
 		go func(i int, input model.BreakdownRequestInput) {
 			defer wg.Done()
 			bdOutcomes[i].result, bdOutcomes[i].err = resolveOneBreakdown(ctx, client, orgID, input, useInvestment, resolvedFilters, selected.Breakdowns)
-			bdOutcomes[i].ended = contextErrAtEnd(ctx)
+			bdOutcomes[i].ended = readEnded(ctx)
 		}(i, input)
 	}
 	wg.Wait()

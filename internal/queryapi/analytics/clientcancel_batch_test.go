@@ -2,6 +2,7 @@ package analytics
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sort"
 	"strings"
@@ -125,21 +126,21 @@ func sameStrings(got, want []string) bool {
 func TestAServerCancelIsNotACancelWhenTheClientLeavesLater(t *testing.T) {
 	records := captureSlog(t)
 	var cancels []string
-	origCancel, origEnd := recordClientCancel, contextErrAtEnd
+	origCancel := recordClientCancel
 	var captured sync.Once
 	tsCaptured := make(chan struct{})
 	recordClientCancel = func(ctx context.Context, name string, attrs ...any) {
 		cancels = append(cancels, name)
 		origCancel(ctx, name, attrs...)
 	}
-	contextErrAtEnd = func(ctx context.Context) error {
-		err := origEnd(ctx)
+	readEnded := func(ctx context.Context) error {
+		err := ctx.Err()
 		if err == nil {
 			captured.Do(func() { close(tsCaptured) })
 		}
 		return err
 	}
-	t.Cleanup(func() { recordClientCancel, contextErrAtEnd = origCancel, origEnd })
+	t.Cleanup(func() { recordClientCancel = origCancel })
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -150,12 +151,16 @@ func TestAServerCancelIsNotACancelWhenTheClientLeavesLater(t *testing.T) {
 	client.inner.onErr("repo_id AS dimension_value", &fakeOperationError{operation: "query", cause: &clickhousedriver.Exception{Code: 394, Name: "QUERY_WAS_CANCELLED"}})
 	client.inner.onErr("LIMIT {top_n:UInt32}", &fakeOperationError{operation: "query", cause: &clickhousedriver.Exception{Code: 735, Name: "QUERY_WAS_CANCELLED_BY_CLIENT"}})
 
-	_, err := Resolve(ctx, client, "org-1", model.AnalyticsRequestInput{
+	_, err := resolveSelected(ctx, client, "org-1", model.AnalyticsRequestInput{
 		Timeseries: []model.TimeseriesRequestInput{tsInput(model.DimensionInputRepo, model.MeasureInputCount)},
 		Breakdowns: []model.BreakdownRequestInput{bdInput(model.DimensionInputRepo, model.MeasureInputCount)},
-	})
+	}, EverythingSelected(), readEnded)
 	if err == nil {
 		t.Fatal("Resolve returned no error")
+	}
+	var exception *clickhousedriver.Exception
+	if !errors.As(err, &exception) || exception.Code != 394 {
+		t.Errorf("the returned error lost its 394 after the failure mark: %v", err)
 	}
 	if !sameStrings(cancels, []string{"breakdown"}) {
 		t.Errorf("cancel reports = %v, want only the breakdown", cancels)

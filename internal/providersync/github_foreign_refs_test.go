@@ -30,7 +30,7 @@ func TestCanonicalGitHubForeignRefsFollowARenamedTarget(t *testing.T) {
 	}}}
 
 	text, err := extractGitHubWorkItemDependencies(claim, "gh:acme/api#1", names.Identity,
-		"Closes #5\nblocks platform/target-v2#42\nfixes platform/api-v2#6", "", nil, at)
+		"Closes #5\nblocks platform/target-v2#42\nfixes platform/api-v2#6", "", nil, githubIssueCommentRoute, at)
 	if err != nil {
 		t.Fatal(err)
 	}

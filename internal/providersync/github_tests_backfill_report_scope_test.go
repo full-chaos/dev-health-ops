@@ -335,3 +335,63 @@ func TestGitHubTestsBackfillRunUpdatedAtTheBoundaryIsReadOnceByTheLaterChunk(t *
 		t.Errorf("reads per chunk=%v, want [0 1]: read once, by [b, c)", perChunk)
 	}
 }
+
+// githubTestsBackfillReadsOverWindows sums one run's reads over contiguous
+// backfill chunks of any widths (edges[i], edges[i+1]).
+func githubTestsBackfillReadsOverWindows(t *testing.T, edges []time.Time, created, updated time.Time) []int {
+	t.Helper()
+	perChunk := make([]int, len(edges)-1)
+	for index := range perChunk {
+		perChunk[index] = githubTestsBackfillChunkReads(t, edges[index], edges[index+1], created, updated)
+	}
+	return perChunk
+}
+
+// RESIDUAL (ticket 14222): a chunk takes the next chunk's listing floor from a
+// next window of its OWN width. The planner's last chunk can be shorter
+// (a range [D, D+8d) gives [D, D+7d) and [D+7d, D+8d)), and its own floor is
+// later. A run created between the two floors and updated inside the last
+// chunk is read by no chunk. WANT = today's value 0; a fix flips it.
+func TestGitHubTestsBackfillRESIDUALShorterLastChunkReadsNothing(t *testing.T) {
+	t.Parallel()
+	d := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	edges := []time.Time{d, d.AddDate(0, 0, 7), d.AddDate(0, 0, 8)}
+	created, updated := d.AddDate(0, 0, 3), d.AddDate(0, 0, 7).Add(12*time.Hour)
+	perChunk := githubTestsBackfillReadsOverWindows(t, edges, created, updated)
+	t.Logf("RESIDUAL shorter last chunk: chunks [%s,%s) [%s,%s) created=%s updated=%s reads per chunk=%v",
+		edges[0].Format(time.RFC3339), edges[1].Format(time.RFC3339), edges[1].Format(time.RFC3339), edges[2].Format(time.RFC3339),
+		created.Format(time.RFC3339), updated.Format(time.RFC3339), perChunk)
+	if !slices.Equal(perChunk, []int{0, 0}) {
+		t.Errorf("reads per chunk=%v, want today's residual [0 0]", perChunk)
+	}
+}
+
+// RESIDUAL (ticket 14222): a chunk a whole day or more shorter than the chunk
+// after it computes a later next floor than the next chunk really uses, so a
+// run created between the two floors and updated in the next chunk is read by
+// both. WANT = today's value 2 (the second read writes no new row: the
+// integration cell TestGitHubTestsBackfillIntegrationRESIDUALSecondReadWritesNoNewRow).
+// The planner's first chunk runs from since to the 7th date after it, so it is
+// less than one day short and the DateOnly floor absorbs it: 1 read.
+func TestGitHubTestsBackfillRESIDUALShorterFirstChunkReadsTwice(t *testing.T) {
+	t.Parallel()
+	a := time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC)
+	for _, cell := range []struct {
+		name             string
+		edges            []time.Time
+		created, updated time.Time
+		want             []int
+	}{
+		{"1-day chunk before a 7-day chunk", []time.Time{a, a.AddDate(0, 0, 1), a.AddDate(0, 0, 8)},
+			a.Add(-12 * time.Hour), a.AddDate(0, 0, 3), []int{1, 1}},
+		{"planner first chunk from 12:00 before a 7-day chunk", []time.Time{a.Add(12 * time.Hour), a.AddDate(0, 0, 7), a.AddDate(0, 0, 14)},
+			a.Add(-12 * time.Hour), a.AddDate(0, 0, 10), []int{1, 0}},
+	} {
+		perChunk := githubTestsBackfillReadsOverWindows(t, cell.edges, cell.created, cell.updated)
+		t.Logf("RESIDUAL %s: created=%s updated=%s reads per chunk=%v", cell.name,
+			cell.created.Format(time.RFC3339), cell.updated.Format(time.RFC3339), perChunk)
+		if !slices.Equal(perChunk, cell.want) {
+			t.Errorf("%s: reads per chunk=%v, want today's value %v", cell.name, perChunk, cell.want)
+		}
+	}
+}

@@ -291,11 +291,8 @@ internal/cigates/integrationshards	shard_run_tee_bound_test.go
 internal/cigates/integrationshards	shard_start_order_test.go
 internal/cigates/integrationshards	side_effect_hooks_test.go
 internal/cigates/livee2e	cli.go
-internal/cigates/livee2e	mintlicense.go
-internal/cigates/livee2e	mintlicense_test.go
 internal/cigates/livee2e	smtpsink.go
 internal/cigates/livee2e	smtpsink_test.go
-internal/cigates/livee2e	ssoseedverb.go
 internal/cigates/livee2e	tokenreview.go
 internal/cigates/livee2e	tokenreview_cli_test.go
 internal/cigates/membershipreads	membershipreads.go
@@ -671,6 +668,7 @@ internal/syncrunrollup	arm_finalize_test.go
 internal/syncrunrollup	cross_package_registry_test.go
 internal/teamactive	roster_census_test.go
 internal/teamattribution	is_primary_census_test.go
+internal/teamattribution	linked_issue_donor_census_test.go
 internal/teamcreated	census_test.go
 internal/teamprovider	census_test.go
 internal/testsupport/authrows	golden_test.go

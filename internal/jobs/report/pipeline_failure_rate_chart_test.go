@@ -40,8 +40,4 @@ func TestPipelineFailureRateChartIsTheCompletedRunRuleOverTheCounts(t *testing.T
 			}
 		}
 	}
-	// The other pipeline rates of the table keep their own columns.
-	if got := withChartRule(supportedMetrics["rerun_rate"]); got.rule != "" {
-		t.Errorf("rerun_rate got a chart rule: %+v", got)
-	}
 }

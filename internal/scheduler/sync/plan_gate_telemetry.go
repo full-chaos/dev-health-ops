@@ -32,6 +32,9 @@ const (
 	// planGateOutcomeFullQueryWindow: a work-items family whose own query is not bounded by the window (Jira
 	// fetch_all, a JQL override) is planned as ONE window instead of bounded windows. An expected path.
 	planGateOutcomeFullQueryWindow = "full_query_window"
+	// planGateOutcomeWaived (CHAOS-13682): an ExecutedProofWaiver let a pair plan that the evidence alone would
+	// have refused. Counted next to "planned" for the same pair.
+	planGateOutcomeWaived = "waived"
 )
 
 // planGateKey identifies one (provider, dataset, outcome) series.

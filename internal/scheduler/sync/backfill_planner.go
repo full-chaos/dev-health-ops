@@ -126,6 +126,8 @@ func BuildBackfillPlan(input PlannerInput) ([]PlannedUnit, error) {
 					slog.String("dataset", dataset.Key),
 					slog.String("org_id", input.OrgID),
 					slog.String("source_id", source.ID))
+			case input.executedProofWaived(descriptor):
+				globalPlanGateTelemetry.observe(provider, dataset.Key, planGateOutcomeWaived)
 			}
 			if !known || !descriptor.RouteReady || !descriptor.Plannable ||
 				replayNoUnit || !input.executedProofSatisfied(descriptor) {
@@ -384,6 +386,8 @@ func buildBackfillWorkItemFamilyUnits(
 			slog.String("dataset", canonicalWorkItemsDataset),
 			slog.String("org_id", input.OrgID),
 			slog.String("source_id", source.ID))
+	case input.executedProofWaived(canonicalDescriptor):
+		globalPlanGateTelemetry.observe(provider, canonicalWorkItemsDataset, planGateOutcomeWaived)
 	}
 	if !known || !canonicalDescriptor.RouteReady || !canonicalDescriptor.Plannable ||
 		replayNoUnit || !input.executedProofSatisfied(canonicalDescriptor) {
@@ -457,6 +461,8 @@ func buildBackfillFoldFamilyUnits(
 			slog.String("dataset", canonicalDataset),
 			slog.String("org_id", input.OrgID),
 			slog.String("source_id", source.ID))
+	case input.executedProofWaived(canonicalDescriptor):
+		globalPlanGateTelemetry.observe(provider, canonicalDataset, planGateOutcomeWaived)
 	}
 	if !known || !canonicalDescriptor.RouteReady || !canonicalDescriptor.Plannable ||
 		replayNoUnit || !input.executedProofSatisfied(canonicalDescriptor) {

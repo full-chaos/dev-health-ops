@@ -38,8 +38,8 @@ var metricDefinitions = map[string]MetricDefinition{
 	"avg_queue_seconds":         pipelineMetric("avg_queue_seconds"),
 	"p95_queue_seconds":         pipelineMetric("p95_queue_seconds"),
 	"pass_rate":                 pooledRate(testMetric(""), "passed_count", executedCases),
-	"flake_rate":                testMetric("flake_rate"),
-	"retry_dependency_rate":     testMetric("retry_dependency_rate"),
+	"flake_rate":                pooledRate(testMetric(""), measuredCases("flake_cases", "flake_rate", "flake_cases"), measuredCases("flake_cases", "flake_rate", "distinct_cases")),
+	"retry_dependency_rate":     pooledRate(testMetric(""), measuredCases("distinct_cases", "retry_dependency_rate", "retry_dependency_rate * distinct_cases"), measuredCases("distinct_cases", "retry_dependency_rate", "distinct_cases")),
 	"failure_recurrence_score":  testMetric("failure_recurrence_score"),
 	"line_coverage_pct":         coverageMetric("line_coverage_pct"),
 	"branch_coverage_pct":       coverageMetric("branch_coverage_pct"),
@@ -110,6 +110,14 @@ const completedRuns = "success_count + failure_count"
 // sample of 0. The stored pass_rate column divides by every case, skipped ones too, holds 0 on that day and is not
 // read; the counts are exact UInt32 columns.
 const executedCases = "passed_count + failed_count"
+
+// measuredCases is a flake or retry count or the distinct cases of a repo-day, NULL when the rate, the distinct cases
+// or (for flake) the flake cases are NULL (a day that measured no case, or a row stored before the counts existed), so such a
+// repo-day is in neither sum. retry_dependency_rate * distinct_cases is a float, the form of rerun_rate *
+// pipelines_count, not a stored count.
+func measuredCases(count, rate, expression string) string {
+	return "if(" + rate + " IS NULL OR distinct_cases IS NULL OR " + count + " IS NULL, NULL, " + expression + ")"
+}
 
 func testMetric(column string) MetricDefinition {
 	return MetricDefinition{

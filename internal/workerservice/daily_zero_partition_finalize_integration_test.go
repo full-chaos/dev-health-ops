@@ -42,6 +42,9 @@ func (drain *zeroPartitionDrain) DrainTouchedDays(context.Context, string, strin
 type zeroPartitionMeasure struct {
 	table, dayColumn, held, filter string
 	final                          bool
+	// key, for a plain MergeTree table, is the key of a row: held is read
+	// from the newest row of each key that is not a retraction.
+	key string
 }
 
 var zeroPartitionMeasures = []zeroPartitionMeasure{
@@ -54,13 +57,13 @@ var zeroPartitionMeasures = []zeroPartitionMeasure{
 	{table: "ic_landscape_rolling_30d", dayColumn: "as_of_day", held: "x_raw + y_raw", final: true},
 }
 
-// benchmarkingMeasure is the output of the one finalize family that refuses a
-// run with no partition. It is skipped on such a run, so its row stays.
-var benchmarkingMeasure = zeroPartitionMeasure{table: "testops_maturity_bands", dayColumn: "period_end", held: "value"}
+// benchmarkingMeasure is an output of benchmarking, the family that reads the
+// partitions of a run. On a run of the whole organization with no repository
+// it retires the rows of the day (a retraction row, retracted = 1).
+var benchmarkingMeasure = zeroPartitionMeasure{table: "testops_maturity_bands", dayColumn: "period_end", held: "value", key: "metric_name, scope_type, scope_key"}
 
 // capabilityMeasure is the output of work_item_measure_capability. The family
-// runs on a run with no partition, but it has no rule that retires a row whose
-// items are gone, so its row stays (ticket 14052).
+// retires each key of the day it no longer produces (item_count 0).
 var capabilityMeasure = zeroPartitionMeasure{table: "work_item_measure_capability", dayColumn: "window_end", held: "tracked + item_count", final: true}
 
 func seedZeroPartitionDay(t *testing.T, ctx context.Context, conn driver.Conn, org string, day time.Time, repo uuid.UUID) {
@@ -103,6 +106,9 @@ func seedZeroPartitionDay(t *testing.T, ctx context.Context, conn driver.Conn, o
 
 func zeroPartitionHeld(t *testing.T, ctx context.Context, conn driver.Conn, measure zeroPartitionMeasure, org string, day time.Time) float64 {
 	t.Helper()
+	if measure.key != "" {
+		return zeroPartitionNewestLiveHeld(t, ctx, conn, measure, org, day)
+	}
 	final := ""
 	if measure.final {
 		final = " FINAL"
@@ -110,6 +116,30 @@ func zeroPartitionHeld(t *testing.T, ctx context.Context, conn driver.Conn, meas
 	var held float64
 	if err := conn.QueryRow(ctx, "SELECT toFloat64(ifNull(sum("+measure.held+"), 0)) FROM "+measure.table+final+
 		" WHERE org_id = ? AND "+measure.dayColumn+" = ?"+measure.filter, org, day).Scan(&held); err != nil {
+		t.Fatalf("read %s: %v", measure.table, err)
+	}
+	return held
+}
+
+// zeroPartitionNewestLiveHeld reads held from the newest row of each key that
+// is not a retraction. On a schema without the retracted column every newest
+// row is live.
+func zeroPartitionNewestLiveHeld(t *testing.T, ctx context.Context, conn driver.Conn, measure zeroPartitionMeasure, org string, day time.Time) float64 {
+	t.Helper()
+	var markers uint64
+	if err := conn.QueryRow(ctx, `SELECT count() FROM system.columns
+WHERE database = currentDatabase() AND table = ? AND name = 'retracted'`, measure.table).Scan(&markers); err != nil {
+		t.Fatalf("read the columns of %s: %v", measure.table, err)
+	}
+	marker := "toUInt8(0)"
+	if markers == 1 {
+		marker = "argMax(retracted, computed_at)"
+	}
+	var held float64
+	if err := conn.QueryRow(ctx, "SELECT toFloat64(ifNull(sum(held), 0)) FROM (SELECT "+measure.key+
+		", argMax(tuple("+measure.held+"), computed_at).1 AS held, "+marker+" AS retired FROM "+measure.table+
+		" WHERE org_id = ? AND "+measure.dayColumn+" = ?"+measure.filter+" GROUP BY "+measure.key+") WHERE retired = 0",
+		org, day).Scan(&held); err != nil {
 		t.Fatalf("read %s: %v", measure.table, err)
 	}
 	return held
@@ -241,24 +271,12 @@ func TestFinalizeOfAWholeOrganizationRunWithNoPartitionRetiresTheRowsOfItsDay(t 
 	if rig.drain.passes != 1 {
 		t.Errorf("the touched-day drain ran %d time(s) after the run, want 1", rig.drain.passes)
 	}
-	for _, measure := range zeroPartitionMeasures {
+	for _, measure := range append(zeroPartitionMeasures, benchmarkingMeasure, capabilityMeasure) {
 		held := zeroPartitionHeld(t, ctx, rig.conn, measure, org, day)
 		t.Logf("%s: the row of the day holds %v after the finalize", measure.table, held)
 		if held != 0 {
 			t.Errorf("%s: the row of the earlier compute still holds %v after the finalize", measure.table, held)
 		}
-	}
-	held := zeroPartitionHeld(t, ctx, rig.conn, benchmarkingMeasure, org, day)
-	t.Logf("%s: the row of the day holds %v after the finalize (benchmarking is skipped on a run with no partition; ticket 14052)",
-		benchmarkingMeasure.table, held)
-	if held == 0 {
-		t.Errorf("%s: the benchmarking row was changed, but the family must be skipped", benchmarkingMeasure.table)
-	}
-	capabilityHeld := zeroPartitionHeld(t, ctx, rig.conn, capabilityMeasure, org, day)
-	t.Logf("%s: the row of the day holds %v after the finalize (the family ran with no item and has no retirement rule; ticket 14052)",
-		capabilityMeasure.table, capabilityHeld)
-	if capabilityHeld != 5 {
-		t.Errorf("%s: the row of the day holds %v, want the stored 5 (the family writes no row and retires none)", capabilityMeasure.table, capabilityHeld)
 	}
 	capabilityLine := ""
 	for _, line := range strings.Split(logs.String(), "\n") {
@@ -267,18 +285,23 @@ func TestFinalizeOfAWholeOrganizationRunWithNoPartitionRetiresTheRowsOfItsDay(t 
 		}
 	}
 	t.Logf("capability log line: %s", capabilityLine)
-	if !strings.Contains(capabilityLine, `"level":"INFO"`) || !strings.Contains(capabilityLine, `"rows":0`) {
-		t.Errorf("no Info line %q with rows=0 for the organization", daily.WorkItemMeasureCapabilityLogMessage)
+	if !strings.Contains(capabilityLine, `"level":"INFO"`) || !strings.Contains(capabilityLine, `"rows":0`) ||
+		!strings.Contains(capabilityLine, `"rows_retired":1`) {
+		t.Errorf("no Info line %q with rows=0 and rows_retired=1 for the organization", daily.WorkItemMeasureCapabilityLogMessage)
 	}
 	exposition := collector.PrometheusText()
 	for _, want := range []string{
 		`worker_daily_metrics_native_family_outcome_total{family="` + daily.WorkItemMeasureCapabilityFamilyName + `",outcome="computed"} 1`,
-		`worker_daily_metrics_native_family_outcome_total{family="` + daily.BenchmarkingFamilyName + `",outcome="skipped_empty_run"} 1`,
+		`worker_daily_metrics_native_family_outcome_total{family="` + daily.BenchmarkingFamilyName + `",outcome="computed"} 1`,
 	} {
 		t.Logf("counter %s present=%t", want, strings.Contains(exposition, want))
 		if !strings.Contains(exposition, want) {
 			t.Errorf("exposition is missing %q", want)
 		}
+	}
+	skipped := `worker_daily_metrics_native_family_outcome_total{family="` + daily.BenchmarkingFamilyName + `",outcome="skipped_empty_run"} 1`
+	if strings.Contains(exposition, skipped) {
+		t.Errorf("benchmarking was skipped on the empty run: %q", skipped)
 	}
 	for _, measure := range append(zeroPartitionMeasures, benchmarkingMeasure, capabilityMeasure) {
 		for _, control := range controls {
@@ -455,3 +478,99 @@ WHERE org_id = ? AND day = ? AND items_started = 40`, empty, day).Scan(&earlier)
 }
 
 func ptrTime(value time.Time) *time.Time { return &value }
+
+// A repository written after the dispatch found none is back at the finalize
+// of the empty run: benchmarking retires nothing, counts the skip and says why
+// in its Info line, and the run still ends as no_repositories.
+func TestFinalizeOfAnEmptyRunKeepsBenchmarkingRowsWhenARepositoryIsBack(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
+	defer cancel()
+	rig := newZeroPartitionRig(t, ctx)
+	day := time.Date(2026, 9, 14, 0, 0, 0, 0, time.UTC)
+	org := "00000000-0000-4000-8000-000000140525"
+	seedZeroPartitionDay(t, ctx, rig.conn, org, day, uuid.MustParse("00000000-0000-4000-8000-00000014052c"))
+	runID := rig.insertRun(t, ctx, org, day, true)
+	now := time.Now().UTC()
+	if err := rig.conn.Exec(ctx, `INSERT INTO repos (id, org_id, repo, provider, created_at, last_synced) VALUES (?, ?, 'acme/back', 'github', ?, ?)`,
+		uuid.MustParse("00000000-0000-4000-8000-00000014052d"), org, now, now); err != nil {
+		t.Fatal(err)
+	}
+	before := zeroPartitionHeld(t, ctx, rig.conn, benchmarkingMeasure, org, day)
+	collector, err := jobruntime.NewMetricsCollector(jobruntime.MetricDimensions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rig.finalize.SetNativeFinalizeFamilyObserver(collector)
+	logs := captureDefaultLog(t)
+
+	workErr := rig.runFinalize(ctx, org, runID)
+
+	status, finalization, fences := rig.runState(t, ctx, runID)
+	after := zeroPartitionHeld(t, ctx, rig.conn, benchmarkingMeasure, org, day)
+	t.Logf("run=%s finalize_err=%v status=%s finalization=%s fences=%d benchmarking held before=%v after=%v",
+		runID, workErr, status, finalization, fences, before, after)
+	if workErr != nil || status != "no_repositories" || finalization != "succeeded" || fences != 1 {
+		t.Errorf("the run ended as err=%v status=%s finalization=%s fences=%d, want nil, no_repositories, succeeded, 1",
+			workErr, status, finalization, fences)
+	}
+	if before == 0 || after != before {
+		t.Errorf("benchmarking held %v before and %v after, want the stored row kept", before, after)
+	}
+	skipLine := ""
+	for _, line := range strings.Split(logs.String(), "\n") {
+		if strings.Contains(line, `"msg":"`+daily.ZeroPartitionFamilySkippedLogMessage+`"`) && strings.Contains(line, org) {
+			skipLine = line
+		}
+	}
+	t.Logf("skip log line: %s", skipLine)
+	if !strings.Contains(skipLine, `"family":"`+daily.BenchmarkingFamilyName+`"`) ||
+		!strings.Contains(skipLine, `"reason":"repository_present_at_finalize"`) {
+		t.Errorf("no Info line %q for benchmarking with reason repository_present_at_finalize", daily.ZeroPartitionFamilySkippedLogMessage)
+	}
+	want := `worker_daily_metrics_native_family_outcome_total{family="` + daily.BenchmarkingFamilyName + `",outcome="skipped_empty_run"} 1`
+	if !strings.Contains(collector.PrometheusText(), want) {
+		t.Errorf("exposition is missing %q", want)
+	}
+}
+
+// A Jira item with no repository (stored under the nil repository id) is
+// synced after the dispatch found no partition: the organization still holds
+// no repository, so benchmarking retires the rows of the day.
+func TestFinalizeOfAnEmptyRunRetiresBenchmarkingWhenOnlyARepositorylessItemArrives(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
+	defer cancel()
+	rig := newZeroPartitionRig(t, ctx)
+	day := time.Date(2026, 9, 14, 0, 0, 0, 0, time.UTC)
+	org := "00000000-0000-4000-8000-000000140527"
+	seedZeroPartitionDay(t, ctx, rig.conn, org, day, uuid.MustParse("00000000-0000-4000-8000-000000140530"))
+	runID := rig.insertRun(t, ctx, org, day, true)
+	created := day.Add(-48 * time.Hour)
+	if err := rig.conn.Exec(ctx, `INSERT INTO work_items
+    (repo_id, work_item_id, provider, title, type, status, status_raw, project_key, project_id, native_team_key, project_name,
+     assignees, reporter, created_at, updated_at, labels, story_points, sprint_id, sprint_name, parent_id, epic_id, url, last_synced, org_id)
+    VALUES (?, 'jira:PROJ-1', 'jira', 'item', 'bug', 'in_progress', 'In Progress', 'PROJ', 'p-1', '', 'Project', [], '', ?, ?, [], 2, '', '', '', '', '', ?, ?)`,
+		uuid.Nil, created, created, created, org); err != nil {
+		t.Fatal(err)
+	}
+	collector, err := jobruntime.NewMetricsCollector(jobruntime.MetricDimensions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rig.finalize.SetNativeFinalizeFamilyObserver(collector)
+
+	workErr := rig.runFinalize(ctx, org, runID)
+
+	status, finalization, fences := rig.runState(t, ctx, runID)
+	held := zeroPartitionHeld(t, ctx, rig.conn, benchmarkingMeasure, org, day)
+	t.Logf("run=%s finalize_err=%v status=%s finalization=%s fences=%d benchmarking held=%v", runID, workErr, status, finalization, fences, held)
+	if workErr != nil {
+		t.Errorf("the finalize failed: %v", workErr)
+	}
+	if held != 0 {
+		t.Errorf("%s: the row of the day holds %v after the empty run, want 0", benchmarkingMeasure.table, held)
+	}
+	exposition := collector.PrometheusText()
+	if want := `worker_daily_metrics_native_family_outcome_total{family="` + daily.BenchmarkingFamilyName + `",outcome="computed"} 1`; !strings.Contains(exposition, want) {
+		t.Errorf("exposition is missing %q", want)
+	}
+}

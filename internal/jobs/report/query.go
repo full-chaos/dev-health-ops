@@ -708,11 +708,6 @@ func buildChartQuery(spec ChartSpec, definition metricDefinition) (string, []any
 		xExpression, xType, temporal = "toDate("+day+")", "Date", true
 	}
 	yExpression := fmt.Sprintf("avg(%s)", spec.Metric)
-	if definition.ownersAsOf != nil {
-		// avg() of no row is NaN, which a total (no GROUP BY) would draw as a point; a team that owns no repository and
-		// a window with no row have no value.
-		yExpression = fmt.Sprintf("avgOrNull(%s)", spec.Metric)
-	}
 	if strings.HasSuffix(spec.Metric, "_count") || definition.Unit == "count" {
 		// sum() of an unsigned integer column is UInt64 in ClickHouse and the
 		// chart read scans y into a float64, which the driver refuses. Cast

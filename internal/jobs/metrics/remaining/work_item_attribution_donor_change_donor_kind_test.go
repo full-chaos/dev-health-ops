@@ -19,8 +19,8 @@ func TestDonorChangeRefusesADonorThatIsNotAnIssue(t *testing.T) {
 	}
 	itemUnassigned := workItemAttributionNewestPrimary{Source: "unassigned", ComputedAt: before}
 	itemLinked := workItemAttributionNewestPrimary{TeamID: "team-a", Source: "linked_issue", ComputedAt: before,
-		Evidence: "linked_issue=D;dependency_type=relates_to;donor_provider=github;donor_source=repo_ownership"}
-	donorRow := workItemAttributionNewestPrimary{TeamID: "team-b", Source: "repo_ownership", ComputedAt: after}
+		Evidence: "linked_issue=D;dependency_type=relates_to;donor_provider=github;donor_source=project_ownership"}
+	donorRow := workItemAttributionNewestPrimary{TeamID: "team-b", Source: "project_ownership", ComputedAt: after}
 	kind := func(provider, itemType string) map[string]teamattribution.GithubWorkItemDerivationSubject {
 		return map[string]teamattribution.GithubWorkItemDerivationSubject{
 			"P": {WorkItemID: "P", Provider: provider, Type: "pr"},
@@ -53,7 +53,7 @@ func TestDonorChangeRefusesADonorThatIsNotAnIssue(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			refused := map[string]int{}
 			rows := map[string]workItemAttributionNewestPrimary{"P": tc.item, "D": donorRow}
-			got := donorChangedDependents(edges, nil, rows, tc.kinds, nil, refused)
+			got := donorChangedDependents(edges, nil, rows, tc.kinds, nil, refused, nil)
 			if fmt.Sprint(got) != fmt.Sprint(tc.want) {
 				t.Errorf("owed %v, want %v", got, tc.want)
 			}
@@ -73,15 +73,15 @@ func TestDonorChangeAPullRequestDonorDoesNotShadowAnIssueDonor(t *testing.T) {
 	}
 	rows := map[string]workItemAttributionNewestPrimary{
 		"P": {TeamID: "team-b", Source: "linked_issue", ComputedAt: base,
-			Evidence: "linked_issue=B;dependency_type=relates_to;donor_provider=github;donor_source=repo_ownership"},
-		"A": {TeamID: "team-a", Source: "repo_ownership", ComputedAt: base.Add(time.Hour)},
-		"B": {TeamID: "team-b", Source: "repo_ownership", ComputedAt: base},
+			Evidence: "linked_issue=B;dependency_type=relates_to;donor_provider=github;donor_source=project_ownership"},
+		"A": {TeamID: "team-a", Source: "project_ownership", ComputedAt: base.Add(time.Hour)},
+		"B": {TeamID: "team-b", Source: "project_ownership", ComputedAt: base},
 	}
 	kinds := map[string]teamattribution.GithubWorkItemDerivationSubject{
 		"A": {WorkItemID: "A", Provider: "github", Type: "pr"},
 		"B": {WorkItemID: "B", Provider: "github", Type: "issue"},
 	}
-	if got := donorChangedDependents(edges, nil, rows, kinds, nil, nil); len(got) != 0 {
+	if got := donorChangedDependents(edges, nil, rows, kinds, nil, nil, nil); len(got) != 0 {
 		t.Errorf("owed %v: the newer pull request donor A changed nothing the item copies (B stays the winner)", got)
 	}
 }
@@ -94,7 +94,7 @@ func TestDonorChangeRepairsAStoredLinkToARefusedDonor(t *testing.T) {
 	edges := []teamattribution.GithubWorkItemDerivationDependencyEdge{
 		{SourceWorkItemID: "P", TargetWorkItemID: "D", RelationshipType: "relates_to", LastSynced: base},
 	}
-	recorded := "linked_issue=D;dependency_type=relates_to;donor_provider=github;donor_source=repo_ownership"
+	recorded := "linked_issue=D;dependency_type=relates_to;donor_provider=github;donor_source=project_ownership"
 	primaryLinked := workItemAttributionNewestPrimary{TeamID: "team-b", Source: "linked_issue", ComputedAt: base, Evidence: recorded}
 	ownedWithProvenance := workItemAttributionNewestPrimary{TeamID: "team-o", Source: "project_ownership", ComputedAt: base,
 		LinkedTeamID: "team-b", LinkedEvidence: recorded, LinkedComputedAt: base}
@@ -107,17 +107,17 @@ func TestDonorChangeRepairsAStoredLinkToARefusedDonor(t *testing.T) {
 		kinds map[string]teamattribution.GithubWorkItemDerivationSubject
 		want  []string
 	}{
-		{"donor older than the item", primaryLinked, workItemAttributionNewestPrimary{TeamID: "team-b", Source: "repo_ownership", ComputedAt: base.Add(-time.Hour)}, prKinds, []string{"P"}},
-		{"donor as old as the item", primaryLinked, workItemAttributionNewestPrimary{TeamID: "team-b", Source: "repo_ownership", ComputedAt: base}, prKinds, []string{"P"}},
-		{"donor newer than the item", primaryLinked, workItemAttributionNewestPrimary{TeamID: "team-b", Source: "repo_ownership", ComputedAt: base.Add(time.Hour)}, prKinds, []string{"P"}},
-		{"provenance under an own primary", ownedWithProvenance, workItemAttributionNewestPrimary{TeamID: "team-b", Source: "repo_ownership", ComputedAt: base.Add(-time.Hour)}, prKinds, []string{"P"}},
-		{"recorded donor has no work item", primaryLinked, workItemAttributionNewestPrimary{TeamID: "team-b", Source: "repo_ownership", ComputedAt: base.Add(-time.Hour)}, map[string]teamattribution.GithubWorkItemDerivationSubject{}, []string{"P"}},
-		{"control: an issue donor older than the item", primaryLinked, workItemAttributionNewestPrimary{TeamID: "team-b", Source: "repo_ownership", ComputedAt: base.Add(-time.Hour)}, issueKinds, nil},
-		{"control: provenance of an issue donor under an own primary", ownedWithProvenance, workItemAttributionNewestPrimary{TeamID: "team-b", Source: "repo_ownership", ComputedAt: base.Add(-time.Hour)}, issueKinds, nil},
+		{"donor older than the item", primaryLinked, workItemAttributionNewestPrimary{TeamID: "team-b", Source: "project_ownership", ComputedAt: base.Add(-time.Hour)}, prKinds, []string{"P"}},
+		{"donor as old as the item", primaryLinked, workItemAttributionNewestPrimary{TeamID: "team-b", Source: "project_ownership", ComputedAt: base}, prKinds, []string{"P"}},
+		{"donor newer than the item", primaryLinked, workItemAttributionNewestPrimary{TeamID: "team-b", Source: "project_ownership", ComputedAt: base.Add(time.Hour)}, prKinds, []string{"P"}},
+		{"provenance under an own primary", ownedWithProvenance, workItemAttributionNewestPrimary{TeamID: "team-b", Source: "project_ownership", ComputedAt: base.Add(-time.Hour)}, prKinds, []string{"P"}},
+		{"recorded donor has no work item", primaryLinked, workItemAttributionNewestPrimary{TeamID: "team-b", Source: "project_ownership", ComputedAt: base.Add(-time.Hour)}, map[string]teamattribution.GithubWorkItemDerivationSubject{}, []string{"P"}},
+		{"control: an issue donor older than the item", primaryLinked, workItemAttributionNewestPrimary{TeamID: "team-b", Source: "project_ownership", ComputedAt: base.Add(-time.Hour)}, issueKinds, nil},
+		{"control: provenance of an issue donor under an own primary", ownedWithProvenance, workItemAttributionNewestPrimary{TeamID: "team-b", Source: "project_ownership", ComputedAt: base.Add(-time.Hour)}, issueKinds, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rows := map[string]workItemAttributionNewestPrimary{"P": tc.item, "D": tc.donor}
-			if got := donorChangedDependents(edges, nil, rows, tc.kinds, nil, nil); fmt.Sprint(got) != fmt.Sprint(tc.want) {
+			if got := donorChangedDependents(edges, nil, rows, tc.kinds, nil, nil, nil); fmt.Sprint(got) != fmt.Sprint(tc.want) {
 				t.Errorf("owed %v, want %v", got, tc.want)
 			}
 		})
@@ -134,14 +134,14 @@ func TestDonorChangeARefusedDonorDoesNotAdvanceTheStalenessSignal(t *testing.T) 
 	}
 	rows := map[string]workItemAttributionNewestPrimary{
 		"P":       {Source: "unassigned", ComputedAt: base},
-		"A-pr":    {TeamID: "team-a", Source: "repo_ownership", ComputedAt: base.Add(time.Hour)},
+		"A-pr":    {TeamID: "team-a", Source: "project_ownership", ComputedAt: base.Add(time.Hour)},
 		"B-issue": {TeamID: "team-b", Source: "project_ownership", ComputedAt: base.Add(-time.Hour)},
 	}
 	kinds := map[string]teamattribution.GithubWorkItemDerivationSubject{
 		"A-pr":    {WorkItemID: "A-pr", Provider: "github", Type: "pr"},
 		"B-issue": {WorkItemID: "B-issue", Provider: "github", Type: "issue"},
 	}
-	if got := donorChangedDependents(edges, nil, rows, kinds, nil, nil); len(got) != 0 {
+	if got := donorChangedDependents(edges, nil, rows, kinds, nil, nil, nil); len(got) != 0 {
 		t.Errorf("owed %v: only the refused donor is newer", got)
 	}
 }
@@ -164,7 +164,7 @@ func TestDonorChangeRefusalCountsAreOfDistinctEvaluatedDonors(t *testing.T) {
 		"owned-pr": {WorkItemID: "owned-pr", Provider: "github", Type: "pr"},
 	}
 	refused := map[string]int{}
-	donorChangedDependents(edges, map[string]string{}, rows, kinds, nil, refused)
+	donorChangedDependents(edges, map[string]string{}, rows, kinds, nil, refused, nil)
 	if fmt.Sprint(refused) != "map[empty_type:1 unknown:1]" {
 		t.Errorf("refused = %v, want map[empty_type:1 unknown:1]", refused)
 	}
@@ -178,7 +178,7 @@ func TestDonorChangeRefusalCountsAreOfCurrentEdgesOnly(t *testing.T) {
 	edge := func(source, target string) teamattribution.GithubWorkItemDerivationDependencyEdge {
 		return teamattribution.GithubWorkItemDerivationDependencyEdge{SourceWorkItemID: source, TargetWorkItemID: target, RelationshipType: "relates_to", LastSynced: base}
 	}
-	recorded := "linked_issue=OLD;dependency_type=relates_to;donor_provider=github;donor_source=repo_ownership"
+	recorded := "linked_issue=OLD;dependency_type=relates_to;donor_provider=github;donor_source=project_ownership"
 	itemLinkedToOld := workItemAttributionNewestPrimary{TeamID: "team-b", Source: "linked_issue", ComputedAt: base, Evidence: recorded}
 	kind := func(id, provider, itemType string) teamattribution.GithubWorkItemDerivationSubject {
 		return teamattribution.GithubWorkItemDerivationSubject{WorkItemID: id, Provider: provider, Type: itemType}
@@ -208,7 +208,7 @@ func TestDonorChangeRefusalCountsAreOfCurrentEdgesOnly(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			rows := map[string]workItemAttributionNewestPrimary{"P": itemLinkedToOld}
 			refused := map[string]int{}
-			got := donorChangedDependents(tc.edges, tc.keys, rows, tc.kinds, nil, refused)
+			got := donorChangedDependents(tc.edges, tc.keys, rows, tc.kinds, nil, refused, nil)
 			if fmt.Sprint(refused) != tc.want {
 				t.Errorf("refused = %v, want %s", refused, tc.want)
 			}
@@ -229,7 +229,7 @@ func TestDonorChangeANativeTeamItemCountsNoRefusal(t *testing.T) {
 		{SourceWorkItemID: "P", TargetWorkItemID: "D", RelationshipType: "relates_to", LastSynced: base},
 	}
 	kinds := map[string]teamattribution.GithubWorkItemDerivationSubject{"D": {WorkItemID: "D", Provider: "github", Type: "pr"}}
-	donor := workItemAttributionNewestPrimary{TeamID: "team-b", Source: "repo_ownership", ComputedAt: base.Add(time.Hour)}
+	donor := workItemAttributionNewestPrimary{TeamID: "team-b", Source: "project_ownership", ComputedAt: base.Add(time.Hour)}
 	for _, tc := range []struct {
 		name string
 		item workItemAttributionNewestPrimary
@@ -240,7 +240,7 @@ func TestDonorChangeANativeTeamItemCountsNoRefusal(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			refused := map[string]int{}
-			got := donorChangedDependents(edges, nil, map[string]workItemAttributionNewestPrimary{"P": tc.item, "D": donor}, kinds, nil, refused)
+			got := donorChangedDependents(edges, nil, map[string]workItemAttributionNewestPrimary{"P": tc.item, "D": donor}, kinds, nil, refused, nil)
 			if fmt.Sprint(refused) != tc.want || len(got) != 0 {
 				t.Errorf("refused %v owed %v, want %s and none owed", refused, got, tc.want)
 			}

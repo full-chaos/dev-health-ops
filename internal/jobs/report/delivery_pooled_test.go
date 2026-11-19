@@ -38,9 +38,9 @@ func TestDeliveryPooledRulesAreTheWritersOwn(t *testing.T) {
 			"duration := row.FinishedAt.UTC().Sub(row.StartedAt.UTC()).Hours()\n\t\t\tif duration >= 0 {", deploymentsSource,
 			"if(finished_at >= started_at, dateDiff('millisecond', started_at, finished_at) / 3600000, NULL) AS " + deliveryHoursSample},
 		{"the deployment rows the writer reads (no FINAL)", "deploy loader", "\nFROM deployments\nWHERE org_id = {org_id:String}", deploymentsSource,
-			"    FROM deployments\n    WHERE org_id = {org_id:String}"},
+			"        FROM deployments\n        WHERE org_id = {org_id:String}"},
 		{"the pull request rows the writer reads (no FINAL)", "repouser loader", "FROM git_pull_requests\nWHERE\n", pullRequestSizesSource,
-			"    FROM git_pull_requests\n    WHERE org_id = {org_id:String}"},
+			"        FROM git_pull_requests\n        WHERE org_id = {org_id:String}"},
 		{"deploy median", "deploy compute", "value := deployPercentile(bucket.durations, 50.0)", deliveryHoursMedian, "quantileExactInclusive(0.5)("},
 		{"a pull request counts on the day it merged", "repouser compute",
 			"if mergedAt.Before(start) || !mergedAt.Before(end) {", pullRequestSizesSource, "toDate(merged_at) AS day"},
@@ -57,7 +57,7 @@ func TestDeliveryPooledRulesAreTheWritersOwn(t *testing.T) {
 		{"a repair is a bug with both lifecycle times", "repouser loader", "AND started_at IS NOT NULL AND completed_at IS NOT NULL", bugRepairsSource,
 			"AND type = 'bug' AND started_at IS NOT NULL AND completed_at IS NOT NULL"},
 		{"a repair is a bug with a terminal status", "repouser loader", "\n  AND status IN ('done', 'canceled')\n", bugRepairsSource,
-			"\n      AND status IN ('done', 'canceled')\n"},
+			"\n          AND status IN ('done', 'canceled')\n"},
 		{"a repair counts on the day it completed", "repouser quality", "if completedAt.Before(start) || !completedAt.Before(end) {", bugRepairsSource,
 			"toDate(completed_at, 'UTC') AS day"},
 		{"repair sample, a negative one included", "repouser quality", "hours := completedAt.Sub(item.StartedAt.UTC()).Seconds() / 3600.0\n", bugRepairsSource,
@@ -71,14 +71,22 @@ func TestDeliveryPooledRulesAreTheWritersOwn(t *testing.T) {
 			"(valid_to IS NULL OR valid_to > {as_of:DateTime64(6, 'UTC')})"},
 		{"an incident joins its service's repositories", "incident loader",
 			"ON incident.org_id = mapping.org_id AND incident.service_id = mapping.service_id\n    INNER JOIN repos AS repo FINAL", incidentRepairsSource,
-			"ON incident.org_id = mapping.org_id AND incident.service_id = mapping.service_id\n        INNER JOIN repos AS repo FINAL"},
+			"ON incident.org_id = mapping.org_id AND incident.service_id = mapping.service_id\n            INNER JOIN repos AS repo FINAL"},
 		{"an incident counts once per repository", "incident loader", "LIMIT 1 BY mapping.repo_id, incident.id", incidentRepairsSource, "LIMIT 1 BY repo_id, incident_id"},
 		{"an incident counts when resolved on the day it started", "incident compute",
 			"if resolvedAt.Before(dayStart) || !resolvedAt.Before(dayEnd) {", incidentRepairsSource, "toDate(resolved_at) = toDate(started_at)"},
 		{"incident repair sample", "incident compute", "mttr := resolvedAt.Sub(row.StartedAt.UTC()).Hours()\n\t\tif mttr >= 0 {", incidentRepairsSource,
-			"if(incident.resolved_at >= incident.started_at,\n                dateDiff('microsecond', incident.started_at, incident.resolved_at) / 3600000000, NULL) AS " + deliveryHoursSample},
+			"if(incident.resolved_at >= incident.started_at,\n                    dateDiff('microsecond', incident.started_at, incident.resolved_at) / 3600000000, NULL) AS " + deliveryHoursSample},
 		{"incident median", "incident compute", "p50 := incidentPercentile(b.mttrHours, 50.0)", deliveryHoursMedian, "quantileExactInclusive(0.5)("},
 		{"incident p90", "incident compute", "p90 := incidentPercentile(b.mttrHours, 90.0)", deliveryHoursP90, "quantileExactInclusive(0.9)("},
+		{"the stored deploy samples are the median's", "deploy compute", "DeployHoursSamples:     append([]float64{}, bucket.durations...)", deploymentsSource,
+			"ARRAY JOIN pooled_deploy_hours AS stored_hours"},
+		{"the stored pull request sizes are the percentiles'", "repouser compute", "PRSizeLOCSamples:           append([]float64{}, repoSizes...)", pullRequestSizesSource,
+			"ARRAY JOIN pooled_pr_size_loc AS stored_loc"},
+		{"the stored repair samples are the mean's", "repouser quality", "hoursByRepo := RepairHoursByRepo(day, bugItems)", bugRepairsSource,
+			"ARRAY JOIN pooled_bug_repair_hours AS stored_hours"},
+		{"the stored incident samples are the percentiles'", "incident compute", "record.RepairHoursSamples = append([]float64{}, b.mttrHours...)", incidentRepairsSource,
+			"ARRAY JOIN pooled_repair_hours AS stored_hours"},
 	}
 	for _, pin := range pins {
 		if !strings.Contains(writers[pin.writer], pin.writerText) {
@@ -113,7 +121,7 @@ func TestDeliveryPooledStatementsReadComputedDaysUnderTheBound(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, text := range []string{"SELECT repo_id, day FROM " + want.table, "max_rows_to_read = 5000000, read_overflow_mode = 'throw'", "HAVING y IS NOT NULL"} {
+		for _, text := range []string{"FROM " + want.table + "\n", "WHERE pooled_samples_stored = 1", "WHERE pooled_samples_stored != 1", "max_rows_to_read = 5000000, read_overflow_mode = 'throw'", "HAVING y IS NOT NULL"} {
 			if !strings.Contains(statement, text) {
 				t.Errorf("%s: the statement has no %q:\n%s", metric, text, statement)
 			}

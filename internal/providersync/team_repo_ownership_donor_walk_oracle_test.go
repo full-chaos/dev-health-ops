@@ -205,9 +205,53 @@ func TestTeamRepoOwnershipDonorWalkMatchesFrozenPythonProduction(t *testing.T) {
 	)
 }
 
+// buildTeamRepoOwnershipDonorWalkOracleRow is the Go side of the frozen pair. DECLARED DIVERGENCE: the frozen Python
+// has no rule on the donor's Type, and the pair's inputs carry none; Go refuses a donor whose Type is empty
+// (teamattribution.LinkedIssueDonorRefusal). So the pair reads a work item with no Type as an issue, as Python
+// does, and the divergence itself is asserted by
+// TestTeamRepoOwnershipDonorWalkDeclaredDivergenceGoRefusesAnEmptyTypeDonor below.
 func buildTeamRepoOwnershipDonorWalkOracleRow(
 	t *testing.T,
 	input map[string]any,
+) teamRepoOwnershipDonorWalkOracleRow {
+	t.Helper()
+	return buildTeamRepoOwnershipDonorWalkOracleRowWith(t, input, true)
+}
+
+// teamRepoOwnershipDonorWalkEmptyTypeDonorCases are the pair's cases whose Python answer is a donor's team.
+var teamRepoOwnershipDonorWalkEmptyTypeDonorCases = []string{
+	"inheritable_relates_to_transfers",
+	"extkey_target_resolves_cross_provider",
+	"multiple_donor_candidates_pick_lexicographically_smallest",
+	"unowned_donor_never_suppresses_an_owned_donor",
+}
+
+// Go refuses where the frozen Python accepts: the same input, read with the real rule (no Type = empty_type),
+// gives no team, while the Python-shaped read gives the frozen donor team. A case that stops resting on a
+// donor with no Type must leave the list.
+func TestTeamRepoOwnershipDonorWalkDeclaredDivergenceGoRefusesAnEmptyTypeDonor(t *testing.T) {
+	byID := map[string]map[string]any{}
+	for _, c := range teamRepoOwnershipDonorWalkOracleCases() {
+		byID[c.ID] = c.Input
+	}
+	for _, id := range teamRepoOwnershipDonorWalkEmptyTypeDonorCases {
+		input, ok := byID[id]
+		if !ok {
+			t.Fatalf("case %q is not in the pair", id)
+		}
+		if python := buildTeamRepoOwnershipDonorWalkOracleRowWith(t, input, true); python.TeamID == nil {
+			t.Fatalf("%s: the Python-shaped read gives no team, want the frozen donor team", id)
+		}
+		if strict := buildTeamRepoOwnershipDonorWalkOracleRowWith(t, input, false); strict.TeamID != nil {
+			t.Fatalf("%s: Go with the donor-type rule still gives team %q", id, *strict.TeamID)
+		}
+	}
+}
+
+func buildTeamRepoOwnershipDonorWalkOracleRowWith(
+	t *testing.T,
+	input map[string]any,
+	readEmptyTypeAsIssue bool,
 ) teamRepoOwnershipDonorWalkOracleRow {
 	t.Helper()
 	encoded, err := json.Marshal(input)
@@ -236,6 +280,9 @@ func buildTeamRepoOwnershipDonorWalkOracleRow(
 		// ownership_donor-walk.py) -- required so buildIssueKeyIndex indexes
 		// extkey donor candidates the same way Python's _work_item does.
 		row := TeamRepoOwnershipWorkItem{WorkItemID: item.WorkItemID, Provider: "linear", ProjectID: item.ProjectID}
+		if readEmptyTypeAsIssue {
+			row.Type = "issue"
+		}
 		workItems = append(workItems, row)
 		byID[item.WorkItemID] = row
 	}
@@ -266,7 +313,7 @@ func buildTeamRepoOwnershipDonorWalkOracleRow(
 	// re-lookup this test used to need is gone.
 	// CHAOS-4537 codex review P1 added a knownLinearTeamKeys param; nil here
 	// since no oracle case in this file exercises the Linear-only arm.
-	donorTeamID := buildDonorTeamIDResolver(byID, edges, projectToTeam, nil)
+	donorTeamID := buildDonorTeamIDResolver(byID, edges, projectToTeam, nil, nil)
 	teamID, _ := donorTeamID(decoded.SourceWorkItemID)
 	row := teamRepoOwnershipDonorWalkOracleRow{}
 	if teamID != "" {

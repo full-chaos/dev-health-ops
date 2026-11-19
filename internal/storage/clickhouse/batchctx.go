@@ -9,11 +9,21 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 )
 
-// DefaultBatchWriteBound is the total bound of one batch when Config.BatchWriteBound
-// is unset. NOT a measured p99 (no prod measure yet): it is the longest
-// ReadTimeout an ops tool sets for one read (operationalbackfill, usersbackfill),
-// so no batch that worked before is cut off by it.
-const DefaultBatchWriteBound = 10 * time.Minute
+// DefaultBatchWriteBound is the floor of a batch's total bound when
+// Config.BatchWriteBound is unset; the bound is then max(this, ReadTimeout).
+// Measured prod ClickHouse BATCH spans (SigNoz, 7 d to 2026-11-19): p99 0.35 s,
+// max 4.27 s (dbspan slow tail only, so conservative).
+const DefaultBatchWriteBound = 15 * time.Second
+
+// batchWriteBound is the bound a connection's batches get: the configured one,
+// else max(DefaultBatchWriteBound, ReadTimeout), so a tool that allows long reads
+// keeps that budget for one batch.
+func batchWriteBound(configured, readTimeout time.Duration) time.Duration {
+	if configured > 0 {
+		return configured
+	}
+	return max(DefaultBatchWriteBound, readTimeout)
+}
 
 // batchWatchdogGrace is how long a batch's driver context stays uncancelled after
 // Send returns, so the driver's late Send watchdog finds it still live.
@@ -39,11 +49,7 @@ func (c detachedBatchConn) PrepareBatch(ctx context.Context, query string, opts 
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	bound := c.bound
-	if bound <= 0 {
-		bound = DefaultBatchWriteBound
-	}
-	deadline, cause := time.Now().Add(bound), ErrBatchWriteBound
+	deadline, cause := time.Now().Add(batchWriteBound(c.bound, 0)), ErrBatchWriteBound
 	if callerDeadline, ok := ctx.Deadline(); ok && callerDeadline.Before(deadline) {
 		deadline, cause = callerDeadline, context.DeadlineExceeded
 	}

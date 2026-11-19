@@ -103,6 +103,21 @@ func TestTheDriverBatchContextCarriesTheBoundOrTheEarlierCallerDeadline(t *testi
 	}
 }
 
+func TestTheBatchBoundIsTheConfiguredOneElseTheLongerOfTheFloorAndReadTimeout(t *testing.T) {
+	for _, tc := range []struct {
+		configured, readTimeout, want time.Duration
+	}{
+		{time.Minute, 30 * time.Second, time.Minute},
+		{0, DefaultConfig("clickhouse://x").ReadTimeout, 30 * time.Second},
+		{0, 5 * time.Second, DefaultBatchWriteBound},
+		{0, 10 * time.Minute, 10 * time.Minute},
+	} {
+		if got := batchWriteBound(tc.configured, tc.readTimeout); got != tc.want {
+			t.Errorf("batchWriteBound(%s, %s) = %s, want %s", tc.configured, tc.readTimeout, got, tc.want)
+		}
+	}
+}
+
 func TestABatchPastItsBoundEndsWithErrBatchWriteBound(t *testing.T) {
 	inner := &recordingBatchConn{block: true}
 	batch, err := wrapConn(inner, 50*time.Millisecond).PrepareBatch(context.Background(), "INSERT INTO t")

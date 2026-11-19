@@ -126,5 +126,9 @@ func OpenWith(ctx context.Context, config Config, wait func(context.Context, fun
 	if config.MaxIdleConns > 1 {
 		WarmPool(ctx, connection.Ping, config.MaxIdleConns)
 	}
-	return newSpanConn(retryConn{connection}, dbspan.NewEmitter(dbspan.SystemClickHouse, "")), nil
+	return wrapConn(connection), nil
+}
+
+func wrapConn(connection driver.Conn) driver.Conn {
+	return newSpanConn(retryConn{detachedBatchConn{connection}}, dbspan.NewEmitter(dbspan.SystemClickHouse, ""))
 }

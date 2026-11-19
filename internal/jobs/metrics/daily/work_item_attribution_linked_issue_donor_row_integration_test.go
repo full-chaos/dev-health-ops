@@ -17,7 +17,7 @@ import (
 // that inherits through a linked issue takes the team of the issue's own
 // primary attribution row, never a resolution of the issue on the pull
 // request's day. The donor issue D's stored row names team-donor
-// (repo_ownership, written when D was attributed); on the pull request's day
+// (project_ownership, written when D was attributed); on the pull request's day
 // D's repository is owned by team-other, which is what a resolution of D on
 // that day would give. Every donor provider. The donor's row is its newest
 // primary row. A donor with no stored row gives nothing: the pull request is
@@ -45,8 +45,8 @@ func TestALinkedItemCopiesTheTeamOfItsDonorsOwnRow(t *testing.T) {
 				if stored {
 					// An older primary row of another team: the donor's row is
 					// its newest primary row.
-					seedWorkItemAttributionStoredRow(t, ctx, conn, orgID, repoD, donor, provider, "team-old", "repo_ownership", targetDay.Add(-48*time.Hour))
-					seedWorkItemAttributionStoredRow(t, ctx, conn, orgID, repoD, donor, provider, "team-donor", "repo_ownership", targetDay.Add(-24*time.Hour))
+					seedWorkItemAttributionStoredRow(t, ctx, conn, orgID, repoD, donor, provider, "team-old", "project_ownership", targetDay.Add(-48*time.Hour))
+					seedWorkItemAttributionStoredRow(t, ctx, conn, orgID, repoD, donor, provider, "team-donor", "project_ownership", targetDay.Add(-24*time.Hour))
 				}
 
 				executor, err := NewWorkItemAttributionExecutor(conn)
@@ -76,7 +76,7 @@ func TestALinkedItemCopiesTheTeamOfItsDonorsOwnRow(t *testing.T) {
 						"not team-other (a resolution of the donor on the pull request's day)", linked)
 				}
 				assertLinkedIssueEvidence(t, ctx, conn, orgID, "PR",
-					"linked_issue="+donor+";dependency_type=relates_to;donor_provider="+provider+";donor_source=repo_ownership")
+					"linked_issue="+donor+";dependency_type=relates_to;donor_provider="+provider+";donor_source=project_ownership")
 			})
 		}
 	}

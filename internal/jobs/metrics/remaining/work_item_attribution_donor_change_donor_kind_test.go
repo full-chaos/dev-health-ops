@@ -19,8 +19,8 @@ func TestDonorChangeRefusesADonorThatIsNotAnIssue(t *testing.T) {
 	}
 	itemUnassigned := workItemAttributionNewestPrimary{Source: "unassigned", ComputedAt: before}
 	itemLinked := workItemAttributionNewestPrimary{TeamID: "team-a", Source: "linked_issue", ComputedAt: before,
-		Evidence: "linked_issue=D;dependency_type=relates_to;donor_provider=github;donor_source=repo_ownership"}
-	donorRow := workItemAttributionNewestPrimary{TeamID: "team-b", Source: "repo_ownership", ComputedAt: after}
+		Evidence: "linked_issue=D;dependency_type=relates_to;donor_provider=github;donor_source=project_ownership"}
+	donorRow := workItemAttributionNewestPrimary{TeamID: "team-b", Source: "project_ownership", ComputedAt: after}
 	kind := func(provider, itemType string) map[string]teamattribution.GithubWorkItemDerivationSubject {
 		return map[string]teamattribution.GithubWorkItemDerivationSubject{
 			"P": {WorkItemID: "P", Provider: provider, Type: "pr"},
@@ -73,9 +73,9 @@ func TestDonorChangeAPullRequestDonorDoesNotShadowAnIssueDonor(t *testing.T) {
 	}
 	rows := map[string]workItemAttributionNewestPrimary{
 		"P": {TeamID: "team-b", Source: "linked_issue", ComputedAt: base,
-			Evidence: "linked_issue=B;dependency_type=relates_to;donor_provider=github;donor_source=repo_ownership"},
-		"A": {TeamID: "team-a", Source: "repo_ownership", ComputedAt: base.Add(time.Hour)},
-		"B": {TeamID: "team-b", Source: "repo_ownership", ComputedAt: base},
+			Evidence: "linked_issue=B;dependency_type=relates_to;donor_provider=github;donor_source=project_ownership"},
+		"A": {TeamID: "team-a", Source: "project_ownership", ComputedAt: base.Add(time.Hour)},
+		"B": {TeamID: "team-b", Source: "project_ownership", ComputedAt: base},
 	}
 	kinds := map[string]teamattribution.GithubWorkItemDerivationSubject{
 		"A": {WorkItemID: "A", Provider: "github", Type: "pr"},
@@ -94,7 +94,7 @@ func TestDonorChangeRepairsAStoredLinkToARefusedDonor(t *testing.T) {
 	edges := []teamattribution.GithubWorkItemDerivationDependencyEdge{
 		{SourceWorkItemID: "P", TargetWorkItemID: "D", RelationshipType: "relates_to", LastSynced: base},
 	}
-	recorded := "linked_issue=D;dependency_type=relates_to;donor_provider=github;donor_source=repo_ownership"
+	recorded := "linked_issue=D;dependency_type=relates_to;donor_provider=github;donor_source=project_ownership"
 	primaryLinked := workItemAttributionNewestPrimary{TeamID: "team-b", Source: "linked_issue", ComputedAt: base, Evidence: recorded}
 	ownedWithProvenance := workItemAttributionNewestPrimary{TeamID: "team-o", Source: "project_ownership", ComputedAt: base,
 		LinkedTeamID: "team-b", LinkedEvidence: recorded, LinkedComputedAt: base}
@@ -107,13 +107,13 @@ func TestDonorChangeRepairsAStoredLinkToARefusedDonor(t *testing.T) {
 		kinds map[string]teamattribution.GithubWorkItemDerivationSubject
 		want  []string
 	}{
-		{"donor older than the item", primaryLinked, workItemAttributionNewestPrimary{TeamID: "team-b", Source: "repo_ownership", ComputedAt: base.Add(-time.Hour)}, prKinds, []string{"P"}},
-		{"donor as old as the item", primaryLinked, workItemAttributionNewestPrimary{TeamID: "team-b", Source: "repo_ownership", ComputedAt: base}, prKinds, []string{"P"}},
-		{"donor newer than the item", primaryLinked, workItemAttributionNewestPrimary{TeamID: "team-b", Source: "repo_ownership", ComputedAt: base.Add(time.Hour)}, prKinds, []string{"P"}},
-		{"provenance under an own primary", ownedWithProvenance, workItemAttributionNewestPrimary{TeamID: "team-b", Source: "repo_ownership", ComputedAt: base.Add(-time.Hour)}, prKinds, []string{"P"}},
-		{"recorded donor has no work item", primaryLinked, workItemAttributionNewestPrimary{TeamID: "team-b", Source: "repo_ownership", ComputedAt: base.Add(-time.Hour)}, map[string]teamattribution.GithubWorkItemDerivationSubject{}, []string{"P"}},
-		{"control: an issue donor older than the item", primaryLinked, workItemAttributionNewestPrimary{TeamID: "team-b", Source: "repo_ownership", ComputedAt: base.Add(-time.Hour)}, issueKinds, nil},
-		{"control: provenance of an issue donor under an own primary", ownedWithProvenance, workItemAttributionNewestPrimary{TeamID: "team-b", Source: "repo_ownership", ComputedAt: base.Add(-time.Hour)}, issueKinds, nil},
+		{"donor older than the item", primaryLinked, workItemAttributionNewestPrimary{TeamID: "team-b", Source: "project_ownership", ComputedAt: base.Add(-time.Hour)}, prKinds, []string{"P"}},
+		{"donor as old as the item", primaryLinked, workItemAttributionNewestPrimary{TeamID: "team-b", Source: "project_ownership", ComputedAt: base}, prKinds, []string{"P"}},
+		{"donor newer than the item", primaryLinked, workItemAttributionNewestPrimary{TeamID: "team-b", Source: "project_ownership", ComputedAt: base.Add(time.Hour)}, prKinds, []string{"P"}},
+		{"provenance under an own primary", ownedWithProvenance, workItemAttributionNewestPrimary{TeamID: "team-b", Source: "project_ownership", ComputedAt: base.Add(-time.Hour)}, prKinds, []string{"P"}},
+		{"recorded donor has no work item", primaryLinked, workItemAttributionNewestPrimary{TeamID: "team-b", Source: "project_ownership", ComputedAt: base.Add(-time.Hour)}, map[string]teamattribution.GithubWorkItemDerivationSubject{}, []string{"P"}},
+		{"control: an issue donor older than the item", primaryLinked, workItemAttributionNewestPrimary{TeamID: "team-b", Source: "project_ownership", ComputedAt: base.Add(-time.Hour)}, issueKinds, nil},
+		{"control: provenance of an issue donor under an own primary", ownedWithProvenance, workItemAttributionNewestPrimary{TeamID: "team-b", Source: "project_ownership", ComputedAt: base.Add(-time.Hour)}, issueKinds, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rows := map[string]workItemAttributionNewestPrimary{"P": tc.item, "D": tc.donor}
@@ -134,7 +134,7 @@ func TestDonorChangeARefusedDonorDoesNotAdvanceTheStalenessSignal(t *testing.T) 
 	}
 	rows := map[string]workItemAttributionNewestPrimary{
 		"P":       {Source: "unassigned", ComputedAt: base},
-		"A-pr":    {TeamID: "team-a", Source: "repo_ownership", ComputedAt: base.Add(time.Hour)},
+		"A-pr":    {TeamID: "team-a", Source: "project_ownership", ComputedAt: base.Add(time.Hour)},
 		"B-issue": {TeamID: "team-b", Source: "project_ownership", ComputedAt: base.Add(-time.Hour)},
 	}
 	kinds := map[string]teamattribution.GithubWorkItemDerivationSubject{
@@ -178,7 +178,7 @@ func TestDonorChangeRefusalCountsAreOfCurrentEdgesOnly(t *testing.T) {
 	edge := func(source, target string) teamattribution.GithubWorkItemDerivationDependencyEdge {
 		return teamattribution.GithubWorkItemDerivationDependencyEdge{SourceWorkItemID: source, TargetWorkItemID: target, RelationshipType: "relates_to", LastSynced: base}
 	}
-	recorded := "linked_issue=OLD;dependency_type=relates_to;donor_provider=github;donor_source=repo_ownership"
+	recorded := "linked_issue=OLD;dependency_type=relates_to;donor_provider=github;donor_source=project_ownership"
 	itemLinkedToOld := workItemAttributionNewestPrimary{TeamID: "team-b", Source: "linked_issue", ComputedAt: base, Evidence: recorded}
 	kind := func(id, provider, itemType string) teamattribution.GithubWorkItemDerivationSubject {
 		return teamattribution.GithubWorkItemDerivationSubject{WorkItemID: id, Provider: provider, Type: itemType}
@@ -229,7 +229,7 @@ func TestDonorChangeANativeTeamItemCountsNoRefusal(t *testing.T) {
 		{SourceWorkItemID: "P", TargetWorkItemID: "D", RelationshipType: "relates_to", LastSynced: base},
 	}
 	kinds := map[string]teamattribution.GithubWorkItemDerivationSubject{"D": {WorkItemID: "D", Provider: "github", Type: "pr"}}
-	donor := workItemAttributionNewestPrimary{TeamID: "team-b", Source: "repo_ownership", ComputedAt: base.Add(time.Hour)}
+	donor := workItemAttributionNewestPrimary{TeamID: "team-b", Source: "project_ownership", ComputedAt: base.Add(time.Hour)}
 	for _, tc := range []struct {
 		name string
 		item workItemAttributionNewestPrimary

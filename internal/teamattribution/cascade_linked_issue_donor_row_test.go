@@ -26,13 +26,14 @@ func TestALinkedItemCopiesItsDonorsRowOnly(t *testing.T) {
 				rows map[string]GithubWorkItemDerivationDonorRow
 				want string
 			}{
-				{"the donor's row wins over its resolution here", map[string]GithubWorkItemDerivationDonorRow{"donor": {TeamID: "team-row", Source: "repo_ownership"}}, "team-row"},
+				{"the donor's row wins over its resolution here", map[string]GithubWorkItemDerivationDonorRow{"donor": {TeamID: "team-row", Source: "project_ownership"}}, "team-row"},
+				{"an issue's repo_ownership row gives nothing", map[string]GithubWorkItemDerivationDonorRow{"donor": {TeamID: "team-row", Source: "repo_ownership"}}, ""},
 				{"no donor row gives nothing", map[string]GithubWorkItemDerivationDonorRow{}, ""},
 				{"an inherited row gives nothing", map[string]GithubWorkItemDerivationDonorRow{"donor": {TeamID: "team-row", Source: "linked_issue"}}, ""},
 				{"a membership row gives nothing", map[string]GithubWorkItemDerivationDonorRow{"donor": {TeamID: "team-row", Source: "assignee_membership"}}, ""},
 				{"a fallback row gives nothing", map[string]GithubWorkItemDerivationDonorRow{"donor": {TeamID: "team-row", Source: "manual_fallback"}}, ""},
 				{"a native team row gives its team", map[string]GithubWorkItemDerivationDonorRow{"donor": {TeamID: "team-row", Source: "native_team"}}, "team-row"},
-				{"a row with no team gives nothing", map[string]GithubWorkItemDerivationDonorRow{"donor": {Source: "repo_ownership"}}, ""},
+				{"a row with no team gives nothing", map[string]GithubWorkItemDerivationDonorRow{"donor": {Source: "project_ownership"}}, ""},
 			} {
 				index, evidence, _, _ := derived.BuildLinkedIssueIndexFromRows(provider, subjects, tc.rows, edges, nil)
 				inherited, ok := index["pr"]

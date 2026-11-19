@@ -20,6 +20,8 @@ type IncidentMetricsDailyRecord struct {
 	IncidentsCount uint32
 	MTTRP50Hours   *float64
 	MTTRP90Hours   *float64
+	// RepairHoursSamples are the samples of the two percentiles, stored with the row for the pooled report charts.
+	RepairHoursSamples []float64
 }
 
 // IncidentExecutor is the NATIVE implementation of the incident
@@ -200,6 +202,7 @@ func computeIncidentMetricsDaily(day time.Time, incidents []IncidentRow) []Incid
 			record.MTTRP50Hours = &p50
 			record.MTTRP90Hours = &p90
 		}
+		record.RepairHoursSamples = append([]float64{}, b.mttrHours...)
 		records = append(records, record)
 	}
 	return records

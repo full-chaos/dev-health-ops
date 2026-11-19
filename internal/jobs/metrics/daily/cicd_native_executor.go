@@ -90,6 +90,12 @@ func (executor *CICDExecutor) ComputeFamily(
 
 	computedAt := executor.nowUTC()
 	result := cicd.ComputeCICDMetricsDaily(dayStart, pipelineRuns, computedAt)
+	for i := range result {
+		if !pooledSamplesFit(ctx, "cicd", run.OrganizationID, result[i].RepoID.String(), dayStart, len(result[i].PooledRunMinutes)) {
+			result[i].PooledRunMinutes, result[i].PooledQueueMinutes = []*float64{}, []*float64{}
+			result[i].PooledSamplesOverCap = true
+		}
+	}
 
 	rowsWritten, err := executor.writer.WriteResult(ctx, result, run.OrganizationID)
 	if err != nil {

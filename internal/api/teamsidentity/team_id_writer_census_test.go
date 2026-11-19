@@ -62,6 +62,10 @@ var teamIDDynamicWriters = map[string]struct {
 	// keyed id would be another key and would leave the old row in place. It
 	// writes no team row and no link row (package teamkeytables).
 	"internal/jobs/metrics/daily/stale_team_keys.go": {1, "stale-key rule: the stored id of the superseded row, daily metric tables only"},
+	// The empty-run retraction of benchmarking copies the key of the stored row
+	// it retracts (scope_key is a team id only in a scope_type 'team' row); it
+	// computes no team and writes no team row and no link row.
+	"internal/jobs/metrics/daily/benchmarking_empty_run_retire.go": {1, "benchmarking empty-run retraction: the stored key of the retired row, the six benchmarking output tables only"},
 	// Exception: `dho fixtures generate` writes contrived CI data, the frozen
 	// fixture world's rows as they are, into an organization that holds no
 	// synced data (it refuses one without --allow-mixed-org). Its team ids

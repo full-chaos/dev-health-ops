@@ -219,12 +219,8 @@ func validatePagerDutyServiceMappingRows(
 }
 
 func pagerDutyMappingSourceValid(value string) bool {
-	switch pagerDutyServiceMappingSource(value) {
-	case pagerDutyMappingAdmin, pagerDutyMappingMetadata, pagerDutyMappingCompass:
-		return true
-	default:
-		return false
-	}
+	_, known := pagerDutyMappingSourceRules[pagerDutyServiceMappingSource(value)]
+	return known
 }
 
 func (sink PagerDutyServicesClickHouseEffects) writeServicesSnapshot(

@@ -305,6 +305,7 @@ dev_health_runtime_ready		code: internal/platform/health/server.go
 dev_health_runtime_required_checks		code: internal/platform/health/server.go
 dev_health_runtime_uptime_seconds		code: internal/platform/health/server.go
 dev_health_scheduler_explicit_datasets_without_row_total		code: internal/scheduler/sync/materializer.go
+dev_health_sync_coverage_backfill_resolutions_total	outcome	code: internal/synccoverage/metrics.go
 dev_health_sync_coverage_datasets_excluded_by_intent_total	provider	code: internal/synccoverage/metrics.go
 dev_health_sync_coverage_folded_key_resolutions_total	canonical_dataset_key	code: internal/synccoverage/metrics.go
 dev_health_sync_dispatch_advisory_lock_wait_total	outcome	code: internal/platform/workersignals/workersignals.go

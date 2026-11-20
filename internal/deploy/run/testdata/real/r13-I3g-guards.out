@@ -1,0 +1,4 @@
+GUARD4994 PASS: #4994 in cut=1 authService.phase=2
+GUARDVALUES PASS: 3 poolers {maxSurge 0, maxUnavailable 1} + connectionBudget 97 in TIP
+GUARDHEADROOM PASS (stage i19): the services of steps 1..6 at their NEW value, the others at the OLD value (postgresql 400m)
+HOOKGUARD PASS: streak-index hook Job renders

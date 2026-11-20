@@ -1,0 +1,4 @@
+docs (non-Secret): A 91, B 91; mode i19; expected image rows 1; added docs expected 0
+Deployment/dev-health-ops-go-api .spec.template.spec.containers[0].env[41].value CHANGED 10.42.0.0/24 -> 10.42.0.0/24,!10.42.0.0,!10.42.0.1 [FIELD row]
+expected image rows seen 1 of 1; missing []; duplicated []; UNEXPECTED: 0
+RENDER PATHS: PASS

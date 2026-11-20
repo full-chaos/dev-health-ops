@@ -1,0 +1,33 @@
+# kubectl top pods -n dev-health (pod cpu memory) 2026-10-28T17:54:38Z
+top dev-health-acr-66658d5b7f-h6wqk 1m 19Mi
+top dev-health-acr-66658d5b7f-rkh9m 1m 19Mi
+top dev-health-acr-falkordb-0 9m 2052Mi
+top dev-health-acr-mcp-5688597865-jm99m 1m 13Mi
+top dev-health-acr-projector-7486cc89fc-8cfjx 6m 42Mi
+top dev-health-ops-auth-service-544c68f895-9plxg 2m 9Mi
+top dev-health-ops-auth-service-544c68f895-hk7zh 2m 9Mi
+top dev-health-ops-go-api-c8c54d46d-jqvjs 2m 21Mi
+top dev-health-ops-go-heavy-55b89f8f45-l5krc 5m 36Mi
+top dev-health-ops-go-ops-75db74dfdb-5pt9m 5m 32Mi
+top dev-health-ops-go-pgbouncer-coordinator-session-6f45cf7bb8b5wxd 4m 1Mi
+top dev-health-ops-go-pgbouncer-queue-session-66444d645c-hsq6v 4m 2Mi
+top dev-health-ops-go-pgbouncer-transaction-55887bcc9-2srdt 2m 4Mi
+top dev-health-ops-go-reconciler-854f8c4fdc-ztskz 8m 24Mi
+top dev-health-ops-go-scheduler-679587fc88-5bqst 3m 20Mi
+top dev-health-ops-go-stream-external-77cfd7df7d-hzbw2 2m 26Mi
+top dev-health-ops-go-stream-ingest-6697b6dc99-p69xf 2m 17Mi
+top dev-health-ops-go-stream-pagerduty-674fc8b598-rlpkt 1m 16Mi
+top dev-health-ops-go-sync-55dc78bb57-rw4lr 4m 24Mi
+top dev-health-ops-go-sync-provider-7944c7bfd7-cctxr 4m 35Mi
+top dev-health-ops-postgresql-0 501m 407Mi
+top dev-health-ops-query-api-5ddd445cd7-6sd64 1m 18Mi
+top dev-health-ops-query-api-5ddd445cd7-9rjfj 1m 17Mi
+top dev-health-ops-valkey-84ff7dd4d4-7qqld 9m 5Mi
+top dev-health-ops-web-76578ddd8f-6nxqp 2m 137Mi
+top dev-health-ops-web-76578ddd8f-r7t77 2m 138Mi
+top dev-health-otel-collector-7d96fb68fc-zg9m7 19m 135Mi
+# hpa rows (name targets minpods maxpods replicas)
+hpa dev-health-ops-web 4%/70% 2 4 2
+hpa keda-hpa-dev-health-ops-go-heavy unknown 1 3 1
+hpa keda-hpa-dev-health-ops-go-ops unknown 1 2 1
+hpa keda-hpa-dev-health-ops-go-sync unknown 1 2 1

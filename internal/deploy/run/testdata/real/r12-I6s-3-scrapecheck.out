@@ -1,0 +1,2 @@
+SCRAPECHECK pods (ip:8096): 10.42.0.87:8096 10.42.0.88:8096 ; series: 2, distinct instance labels: 2
+SCRAPECHECK PASS

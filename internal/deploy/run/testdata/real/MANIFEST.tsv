@@ -1,0 +1,41 @@
+# step	fixture	source (under lanes/fcc-window-1028)	source lines	source sha256[:12]	note
+I0	s20a-I0.out	PRODROLL-WORK-dev-health-i20-s20-a/pre/I0.out	1..1	6f25c968ca00	the prodroll v3e step .out of the s20-a pre (prod, 20:27Z)
+RENDER	s20a-RENDER.out	PRODROLL-WORK-dev-health-i20-s20-a/pre/RENDER.out	1..1	b9c352b39e4c	the prodroll v3e step .out of the s20-a pre (prod, 20:27Z)
+GATES	s20a-GATES.out	PRODROLL-WORK-dev-health-i20-s20-a/pre/GATES.out	1..6	472e12719dce	the prodroll v3e step .out of the s20-a pre (prod, 20:27Z)
+V2r-kit	s20a-V2r-kit.out	PRODROLL-WORK-dev-health-i20-s20-a/pre/V2r-kit.out	1..9	719d948bf514	the prodroll v3e step .out of the s20-a pre (prod, 20:27Z)
+S0	s20a-S0.out	PRODROLL-WORK-dev-health-i20-s20-a/pre/S0.out	1..2	6b82d17be405	the prodroll v3e step .out of the s20-a pre (prod, 20:27Z)
+I0s	s20a-I0s.out	PRODROLL-WORK-dev-health-i20-s20-a/pre/I0s.out	1..2	e5a7f41ef141	the prodroll v3e step .out of the s20-a pre (prod, 20:27Z)
+I1	s20a-I1.out	PRODROLL-WORK-dev-health-i20-s20-a/pre/I1.out	1..6	d94ccc5a60af	the prodroll v3e step .out of the s20-a pre (prod, 20:27Z)
+ROLLBACK_REV-gate	s20a-ROLLBACK_REV-gate.out	PRODROLL-WORK-dev-health-i20-s20-a/pre/ROLLBACK_REV-gate.out	1..1	4948a38791bc	the prodroll v3e step .out of the s20-a pre (prod, 20:27Z)
+I1r	s20a-I1r.out	PRODROLL-WORK-dev-health-i20-s20-a/pre/I1r.out	1..24	5e2fa5e45b7d	the prodroll v3e step .out of the s20-a pre (prod, 20:27Z)
+PODSNAP-before	s20a-PODSNAP-before.out	PRODROLL-WORK-dev-health-i20-s20-a/pre/PODSNAP-before.out	1..22	800ae0e3f57c	the prodroll v3e step .out of the s20-a pre (prod, 20:27Z)
+I2-collect	r13-I2-collect.out	RUN-11705-r13-175427Z.log	90..176	95a360534c4a	
+I2-compute	r13-I2-compute.out	RUN-11705-r13-175427Z.log	177..183	95a360534c4a	
+I3t	r13-I3t-topsnap.out	RUN-11705-r13-175427Z.log	186..218	95a360534c4a	
+I3g	r13-I3g-guards.out	RUN-11705-r13-175427Z.log	221..224	95a360534c4a	
+I3p	r13-I3p-render-paths.out	RUN-11705-r13-175427Z.log	227..230	95a360534c4a	RENDER-PATHS part only (v3e prints the DOCS-GATE lines before it in the same ssh)
+I3d	r13-I3d-deploy.out	RUN-11705-r13-175427Z.log	235..240	95a360534c4a	the ROLL-24d deploy verb part (v3e prints the gate text lines before it in the same ssh)
+I4	r13-I4-wait.out	RUN-11705-r13-175427Z.log	243..243	95a360534c4a	line 244 rc=0 is the lead's echo, not the tool
+I6	r13-I6-stagecheck.out	RUN-11705-r13-175427Z.log	247..268	95a360534c4a	
+I6m	r13-I6m-migjoblog.out	RUN-11705-r13-175427Z.log	284..286	95a360534c4a	
+I6p	r13-I6p-pgver.out	RUN-11705-r13-175427Z.log	289..290	95a360534c4a	
+I6l	r13-I6l-liverows.out	RUN-11705-r13-175427Z.log	293..294	95a360534c4a	
+PODSNAP-after	r13-PODSNAP-after.out	RUN-11705-r13-175427Z.log	297..318	95a360534c4a	
+PODSNAP-cmp	r13-PODSNAP-cmp.out	RUN-11705-r13-175427Z.log	319..342	95a360534c4a	
+I7-topsnap	r13-I7-topsnap.out	RUN-11705-r13-175427Z.log	345..377	95a360534c4a	
+I7-topcmp	r13-I7-topcmp.out	RUN-11705-r13-175427Z.log	378..410	95a360534c4a	
+I6s-1	r12-I6s-1-scrape.out	RUN-11703s2-r12-154830Z.log	307..310	b2c4ba627c34	
+I6s-3	r12-I6s-3-scrapecheck.out	RUN-11703s2-r12-154830Z.log	366..367	b2c4ba627c34	
+P0	11699-P0.out	RUN-11699-ingress-161433Z.log	4..5	f9c5f9b47a38	
+P1	11699-P1.out	RUN-11699-ingress-161433Z.log	8..13	f9c5f9b47a38	
+P2	11699-P2.out	RUN-11699-ingress-161433Z.log	16..18	f9c5f9b47a38	
+P3	11699-P3.out	RUN-11699-ingress-161433Z.log	21..22	f9c5f9b47a38	
+P4	11699-P4.out	RUN-11699-ingress-161433Z.log	25..28	f9c5f9b47a38	the 2 client IPs replaced by TEST-NET-3 203.0.113.x (shape kept)
+R4	11699-R4-as-P4.out	RUN-11699-ingress-161433Z.log	25..28	f9c5f9b47a38	readback R4 runs the same ing_P4 text; the 2 client IPs replaced by TEST-NET-3
+UPGRADE	11699-UPGRADE.out	RUN-11699-ingress-161433Z.log	52..64	f9c5f9b47a38	the helm upgrade output + upgrade rc (prodroll prints the first 12 lines, then upgrade rc)
+R1-R3	11699-R1-R3.out	RUN-11699-ingress-161433Z.log	66..76	f9c5f9b47a38	
+NEWEST	11699-helm-history-max1.out	RUN-11699-ingress-161433Z.log	66..68	f9c5f9b47a38	helm history table: the header + the newest row (real helm padding + tabs)
+HISTORY	11699-helm-history.out	RUN-11699-ingress-161433Z.log	66..68	f9c5f9b47a38	helm history table (real helm padding + tabs)
+GATE-M	11709-GATE-M.out	fcc-11709/RUN-11709-rev425-160350Z.log	3..3	466d84717f03	
+A-STEP	11709-A-STEP.out	fcc-11709/RUN-11709-rev425-160350Z.log	5..18	466d84717f03	the 14 git rev-parse shas + the dirty count
+F1PIPE	11709-F1PIPE.out	fcc-11709/RUN-11709-rev425-160350Z.log	22..37	466d84717f03	the remote log as prodroll prints it; the 2 sha12 values of the live URI masked to 000000000000

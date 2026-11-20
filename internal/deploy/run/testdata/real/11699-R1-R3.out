@@ -1,0 +1,11 @@
+REVISION	UPDATED                 	STATUS    	CHART               	APP VERSION	DESCRIPTION     
+3       	Wed Oct 28 06:05:31 2026	superseded	ingress-nginx-4.14.5	1.14.5     	Upgrade complete
+4       	Wed Oct 28 16:17:12 2026	deployed  	ingress-nginx-4.14.5	1.14.5     	Upgrade complete
+helm Apply keys={"f:compute-full-forwarded-for":{},"f:proxy-real-ip-cidr":{},"f:proxy-set-headers":{},"f:use-forwarded-headers":{}}
+kubectl-patch Update keys={"f:compute-full-forwarded-for":{},"f:proxy-real-ip-cidr":{},"f:use-forwarded-headers":{}}
+R2 use-forwarded-headers=[true]
+R2 proxy-real-ip-cidr=[10.42.0.1/32]
+R2 compute-full-forwarded-for=[false]
+ingress-nginx-controller-67cf7ccf4b-zfcdh restarts=0 ready=true
+R3 reload-error lines: 0
+R3 reload lines: 0

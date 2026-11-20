@@ -1,0 +1,22 @@
+helm live (last deployed) rev now 426 (deployed); before the stage 425
+helm newest rev: 426 status deployed
+stage log: 61 lines, done marker: yes, deploy_rc=0
+CH STS 0/0 + PVC Bound: OK
+'start refused' lines, all 9 worker groups, every pod (count): 0
+readiness refusal lines in the CURRENT pods, last 10 min (count; posture_manifest_lockstep | domain_postgres | coordinator_postgres): 0
+go-api ready 1/1  query-api ready 2/2  auth-service ready 2/2
+STAGECHECK i19: no failed pod (hook Jobs completed)
+STAGECHECK i19: worker image digests 2384953f663a = old (0 pod rollouts: ok)
+STAGECHECK i19: restart sum 0 == baseline 0 (ok)
+dev-health-ops-go-heavy ready=1/1 img=2384953f663a restarts=0
+dev-health-ops-go-ops ready=1/1 img=2384953f663a restarts=0
+dev-health-ops-go-reconciler ready=1/1 img=2384953f663a restarts=0
+dev-health-ops-go-scheduler ready=1/1 img=2384953f663a restarts=0
+dev-health-ops-go-stream-external ready=1/1 img=2384953f663a restarts=0
+dev-health-ops-go-stream-ingest ready=1/1 img=2384953f663a restarts=0
+dev-health-ops-go-stream-pagerduty ready=1/1 img=2384953f663a restarts=0
+dev-health-ops-go-sync ready=1/1 img=2384953f663a restarts=0
+dev-health-ops-go-sync-provider ready=1/1 img=2384953f663a restarts=0
+KEDA ScaledObjects: scaledobject.keda.sh/dev-health-ops-go-heavy scaledobject.keda.sh/dev-health-ops-go-ops scaledobject.keda.sh/dev-health-ops-go-sync 
+web ready=2/2 img=228c3e9bd050 restarts=0
+STAGECHECK: PASS

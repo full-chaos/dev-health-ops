@@ -1,0 +1,3 @@
+MIGJOBLOG captured log: 14 lines (copy /home/ubuntu/lane-prod-k8s/img/migjob.log, 0600)
+MIGJOBLOG postgres action=up_to_date applied=[] heads=["0066", "0162"]
+MIGJOBLOG clickhouse action=up_to_date applied=[] head=144_llm_attempts_endpoint.sql

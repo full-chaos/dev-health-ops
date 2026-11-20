@@ -1,0 +1,24 @@
+RESTART dev-health-ops-auth-service-544c68f895-9plxg 0
+RESTART dev-health-ops-auth-service-544c68f895-hk7zh 0
+RESTART dev-health-ops-go-api-cddf9c767-6gj96 0
+RESTART dev-health-ops-go-heavy-55b89f8f45-l5krc 0
+RESTART dev-health-ops-go-ops-75db74dfdb-5pt9m 0
+RESTART dev-health-ops-go-pgbouncer-coordinator-session-6f45cf7bb8b5wxd 0
+RESTART dev-health-ops-go-pgbouncer-queue-session-66444d645c-hsq6v 0
+RESTART dev-health-ops-go-pgbouncer-transaction-55887bcc9-2srdt 0
+RESTART dev-health-ops-go-reconciler-854f8c4fdc-ztskz 0
+RESTART dev-health-ops-go-scheduler-679587fc88-5bqst 0
+RESTART dev-health-ops-go-stream-external-77cfd7df7d-hzbw2 0
+RESTART dev-health-ops-go-stream-ingest-6697b6dc99-p69xf 0
+RESTART dev-health-ops-go-stream-pagerduty-674fc8b598-rlpkt 0
+RESTART dev-health-ops-go-sync-55dc78bb57-rw4lr 0
+RESTART dev-health-ops-go-sync-provider-7944c7bfd7-cctxr 0
+RESTART dev-health-ops-postgresql-0 0
+RESTART dev-health-ops-query-api-5ddd445cd7-6sd64 0
+RESTART dev-health-ops-query-api-5ddd445cd7-9rjfj 0
+RESTART dev-health-ops-valkey-84ff7dd4d4-7qqld 0
+RESTART dev-health-ops-web-76578ddd8f-6nxqp 0
+RESTART dev-health-ops-web-76578ddd8f-r7t77 0
+RESTART dev-health-otel-collector-7d96fb68fc-zg9m7 0
+STATE RESTARTMAP=dev-health-ops-auth-service-544c68f895-9plxg:0,dev-health-ops-auth-service-544c68f895-hk7zh:0,dev-health-ops-go-api-cddf9c767-6gj96:0,dev-health-ops-go-heavy-55b89f8f45-l5krc:0,dev-health-ops-go-ops-75db74dfdb-5pt9m:0,dev-health-ops-go-pgbouncer-coordinator-session-6f45cf7bb8b5wxd:0,dev-health-ops-go-pgbouncer-queue-session-66444d645c-hsq6v:0,dev-health-ops-go-pgbouncer-transaction-55887bcc9-2srdt:0,dev-health-ops-go-reconciler-854f8c4fdc-ztskz:0,dev-health-ops-go-scheduler-679587fc88-5bqst:0,dev-health-ops-go-stream-external-77cfd7df7d-hzbw2:0,dev-health-ops-go-stream-ingest-6697b6dc99-p69xf:0,dev-health-ops-go-stream-pagerduty-674fc8b598-rlpkt:0,dev-health-ops-go-sync-55dc78bb57-rw4lr:0,dev-health-ops-go-sync-provider-7944c7bfd7-cctxr:0,dev-health-ops-postgresql-0:0,dev-health-ops-query-api-5ddd445cd7-6sd64:0,dev-health-ops-query-api-5ddd445cd7-9rjfj:0,dev-health-ops-valkey-84ff7dd4d4-7qqld:0,dev-health-ops-web-76578ddd8f-6nxqp:0,dev-health-ops-web-76578ddd8f-r7t77:0,dev-health-otel-collector-7d96fb68fc-zg9m7:0
+STATE RESTARTS0=0

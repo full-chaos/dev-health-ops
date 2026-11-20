@@ -1,0 +1,9 @@
+PASS /home/ubuntu/lane-prod-k8s/deploy-roll-24d @ d4c9131bfee56349ea4db6cf29768297316e534a
+gitlinks: acr 418f9bf4 ops e99787a5
+verify_pins=passed
+PASS helm template rc 0
+PASS /home/ubuntu/lane-prod-k8s/deploy-rollback-24d @ f301c670ab2a70f3e7ab4d4f3758e2e53c5f6111
+gitlinks: acr 418f9bf4 ops e99787a5
+verify_pins=passed
+PASS helm template rc 0
+KITREFRESH: PASS (both trees; verify_pins from the kit, nothing run from the trees)

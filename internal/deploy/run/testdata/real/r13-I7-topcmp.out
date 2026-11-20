@@ -1,0 +1,33 @@
+HPA dev-health-ops-web TARGETS before 4%/70% after 4%/70%
+HPA keda-hpa-dev-health-ops-go-heavy TARGETS before unknown after unknown
+HPA keda-hpa-dev-health-ops-go-ops TARGETS before unknown after unknown
+HPA keda-hpa-dev-health-ops-go-sync TARGETS before unknown after unknown
+TOP dev-health-acr-66658d5b7f-h6wqk                  before 1m 19Mi      after 1m 19Mi
+TOP dev-health-acr-66658d5b7f-rkh9m                  before 1m 19Mi      after 1m 19Mi
+TOP dev-health-acr-falkordb-0                        before 9m 2052Mi    after 385m 2052Mi
+TOP dev-health-acr-mcp-5688597865-jm99m              before 1m 13Mi      after 1m 13Mi
+TOP dev-health-acr-projector-7486cc89fc-8cfjx        before 6m 42Mi      after 9m 43Mi
+TOP dev-health-ops-auth-service-544c68f895-9plxg     before 2m 9Mi       after 2m 9Mi
+TOP dev-health-ops-auth-service-544c68f895-hk7zh     before 2m 9Mi       after 2m 9Mi
+TOP dev-health-ops-go-api-c8c54d46d-jqvjs            before 2m 21Mi      after - -
+TOP dev-health-ops-go-api-cddf9c767-6gj96            before - -          after 2m 20Mi
+TOP dev-health-ops-go-heavy-55b89f8f45-l5krc         before 5m 36Mi      after 5m 38Mi
+TOP dev-health-ops-go-ops-75db74dfdb-5pt9m           before 5m 32Mi      after 5m 29Mi
+TOP dev-health-ops-go-pgbouncer-coordinator-session-6f45cf7bb8b5wxd before 4m 1Mi       after 4m 1Mi
+TOP dev-health-ops-go-pgbouncer-queue-session-66444d645c-hsq6v before 4m 2Mi       after 4m 2Mi
+TOP dev-health-ops-go-pgbouncer-transaction-55887bcc9-2srdt before 2m 4Mi       after 2m 3Mi
+TOP dev-health-ops-go-reconciler-854f8c4fdc-ztskz    before 8m 24Mi      after 9m 24Mi
+TOP dev-health-ops-go-scheduler-679587fc88-5bqst     before 3m 20Mi      after 3m 20Mi
+TOP dev-health-ops-go-stream-external-77cfd7df7d-hzbw2 before 2m 26Mi      after 2m 24Mi
+TOP dev-health-ops-go-stream-ingest-6697b6dc99-p69xf before 2m 17Mi      after 1m 17Mi
+TOP dev-health-ops-go-stream-pagerduty-674fc8b598-rlpkt before 1m 16Mi      after 1m 16Mi
+TOP dev-health-ops-go-sync-55dc78bb57-rw4lr          before 4m 24Mi      after 3m 25Mi
+TOP dev-health-ops-go-sync-provider-7944c7bfd7-cctxr before 4m 35Mi      after 5m 31Mi
+TOP dev-health-ops-postgresql-0                      before 501m 407Mi   after 501m 405Mi
+TOP dev-health-ops-query-api-5ddd445cd7-6sd64        before 1m 18Mi      after 1m 18Mi
+TOP dev-health-ops-query-api-5ddd445cd7-9rjfj        before 1m 17Mi      after 1m 17Mi
+TOP dev-health-ops-valkey-84ff7dd4d4-7qqld           before 9m 5Mi       after 9m 5Mi
+TOP dev-health-ops-web-76578ddd8f-6nxqp              before 2m 137Mi     after 2m 137Mi
+TOP dev-health-ops-web-76578ddd8f-r7t77              before 2m 138Mi     after 2m 138Mi
+TOP dev-health-otel-collector-7d96fb68fc-zg9m7       before 19m 135Mi    after 26m 138Mi
+TOPCMP: PASS (web HPA current% unchanged)

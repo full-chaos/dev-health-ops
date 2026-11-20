@@ -1,0 +1,6 @@
+CLONE /home/ubuntu/lane-prod-k8s/deploy-roll-24d origin=pinned url_keys=0 porcelain=0
+CLONE /home/ubuntu/lane-prod-k8s/deploy-rollback-24d origin=pinned url_keys=0 porcelain=0
+MAIN d4c9131bfee56349ea4db6cf29768297316e534a = ls-remote refs/heads/main
+SHA d4c9131bfee56349ea4db6cf29768297316e534a ancestor=1 first_parent=1
+SHA f301c670ab2a70f3e7ab4d4f3758e2e53c5f6111 ancestor=1 first_parent=1
+GATE-REMOTE: PASS

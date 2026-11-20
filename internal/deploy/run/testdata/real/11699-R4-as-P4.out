@@ -1,0 +1,4 @@
+ingress-nginx-controller-67cf7ccf4b-zfcdh restarts=0 ready=true
+P4 access lines 3
+P4 remote_addr 203.0.113.10 2
+P4 remote_addr 203.0.113.11 1

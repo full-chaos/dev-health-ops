@@ -1,0 +1,4 @@
+SCRAPE collector ready 1/1; auth-service pods selected: 2
+SCRAPE-POD dev-health-ops-auth-service-544c68f895-9plxg 10.42.0.87
+SCRAPE-POD dev-health-ops-auth-service-544c68f895-hk7zh 10.42.0.88
+SCRAPE PASS (kubectl half): collector Ready, 2 auth-service pods Running with port 8096 and 2 distinct IPs; next: scrapecheck against the SigNoz series file

@@ -1,0 +1,2 @@
+helm Apply keys={"f:proxy-set-headers":{}}
+kubectl-patch Update keys={"f:compute-full-forwarded-for":{},"f:proxy-real-ip-cidr":{},"f:use-forwarded-headers":{}}

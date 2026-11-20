@@ -1,0 +1,87 @@
+@@FILE nodes.txt
+instance-20260302-0616 4
+@@END
+@@FILE pods.txt
+dev-health/ch-m5-grant17-6fnbg Succeeded 50m,
+dev-health/ch-m5-grant17b-qdj8n Succeeded 50m,
+dev-health/ch-m5-grant17c-b94bs Succeeded 50m,
+dev-health/dev-health-acr-66658d5b7f-h6wqk Running 25m,
+dev-health/dev-health-acr-66658d5b7f-rkh9m Running 25m,
+dev-health/dev-health-acr-falkordb-0 Running 200m,
+dev-health/dev-health-acr-mcp-5688597865-jm99m Running 25m,
+dev-health/dev-health-acr-projector-7486cc89fc-8cfjx Running 50m,
+dev-health/dev-health-ops-auth-service-544c68f895-9plxg Running 50m,
+dev-health/dev-health-ops-auth-service-544c68f895-hk7zh Running 50m,
+dev-health/dev-health-ops-go-api-c8c54d46d-jqvjs Running 50m,
+dev-health/dev-health-ops-go-heavy-55b89f8f45-l5krc Running 100m,
+dev-health/dev-health-ops-go-ops-75db74dfdb-5pt9m Running 50m,
+dev-health/dev-health-ops-go-pgbouncer-coordinator-session-6f45cf7bb8b5wxd Running 50m,
+dev-health/dev-health-ops-go-pgbouncer-queue-session-66444d645c-hsq6v Running 50m,
+dev-health/dev-health-ops-go-pgbouncer-transaction-55887bcc9-2srdt Running 50m,
+dev-health/dev-health-ops-go-reconciler-854f8c4fdc-ztskz Running 30m,
+dev-health/dev-health-ops-go-scheduler-679587fc88-5bqst Running 25m,
+dev-health/dev-health-ops-go-stream-external-77cfd7df7d-hzbw2 Running 25m,
+dev-health/dev-health-ops-go-stream-ingest-6697b6dc99-p69xf Running 25m,
+dev-health/dev-health-ops-go-stream-pagerduty-674fc8b598-rlpkt Running 25m,
+dev-health/dev-health-ops-go-sync-55dc78bb57-rw4lr Running 50m,
+dev-health/dev-health-ops-go-sync-provider-7944c7bfd7-cctxr Running 75m,
+dev-health/dev-health-ops-postgresql-0 Running 400m,
+dev-health/dev-health-ops-provision-roles-jzmr8 Succeeded 100m,
+dev-health/dev-health-ops-query-api-5ddd445cd7-6sd64 Running 25m,
+dev-health/dev-health-ops-query-api-5ddd445cd7-9rjfj Running 25m,
+dev-health/dev-health-ops-river-migrate-zvgvq Succeeded 100m,
+dev-health/dev-health-ops-route-activate-vwcd9 Succeeded 100m,
+dev-health/dev-health-ops-valkey-84ff7dd4d4-7qqld Running 50m,
+dev-health/dev-health-ops-web-76578ddd8f-6nxqp Running 50m,
+dev-health/dev-health-ops-web-76578ddd8f-r7t77 Running 50m,
+dev-health/dev-health-otel-collector-7d96fb68fc-zg9m7 Running 50m,
+ingress-nginx/ingress-nginx-controller-67cf7ccf4b-zfcdh Running 100m,
+keda/keda-admission-webhooks-58876db69c-2bhz2 Running 100m,
+keda/keda-operator-db67b55f6-4f8vs Running 100m,
+keda/keda-operator-metrics-apiserver-d75fdf797-4rq8z Running 100m,
+kube-system/coredns-54996dc9b4-645w4 Running 100m,
+kube-system/local-path-provisioner-77b9867795-8gqbl Running ,
+kube-system/metrics-server-6dc596dfb8-rsxhl Running 100m,
+@@END
+@@FILE deploy.txt
+dev-health/dev-health-acr 2 RollingUpdate 1 25m,
+dev-health/dev-health-acr-mcp 1 RollingUpdate 1 25m,
+dev-health/dev-health-acr-projector 1 Recreate  50m,
+dev-health/dev-health-ops-auth-service 2 RollingUpdate 1 50m,
+dev-health/dev-health-ops-go-api 1 RollingUpdate 1 50m,
+dev-health/dev-health-ops-go-heavy 1 RollingUpdate 1 100m,
+dev-health/dev-health-ops-go-ops 1 RollingUpdate 1 50m,
+dev-health/dev-health-ops-go-pgbouncer-coordinator-session 1 RollingUpdate 0 50m,
+dev-health/dev-health-ops-go-pgbouncer-queue-session 1 RollingUpdate 0 50m,
+dev-health/dev-health-ops-go-pgbouncer-transaction 1 RollingUpdate 0 50m,
+dev-health/dev-health-ops-go-reconciler 1 RollingUpdate 1 30m,
+dev-health/dev-health-ops-go-scheduler 1 RollingUpdate 1 25m,
+dev-health/dev-health-ops-go-stream-external 1 RollingUpdate 1 25m,
+dev-health/dev-health-ops-go-stream-ingest 1 RollingUpdate 1 25m,
+dev-health/dev-health-ops-go-stream-pagerduty 1 RollingUpdate 1 25m,
+dev-health/dev-health-ops-go-sync 1 RollingUpdate 1 50m,
+dev-health/dev-health-ops-go-sync-provider 1 RollingUpdate 1 75m,
+dev-health/dev-health-ops-query-api 2 RollingUpdate 1 25m,
+dev-health/dev-health-ops-valkey 1 Recreate  50m,
+dev-health/dev-health-ops-web 2 RollingUpdate 1 50m,
+dev-health/dev-health-otel-collector 1 Recreate  50m,
+ingress-nginx/ingress-nginx-controller 1 RollingUpdate 25% 100m,
+keda/keda-admission-webhooks 1 RollingUpdate 25% 100m,
+keda/keda-operator 1 RollingUpdate 25% 100m,
+keda/keda-operator-metrics-apiserver 1 RollingUpdate 25% 100m,
+kube-system/coredns 1 RollingUpdate 25% 100m,
+kube-system/local-path-provisioner 1 RollingUpdate 25% ,
+kube-system/metrics-server 1 RollingUpdate 25% 100m,
+@@END
+@@FILE scaledobjects.txt
+dev-health-ops-go-heavy 3
+dev-health-ops-go-ops 2
+dev-health-ops-go-sync 2
+@@END
+@@FILE hpas.txt
+dev-health-ops-web 4
+dev-health-ops-go-heavy 3
+dev-health-ops-go-ops 2
+dev-health-ops-go-sync 2
+@@END
+@@COLLECT OK 2026-10-28T17:54:37Z

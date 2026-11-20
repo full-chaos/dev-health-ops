@@ -1,0 +1,2 @@
+LIVEROW ok   Deployment/dev-health-ops-go-api .spec.template.spec.containers[0].env[41].value = 10.42.0.0/24,!10.42.0.0,!10.42.0.1
+LIVEROWS: PASS (1 rows read, 0 mismatched)

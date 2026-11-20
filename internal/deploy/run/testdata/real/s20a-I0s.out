@@ -1,0 +1,2 @@
+START-CHECK: newest row = 426 deployed; newest deployed revision = 426; expected = 426
+START-CHECK: PASS (revision 426 is the newest and deployed)

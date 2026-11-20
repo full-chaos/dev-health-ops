@@ -1,0 +1,2 @@
+HEAD 309dadea15b861903a9eefb9eb6319f8dfad8c40 dirty=0 values_blob=b20d430f61fbbd5b34a5f0022519f1025bb1565b disk=b20d430f61fbbd5b34a5f0022519f1025bb1565b
+93ea7cf2677577a489e14fc94d6026a1194cf2e453dc86bf43da7162109f0d59  /home/ubuntu/lane-prod-k8s/11647/chart/ingress-nginx-4.14.5.tgz

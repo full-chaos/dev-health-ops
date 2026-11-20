@@ -1,0 +1,7 @@
+R6 HEADROOM (D6411/D6412, Q1=ii; mode img): node allocatable 4000m; pod CPU requests now 2280m; FREE 1720m
+   burst dev-health-ops-go-heavy +2 x 100m
+   burst dev-health-ops-go-ops +1 x 50m
+   burst dev-health-ops-go-sync +1 x 50m
+   burst dev-health-ops-web +2 x 50m
+IMG-STEP ARITHMETIC (mode img): FREE 1720m; need = surge of the rolled Deployments at their current requests 0m + KEDA/HPA burst 400m = 400m
+IMG-STEP WITHIN: no Pending surge pod expected

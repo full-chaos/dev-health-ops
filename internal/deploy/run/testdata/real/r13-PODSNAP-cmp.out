@@ -1,0 +1,24 @@
+KEPT dev-health-ops-auth-service-544c68f895-9plxg (dev-health-ops-auth-service) restarts 0
+KEPT dev-health-ops-auth-service-544c68f895-hk7zh (dev-health-ops-auth-service) restarts 0
+EXEMPT-TARGET dev-health-ops-go-api-c8c54d46d-jqvjs (dev-health-ops-go-api)
+EXEMPT-SCALER dev-health-ops-go-heavy-55b89f8f45-l5krc (dev-health-ops-go-heavy)
+EXEMPT-SCALER dev-health-ops-go-ops-75db74dfdb-5pt9m (dev-health-ops-go-ops)
+KEPT dev-health-ops-go-pgbouncer-coordinator-session-6f45cf7bb8b5wxd (dev-health-ops-go-pgbouncer-coordinator-session) restarts 0
+KEPT dev-health-ops-go-pgbouncer-queue-session-66444d645c-hsq6v (dev-health-ops-go-pgbouncer-queue-session) restarts 0
+KEPT dev-health-ops-go-pgbouncer-transaction-55887bcc9-2srdt (dev-health-ops-go-pgbouncer-transaction) restarts 0
+KEPT dev-health-ops-go-reconciler-854f8c4fdc-ztskz (dev-health-ops-go-reconciler) restarts 0
+KEPT dev-health-ops-go-scheduler-679587fc88-5bqst (dev-health-ops-go-scheduler) restarts 0
+KEPT dev-health-ops-go-stream-external-77cfd7df7d-hzbw2 (dev-health-ops-go-stream-external) restarts 0
+KEPT dev-health-ops-go-stream-ingest-6697b6dc99-p69xf (dev-health-ops-go-stream-ingest) restarts 0
+KEPT dev-health-ops-go-stream-pagerduty-674fc8b598-rlpkt (dev-health-ops-go-stream-pagerduty) restarts 0
+EXEMPT-SCALER dev-health-ops-go-sync-55dc78bb57-rw4lr (dev-health-ops-go-sync)
+KEPT dev-health-ops-go-sync-provider-7944c7bfd7-cctxr (dev-health-ops-go-sync-provider) restarts 0
+KEPT dev-health-ops-postgresql-0 (dev-health-ops-postgresql) restarts 0
+KEPT dev-health-ops-query-api-5ddd445cd7-6sd64 (dev-health-ops-query-api) restarts 0
+KEPT dev-health-ops-query-api-5ddd445cd7-9rjfj (dev-health-ops-query-api) restarts 0
+KEPT dev-health-ops-valkey-84ff7dd4d4-7qqld (dev-health-ops-valkey) restarts 0
+EXEMPT-SCALER dev-health-ops-web-76578ddd8f-6nxqp (dev-health-ops-web)
+EXEMPT-SCALER dev-health-ops-web-76578ddd8f-r7t77 (dev-health-ops-web)
+KEPT dev-health-otel-collector-7d96fb68fc-zg9m7 (dev-health-otel-collector) restarts 0
+PODSNAP before 22 pods: kept 16, missing 0, changed 0, exempt-target 1, exempt-scaler 5
+PODSNAP: PASS

@@ -1,0 +1,6 @@
+REVISION	UPDATED                 	STATUS    	CHART               	APP VERSION	DESCRIPTION     
+1       	Fri Sep 11 20:09:19 2026	superseded	ingress-nginx-4.14.5	1.14.5     	Install complete
+2       	Fri Sep 25 16:23:41 2026	superseded	ingress-nginx-4.14.5	1.14.5     	Upgrade complete
+3       	Wed Oct 28 06:05:31 2026	deployed  	ingress-nginx-4.14.5	1.14.5     	Upgrade complete
+P1 live values == base e6903c19: True
+cni0 inet 10.42.0.1/24

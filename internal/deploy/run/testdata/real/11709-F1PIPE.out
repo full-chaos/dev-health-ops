@@ -1,0 +1,16 @@
+remote log: /home/ubuntu/lane-prod-k8s/11709-logs/F1PIPE-170355Z.log
+== f1pipe-11709 ns=dev-health time=20261028T170355Z
+== P0 preconditions
+P0 file mode/owner before: 600 ubuntu
+P0 rotation marker: absent
+P0 dev-health-ops type=Opaque, key CLICKHOUSE_NATIVE_URI present
+== BEFORE
+BEFORE live CLICKHOUSE_NATIVE_URI sha12=000000000000; URI built from the file: ABSENT; ops.clickhouseCloud ABSENT
+== WRITE (one pipe: kubectl jsonpath | base64 -d | python3 -I writer on stdin)
+WRITE parsed: scheme clickhouse, port 9440, secure=true, user_is_dho_app=true, host_dns_ok=true, db_ok=true, roundtrip=EQUAL
+WRITE ops.clickhouseCloud added (4 keys); every other key unchanged=true; backup of the old file: /home/ubuntu/.config/dev-health/values.prod-secrets.yaml.pre-11709-f1pipe-20261028T170355Z (0600)
+== AFTER
+AFTER file mode/owner: 600 ubuntu; backup /home/ubuntu/.config/dev-health/values.prod-secrets.yaml.pre-11709-f1pipe-20261028T170355Z mode/owner: 600 ubuntu
+AFTER live CLICKHOUSE_NATIVE_URI sha12=000000000000; URI built from the file: EQUAL; ops.clickhouseCloud present=database,host,password,user other_keys=0 nonempty_strings=4
+F1PIPE: PASS
+rc=0

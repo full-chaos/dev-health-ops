@@ -20,11 +20,14 @@ import (
 // Clearenv, syscall.Getenv/Environ/Setenv), so no env var opens a fake or
 // changes a run; (2) os/exec only in run/run.go and no other process start
 // (os.StartProcess, syscall.Exec, ForkExec, StartProcess); (3) no string
-// literal that names a shell (sh, bash, dash, zsh, ksh, ash, busybox, or a
-// path ending in one) or holds a `<shell> -c` form; (4) no dot import of os,
-// os/exec or syscall. NOT pinned: test files, reflect/unsafe/linkname/cgo
-// calls, a shell name built from parts at run time (the real Runner refuses
-// any tool off its allow list at run time).
+// literal whose whole text is a shell name (sh, bash, dash, zsh, ksh, ash,
+// busybox, or a path ending in one), and none that holds `<shell> -c` at the
+// start or after whitespace or "/"; (4) no dot import of os, os/exec or
+// syscall. NOT pinned (ticket 14358): a shell name after ";" (and "&&", "|",
+// "&"), after "$(", after "(", or in quotes inside a literal; test files;
+// reflect/unsafe/linkname/cgo calls; a shell name built from parts at run
+// time. The run-time guard is run.Exec: it starts no tool off its allow list
+// (git, helm, kubectl), whatever a literal holds.
 var censusRoots = []string{"..", "../../deploycli"}
 
 const execFile = "run/run.go"

@@ -1,9 +1,15 @@
 package run
 
 import (
+	"bufio"
+	"fmt"
+	"io"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -416,5 +422,104 @@ func TestALongStateLineHidesNoKey(t *testing.T) {
 	wantCode(t, s.Put("RESTARTMAP", "b:1"), CodeStop, "a long key set twice")
 	if v, err := s.Get("RESTARTMAP"); err != nil || len(v) < 80000 {
 		t.Fatalf("RESTARTMAP: len %d %v", len(v), err)
+	}
+}
+
+// deployRaceArgs are the words after "--" that make TestDeployRaceHelper a
+// child: <root> <RUN_TAG>...
+func deployRaceArgs() []string {
+	for i, a := range os.Args {
+		if a == "--" {
+			return os.Args[i+1:]
+		}
+	}
+	return nil
+}
+
+// TestDeployRaceHelper is the child of TestTwoProcessesRaceForOneDeploy: per
+// RUN_TAG it waits for one byte on stdin, calls Begin("deploy") and prints its code.
+func TestDeployRaceHelper(t *testing.T) {
+	args := deployRaceArgs()
+	if len(args) < 2 {
+		t.Skip("a child of TestTwoProcessesRaceForOneDeploy only")
+	}
+	c := newClock()
+	for _, tag := range args[1:] {
+		if _, err := os.Stdin.Read(make([]byte, 1)); err != nil {
+			t.Fatal(err)
+		}
+		s, err := Open(args[0], "dev-health", tag, shaA, c.now)
+		if err == nil {
+			_, err = s.Begin("deploy")
+		}
+		fmt.Printf("DEPLOY-RACE %s code=%d\n", tag, Code(err))
+	}
+}
+
+// r1 P1 #6 (acp): 2 REAL concurrent calls, each in its own process, released
+// together per round: the O_EXCL deploy.started reservation gives one deploy
+// and one refusal (exit 3), never a STOP; 20 rounds.
+func TestTwoProcessesRaceForOneDeploy(t *testing.T) {
+	r, c := root(t), newClock()
+	const rounds = 20
+	var tags []string
+	for round := 0; round < rounds; round++ {
+		tag := "r" + strconv.Itoa(round)
+		s, err := BeginPre(r, "dev-health", tag, shaA, c.now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.Begin("pre"); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.EndPre(); err != nil {
+			t.Fatal(err)
+		}
+		tags = append(tags, tag)
+	}
+	var cmds [2]*exec.Cmd
+	var gates [2]io.WriteCloser
+	var outs [2]*bufio.Reader
+	for i := range cmds {
+		cmds[i] = exec.Command(os.Args[0], append([]string{"-test.run=^TestDeployRaceHelper$", "-test.count=1", "--", r}, tags...)...)
+		var err error
+		if gates[i], err = cmds[i].StdinPipe(); err != nil {
+			t.Fatal(err)
+		}
+		pipe, err := cmds[i].StdoutPipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		outs[i] = bufio.NewReader(pipe)
+		if err := cmds[i].Start(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	line := regexp.MustCompile(`^DEPLOY-RACE (r[0-9]+) code=([0-9])\n$`)
+	for _, tag := range tags {
+		for i := range gates {
+			if _, err := gates[i].Write([]byte{1}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		var got []string
+		for i := range outs {
+			l, err := outs[i].ReadString('\n')
+			m := line.FindStringSubmatch(l)
+			if err != nil || m == nil || m[1] != tag {
+				t.Fatalf("%s child %d: %q %v", tag, i, l, err)
+			}
+			got = append(got, m[2])
+		}
+		slices.Sort(got)
+		if strings.Join(got, ",") != "0,3" {
+			t.Fatalf("%s: codes %v, want one 0 (the deploy) and one 3 (refused)", tag, got)
+		}
+	}
+	for i := range cmds {
+		gates[i].Close()
+		if err := cmds[i].Wait(); err != nil {
+			t.Fatalf("child %d: %v", i, err)
+		}
 	}
 }

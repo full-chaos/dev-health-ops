@@ -585,21 +585,24 @@ func loadBacklog(
 	query := fmt.Sprintf(`
         SELECT
             sum(wip_count_end_of_day) AS backlog,
-            countIf(%[1]s) AS measured_keys,
-            countIf(%[1]s AND newest_day < {start_date:Date}) AS stale_keys,
-            minIf(newest_day, %[1]s) AS oldest_day
+            countIf(measured) AS measured_keys,
+            countIf(measured AND newest_day < {start_date:Date}) AS stale_keys,
+            minIf(newest_day, measured) AS oldest_day
         FROM (
-            SELECT
-                team_id,
-                work_scope_id,
-                provider,
-                max(day) AS newest_day,
-                `+workItemNewestColumns+`
-            FROM work_item_metrics_daily
-            WHERE %[2]s
-            AND %[3]s
-            GROUP BY team_id, work_scope_id, provider, row_view
-        ) AS newest
+            SELECT newest_day, wip_count_end_of_day, %[1]s AS measured
+            FROM (
+                SELECT
+                    team_id,
+                    work_scope_id,
+                    provider,
+                    max(day) AS newest_day,
+                    `+workItemNewestColumns+`
+                FROM work_item_metrics_daily
+                WHERE %[2]s
+                AND %[3]s
+                GROUP BY team_id, work_scope_id, provider, row_view
+            ) AS newest
+        )
     `, measuredWorkItem, newestrow.PerTeamPredicate("work_item_metrics_daily", where), where)
 
 	rows, err := client.Query(ctx, query, bindings)

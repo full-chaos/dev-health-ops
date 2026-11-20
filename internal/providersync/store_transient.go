@@ -2,10 +2,12 @@ package providersync
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
-	"math/rand/v2"
+	"math/big"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/dialclass"
@@ -112,11 +114,8 @@ func (repository *PostgresRepository) storeRetryWait(ctx context.Context, next i
 	if repository.storeRetrySleep != nil {
 		return repository.storeRetrySleep(ctx, next)
 	}
-	low, high := 25*time.Millisecond, 100*time.Millisecond
-	if next > 2 {
-		low, high = 100*time.Millisecond, 400*time.Millisecond
-	}
-	timer := time.NewTimer(low + rand.N(high-low))
+	low, high := storeRetryWindow(next)
+	timer := time.NewTimer(storeRetryJitter(rand.Reader, low, high))
 	defer timer.Stop()
 	select {
 	case <-ctx.Done():
@@ -124,6 +123,28 @@ func (repository *PostgresRepository) storeRetryWait(ctx context.Context, next i
 	case <-timer.C:
 		return nil
 	}
+}
+
+// storeRetryWindow is the jitter window before in-place attempt `next`.
+func storeRetryWindow(next int) (low, high time.Duration) {
+	if next > 2 {
+		return 100 * time.Millisecond, 400 * time.Millisecond
+	}
+	return 25 * time.Millisecond, 100 * time.Millisecond
+}
+
+// storeRetryJitter draws a uniform wait in [low, high) from entropy (crypto/rand
+// in production: the code scanner refuses math/rand). When entropy fails it
+// waits low.
+func storeRetryJitter(entropy io.Reader, low, high time.Duration) time.Duration {
+	if high <= low {
+		return low
+	}
+	offset, err := rand.Int(entropy, big.NewInt(int64(high-low)))
+	if err != nil {
+		return low
+	}
+	return low + time.Duration(offset.Int64())
 }
 
 // storeOutcome is the state of a unit after a write whose COMMIT outcome is

@@ -434,10 +434,18 @@ func TestRealClickHouse_AIRepetitiveAuthorKeyIsNeverServed(t *testing.T) {
 	if s := strings.ToLower(string(body)); strings.Contains(s, "leak.marker") || strings.Contains(s, "leak marker") {
 		t.Errorf("the served payload holds an author key: %s", body)
 	}
-	// The id is not hashed from the author key either: it is the hash of the kind, the repository and no team.
+	// The id is not hashed from the author key either (CHAOS-14266): it is the hash of the kind, the repository, the
+	// title prefix, the work type and the cluster's anchor (its oldest pull request; one INSERT gives every row one
+	// created_at, so the lowest number), one id per author cluster.
+	want := map[string]bool{}
+	for c := 0; c < 3; c++ {
+		want[stableOpportunityID("repetitive_change", repo, repetitiveClusterKey("rename widget helper", "pull_request", uint32(100*c+1)))] = true
+	}
+	served := map[string]bool{}
 	for _, r := range got.Recommendations {
-		if want := stableOpportunityID(opportunityKinds[r.Kind], repo, ""); r.OpportunityID != want {
-			t.Errorf("opportunityId %s, want %s: an id input other than kind and repository (the author key?)", r.OpportunityID, want)
+		if !want[r.OpportunityID] || served[r.OpportunityID] {
+			t.Errorf("opportunityId %s is not one author-free cluster id served once (the author key?)", r.OpportunityID)
 		}
+		served[r.OpportunityID] = true
 	}
 }

@@ -4,7 +4,9 @@ import (
 	"context"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/syncbucket"
 	"github.com/full-chaos/dev-health-ops/internal/syncrunrollup"
+	"github.com/jackc/pgx/v5"
 )
 
 // appendWakeRun records a run and bucket whose unit this pass moved out of its
@@ -24,11 +26,31 @@ func appendWakeRun(runs []syncrunrollup.SlotFree, slot syncrunrollup.SlotFree) [
 // statement per run, and it never fails the writer: see
 // syncrunrollup.WakeDispatch. db is nil only on the begin-func constructors the
 // unit tests use, which have no pool to wake through.
-func wakeDispatchAfterCommit(ctx context.Context, db syncrunrollup.Execer, sweeps syncrunrollup.BucketSweepEnqueuer, runs []syncrunrollup.SlotFree, now time.Time, path string) {
+func wakeDispatchAfterCommit(ctx context.Context, db syncrunrollup.Execer, sweeps syncrunrollup.BucketSweepEnqueuer, runs []syncrunrollup.SlotFree, reserved []string, now time.Time, path string) {
 	if db == nil {
 		return
 	}
+	syncrunrollup.WakeReserved(ctx, db, reserved, now, path)
 	for _, slot := range runs {
 		syncrunrollup.ReleaseSlot(ctx, db, sweeps, slot, now, path)
 	}
+}
+
+// reserveReleasedSlots gives the slots these writes freed to their buckets' oldest eligible waiters, in the writer's
+// transaction, under the bucket locks it took before any row (syncbucket.ReserveHeads, CHAOS-14250 N1). It returns the
+// runs to wake after the commit.
+func reserveReleasedSlots(ctx context.Context, tx pgx.Tx, runs []syncrunrollup.SlotFree, now time.Time) ([]string, error) {
+	buckets := make([]syncbucket.Bucket, 0, len(runs))
+	for _, slot := range runs {
+		buckets = append(buckets, syncbucket.Bucket{OrgID: slot.OrgID, Provider: slot.Provider, CostClass: slot.CostClass})
+	}
+	var reserved []string
+	for _, bucket := range syncbucket.Sorted(buckets) {
+		heads, err := syncbucket.ReserveHeads(ctx, tx, bucket, now, "")
+		if err != nil {
+			return nil, err
+		}
+		reserved = append(reserved, heads.Reserved...)
+	}
+	return reserved, nil
 }

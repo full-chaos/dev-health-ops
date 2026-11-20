@@ -554,51 +554,30 @@ func TestCoordinatorInsertsBackfillJobsAndDomainIsDenied(t *testing.T) {
 }
 
 // TestCoordinatorExecutesTheBucketSweepSignalStatements (CHAOS-14250) runs, as
-// the real NOSUPERUSER coordinator login, the statements the reconciler runs
-// on the bucket sweep tables: the ReleaseSlot paths' (lease repair,
-// unreclaimable sweep) BumpBucketGenerationSQL (INSERT ... ON CONFLICT DO
-// UPDATE on sync_dispatch_bucket_signals) and WakeDispatchAtSQL (the outbox
-// upsert), and the materializer's UnacknowledgedBucketSignalsSQL read. It also
-// pins that the coordinator holds nothing on sync_dispatch_bucket_reservations
-// and cannot DELETE signals.
+// the real NOSUPERUSER coordinator login, the one bucket sweep statement the
+// reconciler runs on the coordinator pool: the materializer's
+// UnacknowledgedBucketSignalsSQL read. Every signal write (the ReleaseSlot paths
+// of lease repair, the unreclaimable sweep and route-unavailable termination)
+// runs on the domain pool, so the coordinator holds SELECT only on
+// sync_dispatch_bucket_signals and nothing on sync_dispatch_bucket_reservations.
 func TestCoordinatorExecutesTheBucketSweepSignalStatements(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	_, uri, roles := startGrantHarness(t, ctx)
 	coordinator := connectAs(t, ctx, uri, roles.coordinator, grantCoordinatorPass)
 
-	for _, statement := range []struct {
-		name string
-		sql  string
-		args []any
-	}{
-		{"BumpBucketGenerationSQL (insert arm)", syncrunrollup.BumpBucketGenerationSQL, []any{"org", "github", "standard", time.Now().UTC()}},
-		{"WakeDispatchAtSQL", syncrunrollup.WakeDispatchAtSQL, []any{"00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-000000000002", time.Now().UTC(), time.Now().UTC()}},
-		{"UnacknowledgedBucketSignalsSQL (materializer recovery read)", syncrunrollup.UnacknowledgedBucketSignalsSQL, []any{time.Now().UTC(), 100}},
-	} {
-		tx, err := coordinator.Begin(ctx)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := tx.Exec(ctx, statement.sql, statement.args...); err != nil {
-			t.Errorf("%s: denied to the coordinator role, so coordinatorPosture is missing a privilege: %v", statement.name, err)
-		}
-		_ = tx.Rollback(ctx)
-	}
-
-	// The conflict arm: the row must exist first, so the DO UPDATE runs.
 	tx, err := coordinator.Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	for range 2 {
-		if _, err := tx.Exec(ctx, syncrunrollup.BumpBucketGenerationSQL, "org", "github", "standard", time.Now().UTC()); err != nil {
-			t.Fatalf("BumpBucketGenerationSQL (conflict arm) as the coordinator role: %v", err)
-		}
+	if _, err := tx.Exec(ctx, syncrunrollup.UnacknowledgedBucketSignalsSQL, time.Now().UTC(), 100, time.Unix(0, 0).UTC(), "", "", ""); err != nil {
+		t.Errorf("UnacknowledgedBucketSignalsSQL (materializer recovery read): denied to the coordinator role: %v", err)
 	}
+	_ = tx.Rollback(ctx)
 
 	for _, withheld := range []string{
+		"INSERT INTO public.sync_dispatch_bucket_signals (org_id, provider, cost_class, generation, acked_generation, updated_at) VALUES ('o', 'github', 'medium', 1, 0, now())",
+		"UPDATE public.sync_dispatch_bucket_signals SET acked_generation = generation",
 		"DELETE FROM public.sync_dispatch_bucket_signals",
 		"SELECT * FROM public.sync_dispatch_bucket_reservations",
 		"INSERT INTO public.sync_dispatch_bucket_reservations (org_id, provider, cost_class, sync_run_id, backfill, reserved_at) VALUES ('o', 'p', 'c', gen_random_uuid(), false, now())",

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/syncbucket"
 	"github.com/full-chaos/dev-health-ops/internal/syncrunrollup"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -228,7 +229,7 @@ FROM generate_series(1, $3::int) AS n`, rqOrg, rqIntegration, runs, unitsPerRun,
 		if _, err := pool.Exec(ctx, `
 INSERT INTO sync_run_units (id, org_id, sync_run_id, integration_id, source_id, provider, dataset_key, cost_class, mode, status, attempts, created_at, updated_at)
 SELECT ('00000000-0000-4000-900b-' || lpad(to_hex(n * 16 + k), 12, '0'))::uuid, $1, ('00000000-0000-4000-900a-' || lpad(to_hex(n), 12, '0'))::uuid,
-	$2::uuid, $3::uuid, 'github', 'commits', 'medium', 'incremental', CASE WHEN n % 50 = 0 THEN 'planned' ELSE 'success' END, 0, $6::timestamptz, $6::timestamptz
+	$2::uuid, $3::uuid, 'github', 'commits', 'medium', 'incremental', CASE WHEN n % 50 = 0 THEN 'planned' WHEN n % 50 = 1 THEN 'dispatching' ELSE 'success' END, 0, $6::timestamptz, $6::timestamptz
 FROM generate_series(1, $4::int) AS n, generate_series(1, $5::int) AS k`, rqOrg, rqIntegration, rqSource, runs, unitsPerRun, now); err != nil {
 			t.Fatal(err)
 		}
@@ -242,6 +243,9 @@ FROM generate_series(1, $4::int) AS n, generate_series(1, $5::int) AS k`, rqOrg,
 			{"ix_sync_run_units_run_bucket_waiting", "sync_run_units", `CREATE INDEX ix_sync_run_units_run_bucket_waiting ON public.sync_run_units USING btree
     (sync_run_id, provider, cost_class, status, available_at)
     WHERE ((status)::text = ANY ((ARRAY['planned'::character varying, 'retrying'::character varying])::text[]))`},
+			{"ix_sync_run_units_run_bucket_dispatching", "sync_run_units", `CREATE INDEX ix_sync_run_units_run_bucket_dispatching ON public.sync_run_units USING btree
+    (sync_run_id, provider, cost_class, updated_at)
+    WHERE ((status)::text = 'dispatching'::text)`},
 		} {
 			var definition string
 			if err := pool.QueryRow(ctx, `SELECT pg_get_indexdef(to_regclass('public.' || $1))`, index.name).Scan(&definition); err != nil {
@@ -316,7 +320,7 @@ func TestB3HeadReadClassIsAnIndexConditionOfTheMigratedIndex(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, class := range []int{0, 1} {
-			plan, err := p3Explain(ctx, pool, bucketHeadsSQL, rqOrg, "github", "medium", class, now, 1)
+			plan, err := p3Explain(ctx, pool, syncbucket.HeadsSQL, rqOrg, "github", "medium", class, now, 1, now.Add(-staleDispatchSeconds()))
 			if err != nil {
 				t.Fatal(err)
 			}

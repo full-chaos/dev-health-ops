@@ -665,8 +665,10 @@ func TestLostReleaseIsBoundedByTheSweepRearm(t *testing.T) {
 	})
 }
 
-// S11 (H-STARVE): a run reserved by a sweep whose pass never runs (paused route) holds its slot only while the
-// reservation is inside the liveness bound.
+// S11 (H-STARVE, CHAOS-14250 plan 4): a run reserved by a sweep whose pass never runs (paused route) holds its slot
+// only while the reservation is inside the liveness bound; past it the reservation is void and the slot is picked again
+// by eligibility (acp plan4-1): the next pass that reaches the bucket lock reserves it afresh for the oldest eligible
+// run, which is still that run, and admits only what is left.
 func TestPausedRouteSweptRunStopsHoldingBackWithinTheBound(t *testing.T) {
 	withRearmQueuePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
 		t0 := pgNow()
@@ -684,19 +686,34 @@ func TestPausedRouteSweptRunStopsHoldingBackWithinTheBound(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			if err := tx.Commit(ctx); err != nil {
+				t.Fatal(err)
+			}
 			return len(decision.authorizedUnitIDs) - len(decision.cappedUnitIDs)
 		}
-		if err := rqSetReservation(ctx, pool, rqOrg, "github", "medium", older, false, t0.Add(-bound+time.Minute)); err != nil {
+		inside := t0.Add(-bound + time.Minute)
+		if err := rqSetReservation(ctx, pool, rqOrg, "github", "medium", older, false, inside); err != nil {
 			t.Fatal(err)
 		}
-		if got := admits(); got != 1 {
-			t.Fatalf("reservation inside the bound: newer admitted %d, want 1 (one of 2 slots reserved)", got)
+		got := admits()
+		at, _, err := rqReservation(ctx, pool, rqOrg, "github", "medium", older)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != 1 || !at.Equal(inside) {
+			t.Fatalf("reservation inside the bound: newer admitted %d (want 1), reservation at %s (want kept at %s)", got, at, inside)
 		}
 		if err := rqSetReservation(ctx, pool, rqOrg, "github", "medium", older, false, t0.Add(-bound-time.Second)); err != nil {
 			t.Fatal(err)
 		}
-		if got := admits(); got != 2 {
-			t.Fatalf("reservation past the bound (paused route): newer admitted %d, want 2", got)
+		got = admits()
+		at, _, err = rqReservation(ctx, pool, rqOrg, "github", "medium", older)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("reservation past the bound: newer admitted %d; the older run's reservation renewed at %s", got, at.Sub(t0))
+		if got != 1 || !at.Equal(t0) {
+			t.Fatalf("reservation past the bound: newer admitted %d (want 1), reservation at %s (want picked again at %s)", got, at, t0)
 		}
 	})
 }

@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/syncbucket"
+	"github.com/full-chaos/dev-health-ops/internal/syncrunrollup"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -23,7 +25,7 @@ type runOrder struct {
 // admissionLivenessBound is how long a bucket sweep's reservation holds its slot (CHAOS-14250). A reserved run whose
 // pass never runs (a paused route) stops holding the slot after it.
 func admissionLivenessBound() time.Duration {
-	return 2 * redispatchCountdownMax(redispatchCountdown())
+	return syncbucket.ReservationTTL()
 }
 
 // readRunOrder reads the deciding run's admission position in the guard transaction.
@@ -42,33 +44,23 @@ WHERE id = $1::uuid`, runID).Scan(&order.createdAt, &order.backfill, &order.mode
 	return order, nil
 }
 
-// bucketReservationsSQL counts the live reservations of a bucket (CHAOS-14250), all and those of backfill runs,
-// leaving out the run $4 (empty: none). A reservation is a slot a bucket sweep handed to a run whose pass has not yet
-// run; the sweep writes at most the bucket's free slots, so the read is a few rows of the primary key's range.
-const bucketReservationsSQL = `
-SELECT count(*), count(*) FILTER (WHERE reservation.backfill)
-FROM public.sync_dispatch_bucket_reservations AS reservation
-WHERE reservation.org_id = $1 AND reservation.provider = $2 AND reservation.cost_class = $3
-    AND reservation.sync_run_id::text <> $4
-    AND reservation.reserved_at > $5::timestamptz - make_interval(secs => $6::double precision)`
-
-// countBucketReservations runs bucketReservationsSQL under the bucket lock.
+// countBucketReservations counts the bucket's live reservations of other runs (syncbucket.CountReservations).
 func countBucketReservations(ctx context.Context, tx pgx.Tx, bucket dispatchBucket, exceptRunID string, now time.Time) (int, int, error) {
-	var reserved, reservedBackfill int
-	if err := tx.QueryRow(ctx, bucketReservationsSQL, bucket.orgID, bucket.provider, bucket.costClass, exceptRunID, now,
-		admissionLivenessBound().Seconds()).Scan(&reserved, &reservedBackfill); err != nil {
-		return 0, 0, fmt.Errorf("%w: count bucket reservations: %w", ErrDiscoveryTransientFailure, err)
+	reserved, reservedBackfill, err := syncbucket.CountReservations(ctx, tx, bucket.syncBucket(), exceptRunID, now)
+	if err != nil {
+		return 0, 0, fmt.Errorf("%w: %w", ErrDiscoveryTransientFailure, err)
 	}
 	return reserved, reservedBackfill, nil
 }
 
-// retireRunReservationsSQL drops every reservation of the run: its pass is the one the slot was kept for, so the slot
-// is now the pass's to claim (or, if it claims none, free again).
-const retireRunReservationsSQL = `DELETE FROM public.sync_dispatch_bucket_reservations WHERE sync_run_id = $1::uuid`
-
 func retireRunReservations(ctx context.Context, tx pgx.Tx, runID string) error {
-	if _, err := tx.Exec(ctx, retireRunReservationsSQL, runID); err != nil {
-		return fmt.Errorf("%w: retire run reservations: %w", ErrDiscoveryTransientFailure, err)
+	if err := syncbucket.RetireRunReservations(ctx, tx, runID); err != nil {
+		return fmt.Errorf("%w: %w", ErrDiscoveryTransientFailure, err)
 	}
 	return nil
+}
+
+// wakeReservedRuns arms one dispatch wakeup per distinct run a pass reserved a slot for, after the pass committed.
+func wakeReservedRuns(ctx context.Context, db syncrunrollup.Execer, runIDs []string, now time.Time) {
+	syncrunrollup.WakeReserved(ctx, db, runIDs, now, syncrunrollup.DispatchWakePathHoldBack)
 }

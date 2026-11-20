@@ -11,6 +11,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/workersignals"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	"github.com/full-chaos/dev-health-ops/internal/syncbucket"
 	"github.com/full-chaos/dev-health-ops/internal/syncrunrollup"
 	"github.com/full-chaos/dev-health-ops/internal/workitemcontract"
 	"github.com/google/uuid"
@@ -217,6 +218,11 @@ func (repository *PostgresRepository) Complete(
 		return ErrInvalidConfiguration
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	// CHAOS-14250 N1: the bucket lock is this transaction's first lock (one lock order with the dispatch pass, the
+	// sweep and the reconciler's repairs); the slot this unit frees is reserved for the bucket's head below.
+	if err := repository.lockSlotBucket(ctx, tx, claim); err != nil {
+		return ErrInvalidConfiguration
+	}
 	command, err := tx.Exec(ctx, completeUnitSQL,
 		claim.ID, claim.Owner, completedAt.UTC(),
 		int(completedAt.Sub(startedAt).Seconds()), encoded,
@@ -286,11 +292,15 @@ func (repository *PostgresRepository) Complete(
 	if err := syncrunrollup.ArmFinalize(ctx, tx, claim.SyncRunID, claim.OrgID, completedAt); err != nil {
 		return ErrInvalidConfiguration
 	}
+	reserved, err := repository.reserveFreedSlot(ctx, tx, claim, completedAt)
+	if err != nil {
+		return ErrInvalidConfiguration
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return ErrInvalidConfiguration
 	}
 	recordSyncRunRollupBump(ctx, repository.Metrics, claim.SyncRunID, "success", rollupCompleted, rollupFailed, rollupTotal)
-	repository.wakeDispatch(ctx, claim, completedAt)
+	repository.wakeDispatch(ctx, claim, completedAt, reserved)
 	return nil
 }
 
@@ -321,6 +331,11 @@ func (repository *PostgresRepository) CompleteLinearWorkItemFamily(
 		return ErrInvalidConfiguration
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	// CHAOS-14250 N1: the bucket lock is this transaction's first lock (one lock order with the dispatch pass, the
+	// sweep and the reconciler's repairs); the slot this unit frees is reserved for the bucket's head below.
+	if err := repository.lockSlotBucket(ctx, tx, claim); err != nil {
+		return ErrInvalidConfiguration
+	}
 	command, err := tx.Exec(ctx, completeUnitSQL,
 		claim.ID, claim.Owner, completedAt.UTC(),
 		int(completedAt.Sub(startedAt).Seconds()), encoded,
@@ -370,11 +385,15 @@ func (repository *PostgresRepository) CompleteLinearWorkItemFamily(
 	if err := syncrunrollup.ArmFinalize(ctx, tx, claim.SyncRunID, claim.OrgID, completedAt); err != nil {
 		return ErrInvalidConfiguration
 	}
+	reserved, err := repository.reserveFreedSlot(ctx, tx, claim, completedAt)
+	if err != nil {
+		return ErrInvalidConfiguration
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return ErrInvalidConfiguration
 	}
 	recordSyncRunRollupBump(ctx, repository.Metrics, claim.SyncRunID, "success", rollupCompleted, rollupFailed, rollupTotal)
-	repository.wakeDispatch(ctx, claim, completedAt)
+	repository.wakeDispatch(ctx, claim, completedAt, reserved)
 	return nil
 }
 
@@ -706,6 +725,11 @@ func (repository *PostgresRepository) failTx(
 		return ErrInvalidConfiguration
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	// CHAOS-14250 N1: the bucket lock is this transaction's first lock (one lock order with the dispatch pass, the
+	// sweep and the reconciler's repairs); the slot this unit frees is reserved for the bucket's head below.
+	if err := repository.lockSlotBucket(ctx, tx, claim); err != nil {
+		return ErrInvalidConfiguration
+	}
 	resultDoc := map[string]any{"error_category": category}
 	if causeClass != "" {
 		if !ValidCauseClass(causeClass) {
@@ -757,11 +781,15 @@ func (repository *PostgresRepository) failTx(
 	if err := syncrunrollup.ArmFinalize(ctx, tx, claim.SyncRunID, claim.OrgID, completedAt); err != nil {
 		return ErrInvalidConfiguration
 	}
+	reserved, err := repository.reserveFreedSlot(ctx, tx, claim, completedAt)
+	if err != nil {
+		return ErrInvalidConfiguration
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return ErrInvalidConfiguration
 	}
 	recordSyncRunRollupBump(ctx, repository.Metrics, claim.SyncRunID, "failed", rollupCompleted, rollupFailed, rollupTotal)
-	repository.wakeDispatch(ctx, claim, completedAt)
+	repository.wakeDispatch(ctx, claim, completedAt, reserved)
 	// CHAOS-4078: attribute the failure to whichever alias dataset(s) this
 	// claim actually represents, not just the persisted canonical identity
 	// -- see metricDatasetKeys.
@@ -1221,10 +1249,31 @@ func bumpSyncRunRollup(
 	return syncrunrollup.Bump(ctx, tx, syncRunID)
 }
 
+func (claim Claim) slotBucket() syncbucket.Bucket {
+	return syncbucket.Bucket{OrgID: claim.OrgID, Provider: claim.Provider, CostClass: string(claim.CostClass)}
+}
+
+// lockSlotBucket takes the unit's bucket lock as the first lock of its terminal transaction (CHAOS-14250, acp lock-1):
+// the dispatch pass, the bucket sweep and the reconciler's repairs take the same lock before any row.
+func (repository *PostgresRepository) lockSlotBucket(ctx context.Context, tx pgx.Tx, claim Claim) error {
+	return syncbucket.LockCommitPath(ctx, tx, []syncbucket.Bucket{claim.slotBucket()}, syncbucket.LockWaitPathProviderUnit)
+}
+
+// reserveFreedSlot gives the slot this unit frees, in its own transaction, to the bucket's oldest eligible waiters
+// (syncbucket.ReserveHeads): a younger run's pass that reaches the bucket lock after this commit finds it reserved.
+func (repository *PostgresRepository) reserveFreedSlot(ctx context.Context, tx pgx.Tx, claim Claim, now time.Time) ([]string, error) {
+	heads, err := syncbucket.ReserveHeads(ctx, tx, claim.slotBucket(), now.UTC(), "")
+	if err != nil {
+		return nil, err
+	}
+	return heads.Reserved, nil
+}
+
 // wakeDispatch releases this unit's concurrency slot to the dispatch side
 // (CHAOS-10013, CHAOS-14250). It runs after the unit's commit and never fails
 // the completion: see syncrunrollup.ReleaseSlot.
-func (repository *PostgresRepository) wakeDispatch(ctx context.Context, claim Claim, completedAt time.Time) {
+func (repository *PostgresRepository) wakeDispatch(ctx context.Context, claim Claim, completedAt time.Time, reserved []string) {
+	syncrunrollup.WakeReserved(ctx, repository.Pool, reserved, completedAt, syncrunrollup.DispatchWakePathProviderUnit)
 	syncrunrollup.ReleaseSlot(ctx, repository.Pool, repository.BucketSweeps, syncrunrollup.SlotFree{
 		RunID: claim.SyncRunID, OrgID: claim.OrgID, Provider: claim.Provider, CostClass: string(claim.CostClass),
 	}, completedAt, syncrunrollup.DispatchWakePathProviderUnit)

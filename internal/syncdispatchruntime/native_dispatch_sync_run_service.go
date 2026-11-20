@@ -18,6 +18,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	scheduledsync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
+	"github.com/full-chaos/dev-health-ops/internal/syncbucket"
 	"github.com/full-chaos/dev-health-ops/internal/syncrunrollup"
 )
 
@@ -608,12 +609,27 @@ WHERE id = $1::uuid`,
 			return ErrDispatchSyncRunUnavailable
 		}
 	}
+	// CHAOS-14250 N1: a slot this pass was granted and did not fill (a refusal, a deferred or terminalized unit, fewer
+	// units than slots) is reserved now, in this transaction and under the bucket locks the guard took, for the
+	// bucket's oldest eligible waiters, so no younger pass can take it before they run.
+	reservedRunIDs := append([]string(nil), decision.reservedRunIDs...)
+	for _, bucket := range handOffBuckets(decision.grantedSlots, claimedUnits) {
+		heads, err := syncbucket.ReserveHeads(ctx, tx, bucket.syncBucket(), service.nowUTC(), run.id)
+		if err != nil {
+			return ErrDispatchSyncRunUnavailable
+		}
+		reservedRunIDs = append(reservedRunIDs, heads.Reserved...)
+	}
 	if committed, err := service.commitFenced(ctx, tx, fence); err != nil {
 		return err
 	} else if !committed {
 		return nil
 	}
 	flushPostCommitLogs(ctx)
+	// The runs this pass reserved a slot for are due now, each woken by its own statement after the commit.
+	if len(reservedRunIDs) > 0 {
+		defer wakeReservedRuns(ctx, service.pool, reservedRunIDs, service.nowUTC())
+	}
 	// CHAOS-10013: every unit this pass terminalized (budget exhaustion, an
 	// invalid or unroutable claim) was counted against its bucket when the
 	// capacity decision was made, so a sibling the cap held back is due a pass
@@ -724,9 +740,13 @@ WHERE id = $1::uuid`,
 		return nil
 	}
 	// b) Nothing dispatchable, but something is genuinely in flight
-	// (DISPATCHING not yet stale, or RUNNING) -- wait for it; no wakeup to
-	// arm, this pass's job here is done.
+	// (DISPATCHING not yet stale, or RUNNING) -- wait for it. CHAOS-14250 C7: a
+	// RETRYING unit with a future available_at still gets its wakeup at that
+	// instant: nothing else arms it when the pass ran before the retry was due.
 	if counts.inFlight > 0 {
+		if counts.nextDeferredAt != nil {
+			scheduleRedispatch(ctx, service.pool, service.logger, run.id, counts.nextDeferredAt, service.nowUTC())
+		}
 		service.logger.Info(ctx, synclog.MsgDispatchSyncRunWaitingInflight, synclog.Run(synclog.ParseID(run.id)), synclog.Count(synclog.KeyQueuedUnits, 0), synclog.Count(synclog.KeyInFlightUnits, counts.inFlight))
 		return nil
 	}

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/syncbucket"
 	"github.com/full-chaos/dev-health-ops/internal/syncrunrollup"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -36,9 +37,7 @@ func p3SweepHooked(ctx context.Context, pool *pgxpool.Pool, orgID, provider, cos
 		}
 		woken = append(woken, picked...)
 		waiting = stillWaiting
-		for _, runID := range picked {
-			syncrunrollup.WakeDispatch(ctx, pool, runID, now, syncrunrollup.DispatchWakePathBucketSweep)
-		}
+		syncrunrollup.WakeReserved(ctx, pool, picked, now, syncrunrollup.DispatchWakePathBucketSweep)
 		if round == 0 && hooks.betweenRounds != nil {
 			hooks.betweenRounds()
 		}
@@ -66,7 +65,7 @@ func p3PickAndCommit(ctx context.Context, pool *pgxpool.Pool, bucket dispatchBuc
 		return nil, false, 0, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	picked, waiting, generation, err := pickBucketSlots(ctx, tx, bucket, now)
+	picked, waiting, generation, _, err := pickBucketSlots(ctx, tx, bucket, now)
 	if err != nil {
 		return nil, false, 0, err
 	}
@@ -135,7 +134,7 @@ func p3HeadsRowsRead(ctx context.Context, pool *pgxpool.Pool, orgID, provider, c
 	if backfill {
 		class = 1
 	}
-	plan, err := p3Explain(ctx, pool, bucketHeadsSQL, orgID, provider, costClass, class, now, 1)
+	plan, err := p3Explain(ctx, pool, syncbucket.HeadsSQL, orgID, provider, costClass, class, now, 1, now.Add(-staleDispatchSeconds()))
 	if err != nil {
 		return 0, err
 	}
@@ -144,7 +143,7 @@ func p3HeadsRowsRead(ctx context.Context, pool *pgxpool.Pool, orgID, provider, c
 
 // p3HoldBackRowsRead is the guard's hold-back read of a bucket for the run self: its reservation count.
 func p3HoldBackRowsRead(ctx context.Context, pool *pgxpool.Pool, orgID, provider, costClass, selfID string, now time.Time) (float64, error) {
-	plan, err := p3Explain(ctx, pool, bucketReservationsSQL, orgID, provider, costClass, selfID, now, admissionLivenessBound().Seconds())
+	plan, err := p3Explain(ctx, pool, syncbucket.ReservationsSQL, orgID, provider, costClass, selfID, now, admissionLivenessBound().Seconds())
 	if err != nil {
 		return 0, err
 	}

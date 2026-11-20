@@ -17,6 +17,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
+	"github.com/full-chaos/dev-health-ops/internal/syncbucket"
 	"github.com/full-chaos/dev-health-ops/internal/syncrunrollup"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/jackc/pgx/v5"
@@ -1444,7 +1445,7 @@ func TestDomainRoleExecutesTheBucketSweepStatements(t *testing.T) {
 	if err := retireRunReservations(ctx, tx, discoveryTestRun); err != nil {
 		t.Fatalf("retireRunReservations as the domain role: %v", err)
 	}
-	if _, err := tx.Exec(ctx, expireBucketReservationsSQL, bucket.orgID, provider, costClass, time.Now(), 60.0); err != nil {
+	if _, err := tx.Exec(ctx, syncbucket.ExpireReservationsSQL, bucket.orgID, provider, costClass, time.Now(), 60.0); err != nil {
 		t.Fatalf("expireBucketReservationsSQL as the domain role: %v", err)
 	}
 	if err := tx.Commit(ctx); err != nil {

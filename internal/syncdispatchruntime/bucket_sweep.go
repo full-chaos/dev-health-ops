@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
+	"github.com/full-chaos/dev-health-ops/internal/syncbucket"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchcontract"
 	"github.com/full-chaos/dev-health-ops/internal/syncrunrollup"
 	"github.com/jackc/pgx/v5"
@@ -158,213 +159,74 @@ type bucketSweepResult struct {
 	woken    []string
 	waiting  bool
 	signaled bool
+	nextAt   time.Time
 }
-
-// eligibleWaiterPredicateSQL is the one eligibility rule of a bucket's waiter (CHAOS-14250 r1 class 3): an open run
-// whose reference discovery succeeded, with a planned or due retrying unit in the bucket. It reads the run as `run`
-// and the bucket as $2 (provider), $3 (cost class), the due instant as $5. Each probe is a scalar subquery that stops at
-// its first row (ix_sync_run_units_run_bucket_waiting, uq_sync_run_reference_discoveries_run), tested IS NOT NULL. As
-// EXISTS the planner turns a probe into a join; as a boolean expression it estimates it at 0.5 % of the rows. Either
-// way it hashes or scans every open run of the class and sorts them, which reads the whole queue. IS NOT NULL is
-// estimated at 99.5 %, so the ordered walk with the LIMIT is the plan.
-const eligibleWaiterPredicateSQL = `run.status NOT IN ('success', 'partial_failed', 'failed')
-    AND (
-        SELECT 1 FROM public.sync_run_units AS unit
-        WHERE unit.sync_run_id = run.id AND unit.provider = $2 AND unit.cost_class = $3
-            AND unit.status IN ('planned', 'retrying')
-            AND (unit.status = 'planned' OR unit.available_at <= $5)
-        LIMIT 1
-    ) IS NOT NULL
-    AND (
-        SELECT 1 FROM public.sync_run_reference_discoveries AS discovery
-        WHERE discovery.sync_run_id = run.id AND discovery.status = 'success'
-        LIMIT 1
-    ) IS NOT NULL`
-
-// bucketHeadsSQL lists the eligible waiters of one class of a bucket, oldest first. It walks the org's open runs of
-// the class in (created_at, id) order on ix_sync_runs_org_class_active_order and probes each one, so it reads about
-// as many runs as it returns plus the ineligible ones in front of them, never the whole waiting queue. The class is
-// compared as an integer ($4: 1 backfill, 0 not): the planner rewrites a boolean compared with false into
-// NOT (a OR b), then into two inequalities, which no longer match the index column.
-const bucketHeadsSQL = `
-SELECT run.id::text
-FROM public.sync_runs AS run
-WHERE run.org_id = $1
-    AND (run.triggered_by = 'backfill' OR run.mode = 'backfill')::integer = $4::integer
-    AND ` + eligibleWaiterPredicateSQL + `
-ORDER BY run.created_at, run.id
-LIMIT $6`
-
-// readBucketHeads reads up to limit eligible waiters of one class, oldest first, leaving out the runs in skip (the
-// bucket's reserved runs, at most its cap): it reads limit+len(skip) heads and drops them here.
-func readBucketHeads(ctx context.Context, tx pgx.Tx, bucket dispatchBucket, backfill bool, now time.Time, limit int, skip map[string]bool) ([]string, error) {
-	if limit <= 0 {
-		return nil, nil
-	}
-	class := 0
-	if backfill {
-		class = 1
-	}
-	rows, err := tx.Query(ctx, bucketHeadsSQL, bucket.orgID, bucket.provider, bucket.costClass, class, now, limit+len(skip))
-	if err != nil {
-		return nil, fmt.Errorf("%w: read bucket heads: %w", ErrDiscoveryTransientFailure, err)
-	}
-	defer rows.Close()
-	var heads []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("%w: scan bucket head: %w", ErrDiscoveryTransientFailure, err)
-		}
-		if !skip[id] && len(heads) < limit {
-			heads = append(heads, id)
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("%w: iterate bucket heads: %w", ErrDiscoveryTransientFailure, err)
-	}
-	return heads, nil
-}
-
-// reservedRunsSQL lists the runs that hold a reservation in the bucket (at most its cap, after the expiry).
-const reservedRunsSQL = `
-SELECT sync_run_id::text FROM public.sync_dispatch_bucket_reservations
-WHERE org_id = $1 AND provider = $2 AND cost_class = $3`
-
-func readReservedRuns(ctx context.Context, tx pgx.Tx, bucket dispatchBucket) (map[string]bool, error) {
-	rows, err := tx.Query(ctx, reservedRunsSQL, bucket.orgID, bucket.provider, bucket.costClass)
-	if err != nil {
-		return nil, fmt.Errorf("%w: read reserved runs: %w", ErrDiscoveryTransientFailure, err)
-	}
-	defer rows.Close()
-	reserved := map[string]bool{}
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("%w: scan reserved run: %w", ErrDiscoveryTransientFailure, err)
-		}
-		reserved[id] = true
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("%w: iterate reserved runs: %w", ErrDiscoveryTransientFailure, err)
-	}
-	return reserved, nil
-}
-
-// insertBucketReservationSQL reserves one slot of the bucket for a run the sweep picked.
-const insertBucketReservationSQL = `
-INSERT INTO public.sync_dispatch_bucket_reservations (org_id, provider, cost_class, sync_run_id, backfill, reserved_at)
-VALUES ($1, $2, $3, $4::uuid, $5, $6)`
-
-// expireBucketReservationsSQL drops the bucket's void reservations: older than the liveness bound ($5 seconds).
-const expireBucketReservationsSQL = `
-DELETE FROM public.sync_dispatch_bucket_reservations
-WHERE org_id = $1 AND provider = $2 AND cost_class = $3
-    AND reserved_at <= $4::timestamptz - make_interval(secs => $5::double precision)`
 
 // runBucketSweep is one sweep of a bucket. Under the bucket's advisory lock (the guard's lock, so a pass and the sweep
-// read one state) it reads the bucket's generation, counts the free slots (the cap less the active units and the live
-// reservations), and picks, oldest first, up to the backfill share (CHAOS-14211) of backfill waiters and the rest of
-// the free slots of non-backfill waiters; it reserves each pick before the commit. After the commit each picked run
-// gets its dispatch wakeup as its own statement, so no other run's outbox row is held across a commit (acp 14265
-// condition 5). Last, it acknowledges the generation it read; if a wake source bumped it meanwhile, the result says
-// signaled and the caller runs the sweep again.
+// read one state) it reads the bucket's generation and reserves the bucket's free slots for its oldest eligible
+// waiters (syncbucket.ReserveHeads: the cap less the active units and the live reservations, the backfill share first).
+// After the commit each reserved run gets its dispatch wakeup as its own statement, so no other run's outbox row is
+// held across a commit (acp 14265 condition 5). Last, it acknowledges the generation it read; if a wake source bumped
+// it meanwhile, the result says signaled and the caller runs the sweep again. nextAt is when the bucket's oldest live
+// reservation expires (zero: none), so a reserved run that never claims is picked again then.
 func runBucketSweep(ctx context.Context, pool *pgxpool.Pool, bucket dispatchBucket, now func() time.Time) (bucketSweepResult, error) {
 	started := now()
-	woken, waiting, generation, err := sweepBucketOnce(ctx, pool, bucket, started)
+	woken, waiting, generation, nextAt, err := sweepBucketOnce(ctx, pool, bucket, started)
 	if err != nil {
 		return bucketSweepResult{}, err
 	}
-	for _, runID := range woken {
-		syncrunrollup.WakeDispatch(ctx, pool, runID, started, syncrunrollup.DispatchWakePathBucketSweep)
-	}
+	syncrunrollup.WakeReserved(ctx, pool, woken, started, syncrunrollup.DispatchWakePathBucketSweep)
 	signaled, err := syncrunrollup.AckBucketGeneration(ctx, pool, bucket.orgID, bucket.provider, bucket.costClass, generation)
 	if err != nil {
-		return bucketSweepResult{woken: woken, waiting: waiting}, fmt.Errorf("%w: %w", ErrDiscoveryTransientFailure, err)
+		return bucketSweepResult{woken: woken, waiting: waiting, nextAt: nextAt}, fmt.Errorf("%w: %w", ErrDiscoveryTransientFailure, err)
 	}
-	return bucketSweepResult{woken: woken, waiting: waiting, signaled: signaled}, nil
+	return bucketSweepResult{woken: woken, waiting: waiting, signaled: signaled, nextAt: nextAt}, nil
 }
 
-func sweepBucketOnce(ctx context.Context, pool *pgxpool.Pool, bucket dispatchBucket, now time.Time) ([]string, bool, int64, error) {
+func sweepBucketOnce(ctx context.Context, pool *pgxpool.Pool, bucket dispatchBucket, now time.Time) ([]string, bool, int64, time.Time, error) {
 	tx, err := pool.Begin(ctx)
 	if err != nil {
-		return nil, false, 0, fmt.Errorf("%w: begin bucket sweep: %w", ErrDiscoveryTransientFailure, err)
+		return nil, false, 0, time.Time{}, fmt.Errorf("%w: begin bucket sweep: %w", ErrDiscoveryTransientFailure, err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	woken, waiting, generation, err := pickBucketSlots(ctx, tx, bucket, now)
+	woken, waiting, generation, nextAt, err := pickBucketSlots(ctx, tx, bucket, now)
 	if err != nil {
-		return nil, false, 0, err
+		return nil, false, 0, time.Time{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return nil, false, 0, fmt.Errorf("%w: commit bucket sweep: %w", ErrDiscoveryTransientFailure, err)
+		return nil, false, 0, time.Time{}, fmt.Errorf("%w: commit bucket sweep: %w", ErrDiscoveryTransientFailure, err)
 	}
-	return woken, waiting, generation, nil
+	return woken, waiting, generation, nextAt, nil
 }
 
-// pickBucketSlots is the sweep's transaction body: under the bucket lock it reads the generation, picks the heads and
-// reserves their slots, so the reservations commit with the lock's release.
-func pickBucketSlots(ctx context.Context, tx pgx.Tx, bucket dispatchBucket, now time.Time) ([]string, bool, int64, error) {
+// pickBucketSlots is the sweep's transaction body: the bucket lock first, then the generation and the reservations.
+func pickBucketSlots(ctx context.Context, tx pgx.Tx, bucket dispatchBucket, now time.Time) ([]string, bool, int64, time.Time, error) {
 	if err := acquireBucketAdvisoryLocks(ctx, tx, []dispatchBucket{bucket}); err != nil {
-		return nil, false, 0, err
+		return nil, false, 0, time.Time{}, err
 	}
 	generation, err := syncrunrollup.ReadBucketGeneration(ctx, tx, bucket.orgID, bucket.provider, bucket.costClass)
 	if err != nil {
-		return nil, false, 0, fmt.Errorf("%w: %w", ErrDiscoveryTransientFailure, err)
+		return nil, false, 0, time.Time{}, fmt.Errorf("%w: %w", ErrDiscoveryTransientFailure, err)
 	}
-	if _, err := tx.Exec(ctx, expireBucketReservationsSQL, bucket.orgID, bucket.provider, bucket.costClass, now,
-		admissionLivenessBound().Seconds()); err != nil {
-		return nil, false, 0, fmt.Errorf("%w: expire bucket reservations: %w", ErrDiscoveryTransientFailure, err)
-	}
-	active, activeBackfill, err := countActiveBucketUnits(ctx, tx, bucket, now.Add(-staleDispatchSeconds()), now)
+	heads, err := syncbucket.ReserveHeads(ctx, tx, bucket.syncBucket(), now, "")
 	if err != nil {
-		return nil, false, 0, err
+		return nil, false, 0, time.Time{}, fmt.Errorf("%w: %w", ErrDiscoveryTransientFailure, err)
 	}
-	reserved, reservedBackfill, err := countBucketReservations(ctx, tx, bucket, "", now)
+	nextAt, _, err := syncbucket.EarliestReservationExpiry(ctx, tx, bucket.syncBucket())
 	if err != nil {
-		return nil, false, 0, err
+		return nil, false, 0, time.Time{}, fmt.Errorf("%w: %w", ErrDiscoveryTransientFailure, err)
 	}
-	capValue := concurrencyCapForCostClass(bucket.costClass)
-	free := max(0, capValue-active-reserved)
-	backfillUsable := free
-	if capValue >= 2 {
-		backfillUsable = min(free, max(0, capValue-1-activeBackfill-reservedBackfill))
+	return heads.Reserved, heads.StillWaiting, generation, nextAt, nil
+}
+
+// sweepRearm is the sweep's snooze while the bucket has a waiter: SYNC_DISPATCH_CAPPED_REARM_MAX, or sooner when a
+// reservation expires first (one second after it), so a head that never claims is picked again by eligibility.
+func sweepRearm(now, nextAt time.Time) time.Duration {
+	rearm := cappedRearmMax()
+	if !nextAt.IsZero() {
+		rearm = min(rearm, max(time.Second, nextAt.Sub(now)+time.Second))
 	}
-	reservedRuns, err := readReservedRuns(ctx, tx, bucket)
-	if err != nil {
-		return nil, false, 0, err
-	}
-	backfillHeads, err := readBucketHeads(ctx, tx, bucket, true, now, backfillUsable, reservedRuns)
-	if err != nil {
-		return nil, false, 0, err
-	}
-	otherHeads, err := readBucketHeads(ctx, tx, bucket, false, now, free-len(backfillHeads), reservedRuns)
-	if err != nil {
-		return nil, false, 0, err
-	}
-	for _, pick := range []struct {
-		heads    []string
-		backfill bool
-	}{{backfillHeads, true}, {otherHeads, false}} {
-		for _, runID := range pick.heads {
-			if _, err := tx.Exec(ctx, insertBucketReservationSQL, bucket.orgID, bucket.provider, bucket.costClass, runID,
-				pick.backfill, now); err != nil {
-				return nil, false, 0, fmt.Errorf("%w: reserve bucket slot: %w", ErrDiscoveryTransientFailure, err)
-			}
-		}
-	}
-	woken := append(backfillHeads, otherHeads...)
-	waiting := len(woken) > 0
-	for _, backfill := range []bool{true, false} {
-		if waiting {
-			break
-		}
-		heads, err := readBucketHeads(ctx, tx, bucket, backfill, now, 1, nil)
-		if err != nil {
-			return nil, false, 0, err
-		}
-		waiting = len(heads) > 0
-	}
-	return woken, waiting, generation, nil
+	return rearm
 }
 
 type bucketSweepWorker struct {
@@ -406,7 +268,7 @@ func (worker *bucketSweepWorker) Work(ctx context.Context, job *river.Job[Bucket
 		return river.JobSnooze(0)
 	}
 	if result.waiting {
-		return river.JobSnooze(cappedRearmMax())
+		return river.JobSnooze(sweepRearm(worker.now(), result.nextAt))
 	}
 	return nil
 }

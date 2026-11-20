@@ -91,12 +91,14 @@ type BucketSweepEnqueuer interface {
 }
 
 // UnacknowledgedBucketSignalsSQL lists the buckets whose last signal is at least the recovery age old ($1 is now less
-// that age) and still unacknowledged, oldest signal first: the reconciler's materializer enqueues their sweeps.
+// that age) and still unacknowledged, oldest signal first, a page of $2 after the keyset cursor ($3 updated_at, $4
+// org, $5 provider, $6 cost class): the reconciler's materializer enqueues their sweeps.
 const UnacknowledgedBucketSignalsSQL = `
-SELECT signal.org_id, signal.provider, signal.cost_class
+SELECT signal.org_id, signal.provider, signal.cost_class, signal.updated_at
 FROM public.sync_dispatch_bucket_signals AS signal
 WHERE signal.generation > signal.acked_generation
 	AND signal.updated_at <= $1
+	AND (signal.updated_at, signal.org_id, signal.provider, signal.cost_class) > ($3::timestamptz, $4::text, $5::text, $6::text)
 ORDER BY signal.updated_at, signal.org_id, signal.provider, signal.cost_class
 LIMIT $2`
 

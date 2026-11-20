@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/full-chaos/dev-health-ops/internal/syncbucket"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime/synclog"
 	"github.com/full-chaos/dev-health-ops/internal/syncrunrollup"
 )
@@ -141,7 +142,23 @@ type materializerBeginFunc func(context.Context) (pgx.Tx, error)
 type Materializer struct {
 	begin  materializerBeginFunc
 	sweeps syncrunrollup.BucketSweepEnqueuer
+	// signalCursor is where the next tick's signal recovery starts when the last tick stopped at
+	// bucketSignalRecoveryPerTick (the zero cursor: from the oldest signal).
+	signalCursor signalCursor
 }
+
+// signalCursor is the keyset position (updated_at, org_id, provider, cost_class) of the signal recovery.
+type signalCursor struct {
+	updatedAt                  time.Time
+	orgID, provider, costClass string
+}
+
+// bucketSignalRecoveryPage and bucketSignalRecoveryPerTick bound one tick's signal recovery: pages of 100 signals,
+// at most 10,000 per tick; the rest continues from a carried cursor on the next tick (CHAOS-14250 C4).
+const (
+	bucketSignalRecoveryPage    = 100
+	bucketSignalRecoveryPerTick = 10000
+)
 
 // WithBucketSweeps turns on the bucket-signal recovery of Step (CHAOS-14250): a bucket signalled more than
 // bucketSignalRecoveryAge ago whose sweep has not acknowledged the signal gets its sweep again.
@@ -157,10 +174,18 @@ func (materializer *Materializer) WithBucketSweeps(sweeps syncrunrollup.BucketSw
 // signal's enqueue is dropped as the running job's duplicate. A signal is recovered within this age plus one tick.
 const bucketSignalRecoveryAge = 60 * time.Second
 
-type signaledBucket struct{ orgID, provider, costClass string }
+type signaledBucket struct {
+	orgID, provider, costClass string
+	updatedAt                  time.Time
+}
 
-func readUnacknowledgedBucketSignals(ctx context.Context, tx pgx.Tx, now time.Time, limit int) ([]signaledBucket, error) {
-	rows, err := tx.Query(ctx, syncrunrollup.UnacknowledgedBucketSignalsSQL, now.Add(-bucketSignalRecoveryAge), limit)
+func readUnacknowledgedBucketSignals(ctx context.Context, tx pgx.Tx, now time.Time, limit int, after signalCursor) ([]signaledBucket, error) {
+	afterAt := after.updatedAt
+	if afterAt.IsZero() {
+		afterAt = time.Unix(0, 0).UTC()
+	}
+	rows, err := tx.Query(ctx, syncrunrollup.UnacknowledgedBucketSignalsSQL, now.Add(-bucketSignalRecoveryAge), limit,
+		afterAt, after.orgID, after.provider, after.costClass)
 	if err != nil {
 		return nil, err
 	}
@@ -168,12 +193,55 @@ func readUnacknowledgedBucketSignals(ctx context.Context, tx pgx.Tx, now time.Ti
 	var buckets []signaledBucket
 	for rows.Next() {
 		var bucket signaledBucket
-		if err := rows.Scan(&bucket.orgID, &bucket.provider, &bucket.costClass); err != nil {
+		if err := rows.Scan(&bucket.orgID, &bucket.provider, &bucket.costClass, &bucket.updatedAt); err != nil {
 			return nil, err
 		}
 		buckets = append(buckets, bucket)
 	}
 	return buckets, rows.Err()
+}
+
+// recoverSignaledBuckets enqueues the sweep of every bucket whose signal is at least bucketSignalRecoveryAge old and
+// unacknowledged, page by page in keyset order, each page its own short read transaction after the Step's commit, up
+// to bucketSignalRecoveryPerTick buckets; a tick that stops there carries its cursor to the next one. A failed page is
+// logged and ends this tick's recovery (the next tick reads again).
+func (materializer *Materializer) recoverSignaledBuckets(ctx context.Context, now time.Time) int64 {
+	var recovered int64
+	cursor := materializer.signalCursor
+	for read := 0; read < bucketSignalRecoveryPerTick; {
+		tx, err := materializer.begin(ctx)
+		if err != nil || tx == nil {
+			logSignalRecoveryFailure(ctx, err)
+			return recovered
+		}
+		page, err := readUnacknowledgedBucketSignals(ctx, tx, now, min(bucketSignalRecoveryPage, bucketSignalRecoveryPerTick-read), cursor)
+		_ = tx.Rollback(ctx)
+		if err != nil {
+			logSignalRecoveryFailure(ctx, err)
+			return recovered
+		}
+		for _, bucket := range page {
+			if err := materializer.sweeps.EnqueueBucketSweep(ctx, bucket.orgID, bucket.provider, bucket.costClass); err != nil {
+				logSignalRecoveryFailure(ctx, err)
+				continue
+			}
+			recovered++
+		}
+		read += len(page)
+		if len(page) < bucketSignalRecoveryPage {
+			materializer.signalCursor = signalCursor{}
+			return recovered
+		}
+		last := page[len(page)-1]
+		cursor = signalCursor{updatedAt: last.updatedAt, orgID: last.orgID, provider: last.provider, costClass: last.costClass}
+	}
+	materializer.signalCursor = cursor
+	return recovered
+}
+
+func logSignalRecoveryFailure(ctx context.Context, err error) {
+	synclog.Default().Warn(ctx, synclog.MsgDispatchSyncRunUnitCompletionWakeFailed,
+		synclog.Text(synclog.KeyPath, synclog.ParseLabel(syncrunrollup.DispatchWakePathBucketSweep)), synclog.Failure(err))
 }
 
 func NewMaterializer(pool *pgxpool.Pool) (*Materializer, error) {
@@ -207,7 +275,6 @@ const (
 	materializerStepPostSync   = "post_sync materialization insert of public.sync_dispatch_outbox"
 	materializerStepRowCount   = "materialization affected-row count"
 	materializerStepCommit     = "commit coordinator transaction"
-	materializerStepSignals    = "unacknowledged bucket signal read of public.sync_dispatch_bucket_signals"
 )
 
 // materializerStepError names the Step statement that failed while keeping
@@ -407,23 +474,11 @@ func (materializer *Materializer) Step(
 	} else {
 		result.Runaway, result.RunawayTotal, result.RunawayTruncated = runaway, total, truncated
 	}
-	var signaled []signaledBucket
-	if materializer.sweeps != nil {
-		signaled, err = readUnacknowledgedBucketSignals(ctx, tx, now, limit)
-		if err != nil {
-			return MaterializerResult{}, materializerUnavailable(materializerStepSignals, err)
-		}
-	}
 	if err := tx.Commit(ctx); err != nil {
 		return MaterializerResult{}, materializerUnavailable(materializerStepCommit, err)
 	}
-	for _, bucket := range signaled {
-		if err := materializer.sweeps.EnqueueBucketSweep(ctx, bucket.orgID, bucket.provider, bucket.costClass); err != nil {
-			synclog.Default().Warn(ctx, synclog.MsgDispatchSyncRunUnitCompletionWakeFailed,
-				synclog.Text(synclog.KeyPath, synclog.ParseLabel(syncrunrollup.DispatchWakePathBucketSweep)), synclog.Failure(err))
-			continue
-		}
-		result.BucketSweepsRecovered++
+	if materializer.sweeps != nil {
+		result.BucketSweepsRecovered = materializer.recoverSignaledBuckets(ctx, now)
 	}
 	return result, nil
 }
@@ -617,15 +672,7 @@ candidates AS (
 		SELECT 1
 		FROM public.sync_run_units AS unit
 		WHERE unit.sync_run_id = active.id
-			AND (
-				unit.status = 'planned'
-				OR (unit.status = 'dispatching' AND unit.updated_at <= $2)
-				OR (
-					unit.status = 'retrying'
-					AND unit.available_at IS NOT NULL
-					AND unit.available_at <= $1
-				)
-			)
+			AND ` + syncbucket.DispatchableUnitSQL + `
 		LIMIT 1
 	) AS dispatchable
 	WHERE NOT EXISTS (

@@ -2,11 +2,10 @@ package syncreconciler
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/binary"
 	"sort"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/syncbucket"
 	"github.com/full-chaos/dev-health-ops/internal/syncrunrollup"
 	"github.com/full-chaos/dev-health-ops/internal/workitemcontract"
 	"github.com/jackc/pgx/v5"
@@ -245,10 +244,16 @@ func (repair *LeaseRepair) Step(ctx context.Context, now time.Time, limit int) (
 			wakeRuns = appendWakeRun(wakeRuns, slot)
 		}
 	}
+	var reserved []string
+	if repair.wake != nil {
+		if reserved, err = reserveReleasedSlots(ctx, tx, wakeRuns, now); err != nil {
+			return LeaseRepairResult{}, ErrUnavailable
+		}
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return LeaseRepairResult{}, ErrUnavailable
 	}
-	wakeDispatchAfterCommit(ctx, repair.wake, repair.sweeps, wakeRuns, now, syncrunrollup.DispatchWakePathLeaseRepair)
+	wakeDispatchAfterCommit(ctx, repair.wake, repair.sweeps, wakeRuns, reserved, now, syncrunrollup.DispatchWakePathLeaseRepair)
 	return result, nil
 }
 
@@ -427,8 +432,7 @@ func acquireLeaseRepairBucketLocks(ctx context.Context, tx pgx.Tx, candidates []
 }
 
 func leaseRepairBucketAdvisoryID(orgID, provider, costClass string) int64 {
-	digest := sha256.Sum256([]byte(orgID + ":" + provider + ":" + costClass))
-	return int64(binary.BigEndian.Uint64(digest[:8]) & ((uint64(1) << 63) - 1))
+	return syncbucket.LockKey(syncbucket.Bucket{OrgID: orgID, Provider: provider, CostClass: costClass})
 }
 
 // Both mutations repeat the status, owner, expiry, nonterminal-run, and

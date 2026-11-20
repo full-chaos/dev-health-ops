@@ -289,12 +289,20 @@ func (sweep *UnreclaimableSweep) terminalizeRouteUnavailable(
 		result.DeclinedRouteChange = true
 		return nil
 	}
+	var reserved []string
+	if sweep.wake != nil {
+		var err error
+		if reserved, err = reserveReleasedSlots(ctx, tx, wakeRuns, now); err != nil {
+			held.release()
+			return sweepUnavailable(sweepStepCommit, err)
+		}
+	}
 	commitErr := tx.Commit(ctx)
 	held.release()
 	if commitErr != nil {
 		return sweepUnavailable(sweepStepCommit, commitErr)
 	}
-	wakeDispatchAfterCommit(ctx, sweep.wake, sweep.sweeps, wakeRuns, now, syncrunrollup.DispatchWakePathRouteUnavailable)
+	wakeDispatchAfterCommit(ctx, sweep.wake, sweep.sweeps, wakeRuns, reserved, now, syncrunrollup.DispatchWakePathRouteUnavailable)
 	return nil
 }
 

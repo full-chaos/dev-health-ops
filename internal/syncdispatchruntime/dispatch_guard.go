@@ -3,8 +3,6 @@ package syncdispatchruntime
 import (
 	"container/heap"
 	"context"
-	"crypto/sha256"
-	"encoding/binary"
 	"fmt"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime/synclog"
 	"sort"
@@ -12,6 +10,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	scheduledsync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
+	"github.com/full-chaos/dev-health-ops/internal/syncbucket"
 	"github.com/jackc/pgx/v5"
 	"go.opentelemetry.io/otel/attribute"
 	oteltrace "go.opentelemetry.io/otel/trace"
@@ -34,6 +33,10 @@ type dispatchBucket struct {
 	orgID     string
 	provider  string
 	costClass string
+}
+
+func (bucket dispatchBucket) syncBucket() syncbucket.Bucket {
+	return syncbucket.Bucket{OrgID: bucket.orgID, Provider: bucket.provider, CostClass: bucket.costClass}
 }
 
 // dispatchGuardUnit is the narrow sync_run_units projection authorizeRun
@@ -104,6 +107,9 @@ type guardDecision struct {
 	// matching slotHeadroom's own convention (the hard-deny branch returns
 	// before any bucket is visited and its caller never reaches claimUnits).
 	authorizedUnitIDs map[string]bool
+	// reservedRunIDs are the runs this pass reserved a slot for (syncbucket.ReserveHeads); the pass wakes each after
+	// its commit.
+	reservedRunIDs []string
 	// grantedSlots are the slots each bucket gave this run after the cap, the hold-back and the backfill share; a
 	// pass that claims fewer gives the rest back through the bucket's sweep (CHAOS-14250).
 	grantedSlots map[dispatchBucket]int
@@ -118,7 +124,8 @@ type guardDecision struct {
 // syncUnitConcurrencyPerBucket mirrors guard.py's
 // SYNC_UNIT_CONCURRENCY_PER_BUCKET (fallback 8).
 func syncUnitConcurrencyPerBucket() int {
-	return envPositiveInt("SYNC_UNIT_CONCURRENCY_PER_BUCKET", 8)
+	clamp, _ := syncbucket.ConcurrencyClamp()
+	return clamp
 }
 
 // EffectiveAdmissionCaps reports the admission cap the dispatch guard applies
@@ -142,7 +149,7 @@ type admissionCaps struct {
 }
 
 func readAdmissionCaps() admissionCaps {
-	clamp, fromEnv := envPositiveIntFrom("SYNC_UNIT_CONCURRENCY_PER_BUCKET", 8)
+	clamp, fromEnv := syncbucket.ConcurrencyClamp()
 	snapshot := admissionCaps{clamp: clamp, clampSource: clampSourceDefault,
 		caps: make(map[string]int, 3), capSources: make(map[string]string, 3)}
 	if fromEnv {
@@ -213,8 +220,8 @@ func concurrencyCapForCostClass(costClass string) int {
 // not lower it, including the case where the two are equal); "clamp" = SYNC_UNIT_CONCURRENCY_PER_BUCKET is what sets it
 // (it is below the class's limit, or the class is outside the table).
 const (
-	capSourceTable = "table"
-	capSourceClamp = "clamp"
+	capSourceTable = syncbucket.CapSourceTable
+	capSourceClamp = syncbucket.CapSourceClamp
 )
 
 // concurrencyCapAndSourceForCostClass is the ONE place the cap is derived, so the number the guard enforces and the
@@ -226,10 +233,7 @@ func concurrencyCapAndSourceForCostClass(costClass string) (int, string) {
 // capAndSourceForClamp is the derivation for a clamp that was already read: the start line reads the variable once and derives
 // every class from that one value.
 func capAndSourceForClamp(costClass string, clamp int) (int, string) {
-	if limit, ok := providerfoundation.CostClassBudgetLimit(costClass); ok && limit <= clamp {
-		return limit, capSourceTable
-	}
-	return clamp, capSourceClamp
+	return syncbucket.CapForClamp(costClass, clamp)
 }
 
 // staleDispatchSeconds mirrors sync_units._stale_dispatch_seconds() /
@@ -238,7 +242,7 @@ func capAndSourceForClamp(costClass string, clamp int) (int, string) {
 // this port has no such constraint but keeps one definition, referenced by
 // both the guard and _claim_units' own stale-reclaim window).
 func staleDispatchSeconds() time.Duration {
-	return time.Duration(envPositiveInt("SYNC_UNIT_DISPATCH_STALE_SECONDS", 900)) * time.Second
+	return syncbucket.StaleWindow()
 }
 
 // authorizeRun ports DispatchGuard.authorize_run verbatim. Unlike Python's
@@ -273,6 +277,13 @@ func authorizeRun(ctx context.Context, tx pgx.Tx, logger *synclog.Logger, orgID,
 			return countBucketReservations(ctx, tx, bucket, runID, now)
 		},
 		retireReservations: func() error { return retireRunReservations(ctx, tx, runID) },
+		reserveHeads: func(bucket dispatchBucket) ([]string, error) {
+			heads, err := syncbucket.ReserveHeads(ctx, tx, bucket.syncBucket(), now, runID)
+			if err != nil {
+				return nil, fmt.Errorf("%w: %w", ErrDiscoveryTransientFailure, err)
+			}
+			return heads.Reserved, nil
+		},
 	}
 	source := func(fold func(dispatchGuardUnit) error) error {
 		return forEachDispatchGuardUnit(ctx, tx, runID, fold)
@@ -294,6 +305,10 @@ type guardEnv struct {
 	self               runOrder
 	reservations       func(dispatchBucket) (reserved, reservedBackfill int, err error)
 	retireReservations func() error
+	// reserveHeads gives the bucket's free slots to its oldest eligible waiters other than this run
+	// (syncbucket.ReserveHeads) before this run counts its own slots: a slot freed with no writer (an expired lease, a
+	// dispatching unit gone stale) goes to the head, not to whichever pass reaches the lock first (CHAOS-14250 N1).
+	reserveHeads func(dispatchBucket) ([]string, error)
 }
 
 // guardUnitSource folds every unit of the run in id order; each call is one full paged read.
@@ -386,21 +401,16 @@ func decideDispatchGuard(source guardUnitSource, env guardEnv, orgID string, now
 	// classify mirrors the old per-unit switch. lock: a later write of this transaction could touch the row
 	// (PLANNED, stale DISPATCHING, any RETRYING). candidate: a concurrency-cap candidate.
 	// deferred: a not-yet-due RETRYING row, which makes its bucket a cap-loop bucket without being a candidate.
+	// candidate is syncbucket.Dispatchable, the one rule the materializer and the bucket's head read use.
 	classify := func(unit dispatchGuardUnit) (lock, candidate, deferred bool) {
+		candidate = syncbucket.Dispatchable(unit.status, unit.updatedAt, unit.availableAt, now, staleCutoff)
 		switch unit.status {
 		case syncRunUnitStatusPlanned:
-			return true, true, false
+			return true, candidate, false
 		case syncRunUnitStatusDispatching:
-			stale := !unit.updatedAt.After(staleCutoff)
-			return stale, stale, false
+			return candidate, candidate, false
 		case syncRunUnitStatusRetrying:
-			if unit.availableAt == nil {
-				return true, false, false
-			}
-			if !unit.availableAt.After(now) {
-				return true, true, false
-			}
-			return true, false, true
+			return true, candidate, unit.availableAt != nil && !candidate
 		}
 		return false, false, false
 	}
@@ -459,7 +469,15 @@ func decideDispatchGuard(source guardUnitSource, env guardEnv, orgID string, now
 	activeCounts := make(map[dispatchBucket]int, len(allBuckets))
 	heldBack := make(map[dispatchBucket]int, len(allBuckets))
 	folds := make(map[dispatchBucket]*guardBucketFold, len(allBuckets))
+	var reservedRunIDs []string
 	for _, bucket := range allBuckets {
+		if env.reserveHeads != nil {
+			reservedHere, err := env.reserveHeads(bucket)
+			if err != nil {
+				return guardDecision{}, err
+			}
+			reservedRunIDs = append(reservedRunIDs, reservedHere...)
+		}
 		activeCount, activeBackfill, err := env.activeCount(bucket)
 		if err != nil {
 			return guardDecision{}, err
@@ -545,10 +563,11 @@ func decideDispatchGuard(source guardUnitSource, env guardEnv, orgID string, now
 			authorizedUnitIDs: authorizedUnitIDs,
 			grantedSlots:      grantedSlots,
 			cappedBuckets:     cappedBuckets,
+			reservedRunIDs:    reservedRunIDs,
 		}, nil
 	}
 	return guardDecision{allowed: true, slotHeadroom: slotHeadroom, authorizedUnitIDs: authorizedUnitIDs,
-		grantedSlots: grantedSlots}, nil
+		grantedSlots: grantedSlots, reservedRunIDs: reservedRunIDs}, nil
 }
 
 // forEachDispatchGuardUnit folds this run's units in id order (stable ordering for the total-cap suffix,
@@ -620,23 +639,9 @@ func backfillSlotLimit(self runOrder, capValue, backfillHeld int) int {
 // Error classification: same as loadDispatchGuardUnits -- a bare query
 // execution failure, retryable.
 func countActiveBucketUnits(ctx context.Context, tx pgx.Tx, bucket dispatchBucket, staleCutoff, now time.Time) (int, int, error) {
-	var count, backfill int
-	err := tx.QueryRow(ctx, `
-SELECT count(*),
-       count(*) FILTER (WHERE run.triggered_by = 'backfill' OR run.mode = 'backfill')
-FROM public.sync_run_units AS unit
-LEFT JOIN public.sync_runs AS run ON run.id = unit.sync_run_id
-WHERE unit.org_id = $1 AND unit.provider = $2 AND unit.cost_class = $3
-  AND (
-        (unit.status = $4 AND unit.updated_at > $5)
-     OR (unit.status = $6 AND (unit.lease_expires_at IS NULL OR unit.lease_expires_at > $7))
-      )`,
-		bucket.orgID, bucket.provider, bucket.costClass,
-		syncRunUnitStatusDispatching, staleCutoff,
-		syncRunUnitStatusRunning, now,
-	).Scan(&count, &backfill)
+	count, backfill, err := syncbucket.CountActive(ctx, tx, bucket.syncBucket(), staleCutoff, now)
 	if err != nil {
-		return 0, 0, fmt.Errorf("%w: count active bucket units: %w", ErrDiscoveryTransientFailure, err)
+		return 0, 0, fmt.Errorf("%w: %w", ErrDiscoveryTransientFailure, err)
 	}
 	return count, backfill, nil
 }
@@ -665,10 +670,7 @@ func sortBucketList(set map[dispatchBucket]bool) []dispatchBucket {
 // verbatim: SHA-256 of the canonical bucket string, truncated to 63 bits so
 // it fits a signed Postgres bigint.
 func bucketAdvisoryLockKey(bucket dispatchBucket) int64 {
-	raw := []byte(bucket.orgID + ":" + bucket.provider + ":" + bucket.costClass)
-	digest := sha256.Sum256(raw)
-	keyUint := binary.BigEndian.Uint64(digest[:8])
-	return int64(keyUint & ((1 << 63) - 1))
+	return syncbucket.LockKey(bucket.syncBucket())
 }
 
 // BucketAdvisoryLockKeyForTest exposes bucketAdvisoryLockKey's exact

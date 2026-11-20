@@ -1224,10 +1224,11 @@ func coordinatorPosture() RolePosture {
 			// internal/syncreconciler/materializer.go:450. The first three also use
 			// ON CONFLICT DO UPDATE.
 			{"sync_dispatch_outbox", true, true, false},
-			// CHAOS-14250 bucket sweep: lease repair and the unreclaimable sweep call
-			// syncrunrollup.ReleaseSlot (BumpBucketGenerationSQL: INSERT ... ON CONFLICT
-			// DO UPDATE); the materializer only reads it. No reservations access.
-			{"sync_dispatch_bucket_signals", true, true, false},
+			// CHAOS-14250 bucket sweep: the materializer's recovery only reads the signals
+			// (UnacknowledgedBucketSignalsSQL); every signal write (lease repair, the
+			// unreclaimable sweep, route-unavailable termination) runs on the domain pool.
+			// No reservations access.
+			{"sync_dispatch_bucket_signals", false, false, false},
 			{"sync_run_units", false, false, false},
 			{"sync_runs", false, true, false},
 			{"sync_dispatch_transport_routes", false, true, false},

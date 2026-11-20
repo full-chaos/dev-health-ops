@@ -714,12 +714,20 @@ func (sweep *UnreclaimableSweep) Step(
 	}
 	// The lock is still held here, so no route mutation can interleave with
 	// this commit.
+	var reserved []string
+	if sweep.wake != nil {
+		var err error
+		if reserved, err = reserveReleasedSlots(ctx, tx, wakeRuns, now); err != nil {
+			held.release()
+			return UnreclaimableSweepResult{}, sweepUnavailable(sweepStepCommit, err)
+		}
+	}
 	commitErr := tx.Commit(ctx)
 	held.release()
 	if commitErr != nil {
 		return UnreclaimableSweepResult{}, sweepUnavailable(sweepStepCommit, commitErr)
 	}
-	wakeDispatchAfterCommit(ctx, sweep.wake, sweep.sweeps, wakeRuns, now, syncrunrollup.DispatchWakePathUnreclaimableSweep)
+	wakeDispatchAfterCommit(ctx, sweep.wake, sweep.sweeps, wakeRuns, reserved, now, syncrunrollup.DispatchWakePathUnreclaimableSweep)
 	return result, nil
 }
 

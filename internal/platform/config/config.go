@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/full-chaos/dev-health-ops/internal/platform/dsnclass"
@@ -88,12 +89,17 @@ const (
 	// deploy/go-workers/deployment.json for every coordinator process today
 	// (reconciler, scheduler, worker-operator).
 	defaultCoordinatorMaxConns = 2
-	// River's own job cleaner defaults: raising one lengthens how long a
-	// ByArgs unique insert dedupes into a finalized row with the same key.
-	defaultCompletedRetention = 24 * time.Hour
-	defaultCancelledRetention = 24 * time.Hour
-	defaultDiscardedRetention = 7 * 24 * time.Hour
-	defaultJobCleanerTimeout  = 30 * time.Second
+	// A ByArgs unique insert dedupes into a finalized row with the same key
+	// while that row exists. Every value stays below the 30-day
+	// WORKER_JOB_TERMINAL_RETENTION_DAYS outbox prune. Completed and cancelled
+	// keep River's own defaults; discarded stays one day below the prune, so a
+	// row that finalized within a day of its delivery is cleaned within one
+	// cleaner interval of the prune that frees its key. riverstore's
+	// DefaultMaintenanceConfig reads these same constants.
+	DefaultCompletedJobRetention  = 24 * time.Hour
+	DefaultCancelledJobRetention  = 24 * time.Hour
+	DefaultDiscardedJobRetention  = 29 * 24 * time.Hour
+	DefaultRiverJobCleanerTimeout = 30 * time.Second
 	// defaultSyncObservationTimeout mirrors syncreconciler's own unconfigured
 	// default (CHAOS-4092) so a deployment that never sets the override sees
 	// no behavior change from this option's introduction.
@@ -227,6 +233,9 @@ type Config struct {
 	// never accommodate even one retry.
 	PreclaimReadinessTimeout time.Duration
 	LogLevel                 slog.Level
+	// NonNativeClickHouseKeys names each ClickHouse service DSN key that holds an http or https DSN. Load accepts
+	// it; ObserveNonNativeClickHouse reports it.
+	NonNativeClickHouseKeys []string
 
 	DomainDatabaseURI      secrets.Value
 	QueueDatabaseURI       secrets.Value
@@ -728,11 +737,16 @@ func Load(spec Spec) (Config, error) {
 	if err := validateURI("API_DATABASE_URI", cfg.APIDatabaseURI, postgresSchemes...); err != nil {
 		return Config{}, err
 	}
-	if err := validateURI("CLICKHOUSE_URI", cfg.ClickHouseURI, "clickhouse", "http", "https"); err != nil {
+	if err := validateClickHouseServiceURI("CLICKHOUSE_URI", cfg.ClickHouseURI); err != nil {
 		return Config{}, err
 	}
-	if err := validateURI("API_CLICKHOUSE_URI", cfg.APIClickHouseURI, "clickhouse", "http", "https"); err != nil {
+	if err := validateClickHouseServiceURI("API_CLICKHOUSE_URI", cfg.APIClickHouseURI); err != nil {
 		return Config{}, err
+	}
+	for _, key := range clickHouseServiceKeys {
+		if clickHouseHTTPScheme(cfg.clickHouseDSN(key)) != "" {
+			cfg.NonNativeClickHouseKeys = append(cfg.NonNativeClickHouseKeys, key)
+		}
 	}
 	if err := validateURI("VALKEY_URI", cfg.ValkeyURI, "redis", "rediss", "unix"); err != nil {
 		return Config{}, err
@@ -849,7 +863,7 @@ func Load(spec Spec) (Config, error) {
 	cfg.CompletedJobRetention, err = durationEnv(
 		lookup,
 		"RIVER_COMPLETED_JOB_RETENTION",
-		defaultCompletedRetention,
+		DefaultCompletedJobRetention,
 		24*time.Hour,
 		365*24*time.Hour,
 	)
@@ -859,7 +873,7 @@ func Load(spec Spec) (Config, error) {
 	cfg.CancelledJobRetention, err = durationEnv(
 		lookup,
 		"RIVER_CANCELLED_JOB_RETENTION",
-		defaultCancelledRetention,
+		DefaultCancelledJobRetention,
 		24*time.Hour,
 		365*24*time.Hour,
 	)
@@ -869,7 +883,7 @@ func Load(spec Spec) (Config, error) {
 	cfg.DiscardedJobRetention, err = durationEnv(
 		lookup,
 		"RIVER_DISCARDED_JOB_RETENTION",
-		defaultDiscardedRetention,
+		DefaultDiscardedJobRetention,
 		24*time.Hour,
 		365*24*time.Hour,
 	)
@@ -879,7 +893,7 @@ func Load(spec Spec) (Config, error) {
 	cfg.RiverJobCleanerTimeout, err = durationEnv(
 		lookup,
 		"RIVER_JOB_CLEANER_TIMEOUT",
-		defaultJobCleanerTimeout,
+		DefaultRiverJobCleanerTimeout,
 		5*time.Second,
 		5*time.Minute,
 	)
@@ -1542,6 +1556,44 @@ func validateName(kind, value string) error {
 			continue
 		}
 		return fmt.Errorf("%s must contain only lowercase letters, digits, and hyphens", kind)
+	}
+	return nil
+}
+
+// clickHouseHTTPScheme returns "http" or "https" for a DSN that clickhouse-go would open over its HTTP protocol, else
+// "". That path ignores rows.Err() on batches, so a service should use clickhouse://; this is hygiene, not a start
+// refusal (D6465). CLIs resolve their sink through ResolveDSN and are not bound by this.
+func clickHouseHTTPScheme(value secrets.Value) string {
+	if !value.Configured() {
+		return ""
+	}
+	if parsed, err := url.Parse(value.Reveal()); err == nil && parsed != nil {
+		if scheme := strings.ToLower(parsed.Scheme); scheme == "http" || scheme == "https" {
+			return scheme
+		}
+	}
+	return ""
+}
+
+// hasHostName reports whether the URL names a host: a bracketed IPv6 literal, or a hostname with a letter or digit.
+func hasHostName(parsed *url.URL) bool {
+	host := parsed.Hostname()
+	if strings.HasPrefix(parsed.Host, "[") {
+		return net.ParseIP(host) != nil
+	}
+	return strings.ContainsFunc(host, func(r rune) bool {
+		return unicode.IsLetter(r) || unicode.IsDigit(r)
+	})
+}
+
+func validateClickHouseServiceURI(key string, value secrets.Value) error {
+	if err := validateURI(key, value, "clickhouse", "http", "https"); err != nil {
+		return err
+	}
+	if clickHouseHTTPScheme(value) != "" {
+		if parsed, err := url.Parse(value.Reveal()); err != nil || !hasHostName(parsed) {
+			return fmt.Errorf("%s must be a valid supported URI", key)
+		}
 	}
 	return nil
 }

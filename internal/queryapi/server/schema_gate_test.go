@@ -73,7 +73,7 @@ func TestBuildQueryRouteRunsTheSchemaGateAfterThePoolAndBeforeReadiness(t *testi
 		"postgresstore.NewTracedPool(context.Background(), cfg.RegistryPostgresURI)",
 		"enforceQueryAPISchemaGate(context.Background(), slog.Default(), pgPool)",
 		"loadEnvelopeKey(cfg.EnvelopeJWKSPath",
-		"posture := queryAPIPostureCheck(getenv, pgPool)",
+		"posture, stopPosture := queryAPIPostureCheck(getenv, pgPool)",
 		"ready := readinessCheck(chClient, pgPool, envelope.jwksProbe(), posture)",
 	}
 	last := -1

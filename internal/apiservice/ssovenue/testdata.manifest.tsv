@@ -3,6 +3,7 @@
 # header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
 -	header	golden/s-s-o-routes-venue-oracle.json
 63de752a97d9b3c7ea9e3e57d2e7b827708038795dd726c5ee6cfb3c57f32561	hand-written	oauth-providers-retired.go-pin.json
-cf7ba866886071e670390d379d7152f61035ff7666e2844192864cfa4258c510	hand-written	providers-authorize.go-pin.json
+b3bcf9c7b34ff7ed3aa03b7381c224c277529477fa44a8e34d9d3bba74e3355e	hand-written	providers-authorize.go-pin.json
 1fc40a3ed7c11bd401e5f6acf27e6a54f8d584d74c6db1475753140f8da73da9	hand-written	saml-forward-only.go-pin.json
-0ac87f207ff268dceddd648e7959abae3427e075ab6957d69ad01112a29f44f7	go-generated	signin.go-pin.json
+b04bb649d8b23b26058cb03bdb558cd23e9615ca1deffbdf4db171454340ae0b	go-generated	signin.go-pin.json
+2818b5c05f0ccea8d9a58406a1dd0d59f3902e529c904ebeb012c75a42ae00e3	go-generated	status-without-client.go-pin.json

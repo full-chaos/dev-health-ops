@@ -136,6 +136,13 @@ type postgresReconcilerDatabase struct {
 	queueProbe       postgres.LazyProbeCheck
 	coordinatorProbe postgres.LazyProbeCheck
 	riverSchemaProbe postgres.LazyProbeCheck
+	// postures are the cached domain posture checks handed out by DomainPostureCheck; Close seals the
+	// list (a later DomainPostureCheck answers ErrUnavailable) and stops them. A second Close waits for
+	// the first (closeOnce).
+	posturesMu     sync.Mutex
+	posturesClosed bool
+	postures       []*postgres.CachedPostureCheck
+	closeOnce      sync.Once
 }
 
 func openReconcilerDatabase(ctx context.Context, cfg config.Config) (reconcilerDatabase, error) {
@@ -182,10 +189,19 @@ func (database *postgresReconcilerDatabase) DomainPostureCheck(logger *slog.Logg
 	if database == nil || database.pools == nil || database.pools.Domain == nil {
 		return nil
 	}
-	return postgres.NewCachedPostureCheck(
+	database.posturesMu.Lock()
+	defer database.posturesMu.Unlock()
+	if database.posturesClosed {
+		return func(context.Context) error {
+			return fmt.Errorf("%w: domain posture check closed", postgres.ErrUnavailable)
+		}
+	}
+	check := postgres.NewCachedPostureCheck(
 		database.pools.ReadinessPool(), database.domainRole, database.riverSchema, postgres.DomainPosture(),
 		postgres.PostureCheckOptions{Logger: logger},
-	).Check
+	)
+	database.postures = append(database.postures, check)
+	return check.Check
 }
 
 // ReadinessPool is the one-connection probe pool every domain-role readiness
@@ -296,8 +312,28 @@ func (database *postgresReconcilerDatabase) CoordinatorPool() *pgxpool.Pool {
 	return database.pools.Coordinator
 }
 
+// Close stops the readiness checks (each running one ends and logs first), then closes the pools
+// they run on.
 func (database *postgresReconcilerDatabase) Close() {
-	if database != nil && database.pools != nil {
+	if database == nil {
+		return
+	}
+	database.closeOnce.Do(database.close)
+}
+
+func (database *postgresReconcilerDatabase) close() {
+	database.posturesMu.Lock()
+	database.posturesClosed = true
+	postures := database.postures
+	database.postures = nil
+	database.posturesMu.Unlock()
+	database.queueProbe.Close()
+	database.coordinatorProbe.Close()
+	database.riverSchemaProbe.Close()
+	for _, check := range postures {
+		check.Close()
+	}
+	if database.pools != nil {
 		database.pools.Close()
 	}
 }
@@ -1235,10 +1271,16 @@ func (component reconcilerDatabaseLifecycle) Start(context.Context) error {
 }
 
 func (component reconcilerDatabaseLifecycle) Shutdown(context.Context) error {
+	component.Release()
+	return nil
+}
+
+// Release closes the database (its readiness checks first); the runtime calls it when it never
+// started this component.
+func (component reconcilerDatabaseLifecycle) Release() {
 	if component.database != nil {
 		component.database.Close()
 	}
-	return nil
 }
 
 // buildUnreclaimableSweep wires the CHAOS-4005 safety net.

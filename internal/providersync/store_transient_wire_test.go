@@ -214,6 +214,15 @@ func (w *storeWire) answer(c *wireConn, sql string) bool {
 				w.readAcksLost++
 				return wireFail(c, code)
 			}
+			// read_commit is the reviewer's fault on ending the read
+			// transaction: it fires on its ROLLBACK as on its COMMIT.
+			if code := w.fault("read_commit"); code != "" {
+				w.readAcksLost++
+				if code == "EOF" {
+					return false
+				}
+				return wireFail(c, code)
+			}
 			w.probablyReading = false
 		}
 		c.status, c.wroteUnit, c.readTx = 'I', false, false
@@ -814,6 +823,9 @@ func TestRound2ConfirmedSelectSurvivesLostReadCommitAck(t *testing.T) {
 				w := &storeWire{firstCommitState: scenario.state, faults: faults}
 				run := runWireWrite(t, w, write, nil)
 				reviewOutcome(t, w, run, scenario.want, scenario.updates, scenario.commits, 1)
+				if w.readAcksLost == 0 {
+					t.Fatal("premise: the fault on ending the read transaction never fired")
+				}
 				t.Logf("post_commit_rollup_warns=%d needs_attention_infos=%d", strings.Count(run.logs, "sync_run.rollup_bump_ambiguous"), strings.Count(run.logs, "providersync.needs_attention_stamped"))
 			})
 		}

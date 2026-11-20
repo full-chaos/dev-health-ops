@@ -1469,7 +1469,10 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 	// collectRunDetail reads one run's jobs (and the branch policy its acceptance
 	// rows need) and projects its job and acceptance rows. The runs phase and the
 	// open phase share it, so a re-read run is written exactly like a listed one.
-	collectRunDetail := func(run gitHubWorkflowRunPayload, pipeline githubTestsPipelineRow) ([]githubTestsJobRow, []githubTestsAcceptanceRow, error) {
+	// complete says the jobs read is whole: the walk proved its end (or stopped at
+	// the deliberate item cap), got at least the declared total_count, and kept
+	// every job it got.
+	collectRunDetail := func(run gitHubWorkflowRunPayload, pipeline githubTestsPipelineRow) ([]githubTestsJobRow, []githubTestsAcceptanceRow, bool, error) {
 		jobs := make([]githubTestsJobRow, 0)
 		jobPage, pageErr := providerfoundation.CollectGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{
 			Path:     root + "/actions/runs/" + url.PathEscape(pipeline.RunID) + "/jobs",
@@ -1478,9 +1481,10 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 			DataKey:  "jobs",
 			MaxPages: jobPages,
 			MaxItems: githubTestsMaxJobsPerRun + 1,
+			TotalKey: "total_count",
 		})
 		if pageErr != nil {
-			return nil, nil, pageErr
+			return nil, nil, false, pageErr
 		}
 		cursor.Requests = invocationBaseRequests + requests
 		cursor.Pages += jobPage.Pages
@@ -1522,13 +1526,17 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 			decoder := json.NewDecoder(strings.NewReader(string(jobRaw)))
 			decoder.UseNumber()
 			if decoder.Decode(&job) != nil {
-				return nil, nil, providerfoundation.ErrNormalizationInvalid
+				return nil, nil, false, providerfoundation.ErrNormalizationInvalid
 			}
 			row, ok := normalizeGitHubTestsJob(claim, repoID, pipeline.RunID, pipeline.RetryCount, job, normalizedAt)
 			if ok {
 				jobs = append(jobs, row)
 			}
 		}
+		// A walk stopped by its page budget had a next page, so EndProven is false there.
+		complete := jobPage.ItemCapReached ||
+			jobPage.EndProven && (!jobPage.DeclaredTotalSeen || len(jobPage.Items) >= jobPage.DeclaredTotal)
+		complete = complete && len(jobs) == len(jobItems)
 		targetBranch, prNumber := gitHubTestsTarget(run)
 		policy := githubTestsPolicy{provenance: "github.branch_protection.target_branch_unavailable"}
 		if targetBranch != nil {
@@ -1537,14 +1545,14 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 				cached, err = fetchGitHubTestsPolicy(ctx, client, root, *targetBranch)
 				cursor.Requests = invocationBaseRequests + requests
 				if err != nil {
-					return nil, nil, err
+					return nil, nil, false, err
 				}
 				policyCache[*targetBranch] = cached
 			}
 			policy = cached
 		}
 		acceptance := projectGitHubTestsChecks(claim, repoID, pipeline, jobs, policy, targetBranch, prNumber, testsOptionalString(stringValue(run.HTMLURL)), normalizedAt)
-		return jobs, acceptance, nil
+		return jobs, acceptance, complete, nil
 	}
 	emitRunPage := func(page providerfoundation.PageVisit) error {
 		cursor.Pages++
@@ -1591,8 +1599,9 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 			acceptance := make([]githubTestsAcceptanceRow, 0)
 			var pipelines []githubTestsPipelineRow
 			if read {
+				var jobsComplete bool
 				var detailErr error
-				jobs, acceptance, detailErr = collectRunDetail(run, pipeline)
+				jobs, acceptance, jobsComplete, detailErr = collectRunDetail(run, pipeline)
 				if detailErr != nil {
 					return detailErr
 				}
@@ -1600,12 +1609,12 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 				cursor.Jobs += len(jobs)
 				cursor.Acceptance += len(acceptance)
 				pipelines = []githubTestsPipelineRow{pipeline}
-				// A run read with a final status is recorded in the same emission as its rows (a run cut at the per-run jobs cap
-				// too: the cap is deterministic). An open run is read again by the revisit, for its newer status.
-				if githubTestsRunStatusOpen(pipeline.Status) {
-					cursor = githubTestsDropCutRun(cursor, cutKey)
-				} else {
+				// Only a run GitHub calls completed whose jobs read is whole is recorded, in the same emission as its rows (a run
+				// cut at the per-run jobs cap too: the cap is deterministic). Any other read is dropped and read again by the revisit.
+				if githubTestsRunReadable(run) && jobsComplete {
 					cursor = githubTestsRecordCutRun(cursor, cutSecond, cutKey)
+				} else {
+					cursor = githubTestsDropCutRun(cursor, cutKey)
 				}
 			}
 			effects, effectErr := testOpsEffects(pipelines, jobs, acceptance, nil, nil, nil)
@@ -1797,7 +1806,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 					)
 				} else if pipeline, include := normalizeGitHubTestsPipeline(claim, repoID, run, normalizedAt); include {
 					var detailErr error
-					jobs, acceptance, detailErr = collectRunDetail(run, pipeline)
+					jobs, acceptance, _, detailErr = collectRunDetail(run, pipeline)
 					if detailErr != nil {
 						if err := skipOpenRun(before, row, detailErr, true); err != nil {
 							return err

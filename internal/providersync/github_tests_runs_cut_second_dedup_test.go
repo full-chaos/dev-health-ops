@@ -18,23 +18,84 @@ import (
 // range read whole at that second, with a final status, is not read again; an open run, a new attempt or a failed read is.
 
 // runsCutDoer serves the cut-dedup doer plus jobs: one job per run, or more than githubTestsMaxJobsPerRun over pages
-// for a capped run, a hard failure of a run's first jobs page, and a flip of an open run to completed after its first
-// jobs read. jobReads counts first jobs pages per run.
+// for a capped run, a partial jobs shape (runsCutJobShapes), a hard failure of a run's first jobs page, and a flip of an
+// open run to completed after its first jobs read. listRewrite edits each runs listing body. jobReads counts first jobs
+// pages per run.
 type runsCutDoer struct {
 	*cutDedupDoer
 	jobReads      map[int]int
 	capped        map[int]bool
+	jobShape      map[int]string
 	failJobs      map[int]int
 	flipAfterJobs map[int]bool
+	listRewrite   func(string) string
 }
 
 func newRunsCutDoer(t *testing.T, runs []listingRun) *runsCutDoer {
 	return &runsCutDoer{cutDedupDoer: newCutDedupDoer(t, runs), jobReads: map[int]int{}, capped: map[int]bool{},
-		failJobs: map[int]int{}, flipAfterJobs: map[int]bool{}}
+		jobShape: map[int]string{}, failJobs: map[int]int{}, flipAfterJobs: map[int]bool{}}
+}
+
+func runsCutJob(id, page, index int) string {
+	return fmt.Sprintf(`{"id":%d,"name":"unit","status":"completed","conclusion":"success","started_at":"2026-07-20T06:30:01Z","completed_at":"2026-07-20T06:30:09Z","labels":["ubuntu-latest"]}`,
+		id*100000+page*1000+index)
+}
+
+// runsCutJobShapes are jobs responses: the body and the Link header of every page. Every shape but runsCutWholeShape is
+// not a whole read.
+const runsCutWholeShape = "whole, 1 declared"
+
+var runsCutJobShapes = map[string]func(id, page int, request *http.Request) (string, string){
+	runsCutWholeShape: func(id, page int, _ *http.Request) (string, string) {
+		return `{"total_count":1,"jobs":[` + runsCutJob(id, page, 0) + `]}`, ""
+	},
+	"missing array, 2 declared": func(int, int, *http.Request) (string, string) { return `{"total_count":2}`, "" },
+	"null array, 2 declared":    func(int, int, *http.Request) (string, string) { return `{"total_count":2,"jobs":null}`, "" },
+	"short page, 2 declared": func(id, page int, _ *http.Request) (string, string) {
+		return `{"total_count":2,"jobs":[` + runsCutJob(id, page, 0) + `]}`, ""
+	},
+	"bad Link header": func(id, page int, _ *http.Request) (string, string) {
+		return `{"jobs":[` + runsCutJob(id, page, 0) + `]}`, `garbage; rel="next"`
+	},
+	"full page, no Link": func(id, page int, _ *http.Request) (string, string) {
+		jobs := make([]string, 0, githubTestsPerRunPerPage)
+		for index := 0; index < githubTestsPerRunPerPage; index++ {
+			jobs = append(jobs, runsCutJob(id, page, index))
+		}
+		return `{"jobs":[` + strings.Join(jobs, ",") + `]}`, ""
+	},
+	"job with no id": func(id, page int, _ *http.Request) (string, string) {
+		return `{"total_count":2,"jobs":[` + runsCutJob(id, page, 0) + `,{"name":"unit","status":"completed"}]}`, ""
+	},
+	"null job": func(id, page int, _ *http.Request) (string, string) {
+		return `{"total_count":2,"jobs":[` + runsCutJob(id, page, 0) + `,null]}`, ""
+	},
+	"unreadable total": func(id, page int, _ *http.Request) (string, string) {
+		return `{"total_count":"many","jobs":[` + runsCutJob(id, page, 0) + `]}`, ""
+	},
+	"page budget": func(id, page int, request *http.Request) (string, string) {
+		next := *request.URL
+		forward := next.Query()
+		forward.Set("page", strconv.Itoa(page+1))
+		next.RawQuery = forward.Encode()
+		return `{"jobs":[` + runsCutJob(id, page, 0) + `]}`, "<" + next.String() + ">; rel=\"next\""
+	},
 }
 
 func (doer *runsCutDoer) Do(request *http.Request) (*http.Response, error) {
 	path := request.URL.Path
+	if path == "/repos/acme/api/actions/runs" && doer.listRewrite != nil {
+		response, err := doer.cutDedupDoer.Do(request)
+		if err != nil {
+			return nil, err
+		}
+		body, readErr := io.ReadAll(response.Body)
+		if readErr != nil {
+			doer.t.Fatal(readErr)
+		}
+		response.Body = io.NopCloser(strings.NewReader(doer.listRewrite(string(body))))
+		return response, nil
+	}
 	if !strings.HasPrefix(path, "/repos/acme/api/actions/runs/") || !strings.HasSuffix(path, "/jobs") {
 		return doer.cutDedupDoer.Do(request)
 	}
@@ -63,14 +124,20 @@ func (doer *runsCutDoer) Do(request *http.Request) (*http.Response, error) {
 			doer.fake.mu.Unlock()
 		}
 	}
+	if shape, ok := runsCutJobShapes[doer.jobShape[id]]; ok {
+		body, link := shape(id, page, request)
+		if link != "" {
+			header.Set("Link", link)
+		}
+		return githubTestsHTTPResponse(request, header, body), nil
+	}
 	count, last := 1, 1
 	if doer.capped[id] {
 		count, last = githubTestsPerRunPerPage, githubTestsMaxJobsPerRun/githubTestsPerRunPerPage+1
 	}
 	jobs := make([]string, 0, count)
 	for index := 0; index < count; index++ {
-		jobs = append(jobs, fmt.Sprintf(`{"id":%d,"name":"unit","status":"completed","conclusion":"success","started_at":"2026-07-20T06:30:01Z","completed_at":"2026-07-20T06:30:09Z","labels":["ubuntu-latest"]}`,
-			id*100000+page*1000+index))
+		jobs = append(jobs, runsCutJob(id, page, index))
 	}
 	if page < last {
 		next := *request.URL
@@ -289,4 +356,79 @@ func TestGitHubTestsRunsCutListIsClearedForTheArtifactsPhase(t *testing.T) {
 	if err != nil || kept.ActiveCutKeys != "5,6.2" || kept.CarriedCutKeys != "7" {
 		t.Fatalf("runs-phase cut lists = ak %q ck %q, %v; want both kept", kept.ActiveCutKeys, kept.CarriedCutKeys, err)
 	}
+}
+
+// Only a run GitHub calls completed is recorded: a missing, empty or unknown status, and an open status with a stale
+// success conclusion, are read again by the revisit (5004 is read in the first range and listed again).
+func TestGitHubTestsRunsCutSecondRunWithoutACompletedStatusIsReadAgain(t *testing.T) {
+	for _, tc := range []struct {
+		name, status, conclusion string
+		want                     int
+	}{
+		{"completed", "completed", "success", 1},
+		{"missing status", "DROPKEY", "success", 2},
+		{"empty status", "", "success", 2},
+		{"unknown status", "mystery", "success", 2},
+		{"in_progress, stale success", "in_progress", "success", 2},
+		{"queued, stale success", "queued", "success", 2},
+	} {
+		runs := cutDedupRuns(cutDedupBefore.Add(-time.Hour))
+		for index := range runs {
+			if runs[index].id == 5004 {
+				runs[index].status, runs[index].conclusion = tc.status, tc.conclusion
+			}
+		}
+		doer := newRunsCutDoer(t, runs)
+		doer.listRewrite = func(body string) string { return strings.ReplaceAll(body, `"status":"DROPKEY",`, "") }
+		walkCutDedup(t, cutDedupClaim(false), doer, nil, nil)
+		if got := doer.jobReads[5004]; got != tc.want {
+			t.Errorf("%s: run 5004 jobs reads = %d, want %d", tc.name, got, tc.want)
+		}
+		if got := doer.jobReadsOf(cutDedupIDs[:4]); !reflect.DeepEqual(got, []int{1, 1, 1, 1}) {
+			t.Errorf("%s: jobs reads of the other cut-second runs = %v, want once each", tc.name, got)
+		}
+	}
+}
+
+// runsCutPartialJobs walks the fcc layout once per jobs shape of 5004 (read in the first range, listed again by the
+// next): a whole read is read once, every other shape twice. The other cut-second runs are read once.
+func runsCutPartialJobs(t *testing.T, names []string, resume bool) {
+	t.Helper()
+	for _, name := range names {
+		if runsCutJobShapes[name] == nil {
+			t.Fatalf("unknown jobs shape %q", name)
+		}
+		doer := newRunsCutDoer(t, cutDedupRuns(cutDedupBefore.Add(-time.Hour)))
+		doer.jobShape[5004] = name
+		var yield func(before, after githubTestsChunkCursor) bool
+		if resume {
+			yield = func(before, after githubTestsChunkCursor) bool {
+				return runsCutPhase(before, after) && after.RangeHi == "" && after.RangeItems == 999
+			}
+		}
+		walkCutDedup(t, cutDedupClaim(false), doer, yield, nil)
+		want := 2
+		if name == runsCutWholeShape {
+			want = 1
+		}
+		if got := doer.jobReads[5004]; got != want {
+			t.Errorf("%s (resume=%v): run 5004 jobs reads = %d, want %d", name, resume, got, want)
+		}
+		if got := doer.jobReadsOf(cutDedupIDs[:4]); !reflect.DeepEqual(got, []int{1, 1, 1, 1}) {
+			t.Errorf("%s (resume=%v): jobs reads of the other cut-second runs = %v, want once each", name, resume, got)
+		}
+	}
+}
+
+// A jobs read with fewer jobs than total_count declares (or an unreadable total) is not whole: it is read again.
+func TestGitHubTestsRunsCutSecondJobsShortOfTheDeclaredTotalAreReadAgain(t *testing.T) {
+	runsCutPartialJobs(t, []string{runsCutWholeShape, "missing array, 2 declared", "null array, 2 declared", "short page, 2 declared", "unreadable total"}, false)
+	runsCutPartialJobs(t, []string{"short page, 2 declared"}, true)
+}
+
+// A jobs walk with no proven end (a bad Link header, a full page without Link, the page budget) or a job it could not
+// keep is not whole: it is read again.
+func TestGitHubTestsRunsCutSecondJobsWalkNotProvenWholeIsReadAgain(t *testing.T) {
+	runsCutPartialJobs(t, []string{"bad Link header", "full page, no Link", "page budget", "job with no id", "null job"}, false)
+	runsCutPartialJobs(t, []string{"job with no id"}, true)
 }

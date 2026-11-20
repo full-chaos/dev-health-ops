@@ -474,12 +474,35 @@ func githubTestsPlanRunReportsWithin(parsed []githubTestsParsedReport, bound git
 
 // githubTestsContentWithin says whether every suite instance of the report at part (githubTestsReportContent) is also in the report
 // at whole, as many times, counting one work unit per instance read.
+// githubTestsCoverageContent is the allow-list of coverageSnapshotRow fields that are report content, the coverage part of a copy
+// family's representative key. Every other field names the run, the artifact, the format, the attribution or the sync time and
+// must never steer the pick. TestGitHubTestsCoverageRowFieldsAreClassified classifies every field of coverageSnapshotRow and
+// fails when one is added, removed or renamed: classify the new field there, and add it here only if it is report content.
+type githubTestsCoverageContent struct {
+	LinesTotal        *int64   `json:"lines_total"`
+	LinesCovered      *int64   `json:"lines_covered"`
+	LineCoveragePct   *float64 `json:"line_coverage_pct"`
+	BranchesTotal     *int64   `json:"branches_total"`
+	BranchesCovered   *int64   `json:"branches_covered"`
+	BranchCoveragePct *float64 `json:"branch_coverage_pct"`
+	FunctionsTotal    *int64   `json:"functions_total"`
+	FunctionsCovered  *int64   `json:"functions_covered"`
+	ServiceID         *string  `json:"service_id"`
+}
+
+func githubTestsCoverageContentOf(row coverageSnapshotRow) githubTestsCoverageContent {
+	return githubTestsCoverageContent{
+		LinesTotal: row.LinesTotal, LinesCovered: row.LinesCovered, LineCoveragePct: row.LineCoveragePct,
+		BranchesTotal: row.BranchesTotal, BranchesCovered: row.BranchesCovered, BranchCoveragePct: row.BranchCoveragePct,
+		FunctionsTotal: row.FunctionsTotal, FunctionsCovered: row.FunctionsCovered, ServiceID: row.ServiceID,
+	}
+}
+
 // githubTestsCopyRepresentative picks a copy family's representative by content, not by id (CHAOS-14045): a member that holds
 // coverage rows first (a copy is dropped only without them, so a family with one coverage-bearing member then drops the others in
 // any upload order), then the lowest content digest, then the lowest id (members are in id order). The digest holds the suite
-// instances and the coverage rows as the writer stores them, without the fields that name the artifact or the report format
-// (snapshot_id, report_format, report_slot, run_attempt, legacy_snapshot_ids), each part sorted: so the upload id decides only
-// between members of equal content.
+// instances and the content fields of the coverage rows (githubTestsCoverageContent), each part sorted: so the upload id decides
+// only between members of equal content.
 func githubTestsCopyRepresentative(
 	parsed []githubTestsParsedReport, content func(int) (githubTestsCaseCounts, error), members []int,
 ) (int, error) {
@@ -495,8 +518,7 @@ func githubTestsCopyRepresentative(
 		sort.Strings(keys)
 		coverage := make([]string, 0, len(parsed[index].Coverage))
 		for _, row := range parsed[index].Coverage {
-			row.SnapshotID, row.ReportFormat, row.ReportSlot, row.RunAttempt, row.LegacySnapshotIDs = "", nil, "", 0, nil
-			encoded, err := json.Marshal(row)
+			encoded, err := json.Marshal(githubTestsCoverageContentOf(row))
 			if err != nil {
 				return "", err
 			}

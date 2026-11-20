@@ -1,11 +1,14 @@
 package providersync
 
 import (
+	"encoding/json"
 	"fmt"
 	"maps"
 	"math/rand/v2"
+	"reflect"
 	"slices"
 	"testing"
+	"time"
 )
 
 // CHAOS-14045: two matrix legs run the same tests, so their totals share every case identity. A mismatch keeps the artifacts it
@@ -389,6 +392,97 @@ func TestGitHubTestsRunReportsZeroCoverageKnownGapLCOVAndCobertura(t *testing.T)
 	for _, swapped := range []bool{false, true} {
 		if got := markedCopyRole(t, lcov, cobertura, swapped, false); got != "first" {
 			t.Fatalf("ids swapped %t: reported %s, want the LCOV copy (first) in both orders: the keys differ today", swapped, got)
+		}
+	}
+}
+
+// The coverage part of a copy family's representative key is an allow-list (githubTestsCoverageContent). Every field of
+// coverageSnapshotRow is classified here: content (in the key) or identity (the run, artifact, format, attribution or sync time,
+// never in the key). A field added, removed or renamed fails until it is classified, and the content class must equal the
+// allow-list exactly.
+func TestGitHubTestsCoverageRowFieldsAreClassified(t *testing.T) {
+	classes := map[string]string{
+		"RepoID": "identity", "RunID": "identity", "SnapshotID": "identity", "ReportFormat": "identity",
+		"LinesTotal": "content", "LinesCovered": "content", "LineCoveragePct": "content",
+		"BranchesTotal": "content", "BranchesCovered": "content", "BranchCoveragePct": "content",
+		"FunctionsTotal": "content", "FunctionsCovered": "content",
+		"CommitHash": "identity", "Branch": "identity", "PRNumber": "identity", "TeamID": "identity",
+		"ServiceID": "content", "OrgID": "identity", "LastSynced": "identity",
+		"ReportSlot": "identity", "RunAttempt": "identity", "LegacySnapshotIDs": "identity",
+	}
+	row := reflect.TypeFor[coverageSnapshotRow]()
+	seen := map[string]bool{}
+	var content []string
+	for index := range row.NumField() {
+		name := row.Field(index).Name
+		seen[name] = true
+		switch classes[name] {
+		case "content":
+			content = append(content, name)
+		case "identity":
+		default:
+			t.Errorf("coverageSnapshotRow.%s is not classified: decide whether it is report content (add it to githubTestsCoverageContent) or identity", name)
+		}
+	}
+	for name := range classes {
+		if !seen[name] {
+			t.Errorf("classified field %s is no longer in coverageSnapshotRow (removed or renamed)", name)
+		}
+	}
+	allow := reflect.TypeFor[githubTestsCoverageContent]()
+	var allowed []string
+	for index := range allow.NumField() {
+		allowed = append(allowed, allow.Field(index).Name)
+	}
+	slices.Sort(content)
+	slices.Sort(allowed)
+	if !slices.Equal(content, allowed) {
+		t.Errorf("content fields %v, allow-list fields %v: they must be the same", content, allowed)
+	}
+}
+
+// Two covered copies whose coverage differs only in the service (the report's file paths): the service is content, so the same
+// copy is reported in both upload orders.
+func TestGitHubTestsRunReportsCoverageServiceIsContent(t *testing.T) {
+	cobertura := func(path string) map[string]string {
+		return map[string]string{"coverage.xml": `<coverage lines-valid="1" lines-covered="1"><packages><package name="example"><classes>` +
+			`<class filename="` + path + `"><lines><line number="1" hits="1"/></lines></class></classes></package></packages></coverage>`}
+	}
+	frontend, backend := cobertura("services/frontend/foo.go"), cobertura("services/backend/foo.go")
+	want := markedCopyRole(t, frontend, backend, false, false)
+	if got := markedCopyRole(t, frontend, backend, true, false); got != want {
+		t.Fatalf("ids swapped: reported %s, want %s as in the first order: the service must be in the key", got, want)
+	}
+}
+
+// Two covered copies parsed in two sync passes carry different last_synced times. The sync time is identity, not content, so the
+// tie between equal coverage still goes to the lowest upload id, whichever copy was parsed first.
+func TestGitHubTestsRunReportsSyncTimeDoesNotChooseTheRepresentative(t *testing.T) {
+	one, hundred := int64(1), 100.0
+	duration, suiteTime := 0.25, 1.0
+	report := func(id string, synced time.Time) githubTestsParsedReport {
+		suite := "suite-" + id
+		return githubTestsParsedReport{
+			ID: json.Number(id), Name: "copy-" + id, Reports: 1,
+			Suites: []testSuiteResultRow{{SuiteID: suite, SuiteName: "left", DurationSeconds: &suiteTime, ReportSlot: "copy-" + id}},
+			Cases:  []testCaseResultRow{{SuiteID: suite, CaseID: "case-" + id, CaseName: "a", Status: "passed", DurationSeconds: &duration}},
+			Coverage: []coverageSnapshotRow{{SnapshotID: "snapshot-" + id, LinesTotal: &one, LinesCovered: &one, LineCoveragePct: &hundred,
+				LastSynced: synced, ReportSlot: "copy-" + id}},
+		}
+	}
+	early, late := time.Date(2026, 11, 20, 1, 0, 0, 0, time.UTC), time.Date(2026, 11, 20, 2, 0, 0, 0, time.UTC)
+	for _, earlyAtHigherID := range []bool{false, true} {
+		first, second := report("1", early), report("2", late)
+		if earlyAtHigherID {
+			first, second = report("1", late), report("2", early)
+		}
+		plan, err := githubTestsPlanRunReports([]githubTestsParsedReport{first, second})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(plan.Mismatch) != 1 || plan.Mismatch[0].Index != 1 || !slices.Equal(plan.Mismatch[0].Parts, []int{0}) {
+			t.Fatalf("early sync at the higher id %t: mismatch %+v, want copy 2 reported against copy 1 (the lowest id wins the tie)",
+				earlyAtHigherID, plan.Mismatch)
 		}
 	}
 }

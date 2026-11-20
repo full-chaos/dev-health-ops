@@ -54,10 +54,6 @@ var unruledReads = map[string]string{
 	"internal/queryapi/cognitiveload/cognitiveload.go:fetchTeamCognitiveLoad": "SQL pinned by the frozen golden; the rule is applied in Go after the read " +
 		"(fetchRetractedLoadDays reads the days whose newest row is a retraction row, and they are dropped)",
 	"internal/queryapi/sankey/queries.go:fetchExpenseCounts": "three sums over the whole scope, one row, no list: a retraction row adds 0",
-	"internal/queryapi/capacityforecast/clickhouse.go:loadBacklog": "sum of the WIP on the newest day of each key: a retraction row must stay the newest row of its key " +
-		"(so a retracted key gives 0 and not its older backlog) and adds 0; the sum of no row is 0 as well",
-	"internal/queryapi/throughputforecast/clickhouse.go:loadStaleWIP": "Nullable means over the newest-day row of each key, NULL rows left out: " +
-		"a retraction row must stay the newest row of its key, and it holds NULL",
 	"internal/jobs/metrics/remaining/recommendations_loader.go:loadCompoundingRiskPersisted": "the newest row of ONE team over the window, whole: a retraction row is that row, " +
 		"and it reads as the read answers for no row at all (no score, severity unknown)",
 	"internal/jobs/metrics/remaining/capacity_native_clickhouse.go:capacityNewestRows": "the newest-version subquery of the capacity reads; the throughput and scope reads apply the rule after it, and the backlog sums the WIP on the newest day of the scope: a retraction row adds 0 and must stay in the newest-day pick",
@@ -81,12 +77,15 @@ var heldBy = map[string]string{
 // the declaration of the same package that builds the read from the table
 // name: the census holds that it applies the rule.
 var namesOnly = map[string]struct{ reader, why string }{
-	"internal/providersync/":                                    {"", "sync writers and destinations"},
-	"internal/jobs/metrics/daily/":                              {"", "daily family writers"},
-	"internal/cigates/metricsproof/proof.go":                    {"", "executed-proof readback of the rows one CI run wrote: table names of its family maps, no product read"},
-	"internal/jobs/metrics/workitemengine/":                     {"", "compute and insert of the work item engine rows (writer)"},
-	"internal/teamkeytables/teamkeytables.go":                   {"", "the registry of the tables and their measures"},
-	"internal/queryapi/rowview/rowview.go":                      {"", "the reader side of the view column: table names of its registry, no query"},
+	"internal/providersync/":                  {"", "sync writers and destinations"},
+	"internal/jobs/metrics/daily/":            {"", "daily family writers"},
+	"internal/cigates/metricsproof/proof.go":  {"", "executed-proof readback of the rows one CI run wrote: table names of its family maps, no product read"},
+	"internal/jobs/metrics/workitemengine/":   {"", "compute and insert of the work item engine rows (writer)"},
+	"internal/teamkeytables/teamkeytables.go": {"", "the registry of the tables and their measures"},
+	"internal/queryapi/rowview/rowview.go":    {"", "the reader side of the view column: table names of its registry, no query"},
+	"internal/queryapi/capacityforecast/clickhouse.go": {"", "reads through capacitySource (FROM a run-time source, CHAOS-14376): loadThroughput applies the rule " +
+		"after it; loadBacklog sums the WIP on the newest day of each key, where a retraction row must stay the newest row of its key " +
+		"(so a retracted key gives 0, not its older backlog), and the one-team source is rowview.ServedTeamPick (no rule after the pick)"},
 	"internal/storage/clickhouse/liverow/liverow.go":            {"", "the reader side of the rule"},
 	"internal/testsupport/":                                     {"", "test seeds"},
 	"internal/jobruntime/telemetry.go":                          {"", "table names in telemetry labels"},

@@ -917,15 +917,14 @@ func (pipeline *MutationPipeline) Step(
 			orphaned, stepErr = pipeline.orphanedUnit.Step(stageCtx, now, limit)
 			return stepErr
 		})
-		if orphanedErr != nil && ctx.Err() != nil {
-			return recovered, orphanedErr
-		}
 		if orphaned.ReArmed > 0 {
 			// WARN, not INFO: a replacement delivery means a unit was stranded
 			// behind a settled one, which is a defect somewhere upstream even
 			// though this pass just recovered from it. The repair's own
 			// per-pass line (syncreconciler.orphaned_unit_pass) carries the
-			// zeros; this one carries the events.
+			// zeros; this one carries the events. Logged before the outer
+			// return below: each re-arm commits on its own, so a pass the
+			// outer tick ends can already hold committed ones.
 			slog.Warn(
 				"syncreconciler.orphaned_units_rearmed",
 				"re_armed", orphaned.ReArmed,
@@ -933,6 +932,9 @@ func (pipeline *MutationPipeline) Step(
 				"delivery_completed", orphaned.DeliveryCompleted,
 				"found", orphaned.Found,
 			)
+		}
+		if orphanedErr != nil && ctx.Err() != nil {
+			return recovered, orphanedErr
 		}
 		if orphanedErr != nil {
 			slog.Warn(

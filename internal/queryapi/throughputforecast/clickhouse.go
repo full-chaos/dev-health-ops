@@ -29,19 +29,8 @@ var measuredWorkItem = liverow.Predicate("work_item_metrics_daily", "newest")
 // The newest version of a key is the one with the newest computed_at, then the highest hash of the version's values, so
 // two versions that share a computed_at serve one of them whatever the scan order. Each table has ONE order key, the
 // same columns in the same order as the operating review reads of that table, so the pages serve the same version of a
-// tied key. workItemNewestColumns picks every liverow measure of the table from that one version.
-const workItemNewestOrder = `(work_item_metrics_daily.computed_at, cityHash64(tuple(
-    work_item_metrics_daily.items_started, work_item_metrics_daily.items_completed,
-    work_item_metrics_daily.items_started_unassigned, work_item_metrics_daily.items_completed_unassigned,
-    work_item_metrics_daily.wip_count_end_of_day, work_item_metrics_daily.wip_unassigned_end_of_day,
-    work_item_metrics_daily.bug_completed_ratio, work_item_metrics_daily.story_points_completed,
-    work_item_metrics_daily.new_bugs_count, work_item_metrics_daily.new_items_count,
-    work_item_metrics_daily.defect_intro_rate, work_item_metrics_daily.wip_congestion_ratio,
-    work_item_metrics_daily.predictability_score, work_item_metrics_daily.cycle_time_p50_hours,
-    work_item_metrics_daily.cycle_time_p90_hours, work_item_metrics_daily.lead_time_p50_hours,
-    work_item_metrics_daily.lead_time_p90_hours, work_item_metrics_daily.wip_age_p50_hours,
-    work_item_metrics_daily.wip_age_p90_hours)))`
-
+// tied key; the key of work_item_metrics_daily is rowview.WorkItemMetricsNewestOrder, shared by every served reader of
+// the table. workItemNewestColumns picks every liverow measure of the table from that one version.
 const workItemNewestColumns = `argMax(tuple(
                     work_item_metrics_daily.items_started, work_item_metrics_daily.items_completed,
                     work_item_metrics_daily.items_started_unassigned,
@@ -55,7 +44,7 @@ const workItemNewestColumns = `argMax(tuple(
                     work_item_metrics_daily.cycle_time_p50_hours, work_item_metrics_daily.cycle_time_p90_hours,
                     work_item_metrics_daily.lead_time_p50_hours, work_item_metrics_daily.lead_time_p90_hours,
                     work_item_metrics_daily.wip_age_p50_hours, work_item_metrics_daily.wip_age_p90_hours
-                ), ` + workItemNewestOrder + `) AS picked,
+                ), ` + rowview.WorkItemMetricsNewestOrder + `) AS picked,
                 picked.1 AS items_started,
                 picked.2 AS items_completed,
                 picked.3 AS items_started_unassigned,
@@ -157,16 +146,17 @@ func workItemScopeFilter(orgID string, teamIDs []string, workScopeID *string) ([
 // of the newest row of each view of a key, a live row first, then team, org, legacy (rowview.ServedTeamSource); a read
 // of each key's newest day takes the pick with no live-row rule after it (rowview.ServedTeamPick), so a retracted key
 // stays its key's newest row there, as in the org form (see measuredWorkItem). Each view of a key takes its version by
-// workItemNewestOrder, the order of the org form, so both forms serve one version of a computed_at tie (CHAOS-14405).
+// rowview.WorkItemMetricsNewestOrder, the order of the org form, so both forms serve one version of a computed_at tie
+// (CHAOS-14405).
 // The source is aliased as the table.
 func workItemSource(teamIDs []string, where string, newestDay bool) string {
 	switch {
 	case len(teamIDs) != 1:
 		return "work_item_metrics_daily"
 	case newestDay:
-		return rowview.ServedTeamPick("work_item_metrics_daily", where, workItemNewestOrder) + " AS work_item_metrics_daily"
+		return rowview.ServedTeamPick("work_item_metrics_daily", where, rowview.WorkItemMetricsNewestOrder) + " AS work_item_metrics_daily"
 	default:
-		return rowview.ServedTeamSource("work_item_metrics_daily", where, workItemNewestOrder) + " AS work_item_metrics_daily"
+		return rowview.ServedTeamSource("work_item_metrics_daily", where, rowview.WorkItemMetricsNewestOrder) + " AS work_item_metrics_daily"
 	}
 }
 

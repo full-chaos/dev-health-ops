@@ -474,7 +474,7 @@ func fetchWorkItems(ctx context.Context, client QueryClient, orgID string, teams
                 work_item_metrics_daily.cycle_time_p50_hours, work_item_metrics_daily.cycle_time_p90_hours,
                 work_item_metrics_daily.lead_time_p50_hours, work_item_metrics_daily.lead_time_p90_hours,
                 work_item_metrics_daily.wip_age_p50_hours, work_item_metrics_daily.wip_age_p90_hours),
-              ` + workItemsVersionOrder + `
+              ` + rowview.WorkItemMetricsNewestOrder + `
             ) AS picked,
             picked.1 AS items_started,
             picked.2 AS items_completed,
@@ -1450,27 +1450,13 @@ func teamClauses(teams teamSelection) (teamFilter, teamGroup string, binding *cl
 	return "AND team_id IN {team_ids:Array(String)}", ", team_id", &clickhouse.Binding{Name: "team_ids", Value: []string(teams)}
 }
 
-// workItemsVersionOrder and stateDurationsVersionOrder are the version order of each key in the work_items and
-// state_durations reads: computed_at, then the hash of the picked values (CHAOS-14355). The one-team source picks each
-// view's version by the same order (rowview.ServedTeamSource, CHAOS-14405), so on a computed_at tie the team form and
-// the org form serve one version.
-const (
-	workItemsVersionOrder = `(work_item_metrics_daily.computed_at, cityHash64(tuple(
-                work_item_metrics_daily.items_started, work_item_metrics_daily.items_completed,
-                work_item_metrics_daily.items_started_unassigned,
-                work_item_metrics_daily.items_completed_unassigned,
-                work_item_metrics_daily.wip_count_end_of_day,
-                work_item_metrics_daily.wip_unassigned_end_of_day, work_item_metrics_daily.bug_completed_ratio,
-                work_item_metrics_daily.story_points_completed, work_item_metrics_daily.new_bugs_count,
-                work_item_metrics_daily.new_items_count, work_item_metrics_daily.defect_intro_rate,
-                work_item_metrics_daily.wip_congestion_ratio, work_item_metrics_daily.predictability_score,
-                work_item_metrics_daily.cycle_time_p50_hours, work_item_metrics_daily.cycle_time_p90_hours,
-                work_item_metrics_daily.lead_time_p50_hours, work_item_metrics_daily.lead_time_p90_hours,
-                work_item_metrics_daily.wip_age_p50_hours, work_item_metrics_daily.wip_age_p90_hours)))`
-	stateDurationsVersionOrder = `(work_item_state_durations_daily.computed_at, cityHash64(tuple(
+// stateDurationsVersionOrder is the version order of each key in the state_durations read: computed_at, then the
+// hash of the picked values (CHAOS-14355). The work_items read takes rowview.WorkItemMetricsNewestOrder, the one order
+// of work_item_metrics_daily. The one-team source picks each view's version by the same order as the org form
+// (rowview.ServedTeamSource, CHAOS-14405), so on a computed_at tie both forms serve one version.
+const stateDurationsVersionOrder = `(work_item_state_durations_daily.computed_at, cityHash64(tuple(
                 work_item_state_durations_daily.duration_hours, work_item_state_durations_daily.items_touched,
                 work_item_state_durations_daily.avg_wip)))`
-)
 
 // workItemSource is the FROM source of a read of a work item daily table. No team
 // and a team set read the table (a team set is CHAOS-10665's). Exactly one team
@@ -1485,7 +1471,7 @@ func workItemSource(table string, teams teamSelection) string {
 	const where = "team_id = {team_id:String} AND day >= {start:Date} AND day < {end:Date}"
 	switch table {
 	case "work_item_metrics_daily":
-		return rowview.ServedTeamSource("work_item_metrics_daily", where, workItemsVersionOrder) + " AS work_item_metrics_daily"
+		return rowview.ServedTeamSource("work_item_metrics_daily", where, rowview.WorkItemMetricsNewestOrder) + " AS work_item_metrics_daily"
 	case "work_item_state_durations_daily":
 		return rowview.ServedTeamSource("work_item_state_durations_daily", where, stateDurationsVersionOrder) + " AS work_item_state_durations_daily"
 	}

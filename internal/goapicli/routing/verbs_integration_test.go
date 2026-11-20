@@ -260,7 +260,7 @@ func TestEnableDryRunNeverWritesADecision(t *testing.T) {
 }
 
 // A catalog operation has no routing state: every verb refuses it with exit 3 and writes nothing.
-func TestEveryVerbRefusesACatalogOperationAndWritesNothing(t *testing.T) {
+func TestRoutingEveryVerbRefusesACatalogOperationAndWritesNothing(t *testing.T) {
 	_, dsn := startVerbPostgres(t)
 	t.Setenv(accessTokenFileEnvVar, verbTestTokenFile(t))
 	server := queryAPIFor(t)

@@ -80,6 +80,13 @@ func eachInsertArm(t *testing.T, cell func(t *testing.T, arm insertArm)) {
 	}
 }
 
+// pinnedWorkerInstant is the worker-clock instant a venue set up at setup
+// pins: an hour before it, so no PostgreSQL stamp taken at or after setup can
+// equal it.
+func pinnedWorkerInstant(setup time.Time) time.Time {
+	return setup.Add(-time.Hour).Truncate(time.Millisecond)
+}
+
 type runStampVenue struct {
 	h      *shadowHarness
 	pg     domainroledb.Venue
@@ -109,9 +116,8 @@ func newRunStampVenue(t *testing.T, arm insertArm) *runStampVenue {
 		h:   h,
 		pg:  pg,
 		arm: arm,
-		// Every run reads this instant from the worker clock. It lies an hour
-		// before the venue, so no PostgreSQL stamp taken in it can equal it.
-		at: now.Add(-time.Hour).Truncate(time.Millisecond),
+		// Every run reads this instant from the worker clock.
+		at: pinnedWorkerInstant(now),
 		scope: `{"force":true,"from_date":"` + h.windowStart.Format("2006-01-02") +
 			`","to_date":"` + h.windowEnd.Format("2006-01-02") + `"}`,
 	}
@@ -613,4 +619,39 @@ func TestRunStampHeldClockFailsTheRunAndWritesNothing(t *testing.T) {
 	if held := v.advisoryLocks(t); held != 0 {
 		t.Errorf("%d advisory locks held after the refused stamp", held)
 	}
+}
+
+// setupInStampMillisecond re-pins the venue as if it had been set up in the
+// millisecond of the run's own stamp: the CI flake of run 44619068634.
+type setupInStampMillisecond struct {
+	inner RunStamp
+	v     *runStampVenue
+}
+
+func (s *setupInStampMillisecond) Stamp(ctx context.Context, orgID string) (time.Time, error) {
+	stamp, err := s.inner.Stamp(ctx, orgID)
+	if err == nil {
+		s.v.at = pinnedWorkerInstant(stamp)
+	}
+	return stamp, err
+}
+
+// A venue set up in the same millisecond as the run's stamp: the run took its
+// own stamp, so the worker-clock check must not fire.
+func TestRunStampVenueSetUpInTheStampMillisecondKeepsTheRunStamped(t *testing.T) {
+	v := newRunStampVenue(t, insertArms[0])
+	executor := v.executor(t, categorize.MockProvider{})
+	executor.SetRunStamp(&setupInStampMillisecond{inner: executor.runStamp, v: v})
+	if err := v.execute(v.h.ctx, executor, "run-stamp-setup-ms"); err != nil {
+		t.Fatal(err)
+	}
+	ids := v.runIDs(t)
+	if len(ids) != 1 {
+		t.Fatalf("run ids %q", ids)
+	}
+	issued := v.issuedStamps()
+	if len(issued) != 1 || !issued[0].Truncate(time.Millisecond).Equal(issued[0]) {
+		t.Fatalf("issued stamps %v, want one millisecond stamp", issued)
+	}
+	v.requireStampedRun(t, ids[0])
 }

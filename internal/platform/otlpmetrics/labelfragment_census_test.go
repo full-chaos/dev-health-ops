@@ -80,7 +80,6 @@ var unlabeledWriters = map[string]string{
 	"sync_dispatch_unreclaimable_sweep_failures_total":          noLabelSample,
 	"sync_dispatch_unreclaimable_terminalized_total":            noLabelSample,
 	"sync_dispatch_wakeup_report_failures_total":                noLabelSample,
-	"sync_reconciler_chunk_sidecar_reclaim_lock_skipped_total":  noLabelSample,
 	"sync_scheduler_configs_without_schedule":                   noLabelSample,
 	"sync_scheduler_consecutive_failures":                       noLabelSample,
 	"sync_scheduler_last_success_age_seconds":                   noLabelSample,

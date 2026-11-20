@@ -384,7 +384,6 @@ sync_initial_backfill_total	outcome	code: internal/scheduler/sync/initial_backfi
 sync_manual_trigger_await_latency_seconds	outcome	code: internal/synchandoff/await_metrics.go
 sync_manual_trigger_await_outcome_total	outcome	code: internal/synchandoff/await_metrics.go
 sync_plan_gate_total	dataset,outcome,provider	code: internal/scheduler/sync/plan_gate_telemetry.go
-sync_reconciler_chunk_sidecar_reclaim_lock_skipped_total		code: internal/syncreconciler/pipeline.go
 sync_reconciler_stage_budget_seconds	stage	code: internal/syncreconciler/pipeline.go
 sync_reconciler_stage_degraded	stage	code: internal/syncreconciler/pipeline.go
 sync_reconciler_stage_duration_seconds	stage	code: internal/syncreconciler/pipeline.go

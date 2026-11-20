@@ -1541,7 +1541,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 	// at the oldest created time seen, in the same phase. A range that makes no
 	// progress is recorded and the phase ends.
 	endRunsRange := func(c githubTestsChunkCursor) githubTestsChunkCursor {
-		nextHi, saturated, stuck := githubTestsPeel(c.RangeItems, c.RangeOldest, c.RangeHi)
+		nextHi, saturated, stuck := githubTestsRunsInterval(claim, c.LateRuns, lookback, lateLookback).peel(c.RangeItems, c.RangeOldest, c.RangeHi)
 		items, hi := c.RangeItems, c.RangeHi
 		if saturated && !stuck && c.RangeOldestItems >= githubTestsSearchResultCap {
 			stuck, hi = true, nextHi
@@ -1705,6 +1705,8 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 				cursor.RunPages++
 			}
 		}
+		// A moved page is sought again as a new search (githubTestsReseek), which also drops the count of runs at the
+		// oldest second (CHAOS-14321: the runs are counted again).
 		start, reseek := githubTestsResumeStart(cursor, page, client, claim, githubTestsRunsPhase)
 		if reseek {
 			return errGitHubTestsReseek
@@ -1730,9 +1732,10 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 			cutSecond, cutKey := githubTestsCutRunKey(run)
 			wanted := githubTestsRunWanted(run, pipeline, claim)
 			if cursor.LateRuns {
-				wanted = !githubTestsLateRerunListedOutsideDeepRange(pipeline, claim.SinceAt.UTC().Add(-lookback)) && githubTestsLateRerunWanted(run, claim, lookback)
+				wanted = githubTestsLateRerunWanted(run, claim, lookback)
 			}
-			read := include && wanted && !githubTestsSkipCutRun(cursor, cutSecond, cutKey)
+			read := include && githubTestsRunsInterval(claim, cursor.LateRuns, lookback, lateLookback).admitsUnder(pipeline.QueuedAt, cursor.RangeHi) &&
+				wanted && !githubTestsSkipCutRun(cursor, cutSecond, cutKey)
 			jobs := make([]githubTestsJobRow, 0)
 			acceptance := make([]githubTestsAcceptanceRow, 0)
 			var pipelines []githubTestsPipelineRow
@@ -2066,10 +2069,9 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 			start, reseek := githubTestsResumeStart(cursor, page, client, claim, githubTestsArtifactsPhase)
 			if reseek {
 				// A re-seek (githubTestsReseek) reads again the runs of the anchor's created second, which re-downloads
-				// and re-counts their artifacts -- including ones an earlier attempt already reflected in these counters. That can cross the totality floor on a
-				// truly small real sample (e.g. a genuine 1-artifact repo
-				// whose page shrank under a resume): the SAME artifact would
-				// be counted twice, satisfying seen>=2 with only one
+				// and re-counts their artifacts -- including ones an earlier attempt already reflected in these counters.
+				// That can cross the totality floor on a truly small real sample (e.g. a genuine 1-artifact repo whose
+				// page moved under a resume): the SAME artifact would be counted twice, satisfying seen>=2 with only one
 				// distinct observation (CHAOS-4185 codex round 1).
 				//
 				// Poisoning to UNKNOWN here is the same trade-off already

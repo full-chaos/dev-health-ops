@@ -63,7 +63,8 @@ func githubTestsRelistRunOutsideWindow(pipeline githubTestsPipelineRow, claim Cl
 	return pipeline.FinishedAt.UTC().Before(githubTestsLateRerunFloor(claim))
 }
 
-// githubTestsCreatedInterval is the created interval [lo, hi) of one artifacts-phase listing range: the regular range
+// githubTestsCreatedInterval is the created interval [lo, hi) of one listing range (the runs phase's,
+// githubTestsRunsInterval). In the artifacts phase: the regular range
 // [date(since - max(1 d, width)), before + 1 s) of a claim that lists a deep range, or that deep range [date(floor - L),
 // regular floor). A zero bound is open. The two intervals of such a claim are disjoint. A claim that lists no deep range
 // has an unbounded regular interval: its admission and peel are main's (githubTestsPeel), byte for byte. One interval decides, for its range, both which listed runs are admitted

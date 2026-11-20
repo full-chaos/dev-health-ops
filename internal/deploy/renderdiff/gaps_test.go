@@ -238,8 +238,8 @@ func TestRedactedValuesKeepTheKitForms(t *testing.T) {
 }
 
 // hiddenIn parses one input as a render and returns the raw values redact() hides (as str) minus those the same
-// inputs also hold un-redacted (the kit prints those as plain text), plus the plain values seen. A needle the kit's own
-// golden outputs in that dir hold (a common word such as "changed") is the kit's text, not a leak.
+// inputs also hold un-redacted (the kit prints those as plain text), plus the plain values seen. No other needle is
+// skipped: a short redacted fixture value is a unique canary (syn-redact-<n>), so it cannot match kit text by chance.
 func hiddenIn(raw []byte, hidden, plain map[string]bool) {
 	defer func() { _ = recover() }()
 	text, err := pythonText(raw)
@@ -287,19 +287,6 @@ func TestNoRedactedValueOrItsHashInAnyGoldenOutput(t *testing.T) {
 		t.Run(filepath.Base(dir), func(t *testing.T) {
 			in := filepath.Join(dir, "in")
 			t.Chdir(kitInputs(t, in))
-			var kitText strings.Builder
-			outs, err := filepath.Glob(filepath.Join(dir, "out", "*"))
-			if err != nil {
-				t.Fatal(err)
-			}
-			for _, f := range outs {
-				b, err := os.ReadFile(f)
-				if err != nil {
-					t.Fatal(err)
-				}
-				kitText.Write(b)
-			}
-			kit := kitText.String()
 			for _, c := range readManifest(t, dir) {
 				hidden, plain := map[string]bool{}, map[string]bool{}
 				for _, f := range append(append([]string{}, c.args...), c.stdin) {
@@ -314,7 +301,8 @@ func TestNoRedactedValueOrItsHashInAnyGoldenOutput(t *testing.T) {
 					}
 					sum := sha256.Sum256([]byte(v))
 					h := hex.EncodeToString(sum[:])
-					if len(v) >= 6 {
+					// The empty string holds no byte that could leak; its hash windows are still checked.
+					if v != "" {
 						needles = append(needles, v)
 					}
 					for i := 0; i+12 <= len(h); i++ {
@@ -332,7 +320,7 @@ func TestNoRedactedValueOrItsHashInAnyGoldenOutput(t *testing.T) {
 				out := stdout.String() + stderr.String()
 				hiddenRows += strings.Count(out, "CHANGED <redacted>")
 				for _, n := range needles {
-					if strings.Contains(out, n) && !strings.Contains(kit, n) {
+					if strings.Contains(out, n) {
 						t.Errorf("%s: a hidden value or its hash (%d bytes) reached the output", c.name, len(n))
 					}
 				}

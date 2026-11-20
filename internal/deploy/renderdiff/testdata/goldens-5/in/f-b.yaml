@@ -5,18 +5,18 @@ spec:
   containers:
   - name: c
     env:
-    - {name: PRİVATE_X, value: two}
-    - {name: paſsword, value: two}
-    - {name: API_KEY, value: two}
-    - {name: PRıVATE_Y, value: two}
+    - {name: PRİVATE_X, value: syn-redact-2}
+    - {name: paſsword, value: syn-redact-2}
+    - {name: API_KEY, value: syn-redact-2}
+    - {name: PRıVATE_Y, value: syn-redact-2}
     - {name: plain, value: two}
 ---
 apiVersion: v1
 kind: ConfigMap
 metadata: {name: c}
 data:
-  paſsword: two
-  Key1: two
+  paſsword: syn-redact-2
+  Key1: syn-redact-2
   secİret: two
-  credentıal: two
+  credentıal: syn-redact-2
   plain: two

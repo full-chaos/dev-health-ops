@@ -98,6 +98,6 @@ data:
   litstrip: |-
     strip
   ? "a very long key that is longer than one hundred and twenty eight characters, to force the complex key form in the emitter output ok"
-  : v
+  : syn-redact-4
   "multi\nline key": v2
   "": emptykey

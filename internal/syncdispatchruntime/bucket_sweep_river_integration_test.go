@@ -10,6 +10,7 @@ import (
 
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
@@ -29,15 +30,9 @@ func withSweepRiver(t *testing.T, fn func(ctx context.Context, enqueuer *RiverBu
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() {
-		closeCtx, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer closeCancel()
-		_ = instance.Close(closeCtx)
-	}()
+	// The migrated schema (no hand-written DDL): the pinned River migration checks the domain tables it names.
+	instance := pgschema.Start(ctx, t)
+	defer instance.Close(context.Background())
 	dbName, err := containers.DatabaseName(instance.URI)
 	if err != nil {
 		t.Fatal(err)
@@ -58,13 +53,9 @@ func withSweepRiver(t *testing.T, fn func(ctx context.Context, enqueuer *RiverBu
 	defer containers.DropRole(admin, domainRole, t.Logf)
 	defer containers.DropRole(admin, queueRole, t.Logf)
 	for _, statement := range []string{
-		"REVOKE CREATE ON SCHEMA public FROM PUBLIC",
 		"CREATE ROLE " + domainRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + integrationDomainPassword + "'",
 		"CREATE ROLE " + queueRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + integrationQueuePassword + "'",
 		"GRANT CONNECT ON DATABASE " + dbName + " TO " + domainRole + ", " + queueRole,
-		"CREATE TABLE public.worker_job_outbox (id uuid PRIMARY KEY, state text NOT NULL)",
-		"CREATE TABLE public.sync_dispatch_outbox (id uuid PRIMARY KEY, state text NOT NULL)",
-		"CREATE TABLE public.sync_dispatch_transport_routes (kind text PRIMARY KEY, generation bigint NOT NULL)",
 	} {
 		if _, err := admin.Exec(ctx, statement); err != nil {
 			t.Fatal(err)

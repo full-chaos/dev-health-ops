@@ -1,6 +1,8 @@
 package workerservice
 
 import (
+	"log/slog"
+
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -14,7 +16,10 @@ func newBucketSweepEnqueuer(cfg config.Config, queueControl *pgxpool.Pool) (*syn
 	if queueControl == nil {
 		return nil, errWorkerDependencyUnavailable
 	}
-	client, err := river.NewClient(riverpgxv5.New(queueControl), &river.Config{Schema: cfg.RiverDatabaseSchema})
+	client, err := river.NewClient(riverpgxv5.New(queueControl), &river.Config{
+		Schema: cfg.RiverDatabaseSchema,
+		Logger: slog.Default(),
+	})
 	if err != nil {
 		return nil, errWorkerDependencyUnavailable
 	}

@@ -988,3 +988,58 @@ func TestARedriveTwinAfterAnExhaustedJobComputesOnceMore(t *testing.T) {
 		})
 	}
 }
+
+// The first finalize is published by CompletePartition, which stamps the last
+// partition but not the run. A run last written long ago whose last partition
+// just finished is not stranded: neither the selection nor the locked
+// re-check may redrive it.
+func TestSweepSkipsARunWhoseLastPartitionJustCompleted(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createDailyTables(t, ctx, pool)
+	registry, err := jobruntime.Load(filepath.Join("..", "..", "..", "..", "contracts", "jobs", "v1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	publisher, err := NewPostgresPublisher(pool, dailyTestRegistry{production: registry})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewPostgresStore(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	store.now = func() time.Time { return now }
+	orgID := uuid.NewString()
+	freshRun, oldRun := uuid.NewString(), uuid.NewString()
+	for _, runID := range []string{freshRun, oldRun} {
+		seedSweepRun(t, ctx, pool, sweepRunSeed{orgID, runID, "2026-11-01", "pending", now.Add(-26 * time.Hour), []string{"succeeded"}})
+	}
+	if _, err := pool.Exec(ctx, `UPDATE daily_metrics_partitions SET updated_at = $1, completed_at = $1 WHERE run_id = $2::uuid`, now.Add(-time.Second), freshRun); err != nil {
+		t.Fatal(err)
+	}
+	cutoff := now.Add(-finalizeStrandHorizon)
+	published, err := store.redriveOneStrandedFinalize(ctx, publisher, freshRun, uuid.NewString(), now, false, &cutoff)
+	if err != nil || published {
+		t.Fatalf("locked re-check published=%t err=%v, want a run with a one-second-old partition left alone", published, err)
+	}
+	redriven, err := store.SweepStrandedFinalizeForOrg(ctx, publisher, orgID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if redriven != 1 || finalizeRedriveRows(t, ctx, pool, freshRun) != 0 || finalizeRedriveRows(t, ctx, pool, oldRun) != 1 {
+		t.Fatalf("redriven=%d fresh rows=%d old rows=%d, want only the old run redriven",
+			redriven, finalizeRedriveRows(t, ctx, pool, freshRun), finalizeRedriveRows(t, ctx, pool, oldRun))
+	}
+}

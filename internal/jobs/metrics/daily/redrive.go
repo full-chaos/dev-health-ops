@@ -461,6 +461,10 @@ WHERE run.org_id = $1::uuid
       WHERE partition.run_id = run.id AND partition.status <> 'succeeded'
   )
   AND NOT EXISTS (
+      SELECT 1 FROM public.daily_metrics_partitions AS partition
+      WHERE partition.run_id = run.id AND partition.updated_at > $2
+  )
+  AND NOT EXISTS (
       SELECT 1 FROM public.daily_metrics_finalize_redrive_events AS redrive_event
       WHERE redrive_event.run_id = run.id AND redrive_event.status = 'open'
   )
@@ -594,7 +598,7 @@ func (store *PostgresStore) redriveOneStrandedFinalize(
 	var run Run
 	var targetDay, finalizationStatus string
 	var leaseExpiresAt *time.Time
-	var hasPartitions, allPartitionsSucceeded, openRedriveEvent bool
+	var hasPartitions, allPartitionsSucceeded, openRedriveEvent, freshPartition bool
 	var updatedAt time.Time
 	err = tx.QueryRow(ctx, `
 SELECT run.id::text, run.org_id::text, run.generation, run.status, run.target_day::text,
@@ -610,13 +614,17 @@ SELECT run.id::text, run.org_id::text, run.generation, run.status, run.target_da
   EXISTS (
       SELECT 1 FROM public.daily_metrics_finalize_redrive_events AS redrive_event
       WHERE redrive_event.run_id = run.id AND redrive_event.status = 'open'
-  )
+  ),
+  ($2::timestamptz IS NOT NULL AND EXISTS (
+      SELECT 1 FROM public.daily_metrics_partitions AS partition
+      WHERE partition.run_id = run.id AND partition.updated_at > $2::timestamptz
+  ))
 FROM public.daily_metrics_runs AS run
 WHERE run.id = $1::uuid
-FOR UPDATE OF run`, runID).Scan(
+FOR UPDATE OF run`, runID, sweepCutoff).Scan(
 		&run.ID, &run.OrganizationID, &run.Generation, &run.Status, &targetDay,
 		&finalizationStatus, &leaseExpiresAt, &updatedAt, &hasPartitions, &allPartitionsSucceeded,
-		&openRedriveEvent,
+		&openRedriveEvent, &freshPartition,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
@@ -642,7 +650,7 @@ FOR UPDATE OF run`, runID).Scan(
 	// The nightly sweep re-reads its whole predicate under the lock: between
 	// its selection and this lock the run can have been reopened (a recompute,
 	// a range redrive with its open event) and be fresh again.
-	if sweepCutoff != nil && (updatedAt.After(*sweepCutoff) || openRedriveEvent) {
+	if sweepCutoff != nil && (updatedAt.After(*sweepCutoff) || openRedriveEvent || freshPartition) {
 		return false, nil
 	}
 	if run.TargetDay, err = time.Parse(dailyTargetDayLayout, targetDay); err != nil {

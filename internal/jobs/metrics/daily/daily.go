@@ -532,6 +532,13 @@ func (handler *Dispatcher) sweepStrandedFinalize(ctx context.Context, organizati
 	if !ok {
 		return
 	}
+	// Half of the remaining dispatch deadline: a candidate row lock must not
+	// spend the time that the dispatch result and its adapter still need.
+	if deadline, ok := ctx.Deadline(); ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, time.Until(deadline)/2)
+		defer cancel()
+	}
 	redriven, err := sweeper.SweepStrandedFinalizeForOrg(ctx, publisher, organizationID)
 	if err != nil {
 		slog.WarnContext(ctx, StrandedFinalizeSweepFailedLogMessage,
@@ -590,6 +597,11 @@ func (handler *Dispatcher) Work(ctx context.Context, execution *jobruntime.Execu
 	// A defer covers every exit including the panic path, and keeps the
 	// "cannot affect the job's outcome" property: reconcileBlockedRuns is
 	// fail-open and returns nothing.
+	// The organization's never-attempted stranded finalizes, on the same
+	// nightly tick and fail-open for the same reason. Registered FIRST so it
+	// runs LAST: the drain and the reconcile keep the full dispatch deadline,
+	// and the sweep gets only half of what is left (sweepStrandedFinalize).
+	defer handler.sweepStrandedFinalize(ctx, run.OrganizationID)
 	defer handler.reconcileBlockedRuns(ctx, run.OrganizationID)
 	// The floor of the touched-day drain (CHAOS-8846): the nightly run is the
 	// one periodic event of every active organization, so a pending day is
@@ -597,9 +609,6 @@ func (handler *Dispatcher) Work(ctx context.Context, execution *jobruntime.Execu
 	// as the reconcile above: a failed publish of THIS run must not stop the
 	// drain of the organization.
 	defer handler.drainTouchedDaysAfterDispatch(ctx, *run)
-	// The organization's never-attempted stranded finalizes, on the same
-	// nightly tick and fail-open for the same reason.
-	defer handler.sweepStrandedFinalize(ctx, run.OrganizationID)
 	if run.RepositoryDiscoveryRequired {
 		// A run that no attempt materializes keeps no partition and no
 		// finalize handoff: on the last attempt, and on a permanent refusal,

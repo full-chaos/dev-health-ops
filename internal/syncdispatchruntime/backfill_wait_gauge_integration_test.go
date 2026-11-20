@@ -203,7 +203,7 @@ func TestBackfillWaitGaugeUnderTheDomainRole(t *testing.T) {
 	}
 }
 
-// snapshotRaceTx runs a concurrent writer commit right before the first active-count read of a scrape (the claim of a
+// snapshotRaceTx runs a concurrent writer commit right before the active-count statement of a scrape (the claim of a
 // waiting unit), the case of the r1 P1: with one snapshot per scrape the claim is invisible to the whole scrape.
 type snapshotRaceDB struct {
 	pool  *pgxpool.Pool
@@ -232,6 +232,14 @@ func (tx *snapshotRaceTxn) QueryRow(ctx context.Context, sql string, args ...any
 	return tx.Tx.QueryRow(ctx, sql, args...)
 }
 
+func (tx *snapshotRaceTxn) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
+	if !tx.fired && strings.Contains(sql, "FILTER (WHERE run.triggered_by") {
+		tx.fired = true
+		tx.claim()
+	}
+	return tx.Tx.Query(ctx, sql, args...)
+}
+
 // One scrape never counts a unit as both waiting and active.
 func TestBackfillWaitGaugeOneSnapshotPerScrapeOnPostgres(t *testing.T) {
 	t.Setenv("SYNC_UNIT_CONCURRENCY_PER_BUCKET", "8")
@@ -240,9 +248,9 @@ func TestBackfillWaitGaugeOneSnapshotPerScrapeOnPostgres(t *testing.T) {
 		pgseed.Org(ctx, t, pool, waitGaugeOrg, "community")
 		run := "00000000-0000-4000-8000-0000000143f3"
 		seedWaitRun(t, ctx, pool, run, "backfill", "backfill", "running", now.Add(-time.Hour))
-		seedWaitUnits(t, ctx, pool, run, syncRunUnitStatusPlanned, "medium", 1, "0000014341", now)
+		seedWaitUnits(t, ctx, pool, run, syncRunUnitStatusPlanned, "medium", 2, "0000014341", now)
 		source, err := NewBackfillWaitSource(snapshotRaceDB{pool: pool, claim: func() {
-			if _, err := pool.Exec(ctx, `UPDATE public.sync_run_units SET status = 'dispatching', updated_at = now() WHERE sync_run_id = $1::uuid`, run); err != nil {
+			if _, err := pool.Exec(ctx, `UPDATE public.sync_run_units SET status = 'dispatching', updated_at = now() WHERE id = $1::uuid`, guardUnitID("0000014341", 0)); err != nil {
 				t.Errorf("claim: %v", err)
 			}
 		}}, nil)
@@ -254,7 +262,7 @@ func TestBackfillWaitGaugeOneSnapshotPerScrapeOnPostgres(t *testing.T) {
 			t.Fatal(err)
 		}
 		text := out.String()
-		requireLine(t, text, `sync_dispatch_backfill_wait_units{provider="github",cost_class="medium",state="planned"} 1`)
+		requireLine(t, text, `sync_dispatch_backfill_wait_units{provider="github",cost_class="medium",state="planned"} 2`)
 		requireLine(t, text, `sync_dispatch_backfill_wait_units{provider="github",cost_class="medium",state="active"} 0`)
 		requireLine(t, text, `sync_dispatch_backfill_wait_held_back_units{provider="github",cost_class="medium"} 0`)
 	})
@@ -312,5 +320,91 @@ func TestBackfillWaitGaugeOverTheGroupLimitFoldsIntoOtherOnPostgres(t *testing.T
 			}
 		}
 		requireLine(t, text, `sync_dispatch_backfill_wait_truncated_total 1`)
+	})
+}
+
+// The grouped statement of all buckets equals the guard's per-bucket calls, on a mixed set: a bucket with live units
+// of a backfill run (held back), one with live units of another run, one with a dead lease, one with nothing live.
+func TestBackfillWaitFoldedActiveEqualsTheGuardPerBucket(t *testing.T) {
+	t.Setenv("SYNC_UNIT_CONCURRENCY_PER_BUCKET", "8")
+	withGuardPool(t, func(ctx context.Context, pool *pgxpool.Pool) {
+		now := time.Now().UTC().Truncate(time.Microsecond)
+		pgseed.Org(ctx, t, pool, waitGaugeOrg, "community")
+		backfill, other := "00000000-0000-4000-8000-0000000143f6", "00000000-0000-4000-8000-0000000143f7"
+		seedWaitRun(t, ctx, pool, backfill, "backfill", "backfill", "running", now.Add(-time.Hour))
+		seedWaitRun(t, ctx, pool, other, "schedule", "incremental", "running", now.Add(-time.Hour))
+		providers := []string{"mix-a", "mix-b", "mix-c", "mix-d"}
+		for i, provider := range providers {
+			pgseed.InsertSyncRunUnit(ctx, t, pool, pgseed.SyncRunUnit{ID: fmt.Sprintf("00000000-0000-4000-8000-%012x", 0x143530000+i), RunID: backfill, OrgID: waitGaugeOrg,
+				Provider: provider, CostClass: "medium", Mode: "backfill", Status: syncRunUnitStatusPlanned, UpdatedAt: &now})
+		}
+		lease, owner, dead := now.Add(10*time.Minute), "worker-14304", now.Add(-time.Minute)
+		live := func(n int, provider, runID, mode string, leaseAt *time.Time, status string) {
+			pgseed.InsertSyncRunUnit(ctx, t, pool, pgseed.SyncRunUnit{ID: fmt.Sprintf("00000000-0000-4000-8000-%012x", 0x143540000+n), RunID: runID, OrgID: waitGaugeOrg,
+				Provider: provider, CostClass: "medium", Mode: mode, Status: status, UpdatedAt: &now, LeaseExpiresAt: leaseAt, LeaseOwner: &owner})
+		}
+		live(0, "mix-a", backfill, "backfill", &lease, syncRunUnitStatusRunning)
+		live(1, "mix-a", other, "incremental", &lease, syncRunUnitStatusRunning)
+		live(2, "mix-b", other, "incremental", &lease, syncRunUnitStatusRunning)
+		live(3, "mix-b", other, "incremental", &lease, syncRunUnitStatusDispatching)
+		live(4, "mix-c", other, "incremental", &dead, syncRunUnitStatusRunning)
+		tx, err := pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = tx.Rollback(ctx) }()
+		terminal := []string{syncRunStatusSuccess, syncRunStatusPartialFailed, syncRunStatusFailed}
+		cutoff := now.Add(-staleDispatchSeconds())
+		got, err := readBucketActive(ctx, tx, terminal, 1000, cutoff, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		byBucket := map[dispatchBucket]bucketActive{}
+		for _, item := range got {
+			byBucket[item.bucket] = item
+		}
+		sawLive := 0
+		for _, provider := range providers {
+			bucket := dispatchBucket{orgID: waitGaugeOrg, provider: provider, costClass: "medium"}
+			active, activeBackfill, err := countActiveBucketUnits(ctx, tx, bucket, cutoff, now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			item := byBucket[bucket]
+			if item.active != active || item.activeBackfill != activeBackfill {
+				t.Errorf("%s: grouped active=%d backfill=%d, guard active=%d backfill=%d", provider, item.active, item.activeBackfill, active, activeBackfill)
+			}
+			if active > 0 {
+				sawLive++
+			}
+		}
+		if sawLive != 2 || len(got) != 2 {
+			t.Fatalf("the mixed set must hold two buckets with live units (got %d rows, %d live by the guard)", len(got), sawLive)
+		}
+	})
+}
+
+// 2,001 buckets (1,001 folded): one scrape stays well inside the read timeout.
+func TestBackfillWaitGaugeManyBucketsScrapeUnderOneSecondOnPostgres(t *testing.T) {
+	t.Setenv("SYNC_UNIT_CONCURRENCY_PER_BUCKET", "8")
+	withGuardPool(t, func(ctx context.Context, pool *pgxpool.Pool) {
+		now := time.Now().UTC().Truncate(time.Microsecond)
+		pgseed.Org(ctx, t, pool, waitGaugeOrg, "community")
+		run := "00000000-0000-4000-8000-0000000143f8"
+		seedWaitRun(t, ctx, pool, run, "backfill", "backfill", "running", now.Add(-time.Hour))
+		for i := 0; i <= 2000; i++ {
+			pgseed.InsertSyncRunUnit(ctx, t, pool, pgseed.SyncRunUnit{ID: fmt.Sprintf("00000000-0000-4000-8000-%012x", 0x143550000+i), RunID: run, OrgID: waitGaugeOrg,
+				Provider: fmt.Sprintf("many-%04d", i), CostClass: "medium", Mode: "backfill", Status: syncRunUnitStatusPlanned, UpdatedAt: &now})
+		}
+		started := time.Now()
+		text := waitGaugeText(t, ctx, pool)
+		elapsed := time.Since(started)
+		requireLine(t, text, `sync_dispatch_backfill_wait_read_ok 1`)
+		requireLine(t, text, `sync_dispatch_backfill_wait_truncated_total 1`)
+		requireLine(t, text, `sync_dispatch_backfill_wait_units{provider="~other",cost_class="~other",state="planned"} 1001`)
+		t.Logf("scrape over 2001 buckets: %s", elapsed)
+		if elapsed > time.Second {
+			t.Fatalf("one scrape over 2001 buckets took %s, want under 1s", elapsed)
+		}
 	})
 }

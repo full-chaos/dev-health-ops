@@ -59,9 +59,17 @@ FROM grouped AS g
 JOIN buckets AS b ON b.org_id = g.org_id AND b.provider = g.provider AND b.cost_class = g.cost_class
 GROUP BY 1, 2, 3, 4`
 
-// backfillWaitFoldedBucketsSQL lists the buckets that fold, with their waiting total, in the same snapshot.
-const backfillWaitFoldedBucketsSQL = backfillWaitBucketsCTE + `
-SELECT org_id, provider, cost_class, total FROM buckets WHERE rn > $2`
+// backfillWaitActiveSQL reads, for every waiting bucket in one statement, its rank, waiting total and active counts, from
+// the guard's own count clauses (dispatch_guard.go activeBucketUnits*). $2 is the read limit (the rank is compared in Go);
+// $3 is the unused bucket slot of the guard's numbering.
+const backfillWaitActiveSQL = backfillWaitBucketsCTE + `
+SELECT b.org_id, b.provider, b.cost_class, b.total, b.rn, ` + activeBucketUnitsCounts + `
+FROM buckets AS b
+JOIN public.sync_run_units AS unit ON unit.org_id = b.org_id AND unit.provider = b.provider AND unit.cost_class = b.cost_class
+LEFT JOIN public.sync_runs AS run ON run.id = unit.sync_run_id
+WHERE $2::bigint > 0 AND $3::boolean
+  AND ` + activeBucketUnitsLive + `
+GROUP BY b.org_id, b.provider, b.cost_class, b.total, b.rn`
 
 const backfillWaitOpenRunsSQL = `
 SELECT count(*)::int
@@ -145,7 +153,6 @@ func (s *BackfillWaitSource) read(ctx context.Context, now time.Time) (*backfill
 	if err != nil {
 		return nil, err
 	}
-	waiting := map[dispatchBucket]int{}
 	folded := &backfillWaitSample{}
 	for rows.Next() {
 		var org, provider, costClass *string
@@ -158,7 +165,6 @@ func (s *BackfillWaitSource) read(ctx context.Context, now time.Time) (*backfill
 		sample := folded
 		if org != nil && provider != nil && costClass != nil {
 			bucket := dispatchBucket{orgID: *org, provider: *provider, costClass: *costClass}
-			waiting[bucket] += n
 			sample = snapshot.sample(bucket)
 		} else {
 			snapshot.truncated = true
@@ -173,56 +179,25 @@ func (s *BackfillWaitSource) read(ctx context.Context, now time.Time) (*backfill
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+	// ONE grouped statement in the same snapshot gives the active counts of every waiting bucket (the guard's own clause); the
+	// held_back rule is arithmetic on (cost class, waiting, active, active backfill), run in memory per bucket. A bucket with
+	// no live unit has no row: active 0 and held_back 0.
 	staleCutoff := now.Add(-staleDispatchSeconds())
-	buckets := make([]dispatchBucket, 0, len(waiting))
-	for bucket := range waiting {
-		buckets = append(buckets, bucket)
-	}
-	sort.Slice(buckets, func(i, j int) bool {
-		return buckets[i].orgID+"/"+buckets[i].provider+"/"+buckets[i].costClass < buckets[j].orgID+"/"+buckets[j].provider+"/"+buckets[j].costClass
-	})
-	for _, bucket := range buckets {
-		active, activeBackfill, err := countActiveBucketUnits(ctx, tx, bucket, staleCutoff, now)
-		if err != nil {
-			return nil, err
-		}
-		sample := snapshot.sample(bucket)
-		sample.active += active
-		sample.heldBack += backfillWaitHeldBack(bucket.costClass, waiting[bucket], active, activeBackfill, now)
-	}
-	if !snapshot.truncated {
-		return snapshot, nil
-	}
-	// The folded buckets: active and held_back come from the same guard funcs, one call per bucket, in the same snapshot. The
-	// work is bounded by the read timeout; a read that cannot finish fails (read_ok 0) and never publishes a partial total.
-	foldedRows, err := tx.Query(ctx, backfillWaitFoldedBucketsSQL, terminal, backfillWaitRowLimit)
+	counts, err := readBucketActive(ctx, tx, terminal, backfillWaitRowLimit, staleCutoff, now)
 	if err != nil {
 		return nil, err
 	}
-	type foldedBucket struct {
-		bucket dispatchBucket
-		total  int
-	}
-	var foldedBuckets []foldedBucket
-	for foldedRows.Next() {
-		var item foldedBucket
-		if err := foldedRows.Scan(&item.bucket.orgID, &item.bucket.provider, &item.bucket.costClass, &item.total); err != nil {
-			foldedRows.Close()
-			return nil, err
+	for _, item := range counts {
+		heldBack := backfillWaitHeldBack(item.bucket.costClass, item.total, item.active, item.activeBackfill, now)
+		sample := folded
+		if item.rank <= backfillWaitRowLimit {
+			sample = snapshot.sample(item.bucket)
 		}
-		foldedBuckets = append(foldedBuckets, item)
+		sample.active += item.active
+		sample.heldBack += heldBack
 	}
-	foldedRows.Close()
-	if err := foldedRows.Err(); err != nil {
-		return nil, err
-	}
-	for _, item := range foldedBuckets {
-		active, activeBackfill, err := countActiveBucketUnits(ctx, tx, item.bucket, staleCutoff, now)
-		if err != nil {
-			return nil, err
-		}
-		folded.active += active
-		folded.heldBack += backfillWaitHeldBack(item.bucket.costClass, item.total, active, activeBackfill, now)
+	if !snapshot.truncated {
+		return snapshot, nil
 	}
 	snapshot.series[backfillWaitKey{folded: true}] = folded
 	return snapshot, nil
@@ -324,4 +299,33 @@ func (s *BackfillWaitSource) WritePrometheus(w io.Writer) error {
 		}
 	}
 	return nil
+}
+
+type bucketActive struct {
+	bucket         dispatchBucket
+	total          int
+	rank           int
+	active         int
+	activeBackfill int
+}
+
+// readBucketActive returns the active counts of every waiting bucket with its rank. A bucket with no live unit has no row:
+// its active counts are 0 and its held_back is 0 (a free bucket holds nothing back).
+func readBucketActive(ctx context.Context, tx pgx.Tx, terminal []string, limit int, staleCutoff, now time.Time) ([]bucketActive, error) {
+	rows, err := tx.Query(ctx, backfillWaitActiveSQL,
+		terminal, limit, true,
+		syncRunUnitStatusDispatching, staleCutoff, syncRunUnitStatusRunning, now)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []bucketActive
+	for rows.Next() {
+		var item bucketActive
+		if err := rows.Scan(&item.bucket.orgID, &item.bucket.provider, &item.bucket.costClass, &item.total, &item.rank, &item.active, &item.activeBackfill); err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
 }

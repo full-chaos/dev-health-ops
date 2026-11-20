@@ -14,6 +14,7 @@ import (
 	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/rowview"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -116,6 +117,25 @@ var unknownConfidenceCounter = func() metric.Int64Counter {
 	return counter
 }()
 
+const unchartedStoredSpecCounterName = "dev_health_report_plan_uncharted_stored_spec_total"
+
+var unchartedStoredSpecCounter = func() metric.Int64Counter {
+	counter, err := otel.Meter("github.com/full-chaos/dev-health-ops/internal/jobs/report").Int64Counter(
+		unchartedStoredSpecCounterName,
+		metric.WithDescription("Stored chart specs dropped at decode because their metric is not a registry key."))
+	if err != nil {
+		counter, _ = otel.GetMeterProvider().Meter("noop").Int64Counter(unchartedStoredSpecCounterName)
+	}
+	return counter
+}()
+
+// warnUnchartedStoredSpec logs one WARN (plan id and the reason, never the metric name) and counts a stored chart spec
+// whose metric is not an exact registry key. The run goes on and the report lists the name as uncharted.
+func warnUnchartedStoredSpec(planID string) {
+	slog.Warn("stored chart spec dropped", "plan_id", planID, "reason", unchartedNoMetric)
+	unchartedStoredSpecCounter.Add(context.Background(), 1)
+}
+
 // warnUnknownConfidence logs one WARN (plan id, never the value) and counts a stored plan whose confidence level is unknown.
 func warnUnknownConfidence(ctx context.Context, planID, level string) {
 	if confidenceLevels[level] {
@@ -168,7 +188,7 @@ func decodeReportDefinition(
 	}
 	result := ReportDefinition{Plan: Plan{
 		PlanID: plan.PlanID, ReportType: plan.ReportType, Audience: plan.Audience,
-		ScopeTeams: append([]string(nil), plan.ScopeTeams...), ScopeRepos: append([]string(nil), plan.ScopeRepos...),
+		ScopeTeams: distinctTeamIDs(plan.ScopeTeams), ScopeRepos: append([]string(nil), plan.ScopeRepos...),
 		ScopeServices: append([]string(nil), plan.ScopeServices...), TimeRangeStart: plan.TimeRangeStart,
 		TimeRangeEnd: plan.TimeRangeEnd, ComparisonPeriod: plan.ComparisonPeriod,
 		Sections: append([]string(nil), plan.Sections...), RequestedMetrics: append([]string(nil), plan.RequestedMetrics...),
@@ -177,6 +197,10 @@ func decodeReportDefinition(
 	}}
 	if result.Plan.ConfidenceThreshold == "" {
 		result.Plan.ConfidenceThreshold = "direct_fact"
+	}
+	named := map[string]bool{}
+	for _, entry := range uncharted {
+		named[entry.Label] = true
 	}
 	for _, chart := range plan.ChartSpecs {
 		groupBy, title := "", ""
@@ -195,14 +219,39 @@ func decodeReportDefinition(
 		if chart.OrganizationID != organizationID {
 			return ReportDefinition{}, ErrContractMismatch
 		}
+		if _, registered := supportedMetrics[chart.Metric]; !registered {
+			warnUnchartedStoredSpec(chart.PlanID)
+			if strings.TrimSpace(chart.Metric) != "" && !named[chart.Metric] {
+				named[chart.Metric] = true
+				result.Plan.UnchartedMetrics = append(result.Plan.UnchartedMetrics, UnchartedMetric{Label: chart.Metric, Reason: unchartedNoMetric})
+			}
+			continue
+		}
 		result.Charts = append(result.Charts, ChartSpec{
 			ChartID: chart.ChartID, PlanID: chart.PlanID, ChartType: chart.ChartType, Metric: chart.Metric,
-			GroupBy: groupBy, FilterTeams: append([]string(nil), chart.FilterTeams...),
+			GroupBy: groupBy, FilterTeams: distinctTeamIDs(chart.FilterTeams),
 			FilterRepos: append([]string(nil), chart.FilterRepos...), TimeRangeStart: chart.TimeRangeStart,
 			TimeRangeEnd: chart.TimeRangeEnd, Title: title, OrganizationID: chart.OrganizationID,
 		})
 	}
 	return result, nil
+}
+
+// distinctTeamIDs is a team filter as a set: each id once, in the order of its
+// first use, compared as the team_id IN predicate compares ids (exact strings; a
+// blank id is an id). The request's team filter is built here once, so the
+// one-team view gate, the SQL and the scope read the same set (CHAOS-14353).
+func distinctTeamIDs(ids []string) []string {
+	var out []string
+	seen := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		if _, repeated := seen[id]; repeated {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
 }
 
 const (
@@ -797,6 +846,9 @@ func buildChartQuery(spec ChartSpec, definition metricDefinition) (string, []any
 	// alongside its earlier generation. A table with no known re-drive risk
 	// passes through unchanged.
 	source := sourceFrom(spec.Metric, definition)
+	if teamChart(spec, definition) {
+		source = teamDedupFromSource(definition.SourceTable)
+	}
 	if wholePersonLandscapeMetric(spec, definition) {
 		// A landscape point holds no repository (its repo_id is a constant
 		// placeholder), so a repository filter selects the person's user rows
@@ -978,6 +1030,20 @@ func sourceFrom(metric string, definition metricDefinition) string {
     ) AS %s`,
 		definition.Denominator, definition.Numerator, definition.Denominator,
 		metric, dedupSource, definition.SourceTable)
+}
+
+// teamChart reports whether a chart reads the team view (CHAOS-14353): a chart
+// filtered to exactly ONE team, of a table that holds team rows, whose team filter
+// is the stored team_id (no owner join), for one organization, of a metric read
+// straight from the table. A chart of several teams sums a team set and a chart
+// grouped by team shows a row per team: both stay on the org view here. The
+// filter is a set of distinct ids (decodeReportDefinition, distinctTeamIDs), so
+// a filter that repeats one id asks for one team.
+func teamChart(spec ChartSpec, definition metricDefinition) bool {
+	return len(spec.FilterTeams) == 1 && spec.GroupBy != "team" && spec.OrganizationID != "" &&
+		rowview.HasTeamRows(definition.SourceTable) && definition.hasDimension("team") &&
+		definition.ownersAsOf == nil && definition.pooled == nil &&
+		definition.Numerator == "" && definition.Denominator == ""
 }
 
 // dayColumn is the Date column of the metric's source table that time ranges

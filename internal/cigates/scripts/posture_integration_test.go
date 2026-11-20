@@ -65,11 +65,11 @@ func postureLines(out string) (base string, pkgs []string) {
 	return base, pkgs
 }
 
-func TestPostureIntegrationListsTheFifteenPackagesOnATrigger(t *testing.T) {
+func TestPostureIntegrationListsTheSixteenPackagesOnATrigger(t *testing.T) {
 	root := repoRoot(t)
 	keys := postureKeys(t, root)
-	if len(keys) != 15 {
-		t.Fatalf("the posture list has %d packages, want 15", len(keys))
+	if len(keys) != 16 {
+		t.Fatalf("the posture list has %d packages, want 16", len(keys))
 	}
 	triggers := []string{
 		"internal/pgmigrate/sql/0158_x.sql", "internal/pgmigrate/baseline/head.json", "internal/pgmigrate/archive/sql/0139_x.sql", "internal/rivermigrate/x.go",
@@ -92,7 +92,7 @@ func TestPostureIntegrationListsTheFifteenPackagesOnATrigger(t *testing.T) {
 		}
 		sort.Strings(got)
 		if strings.Join(got, ",") != strings.Join(keys, ",") {
-			t.Fatalf("%s: listed %v, want all 15 %v", p, got, keys)
+			t.Fatalf("%s: listed %v, want all 16 %v", p, got, keys)
 		}
 	}
 }
@@ -153,8 +153,8 @@ func TestPostureIntegrationDefaultModePrintsTheBaseSha(t *testing.T) {
 		t.Fatalf("exit %d stderr=%q", res.code, res.stderr)
 	}
 	gotBase, pkgs := postureLines(res.stdout)
-	if gotBase != base || len(pkgs) != 15 {
-		t.Fatalf("BASE %q (want %q), %d packages (want 15)", gotBase, base, len(pkgs))
+	if gotBase != base || len(pkgs) != 16 {
+		t.Fatalf("BASE %q (want %q), %d packages (want 16)", gotBase, base, len(pkgs))
 	}
 }
 
@@ -325,7 +325,7 @@ func TestPostureIntegrationRunIgnoresARunnerOverrideInTheEnvironment(t *testing.
 	res := cmdSpec{dir: repo, env: []string{shimBasePath(), "POSTURE_CAPPED_SH=/bin/true"}}.run("bash", filepath.Join(repoRoot(t), "ci", "posture_integration.sh"), "--run")
 	missing := res.code == 3 && (strings.Contains(res.stderr, "runner not found") || strings.Contains(res.stderr, "go not found") || strings.Contains(res.stderr, "not the one committed at HEAD"))
 	named := strings.Contains(res.stdout, "runner=/home/ubuntu/devhealth/scripts/capped.sh sha256=")
-	if res.code == 0 || strings.Contains(res.stdout, " PASS ") || strings.Contains(res.stdout, "pass=15") || !(missing || named) {
+	if res.code == 0 || strings.Contains(res.stdout, " PASS ") || strings.Contains(res.stdout, "pass=16") || !(missing || named) {
 		t.Fatalf("env runner override: exit %d stdout=%q stderr=%q, want non-zero, no PASS, and either the missing-runner exit 3 or the real capped.sh named with its sha256", res.code, res.stdout, res.stderr)
 	}
 }
@@ -363,8 +363,8 @@ func TestPostureIntegrationListsAFileMovedOutOfAPosturePath(t *testing.T) {
 	git("mv", "internal/storage/postgres/posture_probe.go", "internal/storage/clickhouse/probe.go")
 	git("commit", "-q", "-m", "move out")
 	res := cmdSpec{dir: repo, env: []string{shimBasePath()}}.run("bash", filepath.Join(repoRoot(t), "ci", "posture_integration.sh"))
-	if _, pkgs := postureLines(res.stdout); res.code != 0 || len(pkgs) != 15 {
-		t.Fatalf("a file moved out of a posture path: exit %d stdout=%q, want the 15 packages", res.code, res.stdout)
+	if _, pkgs := postureLines(res.stdout); res.code != 0 || len(pkgs) != 16 {
+		t.Fatalf("a file moved out of a posture path: exit %d stdout=%q, want the 16 packages", res.code, res.stdout)
 	}
 }
 

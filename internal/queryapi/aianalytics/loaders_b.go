@@ -49,6 +49,9 @@ func aiPRFiles(bindings *[]clickhouse.Binding, repoID string, repoIDs []string, 
         AND cs.org_id = {org_id:String}`
 }
 
+// The newest row of a file is the one with the newest computed_at; on a tie the
+// newer day, then a hash of the value, so the read serves one row whatever the
+// scan order (the window spans days and one run writes one day).
 const hotspotOverlapTail = `hotspots AS (
     SELECT repo_id, file_path, risk_score
     FROM (
@@ -65,7 +68,7 @@ const hotspotOverlapTail = `hotspots AS (
             SELECT
                 hs.repo_id AS repo_id,
                 hs.file_path AS file_path,
-                argMax(hs.risk_score, hs.computed_at) AS risk_score
+                argMax(hs.risk_score, (hs.computed_at, hs.day, cityHash64(tuple(hs.risk_score)))) AS risk_score
             FROM file_hotspot_daily AS hs
             WHERE hs.day >= {start_day:Date}
               AND hs.day <= {end_day:Date}
@@ -93,6 +96,8 @@ LEFT JOIN hotspots AS h
 GROUP BY bucket
 ORDER BY bucket`
 
+// The newest snapshot of a file is ordered as hotspotOverlapTail orders a
+// hotspot row: computed_at, then as_of_day, then a hash of the counts.
 const complexityOverlapTail = `complex_files AS (
     SELECT
         fc.repo_id AS repo_id,
@@ -103,7 +108,8 @@ const complexityOverlapTail = `complex_files AS (
     GROUP BY fc.repo_id, fc.file_path
     HAVING argMax(
         fc.high_complexity_functions + fc.very_high_complexity_functions,
-        fc.computed_at
+        (fc.computed_at, fc.as_of_day,
+            cityHash64(tuple(fc.high_complexity_functions, fc.very_high_complexity_functions)))
     ) > 0
 )
 SELECT

@@ -53,6 +53,7 @@ func runawayLogPipeline(t *testing.T, wakeups func(int) []RunawayDispatchWakeup)
 		nil,
 		noopTerminalOutboxClose(),
 		noopOrphanedUnitRepair(),
+		noopChunkSidecarReclaim(),
 		DefaultMutationPipelineConfig(),
 	)
 	if err != nil {

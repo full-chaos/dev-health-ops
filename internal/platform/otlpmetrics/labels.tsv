@@ -85,6 +85,7 @@ devhealth_auth_push_reconcile_drift	class	code: internal/auth/pushreconcile/reco
 devhealth_auth_push_reconcile_runs_total	outcome	code: internal/auth/pushreconcile/reconcilejob/probe.go
 dev_health_categorize_byo_optin_unreadable_total	reason	code: internal/jobs/investment/categorizebyo.go
 dev_health_report_plan_unknown_confidence_total		code: internal/jobs/report/query.go
+dev_health_report_plan_uncharted_stored_spec_total		code: internal/jobs/report/query.go
 dev_health_generation_repair_failures_total	step	code: internal/jobs/metrics/daily/generation_repair_metrics.go
 dev_health_generation_repair_partial_total		code: internal/jobs/metrics/daily/generation_repair_metrics.go
 dev_health_ic_finalize_refused_empty_org_total		code: internal/jobs/metrics/daily/icfinalize/executor.go
@@ -362,6 +363,11 @@ scheduler_database_pool_saturation_ratio	pool	code: internal/platform/poolstat/p
 scheduler_database_pool_saturation_ratio_acquired_conns	pool	code: internal/platform/poolstat/poolstat.go
 scheduler_database_pool_saturation_ratio_max_conns	pool	code: internal/platform/poolstat/poolstat.go
 sync_config_dataset_rows_changed_total	direction,provider	code: internal/api/syncadmin/selection_metrics.go
+sync_dispatch_backfill_open_runs		code: internal/syncdispatchruntime/backfill_wait_gauge.go
+sync_dispatch_backfill_wait_held_back_units	cost_class,provider	code: internal/syncdispatchruntime/backfill_wait_gauge.go
+sync_dispatch_backfill_wait_read_ok		code: internal/syncdispatchruntime/backfill_wait_gauge.go
+sync_dispatch_backfill_wait_truncated_total		code: internal/syncdispatchruntime/backfill_wait_gauge.go
+sync_dispatch_backfill_wait_units	cost_class,provider,state	code: internal/syncdispatchruntime/backfill_wait_gauge.go
 sync_dispatch_discovery_rearmed_total		code: internal/syncreconciler/loop.go
 sync_dispatch_exhausted_delivery_recoveries_total		code: internal/syncreconciler/loop.go
 sync_dispatch_observer_celery_due_pending		code: internal/syncreconciler/loop.go
@@ -384,6 +390,7 @@ sync_initial_backfill_total	outcome	code: internal/scheduler/sync/initial_backfi
 sync_manual_trigger_await_latency_seconds	outcome	code: internal/synchandoff/await_metrics.go
 sync_manual_trigger_await_outcome_total	outcome	code: internal/synchandoff/await_metrics.go
 sync_plan_gate_total	dataset,outcome,provider	code: internal/scheduler/sync/plan_gate_telemetry.go
+sync_reconciler_chunk_sidecar_reclaim_lock_skipped_total		code: internal/syncreconciler/pipeline.go
 sync_reconciler_stage_budget_seconds	stage	code: internal/syncreconciler/pipeline.go
 sync_reconciler_stage_degraded	stage	code: internal/syncreconciler/pipeline.go
 sync_reconciler_stage_duration_seconds	stage	code: internal/syncreconciler/pipeline.go

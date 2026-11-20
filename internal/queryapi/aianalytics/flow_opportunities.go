@@ -230,7 +230,7 @@ FROM (
         SELECT *
         FROM repo_metrics_daily
         WHERE org_id = {org_id:String}
-        ORDER BY computed_at DESC
+        ORDER BY computed_at DESC, cityHash64(tuple(*)) DESC
         LIMIT 1 BY org_id, repo_id, day
     ) AS repo_metrics_daily
     WHERE day >= today() - {window_days:UInt32}@@REPO@@
@@ -246,7 +246,7 @@ LEFT JOIN (
         FROM ` + changefailure.Table + `
         WHERE org_id = {org_id:String}
           AND day >= today() - {window_days:UInt32}@@REPO@@
-        ORDER BY computed_at DESC
+        ORDER BY computed_at DESC, cityHash64(tuple(*)) DESC
         LIMIT 1 BY org_id, repo_id, day
     )
     GROUP BY repo_id

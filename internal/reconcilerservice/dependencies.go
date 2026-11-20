@@ -25,6 +25,7 @@ import (
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchcontract"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime"
+	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime/synclog"
 	"github.com/full-chaos/dev-health-ops/internal/syncreconciler"
 	"github.com/full-chaos/dev-health-ops/internal/syncroute"
 	"github.com/full-chaos/dev-health-ops/internal/syncrunrollup"
@@ -444,6 +445,10 @@ var productionReconcilerDependencySources = reconcilerDependencySources{
 //   - LeaseRepair, the Observer, and the sync-dispatch reference read inside
 //     the publish closure: DOMAIN pool. Every table they touch is
 //     domain-granted, and widening them would defeat the split.
+//   - ChunkSidecarReclaim (CHAOS-14243): DOMAIN pool. It reads sync_run_units
+//     and deletes from sync_run_unit_effect_chunks and
+//     sync_run_unit_chunk_checkpoints, which domainPosture grants DELETE on
+//     and no other runtime role holds at all.
 //
 // pool_composition_test.go enforces this list against the source rather than
 // trusting it: a component added on a pool this comment does not name fails
@@ -470,6 +475,10 @@ func buildSyncMutationPipeline(
 		return nil, err
 	}
 	orphanedUnitRepair, err := syncreconciler.NewOrphanedUnitRepair(domainPool, queuePool, riverSchema)
+	if err != nil {
+		return nil, err
+	}
+	chunkReclaim, err := syncreconciler.NewChunkSidecarReclaim(domainPool)
 	if err != nil {
 		return nil, err
 	}
@@ -539,6 +548,7 @@ func buildSyncMutationPipeline(
 		sweep,
 		outboxClose,
 		orphanedUnitRepair,
+		chunkReclaim,
 		pipelineConfig,
 	)
 }
@@ -810,6 +820,14 @@ func configureReconcilerDependenciesWithActivationSourcesAndLogger(
 		return nil, err
 	}
 	components = append(components, saturation)
+	// CHAOS-14304: observe-only backfill wait gauge on the one reconciler replica. A failed setup never stops the reconciler (D6465).
+	if domainPool := dependencies.database.DomainPool(); domainPool != nil {
+		if waitGauge, gaugeErr := syncdispatchruntime.NewBackfillWaitSource(domainPool, synclog.New(logger)); gaugeErr != nil {
+			logger.Warn("backfill wait gauge not built", "error", gaugeErr)
+		} else if gaugeErr = registry.RegisterMetrics("sync_dispatch_backfill_wait", waitGauge); gaugeErr != nil {
+			logger.Warn("backfill wait gauge not registered", "error", gaugeErr)
+		}
+	}
 	return components, nil
 }
 

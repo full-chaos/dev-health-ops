@@ -382,9 +382,17 @@ func (handler GitHubTestsRouteHandler) Collect(
 		return CompleteRouteBatch{}, ErrInvalidConfiguration
 	}
 	runPages := (maxRuns + nativePerPage - 1) / nativePerPage
-	runItems, runListPages, runsOver, err := collectGitHubTestsRunsPeeled(ctx, client, root, runPages, func(hi string) url.Values {
+	runsInterval := githubTestsRunsInterval(claim, false, handler.refreshLookback(), handler.lateRerunLookback())
+	lateInterval := githubTestsRunsInterval(claim, true, handler.refreshLookback(), handler.lateRerunLookback())
+	// A claim with a deep range admits each listed run under the ceiling of the response that supplied it, as the chunked
+	// route does; a claim without one keeps main's admission.
+	var runsAdmit func(*time.Time, string) bool
+	if githubTestsHoldsMidnight(claim) {
+		runsAdmit = runsInterval.admitsUnder
+	}
+	runItems, runListPages, runsOver, err := collectGitHubTestsRunsPeeledBy(ctx, client, root, runPages, func(hi string) url.Values {
 		return githubTestsRunsQuery(claim, handler.refreshLookback(), hi)
-	})
+	}, runsInterval.peel, runsAdmit, true)
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}
@@ -401,9 +409,9 @@ func (handler GitHubTestsRouteHandler) Collect(
 	var lateItems []json.RawMessage
 	lateListPages, lateOver := 0, false
 	if githubTestsHoldsMidnight(claim) {
-		lateItems, lateListPages, lateOver, err = collectGitHubTestsRunsPeeled(ctx, client, root, lateMaxPages, func(hi string) url.Values {
+		lateItems, lateListPages, lateOver, err = collectGitHubTestsRunsPeeledBy(ctx, client, root, lateMaxPages, func(hi string) url.Values {
 			return githubTestsLateRerunRunsQuery(claim, handler.refreshLookback(), handler.lateRerunLookback(), hi)
-		})
+		}, lateInterval.peel, lateInterval.admitsUnder, true)
 		if err != nil {
 			return CompleteRouteBatch{}, err
 		}
@@ -411,7 +419,7 @@ func (handler GitHubTestsRouteHandler) Collect(
 	regularInterval, deepInterval := githubTestsArtifactInterval(claim, false, 0), githubTestsCreatedInterval{deep: true}
 	artifactRunItems, artifactListPages, artifactsOver, err := collectGitHubTestsRunsPeeledBy(ctx, client, root, runPages, func(hi string) url.Values {
 		return githubTestsArtifactRunQueryAt(claim, hi)
-	}, regularInterval.peel)
+	}, regularInterval.peel, nil, false)
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}
@@ -428,7 +436,7 @@ func (handler GitHubTestsRouteHandler) Collect(
 		deepInterval = githubTestsArtifactInterval(claim, true, handler.lateRerunLookback())
 		relistItems, pages, over, err := collectGitHubTestsRunsPeeledBy(ctx, client, root, lateMaxPages, func(hi string) url.Values {
 			return githubTestsRelistQueryAt(claim, handler.lateRerunLookback(), hi)
-		}, deepInterval.peel)
+		}, deepInterval.peel, nil, false)
 		if err != nil {
 			return CompleteRouteBatch{}, err
 		}
@@ -468,10 +476,9 @@ func (handler GitHubTestsRouteHandler) Collect(
 			return CompleteRouteBatch{}, providerfoundation.RouteFailure(githubRunsRoute, providerfoundation.ReasonBodyDecode, err)
 		}
 		pipeline, include := normalizeGitHubTestsPipeline(claim, repoID, run, normalizedAt)
-		keep := include && githubTestsRunWanted(run, pipeline, claim)
+		keep := include && runsInterval.admits(pipeline.QueuedAt) && githubTestsRunWanted(run, pipeline, claim)
 		if index >= len(runItems) {
-			keep = include && !githubTestsLateRerunListedOutsideDeepRange(pipeline, claim.SinceAt.UTC().Add(-handler.refreshLookback())) &&
-				githubTestsLateRerunWanted(run, claim, handler.refreshLookback())
+			keep = include && lateInterval.admits(pipeline.QueuedAt) && githubTestsLateRerunWanted(run, claim, handler.refreshLookback())
 		}
 		if !keep {
 			continue

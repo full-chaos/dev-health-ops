@@ -39,6 +39,8 @@ const (
 	storeStepWatermark      = "watermark"
 	storeStepFinalize       = "finalize"
 	storeStepCommit         = "commit"
+	storeStepNeedsAttention = "needs_attention"
+	storeStepReadBack       = "read_back"
 )
 
 // storeWriteAttempts bounds the in-place retry of one unit write.
@@ -134,27 +136,67 @@ const (
 	storeOutcomeLeaseLost
 )
 
-// readBackUnitWriteSQL tells a committed terminal write from one that did not
-// commit. completeUnitSQL and failUnitSQL stamp last_heartbeat_at with the
-// write's completedAt and clear lease_owner; a unit still running under the
-// same owner did not commit. Postgres rounds both timestamps the same way.
+// readBackLockTimeout bounds how long one read-back waits on the unit row lock.
+const readBackLockTimeout = 5 * time.Second
+
+// readBackUnitWriteSQL tells a committed unit write from one that did not
+// commit. completeUnitSQL, failUnitSQL and releaseForRetrySQL each set status,
+// clear lease_owner and stamp updated_at and last_heartbeat_at with the write's
+// own instant; a unit still running under the same owner did not commit.
+// FOR SHARE waits on the row lock an in-flight COMMIT of the first transaction
+// still holds, so the row read is the committed or the aborted truth, never the
+// version from before a COMMIT that is about to land.
 const readBackUnitWriteSQL = `
-SELECT unit.status = $3 AND unit.last_heartbeat_at = $4::timestamptz,
+SELECT unit.status = $3 AND unit.lease_owner IS NULL
+       AND unit.updated_at = $4::timestamptz AND unit.last_heartbeat_at = $4::timestamptz,
        unit.status = 'running' AND unit.lease_owner IS NOT DISTINCT FROM $5
 FROM public.sync_run_units AS unit
-WHERE unit.id = $1::uuid AND unit.org_id = $2`
+WHERE unit.id = $1::uuid AND unit.org_id = $2
+FOR SHARE OF unit`
 
+// readBackLockTimeoutValue is lock_timeout for one read-back: readBackLockTimeout,
+// or less when the context ends sooner.
+func readBackLockTimeoutValue(ctx context.Context) string {
+	limit := readBackLockTimeout
+	if deadline, ok := ctx.Deadline(); ok {
+		if remaining := time.Until(deadline); remaining < limit {
+			limit = remaining
+		}
+	}
+	if limit < time.Millisecond {
+		limit = time.Millisecond
+	}
+	return fmt.Sprintf("%dms", limit.Milliseconds())
+}
+
+func isLockTimeout(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "55P03"
+}
+
+// readBackUnitWrite reads the unit once, in a short transaction of its own.
 func (repository *PostgresRepository) readBackUnitWrite(
-	ctx context.Context, claim Claim, terminalStatus string, completedAt time.Time,
+	ctx context.Context, claim Claim, wantStatus string, writtenAt time.Time,
 ) (storeOutcome, error) {
+	tx, err := repository.Pool.Begin(ctx)
+	if err != nil {
+		return storeOutcomeNotCommitted, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SELECT set_config('lock_timeout', $1, true)`, readBackLockTimeoutValue(ctx)); err != nil {
+		return storeOutcomeNotCommitted, err
+	}
 	var committed, ours bool
-	err := repository.Pool.QueryRow(ctx, readBackUnitWriteSQL,
-		claim.ID, claim.OrgID, terminalStatus, completedAt.UTC(), claim.Owner,
+	err = tx.QueryRow(ctx, readBackUnitWriteSQL,
+		claim.ID, claim.OrgID, wantStatus, writtenAt.UTC(), claim.Owner,
 	).Scan(&committed, &ours)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return storeOutcomeLeaseLost, nil
 	}
 	if err != nil {
+		return storeOutcomeNotCommitted, err
+	}
+	if err := tx.Commit(ctx); err != nil {
 		return storeOutcomeNotCommitted, err
 	}
 	switch {
@@ -167,47 +209,77 @@ func (repository *PostgresRepository) readBackUnitWrite(
 	}
 }
 
-// retryUnitWrite runs one terminal unit write (a whole transaction) up to
+// resolveUnitWrite settles a write whose COMMIT outcome is unknown. A
+// transient error or a lock timeout on the read leaves the outcome unknown, so
+// the read is tried again, up to storeWriteAttempts times; resolved is false
+// when no read settled it.
+func (repository *PostgresRepository) resolveUnitWrite(
+	ctx context.Context, claim Claim, write, wantStatus string, writtenAt time.Time,
+) (outcome storeOutcome, resolved bool) {
+	for attempt := 1; ; attempt++ {
+		outcome, err := repository.readBackUnitWrite(ctx, claim, wantStatus, writtenAt)
+		if err == nil {
+			return outcome, true
+		}
+		if !IsTransientStoreError(err) && !isLockTimeout(err) {
+			return storeOutcomeNotCommitted, false
+		}
+		logStoreRetry(ctx, claim, write, storeStepReadBack, sqlStateOf(err), attempt)
+		if attempt >= storeWriteAttempts {
+			return storeOutcomeNotCommitted, false
+		}
+		if repository.storeRetryWait(ctx, attempt+1) != nil {
+			return storeOutcomeNotCommitted, false
+		}
+	}
+}
+
+// unitWriteAttempt is one attempt of a unit write transaction. When the attempt
+// reached COMMIT it returns afterCommit, the steps that run once per committed
+// outcome; rollupKnown is false when the commit was only confirmed by a read-back.
+type unitWriteAttempt func() (afterCommit func(rollupKnown bool), err error)
+
+// retryUnitWrite runs one unit write (a whole transaction) up to
 // storeWriteAttempts times while it fails transiently. Postgres rolled the
 // transaction back on 40P01, 40001 and on a connection lost before COMMIT; a
-// connection lost AT COMMIT is resolved by a read-back first. committed runs
-// when the read-back finds the write committed (its post-commit steps did not
-// run).
+// connection lost AT COMMIT is resolved by a read-back first.
 func (repository *PostgresRepository) retryUnitWrite(
-	ctx context.Context, claim Claim, terminalStatus string, completedAt time.Time,
-	write func() error, committed func(),
+	ctx context.Context, claim Claim, wantStatus string, writtenAt time.Time, write unitWriteAttempt,
 ) error {
-	var err error
 	for attempt := 1; ; attempt++ {
-		err = write()
+		afterCommit, err := write()
+		if err == nil {
+			afterCommit(true)
+			return nil
+		}
 		var transient *StoreTransientError
 		if !errors.As(err, &transient) {
 			return err
 		}
 		if transient.outcomeUnknown {
-			outcome, readErr := repository.readBackUnitWrite(ctx, claim, terminalStatus, completedAt)
-			if readErr != nil {
+			outcome, resolved := repository.resolveUnitWrite(ctx, claim, transient.Write, wantStatus, writtenAt)
+			if !resolved {
 				return err
 			}
 			switch outcome {
 			case storeOutcomeCommitted:
-				committed()
+				afterCommit(false)
 				return nil
 			case storeOutcomeLeaseLost:
 				return ErrLeaseLost
 			}
 		}
-		logStoreRetry(ctx, claim, transient, attempt)
+		logStoreRetry(ctx, claim, transient.Write, transient.Step, transient.SQLState, attempt)
 		if attempt >= storeWriteAttempts {
 			return err
 		}
-		if waitErr := repository.storeRetryWait(ctx, attempt+1); waitErr != nil {
+		if repository.storeRetryWait(ctx, attempt+1) != nil {
 			return err
 		}
 	}
 }
 
-func logStoreRetry(ctx context.Context, claim Claim, transient *StoreTransientError, attempt int) {
+func logStoreRetry(ctx context.Context, claim Claim, write, step, sqlState string, attempt int) {
 	outcome := "retrying"
 	if attempt >= storeWriteAttempts {
 		outcome = "exhausted"
@@ -215,9 +287,9 @@ func logStoreRetry(ctx context.Context, claim Claim, transient *StoreTransientEr
 	slog.WarnContext(ctx, "provider sync store write transient",
 		slog.String("provider", claim.Provider),
 		slog.String("dataset", claim.Dataset),
-		slog.String("write", transient.Write),
-		slog.String("step", transient.Step),
-		slog.String("sqlstate", transient.SQLState),
+		slog.String("write", write),
+		slog.String("step", step),
+		slog.String("sqlstate", sqlState),
 		slog.Int("attempt", attempt),
 		slog.Int("max_attempts", storeWriteAttempts),
 		slog.String("outcome", outcome),

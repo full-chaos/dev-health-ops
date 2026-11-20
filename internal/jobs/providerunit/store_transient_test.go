@@ -214,3 +214,49 @@ func TestStoreTransientOnTheFinalAttemptDoesNotRelease(t *testing.T) {
 		})
 	}
 }
+
+// P1-6 (r1): when the release after a transient write fails, the write stays
+// the cause: class store_transient (registry ceiling), not the release's
+// unclassified ErrLeaseLost with its cap of 2.
+func TestFailedReleaseKeepsTheTransientWriteCause(t *testing.T) {
+	t.Parallel()
+	for _, testCase := range []struct {
+		name          string
+		completeErr   error
+		failErr       error
+		deterministic bool
+		wantCategory  string
+	}{
+		{name: "complete", completeErr: transientStoreWrite("complete", "bump"), wantCategory: retryCauseCompleteWriteTransient},
+		{name: "fail", failErr: transientStoreWrite("fail", "bump"), deterministic: true, wantCategory: retryCauseFailWriteTransient},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			now := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
+			unit := providerUnit()
+			repository := &storeWriteRepository{
+				memoryUnitRepository: newMemoryUnitRepository(unit),
+				completeErr:          testCase.completeErr,
+				failErr:              testCase.failErr,
+			}
+			repository.releaseErr = providersync.ErrLeaseLost
+			err := storeWriteHandler(t, repository, now, testCase.deterministic).
+				Work(context.Background(), providerExecution(unit, now, 2))
+			if repository.releaseCalls != 1 {
+				t.Fatalf("release calls=%d, want 1 (premise: the release was tried and failed)", repository.releaseCalls)
+			}
+			if !errors.Is(err, providersync.ErrStoreTransient) {
+				t.Fatalf("Work()=%v, want the transient write as the cause", err)
+			}
+			if class := causeClass(err, false); class != causeClassStoreTransient {
+				t.Fatalf("cause class=%q, want %q", class, causeClassStoreTransient)
+			}
+			if limit := retryMaxAttempts(err); limit != 0 {
+				t.Fatalf("retryMaxAttempts=%d, want 0 (registry ceiling)", limit)
+			}
+			if cause := safeCauseOf(t, err); !strings.Contains(cause, "category="+testCase.wantCategory) {
+				t.Fatalf("safe cause %q lacks category=%s", cause, testCase.wantCategory)
+			}
+		})
+	}
+}

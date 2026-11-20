@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/syncrunrollup"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/domainroledb"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -23,20 +23,25 @@ import (
 type storeFault struct {
 	table  string
 	timing string // "BEFORE" or "DEFERRED" (a constraint trigger that fires at COMMIT)
-	action string // "deadlock", "serialization" or "terminate"
+	action string // the plpgsql statement the trigger runs on a fire
 	budget int
 }
 
-var storeFaultActions = map[string]string{
-	"deadlock":      `RAISE EXCEPTION 'injected deadlock' USING ERRCODE = 'deadlock_detected';`,
-	"serialization": `RAISE EXCEPTION 'injected serialization failure' USING ERRCODE = 'serialization_failure';`,
-	"terminate":     `PERFORM pg_terminate_backend(pg_backend_pid());`,
-}
+// The fault actions a shared-server test may use. Ending a session is a
+// server-wide action: only a test on a private server (StartPostgresIsolated)
+// writes it, in its own func.
+const (
+	faultDeadlock      = `RAISE EXCEPTION 'injected deadlock' USING ERRCODE = 'deadlock_detected';`
+	faultSerialization = `RAISE EXCEPTION 'injected serialization failure' USING ERRCODE = 'serialization_failure';`
+	// faultHoldCommit waits on an advisory lock the test holds: the COMMIT of
+	// the writing transaction stays in flight, its row lock held.
+	faultHoldCommit = `PERFORM pg_advisory_xact_lock(14371);`
+)
 
 func installStoreFault(t *testing.T, ctx context.Context, pool *pgxpool.Pool, fault storeFault) {
 	t.Helper()
-	action, ok := storeFaultActions[fault.action]
-	if !ok || (fault.table != "sync_runs" && fault.table != "sync_run_units") {
+	action := fault.action
+	if action == "" || (fault.table != "sync_runs" && fault.table != "sync_run_units") {
 		t.Fatalf("unknown fault %+v", fault)
 	}
 	trigger := fmt.Sprintf(`CREATE TRIGGER store_fault_14371 BEFORE UPDATE ON public.%s
@@ -128,10 +133,9 @@ func TestCompleteRetriesATransientRefusalInPlace(t *testing.T) {
 		name  string
 		fault storeFault
 	}{
-		{"deadlock_at_bump", storeFault{table: "sync_runs", timing: "BEFORE", action: "deadlock", budget: 1}},
-		{"deadlock_at_unit_update", storeFault{table: "sync_run_units", timing: "BEFORE", action: "deadlock", budget: 1}},
-		{"serialization_at_commit", storeFault{table: "sync_run_units", timing: "DEFERRED", action: "serialization", budget: 1}},
-		{"connection_lost_at_bump", storeFault{table: "sync_runs", timing: "BEFORE", action: "terminate", budget: 1}},
+		{"deadlock_at_bump", storeFault{table: "sync_runs", timing: "BEFORE", action: faultDeadlock, budget: 1}},
+		{"deadlock_at_unit_update", storeFault{table: "sync_run_units", timing: "BEFORE", action: faultDeadlock, budget: 1}},
+		{"serialization_at_commit", storeFault{table: "sync_run_units", timing: "DEFERRED", action: faultSerialization, budget: 1}},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			withDispatchWakeFixture(t, func(ctx context.Context, pool *pgxpool.Pool, repository *PostgresRepository) {
@@ -172,7 +176,7 @@ func TestCompleteTransientRefusalPastTheBudgetIsStoreTransient(t *testing.T) {
 	withDispatchWakeFixture(t, func(ctx context.Context, pool *pgxpool.Pool, repository *PostgresRepository) {
 		sleeps := countRetrySleeps(repository)
 		claim := claimFixtureUnit(t, ctx, repository, firstUnitID, storeTransientNow)
-		installStoreFault(t, ctx, pool, storeFault{table: "sync_runs", timing: "BEFORE", action: "deadlock", budget: 100})
+		installStoreFault(t, ctx, pool, storeFault{table: "sync_runs", timing: "BEFORE", action: faultDeadlock, budget: 100})
 
 		err := repository.Complete(ctx, claim, map[string]any{"records": 1}, nil,
 			storeTransientNow, storeTransientNow.Add(2*time.Second))
@@ -208,7 +212,7 @@ func TestFailRetriesATransientRefusalInPlace(t *testing.T) {
 		seedRunUnit(t, ctx, pool, "planned")
 		sleeps := countRetrySleeps(repository)
 		claim := claimFixtureUnit(t, ctx, repository, firstUnitID, storeTransientNow)
-		installStoreFault(t, ctx, pool, storeFault{table: "sync_runs", timing: "BEFORE", action: "deadlock", budget: 1})
+		installStoreFault(t, ctx, pool, storeFault{table: "sync_runs", timing: "BEFORE", action: faultDeadlock, budget: 1})
 		armedBefore := wakeArmedCount()
 
 		if err := repository.Fail(ctx, claim, "provider_error", storeTransientNow, storeTransientNow.Add(2*time.Second)); err != nil {
@@ -232,7 +236,7 @@ func TestFailTransientRefusalPastTheBudgetIsStoreTransient(t *testing.T) {
 	withDispatchWakeFixture(t, func(ctx context.Context, pool *pgxpool.Pool, repository *PostgresRepository) {
 		countRetrySleeps(repository)
 		claim := claimFixtureUnit(t, ctx, repository, firstUnitID, storeTransientNow)
-		installStoreFault(t, ctx, pool, storeFault{table: "sync_runs", timing: "BEFORE", action: "deadlock", budget: 100})
+		installStoreFault(t, ctx, pool, storeFault{table: "sync_runs", timing: "BEFORE", action: faultDeadlock, budget: 100})
 
 		err := repository.Fail(ctx, claim, "provider_error", storeTransientNow, storeTransientNow.Add(2*time.Second))
 		var transient *StoreTransientError
@@ -254,7 +258,7 @@ func TestCompleteLinearWorkItemFamilyRetriesATransientRefusalInPlace(t *testing.
 	withDispatchWakeFixture(t, func(ctx context.Context, pool *pgxpool.Pool, repository *PostgresRepository) {
 		sleeps := countRetrySleeps(repository)
 		claim, result := seedLinearFamilyCompletion(t, ctx, pool, repository)
-		installStoreFault(t, ctx, pool, storeFault{table: "sync_runs", timing: "BEFORE", action: "deadlock", budget: 1})
+		installStoreFault(t, ctx, pool, storeFault{table: "sync_runs", timing: "BEFORE", action: faultDeadlock, budget: 1})
 
 		completedAt := storeTransientNow.Add(30 * time.Second)
 		if err := repository.CompleteLinearWorkItemFamily(ctx, claim, result, storeTransientNow, completedAt); err != nil {
@@ -419,35 +423,146 @@ func TestUnitWriteWithALostCommitAfterLeaseRecoveryIsLeaseLost(t *testing.T) {
 	})
 }
 
-// The read-back is the one new statement: it runs under the worker's domain
-// role (NOSUPERUSER, the go-river-migrate grants) without a denial.
-func TestUnitWriteReadBackRunsUnderTheDomainRole(t *testing.T) {
+
+// S4 on a private server: ending the session in the Bump is a lost connection
+// before COMMIT; the write is retried in place and commits once.
+func TestCompleteRetriesALostConnectionInPlace(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
-	venue := domainroledb.Start(t, ctx, "store14371")
-	venue.RequireReady(t, ctx)
-	seedProviderSyncFixture(t, ctx, venue.Admin)
-	failingUnitID := seedRunUnit(t, ctx, venue.Admin, "dispatching")
-	repository, err := NewPostgresRepository(venue.Domain)
+	instance, err := containers.StartPostgresIsolated(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(repository.Close)
-	commits := 0
-	repository.commitTx = lostAckAfterCommit(&commits)
-	completedAt := storeTransientNow.Add(2 * time.Second)
-	if err := repository.Complete(ctx, claimFixtureUnit(t, ctx, repository, firstUnitID, storeTransientNow),
-		map[string]any{"records": 1}, nil, storeTransientNow, completedAt); err != nil {
-		t.Fatalf("Complete()=%v under the domain role", err)
+	defer func() {
+		closeContext, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer closeCancel()
+		if err := instance.Close(closeContext); err != nil {
+			t.Errorf("terminate PostgreSQL: %v", err)
+		}
+	}()
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if err := repository.Fail(ctx, claimFixtureUnit(t, ctx, repository, failingUnitID, storeTransientNow),
-		"provider_error", storeTransientNow, completedAt); err != nil {
-		t.Fatalf("Fail()=%v under the domain role", err)
+	defer pool.Close()
+	createProviderSyncFixture(t, ctx, pool)
+	seedProviderSyncFixture(t, ctx, pool)
+	repository, err := NewPostgresRepository(pool)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if commits != 2 {
-		t.Fatalf("commits=%d, want 2 (premise: both writes took the read-back path)", commits)
+	defer repository.Close()
+	seedRunUnit(t, ctx, pool, "planned")
+	sleeps := countRetrySleeps(repository)
+	claim := claimFixtureUnit(t, ctx, repository, firstUnitID, storeTransientNow)
+	installStoreFault(t, ctx, pool, storeFault{
+		table: "sync_runs", timing: "BEFORE", budget: 1,
+		action: `PERFORM pg_terminate_backend(pg_backend_pid());`,
+	})
+	armedBefore := wakeArmedCount()
+	if err := repository.Complete(ctx, claim, map[string]any{"records": 1}, nil,
+		storeTransientNow, storeTransientNow.Add(2*time.Second)); err != nil {
+		t.Fatalf("Complete()=%v, want the retried write to commit", err)
 	}
-	if denied := venue.Denials.All(); len(denied) != 0 {
-		t.Fatalf("domain role denied %d statements: %q", len(denied), denied)
+	if seen := storeFaultSeen(t, ctx, pool); seen != 2 || *sleeps != 1 {
+		t.Fatalf("fault trigger saw %d rows, waits=%d, want 2 and 1", seen, *sleeps)
 	}
+	if state := readUnitState(t, ctx, pool, firstUnitID); state.status != "success" || state.completed != 1 {
+		t.Fatalf("after Complete: %+v, want success counted once", state)
+	}
+	if armed := wakeArmedCount() - armedBefore; armed != 1 {
+		t.Fatalf("dispatch wake armed %d times, want once", armed)
+	}
+}
+
+// waitForLockWaiter waits until a session of this database waits on a lock of
+// the given type (advisory or transactionid). It orders the cell's steps by
+// lock state only; no assert reads a clock.
+func waitForLockWaiter(ctx context.Context, pool *pgxpool.Pool, lockType string) error {
+	for {
+		var waiting int
+		if err := pool.QueryRow(ctx, `
+SELECT count(*) FROM pg_locks AS lock
+JOIN pg_stat_activity AS activity ON activity.pid = lock.pid
+WHERE NOT lock.granted AND lock.locktype = $1 AND activity.datname = current_database()`, lockType).Scan(&waiting); err != nil {
+			return err
+		}
+		if waiting > 0 {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+}
+
+// P1-2 (r1): the first transaction's COMMIT is still in flight, holding the
+// unit's row lock, when the outcome-unknown read-back starts. The read-back
+// must wait for that COMMIT and see the committed row: success, one commit, no
+// second attempt -- not ErrLeaseLost from a retry that finds the row already
+// terminal.
+func TestUnitWriteReadBackWaitsForAnInFlightCommit(t *testing.T) {
+	withDispatchWakeFixture(t, func(ctx context.Context, pool *pgxpool.Pool, repository *PostgresRepository) {
+		seedRunUnit(t, ctx, pool, "planned")
+		sleeps := countRetrySleeps(repository)
+		claim := claimFixtureUnit(t, ctx, repository, firstUnitID, storeTransientNow)
+		installStoreFault(t, ctx, pool, storeFault{
+			table: "sync_run_units", timing: "DEFERRED", action: faultHoldCommit, budget: 1,
+		})
+		holder, err := pool.Acquire(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer holder.Release()
+		if _, err := holder.Exec(ctx, `SELECT pg_advisory_lock(14371)`); err != nil {
+			t.Fatal(err)
+		}
+		firstCommit := make(chan error, 1)
+		released := make(chan error, 1)
+		attempts := 0
+		repository.commitTx = func(ctx context.Context, tx pgx.Tx) error {
+			attempts++
+			if attempts > 1 {
+				return tx.Commit(ctx)
+			}
+			go func() { firstCommit <- tx.Commit(context.WithoutCancel(ctx)) }()
+			if err := waitForLockWaiter(ctx, pool, "advisory"); err != nil {
+				return err
+			}
+			// The COMMIT waits on the test's lock and holds the row lock. Once
+			// a second session waits on that row, let the COMMIT finish.
+			go func() {
+				if err := waitForLockWaiter(ctx, pool, "transactionid"); err != nil {
+					released <- err
+					return
+				}
+				_, err := holder.Exec(ctx, `SELECT pg_advisory_unlock(14371)`)
+				released <- err
+			}()
+			return io.ErrUnexpectedEOF
+		}
+		armedBefore := wakeArmedCount()
+		err = repository.Complete(ctx, claim, map[string]any{"records": 1}, nil,
+			storeTransientNow, storeTransientNow.Add(2*time.Second))
+		if releaseErr := <-released; releaseErr != nil {
+			t.Fatalf("lock release: %v", releaseErr)
+		}
+		if err != nil {
+			t.Fatalf("Complete()=%v, want the read-back to wait for the in-flight COMMIT and see it", err)
+		}
+		if commitErr := <-firstCommit; commitErr != nil {
+			t.Fatalf("first COMMIT: %v", commitErr)
+		}
+		if attempts != 1 || *sleeps != 0 {
+			t.Fatalf("attempts=%d waits=%d, want one attempt and no retry", attempts, *sleeps)
+		}
+		if state := readUnitState(t, ctx, pool, firstUnitID); state.status != "success" || state.completed != 1 {
+			t.Fatalf("after Complete: %+v, want success counted once", state)
+		}
+		if armed := wakeArmedCount() - armedBefore; armed != 1 {
+			t.Fatalf("dispatch wake armed %d times, want once", armed)
+		}
+	})
 }

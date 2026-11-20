@@ -1248,6 +1248,9 @@ func (m *Metrics) RecordAllArtifactsUnreadable(provider, dataset string) {
 var metricSyncRunRollupBumpedOutcomeVocabulary = map[string]bool{
 	"success": true,
 	"failed":  true,
+	// A terminal write whose COMMIT only a read-back confirmed: the bump
+	// happened, its counts were not re-read (providersync, CHAOS-14371).
+	"ambiguous_commit": true,
 }
 
 // metricSyncRunRollupBumpedPathVocabulary is the closed set of path labels:

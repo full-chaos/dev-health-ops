@@ -1072,10 +1072,15 @@ func (handler *Handler) releaseAfterStoreTransient(
 		if releaseErr := handler.Repository.ReleaseForRetry(
 			context.WithoutCancel(ctx), claim, handler.now(),
 		); releaseErr != nil {
-			return jobruntime.Retryable(jobruntime.WithSafeCauseText(releaseErr,
-				safeCause(retryCauseReleaseFailed, claim, execution, releaseErr)))
+			// The refused write stays the cause (class store_transient, registry
+			// ceiling); the failed release is only logged next to it.
+			releaseCause := safeCause(retryCauseReleaseFailed, claim, execution, releaseErr)
+			slog.WarnContext(ctx, "provider unit release after a transient write failed",
+				"provider", claim.Provider, "dataset", claim.Dataset,
+				"write_cause", cause, "release_cause", releaseCause)
+		} else {
+			handler.observeLeaseRecovery(claim, jobruntime.SyncLeaseResultRetrying)
 		}
-		handler.observeLeaseRecovery(claim, jobruntime.SyncLeaseResultRetrying)
 	}
 	handler.logLifecycle(ctx, execution, claim, "sync_provider_unit_finished", "retrying", writeErr)
 	return jobruntime.Retryable(jobruntime.WithSafeCauseText(writeErr,

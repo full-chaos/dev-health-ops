@@ -1503,7 +1503,7 @@ func parseCoberturaRow(body []byte, reportPath, artifactID, repoID, runID, orgID
 		path                                                     string
 		linesTotal, linesCovered, branchesTotal, branchesCovered int64
 		linesWithHits                                            int64
-		branchPairs, branchMissing                               int64
+		branchPairs, branchMissing, branchOver                   int64
 	}
 	files := make([]metrics, 0, len(document.Classes))
 	positions := map[string]int{}
@@ -1527,7 +1527,10 @@ func parseCoberturaRow(body []byte, reportPath, artifactID, repoID, runID, orgID
 				current.branchPairs++
 				current.branchesTotal += total
 				current.branchesCovered += covered
-			case line.Branch == "true" || strings.TrimSpace(line.ConditionCoverage) != "":
+				if covered > total {
+					current.branchOver++
+				}
+			case line.Branch == "true":
 				current.branchMissing++
 			}
 		}
@@ -1567,12 +1570,13 @@ func parseCoberturaRow(body []byte, reportPath, artifactID, repoID, runID, orgID
 		}
 	}
 	{
-		var detailTotal, detailCovered, pairs, missing int64
+		var detailTotal, detailCovered, pairs, missing, over int64
 		for _, file := range files {
 			detailTotal += file.branchesTotal
 			detailCovered += file.branchesCovered
 			pairs += file.branchPairs
 			missing += file.branchMissing
+			over += file.branchOver
 		}
 		evidence := coverageCountEvidence{summaryTotal: branchesTotal, summaryCovered: branchesCovered}
 		// Every condition-coverage pair holds its own covered count, so the pairs are hit evidence for every counted branch, but a
@@ -1583,7 +1587,13 @@ func parseCoberturaRow(body []byte, reportPath, artifactID, repoID, runID, orgID
 				evidence.summaryTotal = &detailTotal
 			}
 		}
+		summaryCoveredMissing := branchesCovered == nil
 		branchesTotal, branchesCovered = evidence.resolve()
+		// A pair whose covered count is above its own total is bad evidence: it is checked before the zero-total rule and before
+		// the sum, and leaves the covered count unknown (total kept) unless the report states a covered summary.
+		if over > 0 && summaryCoveredMissing {
+			branchesCovered = nil
+		}
 	}
 	if linesCovered != nil && linesTotal != nil && *linesCovered > *linesTotal {
 		return coverageSnapshotRow{}, ErrGitHubTestsReportInvalid

@@ -85,6 +85,12 @@ func TestBranchFunctionCoveredIsKnownApartFromTheTotal(t *testing.T) {
 		{name: "lcov A FNF:1 FNH:1 + B FNH:3 only", lcov: true, body: "SF:a.go\nFNF:1\nFNH:1\nend_of_record\nSF:b.go\nFNH:3\nend_of_record\n", brT: na, brC: na, fnT: na, fnC: 4},
 		{name: "lcov two valid files BRF:2 BRH:1 + BRF:3 BRH:3", lcov: true, body: "SF:a.go\nBRF:2\nBRH:1\nend_of_record\nSF:b.go\nBRF:3\nBRH:3\nend_of_record\n", brT: 5, brC: 4, fnT: na, fnC: na, brPct: true},
 		{name: "cobertura branches-covered 3 over branches-valid 2", body: cob(`branches-valid="2" branches-covered="3"`, ""), brT: 2, brC: na, fnT: na, fnC: na},
+		{name: "cobertura 0/2 detail with a non-branch rate line", body: cob(``, `<line number="1" hits="0" branch="true" condition-coverage="0% (0/2)"/><line number="2" hits="1" branch="false" condition-coverage="100%"/>`), brT: 2, brC: 0, fnT: na, fnC: na, brPct: true},
+		{name: "cobertura 0/2 detail with a rate on a line without branch attribute", body: cob(`branches-valid="2"`, `<line number="1" hits="0" branch="true" condition-coverage="0% (0/2)"/><line number="2" hits="1" condition-coverage="100%"/>`), brT: 2, brC: 0, fnT: na, fnC: na, brPct: true},
+		{name: "cobertura pair 1/0", body: cob(``, `<line number="1" hits="1" branch="true" condition-coverage="100% (1/0)"/>`), brT: 0, brC: na, fnT: na, fnC: na},
+		{name: "cobertura pair 2/1 beside 1/2", body: cob(``, `<line number="1" hits="1" branch="true" condition-coverage="100% (2/1)"/><line number="2" hits="1" branch="true" condition-coverage="50% (1/2)"/>`), brT: 3, brC: na, fnT: na, fnC: na},
+		{name: "cobertura pair 2/1 in one file beside 1/2 in another", body: `<coverage><packages><package name="e"><classes><class filename="a.go"><lines><line number="1" hits="1" branch="true" condition-coverage="100% (2/1)"/></lines></class><class filename="b.go"><lines><line number="1" hits="1" branch="true" condition-coverage="50% (1/2)"/></lines></class></classes></package></packages></coverage>`, brT: 3, brC: na, fnT: na, fnC: na},
+		{name: "cobertura pair 2/1 with branches-covered 1 stated", body: cob(`branches-valid="1" branches-covered="1"`, `<line number="1" hits="1" branch="true" condition-coverage="100% (2/1)"/>`), brT: 1, brC: 1, fnT: na, fnC: na, brPct: true},
 		{name: "cobertura no branch data", body: cob(`lines-valid="1"`, ""), brT: na, brC: na, fnT: na, fnC: na},
 	}
 	for _, cell := range cells {

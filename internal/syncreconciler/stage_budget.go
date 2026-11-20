@@ -96,8 +96,9 @@ type StageBudgets map[StageName]time.Duration
 //     queue pool, and runs the publish closure (a River insert plus a domain
 //     reference read) inline.
 //   - ChunkSidecarReclaim (CHAOS-14243): up to 4 PK-range DELETEs of at most
-//     32 MiB of TOASTed payload each, one transaction per statement; it stops
-//     early when the deadline would not fit another statement.
+//     4 MiB of TOASTed payload each, one transaction per statement; it stops
+//     early when the deadline would not fit another statement, and it yields
+//     the tick when an earlier stage used 3/4 of its budget (CHAOS-14380).
 //   - Observer: proven 0.079ms against a live database (CHAOS-4239 EXPLAIN);
 //     this budget is almost entirely cold-start headroom.
 //

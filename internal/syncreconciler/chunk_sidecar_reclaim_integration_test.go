@@ -211,14 +211,14 @@ func TestChunkSidecarReclaimPostgresContract(t *testing.T) {
 	oneStatement := unlimited
 	oneStatement.StatementsPerTick = 1
 
-	t.Run("row cap: each statement deletes at most 256 rows and the checkpoint goes last", func(t *testing.T) {
+	t.Run("row cap: each statement deletes at most 64 rows and the checkpoint goes last", func(t *testing.T) {
 		resetChunkReclaimVenue(t, ctx, venue)
 		unit := chunkReclaimUnitID(1)
-		seedChunkReclaimUnit(t, ctx, venue.Admin, unit, "failed", 600, 1, now)
+		seedChunkReclaimUnit(t, ctx, venue.Admin, unit, "failed", 150, 1, now)
 		reclaim := newTestChunkReclaim(t, venue.Admin, oneStatement)
 		for index, want := range []struct {
 			rows, units, checkpoints, chunks int
-		}{{256, 0, 1, 344}, {256, 0, 1, 88}, {88, 1, 0, 0}} {
+		}{{64, 0, 1, 86}, {64, 0, 1, 22}, {22, 1, 0, 0}} {
 			result := stepChunkReclaim(t, ctx, reclaim, now)
 			if result.Statements != 1 || result.Rows != int64(want.rows) || result.Units != want.units {
 				t.Fatalf("statement %d = %+v, want %d rows and %d units", index, result, want.rows, want.units)
@@ -227,19 +227,19 @@ func TestChunkSidecarReclaimPostgresContract(t *testing.T) {
 		}
 	})
 
-	t.Run("byte cap: a statement deletes at most 32 MiB of payload_bytes", func(t *testing.T) {
+	t.Run("byte cap: a statement deletes at most 4 MiB of payload_bytes", func(t *testing.T) {
 		resetChunkReclaimVenue(t, ctx, venue)
 		unit := chunkReclaimUnitID(2)
-		seedChunkReclaimUnit(t, ctx, venue.Admin, unit, "failed", 40, chunkMiB, now)
+		seedChunkReclaimUnit(t, ctx, venue.Admin, unit, "failed", 6, chunkMiB, now)
 		reclaim := newTestChunkReclaim(t, venue.Admin, oneStatement)
 		result := stepChunkReclaim(t, ctx, reclaim, now)
-		if result.Rows != 32 || result.Bytes != 32*chunkMiB || result.Units != 0 {
-			t.Fatalf("first statement = %+v, want 32 rows / 32 MiB and no unit", result)
+		if result.Rows != 4 || result.Bytes != 4*chunkMiB || result.Units != 0 {
+			t.Fatalf("first statement = %+v, want 4 rows / 4 MiB and no unit", result)
 		}
-		wantChunkSidecars(t, ctx, venue.Admin, unit, 1, 8)
+		wantChunkSidecars(t, ctx, venue.Admin, unit, 1, 2)
 		result = stepChunkReclaim(t, ctx, reclaim, now)
-		if result.Rows != 8 || result.Bytes != 8*chunkMiB || result.Units != 1 {
-			t.Fatalf("second statement = %+v, want 8 rows / 8 MiB and the unit", result)
+		if result.Rows != 2 || result.Bytes != 2*chunkMiB || result.Units != 1 {
+			t.Fatalf("second statement = %+v, want 2 rows / 2 MiB and the unit", result)
 		}
 		wantChunkSidecars(t, ctx, venue.Admin, unit, 0, 0)
 	})
@@ -473,13 +473,13 @@ func TestChunkSidecarReclaimPostgresContract(t *testing.T) {
 		if !errors.Is(stepErr, ErrUnavailable) {
 			t.Fatalf("step error = %v, want ErrUnavailable", stepErr)
 		}
-		if result.Rows != 256 || result.RemainingUnits != -1 || result.Done {
-			t.Fatalf("result = %+v, want the 256 committed rows, remaining -1, not done", result)
+		if result.Rows != 64 || result.RemainingUnits != -1 || result.Done {
+			t.Fatalf("result = %+v, want the 64 committed rows, remaining -1, not done", result)
 		}
-		if !strings.Contains(logs.String(), `"msg":"syncreconciler.chunk_sidecar_reclaim","bytes":256,"rows":256,"units":0,"statements":1,"throttled":false,"remaining_units":-1,"done":false,"error":`) {
+		if !strings.Contains(logs.String(), `"msg":"syncreconciler.chunk_sidecar_reclaim","bytes":64,"rows":64,"units":0,"statements":1,"throttled":false,"remaining_units":-1,"done":false,"error":`) {
 			t.Fatalf("the tick line does not carry the committed work: %s", logs.String())
 		}
-		wantChunkSidecars(t, ctx, venue.Admin, unit, 1, 44)
+		wantChunkSidecars(t, ctx, venue.Admin, unit, 1, 236)
 	})
 
 	t.Run("an active reclaimer logs a tick that fails before any commit", func(t *testing.T) {
@@ -498,8 +498,8 @@ func TestChunkSidecarReclaimPostgresContract(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if first := stepChunkReclaim(t, ctx, reclaim, now); first.Rows != 256 || first.RemainingUnits != 1 {
-			t.Fatalf("first tick = %+v, want 256 rows and 1 remaining unit", first)
+		if first := stepChunkReclaim(t, ctx, reclaim, now); first.Rows != 64 || first.RemainingUnits != 1 {
+			t.Fatalf("first tick = %+v, want 64 rows and 1 remaining unit", first)
 		}
 		refuse = true
 		var logs bytes.Buffer
@@ -605,7 +605,6 @@ func TestChunkSidecarReclaimPostgresContract(t *testing.T) {
 		unit := chunkReclaimUnitID(60)
 		seedChunkReclaimUnit(t, ctx, venue.Admin, unit, "failed", 10, chunkMiB, now)
 		config := unlimited
-		config.BytesPerStatement = 8 * chunkMiB
 		reclaim, err := newChunkSidecarReclaim(func(beginCtx context.Context) (pgx.Tx, error) {
 			tx, err := venue.Admin.Begin(beginCtx)
 			return lostCommitReplyTx{Tx: tx}, err
@@ -617,9 +616,9 @@ func TestChunkSidecarReclaimPostgresContract(t *testing.T) {
 		if _, err := reclaim.Step(ctx, now, 1); !errors.Is(err, ErrUnavailable) {
 			t.Fatalf("step error = %v, want ErrUnavailable", err)
 		}
-		wantChunkSidecars(t, ctx, venue.Admin, unit, 1, 2)
-		if got := reclaim.limiter.available(now.Add(59 * time.Second)); got != config.BytesPerMinute-8*chunkMiB {
-			t.Fatalf("available after a lost COMMIT reply = %d, want the 8 MiB reservation still charged", got)
+		wantChunkSidecars(t, ctx, venue.Admin, unit, 1, 6)
+		if got := reclaim.limiter.available(now.Add(59 * time.Second)); got != config.BytesPerMinute-4*chunkMiB {
+			t.Fatalf("available after a lost COMMIT reply = %d, want the 4 MiB reservation still charged", got)
 		}
 	})
 }

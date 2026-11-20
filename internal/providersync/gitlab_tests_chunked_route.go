@@ -60,6 +60,9 @@ type gitLabTestsChunkCursor struct {
 	// metadata without re-fetching the project object (CHAOS-3820).
 	Repo      string `json:"repo,omitempty"`
 	ProjectID int64  `json:"project_id,omitempty"`
+	// LastID is the id of the last pipeline the active phase emitted: the resume key of the id-ordered listing
+	// (gitLabTestsSeek). Page and Index only say where to look for it. 0 = the phase has not emitted yet.
+	LastID int64 `json:"li,omitempty"`
 }
 
 const (
@@ -92,9 +95,9 @@ const (
 // components, and gitLabTestsWindowBlocking is the subset that leaves part of
 // the requested window unwalked.
 //
-// GitLab lists pipelines order_by=updated_at&sort=desc, so an inventory phase
-// that stops at its page budget covers the NEW end of the window and never
-// reaches the old one; advancing over that remainder would make the gap
+// The chunked route lists the window's pipelines order_by=id&sort=desc, so an
+// inventory phase that stops at its page budget covers only part of the window
+// and never reaches the rest; advancing over that remainder would make the gap
 // permanent (CHAOS-2587). A per-run cap walks the whole window and truncates
 // only inside an already-committed pipeline, so it has no unreached remainder
 // and must NOT withhold the watermark -- withholding it there is what pinned
@@ -222,10 +225,9 @@ func recordGitLabTestsSkippedItem(
 // recordGitHubTestsInventoryTruncation: a budget stop finalizes the unit with
 // recorded lower-bound coverage instead of returning ErrPaginationCapExceeded,
 // which providerunit maps to a deterministic-terminal category that cancels
-// the unit and discards a checkpoint holding durable rows. GitLab lists
-// pipelines order_by=updated_at&sort=desc, so a truncated walk -- exactly like
-// GitHub's -- covers the NEW end of the window and must not advance the
-// watermark over the old one (CHAOS-2587).
+// the unit and discards a checkpoint holding durable rows. A truncated walk --
+// exactly like GitHub's -- covers only part of the window and must not advance
+// the watermark over the rest (CHAOS-2587).
 func recordGitLabTestsInventoryTruncation(
 	cursor gitLabTestsChunkCursor,
 	client *providerfoundation.HTTPClient,
@@ -273,7 +275,7 @@ func decodeGitLabTestsChunkCursor(raw string) (gitLabTestsChunkCursor, error) {
 	var cursor gitLabTestsChunkCursor
 	if json.Unmarshal([]byte(raw), &cursor) != nil ||
 		(cursor.Phase != "pipelines" && cursor.Phase != "reports" && cursor.Phase != "done") ||
-		cursor.Page < 0 || cursor.Index < 0 ||
+		cursor.Page < 0 || cursor.Index < 0 || cursor.LastID < 0 ||
 		cursor.PipelinePages < 0 || cursor.ReportPages < 0 ||
 		len(cursor.Truncated) > len(gitLabTestsTruncationComponents) {
 		return gitLabTestsChunkCursor{}, ErrChunkCheckpointConflict
@@ -296,9 +298,133 @@ func encodeGitLabTestsChunkCursor(cursor gitLabTestsChunkCursor) (string, error)
 	return string(encoded), nil
 }
 
+// gitLabTestsSeek resumes one phase of the pipelines listing by pipeline id, not by position (CHAOS-14374). The project
+// pipelines endpoint has offset pages only (no keyset, no id filter), and between two chunks a pipeline can leave the
+// window listing (deleted, or updated past BeforeAt) and shift every later page forward. The listing is order_by=id&
+// sort=desc, so ids are a strict order that no update changes, and the seek is exact:
+//   - resumed (LastID > 0 at invocation start = seekID): start on the page that held it (Page, or Page-1 after a page
+//     end). On the FIRST page of a visit, if the page is empty or its first id < seekID and it is not page 1, the
+//     boundary may sit on an earlier page: step back one page and visit again, until a page's first id >= seekID or
+//     page 1. Then skip every id >= seekID (only the resume-time id: inside one invocation every listed item is read).
+//   - legacy (Page > 0 with no LastID: a cursor written by the updated_at-ordered binary): its position names another
+//     order, so the phase starts again at page 1. Rows read twice replace the stored ones (every destination is a
+//     ReplacingMergeTree on its natural key); nothing is skipped.
+//
+// A page at or before chargedThrough was charged to the phase's page budget by an earlier invocation, so a step back, a
+// page-end re-read or a legacy restart up to the legacy Page is free; every later page is charged once on entry.
+type gitLabTestsSeek struct {
+	seekID         int64
+	legacy         bool
+	startPage      int
+	chargedThrough int
+	firstPage      bool
+}
+
+func newGitLabTestsSeek(cursor gitLabTestsChunkCursor) gitLabTestsSeek {
+	switch {
+	case cursor.LastID > 0:
+		through := cursor.Page
+		if cursor.Index == 0 {
+			through = cursor.Page - 1
+		}
+		through = max(through, 1)
+		return gitLabTestsSeek{seekID: cursor.LastID, startPage: through, chargedThrough: through}
+	case cursor.Page > 0 || cursor.Index > 0:
+		through := cursor.Page
+		if cursor.Index == 0 {
+			through = cursor.Page - 1
+		}
+		return gitLabTestsSeek{legacy: true, startPage: 1, chargedThrough: max(through, 0)}
+	default:
+		return gitLabTestsSeek{startPage: 1}
+	}
+}
+
+// gitLabTestsStepBack ends a visit whose first page may not hold the resume boundary; the visit starts again at page.
+type gitLabTestsStepBack struct{ page int }
+
+func (step gitLabTestsStepBack) Error() string {
+	return "gitlab tests listing moved under a resume; stepping back to page " + strconv.Itoa(step.page)
+}
+
+// enter checks one visited page against the seek: a step back (the boundary may be on an earlier page), or whether the
+// page is charged to the budget.
+func (seek *gitLabTestsSeek) enter(pageNumber int, items []json.RawMessage) (charge bool, err error) {
+	first := seek.firstPage
+	seek.firstPage = false
+	if first && seek.seekID > 0 && pageNumber > 1 {
+		if len(items) == 0 {
+			return false, gitLabTestsStepBack{page: pageNumber - 1}
+		}
+		id, idErr := gitLabTestsListedPipelineID(items[0])
+		if idErr != nil {
+			return false, idErr
+		}
+		if id < seek.seekID {
+			return false, gitLabTestsStepBack{page: pageNumber - 1}
+		}
+	}
+	if pageNumber > seek.chargedThrough {
+		seek.chargedThrough = pageNumber
+		return true, nil
+	}
+	return false, nil
+}
+
+// gitLabTestsListedPipelineID is the id of one listed pipeline (GitLab ids are positive integers).
+func gitLabTestsListedPipelineID(raw json.RawMessage) (int64, error) {
+	var item struct {
+		ID json.Number `json:"id"`
+	}
+	if err := json.Unmarshal(raw, &item); err != nil {
+		return 0, providerfoundation.RouteFailure(gitlabPipelinesRoute, providerfoundation.ReasonBodyDecode, err)
+	}
+	id, err := item.ID.Int64()
+	if err != nil || id < 1 {
+		return 0, providerfoundation.ErrNormalizationInvalid
+	}
+	return id, nil
+}
+
+// visitGitLabTestsListing walks one phase of the id-ordered pipelines listing from the seek's start page, stepping back
+// while the seek asks for it. MaxPages is the phase's remaining budget plus the free pages the visit re-reads.
+func visitGitLabTestsListing(
+	ctx context.Context, client *providerfoundation.HTTPClient, claim Claim, repo, phase, root string, query url.Values, seek *gitLabTestsSeek, allowance int,
+	visit func(providerfoundation.PageVisit) error,
+) (providerfoundation.PageCollection, error) {
+	if seek.legacy {
+		recordGitLabTestsReseek(client, claim, repo, phase, "legacy cursor without a pipeline id: the phase starts again", seek.chargedThrough)
+	}
+	for {
+		seek.firstPage = true
+		free := max(0, seek.chargedThrough-seek.startPage+1)
+		collection, err := providerfoundation.VisitGitLabPageParamPages(ctx, client, providerfoundation.GitLabPageOptions{
+			Path: root + "/pipelines", Route: gitlabPipelinesRoute, Query: query, PerPage: nativePerPage,
+			MaxPages: allowance + free, InitialPage: seek.startPage,
+		}, visit)
+		var step gitLabTestsStepBack
+		if !errors.As(err, &step) {
+			return collection, err
+		}
+		recordGitLabTestsReseek(client, claim, repo, phase, "listing moved under a resume: stepping back one page", step.page)
+		seek.startPage = step.page
+	}
+}
+
+func recordGitLabTestsReseek(client *providerfoundation.HTTPClient, claim Claim, repo, phase, reason string, page int) {
+	if client != nil {
+		client.Metrics.RecordResumeReanchor(claim.Provider, claim.Dataset, phase)
+	}
+	slog.Warn(
+		"provider page moved under a resume; seeking the listing by pipeline id",
+		"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
+		"repository", logging.ProviderText(repo), "phase", phase, "reason", reason, "page", page,
+	)
+}
+
 // CollectChunks streams GitLab TestOps pipeline and report pages. It keeps
-// the same normalization functions as Collect while persisting the page and
-// item index after each bounded emission.
+// the same normalization functions as Collect while persisting the page,
+// item index and last pipeline id after each bounded emission.
 func (handler GitLabTestsRouteHandler) CollectChunks(
 	ctx context.Context,
 	claim Claim,
@@ -419,7 +545,7 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 		}
 		return emit(ChunkRouteEmission{Batch: batch, CursorBefore: beforeRaw, CursorAfter: afterRaw, Final: final})
 	}
-	query := url.Values{"order_by": {"updated_at"}, "sort": {"desc"}}
+	query := url.Values{"order_by": {"id"}, "sort": {"desc"}}
 	if claim.SinceAt != nil {
 		query.Set("updated_after", claim.SinceAt.UTC().Format(time.RFC3339Nano))
 	}
@@ -428,27 +554,28 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 	}
 
 	if cursor.Phase == "pipelines" {
+		seek := newGitLabTestsSeek(cursor)
 		visit := func(page providerfoundation.PageVisit) error {
 			cursor.Pages++
 			pageNumber, _ := strconv.Atoi(page.CursorBefore)
-			// First-entry-only counting against the CUMULATIVE budget. This is
-			// the GitLab twin of the GitHub defect measured in CHAOS-4130: a
-			// continuation re-requests the page it stopped inside, and
-			// counting that re-visit shrank an N-page budget to N/visits-per-
-			// page real pages, cancelling every busy project. cursor.Page ==
-			// pageNumber is also true for a FRESH page entered at index 0, so
-			// cursor.Index > 0 is what identifies the re-entry.
-			if !(cursor.Page == pageNumber && cursor.Index > 0) {
+			// First-entry-only counting against the CUMULATIVE budget (the GitLab
+			// twin of CHAOS-4130): a page an earlier invocation already charged is
+			// free when it is visited again (gitLabTestsSeek).
+			charge, seekErr := seek.enter(pageNumber, page.Items)
+			if seekErr != nil {
+				return seekErr
+			}
+			if charge {
 				cursor.PipelinePages++
 			}
-			start := 0
-			if cursor.Page == pageNumber {
-				start = cursor.Index
-			}
-			if start > len(page.Items) {
-				return NewChunkStoreError(errGitLabTestsPageShrank)
-			}
-			for index := start; index < len(page.Items); index++ {
+			for index := 0; index < len(page.Items); index++ {
+				id, idErr := gitLabTestsListedPipelineID(page.Items[index])
+				if idErr != nil {
+					return idErr
+				}
+				if seek.seekID > 0 && id >= seek.seekID {
+					continue
+				}
 				before := cursor
 				payload, decodeErr := decodeGitLabTestsPipeline(page.Items[index])
 				if decodeErr != nil {
@@ -523,12 +650,12 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 					return effectErr
 				}
 				after := cursor
-				after.Page, after.Index = pageNumber, index+1
+				after.Page, after.Index, after.LastID = pageNumber, index+1, id
 				if after.Index >= len(page.Items) {
 					nextPage, _ := strconv.Atoi(page.CursorAfter)
 					after.Page, after.Index = nextPage, 0
 					if nextPage == 0 {
-						after.Phase = "reports"
+						after.Phase, after.LastID = "reports", 0
 					}
 				}
 				if err := emitCursor(before, after, CompleteRouteBatch{Effects: effects}, false); err != nil {
@@ -540,7 +667,7 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 				nextPage, _ := strconv.Atoi(page.CursorAfter)
 				cursor.Page, cursor.Index = nextPage, 0
 				if nextPage == 0 {
-					cursor.Phase = "reports"
+					cursor.Phase, cursor.LastID = "reports", 0
 				}
 			}
 			return nil
@@ -553,9 +680,7 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 		case budgetErr != nil:
 			return budgetErr
 		default:
-			collection, visitErr := providerfoundation.VisitGitLabPageParamPages(ctx, &counted, providerfoundation.GitLabPageOptions{
-				Path: root + "/pipelines", Route: gitlabPipelinesRoute, Query: query, PerPage: nativePerPage, MaxPages: allowance, InitialPage: cursor.Page,
-			}, visit)
+			collection, visitErr := visitGitLabTestsListing(ctx, &counted, claim, cursor.Repo, "pipelines", root, query, &seek, allowance, visit)
 			if visitErr != nil {
 				return visitErr
 			}
@@ -566,31 +691,36 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 		}
 	}
 	if cursor.Phase != "reports" {
-		cursor.Phase, cursor.Page, cursor.Index = "reports", 0, 0
+		cursor.Phase, cursor.Page, cursor.Index, cursor.LastID = "reports", 0, 0, 0
 	}
 
-	reportQuery := url.Values{"order_by": {"updated_at"}, "sort": {"desc"}}
+	reportQuery := url.Values{"order_by": {"id"}, "sort": {"desc"}}
 	if claim.SinceAt != nil {
 		reportQuery.Set("updated_after", claim.SinceAt.UTC().Format(time.RFC3339Nano))
 	}
 	if claim.BeforeAt != nil {
 		reportQuery.Set("updated_before", claim.BeforeAt.UTC().Format(time.RFC3339Nano))
 	}
+	reportSeek := newGitLabTestsSeek(cursor)
 	reportVisit := func(page providerfoundation.PageVisit) error {
 		cursor.Pages++
 		pageNumber, _ := strconv.Atoi(page.CursorBefore)
-		// First-entry-only counting, exactly as in the pipelines visit above.
-		if !(cursor.Page == pageNumber && cursor.Index > 0) {
+		// First-entry-only counting and the id seek, exactly as in the pipelines visit above.
+		charge, seekErr := reportSeek.enter(pageNumber, page.Items)
+		if seekErr != nil {
+			return seekErr
+		}
+		if charge {
 			cursor.ReportPages++
 		}
-		start := 0
-		if cursor.Page == pageNumber {
-			start = cursor.Index
-		}
-		if start > len(page.Items) {
-			return NewChunkStoreError(errGitLabTestsPageShrank)
-		}
-		for index := start; index < len(page.Items); index++ {
+		for index := 0; index < len(page.Items); index++ {
+			id, idErr := gitLabTestsListedPipelineID(page.Items[index])
+			if idErr != nil {
+				return idErr
+			}
+			if reportSeek.seekID > 0 && id >= reportSeek.seekID {
+				continue
+			}
 			before := cursor
 			selected, selectErr := selectGitLabTestsReportPipelines([]json.RawMessage{page.Items[index]}, maxPipelines, claim.BeforeAt)
 			if selectErr != nil {
@@ -766,7 +896,7 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 				return effectErr
 			}
 			after := cursor
-			after.Page, after.Index = pageNumber, index+1
+			after.Page, after.Index, after.LastID = pageNumber, index+1, id
 			if after.Index >= len(page.Items) {
 				nextPage, _ := strconv.Atoi(page.CursorAfter)
 				after.Page, after.Index = nextPage, 0
@@ -777,7 +907,7 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 				// last page re-walked the WHOLE reports phase and spent fresh
 				// budget on every lap (the GitLab twin of CHAOS-4130).
 				if nextPage == 0 {
-					after.Phase = "done"
+					after.Phase, after.LastID = "done", 0
 				}
 			}
 			if err := emitCursor(before, after, CompleteRouteBatch{Effects: effects}, false); err != nil {
@@ -789,7 +919,7 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 			nextPage, _ := strconv.Atoi(page.CursorAfter)
 			cursor.Page, cursor.Index = nextPage, 0
 			if nextPage == 0 {
-				cursor.Phase = "done"
+				cursor.Phase, cursor.LastID = "done", 0
 			}
 		}
 		return nil
@@ -802,9 +932,7 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 	case reportBudgetErr != nil:
 		return reportBudgetErr
 	default:
-		collection, visitErr := providerfoundation.VisitGitLabPageParamPages(ctx, &counted, providerfoundation.GitLabPageOptions{
-			Path: root + "/pipelines", Route: gitlabPipelinesRoute, Query: reportQuery, PerPage: nativePerPage, MaxPages: reportAllowance, InitialPage: cursor.Page,
-		}, reportVisit)
+		collection, visitErr := visitGitLabTestsListing(ctx, &counted, claim, cursor.Repo, "reports", root, reportQuery, &reportSeek, reportAllowance, reportVisit)
 		if visitErr != nil {
 			return visitErr
 		}
@@ -818,7 +946,3 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 }
 
 var _ ChunkedCompleteRouteHandler = GitLabTestsRouteHandler{}
-
-// errGitLabTestsPageShrank: the provider page is fetched again on retry and may
-// have grown back, so a saved cursor index past its end is not a settled state.
-var errGitLabTestsPageShrank = errors.New("gitlab tests page is shorter than the saved cursor index")

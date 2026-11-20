@@ -904,10 +904,11 @@ func (m *Metrics) RecordPreparedSnapshotDiscarded(provider, dataset, reason stri
 }
 
 // metricResumePhaseVocabulary is the closed set of paginated phases whose
-// resume cursor carries a positional index. An unknown phase collapses to
-// "other" so a route cannot open an unbounded label dimension (CHAOS-4177).
+// resume cursor can find its listing moved: github runs/artifacts, gitlab
+// pipelines/reports (CHAOS-14374). An unknown phase collapses to "other" so a
+// route cannot open an unbounded label dimension (CHAOS-4177).
 var metricResumePhaseVocabulary = map[string]struct{}{
-	"runs": {}, "artifacts": {},
+	"runs": {}, "artifacts": {}, "pipelines": {}, "reports": {},
 }
 
 // MetricResumePhaseLabel bounds the resume phase label.

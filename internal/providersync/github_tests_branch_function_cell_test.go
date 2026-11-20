@@ -48,8 +48,8 @@ func TestBranchFunctionCoveredIsKnownApartFromTheTotal(t *testing.T) {
 		{name: "lcov two FN, both FNDA, one hit", lcov: true, body: "SF:a.go\nFN:1,f\nFN:2,g\nFNDA:0,f\nFNDA:3,g\nend_of_record\n", brT: na, brC: na, fnT: 2, fnC: 1},
 		{name: "lcov FN start,end,name with FNDA", lcov: true, body: "SF:a.go\nFN:1,4,f\nFNDA:0,f\nend_of_record\n", brT: na, brC: na, fnT: 1, fnC: 0},
 		{name: "lcov FNF:2 with one FN and FNDA", lcov: true, body: "SF:a.go\nFNF:2\nFN:1,f\nFNDA:0,f\nend_of_record\n", brT: na, brC: na, fnT: 2, fnC: na},
-		{name: "lcov BRH:3 BRF:2", lcov: true, body: "SF:a.go\nBRF:2\nBRH:3\nend_of_record\n", refused: true},
-		{name: "lcov FNH:3 FNF:2", lcov: true, body: "SF:a.go\nFNF:2\nFNH:3\nend_of_record\n", refused: true},
+		{name: "lcov BRH:3 BRF:2", lcov: true, body: "SF:a.go\nBRF:2\nBRH:3\nend_of_record\n", brT: 2, brC: na, fnT: na, fnC: na},
+		{name: "lcov FNH:3 FNF:2", lcov: true, body: "SF:a.go\nFNF:2\nFNH:3\nend_of_record\n", brT: na, brC: na, fnT: 2, fnC: na},
 		{name: "lcov FNDA zero hits, no summary", lcov: true, body: "SF:a.go\nFN:1,f\nFNDA:0,f\nend_of_record\n", brT: na, brC: na, fnT: 1, fnC: 0},
 		{name: "lcov two files, one BRF:2 BRH:0, one no branch", lcov: true, body: "SF:a.go\nBRF:2\nBRH:0\nend_of_record\nSF:b.go\nLF:1\nend_of_record\n", brT: 2, brC: 0, fnT: na, fnC: na, brPct: true},
 		{name: "lcov BRF:2 BRH:0 file + BRF-only file", lcov: true, body: "SF:a.go\nBRF:2\nBRH:0\nend_of_record\nSF:b.go\nBRF:1\nend_of_record\n", brT: 3, brC: na, fnT: na, fnC: na},
@@ -59,10 +59,10 @@ func TestBranchFunctionCoveredIsKnownApartFromTheTotal(t *testing.T) {
 		{name: "cobertura branches-covered 0 only", body: cob(`branches-covered="0"`, ""), brT: na, brC: 0, fnT: na, fnC: na},
 		{name: "cobertura condition-coverage 0/2 only", body: cob(``, `<line number="1" hits="0" branch="true" condition-coverage="0% (0/2)"/>`), brT: 2, brC: 0, fnT: na, fnC: na, brPct: true},
 		{name: "cobertura valid 4 + one 0/2 detail", body: cob(`branches-valid="4"`, `<line number="1" hits="0" branch="true" condition-coverage="0% (0/2)"/>`), brT: 4, brC: na, fnT: na, fnC: na},
-		{name: "lcov BRH:2 BRF:1 file + sibling BRF:2 BRH:0", lcov: true, body: "SF:a.go\nBRF:1\nBRH:2\nend_of_record\nSF:b.go\nBRF:2\nBRH:0\nend_of_record\n", refused: true},
-		{name: "lcov BRH:2 BRF:1 file + sibling BRF:2 only", lcov: true, body: "SF:a.go\nBRF:1\nBRH:2\nend_of_record\nSF:b.go\nBRF:2\nend_of_record\n", refused: true},
-		{name: "lcov FNH:2 FNF:1 file + sibling FNF:2 FNH:0", lcov: true, body: "SF:a.go\nFNF:1\nFNH:2\nend_of_record\nSF:b.go\nFNF:2\nFNH:0\nend_of_record\n", refused: true},
-		{name: "lcov BRH:2 file with BRF:1 from two zero BRDA, sibling BRF:2 BRH:0", lcov: true, body: "SF:a.go\nBRDA:1,0,0,0\nBRH:2\nend_of_record\nSF:b.go\nBRF:2\nBRH:0\nend_of_record\n", refused: true},
+		{name: "lcov BRH:2 BRF:1 file + sibling BRF:2 BRH:0", lcov: true, body: "SF:a.go\nBRF:1\nBRH:2\nend_of_record\nSF:b.go\nBRF:2\nBRH:0\nend_of_record\n", brT: 3, brC: na, fnT: na, fnC: na},
+		{name: "lcov BRH:2 BRF:1 file + sibling BRF:2 only", lcov: true, body: "SF:a.go\nBRF:1\nBRH:2\nend_of_record\nSF:b.go\nBRF:2\nend_of_record\n", brT: 3, brC: na, fnT: na, fnC: na},
+		{name: "lcov FNH:2 FNF:1 file + sibling FNF:2 FNH:0", lcov: true, body: "SF:a.go\nFNF:1\nFNH:2\nend_of_record\nSF:b.go\nFNF:2\nFNH:0\nend_of_record\n", brT: na, brC: na, fnT: 3, fnC: na},
+		{name: "lcov BRH:2 file with BRF:1 from two zero BRDA, sibling BRF:2 BRH:0", lcov: true, body: "SF:a.go\nBRDA:1,0,0,0\nBRH:2\nend_of_record\nSF:b.go\nBRF:2\nBRH:0\nend_of_record\n", brT: 3, brC: na, fnT: na, fnC: na},
 		{name: "lcov BRH:1 only", lcov: true, body: "SF:a.go\nBRH:1\nend_of_record\n", brT: na, brC: 1, fnT: na, fnC: na},
 		{name: "lcov FNH:1 only", lcov: true, body: "SF:a.go\nFNH:1\nend_of_record\n", brT: na, brC: na, fnT: na, fnC: 1},
 		{name: "lcov BRF:2 BRH:0 file + BRH:1-only file", lcov: true, body: "SF:a.go\nBRF:2\nBRH:0\nend_of_record\nSF:b.go\nBRH:1\nend_of_record\n", brT: na, brC: 1, fnT: na, fnC: na},
@@ -77,6 +77,14 @@ func TestBranchFunctionCoveredIsKnownApartFromTheTotal(t *testing.T) {
 		{name: "cobertura known 0/2 beside a branch line with only a rate", body: cob(``, `<line number="1" hits="0" branch="true" condition-coverage="0% (0/2)"/><line number="2" hits="1" branch="true"/>`), brT: na, brC: na, fnT: na, fnC: na},
 		{name: "cobertura explicit 0/0 detail only", body: cob(``, `<line number="1" hits="1" branch="true" condition-coverage="100% (0/0)"/>`), brT: 0, brC: 0, fnT: na, fnC: na},
 		{name: "cobertura valid 4 + two 0/2 details", body: cob(`branches-valid="4"`, `<line number="1" hits="0" branch="true" condition-coverage="0% (0/2)"/><line number="2" hits="0" branch="true" condition-coverage="0% (0/2)"/>`), brT: 4, brC: 0, fnT: na, fnC: na, brPct: true},
+		{name: "lcov BRF:2 BRH:3 + valid sibling BRF:2 BRH:1", lcov: true, body: "SF:a.go\nBRF:2\nBRH:3\nend_of_record\nSF:b.go\nBRF:2\nBRH:1\nend_of_record\n", brT: 4, brC: na, fnT: na, fnC: na},
+		{name: "lcov BRF:2 BRH:3 + sibling BRF:5 only", lcov: true, body: "SF:a.go\nBRF:2\nBRH:3\nend_of_record\nSF:b.go\nBRF:5\nend_of_record\n", brT: 7, brC: na, fnT: na, fnC: na},
+		{name: "lcov FNF:2 FNH:3 + valid sibling FNF:2 FNH:1", lcov: true, body: "SF:a.go\nFNF:2\nFNH:3\nend_of_record\nSF:b.go\nFNF:2\nFNH:1\nend_of_record\n", brT: na, brC: na, fnT: 4, fnC: na},
+		{name: "lcov FNF:2 FNH:3 + sibling FNF:5 only", lcov: true, body: "SF:a.go\nFNF:2\nFNH:3\nend_of_record\nSF:b.go\nFNF:5\nend_of_record\n", brT: na, brC: na, fnT: 7, fnC: na},
+		{name: "lcov A BRF:1 BRH:1 + B BRH:3 only", lcov: true, body: "SF:a.go\nBRF:1\nBRH:1\nend_of_record\nSF:b.go\nBRH:3\nend_of_record\n", brT: na, brC: 4, fnT: na, fnC: na},
+		{name: "lcov A FNF:1 FNH:1 + B FNH:3 only", lcov: true, body: "SF:a.go\nFNF:1\nFNH:1\nend_of_record\nSF:b.go\nFNH:3\nend_of_record\n", brT: na, brC: na, fnT: na, fnC: 4},
+		{name: "lcov two valid files BRF:2 BRH:1 + BRF:3 BRH:3", lcov: true, body: "SF:a.go\nBRF:2\nBRH:1\nend_of_record\nSF:b.go\nBRF:3\nBRH:3\nend_of_record\n", brT: 5, brC: 4, fnT: na, fnC: na, brPct: true},
+		{name: "cobertura branches-covered 3 over branches-valid 2", body: cob(`branches-valid="2" branches-covered="3"`, ""), brT: 2, brC: na, fnT: na, fnC: na},
 		{name: "cobertura no branch data", body: cob(`lines-valid="1"`, ""), brT: na, brC: na, fnT: na, fnC: na},
 	}
 	for _, cell := range cells {
@@ -103,5 +111,33 @@ func TestBranchFunctionCoveredIsKnownApartFromTheTotal(t *testing.T) {
 		if got != want {
 			t.Errorf("CELL %s: stored %s, want %s", cell.name, got, want)
 		}
+	}
+}
+
+// Branch and function evidence never refuses a report (a refusal drops the lines too); the line rules still refuse an over-count.
+func TestBranchFunctionOverCountKeepsLinesAndLineRulesStillRefuse(t *testing.T) {
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	row, err := parseLCOVRow([]byte("SF:a.go\nLF:2\nLH:1\nBRF:2\nBRH:3\nFNF:2\nFNH:3\nend_of_record\n"), "c.info", "a", "r", "1", "o", now)
+	if err != nil {
+		t.Fatalf("over-counted branches and functions refused the whole report: %v", err)
+	}
+	if row.LinesTotal == nil || *row.LinesTotal != 2 || row.LinesCovered == nil || *row.LinesCovered != 1 {
+		t.Errorf("lines of the report were not stored: %v/%v", row.LinesTotal, row.LinesCovered)
+	}
+	if row.BranchesCovered != nil || row.BranchCoveragePct != nil || row.FunctionsCovered != nil || row.BranchesTotal == nil || *row.BranchesTotal != 2 {
+		t.Errorf("over-count must leave covered and pct NULL and keep the total: br %v/%v pct %v fn %v/%v", row.BranchesTotal, row.BranchesCovered, row.BranchCoveragePct, row.FunctionsTotal, row.FunctionsCovered)
+	}
+	for _, body := range []string{"SF:a.go\nLF:2\nLH:3\nend_of_record\n", "SF:a.go\nLH:3\nend_of_record\n"} {
+		if _, err := parseLCOVRow([]byte(body), "c.info", "a", "r", "1", "o", now); err == nil {
+			t.Errorf("line over-count accepted: %q", body)
+		}
+	}
+	cobertura := `<coverage lines-valid="2" lines-covered="1" branches-valid="2" branches-covered="3"><packages><package name="e"><classes><class filename="foo.go"><lines></lines></class></classes></package></packages></coverage>`
+	crow, err := parseCoberturaRow([]byte(cobertura), "c.xml", "a", "r", "1", "o", now)
+	if err != nil {
+		t.Fatalf("over-counted Cobertura branches refused the whole report: %v", err)
+	}
+	if crow.LinesCovered == nil || *crow.LinesCovered != 1 || crow.BranchesCovered != nil {
+		t.Errorf("cobertura: lines %v, branch covered %v, want 1 and NULL", crow.LinesCovered, crow.BranchesCovered)
 	}
 }

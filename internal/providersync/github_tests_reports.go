@@ -1092,12 +1092,11 @@ func (evidence coverageCountEvidence) resolve() (total, covered *int64) {
 
 // lcovCountAggregate sums the per-file resolved counts of one measure. The total is unknown as soon as one file has a covered
 // count and no total, the covered count as soon as one file has a total and no covered count. A file whose covered count exceeds
-// its own total makes the report invalid.
+// its own total (bad evidence) leaves the covered count of the report unknown; branch and function evidence never refuses a report.
 type lcovCountAggregate struct {
 	total, covered               int64
 	hasTotal, hasCovered         bool
 	totalUnknown, coveredUnknown bool
-	invalid                      bool
 }
 
 func (aggregate *lcovCountAggregate) add(total, covered *int64) {
@@ -1116,7 +1115,7 @@ func (aggregate *lcovCountAggregate) add(total, covered *int64) {
 		}
 	}
 	if total != nil && covered != nil && *covered > *total {
-		aggregate.invalid = true
+		aggregate.coveredUnknown = true
 	}
 }
 
@@ -1590,7 +1589,7 @@ func parseCoberturaRow(body []byte, reportPath, artifactID, repoID, runID, orgID
 		return coverageSnapshotRow{}, ErrGitHubTestsReportInvalid
 	}
 	if branchesCovered != nil && branchesTotal != nil && *branchesCovered > *branchesTotal {
-		return coverageSnapshotRow{}, ErrGitHubTestsReportInvalid
+		branchesCovered = nil
 	}
 	serviceCounts := map[string]int{}
 	serviceOrder := []string{}
@@ -2018,7 +2017,7 @@ func parseLCOVRow(body []byte, reportPath, artifactID, repoID, runID, orgID stri
 			serviceCounts[*service]++
 		}
 	}
-	if aggregateLinesCovered > aggregateLinesTotal || aggregateBranches.invalid || aggregateFunctions.invalid {
+	if aggregateLinesCovered > aggregateLinesTotal {
 		return coverageSnapshotRow{}, ErrGitHubTestsReportInvalid
 	}
 	var serviceID *string

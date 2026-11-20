@@ -355,25 +355,32 @@ func TestGitHubTestsLateRerunDeepRangeSkipsRunsAtOrAfterTheFloor(t *testing.T) {
 	claim := lateRerunClaim(time.Date(2026, 7, 4, 23, 0, 0, 0, time.UTC), time.Date(2026, 7, 5, 0, 0, 0, 0, time.UTC))
 	inWindow := listingRun{id: 9, created: time.Date(2026, 7, 4, 23, 10, 0, 0, time.UTC), status: "completed", conclusion: "success"}
 	inWindow.updated = inWindow.created.Add(20 * time.Minute)
+	// The seam: created after the artifacts floor (2026-07-03) but before the runs floor (since - 6 h), re-run in the window.
+	// The regular artifacts range lists it; the artifacts guard is the artifacts floor, not the runs floor.
+	seam := listingRun{id: 10, created: time.Date(2026, 7, 3, 12, 0, 0, 0, time.UTC), startedAt: time.Date(2026, 7, 4, 23, 5, 0, 0, time.UTC),
+		status: "completed", conclusion: "success"}
+	seam.updated = seam.startedAt.Add(20 * time.Minute)
 	t.Run("chunked", func(t *testing.T) {
-		fake, deep := newListingFake(t, []listingRun{inWindow}), 0
+		fake, deep := newListingFake(t, []listingRun{inWindow, seam}), 0
 		client := githubTestsClient(t, fakehttp.Client(lateRerunLooseDoer{listingFake: fake, deep: &deep}))
 		if err := (GitHubTestsRouteHandler{}).CollectChunks(context.Background(), claim, providerfoundation.Credential{}, client, time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC), "",
 			func(ChunkRouteEmission) error { return nil }); err != nil {
 			t.Fatal(err)
 		}
-		if deep != 1 || fake.artifactGets[inWindow.id] != 1 {
-			t.Errorf("deep listings=%d reads=%d, want one deep listing that answered the run and one read (regular range only)", deep, fake.artifactGets[inWindow.id])
+		if deep != 1 || fake.artifactGets[inWindow.id] != 1 || fake.artifactGets[seam.id] != 1 {
+			t.Errorf("deep listings=%d reads in window=%d seam=%d, want one deep listing that answered both runs and one read each (regular range only)",
+				deep, fake.artifactGets[inWindow.id], fake.artifactGets[seam.id])
 		}
 	})
 	t.Run("oracle", func(t *testing.T) {
-		fake, deep := newListingFake(t, []listingRun{inWindow}), 0
+		fake, deep := newListingFake(t, []listingRun{inWindow, seam}), 0
 		client := githubTestsClient(t, fakehttp.Client(lateRerunLooseDoer{listingFake: fake, deep: &deep}))
 		if _, err := (GitHubTestsRouteHandler{}).Collect(context.Background(), claim, providerfoundation.Credential{}, client, time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)); err != nil {
 			t.Fatal(err)
 		}
-		if deep != 1 || fake.artifactGets[inWindow.id] != 1 {
-			t.Errorf("deep listings=%d reads=%d, want one deep listing that answered the run and one read (regular range only)", deep, fake.artifactGets[inWindow.id])
+		if deep != 1 || fake.artifactGets[inWindow.id] != 1 || fake.artifactGets[seam.id] != 1 {
+			t.Errorf("deep listings=%d reads in window=%d seam=%d, want one deep listing that answered both runs and one read each (regular range only)",
+				deep, fake.artifactGets[inWindow.id], fake.artifactGets[seam.id])
 		}
 	})
 }

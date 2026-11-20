@@ -156,15 +156,17 @@ func workItemScopeFilter(orgID string, teamIDs []string, workScopeID *string) ([
 // org view is in the where of workItemScopeFilter). One team reads the team view of the organization (CHAOS-14376):
 // of the newest row of each view of a key, a live row first, then team, org, legacy (rowview.ServedTeamSource); a read
 // of each key's newest day takes the pick with no live-row rule after it (rowview.ServedTeamPick), so a retracted key
-// stays its key's newest row there, as in the org form (see measuredWorkItem). The source is aliased as the table.
+// stays its key's newest row there, as in the org form (see measuredWorkItem). Each view of a key takes its version by
+// workItemNewestOrder, the order of the org form, so both forms serve one version of a computed_at tie (CHAOS-14405).
+// The source is aliased as the table.
 func workItemSource(teamIDs []string, where string, newestDay bool) string {
 	switch {
 	case len(teamIDs) != 1:
 		return "work_item_metrics_daily"
 	case newestDay:
-		return rowview.ServedTeamPick("work_item_metrics_daily", where) + " AS work_item_metrics_daily"
+		return rowview.ServedTeamPick("work_item_metrics_daily", where, workItemNewestOrder) + " AS work_item_metrics_daily"
 	default:
-		return rowview.ServedTeamSource("work_item_metrics_daily", where) + " AS work_item_metrics_daily"
+		return rowview.ServedTeamSource("work_item_metrics_daily", where, workItemNewestOrder) + " AS work_item_metrics_daily"
 	}
 }
 

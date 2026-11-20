@@ -32,6 +32,7 @@ func TestDhoWorkersRunsTheSameVerbTree(t *testing.T) {
 		{"job-routes", "list"},
 		{"providersync", "retire-linear-pseudo-projects"},
 		{"sync-dispatch-outbox", "close-backlog"},
+		{"sync-runs", "cancel", "--run", "0b1f3b0a-6d0c-4f5e-9a55-1c2d3e4f5a6b"},
 		{"streams", "status"},
 		{"unknown-verb"},
 		{"workers", "status"},

@@ -373,9 +373,47 @@ worker_outbox_reconciler_terminal_deliveries_recovered_total
 
 An increase paired with a deployment is expected recovery. Repeated increases
 without a deployment indicate a worker group is still starting without the
-complete checked-in handler registry. Do not rewrite queue rows manually. Cancel the
-sync run only when the user intends to abandon the remaining work; cancellation
-is not a substitute for repairing a recoverable transport delivery.
+complete checked-in handler registry. Do not rewrite queue rows manually.
+
+### Cancel one unfinished sync run
+
+Cancel a sync run only when the user intends to abandon the remaining work.
+Cancellation is not a substitute for repairing a recoverable transport delivery.
+
+Run the verb from a `go-scheduler` or `go-reconciler` pod. Like every
+`dho workers` verb, it needs the coordinator DSN, and `go-ops` has none. Preview
+the run first, then cancel it:
+
+```bash
+dho workers sync-runs cancel --org <org-id> --run <sync-run-id> --dry-run
+dho workers sync-runs cancel --org <org-id> --run <sync-run-id> \
+  --reason <code> --correlation-id <id>
+```
+
+The verb runs the same terminal path the dispatcher uses for a run it cannot
+continue:
+
+- Every unfinished unit fails with `error_category` `cancelled`, and the run
+  closes as `failed`.
+- The run's reference discovery, dispatch outbox, backfill job and job run are
+  closed in the same transaction.
+- The verb cancels no River job: a queued provider-unit job of a cancelled unit
+  retries (attempts 1-4) and River discards it on attempt 5; it writes no domain
+  row. The output counts these jobs under `provider_unit_deliveries`.
+- Each cancelled unit with a queued job adds 1 discarded River job. Those
+  attempts count as `retry` and `discard` in `worker_job_attempts_total` for
+  kind `sync.provider_unit`, and a large cancel can fire the
+  `GoWorkerAttemptFailureRateHigh` alert (more than 10% of a kind's attempts
+  retry, discard or cancel for 10 minutes).
+
+The verb refuses a run in which a worker holds a live lease on a unit
+(`sync_run_running_unit`). Add `--allow-running` to cancel the run anyway; that
+worker then loses its lease and stops. Another organization's run reads as
+`sync_run_not_found`. If the run finishes on its own while the verb runs, the
+verb leaves the run as it finished and reports `already_terminal`. A second call
+on the same run reports `already_terminal`, changes no sync row, and writes its
+own audit row. To sync the window again, submit a new backfill with a new
+idempotency key or with none.
 
 ## Schedules
 

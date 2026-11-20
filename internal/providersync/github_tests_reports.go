@@ -1053,9 +1053,13 @@ type lcovFileMetrics struct {
 	coveredLineNumbers map[int64]struct{}
 	hitLineNumbers     map[int64]struct{}
 	branchRecords      map[string]int64
-	functionNames      map[string]struct{}
-	functionHits       map[string]int64
+	functionDecls      map[string]lcovFunctionDecl
+	functionHits       map[string][]int64
 }
+
+// lcovFunctionDecl is one FN record: name is the text after the first comma, alt the same text without a leading numeric end
+// line (the "FN:start,end,name" form); an FNDA record names a function by one of the two.
+type lcovFunctionDecl struct{ name, alt string }
 
 // coverageCountEvidence is what a report holds about one counted measure (branches or functions) of one file. The total and the
 // covered count are known apart; a record holds a hit count (hits true) or only names the item.
@@ -1086,11 +1090,14 @@ func (evidence coverageCountEvidence) resolve() (total, covered *int64) {
 	return total, covered
 }
 
-// lcovCountAggregate sums the per-file resolved counts of one measure. The covered count is unknown as soon as one file has a
-// total and no covered count.
+// lcovCountAggregate sums the per-file resolved counts of one measure. The total is unknown as soon as one file has a covered
+// count and no total, the covered count as soon as one file has a total and no covered count. A file whose covered count exceeds
+// its own total makes the report invalid.
 type lcovCountAggregate struct {
-	total, covered                int64
-	hasTotal, hasCovered, unknown bool
+	total, covered               int64
+	hasTotal, hasCovered         bool
+	totalUnknown, coveredUnknown bool
+	invalid                      bool
 }
 
 func (aggregate *lcovCountAggregate) add(total, covered *int64) {
@@ -1098,25 +1105,27 @@ func (aggregate *lcovCountAggregate) add(total, covered *int64) {
 		aggregate.hasTotal = true
 		aggregate.total += *total
 		if covered == nil {
-			aggregate.unknown = true
+			aggregate.coveredUnknown = true
 		}
 	}
 	if covered != nil {
 		aggregate.hasCovered = true
 		aggregate.covered += *covered
+		if total == nil {
+			aggregate.totalUnknown = true
+		}
+	}
+	if total != nil && covered != nil && *covered > *total {
+		aggregate.invalid = true
 	}
 }
 
 func (aggregate lcovCountAggregate) totalValue() *int64 {
-	return presentIf(aggregate.hasTotal, aggregate.total)
+	return presentIf(aggregate.hasTotal && !aggregate.totalUnknown, aggregate.total)
 }
 
 func (aggregate lcovCountAggregate) coveredValue() *int64 {
-	return presentIf(aggregate.hasCovered && !aggregate.unknown, aggregate.covered)
-}
-
-func (aggregate lcovCountAggregate) coveredExceedsTotal() bool {
-	return aggregate.hasCovered && aggregate.covered > aggregate.total
+	return presentIf(aggregate.hasCovered && !aggregate.coveredUnknown, aggregate.covered)
 }
 
 func (file lcovFileMetrics) branchEvidence() coverageCountEvidence {
@@ -1132,32 +1141,50 @@ func (file lcovFileMetrics) branchEvidence() coverageCountEvidence {
 	return evidence
 }
 
+// functionEvidence groups the FN declarations of a file by the name their FNDA records use. A group has hit evidence when it holds
+// exactly as many FNDA records as declarations; its covered count is then the number of positive records. Two functions of one
+// name keep their own declaration, so a name is never counted once for two functions.
 func (file lcovFileMetrics) functionEvidence() coverageCountEvidence {
-	evidence := coverageCountEvidence{summaryTotal: file.functionsTotal, summaryCovered: file.functionsCovered, detail: int64(len(file.functionNames))}
-	for name := range file.functionNames {
-		hits, ok := file.functionHits[name]
-		if ok {
-			evidence.detailHits++
+	evidence := coverageCountEvidence{summaryTotal: file.functionsTotal, summaryCovered: file.functionsCovered, detail: int64(len(file.functionDecls))}
+	declarations := map[string]int64{}
+	for _, decl := range file.functionDecls {
+		key := decl.name
+		if _, ok := file.functionHits[key]; !ok {
+			if _, altOK := file.functionHits[decl.alt]; altOK {
+				key = decl.alt
+			}
 		}
-		if ok && hits > 0 {
-			evidence.detailCovered++
+		declarations[key]++
+	}
+	for key, count := range declarations {
+		records := file.functionHits[key]
+		if int64(len(records)) != count {
+			continue
+		}
+		evidence.detailHits += count
+		for _, hits := range records {
+			if hits > 0 {
+				evidence.detailCovered++
+			}
 		}
 	}
 	return evidence
 }
 
-// lcovFunctionName is the name of an FN record value "line,name" or "start,end,name".
-func lcovFunctionName(value string) (string, bool) {
+// lcovFunctionDeclOf reads the value of an FN record ("line,name" or "start,end,name").
+func lcovFunctionDeclOf(value string) (lcovFunctionDecl, bool) {
 	_, name, found := strings.Cut(value, ",")
-	if !found {
-		return "", false
+	name = strings.TrimSpace(name)
+	if !found || name == "" {
+		return lcovFunctionDecl{}, false
 	}
+	decl := lcovFunctionDecl{name: name, alt: name}
 	if head, rest, again := strings.Cut(name, ","); again {
-		if _, err := strconv.ParseUint(strings.TrimSpace(head), 10, 64); err == nil {
-			name = rest
+		if _, err := strconv.ParseUint(strings.TrimSpace(head), 10, 64); err == nil && strings.TrimSpace(rest) != "" {
+			decl.alt = strings.TrimSpace(rest)
 		}
 	}
-	return strings.TrimSpace(name), true
+	return decl, true
 }
 
 type junitDocument struct {
@@ -1447,6 +1474,7 @@ type coberturaClass struct {
 type coberturaLine struct {
 	Hits              string `xml:"hits,attr"`
 	ConditionCoverage string `xml:"condition-coverage,attr"`
+	Branch            string `xml:"branch,attr"`
 }
 
 func parseGitHubCoverageRow(body []byte, reportPath, artifactID, repoID, runID, orgID string, normalizedAt time.Time) (coverageSnapshotRow, error) {
@@ -1476,6 +1504,7 @@ func parseCoberturaRow(body []byte, reportPath, artifactID, repoID, runID, orgID
 		path                                                     string
 		linesTotal, linesCovered, branchesTotal, branchesCovered int64
 		linesWithHits                                            int64
+		branchPairs, branchMissing                               int64
 	}
 	files := make([]metrics, 0, len(document.Classes))
 	positions := map[string]int{}
@@ -1493,9 +1522,15 @@ func parseCoberturaRow(body []byte, reportPath, artifactID, repoID, runID, orgID
 			if hits != nil && *hits > 0 {
 				current.linesCovered++
 			}
-			total, covered := coberturaConditionCounts(line.ConditionCoverage)
-			current.branchesTotal += total
-			current.branchesCovered += covered
+			total, covered, ok := coberturaConditionPair(line.ConditionCoverage)
+			switch {
+			case ok:
+				current.branchPairs++
+				current.branchesTotal += total
+				current.branchesCovered += covered
+			case line.Branch == "true" || strings.TrimSpace(line.ConditionCoverage) != "":
+				current.branchMissing++
+			}
 		}
 		if index, ok := positions[current.path]; ok {
 			files[index] = current
@@ -1533,16 +1568,23 @@ func parseCoberturaRow(body []byte, reportPath, artifactID, repoID, runID, orgID
 		}
 	}
 	{
-		var detailTotal, detailCovered int64
+		var detailTotal, detailCovered, pairs, missing int64
 		for _, file := range files {
 			detailTotal += file.branchesTotal
 			detailCovered += file.branchesCovered
+			pairs += file.branchPairs
+			missing += file.branchMissing
 		}
-		// Every condition-coverage record holds its own covered count, so the detail is hit evidence for every counted branch.
-		branchesTotal, branchesCovered = coverageCountEvidence{
-			summaryTotal: branchesTotal, summaryCovered: branchesCovered,
-			detail: detailTotal, detailHits: detailTotal, detailCovered: detailCovered,
-		}.resolve()
+		evidence := coverageCountEvidence{summaryTotal: branchesTotal, summaryCovered: branchesCovered}
+		// Every condition-coverage pair holds its own covered count, so the pairs are hit evidence for every counted branch, but a
+		// branch line without a pair makes the detail partial: it then gives neither a total nor a covered count.
+		if missing == 0 && pairs > 0 {
+			evidence.detail, evidence.detailHits, evidence.detailCovered = detailTotal, detailTotal, detailCovered
+			if branchesTotal == nil {
+				evidence.summaryTotal = &detailTotal
+			}
+		}
+		branchesTotal, branchesCovered = evidence.resolve()
 	}
 	if linesCovered != nil && linesTotal != nil && *linesCovered > *linesTotal {
 		return coverageSnapshotRow{}, ErrGitHubTestsReportInvalid
@@ -1577,21 +1619,27 @@ func parseCoberturaRow(body []byte, reportPath, artifactID, repoID, runID, orgID
 }
 
 func coberturaConditionCounts(value string) (int64, int64) {
+	total, covered, _ := coberturaConditionPair(value)
+	return total, covered
+}
+
+// coberturaConditionPair reads a condition-coverage value "50% (1/2)"; ok is false when the value holds no such pair.
+func coberturaConditionPair(value string) (int64, int64, bool) {
 	start := strings.Index(value, "(")
 	slash := strings.Index(value, "/")
 	if start < 0 || slash < start {
-		return 0, 0
+		return 0, 0, false
 	}
 	end := strings.Index(value[slash:], ")")
 	if end < 0 {
-		return 0, 0
+		return 0, 0, false
 	}
 	covered := parseOptionalInt64(value[start+1 : slash])
 	total := parseOptionalInt64(value[slash+1 : slash+end])
 	if covered == nil || total == nil {
-		return 0, 0
+		return 0, 0, false
 	}
-	return *total, *covered
+	return *total, *covered, true
 }
 
 func readZipReport(member *zip.File) ([]byte, error) {
@@ -1834,8 +1882,8 @@ func parseLCOVRow(body []byte, reportPath, artifactID, repoID, runID, orgID stri
 	coveredLineNumbers := map[int64]struct{}{}
 	hitLineNumbers := map[int64]struct{}{}
 	branchRecords := map[string]int64{}
-	functionNames := map[string]struct{}{}
-	functionHits := map[string]int64{}
+	functionDecls := map[string]lcovFunctionDecl{}
+	functionHits := map[string][]int64{}
 	files := make([]lcovFileMetrics, 0)
 	flush := func() {
 		if currentPath == nil {
@@ -1846,7 +1894,7 @@ func parseLCOVRow(body []byte, reportPath, artifactID, repoID, runID, orgID stri
 			branchesTotal: branchesTotal, branchesCovered: branchesCovered,
 			functionsTotal: functionsTotal, functionsCovered: functionsCovered,
 			lineNumbers: lineNumbers, coveredLineNumbers: coveredLineNumbers, hitLineNumbers: hitLineNumbers,
-			branchRecords: branchRecords, functionNames: functionNames, functionHits: functionHits,
+			branchRecords: branchRecords, functionDecls: functionDecls, functionHits: functionHits,
 		})
 		currentPath = nil
 		linesTotal, linesCovered = nil, nil
@@ -1856,8 +1904,8 @@ func parseLCOVRow(body []byte, reportPath, artifactID, repoID, runID, orgID stri
 		coveredLineNumbers = map[int64]struct{}{}
 		hitLineNumbers = map[int64]struct{}{}
 		branchRecords = map[string]int64{}
-		functionNames = map[string]struct{}{}
-		functionHits = map[string]int64{}
+		functionDecls = map[string]lcovFunctionDecl{}
+		functionHits = map[string][]int64{}
 	}
 	for _, raw := range strings.Split(string(body), "\n") {
 		line := strings.TrimSpace(raw)
@@ -1905,8 +1953,8 @@ func parseLCOVRow(body []byte, reportPath, artifactID, repoID, runID, orgID stri
 			}
 			branchRecords[strings.TrimSpace(parts[0])+","+strings.TrimSpace(parts[1])+","+strings.TrimSpace(parts[2])] = hits
 		case "FN":
-			if name, ok := lcovFunctionName(value); ok && name != "" {
-				functionNames[name] = struct{}{}
+			if decl, ok := lcovFunctionDeclOf(value); ok {
+				functionDecls[strings.TrimSpace(value)] = decl
 			}
 		case "FNDA":
 			hitsText, name, ok := strings.Cut(value, ",")
@@ -1914,7 +1962,7 @@ func parseLCOVRow(body []byte, reportPath, artifactID, repoID, runID, orgID stri
 				continue
 			}
 			if hits, err := strconv.ParseInt(strings.TrimSpace(hitsText), 10, 64); err == nil && hits >= 0 {
-				functionHits[strings.TrimSpace(name)] = hits
+				functionHits[strings.TrimSpace(name)] = append(functionHits[strings.TrimSpace(name)], hits)
 			}
 		case "LF":
 			linesTotal = parseOptionalInt64(value)
@@ -1970,7 +2018,7 @@ func parseLCOVRow(body []byte, reportPath, artifactID, repoID, runID, orgID stri
 			serviceCounts[*service]++
 		}
 	}
-	if aggregateLinesCovered > aggregateLinesTotal || aggregateBranches.coveredExceedsTotal() || aggregateFunctions.coveredExceedsTotal() {
+	if aggregateLinesCovered > aggregateLinesTotal || aggregateBranches.invalid || aggregateFunctions.invalid {
 		return coverageSnapshotRow{}, ErrGitHubTestsReportInvalid
 	}
 	var serviceID *string

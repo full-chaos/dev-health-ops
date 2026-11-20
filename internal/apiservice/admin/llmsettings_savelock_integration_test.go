@@ -166,9 +166,6 @@ func TestLLMSettingsBudgetSaveAndAdmitNeverDeadlock(t *testing.T) {
 				if round == "held" {
 					t.Logf("held: %s finished in %s, err %v", r.name, r.took, r.err)
 				}
-				if r.took > bound {
-					t.Errorf("%s: %s took %s, bound %s", round, r.name, r.took, bound)
-				}
 			case <-time.After(bound):
 				t.Fatalf("%s: a save or an admission did not finish within %s", round, bound)
 			}

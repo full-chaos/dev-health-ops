@@ -171,10 +171,33 @@ type censusFunc struct {
 	decl    *ast.FuncDecl
 	dir     string
 	imports map[string]string
+	// file is the parsed file of the declaration (its scope binds the file's top-level names).
+	file *ast.File
+	// init is the initializer of a package-level variable, walked as a body (decl is nil then); name is the variable.
+	init ast.Expr
+	name string
+}
+
+// body is the node the walk reads: the function body, or the variable's initializer.
+func (fn censusFunc) body() ast.Node {
+	if fn.decl != nil {
+		return fn.decl.Body
+	}
+	return fn.init
+}
+
+// key names the function or the variable for the memo and the refusals.
+func (fn censusFunc) key() string {
+	if fn.decl != nil {
+		return censusFuncKey(fn.decl)
+	}
+	return "var " + fn.name
 }
 
 type censusPackage struct {
 	strings map[string]string
+	// varInits are the package-level variables with an initializer, walked like a function when a read names them.
+	varInits map[string]censusFunc
 	// consts are the package-level constants whose value is one string literal.
 	consts  map[string]string
 	funcs   map[string]censusFunc
@@ -212,7 +235,7 @@ func (loader *rootCensusLoader) pkg(dir string) *censusPackage {
 	if pkg, ok := loader.packages[dir]; ok {
 		return pkg
 	}
-	pkg := &censusPackage{strings: map[string]string{}, consts: map[string]string{}, funcs: map[string]censusFunc{}, methods: map[string][]censusFunc{}}
+	pkg := &censusPackage{strings: map[string]string{}, varInits: map[string]censusFunc{}, consts: map[string]string{}, funcs: map[string]censusFunc{}, methods: map[string][]censusFunc{}}
 	loader.packages[dir] = pkg
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -245,7 +268,7 @@ func (loader *rootCensusLoader) pkg(dir string) *censusPackage {
 				if decl.Body == nil {
 					continue
 				}
-				fn := censusFunc{decl: decl, dir: dir, imports: imports}
+				fn := censusFunc{decl: decl, dir: dir, imports: imports, file: file}
 				if decl.Recv != nil {
 					pkg.methods[decl.Name.Name] = append(pkg.methods[decl.Name.Name], fn)
 				} else {
@@ -257,6 +280,9 @@ func (loader *rootCensusLoader) pkg(dir string) *censusPackage {
 						for index, ident := range values.Names {
 							if index < len(values.Values) {
 								pkg.strings[ident.Name] = censusLiterals(values.Values[index])
+								if decl.Tok == token.VAR {
+									pkg.varInits[ident.Name] = censusFunc{dir: dir, imports: imports, file: file, init: values.Values[index], name: ident.Name}
+								}
 								if lit, isLit := values.Values[index].(*ast.BasicLit); isLit && decl.Tok == token.CONST && lit.Kind == token.STRING {
 									if value, err := strconv.Unquote(lit.Value); err == nil {
 										pkg.consts[ident.Name] = value
@@ -279,7 +305,7 @@ func (loader *rootCensusLoader) pkg(dir string) *censusPackage {
 // function's own package and in each package its file imports. The marker
 // dynamicMarker stands for a table named at run time.
 func (loader *rootCensusLoader) reads(fn censusFunc) map[string]bool {
-	key := fn.dir + "." + censusFuncKey(fn.decl)
+	key := fn.dir + "." + fn.key()
 	if reads, ok := loader.memo[key]; ok {
 		return reads
 	}
@@ -298,22 +324,32 @@ func (loader *rootCensusLoader) reads(fn censusFunc) map[string]bool {
 			reads[name] = true
 		}
 	}
-	addText(censusLiterals(fn.decl.Body))
+	addText(censusLiterals(fn.body()))
 	pkg := loader.pkg(fn.dir)
 	selected := map[*ast.Ident]bool{}
-	ast.Inspect(fn.decl.Body, func(n ast.Node) bool {
+	called := map[*ast.SelectorExpr]bool{}
+	ast.Inspect(fn.body(), func(n ast.Node) bool {
 		switch node := n.(type) {
 		case *ast.CallExpr:
+			if selector, isSelector := ast.Unparen(node.Fun).(*ast.SelectorExpr); isSelector {
+				called[selector] = true
+			}
 			if table, served, ok := loader.servedTeamViewRead(fn, pkg, node); served && ok {
 				reads[table] = true
 			}
 		case *ast.SelectorExpr:
-			if x, isIdent := node.X.(*ast.Ident); isIdent {
+			if loader.servedTeamViewHelper(fn, node) && !called[node] {
+				loader.refused = append(loader.refused, fn.dir+"."+fn.key()+": rowview."+node.Sel.Name+": call the helper directly")
+			}
+			if x, isIdent := node.X.(*ast.Ident); isIdent && x.Obj == nil {
 				if dir, imported := fn.imports[x.Name]; imported {
 					other := loader.pkg(dir)
 					addText(other.strings[node.Sel.Name])
 					if callee, ok := other.funcs[node.Sel.Name]; ok {
 						addCall(callee)
+					}
+					if init, ok := other.varInits[node.Sel.Name]; ok {
+						addCall(init)
 					}
 					return false
 				}
@@ -335,6 +371,9 @@ func (loader *rootCensusLoader) reads(fn censusFunc) map[string]bool {
 			if callee, ok := pkg.funcs[node.Name]; ok {
 				addCall(callee)
 			}
+			if init, ok := pkg.varInits[node.Name]; ok && packageLevel(fn, node) {
+				addCall(init)
+			}
 		}
 		return true
 	})
@@ -347,18 +386,36 @@ var servedTeamViewHelpers = map[string]bool{"ServedTeamSource": true, "ServedTea
 
 const rowviewPackagePath = "internal/queryapi/rowview"
 
-// servedTeamViewRead reads a call of a served team view helper, a selector on the file's import of package rowview, as
-// a read of its table, the same as a FROM: served is true for such a call, and ok when the table argument is a string
-// literal or an identifier of a string constant declared at package level in the calling function's own package. Any
-// other argument form fails closed (the census refuses it). A renamed import is read (the import map holds the file's
-// name of the package); a dot import is NOT pinned (ticket 14348).
-func (loader *rootCensusLoader) servedTeamViewRead(fn censusFunc, pkg *censusPackage, call *ast.CallExpr) (table string, served, ok bool) {
-	selector, isSelector := call.Fun.(*ast.SelectorExpr)
-	if !isSelector || !servedTeamViewHelpers[selector.Sel.Name] {
-		return "", false, false
+// servedTeamViewHelper reports whether selector is rowview.ServedTeamSource or rowview.ServedTeamPick: a selector whose
+// X is an identifier bound to no local or parameter (Obj nil: the file's import name) of the file's import of package
+// rowview. A value named like the import (a local, a parameter, a receiver) is not the import.
+func (loader *rootCensusLoader) servedTeamViewHelper(fn censusFunc, selector *ast.SelectorExpr) bool {
+	if !servedTeamViewHelpers[selector.Sel.Name] {
+		return false
 	}
 	x, isIdent := selector.X.(*ast.Ident)
-	if !isIdent || fn.imports[x.Name] != filepath.Join(loader.root, filepath.FromSlash(rowviewPackagePath)) {
+	return isIdent && x.Obj == nil && fn.imports[x.Name] == filepath.Join(loader.root, filepath.FromSlash(rowviewPackagePath))
+}
+
+// packageLevel reports whether ident names a declaration at the top level of its package: unresolved in the file (a
+// name of another file of the package), or bound to the file's own top-level object.
+func packageLevel(fn censusFunc, ident *ast.Ident) bool {
+	if ident.Obj == nil {
+		return true
+	}
+	return fn.file != nil && fn.file.Scope != nil && fn.file.Scope.Lookup(ident.Name) == ident.Obj
+}
+
+// servedTeamViewRead reads a call of a served team view helper (the callee unwrapped from its parentheses; see
+// servedTeamViewHelper) as a read of its table, the same as a FROM: served is true for such a call, and ok when the
+// table argument is a string literal or an identifier bound to a string constant declared at the top level of the
+// calling function's own package (resolved through ident.Obj: a local or a parameter of the same name is not the
+// constant). Any other argument form fails closed (the census refuses it). A renamed import is read (the import map
+// holds the file's name of the package); a dot import is NOT pinned (ticket 14348), and neither is a constant whose
+// value is another constant or an expression (it is refused, the safe direction).
+func (loader *rootCensusLoader) servedTeamViewRead(fn censusFunc, pkg *censusPackage, call *ast.CallExpr) (table string, served, ok bool) {
+	selector, isSelector := ast.Unparen(call.Fun).(*ast.SelectorExpr)
+	if !isSelector || !loader.servedTeamViewHelper(fn, selector) {
 		return "", false, false
 	}
 	if len(call.Args) > 0 {
@@ -370,12 +427,12 @@ func (loader *rootCensusLoader) servedTeamViewRead(fn censusFunc, pkg *censusPac
 				}
 			}
 		case *ast.Ident:
-			if value, isConst := pkg.consts[arg.Name]; isConst {
+			if value, isConst := pkg.consts[arg.Name]; isConst && packageLevel(fn, arg) {
 				return strings.ToLower(value), true, true
 			}
 		}
 	}
-	loader.refused = append(loader.refused, fn.dir+"."+censusFuncKey(fn.decl)+": rowview."+selector.Sel.Name+
+	loader.refused = append(loader.refused, fn.dir+"."+fn.key()+": rowview."+selector.Sel.Name+
 		": use a literal or same-package const table name")
 	return "", true, false
 }

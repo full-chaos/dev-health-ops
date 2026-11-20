@@ -1050,6 +1050,10 @@ func validateProviderFamilyExecutionClaim(claim providersync.Claim) error {
 	return nil
 }
 
+// lifecycleResultUnitClosed is the sync_provider_unit_finished result of a job whose unit an
+// operator cancel closed: the job completes without work.
+const lifecycleResultUnitClosed = "unit_closed"
+
 func (handler *Handler) Work(
 	ctx context.Context,
 	execution *jobruntime.Execution[jobruntime.ProviderUnitArgs],
@@ -1072,6 +1076,16 @@ func (handler *Handler) Work(
 		LeaseDuration:        handler.LeaseDuration,
 		AllowExpiredRecovery: true,
 	})
+	var closed *providersync.UnitClosedError
+	if errors.As(err, &closed) {
+		// The job's work went with the operator cancel: complete it now, not after four retries
+		// and a River discard.
+		handler.logLifecycleWith(ctx, execution, providersync.Claim{Unit: providersync.Unit{
+			ID: execution.Args.Payload.UnitID, SyncRunID: closed.SyncRunID,
+			Provider: closed.Provider, Dataset: closed.Dataset, Mode: closed.Mode,
+		}}, "sync_provider_unit_finished", lifecycleResultUnitClosed, nil, "closed_by", closed.Category)
+		return nil
+	}
 	if err != nil {
 		// claim carries nothing yet (Claim failed), so the cause is built from
 		// the classification alone. Both arms get one: a unit that is never

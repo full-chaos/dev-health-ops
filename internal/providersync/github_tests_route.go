@@ -407,18 +407,6 @@ func (handler GitHubTestsRouteHandler) Collect(
 		if err != nil {
 			return CompleteRouteBatch{}, err
 		}
-		// The two ranges are disjoint on GitHub; a run both answered is read once.
-		listed := make(map[string]struct{}, len(runItems))
-		for _, raw := range runItems {
-			if run, decodeErr := decodeGitHubWorkflowRunListItem(raw); decodeErr == nil {
-				listed[run.ID.String()] = struct{}{}
-			}
-		}
-		lateItems = slices.DeleteFunc(lateItems, func(raw json.RawMessage) bool {
-			run, decodeErr := decodeGitHubWorkflowRunListItem(raw)
-			_, seen := listed[run.ID.String()]
-			return decodeErr == nil && seen
-		})
 	}
 	artifactRunItems, artifactListPages, artifactsOver, err := collectGitHubTestsRunsPeeled(ctx, client, root, runPages, func(hi string) url.Values {
 		return githubTestsArtifactRunQueryAt(claim, hi)

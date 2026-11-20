@@ -2,8 +2,11 @@ package providersync
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -455,32 +458,299 @@ func TestLateRerunRunsPageBudgetBounds(t *testing.T) {
 	}
 }
 
-// The oracle reads a run once when both of its ranges answer it (GitHub never does; a fake that ignores created does): one
-// pipeline row and one jobs read, so the batch holds no duplicate key.
-func TestLateRerunRunsOracleReadsARunOnce(t *testing.T) {
+// lateRerunBudgetAPI serves the deep range of a midnight claim from count runs, one every step from oldest (100 a page,
+// GitHub's 1,000-result cap per created search, stable unique seconds). Only the oldest run (id 1) changed late: attempt 2.
+// Every other listing goes to the listing fake.
+type lateRerunBudgetAPI struct {
+	*listingFake
+	oldest time.Time
+	count  int
+	step   time.Duration
+}
+
+func (api *lateRerunBudgetAPI) Do(request *http.Request) (*http.Response, error) {
+	if request.URL.Path != "/repos/acme/api/actions/runs" {
+		return api.listingFake.Do(request)
+	}
+	query := request.URL.Query()
+	lo, hi, ok := strings.Cut(query.Get("created"), "..")
+	first, _ := listingTime(lo, false)
+	last, _ := listingTime(hi, true)
+	if !ok || first.After(api.oldest) || last.Before(api.oldest) {
+		return api.listingFake.Do(request)
+	}
+	api.listingFake.mu.Lock()
+	api.listingFake.listRanges = append(api.listingFake.listRanges, query.Get("created"))
+	api.listingFake.mu.Unlock()
+	newest := min(api.count, int(last.Sub(api.oldest)/api.step)+1)
+	total := min(githubTestsSearchResultCap, newest)
+	page := max(1, func() int { value, _ := strconv.Atoi(query.Get("page")); return value }())
+	from, to := min((page-1)*100, total), min(page*100, total)
+	header := http.Header{"Content-Type": {"application/json"}}
+	if to < total {
+		next := *request.URL
+		query.Set("page", strconv.Itoa(page+1))
+		next.RawQuery = query.Encode()
+		header.Set("Link", "<"+next.String()+">; rel=\"next\"")
+	}
+	items := make([]string, 0, to-from)
+	for index := from; index < to; index++ {
+		id := newest - index
+		created := api.oldest.Add(time.Duration(id-1) * api.step)
+		run := listingRun{id: id, created: created, updated: created.Add(time.Minute), status: "completed", conclusion: "failure"}
+		if id == 1 {
+			run.updated = api.oldest.Add(6*24*time.Hour + 30*time.Minute)
+			run.startedAt, run.attempt, run.conclusion = run.updated.Add(-time.Hour), 2, "success"
+		}
+		items = append(items, run.json())
+	}
+	return api.respond(request, header, `{"workflow_runs":[`+strings.Join(items, ",")+`]}`, 200), nil
+}
+
+// lateRerunYieldWalk drives CollectChunks and yields (a continuation) after the chunks yieldAt picks, from the real cursors.
+func lateRerunYieldWalk(t *testing.T, handler GitHubTestsRouteHandler, claim Claim, doer providerfoundation.HTTPDoer, yieldAt func(chunk int, after githubTestsChunkCursor) bool) listingWalk {
+	t.Helper()
+	client := githubTestsClient(t, fakehttp.Client(doer))
+	stop := errors.New("yield")
+	walk, resume := listingWalk{}, ""
+	for pass := 1; ; pass++ {
+		if pass > 100000 {
+			t.Fatal("the walk never reached a final emission")
+		}
+		err := handler.CollectChunks(context.Background(), claim, providerfoundation.Credential{}, client, claim.BeforeAt.Add(time.Hour), resume,
+			func(emission ChunkRouteEmission) error {
+				resume = emission.CursorAfter
+				for _, effect := range emission.Batch.Effects {
+					if effect.Destination == "ci_pipeline_runs" {
+						rows, decodeErr := decodeEffectRows[githubTestsPipelineRow](effect)
+						if decodeErr != nil {
+							t.Fatal(decodeErr)
+						}
+						walk.pipelines = append(walk.pipelines, rows...)
+					}
+				}
+				after, decodeErr := decodeGitHubTestsChunkCursor(resume)
+				if decodeErr != nil {
+					t.Fatal(decodeErr)
+				}
+				if emission.Final {
+					walk.final, walk.cursor = emission.Batch, after
+					return nil
+				}
+				walk.chunks++
+				if yieldAt(walk.chunks, after) {
+					return stop
+				}
+				return nil
+			})
+		if err == nil {
+			walk.passes = pass
+			return walk
+		}
+		if !errors.Is(err, stop) {
+			t.Fatal(err)
+		}
+	}
+}
+
+// A page is charged when the walk enters it; a resume inside a page re-fetches it for free, and a checkpointed page
+// always finishes. A deep range with exactly its budget of pages, resumed inside a page, writes the late re-run and
+// records no observation; so does the production shape: 99,900 runs, the 1,000-page default and the default chunk size.
+func TestLateRerunRunsResumeInsideAPageCostsNoPage(t *testing.T) {
 	claim := lateRerunMidnightClaim("incremental")
-	run := lateRerunRuns(1, 1, claim.SinceAt.UTC())[0]
-	run.created = claim.SinceAt.Add(-time.Hour)
-	run.startedAt, run.updated = claim.SinceAt.Add(6*time.Hour), claim.SinceAt.Add(7*time.Hour)
-	jobs := 0
+	for _, cell := range []struct {
+		name            string
+		budget, count   int
+		resumeAt        int
+		periodic, heavy bool
+	}{
+		{"fresh at the limit", 2, 150, 0, false, false},
+		{"resume inside the next-to-last page", 2, 150, 64, false, false},
+		{"resume inside the last page", 2, 180, 128, false, false},
+		{"resume at a page boundary", 2, 150, 100, false, false},
+		{"99,900 runs, default budget and chunk size", 0, 99900, DefaultChunkPolicy().MaxChunksPerAttempt, true, true},
+		{"99,900 runs, resume inside page 1,000", 0, 99900, 99964, false, true},
+	} {
+		oldest, step := claim.SinceAt.Add(-72*time.Hour), time.Second
+		if cell.heavy {
+			oldest, step = claim.SinceAt.Add(-7*24*time.Hour), 4*time.Second
+		}
+		api := &lateRerunBudgetAPI{listingFake: newListingFake(t, nil), oldest: oldest, count: cell.count, step: step}
+		walk := lateRerunYieldWalk(t, GitHubTestsRouteHandler{LateRerunMaxPages: cell.budget}, claim, api, func(chunk int, after githubTestsChunkCursor) bool {
+			return after.LateRuns && cell.resumeAt > 0 && (chunk == cell.resumeAt || cell.periodic && chunk%cell.resumeAt == 0)
+		})
+		incomplete := lateRerunIncomplete(t, walk)
+		if len(walk.pipelines) != 1 || walk.pipelines[0].RetryCount != 1 || len(incomplete) != 0 || walk.final.Watermark == nil {
+			t.Errorf("%s: rows=%d incomplete=%v watermark=%v deep pages=%d, want the late re-run, no observation, the window end",
+				cell.name, len(walk.pipelines), incomplete, walk.final.Watermark, walk.cursor.LateRunPages)
+		}
+	}
+}
+
+// The runs range has the same rule: a window of exactly its page budget, resumed inside a page, is walked whole.
+func TestRunsRangeResumeInsideAPageCostsNoPage(t *testing.T) {
+	since := time.Date(2026, 7, 20, 1, 0, 0, 0, time.UTC)
+	claim := listingClaim(since, since.Add(time.Hour))
+	claim.Mode = "incremental"
+	runs := makeListingRuns(1, 150, since.Add(time.Minute), 10*time.Second)
+	walk := lateRerunYieldWalk(t, GitHubTestsRouteHandler{MaxRuns: 200}, claim, newListingFake(t, runs), func(chunk int, after githubTestsChunkCursor) bool {
+		return after.Phase == githubTestsRunsPhase && chunk == 64
+	})
+	if len(walk.pipelineIDs()) != 150 || len(lateRerunIncomplete(t, walk)) != 0 || walk.cursor.RunPages != 2 {
+		t.Fatalf("rows=%d incomplete=%v run pages=%d, want 150 runs, no observation, 2 pages", len(walk.pipelineIDs()), lateRerunIncomplete(t, walk), walk.cursor.RunPages)
+	}
+}
+
+// A deep range that peels at GitHub's cap reads the runs of the cut second once (the runs listing's cut-second dedupe):
+// one jobs read and one pipeline row per run, as many rows as the oracle writes.
+func TestLateRerunRunsPeelReadsTheCutSecondOnce(t *testing.T) {
+	claim := lateRerunMidnightClaim("incremental")
+	for _, cell := range []struct {
+		name   string
+		count  int
+		tie    bool
+		chunks int
+	}{
+		{"one run at the cut", 1000, false, 0},
+		{"two runs share the cut second", 1001, true, 0},
+		{"two runs share the cut second, resumed", 1001, true, 64},
+	} {
+		runs := lateRerunRuns(1, cell.count, claim.SinceAt.UTC())
+		if cell.tie {
+			runs[1].created = runs[0].created
+		}
+		fake := newListingFake(t, runs)
+		walk := walkListing(t, GitHubTestsRouteHandler{}, claim, fake, cell.chunks)
+		batch, err := GitHubTestsRouteHandler{}.Collect(context.Background(), claim, providerfoundation.Credential{},
+			githubTestsClient(t, fakehttp.Client(newListingFake(t, runs))), claim.BeforeAt.Add(time.Hour))
+		if err != nil {
+			t.Fatal(err)
+		}
+		oracle := 0
+		for _, effect := range batch.Effects {
+			if effect.Destination == "ci_pipeline_runs" {
+				oracle += len(effect.Rows)
+			}
+		}
+		extra := 0
+		for _, reads := range fake.jobGets {
+			extra += max(0, reads-1)
+		}
+		if len(walk.pipelines) != cell.count || oracle != cell.count || extra != 0 {
+			t.Errorf("%s: chunked rows=%d oracle rows=%d extra jobs reads=%d, want %d, %d, 0", cell.name, len(walk.pipelines), oracle, extra, cell.count, cell.count)
+		}
+	}
+}
+
+// A late re-run seen in progress is written by the deep range and read again by the open phase of the same claim: the row
+// after the double processing is the row after one (same key, same values; the cost is one more jobs read).
+func TestLateRerunRunsDoubleProcessingWritesTheSameRow(t *testing.T) {
+	claim := lateRerunMidnightClaim("incremental")
+	created := claim.SinceAt.Add(-72 * time.Hour)
+	young := listingClaim(created.Add(-time.Minute), created.Add(time.Hour))
+	young.Mode = "incremental"
+	store := &fakeOpenRuns{rows: walkListing(t, GitHubTestsRouteHandler{}, young,
+		newListingFake(t, []listingRun{{id: 1, created: created, updated: created.Add(time.Minute), status: "in_progress"}}), 0).pipelines}
+	// The re-run started before the runs range reaches, so its open row is one the open phase re-reads.
+	late := listingRun{id: 1, created: created, startedAt: claim.SinceAt.Add(-7 * time.Hour), updated: claim.SinceAt.Add(-time.Hour), status: "in_progress", attempt: 2}
+	twice := walkListing(t, GitHubTestsRouteHandler{OpenRuns: store}, claim, newListingFake(t, []listingRun{late}), 0)
+	once := walkListing(t, GitHubTestsRouteHandler{}, claim, newListingFake(t, []listingRun{late}), 0)
+	if len(twice.pipelines) != 2 || len(once.pipelines) != 1 {
+		t.Fatalf("premise: rows with the open phase=%d without=%d, want 2 and 1", len(twice.pipelines), len(once.pipelines))
+	}
+	for _, row := range twice.pipelines {
+		if lateRerunRowJSON(row) != lateRerunRowJSON(once.pipelines[0]) {
+			t.Fatalf("row after double processing %s, want the row after one %s", lateRerunRowJSON(row), lateRerunRowJSON(once.pipelines[0]))
+		}
+	}
+}
+
+func lateRerunRowJSON(row githubTestsPipelineRow) string {
+	encoded, err := json.Marshal(row)
+	if err != nil {
+		panic(err)
+	}
+	return string(encoded)
+}
+
+// A walk bound reached inside the deep range records only late_rerun_runs: the artifacts phase still reads the window
+// (its bound counts no deep record), and the watermark advances. A bound reached by the window itself still holds it.
+func TestLateRerunRunsWalkBoundInsideTheDeepRange(t *testing.T) {
+	claim := lateRerunMidnightClaim("incremental")
+	for _, cell := range []struct {
+		name                  string
+		window, deep, bound   int
+		chunks                int
+		wantLate, wantBlocked bool
+	}{
+		{"inside a deep page", 1, 3, 2, 0, true, false},
+		{"inside a deep page, resumed", 1, 3, 2, 1, true, false},
+		{"at a deep next link", 0, 101, 100, 0, true, false},
+		{"exactly at the deep range end", 0, 1, 1, 0, false, false},
+		{"below the bound", 1, 2, 10, 0, false, false},
+		{"the window reaches the bound", 1, 2, 1, 0, true, true},
+		{"deep stop, then a two-page artifacts listing", 150, 3, 151, 0, true, false},
+	} {
+		runs := append(lateRerunRuns(1, cell.deep, claim.SinceAt.UTC()),
+			makeListingRuns(9000, cell.window, claim.SinceAt.Add(5*time.Minute), time.Second)...)
+		fake := newListingFake(t, runs)
+		walk := walkListing(t, GitHubTestsRouteHandler{MaxWalkRecords: cell.bound, OpenRuns: &fakeOpenRuns{}}, claim, fake, cell.chunks)
+		var late, blocked bool
+		for _, observation := range lateRerunIncomplete(t, walk) {
+			late = late || observation.Component == githubTestsLateRerunRunsComponent
+			blocked = blocked || observation.Component == githubTestsArtifactInventoryComponent || observation.Component == githubTestsRunInventoryComponent
+		}
+		windowRead := cell.window == 0 || fake.artifactGets[9000] > 0
+		openStopped := walk.final.Result[GitHubTestsResultKeyOpenCapReached] == true
+		if late != cell.wantLate || blocked != cell.wantBlocked || (walk.final.Watermark == nil) != cell.wantBlocked || windowRead == cell.wantBlocked ||
+			openStopped != cell.wantBlocked {
+			t.Errorf("%s: incomplete=%v watermark=%v window artifacts read=%v open phase stopped at the bound=%v, want late=%v blocked=%v",
+				cell.name, lateRerunIncomplete(t, walk), walk.final.Watermark, windowRead, openStopped, cell.wantLate, cell.wantBlocked)
+		}
+	}
+}
+
+// A run with no created_at is never read by the deep range (GitHub cannot list it by created), even from a listing that
+// returns it; the runs range keeps its own rule for such a run (it falls back to the start time).
+func TestLateRerunRunsRefuseARunWithNoCreationTime(t *testing.T) {
+	claim := lateRerunMidnightClaim("incremental")
+	noCreated := `{"id":5,"name":"CI","status":"completed","conclusion":"success","run_started_at":"` + claim.SinceAt.Add(-3*time.Hour).Format(time.RFC3339) +
+		`","updated_at":"` + claim.SinceAt.Add(-time.Hour).Format(time.RFC3339) + `","run_attempt":2,"event":"push","head_sha":"abc","head_branch":"main","html_url":"https://github.com/acme/api/actions/runs/5","pull_requests":[]}`
+	run, err := decodeGitHubWorkflowRun(json.RawMessage(noCreated))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if githubTestsLateRerunWanted(run, claim, githubTestsRefreshLookbackDefault) {
+		t.Fatal("deep keep rule read a run with no created_at")
+	}
+	pipeline, include := normalizeGitHubTestsPipeline(claim, "repo", run, time.Now())
+	inWindow := pipeline
+	inWindow.StartedAt = claim.SinceAt.Add(10 * time.Minute)
+	if !include || !githubTestsRunWanted(run, inWindow, claim) || githubTestsRunWanted(run, pipeline, claim) {
+		t.Fatalf("runs-range rule for a run with no created_at changed: include=%v in-window=%v before-window=%v, want true, true, false",
+			include, githubTestsRunWanted(run, inWindow, claim), githubTestsRunWanted(run, pipeline, claim))
+	}
+	deep, jobs := 0, 0
 	doer := jiraWorkItemsDoerFunc(func(request *http.Request) (*http.Response, error) {
 		header := http.Header{"Content-Type": {"application/json"}}
 		switch request.URL.Path {
 		case "/repos/acme/api":
 			return githubTestsHTTPResponse(request, header, gitHubRepositoryFixture), nil
 		case "/repos/acme/api/actions/runs":
-			return githubTestsHTTPResponse(request, header, `{"workflow_runs":[`+run.json()+`]}`), nil
-		case "/repos/acme/api/actions/runs/1/jobs":
+			if strings.HasSuffix(request.URL.Query().Get("created"), claim.SinceAt.Add(-githubTestsRefreshLookbackDefault-time.Second).Format(time.RFC3339)) {
+				deep++
+				return githubTestsHTTPResponse(request, header, `{"workflow_runs":[`+noCreated+`]}`), nil
+			}
+			return githubTestsHTTPResponse(request, header, `{"workflow_runs":[]}`), nil
+		case "/repos/acme/api/actions/runs/5/jobs":
 			jobs++
 			return githubTestsHTTPResponse(request, header, `{"jobs":[]}`), nil
-		case "/repos/acme/api/actions/runs/1/artifacts":
-			return githubTestsHTTPResponse(request, header, `{"artifacts":[]}`), nil
 		}
 		t.Fatalf("unexpected request %s", request.URL.String())
 		return nil, nil
 	})
 	batch, err := GitHubTestsRouteHandler{}.Collect(context.Background(), claim, providerfoundation.Credential{},
-		githubTestsClient(t, fakehttp.Client(doer)), time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC))
+		githubTestsClient(t, fakehttp.Client(doer)), claim.BeforeAt.Add(time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -490,7 +760,11 @@ func TestLateRerunRunsOracleReadsARunOnce(t *testing.T) {
 			rows += len(effect.Rows)
 		}
 	}
-	if rows != 1 || jobs != 1 {
-		t.Fatalf("pipeline rows=%d jobs reads=%d, want 1 and 1", rows, jobs)
+	if deep != 1 || jobs != 0 || rows != 0 {
+		t.Fatalf("oracle: deep listings=%d jobs reads=%d rows=%d, want 1, 0, 0", deep, jobs, rows)
+	}
+	walk := lateRerunYieldWalk(t, GitHubTestsRouteHandler{}, claim, doer, func(int, githubTestsChunkCursor) bool { return false })
+	if deep != 2 || jobs != 0 || len(walk.pipelines) != 0 {
+		t.Fatalf("chunked: deep listings=%d jobs reads=%d rows=%d, want 2, 0, 0", deep, jobs, len(walk.pipelines))
 	}
 }

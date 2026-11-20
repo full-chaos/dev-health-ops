@@ -191,10 +191,15 @@ func githubTestsLateRerunRunsQuery(claim Claim, lookback, late time.Duration, pe
 // githubTestsLateRerunWanted is the keep rule of the deep range: the run
 // changed at or after the floor, and at least the refresh lookback after its
 // creation. A run that last changed sooner was read in its final state by the
-// runs range of the claim that holds that change. A run with no time is kept.
+// runs range of the claim that holds that change. A run with no creation time
+// is refused (GitHub cannot list it by created); one with no last-updated time
+// is kept.
 func githubTestsLateRerunWanted(run gitHubWorkflowRunPayload, claim Claim, lookback time.Duration) bool {
 	created, updated := parseGitHubWorkflowTime(run.CreatedAt), parseGitHubWorkflowTime(run.UpdatedAt)
-	if created == nil || updated == nil {
+	if created == nil {
+		return false
+	}
+	if updated == nil {
 		return true
 	}
 	return !updated.UTC().Before(githubTestsLateRerunFloor(claim)) && !updated.UTC().Before(created.UTC().Add(lookback))

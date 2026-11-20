@@ -584,8 +584,11 @@ properties of that listing shape the walk:
   one second before the runs range. It keeps a run only when the run last
   changed at or after the window start minus the window width (at least one
   day) and at least the lookback after its creation; the kept run is written
-  like a listed run. The deep range has its own budget of 1,000 pages. A deep
-  range stopped by that budget or by a saturated second records
+  like a listed run; a run with no creation time is not read there. The deep
+  range has its own budget of 1,000 pages (a page is charged when the walk
+  enters it; a resume inside a page re-fetches it for free). A deep range
+  stopped by that budget, by the walk record bound (its records do not count
+  toward the bound of the later phases) or by a saturated second records
   `late_rerun_runs` (`page_budget_exhausted` or `listing_saturated`): the unit
   reads `reports_complete=false`, and the watermark still advances, because
   the window itself was walked. Backfill and full resync units list no deep

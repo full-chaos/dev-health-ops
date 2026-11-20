@@ -112,6 +112,8 @@ type githubTestsChunkCursor struct {
 	// unit result carries them as the late_rerun_runs observations.
 	LateRunsBudget    bool `json:"lrb,omitempty"`
 	LateRunsSaturated bool `json:"lrs,omitempty"`
+	// LateRecords counts the records the deep range wrote (githubTestsWindowRecords).
+	LateRecords int `json:"lrr,omitempty"`
 	// The open phase re-reads, by id, stored pipeline rows that are still open
 	// and older than the runs listing reaches. OpenAfterStarted/OpenAfterRunID
 	// are the keyset position (rows finalized by earlier chunks drop out of the
@@ -483,6 +485,21 @@ func emitCursorPair(
 	return emit(ChunkRouteEmission{Batch: batch, CursorBefore: raw, CursorAfter: raw, Final: true})
 }
 
+// githubTestsListingAllowance is the visitor allowance of one runs-phase range
+// (the runs range and its deep range) under a cumulative page budget. A page is
+// charged when a walk enters it; a resume inside a page re-fetches a page
+// already charged, so that fetch is free, and a checkpointed page always
+// finishes, even when the budget is spent.
+func githubTestsListingAllowance(budget, spent int, resumingInsidePage bool) (int, error) {
+	if !resumingInsidePage {
+		return remainingPageBudget(budget, spent)
+	}
+	if budget < 1 {
+		return 0, ErrInvalidConfiguration
+	}
+	return max(0, budget-spent) + 1, nil
+}
+
 // remainingPageBudget converts a total inventory budget plus the pages already
 // spent on earlier attempts into the allowance for this invocation. A budget
 // that is already exhausted must fail, not silently fetch one more page.
@@ -511,6 +528,13 @@ var errGitHubTestsWalkBound = errors.New("github tests walk record bound reached
 // cursor of an earlier attempt or an earlier release already carries the total.
 func githubTestsWalkRecords(cursor githubTestsChunkCursor) int {
 	return cursor.Pipelines + cursor.Jobs + cursor.Acceptance + cursor.Suites + cursor.Cases + cursor.Coverage
+}
+
+// githubTestsWindowRecords is the walk's records without those of the deep range: the phases after the deep range (the
+// artifacts and open phases) check the bound on it, so a deep range stopped at the bound leaves them their own allowance and
+// its one advancing observation never turns into a blocking one. The deep range itself stops at the whole walk's bound.
+func githubTestsWindowRecords(cursor githubTestsChunkCursor) int {
+	return githubTestsWalkRecords(cursor) - cursor.LateRecords
 }
 
 // markGitHubTestsInventoryTruncated records that an inventory phase ended before the end of its listing: the unit finalizes
@@ -1644,6 +1668,9 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 				cursor.Pipelines++
 				cursor.Jobs += len(jobs)
 				cursor.Acceptance += len(acceptance)
+				if cursor.LateRuns {
+					cursor.LateRecords += 1 + len(jobs) + len(acceptance)
+				}
 				pipelines = []githubTestsPipelineRow{pipeline}
 				// Only a run GitHub calls completed whose jobs read is whole is recorded, in the same emission as its rows (a run
 				// cut at the per-run jobs cap too: the cap is deterministic). Any other read is dropped and read again by the revisit.
@@ -1702,7 +1729,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		if cursor.LateRuns {
 			// The deep range: its own budget; a stop records the advancing
 			// late_rerun_runs pair and the phase goes on.
-			allowance, budgetErr := remainingPageBudget(lateMaxPages, cursor.LateRunPages)
+			allowance, budgetErr := githubTestsListingAllowance(lateMaxPages, cursor.LateRunPages, cursor.NextURL != "" && cursor.Index > 0)
 			exhausted := errors.Is(budgetErr, ErrPaginationCapExceeded)
 			if budgetErr != nil && !exhausted {
 				return budgetErr
@@ -1729,8 +1756,8 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 			continue
 		}
 		query := githubTestsRunsQuery(claim, lookback, cursor.RangeHi)
-		allowance, budgetErr := remainingPageBudget(
-			(maxRuns+nativePerPage-1)/nativePerPage, cursor.RunPages)
+		allowance, budgetErr := githubTestsListingAllowance(
+			(maxRuns+nativePerPage-1)/nativePerPage, cursor.RunPages, cursor.NextURL != "" && cursor.Index > 0)
 		if errors.Is(budgetErr, ErrPaginationCapExceeded) {
 			cursor = recordGitHubTestsInventoryTruncation(
 				cursor, client, claim, githubTestsRunInventoryComponent, cursor.RunPages)
@@ -1807,7 +1834,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		// The open phase re-reads runs older than the window; the next unit re-reads what a bound stop leaves, so the stop adds
 		// no inventory observation. It is published as a cap stop (open_runs_cap_reached): the open rows were not all re-read.
 		stopAtWalkBound := func() bool {
-			if githubTestsWalkRecords(cursor) < maxWalkRecords {
+			if githubTestsWindowRecords(cursor) < maxWalkRecords {
 				return false
 			}
 			cursor.OpenCapReached = true
@@ -1928,7 +1955,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		)
 	}
 	for cursor.Phase == githubTestsArtifactsPhase {
-		if githubTestsWalkRecords(cursor) >= maxWalkRecords {
+		if githubTestsWindowRecords(cursor) >= maxWalkRecords {
 			cursor = recordGitHubTestsWalkBound(cursor, client, claim, githubTestsArtifactInventoryComponent, maxWalkRecords)
 			break
 		}
@@ -1979,7 +2006,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 				// safer failure mode than erasing real history.
 			}
 			for index := start; index < len(page.Items); index++ {
-				if githubTestsWalkRecords(cursor) >= maxWalkRecords {
+				if githubTestsWindowRecords(cursor) >= maxWalkRecords {
 					return errGitHubTestsWalkBound
 				}
 				before := cursor
@@ -2545,7 +2572,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 					cursor = endArtifactsRange(cursor)
 				}
 			}
-			if cursor.Phase == githubTestsArtifactsPhase && githubTestsWalkRecords(cursor) >= maxWalkRecords {
+			if cursor.Phase == githubTestsArtifactsPhase && githubTestsWindowRecords(cursor) >= maxWalkRecords {
 				return errGitHubTestsWalkBound
 			}
 			return nil

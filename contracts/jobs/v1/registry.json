@@ -495,7 +495,7 @@
         1
       ],
       "queue": "sync",
-      "handler_owner": "internal/syncdispatchruntime",
+      "handler_owner": "internal/jobs/sync",
       "execution_mode": "command",
       "priority": 2,
       "timeout_seconds": 120,

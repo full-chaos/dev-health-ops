@@ -2,6 +2,7 @@ package providersync
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -225,6 +226,42 @@ func TestGitHubTestsLateRerunDeepStopAdvances(t *testing.T) {
 			if err := validateGitHubTestsCompletion(claim, walk.final); err != nil {
 				t.Errorf("comparator refused the completion: %v", err)
 			}
+			if cell.cause != githubTestsPageBudgetCause {
+				return
+			}
+			oracleFake := newListingFake(t, cell.runs)
+			batch, err := cell.handler.Collect(context.Background(), claim, providerfoundation.Credential{}, githubTestsClient(t, fakehttp.Client(oracleFake)), time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC))
+			if err != nil {
+				t.Fatalf("Collect: %v", err)
+			}
+			if decodeCompletionValue(batch.Result, "incomplete", &incomplete) != nil || len(incomplete) != 1 || incomplete[0].Component != githubTestsLateRerunRelistComponent ||
+				batch.Watermark == nil || oracleFake.artifactGets[late.id] != 1 {
+				t.Errorf("oracle: incomplete=%+v watermark=%v late reads=%d, want the deep-range stop, an advanced watermark and 1 read", incomplete, batch.Watermark, oracleFake.artifactGets[late.id])
+			}
+			if err := validateGitHubTestsCompletion(claim, batch); err != nil {
+				t.Errorf("comparator refused the oracle completion: %v", err)
+			}
 		})
+	}
+}
+
+// The cursor carries the re-list state in one small field: walking, or one of the two stops. Any other value is corrupt, and a
+// clean deep walk leaves it at zero.
+func TestGitHubTestsLateRerunCursorState(t *testing.T) {
+	for _, raw := range []string{`{"phase":"artifacts","rl":-1}`, `{"phase":"artifacts","rl":4}`} {
+		if _, err := decodeGitHubTestsChunkCursor(raw); err == nil {
+			t.Errorf("cursor %s decoded, want a checkpoint conflict", raw)
+		}
+	}
+	for state := githubTestsRelistWalking; state <= githubTestsRelistStoppedSaturated; state++ {
+		raw := fmt.Sprintf(`{"phase":"artifacts","rl":%d}`, state)
+		if _, err := decodeGitHubTestsChunkCursor(raw); err != nil {
+			t.Errorf("cursor %s: %v, want it accepted", raw, err)
+		}
+	}
+	claim := lateRerunClaim(time.Date(2026, 7, 4, 23, 0, 0, 0, time.UTC), time.Date(2026, 7, 5, 0, 0, 0, 0, time.UTC))
+	_, fake, walk := lateRerunReads(t, claim, nil, 0)
+	if len(lateRerunDeepRanges(fake)) != 1 || walk.cursor.Relist != 0 || walk.cursor.Phase != "done" {
+		t.Errorf("deep ranges=%v final relist=%d phase=%q, want one deep range walked and the state back at 0", lateRerunDeepRanges(fake), walk.cursor.Relist, walk.cursor.Phase)
 	}
 }

@@ -2503,9 +2503,6 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 	if cursor.Phase == githubTestsArtifactsPhase {
 		cursor.Phase = githubTestsPhaseAfterArtifacts(handler)
 	}
-	if cursor.Relist == githubTestsRelistWalking {
-		cursor.Relist = 0
-	}
 	cursor = githubTestsClearCutKeys(cursor)
 	if cursor.Phase == githubTestsOpenPhase {
 		handlerOpenRan = true

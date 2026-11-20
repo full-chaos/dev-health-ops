@@ -39,7 +39,7 @@ func TestBuildChartQueryDedupsCicdMetricsDaily(t *testing.T) {
 		t.Fatal(err)
 	}
 	normalized := strings.Join(strings.Fields(query), " ")
-	const wantSubquery = "(SELECT * FROM cicd_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day) AS cicd_metrics_daily"
+	const wantSubquery = "(SELECT * FROM cicd_metrics_daily ORDER BY computed_at DESC, cityHash64(tuple(*)) DESC LIMIT 1 BY org_id, repo_id, day) AS cicd_metrics_daily"
 	if !strings.Contains(normalized, wantSubquery) {
 		t.Fatalf("query does not dedup cicd_metrics_daily to the latest generation:\n%s", query)
 	}
@@ -76,7 +76,7 @@ func TestBuildChartQueryDedupsDoraMetricsDaily(t *testing.T) {
 		t.Fatal(err)
 	}
 	normalized := strings.Join(strings.Fields(query), " ")
-	const wantSubquery = "(SELECT * FROM dora_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day, metric_name) AS dora_metrics_daily"
+	const wantSubquery = "(SELECT * FROM dora_metrics_daily ORDER BY computed_at DESC, cityHash64(tuple(*)) DESC LIMIT 1 BY org_id, repo_id, day, metric_name) AS dora_metrics_daily"
 	if !strings.Contains(normalized, wantSubquery) {
 		t.Fatalf("query does not dedup dora_metrics_daily to the latest generation:\n%s", query)
 	}
@@ -100,33 +100,33 @@ func TestDedupFromSourceEveryAppendOnlyTableAndEveryReplacingTable(t *testing.T)
 		// The tables below with a live-row rule: the newest row of each key
 		// is read first (LIMIT 1 BY) and the retraction rows are dropped
 		// after, by the row test of the table registry.
-		{"work_item_metrics_daily", "(SELECT * FROM (SELECT * FROM work_item_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, provider, day, work_scope_id, team_id, row_view) AS work_item_metrics_daily WHERE " + teamkeytables.WorkItemMetricsDaily.LiveRow("work_item_metrics_daily.") + " AND " + rowview.OrgPredicate("work_item_metrics_daily", "") + ") AS work_item_metrics_daily"},
+		{"work_item_metrics_daily", "(SELECT * FROM (SELECT * FROM work_item_metrics_daily ORDER BY " + rowview.WorkItemMetricsNewestOrder + " DESC LIMIT 1 BY org_id, provider, day, work_scope_id, team_id, row_view) AS work_item_metrics_daily WHERE " + teamkeytables.WorkItemMetricsDaily.LiveRow("work_item_metrics_daily.") + " AND " + rowview.OrgPredicate("work_item_metrics_daily", "") + ") AS work_item_metrics_daily"},
 		// The own writer marks the retraction row in a Retracted column (migration 159).
-		{"cicd_metrics_daily", "(SELECT * FROM (SELECT * FROM cicd_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day) AS cicd_metrics_daily WHERE (cicd_metrics_daily.retracted = 0)) AS cicd_metrics_daily"},
-		{"deploy_metrics_daily", "(SELECT * FROM (SELECT * FROM deploy_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day) AS deploy_metrics_daily WHERE (deploy_metrics_daily.retracted = 0)) AS deploy_metrics_daily"},
-		{"incident_metrics_daily", "(SELECT * FROM (SELECT * FROM incident_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day) AS incident_metrics_daily WHERE (incident_metrics_daily.retracted = 0)) AS incident_metrics_daily"},
-		{"repo_metrics_daily", "(SELECT * FROM (SELECT * FROM repo_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day) AS repo_metrics_daily WHERE (repo_metrics_daily.retracted = 0)) AS repo_metrics_daily"},
-		{"team_metrics_daily", "(SELECT * FROM (SELECT * FROM team_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, team_id, repo_id, day) AS team_metrics_daily WHERE " + teamkeytables.TeamMetricsDaily.LiveRow("team_metrics_daily.") + ") AS team_metrics_daily"},
-		{"work_item_state_durations_daily", "(SELECT * FROM (SELECT * FROM work_item_state_durations_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, provider, work_scope_id, team_id, status, day, row_view) AS work_item_state_durations_daily WHERE " + teamkeytables.WorkItemStateDurationsDaily.LiveRow("work_item_state_durations_daily.") + " AND " + rowview.OrgPredicate("work_item_state_durations_daily", "") + ") AS work_item_state_durations_daily"},
-		{"ic_landscape_rolling_30d", "(SELECT * FROM (SELECT * FROM ic_landscape_rolling_30d ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, team_id, map_name, as_of_day, identity_id) AS ic_landscape_rolling_30d WHERE " + teamkeytables.ICLandscapeRolling30d.LiveRow("ic_landscape_rolling_30d.") + ") AS ic_landscape_rolling_30d"},
+		{"cicd_metrics_daily", "(SELECT * FROM (SELECT * FROM cicd_metrics_daily ORDER BY computed_at DESC, cityHash64(tuple(*)) DESC LIMIT 1 BY org_id, repo_id, day) AS cicd_metrics_daily WHERE (cicd_metrics_daily.retracted = 0)) AS cicd_metrics_daily"},
+		{"deploy_metrics_daily", "(SELECT * FROM (SELECT * FROM deploy_metrics_daily ORDER BY computed_at DESC, cityHash64(tuple(*)) DESC LIMIT 1 BY org_id, repo_id, day) AS deploy_metrics_daily WHERE (deploy_metrics_daily.retracted = 0)) AS deploy_metrics_daily"},
+		{"incident_metrics_daily", "(SELECT * FROM (SELECT * FROM incident_metrics_daily ORDER BY computed_at DESC, cityHash64(tuple(*)) DESC LIMIT 1 BY org_id, repo_id, day) AS incident_metrics_daily WHERE (incident_metrics_daily.retracted = 0)) AS incident_metrics_daily"},
+		{"repo_metrics_daily", "(SELECT * FROM (SELECT * FROM repo_metrics_daily ORDER BY computed_at DESC, cityHash64(tuple(*)) DESC LIMIT 1 BY org_id, repo_id, day) AS repo_metrics_daily WHERE (repo_metrics_daily.retracted = 0)) AS repo_metrics_daily"},
+		{"team_metrics_daily", "(SELECT * FROM (SELECT * FROM team_metrics_daily ORDER BY computed_at DESC, cityHash64(tuple(*)) DESC LIMIT 1 BY org_id, team_id, repo_id, day) AS team_metrics_daily WHERE " + teamkeytables.TeamMetricsDaily.LiveRow("team_metrics_daily.") + ") AS team_metrics_daily"},
+		{"work_item_state_durations_daily", "(SELECT * FROM (SELECT * FROM work_item_state_durations_daily ORDER BY computed_at DESC, cityHash64(tuple(*)) DESC LIMIT 1 BY org_id, provider, work_scope_id, team_id, status, day, row_view) AS work_item_state_durations_daily WHERE " + teamkeytables.WorkItemStateDurationsDaily.LiveRow("work_item_state_durations_daily.") + " AND " + rowview.OrgPredicate("work_item_state_durations_daily", "") + ") AS work_item_state_durations_daily"},
+		{"ic_landscape_rolling_30d", "(SELECT * FROM (SELECT * FROM ic_landscape_rolling_30d ORDER BY computed_at DESC, cityHash64(tuple(*)) DESC LIMIT 1 BY org_id, repo_id, team_id, map_name, as_of_day, identity_id) AS ic_landscape_rolling_30d WHERE " + teamkeytables.ICLandscapeRolling30d.LiveRow("ic_landscape_rolling_30d.") + ") AS ic_landscape_rolling_30d"},
 		// The two plain MergeTree tables with the rule in their own writers.
-		{"work_item_completion_daily", "(SELECT * FROM (SELECT * FROM work_item_completion_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day, team_id) AS work_item_completion_daily WHERE (work_item_completion_daily.delivery_units != 0 OR work_item_completion_daily.work_items_completed != 0 OR work_item_completion_daily.prs_merged != 0 OR work_item_completion_daily.churn_loc != 0)) AS work_item_completion_daily"},
-		{"issue_type_metrics_daily", "(SELECT * FROM (SELECT * FROM issue_type_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day, provider, team_id, issue_type_norm) AS issue_type_metrics_daily WHERE (issue_type_metrics_daily.created_count != 0 OR issue_type_metrics_daily.completed_count != 0 OR issue_type_metrics_daily.active_count != 0)) AS issue_type_metrics_daily"},
-		{"user_metrics_daily", "(SELECT * FROM (SELECT * FROM user_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, author_email, day) AS user_metrics_daily WHERE " + teamkeytables.UserMetricsDaily.LiveRow("user_metrics_daily.") + ") AS user_metrics_daily"},
-		{"testops_pipeline_metrics_daily", "(SELECT * FROM (SELECT * FROM testops_pipeline_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day) AS testops_pipeline_metrics_daily WHERE (testops_pipeline_metrics_daily.retracted = 0)) AS testops_pipeline_metrics_daily"},
-		{"testops_test_metrics_daily", "(SELECT * FROM (SELECT * FROM testops_test_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day) AS testops_test_metrics_daily WHERE " + teamkeytables.TestopsTestMetricsDaily.LiveRow("testops_test_metrics_daily.") + ") AS testops_test_metrics_daily"},
-		{"testops_coverage_metrics_daily", "(SELECT * FROM (SELECT * FROM testops_coverage_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day) AS testops_coverage_metrics_daily WHERE " + teamkeytables.TestopsCoverageMetricsDaily.LiveRow("testops_coverage_metrics_daily.") + ") AS testops_coverage_metrics_daily"},
-		{"dora_metrics_daily", "(SELECT * FROM dora_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day, metric_name) AS dora_metrics_daily"},
+		{"work_item_completion_daily", "(SELECT * FROM (SELECT * FROM work_item_completion_daily ORDER BY computed_at DESC, cityHash64(tuple(*)) DESC LIMIT 1 BY org_id, repo_id, day, team_id) AS work_item_completion_daily WHERE (work_item_completion_daily.delivery_units != 0 OR work_item_completion_daily.work_items_completed != 0 OR work_item_completion_daily.prs_merged != 0 OR work_item_completion_daily.churn_loc != 0)) AS work_item_completion_daily"},
+		{"issue_type_metrics_daily", "(SELECT * FROM (SELECT * FROM issue_type_metrics_daily ORDER BY computed_at DESC, cityHash64(tuple(*)) DESC LIMIT 1 BY org_id, repo_id, day, provider, team_id, issue_type_norm) AS issue_type_metrics_daily WHERE (issue_type_metrics_daily.created_count != 0 OR issue_type_metrics_daily.completed_count != 0 OR issue_type_metrics_daily.active_count != 0)) AS issue_type_metrics_daily"},
+		{"user_metrics_daily", "(SELECT * FROM (SELECT * FROM user_metrics_daily ORDER BY computed_at DESC, cityHash64(tuple(*)) DESC LIMIT 1 BY org_id, repo_id, author_email, day) AS user_metrics_daily WHERE " + teamkeytables.UserMetricsDaily.LiveRow("user_metrics_daily.") + ") AS user_metrics_daily"},
+		{"testops_pipeline_metrics_daily", "(SELECT * FROM (SELECT * FROM testops_pipeline_metrics_daily ORDER BY computed_at DESC, cityHash64(tuple(*)) DESC LIMIT 1 BY org_id, repo_id, day) AS testops_pipeline_metrics_daily WHERE (testops_pipeline_metrics_daily.retracted = 0)) AS testops_pipeline_metrics_daily"},
+		{"testops_test_metrics_daily", "(SELECT * FROM (SELECT * FROM testops_test_metrics_daily ORDER BY computed_at DESC, cityHash64(tuple(*)) DESC LIMIT 1 BY org_id, repo_id, day) AS testops_test_metrics_daily WHERE " + teamkeytables.TestopsTestMetricsDaily.LiveRow("testops_test_metrics_daily.") + ") AS testops_test_metrics_daily"},
+		{"testops_coverage_metrics_daily", "(SELECT * FROM (SELECT * FROM testops_coverage_metrics_daily ORDER BY computed_at DESC, cityHash64(tuple(*)) DESC LIMIT 1 BY org_id, repo_id, day) AS testops_coverage_metrics_daily WHERE " + teamkeytables.TestopsCoverageMetricsDaily.LiveRow("testops_coverage_metrics_daily.") + ") AS testops_coverage_metrics_daily"},
+		{"dora_metrics_daily", "(SELECT * FROM dora_metrics_daily ORDER BY computed_at DESC, cityHash64(tuple(*)) DESC LIMIT 1 BY org_id, repo_id, day, metric_name) AS dora_metrics_daily"},
 		// CHAOS-4459 (codex review rounds 2-3): both now registered.
-		{"file_metrics_daily", "(SELECT * FROM file_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day, path) AS file_metrics_daily"},
-		{"file_hotspot_daily", "(SELECT * FROM file_hotspot_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day, file_path) AS file_hotspot_daily"},
+		{"file_metrics_daily", "(SELECT * FROM file_metrics_daily ORDER BY computed_at DESC, cityHash64(tuple(*)) DESC LIMIT 1 BY org_id, repo_id, day, path) AS file_metrics_daily"},
+		{"file_hotspot_daily", "(SELECT * FROM file_hotspot_daily ORDER BY computed_at DESC, cityHash64(tuple(*)) DESC LIMIT 1 BY org_id, repo_id, day, file_path) AS file_hotspot_daily"},
 		// CHAOS-4459 (codex review round 4, key corrected round 5 -- org_id
 		// added, migration 024 added the column after 004 created it
 		// without one).
-		{"review_edges_daily", "(SELECT * FROM review_edges_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, reviewer, author, day) AS review_edges_daily"},
+		{"review_edges_daily", "(SELECT * FROM review_edges_daily ORDER BY computed_at DESC, cityHash64(tuple(*)) DESC LIMIT 1 BY org_id, repo_id, reviewer, author, day) AS review_edges_daily"},
 		// CHAOS-4459 (self-audit, requested by team-lead; key corrected
 		// round 5 -- org_id added, same migration-024 root cause).
-		{"commit_metrics", "(SELECT * FROM commit_metrics ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day, author_email, commit_hash) AS commit_metrics"},
+		{"commit_metrics", "(SELECT * FROM commit_metrics ORDER BY computed_at DESC, cityHash64(tuple(*)) DESC LIMIT 1 BY org_id, repo_id, day, author_email, commit_hash) AS commit_metrics"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.table, func(t *testing.T) {
@@ -145,8 +145,8 @@ func TestDedupFromSourceEveryAppendOnlyTableAndEveryReplacingTable(t *testing.T)
 func TestBuildChartQueryReadsTheWorkItemDailyTablesByNewestRow(t *testing.T) {
 	t.Parallel()
 	wantSource := map[string]string{
-		"issue_type_metrics_daily":   "(SELECT * FROM issue_type_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day, provider, team_id, issue_type_norm) AS issue_type_metrics_daily",
-		"work_item_completion_daily": "(SELECT * FROM work_item_completion_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day, team_id) AS work_item_completion_daily",
+		"issue_type_metrics_daily":   "(SELECT * FROM issue_type_metrics_daily ORDER BY computed_at DESC, cityHash64(tuple(*)) DESC LIMIT 1 BY org_id, repo_id, day, provider, team_id, issue_type_norm) AS issue_type_metrics_daily",
+		"work_item_completion_daily": "(SELECT * FROM work_item_completion_daily ORDER BY computed_at DESC, cityHash64(tuple(*)) DESC LIMIT 1 BY org_id, repo_id, day, team_id) AS work_item_completion_daily",
 	}
 	charted := map[string]int{}
 	for name, definition := range supportedMetrics {
@@ -225,7 +225,7 @@ func TestChangeFailureRateChartIsTheSharedRuleOverTheCounts(t *testing.T) {
 		}
 		return strings.Join(strings.Fields(query), " "), definition
 	}
-	const source = "FROM (SELECT * FROM repo_change_failure_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day) AS repo_change_failure_daily WHERE 1 AND org_id = {org_id:String}"
+	const source = "FROM (SELECT * FROM repo_change_failure_daily ORDER BY computed_at DESC, cityHash64(tuple(*)) DESC LIMIT 1 BY org_id, repo_id, day) AS repo_change_failure_daily WHERE 1 AND org_id = {org_id:String}"
 	rule := strings.Join(strings.Fields(changefailure.WindowRateSQL), " ")
 	for _, shape := range []struct{ chartType, groupBy string }{{"line", "day"}, {"bar", "repo"}, {"scorecard", ""}, {"line", "week"}} {
 		query, definition := build("change_failure_rate", shape.chartType, shape.groupBy)

@@ -57,8 +57,8 @@ metadata: {name: cfg}
 data:
   LOG_LEVEL: debug
   DB_DSN: "postgres://a:c@c/d"
-  API_KEY: changed
-  monkey: changed
+  API_KEY: syn-redact-3
+  monkey: syn-redact-3
   PLAIN: three
 binaryData:
   cert.token: BBBB

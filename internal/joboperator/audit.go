@@ -44,6 +44,7 @@ var DirectWriteActions = []Action{
 	ActionProvidersyncCleanup,
 	ActionProvidersyncOwnershipCleanup,
 	ActionSyncDispatchOutboxClose,
+	ActionSyncRunCancel,
 	ActionWorkgraphTrigger,
 	ActionInvestmentTrigger,
 	ActionLedgerRepair,

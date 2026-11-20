@@ -69,6 +69,7 @@ func directWriteVerbs() map[string]directWriteVerb {
 		"providersync carry-team-ids":                        {argv: []string{"providersync", "carry-team-ids", "--org-stdin"}, dryRun: true, stdin: org + "\n"},
 		"providersync compact-ownership-intervals":           {argv: []string{"providersync", "compact-ownership-intervals", "--org-stdin", "--apply", "--workers-paused"}, stdin: org + "\n"},
 		"providersync drain-removed-dependencies":            {argv: []string{"providersync", "drain-removed-dependencies", "--org-stdin", "--apply", "--workers-paused"}, stdin: org + "\n"},
+		"sync-runs cancel":                                   {argv: []string{"sync-runs", "cancel", "--org", org, "--run", id}, dryRun: true},
 		"metrics daily-marker-backfill":                      {argv: []string{"metrics", "daily-marker-backfill", "--org", org, "--from", "2026-08-01", "--to", "2026-08-01"}, dryRun: true},
 		"sync-dispatch-outbox close-backlog":                 {argv: []string{"sync-dispatch-outbox", "close-backlog"}, dryRun: true},
 	}

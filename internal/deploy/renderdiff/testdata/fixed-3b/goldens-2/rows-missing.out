@@ -1,0 +1,84 @@
+render A: helm rc=0 docs=6
+render B: helm rc=0 docs=6
+ConfigMap/cfg .binaryData.cert.token CHANGED <redacted>
+ConfigMap/cfg .data.API_KEY CHANGED <redacted>
+ConfigMap/cfg .data.DB_DSN CHANGED <redacted>
+ConfigMap/cfg .data.LOG_LEVEL CHANGED
+ConfigMap/cfg .data.monkey CHANGED <redacted>
+Deployment/web .spec.added.deep.er[0] CHANGED
+Deployment/web .spec.added.deep.er[1] CHANGED
+Deployment/web .spec.flag CHANGED
+Deployment/web .spec.gone1 CHANGED
+Deployment/web .spec.gone2 CHANGED
+Deployment/web .spec.gone3 CHANGED
+Deployment/web .spec.nanv CHANGED
+Deployment/web .spec.ratio CHANGED
+Deployment/web .spec.removedempty CHANGED
+Deployment/web .spec.removedmap ELEMENT-REMOVED
+Deployment/web .spec.replicas CHANGED
+Deployment/web .spec.template.metadata.annotations.checksum/config CHANGED
+Deployment/web .spec.template.metadata.labels.v CHANGED
+Deployment/web .spec.template.spec.containers[name=app].args[0] CHANGED <redacted>
+Deployment/web .spec.template.spec.containers[name=app].args[2] CHANGED
+Deployment/web .spec.template.spec.containers[name=app].command[1] CHANGED <redacted>
+Deployment/web .spec.template.spec.containers[name=app].env REORDERED old=[DB_PASSWORD,API_TOKEN,PLAIN,SOME_URI,LINK,X_KEY,NOVALUE] new=[PLAIN,DB_PASSWORD,API_TOKEN,SOME_URI,LINK,X_KEY,NOVALUE]
+Deployment/web .spec.template.spec.containers[name=app].env[name=DB_PASSWORD].value CHANGED <redacted>
+Deployment/web .spec.template.spec.containers[name=app].env[name=LINK].value CHANGED
+Deployment/web .spec.template.spec.containers[name=app].env[name=NOVALUE].valueFrom.secretKeyRef.key CHANGED
+Deployment/web .spec.template.spec.containers[name=app].env[name=PLAIN].value CHANGED
+Deployment/web .spec.template.spec.containers[name=app].env[name=SOME_URI].value CHANGED <redacted>
+Deployment/web .spec.template.spec.containers[name=app].env[name=X_KEY].value CHANGED <redacted>
+Deployment/web .spec.template.spec.containers[name=app].image CHANGED
+Deployment/web .spec.template.spec.containers[name=app].ports[port=9090/TCP] ELEMENT-REMOVED
+Deployment/web .spec.template.spec.containers[name=app].ports[port=9091/TCP] ELEMENT-ADDED
+Deployment/web .spec.template.spec.containers[name=app].volumeMounts[name=data] ELEMENT-ADDED
+Deployment/web .spec.template.spec.initContainers[name=i1] ELEMENT-REMOVED
+Deployment/web .spec.template.spec.volumes[name=data] ELEMENT-ADDED
+Secret/gone-secret REMOVED
+Secret/new-secret ADDED
+Service/svc .spec.ports[port=1/TCP].port CHANGED
+Service/svc .spec.ports[port=80/TCP].targetPort CHANGED
+StatefulSet/dev-health-ops-postgresql .spec.ports REORDERED old=[5432/TCP,5433/UDP] new=[5433/UDP,5432/TCP]
+StatefulSet/dev-health-ops-postgresql .spec.replicas CHANGED
+docs A 6 B 6 (all kinds, Secrets as Kind/name only; hook-included: a helm template render); kinds in A: ConfigMap=1, Deployment=1, Secret=2, Service=1, StatefulSet=1
+added ['Secret/new-secret']; removed ['Secret/gone-secret']; changed field rows 30; element rows added 3 removed 3; reordered rows 2; pod-template label/annotation rows 2; postgres sts rows 2
+cannot read the rows file no-such-rows.json: [Errno 2] No such file or directory: 'no-such-rows.json'
+full-render-diff.py: the render-diff gate of the prod roll inputs. ONE tool (CHAOS-11737); it replaces full-render-diff.py and
+render-docs-diff-v4.py of the 11652 window.
+
+  full-render-diff.py filter < manifest > out.yaml
+      Drops every Secret doc and redacts every secret-like value, in memory, before anything is written (for a live manifest).
+  full-render-diff.py names < manifest > out.names
+      One sorted `Kind/name` line per doc, Secrets included, and nothing else (no data, no field).
+  full-render-diff.py A B --rc-a N --rc-b N  ( --expect-added Kind/name[,...] | --expect-rows FILE | --info )
+                      [--live] [--min-docs N] [--names NA NB --expect-names-added Kind/name[,...]]
+
+A and B are two renders (helm template, or a filtered live manifest). The tool does not call helm: --rc-a/--rc-b are the helm return
+codes the caller saw (keep `set -o pipefail` around a pipe). Both are REQUIRED. Exactly one of --expect-added / --expect-rows / --info.
+
+FLOOR (STOP, exit 1, before any diff): a helm rc != 0, fewer than --min-docs docs on a side (default 1), a render that is not valid YAML,
+an empty --names file. Both sides always print `render A|B: helm rc=<n> docs=<n>`. A doc counts when it is a mapping with a kind.
+--min-docs N: the least docs a side must hold. Set the real count in a roll input. Note: a live helm get manifest / dry-run .manifest has no hooks; a helm template render has them
+(say which with --live (hook-free) or not (hook-included)).
+
+SECRETS: a Secret doc enters only as Kind/name, with no data, stringData or key value, in EVERY mode. Values of env entries whose name
+matches PASSWORD|PASSWD|SECRET|TOKEN|PRIVATE|DSN|CREDENTIAL|_URI$|KEY$, ConfigMap data/binaryData under a key matching
+password|secret|token|key|dsn|credential, args/command entries holding both :// and @, and any string with scheme://user@ are redacted
+on load. No value is printed; paths carry names only.
+
+LISTS: a list whose elements are all mappings with a non-empty string `name` is compared BY NAME (containers, initContainers, env,
+volumes, volumeMounts, ports, ...); a list of mappings that all carry containerPort or port is keyed number/protocol; a duplicate key is a
+STOP found by one pass over every doc of both sides (added and removed docs too) BEFORE any comparison: the DUPLICATE lines, then STOP/HOLD, and no row line at all. One element only on one side is ONE row (ELEMENT-ADDED / ELEMENT-REMOVED). A different order of the common names is a REORDERED
+row (order has meaning: initContainers run order, containers[0], env $(VAR) references): it passes only when --expect-rows lists it.
+A missing key, null, [] and {} are FOUR distinct values, at any position: the same form on both sides is no row, two different forms are ONE CHANGED row (helm's patch sends `<field>: null`, which deletes a live non-empty value). An empty list against a non-empty named list is one row per element.
+A map key with a non-empty value in A and missing in B is ONE ELEMENT-REMOVED row at the key path (v3z13): a ConfigMap data key the
+render drops is a removal, so the post config gate reads it back as absent. A key only in B stays one CHANGED row per leaf.
+Every other list (args, command, rules, ...) is compared by index.
+
+MODES: --expect-added: PASS iff the added docs are exactly the list, nothing is removed and there are 0 rows. --expect-rows FILE (JSON
+{"added":[], "removed":[], "rows":[{"doc","path","verb","old","new","before","after","show"}]}): PASS iff docs and rows equal the file
+exactly; before/after are checked silently, a value is printed only for a row with "show": true. --info: print the diff, exit 0.
+--live: the docs came from a live manifest (hook-free) and the window summary line is printed too.
+--names NA NB --expect-names-added L: the Kind/name sets of the two names files differ by exactly L and nothing is removed.
+Exit 0 PASS, 1 STOP/HOLD, 2 usage, an unreadable file or a duplicate doc.
+

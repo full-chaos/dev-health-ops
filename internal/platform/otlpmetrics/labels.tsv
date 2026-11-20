@@ -290,6 +290,7 @@ dev_health_providersync_projects_v2_degraded_snapshots_total	reason	code: intern
 dev_health_reconciler_stage_acquire_wait_seconds	stage	code: internal/syncreconciler/pipeline.go
 dev_health_reconciler_stage_cancelled_total	sqlstate,stage	code: internal/syncreconciler/pipeline.go
 dev_health_reconciler_stage_duration_seconds	stage	code: internal/syncreconciler/pipeline.go
+dev_health_recommendations_discovery_total	outcome	code: internal/jobs/metrics/remaining/recommendations_discovery_metrics.go
 dev_health_release_impact_degraded_missing_telemetry_total		code: internal/jobruntime/telemetry.go
 dev_health_remaining_metrics_manual_backfill_total	family,outcome	code: internal/jobruntime/telemetry.go
 dev_health_remaining_metrics_manual_overlap_total	family	code: internal/jobruntime/telemetry.go

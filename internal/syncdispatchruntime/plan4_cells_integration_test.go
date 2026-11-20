@@ -86,6 +86,9 @@ func TestP4ReleaseReservesTheSlotBeforeAYoungerPass(t *testing.T) {
 						}
 						sim.now = sim.now.Add(time.Minute)
 						p4EndUnitAsWriter(t, sim, noSweep, rqID(3, 0, 0), holder, bucket.costClass)
+						if status, lastError, availableAt := p4RowOf(t, ctx, pool, older); status != "pending" || lastError != nil || availableAt.After(sim.now) {
+							t.Fatalf("%s: the release did not wake the older run (row status=%s last_error=%v available_at=%s)", name, status, lastError, availableAt)
+						}
 						youngerClaimed := p3Pass(t, sim, younger)
 						_, reserved, err := rqReservation(ctx, pool, rqOrg, "github", bucket.costClass, older)
 						if err != nil {

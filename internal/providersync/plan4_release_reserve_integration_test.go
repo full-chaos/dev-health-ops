@@ -59,6 +59,14 @@ func TestB4UnitCommitReservesTheFreedSlotForTheOldestWaiter(t *testing.T) {
 				if reserved != 1 || waits != 1 {
 					t.Fatalf("%s: the unit commit reserved %d slot(s) for the oldest waiter (want 1) and observed %d lock waits (want 1)", outcome, reserved, waits)
 				}
+				var woken int
+				if err := pool.QueryRow(ctx, `SELECT count(*) FROM public.sync_dispatch_outbox WHERE sync_run_id = $1::uuid
+AND kind = 'dispatch_sync_run' AND status = 'pending' AND available_at <= $2`, waiterRun, now.Add(time.Second)).Scan(&woken); err != nil {
+					t.Fatal(err)
+				}
+				if woken != 1 {
+					t.Fatalf("%s: the unit commit did not wake the reserved waiter's dispatch row (pending rows due: %d, want 1)", outcome, woken)
+				}
 			})
 		})
 	}

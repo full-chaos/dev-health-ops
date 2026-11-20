@@ -17,7 +17,7 @@ import (
 //
 // Why this is needed even after round 3's fix (candidates sorted by
 // ascending sync_run_id before the write-then-Bump loop): Bump's own
-// `SELECT ... FOR UPDATE` on sync_runs holds that row's lock for the REST
+// `SELECT ... FOR NO KEY UPDATE` on sync_runs holds that row's lock for the REST
 // of the transaction, not just for the duration of the Bump call. So once
 // the first candidate in a run has been written and Bump'd, this
 // transaction already holds that run's lock for every later statement --

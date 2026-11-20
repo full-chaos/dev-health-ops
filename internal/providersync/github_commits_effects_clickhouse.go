@@ -123,9 +123,11 @@ func inspectGitCommit(ctx context.Context, conn driver.Conn, expected gitCommitR
 	defer rows.Close()
 	actual := gitCommitVersion{}
 	for rows.Next() {
-		if err := rows.Scan(&actual.Row.OrgID, &actual.Row.RepoID, &actual.Row.Hash, &actual.Row.Message, &actual.Row.AuthorName, &actual.Row.AuthorEmail, &actual.Row.AuthorWhen, &actual.Row.CommitterName, &actual.Row.CommitterEmail, &actual.Row.CommitterWhen, &actual.Row.Parents, &actual.LastSynced); err != nil {
+		var authorName, committerName *string
+		if err := rows.Scan(&actual.Row.OrgID, &actual.Row.RepoID, &actual.Row.Hash, &actual.Row.Message, &authorName, &actual.Row.AuthorEmail, &actual.Row.AuthorWhen, &committerName, &actual.Row.CommitterEmail, &actual.Row.CommitterWhen, &actual.Row.Parents, &actual.LastSynced); err != nil {
 			return EffectConflict, err
 		}
+		actual.Row.AuthorName, actual.Row.CommitterName = derefString(authorName), derefString(committerName)
 		actual.Found = true
 	}
 	if err := rows.Err(); err != nil {

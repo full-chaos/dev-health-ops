@@ -770,9 +770,26 @@ func scanMetricRows(ctx context.Context, client QueryClient, query string, bindi
 
 	var out []metricRow
 	for rows.Next() {
-		var row metricRow
-		if err := rows.Scan(&row.Bucket, &row.EntityID, &row.EntityLabel, &row.Value); err != nil {
+		var (
+			bucket              *time.Time
+			entityID, entityLbl *string
+			value               *float64
+		)
+		if err := rows.Scan(&bucket, &entityID, &entityLbl, &value); err != nil {
 			return nil, fmt.Errorf("%s scan: %w", errPrefix, err)
+		}
+		var row metricRow
+		if bucket != nil {
+			row.Bucket = *bucket
+		}
+		if entityID != nil {
+			row.EntityID = *entityID
+		}
+		if entityLbl != nil {
+			row.EntityLabel = *entityLbl
+		}
+		if value != nil {
+			row.Value = *value
 		}
 		out = append(out, row)
 	}

@@ -96,6 +96,9 @@ func TestNormalizeEmailMatchesGoAPIOnTheFrozenCorpus(t *testing.T) {
 	if want := countUsableEmailRows(t); len(inputs) != want {
 		t.Fatalf("goldenInputs returned %d rows; the corpus file holds %d usable rows", len(inputs), want)
 	}
+	if want := countUsableEmailRows(t); want < minUsableEmailRows {
+		t.Fatalf("the email corpus file holds %d usable rows, floor %d: the frozen corpus shrank", want, minUsableEmailRows)
+	}
 	accepted := 0
 	for _, in := range inputs {
 		checkNormalizeEmail(t, in)
@@ -144,6 +147,12 @@ func checkNormalizeEmail(t *testing.T, in string) {
 // floor, so the run would report zero executions. The whole corpus is still
 // checked by TestNormalizeEmailMatchesGoAPIOnTheFrozenCorpus.
 const fuzzSeedBudget = 256
+
+// minUsableEmailRows is the usable row count of the frozen corpus file when it was
+// pinned (rule: countUsableEmailRows over validate_email_golden.jsonl; raise the floor to
+// the new count after a regeneration). A smaller file fails; a corpus regeneration that adds rows may
+// raise this number, never lower it.
+const minUsableEmailRows = 2722
 
 // countUsableEmailRows counts, on its own pass over the corpus file, the rows
 // whose code points are all valid and not U+FFFD: the rows goldenInputs keeps.

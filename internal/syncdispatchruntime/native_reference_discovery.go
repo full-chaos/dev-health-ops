@@ -244,7 +244,7 @@ func (service *NativeReferenceDiscoveryService) claim(
 	// ctx carries a tally, which this function never installed before now.
 	ctx = withRollupBumpTally(ctx)
 
-	fence := &transportFence{args: args, kind: outboxKindReferenceDiscovery, unavailable: ErrReferenceDiscoveryUnavailable}
+	fence := &transportFence{args: args, kind: outboxKindReferenceDiscovery, unavailable: ErrReferenceDiscoveryUnavailable, logger: service.logger}
 	current, err := fence.current(ctx, tx)
 	if err != nil {
 		return false, "", time.Time{}, err

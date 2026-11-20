@@ -139,7 +139,7 @@ func (handler PagerDutyTeamsRouteHandler) Collect(
 	counted.Doer = pagerDutyTeamsCountingDoer{delegate: client.Doer, attempts: &requests}
 	pages, err := providerfoundation.CollectPagerDutyOffsetPages(
 		ctx, &counted, providerfoundation.PagerDutyOffsetOptions{
-			Path: "/teams", Route: "/teams", DataKey: "teams", PerPage: perPage, MaxPages: maxPages,
+			Path: "/teams", Route: pagerDutyTeamsRoute, DataKey: "teams", PerPage: perPage, MaxPages: maxPages,
 		},
 	)
 	if err != nil {
@@ -154,9 +154,9 @@ func (handler PagerDutyTeamsRouteHandler) Collect(
 	}
 	rows := make([]pagerDutyTeamRow, 0, len(pages.Items))
 	for _, raw := range pages.Items {
-		var payload pagerDutyTeamPayload
-		if err := json.Unmarshal(raw, &payload); err != nil {
-			return CompleteRouteBatch{}, providerfoundation.ErrNormalizationInvalid
+		payload, err := decodePagerDutyTeamItem(raw)
+		if err != nil {
+			return CompleteRouteBatch{}, providerfoundation.RouteFailure(pagerDutyTeamsRoute, providerfoundation.ReasonBodyDecode, err)
 		}
 		row, err := normalizePagerDutyTeam(claim, providerInstance, payload, normalizedAt)
 		if err != nil {
@@ -296,3 +296,14 @@ func fillPagerDutyTeamOrdering(row *pagerDutyTeamRow) error {
 }
 
 var _ CompleteRouteHandler = PagerDutyTeamsRouteHandler{}
+
+// pagerDutyTeamsRoute is the route template of the /teams list.
+const pagerDutyTeamsRoute = "/teams"
+
+func decodePagerDutyTeamItem(raw json.RawMessage) (pagerDutyTeamPayload, error) {
+	var payload pagerDutyTeamPayload
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return payload, providerfoundation.ErrNormalizationInvalid
+	}
+	return payload, nil
+}

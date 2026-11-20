@@ -8,50 +8,20 @@ import (
 	"testing"
 	"time"
 
-	stdclickhouse "github.com/ClickHouse/clickhouse-go/v2"
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
-	"github.com/full-chaos/dev-health-ops/internal/chmigrate"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/retractionseed"
 )
 
 // TestMetricLineageRowCountCountsOneRowView seeds work_item_metrics_daily as
 // the writer stores it since L2a-2: an 'org' row and a 'scope' row for each
 // item day. The served rowCount is the number of item days (the org view),
-// a legacy (”) row counts, and a scope-only row does not.
+// a legacy (empty row_view) row counts, and a scope-only row does not.
 func TestMetricLineageRowCountCountsOneRowView(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
-	inst, err := containers.StartClickHouse(ctx)
-	if err != nil {
-		t.Fatalf("start ClickHouse: %v", err)
-	}
-	defer func() { _ = inst.Close(context.Background()) }()
-	opts, err := stdclickhouse.ParseDSN(inst.URI)
-	if err != nil {
-		t.Fatal(err)
-	}
-	conn, err := stdclickhouse.Open(opts)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = conn.Close() }()
-	baseline, err := chmigrate.LoadBaseline()
-	if err != nil {
-		t.Fatal(err)
-	}
-	created := false
-	for _, object := range baseline.Objects {
-		if object.Name == "work_item_metrics_daily" {
-			if err := conn.Exec(ctx, object.Create); err != nil {
-				t.Fatalf("ddl: %v", err)
-			}
-			created = true
-		}
-	}
-	if !created {
-		t.Fatal("work_item_metrics_daily is not in the schema baseline")
-	}
+	store := retractionseed.Start(ctx, t)
+	conn := store.Conn
 
 	seed := func(org, view string, days int) {
 		t.Helper()
@@ -71,7 +41,7 @@ func TestMetricLineageRowCountCountsOneRowView(t *testing.T) {
 	seed("org-legacy-same-day", "", 1)
 	seed("org-legacy-same-day", "org", 1)
 
-	client, err := dhclickhouse.NewClickHouseQueryClientWithOptions(dhclickhouse.Options{DSN: inst.URI})
+	client, err := dhclickhouse.NewClickHouseQueryClientWithOptions(dhclickhouse.Options{DSN: store.URI})
 	if err != nil {
 		t.Fatal(err)
 	}

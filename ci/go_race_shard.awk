@@ -73,6 +73,14 @@
 # empty or blank package, a heavy row of a split, solo or pinned package or of one with no weights row (checked when the file is
 # read, also for a package this run does not plan), a part row of no split package or of no part of it, and a repeated row
 # (parts keyed by number: 02 = 2) are refused.
+# tapart=<tsv> (CHAOS-14334, ci/go_test_apart.tsv, chain=1 only): "package<TAB>reason" rows name split packages that run slower beside
+# each other on one leg (the cigates packages that shell out to check_go.sh: one leg held parts of four of them, 919-940 s on slow
+# runners). In the chain pass a part of a listed package goes, by the chain rule, only to a shard that holds no part of another
+# listed package; it takes a shard of no listed package only while enough such shards stay for the listed packages not yet placed,
+# so every listed package finds one when count >= their number. With fewer shards the part goes by the chain rule alone and its
+# shard prints "WARN test plan: <package> part <p>/<n> beside another apart package on leg <s>/<count>" on stderr. When the run holds a
+# listed package, tapartRebalance then moves unlisted split parts off the most loaded shards. A row of a package this run does not
+# split is inert (a fixture's empty splits table); a blank row and a repeated row are refused. Still a partition.
 # rwall(m, l, x): the modelled batch wall of a shard whose largest package is m and package sum l, with one more package of weight x.
 function rwall(m, l, x,   k, v) {
   k = (rk + 0 > 0) ? rk + 0 : 3.5
@@ -117,6 +125,39 @@ function partOf(key, np, name) {
   if ((key, name) in mpart) return mpart[key, name]
   return (restpart != "") ? restpart + 0 : djb2(name) % np + 1
 }
+# tapartRebalance (tapart, before the rest pass): the apart rule costs the chain pass balance, so while a move of one part of an unlisted,
+# unpinned split package off the shard of the highest chain + serial load (ties: the lowest index), or a swap of it with a lighter
+# such part, lowers the higher load of the two shards, the best one is made (first found on a tie: parts in plan order, shards by
+# index, a move before a swap). Listed, pinned and serial parts stay; so the rule holds.
+function tapartRebalance(    s, t, i, j, oi, oj, d, nm, bm, bi, bj, bt) {
+  while (1) {
+    s = 1
+    for (t = 2; t <= count; t++) if (cl[t] + sl[t] > cl[s] + sl[s]) s = t
+    bm = cl[s] + sl[s]
+    bi = 0
+    for (oi = 1; oi <= n; oi++) {
+      i = order[oi]
+      if (asg[i] != s || !tapartMovable(i)) continue
+      for (t = 1; t <= count; t++) {
+        if (t == s) continue
+        for (oj = 0; oj <= n; oj++) {
+          j = (oj > 0) ? order[oj] : 0
+          if (j > 0 && (asg[j] != t || !tapartMovable(j))) continue
+          d = weight[i] - ((j > 0) ? weight[j] : 0)
+          if (d <= 0) continue
+          nm = (cl[s] + sl[s] - d > cl[t] + sl[t] + d) ? cl[s] + sl[s] - d : cl[t] + sl[t] + d
+          if (nm < bm) { bm = nm; bi = i; bt = t; bj = j }
+        }
+      }
+    }
+    if (bi == 0) return
+    cl[s] -= weight[bi]; cl[bt] += weight[bi]; asg[bi] = bt
+    if (bj > 0) { cl[bt] -= weight[bj]; cl[s] += weight[bj]; asg[bj] = s }
+  }
+}
+function tapartMovable(i) {
+  return nparts[i] > 1 && !serialPkg[i] && !pinPkg[i] && tgroup[i] == ""
+}
 function wall2(s, x,    r) {
   r = rl[s] + x
   return (2 * cl[s] > r ? 2 * cl[s] : r) + 2 * sl[s]
@@ -150,6 +191,17 @@ BEGIN {
       parts[f[1]] = f[2] + 0
     }
     close(splits)
+  }
+  if (tapart != "") {
+    if (!chain) die("tapart= is for chain=1 (the test legs) only")
+    while ((getline line < tapart) > 0) {
+      if (line ~ /^[[:space:]]*(#|$)/) continue
+      nf = split(line, f, "\t")
+      if (nf != 2 || f[1] !~ /^[^[:space:]]+$/ || f[2] ~ /^[[:space:]]*$/) die("bad test apart row: " line)
+      if (f[1] in isTApart) die("test apart row repeats " f[1])
+      isTApart[f[1]] = 1
+    }
+    close(tapart)
   }
   if (tests != "") {
     for (i = 1; i < 256; i++) ord[sprintf("%c", i)] = i
@@ -248,6 +300,7 @@ BEGIN {
     pinPkg[n] = ((key in isPin) && !(key in isSolo)) ? 1 : 0
     heavyPkg[n] = (key in isHeavy) ? 1 : 0
     apartPart[n] = (np > 1 && ((key "#" pp) in isApartPart)) ? 1 : 0
+    tgroup[n] = (np > 1 && (key in isTApart)) ? key : ""
   }
 }
 END {
@@ -266,8 +319,13 @@ END {
   }
   for (s = 1; s <= count; s++) load[s] = 0
   if (chain) {
-    for (s = 1; s <= count; s++) { cl[s] = 0; rl[s] = 0; sl[s] = 0 }
+    for (s = 1; s <= count; s++) { cl[s] = 0; rl[s] = 0; sl[s] = 0; gOn[s] = "" }
+    # tapart: gLeft = the listed packages of this run not placed yet.
+    gLeft = 0
+    for (i = 1; i <= n; i++) if (tgroup[i] != "" && !(tgroup[i] in gWant)) { gWant[tgroup[i]] = 1; gLeft++ }
+    gN = gLeft
     for (cpass = 1; cpass <= 4; cpass++) {
+      if (cpass == 4 && gN > 0) tapartRebalance()
       for (i = 1; i <= n; i++) {
         k = order[i]
         onChain = (nparts[k] > 1 || serialPkg[k])
@@ -276,7 +334,25 @@ END {
         if (cpass == 3 && !(!pinPkg[k] && onChain)) continue
         if (cpass == 4 && !(!pinPkg[k] && !onChain)) continue
         best = 1
-        if (onChain) {
+        if (onChain && tgroup[k] != "") {
+          g = tgroup[k]
+          if (!(g in gStarted)) gLeft--
+          gFree = 0
+          for (s = 1; s <= count; s++) if (gOn[s] == "") gFree++
+          gAny = 0
+          for (s = 1; s <= count; s++) {
+            okS[s] = (gOn[s] == g || (gOn[s] == "" && (!(g in gStarted) || gFree > gLeft)))
+            if (okS[s]) gAny = 1
+          }
+          if (!gAny) for (s = 1; s <= count; s++) okS[s] = 1
+          best = 0
+          for (s = 1; s <= count; s++) if (okS[s] && (best == 0 || cl[s] + sl[s] < cl[best] + sl[best])) best = s
+          if (!gAny && best == shard) printf "WARN test plan: %s part %d/%d beside another apart package on leg %d/%d\n", path[k], pidx[k], nparts[k], shard, count > "/dev/stderr"
+          gStarted[g] = 1
+          if (gOn[best] == "") gOn[best] = g
+          if (serialPkg[k]) sl[best] += weight[k]
+          else cl[best] += weight[k]
+        } else if (onChain) {
           for (s = 2; s <= count; s++) if (cl[s] + sl[s] < cl[best] + sl[best]) best = s
           if (serialPkg[k]) sl[best] += weight[k]
           else cl[best] += weight[k]
@@ -293,9 +369,10 @@ END {
           }
           rl[best] += weight[k]
         }
-        if (best == shard) keep[k] = 1
+        asg[k] = best
       }
     }
+    for (k = 1; k <= n; k++) if (asg[k] == shard) keep[k] = 1
   }
   for (ppass = 0; ppass <= 1 && !chain; ppass++) {
     for (i = 1; i <= n; i++) {

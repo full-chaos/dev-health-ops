@@ -195,6 +195,23 @@ func servedNewest(declared teamkeytables.Table, where, order string) string {
 		table, where, order, strings.Join(key, ", "))
 }
 
+// WorkItemMetricsNewestOrder is the version order of a work_item_metrics_daily key, for the `order` argument of
+// ServedTeamSource / ServedTeamPick and a reader's own pick: the newest computed_at, then the highest hash of the
+// version's 19 measures, so two versions that share a computed_at serve one of them whatever the insert order. Every
+// served reader of the table that picks a version takes this one order, so the pages serve the same version of a tied
+// key.
+const WorkItemMetricsNewestOrder = `(work_item_metrics_daily.computed_at, cityHash64(tuple(
+    work_item_metrics_daily.items_started, work_item_metrics_daily.items_completed,
+    work_item_metrics_daily.items_started_unassigned, work_item_metrics_daily.items_completed_unassigned,
+    work_item_metrics_daily.wip_count_end_of_day, work_item_metrics_daily.wip_unassigned_end_of_day,
+    work_item_metrics_daily.bug_completed_ratio, work_item_metrics_daily.story_points_completed,
+    work_item_metrics_daily.new_bugs_count, work_item_metrics_daily.new_items_count,
+    work_item_metrics_daily.defect_intro_rate, work_item_metrics_daily.wip_congestion_ratio,
+    work_item_metrics_daily.predictability_score, work_item_metrics_daily.cycle_time_p50_hours,
+    work_item_metrics_daily.cycle_time_p90_hours, work_item_metrics_daily.lead_time_p50_hours,
+    work_item_metrics_daily.lead_time_p90_hours, work_item_metrics_daily.wip_age_p50_hours,
+    work_item_metrics_daily.wip_age_p90_hours)))`
+
 // mustTeamTable panics for a table that holds no team rows.
 func mustTeamTable(table string) teamkeytables.Table {
 	if _, ok := teamTables[table]; !ok {

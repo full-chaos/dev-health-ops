@@ -95,26 +95,10 @@ func countFromAggregate(column string, value uint64) (int, error) {
 	return int(value), nil
 }
 
-// capacityNewestOrder is the version order of a work_item_metrics_daily key: the newest computed_at, then the highest
-// hash of the version's measures, so two versions that share a computed_at serve one of them whatever the insert order.
-// The columns and their order are those of the throughput forecast (workItemNewestOrder) and operating review reads of
-// the table, so the three pages serve the same version of a tied key (CHAOS-14406).
-const capacityNewestOrder = `(work_item_metrics_daily.computed_at, cityHash64(tuple(
-    work_item_metrics_daily.items_started, work_item_metrics_daily.items_completed,
-    work_item_metrics_daily.items_started_unassigned, work_item_metrics_daily.items_completed_unassigned,
-    work_item_metrics_daily.wip_count_end_of_day, work_item_metrics_daily.wip_unassigned_end_of_day,
-    work_item_metrics_daily.bug_completed_ratio, work_item_metrics_daily.story_points_completed,
-    work_item_metrics_daily.new_bugs_count, work_item_metrics_daily.new_items_count,
-    work_item_metrics_daily.defect_intro_rate, work_item_metrics_daily.wip_congestion_ratio,
-    work_item_metrics_daily.predictability_score, work_item_metrics_daily.cycle_time_p50_hours,
-    work_item_metrics_daily.cycle_time_p90_hours, work_item_metrics_daily.lead_time_p50_hours,
-    work_item_metrics_daily.lead_time_p90_hours, work_item_metrics_daily.wip_age_p50_hours,
-    work_item_metrics_daily.wip_age_p90_hours)))`
-
 // capacityOrgNewest is the newest version of each full key (the sorting key, row_view included) of the organization by
-// capacityNewestOrder, aliased as the table. It is scoped by org_id in this text, as the served team view is; the caller
-// binds org_id. where names key columns only, so filtering before the pick is filtering after it. The live-row rule is
-// not in it: a reader applies it to the picked row.
+// rowview.WorkItemMetricsNewestOrder, aliased as the table. It is scoped by org_id in this text, as the served team view
+// is; the caller binds org_id. where names key columns only, so filtering before the pick is filtering after it. The
+// live-row rule is not in it: a reader applies it to the picked row.
 func capacityOrgNewest(where string) string {
 	declared, ok := teamkeytables.ByTable("work_item_metrics_daily")
 	if !ok {
@@ -125,7 +109,7 @@ func capacityOrgNewest(where string) string {
 		key = append(key, "work_item_metrics_daily."+column.Name)
 	}
 	return fmt.Sprintf("(SELECT * FROM work_item_metrics_daily WHERE work_item_metrics_daily.org_id = {org_id:String} AND (%s) ORDER BY %s DESC LIMIT 1 BY %s) AS work_item_metrics_daily",
-		where, capacityNewestOrder, strings.Join(key, ", "))
+		where, rowview.WorkItemMetricsNewestOrder, strings.Join(key, ", "))
 }
 
 // capacitySource is the FROM source of a capacity read of work_item_metrics_daily. No team or a team set reads the
@@ -133,16 +117,16 @@ func capacityOrgNewest(where string) string {
 // organization (CHAOS-14376): of the newest row of each view of a key, a live row first, then team, org, legacy
 // (rowview.ServedTeamSource); a newest-day read takes the pick with no live-row rule after it (rowview.ServedTeamPick),
 // so a key whose every view is retracted stays that key's newest day, as in the org form. Both forms take each key's
-// version by capacityNewestOrder, so they serve one version of a computed_at tie (CHAOS-14406). The source is aliased
-// as the table.
+// version by rowview.WorkItemMetricsNewestOrder, the order of the throughput forecast and operating review reads, so
+// they serve one version of a computed_at tie (CHAOS-14406). The source is aliased as the table.
 func capacitySource(teamIDs []string, where string, newestDay bool) string {
 	switch {
 	case len(teamIDs) != 1:
 		return capacityOrgNewest(where)
 	case newestDay:
-		return rowview.ServedTeamPick("work_item_metrics_daily", where, capacityNewestOrder) + " AS work_item_metrics_daily"
+		return rowview.ServedTeamPick("work_item_metrics_daily", where, rowview.WorkItemMetricsNewestOrder) + " AS work_item_metrics_daily"
 	default:
-		return rowview.ServedTeamSource("work_item_metrics_daily", where, capacityNewestOrder) + " AS work_item_metrics_daily"
+		return rowview.ServedTeamSource("work_item_metrics_daily", where, rowview.WorkItemMetricsNewestOrder) + " AS work_item_metrics_daily"
 	}
 }
 

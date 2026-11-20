@@ -89,7 +89,7 @@ func TestAPackagesShardStartsItsLongestPackageFirstAndTheOrderIsStable(t *testin
 	}
 }
 
-const localeFixtureShards = 6
+const localeFixtureShards = 8
 
 // A manifest of fixed weights (60, 120, 180 in file order; a split package or one of 1000 s or more keeps its own weight) and a fixed shard
 // count, so the layout does not move when the real table does.

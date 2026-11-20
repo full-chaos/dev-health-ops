@@ -1,6 +1,6 @@
 render A: helm rc=0 docs=12
 render B: helm rc=0 docs=12
-ConfigMap/ingress-nginx-custom-proxy-headers .data.X-DH-Internal-Principal-Id CHANGED
+ConfigMap/lcnbwye-pgjqe-vtphmw-dsjck-xxsvxkj .data.Z-OX-Sgzsicsd-Arwnizgtp-Tr CHANGED
 docs A 12 B 12 (all kinds, Secrets as Kind/name only; hook-included: a helm template render); kinds in A: ClusterRole=1, ClusterRoleBinding=1, ConfigMap=2, Deployment=1, IngressClass=1, Role=1, RoleBinding=1, Service=2, ServiceAccount=1, ValidatingWebhookConfiguration=1
 added []; removed []; changed field rows 1; element rows added 0 removed 0; reordered rows 0; pod-template label/annotation rows 0; postgres sts rows 0
 FULL RENDER DIFF: INFO (no expectation; the floor held)

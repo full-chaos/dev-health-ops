@@ -3,502 +3,502 @@ automountServiceAccountToken: true
 kind: ServiceAccount
 metadata:
   labels:
-    app.kubernetes.io/component: controller
-    app.kubernetes.io/instance: ingress-nginx
-    app.kubernetes.io/managed-by: Helm
-    app.kubernetes.io/name: ingress-nginx
-    app.kubernetes.io/part-of: ingress-nginx
-    app.kubernetes.io/version: 1.14.5
-    helm.sh/chart: ingress-nginx-4.14.5
-  name: ingress-nginx
-  namespace: ingress-nginx
+    app.kubernetes.io/component: wwogyeqeux
+    app.kubernetes.io/instance: vgzmebi-rmbzw
+    app.kubernetes.io/managed-by: Nyca
+    app.kubernetes.io/name: vgzmebi-rmbzw
+    app.kubernetes.io/part-of: vgzmebi-rmbzw
+    app.kubernetes.io/version: 8.28.4
+    helm.sh/chart: clvubfl-crpwx-8.17.8
+  name: vgzmebi-rmbzw
+  namespace: vgzmebi-rmbzw
 ---
 apiVersion: v1
 data:
-  X-DH-Internal-Impersonation-Active: ''
-  X-DH-Internal-Org-Id: ''
-  X-DH-Internal-Role: ''
-  X-DH-Internal-Superuser: ''
+  H-WF-Wgltsgim-Gtuhmayve: ''
+  K-XG-Nvqhuazi-Skk-Py: ''
+  Q-HQ-Fjajtstx-Bpzy: ''
+  Y-IM-Lcbgbjjz-Kfdcjyiourndh-Skglxi: ''
 kind: ConfigMap
 metadata:
   labels:
-    app.kubernetes.io/component: controller
-    app.kubernetes.io/instance: ingress-nginx
-    app.kubernetes.io/managed-by: Helm
-    app.kubernetes.io/name: ingress-nginx
-    app.kubernetes.io/part-of: ingress-nginx
-    app.kubernetes.io/version: 1.14.5
-    helm.sh/chart: ingress-nginx-4.14.5
-  name: ingress-nginx-custom-proxy-headers
-  namespace: ingress-nginx
+    app.kubernetes.io/component: wwogyeqeux
+    app.kubernetes.io/instance: vgzmebi-rmbzw
+    app.kubernetes.io/managed-by: Nyca
+    app.kubernetes.io/name: vgzmebi-rmbzw
+    app.kubernetes.io/part-of: vgzmebi-rmbzw
+    app.kubernetes.io/version: 8.28.4
+    helm.sh/chart: clvubfl-crpwx-8.17.8
+  name: lcnbwye-pgjqe-vtphmw-dsjck-xxsvxkj
+  namespace: vgzmebi-rmbzw
 ---
 apiVersion: v1
 data:
-  proxy-set-headers: ingress-nginx/ingress-nginx-custom-proxy-headers
+  rqlut-myb-bgdrdbn: bjnxbfb-ctodf/lzljsdd-dgpnk-yxabay-ovrtu-fqbkity
 kind: ConfigMap
 metadata:
   labels:
-    app.kubernetes.io/component: controller
-    app.kubernetes.io/instance: ingress-nginx
-    app.kubernetes.io/managed-by: Helm
-    app.kubernetes.io/name: ingress-nginx
-    app.kubernetes.io/part-of: ingress-nginx
-    app.kubernetes.io/version: 1.14.5
-    helm.sh/chart: ingress-nginx-4.14.5
-  name: ingress-nginx-controller
-  namespace: ingress-nginx
+    app.kubernetes.io/component: wwogyeqeux
+    app.kubernetes.io/instance: vgzmebi-rmbzw
+    app.kubernetes.io/managed-by: Nyca
+    app.kubernetes.io/name: vgzmebi-rmbzw
+    app.kubernetes.io/part-of: vgzmebi-rmbzw
+    app.kubernetes.io/version: 8.28.4
+    helm.sh/chart: clvubfl-crpwx-8.17.8
+  name: hjxemxk-drlnf-siiyzsngms
+  namespace: vgzmebi-rmbzw
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   labels:
-    app.kubernetes.io/instance: ingress-nginx
-    app.kubernetes.io/managed-by: Helm
-    app.kubernetes.io/name: ingress-nginx
-    app.kubernetes.io/part-of: ingress-nginx
-    app.kubernetes.io/version: 1.14.5
-    helm.sh/chart: ingress-nginx-4.14.5
-  name: ingress-nginx
+    app.kubernetes.io/instance: vgzmebi-rmbzw
+    app.kubernetes.io/managed-by: Nyca
+    app.kubernetes.io/name: vgzmebi-rmbzw
+    app.kubernetes.io/part-of: vgzmebi-rmbzw
+    app.kubernetes.io/version: 8.28.4
+    helm.sh/chart: clvubfl-crpwx-8.17.8
+  name: vgzmebi-rmbzw
 rules:
 - apiGroups:
   - ''
   resources:
-  - configmaps
-  - endpoints
-  - nodes
-  - pods
-  - secrets
-  - namespaces
+  - rbwdyiirkq
+  - sdngtnbid
+  - cmkwr
+  - uqwl
+  - secretv
+  - zejwjdhtbw
   verbs:
-  - list
-  - watch
+  - fqao
+  - msmgn
 - apiGroups:
   - coordination.k8s.io
   resources:
-  - leases
+  - oinmmd
   verbs:
-  - list
-  - watch
+  - fqao
+  - msmgn
 - apiGroups:
   - ''
   resources:
-  - nodes
+  - cmkwr
   verbs:
-  - get
+  - qck
 - apiGroups:
   - ''
   resources:
-  - services
+  - orhpgqre
   verbs:
-  - get
-  - list
-  - watch
+  - qck
+  - fqao
+  - msmgn
 - apiGroups:
   - networking.k8s.io
   resources:
-  - ingresses
+  - sibuocevf
   verbs:
-  - get
-  - list
-  - watch
+  - qck
+  - fqao
+  - msmgn
 - apiGroups:
   - ''
   resources:
-  - events
+  - sknmks
   verbs:
-  - create
-  - patch
+  - owvopj
+  - tpugh
 - apiGroups:
   - networking.k8s.io
   resources:
-  - ingresses/status
+  - uvzzwczcx/hyfhqb
   verbs:
-  - update
+  - baoihy
 - apiGroups:
   - networking.k8s.io
   resources:
-  - ingressclasses
+  - mpzjjszjyarigz
   verbs:
-  - get
-  - list
-  - watch
+  - qck
+  - fqao
+  - msmgn
 - apiGroups:
   - discovery.k8s.io
   resources:
-  - endpointslices
+  - pccwpngbblutuq
   verbs:
-  - list
-  - watch
-  - get
+  - fqao
+  - msmgn
+  - qck
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
   labels:
-    app.kubernetes.io/instance: ingress-nginx
-    app.kubernetes.io/managed-by: Helm
-    app.kubernetes.io/name: ingress-nginx
-    app.kubernetes.io/part-of: ingress-nginx
-    app.kubernetes.io/version: 1.14.5
-    helm.sh/chart: ingress-nginx-4.14.5
-  name: ingress-nginx
+    app.kubernetes.io/instance: vgzmebi-rmbzw
+    app.kubernetes.io/managed-by: Nyca
+    app.kubernetes.io/name: vgzmebi-rmbzw
+    app.kubernetes.io/part-of: vgzmebi-rmbzw
+    app.kubernetes.io/version: 8.28.4
+    helm.sh/chart: clvubfl-crpwx-8.17.8
+  name: vgzmebi-rmbzw
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: ingress-nginx
+  name: vgzmebi-rmbzw
 subjects:
 - kind: ServiceAccount
-  name: ingress-nginx
-  namespace: ingress-nginx
+  name: vgzmebi-rmbzw
+  namespace: vgzmebi-rmbzw
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   labels:
-    app.kubernetes.io/component: controller
-    app.kubernetes.io/instance: ingress-nginx
-    app.kubernetes.io/managed-by: Helm
-    app.kubernetes.io/name: ingress-nginx
-    app.kubernetes.io/part-of: ingress-nginx
-    app.kubernetes.io/version: 1.14.5
-    helm.sh/chart: ingress-nginx-4.14.5
-  name: ingress-nginx
-  namespace: ingress-nginx
+    app.kubernetes.io/component: wwogyeqeux
+    app.kubernetes.io/instance: vgzmebi-rmbzw
+    app.kubernetes.io/managed-by: Nyca
+    app.kubernetes.io/name: vgzmebi-rmbzw
+    app.kubernetes.io/part-of: vgzmebi-rmbzw
+    app.kubernetes.io/version: 8.28.4
+    helm.sh/chart: clvubfl-crpwx-8.17.8
+  name: vgzmebi-rmbzw
+  namespace: vgzmebi-rmbzw
 rules:
 - apiGroups:
   - ''
   resources:
-  - namespaces
+  - zejwjdhtbw
   verbs:
-  - get
+  - qck
 - apiGroups:
   - ''
   resources:
-  - configmaps
-  - pods
-  - secrets
-  - endpoints
+  - rbwdyiirkq
+  - uqwl
+  - secretv
+  - sdngtnbid
   verbs:
-  - get
-  - list
-  - watch
+  - qck
+  - fqao
+  - msmgn
 - apiGroups:
   - ''
   resources:
-  - services
+  - orhpgqre
   verbs:
-  - get
-  - list
-  - watch
+  - qck
+  - fqao
+  - msmgn
 - apiGroups:
   - networking.k8s.io
   resources:
-  - ingresses
+  - sibuocevf
   verbs:
-  - get
-  - list
-  - watch
+  - qck
+  - fqao
+  - msmgn
 - apiGroups:
   - networking.k8s.io
   resources:
-  - ingresses/status
+  - uvzzwczcx/hyfhqb
   verbs:
-  - update
+  - baoihy
 - apiGroups:
   - networking.k8s.io
   resources:
-  - ingressclasses
+  - mpzjjszjyarigz
   verbs:
-  - get
-  - list
-  - watch
+  - qck
+  - fqao
+  - msmgn
 - apiGroups:
   - coordination.k8s.io
   resourceNames:
-  - ingress-nginx-leader
+  - ijtfisp-lzhwe-ekuffj
   resources:
-  - leases
+  - oinmmd
   verbs:
-  - get
-  - update
+  - qck
+  - baoihy
 - apiGroups:
   - coordination.k8s.io
   resources:
-  - leases
+  - oinmmd
   verbs:
-  - create
+  - owvopj
 - apiGroups:
   - ''
   resources:
-  - events
+  - sknmks
   verbs:
-  - create
-  - patch
+  - owvopj
+  - tpugh
 - apiGroups:
   - discovery.k8s.io
   resources:
-  - endpointslices
+  - pccwpngbblutuq
   verbs:
-  - list
-  - watch
-  - get
+  - fqao
+  - msmgn
+  - qck
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   labels:
-    app.kubernetes.io/component: controller
-    app.kubernetes.io/instance: ingress-nginx
-    app.kubernetes.io/managed-by: Helm
-    app.kubernetes.io/name: ingress-nginx
-    app.kubernetes.io/part-of: ingress-nginx
-    app.kubernetes.io/version: 1.14.5
-    helm.sh/chart: ingress-nginx-4.14.5
-  name: ingress-nginx
-  namespace: ingress-nginx
+    app.kubernetes.io/component: wwogyeqeux
+    app.kubernetes.io/instance: vgzmebi-rmbzw
+    app.kubernetes.io/managed-by: Nyca
+    app.kubernetes.io/name: vgzmebi-rmbzw
+    app.kubernetes.io/part-of: vgzmebi-rmbzw
+    app.kubernetes.io/version: 8.28.4
+    helm.sh/chart: clvubfl-crpwx-8.17.8
+  name: vgzmebi-rmbzw
+  namespace: vgzmebi-rmbzw
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: ingress-nginx
+  name: vgzmebi-rmbzw
 subjects:
 - kind: ServiceAccount
-  name: ingress-nginx
-  namespace: ingress-nginx
+  name: vgzmebi-rmbzw
+  namespace: vgzmebi-rmbzw
 ---
 apiVersion: v1
 kind: Service
 metadata:
   labels:
-    app.kubernetes.io/component: controller
-    app.kubernetes.io/instance: ingress-nginx
-    app.kubernetes.io/managed-by: Helm
-    app.kubernetes.io/name: ingress-nginx
-    app.kubernetes.io/part-of: ingress-nginx
-    app.kubernetes.io/version: 1.14.5
-    helm.sh/chart: ingress-nginx-4.14.5
-  name: ingress-nginx-controller-admission
-  namespace: ingress-nginx
+    app.kubernetes.io/component: wwogyeqeux
+    app.kubernetes.io/instance: vgzmebi-rmbzw
+    app.kubernetes.io/managed-by: Nyca
+    app.kubernetes.io/name: vgzmebi-rmbzw
+    app.kubernetes.io/part-of: vgzmebi-rmbzw
+    app.kubernetes.io/version: 8.28.4
+    helm.sh/chart: clvubfl-crpwx-8.17.8
+  name: ordjqmt-wekif-cusjiwirao-jiswynohs
+  namespace: vgzmebi-rmbzw
 spec:
   ports:
-  - appProtocol: https
-    name: https-webhook
+  - appProtocol: kygvj
+    name: irzoz-dekobij
     port: 443
-    targetPort: webhook
+    targetPort: mpvnzvi
   selector:
-    app.kubernetes.io/component: controller
-    app.kubernetes.io/instance: ingress-nginx
-    app.kubernetes.io/name: ingress-nginx
-  type: ClusterIP
+    app.kubernetes.io/component: wwogyeqeux
+    app.kubernetes.io/instance: vgzmebi-rmbzw
+    app.kubernetes.io/name: vgzmebi-rmbzw
+  type: YsluxfdKF
 ---
 apiVersion: v1
 kind: Service
 metadata:
   annotations: null
   labels:
-    app.kubernetes.io/component: controller
-    app.kubernetes.io/instance: ingress-nginx
-    app.kubernetes.io/managed-by: Helm
-    app.kubernetes.io/name: ingress-nginx
-    app.kubernetes.io/part-of: ingress-nginx
-    app.kubernetes.io/version: 1.14.5
-    helm.sh/chart: ingress-nginx-4.14.5
-  name: ingress-nginx-controller
-  namespace: ingress-nginx
+    app.kubernetes.io/component: wwogyeqeux
+    app.kubernetes.io/instance: vgzmebi-rmbzw
+    app.kubernetes.io/managed-by: Nyca
+    app.kubernetes.io/name: vgzmebi-rmbzw
+    app.kubernetes.io/part-of: vgzmebi-rmbzw
+    app.kubernetes.io/version: 8.28.4
+    helm.sh/chart: clvubfl-crpwx-8.17.8
+  name: hjxemxk-drlnf-siiyzsngms
+  namespace: vgzmebi-rmbzw
 spec:
-  clusterIP: 10.43.10.27
+  clusterIP: 73.19.70.26
   ipFamilies:
-  - IPv4
-  ipFamilyPolicy: SingleStack
+  - QPq5
+  ipFamilyPolicy: UsiqfvEayfb
   ports:
-  - appProtocol: http
-    name: http
+  - appProtocol: tnzi
+    name: tnzi
     port: 80
     protocol: TCP
-    targetPort: http
-  - appProtocol: https
-    name: https
+    targetPort: tnzi
+  - appProtocol: kygvj
+    name: kygvj
     port: 443
     protocol: TCP
-    targetPort: https
+    targetPort: kygvj
   selector:
-    app.kubernetes.io/component: controller
-    app.kubernetes.io/instance: ingress-nginx
-    app.kubernetes.io/name: ingress-nginx
-  type: ClusterIP
+    app.kubernetes.io/component: wwogyeqeux
+    app.kubernetes.io/instance: vgzmebi-rmbzw
+    app.kubernetes.io/name: vgzmebi-rmbzw
+  type: YsluxfdKF
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   labels:
-    app.kubernetes.io/component: controller
-    app.kubernetes.io/instance: ingress-nginx
-    app.kubernetes.io/managed-by: Helm
-    app.kubernetes.io/name: ingress-nginx
-    app.kubernetes.io/part-of: ingress-nginx
-    app.kubernetes.io/version: 1.14.5
-    helm.sh/chart: ingress-nginx-4.14.5
-  name: ingress-nginx-controller
-  namespace: ingress-nginx
+    app.kubernetes.io/component: wwogyeqeux
+    app.kubernetes.io/instance: vgzmebi-rmbzw
+    app.kubernetes.io/managed-by: Nyca
+    app.kubernetes.io/name: vgzmebi-rmbzw
+    app.kubernetes.io/part-of: vgzmebi-rmbzw
+    app.kubernetes.io/version: 8.28.4
+    helm.sh/chart: clvubfl-crpwx-8.17.8
+  name: hjxemxk-drlnf-siiyzsngms
+  namespace: vgzmebi-rmbzw
 spec:
   minReadySeconds: 0
   replicas: 1
   revisionHistoryLimit: 10
   selector:
     matchLabels:
-      app.kubernetes.io/component: controller
-      app.kubernetes.io/instance: ingress-nginx
-      app.kubernetes.io/name: ingress-nginx
+      app.kubernetes.io/component: wwogyeqeux
+      app.kubernetes.io/instance: vgzmebi-rmbzw
+      app.kubernetes.io/name: vgzmebi-rmbzw
   template:
     metadata:
       labels:
-        app.kubernetes.io/component: controller
-        app.kubernetes.io/instance: ingress-nginx
-        app.kubernetes.io/managed-by: Helm
-        app.kubernetes.io/name: ingress-nginx
-        app.kubernetes.io/part-of: ingress-nginx
-        app.kubernetes.io/version: 1.14.5
-        helm.sh/chart: ingress-nginx-4.14.5
+        app.kubernetes.io/component: wwogyeqeux
+        app.kubernetes.io/instance: vgzmebi-rmbzw
+        app.kubernetes.io/managed-by: Nyca
+        app.kubernetes.io/name: vgzmebi-rmbzw
+        app.kubernetes.io/part-of: vgzmebi-rmbzw
+        app.kubernetes.io/version: 8.28.4
+        helm.sh/chart: clvubfl-crpwx-8.17.8
     spec:
       automountServiceAccountToken: true
       containers:
       - args:
-        - /nginx-ingress-controller
-        - --publish-service=$(POD_NAMESPACE)/ingress-nginx-controller
-        - --election-id=ingress-nginx-leader
-        - --controller-class=k8s.io/ingress-nginx
-        - --ingress-class=nginx
-        - --configmap=$(POD_NAMESPACE)/ingress-nginx-controller
-        - --validating-webhook=:8443
-        - --validating-webhook-certificate=/usr/local/certificates/cert
-        - --validating-webhook-key=/usr/local/certificates/key
+        - /hlvpg-tiaagtl-tbmkmaowpg
+        - --jyzbsdp-yhnfeym=$(DXC_HXJSUKBDK)/lisdsxr-arxkc-mtnbvfjxnv
+        - --ltonzbrq-ur=clrpsqm-ruiqf-ejlygz
+        - --fsrvgsjgrf-yjxfj=e3o.hj/msfbboe-ehraw
+        - --umpxzmg-tiwhc=krqtb
+        - --vtfovmxdx=$(TSK_ATZGYAPMF)/rltfzco-ifofv-ovvtjznwvj
+        - --uhkzrudvgm-mulbkhq=:9063
+        - --rvoyrxmtfb-vjwrxrt-bglrfvswdzm=/vln/axyfl/ieqrrnwrdxjh/kujb
+        - --rzurtviaat-ktzjrmt-eoo=/avh/aslgf/wopydrdptjbv/key
         env:
-        - name: POD_NAME
+        - name: INT_GVFZ
           valueFrom:
             fieldRef:
-              fieldPath: metadata.name
-        - name: POD_NAMESPACE
+              fieldPath: gmqobmsb.cjag
+        - name: LIF_TFWUUHPRR
           valueFrom:
             fieldRef:
-              fieldPath: metadata.namespace
-        - name: LD_PRELOAD
-          value: /usr/local/lib/libmimalloc.so
-        image: registry.k8s.io/ingress-nginx/controller:v1.14.5@sha256:af3312d040dbe8d503001a1094b248e8be372f70f317a4bc35f81fb312bff3a8
-        imagePullPolicy: IfNotPresent
+              fieldPath: nrvilkvr.iptdtbmqa
+        - name: BU_DMUQPIQ
+          value: /cco/aslru/sdl/smovyuduggt.ub
+        image: wiuxqvvz.d8z.jb/czmyknz-jujcs/dmuwewuxmq:t2.43.7@wpd594:c2e9d143f46f305cb6bc413970779d99818d65a3d4762876d6348000614c507e
+        imagePullPolicy: ArHlkBrxiqki
         lifecycle:
           preStop:
             exec:
               command:
-              - /wait-shutdown
+              - /ywcl-thputdpy
         livenessProbe:
           failureThreshold: 5
           httpGet:
-            path: /healthz
+            path: /arpcaml
             port: 10254
-            scheme: HTTP
+            scheme: BGOF
           initialDelaySeconds: 10
           periodSeconds: 10
           successThreshold: 1
           timeoutSeconds: 1
-        name: controller
+        name: wwogyeqeux
         ports:
         - containerPort: 80
-          name: http
+          name: tnzi
           protocol: TCP
         - containerPort: 443
-          name: https
+          name: kygvj
           protocol: TCP
         - containerPort: 8443
-          name: webhook
+          name: mpvnzvi
           protocol: TCP
         readinessProbe:
           failureThreshold: 3
           httpGet:
-            path: /healthz
+            path: /arpcaml
             port: 10254
-            scheme: HTTP
+            scheme: BGOF
           initialDelaySeconds: 10
           periodSeconds: 10
           successThreshold: 1
           timeoutSeconds: 1
         resources:
           requests:
-            cpu: 100m
-            memory: 128Mi
+            cpu: 480p
+            memory: 690Wp
         securityContext:
           allowPrivilegeEscalation: false
           capabilities:
             add:
-            - NET_BIND_SERVICE
+            - CRC_TFOU_QTUDYMZ
             drop:
-            - ALL
+            - ZBZ
           readOnlyRootFilesystem: false
           runAsGroup: 82
           runAsNonRoot: true
           runAsUser: 101
           seccompProfile:
-            type: RuntimeDefault
+            type: KmidnhpTnnzcbg
         volumeMounts:
-        - mountPath: /usr/local/certificates/
-          name: webhook-cert
+        - mountPath: /rkz/yejqp/jbwjabviepyl/
+          name: jfqftne-xajy
           readOnly: true
-      dnsPolicy: ClusterFirst
+      dnsPolicy: LoczgprYgkne
       nodeSelector:
-        kubernetes.io/os: linux
-      serviceAccountName: ingress-nginx
+        kubernetes.io/os: bampj
+      serviceAccountName: vgzmebi-rmbzw
       terminationGracePeriodSeconds: 300
       volumes:
-      - name: webhook-cert
+      - name: jfqftne-xajy
         secret:
-          secretName: ingress-nginx-admission
+          secretName: pbnaxgi-lgbce-geosrdziw
 ---
 apiVersion: networking.k8s.io/v1
 kind: IngressClass
 metadata:
   labels:
-    app.kubernetes.io/component: controller
-    app.kubernetes.io/instance: ingress-nginx
-    app.kubernetes.io/managed-by: Helm
-    app.kubernetes.io/name: ingress-nginx
-    app.kubernetes.io/part-of: ingress-nginx
-    app.kubernetes.io/version: 1.14.5
-    helm.sh/chart: ingress-nginx-4.14.5
-  name: nginx
+    app.kubernetes.io/component: wwogyeqeux
+    app.kubernetes.io/instance: vgzmebi-rmbzw
+    app.kubernetes.io/managed-by: Nyca
+    app.kubernetes.io/name: vgzmebi-rmbzw
+    app.kubernetes.io/part-of: vgzmebi-rmbzw
+    app.kubernetes.io/version: 8.28.4
+    helm.sh/chart: clvubfl-crpwx-8.17.8
+  name: isgwv
 spec:
-  controller: k8s.io/ingress-nginx
+  controller: e3o.hj/msfbboe-ehraw
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingWebhookConfiguration
 metadata:
   annotations: null
   labels:
-    app.kubernetes.io/component: admission-webhook
-    app.kubernetes.io/instance: ingress-nginx
-    app.kubernetes.io/managed-by: Helm
-    app.kubernetes.io/name: ingress-nginx
-    app.kubernetes.io/part-of: ingress-nginx
-    app.kubernetes.io/version: 1.14.5
-    helm.sh/chart: ingress-nginx-4.14.5
-  name: ingress-nginx-admission
+    app.kubernetes.io/component: ddeghonsz-nylokvj
+    app.kubernetes.io/instance: vgzmebi-rmbzw
+    app.kubernetes.io/managed-by: Nyca
+    app.kubernetes.io/name: vgzmebi-rmbzw
+    app.kubernetes.io/part-of: vgzmebi-rmbzw
+    app.kubernetes.io/version: 8.28.4
+    helm.sh/chart: clvubfl-crpwx-8.17.8
+  name: pbnaxgi-lgbce-geosrdziw
 webhooks:
 - admissionReviewVersions:
-  - v1
+  - n6
   clientConfig:
     service:
-      name: ingress-nginx-controller-admission
-      namespace: ingress-nginx
-      path: /networking/v1/ingresses
+      name: ordjqmt-wekif-cusjiwirao-jiswynohs
+      namespace: vgzmebi-rmbzw
+      path: /yjnosbmoul/d7/xvbtucbib
       port: 443
-  failurePolicy: Ignore
-  matchPolicy: Equivalent
-  name: validate.nginx.ingress.kubernetes.io
+  failurePolicy: Qbdljg
+  matchPolicy: Bowwpgypwn
+  name: vpuuqmfk.tdtqz.hkjysoq.lrzisydirf.mo
   rules:
   - apiGroups:
     - networking.k8s.io
     apiVersions:
-    - v1
+    - n6
     operations:
-    - CREATE
-    - UPDATE
+    - AILMGB
+    - JKRHHA
     resources:
-    - ingresses
-  sideEffects: None
+    - sibuocevf
+  sideEffects: Vzmg

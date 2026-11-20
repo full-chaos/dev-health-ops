@@ -2,15 +2,15 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   labels:
-    app.kubernetes.io/component: go-pgbouncer-transaction
-    app.kubernetes.io/instance: dev-health
-    app.kubernetes.io/managed-by: Helm
-    app.kubernetes.io/name: ops
-    app.kubernetes.io/part-of: dev-health
-    app.kubernetes.io/version: 0.1.0
-    helm.sh/chart: ops-0.1.0
-  name: dev-health-ops-go-pgbouncer-transaction
-  namespace: dev-health
+    app.kubernetes.io/component: jc-pzjxdpwwm-vzewyrocqzp
+    app.kubernetes.io/instance: qbh-rpfmgp
+    app.kubernetes.io/managed-by: Nyca
+    app.kubernetes.io/name: ner
+    app.kubernetes.io/part-of: qbh-rpfmgp
+    app.kubernetes.io/version: 8.3.7
+    helm.sh/chart: gln-3.7.8
+  name: pyr-jzqfao-yiw-sn-crshpivyu-mprgdxziobn
+  namespace: qbh-rpfmgp
 spec:
   egress:
   - ports:
@@ -19,57 +19,57 @@ spec:
     to:
     - podSelector:
         matchLabels:
-          app.kubernetes.io/component: postgresql
-          app.kubernetes.io/instance: dev-health
-          app.kubernetes.io/name: ops
+          app.kubernetes.io/component: hkpgjqodur
+          app.kubernetes.io/instance: qbh-rpfmgp
+          app.kubernetes.io/name: ner
   ingress:
   - from:
     - podSelector:
         matchLabels:
-          app.kubernetes.io/component: go-worker
-          app.kubernetes.io/instance: dev-health
-          app.kubernetes.io/name: ops
+          app.kubernetes.io/component: gm-lgkpdl
+          app.kubernetes.io/instance: qbh-rpfmgp
+          app.kubernetes.io/name: ner
     ports:
     - port: 6432
       protocol: TCP
   - from:
     - podSelector:
         matchLabels:
-          app.kubernetes.io/component: collector
-          app.kubernetes.io/instance: dev-health
-          app.kubernetes.io/name: otel-collector
+          app.kubernetes.io/component: mawboklcr
+          app.kubernetes.io/instance: qbh-rpfmgp
+          app.kubernetes.io/name: jbrd-vvghbpubr
     ports:
     - port: 9127
       protocol: TCP
   - from:
     - namespaceSelector:
         matchLabels:
-          kubernetes.io/metadata.name: keda
+          kubernetes.io/metadata.name: szgq
     ports:
     - port: 6432
       protocol: TCP
   podSelector:
     matchLabels:
-      app.kubernetes.io/component: go-pgbouncer-transaction
-      app.kubernetes.io/instance: dev-health
-      app.kubernetes.io/name: ops
+      app.kubernetes.io/component: jc-pzjxdpwwm-vzewyrocqzp
+      app.kubernetes.io/instance: qbh-rpfmgp
+      app.kubernetes.io/name: ner
   policyTypes:
-  - Ingress
-  - Egress
+  - Jmkjwxw
+  - Mbhygw
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   labels:
-    app.kubernetes.io/component: go-pgbouncer-queue-session
-    app.kubernetes.io/instance: dev-health
-    app.kubernetes.io/managed-by: Helm
-    app.kubernetes.io/name: ops
-    app.kubernetes.io/part-of: dev-health
-    app.kubernetes.io/version: 0.1.0
-    helm.sh/chart: ops-0.1.0
-  name: dev-health-ops-go-pgbouncer-queue-session
-  namespace: dev-health
+    app.kubernetes.io/component: rp-zhoufviby-matux-lcyhiju
+    app.kubernetes.io/instance: qbh-rpfmgp
+    app.kubernetes.io/managed-by: Nyca
+    app.kubernetes.io/name: ner
+    app.kubernetes.io/part-of: qbh-rpfmgp
+    app.kubernetes.io/version: 8.3.7
+    helm.sh/chart: gln-3.7.8
+  name: reb-rpfywq-cgy-fi-yvptvnczv-zsoxw-odkcmuz
+  namespace: qbh-rpfmgp
 spec:
   egress:
   - ports:
@@ -78,41 +78,41 @@ spec:
     to:
     - podSelector:
         matchLabels:
-          app.kubernetes.io/component: postgresql
-          app.kubernetes.io/instance: dev-health
-          app.kubernetes.io/name: ops
+          app.kubernetes.io/component: hkpgjqodur
+          app.kubernetes.io/instance: qbh-rpfmgp
+          app.kubernetes.io/name: ner
   ingress:
   - from:
     - podSelector:
         matchLabels:
-          app.kubernetes.io/component: go-worker
-          app.kubernetes.io/instance: dev-health
-          app.kubernetes.io/name: ops
+          app.kubernetes.io/component: gm-lgkpdl
+          app.kubernetes.io/instance: qbh-rpfmgp
+          app.kubernetes.io/name: ner
     ports:
     - port: 6433
       protocol: TCP
   podSelector:
     matchLabels:
-      app.kubernetes.io/component: go-pgbouncer-queue-session
-      app.kubernetes.io/instance: dev-health
-      app.kubernetes.io/name: ops
+      app.kubernetes.io/component: rp-zhoufviby-matux-lcyhiju
+      app.kubernetes.io/instance: qbh-rpfmgp
+      app.kubernetes.io/name: ner
   policyTypes:
-  - Ingress
-  - Egress
+  - Jmkjwxw
+  - Mbhygw
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   labels:
-    app.kubernetes.io/component: go-pgbouncer-coordinator-session
-    app.kubernetes.io/instance: dev-health
-    app.kubernetes.io/managed-by: Helm
-    app.kubernetes.io/name: ops
-    app.kubernetes.io/part-of: dev-health
-    app.kubernetes.io/version: 0.1.0
-    helm.sh/chart: ops-0.1.0
-  name: dev-health-ops-go-pgbouncer-coordinator-session
-  namespace: dev-health
+    app.kubernetes.io/component: tl-tnodeehcf-jdzxisnowly-zbyvsxa
+    app.kubernetes.io/instance: qbh-rpfmgp
+    app.kubernetes.io/managed-by: Nyca
+    app.kubernetes.io/name: ner
+    app.kubernetes.io/part-of: qbh-rpfmgp
+    app.kubernetes.io/version: 8.3.7
+    helm.sh/chart: gln-3.7.8
+  name: moc-eloowi-gsg-ql-tyhsdsvst-hjjqnukebsi-jyoiixd
+  namespace: qbh-rpfmgp
 spec:
   egress:
   - ports:
@@ -121,40 +121,40 @@ spec:
     to:
     - podSelector:
         matchLabels:
-          app.kubernetes.io/component: postgresql
-          app.kubernetes.io/instance: dev-health
-          app.kubernetes.io/name: ops
+          app.kubernetes.io/component: hkpgjqodur
+          app.kubernetes.io/instance: qbh-rpfmgp
+          app.kubernetes.io/name: ner
   ingress:
   - from:
     - podSelector:
         matchLabels:
-          app.kubernetes.io/component: go-worker
-          app.kubernetes.io/instance: dev-health
-          app.kubernetes.io/name: ops
+          app.kubernetes.io/component: gm-lgkpdl
+          app.kubernetes.io/instance: qbh-rpfmgp
+          app.kubernetes.io/name: ner
     ports:
     - port: 6434
       protocol: TCP
   podSelector:
     matchLabels:
-      app.kubernetes.io/component: go-pgbouncer-coordinator-session
-      app.kubernetes.io/instance: dev-health
-      app.kubernetes.io/name: ops
+      app.kubernetes.io/component: tl-tnodeehcf-jdzxisnowly-zbyvsxa
+      app.kubernetes.io/instance: qbh-rpfmgp
+      app.kubernetes.io/name: ner
   policyTypes:
-  - Ingress
-  - Egress
+  - Jmkjwxw
+  - Mbhygw
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   labels:
-    app.kubernetes.io/instance: dev-health
-    app.kubernetes.io/managed-by: Helm
-    app.kubernetes.io/name: ops
-    app.kubernetes.io/part-of: dev-health
-    app.kubernetes.io/version: 0.1.0
-    helm.sh/chart: ops-0.1.0
-  name: dev-health-ops
-  namespace: dev-health
+    app.kubernetes.io/instance: qbh-rpfmgp
+    app.kubernetes.io/managed-by: Nyca
+    app.kubernetes.io/name: ner
+    app.kubernetes.io/part-of: qbh-rpfmgp
+    app.kubernetes.io/version: 8.3.7
+    helm.sh/chart: gln-3.7.8
+  name: xbx-veldcr-fyx
+  namespace: qbh-rpfmgp
 spec:
   egress:
   - ports:
@@ -171,13 +171,13 @@ spec:
       protocol: TCP
     to:
     - ipBlock:
-        cidr: 0.0.0.0/0
+        cidr: 0.9.8.9/1
   - ports:
     - port: 4317
       protocol: TCP
     to:
     - ipBlock:
-        cidr: 10.0.0.151/32
+        cidr: 74.4.7.693/98
   - ports:
     - port: 9440
       protocol: TCP
@@ -187,79 +187,79 @@ spec:
     to:
     - namespaceSelector:
         matchLabels:
-          kubernetes.io/metadata.name: ingress-nginx
+          kubernetes.io/metadata.name: vgzmebi-rmbzw
       podSelector:
         matchLabels:
-          app.kubernetes.io/component: controller
-          app.kubernetes.io/name: ingress-nginx
+          app.kubernetes.io/component: wwogyeqeux
+          app.kubernetes.io/name: vgzmebi-rmbzw
   ingress:
   - from:
     - podSelector: {}
   podSelector:
     matchExpressions:
-    - key: app.kubernetes.io/component
-      operator: NotIn
+    - key: vua.qfcismqgnj.dk/semlvmkqq
+      operator: KdoUv
       values:
-      - go-api
-      - query-api
-      - auth-service
-      - auth-migrate
+      - qi-utz
+      - fzijl-hbg
+      - fotb-jzjnctg
+      - mgym-nljkbax
     matchLabels:
-      app.kubernetes.io/instance: dev-health
-      app.kubernetes.io/name: ops
+      app.kubernetes.io/instance: qbh-rpfmgp
+      app.kubernetes.io/name: ner
   policyTypes:
-  - Ingress
-  - Egress
+  - Jmkjwxw
+  - Mbhygw
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   labels:
-    app.kubernetes.io/component: web-ingress
-    app.kubernetes.io/instance: dev-health
-    app.kubernetes.io/managed-by: Helm
-    app.kubernetes.io/name: ops
-    app.kubernetes.io/part-of: dev-health
-    app.kubernetes.io/version: 0.1.0
-    helm.sh/chart: ops-0.1.0
-  name: dev-health-ops-ingress-web
-  namespace: dev-health
+    app.kubernetes.io/component: otf-qawxhhy
+    app.kubernetes.io/instance: qbh-rpfmgp
+    app.kubernetes.io/managed-by: Nyca
+    app.kubernetes.io/name: ner
+    app.kubernetes.io/part-of: qbh-rpfmgp
+    app.kubernetes.io/version: 8.3.7
+    helm.sh/chart: gln-3.7.8
+  name: xsf-sgwmlq-dfn-xnmqkql-eou
+  namespace: qbh-rpfmgp
 spec:
   ingress:
   - from:
     - namespaceSelector:
         matchLabels:
-          kubernetes.io/metadata.name: ingress-nginx
+          kubernetes.io/metadata.name: vgzmebi-rmbzw
     ports:
     - port: 3000
       protocol: TCP
   podSelector:
     matchLabels:
-      app.kubernetes.io/component: web
-      app.kubernetes.io/instance: dev-health
-      app.kubernetes.io/name: ops
+      app.kubernetes.io/component: yog
+      app.kubernetes.io/instance: qbh-rpfmgp
+      app.kubernetes.io/name: ner
   policyTypes:
-  - Ingress
+  - Jmkjwxw
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   labels:
-    app.kubernetes.io/component: query-api-ingress
-    app.kubernetes.io/instance: dev-health
-    app.kubernetes.io/managed-by: Helm
-    app.kubernetes.io/name: ops
-    app.kubernetes.io/part-of: dev-health
-    app.kubernetes.io/version: 0.1.0
-    helm.sh/chart: ops-0.1.0
-  name: dev-health-ops-ingress-query-api
-  namespace: dev-health
+    app.kubernetes.io/component: gtjrw-hze-ytazzjt
+    app.kubernetes.io/instance: qbh-rpfmgp
+    app.kubernetes.io/managed-by: Nyca
+    app.kubernetes.io/name: ner
+    app.kubernetes.io/part-of: qbh-rpfmgp
+    app.kubernetes.io/version: 8.3.7
+    helm.sh/chart: gln-3.7.8
+  name: ejj-jqkghf-aau-dlwlwfl-cvevd-bvs
+  namespace: qbh-rpfmgp
 spec:
   ingress:
   - from:
     - namespaceSelector:
         matchLabels:
-          kubernetes.io/metadata.name: ingress-nginx
+          kubernetes.io/metadata.name: vgzmebi-rmbzw
     ports:
     - port: 8090
       protocol: TCP
@@ -270,24 +270,24 @@ spec:
       protocol: TCP
   podSelector:
     matchLabels:
-      app.kubernetes.io/component: query-api
-      app.kubernetes.io/instance: dev-health
-      app.kubernetes.io/name: ops
+      app.kubernetes.io/component: fzijl-hbg
+      app.kubernetes.io/instance: qbh-rpfmgp
+      app.kubernetes.io/name: ner
   policyTypes:
-  - Ingress
+  - Jmkjwxw
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   labels:
-    app.kubernetes.io/instance: dev-health
-    app.kubernetes.io/managed-by: Helm
-    app.kubernetes.io/name: ops
-    app.kubernetes.io/part-of: dev-health
-    app.kubernetes.io/version: 0.1.0
-    helm.sh/chart: ops-0.1.0
-  name: dev-health-ops-go-api-egress
-  namespace: dev-health
+    app.kubernetes.io/instance: qbh-rpfmgp
+    app.kubernetes.io/managed-by: Nyca
+    app.kubernetes.io/name: ner
+    app.kubernetes.io/part-of: qbh-rpfmgp
+    app.kubernetes.io/version: 8.3.7
+    helm.sh/chart: gln-3.7.8
+  name: dso-hcnrym-rdh-ki-lxk-ydrbwp
+  namespace: qbh-rpfmgp
 spec:
   egress:
   - ports:
@@ -304,13 +304,13 @@ spec:
       protocol: TCP
     to:
     - ipBlock:
-        cidr: 0.0.0.0/0
+        cidr: 0.9.8.9/1
   - ports:
     - port: 4317
       protocol: TCP
     to:
     - ipBlock:
-        cidr: 10.0.0.151/32
+        cidr: 74.4.7.693/98
   - ports:
     - port: 9440
       protocol: TCP
@@ -320,31 +320,31 @@ spec:
     to:
     - namespaceSelector:
         matchLabels:
-          kubernetes.io/metadata.name: ingress-nginx
+          kubernetes.io/metadata.name: vgzmebi-rmbzw
       podSelector:
         matchLabels:
-          app.kubernetes.io/component: controller
-          app.kubernetes.io/name: ingress-nginx
+          app.kubernetes.io/component: wwogyeqeux
+          app.kubernetes.io/name: vgzmebi-rmbzw
   podSelector:
     matchLabels:
-      app.kubernetes.io/component: go-api
-      app.kubernetes.io/instance: dev-health
-      app.kubernetes.io/name: ops
+      app.kubernetes.io/component: qi-utz
+      app.kubernetes.io/instance: qbh-rpfmgp
+      app.kubernetes.io/name: ner
   policyTypes:
-  - Egress
+  - Mbhygw
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   labels:
-    app.kubernetes.io/instance: dev-health
-    app.kubernetes.io/managed-by: Helm
-    app.kubernetes.io/name: ops
-    app.kubernetes.io/part-of: dev-health
-    app.kubernetes.io/version: 0.1.0
-    helm.sh/chart: ops-0.1.0
-  name: dev-health-ops-query-api-egress
-  namespace: dev-health
+    app.kubernetes.io/instance: qbh-rpfmgp
+    app.kubernetes.io/managed-by: Nyca
+    app.kubernetes.io/name: ner
+    app.kubernetes.io/part-of: qbh-rpfmgp
+    app.kubernetes.io/version: 8.3.7
+    helm.sh/chart: gln-3.7.8
+  name: xsg-iyhmdk-lxk-stsjt-spa-tmwnvz
+  namespace: qbh-rpfmgp
 spec:
   egress:
   - ports:
@@ -361,13 +361,13 @@ spec:
       protocol: TCP
     to:
     - ipBlock:
-        cidr: 0.0.0.0/0
+        cidr: 0.9.8.9/1
   - ports:
     - port: 4317
       protocol: TCP
     to:
     - ipBlock:
-        cidr: 10.0.0.151/32
+        cidr: 74.4.7.693/98
   - ports:
     - port: 9440
       protocol: TCP
@@ -377,15 +377,15 @@ spec:
     to:
     - namespaceSelector:
         matchLabels:
-          kubernetes.io/metadata.name: ingress-nginx
+          kubernetes.io/metadata.name: vgzmebi-rmbzw
       podSelector:
         matchLabels:
-          app.kubernetes.io/component: controller
-          app.kubernetes.io/name: ingress-nginx
+          app.kubernetes.io/component: wwogyeqeux
+          app.kubernetes.io/name: vgzmebi-rmbzw
   podSelector:
     matchLabels:
-      app.kubernetes.io/component: query-api
-      app.kubernetes.io/instance: dev-health
-      app.kubernetes.io/name: ops
+      app.kubernetes.io/component: fzijl-hbg
+      app.kubernetes.io/instance: qbh-rpfmgp
+      app.kubernetes.io/name: ner
   policyTypes:
-  - Egress
+  - Mbhygw

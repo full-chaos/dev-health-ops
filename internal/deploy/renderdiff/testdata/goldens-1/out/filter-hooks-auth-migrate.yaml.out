@@ -2,54 +2,54 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   labels:
-    app.kubernetes.io/component: migrate
-  name: dev-health-ops-migrate
-  namespace: dev-health
+    app.kubernetes.io/component: lofwgcl
+  name: iik-pxjxal-prk-iomxdor
+  namespace: qbh-rpfmgp
 spec:
   template:
     metadata:
       labels:
-        app.kubernetes.io/component: migrate
-        app.kubernetes.io/instance: dev-health
-        app.kubernetes.io/name: dev-health
+        app.kubernetes.io/component: lofwgcl
+        app.kubernetes.io/instance: qbh-rpfmgp
+        app.kubernetes.io/name: qbh-rpfmgp
     spec:
       containers:
-      - image: ghcr.io/full-chaos/dev-health-ops/other-migrate@sha256:1111111111111111111111111111111111111111111111111111111111111111
-        name: migrate
+      - image: registry.example.invalid/example/odr-uhlhpc-juh/zksij-jwktpcc@jxn334:ba9f8b6f926cc3d486eecf9ed1dd93ecd205984261f292661ab4b934dee4412d
+        name: lofwgcl
 ---
 apiVersion: batch/v1
 kind: Job
 metadata:
   labels:
-    app.kubernetes.io/component: auth-migrate
-  name: dev-health-ops-auth-migrate
-  namespace: dev-health
+    app.kubernetes.io/component: mgym-nljkbax
+  name: gvs-hkpqos-wyb-getb-yvahgjg
+  namespace: qbh-rpfmgp
 spec:
   template:
     metadata:
       labels:
-        app.kubernetes.io/component: auth-migrate
-        app.kubernetes.io/instance: dev-health
-        app.kubernetes.io/name: dev-health
+        app.kubernetes.io/component: mgym-nljkbax
+        app.kubernetes.io/instance: qbh-rpfmgp
+        app.kubernetes.io/name: qbh-rpfmgp
     spec:
       containers:
       - env:
-        - name: AUTH_MIGRATION_DATABASE_URI
+        - name: JUBX_SQQZTEITF_TWGCTTWR_URI
           valueFrom:
             secretKeyRef:
-              key: AUTH_MIGRATION_DATABASE_URI
-              name: auth-migrate-db
-        - name: AUTH_DATABASE_SCHEMA
-          value: auth
-        - name: AUTH_RUNTIME_DATABASE_ROLE
-          value: devhealth_auth
-        - name: AUTH_FIXTURE_TOKEN
+              key: JUBX_SQQZTEITF_TWGCTTWR_URI
+              name: dcya-tybpled-no
+        - name: SQGO_JPBQAILR_NQWHHZ
+          value: tmci
+        - name: ZEHT_VJCYXMZ_KLEMUPGI_CSQU
+          value: etwmoukgo_xujj
+        - name: TPFX_OWNZMAX_TOKEN
           value: <redacted>
-        image: ghcr.io/full-chaos/dev-health-ops/auth-migrate@sha256:2222222222222222222222222222222222222222222222222222222222222222
-        imagePullPolicy: IfNotPresent
-        name: auth-migrate
+        image: registry.example.invalid/example/pcv-hqwwhm-nng/ieqq-pthijxs@mkc318:3a265da43e06fc811699dcde42cf08cc716f2e05b8ff29d702a03a568a7290ed
+        imagePullPolicy: ArHlkBrxiqki
+        name: mgym-nljkbax
         resources:
           requests:
-            cpu: 50m
-            memory: 64Mi
-      restartPolicy: Never
+            cpu: 55e
+            memory: 57Ul
+      restartPolicy: Axykd

@@ -1,11 +1,11 @@
 Traceback (most recent call last):
-  File "/var/lib/oci-cache/lane-scratch/fcsup-11788/goldens-1/in/full-render-diff.py", line 487, in <module>
+  File "/var/lib/oci-cache/lane-scratch/fcsup-14332/goldens-1s6/in/full-render-diff.py", line 487, in <module>
     sys.exit(main(sys.argv[1:]))
              ^^^^^^^^^^^^^^^^^^
-  File "/var/lib/oci-cache/lane-scratch/fcsup-11788/goldens-1/in/full-render-diff.py", line 355, in main
+  File "/var/lib/oci-cache/lane-scratch/fcsup-14332/goldens-1s6/in/full-render-diff.py", line 355, in main
     yaml.safe_dump_all([redact(d) for d in docs_of(sys.stdin) if d["kind"] != "Secret"], sys.stdout, sort_keys=True)
                                            ^^^^^^^^^^^^^^^^^^
-  File "/var/lib/oci-cache/lane-scratch/fcsup-11788/goldens-1/in/full-render-diff.py", line 76, in docs_of
+  File "/var/lib/oci-cache/lane-scratch/fcsup-14332/goldens-1s6/in/full-render-diff.py", line 76, in docs_of
     return [d for d in yaml.safe_load_all(stream) if isinstance(d, dict) and d.get("kind")]
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
   File "/usr/lib/python3/dist-packages/yaml/__init__.py", line 93, in load_all

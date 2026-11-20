@@ -392,6 +392,7 @@ internal/clicredentials	opensites_test.go
 internal/deploy/inputs	hookrender_test.go
 internal/deploy/renderdiff	golden_test.go
 internal/deploy/renderdiff	renderdiff.go
+internal/deploy/renderdiff	scrub_test.go
 internal/deploy/selfpin	selfpin.go
 internal/deploy/selfpin	selfpin_test.go
 internal/deploymentcontract	manifest.go

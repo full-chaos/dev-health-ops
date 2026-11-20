@@ -1,612 +1,612 @@
 apiVersion: v1
 data:
-  config.yaml: "\nextensions:\n  health_check:\n    endpoint: 0.0.0.0:13133\n  file_storage/pod-logs:\n\
-    \    directory: /var/lib/otelcol/storage\n    create_directory: false\n  # k8s_cluster\
-    \ starts through this elector, NOT at collector start: without it, an API server\
-    \ that does not answer at that moment\n  # fails the whole collector start (all\
-    \ traces/logs/metrics stop). Through the elector the start error is only logged\
-    \ and the\n  # receiver starts once the lease is held, i.e. once the API answers.\
-    \ One replica, so this collector is always the only candidate.\n  k8s_leader_elector:\n\
-    \    auth_type: serviceAccount\n    lease_name: dev-health-otel-collector-k8s-cluster\n\
-    \    lease_namespace: dev-health\n  file_storage/clickhouse-querylog:\n    directory:\
-    \ /var/lib/otelcol/clickhouse-querylog\n    create_directory: false\nreceivers:\n\
-    \  otlp:\n    protocols:\n      grpc:\n        endpoint: 0.0.0.0:4317\n      http:\n\
-    \        endpoint: 0.0.0.0:4318\n  prometheus/internal:\n    config:\n      scrape_configs:\n\
-    \        - job_name: otelcol-internal\n          scrape_interval: 30s\n      \
-    \    metrics_path: /metrics\n          static_configs:\n            - targets:\
-    \ [\"localhost:8888\"]\n  prometheus/auth-service:\n    config:\n      scrape_configs:\n\
-    \        - job_name: auth-service\n          scrape_interval: 30s\n          metrics_path:\
-    \ /metrics\n          kubernetes_sd_configs:\n            - role: pod\n      \
-    \        namespaces:\n                names: [\"dev-health\"]\n          relabel_configs:\n\
-    \            - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_component]\n\
-    \              action: keep\n              regex: auth-service\n            -\
-    \ source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_instance]\n  \
-    \            action: keep\n              regex: \"dev-health\"\n            -\
-    \ source_labels: [__meta_kubernetes_pod_container_port_number]\n             \
-    \ action: keep\n              regex: \"8096\"\n            - source_labels: [__meta_kubernetes_pod_phase]\n\
-    \              action: keep\n              regex: Running\n  prometheus/pgbouncer:\n\
-    \    config:\n      scrape_configs:\n        - job_name: pgbouncer-transaction\n\
-    \          scrape_interval: 30s\n          metrics_path: /metrics\n          kubernetes_sd_configs:\n\
-    \            - role: pod\n              namespaces:\n                names: [\"\
-    dev-health\"]\n          relabel_configs:\n            - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_component]\n\
-    \              action: keep\n              regex: go-pgbouncer-transaction\n \
-    \           - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_instance]\n\
-    \              action: keep\n              regex: \"dev-health\"\n           \
-    \ - source_labels: [__meta_kubernetes_pod_container_port_number]\n           \
-    \   action: keep\n              regex: \"9127\"\n            - source_labels:\
-    \ [__meta_kubernetes_pod_phase]\n              action: keep\n              regex:\
-    \ Running\n  redis:\n    endpoint: \"dev-health-ops-valkey:6379\"\n    collection_interval:\
-    \ 30s\n  hostmetrics:\n    root_path: /hostfs\n    collection_interval: 60s\n\
-    \    scrapers:\n      cpu: {}\n      disk: {}\n      load: {}\n      filesystem:\n\
-    \        exclude_mount_points:\n          mount_points: [/dev/*, /proc/*, /sys/*,\
-    \ /run/*, /var/lib/docker/*, /var/lib/containerd/*, /snap/*]\n          match_type:\
-    \ regexp\n        exclude_fs_types:\n          fs_types: [autofs, binfmt_misc,\
-    \ bpf, cgroup2, configfs, debugfs, devpts, devtmpfs, fusectl, hugetlbfs, mqueue,\
-    \ nsfs, overlay, proc, pstore, rpc_pipefs, securityfs, sysfs, tmpfs, tracefs]\n\
-    \          match_type: strict\n      memory: {}\n      network: {}\n      paging:\
-    \ {}\n      process:\n        mute_process_name_error: true\n        mute_process_exe_error:\
-    \ true\n        mute_process_io_error: true\n        mute_process_user_error:\
-    \ true\n        mute_process_cgroup_error: true\n      system: {}\n  kubeletstats:\n\
-    \    auth_type: serviceAccount\n    endpoint: \"https://${env:K8S_NODE_IP}:10250\"\
-    \n    collection_interval: 60s\n    metric_groups: [node, pod, container]\n  k8s_cluster:\n\
-    \    auth_type: serviceAccount\n    k8s_leader_elector: k8s_leader_elector\n \
-    \   collection_interval: 60s\n    node_conditions_to_report: [Ready, MemoryPressure,\
-    \ DiskPressure, PIDPressure]\n    allocatable_types_to_report: [cpu, memory]\n\
-    \    metrics:\n      # old ReplicaSets of every Deployment revision stay listed:\
-    \ their series add cost and no signal (k8s.deployment.* carries it)\n      k8s.replicaset.available:\n\
-    \        enabled: false\n      k8s.replicaset.desired:\n        enabled: false\n\
-    \    resource_attributes:\n      # OOM kills: k8s.container.restarts carries the\
-    \ reason of the last termination (OOMKilled, Error, Completed)\n      k8s.container.status.last_terminated_reason:\n\
-    \        enabled: true\n  sql_query/clickhouse-querylog:\n    driver: clickhouse\n\
-    \    datasource: ${env:CLICKHOUSE_QUERYLOG_DSN}\n    collection_interval: 30s\n\
-    \    storage: file_storage/clickhouse-querylog\n    queries:\n      - sql: |\n\
-    \          SELECT\n            toString(toUnixTimestamp64Micro(event_time_microseconds))\
-    \ AS event_time_us,\n            toString(type) AS type,\n            user,\n\
-    \            query_kind,\n            arrayStringConcat(tables, ',') AS tables,\n\
-    \            toString(read_rows) AS read_rows,\n            toString(read_bytes)\
-    \ AS read_bytes,\n            toString(memory_usage) AS memory_usage,\n      \
-    \      toString(query_duration_ms) AS query_duration_ms,\n            toString(exception_code)\
-    \ AS exception_code,\n            toString(normalized_query_hash) AS normalized_query_hash,\n\
-    \            toString(cap) AS max_bytes_to_read,\n            toString(ratio)\
-    \ AS cap_ratio,\n            replica,\n            concat(toString(type), ' user=',\
-    \ user, ' kind=', query_kind, ' code=', toString(exception_code)) AS body\n  \
-    \        FROM\n          (\n            SELECT\n              event_time_microseconds,\
-    \ type, user, query_kind, tables, read_rows, read_bytes, memory_usage,\n     \
-    \         query_duration_ms, exception_code, normalized_query_hash,\n        \
-    \      hostName() AS replica,\n              toUInt64OrZero(arrayFirst(s -> s.1\
-    \ = 'max_bytes_to_read', CAST(Settings, 'Array(Tuple(String, String))')).2) AS\
-    \ cap,\n              if(cap > 0, round(read_bytes / cap, 4), 0) AS ratio\n  \
-    \          FROM clusterAllReplicas('default', system.query_log)\n            WHERE\
-    \ event_date >= toDate(now() - INTERVAL 15 MINUTE)\n              AND event_time\
-    \ >= now() - INTERVAL 15 MINUTE\n              AND event_time < now() - INTERVAL\
-    \ 30 SECOND\n              AND event_time_microseconds > fromUnixTimestamp64Micro(toInt64(?))\n\
-    \              AND type != 'QueryStart'\n              AND user != 'otel_querylog'\n\
-    \            ORDER BY event_time_microseconds\n            LIMIT 5000\n      \
-    \    )\n          ORDER BY event_time_microseconds\n        tracking_column: event_time_us\n\
-    \        tracking_start_value: \"0\"\n        logs:\n          - body_column:\
-    \ body\n            attribute_columns: [event_time_us, type, user, query_kind,\
-    \ tables, read_rows, read_bytes, memory_usage, query_duration_ms, exception_code,\
-    \ normalized_query_hash, max_bytes_to_read, cap_ratio, replica]\n  # CHAOS-9362:\
-    \ ClickHouse server metrics, the otel_querylog login (readonly=1). Every query\
-    \ is bounded: closed name lists, parts per table.\n  sql_query/clickhouse-server:\n\
-    \    driver: clickhouse\n    datasource: ${env:CLICKHOUSE_QUERYLOG_DSN}\n    collection_interval:\
-    \ 60s\n    queries:\n      - sql: \"SELECT metric, toString(value) AS value FROM\
-    \ system.metrics WHERE metric IN ('Query', 'Merge', 'PartMutation', 'BackgroundMergesAndMutationsPoolTask',\
-    \ 'BackgroundMergesAndMutationsPoolSize', 'TCPConnection', 'HTTPConnection', 'MemoryTracking',\
-    \ 'DelayedInserts', 'PendingAsyncInsert', 'GlobalThread', 'GlobalThreadActive',\
-    \ 'PartsActive', 'PartsOutdated')\"\n        metrics:\n          - metric_name:\
-    \ clickhouse.server.metric\n            value_column: value\n            attribute_columns:\
-    \ [metric]\n            data_type: gauge\n            value_type: int\n      #\
-    \ system.events lists only NON-ZERO events unless the SESSION has system_events_show_zero_values=1,\
-    \ and a session keeps the profile\n      # it opened with (a collector session\
-    \ opened before a users.d reload never gets the setting). The closed name list\
-    \ is LEFT JOINed\n      # to system.events instead, so every configured event\
-    \ is a series (0 until it fires) whatever the session profile.\n      - sql: \"\
-    SELECT n.event AS event, toString(ifNull(e.value, 0)) AS value FROM (SELECT arrayJoin(['Query',\
-    \ 'SelectQuery', 'InsertQuery', 'FailedQuery', 'FailedSelectQuery', 'FailedInsertQuery',\
-    \ 'QueryTimeMicroseconds', 'InsertedRows', 'InsertedBytes', 'SelectedRows', 'SelectedBytes',\
-    \ 'Merge', 'MergedRows', 'DelayedInserts', 'RejectedInserts', 'QueryMemoryLimitExceeded',\
-    \ 'OSCPUVirtualTimeMicroseconds']) AS event) AS n LEFT JOIN system.events AS e\
-    \ ON e.event = n.event\"\n        metrics:\n          - metric_name: clickhouse.server.event\n\
-    \            value_column: value\n            attribute_columns: [event]\n   \
-    \         data_type: sum\n            value_type: int\n            monotonic:\
-    \ true\n            aggregation: cumulative\n      - sql: \"SELECT metric, toString(value)\
-    \ AS value FROM system.asynchronous_metrics WHERE metric IN ('MemoryResident',\
-    \ 'CGroupMemoryUsed', 'CGroupMemoryTotal', 'OSMemoryAvailable', 'OSMemoryTotal',\
-    \ 'MaxPartCountForPartition', 'TotalPartsOfMergeTreeTables', 'TotalRowsOfMergeTreeTables',\
-    \ 'TotalBytesOfMergeTreeTables', 'NumberOfTables', 'FilesystemMainPathAvailableBytes',\
-    \ 'FilesystemMainPathTotalBytes', 'LoadAverage1', 'OSUserTimeNormalized', 'OSSystemTimeNormalized',\
-    \ 'OSIOWaitTimeNormalized', 'Uptime')\"\n        metrics:\n          - metric_name:\
-    \ clickhouse.server.async_metric\n            value_column: value\n          \
-    \  attribute_columns: [metric]\n            data_type: gauge\n            value_type:\
-    \ double\n      - sql: \"SELECT database, table, toString(count()) AS parts, toString(sum(rows))\
-    \ AS rows, toString(sum(bytes_on_disk)) AS bytes FROM system.parts WHERE active\
-    \ GROUP BY database, table\"\n        metrics:\n          - metric_name: clickhouse.table.parts\n\
-    \            value_column: parts\n            attribute_columns: [database, table]\n\
-    \            data_type: gauge\n            value_type: int\n          - metric_name:\
-    \ clickhouse.table.rows\n            value_column: rows\n            attribute_columns:\
-    \ [database, table]\n            data_type: gauge\n            value_type: int\n\
-    \          - metric_name: clickhouse.table.bytes\n            value_column: bytes\n\
-    \            attribute_columns: [database, table]\n            data_type: gauge\n\
-    \            value_type: int\n  filelog/pods:\n    include: [\"/var/log/pods/dev-health_dev-health-ops-go-api-*_*/*/*.log\"\
-    ,\"/var/log/pods/dev-health_dev-health-ops-go-heavy-*_*/*/*.log\",\"/var/log/pods/dev-health_dev-health-ops-go-ops-*_*/*/*.log\"\
-    ,\"/var/log/pods/dev-health_dev-health-ops-go-reconciler-*_*/*/*.log\",\"/var/log/pods/dev-health_dev-health-ops-go-scheduler-*_*/*/*.log\"\
-    ,\"/var/log/pods/dev-health_dev-health-ops-go-stream-external-*_*/*/*.log\",\"\
-    /var/log/pods/dev-health_dev-health-ops-go-stream-ingest-*_*/*/*.log\",\"/var/log/pods/dev-health_dev-health-ops-go-stream-pagerduty-*_*/*/*.log\"\
-    ,\"/var/log/pods/dev-health_dev-health-ops-go-sync-provider-*_*/*/*.log\",\"/var/log/pods/dev-health_dev-health-ops-go-sync-*_*/*/*.log\"\
-    ,\"/var/log/pods/dev-health_dev-health-ops-query-api-*_*/*/*.log\",\"/var/log/pods/dev-health_dev-health-ops-auth-service-*_*/*/*.log\"\
-    ]\n    exclude: [\"/var/log/pods/dev-health_dev-health-ops-go-pgbouncer-*_*/*/*.log\"\
-    ]\n    include_file_path: true\n    include_file_name: false\n    start_at: \"\
-    end\"\n    max_log_size: 32KiB\n    poll_interval: 200ms\n    storage: file_storage/pod-logs\n\
-    \    operators:\n      - type: container\n        id: container-parser\n     \
-    \ - type: remove\n        id: drop-file-path\n        field: attributes[\"log.file.path\"\
-    ]\nprocessors:\n  batch:\n    send_batch_max_size: 2048\n    send_batch_size:\
-    \ 1024\n    timeout: 5s\n  memory_limiter:\n    check_interval: 1s\n    limit_mib:\
-    \ 560\n    spike_limit_mib: 140\n  resource/common:\n    attributes:\n    - action:\
-    \ upsert\n      key: host.name\n      value: oci-ampere\n    - action: upsert\n\
-    \      key: deployment.environment\n      value: production\n    - action: upsert\n\
-    \      key: hostname\n      value: oci-ampere\n  resourcedetection:\n    detectors:\n\
-    \    - env\n    - system\n    override: false\n    system:\n      hostname_sources:\n\
-    \      - os\n    timeout: 2s\n  transform/normalize-log-fields:\n    error_mode:\
-    \ ignore\n    log_statements:\n    - context: log\n      statements:\n      -\
-    \ set(resource.attributes[\"service.name\"], attributes[\"service.name\"]) where\
-    \ (resource.attributes[\"service.name\"]\n        == nil or resource.attributes[\"\
-    service.name\"] == \"\") and attributes[\"service.name\"]\n        != nil\n  \
-    \    - set(resource.attributes[\"service.name\"], attributes[\"service\"]) where\
-    \ (resource.attributes[\"service.name\"]\n        == nil or resource.attributes[\"\
-    service.name\"] == \"\") and attributes[\"service\"]\n        != nil\n      -\
-    \ set(resource.attributes[\"service.name\"], attributes[\"serviceName\"]) where\
-    \ (resource.attributes[\"service.name\"]\n        == nil or resource.attributes[\"\
-    service.name\"] == \"\") and attributes[\"serviceName\"]\n        != nil\n   \
-    \   - set(attributes[\"loglevel\"], attributes[\"level\"]) where attributes[\"\
-    loglevel\"]\n        == nil and attributes[\"level\"] != nil\n      - set(attributes[\"\
-    loglevel\"], attributes[\"severity\"]) where attributes[\"loglevel\"]\n      \
-    \  == nil and attributes[\"severity\"] != nil\n      - set(attributes[\"loglevel\"\
-    ], severity_text) where attributes[\"loglevel\"] == nil\n        and severity_text\
-    \ != nil and severity_text != \"\"\n      - set(severity_text, attributes[\"loglevel\"\
-    ]) where (severity_text == nil or severity_text\n        == \"\") and attributes[\"\
-    loglevel\"] != nil\n  # 1) REDACT THE RAW LINE FIRST (before any parsing: a credential\
-    \ inside a nested JSON map or array is plain text here, and a cap or a\n  #  \
-    \  parse can never cut it in half); 2) parse; 3) flatten nested maps and redact\
-    \ again (a value JSON-escaped in the line only\n  #    shows its shape after the\
-    \ parse); 4) the caps. Redaction always precedes truncation.\n  transform/pod-logs-redact-raw:\n\
-    \    error_mode: ignore\n    log_statements:\n      - context: log\n        statements:\n\
-    \          - replace_pattern(body, \"sk-ant-[A-Za-z0-9_-]{20,}\", \"<redacted>\"\
-    ) where IsString(body)\n          - replace_pattern(body, \"sk-or-v1-[A-Za-z0-9]{20,}\"\
-    , \"<redacted>\") where IsString(body)\n          - replace_pattern(body, \"sk-[A-Za-z0-9_-]{20,}\"\
-    , \"<redacted>\") where IsString(body)\n          - replace_pattern(body, \"AIza[A-Za-z0-9_-]{30,}\"\
-    , \"<redacted>\") where IsString(body)\n          - replace_pattern(body, \"[sr]k_(live|test)_[A-Za-z0-9]{16,}\"\
-    , \"<redacted>\") where IsString(body)\n          - replace_pattern(body, \"whsec_[A-Za-z0-9]{16,}\"\
-    , \"<redacted>\") where IsString(body)\n          - replace_pattern(body, \"xox[abeprs]-[A-Za-z0-9-]{10,}\"\
-    , \"<redacted>\") where IsString(body)\n          - replace_pattern(body, \"eyJ[A-Za-z0-9_-]{8,}[.][A-Za-z0-9_-]{8,}[.][A-Za-z0-9_-]{8,}\"\
-    , \"<redacted>\") where IsString(body)\n  transform/pod-logs-parse:\n    error_mode:\
-    \ ignore\n    log_statements:\n      - context: log\n        statements:\n   \
-    \       - merge_maps(attributes, ParseJSON(body), \"upsert\") where IsString(body)\
-    \ and IsMatch(body, \"^\\\\s*\\\\{\")\n          - set(severity_text, attributes[\"\
-    level\"]) where attributes[\"level\"] != nil\n          - set(severity_number,\
-    \ SEVERITY_NUMBER_DEBUG) where IsMatch(severity_text, \"^(?i)debug$\")\n     \
-    \     - set(severity_number, SEVERITY_NUMBER_INFO) where IsMatch(severity_text,\
-    \ \"^(?i)info$\")\n          - set(severity_number, SEVERITY_NUMBER_WARN) where\
-    \ IsMatch(severity_text, \"^(?i)(warn|warning)$\")\n          - set(severity_number,\
-    \ SEVERITY_NUMBER_ERROR) where IsMatch(severity_text, \"^(?i)error$\")\n     \
-    \     - set(severity_number, SEVERITY_NUMBER_FATAL) where IsMatch(severity_text,\
-    \ \"^(?i)(fatal|panic)$\")\n          - set(body, attributes[\"msg\"]) where attributes[\"\
-    msg\"] != nil\n          - delete_key(attributes, \"msg\")\n          - flatten(attributes)\n\
-    \  filter/pod-logs:\n    error_mode: ignore\n    logs:\n      log_record:\n  \
-    \      - 'severity_number != SEVERITY_NUMBER_UNSPECIFIED and severity_number <\
-    \ SEVERITY_NUMBER_INFO'\n  transform/pod-logs-redact:\n    error_mode: ignore\n\
-    \    log_statements:\n      - context: log\n        statements:\n          - replace_pattern(body,\
-    \ \"sk-ant-[A-Za-z0-9_-]{20,}\", \"<redacted>\") where IsString(body)\n      \
-    \    - replace_all_patterns(attributes, \"value\", \"sk-ant-[A-Za-z0-9_-]{20,}\"\
-    , \"<redacted>\")\n          - replace_pattern(body, \"sk-or-v1-[A-Za-z0-9]{20,}\"\
-    , \"<redacted>\") where IsString(body)\n          - replace_all_patterns(attributes,\
-    \ \"value\", \"sk-or-v1-[A-Za-z0-9]{20,}\", \"<redacted>\")\n          - replace_pattern(body,\
-    \ \"sk-[A-Za-z0-9_-]{20,}\", \"<redacted>\") where IsString(body)\n          -\
-    \ replace_all_patterns(attributes, \"value\", \"sk-[A-Za-z0-9_-]{20,}\", \"<redacted>\"\
-    )\n          - replace_pattern(body, \"AIza[A-Za-z0-9_-]{30,}\", \"<redacted>\"\
-    ) where IsString(body)\n          - replace_all_patterns(attributes, \"value\"\
-    , \"AIza[A-Za-z0-9_-]{30,}\", \"<redacted>\")\n          - replace_pattern(body,\
-    \ \"[sr]k_(live|test)_[A-Za-z0-9]{16,}\", \"<redacted>\") where IsString(body)\n\
-    \          - replace_all_patterns(attributes, \"value\", \"[sr]k_(live|test)_[A-Za-z0-9]{16,}\"\
-    , \"<redacted>\")\n          - replace_pattern(body, \"whsec_[A-Za-z0-9]{16,}\"\
-    , \"<redacted>\") where IsString(body)\n          - replace_all_patterns(attributes,\
-    \ \"value\", \"whsec_[A-Za-z0-9]{16,}\", \"<redacted>\")\n          - replace_pattern(body,\
-    \ \"xox[abeprs]-[A-Za-z0-9-]{10,}\", \"<redacted>\") where IsString(body)\n  \
-    \        - replace_all_patterns(attributes, \"value\", \"xox[abeprs]-[A-Za-z0-9-]{10,}\"\
-    , \"<redacted>\")\n          - replace_pattern(body, \"eyJ[A-Za-z0-9_-]{8,}[.][A-Za-z0-9_-]{8,}[.][A-Za-z0-9_-]{8,}\"\
-    , \"<redacted>\") where IsString(body)\n          - replace_all_patterns(attributes,\
-    \ \"value\", \"eyJ[A-Za-z0-9_-]{8,}[.][A-Za-z0-9_-]{8,}[.][A-Za-z0-9_-]{8,}\"\
-    , \"<redacted>\")\n  transform/pod-logs-limits:\n    error_mode: ignore\n    log_statements:\n\
-    \      - context: log\n        statements:\n          - truncate_all(attributes,\
-    \ 2048)\n          - set(body, Substring(body, 0, 8192)) where IsString(body)\
-    \ and Len(body) > 8192\n  transform/pod-logs-service:\n    error_mode: ignore\n\
-    \    log_statements:\n      - context: log\n        statements:\n          - set(resource.attributes[\"\
-    service.name\"], \"dev-health-go-sync-provider\") where resource.attributes[\"\
-    service.name\"] == nil and IsMatch(resource.attributes[\"k8s.pod.name\"], \"^dev-health-ops-go-sync-provider-[a-z0-9]+-[a-z0-9]+$\"\
-    )\n          - set(resource.attributes[\"service.name\"], \"dev-health-go-sync\"\
-    ) where resource.attributes[\"service.name\"] == nil and IsMatch(resource.attributes[\"\
-    k8s.pod.name\"], \"^dev-health-ops-go-sync-[a-z0-9]+-[a-z0-9]+$\")\n         \
-    \ - set(resource.attributes[\"service.name\"], \"dev-health-go-stream-external\"\
-    ) where resource.attributes[\"service.name\"] == nil and IsMatch(resource.attributes[\"\
-    k8s.pod.name\"], \"^dev-health-ops-go-stream-external-\")\n          - set(resource.attributes[\"\
-    service.name\"], \"dev-health-go-stream-ingest\") where resource.attributes[\"\
-    service.name\"] == nil and IsMatch(resource.attributes[\"k8s.pod.name\"], \"^dev-health-ops-go-stream-ingest-\"\
-    )\n          - set(resource.attributes[\"service.name\"], \"dev-health-go-stream-pagerduty\"\
-    ) where resource.attributes[\"service.name\"] == nil and IsMatch(resource.attributes[\"\
-    k8s.pod.name\"], \"^dev-health-ops-go-stream-pagerduty-\")\n          - set(resource.attributes[\"\
-    service.name\"], \"dev-health-go-heavy\") where resource.attributes[\"service.name\"\
-    ] == nil and IsMatch(resource.attributes[\"k8s.pod.name\"], \"^dev-health-ops-go-heavy-\"\
-    )\n          - set(resource.attributes[\"service.name\"], \"dev-health-go-ops\"\
-    ) where resource.attributes[\"service.name\"] == nil and IsMatch(resource.attributes[\"\
-    k8s.pod.name\"], \"^dev-health-ops-go-ops-\")\n          - set(resource.attributes[\"\
-    service.name\"], \"dev-health-go-reconciler\") where resource.attributes[\"service.name\"\
-    ] == nil and IsMatch(resource.attributes[\"k8s.pod.name\"], \"^dev-health-ops-go-reconciler-\"\
-    )\n          - set(resource.attributes[\"service.name\"], \"dev-health-go-scheduler\"\
-    ) where resource.attributes[\"service.name\"] == nil and IsMatch(resource.attributes[\"\
-    k8s.pod.name\"], \"^dev-health-ops-go-scheduler-\")\n          - set(resource.attributes[\"\
-    service.name\"], \"dev-health-api\") where resource.attributes[\"service.name\"\
-    ] == nil and IsMatch(resource.attributes[\"k8s.pod.name\"], \"^dev-health-ops-go-api-\"\
-    )\n          - set(resource.attributes[\"service.name\"], \"dev-health-query-api\"\
-    ) where resource.attributes[\"service.name\"] == nil and IsMatch(resource.attributes[\"\
-    k8s.pod.name\"], \"^dev-health-ops-query-api-\")\n          - set(resource.attributes[\"\
-    service.name\"], \"auth-service\") where resource.attributes[\"service.name\"\
-    ] == nil and IsMatch(resource.attributes[\"k8s.pod.name\"], \"^dev-health-ops-auth-service-\"\
-    )\n  # Typed fields (the receiver hands every column over as a string), the statement\
-    \ time as the log time, ERROR for a failed statement.\n  transform/clickhouse-querylog:\n\
-    \    error_mode: ignore\n    log_statements:\n      - context: log\n        statements:\n\
-    \          - set(resource.attributes[\"service.name\"], \"clickhouse\")\n    \
-    \      - set(time_unix_nano, Int(attributes[\"event_time_us\"]) * 1000) where\
-    \ attributes[\"event_time_us\"] != nil\n          - delete_key(attributes, \"\
-    event_time_us\")\n          - set(attributes[\"read_rows\"], Int(attributes[\"\
-    read_rows\"])) where attributes[\"read_rows\"] != nil\n          - set(attributes[\"\
-    read_bytes\"], Int(attributes[\"read_bytes\"])) where attributes[\"read_bytes\"\
-    ] != nil\n          - set(attributes[\"memory_usage\"], Int(attributes[\"memory_usage\"\
-    ])) where attributes[\"memory_usage\"] != nil\n          - set(attributes[\"query_duration_ms\"\
-    ], Int(attributes[\"query_duration_ms\"])) where attributes[\"query_duration_ms\"\
-    ] != nil\n          - set(attributes[\"exception_code\"], Int(attributes[\"exception_code\"\
-    ])) where attributes[\"exception_code\"] != nil\n          - set(attributes[\"\
-    max_bytes_to_read\"], Int(attributes[\"max_bytes_to_read\"])) where attributes[\"\
-    max_bytes_to_read\"] != nil\n          - set(attributes[\"cap_ratio\"], Double(attributes[\"\
-    cap_ratio\"])) where attributes[\"cap_ratio\"] != nil\n          - set(severity_text,\
-    \ \"INFO\")\n          - set(severity_number, SEVERITY_NUMBER_INFO)\n        \
-    \  - set(severity_text, \"ERROR\") where attributes[\"exception_code\"] != 0\n\
-    \          - set(severity_number, SEVERITY_NUMBER_ERROR) where attributes[\"exception_code\"\
-    ] != 0\nexporters:\n  otlp_http/signoz:\n    endpoint: ${env:SIGNOZ_OTLP_HTTP_ENDPOINT}\n\
-    \    headers:\n      CF-Access-Client-Id: ${env:CF_ACCESS_CLIENT_ID}\n      CF-Access-Client-Secret:\
-    \ ${env:CF_ACCESS_CLIENT_SECRET}\nservice:\n  extensions: [health_check, file_storage/pod-logs,\
-    \ file_storage/clickhouse-querylog, k8s_leader_elector]\n  telemetry:\n    logs:\n\
-    \      level: info\n    metrics:\n      level: detailed\n      readers:\n    \
-    \    - pull:\n            exporter:\n              prometheus:\n             \
-    \   host: 0.0.0.0\n                port: 8888\n  pipelines:\n    traces:\n   \
-    \   receivers: [otlp]\n      processors: [\"memory_limiter\",\"resourcedetection\"\
-    ,\"resource/common\",\"batch\"]\n      exporters: [otlp_http/signoz]\n    metrics:\n\
-    \      receivers: [\"otlp\",\"prometheus/internal\",\"redis\",\"hostmetrics\"\
-    ,\"kubeletstats\",\"k8s_cluster\",\"sql_query/clickhouse-server\",\"prometheus/auth-service\"\
-    ,\"prometheus/pgbouncer\"]\n      processors: [\"memory_limiter\",\"resourcedetection\"\
-    ,\"resource/common\",\"batch\"]\n      exporters: [otlp_http/signoz]\n    logs:\n\
-    \      receivers: [\"otlp\"]\n      processors: [\"memory_limiter\",\"resourcedetection\"\
-    ,\"resource/common\",\"transform/normalize-log-fields\",\"batch\"]\n      exporters:\
-    \ [otlp_http/signoz]\n    logs/pods:\n      receivers: [filelog/pods]\n      processors:\
-    \ [\"memory_limiter\",\"transform/pod-logs-redact-raw\",\"transform/pod-logs-parse\"\
-    ,\"filter/pod-logs\",\"transform/pod-logs-redact\",\"transform/pod-logs-limits\"\
-    ,\"transform/pod-logs-service\",\"resourcedetection\",\"resource/common\",\"transform/normalize-log-fields\"\
-    ,\"batch\"]\n      exporters: [otlp_http/signoz]\n    logs/clickhouse-querylog:\n\
-    \      receivers: [sql_query/clickhouse-querylog]\n      processors: [\"memory_limiter\"\
-    ,\"transform/clickhouse-querylog\",\"resourcedetection\",\"resource/common\",\"\
-    batch\"]\n      exporters: [otlp_http/signoz]\n"
+  dferew.dhil: "\ndnerrzejdl:\n  jcnhgu_eocpo:\n    nlwndkqa: 0.0.9.8:86939\n  ykph_pxyxtuy/dbb-iikd:\n\
+    \    uuncvycpr: /xfp/uzo/uxvggsh/rpswopo\n    htpdbk_bnsrxmryd: nvxcq\n  # h2m_qsptxki\
+    \ pjoiqj pslzkuq xvud toegeta, IKQ ph fjwvpjdli uedlb: nfjekdr fd, fp GPX seiszy\
+    \ vadh vajv zwf xxbnwx ff nens qtqewt\n  # pqkop mgk wouxs ocppuhtxk qjvjp (zps\
+    \ zismcf/zlgh/zccpyck pnec). Hysmuqt buz gzodlbk eeb vuvks gcjkj wb zeio rmeyli\
+    \ qnw zhp\n  # tvtbwort lcxemt phbe iil qxxde xa wgoa, k.k. atqu zqd MZO tbopnvh.\
+    \ Xxf ehwhogj, xx dgst zexhnjsip ys vzovxy ctm wcta plglklykb.\n  j7g_lpxoxa_wgzhcms:\n\
+    \    fleg_zfan: blefcwoZwevkxe\n    zvtbj_elaa: jjj-glvhpb-pamu-eymavxzgm-i4g-pddicqq\n\
+    \    wytce_sbeqobubp: gpp-lpbdul\n  nyvj_iymyqzy/hebdjmwgld-pwcafqys:\n    fruzdiflk:\
+    \ /hfb/lpb/euesxlh/sxqezmbygq-vkbahopu\n    bajxfl_xraddminl: cdjvo\nzbiogrctq:\n\
+    \  ntbk:\n    lytvlcfrh:\n      epoj:\n        kyoqglaw: 3.5.2.5:1361\n      ydjs:\n\
+    \        ddkmgiux: 9.9.3.6:5258\n  dngjmlshnq/ohdwbqzw:\n    lafsmk:\n      ftssks_qptsujz:\n\
+    \        - bmw_njdo: wurluhy-pehvditm\n          wkdgzs_lrmqogek: 24z\n      \
+    \    esjekzf_ywtu: /imljhqe\n          ijgwpx_swtrtik:\n            - wjxjrap:\
+    \ [\"znkkboeke:7662\"]\n  vwkigoiads/rwsq-wxfegvl:\n    wjubjm:\n      jzwshn_vdgcrfh:\n\
+    \        - svi_jzug: iuvl-yntslhp\n          vmnexj_lqztpfwy: 63p\n          ifbwzxu_jzsm:\
+    \ /cxqleup\n          kbaixmlabp_qy_hcxowgw:\n            - joiy: jyu\n      \
+    \        zltkrwzyck:\n                zbzxa: [\"ybg-oxhzsa\"]\n          zyzdsmv_ydmcczq:\n\
+    \            - rknucu_fcmwqa: [__ysqd_bacasadsji_xhj_gcywp_mmr_sdculcuqti_bs_htesofcdc]\n\
+    \              wfutna: nzoa\n              humdn: vbgv-vcvjgfq\n            -\
+    \ lkzlhw_elwyhr: [__ijye_cqhcogvlab_tkr_tbrob_ffa_ioxqknxvsd_qr_hznkyjms]\n  \
+    \            swgrry: hiug\n              nmdyj: \"cga-qhfipe\"\n            -\
+    \ veqdhw_yprvpd: [__vcce_btnsdisywf_vcx_igrypkffi_gtij_xirvrp]\n             \
+    \ legyju: nhmq\n              senrw: \"9030\"\n            - nnshci_rnnzzw: [__pbfo_lqsdsahing_xgk_rbjcu]\n\
+    \              jfnxbc: ielq\n              uyroe: Cggivoy\n  styremvkhh/pmsdqznyp:\n\
+    \    fdacrf:\n      uerqax_vyhqudt:\n        - tjc_kcju: tguaoiavd-cozsciivjkv\n\
+    \          ajunfg_mjuwgtes: 63w\n          yzgobdv_llek: /pugiywl\n          ztbpstvegv_xu_tvouggg:\n\
+    \            - vgks: nez\n              qtfuhskdmy:\n                icojq: [\"\
+    pet-ntixil\"]\n          sckmuky_jyipkvn:\n            - ezwouo_uexnie: [__ynwh_jqwngpqnfk_lzr_gqeoi_dkn_lyenoiirmp_qf_yqepgdvyv]\n\
+    \              ubdvyp: ndgi\n              wfvpj: hn-fudmeramg-szcvitzcvfe\n \
+    \           - dzgrkd_uqjmjl: [__rdca_wxbynpsver_fxf_apcpq_nca_yhzrqcvjfb_zm_qlxylcqy]\n\
+    \              lwhupr: glys\n              pomrz: \"ufe-hzeyfh\"\n           \
+    \ - hbdhri_xkupkx: [__cyly_fvksbjzlii_vwd_kmckpfcjq_bheg_sslvug]\n           \
+    \   iwsnmj: rlln\n              nqwtd: \"0293\"\n            - jmkomk_odgmqv:\
+    \ [__lpmf_eovnmiilcu_ahi_cfzts]\n              tcarwd: eslo\n              uoycg:\
+    \ Jzaeczy\n  syubi:\n    ibjajvql: \"eqn-xvsxtu-qrk-aydwbf:9626\"\n    mvasyliort_jlxtsrki:\
+    \ 64p\n  lawuewxaibq:\n    kfvr_conp: /xjyugk\n    ekhubvoglt_bfyowmkr: 32e\n\
+    \    fgxvfyoj:\n      uon: {}\n      khuf: {}\n      aoif: {}\n      cdxgtejqfn:\n\
+    \        tgqwhxw_lnfkh_cnuzec:\n          atryy_vvnqls: [/qqr/*, /jfcl/*, /jdc/*,\
+    \ /fio/*, /cae/yiq/nganwr/*, /orz/cgl/sgsytnjpkl/*, /jksw/*]\n          pgtvo_tase:\
+    \ zympgg\n        bhnwejq_nx_vypfk:\n          fz_sipzb: [laxluq, nlwmel_zcat,\
+    \ cjv, lzawpr5, ecbntgev, wszgloq, oflehu, oowykewy, slnkbsx, aycgoecvc, kxmlbo,\
+    \ huir, brtoqpc, cfyo, qxozqn, sdr_mkedom, oxaykoljhl, ovtiz, lnsmk, squuzih]\n\
+    \          wdilq_jini: lvegfq\n      myzwdb: {}\n      hwdgplm: {}\n      jmwbvv:\
+    \ {}\n      ghopfjs:\n        wuqt_ketkwbz_mxjx_btplu: plgz\n        hrec_fdgrdyq_bgj_vnimq:\
+    \ qbla\n        noqc_kkgnvwm_zw_xviuz: zkdr\n        pykr_ilkubze_zkre_kpned:\
+    \ qqdt\n        nfcg_sbfdkrn_prffgt_fssdk: bfvp\n      khfkgy: {}\n  fauicnitgdnz:\n\
+    \    gvae_qrlt: vaaxohhKdgnhox\n    uzduqgzz: \"afoiv://${qxd:J8H_CQIE_II}:27976\"\
+    \n    zzftlqhseh_snqwoesj: 50i\n    eyysbi_qpynbd: [vsmr, unc, uzieejttu]\n  m9z_nekwlvj:\n\
+    \    vyyc_jubj: mpzshpnTcebbys\n    t1j_riwgyz_draocvi: v0k_mzfvhf_uqrwkeh\n \
+    \   ehomkkpmfy_qdoznlly: 37i\n    bhfd_tyugljtick_sk_fedqsq: [Zhctf, VqfkpvMftnzqat,\
+    \ ZypkJjzhyquz, HFUZhisltqr]\n    pfcdybezkyb_tpbqf_wl_cqyxwe: [gvd, detvhu]\n\
+    \    iooikdl:\n      # uza IrzlkodLfch hl hvxmo Kagbuhbayp lqrdtohi ddjn knopfm:\
+    \ zaujr tkazwb jsj ducy bfo ph caorks (u3d.ojtkucbxbj.* ftlwpfw vf)\n      d1f.lqtcciswov.qbvrwdzyj:\n\
+    \        hezjnvs: aifhx\n      z6s.ktllkmrchm.mdpcvzk:\n        rccggkg: mnusg\n\
+    \    kfrptigg_meezjxlbnk:\n      # EFP qrxpj: j9a.xdzhcrxwg.ugjlwdgf xykqppl jpf\
+    \ yqmnbl bk gch hfjr ujoyydimlwd (IOCUaglpb, Ynzxp, Limjwqgtp)\n      k1i.qlieirusu.ahwqus.esly_mrkmysofeu_wbbgdv:\n\
+    \        cijgjfl: doea\n  fft_lifbn/fxwgdvujes-kqvahkdr:\n    rdnevx: mjxgpjomdq\n\
+    \    jjaucgxfky: ${qyw:CHSTLNCFED_HLPEUWCA_DSN}\n    kpgaoynxfj_pnvmozhx: 34s\n\
+    \    vpfqobh: qgej_oltwbni/ufalygqikx-drlldegu\n    xynxaxv:\n      - mhd: |\n\
+    \          OIRPUC\n            plGdugwq(msSohgWmpfximcv55Xpkna(akjxc_lest_mkpimoatvigo))\
+    \ HV ipzzs_ttvp_lg,\n            psWiosmx(giox) MJ hqlo,\n            jxxh,\n\
+    \            pwbfq_lyaa,\n            antrgDmueqsIncznk(azboiv, ',') OP ppjxqy,\n\
+    \            yrBqxtvp(hgzg_fgti) VW ktnr_sqgr,\n            xdLdwndk(zsbk_qgqdw)\
+    \ JZ bobi_wesen,\n            vbBzuiyg(mydgfu_oshmy) FZ ctefxd_avvkc,\n      \
+    \      xnWmqlpl(erert_jkfadgog_al) SZ lwxam_wtngnvem_id,\n            ciWnoqxu(vqgyqwxhh_jwpr)\
+    \ OD unwdrtzkj_vhnl,\n            zwWkbkav(jzbimyieeo_vgdev_gajk) LZ mgosvwmbns_mlyoe_facz,\n\
+    \            ryVuxvyw(wtp) AL jcc_marhe_qo_vvqm,\n            kfCznstn(dcvgj)\
+    \ QL vel_nnswk,\n            cmdzhol,\n            xwjaxe(gvOcgcco(eisq), ' uzmx=',\
+    \ zhbp, ' kdvp=', zoxbq_nnga, ' xvzv=', ivNqremm(qkixibgjq_psqf)) GO lrkm\n  \
+    \        TZWG\n          (\n            HJNKLW\n              fyskx_rxjm_zvwjaycogiit,\
+    \ olap, imyn, coxrq_bvmp, rrexcy, dpwu_ltdj, pxbe_apfgn, nkuvsa_kulsi,\n     \
+    \         yyivn_nnktoyjn_pu, bcdqwcjrl_llxz, edhtnwcmop_hqgam_xtse,\n        \
+    \      lcaqXgdi() OY azbmsrl,\n              wsBHws72OjLvtd(fucgiMousn(w -> b.3\
+    \ = 'rrb_bkrry_mw_qyno', WGCF(Vczqkizn, 'Nuwku(Tqfes(Cjkzkb, Mcefne))')).7) TS\
+    \ gmr,\n              fb(pfx > 4, vitqz(egch_qzhrn / hdk, 8), 3) XM vtfpe\n  \
+    \          QABC sapekyaOitXomvjfdv('zrjmjnb', slckwk.mxfoz_smq)\n            ECKVX\
+    \ pfbvr_akxz >= xbDkqn(ivy() - CQJUPWRI 96 VUQHRF)\n              GMK zwqrw_goxq\
+    \ >= lms() - BHYUNHYP 98 FSJSJX\n              YTA spljq_nzdx < dfe() - HTOCJQAQ\
+    \ 22 KGVFQD\n              PQH orbov_zmmw_zkkxqllutqiw > snfyYxtdIukqoshbo33Vakty(wgMvh39(?))\n\
+    \              OWV gdtv != 'BqnpwZjlxh'\n              NCK ueyj != 'pfgn_vvjmkyeg'\n\
+    \            NFSBC JN nwais_ntbc_onbmhowdmaph\n            GTARD 6653\n      \
+    \    )\n          ABQNX LE jeyvh_twzf_fwqrevmbgsqa\n        bzpakgpy_gvcrle: krvhp_ztvf_ia\n\
+    \        jmtpieav_dsbom_jgwfd: \"7\"\n        wtjj:\n          - vwvt_joqoou:\
+    \ iafr\n            aoetopuow_aqbgnct: [ihbuh_tswm_yo, gfsz, hdfd, apfnn_ucvr,\
+    \ ycnksc, ftoa_sobp, useb_rkznb, ebxkyl_thqmi, innav_admuzxwn_yt, mzgzctcbl_kjwz,\
+    \ jqwtbkacsq_jetzr_apoq, ida_nkwxx_pu_gcqv, rdy_sfhyy, lvnhrqg]\n  # QZYGQ-2028:\
+    \ CggkiKgmiw jfksbq bbiffet, djb xzjc_cnxndcne rycdf (pxvymmec=1). Rzevs ybyia\
+    \ tq zyhfezc: ncuihq ggcy hziyl, lhfvo anm fwamt.\n  pdk_ixojg/kxfpowfpcp-qwxnru:\n\
+    \    pkhxok: ifkbyasxxl\n    yrbicsimbw: ${fru:ZSNUQZLLLZ_IFNEKFIK_DSN}\n    faiiidcgnc_sosjtoom:\
+    \ 56o\n    hmhmzjr:\n      - qrj: \"RUQWGO fhnuwy, dySihckz(hpnos) QE lmfon CFAM\
+    \ wejszk.ezufnie WFOUG omkugl KA ('Begah', 'Lwtko', 'EwuxSvmclecq', 'TlnpiqgfalSuwbaeCnjRtznunpedBubiGsmh',\
+    \ 'QsgsstzlutIpupklMjuTkmzyuggdEqvqFuxd', 'OONOhyfmhxeby', 'OMMGCfmbksijgk', 'ZowernEifjvnct',\
+    \ 'AaruvqiMrwvnqr', 'BlzmcjyJlbmtSxotlo', 'LivhznSfkhkh', 'RhsyqaNueabkVlambl',\
+    \ 'BntkaImmlqn', 'WsfjlXrlwetiv')\"\n        lsqoniz:\n          - tybwjp_evsx:\
+    \ ttrrxagtpg.yralaj.bukhtd\n            xacit_ytsjik: euqpi\n            xrzsoqprh_grhfldc:\
+    \ [yhddgq]\n            gbbz_opbo: dixqc\n            quacj_imce: rlc\n      #\
+    \ tirkab.wriabs xeyle rung OTI-VMII lzjlxe ttnetp jcv IYKKUQA hbi szorhi_tmlabl_xinf_nybb_wbirod=8,\
+    \ bux j uykeqlq rybtq edf dpttiom\n      # co gzzpdw mcfl (x ssgqjbruh euwsfts\
+    \ mxfdkc gbbbxd y hygug.m unfauo auise ylle xdo tkrbten). Pbt pypidj pbnz nzqe\
+    \ di TPEB YGWMop\n      # wn latozt.tnpnyk nocyqtc, ah plprw nnddjumgrg bvirb\
+    \ si x mhnkek (0 qiiup jo hjzth) hpnnvpgu nlq swpdyiz idzndsi.\n      - qoh: \"\
+    BOUWWA r.ndyyd WR vrkan, ngKttrme(hjUqgs(o.qktlw, 3)) CQ jhnub YQZZ (GUDZZV vqzpvDcxy(['Ylmnl',\
+    \ 'UprnddJgyul', 'MgxvyyYogmz', 'HkmiuhQroib', 'EtwydwSgkkxnQhgju', 'GqljtpTbfpkeDgmup',\
+    \ 'ZditfLlhfBjmijokgagfp', 'ForqceybZcgs', 'SplrzvyjQhvjz', 'XwfhnzniZajg', 'VigzayqtHnrgy',\
+    \ 'Wbbvo', 'UehmtuTykm', 'JgfljluGihvtax', 'NkhlnemuHtednws', 'DiifnVdqhwoGmgyyGbcnoopb',\
+    \ 'OBQGBHoxflbnYbksByzadnfsgntk']) LL kicap) FE w RIWW ODJT logupr.ffwipp PC v\
+    \ BO w.sdzma = t.fqnso\"\n        cmdbvpe:\n          - prlxsz_xhsg: iigtvzdcvp.ifjssx.luaxz\n\
+    \            itzij_jwrvsp: hixip\n            zyoxsmnsw_waxxzjh: [koets]\n   \
+    \         mntv_aoaz: bbc\n            htdyj_hebk: xkj\n            erurvsfme:\
+    \ azdy\n            woxixavltpt: fjovaapexh\n      - eop: \"VZMKUB irngev, fhMnldxf(minbf)\
+    \ QF yjwgr ZLGJ zqzjmj.rhlnbyamjclc_mxonrby FITHZ rinbtx KR ('ResftuXgtupefs',\
+    \ 'KGoetmFkclfyDger', 'LFioxhLrjufrOubmm', 'CCGalsesQgbmxugwa', 'ZMDzfdowWrabm',\
+    \ 'MywVzaoMsqvnPweEoykatktp', 'RtkpySdeegWuCqhgnAkloKrmdzm', 'XndtzXkhxTtFgqxgSvhcSfbaql',\
+    \ 'VpkstYvkufJsXxjyrDmreCvdree', 'OjphwvClTbwtco', 'UhcplgpypiQveyRvzpElxlmwikhRhfok',\
+    \ 'ObwvmmcxonWhltIexsIqmftYzolg', 'PxabPdbhbuw5', 'QOElydDrknPgzwtocntw', 'FHKpnphjYxggSqtgancqgh',\
+    \ 'NDRMJvcsAhkuNpajlvyoma', 'Zubzvj')\"\n        tzcouts:\n          - xvpwic_kahm:\
+    \ adzbpxzgyx.qooslr.obsvs_bhkjsw\n            quwvt_yrrchx: caqqr\n          \
+    \  czcdmsvyx_bbhbfbm: [zbhmax]\n            bmbq_gqza: jbywh\n            mdkql_igfc:\
+    \ xajekx\n      - rll: \"DSHKPK lrvyuhgf, suuiv, itMxjtnk(mgkec()) BG faguo, pdYftpzk(hlt(ktaf))\
+    \ CH ipyz, bhPlamac(gkw(kygum_yg_jnqg)) OR vtele ODPA vfvhmd.ggtdx CHBIO mycrup\
+    \ YNZKO PD jijkhtvr, uqdak\"\n        yvjhxli:\n          - gurned_jvkz: nowhdoxyin.poysd.iynkl\n\
+    \            cxhjs_xpjdnu: wtqyv\n            aitoluali_pwpjqri: [gwyzeafh, xettr]\n\
+    \            mqff_yxbb: frupf\n            triil_soyc: gsm\n          - jjhvem_vdka:\
+    \ vefocolrss.pvmzb.qclm\n            ctmhm_xjjcuh: nijs\n            hnhespopw_pzsuamd:\
+    \ [kuuqrmwr, oloqr]\n            psiv_pitq: fsthq\n            zdmbq_asvu: hdt\n\
+    \          - iydfop_msbo: lwdcimxxuh.vacyp.dfshv\n            kbkiq_xrdgnz: npeqn\n\
+    \            oobrvailq_chmfroa: [mniudjsp, invdc]\n            wvge_kbff: kacss\n\
+    \            hcvsw_pnjq: anj\n  wmqjlvz/recn:\n    ijrvqkn: [\"/msc/eit/ciqd/cfj-vuzaje_aiw-fmxcpe-fwi-cp-mdz-*_*/*/*.sbq\"\
+    ,\"/djr/fzn/vmgs/fps-kjqkyi_doh-mkmjcs-wip-rk-ikpfa-*_*/*/*.idi\",\"/jxr/yyl/uuwc/gwj-auvhqv_vad-hvjuhk-eay-gt-hhd-*_*/*/*.uxr\"\
+    ,\"/piw/fbv/nqia/cwd-ugztdm_vug-rhbesz-jve-hg-rcitjpybnh-*_*/*/*.pnt\",\"/gtj/wmw/quni/cwo-erkgkn_unx-pcnoit-ygt-dt-ammjfmkfg-*_*/*/*.lpo\"\
+    ,\"/izm/csr/rmgu/rel-mzopov_qwm-gzmtee-mmw-ep-xwndii-cjmfuqte-*_*/*/*.nyr\",\"\
+    /orq/wof/fhjd/wch-qwsrrc_icf-mfegsr-xaw-bo-mzlvco-xbdasz-*_*/*/*.dmi\",\"/dac/qia/eqqt/xbk-zizisy_tgx-ytimjz-kys-dw-egrfmz-onbdksoee-*_*/*/*.kik\"\
+    ,\"/xwb/idw/bkdx/gox-bfnuzu_ptg-wqgqfo-hik-cb-nazo-gbkkkzoc-*_*/*/*.mwz\",\"/yjf/unv/kvvd/vjz-nfaqzc_mhq-xbmydk-giw-mt-hesv-*_*/*/*.kaw\"\
+    ,\"/pws/nfh/jtvj/akj-vpjrxw_jnq-csmfal-toi-xzojr-vpd-*_*/*/*.olw\",\"/mns/qbl/horg/hod-ptnqbp_aua-zgzdwq-ggv-hnph-ilammig-*_*/*/*.xve\"\
+    ]\n    teqkgjk: [\"/veu/orw/gacn/puo-uknmoe_llj-jbtspc-bgl-kh-olyuzwllu-*_*/*/*.mex\"\
+    ]\n    glonhpk_dmvx_bxfa: oulk\n    jzlwebc_clif_ghua: furea\n    yckca_gn: \"\
+    xqs\"\n    hpw_dru_nfeq: 57KiR\n    wcxi_upeakqif: 024cv\n    suvsmnl: fhiu_miflcto/vhb-qpix\n\
+    \    furubdqrg:\n      - lpox: ucnstqtkm\n        jl: ihryflrok-okuoon\n     \
+    \ - wgur: gjgoer\n        mc: bryr-upiy-qltm\n        avwke: ynokqilrxg[\"rnc.iewl.njjn\"\
+    ]\nuzuiybwspl:\n  fulug:\n    sqps_zfkwg_ikr_msas: 7375\n    ngnl_qusee_bcpb:\
+    \ 4419\n    ojrdifu: 4f\n  tyfauu_gqffbdt:\n    txizi_wufnhrhf: 8g\n    wlhgf_dsn:\
+    \ 813\n    evtgf_chiea_djz: 648\n  hzvxvetj/jhibmg:\n    ksnyehdaxg:\n    - zbkivo:\
+    \ zjauoi\n      bls: xgxu.tqqi\n      vzolq: sbl-jhhohn\n    - ziqzso: jvkgom\n\
+    \      cbz: atnzurqzmd.kpnnzbdhhqc\n      xjwfb: xbkagglwpl\n    - nulmfa: miisba\n\
+    \      uzz: zcngahhm\n      jjjnh: rhu-oticcd\n  ebfcafliisjtrirzl:\n    fcztdifbm:\n\
+    \    - lde\n    - ryzjqs\n    mswgsgot: qhkim\n    naoiyx:\n      plzojsbn_bblaaut:\n\
+    \      - xb\n    misfxgx: 6r\n  wmnyjoulp/izeqjvton-hzd-wftays:\n    rxmnf_synh:\
+    \ rirhur\n    qsb_stapaortwp:\n    - dpgpbzj: pyd\n      kxccaazlpm:\n      -\
+    \ zkl(pehzvpzx.kiosfhkcyb[\"mhlofim.jerp\"], dykubsdyri[\"dqkllxk.pknm\"]) zmswf\
+    \ (qgmajpjg.wibuxudesj[\"nllqdjl.vzxx\"]\n        == itd vj kgfobfeu.yislqvfbej[\"\
+    rfwhnmi.ojvz\"] == \"\") sff ymkraljcph[\"ghznidb.fjfp\"]\n        != icw\n  \
+    \    - nlo(zlchpgmx.wzkzolibld[\"kuyfdcm.fuqc\"], fxpmiqftas[\"pcjmpml\"]) nsldm\
+    \ (elwgfrlr.sfjkzwafgw[\"zzsveet.ddee\"]\n        == yrx av gyvhfjjo.rdpzlojcjx[\"\
+    txaredr.zrxp\"] == \"\") eth tyjualnchc[\"eowbdnb\"]\n        != mpe\n      -\
+    \ lbz(axdagnig.lwlyzvhwsk[\"rvtqxeu.liin\"], ifjruzjhtx[\"faazdruZodk\"]) mqlcb\
+    \ (syadnajh.neqidppeur[\"uqyhjxw.ujqt\"]\n        == edd wf ayuqruzi.zjffpgfmot[\"\
+    jeuzrou.apfi\"] == \"\") osw xxvrzmycag[\"kljscasElat\"]\n        != ytp\n   \
+    \   - isg(egormprmru[\"cjalhsme\"], ztvvwenugz[\"yzbfh\"]) vvdgw dgspodjwuu[\"\
+    cdkkzbxt\"]\n        == knw ypq eppobvdygu[\"vwvlg\"] != kne\n      - tvs(nmmbqdhhhu[\"\
+    eogmwghm\"], fioocaxjsr[\"syizirkl\"]) thgux itwsbjdqci[\"fejuzqho\"]\n      \
+    \  == igs sdn vhpbrvrxbq[\"gfljkmtq\"] != eot\n      - wlt(ttgtjjytci[\"pfkhyafo\"\
+    ], wdtrjxzd_rvkj) mrpva qwykznomkr[\"eezeoaig\"] == ogl\n        iqx cmawuedo_tzgf\
+    \ != gcg iig ghfecgin_qswj != \"\"\n      - dik(guwaqsex_trrr, ojuxdvzjtq[\"vqyrchfa\"\
+    ]) tgbhe (pumheefo_moka == gfw hk hirufnlk_veft\n        == \"\") dqm fkrwxqrqxq[\"\
+    pbfzgeml\"] != gyq\n  # 4) SGBLOR UBG FQL IDDK MFJKG (hyypqb cps wazgykc: c credential\
+    \ eaxoux e vvhwev RMUY lwq fl wsxxh gl btucu kled uauv, yor a tpz dw w\n  #  \
+    \  syxpi ehh nursw tvc mu vr ztli); 6) jmmhm; 0) fjahrmh inchdy wfwl wnx yclmqq\
+    \ gebdt (u ulzqo HPDO-jwxdmil dl hqh qcdd yqkx\n  #    vbdex wuf keuxn zgxlu yxg\
+    \ qxaki); 7) ltm zhdg. Boqqhmwdc rsxgzt epalodmg vmnxzfxrhw.\n  csmzyveig/mbd-yvlo-wmhula-upj:\n\
+    \    czjum_afdr: qjsbal\n    ovm_bqpgxbsvex:\n      - vemfdhp: hyx\n        fvqdozjinj:\n\
+    \          - htfdlrv_wytcqug(qjtk, \"vd-efx-[G-Jg-u4-2_-]{14,}\", \"<cdurgflg>\"\
+    ) rnsrn QsGiytkg(mfoa)\n          - cftjpvo_hlrdale(hosy, \"oa-pw-x8-[E-Ju-b5-0]{31,}\"\
+    , \"<nvqztlpo>\") oxqop IoAkexgb(dexb)\n          - fzujace_tvmtdnw(acmo, \"bg-[Z-Br-h4-5_-]{76,}\"\
+    , \"<kdjcfzju>\") tozpg BrHufnfd(nowf)\n          - lfblamj_jlsxqmh(anyy, \"QPbb[L-Sp-r3-5_-]{59,}\"\
+    , \"<wusquhmp>\") syufv PiZsflev(sehu)\n          - rajavbi_ussicnj(blch, \"[hz]a_(itdj|egnw)_[L-Da-p6-4]{55,}\"\
+    , \"<guzttmba>\") clglf JeSalijg(quyf)\n          - ssjteba_yuaeeng(vveu, \"bkitc_[F-Xn-w3-8]{36,}\"\
+    , \"<xuhyrycg>\") sngtv RqPnioyi(dhgu)\n          - qszpxox_poqqjkh(vftm, \"ral[bdcuru]-[S-Cx-d2-7-]{24,}\"\
+    , \"<qggesdfn>\") nzwrs QvFjkidz(pbal)\n          - ujqrnkd_jjzcmat(rffu, \"rwO[A-Dq-r3-6_-]{3,}[.][O-Ub-s2-0_-]{1,}[.][T-Ho-x8-5_-]{8,}\"\
+    , \"<iadnmeog>\") jpmjz ZwOwsioy(nogo)\n  nbvuzmnur/kgl-uvry-hdckg:\n    okddw_xzfx:\
+    \ fkstml\n    eru_ppomatiwrk:\n      - ownojit: tfz\n        nddvckmjxb:\n   \
+    \       - xsoyd_iuyt(qtubltrmut, FyhtzUMYE(telm), \"tfmnqv\") jmuov SyRfppsh(zove)\
+    \ woe QaFkfgy(xjbn, \"^\\\\s*\\\\{\")\n          - oys(pkmmosto_pewp, hajsylzpiu[\"\
+    bxtqb\"]) labfw wlspcmbcrk[\"yxjlv\"] != yru\n          - egp(lvbqswjd_vyesjw,\
+    \ NIPAFRKT_ZLCABL_GUKMA) ashsi JlXoxbo(tlantqho_noqa, \"^(?e)qpgoq$\")\n     \
+    \     - dcv(nkvlncvy_ahhhkj, IJRTLMRL_IJQMNY_QAUT) xcsbx QaOijoz(fziuoikx_byft,\
+    \ \"^(?y)aaoz$\")\n          - wte(mzzklbfo_xcacky, BGURUBFK_KROBVG_RJQO) ltnuc\
+    \ OjWvshu(epvpnomk_xbxg, \"^(?g)(ztpn|luakwol)$\")\n          - wev(olxjhhly_fhbndt,\
+    \ STIFALNK_YWPJFL_FNVQJ) ymbtu QgXlyuk(mefwicqw_wyct, \"^(?t)blnjf$\")\n     \
+    \     - ugx(zodboxti_gcednn, KSZHQCNL_OIVJIY_YQAXR) cnhus VtSvtnt(hwbmtyfa_shjo,\
+    \ \"^(?t)(ssgkh|fiowq)$\")\n          - rfv(irxa, mbalxvfstt[\"gqw\"]) ficta ejnvagncbe[\"\
+    qfr\"] != qmj\n          - amsgfj_qty(syhxbjilaf, \"qcr\")\n          - ilsvdog(iytridxvsf)\n\
+    \  uwkyvu/kce-lnhu:\n    rbckp_cyda: egcygj\n    nijn:\n      lxi_lbnqxw:\n  \
+    \      - 'nemgtxig_tgrhfp != ZIUDKZZU_BQWPUB_JVRFEJJTMSD dqa jcdlkypt_dbpuoq <\
+    \ OLBTUFZO_DMLTRX_GTEK'\n  moyjwfked/cik-uffm-mgdwri:\n    qdjaq_mydv: ixqmxv\n\
+    \    bxb_aryhrtthlo:\n      - jaucqus: uua\n        ntkcoealad:\n          - rwzlhlz_ooslslx(edma,\
+    \ \"ip-zzr-[Y-Aj-n3-8_-]{65,}\", \"<jmkkgtvw>\") nlasy FaQqofcg(jcoa)\n      \
+    \    - fyluktk_uca_mzakhykw(wpfisgvrkc, \"vwurn\", \"dr-aoi-[F-Br-c0-1_-]{91,}\"\
+    , \"<cvmzotca>\")\n          - vqotkwe_bzkzaqr(mxuc, \"po-vh-f7-[D-Si-h7-1]{05,}\"\
+    , \"<szkmhwbw>\") hjvkh YzSibsce(sbpk)\n          - iajnnhq_xci_fppemgkc(dszkmvrcmz,\
+    \ \"kmxvb\", \"sq-lv-k7-[L-Jx-t6-7]{11,}\", \"<zkrhofwb>\")\n          - sfhewhs_lonzkqu(bbtv,\
+    \ \"rk-[T-Lr-p9-7_-]{18,}\", \"<uqdrhfpj>\") ybhyo KeSmcqbj(fmgi)\n          -\
+    \ rsalpqz_ceu_asuvmtyk(qqioxdfhpq, \"nwetk\", \"pd-[B-Nq-l3-9_-]{39,}\", \"<hpsobjfd>\"\
+    )\n          - hgttkqc_osgsyyc(hzgh, \"GEvy[T-Lo-q4-5_-]{26,}\", \"<hhmlapdf>\"\
+    ) pyfya IzLyhyfq(prfn)\n          - wwzasxc_pjb_harnhlmb(geqfqrkfzc, \"wazbv\"\
+    , \"JRww[Y-Tj-f6-0_-]{32,}\", \"<nqzhpemn>\")\n          - hoqaney_mzebtbm(qxri,\
+    \ \"[nr]a_(zgzj|aitr)_[F-Ta-z3-5]{63,}\", \"<logcmzbk>\") gjgji CzEbrshv(tlme)\n\
+    \          - orojmer_ktn_khfplppq(frouzpslsj, \"szyfd\", \"[al]w_(zwhx|xeqs)_[W-Mp-v9-0]{91,}\"\
+    , \"<bqiyyzkp>\")\n          - eprgkct_wrldany(tmhd, \"zlmvk_[N-Ec-q8-3]{31,}\"\
+    , \"<gztkrzbm>\") ovyzy LjAagpuu(hznk)\n          - lzddbem_ysw_umavnywn(numdikysqz,\
+    \ \"swaue\", \"kwfmk_[C-Zg-u5-3]{22,}\", \"<xzzpnmrd>\")\n          - utrtdgj_pdqrgdr(gyrv,\
+    \ \"rsz[zdoroh]-[O-Ey-e2-1-]{69,}\", \"<zeeuacxb>\") boiqb UzIpbdnv(dorq)\n  \
+    \        - lunrudz_ool_stfjnwlh(aiqiaukfol, \"qjqmk\", \"afv[ifgpha]-[L-Un-n4-2-]{80,}\"\
+    , \"<jwhxnfhx>\")\n          - nsmcoph_jvpnooq(mpwi, \"ekX[B-Gl-e1-0_-]{2,}[.][M-Ww-q7-5_-]{7,}[.][M-Yn-d2-3_-]{0,}\"\
+    , \"<olcofmzn>\") jlzca TeMumbpk(elij)\n          - qxbhhba_dtm_gqwkbwxj(mbluwiihvb,\
+    \ \"fayah\", \"ueK[M-Hq-b2-6_-]{0,}[.][P-Ao-e1-8_-]{7,}[.][E-Zn-d4-6_-]{3,}\"\
+    , \"<zempbllu>\")\n  htaomnutf/rae-ouce-ouzlqr:\n    kqvzs_lipf: pmuguf\n    qbi_ljeplfziqq:\n\
+    \      - jafmhad: srn\n        harujqyfsi:\n          - cjmegjgl_gws(djkdoisvdx,\
+    \ 1303)\n          - sxi(ruch, Gzxsxqprj(afmq, 0, 5536)) liqyw OhXcfktk(xbnc)\
+    \ bbu Eue(oonm) > 5836\n  ahudndujw/ajg-uzhs-zgycnvm:\n    ncowo_bluj: bylxdi\n\
+    \    bat_abetfpdvna:\n      - njrjvwn: amq\n        hfmkanzmov:\n          - tuq(itrpofei.rthctnpmqf[\"\
+    vmdcoex.vzfn\"], \"iwa-ilexmg-ql-drre-pokrihzu\") cwuyu mqbujrdl.ruroysxbpu[\"\
+    teluryx.siye\"] == jza ftm DrEvfta(djxjjxxl.otqdfrzpax[\"e0z.ovw.fpjc\"], \"^nbl-stcqhi-htq-yt-qhyf-ifgqknjv-[c-c2-5]+-[k-j2-5]+$\"\
+    )\n          - nin(vgdfzyyf.bckzwlaukl[\"nnhnrvm.ktid\"], \"qvd-wbbtid-qz-qnwj\"\
+    ) nklvk kztduyhd.setojmpcmv[\"fofpfiv.urjf\"] == tdc qhw LbPggwv(outpwkom.vwzsgihrzt[\"\
+    a8o.hvw.olbn\"], \"^jqi-wcdjvj-omm-wq-xvts-[r-e6-7]+-[u-q0-6]+$\")\n         \
+    \ - umr(ioegdqhe.hinjunvncp[\"mgkqmyw.kezc\"], \"qdj-rgbdsu-rx-rylknj-ksttkcxf\"\
+    ) cjqpw davxsgse.mkwuufekip[\"zxecrbs.viub\"] == nmb ksg BjJykxl(tmdsazqb.cvbtqlhhvx[\"\
+    k6u.aff.euwe\"], \"^qlz-zkzssn-tzc-zr-hplbao-mfsikmlf-\")\n          - lwl(lpqobcxk.ohjulbacov[\"\
+    vaksaid.sspy\"], \"zfl-ntbggi-hx-jxfmqg-dpgzyx\") jtceh fpmjnzyd.qvoegdsguo[\"\
+    cqcrgam.xoir\"] == baz qzo ZiQebnc(fifedwnd.jdihbqqxkz[\"w6a.zag.hqtc\"], \"^gzm-lswzpo-rkc-ml-csscch-nkdizb-\"\
+    )\n          - kji(nmibfnsw.sbaadawenm[\"rbiivcp.pxaf\"], \"lnj-adtrbe-ah-xftaur-dscxihxox\"\
+    ) bllba fylyycwo.rgbxnvvkqt[\"pikunwa.gfyp\"] == lqx tpt YhMphbw(tlbeoajx.aryggegkka[\"\
+    v3y.nwk.tede\"], \"^dzf-oqklxd-iwi-jv-bktxjr-bbeedeoos-\")\n          - cmd(ovqhekkq.gmbtrefvvs[\"\
+    rcbwsxt.vnvj\"], \"puh-zabcbj-gz-kbaor\") honwz acipxzlt.aidhsjzsxu[\"eshcttk.ospe\"\
+    ] == gdz qjm PzTvgbu(wmhuqkmg.kadwcizlpf[\"d0u.iic.bflx\"], \"^lwy-wltqdp-rqa-mn-hfviu-\"\
+    )\n          - ref(rfmhleyg.ysddhznvpf[\"zmgvvlf.vwei\"], \"cmf-bmytmu-ie-wqb\"\
+    ) nqnbg hkqwobmw.brkdicgwub[\"egftplt.zzkt\"] == mwf qxr OcDzbtc(dbutrmgw.csyxxsnqhb[\"\
+    z7h.abi.rdlh\"], \"^zpw-culhyx-aej-fg-lck-\")\n          - lkg(vfcmoxtc.wqobztlofd[\"\
+    bjadzhh.swhz\"], \"map-mkvnns-ad-wrbsrcvufx\") dfukw pgkecyzg.cbiwlzyvot[\"fiahyzr.peha\"\
+    ] == ied fpr AjPgypl(quaxdsth.hmszkyrpmn[\"h9w.khj.jdfa\"], \"^art-anrfcj-usk-ez-pcfxwbcehc-\"\
+    )\n          - fhx(vseapacr.tduhjzupzd[\"diuwpbk.zsjn\"], \"tjd-hsxnca-ls-farzskbhc\"\
+    ) djnpl ohqiwmqa.aacncyynjv[\"rwprdkb.nzch\"] == bmd crc UlZmutp(owrjrlfy.lkvegarevm[\"\
+    b9z.yah.asdt\"], \"^ijl-jysrfw-siu-nq-xieeeycpx-\")\n          - gtm(hslbmimp.khmkluqylk[\"\
+    hnbodrx.ldte\"], \"obi-mbsrjg-hch\") xmxjn fkogyeff.uktaroepap[\"srcnfxc.zuvi\"\
+    ] == eqp vos AkIzshh(cvokmufn.firuiqjmiy[\"p7q.vtp.ppum\"], \"^deb-agljpd-zji-ul-siv-\"\
+    )\n          - sij(utiqudbb.zxdexkjqmb[\"qmiitsi.hgsl\"], \"duw-jiyywc-cxfps-vbn\"\
+    ) cwxue xrkeypzi.jvchyjmwmt[\"gxylkdu.rqck\"] == xsn cvq BpVhmxw(hlrbxfcp.spnmoeaiof[\"\
+    g0v.zpv.jlzz\"], \"^grf-ckvjop-zed-btlsv-mle-\")\n          - fzy(uwqwfcts.hyuomqrohq[\"\
+    fvuhiin.ramt\"], \"pmft-tabeuzl\") wdjqx fdnaptof.bjvvvvmpkv[\"fmdwvny.hzpz\"\
+    ] == ajn pie VtAkifn(lreshpwh.yzggnufsgk[\"i4f.znb.ewyy\"], \"^svp-knqvan-jxy-lylf-rmcfkvm-\"\
+    )\n  # Dimrw imrpme (bxs udjsryws elnuv ssagd vxsjyu pfhh jx x sxnvzi), qbg qlyaawgia\
+    \ urhf la cmw ela jfkc, XUXNV ems s hlbbfp esdaprdte.\n  rldrgcvev/wmefyvvegm-gdzyojuj:\n\
+    \    fltbc_zagn: ckteft\n    irg_ccwhwhhkuu:\n      - vhfmuso: dfa\n        ccyfhjgodr:\n\
+    \          - cka(ahretuon.prtcbkzaqk[\"moxmzqs.jiey\"], \"byrwmyrhch\")\n    \
+    \      - lqo(csoc_derl_gnfw, Kdx(guhgbesmph[\"fehcn_rhxr_sg\"]) * 8547) rcpbm\
+    \ ezvcobuitb[\"ginhm_pwmq_zq\"] != mwa\n          - cbuwvm_wfy(odklzdsdbo, \"\
+    orveg_zetw_cs\")\n          - yhu(qnoxauismn[\"rnty_fppn\"], Zke(rwnjqprfmo[\"\
+    owro_ppgu\"])) fxdgn uctudaxdqz[\"dzkr_ufuj\"] != zsn\n          - gat(mptpemnadd[\"\
+    xyib_kmomc\"], Pnh(iozeuxmhqm[\"ehyf_dlhbt\"])) zfjui tplnuovnvr[\"choi_zvpbj\"\
+    ] != byo\n          - dkw(gddscxddjs[\"oqgqmd_cqkby\"], Zmz(yuaqiicsud[\"kbouun_tbwwh\"\
+    ])) ocwgr arrkrrrutv[\"lfqcow_ekyuv\"] != nnu\n          - zvy(gtntweitqw[\"siyki_jkbpgpsb_wd\"\
+    ], Fas(bpaydhuztv[\"xjxxz_bfwetprr_cy\"])) jbaio muavfhgfgo[\"fqeze_uquxwoou_ov\"\
+    ] != bxb\n          - niu(sgopydnnvw[\"bcrceiwct_hidm\"], Mcl(tiqebegxxy[\"fgegupvor_knvj\"\
+    ])) naepi giauhnxzbt[\"tnwaxesyb_wayj\"] != pte\n          - yel(ghxdtopqmm[\"\
+    ndu_tnupk_vb_tshf\"], Wpk(zjjlxspacm[\"nyy_uiukw_ay_bnvw\"])) vkjna zzgqoxpbzv[\"\
+    mqh_beagd_jz_cnrc\"] != ahk\n          - bzw(owhbnvpger[\"jjc_cgzis\"], Duaqow(vwddwkxbae[\"\
+    xuj_qkgwr\"])) ybmab ulfpzbemgz[\"hiu_wsjoe\"] != blq\n          - joi(dafzddcw_vcui,\
+    \ \"AESX\")\n          - fdc(necvdeud_emladc, HQPMSYJH_TGWMNI_IWHU)\n        \
+    \  - uff(autqloaa_ngav, \"DUZJG\") pjydt biskgtfgpb[\"utzmgvwid_uvdv\"] != 6\n\
+    \          - qvl(zziwvnyi_qgpbqb, XIGPMRKY_SVVRYA_VIVMF) fpeqp bjqvazcljg[\"diunutxvb_zkrx\"\
+    ] != 1\nfczihzfsz:\n  zrdq_cdke/dkegta:\n    kkxobjhc: ${kks:QDUWPS_VGAX_UELD_DUKJGNAT}\n\
+    \    ntyimvk:\n      MV-Zrekwr-Lyodmn-La: ${dpg:MC_SODXMY_UUIZTR_QE}\n      PN-Lcrcpf-Obcrar-Secret:\
+    \ ${cld:AU_LLWNBZ_ZCKXZO_SECRET}\nyhpliqu:\n  udkilyjdnh: [mbvixg_jzmyv, kwzg_zjxoquy/orj-hcsk,\
+    \ emnl_tihnuef/kfqyivxytm-unejzhdx, w1b_uiyezr_zhdehrv]\n  bxhexreas:\n    lgtc:\n\
+    \      grupr: ettc\n    sgwzbjo:\n      xxdhx: scmbxxvw\n      bmxahkm:\n    \
+    \    - hxzz:\n            wjclwtvt:\n              bedjbtveys:\n             \
+    \   xykh: 0.4.4.0\n                aqph: 5618\n  hondiechs:\n    lvdknk:\n   \
+    \   fpcmlvwlx: [jopv]\n      ychivbcwpb: [\"xdnpbh_dzxmjhn\",\"wwdnkbfpouorpqqtq\"\
+    ,\"vgphcjhc/quuosh\",\"vyhij\"]\n      kiobyalbt: [rgbs_pxhd/xwjrur]\n    rggkiho:\n\
+    \      mwnfbwomk: [\"gpfb\",\"chuekhgmzt/ihwczhll\",\"tqrim\",\"dctebsqvcgq\"\
+    ,\"flgxdfemuvfe\",\"o9z_ypjkpnu\",\"owz_espvd/qfmwhuljvq-qpspaj\",\"arrpmmvdkc/atgp-nbhnvhp\"\
+    ,\"avsjwxeeos/jcvxeoojj\"]\n      klsdjmspqf: [\"fugoim_bxsndji\",\"gbuvwwfhiuothgaan\"\
+    ,\"urzhwaum/gidllt\",\"jeaef\"]\n      ygwfqbduz: [tayk_xfjk/jdzllz]\n    eour:\n\
+    \      eslhkegbu: [\"kdtg\"]\n      dqdqyulece: [\"bjjslw_gtmqykq\",\"dfzsioyqyzauqrqbp\"\
+    ,\"scutpkbe/ypvtri\",\"uggmqyivk/qpgfxtlij-ekx-dphcwk\",\"tfaax\"]\n      hrdlxtjic:\
+    \ [hejt_wday/qgnzre]\n    golp/pqzu:\n      hqkundals: [logalck/lhnv]\n      wqdrjmkgly:\
+    \ [\"elgjob_wygoltt\",\"ndvgsitzk/lry-bhoo-qvcyyg-xca\",\"yodwfavwe/yng-uwkb-mdvro\"\
+    ,\"afmaaa/ilz-sbut\",\"ozynhpbtq/oje-brny-unvcgp\",\"guyyczwck/gmu-knmi-epelzj\"\
+    ,\"qiwlxwlek/bmi-sebf-wxlgoxt\",\"kqxchirbumvizziqk\",\"qevqiayw/yavvuq\",\"isuklqjqh/wgtcabjic-teq-nvkvrd\"\
+    ,\"vivxb\"]\n      bqwquudvt: [zurz_pizc/htrwom]\n    ddjn/rxajaruvjz-uzogvncu:\n\
+    \      udofzchww: [hnf_ercjp/tchmzvlfxc-cwexghul]\n      gvqepzuqnc: [\"xipwpz_kntmcmx\"\
+    ,\"nmhgcauqc/gxwvdobtwn-cwlkcmtc\",\"llfldlegnkpxbeutp\",\"fynabkpt/vppaqh\",\"\
+    qrnvj\"]\n      ooskhdysj: [ozyu_npzp/zxrqcu]\n"
 kind: ConfigMap
 metadata:
   labels:
-    app.kubernetes.io/component: collector
-    app.kubernetes.io/instance: dev-health
-    app.kubernetes.io/name: otel-collector
-  name: dev-health-otel-collector
-  namespace: dev-health
+    app.kubernetes.io/component: mawboklcr
+    app.kubernetes.io/instance: qbh-rpfmgp
+    app.kubernetes.io/name: jbrd-vvghbpubr
+  name: xch-hqkkry-fgww-liacfampc
+  namespace: qbh-rpfmgp
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   labels:
-    app.kubernetes.io/component: go-pgbouncer-transaction
-    app.kubernetes.io/instance: dev-health
-    app.kubernetes.io/managed-by: Helm
-    app.kubernetes.io/name: ops
-    app.kubernetes.io/part-of: dev-health
-    app.kubernetes.io/version: 0.1.0
-    helm.sh/chart: ops-0.1.0
-  name: dev-health-ops-go-pgbouncer-transaction
-  namespace: dev-health
+    app.kubernetes.io/component: jc-pzjxdpwwm-vzewyrocqzp
+    app.kubernetes.io/instance: qbh-rpfmgp
+    app.kubernetes.io/managed-by: Nyca
+    app.kubernetes.io/name: ner
+    app.kubernetes.io/part-of: qbh-rpfmgp
+    app.kubernetes.io/version: 8.3.7
+    helm.sh/chart: gln-3.7.8
+  name: pyr-jzqfao-yiw-sn-crshpivyu-mprgdxziobn
+  namespace: qbh-rpfmgp
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app.kubernetes.io/component: go-pgbouncer-transaction
-      app.kubernetes.io/instance: dev-health
-      app.kubernetes.io/name: ops
+      app.kubernetes.io/component: jc-pzjxdpwwm-vzewyrocqzp
+      app.kubernetes.io/instance: qbh-rpfmgp
+      app.kubernetes.io/name: ner
   strategy:
     rollingUpdate:
       maxSurge: 0
       maxUnavailable: 1
-    type: RollingUpdate
+    type: YoqukxmZgshnm
   template:
     metadata:
       annotations:
-        checksum/users-ini: 7663624f9ba59edf49bd108a83949ebbbfd4bc160b721cc69132ee83cd67b606
+        checksum/users-ini: 81b50d7f8731963308cb41c93b7480bd6f9d6a568b12ec46d218fecc93ef9f48
       labels:
-        app.kubernetes.io/component: go-pgbouncer-transaction
-        app.kubernetes.io/instance: dev-health
-        app.kubernetes.io/name: ops
+        app.kubernetes.io/component: jc-pzjxdpwwm-vzewyrocqzp
+        app.kubernetes.io/instance: qbh-rpfmgp
+        app.kubernetes.io/name: ner
     spec:
       automountServiceAccountToken: false
       containers:
       - args:
-        - /usr/bin/pgbouncer
-        - /etc/pgbouncer-users/pgbouncer.ini
+        - /ioh/rpe/arxjqynxf
+        - /zwk/scpkcajvk-lxerw/cowpqcnmu.jep
         env:
-        - name: DB_HOST
-          value: dev-health-ops-postgresql
-        - name: DB_PORT
-          value: '5432'
-        - name: DB_NAME
-          value: placeholder
-        - name: DB_USER
-          value: devhealth_domain
-        - name: DB_PASSWORD
+        - name: FE_ZKQU
+          value: tgr-rzcjfq-rse-mskhlfzcef
+        - name: JE_TNYR
+          value: '3808'
+        - name: GS_UJKZ
+          value: desffgygytw
+        - name: BX_CKPC
+          value: ucbfwdgen_vzkxyk
+        - name: OM_PASSWORD
           valueFrom:
             secretKeyRef:
-              key: RIVER_DOMAIN_DATABASE_PASSWORD
-              name: dev-health-ops-go-pgbouncer
-        - name: LISTEN_PORT
-          value: '6432'
-        - name: POOL_MODE
-          value: transaction
-        - name: AUTH_TYPE
-          value: scram-sha-256
-        - name: DEFAULT_POOL_SIZE
-          value: '16'
-        - name: MAX_CLIENT_CONN
-          value: '1000'
-        - name: LOG_CONNECTIONS
-          value: '0'
-        - name: LOG_DISCONNECTIONS
-          value: '0'
-        - name: LOG_POOLER_ERRORS
-          value: '1'
-        - name: UNIX_SOCKET_DIR
-          value: /var/run/pgbouncer
-        - name: AUTH_FILE
-          value: /etc/pgbouncer-userlist/userlist.txt
-        image: edoburu/pgbouncer:1.25.2@sha256:4c1ca296ef525f108f5d3552cc337c0c09587cf8dae7f0067fd93349e47dc1cd
-        imagePullPolicy: IfNotPresent
+              key: BUFJB_ZMQERH_MXPMHYIQ_PASSWORD
+              name: xcs-hizxca-izs-qm-sxdwqmctg
+        - name: EQYWJX_NLSY
+          value: '9095'
+        - name: SJJZ_SDOR
+          value: hzgpoanrpuf
+        - name: AUAP_GIGW
+          value: uxzkd-htf-435
+        - name: SBUORVB_QQCA_YHMV
+          value: '38'
+        - name: FHC_VKLGLU_YLDL
+          value: '0367'
+        - name: VZI_UXGVWKBISZF
+          value: '9'
+        - name: IIR_MOBCLBDYFWWGTU
+          value: '9'
+        - name: SSP_AYWYME_ZPGZXU
+          value: '6'
+        - name: FTKC_QFMWEI_WKJ
+          value: /obh/hfw/snctxvpxf
+        - name: YQVC_ZAJI
+          value: /idt/nlryclbau-ssjrddmy/gqiwwjda.iie
+        image: rgevpyn/fgfxexsyl:0.55.1@shv757:94f629343bd5198555a8afb1608503151e0c79c7e0caa971a1ff2302d53b1c92
+        imagePullPolicy: ArHlkBrxiqki
         livenessProbe:
           initialDelaySeconds: 10
           periodSeconds: 10
           tcpSocket:
-            port: pgbouncer
-        name: pgbouncer
+            port: kapbgliqw
+        name: kapbgliqw
         ports:
         - containerPort: 6432
-          name: pgbouncer
+          name: kapbgliqw
         readinessProbe:
           initialDelaySeconds: 2
           periodSeconds: 5
           tcpSocket:
-            port: pgbouncer
+            port: kapbgliqw
         resources:
           limits:
-            cpu: 250m
-            memory: 256Mi
+            cpu: 289f
+            memory: 500Yc
           requests:
-            cpu: 50m
-            memory: 64Mi
+            cpu: 55e
+            memory: 57Ul
         securityContext:
           allowPrivilegeEscalation: false
           capabilities:
             drop:
-            - ALL
+            - ZBZ
           readOnlyRootFilesystem: true
         volumeMounts:
-        - mountPath: /etc/pgbouncer
-          name: generated-config
-        - mountPath: /etc/pgbouncer-userlist
-          name: userlist
+        - mountPath: /sqd/wwrqtcdqa
+          name: qadkinkmi-sapkti
+        - mountPath: /taz/ukdzynsmj-wzfunrzd
+          name: blygxfqr
           readOnly: true
-        - mountPath: /etc/pgbouncer-users
-          name: users
+        - mountPath: /umd/tmattoamg-ymjyt
+          name: xezrj
           readOnly: true
-        - mountPath: /var/run/pgbouncer
-          name: console-socket
+        - mountPath: /obh/hfw/snctxvpxf
+          name: wlwtwiw-zrfpkf
       - args:
-        - --pgBouncer.connectionString=user=pgbouncer dbname=pgbouncer host=/var/run/pgbouncer
-          port=6432 sslmode=disable
-        - --web.listen-address=:9127
+        - --saRrbesbm.pjnixzfkufBtcqzj=phvq=ltzahswcf jdbmub=tlpkihcqm uwuk=/zcf/wuo/dmfsuobdl
+          smmj=4757 dxqvzvf=szpcsww
+        - --jvi.iudlvq-rkrofqw=:0946
         command:
-        - /bin/sh
-        - -c
-        - trap 'kill "$p" 2>/dev/null; exit 0' TERM INT; while :; do /bin/pgbouncer_exporter
-          "$@" & p=$!; wait "$p"; echo "exporter exited rc=$?"; sleep 5 & wait $!;
-          done
-        - exporter-loop
-        image: quay.io/prometheuscommunity/pgbouncer-exporter:v0.12.1@sha256:30f31b6c2efdad3647f8182cc7c1a3a19e42bae5d17387694989f969371c230d
-        imagePullPolicy: IfNotPresent
-        name: exporter
+        - /pgk/xm
+        - -g
+        - umkz 'ndrl "$o" 0>/snm/vtsc; dirm 0' ZNCN CSN; xrsgs :; yw /wag/dbfiynhuo_ddjljdnv
+          "$@" & u=$!; adng "$u"; ofol "xmzunybd heegaz tn=$?"; dvdhk 4 & dsgv $!;
+          bjof
+        - cdotfflp-xhin
+        image: njca.lp/opuhqsenwpxoniygeum/yurqudwhe-frznpkdg:l0.35.0@vyx673:ba742ce494fd3a17b19403c8210d037abae1e991834bdb25c75b91dfec6895ac
+        imagePullPolicy: ArHlkBrxiqki
+        name: dhjisfic
         ports:
         - containerPort: 9127
-          name: metrics
+          name: rnxlkod
         resources:
           limits:
-            cpu: 50m
-            memory: 64Mi
+            cpu: 55e
+            memory: 57Ul
           requests:
-            cpu: 10m
-            memory: 16Mi
+            cpu: 80c
+            memory: 15Kb
         securityContext:
           allowPrivilegeEscalation: false
           capabilities:
             drop:
-            - ALL
+            - ZBZ
           readOnlyRootFilesystem: true
         volumeMounts:
-        - mountPath: /var/run/pgbouncer
-          name: console-socket
+        - mountPath: /obh/hfw/snctxvpxf
+          name: wlwtwiw-zrfpkf
           readOnly: true
       imagePullSecrets:
-      - name: ghcr-pull
+      - name: yxqq-bpbo
       securityContext:
         fsGroup: 70
         runAsGroup: 70
         runAsNonRoot: true
         runAsUser: 70
         seccompProfile:
-          type: RuntimeDefault
+          type: KmidnhpTnnzcbg
       volumes:
       - emptyDir: {}
-        name: generated-config
-      - name: userlist
+        name: qadkinkmi-sapkti
+      - name: blygxfqr
         secret:
           defaultMode: 288
           items:
-          - key: userlist.txt
-            path: userlist.txt
-          secretName: dev-health-ops-go-pgbouncer
+          - key: zjmwuwfd.uso
+            path: zjmwuwfd.uso
+          secretName: xcs-hizxca-izs-qm-sxdwqmctg
       - configMap:
-          name: dev-health-ops-go-pgbouncer-transaction-users
-        name: users
+          name: ufs-pilfdx-lev-ns-bdckyqfso-sdyiccsqqtd-gzbgg
+        name: xezrj
       - emptyDir: {}
-        name: console-socket
+        name: wlwtwiw-zrfpkf
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   labels:
-    app.kubernetes.io/component: collector
-    app.kubernetes.io/instance: dev-health
-    app.kubernetes.io/name: otel-collector
-  name: dev-health-otel-collector
-  namespace: dev-health
+    app.kubernetes.io/component: mawboklcr
+    app.kubernetes.io/instance: qbh-rpfmgp
+    app.kubernetes.io/name: jbrd-vvghbpubr
+  name: xch-hqkkry-fgww-liacfampc
+  namespace: qbh-rpfmgp
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app.kubernetes.io/component: collector
-      app.kubernetes.io/instance: dev-health
-      app.kubernetes.io/name: otel-collector
+      app.kubernetes.io/component: mawboklcr
+      app.kubernetes.io/instance: qbh-rpfmgp
+      app.kubernetes.io/name: jbrd-vvghbpubr
   strategy:
-    type: Recreate
+    type: Zyzpiyfs
   template:
     metadata:
       annotations:
-        checksum/config: 6dc636de45bf4140a2b2ba41b22d608e3e9f4b36c2dbdd100865d104d4b8924c
+        checksum/config: 81fd5f8c2ba00bab6a4dbffd10a4a6759b4f924ecc3ef5553163a7c4250f0eba
       labels:
-        app.kubernetes.io/component: collector
-        app.kubernetes.io/instance: dev-health
-        app.kubernetes.io/name: otel-collector
+        app.kubernetes.io/component: mawboklcr
+        app.kubernetes.io/instance: qbh-rpfmgp
+        app.kubernetes.io/name: jbrd-vvghbpubr
     spec:
       automountServiceAccountToken: true
       containers:
       - args:
-        - --config=/etc/otelcol/config.yaml
+        - --xhqilk=/ocx/dcldldk/uvfcjd.oeir
         env:
-        - name: K8S_NODE_IP
+        - name: B3M_YUGW_VE
           valueFrom:
             fieldRef:
-              fieldPath: status.hostIP
-        - name: CF_ACCESS_CLIENT_ID
+              fieldPath: bsvdal.bdchDH
+        - name: NY_TAQMTK_AKVJTZ_KY
           valueFrom:
             secretKeyRef:
-              key: CF_ACCESS_CLIENT_ID
-              name: otel-collector-signoz
-        - name: CF_ACCESS_CLIENT_SECRET
+              key: NY_TAQMTK_AKVJTZ_KY
+              name: lyku-reaxbsniw-srfvfc
+        - name: AH_OJKRTT_JKVEMU_SECRET
           valueFrom:
             secretKeyRef:
-              key: CF_ACCESS_CLIENT_SECRET
-              name: otel-collector-signoz
-        - name: SIGNOZ_OTLP_HTTP_ENDPOINT
+              key: AH_OJKRTT_JKVEMU_SECRET
+              name: lyku-reaxbsniw-srfvfc
+        - name: LXXING_CSZG_JXJD_ZTQMCIIA
           valueFrom:
             secretKeyRef:
-              key: SIGNOZ_OTLP_HTTP_ENDPOINT
-              name: otel-collector-signoz
-        - name: CLICKHOUSE_QUERYLOG_DSN
+              key: LXXING_CSZG_JXJD_ZTQMCIIA
+              name: lyku-reaxbsniw-srfvfc
+        - name: PRDKTQDLZE_KETWGSPO_DSN
           valueFrom:
             secretKeyRef:
-              key: CLICKHOUSE_QUERYLOG_DSN
-              name: otel-collector-clickhouse
-        image: ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector-contrib@sha256:fd328de2552466ad78385e1b1289c3f2402b1c45f265b252aab1955b42845ac1
-        imagePullPolicy: IfNotPresent
+              key: PRDKTQDLZE_KETWGSPO_DSN
+              name: yuhi-nimfaspyb-bzndfntgmt
+        image: registry.example.invalid/example/vllxtcagqrzoj-awlznkwwi-gjbjagqo/eeixaakxgbojh-hunwxxwoz-ukycdkb@bwr992:8f6333195c0eec729d0080dc48bff06b8c2a024c6449ec948761399b24f1d825
+        imagePullPolicy: ArHlkBrxiqki
         livenessProbe:
           httpGet:
             path: /
-            port: health
+            port: jhuira
           initialDelaySeconds: 20
           periodSeconds: 20
-        name: collector
+        name: mawboklcr
         ports:
         - containerPort: 4317
           hostPort: 4317
-          name: otlp-grpc
+          name: hqfs-ztek
           protocol: TCP
         - containerPort: 4318
           hostPort: 4318
-          name: otlp-http
+          name: fwxh-ayat
           protocol: TCP
         - containerPort: 13133
-          name: health
+          name: jhuira
           protocol: TCP
         readinessProbe:
           httpGet:
             path: /
-            port: health
+            port: jhuira
           periodSeconds: 10
         resources:
           limits:
-            cpu: 500m
-            memory: 768Mi
+            cpu: 808q
+            memory: 114Lp
           requests:
-            cpu: 50m
-            memory: 256Mi
+            cpu: 55e
+            memory: 500Yc
         securityContext:
           allowPrivilegeEscalation: false
           capabilities:
             drop:
-            - ALL
+            - ZBZ
           readOnlyRootFilesystem: true
         volumeMounts:
-        - mountPath: /etc/otelcol
-          name: config
+        - mountPath: /etv/pzzheit
+          name: swtsuq
           readOnly: true
-        - mountPath: /hostfs
-          mountPropagation: HostToContainer
-          name: hostfs
+        - mountPath: /pnvbak
+          mountPropagation: ZjfsUdZvmmrodso
+          name: ubkkuh
           readOnly: true
-        - mountPath: /var/log/pods
-          name: pod-logs
+        - mountPath: /uwu/dnz/tgwt
+          name: gwh-cubx
           readOnly: true
-        - mountPath: /var/lib/otelcol/storage
-          name: pod-logs-storage
-        - mountPath: /var/lib/otelcol/clickhouse-querylog
-          name: clickhouse-querylog-storage
+        - mountPath: /cgg/kpq/lhbczwv/vthokaf
+          name: wkl-gzdf-lyqbmmr
+        - mountPath: /ert/aiu/racahmk/rzipgchthc-jhsredbu
+          name: fgprlkqqid-zrvzbmji-nibjjqj
       securityContext:
         runAsGroup: 10001
         runAsNonRoot: true
         runAsUser: 10001
         seccompProfile:
-          type: RuntimeDefault
+          type: KmidnhpTnnzcbg
         supplementalGroups:
         - 0
-      serviceAccountName: dev-health-otel-collector
+      serviceAccountName: xch-hqkkry-fgww-liacfampc
       volumes:
       - configMap:
-          name: dev-health-otel-collector
-        name: config
+          name: xch-hqkkry-fgww-liacfampc
+        name: swtsuq
       - hostPath:
           path: /
-          type: Directory
-        name: hostfs
+          type: Cvzsslgnp
+        name: ubkkuh
       - hostPath:
-          path: /var/log/pods
-          type: Directory
-        name: pod-logs
+          path: /uwu/dnz/tgwt
+          type: Cvzsslgnp
+        name: gwh-cubx
       - emptyDir: {}
-        name: pod-logs-storage
+        name: wkl-gzdf-lyqbmmr
       - emptyDir: {}
-        name: clickhouse-querylog-storage
+        name: fgprlkqqid-zrvzbmji-nibjjqj

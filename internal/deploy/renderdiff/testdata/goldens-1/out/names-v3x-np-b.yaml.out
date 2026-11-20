@@ -1,8 +1,8 @@
-NetworkPolicy/dev-health-ops
-NetworkPolicy/dev-health-ops-go-api-egress
-NetworkPolicy/dev-health-ops-go-pgbouncer-coordinator-session
-NetworkPolicy/dev-health-ops-go-pgbouncer-queue-session
-NetworkPolicy/dev-health-ops-go-pgbouncer-transaction
-NetworkPolicy/dev-health-ops-ingress-query-api
-NetworkPolicy/dev-health-ops-ingress-web
-NetworkPolicy/dev-health-ops-query-api-egress
+NetworkPolicy/dso-hcnrym-rdh-ki-lxk-ydrbwp
+NetworkPolicy/ejj-jqkghf-aau-dlwlwfl-cvevd-bvs
+NetworkPolicy/moc-eloowi-gsg-ql-tyhsdsvst-hjjqnukebsi-jyoiixd
+NetworkPolicy/pyr-jzqfao-yiw-sn-crshpivyu-mprgdxziobn
+NetworkPolicy/reb-rpfywq-cgy-fi-yvptvnczv-zsoxw-odkcmuz
+NetworkPolicy/xbx-veldcr-fyx
+NetworkPolicy/xsf-sgwmlq-dfn-xnmqkql-eou
+NetworkPolicy/xsg-iyhmdk-lxk-stsjt-spa-tmwnvz

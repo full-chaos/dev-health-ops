@@ -1,11 +1,11 @@
 render A: helm rc=0 docs=3
 render B: helm rc=0 docs=3
-ConfigMap/dev-health-otel-collector .data.config.yaml CHANGED
-Deployment/dev-health-ops-go-pgbouncer-transaction .spec.template.spec.containers[name=exporter] ELEMENT-ADDED
-Deployment/dev-health-ops-go-pgbouncer-transaction .spec.template.spec.containers[name=pgbouncer].env[name=UNIX_SOCKET_DIR] ELEMENT-ADDED
-Deployment/dev-health-ops-go-pgbouncer-transaction .spec.template.spec.containers[name=pgbouncer].volumeMounts[name=console-socket] ELEMENT-ADDED
-Deployment/dev-health-ops-go-pgbouncer-transaction .spec.template.spec.volumes[name=console-socket] ELEMENT-ADDED
-Deployment/dev-health-otel-collector .spec.template.metadata.annotations.checksum/config CHANGED
+ConfigMap/xch-hqkkry-fgww-liacfampc .data.dferew.dhil CHANGED
+Deployment/pyr-jzqfao-yiw-sn-crshpivyu-mprgdxziobn .spec.template.spec.containers[name=dhjisfic] ELEMENT-ADDED
+Deployment/pyr-jzqfao-yiw-sn-crshpivyu-mprgdxziobn .spec.template.spec.containers[name=kapbgliqw].env[name=FTKC_QFMWEI_WKJ] ELEMENT-ADDED
+Deployment/pyr-jzqfao-yiw-sn-crshpivyu-mprgdxziobn .spec.template.spec.containers[name=kapbgliqw].volumeMounts[name=wlwtwiw-zrfpkf] ELEMENT-ADDED
+Deployment/pyr-jzqfao-yiw-sn-crshpivyu-mprgdxziobn .spec.template.spec.volumes[name=wlwtwiw-zrfpkf] ELEMENT-ADDED
+Deployment/xch-hqkkry-fgww-liacfampc .spec.template.metadata.annotations.checksum/config CHANGED
 docs A 3 B 3 (all kinds, Secrets as Kind/name only; hook-included: a helm template render); kinds in A: ConfigMap=1, Deployment=2
 added []; removed []; changed field rows 2; element rows added 4 removed 0; reordered rows 0; pod-template label/annotation rows 1; postgres sts rows 0
 FULL RENDER DIFF: INFO (no expectation; the floor held)

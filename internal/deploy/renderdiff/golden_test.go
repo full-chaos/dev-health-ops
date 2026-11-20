@@ -11,13 +11,13 @@ import (
 	"testing"
 )
 
-// goldensManifestSHA256 pins testdata/goldens-1/MANIFEST.tsv: the 67 cases the kit tool (sha256 ecf6771eb509...)
-// produced, one row per case: name, exit code, sha256 of the captured stdout+stderr, argv, crash token (the last
-// column is added here; see TestTheCrashTokensAreTheKitsOwn). The source capture's
-// MANIFEST sha12 is bc7e47ef923a; this copy differs only in the sha of the two filter outputs whose secret-derived
-// hashes (four ClickHouse password_sha256_hex values, one checksum/secret annotation) are replaced by same-length
-// letter-only placeholders, in the inputs and the outputs alike.
-const goldensManifestSHA256 = "c99c0e27f1cf584a10b38668a0a181bf27c2779bafbfe318a072ede41097246f"
+// goldensManifestSHA256 pins testdata/goldens-1/MANIFEST.tsv: the 67 cases of the 11788 capture (its case names,
+// order and argv), recorded by the kit tool (sha256 ecf6771eb509...) on SYNTHETIC renders: the prod renders of the
+// first capture are replaced by same-shape synthetic ones (example.invalid hosts, fake digests, every other string
+// value, names and namespaces too, a fresh random string; the same diff and redaction features). One row per case:
+// name, exit code, sha256 of the captured stdout+stderr, argv, crash token (the last column is added here; see
+// TestTheCrashTokensAreTheKitsOwn).
+const goldensManifestSHA256 = "5b950abcd5e0039f9e7798cc369dc0f921d6f06af6207dd6788875b96a0f3193"
 
 // goldens2ManifestSHA256 pins testdata/goldens-2/MANIFEST.tsv: 84 more kit cases on synthetic fixtures (the
 // redaction forms, the empty forms, keyed and index lists, Python scalar types and YAML 1.1 resolution, the dump

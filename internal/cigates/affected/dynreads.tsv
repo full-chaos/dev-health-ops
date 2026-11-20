@@ -612,6 +612,7 @@ internal/queryapi/server	log_request_id_census_test.go
 internal/queryapi/server	mcp_proof_route_retired_test.go
 internal/queryapi/server	mutation_documents_test.go
 internal/queryapi/server	org_scope_census_test.go
+internal/queryapi/server	org_scope_team_view_test.go
 internal/queryapi/server	people_drilldown_issues_route_test.go
 internal/queryapi/server	people_drilldown_prs_route_test.go
 internal/queryapi/server	people_route_test.go

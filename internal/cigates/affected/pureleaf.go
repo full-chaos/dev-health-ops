@@ -25,6 +25,17 @@ var pureStdlibNames = map[string]bool{
 	"path/filepath.IsAbs": true, "path/filepath.Rel": true, "path/filepath.SplitList": true, "path/filepath.VolumeName": true,
 }
 
+// pureStdlibValueMethods: the methods a pure function may call on a package-level value of the standard library, by the
+// value's full name. These only encode or decode their arguments.
+var pureStdlibValueMethods = func() map[string]map[string]bool {
+	enc := map[string]bool{"EncodeToString": true, "DecodeString": true, "EncodedLen": true, "DecodedLen": true, "Encode": true, "Decode": true}
+	m := map[string]map[string]bool{}
+	for _, v := range []string{"StdEncoding", "URLEncoding", "RawStdEncoding", "RawURLEncoding"} {
+		m["encoding/base64."+v] = enc
+	}
+	return m
+}()
+
 var pureBuiltins = map[string]bool{"len": true, "cap": true, "append": true, "make": true, "new": true, "copy": true, "min": true,
 	"max": true, "panic": true, "string": true, "byte": true, "rune": true, "delete": true, "clear": true}
 
@@ -151,6 +162,13 @@ func (c *fileCtx) pureCallIn(x *ast.CallExpr, visiting map[*ast.FuncDecl]bool) b
 	case *ast.ArrayType, *ast.MapType, *ast.InterfaceType, *ast.StarExpr, *ast.FuncType, *ast.ChanType:
 		return true // a conversion
 	case *ast.SelectorExpr:
+		if v, ok := f.X.(*ast.SelectorExpr); ok {
+			if id, ok := v.X.(*ast.Ident); ok {
+				if _, imp := c.s.imports[id.Name]; imp && !c.declaresName(id.Name) && pureStdlibValueMethods[c.s.callName(v)][f.Sel.Name] {
+					return true
+				}
+			}
+		}
 		if id, ok := f.X.(*ast.Ident); ok {
 			if _, imp := c.s.imports[id.Name]; imp && !c.declaresName(id.Name) {
 				if purePkgCall(c.s.callName(f)) {

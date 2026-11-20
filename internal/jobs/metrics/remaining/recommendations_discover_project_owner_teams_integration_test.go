@@ -4,9 +4,17 @@ package remaining
 
 import (
 	"context"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+
+	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	"github.com/full-chaos/dev-health-ops/internal/teamattribution"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
@@ -133,4 +141,177 @@ func TestAProjectOwnerTeamWithNoWorkItemsIsEvaluated(t *testing.T) {
 			t.Errorf("team %s (inactive, or its ownership ended before the window end) has %d rows, want none", team, written[team])
 		}
 	}
+}
+
+// TestAProjectOwnerReadPastItsBoundSkipsOnlyTheProjectOwners: when the project
+// ownership read returns its row-bound error, discovery keeps the work-item and
+// repository owner teams, skips the project owner teams, logs one WARN and adds
+// 1 to the discovery counter with outcome project_owners_skipped_bound. The run
+// does not fail.
+func TestAProjectOwnerReadPastItsBoundSkipsOnlyTheProjectOwners(t *testing.T) {
+	const (
+		org         = "org-discover-project-owner-bound"
+		workTeam    = "jira:team-work-items"
+		repoTeam    = "gh:team-repo-owner"
+		projectTeam = "linear:team-project-only"
+		repoID      = "a4444444-4444-4444-4444-444444444444"
+	)
+	ctx := context.Background()
+	instance, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		if err := instance.Close(closeCtx); err != nil {
+			t.Errorf("terminate ClickHouse: %v", err)
+		}
+	})
+	chschema.Apply(ctx, t, instance)
+	dsn, err := containers.ClickHouseHTTPDSN(ctx, instance)
+	if err != nil {
+		t.Fatalf("clickhouse dsn: %v", err)
+	}
+	conn := openLoaderClickHouse(t, ctx, dsn)
+	exec := func(query string, args ...any) {
+		t.Helper()
+		if err := conn.Exec(ctx, query, args...); err != nil {
+			t.Fatalf("seed failed: %v\nquery: %s", err, query)
+		}
+	}
+
+	now := time.Now().UTC()
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	since := mustTimestamp(t, "2026-01-01 00:00:00")
+
+	exec(`INSERT INTO work_item_metrics_daily
+		(day, provider, work_scope_id, team_id, team_name, items_started, items_completed,
+		 items_started_unassigned, items_completed_unassigned, wip_count_end_of_day,
+		 wip_unassigned_end_of_day, cycle_time_p50_hours, bug_completed_ratio,
+		 story_points_completed, computed_at, org_id)
+		VALUES (?, 'jira', 'PROJ', ?, '', 1, 1, 0, 0, 1, 0, 10, 0, 0, ?, ?)`,
+		today.AddDate(0, 0, -1), workTeam, today, org)
+	exec(`INSERT INTO repos (id, repo, created_at, last_synced, org_id, provider)
+		VALUES (?, 'acme/repo-owner', ?, ?, ?, 'github')`, repoID, since, since, org)
+	exec(`INSERT INTO team_repo_ownership
+		(org_id, provider, team_id, repo_id, repo_full_name, match_type,
+		 source, is_primary, specificity, priority, valid_from, valid_to, updated_at)
+		VALUES (?, 'github', ?, ?, 'acme/repo-owner', 'exact', 'inferred', 1, 1, 0, ?, NULL, ?)`,
+		org, repoTeam, repoID, since, since)
+	exec(`INSERT INTO team_project_ownership
+		(org_id, provider, team_id, project_id, project_key, source, is_primary, specificity, priority,
+		 valid_from, valid_to, updated_at, last_synced)
+		VALUES (?, 'linear', ?, '3a4b5c6d-0000-4000-8000-000000000003', 'LIN', 'native', 1, 1, 0, ?, NULL, ?, ?)`,
+		org, projectTeam, since, since, since)
+
+	reader := sdkmetric.NewManualReader()
+	previous := otel.GetMeterProvider()
+	otel.SetMeterProvider(sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)))
+	t.Cleanup(func() { otel.SetMeterProvider(previous) })
+
+	executor, err := newClickHouseOnlyExecutor(ctx, conn, org)
+	if err != nil {
+		t.Fatalf("construct executor: %v", err)
+	}
+	logs := &boundWarnRecorder{}
+	executor.SetReadinessLogger(logs)
+	executor.loadProjectOwners = func(context.Context, string, time.Time) ([]teamattribution.GithubWorkItemDerivationProjectFact, error) {
+		return nil, fmt.Errorf("load projects: %w", &providerfoundation.EffectBoundError{Limit: "derivation_context", Rows: 100_001})
+	}
+
+	outcome, err := executor.ComputeOrg(ctx, org, now, 30, "v1", "")
+	if err != nil {
+		t.Fatalf("compute org: %v, want the run to keep the other teams", err)
+	}
+	if outcome.Teams != 2 {
+		t.Errorf("evaluated %d teams, want 2 (the work-item team and the repository owner team)", outcome.Teams)
+	}
+
+	rows, err := conn.Query(ctx, `
+        SELECT team_id, count()
+        FROM recommendations_daily FINAL
+        WHERE org_id = ?
+        GROUP BY team_id`, org)
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+	written := map[string]uint64{}
+	for rows.Next() {
+		var teamID string
+		var count uint64
+		if err := rows.Scan(&teamID, &count); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		written[teamID] = count
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate: %v", err)
+	}
+	if written[workTeam] == 0 || written[repoTeam] == 0 {
+		t.Errorf("rows by team = %v, want rows for %s and %s", written, workTeam, repoTeam)
+	}
+	if written[projectTeam] != 0 {
+		t.Errorf("project-only team %s has %d rows, want none when the project read is past its bound", projectTeam, written[projectTeam])
+	}
+
+	if got := logs.count("recommendations.discovery.project_owners_skipped_bound"); got != 1 {
+		t.Errorf("WARN recommendations.discovery.project_owners_skipped_bound logged %d times, want 1 (all WARN: %v)", got, logs.messages())
+	}
+
+	var collected metricdata.ResourceMetrics
+	if err := reader.Collect(ctx, &collected); err != nil {
+		t.Fatal(err)
+	}
+	byOutcome := map[string]int64{}
+	for _, scope := range collected.ScopeMetrics {
+		for _, m := range scope.Metrics {
+			if m.Name != RecommendationsDiscoveryCounter {
+				continue
+			}
+			sum, ok := m.Data.(metricdata.Sum[int64])
+			if !ok {
+				t.Fatalf("%s is %T, want a sum", m.Name, m.Data)
+			}
+			for _, point := range sum.DataPoints {
+				value, _ := point.Attributes.Value("outcome")
+				byOutcome[value.AsString()] += point.Value
+			}
+		}
+	}
+	if byOutcome["project_owners_skipped_bound"] != 1 || len(byOutcome) != 1 {
+		t.Errorf("%s by outcome = %v, want project_owners_skipped_bound 1", RecommendationsDiscoveryCounter, byOutcome)
+	}
+}
+
+type boundWarnRecorder struct {
+	mu    sync.Mutex
+	warns []string
+}
+
+func (r *boundWarnRecorder) Error(string, ...any) {}
+
+func (r *boundWarnRecorder) Warn(msg string, _ ...any) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.warns = append(r.warns, msg)
+}
+
+func (r *boundWarnRecorder) count(msg string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	n := 0
+	for _, warn := range r.warns {
+		if warn == msg {
+			n++
+		}
+	}
+	return n
+}
+
+func (r *boundWarnRecorder) messages() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.warns...)
 }

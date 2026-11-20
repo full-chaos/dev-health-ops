@@ -2,11 +2,13 @@ package remaining
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/rowview"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 	"github.com/full-chaos/dev-health-ops/internal/teamactive"
@@ -105,17 +107,32 @@ func (executor *RecommendationsExecutor) DiscoverTeamIDs(
 				add(teamID)
 			}
 		}
-		projects, err := teamattribution.ClickHouseFactSource{Conn: executor.conn}.LoadProjects(ctx, orgID, asOf)
-		if err != nil {
+		loadProjects := executor.loadProjectOwners
+		if loadProjects == nil {
+			loadProjects = teamattribution.ClickHouseFactSource{Conn: executor.conn}.LoadProjects
+		}
+		projects, err := loadProjects(ctx, orgID, asOf)
+		var bound *providerfoundation.EffectBoundError
+		switch {
+		case errors.As(err, &bound):
+			// The project owners are an addition to the other two sets: past the
+			// read's row bound the run keeps them and skips only the project owners.
+			executor.warnf("recommendations.discovery.project_owners_skipped_bound",
+				"org_id", orgID, "limit", bound.Limit, "rows", bound.Rows)
+			recordRecommendationsDiscoveryOutcome(ctx, recommendationsDiscoveryProjectOwnersSkippedBound)
+			projects = nil
+		case err != nil:
 			return nil, fmt.Errorf("discover recommendation project owner teams: %w", err)
 		}
-		inactive, err := teamactive.LoadInactive(ctx, executor.conn, orgID)
-		if err != nil {
-			return nil, fmt.Errorf("discover recommendation project owner teams: %w", err)
-		}
-		for _, project := range projects {
-			if !inactive.Has(project.TeamID) {
-				add(project.TeamID)
+		if len(projects) > 0 {
+			inactive, err := teamactive.LoadInactive(ctx, executor.conn, orgID)
+			if err != nil {
+				return nil, fmt.Errorf("discover recommendation project owner teams: %w", err)
+			}
+			for _, project := range projects {
+				if !inactive.Has(project.TeamID) {
+					add(project.TeamID)
+				}
 			}
 		}
 	}

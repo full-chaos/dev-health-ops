@@ -125,6 +125,30 @@ func TestLLMSettingsSaveTakesTheOrgSaveLockFirst(t *testing.T) {
 	}
 }
 
+// A save that sends the masked form of the stored base_url takes the save lock
+// before its masked-url re-check reads the transaction's rows, in every scope:
+// the lock statements come first and the re-check's read is the next statement.
+func TestLLMSettingsSaveTakesTheLockBeforeTheMaskedURLReCheck(t *testing.T) {
+	const stored = "https://user:" + "secretpw0123456789" + "@p.example.invalid/v1"
+	sent := maskBaseURL(stored, nil)
+	if sent == stored || !carriesBaseURLMask(sent) {
+		t.Fatalf("mask of %q is %q: the cell needs a masked form", stored, sent)
+	}
+	want := []string{llmSettingsSaveLockTimeoutReadSQL, llmSettingsSaveLockTimeoutSQL, llmSettingsSaveLockSQL, llmSettingsSaveLockTimeoutRestoreSQL}
+	for _, scope := range llmWriteScopes {
+		tx := &saveLockTx{}
+		h := baseURLHandlers(&resolverSpy{valid: true}, scope, stored)
+		h.store.Pool = &saveLockDB{tx: tx}
+		refusal, reached, err := keysetWrite(h, scope, nil, &sent)
+		if err != nil || refusal != nil || !reached {
+			t.Fatalf("%s: refusal=%v reached=%v err=%v", scopeName(scope), refusal, reached, err)
+		}
+		if !slices.Equal(tx.statements, want) {
+			t.Fatalf("%s: statements before the re-check's read %q, want the save lock %q", scopeName(scope), tx.statements, want)
+		}
+	}
+}
+
 // Every spelling of one org id the access gate accepts (upper case, no hyphens,
 // braces) takes the save lock of the canonical id, in every scope: the raw id
 // the caller gave never reaches the lock key.

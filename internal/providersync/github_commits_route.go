@@ -1,6 +1,7 @@
 package providersync
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -119,11 +120,9 @@ func (handler GitHubCommitsRouteHandler) Collect(ctx context.Context, claim Clai
 	}
 	rows := make([]gitCommitRow, 0, len(items))
 	for _, raw := range items {
-		var payload gitHubCommitPayload
-		decoder := json.NewDecoder(strings.NewReader(string(raw)))
-		decoder.UseNumber()
-		if decoder.Decode(&payload) != nil {
-			return CompleteRouteBatch{}, providerfoundation.ErrNormalizationInvalid
+		payload, err := decodeGitHubCommitItem(raw)
+		if err != nil {
+			return CompleteRouteBatch{}, providerfoundation.RouteFailure(githubCommitsRoute, providerfoundation.ReasonBodyDecode, err)
 		}
 		row, ok := normalizeGitHubCommit(claim, repoID, payload, normalizedAt)
 		if ok {
@@ -193,3 +192,13 @@ func (row gitCommitRow) validate(claim Claim) error {
 }
 
 var _ CompleteRouteHandler = GitHubCommitsRouteHandler{}
+
+func decodeGitHubCommitItem(raw json.RawMessage) (gitHubCommitPayload, error) {
+	var payload gitHubCommitPayload
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if decoder.Decode(&payload) != nil {
+		return payload, providerfoundation.ErrNormalizationInvalid
+	}
+	return payload, nil
+}

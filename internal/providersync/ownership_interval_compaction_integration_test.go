@@ -273,11 +273,11 @@ func (f cmpFixture) readerSnapshot(org string, at time.Time) string {
 			f.t.Fatalf("raw valid-at-T: %v", err)
 		}
 		for rows.Next() {
-			var line string
+			var line *string
 			if err := rows.Scan(&line); err != nil {
 				f.t.Fatalf("scan: %v", err)
 			}
-			out = append(out, line)
+			out = append(out, derefString(line))
 		}
 		rows.Close()
 	}

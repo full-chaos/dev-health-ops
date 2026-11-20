@@ -1,12 +1,12 @@
 package providersync
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/url"
-	"strings"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
@@ -158,10 +158,11 @@ func (handler GitHubCommitStatsRouteHandler) Collect(
 	}
 	rows := make([]commitStatsRow, 0)
 	for _, raw := range page.Items[:min(statsLimit, len(page.Items))] {
-		var commit gitHubCommitListPayload
-		decoder := json.NewDecoder(strings.NewReader(string(raw)))
-		decoder.UseNumber()
-		if decoder.Decode(&commit) != nil || commit.SHA == "" {
+		commit, err := decodeGitHubCommitListItem(raw)
+		if err != nil {
+			return CompleteRouteBatch{}, providerfoundation.RouteFailure(githubCommitsRoute, providerfoundation.ReasonBodyDecode, err)
+		}
+		if commit.SHA == "" {
 			return CompleteRouteBatch{}, providerfoundation.ErrNormalizationInvalid
 		}
 		if commitStatsBeforeSince(commit, claim.SinceAt) {
@@ -239,3 +240,13 @@ func (row commitStatsRow) validate(claim Claim) error {
 }
 
 var _ CompleteRouteHandler = GitHubCommitStatsRouteHandler{}
+
+func decodeGitHubCommitListItem(raw json.RawMessage) (gitHubCommitListPayload, error) {
+	var commit gitHubCommitListPayload
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if decoder.Decode(&commit) != nil {
+		return commit, providerfoundation.ErrNormalizationInvalid
+	}
+	return commit, nil
+}

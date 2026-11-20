@@ -84,6 +84,7 @@ devhealth_auth_outbox_publisher_enabled		code: internal/audit/outboxloop.go
 devhealth_auth_push_reconcile_drift	class	code: internal/auth/pushreconcile/reconcilejob/gauge.go
 devhealth_auth_push_reconcile_runs_total	outcome	code: internal/auth/pushreconcile/reconcilejob/probe.go
 dev_health_categorize_byo_optin_unreadable_total	reason	code: internal/jobs/investment/categorizebyo.go
+dev_health_report_plan_unknown_confidence_total		code: internal/jobs/report/query.go
 dev_health_generation_repair_failures_total	step	code: internal/jobs/metrics/daily/generation_repair_metrics.go
 dev_health_generation_repair_partial_total		code: internal/jobs/metrics/daily/generation_repair_metrics.go
 dev_health_ic_finalize_refused_empty_org_total		code: internal/jobs/metrics/daily/icfinalize/executor.go
@@ -190,6 +191,7 @@ river.work_duration_histogram	attempt,cancel,kind,priority,queue,snooze,status	t
 session_org_activity_fallback_total		code: internal/api/session/activity_metrics.go
 session_org_activity_read_failures_total	error_class,table	code: internal/api/session/activity_metrics.go
 sync_finalize_delivery_not_current_total	reason	code: internal/syncdispatchruntime/native_finalize_sync_run.go
+sync_fence_commit_snapshot_busy_total	kind,reason	code: internal/syncdispatchruntime/transport_fence.go
 sync_route_generation_stranded_total	action,kind	code: internal/syncreconciler/generation_reconcile.go
 team_catalog_snapshot_close_abandoned_total	kind,provider,reason	code: internal/providersync/snapshot_close_report.go
 team_repo_ownership_retraction_held_total	kind,provider,reason	code: internal/providersync/team_repo_ownership_retraction_guard.go

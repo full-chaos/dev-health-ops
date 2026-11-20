@@ -243,7 +243,11 @@ func (h *handlers) llmSettingsResponse(ctx context.Context, db pgExecer, orgID s
 		values[key] = value
 	}
 	// Every unreadable setting is named, the overrides' too (CHAOS-12172).
-	purposes, err := h.llmPurposesObject(ctx, db, orgID)
+	maskKeys, err := h.llmMaskKeys(ctx, db, orgID)
+	if err != nil {
+		return nil, err
+	}
+	purposes, err := h.llmPurposesObject(ctx, db, orgID, maskKeys)
 	if !collectUndecryptable(err, &unreadable) && err != nil {
 		return nil, err
 	}
@@ -263,7 +267,7 @@ func (h *handlers) llmSettingsResponse(ctx context.Context, db pgExecer, orgID s
 		}
 	}
 	if values["base_url"] != nil {
-		out.Set("base_url", *values["base_url"])
+		setMaskedBaseURL(out, *values["base_url"], maskKeys)
 	}
 	if raw := values["concurrency"]; raw != nil && *raw != "" {
 		parsed, err := pythonparity.ParseInt(*raw)
@@ -521,6 +525,15 @@ func (h *handlers) applyLLMSettings(ctx context.Context, org uuid.UUID, in llmUp
 	if refusal := decisionProviderRefusal(in.provider, "", false, "", nil, false); refusal != nil {
 		return nil, refusal, nil
 	}
+	origBaseURL := in.baseURL
+	sentBaseURL, refused, err := h.resolveBaseURL(ctx, nil, orgID, "", in.baseURL)
+	if err != nil {
+		return nil, nil, err
+	}
+	if refused {
+		return nil, maskedBaseURLRefusal(), nil
+	}
+	in.baseURL = sentBaseURL
 	baseURLText := ""
 	if in.baseURL != nil {
 		baseURLText = *in.baseURL
@@ -547,6 +560,13 @@ func (h *handlers) applyLLMSettings(ctx context.Context, org uuid.UUID, in llmUp
 	// seen here, so two saves never each store a url carrying the other's key.
 	if refusal, err := h.lockLLMSettingsSave(ctx, tx, org, ""); refusal != nil || err != nil {
 		return nil, refusal, err
+	}
+	inTx, refused, err := h.resolveBaseURL(ctx, tx, orgID, "", origBaseURL)
+	if err != nil {
+		return nil, nil, err
+	}
+	if refused || !sameBaseURL(inTx, in.baseURL) {
+		return nil, maskedBaseURLRefusal(), nil
 	}
 	if refusal, err := h.saveKeyRefusal(ctx, tx, orgID, "", in.apiKey, in.baseURL, false); refusal != nil || err != nil {
 		return nil, refusal, err

@@ -44,6 +44,13 @@ var metrics = []metricSpec{
 	{Metric: "ci_success", Label: "CI Success Rate", Unit: "%", Table: "testops_pipeline_metrics_daily", Column: "success_count", Aggregator: "ratio", Transform: percentTransform, Scope: "repo"},
 }
 
+// nullableValueColumns are the metric value columns that are Nullable(Float64) in their table, read by
+// metricFromClause with the tuple argMax.
+var nullableValueColumns = map[string]bool{
+	"cycle_time_p50_hours":      true,
+	"pr_first_review_p50_hours": true,
+}
+
 // dedupByComputedAt ports _DEDUP_BY_COMPUTED_AT (api/queries/metrics.py:
 // 21-58) -- the natural key each daily-family ReplacingMergeTree(computed_at)
 // table's readers dedup on before aggregating.

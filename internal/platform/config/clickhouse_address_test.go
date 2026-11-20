@@ -67,7 +67,7 @@ func TestServiceClickHouseDSNAcceptsAddressLists(t *testing.T) {
 			"clickhouse://u:p@a:9000,b:9000":            false,
 			"http://u:p@a:8443,b:8443/db":               true,
 			"http://[::1]:8443,[fe80::2]:8443/db":       true,
-			"https://a:8443,b:8443/db":                  true,
+			"https://a:8443,b:8443/db?secure=true":      true,
 		} {
 			t.Run(key+"/"+dsn, func(t *testing.T) {
 				_, out, native, problems, err := observeDSN(t, key, dsn)
@@ -148,10 +148,47 @@ func TestServiceClickHouseDSNWarnsOnNoUsableHost(t *testing.T) {
 }
 
 func TestServiceClickHouseDSNStillRefusesWhatItRefusedBefore(t *testing.T) {
-	for _, dsn := range []string{"clickhouse://a:9000,/db", "clickhouse://[::1]:9000,[not-ip]:9000/db", "http://a:8443,/db", "http://:8443,:8444/db", "https://a:8443,:8444/db", "http://[::1]:8443,[x]:1/db", "http://a:8443/db?alt_hosts=:1"} {
+	for _, dsn := range []string{"clickhouse://a:9000,/db", "clickhouse://[::1]:9000,[not-ip]:9000/db", "http://a:8443,/db", "http://:8443,:8444/db", "https://a:8443,:8444/db", "http://[::1]:8443,[x]:1/db", "clickhouse://[::1]:9000,[fe80::2]:9000/db?secure=ture", "clickhouse://[::1]:9000,[fe80::2]:9000/db?dial_timeout=abc", "clickhouse://[::1]:9000,[fe80::2]:9000/db?max_open_conns=abc", "clickhouse://a:9000,[::1]:9000/db?secure=ture", "http://:8123:8443/db", "https://:8123:8443/db", "https://a:8443,b:8443/db"} {
 		if _, err := Load(workerSpec(map[string]string{"CLICKHOUSE_URI": dsn})); err == nil {
 			t.Fatalf("Load accepted %q", dsn)
 		}
+	}
+}
+
+// Each DSN here has its result at base a03ab785c031 in the lane record CELLS-14275-base.txt: a form that loaded there
+// loads here (D6465); the "" cause rows are forms the driver accepts.
+func TestServiceClickHouseDSNMalformedAddressesWarnNotRefuse(t *testing.T) {
+	cases := map[string]string{
+		"clickhouse://:8123:8443/db":                               hostProblemNoUsableHost,
+		"clickhouse://peer::8123/db":                               hostProblemNoUsableHost,
+		"clickhouse://2001:db8::1:9000/db":                         hostProblemNoUsableHost,
+		"clickhouse://:9000,:8123:8443/db":                         hostProblemNoUsableHost,
+		"clickhouse://a:9000,:8123:8443/db":                        hostProblemEmptyHostElement,
+		"clickhouse://a:9000/db?hosts=%5B::1%5Dx:9000":             hostProblemEmptyHostElement,
+		"http://a:8443/db?hosts=bad::port":                         hostProblemEmptyHostElement,
+		"http://a:8123/db?alt_hosts=:1":                            hostProblemEmptyHostElement,
+		"clickhouse://[::1]:9000,[fe80::2]:9000/db?secure=true":    "",
+		"https://a:8443,b:8443/db?secure=true":                     "",
+		"clickhouse://[fe80::1%2525]:9000/db":                      "",
+		"http://[fe80::1%2525]:8123/db":                            "",
+		"clickhouse://a:9000/db?alt_hosts=%5Bfe80::1%2525%5D:9000": "",
+		"http://a:8123/db?hosts=%5Bfe80::1%2525%5D:8123":           "",
+		"clickhouse://[fe80::1%2524]:9000/db":                      "",
+	}
+	for dsn, cause := range cases {
+		t.Run(dsn, func(t *testing.T) {
+			cfg, err := Load(workerSpec(map[string]string{"CLICKHOUSE_URI": dsn}))
+			if err != nil {
+				t.Fatalf("Load refused: %v", err)
+			}
+			var want []ClickHouseHostProblem
+			if cause != "" {
+				want = []ClickHouseHostProblem{{Key: "CLICKHOUSE_URI", Cause: cause}}
+			}
+			if !slices.Equal(cfg.ClickHouseHostProblems, want) {
+				t.Fatalf("problems = %v, want %v", cfg.ClickHouseHostProblems, want)
+			}
+		})
 	}
 }
 

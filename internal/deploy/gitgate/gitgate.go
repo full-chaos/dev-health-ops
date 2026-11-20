@@ -5,8 +5,6 @@
 package gitgate
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -35,12 +33,12 @@ func git(ctx context.Context, r run.Runner, tree string, args ...string) (run.Ou
 	return r.Run(ctx, run.Cmd{Argv: append([]string{"git", "-C", tree}, args...)})
 }
 
+// lines splits the whole buffer (no line length limit) and drops blank lines.
 func lines(b []byte) []string {
 	var out []string
-	sc := bufio.NewScanner(bytes.NewReader(b))
-	for sc.Scan() {
-		if strings.TrimSpace(sc.Text()) != "" {
-			out = append(out, sc.Text())
+	for _, l := range strings.Split(string(b), "\n") {
+		if strings.TrimSpace(l) != "" {
+			out = append(out, l)
 		}
 	}
 	return out
@@ -53,28 +51,30 @@ func (c Clone) Record() string {
 	return fmt.Sprintf("CLONE %s origin=pinned url_keys=0 porcelain=0", c.Tree)
 }
 
-// CheckClone: tree is the top of its own work tree, remote.origin.url == url,
-// no url.* key in any git config scope, and `git status --porcelain` is empty.
+// CheckClone: tree is the top of its own work tree, the fetch URL of origin
+// (`git remote get-url origin`, the first url) == url, no url.* key in any git
+// config scope, and `git status --porcelain` is empty with every untracked
+// file and every submodule change shown, whatever the repo config says.
 func CheckClone(ctx context.Context, r run.Runner, url, tree string) (Clone, error) {
 	o, err := git(ctx, r, tree, "rev-parse", "--show-toplevel")
 	if err != nil || o.RC != 0 || strings.TrimSuffix(string(o.Stdout), "\n") != tree {
 		return Clone{}, run.Stop("%s: not the top of a git work tree", tree)
 	}
-	o, err = git(ctx, r, tree, "config", "--get", "remote.origin.url")
+	o, err = git(ctx, r, tree, "remote", "get-url", "origin")
 	if err != nil || o.RC != 0 {
-		return Clone{}, run.Stop("%s: no remote.origin.url", tree)
+		return Clone{}, run.Stop("%s: no origin fetch URL", tree)
 	}
 	if strings.TrimSuffix(string(o.Stdout), "\n") != url {
-		return Clone{}, run.Stop("%s: remote.origin.url is not the pinned URL", tree)
+		return Clone{}, run.Stop("%s: the origin fetch URL is not the pinned URL", tree)
 	}
-	o, err = git(ctx, r, tree, "config", "--get-regexp", `^url\.`)
+	o, err = git(ctx, r, tree, "config", "--name-only", "--get-regexp", `^url\.`)
 	if err != nil || (o.RC != 0 && o.RC != 1) {
 		return Clone{}, run.Stop("%s: git config --get-regexp failed", tree)
 	}
 	if n := len(lines(o.Stdout)); n != 0 {
 		return Clone{}, run.Stop("%s: %d url.* key(s) in its git config (insteadOf)", tree, n)
 	}
-	o, err = git(ctx, r, tree, "status", "--porcelain")
+	o, err = git(ctx, r, tree, "status", "--porcelain", "--untracked-files=all", "--ignore-submodules=none")
 	if err != nil || o.RC != 0 {
 		return Clone{}, run.Stop("%s: git status failed", tree)
 	}
@@ -105,12 +105,16 @@ func FetchMain(ctx context.Context, r run.Runner, url, tree string) (Main, error
 	if err != nil || o.RC != 0 {
 		return Main{}, run.Stop("git ls-remote refs/heads/main failed")
 	}
-	rows := lines(o.Stdout)
-	l := ""
-	if len(rows) == 1 {
-		if sha, ref, ok := strings.Cut(rows[0], "\t"); ok && ref == "refs/heads/main" && sha40.MatchString(sha) {
-			l = sha
+	// ls-remote matches the pattern at any slash boundary: only the exact ref counts.
+	var exact []string
+	for _, row := range lines(o.Stdout) {
+		if sha, ref, ok := strings.Cut(row, "\t"); ok && ref == "refs/heads/main" {
+			exact = append(exact, sha)
 		}
+	}
+	l := ""
+	if len(exact) == 1 && sha40.MatchString(exact[0]) {
+		l = exact[0]
 	}
 	if l == "" || f != l {
 		return Main{}, run.Stop("fetched main %s != ls-remote refs/heads/main %s", f, l)
@@ -183,8 +187,10 @@ func (p Pinned) Record() string {
 	return fmt.Sprintf("P0u HEAD %s dirty=%d values_blob=%s disk=%s tgz=%s", p.Head, p.Dirty, p.ValuesBlob, p.Disk, p.Tgz)
 }
 
-// TreePin: HEAD == TreeSHA, 0 dirty tracked files, the committed values blob
-// == the disk blob == ValuesBlob, sha256(tgz) == TgzSHA256.
+// TreePin: HEAD == TreeSHA, 0 dirty tracked files (submodule commit and
+// tracked-content changes shown whatever the repo config says), the committed
+// values blob == the raw disk blob (no git filter) == ValuesBlob,
+// sha256(tgz) == TgzSHA256.
 func TreePin(ctx context.Context, r run.Runner, p Pin) (Pinned, error) {
 	if !sha40.MatchString(p.TreeSHA) || !sha40.MatchString(p.ValuesBlob) || !sha256x.MatchString(p.TgzSHA256) || !inTree(p.ValuesPath) {
 		return Pinned{}, run.Stop("tree pin: a bad pin value")
@@ -195,7 +201,7 @@ func TreePin(ctx context.Context, r run.Runner, p Pin) (Pinned, error) {
 		return Pinned{}, run.Stop("tree pin: rev-parse HEAD failed")
 	}
 	got.Head = strings.TrimSuffix(string(o.Stdout), "\n")
-	o, err = git(ctx, r, p.Tree, "status", "--porcelain", "--untracked-files=no")
+	o, err = git(ctx, r, p.Tree, "status", "--porcelain", "--untracked-files=no", "--ignore-submodules=untracked")
 	if err != nil || o.RC != 0 {
 		return Pinned{}, run.Stop("tree pin: git status failed")
 	}
@@ -205,7 +211,7 @@ func TreePin(ctx context.Context, r run.Runner, p Pin) (Pinned, error) {
 		return Pinned{}, run.Stop("tree pin: the values file is not in HEAD")
 	}
 	got.ValuesBlob = strings.TrimSuffix(string(o.Stdout), "\n")
-	o, err = git(ctx, r, p.Tree, "hash-object", "--", p.ValuesPath)
+	o, err = git(ctx, r, p.Tree, "hash-object", "--no-filters", "--", p.ValuesPath)
 	if err != nil || o.RC != 0 {
 		return Pinned{}, run.Stop("tree pin: hash-object of the values file failed")
 	}

@@ -4,7 +4,9 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -216,13 +218,13 @@ func TestRunFilesAre0600AndDirs0700(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.Close()
-	l, err := s.OpenLog("roll", "deploy")
+	l, err := s.OpenLog("roll", o)
 	if err != nil {
 		t.Fatal(err)
 	}
 	l.Close()
-	_, err = s.OpenLog("roll", "deploy")
-	wantCode(t, err, CodeStop, "a second run log in the same second")
+	_, err = s.OpenLog("roll", o)
+	wantCode(t, err, CodeStop, "a second run log of one try")
 	n := 0
 	err = filepath.WalkDir(filepath.Join(r, "dev-health"), func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -265,5 +267,154 @@ func TestDeployNeedsThePreMarkerNotOnlyPreEnd(t *testing.T) {
 	wantCode(t, err, CodeRefused, "deploy with PREEND and no pre.pass")
 	if s.Has(DeployStarted) {
 		t.Fatal("a refused deploy must not mark deploy.started")
+	}
+}
+
+// r1 P1: PREEND keeps the clock's full precision; a pre that ended at .9 s
+// is fresh for exactly PreMaxAge.
+func TestAFractionalPreEndKeepsItsFullAge(t *testing.T) {
+	for i, c := range []struct {
+		after time.Duration
+		ok    bool
+	}{{PreMaxAge - time.Millisecond, true}, {PreMaxAge, true}, {PreMaxAge + time.Millisecond, false}} {
+		r, clk := root(t), newClock()
+		clk.t = clk.t.Add(900 * time.Millisecond)
+		s, err := BeginPre(r, "dev-health", "s41-"+strconv.Itoa(i), shaA, clk.now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.Begin("pre"); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.EndPre(); err != nil {
+			t.Fatal(err)
+		}
+		clk.t = clk.t.Add(c.after)
+		_, err = s.Begin("deploy")
+		if c.ok && err != nil || !c.ok && Code(err) != CodeRefused {
+			t.Fatalf("deploy %v after a pre that ended at .9 s: %v (want ok=%v)", c.after, err, c.ok)
+		}
+	}
+}
+
+// race runs n calls at once and counts nil and each exit code.
+func race(n int, call func(i int) error) (ok, stop, refused int) {
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			err := call(i)
+			mu.Lock()
+			defer mu.Unlock()
+			switch Code(err) {
+			case 0:
+				ok++
+			case CodeStop:
+				stop++
+			case CodeRefused:
+				refused++
+			}
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+	return
+}
+
+// r1 P1: racing phase calls, each on its own handle: one deploy wins and the
+// others are refused (exit 3, not a STOP); post takes its 5 tries and refuses
+// the rest; racing waits each get their own try dir and log.
+func TestRacingPhaseCallsReserveOnceAndRefuseTheRest(t *testing.T) {
+	r, c := root(t), newClock()
+	pre(t, r, c)
+	open := func() *State {
+		s, err := Open(r, "dev-health", "s41-a", shaA, c.now)
+		if err != nil {
+			t.Error(err)
+		}
+		return s
+	}
+	if ok, stop, refused := race(24, func(int) error { _, err := open().Begin("deploy"); return err }); ok != 1 || stop != 0 || refused != 23 {
+		t.Fatalf("24 racing deploys: ok %d, stop %d, refused %d; want 1, 0, 23", ok, stop, refused)
+	}
+	var mu sync.Mutex
+	logs := map[string]bool{}
+	ok, stop, refused := race(24, func(int) error {
+		s := open()
+		o, err := s.Begin("wait")
+		if err != nil {
+			return err
+		}
+		l, err := s.OpenLog("roll", o)
+		if err != nil {
+			return err
+		}
+		mu.Lock()
+		logs[l.(*os.File).Name()] = true
+		mu.Unlock()
+		return l.Close()
+	})
+	if ok != 24 || stop != 0 || refused != 0 || len(logs) != 24 {
+		t.Fatalf("24 racing waits in one second: ok %d, stop %d, refused %d, %d logs; want 24 each with its own log", ok, stop, refused, len(logs))
+	}
+	if err := open().Mark(DeployPass); err != nil {
+		t.Fatal(err)
+	}
+	if ok, stop, refused := race(24, func(int) error { _, err := open().Begin("post"); return err }); ok != PostTries || stop != 0 || refused != 24-PostTries {
+		t.Fatalf("24 racing posts: ok %d, stop %d, refused %d; want %d, 0, %d", ok, stop, refused, PostTries, 24-PostTries)
+	}
+}
+
+// r1 P2: racing Puts of one key on their own handles set it once (50 rounds,
+// 24 callers each: one round alone can miss the race).
+func TestRacingPutsSetAKeyOnce(t *testing.T) {
+	r, c := root(t), newClock()
+	for round := 0; round < 50; round++ {
+		tag := "p" + strconv.Itoa(round)
+		if _, err := BeginPre(r, "dev-health", tag, shaA, c.now); err != nil {
+			t.Fatal(err)
+		}
+		for _, key := range []string{"RESTARTS0", "GROUPDIG"} {
+			ok, stop, _ := race(24, func(i int) error {
+				s, err := Open(r, "dev-health", tag, shaA, c.now)
+				if err != nil {
+					return err
+				}
+				return s.Put(key, strconv.Itoa(i))
+			})
+			if ok != 1 || stop != 23 {
+				t.Fatalf("round %d %s: ok %d, stop %d; want 1, 23", round, key, ok, stop)
+			}
+			s, _ := Open(r, "dev-health", tag, shaA, c.now)
+			if _, err := s.Get(key); err != nil {
+				t.Fatalf("round %d %s after the race: %v", round, key, err)
+			}
+		}
+	}
+}
+
+// r1 P2: a legal state line longer than 64 KiB hides no key from Get or Put.
+func TestALongStateLineHidesNoKey(t *testing.T) {
+	r, c := root(t), newClock()
+	s, err := BeginPre(r, "dev-health", "s41-a", shaA, c.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Put("RESTARTMAP", strings.Repeat("a:0,", 20000)+"a:0"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Put("LIVEREV", "449"); err != nil {
+		t.Fatal(err)
+	}
+	if v, err := s.Get("LIVEREV"); err != nil || v != "449" {
+		t.Fatalf("LIVEREV after a long line: %q %v", v, err)
+	}
+	wantCode(t, s.Put("RESTARTMAP", "b:1"), CodeStop, "a long key set twice")
+	if v, err := s.Get("RESTARTMAP"); err != nil || len(v) < 80000 {
+		t.Fatalf("RESTARTMAP: len %d %v", len(v), err)
 	}
 }

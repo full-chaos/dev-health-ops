@@ -79,6 +79,33 @@ func (w *world) commit(path, body string) string {
 	return w.git(w.work, "rev-parse", "HEAD")
 }
 
+// addSubmodule records a gitlink "module" (with .gitmodules) on main, pulls it
+// into the deploy clone and checks the module out there, at the recorded commit.
+func (w *world) addSubmodule() {
+	w.t.Helper()
+	sub := filepath.Join(w.dir, "sub")
+	w.git("", "init", "-q", "-b", "main", sub)
+	w.write(sub, "s.txt", "s\n")
+	w.git(sub, "add", "s.txt")
+	w.git(sub, "commit", "-q", "-m", "s")
+	sha := w.git(sub, "rev-parse", "HEAD")
+	w.write(w.work, ".gitmodules", "[submodule \"module\"]\n\tpath = module\n\turl = file://"+sub+"\n")
+	w.git(w.work, "update-index", "--add", "--cacheinfo", "160000,"+sha+",module")
+	w.git(w.work, "add", ".gitmodules")
+	w.git(w.work, "commit", "-q", "-m", "module")
+	w.git(w.work, "push", "-q", "origin", "refs/heads/main:refs/heads/main")
+	w.git(w.tree, "pull", "-q", "--ff-only")
+	w.git("", "clone", "-q", "file://"+sub, filepath.Join(w.tree, "module"))
+}
+
+// moveSubmodule commits in the checked-out module: the gitlink is now changed.
+func (w *world) moveSubmodule() {
+	w.t.Helper()
+	m := filepath.Join(w.tree, "module")
+	w.write(m, "s.txt", "moved\n")
+	w.git(m, "commit", "-q", "-a", "-m", "moved")
+}
+
 func (w *world) appendConfig(path, text string) {
 	w.t.Helper()
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
@@ -146,6 +173,34 @@ func TestCloneChecks(t *testing.T) {
 		"not a repo": func(w *world) (string, string) {
 			return w.url, w.dir
 		},
+		"another fetch URL first, the pinned URL second": func(w *world) (string, string) {
+			w.git(w.tree, "remote", "set-url", "origin", w.url+"x")
+			w.git(w.tree, "remote", "set-url", "--add", "origin", w.url)
+			return w.url, w.tree
+		},
+		"an untracked file under status.showUntrackedFiles=no": func(w *world) (string, string) {
+			w.appendConfig(filepath.Join(w.tree, ".git", "config"), "[status]\n\tshowUntrackedFiles = no\n")
+			w.write(w.tree, "stray.txt", "x\n")
+			return w.url, w.tree
+		},
+		"a moved submodule under submodule.<name>.ignore=all": func(w *world) (string, string) {
+			w.addSubmodule()
+			w.appendConfig(filepath.Join(w.tree, ".git", "config"), "[submodule \"module\"]\n\tignore = all\n")
+			w.moveSubmodule()
+			return w.url, w.tree
+		},
+		"a moved submodule under .gitmodules ignore=dirty": func(w *world) (string, string) {
+			w.addSubmodule()
+			w.appendConfig(filepath.Join(w.tree, ".gitmodules"), "\tignore = dirty\n")
+			w.moveSubmodule()
+			return w.url, w.tree
+		},
+		"a url.* key longer than 64 KiB in the global config": func(w *world) (string, string) {
+			g := filepath.Join(w.dir, "global.gitconfig")
+			w.appendConfig(g, "[url \"file:///"+strings.Repeat("e", 70000)+"\"]\n\tinsteadOf = x\n")
+			w.r.Env = append(w.r.Env, "GIT_CONFIG_GLOBAL="+g)
+			return w.url, w.tree
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			w := newWorld(t)
@@ -154,6 +209,23 @@ func TestCloneChecks(t *testing.T) {
 			stop(t, err, name)
 		})
 	}
+
+	// git fetch uses the first url: the pinned one first passes; a second url or a push url after it does not matter.
+	t.Run("the pinned fetch URL first", func(t *testing.T) {
+		w := newWorld(t)
+		w.git(w.tree, "remote", "set-url", "--add", "origin", w.url+"x")
+		w.git(w.tree, "remote", "set-url", "--push", "origin", w.url+"y")
+		if _, err := CheckClone(ctx, w.r, w.url, w.tree); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("a clean checked-out submodule", func(t *testing.T) {
+		w := newWorld(t)
+		w.addSubmodule()
+		if _, err := CheckClone(ctx, w.r, w.url, w.tree); err != nil {
+			t.Fatal(err)
+		}
+	})
 }
 
 // moveAfterFetch pushes a new main commit right after the fetch, before ls-remote.
@@ -190,6 +262,10 @@ func TestFetchMain(t *testing.T) {
 
 	_, err = FetchMain(ctx, &moveAfterFetch{w: w}, w.url, w.tree)
 	stop(t, err, "main moves between fetch and ls-remote")
+	w.git(w.work, "push", "-q", "origin", "refs/heads/main:refs/heads/x/refs/heads/main", "refs/heads/main:refs/tags/refs/heads/main")
+	if m, err := FetchMain(ctx, w.r, w.url, w.tree); err != nil || m.SHA != w.git(w.work, "rev-parse", "HEAD") {
+		t.Fatalf("refs that end in /refs/heads/main must not count: %q %v", m.SHA, err)
+	}
 	_, err = FetchMain(ctx, w.r, w.url+"-none", w.tree)
 	stop(t, err, "no such origin")
 }
@@ -281,6 +357,26 @@ func TestTreePin(t *testing.T) {
 		"a values blob pin off": {func(w *world, p *Pin) {
 			p.ValuesBlob = strings.Repeat("1", 40)
 		}, "values_blob,disk"},
+		"a CRLF checkout under eol=crlf (status clean)": {func(w *world, p *Pin) {
+			w.write(w.tree, ".git/info/attributes", "prod/values.yaml text eol=crlf\n")
+			if err := os.Remove(filepath.Join(w.tree, "prod/values.yaml")); err != nil {
+				t.Fatal(err)
+			}
+			w.git(w.tree, "checkout", "--", "prod/values.yaml")
+		}, "disk"},
+		"a CRLF checkout under core.autocrlf=true (status clean)": {func(w *world, p *Pin) {
+			w.appendConfig(filepath.Join(w.tree, ".git", "config"), "[core]\n\tautocrlf = true\n")
+			if err := os.Remove(filepath.Join(w.tree, "prod/values.yaml")); err != nil {
+				t.Fatal(err)
+			}
+			w.git(w.tree, "checkout", "--", "prod/values.yaml")
+		}, "disk"},
+		"a moved submodule under submodule.<name>.ignore=all": {func(w *world, p *Pin) {
+			w.addSubmodule()
+			*p = newPin(w)
+			w.appendConfig(filepath.Join(w.tree, ".git", "config"), "[submodule \"module\"]\n\tignore = all\n")
+			w.moveSubmodule()
+		}, "dirty"},
 		"a tgz byte change": {func(w *world, p *Pin) {
 			if err := os.WriteFile(p.TgzPath, []byte("chart bytez"), 0o600); err != nil {
 				t.Fatal(err)

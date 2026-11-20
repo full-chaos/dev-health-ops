@@ -26,7 +26,8 @@ type Step[T Record] struct {
 var stopWord = regexp.MustCompile(`\b(FAIL|REFUSED|HOLD)\b`)
 
 // Do runs s once. <label>.out is created O_EXCL first (an existing one is a
-// STOP and nothing runs). A STOP names the label and the rule, never the
+// STOP and nothing runs). A STOP is fixed text per failure class (label, rc,
+// rule): the text of a runner or parser error is dropped, since it can hold
 // tool output.
 func Do[T Record](ctx context.Context, r Runner, out *Out, log io.Writer, now func() time.Time, s Step[T]) (T, error) {
 	var zero T
@@ -38,7 +39,7 @@ func Do[T Record](ctx context.Context, r Runner, out *Out, log io.Writer, now fu
 	fmt.Fprintf(log, "== %s %s\n", s.Label, now().UTC().Format(time.RFC3339))
 	o, err := r.Run(ctx, s.Cmd)
 	if err != nil {
-		return zero, stopRecord(f, log, Stop("%s: %v", s.Label, err))
+		return zero, stopRecord(f, log, Stop("%s: the exec did not run to an exit code", s.Label))
 	}
 	fmt.Fprintf(log, "== %s rc=%d\n", s.Label, o.RC)
 	if !rcAllowed(o.RC, s.OK) {
@@ -46,7 +47,7 @@ func Do[T Record](ctx context.Context, r Runner, out *Out, log io.Writer, now fu
 	}
 	v, err := s.Parse(o)
 	if err != nil {
-		return zero, stopRecord(f, log, Stop("%s rc=%d but its output is not the PASS form: %v", s.Label, o.RC, err))
+		return zero, stopRecord(f, log, Stop("%s rc=%d but its output is not the PASS form", s.Label, o.RC))
 	}
 	if stopWord.Match(o.Stdout) {
 		return zero, stopRecord(f, log, Stop("%s printed FAIL, REFUSED or HOLD", s.Label))

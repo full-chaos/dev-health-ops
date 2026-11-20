@@ -1,8 +1,6 @@
 package run
 
 import (
-	"bufio"
-	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -12,6 +10,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -22,6 +21,8 @@ const (
 	PreMaxAge = 1800 * time.Second
 	// PostTries is the kit POST_TRIES: post, post-2 .. post-5.
 	PostTries = 5
+	// MaxWaits bounds the wait tries of one RUN_TAG: wait-1 .. wait-99.
+	MaxWaits = 99
 
 	inputsFile = "inputs.sha256"
 	stateFile  = "state.txt"
@@ -152,6 +153,15 @@ func (s *State) Put(key, value string) error {
 	if !re.MatchString(value) {
 		return Stop("STATE %s has a bad value", key)
 	}
+	f, err := os.OpenFile(filepath.Join(s.Dir, stateFile), os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
+	if err != nil {
+		return Stop("cannot open %s", stateFile)
+	}
+	defer f.Close()
+	// The check and the append hold one exclusive lock, across handles and processes.
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		return Stop("cannot lock %s", stateFile)
+	}
 	vals, err := s.values(key)
 	if err != nil {
 		return err
@@ -159,15 +169,10 @@ func (s *State) Put(key, value string) error {
 	if len(vals) != 0 {
 		return Stop("STATE %s is already set in %s", key, filepath.Join(s.Dir, stateFile))
 	}
-	f, err := os.OpenFile(filepath.Join(s.Dir, stateFile), os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
-	if err != nil {
-		return Stop("cannot open %s", stateFile)
+	if _, err := fmt.Fprintf(f, "%s=%s\n", key, value); err != nil {
+		return Stop("cannot write %s", stateFile)
 	}
-	_, werr := fmt.Fprintf(f, "%s=%s\n", key, value)
-	if cerr := f.Close(); werr == nil {
-		werr = cerr
-	}
-	if werr != nil {
+	if err := f.Close(); err != nil {
 		return Stop("cannot write %s", stateFile)
 	}
 	return nil
@@ -214,18 +219,17 @@ func (s *State) values(key string) ([]string, error) {
 		return nil, Stop("cannot read %s", stateFile)
 	}
 	var out []string
-	sc := bufio.NewScanner(bytes.NewReader(b))
-	for sc.Scan() {
-		if v, ok := strings.CutPrefix(sc.Text(), key+"="); ok {
+	for _, l := range strings.Split(string(b), "\n") {
+		if v, ok := strings.CutPrefix(l, key+"="); ok {
 			out = append(out, v)
 		}
 	}
 	return out, nil
 }
 
-// EndPre records PREEND and the pre.pass marker.
+// EndPre records PREEND (unix ns, the clock's full precision) and the pre.pass marker.
 func (s *State) EndPre() error {
-	if err := s.Put("PREEND", strconv.FormatInt(s.now().Unix(), 10)); err != nil {
+	if err := s.Put("PREEND", strconv.FormatInt(s.now().UnixNano(), 10)); err != nil {
 		return err
 	}
 	return s.Mark(PrePass)
@@ -237,7 +241,7 @@ func (s *State) PreFresh() (time.Duration, error) {
 	if err != nil {
 		return 0, err
 	}
-	age := s.now().Sub(time.Unix(t, 0))
+	age := s.now().Sub(time.Unix(0, t))
 	if age < 0 || age > PreMaxAge {
 		return age, Refuse("the pre phase ended %d s ago (want 0..%d s): run a new pre phase (new RUN_TAG)", int64(age/time.Second), int64(PreMaxAge/time.Second))
 	}
@@ -263,20 +267,18 @@ func (s *State) Begin(phase string) (*Out, error) {
 		if !s.Has(PrePass) {
 			return nil, Refuse("no pre.pass in %s: run the pre phase first", s.Dir)
 		}
-		if s.Has(DeployStarted) {
-			return nil, Refuse("deploy.started exists: the deploy runs once per RUN_TAG (use the wait phase)")
-		}
 		if _, err := s.PreFresh(); err != nil {
 			return nil, err
 		}
-		o, err := s.newOut("deploy")
-		if err != nil {
-			return nil, err
-		}
+		// deploy.started is the one check and the reservation: O_EXCL, so of
+		// two calls (in turn or racing) one wins and the other is refused.
 		if err := s.Mark(DeployStarted); err != nil {
+			if s.Has(DeployStarted) {
+				return nil, Refuse("deploy.started exists: the deploy runs once per RUN_TAG (use the wait phase)")
+			}
 			return nil, err
 		}
-		return o, nil
+		return s.newOut("deploy")
 	case "wait":
 		if !s.Has(DeployStarted) {
 			return nil, Refuse("no deploy.started in %s", s.Dir)
@@ -284,7 +286,7 @@ func (s *State) Begin(phase string) (*Out, error) {
 		if s.Has(DeployPass) {
 			return nil, Refuse("deploy.pass exists: run the post phase")
 		}
-		return s.newOut("wait-" + s.now().UTC().Format("150405"))
+		return s.reserve("wait", MaxWaits)
 	case "post":
 		if !s.Has(DeployPass) {
 			return nil, Refuse("no deploy.pass in %s", s.Dir)
@@ -292,25 +294,32 @@ func (s *State) Begin(phase string) (*Out, error) {
 		if s.Has(PostPass) {
 			return nil, Refuse("post.pass exists in %s", s.Dir)
 		}
-		n := 1
-		for ; n <= PostTries; n++ {
-			if _, err := os.Lstat(filepath.Join(s.Dir, postDir(n))); errors.Is(err, fs.ErrNotExist) {
-				break
-			}
-		}
-		if n > PostTries {
-			return nil, Refuse("post: %d tries already in %s, max %d", PostTries, s.Dir, PostTries)
-		}
-		return s.newOut(postDir(n))
+		return s.reserve("post", PostTries)
 	}
 	return nil, Refuse("unknown phase")
 }
 
-func postDir(n int) string {
-	if n == 1 {
+func tryDir(phase string, n int) string {
+	if n == 1 && phase == "post" {
 		return "post"
 	}
-	return "post-" + strconv.Itoa(n)
+	return phase + "-" + strconv.Itoa(n)
+}
+
+// reserve makes the first free try dir of a phase with O_EXCL mkdir: a dir
+// another call took moves on to the next number; all max taken is refused.
+func (s *State) reserve(phase string, max int) (*Out, error) {
+	for n := 1; n <= max; n++ {
+		dir := filepath.Join(s.Dir, tryDir(phase, n))
+		err := os.Mkdir(dir, 0o700)
+		if err == nil {
+			return &Out{Dir: dir}, nil
+		}
+		if !errors.Is(err, fs.ErrExist) {
+			return nil, Stop("cannot create %s", dir)
+		}
+	}
+	return nil, Refuse("%s: %d tries already in %s, max %d", phase, max, s.Dir, max)
 }
 
 func (s *State) newOut(name string) (*Out, error) {
@@ -340,12 +349,15 @@ func (o *Out) create(label string) (*os.File, error) {
 	return f, nil
 }
 
-// OpenLog makes the run log <RUN_TAG>/<verb>-<phase>-<HHMMSS>Z.log O_EXCL.
-func (s *State) OpenLog(verb, phase string) (io.WriteCloser, error) {
-	if !labelRe.MatchString(verb) || !labelRe.MatchString(phase) {
+// OpenLog makes the run log <RUN_TAG>/<verb>-<try>-<HHMMSS>Z.log O_EXCL, where
+// <try> is the reserved output dir of this call (pre, deploy, wait-N, post-N),
+// so two calls never share a log name.
+func (s *State) OpenLog(verb string, o *Out) (io.WriteCloser, error) {
+	try := filepath.Base(o.Dir)
+	if !labelRe.MatchString(verb) || !labelRe.MatchString(try) || filepath.Dir(o.Dir) != s.Dir {
 		return nil, Stop("bad log name")
 	}
-	name := fmt.Sprintf("%s-%s-%sZ.log", verb, phase, s.now().UTC().Format("150405"))
+	name := fmt.Sprintf("%s-%s-%sZ.log", verb, try, s.now().UTC().Format("150405"))
 	f, err := os.OpenFile(filepath.Join(s.Dir, name), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		if errors.Is(err, fs.ErrExist) {

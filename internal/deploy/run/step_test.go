@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -20,12 +21,13 @@ const realDir = "testdata/real"
 // fake replays one Output and records every argv.
 type fake struct {
 	out   Output
+	err   error
 	calls [][]string
 }
 
 func (f *fake) Run(_ context.Context, c Cmd) (Output, error) {
 	f.calls = append(f.calls, c.Argv)
-	return f.out, nil
+	return f.out, f.err
 }
 
 // finalLine is the kit step_rc final-line rule as a typed parser: the last
@@ -203,4 +205,38 @@ func TestAStepRunsOnceAndWritesOnlyItsRecord(t *testing.T) {
 	bad.Label = "../x"
 	_, err = Do(context.Background(), &fake{}, newOut(t), log, c.now, bad)
 	wantCode(t, err, CodeStop, "a label with a path")
+}
+
+type number int
+
+func (n number) Record() string { return "N=" + strconv.Itoa(int(n)) }
+
+// r1 P1: a STOP is fixed text: the text of a parser error or a runner error
+// (both can quote tool output) reaches neither .out, the log nor the error.
+func TestAStopLineHoldsNoToolText(t *testing.T) {
+	c := newClock()
+	const sentinel = "raw-tool-bytes-5be1"
+	atoi := func(o Output) (number, error) {
+		n, err := strconv.Atoi(strings.TrimSpace(string(o.Stdout)))
+		return number(n), err
+	}
+	for name, f := range map[string]*fake{
+		"a parser error quoting stdout": {out: Output{Stdout: []byte(sentinel + "\n")}},
+		"a runner error quoting stderr": {out: Output{Stderr: []byte(sentinel)}, err: errors.New("exit: " + sentinel)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			o, log := newOut(t), &bytes.Buffer{}
+			_, err := Do(context.Background(), f, o, log, c.now, Step[number]{Label: "N", Cmd: Cmd{Argv: []string{"helm"}}, Parse: atoi})
+			wantCode(t, err, CodeStop, name)
+			rec, _ := os.ReadFile(filepath.Join(o.Dir, "N.out"))
+			if strings.Contains(string(rec)+log.String()+err.Error(), sentinel) || !strings.HasPrefix(string(rec), "STOP: N") {
+				t.Fatalf("tool text reached a record: .out %q, log %q, err %q", rec, log.String(), err)
+			}
+		})
+	}
+	o := newOut(t)
+	v, err := Do(context.Background(), &fake{out: Output{Stdout: []byte("7\n")}}, o, &bytes.Buffer{}, c.now, Step[number]{Label: "N", Cmd: Cmd{Argv: []string{"helm"}}, Parse: atoi})
+	if err != nil || v != 7 {
+		t.Fatalf("a good parse: %v %v", v, err)
+	}
 }

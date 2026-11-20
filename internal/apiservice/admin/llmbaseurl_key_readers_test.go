@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/full-chaos/dev-health-ops/internal/llmorgsettings"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
@@ -44,7 +46,7 @@ func TestApplyLLMPurposeRefusesAKeyInTheBaseURLBeforeResolution(t *testing.T) {
 		},
 	} {
 		spy := &resolverSpy{valid: true}
-		out, refusal, err := readerHandlers(spy).applyLLMPurpose(context.Background(), "org", tc)
+		out, refusal, err := readerHandlers(spy).applyLLMPurpose(context.Background(), uuid.Nil, "org", tc)
 		if err != nil || out != nil || refusal == nil || refusal.status != 400 || spy.calls != 0 {
 			t.Fatalf("%s: out=%v refusal=%v err=%v resolver calls=%d", name, out, refusal, err, spy.calls)
 		}
@@ -79,7 +81,7 @@ func TestSpendUsabilityRefusesAKeyBeforeResolution(t *testing.T) {
 func TestPurposeKeyRefusalCarriesNoKeyOrURLText(t *testing.T) {
 	spy := &resolverSpy{valid: true}
 	badURL := "https://" + readerStoredKey + ".example.invalid/v1"
-	_, refusal, err := readerHandlers(spy).applyLLMPurpose(context.Background(), "org", llmPurposeUpsert{
+	_, refusal, err := readerHandlers(spy).applyLLMPurpose(context.Background(), uuid.Nil, "org", llmPurposeUpsert{
 		purpose: llmorgsettings.PurposeInvestigate, provider: "openai", model: "m", baseURL: &badURL,
 	})
 	if err != nil || refusal == nil {

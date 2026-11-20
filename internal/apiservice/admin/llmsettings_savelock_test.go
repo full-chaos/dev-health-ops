@@ -10,11 +10,13 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	"github.com/full-chaos/dev-health-ops/internal/llmorgsettings"
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
 // reachedSaveWrite is the panic of a saveLockTx at the first statement after the save lock.
@@ -102,22 +104,47 @@ func TestLLMSettingsSaveTakesTheOrgSaveLockFirst(t *testing.T) {
 	if llmSettingsSaveLockTimeoutSQL != `SET LOCAL lock_timeout = '2000ms'` {
 		t.Fatalf("lock timeout statement %q", llmSettingsSaveLockTimeoutSQL)
 	}
+	org := uuid.MustParse("550e8400-e29b-41d4-a716-446655440000")
 	for _, scope := range llmWriteScopes {
 		tx := &saveLockTx{}
 		h := baseURLHandlers(&resolverSpy{valid: true}, "", "")
 		h.store.Pool = &saveLockDB{tx: tx}
-		refusal, reached, err := keysetWrite(h, scope, strPtr("sk-fresh-"+"0123456789"), strPtr(readerCleanURL))
+		refusal, reached, err := keysetWriteAs(h, scope, org, org.String(), strPtr("sk-fresh-"+"0123456789"), strPtr(readerCleanURL))
 		if err != nil || refusal != nil || !reached {
 			t.Fatalf("%s: refusal=%v reached write=%v err=%v", scopeName(scope), refusal, reached, err)
 		}
 		if !slices.Equal(tx.statements, want) {
 			t.Fatalf("%s: statements %q, want %q", scopeName(scope), tx.statements, want)
 		}
-		if got := tx.args[2]; len(got) != 1 || got[0] != "llm-settings-save:org" {
+		if got := tx.args[2]; len(got) != 1 || got[0] != "llm-settings-save:550e8400-e29b-41d4-a716-446655440000" {
 			t.Fatalf("%s: lock args %v", scopeName(scope), got)
 		}
 		if got := tx.args[3]; len(got) != 1 || got[0] != "7s" {
 			t.Fatalf("%s: restore args %v, want the read value", scopeName(scope), got)
+		}
+	}
+}
+
+// Every spelling of one org id the access gate accepts (upper case, no hyphens,
+// braces) takes the save lock of the canonical id, in every scope: the raw id
+// the caller gave never reaches the lock key.
+func TestLLMSettingsSaveLockKeyIsTheCanonicalOrgID(t *testing.T) {
+	const canonical = "550e8400-e29b-41d4-a716-446655440000"
+	for _, scope := range llmWriteScopes {
+		for _, alias := range []string{"550E8400-E29B-41D4-A716-446655440000", "550e8400e29b41d4a716446655440000", "{550e8400-e29b-41d4-a716-446655440000}"} {
+			org, err := pythonparity.ParseUUID(alias)
+			if err != nil {
+				t.Fatalf("%s: the access gate refuses %q: %v", scopeName(scope), alias, err)
+			}
+			tx := &saveLockTx{}
+			h := baseURLHandlers(&resolverSpy{valid: true}, "", "")
+			h.store.Pool = &saveLockDB{tx: tx}
+			if refusal, reached, err := keysetWriteAs(h, scope, org, alias, strPtr("sk-fresh-"+"0123456789"), strPtr(readerCleanURL)); err != nil || refusal != nil || !reached {
+				t.Fatalf("%s %q: refusal=%v reached write=%v err=%v", scopeName(scope), alias, refusal, reached, err)
+			}
+			if got := tx.args[2]; len(got) != 1 || got[0] != "llm-settings-save:"+canonical {
+				t.Errorf("%s %q: lock key %v, want the canonical %q", scopeName(scope), alias, got, "llm-settings-save:"+canonical)
+			}
 		}
 	}
 }
@@ -196,7 +223,7 @@ func TestLLMSettingsSaveLockTimeoutIsTheSettingChangedConflict(t *testing.T) {
 		}
 		line := strings.TrimSpace(logs.String())
 		if strings.Count(line, "\n") != 0 || !strings.Contains(line, "level=WARN") ||
-			!strings.Contains(line, "org_id=org") || !strings.Contains(line, "scope="+scopeName(scope)) {
+			!strings.Contains(line, "org_id="+uuid.Nil.String()) || !strings.Contains(line, "scope="+scopeName(scope)) {
 			t.Fatalf("%s: log %q", scopeName(scope), line)
 		}
 		for _, leak := range []string{fresh, "example.invalid"} {

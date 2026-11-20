@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
@@ -136,7 +137,9 @@ func (in llmPurposeUpsert) decisionRefusal() *llmRefusal {
 	return decisionProviderRefusal(in.provider, in.purpose, true, in.model, in.baseURL, in.baseURLKey)
 }
 
-func (h *handlers) applyLLMPurpose(ctx context.Context, orgID string, in llmPurposeUpsert) (*pyjson.Object, *llmRefusal, error) {
+// applyLLMPurpose is applyLLMSettings for one purpose override; org is orgID as
+// byoLLMAccessOrg parsed it, the save lock key.
+func (h *handlers) applyLLMPurpose(ctx context.Context, org uuid.UUID, orgID string, in llmPurposeUpsert) (*pyjson.Object, *llmRefusal, error) {
 	if refusal := in.decisionRefusal(); refusal != nil {
 		return nil, refusal, nil
 	}
@@ -160,7 +163,7 @@ func (h *handlers) applyLLMPurpose(ctx context.Context, orgID string, in llmPurp
 	// Under the org's save lock the key checks run again on the transaction: a
 	// save of another scope that passed its checks before this one committed is
 	// seen here, so two saves never each store a url carrying the other's key.
-	if refusal, err := h.lockLLMSettingsSave(ctx, tx, orgID, in.purpose); refusal != nil || err != nil {
+	if refusal, err := h.lockLLMSettingsSave(ctx, tx, org, in.purpose); refusal != nil || err != nil {
 		return nil, refusal, err
 	}
 	if refusal, err := h.saveKeyRefusal(ctx, tx, orgID, in.purpose, in.apiKey, in.baseURL, false); refusal != nil || err != nil {

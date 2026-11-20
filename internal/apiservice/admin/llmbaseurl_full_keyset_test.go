@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/full-chaos/dev-health-ops/internal/llmorgsettings"
 )
 
@@ -30,6 +32,11 @@ func scopeKeyText(scope llmorgsettings.Purpose) string {
 // key checks inside it: the fake transaction panics at the first statement
 // after them, which reads as "reached the write".
 func keysetWrite(h *handlers, scope llmorgsettings.Purpose, apiKey, baseURL *string) (refusal *llmRefusal, reachedWrite bool, err error) {
+	return keysetWriteAs(h, scope, uuid.Nil, "org", apiKey, baseURL)
+}
+
+// keysetWriteAs is keysetWrite for org as parsed and orgID as given.
+func keysetWriteAs(h *handlers, scope llmorgsettings.Purpose, org uuid.UUID, orgID string, apiKey, baseURL *string) (refusal *llmRefusal, reachedWrite bool, err error) {
 	if h.store.Pool == nil {
 		h.store.Pool = &saveLockDB{tx: &saveLockTx{}}
 	}
@@ -45,9 +52,9 @@ func keysetWrite(h *handlers, scope llmorgsettings.Purpose, apiKey, baseURL *str
 		}
 	}()
 	if scope == "" {
-		_, refusal, err = h.applyLLMSettings(context.Background(), "org", llmUpsert{provider: "openai", model: strPtr("m"), apiKey: apiKey, baseURL: baseURL})
+		_, refusal, err = h.applyLLMSettings(context.Background(), org, orgID, llmUpsert{provider: "openai", model: strPtr("m"), apiKey: apiKey, baseURL: baseURL})
 	} else {
-		_, refusal, err = h.applyLLMPurpose(context.Background(), "org", llmPurposeUpsert{purpose: scope, provider: "openai", model: "m", apiKey: apiKey, baseURL: baseURL})
+		_, refusal, err = h.applyLLMPurpose(context.Background(), org, orgID, llmPurposeUpsert{purpose: scope, provider: "openai", model: "m", apiKey: apiKey, baseURL: baseURL})
 	}
 	return refusal, false, err
 }

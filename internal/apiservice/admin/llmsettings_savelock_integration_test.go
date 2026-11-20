@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"math/big"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -29,7 +30,7 @@ const sessionLockTimeout = "7s"
 
 // saveLockPool is a migrated Postgres whose every connection SETs
 // sessionLockTimeout after connect, with one org.
-func saveLockPool(t *testing.T, ctx context.Context) (*pgxpool.Pool, string) {
+func saveLockPool(t *testing.T, ctx context.Context) (*pgxpool.Pool, uuid.UUID) {
 	t.Helper()
 	instance, err := containers.StartPostgres(ctx)
 	if err != nil {
@@ -56,7 +57,7 @@ func saveLockPool(t *testing.T, ctx context.Context) (*pgxpool.Pool, string) {
 	}
 	t.Cleanup(pool.Close)
 	pgschema.Apply(ctx, t, pool)
-	org := uuid.NewString()
+	org := uuid.New()
 	if _, err := pool.Exec(ctx, `INSERT INTO organizations (id, slug, name, tier, managed_by, is_active, created_at, updated_at)
 VALUES ($1, 'save-lock', 'save-lock', 'team', 'stripe', true, now(), now())`, org); err != nil {
 		t.Fatal(err)
@@ -94,10 +95,10 @@ func TestLLMSettingsSaveGivesTheSessionLockTimeoutBack(t *testing.T) {
 		}
 	}
 	var inDefault, inPurpose string
-	if _, refusal, err := h.applyLLMSettings(ctx, org, llmUpsert{provider: "openai", model: strPtr("m"), requireModel: true, inTx: read(&inDefault)}); err != nil || refusal != nil {
+	if _, refusal, err := h.applyLLMSettings(ctx, org, org.String(), llmUpsert{provider: "openai", model: strPtr("m"), requireModel: true, inTx: read(&inDefault)}); err != nil || refusal != nil {
 		t.Fatalf("default save: refusal=%v err=%v", refusal, err)
 	}
-	if _, refusal, err := h.applyLLMPurpose(ctx, org, llmPurposeUpsert{purpose: llmorgsettings.PurposeExplain, provider: "openai", model: "m", inTx: read(&inPurpose)}); err != nil || refusal != nil {
+	if _, refusal, err := h.applyLLMPurpose(ctx, org, org.String(), llmPurposeUpsert{purpose: llmorgsettings.PurposeExplain, provider: "openai", model: "m", inTx: read(&inPurpose)}); err != nil || refusal != nil {
 		t.Fatalf("purpose save: refusal=%v err=%v", refusal, err)
 	}
 	t.Logf("server default lock_timeout %sms; session %s; inside the save after the lock: default %s, purpose %s", serverDefault, sessionLockTimeout, inDefault, inPurpose)
@@ -129,14 +130,14 @@ func TestLLMSettingsBudgetSaveAndAdmitNeverDeadlock(t *testing.T) {
 		return ""
 	}
 	save := func(limit int64) error {
-		_, refusal, err := h.applyLLMSettings(ctx, org, llmUpsert{provider: "openai", model: strPtr("m"), budgetLimitMu: big.NewInt(limit), requireModel: true})
+		_, refusal, err := h.applyLLMSettings(ctx, org, org.String(), llmUpsert{provider: "openai", model: strPtr("m"), budgetLimitMu: big.NewInt(limit), requireModel: true})
 		if refusal != nil {
 			return fmt.Errorf("refused: %v", refusal.detail)
 		}
 		return err
 	}
 	admit := func(key string) error {
-		_, err := store.Admit(ctx, llmbudget.AdmitRequest{OrgID: org, Provider: "openai", Model: "m", IdempotencyKey: key,
+		_, err := store.Admit(ctx, llmbudget.AdmitRequest{OrgID: org.String(), Provider: "openai", Model: "m", IdempotencyKey: key,
 			MaxCost: ptrInt64(1), Now: time.Now().UTC(), Lookup: noEnv})
 		if code := lockErr(err); code != "" {
 			return err
@@ -180,7 +181,7 @@ func TestLLMSettingsBudgetSaveAndAdmitNeverDeadlock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := holder.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, llmbudget.LockKey(org)); err != nil {
+	if _, err := holder.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, llmbudget.LockKey(org.String())); err != nil {
 		t.Fatal(err)
 	}
 	out, start := make(chan result, 2), make(chan struct{})
@@ -226,8 +227,111 @@ func TestLLMSettingsBudgetSaveAndAdmitNeverDeadlock(t *testing.T) {
 	wg.Wait()
 	t.Logf("20 free-running rounds of one budget save and two admissions finished, no lock error")
 	var limit string
-	if err := pool.QueryRow(ctx, `SELECT value FROM settings WHERE org_id = $1 AND category = $2 AND key = $3`, org, llmbudget.Category, llmbudget.LimitKey).Scan(&limit); err != nil || limit != "1019" {
+	if err := pool.QueryRow(ctx, `SELECT value FROM settings WHERE org_id = $1 AND category = $2 AND key = $3`, org.String(), llmbudget.Category, llmbudget.LimitKey).Scan(&limit); err != nil || limit != "1019" {
 		t.Fatalf("stored budget limit %q, %v; want the last round's 1019", limit, err)
+	}
+}
+
+// An operator save that spells the org id another way (upper case, no hyphens,
+// braces) and a save under the canonical id serialize on one save lock: with
+// the canonical save held after its lock, the alias save waits on the save
+// lock and answers only after the canonical save ends.
+func TestLLMSettingsOperatorAliasSaveWaitsOnTheCanonicalSave(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	pool, org := saveLockPool(t, ctx)
+	h := saveLockHandlers(pool)
+	operator := Operator{Pool: pool}
+	canonicalSave := func() error {
+		_, refusal, err := h.applyLLMSettings(ctx, org, org.String(), llmUpsert{provider: "openai", model: strPtr("m"), baseURL: strPtr("https://8.8.8.8/v1"), requireModel: true})
+		if refusal != nil {
+			return fmt.Errorf("refused: %v", refusal.detail)
+		}
+		return err
+	}
+	if err := canonicalSave(); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	waitingOnSaveLock := func() int {
+		t.Helper()
+		var n int
+		if err := pool.QueryRow(ctx, `SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted`).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	blocked := func() int {
+		t.Helper()
+		var n int
+		if err := pool.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity WHERE cardinality(pg_blocking_pids(pid)) > 0`).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	upper := strings.ToUpper(org.String())
+	for _, alias := range []string{upper, strings.ReplaceAll(org.String(), "-", ""), "{" + org.String() + "}"} {
+		holder, err := pool.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var held int
+		if err := holder.QueryRow(ctx, `SELECT count(*) FROM (SELECT 1 FROM settings WHERE org_id = $1 AND category = 'llm' AND key = 'base_url' FOR UPDATE) AS l`, org.String()).Scan(&held); err != nil || held != 1 {
+			_ = holder.Rollback(ctx)
+			t.Fatalf("%q: hold the canonical base_url row: %d, %v", alias, held, err)
+		}
+		canonical, aliased := make(chan error, 1), make(chan error, 1)
+		go func() { canonical <- canonicalSave() }()
+		deadline := time.Now().Add(10 * time.Second)
+		for blocked() < 1 {
+			if time.Now().After(deadline) {
+				_ = holder.Rollback(ctx)
+				t.Fatalf("%q: the canonical save did not wait on the held row", alias)
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		go func() {
+			_, err := operator.SetLLMSettings(ctx, alias, LLMSettingsInput{Provider: "openai", Model: strPtr("m")}, LLMSettingsConfig{})
+			aliased <- err
+		}()
+		var early error
+		answered := false
+		deadline = time.Now().Add(10 * time.Second)
+		for !answered && waitingOnSaveLock() < 1 {
+			select {
+			case early = <-aliased:
+				answered = true
+			default:
+				if time.Now().After(deadline) {
+					_ = holder.Rollback(ctx)
+					t.Fatalf("%q: the alias save neither answered nor waited on the save lock", alias)
+				}
+				time.Sleep(20 * time.Millisecond)
+			}
+		}
+		if err := holder.Rollback(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if answered {
+			t.Errorf("%q: the alias save answered (%v) while the canonical save held the save lock: they took different locks", alias, early)
+		}
+		for name, done := range map[string]chan error{"canonical": canonical, "alias": aliased} {
+			select {
+			case err := <-done:
+				if name == "alias" && answered {
+					continue
+				}
+				if err != nil {
+					t.Errorf("%q: %s save: %v", alias, name, err)
+				}
+			case <-time.After(10 * time.Second):
+				if !(name == "alias" && answered) {
+					t.Fatalf("%q: the %s save did not finish after the release", alias, name)
+				}
+			}
+		}
+		if !answered {
+			t.Logf("%q: the alias save waited on the canonical save's lock, then both finished", alias)
+		}
 	}
 }
 

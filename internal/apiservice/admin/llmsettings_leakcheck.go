@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -22,6 +23,10 @@ func llmLeakScopes() []llmorgsettings.Purpose {
 // settings save of the org takes first, so its key checks read what each
 // earlier save of the org committed (CHAOS-14247).
 const llmSettingsSaveLockPrefix = "llm-settings-save:"
+
+// llmSettingsSaveLockKey is the lock key text of the org: the canonical uuid
+// spelling, whatever spelling of the id the caller was given.
+func llmSettingsSaveLockKey(org uuid.UUID) string { return llmSettingsSaveLockPrefix + org.String() }
 
 // llmSettingsSaveLockTimeout bounds the wait on another save of the org: 10x
 // the measured p99 of one save (under 40 ms on the venue), floor 2 s.
@@ -50,7 +55,7 @@ var llmSettingsSaveLockTimeouts = func() metric.Int64Counter {
 
 // lockLLMSettingsSave takes the org's save lock as the first statements of a
 // save transaction. A wait past the timeout is the 409 setting_changed.
-func (h *handlers) lockLLMSettingsSave(ctx context.Context, tx pgExecer, orgID string, scope llmorgsettings.Purpose) (*llmRefusal, error) {
+func (h *handlers) lockLLMSettingsSave(ctx context.Context, tx pgExecer, org uuid.UUID, scope llmorgsettings.Purpose) (*llmRefusal, error) {
 	var previous string
 	if err := tx.QueryRow(ctx, llmSettingsSaveLockTimeoutReadSQL).Scan(&previous); err != nil {
 		return nil, &llmStepError{"read lock timeout", err}
@@ -58,13 +63,13 @@ func (h *handlers) lockLLMSettingsSave(ctx context.Context, tx pgExecer, orgID s
 	if _, err := tx.Exec(ctx, llmSettingsSaveLockTimeoutSQL); err != nil {
 		return nil, &llmStepError{"bound llm settings save lock", err}
 	}
-	if _, err := tx.Exec(ctx, llmSettingsSaveLockSQL, llmSettingsSaveLockPrefix+orgID); err != nil {
+	if _, err := tx.Exec(ctx, llmSettingsSaveLockSQL, llmSettingsSaveLockKey(org)); err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == pgLockNotAvailable {
 			name := scopeLabel(scope)
 			llmSettingsSaveLockTimeouts.Add(ctx, 1, metric.WithAttributes(attribute.String("scope", name)))
 			h.logger.WarnContext(ctx, "admin: llm settings save lock timed out; another save of the org holds it",
-				"org_id", orgID, "scope", name)
+				"org_id", org.String(), "scope", name)
 			return newLLMRefusal(http.StatusConflict,
 				"error", "setting_changed",
 				"message", "The setting changed while saving. Reload and try again."), nil

@@ -408,14 +408,34 @@ func (handler GitHubTestsRouteHandler) Collect(
 			return CompleteRouteBatch{}, err
 		}
 	}
-	artifactRunItems, artifactListPages, artifactsOver, err := collectGitHubTestsRunsPeeled(ctx, client, root, runPages, func(hi string) url.Values {
+	regularInterval, deepInterval := githubTestsArtifactInterval(claim, false, 0), githubTestsCreatedInterval{deep: true}
+	artifactRunItems, artifactListPages, artifactsOver, err := collectGitHubTestsRunsPeeledBy(ctx, client, root, runPages, func(hi string) url.Values {
 		return githubTestsArtifactRunQueryAt(claim, hi)
-	})
+	}, regularInterval.peel)
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}
 	if artifactsOver || len(artifactRunItems) > maxRuns {
 		return CompleteRouteBatch{}, ErrPaginationCapExceeded
+	}
+	artifactRuns := make([]githubTestsListedRun, 0, len(artifactRunItems))
+	for _, raw := range artifactRunItems {
+		artifactRuns = append(artifactRuns, githubTestsListedRun{raw: raw})
+	}
+	var relistPages int
+	relistStopped := false
+	if githubTestsHoldsMidnight(claim) {
+		deepInterval = githubTestsArtifactInterval(claim, true, handler.lateRerunLookback())
+		relistItems, pages, over, err := collectGitHubTestsRunsPeeledBy(ctx, client, root, lateMaxPages, func(hi string) url.Values {
+			return githubTestsRelistQueryAt(claim, handler.lateRerunLookback(), hi)
+		}, deepInterval.peel)
+		if err != nil {
+			return CompleteRouteBatch{}, err
+		}
+		relistPages, relistStopped = pages, over
+		for _, raw := range relistItems {
+			artifactRuns = append(artifactRuns, githubTestsListedRun{raw: raw, relist: true})
+		}
 	}
 	pipelines := make([]githubTestsPipelineRow, 0, len(runItems))
 	jobs := make([]githubTestsJobRow, 0)
@@ -437,7 +457,10 @@ func (handler GitHubTestsRouteHandler) Collect(
 		skippedCauseOverflow map[string]bool
 		skippedCauseCount    map[string]int
 	)
-	requests, pages := 1+runListPages+lateListPages+artifactListPages, runListPages+lateListPages+artifactListPages
+	if relistStopped {
+		incomplete = append(incomplete, GitHubTestsIncomplete{Component: githubTestsLateRerunReportsComponent, Cause: githubTestsPageBudgetCause, Count: 1})
+	}
+	requests, pages := 1+runListPages+lateListPages+artifactListPages+relistPages, runListPages+lateListPages+artifactListPages+relistPages
 	policyCache := map[string]githubTestsPolicy{}
 	for index, raw := range append(append([]json.RawMessage{}, runItems...), lateItems...) {
 		run, err := decodeGitHubWorkflowRun(raw)
@@ -447,7 +470,7 @@ func (handler GitHubTestsRouteHandler) Collect(
 		pipeline, include := normalizeGitHubTestsPipeline(claim, repoID, run, normalizedAt)
 		keep := include && githubTestsRunWanted(run, pipeline, claim)
 		if index >= len(runItems) {
-			keep = include && !githubTestsLateRerunListedOutsideDeepRange(pipeline, claim, handler.refreshLookback()) &&
+			keep = include && !githubTestsLateRerunListedOutsideDeepRange(pipeline, claim.SinceAt.UTC().Add(-handler.refreshLookback())) &&
 				githubTestsLateRerunWanted(run, claim, handler.refreshLookback())
 		}
 		if !keep {
@@ -504,13 +527,17 @@ func (handler GitHubTestsRouteHandler) Collect(
 			testsOptionalString(stringValue(run.HTMLURL)), normalizedAt,
 		)...)
 	}
-	for _, raw := range artifactRunItems {
-		run, err := decodeGitHubWorkflowRun(raw)
+	for _, listed := range artifactRuns {
+		run, err := decodeGitHubWorkflowRun(listed.raw)
 		if err != nil {
 			return CompleteRouteBatch{}, providerfoundation.RouteFailure(githubRunsRoute, providerfoundation.ReasonBodyDecode, err)
 		}
 		pipeline, include := normalizeGitHubTestsPipeline(claim, repoID, run, normalizedAt)
-		if !include || !githubTestsRunReadable(run) || githubTestsReportRunOutsideWindow(pipeline, claim) {
+		interval := regularInterval
+		if listed.relist {
+			interval = deepInterval
+		}
+		if !include || !githubTestsRunReadable(run) || githubTestsArtifactRunOutside(pipeline, claim, listed.relist) || !interval.admits(pipeline.QueuedAt) {
 			continue
 		}
 		artPage, pageErr := providerfoundation.CollectGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{
@@ -737,6 +764,12 @@ func githubTestsIncompleteCount(incomplete []GitHubTestsIncomplete) int {
 
 func (row githubTestsPipelineRow) StartedAtPtr() *time.Time { value := row.StartedAt; return &value }
 
+// githubTestsListedRun is one run of the artifacts listings, with the range it was listed in.
+type githubTestsListedRun struct {
+	raw    json.RawMessage
+	relist bool
+}
+
 // githubTestsArtifactRunQuery selects the runs whose report artifacts are
 // fetched: runs of ANY branch (default branch and pull-request branches alike;
 // the run conclusion does not matter either). The listing runs up to BeforeAt,
@@ -777,7 +810,12 @@ func githubTestsArtifactRunQuery(claim Claim) url.Values {
 //
 // "Well before" is one full window width earlier than the window's own start,
 // so a run is offered this window AND the one before it -- two consecutive
-// looks -- before its report artifacts stop being re-fetched. The provider
+// looks -- before its report artifacts stop being re-fetched. A claim reads
+// only the runs its listing reaches: runs created from its floor
+// (githubTestsArtifactRunsCreatedFrom). A run re-run after it left every floor
+// is read by the daily late re-run re-list instead
+// (github_tests_late_rerun_reports.go), whose rule floors the width at one day,
+// so such a run can take one more look. The provider
 // documents no bound on how long a run's artifacts can take to become
 // listable after the run itself stops changing, so the margin is sized off
 // the claim's own cadence (the only figure this route actually knows) rather
@@ -850,7 +888,9 @@ func githubTestsRunReadable(run gitHubWorkflowRunPayload) bool {
 // the since date minus the claim's width, at least one day. It is never
 // stricter than githubTestsReportRunOutsideWindow, which keeps a run that
 // finished at or after since minus width, so a run created before the window
-// and completed inside it is still listed.
+// and completed inside it is still listed. An incremental claim that holds a
+// UTC midnight also lists the deep range below this floor
+// (githubTestsRelistQueryAt).
 func githubTestsArtifactRunsCreatedFrom(claim Claim) string {
 	width := 24 * time.Hour
 	if claim.BeforeAt != nil {

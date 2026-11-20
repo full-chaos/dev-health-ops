@@ -594,6 +594,22 @@ properties of that listing shape the walk:
   the window itself was walked. Backfill and full resync units list no deep
   range.
 
+- The artifacts phase (test reports) lists runs created from the UTC date of
+  the window start minus the larger of one day and the window width. A run
+  re-run after it left that floor is listed by no claim that holds the re-run.
+  So the incremental unit whose window holds a UTC midnight also lists a
+  deeper artifacts range: from the same date minus 7 days to one second before
+  the floor. It reads a run of that range when the run is completed, started
+  by the window end, and changed since the window start minus the larger of
+  one day and the window width; a run with no creation time or no last-change
+  time is not read there. Each midnight has one owning unit, so this costs one
+  extra listing a day per repository, and a late re-run's reports land up to
+  one day plus a window width after it changed. The deeper range has its own
+  budget of 1,000 pages, charged like the runs phase's deep range. When it
+  runs out, or a second cannot be peeled past, the unit records
+  `late_rerun_reports` (`page_budget_exhausted` or `listing_saturated`):
+  `reports_complete` stays false and the watermark still advances.
+
 One case stays unseen: a run rerun more than 7 days after its creation (GitHub
 allows a rerun for 30 days) is not re-read, because no listing key reaches it.
 A rerun inside the 7 days lands at the next midnight unit, up to one day plus

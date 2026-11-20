@@ -357,8 +357,10 @@ func TestLateRerunRunsStopIsOneAdvancingObservation(t *testing.T) {
 	} {
 		runs := append(append([]listingRun{}, cell.runs...), inWindow)
 		walk := walkListing(t, cell.handler, claim, newListingFake(t, runs), 0)
+		// The artifacts phase's deep range lists the same old runs on the same page budget and records its own
+		// late_rerun_reports stop; this cell pins the runs phase's component.
 		want := []GitHubTestsIncomplete{{Component: githubTestsLateRerunRunsComponent, Cause: cell.cause, Count: 1}}
-		if incomplete := lateRerunIncomplete(t, walk); fmt.Sprint(incomplete) != fmt.Sprint(want) {
+		if incomplete := lateRerunIncompleteOf(lateRerunIncomplete(t, walk), githubTestsLateRerunRunsComponent); fmt.Sprint(incomplete) != fmt.Sprint(want) {
 			t.Errorf("%s: incomplete=%v, want %v", cell.name, incomplete, want)
 		}
 		if walk.final.Result[GitHubTestsResultKeyReportsComplete] != false {
@@ -423,7 +425,7 @@ func TestLateRerunRunsOracleMatchesTheChunkedRoute(t *testing.T) {
 	}
 	_, incomplete = collect(GitHubTestsRouteHandler{LateRerunMaxPages: 1}, lateRerunRuns(1, 150, claim.SinceAt.UTC()))
 	want := []GitHubTestsIncomplete{{Component: githubTestsLateRerunRunsComponent, Cause: githubTestsPageBudgetCause, Count: 1}}
-	if fmt.Sprint(incomplete) != fmt.Sprint(want) {
+	if incomplete = lateRerunIncompleteOf(incomplete, githubTestsLateRerunRunsComponent); fmt.Sprint(incomplete) != fmt.Sprint(want) {
 		t.Fatalf("oracle over its deep budget: incomplete=%v, want %v", incomplete, want)
 	}
 }
@@ -878,4 +880,15 @@ func TestLateRerunRunsDeepRangeSkipsARunOfTheRunsRange(t *testing.T) {
 			t.Errorf("%s: rows=%d jobs reads=%d, want 1 and 1", route, rows[route]["31"], reads[route]["31"])
 		}
 	}
+}
+
+// lateRerunIncompleteOf keeps the observations of one component.
+func lateRerunIncompleteOf(incomplete []GitHubTestsIncomplete, component string) []GitHubTestsIncomplete {
+	var out []GitHubTestsIncomplete
+	for _, observation := range incomplete {
+		if observation.Component == component {
+			out = append(out, observation)
+		}
+	}
+	return out
 }

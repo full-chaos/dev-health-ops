@@ -125,6 +125,7 @@ type cutDedupWalk struct {
 	final   CompleteRouteBatch
 	cursors []string
 	rows    map[string]map[string]int
+	suites  map[string]map[string]bool
 	digest  string
 	errors  int
 }
@@ -138,7 +139,7 @@ func walkCutDedup(
 	t.Helper()
 	client := githubTestsClient(t, doer)
 	normalizedAt := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
-	walk := cutDedupWalk{rows: map[string]map[string]int{}}
+	walk := cutDedupWalk{rows: map[string]map[string]int{}, suites: map[string]map[string]bool{}}
 	hash := sha256.New()
 	stop := errors.New("yield")
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
@@ -160,13 +161,20 @@ func walkCutDedup(
 						hash.Write([]byte(effect.Destination))
 						hash.Write(raw)
 						var row struct {
-							RunID string `json:"run_id"`
+							RunID     string `json:"run_id"`
+							SuiteName string `json:"suite_name"`
 						}
 						_ = json.Unmarshal(raw, &row)
 						if walk.rows[effect.Destination] == nil {
 							walk.rows[effect.Destination] = map[string]int{}
 						}
 						walk.rows[effect.Destination][row.RunID]++
+						if effect.Destination == "test_suite_results" {
+							if walk.suites[row.RunID] == nil {
+								walk.suites[row.RunID] = map[string]bool{}
+							}
+							walk.suites[row.RunID][row.SuiteName] = true
+						}
 					}
 				}
 				if emission.Final {

@@ -380,3 +380,70 @@ func TestGitHubTestsCutSecondRepeatedReadWithALossDropsTheKey(t *testing.T) {
 		}
 	}
 }
+
+// cutReAddDoer serves run 5004's three reads in the first range: complete (9901), a loss (9902 listed, its download 404),
+// then complete (9901 and 9902 read).
+type cutReAddDoer struct {
+	*githubTestsAdmissionDoer
+	listing *listingFake
+	both    []githubTestsAdmissionArtifact
+	lists   int
+}
+
+func (doer *cutReAddDoer) Do(request *http.Request) (*http.Response, error) {
+	path := request.URL.Path
+	switch {
+	case path == "/repos/acme/api/actions/runs/5004/artifacts":
+		doer.lists++
+		if doer.lists >= 2 {
+			doer.artifacts = doer.both
+		}
+		return doer.githubTestsAdmissionDoer.Do(request)
+	case path == "/repos/acme/api/actions/artifacts/9902/zip" && doer.lists == 2:
+		return &http.Response{StatusCode: http.StatusNotFound, Header: http.Header{}, Body: http.NoBody, Request: request}, nil
+	case strings.HasPrefix(path, "/repos/acme/api/actions/artifacts/"):
+		return doer.githubTestsAdmissionDoer.Do(request)
+	default:
+		return doer.listing.Do(request)
+	}
+}
+
+// The active list holds a run's key only while its latest read in the active range was complete: a complete read adds it,
+// a later read with a loss removes it, and a later complete read adds it again, so the peel carries it and the revisit
+// skips all three listed entries.
+func TestGitHubTestsCutSecondLaterCompleteReadReAddsTheKey(t *testing.T) {
+	runs := makeListingRuns(1, 997, cutDedupSince.Add(time.Hour), 30*time.Second)
+	for _, id := range cutDedupIDs {
+		runs = append(runs, listingRun{id: id, created: cutDedupSecond, updated: cutDedupBefore.Add(-time.Hour), status: "completed", conclusion: "success"})
+	}
+	target := runs[len(runs)-1]
+	runs = append(runs, target, target)
+	first := []githubTestsAdmissionArtifact{{id: 9901, name: "existing-tests", archive: githubTestsZip(t, map[string]string{"junit.xml": completenessJUnit("existing-", 1)})}}
+	both := append(append([]githubTestsAdmissionArtifact(nil), first...), githubTestsAdmissionArtifact{id: 9902, name: "additional-tests", archive: githubTestsZip(t, map[string]string{"junit.xml": completenessJUnit("additional-", 1)})})
+	admission := newGitHubTestsAdmissionDoer(t, "5004", first)
+	admission.direct = true
+	doer := &cutReAddDoer{githubTestsAdmissionDoer: admission, listing: newListingFake(t, runs), both: both}
+	var active []string
+	carried, seen := "", 0
+	walkCutDedup(t, cutDedupClaim(false), doer, func(before, after githubTestsChunkCursor) bool {
+		if before.Phase != githubTestsArtifactsPhase || before.RangeHi != "" {
+			return false
+		}
+		if doer.lists > seen {
+			seen = doer.lists
+			// The read that ends the range is emitted with the peel: its list is already frozen into the carried one.
+			if after.RangeHi != "" {
+				active = append(active, after.CarriedCutKeys)
+			} else {
+				active = append(active, after.ActiveCutKeys)
+			}
+		}
+		if after.RangeHi != "" {
+			carried = after.CarriedCutKeys
+		}
+		return false
+	}, nil)
+	if want := []string{"5004", "", "5004"}; !reflect.DeepEqual(active, want) || carried != "5004" || doer.lists != 3 {
+		t.Fatalf("active list after each read (the last as carried at the peel) = %q, carried = %q, lists = %d; want %q, \"5004\", 3 (the revisit skips all three)", active, carried, doer.lists, want)
+	}
+}

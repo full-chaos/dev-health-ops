@@ -2381,9 +2381,11 @@ The recommendations job evaluates three sets of teams: the teams with a live `wo
 30 days, the teams that own a repository at the end of the evaluation window (`teamownership.OwnerCandidatesByRepo`,
 the same instant as the owned repositories the loader reads), and the teams that own a project at that instant
 (the project ownership read of the attribution cascade, `LoadProjects`). Co-owners are owners in both owner sets. A team
-in several sets is evaluated once. One activity read (`teamactive.LoadInactive`), taken after all three sets, drops
-every inactive team from the union; no set reads activity on its own, so a team retired at an earlier read and active
-at that last read is evaluated. So a team that owns repositories or projects but has no work items is evaluated, and
+in several sets is evaluated once. One activity snapshot (`teamactive.LoadInactive`), read after the work item and
+project sets, decides for the whole union: the repository owner read takes the snapshot as a bound set (the first
+record of its validity window leaves out the teams the snapshot names inactive, and it reads no `teams` row), and
+every team the snapshot names inactive is dropped. No set reads activity on its own, so a team retired at the start of
+the run and active at the snapshot is evaluated, also when its first ownership record is after the window end. So a team that owns repositories or projects but has no work items is evaluated, and
 a rule it fired before gets the `fired=false` row that clears it. When the project ownership read is past its row bound,
 the run keeps the other two sets, skips the project owners, and logs one WARN and adds 1 to
 `dev_health_recommendations_discovery_total` (outcome `project_owners_skipped_bound`).
@@ -2537,7 +2539,9 @@ Only another ACTIVE team's tenure delays a start: an inactive team owns nothing 
 > work-item cascade `LoadRepos` (it keeps the rows of an inactive team, the cascade drops them), which is the
 > only ownership read of `work_item_attribution` (the backstop and the daily family, at the item's day), and by the
 > investment materialize donor set (`TeamRepoDonorSet.DonorsAt`; the one-shot `FetchTeamRepoDonors` keeps the
-> plain window and is tests-only). The
+> plain window and is tests-only). The recommendations repository owner read (`OwnerCandidatesByRepo`) renders the
+> same rule over the caller's activity snapshot (`WindowBoundInactive`: the inactive team ids are a bound
+> `Array(String)` parameter, not a read of `teams`). The
 > first record of a repository is the earliest `valid_from` of its rows of ACTIVE teams (an inactive team owns
 > nothing, section 0.4g rule 1, so it does not set it, in `teamscope` too); an instant at or after the first record
 > reads as before, and an instant in a gap between two records has no owner. Not yet applying it: the investment team

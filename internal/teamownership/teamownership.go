@@ -45,8 +45,16 @@ import (
 )
 
 // ownershipWindow is the validity test of an ownership row at {as_of}: the one rule of package ownershipwindow (the first
-// recorded owners apply before the first record, D5987 option C, CHAOS-9404). Every query of this file renders it.
+// recorded owners apply before the first record, D5987 option C, CHAOS-9404). Every query of this file renders it, but
+// OwnerCandidatesByRepo, which renders the same rule over a bound activity snapshot (ownershipWindowBoundInactive).
 var ownershipWindow = ownershipwindow.Window(ownershipwindow.Names{Org: "org_id", AsOf: "as_of"})
+
+// inactiveTeamIDsParam is the Array(String) parameter of the inactive team ids that OwnerCandidatesByRepo binds.
+const inactiveTeamIDsParam = "inactive_team_ids"
+
+// ownershipWindowBoundInactive is ownershipWindow with its first record over the bound inactive team ids
+// (ownershipwindow.WindowBoundInactive): the same rule, with no read of teams.
+var ownershipWindowBoundInactive = ownershipwindow.WindowBoundInactive(ownershipwindow.Names{Org: "org_id", AsOf: "as_of"}, inactiveTeamIDsParam)
 
 // OwnedRepoIDs returns the distinct set of repo IDs team_repo_ownership links
 // to teamID in orgID, active as of asOf.
@@ -411,8 +419,7 @@ func ownerSharesOfRepo(teamOrder, mainOwners []string, storedShare func(string) 
 // window, the repos name join with its matched sentinel, a non-empty team id,
 // a repository that repos holds), plus the active-team rule of
 // AuthoritativeOwnersByRepo: an inactive team owns nothing. A failed read of
-// the inactive teams is returned, never read as "no team is inactive". The
-// activity read runs before the ownership read.
+// the inactive teams is returned, never read as "no team is inactive".
 func OwnersByRepo(
 	ctx context.Context, conn teamactive.Querier, orgID string, asOf time.Time,
 ) (map[string][]string, error) {
@@ -422,32 +429,6 @@ func OwnersByRepo(
 	inactive, err := teamactive.LoadInactive(ctx, conn, orgID)
 	if err != nil {
 		return nil, fmt.Errorf("OwnersByRepo: %w", err)
-	}
-	candidates, err := OwnerCandidatesByRepo(ctx, conn, orgID, asOf)
-	if err != nil {
-		return nil, err
-	}
-	owners := map[string][]string{}
-	for repoIDText, teamIDs := range candidates {
-		for _, teamID := range teamIDs {
-			if !inactive.Has(teamID) {
-				owners[repoIDText] = append(owners[repoIDText], teamID)
-			}
-		}
-	}
-	return owners, nil
-}
-
-// OwnerCandidatesByRepo is OwnersByRepo with no active-team rule: every team
-// that owns each repository as of asOf, inactive teams included, keyed by
-// repo_id text, each list in team_id order. It reads no activity, so a caller
-// that unions it with other team sets applies ONE teamactive read to the whole
-// union itself.
-func OwnerCandidatesByRepo(
-	ctx context.Context, conn teamactive.Querier, orgID string, asOf time.Time,
-) (map[string][]string, error) {
-	if conn == nil || orgID == "" {
-		return nil, fmt.Errorf("OwnerCandidatesByRepo: a connection and an organization id are required")
 	}
 	rows, err := conn.Query(ctx, `
         SELECT DISTINCT
@@ -473,6 +454,70 @@ func OwnerCandidatesByRepo(
           )
         ORDER BY owned_repo_id, owner_team_id
     `, clickhouse.Named("org_id", orgID), clickhouse.Named("as_of", dateTime64Literal(asOf)))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	owners := map[string][]string{}
+	for rows.Next() {
+		var repoIDText, teamID string
+		if err := rows.Scan(&repoIDText, &teamID); err != nil {
+			return nil, err
+		}
+		if inactive.Has(teamID) {
+			continue
+		}
+		owners[repoIDText] = append(owners[repoIDText], teamID)
+	}
+	return owners, rows.Err()
+}
+
+// OwnerCandidatesByRepo is OwnersByRepo over a bound activity snapshot: every
+// team that owns each repository as of asOf, keyed by repo_id text, each list in
+// team_id order, inactive teams included. It reads no teams row: the first
+// record of the validity window (package ownershipwindow) leaves out the teams
+// in inactive, the snapshot the caller read itself (teamactive.LoadInactive).
+// A caller that unions this set with other team sets applies the same snapshot
+// to the whole union, so one activity read decides for every set.
+func OwnerCandidatesByRepo(
+	ctx context.Context, conn teamactive.Querier, orgID string, asOf time.Time, inactive teamactive.Inactive,
+) (map[string][]string, error) {
+	if conn == nil || orgID == "" {
+		return nil, fmt.Errorf("OwnerCandidatesByRepo: a connection and an organization id are required")
+	}
+	if inactive == nil {
+		return nil, fmt.Errorf("OwnerCandidatesByRepo: an activity snapshot is required")
+	}
+	inactiveIDs := make([]string, 0, len(inactive))
+	for id := range inactive {
+		inactiveIDs = append(inactiveIDs, id)
+	}
+	slices.Sort(inactiveIDs)
+	rows, err := conn.Query(ctx, `
+        SELECT DISTINCT
+            coalesce(toString(o.repo_id), toString(r.id)) AS owned_repo_id,
+            o.team_id AS owner_team_id
+        FROM team_repo_ownership AS o FINAL
+        LEFT JOIN (
+            SELECT org_id, provider, id, repo, 1 AS matched
+            FROM repos FINAL
+            WHERE org_id = {org_id:String}
+        ) AS r
+            ON r.org_id = o.org_id
+               AND r.provider = o.provider
+               AND lower(r.repo) = lower(o.repo_full_name)
+        WHERE o.org_id = {org_id:String}
+          AND o.team_id != ''
+          AND (o.repo_id IS NOT NULL OR r.matched = 1)
+          AND `+ownershipWindowBoundInactive+`
+          AND coalesce(toString(o.repo_id), toString(r.id)) IN (
+              SELECT toString(id) AS id
+              FROM repos FINAL
+              WHERE org_id = {org_id:String}
+          )
+        ORDER BY owned_repo_id, owner_team_id
+    `, clickhouse.Named("org_id", orgID), clickhouse.Named("as_of", dateTime64Literal(asOf)),
+		clickhouse.Named(inactiveTeamIDsParam, inactiveIDs))
 	if err != nil {
 		return nil, err
 	}

@@ -46,15 +46,15 @@ var discoverTeamIDsSQL = `
       AND ` + liverow.Predicate("work_item_metrics_daily", "")
 
 // DiscoverTeamIDs returns the teams to evaluate for an org: the teams with
-// recent work item rows, plus the teams that own a repository at asOf (the
-// window end; teamownership.OwnerCandidatesByRepo, which reads no activity),
-// plus the teams that own a project at asOf (teamattribution LoadProjects,
-// co-owners included, the same as the repository owners). A team in several
-// sets is listed once. A team whose newest teams row is inactive
-// (teamactive.LoadInactive, read once, after the sets: the only activity read)
-// is dropped from the whole union. Without the
-// owner teams, a quiet owner team is never evaluated, so its old fired rules
-// never get the fired=false rows that clear them.
+// recent work item rows, plus the teams that own a project at asOf
+// (teamattribution LoadProjects, co-owners included), plus the teams that own a
+// repository at asOf (the window end; teamownership.OwnerCandidatesByRepo,
+// co-owners included). A team in several sets is listed once. ONE activity
+// snapshot (teamactive.LoadInactive), read after the work item and project
+// sets, decides for the whole union: the repository owner read is bound to it
+// (it reads no teams row), and every team the snapshot names inactive is
+// dropped. Without the owner teams, a quiet owner team is never evaluated, so
+// its old fired rules never get the fired=false rows that clear them.
 //
 // The org predicate is appended only for a real org, matching the reference:
 // "default" is the single-tenant sentinel and is not a value present in
@@ -101,15 +101,6 @@ func (executor *RecommendationsExecutor) DiscoverTeamIDs(
 	}
 
 	if orgID != "" && orgID != "default" {
-		owners, err := teamownership.OwnerCandidatesByRepo(ctx, executor.conn, orgID, asOf)
-		if err != nil {
-			return nil, fmt.Errorf("discover recommendation repository owner teams: %w", err)
-		}
-		for _, ownerTeams := range owners {
-			for _, teamID := range ownerTeams {
-				add(teamID)
-			}
-		}
 		loadProjects := executor.loadProjectOwners
 		if loadProjects == nil {
 			loadProjects = teamattribution.ClickHouseFactSource{Conn: executor.conn}.LoadProjects
@@ -130,12 +121,22 @@ func (executor *RecommendationsExecutor) DiscoverTeamIDs(
 		for _, project := range projects {
 			add(project.TeamID)
 		}
-		// ONE activity decision for the whole union, read after every set so the
-		// latest instant wins. A failed read fails discovery: an empty set read
-		// from an error would evaluate a retired team.
+		// ONE activity snapshot for the whole union, read after the work item and
+		// project sets so the latest instant wins. The repository owner read is
+		// bound to it, so no set reads activity on its own. A failed read fails
+		// discovery: an empty set read from an error would evaluate a retired team.
 		inactive, err := teamactive.LoadInactive(ctx, executor.conn, orgID)
 		if err != nil {
 			return nil, fmt.Errorf("discover recommendation teams: %w", err)
+		}
+		owners, err := teamownership.OwnerCandidatesByRepo(ctx, executor.conn, orgID, asOf, inactive)
+		if err != nil {
+			return nil, fmt.Errorf("discover recommendation repository owner teams: %w", err)
+		}
+		for _, ownerTeams := range owners {
+			for _, teamID := range ownerTeams {
+				add(teamID)
+			}
 		}
 		kept := teamIDs[:0]
 		for _, teamID := range teamIDs {

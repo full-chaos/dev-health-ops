@@ -1,6 +1,7 @@
 // Package ownershipwindow is the one rule for which ownership rows of team_repo_ownership are valid at an instant
 // (team-attribution.md section 0.4j, D5987 option C, CHAOS-9404). Every reader renders it: teamownership
-// (OwnedRepoIDs, OwnersByRepo, OwnerSharesByRepo and AuthoritativeOwnersByRepo) and queryapi/teamscope.
+// (OwnedRepoIDs, OwnersByRepo, OwnerSharesByRepo and AuthoritativeOwnersByRepo; OwnerCandidatesByRepo over a bound
+// activity snapshot, WindowBoundInactive) and queryapi/teamscope.
 //
 // A row is valid at an instant when valid_from <= instant and valid_to is NULL or after it. For an instant BEFORE the
 // first recorded ownership of a repository, the repository's FIRST recorded owners apply: the instant is clamped up to
@@ -40,10 +41,21 @@ func ActiveTeam(n Names) string {
 	return fmt.Sprintf("trimBoth(o.team_id) NOT IN (%s)", InactiveTeams(n))
 }
 
+// BoundActiveTeam is ActiveTeam over a bound set: o.team_id is not in the Array(String) parameter named
+// inactiveParam, which the caller binds to the ids of the inactive teams (teamactive.LoadInactive). It reads no
+// teams row, so a caller can apply the one activity snapshot it already read.
+func BoundActiveTeam(inactiveParam string) string {
+	return fmt.Sprintf("NOT has({%s:Array(String)}, trimBoth(o.team_id))", inactiveParam)
+}
+
 // FirstRecordsQuery is a statement of the first record of each repository: one row (repo_key String, first_from
 // DateTime64(3, 'UTC')) per repository, from the first valid_from of its ownership rows of active teams, under the rules of
 // the package comment. It reads only the organization placeholder of n, and has no source filter.
 func FirstRecordsQuery(n Names) string {
+	return firstRecordsQuery(n, ActiveTeam(n))
+}
+
+func firstRecordsQuery(n Names, activeTeam string) string {
 	return fmt.Sprintf(`SELECT %[2]s AS repo_key, min(o.valid_from) AS first_from
             FROM team_repo_ownership AS o FINAL
             LEFT JOIN (
@@ -58,7 +70,7 @@ func FirstRecordsQuery(n Names) string {
               AND o.team_id != ''
               AND %[3]s
               AND (o.repo_id IS NOT NULL OR r.matched = 1)
-            GROUP BY repo_key`, n.Org, RepoKey, ActiveTeam(n))
+            GROUP BY repo_key`, n.Org, RepoKey, activeTeam)
 }
 
 // ClampAsOf is the instant a row of a repository is tested at when the repository's first record is first: the later of
@@ -73,24 +85,44 @@ func ClampAsOf(at, first time.Time) time.Time {
 // firstRecords is an uncorrelated scalar subquery: a Map(String, DateTime64) from the id of each repository to the
 // first valid_from of its ownership rows of active teams.
 func firstRecords(n Names) string {
+	return firstRecordsWith(n, ActiveTeam(n))
+}
+
+func firstRecordsWith(n Names, activeTeam string) string {
 	return fmt.Sprintf(`(
         SELECT mapFromArrays(groupArray(repo_key), groupArray(first_from))
         FROM (
             %s
         )
-    )`, FirstRecordsQuery(n))
+    )`, firstRecordsQuery(n, activeTeam))
 }
 
 // EffectiveAsOf is the instant the validity window of the row's repository is tested at: the bound instant, or the
 // repository's first record when that is later. A repository with no record in the map reads the map's default (the
 // epoch), which is before any instant, so it is tested at the bound instant.
 func EffectiveAsOf(n Names) string {
-	return fmt.Sprintf("greatest({%s:DateTime64(3, 'UTC')}, %s[%s])", n.AsOf, firstRecords(n), RepoKey)
+	return effectiveAsOf(n, ActiveTeam(n))
+}
+
+func effectiveAsOf(n Names, activeTeam string) string {
+	return fmt.Sprintf("greatest({%s:DateTime64(3, 'UTC')}, %s[%s])", n.AsOf, firstRecordsWith(n, activeTeam), RepoKey)
 }
 
 // Window is the validity test of ownership row o at the bound instant, with the first recorded owners applied before
 // the first record. It is the two AND-ed bounds, with no leading AND.
 func Window(n Names) string {
-	effective := EffectiveAsOf(n)
+	return window(n, ActiveTeam(n))
+}
+
+// WindowBoundInactive is Window with the active-team rule of the first record over a bound set (BoundActiveTeam):
+// the same rule, with the inactive team ids the caller already read instead of a read of teams. A caller that
+// applies one activity snapshot to several team sets renders it, so the window and its own filter see the same
+// inactive teams.
+func WindowBoundInactive(n Names, inactiveParam string) string {
+	return window(n, BoundActiveTeam(inactiveParam))
+}
+
+func window(n Names, activeTeam string) string {
+	effective := effectiveAsOf(n, activeTeam)
 	return fmt.Sprintf("o.valid_from <= %[1]s\n      AND (o.valid_to IS NULL OR o.valid_to > %[1]s)", effective)
 }

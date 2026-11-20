@@ -909,7 +909,7 @@ LIMIT {max_edges:UInt32}
 // verified by running that mutant, not by inspection. See
 // flowMatrixWorkTypeEnrichedSelect's doc comment for the full result and
 // for what is still NOT measured (the cost number).
-// A WORK_TYPE key must hold a char that is not whitespace: the match() class is the ECMA-262 "White Space" and "Line Terminators" set (what JS trim removes), not just ''.
+// A WORK_TYPE key must hold a char that is not whitespace: the match() class is the ECMA-262 "White Space" and "Line Terminators" set (what JS trim removes), not just the empty string.
 const flowMatrixWorkTypeNodesTemplate = `
 SELECT
     'WORK_TYPE' AS dimension,
@@ -935,7 +935,7 @@ LIMIT {limit_per_dim:UInt32}
 // correction: "fixing the template" without fixing the CTE would leave
 // the CTE (and its OTHER consumers, if any existed) still exposed --
 // there are none here, but the fix belongs at the CTE regardless.
-// A WORK_TYPE key must hold a char that is not whitespace: the match() class is the ECMA-262 "White Space" and "Line Terminators" set (what JS trim removes), not just ''.
+// A WORK_TYPE key must hold a char that is not whitespace: the match() class is the ECMA-262 "White Space" and "Line Terminators" set (what JS trim removes), not just the empty string.
 const flowMatrixWorkTypeEdgesTemplate = `
 SELECT
     'WORK_TYPE' AS source_dimension,

@@ -757,7 +757,8 @@ const nullableIntoPlainSites = `
 //	fetchChangeFailureAgg 78aa9a6d5455 -> 33e78a54a14c
 //	fetchStateDurations 4e40f48a6488 -> dd682a464928
 //	fetchWorkItems 02d2157b4812 -> 6adb8910eb84
-// CHAOS-14393: the WORK_TYPE nodes and edges templates filter blank types with match() instead of != ''. Select lists,
+//
+// CHAOS-14393: the WORK_TYPE nodes and edges templates filter blank types with match() instead of an empty-string test. Select lists,
 // column types and scan targets are unchanged; only the statement text moved. Re-pinned by hand, digests copied from the
 // local TestScanTypeCensus failure output (not computed):
 //

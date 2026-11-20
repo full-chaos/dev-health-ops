@@ -19,7 +19,7 @@ var itemDecoderExceptions = map[string]string{
 // TestItemDecoderFailuresCarryTheRoute: a providersync function whose first parameter is `raw json.RawMessage` and that returns the bare
 // providerfoundation.ErrNormalizationInvalid is an item decoder. The page walker has dropped the response by the time it
 // runs, so every call site must return its error through RouteFailure (or ResponseFailure) naming the route that served
-// the page.
+// the page. A syntactic guard over direct assignment call sites and one wrapper level (CHAOS-14292).
 func TestItemDecoderFailuresCarryTheRoute(t *testing.T) {
 	t.Parallel()
 	files, err := filepath.Glob("*.go")
@@ -49,8 +49,8 @@ func TestItemDecoderFailuresCarryTheRoute(t *testing.T) {
 			}
 		}
 	}
-	if len(decoders) < 24 {
-		t.Fatalf("found %d item decoders, want at least the 24 of CHAOS-10292 and CHAOS-13631: %v", len(decoders), decoders)
+	if len(decoders) < 76 {
+		t.Fatalf("found %d item decoders, want at least the 76 of CHAOS-10292, CHAOS-13631, CHAOS-14279 and CHAOS-14280: %v", len(decoders), decoders)
 	}
 	for name := range itemDecoderExceptions {
 		if !decoders[name] {
@@ -93,8 +93,8 @@ func TestItemDecoderFailuresCarryTheRoute(t *testing.T) {
 	if len(bad) > 0 {
 		t.Fatalf("item decoder calls whose error does not name a route:\n%s", strings.Join(bad, "\n"))
 	}
-	if calls < 36 {
-		t.Fatalf("checked %d item decoder calls, want the 36 call sites of CHAOS-10292 and CHAOS-13631", calls)
+	if calls < 94 {
+		t.Fatalf("checked %d item decoder calls, want the 94 call sites of CHAOS-10292, CHAOS-13631, CHAOS-14279 and CHAOS-14280", calls)
 	}
 }
 
@@ -209,14 +209,17 @@ func blockReturnsRouted(body *ast.BlockStmt, errName string) bool {
 	return ok && arg.Name == errName
 }
 
-// inlineDecodeFamilies are the file families whose item decodes CHAOS-13631 moved into item decoders. The inline decodes of the
-// other files are not sorted yet (item or whole body): CHAOS-14235.
-var inlineDecodeFamilies = []string{"github_", "gitlab_", "launchdarkly_"}
-
-// inlineDecodeExceptions are functions of those families that decode inline and return the bare ErrNormalizationInvalid,
+// inlineDecodeExceptions are functions of any providersync file that decode inline and return the bare ErrNormalizationInvalid,
 // keyed "file:function", each with its reason.
 var inlineDecodeExceptions = map[string]string{
-	"launchdarkly_references_clickhouse.go:parseLaunchDarklyCodeReferences": "decodes the whole code-references document, not a page item",
+	"launchdarkly_references_clickhouse.go:parseLaunchDarklyCodeReferences": "decodes the whole code-references document, not a page item (the caller launchdarkly_route.go:189 wraps RouteFailure with the code-references route; the resolver at launchdarkly_references_clickhouse.go:48 gets the payload that call already parsed)",
+	"jira_incidents_route.go:decodeJiraIncidentJSON":                        "shared helper; the body caller jira_incidents_route.go:426 wraps ResponseInvalid(BodyDecode) and the item caller :343 wraps RouteFailure",
+	"jira_work_items_route.go:decodeJiraJSON":                               "shared helper; the body callers jira_work_items_route.go:644 and jira_dev_status.go:95 wrap ResponseInvalid(BodyDecode), the graphql body caller jira_atlassian_route.go:1116 wraps it too, and the item callers (jira_work_items_route.go:429, :494, jira_atlassian_route.go, jira_team_catalog_route.go) wrap RouteFailure",
+	"native_rest.go:NativeRESTHandler.normalizeGitHubWorkItems":             "cannot fail on decode: filterWorkItemWindow (native_rest.go:691) already dropped every item that does not decode into the same workItemPayload; the check shares one condition with the number and title validation",
+	"native_rest.go:NativeRESTHandler.normalizeGitLabWorkItems":             "cannot fail on decode: filterWorkItemWindow (native_rest.go:691) already dropped every item that does not decode into the same workItemPayload; the check shares one condition with the iid and title validation",
+	"native_rest.go:NativeRESTHandler.fetchGitHubChildren":                  "cannot fail on decode: the parent came through filterWorkItemWindow (native_rest.go:691); the check shares one condition with the number validation",
+	"native_rest.go:NativeRESTHandler.fetchGitLabChildren":                  "cannot fail on decode: the parent came through filterWorkItemWindow (native_rest.go:691); the check shares one condition with the iid validation",
+	"repository_shadow.go:ClickHouseRepositoryShadowSource.Load":            "decodes the settings JSON of a ClickHouse row, not a provider response",
 	"github_tests_chunked_route.go:GitHubTestsRouteHandler.CollectChunks":   "the job item decode in collectRunDetail stays bare: its error reaches githubTestsOpenRunSkip, which compares it by identity (github_tests_run_listing.go:66)",
 	"github_tests_run_listing.go:fetchGitHubTestsRun":                       "decodes the whole single-run body, not a page item; its error reaches githubTestsOpenRunSkip, which compares it by identity (github_tests_run_listing.go:66)",
 	"gitlab_feature_flags_route.go:ensureJSONEOF":                           "trailing-data check inside the item decoder decodeGitLabFeatureFlagObject; its callers (gitlab_feature_flags_route.go:217, :255) already name the route",
@@ -224,7 +227,8 @@ var inlineDecodeExceptions = map[string]string{
 
 // TestInlineItemDecodesAreListed: an inline decode (json.Unmarshal or a Decoder's Decode in an if statement) whose branch returns the
 // bare ErrNormalizationInvalid names no route, and TestItemDecoderFailuresCarryTheRoute cannot see it. Outside an item decoder each
-// such function is moved into an item decoder or listed in inlineDecodeExceptions with its reason.
+// such function is moved into an item decoder or listed in inlineDecodeExceptions with its reason. A syntactic guard over the
+// if-init decode form and the named exceptions only: other source forms are not pinned (CHAOS-14292).
 func TestInlineItemDecodesAreListed(t *testing.T) {
 	t.Parallel()
 	files, err := filepath.Glob("*.go")
@@ -234,7 +238,7 @@ func TestInlineItemDecodesAreListed(t *testing.T) {
 	fset := token.NewFileSet()
 	found := map[string]bool{}
 	for _, name := range files {
-		if strings.HasSuffix(name, "_test.go") || !hasAnyPrefix(name, inlineDecodeFamilies) {
+		if strings.HasSuffix(name, "_test.go") {
 			continue
 		}
 		file, err := parser.ParseFile(fset, name, nil, 0)
@@ -270,15 +274,6 @@ func TestInlineItemDecodesAreListed(t *testing.T) {
 	if len(bad) > 0 {
 		t.Fatalf("inline decodes that return a bare ErrNormalizationInvalid, not in inlineDecodeExceptions:\n%s", strings.Join(bad, "\n"))
 	}
-}
-
-func hasAnyPrefix(name string, prefixes []string) bool {
-	for _, prefix := range prefixes {
-		if strings.HasPrefix(name, prefix) {
-			return true
-		}
-	}
-	return false
 }
 
 func funcKey(fn *ast.FuncDecl) string {

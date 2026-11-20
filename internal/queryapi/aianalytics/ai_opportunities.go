@@ -107,6 +107,10 @@ type opportunity struct {
 	score  float64
 	raw    float64
 	refs   []string
+	// key is the rule's own sort key after its count or share (value): the terms its read orders by after the
+	// count, so opportunityLess and the read's ORDER BY ... LIMIT 100 agree. Never served, logged or put in an error.
+	value float64
+	key   []string
 	// idKey, when set, is the secondary part of the stable id in place of the team.
 	idKey string
 }
@@ -312,8 +316,9 @@ type clusterRow struct {
 	RepoID   string
 	Count    int64
 	Prefix   string
-	Refs     []string
+	Author   string
 	WorkType string
+	Refs     []string
 	Anchor   uint32
 }
 
@@ -330,9 +335,7 @@ func loadClusters(ctx context.Context, client QueryClient, statement string, bin
 			n uint64
 		)
 		if withPrefix {
-			// cluster_author is a GROUP BY key and a sort value of the read; it is never read here.
-			var author string
-			if err := rs.Scan(&r.RepoID, &r.Prefix, &n, &r.Refs, &author, &r.WorkType, &r.Anchor); err != nil {
+			if err := rs.Scan(&r.RepoID, &r.Prefix, &n, &r.Refs, &r.Author, &r.WorkType, &r.Anchor); err != nil {
 				return nil, fmt.Errorf("aianalytics: opportunity cluster scan: %w", err)
 			}
 		} else if err := rs.Scan(&r.RepoID, &n, &r.Refs); err != nil {
@@ -382,7 +385,7 @@ WHERE pr.created_at >= now() - INTERVAL 30 DAY@@REPO@@
   AND coalesce(pr.title, '') != ''
 GROUP BY repo_id, coalesce(pr.author_email, pr.author_name, ''), coalesce(nullIf(wi.type, ''), 'pull_request'), title_prefix
 HAVING prs_total >= {cluster_min:UInt32}
-ORDER BY prs_total DESC
+ORDER BY prs_total DESC, repo_id ASC, title_prefix ASC, cluster_author ASC, cluster_work_type ASC
 LIMIT 100`
 
 type titleRule struct {
@@ -432,7 +435,7 @@ WHERE pr.created_at >= now() - INTERVAL 30 DAY
   AND pr.org_id = {org_id:String}
 GROUP BY repo_id
 HAVING prs_total >= {min_prs:UInt32}
-ORDER BY prs_total DESC
+ORDER BY prs_total DESC, repo_id ASC
 LIMIT 100`
 
 const docFileExpr = "(file_path LIKE '%.md' OR file_path LIKE '%.rst' OR file_path LIKE '%.adoc'" +
@@ -451,7 +454,7 @@ WHERE c.committer_when >= now() - INTERVAL 30 DAY@@REPO@@
   AND c.org_id = {org_id:String}
 GROUP BY repo_id
 HAVING code_commits >= {min_commits:UInt32} AND doc_changes = 0
-ORDER BY code_commits DESC
+ORDER BY code_commits DESC, repo_id ASC
 LIMIT 100`
 
 // flakyStatement is the share of DISTINCT test cases that flaked over the window: the summed flake cases over the
@@ -478,7 +481,7 @@ WHERE day >= today() - 30@@REPO@@
 GROUP BY repo_id
 HAVING cases_total >= {min_cases:UInt64}
    AND flake_share >= {flake_threshold:Float64}
-ORDER BY flake_share DESC
+ORDER BY flake_share DESC, repo_id ASC
 LIMIT 100`
 
 // withRepo splices the optional repository predicate into a statement.
@@ -666,7 +669,8 @@ func workflowOpportunities(ctx context.Context, client QueryClient, orgID, repoI
 		o := newOpportunity(model.AIOpportunityKindRepetitiveChange, repo, nil,
 			"Repetitive AI change pattern in "+repo,
 			strconv.FormatInt(r.Count, 10)+" AI-assisted PRs shared the title prefix '"+prefix+"' with the same author/work type over the last 30 days.",
-			scoreDeltaRaw(float64(r.Count)/float64(repetitiveClusterMinPRs), 1.0), refs)
+			scoreDeltaRaw(float64(r.Count)/float64(repetitiveClusterMinPRs), 1.0), refs).
+			sortedBy(float64(r.Count), r.Prefix, r.Author, r.WorkType)
 		o.idKey = repetitiveClusterKey(r.Prefix, r.WorkType, r.Anchor)
 		out = append(out, o)
 	}
@@ -690,7 +694,8 @@ func workflowOpportunities(ctx context.Context, client QueryClient, orgID, repoI
 			refs = append(append([]string(nil), refs...), rule.metricRef+":"+repo)
 			out = append(out, newOpportunity(rule.kind, repo, nil,
 				fmt.Sprintf(rule.title, repo), fmt.Sprintf(rule.why, r.Count),
-				scoreDeltaRaw(float64(r.Count)/float64(rule.minPRs), 1.0), refs))
+				scoreDeltaRaw(float64(r.Count)/float64(rule.minPRs), 1.0), refs).
+				sortedBy(float64(r.Count)))
 		}
 	}
 
@@ -739,7 +744,8 @@ func loadDocDrift(ctx context.Context, client QueryClient, orgID, repoID string)
 			"Documentation drift in "+repo,
 			strconv.FormatUint(commits, 10)+" code commits landed in the last 30 days with zero documentation-file changes.",
 			scoreDeltaRaw(float64(commits)/float64(docDriftMinCodeCommits), 1.0),
-			[]string{"git_commit_stats:doc_changes:" + repo}))
+			[]string{"git_commit_stats:doc_changes:" + repo}).
+			sortedBy(float64(commits)))
 	}
 	if err := rs.Err(); err != nil {
 		return nil, fmt.Errorf("aianalytics: documentation drift rows: %w", err)
@@ -775,7 +781,8 @@ func loadFlaky(ctx context.Context, client QueryClient, orgID, repoID string) ([
 			"Flaky test triage candidate in "+repo,
 			"Test cases appear to flake at "+pct(*rate, 1)+" of distinct cases across "+strconv.FormatUint(cases, 10)+" executions over the last 30 days.",
 			scoreDeltaRaw(*rate, flakyRateThreshold),
-			[]string{"testops_test_metrics_daily:flake_rate:" + repo}))
+			[]string{"testops_test_metrics_daily:flake_rate:" + repo}).
+			sortedBy(*rate))
 	}
 	if err := rs.Err(); err != nil {
 		return nil, fmt.Errorf("aianalytics: flaky test rows: %w", err)

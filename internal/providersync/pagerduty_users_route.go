@@ -136,7 +136,7 @@ func (handler PagerDutyUsersRouteHandler) Collect(
 	counted.Doer = pagerDutyUsersCountingDoer{delegate: client.Doer, attempts: &requests}
 	pages, err := providerfoundation.CollectPagerDutyOffsetPages(
 		ctx, &counted, providerfoundation.PagerDutyOffsetOptions{
-			Path: "/users", Route: "/users", DataKey: "users", PerPage: perPage, MaxPages: maxPages,
+			Path: "/users", Route: pagerDutyUsersRoute, DataKey: "users", PerPage: perPage, MaxPages: maxPages,
 		},
 	)
 	if err != nil {
@@ -147,9 +147,9 @@ func (handler PagerDutyUsersRouteHandler) Collect(
 	}
 	rows := make([]pagerDutyUserRow, 0, len(pages.Items))
 	for _, raw := range pages.Items {
-		var payload pagerDutyUserPayload
-		if err := json.Unmarshal(raw, &payload); err != nil {
-			return CompleteRouteBatch{}, providerfoundation.ErrNormalizationInvalid
+		payload, err := decodePagerDutyUserItem(raw)
+		if err != nil {
+			return CompleteRouteBatch{}, providerfoundation.RouteFailure(pagerDutyUsersRoute, providerfoundation.ReasonBodyDecode, err)
 		}
 		row, err := normalizePagerDutyUser(claim, providerInstance, payload, normalizedAt)
 		if err != nil {
@@ -291,3 +291,14 @@ func fillPagerDutyUserOrdering(row *pagerDutyUserRow) error {
 }
 
 var _ CompleteRouteHandler = PagerDutyUsersRouteHandler{}
+
+// pagerDutyUsersRoute is the route template of the /users list.
+const pagerDutyUsersRoute = "/users"
+
+func decodePagerDutyUserItem(raw json.RawMessage) (pagerDutyUserPayload, error) {
+	var payload pagerDutyUserPayload
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return payload, providerfoundation.ErrNormalizationInvalid
+	}
+	return payload, nil
+}

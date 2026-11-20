@@ -46,6 +46,7 @@ func TestOrgActivityAgeProbeOfTheWorkerReportsTheNewestRowAgeAndNoSampleWhenEmpt
 	}
 	t.Cleanup(admin.Close)
 	prepareMultiReplicaDatabase(t, ctx, admin)
+	// If ageSQL is ever qualified as pg_catalog.now(), this shadow is bypassed and this test fails on purpose: switch it to a Go clock seam then.
 	if _, err := admin.Exec(ctx, `CREATE FUNCTION public.now() RETURNS timestamptz LANGUAGE sql STABLE
 AS $$ SELECT timestamptz '2026-11-20 12:00:00+00' $$`); err != nil {
 		t.Fatal(err)

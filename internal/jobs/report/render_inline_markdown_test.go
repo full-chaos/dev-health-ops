@@ -214,3 +214,43 @@ func TestOtherChartsCollisionIsExactName(t *testing.T) {
 		}
 	}
 }
+
+// A heading, list-line, wrapped or footer value shows trimmed of edge space and tabs (and a trailing line break), not as
+// the raw value. A table cell keeps its edge space: the GFM table drops it.
+func TestRenderFreeTextShowsEdgeTrimmed(t *testing.T) {
+	const padded = " \tReview \t\r\n"
+	want := map[string]string{
+		"report type": "\n# Review Report — ", "window": "— Review → Review\n", "section": "\n## Review\n", "chart title": "\n#### Review\n",
+		"not applicable": "_Not applicable: Review_", "note": "_Note: Review_", "uncharted label": "\n- Review: why\n", "uncharted reason": "\n- lbl: Review\n",
+		"provenance artifact id": "**chart:Review** —", "provenance source": "sources: Review; metrics", "metric name": "metrics: Review\n",
+		"team scope": "Scope: teams=Review\n", "repo scope": "Scope: repos=Review\n", "service scope": "Scope: services=Review\n",
+		"footer confidence": "Confidence: Review |",
+	}
+	for _, site := range inlineSites() {
+		fragment, ok := want[site.name]
+		if !ok {
+			continue
+		}
+		if markdown := "\n" + renderInline(t, site.set, padded); !strings.Contains(markdown, fragment) {
+			t.Errorf("%s: %q missing in:\n%s", site.name, fragment, markdown)
+		}
+	}
+}
+
+// The title-cased fields (custom report type, section name, fallback metric name) show title-case(value): the escaper
+// makes that text literal, and the existing title-case rule (lower case, "_" as a space) still applies first.
+func TestRenderTitleCasedFieldsShowTitleCaseOfTheValue(t *testing.T) {
+	const value = "Release _Candidate_ *x*"
+	want := map[string]string{
+		"report type": "\n# Release Candidate \\*x\\* Report — ", "section": "\n## Release Candidate \\*x\\*\n", "metric name": "Release Candidate \\*x\\* appears near",
+	}
+	for _, site := range inlineSites() {
+		fragment, ok := want[site.name]
+		if !ok {
+			continue
+		}
+		if markdown := "\n" + renderInline(t, site.set, value); !strings.Contains(markdown, fragment) {
+			t.Errorf("%s: %q missing in:\n%s", site.name, fragment, markdown)
+		}
+	}
+}

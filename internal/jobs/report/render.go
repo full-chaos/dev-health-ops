@@ -311,11 +311,12 @@ func escapeMarkdown(value, escapes string) string {
 	return b.String()
 }
 
-// markdownText writes free text into a heading, note or list line: each character that starts inline Markdown, an
+// markdownText writes free text into a heading, note or list line, edge space dropped (a reader drops it there and a
+// closing marker after a space does not close): each character that starts inline Markdown, an
 // entity, a heading or a backslash escape gets a backslash. An "_" between two ASCII letters or digits stays plain:
 // CommonMark never reads it as emphasis, and source-table and metric names hold it.
 func markdownText(value string) string {
-	runes := []rune(markdownLineBreaks.Replace(value))
+	runes := []rune(strings.TrimSpace(markdownLineBreaks.Replace(value)))
 	var b strings.Builder
 	for i, r := range runes {
 		if strings.ContainsRune("\\*_`[]<>~&#", r) && !(r == '_' && i > 0 && i < len(runes)-1 && asciiAlnum(runes[i-1]) && asciiAlnum(runes[i+1])) {

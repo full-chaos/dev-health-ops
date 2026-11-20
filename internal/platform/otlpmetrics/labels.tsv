@@ -273,6 +273,7 @@ dev_health_provider_inventory_page_cap_total	dataset,provider	code: internal/pro
 dev_health_provider_open_run_skipped_total	dataset,provider,reason	code: internal/providerfoundation/budget.go
 dev_health_provider_per_run_truncation_total	cause,component,dataset,provider	code: internal/providerfoundation/budget.go
 dev_health_provider_prepared_snapshot_discarded_total	dataset,provider,reason	code: internal/providerfoundation/budget.go
+dev_health_provider_rate_limit_episode_restart_total	dataset,provider	code: internal/providerfoundation/budget.go
 dev_health_provider_request_usage_dropped_requests_total		code: internal/providersync/request_usage.go
 dev_health_provider_request_usage_dropped_rows_total		code: internal/providersync/request_usage.go
 dev_health_provider_requests_total	class,provider	code: internal/providerfoundation/budget.go

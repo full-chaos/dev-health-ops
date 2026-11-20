@@ -460,7 +460,7 @@ func TestGitHubTestsResumeArtifactsCursorWithoutAnchorKeepsTheAllUnreadableGate(
 // acp r1 ruling P1-2, the invariant: a resume over a moved page costs no budget. A walk that resumes over a deletion before
 // its resume point and then stops at a budget edge (page budget or record bound) reads every surviving run an uninterrupted
 // walk of the same runs reads under the same budget, and advances the watermark past an unread run only when that
-// uninterrupted walk does too (the deep listings' stop advances by design). The re-seek's first page and its re-read runs
+// uninterrupted walk does too (the deep listings' stop advances by design). The re-seek's first pages and its re-read runs
 // are free.
 func TestGitHubTestsResumeAtABudgetEdgeReadsWhatAFreshWalkReads(t *testing.T) {
 	window := listingClaim(listingSince, listingSince.Add(6*time.Hour))
@@ -624,7 +624,7 @@ func (doer resumeReportsDoer) Do(request *http.Request) (*http.Response, error) 
 }
 
 // acp r2 close path (a): a page-end resume whose page allowance is already spent checks its anchor on the page before it
-// first; on a move it seeks the listing again with the free first page, so the walk reads every survivor an uninterrupted
+// first; on a move it seeks the listing again with its free pages, so the walk reads every survivor an uninterrupted
 // walk of the survivors reads under the same budget.
 func TestGitHubTestsResumePageEndAtASpentBudgetChecksTheAnchor(t *testing.T) {
 	window := listingClaim(listingSince, listingSince.Add(6*time.Hour))
@@ -730,10 +730,9 @@ func TestGitHubTestsResumeReseekCreditStaysInItsListing(t *testing.T) {
 	}
 }
 
-// RESIDUAL (acp r2 close path (b), not closed here, follow-up ticket): the re-seek's free first page covers one page of
-// its boundary second. A boundary second that spans more pages costs the page budget again, so a walk at the budget edge
-// reads fewer runs than an uninterrupted walk. This cell RECORDS the current skip count; it is not a want.
-func TestGitHubTestsResumeResidualMultiPageBoundarySecond(t *testing.T) {
+// A boundary second that spans more than one page: the re-seek gets as many free pages as the moved search entered
+// (CHAOS-14385), so a walk at the page budget edge reads every survivor an uninterrupted walk of the survivors reads.
+func TestGitHubTestsResumeMultiPageBoundarySecondReadsEverySurvivor(t *testing.T) {
 	claim := listingClaim(listingSince, listingSince.Add(6*time.Hour))
 	runs := makeListingRuns(1, 250, listingSince.Add(time.Hour), time.Second)
 	for index := range 150 { // ids 1..150 share one second: the second spans pages 2 and 3
@@ -752,13 +751,14 @@ func TestGitHubTestsResumeResidualMultiPageBoundarySecond(t *testing.T) {
 			skipped++
 		}
 	}
-	t.Logf("RESIDUAL multi-page boundary second: survivors an uninterrupted walk of the survivors reads and the resumed walk does not = %d", skipped)
+	if skipped != 0 {
+		t.Errorf("multi-page boundary second: %d survivors an uninterrupted walk of the survivors reads were not read, want 0", skipped)
+	}
 }
 
-// RESIDUAL (acp r2 close path (c), not closed here, follow-up ticket): the re-seek's record credit lives in memory. A
-// worker yield inside the re-seek's second loses it, and the re-read runs after the yield count against the record bound.
-// This cell RECORDS the current skip count; it is not a want.
-func TestGitHubTestsResumeResidualRecordCreditAcrossYields(t *testing.T) {
+// The re-seek's record credit is in the cursor (CHAOS-14385): a worker yield inside the re-seek's second keeps it, so the
+// re-read runs after the yield are not charged to the record bound and no run an uninterrupted walk reads is skipped.
+func TestGitHubTestsResumeRecordCreditSurvivesYields(t *testing.T) {
 	claim := listingClaim(listingSince, listingSince.Add(6*time.Hour))
 	runs := makeListingRuns(1, 250, listingSince.Add(time.Minute), time.Minute)
 	for index := range runs { // five runs share each second
@@ -806,5 +806,7 @@ func TestGitHubTestsResumeResidualRecordCreditAcrossYields(t *testing.T) {
 			skipped++
 		}
 	}
-	t.Logf("RESIDUAL record credit across yields: runs the uninterrupted walk reads and the resumed walk does not = %d", skipped)
+	if skipped != 0 {
+		t.Errorf("record credit across yields: %d runs the uninterrupted walk reads were not read, want 0", skipped)
+	}
 }

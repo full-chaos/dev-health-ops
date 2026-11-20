@@ -843,6 +843,7 @@ func TestChunkCursorWorstCaseOfEachPhaseKeepsTheMargin(t *testing.T) {
 			c.ActiveCutKeys, c.CarriedCutKeys = githubTestsWidestRunsCutKeys(t), githubTestsWidestRunsCutKeys(t)
 			c.RangeOldestItems = githubTestsSearchResultCap
 			c.AnchorID = githubTestsWidestAnchorID
+			c.ReseekPages, c.RecordCredit = githubTestsWidestReseekPages, githubTestsWidestRecordCredit
 		}},
 		{"runs deep range peel", func(c *githubTestsChunkCursor) {
 			c.Phase = githubTestsRunsPhase
@@ -853,6 +854,8 @@ func TestChunkCursorWorstCaseOfEachPhaseKeepsTheMargin(t *testing.T) {
 			c.ActiveCutKeys, c.CarriedCutKeys = githubTestsWidestRunsCutKeys(t), githubTestsWidestRunsCutKeys(t)
 			c.RangeOldestItems = githubTestsSearchResultCap
 			c.AnchorID = githubTestsWidestAnchorID
+			// The deep range's own record count rides its cursor too (CHAOS-14385: it was missing from this worst case).
+			c.ReseekPages, c.RecordCredit, c.LateRecords = githubTestsWidestReseekPages, githubTestsWidestRecordCredit, githubTestsMaxWalkRecords
 		}},
 		{"artifacts peel", func(c *githubTestsChunkCursor) {
 			c.Phase = githubTestsArtifactsPhase
@@ -860,6 +863,7 @@ func TestChunkCursorWorstCaseOfEachPhaseKeepsTheMargin(t *testing.T) {
 			c.SaturatedRuns, c.SaturatedArtifacts = true, true
 			c.ActiveCutKeys, c.CarriedCutKeys = githubTestsWidestCutKeys(t), githubTestsWidestCutKeys(t)
 			c.AnchorID = githubTestsWidestAnchorID
+			c.ReseekPages, c.RecordCredit, c.LateRecords = githubTestsWidestReseekPages, githubTestsWidestRecordCredit, githubTestsMaxWalkRecords
 		}},
 		{"open phase", func(c *githubTestsChunkCursor) {
 			c.Phase = githubTestsOpenPhase

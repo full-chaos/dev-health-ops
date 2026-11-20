@@ -251,6 +251,14 @@ type githubTestsChunkCursor struct {
 	// checks that the run before its stored index is still this run (githubTestsResumeStart): a run deleted before it moves
 	// it, and the listing is then sought again by created time (githubTestsReseek) instead of resumed by position.
 	AnchorID string `json:"ra,omitempty"`
+	// ReseekPages is the count of free pages of a re-seek search (githubTestsReseek): the pages its moved search had entered, at
+	// least one, so the re-seek reads again what they charged without charging it twice (CHAOS-14385). A page of the active
+	// range is free while its index is below it. It is zero outside a re-seek range: every range end clears it.
+	ReseekPages int `json:"rp,omitempty"`
+	// RecordCredit is the records of the runs a re-seek range read in its boundary second (its RangeHi): they are, for the most
+	// part, runs read again, and the record bounds do not charge them. It stays for the whole walk. A credit earned in the deep
+	// range is also taken off LateRecords, so the window records less this credit leave the deep range out as before.
+	RecordCredit int `json:"rc,omitempty"`
 }
 
 // markGitHubTestsSkippedArtifactCauseOverflow returns a NEW map with cause
@@ -496,19 +504,33 @@ func emitCursorPair(
 	return emit(ChunkRouteEmission{Batch: batch, CursorBefore: raw, CursorAfter: raw, Final: true})
 }
 
-// githubTestsListingAllowance is the visitor allowance of one runs-phase range
-// (the runs range and its deep range) under a cumulative page budget. A page is
-// charged when a walk enters it; a resume inside a page re-fetches a page
-// already charged, so that fetch is free, and a checkpointed page always
-// finishes, even when the budget is spent.
-func githubTestsListingAllowance(budget, spent int, resumingInsidePage bool) (int, error) {
-	if !resumingInsidePage {
+// githubTestsListingAllowance is the visitor allowance of one listing range
+// under a cumulative page budget. A page is charged when a walk enters it; the
+// free pages (githubTestsFreePages) are fetched on top of the budget, even when
+// it is spent.
+func githubTestsListingAllowance(budget, spent, free int) (int, error) {
+	if free == 0 {
 		return remainingPageBudget(budget, spent)
 	}
 	if budget < 1 {
 		return 0, ErrInvalidConfiguration
 	}
-	return max(0, budget-spent) + 1, nil
+	return max(0, budget-spent) + free, nil
+}
+
+// githubTestsFreePages is the pages a visit of the active range may fetch without charging the page budget: the page a
+// resume inside a page re-fetches (it was charged when the walk entered it), and the re-seek's free pages not entered yet.
+func githubTestsFreePages(cursor githubTestsChunkCursor) int {
+	free := max(0, cursor.ReseekPages-(cursor.RangeItems+nativePerPage-1)/nativePerPage)
+	if cursor.NextURL != "" && cursor.Index > 0 {
+		free++
+	}
+	return free
+}
+
+// githubTestsReseekPageFree reports that the page the active range enters next (at index 0) is a free page of its re-seek.
+func githubTestsReseekPageFree(cursor githubTestsChunkCursor) bool {
+	return cursor.RangeItems/nativePerPage < cursor.ReseekPages
 }
 
 // remainingPageBudget converts a total inventory budget plus the pages already
@@ -1042,11 +1064,6 @@ func githubTestsNeedsPageEnd(cursor githubTestsChunkCursor) bool {
 		(cursor.Phase == githubTestsRunsPhase || cursor.Phase == githubTestsArtifactsPhase)
 }
 
-// githubTestsListingKey names the listing a cursor walks: the runs range, the deep range, the artifacts range or the relist.
-func githubTestsListingKey(cursor githubTestsChunkCursor) string {
-	return cursor.Phase + "/" + strconv.FormatBool(cursor.LateRuns) + "/" + strconv.Itoa(cursor.Relist)
-}
-
 // githubTestsPreviousPageURL is the URL of the page before a GitHub Link page URL: the same URL with its page number one
 // lower. "" when the URL carries no page number above 1 (that page cannot be named; the caller treats the anchor as
 // unchecked).
@@ -1095,7 +1112,14 @@ var errGitHubTestsReseek = errors.New("github tests listing moved under a resume
 // replaces the stored one. Only the carried list stays a skip source, when the range already ended at that second: those
 // runs were read whole by the previous range. With no dated run listed yet the range starts again from its start. The new
 // search has its own count. A moved page never fails the unit (CHAOS-4177: a failure cost one of its five attempts).
+//
+// The new search's first pages re-list what the moved search listed: it gets as many free pages as the moved search entered
+// (ceil(RangeItems / per page), at least one), or the free pages it already had when the moved search was itself a re-seek,
+// whichever is more (CHAOS-14385). Every run the moved search listed sits at or above the same position in the new search
+// (the new search lists a subset, newest first), so a walk at the page budget edge then reads every run an uninterrupted
+// walk of the surviving runs reads.
 func githubTestsReseek(cursor githubTestsChunkCursor) githubTestsChunkCursor {
+	cursor.ReseekPages = max(cursor.ReseekPages, (cursor.RangeItems+nativePerPage-1)/nativePerPage, 1)
 	if second, ok := githubTestsCutSecond(cursor.RangeOldest); ok {
 		if hi, hiOK := githubTestsCutSecond(cursor.RangeHi); !hiOK || hi != second {
 			cursor.CarriedCutKeys = ""
@@ -1127,7 +1151,7 @@ func decodeGitHubTestsChunkCursor(raw string) (githubTestsChunkCursor, error) {
 		cursor.OpenSkipEvent != nil && (cursor.OpenSkipEvent.RunID == "" || cursor.OpenSkipEvent.Reason == "") ||
 		cursor.Index < 0 || cursor.NextURL == "" && cursor.Index != 0 ||
 		cursor.AnchorID != "" && !githubTestsCutRunDigits(cursor.AnchorID, 20) ||
-		cursor.RunPages < 0 || cursor.ArtifactPages < 0 || cursor.Relist < 0 || cursor.Relist > githubTestsRelistStoppedSaturated ||
+		cursor.RunPages < 0 || cursor.ArtifactPages < 0 || cursor.ReseekPages < 0 || cursor.RecordCredit < 0 || cursor.Relist < 0 || cursor.Relist > githubTestsRelistStoppedSaturated ||
 		// The counter pair is either both known or both unknown, never split:
 		// a cursor carrying exactly one is corrupt, not a legacy shape (a
 		// legacy cursor predates the field entirely, so it is missing BOTH).
@@ -1570,29 +1594,22 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 	cursor.Requests = invocationBaseRequests + requests
 	policyCache := map[string]githubTestsPolicy{}
 	// Resume state of this invocation (CHAOS-14316). firstPage: only the invocation's first page resumes from the cursor.
-	// reseekFree: the first page of a re-seek search re-reads runs already charged, so it is free like a re-entry.
-	// walkCredit/windowCredit: the records of runs created in the re-seek's second (creditSecond), read by the listing that
-	// re-sought (creditListing), are not charged to the walk record bound: they are, for the most part, runs read again.
-	// Another listing earns no credit (its report rows of that second are first reads); credit already earned stays.
-	firstPage, reseekFree := true, false
-	walkCredit, windowCredit, creditSecond, creditListing := 0, 0, int64(-1), ""
-	walkBoundHit := func() bool { return githubTestsWalkRecords(cursor)-walkCredit >= maxWalkRecords }
-	windowBoundHit := func() bool { return githubTestsWindowRecords(cursor)-windowCredit >= maxWalkRecords }
-	reseek := func(c githubTestsChunkCursor) githubTestsChunkCursor {
-		c = githubTestsReseek(c)
-		reseekFree, creditSecond, creditListing = true, -1, githubTestsListingKey(c)
-		if second, ok := githubTestsCutSecond(c.RangeHi); ok && c.NextURL == "" {
-			creditSecond = second
-		}
-		return c
-	}
+	// The re-seek's free pages and its record credit ride the cursor (ReseekPages, RecordCredit; CHAOS-14385).
+	firstPage := true
+	walkBoundHit := func() bool { return githubTestsWalkRecords(cursor)-cursor.RecordCredit >= maxWalkRecords }
+	windowBoundHit := func() bool { return githubTestsWindowRecords(cursor)-cursor.RecordCredit >= maxWalkRecords }
+	reseek := githubTestsReseek
+	// creditRecords: the records of a run created in the boundary second of a re-seek range, read by the listing that
+	// re-sought, are not charged to the record bounds. Another listing earns no credit (its report rows of that second are
+	// first reads; a range end clears ReseekPages); credit already earned stays.
 	creditRecords := func(second int64, records int, deep bool) {
-		if creditSecond < 0 || second != creditSecond || records <= 0 || githubTestsListingKey(cursor) != creditListing {
+		boundary, ok := githubTestsCutSecond(cursor.RangeHi)
+		if cursor.ReseekPages == 0 || !ok || second != boundary || records <= 0 {
 			return
 		}
-		walkCredit += records
-		if !deep {
-			windowCredit += records
+		cursor.RecordCredit += records
+		if deep {
+			cursor.LateRecords -= records
 		}
 	}
 	// resumePageEnd re-reads the page before the one a page-end cursor names, for its last run (githubTestsResumeStart).
@@ -1620,7 +1637,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 	}
 	// movedAtSpentBudget checks the anchor of a page-end resume whose page allowance is already spent, before the budget
 	// stop is recorded: the next page would not be fetched, so its visitor never checks the page before it. A moved
-	// listing is sought again (its first page is free); an unmoved one stops at the budget as before. Only the
+	// listing is sought again (its first pages are free); an unmoved one stops at the budget as before. Only the
 	// invocation's first listing call can carry a resume cursor.
 	movedAtSpentBudget := func(phase string) (bool, error) {
 		if !firstPage || !githubTestsNeedsPageEnd(cursor) {
@@ -1666,7 +1683,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 	// runs range of the claim that holds a UTC midnight goes on to the deep
 	// range, every other one to the artifacts phase.
 	nextRunsListing := func(c githubTestsChunkCursor) githubTestsChunkCursor {
-		c.RangeHi, c.RangeItems, c.RangeOldest, c.RangeOldestItems, c.AnchorID = "", 0, "", 0, ""
+		c.RangeHi, c.RangeItems, c.RangeOldest, c.RangeOldestItems, c.AnchorID, c.ReseekPages = "", 0, "", 0, "", 0
 		c = githubTestsClearCutKeys(c)
 		if !c.LateRuns && githubTestsHoldsMidnight(claim) {
 			c.LateRuns = true
@@ -1686,7 +1703,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		if saturated && !stuck && c.RangeOldestItems >= githubTestsSearchResultCap {
 			stuck, hi = true, nextHi
 		}
-		c.RangeItems, c.RangeOldest, c.RangeOldestItems, c.AnchorID = 0, "", 0, ""
+		c.RangeItems, c.RangeOldest, c.RangeOldestItems, c.AnchorID, c.ReseekPages = 0, "", 0, "", 0
 		switch {
 		case !saturated:
 			c = nextRunsListing(c)
@@ -1705,7 +1722,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 	endArtifactsRange := func(c githubTestsChunkCursor) githubTestsChunkCursor {
 		nextHi, saturated, stuck := githubTestsArtifactInterval(claim, c.Relist == githubTestsRelistWalking, lateLookback).peel(c.RangeItems, c.RangeOldest, c.RangeHi)
 		items, hi := c.RangeItems, c.RangeHi
-		c.RangeItems, c.RangeOldest, c.AnchorID = 0, "", ""
+		c.RangeItems, c.RangeOldest, c.AnchorID, c.ReseekPages = 0, "", "", 0
 		switch {
 		case !saturated:
 			c.RangeHi = ""
@@ -1849,14 +1866,13 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		if action != githubTestsResumeAt {
 			return errGitHubTestsReseek
 		}
-		if !(cursor.NextURL == page.CursorBefore && cursor.Index > 0) && !reseekFree {
+		if !(cursor.NextURL == page.CursorBefore && cursor.Index > 0) && !githubTestsReseekPageFree(cursor) {
 			if cursor.LateRuns {
 				cursor.LateRunPages++
 			} else {
 				cursor.RunPages++
 			}
 		}
-		reseekFree = false
 		for index := start; index < len(page.Items); index++ {
 			if walkBoundHit() {
 				return errGitHubTestsWalkBound
@@ -1963,7 +1979,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		if cursor.LateRuns {
 			// The deep range: its own budget; a stop records the advancing
 			// late_rerun_runs pair and the phase goes on.
-			allowance, budgetErr := githubTestsListingAllowance(lateMaxPages, cursor.LateRunPages, cursor.NextURL != "" && cursor.Index > 0 || reseekFree)
+			allowance, budgetErr := githubTestsListingAllowance(lateMaxPages, cursor.LateRunPages, githubTestsFreePages(cursor))
 			exhausted := errors.Is(budgetErr, ErrPaginationCapExceeded)
 			if budgetErr != nil && !exhausted {
 				return budgetErr
@@ -2005,7 +2021,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		}
 		query := githubTestsRunsQuery(claim, lookback, cursor.RangeHi)
 		allowance, budgetErr := githubTestsListingAllowance(
-			(maxRuns+nativePerPage-1)/nativePerPage, cursor.RunPages, cursor.NextURL != "" && cursor.Index > 0 || reseekFree)
+			(maxRuns+nativePerPage-1)/nativePerPage, cursor.RunPages, githubTestsFreePages(cursor))
 		if errors.Is(budgetErr, ErrPaginationCapExceeded) {
 			moved, movedErr := movedAtSpentBudget(githubTestsRunsPhase)
 			if movedErr != nil {
@@ -2050,7 +2066,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		cursor.Phase = githubTestsArtifactsPhase
 		cursor.NextURL, cursor.Index, cursor.LateRuns, cursor.AnchorID = "", 0, false, ""
 		// A runs phase stopped inside a peeled or re-sought range must not hand its range end to the artifacts listing.
-		cursor.RangeHi, cursor.RangeItems, cursor.RangeOldest, cursor.RangeOldestItems = "", 0, "", 0
+		cursor.RangeHi, cursor.RangeItems, cursor.RangeOldest, cursor.RangeOldestItems, cursor.ReseekPages = "", 0, "", 0, 0
 		cursor = githubTestsClearCutKeys(cursor)
 	}
 	handlerOpenRan := false
@@ -2248,10 +2264,9 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 			start, action := githubTestsResumeStart(cursor, page, firstPage, pageEnd, client, claim, githubTestsArtifactsPhase)
 			firstPage = false
 			// The page left for a re-seek is not charged; a positional re-walk walks it, so it is (as before).
-			if !(cursor.NextURL == page.CursorBefore && cursor.Index > 0) && !reseekFree && action != githubTestsResumeReseek {
+			if !(cursor.NextURL == page.CursorBefore && cursor.Index > 0) && !githubTestsReseekPageFree(cursor) && action != githubTestsResumeReseek {
 				cursor.ArtifactPages++
 			}
-			reseekFree = false
 			if action != githubTestsResumeAt {
 				// A re-seek (githubTestsReseek) reads again the runs of the anchor's created second, and a positional
 				// re-walk the whole page, which re-downloads and re-counts their artifacts -- including ones an earlier attempt already reflected in these counters.
@@ -2854,10 +2869,10 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		}
 		// A resume inside a page (a finished page included: its cursor keeps the page to check the anchor) re-reads a
 		// charged page, so that read is free, as in the runs phase.
-		allowance, budgetErr := githubTestsListingAllowance((maxRuns+nativePerPage-1)/nativePerPage, cursor.ArtifactPages, cursor.NextURL != "" && cursor.Index > 0 || reseekFree)
+		allowance, budgetErr := githubTestsListingAllowance((maxRuns+nativePerPage-1)/nativePerPage, cursor.ArtifactPages, githubTestsFreePages(cursor))
 		if cursor.Relist == githubTestsRelistWalking {
 			// The deep range: its own budget, under the shared listing allowance (charged on entering a page).
-			allowance, budgetErr = githubTestsListingAllowance(lateMaxPages, cursor.ArtifactPages, cursor.NextURL != "" && cursor.Index > 0 || reseekFree)
+			allowance, budgetErr = githubTestsListingAllowance(lateMaxPages, cursor.ArtifactPages, githubTestsFreePages(cursor))
 		}
 		if errors.Is(budgetErr, ErrPaginationCapExceeded) {
 			moved, movedErr := movedAtSpentBudget(githubTestsArtifactsPhase)
@@ -2912,7 +2927,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		cursor.Phase = githubTestsPhaseAfterArtifacts(handler)
 	}
 	cursor = githubTestsClearCutKeys(cursor)
-	cursor.AnchorID = ""
+	cursor.AnchorID, cursor.ReseekPages = "", 0
 	if cursor.Phase == githubTestsOpenPhase {
 		handlerOpenRan = true
 		if err := collectOpenRuns(); err != nil {

@@ -287,8 +287,9 @@ func TestGitHubTestsRunsCutListCapIsPerPhase(t *testing.T) {
 		{githubTestsRunsPhase, githubTestsWidestRunsCutKeys(t), true},
 		// A runs list decodes up to githubTestsMaxRunsCutKeysReadBytes (896): a cursor of the 896-byte writer resumes
 		// (acp r1 ruling P1-1, CHAOS-14316); past it the list is corrupt.
-		{githubTestsRunsPhase, githubTestsWidestRunsCutKeys(t) + "," + strings.Repeat("6", githubTestsMaxRunsCutKeysReadBytes-githubTestsMaxRunsCutKeysBytes-1), true},
-		{githubTestsRunsPhase, githubTestsWidestRunsCutKeys(t) + "," + strings.Repeat("6", githubTestsMaxRunsCutKeysReadBytes-githubTestsMaxRunsCutKeysBytes), false},
+		// Two more keys fill it: a 20-digit key and the rest.
+		{githubTestsRunsPhase, githubTestsWidestRunsCutKeys(t) + "," + strings.Repeat("6", 20) + "," + strings.Repeat("5", githubTestsMaxRunsCutKeysReadBytes-githubTestsMaxRunsCutKeysBytes-22), true},
+		{githubTestsRunsPhase, githubTestsWidestRunsCutKeys(t) + "," + strings.Repeat("6", 20) + "," + strings.Repeat("5", githubTestsMaxRunsCutKeysReadBytes-githubTestsMaxRunsCutKeysBytes-21), false},
 		{githubTestsArtifactsPhase, githubTestsWidestCutKeys(t), true},
 		{githubTestsArtifactsPhase, githubTestsWidestCutKeys(t) + "9", false},
 	} {

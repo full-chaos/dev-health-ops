@@ -899,7 +899,7 @@ jobs:
           GOWORK: off
         run: |
           mkdir -p coverage
-          go run ./tools/lcovmerge -strip "$(go list -m)/" -o coverage/go-quality.info cover-parts
+          go run -trimpath ./tools/lcovmerge -strip "$(go list -m)/" -o coverage/go-quality.info cover-parts
           echo "$(grep -c '^SF:' coverage/go-quality.info) file record(s)"
 
       - name: Upload the merged go-quality lcov report

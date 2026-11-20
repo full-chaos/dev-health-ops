@@ -410,11 +410,11 @@ func TestTheUnweightedGuardReadsSummaryLinesThatCarryACoverageField(t *testing.T
 	withCover := func(log string) string {
 		return regexp.MustCompile(`(?m)^(ok  \t[^\t]+\t[^\t\n]+)$`).ReplaceAllString(log, "$1\tcoverage: 12.3% of statements")
 	}
-	if errs, err := unweightedGuard(t, nil, guardShard, withCover(coverLog(t, guardShard, shardCount, nil))); err != nil {
-		t.Errorf("fast packages with a coverage field: the guard failed: %v\n%s", err, errs)
-	}
 	errs, err := unweightedGuard(t, nil, guardShard, withCover(coverLog(t, guardShard, shardCount, map[string]string{pkg: "45.000s"})))
 	if err == nil || !strings.Contains(errs, "unweighted-slow-package: "+pkg+" took 45s") || !strings.Contains(errs, "\n"+key+"\t45\n") {
 		t.Errorf("a 45 s package with a coverage field must still fail with its row: err=%v\n%s", err, errs)
+	}
+	if n := strings.Count(errs, "unweighted-slow-package:"); n != 1 {
+		t.Errorf("only the slow package may be named (the fast ones carry a coverage field too), got %d:\n%s", n, errs)
 	}
 }

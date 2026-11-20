@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"unicode"
 )
 
 // The census scope: the non-test .go files of internal/deploy/** and
@@ -21,11 +22,13 @@ import (
 // changes a run; (2) os/exec only in run/run.go and no other process start
 // (os.StartProcess, syscall.Exec, ForkExec, StartProcess); (3) no string
 // literal whose whole text is a shell name (sh, bash, dash, zsh, ksh, ash,
-// busybox, or a path ending in one), and none that holds `<shell> -c` at the
-// start or after whitespace or "/"; (4) no dot import of os, os/exec or
+// busybox, or a path ending in one), and none that holds a shell name followed
+// by a -c style flag (-c, -lc, -ec): the literal is split on whitespace and on
+// ; & | ( ) { } < > $, backtick, quotes and backslash, so the pair is found after
+// ";", "&&", "|", "$(", "(" or quotes; a quoted lone shell name is refused too; (4) no dot import of os, os/exec or
 // syscall; (5) every exec.Command / exec.CommandContext call names its binary
-// with a string literal (the closed set of run.go). NOT pinned (ticket 14358): a shell name after ";" (and "&&", "|",
-// "&"), after "$(", after "(", or in quotes inside a literal; test files;
+// with a string literal (the closed set of run.go). NOT pinned: a shell name with no -c style flag
+// right after it in a mixed literal (such as "sh run.sh"); test files;
 // reflect/unsafe/linkname/cgo calls; a shell name built from parts at run
 // time. The run-time guard is run.Exec: it starts no tool off its allow list
 // (git, helm, kubectl), whatever a literal holds.
@@ -37,8 +40,27 @@ var (
 	envFuncs   = map[string][]string{"os": {"Getenv", "LookupEnv", "Environ", "ExpandEnv", "Setenv", "Unsetenv", "Clearenv"}, "syscall": {"Getenv", "Environ", "Setenv", "Unsetenv", "Clearenv"}}
 	startFuncs = map[string][]string{"os": {"StartProcess"}, "syscall": {"Exec", "ForkExec", "StartProcess"}}
 	shellName  = regexp.MustCompile(`^(.*/)?(sh|bash|dash|zsh|ksh|ash|busybox)$`)
-	shellDashC = regexp.MustCompile(`(^|[\s/])(sh|bash|dash|zsh|ksh|ash|busybox)\s+-c\b`)
+	shellFlagC = regexp.MustCompile(`^-[a-z]*c[a-z]*$`)
 )
+
+func isShellSep(r rune) bool {
+	return unicode.IsSpace(r) || strings.ContainsRune(";&|(){}<>$`\"'\\", r)
+}
+
+// shellLiteral reports a literal that holds a shell start: a lone shell token
+// (a whole shell name or a quoted one), or a shell token followed by a -c style flag.
+func shellLiteral(v string) bool {
+	toks := strings.FieldsFunc(v, isShellSep)
+	if len(toks) == 1 && shellName.MatchString(toks[0]) {
+		return true
+	}
+	for i := 0; i+1 < len(toks); i++ {
+		if shellName.MatchString(toks[i]) && shellFlagC.MatchString(toks[i+1]) {
+			return true
+		}
+	}
+	return false
+}
 
 type finding struct{ file, rule string }
 
@@ -110,7 +132,7 @@ func censusFile(rel string, src []byte) ([]finding, error) {
 			if err != nil {
 				return true
 			}
-			if shellName.MatchString(v) || shellDashC.MatchString(v) {
+			if shellLiteral(v) {
 				add("shell literal")
 			}
 		}
@@ -179,6 +201,19 @@ func TestTheCensusCatchesEachPlantedForm(t *testing.T) {
 		"bin bash literal":               {"run/x.go", "package x; const b = `/bin/bash`", "shell literal"},
 		"sh -c in a string":              {"helmrev/x.go", `package x; const c = "kubectl x; sh  -c y"`, "shell literal"},
 		"bash -c in a path":              {"helmrev/x.go", `package x; const c = "/usr/bin/bash -c y"`, "shell literal"},
+		"; sh -c":                        {"run/x.go", `package x; const c = "x; sh -c y"`, "shell literal"},
+		";sh -c no space":                {"run/x.go", `package x; const c = "x;sh -c y"`, "shell literal"},
+		"|bash -c no space":              {"run/x.go", `package x; const c = "x|bash -c y"`, "shell literal"},
+		"$(bash -c":                      {"run/x.go", `package x; const c = "echo $(bash -c id)"`, "shell literal"},
+		"(sh -c":                         {"run/x.go", `package x; const c = "(sh -c id)"`, "shell literal"},
+		"quoted bash quoted -c":          {"run/x.go", "package x; const c = `\"bash\" \"-c\" id`", "shell literal"},
+		"&& sh -c":                       {"run/x.go", `package x; const c = "a && sh -c b"`, "shell literal"},
+		"| bash -c":                      {"run/x.go", `package x; const c = "a | bash -c b"`, "shell literal"},
+		"backtick sh -c":                 {"run/x.go", "package x; const c = \"`sh -c id`\"", "shell literal"},
+		"bash -lc":                       {"run/x.go", `package x; const c = "x; bash -lc y"`, "shell literal"},
+		"env sh -c":                      {"run/x.go", `package x; const c = "/usr/bin/env sh -c y"`, "shell literal"},
+		"newline sh -c":                  {"run/x.go", `package x; const c = "x\nsh -c y"`, "shell literal"},
+		"quoted lone bash":               {"run/x.go", `package x; const c = "'bash'"`, "shell literal"},
 		"dot import os":                  {"run/x.go", `package x; import . "os"; var _ = Args`, "dot import os"},
 		"dot import syscall":             {"run/x.go", `package x; import . "syscall"; var _ = Getpid`, "dot import syscall"},
 		"exec.Command(name)":             {execFile, `package x; import "os/exec"; func f(n string) { exec.Command(n) }`, "exec name not a literal"},
@@ -195,7 +230,7 @@ func TestTheCensusCatchesEachPlantedForm(t *testing.T) {
 			}
 		})
 	}
-	clean := `package x; import ("context"; "os"; "os/exec"; "syscall"); var _ = os.Args; var _ = exec.Command("git", "x"); var _ = syscall.Umask; var a = []string{"git", "-C", "bash.d", "shell", "kubectl", "-c"}; func f(c context.Context, a []string) { exec.CommandContext(c, "helm", a...) }`
+	clean := `package x; import ("context"; "os"; "os/exec"; "syscall"); var _ = os.Args; var _ = exec.Command("git", "x"); var _ = syscall.Umask; var a = []string{"git", "-C", "bash.d", "shell", "kubectl", "-c", "run bash docs", "sh run.sh", "x ; git -c maintenance.auto=false", "echo $(date)"}; func f(c context.Context, a []string) { exec.CommandContext(c, "helm", a...) }`
 	if got, err := censusFile(execFile, []byte(clean)); err != nil || len(got) != 0 {
 		t.Fatalf("a clean exec file: %v %v", got, err)
 	}

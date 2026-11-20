@@ -314,8 +314,8 @@ func TestChunkSidecarReclaimPostgresContract(t *testing.T) {
 		}
 		wantLines := []tickLine{
 			{Bytes: 4 * chunkMiB, Throttled: true, RemainingUnits: 1},
-			{Throttled: true, RemainingUnits: 1},
-			{Throttled: true, RemainingUnits: 1},
+			{Throttled: true, RemainingUnits: -1},
+			{Throttled: true, RemainingUnits: -1},
 			{Bytes: 4 * chunkMiB, Throttled: true, RemainingUnits: 1},
 			{Bytes: 2 * chunkMiB, Done: true},
 		}

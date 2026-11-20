@@ -209,8 +209,8 @@ type tickPressure struct {
 
 type tickPressureKey struct{}
 
-func (pressure *tickPressure) observe(stage StageName, elapsed, budget time.Duration) {
-	if !stageIsSlow(elapsed, budget) {
+func (pressure *tickPressure) observe(stage StageName, used, budget time.Duration) {
+	if !stageIsSlow(used, budget) {
 		return
 	}
 	pressure.mu.Lock()
@@ -427,7 +427,13 @@ func (pipeline *MutationPipeline) runStage(
 	elapsed := time.Since(start)
 	pipeline.stages.recordDuration(stage, elapsed)
 	if pressure, ok := ctx.Value(tickPressureKey{}).(*tickPressure); ok {
-		pressure.observe(stage, elapsed, budget)
+		// From the armed deadline, not from start: budget spent before fn
+		// ran (a setup stall on the telemetry mutex) is pressure too.
+		used := budget
+		if deadline, armed := stageCtx.Deadline(); armed {
+			used = budget - time.Until(deadline)
+		}
+		pressure.observe(stage, used, budget)
 	}
 	pipeline.stages.recordAcquireWaits(stage, trace.AcquireWaits())
 
@@ -1091,7 +1097,8 @@ func (pipeline *MutationPipeline) Step(
 	// after chunkReclaimYieldStreakCap yields in a row it runs once at the
 	// floor size.
 	pressured := pressure.pressured()
-	if ctx.Err() == nil && pressured != "" && pipeline.chunkReclaimYieldStreak.Load() < chunkReclaimYieldStreakCap {
+	floorDue := pipeline.chunkReclaimYieldStreak.Load() >= chunkReclaimYieldStreakCap
+	if ctx.Err() == nil && pressured != "" && !floorDue {
 		streak := pipeline.chunkReclaimYieldStreak.Add(1)
 		if pipeline.chunkReclaimActive.Load() {
 			slog.Info("syncreconciler.chunk_sidecar_reclaim", "yielded", true, "stage", string(pressured), "yield_streak", streak)
@@ -1099,7 +1106,7 @@ func (pipeline *MutationPipeline) Step(
 	} else if ctx.Err() == nil {
 		pipeline.chunkReclaimYieldStreak.Store(0)
 		step := pipeline.chunkReclaim.Step
-		if floorStepper, ok := pipeline.chunkReclaim.(chunkSidecarReclaimFloorStepper); ok && pressured != "" {
+		if floorStepper, ok := pipeline.chunkReclaim.(chunkSidecarReclaimFloorStepper); ok && floorDue {
 			step = floorStepper.StepAtFloor
 		}
 		reclaimErr := pipeline.runStage(ctx, StageChunkSidecarReclaim, func(stageCtx context.Context) error {

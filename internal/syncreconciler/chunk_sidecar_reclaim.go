@@ -28,7 +28,7 @@ import (
 // row always goes). The checkpoint row goes last, once no chunk row is left, so
 // its ON DELETE CASCADE never deletes chunk rows.
 //
-// Every tick first takes a cluster-wide advisory lock
+// Every tick the byte limiter admits takes a cluster-wide advisory lock
 // (chunkSidecarReclaimLockKey) for its whole length; a tick that does not get
 // it is skipped and counted, so only one reconciler deletes at a time. The
 // in-process limiter bounds the payload that holder deletes in any 60-second
@@ -318,15 +318,6 @@ func (reclaim *ChunkSidecarReclaim) step(ctx context.Context, now time.Time, lim
 	if err := ctx.Err(); err != nil {
 		return ChunkSidecarReclaimResult{}, err
 	}
-	release, acquired, err := reclaim.tickLock(ctx)
-	if err != nil {
-		return reclaim.report(ChunkSidecarReclaimResult{RemainingUnits: -1}, reclaimError(ctx, err))
-	}
-	if !acquired {
-		reclaim.lockSkipped.Add(1)
-		return ChunkSidecarReclaimResult{RemainingUnits: -1, LockSkipped: true}, nil
-	}
-	defer release()
 	statements := reclaim.config.StatementsPerTick
 	if limit < statements {
 		statements = limit
@@ -334,19 +325,42 @@ func (reclaim *ChunkSidecarReclaim) step(ctx context.Context, now time.Time, lim
 	if floor {
 		statements = 1
 	}
-	result := ChunkSidecarReclaimResult{RemainingUnits: -1}
-	for result.Statements < statements {
+	reserve := func() *chunkReclaimSpend {
 		statementBytes := reclaim.nextStatementBytes()
 		if floor {
 			statementBytes = maxChunkPayloadBytes
 		}
-		reservation := reclaim.limiter.reserve(reclaim.clock(), statementBytes)
+		return reclaim.limiter.reserve(reclaim.clock(), statementBytes)
+	}
+	// Admission comes first (CHAOS-14380): a tick the cap does not admit takes
+	// no lock and runs no backlog count, so a slow server costs it nothing.
+	result := ChunkSidecarReclaimResult{RemainingUnits: -1}
+	reservation := reserve()
+	if reservation == nil {
+		result.Throttled = true
+		return reclaim.report(result, nil)
+	}
+	release, acquired, err := reclaim.tickLock(ctx)
+	if err != nil {
+		reclaim.settleFailed(ctx, reservation, false)
+		return reclaim.report(result, reclaimError(ctx, err))
+	}
+	if !acquired {
+		reclaim.limiter.settle(reservation, 0, reclaim.clock())
+		reclaim.lockSkipped.Add(1)
+		return ChunkSidecarReclaimResult{RemainingUnits: -1, LockSkipped: true}, nil
+	}
+	defer release()
+	for result.Statements < statements {
 		if reservation == nil {
-			result.Throttled = true
-			break
+			if reservation = reserve(); reservation == nil {
+				result.Throttled = true
+				break
+			}
 		}
 		started := time.Now()
 		rows, bytes, units, found, err := reclaim.statement(ctx, reservation)
+		reservation = nil
 		if err != nil {
 			return reclaim.report(result, err)
 		}
@@ -366,6 +380,10 @@ func (reclaim *ChunkSidecarReclaim) step(ctx context.Context, now time.Time, lim
 	}
 	remaining, err := reclaim.remaining(ctx)
 	if err != nil {
+		if ctx.Err() != nil {
+			reclaim.limiter.charge(reclaim.deadlineCutCharge(), reclaim.clock())
+			reclaim.shrinkStatement()
+		}
 		return reclaim.report(result, err)
 	}
 	result.RemainingUnits = remaining
@@ -416,25 +434,16 @@ func (reclaim *ChunkSidecarReclaim) statement(ctx context.Context, reservation *
 			reclaim.limiter.settle(reservation, 0, reclaim.clock())
 		}
 	}()
-	tx, err := reclaim.begin(ctx)
-	if err != nil {
-		reclaim.limiter.settle(reservation, 0, reclaim.clock())
-		return 0, 0, 0, false, reclaimError(ctx, err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
 	failed := func(cause error, unknownOutcome bool) (int64, int64, int, bool, error) {
-		charge := int64(0)
-		if unknownOutcome {
-			charge = reservation.bytes
-		}
-		if ctx.Err() != nil {
-			charge = max(charge, reservation.bytes, reclaim.config.BytesPerMinute/chunkReclaimDeadlineCutsPerWindow)
-			reclaim.shrinkStatement()
-		}
 		committed = true
-		reclaim.limiter.settle(reservation, charge, reclaim.clock())
+		reclaim.settleFailed(ctx, reservation, unknownOutcome)
 		return 0, 0, 0, false, reclaimError(ctx, cause)
 	}
+	tx, err := reclaim.begin(ctx)
+	if err != nil {
+		return failed(err, false)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
 	var orgID, unitID, generation string
 	err = tx.QueryRow(ctx, selectChunkReclaimCandidateSQL).Scan(&orgID, &unitID, &generation)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -462,6 +471,25 @@ func (reclaim *ChunkSidecarReclaim) statement(ctx context.Context, reservation *
 	reclaim.limiter.settle(reservation, bytes, reclaim.clock())
 	reclaim.growStatement()
 	return rows, bytes, units, true, nil
+}
+
+// settleFailed settles a reservation whose work did not commit: released when
+// the outcome is known, kept whole when COMMIT's outcome is unknown, and
+// charged (with the next statement halved) when the stage deadline cut it.
+func (reclaim *ChunkSidecarReclaim) settleFailed(ctx context.Context, reservation *chunkReclaimSpend, unknownOutcome bool) {
+	charge := int64(0)
+	if unknownOutcome {
+		charge = reservation.bytes
+	}
+	if ctx.Err() != nil {
+		charge = max(charge, reservation.bytes, reclaim.deadlineCutCharge())
+		reclaim.shrinkStatement()
+	}
+	reclaim.limiter.settle(reservation, charge, reclaim.clock())
+}
+
+func (reclaim *ChunkSidecarReclaim) deadlineCutCharge() int64 {
+	return reclaim.config.BytesPerMinute / chunkReclaimDeadlineCutsPerWindow
 }
 
 func (reclaim *ChunkSidecarReclaim) nextStatementBytes() int64 {
@@ -552,6 +580,14 @@ func (limiter *chunkReclaimLimiter) reserve(now time.Time, maxBytes int64) *chun
 	spend := &chunkReclaimSpend{at: now, bytes: granted}
 	limiter.spends = append(limiter.spends, spend)
 	return spend
+}
+
+// charge counts bytes no reservation holds: a deadline cut outside a
+// statement (the backlog count).
+func (limiter *chunkReclaimLimiter) charge(bytes int64, at time.Time) {
+	limiter.mu.Lock()
+	defer limiter.mu.Unlock()
+	limiter.spends = append(limiter.spends, &chunkReclaimSpend{at: at, bytes: bytes, settled: true})
 }
 
 func (limiter *chunkReclaimLimiter) settle(spend *chunkReclaimSpend, bytes int64, at time.Time) {

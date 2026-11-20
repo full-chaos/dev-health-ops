@@ -228,8 +228,10 @@ func TestArgMaxTieHomeSignals14355(t *testing.T) {
 		}
 	})
 	t.Run("risk: on a tie the day picker and the served rows take the same version", func(t *testing.T) {
-		for k := 1; k <= 8; k++ {
-			scored := riskVersion("2026-08-03", "repo", "repo-2", fmt.Sprintf("0.%d", k), s0)
+		// 40 scored values: the scored version is the pick of a hash for some of them and not for others, so a day
+		// picker and a served pick that order by different hashes split on at least one pair.
+		for k := 1; k <= 40; k++ {
+			scored := riskVersion("2026-08-03", "repo", "repo-2", fmt.Sprintf("0.%02d", k), s0)
 			unscored := riskVersion("2026-08-03", "repo", "repo-2", "NULL", s0)
 			seed := append(append([]string{}, complete...), riskVersion("2026-08-03", "repo", "repo-1", "0.5", s0))
 			refScored := ref("compounding_risk_daily", readRisk, append(append([]string{}, seed...), scored)...)

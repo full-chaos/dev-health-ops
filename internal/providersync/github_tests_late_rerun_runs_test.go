@@ -357,8 +357,10 @@ func TestLateRerunRunsStopIsOneAdvancingObservation(t *testing.T) {
 	} {
 		runs := append(append([]listingRun{}, cell.runs...), inWindow)
 		walk := walkListing(t, cell.handler, claim, newListingFake(t, runs), 0)
+		// The artifacts phase's deep range lists the same old runs on the same page budget and records its own
+		// late_rerun_reports stop; this cell pins the runs phase's component.
 		want := []GitHubTestsIncomplete{{Component: githubTestsLateRerunRunsComponent, Cause: cell.cause, Count: 1}}
-		if incomplete := lateRerunIncomplete(t, walk); fmt.Sprint(incomplete) != fmt.Sprint(want) {
+		if incomplete := lateRerunIncompleteOf(lateRerunIncomplete(t, walk), githubTestsLateRerunRunsComponent); fmt.Sprint(incomplete) != fmt.Sprint(want) {
 			t.Errorf("%s: incomplete=%v, want %v", cell.name, incomplete, want)
 		}
 		if walk.final.Result[GitHubTestsResultKeyReportsComplete] != false {
@@ -423,7 +425,7 @@ func TestLateRerunRunsOracleMatchesTheChunkedRoute(t *testing.T) {
 	}
 	_, incomplete = collect(GitHubTestsRouteHandler{LateRerunMaxPages: 1}, lateRerunRuns(1, 150, claim.SinceAt.UTC()))
 	want := []GitHubTestsIncomplete{{Component: githubTestsLateRerunRunsComponent, Cause: githubTestsPageBudgetCause, Count: 1}}
-	if fmt.Sprint(incomplete) != fmt.Sprint(want) {
+	if incomplete = lateRerunIncompleteOf(incomplete, githubTestsLateRerunRunsComponent); fmt.Sprint(incomplete) != fmt.Sprint(want) {
 		t.Fatalf("oracle over its deep budget: incomplete=%v, want %v", incomplete, want)
 	}
 }
@@ -458,14 +460,15 @@ func TestLateRerunRunsPageBudgetBounds(t *testing.T) {
 	}
 }
 
-// lateRerunBudgetAPI serves the deep range of a midnight claim from count runs, one every step from oldest (100 a page,
-// GitHub's 1,000-result cap per created search, stable unique seconds). Only the oldest run (id 1) changed late: attempt 2.
-// Every other listing goes to the listing fake.
+// lateRerunBudgetAPI serves the deep range of a midnight claim from count runs, one every step from oldest (perPage a
+// page, 100 when zero; GitHub's 1,000-result cap per created search, stable unique seconds). Only the oldest run (id 1)
+// changed late: attempt 2. Every other listing goes to the listing fake.
 type lateRerunBudgetAPI struct {
 	*listingFake
-	oldest time.Time
-	count  int
-	step   time.Duration
+	oldest  time.Time
+	count   int
+	step    time.Duration
+	perPage int
 }
 
 func (api *lateRerunBudgetAPI) Do(request *http.Request) (*http.Response, error) {
@@ -485,7 +488,11 @@ func (api *lateRerunBudgetAPI) Do(request *http.Request) (*http.Response, error)
 	newest := min(api.count, int(last.Sub(api.oldest)/api.step)+1)
 	total := min(githubTestsSearchResultCap, newest)
 	page := max(1, func() int { value, _ := strconv.Atoi(query.Get("page")); return value }())
-	from, to := min((page-1)*100, total), min(page*100, total)
+	perPage := api.perPage
+	if perPage == 0 {
+		perPage = 100
+	}
+	from, to := min((page-1)*perPage, total), min(page*perPage, total)
 	header := http.Header{"Content-Type": {"application/json"}}
 	if to < total {
 		next := *request.URL
@@ -555,27 +562,30 @@ func lateRerunYieldWalk(t *testing.T, handler GitHubTestsRouteHandler, claim Cla
 
 // A page is charged when the walk enters it; a resume inside a page re-fetches it for free, and a checkpointed page
 // always finishes. A deep range with exactly its budget of pages, resumed inside a page, writes the late re-run and
-// records no observation; so does the production shape: 99,900 runs, the 1,000-page default and the default chunk size.
+// records no observation; so does the production shape: the 1,000-page default and the default chunk size. Its pages
+// hold 3 runs (2,993 runs: three peeled ranges, exactly 1,000 pages, 2 runs on the last), so a resume lands inside a
+// page at most chunk ends, and the walk ends at the budget: each page a resume charged again would lose the re-run.
 func TestLateRerunRunsResumeInsideAPageCostsNoPage(t *testing.T) {
 	claim := lateRerunMidnightClaim("incremental")
 	for _, cell := range []struct {
 		name            string
 		budget, count   int
+		perPage         int
 		resumeAt        int
 		periodic, heavy bool
 	}{
-		{"fresh at the limit", 2, 150, 0, false, false},
-		{"resume inside the next-to-last page", 2, 150, 64, false, false},
-		{"resume inside the last page", 2, 180, 128, false, false},
-		{"resume at a page boundary", 2, 150, 100, false, false},
-		{"99,900 runs, default budget and chunk size", 0, 99900, DefaultChunkPolicy().MaxChunksPerAttempt, true, true},
-		{"99,900 runs, resume inside page 1,000", 0, 99900, 99964, false, true},
+		{"fresh at the limit", 2, 150, 0, 0, false, false},
+		{"resume inside the next-to-last page", 2, 150, 0, 64, false, false},
+		{"resume inside the last page", 2, 180, 0, 128, false, false},
+		{"resume at a page boundary", 2, 150, 0, 100, false, false},
+		{"1,000 pages, default budget and chunk size", 0, 2993, 3, DefaultChunkPolicy().MaxChunksPerAttempt, true, true},
+		{"1,000 pages, resume inside page 1,000", 0, 2993, 3, 2994, false, true},
 	} {
 		oldest, step := claim.SinceAt.Add(-72*time.Hour), time.Second
 		if cell.heavy {
 			oldest, step = claim.SinceAt.Add(-7*24*time.Hour), 4*time.Second
 		}
-		api := &lateRerunBudgetAPI{listingFake: newListingFake(t, nil), oldest: oldest, count: cell.count, step: step}
+		api := &lateRerunBudgetAPI{listingFake: newListingFake(t, nil), oldest: oldest, count: cell.count, step: step, perPage: cell.perPage}
 		walk := lateRerunYieldWalk(t, GitHubTestsRouteHandler{LateRerunMaxPages: cell.budget}, claim, api, func(chunk int, after githubTestsChunkCursor) bool {
 			return after.LateRuns && cell.resumeAt > 0 && (chunk == cell.resumeAt || cell.periodic && chunk%cell.resumeAt == 0)
 		})
@@ -583,6 +593,9 @@ func TestLateRerunRunsResumeInsideAPageCostsNoPage(t *testing.T) {
 		if len(walk.pipelines) != 1 || walk.pipelines[0].RetryCount != 1 || len(incomplete) != 0 || walk.final.Watermark == nil {
 			t.Errorf("%s: rows=%d incomplete=%v watermark=%v deep pages=%d, want the late re-run, no observation, the window end",
 				cell.name, len(walk.pipelines), incomplete, walk.final.Watermark, walk.cursor.LateRunPages)
+		}
+		if cell.heavy && (walk.cursor.LateRunPages != githubTestsLateRerunMaxPages || walk.passes < 2) {
+			t.Errorf("%s: deep pages=%d passes=%d, want exactly the 1,000-page budget over more than one invocation", cell.name, walk.cursor.LateRunPages, walk.passes)
 		}
 	}
 }
@@ -867,4 +880,15 @@ func TestLateRerunRunsDeepRangeSkipsARunOfTheRunsRange(t *testing.T) {
 			t.Errorf("%s: rows=%d jobs reads=%d, want 1 and 1", route, rows[route]["31"], reads[route]["31"])
 		}
 	}
+}
+
+// lateRerunIncompleteOf keeps the observations of one component.
+func lateRerunIncompleteOf(incomplete []GitHubTestsIncomplete, component string) []GitHubTestsIncomplete {
+	var out []GitHubTestsIncomplete
+	for _, observation := range incomplete {
+		if observation.Component == component {
+			out = append(out, observation)
+		}
+	}
+	return out
 }

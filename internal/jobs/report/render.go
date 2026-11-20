@@ -91,7 +91,7 @@ func buildNarratives(plan Plan, charts []ChartResult) []narrative {
 		}
 		title := sectionTitles[section]
 		if title == "" {
-			title = titleCase(section)
+			title = section
 		}
 		result = append(result, narrative{sectionType: section, title: title, body: body, supportingMetrics: metrics})
 	}
@@ -127,7 +127,7 @@ func metricTitle(chart ChartResult) string {
 	if definition, ok := supportedMetrics[chart.Spec.Metric]; ok {
 		return markdownLineStart(markdownText(definition.DisplayName))
 	}
-	return markdownLineStart(markdownText(titleCase(chart.Spec.Metric)))
+	return markdownLineStart(markdownText(chart.Spec.Metric))
 }
 
 func formatValue(value float64, unit string) string {
@@ -203,7 +203,7 @@ func renderMarkdown(plan Plan, charts []ChartResult, narratives []narrative, pro
 		}
 	}
 	lines := []string{
-		"# " + markdownText(titleCase(plan.ReportType)) + " Report — " + window,
+		"# " + markdownText(reportTypeTitle(plan.ReportType)) + " Report — " + window,
 		"",
 		"## Summary",
 		summary,
@@ -381,6 +381,13 @@ func formatScope(plan Plan) string {
 		return "global"
 	}
 	return strings.Join(parts, " | ")
+}
+
+func reportTypeTitle(value string) string {
+	if _, ok := builtinReportTypes[value]; ok {
+		return titleCase(value)
+	}
+	return value
 }
 
 func titleCase(value string) string {

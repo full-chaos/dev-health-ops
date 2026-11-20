@@ -33,7 +33,8 @@ const (
 // starts at the UTC date of (window start - max(24 h, window)) whatever the
 // window (githubTestsArtifactRunsCreatedFrom), so a smaller window cannot bring
 // it under its budget, and narrowing for it would only stop new runs from being
-// listed. A per-run cap does not hold the watermark, and a listing that stopped
+// listed. The late re-run re-list has its own budget and advances the
+// watermark when it stops, so it never blocks a unit either. A per-run cap does not hold the watermark, and a listing that stopped
 // inside one second (listing_saturated) is not cured by a smaller window.
 const TestOpsBudgetBlockedUnitsSQL = `
 SELECT s.id::text, recent.budget_blocked, recent.updated_at

@@ -112,7 +112,7 @@ func TestGitHubTestsGuardSkipCountAfterSampleOverflowNeverUnderCounts(t *testing
 			if checkpoint.SkippedArtifactsOverflow < 1 || len(checkpoint.SkippedArtifacts) != githubTestsMaxSkippedArtifactRecords {
 				t.Fatalf("overflow=%d sample=%d, want the sample full and a marker dropped", checkpoint.SkippedArtifactsOverflow, len(checkpoint.SkippedArtifacts))
 			}
-			checkpoint.Phase, checkpoint.Index, checkpoint.NextURL = "artifacts", 0, ""
+			checkpoint.Phase, checkpoint.Index, checkpoint.NextURL, checkpoint.Relist = "artifacts", 0, "", 0
 			encoded, encodeErr := encodeGitHubTestsChunkCursor(checkpoint)
 			if encodeErr != nil {
 				t.Fatal(encodeErr)

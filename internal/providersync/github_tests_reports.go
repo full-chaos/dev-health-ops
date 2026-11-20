@@ -1408,7 +1408,7 @@ func parseCoberturaRow(body []byte, reportPath, artifactID, repoID, runID, orgID
 		for _, file := range files {
 			value += file.linesCovered
 		}
-		linesCovered = nilIfZero(value)
+		linesCovered = presentIf(linesTotal != nil, value)
 	}
 	if branchesTotal == nil {
 		var value int64
@@ -1781,7 +1781,11 @@ func parseLCOVRow(body []byte, reportPath, artifactID, repoID, runID, orgID stri
 	var aggregateFunctionsTotal, aggregateFunctionsCovered int64
 	serviceCounts := map[string]int{}
 	serviceOrder := make([]string, 0)
+	hasLineData := false
 	for _, file := range files {
+		if file.linesTotal != nil || file.linesCovered != nil || len(file.lineNumbers) > 0 {
+			hasLineData = true
+		}
 		aggregateLinesTotal += int64(len(file.lineNumbers))
 		if file.linesTotal != nil {
 			aggregateLinesTotal += *file.linesTotal - int64(len(file.lineNumbers))
@@ -1816,7 +1820,7 @@ func parseLCOVRow(body []byte, reportPath, artifactID, repoID, runID, orgID stri
 	format := "lcov"
 	row := coverageSnapshotRow{
 		RepoID: repoID, RunID: runID, SnapshotID: githubTestsSnapshotID(runID, artifactID, format, reportPath),
-		ReportFormat: &format, LinesTotal: nilIfZero(aggregateLinesTotal), LinesCovered: nilIfZero(aggregateLinesCovered),
+		ReportFormat: &format, LinesTotal: presentIf(hasLineData, aggregateLinesTotal), LinesCovered: presentIf(hasLineData, aggregateLinesCovered),
 		BranchesTotal: nilIfZero(aggregateBranchesTotal), BranchesCovered: nilIfZero(aggregateBranchesCovered),
 		FunctionsTotal: nilIfZero(aggregateFunctionsTotal), FunctionsCovered: nilIfZero(aggregateFunctionsCovered),
 		ServiceID: serviceID, OrgID: orgID, LastSynced: normalizedAt,
@@ -2001,6 +2005,14 @@ func looksQuarantined(values ...string) bool {
 
 func nilIfZero(value int64) *int64 {
 	if value == 0 {
+		return nil
+	}
+	return &value
+}
+
+// presentIf stores a count that the report really holds, zero included; no line data at all is missing, never 0.
+func presentIf(present bool, value int64) *int64 {
+	if !present {
 		return nil
 	}
 	return &value

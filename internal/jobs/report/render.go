@@ -215,7 +215,7 @@ func renderMarkdown(plan Plan, charts []ChartResult, narratives []narrative, pro
 			continue
 		}
 		title := section.title
-		if strings.EqualFold(title, otherChartsTitle) {
+		if strings.EqualFold(strings.TrimSpace(title), otherChartsTitle) {
 			title = otherChartsTitle + " (plan section)"
 		}
 		lines = append(lines, "## "+markdownText(title), section.body, "", "### Insights",

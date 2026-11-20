@@ -254,3 +254,19 @@ func TestRenderTitleCasedFieldsShowTitleCaseOfTheValue(t *testing.T) {
 		}
 	}
 }
+
+// The collision check reads the title as a reader does: edge space is dropped, case is ignored, a "#" suffix is text.
+func TestOtherChartsCollisionIgnoresEdgeSpace(t *testing.T) {
+	plan := Plan{PlanID: "plan-1", ReportType: "weekly_health", CreatedAt: time.Date(2026, 1, 8, 0, 0, 0, 0, time.UTC)}
+	chart := ChartResult{Spec: ChartSpec{ChartID: "c1", Metric: "failure_rate", GroupBy: "team"}, Title: "Failure rate", Unit: "ratio",
+		DataPoints: []DataPoint{{X: "2026-01-01", Y: 0.5}}}
+	for title, renamed := range map[string]bool{" Other Charts\t": true, "other charts ": true, "Other Charts#": false} {
+		markdown := renderMarkdown(plan, []ChartResult{chart}, []narrative{{sectionType: "x", title: title}}, nil)
+		if got := strings.Contains(markdown, "## Other Charts (plan section)\n"); got != renamed {
+			t.Errorf("title %q renamed = %v, want %v:\n%s", title, got, renamed, markdown)
+		}
+		if n := strings.Count(markdown, "\n## Other Charts\n"); n != 1 {
+			t.Errorf("title %q: %d plain Other Charts headings, want 1 (the fallback):\n%s", title, n, markdown)
+		}
+	}
+}

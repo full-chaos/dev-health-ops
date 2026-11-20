@@ -259,16 +259,28 @@ func (loader *RecommendationsLoader) loadReviewSignals(
 	}
 	arguments := loader.windowArguments(teamID, windowStart, windowEnd)
 	arguments["repo_ids"] = ownedRepoIDs
+	// One version per repository and day, picked whole; a picked retraction row
+	// leaves its day out (it is not a measured 0 h). Each repository's value is
+	// then its newest live day by (computed_at, day).
 	latencyQuery := `
             SELECT avg(p75) AS avg_p75
             FROM (
-                SELECT repo_id,
-                       argMax(repo_metrics_daily.pr_cycle_p75_hours,
-                              (repo_metrics_daily.computed_at, repo_metrics_daily.day, ` + repoMetricsServedHash + `,
-                               cityHash64(tuple(repo_metrics_daily.pr_cycle_p75_hours)))) AS p75
-                FROM repo_metrics_daily
-                WHERE repo_id IN {repo_ids:Array(UUID)}
-                  AND day >= {start:Date} AND day < {end:Date}` + loader.orgClause() + `
+                SELECT repo_id, argMax(day_p75, (picked_at, day)) AS p75
+                FROM (
+                    SELECT repo_id, day,
+                           argMax(tuple(repo_metrics_daily.pr_cycle_p75_hours, repo_metrics_daily.retracted,
+                                        repo_metrics_daily.computed_at),
+                                  (repo_metrics_daily.computed_at, ` + repoMetricsServedHash + `,
+                                   cityHash64(tuple(repo_metrics_daily.pr_cycle_p75_hours)))) AS picked,
+                           picked.1 AS day_p75,
+                           picked.2 AS retracted,
+                           picked.3 AS picked_at
+                    FROM repo_metrics_daily
+                    WHERE repo_id IN {repo_ids:Array(UUID)}
+                      AND day >= {start:Date} AND day < {end:Date}` + loader.orgClause() + `
+                    GROUP BY repo_id, day
+                ) AS newest
+                WHERE ` + liverow.Predicate("repo_metrics_daily", "newest") + `
                 GROUP BY repo_id
             )
         `

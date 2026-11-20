@@ -552,3 +552,99 @@ func TestRecommendationsLoaderServedOrdersAreTheServedText(t *testing.T) {
 		}
 	}
 }
+
+// latencyRow is one repo_metrics_daily version for the review latency read.
+func latencyRow(repo string, day time.Time, merged int, p75 float64, retracted int, at time.Time) string {
+	return fmt.Sprintf(`INSERT INTO repo_metrics_daily
+		(repo_id, day, commits_count, prs_merged, pr_cycle_p75_hours, retracted, computed_at, org_id)
+		VALUES ('%s', '%s', 1, %d, %g, %d, '%s', '%s')`, repo, tieDay(day), merged, p75, retracted, tieStamp(at), tieOrg)
+}
+
+func (env *tieEnv) latency(t *testing.T, repos ...string) string {
+	t.Helper()
+	ids := make([]uuid.UUID, 0, len(repos))
+	for _, repo := range repos {
+		ids = append(ids, uuid.MustParse(repo))
+	}
+	c := env.clock
+	latency, known, _, _, err := env.loader(t).loadReviewSignals(env.ctx, tieTeam, ids, c.start, c.end)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !known {
+		return "absent"
+	}
+	return fmt.Sprintf("%gh", latency)
+}
+
+// The review latency reads a repository-day's picked version, and a picked
+// retraction row (retracted = 1) leaves that day out: it is not a measured
+// 0 h. The live-row rule runs on the picked version, never before the pick.
+func TestRecommendationsLoaderLatencyLeavesRetractedDaysOut(t *testing.T) {
+	env := startTieEnv(t)
+	c := env.clock
+	at, newer := c.at, c.at.Add(time.Second)
+	for _, cell := range []struct {
+		name  string
+		rows  []string
+		repos []string
+		want  string
+	}{
+		{"live_zero_is_measured", []string{latencyRow(tieRepo, c.day1, 10, 0, 0, at)}, []string{tieRepo}, "0h"},
+		{"retraction_alone", []string{latencyRow(tieRepo, c.day1, 0, 0, 1, at)}, []string{tieRepo}, "absent"},
+		{"live_then_newer_retraction", []string{latencyRow(tieRepo, c.day1, 10, 40, 0, at), latencyRow(tieRepo, c.day1, 0, 0, 1, newer)}, []string{tieRepo}, "absent"},
+		{"retired_repo_beside_a_live_repo", []string{latencyRow(tieRepo, c.day1, 10, 40, 0, at), latencyRow(tieRepo2, c.day1, 10, 30, 0, at), latencyRow(tieRepo2, c.day1, 0, 0, 1, newer)}, []string{tieRepo, tieRepo2}, "40h"},
+		{"live_day_and_retracted_day_one_computed_at", []string{latencyRow(tieRepo, c.day1, 10, 40, 0, at), latencyRow(tieRepo, c.day2, 0, 0, 1, at)}, []string{tieRepo}, "40h"},
+		{"older_retraction_then_newer_live", []string{latencyRow(tieRepo, c.day1, 0, 0, 1, at), latencyRow(tieRepo, c.day1, 10, 40, 0, newer)}, []string{tieRepo}, "40h"},
+	} {
+		t.Run(cell.name, func(t *testing.T) {
+			for order := 0; order < 2; order++ {
+				env.reset(t)
+				rows := append([]string(nil), cell.rows...)
+				if order == 1 {
+					sort.Sort(sort.Reverse(sort.StringSlice(rows)))
+				}
+				for _, row := range rows {
+					env.exec(t, row)
+				}
+				if got := env.latency(t, cell.repos...); got != cell.want {
+					t.Errorf("order %d: latency = %s, want %s", order, got, cell.want)
+				}
+			}
+		})
+	}
+	// One key, a live version and a retraction at one computed_at: the latency
+	// is the served pick's (absent when the served order picks the retraction),
+	// in both insert orders. The pairs vary so that each version wins.
+	t.Run("same_key_tie_follows_the_served_pick", func(t *testing.T) {
+		wins := map[string]int{}
+		for k := 0; k < 12; k++ {
+			live, retraction := latencyRow(tieRepo, c.day1, 10+k, 40, 0, at), latencyRow(tieRepo, c.day1, 0, 0, 1, at)
+			env.reset(t)
+			env.exec(t, live)
+			env.exec(t, retraction)
+			var servedRetracted uint8
+			if err := env.conn.QueryRow(env.ctx, "SELECT argMax(repo_metrics_daily.retracted, "+servedRepoMetricsOrder+
+				") FROM repo_metrics_daily WHERE org_id = '"+tieOrg+"'").Scan(&servedRetracted); err != nil {
+				t.Fatal(err)
+			}
+			want := "40h"
+			if servedRetracted == 1 {
+				want = "absent"
+			}
+			wins[want]++
+			for order, rows := range [][]string{{live, retraction}, {retraction, live}} {
+				env.reset(t)
+				env.exec(t, rows[0])
+				env.exec(t, rows[1])
+				if got := env.latency(t, tieRepo); got != want {
+					t.Errorf("k=%d order %d: latency = %s, want %s (served pick)", k, order, got, want)
+				}
+			}
+		}
+		t.Logf("served pick: %v", wins)
+		if wins["absent"] == 0 || wins["40h"] == 0 {
+			t.Fatalf("fixture: the served order must pick each version at least once: %v", wins)
+		}
+	})
+}

@@ -645,15 +645,45 @@ const nullableIntoPlainSites = `
 //	ExecuteOrgTimeseries 1e3ee3af097b -> 6637e944ff79
 //	ExecuteTimeseries f2eec06b6811 -> 8842c256cd1a
 //
+// CHAOS-14266: ai_opportunities.go re-pinned by hand, digests copied from the local TestScanTypeCensus failure output (not
+// computed), on the merge with CHAOS-14256 (total served order). repetitiveStatement selects two more columns,
+// cluster_author and cluster_work_type: the author and work type coalesce expressions it already grouped by, both String
+// (coalesce with a non-null last argument), scanned into *string. The cluster read's scan targets gain *string,*string;
+// the other sites of the file change digest only:
+//
+//	loadClusters (repetitive) 0dcb9c7aceb8 -> 4ae1cede92ca, scan +*string,*string
+//	loadClusters (title toil) 0dcb9c7aceb8 -> 4ae1cede92ca
+//	loadDocDrift f049a4598b46 -> ee855478db42
+//	loadFlaky be2a35ea7bc8 -> 74566417b303
+//
+// CHAOS-14266 anchor (acp ruling: no author in the id input): repetitiveStatement selects one more column,
+// cluster_anchor = argMin(pr.number, (pr.created_at, pr.number)), UInt32 (the number column, not Nullable), scanned into
+// *uint32; cluster_author stays selected (a GROUP BY key and a sort value) and is scanned but never read. Re-pinned by
+// hand, digests copied from the local TestScanTypeCensus failure output (not computed):
+//
+//	loadClusters (repetitive) 4ae1cede92ca -> b1659de79ad1, scan +*uint32
+//	loadClusters (title toil) 4ae1cede92ca -> b1659de79ad1
+//	loadDocDrift ee855478db42 -> 84c1bc669446
+//	loadFlaky 74566417b303 -> 32baba4ff289
+//
 // CHAOS-14218: six pins re-pinned for the nillable scan destinations clickhouse-go v2.51 needs (breakdown, flow-matrix nodes and
 // edges, both timeseries reads, quadrant metric rows); the statements are unchanged, digests copied from the hosted
 // TestScanTypeCensus failure output (job 135986472250), not computed.
+//
+// CHAOS-14266 on the merge with CHAOS-14258 (total order at the workflow cut): repetitiveStatement keeps the CHAOS-14258 ORDER BY
+// and our cluster_anchor column (scan +*uint32); re-pinned by hand, digests copied from the local TestScanTypeCensus failure
+// output (not computed), the old values being the CHAOS-14258 pins:
+//
+//	loadClusters (repetitive) 6782179e5bab -> 02e42d9124bc
+//	loadClusters (title toil) 6782179e5bab -> 02e42d9124bc
+//	loadDocDrift 9d9f4e10b7aa -> 74e03d28cf3f
+//	loadFlaky e2c82e8e8355 -> 7740a9c9e213
 const unverifiedSites = `
 internal/queryapi/aggflame/clickhouse.go|fetchCycleBreakdown|*string,*float64,*uint64|a0d30b3aefa3|not-describable
-internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*string,*uint64,*[]string,*string,*string|6782179e5bab|not-describable
-internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*uint64,*[]string|6782179e5bab|not-describable
-internal/queryapi/aianalytics/ai_opportunities.go|loadDocDrift|*string,*uint64,*uint64|9d9f4e10b7aa|not-describable
-internal/queryapi/aianalytics/ai_opportunities.go|loadFlaky|*string,*uint64,**float64|e2c82e8e8355|not-describable
+internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*string,*uint64,*[]string,*string,*string,*uint32|02e42d9124bc|not-describable
+internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*uint64,*[]string|02e42d9124bc|not-describable
+internal/queryapi/aianalytics/ai_opportunities.go|loadDocDrift|*string,*uint64,*uint64|74e03d28cf3f|not-describable
+internal/queryapi/aianalytics/ai_opportunities.go|loadFlaky|*string,*uint64,**float64|7740a9c9e213|not-describable
 internal/queryapi/aianalytics/flow_opportunities.go|loadRepoFlowRows|*string,*uint64,**float64,**float64,**float64,**float64|39a7e63ddf0e|not-describable
 internal/queryapi/aianalytics/flow_opportunities.go|loadTeamFlowRows|*string,*uint64,**float64,**float64,**float64|2653b84e5b21|not-describable
 internal/queryapi/aianalytics/loaders.go|loadLabels|*string,*string|ffbc61d0410c|spliced-select-list

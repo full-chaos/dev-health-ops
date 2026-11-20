@@ -184,14 +184,14 @@ func oracleCutArtifactsRead(t *testing.T, route, change string) (reads []int, su
 	return doer.reads(cutDedupIDs), suites
 }
 
-func TestGitHubTestsOracleCutArtifacts(t *testing.T) {
+func oracleCutArtifactsCells(t *testing.T, changes ...string) {
 	wantReads := map[string][]int{
 		"stable":       {1, 1, 1, 1, 1},
 		"new_attempt":  {1, 1, 1, 1, 2},
 		"loss":         {1, 1, 1, 1, 2},
 		"partial_loss": {1, 1, 1, 1, 2},
 	}
-	for _, change := range []string{"stable", "new_attempt", "loss", "partial_loss"} {
+	for _, change := range changes {
 		t.Run(change, func(t *testing.T) {
 			t.Parallel()
 			oracleReads, oracleSuites := oracleCutArtifactsRead(t, "Collect", change)
@@ -204,4 +204,12 @@ func TestGitHubTestsOracleCutArtifacts(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestGitHubTestsOracleCutArtifactsAttempt(t *testing.T) {
+	oracleCutArtifactsCells(t, "stable", "new_attempt")
+}
+
+func TestGitHubTestsOracleCutArtifactsLoss(t *testing.T) {
+	oracleCutArtifactsCells(t, "loss", "partial_loss")
 }

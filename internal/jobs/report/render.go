@@ -344,7 +344,8 @@ func emphasisLine(label, value string) string {
 // markdownListStart writes the first text of a list item as one table-cell escaped label. Whitespace the reader would
 // drop or fold (a run at either edge, or any run with a tab, line break or other space inside) is written as a visible
 // code span of escapes (`\n`, `\u0020`), so two labels that differ only by such whitespace read differently and a
-// padded name does not read as the name without padding. A single ASCII space between words stays a space.
+// padded name does not read as the name without padding. A single ASCII space between words stays a space. A span that
+// follows text gets one space before it: a backtick next to a pasted URL would join its link (a space ends it).
 func markdownListStart(value string) string {
 	runes := []rune(value)
 	var b strings.Builder
@@ -367,6 +368,9 @@ func markdownListStart(value string) string {
 		if plain && i > 0 && j < len(runes) {
 			b.WriteString(string(runes[i:j]))
 		} else {
+			if b.Len() > 0 {
+				b.WriteByte(' ')
+			}
 			b.WriteByte('`')
 			for _, r := range runes[i:j] {
 				switch r {

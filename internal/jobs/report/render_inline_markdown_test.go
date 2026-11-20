@@ -228,7 +228,7 @@ func TestRenderFreeTextShowsEdgeTrimmed(t *testing.T) {
 	const padded = " \tReview \t\r\n"
 	want := map[string]string{
 		"report type": "\n# Review Report — ", "window": "— Review → Review\n", "section": "\n## Review\n", "chart title": "\n#### Review\n",
-		"not applicable": "_Not applicable: Review_", "note": "_Note: Review_", "uncharted label": "\n- `\\u0020\\t`Review`\\u0020\\t\\r\\n`: why\n", "uncharted reason": "\n- lbl: Review\n",
+		"not applicable": "_Not applicable: Review_", "note": "_Note: Review_", "uncharted label": "\n- `\\u0020\\t`Review `\\u0020\\t\\r\\n`: why\n", "uncharted reason": "\n- lbl: Review\n",
 		"provenance artifact id": "**chart:Review** —", "provenance source": "sources: Review; metrics", "metric name": "metrics: Review\n",
 		"team scope": "Scope: teams=Review\n", "repo scope": "Scope: repos=Review\n", "service scope": "Scope: services=Review\n",
 		"footer confidence": "Confidence: Review |",

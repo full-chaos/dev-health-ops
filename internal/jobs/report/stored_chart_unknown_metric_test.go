@@ -7,12 +7,15 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
 	"unicode"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/yuin/goldmark"
+	"github.com/yuin/goldmark/extension"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 )
@@ -295,6 +298,99 @@ func TestUnchartedListWritesAPlainLabelAsBefore(t *testing.T) {
 		want := "- " + markdownLineStart(markdownTableCell(label)) + ": no metric matches this label"
 		if bullets := unchartedBullets(markdown); len(bullets) != 1 || bullets[0] != want {
 			t.Errorf("label %q: bullets %q, want %q", label, bullets, want)
+		}
+	}
+}
+
+// A pasted URL keeps its link destination and its escape stays a code span: the escape span after text is separated by one
+// space, because a backtick next to a URL is taken into its GFM autolink.
+
+var linkTarget = regexp.MustCompile(`href="([^"]*)"`)
+
+func gfmLinks(t *testing.T, bullet string) (string, []string) {
+	t.Helper()
+	var out bytes.Buffer
+	if err := goldmark.New(goldmark.WithExtensions(extension.GFM)).Convert([]byte(bullet), &out); err != nil {
+		t.Fatal(err)
+	}
+	var hrefs []string
+	for _, match := range linkTarget.FindAllStringSubmatch(out.String(), -1) {
+		hrefs = append(hrefs, match[1])
+	}
+	return out.String(), hrefs
+}
+
+func singleBullet(t *testing.T, label string) string {
+	t.Helper()
+	_, markdown := renderStoredSpecs(t, [2]string{label, "day"})
+	bullets := unchartedBullets(markdown)
+	if len(bullets) != 1 {
+		t.Fatalf("label %q: bullets %q", label, bullets)
+	}
+	return bullets[0]
+}
+
+func TestUnchartedUrlLabelKeepsItsLinkDestinationAndItsEscapeSpan(t *testing.T) {
+	urls := map[string]string{
+		"https://ci.example.com/builds": "https://ci.example.com/builds", "http://ci.example.com/builds": "http://ci.example.com/builds",
+		"www.ci.example.com/builds": "http://www.ci.example.com/builds", "https://ci.example.com/builds?a=1": "https://ci.example.com/builds?a=1",
+		"see https://ci.example.com/builds": "https://ci.example.com/builds",
+	}
+	for url, href := range urls {
+		if _, got := gfmLinks(t, singleBullet(t, url)); fmt.Sprint(got) != fmt.Sprint([]string{href}) {
+			t.Fatalf("plain %q: destinations %q, want [%q]", url, got, href)
+		}
+		if want := "- " + markdownLineStart(markdownTableCell(url)) + ": no metric matches this label"; singleBullet(t, url) != want {
+			t.Fatalf("plain %q is not byte-equal to the base text %q", url, want)
+		}
+		for _, space := range []string{"\n", "\r\n", "\t", " ", " "} {
+			for position, label := range map[string]string{"trailing": url + space, "interior": url + space + "tail", "leading": space + url} {
+				html, got := gfmLinks(t, singleBullet(t, label))
+				if fmt.Sprint(got) != fmt.Sprint([]string{href}) || (!strings.Contains(html, "<code>") && !(position == "interior" && space == " ")) {
+					t.Errorf("%s %q + %q: destinations %q, want [%q] and an escape code span; html %s", position, url, space, got, href, html)
+				}
+			}
+		}
+	}
+}
+
+func TestUnchartedLabelWithoutAnEscapeGetsNoSeparator(t *testing.T) {
+	for _, label := range []string{"ci.example.com", "team@example.com", "a b", "a  b", "Release _Candidate_"} {
+		for _, space := range []string{"\n", " ", "\t"} {
+			html, got := gfmLinks(t, singleBullet(t, label+space))
+			_, want := gfmLinks(t, singleBullet(t, label))
+			if fmt.Sprint(got) != fmt.Sprint(want) || !strings.Contains(html, "<code>") {
+				t.Errorf("%q + %q: destinations %q want %q, html %s", label, space, got, want, html)
+			}
+		}
+	}
+	if bullet := singleBullet(t, "\nRelease"); !strings.HasPrefix(bullet, "- `\\n`Release") {
+		t.Errorf("a leading escape gets a separator: %q", bullet)
+	}
+	if bullet := singleBullet(t, "Release\n"); !strings.HasPrefix(bullet, "- Release `\\n`: ") {
+		t.Errorf("a trailing escape is not separated by one ASCII space: %q", bullet)
+	}
+}
+
+func TestUnchartedSeparatorNeverMakesTwoRawLabelsEqual(t *testing.T) {
+	groups := [][]string{
+		{"abc\n", "abc \n", "abc  \n", "abc", "abc ", "abc  "},
+		{"a\nb", "a \nb", "a\n b", "a \n b", "a b", "a  b"},
+		{"https://ci.example.com/b\n", "https://ci.example.com/b \n", "https://ci.example.com/b  \n"},
+	}
+	for _, labels := range groups {
+		specs := make([][2]string, 0, len(labels))
+		for _, label := range labels {
+			specs = append(specs, [2]string{label, "day"})
+		}
+		_, markdown := renderStoredSpecs(t, specs...)
+		bullets := unchartedBullets(markdown)
+		seen := map[string]bool{}
+		for _, bullet := range bullets {
+			seen[bullet] = true
+		}
+		if len(bullets) != len(labels) || len(seen) != len(labels) {
+			t.Errorf("%q: %d bullets, %d distinct, want %d: %q", labels, len(bullets), len(seen), len(labels), bullets)
 		}
 	}
 }

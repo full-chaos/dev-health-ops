@@ -158,8 +158,8 @@ func TestDefaultPlanReportNamesANonNumericRegistryName(t *testing.T) {
 
 func TestDefaultPlanReportEscapesTheLabel(t *testing.T) {
 	markdown := renderDefinition(t, decodeDefault(t, `{"metrics":["Lead *Time*|x\n## Fake","## Provenance","\n---\n"]}`))
-	want := unchartedHeading + "- Lead \\*Time\\*\\|x`\\n`\\#\\# Fake: no metric matches this label\n" +
-		"- \\#\\# Provenance: no metric matches this label\n- `\\n`---`\\n`: no metric matches this label\n"
+	want := unchartedHeading + "- Lead \\*Time\\*\\|x `\\n`\\#\\# Fake: no metric matches this label\n" +
+		"- \\#\\# Provenance: no metric matches this label\n- `\\n`--- `\\n`: no metric matches this label\n"
 	if !strings.Contains(markdown, want) {
 		t.Fatalf("labels are not escaped onto one line, want %q in:\n%s", want, markdown)
 	}

@@ -176,9 +176,17 @@ type attributedPR struct {
 // item id alone, exactly as the reference does: an attribution record pinned
 // to one repository also attributes the pull requests of another repository
 // that the same work item links to.
+//
+// A pull request reaches the page once: the linked arm can give it once per
+// linked issue and the direct arm once per id form, so one row per
+// (repository, number) is kept before the page is cut (the linked arm first,
+// then kind and work type, for a fixed choice), and LIMIT/OFFSET count pull
+// requests.
 const attributedPRsStatement = `SELECT
     repo_id_str, number, kind, work_type, title, merged_at
 FROM (
+    SELECT repo_id_str, repo_id, number, kind, work_type, title, merged_at
+    FROM (
     SELECT
         toString(pr.repo_id) AS repo_id_str,
         pr.repo_id AS repo_id,
@@ -186,9 +194,10 @@ FROM (
         attr.kind AS kind,
         coalesce(nullIf(wi.type, ''), 'pull_request') AS work_type,
         pr.title AS title,
-        pr.merged_at AS merged_at
+        pr.merged_at AS merged_at,
+        0 AS arm
     FROM git_pull_requests AS pr FINAL
-    INNER JOIN work_graph_issue_pr AS link
+    INNER JOIN work_graph_issue_pr AS link FINAL
         ON link.repo_id = pr.repo_id AND link.pr_number = pr.number
         AND link.org_id = {org_id:String}
     INNER JOIN ai_attribution_resolved AS attr
@@ -211,7 +220,8 @@ FROM (
         attr.kind AS kind,
         'pull_request' AS work_type,
         pr.title AS title,
-        pr.merged_at AS merged_at
+        pr.merged_at AS merged_at,
+        1 AS arm
     FROM git_pull_requests AS pr FINAL
     INNER JOIN ai_attribution_resolved AS attr
         ON attr.subject_type = 'pull_request'
@@ -223,6 +233,9 @@ FROM (
         OR (pr.merged_at IS NOT NULL AND pr.merged_at >= {start:DateTime64(3, 'UTC')} AND pr.merged_at < {end:DateTime64(3, 'UTC')}))
       %[1]s
       AND pr.org_id = {org_id:String}
+    )
+    ORDER BY repo_id, number, arm, kind, work_type
+    LIMIT 1 BY repo_id, number
 )
 ORDER BY merged_at DESC NULLS LAST, repo_id, number DESC
 LIMIT {limit_n:UInt32} OFFSET {offset_n:UInt32}`

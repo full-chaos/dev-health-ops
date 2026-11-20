@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/google/uuid"
 
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
@@ -103,12 +102,13 @@ func TestCommitStatsLoaderReadsAResyncedStatRowOnce(t *testing.T) {
 		t.Fatalf("the EXPLAIN statement does not carry FINAL on both tables:\n%s", final)
 	}
 	for _, mode := range []string{"EXPLAIN indexes = 1 ", "EXPLAIN PIPELINE "} {
-		explain, err := conn.Query(ctx, mode+final,
-			clickhouse.Named("start", dateTimeArgument(day)),
-			clickhouse.Named("end", dateTimeArgument(day.Add(24*time.Hour))),
-			clickhouse.Named("repo_ids", []uuid.UUID{repo}),
-			clickhouse.Named("org_id", orgA),
-		)
+		bound := strings.NewReplacer(
+			"{start:DateTime}", "toDateTime('"+dateTimeArgument(day)+"')",
+			"{end:DateTime}", "toDateTime('"+dateTimeArgument(day.Add(24*time.Hour))+"')",
+			"{repo_ids:Array(UUID)}", "[toUUID('"+repo.String()+"')]",
+			"{org_id:String}", "'"+orgA+"'",
+		).Replace(final)
+		explain, err := conn.Query(ctx, mode+bound)
 		if err != nil {
 			t.Fatal(err)
 		}

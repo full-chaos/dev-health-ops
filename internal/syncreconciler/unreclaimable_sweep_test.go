@@ -354,6 +354,7 @@ func pipelineWithSweep(t *testing.T, sweep UnreclaimableSweepStepper) *MutationP
 		sweep,
 		noopTerminalOutboxClose(),
 		noopOrphanedUnitRepair(),
+		noopChunkSidecarReclaim(),
 		DefaultMutationPipelineConfig(),
 	)
 	if err != nil {
@@ -713,6 +714,7 @@ func TestPipelineStepReportsAnUnavailableRunawayReport(t *testing.T) {
 		nil,
 		noopTerminalOutboxClose(),
 		noopOrphanedUnitRepair(),
+		noopChunkSidecarReclaim(),
 		DefaultMutationPipelineConfig(),
 	)
 	if err != nil {
@@ -786,6 +788,7 @@ func TestPipelineStepCarriesTheSweepAndRunawayFiguresOntoTheObservation(t *testi
 		}},
 		noopTerminalOutboxClose(),
 		noopOrphanedUnitRepair(),
+		noopChunkSidecarReclaim(),
 		DefaultMutationPipelineConfig(),
 	)
 	if err != nil {
@@ -837,6 +840,7 @@ func TestPipelineStepCountsAnUnavailableRunawayReportOnTheObservation(t *testing
 		nil,
 		noopTerminalOutboxClose(),
 		noopOrphanedUnitRepair(),
+		noopChunkSidecarReclaim(),
 		DefaultMutationPipelineConfig(),
 	)
 	if err != nil {
@@ -893,6 +897,7 @@ func TestPipelineStepCarriesSweepFiguresPastATerminalRepairFailure(t *testing.T)
 		}},
 		noopTerminalOutboxClose(),
 		noopOrphanedUnitRepair(),
+		noopChunkSidecarReclaim(),
 		DefaultMutationPipelineConfig(),
 	)
 	if err != nil {
@@ -954,6 +959,7 @@ func TestPipelineStepCountsAMaterializerFailureAsAReportThatDidNotRun(t *testing
 		nil,
 		noopTerminalOutboxClose(),
 		noopOrphanedUnitRepair(),
+		noopChunkSidecarReclaim(),
 		DefaultMutationPipelineConfig(),
 	)
 	if err != nil {
@@ -1066,6 +1072,7 @@ func TestPipelineStepCountsEveryExitThatPreventsTheReport(t *testing.T) {
 		nil,
 		noopTerminalOutboxClose(),
 		noopOrphanedUnitRepair(),
+		noopChunkSidecarReclaim(),
 		DefaultMutationPipelineConfig(),
 	)
 	if err != nil {
@@ -1124,6 +1131,7 @@ func TestTerminalRepairFailureStillDeliversTheReport(t *testing.T) {
 				nil,
 				noopTerminalOutboxClose(),
 				noopOrphanedUnitRepair(),
+				noopChunkSidecarReclaim(),
 				DefaultMutationPipelineConfig(),
 			)
 			if err != nil {

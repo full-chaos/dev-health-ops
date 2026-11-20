@@ -108,27 +108,31 @@ func TestGitHubTestsRunReportsCompareSuiteMembership(t *testing.T) {
 					} else {
 						artifacts = append(artifacts, groupArchive("1", 10, layout, left), groupArchive("2", 20, layout, right))
 					}
-					assertGroupDecision(t, append(artifacts, groupArchive("3", 30, layout, newLeft, newRight)), want)
+					swapped := groupArchive("3", 30, layout, newLeft, newRight)
+					if branch == "copy" && variant != "unchanged-membership" {
+						// Two copies that differ: the one whose content sorts after is reported, whatever its id (CHAOS-14045).
+						want = map[string]string{markedCopyByContent(t, artifacts[0], swapped): githubTestsAggregateMismatchCause}
+					}
+					assertGroupDecision(t, append(artifacts, swapped), want)
 				})
 			}
 		}
 	}
 }
 
-// P1-b: three timed copies; one of them differs. The whole copy group is kept and both would-be drops are reported; coverage on
-// the kept representative (id 1) loses nothing, so its copies still go.
+// P1-b: three timed copies; one of them differs. The whole copy group is kept and both would-be drops are reported. The
+// representative is chosen by content (CHAOS-14045): coverage on any copy makes that copy the representative, which loses nothing,
+// so the other copies still go; for a copy that differs in a stored field, the same CONTENT stays unreported wherever it sits.
 func TestGitHubTestsRunReportsKeepTheWholeCopyGroupOnAMismatch(t *testing.T) {
 	plain := strings.Replace(groupSuite("frontend", "a1", "a2"), "/>", `><failure message="boom"/></testcase>`, 1)
-	mismatch := map[string]string{"2": githubTestsAggregateMismatchCause, "3": githubTestsAggregateMismatchCause}
-	dropped := map[string]string{"2": githubTestsAggregateOfPartsCause, "3": githubTestsAggregateOfPartsCause}
 	for _, variant := range []string{"different-case", "different-suite", "lcov", "cobertura", "unchanged"} {
+		representative := ""
 		for index := range 3 {
 			if variant == "unchanged" && index > 0 {
 				continue
 			}
 			t.Run(fmt.Sprintf("%s/conflict-id-%d", variant, index+1), func(t *testing.T) {
 				artifacts := []rowsArtifact{{id: "1", size: 10, body: plain}, {id: "2", size: 20, body: plain}, {id: "3", size: 30, body: plain}}
-				want := mismatch
 				switch variant {
 				case "different-case":
 					artifacts[index].body = strings.ReplaceAll(plain, "boom", "other message")
@@ -139,8 +143,34 @@ func TestGitHubTestsRunReportsKeepTheWholeCopyGroupOnAMismatch(t *testing.T) {
 				case "cobertura":
 					artifacts[index].extra = map[string]string{"coverage.xml": groupCobertura}
 				}
-				if variant == "unchanged" || (index == 0 && (variant == "lcov" || variant == "cobertura")) {
-					want = dropped
+				cause, kept := githubTestsAggregateMismatchCause, -1
+				switch variant {
+				case "unchanged":
+					cause, kept = githubTestsAggregateOfPartsCause, 0
+				case "lcov", "cobertura":
+					cause, kept = githubTestsAggregateOfPartsCause, index
+				default:
+					walk, _, _ := rowsWalk(t, 1, artifacts...)
+					causes := markerCauses(walk)
+					for position, artifact := range artifacts {
+						if _, marked := causes[artifact.id]; !marked {
+							kept = position
+						}
+					}
+					if kept < 0 || len(causes) != 2 {
+						t.Fatalf("markers %v, want two of the three copies reported", causes)
+					}
+					if representative == "" {
+						representative = artifacts[kept].body
+					} else if artifacts[kept].body != representative {
+						t.Fatalf("the unreported copy changed with the position of the differing copy")
+					}
+				}
+				want := map[string]string{}
+				for position, artifact := range artifacts {
+					if position != kept {
+						want[artifact.id] = cause
+					}
 				}
 				assertGroupDecision(t, artifacts, want)
 			})

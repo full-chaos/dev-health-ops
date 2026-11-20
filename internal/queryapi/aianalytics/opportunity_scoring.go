@@ -36,6 +36,18 @@ func stableOpportunityID(kind, entityID, secondaryID string) string {
 	return hex.EncodeToString(sum[:])[:24]
 }
 
+// servedID is the opportunityId an opportunity is served with: the team is the secondary part, or the idKey when set.
+func (o opportunity) servedID() string {
+	secondary := ""
+	if o.teamID != nil {
+		secondary = *o.teamID
+	}
+	if o.idKey != "" {
+		secondary = o.idKey
+	}
+	return stableOpportunityID(opportunityKinds[o.kind], o.repoID, secondary)
+}
+
 // pct formats v as Python's "{v:.<digits>%}" does: v*100 in fixed notation.
 func pct(v float64, digits int) string {
 	s, err := pythonparity.FormatFixed(v*100, digits)

@@ -2,6 +2,7 @@ package aianalytics
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strconv"
@@ -110,6 +111,18 @@ type opportunity struct {
 	// count, so opportunityLess and the read's ORDER BY ... LIMIT 100 agree. Never served, logged or put in an error.
 	value float64
 	key   []string
+	// idKey, when set, is the secondary part of the stable id in place of the team.
+	idKey string
+}
+
+// repetitiveClusterKey is the id key of one repetitive-change cluster past its repository: the title prefix, the
+// work type and the cluster's anchor, the number of its oldest pull request. A repository has one cluster per
+// author, work type and prefix (CHAOS-14266); two authors' clusters hold disjoint pull requests, so the anchor tells
+// them apart. The author is never id input: a served id must not let a reader test a guessed author. JSON keeps the
+// parts apart whatever characters they hold.
+func repetitiveClusterKey(prefix, workType string, anchor uint32) string {
+	key, _ := json.Marshal([]string{prefix, workType, strconv.FormatUint(uint64(anchor), 10)})
+	return string(key)
 }
 
 // newOpportunity takes the unclamped score: the served score is clamped, the raw one orders equal served scores.
@@ -225,13 +238,9 @@ func (o opportunity) project(repoName, teamName *string) model.AIOpportunity {
 		}
 		drill = append(drill, model.AIWorkGraphDrilldownRef{RootType: "pr", RootID: prrootid.Format(repo, number), Label: "PR " + number})
 	}
-	team := ""
-	if o.teamID != nil {
-		team = *o.teamID
-	}
 	repo := o.repoID
 	return model.AIOpportunity{
-		OpportunityID:       stableOpportunityID(opportunityKinds[o.kind], o.repoID, team),
+		OpportunityID:       o.servedID(),
 		Kind:                o.kind,
 		RepoID:              &repo,
 		TeamID:              o.teamID,
@@ -310,6 +319,7 @@ type clusterRow struct {
 	Author   string
 	WorkType string
 	Refs     []string
+	Anchor   uint32
 }
 
 func loadClusters(ctx context.Context, client QueryClient, statement string, bindings []clickhouse.Binding, withPrefix bool) ([]clusterRow, error) {
@@ -325,7 +335,7 @@ func loadClusters(ctx context.Context, client QueryClient, statement string, bin
 			n uint64
 		)
 		if withPrefix {
-			if err := rs.Scan(&r.RepoID, &r.Prefix, &n, &r.Refs, &r.Author, &r.WorkType); err != nil {
+			if err := rs.Scan(&r.RepoID, &r.Prefix, &n, &r.Refs, &r.Author, &r.WorkType, &r.Anchor); err != nil {
 				return nil, fmt.Errorf("aianalytics: opportunity cluster scan: %w", err)
 			}
 		} else if err := rs.Scan(&r.RepoID, &n, &r.Refs); err != nil {
@@ -354,7 +364,8 @@ const repetitiveStatement = `SELECT
     count() AS prs_total,
     groupArray(concat('git_pull_requests:', toString(pr.repo_id), ':', toString(pr.number))) AS pr_refs,
     coalesce(pr.author_email, pr.author_name, '') AS cluster_author,
-    coalesce(nullIf(wi.type, ''), 'pull_request') AS cluster_work_type
+    coalesce(nullIf(wi.type, ''), 'pull_request') AS cluster_work_type,
+    argMin(pr.number, (pr.created_at, pr.number)) AS cluster_anchor
 FROM git_pull_requests AS pr
 LEFT JOIN work_graph_issue_pr AS link
     ON link.repo_id = pr.repo_id AND link.pr_number = pr.number
@@ -655,11 +666,13 @@ func workflowOpportunities(ctx context.Context, client QueryClient, orgID, repoI
 		if !ok {
 			continue
 		}
-		out = append(out, newOpportunity(model.AIOpportunityKindRepetitiveChange, repo, nil,
+		o := newOpportunity(model.AIOpportunityKindRepetitiveChange, repo, nil,
 			"Repetitive AI change pattern in "+repo,
 			strconv.FormatInt(r.Count, 10)+" AI-assisted PRs shared the title prefix '"+prefix+"' with the same author/work type over the last 30 days.",
 			scoreDeltaRaw(float64(r.Count)/float64(repetitiveClusterMinPRs), 1.0), refs).
-			sortedBy(float64(r.Count), r.Prefix, r.Author, r.WorkType))
+			sortedBy(float64(r.Count), r.Prefix, r.Author, r.WorkType)
+		o.idKey = repetitiveClusterKey(r.Prefix, r.WorkType, r.Anchor)
+		out = append(out, o)
 	}
 
 	for _, rule := range titlePatternRules {

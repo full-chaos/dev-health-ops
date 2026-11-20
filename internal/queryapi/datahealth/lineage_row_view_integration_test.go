@@ -64,3 +64,56 @@ func TestMetricLineageRowCountCountsOneRowView(t *testing.T) {
 		}
 	}
 }
+
+// TestMetricLineageComputedAtIsTheNewestMeasuredRowOfAnyView: the view only
+// narrows the row count. The compute time is the newest measured row of the
+// organization, whatever its view, so a scope row newer than the org row (or
+// the only row) still gives the time of that compute.
+func TestMetricLineageComputedAtIsTheNewestMeasuredRowOfAnyView(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	store := retractionseed.Start(ctx, t)
+
+	insert := func(org, view, computedAt string, completed int) {
+		t.Helper()
+		stmt := fmt.Sprintf("INSERT INTO work_item_metrics_daily (org_id, day, computed_at, items_completed, row_view) VALUES ('%s', '2026-01-01', '%s', %d, '%s')", org, computedAt, completed, view)
+		if err := store.Conn.Exec(ctx, stmt); err != nil {
+			t.Fatalf("seed %s/%s: %v", org, view, err)
+		}
+	}
+	const t1, t2, t3 = "2026-01-01 00:01:40", "2026-01-01 00:02:30", "2026-01-01 00:03:20"
+	insert("scope-only-newer", "scope", t3, 1)
+	insert("org-and-newer-scope", "org", t1, 1)
+	insert("org-and-newer-scope", "scope", t3, 1)
+	insert("retracted-org-live-scope", "org", t1, 1)
+	insert("retracted-org-live-scope", "org", t2, 0)
+	insert("retracted-org-live-scope", "scope", t3, 1)
+	// Control: a legacy-only org keeps the time main served, the newest measured row.
+	insert("legacy-only-control", "", t3, 1)
+
+	client, err := dhclickhouse.NewClickHouseQueryClientWithOptions(dhclickhouse.Options{DSN: store.URI})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = client.Close() }()
+	reader := &Reader{ClickHouse: client}
+
+	wantTime := time.Date(2026, 1, 1, 0, 3, 20, 0, time.UTC)
+	for _, c := range []struct {
+		org  string
+		want int
+	}{{"scope-only-newer", 0}, {"org-and-newer-scope", 1}, {"retracted-org-live-scope", 0}, {"legacy-only-control", 1}} {
+		lin := reader.MetricLineage(ctx, c.org, "throughput")
+		if lin == nil || lin.RowCount == nil {
+			t.Errorf("%s: no lineage", c.org)
+			continue
+		}
+		// Kill sites: a view predicate in the WHERE shared with the compute time fails the time of all three.
+		if !lin.ComputedAt.Equal(wantTime) {
+			t.Errorf("%s: computedAt = %s, want %s", c.org, lin.ComputedAt, wantTime)
+		}
+		if *lin.RowCount != c.want {
+			t.Errorf("%s: rowCount = %d, want %d", c.org, *lin.RowCount, c.want)
+		}
+	}
+}

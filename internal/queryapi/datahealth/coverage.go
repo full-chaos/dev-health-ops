@@ -138,13 +138,15 @@ func measuredRowsOnly(table string) string {
 	return "\n  AND " + liverow.Predicate(table, "")
 }
 
-// lineageRowView keeps the rows of one view of a table that holds row_view: a
-// row count that took every view would count an item day once for each view.
-func lineageRowView(table string) string {
+// lineageRowCount counts the rows of one view of a table that holds row_view:
+// a count over every view would count an item day once for each view. Only the
+// count narrows to the view; the compute time stays the newest measured row of
+// any view.
+func lineageRowCount(table string) string {
 	if !rowview.Has(table) {
-		return ""
+		return "count()"
 	}
-	return "\n  AND " + rowview.OrgPredicate(table, "")
+	return "countIf(" + rowview.OrgPredicate(table, "") + ")"
 }
 
 // MetricLineage ports compute_metric_lineage: the freshness of the tables a
@@ -160,7 +162,7 @@ func (r *Reader) MetricLineage(ctx context.Context, orgID, metricID string) *mod
 	found := false
 	totalRows := 0
 	for _, table := range entry.tables {
-		statement := "\nSELECT argMax(computed_at, computed_at) AS computed_at, count() AS row_count\nFROM " + lineageSource(table) + "\nWHERE org_id = {org_id:String}" + lineageRowView(table) + measuredRowsOnly(table)
+		statement := "\nSELECT argMax(computed_at, computed_at) AS computed_at, " + lineageRowCount(table) + " AS row_count\nFROM " + lineageSource(table) + "\nWHERE org_id = {org_id:String}" + measuredRowsOnly(table)
 		r.queryRows(ctx, "lineage_"+table, statement, []clickhouse.Binding{{Name: "org_id", Value: orgID}},
 			func(rows clickhouse.RowScanner) error {
 				var computed *time.Time

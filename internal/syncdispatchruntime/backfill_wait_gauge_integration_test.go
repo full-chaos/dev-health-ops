@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -384,27 +385,54 @@ func TestBackfillWaitFoldedActiveEqualsTheGuardPerBucket(t *testing.T) {
 	})
 }
 
-// 2,001 buckets (1,001 folded): one scrape stays well inside the read timeout.
-func TestBackfillWaitGaugeManyBucketsScrapeUnderOneSecondOnPostgres(t *testing.T) {
+type statementCounter struct{ n atomic.Int64 }
+
+func (c *statementCounter) TraceQueryStart(ctx context.Context, _ *pgx.Conn, _ pgx.TraceQueryStartData) context.Context {
+	c.n.Add(1)
+	return ctx
+}
+
+func (c *statementCounter) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
+
+// The statement count of one scrape does not grow with the number of buckets: the same count at 1 bucket and at 2,001
+// buckets (1,001 of them folded). The duration is logged only.
+func TestBackfillWaitGaugeStatementCountIsFlatAcrossBucketCountsOnPostgres(t *testing.T) {
 	t.Setenv("SYNC_UNIT_CONCURRENCY_PER_BUCKET", "8")
 	withGuardPool(t, func(ctx context.Context, pool *pgxpool.Pool) {
+		counter := &statementCounter{}
+		config := pool.Config().Copy()
+		config.ConnConfig.Tracer = counter
+		counted, err := pgxpool.NewWithConfig(ctx, config)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer counted.Close()
 		now := time.Now().UTC().Truncate(time.Microsecond)
 		pgseed.Org(ctx, t, pool, waitGaugeOrg, "community")
 		run := "00000000-0000-4000-8000-0000000143f8"
 		seedWaitRun(t, ctx, pool, run, "backfill", "backfill", "running", now.Add(-time.Hour))
-		for i := 0; i <= 2000; i++ {
-			pgseed.InsertSyncRunUnit(ctx, t, pool, pgseed.SyncRunUnit{ID: fmt.Sprintf("00000000-0000-4000-8000-%012x", 0x143550000+i), RunID: run, OrgID: waitGaugeOrg,
-				Provider: fmt.Sprintf("many-%04d", i), CostClass: "medium", Mode: "backfill", Status: syncRunUnitStatusPlanned, UpdatedAt: &now})
+		seed := func(from, to int) {
+			for i := from; i <= to; i++ {
+				pgseed.InsertSyncRunUnit(ctx, t, pool, pgseed.SyncRunUnit{ID: fmt.Sprintf("00000000-0000-4000-8000-%012x", 0x143550000+i), RunID: run, OrgID: waitGaugeOrg,
+					Provider: fmt.Sprintf("many-%04d", i), CostClass: "medium", Mode: "backfill", Status: syncRunUnitStatusPlanned, UpdatedAt: &now})
+			}
 		}
-		started := time.Now()
-		text := waitGaugeText(t, ctx, pool)
-		elapsed := time.Since(started)
+		scrape := func() (string, int64) {
+			before := counter.n.Load()
+			started := time.Now()
+			text := waitGaugeText(t, ctx, counted)
+			t.Logf("scrape: %s", time.Since(started))
+			return text, counter.n.Load() - before
+		}
+		seed(0, 0)
+		_, one := scrape()
+		seed(1, 2000)
+		text, many := scrape()
 		requireLine(t, text, `sync_dispatch_backfill_wait_read_ok 1`)
 		requireLine(t, text, `sync_dispatch_backfill_wait_truncated_total 1`)
 		requireLine(t, text, `sync_dispatch_backfill_wait_units{provider="~other",cost_class="~other",state="planned"} 1001`)
-		t.Logf("scrape over 2001 buckets: %s", elapsed)
-		if elapsed > time.Second {
-			t.Fatalf("one scrape over 2001 buckets took %s, want under 1s", elapsed)
+		if one == 0 || one != many {
+			t.Fatalf("statements per scrape: %d at 1 bucket, %d at 2001 buckets, want the same non-zero count", one, many)
 		}
 	})
 }

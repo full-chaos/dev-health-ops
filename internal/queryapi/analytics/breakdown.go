@@ -269,6 +269,13 @@ func executeBreakdownRaw(ctx context.Context, client QueryClient, q compiledQuer
 
 // ExecuteBreakdown runs the compiled query and returns a BreakdownResult.
 //
+// The REPO item keyed "" is the unassigned group: the work items with no
+// repository (a NULL repo_id on work_item_completion_daily), summed into ONE
+// item and counted in topN like any other. It is kept, not left out: the
+// breakdown has no other field that would show that share. A repository's
+// key is its UUID text, never "", so the group cannot merge with one; its
+// label is null, as the key is no repository to resolve.
+//
 // Every item carries the server-resolved label the client renders instead of
 // a raw id: for the repo and team dimensions the key is resolved to its
 // display name through the shared lookup (internal/scopelabel); a resolved

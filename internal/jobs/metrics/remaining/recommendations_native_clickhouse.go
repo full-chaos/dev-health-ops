@@ -9,6 +9,8 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/rowview"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
+	"github.com/full-chaos/dev-health-ops/internal/teamactive"
+	"github.com/full-chaos/dev-health-ops/internal/teamattribution"
 	"github.com/full-chaos/dev-health-ops/internal/teamownership"
 )
 
@@ -43,9 +45,11 @@ var discoverTeamIDsSQL = `
 
 // DiscoverTeamIDs returns the teams to evaluate for an org: the teams with
 // recent work item rows, plus the active teams that own a repository at asOf
-// (the window end; teamownership.OwnersByRepo). A team in both sets is listed
-// once. Without the owner teams, a team that owns repositories but has no work
-// item rows is never evaluated, and its repository-based rules never fire.
+// (the window end; teamownership.OwnersByRepo), plus the active teams that own
+// a project at asOf (teamattribution LoadProjects, co-owners included, the same
+// as the repository owners). A team in several sets is listed once. Without the
+// owner teams, a quiet owner team is never evaluated, so its old fired rules
+// never get the fired=false rows that clear them.
 //
 // The org predicate is appended only for a real org, matching the reference:
 // "default" is the single-tenant sentinel and is not a value present in
@@ -99,6 +103,19 @@ func (executor *RecommendationsExecutor) DiscoverTeamIDs(
 		for _, ownerTeams := range owners {
 			for _, teamID := range ownerTeams {
 				add(teamID)
+			}
+		}
+		projects, err := teamattribution.ClickHouseFactSource{Conn: executor.conn}.LoadProjects(ctx, orgID, asOf)
+		if err != nil {
+			return nil, fmt.Errorf("discover recommendation project owner teams: %w", err)
+		}
+		inactive, err := teamactive.LoadInactive(ctx, executor.conn, orgID)
+		if err != nil {
+			return nil, fmt.Errorf("discover recommendation project owner teams: %w", err)
+		}
+		for _, project := range projects {
+			if !inactive.Has(project.TeamID) {
+				add(project.TeamID)
 			}
 		}
 	}

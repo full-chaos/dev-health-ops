@@ -360,7 +360,7 @@ func firstFive(refs []string) []string {
 	return refs
 }
 
-// ORDER BY: disjoint PR sets give distinct anchors, and work_type breaks a shared anchor (the statement takes no SQL comments).
+// ORDER BY ends with the anchor: within one prefix and work type two author clusters hold disjoint PRs, so their anchors differ (the statement takes no SQL comments).
 const repetitiveStatement = `SELECT
     toString(pr.repo_id) AS repo_id,
     lower(arrayStringConcat(arraySlice(splitByChar(' ', coalesce(pr.title, '')), 1, 3), ' ')) AS title_prefix,
@@ -387,7 +387,7 @@ WHERE pr.created_at >= now() - INTERVAL 30 DAY@@REPO@@
   AND coalesce(pr.title, '') != ''
 GROUP BY repo_id, coalesce(pr.author_email, pr.author_name, ''), coalesce(nullIf(wi.type, ''), 'pull_request'), title_prefix
 HAVING prs_total >= {cluster_min:UInt32}
-ORDER BY prs_total DESC, repo_id ASC, title_prefix ASC, cluster_anchor ASC, cluster_work_type ASC
+ORDER BY prs_total DESC, repo_id ASC, title_prefix ASC, cluster_work_type ASC, cluster_anchor ASC
 LIMIT 100`
 
 type titleRule struct {
@@ -672,7 +672,7 @@ func workflowOpportunities(ctx context.Context, client QueryClient, orgID, repoI
 			"Repetitive AI change pattern in "+repo,
 			strconv.FormatInt(r.Count, 10)+" AI-assisted PRs shared the title prefix '"+prefix+"' with the same author/work type over the last 30 days.",
 			scoreDeltaRaw(float64(r.Count)/float64(repetitiveClusterMinPRs), 1.0), refs).
-			sortedBy(float64(r.Count), r.Prefix, anchorOrderKey(r.Anchor), r.WorkType)
+			sortedBy(float64(r.Count), r.Prefix, r.WorkType, anchorOrderKey(r.Anchor))
 		o.idKey = repetitiveClusterKey(r.Prefix, r.WorkType, r.Anchor)
 		out = append(out, o)
 	}

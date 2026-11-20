@@ -406,10 +406,9 @@ func TestCell14266IDInputHoldsNoAuthor(t *testing.T) {
 // seed: digests of the answer with the ids blanked, recorded there. The ids alone are what this change moves.
 func TestCell14266OtherFieldsByteEqualToMain(t *testing.T) {
 	pinned := map[string]string{
-		"14266/two-authors":  "e6dd93fb9c81db813a19ddcc75af84616183fef64c8ba70dca146fbbe4798026",
-		"14266/two-prefixes": "c1ecde99c34a03c87a6861931ccdffabac625d1bbf8d42c0d6cbf90519a58522",
-		// CHAOS-14294: re-pinned; one author, two work types, anchors 1 and 3 now serve by anchor (pull_request first), not by work type.
-		"14266/two-work-types": "e6dd93fb9c81db813a19ddcc75af84616183fef64c8ba70dca146fbbe4798026",
+		"14266/two-authors":    "e6dd93fb9c81db813a19ddcc75af84616183fef64c8ba70dca146fbbe4798026",
+		"14266/two-prefixes":   "c1ecde99c34a03c87a6861931ccdffabac625d1bbf8d42c0d6cbf90519a58522",
+		"14266/two-work-types": "ecebf3b20b7792029b44f1955013477a0a52e9e67b37ed69a86757fe02f2df8b",
 		"ai/boundaries":        "d408533f8d1b064d58784649497a72fba0cd44146fc7dfaf5ef827602e423ea8",
 		"ai/everything":        "7bb46b6d1a1c28590cb72a24fcc5e1c62b4f230848e9d63b661733fe41e08565",
 		"ai/exactMinimums":     "7af548b1910c5a2777cc8d8647ee22f506b81d148d211c854b25e525a6a95ff1",

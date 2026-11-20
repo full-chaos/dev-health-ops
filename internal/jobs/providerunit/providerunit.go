@@ -192,6 +192,10 @@ const (
 	// A database error the chunk store flattened into the checkpoint conflict
 	// (providersync.ChunkStoreError): transient, so the retry policy stays.
 	causeClassCheckpointStoreError = "checkpoint_store_error"
+	// A unit write the database refused for a transient reason (deadlock,
+	// serialization failure, lost connection; providersync.ErrStoreTransient)
+	// after its bounded in-place retry. Not capped: the registry ceiling holds.
+	causeClassStoreTransient = "store_transient"
 	// "provider_" + providerfoundation.ErrorClass for the rest.
 	causeClassProviderPrefix = "provider_"
 )
@@ -226,6 +230,9 @@ func causeClass(err error, timedOut bool) string {
 	var storeErr *providersync.ChunkStoreError
 	if errors.As(err, &storeErr) {
 		return causeClassCheckpointStoreError
+	}
+	if errors.Is(err, providersync.ErrStoreTransient) {
+		return causeClassStoreTransient
 	}
 	var providerErr *providerfoundation.ProviderError
 	if errors.As(err, &providerErr) && !providerErr.AfterResponse() {
@@ -402,6 +409,11 @@ func safeCause(
 			cause += fmt.Sprintf(" provider_status=%d", providerErr.StatusCode)
 		}
 	}
+	var storeTransient *providersync.StoreTransientError
+	if errors.As(err, &storeTransient) {
+		cause += fmt.Sprintf(" store_write=%s store_step=%s sqlstate=%s",
+			storeTransient.Write, storeTransient.Step, storeTransient.SQLState)
+	}
 	return cause
 }
 
@@ -414,7 +426,11 @@ const (
 	retryCauseClaimFailed      = "claim_failed"
 	retryCauseReleaseFailed    = "release_for_retry_failed"
 	retryCauseFailWriteFailed  = "terminal_write_failed"
-	retryCauseExecution        = "execution_failed"
+	// The completion or failure write was refused transiently after its
+	// in-place retry; the unit is released so it does not hold its slot.
+	retryCauseCompleteWriteTransient = "complete_write_transient"
+	retryCauseFailWriteTransient     = "terminal_write_transient"
+	retryCauseExecution              = "execution_failed"
 	// The DEFERRAL persistence paths (codex r2, P2). These are the arms where
 	// the work itself did not fail -- a chunk continuation, a provider rate
 	// limit, a shared-budget collision -- and only the write that RECORDS the
@@ -999,8 +1015,7 @@ func (handler *Handler) reconcileRouteFault(
 			context.WithoutCancel(ctx), claim, RouteReconciliationCategory,
 			startedAt, handler.now(),
 		); failErr != nil {
-			return jobruntime.Retryable(jobruntime.WithSafeCauseText(failErr,
-				safeCause(retryCauseFailWriteFailed, claim, execution, failErr)))
+			return handler.failWriteFailed(ctx, execution, claim, failErr)
 		}
 		handler.observeLeaseRecovery(claim, jobruntime.SyncLeaseResultFailed)
 		handler.logLifecycle(ctx, execution, claim, "sync_provider_unit_finished", "failed", configurationErr)
@@ -1022,6 +1037,54 @@ func (handler *Handler) reconcileRouteFault(
 	handler.observeLeaseRecovery(claim, jobruntime.SyncLeaseResultRetrying)
 	handler.logLifecycle(ctx, execution, claim, "sync_provider_unit_finished", "retrying", configurationErr)
 	return jobruntime.Retryable(jobruntime.WithSafeCause(routeReconciliationError(configurationErr)))
+}
+
+// failWriteFailed answers a refused durable Fail. A transient refusal releases
+// the unit (releaseAfterStoreTransient); any other refusal stays retryable
+// with the unit untouched, so a later attempt can record the outcome.
+func (handler *Handler) failWriteFailed(
+	ctx context.Context,
+	execution *jobruntime.Execution[jobruntime.ProviderUnitArgs],
+	claim providersync.Claim,
+	failErr error,
+) error {
+	if errors.Is(failErr, providersync.ErrStoreTransient) {
+		return handler.releaseAfterStoreTransient(ctx, execution, claim, failErr, retryCauseFailWriteTransient)
+	}
+	return jobruntime.Retryable(jobruntime.WithSafeCauseText(failErr,
+		safeCause(retryCauseFailWriteFailed, claim, execution, failErr)))
+}
+
+// releaseAfterStoreTransient ends an attempt whose Complete or Fail write the
+// database refused transiently after the repository's in-place retry. A unit
+// left running holds its bucket slot until its lease expires, so a non-final
+// attempt releases it for the same job's next attempt. The final attempt does
+// not: River discards the job after it, and a released unit with no consumer
+// would be stranded dispatching; lease repair recovers the running unit.
+func (handler *Handler) releaseAfterStoreTransient(
+	ctx context.Context,
+	execution *jobruntime.Execution[jobruntime.ProviderUnitArgs],
+	claim providersync.Claim,
+	writeErr error,
+	cause string,
+) error {
+	if execution.Attempt < execution.Definition.MaxAttempts {
+		if releaseErr := handler.Repository.ReleaseForRetry(
+			context.WithoutCancel(ctx), claim, handler.now(),
+		); releaseErr != nil {
+			// The refused write stays the cause (class store_transient, registry
+			// ceiling); the failed release is only logged next to it.
+			releaseCause := safeCause(retryCauseReleaseFailed, claim, execution, releaseErr)
+			slog.WarnContext(ctx, "provider unit release after a transient write failed",
+				"provider", claim.Provider, "dataset", claim.Dataset,
+				"write_cause", cause, "release_cause", releaseCause)
+		} else {
+			handler.observeLeaseRecovery(claim, jobruntime.SyncLeaseResultRetrying)
+		}
+	}
+	handler.logLifecycle(ctx, execution, claim, "sync_provider_unit_finished", "retrying", writeErr)
+	return jobruntime.Retryable(jobruntime.WithSafeCauseText(writeErr,
+		safeCause(cause, claim, execution, writeErr)))
 }
 
 func routeReconciliationError(configurationErr error) error {
@@ -1050,6 +1113,10 @@ func validateProviderFamilyExecutionClaim(claim providersync.Claim) error {
 	return nil
 }
 
+// lifecycleResultUnitClosed is the sync_provider_unit_finished result of a job whose unit an
+// operator cancel or the feature gate closed for good: the job completes without work.
+const lifecycleResultUnitClosed = "unit_closed"
+
 func (handler *Handler) Work(
 	ctx context.Context,
 	execution *jobruntime.Execution[jobruntime.ProviderUnitArgs],
@@ -1072,6 +1139,16 @@ func (handler *Handler) Work(
 		LeaseDuration:        handler.LeaseDuration,
 		AllowExpiredRecovery: true,
 	})
+	var closed *providersync.UnitClosedError
+	if errors.As(err, &closed) {
+		// The job's work went with the unit's terminal failure: complete it now, not after four
+		// retries and a River discard.
+		handler.logLifecycleWith(ctx, execution, providersync.Claim{Unit: providersync.Unit{
+			ID: execution.Args.Payload.UnitID, SyncRunID: closed.SyncRunID,
+			Provider: closed.Provider, Dataset: closed.Dataset, Mode: closed.Mode,
+		}}, "sync_provider_unit_finished", lifecycleResultUnitClosed, nil, "closed_by", closed.Category)
+		return nil
+	}
 	if err != nil {
 		// claim carries nothing yet (Claim failed), so the cause is built from
 		// the classification alone. Both arms get one: a unit that is never
@@ -1132,6 +1209,11 @@ func (handler *Handler) Work(
 				context.WithoutCancel(ctx), session.Claim, payload,
 				result.Watermark, startedAt, handler.now(),
 			); completeErr != nil {
+				if errors.Is(completeErr, providersync.ErrStoreTransient) {
+					return handler.releaseAfterStoreTransient(
+						ctx, execution, session.Claim, completeErr, retryCauseCompleteWriteTransient,
+					)
+				}
 				err = completeErr
 			} else {
 				handler.observeBudgetComparison(ctx, session.Claim, budgetRows, result.RequestLedger.Dropped, earlierWork)
@@ -1222,8 +1304,7 @@ func (handler *Handler) Work(
 				context.WithoutCancel(ctx), session.Claim, RateLimitCategory,
 				causeClass(err, false), nil, startedAt, completedAt,
 			); failErr != nil {
-				return jobruntime.Retryable(jobruntime.WithSafeCauseText(failErr,
-					safeCause(retryCauseFailWriteFailed, session.Claim, execution, failErr)))
+				return handler.failWriteFailed(ctx, execution, session.Claim, failErr)
 			}
 			logTerminalFailure(execution, session.Claim, RateLimitCategory, causeClass(err, false), nil)
 			handler.observeLeaseRecovery(session.Claim, jobruntime.SyncLeaseResultFailed)
@@ -1267,8 +1348,7 @@ func (handler *Handler) Work(
 		// never armed, leaving the run nonterminal. Stay retryable so a later
 		// attempt can record it, exactly as the route-reconciliation path does.
 		if failErr := handler.failTerminal(ctx, session.Claim, category, class, err, startedAt, completedAt); failErr != nil {
-			return jobruntime.Retryable(jobruntime.WithSafeCauseText(failErr,
-				safeCause(retryCauseFailWriteFailed, session.Claim, execution, failErr)))
+			return handler.failWriteFailed(ctx, execution, session.Claim, failErr)
 		}
 		// Only AFTER the durable transition, for the same reason
 		// observeLeaseRecovery is: a lost CAS leaves the unit retryable, and a
@@ -1312,6 +1392,10 @@ func (handler *Handler) Work(
 				return jobruntime.Permanent(jobruntime.WithSafeCauseText(err,
 					safeCause(exhaustedFailureCategory(session.Claim), session.Claim, execution, err)))
 			}
+		} else if errors.Is(failErr, providersync.ErrStoreTransient) {
+			return handler.releaseAfterStoreTransient(
+				ctx, execution, session.Claim, failErr, retryCauseFailWriteTransient,
+			)
 		}
 		return jobruntime.Retryable(jobruntime.WithSafeCauseText(err,
 			safeCause(exhaustedFailureCategory(session.Claim), session.Claim, execution, err)))

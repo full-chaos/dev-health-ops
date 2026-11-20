@@ -47,6 +47,8 @@ type FeatureDisabledRunTransition struct {
 	FailedUnits  int
 	RunningUnits int
 	RunTerminal  bool
+	// operatorUnitIDs are the units an operator termination's own writes failed.
+	operatorUnitIDs []string
 }
 
 // syncRunRequiresCanonicalIncidentFeature ports
@@ -118,7 +120,52 @@ func datasetScopeRequiresCanonicalIncident(provider, dataset string) bool {
 	return scheduledsync.SyncTargetsRequireCanonicalIncident(targets)
 }
 
-// terminalizeFeatureDisabledRun ports feature_denial.py::terminalize_feature_disabled_run
+// terminalizeFeatureDisabledRun is terminalizeRun with the feature_disabled category, the
+// reference-discovery and dispatch callers' termination.
+func terminalizeFeatureDisabledRun(
+	ctx context.Context, tx pgx.Tx, run *finalizeSyncRun, errorText string, now time.Time,
+) (FeatureDisabledRunTransition, error) {
+	return terminalizeRun(ctx, tx, run, runTermination{errorCategory: featureDisabledErrorCategory}, errorText, now)
+}
+
+// runTermination is what one caller of terminalizeRun/terminalizeRunGraph writes: the
+// error_category of every unit, run, ledger and observer result. operator marks the operator
+// cancel: its unit writes return the ids they changed, a RUNNING unit is failed only while its
+// lease is expired unless allowRunning, and the run status is read again under the run lock. The
+// feature-disabled callers leave operator false and send the statements they always sent.
+type runTermination struct {
+	errorCategory string
+	operator      bool
+	allowRunning  bool
+}
+
+// errRunTerminalUnderLock is an operator termination that found the run already terminal once it
+// held the run lock: a finalizer committed after the first read. The caller rolls back.
+var errRunTerminalUnderLock = errors.New("sync run was terminal under the run lock")
+
+// operatorReturning is appended to an operator termination's unit writes.
+const operatorReturning = `
+RETURNING id::text`
+
+// returnedUnitIDs runs one unit write that ends in operatorReturning and returns the ids it changed.
+func returnedUnitIDs(ctx context.Context, tx pgx.Tx, sql string, args ...any) ([]string, error) {
+	rows, err := tx.Query(ctx, sql, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	ids := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+// terminalizeRun ports feature_denial.py::terminalize_feature_disabled_run
 // verbatim, including its two-phase unit termination: a bulk update for
 // units with no active lease (planned/retrying/dispatching), then a
 // per-unit, lease-owner-matched update for units that were RUNNING at the
@@ -129,10 +176,10 @@ func datasetScopeRequiresCanonicalIncident(provider, dataset string) bool {
 // completedAt when terminal) the same way Python's ORM-attached `run`
 // object is mutated by the SQLAlchemy session -- callers downstream (the
 // graph termination) read those fields off the same run value afterward.
-func terminalizeFeatureDisabledRun(
-	ctx context.Context, tx pgx.Tx, run *finalizeSyncRun, errorText string, now time.Time,
+func terminalizeRun(
+	ctx context.Context, tx pgx.Tx, run *finalizeSyncRun, termination runTermination, errorText string, now time.Time,
 ) (FeatureDisabledRunTransition, error) {
-	resultPayload := map[string]any{"error_category": featureDisabledErrorCategory}
+	resultPayload := map[string]any{"error_category": termination.errorCategory}
 	resultJSON, err := json.Marshal(resultPayload)
 	if err != nil {
 		return FeatureDisabledRunTransition{}, ErrReferenceDiscoveryUnavailable
@@ -193,9 +240,19 @@ WHERE sync_run_id = $1::uuid AND status IN ('planned', 'retrying', 'dispatching'
 		unitID string
 		owner  *string
 	}
-	rows, err = tx.Query(ctx, `
+	// The feature-disabled callers send this statement unchanged. An operator termination without
+	// allowRunning reads only the running units whose lease has expired.
+	keepLiveLeases := termination.operator && !termination.allowRunning
+	runningSQL := `
 SELECT id::text, lease_owner FROM public.sync_run_units
-WHERE sync_run_id = $1::uuid AND status = 'running'`, run.id)
+WHERE sync_run_id = $1::uuid AND status = 'running'`
+	runningArgs := []any{run.id}
+	if keepLiveLeases {
+		runningSQL += `
+  AND lease_expires_at IS NOT NULL AND lease_expires_at <= $2`
+		runningArgs = append(runningArgs, now)
+	}
+	rows, err = tx.Query(ctx, runningSQL, runningArgs...)
 	if err != nil {
 		return FeatureDisabledRunTransition{}, ErrReferenceDiscoveryUnavailable
 	}
@@ -214,22 +271,43 @@ WHERE sync_run_id = $1::uuid AND status = 'running'`, run.id)
 	}
 	rows.Close()
 
-	if _, err := tx.Exec(ctx, `
+	bulkSQL := `
 UPDATE public.sync_run_units
 SET status = $2, available_at = NULL, error = $3, result = $4::json,
     lease_owner = NULL, lease_expires_at = NULL, updated_at = $5
-WHERE sync_run_id = $1::uuid AND status IN ('planned', 'retrying', 'dispatching')`,
+WHERE sync_run_id = $1::uuid AND status IN ('planned', 'retrying', 'dispatching')`
+	var operatorUnitIDs []string
+	if termination.operator {
+		if operatorUnitIDs, err = returnedUnitIDs(ctx, tx, bulkSQL+operatorReturning, run.id, syncRunUnitStatusFailed, errorText, resultJSON, now); err != nil {
+			return FeatureDisabledRunTransition{}, ErrReferenceDiscoveryUnavailable
+		}
+	} else if _, err := tx.Exec(ctx, bulkSQL,
 		run.id, syncRunUnitStatusFailed, errorText, resultJSON, now); err != nil {
 		return FeatureDisabledRunTransition{}, ErrReferenceDiscoveryUnavailable
 	}
 
-	for _, lease := range runningLeases {
-		if _, err := tx.Exec(ctx, `
+	leaseSQL := `
 UPDATE public.sync_run_units
 SET status = $2, available_at = NULL, error = $3, result = $4::json,
     lease_owner = NULL, lease_expires_at = NULL, updated_at = $5
 WHERE id = $1::uuid AND sync_run_id = $6::uuid AND status = 'running'
-  AND lease_owner IS NOT DISTINCT FROM $7`,
+  AND lease_owner IS NOT DISTINCT FROM $7`
+	if keepLiveLeases {
+		// A same-owner renewal between the read above and this write keeps the unit running.
+		leaseSQL += `
+  AND lease_expires_at IS NOT NULL AND lease_expires_at <= $5`
+	}
+	for _, lease := range runningLeases {
+		if termination.operator {
+			ids, err := returnedUnitIDs(ctx, tx, leaseSQL+operatorReturning, lease.unitID, syncRunUnitStatusFailed, errorText, resultJSON, now,
+				run.id, lease.owner)
+			if err != nil {
+				return FeatureDisabledRunTransition{}, ErrReferenceDiscoveryUnavailable
+			}
+			operatorUnitIDs = append(operatorUnitIDs, ids...)
+			continue
+		}
+		if _, err := tx.Exec(ctx, leaseSQL,
 			lease.unitID, syncRunUnitStatusFailed, errorText, resultJSON, now,
 			run.id, lease.owner); err != nil {
 			return FeatureDisabledRunTransition{}, ErrReferenceDiscoveryUnavailable
@@ -256,6 +334,16 @@ WHERE id = $1::uuid AND sync_run_id = $6::uuid AND status = 'running'
 	// syncrunrollup.LockRun's doc comment for the full scenario.
 	if err := syncrunrollup.LockRun(ctx, tx, run.id); err != nil {
 		return FeatureDisabledRunTransition{}, ErrReferenceDiscoveryUnavailable
+	}
+	if termination.operator {
+		var status string
+		if err := tx.QueryRow(ctx, `SELECT status FROM public.sync_runs WHERE id = $1::uuid`, run.id).Scan(&status); err != nil {
+			return FeatureDisabledRunTransition{}, ErrReferenceDiscoveryUnavailable
+		}
+		if terminalSyncRunStatus(status) {
+			run.status = status
+			return FeatureDisabledRunTransition{}, errRunTerminalUnderLock
+		}
 	}
 
 	statusRows, err := tx.Query(ctx, `SELECT status FROM public.sync_run_units WHERE sync_run_id = $1::uuid`, run.id)
@@ -326,9 +414,10 @@ WHERE id = $1::uuid`,
 	recordRollupBump(ctx, rollupPathFeatureDisabled)
 
 	return FeatureDisabledRunTransition{
-		FailedUnits:  failedUnits,
-		RunningUnits: runningUnits,
-		RunTerminal:  runTerminal,
+		FailedUnits:     failedUnits,
+		RunningUnits:    runningUnits,
+		RunTerminal:     runTerminal,
+		operatorUnitIDs: operatorUnitIDs,
 	}, nil
 }
 
@@ -350,8 +439,18 @@ WHERE id = $1::uuid`,
 func terminalizeFeatureDisabledGraph(
 	ctx context.Context, tx pgx.Tx, run *finalizeSyncRun, errorText string, completedAt time.Time,
 ) error {
+	return terminalizeRunGraph(ctx, tx, run, featureDisabledErrorCategory, errorText, completedAt)
+}
+
+// terminalizeRunGraph is terminalizeFeatureDisabledGraph with the category of the ledger and
+// observer results given. The outbox rows keep last_error 'feature_disabled' whatever the
+// category: ck_sync_dispatch_outbox_dispatched_route_coherence admits a dispatched row with no
+// transport only with that value, and the native wakeup upserts keep such a row terminal by it.
+func terminalizeRunGraph(
+	ctx context.Context, tx pgx.Tx, run *finalizeSyncRun, errorCategory, errorText string, completedAt time.Time,
+) error {
 	sanitized := sanitizeErrorText(errorText)
-	resultJSON, err := json.Marshal(map[string]any{"error_category": featureDisabledErrorCategory})
+	resultJSON, err := json.Marshal(map[string]any{"error_category": errorCategory})
 	if err != nil {
 		return ErrReferenceDiscoveryUnavailable
 	}
@@ -400,7 +499,7 @@ SET status = 'dispatched',
 	}
 
 	return observeTerminalSyncRun(ctx, tx, run, completedAt, syncRunStatusFailed, run.completedUnits, run.failedUnits,
-		map[string]any{"error_category": featureDisabledErrorCategory}, &sanitized)
+		map[string]any{"error_category": errorCategory}, &sanitized)
 }
 
 // terminalizeFeatureDisabledPlan ports terminalize_feature_disabled_plan:

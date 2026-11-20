@@ -28,6 +28,7 @@ var (
 	MsgDispatchSyncRunBudgetSurplusWithdrawalLostRace    = Msg{"dispatch_sync_run.budget_surplus_withdrawal_lost_race"}
 	MsgDispatchSyncRunBudgetSurplusWithdrawn             = Msg{"dispatch_sync_run.budget_surplus_withdrawn"}
 	MsgDispatchSyncRunClaimDeferredOutsideGuardSnapshot  = Msg{"dispatch_sync_run.claim_deferred_outside_guard_snapshot"}
+	MsgBackfillWaitGaugeReadFailed                       = Msg{"backfill_wait_gauge.read_failed"}
 	MsgSyncDispatchAdmissionCaps                         = Msg{"sync_dispatch_admission_caps"}
 	MsgTeamsInsertCarriesProviderIdentity                = Msg{"teams_insert.carries_provider_identity"}
 	MsgSyncTriggerRefusedUnselectedSource                = Msg{"sync_trigger.refused_unselected_source"}

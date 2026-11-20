@@ -5,13 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"sort"
 	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/puddle/v2"
+
+	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime/synclog"
 )
 
 // CHAOS-14304: an operator gauge for the serial backfill drain. It reports, per (provider, cost class), how many units
@@ -64,7 +65,7 @@ type backfillWaitSnapshot struct {
 // read records no sample (read_ok 0) and is not retried before the period ends.
 type BackfillWaitSource struct {
 	db     BackfillWaitDB
-	logger *slog.Logger
+	logger *synclog.Logger
 	now    func() time.Time
 
 	mu       sync.Mutex
@@ -72,12 +73,9 @@ type BackfillWaitSource struct {
 	snapshot *backfillWaitSnapshot
 }
 
-func NewBackfillWaitSource(db BackfillWaitDB, logger *slog.Logger) (*BackfillWaitSource, error) {
+func NewBackfillWaitSource(db BackfillWaitDB, logger *synclog.Logger) (*BackfillWaitSource, error) {
 	if db == nil {
 		return nil, errors.New("syncdispatchruntime: the backfill wait gauge needs a database")
-	}
-	if logger == nil {
-		logger = slog.Default()
 	}
 	return &BackfillWaitSource{db: db, logger: logger, now: time.Now}, nil
 }
@@ -177,11 +175,10 @@ func (s *BackfillWaitSource) current(ctx context.Context) *backfillWaitSnapshot 
 	snapshot, err := s.read(ctx, now)
 	if err != nil {
 		s.snapshot = nil
-		if errors.Is(err, puddle.ErrClosedPool) {
-			s.logger.InfoContext(ctx, "backfill wait gauge read skipped: the pool is closed (shutdown)")
-			return nil
+		// The last scrape at pod stop can run after the pool is closed: shutdown, not a failed read.
+		if !errors.Is(err, puddle.ErrClosedPool) {
+			s.logger.Warn(ctx, synclog.MsgBackfillWaitGaugeReadFailed, synclog.Failure(err))
 		}
-		s.logger.WarnContext(ctx, "backfill wait gauge read failed", "error", err)
 		return nil
 	}
 	s.snapshot = snapshot

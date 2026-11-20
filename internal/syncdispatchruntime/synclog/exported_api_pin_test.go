@@ -185,6 +185,7 @@ var exportedAPI = []string{
 	"var synclog.LabelPostClaim synclog.Label",
 	"var synclog.LabelPreCapacity synclog.Label",
 	"var synclog.LabelReclaimedUnitsWhoseDeliveriesAreAlreadyTerminalNothingWasDel synclog.Label",
+	"var synclog.MsgBackfillWaitGaugeReadFailed synclog.Msg",
 	"var synclog.MsgDispatchGuardBucketDecision synclog.Msg",
 	"var synclog.MsgDispatchSyncRunBlockedOnReferenceDiscovery synclog.Msg",
 	"var synclog.MsgDispatchSyncRunBudgetEstimateUnitFailed synclog.Msg",

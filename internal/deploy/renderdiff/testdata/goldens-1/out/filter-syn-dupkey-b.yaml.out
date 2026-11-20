@@ -1,0 +1,14 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: svc
+spec:
+  template:
+    spec:
+      containers:
+      - env:
+        - name: A
+          value: '1'
+        - name: A
+          value: '2'
+        name: app

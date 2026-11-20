@@ -1,0 +1,103 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: scalars
+  annotations:
+    when: 2020-01-02
+    stamp: 2020-01-02T03:04:05.123Z
+    stamp2: 2020-01-02 03:04:05 +05:30
+    naive: 2001-12-14 21:59:43.10
+data:
+  b1: yes
+  b2: Off
+  b3: TRUE
+  o1: 0755
+  h1: 0x1F
+  s1: 1:30
+  f1: 1.5
+  f2: 1e+3
+  f3: 1e3
+  f4: .inf
+  f5: -.Inf
+  f6: .NaN
+  f7: 6.8523015e+5
+  f8: 1_000.5
+  f9: 190:20:30.15
+  f10: 0.00001
+  f11: 12345678901234567890.0
+  i2: -0b1010
+  i3: 1_000
+  i4: 123456789012345678901234567890
+  n1: ~
+  n2: null
+  n3:
+  q1: '123'
+  q2: 'true'
+  q3: 'null'
+  q4: ''
+  q5: ' lead'
+  q6: 'trail '
+  q7: 'a # b'
+  q8: 'a: b'
+  q9: '- x'
+  q10: '---x'
+  q11: '...'
+  q12: "tab\there"
+  q13: "café \U0001F600"
+  q14: "line1\nline2\n"
+  q15: "trailing space \nnext"
+  q16: "  \nindented"
+  q17: "x y"
+  q18: '@at'
+  q19: '%pct'
+  q20: '!bang'
+  q21: '?q'
+  q22: ': c'
+  q23: 'a:b'
+  q24: '[x]'
+  q25: 'it''s'
+  q26: "quote\"d"
+  q27: "back\\slash"
+  q28: "bell\a esc\e nul\0 del\x7f nbsp\_ nel\N"
+  q29: "="
+  q30: "<<"
+  q31: '#hash'
+  q32: 'x #y'
+  q33: '-'
+  q34: '0o17'
+  q35: '1e3'
+  q36: '+1'
+  q37: '.5'
+  q38: 'Yes'
+  q39: '~'
+  q40: '2020-01-02'
+  t1: !!str 123
+  t2: !!int "7"
+  t3: !!float "2"
+  t4: !!bool "yes"
+  t5: !!null "anything"
+  bin: !!binary aGVsbG8gd29ybGQ=
+  long1: "The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog again and again and again."
+  long2: "A long line with a newline\nThe quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog."
+  long3: "ThequickbrownfoxjumpsoverthelazydogThequickbrownfoxjumpsoverthelazydogThequickbrownfoxjumpsoverthelazydog"
+  long4: "unicode é and a long tail to fold over the width limit of eighty characters, fold fold fold fold"
+  long5: "spaces    many     spaces      between     words      to      fold      over     the     limit     ok"
+  long6: "  leading spaces then a long tail to fold over the width limit of eighty characters, fold fold fold fold"
+  lit: |
+    literal block
+      indented
+    end
+  fold: >
+    folded block
+    joins lines
+
+    keeps paragraph
+  litkeep: |+
+    keep
+
+  litstrip: |-
+    strip
+  ? "a very long key that is longer than one hundred and twenty eight characters, to force the complex key form in the emitter output ok"
+  : v
+  "multi\nline key": v2
+  "": emptykey

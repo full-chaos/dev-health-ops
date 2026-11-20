@@ -1,0 +1,43 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: svc}
+spec:
+  replicas: 2
+  emptyl: {}
+  emptym: []
+  template:
+    spec:
+      initContainers:
+        - {name: i2, image: "r/i2@sha256:aaaa"}
+        - {name: i1, image: "r/i1@sha256:aaaa"}
+      containers:
+        - name: app
+          image: "r/app@sha256:bbbb"
+          args: ["--dsn", "postgres://u:pw2@h/db", "--y"]
+          ports:
+            - {containerPort: 8080, protocol: TCP, name: http}
+            - {containerPort: 9091, protocol: TCP, name: metrics}
+          env:
+            - {name: B, value: "2"}
+            - {name: A, value: "1"}
+            - {name: DB_PASSWORD, value: "SENTINEL-PW-zzzz"}
+            - {name: NEWV, value: "n"}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: cfg}
+data:
+  LOG_LEVEL: debug
+  api_token: SENTINEL-TOKEN-zzzz
+  ADDED_KEY: "x"
+  URL: "https://bob@example.com/p"
+---
+apiVersion: v1
+kind: Secret
+metadata: {name: sec}
+stringData: {PASSWORD: SENTINEL-SECRET-zzzz}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: new-np}
+spec: {podSelector: {}}

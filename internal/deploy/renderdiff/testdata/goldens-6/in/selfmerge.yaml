@@ -1,0 +1,6 @@
+kind: ConfigMap
+metadata: {name: selfm}
+data:
+  password: SNTSELF01Z
+  plain: SNTSELF02Z
+v: &m {<<: *m}

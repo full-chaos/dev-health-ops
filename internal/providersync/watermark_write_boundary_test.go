@@ -57,7 +57,7 @@ func TestNormalizeWatermarkWriteClampsToBothCeilings(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			got := normalizeWatermarkWrite(test.incoming, test.bound, now, "org", "src", "commits")
+			got, _ := normalizeWatermarkWrite(test.incoming, test.bound, now, "org", "src", "commits")
 			if !got.Equal(test.want) {
 				t.Fatalf("normalizeWatermarkWrite = %s, want %s", got, test.want)
 			}
@@ -105,7 +105,7 @@ func TestNormalizeWatermarkWriteReturnsUTC(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			got := normalizeWatermarkWrite(test.incoming, test.bound, now, "org", "src", "commits")
+			got, _ := normalizeWatermarkWrite(test.incoming, test.bound, now, "org", "src", "commits")
 			if got.Location() != time.UTC {
 				t.Fatalf("normalizeWatermarkWrite returned %s (location %s), want UTC",
 					got.Format(time.RFC3339Nano), got.Location())

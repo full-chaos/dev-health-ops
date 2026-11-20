@@ -714,7 +714,7 @@ func deletePreparedChunkStateTx(ctx context.Context, tx pgx.Tx, claim Claim) err
 	if err := tx.QueryRow(ctx,
 		`SELECT to_regclass('public.sync_run_unit_effect_chunks') IS NOT NULL`,
 	).Scan(&present); err != nil {
-		return ErrInvalidConfiguration
+		return err
 	}
 	if !present {
 		return nil
@@ -722,12 +722,12 @@ func deletePreparedChunkStateTx(ctx context.Context, tx pgx.Tx, claim Claim) err
 	if _, err := tx.Exec(ctx, deletePreparedEffectChunksSQL,
 		claim.OrgID, claim.ID, claim.GenerationKey(),
 	); err != nil {
-		return ErrInvalidConfiguration
+		return err
 	}
 	if _, err := tx.Exec(ctx, deletePreparedCheckpointSQL,
 		claim.OrgID, claim.ID, claim.GenerationKey(),
 	); err != nil {
-		return ErrInvalidConfiguration
+		return err
 	}
 	return nil
 }

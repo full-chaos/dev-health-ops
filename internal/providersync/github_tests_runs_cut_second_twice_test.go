@@ -2,6 +2,7 @@ package providersync
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -175,4 +176,82 @@ func TestGitHubTestsRunsCutSecondControlsAreReadOnce(t *testing.T) {
 		{name: "shared_cut_second_resumed", count: 1001, ties: 2, chunk: 64},
 		{name: "three_long_ids_fit", count: 1001, ties: 4, long: true},
 	})
+}
+
+// The runs phase keeps up to githubTestsMaxRunsCutKeysBytes of cut keys and the artifacts phase 52: one key past the cap
+// overflows the list (those runs are read again, the named residual), and a decoded list past its phase cap is a named
+// checkpoint conflict.
+func TestGitHubTestsRunsCutListCapIsPerPhase(t *testing.T) {
+	at := "2026-07-20T06:30:00Z"
+	second, _ := githubTestsCutSecond(at)
+	widest := strings.Split(githubTestsWidestRunsCutKeys(t), ",")
+	fill := func(phase string, keys []string) githubTestsChunkCursor {
+		cursor := githubTestsChunkCursor{Phase: phase, RangeOldest: at}
+		for _, key := range keys {
+			cursor = githubTestsRecordCutRun(cursor, second, key)
+		}
+		return cursor
+	}
+	if got := fill(githubTestsRunsPhase, widest).ActiveCutKeys; len(got) != githubTestsMaxRunsCutKeysBytes {
+		t.Fatalf("runs phase: %d bytes of keys kept, want all %d", len(got), githubTestsMaxRunsCutKeysBytes)
+	}
+	if got := fill(githubTestsRunsPhase, append(slices.Clone(widest), "6")).ActiveCutKeys; got != githubTestsCutKeysOverflow {
+		t.Fatalf("runs phase: one key past %d bytes kept %d bytes, want the overflow mark", githubTestsMaxRunsCutKeysBytes, len(got))
+	}
+	if got := fill(githubTestsArtifactsPhase, widest).ActiveCutKeys; got != githubTestsCutKeysOverflow {
+		t.Fatalf("artifacts phase: past %d bytes kept %d bytes, want the overflow mark", githubTestsMaxCutKeysBytes, len(got))
+	}
+	for _, tc := range []struct {
+		phase, keys string
+		valid       bool
+	}{
+		{githubTestsRunsPhase, githubTestsWidestRunsCutKeys(t), true},
+		{githubTestsRunsPhase, githubTestsWidestRunsCutKeys(t) + ",6", false},
+		{githubTestsArtifactsPhase, githubTestsWidestCutKeys(t), true},
+		{githubTestsArtifactsPhase, githubTestsWidestCutKeys(t) + "9", false},
+	} {
+		for _, carried := range []bool{false, true} {
+			cursor := githubTestsChunkCursor{Phase: tc.phase, Repo: "acme/api", RangeHi: "2026-07-20T23:59:59Z", RangeOldest: at}
+			if carried {
+				cursor.CarriedCutKeys = tc.keys
+			} else {
+				cursor.ActiveCutKeys = tc.keys
+			}
+			raw, err := json.Marshal(cursor)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = decodeGitHubTestsChunkCursor(string(raw))
+			if tc.valid && err != nil || !tc.valid && !errors.Is(err, ErrChunkCheckpointConflict) {
+				t.Errorf("%s phase, %d-byte list (carried %t): decode err=%v, want valid=%t", tc.phase, len(tc.keys), carried, err, tc.valid)
+			}
+		}
+	}
+}
+
+// The count of runs at the oldest second is a plain cursor int: negative, above the range's runs or without an oldest
+// second is a corrupt cursor.
+func TestGitHubTestsRunsRangeOldestItemsDecode(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		items, oldest int
+		at            string
+		valid         bool
+	}{
+		{"absent", 5, 0, "", true},
+		{"within the range", 5, 5, "2026-07-20T06:30:00Z", true},
+		{"negative", 5, -1, "2026-07-20T06:30:00Z", false},
+		{"above the range", 5, 6, "2026-07-20T06:30:00Z", false},
+		{"no oldest second", 5, 1, "", false},
+	} {
+		raw, err := json.Marshal(githubTestsChunkCursor{Phase: githubTestsRunsPhase, Repo: "acme/api", RangeItems: tc.items,
+			RangeOldestItems: tc.oldest, RangeOldest: tc.at})
+		if err != nil {
+			t.Fatal(err)
+		}
+		decoded, err := decodeGitHubTestsChunkCursor(string(raw))
+		if tc.valid && (err != nil || decoded.RangeOldestItems != tc.oldest) || !tc.valid && !errors.Is(err, ErrChunkCheckpointConflict) {
+			t.Errorf("%s: decode = %d err=%v, want valid=%t", tc.name, decoded.RangeOldestItems, err, tc.valid)
+		}
+	}
 }

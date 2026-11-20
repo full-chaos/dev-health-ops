@@ -840,7 +840,8 @@ func TestChunkCursorWorstCaseOfEachPhaseKeepsTheMargin(t *testing.T) {
 			c.Phase = githubTestsRunsPhase
 			c.RangeHi, c.RangeOldest, c.RangeItems = "2026-07-20T23:59:59Z", "2026-07-20T00:00:00Z", githubTestsSearchResultCap
 			c.SaturatedRuns, c.SaturatedArtifacts = true, true
-			c.ActiveCutKeys, c.CarriedCutKeys = githubTestsWidestCutKeys(t), githubTestsWidestCutKeys(t)
+			c.ActiveCutKeys, c.CarriedCutKeys = githubTestsWidestRunsCutKeys(t), githubTestsWidestRunsCutKeys(t)
+			c.RangeOldestItems = githubTestsSearchResultCap
 		}},
 		{"runs deep range peel", func(c *githubTestsChunkCursor) {
 			c.Phase = githubTestsRunsPhase
@@ -848,6 +849,8 @@ func TestChunkCursorWorstCaseOfEachPhaseKeepsTheMargin(t *testing.T) {
 			c.RangeHi, c.RangeOldest, c.RangeItems = "2026-07-20T23:59:59Z", "2026-07-20T00:00:00Z", githubTestsSearchResultCap
 			c.SaturatedRuns, c.SaturatedArtifacts = true, true
 			c.LateRunsBudget, c.LateRunsSaturated = true, true
+			c.ActiveCutKeys, c.CarriedCutKeys = githubTestsWidestRunsCutKeys(t), githubTestsWidestRunsCutKeys(t)
+			c.RangeOldestItems = githubTestsSearchResultCap
 		}},
 		{"artifacts peel", func(c *githubTestsChunkCursor) {
 			c.Phase = githubTestsArtifactsPhase
@@ -873,6 +876,7 @@ func TestChunkCursorWorstCaseOfEachPhaseKeepsTheMargin(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", tc.name, err)
 		}
+		t.Logf("%s: worst-case cursor %d bytes", tc.name, len(encoded))
 		if remaining := maxChunkCursorBytes - len(encoded); remaining < 300 {
 			t.Fatalf("%s: worst-case cursor %d bytes leaves %d under maxChunkCursorBytes, want at least 300", tc.name, len(encoded), remaining)
 		}

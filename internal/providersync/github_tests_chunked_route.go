@@ -103,6 +103,9 @@ type githubTestsChunkCursor struct {
 	RangeHi     string `json:"rh,omitempty"`
 	RangeItems  int    `json:"ri,omitempty"`
 	RangeOldest string `json:"ro,omitempty"`
+	// RangeOldestItems counts the runs of the current runs-phase range created in the second RangeOldest: a range whose
+	// cap of runs all share that second is stuck at once, as any range ending at it lists the same runs (CHAOS-14321).
+	RangeOldestItems int `json:"rq,omitempty"`
 	// LateRuns marks the deep range of the runs phase (the late re-run relist
 	// of the claim that holds a UTC midnight), walked after the runs range;
 	// LateRunPages is its cumulative page count against its own budget.
@@ -1032,7 +1035,8 @@ func decodeGitHubTestsChunkCursor(raw string) (githubTestsChunkCursor, error) {
 	var cursor githubTestsChunkCursor
 	if json.Unmarshal([]byte(raw), &cursor) != nil ||
 		(cursor.Phase != "runs" && cursor.Phase != "artifacts" && cursor.Phase != githubTestsOpenPhase && cursor.Phase != "done") ||
-		cursor.RangeItems < 0 || cursor.OpenDone < 0 || cursor.OpenCap < 0 ||
+		cursor.RangeItems < 0 || cursor.RangeOldestItems < 0 || cursor.RangeOldestItems > cursor.RangeItems ||
+		cursor.RangeOldestItems > 0 && cursor.RangeOldest == "" || cursor.OpenDone < 0 || cursor.OpenCap < 0 ||
 		cursor.OpenSkipped < 0 || cursor.OpenTransientRun < 0 ||
 		cursor.OpenSkipEvent != nil && (cursor.OpenSkipEvent.RunID == "" || cursor.OpenSkipEvent.Reason == "") ||
 		cursor.Index < 0 || cursor.NextURL == "" && cursor.Index != 0 ||
@@ -1500,7 +1504,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 	// runs range of the claim that holds a UTC midnight goes on to the deep
 	// range, every other one to the artifacts phase.
 	nextRunsListing := func(c githubTestsChunkCursor) githubTestsChunkCursor {
-		c.RangeHi, c.RangeItems, c.RangeOldest = "", 0, ""
+		c.RangeHi, c.RangeItems, c.RangeOldest, c.RangeOldestItems = "", 0, "", 0
 		c = githubTestsClearCutKeys(c)
 		if !c.LateRuns && githubTestsHoldsMidnight(claim) {
 			c.LateRuns = true
@@ -1517,7 +1521,10 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 	endRunsRange := func(c githubTestsChunkCursor) githubTestsChunkCursor {
 		nextHi, saturated, stuck := githubTestsPeel(c.RangeItems, c.RangeOldest, c.RangeHi)
 		items, hi := c.RangeItems, c.RangeHi
-		c.RangeItems, c.RangeOldest = 0, ""
+		if saturated && !stuck && c.RangeOldestItems >= githubTestsSearchResultCap {
+			stuck, hi = true, nextHi
+		}
+		c.RangeItems, c.RangeOldest, c.RangeOldestItems = 0, "", 0
 		switch {
 		case !saturated:
 			c = nextRunsListing(c)
@@ -1624,9 +1631,12 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 				jobs = append(jobs, row)
 			}
 		}
-		// A walk stopped by its page budget had a next page, so EndProven is false there.
+		// A walk stopped by its page budget had a next page, so EndProven is false there. A walk that ended on its own with
+		// every job total_count declares is whole too, even when its last page was full and carried no Link (CHAOS-14321).
+		gotDeclared := jobPage.DeclaredTotalSeen && len(jobPage.Items) >= jobPage.DeclaredTotal
 		complete := jobPage.ItemCapReached ||
-			jobPage.EndProven && (!jobPage.DeclaredTotalSeen || len(jobPage.Items) >= jobPage.DeclaredTotal)
+			jobPage.EndProven && (!jobPage.DeclaredTotalSeen || gotDeclared) ||
+			!jobPage.PageBudgetExhausted && gotDeclared
 		complete = complete && len(jobs) == len(jobItems)
 		targetBranch, prNumber := gitHubTestsTarget(run)
 		policy := githubTestsPolicy{provenance: "github.branch_protection.target_branch_unavailable"}
@@ -1685,8 +1695,12 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 			}
 			pipeline, include := normalizeGitHubTestsPipeline(claim, repoID, run, normalizedAt)
 			cursor.RangeItems++
-			if oldest := githubTestsOlderCreated(cursor.RangeOldest, parseGitHubWorkflowTime(run.CreatedAt)); oldest != cursor.RangeOldest {
-				cursor.RangeOldest, cursor.ActiveCutKeys = oldest, ""
+			created := parseGitHubWorkflowTime(run.CreatedAt)
+			if oldest := githubTestsOlderCreated(cursor.RangeOldest, created); oldest != cursor.RangeOldest {
+				cursor.RangeOldest, cursor.ActiveCutKeys, cursor.RangeOldestItems = oldest, "", 0
+			}
+			if created != nil && created.UTC().Format(time.RFC3339) == cursor.RangeOldest {
+				cursor.RangeOldestItems++
 			}
 			cutSecond, cutKey := githubTestsCutRunKey(run)
 			wanted := githubTestsRunWanted(run, pipeline, claim)
@@ -1828,6 +1842,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 	if cursor.Phase == githubTestsRunsPhase {
 		cursor.Phase = githubTestsArtifactsPhase
 		cursor.NextURL, cursor.Index, cursor.LateRuns = "", 0, false
+		cursor.RangeOldestItems = 0
 		cursor = githubTestsClearCutKeys(cursor)
 	}
 	handlerOpenRan := false

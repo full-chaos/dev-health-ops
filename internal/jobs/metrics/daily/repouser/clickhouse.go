@@ -30,12 +30,12 @@ type conn interface {
 // on why batching every repo in a partition into one query is equivalent to
 // Python's per-repo loop (job_daily.py:956).
 //
-// The pull request query reads git_pull_requests FINAL: a re-synced pull
-// request (merge moved, counts changed) keeps its old version until
-// ClickHouse merges the parts, and the window predicates are on non-key
-// columns, so FINAL applies them to the current version. The commit,
-// commit stat and review queries still read raw, as load_git_rows does
-// (loaders/clickhouse.py:110-164); they are not changed here.
+// The pull request, commit and commit stat queries read FINAL: a re-synced
+// row keeps its old version until ClickHouse merges the parts, so a raw read
+// counts the pull request twice or joins each stat row to every commit
+// version and sums its lines twice; the window predicates are on non-key
+// columns, so FINAL applies them to the current version. The review query
+// still reads raw, as load_git_rows does (loaders/clickhouse.py:110-164).
 type ClickHouseLoader struct {
 	conn conn
 }
@@ -84,8 +84,8 @@ SELECT
   s.file_path AS file_path,
   s.additions AS additions,
   s.deletions AS deletions
-FROM git_commits AS c
-LEFT JOIN git_commit_stats AS s
+FROM git_commits AS c FINAL
+LEFT JOIN git_commit_stats AS s FINAL
   ON (s.repo_id = c.repo_id) AND (s.commit_hash = c.hash) AND (s.org_id = c.org_id)
 WHERE c.committer_when >= {start:DateTime} AND c.committer_when < {end:DateTime}
   AND c.repo_id IN {repo_ids:Array(UUID)}

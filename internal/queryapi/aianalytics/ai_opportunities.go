@@ -364,12 +364,12 @@ func firstFive(refs []string) []string {
 const repetitiveStatement = `SELECT
     toString(pr.repo_id) AS repo_id,
     lower(arrayStringConcat(arraySlice(splitByChar(' ', coalesce(pr.title, '')), 1, 3), ' ')) AS title_prefix,
-    count() AS prs_total,
-    groupArray(concat('git_pull_requests:', toString(pr.repo_id), ':', toString(pr.number))) AS pr_refs,
+    uniqExact(pr.number) AS prs_total,
+    groupUniqArray(concat('git_pull_requests:', toString(pr.repo_id), ':', toString(pr.number))) AS pr_refs,
     coalesce(nullIf(wi.type, ''), 'pull_request') AS cluster_work_type,
     argMin(pr.number, (pr.created_at, pr.number)) AS cluster_anchor
-FROM git_pull_requests AS pr
-LEFT JOIN work_graph_issue_pr AS link
+FROM git_pull_requests AS pr FINAL
+LEFT JOIN work_graph_issue_pr AS link FINAL
     ON link.repo_id = pr.repo_id AND link.pr_number = pr.number
     AND link.org_id = {org_id:String}
 INNER JOIN ai_attribution_resolved AS attr
@@ -423,7 +423,7 @@ const titleToilStatement = `SELECT
     toString(pr.repo_id) AS repo_id,
     count() AS prs_total,
     groupArray(concat('git_pull_requests:', toString(pr.repo_id), ':', toString(pr.number))) AS pr_refs
-FROM git_pull_requests AS pr
+FROM git_pull_requests AS pr FINAL
 LEFT ANTI JOIN ai_attribution_resolved AS attr
     ON attr.repo_id = pr.repo_id
     AND attr.subject_type = 'pull_request'

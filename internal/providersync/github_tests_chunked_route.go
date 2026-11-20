@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -1188,6 +1189,31 @@ func normalizeLegacyGitHubTestsSkippedArtifacts(cursor githubTestsChunkCursor) g
 	return cursor
 }
 
+// recordGitHubTestsCutListsDropped counts and logs one emission whose cursor dropped cut lists to fit the byte budget
+// (CHAOS-14315). It fires once per degraded emission, never for the before cursor of the next one.
+func recordGitHubTestsCutListsDropped(cursor githubTestsChunkCursor, bytesBefore int, client *providerfoundation.HTTPClient, claim Claim, dropped []string) {
+	encoded, _ := json.Marshal(cursor)
+	for _, list := range dropped {
+		if client != nil {
+			client.Metrics.RecordCursorCutListDropped(list)
+		}
+	}
+	slog.Warn(
+		"github tests chunk cursor over the byte budget; cut lists dropped, the revisit of the cut second reads its runs again",
+		"provider", claim.Provider, "dataset", claim.Dataset, "repository", logging.ProviderText(cursor.Repo),
+		"dropped", strings.Join(dropped, ","), "bytes_after", len(encoded), "bytes_before", bytesBefore,
+	)
+}
+
+// githubTestsAddExcludedSample is the one bounded insertion of an exclusion sample (all four reasons). A sample already
+// present is not added again: a run read again (a resume from a degraded cursor) must not grow the cursor (CHAOS-14315).
+func githubTestsAddExcludedSample(samples []string, sample string) []string {
+	if len(samples) >= githubTestsMaxExcludedArtifactSampleRecords || slices.Contains(samples, sample) {
+		return samples
+	}
+	return append(samples, sample)
+}
+
 func encodeGitHubTestsChunkCursor(cursor githubTestsChunkCursor) (string, error) {
 	encoded, err := json.Marshal(cursor)
 	if err != nil || len(encoded) > maxChunkCursorBytes {
@@ -1449,9 +1475,15 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 	cursor.Requests = invocationBaseRequests + requests
 	policyCache := map[string]githubTestsPolicy{}
 	emitCursor := func(before, after githubTestsChunkCursor, batch CompleteRouteBatch, final bool) error {
+		before, _ = githubTestsFitCursor(before)
 		beforeRaw, beforeErr := encodeGitHubTestsChunkCursor(before)
 		if beforeErr != nil {
 			return beforeErr
+		}
+		bytesBefore, _ := json.Marshal(after)
+		after, dropped := githubTestsFitCursor(after)
+		if len(dropped) > 0 {
+			recordGitHubTestsCutListsDropped(after, len(bytesBefore), client, claim, dropped)
 		}
 		afterRaw, afterErr := encodeGitHubTestsChunkCursor(after)
 		if afterErr != nil {
@@ -2062,16 +2094,13 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 							case githubTestsExclusionReasonPrefix:
 								cursor.ExcludedNonReportPrefix++
 							}
-							if len(cursor.ExcludedArtifactSample) < githubTestsMaxExcludedArtifactSampleRecords {
-								// Bounded the same way as GitHubTestsSkippedArtifact.Name
-								// (CHAOS-4588/CHAOS-4591, codex round 1, P1): a
-								// provider name is unbounded, and this sample
-								// shares the same cursor byte budget.
-								cursor.ExcludedArtifactSample = append(
-									cursor.ExcludedArtifactSample,
-									githubTestsTruncateArtifactName(artifact.Name)+" ("+reason+")",
-								)
-							}
+							// Bounded the same way as GitHubTestsSkippedArtifact.Name
+							// (CHAOS-4588/CHAOS-4591, codex round 1, P1): a
+							// provider name is unbounded, and this sample
+							// shares the same cursor byte budget.
+							cursor.ExcludedArtifactSample = githubTestsAddExcludedSample(
+								cursor.ExcludedArtifactSample, githubTestsTruncateArtifactName(artifact.Name)+" ("+reason+")",
+							)
 							continue
 						}
 						artifactItems = append(artifactItems, artifact)
@@ -2081,12 +2110,9 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 					artifactItems, superseded := githubTestsKeepNewestArtifactPerName(artifactItems)
 					supersededIDs := githubTestsSupersededIDs(superseded)
 					for _, artifact := range superseded {
-						if len(cursor.ExcludedArtifactSample) < githubTestsMaxExcludedArtifactSampleRecords {
-							cursor.ExcludedArtifactSample = append(
-								cursor.ExcludedArtifactSample,
-								githubTestsTruncateArtifactName(artifact.Name)+" ("+githubTestsExclusionReasonSuperseded+")",
-							)
-						}
+						cursor.ExcludedArtifactSample = githubTestsAddExcludedSample(
+							cursor.ExcludedArtifactSample, githubTestsTruncateArtifactName(artifact.Name)+" ("+githubTestsExclusionReasonSuperseded+")",
+						)
 					}
 					// CHAOS-13980: GitHub says an expired artifact's bytes are deleted, so a report-shaped one is lost for good. It is
 					// decided here, after the newest-per-name rule (an older attempt's expired copy is superseded, not a loss) and BEFORE
@@ -2126,9 +2152,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 					// An artifact whose directory lists no report member is not a report source of the run (CHAOS-13826).
 					reportsExpected -= len(noReportItems)
 					for _, artifact := range noReportItems {
-						if len(cursor.ExcludedArtifactSample) < githubTestsMaxExcludedArtifactSampleRecords {
-							cursor.ExcludedArtifactSample = append(cursor.ExcludedArtifactSample, githubTestsNoReportSampleRecord(artifact))
-						}
+						cursor.ExcludedArtifactSample = githubTestsAddExcludedSample(cursor.ExcludedArtifactSample, githubTestsNoReportSampleRecord(artifact))
 					}
 					switch {
 					case artifactsCapped:

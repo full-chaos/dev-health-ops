@@ -236,6 +236,27 @@ func TestGitHubTestsRunsCutSecondControlsAreReadOnce(t *testing.T) {
 	runsTwiceRanges(t, []runsTwiceCell{{name: "three_long_ids_fit", count: 1001, ties: 4, long: true}})
 }
 
+func runsTwiceDeep(t *testing.T, cells []runsTwiceCell) {
+	t.Helper()
+	for _, cell := range cells {
+		t.Run("deep/"+cell.name, func(t *testing.T) { runsTwiceCheck(t, cell, "deep") })
+	}
+}
+
+// Deep-range controls: one run at the cut second, and two runs sharing it (one in the first range), are read once on
+// both routes, as on main. The regular range keeps these controls in TestGitHubTestsRunsCutSecondRunsAreReadOnce.
+func TestGitHubTestsRunsCutSecondDeepRangeControlsAreReadOnce(t *testing.T) {
+	runsTwiceDeep(t, []runsTwiceCell{
+		{name: "one_cut_run", count: 1000},
+		{name: "shared_cut_second", count: 1001, ties: 2},
+	})
+}
+
+// Deep-range control: the shared cut second is read once across a resume every 64 emissions, as on main.
+func TestGitHubTestsRunsCutSecondDeepRangeControlsAreReadOnceAcrossResumes(t *testing.T) {
+	runsTwiceDeep(t, []runsTwiceCell{{name: "shared_cut_second_resumed", count: 1001, ties: 2, chunk: 64}})
+}
+
 // The runs phase keeps up to githubTestsMaxRunsCutKeysBytes of cut keys and the artifacts phase 52: one key past the cap
 // overflows the list (those runs are read again, the named residual), and a decoded list past its phase cap is a named
 // checkpoint conflict.

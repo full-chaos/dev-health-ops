@@ -90,19 +90,33 @@ func FixedEnv() []string {
 	}
 }
 
-// ProdTools are the only tools the real Runner starts.
-var ProdTools = []string{"git", "helm", "kubectl"}
+// Tools is the closed set of binaries the real Runner starts.
+var Tools = []string{"git", "helm", "kubectl"}
 
 // Exec is the real Runner. Env is the whole child env; argv[0] must be one of
 // Tools and is resolved on the PATH of Env (never the caller's PATH). The
 // child runs in "/".
 type Exec struct {
-	Env   []string
-	Tools []string
+	Env []string
 }
 
-// Real is the prod Runner: the fixed env and the prod tools.
-func Real() Exec { return Exec{Env: FixedEnv(), Tools: ProdTools} }
+// Real is the prod Runner: the fixed env.
+func Real() Exec { return Exec{Env: FixedEnv()} }
+
+// command builds the exec.Cmd of one closed-set binary: each case names its
+// binary as a literal, the words come from the Step's argv. Any other name is
+// refused before anything starts.
+func command(ctx context.Context, name string, args []string) (*exec.Cmd, error) {
+	switch name {
+	case "git":
+		return exec.CommandContext(ctx, "git", args...), nil
+	case "helm":
+		return exec.CommandContext(ctx, "helm", args...), nil
+	case "kubectl":
+		return exec.CommandContext(ctx, "kubectl", args...), nil
+	}
+	return nil, Refuse("exec: argv[0] is not one of git, helm, kubectl")
+}
 
 // Run starts c.Argv with no shell.
 func (e Exec) Run(ctx context.Context, c Cmd) (Output, error) {
@@ -110,15 +124,17 @@ func (e Exec) Run(ctx context.Context, c Cmd) (Output, error) {
 		return Output{}, Refuse("exec: empty argv")
 	}
 	name := c.Argv[0]
-	if !e.allowed(name) {
-		return Output{}, Refuse("exec: %q is not an allowed tool", name)
+	cmd, err := command(ctx, name, c.Argv[1:])
+	if err != nil {
+		return Output{}, err
 	}
 	path, err := lookPath(name, e.Env)
 	if err != nil {
 		return Output{}, Stop("exec: %s is not on the fixed PATH", name)
 	}
-	cmd := exec.CommandContext(ctx, path, c.Argv[1:]...)
-	cmd.Args[0] = name
+	// The binary is the one on the PATH of Env, not the one exec found on the
+	// caller's PATH (or failed to find: that error is dropped with it).
+	cmd.Path, cmd.Err = path, nil
 	cmd.Env = append([]string{}, e.Env...)
 	cmd.Dir = "/"
 	if c.Stdin != nil {
@@ -139,15 +155,6 @@ func (e Exec) Run(ctx context.Context, c Cmd) (Output, error) {
 	default:
 		return out, Stop("exec: %s did not run to an exit code", name)
 	}
-}
-
-func (e Exec) allowed(name string) bool {
-	for _, t := range e.Tools {
-		if name == t {
-			return true
-		}
-	}
-	return false
 }
 
 // lookPath resolves a bare name on the PATH of env, never os PATH.

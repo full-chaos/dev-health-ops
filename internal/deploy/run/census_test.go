@@ -23,7 +23,8 @@ import (
 // literal whose whole text is a shell name (sh, bash, dash, zsh, ksh, ash,
 // busybox, or a path ending in one), and none that holds `<shell> -c` at the
 // start or after whitespace or "/"; (4) no dot import of os, os/exec or
-// syscall. NOT pinned (ticket 14358): a shell name after ";" (and "&&", "|",
+// syscall; (5) every exec.Command / exec.CommandContext call names its binary
+// with a string literal (the closed set of run.go). NOT pinned (ticket 14358): a shell name after ";" (and "&&", "|",
 // "&"), after "$(", after "(", or in quotes inside a literal; test files;
 // reflect/unsafe/linkname/cgo calls; a shell name built from parts at run
 // time. The run-time guard is run.Exec: it starts no tool off its allow list
@@ -70,6 +71,25 @@ func censusFile(rel string, src []byte) ([]finding, error) {
 	}
 	ast.Inspect(f, func(n ast.Node) bool {
 		switch x := n.(type) {
+		case *ast.CallExpr:
+			sel, ok := x.Fun.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			id, ok := sel.X.(*ast.Ident)
+			if !ok || local[id.Name] != "os/exec" {
+				return true
+			}
+			at := map[string]int{"Command": 0, "CommandContext": 1}
+			if i, ok := at[sel.Sel.Name]; ok {
+				if len(x.Args) <= i {
+					add("exec name not a literal")
+					return true
+				}
+				if lit, ok := x.Args[i].(*ast.BasicLit); !ok || lit.Kind != token.STRING {
+					add("exec name not a literal")
+				}
+			}
 		case *ast.SelectorExpr:
 			id, ok := x.X.(*ast.Ident)
 			if !ok {
@@ -146,21 +166,24 @@ func TestTheCensusCatchesEachPlantedForm(t *testing.T) {
 	for name, c := range map[string]struct {
 		rel, src, rule string
 	}{
-		"os.Getenv":          {"gitgate/x.go", `package x; import "os"; var _ = os.Getenv("X")`, "env access os.Getenv"},
-		"aliased LookupEnv":  {"gitgate/x.go", `package x; import o "os"; func f() { o.LookupEnv("X") }`, "env access os.LookupEnv"},
-		"os.Environ value":   {"helmrev/x.go", `package x; import "os"; var f = os.Environ`, "env access os.Environ"},
-		"syscall.Getenv":     {"run/x.go", `package x; import "syscall"; func f() { syscall.Getenv("X") }`, "env access syscall.Getenv"},
-		"os.Setenv":          {"run/x.go", `package x; import "os"; func f() { os.Setenv("X", "1") }`, "env access os.Setenv"},
-		"exec elsewhere":     {"gitgate/x.go", `package x; import "os/exec"; var _ = exec.Command`, "os/exec outside " + execFile},
-		"os.StartProcess":    {"run/x.go", `package x; import "os"; var _ = os.StartProcess`, "process start os.StartProcess"},
-		"syscall.Exec":       {"run/x.go", `package x; import "syscall"; var _ = syscall.Exec`, "process start syscall.Exec"},
-		"aliased ForkExec":   {"run/x.go", `package x; import s "syscall"; var _ = s.ForkExec`, "process start syscall.ForkExec"},
-		"sh literal":         {"run/x.go", `package x; var a = []string{"sh"}`, "shell literal"},
-		"bin bash literal":   {"run/x.go", "package x; const b = `/bin/bash`", "shell literal"},
-		"sh -c in a string":  {"helmrev/x.go", `package x; const c = "kubectl x; sh  -c y"`, "shell literal"},
-		"bash -c in a path":  {"helmrev/x.go", `package x; const c = "/usr/bin/bash -c y"`, "shell literal"},
-		"dot import os":      {"run/x.go", `package x; import . "os"; var _ = Args`, "dot import os"},
-		"dot import syscall": {"run/x.go", `package x; import . "syscall"; var _ = Getpid`, "dot import syscall"},
+		"os.Getenv":                      {"gitgate/x.go", `package x; import "os"; var _ = os.Getenv("X")`, "env access os.Getenv"},
+		"aliased LookupEnv":              {"gitgate/x.go", `package x; import o "os"; func f() { o.LookupEnv("X") }`, "env access os.LookupEnv"},
+		"os.Environ value":               {"helmrev/x.go", `package x; import "os"; var f = os.Environ`, "env access os.Environ"},
+		"syscall.Getenv":                 {"run/x.go", `package x; import "syscall"; func f() { syscall.Getenv("X") }`, "env access syscall.Getenv"},
+		"os.Setenv":                      {"run/x.go", `package x; import "os"; func f() { os.Setenv("X", "1") }`, "env access os.Setenv"},
+		"exec elsewhere":                 {"gitgate/x.go", `package x; import "os/exec"; var _ = exec.Command`, "os/exec outside " + execFile},
+		"os.StartProcess":                {"run/x.go", `package x; import "os"; var _ = os.StartProcess`, "process start os.StartProcess"},
+		"syscall.Exec":                   {"run/x.go", `package x; import "syscall"; var _ = syscall.Exec`, "process start syscall.Exec"},
+		"aliased ForkExec":               {"run/x.go", `package x; import s "syscall"; var _ = s.ForkExec`, "process start syscall.ForkExec"},
+		"sh literal":                     {"run/x.go", `package x; var a = []string{"sh"}`, "shell literal"},
+		"bin bash literal":               {"run/x.go", "package x; const b = `/bin/bash`", "shell literal"},
+		"sh -c in a string":              {"helmrev/x.go", `package x; const c = "kubectl x; sh  -c y"`, "shell literal"},
+		"bash -c in a path":              {"helmrev/x.go", `package x; const c = "/usr/bin/bash -c y"`, "shell literal"},
+		"dot import os":                  {"run/x.go", `package x; import . "os"; var _ = Args`, "dot import os"},
+		"dot import syscall":             {"run/x.go", `package x; import . "syscall"; var _ = Getpid`, "dot import syscall"},
+		"exec.Command(name)":             {execFile, `package x; import "os/exec"; func f(n string) { exec.Command(n) }`, "exec name not a literal"},
+		"exec.CommandContext(ctx, name)": {execFile, `package x; import ("context"; "os/exec"); func f(c context.Context, n string) { exec.CommandContext(c, n, "x") }`, "exec name not a literal"},
+		"aliased exec, name from argv":   {execFile, `package x; import e "os/exec"; func f(a []string) { e.Command(a[0], a[1:]...) }`, "exec name not a literal"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			got, err := censusFile(c.rel, []byte(c.src))
@@ -172,7 +195,7 @@ func TestTheCensusCatchesEachPlantedForm(t *testing.T) {
 			}
 		})
 	}
-	clean := `package x; import ("os"; "os/exec"; "syscall"); var _ = os.Args; var _ = exec.Command; var _ = syscall.Umask; var a = []string{"git", "-C", "bash.d", "shell", "kubectl", "-c"}`
+	clean := `package x; import ("context"; "os"; "os/exec"; "syscall"); var _ = os.Args; var _ = exec.Command("git", "x"); var _ = syscall.Umask; var a = []string{"git", "-C", "bash.d", "shell", "kubectl", "-c"}; func f(c context.Context, a []string) { exec.CommandContext(c, "helm", a...) }`
 	if got, err := censusFile(execFile, []byte(clean)); err != nil || len(got) != 0 {
 		t.Fatalf("a clean exec file: %v %v", got, err)
 	}

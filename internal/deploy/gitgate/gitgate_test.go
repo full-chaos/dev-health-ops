@@ -35,7 +35,7 @@ func newWorld(t *testing.T) *world {
 	w := &world{t: t, dir: dir, url: "file://" + filepath.Join(dir, "origin.git"), work: filepath.Join(dir, "work"), tree: filepath.Join(dir, "deploy")}
 	// The fixed PATH of the real Runner; HOME and the system scope are the
 	// fixture's own so no host git config reaches a cell.
-	w.r = run.Exec{Tools: []string{"git"}, Env: []string{
+	w.r = run.Exec{Env: []string{
 		"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "HOME=" + home, "LC_ALL=C", "GIT_CONFIG_NOSYSTEM=1",
 		"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.invalid", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.invalid",
 	}}

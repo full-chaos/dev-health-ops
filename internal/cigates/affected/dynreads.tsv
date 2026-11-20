@@ -394,6 +394,7 @@ internal/deploy/gitgate	gitgate_test.go
 internal/deploy/inputs	hookrender_test.go
 internal/deploy/run	census_test.go
 internal/deploy/run	run.go
+internal/deploy/run	run_test.go
 internal/deploy/run	state.go
 internal/deploy/run	state_test.go
 internal/deploy/run	step_test.go

@@ -648,12 +648,13 @@ const nullableIntoPlainSites = `
 // CHAOS-14218: six pins re-pinned for the nillable scan destinations clickhouse-go v2.51 needs (breakdown, flow-matrix nodes and
 // edges, both timeseries reads, quadrant metric rows); the statements are unchanged, digests copied from the hosted
 // TestScanTypeCensus failure output (job 135986472250), not computed.
-// CHAOS-14271: executeSankeyGrouped re-pinned by hand, digest copied from the local TestScanTypeCensus failure output (not
-// computed). Its statement gains, on the health path, a post-aggregation condition per node set (a NULL node key is
-// dropped, as the edge sets already did); its scan targets are unchanged. scanMetricRows keeps the CHAOS-14218 pin: a NULL
-// value is now left out after the scan, the statement and the destinations are unchanged:
+// CHAOS-14271: two pins re-pinned by hand, digests copied from the local TestScanTypeCensus failure output (not computed).
+// executeSankeyGrouped's statement gains, on the health path, a post-aggregation condition per node set (a NULL node key is
+// dropped, as the edge sets already did); its scan targets are unchanged. scanMetricRows leaves a row with a NULL value
+// out after the scan (no point, never a 0); its destinations are the CHAOS-14218 ones:
 //
 //	executeSankeyGrouped 02426fb74c03 -> 06df22123891
+//	scanMetricRows 261210b712cd -> 9b55a7ceff60
 const unverifiedSites = `
 internal/queryapi/aggflame/clickhouse.go|fetchCycleBreakdown|*string,*float64,*uint64|a0d30b3aefa3|not-describable
 internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*string,*uint64,*[]string,*string,*string|6782179e5bab|not-describable
@@ -717,7 +718,7 @@ internal/queryapi/people/search.go|BuildSearchResponse|*string,*time.Time|afd45e
 internal/queryapi/people/summary.go|fetchPersonCollaboration|*string,*string,*float64|be7c30414391|not-describable
 internal/queryapi/pooledmttr/pooledmttr.go|scorecard|*string,**string,**float64|3a0c54cda9e6|spliced-select-list
 internal/queryapi/producttelemetry/platform.go|LoadOrgNames|*string,*string,*string|64c4ca805d17|not-describable
-internal/queryapi/quadrant/quadrant.go|scanMetricRows|**time.Time,**string,**string,**float64|261210b712cd|statement-not-static
+internal/queryapi/quadrant/quadrant.go|scanMetricRows|**time.Time,**string,**string,**float64|9b55a7ceff60|statement-not-static
 internal/queryapi/reports/reports.go|scanCount|*int64|8d2d39db7d2b|not-describable
 internal/queryapi/reports/reports.go|scanReportRun|*string,*string,*string,**time.Time,**time.Time,**float64,**string,**string,**string,**string,*string,*time.Time|0121a67bb651|not-describable
 internal/queryapi/reports/reports.go|scanSavedReport|*string,*string,*string,**string,**string,*bool,**string,**string,**string,*bool,**time.Time,**string,*time.Time,*time.Time,**string|835998e4481b|not-describable

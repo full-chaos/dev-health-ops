@@ -416,6 +416,7 @@ func TestGitHubTestsResumeBudgetEdgeWithCoalescedGroups(t *testing.T) {
 				if five {
 					handler, runs, yieldAt = GitHubTestsRouteHandler{MaxWalkRecords: 230}, listing.fivePerSec(), 52
 				}
+				handler.CoalesceRuns = true // as the production route (git_family_route.go)
 				now := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
 				// The cicd unit (the same route and listing as tests) over the listing's window.
 				unit := nativeTestClaim("github", "cicd").Unit

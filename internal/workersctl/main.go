@@ -1222,6 +1222,7 @@ func dispatchMetricsDailyBlocked(
 			// decides whether a redrive is safe.
 			"failed_permanent_partitions": run.PermanentPartitions,
 			"succeeded_partitions":        run.SucceededPartitions,
+			"failed_partitions":           run.FailedPartitions,
 		})
 	}
 	return writeResult(stdout, stderr, map[string]any{

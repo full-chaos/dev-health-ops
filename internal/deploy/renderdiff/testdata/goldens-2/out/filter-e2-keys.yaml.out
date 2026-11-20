@@ -1,0 +1,70 @@
+data:
+  a: 1
+  b: 2
+datekeys:
+  2019-01-01: d0
+  2020-01-02: d1
+dupkeys:
+  y: 2
+  z: 3
+kind: ConfigMap
+lists:
+  empty: []
+  emptymap: {}
+  flowmap:
+    x: 1
+    y z:
+    - a
+    - b
+  nested:
+  - - 1
+    - - 2
+      - []
+  - {}
+  - null
+  - - {}
+  seqofmaps:
+  - name: a
+    value: 1
+  - name: b
+merged:
+  a: 1
+  b: 2
+  c: 5
+merged2:
+  base:
+    p: 1
+    q: 2
+  child:
+    p: 1
+    q: 9
+metadata:
+  name: keys
+mixed:
+  1: tee
+  b: bee
+nullkey:
+  null: n
+  x: y
+numkeys:
+  1: overwritten
+  1.5: onefive
+  2: two
+shared:
+  first: &id001 2020-05-05
+  second: *id001
+  third: 2020-05-05
+---
+kind:
+- x
+metadata:
+  name: listkind
+---
+kind: Thing
+metadata: {}
+---
+kind: Thing2
+---
+kind: Thing3
+metadata:
+  name: 123

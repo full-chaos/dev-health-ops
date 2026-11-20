@@ -1,0 +1,92 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  labels: {app: web}
+spec:
+  replicas: 1
+  ratio: 1
+  flag: "1"
+  same: 2.0
+  nanv: .nan
+  gone1: null
+  gone2: []
+  gone3: {}
+  keep: x
+  removedmap: {a: 1}
+  removedempty: {}
+  template:
+    metadata:
+      labels: {app: web, v: "1"}
+      annotations: {checksum/config: abc}
+    spec:
+      initContainers:
+      - name: i1
+        image: busybox
+      containers:
+      - name: app
+        image: app:1
+        args: ["--db=postgres://user:pw@db:5432/x", "--plain", "--x"]
+        command: ["run", "https://u@h/p"]
+        env:
+        - name: DB_PASSWORD
+          value: old-secret
+        - name: API_TOKEN
+          value: tok1
+        - name: PLAIN
+          value: v1
+        - name: SOME_URI
+          value: "redis://:pw@redis:6379"
+        - name: LINK
+          value: "see https://example.com/a@b"
+        - name: X_KEY
+          value: k1
+        - name: NOVALUE
+          valueFrom: {secretKeyRef: {name: s, key: k}}
+        ports:
+        - containerPort: 8080
+          protocol: TCP
+        - containerPort: 9090
+        volumeMounts: []
+      volumes: null
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: cfg}
+data:
+  LOG_LEVEL: info
+  DB_DSN: "postgres://a:b@c/d"
+  API_KEY: one
+  monkey: two
+  PLAIN: three
+binaryData:
+  cert.token: AAAA
+---
+apiVersion: v1
+kind: Secret
+metadata: {name: creds}
+data: {password: aHVudGVyMg==}
+---
+apiVersion: v1
+kind: Secret
+metadata: {name: gone-secret}
+stringData: {k: v}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata: {name: dev-health-ops-postgresql}
+spec:
+  replicas: 1
+  ports:
+  - port: 5432
+  - port: 5433
+    protocol: UDP
+---
+apiVersion: v1
+kind: Service
+metadata: {name: svc}
+spec:
+  ports:
+  - port: 80
+    targetPort: 8080
+  - port: true

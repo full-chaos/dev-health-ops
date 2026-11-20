@@ -1,0 +1,198 @@
+{
+ "added": [
+  "Secret/new-secret"
+ ],
+ "removed": [
+  "Secret/gone-secret"
+ ],
+ "rows": [
+  {
+   "doc": "ConfigMap/cfg",
+   "path": ".data.LOG_LEVEL",
+   "verb": "CHANGED"
+  },
+  {
+   "doc": "Deployment/web",
+   "path": ".spec.added.deep.er[0]",
+   "verb": "CHANGED",
+   "show": true
+  },
+  {
+   "doc": "Deployment/web",
+   "path": ".spec.added.deep.er[1]",
+   "verb": "CHANGED"
+  },
+  {
+   "doc": "Deployment/web",
+   "path": ".spec.flag",
+   "verb": "CHANGED"
+  },
+  {
+   "doc": "Deployment/web",
+   "path": ".spec.gone1",
+   "verb": "CHANGED",
+   "before": null,
+   "after": [],
+   "show": 1
+  },
+  {
+   "doc": "Deployment/web",
+   "path": ".spec.gone2",
+   "verb": "CHANGED"
+  },
+  {
+   "doc": "Deployment/web",
+   "path": ".spec.gone3",
+   "verb": "CHANGED"
+  },
+  {
+   "doc": "Deployment/web",
+   "path": ".spec.nanv",
+   "verb": "CHANGED"
+  },
+  {
+   "doc": "Deployment/web",
+   "path": ".spec.ratio",
+   "verb": "CHANGED",
+   "before": "1",
+   "after": 1.0
+  },
+  {
+   "doc": "Deployment/web",
+   "path": ".spec.removedempty",
+   "verb": "CHANGED"
+  },
+  {
+   "doc": "Deployment/web",
+   "path": ".spec.removedmap",
+   "verb": "ELEMENT-REMOVED"
+  },
+  {
+   "doc": "Deployment/web",
+   "path": ".spec.replicas",
+   "verb": "CHANGED",
+   "before": 1,
+   "after": true,
+   "show": true
+  },
+  {
+   "doc": "Deployment/web",
+   "path": ".spec.template.metadata.annotations.checksum/config",
+   "verb": "CHANGED"
+  },
+  {
+   "doc": "Deployment/web",
+   "path": ".spec.template.metadata.labels.v",
+   "verb": "CHANGED"
+  },
+  {
+   "doc": "Deployment/web",
+   "path": ".spec.template.spec.containers[name=app].args[2]",
+   "verb": "CHANGED"
+  },
+  {
+   "doc": "Deployment/web",
+   "path": ".spec.template.spec.containers[name=app].env",
+   "verb": "REORDERED",
+   "old": [
+    "DB_PASSWORD",
+    "API_TOKEN",
+    "PLAIN",
+    "SOME_URI",
+    "LINK",
+    "X_KEY",
+    "NOVALUE"
+   ],
+   "new": [
+    "PLAIN",
+    "DB_PASSWORD",
+    "API_TOKEN",
+    "SOME_URI",
+    "LINK",
+    "X_KEY",
+    "NOVALUE"
+   ]
+  },
+  {
+   "doc": "Deployment/web",
+   "path": ".spec.template.spec.containers[name=app].env[name=LINK].value",
+   "verb": "CHANGED"
+  },
+  {
+   "doc": "Deployment/web",
+   "path": ".spec.template.spec.containers[name=app].env[name=NOVALUE].valueFrom.secretKeyRef.key",
+   "verb": "CHANGED"
+  },
+  {
+   "doc": "Deployment/web",
+   "path": ".spec.template.spec.containers[name=app].env[name=PLAIN].value",
+   "verb": "CHANGED"
+  },
+  {
+   "doc": "Deployment/web",
+   "path": ".spec.template.spec.containers[name=app].image",
+   "verb": "CHANGED",
+   "after": "app:2",
+   "show": "yes"
+  },
+  {
+   "doc": "Deployment/web",
+   "path": ".spec.template.spec.containers[name=app].ports[port=9090/TCP]",
+   "verb": "ELEMENT-REMOVED"
+  },
+  {
+   "doc": "Deployment/web",
+   "path": ".spec.template.spec.containers[name=app].ports[port=9091/TCP]",
+   "verb": "ELEMENT-ADDED"
+  },
+  {
+   "doc": "Deployment/web",
+   "path": ".spec.template.spec.containers[name=app].volumeMounts[name=data]",
+   "verb": "ELEMENT-ADDED"
+  },
+  {
+   "doc": "Deployment/web",
+   "path": ".spec.template.spec.initContainers[name=i1]",
+   "verb": "ELEMENT-REMOVED"
+  },
+  {
+   "doc": "Deployment/web",
+   "path": ".spec.template.spec.volumes[name=data]",
+   "verb": "ELEMENT-ADDED"
+  },
+  {
+   "doc": "Service/svc",
+   "path": ".spec.ports[port=1/TCP].port",
+   "verb": "CHANGED",
+   "before": true,
+   "after": 1,
+   "show": true
+  },
+  {
+   "doc": "Service/svc",
+   "path": ".spec.ports[port=80/TCP].targetPort",
+   "verb": "CHANGED"
+  },
+  {
+   "doc": "StatefulSet/dev-health-ops-postgresql",
+   "path": ".spec.ports",
+   "verb": "REORDERED",
+   "old": [
+    "5432/TCP",
+    "5433/UDP"
+   ],
+   "new": [
+    "5433/UDP",
+    "5432/TCP"
+   ]
+  },
+  {
+   "doc": "StatefulSet/dev-health-ops-postgresql",
+   "path": ".spec.replicas",
+   "verb": "CHANGED",
+   "before": 1,
+   "after": true,
+   "show": true
+  }
+ ]
+}

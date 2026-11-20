@@ -1,0 +1,5 @@
+render A: helm rc=0 docs=2
+render B: helm rc=0 docs=6
+DUPLICATE name E in Deployment/x .spec.template.spec.containers[0].env (render A)
+DUPLICATE name 80/TCP in Service/svc .spec.ports (render A)
+GATE rows-d-exact.json: HOLD (duplicate names)

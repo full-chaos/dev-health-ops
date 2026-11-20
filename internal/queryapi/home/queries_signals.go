@@ -5,9 +5,11 @@
 //
 // recommendations_daily and compounding_risk_daily are both
 // ReplacingMergeTree(computed_at) since creation (confirmed against
-// prod); both readers already dedup correctly with a
-// two-stage argMax(..., computed_at)/argMax(tuple(...), computed_at)
-// pattern matching their natural key -- ported verbatim, no divergence.
+// prod). Each reader takes ONE version of a key: the newest computed_at,
+// then a hash of the version's values (CHAOS-14355), so two versions that
+// share a computed_at serve one of them whatever the scan order. The outer
+// by-window_end pick of the recommendation read cannot tie: window_end is a
+// GROUP BY key of its inner read.
 //
 // DEDUP (declared Python-plane defect fixed here):
 // resolveScopeLabels' repos/teams reads (_resolve_scope_labels,
@@ -45,13 +47,22 @@ const recommendationsSQL = `
             org_id,
             rule_id,
             window_end,
-            argMax(fired,               computed_at) AS latest_fired,
-            argMax(severity,            computed_at) AS latest_severity,
-            argMax(title,               computed_at) AS latest_title,
-            argMax(rationale,           computed_at) AS latest_rationale,
-            argMax(success_criterion,   computed_at) AS latest_success_criterion,
-            argMax(evidence_json,       computed_at) AS latest_evidence_json,
-            argMax(window_start,        computed_at) AS latest_window_start,
+            argMax(
+                tuple(recommendations_daily.fired, recommendations_daily.severity, recommendations_daily.title,
+                    recommendations_daily.rationale, recommendations_daily.success_criterion,
+                    recommendations_daily.evidence_json, recommendations_daily.window_start),
+                (recommendations_daily.computed_at, cityHash64(tuple(
+                    recommendations_daily.fired, recommendations_daily.severity, recommendations_daily.title,
+                    recommendations_daily.rationale, recommendations_daily.success_criterion,
+                    recommendations_daily.evidence_json, recommendations_daily.window_start)))
+            ) AS picked,
+            picked.1 AS latest_fired,
+            picked.2 AS latest_severity,
+            picked.3 AS latest_title,
+            picked.4 AS latest_rationale,
+            picked.5 AS latest_success_criterion,
+            picked.6 AS latest_evidence_json,
+            picked.7 AS latest_window_start,
             max(computed_at)                         AS latest_computed_at
         FROM recommendations_daily
         WHERE org_id = {org_id:String}
@@ -116,6 +127,22 @@ func fetchRecommendationSignals(ctx context.Context, client QueryClient, f Filte
 	return out, nil
 }
 
+// compoundingRiskNewestOrder orders the versions of one compounding_risk_daily
+// key: the newest computed_at, then a hash of the version's values (the
+// severity and every liverow column). The day picker and the served rows order
+// by it, so both judge the same version of a key whose versions share a
+// computed_at.
+const compoundingRiskNewestOrder = `(compounding_risk_daily.computed_at, cityHash64(tuple(
+    compounding_risk_daily.severity, compounding_risk_daily.w_churn, compounding_risk_daily.w_complexity,
+    compounding_risk_daily.w_ownership, compounding_risk_daily.w_review, compounding_risk_daily.threshold_elevated,
+    compounding_risk_daily.threshold_high, compounding_risk_daily.compounding_risk,
+    compounding_risk_daily.churn_norm, compounding_risk_daily.complexity_norm, compounding_risk_daily.ownership_norm,
+    compounding_risk_daily.review_norm, compounding_risk_daily.rework_churn, compounding_risk_daily.complexity_delta,
+    compounding_risk_daily.bus_factor, compounding_risk_daily.ownership_gini,
+    compounding_risk_daily.single_owner_ratio, compounding_risk_daily.review_latency_p90h,
+    compounding_risk_daily.merged_prs_30d, compounding_risk_daily.reviewed_prs_30d,
+    compounding_risk_daily.review_share_30d)))`
+
 const compoundingRiskSQLBase = `
     SELECT
         scope,
@@ -140,8 +167,39 @@ const compoundingRiskSQLBase = `
         SELECT
             scope,
             scope_id,
-            argMax(tuple(compounding_risk, severity, computed_at, churn_norm, complexity_norm, ownership_norm, review_norm,
-                         w_churn, w_complexity, w_ownership, w_review), computed_at) AS latest_row
+            argMax(tuple(
+                compounding_risk_daily.compounding_risk, compounding_risk_daily.severity,
+                compounding_risk_daily.computed_at, compounding_risk_daily.churn_norm,
+                compounding_risk_daily.complexity_norm, compounding_risk_daily.ownership_norm,
+                compounding_risk_daily.review_norm, compounding_risk_daily.w_churn,
+                compounding_risk_daily.w_complexity, compounding_risk_daily.w_ownership,
+                compounding_risk_daily.w_review, compounding_risk_daily.threshold_elevated,
+                compounding_risk_daily.threshold_high, compounding_risk_daily.rework_churn,
+                compounding_risk_daily.complexity_delta, compounding_risk_daily.bus_factor,
+                compounding_risk_daily.ownership_gini, compounding_risk_daily.single_owner_ratio,
+                compounding_risk_daily.review_latency_p90h, compounding_risk_daily.merged_prs_30d,
+                compounding_risk_daily.reviewed_prs_30d, compounding_risk_daily.review_share_30d
+            ), ` + compoundingRiskNewestOrder + `) AS latest_row,
+            tupleElement(latest_row, 8) AS w_churn,
+            tupleElement(latest_row, 9) AS w_complexity,
+            tupleElement(latest_row, 10) AS w_ownership,
+            tupleElement(latest_row, 11) AS w_review,
+            tupleElement(latest_row, 12) AS threshold_elevated,
+            tupleElement(latest_row, 13) AS threshold_high,
+            tupleElement(latest_row, 1) AS compounding_risk,
+            tupleElement(latest_row, 4) AS churn_norm,
+            tupleElement(latest_row, 5) AS complexity_norm,
+            tupleElement(latest_row, 6) AS ownership_norm,
+            tupleElement(latest_row, 7) AS review_norm,
+            tupleElement(latest_row, 14) AS rework_churn,
+            tupleElement(latest_row, 15) AS complexity_delta,
+            tupleElement(latest_row, 16) AS bus_factor,
+            tupleElement(latest_row, 17) AS ownership_gini,
+            tupleElement(latest_row, 18) AS single_owner_ratio,
+            tupleElement(latest_row, 19) AS review_latency_p90h,
+            tupleElement(latest_row, 20) AS merged_prs_30d,
+            tupleElement(latest_row, 21) AS reviewed_prs_30d,
+            tupleElement(latest_row, 22) AS review_share_30d
         FROM compounding_risk_daily
         WHERE org_id = {org_id:String}
           AND day = (
@@ -156,15 +214,46 @@ const compoundingRiskSQLBase = `
                           day,
                           scope,
                           scope_id,
-                          argMax(tuple(compounding_risk), computed_at) AS latest_row
+                          argMax(tuple(
+                              compounding_risk_daily.compounding_risk, compounding_risk_daily.w_churn,
+                              compounding_risk_daily.w_complexity, compounding_risk_daily.w_ownership,
+                              compounding_risk_daily.w_review, compounding_risk_daily.threshold_elevated,
+                              compounding_risk_daily.threshold_high, compounding_risk_daily.churn_norm,
+                              compounding_risk_daily.complexity_norm, compounding_risk_daily.ownership_norm,
+                              compounding_risk_daily.review_norm, compounding_risk_daily.rework_churn,
+                              compounding_risk_daily.complexity_delta, compounding_risk_daily.bus_factor,
+                              compounding_risk_daily.ownership_gini, compounding_risk_daily.single_owner_ratio,
+                              compounding_risk_daily.review_latency_p90h, compounding_risk_daily.merged_prs_30d,
+                              compounding_risk_daily.reviewed_prs_30d, compounding_risk_daily.review_share_30d
+                          ), ` + compoundingRiskNewestOrder + `) AS latest_row,
+                          tupleElement(latest_row, 2) AS w_churn,
+                          tupleElement(latest_row, 3) AS w_complexity,
+                          tupleElement(latest_row, 4) AS w_ownership,
+                          tupleElement(latest_row, 5) AS w_review,
+                          tupleElement(latest_row, 6) AS threshold_elevated,
+                          tupleElement(latest_row, 7) AS threshold_high,
+                          tupleElement(latest_row, 1) AS compounding_risk,
+                          tupleElement(latest_row, 8) AS churn_norm,
+                          tupleElement(latest_row, 9) AS complexity_norm,
+                          tupleElement(latest_row, 10) AS ownership_norm,
+                          tupleElement(latest_row, 11) AS review_norm,
+                          tupleElement(latest_row, 12) AS rework_churn,
+                          tupleElement(latest_row, 13) AS complexity_delta,
+                          tupleElement(latest_row, 14) AS bus_factor,
+                          tupleElement(latest_row, 15) AS ownership_gini,
+                          tupleElement(latest_row, 16) AS single_owner_ratio,
+                          tupleElement(latest_row, 17) AS review_latency_p90h,
+                          tupleElement(latest_row, 18) AS merged_prs_30d,
+                          tupleElement(latest_row, 19) AS reviewed_prs_30d,
+                          tupleElement(latest_row, 20) AS review_share_30d
                       FROM compounding_risk_daily
                       WHERE org_id = {org_id:String}
                         AND day >= {start_day:Date}
                         AND day < {end_day:Date}
                       %s
                       GROUP BY day, scope, scope_id
-                      HAVING %s
-                  )
+                  ) AS newest
+                  WHERE %s
                   GROUP BY day
               )
               WHERE row_count > 0 AND missing_scores = 0
@@ -185,12 +274,12 @@ func fetchRiskSignals(ctx context.Context, client QueryClient, f Filters, startD
 	if scoped && len(f.Scope.IDs) > 0 {
 		latestScopeFilter = "AND scope = {scope:String} AND scope_id IN {scope_ids:Array(String)}"
 	}
-	// measuredRisk keeps a scope id only when its newest row is a measurement
-	// (package liverow). A retraction row over the key of a retired team id
+	// measuredRisk keeps a scope id only when its picked newest row is a
+	// measurement (package liverow). A retraction row over the key of a retired team id
 	// has a NULL score: counted as a row it would make every day look
 	// incomplete (missing_scores > 0) and the day picker would refuse the
 	// newest day, and listed as a row it would be a signal with no score.
-	measuredRisk := liverow.NewestPredicate("compounding_risk_daily", "")
+	measuredRisk := liverow.Predicate("compounding_risk_daily", "newest")
 	query := fmt.Sprintf(compoundingRiskSQLBase, latestScopeFilter, measuredRisk)
 	if scoped && len(f.Scope.IDs) > 0 {
 		query += `
@@ -200,8 +289,8 @@ func fetchRiskSignals(ctx context.Context, client QueryClient, f Filters, startD
 	}
 	query += `
         GROUP BY scope, scope_id
-        HAVING ` + measuredRisk + `
-    )
+    ) AS newest
+    WHERE ` + measuredRisk + `
     ORDER BY score DESC NULLS LAST
     LIMIT 5
     `

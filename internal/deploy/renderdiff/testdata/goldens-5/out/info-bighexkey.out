@@ -1,0 +1,3 @@
+render A: helm rc=0 docs=0
+render B: helm rc=0 docs=1
+FULL RENDER DIFF: STOP (render floor: render A is not valid YAML; render A: docs=0 below --min-docs 1)

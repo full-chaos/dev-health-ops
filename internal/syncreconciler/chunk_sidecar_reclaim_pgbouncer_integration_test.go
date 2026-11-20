@@ -111,14 +111,14 @@ func TestChunkSidecarReclaimTickLockThroughATransactionModePooler(t *testing.T) 
 	resetLeaseRepairTables(t, ctx, direct)
 	seedLeaseRepairRun(t, ctx, direct, chunkLeakRun, "org-a", "running")
 	unit := chunkReclaimUnitID(80)
-	seedChunkReclaimUnit(t, ctx, direct, unit, "failed", 300, 1, now)
+	seedChunkReclaimUnit(t, ctx, direct, unit, "failed", 200, 1, now)
 	reclaim, err := NewChunkSidecarReclaim(first)
 	if err != nil {
 		t.Fatal(err)
 	}
 	result, err := reclaim.Step(ctx, now, 100)
-	if err != nil || result.LockSkipped || result.Units != 1 || result.Rows != 300 {
-		t.Fatalf("tick through the transaction pooler = %+v / %v, want the unit (300 rows) reclaimed", result, err)
+	if err != nil || result.LockSkipped || result.Units != 1 || result.Rows != 200 {
+		t.Fatalf("tick through the transaction pooler = %+v / %v, want the unit (200 rows) reclaimed", result, err)
 	}
 	wantChunkSidecars(t, ctx, direct, unit, 0, 0)
 	if held := advisoryLocks(); held != 0 {

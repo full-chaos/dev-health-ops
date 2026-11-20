@@ -1,0 +1,55 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: svc
+spec:
+  emptyl: {}
+  emptym: []
+  replicas: 2
+  template:
+    spec:
+      containers:
+      - args:
+        - --dsn
+        - <redacted>
+        - --y
+        env:
+        - name: B
+          value: '2'
+        - name: A
+          value: '1'
+        - name: DB_PASSWORD
+          value: <redacted>
+        - name: NEWV
+          value: n
+        image: r/app@sha256:bbbb
+        name: app
+        ports:
+        - containerPort: 8080
+          name: http
+          protocol: TCP
+        - containerPort: 9091
+          name: metrics
+          protocol: TCP
+      initContainers:
+      - image: r/i2@sha256:aaaa
+        name: i2
+      - image: r/i1@sha256:aaaa
+        name: i1
+---
+apiVersion: v1
+data:
+  ADDED_KEY: <redacted>
+  LOG_LEVEL: debug
+  URL: <redacted>
+  api_token: <redacted>
+kind: ConfigMap
+metadata:
+  name: cfg
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: new-np
+spec:
+  podSelector: {}

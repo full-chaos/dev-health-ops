@@ -1459,6 +1459,16 @@ func TestDomainRoleExecutesTheBucketSweepStatements(t *testing.T) {
 	if !syncrunrollup.WakeDispatchAt(ctx, domain, discoveryTestRun, now.Add(time.Minute), now, syncrunrollup.DispatchWakePathBucketSweep) {
 		t.Fatal("WakeDispatchAt as the domain role armed nothing")
 	}
+	// The pass's PagerDuty pre-step read (passPagerDutyGroupsSQL on sync_run_units, acp lockio-1) runs on the pass's
+	// domain transaction, before the bucket locks.
+	preTx, err := domain.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := passPagerDutyGroups(ctx, preTx, discoveryTestRun, time.Now().UTC()); err != nil {
+		t.Fatalf("passPagerDutyGroupsSQL as the domain role: %v", err)
+	}
+	_ = preTx.Rollback(ctx)
 	denials.assertNone(t, "bucket sweep statements")
 
 	// Withheld verbs stay withheld.

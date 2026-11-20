@@ -74,8 +74,40 @@ func (h PagerDutyOAuthHydrator) Hydrate(
 	scope TenantScope,
 	credential Credential,
 ) (Credential, error) {
-	hydrated, _, err := h.hydrate(ctx, lease, scope, credential, time.Time{})
-	return hydrated, err
+	if credential.Provider != "pagerduty" || credentialValue(credential, "auth_mode") != "oauth" {
+		return credential, nil
+	}
+	if token, exists := credential.Secret("access_token"); exists && token.Configured() {
+		return credential, nil
+	}
+	if ctx == nil || lease == nil || h.Repository == nil || h.Cipher == nil {
+		return Credential{}, ErrCredentialInvalid
+	}
+	credentialName := credentialValue(credential, "oauth_credential_name")
+	bindingID := credentialValue(credential, "oauth_binding_id")
+	if scope.Provider != "pagerduty" || credentialName == "" || bindingID == "" {
+		return Credential{}, ErrCredentialInvalid
+	}
+	if err := lease.Assert(ctx); err != nil {
+		return Credential{}, err
+	}
+	record, err := h.Repository.Load(ctx, scope.OrgID, credentialName)
+	if err != nil {
+		return Credential{}, err
+	}
+	tokens, err := h.decode(ctx, lease, record, bindingID)
+	if err != nil {
+		return Credential{}, err
+	}
+	if !hasPagerDutyOperationalReadScopes(tokens.GrantedScopes) {
+		return Credential{}, ErrCredentialInvalid
+	}
+	if tokens.ExpiresAt.After(h.now().Add(pagerDutyOAuthRenewalWindow)) {
+		return credential.WithEphemeralSecret(
+			"access_token", secrets.NewValue(tokens.AccessToken),
+		)
+	}
+	return h.refreshLocked(ctx, lease, scope.OrgID, credentialName, bindingID, credential)
 }
 
 // HydrateUntil is Hydrate for a caller that must not need the network for this credential again before until (a sync
@@ -134,7 +166,7 @@ func (h PagerDutyOAuthHydrator) hydrate(
 		)
 		return hydrated, tokens.ExpiresAt.Add(-pagerDutyOAuthRenewalWindow), err
 	}
-	return h.refreshLocked(ctx, lease, scope.OrgID, credentialName, bindingID, credential, until)
+	return h.refreshLockedUntil(ctx, lease, scope.OrgID, credentialName, bindingID, credential, until)
 }
 
 // renewFrom is the expiry at or before which a stored token is refreshed: the renewal window past now, or past until
@@ -173,7 +205,18 @@ func (h PagerDutyOAuthHydrator) decode(
 	return tokens, nil
 }
 
+// refreshLocked is refreshLockedUntil for Hydrate: the renewal window counts from now.
 func (h PagerDutyOAuthHydrator) refreshLocked(
+	ctx context.Context,
+	lease LeaseGuard,
+	orgID, credentialName, bindingID string,
+	credential Credential,
+) (Credential, error) {
+	hydrated, _, err := h.refreshLockedUntil(ctx, lease, orgID, credentialName, bindingID, credential, time.Time{})
+	return hydrated, err
+}
+
+func (h PagerDutyOAuthHydrator) refreshLockedUntil(
 	ctx context.Context,
 	lease LeaseGuard,
 	orgID string,

@@ -43,8 +43,8 @@ WHERE provider = 'pagerduty'
 ORDER BY 1, 2, 3`
 
 // PreHydratePass is the pass's pre-step: it reads the PagerDuty unit groups the pass's locked estimates can read and
-// hydrates each group's credential once, with the network, into a new record. It reads inside a savepoint it always
-// rolls back (the pre-step writes nothing), so a failed read never aborts the pass's transaction; a failed read leaves
+// hydrates each group's credential once, with the network, into a new record. It reads inside a savepoint (released
+// when no PagerDuty unit is found, else rolled back), so a failed read never aborts the pass's transaction; a failed read leaves
 // the record empty, and every locked PagerDuty estimate then takes the guard. The record's tokens must hold until the
 // pass's deadline (the job context's, else River's default job timeout).
 func (estimator *InProcessBudgetEstimator) PreHydratePass(ctx context.Context, tx pgx.Tx, runID string, now time.Time) *syncbudget.PassHydrations {
@@ -59,11 +59,20 @@ func (estimator *InProcessBudgetEstimator) PreHydratePass(ctx context.Context, t
 	if err != nil {
 		return record
 	}
-	defer func() { _ = savepoint.Rollback(ctx) }()
 	groups, err := passPagerDutyGroups(ctx, savepoint, runID, now)
-	if err != nil || len(groups) == 0 {
+	if err != nil {
+		_ = savepoint.Rollback(ctx)
 		return record
 	}
+	if len(groups) == 0 {
+		// The read succeeded and nothing was written: release the savepoint (a pass of a run with no PagerDuty unit
+		// adds no rollback to its transaction).
+		_ = savepoint.Commit(ctx)
+		return record
+	}
+	// Hydration reads through the savepoint; it is always rolled back (the pre-step writes nothing), so a failed read
+	// never aborts the pass's transaction.
+	defer func() { _ = savepoint.Rollback(ctx) }()
 	until := estimator.clock().Add(river.JobTimeoutDefault)
 	if deadline, ok := ctx.Deadline(); ok {
 		until = deadline

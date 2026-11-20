@@ -3,7 +3,6 @@ package syncbudget
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"sync"
 	"time"
 
@@ -164,7 +163,7 @@ func (loader Loader) PreHydratePagerDuty(ctx context.Context, record *PassHydrat
 		return
 	}
 	// The locked estimate logs what resolving the credential logs (a fingerprint mismatch); the pre-step does not.
-	loader.Logger = synclog.New(slog.New(slog.DiscardHandler))
+	loader.Logger = synclog.Discard()
 	credentials := credentialCache{}
 	for _, group := range groups {
 		integration, err := loader.integration(ctx, group.IntegrationID, group.OrgID)

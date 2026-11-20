@@ -17,6 +17,7 @@ var exportedAPI = []string{
 	"func (*synclog.Logger).Warn(ctx context.Context, message synclog.Msg, attrs ...synclog.Attr)",
 	"func synclog.Count[N ~int | ~int64](key synclog.Key, value N) synclog.Attr",
 	"func synclog.Default() *synclog.Logger",
+	"func synclog.Discard() *synclog.Logger",
 	"func synclog.Dispatch(id synclog.ID) synclog.Attr",
 	"func synclog.Elapsed(key synclog.Key, value time.Duration) synclog.Attr",
 	"func synclog.Failure(err error) synclog.Attr",

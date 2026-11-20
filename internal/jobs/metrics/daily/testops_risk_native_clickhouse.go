@@ -3,7 +3,6 @@ package daily
 import (
 	"context"
 	"fmt"
-	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -406,11 +405,16 @@ func knownRate(value float64, unknown bool) *float64 {
 	return &rounded
 }
 
-func knownCoverage(value *float64) *float64 {
-	if value == nil || math.IsNaN(*value) || math.IsInf(*value, 0) {
+// knownCoverage is nil for a missing value and for a non-finite one; a non-finite value is one finite-boundary trip.
+func knownCoverage(field string, value *float64) *float64 {
+	if value == nil {
 		return nil
 	}
-	known := pythonparity.OrZero(*value)
+	finiteValue := finite.NullIfNonFinite("testops_release_confidence", field, *value)
+	if finiteValue == nil {
+		return nil
+	}
+	known := pythonparity.OrZero(*finiteValue)
 	return &known
 }
 
@@ -605,8 +609,8 @@ func computeReleaseConfidence(
 	// other weights are renormalized (a measured 0% keeps its weight). An unknown delta is no regression penalty.
 	var coveragePct, coverageDelta *float64
 	if cov != nil {
-		coveragePct = knownCoverage(cov.LineCoveragePct)
-		coverageDelta = knownCoverage(cov.CoverageDeltaPct)
+		coveragePct = knownCoverage("coverage_pct", cov.LineCoveragePct)
+		coverageDelta = knownCoverage("coverage_delta_pct", cov.CoverageDeltaPct)
 	}
 
 	pipelineFactor := 0.4 * valueOrZero(successRate)

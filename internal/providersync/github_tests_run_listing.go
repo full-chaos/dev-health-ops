@@ -550,16 +550,18 @@ func collectGitHubTestsRunsPeeled(
 	ctx context.Context, client *providerfoundation.HTTPClient, root string, pageBudget int,
 	queryFor func(peeledHi string) url.Values,
 ) (items []json.RawMessage, pages int, over bool, err error) {
-	return collectGitHubTestsRunsPeeledBy(ctx, client, root, pageBudget, queryFor, githubTestsPeel, nil)
+	return collectGitHubTestsRunsPeeledBy(ctx, client, root, pageBudget, queryFor, githubTestsPeel, nil, false)
 }
 
 // collectGitHubTestsRunsPeeledBy is collectGitHubTestsRunsPeeled with the peel rule given (an artifacts-phase range peels
 // inside its created interval). A non-nil admit keeps a listed run only when it admits the run's created time under the
 // ceiling of the response that supplied it (the chunked route's rule); a refused run is not kept and not marked seen.
+// stuckAtCap is the runs phase's rule of the chunked route (CHAOS-14321): a range whose cap of results all share its
+// oldest second is stuck at once, with no second listing that ends at that second.
 func collectGitHubTestsRunsPeeledBy(
 	ctx context.Context, client *providerfoundation.HTTPClient, root string, pageBudget int,
 	queryFor func(peeledHi string) url.Values, peel func(items int, oldest, rangeHi string) (string, bool, bool),
-	admit func(created *time.Time, rangeHi string) bool,
+	admit func(created *time.Time, rangeHi string) bool, stuckAtCap bool,
 ) (items []json.RawMessage, pages int, over bool, err error) {
 	seen := map[string]struct{}{}
 	hi := ""
@@ -572,14 +574,20 @@ func collectGitHubTestsRunsPeeledBy(
 			return nil, pages, false, collectErr
 		}
 		pages += page.Pages
-		oldest, count := "", 0
+		oldest, count, oldestCount := "", 0, 0
 		for _, raw := range page.Items {
 			run, err := decodeGitHubWorkflowRunListItem(raw)
 			if err != nil {
 				return nil, pages, false, providerfoundation.RouteFailure(githubRunsRoute, providerfoundation.ReasonBodyDecode, err)
 			}
 			count++
-			oldest = githubTestsOlderCreated(oldest, parseGitHubWorkflowTime(run.CreatedAt))
+			created := parseGitHubWorkflowTime(run.CreatedAt)
+			if next := githubTestsOlderCreated(oldest, created); next != oldest {
+				oldest, oldestCount = next, 0
+			}
+			if created != nil && created.UTC().Format(time.RFC3339) == oldest {
+				oldestCount++
+			}
 			if admit != nil && !admit(parseGitHubWorkflowTime(run.CreatedAt), hi) {
 				continue
 			}
@@ -592,6 +600,9 @@ func collectGitHubTestsRunsPeeledBy(
 			return items, pages, true, nil
 		}
 		nextHi, saturated, stuck := peel(count, oldest, hi)
+		if stuckAtCap && saturated && oldestCount >= githubTestsSearchResultCap {
+			stuck = true
+		}
 		switch {
 		case !saturated:
 			return items, pages, false, nil

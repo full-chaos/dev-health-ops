@@ -178,7 +178,7 @@ func githubTestsCutKeyListValid(keys string, limit int) bool {
 
 // githubTestsFitCursor drops cut lists from a cursor that is over maxChunkCursorBytes (CHAOS-14315): the active list first
 // (empty: the revisit then skips only the runs a later write lists again, each read whole, so it is sound), then the carried
-// list. The lists only dedup reads of a peeled
+// list, then the runs-phase count of runs at the oldest second. The lists only dedup reads of a peeled
 // range; the continuation URL and every other field stay. A cursor that does not fit even then is returned unchanged,
 // so the encode fails as it always did. The result depends only on the cursor, so a before cursor equal to the previous
 // after cursor degrades to the same bytes.
@@ -198,6 +198,12 @@ func githubTestsFitCursor(cursor githubTestsChunkCursor) (githubTestsChunkCursor
 	if !fits(fitted) && fitted.CarriedCutKeys != "" {
 		fitted.CarriedCutKeys = ""
 		dropped = append(dropped, "carried")
+	}
+	// The count of runs at the oldest second only proves a saturated second early; without it the range takes the
+	// confirmation listing (CHAOS-14321).
+	if !fits(fitted) && fitted.RangeOldestItems != 0 {
+		fitted.RangeOldestItems = 0
+		dropped = append(dropped, "oldest_count")
 	}
 	if !fits(fitted) {
 		return cursor, nil

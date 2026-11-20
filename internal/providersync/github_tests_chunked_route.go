@@ -1683,7 +1683,12 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 				cursor.RunPages++
 			}
 		}
-		start, _ := githubTestsResumeStart(cursor, page, client, claim, githubTestsRunsPhase)
+		start, reanchored := githubTestsResumeStart(cursor, page, client, claim, githubTestsRunsPhase)
+		if reanchored {
+			// The page is walked again from its first item: those runs were counted at the oldest second already, so the
+			// count no longer proves a saturated second; the range takes the confirmation listing (CHAOS-14321).
+			cursor.RangeOldestItems = 0
+		}
 		for index := start; index < len(page.Items); index++ {
 			if githubTestsWalkRecords(cursor) >= maxWalkRecords {
 				return errGitHubTestsWalkBound

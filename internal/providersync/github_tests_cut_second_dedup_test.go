@@ -102,6 +102,15 @@ func (doer *cutDedupDoer) Do(request *http.Request) (*http.Response, error) {
 	return doer.fake.Do(request)
 }
 
+// withReports gives each run of ids one report artifact, so a read of it ends in a complete verdict (the only reads that
+// are recorded for a skip).
+func (doer *cutDedupDoer) withReports(ids ...int) *cutDedupDoer {
+	for _, id := range ids {
+		doer.reports[id] = true
+	}
+	return doer
+}
+
 func (doer *cutDedupDoer) reads(ids []int) []int {
 	out := make([]int, 0, len(ids))
 	for _, id := range ids {
@@ -219,7 +228,7 @@ var cutDedupLayouts = []struct {
 
 func TestGitHubTestsCutSecondRunsAreReadOnce(t *testing.T) {
 	for _, layout := range cutDedupLayouts {
-		doer := newCutDedupDoer(t, cutDedupRuns(layout.updated))
+		doer := newCutDedupDoer(t, cutDedupRuns(layout.updated)).withReports(cutDedupIDs...)
 		walkCutDedup(t, cutDedupClaim(layout.backfill), doer, nil, nil)
 		if got, want := doer.reads(cutDedupIDs), []int{1, 1, 1, 1, 1}; !reflect.DeepEqual(got, want) {
 			t.Fatalf("%s: artifact lists of %v = %v, want %v", layout.name, cutDedupIDs, got, want)
@@ -231,7 +240,7 @@ func TestGitHubTestsCutSecondRunsAreReadOnce(t *testing.T) {
 // of the next range: the list rides in the cursor across each resume.
 func TestGitHubTestsCutSecondRunsAreReadOnceAcrossResumes(t *testing.T) {
 	for _, layout := range cutDedupLayouts {
-		doer := newCutDedupDoer(t, cutDedupRuns(layout.updated))
+		doer := newCutDedupDoer(t, cutDedupRuns(layout.updated)).withReports(cutDedupIDs...)
 		yields := 0
 		yield := func(before, after githubTestsChunkCursor) bool {
 			if after.Phase != githubTestsArtifactsPhase && before.Phase != githubTestsArtifactsPhase {
@@ -268,13 +277,15 @@ func TestGitHubTestsCutSecondRunsAreReadOnceOverTwoPeels(t *testing.T) {
 		}
 	}
 	add(50, 10*time.Second)
+	cutB := id
 	add(2, 0)
 	add(1, 10*time.Second) // cut B: three runs share one second
 	add(994, 10*time.Second)
+	cutA := id
 	add(2, 0)
 	add(1, 10*time.Second) // cut A
 	add(997, 10*time.Second)
-	doer := newCutDedupDoer(t, runs)
+	doer := newCutDedupDoer(t, runs).withReports(cutB, cutB+1, cutB+2, cutA, cutA+1, cutA+2)
 	walkCutDedup(t, cutDedupClaim(false), doer, nil, nil)
 	ranges := map[string]bool{}
 	for _, created := range doer.fake.listRanges {
@@ -357,7 +368,7 @@ func TestGitHubTestsCutSecondRunFailedReadIsReadOnResume(t *testing.T) {
 
 // A run listed again with a new attempt is a different key: it is read again.
 func TestGitHubTestsCutSecondRunWithANewAttemptIsReadAgain(t *testing.T) {
-	doer := newCutDedupDoer(t, cutDedupRuns(cutDedupBefore.Add(-time.Hour)))
+	doer := newCutDedupDoer(t, cutDedupRuns(cutDedupBefore.Add(-time.Hour))).withReports(cutDedupIDs...)
 	doer.attemptAt[5004] = cutDedupSecond.Format(time.RFC3339)
 	walkCutDedup(t, cutDedupClaim(false), doer, nil, nil)
 	if got, want := doer.reads(cutDedupIDs), []int{1, 1, 1, 1, 2}; !reflect.DeepEqual(got, want) {
@@ -398,7 +409,7 @@ func TestGitHubTestsCutRunsEveryWrittenCursorFormDecodes(t *testing.T) {
 	collect := func(doer *cutDedupDoer, tolerate func(error) bool) {
 		cursors = append(cursors, walkCutDedup(t, cutDedupClaim(false), doer, nil, tolerate).cursors...)
 	}
-	plain := newCutDedupDoer(t, cutDedupRuns(cutDedupBefore.Add(-time.Hour)))
+	plain := newCutDedupDoer(t, cutDedupRuns(cutDedupBefore.Add(-time.Hour))).withReports(cutDedupIDs...)
 	collect(plain, nil)
 	overflow := newCutDedupDoer(t, nil)
 	for index := 0; index < 990; index++ {
@@ -406,9 +417,10 @@ func TestGitHubTestsCutRunsEveryWrittenCursorFormDecodes(t *testing.T) {
 	}
 	for index := 0; index < 12; index++ {
 		overflow.fake.runs = append(overflow.fake.runs, listingRun{id: 33301167231 + index, created: cutDedupSecond, updated: cutDedupBefore.Add(-time.Hour), status: "completed", conclusion: "success"})
+		overflow.withReports(33301167231 + index)
 	}
 	collect(overflow, nil)
-	attempt := newCutDedupDoer(t, cutDedupRuns(cutDedupBefore.Add(-time.Hour)))
+	attempt := newCutDedupDoer(t, cutDedupRuns(cutDedupBefore.Add(-time.Hour))).withReports(cutDedupIDs...)
 	attempt.attemptAt[5004] = cutDedupSecond.Format(time.RFC3339)
 	collect(attempt, nil)
 	cursors = append(cursors,
@@ -418,37 +430,40 @@ func TestGitHubTestsCutRunsEveryWrittenCursorFormDecodes(t *testing.T) {
 		`{"phase":"open","pipelines":0,"jobs":0,"acceptance":0,"suites":0,"cases":0,"coverage":0,"requests":1,"pages":0,"run_pages":2,"artifact_pages":2,"repo":"acme/api","archives_seen":0,"archives_unreadable":0,"oc":100,"od":4}`,
 		``,
 	)
-	forms, withList, overflowed := 0, 0, 0
+	forms, withList, carried, overflowed := 0, 0, 0, 0
 	for _, raw := range cursors {
 		cursor, err := decodeGitHubTestsChunkCursor(raw)
 		if err != nil {
 			t.Fatalf("a written cursor does not decode: %v: %s", err, raw)
 		}
-		if cursor.CutRuns != "" {
+		if cursor.ActiveCutKeys != "" && cursor.ActiveCutKeys != githubTestsCutKeysOverflow {
 			withList++
 		}
-		if cursor.CutRuns == githubTestsCutRunsOverflow {
+		if cursor.CarriedCutKeys != "" {
+			carried++
+		}
+		if cursor.ActiveCutKeys == githubTestsCutKeysOverflow {
 			overflowed++
 		}
 		var fields map[string]json.RawMessage
 		if raw == "" || json.Unmarshal([]byte(raw), &fields) != nil {
 			continue
 		}
-		delete(fields, "cs")
-		delete(fields, "ci")
+		delete(fields, "ak")
+		delete(fields, "ck")
 		stripped, _ := json.Marshal(fields)
 		old, err := decodeGitHubTestsChunkCursor(string(stripped))
-		if err != nil || old.CutSecond != 0 || old.CutRuns != "" {
+		if err != nil || old.ActiveCutKeys != "" || old.CarriedCutKeys != "" {
 			t.Fatalf("the pre-list form of a written cursor = %+v, %v; want an empty list: %s", old, err, stripped)
 		}
 		forms++
 	}
-	if withList == 0 || overflowed == 0 || forms < 2000 {
-		t.Fatalf("premise: %d cursors carried a list, %d an overflowed one, %d forms checked", withList, overflowed, forms)
+	if withList == 0 || carried == 0 || overflowed == 0 || forms < 2000 {
+		t.Fatalf("premise: %d cursors held an active list, %d a carried one, %d an overflowed one, %d forms checked", withList, carried, overflowed, forms)
 	}
 
 	// Resume from the pre-list form of the cursor after the first cut-second run of the first range.
-	doer := newCutDedupDoer(t, cutDedupRuns(cutDedupBefore.Add(-time.Hour)))
+	doer := newCutDedupDoer(t, cutDedupRuns(cutDedupBefore.Add(-time.Hour))).withReports(cutDedupIDs...)
 	stripNext := false
 	yield := func(before, after githubTestsChunkCursor) bool {
 		if after.Phase == githubTestsArtifactsPhase && after.RangeHi == "" && after.RangeItems == 999 {
@@ -487,11 +502,11 @@ func TestGitHubTestsCutRunsEveryWrittenCursorFormDecodes(t *testing.T) {
 		if json.Unmarshal([]byte(last), &fields) != nil {
 			t.Fatal("cursor is not JSON")
 		}
-		if _, ok := fields["ci"]; !ok {
-			t.Fatalf("premise: the yielded cursor carries no list: %s", last)
+		if _, ok := fields["ak"]; !ok {
+			t.Fatalf("premise: the yielded cursor holds no list: %s", last)
 		}
-		delete(fields, "cs")
-		delete(fields, "ci")
+		delete(fields, "ak")
+		delete(fields, "ck")
 		stripped, _ := json.Marshal(fields)
 		resume = string(stripped)
 	}
@@ -508,24 +523,27 @@ func TestGitHubTestsCutRunsEveryWrittenCursorFormDecodes(t *testing.T) {
 	}
 }
 
-// A cut list this code cannot have written is a checkpoint conflict with a named reason, before any provider call. A
-// list on a cursor outside the artifacts phase is cleared.
+// A cut list this code cannot have written is a checkpoint conflict with a named reason, before any provider call. Lists
+// on a cursor outside the artifacts phase are cleared.
 func TestGitHubTestsCutRunsMalformedCursorIsANamedConflict(t *testing.T) {
 	base := `{"phase":"artifacts","next_url":"","index":0,"run_pages":1,"artifact_pages":1,"repo":"acme/api","archives_seen":0,"archives_unreadable":0,`
+	active := `"ro":"2026-07-20T06:30:00Z","ak":`
+	carried := `"rh":"2026-07-20T06:30:00Z","ck":`
 	for _, tail := range []string{
-		`"cs":-1,"ci":"5"}`,
-		`"cs":253402300800,"ci":"5"}`,
-		`"cs":1784528400}`,
-		`"ci":"5"}`,
-		`"cs":1784528400,"ci":"x"}`,
-		`"cs":1784528400,"ci":"5,,6"}`,
-		`"cs":1784528400,"ci":"05"}`,
-		`"cs":1784528400,"ci":"5.1"}`,
-		`"cs":1784528400,"ci":"5.0"}`,
-		`"cs":1784528400,"ci":"5,5"}`,
-		`"cs":1784528400,"ci":"5,-"}`,
-		`"cs":1784528400,"ci":"123456789012345678901"}`,
-		`"cs":1784528400,"ci":"` + cutDedupDistinctIDs(9) + `,1"}`,
+		`"ak":"5"}`,
+		`"ck":"5"}`,
+		carried + `"-"}`,
+		active + `"x"}`,
+		active + `"5,,6"}`,
+		active + `"05"}`,
+		active + `"5.1"}`,
+		active + `"5.0"}`,
+		active + `"5,5"}`,
+		active + `"5,-"}`,
+		active + `"123456789012345678901"}`,
+		active + `"` + cutDedupDistinctIDs(5) + `"}`,
+		carried + `"5,5"}`,
+		carried + `"` + cutDedupDistinctIDs(5) + `"}`,
 	} {
 		_, err := decodeGitHubTestsChunkCursor(base + tail)
 		var storeErr *ChunkStoreError
@@ -536,57 +554,71 @@ func TestGitHubTestsCutRunsMalformedCursorIsANamedConflict(t *testing.T) {
 	doer := newCutDedupDoer(t, nil)
 	client := githubTestsClient(t, doer)
 	err := GitHubTestsRouteHandler{}.CollectChunks(context.Background(), cutDedupClaim(false), providerfoundation.Credential{}, client,
-		time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC), base+`"cs":1784528400,"ci":"x"}`, func(ChunkRouteEmission) error { return nil })
+		time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC), base+active+`"x"}`, func(ChunkRouteEmission) error { return nil })
 	if !errors.Is(err, ErrChunkCheckpointConflict) || doer.fake.requests != 0 {
 		t.Fatalf("CollectChunks err=%v after %d requests, want the conflict before any request", err, doer.fake.requests)
 	}
-	for _, raw := range []string{
-		`{"phase":"artifacts","next_url":"","index":0,"repo":"acme/api","archives_seen":0,"archives_unreadable":0,"cs":1784528400,"ci":"5,6.2"}`,
-		`{"phase":"artifacts","next_url":"","index":0,"repo":"acme/api","archives_seen":0,"archives_unreadable":0,"cs":1784528400,"ci":"-"}`,
-		`{"phase":"artifacts","next_url":"","index":0,"repo":"acme/api","archives_seen":0,"archives_unreadable":0,"cs":253402300799,"ci":"` + cutDedupDistinctIDs(8) + `,12345"}`,
+	for _, tail := range []string{
+		active + `"5,6.2"}`,
+		active + `"-"}`,
+		carried + `"` + cutDedupDistinctIDs(4) + `,12"}`,
+		`"ro":"2026-07-20T06:00:00Z","rh":"2026-07-20T06:30:00Z","ak":"7","ck":"5,6.2"}`,
 	} {
-		if _, err := decodeGitHubTestsChunkCursor(raw); err != nil {
-			t.Fatalf("%s: err=%v, want a valid list", raw, err)
+		if _, err := decodeGitHubTestsChunkCursor(base + tail); err != nil {
+			t.Fatalf("%s: err=%v, want a valid cursor", tail, err)
 		}
 	}
-	cleared, err := decodeGitHubTestsChunkCursor(`{"phase":"open","repo":"acme/api","archives_seen":0,"archives_unreadable":0,"cs":1784528400,"ci":"5"}`)
-	if err != nil || cleared.CutSecond != 0 || cleared.CutRuns != "" {
-		t.Fatalf("a list outside the artifacts phase = %+v, %v; want cleared", cleared, err)
+	cleared, err := decodeGitHubTestsChunkCursor(`{"phase":"open","repo":"acme/api","archives_seen":0,"archives_unreadable":0,"ro":"2026-07-20T06:30:00Z","rh":"2026-07-20T06:30:00Z","ak":"5","ck":"6"}`)
+	if err != nil || cleared.ActiveCutKeys != "" || cleared.CarriedCutKeys != "" {
+		t.Fatalf("lists outside the artifacts phase = %+v, %v; want cleared", cleared, err)
 	}
 }
 
-// The list helpers: an older second starts a new list, a newer one is ignored, a duplicate is kept once, the byte cap
-// turns the list into the overflow mark, and an unkeyable run is never recorded or skipped.
+// The list helpers: only a run of the RangeOldest second is recorded, a duplicate is kept once, the byte cap turns the
+// active list into the overflow mark, the freeze carries a list (never an overflow), and only the carried list at the
+// RangeHi second skips. An unkeyable run is never recorded or skipped.
 func TestGitHubTestsCutRunsRecordAndSkip(t *testing.T) {
-	cursor := githubTestsChunkCursor{}
-	cursor = githubTestsRecordCutRun(cursor, 200, "7")
-	cursor = githubTestsRecordCutRun(cursor, 300, "8")
-	cursor = githubTestsRecordCutRun(cursor, 200, "9.2")
-	cursor = githubTestsRecordCutRun(cursor, 200, "7")
-	if cursor.CutSecond != 200 || cursor.CutRuns != "7,9.2" {
-		t.Fatalf("list = %d %q, want 200 \"7,9.2\"", cursor.CutSecond, cursor.CutRuns)
+	const at = "2026-07-20T06:30:00Z"
+	second := cutDedupSecond.Unix()
+	cursor := githubTestsChunkCursor{RangeOldest: at}
+	cursor = githubTestsRecordCutRun(cursor, second, "7")
+	cursor = githubTestsRecordCutRun(cursor, second+1, "8")
+	cursor = githubTestsRecordCutRun(cursor, second, "9.2")
+	cursor = githubTestsRecordCutRun(cursor, second, "7")
+	cursor = githubTestsRecordCutRun(cursor, second, "")
+	if cursor.ActiveCutKeys != "7,9.2" {
+		t.Fatalf("active list = %q, want \"7,9.2\"", cursor.ActiveCutKeys)
 	}
-	if !githubTestsSkipCutRun(cursor, 200, "9.2") || githubTestsSkipCutRun(cursor, 200, "9") || githubTestsSkipCutRun(cursor, 201, "7") || githubTestsSkipCutRun(cursor, 200, "") {
-		t.Fatal("skip must match the exact key at the exact second only")
+	if githubTestsSkipCutRun(cursor, second, "7") {
+		t.Fatal("the active list must never skip")
 	}
-	cursor = githubTestsRecordCutRun(cursor, 100, "1")
-	if cursor.CutSecond != 100 || cursor.CutRuns != "1" {
-		t.Fatalf("an older second must start a new list: %d %q", cursor.CutSecond, cursor.CutRuns)
+	cursor.RangeHi = at
+	frozen := githubTestsFreezeCutKeys(cursor)
+	if frozen.CarriedCutKeys != "7,9.2" || frozen.ActiveCutKeys != "" {
+		t.Fatalf("freeze = active %q carried %q, want \"\" and \"7,9.2\"", frozen.ActiveCutKeys, frozen.CarriedCutKeys)
 	}
-	for index := 0; index < 8; index++ {
-		cursor = githubTestsRecordCutRun(cursor, 100, strconv.Itoa(33301167231+index))
+	if !githubTestsSkipCutRun(frozen, second, "9.2") || githubTestsSkipCutRun(frozen, second, "9") || githubTestsSkipCutRun(frozen, second-1, "7") ||
+		githubTestsSkipCutRun(frozen, second, "") {
+		t.Fatal("skip must match the exact key in the carried list at the RangeHi second only")
 	}
-	if cursor.CutRuns != githubTestsCutRunsOverflow || githubTestsSkipCutRun(cursor, 100, "1") {
-		t.Fatalf("past %d bytes the list overflows and skips nothing: %q", githubTestsMaxCutRunsBytes, cursor.CutRuns)
+	if noHi := frozen; func() bool { noHi.RangeHi = ""; return githubTestsSkipCutRun(noHi, second, "7") }() {
+		t.Fatal("a carried list with no RangeHi must not skip")
 	}
-	cursor = githubTestsRecordCutRun(cursor, 100, "2")
-	if cursor.CutRuns != githubTestsCutRunsOverflow {
-		t.Fatalf("an overflowed second stays overflowed: %q", cursor.CutRuns)
+	full := githubTestsChunkCursor{RangeOldest: at}
+	for index := 0; index < 5; index++ {
+		full = githubTestsRecordCutRun(full, second, strconv.Itoa(33301167231+index))
 	}
-	if next := githubTestsRecordCutRun(cursor, 99, "3"); next.CutSecond != 99 || next.CutRuns != "3" {
-		t.Fatalf("an older second clears the overflow: %d %q", next.CutSecond, next.CutRuns)
+	if full.ActiveCutKeys != githubTestsCutKeysOverflow {
+		t.Fatalf("past %d bytes the active list overflows: %q", githubTestsMaxCutKeysBytes, full.ActiveCutKeys)
 	}
-	created := "2026-07-20T06:30:00Z"
+	if full = githubTestsRecordCutRun(full, second, "2"); full.ActiveCutKeys != githubTestsCutKeysOverflow {
+		t.Fatalf("an overflowed list stays overflowed: %q", full.ActiveCutKeys)
+	}
+	full.RangeHi = at
+	if carried := githubTestsFreezeCutKeys(full); carried.CarriedCutKeys != "" || carried.ActiveCutKeys != "" {
+		t.Fatalf("an overflowed list must carry nothing: active %q carried %q", carried.ActiveCutKeys, carried.CarriedCutKeys)
+	}
+	created := at
 	for _, tc := range []struct {
 		id      string
 		attempt any
@@ -595,9 +627,9 @@ func TestGitHubTestsCutRunsRecordAndSkip(t *testing.T) {
 		{"5004", json.Number("1"), "5004"}, {"5004", json.Number("3"), "5004.3"}, {"5004", nil, ""}, {"5004", json.Number("0"), ""},
 		{"5004", json.Number("1.5"), ""}, {"-5", json.Number("1"), ""}, {"1e3", json.Number("1"), ""}, {"123456789012345678901", json.Number("1"), ""},
 	} {
-		second, key := githubTestsCutRunKey(gitHubWorkflowRunPayload{ID: json.Number(tc.id), CreatedAt: &created, RunAttempt: tc.attempt})
-		if key != tc.want || (key != "" && second != cutDedupSecond.Unix()) {
-			t.Fatalf("key(%s, %v) = %d %q, want %q", tc.id, tc.attempt, second, key, tc.want)
+		got, key := githubTestsCutRunKey(gitHubWorkflowRunPayload{ID: json.Number(tc.id), CreatedAt: &created, RunAttempt: tc.attempt})
+		if key != tc.want || (key != "" && got != second) {
+			t.Fatalf("key(%s, %v) = %d %q, want %q", tc.id, tc.attempt, got, key, tc.want)
 		}
 	}
 	if _, key := githubTestsCutRunKey(gitHubWorkflowRunPayload{ID: json.Number("5"), RunAttempt: json.Number("1")}); key != "" {

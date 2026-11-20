@@ -110,10 +110,10 @@ func TestGitHubTestsChunkCursorWorstCaseStaysWithinBudget(t *testing.T) {
 		)
 	}
 
-	// An artifacts phase mid-peel also carries its range and the cut list at its byte cap and widest second (CHAOS-14251:
-	// at most 122 bytes; the canary below stays 150).
+	// An artifacts phase mid-peel also carries its range and both cut lists at their byte cap (CHAOS-14251: at most 120
+	// bytes; the canary below stays 150).
 	cursor.RangeHi, cursor.RangeOldest, cursor.RangeItems = "2026-07-20T23:59:59Z", "2026-07-20T00:00:00Z", githubTestsSearchResultCap
-	cursor.CutSecond, cursor.CutRuns = githubTestsMaxCutSecond, githubTestsWidestCutRuns(t)
+	cursor.ActiveCutKeys, cursor.CarriedCutKeys = githubTestsWidestCutKeys(t), githubTestsWidestCutKeys(t)
 
 	encoded, err := encodeGitHubTestsChunkCursor(cursor)
 	if err != nil {
@@ -453,12 +453,12 @@ func TestGitHubTestsChunkCursorLegacyTrimDoesNotExcuseAnUnrelatedUnmarkedCause(t
 	mustCompareGitHubTestsCompletionOK(t, claim, batch)
 }
 
-// githubTestsWidestCutRuns is a valid cut list of exactly githubTestsMaxCutRunsBytes bytes of the widest keys.
-func githubTestsWidestCutRuns(t *testing.T) string {
+// githubTestsWidestCutKeys is a valid cut key list of exactly githubTestsMaxCutKeysBytes bytes of the widest keys.
+func githubTestsWidestCutKeys(t *testing.T) string {
 	t.Helper()
-	runs := "99999999999999999999.999999,99999999999999999998.999999,99999999999999999997.999999,999999999999"
-	if len(runs) != githubTestsMaxCutRunsBytes || !githubTestsCutRunsValid(githubTestsMaxCutSecond, runs) {
-		t.Fatalf("widest cut list %q is %d bytes or invalid, want a valid list of %d bytes", runs, len(runs), githubTestsMaxCutRunsBytes)
+	keys := "99999999999999999999.999999,99999999999999999998.999"
+	if len(keys) != githubTestsMaxCutKeysBytes || !githubTestsCutKeyListValid(keys) {
+		t.Fatalf("widest cut key list %q is %d bytes or invalid, want a valid list of %d bytes", keys, len(keys), githubTestsMaxCutKeysBytes)
 	}
-	return runs
+	return keys
 }

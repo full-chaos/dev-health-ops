@@ -223,11 +223,10 @@ type githubTestsChunkCursor struct {
 	// describes -- it only ever under-reports one telemetry field on a
 	// resumed walk, never mis-terminalizes a unit.
 	ArtifactsExcludedNotFound int `json:"artifacts_excluded_not_found,omitempty"`
-	// CutSecond and CutRuns (artifacts phase only) are the runs read whole at the oldest created second seen, so the next
-	// peeled range, which lists that second again, does not read them twice (githubTestsSkipCutRun). A cursor without
-	// them skips nothing.
-	CutSecond int64  `json:"cs,omitempty"`
-	CutRuns   string `json:"ci,omitempty"`
+	// ActiveCutKeys and CarriedCutKeys (artifacts phase only) keep a peeled range from reading again the runs the previous
+	// range read whole at its cut second (github_tests_cut_runs.go). A cursor without them skips nothing.
+	ActiveCutKeys  string `json:"ak,omitempty"`
+	CarriedCutKeys string `json:"ck,omitempty"`
 }
 
 // markGitHubTestsSkippedArtifactCauseOverflow returns a NEW map with cause
@@ -1009,11 +1008,11 @@ func decodeGitHubTestsChunkCursor(raw string) (githubTestsChunkCursor, error) {
 			*cursor.ArchivesUnreadable > *cursor.ArchivesSeen) {
 		return githubTestsChunkCursor{}, ErrChunkCheckpointConflict
 	}
-	if !githubTestsCutRunsValid(cursor.CutSecond, cursor.CutRuns) {
+	if !githubTestsCutKeysValid(cursor) {
 		return githubTestsChunkCursor{}, chunkConflictBecause(githubTestsCutRunsConflict)
 	}
 	if cursor.Phase != githubTestsArtifactsPhase {
-		cursor = githubTestsClearCutRuns(cursor)
+		cursor = githubTestsClearCutKeys(cursor)
 	}
 	// A cursor already carrying aggregate overflow with no per-cause ledger
 	// at all predates SkippedArtifactCauseOverflow (CHAOS-4592 codex review
@@ -1451,14 +1450,15 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		case !saturated:
 			c.RangeHi = ""
 			c.Phase = githubTestsPhaseAfterArtifacts(handler)
-			c = githubTestsClearCutRuns(c)
+			c = githubTestsClearCutKeys(c)
 		case stuck:
 			c = recordGitHubTestsSaturated(c, client, claim, githubTestsArtifactInventorySaturatedComponent, githubTestsArtifactsPhase, hi, items)
 			c.RangeHi = ""
 			c.Phase = githubTestsPhaseAfterArtifacts(handler)
-			c = githubTestsClearCutRuns(c)
+			c = githubTestsClearCutKeys(c)
 		default:
 			c.RangeHi = nextHi
+			c = githubTestsFreezeCutKeys(c)
 		}
 		return c
 	}
@@ -1898,7 +1898,9 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 				}
 				pipeline, include := normalizeGitHubTestsPipeline(claim, repoID, run, normalizedAt)
 				cursor.RangeItems++
-				cursor.RangeOldest = githubTestsOlderCreated(cursor.RangeOldest, parseGitHubWorkflowTime(run.CreatedAt))
+				if oldest := githubTestsOlderCreated(cursor.RangeOldest, parseGitHubWorkflowTime(run.CreatedAt)); oldest != cursor.RangeOldest {
+					cursor.RangeOldest, cursor.ActiveCutKeys = oldest, ""
+				}
 				cutSecond, cutKey := githubTestsCutRunKey(run)
 				suites := []testSuiteResultRow(nil)
 				cases := []testCaseResultRow(nil)
@@ -2405,8 +2407,9 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 						pipeline, run, lossBefore, lossAfter,
 						reportsExpected-nonReportArchives, len(expiredItems), githubTestsAdmittedReports(parsedReports, plan.Admitted), normalizedAt,
 					)
-					// Only a run read whole is recorded, in the same emission as its rows: a run with any loss is read again.
-					if len(completeness) == 0 || completeness[0].Complete {
+					// Only a run read whole (one complete verdict) is recorded, in the same emission as its rows: a run with no report
+					// source or any loss is read again.
+					if len(completeness) == 1 && completeness[0].Complete {
 						cursor = githubTestsRecordCutRun(cursor, cutSecond, cutKey)
 					}
 				}
@@ -2483,7 +2486,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 	if cursor.Phase == githubTestsArtifactsPhase {
 		cursor.Phase = githubTestsPhaseAfterArtifacts(handler)
 	}
-	cursor = githubTestsClearCutRuns(cursor)
+	cursor = githubTestsClearCutKeys(cursor)
 	if cursor.Phase == githubTestsOpenPhase {
 		handlerOpenRan = true
 		if err := collectOpenRuns(); err != nil {

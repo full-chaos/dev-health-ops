@@ -135,8 +135,10 @@ func TestReconcileBlockedRunsMarksOnlyRunsThatCanNeverFinish(t *testing.T) {
 			// A 'failed' partition is claimed again by the retry of its River
 			// job, so while that job lives this run can still finish on its own
 			// and must NOT be marked -- marking it would raise a false alarm on
-			// ordinary transient failure. (A partition whose job ended is
-			// written failed_permanent by Work, never left 'failed'.)
+			// ordinary transient failure. The 'failed' row here was written
+			// now, inside failedPartitionRetryHorizon; a 'failed' row whose job
+			// is gone is marked once the horizon passes
+			// (blocked_stale_failed_integration_test.go).
 			name:        "failed_permanent alongside a dispatchable failed is not blocked",
 			partitions:  []string{"failed_permanent", "failed"},
 			wantBlocked: false,

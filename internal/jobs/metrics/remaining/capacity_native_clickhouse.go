@@ -49,24 +49,43 @@ func capacityNewestRows(where string) string {
 // -- once in its outer WHERE and once inside the max(day) subquery. Two
 // separately-written copies would be free to drift from each other while both
 // still looked right.
+//
+// A forecast of no team reads the org view (CHAOS-8863): legacy rows and org
+// rows, each item once in the organization. A forecast of one team reads the team
+// view (CHAOS-14353): every view stays in the collapse, and capacitySource picks
+// one view per key on top of it.
 func capacityScopeFilters(
 	organizationID string, target capacityTarget, arguments map[string]any,
 ) []string {
-	conditions := []string{
-		"org_id = {org_id:String}",
-		// Each item once in the organization (CHAOS-8863): legacy rows and the org view, never the scope view.
-		rowview.OrgPredicate("work_item_metrics_daily", ""),
-	}
+	conditions := []string{"org_id = {org_id:String}"}
 	arguments["org_id"] = organizationID
-	if target.TeamID != nil && *target.TeamID != "" {
+	if capacityOneTeam(target) {
 		conditions = append(conditions, "team_id = {team_id:String}")
 		arguments["team_id"] = *target.TeamID
+	} else {
+		conditions = append(conditions, rowview.OrgPredicate("work_item_metrics_daily", ""))
 	}
 	if target.WorkScopeID != nil && *target.WorkScopeID != "" {
 		conditions = append(conditions, "work_scope_id = {work_scope_id:String}")
 		arguments["work_scope_id"] = *target.WorkScopeID
 	}
 	return conditions
+}
+
+// capacityOneTeam reports whether the forecast is of one team.
+func capacityOneTeam(target capacityTarget) bool {
+	return target.TeamID != nil && *target.TeamID != ""
+}
+
+// capacitySource is the FROM source of a forecast read: the collapse of
+// capacityNewestRows, and for a forecast of one team the team view's pick on top
+// of it (rowview.TeamPick: a live row first, then team, org, legacy). The pick
+// applies no live-row rule: each read applies it where it did before.
+func capacitySource(target capacityTarget, newest string) string {
+	if !capacityOneTeam(target) {
+		return newest
+	}
+	return rowview.TeamPick("work_item_metrics_daily", newest) + " AS work_item_metrics_daily"
 }
 
 // loadThroughput ports load_throughput_from_sink.
@@ -103,7 +122,7 @@ func (executor *CapacityExecutor) loadThroughput(
         WHERE %s
         GROUP BY day
         ORDER BY day
-    `, capacityNewestRows(strings.Join(conditions, " AND ")), liverow.Predicate("work_item_metrics_daily", ""))
+    `, capacitySource(target, capacityNewestRows(strings.Join(conditions, " AND "))), liverow.Predicate("work_item_metrics_daily", ""))
 
 	rows, err := executor.conn.Query(ctx, query, namedArguments(arguments)...)
 	if err != nil {
@@ -153,7 +172,7 @@ func (executor *CapacityExecutor) loadBacklog(
               SELECT max(day)
               FROM %s
           )
-    `, capacityNewestRows(where), capacityNewestRows(where))
+    `, capacitySource(target, capacityNewestRows(where)), capacitySource(target, capacityNewestRows(where)))
 
 	// sum() over a UInt32 column widens to UInt64, so the destination has to
 	// be uint64 rather than the column's own type. An aggregate always returns

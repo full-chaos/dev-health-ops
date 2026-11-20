@@ -23,7 +23,7 @@
 # A row must name a test `go test -list` reports: renaming or removing a measured test needs its row edited in the same change
 # (the leg and internal/cigates/testshard fail otherwise). Refresh: the same reduction over newer runs; values only cost balance.
 # Sorted (LC_ALL=C) by package, then test.
-# - CHAOS-14341 (both directions): a row whose measured value differs from it by more than 10 % and 2 s or more is set to that value, and a listed test of 2 s or more gets a row; measured = the median of round(W * e/E) (e the largest elapsed of the test and its subtests, W the leg's `ok` seconds) over the go-test-timings-test-K artifacts of the main-push runs of ci/go_test_weights.tsv's CHAOS-14341 line (n >= 5 runs per row).
+# - CHAOS-14341 (both directions): a row whose measured value differs from it by more than 10 % and 2 s or more is set to that value, and a listed test of 2 s or more gets a row; measured = the median of round(W * e/E) (e the largest elapsed of the test and its subtests, W the leg's `ok` seconds) over the go-test-timings-test-K artifacts of the main-push runs of ci/go_test_weights.tsv's CHAOS-14341 line (n >= 5 runs per row). It drops the larger-of-warm-and-cold rule (CHAOS-13730) for these rows: the go.sum-change run 44694742462 measured like warm runs (shared build cache); 377 s of modelled headroom covers a cold run; a cold-cache wall red reruns warm.
 deploy/helm/dev-health	TestACRRevokeNamesNeverComeFromExtraEnv	1
 deploy/helm/dev-health	TestAReservedDatabaseNameFailsTheRender	3
 deploy/helm/dev-health	TestAccessTokenLifetimeRendersForEdDSAOnly	2

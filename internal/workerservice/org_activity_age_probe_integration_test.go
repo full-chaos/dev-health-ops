@@ -29,7 +29,6 @@ import (
 // real worker family and reads the gauge through the global meter. The SQL clock is pinned: the domain pool resolves now() to a
 // test-owned public.now() (search_path public, pg_catalog), so the age is an exact value of the seeded timestamps, not of wall time.
 func TestOrgActivityAgeProbeOfTheWorkerReportsTheNewestRowAgeAndNoSampleWhenEmpty(t *testing.T) {
-	t.Chdir(filepath.Join("..", ".."))
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	t.Cleanup(cancel)
 
@@ -74,7 +73,7 @@ AS $$ SELECT timestamptz '2026-11-20 12:00:00+00' $$`); err != nil {
 		t.Fatalf("the domain pool did not resolve now() to the pinned clock: %v %v", pinned, err)
 	}
 
-	registry, err := jobruntime.Load(filepath.Join("contracts", "jobs", "v1"))
+	registry, err := jobruntime.Load(filepath.Join("..", "..", "contracts", "jobs", "v1"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +84,7 @@ AS $$ SELECT timestamptz '2026-11-20 12:00:00+00' $$`); err != nil {
 		OperationalBridgeTimeout: 20 * time.Second,
 		ClickHouseURI:            secrets.NewValue(clickhouse),
 		WorkerRemainingComplexityConfigPath: filepath.Join(
-			"src", "dev_health_ops", "config", "complexity.yaml",
+			"..", "..", "src", "dev_health_ops", "config", "complexity.yaml",
 		),
 	}
 	collector, err := jobruntime.NewMetricsCollector(jobruntime.MetricDimensions{})

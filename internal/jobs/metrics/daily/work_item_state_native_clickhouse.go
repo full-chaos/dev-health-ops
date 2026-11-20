@@ -140,8 +140,8 @@ WHERE org_id = ? AND repo_id = ?
 // event (including two parts not merged yet), never two distinct same-instant
 // transitions. The order inside an instant comes from the status chain
 // (workitemmetrics.OrderTransitions), not from tie_ordinal. tie_ordinal is read
-// only to drop a Projects v2 board row stored before 170 at an instant where the
-// board now writes its slot row (workitemmetrics.StaleBoardTieZeroSQL).
+// only to drop a Projects v2 board row stored before 170 whose board now writes
+// the same event at its slot with another status (workitemmetrics.StaleBoardTieZeroSQL).
 // repo_id and provider are NOT part of the identity: neither is filled by the
 // sync sink, and a copy of one event that differs only in one of them is still
 // the same event.

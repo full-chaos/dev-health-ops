@@ -14,7 +14,8 @@ import (
 
 // TestTransitionReadsDropAStaleBoardTieZeroRow: a Projects v2 board Status event stored before migration 170
 // (tie_ordinal 0, an earlier status map's to_status) and the board's slot row of the same event (tie_ordinal >= 2^31)
-// are one transition, the slot row's, in both daily readers. A board row at 0 with no slot row at its instant is kept.
+// are one transition, the slot row's, in both daily readers. A board row at 0 with no slot row at its instant is kept,
+// also beside another row of the same raw value.
 func TestTransitionReadsDropAStaleBoardTieZeroRow(t *testing.T) {
 	ctx := context.Background()
 	conn := workItemAttributionLinkedIssueMigratedClickHouse(t, ctx)
@@ -47,8 +48,12 @@ func TestTransitionReadsDropAStaleBoardTieZeroRow(t *testing.T) {
 	insert("", uuid.Nil, item, history, "github", "unknown", "in_progress", "", "Doing", "", orgID, pre170)
 	insert("", uuid.Nil, item, current, "github", "unknown", "in_progress", "", "Done", "", orgID, pre170)
 	insert(", tie_ordinal", uuid.Nil, item, current, "github", "unknown", "done", "", "Done", "", orgID, post170, uint32(1<<31|12345))
+	// An instant with two rows of one raw value and no slot row: both are kept.
+	noSlot := day.Add(-48 * time.Hour)
+	insert("", uuid.Nil, item, noSlot, "github", "unknown", "in_progress", "", "Ready", "", orgID, pre170)
+	insert(", tie_ordinal", uuid.Nil, item, noSlot, "github", "todo", "blocked", "", "Ready", "", orgID, post170, uint32(1))
 
-	want := "unknown->done unknown->in_progress"
+	want := "todo->blocked unknown->done unknown->in_progress unknown->in_progress"
 	stateTransitions, err := LoadWorkItemStateTransitions(ctx, conn, orgID, repoID, end)
 	if err != nil {
 		t.Fatal(err)

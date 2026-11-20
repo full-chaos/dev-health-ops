@@ -4,7 +4,9 @@ package providersync
 
 import (
 	"context"
+	"encoding/json"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -108,7 +110,7 @@ func TestBoardTieZeroRowWithNoSlotRowAtItsInstantIsKept(t *testing.T) {
 }
 
 // A GitHub timeline transition of the board event's shape (the issue's first event, from "unknown", no actor) at the
-// slot row's instant is kept by its raw value.
+// slot row's instant is kept: its raw value is not the slot row's.
 func TestTimelineTieZeroRowAtTheSlotInstantIsKept(t *testing.T) {
 	item := "gh:acme/api#14274"
 	closed := "closed"
@@ -121,5 +123,119 @@ func TestTimelineTieZeroRowAtTheSlotInstantIsKept(t *testing.T) {
 	want := "02-01T09:00 unknown->in_progress(Done), 03-02T09:00 unknown->done(Done), 03-02T09:00 unknown->done(closed)"
 	if got := boardTieZeroLabels(stored); got != want {
 		t.Fatalf("stored history %q, want %q", got, want)
+	}
+}
+
+// firstLabelRow is the issue's first GitHub timeline transition: a status label set at at, as the timeline normalizer
+// writes it (from "unknown", no from raw, no actor, the label name as raw): the board event's shape.
+func firstLabelRow(t *testing.T, item, label, at string, normalizedAt time.Time) githubWorkItemTransitionRow {
+	t.Helper()
+	raw, err := json.Marshal(githubWorkItemEventPayload{Event: "labeled", CreatedAt: &at, Label: &githubWorkItemLabelPayload{Name: label}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, _, err := normalizeGitHubWorkItemEvents(nativeTestClaim("github", "work-items"), item, false, []json.RawMessage{raw},
+		time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC), nil, normalizedAt)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("label %q: rows %+v err %v", label, rows, err)
+	}
+	return rows[0]
+}
+
+// labelAndBoardInOneSecond writes, after 170, an issue's first status label and its board's Status value set in the same
+// second, and returns the stored history the Projects v2 route reads and the status settled from it, next to the status
+// settled from the two written rows (what the reader served before the stale-row rule).
+func labelAndBoardInOneSecond(
+	ctx context.Context, t *testing.T, conn driver.Conn, item, label, column string,
+) (stored string, settled, want string) {
+	t.Helper()
+	at := "2026-03-02T09:00:00Z"
+	synced := time.Date(2026, 11, 20, 0, 0, 0, 0, time.UTC)
+	rows := []githubWorkItemTransitionRow{
+		firstLabelRow(t, item, label, at, synced),
+		boardTieEvent(t, item, "ghprojv2:acme#3", column, at, synced),
+	}
+	if err := githubFamilyTieWriter(conn, rows).write(ctx, t); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.Exec(ctx, `OPTIMIZE TABLE work_item_transitions FINAL`); err != nil {
+		t.Fatal(err)
+	}
+	history, err := GitHubProjectV2StoredTransitionsClickHouseReader{Conn: conn}.StoredTransitions(
+		ctx, nativeTestClaim("github", "work-items").OrgID, []string{item})
+	if err != nil {
+		t.Fatal(err)
+	}
+	last, _ := lastGitHubTransition(history)
+	base, _ := lastGitHubTransition(rows)
+	return boardTieZeroLabels(history), last.ToStatus, base.ToStatus
+}
+
+var statusLabelNames = []string{
+	"in progress", "doing", "wip", "in review", "needs review", "blocked", "todo", "to do", "ready", "done",
+	"wontfix", "duplicate", "In Review", "IN  PROGRESS", "Done",
+}
+
+// #6646 r1 (080ea3048927): an issue's first status label set in the same second as a board Status value (another raw
+// value) is a real transition. Both rows are served and the settled status is the one the two rows give.
+func TestFirstLabelInTheSecondOfABoardSlotRowIsKept(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	for index, label := range statusLabelNames {
+		item := "gh:acme/api#" + strconv.Itoa(15000+index)
+		stored, settled, want := labelAndBoardInOneSecond(ctx, t, conn, item, label, "Resolved")
+		if strings.Count(stored, ", ")+1 != 2 || settled != want {
+			t.Errorf("label %q: stored %q settled %q, want both rows and settled %q", label, stored, settled, want)
+		}
+	}
+}
+
+// A status label and a board Status value with the SAME raw value in one second. Where both maps give the label's
+// status, the two rows are one transition and the settled status is unchanged.
+func TestSameRawLabelAndBoardValueInOneSecondKeepTheSettledStatus(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	for index, label := range statusLabelNames {
+		item := "gh:acme/api#" + strconv.Itoa(16000+index)
+		stored, settled, want := labelAndBoardInOneSecond(ctx, t, conn, item, label, label)
+		t.Logf("same raw %q: stored %q settled %q base %q", label, stored, settled, want)
+		if settled != want {
+			t.Errorf("same raw %q: settled %q, want %q (base)", label, settled, want)
+		}
+	}
+}
+
+// Residual of the rule, pinned: on a CLOSED issue an unmapped board column ("needs review")
+// maps to done (githubProjectV2UnmappedStatus), a known status, so the slot row is evidence and the same-second
+// "needs review" label row (in_review) is dropped. The settled status is done; without the rule it is in_review.
+func TestClosedIssueUnmappedBoardColumnDropsTheSameRawLabelRow(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	item, at := "gh:acme/api#17000", "2026-03-02T09:00:00Z"
+	synced := time.Date(2026, 11, 20, 0, 0, 0, 0, time.UTC)
+	column, closed, closedAt := "needs review", "CLOSED", "2026-03-01T09:00:00Z"
+	var payload gitHubProjectV2ItemPayload
+	value := gitHubProjectV2FieldValuePayload{Typename: "ProjectV2ItemFieldSingleSelectValue", Name: &column, UpdatedAt: &at}
+	value.Field.Name = "Status"
+	payload.FieldValues.Nodes = []gitHubProjectV2FieldValuePayload{value}
+	payload.Content.Typename, payload.Content.State, payload.Content.ClosedAt = "Issue", &closed, &closedAt
+	board, ok, _, err := githubProjectV2StatusEvent(nativeTestClaim("github", "work-items"), payload, item, synced)
+	if err != nil || !ok || board.ToStatus != "done" {
+		t.Fatalf("board event %+v ok=%v err=%v, want to_status done", board, ok, err)
+	}
+	board.BoardSlot = int(boardTieSlot("ghprojv2:acme#3"))
+	rows := []githubWorkItemTransitionRow{firstLabelRow(t, item, column, at, synced), board}
+	if err := githubFamilyTieWriter(conn, rows).write(ctx, t); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.Exec(ctx, `OPTIMIZE TABLE work_item_transitions FINAL`); err != nil {
+		t.Fatal(err)
+	}
+	history, err := GitHubProjectV2StoredTransitionsClickHouseReader{Conn: conn}.StoredTransitions(
+		ctx, nativeTestClaim("github", "work-items").OrgID, []string{item})
+	if err != nil {
+		t.Fatal(err)
+	}
+	last, _ := lastGitHubTransition(history)
+	base, _ := lastGitHubTransition(rows)
+	if got := boardTieZeroLabels(history); got != "03-02T09:00 unknown->done(needs review)" || last.ToStatus != "done" || base.ToStatus != "in_review" {
+		t.Fatalf("stored %q settled %q (base %q), want only the board row, settled done (base in_review)", got, last.ToStatus, base.ToStatus)
 	}
 }

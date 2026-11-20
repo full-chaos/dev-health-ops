@@ -583,11 +583,12 @@ func TestArtifactsListingPeelsPastTheSearchCap(t *testing.T) {
 }
 
 // Fewer than 1,000 runs is one range per phase and no peel; 1,000 fills the cap, so each phase lists one more range;
-// 1,001 loses nothing. The claim holds a UTC midnight, so the runs phase also lists its deep range once (no run there).
+// 1,001 loses nothing. The claim holds a UTC midnight, so the runs phase and the artifacts phase also list their deep range
+// once each (no run there).
 func TestPeelStartsOnlyWhenARangeFillsTheCap(t *testing.T) {
 	for _, tc := range []struct {
 		runs, wantRanges int
-	}{{999, 3}, {1000, 5}, {1001, 5}} {
+	}{{999, 4}, {1000, 6}, {1001, 6}} {
 		fake := newListingFake(t, makeListingRuns(1, tc.runs, listingSince, 20*time.Second))
 		claim := listingClaim(listingSince, listingSince.Add(24*time.Hour))
 		walk := walkListing(t, GitHubTestsRouteHandler{}, claim, fake, 0)

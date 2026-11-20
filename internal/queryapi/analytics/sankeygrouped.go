@@ -154,6 +154,7 @@ func CompileSankeyGrouped(req SankeyRequest, orgID string, timeoutSeconds int, u
 
 	keys := make([]string, n)
 	keyExprs := make([]string, n)
+	outKeys := make([]string, n)
 	for i, dim := range req.Path {
 		dimCol, dimErr := dbColumn(dim, useInvestment)
 		if dimErr != nil {
@@ -162,6 +163,11 @@ func CompileSankeyGrouped(req SankeyRequest, orgID string, timeoutSeconds int, u
 		dimCol = shape.owner.column(dim, dimCol)
 		keys[i] = sankeyKeyAlias(i)
 		keyExprs[i] = fmt.Sprintf("toString(%s) AS %s", dimCol, keys[i])
+		outKeys[i] = keys[i]
+		if keyProjection(dim, useInvestment, dimCol) != dimCol {
+			// A key outside the grouping set is NULL and stays NULL: only the empty stored team is renamed.
+			outKeys[i] = fmt.Sprintf("if(%s = '', 'unassigned', %s) AS %s_out", keys[i], keys[i], keys[i])
+		}
 	}
 
 	// Node sets first, then edge sets: the order here does not reach the
@@ -226,7 +232,7 @@ WHERE %s
 ORDER BY grouping_set ASC, value DESC, %s
 LIMIT {per_set_limit:UInt32} BY grouping_set
 %s, force_grouping_standard_compatibility = 1
-`, strings.Join(keys, ", "),
+`, strings.Join(outKeys, ", "),
 		strings.Join(keys, ", "),
 		strings.Join(keyExprs, ",\n    "),
 		shape.measureExpr,

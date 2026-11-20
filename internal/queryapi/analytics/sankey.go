@@ -134,21 +134,27 @@ func CompileSankey(req SankeyRequest, orgID string, timeoutSeconds int, useInves
 			return compiledQuery{}, nil, dimErr
 		}
 		dimCol = shape.owner.column(dim, dimCol)
+		dimOut := keyProjection(dim, useInvestment, dimCol)
+		nodeGroup := "node_id"
+		if dimOut != dimCol {
+			nodeGroup = dimCol
+		}
 		unionParts = append(unionParts, fmt.Sprintf(`
 SELECT
     '%s' AS dimension,
     toString(%s) AS node_id,
     %s AS value,
-    %d AS dim_order
+    %d AS dim_order,
+    toString(%s) AS node_sort
 FROM %s
 %s
 WHERE %s
   AND %s.org_id = {org_id:String}
 %s%s
-GROUP BY node_id
-ORDER BY value DESC, node_id ASC
+GROUP BY %s
+ORDER BY value DESC, %s ASC
 LIMIT {limit_per_dim:UInt32}
-`, strings.ToUpper(string(dim)), dimCol, measureExpr, i, source, extraClauses, dateFilter, alias, fc.sql, groupKeyNotNull(dimCol, useInvestment)))
+`, strings.ToUpper(string(dim)), dimOut, measureExpr, i, dimCol, source, extraClauses, dateFilter, alias, fc.sql, groupKeyNotNull(dimCol, useInvestment), nodeGroup, nodeGroup))
 	}
 	// The outer SELECT drops dim_order from the projection -- queryNodes
 	// (flowmatrix.go) scans exactly 3 columns (dimension, node_id,
@@ -162,7 +168,7 @@ SELECT dimension, node_id, value
 FROM (
 %s
 )
-ORDER BY dim_order ASC, value DESC, node_id ASC
+ORDER BY dim_order ASC, value DESC, node_sort ASC
 %s
 `, strings.Join(unionParts, "\nUNION ALL\n"), statementSettings(source, timeoutSeconds))
 	nodesBindings := []clickhouse.Binding{
@@ -191,6 +197,15 @@ ORDER BY dim_order ASC, value DESC, node_id ASC
 			return compiledQuery{}, nil, colErr
 		}
 		targetCol = shape.owner.column(targetDim, targetCol)
+		sourceOut := keyProjection(sourceDim, useInvestment, sourceCol)
+		targetOut := keyProjection(targetDim, useInvestment, targetCol)
+		sourceGroup, targetGroup := "source", "target"
+		if sourceOut != sourceCol {
+			sourceGroup = sourceCol
+		}
+		if targetOut != targetCol {
+			targetGroup = targetCol
+		}
 		edgeSQL := fmt.Sprintf(`
 SELECT
     '%s' AS source_dimension,
@@ -205,11 +220,11 @@ WHERE %s
 %s
   AND %s IS NOT NULL
   AND %s IS NOT NULL
-GROUP BY source, target
-ORDER BY value DESC, source ASC, target ASC
+GROUP BY %s, %s
+ORDER BY value DESC, %s ASC, %s ASC
 LIMIT {max_edges:UInt32}
 %s
-`, strings.ToUpper(string(sourceDim)), strings.ToUpper(string(targetDim)), sourceCol, targetCol, measureExpr, source, extraClauses, dateFilter, alias, fc.sql, sourceCol, targetCol, statementSettings(source, timeoutSeconds))
+`, strings.ToUpper(string(sourceDim)), strings.ToUpper(string(targetDim)), sourceOut, targetOut, measureExpr, source, extraClauses, dateFilter, alias, fc.sql, sourceCol, targetCol, sourceGroup, targetGroup, sourceGroup, targetGroup, statementSettings(source, timeoutSeconds))
 
 		edgeBindings := []clickhouse.Binding{
 			{Name: "org_id", Value: orgID},

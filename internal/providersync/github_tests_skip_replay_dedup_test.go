@@ -214,7 +214,7 @@ func githubTestsReplayDedupRun(t *testing.T, doer *githubTestsReplayDedupDoer, s
 		t.Fatalf("err=%v, want the walk stopped at the checkpoint", err)
 	}
 	resume := walk.checkpoint
-	resume.Phase, resume.Index, resume.NextURL = "artifacts", 0, ""
+	resume.Phase, resume.Index, resume.NextURL, resume.Relist = "artifacts", 0, "", 0
 	encoded, err := encodeGitHubTestsChunkCursor(resume)
 	if err != nil {
 		t.Fatal(err)

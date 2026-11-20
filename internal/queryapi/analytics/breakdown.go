@@ -106,6 +106,8 @@ func compileBreakdownOver(req BreakdownRequest, dimCol, orgID string, timeoutSec
 
 	owner := newTestopsOwner(orgID, req.Measure, []Dimension{req.Dimension}, useInvestment, filters)
 	dimCol = owner.column(req.Dimension, dimCol)
+	dimOut := keyProjection(req.Dimension, useInvestment, dimCol)
+	dimGroup := groupRef("dimension_value", dimOut, dimCol)
 
 	fc, err := translateFilters(orgID, filters, useInvestment, owner.filterColumns(req.Measure, useInvestment))
 	if err != nil {
@@ -162,11 +164,11 @@ FROM %s
 WHERE %s
   AND %s.org_id = {org_id:String}
 %s%s
-GROUP BY dimension_value
-ORDER BY value DESC, dimension_value ASC
+GROUP BY %s
+ORDER BY value DESC, %s ASC
 %s
 %s
-`, dimCol, measureExpr, source, extraClauses, dateFilter, alias, fc.sql, keyFilter, limitClause, statementSettings(source, timeoutSeconds))
+`, dimOut, measureExpr, source, extraClauses, dateFilter, alias, fc.sql, keyFilter, dimGroup, dimGroup, limitClause, statementSettings(source, timeoutSeconds))
 
 	bindings := []clickhouse.Binding{
 		{Name: "org_id", Value: orgID},
@@ -176,7 +178,11 @@ ORDER BY value DESC, dimension_value ASC
 	if req.Keys == nil {
 		bindings = append(bindings, clickhouse.Binding{Name: "top_n", Value: req.TopN})
 	} else {
-		bindings = append(bindings, clickhouse.Binding{Name: "breakdown_keys", Value: req.Keys})
+		keys := req.Keys
+		if dimOut != dimCol {
+			keys = storedTeamIDs(keys)
+		}
+		bindings = append(bindings, clickhouse.Binding{Name: "breakdown_keys", Value: keys})
 	}
 	bindings = append(bindings, fc.bindings...)
 	bindings = append(bindings, contextBindings...)

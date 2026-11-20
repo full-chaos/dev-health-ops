@@ -1,0 +1,4 @@
+kind: ConfigMap
+metadata: {name: badtag}
+data:
+  x: !custom 1

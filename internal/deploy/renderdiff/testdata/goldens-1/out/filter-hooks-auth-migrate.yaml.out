@@ -1,0 +1,55 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  labels:
+    app.kubernetes.io/component: migrate
+  name: dev-health-ops-migrate
+  namespace: dev-health
+spec:
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: migrate
+        app.kubernetes.io/instance: dev-health
+        app.kubernetes.io/name: dev-health
+    spec:
+      containers:
+      - image: ghcr.io/full-chaos/dev-health-ops/other-migrate@sha256:1111111111111111111111111111111111111111111111111111111111111111
+        name: migrate
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  labels:
+    app.kubernetes.io/component: auth-migrate
+  name: dev-health-ops-auth-migrate
+  namespace: dev-health
+spec:
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: auth-migrate
+        app.kubernetes.io/instance: dev-health
+        app.kubernetes.io/name: dev-health
+    spec:
+      containers:
+      - env:
+        - name: AUTH_MIGRATION_DATABASE_URI
+          valueFrom:
+            secretKeyRef:
+              key: AUTH_MIGRATION_DATABASE_URI
+              name: auth-migrate-db
+        - name: AUTH_DATABASE_SCHEMA
+          value: auth
+        - name: AUTH_RUNTIME_DATABASE_ROLE
+          value: devhealth_auth
+        - name: AUTH_FIXTURE_TOKEN
+          value: <redacted>
+        image: ghcr.io/full-chaos/dev-health-ops/auth-migrate@sha256:2222222222222222222222222222222222222222222222222222222222222222
+        imagePullPolicy: IfNotPresent
+        name: auth-migrate
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+      restartPolicy: Never

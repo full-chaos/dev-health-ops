@@ -1,0 +1,12 @@
+ClusterRole/ingress-nginx
+ClusterRoleBinding/ingress-nginx
+ConfigMap/ingress-nginx-controller
+ConfigMap/ingress-nginx-custom-proxy-headers
+Deployment/ingress-nginx-controller
+IngressClass/nginx
+Role/ingress-nginx
+RoleBinding/ingress-nginx
+Service/ingress-nginx-controller
+Service/ingress-nginx-controller-admission
+ServiceAccount/ingress-nginx
+ValidatingWebhookConfiguration/ingress-nginx-admission

@@ -1,0 +1,391 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  labels:
+    app.kubernetes.io/component: go-pgbouncer-transaction
+    app.kubernetes.io/instance: dev-health
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: ops
+    app.kubernetes.io/part-of: dev-health
+    app.kubernetes.io/version: 0.1.0
+    helm.sh/chart: ops-0.1.0
+  name: dev-health-ops-go-pgbouncer-transaction
+  namespace: dev-health
+spec:
+  egress:
+  - ports:
+    - port: 5432
+      protocol: TCP
+    to:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/component: postgresql
+          app.kubernetes.io/instance: dev-health
+          app.kubernetes.io/name: ops
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/component: go-worker
+          app.kubernetes.io/instance: dev-health
+          app.kubernetes.io/name: ops
+    ports:
+    - port: 6432
+      protocol: TCP
+  - from:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/component: collector
+          app.kubernetes.io/instance: dev-health
+          app.kubernetes.io/name: otel-collector
+    ports:
+    - port: 9127
+      protocol: TCP
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: keda
+    ports:
+    - port: 6432
+      protocol: TCP
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: go-pgbouncer-transaction
+      app.kubernetes.io/instance: dev-health
+      app.kubernetes.io/name: ops
+  policyTypes:
+  - Ingress
+  - Egress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  labels:
+    app.kubernetes.io/component: go-pgbouncer-queue-session
+    app.kubernetes.io/instance: dev-health
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: ops
+    app.kubernetes.io/part-of: dev-health
+    app.kubernetes.io/version: 0.1.0
+    helm.sh/chart: ops-0.1.0
+  name: dev-health-ops-go-pgbouncer-queue-session
+  namespace: dev-health
+spec:
+  egress:
+  - ports:
+    - port: 5432
+      protocol: TCP
+    to:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/component: postgresql
+          app.kubernetes.io/instance: dev-health
+          app.kubernetes.io/name: ops
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/component: go-worker
+          app.kubernetes.io/instance: dev-health
+          app.kubernetes.io/name: ops
+    ports:
+    - port: 6433
+      protocol: TCP
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: go-pgbouncer-queue-session
+      app.kubernetes.io/instance: dev-health
+      app.kubernetes.io/name: ops
+  policyTypes:
+  - Ingress
+  - Egress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  labels:
+    app.kubernetes.io/component: go-pgbouncer-coordinator-session
+    app.kubernetes.io/instance: dev-health
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: ops
+    app.kubernetes.io/part-of: dev-health
+    app.kubernetes.io/version: 0.1.0
+    helm.sh/chart: ops-0.1.0
+  name: dev-health-ops-go-pgbouncer-coordinator-session
+  namespace: dev-health
+spec:
+  egress:
+  - ports:
+    - port: 5432
+      protocol: TCP
+    to:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/component: postgresql
+          app.kubernetes.io/instance: dev-health
+          app.kubernetes.io/name: ops
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/component: go-worker
+          app.kubernetes.io/instance: dev-health
+          app.kubernetes.io/name: ops
+    ports:
+    - port: 6434
+      protocol: TCP
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: go-pgbouncer-coordinator-session
+      app.kubernetes.io/instance: dev-health
+      app.kubernetes.io/name: ops
+  policyTypes:
+  - Ingress
+  - Egress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  labels:
+    app.kubernetes.io/instance: dev-health
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: ops
+    app.kubernetes.io/part-of: dev-health
+    app.kubernetes.io/version: 0.1.0
+    helm.sh/chart: ops-0.1.0
+  name: dev-health-ops
+  namespace: dev-health
+spec:
+  egress:
+  - ports:
+    - port: 53
+      protocol: UDP
+    - port: 53
+      protocol: TCP
+    to:
+    - namespaceSelector: {}
+  - to:
+    - podSelector: {}
+  - ports:
+    - port: 443
+      protocol: TCP
+    to:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+  - ports:
+    - port: 4317
+      protocol: TCP
+    to:
+    - ipBlock:
+        cidr: 10.0.0.151/32
+  - ports:
+    - port: 9440
+      protocol: TCP
+  - ports:
+    - port: 80
+      protocol: TCP
+    to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: ingress-nginx
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/component: controller
+          app.kubernetes.io/name: ingress-nginx
+  ingress:
+  - from:
+    - podSelector: {}
+  podSelector:
+    matchExpressions:
+    - key: app.kubernetes.io/component
+      operator: NotIn
+      values:
+      - go-api
+      - query-api
+      - auth-service
+      - auth-migrate
+    matchLabels:
+      app.kubernetes.io/instance: dev-health
+      app.kubernetes.io/name: ops
+  policyTypes:
+  - Ingress
+  - Egress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  labels:
+    app.kubernetes.io/component: web-ingress
+    app.kubernetes.io/instance: dev-health
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: ops
+    app.kubernetes.io/part-of: dev-health
+    app.kubernetes.io/version: 0.1.0
+    helm.sh/chart: ops-0.1.0
+  name: dev-health-ops-ingress-web
+  namespace: dev-health
+spec:
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: ingress-nginx
+    ports:
+    - port: 3000
+      protocol: TCP
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: web
+      app.kubernetes.io/instance: dev-health
+      app.kubernetes.io/name: ops
+  policyTypes:
+  - Ingress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  labels:
+    app.kubernetes.io/component: query-api-ingress
+    app.kubernetes.io/instance: dev-health
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: ops
+    app.kubernetes.io/part-of: dev-health
+    app.kubernetes.io/version: 0.1.0
+    helm.sh/chart: ops-0.1.0
+  name: dev-health-ops-ingress-query-api
+  namespace: dev-health
+spec:
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: ingress-nginx
+    ports:
+    - port: 8090
+      protocol: TCP
+  - from:
+    - podSelector: {}
+    ports:
+    - port: 8090
+      protocol: TCP
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: query-api
+      app.kubernetes.io/instance: dev-health
+      app.kubernetes.io/name: ops
+  policyTypes:
+  - Ingress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  labels:
+    app.kubernetes.io/instance: dev-health
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: ops
+    app.kubernetes.io/part-of: dev-health
+    app.kubernetes.io/version: 0.1.0
+    helm.sh/chart: ops-0.1.0
+  name: dev-health-ops-go-api-egress
+  namespace: dev-health
+spec:
+  egress:
+  - ports:
+    - port: 53
+      protocol: UDP
+    - port: 53
+      protocol: TCP
+    to:
+    - namespaceSelector: {}
+  - to:
+    - podSelector: {}
+  - ports:
+    - port: 443
+      protocol: TCP
+    to:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+  - ports:
+    - port: 4317
+      protocol: TCP
+    to:
+    - ipBlock:
+        cidr: 10.0.0.151/32
+  - ports:
+    - port: 9440
+      protocol: TCP
+  - ports:
+    - port: 80
+      protocol: TCP
+    to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: ingress-nginx
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/component: controller
+          app.kubernetes.io/name: ingress-nginx
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: go-api
+      app.kubernetes.io/instance: dev-health
+      app.kubernetes.io/name: ops
+  policyTypes:
+  - Egress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  labels:
+    app.kubernetes.io/instance: dev-health
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: ops
+    app.kubernetes.io/part-of: dev-health
+    app.kubernetes.io/version: 0.1.0
+    helm.sh/chart: ops-0.1.0
+  name: dev-health-ops-query-api-egress
+  namespace: dev-health
+spec:
+  egress:
+  - ports:
+    - port: 53
+      protocol: UDP
+    - port: 53
+      protocol: TCP
+    to:
+    - namespaceSelector: {}
+  - to:
+    - podSelector: {}
+  - ports:
+    - port: 443
+      protocol: TCP
+    to:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+  - ports:
+    - port: 4317
+      protocol: TCP
+    to:
+    - ipBlock:
+        cidr: 10.0.0.151/32
+  - ports:
+    - port: 9440
+      protocol: TCP
+  - ports:
+    - port: 80
+      protocol: TCP
+    to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: ingress-nginx
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/component: controller
+          app.kubernetes.io/name: ingress-nginx
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: query-api
+      app.kubernetes.io/instance: dev-health
+      app.kubernetes.io/name: ops
+  policyTypes:
+  - Egress

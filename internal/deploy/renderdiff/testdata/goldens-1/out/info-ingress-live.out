@@ -1,0 +1,9 @@
+render A: helm rc=0 docs=12
+render B: helm rc=0 docs=12
+ConfigMap/ingress-nginx-controller .data.compute-full-forwarded-for CHANGED
+ConfigMap/ingress-nginx-controller .data.proxy-real-ip-cidr CHANGED
+ConfigMap/ingress-nginx-controller .data.use-forwarded-headers CHANGED
+docs A 12 B 12 (all kinds, Secrets as Kind/name only; hook-free: a live manifest); kinds in A: ClusterRole=1, ClusterRoleBinding=1, ConfigMap=2, Deployment=1, IngressClass=1, Role=1, RoleBinding=1, Service=2, ServiceAccount=1, ValidatingWebhookConfiguration=1
+added []; removed []; changed field rows 3; element rows added 0 removed 0; reordered rows 0; pod-template label/annotation rows 0; postgres sts rows 0
+docs (non-Secret) A 12 B 12; added 0 removed 0 changed fields 3
+FULL RENDER DIFF: INFO (no expectation; the floor held)

@@ -1,0 +1,612 @@
+apiVersion: v1
+data:
+  config.yaml: "\nextensions:\n  health_check:\n    endpoint: 0.0.0.0:13133\n  file_storage/pod-logs:\n\
+    \    directory: /var/lib/otelcol/storage\n    create_directory: false\n  # k8s_cluster\
+    \ starts through this elector, NOT at collector start: without it, an API server\
+    \ that does not answer at that moment\n  # fails the whole collector start (all\
+    \ traces/logs/metrics stop). Through the elector the start error is only logged\
+    \ and the\n  # receiver starts once the lease is held, i.e. once the API answers.\
+    \ One replica, so this collector is always the only candidate.\n  k8s_leader_elector:\n\
+    \    auth_type: serviceAccount\n    lease_name: dev-health-otel-collector-k8s-cluster\n\
+    \    lease_namespace: dev-health\n  file_storage/clickhouse-querylog:\n    directory:\
+    \ /var/lib/otelcol/clickhouse-querylog\n    create_directory: false\nreceivers:\n\
+    \  otlp:\n    protocols:\n      grpc:\n        endpoint: 0.0.0.0:4317\n      http:\n\
+    \        endpoint: 0.0.0.0:4318\n  prometheus/internal:\n    config:\n      scrape_configs:\n\
+    \        - job_name: otelcol-internal\n          scrape_interval: 30s\n      \
+    \    metrics_path: /metrics\n          static_configs:\n            - targets:\
+    \ [\"localhost:8888\"]\n  prometheus/auth-service:\n    config:\n      scrape_configs:\n\
+    \        - job_name: auth-service\n          scrape_interval: 30s\n          metrics_path:\
+    \ /metrics\n          kubernetes_sd_configs:\n            - role: pod\n      \
+    \        namespaces:\n                names: [\"dev-health\"]\n          relabel_configs:\n\
+    \            - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_component]\n\
+    \              action: keep\n              regex: auth-service\n            -\
+    \ source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_instance]\n  \
+    \            action: keep\n              regex: \"dev-health\"\n            -\
+    \ source_labels: [__meta_kubernetes_pod_container_port_number]\n             \
+    \ action: keep\n              regex: \"8096\"\n            - source_labels: [__meta_kubernetes_pod_phase]\n\
+    \              action: keep\n              regex: Running\n  prometheus/pgbouncer:\n\
+    \    config:\n      scrape_configs:\n        - job_name: pgbouncer-transaction\n\
+    \          scrape_interval: 30s\n          metrics_path: /metrics\n          kubernetes_sd_configs:\n\
+    \            - role: pod\n              namespaces:\n                names: [\"\
+    dev-health\"]\n          relabel_configs:\n            - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_component]\n\
+    \              action: keep\n              regex: go-pgbouncer-transaction\n \
+    \           - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_instance]\n\
+    \              action: keep\n              regex: \"dev-health\"\n           \
+    \ - source_labels: [__meta_kubernetes_pod_container_port_number]\n           \
+    \   action: keep\n              regex: \"9127\"\n            - source_labels:\
+    \ [__meta_kubernetes_pod_phase]\n              action: keep\n              regex:\
+    \ Running\n  redis:\n    endpoint: \"dev-health-ops-valkey:6379\"\n    collection_interval:\
+    \ 30s\n  hostmetrics:\n    root_path: /hostfs\n    collection_interval: 60s\n\
+    \    scrapers:\n      cpu: {}\n      disk: {}\n      load: {}\n      filesystem:\n\
+    \        exclude_mount_points:\n          mount_points: [/dev/*, /proc/*, /sys/*,\
+    \ /run/*, /var/lib/docker/*, /var/lib/containerd/*, /snap/*]\n          match_type:\
+    \ regexp\n        exclude_fs_types:\n          fs_types: [autofs, binfmt_misc,\
+    \ bpf, cgroup2, configfs, debugfs, devpts, devtmpfs, fusectl, hugetlbfs, mqueue,\
+    \ nsfs, overlay, proc, pstore, rpc_pipefs, securityfs, sysfs, tmpfs, tracefs]\n\
+    \          match_type: strict\n      memory: {}\n      network: {}\n      paging:\
+    \ {}\n      process:\n        mute_process_name_error: true\n        mute_process_exe_error:\
+    \ true\n        mute_process_io_error: true\n        mute_process_user_error:\
+    \ true\n        mute_process_cgroup_error: true\n      system: {}\n  kubeletstats:\n\
+    \    auth_type: serviceAccount\n    endpoint: \"https://${env:K8S_NODE_IP}:10250\"\
+    \n    collection_interval: 60s\n    metric_groups: [node, pod, container]\n  k8s_cluster:\n\
+    \    auth_type: serviceAccount\n    k8s_leader_elector: k8s_leader_elector\n \
+    \   collection_interval: 60s\n    node_conditions_to_report: [Ready, MemoryPressure,\
+    \ DiskPressure, PIDPressure]\n    allocatable_types_to_report: [cpu, memory]\n\
+    \    metrics:\n      # old ReplicaSets of every Deployment revision stay listed:\
+    \ their series add cost and no signal (k8s.deployment.* carries it)\n      k8s.replicaset.available:\n\
+    \        enabled: false\n      k8s.replicaset.desired:\n        enabled: false\n\
+    \    resource_attributes:\n      # OOM kills: k8s.container.restarts carries the\
+    \ reason of the last termination (OOMKilled, Error, Completed)\n      k8s.container.status.last_terminated_reason:\n\
+    \        enabled: true\n  sql_query/clickhouse-querylog:\n    driver: clickhouse\n\
+    \    datasource: ${env:CLICKHOUSE_QUERYLOG_DSN}\n    collection_interval: 30s\n\
+    \    storage: file_storage/clickhouse-querylog\n    queries:\n      - sql: |\n\
+    \          SELECT\n            toString(toUnixTimestamp64Micro(event_time_microseconds))\
+    \ AS event_time_us,\n            toString(type) AS type,\n            user,\n\
+    \            query_kind,\n            arrayStringConcat(tables, ',') AS tables,\n\
+    \            toString(read_rows) AS read_rows,\n            toString(read_bytes)\
+    \ AS read_bytes,\n            toString(memory_usage) AS memory_usage,\n      \
+    \      toString(query_duration_ms) AS query_duration_ms,\n            toString(exception_code)\
+    \ AS exception_code,\n            toString(normalized_query_hash) AS normalized_query_hash,\n\
+    \            toString(cap) AS max_bytes_to_read,\n            toString(ratio)\
+    \ AS cap_ratio,\n            replica,\n            concat(toString(type), ' user=',\
+    \ user, ' kind=', query_kind, ' code=', toString(exception_code)) AS body\n  \
+    \        FROM\n          (\n            SELECT\n              event_time_microseconds,\
+    \ type, user, query_kind, tables, read_rows, read_bytes, memory_usage,\n     \
+    \         query_duration_ms, exception_code, normalized_query_hash,\n        \
+    \      hostName() AS replica,\n              toUInt64OrZero(arrayFirst(s -> s.1\
+    \ = 'max_bytes_to_read', CAST(Settings, 'Array(Tuple(String, String))')).2) AS\
+    \ cap,\n              if(cap > 0, round(read_bytes / cap, 4), 0) AS ratio\n  \
+    \          FROM clusterAllReplicas('default', system.query_log)\n            WHERE\
+    \ event_date >= toDate(now() - INTERVAL 15 MINUTE)\n              AND event_time\
+    \ >= now() - INTERVAL 15 MINUTE\n              AND event_time < now() - INTERVAL\
+    \ 30 SECOND\n              AND event_time_microseconds > fromUnixTimestamp64Micro(toInt64(?))\n\
+    \              AND type != 'QueryStart'\n              AND user != 'otel_querylog'\n\
+    \            ORDER BY event_time_microseconds\n            LIMIT 5000\n      \
+    \    )\n          ORDER BY event_time_microseconds\n        tracking_column: event_time_us\n\
+    \        tracking_start_value: \"0\"\n        logs:\n          - body_column:\
+    \ body\n            attribute_columns: [event_time_us, type, user, query_kind,\
+    \ tables, read_rows, read_bytes, memory_usage, query_duration_ms, exception_code,\
+    \ normalized_query_hash, max_bytes_to_read, cap_ratio, replica]\n  # CHAOS-9362:\
+    \ ClickHouse server metrics, the otel_querylog login (readonly=1). Every query\
+    \ is bounded: closed name lists, parts per table.\n  sql_query/clickhouse-server:\n\
+    \    driver: clickhouse\n    datasource: ${env:CLICKHOUSE_QUERYLOG_DSN}\n    collection_interval:\
+    \ 60s\n    queries:\n      - sql: \"SELECT metric, toString(value) AS value FROM\
+    \ system.metrics WHERE metric IN ('Query', 'Merge', 'PartMutation', 'BackgroundMergesAndMutationsPoolTask',\
+    \ 'BackgroundMergesAndMutationsPoolSize', 'TCPConnection', 'HTTPConnection', 'MemoryTracking',\
+    \ 'DelayedInserts', 'PendingAsyncInsert', 'GlobalThread', 'GlobalThreadActive',\
+    \ 'PartsActive', 'PartsOutdated')\"\n        metrics:\n          - metric_name:\
+    \ clickhouse.server.metric\n            value_column: value\n            attribute_columns:\
+    \ [metric]\n            data_type: gauge\n            value_type: int\n      #\
+    \ system.events lists only NON-ZERO events unless the SESSION has system_events_show_zero_values=1,\
+    \ and a session keeps the profile\n      # it opened with (a collector session\
+    \ opened before a users.d reload never gets the setting). The closed name list\
+    \ is LEFT JOINed\n      # to system.events instead, so every configured event\
+    \ is a series (0 until it fires) whatever the session profile.\n      - sql: \"\
+    SELECT n.event AS event, toString(ifNull(e.value, 0)) AS value FROM (SELECT arrayJoin(['Query',\
+    \ 'SelectQuery', 'InsertQuery', 'FailedQuery', 'FailedSelectQuery', 'FailedInsertQuery',\
+    \ 'QueryTimeMicroseconds', 'InsertedRows', 'InsertedBytes', 'SelectedRows', 'SelectedBytes',\
+    \ 'Merge', 'MergedRows', 'DelayedInserts', 'RejectedInserts', 'QueryMemoryLimitExceeded',\
+    \ 'OSCPUVirtualTimeMicroseconds']) AS event) AS n LEFT JOIN system.events AS e\
+    \ ON e.event = n.event\"\n        metrics:\n          - metric_name: clickhouse.server.event\n\
+    \            value_column: value\n            attribute_columns: [event]\n   \
+    \         data_type: sum\n            value_type: int\n            monotonic:\
+    \ true\n            aggregation: cumulative\n      - sql: \"SELECT metric, toString(value)\
+    \ AS value FROM system.asynchronous_metrics WHERE metric IN ('MemoryResident',\
+    \ 'CGroupMemoryUsed', 'CGroupMemoryTotal', 'OSMemoryAvailable', 'OSMemoryTotal',\
+    \ 'MaxPartCountForPartition', 'TotalPartsOfMergeTreeTables', 'TotalRowsOfMergeTreeTables',\
+    \ 'TotalBytesOfMergeTreeTables', 'NumberOfTables', 'FilesystemMainPathAvailableBytes',\
+    \ 'FilesystemMainPathTotalBytes', 'LoadAverage1', 'OSUserTimeNormalized', 'OSSystemTimeNormalized',\
+    \ 'OSIOWaitTimeNormalized', 'Uptime')\"\n        metrics:\n          - metric_name:\
+    \ clickhouse.server.async_metric\n            value_column: value\n          \
+    \  attribute_columns: [metric]\n            data_type: gauge\n            value_type:\
+    \ double\n      - sql: \"SELECT database, table, toString(count()) AS parts, toString(sum(rows))\
+    \ AS rows, toString(sum(bytes_on_disk)) AS bytes FROM system.parts WHERE active\
+    \ GROUP BY database, table\"\n        metrics:\n          - metric_name: clickhouse.table.parts\n\
+    \            value_column: parts\n            attribute_columns: [database, table]\n\
+    \            data_type: gauge\n            value_type: int\n          - metric_name:\
+    \ clickhouse.table.rows\n            value_column: rows\n            attribute_columns:\
+    \ [database, table]\n            data_type: gauge\n            value_type: int\n\
+    \          - metric_name: clickhouse.table.bytes\n            value_column: bytes\n\
+    \            attribute_columns: [database, table]\n            data_type: gauge\n\
+    \            value_type: int\n  filelog/pods:\n    include: [\"/var/log/pods/dev-health_dev-health-ops-go-api-*_*/*/*.log\"\
+    ,\"/var/log/pods/dev-health_dev-health-ops-go-heavy-*_*/*/*.log\",\"/var/log/pods/dev-health_dev-health-ops-go-ops-*_*/*/*.log\"\
+    ,\"/var/log/pods/dev-health_dev-health-ops-go-reconciler-*_*/*/*.log\",\"/var/log/pods/dev-health_dev-health-ops-go-scheduler-*_*/*/*.log\"\
+    ,\"/var/log/pods/dev-health_dev-health-ops-go-stream-external-*_*/*/*.log\",\"\
+    /var/log/pods/dev-health_dev-health-ops-go-stream-ingest-*_*/*/*.log\",\"/var/log/pods/dev-health_dev-health-ops-go-stream-pagerduty-*_*/*/*.log\"\
+    ,\"/var/log/pods/dev-health_dev-health-ops-go-sync-provider-*_*/*/*.log\",\"/var/log/pods/dev-health_dev-health-ops-go-sync-*_*/*/*.log\"\
+    ,\"/var/log/pods/dev-health_dev-health-ops-query-api-*_*/*/*.log\",\"/var/log/pods/dev-health_dev-health-ops-auth-service-*_*/*/*.log\"\
+    ]\n    exclude: [\"/var/log/pods/dev-health_dev-health-ops-go-pgbouncer-*_*/*/*.log\"\
+    ]\n    include_file_path: true\n    include_file_name: false\n    start_at: \"\
+    end\"\n    max_log_size: 32KiB\n    poll_interval: 200ms\n    storage: file_storage/pod-logs\n\
+    \    operators:\n      - type: container\n        id: container-parser\n     \
+    \ - type: remove\n        id: drop-file-path\n        field: attributes[\"log.file.path\"\
+    ]\nprocessors:\n  batch:\n    send_batch_max_size: 2048\n    send_batch_size:\
+    \ 1024\n    timeout: 5s\n  memory_limiter:\n    check_interval: 1s\n    limit_mib:\
+    \ 560\n    spike_limit_mib: 140\n  resource/common:\n    attributes:\n    - action:\
+    \ upsert\n      key: host.name\n      value: oci-ampere\n    - action: upsert\n\
+    \      key: deployment.environment\n      value: production\n    - action: upsert\n\
+    \      key: hostname\n      value: oci-ampere\n  resourcedetection:\n    detectors:\n\
+    \    - env\n    - system\n    override: false\n    system:\n      hostname_sources:\n\
+    \      - os\n    timeout: 2s\n  transform/normalize-log-fields:\n    error_mode:\
+    \ ignore\n    log_statements:\n    - context: log\n      statements:\n      -\
+    \ set(resource.attributes[\"service.name\"], attributes[\"service.name\"]) where\
+    \ (resource.attributes[\"service.name\"]\n        == nil or resource.attributes[\"\
+    service.name\"] == \"\") and attributes[\"service.name\"]\n        != nil\n  \
+    \    - set(resource.attributes[\"service.name\"], attributes[\"service\"]) where\
+    \ (resource.attributes[\"service.name\"]\n        == nil or resource.attributes[\"\
+    service.name\"] == \"\") and attributes[\"service\"]\n        != nil\n      -\
+    \ set(resource.attributes[\"service.name\"], attributes[\"serviceName\"]) where\
+    \ (resource.attributes[\"service.name\"]\n        == nil or resource.attributes[\"\
+    service.name\"] == \"\") and attributes[\"serviceName\"]\n        != nil\n   \
+    \   - set(attributes[\"loglevel\"], attributes[\"level\"]) where attributes[\"\
+    loglevel\"]\n        == nil and attributes[\"level\"] != nil\n      - set(attributes[\"\
+    loglevel\"], attributes[\"severity\"]) where attributes[\"loglevel\"]\n      \
+    \  == nil and attributes[\"severity\"] != nil\n      - set(attributes[\"loglevel\"\
+    ], severity_text) where attributes[\"loglevel\"] == nil\n        and severity_text\
+    \ != nil and severity_text != \"\"\n      - set(severity_text, attributes[\"loglevel\"\
+    ]) where (severity_text == nil or severity_text\n        == \"\") and attributes[\"\
+    loglevel\"] != nil\n  # 1) REDACT THE RAW LINE FIRST (before any parsing: a credential\
+    \ inside a nested JSON map or array is plain text here, and a cap or a\n  #  \
+    \  parse can never cut it in half); 2) parse; 3) flatten nested maps and redact\
+    \ again (a value JSON-escaped in the line only\n  #    shows its shape after the\
+    \ parse); 4) the caps. Redaction always precedes truncation.\n  transform/pod-logs-redact-raw:\n\
+    \    error_mode: ignore\n    log_statements:\n      - context: log\n        statements:\n\
+    \          - replace_pattern(body, \"sk-ant-[A-Za-z0-9_-]{20,}\", \"<redacted>\"\
+    ) where IsString(body)\n          - replace_pattern(body, \"sk-or-v1-[A-Za-z0-9]{20,}\"\
+    , \"<redacted>\") where IsString(body)\n          - replace_pattern(body, \"sk-[A-Za-z0-9_-]{20,}\"\
+    , \"<redacted>\") where IsString(body)\n          - replace_pattern(body, \"AIza[A-Za-z0-9_-]{30,}\"\
+    , \"<redacted>\") where IsString(body)\n          - replace_pattern(body, \"[sr]k_(live|test)_[A-Za-z0-9]{16,}\"\
+    , \"<redacted>\") where IsString(body)\n          - replace_pattern(body, \"whsec_[A-Za-z0-9]{16,}\"\
+    , \"<redacted>\") where IsString(body)\n          - replace_pattern(body, \"xox[abeprs]-[A-Za-z0-9-]{10,}\"\
+    , \"<redacted>\") where IsString(body)\n          - replace_pattern(body, \"eyJ[A-Za-z0-9_-]{8,}[.][A-Za-z0-9_-]{8,}[.][A-Za-z0-9_-]{8,}\"\
+    , \"<redacted>\") where IsString(body)\n  transform/pod-logs-parse:\n    error_mode:\
+    \ ignore\n    log_statements:\n      - context: log\n        statements:\n   \
+    \       - merge_maps(attributes, ParseJSON(body), \"upsert\") where IsString(body)\
+    \ and IsMatch(body, \"^\\\\s*\\\\{\")\n          - set(severity_text, attributes[\"\
+    level\"]) where attributes[\"level\"] != nil\n          - set(severity_number,\
+    \ SEVERITY_NUMBER_DEBUG) where IsMatch(severity_text, \"^(?i)debug$\")\n     \
+    \     - set(severity_number, SEVERITY_NUMBER_INFO) where IsMatch(severity_text,\
+    \ \"^(?i)info$\")\n          - set(severity_number, SEVERITY_NUMBER_WARN) where\
+    \ IsMatch(severity_text, \"^(?i)(warn|warning)$\")\n          - set(severity_number,\
+    \ SEVERITY_NUMBER_ERROR) where IsMatch(severity_text, \"^(?i)error$\")\n     \
+    \     - set(severity_number, SEVERITY_NUMBER_FATAL) where IsMatch(severity_text,\
+    \ \"^(?i)(fatal|panic)$\")\n          - set(body, attributes[\"msg\"]) where attributes[\"\
+    msg\"] != nil\n          - delete_key(attributes, \"msg\")\n          - flatten(attributes)\n\
+    \  filter/pod-logs:\n    error_mode: ignore\n    logs:\n      log_record:\n  \
+    \      - 'severity_number != SEVERITY_NUMBER_UNSPECIFIED and severity_number <\
+    \ SEVERITY_NUMBER_INFO'\n  transform/pod-logs-redact:\n    error_mode: ignore\n\
+    \    log_statements:\n      - context: log\n        statements:\n          - replace_pattern(body,\
+    \ \"sk-ant-[A-Za-z0-9_-]{20,}\", \"<redacted>\") where IsString(body)\n      \
+    \    - replace_all_patterns(attributes, \"value\", \"sk-ant-[A-Za-z0-9_-]{20,}\"\
+    , \"<redacted>\")\n          - replace_pattern(body, \"sk-or-v1-[A-Za-z0-9]{20,}\"\
+    , \"<redacted>\") where IsString(body)\n          - replace_all_patterns(attributes,\
+    \ \"value\", \"sk-or-v1-[A-Za-z0-9]{20,}\", \"<redacted>\")\n          - replace_pattern(body,\
+    \ \"sk-[A-Za-z0-9_-]{20,}\", \"<redacted>\") where IsString(body)\n          -\
+    \ replace_all_patterns(attributes, \"value\", \"sk-[A-Za-z0-9_-]{20,}\", \"<redacted>\"\
+    )\n          - replace_pattern(body, \"AIza[A-Za-z0-9_-]{30,}\", \"<redacted>\"\
+    ) where IsString(body)\n          - replace_all_patterns(attributes, \"value\"\
+    , \"AIza[A-Za-z0-9_-]{30,}\", \"<redacted>\")\n          - replace_pattern(body,\
+    \ \"[sr]k_(live|test)_[A-Za-z0-9]{16,}\", \"<redacted>\") where IsString(body)\n\
+    \          - replace_all_patterns(attributes, \"value\", \"[sr]k_(live|test)_[A-Za-z0-9]{16,}\"\
+    , \"<redacted>\")\n          - replace_pattern(body, \"whsec_[A-Za-z0-9]{16,}\"\
+    , \"<redacted>\") where IsString(body)\n          - replace_all_patterns(attributes,\
+    \ \"value\", \"whsec_[A-Za-z0-9]{16,}\", \"<redacted>\")\n          - replace_pattern(body,\
+    \ \"xox[abeprs]-[A-Za-z0-9-]{10,}\", \"<redacted>\") where IsString(body)\n  \
+    \        - replace_all_patterns(attributes, \"value\", \"xox[abeprs]-[A-Za-z0-9-]{10,}\"\
+    , \"<redacted>\")\n          - replace_pattern(body, \"eyJ[A-Za-z0-9_-]{8,}[.][A-Za-z0-9_-]{8,}[.][A-Za-z0-9_-]{8,}\"\
+    , \"<redacted>\") where IsString(body)\n          - replace_all_patterns(attributes,\
+    \ \"value\", \"eyJ[A-Za-z0-9_-]{8,}[.][A-Za-z0-9_-]{8,}[.][A-Za-z0-9_-]{8,}\"\
+    , \"<redacted>\")\n  transform/pod-logs-limits:\n    error_mode: ignore\n    log_statements:\n\
+    \      - context: log\n        statements:\n          - truncate_all(attributes,\
+    \ 2048)\n          - set(body, Substring(body, 0, 8192)) where IsString(body)\
+    \ and Len(body) > 8192\n  transform/pod-logs-service:\n    error_mode: ignore\n\
+    \    log_statements:\n      - context: log\n        statements:\n          - set(resource.attributes[\"\
+    service.name\"], \"dev-health-go-sync-provider\") where resource.attributes[\"\
+    service.name\"] == nil and IsMatch(resource.attributes[\"k8s.pod.name\"], \"^dev-health-ops-go-sync-provider-[a-z0-9]+-[a-z0-9]+$\"\
+    )\n          - set(resource.attributes[\"service.name\"], \"dev-health-go-sync\"\
+    ) where resource.attributes[\"service.name\"] == nil and IsMatch(resource.attributes[\"\
+    k8s.pod.name\"], \"^dev-health-ops-go-sync-[a-z0-9]+-[a-z0-9]+$\")\n         \
+    \ - set(resource.attributes[\"service.name\"], \"dev-health-go-stream-external\"\
+    ) where resource.attributes[\"service.name\"] == nil and IsMatch(resource.attributes[\"\
+    k8s.pod.name\"], \"^dev-health-ops-go-stream-external-\")\n          - set(resource.attributes[\"\
+    service.name\"], \"dev-health-go-stream-ingest\") where resource.attributes[\"\
+    service.name\"] == nil and IsMatch(resource.attributes[\"k8s.pod.name\"], \"^dev-health-ops-go-stream-ingest-\"\
+    )\n          - set(resource.attributes[\"service.name\"], \"dev-health-go-stream-pagerduty\"\
+    ) where resource.attributes[\"service.name\"] == nil and IsMatch(resource.attributes[\"\
+    k8s.pod.name\"], \"^dev-health-ops-go-stream-pagerduty-\")\n          - set(resource.attributes[\"\
+    service.name\"], \"dev-health-go-heavy\") where resource.attributes[\"service.name\"\
+    ] == nil and IsMatch(resource.attributes[\"k8s.pod.name\"], \"^dev-health-ops-go-heavy-\"\
+    )\n          - set(resource.attributes[\"service.name\"], \"dev-health-go-ops\"\
+    ) where resource.attributes[\"service.name\"] == nil and IsMatch(resource.attributes[\"\
+    k8s.pod.name\"], \"^dev-health-ops-go-ops-\")\n          - set(resource.attributes[\"\
+    service.name\"], \"dev-health-go-reconciler\") where resource.attributes[\"service.name\"\
+    ] == nil and IsMatch(resource.attributes[\"k8s.pod.name\"], \"^dev-health-ops-go-reconciler-\"\
+    )\n          - set(resource.attributes[\"service.name\"], \"dev-health-go-scheduler\"\
+    ) where resource.attributes[\"service.name\"] == nil and IsMatch(resource.attributes[\"\
+    k8s.pod.name\"], \"^dev-health-ops-go-scheduler-\")\n          - set(resource.attributes[\"\
+    service.name\"], \"dev-health-api\") where resource.attributes[\"service.name\"\
+    ] == nil and IsMatch(resource.attributes[\"k8s.pod.name\"], \"^dev-health-ops-go-api-\"\
+    )\n          - set(resource.attributes[\"service.name\"], \"dev-health-query-api\"\
+    ) where resource.attributes[\"service.name\"] == nil and IsMatch(resource.attributes[\"\
+    k8s.pod.name\"], \"^dev-health-ops-query-api-\")\n          - set(resource.attributes[\"\
+    service.name\"], \"auth-service\") where resource.attributes[\"service.name\"\
+    ] == nil and IsMatch(resource.attributes[\"k8s.pod.name\"], \"^dev-health-ops-auth-service-\"\
+    )\n  # Typed fields (the receiver hands every column over as a string), the statement\
+    \ time as the log time, ERROR for a failed statement.\n  transform/clickhouse-querylog:\n\
+    \    error_mode: ignore\n    log_statements:\n      - context: log\n        statements:\n\
+    \          - set(resource.attributes[\"service.name\"], \"clickhouse\")\n    \
+    \      - set(time_unix_nano, Int(attributes[\"event_time_us\"]) * 1000) where\
+    \ attributes[\"event_time_us\"] != nil\n          - delete_key(attributes, \"\
+    event_time_us\")\n          - set(attributes[\"read_rows\"], Int(attributes[\"\
+    read_rows\"])) where attributes[\"read_rows\"] != nil\n          - set(attributes[\"\
+    read_bytes\"], Int(attributes[\"read_bytes\"])) where attributes[\"read_bytes\"\
+    ] != nil\n          - set(attributes[\"memory_usage\"], Int(attributes[\"memory_usage\"\
+    ])) where attributes[\"memory_usage\"] != nil\n          - set(attributes[\"query_duration_ms\"\
+    ], Int(attributes[\"query_duration_ms\"])) where attributes[\"query_duration_ms\"\
+    ] != nil\n          - set(attributes[\"exception_code\"], Int(attributes[\"exception_code\"\
+    ])) where attributes[\"exception_code\"] != nil\n          - set(attributes[\"\
+    max_bytes_to_read\"], Int(attributes[\"max_bytes_to_read\"])) where attributes[\"\
+    max_bytes_to_read\"] != nil\n          - set(attributes[\"cap_ratio\"], Double(attributes[\"\
+    cap_ratio\"])) where attributes[\"cap_ratio\"] != nil\n          - set(severity_text,\
+    \ \"INFO\")\n          - set(severity_number, SEVERITY_NUMBER_INFO)\n        \
+    \  - set(severity_text, \"ERROR\") where attributes[\"exception_code\"] != 0\n\
+    \          - set(severity_number, SEVERITY_NUMBER_ERROR) where attributes[\"exception_code\"\
+    ] != 0\nexporters:\n  otlp_http/signoz:\n    endpoint: ${env:SIGNOZ_OTLP_HTTP_ENDPOINT}\n\
+    \    headers:\n      CF-Access-Client-Id: ${env:CF_ACCESS_CLIENT_ID}\n      CF-Access-Client-Secret:\
+    \ ${env:CF_ACCESS_CLIENT_SECRET}\nservice:\n  extensions: [health_check, file_storage/pod-logs,\
+    \ file_storage/clickhouse-querylog, k8s_leader_elector]\n  telemetry:\n    logs:\n\
+    \      level: info\n    metrics:\n      level: detailed\n      readers:\n    \
+    \    - pull:\n            exporter:\n              prometheus:\n             \
+    \   host: 0.0.0.0\n                port: 8888\n  pipelines:\n    traces:\n   \
+    \   receivers: [otlp]\n      processors: [\"memory_limiter\",\"resourcedetection\"\
+    ,\"resource/common\",\"batch\"]\n      exporters: [otlp_http/signoz]\n    metrics:\n\
+    \      receivers: [\"otlp\",\"prometheus/internal\",\"redis\",\"hostmetrics\"\
+    ,\"kubeletstats\",\"k8s_cluster\",\"sql_query/clickhouse-server\",\"prometheus/auth-service\"\
+    ,\"prometheus/pgbouncer\"]\n      processors: [\"memory_limiter\",\"resourcedetection\"\
+    ,\"resource/common\",\"batch\"]\n      exporters: [otlp_http/signoz]\n    logs:\n\
+    \      receivers: [\"otlp\"]\n      processors: [\"memory_limiter\",\"resourcedetection\"\
+    ,\"resource/common\",\"transform/normalize-log-fields\",\"batch\"]\n      exporters:\
+    \ [otlp_http/signoz]\n    logs/pods:\n      receivers: [filelog/pods]\n      processors:\
+    \ [\"memory_limiter\",\"transform/pod-logs-redact-raw\",\"transform/pod-logs-parse\"\
+    ,\"filter/pod-logs\",\"transform/pod-logs-redact\",\"transform/pod-logs-limits\"\
+    ,\"transform/pod-logs-service\",\"resourcedetection\",\"resource/common\",\"transform/normalize-log-fields\"\
+    ,\"batch\"]\n      exporters: [otlp_http/signoz]\n    logs/clickhouse-querylog:\n\
+    \      receivers: [sql_query/clickhouse-querylog]\n      processors: [\"memory_limiter\"\
+    ,\"transform/clickhouse-querylog\",\"resourcedetection\",\"resource/common\",\"\
+    batch\"]\n      exporters: [otlp_http/signoz]\n"
+kind: ConfigMap
+metadata:
+  labels:
+    app.kubernetes.io/component: collector
+    app.kubernetes.io/instance: dev-health
+    app.kubernetes.io/name: otel-collector
+  name: dev-health-otel-collector
+  namespace: dev-health
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app.kubernetes.io/component: go-pgbouncer-transaction
+    app.kubernetes.io/instance: dev-health
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: ops
+    app.kubernetes.io/part-of: dev-health
+    app.kubernetes.io/version: 0.1.0
+    helm.sh/chart: ops-0.1.0
+  name: dev-health-ops-go-pgbouncer-transaction
+  namespace: dev-health
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: go-pgbouncer-transaction
+      app.kubernetes.io/instance: dev-health
+      app.kubernetes.io/name: ops
+  strategy:
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 1
+    type: RollingUpdate
+  template:
+    metadata:
+      annotations:
+        checksum/users-ini: 7663624f9ba59edf49bd108a83949ebbbfd4bc160b721cc69132ee83cd67b606
+      labels:
+        app.kubernetes.io/component: go-pgbouncer-transaction
+        app.kubernetes.io/instance: dev-health
+        app.kubernetes.io/name: ops
+    spec:
+      automountServiceAccountToken: false
+      containers:
+      - args:
+        - /usr/bin/pgbouncer
+        - /etc/pgbouncer-users/pgbouncer.ini
+        env:
+        - name: DB_HOST
+          value: dev-health-ops-postgresql
+        - name: DB_PORT
+          value: '5432'
+        - name: DB_NAME
+          value: placeholder
+        - name: DB_USER
+          value: devhealth_domain
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              key: RIVER_DOMAIN_DATABASE_PASSWORD
+              name: dev-health-ops-go-pgbouncer
+        - name: LISTEN_PORT
+          value: '6432'
+        - name: POOL_MODE
+          value: transaction
+        - name: AUTH_TYPE
+          value: scram-sha-256
+        - name: DEFAULT_POOL_SIZE
+          value: '16'
+        - name: MAX_CLIENT_CONN
+          value: '1000'
+        - name: LOG_CONNECTIONS
+          value: '0'
+        - name: LOG_DISCONNECTIONS
+          value: '0'
+        - name: LOG_POOLER_ERRORS
+          value: '1'
+        - name: UNIX_SOCKET_DIR
+          value: /var/run/pgbouncer
+        - name: AUTH_FILE
+          value: /etc/pgbouncer-userlist/userlist.txt
+        image: edoburu/pgbouncer:1.25.2@sha256:4c1ca296ef525f108f5d3552cc337c0c09587cf8dae7f0067fd93349e47dc1cd
+        imagePullPolicy: IfNotPresent
+        livenessProbe:
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          tcpSocket:
+            port: pgbouncer
+        name: pgbouncer
+        ports:
+        - containerPort: 6432
+          name: pgbouncer
+        readinessProbe:
+          initialDelaySeconds: 2
+          periodSeconds: 5
+          tcpSocket:
+            port: pgbouncer
+        resources:
+          limits:
+            cpu: 250m
+            memory: 256Mi
+          requests:
+            cpu: 50m
+            memory: 64Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+        volumeMounts:
+        - mountPath: /etc/pgbouncer
+          name: generated-config
+        - mountPath: /etc/pgbouncer-userlist
+          name: userlist
+          readOnly: true
+        - mountPath: /etc/pgbouncer-users
+          name: users
+          readOnly: true
+        - mountPath: /var/run/pgbouncer
+          name: console-socket
+      - args:
+        - --pgBouncer.connectionString=user=pgbouncer dbname=pgbouncer host=/var/run/pgbouncer
+          port=6432 sslmode=disable
+        - --web.listen-address=:9127
+        command:
+        - /bin/sh
+        - -c
+        - trap 'kill "$p" 2>/dev/null; exit 0' TERM INT; while :; do /bin/pgbouncer_exporter
+          "$@" & p=$!; wait "$p"; echo "exporter exited rc=$?"; sleep 5 & wait $!;
+          done
+        - exporter-loop
+        image: quay.io/prometheuscommunity/pgbouncer-exporter:v0.12.1@sha256:30f31b6c2efdad3647f8182cc7c1a3a19e42bae5d17387694989f969371c230d
+        imagePullPolicy: IfNotPresent
+        name: exporter
+        ports:
+        - containerPort: 9127
+          name: metrics
+        resources:
+          limits:
+            cpu: 50m
+            memory: 64Mi
+          requests:
+            cpu: 10m
+            memory: 16Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+        volumeMounts:
+        - mountPath: /var/run/pgbouncer
+          name: console-socket
+          readOnly: true
+      imagePullSecrets:
+      - name: ghcr-pull
+      securityContext:
+        fsGroup: 70
+        runAsGroup: 70
+        runAsNonRoot: true
+        runAsUser: 70
+        seccompProfile:
+          type: RuntimeDefault
+      volumes:
+      - emptyDir: {}
+        name: generated-config
+      - name: userlist
+        secret:
+          defaultMode: 288
+          items:
+          - key: userlist.txt
+            path: userlist.txt
+          secretName: dev-health-ops-go-pgbouncer
+      - configMap:
+          name: dev-health-ops-go-pgbouncer-transaction-users
+        name: users
+      - emptyDir: {}
+        name: console-socket
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app.kubernetes.io/component: collector
+    app.kubernetes.io/instance: dev-health
+    app.kubernetes.io/name: otel-collector
+  name: dev-health-otel-collector
+  namespace: dev-health
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: collector
+      app.kubernetes.io/instance: dev-health
+      app.kubernetes.io/name: otel-collector
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      annotations:
+        checksum/config: 6dc636de45bf4140a2b2ba41b22d608e3e9f4b36c2dbdd100865d104d4b8924c
+      labels:
+        app.kubernetes.io/component: collector
+        app.kubernetes.io/instance: dev-health
+        app.kubernetes.io/name: otel-collector
+    spec:
+      automountServiceAccountToken: true
+      containers:
+      - args:
+        - --config=/etc/otelcol/config.yaml
+        env:
+        - name: K8S_NODE_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.hostIP
+        - name: CF_ACCESS_CLIENT_ID
+          valueFrom:
+            secretKeyRef:
+              key: CF_ACCESS_CLIENT_ID
+              name: otel-collector-signoz
+        - name: CF_ACCESS_CLIENT_SECRET
+          valueFrom:
+            secretKeyRef:
+              key: CF_ACCESS_CLIENT_SECRET
+              name: otel-collector-signoz
+        - name: SIGNOZ_OTLP_HTTP_ENDPOINT
+          valueFrom:
+            secretKeyRef:
+              key: SIGNOZ_OTLP_HTTP_ENDPOINT
+              name: otel-collector-signoz
+        - name: CLICKHOUSE_QUERYLOG_DSN
+          valueFrom:
+            secretKeyRef:
+              key: CLICKHOUSE_QUERYLOG_DSN
+              name: otel-collector-clickhouse
+        image: ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector-contrib@sha256:fd328de2552466ad78385e1b1289c3f2402b1c45f265b252aab1955b42845ac1
+        imagePullPolicy: IfNotPresent
+        livenessProbe:
+          httpGet:
+            path: /
+            port: health
+          initialDelaySeconds: 20
+          periodSeconds: 20
+        name: collector
+        ports:
+        - containerPort: 4317
+          hostPort: 4317
+          name: otlp-grpc
+          protocol: TCP
+        - containerPort: 4318
+          hostPort: 4318
+          name: otlp-http
+          protocol: TCP
+        - containerPort: 13133
+          name: health
+          protocol: TCP
+        readinessProbe:
+          httpGet:
+            path: /
+            port: health
+          periodSeconds: 10
+        resources:
+          limits:
+            cpu: 500m
+            memory: 768Mi
+          requests:
+            cpu: 50m
+            memory: 256Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+        volumeMounts:
+        - mountPath: /etc/otelcol
+          name: config
+          readOnly: true
+        - mountPath: /hostfs
+          mountPropagation: HostToContainer
+          name: hostfs
+          readOnly: true
+        - mountPath: /var/log/pods
+          name: pod-logs
+          readOnly: true
+        - mountPath: /var/lib/otelcol/storage
+          name: pod-logs-storage
+        - mountPath: /var/lib/otelcol/clickhouse-querylog
+          name: clickhouse-querylog-storage
+      securityContext:
+        runAsGroup: 10001
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile:
+          type: RuntimeDefault
+        supplementalGroups:
+        - 0
+      serviceAccountName: dev-health-otel-collector
+      volumes:
+      - configMap:
+          name: dev-health-otel-collector
+        name: config
+      - hostPath:
+          path: /
+          type: Directory
+        name: hostfs
+      - hostPath:
+          path: /var/log/pods
+          type: Directory
+        name: pod-logs
+      - emptyDir: {}
+        name: pod-logs-storage
+      - emptyDir: {}
+        name: clickhouse-querylog-storage

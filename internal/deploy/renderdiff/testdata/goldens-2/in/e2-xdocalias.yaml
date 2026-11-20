@@ -1,0 +1,7 @@
+kind: ConfigMap
+metadata: {name: one}
+data: {a: &x 1}
+---
+kind: ConfigMap
+metadata: {name: two}
+data: {b: *x}

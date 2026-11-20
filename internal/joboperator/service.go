@@ -66,6 +66,11 @@ const (
 	// ActionSyncDispatchOutboxClose: `sync-dispatch-outbox close-backlog`
 	// (a Postgres UPDATE over sync_dispatch_outbox).
 	ActionSyncDispatchOutboxClose Action = "sync_dispatch_outbox.close_terminal_backlog"
+	// ActionSyncRunCancel: `sync-runs cancel` (one unfinished sync run closed failed). It
+	// shares the string of ActionCancel: the audit row tells the two apart by resource_type
+	// (sync_run, not job), as the sync and job route applies do above, so the deployed
+	// ck_worker_operator_audits_action list needs no migration.
+	ActionSyncRunCancel Action = "jobs.cancel"
 	// ActionWorkgraphTrigger and ActionInvestmentTrigger: `workgraph trigger`
 	// and `investment trigger`, a manual enqueue through
 	// workgraph.RequestWriter.WriteTx.

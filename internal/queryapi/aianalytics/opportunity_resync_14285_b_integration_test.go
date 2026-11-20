@@ -76,7 +76,7 @@ func TestRealClickHouse_AIRepetitiveClusterCountsAPullRequestOnce(t *testing.T) 
 		}
 		var total int64
 		for _, r := range rows {
-			t.Logf("org %s: cluster %q author %q type %q count %d refs %v", org[len(org)-4:], r.Prefix, r.Author, r.WorkType, r.Count, r.Refs)
+			t.Logf("org %s: cluster %q type %q count %d refs %v", org[len(org)-4:], r.Prefix, r.WorkType, r.Count, r.Refs)
 			if r.Prefix == "rename widget helper" {
 				total += r.Count
 			}

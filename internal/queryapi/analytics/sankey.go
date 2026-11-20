@@ -144,11 +144,11 @@ FROM %s
 %s
 WHERE %s
   AND %s.org_id = {org_id:String}
-%s
+%s%s
 GROUP BY node_id
 ORDER BY value DESC, node_id ASC
 LIMIT {limit_per_dim:UInt32}
-`, strings.ToUpper(string(dim)), dimCol, measureExpr, i, source, extraClauses, dateFilter, alias, fc.sql))
+`, strings.ToUpper(string(dim)), dimCol, measureExpr, i, source, extraClauses, dateFilter, alias, fc.sql, groupKeyNotNull(dimCol, useInvestment)))
 	}
 	// The outer SELECT drops dim_order from the projection -- queryNodes
 	// (flowmatrix.go) scans exactly 3 columns (dimension, node_id,

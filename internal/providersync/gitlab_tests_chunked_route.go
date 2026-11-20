@@ -574,7 +574,7 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 				// moved, rate limited) must not leave a finished scan unfinalized: keep the stored path, or the source
 				// name when the cursor holds none.
 				slog.Warn("gitlab tests/cicd done resume could not read the project; publishing without a refreshed repo",
-					"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID, "error", fetchErr)
+					"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID)
 				if cursor.Repo == "" {
 					cursor.Repo = claim.SourceName
 				}

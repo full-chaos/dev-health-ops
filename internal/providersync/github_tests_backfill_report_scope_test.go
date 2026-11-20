@@ -213,12 +213,24 @@ func githubTestsBackfillChunkReadsAt(
 	t *testing.T, since, before time.Time, next *BackfillNextWindow, created, updated, normalizedAt time.Time,
 ) (int, []string) {
 	t.Helper()
+	return githubTestsChunkReadsOfRun(t, "backfill", since, before, next, created, created.Add(time.Minute), updated, normalizedAt)
+}
+
+// githubTestsChunkReadsOfRun runs one claim of the mode over fixture run 9001
+// with the given created_at, run_started_at (its latest attempt) and
+// updated_at (zero = the payload has no updated_at). It returns how many times
+// the claim read the run's reports and the runs listings' raw queries.
+func githubTestsChunkReadsOfRun(
+	t *testing.T, mode string, since, before time.Time, next *BackfillNextWindow, created, started, updated, normalizedAt time.Time,
+) (int, []string) {
+	t.Helper()
 	doer := githubTestsReportWindowDoerFor(t, updated.UTC().Format(time.RFC3339))
+	doer.omitUpdatedAt = updated.IsZero()
 	doer.createdAt = created.UTC().Format(time.RFC3339)
-	doer.startedAt = created.Add(time.Minute).UTC().Format(time.RFC3339)
+	doer.startedAt = started.UTC().Format(time.RFC3339)
 	doer.filterCreated = true
 	claim := githubTestsWindowClaim(t, since, before)
-	claim.Mode = "backfill"
+	claim.Mode = mode
 	claim.BackfillNext = next
 	_, cases := collectGitHubTestsReportRows(t, doer, claim, normalizedAt)
 	lists, zips := githubTestsReportReads(doer)
@@ -365,9 +377,25 @@ func TestGitHubTestsBackfillRunUpdatedAtTheBoundaryIsReadOnceByTheLaterChunk(t *
 // tiling the claim SQL gives it (the real next chunk, or last).
 func githubTestsBackfillReadsOverWindows(t *testing.T, edges []time.Time, created, updated time.Time) []int {
 	t.Helper()
+	return githubTestsReadsOfRunOverWindows(t, "backfill", true, edges, created, created.Add(time.Minute), updated)
+}
+
+// githubTestsReadsOfRunOverWindows is one run's reads over contiguous claims of
+// the mode (edges[i], edges[i+1]); tiled = each claim carries the tiling the
+// claim SQL gives a backfill chunk, else none. A zero updated = no updated_at.
+func githubTestsReadsOfRunOverWindows(t *testing.T, mode string, tiled bool, edges []time.Time, created, started, updated time.Time) []int {
+	t.Helper()
+	normalizedAt := updated.Add(time.Hour)
+	if updated.IsZero() {
+		normalizedAt = edges[len(edges)-1].Add(time.Hour)
+	}
 	perChunk := make([]int, len(edges)-1)
 	for index := range perChunk {
-		perChunk[index] = githubTestsBackfillChunkReads(t, edges[index], edges[index+1], githubTestsBackfillNextOf(edges, index), created, updated)
+		var next *BackfillNextWindow
+		if tiled {
+			next = githubTestsBackfillNextOf(edges, index)
+		}
+		perChunk[index], _ = githubTestsChunkReadsOfRun(t, mode, edges[index], edges[index+1], next, created, started, updated, normalizedAt)
 	}
 	return perChunk
 }
@@ -461,6 +489,20 @@ func TestGitHubTestsBackfillUnknownTilingKeepsTheSameWidthRule(t *testing.T) {
 // since is read exactly once.
 func TestGitHubTestsBackfillMixedWidthTilingReadsEachRunOnce(t *testing.T) {
 	t.Parallel()
+	githubTestsBackfillPlannerTilingsReadEachRunOnce(t, func(created, _ time.Time) time.Time { return created.Add(time.Minute) })
+}
+
+// CHAOS-14249: the same planner tilings with run_started_at one minute before
+// updated_at (a run re-run or queued late: its latest attempt starts after the
+// chunk it was created in). Each run is still read exactly once: no loss, and
+// no second chunk reads it.
+func TestGitHubTestsBackfillLateStartMixedWidthTilingReadsEachRunOnce(t *testing.T) {
+	t.Parallel()
+	githubTestsBackfillPlannerTilingsReadEachRunOnce(t, func(_, updated time.Time) time.Time { return updated.Add(-time.Minute) })
+}
+
+func githubTestsBackfillPlannerTilingsReadEachRunOnce(t *testing.T, startedOf func(created, updated time.Time) time.Time) {
+	t.Helper()
 	at := func(day, hour int) time.Time { return time.Date(2026, 7, day, hour, 0, 0, 0, time.UTC) }
 	for _, tiling := range []struct {
 		name  string
@@ -496,10 +538,10 @@ func TestGitHubTestsBackfillMixedWidthTilingReadsEachRunOnce(t *testing.T) {
 				continue
 			}
 			for _, u := range updated {
-				if u.Before(first) || c.Add(time.Minute).After(u) {
+				if started := startedOf(c, u); u.Before(first) || started.Before(c) || started.After(u) {
 					continue
 				}
-				perChunk := githubTestsBackfillReadsOverWindows(t, edges, c, u)
+				perChunk := githubTestsReadsOfRunOverWindows(t, "backfill", true, edges, c, startedOf(c, u), u)
 				total := 0
 				for _, reads := range perChunk {
 					total += reads
@@ -553,6 +595,134 @@ func TestGitHubTestsBackfillLastChunkReadsOnlyRunsCreatedInItsListing(t *testing
 			if created := values.Get("created"); !strings.HasSuffix(created, ".."+before.Format(time.RFC3339)) {
 				t.Errorf("%s: runs listing created=%q, want it to end at the chunk's before %s", cell.name, created, before.Format(time.RFC3339))
 			}
+		}
+	}
+}
+
+// githubTestsLateStartShape is a run created in one chunk whose latest attempt
+// (run_started_at) starts at or after that chunk's before.
+type githubTestsLateStartShape struct {
+	name                      string
+	edges                     []time.Time
+	created, started, updated time.Time
+}
+
+func githubTestsLateStartShapes() []githubTestsLateStartShape {
+	day := func(d, h int) time.Time { return time.Date(2026, 7, d, h, 0, 0, 0, time.UTC) }
+	d := day(1, 0)
+	return []githubTestsLateStartShape{
+		{"lone short chunk", []time.Time{day(1, 6), day(1, 18)}, day(1, 17), day(1, 19), day(1, 20)},
+		{"lone short chunk, start at before", []time.Time{day(1, 6), day(1, 18)}, day(1, 17), day(1, 18), day(1, 20)},
+		{"short last chunk", []time.Time{d, d.AddDate(0, 0, 7), d.AddDate(0, 0, 8)},
+			d.AddDate(0, 0, 7).Add(12 * time.Hour), d.AddDate(0, 0, 8).Add(time.Hour), d.AddDate(0, 0, 8).Add(2 * time.Hour)},
+		{"full chunk before a short last chunk", []time.Time{d, d.AddDate(0, 0, 7), d.AddDate(0, 0, 8)},
+			d.AddDate(0, 0, 3), d.AddDate(0, 0, 7).Add(12 * time.Hour), d.AddDate(0, 0, 7).Add(13 * time.Hour)},
+		{"full chunk, re-run in the next full chunk", []time.Time{d, d.AddDate(0, 0, 7), d.AddDate(0, 0, 14), d.AddDate(0, 0, 15)},
+			d.AddDate(0, 0, -1), d.AddDate(0, 0, 8), d.AddDate(0, 0, 8).Add(time.Hour)},
+		{"next chunk lists it", []time.Time{d, d.AddDate(0, 0, 7), d.AddDate(0, 0, 14)},
+			d.AddDate(0, 0, 6).Add(23 * time.Hour), d.AddDate(0, 0, 7).Add(time.Hour), d.AddDate(0, 0, 7).Add(2 * time.Hour)},
+	}
+}
+
+// CHAOS-14249. A backfill chunk lists runs by created_at, but run_started_at is
+// the latest attempt. A chunk that knows the tiling no longer drops a run that
+// started after its before: the run is read once, by the chunk that owns it by
+// updated_at (or the last chunk that lists it). Was [0] [1] [0 0] [0 0] [0 0 0] [0 1].
+func TestGitHubTestsBackfillLateStartRunIsReadOnce(t *testing.T) {
+	t.Parallel()
+	want := map[string][]int{
+		"lone short chunk":                          {1},
+		"lone short chunk, start at before":         {1},
+		"short last chunk":                          {0, 1},
+		"full chunk before a short last chunk":      {1, 0},
+		"full chunk, re-run in the next full chunk": {1, 0, 0},
+		"next chunk lists it":                       {0, 1},
+	}
+	for _, shape := range githubTestsLateStartShapes() {
+		perChunk := githubTestsReadsOfRunOverWindows(t, "backfill", true, shape.edges, shape.created, shape.started, shape.updated)
+		t.Logf("CELL late start %s: created=%s started=%s updated=%s reads per chunk=%v", shape.name,
+			shape.created.Format(time.RFC3339), shape.started.Format(time.RFC3339), shape.updated.Format(time.RFC3339), perChunk)
+		if !slices.Equal(perChunk, want[shape.name]) {
+			t.Errorf("%s: reads per chunk=%v, want %v", shape.name, perChunk, want[shape.name])
+		}
+	}
+}
+
+// CHAOS-14249: outside a backfill chunk that knows the tiling, the
+// run_started_at cutoff stays: incremental and full_resync claims, a backfill
+// claim with no tiling, a run with no updated_at, and a zero-width claim read
+// these shapes as before. (The incremental late re-run loss is ticket 14299.)
+func TestGitHubTestsLateStartKeepsTheStartCutoffOutsideKnownTiling(t *testing.T) {
+	t.Parallel()
+	want := map[string][]int{
+		"lone short chunk":                          {0},
+		"lone short chunk, start at before":         {1},
+		"short last chunk":                          {0, 0},
+		"full chunk before a short last chunk":      {0, 0},
+		"full chunk, re-run in the next full chunk": {0, 0, 0},
+		"next chunk lists it":                       {0, 1},
+	}
+	wantNoTiling := map[string][]int{
+		"lone short chunk":                          {0},
+		"lone short chunk, start at before":         {0},
+		"short last chunk":                          {0, 0},
+		"full chunk before a short last chunk":      {0, 0},
+		"full chunk, re-run in the next full chunk": {0, 0, 0},
+		"next chunk lists it":                       {0, 1},
+	}
+	for _, shape := range githubTestsLateStartShapes() {
+		for _, claim := range []struct {
+			mode  string
+			tiled bool
+			want  []int
+		}{
+			{"incremental", false, want[shape.name]},
+			{"full_resync", false, want[shape.name]},
+			{"backfill", false, wantNoTiling[shape.name]},
+		} {
+			perChunk := githubTestsReadsOfRunOverWindows(t, claim.mode, claim.tiled, shape.edges, shape.created, shape.started, shape.updated)
+			t.Logf("CELL start cutoff %s %s: reads per window=%v", claim.mode, shape.name, perChunk)
+			if !slices.Equal(perChunk, claim.want) {
+				t.Errorf("%s %s: reads per window=%v, want %v", claim.mode, shape.name, perChunk, claim.want)
+			}
+		}
+	}
+	day := func(d, h int) time.Time { return time.Date(2026, 7, d, h, 0, 0, 0, time.UTC) }
+	lone := []time.Time{day(1, 6), day(1, 18)}
+	if perChunk := githubTestsReadsOfRunOverWindows(t, "backfill", true, lone, day(1, 17), day(1, 19), time.Time{}); !slices.Equal(perChunk, []int{0}) {
+		t.Errorf("tiled backfill, no updated_at, started after before: reads=%v, want [0]", perChunk)
+	}
+	if perChunk := githubTestsReadsOfRunOverWindows(t, "backfill", true, lone, day(1, 17), day(1, 17).Add(time.Minute), time.Time{}); !slices.Equal(perChunk, []int{1}) {
+		t.Errorf("tiled backfill, no updated_at, started before before: reads=%v, want [1] (fail open)", perChunk)
+	}
+	zero := []time.Time{day(1, 18), day(1, 18)}
+	if perChunk := githubTestsReadsOfRunOverWindows(t, "backfill", true, zero, day(1, 17), day(1, 19), day(1, 20)); !slices.Equal(perChunk, []int{0}) {
+		t.Errorf("tiled zero-width backfill claim, started after before: reads=%v, want [0]", perChunk)
+	}
+}
+
+// CHAOS-14249: the non-chunked comparison route shares the rule.
+func TestGitHubTestsOracleReadsALateStartRunOfATiledBackfillChunk(t *testing.T) {
+	t.Parallel()
+	day := func(d, h int) time.Time { return time.Date(2026, 7, d, h, 0, 0, 0, time.UTC) }
+	run := listingRun{id: 1, created: day(1, 17), startedAt: day(1, 19), updated: day(1, 20), status: "completed", conclusion: "success"}
+	for _, cell := range []struct {
+		mode string
+		want int
+	}{{"backfill", 1}, {"incremental", 0}} {
+		fake := newListingFake(t, []listingRun{run})
+		claim := listingClaim(day(1, 6), day(1, 18))
+		claim.Mode = cell.mode
+		if cell.mode == "backfill" {
+			claim.BackfillNext = &BackfillNextWindow{}
+		}
+		if _, err := (GitHubTestsRouteHandler{}).Collect(context.Background(), claim, providerfoundation.Credential{},
+			githubTestsClient(t, fakehttp.Client(fake)), day(1, 21)); err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("CELL oracle %s: artifact lists=%d", cell.mode, fake.artifactGets[run.id])
+		if fake.artifactGets[run.id] != cell.want {
+			t.Errorf("oracle %s: artifact lists=%d, want %d", cell.mode, fake.artifactGets[run.id], cell.want)
 		}
 	}
 }

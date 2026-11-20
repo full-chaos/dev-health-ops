@@ -381,17 +381,19 @@ func TestGitHubTestsRunReportsCoverageRowOrderDoesNotChooseTheRepresentative(t *
 	}
 }
 
-// KNOWN GAP (CHAOS-14045 round 2): zero line coverage is not stored alike in the two formats. LCOV with LH:0 stores lines_covered
-// NULL (the LCOV parser keeps a zero aggregate as absent), Cobertura with lines-covered="0" stores 0, so the two copies have
-// different keys although they report the same coverage. This pins today's behaviour: the keys differ, so the same copy (the
-// LCOV one; the Cobertura copy is the representative) is reported in both upload orders instead of the lowest id winning a tie.
-func TestGitHubTestsRunReportsZeroCoverageKnownGapLCOVAndCobertura(t *testing.T) {
+// Zero line coverage is stored alike in the two formats (CHAOS-14284): LCOV with LH:0 and Cobertura with lines-covered="0" both
+// store lines_covered 0, so equal zero coverage is equal content and the tie goes to the lowest upload id in both id orders.
+func TestGitHubTestsRunReportsZeroCoverageEqualInLCOVAndCobertura(t *testing.T) {
 	lcov := map[string]string{"coverage.info": "TN:\nSF:foo.go\nDA:1,0\nLF:1\nLH:0\nend_of_record\n"}
 	cobertura := map[string]string{"coverage.xml": `<coverage lines-valid="1" lines-covered="0"><packages><package name="example"><classes>` +
 		`<class filename="foo.go"><lines><line number="1" hits="0"/></lines></class></classes></package></packages></coverage>`}
 	for _, swapped := range []bool{false, true} {
-		if got := markedCopyRole(t, lcov, cobertura, swapped, false); got != "first" {
-			t.Fatalf("ids swapped %t: reported %s, want the LCOV copy (first) in both orders: the keys differ today", swapped, got)
+		wantMarked := "second"
+		if swapped {
+			wantMarked = "first"
+		}
+		if got := markedCopyRole(t, lcov, cobertura, swapped, false); got != wantMarked {
+			t.Fatalf("ids swapped %t: reported %s, want %s (the higher id): equal zero coverage is equal content", swapped, got, wantMarked)
 		}
 	}
 }

@@ -14,7 +14,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/domainroledb"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -91,18 +92,36 @@ func seedChunkReclaimUnit(t *testing.T, ctx context.Context, pool *pgxpool.Pool,
 	seedChunkSidecarsSized(t, ctx, pool, "org-a", unitID, chunks, payloadBytes, now.Add(-time.Hour))
 }
 
-func startChunkReclaimVenue(t *testing.T, ctx context.Context) domainroledb.Venue {
-	t.Helper()
-	venue := domainroledb.Start(t, ctx, "chunkreclaim")
-	t.Cleanup(func() {
-		if denied := venue.Denials.All(); len(denied) > 0 {
-			t.Errorf("domain role refused %d statement(s): %v", len(denied), denied)
-		}
-	})
-	return venue
+// chunkReclaimVenue is the migrated schema on one admin pool. The domain-role
+// run of the reclaimer (grants, 0 denials) lives in package chunkreclaimrolecell,
+// so this package stays outside the posture-test list.
+type chunkReclaimVenue struct {
+	Admin *pgxpool.Pool
 }
 
-func resetChunkReclaimVenue(t *testing.T, ctx context.Context, venue domainroledb.Venue) {
+func startChunkReclaimVenue(t *testing.T, ctx context.Context) chunkReclaimVenue {
+	t.Helper()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := instance.Close(closeCtx); err != nil {
+			t.Errorf("terminate PostgreSQL: %v", err)
+		}
+	})
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	pgschema.Apply(ctx, t, pool)
+	return chunkReclaimVenue{Admin: pool}
+}
+
+func resetChunkReclaimVenue(t *testing.T, ctx context.Context, venue chunkReclaimVenue) {
 	t.Helper()
 	resetLeaseRepairTables(t, ctx, venue.Admin)
 	seedLeaseRepairRun(t, ctx, venue.Admin, chunkLeakRun, "org-a", "running")
@@ -134,8 +153,8 @@ func wantChunkSidecars(t *testing.T, ctx context.Context, pool *pgxpool.Pool, un
 }
 
 // CHAOS-14243 red cell: lease repair terminalizes a chunked unit as failed
-// (worker_lost) and nothing else reclaims its stored chunk rows. Both writers
-// run as the migrated domain role.
+// (worker_lost) and nothing else reclaims its stored chunk rows. The same
+// scenario as the migrated domain role is chunkreclaimrolecell's cell.
 func TestChunkSidecarsOfLeaseRepairFailedUnitAreReclaimed(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
@@ -147,7 +166,7 @@ func TestChunkSidecarsOfLeaseRepairFailedUnitAreReclaimed(t *testing.T) {
 	seedChunkSidecars(t, ctx, venue.Admin, "org-a", chunkLeakFailed, chunkLeakChunksPer, now.Add(-time.Hour))
 	seedChunkSidecars(t, ctx, venue.Admin, "org-a", chunkLeakRunning, chunkLeakChunksPer, now.Add(-time.Hour))
 
-	repair, err := NewLeaseRepair(venue.Domain)
+	repair, err := NewLeaseRepair(venue.Admin)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,7 +185,7 @@ func TestChunkSidecarsOfLeaseRepairFailedUnitAreReclaimed(t *testing.T) {
 		t.Fatalf("unit status = %q, want failed", status)
 	}
 
-	reclaim, err := NewChunkSidecarReclaim(venue.Domain)
+	reclaim, err := NewChunkSidecarReclaim(venue.Admin)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,7 +215,7 @@ func TestChunkSidecarReclaimPostgresContract(t *testing.T) {
 		resetChunkReclaimVenue(t, ctx, venue)
 		unit := chunkReclaimUnitID(1)
 		seedChunkReclaimUnit(t, ctx, venue.Admin, unit, "failed", 600, 1, now)
-		reclaim := newTestChunkReclaim(t, venue.Domain, oneStatement)
+		reclaim := newTestChunkReclaim(t, venue.Admin, oneStatement)
 		for index, want := range []struct {
 			rows, units, checkpoints, chunks int
 		}{{256, 0, 1, 344}, {256, 0, 1, 88}, {88, 1, 0, 0}} {
@@ -212,7 +231,7 @@ func TestChunkSidecarReclaimPostgresContract(t *testing.T) {
 		resetChunkReclaimVenue(t, ctx, venue)
 		unit := chunkReclaimUnitID(2)
 		seedChunkReclaimUnit(t, ctx, venue.Admin, unit, "failed", 40, chunkMiB, now)
-		reclaim := newTestChunkReclaim(t, venue.Domain, oneStatement)
+		reclaim := newTestChunkReclaim(t, venue.Admin, oneStatement)
 		result := stepChunkReclaim(t, ctx, reclaim, now)
 		if result.Rows != 32 || result.Bytes != 32*chunkMiB || result.Units != 0 {
 			t.Fatalf("first statement = %+v, want 32 rows / 32 MiB and no unit", result)
@@ -231,7 +250,7 @@ func TestChunkSidecarReclaimPostgresContract(t *testing.T) {
 		seedChunkReclaimUnit(t, ctx, venue.Admin, unit, "failed", 2, maxChunkPayloadBytes, now)
 		small := oneStatement
 		small.BytesPerStatement = maxChunkPayloadBytes
-		reclaim := newTestChunkReclaim(t, venue.Domain, small)
+		reclaim := newTestChunkReclaim(t, venue.Admin, small)
 		result := stepChunkReclaim(t, ctx, reclaim, now)
 		if result.Rows != 1 || result.Bytes != maxChunkPayloadBytes {
 			t.Fatalf("statement = %+v, want exactly one %d-byte row", result, maxChunkPayloadBytes)
@@ -245,7 +264,7 @@ func TestChunkSidecarReclaimPostgresContract(t *testing.T) {
 		seedChunkReclaimUnit(t, ctx, venue.Admin, unit, "failed", 10, chunkMiB, now)
 		limited := DefaultChunkSidecarReclaimConfig()
 		limited.BytesPerMinute = 4 * chunkMiB
-		reclaim := newTestChunkReclaim(t, venue.Domain, limited)
+		reclaim := newTestChunkReclaim(t, venue.Admin, limited)
 		clock := now
 		reclaim.clock = func() time.Time { return clock }
 		var logs bytes.Buffer
@@ -317,7 +336,7 @@ func TestChunkSidecarReclaimPostgresContract(t *testing.T) {
 		for index, status := range statuses {
 			seedChunkReclaimUnit(t, ctx, venue.Admin, chunkReclaimUnitID(10+index), status, 5, 1, now)
 		}
-		reclaim := newTestChunkReclaim(t, venue.Domain, unlimited)
+		reclaim := newTestChunkReclaim(t, venue.Admin, unlimited)
 		result := stepChunkReclaim(t, ctx, reclaim, now)
 		if result.Units != 2 || result.Rows != 10 || result.RemainingUnits != 0 {
 			t.Fatalf("reclaim result = %+v, want the 2 terminal units (10 rows), 0 remaining", result)
@@ -346,7 +365,7 @@ func TestChunkSidecarReclaimPostgresContract(t *testing.T) {
 		if _, err := holder.Exec(ctx, `SELECT 1 FROM public.sync_run_units WHERE id = $1::uuid FOR UPDATE`, unit); err != nil {
 			t.Fatal(err)
 		}
-		reclaim := newTestChunkReclaim(t, venue.Domain, unlimited)
+		reclaim := newTestChunkReclaim(t, venue.Admin, unlimited)
 		stepCtx, stepCancel := context.WithTimeout(ctx, 10*time.Second)
 		defer stepCancel()
 		for step := 0; step < 3; step++ {
@@ -362,8 +381,8 @@ func TestChunkSidecarReclaimPostgresContract(t *testing.T) {
 		for index := 0; index < 4; index++ {
 			seedChunkReclaimUnit(t, ctx, venue.Admin, chunkReclaimUnitID(30+index), "failed", 300, 1, now)
 		}
-		first := newTestChunkReclaim(t, venue.Domain, unlimited)
-		second := newTestChunkReclaim(t, venue.Domain, unlimited)
+		first := newTestChunkReclaim(t, venue.Admin, unlimited)
+		second := newTestChunkReclaim(t, venue.Admin, unlimited)
 		var mu sync.Mutex
 		var rows int64
 		var units int
@@ -412,7 +431,7 @@ func TestChunkSidecarReclaimPostgresContract(t *testing.T) {
 		if _, err := holder.Exec(ctx, `SELECT 1 FROM public.sync_run_unit_chunk_checkpoints WHERE sync_run_unit_id = $1::uuid FOR UPDATE`, held); err != nil {
 			t.Fatal(err)
 		}
-		reclaim := newTestChunkReclaim(t, venue.Domain, unlimited)
+		reclaim := newTestChunkReclaim(t, venue.Admin, unlimited)
 		result := stepChunkReclaim(t, ctx, reclaim, now)
 		if result.Units != 1 || result.Done || result.RemainingUnits != 1 {
 			t.Fatalf("with the last checkpoint locked elsewhere: %+v, want 1 unit, remaining 1, not done", result)
@@ -441,8 +460,8 @@ func TestChunkSidecarReclaimPostgresContract(t *testing.T) {
 			if begins > 1 {
 				return nil, errors.New("begin refused")
 			}
-			return venue.Domain.Begin(beginCtx)
-		}, poolChunkSidecarReclaimTickLock(venue.Domain), unlimited)
+			return venue.Admin.Begin(beginCtx)
+		}, poolChunkSidecarReclaimTickLock(venue.Admin), unlimited)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -474,8 +493,8 @@ func TestChunkSidecarReclaimPostgresContract(t *testing.T) {
 			if refuse {
 				return nil, errors.New("begin refused")
 			}
-			return venue.Domain.Begin(beginCtx)
-		}, poolChunkSidecarReclaimTickLock(venue.Domain), config)
+			return venue.Admin.Begin(beginCtx)
+		}, poolChunkSidecarReclaimTickLock(venue.Admin), config)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -509,12 +528,12 @@ func TestChunkSidecarReclaimPostgresContract(t *testing.T) {
 				close(entered)
 				<-gate
 			})
-			return venue.Domain.Begin(beginCtx)
-		}, poolChunkSidecarReclaimTickLock(venue.Domain), limited)
+			return venue.Admin.Begin(beginCtx)
+		}, poolChunkSidecarReclaimTickLock(venue.Admin), limited)
 		if err != nil {
 			t.Fatal(err)
 		}
-		second, err := newChunkSidecarReclaim(venue.Domain.Begin, poolChunkSidecarReclaimTickLock(venue.Domain), limited)
+		second, err := newChunkSidecarReclaim(venue.Admin.Begin, poolChunkSidecarReclaimTickLock(venue.Admin), limited)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -560,7 +579,7 @@ func TestChunkSidecarReclaimPostgresContract(t *testing.T) {
 		if _, err := holder.Exec(ctx, `SELECT pg_advisory_lock($1)`, chunkSidecarReclaimLockKey); err != nil {
 			t.Fatal(err)
 		}
-		reclaim := newTestChunkReclaim(t, venue.Domain, unlimited)
+		reclaim := newTestChunkReclaim(t, venue.Admin, unlimited)
 		result, err := reclaim.Step(ctx, now, 100)
 		if err != nil || !result.LockSkipped || result.Statements != 0 || reclaim.LockSkippedTicks() != 1 {
 			t.Fatalf("tick under another session's lock = %+v / %v (skipped ticks %d), want skipped, no error, counter 1", result, err, reclaim.LockSkippedTicks())
@@ -588,9 +607,9 @@ func TestChunkSidecarReclaimPostgresContract(t *testing.T) {
 		config := unlimited
 		config.BytesPerStatement = 8 * chunkMiB
 		reclaim, err := newChunkSidecarReclaim(func(beginCtx context.Context) (pgx.Tx, error) {
-			tx, err := venue.Domain.Begin(beginCtx)
+			tx, err := venue.Admin.Begin(beginCtx)
 			return lostCommitReplyTx{Tx: tx}, err
-		}, poolChunkSidecarReclaimTickLock(venue.Domain), config)
+		}, poolChunkSidecarReclaimTickLock(venue.Admin), config)
 		if err != nil {
 			t.Fatal(err)
 		}

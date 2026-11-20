@@ -550,18 +550,20 @@ func collectGitHubTestsRunsPeeled(
 	ctx context.Context, client *providerfoundation.HTTPClient, root string, pageBudget int,
 	queryFor func(peeledHi string) url.Values,
 ) (items []json.RawMessage, pages int, over bool, err error) {
-	return collectGitHubTestsRunsPeeledBy(ctx, client, root, pageBudget, queryFor, githubTestsPeel, nil, false)
+	return collectGitHubTestsRunsPeeledBy(ctx, client, root, pageBudget, queryFor, githubTestsPeel, nil, false, false)
 }
 
 // collectGitHubTestsRunsPeeledBy is collectGitHubTestsRunsPeeled with the peel rule given (an artifacts-phase range peels
 // inside its created interval). A non-nil admit keeps a listed run only when it admits the run's created time under the
 // ceiling of the response that supplied it (the chunked route's rule); a refused run is not kept and not marked seen.
 // stuckAtCap is the runs phase's rule of the chunked route (CHAOS-14321): a range whose cap of results all share its
-// oldest second is stuck at once, with no second listing that ends at that second.
+// oldest second is stuck at once, with no second listing that ends at that second. keepRepeats keeps every listed record of a
+// run, a cut second's runs listed again by the peeled range included: the caller skips a repeat only after the same
+// (run, attempt) had a whole read, as the chunked route does (CHAOS-14361).
 func collectGitHubTestsRunsPeeledBy(
 	ctx context.Context, client *providerfoundation.HTTPClient, root string, pageBudget int,
 	queryFor func(peeledHi string) url.Values, peel func(items int, oldest, rangeHi string) (string, bool, bool),
-	admit func(created *time.Time, rangeHi string) bool, stuckAtCap bool,
+	admit func(created *time.Time, rangeHi string) bool, stuckAtCap, keepRepeats bool,
 ) (items []json.RawMessage, pages int, over bool, err error) {
 	seen := map[string]struct{}{}
 	hi := ""
@@ -591,7 +593,7 @@ func collectGitHubTestsRunsPeeledBy(
 			if admit != nil && !admit(parseGitHubWorkflowTime(run.CreatedAt), hi) {
 				continue
 			}
-			if _, duplicate := seen[run.ID.String()]; !duplicate {
+			if _, duplicate := seen[run.ID.String()]; !duplicate || keepRepeats {
 				seen[run.ID.String()] = struct{}{}
 				items = append(items, raw)
 			}
@@ -656,4 +658,24 @@ func decodeGitHubWorkflowRunListItem(raw json.RawMessage) (gitHubWorkflowRunPayl
 		return run, providerfoundation.ErrNormalizationInvalid
 	}
 	return run, nil
+}
+
+// githubTestsDistinctListedRuns counts the distinct run ids of a listing kept with its repeats.
+func githubTestsDistinctListedRuns(items []json.RawMessage) int {
+	seen := map[string]struct{}{}
+	for _, raw := range items {
+		if run, err := decodeGitHubWorkflowRunListItem(raw); err == nil {
+			seen[run.ID.String()] = struct{}{}
+		}
+	}
+	return len(seen)
+}
+
+// githubTestsOracleReadKey is the key under which the oracle records a whole read of a listed run: the listing it came from
+// and the run's (id, attempt) cut key, or its id when the run has no exact key (the oracle's one read per id before).
+func githubTestsOracleReadKey(listing string, run gitHubWorkflowRunPayload) string {
+	if _, key := githubTestsCutRunKey(run); key != "" {
+		return listing + ":" + key
+	}
+	return listing + ":#" + run.ID.String()
 }

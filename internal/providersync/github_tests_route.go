@@ -392,11 +392,11 @@ func (handler GitHubTestsRouteHandler) Collect(
 	}
 	runItems, runListPages, runsOver, err := collectGitHubTestsRunsPeeledBy(ctx, client, root, runPages, func(hi string) url.Values {
 		return githubTestsRunsQuery(claim, handler.refreshLookback(), hi)
-	}, runsInterval.peel, runsAdmit, true)
+	}, runsInterval.peel, runsAdmit, true, true)
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}
-	if runsOver || len(runItems) > maxRuns {
+	if runsOver || githubTestsDistinctListedRuns(runItems) > maxRuns {
 		return CompleteRouteBatch{}, ErrPaginationCapExceeded
 	}
 	lateMaxPages := handler.lateRerunMaxPages()
@@ -411,7 +411,7 @@ func (handler GitHubTestsRouteHandler) Collect(
 	if githubTestsHoldsMidnight(claim) {
 		lateItems, lateListPages, lateOver, err = collectGitHubTestsRunsPeeledBy(ctx, client, root, lateMaxPages, func(hi string) url.Values {
 			return githubTestsLateRerunRunsQuery(claim, handler.refreshLookback(), handler.lateRerunLookback(), hi)
-		}, lateInterval.peel, lateInterval.admitsUnder, true)
+		}, lateInterval.peel, lateInterval.admitsUnder, true, true)
 		if err != nil {
 			return CompleteRouteBatch{}, err
 		}
@@ -419,11 +419,11 @@ func (handler GitHubTestsRouteHandler) Collect(
 	regularInterval, deepInterval := githubTestsArtifactInterval(claim, false, 0), githubTestsCreatedInterval{deep: true}
 	artifactRunItems, artifactListPages, artifactsOver, err := collectGitHubTestsRunsPeeledBy(ctx, client, root, runPages, func(hi string) url.Values {
 		return githubTestsArtifactRunQueryAt(claim, hi)
-	}, regularInterval.peel, nil, false)
+	}, regularInterval.peel, nil, false, true)
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}
-	if artifactsOver || len(artifactRunItems) > maxRuns {
+	if artifactsOver || githubTestsDistinctListedRuns(artifactRunItems) > maxRuns {
 		return CompleteRouteBatch{}, ErrPaginationCapExceeded
 	}
 	artifactRuns := make([]githubTestsListedRun, 0, len(artifactRunItems))
@@ -436,7 +436,7 @@ func (handler GitHubTestsRouteHandler) Collect(
 		deepInterval = githubTestsArtifactInterval(claim, true, handler.lateRerunLookback())
 		relistItems, pages, over, err := collectGitHubTestsRunsPeeledBy(ctx, client, root, lateMaxPages, func(hi string) url.Values {
 			return githubTestsRelistQueryAt(claim, handler.lateRerunLookback(), hi)
-		}, deepInterval.peel, nil, false)
+		}, deepInterval.peel, nil, false, true)
 		if err != nil {
 			return CompleteRouteBatch{}, err
 		}
@@ -470,10 +470,20 @@ func (handler GitHubTestsRouteHandler) Collect(
 	}
 	requests, pages := 1+runListPages+lateListPages+artifactListPages+relistPages, runListPages+lateListPages+artifactListPages+relistPages
 	policyCache := map[string]githubTestsPolicy{}
+	// A listed run read whole (completed, every job its jobs read declares) is not read again when a peeled range lists it
+	// again; a newer attempt is another key (CHAOS-14361).
+	readWhole := map[string]struct{}{}
 	for index, raw := range append(append([]json.RawMessage{}, runItems...), lateItems...) {
 		run, err := decodeGitHubWorkflowRun(raw)
 		if err != nil {
 			return CompleteRouteBatch{}, providerfoundation.RouteFailure(githubRunsRoute, providerfoundation.ReasonBodyDecode, err)
+		}
+		readKey := githubTestsOracleReadKey("runs", run)
+		if index >= len(runItems) {
+			readKey = githubTestsOracleReadKey("deep", run)
+		}
+		if _, done := readWhole[readKey]; done {
+			continue
 		}
 		pipeline, include := normalizeGitHubTestsPipeline(claim, repoID, run, normalizedAt)
 		keep := include && runsInterval.admits(pipeline.QueuedAt) && githubTestsRunWanted(run, pipeline, claim)
@@ -486,6 +496,7 @@ func (handler GitHubTestsRouteHandler) Collect(
 		pipelines = append(pipelines, pipeline)
 		jobPage, pageErr := providerfoundation.CollectGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{
 			Path: root + "/actions/runs/" + url.PathEscape(pipeline.RunID) + "/jobs", Route: githubRunJobsRoute, Query: url.Values{"per_page": {"100"}}, DataKey: "jobs", MaxPages: jobPages,
+			TotalKey: "total_count",
 		})
 		if pageErr != nil {
 			return CompleteRouteBatch{}, pageErr
@@ -515,6 +526,13 @@ func (handler GitHubTestsRouteHandler) Collect(
 				jobs = append(jobs, row)
 			}
 		}
+		// The chunked route's whole-jobs rule (collectRunDetail): the walk proved its end with every declared job, or got the
+		// declared total, and kept every job it got. A budget stop failed closed above.
+		gotDeclared := jobPage.DeclaredTotalSeen && len(jobPage.Items) >= jobPage.DeclaredTotal
+		jobsComplete := jobPage.EndProven && (!jobPage.DeclaredTotalSeen || gotDeclared) || gotDeclared
+		if githubTestsRunReadable(run) && jobsComplete && len(runJobs) == len(jobPage.Items) {
+			readWhole[readKey] = struct{}{}
+		}
 		targetBranch, prNumber := gitHubTestsTarget(run)
 		policy := githubTestsPolicy{provenance: "github.branch_protection.target_branch_unavailable"}
 		if targetBranch != nil {
@@ -534,10 +552,20 @@ func (handler GitHubTestsRouteHandler) Collect(
 			testsOptionalString(stringValue(run.HTMLURL)), normalizedAt,
 		)...)
 	}
+	// A listed run whose report read was whole (at least one report read, no loss) is not read again when a peeled range lists
+	// it again; any loss or a newer attempt reads it again, as the chunked route's run verdict does (CHAOS-14361).
+	reportsWhole := map[string]struct{}{}
 	for _, listed := range artifactRuns {
 		run, err := decodeGitHubWorkflowRun(listed.raw)
 		if err != nil {
 			return CompleteRouteBatch{}, providerfoundation.RouteFailure(githubRunsRoute, providerfoundation.ReasonBodyDecode, err)
+		}
+		reportKey := githubTestsOracleReadKey("artifacts", run)
+		if listed.relist {
+			reportKey = githubTestsOracleReadKey("relist", run)
+		}
+		if _, done := reportsWhole[reportKey]; done {
+			continue
 		}
 		pipeline, include := normalizeGitHubTestsPipeline(claim, repoID, run, normalizedAt)
 		interval := regularInterval
@@ -583,6 +611,7 @@ func (handler GitHubTestsRouteHandler) Collect(
 		// cap, every expired artifact that passed the selection seam is recorded once per (run, artifact) with the same durable marker
 		// (contents unknown: fail closed).
 		artifacts, expiredItems := githubTestsSplitExpiredArtifacts(artifacts)
+		reportLoss, reportSources := len(expiredItems) > 0, 0
 		for _, artifact := range expiredItems {
 			if githubTestsSkippedMarkerRecorded(skippedArtifacts, pipeline.RunID, string(artifact.ID), githubTestsArtifactExpiredCause) {
 				continue
@@ -627,11 +656,13 @@ func (handler GitHubTestsRouteHandler) Collect(
 						incomplete, client, claim, claim.SourceName, pipeline.RunID,
 						githubTestsArtifactUnavailableCause,
 					)
+					reportLoss = true
 					continue
 				}
 				return CompleteRouteBatch{}, downloadErr
 			}
 			if len(archive) == 0 {
+				reportLoss = true
 				continue
 			}
 			rows, parseErr := parseGitHubTestsReportArtifact(archive, string(artifact.ID), githubTestsReportSlotFor(run, artifact), supersededIDs[githubTestsArtifactSlotName(artifact)], repoID, pipeline.RunID, claim.OrgID, pipeline.StartedAtPtr(), pipeline.FinishedAt, normalizedAt)
@@ -643,6 +674,7 @@ func (handler GitHubTestsRouteHandler) Collect(
 						incomplete, client, claim, claim.SourceName, pipeline.RunID,
 						githubTestsUnreadableArchiveCause,
 					)
+					reportLoss = true
 					continue
 				}
 				return CompleteRouteBatch{}, fmt.Errorf("%w: artifact parse failed: %v", ErrGitHubTestsIncomplete, parseErr)
@@ -653,6 +685,15 @@ func (handler GitHubTestsRouteHandler) Collect(
 			}
 			for _, observation := range reportIncomplete {
 				incomplete = mergeGitHubTestsIncomplete(incomplete, observation)
+				if _, notALoss := githubTestsRunReportNotALossCauses[observation.Cause]; !notALoss {
+					reportLoss = true
+				}
+			}
+			if len(rows.SkippedArtifacts) > 0 {
+				reportLoss = true
+			}
+			if rows.ReportsRead > 0 {
+				reportSources++
 			}
 			// The two size-guard skips carry their durable markers here as on the chunked route, so the watermark advances for
 			// them (CHAOS-14030). malformed/unreadable markers stay dropped: the divergence noted below predates this.
@@ -691,6 +732,9 @@ func (handler GitHubTestsRouteHandler) Collect(
 			suites = append(suites, rows.Suites...)
 			cases = append(cases, rows.Cases...)
 			coverage = append(coverage, rows.Coverage...)
+		}
+		if !reportLoss && reportSources > 0 {
+			reportsWhole[reportKey] = struct{}{}
 		}
 	}
 	effects, err := testOpsEffects(pipelines, jobs, acceptance, suites, cases, coverage)

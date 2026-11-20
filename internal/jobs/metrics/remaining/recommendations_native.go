@@ -59,16 +59,20 @@ var recommendationsTableRequirements = map[string][]string{
 	// from the deprecated ratio column: the check names the columns the read
 	// uses, so a database that does not hold them yet is refused here and not
 	// at the first read.
+	// The latency pick also orders by the hash of the served order's columns.
 	"repo_metrics_daily": withLiveRowColumns("repo_metrics_daily",
 		"repo_id", "day", "org_id", "pr_cycle_p75_hours", "computed_at",
 		prrework.ColumnMerged, prrework.ColumnReviewed, prrework.ColumnRework, prrework.ColumnNoSignal,
+		"prs_merged", "pr_first_review_p50_hours", "single_owner_file_ratio_30d", "code_ownership_gini",
+		"bus_factor", "revert_rate", "mttr_hours", "retracted",
 	),
 	"user_metrics_daily": withLiveRowColumns("user_metrics_daily",
-		"repo_id", "day", "author_email", "team_id", "org_id", "reviews_given", "computed_at",
+		"repo_id", "day", "author_email", "team_id", "org_id", "reviews_given", "retracted", "computed_at",
 	),
 	"team_metrics_daily": withLiveRowColumns("team_metrics_daily",
 		"day", "team_id", "repo_id", "org_id",
-		"commits_count", "after_hours_commits_count", "computed_at",
+		"commits_count", "after_hours_commits_count", "weekend_commits_count",
+		"after_hours_commit_ratio", "weekend_commit_ratio", "computed_at",
 	),
 	"repo_complexity_daily": {
 		"repo_id", "day", "org_id", "cyclomatic_per_kloc", "computed_at",
@@ -76,8 +80,14 @@ var recommendationsTableRequirements = map[string][]string{
 	"file_hotspot_daily": {
 		"repo_id", "day", "org_id", "file_path", "risk_score", "computed_at",
 	},
+	// The persisted-risk pick reads 10 of these columns and orders by the hash of
+	// the served order (Home), which names the rest.
 	"compounding_risk_daily": {
 		"org_id", "day", "scope", "scope_id", "compounding_risk", "severity", "computed_at",
+		"churn_norm", "complexity_norm", "ownership_norm", "review_norm",
+		"w_churn", "w_complexity", "w_ownership", "w_review", "threshold_elevated", "threshold_high",
+		"rework_churn", "complexity_delta", "bus_factor", "ownership_gini", "single_owner_ratio",
+		"review_latency_p90h", "merged_prs_30d", "reviewed_prs_30d", "review_share_30d",
 	},
 	// The write target. Its column list is the sink's
 	// (metrics/sinks/clickhouse/recommendations.py:45-58) -- if a column is

@@ -30,17 +30,7 @@ var measuredWorkItem = liverow.Predicate("work_item_metrics_daily", "newest")
 // two versions that share a computed_at serve one of them whatever the scan order. Each table has ONE order key, the
 // same columns in the same order as the operating review reads of that table, so the pages serve the same version of a
 // tied key. workItemNewestColumns picks every liverow measure of the table from that one version.
-const workItemNewestOrder = `(work_item_metrics_daily.computed_at, cityHash64(tuple(
-    work_item_metrics_daily.items_started, work_item_metrics_daily.items_completed,
-    work_item_metrics_daily.items_started_unassigned, work_item_metrics_daily.items_completed_unassigned,
-    work_item_metrics_daily.wip_count_end_of_day, work_item_metrics_daily.wip_unassigned_end_of_day,
-    work_item_metrics_daily.bug_completed_ratio, work_item_metrics_daily.story_points_completed,
-    work_item_metrics_daily.new_bugs_count, work_item_metrics_daily.new_items_count,
-    work_item_metrics_daily.defect_intro_rate, work_item_metrics_daily.wip_congestion_ratio,
-    work_item_metrics_daily.predictability_score, work_item_metrics_daily.cycle_time_p50_hours,
-    work_item_metrics_daily.cycle_time_p90_hours, work_item_metrics_daily.lead_time_p50_hours,
-    work_item_metrics_daily.lead_time_p90_hours, work_item_metrics_daily.wip_age_p50_hours,
-    work_item_metrics_daily.wip_age_p90_hours)))`
+const workItemNewestOrder = rowview.WorkItemMetricsNewestOrder
 
 const workItemNewestColumns = `argMax(tuple(
                     work_item_metrics_daily.items_started, work_item_metrics_daily.items_completed,

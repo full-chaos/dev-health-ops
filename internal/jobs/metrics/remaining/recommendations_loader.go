@@ -134,23 +134,51 @@ func safeFloat(value *float64) (float64, bool) {
 	return SafeFloat(*value, true)
 }
 
-// measuredKeyHaving keeps a key of a team-keyed daily table only when its
-// newest row is a measurement (package liverow). The loader reads the rows of
-// ONE team id. When that id was retired, its newest rows are retraction rows:
-// a day that holds only such rows is a day with no data for the team, not a
-// day with a WIP, a throughput or an after-hours ratio of 0.
-func measuredKeyHaving(table string) string {
-	return "\n                HAVING " + liverow.NewestPredicate(table, "")
-}
-
 // teamMetricsSource is the team view of work_item_metrics_daily for the loader's
 // one team in the window (CHAOS-14353): one live row per (provider, work scope,
 // day), the team row where one exists, else the org row, else the legacy row
-// (rowview.TeamSource). A co-owner team reads the items of its team rows.
+// (rowview.TeamSource). A co-owner team reads the items of its team rows. Each
+// full key's version is picked by the table's one order
+// (rowview.WorkItemMetricsNewestOrder), the order the served forecast reads take,
+// so a computed_at tie stores the version the pages serve.
 func (loader *RecommendationsLoader) teamMetricsSource() string {
 	return rowview.TeamSource("work_item_metrics_daily",
-		"team_id = {team_id:String} AND day >= {start:Date} AND day < {end:Date}"+loader.orgClause())
+		"team_id = {team_id:String} AND day >= {start:Date} AND day < {end:Date}"+loader.orgClause(),
+		rowview.WorkItemMetricsNewestOrder)
 }
+
+// The version orders of the loader's other picks (CHAOS-14407). Each takes the
+// order of the served reader of its table where one breaks ties, so a computed_at
+// tie of two versions gives the version the pages serve, whatever the scan order.
+// repoMetricsServedHash is the hash of the served repo_metrics_daily order
+// (operating review, throughput forecast); it holds no pr_cycle_p75_hours, so the
+// latency pick hashes that column last. userMetricsReviewsPick is the served
+// reviews pick (aianalytics concentrationStatement). teamMetricsPick is every
+// liverow measure of team_metrics_daily: no served reader of the table breaks a
+// tie yet. compoundingRiskHash is the hash of the served compounding_risk_daily
+// order (Home compoundingRiskNewestOrder).
+const repoMetricsServedHash = `cityHash64(tuple(
+    repo_metrics_daily.prs_merged, repo_metrics_daily.pr_first_review_p50_hours,
+    repo_metrics_daily.single_owner_file_ratio_30d, repo_metrics_daily.code_ownership_gini,
+    repo_metrics_daily.bus_factor, repo_metrics_daily.revert_rate, repo_metrics_daily.mttr_hours,
+    repo_metrics_daily.retracted))`
+
+const userMetricsReviewsPick = `tuple(user_metrics_daily.reviews_given, user_metrics_daily.retracted)`
+
+const teamMetricsPick = `tuple(team_metrics_daily.commits_count, team_metrics_daily.after_hours_commits_count,
+    team_metrics_daily.weekend_commits_count, team_metrics_daily.after_hours_commit_ratio,
+    team_metrics_daily.weekend_commit_ratio)`
+
+const compoundingRiskHash = `cityHash64(tuple(
+    compounding_risk_daily.severity, compounding_risk_daily.w_churn, compounding_risk_daily.w_complexity,
+    compounding_risk_daily.w_ownership, compounding_risk_daily.w_review, compounding_risk_daily.threshold_elevated,
+    compounding_risk_daily.threshold_high, compounding_risk_daily.compounding_risk,
+    compounding_risk_daily.churn_norm, compounding_risk_daily.complexity_norm, compounding_risk_daily.ownership_norm,
+    compounding_risk_daily.review_norm, compounding_risk_daily.rework_churn, compounding_risk_daily.complexity_delta,
+    compounding_risk_daily.bus_factor, compounding_risk_daily.ownership_gini,
+    compounding_risk_daily.single_owner_ratio, compounding_risk_daily.review_latency_p90h,
+    compounding_risk_daily.merged_prs_30d, compounding_risk_daily.reviewed_prs_30d,
+    compounding_risk_daily.review_share_30d))`
 
 // loadWIPThroughput ports _load_wip_throughput.
 //
@@ -234,7 +262,10 @@ func (loader *RecommendationsLoader) loadReviewSignals(
 	latencyQuery := `
             SELECT avg(p75) AS avg_p75
             FROM (
-                SELECT repo_id, argMax(pr_cycle_p75_hours, computed_at) AS p75
+                SELECT repo_id,
+                       argMax(repo_metrics_daily.pr_cycle_p75_hours,
+                              (repo_metrics_daily.computed_at, repo_metrics_daily.day, ` + repoMetricsServedHash + `,
+                               cityHash64(tuple(repo_metrics_daily.pr_cycle_p75_hours)))) AS p75
                 FROM repo_metrics_daily
                 WHERE repo_id IN {repo_ids:Array(UUID)}
                   AND day >= {start:Date} AND day < {end:Date}` + loader.orgClause() + `
@@ -267,13 +298,16 @@ func (loader *RecommendationsLoader) loadReviewSignals(
             SELECT author_email, sum(rev) AS total_reviews
             FROM (
                 SELECT repo_id, author_email, day,
-                       argMax(reviews_given, computed_at) AS rev
+                       argMax(` + userMetricsReviewsPick + `,
+                              (user_metrics_daily.computed_at, cityHash64(` + userMetricsReviewsPick + `))) AS picked,
+                       picked.1 AS rev,
+                       picked.2 AS retracted
                 FROM user_metrics_daily
                 WHERE repo_id IN {repo_ids:Array(UUID)}
                   AND day >= {start:Date} AND day < {end:Date}` + loader.orgClause() + `
                 GROUP BY repo_id, author_email, day
-                HAVING ` + liverow.NewestPredicate("user_metrics_daily", "") + `
-            )
+            ) AS newest
+            WHERE ` + liverow.Predicate("user_metrics_daily", "newest") + `
             GROUP BY author_email
         `
 	giniRows, err := loader.conn.Query(ctx, giniQuery, namedArguments(arguments)...)
@@ -322,7 +356,9 @@ func (loader *RecommendationsLoader) loadReworkRatio(
 	arguments := loader.windowArguments(teamID, windowStart, windowEnd)
 	arguments["repo_ids"] = ownedRepoIDs
 	// The newest row of each repository and day, whole: the counts of one
-	// generation.
+	// generation. A computed_at tie is broken by the hash of the whole row, the
+	// newest-row form of the count reads (changefailure.LatestRowsSQL): no served
+	// read of these counts breaks a tie yet.
 	query := `
             SELECT ` + prrework.ViewSumsSQL + `
             FROM (
@@ -330,7 +366,7 @@ func (loader *RecommendationsLoader) loadReworkRatio(
                 FROM repo_metrics_daily
                 WHERE repo_id IN {repo_ids:Array(UUID)}
                   AND day >= {start:Date} AND day < {end:Date}` + loader.orgClause() + `
-                ORDER BY computed_at DESC
+                ORDER BY computed_at DESC, cityHash64(tuple(*)) DESC
                 LIMIT 1 BY repo_id, day
             ) AS newest
             WHERE ` + liverow.Predicate("repo_metrics_daily", "newest") + `
@@ -384,16 +420,25 @@ func (loader *RecommendationsLoader) loadSustainabilitySignals(
                     SELECT day, repo_id, commits_count, after_hours_commits_count
                     FROM (
                         SELECT
-                            day,
-                            repo_id,
-                            argMax(commits_count, computed_at) AS commits_count,
-                            argMax(after_hours_commits_count, computed_at)
-                                AS after_hours_commits_count,
+                            day, repo_id, commits_count, after_hours_commits_count,
                             countIf(repo_id != '') OVER (PARTITION BY day) AS real_repo_count
-                        FROM team_metrics_daily
-                        WHERE team_id = {team_id:String}
-                          AND day >= {start:Date} AND day < {end:Date}` + loader.orgClause() + `
-                        GROUP BY day, repo_id` + measuredKeyHaving("team_metrics_daily") + `
+                        FROM (
+                            SELECT
+                                day,
+                                repo_id,
+                                argMax(` + teamMetricsPick + `,
+                                       (team_metrics_daily.computed_at, cityHash64(` + teamMetricsPick + `))) AS picked,
+                                picked.1 AS commits_count,
+                                picked.2 AS after_hours_commits_count,
+                                picked.3 AS weekend_commits_count,
+                                picked.4 AS after_hours_commit_ratio,
+                                picked.5 AS weekend_commit_ratio
+                            FROM team_metrics_daily
+                            WHERE team_id = {team_id:String}
+                              AND day >= {start:Date} AND day < {end:Date}` + loader.orgClause() + `
+                            GROUP BY day, repo_id
+                        ) AS newest
+                        WHERE ` + liverow.Predicate("team_metrics_daily", "newest") + `
                     )
                     WHERE repo_id != '' OR real_repo_count = 0
                 )
@@ -491,7 +536,9 @@ func (loader *RecommendationsLoader) loadCompoundingSignals(
                 avg(if(day >= {mid:Date}, cpk, NULL)) AS second_half
             FROM (
                 SELECT day, repo_id,
-                       argMax(cyclomatic_per_kloc, computed_at) AS cpk
+                       argMax(repo_complexity_daily.cyclomatic_per_kloc,
+                              (repo_complexity_daily.computed_at,
+                               cityHash64(tuple(repo_complexity_daily.cyclomatic_per_kloc)))) AS cpk
                 FROM repo_complexity_daily
                 WHERE repo_id IN {repo_ids:Array(UUID)}
                   AND day >= {start:Date} AND day < {end:Date}` + loader.orgClause() + `
@@ -517,12 +564,15 @@ func (loader *RecommendationsLoader) loadCompoundingSignals(
 	hotspotQuery := `
             SELECT count(DISTINCT file_path) AS total
             FROM (
-                SELECT file_path, argMax(risk_score, computed_at) AS risk_score
+                SELECT file_path,
+                       argMax(file_hotspot_daily.risk_score,
+                              (file_hotspot_daily.computed_at, file_hotspot_daily.day,
+                               cityHash64(tuple(file_hotspot_daily.risk_score)))) AS latest_risk_score
                 FROM file_hotspot_daily
                 WHERE repo_id IN {repo_ids:Array(UUID)}
                   AND day >= {mid:Date} AND day < {end:Date}` + loader.orgClause() + `
                 GROUP BY file_path
-            ) WHERE risk_score > 0
+            ) WHERE latest_risk_score > 0
         `
 	hotspotRows, err := loader.conn.Query(ctx, hotspotQuery, namedArguments(arguments)...)
 	if err != nil {
@@ -560,10 +610,11 @@ func (loader *RecommendationsLoader) loadCompoundingRiskPersisted(
 	// SAME row. Two separate argMax calls could take them from different rows
 	// if their computed_at values ever tie, which would pair a score with
 	// another row's severity -- and severity is the field that decides whether
-	// this path fires at all. The order key is tuple(day, computed_at): the
+	// this path fires at all. The order key is tuple(day, computed_at, hash): the
 	// latest DAY wins, and computed_at only breaks ties within a day. Ordering
 	// by computed_at alone let an old day that was backfilled later beat the
-	// latest day (CHAOS-9713).
+	// latest day (CHAOS-9713). The hash of the served order (Home) breaks a
+	// computed_at tie of one day, so the stored score is the version Home serves.
 	query := `
             SELECT
                 tupleElement(latest_row, 1) AS score,
@@ -573,7 +624,8 @@ func (loader *RecommendationsLoader) loadCompoundingRiskPersisted(
                 toString(tupleElement(latest_row, 11))
             FROM (
                 SELECT argMax(tuple(compounding_risk, severity, churn_norm, complexity_norm, ownership_norm, review_norm,
-                                    w_churn, w_complexity, w_ownership, w_review, day), tuple(day, computed_at)) AS latest_row
+                                    w_churn, w_complexity, w_ownership, w_review, day),
+                              tuple(compounding_risk_daily.day, compounding_risk_daily.computed_at, ` + compoundingRiskHash + `)) AS latest_row
                 FROM compounding_risk_daily
                 WHERE scope = 'team'
                   AND scope_id = {team_id:String}

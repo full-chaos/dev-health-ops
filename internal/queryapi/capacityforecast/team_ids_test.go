@@ -133,15 +133,15 @@ func TestResolveForecastNoTeamIsOrgWide(t *testing.T) {
 // team) with no item key (chmigrate/baseline/head.json: ORDER BY org_id,
 // provider, day, work_scope_id, team_id). So the only double-count risk under
 // IN is a join or a second source multiplying rows; pin that the read stays a
-// single-table SUM, deduplicated by FINAL.
+// single-table SUM over the newest version of each key (capacityOrgNewest).
 func TestMultiTeamReadsAreASingleTableSumWithoutAJoin(t *testing.T) {
 	_, client := runWith(t, &model.CapacityForecastInput{TeamIds: []string{"team-a", "team-b"}})
 	for index, statement := range client.statements {
 		if strings.Contains(strings.ToUpper(statement), "JOIN") {
 			t.Errorf("statement %d joins; a join could count a row once per team:\n%s", index, statement)
 		}
-		if got := strings.Count(statement, "FROM work_item_metrics_daily FINAL"); got < 1 {
-			t.Errorf("statement %d does not read work_item_metrics_daily FINAL:\n%s", index, statement)
+		if got := strings.Count(statement, "FROM work_item_metrics_daily WHERE work_item_metrics_daily.org_id = {org_id:String}"); got < 1 {
+			t.Errorf("statement %d does not read the newest version of each key of work_item_metrics_daily:\n%s", index, statement)
 		}
 	}
 	if !strings.Contains(client.statements[0], "GROUP BY day") || strings.Contains(client.statements[0], "GROUP BY day,") {

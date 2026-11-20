@@ -16,6 +16,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/newestrow"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/rowview"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
+	"github.com/full-chaos/dev-health-ops/internal/teamkeytables"
 )
 
 // The reads, ported from metrics/capacity_queries.py (the two compute-path
@@ -94,19 +95,54 @@ func countFromAggregate(column string, value uint64) (int, error) {
 	return int(value), nil
 }
 
+// capacityNewestOrder is the version order of a work_item_metrics_daily key: the newest computed_at, then the highest
+// hash of the version's measures, so two versions that share a computed_at serve one of them whatever the insert order.
+// The columns and their order are those of the throughput forecast (workItemNewestOrder) and operating review reads of
+// the table, so the three pages serve the same version of a tied key (CHAOS-14406).
+const capacityNewestOrder = `(work_item_metrics_daily.computed_at, cityHash64(tuple(
+    work_item_metrics_daily.items_started, work_item_metrics_daily.items_completed,
+    work_item_metrics_daily.items_started_unassigned, work_item_metrics_daily.items_completed_unassigned,
+    work_item_metrics_daily.wip_count_end_of_day, work_item_metrics_daily.wip_unassigned_end_of_day,
+    work_item_metrics_daily.bug_completed_ratio, work_item_metrics_daily.story_points_completed,
+    work_item_metrics_daily.new_bugs_count, work_item_metrics_daily.new_items_count,
+    work_item_metrics_daily.defect_intro_rate, work_item_metrics_daily.wip_congestion_ratio,
+    work_item_metrics_daily.predictability_score, work_item_metrics_daily.cycle_time_p50_hours,
+    work_item_metrics_daily.cycle_time_p90_hours, work_item_metrics_daily.lead_time_p50_hours,
+    work_item_metrics_daily.lead_time_p90_hours, work_item_metrics_daily.wip_age_p50_hours,
+    work_item_metrics_daily.wip_age_p90_hours)))`
+
+// capacityOrgNewest is the newest version of each full key (the sorting key, row_view included) of the organization by
+// capacityNewestOrder, aliased as the table. It is scoped by org_id in this text, as the served team view is; the caller
+// binds org_id. where names key columns only, so filtering before the pick is filtering after it. The live-row rule is
+// not in it: a reader applies it to the picked row.
+func capacityOrgNewest(where string) string {
+	declared, ok := teamkeytables.ByTable("work_item_metrics_daily")
+	if !ok {
+		panic("capacityforecast: work_item_metrics_daily is not declared in teamkeytables")
+	}
+	key := []string{"work_item_metrics_daily.org_id", "work_item_metrics_daily." + declared.DayColumn}
+	for _, column := range declared.Keys {
+		key = append(key, "work_item_metrics_daily."+column.Name)
+	}
+	return fmt.Sprintf("(SELECT * FROM work_item_metrics_daily WHERE work_item_metrics_daily.org_id = {org_id:String} AND (%s) ORDER BY %s DESC LIMIT 1 BY %s) AS work_item_metrics_daily",
+		where, capacityNewestOrder, strings.Join(key, ", "))
+}
+
 // capacitySource is the FROM source of a capacity read of work_item_metrics_daily. No team or a team set reads the
-// table FINAL (the org view is in the where). One team reads the team view of the organization (CHAOS-14376): of the
-// newest row of each view of a key, a live row first, then team, org, legacy (rowview.ServedTeamSource); a newest-day
-// read takes the pick with no live-row rule after it (rowview.ServedTeamPick), so a key whose every view is retracted
-// stays that key's newest day, as in the org form. The source is aliased as the table.
+// newest version of each key (capacityOrgNewest; the org view is in the where). One team reads the team view of the
+// organization (CHAOS-14376): of the newest row of each view of a key, a live row first, then team, org, legacy
+// (rowview.ServedTeamSource); a newest-day read takes the pick with no live-row rule after it (rowview.ServedTeamPick),
+// so a key whose every view is retracted stays that key's newest day, as in the org form. Both forms take each key's
+// version by capacityNewestOrder, so they serve one version of a computed_at tie (CHAOS-14406). The source is aliased
+// as the table.
 func capacitySource(teamIDs []string, where string, newestDay bool) string {
 	switch {
 	case len(teamIDs) != 1:
-		return "work_item_metrics_daily FINAL"
+		return capacityOrgNewest(where)
 	case newestDay:
-		return rowview.ServedTeamPick("work_item_metrics_daily", where, "") + " AS work_item_metrics_daily"
+		return rowview.ServedTeamPick("work_item_metrics_daily", where, capacityNewestOrder) + " AS work_item_metrics_daily"
 	default:
-		return rowview.ServedTeamSource("work_item_metrics_daily", where, "") + " AS work_item_metrics_daily"
+		return rowview.ServedTeamSource("work_item_metrics_daily", where, capacityNewestOrder) + " AS work_item_metrics_daily"
 	}
 }
 
@@ -136,9 +172,10 @@ func loadThroughput(
 	// and for the same reason.
 	conditions = append([]string{fmt.Sprintf("day >= '%s'", start)}, conditions...)
 
-	// FINAL here, and NOT on the capacityForecasts read below. That asymmetry is
-	// Python's: work_item_metrics_daily is a ReplacingMergeTree whose rows are
-	// genuinely superseded by recomputes, so dropping FINAL would read stale
+	// The newest version of each key here (capacitySource), and NOT on the
+	// capacityForecasts read below. That asymmetry is Python's:
+	// work_item_metrics_daily is a ReplacingMergeTree whose rows are genuinely
+	// superseded by recomputes, so reading every version would read stale
 	// throughput.
 	where := strings.Join(conditions, " AND ")
 	query := fmt.Sprintf(`

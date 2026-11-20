@@ -550,14 +550,16 @@ func collectGitHubTestsRunsPeeled(
 	ctx context.Context, client *providerfoundation.HTTPClient, root string, pageBudget int,
 	queryFor func(peeledHi string) url.Values,
 ) (items []json.RawMessage, pages int, over bool, err error) {
-	return collectGitHubTestsRunsPeeledBy(ctx, client, root, pageBudget, queryFor, githubTestsPeel)
+	return collectGitHubTestsRunsPeeledBy(ctx, client, root, pageBudget, queryFor, githubTestsPeel, nil)
 }
 
 // collectGitHubTestsRunsPeeledBy is collectGitHubTestsRunsPeeled with the peel rule given (an artifacts-phase range peels
-// inside its created interval).
+// inside its created interval). A non-nil admit keeps a listed run only when it admits the run's created time under the
+// ceiling of the response that supplied it (the chunked route's rule); a refused run is not kept and not marked seen.
 func collectGitHubTestsRunsPeeledBy(
 	ctx context.Context, client *providerfoundation.HTTPClient, root string, pageBudget int,
 	queryFor func(peeledHi string) url.Values, peel func(items int, oldest, rangeHi string) (string, bool, bool),
+	admit func(created *time.Time, rangeHi string) bool,
 ) (items []json.RawMessage, pages int, over bool, err error) {
 	seen := map[string]struct{}{}
 	hi := ""
@@ -578,6 +580,9 @@ func collectGitHubTestsRunsPeeledBy(
 			}
 			count++
 			oldest = githubTestsOlderCreated(oldest, parseGitHubWorkflowTime(run.CreatedAt))
+			if admit != nil && !admit(parseGitHubWorkflowTime(run.CreatedAt), hi) {
+				continue
+			}
 			if _, duplicate := seen[run.ID.String()]; !duplicate {
 				seen[run.ID.String()] = struct{}{}
 				items = append(items, raw)

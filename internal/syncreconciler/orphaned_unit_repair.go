@@ -234,9 +234,9 @@ type OrphanedUnitRepairResult struct {
 	SkippedRaceLost         int
 
 	RemainingBudget int
-	// Left counts approved candidates whose re-arm this pass did not commit:
-	// the ones after a stop before the stage deadline, or all of them when
-	// the re-arm transaction failed. The next tick surveys them again.
+	// Left counts approved candidates this pass did not finish: the one a
+	// failure (or the stage deadline) ended and every one after it. Each
+	// re-arm before it is already committed; the next tick surveys the rest.
 	Left int
 }
 
@@ -365,29 +365,19 @@ func (repair *OrphanedUnitRepair) Step(
 		return result, nil
 	}
 
-	// The whole mutating half is ONE transaction, so its counters are merged
-	// only after the commit succeeds. This is the OPPOSITE of what
-	// joboutbox.StrandRepair does, and deliberately so: that repair commits per
-	// shape, so a later failure must never erase an earlier shape's already
-	// durable work. Here a failure means nothing was written at all, and
-	// reporting re_armed > 0 for a rolled-back transaction would put a number
-	// an operator alerts on behind work that did not happen.
+	// Each re-arm commits on its own (rearm), so the counters cover exactly the
+	// committed re-arms, also when the pass then fails: a failure costs only
+	// the candidate it ended, and re_armed never counts a rolled-back insert.
 	committed, err := repair.rearm(ctx, now, approved)
-	if err != nil {
-		result.Left = len(approved)
-		repair.logOutcome(ctx, now, result, err)
-		return result, err
-	}
 	result.merge(committed)
 	result.RemainingBudget = limit - result.ReArmed
-	repair.logOutcome(ctx, now, result, nil)
+	repair.logOutcome(ctx, now, result, err)
 	for _, record := range committed.rearms {
-		// Emitted AFTER the commit, for the same reason the counters are merged
-		// after it: a line claiming a re-arm that rolled back is worse than no
-		// line, because it is the line an operator would trust.
+		// Only committed re-arms are here: a line claiming a re-arm that rolled
+		// back is worse than no line, because it is the line an operator trusts.
 		slog.InfoContext(ctx, "syncreconciler.orphaned_unit_rearmed", rearmLogAttributes(record)...)
 	}
-	return result, nil
+	return result, err
 }
 
 // rearmLogAttributes lists the fields of one re-arm log line. The two dedupe
@@ -488,28 +478,33 @@ func (repair *OrphanedUnitRepair) survey(
 	return candidates, nil
 }
 
-// rearm opens ONE domain transaction for the pass. Every per-candidate refusal
-// is decided before any statement runs for that candidate, so a refusal never
-// aborts the transaction and never costs an already-committed sibling its
-// insert; only a genuine database failure ends the pass.
+// rearm commits each re-arm in its own domain transaction (CHAOS-14238): a
+// failure, or the stage deadline, ends the pass inside one candidate and costs
+// only that candidate; every re-arm before it stays committed and the next
+// tick continues with the rest. Refusals write nothing, so they share the open
+// transaction with the next candidate rather than paying for one of their own.
+// Each candidate re-proves itself in its own statements (the unit lock and the
+// (id, dedupe_key, river_job_id) compare-and-set), so no candidate depends on
+// another committing with it. The returned outcome is the committed work, also
+// when err is not nil.
 func (repair *OrphanedUnitRepair) rearm(
 	ctx context.Context,
 	now time.Time,
 	approved []orphanedCandidate,
 ) (committedOutcome, error) {
 	outcome := committedOutcome{}
-	tx, err := repair.beginDomain(ctx)
-	if err != nil || tx == nil {
-		return committedOutcome{}, repair.failed(ctx, "domain_begin", err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-
-	pass := newPassDeadline(ctx)
-	for index, candidate := range approved {
-		if !pass.next() {
-			outcome.left = len(approved) - index
-			break
+	var tx pgx.Tx
+	defer func() {
+		if tx != nil {
+			_ = tx.Rollback(ctx)
 		}
+	}()
+	stop := func(index int, err error) (committedOutcome, error) {
+		outcome.left = len(approved) - index
+		return outcome, err
+	}
+
+	for index, candidate := range approved {
 		newKey, err := nextProviderUnitReclaimKey(candidate.dedupeKey, candidate.unitID)
 		if errors.Is(err, ErrReclaimBudgetSpent) {
 			outcome.skippedReclaimBudget++
@@ -520,6 +515,14 @@ func (repair *OrphanedUnitRepair) rearm(
 			// Counted with the envelope refusals rather than acted on.
 			outcome.skippedEnvelope++
 			continue
+		}
+
+		if tx == nil {
+			opened, err := repair.beginDomain(ctx)
+			if err != nil || opened == nil {
+				return stop(index, repair.failed(ctx, "domain_begin", err))
+			}
+			tx = opened
 		}
 
 		// Lock the unit and re-prove every DOMAIN fact the survey asserted.
@@ -533,7 +536,7 @@ func (repair *OrphanedUnitRepair) rearm(
 			continue
 		}
 		if lockErr != nil {
-			return committedOutcome{}, repair.failed(ctx, "unit_lock", lockErr)
+			return stop(index, repair.failed(ctx, "unit_lock", lockErr))
 		}
 
 		var args string
@@ -550,7 +553,7 @@ func (repair *OrphanedUnitRepair) rearm(
 			continue
 		}
 		if sourceErr != nil {
-			return committedOutcome{}, repair.failed(ctx, "source_read", sourceErr)
+			return stop(index, repair.failed(ctx, "source_read", sourceErr))
 		}
 		if prerequisite != "" {
 			// PublishAfter's durable fence. No provider-unit publisher sets one
@@ -572,13 +575,18 @@ func (repair *OrphanedUnitRepair) rearm(
 			candidate.outboxID, candidate.dedupeKey, candidate.riverJobID,
 		)
 		if err != nil {
-			return committedOutcome{}, repair.failed(ctx, "insert_reclaim", err)
+			return stop(index, repair.failed(ctx, "insert_reclaim", err))
 		}
 		if tag.RowsAffected() != 1 {
 			// ON CONFLICT DO NOTHING, or the SELECT-side CAS stopped matching
 			// between the read above and this statement.
 			outcome.skippedRaceLost++
 			continue
+		}
+		err = tx.Commit(ctx)
+		tx = nil
+		if err != nil {
+			return stop(index, repair.failed(ctx, "domain_commit", err))
 		}
 		outcome.reArmed++
 		if candidate.disposition == dispositionOrphanMissing {
@@ -589,7 +597,7 @@ func (repair *OrphanedUnitRepair) rearm(
 		// The unit id and the key it was re-armed under are the only handles an
 		// operator gets: River's own record of why the delivery died is either
 		// gone or a completion, so there is nothing to correlate against unless
-		// this says so. HELD until the commit -- see Step.
+		// this says so. Recorded only after its commit -- see Step.
 		outcome.rearms = append(outcome.rearms, rearmRecord{
 			unitID:           candidate.unitID,
 			runID:            candidate.runID,
@@ -599,10 +607,6 @@ func (repair *OrphanedUnitRepair) rearm(
 			dedupeKey:        newKey,
 			evidence:         candidate.disposition,
 		})
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return committedOutcome{}, repair.failed(ctx, "domain_commit", err)
 	}
 	return outcome, nil
 }

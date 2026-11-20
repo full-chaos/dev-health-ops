@@ -869,7 +869,7 @@ func (pipeline *MutationPipeline) Step(
 		if orphanedErr != nil && ctx.Err() != nil {
 			return recovered, orphanedErr
 		}
-		if orphanedErr == nil && orphaned.ReArmed > 0 {
+		if orphaned.ReArmed > 0 {
 			// WARN, not INFO: a replacement delivery means a unit was stranded
 			// behind a settled one, which is a defect somewhere upstream even
 			// though this pass just recovered from it. The repair's own

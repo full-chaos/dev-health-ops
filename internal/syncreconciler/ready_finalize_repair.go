@@ -64,7 +64,6 @@ type readyFinalizeOutcome struct {
 	SkippedLiveJob     int
 	SkippedLockedJob   int
 	RemainingBudget    int
-	Left               int
 	CoordinatorReadSec float64
 	// LastDispatchedAt and LastID are the position of the last candidate of the page (route-command reconcile only).
 	LastDispatchedAt time.Time
@@ -182,14 +181,7 @@ func (repair *TerminalDeliveryRepair) repairReadyFinalizersWith(
 	if readErr != nil {
 		return outcome, repair.readyFinalizeError(ctx, "coordinator_readiness", readErr)
 	}
-	// Only the scheduled pass (cursor nil) stops early: the route-command walk
-	// pages from the last SELECTED candidate, so a stop there would skip rows.
-	pass := newPassDeadline(ctx)
-	for index, c := range candidates {
-		if cursor == nil && !pass.next() {
-			outcome.Left = len(candidates) - index
-			break
-		}
+	for _, c := range candidates {
 		// A run absent from the answer is not ready: the batched query's WHERE clause is the same
 		// finalizeReadyRunPredicate the per-run query used, so a run it does not return failed one of
 		// those conditions, exactly as a per-run false answer would have. Missing is never read as
@@ -294,7 +286,6 @@ func (repair *TerminalDeliveryRepair) logReadyFinalizeOutcome(
 		"skipped_live_job", outcome.SkippedLiveJob,
 		"skipped_locked_job", outcome.SkippedLockedJob,
 		"remaining_budget", outcome.RemainingBudget,
-		"left", outcome.Left,
 		"stale_age_seconds", int64(repair.finalizeStaleAge.Seconds()),
 		"coordinator_read_seconds", outcome.CoordinatorReadSec,
 		"now", now.UTC().Format(time.RFC3339Nano),

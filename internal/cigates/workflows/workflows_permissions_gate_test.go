@@ -42,6 +42,7 @@ type jobPermRow struct {
 var jobPermAllowlist = map[jobKey]jobPermRow{
 	{"arc-runner-image.yml", "build"}:                             {map[string]string{"contents": "read", "packages": "write"}, "pushes the runner image to ghcr"},
 	{"auto-release.yml", "tag-and-release"}:                       {map[string]string{"contents": "write"}, "creates the release tag and the release"},
+	{"auto-release.yml", "dho-publish"}:                           {map[string]string{"contents": "write", "id-token": "write", "attestations": "write"}, "uploads the dho release asset and attests its build provenance"},
 	{"codeql-analysis.yml", "analyze-docs-only"}:                  {map[string]string{"actions": "read", "contents": "read", "security-events": "write"}, "uploads the code scanning result of the docs-only twin"},
 	{"codeql-analysis.yml", "analyze"}:                            {map[string]string{"actions": "read", "contents": "read", "security-events": "write"}, "uploads the code scanning result"},
 	{"codeql-analysis.yml", "refresh-target"}:                     {map[string]string{"contents": "read", "pull-requests": "read"}, "reads the pull request a refresh dispatch names"},

@@ -2,7 +2,10 @@ package syncreconciler
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -276,6 +279,65 @@ func TestMutationPipelineChunkSidecarReclaimPressureCountsBudgetSpentBeforeTheCa
 			}
 			if reclaimCalls != 0 {
 				t.Errorf("reclaim ran %d times in a tick whose lease repair spent its budget; want a yield", reclaimCalls)
+			}
+		})
+	}
+}
+
+// CHAOS-14380 cell: remaining_units=-1 means "not measured" (a tick the cap did
+// not admit, or a tick cut before or at the backlog count), never "no backlog":
+// every such tick returns and logs done=false, so a reader of the
+// syncreconciler.chunk_sidecar_reclaim line cannot take it as done.
+func TestChunkSidecarReclaimUnmeasuredBacklogIsNeverDone(t *testing.T) {
+	now := time.Date(2026, 11, 20, 16, 0, 0, 0, time.UTC)
+	capSpent := func(reclaim *ChunkSidecarReclaim) {
+		limit := DefaultChunkSidecarReclaimConfig().BytesPerMinute
+		spent := reclaim.limiter.reserve(reclaim.clock(), limit)
+		reclaim.limiter.settle(spent, limit, reclaim.clock())
+	}
+	for name, testCase := range map[string]struct {
+		slow    slowSite
+		prepare func(*ChunkSidecarReclaim)
+	}{
+		"not admitted by the cap": {slowSiteNone, capSpent},
+		"tick lock cut":           {slowSiteTickLock, func(*ChunkSidecarReclaim) {}},
+		"begin cut":               {slowSiteBegin, func(*ChunkSidecarReclaim) {}},
+		"backlog count cut":       {slowSiteBacklog, func(*ChunkSidecarReclaim) {}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			reclaim, _ := newSlowSiteReclaim(t, testCase.slow)
+			reclaim.setActive(true)
+			testCase.prepare(reclaim)
+			var logs strings.Builder
+			original := slog.Default()
+			slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
+			stageCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+			result, _ := reclaim.Step(stageCtx, now, 100)
+			cancel()
+			slog.SetDefault(original)
+			if result.RemainingUnits != -1 || result.Done {
+				t.Fatalf("result = %+v, want remaining_units -1 and done false", result)
+			}
+			lines := 0
+			for _, raw := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
+				var line struct {
+					Msg            string `json:"msg"`
+					RemainingUnits *int64 `json:"remaining_units"`
+					Done           *bool  `json:"done"`
+				}
+				if err := json.Unmarshal([]byte(raw), &line); err != nil {
+					t.Fatalf("log line %q: %v", raw, err)
+				}
+				if line.Msg != "syncreconciler.chunk_sidecar_reclaim" || line.RemainingUnits == nil || *line.RemainingUnits != -1 {
+					continue
+				}
+				lines++
+				if line.Done == nil || *line.Done {
+					t.Errorf("logged %s, want done=false beside remaining_units=-1", raw)
+				}
+			}
+			if lines != 1 {
+				t.Fatalf("logged %d tick lines with remaining_units=-1, want 1: %s", lines, logs.String())
 			}
 		})
 	}

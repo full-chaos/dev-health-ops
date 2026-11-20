@@ -488,9 +488,15 @@ func (adapter *ClickHouseQueryAdapter) executeChart(ctx context.Context, spec Ch
 				return ChartResult{}, fmt.Errorf("scan report chart: %w", ErrDependencyUnavailable)
 			}
 			x = instant.Format(time.DateOnly)
-		} else if err := rows.Scan(&x, &group, &y); err != nil {
-			logChartFailure(ctx, spec, definition, "scan", err)
-			return ChartResult{}, fmt.Errorf("scan report chart: %w", ErrDependencyUnavailable)
+		} else {
+			var xValue *string
+			if err := rows.Scan(&xValue, &group, &y); err != nil {
+				logChartFailure(ctx, spec, definition, "scan", err)
+				return ChartResult{}, fmt.Errorf("scan report chart: %w", ErrDependencyUnavailable)
+			}
+			if xValue != nil {
+				x = *xValue
+			}
 		}
 		if y == nil {
 			continue

@@ -150,7 +150,7 @@ func TestTimeseriesRepoDimensionReadsANullRepoAsEmpty(t *testing.T) {
 	}
 }
 
-// The sankey node/edge reads and the two timeseries reads scan a value that can
+// The breakdown read, the sankey node/edge reads and the two timeseries reads scan a value that can
 // be NULL (toString of a Nullable dimension, date_trunc of a Nullable day) into
 // a nillable local and read NULL as the v2.49 zero value: "" or the zero date.
 func TestSankeyAndTimeseriesReadsKeepTheZeroValueOfANull(t *testing.T) {
@@ -167,6 +167,15 @@ func TestSankeyAndTimeseriesReadsKeepTheZeroValueOfANull(t *testing.T) {
 	}
 	defer func() { _ = client.Close() }()
 
+	t.Run("executeBreakdownRaw", func(t *testing.T) {
+		rows, err := executeBreakdownRaw(ctx, client, compiledQuery{sql: "SELECT CAST(NULL AS Nullable(UUID)) AS dimension_value, toFloat64(3) AS value"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(rows) != 1 || rows[0].DimensionValue != "" || rows[0].Value == nil || *rows[0].Value != 3 {
+			t.Fatalf("rows = %+v, want one row keyed by the empty value with value 3", rows)
+		}
+	})
 	t.Run("queryNodes", func(t *testing.T) {
 		nodes, err := queryNodes(ctx, client, compiledQuery{sql: "SELECT 'repo' AS dimension, toString(CAST(NULL AS Nullable(UUID))) AS node_id, toFloat64(1) AS value"})
 		if err != nil {

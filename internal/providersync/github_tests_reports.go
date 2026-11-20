@@ -1482,11 +1482,40 @@ type coberturaDocument struct {
 type coberturaClass struct {
 	Filename string          `xml:"filename,attr"`
 	Lines    []coberturaLine `xml:"lines>line"`
+	Methods  []coberturaLine `xml:"methods>method>lines>line"`
 }
 type coberturaLine struct {
+	Number            string `xml:"number,attr"`
 	Hits              string `xml:"hits,attr"`
 	ConditionCoverage string `xml:"condition-coverage,attr"`
 	Branch            string `xml:"branch,attr"`
+}
+
+// coberturaLineEntry is one <line> element read once; merge combines two entries of the same line number order-free.
+type coberturaLineEntry struct {
+	hasHits, hasPair, branch     bool
+	hits, pairTotal, pairCovered int64
+}
+
+func coberturaEntryOf(line coberturaLine) coberturaLineEntry {
+	entry := coberturaLineEntry{branch: line.Branch == "true"}
+	if hits := parseOptionalInt64(line.Hits); hits != nil {
+		entry.hasHits, entry.hits = true, *hits
+	}
+	if total, covered, ok := coberturaConditionPair(line.ConditionCoverage); ok {
+		entry.hasPair, entry.pairTotal, entry.pairCovered = true, total, covered
+	}
+	return entry
+}
+
+func (entry *coberturaLineEntry) merge(other coberturaLineEntry) {
+	if other.hasHits && (!entry.hasHits || other.hits > entry.hits) {
+		entry.hasHits, entry.hits = true, other.hits
+	}
+	if other.hasPair && (!entry.hasPair || other.pairTotal > entry.pairTotal || (other.pairTotal == entry.pairTotal && other.pairCovered > entry.pairCovered)) {
+		entry.hasPair, entry.pairTotal, entry.pairCovered = true, other.pairTotal, other.pairCovered
+	}
+	entry.branch = entry.branch || other.branch
 }
 
 func parseGitHubCoverageRow(body []byte, reportPath, artifactID, repoID, runID, orgID string, normalizedAt time.Time) (coverageSnapshotRow, error) {
@@ -1518,41 +1547,83 @@ func parseCoberturaRow(body []byte, reportPath, artifactID, repoID, runID, orgID
 		linesWithHits                                            int64
 		branchPairs, branchMissing, branchOver                   int64
 	}
-	files := make([]metrics, 0, len(document.Classes))
-	positions := map[string]int{}
-	for _, class := range document.Classes {
-		if class.Filename == "" {
-			continue
+	// One file holds each line number once, whatever its source (class lines, method lines, a repeated filename): hits are the
+	// maximum over its entries, so the element order never decides. A class with an empty filename is a file of its own.
+	type fileLines struct {
+		numbered map[int64]*coberturaLineEntry
+		plain    []coberturaLineEntry
+	}
+	var fileOrder []string
+	byName := map[string]*fileLines{}
+	var emptyNames []*fileLines
+	addEntry := func(file *fileLines, line coberturaLine, fromMethod bool) {
+		entry := coberturaEntryOf(line)
+		number, err := strconv.ParseInt(strings.TrimSpace(line.Number), 10, 64)
+		if err != nil {
+			if !fromMethod {
+				file.plain = append(file.plain, entry)
+			}
+			return
 		}
-		current := metrics{path: class.Filename}
-		current.linesTotal = int64(len(class.Lines))
+		if held, ok := file.numbered[number]; ok {
+			held.merge(entry)
+			return
+		}
+		file.numbered[number] = &entry
+	}
+	for _, class := range document.Classes {
+		var file *fileLines
+		if class.Filename == "" {
+			file = &fileLines{numbered: map[int64]*coberturaLineEntry{}}
+			emptyNames = append(emptyNames, file)
+		} else if held, ok := byName[class.Filename]; ok {
+			file = held
+		} else {
+			file = &fileLines{numbered: map[int64]*coberturaLineEntry{}}
+			byName[class.Filename] = file
+			fileOrder = append(fileOrder, class.Filename)
+		}
 		for _, line := range class.Lines {
-			hits := parseOptionalInt64(line.Hits)
-			if hits != nil {
+			addEntry(file, line, false)
+		}
+		for _, line := range class.Methods {
+			addEntry(file, line, true)
+		}
+	}
+	files := make([]metrics, 0, len(fileOrder)+len(emptyNames))
+	build := func(path string, file *fileLines) {
+		current := metrics{path: path}
+		entries := append([]coberturaLineEntry{}, file.plain...)
+		for _, entry := range file.numbered {
+			entries = append(entries, *entry)
+		}
+		current.linesTotal = int64(len(entries))
+		for _, entry := range entries {
+			if entry.hasHits {
 				current.linesWithHits++
 			}
-			if hits != nil && *hits > 0 {
+			if entry.hasHits && entry.hits > 0 {
 				current.linesCovered++
 			}
-			total, covered, ok := coberturaConditionPair(line.ConditionCoverage)
 			switch {
-			case ok:
+			case entry.hasPair:
 				current.branchPairs++
-				current.branchesTotal += total
-				current.branchesCovered += covered
-				if covered > total {
+				current.branchesTotal += entry.pairTotal
+				current.branchesCovered += entry.pairCovered
+				if entry.pairCovered > entry.pairTotal {
 					current.branchOver++
 				}
-			case line.Branch == "true":
+			case entry.branch:
 				current.branchMissing++
 			}
 		}
-		if index, ok := positions[current.path]; ok {
-			files[index] = current
-		} else {
-			positions[current.path] = len(files)
-			files = append(files, current)
-		}
+		files = append(files, current)
+	}
+	for _, name := range fileOrder {
+		build(name, byName[name])
+	}
+	for _, file := range emptyNames {
+		build("", file)
 	}
 	linesTotal := parseOptionalInt64(document.LinesValid)
 	linesCovered := parseOptionalInt64(document.LinesCovered)

@@ -14,7 +14,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode"
 
 	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/full-chaos/dev-health-ops/internal/platform/dsnclass"
@@ -236,6 +235,9 @@ type Config struct {
 	// NonNativeClickHouseKeys names each ClickHouse service DSN key that holds an http or https DSN. Load accepts
 	// it; ObserveNonNativeClickHouse reports it.
 	NonNativeClickHouseKeys []string
+	// ClickHouseHostProblems names each native ClickHouse service DSN key whose address list loads but holds an address
+	// with no usable host (CHAOS-14275, D6465: a form that loaded before keeps loading). ObserveNonNativeClickHouse reports it.
+	ClickHouseHostProblems []ClickHouseHostProblem
 
 	DomainDatabaseURI      secrets.Value
 	QueueDatabaseURI       secrets.Value
@@ -744,8 +746,16 @@ func Load(spec Spec) (Config, error) {
 		return Config{}, err
 	}
 	for _, key := range clickHouseServiceKeys {
-		if clickHouseHTTPScheme(cfg.clickHouseDSN(key)) != "" {
+		dsn := cfg.clickHouseDSN(key)
+		if clickHouseHTTPScheme(dsn) != "" {
 			cfg.NonNativeClickHouseKeys = append(cfg.NonNativeClickHouseKeys, key)
+		}
+		if dsn.Configured() {
+			if parsed, ok := parseClickHouseDSN(dsn.Reveal()); ok {
+				if cause := clickHouseHostProblem(parsed); cause != "" {
+					cfg.ClickHouseHostProblems = append(cfg.ClickHouseHostProblems, ClickHouseHostProblem{Key: key, Cause: cause})
+				}
+			}
 		}
 	}
 	if err := validateURI("VALKEY_URI", cfg.ValkeyURI, "redis", "rediss", "unix"); err != nil {
@@ -1567,7 +1577,7 @@ func clickHouseHTTPScheme(value secrets.Value) string {
 	if !value.Configured() {
 		return ""
 	}
-	if parsed, err := url.Parse(value.Reveal()); err == nil && parsed != nil {
+	if parsed, ok := parseClickHouseDSN(value.Reveal()); ok {
 		if scheme := strings.ToLower(parsed.Scheme); scheme == "http" || scheme == "https" {
 			return scheme
 		}
@@ -1575,25 +1585,23 @@ func clickHouseHTTPScheme(value secrets.Value) string {
 	return ""
 }
 
-// hasHostName reports whether the URL names a host: a bracketed IPv6 literal, or a hostname with a letter or digit.
-func hasHostName(parsed *url.URL) bool {
-	host := parsed.Hostname()
-	if strings.HasPrefix(parsed.Host, "[") {
-		return net.ParseIP(host) != nil
-	}
-	return strings.ContainsFunc(host, func(r rune) bool {
-		return unicode.IsLetter(r) || unicode.IsDigit(r)
-	})
-}
-
+// validateClickHouseServiceURI accepts what clickhouse-go ParseDSN accepts, address lists included, and every form
+// that url.Parse accepted before. An http or https DSN needs a usable host in every address; a native DSN with an
+// unusable address still loads and is reported by ObserveNonNativeClickHouse (D6465).
 func validateClickHouseServiceURI(key string, value secrets.Value) error {
-	if err := validateURI(key, value, "clickhouse", "http", "https"); err != nil {
-		return err
+	if !value.Configured() {
+		return nil
 	}
-	if clickHouseHTTPScheme(value) != "" {
-		if parsed, err := url.Parse(value.Reveal()); err != nil || !hasHostName(parsed) {
-			return fmt.Errorf("%s must be a valid supported URI", key)
-		}
+	parsed, ok := parseClickHouseDSN(value.Reveal())
+	if !ok {
+		return fmt.Errorf("%s must be a valid supported URI", key)
+	}
+	scheme := strings.ToLower(parsed.Scheme)
+	if parsed.Host == "" || !slices.Contains([]string{"clickhouse", "http", "https"}, scheme) {
+		return fmt.Errorf("%s must be a valid supported URI", key)
+	}
+	if (scheme == "http" || scheme == "https") && clickHouseHostProblem(parsed) != "" {
+		return fmt.Errorf("%s must be a valid supported URI", key)
 	}
 	return nil
 }

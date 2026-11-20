@@ -528,3 +528,4 @@ worker_work_item_attribution_native_runs_total		code: internal/jobruntime/teleme
 worker_work_item_attribution_native_scoped_runs_total		code: internal/jobruntime/telemetry.go
 worker_workgraph_lease_release_lost_total		code: internal/jobruntime/telemetry.go
 dev_health_config_clickhouse_non_native_dsn	key	code: internal/platform/config/clickhouse_non_native.go
+dev_health_config_clickhouse_dsn_host_problem	cause,key	code: internal/platform/config/clickhouse_non_native.go

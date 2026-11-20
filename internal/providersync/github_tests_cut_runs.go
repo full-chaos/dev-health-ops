@@ -2,7 +2,7 @@ package providersync
 
 import "strings"
 
-// A peeled artifacts listing ends the next range at the oldest created second it saw, inclusive, so the runs of that
+// A peeled runs or artifacts listing ends the next range at the oldest created second it saw, inclusive, so the runs of that
 // second are listed again (githubTestsPeel). The cursor keeps the runs of that second already read whole: CutSecond is
 // the second (unix seconds, 0 = none) and CutRuns its comma list of run keys, or githubTestsCutRunsOverflow when the
 // list did not fit (then no run of that second is skipped). The list costs at most 25 + 96 + 1 bytes of the cursor.

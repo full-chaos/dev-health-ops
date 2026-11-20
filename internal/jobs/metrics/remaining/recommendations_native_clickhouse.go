@@ -46,10 +46,12 @@ var discoverTeamIDsSQL = `
       AND ` + liverow.Predicate("work_item_metrics_daily", "")
 
 // DiscoverTeamIDs returns the teams to evaluate for an org: the teams with
-// recent work item rows, plus the active teams that own a repository at asOf
-// (the window end; teamownership.OwnersByRepo), plus the active teams that own
-// a project at asOf (teamattribution LoadProjects, co-owners included, the same
-// as the repository owners). A team in several sets is listed once. Without the
+// recent work item rows, plus the teams that own a repository at asOf (the
+// window end; teamownership.OwnersByRepo), plus the teams that own a project at
+// asOf (teamattribution LoadProjects, co-owners included, the same as the
+// repository owners). A team in several sets is listed once. A team whose
+// newest teams row is inactive (teamactive.LoadInactive, read once, after the
+// sets) is dropped from the whole union. Without the
 // owner teams, a quiet owner team is never evaluated, so its old fired rules
 // never get the fired=false rows that clear them.
 //
@@ -124,17 +126,23 @@ func (executor *RecommendationsExecutor) DiscoverTeamIDs(
 		case err != nil:
 			return nil, fmt.Errorf("discover recommendation project owner teams: %w", err)
 		}
-		if len(projects) > 0 {
-			inactive, err := teamactive.LoadInactive(ctx, executor.conn, orgID)
-			if err != nil {
-				return nil, fmt.Errorf("discover recommendation project owner teams: %w", err)
-			}
-			for _, project := range projects {
-				if !inactive.Has(project.TeamID) {
-					add(project.TeamID)
-				}
+		for _, project := range projects {
+			add(project.TeamID)
+		}
+		// ONE activity decision for the whole union, read after every set so the
+		// latest instant wins. A failed read fails discovery: an empty set read
+		// from an error would evaluate a retired team.
+		inactive, err := teamactive.LoadInactive(ctx, executor.conn, orgID)
+		if err != nil {
+			return nil, fmt.Errorf("discover recommendation teams: %w", err)
+		}
+		kept := teamIDs[:0]
+		for _, teamID := range teamIDs {
+			if !inactive.Has(teamID) {
+				kept = append(kept, teamID)
 			}
 		}
+		teamIDs = kept
 	}
 
 	// A DELIBERATE, OBSERVABLE DIVERGENCE FROM THE ORACLE. Ruled, and listed as

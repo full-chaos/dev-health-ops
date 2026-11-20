@@ -25,8 +25,8 @@ func dispatchSyncRuns(ctx context.Context, runtime *operatorRuntime, args []stri
 // dispatchSyncRunsCancel handles `sync-runs cancel`: it closes one unfinished sync run of one
 // organization through syncdispatchruntime.CancelSyncRun on the domain pool, audited as jobs.cancel
 // on resource_type sync_run (a repeat call on a closed run writes its own audit pair and no domain
-// row). It cancels no River job: a queued provider-unit job of a cancelled unit retries
-// (attempts 1-4) and River discards it on attempt 5; it writes no domain row.
+// row). It cancels no River job: a queued provider-unit job of a cancelled unit completes on its
+// next attempt without work; it writes no domain row.
 func dispatchSyncRunsCancel(ctx context.Context, runtime *operatorRuntime, args []string, stdout, stderr io.Writer) int {
 	flags := quietFlags("sync-runs cancel")
 	org := flags.String("org", "", "organization id")

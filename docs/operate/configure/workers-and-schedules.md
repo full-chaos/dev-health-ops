@@ -398,13 +398,13 @@ continue:
 - The run's reference discovery, dispatch outbox, backfill job and job run are
   closed in the same transaction.
 - The verb cancels no River job: a queued provider-unit job of a cancelled unit
-  retries (attempts 1-4) and River discards it on attempt 5; it writes no domain
-  row. The output counts these jobs under `provider_unit_deliveries`.
-- Each cancelled unit with a queued job adds 1 discarded River job. Those
-  attempts count as `retry` and `discard` in `worker_job_attempts_total` for
-  kind `sync.provider_unit`, and a large cancel can fire the
-  `GoWorkerAttemptFailureRateHigh` alert (more than 10% of a kind's attempts
-  retry, discard or cancel for 10 minutes).
+  completes on its next attempt without work and writes no domain row. The
+  output counts these jobs under `provider_unit_deliveries`.
+- Each such job logs one Info line `sync_provider_unit_finished` with `result`
+  `unit_closed` and `closed_by` `cancelled`, and counts as `success` in
+  `worker_job_attempts_total` for kind `sync.provider_unit`. A worker image
+  older than this behavior still retries the job (attempts 1-4) and River
+  discards it on attempt 5.
 
 The verb refuses a run in which a worker holds a live lease on a unit
 (`sync_run_running_unit`). Add `--allow-running` to cancel the run anyway; that

@@ -58,8 +58,8 @@ type CancelSyncRunUnits struct {
 }
 
 // CancelSyncRunDeliveries counts the provider-unit deliveries (worker_job_outbox rows) of the units
-// the cancel failed. The cancel leaves them: a queued job of a cancelled unit retries (attempts 1-4)
-// and River discards it on attempt 5; it writes no domain row.
+// the cancel failed. The cancel leaves them: a queued job of a cancelled unit completes on its next
+// attempt without work (providersync.UnitClosedError); it writes no domain row.
 type CancelSyncRunDeliveries struct {
 	Delivered int `json:"delivered"`
 	Pending   int `json:"pending"`

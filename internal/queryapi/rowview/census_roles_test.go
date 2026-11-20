@@ -27,7 +27,7 @@ var readerRoles = map[string]struct{ role, why string }{
 	"internal/jobs/metrics/daily/work_item_state_native_executor.go":       {"writer", "writes the table or builds its rows"},
 	"internal/jobs/metrics/daily/work_item_user_rows_metrics.go":           {"writer", "writes the table or builds its rows"},
 	"internal/jobs/metrics/remaining/capacity_native_clickhouse.go":        {"reader-sum", "sums rows of several work scopes: takes the org predicate (CHAOS-8863 PR2)"},
-	"internal/jobs/metrics/remaining/recommendations_loader.go":            {"reader-sum", "sums rows of several work scopes: takes the org predicate (CHAOS-8863 PR2)"},
+	"internal/jobs/metrics/remaining/recommendations_loader.go":            {"reader-sum", "sums the rows of the work scopes of one team: takes the team view (CHAOS-14353)"},
 	"internal/jobs/metrics/remaining/recommendations_native_clickhouse.go": {"reader-sum", "takes the org view (PR2a): lists the teams of the org view, the same teams the loader reads"},
 	"internal/jobs/metrics/remaining/recommendations_native.go":            {"writer", "writes the table or builds its rows"},
 	"internal/jobs/metrics/remaining/recommendations_rules.go":             {"writer", "writes the table or builds its rows"},

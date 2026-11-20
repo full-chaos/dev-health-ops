@@ -89,6 +89,12 @@ var teamTables = map[string]struct{}{
 	"work_item_state_durations_daily": {},
 }
 
+// HasTeamRows reports whether table holds team rows.
+func HasTeamRows(table string) bool {
+	_, ok := teamTables[table]
+	return ok
+}
+
 // teamSourceAlias is the alias of the picked rows inside TeamSource.
 const teamSourceAlias = "team_view"
 
@@ -96,11 +102,11 @@ const teamSourceAlias = "team_view"
 // per key without row_view, (org_id, day, provider, work_scope_id, team_id[,
 // status]), and only live rows. Of the newest row of each view of a key (the
 // table read with FINAL) it picks, in one LIMIT 1 BY, a live row first, then the
-// team row, then the org row, then the legacy row. A day that no writer of team
-// rows computed reads its org rows (or its legacy rows), as the org form does;
-// a retracted team row (a row of zeros) never hides a live org row. The live-row
-// rule runs again after the pick, so a key whose views are all rows of zeros
-// leaves the result.
+// team row, then the org row, then the legacy row (TeamPick). A day that no
+// writer of team rows computed reads its org rows (or its legacy rows), as the
+// org form does; a retracted team row (a row of zeros) never hides a live org
+// row. The live-row rule runs again after the pick, so a key whose views are all
+// rows of zeros leaves the result.
 //
 // where is the reader's filter of the table. It runs before the pick, so it
 // must name key columns only (org_id, day, provider, work_scope_id, team_id,
@@ -111,16 +117,25 @@ const teamSourceAlias = "team_view"
 // It panics for a table that holds no team rows and for an empty filter: a
 // reader of one team must not read every organization.
 func TeamSource(table, where string) string {
-	if _, ok := teamTables[table]; !ok {
-		panic("rowview: table " + table + " holds no team rows")
-	}
+	declared := mustTeamTable(table)
 	if strings.TrimSpace(where) == "" {
 		panic("rowview: TeamSource of " + table + " needs a filter")
 	}
-	declared, ok := teamkeytables.ByTable(table)
-	if !ok {
-		panic("rowview: table " + table + " is not declared in teamkeytables")
-	}
+	newest := fmt.Sprintf("(SELECT * FROM %[1]s FINAL WHERE (%[2]s)) AS %[1]s", table, where)
+	return fmt.Sprintf("(\n    SELECT * FROM %s AS %s\n    WHERE %s\n)",
+		TeamPick(table, newest), teamSourceAlias, declared.LiveRow(teamSourceAlias+"."))
+}
+
+// TeamPick is the pick of TeamSource without its live-row rule after the pick,
+// for a reader that collapses the table itself: newest must be a FROM source
+// that holds the newest row of each full key of table, row_view included, and
+// that is aliased as the table. Of those rows it keeps one per key without
+// row_view, in one LIMIT 1 BY: a live row first, then team, org, legacy, then
+// the newest computed_at. A picked row can be a row of zeros (every view of the
+// key is retracted); the reader applies the live-row rule where it needs it. The
+// result is a parenthesized subquery with no alias.
+func TeamPick(table, newest string) string {
+	declared := mustTeamTable(table)
 	key := []string{table + ".org_id", table + "." + declared.DayColumn}
 	for _, column := range declared.Keys {
 		if column.Name != Column {
@@ -129,14 +144,22 @@ func TeamSource(table, where string) string {
 	}
 	view := table + "." + Column
 	return fmt.Sprintf(`(
-    SELECT * FROM (
-        SELECT * FROM %[1]s FINAL
-        WHERE (%[2]s)
-          AND %[3]s IN ('%[4]s', '%[5]s', '%[6]s')
-        ORDER BY %[7]s DESC, multiIf(%[3]s = '%[6]s', 2, %[3]s = '%[5]s', 1, 0) DESC, %[1]s.computed_at DESC
+        SELECT * FROM %[1]s
+        WHERE %[2]s IN ('%[3]s', '%[4]s', '%[5]s')
+        ORDER BY %[6]s DESC, multiIf(%[2]s = '%[5]s', 2, %[2]s = '%[4]s', 1, 0) DESC, %[7]s.computed_at DESC
         LIMIT 1 BY %[8]s
-    ) AS %[9]s
-    WHERE %[10]s
-)`, table, where, view, teamkeytables.LegacyRowView, teamkeytables.OrgRowView, teamkeytables.TeamRowView,
-		declared.LiveRow(table+"."), strings.Join(key, ", "), teamSourceAlias, declared.LiveRow(teamSourceAlias+"."))
+    )`, newest, view, teamkeytables.LegacyRowView, teamkeytables.OrgRowView, teamkeytables.TeamRowView,
+		declared.LiveRow(table+"."), table, strings.Join(key, ", "))
+}
+
+// mustTeamTable panics for a table that holds no team rows.
+func mustTeamTable(table string) teamkeytables.Table {
+	if _, ok := teamTables[table]; !ok {
+		panic("rowview: table " + table + " holds no team rows")
+	}
+	declared, ok := teamkeytables.ByTable(table)
+	if !ok {
+		panic("rowview: table " + table + " is not declared in teamkeytables")
+	}
+	return declared
 }

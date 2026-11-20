@@ -14,6 +14,7 @@ import (
 	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/rowview"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -797,6 +798,9 @@ func buildChartQuery(spec ChartSpec, definition metricDefinition) (string, []any
 	// alongside its earlier generation. A table with no known re-drive risk
 	// passes through unchanged.
 	source := sourceFrom(spec.Metric, definition)
+	if teamChart(spec, definition) {
+		source = teamDedupFromSource(definition.SourceTable)
+	}
 	if wholePersonLandscapeMetric(spec, definition) {
 		// A landscape point holds no repository (its repo_id is a constant
 		// placeholder), so a repository filter selects the person's user rows
@@ -978,6 +982,18 @@ func sourceFrom(metric string, definition metricDefinition) string {
     ) AS %s`,
 		definition.Denominator, definition.Numerator, definition.Denominator,
 		metric, dedupSource, definition.SourceTable)
+}
+
+// teamChart reports whether a chart reads the team view (CHAOS-14353): a chart
+// filtered to exactly ONE team, of a table that holds team rows, whose team filter
+// is the stored team_id (no owner join), for one organization, of a metric read
+// straight from the table. A chart of several teams sums a team set and a chart
+// grouped by team shows a row per team: both stay on the org view here.
+func teamChart(spec ChartSpec, definition metricDefinition) bool {
+	return len(spec.FilterTeams) == 1 && spec.GroupBy != "team" && spec.OrganizationID != "" &&
+		rowview.HasTeamRows(definition.SourceTable) && definition.hasDimension("team") &&
+		definition.ownersAsOf == nil && definition.pooled == nil &&
+		definition.Numerator == "" && definition.Denominator == ""
 }
 
 // dayColumn is the Date column of the metric's source table that time ranges

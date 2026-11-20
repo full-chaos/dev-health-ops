@@ -144,3 +144,18 @@ func dedupFromSource(table string) string {
 	}
 	return fmt.Sprintf("(SELECT * FROM %s WHERE %s) AS %s", newest, conditions, table)
 }
+
+// teamDedupFromSource is dedupFromSource for a chart of ONE team of a table that
+// holds team rows (CHAOS-14353): of the newest version of each declared key,
+// rowview.TeamPick keeps one row per key without row_view (a live row first,
+// then team, org, legacy), and the live-row rule then leaves out a key whose
+// views are all retracted. A co-owner team reads the items of its team rows.
+func teamDedupFromSource(table string) string {
+	read := tableReads[table]
+	newest := fmt.Sprintf(
+		"(SELECT * FROM %s ORDER BY %s DESC LIMIT 1 BY %s) AS %s",
+		table, read.Version, strings.Join(read.Key, ", "), table,
+	)
+	return fmt.Sprintf("(SELECT * FROM %s AS %s WHERE %s) AS %s",
+		rowview.TeamPick(table, newest), table, liverow.Predicate(table, ""), table)
+}

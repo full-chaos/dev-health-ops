@@ -458,8 +458,25 @@ func TestGitHubTestsChunkCursorLegacyTrimDoesNotExcuseAnUnrelatedUnmarkedCause(t
 func githubTestsWidestCutKeys(t *testing.T) string {
 	t.Helper()
 	keys := "99999999999999999999.999999,99999999999999999998.999"
-	if len(keys) != githubTestsMaxCutKeysBytes || !githubTestsCutKeyListValid(keys) {
+	if len(keys) != githubTestsMaxCutKeysBytes || !githubTestsCutKeyListValid(keys, githubTestsMaxCutKeysBytes) {
 		t.Fatalf("widest cut key list %q is %d bytes or invalid, want a valid list of %d bytes", keys, len(keys), githubTestsMaxCutKeysBytes)
 	}
 	return keys
+}
+
+// githubTestsWidestRunsCutKeys is a valid runs-phase cut key list of exactly githubTestsMaxRunsCutKeysBytes bytes: 31 of
+// the widest keys (27 bytes) and two short ones.
+func githubTestsWidestRunsCutKeys(t *testing.T) string {
+	t.Helper()
+	keys := make([]string, 0, 33)
+	for index := range 31 {
+		keys = append(keys, "9999999999999999"+strconv.Itoa(9999-index)+".999999")
+	}
+	keys = append(keys, strings.Repeat("8", 13), strings.Repeat("7", 14))
+	list := strings.Join(keys, ",")
+	if len(list) != githubTestsMaxRunsCutKeysBytes || !githubTestsCutKeyListValid(list, githubTestsMaxRunsCutKeysBytes) ||
+		githubTestsCutKeyListValid(list, githubTestsMaxCutKeysBytes) {
+		t.Fatalf("widest runs cut key list is %d bytes or invalid, want a valid list of %d bytes", len(list), githubTestsMaxRunsCutKeysBytes)
+	}
+	return list
 }

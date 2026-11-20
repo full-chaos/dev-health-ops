@@ -3,12 +3,14 @@ package report
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
 	"testing"
 	"time"
+	"unicode"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
@@ -41,8 +43,9 @@ func storedSpecPlan(requested string, specs ...[2]string) []byte {
 		if spec[1] != "" {
 			group = `"` + spec[1] + `"`
 		}
-		entries = append(entries, fmt.Sprintf(`{"chart_id":"c%d","plan_id":"p1","chart_type":"line","metric":%q,"group_by":%s,"org_id":"org-1"}`,
-			index, spec[0], group))
+		metric, _ := json.Marshal(spec[0])
+		entries = append(entries, fmt.Sprintf(`{"chart_id":"c%d","plan_id":"p1","chart_type":"line","metric":%s,"group_by":%s,"org_id":"org-1"}`,
+			index, metric, group))
 	}
 	return []byte(fmt.Sprintf(`{"plan_id":"p1","report_type":"weekly_health","org_id":"org-1","sections":["summary"],
 "requested_metrics":[%s],"created_at":"2026-01-08T00:00:00Z","chart_specs":[%s]}`, requested, strings.Join(entries, ",")))
@@ -181,5 +184,117 @@ func TestStoredChartWithABlankMetricIsNotListed(t *testing.T) {
 	}
 	if _, err := decodeReportDefinition("r1", "org-1", storedSpecPlan(`""`, [2]string{"", "day"}), nil, time.Now()); !errors.Is(err, ErrContractMismatch) {
 		t.Fatalf("an empty metric must stay a contract mismatch, got %v", err)
+	}
+}
+
+// The uncharted list shows the label as stored: whitespace the reader would drop or fold is written as a visible escape,
+// the raw string stays the lookup and dedupe key (a padded registry key is not the key and does not chart).
+
+func unchartedBullets(markdown string) []string {
+	var bullets []string
+	listed := false
+	for _, line := range strings.Split(markdown, "\n") {
+		if line == "## Requested Metrics Without a Chart" {
+			listed = true
+			continue
+		}
+		if listed && strings.HasPrefix(line, "## ") {
+			break
+		}
+		if listed && strings.HasPrefix(line, "- ") {
+			bullets = append(bullets, line)
+		}
+	}
+	return bullets
+}
+
+func renderStoredSpecs(t *testing.T, specs ...[2]string) (ReportDefinition, string) {
+	t.Helper()
+	definition, err := decodeReportDefinition("r1", "org-1", storedSpecPlan(`""`, specs...), nil, time.Date(2026, 1, 8, 0, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var charts []ChartResult
+	for _, spec := range definition.Charts {
+		charts = append(charts, ChartResult{Spec: spec, Title: "Pipelines count", SourceTable: "cicd_metrics_daily", Unit: "count",
+			DataPoints: []DataPoint{{X: "2026-01-01", Y: 1}, {X: "2026-01-02", Y: 2}}})
+	}
+	artifact, err := NewDeterministicRenderer().Render(context.Background(), QueryResult{Plan: definition.Plan, Charts: charts})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return definition, artifact.Markdown
+}
+
+var storedGroups = []string{"day", "team", ""}
+
+func edgeSpaceRunes() []rune {
+	var runes []rune
+	for r := rune(0); r < 0x10000; r++ {
+		if unicode.IsSpace(r) {
+			runes = append(runes, r)
+		}
+	}
+	return runes
+}
+
+func TestUnchartedListShowsAPaddedRegistryKeyAsPadded(t *testing.T) {
+	for _, group := range storedGroups {
+		for _, other := range storedGroups {
+			for _, padded := range []string{"pipelines_count ", " pipelines_count", "pipelines_count\n", "pipelines_count\r\n", "\tpipelines_count"} {
+				definition, markdown := renderStoredSpecs(t, [2]string{"pipelines_count", group}, [2]string{padded, other})
+				bullets := unchartedBullets(markdown)
+				if len(definition.Charts) != 1 || definition.Charts[0].Metric != "pipelines_count" || len(bullets) != 1 {
+					t.Fatalf("%q/%q/%q: charts=%v bullets=%q, want only the exact key charted and one bullet", group, other, padded, definition.Charts, bullets)
+				}
+				if strings.HasPrefix(bullets[0], "- pipelines\\_count:") || !strings.Contains(bullets[0], "`\\") {
+					t.Errorf("%q/%q/%q: bullet %q reads as the charted key, want a visible escape", group, other, padded, bullets[0])
+				}
+			}
+		}
+	}
+}
+
+func TestUnchartedListGivesEveryRawDistinctLabelADistinctBullet(t *testing.T) {
+	labels := []string{"Release"}
+	for _, r := range edgeSpaceRunes() {
+		labels = append(labels, string(r)+"Release", "Release"+string(r))
+	}
+	labels = append(labels, "a b", "a\nb", "a\rb", "a\r\nb", "a\tb", "a b", "a\\nb", "a  b", "Release  ", " Release ")
+	for _, group := range storedGroups {
+		for _, other := range storedGroups {
+			specs := make([][2]string, 0, len(labels))
+			for index, label := range labels {
+				groupBy := group
+				if index%2 == 1 {
+					groupBy = other
+				}
+				specs = append(specs, [2]string{label, groupBy})
+			}
+			_, markdown := renderStoredSpecs(t, specs...)
+			bullets := unchartedBullets(markdown)
+			seen := map[string]bool{}
+			for _, bullet := range bullets {
+				seen[bullet] = true
+			}
+			for _, bullet := range bullets {
+				if !strings.HasSuffix(bullet, ": no metric matches this label") || strings.ContainsFunc(bullet, func(r rune) bool { return unicode.IsSpace(r) && r != ' ' }) {
+					t.Fatalf("%q/%q: bullet %q holds a raw line break or space other than ' '", group, other, bullet)
+				}
+			}
+			if len(bullets) != len(labels) || len(seen) != len(labels) {
+				t.Fatalf("%q/%q: %d raw-distinct labels gave %d bullets, %d distinct", group, other, len(labels), len(bullets), len(seen))
+			}
+		}
+	}
+}
+
+func TestUnchartedListWritesAPlainLabelAsBefore(t *testing.T) {
+	for _, label := range []string{"Release _Candidate_", "pipelines_count_x", "two words", "a  b", "- dash", "1. one", "Lead *Time*|x ## Fake", "Lead_Time"} {
+		_, markdown := renderStoredSpecs(t, [2]string{label, "day"})
+		want := "- " + markdownLineStart(markdownTableCell(label)) + ": no metric matches this label"
+		if bullets := unchartedBullets(markdown); len(bullets) != 1 || bullets[0] != want {
+			t.Errorf("label %q: bullets %q, want %q", label, bullets, want)
+		}
 	}
 }

@@ -19,13 +19,17 @@ import (
 // Each list costs at most 8 + 52 bytes of the cursor in the artifacts phase, whose worst-case cursor has no more room, and
 // 8 + 882 bytes in the runs phase, whose cursor carries no artifacts fields (CHAOS-14321): a cut second of a busy repo holds
 // tens of runs, so 52 bytes (four 11-digit keys) dropped every one of them. The runs cap is 896 less 14: the two lists pay
-// the 28 bytes of the widest AnchorID (CHAOS-14316), so the deep range's worst-case cursor keeps its 300-byte margin.
+// the 28 bytes of the widest AnchorID (CHAOS-14316), so the deep range's worst-case cursor keeps its 300-byte margin. A
+// decoded runs list may hold up to 896 bytes (githubTestsMaxRunsCutKeysReadBytes): a cursor written by a binary with the
+// 896-byte cap still resumes (read old, write new); appending to such a list overflows it (its runs are read again).
 // githubTestsFitCursor drops a list that does not fit the cursor budget.
 const (
 	githubTestsMaxCutKeysBytes     = 52
 	githubTestsMaxRunsCutKeysBytes = 882
-	githubTestsCutKeysOverflow     = "-"
-	githubTestsCutRunsConflict     = "github_tests_cut_runs"
+	// githubTestsMaxRunsCutKeysReadBytes is the decode limit of a runs-phase cut list: the write cap before CHAOS-14316.
+	githubTestsMaxRunsCutKeysReadBytes = 896
+	githubTestsCutKeysOverflow         = "-"
+	githubTestsCutRunsConflict         = "github_tests_cut_runs"
 )
 
 // githubTestsCutRunKey is the created second and the (id, attempt) key of one listed run: "<id>" for attempt 1,
@@ -150,9 +154,12 @@ func githubTestsClearCutKeys(cursor githubTestsChunkCursor) githubTestsChunkCurs
 
 // githubTestsCutKeysValid is the shape this code writes: an active list only with RangeOldest set (and the overflow mark
 // allowed), a carried list only with RangeHi set (never the overflow mark), each of distinct well-formed keys within the
-// byte cap of the cursor's phase.
+// byte cap of the cursor's phase (the runs phase reads up to githubTestsMaxRunsCutKeysReadBytes).
 func githubTestsCutKeysValid(cursor githubTestsChunkCursor) bool {
 	limit := githubTestsCutKeysCap(cursor.Phase)
+	if cursor.Phase == githubTestsRunsPhase {
+		limit = githubTestsMaxRunsCutKeysReadBytes
+	}
 	if cursor.ActiveCutKeys != "" && (cursor.RangeOldest == "" || cursor.ActiveCutKeys != githubTestsCutKeysOverflow && !githubTestsCutKeyListValid(cursor.ActiveCutKeys, limit)) {
 		return false
 	}

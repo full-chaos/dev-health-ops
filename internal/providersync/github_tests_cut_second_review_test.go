@@ -148,8 +148,7 @@ func TestGitHubTestsCutSecondSameRangeNeverSkips(t *testing.T) {
 					}
 					doer.base.runs = kept
 				case "pagination_offset_shift":
-					// A finished page keeps its URL and length (CHAOS-14316).
-					if after.RangeItems != 100 || after.Index != 100 {
+					if after.RangeItems != 100 || after.Index != 0 {
 						t.Fatalf("%s: want a page boundary: %+v", name, after)
 					}
 					doer.base.runs = append(doer.base.runs, run(id+1, at.Add(2*time.Second)))
@@ -361,8 +360,7 @@ func TestGitHubTestsCutSecondRepeatedReadWithALossDropsTheKey(t *testing.T) {
 					}
 					switch shape {
 					case "offset_shift":
-						// A finished page keeps its URL and length (CHAOS-14316).
-						if after.RangeItems != 900 || after.Index != 100 {
+						if after.RangeItems != 900 || after.Index != 0 {
 							t.Fatalf("%s: the page did not end at the target: items=%d index=%d", name, after.RangeItems, after.Index)
 						}
 						doer.listing.runs = append(doer.listing.runs, listingRun{id: 7000, created: cutDedupBefore.Add(-time.Minute), updated: layout.updated, status: "completed", conclusion: "success"})

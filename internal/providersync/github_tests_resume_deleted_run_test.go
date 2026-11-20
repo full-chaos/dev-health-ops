@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net/http"
 	"reflect"
 	"sort"
 	"strconv"
@@ -173,7 +175,9 @@ func TestGitHubTestsResumeAfterARunDeletedBeforeTheResumePointReadsEachRunOnce(t
 		{"artifacts last page, the only run after the anchor deleted", window, windowRuns, true, false, at(inArtifacts, 249), oldestRun},
 		{"legacy cursor: runs range mid page, newest consumed run deleted", window, windowRuns, false, true, at(inRuns, 50), newest(1)},
 		{"legacy cursor: runs range mid page, nothing deleted", window, windowRuns, false, true, at(inRuns, 50), none},
-		{"legacy cursor: artifacts mid page, newest consumed run deleted", window, windowRuns, true, true, at(inArtifacts, 50), newest(1)},
+		// An artifacts cursor without an anchor resumes by position (acp r1 ruling P1-3): nothing moved reads nothing twice and
+		// keeps the totality counters known. A same-length move there keeps the old skip class (named residual, not pinned).
+		{"legacy cursor: artifacts mid page, nothing deleted", window, windowRuns, true, true, at(inArtifacts, 50), none},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fake := newListingFake(t, tc.runs())
@@ -238,7 +242,7 @@ func TestGitHubTestsResumeAfterARunDeletedBeforeTheResumePointReadsEachRunOnce(t
 			sort.Strings(skipped)
 			sort.Strings(twice)
 			sort.Strings(dups)
-			moved := len(deleted) > 0 && reads(fake)[deleted[0]] > 0 || tc.legacy
+			moved := len(deleted) > 0 && reads(fake)[deleted[0]] > 0 || tc.legacy && !tc.artifacts
 			t.Logf("deleted=%d first=%v remaining_expected=%d skipped=%v read_twice=%v anchor_second_dups=%v complete=%v watermark=%v archives_known=%v",
 				len(deleted), deleted[:min(3, len(deleted))], len(reads(oracle)), skipped, twice, dups,
 				walk.final.Result[GitHubTestsResultKeyReportsComplete], walk.final.Watermark != nil, walk.cursor.ArchivesSeen != nil)
@@ -331,8 +335,8 @@ func TestGitHubTestsResumeOnAPageEndCostsNoBudgetPage(t *testing.T) {
 	}
 }
 
-// The resume anchor is the last field the cursor fit drops (after both cut lists); a cursor without it is sought again on
-// resume, never resumed by position.
+// The resume anchor is the last field the cursor fit drops (after both cut lists); a runs cursor without it is sought again
+// on resume, never resumed by position; an artifacts cursor without it resumes by position.
 func TestGitHubTestsCursorFitDropsTheAnchorLast(t *testing.T) {
 	base := githubTestsChunkCursor{Phase: githubTestsRunsPhase, Index: 3, Repo: "acme/api", RangeHi: "2026-07-20T06:30:00Z",
 		RangeOldest: "2026-07-20T06:30:00Z", ActiveCutKeys: "11", CarriedCutKeys: "12", AnchorID: githubTestsWidestAnchorID}
@@ -342,7 +346,245 @@ func TestGitHubTestsCursorFitDropsTheAnchorLast(t *testing.T) {
 	if !reflect.DeepEqual(dropped, []string{"active", "carried", "anchor"}) || fitted.AnchorID != "" || fitted.NextURL != base.NextURL {
 		t.Fatalf("dropped %v anchor %q, want active, carried, anchor and the URL kept", dropped, fitted.AnchorID)
 	}
-	if start, reseek := githubTestsResumeStart(fitted, providerfoundation.PageVisit{CursorBefore: fitted.NextURL, Items: make([]json.RawMessage, 5)}, nil, Claim{}, githubTestsRunsPhase); start != 0 || !reseek {
-		t.Fatalf("a cursor without its anchor resumed at %d (reseek %v), want a re-seek", start, reseek)
+	page := providerfoundation.PageVisit{CursorBefore: fitted.NextURL, Items: make([]json.RawMessage, 5)}
+	if start, action := githubTestsResumeStart(fitted, page, true, githubTestsPageEnd{}, nil, Claim{}, githubTestsRunsPhase); start != 0 || action != githubTestsResumeReseek {
+		t.Fatalf("a runs cursor without its anchor resumed at %d (action %d), want a re-seek", start, action)
+	}
+	// The artifacts phases resume such a cursor by position (acp r1 ruling P1-3): the all-unreadable gate keeps its counters.
+	fitted.Phase = githubTestsArtifactsPhase
+	if start, action := githubTestsResumeStart(fitted, page, true, githubTestsPageEnd{}, nil, Claim{}, githubTestsArtifactsPhase); start != 3 || action != githubTestsResumeAt {
+		t.Fatalf("an artifacts cursor without its anchor resumed at %d (action %d), want 3 by position", start, action)
+	}
+}
+
+// acp r1 ruling P1-1: a runs cursor written by the 896-byte writer (no anchor, an 890-byte carried list) decodes and
+// resumes; the list is still the skip source of its cut second.
+func TestGitHubTestsResumeA896ByteWriterCutListOf890BytesResumes(t *testing.T) {
+	claim := listingClaim(listingSince, listingSince.Add(6*time.Hour))
+	cut := listingSince.Add(3 * time.Hour)
+	keys := make([]string, 0, 74)
+	for index := range 73 {
+		keys = append(keys, strconv.Itoa(90000000000+index))
+	}
+	keys = append(keys, "12345678901234")
+	list := strings.Join(keys, ",")
+	if len(list) != 890 || len(list) <= githubTestsMaxRunsCutKeysBytes {
+		t.Fatalf("list is %d bytes, want 890 (over the %d-byte write cap)", len(list), githubTestsMaxRunsCutKeysBytes)
+	}
+	cursor, err := decodeGitHubTestsChunkCursor("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cursor.Repo, cursor.RangeHi, cursor.CarriedCutKeys = "acme/api", cut.Format(time.RFC3339), list
+	raw, err := encodeGitHubTestsChunkCursor(cursor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs := makeListingRuns(1, 120, listingSince.Add(time.Minute), time.Minute)
+	runs = append(runs, listingRun{id: 90000000000, created: cut, updated: cut.Add(time.Minute), status: "completed", conclusion: "success"},
+		listingRun{id: 777, created: cut, updated: cut.Add(time.Minute), status: "completed", conclusion: "success"})
+	fake := newListingFake(t, runs)
+	client := githubTestsClient(t, fakehttp.Client(fake))
+	finals := 0
+	collectErr := GitHubTestsRouteHandler{}.CollectChunks(context.Background(), claim, providerfoundation.Credential{}, client,
+		time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC), raw, func(emission ChunkRouteEmission) error {
+			if emission.Final {
+				finals++
+			}
+			return nil
+		})
+	if collectErr != nil || finals != 1 {
+		t.Fatalf("a cursor with an 890-byte carried list: err=%v finals=%d, want it to resume to the final emission", collectErr, finals)
+	}
+	if fake.jobGets[90000000000] != 0 || fake.jobGets[777] != 1 || len(fake.jobGets) != 121 {
+		t.Fatalf("carried run reads=%d, other cut-second run reads=%d, runs read=%d; want 0, 1 and 121", fake.jobGets[90000000000], fake.jobGets[777], len(fake.jobGets))
+	}
+}
+
+// acp r1 ruling P1-3: an artifacts cursor without an anchor resumes by position, so 150 of 150 unreadable archives still
+// fail the unit with the all-unreadable error, as before (a re-seek there would make the counters unknown).
+func TestGitHubTestsResumeArtifactsCursorWithoutAnchorKeepsTheAllUnreadableGate(t *testing.T) {
+	for _, legacy := range []bool{false, true} {
+		doer := &githubTestsAllUnreadableDoer{t: t, runs: 150}
+		client := githubTestsClient(t, fakehttp.Client(doer))
+		claim := nativeTestClaim("github", "cicd")
+		resume, yielded := "", false
+		stop := errors.New("yield")
+		var collectErr error
+		for pass := 0; pass < 10; pass++ {
+			collectErr = GitHubTestsRouteHandler{}.CollectChunks(context.Background(), claim, providerfoundation.Credential{}, client,
+				time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC), resume, func(emission ChunkRouteEmission) error {
+					resume = emission.CursorAfter
+					after, err := decodeGitHubTestsChunkCursor(emission.CursorAfter)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if !yielded && after.Phase == githubTestsArtifactsPhase && after.Index == 50 {
+						yielded = true
+						if legacy {
+							after.AnchorID = ""
+							if resume, err = encodeGitHubTestsChunkCursor(after); err != nil {
+								t.Fatal(err)
+							}
+						}
+						return stop
+					}
+					return nil
+				})
+			if !errors.Is(collectErr, stop) {
+				break
+			}
+		}
+		if !yielded {
+			t.Fatal("the walk never yielded inside the artifacts page")
+		}
+		if !errors.Is(collectErr, ErrGitHubTestsAllArtifactsUnreadable) || !strings.Contains(collectErr.Error(), "seen=150") ||
+			!strings.Contains(collectErr.Error(), "unreadable=150") || doer.archiveRequests != 150 {
+			t.Fatalf("legacy=%v: err=%v archive requests=%d, want the all-unreadable error at seen=150 unreadable=150 and 150 requests", legacy, collectErr, doer.archiveRequests)
+		}
+	}
+}
+
+// acp r1 ruling P1-2, the invariant: a resume over a moved page costs no budget. A walk that resumes over a deletion before
+// its resume point and then stops at a budget edge (page budget or record bound) reads every surviving run an uninterrupted
+// walk of the same runs reads under the same budget, and advances the watermark past an unread run only when that
+// uninterrupted walk does too (the deep listings' stop advances by design). The re-seek's first page and its re-read runs
+// are free.
+func TestGitHubTestsResumeAtABudgetEdgeReadsWhatAFreshWalkReads(t *testing.T) {
+	window := listingClaim(listingSince, listingSince.Add(6*time.Hour))
+	deep := lateRerunMidnightClaim("incremental")
+	windowRuns := func() []listingRun { return makeListingRuns(1, 250, listingSince.Add(time.Minute), time.Minute) }
+	deepRuns := func() []listingRun { return lateRerunRuns(1, 250, deep.SinceAt.UTC()) }
+	for _, listing := range []struct {
+		name      string
+		claim     Claim
+		runs      func() []listingRun
+		artifacts bool
+		in        func(githubTestsChunkCursor) bool
+		budgets   []GitHubTestsRouteHandler
+	}{
+		{"runs", window, windowRuns, false, func(c githubTestsChunkCursor) bool { return c.Phase == githubTestsRunsPhase && !c.LateRuns },
+			[]GitHubTestsRouteHandler{{MaxRuns: 300}, {MaxRuns: 200}, {MaxWalkRecords: 120}, {MaxWalkRecords: 230}}},
+		{"deep", deep, deepRuns, false, func(c githubTestsChunkCursor) bool { return c.Phase == githubTestsRunsPhase && c.LateRuns },
+			[]GitHubTestsRouteHandler{{LateRerunMaxPages: 3}, {LateRerunMaxPages: 2}, {MaxWalkRecords: 120}, {MaxWalkRecords: 230}}},
+		{"artifacts", window, windowRuns, true, func(c githubTestsChunkCursor) bool { return c.Phase == githubTestsArtifactsPhase && c.Relist == 0 },
+			[]GitHubTestsRouteHandler{{MaxRuns: 300}, {MaxRuns: 200}}},
+	} {
+		for _, handler := range listing.budgets {
+			for _, items := range []int{50, 100, 150} {
+				name := fmt.Sprintf("%s/runs=%d,pages=%d,records=%d/yield=%d", listing.name, handler.MaxRuns, handler.LateRerunMaxPages, handler.MaxWalkRecords, items)
+				t.Run(name, func(t *testing.T) {
+					reads := func(f *listingFake) map[int]int {
+						if listing.artifacts {
+							return f.artifactGets
+						}
+						return f.jobGets
+					}
+					original := newListingFake(t, listing.runs())
+					uninterrupted := walkListing(t, handler, listing.claim, original, 0)
+					if len(reads(original)) <= items {
+						t.Skipf("the uninterrupted walk reads %d runs: it stops before the resume point", len(reads(original)))
+					}
+					fake := newListingFake(t, listing.runs())
+					deleted := 0
+					walk := resumeDeletionWalk(t, handler, listing.claim, fake, func(c githubTestsChunkCursor) bool {
+						return listing.in(c) && c.RangeItems == items
+					}, func(githubTestsChunkCursor) {
+						consumed := resumeDeletionConsumed(reads(fake))
+						sort.Ints(consumed)
+						deleted = consumed[len(consumed)-1]
+						resumeDeletionDelete(fake, deleted)
+					}, nil)
+					survivors := newListingFake(t, fake.runs)
+					walkListing(t, GitHubTestsRouteHandler{}, listing.claim, survivors, 0)
+					var unread, unreadSurvivors []int
+					for id := range reads(original) {
+						if id != deleted && reads(fake)[id] == 0 {
+							unread = append(unread, id)
+						}
+					}
+					for id := range reads(survivors) {
+						if reads(fake)[id] == 0 {
+							unreadSurvivors = append(unreadSurvivors, id)
+						}
+					}
+					// The listing after the resumed one starts its own range: a re-seek's range end must not narrow it.
+					for id := range original.artifactGets {
+						if !listing.artifacts && id != deleted && fake.artifactGets[id] == 0 {
+							unread = append(unread, -id)
+						}
+					}
+					sort.Ints(unread)
+					advancedPastUnread := walk.final.Watermark != nil && len(unreadSurvivors) > 0 && uninterrupted.final.Watermark == nil
+					if len(unread) != 0 || advancedPastUnread {
+						t.Errorf("resumed over a deletion: unread=%v watermark=%v unread_survivors=%d; uninterrupted walk %v watermark=%v",
+							unread, walk.final.Watermark != nil, len(unreadSurvivors), uninterrupted.incompleteComponents(), uninterrupted.final.Watermark != nil)
+					}
+				})
+			}
+		}
+	}
+}
+
+// acp r1 ruling P2-2: a page-end cursor names the next page by its own (short) URL at index 0, so a long Link of a finished
+// page does not grow the page-end cursor: a walk at the byte budget's edge completes, in the runs and the artifacts listing.
+func TestGitHubTestsResumePageEndCursorAfterALongLinkFitsAndCompletes(t *testing.T) {
+	claim := listingClaim(listingSince, listingSince.Add(6*time.Hour))
+	for _, phase := range []string{githubTestsRunsPhase, githubTestsArtifactsPhase} {
+		t.Run(phase, func(t *testing.T) {
+			// The runs listing's created range starts at a time, the artifacts listing's at a date.
+			padded := func(request *http.Request) bool {
+				lo, _, _ := strings.Cut(request.URL.Query().Get("created"), "..")
+				return strings.Contains(lo, "T") == (phase == githubTestsRunsPhase)
+			}
+			walk := func(linkBytes int) (int, error, *listingFake) {
+				fake := newListingFake(t, makeListingRuns(1, 250, listingSince.Add(time.Minute), time.Minute))
+				doer := jiraWorkItemsDoerFunc(func(request *http.Request) (*http.Response, error) {
+					response, err := fake.Do(request)
+					if err != nil || request.URL.Path != "/repos/acme/api/actions/runs" || request.URL.Query().Get("page") != "" || !padded(request) {
+						return response, err
+					}
+					if link := response.Header.Get("Link"); link != "" {
+						target, _, _ := strings.Cut(strings.TrimPrefix(link, "<"), ">")
+						if len(target)+len("&pad=") < linkBytes {
+							target += "&pad=" + strings.Repeat("a", linkBytes-len(target)-len("&pad="))
+						}
+						response.Header.Set("Link", "<"+target+">; rel=\"next\"")
+					}
+					return response, nil
+				})
+				overhead := 0
+				err := GitHubTestsRouteHandler{}.CollectChunks(t.Context(), claim, providerfoundation.Credential{}, githubTestsClient(t, fakehttp.Client(doer)),
+					time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC), "", func(emission ChunkRouteEmission) error {
+						cursor, decodeErr := decodeGitHubTestsChunkCursor(emission.CursorAfter)
+						if decodeErr != nil {
+							return decodeErr
+						}
+						// The widest mid-page cursor on the long-URL page, with every droppable field dropped, sets the
+						// edge; a page-end cursor must then still fit.
+						if cursor.Phase != phase || !strings.Contains(cursor.NextURL, "pad=") || cursor.Index == 0 || cursor.Index >= 100 {
+							return nil
+						}
+						cursor.ActiveCutKeys, cursor.CarriedCutKeys, cursor.RangeOldestItems, cursor.AnchorID = "", "", 0, ""
+						plain, encodeErr := encodeGitHubTestsChunkCursor(cursor)
+						if encodeErr != nil {
+							return encodeErr
+						}
+						overhead = max(overhead, len(plain)-len(cursor.NextURL))
+						return nil
+					})
+				return overhead, err, fake
+			}
+			overhead, err, _ := walk(1000)
+			if err != nil || overhead == 0 {
+				t.Fatalf("premise: no %s cursor carried the long page-2 URL (overhead=%d err=%v)", phase, overhead, err)
+			}
+			linkBytes := maxChunkCursorBytes - overhead
+			_, err, fake := walk(linkBytes)
+			if err != nil || len(fake.jobGets) != 250 || len(fake.artifactGets) != 250 {
+				t.Fatalf("a %d-byte page-2 link: err=%v, runs read jobs=%d artifacts=%d; want the walk to complete with 250 each", linkBytes, err, len(fake.jobGets), len(fake.artifactGets))
+			}
+			t.Logf("%s: link_bytes=%d overhead=%d", phase, linkBytes, overhead)
+		})
 	}
 }

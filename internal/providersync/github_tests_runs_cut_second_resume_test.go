@@ -108,9 +108,7 @@ func runsBudgetDropsTheOldestCount(t *testing.T, lists string) {
 			claim, handler := runsTwiceClaim(rangeName), runsTwiceHandler(rangeName)
 			// both: 149 of 1,050 runs share the oldest second; the first range holds 99 of them (run 149 is read and
 			// carried) and the revisit lists all 149 in two pages, run 50 last on its first page (read into the active list).
-			// none: 102 runs at one second; the second page holds two, so a cursor inside it carries the padded URL (a
-			// finished page keeps its own URL, CHAOS-14316).
-			count, ties := 102, 102
+			count, ties := 101, 101
 			peeled := lists == "both"
 			if peeled {
 				count, ties = 1050, 149

@@ -101,17 +101,24 @@ func TestSelfCheckRefusesAnUnpinnedBinary(t *testing.T) {
 
 func TestArgvIsAFixedGrammar(t *testing.T) {
 	for name, args := range map[string][]string{
-		"self-check extra word":  {"self-check", "-", "x"},
-		"self-check not dash":    {"self-check", canary},
-		"roll no words":          {"roll"},
-		"roll unknown target":    {"roll", "prod", "pre", "-"},
-		"roll unknown phase":     {"roll", "dev-health", "upgrade", "-"},
-		"roll ingress wait":      {"roll", "ingress-nginx", "wait", "-"},
-		"roll no dash":           {"roll", "dev-health", "pre"},
-		"roll a path for inputs": {"roll", "dev-health", "pre", "/var/lib/oci-cache/lane-scratch/x"},
-		"roll extra word":        {"roll", "dev-health", "pre", "-", canary},
-		"unknown flag":           {"roll", "-" + canary, "dev-health", "pre", "-"},
-		"where-it-acts flag":     {"self-check", "--org=" + canary},
+		"self-check extra word":        {"self-check", "-", "x"},
+		"self-check not dash":          {"self-check", canary},
+		"roll no words":                {"roll"},
+		"roll unknown target":          {"roll", "prod", "pre", "-"},
+		"roll unknown phase":           {"roll", "dev-health", "upgrade", "-"},
+		"roll ingress wait":            {"roll", "ingress-nginx", "wait", "-"},
+		"roll no dash":                 {"roll", "dev-health", "pre"},
+		"roll a path for inputs":       {"roll", "dev-health", "pre", "/var/lib/oci-cache/lane-scratch/x"},
+		"roll extra word":              {"roll", "dev-health", "pre", "-", canary},
+		"unknown flag":                 {"roll", "-" + canary, "dev-health", "pre", "-"},
+		"where-it-acts flag":           {"self-check", "--org=" + canary},
+		"self-check end-of-flags":      {"self-check", "--"},
+		"self-check end-of-flags dash": {"self-check", "--", "-"},
+		"roll end-of-flags":            {"roll", "--", "dev-health", "pre", "-"},
+		"roll end-of-flags later":      {"roll", "dev-health", "--", "pre", "-"},
+		"help with a trailing word":    {"self-check", "--help", canary},
+		"help with a value":            {"roll", "--help=" + canary},
+		"help after the words":         {"roll", "dev-health", "pre", "-", "-h"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			out, errOut, code := exec(t, pinnedHost(t), good, append([]string{"deploy"}, args...)...)
@@ -140,9 +147,11 @@ func TestRollIsRefusedAfterItsGates(t *testing.T) {
 
 func TestHelpExitsZero(t *testing.T) {
 	for _, verb := range []string{"self-check", "roll"} {
-		_, errOut, code := exec(t, pinnedHost(t), "", "deploy", verb, "--help")
-		if code != cli.ExitOK || !strings.Contains(errOut, "usage: dho deploy "+verb) {
-			t.Fatalf("%s --help: exit %d, %q", verb, code, errOut)
+		for _, h := range []string{"--help", "-help", "-h"} {
+			out, errOut, code := exec(t, pinnedHost(t), "", "deploy", verb, h)
+			if code != cli.ExitOK || !strings.Contains(errOut, "usage: dho deploy "+verb) || out != "" {
+				t.Fatalf("%s %s: exit %d, %q %q", verb, h, code, out, errOut)
+			}
 		}
 	}
 }

@@ -8,7 +8,6 @@ package deploycli
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"io"
 	"strings"
@@ -61,15 +60,26 @@ func command(h host) cli.Command {
 	}
 }
 
-// positional parses an empty flag set through the shared helper (--help, an
-// unknown flag = usage, typed input never echoed) and returns the words.
-func positional(name, usage string, env cli.Env) ([]string, int, bool) {
-	fs := flag.NewFlagSet(name, flag.ContinueOnError)
-	fs.Usage = func() { fmt.Fprintln(fs.Output(), "usage: dho deploy "+usage) }
-	if code, ok := cli.ParseFlags(fs, env.Stderr, env.Args); !ok {
-		return nil, code, false
+// positional checks the raw words before anything reads them: a lone help
+// word prints the usage (exit 0); any other word that starts with "-", except
+// the stdin word "-" itself, is a usage error that never echoes the word
+// ("--" included, so no parser can drop a token).
+func positional(usage string, env cli.Env) ([]string, int, bool) {
+	if len(env.Args) == 1 {
+		switch env.Args[0] {
+		case "-h", "-help", "--help":
+			fmt.Fprintln(env.Stderr, "usage: dho deploy "+usage)
+			return nil, cli.ExitOK, false
+		}
 	}
-	return fs.Args(), cli.ExitOK, true
+	for _, a := range env.Args {
+		if a != "-" && strings.HasPrefix(a, "-") {
+			fmt.Fprintln(env.Stderr, "unknown flag (dho deploy takes no flags)")
+			fmt.Fprintln(env.Stderr, "usage: dho deploy "+usage)
+			return nil, cli.ExitUsage, false
+		}
+	}
+	return env.Args, cli.ExitOK, true
 }
 
 type run struct {
@@ -116,7 +126,7 @@ func readInputs(env cli.Env) ([]byte, error) {
 }
 
 func selfCheck(h host, env cli.Env) int {
-	words, code, ok := positional("self-check", "self-check [-]", env)
+	words, code, ok := positional("self-check [-]", env)
 	if !ok {
 		return code
 	}
@@ -162,7 +172,7 @@ func summary(in *inputs.Inputs) string {
 }
 
 func roll(h host, env cli.Env) int {
-	words, code, ok := positional("roll", "roll <target> <phase> -", env)
+	words, code, ok := positional("roll <target> <phase> -", env)
 	if !ok {
 		return code
 	}

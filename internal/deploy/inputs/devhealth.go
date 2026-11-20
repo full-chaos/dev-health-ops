@@ -144,9 +144,10 @@ var targets = map[string]targetSpec{
 	},
 }
 
-// ImgRow is one IMGROW line: <Kind/name> <path> <old> <new>.
+// ImgRow is one IMGROW line: <Kind/name> <path> <old> <new>, and its file line.
 type ImgRow struct {
 	Doc, Path, Old, New string
+	Line                int
 }
 
 // DevHealth is the derived plan of a dev-health one-service app roll.
@@ -168,14 +169,27 @@ var (
 	hexDigest    = regexp.MustCompile(rHex)
 )
 
-// hookJobs are the migrate and grant hook Jobs. Their pins are never rolled
-// back (acp Q5) and their rows need the post-roll posture read the kit runs.
-var hookJobs = map[string]bool{
-	"Job/dev-health-ops-river-migrate":   true,
-	"Job/dev-health-ops-provision-roles": true,
-	"Job/dev-health-ops-auth-migrate":    true,
-	"Job/dev-health-ops-auth-grants":     true,
+// migrateHooks are the names of the chart's migrate, data and grant hook
+// Jobs (deploy/helm/dev-health/templates: river-hooks.yaml, migrate-job.yaml,
+// auth-migrate-job.yaml, auth-grants-job.yaml). Their pins are never rolled
+// back (acp Q5) and the kit gates their rows with post-roll posture reads, so
+// a row on a doc of one of these names, of any kind, is a kit form. The one
+// other chart hook, route-activate, rides an app roll in the kit (s41-a).
+var migrateHooks = map[string]bool{
+	"dev-health-ops-river-migrate":    true,
+	"dev-health-ops-provision-roles":  true,
+	"dev-health-ops-migrate":          true,
+	"dev-health-ops-streak-index":     true,
+	"dev-health-ops-open-units-index": true,
+	"dev-health-ops-auth-migrate":     true,
+	"dev-health-ops-auth-grants":      true,
 }
+
+// authDoc is any doc of the auth-service family: every chart auth resource
+// is named <fullname>-auth-... (auth-service and its Services, keyset,
+// token-review RBAC and PDB, the auth Jobs). The kit rolls them with the
+// restore-fence and GRANTWIDEN gates.
+func authDoc(name string) bool { return strings.Contains(name, "-auth-") }
 
 func checkDevHealth(in *Inputs) error {
 	v := in.Values
@@ -214,23 +228,29 @@ func checkDevHealth(in *Inputs) error {
 
 	pairs := map[[2]string]bool{}
 	var pair [2]string
+	pairLine := map[[2]string]int{}
+	var pairLines []int
 	for i, raw := range in.Lists["IMGROW"] {
 		f := strings.Split(raw, " ")
-		r := ImgRow{Doc: f[0], Path: f[1], Old: f[2], New: f[3]}
-		line := in.lines["IMGROW"][i]
+		r := ImgRow{Doc: f[0], Path: f[1], Old: f[2], New: f[3], Line: in.lines["IMGROW"][i]}
+		_, name, _ := strings.Cut(r.Doc, "/")
 		switch {
 		case r.Old == "<secret>" || r.New == "<empty>":
-			return notBuilt(line, "an IMGROW <secret> / <empty> row (%s)", r.Doc)
-		case hookJobs[r.Doc]:
-			return notBuilt(line, "an IMGROW row on the hook Job %s", r.Doc)
-		case strings.HasPrefix(r.Doc, "Deployment/") && strings.HasSuffix(r.Doc, "-auth-service"):
-			return notBuilt(line, "an IMGROW row on %s (restore-fence, GRANTWIDEN)", r.Doc)
+			return notBuilt(r.Line, "an IMGROW <secret> / <empty> row")
+		case migrateHooks[name]:
+			return notBuilt(r.Line, "an IMGROW row on a migrate, data or grant hook Job doc")
+		case authDoc(name):
+			return notBuilt(r.Line, "an IMGROW row on an auth doc (restore-fence, GRANTWIDEN)")
 		case strings.HasPrefix(r.Doc, "StatefulSet/"):
-			return notBuilt(line, "an IMGROW row on %s (DSSTEP)", r.Doc)
+			return notBuilt(r.Line, "an IMGROW row on a StatefulSet (DSSTEP)")
 		}
 		if strings.HasPrefix(r.Doc, "Deployment/") && podImagePath.MatchString(r.Path) && hexDigest.MatchString(r.Old) && hexDigest.MatchString(r.New) {
 			pair = [2]string{r.Old, r.New}
-			pairs[pair] = true
+			if !pairs[pair] {
+				pairs[pair] = true
+				pairLine[pair] = r.Line
+				pairLines = append(pairLines, r.Line)
+			}
 		}
 		dh.Rows = append(dh.Rows, r)
 	}
@@ -239,15 +259,15 @@ func checkDevHealth(in *Inputs) error {
 		return notBuilt(in.line("IMGROW"), "no Deployment .image digest pair (the norolls, config-only and ADDCONT forms)")
 	case 1:
 	default:
-		return refuse(in.line("IMGROW"), "the Deployment .image rows disagree on the digest pair (D6415: one service per roll)")
+		return refuse(pairLines[1], "this Deployment .image row and the one on line %d carry two digest pairs (D6415: one service per roll)", pairLines[0])
 	}
 	dh.ImgOld, dh.ImgNew = pair[0], pair[1]
 	if dh.ImgOld == dh.ImgNew || strings.HasPrefix(dh.ImgOld, dh.ImgNew) || strings.HasPrefix(dh.ImgNew, dh.ImgOld) {
-		return refuse(in.line("IMGROW"), "the old and new digest prefixes are not two different hex prefixes")
+		return refuse(pairLine[pair], "the old and new digest prefixes are not two different hex prefixes")
 	}
 	for _, r := range dh.Rows {
 		if strings.HasSuffix(r.Path, ".image") && (r.Old != dh.ImgOld || r.New != dh.ImgNew) {
-			return refuse(in.line("IMGROW"), "the .image row of %s is not the one digest pair of the step (D6415: one service per roll)", r.Doc)
+			return refuse(r.Line, "this .image row is not the one digest pair of the step (line %d; D6415: one service per roll)", pairLine[pair])
 		}
 	}
 	if o, set := v["IMG_OLD"]; set && o != dh.ImgOld {

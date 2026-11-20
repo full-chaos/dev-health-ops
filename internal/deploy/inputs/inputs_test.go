@@ -281,12 +281,12 @@ func TestImageRowForms(t *testing.T) {
 		want     string
 	}{
 		"secret old":         {goodDev + row("Deployment/dev-health-ops-go-reconciler", ".spec.template.spec.containers[0].env[DB_PASSWORD].value", "<secret>", "<none>"), true, "<secret> / <empty> row"},
-		"river-migrate hook": {goodDev + row("Job/dev-health-ops-river-migrate", img, oldDig, newDig), true, "hook Job Job/dev-health-ops-river-migrate"},
-		"auth-migrate hook":  {goodDev + row("Job/dev-health-ops-auth-migrate", img, oldDig, newDig), true, "hook Job"},
+		"river-migrate hook": {goodDev + row("Job/dev-health-ops-river-migrate", img, oldDig, newDig), true, "migrate, data or grant hook"},
+		"auth-migrate hook":  {goodDev + row("Job/dev-health-ops-auth-migrate", img, oldDig, newDig), true, "migrate, data or grant hook"},
 		"auth-service":       {goodDev + row("Deployment/dev-health-ops-auth-service", img, oldDig, newDig), true, "restore-fence"},
 		"statefulset":        {goodDev + row("StatefulSet/dev-health-ops-postgresql", ".spec.template.spec.containers[0].resources.requests.cpu", "300m", "400m"), true, "DSSTEP"},
 		"no image pair":      {dhHead + dhScal + row("Deployment/dev-health-ops-web", ".spec.replicas", "2", "3"), true, "no Deployment .image digest pair"},
-		"two pairs":          {goodDev + row("Deployment/dev-health-ops-web", img, oldDig, other), false, "disagree on the digest pair (D6415"},
+		"two pairs":          {goodDev + row("Deployment/dev-health-ops-web", img, oldDig, other), false, "carry two digest pairs (D6415"},
 		"job other pair":     {goodDev + row("Job/dev-health-ops-route-activate", ".spec.template.spec.initContainers[1].image", other, newDig), false, "is not the one digest pair"},
 		"same digest":        {dhHead + dhScal + row("Deployment/dev-health-ops-web", img, oldDig, oldDig), false, "not two different hex prefixes"},
 		"prefix overlap":     {dhHead + dhScal + row("Deployment/dev-health-ops-web", img, oldDig, oldDig+"ab"), false, "not two different hex prefixes"},
@@ -305,5 +305,97 @@ func TestARowRefusalNamesItsOwnLine(t *testing.T) {
 	r := mustRefuse(t, goodDev+row("Job/dev-health-ops-river-migrate", ".spec.template.spec.containers[0].image", oldDig, newDig), true, "hook Job")
 	if r.Line != 23 {
 		t.Fatalf("refusal line %d, want 23 (the 4th IMGROW line)", r.Line)
+	}
+}
+
+// The chart's hook Jobs (deploy/helm/dev-health/templates). Seven are kit
+// forms on any row; route-activate rides an app roll, as in the kit.
+func TestEveryChartHookJobIsClassified(t *testing.T) {
+	img := ".spec.template.spec.containers[0].image"
+	for _, name := range []string{"river-migrate", "provision-roles", "migrate", "streak-index", "open-units-index", "auth-migrate", "auth-grants"} {
+		for _, r := range []string{
+			row("Job/dev-health-ops-"+name, img, oldDig, newDig),
+			row("Job/dev-health-ops-"+name, ".spec.template.spec.initContainers[0].image", oldDig, newDig),
+			row("Job/dev-health-ops-"+name, ".spec.backoffLimit", "1", "2"),
+			row("NetworkPolicy/dev-health-ops-"+name, ".spec.podSelector.matchLabels.app", "a", "b"),
+		} {
+			mustRefuse(t, goodDev+r, true, "an IMGROW row on a")
+		}
+	}
+	for _, r := range []string{
+		row("Job/dev-health-ops-route-activate", img, oldDig, newDig),
+		row("Job/dev-health-ops-route-activate", ".spec.backoffLimit", "1", "2"),
+	} {
+		if _, err := Parse([]byte(goodDev + r)); err != nil {
+			t.Fatalf("route-activate rides the app roll: %v", err)
+		}
+	}
+}
+
+func TestEveryAuthDocIsNotBuilt(t *testing.T) {
+	for _, r := range []string{
+		row("Service/dev-health-ops-auth-service", ".spec.ports[http].port", "80", "81"),
+		row("Service/dev-health-ops-auth-service-internal", ".spec.ports[http].port", "80", "81"),
+		row("NetworkPolicy/dev-health-ops-auth-service", ".spec.podSelector.matchLabels.app", "a", "b"),
+		row("PodDisruptionBudget/dev-health-ops-auth-service", ".spec.minAvailable", "1", "2"),
+		row("ServiceAccount/dev-health-ops-auth-service", ".metadata.labels.x", "a", "b"),
+		row("ConfigMap/dev-health-ops-auth-service-keyset", ".data.kid", "a", "b"),
+		row("ClusterRole/dev-health-ops-auth-service-token-review", ".rules[0].verbs[0]", "create", "get"),
+		row("ClusterRoleBinding/dev-health-ops-auth-service-token-review", ".subjects[0].name", "a", "b"),
+		row("Deployment/dev-health-ops-auth-service", ".spec.template.spec.containers[0].image", oldDig, newDig),
+		row("Job/dev-health-ops-auth-backfill-cafed00d", ".spec.template.spec.containers[0].image", oldDig, newDig),
+	} {
+		mustRefuse(t, goodDev+r, true, "an IMGROW row on an auth doc")
+	}
+}
+
+func TestRowRefusalsNeverEchoTheRow(t *testing.T) {
+	img := ".spec.template.spec.containers[0].image"
+	other := "4d61345532cc"
+	for _, r := range []string{
+		row("Deployment/dev-health-ops-query-api", ".spec.template.spec.containers[0].env[DB_PASSWORD].value", "<secret>", "<none>"),
+		row("Deployment/dev-health-ops-query-api", ".spec.template.spec.containers[0].env[A_TOKEN].value", "<secret>", "<empty>"),
+		row("Job/dev-health-ops-migrate", img, oldDig, newDig),
+		row("Service/dev-health-ops-auth-service", ".spec.ports[http].port", "80", "81"),
+		row("StatefulSet/dev-health-ops-postgresql", ".spec.replicas", "1", "2"),
+		row("Deployment/dev-health-ops-web", img, oldDig, other),
+		row("Job/dev-health-ops-route-activate", ".spec.template.spec.initContainers[1].image", other, newDig),
+		row("CronJob/dev-health-ops-sweep", ".spec.jobTemplate.spec.template.spec.containers[0].image", other, newDig),
+	} {
+		_, err := Parse([]byte(goodDev + r))
+		if err == nil {
+			t.Fatalf("row accepted: %s", r)
+		}
+		f := strings.Fields(strings.TrimPrefix(strings.TrimSpace(r), "IMGROW="))
+		_, name, _ := strings.Cut(f[0], "/")
+		for _, part := range []string{name, f[1], other} {
+			if strings.Contains(err.Error(), part) {
+				t.Fatalf("refusal %q echoes %q of the row", err.Error(), part)
+			}
+		}
+	}
+}
+
+func TestDigestRefusalsPointAtTheirRow(t *testing.T) {
+	img := ".spec.template.spec.containers[0].image"
+	other := "4d61345532cc"
+	cfg := row("Deployment/dev-health-ops-web", ".spec.replicas", "2", "3")
+	head := dhHead + dhScal // 19 lines: the first row is line 20
+	for name, c := range map[string]struct {
+		buf  string
+		line int
+		want string
+	}{
+		"job pair mismatch":                  {head + row("Deployment/dev-health-ops-web", img, oldDig, newDig) + row("Job/dev-health-ops-route-activate", img, other, newDig), 21, "(line 20;"},
+		"two pairs behind a config row":      {head + cfg + row("Deployment/dev-health-ops-web", img, oldDig, newDig) + row("Deployment/dev-health-ops-api", img, oldDig, other), 22, "the one on line 21"},
+		"same digest behind a config row":    {head + cfg + row("Deployment/dev-health-ops-web", img, oldDig, oldDig), 21, "not two different"},
+		"prefix overlap behind a config row": {head + cfg + row("Deployment/dev-health-ops-web", img, oldDig, oldDig+"ab"), 21, "not two different"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := mustRefuse(t, c.buf, false, c.want)
+			if r.Line != c.line {
+				t.Fatalf("refusal on line %d, want %d: %v", r.Line, c.line, r)
+			}
+		})
 	}
 }

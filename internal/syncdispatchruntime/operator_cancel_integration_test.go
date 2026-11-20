@@ -397,6 +397,21 @@ func TestCancelSyncRunEndStateEqualsTheFeatureDisabledTerminator(t *testing.T) {
 	if !strings.Contains(verb, `"status" : "failed"`) || !strings.Contains(verb, "<category>") || !strings.Contains(verb, "<message>") {
 		t.Fatalf("the snapshot does not hold the closed state it compares: %s", verb)
 	}
+	// What the normalization hides: each path writes its own category, the terminator still its own.
+	for runID, category := range map[string]string{cancelTestRun: "cancelled", cancelTestOtherRun: "feature_disabled"} {
+		var run, units, ledger, jobRuns int
+		if err := pool.QueryRow(ctx, `
+SELECT (SELECT count(*) FROM public.sync_runs WHERE id = $1::uuid AND result::jsonb ->> 'error_category' = $2),
+       (SELECT count(*) FROM public.sync_run_units WHERE sync_run_id = $1::uuid AND result::jsonb ->> 'error_category' = $2),
+       (SELECT count(*) FROM public.sync_run_reference_discoveries WHERE sync_run_id = $1::uuid AND result::jsonb ->> 'error_category' = $2),
+       (SELECT count(*) FROM public.job_runs WHERE result->>'sync_run_id' = $1::text AND result::jsonb ->> 'error_category' = $2)`,
+			runID, category).Scan(&run, &units, &ledger, &jobRuns); err != nil {
+			t.Fatal(err)
+		}
+		if run != 1 || units != 5 || ledger != 1 || jobRuns != 1 {
+			t.Fatalf("run %s: category %s on run=%d units=%d ledger=%d job_runs=%d, want 1, 5, 1, 1", runID, category, run, units, ledger, jobRuns)
+		}
+	}
 }
 
 // A River job of a cancelled unit that the post-commit cancel missed finds its unit unclaimable

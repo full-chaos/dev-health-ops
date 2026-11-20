@@ -373,9 +373,41 @@ worker_outbox_reconciler_terminal_deliveries_recovered_total
 
 An increase paired with a deployment is expected recovery. Repeated increases
 without a deployment indicate a worker group is still starting without the
-complete checked-in handler registry. Do not rewrite queue rows manually. Cancel the
-sync run only when the user intends to abandon the remaining work; cancellation
-is not a substitute for repairing a recoverable transport delivery.
+complete checked-in handler registry. Do not rewrite queue rows manually.
+
+### Cancel one unfinished sync run
+
+Cancel a sync run only when the user intends to abandon the remaining work.
+Cancellation is not a substitute for repairing a recoverable transport delivery.
+
+Run the verb from a `go-scheduler` or `go-reconciler` pod. Like every
+`dho workers` verb, it needs the coordinator DSN, and `go-ops` has none. Preview
+the run first, then cancel it:
+
+```bash
+dho workers sync-runs cancel --org <org-id> --run <sync-run-id> --dry-run
+dho workers sync-runs cancel --org <org-id> --run <sync-run-id> \
+  --reason <code> --correlation-id <id>
+```
+
+The verb runs the same terminal path the dispatcher uses for a run it cannot
+continue:
+
+- Every unfinished unit fails with `error_category` `cancelled`, and the run
+  closes as `failed`.
+- The run's reference discovery, dispatch outbox, backfill job and job run are
+  closed in the same transaction.
+- After the commit, the verb cancels the River jobs of units that were already
+  dispatched. Each River cancel writes its own audit row. If a River job cannot
+  be cancelled, the verb counts it on a `river_cancel_failed=N` line on stderr
+  and still exits 0: that job finds its unit closed and does nothing.
+
+The verb refuses a run in which a worker holds a live lease on a unit
+(`sync_run_running_unit`). Add `--allow-running` to cancel the run anyway; that
+worker then loses its lease and stops. Another organization's run reads as
+`sync_run_not_found`. A second call on the same run reports `already_terminal`
+and writes nothing. To sync the window again, submit a new backfill with a new
+idempotency key or with none.
 
 ## Schedules
 

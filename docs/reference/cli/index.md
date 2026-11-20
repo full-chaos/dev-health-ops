@@ -852,7 +852,7 @@ verbs, and also the verbs that write outside the operator service:
 `partition-recompute`, `execution-repair`, `metrics remaining start`,
 `trigger-backstop` and `redrive`, `workgraph trigger` and `repair`,
 `investment trigger`, `external-recompute replay`, every `providersync retire-*`
-verb and `sync-dispatch-outbox close-backlog`. Each one writes its
+verb, `sync-dispatch-outbox close-backlog` and `sync-runs cancel`. Each one writes its
 `worker_operator_audits` row before it writes anything else, and completes it
 `succeeded` or `failed`. If the row cannot be written, the command stops with
 `audit_unavailable` and changes nothing. `--dry-run` writes nothing, so it

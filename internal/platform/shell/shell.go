@@ -467,6 +467,7 @@ func Execute(
 		Components:      components,
 	})
 	if err != nil {
+		lifecycle.ReleaseAll(components)
 		logger.ErrorContext(ctx, "construct runtime", "error", err)
 		return 1
 	}

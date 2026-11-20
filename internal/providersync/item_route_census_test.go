@@ -1,216 +1,15 @@
 package providersync
 
 import (
-	"go/ast"
-	"go/parser"
-	"go/token"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
 )
 
-// itemDecoderExceptions are item decoders whose callers do not name a route yet, each with its reason.
-var itemDecoderExceptions = map[string]string{
-	"gitLabRawSize": "decodes a field value of a GraphQL node, not a page item",
-}
-
-// TestItemDecoderFailuresCarryTheRoute: a providersync function whose first parameter is `raw json.RawMessage` and that returns the bare
-// providerfoundation.ErrNormalizationInvalid is an item decoder. The page walker has dropped the response by the time it
-// runs, so every call site must return its error through RouteFailure (or ResponseFailure) naming the route that served
-// the page. A syntactic guard over direct assignment call sites and one wrapper level (CHAOS-14292).
-func TestItemDecoderFailuresCarryTheRoute(t *testing.T) {
-	t.Parallel()
-	files, err := filepath.Glob("*.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	fset := token.NewFileSet()
-	parsed := map[string]*ast.File{}
-	decoders := map[string]bool{}
-	for _, name := range files {
-		if strings.HasSuffix(name, "_test.go") {
-			continue
-		}
-		source, err := os.ReadFile(name)
-		if err != nil {
-			t.Fatal(err)
-		}
-		file, err := parser.ParseFile(fset, name, source, 0)
-		if err != nil {
-			t.Fatal(err)
-		}
-		parsed[name] = file
-		for _, decl := range file.Decls {
-			fn, ok := decl.(*ast.FuncDecl)
-			if ok && fn.Recv == nil && fn.Body != nil && takesRawMessage(fn) && returnsBareNormalizationInvalid(fn.Body) {
-				decoders[fn.Name.Name] = true
-			}
-		}
-	}
-	if len(decoders) < 76 {
-		t.Fatalf("found %d item decoders, want at least the 76 of CHAOS-10292, CHAOS-13631, CHAOS-14279 and CHAOS-14280: %v", len(decoders), decoders)
-	}
-	for name := range itemDecoderExceptions {
-		if !decoders[name] {
-			t.Errorf("exception %s is no longer an item decoder: drop it", name)
-		}
-	}
-	var bad []string
-	calls := 0
-	for _, file := range parsed {
-		ast.Inspect(file, func(node ast.Node) bool {
-			var list []ast.Stmt
-			switch n := node.(type) {
-			case *ast.BlockStmt:
-				list = n.List
-			case *ast.CaseClause:
-				list = n.Body
-			default:
-				return true
-			}
-			for i, stmt := range list {
-				callee, errName := itemDecoderCall(stmt, decoders)
-				if callee == "" || itemDecoderExceptions[callee] != "" {
-					continue
-				}
-				calls++
-				routed := false
-				if inIf, ok := strings.CutPrefix(errName, "@if:"); ok {
-					routed = blockReturnsRouted(stmt.(*ast.IfStmt).Body, inIf)
-				} else if i+1 < len(list) {
-					routed = returnsRoutedError(list[i+1], errName)
-				}
-				if !routed {
-					bad = append(bad, fset.Position(stmt.Pos()).String()+" "+callee)
-				}
-			}
-			return true
-		})
-	}
-	sort.Strings(bad)
-	if len(bad) > 0 {
-		t.Fatalf("item decoder calls whose error does not name a route:\n%s", strings.Join(bad, "\n"))
-	}
-	if calls < 94 {
-		t.Fatalf("checked %d item decoder calls, want the 94 call sites of CHAOS-10292, CHAOS-13631, CHAOS-14279 and CHAOS-14280", calls)
-	}
-}
-
-// takesRawMessage: the page-item decoder form, a first parameter `raw json.RawMessage` (one item of a page).
-func takesRawMessage(fn *ast.FuncDecl) bool {
-	params := fn.Type.Params.List
-	if len(params) == 0 || len(params[0].Names) == 0 || params[0].Names[0].Name != "raw" {
-		return false
-	}
-	selector, ok := params[0].Type.(*ast.SelectorExpr)
-	return ok && selector.Sel.Name == "RawMessage"
-}
-
-func isNormalizationInvalid(expr ast.Expr) bool {
-	selector, ok := expr.(*ast.SelectorExpr)
-	if !ok || selector.Sel.Name != "ErrNormalizationInvalid" {
-		return false
-	}
-	pkg, ok := selector.X.(*ast.Ident)
-	return ok && pkg.Name == "providerfoundation"
-}
-
-func returnsBareNormalizationInvalid(body *ast.BlockStmt) bool {
-	found := false
-	ast.Inspect(body, func(node ast.Node) bool {
-		if _, ok := node.(*ast.FuncLit); ok {
-			return false
-		}
-		if ret, ok := node.(*ast.ReturnStmt); ok {
-			for _, result := range ret.Results {
-				if isNormalizationInvalid(result) {
-					found = true
-				}
-				// A wrapper call that passes the sentinel on (return wrap(ErrNormalizationInvalid)) names no route either.
-				if call, isCall := result.(*ast.CallExpr); isCall {
-					for _, arg := range call.Args {
-						if isNormalizationInvalid(arg) {
-							found = true
-						}
-					}
-				}
-			}
-		}
-		return true
-	})
-	return found
-}
-
-// itemDecoderCall names the decoder a statement calls and the error variable it binds: `x, err := decode(raw)`,
-// `x, y, err := decode(raw)` or `if err := decode(raw, &p); err != nil {` (then the error check is the statement itself).
-func itemDecoderCall(stmt ast.Stmt, decoders map[string]bool) (string, string) {
-	switch s := stmt.(type) {
-	case *ast.AssignStmt:
-		return assignedDecoderCall(s, decoders)
-	case *ast.IfStmt:
-		if init, ok := s.Init.(*ast.AssignStmt); ok {
-			if callee, errName := assignedDecoderCall(init, decoders); callee != "" {
-				return callee, "@if:" + errName
-			}
-		}
-	}
-	return "", ""
-}
-
-func assignedDecoderCall(s *ast.AssignStmt, decoders map[string]bool) (string, string) {
-	if len(s.Rhs) != 1 || len(s.Lhs) == 0 {
-		return "", ""
-	}
-	call, ok := s.Rhs[0].(*ast.CallExpr)
-	if !ok {
-		return "", ""
-	}
-	ident, ok := call.Fun.(*ast.Ident)
-	if !ok || !decoders[ident.Name] {
-		return "", ""
-	}
-	last, ok := s.Lhs[len(s.Lhs)-1].(*ast.Ident)
-	if !ok {
-		return ident.Name, ""
-	}
-	return ident.Name, last.Name
-}
-
-func returnsRoutedError(stmt ast.Stmt, errName string) bool {
-	ifStmt, ok := stmt.(*ast.IfStmt)
-	return ok && blockReturnsRouted(ifStmt.Body, errName)
-}
-
-func blockReturnsRouted(body *ast.BlockStmt, errName string) bool {
-	if len(body.List) != 1 {
-		return false
-	}
-	ret, ok := body.List[0].(*ast.ReturnStmt)
-	if !ok || len(ret.Results) == 0 {
-		return false
-	}
-	call, ok := ret.Results[len(ret.Results)-1].(*ast.CallExpr)
-	if !ok {
-		return false
-	}
-	// One wrapper level is allowed (return wrap(RouteFailure(route, reason, err))): the wrapper keeps the cause chain.
-	if inner, wrapped := call.Args, len(call.Args) == 1; wrapped {
-		if innerCall, isCall := inner[0].(*ast.CallExpr); isCall {
-			call = innerCall
-		}
-	}
-	selector, ok := call.Fun.(*ast.SelectorExpr)
-	if !ok || (selector.Sel.Name != "RouteFailure" && selector.Sel.Name != "ResponseFailure") || len(call.Args) != 3 {
-		return false
-	}
-	arg, ok := call.Args[2].(*ast.Ident)
-	return ok && arg.Name == errName
-}
-
-// inlineDecodeExceptions are functions of any providersync file that decode inline and return the bare ErrNormalizationInvalid,
-// keyed "file:function", each with its reason.
+// inlineDecodeExceptions are functions that decode and return the bare ErrNormalizationInvalid on the decode failure (an
+// item decoder by signature is an allowed origin and is not listed), keyed "file:function", each with its reason. A shared
+// helper listed here is an origin only: every function that returns what it returns is a finding of its own, so a new caller
+// that returns the bare error must be listed as an edge in itemRouteEdgeExceptions.
 var inlineDecodeExceptions = map[string]string{
 	"launchdarkly_references_clickhouse.go:parseLaunchDarklyCodeReferences": "decodes the whole code-references document, not a page item (the caller launchdarkly_route.go:189 wraps RouteFailure with the code-references route; the resolver at launchdarkly_references_clickhouse.go:48 gets the payload that call already parsed)",
 	"jira_incidents_route.go:decodeJiraIncidentJSON":                        "shared helper; the body caller jira_incidents_route.go:426 wraps ResponseInvalid(BodyDecode) and the item caller :343 wraps RouteFailure",
@@ -225,93 +24,107 @@ var inlineDecodeExceptions = map[string]string{
 	"gitlab_feature_flags_route.go:ensureJSONEOF":                           "trailing-data check inside the item decoder decodeGitLabFeatureFlagObject; its callers (gitlab_feature_flags_route.go:217, :255) already name the route",
 }
 
-// TestInlineItemDecodesAreListed: an inline decode (json.Unmarshal or a Decoder's Decode in an if statement) whose branch returns the
-// bare ErrNormalizationInvalid names no route, and TestItemDecoderFailuresCarryTheRoute cannot see it. Outside an item decoder each
-// such function is moved into an item decoder or listed in inlineDecodeExceptions with its reason. A syntactic guard over the
-// if-init decode form and the named exceptions only: other source forms are not pinned (CHAOS-14292).
-func TestInlineItemDecodesAreListed(t *testing.T) {
-	t.Parallel()
-	files, err := filepath.Glob("*.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	fset := token.NewFileSet()
-	found := map[string]bool{}
-	for _, name := range files {
-		if strings.HasSuffix(name, "_test.go") {
-			continue
-		}
-		file, err := parser.ParseFile(fset, name, nil, 0)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, decl := range file.Decls {
-			fn, ok := decl.(*ast.FuncDecl)
-			if !ok || fn.Body == nil || (fn.Recv == nil && takesRawMessage(fn) && returnsBareNormalizationInvalid(fn.Body)) {
-				continue
-			}
-			ast.Inspect(fn.Body, func(node ast.Node) bool {
-				ifStmt, ok := node.(*ast.IfStmt)
-				if ok && (containsDecodeCall(ifStmt.Init) || containsDecodeCall(ifStmt.Cond)) && returnsBareNormalizationInvalid(ifStmt.Body) {
-					found[name+":"+funcKey(fn)] = true
-				}
-				return true
-			})
-		}
-	}
+// itemRouteAbsorbed are the inline exceptions that cannot fail: the analysis does not follow their bare error to their callers.
+var itemRouteAbsorbed = map[string]bool{
+	"native_rest.go:NativeRESTHandler.normalizeGitHubWorkItems":  true,
+	"native_rest.go:NativeRESTHandler.normalizeGitLabWorkItems":  true,
+	"native_rest.go:NativeRESTHandler.fetchGitHubChildren":       true,
+	"native_rest.go:NativeRESTHandler.fetchGitLabChildren":       true,
+	"repository_shadow.go:ClickHouseRepositoryShadowSource.Load": true,
+}
+
+// itemRouteEdgeExceptions are call edges "file:caller>callee" that return the bare error of a decode failure, each with its reason.
+// An exception applies to the named edge only: a new caller of the same callee that returns the bare error is a finding.
+var itemRouteEdgeExceptions = map[string]string{
+	"github_tests_chunked_route.go:GitHubTestsRouteHandler.CollectChunks>fetchGitHubTestsRun":                                                  "the single-run body decode stays bare for githubTestsOpenRunSkip, which compares it by identity (github_tests_run_listing.go:66)",
+	"github_tests_chunked_route.go:GitHubTestsRouteHandler.CollectChunks>GitHubTestsRouteHandler.CollectChunks":                                "the run-detail closure of CollectChunks returns the job item decode bare to the same identity compare (github_tests_run_listing.go:66)",
+	"launchdarkly_references_clickhouse.go:LaunchDarklyClickHouseReferences.ResolveLaunchDarklyCodeReferences>parseLaunchDarklyCodeReferences": "the resolver gets the payload that launchdarkly_route.go:189 already parsed and routed, so this parse cannot fail on decode",
+}
+
+// itemRouteVerdict compares the findings with the two tables: unlisted findings and listed entries that no longer match.
+func itemRouteVerdict(a *itemRouteAnalysis, inline, edges map[string]string) []string {
 	var bad []string
-	for key := range found {
-		if inlineDecodeExceptions[key] == "" {
-			bad = append(bad, key)
+	found := map[string]bool{}
+	for _, finding := range a.findings() {
+		found[finding.Key] = true
+		if inline[finding.Key] == "" && edges[finding.Key] == "" {
+			bad = append(bad, finding.Key+" at "+finding.Pos)
 		}
 	}
-	for key := range inlineDecodeExceptions {
-		if !found[key] {
-			bad = append(bad, key+" (listed, no inline decode left: drop it)")
+	for _, table := range []map[string]string{inline, edges} {
+		for key := range table {
+			if !found[key] {
+				bad = append(bad, key+" (listed, no finding left: drop it)")
+			}
 		}
 	}
 	sort.Strings(bad)
-	if len(bad) > 0 {
-		t.Fatalf("inline decodes that return a bare ErrNormalizationInvalid, not in inlineDecodeExceptions:\n%s", strings.Join(bad, "\n"))
+	return bad
+}
+
+// TestItemDecodeFailuresCarryTheRoute: the SSA census (item_route_ssa_test.go) follows the bare
+// providerfoundation.ErrNormalizationInvalid of a decode failure to every return of the function and of its callers. A
+// function that returns it without a RouteFailure/ResponseFailure/ResponseInvalid is a finding unless it is an item decoder by
+// signature (`raw json.RawMessage` first) or is listed with its reason (CHAOS-14292). Forms outside the bound of
+// itemRouteAnalysis are not pinned.
+func TestItemDecodeFailuresCarryTheRoute(t *testing.T) {
+	t.Parallel()
+	pkg, err := loadItemRoutePackage("./internal/providersync")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := newItemRouteAnalysis(pkg, itemRouteAbsorbed)
+	if decoders := a.decoders(); len(decoders) < 77 {
+		t.Fatalf("found %d item decoders, want at least the 77 of CHAOS-14292: %v", len(decoders), decoders)
+	}
+	if edges := a.edges(); edges < 97 {
+		t.Fatalf("found %d call edges into an item decoder, want at least the 97 of CHAOS-14292", edges)
+	}
+	if bad := itemRouteVerdict(a, inlineDecodeExceptions, itemRouteEdgeExceptions); len(bad) > 0 {
+		t.Fatalf("decode failures that reach a return as the bare sentinel, not listed:\n%s", strings.Join(bad, "\n"))
 	}
 }
 
-func funcKey(fn *ast.FuncDecl) string {
-	if fn.Recv == nil || len(fn.Recv.List) == 0 {
-		return fn.Name.Name
+// The bypass fixture holds one function per form of CHAOS-14292 that the AST census accepted; each must be a finding.
+func TestItemRouteCensusRefusesEveryBypassForm(t *testing.T) {
+	t.Parallel()
+	pkg, err := loadItemRoutePackage("./internal/providersync/testdata/itemroute/bypass")
+	if err != nil {
+		t.Fatal(err)
 	}
-	receiver := fn.Recv.List[0].Type
-	if star, ok := receiver.(*ast.StarExpr); ok {
-		receiver = star.X
+	a := newItemRouteAnalysis(pkg, nil)
+	// sharedHelper is a listed origin: its callers are the findings.
+	var got []string
+	for _, finding := range a.findings() {
+		if finding.Key != "bypass.go:sharedHelper" {
+			got = append(got, finding.Key)
+		}
 	}
-	if ident, ok := receiver.(*ast.Ident); ok {
-		return ident.Name + "." + fn.Name.Name
+	want := []string{
+		"bypass.go:assignDecode", "bypass.go:assignElse", "bypass.go:assignSuccessFirst", "bypass.go:assignSwitch",
+		"bypass.go:callerDirect>decodeItem", "bypass.go:callerRouteConditional>decodeItem", "bypass.go:callerRouteDropped>decodeItem",
+		"bypass.go:callerVar>decodeItem", "bypass.go:init>decodeItem", "bypass.go:newSharedCaller>sharedHelper",
+		"bypass.go:phiMerge", "bypass.go:sentinelLocal", "bypass.go:sentinelNested",
 	}
-	return fn.Name.Name
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("bypass findings:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
 }
 
-// containsDecodeCall: a json.Unmarshal call or a Decode method call (json.Decoder) inside node.
-func containsDecodeCall(node ast.Node) bool {
-	if node == nil {
-		return false
+// The control fixture holds legal code (a decode routed through every exit shape, a plain sentinel next to a routed decode, a
+// decode whose failure is ignored, the listed forms); the census must accept all of it.
+func TestItemRouteCensusAcceptsLegalCode(t *testing.T) {
+	t.Parallel()
+	pkg, err := loadItemRoutePackage("./internal/providersync/testdata/itemroute/control")
+	if err != nil {
+		t.Fatal(err)
 	}
-	found := false
-	ast.Inspect(node, func(inner ast.Node) bool {
-		call, ok := inner.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
-		selector, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok {
-			return true
-		}
-		if pkg, isIdent := selector.X.(*ast.Ident); isIdent && pkg.Name == "json" && selector.Sel.Name == "Unmarshal" {
-			found = true
-		}
-		if selector.Sel.Name == "Decode" {
-			found = true
-		}
-		return true
-	})
-	return found
+	inline := map[string]string{
+		"control.go:sharedHelper": "listed origin", "control.go:cannotFail": "cannot fail",
+	}
+	edges := map[string]string{"control.go:identityEdge>sharedHelper": "identity compare"}
+	a := newItemRouteAnalysis(pkg, map[string]bool{"control.go:cannotFail": true})
+	if bad := itemRouteVerdict(a, inline, edges); len(bad) > 0 {
+		t.Fatalf("legal code refused:\n%s", strings.Join(bad, "\n"))
+	}
 }

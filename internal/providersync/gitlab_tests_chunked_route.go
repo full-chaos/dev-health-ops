@@ -33,6 +33,16 @@ import (
 // as pages are full, without any configuration being able to say otherwise.
 const gitLabTestsPerRunJobPages = githubTestsMaxJobsPerRun/nativePerPage + 1
 
+// gitLabTestsCursorNonRepoMaxBytes is the widest GitLab cursor without Repo: every counter at its type's maximum, the
+// whole truncation vocabulary, LastID and ProjectID at MaxInt64 encode in 641 bytes (a cell pins it).
+const gitLabTestsCursorNonRepoMaxBytes = 641
+
+// gitLabTestsCursorRepoMaxBytes is the longest repository path the done cursor keeps: an eighth of the checkpoint budget
+// (maxChunkCursorBytes), so the widest done cursor is 1158 bytes (641 + 512 + the "repo" key) and keeps a margin of 2938 bytes of the
+// budget whatever the path length (GitLab allows deep groups). A longer path is dropped and the done resume reads the
+// project again.
+const gitLabTestsCursorRepoMaxBytes = maxChunkCursorBytes / 8
+
 type gitLabTestsChunkCursor struct {
 	Phase      string `json:"phase"`
 	Page       int    `json:"page,omitempty"`
@@ -57,7 +67,9 @@ type gitLabTestsChunkCursor struct {
 	// instead of being cancelled.
 	Truncated []string `json:"truncated,omitempty"`
 	// Repo and ProjectID let the terminal `done` resume publish completion
-	// metadata without re-fetching the project object (CHAOS-3820).
+	// metadata without re-fetching the project object (CHAOS-3820). Repo is
+	// persisted only in the done cursor and only up to gitLabTestsCursorRepoMaxBytes
+	// (gitLabTestsPersistedCursor); a cursor an older binary wrote may carry any path.
 	Repo      string `json:"repo,omitempty"`
 	ProjectID int64  `json:"project_id,omitempty"`
 	// LastID is the id of the last pipeline the active phase emitted: the resume key of the id-ordered listing
@@ -290,8 +302,17 @@ func decodeGitLabTestsChunkCursor(raw string) (gitLabTestsChunkCursor, error) {
 	return cursor, nil
 }
 
+// gitLabTestsPersistedCursor is the cursor as it is written: a phase that reads the project again on resume never
+// persists Repo, and the done cursor persists it only when it is short.
+func gitLabTestsPersistedCursor(cursor gitLabTestsChunkCursor) gitLabTestsChunkCursor {
+	if cursor.Phase != "done" || len(cursor.Repo) > gitLabTestsCursorRepoMaxBytes {
+		cursor.Repo = ""
+	}
+	return cursor
+}
+
 func encodeGitLabTestsChunkCursor(cursor gitLabTestsChunkCursor) (string, error) {
-	encoded, err := json.Marshal(cursor)
+	encoded, err := json.Marshal(gitLabTestsPersistedCursor(cursor))
 	if err != nil || len(encoded) > maxChunkCursorBytes {
 		return "", ErrChunkCheckpointConflict
 	}
@@ -524,21 +545,46 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 			},
 		}, emit)
 	}
-	if cursor.Phase == "done" {
-		return emitFinalMetadata(cursor)
-	}
 	requests := cursor.Requests
 	counted := *client
 	counted.Doer = gitLabTestsCountingDoer{delegate: client.Doer, attempts: &requests}
 	root := providerRelativePath(client, "api", "v4", "projects", projectID)
-	var project repositoryPayload
-	if err := fetchObjectRoute(ctx, &counted, gitlabProjectRoute, root, &project); err != nil {
-		return err
+	fetchProject := func() (repositoryPayload, int64, error) {
+		var project repositoryPayload
+		if err := fetchObjectRoute(ctx, &counted, gitlabProjectRoute, root, &project); err != nil {
+			return project, 0, err
+		}
+		cursor.Requests = requests
+		parsedProjectID, err := project.ID.Int64()
+		if err != nil || parsedProjectID < 1 || strconv.FormatInt(parsedProjectID, 10) != projectID {
+			return project, 0, providerfoundation.ErrNormalizationInvalid
+		}
+		return project, parsedProjectID, nil
 	}
-	cursor.Requests = requests
-	parsedProjectID, err := project.ID.Int64()
-	if err != nil || parsedProjectID < 1 || strconv.FormatInt(parsedProjectID, 10) != projectID {
-		return providerfoundation.ErrNormalizationInvalid
+	if cursor.Phase == "done" {
+		if (cursor.Repo == "" || len(cursor.Repo) > gitLabTestsCursorRepoMaxBytes) && cursor.ProjectID > 0 {
+			project, _, fetchErr := fetchProject()
+			switch {
+			case fetchErr == nil:
+				cursor.Repo = gitLabProjectFullName(project)
+			case ctx.Err() != nil:
+				return fetchErr
+			default:
+				// Main published the stored path with no project read, so a project that cannot be read now (deleted,
+				// moved, rate limited) must not leave a finished scan unfinalized: keep the stored path, or the source
+				// name when the cursor holds none.
+				slog.Warn("gitlab tests/cicd done resume could not read the project; publishing without a refreshed repo",
+					"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID)
+				if cursor.Repo == "" {
+					cursor.Repo = claim.SourceName
+				}
+			}
+		}
+		return emitFinalMetadata(cursor)
+	}
+	project, parsedProjectID, err := fetchProject()
+	if err != nil {
+		return err
 	}
 	fullName := gitLabProjectFullName(project)
 	cursor.Repo, cursor.ProjectID = fullName, parsedProjectID

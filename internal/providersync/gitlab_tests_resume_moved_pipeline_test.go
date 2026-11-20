@@ -30,6 +30,11 @@ type gitLabResumeFake struct {
 	t          *testing.T
 	pipelines  []gitLabResumePipeline
 	reportGets map[int]int
+	// repoPath is the project's path_with_namespace ("acme/api" when empty); projectGets counts project reads.
+	repoPath    string
+	projectGets int
+	// projectStatus, when set, is the status the project read answers with.
+	projectStatus int
 }
 
 func (fake *gitLabResumeFake) Do(request *http.Request) (*http.Response, error) {
@@ -40,7 +45,16 @@ func (fake *gitLabResumeFake) Do(request *http.Request) (*http.Response, error) 
 	query := request.URL.Query()
 	switch {
 	case path == "/api/v4/projects/123":
-		body = `{"id":123,"path_with_namespace":"acme/api","default_branch":"main","only_allow_merge_if_pipeline_succeeds":true}`
+		fake.projectGets++
+		if fake.projectStatus != 0 {
+			return &http.Response{StatusCode: fake.projectStatus, Header: header,
+				Body: io.NopCloser(strings.NewReader(`{"message":"unavailable"}`)), Request: request}, nil
+		}
+		repoPath := fake.repoPath
+		if repoPath == "" {
+			repoPath = "acme/api"
+		}
+		body = `{"id":123,"path_with_namespace":"` + repoPath + `","default_branch":"main","only_allow_merge_if_pipeline_succeeds":true}`
 	case path == "/api/v4/projects/123/pipelines":
 		listed := fake.list(query)
 		page, perPage := 1, 20
@@ -162,6 +176,7 @@ type gitLabResumeWalkOptions struct {
 	yields  []int
 	mutate  func(yield int)
 	rewrite func(raw string) string
+	observe func(cursor string)
 }
 
 type gitLabResumeResult struct {
@@ -192,6 +207,9 @@ func gitLabResumeRun(t *testing.T, fake *gitLabResumeFake, options gitLabResumeW
 		err := options.handler.CollectChunks(ctx, claim, providerfoundation.Credential{}, client, normalizedAt, resume,
 			func(emission ChunkRouteEmission) error {
 				last = emission.CursorAfter
+				if options.observe != nil {
+					options.observe(emission.CursorAfter)
+				}
 				for _, effect := range emission.Batch.Effects {
 					if effect.Destination != "ci_pipeline_runs" {
 						continue

@@ -5,6 +5,7 @@ import (
 	"go/parser"
 	"go/token"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -17,11 +18,15 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 )
 
-// The ops census of the latest-row key has three cells. The key is the
-// dev-health-go key (no ops copy). No non-test Go string literal in this
-// module reads an insert-order virtual column, so no site builds its own key
-// from _part / _part_offset. Every call to latestrow is a named site, so a new
-// site fails until it is listed here.
+// The ops census of the latest-row key is a static guard over the non-test Go
+// files of the ops module tree (nested modules, vendor, testdata and dot
+// directories excluded). It checks three things: the ops key and renders are
+// the dev-health-go ones; no string literal names an insert-order virtual
+// column (_part, _part_offset, ...) as a whole identifier; and the selectors
+// spelled <latestrow import name>.<func>, per selector and per enclosing
+// declaration, match the named list below. It reads spelling, not Go
+// bindings: a shadowed name, a dot import, an unqualified call inside this
+// package or a function value called more than once is not counted.
 
 var latestrowImports = map[string]bool{
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/latestrow": true,
@@ -75,15 +80,28 @@ func moduleFiles(t *testing.T) []moduleFile {
 	if err != nil {
 		t.Fatal(err)
 	}
+	out, err := collectModuleFiles(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+func collectModuleFiles(root string) ([]moduleFile, error) {
 	var out []moduleFile
 	fset := token.NewFileSet()
-	err = filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if entry.IsDir() {
 			if name := entry.Name(); path != root && (strings.HasPrefix(name, ".") || name == "vendor" || name == "node_modules" || name == "testdata") {
 				return filepath.SkipDir
+			}
+			if path != root {
+				if _, statErr := os.Stat(filepath.Join(path, "go.mod")); statErr == nil {
+					return filepath.SkipDir
+				}
 			}
 			return nil
 		}
@@ -101,10 +119,55 @@ func moduleFiles(t *testing.T) []moduleFile {
 		out = append(out, moduleFile{rel: filepath.ToSlash(rel), file: file})
 		return nil
 	})
+	return out, err
+}
+
+func TestModuleFilesStopAtNestedModules(t *testing.T) {
+	root := t.TempDir()
+	files := map[string]string{
+		"go.mod":            "module example.com/root\n",
+		"own/own.go":        "package own\n",
+		"nested/go.mod":     "module example.com/nested\n",
+		"nested/nested.go":  "package nested\n",
+		"nested/sub/sub.go": "package sub\n",
+	}
+	for name, body := range files {
+		path := filepath.Join(root, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := collectModuleFiles(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return out
+	var rels []string
+	for _, f := range got {
+		rels = append(rels, f.rel)
+	}
+	if strings.Join(rels, " ") != "own/own.go" {
+		t.Fatalf("module files = %v, want only own/own.go (a nested go.mod is another module)", rels)
+	}
+}
+
+func TestDeclNameUnwrapsParenReceivers(t *testing.T) {
+	src := "package p\ntype Reader struct{}\nfunc (r *Reader) A() {}\nfunc (r *(Reader)) B() {}\nfunc (r (*Reader)) C() {}\nfunc (r *((Reader))) D() {}\n"
+	file, err := parser.ParseFile(token.NewFileSet(), "p.go", src, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, decl := range file.Decls {
+		if fn, ok := decl.(*ast.FuncDecl); ok {
+			got = append(got, declName(fn, fn))
+		}
+	}
+	if want := "Reader.A Reader.B Reader.C Reader.D"; strings.Join(got, " ") != want {
+		t.Fatalf("declName = %v, want %s", got, want)
+	}
 }
 
 func declName(decl ast.Decl, node ast.Node) string {
@@ -130,6 +193,8 @@ func declName(decl ast.Decl, node ast.Node) string {
 
 func exprName(e ast.Expr) string {
 	switch x := e.(type) {
+	case *ast.ParenExpr:
+		return exprName(x.X)
 	case *ast.StarExpr:
 		return exprName(x.X)
 	case *ast.Ident:

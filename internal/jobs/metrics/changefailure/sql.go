@@ -31,7 +31,7 @@ func LatestRowsSQL(startParam, endParam, extraWhere string) string {
             WHERE org_id = {org_id:String}
               AND day >= {` + startParam + `:Date} AND day < {` + endParam + `:Date}
               ` + extraWhere + `
-            ORDER BY computed_at DESC
+            ORDER BY computed_at DESC, cityHash64(tuple(*)) DESC
             LIMIT 1 BY org_id, repo_id, day
         )`
 }

@@ -416,12 +416,18 @@ const finalizeSweepMaxPages = 4
 // so nothing else would ever claim it. Only the never-attempted subset
 // (RedriveStrandedFinalize with allowPriorAttempt false): a 'failed' or
 // expired-'running' finalization may already have written rows and stays with
-// an operator. A finalize job still queued past the horizon gets a second one;
-// ClaimFinalize's lease lets only one of them compute.
+// an operator. A run that still has a finalize job a worker can run (an
+// undelivered outbox row, or a River job available, pending, scheduled,
+// running or retryable) is left alone, so the sweep never adds a second job
+// beside a live one.
 func (store *PostgresStore) SweepStrandedFinalizeForOrg(
 	ctx context.Context, publisher redriveFinalizePublisher, orgID string,
 ) (int, error) {
 	if !store.valid() || publisher == nil || !validUUID(orgID) {
+		return 0, ErrUnavailable
+	}
+	if store.sweepQueuePool == nil || !riverSchemaPattern.MatchString(store.sweepRiverSchema) {
+		store.observeFinalizeSweep("failed", 1)
 		return 0, ErrUnavailable
 	}
 	redriven, err := store.sweepStrandedFinalizeForOrg(ctx, publisher, orgID)
@@ -489,7 +495,14 @@ LIMIT $5`, orgID, cutoff, afterUpdated, afterID, defaultFinalizeSweepLimit)
 			return redriven, ErrUnavailable
 		}
 		store.observeFinalizeSweep("detected", len(runIDs))
+		live, err := store.runsWithLiveFinalizeJob(ctx, runIDs)
+		if err != nil {
+			return redriven, err
+		}
 		for _, runID := range runIDs {
+			if live[runID] {
+				continue
+			}
 			finalized, err := store.redriveOneStrandedFinalize(ctx, publisher, runID, nonce, now, false, &cutoff)
 			if err != nil {
 				return redriven, err
@@ -503,6 +516,70 @@ LIMIT $5`, orgID, cutoff, afterUpdated, afterID, defaultFinalizeSweepLimit)
 		}
 	}
 	return redriven, nil
+}
+
+// runsWithLiveFinalizeJob names the runs that still have a metrics.daily_finalize
+// job that a worker can run: an outbox row the relay has not delivered yet, or a
+// delivered one whose River job is available, pending, scheduled, running or
+// retryable. The sweep leaves such a run alone, so a run never has two live
+// finalize jobs and its compute count is that of the one job alone.
+func (store *PostgresStore) runsWithLiveFinalizeJob(ctx context.Context, runIDs []string) (map[string]bool, error) {
+	live := make(map[string]bool, len(runIDs))
+	if len(runIDs) == 0 {
+		return live, nil
+	}
+	rows, err := store.pool.Query(ctx, `
+SELECT outbox.args #>> '{domain,id}', outbox.status, outbox.river_job_id
+FROM public.worker_job_outbox AS outbox
+WHERE outbox.job_kind = 'metrics.daily_finalize'
+  AND outbox.args #>> '{domain,id}' = ANY($1::text[])`, runIDs)
+	if err != nil {
+		return nil, ErrUnavailable
+	}
+	jobRun := map[int64]string{}
+	var jobIDs []int64
+	for rows.Next() {
+		var runID, status string
+		var jobID *int64
+		if err := rows.Scan(&runID, &status, &jobID); err != nil {
+			rows.Close()
+			return nil, ErrUnavailable
+		}
+		switch {
+		case status == "pending" || status == "claimed":
+			live[runID] = true
+		case status == "delivered" && jobID != nil:
+			jobRun[*jobID] = runID
+			jobIDs = append(jobIDs, *jobID)
+		}
+	}
+	rowsErr := rows.Err()
+	rows.Close()
+	if rowsErr != nil {
+		return nil, ErrUnavailable
+	}
+	if len(jobIDs) == 0 {
+		return live, nil
+	}
+	jobTable := pgx.Identifier{store.sweepRiverSchema, "river_job"}.Sanitize()
+	riverRows, err := store.sweepQueuePool.Query(ctx,
+		"SELECT id FROM "+jobTable+" WHERE id = ANY($1) AND state::text IN ('available', 'pending', 'scheduled', 'running', 'retryable')",
+		jobIDs)
+	if err != nil {
+		return nil, ErrUnavailable
+	}
+	defer riverRows.Close()
+	for riverRows.Next() {
+		var jobID int64
+		if err := riverRows.Scan(&jobID); err != nil {
+			return nil, ErrUnavailable
+		}
+		live[jobRun[jobID]] = true
+	}
+	if riverRows.Err() != nil {
+		return nil, ErrUnavailable
+	}
+	return live, nil
 }
 
 // FinalizeRedriveOutcome summarizes one CHAOS-4389 stranded-finalize redrive

@@ -198,3 +198,24 @@ func (l *leavingClient) Query(ctx context.Context, statement string, bindings []
 	}
 	return l.inner.Query(ctx, statement, bindings)
 }
+
+// A read that failed on a live request stays a failure for a caller that judges
+// the returned error after the client left, also when no other read was
+// running at the time (the presenter runs after Resolve returned).
+func TestAFailureOfALiveRequestStaysOneWhenTheClientLeavesAfterResolve(t *testing.T) {
+	for _, code := range []int32{394, 735} {
+		ctx, cancel := context.WithCancel(context.Background())
+		client := &routingFakeClient{}
+		client.onErr("repo_id AS dimension_value", &fakeOperationError{operation: "query", cause: &clickhousedriver.Exception{Code: code}})
+		_, err := Resolve(ctx, client, "org-1", model.AnalyticsRequestInput{
+			Timeseries: []model.TimeseriesRequestInput{tsInput(model.DimensionInputRepo, model.MeasureInputCount)},
+		})
+		cancel()
+		if err == nil {
+			t.Fatalf("code %d: Resolve returned no error", code)
+		}
+		if ClientCancelled(ctx, err) || ReportedAsClientCancel(ctx, err, "caller") {
+			t.Errorf("code %d: an error of a read that failed on a live request is a client cancel after the client left", code)
+		}
+	}
+}

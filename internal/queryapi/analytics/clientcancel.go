@@ -130,7 +130,10 @@ func (r *reportedClientCancel) Unwrap() error { return r.err }
 // markedIfClientCancel reports err as a client cancel of phase when it is one
 // and returns it marked as reported; any other err is returned as it is.
 func markedIfClientCancel(ctx context.Context, err error, phase string, attrs ...any) error {
-	return markedIfClientCancelAt(ctx, ctx.Err(), err, phase, attrs...)
+	if !reportedAsClientCancel(ctx, err, phase, attrs...) {
+		return err
+	}
+	return &reportedClientCancel{err: err}
 }
 
 // endedAsFailure marks an error of a read that ended as a failure while the
@@ -143,10 +146,11 @@ func (f *endedAsFailure) Unwrap() error { return f.err }
 
 // markedIfClientCancelAt is markedIfClientCancel for a read that ended when
 // the context state was ctxErr. Any other error comes back as it is, marked
-// as a failure when the request has been cancelled since.
+// as a failure when the read ended on a live request: a client that leaves
+// later, also after this report, does not turn it into a cancel.
 func markedIfClientCancelAt(ctx context.Context, ctxErr, err error, phase string, attrs ...any) error {
 	if !reportedAsClientCancelAt(ctx, ctxErr, err, phase, attrs...) {
-		if ctxErr == nil && ctx.Err() != nil {
+		if ctxErr == nil {
 			return &endedAsFailure{err: err}
 		}
 		return err

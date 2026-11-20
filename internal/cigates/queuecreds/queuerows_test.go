@@ -235,7 +235,7 @@ var queueRowReadTable = map[string]queueRowRead{
 	"internal/syncreconciler/unreclaimable_sweep.go#terminalizeTerminalDeliverySQL": {
 		"dedupe_key", roleInternal, "", "", "equality with a key built from the unit id"},
 	"internal/syncdispatchruntime/operator_cancel.go#cancelledUnitDeliveries": {
-		"dedupe_key", roleInternal, "", "", "equality join with a key built from the unit id (operator_cancel.go:203); only status and river_job_id are read (:200), and the job id is the one value returned (:223, RiverJobIDs json:\"-\" :71)"},
+		"dedupe_key", roleInternal, "", "", "equality filter against keys built from the cancel's own unit ids (operator_cancel.go:209, :237); only two counts are read (:235) and returned"},
 	"internal/syncreconciler/terminal_delivery_repair.go#rearmExhaustedPostSyncSQL": {
 		"args->>sync_run_id", roleInternal, "", "", "equality join to the outbox row's sync_run_id; the UPDATE returns nothing and nothing is logged"},
 	"internal/syncreconciler/terminal_delivery_repair.go#countExhaustedPostSyncOutsideWindowSQL": {

@@ -57,32 +57,38 @@ type CancelSyncRunUnits struct {
 	Other          int `json:"other"`
 }
 
-// CancelSyncRunOutcome is what CancelSyncRun did. RiverJobIDs are the River jobs of the provider
-// unit deliveries this cancel closed; the caller cancels them after the commit.
+// CancelSyncRunDeliveries counts the provider-unit deliveries (worker_job_outbox rows) of the units
+// the cancel failed. The cancel leaves them: a job of a failed unit of a terminal run finds the unit
+// unclaimable and ends as a no-op.
+type CancelSyncRunDeliveries struct {
+	Delivered int `json:"delivered"`
+	Pending   int `json:"pending"`
+}
+
+// CancelSyncRunOutcome is what CancelSyncRun did. UnitsFailed and ProviderUnitDeliveries count only
+// the units the cancel's own writes failed.
 type CancelSyncRunOutcome struct {
-	SyncRunID   string             `json:"sync_run_id"`
-	Outcome     string             `json:"outcome"`
-	PriorStatus string             `json:"prior_status"`
-	Units       CancelSyncRunUnits `json:"units"`
-	UnitsFailed int                `json:"units_failed"`
-	// PendingProviderUnitDeliveries are undelivered worker_job_outbox rows of the cancelled units.
-	// The domain role cannot close them; once relayed, their job finds the unit unclaimable.
-	PendingProviderUnitDeliveries int     `json:"pending_provider_unit_deliveries"`
-	RiverJobIDs                   []int64 `json:"-"`
+	SyncRunID              string                  `json:"sync_run_id"`
+	Outcome                string                  `json:"outcome"`
+	PriorStatus            string                  `json:"prior_status"`
+	Units                  CancelSyncRunUnits      `json:"units"`
+	UnitsFailed            int                     `json:"units_failed"`
+	ProviderUnitDeliveries CancelSyncRunDeliveries `json:"provider_unit_deliveries"`
 }
 
 // CancelSyncRun closes one unfinished sync run the way the feature-disabled terminator does, in
 // one transaction on the domain pool: bucket locks, every open unit failed, the run failed, the
 // reference-discovery ledger, the dispatch outbox and finalize row, and the backfill_jobs and
 // job_runs observers. A run that is still open after the unit write (a running unit kept or
-// reclaimed in between) is rolled back whole. A terminal run is left alone.
+// reclaimed in between) is rolled back whole. A run that is terminal at the first read, or under the
+// run lock (a finalizer committed in between), is left alone: already_terminal.
 func CancelSyncRun(ctx context.Context, pool *pgxpool.Pool, request CancelSyncRunRequest) (CancelSyncRunOutcome, error) {
 	runID, err := uuid.Parse(request.SyncRunID)
 	if pool == nil || ctx == nil || err != nil || request.OrgID == "" || request.Now.IsZero() ||
 		(!request.DryRun && request.ReasonCode == "") {
 		return CancelSyncRunOutcome{}, ErrCancelSyncRunInvalid
 	}
-	// Postgres keeps microseconds: the unit write and the delivery read below must name the same instant.
+	// Postgres keeps microseconds: the lease reads and writes compare against the same instant.
 	now := request.Now.UTC().Truncate(time.Microsecond)
 	options := pgx.TxOptions{}
 	if request.DryRun {
@@ -121,8 +127,13 @@ func CancelSyncRun(ctx context.Context, pool *pgxpool.Pool, request CancelSyncRu
 	}
 
 	message := fmt.Sprintf("%s: sync run cancelled by the operator (reason %s)", operatorCancelErrorCategory, request.ReasonCode)
-	termination := runTermination{errorCategory: operatorCancelErrorCategory, keepLiveLeases: !request.AllowRunning}
+	termination := runTermination{errorCategory: operatorCancelErrorCategory, operator: true, allowRunning: request.AllowRunning}
 	transition, err := terminalizeRun(ctx, tx, run, termination, message, now)
+	if errors.Is(err, errRunTerminalUnderLock) {
+		outcome.PriorStatus = run.status
+		outcome.Outcome = CancelOutcomeAlreadyTerminal
+		return outcome, nil
+	}
 	if err != nil {
 		return CancelSyncRunOutcome{}, fmt.Errorf("%w: %w", ErrSyncRunCancelUnavailable, err)
 	}
@@ -135,8 +146,8 @@ func CancelSyncRun(ctx context.Context, pool *pgxpool.Pool, request CancelSyncRu
 	if err := terminalizeRunGraph(ctx, tx, run, operatorCancelErrorCategory, message, *run.completedAt); err != nil {
 		return CancelSyncRunOutcome{}, fmt.Errorf("%w: %w", ErrSyncRunCancelUnavailable, err)
 	}
-	outcome.UnitsFailed = transition.FailedUnits - outcome.Units.Failed
-	if outcome.RiverJobIDs, outcome.PendingProviderUnitDeliveries, err = cancelledUnitDeliveries(ctx, tx, run, now); err != nil {
+	outcome.UnitsFailed = len(transition.operatorUnitIDs)
+	if outcome.ProviderUnitDeliveries, err = cancelledUnitDeliveries(ctx, tx, transition.operatorUnitIDs); err != nil {
 		return CancelSyncRunOutcome{}, ErrSyncRunCancelUnavailable
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -192,38 +203,39 @@ GROUP BY 1, 2`, run.id, run.orgID, now)
 	return units, rows.Err()
 }
 
-// cancelledUnitDeliveries reads the provider-unit deliveries of the units this cancel failed: the
-// River job ids of delivered rows, and how many rows are not delivered yet. The units are the
-// ones the cancel stamped at now with its category.
-func cancelledUnitDeliveries(ctx context.Context, tx pgx.Tx, run *finalizeSyncRun, now time.Time) ([]int64, int, error) {
-	rows, err := tx.Query(ctx, `
-SELECT outbox.status, outbox.river_job_id
-FROM public.sync_run_units AS unit
-JOIN public.worker_job_outbox AS outbox
-  ON outbox.dedupe_key = 'sync.provider_unit:' || unit.id::text
- AND outbox.job_kind = 'sync.provider_unit'
-WHERE unit.sync_run_id = $1::uuid AND unit.org_id = $2
-  AND unit.status = 'failed' AND unit.updated_at = $3
-  AND unit.result::jsonb ->> 'error_category' = $4
-  AND outbox.status IN ('pending', 'claimed', 'delivered')
-ORDER BY outbox.river_job_id NULLS LAST`, run.id, run.orgID, now, operatorCancelErrorCategory)
-	if err != nil {
-		return nil, 0, err
+// ProviderUnitDeliveryKeys is every dedupe key a provider-unit delivery of one unit can carry: the
+// dispatcher's original key and each reclaim generation the orphaned-unit repair mints
+// (syncreconciler providerUnitCandidateKeys, orphaned_unit_repair.go:705; a cell pins the two equal).
+func ProviderUnitDeliveryKeys(unitID string) []string {
+	base := providerUnitDeliveryKind + ":" + unitID
+	keys := []string{base}
+	for generation := 1; generation <= providerUnitDeliveryReclaims; generation++ {
+		keys = append(keys, fmt.Sprintf("%s/reclaim/%d", base, generation))
 	}
-	defer rows.Close()
-	ids := []int64{}
-	pending := 0
-	for rows.Next() {
-		var status string
-		var jobID *int64
-		if err := rows.Scan(&status, &jobID); err != nil {
-			return nil, 0, err
-		}
-		if status == "delivered" && jobID != nil {
-			ids = append(ids, *jobID)
-			continue
-		}
-		pending++
+	return keys
+}
+
+const (
+	providerUnitDeliveryKind     = "sync.provider_unit"
+	providerUnitDeliveryReclaims = 3
+)
+
+// cancelledUnitDeliveries counts the deliveries of the units the cancel's own writes failed, under
+// every dedupe form: delivered, and not yet delivered (pending or claimed).
+func cancelledUnitDeliveries(ctx context.Context, tx pgx.Tx, unitIDs []string) (CancelSyncRunDeliveries, error) {
+	if len(unitIDs) == 0 {
+		return CancelSyncRunDeliveries{}, nil
 	}
-	return ids, pending, rows.Err()
+	keys := make([]string, 0, len(unitIDs)*(providerUnitDeliveryReclaims+1))
+	for _, id := range unitIDs {
+		keys = append(keys, ProviderUnitDeliveryKeys(id)...)
+	}
+	var deliveries CancelSyncRunDeliveries
+	if err := tx.QueryRow(ctx, `
+SELECT count(*) FILTER (WHERE status = 'delivered'), count(*) FILTER (WHERE status IN ('pending', 'claimed'))
+FROM public.worker_job_outbox
+WHERE job_kind = $1 AND dedupe_key = ANY($2::text[])`, providerUnitDeliveryKind, keys).Scan(&deliveries.Delivered, &deliveries.Pending); err != nil {
+		return CancelSyncRunDeliveries{}, err
+	}
+	return deliveries, nil
 }

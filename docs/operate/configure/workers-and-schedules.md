@@ -397,16 +397,17 @@ continue:
   closes as `failed`.
 - The run's reference discovery, dispatch outbox, backfill job and job run are
   closed in the same transaction.
-- After the commit, the verb cancels the River jobs of units that were already
-  dispatched. Each River cancel writes its own audit row. If a River job cannot
-  be cancelled, the verb counts it on a `river_cancel_failed=N` line on stderr
-  and still exits 0: that job finds its unit closed and does nothing.
+- The verb cancels no River job. A provider-unit job that is still waiting for a
+  unit of the run finds the unit closed when it starts, does nothing, and ends
+  on its own. The output counts these jobs under `provider_unit_deliveries`.
 
 The verb refuses a run in which a worker holds a live lease on a unit
 (`sync_run_running_unit`). Add `--allow-running` to cancel the run anyway; that
 worker then loses its lease and stops. Another organization's run reads as
-`sync_run_not_found`. A second call on the same run reports `already_terminal`
-and writes nothing. To sync the window again, submit a new backfill with a new
+`sync_run_not_found`. If the run finishes on its own while the verb runs, the
+verb leaves the run as it finished and reports `already_terminal`. A second call
+on the same run reports `already_terminal`, changes no sync row, and writes its
+own audit row. To sync the window again, submit a new backfill with a new
 idempotency key or with none.
 
 ## Schedules

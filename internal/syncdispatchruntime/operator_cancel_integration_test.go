@@ -28,9 +28,8 @@ const (
 // reference-discovery ledger, a pending dispatch_sync_run wakeup, a running job_runs row and a
 // running backfill_jobs row. units maps each unit's dataset_key (its label) to its id.
 type cancelFixture struct {
-	runID        string
-	units        map[string]string
-	deliveredJob int64
+	runID string
+	units map[string]string
 }
 
 func seedCancelFixture(t *testing.T, ctx context.Context, pool *pgxpool.Pool, runID string, now time.Time, extra ...pgseed.SyncRunUnit) cancelFixture {
@@ -62,10 +61,6 @@ func seedCancelFixture(t *testing.T, ctx context.Context, pool *pgxpool.Pool, ru
 	}
 	pgseed.WorkerJobOutbox(ctx, t, pool, "sync.provider_unit:"+fixture.units["c-dispatching"], "sync.provider_unit", "delivered")
 	pgseed.WorkerJobOutbox(ctx, t, pool, "sync.provider_unit:"+fixture.units["d-dispatching-unrelayed"], "sync.provider_unit", "pending")
-	if err := pool.QueryRow(ctx, `SELECT river_job_id FROM public.worker_job_outbox WHERE dedupe_key = $1`,
-		"sync.provider_unit:"+fixture.units["c-dispatching"]).Scan(&fixture.deliveredJob); err != nil {
-		t.Fatal(err)
-	}
 	if _, err := pool.Exec(ctx, `
 INSERT INTO sync_run_reference_discoveries (id, sync_run_id, org_id, status, attempts, available_at, created_at, updated_at)
 VALUES ($1, $2, $3, 'planned', 0, now(), now(), now())`, uuid.NewString(), runID, featureDisabledTestOrg); err != nil {
@@ -119,7 +114,7 @@ func cancelTestNow() time.Time { return time.Now().UTC().Truncate(time.Microseco
 func TestCancelSyncRunClosesAQueuedRunAndEveryObserver(t *testing.T) {
 	ctx, pool := startFeatureDisabledPool(t)
 	now := cancelTestNow()
-	fixture := seedCancelFixture(t, ctx, pool, cancelTestRun, now)
+	seedCancelFixture(t, ctx, pool, cancelTestRun, now)
 
 	outcome, err := CancelSyncRun(ctx, pool, cancelRequest(cancelTestRun, now))
 	if err != nil {
@@ -127,10 +122,9 @@ func TestCancelSyncRunClosesAQueuedRunAndEveryObserver(t *testing.T) {
 	}
 	wantUnits := CancelSyncRunUnits{Planned: 1, Retrying: 1, Dispatching: 2, RunningExpired: 1, Success: 1}
 	if outcome.Outcome != CancelOutcomeCancelled || outcome.PriorStatus != "dispatching" || outcome.Units != wantUnits ||
-		outcome.UnitsFailed != 5 || outcome.PendingProviderUnitDeliveries != 1 ||
-		len(outcome.RiverJobIDs) != 1 || outcome.RiverJobIDs[0] != fixture.deliveredJob {
-		t.Fatalf("outcome %+v, want cancelled from dispatching, units %+v, 5 failed, 1 pending delivery, river job %d",
-			outcome, wantUnits, fixture.deliveredJob)
+		outcome.UnitsFailed != 5 || outcome.ProviderUnitDeliveries != (CancelSyncRunDeliveries{Delivered: 1, Pending: 1}) {
+		t.Fatalf("outcome %+v, want cancelled from dispatching, units %+v, 5 failed, 1 delivered and 1 pending delivery",
+			outcome, wantUnits)
 	}
 
 	var runStatus, runError, runResult string
@@ -285,7 +279,7 @@ func TestCancelSyncRunSecondCallIsAlreadyTerminal(t *testing.T) {
 	}
 	before := cancelSnapshot(t, ctx, pool, cancelTestRun)
 	outcome, err := CancelSyncRun(ctx, pool, cancelRequest(cancelTestRun, now.Add(time.Minute)))
-	if err != nil || outcome.Outcome != CancelOutcomeAlreadyTerminal || outcome.PriorStatus != "failed" || len(outcome.RiverJobIDs) != 0 {
+	if err != nil || outcome.Outcome != CancelOutcomeAlreadyTerminal || outcome.PriorStatus != "failed" || outcome.UnitsFailed != 0 {
 		t.Fatalf("second call: err=%v outcome=%+v, want already_terminal from failed", err, outcome)
 	}
 	if after := cancelSnapshot(t, ctx, pool, cancelTestRun); after != before {

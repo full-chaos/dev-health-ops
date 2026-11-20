@@ -3,9 +3,7 @@ package workersctl
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
-	"log/slog"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/joboperator"
@@ -25,9 +23,9 @@ func dispatchSyncRuns(ctx context.Context, runtime *operatorRuntime, args []stri
 }
 
 // dispatchSyncRunsCancel handles `sync-runs cancel`: it closes one unfinished sync run of one
-// organization through syncdispatchruntime.CancelSyncRun on the domain pool, then cancels the
-// River jobs of the provider-unit deliveries that cancel closed. The domain write is the audited
-// one (resource_type sync_run); each River cancel writes its own jobs.cancel row.
+// organization through syncdispatchruntime.CancelSyncRun on the domain pool, audited as jobs.cancel
+// on resource_type sync_run (a repeat call on a closed run writes its own audit pair and no domain
+// row). It cancels no River job: a provider-unit job of a cancelled unit ends as a no-op.
 func dispatchSyncRunsCancel(ctx context.Context, runtime *operatorRuntime, args []string, stdout, stderr io.Writer) int {
 	flags := quietFlags("sync-runs cancel")
 	org := flags.String("org", "", "organization id")
@@ -59,19 +57,7 @@ func dispatchSyncRunsCancel(ctx context.Context, runtime *operatorRuntime, args 
 		if err != nil {
 			return writeError(stderr, syncRunCancelErrorCode(err))
 		}
-		report := syncRunCancelReport{CancelSyncRunOutcome: outcome, DryRun: *dryRun}
-		if outcome.Outcome == syncdispatchruntime.CancelOutcomeCancelled {
-			report.RiverJobs = cancelRiverJobs(ctx, runtime.service, runtime.principal, outcome.RiverJobIDs, *mutation.reason, *mutation.correlation)
-		}
-		if code := writeResult(stdout, stderr, map[string]any{"sync_run_cancel": report}); code != 0 {
-			return code
-		}
-		if report.RiverJobs.Failed > 0 {
-			slog.Default().LogAttrs(ctx, slog.LevelWarn, "dho workers: sync run cancelled; some River jobs of its units were not cancelled",
-				slog.String("correlation_id", *mutation.correlation), slog.Int("river_cancel_failed", report.RiverJobs.Failed))
-			_, _ = fmt.Fprintf(stderr, "river_cancel_failed=%d\n", report.RiverJobs.Failed)
-		}
-		return 0
+		return writeResult(stdout, stderr, map[string]any{"sync_run_cancel": syncRunCancelReport{CancelSyncRunOutcome: outcome, DryRun: *dryRun}})
 	}
 	if *dryRun {
 		return dryRunPreview(ctx, runtime, stderr, joboperator.ActionSyncRunCancel, "sync_run", resource, run)
@@ -81,50 +67,7 @@ func dispatchSyncRunsCancel(ctx context.Context, runtime *operatorRuntime, args 
 
 type syncRunCancelReport struct {
 	syncdispatchruntime.CancelSyncRunOutcome
-	DryRun    bool                `json:"dry_run"`
-	RiverJobs riverJobCancelCount `json:"river_jobs"`
-}
-
-// riverJobCancelCount counts the River jobs of the cancelled units by what happened to them.
-type riverJobCancelCount struct {
-	Cancelled       int `json:"cancelled"`
-	SkippedRunning  int `json:"skipped_running"`
-	SkippedTerminal int `json:"skipped_terminal"`
-	Failed          int `json:"cancel_failed"`
-}
-
-type riverJobCanceller interface {
-	Inspect(ctx context.Context, principal joboperator.Principal, jobID int64) (joboperator.JobSummary, error)
-	Cancel(ctx context.Context, principal joboperator.Principal, jobID int64, reasonCode, correlationID string) (joboperator.JobSummary, error)
-}
-
-// cancelRiverJobs cancels each waiting River job. It runs after the domain commit: the unit is
-// failed and its run terminal, so nothing re-arms a cancelled job, and a job it misses only finds
-// its unit unclaimable and retries as a no-op. A running job is left: its worker loses the lease.
-func cancelRiverJobs(
-	ctx context.Context, canceller riverJobCanceller, principal joboperator.Principal, ids []int64, reason, correlation string,
-) riverJobCancelCount {
-	var count riverJobCancelCount
-	for _, id := range ids {
-		job, err := canceller.Inspect(ctx, principal, id)
-		if err != nil {
-			count.Failed++
-			continue
-		}
-		switch job.State {
-		case joboperator.StateAvailable, joboperator.StatePending, joboperator.StateRetryable, joboperator.StateScheduled:
-			if _, err := canceller.Cancel(ctx, principal, id, reason, correlation); err != nil {
-				count.Failed++
-				continue
-			}
-			count.Cancelled++
-		case joboperator.StateRunning:
-			count.SkippedRunning++
-		default:
-			count.SkippedTerminal++
-		}
-	}
-	return count
+	DryRun bool `json:"dry_run"`
 }
 
 func syncRunCancelErrorCode(err error) string {
